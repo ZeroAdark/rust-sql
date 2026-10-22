@@ -1,0 +1,16 @@
+-- oltpc-080
+-- UPDATE stock SET s_quantity = CASE WHEN s_quantity >= $1::int + 10 THEN s_quantity - $1::int ELSE s_quantity - $1::int + 91 END, s_ytd = s_ytd + $1::int, s_order_cnt = s_order_cnt + 1, s_remote_cnt = s_remote_cnt + CASE WHEN $2::int = $3::int THEN 0 ELSE 1 END WHERE s_i_id = $4 AND s_w_id = $2 RETURNING s_quantity /* C25 NO stock update returning */
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16462 rti=1 am=heap index=16482
+    key att=1 op=96 value=$4
+    key att=2 op=96 value=$2
+    recheck (op96(v1.1, $4), op96(v1.2, $2))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byref8:vl:win/page Attr(8):byref8:vl:win/page Attr(9):byref8:vl:win/page Attr(10):byref8:vl:win/page Attr(11):byref8:vl:win/page Attr(12):byref8:vl:win/page Attr(13):byref8:vl:win/page Attr(14):byref8:vl:win/page Attr(15):byref8:vl:win/page Attr(16):byref8:vl:win/page Attr(17):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=op551(v1.3, $1), 2=fn314(case(when op542(v1.4, op551($1, c23:10)) then op556(v1.4, $1)) else op551(op556(v1.4, $1), c23:91)), 3=fn314(op552(v1.5, c23:1)), 4=fn314(op552(v1.6, case(when op96($2, $3) then c23:0) else c23:1)), 5j=v1.-1, 6j=v1.1, 7j=v1.2, 8j=v1.7, 9j=v1.8, 10j=v1.9, 11j=v1.10, 12j=v1.11, 13j=v1.12, 14j=v1.13, 15j=v1.14, 16j=v1.15, 17j=v1.16, 18j=v1.17)
+  write UPDATE rel=16462 rti=1 natts=17 indexes=(16482[1, 2]up) set=(3,4,5,6) returning
+  project (1=v1.4)
+  outs 1=w4:val 2=w2:val 3=w2:val 4=w2:val 5=fx6:row 6=w8:val 7=w8:val 8=vl:win/page 9=vl:win/page 10=vl:win/page 11=vl:win/page 12=vl:win/page 13=vl:win/page 14=vl:win/page 15=vl:win/page 16=vl:win/page 17=vl:win/page 18=vl:win/page
+  outs 1=w8:val
+mapped: ModifyTable IndexScan

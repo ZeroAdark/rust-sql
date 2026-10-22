@@ -1,0 +1,13 @@
+-- name: regress-full-stats-014
+-- sql: SELECT pr.snap_ts < pg_stat_get_snapshot_timestamp() as snapshot_newer FROM prevstats AS pr;
+-- test: stats
+-- shape: ff4f6dd64a0ef8b6 seen=1
+-- rel 46996 prevstats am=heap kind=r natts=7
+-- att 46996 1 seq_scan typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 46996 2 seq_tup_read typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 46996 3 idx_scan typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 46996 4 idx_tup_fetch typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 46996 5 heap_blks typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 46996 6 idx_blks typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 46996 7 snap_ts typid=1184 typmod=-1 len=8 byval=t notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 24.550000000000004 :scan.plan.plan_rows 970 :scan.plan.plan_width 1 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {OPEXPR :opno 1322 :opfuncid 1154 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 7 :vartype 1184 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 7 :location 7} {FUNCEXPR :funcid 3788 :funcresulttype 1184 :funcretset false :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 0 :args <> :location 20}) :location 18} :resno 1 :resname snapshot_newer :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 7)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias {ALIAS :aliasname pr :colnames <>} :eref {ALIAS :aliasname pr :colnames ("seq_scan" "seq_tup_read" "idx_scan" "idx_tup_fetch" "heap_blks" "idx_blks" "snap_ts")} :rtekind 0 :relid 46996 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 46996 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 14) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 46996) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 91}

@@ -1,0 +1,22 @@
+# NOALLOC (TD-197 LINT-FP; findings.NOALLOC_ITEMS): findings the IR leg proved allocate nothing, keyed on the line's normalized text. Written by run.sh full + ratchet.py write --noalloc only; an edited line's row goes.
+file	line	kind	item	count	text	class
+crates/gravity/driver/src/entry.rs	1257	method	std::clone::Clone::clone	1	929dec5f50e6	NOALLOC
+crates/gravity/driver/src/lib.rs	60	method	std::clone::Clone::clone	1	136fd012489d	NOALLOC
+crates/gravity/driver/src/lib.rs	61	method	std::clone::Clone::clone	1	c1b5148187fb	NOALLOC
+crates/gravity/driver/src/lib.rs	64	method	std::clone::Clone::clone	1	5150571a0800	NOALLOC
+crates/gravity/driver/src/lib.rs	67	method	std::clone::Clone::clone	4	98a19c53b4d2	NOALLOC
+crates/gravity/driver/src/lib.rs	72	method	std::clone::Clone::clone	4	1e6e279d8afc	NOALLOC
+crates/gravity/driver/src/lib.rs	155	method	std::clone::Clone::clone	1	25598aa60d1e	NOALLOC
+crates/gravity/driver/src/lives.rs	39	method	std::clone::Clone::clone	1	a16867ea8bb8	NOALLOC
+crates/gravity/driver/src/lives.rs	136	method	std::clone::Clone::clone	1	ca69f10710a4	NOALLOC
+crates/gravity/driver/src/mem/fence.rs	114	method	std::clone::Clone::clone	1	4cd2735e5d7b	NOALLOC
+crates/gravity/driver/src/mem/grant.rs	865	method	std::clone::Clone::clone	1	c0d068b799d9	NOALLOC
+crates/gravity/driver/src/mem/grant.rs	1535	method	std::clone::Clone::clone	1	ecac7d525730	NOALLOC
+crates/gravity/driver/src/mem/runcodec.rs	336	method	std::clone::Clone::clone	1	84767e2f0484	NOALLOC
+crates/gravity/driver/src/mem/runcodec.rs	337	method	std::clone::Clone::clone	1	a23e3b2ba479	NOALLOC
+crates/gravity/driver/src/mem/runcodec.rs	348	method	std::clone::Clone::clone	1	ae40bb4e5caf	NOALLOC
+crates/gravity/driver/src/mem/runcodec.rs	923	method	std::clone::Clone::clone	1	ca8371761686	NOALLOC
+crates/gravity/driver/src/mem/runcodec.rs	950	method	std::clone::Clone::clone	1	ca8371761686	NOALLOC
+crates/gravity/driver/src/mem/spill.rs	976	method	std::clone::Clone::clone	1	66b6234d5562	NOALLOC
+crates/gravity/driver/src/mem/spill.rs	981	method	std::clone::Clone::clone	1	e9a289f9d2a4	NOALLOC
+crates/gravity/driver/src/node/mod.rs	447	method	std::clone::Clone::clone	1	d7c26aef7139	NOALLOC

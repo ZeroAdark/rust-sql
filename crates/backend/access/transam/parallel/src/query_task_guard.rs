@@ -118,7 +118,11 @@ pub(super) fn with_query_task_binding<T>(
     let mut guard = QueryTaskBindingGuard::bind(shared)?;
     super::gtrace("w.qtb.bind.end");
     // unwind-ok: worker-containment
-    let outcome = catch_unwind(AssertUnwindSafe(body));
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        mcx::governor::arm(true);
+        body()
+    }));
+    mcx::governor::arm(false);
     super::gtrace("w.qtb.body.end");
     match outcome {
         Ok(Ok(value)) => {
@@ -240,6 +244,13 @@ pub struct QueryTaskBindingGuard {
     snapshot_pushed: bool,
     parallel_mode: bool,
     armed: bool,
+    /// G1-A: the statement half charges the leader's account (its backend slot), the worker's own again after.
+    account: Option<memledger::Entered>,
+}
+
+/// The leader's account in the memory ledger (`ParallelShared::parallel_leader_proc_number`'s backend slot).
+pub(crate) fn leader_account(shared: &ParallelShared) -> memledger::Acct {
+    u32::try_from(shared.parallel_leader_proc_number).map_or(memledger::Acct::UNBOUND, memledger::Acct::backend)
 }
 
 impl QueryTaskBindingGuard {
@@ -263,6 +274,7 @@ impl QueryTaskBindingGuard {
             snapshot_pushed: false,
             parallel_mode: false,
             armed: true,
+            account: Some(memledger::charge::enter_as(memledger::charge::context_of(leader_account(shared)).0)),
         };
 
         let setup = (|| {
@@ -342,7 +354,7 @@ impl QueryTaskBindingGuard {
             if let Some(pin) = shared.guc_pin.as_ref() {
                 guard.guc_binding = Some(guc::layers::bind_query_pin(pin)?);
             } else {
-                guc::store::restore_nondefault_variables(&shared.guc_state)?;
+                guc::store::restore_guc_state(&shared.guc_state)?;
             }
             #[cfg(debug_assertions)]
             inject(QueryTaskFaultPoint::BindGucs)?;
@@ -401,6 +413,7 @@ impl QueryTaskBindingGuard {
     /// Split out for the ceremony-v2 sticky park (`finish_for_sticky_park`),
     /// which runs this half and RETAINS the session half.
     fn finish_statement_into(&mut self, commit: bool, first: &mut Option<Box<PgError>>) {
+        self.account = None;
         if self.parallel_mode {
             xact::ExitParallelMode();
             self.parallel_mode = false;
@@ -551,6 +564,7 @@ impl QueryTaskBindingGuard {
         self.saved_worker_shared = super::MY_WORKER_SHARED
             .with(|slot| slot.borrow_mut().replace(Arc::clone(shared)));
         self.armed = true;
+        self.account = Some(memledger::charge::enter_as(memledger::charge::context_of(leader_account(shared)).0));
         let setup = (|| {
             xact::SetParallelStartTimestamps(shared.xact_ts, shared.stmt_ts);
             self.transaction_started = true;

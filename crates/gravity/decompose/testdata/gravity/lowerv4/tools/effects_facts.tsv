@@ -1,0 +1,2195 @@
+# rule	key	value: written by crates/gravity/decompose/tests/effects_table.rs (REGEN=changed); do not edit
+agg	2100	plain
+agg	2101	plain
+agg	2102	plain
+agg	2103	typmod
+agg	2107	plain
+agg	2108	plain
+agg	2109	plain
+agg	2114	typmod
+agg	2115	plain
+agg	2116	plain
+agg	2117	plain
+agg	2118	plain
+agg	2119	plain
+agg	2120	plain
+agg	2122	plain
+agg	2123	plain
+agg	2124	plain
+agg	2125	plain
+agg	2126	plain
+agg	2127	plain
+agg	2128	plain
+agg	2130	plain
+agg	2131	plain
+agg	2132	plain
+agg	2133	plain
+agg	2134	plain
+agg	2135	plain
+agg	2136	plain
+agg	2138	plain
+agg	2139	plain
+agg	2140	plain
+agg	2141	plain
+agg	2142	plain
+agg	2143	plain
+agg	2144	plain
+agg	2146	plain
+agg	2147	plain
+agg	2148	typmod
+agg	2149	plain
+agg	2150	plain
+agg	2153	typmod
+agg	2154	typmod
+agg	2155	plain
+agg	2156	plain
+agg	2159	typmod
+agg	2236	plain
+agg	2237	plain
+agg	2238	plain
+agg	2239	plain
+agg	2240	plain
+agg	2241	plain
+agg	2517	plain
+agg	2518	plain
+agg	2519	plain
+agg	2641	typmod
+agg	2642	plain
+agg	2643	plain
+agg	2646	typmod
+agg	2712	typmod
+agg	2713	plain
+agg	2714	plain
+agg	2717	typmod
+agg	2718	typmod
+agg	2719	plain
+agg	2720	plain
+agg	2723	typmod
+agg	2724	typmod
+agg	2725	plain
+agg	2726	plain
+agg	2729	typmod
+agg	2797	plain
+agg	2798	plain
+agg	2803	plain
+agg	2818	plain
+agg	4189	plain
+agg	4190	plain
+agg	5099	plain
+agg	5100	plain
+agg	6164	plain
+agg	6165	plain
+agg	6166	plain
+call	1067	1
+call	1069	1
+call	1191	1
+call	1192	1
+call	1257	1
+call	1258	1
+call	1299	1
+call	1317	1
+call	1369	1
+call	1374	1
+call	1375	1
+call	1381	1
+call	1440	1
+call	1718	1
+call	1719	1
+call	1720	1
+call	1721	1
+call	1722	1
+call	1723	1
+call	1769	1
+call	1892	1
+call	1893	1
+call	1894	1
+call	1895	1
+call	1898	1
+call	1899	1
+call	1900	1
+call	1901	1
+call	1904	1
+call	1905	1
+call	1906	1
+call	1907	1
+call	2022	1
+call	2026	1
+call	2079	1
+call	2080	1
+call	2081	1
+call	2082	1
+call	2083	1
+call	2093	1
+call	2331	1
+call	2647	1
+call	2648	1
+call	266	1
+call	2854	1
+call	2855	1
+call	3179	1
+call	3210	1
+call	3214	1
+call	3215	1
+call	3216	1
+call	3403	1
+call	3478	1
+call	3508	1
+call	3509	1
+call	3756	1
+call	3757	1
+call	3758	1
+call	3768	1
+call	3815	1
+call	3829	1
+call	4046	1
+call	4047	1
+call	4050	1
+call	861	1
+call	944	1
+call	946	1
+collation_free	1258	1
+collation_free	2160	1
+collation_free	2161	1
+collation_free	2163	1
+collation_free	2164	1
+collation_free	2166	1
+collation_free	2174	1
+collation_free	2175	1
+collation_free	2177	1
+collation_free	2178	1
+collation_free	2180	1
+const_arg	3060 2	1
+const_arg	3061 2	1
+const_arg	877 3	2
+const_arg	936 3	2
+epoch_clock	0	0
+epoch_clock	1	0
+epoch_clock	10	0
+epoch_clock	11	0
+epoch_clock	12	0
+epoch_clock	13	0
+epoch_clock	14	0
+epoch_clock	15	0
+epoch_clock	16	0
+epoch_clock	17	0
+epoch_clock	18	0
+epoch_clock	19	0
+epoch_clock	2	0
+epoch_clock	20	0
+epoch_clock	3	1
+epoch_clock	4	1
+epoch_clock	5	0
+epoch_clock	6	0
+epoch_clock	7	0
+epoch_clock	8	0
+epoch_clock	9	0
+epoch_ns	cast	1779
+epoch_ns	extract	6203
+epoch_ns	max_k	1000000000
+epoch_ns	mul	1726
+int_div	1277	1
+int_div	1281	1
+int_div	153	1
+int_div	154	1
+int_div	172	1
+int_div	173	1
+int_div	466	1
+int_div	840	1
+int_div	948	1
+int_mod	155	1
+int_mod	156	1
+int_mod	940	1
+int_mod	941	1
+int_mod	945	1
+int_mod	947	1
+io_text_target	1042	1
+io_text_target	1043	1
+io_text_target	19	1
+io_text_target	25	1
+out_quiet	1042	1
+out_quiet	1043	1
+out_quiet	1082	1
+out_quiet	1083	1
+out_quiet	16	1
+out_quiet	1700	1
+out_quiet	18	1
+out_quiet	19	1
+out_quiet	20	1
+out_quiet	21	1
+out_quiet	23	1
+out_quiet	25	1
+out_quiet	26	1
+out_quiet	2950	1
+out_quiet	700	1
+out_quiet	701	1
+pattern	1238	4
+pattern	1239	4
+pattern	1240	4
+pattern	1241	4
+pattern	1252	3
+pattern	1254	3
+pattern	1256	3
+pattern	1569	1
+pattern	1570	1
+pattern	1571	1
+pattern	1572	1
+pattern	1631	1
+pattern	1632	1
+pattern	1633	2
+pattern	1634	2
+pattern	1635	2
+pattern	1636	2
+pattern	1656	4
+pattern	1657	4
+pattern	1658	3
+pattern	1659	3
+pattern	1660	2
+pattern	1661	2
+pattern	79	3
+pattern	850	1
+pattern	851	1
+pattern	858	1
+pattern	859	1
+privilege	1927	2 0 SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN
+privilege	2261	2 0 EXECUTE
+privilege	2710	2 1 USAGE,MEMBER,SET
+privilege	3023	3 0 SELECT,INSERT,UPDATE,REFERENCES
+privilege	3029	2 0 SELECT,INSERT,UPDATE,REFERENCES
+privilege	3143	2 0 USAGE
+probe.divisor	1277 -1	0
+probe.divisor	1277 -2	1
+probe.divisor	1277 -9223372036854775808	1
+probe.divisor	1277 0	0
+probe.divisor	1277 1	1
+probe.divisor	1277 7	1
+probe.divisor	1277 9223372036854775807	1
+probe.divisor	1277 null	0
+probe.divisor	1281 -1	0
+probe.divisor	1281 -2	1
+probe.divisor	1281 -9223372036854775808	1
+probe.divisor	1281 0	0
+probe.divisor	1281 1	1
+probe.divisor	1281 7	1
+probe.divisor	1281 9223372036854775807	1
+probe.divisor	1281 null	0
+probe.divisor	153 -1	0
+probe.divisor	153 -2	1
+probe.divisor	153 -9223372036854775808	1
+probe.divisor	153 0	0
+probe.divisor	153 1	1
+probe.divisor	153 7	1
+probe.divisor	153 9223372036854775807	1
+probe.divisor	153 null	0
+probe.divisor	154 -1	0
+probe.divisor	154 -2	1
+probe.divisor	154 -9223372036854775808	1
+probe.divisor	154 0	0
+probe.divisor	154 1	1
+probe.divisor	154 7	1
+probe.divisor	154 9223372036854775807	1
+probe.divisor	154 null	0
+probe.divisor	155 -1	1
+probe.divisor	155 -2	1
+probe.divisor	155 -9223372036854775808	1
+probe.divisor	155 0	0
+probe.divisor	155 1	1
+probe.divisor	155 7	1
+probe.divisor	155 9223372036854775807	1
+probe.divisor	155 null	0
+probe.divisor	156 -1	1
+probe.divisor	156 -2	1
+probe.divisor	156 -9223372036854775808	1
+probe.divisor	156 0	0
+probe.divisor	156 1	1
+probe.divisor	156 7	1
+probe.divisor	156 9223372036854775807	1
+probe.divisor	156 null	0
+probe.divisor	172 -1	0
+probe.divisor	172 -2	1
+probe.divisor	172 -9223372036854775808	1
+probe.divisor	172 0	0
+probe.divisor	172 1	1
+probe.divisor	172 7	1
+probe.divisor	172 9223372036854775807	1
+probe.divisor	172 null	0
+probe.divisor	173 -1	0
+probe.divisor	173 -2	1
+probe.divisor	173 -9223372036854775808	1
+probe.divisor	173 0	0
+probe.divisor	173 1	1
+probe.divisor	173 7	1
+probe.divisor	173 9223372036854775807	1
+probe.divisor	173 null	0
+probe.divisor	466 -1	0
+probe.divisor	466 -2	1
+probe.divisor	466 -9223372036854775808	1
+probe.divisor	466 0	0
+probe.divisor	466 1	1
+probe.divisor	466 7	1
+probe.divisor	466 9223372036854775807	1
+probe.divisor	466 null	0
+probe.divisor	840 -1	0
+probe.divisor	840 -2	1
+probe.divisor	840 -9223372036854775808	1
+probe.divisor	840 0	0
+probe.divisor	840 1	1
+probe.divisor	840 7	1
+probe.divisor	840 9223372036854775807	1
+probe.divisor	840 null	0
+probe.divisor	940 -1	1
+probe.divisor	940 -2	1
+probe.divisor	940 -9223372036854775808	1
+probe.divisor	940 0	0
+probe.divisor	940 1	1
+probe.divisor	940 7	1
+probe.divisor	940 9223372036854775807	1
+probe.divisor	940 null	0
+probe.divisor	941 -1	1
+probe.divisor	941 -2	1
+probe.divisor	941 -9223372036854775808	1
+probe.divisor	941 0	0
+probe.divisor	941 1	1
+probe.divisor	941 7	1
+probe.divisor	941 9223372036854775807	1
+probe.divisor	941 null	0
+probe.divisor	945 -1	1
+probe.divisor	945 -2	1
+probe.divisor	945 -9223372036854775808	1
+probe.divisor	945 0	0
+probe.divisor	945 1	1
+probe.divisor	945 7	1
+probe.divisor	945 9223372036854775807	1
+probe.divisor	945 null	0
+probe.divisor	947 -1	1
+probe.divisor	947 -2	1
+probe.divisor	947 -9223372036854775808	1
+probe.divisor	947 0	0
+probe.divisor	947 1	1
+probe.divisor	947 7	1
+probe.divisor	947 9223372036854775807	1
+probe.divisor	947 null	0
+probe.divisor	948 -1	0
+probe.divisor	948 -2	1
+probe.divisor	948 -9223372036854775808	1
+probe.divisor	948 0	0
+probe.divisor	948 1	1
+probe.divisor	948 7	1
+probe.divisor	948 9223372036854775807	1
+probe.divisor	948 null	0
+probe.epoch_k	-	0 empty
+probe.epoch_k	000000000100	1 1 (long form)
+probe.epoch_k	0080	1 0
+probe.epoch_k	008001	0 odd length
+probe.epoch_k	00800100	1 1
+probe.epoch_k	00801027	0 digit 10000
+probe.epoch_k	00c0	0 NaN
+probe.epoch_k	00d0	0 +Infinity
+probe.epoch_k	02800a00	1 1e9
+probe.epoch_k	02800a0000000100	0 1e9+1
+probe.epoch_k	02a00a00	1 -1e9
+probe.epoch_k	03800100	0 1e12 (weight 3)
+probe.epoch_k	828001002909851a8813	1 123456789.5
+probe.epoch_k	82800a00000000008813	0 1e9+0.5
+probe.epoch_k	ff808813	1 0.5
+probe.pattern	1238 0 -	0
+probe.pattern	1238 0 5c5c5c	0
+probe.pattern	1238 0 6125635f	0
+probe.pattern	1238 0 616263	0
+probe.pattern	1238 0 6162635c	0
+probe.pattern	1238 0 6162635c5c	0
+probe.pattern	1238 100 -	0
+probe.pattern	1238 100 5c5c5c	0
+probe.pattern	1238 100 6125635f	0
+probe.pattern	1238 100 616263	0
+probe.pattern	1238 100 6162635c	0
+probe.pattern	1238 100 6162635c5c	0
+probe.pattern	1238 16384 -	0
+probe.pattern	1238 16384 5c5c5c	0
+probe.pattern	1238 16384 6125635f	0
+probe.pattern	1238 16384 616263	0
+probe.pattern	1238 16384 6162635c	0
+probe.pattern	1238 16384 6162635c5c	0
+probe.pattern	1238 6411 -	0
+probe.pattern	1238 6411 5c5c5c	0
+probe.pattern	1238 6411 6125635f	0
+probe.pattern	1238 6411 616263	0
+probe.pattern	1238 6411 6162635c	0
+probe.pattern	1238 6411 6162635c5c	0
+probe.pattern	1238 811 -	0
+probe.pattern	1238 811 5c5c5c	0
+probe.pattern	1238 811 6125635f	0
+probe.pattern	1238 811 616263	0
+probe.pattern	1238 811 6162635c	0
+probe.pattern	1238 811 6162635c5c	0
+probe.pattern	1238 950 -	0
+probe.pattern	1238 950 5c5c5c	0
+probe.pattern	1238 950 6125635f	0
+probe.pattern	1238 950 616263	0
+probe.pattern	1238 950 6162635c	0
+probe.pattern	1238 950 6162635c5c	0
+probe.pattern	1238 951 -	0
+probe.pattern	1238 951 5c5c5c	0
+probe.pattern	1238 951 6125635f	0
+probe.pattern	1238 951 616263	0
+probe.pattern	1238 951 6162635c	0
+probe.pattern	1238 951 6162635c5c	0
+probe.pattern	1238 962 -	0
+probe.pattern	1238 962 5c5c5c	0
+probe.pattern	1238 962 6125635f	0
+probe.pattern	1238 962 616263	0
+probe.pattern	1238 962 6162635c	0
+probe.pattern	1238 962 6162635c5c	0
+probe.pattern	1238 963 -	0
+probe.pattern	1238 963 5c5c5c	0
+probe.pattern	1238 963 6125635f	0
+probe.pattern	1238 963 616263	0
+probe.pattern	1238 963 6162635c	0
+probe.pattern	1238 963 6162635c5c	0
+probe.pattern	1239 0 -	0
+probe.pattern	1239 0 5c5c5c	0
+probe.pattern	1239 0 6125635f	0
+probe.pattern	1239 0 616263	0
+probe.pattern	1239 0 6162635c	0
+probe.pattern	1239 0 6162635c5c	0
+probe.pattern	1239 100 -	0
+probe.pattern	1239 100 5c5c5c	0
+probe.pattern	1239 100 6125635f	0
+probe.pattern	1239 100 616263	0
+probe.pattern	1239 100 6162635c	0
+probe.pattern	1239 100 6162635c5c	0
+probe.pattern	1239 16384 -	0
+probe.pattern	1239 16384 5c5c5c	0
+probe.pattern	1239 16384 6125635f	0
+probe.pattern	1239 16384 616263	0
+probe.pattern	1239 16384 6162635c	0
+probe.pattern	1239 16384 6162635c5c	0
+probe.pattern	1239 6411 -	0
+probe.pattern	1239 6411 5c5c5c	0
+probe.pattern	1239 6411 6125635f	0
+probe.pattern	1239 6411 616263	0
+probe.pattern	1239 6411 6162635c	0
+probe.pattern	1239 6411 6162635c5c	0
+probe.pattern	1239 811 -	0
+probe.pattern	1239 811 5c5c5c	0
+probe.pattern	1239 811 6125635f	0
+probe.pattern	1239 811 616263	0
+probe.pattern	1239 811 6162635c	0
+probe.pattern	1239 811 6162635c5c	0
+probe.pattern	1239 950 -	0
+probe.pattern	1239 950 5c5c5c	0
+probe.pattern	1239 950 6125635f	0
+probe.pattern	1239 950 616263	0
+probe.pattern	1239 950 6162635c	0
+probe.pattern	1239 950 6162635c5c	0
+probe.pattern	1239 951 -	0
+probe.pattern	1239 951 5c5c5c	0
+probe.pattern	1239 951 6125635f	0
+probe.pattern	1239 951 616263	0
+probe.pattern	1239 951 6162635c	0
+probe.pattern	1239 951 6162635c5c	0
+probe.pattern	1239 962 -	0
+probe.pattern	1239 962 5c5c5c	0
+probe.pattern	1239 962 6125635f	0
+probe.pattern	1239 962 616263	0
+probe.pattern	1239 962 6162635c	0
+probe.pattern	1239 962 6162635c5c	0
+probe.pattern	1239 963 -	0
+probe.pattern	1239 963 5c5c5c	0
+probe.pattern	1239 963 6125635f	0
+probe.pattern	1239 963 616263	0
+probe.pattern	1239 963 6162635c	0
+probe.pattern	1239 963 6162635c5c	0
+probe.pattern	1240 0 -	0
+probe.pattern	1240 0 5c5c5c	0
+probe.pattern	1240 0 6125635f	0
+probe.pattern	1240 0 616263	0
+probe.pattern	1240 0 6162635c	0
+probe.pattern	1240 0 6162635c5c	0
+probe.pattern	1240 100 -	0
+probe.pattern	1240 100 5c5c5c	0
+probe.pattern	1240 100 6125635f	0
+probe.pattern	1240 100 616263	0
+probe.pattern	1240 100 6162635c	0
+probe.pattern	1240 100 6162635c5c	0
+probe.pattern	1240 16384 -	0
+probe.pattern	1240 16384 5c5c5c	0
+probe.pattern	1240 16384 6125635f	0
+probe.pattern	1240 16384 616263	0
+probe.pattern	1240 16384 6162635c	0
+probe.pattern	1240 16384 6162635c5c	0
+probe.pattern	1240 6411 -	0
+probe.pattern	1240 6411 5c5c5c	0
+probe.pattern	1240 6411 6125635f	0
+probe.pattern	1240 6411 616263	0
+probe.pattern	1240 6411 6162635c	0
+probe.pattern	1240 6411 6162635c5c	0
+probe.pattern	1240 811 -	0
+probe.pattern	1240 811 5c5c5c	0
+probe.pattern	1240 811 6125635f	0
+probe.pattern	1240 811 616263	0
+probe.pattern	1240 811 6162635c	0
+probe.pattern	1240 811 6162635c5c	0
+probe.pattern	1240 950 -	0
+probe.pattern	1240 950 5c5c5c	0
+probe.pattern	1240 950 6125635f	0
+probe.pattern	1240 950 616263	0
+probe.pattern	1240 950 6162635c	0
+probe.pattern	1240 950 6162635c5c	0
+probe.pattern	1240 951 -	0
+probe.pattern	1240 951 5c5c5c	0
+probe.pattern	1240 951 6125635f	0
+probe.pattern	1240 951 616263	0
+probe.pattern	1240 951 6162635c	0
+probe.pattern	1240 951 6162635c5c	0
+probe.pattern	1240 962 -	0
+probe.pattern	1240 962 5c5c5c	0
+probe.pattern	1240 962 6125635f	0
+probe.pattern	1240 962 616263	0
+probe.pattern	1240 962 6162635c	0
+probe.pattern	1240 962 6162635c5c	0
+probe.pattern	1240 963 -	0
+probe.pattern	1240 963 5c5c5c	0
+probe.pattern	1240 963 6125635f	0
+probe.pattern	1240 963 616263	0
+probe.pattern	1240 963 6162635c	0
+probe.pattern	1240 963 6162635c5c	0
+probe.pattern	1241 0 -	0
+probe.pattern	1241 0 5c5c5c	0
+probe.pattern	1241 0 6125635f	0
+probe.pattern	1241 0 616263	0
+probe.pattern	1241 0 6162635c	0
+probe.pattern	1241 0 6162635c5c	0
+probe.pattern	1241 100 -	0
+probe.pattern	1241 100 5c5c5c	0
+probe.pattern	1241 100 6125635f	0
+probe.pattern	1241 100 616263	0
+probe.pattern	1241 100 6162635c	0
+probe.pattern	1241 100 6162635c5c	0
+probe.pattern	1241 16384 -	0
+probe.pattern	1241 16384 5c5c5c	0
+probe.pattern	1241 16384 6125635f	0
+probe.pattern	1241 16384 616263	0
+probe.pattern	1241 16384 6162635c	0
+probe.pattern	1241 16384 6162635c5c	0
+probe.pattern	1241 6411 -	0
+probe.pattern	1241 6411 5c5c5c	0
+probe.pattern	1241 6411 6125635f	0
+probe.pattern	1241 6411 616263	0
+probe.pattern	1241 6411 6162635c	0
+probe.pattern	1241 6411 6162635c5c	0
+probe.pattern	1241 811 -	0
+probe.pattern	1241 811 5c5c5c	0
+probe.pattern	1241 811 6125635f	0
+probe.pattern	1241 811 616263	0
+probe.pattern	1241 811 6162635c	0
+probe.pattern	1241 811 6162635c5c	0
+probe.pattern	1241 950 -	0
+probe.pattern	1241 950 5c5c5c	0
+probe.pattern	1241 950 6125635f	0
+probe.pattern	1241 950 616263	0
+probe.pattern	1241 950 6162635c	0
+probe.pattern	1241 950 6162635c5c	0
+probe.pattern	1241 951 -	0
+probe.pattern	1241 951 5c5c5c	0
+probe.pattern	1241 951 6125635f	0
+probe.pattern	1241 951 616263	0
+probe.pattern	1241 951 6162635c	0
+probe.pattern	1241 951 6162635c5c	0
+probe.pattern	1241 962 -	0
+probe.pattern	1241 962 5c5c5c	0
+probe.pattern	1241 962 6125635f	0
+probe.pattern	1241 962 616263	0
+probe.pattern	1241 962 6162635c	0
+probe.pattern	1241 962 6162635c5c	0
+probe.pattern	1241 963 -	0
+probe.pattern	1241 963 5c5c5c	0
+probe.pattern	1241 963 6125635f	0
+probe.pattern	1241 963 616263	0
+probe.pattern	1241 963 6162635c	0
+probe.pattern	1241 963 6162635c5c	0
+probe.pattern	1252 0 -	0
+probe.pattern	1252 0 5c5c5c	0
+probe.pattern	1252 0 6125635f	0
+probe.pattern	1252 0 616263	0
+probe.pattern	1252 0 6162635c	0
+probe.pattern	1252 0 6162635c5c	0
+probe.pattern	1252 100 -	0
+probe.pattern	1252 100 5c5c5c	0
+probe.pattern	1252 100 6125635f	0
+probe.pattern	1252 100 616263	0
+probe.pattern	1252 100 6162635c	0
+probe.pattern	1252 100 6162635c5c	0
+probe.pattern	1252 16384 -	0
+probe.pattern	1252 16384 5c5c5c	0
+probe.pattern	1252 16384 6125635f	0
+probe.pattern	1252 16384 616263	0
+probe.pattern	1252 16384 6162635c	0
+probe.pattern	1252 16384 6162635c5c	0
+probe.pattern	1252 6411 -	0
+probe.pattern	1252 6411 5c5c5c	0
+probe.pattern	1252 6411 6125635f	0
+probe.pattern	1252 6411 616263	0
+probe.pattern	1252 6411 6162635c	0
+probe.pattern	1252 6411 6162635c5c	0
+probe.pattern	1252 811 -	0
+probe.pattern	1252 811 5c5c5c	0
+probe.pattern	1252 811 6125635f	0
+probe.pattern	1252 811 616263	0
+probe.pattern	1252 811 6162635c	0
+probe.pattern	1252 811 6162635c5c	0
+probe.pattern	1252 950 -	0
+probe.pattern	1252 950 5c5c5c	0
+probe.pattern	1252 950 6125635f	0
+probe.pattern	1252 950 616263	0
+probe.pattern	1252 950 6162635c	0
+probe.pattern	1252 950 6162635c5c	0
+probe.pattern	1252 951 -	0
+probe.pattern	1252 951 5c5c5c	0
+probe.pattern	1252 951 6125635f	0
+probe.pattern	1252 951 616263	0
+probe.pattern	1252 951 6162635c	0
+probe.pattern	1252 951 6162635c5c	0
+probe.pattern	1252 962 -	0
+probe.pattern	1252 962 5c5c5c	0
+probe.pattern	1252 962 6125635f	0
+probe.pattern	1252 962 616263	0
+probe.pattern	1252 962 6162635c	0
+probe.pattern	1252 962 6162635c5c	0
+probe.pattern	1252 963 -	0
+probe.pattern	1252 963 5c5c5c	0
+probe.pattern	1252 963 6125635f	0
+probe.pattern	1252 963 616263	0
+probe.pattern	1252 963 6162635c	0
+probe.pattern	1252 963 6162635c5c	0
+probe.pattern	1254 0 -	0
+probe.pattern	1254 0 5c5c5c	0
+probe.pattern	1254 0 6125635f	0
+probe.pattern	1254 0 616263	0
+probe.pattern	1254 0 6162635c	0
+probe.pattern	1254 0 6162635c5c	0
+probe.pattern	1254 100 -	0
+probe.pattern	1254 100 5c5c5c	0
+probe.pattern	1254 100 6125635f	0
+probe.pattern	1254 100 616263	0
+probe.pattern	1254 100 6162635c	0
+probe.pattern	1254 100 6162635c5c	0
+probe.pattern	1254 16384 -	0
+probe.pattern	1254 16384 5c5c5c	0
+probe.pattern	1254 16384 6125635f	0
+probe.pattern	1254 16384 616263	0
+probe.pattern	1254 16384 6162635c	0
+probe.pattern	1254 16384 6162635c5c	0
+probe.pattern	1254 6411 -	0
+probe.pattern	1254 6411 5c5c5c	0
+probe.pattern	1254 6411 6125635f	0
+probe.pattern	1254 6411 616263	0
+probe.pattern	1254 6411 6162635c	0
+probe.pattern	1254 6411 6162635c5c	0
+probe.pattern	1254 811 -	0
+probe.pattern	1254 811 5c5c5c	0
+probe.pattern	1254 811 6125635f	0
+probe.pattern	1254 811 616263	0
+probe.pattern	1254 811 6162635c	0
+probe.pattern	1254 811 6162635c5c	0
+probe.pattern	1254 950 -	0
+probe.pattern	1254 950 5c5c5c	0
+probe.pattern	1254 950 6125635f	0
+probe.pattern	1254 950 616263	0
+probe.pattern	1254 950 6162635c	0
+probe.pattern	1254 950 6162635c5c	0
+probe.pattern	1254 951 -	0
+probe.pattern	1254 951 5c5c5c	0
+probe.pattern	1254 951 6125635f	0
+probe.pattern	1254 951 616263	0
+probe.pattern	1254 951 6162635c	0
+probe.pattern	1254 951 6162635c5c	0
+probe.pattern	1254 962 -	0
+probe.pattern	1254 962 5c5c5c	0
+probe.pattern	1254 962 6125635f	0
+probe.pattern	1254 962 616263	0
+probe.pattern	1254 962 6162635c	0
+probe.pattern	1254 962 6162635c5c	0
+probe.pattern	1254 963 -	0
+probe.pattern	1254 963 5c5c5c	0
+probe.pattern	1254 963 6125635f	0
+probe.pattern	1254 963 616263	0
+probe.pattern	1254 963 6162635c	0
+probe.pattern	1254 963 6162635c5c	0
+probe.pattern	1256 0 -	0
+probe.pattern	1256 0 5c5c5c	0
+probe.pattern	1256 0 6125635f	0
+probe.pattern	1256 0 616263	0
+probe.pattern	1256 0 6162635c	0
+probe.pattern	1256 0 6162635c5c	0
+probe.pattern	1256 100 -	0
+probe.pattern	1256 100 5c5c5c	0
+probe.pattern	1256 100 6125635f	0
+probe.pattern	1256 100 616263	0
+probe.pattern	1256 100 6162635c	0
+probe.pattern	1256 100 6162635c5c	0
+probe.pattern	1256 16384 -	0
+probe.pattern	1256 16384 5c5c5c	0
+probe.pattern	1256 16384 6125635f	0
+probe.pattern	1256 16384 616263	0
+probe.pattern	1256 16384 6162635c	0
+probe.pattern	1256 16384 6162635c5c	0
+probe.pattern	1256 6411 -	0
+probe.pattern	1256 6411 5c5c5c	0
+probe.pattern	1256 6411 6125635f	0
+probe.pattern	1256 6411 616263	0
+probe.pattern	1256 6411 6162635c	0
+probe.pattern	1256 6411 6162635c5c	0
+probe.pattern	1256 811 -	0
+probe.pattern	1256 811 5c5c5c	0
+probe.pattern	1256 811 6125635f	0
+probe.pattern	1256 811 616263	0
+probe.pattern	1256 811 6162635c	0
+probe.pattern	1256 811 6162635c5c	0
+probe.pattern	1256 950 -	0
+probe.pattern	1256 950 5c5c5c	0
+probe.pattern	1256 950 6125635f	0
+probe.pattern	1256 950 616263	0
+probe.pattern	1256 950 6162635c	0
+probe.pattern	1256 950 6162635c5c	0
+probe.pattern	1256 951 -	0
+probe.pattern	1256 951 5c5c5c	0
+probe.pattern	1256 951 6125635f	0
+probe.pattern	1256 951 616263	0
+probe.pattern	1256 951 6162635c	0
+probe.pattern	1256 951 6162635c5c	0
+probe.pattern	1256 962 -	0
+probe.pattern	1256 962 5c5c5c	0
+probe.pattern	1256 962 6125635f	0
+probe.pattern	1256 962 616263	0
+probe.pattern	1256 962 6162635c	0
+probe.pattern	1256 962 6162635c5c	0
+probe.pattern	1256 963 -	0
+probe.pattern	1256 963 5c5c5c	0
+probe.pattern	1256 963 6125635f	0
+probe.pattern	1256 963 616263	0
+probe.pattern	1256 963 6162635c	0
+probe.pattern	1256 963 6162635c5c	0
+probe.pattern	1569 0 -	0
+probe.pattern	1569 0 5c5c5c	0
+probe.pattern	1569 0 6125635f	0
+probe.pattern	1569 0 616263	0
+probe.pattern	1569 0 6162635c	0
+probe.pattern	1569 0 6162635c5c	0
+probe.pattern	1569 100 -	1
+probe.pattern	1569 100 5c5c5c	0
+probe.pattern	1569 100 6125635f	1
+probe.pattern	1569 100 616263	1
+probe.pattern	1569 100 6162635c	0
+probe.pattern	1569 100 6162635c5c	1
+probe.pattern	1569 16384 -	0
+probe.pattern	1569 16384 5c5c5c	0
+probe.pattern	1569 16384 6125635f	0
+probe.pattern	1569 16384 616263	0
+probe.pattern	1569 16384 6162635c	0
+probe.pattern	1569 16384 6162635c5c	0
+probe.pattern	1569 6411 -	1
+probe.pattern	1569 6411 5c5c5c	0
+probe.pattern	1569 6411 6125635f	1
+probe.pattern	1569 6411 616263	1
+probe.pattern	1569 6411 6162635c	0
+probe.pattern	1569 6411 6162635c5c	1
+probe.pattern	1569 811 -	1
+probe.pattern	1569 811 5c5c5c	0
+probe.pattern	1569 811 6125635f	1
+probe.pattern	1569 811 616263	1
+probe.pattern	1569 811 6162635c	0
+probe.pattern	1569 811 6162635c5c	1
+probe.pattern	1569 950 -	1
+probe.pattern	1569 950 5c5c5c	0
+probe.pattern	1569 950 6125635f	1
+probe.pattern	1569 950 616263	1
+probe.pattern	1569 950 6162635c	0
+probe.pattern	1569 950 6162635c5c	1
+probe.pattern	1569 951 -	1
+probe.pattern	1569 951 5c5c5c	0
+probe.pattern	1569 951 6125635f	1
+probe.pattern	1569 951 616263	1
+probe.pattern	1569 951 6162635c	0
+probe.pattern	1569 951 6162635c5c	1
+probe.pattern	1569 962 -	1
+probe.pattern	1569 962 5c5c5c	0
+probe.pattern	1569 962 6125635f	1
+probe.pattern	1569 962 616263	1
+probe.pattern	1569 962 6162635c	0
+probe.pattern	1569 962 6162635c5c	1
+probe.pattern	1569 963 -	1
+probe.pattern	1569 963 5c5c5c	0
+probe.pattern	1569 963 6125635f	1
+probe.pattern	1569 963 616263	1
+probe.pattern	1569 963 6162635c	0
+probe.pattern	1569 963 6162635c5c	1
+probe.pattern	1570 0 -	0
+probe.pattern	1570 0 5c5c5c	0
+probe.pattern	1570 0 6125635f	0
+probe.pattern	1570 0 616263	0
+probe.pattern	1570 0 6162635c	0
+probe.pattern	1570 0 6162635c5c	0
+probe.pattern	1570 100 -	1
+probe.pattern	1570 100 5c5c5c	0
+probe.pattern	1570 100 6125635f	1
+probe.pattern	1570 100 616263	1
+probe.pattern	1570 100 6162635c	0
+probe.pattern	1570 100 6162635c5c	1
+probe.pattern	1570 16384 -	0
+probe.pattern	1570 16384 5c5c5c	0
+probe.pattern	1570 16384 6125635f	0
+probe.pattern	1570 16384 616263	0
+probe.pattern	1570 16384 6162635c	0
+probe.pattern	1570 16384 6162635c5c	0
+probe.pattern	1570 6411 -	1
+probe.pattern	1570 6411 5c5c5c	0
+probe.pattern	1570 6411 6125635f	1
+probe.pattern	1570 6411 616263	1
+probe.pattern	1570 6411 6162635c	0
+probe.pattern	1570 6411 6162635c5c	1
+probe.pattern	1570 811 -	1
+probe.pattern	1570 811 5c5c5c	0
+probe.pattern	1570 811 6125635f	1
+probe.pattern	1570 811 616263	1
+probe.pattern	1570 811 6162635c	0
+probe.pattern	1570 811 6162635c5c	1
+probe.pattern	1570 950 -	1
+probe.pattern	1570 950 5c5c5c	0
+probe.pattern	1570 950 6125635f	1
+probe.pattern	1570 950 616263	1
+probe.pattern	1570 950 6162635c	0
+probe.pattern	1570 950 6162635c5c	1
+probe.pattern	1570 951 -	1
+probe.pattern	1570 951 5c5c5c	0
+probe.pattern	1570 951 6125635f	1
+probe.pattern	1570 951 616263	1
+probe.pattern	1570 951 6162635c	0
+probe.pattern	1570 951 6162635c5c	1
+probe.pattern	1570 962 -	1
+probe.pattern	1570 962 5c5c5c	0
+probe.pattern	1570 962 6125635f	1
+probe.pattern	1570 962 616263	1
+probe.pattern	1570 962 6162635c	0
+probe.pattern	1570 962 6162635c5c	1
+probe.pattern	1570 963 -	1
+probe.pattern	1570 963 5c5c5c	0
+probe.pattern	1570 963 6125635f	1
+probe.pattern	1570 963 616263	1
+probe.pattern	1570 963 6162635c	0
+probe.pattern	1570 963 6162635c5c	1
+probe.pattern	1571 0 -	0
+probe.pattern	1571 0 5c5c5c	0
+probe.pattern	1571 0 6125635f	0
+probe.pattern	1571 0 616263	0
+probe.pattern	1571 0 6162635c	0
+probe.pattern	1571 0 6162635c5c	0
+probe.pattern	1571 100 -	1
+probe.pattern	1571 100 5c5c5c	0
+probe.pattern	1571 100 6125635f	1
+probe.pattern	1571 100 616263	1
+probe.pattern	1571 100 6162635c	0
+probe.pattern	1571 100 6162635c5c	1
+probe.pattern	1571 16384 -	0
+probe.pattern	1571 16384 5c5c5c	0
+probe.pattern	1571 16384 6125635f	0
+probe.pattern	1571 16384 616263	0
+probe.pattern	1571 16384 6162635c	0
+probe.pattern	1571 16384 6162635c5c	0
+probe.pattern	1571 6411 -	1
+probe.pattern	1571 6411 5c5c5c	0
+probe.pattern	1571 6411 6125635f	1
+probe.pattern	1571 6411 616263	1
+probe.pattern	1571 6411 6162635c	0
+probe.pattern	1571 6411 6162635c5c	1
+probe.pattern	1571 811 -	1
+probe.pattern	1571 811 5c5c5c	0
+probe.pattern	1571 811 6125635f	1
+probe.pattern	1571 811 616263	1
+probe.pattern	1571 811 6162635c	0
+probe.pattern	1571 811 6162635c5c	1
+probe.pattern	1571 950 -	1
+probe.pattern	1571 950 5c5c5c	0
+probe.pattern	1571 950 6125635f	1
+probe.pattern	1571 950 616263	1
+probe.pattern	1571 950 6162635c	0
+probe.pattern	1571 950 6162635c5c	1
+probe.pattern	1571 951 -	1
+probe.pattern	1571 951 5c5c5c	0
+probe.pattern	1571 951 6125635f	1
+probe.pattern	1571 951 616263	1
+probe.pattern	1571 951 6162635c	0
+probe.pattern	1571 951 6162635c5c	1
+probe.pattern	1571 962 -	1
+probe.pattern	1571 962 5c5c5c	0
+probe.pattern	1571 962 6125635f	1
+probe.pattern	1571 962 616263	1
+probe.pattern	1571 962 6162635c	0
+probe.pattern	1571 962 6162635c5c	1
+probe.pattern	1571 963 -	1
+probe.pattern	1571 963 5c5c5c	0
+probe.pattern	1571 963 6125635f	1
+probe.pattern	1571 963 616263	1
+probe.pattern	1571 963 6162635c	0
+probe.pattern	1571 963 6162635c5c	1
+probe.pattern	1572 0 -	0
+probe.pattern	1572 0 5c5c5c	0
+probe.pattern	1572 0 6125635f	0
+probe.pattern	1572 0 616263	0
+probe.pattern	1572 0 6162635c	0
+probe.pattern	1572 0 6162635c5c	0
+probe.pattern	1572 100 -	1
+probe.pattern	1572 100 5c5c5c	0
+probe.pattern	1572 100 6125635f	1
+probe.pattern	1572 100 616263	1
+probe.pattern	1572 100 6162635c	0
+probe.pattern	1572 100 6162635c5c	1
+probe.pattern	1572 16384 -	0
+probe.pattern	1572 16384 5c5c5c	0
+probe.pattern	1572 16384 6125635f	0
+probe.pattern	1572 16384 616263	0
+probe.pattern	1572 16384 6162635c	0
+probe.pattern	1572 16384 6162635c5c	0
+probe.pattern	1572 6411 -	1
+probe.pattern	1572 6411 5c5c5c	0
+probe.pattern	1572 6411 6125635f	1
+probe.pattern	1572 6411 616263	1
+probe.pattern	1572 6411 6162635c	0
+probe.pattern	1572 6411 6162635c5c	1
+probe.pattern	1572 811 -	1
+probe.pattern	1572 811 5c5c5c	0
+probe.pattern	1572 811 6125635f	1
+probe.pattern	1572 811 616263	1
+probe.pattern	1572 811 6162635c	0
+probe.pattern	1572 811 6162635c5c	1
+probe.pattern	1572 950 -	1
+probe.pattern	1572 950 5c5c5c	0
+probe.pattern	1572 950 6125635f	1
+probe.pattern	1572 950 616263	1
+probe.pattern	1572 950 6162635c	0
+probe.pattern	1572 950 6162635c5c	1
+probe.pattern	1572 951 -	1
+probe.pattern	1572 951 5c5c5c	0
+probe.pattern	1572 951 6125635f	1
+probe.pattern	1572 951 616263	1
+probe.pattern	1572 951 6162635c	0
+probe.pattern	1572 951 6162635c5c	1
+probe.pattern	1572 962 -	1
+probe.pattern	1572 962 5c5c5c	0
+probe.pattern	1572 962 6125635f	1
+probe.pattern	1572 962 616263	1
+probe.pattern	1572 962 6162635c	0
+probe.pattern	1572 962 6162635c5c	1
+probe.pattern	1572 963 -	1
+probe.pattern	1572 963 5c5c5c	0
+probe.pattern	1572 963 6125635f	1
+probe.pattern	1572 963 616263	1
+probe.pattern	1572 963 6162635c	0
+probe.pattern	1572 963 6162635c5c	1
+probe.pattern	1631 0 -	0
+probe.pattern	1631 0 5c5c5c	0
+probe.pattern	1631 0 6125635f	0
+probe.pattern	1631 0 616263	0
+probe.pattern	1631 0 6162635c	0
+probe.pattern	1631 0 6162635c5c	0
+probe.pattern	1631 100 -	1
+probe.pattern	1631 100 5c5c5c	0
+probe.pattern	1631 100 6125635f	1
+probe.pattern	1631 100 616263	1
+probe.pattern	1631 100 6162635c	0
+probe.pattern	1631 100 6162635c5c	1
+probe.pattern	1631 16384 -	0
+probe.pattern	1631 16384 5c5c5c	0
+probe.pattern	1631 16384 6125635f	0
+probe.pattern	1631 16384 616263	0
+probe.pattern	1631 16384 6162635c	0
+probe.pattern	1631 16384 6162635c5c	0
+probe.pattern	1631 6411 -	1
+probe.pattern	1631 6411 5c5c5c	0
+probe.pattern	1631 6411 6125635f	1
+probe.pattern	1631 6411 616263	1
+probe.pattern	1631 6411 6162635c	0
+probe.pattern	1631 6411 6162635c5c	1
+probe.pattern	1631 811 -	1
+probe.pattern	1631 811 5c5c5c	0
+probe.pattern	1631 811 6125635f	1
+probe.pattern	1631 811 616263	1
+probe.pattern	1631 811 6162635c	0
+probe.pattern	1631 811 6162635c5c	1
+probe.pattern	1631 950 -	1
+probe.pattern	1631 950 5c5c5c	0
+probe.pattern	1631 950 6125635f	1
+probe.pattern	1631 950 616263	1
+probe.pattern	1631 950 6162635c	0
+probe.pattern	1631 950 6162635c5c	1
+probe.pattern	1631 951 -	1
+probe.pattern	1631 951 5c5c5c	0
+probe.pattern	1631 951 6125635f	1
+probe.pattern	1631 951 616263	1
+probe.pattern	1631 951 6162635c	0
+probe.pattern	1631 951 6162635c5c	1
+probe.pattern	1631 962 -	1
+probe.pattern	1631 962 5c5c5c	0
+probe.pattern	1631 962 6125635f	1
+probe.pattern	1631 962 616263	1
+probe.pattern	1631 962 6162635c	0
+probe.pattern	1631 962 6162635c5c	1
+probe.pattern	1631 963 -	1
+probe.pattern	1631 963 5c5c5c	0
+probe.pattern	1631 963 6125635f	1
+probe.pattern	1631 963 616263	1
+probe.pattern	1631 963 6162635c	0
+probe.pattern	1631 963 6162635c5c	1
+probe.pattern	1632 0 -	0
+probe.pattern	1632 0 5c5c5c	0
+probe.pattern	1632 0 6125635f	0
+probe.pattern	1632 0 616263	0
+probe.pattern	1632 0 6162635c	0
+probe.pattern	1632 0 6162635c5c	0
+probe.pattern	1632 100 -	1
+probe.pattern	1632 100 5c5c5c	0
+probe.pattern	1632 100 6125635f	1
+probe.pattern	1632 100 616263	1
+probe.pattern	1632 100 6162635c	0
+probe.pattern	1632 100 6162635c5c	1
+probe.pattern	1632 16384 -	0
+probe.pattern	1632 16384 5c5c5c	0
+probe.pattern	1632 16384 6125635f	0
+probe.pattern	1632 16384 616263	0
+probe.pattern	1632 16384 6162635c	0
+probe.pattern	1632 16384 6162635c5c	0
+probe.pattern	1632 6411 -	1
+probe.pattern	1632 6411 5c5c5c	0
+probe.pattern	1632 6411 6125635f	1
+probe.pattern	1632 6411 616263	1
+probe.pattern	1632 6411 6162635c	0
+probe.pattern	1632 6411 6162635c5c	1
+probe.pattern	1632 811 -	1
+probe.pattern	1632 811 5c5c5c	0
+probe.pattern	1632 811 6125635f	1
+probe.pattern	1632 811 616263	1
+probe.pattern	1632 811 6162635c	0
+probe.pattern	1632 811 6162635c5c	1
+probe.pattern	1632 950 -	1
+probe.pattern	1632 950 5c5c5c	0
+probe.pattern	1632 950 6125635f	1
+probe.pattern	1632 950 616263	1
+probe.pattern	1632 950 6162635c	0
+probe.pattern	1632 950 6162635c5c	1
+probe.pattern	1632 951 -	1
+probe.pattern	1632 951 5c5c5c	0
+probe.pattern	1632 951 6125635f	1
+probe.pattern	1632 951 616263	1
+probe.pattern	1632 951 6162635c	0
+probe.pattern	1632 951 6162635c5c	1
+probe.pattern	1632 962 -	1
+probe.pattern	1632 962 5c5c5c	0
+probe.pattern	1632 962 6125635f	1
+probe.pattern	1632 962 616263	1
+probe.pattern	1632 962 6162635c	0
+probe.pattern	1632 962 6162635c5c	1
+probe.pattern	1632 963 -	1
+probe.pattern	1632 963 5c5c5c	0
+probe.pattern	1632 963 6125635f	1
+probe.pattern	1632 963 616263	1
+probe.pattern	1632 963 6162635c	0
+probe.pattern	1632 963 6162635c5c	1
+probe.pattern	1633 0 -	0
+probe.pattern	1633 0 5c5c5c	0
+probe.pattern	1633 0 6125635f	0
+probe.pattern	1633 0 616263	0
+probe.pattern	1633 0 6162635c	0
+probe.pattern	1633 0 6162635c5c	0
+probe.pattern	1633 100 -	1
+probe.pattern	1633 100 5c5c5c	0
+probe.pattern	1633 100 6125635f	1
+probe.pattern	1633 100 616263	1
+probe.pattern	1633 100 6162635c	0
+probe.pattern	1633 100 6162635c5c	1
+probe.pattern	1633 16384 -	0
+probe.pattern	1633 16384 5c5c5c	0
+probe.pattern	1633 16384 6125635f	0
+probe.pattern	1633 16384 616263	0
+probe.pattern	1633 16384 6162635c	0
+probe.pattern	1633 16384 6162635c5c	0
+probe.pattern	1633 6411 -	1
+probe.pattern	1633 6411 5c5c5c	0
+probe.pattern	1633 6411 6125635f	1
+probe.pattern	1633 6411 616263	1
+probe.pattern	1633 6411 6162635c	0
+probe.pattern	1633 6411 6162635c5c	1
+probe.pattern	1633 811 -	1
+probe.pattern	1633 811 5c5c5c	0
+probe.pattern	1633 811 6125635f	1
+probe.pattern	1633 811 616263	1
+probe.pattern	1633 811 6162635c	0
+probe.pattern	1633 811 6162635c5c	1
+probe.pattern	1633 950 -	1
+probe.pattern	1633 950 5c5c5c	0
+probe.pattern	1633 950 6125635f	1
+probe.pattern	1633 950 616263	1
+probe.pattern	1633 950 6162635c	0
+probe.pattern	1633 950 6162635c5c	1
+probe.pattern	1633 951 -	1
+probe.pattern	1633 951 5c5c5c	0
+probe.pattern	1633 951 6125635f	1
+probe.pattern	1633 951 616263	1
+probe.pattern	1633 951 6162635c	0
+probe.pattern	1633 951 6162635c5c	1
+probe.pattern	1633 962 -	1
+probe.pattern	1633 962 5c5c5c	0
+probe.pattern	1633 962 6125635f	1
+probe.pattern	1633 962 616263	1
+probe.pattern	1633 962 6162635c	0
+probe.pattern	1633 962 6162635c5c	1
+probe.pattern	1633 963 -	1
+probe.pattern	1633 963 5c5c5c	0
+probe.pattern	1633 963 6125635f	1
+probe.pattern	1633 963 616263	1
+probe.pattern	1633 963 6162635c	0
+probe.pattern	1633 963 6162635c5c	1
+probe.pattern	1634 0 -	0
+probe.pattern	1634 0 5c5c5c	0
+probe.pattern	1634 0 6125635f	0
+probe.pattern	1634 0 616263	0
+probe.pattern	1634 0 6162635c	0
+probe.pattern	1634 0 6162635c5c	0
+probe.pattern	1634 100 -	1
+probe.pattern	1634 100 5c5c5c	0
+probe.pattern	1634 100 6125635f	1
+probe.pattern	1634 100 616263	1
+probe.pattern	1634 100 6162635c	0
+probe.pattern	1634 100 6162635c5c	1
+probe.pattern	1634 16384 -	0
+probe.pattern	1634 16384 5c5c5c	0
+probe.pattern	1634 16384 6125635f	0
+probe.pattern	1634 16384 616263	0
+probe.pattern	1634 16384 6162635c	0
+probe.pattern	1634 16384 6162635c5c	0
+probe.pattern	1634 6411 -	1
+probe.pattern	1634 6411 5c5c5c	0
+probe.pattern	1634 6411 6125635f	1
+probe.pattern	1634 6411 616263	1
+probe.pattern	1634 6411 6162635c	0
+probe.pattern	1634 6411 6162635c5c	1
+probe.pattern	1634 811 -	1
+probe.pattern	1634 811 5c5c5c	0
+probe.pattern	1634 811 6125635f	1
+probe.pattern	1634 811 616263	1
+probe.pattern	1634 811 6162635c	0
+probe.pattern	1634 811 6162635c5c	1
+probe.pattern	1634 950 -	1
+probe.pattern	1634 950 5c5c5c	0
+probe.pattern	1634 950 6125635f	1
+probe.pattern	1634 950 616263	1
+probe.pattern	1634 950 6162635c	0
+probe.pattern	1634 950 6162635c5c	1
+probe.pattern	1634 951 -	1
+probe.pattern	1634 951 5c5c5c	0
+probe.pattern	1634 951 6125635f	1
+probe.pattern	1634 951 616263	1
+probe.pattern	1634 951 6162635c	0
+probe.pattern	1634 951 6162635c5c	1
+probe.pattern	1634 962 -	1
+probe.pattern	1634 962 5c5c5c	0
+probe.pattern	1634 962 6125635f	1
+probe.pattern	1634 962 616263	1
+probe.pattern	1634 962 6162635c	0
+probe.pattern	1634 962 6162635c5c	1
+probe.pattern	1634 963 -	1
+probe.pattern	1634 963 5c5c5c	0
+probe.pattern	1634 963 6125635f	1
+probe.pattern	1634 963 616263	1
+probe.pattern	1634 963 6162635c	0
+probe.pattern	1634 963 6162635c5c	1
+probe.pattern	1635 0 -	0
+probe.pattern	1635 0 5c5c5c	0
+probe.pattern	1635 0 6125635f	0
+probe.pattern	1635 0 616263	0
+probe.pattern	1635 0 6162635c	0
+probe.pattern	1635 0 6162635c5c	0
+probe.pattern	1635 100 -	1
+probe.pattern	1635 100 5c5c5c	0
+probe.pattern	1635 100 6125635f	1
+probe.pattern	1635 100 616263	1
+probe.pattern	1635 100 6162635c	0
+probe.pattern	1635 100 6162635c5c	1
+probe.pattern	1635 16384 -	0
+probe.pattern	1635 16384 5c5c5c	0
+probe.pattern	1635 16384 6125635f	0
+probe.pattern	1635 16384 616263	0
+probe.pattern	1635 16384 6162635c	0
+probe.pattern	1635 16384 6162635c5c	0
+probe.pattern	1635 6411 -	1
+probe.pattern	1635 6411 5c5c5c	0
+probe.pattern	1635 6411 6125635f	1
+probe.pattern	1635 6411 616263	1
+probe.pattern	1635 6411 6162635c	0
+probe.pattern	1635 6411 6162635c5c	1
+probe.pattern	1635 811 -	1
+probe.pattern	1635 811 5c5c5c	0
+probe.pattern	1635 811 6125635f	1
+probe.pattern	1635 811 616263	1
+probe.pattern	1635 811 6162635c	0
+probe.pattern	1635 811 6162635c5c	1
+probe.pattern	1635 950 -	1
+probe.pattern	1635 950 5c5c5c	0
+probe.pattern	1635 950 6125635f	1
+probe.pattern	1635 950 616263	1
+probe.pattern	1635 950 6162635c	0
+probe.pattern	1635 950 6162635c5c	1
+probe.pattern	1635 951 -	1
+probe.pattern	1635 951 5c5c5c	0
+probe.pattern	1635 951 6125635f	1
+probe.pattern	1635 951 616263	1
+probe.pattern	1635 951 6162635c	0
+probe.pattern	1635 951 6162635c5c	1
+probe.pattern	1635 962 -	1
+probe.pattern	1635 962 5c5c5c	0
+probe.pattern	1635 962 6125635f	1
+probe.pattern	1635 962 616263	1
+probe.pattern	1635 962 6162635c	0
+probe.pattern	1635 962 6162635c5c	1
+probe.pattern	1635 963 -	1
+probe.pattern	1635 963 5c5c5c	0
+probe.pattern	1635 963 6125635f	1
+probe.pattern	1635 963 616263	1
+probe.pattern	1635 963 6162635c	0
+probe.pattern	1635 963 6162635c5c	1
+probe.pattern	1636 0 -	0
+probe.pattern	1636 0 5c5c5c	0
+probe.pattern	1636 0 6125635f	0
+probe.pattern	1636 0 616263	0
+probe.pattern	1636 0 6162635c	0
+probe.pattern	1636 0 6162635c5c	0
+probe.pattern	1636 100 -	1
+probe.pattern	1636 100 5c5c5c	0
+probe.pattern	1636 100 6125635f	1
+probe.pattern	1636 100 616263	1
+probe.pattern	1636 100 6162635c	0
+probe.pattern	1636 100 6162635c5c	1
+probe.pattern	1636 16384 -	0
+probe.pattern	1636 16384 5c5c5c	0
+probe.pattern	1636 16384 6125635f	0
+probe.pattern	1636 16384 616263	0
+probe.pattern	1636 16384 6162635c	0
+probe.pattern	1636 16384 6162635c5c	0
+probe.pattern	1636 6411 -	1
+probe.pattern	1636 6411 5c5c5c	0
+probe.pattern	1636 6411 6125635f	1
+probe.pattern	1636 6411 616263	1
+probe.pattern	1636 6411 6162635c	0
+probe.pattern	1636 6411 6162635c5c	1
+probe.pattern	1636 811 -	1
+probe.pattern	1636 811 5c5c5c	0
+probe.pattern	1636 811 6125635f	1
+probe.pattern	1636 811 616263	1
+probe.pattern	1636 811 6162635c	0
+probe.pattern	1636 811 6162635c5c	1
+probe.pattern	1636 950 -	1
+probe.pattern	1636 950 5c5c5c	0
+probe.pattern	1636 950 6125635f	1
+probe.pattern	1636 950 616263	1
+probe.pattern	1636 950 6162635c	0
+probe.pattern	1636 950 6162635c5c	1
+probe.pattern	1636 951 -	1
+probe.pattern	1636 951 5c5c5c	0
+probe.pattern	1636 951 6125635f	1
+probe.pattern	1636 951 616263	1
+probe.pattern	1636 951 6162635c	0
+probe.pattern	1636 951 6162635c5c	1
+probe.pattern	1636 962 -	1
+probe.pattern	1636 962 5c5c5c	0
+probe.pattern	1636 962 6125635f	1
+probe.pattern	1636 962 616263	1
+probe.pattern	1636 962 6162635c	0
+probe.pattern	1636 962 6162635c5c	1
+probe.pattern	1636 963 -	1
+probe.pattern	1636 963 5c5c5c	0
+probe.pattern	1636 963 6125635f	1
+probe.pattern	1636 963 616263	1
+probe.pattern	1636 963 6162635c	0
+probe.pattern	1636 963 6162635c5c	1
+probe.pattern	1656 0 -	0
+probe.pattern	1656 0 5c5c5c	0
+probe.pattern	1656 0 6125635f	0
+probe.pattern	1656 0 616263	0
+probe.pattern	1656 0 6162635c	0
+probe.pattern	1656 0 6162635c5c	0
+probe.pattern	1656 100 -	0
+probe.pattern	1656 100 5c5c5c	0
+probe.pattern	1656 100 6125635f	0
+probe.pattern	1656 100 616263	0
+probe.pattern	1656 100 6162635c	0
+probe.pattern	1656 100 6162635c5c	0
+probe.pattern	1656 16384 -	0
+probe.pattern	1656 16384 5c5c5c	0
+probe.pattern	1656 16384 6125635f	0
+probe.pattern	1656 16384 616263	0
+probe.pattern	1656 16384 6162635c	0
+probe.pattern	1656 16384 6162635c5c	0
+probe.pattern	1656 6411 -	0
+probe.pattern	1656 6411 5c5c5c	0
+probe.pattern	1656 6411 6125635f	0
+probe.pattern	1656 6411 616263	0
+probe.pattern	1656 6411 6162635c	0
+probe.pattern	1656 6411 6162635c5c	0
+probe.pattern	1656 811 -	0
+probe.pattern	1656 811 5c5c5c	0
+probe.pattern	1656 811 6125635f	0
+probe.pattern	1656 811 616263	0
+probe.pattern	1656 811 6162635c	0
+probe.pattern	1656 811 6162635c5c	0
+probe.pattern	1656 950 -	0
+probe.pattern	1656 950 5c5c5c	0
+probe.pattern	1656 950 6125635f	0
+probe.pattern	1656 950 616263	0
+probe.pattern	1656 950 6162635c	0
+probe.pattern	1656 950 6162635c5c	0
+probe.pattern	1656 951 -	0
+probe.pattern	1656 951 5c5c5c	0
+probe.pattern	1656 951 6125635f	0
+probe.pattern	1656 951 616263	0
+probe.pattern	1656 951 6162635c	0
+probe.pattern	1656 951 6162635c5c	0
+probe.pattern	1656 962 -	0
+probe.pattern	1656 962 5c5c5c	0
+probe.pattern	1656 962 6125635f	0
+probe.pattern	1656 962 616263	0
+probe.pattern	1656 962 6162635c	0
+probe.pattern	1656 962 6162635c5c	0
+probe.pattern	1656 963 -	0
+probe.pattern	1656 963 5c5c5c	0
+probe.pattern	1656 963 6125635f	0
+probe.pattern	1656 963 616263	0
+probe.pattern	1656 963 6162635c	0
+probe.pattern	1656 963 6162635c5c	0
+probe.pattern	1657 0 -	0
+probe.pattern	1657 0 5c5c5c	0
+probe.pattern	1657 0 6125635f	0
+probe.pattern	1657 0 616263	0
+probe.pattern	1657 0 6162635c	0
+probe.pattern	1657 0 6162635c5c	0
+probe.pattern	1657 100 -	0
+probe.pattern	1657 100 5c5c5c	0
+probe.pattern	1657 100 6125635f	0
+probe.pattern	1657 100 616263	0
+probe.pattern	1657 100 6162635c	0
+probe.pattern	1657 100 6162635c5c	0
+probe.pattern	1657 16384 -	0
+probe.pattern	1657 16384 5c5c5c	0
+probe.pattern	1657 16384 6125635f	0
+probe.pattern	1657 16384 616263	0
+probe.pattern	1657 16384 6162635c	0
+probe.pattern	1657 16384 6162635c5c	0
+probe.pattern	1657 6411 -	0
+probe.pattern	1657 6411 5c5c5c	0
+probe.pattern	1657 6411 6125635f	0
+probe.pattern	1657 6411 616263	0
+probe.pattern	1657 6411 6162635c	0
+probe.pattern	1657 6411 6162635c5c	0
+probe.pattern	1657 811 -	0
+probe.pattern	1657 811 5c5c5c	0
+probe.pattern	1657 811 6125635f	0
+probe.pattern	1657 811 616263	0
+probe.pattern	1657 811 6162635c	0
+probe.pattern	1657 811 6162635c5c	0
+probe.pattern	1657 950 -	0
+probe.pattern	1657 950 5c5c5c	0
+probe.pattern	1657 950 6125635f	0
+probe.pattern	1657 950 616263	0
+probe.pattern	1657 950 6162635c	0
+probe.pattern	1657 950 6162635c5c	0
+probe.pattern	1657 951 -	0
+probe.pattern	1657 951 5c5c5c	0
+probe.pattern	1657 951 6125635f	0
+probe.pattern	1657 951 616263	0
+probe.pattern	1657 951 6162635c	0
+probe.pattern	1657 951 6162635c5c	0
+probe.pattern	1657 962 -	0
+probe.pattern	1657 962 5c5c5c	0
+probe.pattern	1657 962 6125635f	0
+probe.pattern	1657 962 616263	0
+probe.pattern	1657 962 6162635c	0
+probe.pattern	1657 962 6162635c5c	0
+probe.pattern	1657 963 -	0
+probe.pattern	1657 963 5c5c5c	0
+probe.pattern	1657 963 6125635f	0
+probe.pattern	1657 963 616263	0
+probe.pattern	1657 963 6162635c	0
+probe.pattern	1657 963 6162635c5c	0
+probe.pattern	1658 0 -	0
+probe.pattern	1658 0 5c5c5c	0
+probe.pattern	1658 0 6125635f	0
+probe.pattern	1658 0 616263	0
+probe.pattern	1658 0 6162635c	0
+probe.pattern	1658 0 6162635c5c	0
+probe.pattern	1658 100 -	0
+probe.pattern	1658 100 5c5c5c	0
+probe.pattern	1658 100 6125635f	0
+probe.pattern	1658 100 616263	0
+probe.pattern	1658 100 6162635c	0
+probe.pattern	1658 100 6162635c5c	0
+probe.pattern	1658 16384 -	0
+probe.pattern	1658 16384 5c5c5c	0
+probe.pattern	1658 16384 6125635f	0
+probe.pattern	1658 16384 616263	0
+probe.pattern	1658 16384 6162635c	0
+probe.pattern	1658 16384 6162635c5c	0
+probe.pattern	1658 6411 -	0
+probe.pattern	1658 6411 5c5c5c	0
+probe.pattern	1658 6411 6125635f	0
+probe.pattern	1658 6411 616263	0
+probe.pattern	1658 6411 6162635c	0
+probe.pattern	1658 6411 6162635c5c	0
+probe.pattern	1658 811 -	0
+probe.pattern	1658 811 5c5c5c	0
+probe.pattern	1658 811 6125635f	0
+probe.pattern	1658 811 616263	0
+probe.pattern	1658 811 6162635c	0
+probe.pattern	1658 811 6162635c5c	0
+probe.pattern	1658 950 -	0
+probe.pattern	1658 950 5c5c5c	0
+probe.pattern	1658 950 6125635f	0
+probe.pattern	1658 950 616263	0
+probe.pattern	1658 950 6162635c	0
+probe.pattern	1658 950 6162635c5c	0
+probe.pattern	1658 951 -	0
+probe.pattern	1658 951 5c5c5c	0
+probe.pattern	1658 951 6125635f	0
+probe.pattern	1658 951 616263	0
+probe.pattern	1658 951 6162635c	0
+probe.pattern	1658 951 6162635c5c	0
+probe.pattern	1658 962 -	0
+probe.pattern	1658 962 5c5c5c	0
+probe.pattern	1658 962 6125635f	0
+probe.pattern	1658 962 616263	0
+probe.pattern	1658 962 6162635c	0
+probe.pattern	1658 962 6162635c5c	0
+probe.pattern	1658 963 -	0
+probe.pattern	1658 963 5c5c5c	0
+probe.pattern	1658 963 6125635f	0
+probe.pattern	1658 963 616263	0
+probe.pattern	1658 963 6162635c	0
+probe.pattern	1658 963 6162635c5c	0
+probe.pattern	1659 0 -	0
+probe.pattern	1659 0 5c5c5c	0
+probe.pattern	1659 0 6125635f	0
+probe.pattern	1659 0 616263	0
+probe.pattern	1659 0 6162635c	0
+probe.pattern	1659 0 6162635c5c	0
+probe.pattern	1659 100 -	0
+probe.pattern	1659 100 5c5c5c	0
+probe.pattern	1659 100 6125635f	0
+probe.pattern	1659 100 616263	0
+probe.pattern	1659 100 6162635c	0
+probe.pattern	1659 100 6162635c5c	0
+probe.pattern	1659 16384 -	0
+probe.pattern	1659 16384 5c5c5c	0
+probe.pattern	1659 16384 6125635f	0
+probe.pattern	1659 16384 616263	0
+probe.pattern	1659 16384 6162635c	0
+probe.pattern	1659 16384 6162635c5c	0
+probe.pattern	1659 6411 -	0
+probe.pattern	1659 6411 5c5c5c	0
+probe.pattern	1659 6411 6125635f	0
+probe.pattern	1659 6411 616263	0
+probe.pattern	1659 6411 6162635c	0
+probe.pattern	1659 6411 6162635c5c	0
+probe.pattern	1659 811 -	0
+probe.pattern	1659 811 5c5c5c	0
+probe.pattern	1659 811 6125635f	0
+probe.pattern	1659 811 616263	0
+probe.pattern	1659 811 6162635c	0
+probe.pattern	1659 811 6162635c5c	0
+probe.pattern	1659 950 -	0
+probe.pattern	1659 950 5c5c5c	0
+probe.pattern	1659 950 6125635f	0
+probe.pattern	1659 950 616263	0
+probe.pattern	1659 950 6162635c	0
+probe.pattern	1659 950 6162635c5c	0
+probe.pattern	1659 951 -	0
+probe.pattern	1659 951 5c5c5c	0
+probe.pattern	1659 951 6125635f	0
+probe.pattern	1659 951 616263	0
+probe.pattern	1659 951 6162635c	0
+probe.pattern	1659 951 6162635c5c	0
+probe.pattern	1659 962 -	0
+probe.pattern	1659 962 5c5c5c	0
+probe.pattern	1659 962 6125635f	0
+probe.pattern	1659 962 616263	0
+probe.pattern	1659 962 6162635c	0
+probe.pattern	1659 962 6162635c5c	0
+probe.pattern	1659 963 -	0
+probe.pattern	1659 963 5c5c5c	0
+probe.pattern	1659 963 6125635f	0
+probe.pattern	1659 963 616263	0
+probe.pattern	1659 963 6162635c	0
+probe.pattern	1659 963 6162635c5c	0
+probe.pattern	1660 0 -	0
+probe.pattern	1660 0 5c5c5c	0
+probe.pattern	1660 0 6125635f	0
+probe.pattern	1660 0 616263	0
+probe.pattern	1660 0 6162635c	0
+probe.pattern	1660 0 6162635c5c	0
+probe.pattern	1660 100 -	1
+probe.pattern	1660 100 5c5c5c	0
+probe.pattern	1660 100 6125635f	1
+probe.pattern	1660 100 616263	1
+probe.pattern	1660 100 6162635c	0
+probe.pattern	1660 100 6162635c5c	1
+probe.pattern	1660 16384 -	0
+probe.pattern	1660 16384 5c5c5c	0
+probe.pattern	1660 16384 6125635f	0
+probe.pattern	1660 16384 616263	0
+probe.pattern	1660 16384 6162635c	0
+probe.pattern	1660 16384 6162635c5c	0
+probe.pattern	1660 6411 -	1
+probe.pattern	1660 6411 5c5c5c	0
+probe.pattern	1660 6411 6125635f	1
+probe.pattern	1660 6411 616263	1
+probe.pattern	1660 6411 6162635c	0
+probe.pattern	1660 6411 6162635c5c	1
+probe.pattern	1660 811 -	1
+probe.pattern	1660 811 5c5c5c	0
+probe.pattern	1660 811 6125635f	1
+probe.pattern	1660 811 616263	1
+probe.pattern	1660 811 6162635c	0
+probe.pattern	1660 811 6162635c5c	1
+probe.pattern	1660 950 -	1
+probe.pattern	1660 950 5c5c5c	0
+probe.pattern	1660 950 6125635f	1
+probe.pattern	1660 950 616263	1
+probe.pattern	1660 950 6162635c	0
+probe.pattern	1660 950 6162635c5c	1
+probe.pattern	1660 951 -	1
+probe.pattern	1660 951 5c5c5c	0
+probe.pattern	1660 951 6125635f	1
+probe.pattern	1660 951 616263	1
+probe.pattern	1660 951 6162635c	0
+probe.pattern	1660 951 6162635c5c	1
+probe.pattern	1660 962 -	1
+probe.pattern	1660 962 5c5c5c	0
+probe.pattern	1660 962 6125635f	1
+probe.pattern	1660 962 616263	1
+probe.pattern	1660 962 6162635c	0
+probe.pattern	1660 962 6162635c5c	1
+probe.pattern	1660 963 -	1
+probe.pattern	1660 963 5c5c5c	0
+probe.pattern	1660 963 6125635f	1
+probe.pattern	1660 963 616263	1
+probe.pattern	1660 963 6162635c	0
+probe.pattern	1660 963 6162635c5c	1
+probe.pattern	1661 0 -	0
+probe.pattern	1661 0 5c5c5c	0
+probe.pattern	1661 0 6125635f	0
+probe.pattern	1661 0 616263	0
+probe.pattern	1661 0 6162635c	0
+probe.pattern	1661 0 6162635c5c	0
+probe.pattern	1661 100 -	1
+probe.pattern	1661 100 5c5c5c	0
+probe.pattern	1661 100 6125635f	1
+probe.pattern	1661 100 616263	1
+probe.pattern	1661 100 6162635c	0
+probe.pattern	1661 100 6162635c5c	1
+probe.pattern	1661 16384 -	0
+probe.pattern	1661 16384 5c5c5c	0
+probe.pattern	1661 16384 6125635f	0
+probe.pattern	1661 16384 616263	0
+probe.pattern	1661 16384 6162635c	0
+probe.pattern	1661 16384 6162635c5c	0
+probe.pattern	1661 6411 -	1
+probe.pattern	1661 6411 5c5c5c	0
+probe.pattern	1661 6411 6125635f	1
+probe.pattern	1661 6411 616263	1
+probe.pattern	1661 6411 6162635c	0
+probe.pattern	1661 6411 6162635c5c	1
+probe.pattern	1661 811 -	1
+probe.pattern	1661 811 5c5c5c	0
+probe.pattern	1661 811 6125635f	1
+probe.pattern	1661 811 616263	1
+probe.pattern	1661 811 6162635c	0
+probe.pattern	1661 811 6162635c5c	1
+probe.pattern	1661 950 -	1
+probe.pattern	1661 950 5c5c5c	0
+probe.pattern	1661 950 6125635f	1
+probe.pattern	1661 950 616263	1
+probe.pattern	1661 950 6162635c	0
+probe.pattern	1661 950 6162635c5c	1
+probe.pattern	1661 951 -	1
+probe.pattern	1661 951 5c5c5c	0
+probe.pattern	1661 951 6125635f	1
+probe.pattern	1661 951 616263	1
+probe.pattern	1661 951 6162635c	0
+probe.pattern	1661 951 6162635c5c	1
+probe.pattern	1661 962 -	1
+probe.pattern	1661 962 5c5c5c	0
+probe.pattern	1661 962 6125635f	1
+probe.pattern	1661 962 616263	1
+probe.pattern	1661 962 6162635c	0
+probe.pattern	1661 962 6162635c5c	1
+probe.pattern	1661 963 -	1
+probe.pattern	1661 963 5c5c5c	0
+probe.pattern	1661 963 6125635f	1
+probe.pattern	1661 963 616263	1
+probe.pattern	1661 963 6162635c	0
+probe.pattern	1661 963 6162635c5c	1
+probe.pattern	79 0 -	0
+probe.pattern	79 0 5c5c5c	0
+probe.pattern	79 0 6125635f	0
+probe.pattern	79 0 616263	0
+probe.pattern	79 0 6162635c	0
+probe.pattern	79 0 6162635c5c	0
+probe.pattern	79 100 -	0
+probe.pattern	79 100 5c5c5c	0
+probe.pattern	79 100 6125635f	0
+probe.pattern	79 100 616263	0
+probe.pattern	79 100 6162635c	0
+probe.pattern	79 100 6162635c5c	0
+probe.pattern	79 16384 -	0
+probe.pattern	79 16384 5c5c5c	0
+probe.pattern	79 16384 6125635f	0
+probe.pattern	79 16384 616263	0
+probe.pattern	79 16384 6162635c	0
+probe.pattern	79 16384 6162635c5c	0
+probe.pattern	79 6411 -	0
+probe.pattern	79 6411 5c5c5c	0
+probe.pattern	79 6411 6125635f	0
+probe.pattern	79 6411 616263	0
+probe.pattern	79 6411 6162635c	0
+probe.pattern	79 6411 6162635c5c	0
+probe.pattern	79 811 -	0
+probe.pattern	79 811 5c5c5c	0
+probe.pattern	79 811 6125635f	0
+probe.pattern	79 811 616263	0
+probe.pattern	79 811 6162635c	0
+probe.pattern	79 811 6162635c5c	0
+probe.pattern	79 950 -	0
+probe.pattern	79 950 5c5c5c	0
+probe.pattern	79 950 6125635f	0
+probe.pattern	79 950 616263	0
+probe.pattern	79 950 6162635c	0
+probe.pattern	79 950 6162635c5c	0
+probe.pattern	79 951 -	0
+probe.pattern	79 951 5c5c5c	0
+probe.pattern	79 951 6125635f	0
+probe.pattern	79 951 616263	0
+probe.pattern	79 951 6162635c	0
+probe.pattern	79 951 6162635c5c	0
+probe.pattern	79 962 -	0
+probe.pattern	79 962 5c5c5c	0
+probe.pattern	79 962 6125635f	0
+probe.pattern	79 962 616263	0
+probe.pattern	79 962 6162635c	0
+probe.pattern	79 962 6162635c5c	0
+probe.pattern	79 963 -	0
+probe.pattern	79 963 5c5c5c	0
+probe.pattern	79 963 6125635f	0
+probe.pattern	79 963 616263	0
+probe.pattern	79 963 6162635c	0
+probe.pattern	79 963 6162635c5c	0
+probe.pattern	850 0 -	0
+probe.pattern	850 0 5c5c5c	0
+probe.pattern	850 0 6125635f	0
+probe.pattern	850 0 616263	0
+probe.pattern	850 0 6162635c	0
+probe.pattern	850 0 6162635c5c	0
+probe.pattern	850 100 -	1
+probe.pattern	850 100 5c5c5c	0
+probe.pattern	850 100 6125635f	1
+probe.pattern	850 100 616263	1
+probe.pattern	850 100 6162635c	0
+probe.pattern	850 100 6162635c5c	1
+probe.pattern	850 16384 -	0
+probe.pattern	850 16384 5c5c5c	0
+probe.pattern	850 16384 6125635f	0
+probe.pattern	850 16384 616263	0
+probe.pattern	850 16384 6162635c	0
+probe.pattern	850 16384 6162635c5c	0
+probe.pattern	850 6411 -	1
+probe.pattern	850 6411 5c5c5c	0
+probe.pattern	850 6411 6125635f	1
+probe.pattern	850 6411 616263	1
+probe.pattern	850 6411 6162635c	0
+probe.pattern	850 6411 6162635c5c	1
+probe.pattern	850 811 -	1
+probe.pattern	850 811 5c5c5c	0
+probe.pattern	850 811 6125635f	1
+probe.pattern	850 811 616263	1
+probe.pattern	850 811 6162635c	0
+probe.pattern	850 811 6162635c5c	1
+probe.pattern	850 950 -	1
+probe.pattern	850 950 5c5c5c	0
+probe.pattern	850 950 6125635f	1
+probe.pattern	850 950 616263	1
+probe.pattern	850 950 6162635c	0
+probe.pattern	850 950 6162635c5c	1
+probe.pattern	850 951 -	1
+probe.pattern	850 951 5c5c5c	0
+probe.pattern	850 951 6125635f	1
+probe.pattern	850 951 616263	1
+probe.pattern	850 951 6162635c	0
+probe.pattern	850 951 6162635c5c	1
+probe.pattern	850 962 -	1
+probe.pattern	850 962 5c5c5c	0
+probe.pattern	850 962 6125635f	1
+probe.pattern	850 962 616263	1
+probe.pattern	850 962 6162635c	0
+probe.pattern	850 962 6162635c5c	1
+probe.pattern	850 963 -	1
+probe.pattern	850 963 5c5c5c	0
+probe.pattern	850 963 6125635f	1
+probe.pattern	850 963 616263	1
+probe.pattern	850 963 6162635c	0
+probe.pattern	850 963 6162635c5c	1
+probe.pattern	851 0 -	0
+probe.pattern	851 0 5c5c5c	0
+probe.pattern	851 0 6125635f	0
+probe.pattern	851 0 616263	0
+probe.pattern	851 0 6162635c	0
+probe.pattern	851 0 6162635c5c	0
+probe.pattern	851 100 -	1
+probe.pattern	851 100 5c5c5c	0
+probe.pattern	851 100 6125635f	1
+probe.pattern	851 100 616263	1
+probe.pattern	851 100 6162635c	0
+probe.pattern	851 100 6162635c5c	1
+probe.pattern	851 16384 -	0
+probe.pattern	851 16384 5c5c5c	0
+probe.pattern	851 16384 6125635f	0
+probe.pattern	851 16384 616263	0
+probe.pattern	851 16384 6162635c	0
+probe.pattern	851 16384 6162635c5c	0
+probe.pattern	851 6411 -	1
+probe.pattern	851 6411 5c5c5c	0
+probe.pattern	851 6411 6125635f	1
+probe.pattern	851 6411 616263	1
+probe.pattern	851 6411 6162635c	0
+probe.pattern	851 6411 6162635c5c	1
+probe.pattern	851 811 -	1
+probe.pattern	851 811 5c5c5c	0
+probe.pattern	851 811 6125635f	1
+probe.pattern	851 811 616263	1
+probe.pattern	851 811 6162635c	0
+probe.pattern	851 811 6162635c5c	1
+probe.pattern	851 950 -	1
+probe.pattern	851 950 5c5c5c	0
+probe.pattern	851 950 6125635f	1
+probe.pattern	851 950 616263	1
+probe.pattern	851 950 6162635c	0
+probe.pattern	851 950 6162635c5c	1
+probe.pattern	851 951 -	1
+probe.pattern	851 951 5c5c5c	0
+probe.pattern	851 951 6125635f	1
+probe.pattern	851 951 616263	1
+probe.pattern	851 951 6162635c	0
+probe.pattern	851 951 6162635c5c	1
+probe.pattern	851 962 -	1
+probe.pattern	851 962 5c5c5c	0
+probe.pattern	851 962 6125635f	1
+probe.pattern	851 962 616263	1
+probe.pattern	851 962 6162635c	0
+probe.pattern	851 962 6162635c5c	1
+probe.pattern	851 963 -	1
+probe.pattern	851 963 5c5c5c	0
+probe.pattern	851 963 6125635f	1
+probe.pattern	851 963 616263	1
+probe.pattern	851 963 6162635c	0
+probe.pattern	851 963 6162635c5c	1
+probe.pattern	858 0 -	0
+probe.pattern	858 0 5c5c5c	0
+probe.pattern	858 0 6125635f	0
+probe.pattern	858 0 616263	0
+probe.pattern	858 0 6162635c	0
+probe.pattern	858 0 6162635c5c	0
+probe.pattern	858 100 -	1
+probe.pattern	858 100 5c5c5c	0
+probe.pattern	858 100 6125635f	1
+probe.pattern	858 100 616263	1
+probe.pattern	858 100 6162635c	0
+probe.pattern	858 100 6162635c5c	1
+probe.pattern	858 16384 -	0
+probe.pattern	858 16384 5c5c5c	0
+probe.pattern	858 16384 6125635f	0
+probe.pattern	858 16384 616263	0
+probe.pattern	858 16384 6162635c	0
+probe.pattern	858 16384 6162635c5c	0
+probe.pattern	858 6411 -	1
+probe.pattern	858 6411 5c5c5c	0
+probe.pattern	858 6411 6125635f	1
+probe.pattern	858 6411 616263	1
+probe.pattern	858 6411 6162635c	0
+probe.pattern	858 6411 6162635c5c	1
+probe.pattern	858 811 -	1
+probe.pattern	858 811 5c5c5c	0
+probe.pattern	858 811 6125635f	1
+probe.pattern	858 811 616263	1
+probe.pattern	858 811 6162635c	0
+probe.pattern	858 811 6162635c5c	1
+probe.pattern	858 950 -	1
+probe.pattern	858 950 5c5c5c	0
+probe.pattern	858 950 6125635f	1
+probe.pattern	858 950 616263	1
+probe.pattern	858 950 6162635c	0
+probe.pattern	858 950 6162635c5c	1
+probe.pattern	858 951 -	1
+probe.pattern	858 951 5c5c5c	0
+probe.pattern	858 951 6125635f	1
+probe.pattern	858 951 616263	1
+probe.pattern	858 951 6162635c	0
+probe.pattern	858 951 6162635c5c	1
+probe.pattern	858 962 -	1
+probe.pattern	858 962 5c5c5c	0
+probe.pattern	858 962 6125635f	1
+probe.pattern	858 962 616263	1
+probe.pattern	858 962 6162635c	0
+probe.pattern	858 962 6162635c5c	1
+probe.pattern	858 963 -	1
+probe.pattern	858 963 5c5c5c	0
+probe.pattern	858 963 6125635f	1
+probe.pattern	858 963 616263	1
+probe.pattern	858 963 6162635c	0
+probe.pattern	858 963 6162635c5c	1
+probe.pattern	859 0 -	0
+probe.pattern	859 0 5c5c5c	0
+probe.pattern	859 0 6125635f	0
+probe.pattern	859 0 616263	0
+probe.pattern	859 0 6162635c	0
+probe.pattern	859 0 6162635c5c	0
+probe.pattern	859 100 -	1
+probe.pattern	859 100 5c5c5c	0
+probe.pattern	859 100 6125635f	1
+probe.pattern	859 100 616263	1
+probe.pattern	859 100 6162635c	0
+probe.pattern	859 100 6162635c5c	1
+probe.pattern	859 16384 -	0
+probe.pattern	859 16384 5c5c5c	0
+probe.pattern	859 16384 6125635f	0
+probe.pattern	859 16384 616263	0
+probe.pattern	859 16384 6162635c	0
+probe.pattern	859 16384 6162635c5c	0
+probe.pattern	859 6411 -	1
+probe.pattern	859 6411 5c5c5c	0
+probe.pattern	859 6411 6125635f	1
+probe.pattern	859 6411 616263	1
+probe.pattern	859 6411 6162635c	0
+probe.pattern	859 6411 6162635c5c	1
+probe.pattern	859 811 -	1
+probe.pattern	859 811 5c5c5c	0
+probe.pattern	859 811 6125635f	1
+probe.pattern	859 811 616263	1
+probe.pattern	859 811 6162635c	0
+probe.pattern	859 811 6162635c5c	1
+probe.pattern	859 950 -	1
+probe.pattern	859 950 5c5c5c	0
+probe.pattern	859 950 6125635f	1
+probe.pattern	859 950 616263	1
+probe.pattern	859 950 6162635c	0
+probe.pattern	859 950 6162635c5c	1
+probe.pattern	859 951 -	1
+probe.pattern	859 951 5c5c5c	0
+probe.pattern	859 951 6125635f	1
+probe.pattern	859 951 616263	1
+probe.pattern	859 951 6162635c	0
+probe.pattern	859 951 6162635c5c	1
+probe.pattern	859 962 -	1
+probe.pattern	859 962 5c5c5c	0
+probe.pattern	859 962 6125635f	1
+probe.pattern	859 962 616263	1
+probe.pattern	859 962 6162635c	0
+probe.pattern	859 962 6162635c5c	1
+probe.pattern	859 963 -	1
+probe.pattern	859 963 5c5c5c	0
+probe.pattern	859 963 6125635f	1
+probe.pattern	859 963 616263	1
+probe.pattern	859 963 6162635c	0
+probe.pattern	859 963 6162635c5c	1
+probe.privilege	1927 -	0
+probe.privilege	1927 2053656c65637409	1
+probe.privilege	1927 2c	0
+probe.privilege	1927 414c5445522053595354454d	0
+probe.privilege	1927 434f4e4e454354	0
+probe.privilege	1927 435245415445	0
+probe.privilege	1927 44454c455445	1
+probe.privilege	1927 45584543555445	0
+probe.privilege	1927 455845435554452057495448204752414e54204f5054494f4e	0
+probe.privilege	1927 464f4f	0
+probe.privilege	1927 494e53455254	1
+probe.privilege	1927 4d41494e5441494e	1
+probe.privilege	1927 4d454d424552	0
+probe.privilege	1927 4d454d42455220574954482041444d494e204f5054494f4e	0
+probe.privilege	1927 5245464552454e434553	1
+probe.privilege	1927 53454c454354	1
+probe.privilege	1927 53454c45435420574954482041444d494e204f5054494f4e	0
+probe.privilege	1927 53454c4543542057495448204752414e54204f5054494f4e	1
+probe.privilege	1927 53454c4543542c	0
+probe.privilege	1927 53454c4543542c464f4f	0
+probe.privilege	1927 53454c4543542c494e53455254	1
+probe.privilege	1927 53454c45435458	0
+probe.privilege	1927 534554	0
+probe.privilege	1927 54454d50	0
+probe.privilege	1927 54454d504f52415259	0
+probe.privilege	1927 54524947474552	1
+probe.privilege	1927 5452554e43415445	1
+probe.privilege	1927 555044415445	1
+probe.privilege	1927 5553414745	0
+probe.privilege	1927 555341474520574954482041444d494e204f5054494f4e	0
+probe.privilege	1927 73656c656374	1
+probe.privilege	1927 73656c6563742077697468206772616e74206f7074696f6e	1
+probe.privilege	1927 73656c6563742c2075706461746520	1
+probe.privilege	2261 -	0
+probe.privilege	2261 2053656c65637409	0
+probe.privilege	2261 2c	0
+probe.privilege	2261 414c5445522053595354454d	0
+probe.privilege	2261 434f4e4e454354	0
+probe.privilege	2261 435245415445	0
+probe.privilege	2261 44454c455445	0
+probe.privilege	2261 45584543555445	1
+probe.privilege	2261 455845435554452057495448204752414e54204f5054494f4e	1
+probe.privilege	2261 464f4f	0
+probe.privilege	2261 494e53455254	0
+probe.privilege	2261 4d41494e5441494e	0
+probe.privilege	2261 4d454d424552	0
+probe.privilege	2261 4d454d42455220574954482041444d494e204f5054494f4e	0
+probe.privilege	2261 5245464552454e434553	0
+probe.privilege	2261 53454c454354	0
+probe.privilege	2261 53454c45435420574954482041444d494e204f5054494f4e	0
+probe.privilege	2261 53454c4543542057495448204752414e54204f5054494f4e	0
+probe.privilege	2261 53454c4543542c	0
+probe.privilege	2261 53454c4543542c464f4f	0
+probe.privilege	2261 53454c4543542c494e53455254	0
+probe.privilege	2261 53454c45435458	0
+probe.privilege	2261 534554	0
+probe.privilege	2261 54454d50	0
+probe.privilege	2261 54454d504f52415259	0
+probe.privilege	2261 54524947474552	0
+probe.privilege	2261 5452554e43415445	0
+probe.privilege	2261 555044415445	0
+probe.privilege	2261 5553414745	0
+probe.privilege	2261 555341474520574954482041444d494e204f5054494f4e	0
+probe.privilege	2261 73656c656374	0
+probe.privilege	2261 73656c6563742077697468206772616e74206f7074696f6e	0
+probe.privilege	2261 73656c6563742c2075706461746520	0
+probe.privilege	2710 -	0
+probe.privilege	2710 2053656c65637409	0
+probe.privilege	2710 2c	0
+probe.privilege	2710 414c5445522053595354454d	0
+probe.privilege	2710 434f4e4e454354	0
+probe.privilege	2710 435245415445	0
+probe.privilege	2710 44454c455445	0
+probe.privilege	2710 45584543555445	0
+probe.privilege	2710 455845435554452057495448204752414e54204f5054494f4e	0
+probe.privilege	2710 464f4f	0
+probe.privilege	2710 494e53455254	0
+probe.privilege	2710 4d41494e5441494e	0
+probe.privilege	2710 4d454d424552	1
+probe.privilege	2710 4d454d42455220574954482041444d494e204f5054494f4e	1
+probe.privilege	2710 5245464552454e434553	0
+probe.privilege	2710 53454c454354	0
+probe.privilege	2710 53454c45435420574954482041444d494e204f5054494f4e	0
+probe.privilege	2710 53454c4543542057495448204752414e54204f5054494f4e	0
+probe.privilege	2710 53454c4543542c	0
+probe.privilege	2710 53454c4543542c464f4f	0
+probe.privilege	2710 53454c4543542c494e53455254	0
+probe.privilege	2710 53454c45435458	0
+probe.privilege	2710 534554	1
+probe.privilege	2710 54454d50	0
+probe.privilege	2710 54454d504f52415259	0
+probe.privilege	2710 54524947474552	0
+probe.privilege	2710 5452554e43415445	0
+probe.privilege	2710 555044415445	0
+probe.privilege	2710 5553414745	1
+probe.privilege	2710 555341474520574954482041444d494e204f5054494f4e	1
+probe.privilege	2710 73656c656374	0
+probe.privilege	2710 73656c6563742077697468206772616e74206f7074696f6e	0
+probe.privilege	2710 73656c6563742c2075706461746520	0
+probe.privilege	3023 -	0
+probe.privilege	3023 2053656c65637409	1
+probe.privilege	3023 2c	0
+probe.privilege	3023 414c5445522053595354454d	0
+probe.privilege	3023 434f4e4e454354	0
+probe.privilege	3023 435245415445	0
+probe.privilege	3023 44454c455445	0
+probe.privilege	3023 45584543555445	0
+probe.privilege	3023 455845435554452057495448204752414e54204f5054494f4e	0
+probe.privilege	3023 464f4f	0
+probe.privilege	3023 494e53455254	1
+probe.privilege	3023 4d41494e5441494e	0
+probe.privilege	3023 4d454d424552	0
+probe.privilege	3023 4d454d42455220574954482041444d494e204f5054494f4e	0
+probe.privilege	3023 5245464552454e434553	1
+probe.privilege	3023 53454c454354	1
+probe.privilege	3023 53454c45435420574954482041444d494e204f5054494f4e	0
+probe.privilege	3023 53454c4543542057495448204752414e54204f5054494f4e	1
+probe.privilege	3023 53454c4543542c	0
+probe.privilege	3023 53454c4543542c464f4f	0
+probe.privilege	3023 53454c4543542c494e53455254	1
+probe.privilege	3023 53454c45435458	0
+probe.privilege	3023 534554	0
+probe.privilege	3023 54454d50	0
+probe.privilege	3023 54454d504f52415259	0
+probe.privilege	3023 54524947474552	0
+probe.privilege	3023 5452554e43415445	0
+probe.privilege	3023 555044415445	1
+probe.privilege	3023 5553414745	0
+probe.privilege	3023 555341474520574954482041444d494e204f5054494f4e	0
+probe.privilege	3023 73656c656374	1
+probe.privilege	3023 73656c6563742077697468206772616e74206f7074696f6e	1
+probe.privilege	3023 73656c6563742c2075706461746520	1
+probe.privilege	3029 -	0
+probe.privilege	3029 2053656c65637409	1
+probe.privilege	3029 2c	0
+probe.privilege	3029 414c5445522053595354454d	0
+probe.privilege	3029 434f4e4e454354	0
+probe.privilege	3029 435245415445	0
+probe.privilege	3029 44454c455445	0
+probe.privilege	3029 45584543555445	0
+probe.privilege	3029 455845435554452057495448204752414e54204f5054494f4e	0
+probe.privilege	3029 464f4f	0
+probe.privilege	3029 494e53455254	1
+probe.privilege	3029 4d41494e5441494e	0
+probe.privilege	3029 4d454d424552	0
+probe.privilege	3029 4d454d42455220574954482041444d494e204f5054494f4e	0
+probe.privilege	3029 5245464552454e434553	1
+probe.privilege	3029 53454c454354	1
+probe.privilege	3029 53454c45435420574954482041444d494e204f5054494f4e	0
+probe.privilege	3029 53454c4543542057495448204752414e54204f5054494f4e	1
+probe.privilege	3029 53454c4543542c	0
+probe.privilege	3029 53454c4543542c464f4f	0
+probe.privilege	3029 53454c4543542c494e53455254	1
+probe.privilege	3029 53454c45435458	0
+probe.privilege	3029 534554	0
+probe.privilege	3029 54454d50	0
+probe.privilege	3029 54454d504f52415259	0
+probe.privilege	3029 54524947474552	0
+probe.privilege	3029 5452554e43415445	0
+probe.privilege	3029 555044415445	1
+probe.privilege	3029 5553414745	0
+probe.privilege	3029 555341474520574954482041444d494e204f5054494f4e	0
+probe.privilege	3029 73656c656374	1
+probe.privilege	3029 73656c6563742077697468206772616e74206f7074696f6e	1
+probe.privilege	3029 73656c6563742c2075706461746520	1
+probe.privilege	3143 -	0
+probe.privilege	3143 2053656c65637409	0
+probe.privilege	3143 2c	0
+probe.privilege	3143 414c5445522053595354454d	0
+probe.privilege	3143 434f4e4e454354	0
+probe.privilege	3143 435245415445	0
+probe.privilege	3143 44454c455445	0
+probe.privilege	3143 45584543555445	0
+probe.privilege	3143 455845435554452057495448204752414e54204f5054494f4e	0
+probe.privilege	3143 464f4f	0
+probe.privilege	3143 494e53455254	0
+probe.privilege	3143 4d41494e5441494e	0
+probe.privilege	3143 4d454d424552	0
+probe.privilege	3143 4d454d42455220574954482041444d494e204f5054494f4e	0
+probe.privilege	3143 5245464552454e434553	0
+probe.privilege	3143 53454c454354	0
+probe.privilege	3143 53454c45435420574954482041444d494e204f5054494f4e	0
+probe.privilege	3143 53454c4543542057495448204752414e54204f5054494f4e	0
+probe.privilege	3143 53454c4543542c	0
+probe.privilege	3143 53454c4543542c464f4f	0
+probe.privilege	3143 53454c4543542c494e53455254	0
+probe.privilege	3143 53454c45435458	0
+probe.privilege	3143 534554	0
+probe.privilege	3143 54454d50	0
+probe.privilege	3143 54454d504f52415259	0
+probe.privilege	3143 54524947474552	0
+probe.privilege	3143 5452554e43415445	0
+probe.privilege	3143 555044415445	0
+probe.privilege	3143 5553414745	1
+probe.privilege	3143 555341474520574954482041444d494e204f5054494f4e	0
+probe.privilege	3143 73656c656374	0
+probe.privilege	3143 73656c6563742077697468206772616e74206f7074696f6e	0
+probe.privilege	3143 73656c6563742c2075706461746520	0
+probe.text_arg	3060 -1	1
+probe.text_arg	3060 -2147483647	1
+probe.text_arg	3060 -2147483648	0
+probe.text_arg	3060 0	1
+probe.text_arg	3060 1	1
+probe.text_arg	3060 1099511627776	1
+probe.text_arg	3060 2147483647	1
+probe.text_arg	3060 5	1
+probe.text_arg	3060 null	0
+probe.text_arg	3061 -1	1
+probe.text_arg	3061 -2147483647	1
+probe.text_arg	3061 -2147483648	0
+probe.text_arg	3061 0	1
+probe.text_arg	3061 1	1
+probe.text_arg	3061 1099511627776	1
+probe.text_arg	3061 2147483647	1
+probe.text_arg	3061 5	1
+probe.text_arg	3061 null	0
+probe.text_arg	877 -1	0
+probe.text_arg	877 -2147483647	0
+probe.text_arg	877 -2147483648	0
+probe.text_arg	877 0	1
+probe.text_arg	877 1	1
+probe.text_arg	877 1099511627776	1
+probe.text_arg	877 2147483647	1
+probe.text_arg	877 5	1
+probe.text_arg	877 null	0
+probe.text_arg	936 -1	0
+probe.text_arg	936 -2147483647	0
+probe.text_arg	936 -2147483648	0
+probe.text_arg	936 0	1
+probe.text_arg	936 1	1
+probe.text_arg	936 1099511627776	1
+probe.text_arg	936 2147483647	1
+probe.text_arg	936 5	1
+probe.text_arg	936 null	0
+start_time	1299	1
+start_time	2647	1
+start_time	2648	1
+svf_raise_free	0	1
+svf_raise_free	1	1
+svf_raise_free	10	0
+svf_raise_free	11	0
+svf_raise_free	12	0
+svf_raise_free	13	1
+svf_raise_free	14	1
+svf_raise_free	15	0
+svf_raise_free	16	0
+svf_raise_free	17	0
+svf_raise_free	18	0
+svf_raise_free	19	0
+svf_raise_free	2	1
+svf_raise_free	20	0
+svf_raise_free	3	1
+svf_raise_free	4	1
+svf_raise_free	5	1
+svf_raise_free	6	1
+svf_raise_free	7	1
+svf_raise_free	8	1
+svf_raise_free	9	0
+text_extremum	2129 100	1
+text_extremum	2129 950	1
+text_extremum	2129 951	1
+text_extremum	2145 100	1
+text_extremum	2145 950	1
+text_extremum	2145 951	1
+xml_value	1000	1
+xml_value	1003	1
+xml_value	1005	1
+xml_value	1007	1
+xml_value	1009	1
+xml_value	1014	1
+xml_value	1015	1
+xml_value	1016	1
+xml_value	1021	1
+xml_value	1022	1
+xml_value	1028	1
+xml_value	1042	1
+xml_value	1043	1
+xml_value	1231	1
+xml_value	142	1
+xml_value	143	1
+xml_value	16	1
+xml_value	1700	1
+xml_value	19	1
+xml_value	20	1
+xml_value	21	1
+xml_value	23	1
+xml_value	25	1
+xml_value	26	1
+xml_value	700	1
+xml_value	701	1

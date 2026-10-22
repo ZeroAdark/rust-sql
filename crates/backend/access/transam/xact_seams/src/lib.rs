@@ -29,6 +29,15 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    pub fn get_current_statement_start_timestamp() -> types_core::TimestampTz
+);
+
+seam_core::seam!(
+    // xact::ArmClaimStartTimestamps, (transaction, statement) start in, the thread's previous pair out.
+    pub fn arm_claim_start_timestamps(xact_ts: types_core::TimestampTz, stmt_ts: types_core::TimestampTz) -> (types_core::TimestampTz, types_core::TimestampTz)
+);
+
+seam_core::seam!(
     pub fn get_top_transaction_id_if_any() -> types_core::TransactionId
 );
 

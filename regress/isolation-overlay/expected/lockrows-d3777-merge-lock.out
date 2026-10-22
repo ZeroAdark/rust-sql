@@ -1,0 +1,403 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1c s2c
+step s2x: EXPLAIN (COSTS OFF) SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE;
+QUERY PLAN                                                  
+------------------------------------------------------------
+Limit                                                       
+  ->  LockRows                                              
+        ->  Merge Join                                      
+              Merge Cond: (s.id = ms.s_id)                  
+              ->  Sort                                      
+                    Sort Key: s.id                          
+                    ->  Seq Scan on d3777s s                
+                          Filter: (field >= 2)              
+              ->  Sort                                      
+                    Sort Key: ms.s_id                       
+                    ->  Bitmap Heap Scan on d3777ms ms      
+                          Recheck Cond: (m_id = 1)          
+                          ->  Bitmap Index Scan on d3777ms_m
+                                Index Cond: (m_id = 1)      
+(14 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1f s2l s1c s2r s2c
+step s1f: UPDATE d3777s SET field = 0 WHERE id = 2;
+step s2l: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|field|ms
+--+-----+--
+ 6|    2| 3
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2l s1c s2r s2c
+step s1g: UPDATE d3777s SET field = 3 WHERE id = 6;
+step s2l: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|field|ms
+--+-----+--
+ 2|    2| 2
+ 6|    3| 3
+(2 rows)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c s2r s2c
+step s1m: UPDATE d3777ms SET m_id = 3 WHERE id = 2;
+step s2l: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|field|ms
+--+-----+--
+ 6|    2| 3
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2l s1c s2r s2c
+step s1j: UPDATE d3777ms SET s_id = 7 WHERE id = 2;
+step s2l: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|field|ms
+--+-----+--
+ 6|    2| 3
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1f s2one s1c s2r s2c
+step s1f: UPDATE d3777s SET field = 0 WHERE id = 2;
+step s2one: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 1 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2one: <... completed>
+id|field|ms
+--+-----+--
+ 6|    2| 3
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2i s1c s2r s2c
+step s1m: UPDATE d3777ms SET m_id = 3 WHERE id = 2;
+step s2i: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE OF ms; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+id|field|ms
+--+-----+--
+ 6|    2| 3
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+(2 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2i s1c s2r s2c
+step s1j: UPDATE d3777ms SET s_id = 7 WHERE id = 2;
+step s2i: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE OF ms; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+id|field|ms
+--+-----+--
+ 6|    2| 3
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+(2 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1f s2o s1c s2r s2c
+step s1f: UPDATE d3777s SET field = 0 WHERE id = 2;
+step s2o: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE OF s; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|field|ms
+--+-----+--
+ 6|    2| 3
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t|id
+-+--
+s| 2
+s| 6
+(2 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2o s1c s2r s2c
+step s1g: UPDATE d3777s SET field = 3 WHERE id = 6;
+step s2o: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE OF s; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|field|ms
+--+-----+--
+ 2|    2| 2
+ 6|    3| 3
+(2 rows)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t|id
+-+--
+s| 2
+s| 6
+(2 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s2xi s1c s2c
+step s2xi: EXPLAIN (COSTS OFF) SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id LIMIT 4 FOR UPDATE;
+QUERY PLAN                                                
+----------------------------------------------------------
+Limit                                                     
+  ->  LockRows                                            
+        ->  Merge Join                                    
+              Merge Cond: (s.id = ms.s_id)                
+              ->  Index Scan using d3777s_pkey on d3777s s
+              ->  Index Scan using d3777ms_s on d3777ms ms
+(6 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2li s1c s2r s2c
+step s1j: UPDATE d3777ms SET s_id = 7 WHERE id = 2;
+step s2li: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id LIMIT 4 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2li: <... completed>
+id|field|ms
+--+-----+--
+ 1|    1| 1
+ 2|    2| 4
+ 3|    3| 5
+ 6|    2| 3
+(4 rows)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 1
+ms| 2
+ms| 3
+ms| 4
+ms| 5
+s | 1
+s | 2
+s | 3
+s | 6
+(9 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1f s2li s1c s2r s2c
+step s1f: UPDATE d3777s SET field = 0 WHERE id = 2;
+step s2li: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id LIMIT 4 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2li: <... completed>
+id|field|ms
+--+-----+--
+ 1|    1| 1
+ 2|    0| 2
+ 2|    0| 4
+ 3|    3| 5
+(4 rows)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 1
+ms| 2
+ms| 4
+ms| 5
+s | 1
+s | 2
+s | 3
+(7 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2ii s1c s2r s2c
+step s1j: UPDATE d3777ms SET s_id = 7 WHERE id = 2;
+step s2ii: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id LIMIT 4 FOR UPDATE OF ms; <waiting ...>
+step s1c: COMMIT;
+step s2ii: <... completed>
+id|field|ms
+--+-----+--
+ 1|    1| 1
+ 2|    2| 4
+ 3|    3| 5
+ 6|    2| 3
+(4 rows)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 1
+ms| 2
+ms| 3
+ms| 4
+ms| 5
+(5 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2l s1c s2r s2c
+step s1n: UPDATE d3777ms SET m_id = m_id WHERE id = 2;
+step s2l: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|field|ms
+--+-----+--
+ 2|    2| 2
+ 6|    2| 3
+(2 rows)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2i s1c s2r s2c
+step s1n: UPDATE d3777ms SET m_id = m_id WHERE id = 2;
+step s2i: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field >= 2 LIMIT 21 FOR UPDATE OF ms; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+id|field|ms
+--+-----+--
+ 2|    2| 2
+ 6|    2| 3
+(2 rows)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+(2 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2ii s1c s2r s2c
+step s1n: UPDATE d3777ms SET m_id = m_id WHERE id = 2;
+step s2ii: SELECT s.id, s.field, ms.id AS ms FROM d3777s s JOIN d3777ms ms ON s.id = ms.s_id LIMIT 4 FOR UPDATE OF ms; <waiting ...>
+step s1c: COMMIT;
+step s2ii: <... completed>
+id|field|ms
+--+-----+--
+ 1|    1| 1
+ 2|    2| 2
+ 2|    2| 4
+ 3|    3| 5
+(4 rows)
+
+step s2r: SELECT 's' AS t, id FROM d3777s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3777ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 1
+ms| 2
+ms| 4
+ms| 5
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress

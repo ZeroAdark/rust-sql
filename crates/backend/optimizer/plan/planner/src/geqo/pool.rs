@@ -33,7 +33,9 @@ pub(super) fn alloc_pool(pool_size: i32, string_length: i32) -> PgResult<Pool> {
 fn pool_requests(pool_size: i32, string_length: i32) -> PgResult<(usize, usize, usize)> {
     let n = pool_size.max(0) as usize;
     let genes = (string_length + 1) as usize;
-    let bytes = n.saturating_mul(core::mem::size_of::<Chromosome>());
+    // sizeof(Chromosome) in C is a Gene * plus a double, not the Rust layout.
+    const C_SIZEOF_CHROMOSOME: usize = 16;
+    let bytes = n.saturating_mul(C_SIZEOF_CHROMOSOME);
     ::mcx::check_alloc_size(bytes)?;
     ::mcx::check_alloc_size(genes.saturating_mul(core::mem::size_of::<super::Gene>()))?;
     Ok((n, genes, bytes))
@@ -44,8 +46,11 @@ pub(super) fn pool_requests_ok(pool_size: i32, string_length: i32) -> bool {
     pool_requests(pool_size, string_length).is_ok()
 }
 
-pub(super) fn alloc_chromo(string_length: i32) -> Chromosome {
-    Chromosome { string: vec![0 as super::Gene; (string_length + 1) as usize], worth: 0.0 }
+pub(super) fn alloc_chromo(string_length: i32) -> PgResult<Chromosome> {
+    Ok(Chromosome {
+        string: mcx::std_vec_from_elem("geqo", 0 as super::Gene, (string_length + 1) as usize)?,
+        worth: 0.0,
+    })
 }
 
 // Seed the pool, discarding invalid individuals (fitness DBL_MAX); give up

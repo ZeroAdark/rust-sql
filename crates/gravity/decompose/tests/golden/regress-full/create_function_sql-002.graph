@@ -1,0 +1,20 @@
+-- regress-full-create_function_sql-002
+-- SELECT proname, prorettype::regtype, proargtypes::regtype[] FROM pg_proc WHERE oid in ('functest_A_1'::regproc, 'functest_A_2'::regproc, 'functest_A_3'::regproc) ORDER BY proname;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n1@0 n0@1^
+  source index rel=1255 rti=1 am=heap index=2690
+    key att=1 op=607 form=any value=c1028:'\x01\x00\x00\x00\x00\x00\x00\x00\x1a\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x007P\x00\x008P\x00\x009P\x00\x00'
+    recheck (any607(v1.1, c1028:'\x01\x00\x00\x00\x00\x00\x00\x00\x1a\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x007P\x00\x008P\x00\x009P\x00\x00'))
+    lanes Attr(2):byref8:fx64:win/page Attr(19):byval8:w8:val Attr(20):byref8:vl:win/page
+  project (1=v1.2, 2=relabel2206(v1.19), 3=T_ArrayCoerceExpr)
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=fx64:win/page 2=w8:val 3=?
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=fx64:win/page 2=w8:val 3=?
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+mapped: IndexScan Sort

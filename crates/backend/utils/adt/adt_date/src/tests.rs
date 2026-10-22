@@ -2,6 +2,11 @@ use super::*;
 use adt_datetime::{set_date_style, USE_GERMAN_DATES, USE_ISO_DATES, USE_POSTGRES_DATES, USE_SQL_DATES};
 use types_error::{ERRCODE_DATETIME_FIELD_OVERFLOW, ERRCODE_INVALID_DATETIME_FORMAT};
 
+std::thread_local! {
+    /// This thread's pg_type reads through the stubbed seam.
+    static TYPE_LOOKUPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 fn gmt_session() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -17,6 +22,7 @@ fn gmt_session() {
         // extract_date's error path names the type through format_type_be:
         // a visible pg_catalog.date.
         syscache_seams::lookup_pg_type_typcache_shape::set(|typid| {
+            TYPE_LOOKUPS.with(|n| n.set(n.get() + 1));
             Ok((typid == types_core::catalog::DATEOID).then(|| {
                 let mut typname = types_tuple::NameData::default();
                 typname.namestrcpy("date");
@@ -501,6 +507,8 @@ fn timetz_zone_izone_rotation() {
 #[test]
 fn extract_arms() {
     gmt_session();
+    // a session's thread: the unit errors name the type from the catalog (format_type_be)
+    catcache_seams::note_catalog_registered();
     let d = d_in("2024-02-29");
     assert_eq!(pv_num(extract_date(b"year", d).unwrap()), "2024");
     assert_eq!(pv_num(extract_date(b"quarter", d).unwrap()), "1");
@@ -515,6 +523,7 @@ fn extract_arms() {
     assert_eq!(e.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);
     let e = extract_date(b"bogus", d).unwrap_err();
     assert_eq!(e.message(), "unit \"bogus\" not recognized for type date");
+    assert!(TYPE_LOOKUPS.with(std::cell::Cell::get) >= 2, "the session thread read pg_type");
 
     let t = t_in("13:30:25.123456", -1);
     assert_eq!(pv_num(time_part_common(b"second", t, true).unwrap()), "25.123456");
@@ -649,6 +658,39 @@ fn make_time_error_seconds_render_like_c_percent_g() {
 }
 
 #[test]
+fn date_in_iso_fast_path_matches_the_general_parser() {
+    gmt_session();
+    let mut inputs: Vec<String> = Vec::new();
+    for y in (1..=60).chain(1580..=1620).chain(1890..=2110).chain(9950..=9999) {
+        for m in 0..=13 {
+            for d in [0, 1, 2, 15, 27, 28, 29, 30, 31, 32] {
+                inputs.push(format!("{y:04}-{m:02}-{d:02}"));
+            }
+        }
+    }
+    for odd in [
+        "0000-01-01", " 2020-01-01", "2020-01-01 ", "2020/01/01", "20200101", "2020-1-01", "2020-01-1",
+        "+020-01-01", "-020-01-01", "2020-01-0a", "2020_01-01", "99999-01-01", "2020-001-1", "\u{ff12}020-01-0",
+        "1900-02-29", "2000-02-29", "2100-02-29", "2400-02-29", "0004-02-29", "0100-02-29",
+    ] {
+        inputs.push(odd.to_string());
+    }
+    let mut fast = 0;
+    for s in &inputs {
+        if let Some(v) = date_in_iso(s.as_bytes()) {
+            fast += 1;
+            assert_eq!(date_in_general(s, None).ok(), Some(v), "fast path value differs for {s:?}");
+        }
+        let mut soft = SoftErrorContext::default();
+        let a = date_in(s, Some(&mut soft)).ok().map(|v| (v, soft.error_occurred()));
+        let mut soft2 = SoftErrorContext::default();
+        let b = date_in_general(s, Some(&mut soft2)).ok().map(|v| (v, soft2.error_occurred()));
+        assert_eq!(a, b, "date_in differs from the general parser for {s:?}");
+    }
+    assert!(fast > 30_000, "the fast path took {fast} of {} inputs", inputs.len());
+}
+
+#[test]
 fn date_out_results_do_not_alias_across_carriers() {
     let expect = |d: DateADT| {
         let mut buf: DateBuf = [0; MAXDATELEN + 1];
@@ -658,6 +700,9 @@ fn date_out_results_do_not_alias_across_carriers() {
     let mut f1 = types_fmgr::FmgrInfo::new(crate::builtins::fc_date_out, 1085, 1, true, false);
     let mut f2 = types_fmgr::FmgrInfo::new(crate::builtins::fc_date_out, 1085, 1, true, false);
     let mut fci = types_fmgr::LocalFcinfo::<1>::new(0);
+    let cx = ::mcx::MemoryContext::new_bump("date_out alias test");
+    // SAFETY: cx outlives every call through fci and every read of its results.
+    unsafe { fci.set_result_mcx(cx.mcx()) };
     fci.set_arg(0, ::datum::Datum::from_i32(0));
     let d1 = f1.invoke(&mut fci).unwrap();
     fci.set_arg(0, ::datum::Datum::from_i32(1));
@@ -668,3 +713,20 @@ fn date_out_results_do_not_alias_across_carriers() {
     assert_ne!(expect(0), expect(1));
 }
 
+// D3128: a thread with no catalog caches (a gravity pool thread, D1409) names the type "date" without a catalog read, so
+// its unit error is PostgreSQL's text, not the pool's catalog-miss error.
+#[test]
+fn extract_unit_errors_off_the_catalog_thread() {
+    gmt_session();
+    let d = d_in("2024-02-29");
+    let (hour, bogus, lookups) = std::thread::spawn(move || {
+        let hour = extract_date(b"hour", d).unwrap_err().message().to_string();
+        let bogus = extract_date(b"bogus", d).unwrap_err().message().to_string();
+        (hour, bogus, TYPE_LOOKUPS.with(std::cell::Cell::get))
+    })
+    .join()
+    .unwrap();
+    assert_eq!(hour, "unit \"hour\" not supported for type date");
+    assert_eq!(bogus, "unit \"bogus\" not recognized for type date");
+    assert_eq!(lookups, 0, "no pg_type read off the catalog thread");
+}

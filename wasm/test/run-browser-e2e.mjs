@@ -30,6 +30,12 @@ function argAfter(flag, dflt) {
 const port = Number(argAfter('--port', '8093'));
 const reportPort = port + 1;
 const timeoutSec = Number(argAfter('--timeout', '180'));
+// --page <name>: the test page under test/ (default psql-e2e); --isolate: serve it cross-origin isolated (COOP/COEP);
+// --client psql|js (default psql); --query k=v&k=v: more page parameters
+const page = argAfter('--page', 'psql-e2e');
+const isolate = process.argv.includes('--isolate');
+const client = argAfter('--client', 'psql');
+const extraQuery = argAfter('--query', '');
 
 const CHROME = process.env.CHROME ||
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -47,7 +53,7 @@ process.on('exit', cleanup);
 process.on('SIGINT', () => { cleanup(); process.exit(2); });
 
 // 1. static server
-const server = spawn(process.execPath, [path.join(webRoot, 'serve.mjs'), String(port)], {
+const server = spawn(process.execPath, [path.join(webRoot, 'serve.mjs'), String(port), ...(isolate ? ['--isolate'] : [])], {
   stdio: ['ignore', 'ignore', 'pipe'],
 });
 children.push(server);
@@ -76,7 +82,7 @@ await new Promise((r, j) => listener.listen(reportPort, (e) => e ? j(e) : r()));
 // 3. headless Chrome on the test page
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'psql-e2e-chrome-'));
 const debug = process.argv.includes('--debug') ? '&debug=1' : '';
-const url = `http://localhost:${port}/test/psql-e2e.html?client=psql${debug}` +
+const url = `http://localhost:${port}/test/${page}.html?client=${client}${debug}${extraQuery ? `&${extraQuery}` : ''}` +
   `&reportTo=${encodeURIComponent(`http://localhost:${reportPort}/verdict`)}`;
 const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
@@ -110,4 +116,4 @@ if (body === null) {
   process.exit(2);
 }
 console.log(body);
-process.exit(body.startsWith('VERDICT: psql-browser-e2e PASS') ? 0 : 1);
+process.exit(/^VERDICT: \S+ PASS/.test(body) ? 0 : 1);

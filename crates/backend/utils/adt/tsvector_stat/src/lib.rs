@@ -108,7 +108,11 @@ fn ts_accum(acc: &mut HashMap<Vec<u8>, (i32, i32)>, weight: u16, img: &[u8]) {
         if n == 0 {
             continue;
         }
-        let e = acc.entry(v.lexeme(we).to_vec()).or_insert((0, 0));
+        let lex = v.lexeme(we);
+        let mut key = Vec::new();
+        let _ = key.try_reserve(lex.len());
+        key.extend_from_slice(lex);
+        let e = acc.entry(key).or_insert((0, 0));
         e.0 += 1;
         e.1 += n;
     }
@@ -154,6 +158,7 @@ fn ts_stat_sql(mcx: Mcx<'_>, txt: &[u8], ws: Option<&[u8]>) -> PgResult<Vec<(Vec
     let weight = ws.map_or(0, parse_weight);
     let mut acc: HashMap<Vec<u8>, (i32, i32)> = HashMap::new();
 
+    let mut rowcx = mcx.context().new_child_wholesale("ts_stat row");
     while ::spi::SPI_processed() > 0 {
         let Some(h) = ::spi::SPI_tuptable() else {
             break;
@@ -162,8 +167,9 @@ fn ts_stat_sql(mcx: Mcx<'_>, txt: &[u8], ws: Option<&[u8]>) -> PgResult<Vec<(Vec
             for tup in t.vals.iter() {
                 let (d, isnull) = ::spi::SPI_getbinval(tup, &t.tupdesc, 1);
                 if !isnull {
-                    let img = detoasted_image(mcx, d)?;
+                    let img = detoasted_image(rowcx.mcx(), d)?;
                     ts_accum(&mut acc, weight, img);
+                    rowcx.reset();
                 }
             }
             Ok(())
@@ -211,16 +217,17 @@ fn stat_rows(fcinfo: &Fcinfo, stats: StatRows) -> PgResult<Vec<Vec<u8>>> {
     // rowtype lookup, record_out) need the registered typmod.
     ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
 
-    let mut rows = Vec::with_capacity(stats.len());
+    let mut rows = ::mcx::std_vec_with_capacity("adt", stats.len())?;
     for (word, ndoc, nentry) in stats {
-        let w = varlena_result(::varlena::cstring_to_text(mcx, &word)?);
+        let word = &word[..word.iter().position(|&b| b == 0).unwrap_or(word.len())];
+        let w = varlena_result(::varlena::cstring_to_text(mcx, word)?);
         let tuple = ::heaptuple::heap_form_tuple(
             mcx,
             &desc,
             &[w, Datum::from_i32(ndoc), Datum::from_i32(nentry)],
             &[false, false, false],
         )?;
-        rows.push(tuple.image().to_vec());
+        rows.push(::mcx::std_vec_from_slice("adt", &tuple.image())?);
     }
     Ok(rows)
 }

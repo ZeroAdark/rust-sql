@@ -1,0 +1,2 @@
+path	crates/backend/access/pgrcolumnar/pgrc_meta/src/census.rs
+macro	std::format	1

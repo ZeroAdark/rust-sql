@@ -11,6 +11,7 @@ use types_storage::RelFileLocator;
 use types_tuple::{HeapTupleData, ItemPointerData};
 
 use crate::{rb_error, rb_file_error};
+use elog::PCT_M;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReorderBufferTupleCidKey {
@@ -106,7 +107,7 @@ pub(crate) fn ApplyLogicalMappingFile(
     // reorderbuffer.c:5366: OpenTransientFile(path, O_RDONLY | PG_BINARY).
     let fd = fd::OpenTransientFile(&path.to_string_lossy(), libc::O_RDONLY)?;
     if fd < 0 {
-        return Err(rb_file_error(format!("could not open file \"{cpath}\": %m"), &os_error()));
+        return Err(rb_file_error(format!("could not open file \"{cpath}\": {PCT_M}"), &os_error()));
     }
 
     let result = apply_mapping_entries(hash, fd, &cpath);
@@ -122,7 +123,7 @@ pub(crate) fn ApplyLogicalMappingFile(
 // reorderbuffer.c:5437-5440.
 fn close_mapping_file(fd: i32, cpath: &str) -> PgResult<()> {
     if fd::CloseTransientFile(fd) != 0 {
-        return Err(rb_file_error(format!("could not close file \"{cpath}\": %m"), &os_error()));
+        return Err(rb_file_error(format!("could not close file \"{cpath}\": {PCT_M}"), &os_error()));
     }
     Ok(())
 }
@@ -141,7 +142,7 @@ fn apply_mapping_entries(hash: &RefCell<TupleCidHash>, fd: i32, cpath: &str) -> 
 
         if read_bytes < 0 {
             // reorderbuffer.c:5388.
-            return Err(rb_file_error(format!("could not read file \"{cpath}\": %m"), &os_error()));
+            return Err(rb_file_error(format!("could not read file \"{cpath}\": {PCT_M}"), &os_error()));
         } else if read_bytes == 0 {
             // EOF.
             break;
@@ -257,7 +258,7 @@ fn UpdateLogicalMappings(
     let dir = PathBuf::from(datadir).join("pg_logical/mappings");
     let entries = std::fs::read_dir(&dir).map_err(|e| {
         rb_file_error(
-            format!("could not open directory \"{}\": %m", dir.display()),
+            format!("could not open directory \"{}\": {PCT_M}", crate::startup::datadir_relative(&dir)),
             &e,
         )
     })?;
@@ -273,7 +274,7 @@ fn UpdateLogicalMappings(
         let entry =
             entry.map_err(|e| {
                 rb_file_error(
-                    format!("could not read directory \"{}\": %m", dir.display()),
+                    format!("could not read directory \"{}\": {PCT_M}", crate::startup::datadir_relative(&dir)),
                     &e,
                 )
             })?;

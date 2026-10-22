@@ -1,0 +1,13 @@
+-- regress-full-triggers-044
+-- update parted_trig set a = 2 where a = 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n0@2
+  source range rel=21713 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v2.1, c23:1)
+  project (1=c23:2, 2j=v2.-6, 3j=v2.-1)
+  write UPDATE rel=21713 rti=2 natts=1 indexes=() set=(1) route=rti1:21710 natts=1 cross-partition
+  outs 1=w4:val 2=w4:val 3=fx6:row
+scan-lanes node=2 rti=2 rel=21713 tableoid
+mapped: ModifyTable SeqScan

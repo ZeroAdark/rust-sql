@@ -1,0 +1,40 @@
+-- regress-full-rowsecurity-130
+-- SELECT count(*) = 0 FROM pg_depend WHERE objid = (SELECT oid FROM pg_policy WHERE polname = 'dep_p1') AND refobjid = (SELECT oid FROM pg_class WHERE relname = 'dep2');
+graph pipelines=4 breakers=1 init_plans=2 root=p3
+p0 node=3 eligible rows=1 end=sink
+  nodes n3@0
+  source range rel=3256 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v2.2, c19:#64)
+  project (1=v2.1)
+  outs 1=w8:val
+p1 node=4 serial site=0 reason=IndexSource end=sink
+  nodes n4@0
+  source index rel=1259 rti=3 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v3.2, c19:#64))
+    lanes Attr(1):byval8:w8:val
+  project (1=v3.1)
+  outs 1=w8:val
+p2 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 PlainAgg)
+  nodes n2@0 n1@0 n0@2^
+  source bitmap rel=2608 rti=1 am=heap
+    bitmap index node=2 index=2674 rows=5
+      key att=5 op=607 value=$exec1
+    recheck (op607(v1.5, $exec1))
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v1.2, $exec0)
+  project ()
+  outs
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  project (1=op416(agg2803*(), c23:0))
+  outs 1=w1:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p2 layout=[]->[Count@0] 8B
+group slot=0 producer=p2 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+init_plan id=2 pipeline=p1 link=Expr param=$exec1
+mapped: SeqScan IndexScan BitmapIndexScan BitmapHeapScan Agg SubPlan

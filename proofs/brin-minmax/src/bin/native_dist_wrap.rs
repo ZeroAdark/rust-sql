@@ -1,5 +1,5 @@
 //! Native differential replay of the dist_time / dist_timetz OUT-OF-CONTRACT
-//! wrap plane (CI cluster batchB FAILEDs at builtins.rs:124/137, suite tip
+//! wrap plane (fleet batchB FAILEDs at builtins.rs:124/137, suite tip
 //! 994f9977: "attempt to subtract/add with overflow").
 //!
 //! Those FAILEDs are Kani debug-overflow-CHECK artifacts, not value

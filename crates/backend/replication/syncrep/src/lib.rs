@@ -348,7 +348,7 @@ pub fn SyncRepWaitForLSN(lsn: XLogRecPtr, commit: bool) -> PgResult<()> {
         }
 
         if g::QueryCancelPending() {
-            g::SetQueryCancelPending(false);
+            g::ClearQueryCancelPending(); // D334: with its abort-class byte
             ereport(WARNING)
                 .errmsg("canceling wait for synchronous replication due to user request")
                 .errdetail(
@@ -463,13 +463,13 @@ pub struct SyncRepStandbyData {
 }
 
 /// SyncRepGetCandidateStandbys (syncrep.c:754).
-pub fn SyncRepGetCandidateStandbys() -> Vec<SyncRepStandbyData> {
+pub fn SyncRepGetCandidateStandbys() -> PgResult<Vec<SyncRepStandbyData>> {
     let Some(cfg) = sync_rep_config() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let ctl = walsender::WalSndCtl();
     let my_index = walsender::my_walsnd_index();
-    let mut out: Vec<SyncRepStandbyData> = Vec::with_capacity(ctl.walsnds.len());
+    let mut out: Vec<SyncRepStandbyData> = ::mcx::std_vec_with_capacity("syncrep", ctl.walsnds.len())?;
 
     for (i, slot) in ctl.walsnds.iter().enumerate() {
         let w = slot.lock().expect("walsnd mutex");
@@ -507,7 +507,7 @@ pub fn SyncRepGetCandidateStandbys() -> Vec<SyncRepStandbyData> {
         out.sort_by_key(|s| (s.sync_standby_priority, s.walsnd_index));
         out.truncate(cfg.num_sync as usize);
     }
-    out
+    Ok(out)
 }
 
 // SyncRepGetStandbyPriority (syncrep.c:860).
@@ -533,15 +533,15 @@ fn SyncRepGetStandbyPriority() -> i32 {
 
 // SyncRepGetSyncRecPtr (syncrep.c:586): (write, flush, apply, am_sync) or None
 // when there are not enough sync standbys / we are not one.
-fn SyncRepGetSyncRecPtr() -> (Option<(XLogRecPtr, XLogRecPtr, XLogRecPtr)>, bool) {
+fn SyncRepGetSyncRecPtr() -> PgResult<(Option<(XLogRecPtr, XLogRecPtr, XLogRecPtr)>, bool)> {
     let Some(cfg) = sync_rep_config() else {
-        return (None, false);
+        return Ok((None, false));
     };
-    let standbys = SyncRepGetCandidateStandbys();
+    let standbys = SyncRepGetCandidateStandbys()?;
     let am_sync = standbys.iter().any(|s| s.is_me);
 
     if !am_sync || (standbys.len() as i32) < cfg.num_sync {
-        return (None, am_sync);
+        return Ok((None, am_sync));
     }
 
     if cfg.syncrep_method == SYNC_REP_PRIORITY {
@@ -560,7 +560,7 @@ fn SyncRepGetSyncRecPtr() -> (Option<(XLogRecPtr, XLogRecPtr, XLogRecPtr)>, bool
                 apply = s.apply;
             }
         }
-        (Some((write, flush, apply)), true)
+        Ok((Some((write, flush, apply)), true))
     } else {
         // Nth latest positions (quorum).
         let nth = cfg.num_sync as usize;
@@ -570,7 +570,7 @@ fn SyncRepGetSyncRecPtr() -> (Option<(XLogRecPtr, XLogRecPtr, XLogRecPtr)>, bool
         writes.sort_unstable_by(|a, b| b.cmp(a));
         flushes.sort_unstable_by(|a, b| b.cmp(a));
         applies.sort_unstable_by(|a, b| b.cmp(a));
-        (Some((writes[nth - 1], flushes[nth - 1], applies[nth - 1])), true)
+        Ok((Some((writes[nth - 1], flushes[nth - 1], applies[nth - 1])), true))
     }
 }
 
@@ -596,7 +596,7 @@ pub fn SyncRepReleaseWaiters() -> PgResult<()> {
     }
 
     lock_sync_rep()?;
-    let (recptrs, am_sync) = SyncRepGetSyncRecPtr();
+    let (recptrs, am_sync) = SyncRepGetSyncRecPtr()?;
 
     if ANNOUNCE_NEXT_TAKEOVER.get() && am_sync {
         ANNOUNCE_NEXT_TAKEOVER.set(false);
@@ -793,7 +793,7 @@ pub fn init_seams() {
     syncrep_seams::sync_rep_init_config::set(SyncRepInitConfig);
     syncrep_seams::sync_rep_release_waiters::set(SyncRepReleaseWaiters);
     syncrep_seams::sync_rep_candidate_indexes::set(|| {
-        Ok(SyncRepGetCandidateStandbys()
+        Ok(SyncRepGetCandidateStandbys()?
             .into_iter()
             .map(|s| (s.walsnd_index, s.pid))
             .collect())

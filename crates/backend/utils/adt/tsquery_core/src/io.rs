@@ -95,10 +95,8 @@ fn infix<'mcx>(
     ::stack_depth::check_stack_depth()?;
     match st.q.item(st.cur) {
         Item::Val(op) => {
-            // C: RESIZEBUF(in, curpol->length * (pg_database_encoding_max_length() + 1) + 2 + 6)
-            out.resize(
-                op.length * (::mbutils::pg_database_encoding_max_length() as usize + 1) + 2 + 6,
-            )?;
+            let add_len = op.length * (::mbutils::pg_database_encoding_max_length() as usize + 1) + 8;
+            out.resize(add_len)?;
             out.v.push(b'\'');
             // operand is NUL-terminated in the pool; C walks to the NUL.
             push_escaped(&mut out.v, st.q.operand_str(&op));
@@ -254,6 +252,8 @@ pub fn tsquery_recv_core<'mcx>(
         return Err(PgError::error("invalid size of tsquery").into());
     }
     let size = size as usize;
+    // tsquery.c palloc0(HDRSIZETQ + sizeof(QueryItem) * size) before any item is read.
+    ::mcx::check_alloc_size(HDRSIZETQ + QUERYITEM_SIZE * size)?;
     let mut items: PgVec<Item> =
         vec_with_capacity_in(mcx, size.min(buf.len().saturating_sub(buf.cursor) / 2))?;
     let mut pool: PgVec<u8> = PgVec::new_in(mcx);

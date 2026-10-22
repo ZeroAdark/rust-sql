@@ -30,6 +30,8 @@ format_type = { path = "../format_type" }
 syscache_seams = { path = "../../cache/syscache_seams" }
 table = { path = "../../../access/table/table" }
 heapam = { path = "../../../access/heap/heapam" }
+tableam = { path = "../../../access/table/tableam" }
+tableam_vocab = { path = "../../../access/table/tableam_vocab" }
 xact = { path = "../../../access/transam/xact" }
 xact_seams = { path = "../../../access/transam/xact_seams" }
 spi = { path = "../../../executor/spi" }

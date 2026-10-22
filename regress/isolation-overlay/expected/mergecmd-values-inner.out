@@ -1,0 +1,109 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s2f s1c
+step s2e: EXPLAIN (COSTS OFF) MERGE INTO vi_view2 t USING (VALUES ('Tom'), ('Dick'), ('Harry')) AS v(person) ON t.person = v.person WHEN MATCHED THEN UPDATE SET n = t.n + 10;
+QUERY PLAN                                                               
+-------------------------------------------------------------------------
+Merge on vi_base                                                         
+  ->  Nested Loop                                                        
+        Join Filter: (vi_base.person = "*VALUES*".column1)               
+        ->  Seq Scan on vi_base                                          
+              Filter: ((visibility = 'public'::text) AND vi_true(person))
+        ->  Values Scan on "*VALUES*"                                    
+(6 rows)
+
+step s2f: EXPLAIN (COSTS OFF) UPDATE vi_view2 t SET n = t.n + 100 FROM (VALUES ('Tom'), ('Harry')) AS v(person) WHERE t.person = v.person;
+QUERY PLAN                                                               
+-------------------------------------------------------------------------
+Update on vi_base                                                        
+  ->  Nested Loop                                                        
+        Join Filter: (vi_base.person = "*VALUES*".column1)               
+        ->  Seq Scan on vi_base                                          
+              Filter: ((visibility = 'public'::text) AND vi_true(person))
+        ->  Values Scan on "*VALUES*"                                    
+(6 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1n s2m s1c s2s
+step s1n: UPDATE vi_base SET n = n + 1 WHERE person = 'Tom';
+step s2m: MERGE INTO vi_view2 t USING (VALUES ('Tom'), ('Dick'), ('Harry')) AS v(person) ON t.person = v.person WHEN MATCHED THEN UPDATE SET n = t.n + 10; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2s: SELECT person, visibility, n FROM vi_base ORDER BY person, n;
+person|visibility| n
+------+----------+--
+Dick  |private   | 0
+Harry |public    |10
+Tom   |public    |11
+(3 rows)
+
+
+starting permutation: s1p s2m s1c s2s
+step s1p: UPDATE vi_base SET visibility = 'private' WHERE person = 'Tom';
+step s2m: MERGE INTO vi_view2 t USING (VALUES ('Tom'), ('Dick'), ('Harry')) AS v(person) ON t.person = v.person WHEN MATCHED THEN UPDATE SET n = t.n + 10; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2s: SELECT person, visibility, n FROM vi_base ORDER BY person, n;
+person|visibility| n
+------+----------+--
+Dick  |private   | 0
+Harry |public    |10
+Tom   |private   | 0
+(3 rows)
+
+
+starting permutation: s1k s2m s1c s2s
+step s1k: UPDATE vi_base SET person = 'Harry' WHERE person = 'Tom';
+step s2m: MERGE INTO vi_view2 t USING (VALUES ('Tom'), ('Dick'), ('Harry')) AS v(person) ON t.person = v.person WHEN MATCHED THEN UPDATE SET n = t.n + 10; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2s: SELECT person, visibility, n FROM vi_base ORDER BY person, n;
+person|visibility| n
+------+----------+--
+Dick  |private   | 0
+Harry |public    | 0
+Harry |public    |10
+(3 rows)
+
+
+starting permutation: s1d s2m s1c s2s
+step s1d: DELETE FROM vi_base WHERE person = 'Tom';
+step s2m: MERGE INTO vi_view2 t USING (VALUES ('Tom'), ('Dick'), ('Harry')) AS v(person) ON t.person = v.person WHEN MATCHED THEN UPDATE SET n = t.n + 10; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2s: SELECT person, visibility, n FROM vi_base ORDER BY person, n;
+person|visibility| n
+------+----------+--
+Dick  |private   | 0
+Harry |public    |10
+(2 rows)
+
+
+starting permutation: s1k s2u s1c s2s
+step s1k: UPDATE vi_base SET person = 'Harry' WHERE person = 'Tom';
+step s2u: UPDATE vi_view2 t SET n = t.n + 100 FROM (VALUES ('Tom'), ('Harry')) AS v(person) WHERE t.person = v.person; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT person, visibility, n FROM vi_base ORDER BY person, n;
+person|visibility|  n
+------+----------+---
+Dick  |private   |  0
+Harry |public    |  0
+Harry |public    |100
+(3 rows)
+
+
+starting permutation: s1n s2u s1c s2s
+step s1n: UPDATE vi_base SET n = n + 1 WHERE person = 'Tom';
+step s2u: UPDATE vi_view2 t SET n = t.n + 100 FROM (VALUES ('Tom'), ('Harry')) AS v(person) WHERE t.person = v.person; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT person, visibility, n FROM vi_base ORDER BY person, n;
+person|visibility|  n
+------+----------+---
+Dick  |private   |  0
+Harry |public    |100
+Tom   |public    |101
+(3 rows)
+

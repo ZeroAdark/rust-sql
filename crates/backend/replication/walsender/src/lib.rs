@@ -13,6 +13,7 @@ pub mod replies;
 pub mod logical_stream;
 mod lag;
 mod streaming;
+mod pgrc_files;
 pub mod wakeup;
 
 use std::cell::{Cell, RefCell};
@@ -22,7 +23,7 @@ use std::sync::{Mutex, OnceLock};
 use condition_variable::ConditionVariable;
 use datum::Datum;
 use elog::errno::current_errno;
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use repl_gram::{
     AlterReplicationSlotCmd, CreateReplicationSlotCmd, DropReplicationSlotCmd, ReadReplicationSlotCmd,
     ReplCommand, ReplOptionArg, ReplicationKind, TimeLineHistoryCmd,
@@ -1493,7 +1494,7 @@ fn SendTimeLineHistory(mcx: mcx::Mcx<'_>, cmd: TimeLineHistoryCmd) -> PgResult<(
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{path}\": %m"))
+            .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
             .finish(loc(614, "SendTimeLineHistory"));
     }
 
@@ -1506,7 +1507,7 @@ fn SendTimeLineHistory(mcx: mcx::Mcx<'_>, cmd: TimeLineHistoryCmd) -> PgResult<(
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not seek to end of file \"{path}\": %m"))
+            .errmsg(format!("could not seek to end of file \"{path}\": {PCT_M}"))
             .finish(loc(622, "SendTimeLineHistory"));
     }
     // SAFETY: as above.
@@ -1516,11 +1517,11 @@ fn SendTimeLineHistory(mcx: mcx::Mcx<'_>, cmd: TimeLineHistoryCmd) -> PgResult<(
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not seek to beginning of file \"{path}\": %m"))
+            .errmsg(format!("could not seek to beginning of file \"{path}\": {PCT_M}"))
             .finish(loc(626, "SendTimeLineHistory"));
     }
 
-    let mut content: Vec<u8> = Vec::with_capacity(histfilelen as usize);
+    let mut content: Vec<u8> = ::mcx::std_vec_with_capacity("replication", histfilelen as usize)?;
     let mut rbuf = [0u8; 8192];
     let mut bytesleft = histfilelen as i64;
     while bytesleft > 0 {
@@ -1531,7 +1532,7 @@ fn SendTimeLineHistory(mcx: mcx::Mcx<'_>, cmd: TimeLineHistoryCmd) -> PgResult<(
             return ereport(ERROR)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{path}\": %m"))
+                .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                 .finish(loc(643, "SendTimeLineHistory"));
         } else if nread == 0 {
             // The file shrank under us (walsender.c:646).
@@ -1550,7 +1551,7 @@ fn SendTimeLineHistory(mcx: mcx::Mcx<'_>, cmd: TimeLineHistoryCmd) -> PgResult<(
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{path}\": %m"))
+            .errmsg(format!("could not close file \"{path}\": {PCT_M}"))
             .finish(loc(658, "SendTimeLineHistory"));
     }
 
@@ -1675,8 +1676,6 @@ mod conformance_tests;
 mod tests {
     use super::*;
 
-    // WalSndSegmentOpen (walsender.c:3119): a missing segment is reported by
-    // its bare file name (xlogutils' shared opener says "pg_wal/<name>").
     #[test]
     fn segment_open_reports_removed_segment_by_bare_name() {
         use xlogreader::XLogSegmentRoutine as _;
@@ -1698,6 +1697,8 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.message, "requested WAL segment 000000010000000000000000 has already been removed");
         assert_eq!(err.sqlstate, types_error::ERRCODE_UNDEFINED_FILE);
+        assert_eq!(err.location.as_ref().map(|l| l.lineno), Some(3120));
+        assert_eq!(err.location.as_ref().and_then(|l| l.filename.as_deref()), Some("walsender.c"));
         assert_eq!(err.location.as_ref().and_then(|l| l.funcname.as_deref()), Some("WalSndSegmentOpen"));
     }
 
@@ -1945,7 +1946,7 @@ mod tests {
     // leaves no manifest behind.
     // defGetBoolean (define.c:127) takes only true/false/on/off for a string
     // argument; bool.c's yes/no/t/f/y/n/'1'/'0' are 42601 "requires a
-    // Boolean value" (audit regression / regression).
+    // Boolean value" (audit fp-commands-b1#3 / fp-replication-walsender-p1#2).
     #[test]
     fn option_booleans_take_only_define_c_strings() {
         let s = |v: &str| Some(ReplOptionArg::Str(v.to_string()));
@@ -1969,7 +1970,7 @@ mod tests {
 
     // pqcomm.h PQ_LARGE_MESSAGE_LIMIT is MaxAllocSize - 1: a CopyData of
     // exactly 0x3fffffff bytes is "invalid message length" in C, not a body
-    // read the walsender blocks on (audit regression).
+    // read the walsender blocks on (audit fp-replication-walsender-p1#6).
     #[test]
     fn streaming_reply_message_limit_is_max_alloc_size_minus_one() {
         assert_eq!(crate::replies::PQ_LARGE_MESSAGE_LIMIT, 0x3fff_ffff - 1);
@@ -1978,7 +1979,7 @@ mod tests {
 
     // walsender.c:794 reads the CopyFail text with pq_getmsgstring: a body
     // without a NUL terminator is 08P01 "invalid string in message", not a
-    // 57014 cancel (audit regression).
+    // 57014 cancel (audit fp-replication-walsender-p1#5).
     #[test]
     fn upload_manifest_copyfail_without_nul_is_a_protocol_violation() {
         let _g = slot_lock();
@@ -2000,19 +2001,29 @@ mod tests {
 
     // walsender.c:636-638 brackets each history-file read(2) with the
     // WalsenderTimelineHistoryRead IO wait event (audit
-    // regression).
+    // fp-replication-walsender-p1#7).
     #[test]
     fn timeline_history_read_reports_the_walsender_wait_event() {
-        static STARTS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-        static ENDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        // The pgstat_report_wait_start/end seams are process-global test
+        // hooks: once installed here, any OTHER concurrently running test in
+        // this binary that happens to do real file I/O (fd::OpenTransientFile
+        // et al. also report through them) feeds entries into the same
+        // callback. libtest gives every #[test] its own thread, so entries
+        // are tagged with the reporting thread's id and filtered down to
+        // this test's own thread below instead of relying on a shared
+        // process-wide count, which a sibling test's wait events would
+        // otherwise corrupt.
+        static STARTS: Mutex<Vec<(std::thread::ThreadId, u32)>> = Mutex::new(Vec::new());
+        static ENDS: Mutex<Vec<std::thread::ThreadId>> = Mutex::new(Vec::new());
         if !waitevent_seams::pgstat_report_wait_start::is_installed() {
             waitevent_seams::pgstat_report_wait_start::set(|info| {
-                STARTS.lock().unwrap().push(info);
+                STARTS.lock().unwrap().push((std::thread::current().id(), info));
             });
             waitevent_seams::pgstat_report_wait_end::set(|| {
-                ENDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                ENDS.lock().unwrap().push(std::thread::current().id());
             });
         }
+        let my_tid = std::thread::current().id();
         let dir = std::env::temp_dir().join(format!("wsthr-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("00000002.history");
@@ -2023,8 +2034,6 @@ mod tests {
         let fd = unsafe { libc::open(cpath.as_ptr(), libc::O_RDONLY) };
         assert!(fd >= 0);
         let mut rbuf = [0u8; 64];
-        STARTS.lock().unwrap().clear();
-        ENDS.store(0, std::sync::atomic::Ordering::SeqCst);
         let n = timeline_history_read(fd, &mut rbuf);
         // SAFETY: fd is the descriptor opened above.
         unsafe { libc::close(fd) };
@@ -2033,10 +2042,17 @@ mod tests {
         assert_eq!(&rbuf[..2], b"1\t");
         assert_eq!(WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ, 0x0A00_0000 | 67);
         if waitevent_seams::pgstat_report_wait_start::is_installed() {
-            let starts = STARTS.lock().unwrap();
-            if !starts.is_empty() || ENDS.load(std::sync::atomic::Ordering::SeqCst) > 0 {
-                assert_eq!(*starts, vec![WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ]);
-                assert_eq!(ENDS.load(std::sync::atomic::Ordering::SeqCst), 1);
+            let starts: Vec<u32> = STARTS
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(tid, _)| *tid == my_tid)
+                .map(|(_, info)| *info)
+                .collect();
+            let ends = ENDS.lock().unwrap().iter().filter(|tid| **tid == my_tid).count();
+            if !starts.is_empty() || ends > 0 {
+                assert_eq!(starts, vec![WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ]);
+                assert_eq!(ends, 1);
             }
         }
     }

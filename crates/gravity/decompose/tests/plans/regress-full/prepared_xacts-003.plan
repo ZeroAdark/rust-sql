@@ -1,0 +1,48 @@
+-- name: regress-full-prepared_xacts-003
+-- sql: SELECT gid FROM pg_prepared_xacts WHERE gid ~ '^regress_' ORDER BY gid;
+-- test: prepared_xacts
+-- shape: c117635c1f8b3655 seen=10
+-- op 664 family=1994 strat=1
+-- rel 1260 pg_authid am=heap kind=r natts=12
+-- att 1260 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1260 2 rolname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1260 3 rolsuper typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 4 rolinherit typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 5 rolcreaterole typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 6 rolcreatedb typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 7 rolcanlogin typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 8 rolreplication typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 9 rolbypassrls typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 10 rolconnlimit typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1260 11 rolpassword typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1260 12 rolvaliduntil typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- idx 2676 rel=1260 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2677 rel=1260 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- rel 1262 pg_database am=heap kind=r natts=18
+-- att 1262 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 2 datname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1262 3 datdba typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 4 encoding typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 5 datlocprovider typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 6 datistemplate typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 7 datallowconn typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 8 dathasloginevt typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 9 datconnlimit typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 10 datfrozenxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 11 datminmxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 12 dattablespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 13 datcollate typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 1262 14 datctype typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 1262 15 datlocale typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1262 16 daticurules typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1262 17 datcollversion typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1262 18 datacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2671 rel=1262 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2672 rel=1262 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- rel 12090 pg_prepared_xacts am=none kind=v natts=5
+-- att 12090 1 transaction typid=28 typmod=-1 len=4 byval=t notnull=f
+-- att 12090 2 gid typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12090 3 prepared typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- att 12090 4 owner typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 12090 5 database typid=19 typmod=-1 len=64 byval=f notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SORT :plan.disabled_nodes 0 :plan.startup_cost 12.560548202372184 :plan.total_cost 12.573048202372183 :plan.plan_rows 5 :plan.plan_width 32 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {VAR :varno -2 :varattno 1 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 2 :location -1} :resno 1 :resname gid :ressortgroupref 1 :resorigtbl 12090 :resorigcol 2 :resjunk false}) :plan.qual <> :plan.lefttree {FUNCTIONSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0.0025 :scan.plan.total_cost 12.5025 :scan.plan.plan_rows 5 :scan.plan.plan_width 32 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 1 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 2 :varattno 2 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 2 :location -1} :resno 1 :resname gid :ressortgroupref 1 :resorigtbl 12090 :resorigcol 2 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 641 :opfuncid 1254 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 100 :args ({VAR :varno 2 :varattno 2 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 2 :location -1} {CONST :consttype 25 :consttypmod -1 :constcollid 100 :constlen -1 :constbyval false :constisnull false :location 46 :constvalue 13 [ 52 0 0 0 94 114 101 103 114 101 115 115 95 ]}) :location 44}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 2 :functions ({RANGETBLFUNCTION :funcexpr {FUNCEXPR :funcid 1065 :funcresulttype 2249 :funcretset true :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 0 :args <> :location -1} :funccolcount 5 :funccolnames <> :funccoltypes <> :funccoltypmods <> :funccolcollations <> :funcparams (b)}) :funcordinality false} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :numCols 1 :sortColIdx ( 1) :sortOperators ( 664) :collations ( 100) :nullsFirst ( false)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_prepared_xacts :colnames ("transaction" "gid" "prepared" "owner" "database")} :rtekind 1 :subquery <> :security_barrier false :relid 12090 :inh false :relkind v :rellockmode 1 :perminfoindex 1 :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname p :colnames <>} :eref {ALIAS :aliasname p :colnames ("transaction" "gid" "prepared" "ownerid" "dbid")} :rtekind 3 :functions <> :funcordinality false :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname u :colnames <>} :eref {ALIAS :aliasname u :colnames ("oid" "rolname" "rolsuper" "rolinherit" "rolcreaterole" "rolcreatedb" "rolcanlogin" "rolreplication" "rolbypassrls" "rolconnlimit" "rolpassword" "rolvaliduntil")} :rtekind 0 :relid 1260 :inh false :relkind r :rellockmode 1 :perminfoindex 2 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("transaction" "gid" "prepared" "ownerid" "dbid" "oid" "rolname" "rolsuper" "rolinherit" "rolcreaterole" "rolcreatedb" "rolcanlogin" "rolreplication" "rolbypassrls" "rolconnlimit" "rolpassword" "rolvaliduntil")} :rtekind 2 :jointype 1 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname d :colnames <>} :eref {ALIAS :aliasname d :colnames ("oid" "datname" "datdba" "encoding" "datlocprovider" "datistemplate" "datallowconn" "dathasloginevt" "datconnlimit" "datfrozenxid" "datminmxid" "dattablespace" "datcollate" "datctype" "datlocale" "daticurules" "datcollversion" "datacl")} :rtekind 0 :relid 1262 :inh false :relkind r :rellockmode 1 :perminfoindex 3 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("transaction" "gid" "prepared" "ownerid" "dbid" "oid" "rolname" "rolsuper" "rolinherit" "rolcreaterole" "rolcreatedb" "rolcanlogin" "rolreplication" "rolbypassrls" "rolconnlimit" "rolpassword" "rolvaliduntil" "oid" "datname" "datdba" "encoding" "datlocprovider" "datistemplate" "datallowconn" "dathasloginevt" "datconnlimit" "datfrozenxid" "datminmxid" "dattablespace" "datcollate" "datctype" "datlocale" "daticurules" "datcollversion" "datacl")} :rtekind 2 :jointype 1 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1 3 5) :permInfos ({RTEPERMISSIONINFO :relid 12090 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 9) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1260 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1262 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 12090 1260 1262) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 70}

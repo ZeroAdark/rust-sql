@@ -1,0 +1,3 @@
+path	crates/gravity/driver/src/node/image.rs
+growth	std::collections::BTreeMap::entry	1
+growth	std::vec::Vec::push	1

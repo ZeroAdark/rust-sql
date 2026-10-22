@@ -182,6 +182,33 @@ fn search_path_resolution_and_caching() {
 }
 
 #[test]
+fn hook_recompute_reuses_the_final_path_span() {
+    install_fakes();
+    fn hook(
+        _: objectaccess::ObjectAccessType,
+        _: Oid,
+        _: Oid,
+        _: i32,
+        _: &mut objectaccess::ObjectAccessArg<'_>,
+    ) -> PgResult<()> {
+        Ok(())
+    }
+    let prev = objectaccess::set_object_access_hook(Some(hook));
+    let ctx = MemoryContext::new("test");
+    let mut sizes = Vec::new();
+    for _ in 0..8 {
+        for p in ["public, s1", "s1, public"] {
+            set_search_path(p);
+            fetch_search_path(ctx.mcx(), true).unwrap();
+            sizes.push(crate::path::spcache_oid_pool_len());
+        }
+    }
+    objectaccess::set_object_access_hook(prev);
+    assert!(sizes[1] > 0);
+    assert_eq!(&sizes[2..], &vec![sizes[1]; sizes.len() - 2][..]);
+}
+
+#[test]
 fn dollar_user_and_missing_schemas() {
     install_fakes();
     ROLNAME.with(|r| *r.borrow_mut() = Some("s1".to_string()));
@@ -403,6 +430,21 @@ fn lookup_namespace_helpers() {
         LookupExplicitNamespace("s1", false)
     };
     assert!(denied.err().unwrap().message().contains("permission denied"));
+}
+
+// audit fp-catalog-namespace-p3#2: no 3F000 while CREATE TEMP TABLE defers.
+#[test]
+fn deferred_temp_namespace_lookup_finds_nothing() {
+    install_fakes();
+    assert_eq!(my_temp_namespace(), InvalidOid);
+    let missing = LookupExplicitNamespace("pg_temp", false).err().unwrap();
+    assert_eq!(missing.message(), "schema \"pg_temp\" does not exist");
+    {
+        let _deferred = defer_temp_namespace_creation();
+        assert_eq!(LookupExplicitNamespace("pg_temp", false).unwrap(), InvalidOid);
+        assert_eq!(LookupExplicitNamespace("pg_temp", true).unwrap(), InvalidOid);
+    }
+    assert!(LookupExplicitNamespace("pg_temp", false).is_err());
 }
 
 fn install_proc_candidates() {

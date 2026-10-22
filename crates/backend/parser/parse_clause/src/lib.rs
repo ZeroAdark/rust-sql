@@ -3215,6 +3215,7 @@ pub fn transformWindowDefinitions<'mcx>(
                     format!("window \"{name}\" is already defined"),
                     types_error::ERRCODE_WINDOWING_ERROR,
                     windef.location,
+                    2793,
                 ));
             }
         }
@@ -3228,6 +3229,7 @@ pub fn transformWindowDefinitions<'mcx>(
                         format!("window \"{refname}\" does not exist"),
                         types_error::ERRCODE_UNDEFINED_OBJECT,
                         windef.location,
+                        2806,
                     ));
                 }
             },
@@ -3274,6 +3276,7 @@ pub fn transformWindowDefinitions<'mcx>(
                     ),
                     types_error::ERRCODE_WINDOWING_ERROR,
                     windef.location,
+                    2855,
                 ));
             }
             wc.partitionClause = copy_sort_group_list(mcx, &refwc.partitionClause)?;
@@ -3293,6 +3296,7 @@ pub fn transformWindowDefinitions<'mcx>(
                     ),
                     types_error::ERRCODE_WINDOWING_ERROR,
                     windef.location,
+                    2867,
                 ));
             }
             if !orderClause.is_nil() {
@@ -3324,6 +3328,7 @@ pub fn transformWindowDefinitions<'mcx>(
                         ),
                         types_error::ERRCODE_WINDOWING_ERROR,
                         windef.location,
+                        2897,
                     ));
                 }
                 return Err(window_error_hint(
@@ -3334,6 +3339,7 @@ pub fn transformWindowDefinitions<'mcx>(
                     ),
                     "Omit the parentheses in this OVER clause.",
                     windef.location,
+                    2904,
                 ));
             }
         }
@@ -3352,6 +3358,7 @@ pub fn transformWindowDefinitions<'mcx>(
                         .into(),
                     types_error::ERRCODE_WINDOWING_ERROR,
                     windef.location,
+                    2924,
                 ));
             }
             let sortcl = wc
@@ -3384,6 +3391,7 @@ pub fn transformWindowDefinitions<'mcx>(
                 "GROUPS mode requires an ORDER BY clause".into(),
                 types_error::ERRCODE_WINDOWING_ERROR,
                 windef.location,
+                2947,
             ));
         }
 
@@ -3432,6 +3440,7 @@ fn window_error(
     msg: String,
     code: types_error::SqlState,
     location: ParseLoc,
+    source_line: i32,
 ) -> Box<PgError> {
     Box::new(
         elog::ereport(ERROR)
@@ -3445,7 +3454,7 @@ fn window_error(
             .into_error()
             .with_error_location(ErrorLocation::new(
                 "parse_clause.c",
-                0,
+                source_line,
                 "transformWindowDefinitions",
             )),
     )
@@ -3459,6 +3468,7 @@ fn window_error_hint(
     msg: String,
     hint: &'static str,
     location: ParseLoc,
+    source_line: i32,
 ) -> Box<PgError> {
     Box::new(
         elog::ereport(ERROR)
@@ -3473,7 +3483,7 @@ fn window_error_hint(
             .into_error()
             .with_error_location(ErrorLocation::new(
                 "parse_clause.c",
-                0,
+                source_line,
                 "transformWindowDefinitions",
             )),
     )

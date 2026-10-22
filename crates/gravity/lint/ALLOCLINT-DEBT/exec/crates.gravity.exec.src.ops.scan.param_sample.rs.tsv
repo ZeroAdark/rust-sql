@@ -1,0 +1,8 @@
+path	crates/gravity/exec/src/ops/scan/param_sample.rs
+method	std::boxed::Box::new	1
+method	std::iter::Iterator::collect	1
+method	std::rc::Rc::new	1
+method	std::sync::Arc::new	1
+type	std::boxed::Box	1
+type	std::rc::Rc	1
+type	std::sync::Arc	1

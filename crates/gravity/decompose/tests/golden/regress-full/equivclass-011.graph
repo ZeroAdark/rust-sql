@@ -1,0 +1,53 @@
+-- regress-full-equivclass-011
+-- explain (costs off) select * from ec1, (select ff + 1 as x from (select ff + 2 as ff from ec1 union all select ff + 3 as ff from ec1) ss0 union all select ff + 4 as x from ec1) as ss1 where ss1.x = ec1.f1 and ec1.ff = 42::int8;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=3 serial site=0 reason=IndexSource end=breaker(slot=0 Materialize)
+  nodes n3@0 n2@1^
+  source index rel=39127 rti=8 am=heap index=39140
+    key att=0 op=39111 col=1 value=$exec0
+    recheck (op39111(op688(op688(v8.1, c23:2), c23:1), $exec0))
+    lanes Attr(1):byval8:w8:val
+  project (1=op688(op688(v8.1, c23:2), c23:1))
+  feed slot=0
+  outs 1=w8:val
+p1 node=4 eligible rows=8 end=breaker(slot=0 Materialize)
+  nodes n4@0 n2@2^
+  source range rel=39127 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op39111(op688(op688(v9.1, c23:3), c23:1), $exec0)
+  project (1=op688(op688(v9.1, c23:3), c23:1))
+  feed slot=0
+  outs 1=w8:val
+p2 node=5 serial site=0 reason=IndexSource end=breaker(slot=0 Materialize)
+  nodes n5@0 n2@1^
+  source index rel=39127 rti=10 am=heap index=39142
+    key att=0 op=39111 col=1 value=$exec0
+    recheck (op39111(op688(v10.1, c23:4), $exec0))
+    lanes Attr(1):byval8:w8:val
+  project (1=op688(v10.1, c23:4))
+  feed slot=0
+  outs 1=w8:val
+p3 node=1 serial site=0 reason=IndexSource end=sink
+  desc consumes=slot0@p2
+  nodes n1@0 n0@1
+  source index rel=39127 rti=1 am=heap index=39131
+    key att=1 op=410 value=c20:42
+    recheck (op410(v1.1, c20:42))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  nest inner=n2 JOIN_INNER vol=v params=($exec0=outer.2)
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n2@0
+  source breaker slot=0
+  append union slot=0 children=3
+  project (1=outer.1)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1)
+  outs 1=w8:val 2=? 3=?
+  outs 1=w8:val 2=? 3=? 4=w8:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p2 layout=[]->[Count@0] 8B
+rerun node=0 pipelines=p0,p1,p2 slots=0
+param $exec0 owner=n0 type=39092 rep=?
+mapped: Append SeqScan IndexScan NestLoop NestLoopParam

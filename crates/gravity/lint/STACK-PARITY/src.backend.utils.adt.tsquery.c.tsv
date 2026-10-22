@@ -1,0 +1,4 @@
+# PostgreSQL 18.6 src/backend/utils/adt/tsquery.c: 3 stack-depth check sites
+686	makepol	crates/backend/utils/adt/tsquery_core/src/parse.rs	QueryParser::makepol	yes	
+729	findoprnd_recurse	crates/backend/utils/adt/tsquery_core/src/parse.rs	findoprnd_recurse	yes	
+994	infix	crates/backend/utils/adt/tsquery_core/src/io.rs	infix	yes	

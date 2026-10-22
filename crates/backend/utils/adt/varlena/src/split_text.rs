@@ -66,16 +66,16 @@ pub(crate) fn split_fields(fcinfo: &Fcinfo) -> PgResult<TableFields> {
         return Ok(TableFields { input: Vec::new(), fields: out });
     }
     // SAFETY: arg 0 checked non-null; a live text varlena.
-    let inputstring: Vec<u8> = unsafe { fcinfo.arg_varlena_packed(0) }?.data().to_vec();
+    let inputstring: Vec<u8> = ::mcx::std_vec_from_slice("adt", &unsafe { fcinfo.arg_varlena_packed(0) }?.data())?;
     let fldsep: Option<Vec<u8>> = if !fcinfo.argisnull(1) {
         // SAFETY: arg 1 checked non-null; a live text varlena.
-        Some(unsafe { fcinfo.arg_varlena_packed(1) }?.data().to_vec())
+        Some(::mcx::std_vec_from_slice("adt", &unsafe { fcinfo.arg_varlena_packed(1) }?.data())?)
     } else {
         None
     };
     let null_string: Option<Vec<u8>> = if fcinfo.nargs() > 2 && !fcinfo.argisnull(2) {
         // SAFETY: arg 2 checked non-null; a live text varlena.
-        Some(unsafe { fcinfo.arg_varlena_packed(2) }?.data().to_vec())
+        Some(::mcx::std_vec_from_slice("adt", &unsafe { fcinfo.arg_varlena_packed(2) }?.data())?)
     } else {
         None
     };
@@ -179,16 +179,16 @@ pub fn fc_text_to_array(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
     }
     let mcx = fcinfo.result_mcx();
     // SAFETY: arg 0 checked non-null; a live text varlena.
-    let inputstring: Vec<u8> = unsafe { fcinfo.arg_varlena_packed(0) }?.data().to_vec();
+    let inputstring: Vec<u8> = ::mcx::std_vec_from_slice("adt", &unsafe { fcinfo.arg_varlena_packed(0) }?.data())?;
     let fldsep: Option<Vec<u8>> = if !fcinfo.argisnull(1) {
         // SAFETY: arg 1 checked non-null; a live text varlena.
-        Some(unsafe { fcinfo.arg_varlena_packed(1) }?.data().to_vec())
+        Some(::mcx::std_vec_from_slice("adt", &unsafe { fcinfo.arg_varlena_packed(1) }?.data())?)
     } else {
         None
     };
     let null_string: Option<Vec<u8>> = if fcinfo.nargs() > 2 && !fcinfo.argisnull(2) {
         // SAFETY: arg 2 checked non-null; a live text varlena.
-        Some(unsafe { fcinfo.arg_varlena_packed(2) }?.data().to_vec())
+        Some(::mcx::std_vec_from_slice("adt", &unsafe { fcinfo.arg_varlena_packed(2) }?.data())?)
     } else {
         None
     };

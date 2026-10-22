@@ -1,0 +1,7 @@
+# PostgreSQL 18.6 (Homebrew, Mac, M2-RIG 09-24): COPY (<sql>) TO STDOUT over a fresh initdb
+sql: SELECT 1 AS two UNION ALL SELECT 1;
+cols: two
+class: unordered
+[pg]
+1
+1

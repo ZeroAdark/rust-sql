@@ -1,0 +1,60 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3e s1u s1q s1d s1m s1s s2d s1c s2c s3s
+step s3e: EXPLAIN (COSTS OFF) DELETE FROM sem_t t WHERE EXISTS (SELECT 1 FROM sem_s s WHERE s.k = t.ref) AND t.id > 388 AND t.tier < 5;
+QUERY PLAN                                       
+-------------------------------------------------
+Delete on sem_t t                                
+  ->  Nested Loop Semi Join                      
+        Join Filter: (t.ref = s.k)               
+        ->  Bitmap Heap Scan on sem_t t          
+              Recheck Cond: (id > 388)           
+              Filter: (tier < 5)                 
+              ->  Bitmap Index Scan on sem_t_pkey
+                    Index Cond: (id > 388)       
+        ->  Seq Scan on sem_s s                  
+(9 rows)
+
+step s1u: UPDATE sem_t SET note = note || '*' WHERE id IN (391, 392);
+step s1q: UPDATE sem_t SET tier = 9 WHERE id = 393;
+step s1d: DELETE FROM sem_t WHERE id = 394;
+step s1m: UPDATE sem_t SET ref = ref + 1000 WHERE id = 395;
+step s1s: UPDATE sem_s SET k = 0 WHERE k = 396; UPDATE sem_t SET note = note || '+' WHERE id = 396;
+step s2d: DELETE FROM sem_t t WHERE EXISTS (SELECT 1 FROM sem_s s WHERE s.k = t.ref) AND t.id > 388 AND t.tier < 5; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3s: SELECT id, ref, tier, note FROM sem_t WHERE id > 388 ORDER BY id;
+ id| ref|tier|note
+---+----+----+----
+393| 393|   9|t393
+395|1395|   2|t395
+(2 rows)
+
+
+starting permutation: s1u s1q s1d s1m s1s s2u s1c s2c s3s
+step s1u: UPDATE sem_t SET note = note || '*' WHERE id IN (391, 392);
+step s1q: UPDATE sem_t SET tier = 9 WHERE id = 393;
+step s1d: DELETE FROM sem_t WHERE id = 394;
+step s1m: UPDATE sem_t SET ref = ref + 1000 WHERE id = 395;
+step s1s: UPDATE sem_s SET k = 0 WHERE k = 396; UPDATE sem_t SET note = note || '+' WHERE id = 396;
+step s2u: UPDATE sem_t t SET note = note || '#' WHERE EXISTS (SELECT 1 FROM sem_s s WHERE s.k = t.ref) AND t.id > 388 AND t.tier < 5; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3s: SELECT id, ref, tier, note FROM sem_t WHERE id > 388 ORDER BY id;
+ id| ref|tier|note  
+---+----+----+------
+389| 389|   2|t389# 
+390| 390|   0|t390# 
+391| 391|   1|t391*#
+392| 392|   2|t392*#
+393| 393|   9|t393  
+395|1395|   2|t395  
+396| 396|   0|t396+#
+397| 397|   1|t397# 
+398| 398|   2|t398# 
+399| 399|   0|t399# 
+400| 400|   1|t400# 
+(11 rows)
+

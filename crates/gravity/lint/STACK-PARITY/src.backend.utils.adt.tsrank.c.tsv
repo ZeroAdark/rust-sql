@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/adt/tsrank.c: 1 stack-depth check sites
+661	Cover	crates/backend/utils/adt/tsrank/src/rank_cd.rs	cover	yes	

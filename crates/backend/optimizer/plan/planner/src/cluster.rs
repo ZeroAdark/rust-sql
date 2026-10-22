@@ -51,7 +51,7 @@ pub fn plan_cluster_use_sort<'mcx>(
     let qid = run.intern_query(query);
     run.root.parse = qid;
 
-    setup_simple_rel_arrays(&mut run.root, 1);
+    setup_simple_rel_arrays(&mut run.root, 1)?;
     let rel_id = build_simple_rel(&mut run, 1, RTEKind::RTE_RELATION)?;
 
     let Some(index) =
@@ -81,8 +81,7 @@ pub fn plan_cluster_use_sort<'mcx>(
 
     // planner.c:7077-7078: charge twice the index expressions' eval cost per
     // sort comparison (tuplesort re-evaluates them for every comparison).
-    let indexprs: mcx::PgVec<'mcx, types_pathnodes::NodeId> =
-        crate::relnode::pgvec_clone_shallow(mcx, &index.indexprs);
+    let indexprs: &'mcx [types_pathnodes::NodeId] = index.indexprs;
     let mut index_expr_cost = types_pathnodes::QualCost::default();
     for &eid in indexprs.iter() {
         let e = *run.root.expr_node(eid);

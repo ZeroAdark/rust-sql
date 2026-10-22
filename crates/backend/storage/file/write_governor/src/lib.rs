@@ -12,7 +12,7 @@
 //! and 28,300Mi; notes: docs/tech-debt.md "Bulk writes OOM the server").
 //!
 //! The mechanism, hooked at the two funnels every bulk write passes through
-//! (fd's `FileWriteV`/`FileZero` for relation files; pgrc2's
+//! (fd's `FileWriteV`/`FileZero` for relation files; pgrc's
 //! `RealVfs::pwrite_at` for columnar part files):
 //!
 //!  1. per-fd WINDOW: written byte ranges accumulate; every `kick` bytes the
@@ -23,11 +23,14 @@
 //!     issues a blocking `fdatasync` on its own file — backpressure that
 //!     paces the writer at device speed with bounded outstanding dirty.
 //!
-//! Sizing is cgroup-honest: `budget = clamp(memory.max/4, 64MiB, 8GiB)`
-//! where `memory.max` is the MIN over bounded levels of our own cgroup
-//! hierarchy (the memheadroom ancestor-walk lesson: on the CI cluster the leaf
-//! reads "max" and the limit lives on the pod slice). No bounded cgroup =
-//! disarmed: bare boxes already have global writeback throttling.
+//! Sizing is cgroup-honest: `budget = mempolicy::load::write_budget(memory.max)`
+//! (D3808: B's page-cache floor, limit / 16 by default: the space the memory
+//! budget leaves outside itself, so dirty and writeback pages, which the
+//! watchdog counts, never sit past a load's room; it was memory.max/4 up to
+//! 8GiB, sized beside the load) where `memory.max` is
+//! the MIN over bounded levels of our own cgroup hierarchy (the memheadroom
+//! ancestor-walk lesson: on the CI cluster the leaf reads "max" and the limit
+//! lives on the pod slice). No bounded cgroup: the same rule over MemTotal.
 //!
 //! What this changes and does not change:
 //!  - WHAT gets written is untouched — only WHEN pages reach the device.
@@ -38,7 +41,8 @@
 //!    arm disarms loudly and fail-open (per-fd errseq on kernels >= 4.13
 //!    keeps the error visible to the durability fsyncs' own descriptors).
 //!  - Small writes never reach `kick` bytes outstanding and pay one atomic
-//!    load (disarmed) or one sharded map update (armed) per write.
+//!    load (disarmed) or one sharded map update (armed) per write; a small
+//!    file (under 1 MiB, never at `kick`) is not kicked at close either.
 //!
 //! Knob: `PGRUST_BULK_WRITE_GOVERNOR` = unset/`auto` (arm iff a bounded
 //! cgroup limit is visible) | `off`/`0` (disarm) | `<N>` (explicit budget in
@@ -96,8 +100,11 @@ struct Config {
     limit: u64,
 }
 
+/// the memory policy's write budget for `limit` (a cgroup's memory.max
+/// or MemTotal): B's page-cache floor, which the memory budget and so a
+/// load's room leave outside themselves.
 fn budget_from_limit(limit: u64) -> u64 {
-    (limit / 4).clamp(64 * MIB, 8 << 30)
+    mempolicy::load::write_budget(limit)
 }
 
 fn kick_from_budget(budget: u64) -> u64 {
@@ -128,7 +135,7 @@ fn resolve() -> Option<Config> {
                 })
             } else {
                 let total = meminfo_total()?;
-                let budget = (total / 8).clamp(64 * MIB, 8 << 30);
+                let budget = budget_from_limit(total);
                 Some(Config {
                     budget,
                     kick: kick_from_budget(budget),
@@ -255,6 +262,19 @@ struct Win {
     pending: u64,
     lo: u64,
     hi: u64,
+    /// This fd's writes reached `kick` at least once: a bulk write, whose tail is kicked at close.
+    kicked: bool,
+}
+
+/// The smallest window a close kicks on an fd that never reached `kick`.
+const CLOSE_KICK_MIN: u64 = MIB;
+
+/// Whether closing an fd kicks its pending window: a bulk write's tail, or a window of [`CLOSE_KICK_MIN`] or more.
+/// Below that a file is small (pgrc's commit pointer, a manifest, a small part): the kernel's own writeback takes
+/// it, or none if it is unlinked first. COMPACTP: kicking every small file put each commit pointer into writeback
+/// at close, and the next publish's rename waited for that writeback under the publish lock.
+fn close_kicks(w: &Win) -> bool {
+    w.pending > 0 && (w.kicked || w.pending >= CLOSE_KICK_MIN)
 }
 
 struct Gov {
@@ -301,7 +321,7 @@ fn gov() -> Option<&'static Gov> {
     .as_ref()
 }
 
-/// Postmaster boot wiring (ServerLoop, next to memwatchdog::start): resolve
+/// Postmaster boot wiring (ServerLoop, next to memruntime::start): resolve
 /// the config once and put the arming decision in the log — the census
 /// witness that the governor is live BEFORE any bulk write runs.
 pub fn start() {
@@ -391,15 +411,16 @@ pub fn note_write(fd: i32, off: u64, len: u64) {
             return;
         }
         let out = (w.lo, w.hi, w.pending);
-        *w = Win::default();
+        *w = Win { kicked: true, ..Win::default() };
         out
     };
     kick_and_maybe_wait(g, fd, lo, hi, pend, true);
 }
 
-/// The descriptor is about to be closed: kick any pending window so its
-/// bytes keep draining, and forget the fd (numbers are reused). Never
-/// blocks — close paths run in cleanup contexts.
+/// The descriptor is about to be closed: kick a bulk write's pending tail (or
+/// a window of [`CLOSE_KICK_MIN`] or more) so its bytes keep draining, and
+/// forget the fd (numbers are reused). Never blocks — close paths run in
+/// cleanup contexts.
 pub fn note_close(fd: i32) {
     let Some(g) = gov() else { return };
     let win = {
@@ -407,7 +428,7 @@ pub fn note_close(fd: i32) {
         m.remove(&fd)
     };
     if let Some(w) = win {
-        if w.pending > 0 {
+        if close_kicks(&w) {
             kick_and_maybe_wait(g, fd, w.lo, w.hi, w.pending, false);
         }
     }
@@ -561,21 +582,49 @@ mod tests {
         assert_eq!(meminfo_total_of("Bogus: 1\n"), None);
     }
 
-    /// The witnessed failure config: 28,300Mi memory.max sizes an ~7 GiB
-    /// budget, well inside the envelope; a 16Gi CI pod gets 4 GiB.
+    /// the budget is the memory policy's write budget, B's page-cache
+    /// floor (limit / 16 with no floor configured): the witnessed failure
+    /// config's 28,300Mi memory.max sizes ~1.7 GiB; a 16Gi pod gets 1 GiB, a
+    /// 12Gi pod 768 MiB.
     #[test]
     fn budget_sizing() {
         let witnessed = 28_979_200 * 1024u64; // 28300Mi in bytes
         let b = budget_from_limit(witnessed);
-        assert_eq!(b, witnessed / 4);
-        assert!(b > 6 * GIB && b < 7 * GIB); // ~6.9 GiB at the witnessed cap
-        assert_eq!(budget_from_limit(16 * GIB), 4 * GIB);
-        // Floors and ceilings.
-        assert_eq!(budget_from_limit(64 * MIB), 64 * MIB);
-        assert_eq!(budget_from_limit(1 << 45), 8 << 30);
+        assert_eq!(b, witnessed / 16);
+        assert!(b > GIB + GIB / 2 && b < 2 * GIB); // ~1.7 GiB at the witnessed cap
+        assert_eq!(budget_from_limit(16 * GIB), GIB);
+        assert_eq!(budget_from_limit(12 * GIB), 768 * MIB);
         // Kick scales with budget inside [1MiB, 32MiB].
         assert_eq!(kick_from_budget(4 * GIB), 32 * MIB);
         assert_eq!(kick_from_budget(64 * MIB), 4 * MIB);
         assert_eq!(kick_from_budget(16 * MIB), MIB);
+    }
+
+    #[test]
+    fn close_kicks_bulk_tails_and_mib_windows_only() {
+        use std::os::fd::AsRawFd;
+        std::env::set_var("PGRUST_BULK_WRITE_GOVERNOR", "64");
+        let g = gov().expect("an explicit budget arms the governor");
+        assert_eq!(g.cfg.kick, 4 * MIB);
+        let dir = std::env::temp_dir().join(format!("write-governor-close-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let kicks = || g.kicks.load(Ordering::Relaxed);
+        let closed = |name: &str, writes: &[(u64, u64)]| {
+            let f = fs::File::create(dir.join(name)).unwrap();
+            let fd = f.as_raw_fd();
+            for &(off, len) in writes {
+                note_write(fd, off, len);
+            }
+            let k = kicks();
+            note_close(fd);
+            kicks() - k
+        };
+        assert_eq!(closed("small", &[(0, 100)]), 0, "a 100-byte file was kicked at close");
+        assert_eq!(closed("manifest", &[(0, 64 << 10), (64 << 10, 4 << 10)]), 0, "a 68 KiB file was kicked at close");
+        assert_eq!(closed("mib", &[(0, MIB)]), 1, "a 1 MiB window was not kicked at close");
+        let before = kicks();
+        assert_eq!(closed("bulk", &[(0, 4 * MIB), (4 * MIB, 100)]), 1, "a bulk write's 100-byte tail was not kicked at close");
+        assert_eq!(kicks() - before, 2, "the bulk write's kick at 4 MiB");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

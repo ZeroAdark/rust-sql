@@ -1,0 +1,10 @@
+-- regress-full-transactions-006
+-- DECLARE c CURSOR FOR SELECT unique2/0 FROM tenk1 ORDER BY unique2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=16423 rti=1 am=heap index=19340
+    lanes Attr(2):byval8:w8:val
+  project (1=op528(index.1, c23:0), 2j=index.1)
+  outs 1=w4:val 2=w4:val
+mapped: IndexOnlyScan

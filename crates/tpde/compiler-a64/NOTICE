@@ -1,0 +1,14 @@
+Rust translation of TPDE arm64/CompilerA64.hpp, revision
+116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception. Original sources and license
+texts are retained under tests/raw_reference (manifest.json); license texts
+under ../assembler/tests/upstream/LICENSES and crates/tpde/LICENSES; the
+translated files, as pinned there:
+  tpde/include/tpde/arm64/CompilerA64.hpp
+    sha256 a58a5d8031372cb7f12a0f25a333a88a1b0c124b806cba1065bcc4906dc4ac91
+    git blob 4de1bc9b11f31c25b977467ca916290fbff3e2a0
+Rust changes include a typed AArch64 register/value model, explicit prologue
+and call-sequence state, a target guard for the single supported host, and the
+Disarm encoder reached through the fresh tpde_disarm crate instead of the C
+header. See docs/tpde-rewrite/coverage/compiler-a64.md.

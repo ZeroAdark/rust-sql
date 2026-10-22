@@ -38,6 +38,8 @@ heaptuple = { path = "../access/common/heaptuple" }
 catalog = { path = "../catalog/catalog" }
 init_small = { path = "../utils/init/init_small" }
 postgres_seams = { path = "../tcop/postgres_seams" }
+lmgr_proc = { path = "../storage/lmgr/lmgr_proc" }
+procarray = { path = "../storage/ipc/procarray" }
 funcapi = { path = "../utils/fmgr/funcapi" }
 namespace_seams = { path = "../catalog/namespace_seams" }
 s_lock_seams = { path = "../storage/lmgr/s_lock_seams" }

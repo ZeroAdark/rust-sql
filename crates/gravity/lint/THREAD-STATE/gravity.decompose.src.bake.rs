@@ -1,0 +1,2 @@
+gravity/decompose/src/bake.rs	SCOPES	admission	scope:Scope	leader	admission scope: the plan-tree bake log, one Scope guard per admission (exec Front holds it) or lowering (lower key.rs lowering_reads_lists); its drop closes it (an unwind too)
+gravity/decompose/src/bake.rs	DERIVED	admission	scope:Scope	leader	admission scope: constants decompose built per open bake scope; a scope's entries go when its Scope guard drops (an unwind too)

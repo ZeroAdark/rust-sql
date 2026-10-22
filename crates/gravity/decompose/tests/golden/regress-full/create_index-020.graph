@@ -1,0 +1,11 @@
+-- regress-full-create_index-020
+-- INSERT INTO array_gin_test SELECT ARRAY[1, g%5, g] FROM generate_series(1, 10000) g;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10000)]
+  project (1=array(c23:1, op530(v3.1, c23:5), v3.1))
+  write INSERT rel=19385 rti=1 natts=1 indexes=()
+  outs 1=vl:call0
+mapped: ModifyTable FunctionScan

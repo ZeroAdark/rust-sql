@@ -319,3 +319,31 @@ fn strtoint_bytes_quote_the_raw_input() {
     assert!(err.message_raw.is_none());
     assert_eq!(err.message(), "invalid input syntax for type bigint: \"x\"");
 }
+
+#[test]
+fn unsigned_subr_bytes_quote_the_raw_input() {
+    let err = uint32in_subr_bytes(b"1\xff", false, "oid", None).unwrap_err();
+    assert_eq!(err.sqlstate(), ERRCODE_INVALID_TEXT_REPRESENTATION);
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type oid: \"1\xff\"".as_slice())
+    );
+    let err = uint64in_subr_bytes(b"1\xff", false, "xid8", None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type xid8: \"1\xff\"".as_slice())
+    );
+    let err = uint32in_subr_bytes(b"99999999999 \xff", true, "oid", None).unwrap_err();
+    assert_eq!(err.sqlstate(), ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"value \"99999999999 \xff\" is out of range for type oid".as_slice())
+    );
+    assert_eq!(
+        uint32in_subr_bytes(b"42 \xff", true, "oid", None).unwrap(),
+        (42, b" \xff".as_slice())
+    );
+    let err = uint32in_subr("x", false, "oid", None).unwrap_err();
+    assert!(err.message_raw.is_none());
+    assert_eq!(err.message(), "invalid input syntax for type oid: \"x\"");
+}

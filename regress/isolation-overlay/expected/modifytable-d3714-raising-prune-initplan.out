@@ -1,0 +1,93 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1v s2u s1c s2r
+step s1v: UPDATE ri SET v = v + 1 WHERE a = 1 AND b = 1;
+step s2u: UPDATE ri_a1 SET v = ri_a1.v + 100 FROM ri_a2 WHERE ri_a2.b = (SELECT 3 / count(*)::int FROM ri_w); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM ri ORDER BY a, b, v;
+part    |a|b|  v
+--------+-+-+---
+ri_a1_b1|1|1|111
+ri_a1_b2|1|2|120
+ri_a2_b1|2|1|  0
+ri_a2_b2|2|2|  0
+(4 rows)
+
+
+starting permutation: s1d s2u s1c s2r
+step s1d: DELETE FROM ri WHERE a = 1 AND b = 1;
+step s2u: UPDATE ri_a1 SET v = ri_a1.v + 100 FROM ri_a2 WHERE ri_a2.b = (SELECT 3 / count(*)::int FROM ri_w); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM ri ORDER BY a, b, v;
+part    |a|b|  v
+--------+-+-+---
+ri_a1_b2|1|2|120
+ri_a2_b1|2|1|  0
+ri_a2_b2|2|2|  0
+(3 rows)
+
+
+starting permutation: s1m s2u s1c s2r
+step s1m: UPDATE ri SET b = 3 WHERE a = 1 AND b = 1;
+step s2u: UPDATE ri_a1 SET v = ri_a1.v + 100 FROM ri_a2 WHERE ri_a2.b = (SELECT 3 / count(*)::int FROM ri_w); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2r: SELECT tableoid::regclass AS part, * FROM ri ORDER BY a, b, v;
+part    |a|b| v
+--------+-+-+--
+ri_a1_b2|1|2|20
+ri_a1_b3|1|3|10
+ri_a2_b1|2|1| 0
+ri_a2_b2|2|2| 0
+(4 rows)
+
+
+starting permutation: s1v s2b s1c s2r
+step s1v: UPDATE ri SET v = v + 1 WHERE a = 1 AND b = 1;
+step s2b: UPDATE ri_a1 SET b = 2, v = ri_a1.v + 100 FROM ri_a2 WHERE ri_a2.b = (SELECT 3 / count(*)::int FROM ri_w); <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM ri ORDER BY a, b, v;
+part    |a|b|  v
+--------+-+-+---
+ri_a1_b2|1|2|111
+ri_a1_b2|1|2|120
+ri_a2_b1|2|1|  0
+ri_a2_b2|2|2|  0
+(4 rows)
+
+
+starting permutation: s1m s2b s1c s2r
+step s1m: UPDATE ri SET b = 3 WHERE a = 1 AND b = 1;
+step s2b: UPDATE ri_a1 SET b = 2, v = ri_a1.v + 100 FROM ri_a2 WHERE ri_a2.b = (SELECT 3 / count(*)::int FROM ri_w); <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2r: SELECT tableoid::regclass AS part, * FROM ri ORDER BY a, b, v;
+part    |a|b| v
+--------+-+-+--
+ri_a1_b2|1|2|20
+ri_a1_b3|1|3|10
+ri_a2_b1|2|1| 0
+ri_a2_b2|2|2| 0
+(4 rows)
+
+
+starting permutation: s1v s1w s2u s1c s2r
+step s1v: UPDATE ri SET v = v + 1 WHERE a = 1 AND b = 1;
+step s1w: INSERT INTO ri_w VALUES (4), (5), (6);
+step s2u: UPDATE ri_a1 SET v = ri_a1.v + 100 FROM ri_a2 WHERE ri_a2.b = (SELECT 3 / count(*)::int FROM ri_w); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM ri ORDER BY a, b, v;
+part    |a|b|  v
+--------+-+-+---
+ri_a1_b1|1|1|111
+ri_a1_b2|1|2|120
+ri_a2_b1|2|1|  0
+ri_a2_b2|2|2|  0
+(4 rows)
+

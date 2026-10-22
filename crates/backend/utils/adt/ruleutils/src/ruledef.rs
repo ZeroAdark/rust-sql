@@ -68,7 +68,7 @@ pub(crate) fn text_attr(td: &TupleDescData<'_>, tup: &HeapTupleData<'_>, attno: 
     };
     let scratch = MemoryContext::new("pg_rewrite text attr");
     let image = detoast::detoast_attr(scratch.mcx(), raw)?;
-    Ok(String::from_utf8(image[datum::varlena::VARHDRSZ..].to_vec())
+    Ok(String::from_utf8(::mcx::std_vec_from_slice("ruleutils", &image[datum::varlena::VARHDRSZ..])?)
         .expect("pg_rewrite text attr is UTF-8"))
 }
 
@@ -107,6 +107,11 @@ fn fetch_rule_scan(index_id: Oid, keys: &[ScanKeyData]) -> PgResult<Option<PgRew
     let cx = MemoryContext::new("pg_get_ruledef scan");
     let scan_mcx = cx.mcx();
     let rel = table::table_open(scan_mcx, REWRITE_RELATION_ID, AccessShareLock)?;
+    // The SPI query's planner locks every pg_rewrite index; like the executor's
+    // NoLock closes, these locks and the table lock are held to xact end.
+    for &idx in relcache::RelationGetIndexList(scan_mcx, REWRITE_RELATION_ID)?.iter() {
+        lmgr_seams::lock_relation_oid::call(idx, AccessShareLock)?;
+    }
     let snapshot = snapmgr::ActiveSnapshotSet().then(snapmgr::GetActiveSnapshot);
     let mut scan = genam::systable_beginscan(
         scan_mcx,
@@ -132,7 +137,7 @@ fn fetch_rule_scan(index_id: Oid, keys: &[ScanKeyData]) -> PgResult<Option<PgRew
         });
     }
     genam::systable_endscan(scan_mcx, scan)?;
-    rel.close(AccessShareLock)?;
+    rel.close(types_rel::NoLock)?;
     Ok(row)
 }
 

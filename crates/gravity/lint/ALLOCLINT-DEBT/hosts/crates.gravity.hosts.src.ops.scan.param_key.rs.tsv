@@ -1,0 +1,5 @@
+path	crates/gravity/hosts/src/ops/scan/param_key.rs
+macro	std::vec	2
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	1
+type	std::boxed::Box	1

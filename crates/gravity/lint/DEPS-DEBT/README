@@ -1,0 +1,12 @@
+# RD's registry (lint/rules/rd_deps.py; construct C3 recorded dependencies, lanes/rxcursor/DESIGN-c3-deps.md; the
+# user's direction 2026-10-11 06:36Z: make the code unified): the functions outside the dependency home (gravity_deps,
+# crates/gravity/deps/) that key or retire a catalog-derived cache by a backend-wide epoch, the shared tier's hand-built
+# stamp, the hand-walked composite relations or the per-thread note_* lists, and the definitions of those mechanisms
+# (kind def), by repository path, name and owner lane. Seeded at C3 S2 from the tree scan (44 rows); a row goes when its
+# step (S3 shared tier, S4 backend cache + memos, S6 bound tables) moves the cache onto Deps and deletes the old code; a
+# landing never adds a row (a certified move rewrites one). C3 is done when this list is empty.
+# kind: epoch, stamp, composite, note, def (several joined by '+').
+# path	fn	owner	kind	what it keys or retires, and the step that moves it
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<fn> (the row's path with
+# crates/gravity/ dropped and '/' as '.'), holding the row line; this README is not a row. Deleting a row deletes
+# its file, so lanes that delete different rows never touch the same file.

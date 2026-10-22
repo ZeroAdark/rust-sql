@@ -1,0 +1,10 @@
+# json_agg: elements sorted, the gap kept
+sql: SELECT json_agg(x) FROM t;
+cols: json_agg
+elem: 1	json_array
+class: unordered
+verdict: match
+[pg]
+[1, 2, "a, b"]
+[got]
+["a, b", 1, 2]

@@ -1,0 +1,18 @@
+# CORR-8 (main 09-27): ORDER BY key columns whose sort peers display apart (a nondeterministic collation's zz / Zz, numeric
+# 1.5 / 1.500) take eqo classes under the sort's `=` (the rig asks PG): tie runs and the key sequence compare by class, rows exactly
+# numeric peers 1.5 / 1.500 in one run, their order swapped: ordered by class; each row keeps its own display
+sql: SELECT n, id FROM t ORDER BY n;
+cols: n	id
+eqo: 1	1.5	1.5
+eqo: 1	1.500	1.5
+eqo: 1	2	2
+class: ordered 1
+verdict: match
+[pg]
+1.5	1
+1.500	2
+2	3
+[got]
+1.500	2
+1.5	1
+2	3

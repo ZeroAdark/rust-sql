@@ -56,6 +56,8 @@ pub struct LdapOptions {
     pub deref: i32,
     pub sizelimit: i32,
     pub timelimit: i32,
+    /// REFERRALS (LDAP_BOOL_REFERRALS): chase SearchResultReferences.
+    pub referrals: bool,
 }
 
 impl Default for LdapOptions {
@@ -76,6 +78,7 @@ impl Default for LdapOptions {
             deref: LDAP_DEREF_NEVER,
             sizelimit: 0,
             timelimit: 0,
+            referrals: true,
         }
     }
 }
@@ -137,7 +140,7 @@ fn b64_decode(s: &[u8]) -> Option<Vec<u8>> {
             _ => None,
         }
     }
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let mut out = ::mcx::std_vec_with_capacity("auth", s.len() / 4 * 3).ok()?;
     let mut acc: u32 = 0;
     let mut bits = 0u32;
     let mut pad = 0usize;
@@ -184,6 +187,8 @@ enum Attr {
     Int(bool),
     /// ATTR_KV: DEREF
     Deref,
+    /// ATTR_BOOL: REFERRALS
+    Referrals,
     Tls(TlsOpt),
     /// Rows this client reads past (no consumer).
     Ignored,
@@ -204,7 +209,7 @@ const ATTRS: &[(&str, bool, Attr)] = &[
     ("HOST", false, Attr::Ignored),
     ("URI", false, Attr::Ignored),
     ("SOCKET_BIND_ADDRESSES", false, Attr::Ignored),
-    ("REFERRALS", false, Attr::Ignored),
+    ("REFERRALS", false, Attr::Referrals),
     ("KEEPALIVE_IDLE", false, Attr::Ignored),
     ("KEEPALIVE_PROBES", false, Attr::Ignored),
     ("KEEPALIVE_INTERVAL", false, Attr::Ignored),
@@ -330,6 +335,12 @@ impl LdapOptions {
                             self.timelimit = v;
                         }
                     }
+                }
+                Attr::Referrals => {
+                    // init.c ATTR_BOOL: on/yes/true set, anything else clears.
+                    self.referrals = ["on", "yes", "true"]
+                        .iter()
+                        .any(|k| opt.eq_ignore_ascii_case(k));
                 }
                 Attr::Deref => {
                     for (key, value) in [
@@ -520,6 +531,18 @@ mod ldapconf_tests {
         assert_eq!(b64_decode(b"A"), None);
         assert_eq!(c_strtol("  -12x"), (-12, 5));
         assert_eq!(c_strtol("x"), (0, 0));
+    }
+
+    // init.c ATTR_BOOL REFERRALS (default on): Active Directory setups turn
+    // it off so continuation references are not chased.
+    #[test]
+    fn referrals_is_a_bool_option() {
+        let mut o = LdapOptions::default();
+        assert!(o.referrals);
+        o.init_w_conf_text(b"REFERRALS off\n", false);
+        assert!(!o.referrals);
+        o.init_w_conf_text(b"referrals Yes\n", false);
+        assert!(o.referrals);
     }
 
     #[test]

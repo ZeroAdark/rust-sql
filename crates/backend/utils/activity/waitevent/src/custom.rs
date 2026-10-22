@@ -94,13 +94,13 @@ fn key_buf(name: &str) -> [u8; NAMEDATALEN] {
 const C_SIZEOF_WAIT_EVENT_CUSTOM_COUNTER_DATA: usize = 8;
 
 #[allow(non_snake_case)] // C-parity name
-pub fn WaitEventCustomShmemSize() -> usize {
-    C_SIZEOF_WAIT_EVENT_CUSTOM_COUNTER_DATA
-        + dynahash::hash_estimate_size(WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64, size_of::<EntryByInfo>())
+pub fn WaitEventCustomShmemSize() -> PgResult<usize> {
+    Ok(C_SIZEOF_WAIT_EVENT_CUSTOM_COUNTER_DATA
+        + dynahash::hash_estimate_size(WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64, size_of::<EntryByInfo>())?
         + dynahash::hash_estimate_size(
             WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64,
             size_of::<EntryByName>(),
-        )
+        )?)
 }
 
 #[allow(non_snake_case)] // C-parity name

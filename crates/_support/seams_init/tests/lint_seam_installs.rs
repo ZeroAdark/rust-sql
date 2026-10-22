@@ -1,19 +1,10 @@
-//! Unit-shaped wiring for crates/_support/seams_init/tests/lint-seam-installs.sh — the CI differ for
-//! the seam-install bug class (a ported+exported seam implementation that
-//! init_all()'s closure never ::set()s, so is_installed()-guarded callers
-//! silently skip forever). It would have caught the subtrans boot bug
-//! (StartupSUBTRANS skipped on every boot) and the count_user_backends
-//! panic-on-login; see the script header and notes/seam-audit.md.
-//!
-//! Lives in seams_init because init_all() IS the install closure the lint
-//! checks against: `cargo test -p seams_init --test lint_seam_installs`.
 
 use std::path::Path;
 use std::process::Command;
 
 #[test]
 fn seam_installs_lint_passes() {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let repo = manifest_dir()
         .join("../../..")
         .canonicalize()
         .expect("repo root");
@@ -38,4 +29,11 @@ fn seam_installs_lint_passes() {
          unported seam gained a caller without an allowlist classification):\n\
          {report}"
     );
+}
+
+/// D793-b: the checkout under test, read at run time (cargo sets CARGO_MANIFEST_DIR for every test process), never
+/// env!()'s path baked in at compile time: a test binary reused from another checkout would read that checkout's files.
+fn manifest_dir() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| std::env::var_os("CARGO_MANIFEST_DIR").map(Into::into).expect("CARGO_MANIFEST_DIR unset: run under cargo test (D793-b)"))
 }

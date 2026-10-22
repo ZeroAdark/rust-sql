@@ -1,22 +1,26 @@
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::ffi::CString;
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use ::vfs::VfsFd;
 
-use ::elog::ereport;
+use ::elog::{ereport, PCT_M};
 use ::types_core::Oid;
 use ::types_error::{
     ErrorLevel, ErrorLocation, PgResult, DEBUG2, ERRCODE_INSUFFICIENT_RESOURCES, FATAL, LOG,
     PANIC, WARNING,
 };
 use ::types_resowner::ResourceOwner;
-use ::types_storage::{FD_MINFREE, NUM_RESERVED_FDS};
+use ::types_storage::{File, FD_MINFREE, NUM_RESERVED_FDS};
 
 use crate::desc::AllocateDesc;
 
 pub(crate) const FD_DELETE_AT_CLOSE: u16 = 1 << 0;
 pub(crate) const FD_CLOSE_AT_EOXACT: u16 = 1 << 1;
 pub(crate) const FD_TEMP_FILE_LIMIT: u16 = 1 << 2;
+pub(crate) const FD_TEMP_FOR_LIFE: u16 = 1 << 3;
 
 // The synthetic direct-IO bit lives in vfs (its F_NOCACHE mapping is
 // PosixVfs's platform split); re-exported here for the existing callers.
@@ -37,10 +41,15 @@ pub(crate) struct Vfd {
     pub next_free: i32,
     pub lru_more_recently: i32,
     pub lru_less_recently: i32,
-    pub file_size: i64,
+    /// A temp file's charge against `temp_file_limit` (C's fileSize), from its first growth.
+    pub temp: Option<Arc<TempCharge>>,
     pub file_name: Option<String>,
     pub file_flags: i32,
     pub file_mode: u32,
+    /// the slot's allocation number (`AllocateVfd`, 0 = never allocated). A File index names one open only while
+    /// its slot still holds the generation taken at that open (`io::FileGeneration`): a slot freed and allocated again
+    /// holds another file under the same index.
+    pub gen: u64,
 }
 
 impl Vfd {
@@ -54,10 +63,11 @@ impl Vfd {
             next_free: 0,
             lru_more_recently: 0,
             lru_less_recently: 0,
-            file_size: 0,
+            temp: None,
             file_name: None,
             file_flags: 0,
             file_mode: 0,
+            gen: 0,
         }
     }
 }
@@ -66,7 +76,8 @@ pub(crate) struct FdState {
     pub vfd_cache: Vec<Vfd>,
     pub nfile: i32,
     pub have_xact_temporary_files: bool,
-    pub temporary_files_size: u64,
+    pub temp_own: Option<Arc<AtomicU64>>,
+    pub temp_charge: Option<Arc<AtomicU64>>,
     pub temporary_files_allowed: bool,
     /// Stable-index slots: C's FreeFile searches by FILE*, so its
     /// compaction is invisible; index handles require tombstones instead.
@@ -74,8 +85,10 @@ pub(crate) struct FdState {
     pub max_allocated_descs: i32,
     pub temp_file_counter: i64,
     // None mirrors C's `numTempTableSpaces == -1`.
-    pub temp_table_spaces: Option<Vec<Oid>>,
+    pub temp_table_spaces: Option<std::sync::Arc<Vec<Oid>>>,
     pub next_temp_table_space: i32,
+    pub gen_next: u64,
+    pub orphan: Option<crate::orphan::Registered>,
 }
 
 impl FdState {
@@ -84,13 +97,24 @@ impl FdState {
             vfd_cache: Vec::new(),
             nfile: 0,
             have_xact_temporary_files: false,
-            temporary_files_size: 0,
+            temp_own: None,
+            temp_charge: None,
             temporary_files_allowed: false,
             allocated_descs: Vec::new(),
             max_allocated_descs: 0,
             temp_file_counter: 0,
             temp_table_spaces: None,
             next_temp_table_space: 0,
+            gen_next: 0,
+            orphan: None,
+        }
+    }
+
+    /// The account a temp file growing now is charged to: the installed charge, else the thread's own.
+    pub(crate) fn temp_current(&mut self) -> Arc<AtomicU64> {
+        match &self.temp_charge {
+            Some(a) => a.clone(),
+            None => self.temp_own.get_or_insert_with(Default::default).clone(),
         }
     }
 
@@ -198,7 +222,13 @@ pub fn set_temp_tablespaces_guc(value: Option<String>) {
 pub(crate) use ::vfs::{get_errno, set_errno};
 
 pub(crate) fn cpath(path: &str) -> CString {
-    CString::new(path.as_bytes()).unwrap_or_else(|_| CString::new("").unwrap())
+    cpath_bytes(path.as_bytes())
+}
+
+/// The byte-path form of `cpath` (C's `char *` reaches open/stat/mkdir
+/// untouched; an interior NUL degrades to "" exactly as before).
+pub(crate) fn cpath_bytes(path: &[u8]) -> CString {
+    CString::new(path).unwrap_or_else(|_| CString::new("").unwrap())
 }
 
 #[track_caller]
@@ -254,7 +284,7 @@ pub(crate) fn LruDelete(fd: &mut FdState, file: i32) -> PgResult<()> {
         let name = fd.vfd_cache[file as usize].file_name.clone().unwrap_or_default();
         ereport(elevel)
             .with_saved_errno(en)
-            .errmsg_internal(format!("could not close file \"{name}\": %m"))
+            .errmsg_internal(format!("could not close file \"{name}\": {PCT_M}"))
             .finish(loc("LruDelete"))?;
     }
     Ok(())
@@ -301,8 +331,41 @@ pub(crate) fn ReleaseLruFile(fd: &mut FdState) -> PgResult<bool> {
     Ok(false)
 }
 
+pub fn effective_max_safe_fds() -> i32 {
+    let own = max_safe_fds();
+    match vfs::session_fd_limit() {
+        n if n > 0 => own.min(n.min(i32::MAX as i64) as i32),
+        _ => own,
+    }
+}
+
 pub(crate) fn ReleaseLruFiles(fd: &mut FdState) -> PgResult<()> {
-    while fd.nfile + occupied_descs(fd) + num_external_fds() >= max_safe_fds() {
+    while fd.nfile + occupied_descs(fd) + num_external_fds() >= effective_max_safe_fds() {
+        if !ReleaseLruFile(fd)? {
+            break;
+        }
+    }
+    let generation = SHED_GEN.load(Ordering::Relaxed);
+    if generation != SEEN_SHED_GEN.get() {
+        SEEN_SHED_GEN.set(generation);
+        shed_to(fd, SHED_TARGET.load(Ordering::Relaxed))?;
+    }
+    Ok(())
+}
+
+// C divergence: one descriptor table serves every session. Idle sessions keep
+// at most SHED_TARGET kernel fds; EMFILE bumps SHED_GEN so busy ones shed too.
+pub(crate) static SHED_TARGET: AtomicI32 = AtomicI32::new(i32::MAX);
+static SHED_GEN: AtomicU32 = AtomicU32::new(0);
+const PRESSURE_RETRIES: u32 = 50;
+const PRESSURE_WAIT_MS: u64 = 10;
+
+thread_local! {
+    static SEEN_SHED_GEN: Cell<u32> = const { Cell::new(0) };
+}
+
+fn shed_to(fd: &mut FdState, target: i32) -> PgResult<()> {
+    while fd.nfile > target {
         if !ReleaseLruFile(fd)? {
             break;
         }
@@ -310,15 +373,29 @@ pub(crate) fn ReleaseLruFiles(fd: &mut FdState) -> PgResult<()> {
     Ok(())
 }
 
-pub(crate) fn AllocateVfd(fd: &mut FdState) -> i32 {
+pub fn ShedIdleFiles() -> PgResult<()> {
+    let target = SHED_TARGET.load(Ordering::Relaxed);
+    if !fd_tls_alive() {
+        return Ok(());
+    }
+    with_fd(|fd| if fd.nfile > target { shed_to(fd, target) } else { Ok(()) })
+}
+
+pub fn shed_target() -> i32 {
+    SHED_TARGET.load(Ordering::Relaxed)
+}
+
+pub(crate) fn AllocateVfd(fd: &mut FdState) -> PgResult<i32> {
     debug_assert!(fd.size_vfd_cache() > 0, "InitFileAccess not called?");
 
     if fd.vfd_cache[0].next_free == 0 {
         let old_size = fd.size_vfd_cache();
         let new_size = (old_size * 2).max(32);
 
-        // C reallocs and ereports ERROR on OOM; Vec growth aborts instead.
-        fd.vfd_cache.reserve(new_size - old_size);
+        // C reallocs and ereports ERROR (ERRCODE_OUT_OF_MEMORY) on failure.
+        fd.vfd_cache.try_reserve(new_size - old_size).map_err(|_| {
+            ::mcx::oom_named("VfdCache", new_size * core::mem::size_of::<Vfd>())
+        })?;
         for i in old_size..new_size {
             let mut v = Vfd::zeroed();
             v.next_free = (i + 1) as i32;
@@ -330,7 +407,94 @@ pub(crate) fn AllocateVfd(fd: &mut FdState) -> i32 {
 
     let file = fd.vfd_cache[0].next_free;
     fd.vfd_cache[0].next_free = fd.vfd_cache[file as usize].next_free;
-    file
+    fd.gen_next += 1;
+    fd.vfd_cache[file as usize].gen = fd.gen_next;
+    Ok(file)
+}
+
+pub fn temp_account() -> Arc<AtomicU64> {
+    with_fd(|fd| fd.temp_own.get_or_insert_with(Default::default).clone())
+}
+
+pub fn charge_temp_to(account: Option<Arc<AtomicU64>>) -> Option<Arc<AtomicU64>> {
+    with_fd(|fd| std::mem::replace(&mut fd.temp_charge, account))
+}
+
+pub(crate) struct TempCharge {
+    account: Arc<AtomicU64>,
+    bytes: AtomicU64,
+}
+
+impl TempCharge {
+    pub(crate) fn totals(&self) -> (u64, u64) {
+        (self.account.load(Ordering::Relaxed), self.bytes.load(Ordering::Relaxed))
+    }
+
+    pub(crate) fn grow_to(&self, end: u64) {
+        let prev = self.bytes.fetch_max(end, Ordering::Relaxed);
+        if end > prev {
+            self.account.fetch_add(end - prev, Ordering::Relaxed);
+        }
+    }
+
+    /// Credit the bytes past `end`: a truncate, or `0` when the file goes away.
+    pub(crate) fn shrink_to(&self, end: u64) {
+        let prev = self.bytes.fetch_min(end, Ordering::Relaxed);
+        if prev > end {
+            self.account.fetch_sub(prev - end, Ordering::Relaxed);
+        }
+    }
+}
+
+static NAMED_TEMP: pgsync::Mutex<BTreeMap<String, Arc<TempCharge>>> = pgsync::Mutex::new(BTreeMap::new());
+
+fn named_temp() -> pgsync::MutexGuard<'static, BTreeMap<String, Arc<TempCharge>>> {
+    pgsync::lock(&NAMED_TEMP)
+}
+
+pub(crate) fn charge_for_life(file: File, created: bool) {
+    if file.0 <= 0 {
+        return; // not opened
+    }
+    with_fd(|fd| {
+        let vfd_p = &mut fd.vfd_cache[file.0 as usize];
+        if vfd_p.fdstate & FD_TEMP_FILE_LIMIT == 0 {
+            return; // read-only: not charged
+        }
+        vfd_p.fdstate |= FD_TEMP_FOR_LIFE;
+        let path = vfd_p.file_name.as_deref().expect("a temp file has a name");
+        if created {
+            named_temp_gone(path);
+        } else {
+            vfd_p.temp = named_temp().get(path).cloned();
+        }
+    })
+}
+
+/// The charge a temp file growing for the first time on this descriptor takes: one charged for its life shares the
+/// file's (another descriptor may have made it), else a new one to the account charged now.
+pub(crate) fn temp_charge_for(fd: &mut FdState, file: i32) -> Arc<TempCharge> {
+    let account = fd.temp_current();
+    let fresh = || Arc::new(TempCharge { account, bytes: AtomicU64::new(0) });
+    let vfd_p = &fd.vfd_cache[file as usize];
+    match vfd_p.file_name.as_ref().filter(|_| vfd_p.fdstate & FD_TEMP_FOR_LIFE != 0) {
+        Some(name) => named_temp().entry(name.clone()).or_insert_with(fresh).clone(),
+        None => fresh(),
+    }
+}
+
+pub(crate) fn named_temp_gone(path: &str) {
+    if let Some(c) = named_temp().remove(path) {
+        c.shrink_to(0);
+    }
+}
+
+/// A descriptor on a file charged for its life closes: the charge stays with the file, unless the file went away (or
+/// was created over) while the descriptor was open, leaving the charge to nothing else.
+pub(crate) fn named_temp_closed(path: &str, charge: &Arc<TempCharge>) {
+    if !named_temp().get(path).is_some_and(|c| Arc::ptr_eq(c, charge)) {
+        charge.shrink_to(0);
+    }
 }
 
 pub(crate) fn FreeVfd(fd: &mut FdState, file: i32) {
@@ -339,6 +503,7 @@ pub(crate) fn FreeVfd(fd: &mut FdState, file: i32) {
     let vfd_p = &mut fd.vfd_cache[file as usize];
     vfd_p.dio_failed = false;
     vfd_p.file_name = None;
+    vfd_p.temp = None;
     vfd_p.fdstate = 0x0;
     vfd_p.next_free = head;
     fd.vfd_cache[0].next_free = file;
@@ -415,6 +580,25 @@ impl RawOf for VfsFd {
     }
 }
 
+/// D4682: a client backend thread reused for the next session (launch_backend cpool) gets a new thread's file state.
+/// The session's virtual files go, their descriptors closed with them (a thread exit's TLS drop): the smgr table that
+/// held them died with the session's roots, and the next session's InitFileAccess wants an empty cache. The slot
+/// generations go on counting, so a File index from the last session can never name a file of the next. The
+/// backend_initialize reservation for the client socket (closed at exit by socket_close) is handed back; the thread's
+/// own external descriptors (the waiter's wake pipe, the latch wait set, an open WAL segment) keep theirs.
+pub fn reset_for_thread_reuse() {
+    with_fd(|fd| {
+        let gen_next = fd.gen_next;
+        let temp_own = fd.temp_own.take();
+        let orphan = fd.orphan.take();
+        *fd = FdState::new();
+        fd.gen_next = gen_next;
+        fd.temp_own = temp_own;
+        fd.orphan = orphan;
+    });
+    ReleaseExternalFD();
+}
+
 pub fn InitFileAccess() {
     with_fd(|fd| {
         debug_assert_eq!(fd.size_vfd_cache(), 0, "call me only once");
@@ -433,6 +617,13 @@ pub fn InitFileAccess() {
 /// in release builds, so callers gate here instead.
 pub fn TempFileAccessReady() -> bool {
     with_fd(|fd| fd.temporary_files_allowed)
+}
+
+/// Whether this thread's VFD cache exists (`InitFileAccess` ran): a thread armed through
+/// `BaseInit` first (a pool worker's standing bring-up) must not initialize it again — the
+/// debug assertion in `InitFileAccess` fires, and release pushed a second zeroed header Vfd.
+pub fn FileAccessReady() -> bool {
+    with_fd(|fd| fd.size_vfd_cache() != 0)
 }
 
 pub fn InitTemporaryFileAccess() -> PgResult<()> {
@@ -483,7 +674,7 @@ pub(crate) fn count_usable_fds(max_to_probe: i32) -> PgResult<(i32, i32)> {
     if probe.getrlimit_failed {
         ereport(WARNING)
             .with_saved_errno(probe.getrlimit_errno)
-            .errmsg("getrlimit failed: %m")
+            .errmsg(format!("getrlimit failed: {PCT_M}"))
             .finish(loc("count_usable_fds"))?;
     }
 
@@ -495,7 +686,7 @@ pub(crate) fn count_usable_fds(max_to_probe: i32) -> PgResult<(i32, i32)> {
         ereport(WARNING)
             .with_saved_errno(probe.stop_errno)
             .errmsg_internal(format!(
-                "duplicating stderr file descriptor failed after {used} successes: %m"
+                "duplicating stderr file descriptor failed after {used} successes: {PCT_M}"
             ))
             .finish(loc("count_usable_fds"))?;
     }
@@ -519,6 +710,58 @@ pub const PER_SESSION_SETUP_FDS: i32 = 5;
 /// log-collector pipe. A flat allowance — it is paid once, not per session.
 pub const POSTMASTER_RESERVED_FDS: i32 = 96;
 
+/// The fewest / most descriptors the process-wide part-file pool gets
+/// (pgrcolumnar's parts, read by every session and the gravity pool threads,
+/// pgrc_read fdpool.rs). Its slice comes out of the ceiling before the
+/// sessions' split, so parts never take a session's reserve for WAL,
+/// pg_control, relation and temp files. The slice is sized by demand
+/// (the part files the pool holds plus the floor, at most the cap
+/// `compute_part_fd_slice` returns; vfs::part_fd_slice), and each session's
+/// limit follows it (`effective_max_safe_fds`): a server with few or no part
+/// files keeps the share it had before parts were counted.
+pub const PART_FD_FLOOR: i32 = 16;
+pub const PART_FD_CAP: i32 = 65536;
+
+fn fds_for_caches(ceiling: i32, max_child_threads: i32) -> i32 {
+    let setup = PER_SESSION_SETUP_FDS.saturating_mul(max_child_threads.max(1));
+    ceiling
+        .saturating_sub(setup)
+        .saturating_sub(POSTMASTER_RESERVED_FDS)
+}
+
+fn part_fd_slice_of(for_caches: i32, sessions: i32) -> i32 {
+    let floors = (FD_MINFREE + NUM_RESERVED_FDS).saturating_mul(sessions.max(1));
+    (for_caches.saturating_sub(floors) / 2).clamp(PART_FD_FLOOR, PART_FD_CAP)
+}
+
+pub fn compute_part_fd_slice(
+    process_ceiling: Option<i32>,
+    max_child_threads: i32,
+    max_session_threads: i32,
+) -> i32 {
+    process_ceiling.map_or(0, |c| {
+        part_fd_slice_of(fds_for_caches(c, max_child_threads), max_session_threads)
+    })
+}
+
+/// Smaller of RLIMIT_NOFILE (post-raise) and the kernel's per-process cap:
+/// macOS accepts a soft limit above its cap, then refuses the opens.
+pub fn effective_fd_ceiling(
+    soft_after: u64,
+    getrlimit_failed: bool,
+    kernel_cap: Option<u64>,
+) -> Option<i32> {
+    let effective = if getrlimit_failed {
+        kernel_cap?
+    } else {
+        match kernel_cap {
+            Some(cap) => soft_after.min(cap),
+            None => soft_after,
+        }
+    };
+    Some(effective.min(i32::MAX as u64) as i32)
+}
+
 /// The one-process fd budget (see `set_max_safe_fds`), factored out so the
 /// arithmetic is testable without touching the real limits.
 ///
@@ -539,18 +782,30 @@ pub fn compute_max_safe_fds(
     };
     // One process, one fd table: every live child is a thread inside this
     // ceiling, so the file-descriptor cache each session may fill is the
-    // ceiling MINUS every session's setup descriptors, divided by the
-    // sessions that can hold a cache at once.
     let sessions = max_session_threads.max(1);
-    let setup = PER_SESSION_SETUP_FDS.saturating_mul(max_child_threads.max(1));
-    let for_caches = ceiling
-        .saturating_sub(setup)
-        .saturating_sub(POSTMASTER_RESERVED_FDS);
-    let share = for_caches / sessions;
+    let for_caches = fds_for_caches(ceiling, max_child_threads);
+    let share = (for_caches - PART_FD_FLOOR) / sessions;
     // The share only ever LOWERS the answer: where the limit is generous
     // (containers, `nofile` raised to the hard limit) max_files_per_process
     // still binds and the result is byte-identical to C's.
     c_shaped.min(share) - NUM_RESERVED_FDS
+}
+
+/// C's per-backend cap, bounded by the table left after setup descriptors.
+pub fn compute_thread_max_safe_fds(
+    usable_fds: i32,
+    max_files_per_process: i32,
+    process_ceiling: Option<i32>,
+    max_child_threads: i32,
+) -> i32 {
+    let c_shaped = usable_fds.min(max_files_per_process);
+    let Some(ceiling) = process_ceiling else {
+        return c_shaped - NUM_RESERVED_FDS;
+    };
+    let table = ceiling
+        .saturating_sub(PER_SESSION_SETUP_FDS.saturating_mul(max_child_threads.max(1)))
+        .saturating_sub(POSTMASTER_RESERVED_FDS);
+    c_shaped.min(table) - NUM_RESERVED_FDS
 }
 
 /// set_max_safe_fds (fd.c), adapted to the one-process topology.
@@ -580,7 +835,7 @@ pub fn set_max_safe_fds(max_child_threads: i32, max_session_threads: i32) -> PgR
         } else if limits.setrlimit_errno != 0 {
             ereport(WARNING)
                 .with_saved_errno(limits.setrlimit_errno)
-                .errmsg("setrlimit(RLIMIT_NOFILE) failed: %m")
+                .errmsg(format!("setrlimit(RLIMIT_NOFILE) failed: {PCT_M}"))
                 .finish(loc("set_max_safe_fds"))?;
         }
     }
@@ -588,25 +843,48 @@ pub fn set_max_safe_fds(max_child_threads: i32, max_session_threads: i32) -> PgR
     let mfp = max_files_per_process();
     let (usable_fds, already_open) = count_usable_fds(mfp)?;
 
-    let ceiling: Option<i32> = if limits.getrlimit_failed {
-        None
-    } else {
-        Some(limits.soft_after.min(i32::MAX as u64) as i32)
-    };
+    // Verified limit: dividing descriptors that do not exist hides the FATAL.
+    let kernel_cap = limits.kernel_per_process_cap;
+    let ceiling = effective_fd_ceiling(limits.soft_after, limits.getrlimit_failed, kernel_cap);
+    if let Some(cap) = kernel_cap {
+        if !limits.getrlimit_failed && cap < limits.soft_after {
+            ::elog::elog(
+                LOG,
+                format!(
+                    "file descriptor budget sized from the kernel's per-process cap {}, \
+                     not the soft limit {} (the kernel refuses opens past the cap)",
+                    cap, limits.soft_after
+                ),
+            )?;
+        }
+    }
 
-    let new_max =
+    let share =
         compute_max_safe_fds(usable_fds, mfp, ceiling, max_child_threads, max_session_threads);
+    let new_max = compute_thread_max_safe_fds(usable_fds, mfp, ceiling, max_child_threads);
     set_max_safe_fds_value(new_max);
+    if let Some(c) = ceiling {
+        vfs::set_fd_budget(vfs::FdBudget {
+            for_caches: fds_for_caches(c, max_child_threads) as i64,
+            sessions: max_session_threads.max(1) as i64,
+            c_bound: (usable_fds.min(mfp) - NUM_RESERVED_FDS) as i64,
+            reserved: NUM_RESERVED_FDS as i64,
+            part_floor: PART_FD_FLOOR as usize,
+            part_cap: compute_part_fd_slice(ceiling, max_child_threads, max_session_threads).max(0)
+                as usize,
+        });
+    }
+    SHED_TARGET.store(share.max(1), Ordering::Relaxed);
 
     if new_max < FD_MINFREE {
         // Never boot a server whose sessions would die at connection setup:
-        // C refuses the same way when one backend cannot get enough
-        // descriptors, and here the shortage is the whole server's.
+        // every child's socket, wake pipe and wait sets are set aside first,
+        // and what is left must hold one backend's minimum, as C requires.
         let needed_per_session = FD_MINFREE + NUM_RESERVED_FDS;
         let needed_total = (needed_per_session as i64)
-            * (max_session_threads.max(1) as i64)
             + (PER_SESSION_SETUP_FDS as i64) * (max_child_threads.max(1) as i64)
-            + POSTMASTER_RESERVED_FDS as i64;
+            + POSTMASTER_RESERVED_FDS as i64
+            + PART_FD_FLOOR as i64;
         return ereport(FATAL)
             .errcode(ERRCODE_INSUFFICIENT_RESOURCES)
             .errmsg("insufficient file descriptors available to start server process")
@@ -614,29 +892,52 @@ pub fn set_max_safe_fds(max_child_threads: i32, max_session_threads: i32) -> PgR
                 "The whole server runs in one process: {} concurrent sessions \
                  (max_connections and friends) need at least {} open file \
                  descriptors, but the limit in force allows {} ({} already open, \
-                 hard limit {}). Each session needs {} descriptors for its file \
-                 cache plus {} for its socket, wake pipe and wait sets.",
-                max_session_threads.max(1),
+                 hard limit {}). Each session needs {} for its socket, wake pipe \
+                 and wait sets, and the file caches need at least {}.",
+                max_child_threads.max(1),
                 needed_total,
                 ceiling.map(|c| c.to_string()).unwrap_or_else(|| usable_fds.to_string()),
                 already_open,
                 hard_limit_text(limits.hard),
-                needed_per_session,
                 PER_SESSION_SETUP_FDS,
+                needed_per_session,
             ))
             .errhint(
-                "Raise the open file limit (ulimit -n / LimitNOFILE), or lower \
-                 max_connections."
-                    .to_string(),
+                // Raising ulimit -n cannot help when the kernel cap binds.
+                match kernel_cap {
+                    Some(cap) if limits.getrlimit_failed || cap < limits.soft_after => format!(
+                        "The kernel caps one process at {cap} descriptors, so raising \
+                         ulimit -n will not help. Raise that cap (sysctl \
+                         kern.maxfilesperproc, and kern.maxfiles above it), or lower \
+                         max_connections."
+                    ),
+                    _ => "Raise the open file limit (ulimit -n / LimitNOFILE), or lower \
+                          max_connections."
+                        .to_string(),
+                },
             )
             .finish(loc("set_max_safe_fds"));
+    }
+
+    if share < FD_MINFREE {
+        ereport(WARNING)
+            .errcode(ERRCODE_INSUFFICIENT_RESOURCES)
+            .errmsg(format!(
+                "the open file limit leaves {} file descriptors per session when all {} \
+                 sessions are busy",
+                share.max(0) + NUM_RESERVED_FDS,
+                max_session_threads.max(1)
+            ))
+            .errhint("Raise the open file limit (ulimit -n / LimitNOFILE), or lower max_connections.")
+            .finish(loc("set_max_safe_fds"))?;
     }
 
     ::elog::elog(
         DEBUG2,
         format!(
-            "max_safe_fds = {new_max}, usable_fds = {usable_fds}, already_open = {already_open}, \
-             sessions = {max_session_threads}, child threads = {max_child_threads}"
+            "max_safe_fds = {new_max}, shared share = {share}, usable_fds = {usable_fds}, \
+             already_open = {already_open}, sessions = {max_session_threads}, \
+             child threads = {max_child_threads}"
         ),
     )
 }
@@ -664,7 +965,16 @@ pub(crate) fn BasicOpenFilePermInternal(
     file_flags: i32,
     file_mode: u32,
 ) -> PgResult<i32> {
-    let path = cpath(file_name);
+    BasicOpenFilePermInternalBytes(fd, file_name.as_bytes(), file_flags, file_mode)
+}
+
+pub(crate) fn BasicOpenFilePermInternalBytes(
+    fd: &mut FdState,
+    file_name: &[u8],
+    file_flags: i32,
+    file_mode: u32,
+) -> PgResult<i32> {
+    let path = cpath_bytes(file_name);
 
     loop {
         // The open(2) chokepoint. PG_O_DIRECT handling (macOS: mask +
@@ -680,11 +990,23 @@ pub(crate) fn BasicOpenFilePermInternal(
             ereport(LOG)
                 .with_saved_errno(save_errno)
                 .errcode(ERRCODE_INSUFFICIENT_RESOURCES)
-                .errmsg("out of file descriptors: %m; release and retry")
+                .errmsg(format!("out of file descriptors: {PCT_M}; release and retry"))
                 .finish(loc("BasicOpenFilePerm"))?;
             set_errno(0);
+            SHED_GEN.fetch_add(1, Ordering::Relaxed);
+            SEEN_SHED_GEN.set(SHED_GEN.load(Ordering::Relaxed));
             if ReleaseLruFile(fd)? {
                 continue;
+            }
+            for _ in 0..PRESSURE_RETRIES {
+                pgsync::thread::sleep(std::time::Duration::from_millis(PRESSURE_WAIT_MS));
+                let raw = vfs::open(&path, file_flags, file_mode as libc::mode_t);
+                if raw >= 0 {
+                    return Ok(raw);
+                }
+                if get_errno() != libc::EMFILE && get_errno() != libc::ENFILE {
+                    return Ok(-1);
+                }
             }
             set_errno(save_errno);
         }
@@ -694,7 +1016,7 @@ pub(crate) fn BasicOpenFilePermInternal(
 }
 
 pub fn AcquireExternalFD() -> PgResult<bool> {
-    if num_external_fds() < max_safe_fds() / 3 {
+    if num_external_fds() < effective_max_safe_fds() / 3 {
         ReserveExternalFD()?;
         Ok(true)
     } else {
@@ -715,9 +1037,15 @@ pub fn ReleaseExternalFD() {
 }
 
 pub fn MakePGDirectory(directory_name: &str) -> i32 {
+    MakePGDirectoryPath(&vfs::PgPath::from(directory_name))
+}
+
+/// MakePGDirectory over a byte path (tablespace redo hands the WAL record's
+/// location bytes straight through, as C does).
+pub fn MakePGDirectoryPath(directory_name: &vfs::PgPath) -> i32 {
     // mkdir(2) with the configured directory mode (composite policy stays
     // here; the syscall is the VFS's).
-    let path = cpath(directory_name);
+    let path = directory_name.to_c_string();
     vfs::mkdir(&path, pg_dir_create_mode() as libc::mode_t)
 }
 

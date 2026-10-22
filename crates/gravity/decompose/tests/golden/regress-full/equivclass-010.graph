@@ -1,0 +1,84 @@
+-- regress-full-equivclass-010
+-- explain (costs off) select * from ec1, (select ff + 1 as x from (select ff + 2 as ff from ec1 union all select ff + 3 as ff from ec1) ss0 union all select ff + 4 as x from ec1) as ss1, (select ff + 1 as x from (select ff + 2 as ff from ec1 union all select ff + 3 as ff from ec1) ss0 union all select ff + 4 as x from ec1) as ss2 where ss1.x = ec1.f1 and ss1.x = ss2.x and ec1.ff = 42::int8;
+graph pipelines=9 breakers=8 init_plans=0 root=p8
+p0 node=12 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n12@0 n11@1
+  source index rel=39127 rti=1 am=heap index=39131
+    key att=1 op=410 value=c20:42
+    recheck (op410(v1.1, c20:42))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  sort keys=2+:I64 form=runs
+  outs 1=w8:val 2=? 3=?
+p1 node=8 serial site=0 reason=IndexSource end=breaker(slot=1 Sort)
+  nodes n8@0 n7@1^
+  source index rel=39127 rti=9 am=heap index=39140
+    lanes Attr(1):byval8:w8:val
+  project (1=op688(op688(v9.1, c23:2), c23:1))
+  feed slot=1 ordered
+  outs 1=w8:val
+p2 node=9 serial site=0 reason=IndexSource end=breaker(slot=1 Sort)
+  nodes n9@0 n7@1^
+  source index rel=39127 rti=10 am=heap index=39141
+    lanes Attr(1):byval8:w8:val
+  project (1=op688(op688(v10.1, c23:3), c23:1))
+  feed slot=1 ordered
+  outs 1=w8:val
+p3 node=10 serial site=0 reason=IndexSource end=breaker(slot=1 Sort)
+  nodes n10@0 n7@1^
+  source index rel=39127 rti=11 am=heap index=39142
+    lanes Attr(1):byval8:w8:val
+  project (1=op688(v11.1, c23:4))
+  feed slot=1 ordered
+  outs 1=w8:val
+p4 node=7 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 Materialize)
+  desc consumes=slot1@p3 consumes=slot0@p0
+  nodes n7@0 n6@2 n5@4
+  source breaker slot=1
+  append merge slot=1 children=3 keys=1+:I64
+  project (1=outer.1)
+  merge slot=0 inner=n11 JOIN_INNER unique clauses=(op39111(outer.1, inner.2)) reversals=[false] nulls_first=[false]
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=outer.1)
+  spool
+  outs 1=w8:val
+  outs 1=w8:val 2=? 3=? 4=w8:val
+p5 node=2 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n2@0 n1@1^
+  source index rel=39127 rti=17 am=heap index=39140
+    lanes Attr(1):byval8:w8:val
+  project (1=op688(op688(v17.1, c23:2), c23:1))
+  feed slot=0 ordered
+  outs 1=w8:val
+p6 node=3 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n3@0 n1@1^
+  source index rel=39127 rti=18 am=heap index=39141
+    lanes Attr(1):byval8:w8:val
+  project (1=op688(op688(v18.1, c23:3), c23:1))
+  feed slot=0 ordered
+  outs 1=w8:val
+p7 node=4 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n4@0 n1@1^
+  source index rel=39127 rti=19 am=heap index=39142
+    lanes Attr(1):byval8:w8:val
+  project (1=op688(v19.1, c23:4))
+  feed slot=0 ordered
+  outs 1=w8:val
+p8 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p7 consumes=slot2@p4
+  nodes n1@0 n0@2
+  source breaker slot=0
+  append merge slot=0 children=3 keys=1+:I64
+  project (1=outer.1)
+  merge slot=2 inner=n5 JOIN_INNER clauses=(op410(outer.1, inner.4)) reversals=[false] nulls_first=[false]
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val 2=? 3=? 4=w8:val 5=w8:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I64]->[Count@8] 16B order=2+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[I64]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p2 layout=[I64]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p3 layout=[I64]->[Count@8] 16B order=1+
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B order=4+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p5 layout=[I64]->[Count@8] 16B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p6 layout=[I64]->[Count@8] 16B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p7 layout=[I64]->[Count@8] 16B order=1+
+mapped: MergeAppend IndexScan MergeJoin Material Sort

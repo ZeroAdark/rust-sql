@@ -1,0 +1,131 @@
+gravity_abi ctx layout v4 (abi-v2)
+ctx size 128 align 8
+ctx program 0 8
+ctx sites 8 8
+ctx out 16 8
+ctx cancel 24 8
+ctx arena_cur 32 8
+ctx arena_end 40 8
+ctx budget_bytes 48 8
+ctx spill 56 8
+ctx claim 64 16
+ctx resume 80 8
+ctx params 88 8
+ctx params_null 96 8
+ctx identity 104 8
+ctx flags 112 4
+ctx worker_ordinal 116 2
+ctx width 118 2
+ctx nsites 120 2
+ctx host_lane0 122 2
+ctx pad 124 4
+site size 192 align 8
+site values 0 8
+site isnull 8 8
+site keys 16 8
+site keys_null 24 8
+site lanes 32 8
+site next 40 8
+site lane 48 8
+site fetch 56 8
+site src 64 8
+site env 72 8
+site sel 80 8
+site answer 88 8
+site rows_in 96 8
+site rows_out 104 8
+site cont 112 8
+site state 120 4
+site rows 124 4
+site cursor 128 4
+site sel_n 132 4
+site part_id 136 4
+site dict_epoch 140 4
+site granule 144 4
+site claim_id 148 4
+site pos 152 12
+site nlanes 164 2
+site answered 166 1
+site part_facts 167 1
+site nkeys 168 2
+site natts 170 2
+site page_flags 172 2
+site lanes_cap 174 2
+site dict 176 8
+site page 184 8
+program size 96 align 8
+program push 0 8
+program spill 8 8
+program arena_grow 16 8
+program write 24 8
+program lock 32 8
+program partial 40 8
+program env 48 8
+program sink 56 8
+program rec_open 64 8
+program owner 72 8
+program pin 80 8
+program instr 88 8
+out size 56 align 8
+out values 0 8
+out isnull 8 8
+out count 16 8
+out cap 24 8
+out region 32 8
+out region_cap 40 8
+out region_len 48 8
+lane size 32 align 8
+lane ptr 0 8
+lane valid 8 8
+lane width 16 1
+lane kind 17 1
+lane region 18 1
+lane flags 19 1
+lane ncodes_or_scale 20 4
+lane id 24 4
+lane aux 28 4
+answer size 56 align 8
+answer nonnull 0 8
+answer sum_lo 8 8
+answer sum_hi 16 8
+answer min 24 8
+answer max 32 8
+answer flags 40 8
+answer false_count 48 8
+partials size 32 align 8
+partials own 0 8
+partials consumed 8 16
+partials more 24 8
+identity size 32 align 8
+identity proc_number 0 4
+identity command_id 4 4
+identity resource_owner 8 8
+identity latch 16 8
+identity snapshot 24 8
+scanpos size 12 align 8
+scanpos flags 0 2
+scanpos off 2 2
+scanpos rel 4 4
+scanpos block 8 4
+ctx claim.lo 64 8 claim.hi 72 8
+site pos.flags 152 2 pos.off 154 2 pos.rel 156 4 pos.block 160 4
+site window cells 80 88
+sites stride 192 count ctx.nsites after header 128
+lanes count site.nlanes per program
+lane kind byval 0 byref 1 codes 2 fixed 3
+lane region page 0 arena 1 dictionary 2 breaker 3 immediate 4
+lane flags all_valid 1 sorted 2 verdict mixed 0 all_match 4 none_match 8 answered 16 entries 32
+lane id kind<<24 attr 0 rowid 1 offset 2 verdict 3 projection 4 jsonb 5 table 6
+lane empty_code_none 4294967295
+answer flags sum 1 minmax 2
+site state closed 0 open 1 eof 2
+pos flags valid 1 row 2
+flags resume 1
+claim all 0 18446744073709551615
+resume phase<<48|position none 0 build 1 probe 2 spill_batch 3 emit 4
+status ok 0 stop -1 cancelled -2 error -3 suspend -(4|full<<8) recheck -(5|site<<8) unsupported -(6|kind<<8) fault -(7|site<<8|lane<<16|code<<24)
+unsupported shape 1 scratch 2 null_key 3 on_worker 4 out_region 5
+write op insert 1 update 2 delete 3 value skipped 0 done 1 recheck 2
+spill op scatter 0 refill 1 parts 2 drop 3 target 4 run_put 5 runs 6 run_open 7 run_fill 8
+calls site next(site) lane(site,k) fetch(site,nrows) program push(ctx) spill(ctx,op,arg) arena_grow(ctx,bytes) write(ctx,op,site) lock(ctx,site) rec_open(ctx,partial,layout,cap,limit,keys)
+abi C-unwind i64

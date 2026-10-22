@@ -1,0 +1,41 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1b s1am s2i s1c s3s
+step s1b: BEGIN;
+step s1am: ALTER TABLE rp1 SET ACCESS METHOD pgrcolumnar;
+step s2i: INSERT INTO rp VALUES (1, 'x'); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s3s: SELECT tableoid::regclass, * FROM rp ORDER BY a, b;
+tableoid|a|b
+--------+-+-
+rp1     |1|x
+(1 row)
+
+
+starting permutation: s1b s1am s2b s2j s1c s2s s2c s3s
+step s1b: BEGIN;
+step s1am: ALTER TABLE rp1 SET ACCESS METHOD pgrcolumnar;
+step s2b: BEGIN;
+step s2j: INSERT INTO rp SELECT g % 2 + 1, 'y' || g FROM generate_series(1, 4) g; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+step s2s: SELECT tableoid::regclass, * FROM rp ORDER BY a, b;
+tableoid|a|b 
+--------+-+--
+rp1     |1|y2
+rp1     |1|y4
+rp2     |2|y1
+rp2     |2|y3
+(4 rows)
+
+step s2c: COMMIT;
+step s3s: SELECT tableoid::regclass, * FROM rp ORDER BY a, b;
+tableoid|a|b 
+--------+-+--
+rp1     |1|y2
+rp1     |1|y4
+rp2     |2|y1
+rp2     |2|y3
+(4 rows)
+

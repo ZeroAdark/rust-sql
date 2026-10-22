@@ -1,0 +1,12 @@
+-- regress-full-without_overlaps-002
+-- SELECT pg_get_indexdef(conindid, 0, true) FROM pg_constraint WHERE conname = 'temporal_rng_pk';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=2606 rti=1 am=heap index=2664
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v1.2, c19:#64))
+    lanes Attr(11):byval8:w8:val
+  project (1=fn2507(v1.11, c23:0, c16:1))
+  outs 1=vl:call2507
+mapped: IndexScan

@@ -1,0 +1,51 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1val s2del s1c s2sel
+step s1b: BEGIN;
+step s1val: UPDATE wp SET val = val || 'x' WHERE id = 24;
+step s2del: WITH r AS (SELECT max(id) AS maxid FROM wp) DELETE FROM wp USING r WHERE id = maxid; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2sel: SELECT id, val FROM wp ORDER BY id;
+id|val
+--+---
+ 1|p1 
+11|c11
+12|c12
+23|c21
+(4 rows)
+
+
+starting permutation: s1b s1move s2del s1c s2sel
+step s1b: BEGIN;
+step s1move: UPDATE wp SET id = 25 WHERE id = 24;
+step s2del: WITH r AS (SELECT max(id) AS maxid FROM wp) DELETE FROM wp USING r WHERE id = maxid; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2sel: SELECT id, val FROM wp ORDER BY id;
+id|val
+--+---
+ 1|p1 
+11|c11
+12|c12
+23|c21
+25|c22
+(5 rows)
+
+
+starting permutation: s1b s1val s2upd s1c s2sel
+step s1b: BEGIN;
+step s1val: UPDATE wp SET val = val || 'x' WHERE id = 24;
+step s2upd: WITH r AS (SELECT max(id) AS maxid, count(*) AS n FROM wp) UPDATE wp SET val = val || '/' || r.n FROM r WHERE id = maxid; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT id, val FROM wp ORDER BY id;
+id|val   
+--+------
+ 1|p1    
+11|c11   
+12|c12   
+23|c21   
+24|c22x/5
+(5 rows)
+

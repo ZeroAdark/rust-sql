@@ -5,7 +5,7 @@ use core::cell::RefCell;
 use core::mem::ManuallyDrop;
 
 use datum::Varlena;
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use large_object::{
     inv_close, inv_create, inv_drop, inv_open, inv_read, inv_seek, inv_tell, inv_truncate,
     inv_write, LargeObjectDesc, INV_READ, INV_WRITE, SEEK_END, SEEK_SET,
@@ -26,9 +26,25 @@ const MaxAllocSize: int64 = 0x3FFF_FFFF;
 const VARHDRSZ: int64 = 4;
 
 struct FsState {
-    // C's cookies[] in fscxt: the slots own the descriptors.
-    cookies: Vec<Option<LargeObjectDesc>>,
+    // fscxt: the "Filesystem" context created by the first descriptor and
+    // deleted at transaction end; cookies[] lives in it and owns the descriptors.
+    fscxt: Option<mcx::MemoryContext>,
+    cookies: Option<PgVec<'static, Option<LargeObjectDesc>>>,
     lo_cleanup_needed: bool,
+}
+
+impl FsState {
+    fn len(&self) -> usize {
+        self.cookies.as_ref().map_or(0, |c| c.len())
+    }
+
+    fn slot(&self, fd: i32) -> &Option<LargeObjectDesc> {
+        &self.cookies.as_ref().expect("fd_is_valid")[fd as usize]
+    }
+
+    fn slot_mut(&mut self, fd: i32) -> &mut Option<LargeObjectDesc> {
+        &mut self.cookies.as_mut().expect("fd_is_valid")[fd as usize]
+    }
 }
 
 thread_local! {
@@ -36,7 +52,8 @@ thread_local! {
     // AtEOXact_LargeObject empties it at every transaction end.
     static STATE: RefCell<ManuallyDrop<FsState>> = const {
         RefCell::new(ManuallyDrop::new(FsState {
-            cookies: Vec::new(),
+            fscxt: None,
+            cookies: None,
             lo_cleanup_needed: false,
         }))
     };
@@ -60,7 +77,7 @@ fn close_error(fnamebuf: &str, errnum: i32) -> Box<types_error::PgError> {
     ereport(ERROR)
         .with_saved_errno(errnum)
         .errcode_for_file_access()
-        .errmsg(format!("could not close file \"{fnamebuf}\": %m"))
+        .errmsg(format!("could not close file \"{fnamebuf}\": {PCT_M}"))
         .into_error()
         .into()
 }
@@ -68,35 +85,46 @@ fn close_error(fnamebuf: &str, errnum: i32) -> Box<types_error::PgError> {
 fn fd_is_valid(fd: i32) -> bool {
     fd >= 0
         && with_state(|s| {
-            (fd as usize) < s.cookies.len() && s.cookies[fd as usize].is_some()
+            (fd as usize) < s.len() && s.slot(fd).is_some()
         })
 }
 
-fn newLOfd() -> i32 {
+fn newLOfd() -> PgResult<i32> {
     with_state(|s| {
         s.lo_cleanup_needed = true;
-        for (i, c) in s.cookies.iter().enumerate() {
+        let Some(cookies) = s.cookies.as_mut() else {
+            let fscxt = s.fscxt.get_or_insert_with(|| mcx::MemoryContext::new("Filesystem"));
+            // SAFETY: cookies allocate from fscxt and are dropped before it
+            // (AtEOXact_LargeObject clears cookies first).
+            let mcx = unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'static>>(fscxt.mcx()) };
+            let mut v: PgVec<'static, Option<LargeObjectDesc>> = PgVec::new_in(mcx);
+            grow_cookies(&mut v, 64)?;
+            s.cookies = Some(v);
+            return Ok(0);
+        };
+        for (i, c) in cookies.iter().enumerate() {
             if c.is_none() {
-                return i as i32;
+                return Ok(i as i32);
             }
         }
-        // No free slot: first allocation is 64 slots, else double (C's
-        // MemoryContextAllocZero / repalloc0_array growth).
-        if s.cookies.is_empty() {
-            s.cookies.resize_with(64, || None);
-            0
-        } else {
-            let i = s.cookies.len();
-            s.cookies.resize_with(i * 2, || None);
-            i as i32
-        }
+        // No free slot: double (C's repalloc0_array growth).
+        let i = cookies.len();
+        grow_cookies(cookies, i)?;
+        Ok(i as i32)
     })
+}
+
+fn grow_cookies(v: &mut PgVec<'static, Option<LargeObjectDesc>>, additional: usize) -> PgResult<()> {
+    let bytes = additional.saturating_mul(core::mem::size_of::<Option<LargeObjectDesc>>());
+    v.try_reserve(additional).map_err(|_| v.allocator().oom(bytes))?;
+    v.resize_with(v.len() + additional, || None);
+    Ok(())
 }
 
 fn closeLOfd(fd: i32) -> PgResult<()> {
     // Clear the slot first so an error can't double-free (C: better a leak
     // than a crash).
-    let mut lobj = match with_state(|s| s.cookies[fd as usize].take()) {
+    let mut lobj = match with_state(|s| s.slot_mut(fd).take()) {
         Some(l) => l,
         None => return Ok(()),
     };
@@ -114,7 +142,7 @@ pub fn be_lo_open<'mcx>(mcx: Mcx<'mcx>, lobjId: Oid, mode: i32) -> PgResult<i32>
         xact::PreventCommandIfReadOnly("lo_open(INV_WRITE)")?;
     }
 
-    let fd = newLOfd();
+    let fd = newLOfd()?;
 
     let mut lobjDesc = inv_open(mcx, lobjId, mode)?;
     lobjDesc.subid = xact::GetCurrentSubTransactionId();
@@ -129,8 +157,8 @@ pub fn be_lo_open<'mcx>(mcx: Mcx<'mcx>, lobjId: Oid, mode: i32) -> PgResult<i32>
     }
 
     with_state(|s| {
-        debug_assert!(s.cookies[fd as usize].is_none());
-        s.cookies[fd as usize] = Some(lobjDesc);
+        debug_assert!(s.slot(fd).is_none());
+        *s.slot_mut(fd) = Some(lobjDesc);
     });
 
     Ok(fd)
@@ -160,7 +188,7 @@ pub fn lo_read<'mcx>(mcx: Mcx<'mcx>, fd: i32, buf: &mut [u8]) -> PgResult<i32> {
     }
     // Check state first so the error is about the FD, not the privilege.
     with_state(|s| {
-        let lobj = s.cookies[fd as usize].as_mut().expect("fd_is_valid");
+        let lobj = s.slot_mut(fd).as_mut().expect("fd_is_valid");
         if (lobj.flags & IFS_RDLOCK) == 0 {
             return Err(not_opened(fd, "reading"));
         }
@@ -173,7 +201,7 @@ pub fn lo_write<'mcx>(mcx: Mcx<'mcx>, fd: i32, buf: &[u8]) -> PgResult<i32> {
         return Err(invalid_descriptor(fd));
     }
     with_state(|s| {
-        let lobj = s.cookies[fd as usize].as_mut().expect("fd_is_valid");
+        let lobj = s.slot_mut(fd).as_mut().expect("fd_is_valid");
         if (lobj.flags & IFS_WRLOCK) == 0 {
             return Err(not_opened(fd, "writing"));
         }
@@ -186,7 +214,7 @@ pub fn be_lo_lseek<'mcx>(mcx: Mcx<'mcx>, fd: i32, offset: i32, whence: i32) -> P
         return Err(invalid_descriptor(fd));
     }
     let status = with_state(|s| {
-        inv_seek(mcx, s.cookies[fd as usize].as_mut().expect("fd_is_valid"), offset as int64, whence)
+        inv_seek(mcx, s.slot_mut(fd).as_mut().expect("fd_is_valid"), offset as int64, whence)
     })?;
     if status != status as i32 as int64 {
         return Err(ereport(ERROR)
@@ -205,7 +233,7 @@ pub fn be_lo_lseek64<'mcx>(mcx: Mcx<'mcx>, fd: i32, offset: int64, whence: i32) 
         return Err(invalid_descriptor(fd));
     }
     with_state(|s| {
-        inv_seek(mcx, s.cookies[fd as usize].as_mut().expect("fd_is_valid"), offset, whence)
+        inv_seek(mcx, s.slot_mut(fd).as_mut().expect("fd_is_valid"), offset, whence)
     })
 }
 
@@ -225,7 +253,7 @@ pub fn be_lo_tell(fd: i32) -> PgResult<i32> {
     if !fd_is_valid(fd) {
         return Err(invalid_descriptor(fd));
     }
-    let offset = with_state(|s| inv_tell(s.cookies[fd as usize].as_ref().expect("fd_is_valid")))?;
+    let offset = with_state(|s| inv_tell(s.slot(fd).as_ref().expect("fd_is_valid")))?;
     if offset != offset as i32 as int64 {
         return Err(ereport(ERROR)
             .errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE)
@@ -242,7 +270,7 @@ pub fn be_lo_tell64(fd: i32) -> PgResult<int64> {
     if !fd_is_valid(fd) {
         return Err(invalid_descriptor(fd));
     }
-    with_state(|s| inv_tell(s.cookies[fd as usize].as_ref().expect("fd_is_valid")))
+    with_state(|s| inv_tell(s.slot(fd).as_ref().expect("fd_is_valid")))
 }
 
 pub fn be_lo_unlink<'mcx>(mcx: Mcx<'mcx>, lobjId: Oid) -> PgResult<i32> {
@@ -272,6 +300,7 @@ pub fn be_lo_unlink<'mcx>(mcx: Mcx<'mcx>, lobjId: Oid) -> PgResult<i32> {
     let to_close: Vec<i32> = with_state(|s| {
         s.cookies
             .iter()
+            .flatten()
             .enumerate()
             .filter(|(_, c)| c.as_ref().is_some_and(|l| l.id == lobjId))
             .map(|(i, _)| i as i32)
@@ -356,7 +385,7 @@ fn lo_import_internal<'mcx>(mcx: Mcx<'mcx>, filename: &[u8], lobjOid: Oid) -> Pg
         return Err(ereport(ERROR)
             .with_saved_errno(elog::errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open server file \"{fnamebuf}\": %m"))
+            .errmsg(format!("could not open server file \"{fnamebuf}\": {PCT_M}"))
             .into_error()
             .into());
     }
@@ -375,7 +404,7 @@ fn lo_import_internal<'mcx>(mcx: Mcx<'mcx>, filename: &[u8], lobjOid: Oid) -> Pg
                 return Err(ereport(ERROR)
                     .with_saved_errno(elog::errno::current_errno())
                     .errcode_for_file_access()
-                    .errmsg(format!("could not read server file \"{fnamebuf}\": %m"))
+                    .errmsg(format!("could not read server file \"{fnamebuf}\": {PCT_M}"))
                     .into_error()
                     .into());
             }
@@ -438,7 +467,7 @@ pub fn be_lo_export<'mcx>(mcx: Mcx<'mcx>, lobjId: Oid, filename: &[u8]) -> PgRes
         return Err(ereport(ERROR)
             .with_saved_errno(elog::errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create server file \"{fnamebuf}\": %m"))
+            .errmsg(format!("could not create server file \"{fnamebuf}\": {PCT_M}"))
             .into_error()
             .into());
     }
@@ -471,7 +500,7 @@ pub fn be_lo_export<'mcx>(mcx: Mcx<'mcx>, lobjId: Oid, filename: &[u8]) -> PgRes
                 return Err(ereport(ERROR)
                     .with_saved_errno(elog::errno::current_errno())
                     .errcode_for_file_access()
-                    .errmsg(format!("could not write server file \"{fnamebuf}\": %m"))
+                    .errmsg(format!("could not write server file \"{fnamebuf}\": {PCT_M}"))
                     .into_error()
                     .into());
             }
@@ -496,7 +525,7 @@ fn lo_truncate_internal<'mcx>(mcx: Mcx<'mcx>, fd: i32, len: int64) -> PgResult<(
         return Err(invalid_descriptor(fd));
     }
     with_state(|s| {
-        let lobj = s.cookies[fd as usize].as_mut().expect("fd_is_valid");
+        let lobj = s.slot_mut(fd).as_mut().expect("fd_is_valid");
         if (lobj.flags & IFS_WRLOCK) == 0 {
             return Err(not_opened(fd, "writing"));
         }
@@ -525,8 +554,8 @@ pub fn AtEOXact_LargeObject(isCommit: bool) -> PgResult<()> {
     // clear below is the MemoryContextDelete(fscxt) analogue.
     if isCommit {
         let open: Vec<i32> = with_state(|s| {
-            (0..s.cookies.len() as i32)
-                .filter(|&i| s.cookies[i as usize].is_some())
+            (0..s.len() as i32)
+                .filter(|&i| s.slot(i).is_some())
                 .collect()
         });
         for i in open {
@@ -534,7 +563,10 @@ pub fn AtEOXact_LargeObject(isCommit: bool) -> PgResult<()> {
         }
     }
 
-    with_state(|s| s.cookies = Vec::new());
+    with_state(|s| {
+        s.cookies = None;
+        s.fscxt = None;
+    });
 
     large_object::close_lo_relation(isCommit)?;
 
@@ -548,17 +580,17 @@ pub fn AtEOSubXact_LargeObject(
     mySubid: SubTransactionId,
     parentSubid: SubTransactionId,
 ) -> PgResult<()> {
-    if with_state(|s| s.cookies.is_empty()) {
+    if with_state(|s| s.len() == 0) {
         return Ok(()); // no LO operations in this xact
     }
 
-    let n = with_state(|s| s.cookies.len() as i32);
+    let n = with_state(|s| s.len() as i32);
     for i in 0..n {
-        let subid = with_state(|s| s.cookies[i as usize].as_ref().map(|l| l.subid));
+        let subid = with_state(|s| s.slot(i).as_ref().map(|l| l.subid));
         if subid == Some(mySubid) {
             if isCommit {
                 with_state(|s| {
-                    s.cookies[i as usize].as_mut().expect("checked above").subid = parentSubid;
+                    s.slot_mut(i).as_mut().expect("checked above").subid = parentSubid;
                 });
             } else {
                 closeLOfd(i)?;
@@ -669,6 +701,18 @@ pub fn init_seams() {
 #[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+
+    // be-fsstubs.c:687/:635: the "Filesystem" context is created by the first
+    // descriptor allocation and deleted with the cookies at transaction end.
+    #[test]
+    fn filesystem_context_lives_from_first_descriptor_to_xact_end() {
+        assert!(crate::with_state(|s| s.fscxt.is_none() && s.len() == 0));
+        assert_eq!(crate::newLOfd().unwrap(), 0);
+        assert!(crate::with_state(|s| s.fscxt.as_ref().is_some_and(|c| c.name() == "Filesystem")));
+        assert_eq!(crate::with_state(|s| s.len()), 64);
+        crate::AtEOXact_LargeObject(true).unwrap();
+        assert!(crate::with_state(|s| s.fscxt.is_none() && s.len() == 0 && !s.lo_cleanup_needed));
+    }
 
     // be-fsstubs.c:372 be_loread: `palloc(VARHDRSZ + len)` is admitted by
     // palloc's MaxAllocSize check before lo_read ever looks at the fd, so an

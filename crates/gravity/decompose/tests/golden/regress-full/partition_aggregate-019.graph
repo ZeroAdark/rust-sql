@@ -1,0 +1,81 @@
+-- regress-full-partition_aggregate-019
+-- SELECT a.x, b.y, count(*) FROM (SELECT * FROM pagg_tab1 WHERE x < 20) a LEFT JOIN (SELECT * FROM pagg_tab2 WHERE y > 10) b ON a.x = b.y WHERE a.x > 5 or b.y < 20 GROUP BY a.x, b.y ORDER BY 1, 2;
+graph pipelines=7 breakers=6 init_plans=0 root=p6
+p0 node=8 eligible rows=30 end=breaker(slot=0 Materialize)
+  nodes n8@0 n7@2^
+  source range rel=46778 rti=9 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op521(v9.2, c23:10)
+  project (1=v9.2)
+  feed slot=0
+  outs 1=w8:val
+p1 node=9 eligible rows=30 end=breaker(slot=0 Materialize)
+  nodes n9@0 n7@2^
+  source range rel=46781 rti=10 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op521(v10.2, c23:10)
+  project (1=v10.2)
+  feed slot=0
+  outs 1=w8:val
+p2 node=7 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p1 words=bits@5/6
+  nodes n7@0 n6@2
+  source breaker slot=0
+  append union slot=0 children=2
+  project (1=outer.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val
+p3 node=4 eligible rows=50 end=breaker(slot=0 HashAgg)
+  desc consumes=slot1@p2 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n3@2 n2@4 n1@7^
+  source range rel=46763 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op97(v7.1, c23:20)
+  project (1=v7.1)
+  append arm 0/2
+  project (1=outer.1)
+  probe slot=1 inner=n6 JOIN_LEFT keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  filter or(op521(outer.1, c23:5), op97(inner.1, c23:20))
+  project (1=outer.1, 2=inner.1)
+  outs 1=w8:val
+  outs 1=w4:val
+  outs 1=w4:val 2=w4:val
+p4 node=5 eligible rows=50 end=breaker(slot=0 HashAgg)
+  desc consumes=slot1@p2 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n5@0 n3@2 n2@4 n1@7^
+  source range rel=46766 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op97(v8.1, c23:20)
+  project (1=v8.1)
+  append arm 1/2
+  project (1=outer.1)
+  probe slot=1 inner=n6 JOIN_LEFT keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  filter or(op521(outer.1, c23:5), op97(inner.1, c23:20))
+  project (1=outer.1, 2=inner.1)
+  outs 1=w8:val
+  outs 1=w4:val
+  outs 1=w4:val 2=w4:val
+p5 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot0@p4
+  nodes n1@0 n0@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=agg2803*())
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w4:val 2=w4:val 3=w8:val
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p5
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=w8:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32,I32]->[Count@16] 24B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[I32,I32]->[Count@16] 24B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p5 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+group slot=0 producer=p4 node=1 form=Hashed hints=[] layout=[I32,I32]->[Count@16] 24B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  key 1 word=1 resno=2 kind=I32 attno=0 type=23 expr=inner.1
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: Append SeqScan HashJoin Sort Agg Hash

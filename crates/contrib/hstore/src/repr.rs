@@ -15,7 +15,7 @@ pub const HS_COUNT_MASK: u32 = 0x0FFF_FFFF;
 pub const HSTORE_MAX_KEY_LEN: usize = 0x3FFF_FFFF;
 pub const HSTORE_MAX_VALUE_LEN: usize = 0x3FFF_FFFF;
 
-const HSHRDSIZE: usize = 8;
+pub(crate) const HSHRDSIZE: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct Pair {

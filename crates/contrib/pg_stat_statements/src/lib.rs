@@ -16,6 +16,7 @@ use types_core::Oid;
 use types_error::{PgError, PgResult};
 use types_fmgr::{FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction};
 
+mod settings;
 mod hooks;
 mod normalize;
 mod srf;
@@ -214,6 +215,12 @@ fn pg_init() -> PgResult<()> {
 
     queryjumble::EnableQueryId();
 
+    for &setting in settings::SETTINGS {
+        guc::DefineCustomVariable(setting)?;
+    }
+    guc::MarkGUCPrefixReserved("pg_stat_statements");
+
+
     // pg_stat_statements.c:473: shmem_startup_hook = pgss_shmem_startup.
     ipci::register_shmem_startup_hook(pgss_shmem_startup);
 
@@ -232,6 +239,7 @@ fn pg_init() -> PgResult<()> {
         finish: Some(hooks::pgss_executor_finish),
         finish_leave: Some(hooks::pgss_executor_finish_leave),
         end: Some(hooks::pgss_executor_end),
+        active: Some(|| pgss_enabled(nesting_level())),
     });
     utility::dispatch::tap_process_utility_enter::install(hooks::pgss_process_utility_enter);
     utility::dispatch::tap_process_utility_leave::install(hooks::pgss_process_utility_leave);
@@ -241,6 +249,7 @@ fn pg_init() -> PgResult<()> {
 
 /// `pgss_shmem_startup` (pg_stat_statements.c:511-600), at boot and after a crash cycle (ipci.c:248).
 fn pgss_shmem_startup() -> PgResult<()> {
+    pgss_shmem_register()?;
     let mut shared = PgssShared {
         hash: HashMap::with_hasher(FxBuildHasher),
         max: gucs::pgss_max().max(100) as usize,
@@ -260,6 +269,25 @@ fn pgss_shmem_startup() -> PgResult<()> {
     Ok(())
 }
 
+/// pg_stat_statements.c:533-560's ShmemIndex rows; entries live in PGSS.
+pub(crate) fn pgss_shmem_register() -> PgResult<()> {
+    let (_, found) = shmem::ShmemInitStruct("pg_stat_statements", PGSS_SHARED_STATE_SIZE)?;
+    if !found {
+        let mut info = types_hash::hsearch::HASHCTL::default();
+        info.keysize = PGSS_HASH_KEY_SIZE;
+        info.entrysize = store::PGSS_ENTRY_SIZE;
+        let max = i64::from(gucs::pgss_max());
+        shmem::ShmemInitHash(
+            "pg_stat_statements hash",
+            max,
+            max,
+            &mut info,
+            types_hash::hsearch::HASH_ELEM | types_hash::hsearch::HASH_BLOBS,
+        )?;
+    }
+    Ok(())
+}
+
 /// C `MAXALIGN(sizeof(pgssSharedState))` (pg_stat_statements.c:246-256) on
 /// LP64: LWLock *lock 8 + double cur_median_usage 8 + Size mean_query_len 8 +
 /// slock_t mutex 1 (+7 pad) + Size extent 8 + int n_writers 4 + int gc_count
@@ -267,13 +295,16 @@ fn pgss_shmem_startup() -> PgResult<()> {
 /// ShmemIndex row.
 pub(crate) const PGSS_SHARED_STATE_SIZE: usize = 64;
 
+/// C `sizeof(pgssHashKey)`.
+pub(crate) const PGSS_HASH_KEY_SIZE: usize = 24;
+
 /// `pgss_memsize` (pg_stat_statements.c:2053-2061): the shared memory the
 /// module reserves — its state struct plus a pg_stat_statements.max-entry
 /// shared hash of sizeof(pgssEntry) entries (hash_estimate_size, dynahash.c).
 pub(crate) fn pgss_memsize() -> PgResult<usize> {
     shmem::add_size(
         PGSS_SHARED_STATE_SIZE,
-        dynahash::hash_estimate_size(gucs::pgss_max() as i64, store::PGSS_ENTRY_SIZE),
+        dynahash::hash_estimate_size(gucs::pgss_max() as i64, store::PGSS_ENTRY_SIZE)?,
     )
 }
 

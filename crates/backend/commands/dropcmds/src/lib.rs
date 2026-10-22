@@ -302,7 +302,7 @@ fn does_not_exist_skipping(objtype: ObjectType, object: Node<'_>) -> PgResult<()
                 .and_then(|n| n.as_string())
                 .expect("opclass access method name is a String node")
                 .sval;
-            let tail: Vec<&str> = string_parts(names, names.len())[1..].to_vec();
+            let tail: Vec<&str> = ::mcx::std_vec_from_slice("dropcmds", &string_parts(names, names.len())[1..])?;
             match schema_does_not_exist_skipping_parts(&tail)? {
                 Some(msg) => msg,
                 None => {

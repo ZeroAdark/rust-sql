@@ -83,6 +83,7 @@ pub fn ProcessStartupProcInterrupts() -> PgResult<()> {
     // handlers (startup-progress, standby timeouts) at this per-record poll,
     // where C's signal handler would already have preempted the redo loop.
     timeout::ProcessTimeoutInterrupt();
+    procsignal::DrainThreadSignals()?;
 
     if GOT_SIGHUP.swap(false, Relaxed) {
         StartupRereadConfig()?;
@@ -157,6 +158,11 @@ pub fn StartupProcessMain(startup_data: &StartupData) -> ! {
     if let Err(e) = transam_xlog::StartupXLOG() {
         fatal_exit(&e);
     }
+    if startup_seams::columnar_after_recovery::is_installed() {
+        if let Err(e) = startup_seams::columnar_after_recovery::call() {
+            fatal_exit(&e);
+        }
+    }
 
     // Exit code 0 tells the postmaster recovery completed successfully.
     ipc::proc_exit(0, g::MyProcPid())
@@ -219,6 +225,7 @@ pub fn begin_startup_progress_phase() {
 }
 
 pub fn has_startup_progress_timeout_expired() -> Option<(i64, i32)> {
+    timeout::ProcessTimeoutInterrupt();
     if !STARTUP_PROGRESS_TIMER_EXPIRED.load(Relaxed) {
         return None;
     }

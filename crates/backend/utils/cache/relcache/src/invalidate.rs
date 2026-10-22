@@ -24,6 +24,7 @@ pub(crate) fn RelationInvalidateRelation(rel: &RelationData<'static>) {
     // clear missed (wave-4 find — stale opclass config after DDL, plus a
     // harmless stale lastUsedPages hint).
     *rel.rd_amcache_spgist.borrow_mut() = None;
+    *rel.rd_amcache_bloom.borrow_mut() = None;
     *rel.rd_indexlist.borrow_mut() = None;
     *rel.rd_trigdesc.borrow_mut() = None;
     crate::rules::forget(rel.rd_id);
@@ -32,6 +33,7 @@ pub(crate) fn RelationInvalidateRelation(rel: &RelationData<'static>) {
     crate::statextlist::forget(rel.rd_id);
     crate::fkeylist::forget(rel.rd_id);
     crate::deform_jit::forget(rel.rd_id);
+    crate::defaults::forget(rel.rd_id);
 }
 
 // RelationClearRelation: caller has verified refcount-zero, not nailed, and
@@ -90,6 +92,9 @@ pub(crate) fn RelationRebuildRelation(
 ) -> PgResult<Rc<RelationData<'static>>> {
     debug_assert!(!store::refcount_zero(held, 0));
     debug_assert_eq!(held.rd_droppedSubid.get(), InvalidSubTransactionId);
+    if elog::message_level_is_interesting(types_error::DEBUG5) {
+        let _ = elog::elog(types_error::DEBUG5, format!("relcache: rebuild {relid}"));
+    }
 
     RelationInvalidateRelation(held);
 
@@ -142,7 +147,8 @@ fn RelationReloadIndexInfo(
     }
 
     let index_ok = relid != CLASS_OID_INDEX_ID && critical;
-    let Some(scanned) = relcache_build_seams::scan_pg_relation::call(relid, index_ok, false)?
+    let scan_cx = mcx::MemoryContext::new("ScanPgRelation");
+    let Some(scanned) = relcache_build_seams::scan_pg_relation::call(scan_cx.mcx(), relid, index_ok, false)?
     else {
         return Err(Box::new(
             PgError::error(format!("could not find pg_class tuple for index {relid}"))
@@ -202,7 +208,7 @@ fn RelationReloadIndexInfo(
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: support,
         // Preserved like rd_support: resolving a support proc scans
         // pg_amproc, which needs these very indexes searchable.
@@ -218,6 +224,58 @@ fn RelationReloadIndexInfo(
     copy_preserved(held, &newrel);
     replace_entry(relid, &newrel);
     Ok(newrel)
+}
+
+/// `RelationInitIndexAccessInfo` for a just-created index in bootstrap mode
+/// (index.c index_create): swaps in a copy with the pg_index/opclass fields.
+pub fn RelationInitIndexAccessInfoBootstrap(relid: Oid) -> PgResult<()> {
+    debug_assert!(miscinit_seams::is_bootstrap_processing_mode::call());
+    let _ = elog::elog(types_error::DEBUG4, format!("relcache: bootstrap index access info {relid}"));
+    let Some((held, _nailed)) = store::lookup_ent(relid) else {
+        return Err(Box::new(
+            PgError::error(format!("relcache entry for new index {relid} not found"))
+                .with_sqlstate(ERRCODE_INTERNAL_ERROR),
+        ));
+    };
+    let mcx = cache_mcx();
+    let ii = relcache_build_seams::relation_init_index_access_info::call(
+        mcx,
+        relid,
+        &held.rd_rel,
+        held.rd_att.natts as i16,
+    )?;
+    let newrel = Rc::new(RelationData { rd_locator: Default::default(), rd_smgr: Default::default(),
+        rd_id: relid,
+        rd_backend: held.rd_backend,
+        rd_islocaltemp: held.rd_islocaltemp,
+        rd_isvalid: Cell::new(true),
+        rd_createSubid: Cell::new(held.rd_createSubid.get()),
+        rd_newRelfilelocatorSubid: Cell::new(held.rd_newRelfilelocatorSubid.get()),
+        rd_firstRelfilelocatorSubid: Cell::new(held.rd_firstRelfilelocatorSubid.get()),
+        rd_droppedSubid: Cell::new(InvalidSubTransactionId),
+        rd_lockInfo: lmgr::RelationInitLockInfo(relid, held.rd_rel.relisshared),
+        rd_rel: held.rd_rel.clone(),
+        rd_att: Rc::clone(&held.rd_att),
+        rd_index: Some(ii.index),
+        rd_opcintype: ii.opcintype,
+        rd_opfamily: ii.opfamily,
+        rd_indoption: ii.indoption,
+        rd_indcollation: ii.indcollation,
+        rd_options: None,
+        pgstat_enabled: Cell::new(false),
+        pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
+        rd_amcache: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
+        rd_support: ii.support,
+        rd_supportinfo: core::cell::RefCell::new(Vec::new()),
+        rd_opcoptions: Default::default(),
+        rd_indexlist: Default::default(),
+            rd_trigdesc: Default::default(),
+            rd_hastriggers: false, rd_hasrules: false,
+    });
+    build::RelationInitPhysicalAddr(&newrel)?;
+    replace_entry(relid, &newrel);
+    Ok(())
 }
 
 fn vec_clone_in<'mcx, T: Copy>(
@@ -282,7 +340,8 @@ fn RelationReloadNailed(
     // Valid before scanning: the scan re-enters the relcache for pg_class and
     // must not recurse into this reload.
     held.rd_isvalid.set(true);
-    let scanned = relcache_build_seams::scan_pg_relation::call(relid, true, false)?
+    let scan_cx = mcx::MemoryContext::new("ScanPgRelation");
+    let scanned = relcache_build_seams::scan_pg_relation::call(scan_cx.mcx(), relid, true, false)?
         .ok_or_else(|| deleted_while_in_use(relid))?;
 
     let newrel = Rc::new(RelationData { rd_locator: Default::default(), rd_smgr: Default::default(),
@@ -306,7 +365,7 @@ fn RelationReloadNailed(
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: mcx::PgVec::new_in(cache_mcx()),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -387,6 +446,7 @@ pub fn RelationCacheInvalidateEntry(relationId: Oid) -> PgResult<()> {
     crate::statextlist::forget(relationId);
     crate::fkeylist::forget(relationId);
     crate::deform_jit::forget(relationId);
+    crate::defaults::forget(relationId);
     let cached = with_state(|st| st.id_cache.contains_key(&relationId));
     if cached {
         with_state(|st| st.invals_received += 1);
@@ -415,6 +475,7 @@ pub fn RelationCacheInvalidate(debug_discard: bool) -> PgResult<()> {
         st.statext_cache.clear();
         st.fkey_cache.clear();
         st.deform_jit_cache.clear();
+        st.defaults_cache.clear();
     });
 
     let snapshot: Vec<(Oid, Rc<RelationData<'static>>, bool)> = with_state(|st| {
@@ -491,9 +552,18 @@ pub fn RelationCacheInvalidate(debug_discard: bool) -> PgResult<()> {
 fn eoxact_targets() -> Vec<Oid> {
     with_state(|st| {
         if st.eoxact_list_overflowed {
-            st.id_cache.keys().copied().collect()
+            let mut v = Vec::new();
+            let _ = v.try_reserve(st.id_cache.len());
+            for k in st.id_cache.keys() {
+                v.push(*k);
+            }
+            v
         } else {
-            st.eoxact_list[..st.eoxact_list_len].to_vec()
+            let slice = &st.eoxact_list[..st.eoxact_list_len];
+            let mut v = Vec::new();
+            let _ = v.try_reserve(slice.len());
+            v.extend_from_slice(slice);
+            v
         }
     })
 }
@@ -510,23 +580,44 @@ pub fn RelationAssumeNewRelfilelocator(rel: &RelationData<'_>) {
 }
 
 pub fn AtEOXact_RelationCache(isCommit: bool) -> PgResult<()> {
-    with_state(|st| {
+    // D4485: relcache.c:3228 cleans up only the eoxact_list entries (relcache.c:3260-3271), or every entry after an
+    // overflow (relcache.c:3252-3259): with the list empty and no overflow its loop does nothing and the end resets
+    // (relcache.c:3283-3284) are already true. So the common commit takes one borrow: forget in_progress, see the list
+    // empty, prune; a debug build still copies the targets out and asserts there were none.
+    let none = with_state(|st| {
         debug_assert!(st.in_progress.is_empty() || !isCommit);
         st.in_progress.clear();
+        let none = st.eoxact_list_len == 0 && !st.eoxact_list_overflowed;
+        if none {
+            crate::prune_stale_refs(st);
+        }
+        none
     });
 
-    // Duplicates possible in eoxact_list; cleanup is idempotent. No
-    // EOXactTupleDescArray: rd_att is Rc-shared, freed by the last holder.
-    for relid in eoxact_targets() {
-        AtEOXact_cleanup(relid, isCommit)?;
+    if !none || cfg!(debug_assertions) {
+        // Duplicates possible in eoxact_list; cleanup is idempotent. No
+        // EOXactTupleDescArray: rd_att is Rc-shared, freed by the last holder.
+        let targets = eoxact_targets();
+        debug_assert!(
+            !none || targets.is_empty(),
+            "D4485: AtEOXact_RelationCache skipped eoxact targets"
+        );
+        for relid in targets {
+            AtEOXact_cleanup(relid, isCommit)?;
+        }
     }
 
-    with_state(|st| {
-        st.eoxact_list_len = 0;
-        st.eoxact_list_overflowed = false;
-        crate::prune_stale_refs(st);
-    });
-    Ok(())
+    if !none {
+        with_state(|st| {
+            st.eoxact_list_len = 0;
+            st.eoxact_list_overflowed = false;
+            crate::prune_stale_refs(st);
+        });
+    }
+    if crate::trim_at_idle() {
+        return Ok(());
+    }
+    store::enforce_cap()
 }
 
 fn AtEOXact_cleanup(relid: Oid, isCommit: bool) -> PgResult<()> {

@@ -72,7 +72,7 @@ fn scan_posting_tree<'scan, 'tmp>(
     root: BlockNumber,
 ) -> PgResult<()> {
     let stack = {
-        let scratch = MemoryContext::new_bump("gin posting tree scan scratch");
+        let scratch = MemoryContext::new_wholesale("gin posting tree scan scratch");
         let stack = crate::datapage::ginScanBeginPostingTree(scratch.mcx(), rel, root)?;
         let buffer = stack.top().buffer;
         bm::incr_buffer_ref_count::call(buffer);
@@ -154,13 +154,16 @@ fn collect_match_bitmap<'scan>(
             if icategory != GIN_CAT_NORM_KEY {
                 return Ok(true);
             }
-            let cmp = crate::opclass::compare_partial(
-                state.col(attnum),
-                entry.queryKey,
-                idatum,
-                entry.strategy,
-                entry.queryOrig,
-            );
+            let col = state.col(attnum);
+            let cmp = crate::secdef::call(col.secdef_proc(GIN_COMPARE_PARTIAL_PROC), || {
+                Ok(crate::opclass::compare_partial(
+                    col,
+                    entry.queryKey,
+                    idatum,
+                    entry.strategy,
+                    entry.queryOrig,
+                ))
+            })?;
             if cmp > 0 {
                 return Ok(true);
             } else if cmp < 0 {
@@ -279,7 +282,7 @@ fn start_scan_entry<'scan>(
         entry.predictNumberResult = 0;
         entry.postingRoot = InvalidBlockNumber;
 
-        let scratch = MemoryContext::new_bump("gin entry scan scratch");
+        let scratch = MemoryContext::new_wholesale("gin entry scan scratch");
         let smcx = scratch.mcx();
         let mut btree = EntryBtree::new(
             rel,
@@ -499,7 +502,7 @@ fn entry_load_more_items(
                 OffsetNumberNext(gin_item_pointer_offset(advance_past)),
             )
         };
-        let scratch = MemoryContext::new_bump("gin posting descent scratch");
+        let scratch = MemoryContext::new_wholesale("gin posting descent scratch");
         let smcx = scratch.mcx();
         let mut btree = crate::datapage::DataBtree::new(rel, entry.postingRoot, smcx);
         btree.itemptr = target;
@@ -1030,13 +1033,16 @@ fn match_partial_in_pending_list(
         if category[mi] != GIN_CAT_NORM_KEY {
             return Ok(false);
         }
-        let cmp = crate::opclass::compare_partial(
-            state.col(entry.attnum),
-            entry.queryKey,
-            datum[mi],
-            entry.strategy,
-            entry.queryOrig,
-        );
+        let col = state.col(entry.attnum);
+        let cmp = crate::secdef::call(col.secdef_proc(GIN_COMPARE_PARTIAL_PROC), || {
+            Ok(crate::opclass::compare_partial(
+                col,
+                entry.queryKey,
+                datum[mi],
+                entry.strategy,
+                entry.queryOrig,
+            ))
+        })?;
         if cmp == 0 {
             return Ok(true);
         } else if cmp > 0 {
@@ -1255,7 +1261,7 @@ fn scan_pending_insert(
     bm::lock_buffer::call(metabuffer, GIN_UNLOCK)?;
     bm::release_buffer::call(metabuffer)?;
 
-    let mut has_match_key = vec![false; work.keys.len()];
+    let mut has_match_key = ::mcx::std_vec_from_elem("access", false, work.keys.len())?;
 
     while scan_get_candidate(rel, &mut pos)? {
         if !collect_matches_for_heap_row(rel, state, work, &mut pos, &mut has_match_key)? {
@@ -1290,7 +1296,7 @@ pub fn gingetbitmap(
         indexRelation,
         xs_snapshot,
         keyData,
-        xs_pgstat_index_scans,
+        xs_pgstat,
         xs_nsearches,
         opaque,
         ..
@@ -1303,7 +1309,7 @@ pub fn gingetbitmap(
 
     ginFreeScanKeys(so)?;
     ginNewScanKey(rel, keyData.as_slice(), so)?;
-    *xs_pgstat_index_scans += 1;
+    xs_pgstat.count(1, 0, 0);
     // ginscan.c:489-490 (ginNewScanKey): scan->instrument->nsearches++.
     *xs_nsearches += 1;
 

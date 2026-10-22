@@ -72,13 +72,8 @@ pub static check_huge_page_size: GucIntCheckHook = GucSlot::new("check_huge_page
 pub static check_io_max_concurrency: GucIntCheckHook = GucSlot::new("check_io_max_concurrency");
 // pgrust-only (no C counterpart): refuses unported io methods; owner aio_core.
 pub static check_io_method: GucEnumCheckHook = GucSlot::new("check_io_method");
-// pgrust-only (no C counterpart): P7-2 D-8 lanev2 GUC tombstones — the registry
-// keeps each slot (SET/SHOW/pg_settings byte-compatible) but no consumer remains;
-// the hooks warn once per process that the value has no effect. Owner
-// commands/variable (deletion plan docs/design/sqe/p72-deletion-plan.md §1.3).
-pub static check_lanev2_tombstone_bool: GucBoolCheckHook = GucSlot::new("check_lanev2_tombstone_bool");
-pub static check_lanev2_tombstone_int: GucIntCheckHook = GucSlot::new("check_lanev2_tombstone_int");
-pub static check_lanev2_tombstone_enum: GucEnumCheckHook = GucSlot::new("check_lanev2_tombstone_enum");
+// pgrust-only (no C counterpart): refuses the removed Gravity lowerers (v1 = the ladder, v2 = lowerv2, v3 = lowerv3); owner gravity_exec.
+pub static check_pgrust_gravity_lowerer: GucEnumCheckHook = GucSlot::new("check_pgrust_gravity_lowerer");
 pub static check_locale_messages: GucStringCheckHook = GucSlot::new("check_locale_messages");
 pub static check_locale_monetary: GucStringCheckHook = GucSlot::new("check_locale_monetary");
 pub static check_locale_numeric: GucStringCheckHook = GucSlot::new("check_locale_numeric");
@@ -136,10 +131,17 @@ pub static show_random_seed: GucShowHook = GucSlot::new("show_random_seed");
 // pgrust-only (no C symbol): computed SHOW for pgrust.resource_counters —
 // the simharness F8 resource-baseline hook channel; owner = the fd crate.
 pub static show_resource_counters: GucShowHook = GucSlot::new("show_resource_counters");
+// pgrust-only (no C symbol): pgrust.condition_cache_size's budget at its boot
+// value -1, derived from the machine (impl Gravity's, installed by
+// gravity_exec::init_seams), and its computed SHOW (impl and install here).
+pub static derive_pgrust_condition_cache_size: GucSlot<fn() -> u64> = GucSlot::new("derive_pgrust_condition_cache_size");
+pub static show_pgrust_condition_cache_size: GucShowHook = GucSlot::new("show_pgrust_condition_cache_size");
 // pgrust-only (docs/design/test-views.md D2): list-syntax validation for the
 // mint-roles allowlist; impl in the janitor crate, installed by
 // janitor::init_seams.
 pub static check_pgrust_ephemeral_db_mint_roles: GucStringCheckHook = GucSlot::new("check_pgrust_ephemeral_db_mint_roles");
+pub static check_pgrust_pgrc_part_cache_mb: GucIntCheckHook = GucSlot::new("check_pgrust_pgrc_part_cache_mb");
+pub static check_cron_timezone: GucStringCheckHook = GucSlot::new("check_cron_timezone");
 pub static show_role: GucShowHook = GucSlot::new("show_role");
 pub static show_tcp_keepalives_count: GucShowHook = GucSlot::new("show_tcp_keepalives_count");
 pub static show_tcp_keepalives_idle: GucShowHook = GucSlot::new("show_tcp_keepalives_idle");

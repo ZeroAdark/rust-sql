@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/ops/scan/heap.rs
+growth	std::vec::Vec::push	2
+macro	std::vec	1
+method	std::iter::Iterator::collect	1

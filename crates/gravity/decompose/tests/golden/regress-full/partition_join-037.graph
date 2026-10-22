@@ -1,0 +1,128 @@
+-- regress-full-partition_join-037
+-- EXPLAIN (COSTS OFF) SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM plt1 t1, plt2 t2, plt1_e t3 WHERE t1.b = t2.b AND t1.c = t2.c AND ltrim(t3.c, 'A') = t1.c GROUP BY t1.c, t2.c, t3.c ORDER BY t1.c, t2.c, t3.c;
+graph pipelines=10 breakers=9 init_plans=0 root=p9
+p0 node=9 eligible rows=100 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n9@0 n8@1
+  source range rel=44075 rti=11 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v11.1, 2=v11.2, 3=v11.3)
+  build keys=(fn875(outer.3, c25:'A')) decls=25/25:Fp128@100
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p1 node=7 eligible rows=68 end=breaker(slot=1 HashBuild)
+  desc words=bits@6/7
+  nodes n7@0 n6@1
+  source range rel=44057 rti=8 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v8.2, 2=v8.3)
+  build keys=(outer.1, outer.2) decls=23/23:I32,25/25:Fp128@100
+  outs 1=w8:val 2=vl:win/page
+p2 node=16 eligible rows=100 end=breaker(slot=2 HashBuild)
+  desc words=bits@7/8
+  nodes n16@0 n15@1
+  source range rel=44080 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v12.1, 2=v12.2, 3=v12.3)
+  build keys=(fn875(outer.3, c25:'A')) decls=25/25:Fp128@100
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p3 node=14 eligible rows=66 end=breaker(slot=3 HashBuild)
+  desc words=bits@8/9
+  nodes n14@0 n13@1
+  source range rel=44062 rti=9 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v9.2, 2=v9.3)
+  build keys=(outer.1, outer.2) decls=23/23:I32,25/25:Fp128@100
+  outs 1=w8:val 2=vl:win/page
+p4 node=23 eligible rows=100 end=breaker(slot=4 HashBuild)
+  desc words=bits@9/10
+  nodes n23@0 n22@1
+  source range rel=44085 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v13.1, 2=v13.2, 3=v13.3)
+  build keys=(fn875(outer.3, c25:'A')) decls=25/25:Fp128@100
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p5 node=21 eligible rows=66 end=breaker(slot=5 HashBuild)
+  desc words=bits@10/11
+  nodes n21@0 n20@1
+  source range rel=44067 rti=10 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v10.2, 2=v10.3)
+  build keys=(outer.1, outer.2) decls=23/23:I32,25/25:Fp128@100
+  outs 1=w8:val 2=vl:win/page
+p6 node=5 eligible rows=100 end=breaker(slot=6 HashAgg)
+  desc consumes=slot1@p1 consumes=slot0@p0 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n5@0 n4@1 n3@3 n2@5 n1@7 n0@8^
+  source range rel=44039 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v5.1, 2=v5.3, 3=v5.2)
+  probe slot=1 inner=n6 JOIN_INNER keys=(outer.3, outer.2) decls=23/23:I32,25/25:Fp128@100 clauses=(op96(outer.3, inner.1), op98(outer.2, inner.2))
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  probe slot=0 inner=n8 JOIN_INNER build-first keys=(outer.2) decls=25/25:Fp128@100 clauses=(op98(outer.2, fn875(inner.3, c25:'A')))
+  project (1=outer.2, 2=inner.3, 3=outer.1, 4=outer.3, 5=inner.1, 6=inner.2, 7=outer.4)
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7)
+  outs 1=w8:val 2=vl:win/page 3=w8:val
+  outs 1=w8:val 2=vl:win/page 3=w4:val 4=vl:life/breaker
+  outs 1=vl:win/page 2=vl:life/breaker 3=w8:val 4=w4:val 5=w4:val 6=w4:val 7=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=vl:life/breaker
+p7 node=12 eligible rows=100 end=breaker(slot=6 HashAgg)
+  desc consumes=slot3@p3 consumes=slot2@p2 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n12@0 n11@1 n10@3 n2@5 n1@7 n0@8^
+  source range rel=44044 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v6.1, 2=v6.3, 3=v6.2)
+  probe slot=3 inner=n13 JOIN_INNER keys=(outer.3, outer.2) decls=23/23:I32,25/25:Fp128@100 clauses=(op96(outer.3, inner.1), op98(outer.2, inner.2))
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  probe slot=2 inner=n15 JOIN_INNER build-first keys=(outer.2) decls=25/25:Fp128@100 clauses=(op98(outer.2, fn875(inner.3, c25:'A')))
+  project (1=outer.2, 2=inner.3, 3=outer.1, 4=outer.3, 5=inner.1, 6=inner.2, 7=outer.4)
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7)
+  outs 1=w8:val 2=vl:win/page 3=w8:val
+  outs 1=w8:val 2=vl:win/page 3=w4:val 4=vl:life/breaker
+  outs 1=vl:win/page 2=vl:life/breaker 3=w8:val 4=w4:val 5=w4:val 6=w4:val 7=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=vl:life/breaker
+p8 node=19 eligible rows=100 end=breaker(slot=6 HashAgg)
+  desc consumes=slot5@p5 consumes=slot4@p4 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n19@0 n18@1 n17@3 n2@5 n1@7 n0@8^
+  source range rel=44049 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v7.1, 2=v7.3, 3=v7.2)
+  probe slot=5 inner=n20 JOIN_INNER keys=(outer.3, outer.2) decls=23/23:I32,25/25:Fp128@100 clauses=(op96(outer.3, inner.1), op98(outer.2, inner.2))
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  probe slot=4 inner=n22 JOIN_INNER build-first keys=(outer.2) decls=25/25:Fp128@100 clauses=(op98(outer.2, fn875(inner.3, c25:'A')))
+  project (1=outer.2, 2=inner.3, 3=outer.1, 4=outer.3, 5=inner.1, 6=inner.2, 7=outer.4)
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7)
+  outs 1=w8:val 2=vl:win/page 3=w8:val
+  outs 1=w8:val 2=vl:win/page 3=w4:val 4=vl:life/breaker
+  outs 1=vl:win/page 2=vl:life/breaker 3=w8:val 4=w4:val 5=w4:val 6=w4:val 7=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=vl:life/breaker
+p9 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot6@p8
+  nodes n0@0
+  source breaker slot=6
+  project (1=agg2101(1=outer.3), 2=agg2101(1=outer.4), 3=agg2101(1=op551(outer.5, outer.6)), 4=outer.1, 5=outer.7, 6=outer.2)
+  outs 1=vl:call2101 2=vl:call2101 3=vl:call2101 4=vl:life/breaker 5=vl:life/breaker 6=vl:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32,Fp128,Fp128]->[Count@24] 32B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[Fp128,Fp128]->[Count@16] 24B
+breaker slot=3 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32,Fp128,Fp128]->[Count@24] 32B
+breaker slot=4 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[Fp128,Fp128]->[Count@16] 24B
+breaker slot=5 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[I32,Fp128,Fp128]->[Count@24] 32B
+breaker slot=6 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p6 layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[AvgI128@48,AvgI128@72,AvgI128@96,MinCode@120,MinCode@128,MinCode@136,Count@144]+valid 160B order=1+,2+,7+
+breaker slot=6 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p7 layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[AvgI128@48,AvgI128@72,AvgI128@96,MinCode@120,MinCode@128,MinCode@136,Count@144]+valid 160B order=1+,2+,7+
+breaker slot=6 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p8 layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[AvgI128@48,AvgI128@72,AvgI128@96,MinCode@120,MinCode@128,MinCode@136,Count@144]+valid 160B order=1+,2+,7+
+group slot=6 producer=p8 node=0 form=Sorted hints=[] layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[AvgI128@48,AvgI128@72,AvgI128@96,MinCode@120,MinCode@128,MinCode@136,Count@144]+valid 160B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=25 rep=3 expr=outer.1
+  key 1 word=2 resno=2 kind=Fp128 attno=0 type=25 rep=4 expr=outer.2
+  key 2 word=4 resno=7 kind=Fp128 attno=0 type=25 rep=5 expr=outer.7
+  agg aggno=0 fn=2101 reg=AvgInt slot=0 count_slot=- final=Int128Avg class=AvgI128 trans=Abi(AvgI128) mods=[] expr=agg2101(1=outer.3)
+  agg aggno=1 fn=2101 reg=AvgInt slot=1 count_slot=- final=Int128Avg class=AvgI128 trans=Abi(AvgI128) mods=[] expr=agg2101(1=outer.4)
+  agg aggno=2 fn=2101 reg=AvgInt slot=2 count_slot=- final=Int128Avg class=AvgI128 trans=Abi(AvgI128) mods=[] expr=agg2101(1=op551(outer.5, outer.6))
+mapped: Append SeqScan HashJoin Agg Hash

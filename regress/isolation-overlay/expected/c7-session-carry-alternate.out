@@ -1,0 +1,101 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1q s2q s1q s2q s1q
+step s1q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|money         |ident
+------+--------------+-----
+100000|$         2.50|"w9x"
+(1 row)
+
+step s2q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|         money|ident
+------+--------------+-----
+100000|          2.50|w9x  
+(1 row)
+
+step s1q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|money         |ident
+------+--------------+-----
+100000|$         2.50|"w9x"
+(1 row)
+
+step s2q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|         money|ident
+------+--------------+-----
+100000|          2.50|w9x  
+(1 row)
+
+step s1q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|money         |ident
+------+--------------+-----
+100000|$         2.50|"w9x"
+(1 row)
+
+
+starting permutation: s1q s2s s2q s1q s2t s2q s1q
+step s1q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|money         |ident
+------+--------------+-----
+100000|$         2.50|"w9x"
+(1 row)
+
+step s2s: SET lc_monetary = 'en_US.utf8'; SET quote_all_identifiers = on;
+step s2q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|money         |ident
+------+--------------+-----
+100000|$         2.50|"w9x"
+(1 row)
+
+step s1q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|money         |ident
+------+--------------+-----
+100000|$         2.50|"w9x"
+(1 row)
+
+step s2t: RESET lc_monetary; RESET quote_all_identifiers;
+step s2q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|         money|ident
+------+--------------+-----
+100000|          2.50|w9x  
+(1 row)
+
+step s1q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|money         |ident
+------+--------------+-----
+100000|$         2.50|"w9x"
+(1 row)
+
+
+starting permutation: s1b s1q s2q s1q s1r s1q s2q
+step s1b: BEGIN; SET LOCAL lc_monetary = 'C'; SET LOCAL quote_all_identifiers = off;
+step s1q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|         money|ident
+------+--------------+-----
+100000|          2.50|w9x  
+(1 row)
+
+step s2q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|         money|ident
+------+--------------+-----
+100000|          2.50|w9x  
+(1 row)
+
+step s1q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|         money|ident
+------+--------------+-----
+100000|          2.50|w9x  
+(1 row)
+
+step s1r: ROLLBACK;
+step s1q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|money         |ident
+------+--------------+-----
+100000|$         2.50|"w9x"
+(1 row)
+
+step s2q: SELECT count(*), min(to_char(n, 'L999999990.00')) AS money, max(quote_ident(w)) AS ident FROM c7a WHERE id % 3 = 0;
+ count|         money|ident
+------+--------------+-----
+100000|          2.50|w9x  
+(1 row)
+

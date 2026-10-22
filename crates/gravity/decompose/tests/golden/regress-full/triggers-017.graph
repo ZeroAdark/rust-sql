@@ -1,0 +1,11 @@
+-- regress-full-triggers-017
+-- UPDATE main_view SET b = 0 WHERE false;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=c23:0, 2j=T_RowExpr, 3j=v3.-1)
+  write UPDATE rel=21427 rti=2 natts=2 indexes=() set=(2) marks=1 (rti3:ROW_MARK_REFERENCE) view instead=iud wholerow=outer.2
+  outs 1=w4:val 2=? 3=fx6:row
+mapped: Result ModifyTable PlanRowMark

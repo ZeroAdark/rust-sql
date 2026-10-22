@@ -1,0 +1,9 @@
+-- regress-full-subselect-120
+-- explain (verbose, costs off) with x as (select 1 as y) select * from (with x as (select 2 as y) select * from x) ss;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0
+  source const
+  project (1=c23:2)
+  outs 1=w4:val
+mapped: Result

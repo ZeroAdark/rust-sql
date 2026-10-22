@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/admit/refusal.rs
+growth	std::vec::Vec::push	1
+method	std::boxed::Box::new	3
+type	std::boxed::Box	4

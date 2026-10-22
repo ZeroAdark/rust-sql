@@ -1,0 +1,3 @@
+backend/storage/buffer/bufmgr/src/write.rs	BACKEND_WB	pgport	exit	thread	C's BackendWritebackContext: this thread's pending writeback requests (a claim that writes out a dirty victim queues on its own thread's), issued once backend_flush_after fill; fixed size (WRITEBACK_MAX_PENDING_FLUSHES), made on first use
+backend/storage/buffer/bufmgr/src/write.rs	PAGE_COPY	pgport	call	scratch	PageSetChecksumCopy's private page image (one BLCKSZ box, made on first use): each flush overwrites it before the write
+backend/storage/buffer/bufmgr/src/write.rs	CKPT_SCRATCH	pgport	call	scratch	BufferSync's sort and per-tablespace scratch (the checkpointer's): each checkpoint clears and refills it; sized by the buffers to write (at most NBuffers)

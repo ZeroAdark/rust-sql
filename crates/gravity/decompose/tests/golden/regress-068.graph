@@ -1,0 +1,26 @@
+-- regress-068
+-- SELECT t.a FROM t JOIN u ON t.a = u.x WHERE t.a < 3 FOR SHARE OF t SKIP LOCKED;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Lock end=sink
+  nodes n2@0 n1@1 n0@3
+  source index rel=16395 rti=1 am=heap index=16402
+    key att=1 op=97 value=c23:3
+    recheck (op97(v1.1, c23:3))
+    lanes Attr(1):byval8:w8:val RowId:byval8:w8:val
+  project (1=v1.1, 2=v1.-1)
+  nest inner=n3 JOIN_INNER unique raise-free params=($exec1=outer.1)
+  inner node=3 serial site=0 reason=IndexSource end=sink
+  nodes n3@0
+  source index rel=16406 rti=2 am=heap index=16412
+    key att=1 op=96 value=$exec1
+    recheck (op96(v2.1, $exec1))
+    lanes RowId:byval8:w8:val
+  project (1=v2.-1, 2=v2.1)
+  project (1=outer.1, 2j=outer.2, 3j=inner.1)
+  lock rel=16395 Share Skip marks=(rti1:ROW_MARK_SHARE, rti2:ROW_MARK_REFERENCE)
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  outs 1=w8:val 2=fx6:row
+  outs 1=w8:val 2=fx6:row 3=fx6:life/breaker
+  outs 1=w8:val 2=fx6:row 3=fx6:life/breaker
+param $exec1 owner=n1 type=23 rep=w8:val
+mapped: IndexScan NestLoop NestLoopParam LockRows PlanRowMark

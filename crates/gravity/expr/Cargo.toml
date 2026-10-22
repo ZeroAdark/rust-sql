@@ -1,0 +1,128 @@
+[package]
+name = "gravity_expr"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "gravity_expr"
+path = "src/lib.rs"
+
+[dependencies]
+# C7 runtime half: its leader-class thread-locals are declared through leader_tls!
+leader_tls = { path = "../../_support/leader_tls" }
+gravity_abi = { path = "../abi" }
+gravity_dict = { path = "../dict" }
+gravity_fn = { path = "../fn" }
+gravity_ir = { path = "../ir" }
+gravity_program = { path = "../program" }
+datum = { path = "../../_support/types/datum" }
+fires = { path = "../../_support/fires" }
+mcx = { path = "../../_support/mcx" }
+types_core = { path = "../../_support/types/types_core" }
+types_error = { path = "../../_support/types/types_error" }
+types_nodes = { path = "../../_support/types/nodes" }
+types_portal = { path = "../../_support/types/portal" }
+types_tuple = { path = "../../_support/types/types_tuple" }
+fmgr = { package = "types_fmgr", path = "../../_support/types/fmgr" }
+fmgr_core = { path = "../../backend/utils/fmgr/fmgr_core" }
+lsyscache = { path = "../../backend/utils/cache/lsyscache" }
+typcache = { path = "../../backend/utils/cache/typcache" }
+detoast_seams = { path = "../../backend/access/common/detoast_seams" }
+nodes_core = { path = "../../backend/nodes/nodes_core" }
+format_type = { path = "../../backend/utils/adt/format_type" }
+syscache_seams = { path = "../../backend/utils/cache/syscache_seams" }
+pg_enum_seams = { path = "../../backend/catalog/pg_enum_seams" }
+aclchk_seams = { path = "../../backend/catalog/aclchk_seams" }
+miscinit_seams = { path = "../../backend/utils/init/miscinit_seams" }
+objectaccess = { path = "../../backend/catalog/objectaccess" }
+adt_date = { path = "../../backend/utils/adt/adt_date" }
+adt_timestamp = { path = "../../backend/utils/adt/adt_timestamp" }
+dbcommands_seams = { path = "../../backend/commands/dbcommands_seams" }
+init_small = { path = "../../backend/utils/init/init_small" }
+namespace_seams = { path = "../../backend/catalog/namespace_seams" }
+sequence_seams = { path = "../../backend/commands/sequence_seams" }
+arrayfuncs = { path = "../../backend/utils/adt/arrayfuncs" }
+arrayutils = { path = "../../backend/utils/adt/arrayutils" }
+adt_jsonb = { path = "../../backend/utils/adt/jsonb" }
+hstore_subs_seams = { path = "../../backend/executor/hstore_subs_seams" }
+numutils = { path = "../../backend/utils/adt/numutils" }
+adt_numeric = { path = "../../backend/utils/adt/numeric" }
+adt_float = { path = "../../backend/utils/adt/float" }
+varlena = { path = "../../backend/utils/adt/varlena" }
+expandedrecord_seams = { path = "../../backend/utils/adt/expandedrecord_seams" }
+execexpr = { path = "../../backend/executor/execexpr" }
+tupdesc = { path = "../../backend/access/common/tupdesc" }
+adt_xml = { path = "../../backend/utils/adt/xml" }
+exectuples = { path = "../../backend/executor/exectuples" }
+types_slot = { path = "../../_support/types/types_slot" }
+heaptuple = { path = "../../backend/access/common/heaptuple" }
+adt_jsonpath_exec = { path = "../../backend/utils/adt/jsonpath_exec" }
+adt_json = { path = "../../backend/utils/adt/json" }
+adt_formatting = { path = "../../backend/utils/adt/formatting" }
+adt_datetime = { path = "../../backend/utils/adt/adt_datetime" }
+typcache_seams = { path = "../../backend/utils/cache/typcache_seams" }
+# check_stack_depth at each level of the compiler's and tier 0's recursions (54001, never the thread's stack end)
+stack_depth_core = { path = "../../backend/utils/misc/stack_depth_core" }
+
+[dev-dependencies]
+types_rel = { path = "../../_support/types/rel" }
+relation_seams = { path = "../../backend/access/common/relation_seams" }
+gravity_backend = { path = "../backend" }
+gravity_wasm = { path = "../backend/wasm" }
+wasmtime = { version = "48", default-features = false, features = ["cranelift", "runtime", "std"] }
+sequence_seams = { path = "../../backend/commands/sequence_seams" }
+gravity_lint = { path = "../lint" }
+heaptuple = { path = "../../backend/access/common/heaptuple" }
+adt_jsonpath = { path = "../../backend/utils/adt/jsonpath" }
+funcapi = { path = "../../backend/utils/fmgr/funcapi" }
+indexcmds_seams = { path = "../../backend/commands/indexcmds_seams" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+clauses = { path = "../../backend/optimizer/util/clauses" }
+guc_tables = { path = "../../backend/utils/misc/guc_tables" }
+pgtz = { path = "../../backend/timezone/pgtz" }
+elog = { path = "../../backend/utils/error/elog" }
+fd = { path = "../../backend/storage/file/fd" }
+xact_seams = { path = "../../backend/access/transam/xact_seams" }
+mbutils = { path = "../../backend/utils/mb/mbutils" }
+wchar = { path = "../../common/wchar" }
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# gravity_expr_suite (tests/gravity_expr_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs it
+# once per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot share
+# a process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text naming
+# process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state call): then
+# it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the file is in
+# exactly one of the two places.
+[[test]]
+name = "gravity_expr_suite"
+path = "tests/gravity_expr_suite.rs"
+
+[[test]]
+name = "agg"
+path = "tests/agg.rs"
+
+[[test]]
+name = "aggregate_gate"
+path = "tests/aggregate_gate.rs"
+
+[[test]]
+name = "alloc"
+path = "tests/alloc.rs"
+
+[[test]]
+name = "compat"
+path = "tests/compat.rs"
+
+[[test]]
+name = "differential"
+path = "tests/differential.rs"
+
+[[test]]
+name = "emit"
+path = "tests/emit.rs"
+
+[[test]]
+name = "tail"
+path = "tests/tail.rs"

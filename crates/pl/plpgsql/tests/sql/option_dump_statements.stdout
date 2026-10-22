@@ -1,0 +1,99 @@
+
+Execution tree of successfully compiled PL/pgSQL function p158_broad(integer):
+
+Function's data area:
+    entry 0: VAR a                type int4 (typoid 23) atttypmod -1
+    entry 1: VAR found            type bool (typoid 16) atttypmod -1
+    entry 2: VAR x                type int4 (typoid 23) atttypmod -1
+                                  DEFAULT '0' target 2 (local)
+    entry 3: VAR éééééééééé type int4 (typoid 23) atttypmod -1
+                                  DEFAULT '1' target 3 (local)
+    entry 4: REC r                typoid 2249
+    entry 5: VAR v                type int4 (typoid 23) atttypmod -1
+    entry 6: ROW (unnamed row)    fields v=var 5
+    entry 7: VAR c                type refcursor (typoid 1790) atttypmod -1
+                                  CURSOR argument row 6
+                                  CURSOR IS 'SELECT v'
+    entry 8: VAR __Case__Variable_8__ type int4 (typoid 23) atttypmod -1
+    entry 9: VAR x                type int4 (typoid 23) atttypmod -1
+    entry 10: REC r                typoid 2249
+    entry 11: ROW (unnamed row)    fields x=var 2
+    entry 12: ROW (unnamed row)    fields x=var 2
+    entry 13: VAR sqlstate         type text (typoid 25) atttypmod -1
+                                  CONSTANT
+    entry 14: VAR sqlerrm          type text (typoid 25) atttypmod -1
+                                  CONSTANT
+
+Function's statements:
+  4:BLOCK <<*unnamed*>>
+  5:  ASSIGN var 2 := 'x := a' target 2 (local)
+  6:  IF 'x = 1' THEN
+  6:    PERFORM expr = 'SELECT 1'
+      ELSIF 'x = 2' THEN
+      ELSE
+  6:    PERFORM expr = 'SELECT 2'
+      ENDIF
+  7:  CASE 8 'x'
+        WHEN '"__Case__Variable_8__" IN (1)'
+        THEN
+        WHEN '"__Case__Variable_8__" IN (2)'
+        THEN
+        ELSE
+      ENDCASE
+  8:  LOOP
+  8:    EXIT WHEN 'true'
+  8:    CONTINUE
+      ENDLOOP
+  9:  WHILE 'false'
+      ENDWHILE
+ 10:  FORI x REVERSE
+        lower = '2'
+        upper = '1'
+        step = '1'
+      ENDFORI
+ 11:  FORS r 'SELECT 1'
+      ENDFORS
+ 12:  FORS r EXECUTE ''select 1''
+        USING
+          parameter $1: '2'
+      ENDFORS
+ 13:  FORC r curvar=7
+      arguments = '1'
+      ENDFORC
+ 14:  FOREACHA var 2 IN 'ARRAY[1]'
+      ENDFOREACHA 15:  RAISE level=18 message='x %'
+        parameter 0: 'x'
+        USING
+          DETAIL = ''detail''
+ 16:  ASSERT 'true'
+        MESSAGE = ''msg''
+ 17:  EXECSQL 'SELECT 1'
+        INTO STRICT target = 11 (unnamed row)
+ 18:  EXECUTE ''select 1''
+        INTO target = 12 (unnamed row)
+        USING
+          parameter 1: '2'
+ 19:  GET CURRENT DIAGNOSTICS {var 2} = ROW_COUNT
+ 20:  OPEN curvar=7
+      arguments = ''1''
+ 20:  FETCH curvar=7
+        FORWARD 1
+        target = 4 r
+ 20:  MOVE curvar=7
+        ABSOLUTE '1'
+ 20:  CLOSE curvar=7
+ 21:  RETURN NEXT variable 2
+ 22:  RETURN QUERY 'SELECT 1'
+ 23:  RETURN QUERY EXECUTE ''select 1''
+        USING
+          parameter $1: '2'
+ 24:  BLOCK <<*unnamed*>>
+ 24:    ASSIGN var 2 := 'x := 2' target 2
+      EXCEPTION WHEN others THEN
+ 24:    ASSIGN var 2 := 'x := 3' target 2
+      END -- *unnamed*
+ 25:  RETURN NULL
+    END -- *unnamed*
+
+End of execution tree of function p158_broad(integer)
+

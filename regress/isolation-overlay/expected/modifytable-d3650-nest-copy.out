@@ -1,0 +1,80 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1bump s2upd s1c s2show
+step s2x: EXPLAIN (COSTS OFF) WITH j AS MATERIALIZED (SELECT id, qid FROM nc_src), q AS (UPDATE nc_q SET locked_by = 'w2', n = nc_q.n + 1 FROM j WHERE nc_q.id = j.qid AND nc_q.locked_by IS NULL RETURNING nc_q.id, nc_q.n, nc_q.locked_by) SELECT id, n, locked_by FROM q;
+QUERY PLAN                                       
+-------------------------------------------------
+CTE Scan on q                                    
+  CTE j                                          
+    ->  Seq Scan on nc_src                       
+  CTE q                                          
+    ->  Update on nc_q                           
+          ->  Nested Loop                        
+                Join Filter: (nc_q.id = j.qid)   
+                ->  Seq Scan on nc_q             
+                      Filter: (locked_by IS NULL)
+                ->  CTE Scan on j                
+(10 rows)
+
+step s1bump: UPDATE nc_q SET n = n + 10 WHERE id = 1;
+step s2upd: WITH j AS MATERIALIZED (SELECT id, qid FROM nc_src), q AS (UPDATE nc_q SET locked_by = 'w2', n = nc_q.n + 1 FROM j WHERE nc_q.id = j.qid AND nc_q.locked_by IS NULL RETURNING nc_q.id, nc_q.n, nc_q.locked_by) SELECT id, n, locked_by FROM q; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id| n|locked_by
+--+--+---------
+ 1|11|w2       
+(1 row)
+
+step s2show: SELECT id, locked_by, n FROM nc_q ORDER BY id;
+id|locked_by| n
+--+---------+--
+ 1|w2       |11
+(1 row)
+
+
+starting permutation: s1move s2upd s1c s2show
+step s1move: UPDATE nc_q SET id = 2 WHERE id = 1;
+step s2upd: WITH j AS MATERIALIZED (SELECT id, qid FROM nc_src), q AS (UPDATE nc_q SET locked_by = 'w2', n = nc_q.n + 1 FROM j WHERE nc_q.id = j.qid AND nc_q.locked_by IS NULL RETURNING nc_q.id, nc_q.n, nc_q.locked_by) SELECT id, n, locked_by FROM q; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|n|locked_by
+--+-+---------
+(0 rows)
+
+step s2show: SELECT id, locked_by, n FROM nc_q ORDER BY id;
+id|locked_by|n
+--+---------+-
+ 2|         |0
+(1 row)
+
+
+starting permutation: s1take s2upd s1c s2show
+step s1take: UPDATE nc_q SET locked_by = 'w1' WHERE id = 1;
+step s2upd: WITH j AS MATERIALIZED (SELECT id, qid FROM nc_src), q AS (UPDATE nc_q SET locked_by = 'w2', n = nc_q.n + 1 FROM j WHERE nc_q.id = j.qid AND nc_q.locked_by IS NULL RETURNING nc_q.id, nc_q.n, nc_q.locked_by) SELECT id, n, locked_by FROM q; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|n|locked_by
+--+-+---------
+(0 rows)
+
+step s2show: SELECT id, locked_by, n FROM nc_q ORDER BY id;
+id|locked_by|n
+--+---------+-
+ 1|w1       |0
+(1 row)
+
+
+starting permutation: s1del s2upd s1c s2show
+step s1del: DELETE FROM nc_q WHERE id = 1;
+step s2upd: WITH j AS MATERIALIZED (SELECT id, qid FROM nc_src), q AS (UPDATE nc_q SET locked_by = 'w2', n = nc_q.n + 1 FROM j WHERE nc_q.id = j.qid AND nc_q.locked_by IS NULL RETURNING nc_q.id, nc_q.n, nc_q.locked_by) SELECT id, n, locked_by FROM q; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|n|locked_by
+--+-+---------
+(0 rows)
+
+step s2show: SELECT id, locked_by, n FROM nc_q ORDER BY id;
+id|locked_by|n
+--+---------+-
+(0 rows)
+

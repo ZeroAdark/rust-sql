@@ -25,9 +25,12 @@ use crate::steps::{
 pub struct AggBind {
     pub values: NonNull<::datum::Datum>,
     pub nulls: NonNull<bool>,
-    pub naggs: u16,
+    pub naggs: u32,
     // EEOP_GROUPING_FUNC cell; None = no grouping sets (C's NIL clauses).
     pub grouping: Option<NonNull<crate::steps::GroupedColsCell>>,
+    // A WindowAgg parent's wfuncno table, carried into SubPlan testexpr /
+    // projection compiles (C: the SubPlan's parent is the WindowAggState).
+    pub win: Option<NonNull<[(Node<'static>, u32)]>>,
 }
 
 pub struct AggTransSpec<'a, 'mcx> {
@@ -71,13 +74,45 @@ pub struct AggOrderedSpec {
 #[derive(Clone, Copy)]
 pub struct WinBind<'a, 'mcx> {
     pub agg: AggBind,
-    pub wfuncnos: &'a [(Node<'mcx>, u16)],
+    pub wfuncnos: &'a [(Node<'mcx>, u32)],
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum Bind<'a, 'mcx> {
     Agg(AggBind),
     Win(WinBind<'a, 'mcx>),
+}
+
+impl<'a, 'mcx> Bind<'a, 'mcx> {
+    fn from_agg(agg: AggBind) -> Self {
+        match agg.win {
+            // SAFETY: `win` is set only by `erase_bind` from a live WinBind,
+            // and every compile carrying it runs inside that bind's lifetime
+            // (SubPlan init is synchronous within the parent's compile).
+            Some(w) => Bind::Win(WinBind {
+                agg,
+                wfuncnos: unsafe {
+                    &*(w.as_ptr() as *const [(Node<'mcx>, u32)])
+                },
+            }),
+            None => Bind::Agg(agg),
+        }
+    }
+
+    fn erase(self) -> AggBind {
+        match self {
+            Bind::Agg(a) => a,
+            Bind::Win(w) => AggBind {
+                // SAFETY: a non-null slice pointer; only the lifetime is erased.
+                win: Some(unsafe {
+                    NonNull::new_unchecked(
+                        w.wfuncnos as *const [(Node<'mcx>, u32)] as *mut [(Node<'static>, u32)],
+                    )
+                }),
+                ..w.agg
+            },
+        }
+    }
 }
 
 pub const INNER_VAR: i32 = -1;
@@ -118,6 +153,10 @@ fn grow_steps(state: &mut ExprState<'_>, mcx: Mcx<'_>) -> PgResult<()> {
     Ok(())
 }
 
+/// The owning MERGE ModifyTableState's current action (C mt_merge_action),
+/// shared by every expression compiled under it, SubPlan testexprs included.
+pub type MergeActionCell = NonNull<Option<::types_nodes::nodes_enums::CmdType>>;
+
 /// C ExecInitSubPlan linkage, type-erased against the execexpr<->execmain
 /// crate cycle: `estate` is a live `*mut EStateData` the caller must not
 /// alias during compile; `init` builds a query-lifetime SubPlanState.
@@ -126,8 +165,14 @@ pub struct SubplanCompileEnv {
     pub estate: NonNull<()>,
     /// None when the query has no subplans (the env still carries the
     /// rtable/junk-tlist legs); a SubPlan node reaching compile then louds.
-    pub init:
-        Option<for<'x> unsafe fn(NonNull<()>, Node<'x>, Option<AggBind>) -> PgResult<NonNull<()>>>,
+    pub init: Option<
+        for<'x> unsafe fn(
+            NonNull<()>,
+            Node<'x>,
+            Option<AggBind>,
+            Option<MergeActionCell>,
+        ) -> PgResult<NonNull<()>>,
+    >,
     /// Parent Agg's result-array binding: Aggrefs inside the SubPlan's
     /// testexpr/args compile against the owning AggState (C parent PlanState).
     pub agg: Option<AggBind>,
@@ -172,13 +217,26 @@ pub fn exec_init_expr_subplans_agg<'mcx>(
     sub: Option<SubplanCompileEnv>,
     agg: Option<AggBind>,
 ) -> PgResult<Option<PgBox<'mcx, ExprState<'mcx>>>> {
+    exec_init_expr_subplans_agg_merge(mcx, node, params, sub, agg, None)
+}
+
+pub fn exec_init_expr_subplans_agg_merge<'mcx>(
+    mcx: Mcx<'mcx>,
+    node: Option<Node<'mcx>>,
+    params: ParamBind<'mcx>,
+    sub: Option<SubplanCompileEnv>,
+    agg: Option<AggBind>,
+    merge: Option<MergeActionCell>,
+) -> PgResult<Option<PgBox<'mcx, ExprState<'mcx>>>> {
     let Some(node) = node else {
         return Ok(None);
     };
     let mut state = ExprState::new_boxed_in(mcx)?;
-    create_expr_setup_steps(&mut state, mcx, &[node], agg.map(Bind::Agg), params, sub)?;
+    state.allow_merge_support = merge.is_some();
+    state.merge_action_cell = merge;
+    create_expr_setup_steps(&mut state, mcx, &[node], agg.map(Bind::from_agg), params, sub)?;
     let rout = state.result_out();
-    init_expr_rec(node, &mut state, mcx, rout, agg.map(Bind::Agg), params, sub)?;
+    init_expr_rec(node, &mut state, mcx, rout, agg.map(Bind::from_agg), params, sub)?;
     push_step(&mut state, mcx, Step::DoneReturn)?;
     ready_expr(&mut state);
     Ok(Some(state))
@@ -290,7 +348,7 @@ pub fn exec_build_agg_qual_subplans<'mcx>(
         &mut state,
         mcx,
         qual.as_slice(),
-        Some(Bind::Agg(agg)),
+        Some(Bind::from_agg(agg)),
         params,
         sub,
     )?;
@@ -302,7 +360,7 @@ pub fn exec_build_agg_qual_subplans<'mcx>(
             &mut state,
             mcx,
             rout,
-            Some(Bind::Agg(agg)),
+            Some(Bind::from_agg(agg)),
             params,
             sub,
         )?;
@@ -352,7 +410,20 @@ pub fn exec_build_merge_projection_info_subplans<'mcx>(
     params: ParamBind<'mcx>,
     sub: Option<SubplanCompileEnv>,
 ) -> PgResult<PgBox<'mcx, ExprState<'mcx>>> {
-    build_projection_info_ext(mcx, target_list, input_desc, None, params, sub, true)
+    build_projection_info_ext(mcx, target_list, input_desc, None, params, sub, true, None)
+}
+
+/// [`exec_build_projection_info_subplans`] under a MERGE parent (a hashed
+/// SubPlan's LHS projection): MERGE_SUPPORT_FUNC reads the parent's cell.
+pub fn exec_build_projection_info_subplans_merge<'mcx>(
+    mcx: Mcx<'mcx>,
+    target_list: &NodeList<'mcx>,
+    input_desc: Option<&TupleDescData<'mcx>>,
+    params: ParamBind<'mcx>,
+    sub: Option<SubplanCompileEnv>,
+    merge: Option<MergeActionCell>,
+) -> PgResult<PgBox<'mcx, ExprState<'mcx>>> {
+    build_projection_info_ext(mcx, target_list, input_desc, None, params, sub, merge.is_some(), merge)
 }
 
 /// Agg-node projection: Aggrefs bound to the AggState's result arrays.
@@ -367,7 +438,7 @@ pub fn exec_build_agg_projection_info<'mcx>(
         mcx,
         target_list,
         input_desc,
-        Some(Bind::Agg(agg)),
+        Some(Bind::from_agg(agg)),
         params,
         None,
     )
@@ -386,7 +457,7 @@ pub fn exec_build_agg_projection_info_subplans<'mcx>(
         mcx,
         target_list,
         input_desc,
-        Some(Bind::Agg(agg)),
+        Some(Bind::from_agg(agg)),
         params,
         sub,
     )
@@ -438,7 +509,7 @@ fn build_projection_info<'mcx>(
     params: ParamBind<'mcx>,
     sub: Option<SubplanCompileEnv>,
 ) -> PgResult<PgBox<'mcx, ExprState<'mcx>>> {
-    build_projection_info_ext(mcx, target_list, input_desc, agg, params, sub, false)
+    build_projection_info_ext(mcx, target_list, input_desc, agg, params, sub, false, None)
 }
 
 fn build_projection_info_ext<'mcx>(
@@ -449,9 +520,11 @@ fn build_projection_info_ext<'mcx>(
     params: ParamBind<'mcx>,
     sub: Option<SubplanCompileEnv>,
     merge_support: bool,
+    merge_cell: Option<MergeActionCell>,
 ) -> PgResult<PgBox<'mcx, ExprState<'mcx>>> {
     let mut state = ExprState::new_boxed_in(mcx)?;
     state.allow_merge_support = merge_support;
+    state.merge_action_cell = merge_cell;
     create_expr_setup_steps(&mut state, mcx, target_list.as_slice(), agg, params, sub)?;
 
     for tle_node in target_list.iter() {
@@ -754,6 +827,17 @@ pub fn exec_build_agg_trans_plain_masked<'mcx>(
 // supplies one: nodeagg passes it at nodeagg/src/lib.rs:1127, and nodewindowagg
 // creates an AggStateNode whenever any window agg exists
 // (nodewindowagg/src/lib.rs:606-612) and passes it at :761 and :1225.
+fn push_select_set<'mcx>(
+    state: &mut ExprState<'mcx>,
+    mcx: Mcx<'mcx>,
+    agg: Option<NonNull<::types_fmgr::AggStateNode>>,
+    setno: Option<usize>,
+) -> PgResult<()> {
+    let Some(agg) = agg else { return Ok(()) };
+    let setno = setno.map_or(u32::MAX, |n| n as u32);
+    push_step(state, mcx, Step::AggSelectSet { agg, setno })
+}
+
 fn agg_state_node(agg_node: FmNodePtr) -> PgResult<NonNull<::types_fmgr::AggStateNode>> {
     let Some(p) = agg_node else {
         // Invariant tripwire: a by-ref transition type always comes with an
@@ -875,6 +959,8 @@ fn build_agg_trans_masked<'mcx>(
                     .unwrap_or(::types_core::InvalidOid),
                 argtypes,
                 variadic: spec.variadic,
+                stable: 0,
+                inputcollid: spec.inputcollid,
             },
         )?;
         // SAFETY: agg_argtypes is arena-backed for the query, see above.
@@ -1025,6 +1111,18 @@ fn build_agg_trans_masked<'mcx>(
         } else {
             None
         };
+        // Sorted grouping sets with their own aggcontexts (nodeagg).
+        let set_agg = match (&mode, agg_node) {
+            (PergroupMode::Sets(_) | PergroupMode::Mixed(..), Some(p))
+                // SAFETY: build-time read of the caller's live node header.
+                if unsafe { p.as_ref().tag } == ::types_fmgr::T_AGG_STATE =>
+            {
+                let agg = p.cast::<::types_fmgr::AggStateNode>();
+                // SAFETY: tag checked; the node outlives the program.
+                (unsafe { agg.as_ref() }.num_set_contexts() > 0).then_some(agg)
+            }
+            _ => None,
+        };
         // One fixed-pergroup step (byval or by-ref) — Fixed and per-set modes.
         let fixed_step = |pergroup: NonNull<AggPerGroup>| -> Step {
             if spec.transtype_byval {
@@ -1118,22 +1216,26 @@ fn build_agg_trans_masked<'mcx>(
         match &mode {
             PergroupMode::Fixed => push_step(&mut state, mcx, fixed_step(spec.pergroup))?,
             PergroupMode::Sets(bases) => {
-                for &base in bases.iter() {
+                for (setno, &base) in bases.iter().enumerate() {
+                    push_select_set(&mut state, mcx, set_agg, Some(setno))?;
                     // SAFETY: transno < numtrans slots of each once-allocated
                     // per-set pergroup array (nodeAgg contract).
                     let pergroup = unsafe { NonNull::new_unchecked(base.as_ptr().add(transno)) };
                     push_step(&mut state, mcx, fixed_step(pergroup))?;
                 }
+                push_select_set(&mut state, mcx, set_agg, None)?;
             }
             PergroupMode::Indirect(base) => {
                 push_indirect_nullchecked(&mut state, mcx, nullcheck, *base, &indirect_step)?;
             }
             PergroupMode::Mixed(bases, cells) => {
-                for &base in bases.iter() {
+                for (setno, &base) in bases.iter().enumerate() {
+                    push_select_set(&mut state, mcx, set_agg, Some(setno))?;
                     // SAFETY: as PergroupMode::Sets.
                     let pergroup = unsafe { NonNull::new_unchecked(base.as_ptr().add(transno)) };
                     push_step(&mut state, mcx, fixed_step(pergroup))?;
                 }
+                push_select_set(&mut state, mcx, set_agg, None)?;
                 for &cell in cells.iter() {
                     push_indirect_nullchecked(&mut state, mcx, nullcheck, cell, &indirect_step)?;
                 }
@@ -1847,8 +1949,8 @@ fn init_subplan_expr<'mcx>(
         push_step(state, mcx, Step::ParamSet { prm, out })?;
     }
     let aggbind = match agg {
-        Some(Bind::Agg(a)) => Some(a),
-        _ => env.agg,
+        Some(b) => Some(b.erase()),
+        None => env.agg,
     };
     // SAFETY: env.estate is the caller's live estate (SubplanCompileEnv
     // contract: no aliasing borrows during compile).
@@ -1859,9 +1961,52 @@ fn init_subplan_expr<'mcx>(
             sp.plan_name, sp.plan_id
         )
     });
-    let sstate = unsafe { init(env.estate, node, aggbind) }?;
+    let merge = if state.allow_merge_support {
+        Some(merge_action_cell(state, mcx)?)
+    } else {
+        None
+    };
+    let stash = SubplanParentWinScope(SUBPLAN_PARENT_WIN.get());
+    if let Some(Bind::Win(w)) = agg {
+        let erased = NonNull::new(w.wfuncnos as *const [(Node<'_>, u32)] as *mut [(Node<'static>, u32)]).expect("slice");
+        SUBPLAN_PARENT_WIN.set(Some((w.agg, erased)));
+    }
+    let sstate = unsafe { init(env.estate, node, aggbind, merge) };
+    drop(stash);
+    let sstate = sstate?;
     state.flags |= crate::steps::EEO_FLAG_HAS_SUBPLAN;
     push_step(state, mcx, Step::SubPlan { sstate, out })
+}
+
+thread_local! {
+    static SUBPLAN_PARENT_WIN: core::cell::Cell<Option<(AggBind, NonNull<[(Node<'static>, u32)]>)>> =
+        const { core::cell::Cell::new(None) };
+}
+
+/// `init_subplan_expr`'s stash of its parent window projection's bind: its drop puts back the stash it found, on a
+/// return and on an unwind out of the SubPlan's init alike. A stash left set would point a later WindowFunc's compile
+/// at a freed wfuncnos slice.
+struct SubplanParentWinScope(Option<(AggBind, NonNull<[(Node<'static>, u32)]>)>);
+
+impl Drop for SubplanParentWinScope {
+    fn drop(&mut self) {
+        SUBPLAN_PARENT_WIN.set(self.0);
+    }
+}
+
+fn merge_action_cell<'mcx>(state: &mut ExprState<'mcx>, mcx: Mcx<'mcx>) -> PgResult<MergeActionCell> {
+    if let Some(c) = state.merge_action_cell {
+        return Ok(c);
+    }
+    let layout = core::alloc::Layout::new::<Option<::types_nodes::nodes_enums::CmdType>>();
+    let c = mcx
+        .allocate(layout)
+        .map_err(|_| mcx.oom(layout.size()))?
+        .cast::<Option<::types_nodes::nodes_enums::CmdType>>();
+    // SAFETY: fresh exclusive allocation; no action armed yet.
+    unsafe { c.write(None) };
+    state.merge_action_cell = Some(c);
+    Ok(c)
 }
 
 // C ExprSetupInfo + expr_setup_walker + ExecPushExprSetupSteps. Slots are not
@@ -2620,7 +2765,7 @@ pub(crate) fn init_expr_rec<'mcx>(
                 };
                 let aggno = aggref.aggno;
                 assert!(
-                    aggno >= 0 && (aggno as u16) < bind.naggs,
+                    aggno >= 0 && (aggno as u32) < bind.naggs,
                     "Aggref.aggno {aggno} outside the AggState's {} slots (planner must set it)",
                     bind.naggs
                 );
@@ -2678,18 +2823,27 @@ pub(crate) fn init_expr_rec<'mcx>(
         }),
         NodeTag::T_WindowFunc => stack_depth_core::with_own_frame(|| -> PgResult<()> {
             {
-                // Invariant tripwire (C twin: execExpr.c:1162 "WindowFunc found in
-                // non-WindowAgg plan node"): setrefs confines WindowFuncs to
-                // WindowAgg tlists (setrefs/src/lib.rs:1754, :2487-2511), and only
-                // exec_build_window_projection_info[_subplans] (compile.rs:355/366)
-                // passes Bind::Win.
-                let Some(Bind::Win(win)) = agg else {
-                    panic!(
-                        "WindowFunc found in non-WindowAgg plan node: setrefs confines \
-                     WindowFuncs to WindowAgg tlists (setrefs/src/lib.rs:1754) and only the \
-                     window projection build passes Bind::Win (compile.rs:355/366); C twin \
-                     execExpr.c:1162"
-                    );
+                // C execExpr.c:1162: a WindowFunc compiles against its WindowAgg parent. setrefs confines
+                // WindowFuncs to WindowAgg tlists; the window projection build passes Bind::Win, and a SubPlan in
+                // that tlist compiles its testexpr / hashed LHS with the parent's bind stashed by
+                // init_subplan_expr (D2238: lag(s) OVER (..) IN (SELECT ..)). Anything else is PostgreSQL's
+                // elog(ERROR), never a panic.
+                let stashed;
+                let win = match agg {
+                    Some(Bind::Win(win)) => win,
+                    _ => match SUBPLAN_PARENT_WIN.get() {
+                        Some((a, p)) => {
+                            // SAFETY: the stash is set only for the duration of the parent window projection's
+                            // SubPlan init (init_subplan_expr), whose wfuncnos slice outlives that call; the
+                            // erased lifetime is the parent's own 'mcx.
+                            let wfuncnos = unsafe { &*(p.as_ptr() as *const [(Node<'mcx>, u32)]) };
+                            stashed = WinBind { agg: a, wfuncnos };
+                            stashed
+                        }
+                        None => {
+                            return Err(Box::new(PgError::error("WindowFunc found in non-WindowAgg plan node")));
+                        }
+                    },
                 };
                 let wfuncno = win
                     .wfuncnos
@@ -2753,22 +2907,7 @@ pub(crate) fn init_expr_rec<'mcx>(
                 if !state.allow_merge_support {
                     panic!("MergeSupportFunc found in non-merge plan node");
                 }
-                let cell = match state.merge_action_cell {
-                    Some(c) => c,
-                    None => {
-                        let layout = core::alloc::Layout::new::<
-                            Option<::types_nodes::nodes_enums::CmdType>,
-                        >();
-                        let c = mcx
-                            .allocate(layout)
-                            .map_err(|_| mcx.oom(layout.size()))?
-                            .cast::<Option<::types_nodes::nodes_enums::CmdType>>();
-                        // SAFETY: fresh exclusive allocation; no action armed yet.
-                        unsafe { c.write(None) };
-                        state.merge_action_cell = Some(c);
-                        c
-                    }
-                };
+                let cell = merge_action_cell(state, mcx)?;
                 // 10-byte text image ("INSERT"/"UPDATE"/"DELETE"), 8-aligned.
                 let layout = core::alloc::Layout::from_size_align(12, 8).expect("msf layout");
                 let scratch = mcx
@@ -3181,11 +3320,16 @@ fn init_scalar_array_op<'mcx>(
         check_execute_acl(mcx, saop.hashfuncid, userid)?;
     }
 
-    let element_type = lsyscache::get_element_type(expr_type(arrayarg))?;
-    assert!(
-        element_type != 0,
-        "init_scalar_array_op: operand is not an array"
-    );
+    let arraytype = expr_type(arrayarg);
+    let mut element_type = lsyscache::get_element_type(arraytype)?;
+    if element_type == 0 {
+        // A domain over an array (make_scalar_array_op keeps it for
+        // polymorphic operators); C reads ARR_ELEMTYPE at run time.
+        element_type = lsyscache::get_base_element_type(arraytype)?;
+    }
+    if element_type == 0 {
+        return Err(PgError::error("ScalarArrayOpExpr operand is not an array").into());
+    }
     let (typlen, typbyval, typalign) = lsyscache::get_typlenbyvalalign(element_type)?;
 
     let mut flinfo = fmgr_core::fmgr_info(opfuncid)?;
@@ -3538,6 +3682,10 @@ fn init_subscripting_ref<'mcx>(
             Some("hstore_subscript_handler") => {
                 return init_hstore_subscripting_ref(node, state, mcx, out, agg, params, sub)
             }
+            Some("jsonb_subscript_handler") => {
+                return init_jsonb_subscripting_ref(node, state, mcx, out, agg, params, sub)
+            }
+            Some("array_subscript_handler" | "raw_array_subscript_handler") => {}
             // Descoped, not unported: arbitrary third-party SubscriptingRef
             // handlers are C functions in dlopen'd modules, excluded by the
             // no-dlopen carve; only in-tree handlers are dispatchable.
@@ -4478,6 +4626,18 @@ fn init_json_expr<'mcx>(
         )
     };
 
+    for flag in [error_out, empty_out] {
+        push_step(
+            state,
+            mcx,
+            Step::Const {
+                value: ::datum::Datum::from_bool(false),
+                isnull: false,
+                out: flag,
+            },
+        )?;
+    }
+
     let mut jumps_return_null: PgVec<'_, usize> = PgVec::new_in(mcx);
     init_expr_rec(
         jsexpr.formatted_expr.expect("JsonExpr.formatted_expr"),
@@ -5177,6 +5337,12 @@ fn init_param(param: &Param, params: ParamBind<'_>, out: OutRef) -> PgResult<Ste
             // C execExpr.c:1060-1064: a paramCompile hook takes precedence
             // over the materialized list; the value is fetched at evaluation.
             if let Some(func) = params.param_callback {
+                let me = param as *const Param as *const ();
+                let func = match (params.param_rw, params.param_ro_expanded) {
+                    (Some((id, rw)), _) if core::ptr::eq(me, id) => rw,
+                    (_, Some((ids, ro))) if ids.iter().any(|&id| core::ptr::eq(me, id)) => ro,
+                    _ => func,
+                };
                 return Ok(Step::ParamCallback {
                     func,
                     paramid,
@@ -5185,12 +5351,18 @@ fn init_param(param: &Param, params: ParamBind<'_>, out: OutRef) -> PgResult<Ste
                 });
             }
             let list = params.extern_params.unwrap_or(&[]);
+            let missing = |fetch| Step::ParamExternMissing {
+                paramid,
+                paramtype: param.paramtype,
+                fetch,
+                out,
+            };
             if paramid <= 0 || paramid as usize > list.len() {
-                return Ok(Step::ParamExternMissing { paramid });
+                return Ok(missing(None));
             }
             let prm = &list[(paramid - 1) as usize];
             if prm.ptype == 0 {
-                return Ok(Step::ParamExternMissing { paramid });
+                return Ok(missing(params.extern_fetch));
             }
             if prm.ptype != param.paramtype {
                 return Ok(Step::ParamExternTypeMismatch {
@@ -5225,6 +5397,29 @@ pub(crate) fn param_type_mismatch(paramid: i32, ptype: Oid, paramtype: Oid) -> B
         ))
         .with_sqlstate(::types_error::ERRCODE_DATATYPE_MISMATCH),
     )
+}
+
+// ExecEvalParamExtern's paramFetch arm (execExprInterp.c:3084-3108) for a
+// slot the list was built without.
+#[cold]
+#[inline(never)]
+pub(crate) fn fetch_missing_param(
+    fetch: Option<::types_portal::params::ParamFetchHook>,
+    paramid: i32,
+    paramtype: Oid,
+) -> PgResult<::datum::NullableDatum> {
+    let Some(h) = fetch else {
+        return Err(no_param_value(paramid));
+    };
+    // SAFETY: the list owner keeps `arg` live while its list is bound.
+    let prm = unsafe { (h.func)(h.arg, paramid) }?;
+    if prm.ptype == 0 {
+        return Err(no_param_value(paramid));
+    }
+    if prm.ptype != paramtype {
+        return Err(param_type_mismatch(paramid, prm.ptype, paramtype));
+    }
+    Ok(::datum::NullableDatum { value: prm.value, isnull: prm.isnull })
 }
 
 #[cold]
@@ -5304,6 +5499,11 @@ fn init_coerce_via_io<'mcx>(
     let (infunc, typioparam) = lsyscache::getTypeInputInfo(cio.resulttype)?;
 
     let flinfo_out = fmgr_core::fmgr_info(outfunc)?;
+    let text_into = if cio.resulttype == ::types_core::catalog::TEXTOID && state.escontext.is_none() {
+        fmgr_core::fmgr_out_into(&flinfo_out)
+    } else {
+        None
+    };
     let frame_out = FuncFrame::new_in(mcx, flinfo_out, 1, ::types_core::primitive::InvalidOid)?;
     let outcall = FuncCall {
         fcinfo: frame_out.fcinfo,
@@ -5349,6 +5549,7 @@ fn init_coerce_via_io<'mcx>(
         outcall,
         incall,
         in_strict,
+        text_into,
     };
     let raw = mcx
         .allocate(core::alloc::Layout::new::<crate::steps::IoCoerceCalls>())
@@ -5450,31 +5651,6 @@ fn init_convert_rowtype<'mcx>(
     let convert = node.as_convert_rowtype_expr().unwrap();
     init_expr_rec(convert.arg, state, mcx, out, agg, params, sub)?;
 
-    let intype = expr_type(convert.arg);
-    let indesc = ::typcache::lookup_rowtype_tupdesc_copy(mcx, intype, -1)?;
-    let outdesc = ::typcache::lookup_rowtype_tupdesc_copy(mcx, convert.resulttype, -1)?;
-
-    let map = build_attrmap_by_name(mcx, &indesc, &outdesc)?;
-
-    let alloc_desc = |desc: TupleDescData<'mcx>| -> PgResult<NonNull<TupleDescData<'static>>> {
-        let layout = core::alloc::Layout::new::<TupleDescData<'static>>();
-        let p: NonNull<TupleDescData<'static>> = mcx
-            .allocate(layout)
-            .map_err(|_| mcx.oom(layout.size()))?
-            .cast();
-        // SAFETY: fresh exact-layout allocation; the plan mcx outlives every
-        // eval of this step, so the 'static restamp never escapes it.
-        unsafe {
-            p.as_ptr().write(core::mem::transmute::<
-                TupleDescData<'mcx>,
-                TupleDescData<'static>,
-            >(desc));
-        }
-        Ok(p)
-    };
-    let outdesc_ptr = alloc_desc(outdesc)?;
-    let indesc_ptr = alloc_desc(indesc)?;
-
     let frame_ix = state.frames.len() as u32;
     let frame = FuncFrame::new_in(mcx, FmgrInfo::unresolved(), 0, 0)?;
     state
@@ -5484,9 +5660,12 @@ fn init_convert_rowtype<'mcx>(
     state.frames.push(frame);
 
     let crs = crate::steps::ConvertRowtypeState {
-        indesc: indesc_ptr,
-        outdesc: outdesc_ptr,
-        map,
+        inputtype: expr_type(convert.arg),
+        outputtype: convert.resulttype,
+        descriptor_ids: None,
+        map: None,
+        // SAFETY: the compile context outlives every evaluation of this state.
+        mcx: unsafe { core::mem::transmute::<Mcx<'mcx>, Mcx<'static>>(mcx) },
     };
     let p = alloc_state(mcx, crs)?;
     push_step(
@@ -5502,7 +5681,7 @@ fn init_convert_rowtype<'mcx>(
 
 // attmap.c build_attrmap_by_name + tupconvert.c convert_tuples_by_name's
 // identity elision: Ok(None) = physically compatible, relabel only.
-fn build_attrmap_by_name<'mcx>(
+pub(crate) fn build_attrmap_by_name<'mcx>(
     mcx: Mcx<'mcx>,
     indesc: &TupleDescData<'_>,
     outdesc: &TupleDescData<'_>,
@@ -5848,17 +6027,10 @@ pub(crate) fn ready_expr(state: &mut ExprState<'_>) {
     // Kernelized programs never run their steps: skipping the peephole keeps
     // compile-per-query lanes (point/select1) free of the pass cost.
     if matches!(state.kernel, Kernel::Program) {
-        // JIT compiles the unfused program (kernel and interpreter share the
-        // step-state contract); fusion only serves the interpreter loop, so
-        // a jitted program skips it. Below the planner's jit gate this is a
-        // single thread-local read.
-        crate::jit::try_compile(state);
-        if state.jit.is_none() {
-            if economy {
-                thin_steps(state);
-            } else {
-                fuse_program(state);
-            }
+        if economy {
+            thin_steps(state);
+        } else {
+            fuse_program(state);
         }
     }
     if dump_programs_enabled() {
@@ -5887,7 +6059,9 @@ fn for_each_jump_field_mut(step: &mut Step, mut f: impl FnMut(&mut u32)) {
         | Step::FuncStrict2QualThin { jumpdone, .. }
         | Step::NotDistinctQual { jumpdone, .. }
         | Step::NotDistinctQualThin { jumpdone, .. }
-        | Step::ReturningExprStep { jumpdone, .. } => f(jumpdone),
+        | Step::ReturningExprStep { jumpdone, .. }
+        | Step::HashDatumFirstStrict { jumpdone, .. }
+        | Step::HashDatumNext32Strict { jumpdone, .. } => f(jumpdone),
         Step::AggStrictInputCheck { jumpnull, .. }
         | Step::AggStrictInputCheck1 { jumpnull, .. }
         | Step::AggPergroupNullcheck { jumpnull, .. }
@@ -6111,14 +6285,6 @@ fn try_fuse(a: &Step, b: &Step) -> Option<Step> {
 // pairs collapse into fused steps (one dispatch + arg-slot round trip per
 // pair). Runs after select_kernel (kernel matchers see raw shapes); a pair
 // whose second step is a jump target stays unfused.
-// Test hook: the jit single-step cross-check drives exec_one_step over
-// unfused programs (the shape jitted programs keep).
-#[cfg(test)]
-thread_local! {
-    pub(crate) static SKIP_FUSE_FOR_TESTS: core::cell::Cell<bool> =
-        const { core::cell::Cell::new(false) };
-}
-
 thread_local! {
     // PROCPERF P2 compile economy: per-thread window armed by execmain's
     // standard_executor_start over InitPlan when the statement is cost-gated
@@ -6219,6 +6385,36 @@ pub fn execute_acl_session_end() -> alloc::vec::Vec<Oid> {
     })
 }
 
+/// An EXECUTE-ACL recording window held as a guard (`execute_acl_window`): `finish` closes it and returns its funcids;
+/// a drop without `finish` (an unwind out of the compile it covers) closes it too, so no window outlives its compile.
+/// `execute_acl_session_begin` / `_end` stay as the bare pair for this crate's unit tests.
+#[must_use]
+pub struct ExecuteAclWindow {
+    open: bool,
+}
+
+/// Opens an EXECUTE-ACL recording window (nestable) for the guard's life.
+pub fn execute_acl_window() -> ExecuteAclWindow {
+    execute_acl_session_begin();
+    ExecuteAclWindow { open: true }
+}
+
+impl ExecuteAclWindow {
+    /// Closes the window: the funcids `execute_acl_session_end` returns.
+    pub fn finish(mut self) -> alloc::vec::Vec<Oid> {
+        self.open = false;
+        execute_acl_session_end()
+    }
+}
+
+impl Drop for ExecuteAclWindow {
+    fn drop(&mut self) {
+        if self.open {
+            drop(execute_acl_session_end());
+        }
+    }
+}
+
 // Records a gated funcid into the active recording window (no-op outside a
 // window: EPQ / utility / SPI-without-park compiles). Repeats are kept: C
 // gates (and fires the execute hook for) every ExecInitFunc-family site.
@@ -6287,10 +6483,6 @@ fn thin_steps(state: &mut ExprState<'_>) {
 }
 
 pub(crate) fn fuse_program(state: &mut ExprState<'_>) {
-    #[cfg(test)]
-    if SKIP_FUSE_FOR_TESTS.with(|c| c.get()) {
-        return;
-    }
     let len = state.steps.len();
     if len < 3 {
         thin_steps(state);
@@ -7529,7 +7721,8 @@ fn decode_saop_const_array(
     let mut off = ::arrayfuncs::foundation::arr_data_offset(img);
     let mut bitmask: u32 = 1;
     let mut bitmap_byte = 0usize;
-    let mut elems = alloc::vec::Vec::with_capacity(nitems as usize);
+    let mut elems =
+        ::mcx::std_vec_with_capacity("ExecutorState", nitems as usize).map_err(|_| "OOM")?;
     for _ in 0..nitems {
         let elt_null = match bitmap_off {
             Some(bo) => (img[bo + bitmap_byte] as u32 & bitmask) == 0,
@@ -7718,4 +7911,43 @@ fn alloc_row_cache<'mcx>(mcx: Mcx<'mcx>) -> PgResult<NonNull<crate::steps::RowNu
         })
     };
     Ok(rn)
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    /// C7 clause (d): init_subplan_expr's parent-window stash goes back on an unwind out of the SubPlan's init too, so no
+    /// later WindowFunc compile reads a freed wfuncnos slice.
+    #[test]
+    fn subplan_parent_win_stash_goes_back_on_an_unwind() {
+        assert!(SUBPLAN_PARENT_WIN.get().is_none());
+        let unwound = std::panic::catch_unwind(|| {
+            let _stash = SubplanParentWinScope(SUBPLAN_PARENT_WIN.get());
+            let (mut value, mut null) = (::datum::Datum::null(), false);
+            let bind = AggBind { values: NonNull::from(&mut value), nulls: NonNull::from(&mut null), naggs: 0, grouping: None, win: None };
+            let none: &[(Node<'static>, u32)] = &[];
+            SUBPLAN_PARENT_WIN.set(Some((bind, NonNull::from(none))));
+            panic!("the SubPlan's init unwinds");
+        });
+        assert!(unwound.is_err());
+        assert!(SUBPLAN_PARENT_WIN.get().is_none(), "the stash outlived the unwind");
+    }
+
+    /// C7 clause (d): an EXECUTE-ACL window closes on an unwind out of the compile it covers; a finished one returns its
+    /// funcids and leaves the outer window open.
+    #[test]
+    fn execute_acl_window_closes_on_an_unwind() {
+        let outer = execute_acl_window();
+        execute_acl_record(1);
+        let unwound = std::panic::catch_unwind(|| {
+            let _inner = execute_acl_window();
+            execute_acl_record(2);
+            panic!("the compile unwinds");
+        });
+        assert!(unwound.is_err());
+        execute_acl_record(3);
+        assert_eq!(outer.finish(), vec![1, 3], "the unwound inner window was still open");
+        assert!(EXECUTE_ACL_SESSION.with(|s| s.borrow().is_none()));
+    }
 }

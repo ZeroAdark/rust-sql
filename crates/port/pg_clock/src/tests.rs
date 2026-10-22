@@ -227,3 +227,34 @@ mod sim_conformance {
         let _ = moved;
     }
 }
+
+// ---- the poll-gap probe's thread reading (testflow, D4128 / D4129) ----------
+
+#[test]
+fn schedstat_wait_is_the_second_field() {
+    assert_eq!(posix::schedstat_wait_ns(b"123456 7890 12\n"), Some(7890));
+    assert_eq!(posix::schedstat_wait_ns(b"123456\n"), None);
+    assert_eq!(posix::schedstat_wait_ns(b""), None);
+    assert_eq!(posix::schedstat_wait_ns(b"1 x 2"), None);
+}
+
+/// Linux: the counters read, and they never go back on the same thread (a minor fault and some CPU in between).
+#[cfg(target_os = "linux")]
+#[test]
+fn thread_use_reads_and_grows_on_linux() {
+    let a = posix::thread_use().expect("getrusage(RUSAGE_THREAD) reads on Linux");
+    let v: Vec<u8> = (0..(4 << 20)).map(|i| i as u8).collect(); // touch fresh pages: minor faults, user CPU
+    assert_eq!(v.len(), 4 << 20);
+    let b = posix::thread_use().expect("second read");
+    assert!(b.user_ns + b.sys_ns >= a.user_ns + a.sys_ns && b.minflt >= a.minflt && b.majflt >= a.majflt, "{a:?} -> {b:?}");
+    assert!(b.nvcsw >= a.nvcsw && b.nivcsw >= a.nivcsw && b.inblock >= a.inblock && b.oublock >= a.oublock, "{a:?} -> {b:?}");
+    if let (Some(x), Some(y)) = (a.rq_ns, b.rq_ns) {
+        assert!(y >= x, "{a:?} -> {b:?}");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn thread_use_is_none_off_linux() {
+    assert_eq!(posix::thread_use(), None);
+}

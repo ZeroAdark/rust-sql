@@ -1,10 +1,46 @@
 use super::*;
 use std::sync::MutexGuard;
+use elog::PCT_M;
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock() -> MutexGuard<'static, ()> {
     TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// A test's scratch directory under the temp dir, removed on drop (the
+/// test's end, or a panic's unwind).
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("sysltest-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn scratch_dirs_leave_nothing_behind() {
+    let dir = Scratch::new("gone");
+    std::fs::write(dir.join("x.log"), b"x").unwrap();
+    let path = dir.0.clone();
+    drop(dir);
+    assert!(!path.exists(), "{} left behind", path.display());
 }
 
 fn chunk(pid: i32, flags: u8, payload: &[u8]) -> Vec<u8> {
@@ -55,8 +91,7 @@ fn header_layout_matches_elog_writer() {
 #[test]
 fn single_chunk_message_is_written() {
     let _g = lock();
-    let dir = std::env::temp_dir().join(format!("sysltest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("single");
     let path = dir.join("single.log");
     install_logfile(&path);
 
@@ -68,8 +103,7 @@ fn single_chunk_message_is_written() {
 #[test]
 fn multi_chunk_message_reassembles_and_interleaves() {
     let _g = lock();
-    let dir = std::env::temp_dir().join(format!("sysltest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("multi");
     let path = dir.join("multi.log");
     install_logfile(&path);
 
@@ -90,8 +124,7 @@ fn multi_chunk_message_reassembles_and_interleaves() {
 #[test]
 fn oversized_message_spans_max_payload_chunks() {
     let _g = lock();
-    let dir = std::env::temp_dir().join(format!("sysltest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("big");
     let path = dir.join("big.log");
     install_logfile(&path);
 
@@ -111,8 +144,7 @@ fn oversized_message_spans_max_payload_chunks() {
 #[test]
 fn partial_chunk_is_left_justified_and_completed() {
     let _g = lock();
-    let dir = std::env::temp_dir().join(format!("sysltest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("partial");
     let path = dir.join("partial.log");
     install_logfile(&path);
 
@@ -137,8 +169,7 @@ fn partial_chunk_is_left_justified_and_completed() {
 #[test]
 fn non_protocol_data_passes_through_and_flush_dumps_partials() {
     let _g = lock();
-    let dir = std::env::temp_dir().join(format!("sysltest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("raw");
     let path = dir.join("raw.log");
     install_logfile(&path);
 
@@ -160,8 +191,7 @@ fn non_protocol_data_passes_through_and_flush_dumps_partials() {
 #[test]
 fn csv_dest_without_csv_file_falls_back_to_syslog_file() {
     let _g = lock();
-    let dir = std::env::temp_dir().join(format!("sysltest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("csvfallback");
     let path = dir.join("csvfallback.log");
     install_logfile(&path);
     assert!(CSVLOG_FILE.load(Relaxed).is_null());
@@ -174,10 +204,9 @@ fn csv_dest_without_csv_file_falls_back_to_syslog_file() {
 #[test]
 fn update_metainfo_datafile_writes_current_logfiles() {
     let _g = lock();
-    let dir = std::env::temp_dir().join(format!("sysltest-meta-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("meta");
     let saved_cwd = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&dir).unwrap();
+    std::env::set_current_dir(&*dir).unwrap();
 
     let mut st = SysLoggerState::new();
     st.last_sys_file_name = Some("log/postgresql-x.log".to_string());
@@ -199,8 +228,7 @@ fn update_metainfo_datafile_writes_current_logfiles() {
 fn logfile_open_mode_matches_c_fopen_under_umask() {
     use std::os::unix::fs::PermissionsExt;
     let _g = lock();
-    let dir = std::env::temp_dir().join(format!("sysltest-mode-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("mode");
     let path = dir.join("mode.log");
     let _ = std::fs::remove_file(&path);
     let mode_of = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
@@ -230,7 +258,6 @@ fn logfile_open_mode_matches_c_fopen_under_umask() {
     assert_eq!(mode_of(&path), 0o640, "existing file, truncate: mode preserved");
 
     LOG_FILE_MODE.store(saved, Relaxed);
-    let _ = std::fs::remove_file(&path);
 }
 
 /// syslogger.c:526 (read from the logger pipe) and :625 (pipe(2) for the
@@ -243,15 +270,15 @@ fn logger_pipe_errors_use_socket_access_sqlstates() {
     let sqlstate = |errnum: i32, message: &str| {
         logger_pipe_report(FATAL, errnum, message).into_error().sqlstate()
     };
-    let create = "could not create pipe for syslog: %m";
-    let read = "could not read from logger pipe: %m";
-    assert_eq!(sqlstate(libc::EMFILE, create), ERRCODE_INTERNAL_ERROR);
-    assert_eq!(sqlstate(libc::ENFILE, create), ERRCODE_INTERNAL_ERROR);
-    assert_eq!(sqlstate(libc::ENOMEM, create), ERRCODE_INTERNAL_ERROR);
-    assert_eq!(sqlstate(libc::EIO, read), ERRCODE_INTERNAL_ERROR);
-    assert_eq!(sqlstate(libc::ECONNRESET, read), ERRCODE_CONNECTION_FAILURE);
-    assert_eq!(sqlstate(libc::EPIPE, read), ERRCODE_CONNECTION_FAILURE);
-    let err = logger_pipe_report(FATAL, libc::EMFILE, create).into_error();
+    let create = format!("could not create pipe for syslog: {PCT_M}");
+    let read = format!("could not read from logger pipe: {PCT_M}");
+    assert_eq!(sqlstate(libc::EMFILE, &create), ERRCODE_INTERNAL_ERROR);
+    assert_eq!(sqlstate(libc::ENFILE, &create), ERRCODE_INTERNAL_ERROR);
+    assert_eq!(sqlstate(libc::ENOMEM, &create), ERRCODE_INTERNAL_ERROR);
+    assert_eq!(sqlstate(libc::EIO, &read), ERRCODE_INTERNAL_ERROR);
+    assert_eq!(sqlstate(libc::ECONNRESET, &read), ERRCODE_CONNECTION_FAILURE);
+    assert_eq!(sqlstate(libc::EPIPE, &read), ERRCODE_CONNECTION_FAILURE);
+    let err = logger_pipe_report(FATAL, libc::EMFILE, &create).into_error();
     assert_eq!(err.message, format!("could not create pipe for syslog: {}", elog::errno::strerror(libc::EMFILE)));
 }
 
@@ -367,9 +394,7 @@ fn jsonlog_omits_state_code_for_successful_completion() {
 fn logfile_open_creates_the_target_of_a_dangling_symlink() {
     use std::os::unix::fs::PermissionsExt;
     let _g = lock();
-    let dir = std::env::temp_dir().join(format!("sysltest-symlink-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("symlink");
     let target = dir.join("target.log");
     let link = dir.join("fixed.log");
     std::os::unix::fs::symlink(&target, &link).unwrap();
@@ -380,7 +405,6 @@ fn logfile_open_creates_the_target_of_a_dangling_symlink() {
     LOG_FILE_MODE.store(saved, Relaxed);
     let md = std::fs::metadata(&target).expect("symlink target created");
     assert_eq!(md.permissions().mode() & 0o777, 0o600);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 static FORK_FAILURE_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());

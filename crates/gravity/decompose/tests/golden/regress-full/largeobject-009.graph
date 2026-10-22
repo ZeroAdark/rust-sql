@@ -1,0 +1,46 @@
+-- regress-full-largeobject-009
+-- SELECT pageno, data FROM pg_largeobject WHERE loid = (SELECT loid from lotest_stash_values) EXCEPT SELECT pageno, data FROM pg_largeobject WHERE loid = 43707;
+graph pipelines=4 breakers=2 init_plans=1 root=p3
+p0 node=7 eligible rows=2260 end=sink
+  nodes n7@0
+  source range rel=43700 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v5.1)
+  outs 1=w8:val
+p1 node=2 serial site=0 reason=IndexSource end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n2@0 n0@1^
+  source bitmap rel=2613 rti=3 am=heap
+    bitmap index node=3 index=2683 rows=61
+      key att=1 op=607 value=$exec0
+    recheck (op607(v3.1, $exec0))
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v3.2, 2=v3.3)
+  outs 1=w8:val 2=vl:win/page
+p2 node=5 serial site=0 reason=IndexSource end=breaker(slot=1 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n6@0 n5@0 n0@1^
+  source bitmap rel=2613 rti=4 am=heap
+    bitmap index node=6 index=2683 rows=61
+      key att=1 op=607 value=c26:43707
+    recheck (op607(v4.1, c26:43707))
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v4.2, 2=v4.3)
+  outs 1=w8:val 2=vl:win/page
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1 consumes=slot1@p2
+  nodes n0@0
+  source breaker slot=0
+  setop Except hashed left=slot0 right=slot1 groups=60 keys=1=96:I32,2=1955:Fp128
+  project (1=outer.1, 2=outer.2)
+  outs 1=w4:val 2=vl:life/breaker
+breaker slot=0 kind=HashAgg budget=Pool spill=None producer=p1 layout=[I32,Fp128,Fp128]->[Count@24,Count@32,MinCode@40] 48B
+breaker slot=1 kind=HashAgg budget=Pool spill=None producer=p2 layout=[I32,Fp128,Fp128]->[Count@24,MinCode@32] 40B
+group slot=0 producer=p1 node=0 form=Hashed hints=[] layout=[I32,Fp128,Fp128]->[Count@24,Count@32,MinCode@40] 48B
+  key 0 word=0 resno=1 kind=I32 attno=2 type=23 expr=v3.2
+  key 1 word=1 resno=2 kind=Fp128 attno=3 type=17 rep=2 image=Bytes expr=v3.3
+group slot=1 producer=p2 node=0 form=Hashed hints=[] layout=[I32,Fp128,Fp128]->[Count@24,MinCode@32] 40B
+  key 0 word=0 resno=1 kind=I32 attno=2 type=23 expr=v4.2
+  key 1 word=1 resno=2 kind=Fp128 attno=3 type=17 rep=1 image=Bytes expr=v4.3
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: SeqScan BitmapIndexScan BitmapHeapScan SetOp SubPlan

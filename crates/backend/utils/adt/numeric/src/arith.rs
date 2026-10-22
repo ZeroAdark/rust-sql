@@ -395,9 +395,9 @@ pub fn mul_var(var1: VarView<'_>, var2: VarView<'_>, result: &mut NumericVar, rs
         let mut scratch = scratch.borrow_mut();
         let (dig, var2digitpairs) = &mut *scratch;
         dig.clear();
-        dig.reserve(res_ndigitpairs as usize);
+        let _ = dig.try_reserve(res_ndigitpairs as usize);
         var2digitpairs.clear();
-        var2digitpairs.reserve(var2ndigitpairs as usize);
+        let _ = var2digitpairs.try_reserve(var2ndigitpairs as usize);
         // SAFETY: capacities reserved; u64/u32 have no invalid bit patterns.
         // Every dig[] word is written before read: the head memset below
         // covers [0, i1+pair_offset) and the first product loop covers the
@@ -764,9 +764,10 @@ pub fn div_var(
         let (dividend, divisor) = &mut *scratch;
         // One extra dividend digit so the loop can touch dividend[qi+1].
         dividend.clear();
+        let _ = dividend.try_reserve(div_ndigitpairs as usize + 1);
         dividend.resize(div_ndigitpairs as usize + 1, 0);
         divisor.clear();
-        divisor.reserve(var2ndigitpairs as usize);
+        let _ = divisor.try_reserve(var2ndigitpairs as usize);
 
         let var1digits = var1.digits;
         let var2digits = var2.digits;

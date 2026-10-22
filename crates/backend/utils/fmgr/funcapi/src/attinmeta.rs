@@ -8,7 +8,7 @@ use core::ffi::CStr;
 use datum::Datum;
 use mcx::Mcx;
 use fmgr::FmgrInfo;
-use types_error::PgResult;
+use types_error::{PgError, PgResult, ERRCODE_DATATYPE_MISMATCH};
 use types_tuple::TupleDescData;
 
 struct AttIn {
@@ -25,7 +25,7 @@ pub struct AttInMetadata {
 impl AttInMetadata {
     pub fn new(tupdesc: &TupleDescData<'_>) -> PgResult<AttInMetadata> {
         let natts = tupdesc.natts as usize;
-        let mut atts = Vec::with_capacity(natts);
+        let mut atts = ::mcx::std_vec_with_capacity("utils", natts)?;
         for att in &tupdesc.attrs[..natts] {
             if att.attisdropped {
                 atts.push(AttIn { in_func: None, typ_ioparam: types_core::InvalidOid, atttypmod: -1 });
@@ -53,8 +53,11 @@ impl AttInMetadata {
         values: &[Option<&[u8]>],
     ) -> PgResult<(Vec<Datum>, Vec<bool>)> {
         let natts = self.natts();
-        let mut out = Vec::with_capacity(natts);
-        let mut isnull = Vec::with_capacity(natts);
+        if values.len() < natts {
+            return Err(short_row(values.len(), natts));
+        }
+        let mut out = ::mcx::std_vec_with_capacity("utils", natts)?;
+        let mut isnull = ::mcx::std_vec_with_capacity("utils", natts)?;
         for (i, att) in self.atts.iter_mut().enumerate() {
             let Some(in_func) = att.in_func.as_mut() else {
                 out.push(Datum::null());
@@ -66,7 +69,7 @@ impl AttInMetadata {
             let mut buf;
             let cstr = match values[i] {
                 Some(bytes) => {
-                    buf = Vec::with_capacity(bytes.len() + 1);
+                    buf = ::mcx::std_vec_with_capacity("utils", bytes.len() + 1)?;
                     buf.extend_from_slice(bytes);
                     buf.push(0);
                     Some(CStr::from_bytes_with_nul(&buf).expect("appended single NUL"))
@@ -85,4 +88,18 @@ impl AttInMetadata {
         }
         Ok((out, isnull))
     }
+}
+
+/// C DIVERGENCE: C reads past a cstring array shorter than the descriptor; this raises the executor's tupledesc_match
+/// error instead.
+#[track_caller]
+#[cold]
+#[inline(never)]
+fn short_row(formed: usize, natts: usize) -> Box<PgError> {
+    let noun = if formed == 1 { "attribute" } else { "attributes" };
+    Box::new(
+        PgError::error("function return row and query-specified return row do not match")
+            .with_sqlstate(ERRCODE_DATATYPE_MISMATCH)
+            .with_detail(format!("Returned row contains {formed} {noun}, but query expects {natts}.")),
+    )
 }

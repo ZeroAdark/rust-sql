@@ -146,7 +146,7 @@ fn fetch_type_row<'mcx>(mcx: Mcx<'mcx>, typeoid: Oid) -> PgResult<TypeRow> {
         let p = acl_datum.as_usize() as *const u8;
         // SAFETY: live aclitem[] varlena image through its extent.
         let image = unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
-        Some(varlena::open_image(mcx, image)?.as_bytes().to_vec())
+        Some(::mcx::std_vec_from_slice("typecmds", &varlena::open_image(mcx, image)?.as_bytes())?)
     };
     let mut bin_isnull = false;
     let bin_datum = get(Anum_pg_type_typdefaultbin, &mut bin_isnull);
@@ -799,7 +799,7 @@ fn validateDomainCheckConstraint<'mcx>(
     let planned = clauses::eval_const_expressions(mcx, expr)?;
     // typecmds.c:3297 ResetExprContext per scanned tuple: call results
     // (detoasts, concatenations) live one row, not the whole scan.
-    let mut per_tuple = ::mcx::MemoryContext::new_bump("validateDomainCheckConstraint per-tuple");
+    let mut per_tuple = ::mcx::MemoryContext::new_wholesale("validateDomainCheckConstraint per-tuple");
     let mut program = execexpr::domain::prepare_domain_check_expr(mcx, planned)?;
     // SAFETY: per_tuple is declared before program and outlives every eval.
     unsafe { program.arm_result_mcx_raw(per_tuple.mcx()) };

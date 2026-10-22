@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/hashjoin/drain/lower.rs	end	licence	fn	A1b spooled drain / RIGHT SEMI drain runs the probe whole into its spool before the drain emits (PG streams under a LIMIT / cursor) [WHOLE-READ; D1922,D3377,V4R-536]

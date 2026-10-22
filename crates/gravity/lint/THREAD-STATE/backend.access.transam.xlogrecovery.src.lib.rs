@@ -1,0 +1,8 @@
+backend/access/transam/xlogrecovery/src/lib.rs	DO_REQUEST_WALRCV_REPLY	pgport	exit	thread	C doRequestWalReceiverReply: set when replay passes a commit that asked for it, consumed by apply_wal_record; the startup (replay) thread's own
+backend/access/transam/xlogrecovery/src/lib.rs	RECOVERY	pgport	at:ShutdownWalRecovery	thread	the xlogrecovery.c file statics as one struct (reader, sources, targets): built at InitWalRecovery, taken by PerformWalRecovery's loop, dropped at ShutdownWalRecovery; the startup (replay) thread's own
+backend/access/transam/xlogrecovery/src/lib.rs	PENDING_WALRCV_RESTART	pgport	exit	thread	C pendingWalRcvRestart: set by StartupRequestWalReceiverRestart, consumed by wait_for_wal; the startup (replay) thread's own
+backend/access/transam/xlogrecovery/src/lib.rs	CURRENT_SOURCE	pgport	exit	thread	C currentSource, mirrored out of the reader for the SIGHUP path; the startup (replay) thread's own
+backend/access/transam/xlogrecovery/src/lib.rs	WALRCV_STARTED_WITH	pgport	at:StartupRereadWalRcvConfig	thread	the walreceiver's started-with conninfo, slot name and temp-slot flag: at most one triple, replaced when the walreceiver starts and compared at each config reread; the startup (replay) thread's own
+backend/access/transam/xlogrecovery/src/lib.rs	RECEIPT_TIME	pgport	exit	thread	C XLogReceiptTime: when the record being replayed was received; the startup (replay) thread's own
+backend/access/transam/xlogrecovery/src/lib.rs	RECEIPT_SOURCE	pgport	exit	thread	C XLogReceiptSource: where the record being replayed came from; the startup (replay) thread's own
+backend/access/transam/xlogrecovery/src/lib.rs	IN_REDO	pgport	exit	thread	C InRedo: true while PerformWalRecovery's redo loop runs; the startup (replay) thread's own

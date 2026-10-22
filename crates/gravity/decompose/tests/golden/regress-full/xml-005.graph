@@ -1,0 +1,9 @@
+-- regress-full-xml-005
+-- SELECT xmlelement(name element, xmlelement(name nested, 'stuff'));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=T_XmlExpr)
+  outs 1=vl:call0
+mapped: Result

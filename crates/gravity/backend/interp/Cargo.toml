@@ -1,0 +1,16 @@
+[package]
+name = "gravity_interp"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "gravity_interp"
+path = "src/lib.rs"
+
+[dependencies]
+gravity_abi = { path = "../../abi" }
+gravity_ir = { path = "../../ir" }
+
+[dev-dependencies]
+gravity_ir = { path = "../../ir", features = ["text-loader"] }

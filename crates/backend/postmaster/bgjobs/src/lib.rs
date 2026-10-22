@@ -249,7 +249,7 @@ impl Dispatcher {
     /// Bare-thread spawn (tests).
     pub fn spawn(rt: Arc<Runtime>) -> Dispatcher {
         Dispatcher::spawn_with(rt, |body| {
-            std::thread::Builder::new().name("pg-bgjobs-dispatcher".into()).spawn(body)
+            std::thread::Builder::new().name("pg-bgjobs-dispatcher".into()).spawn(pagegive::pinned(body))
         })
     }
 

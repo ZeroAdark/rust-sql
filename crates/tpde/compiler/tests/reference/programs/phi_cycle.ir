@@ -1,0 +1,11 @@
+f(%a,%b,%condition) {
+entry:
+br ^loop
+loop:
+%x! = phi [^entry, %a], [^loop, %y]
+%y! = phi [^entry, %b], [^loop, %x]
+condbr %condition, ^loop, ^exit
+exit:
+%z = add %x, %y
+ret %z
+}

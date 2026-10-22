@@ -214,7 +214,11 @@ pub fn pg_valid_client_encoding(name: &str) -> pg_enc {
 }
 
 pub fn pg_valid_server_encoding(name: &str) -> pg_enc {
-    let enc = pg_char_to_encoding(name);
+    pg_valid_server_encoding_bytes(name.as_bytes())
+}
+
+pub fn pg_valid_server_encoding_bytes(name: &[u8]) -> pg_enc {
+    let enc = pg_char_to_encoding_bytes(name);
     if enc < 0 || !pg_valid_be_encoding(enc) {
         return -1;
     }
@@ -256,6 +260,54 @@ thread_local! {
     // C ConvProcList lives in TopMemoryContext for the backend lifetime; no
     // arena outlives the backend thread, so a std Vec of Copy entries.
     static CONV_PROC_LIST: RefCell<Vec<ConvProcInfo>> = const { RefCell::new(Vec::new()) };
+    static STATEMENT_CONVERSIONS: Cell<Option<&'static [ArmedConversion]>> = const { Cell::new(None) };
+}
+
+/// D4682 (client backend thread reuse, launch_backend cpool): the encoding state a parked thread puts back to a fresh
+/// thread's values. A reused thread's next session runs the client_encoding assign hook before InitializeClientEncoding
+/// again, so BACKEND_STARTUP_COMPLETE must read false (else SetClientEncoding resolves conversions with no catalog),
+/// and the resolved procedures and the conversion list were looked up under the previous database.
+pub fn reset_for_thread_reuse() {
+    CLIENT_ENCODING.set(PG_SQL_ASCII);
+    DATABASE_ENCODING.set(PG_SQL_ASCII);
+    MESSAGE_ENCODING.set(PG_SQL_ASCII);
+    BACKEND_STARTUP_COMPLETE.set(false);
+    PENDING_CLIENT_ENCODING.set(PG_SQL_ASCII);
+    TO_SERVER_CONV_PROC.set(None);
+    TO_CLIENT_CONV_PROC.set(None);
+    UTF8_TO_SERVER_CONV_PROC.set(None);
+    CONV_PROC_LIST.with(|l| l.borrow_mut().clear());
+    STATEMENT_CONVERSIONS.set(None);
+}
+
+/// one encoding conversion a statement's hosted `convert_to` / `convert_from` / `convert` site reaches,
+/// resolved on the leader (`armed_conversion`: its search path's default conversion and that procedure's entry point)
+/// for a pool claim, which has no catalog. `fn_addr` None: no default conversion (the body raises PG's error).
+#[derive(Clone, Copy)]
+pub struct ArmedConversion {
+    pub src: pg_enc,
+    pub dest: pg_enc,
+    pub proc: Oid,
+    pub fn_addr: Option<PGFunction>,
+}
+
+impl core::fmt::Debug for ArmedConversion {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ArmedConversion").field("src", &self.src).field("dest", &self.dest).field("proc", &self.proc).finish()
+    }
+}
+
+pub fn armed_conversion(src: pg_enc, dest: pg_enc) -> PgResult<Option<ArmedConversion>> {
+    if src == dest || dest == PG_SQL_ASCII || src == PG_SQL_ASCII {
+        return Ok(None);
+    }
+    let proc = namespace_seams::find_default_conversion_proc::call(src, dest)?;
+    let fn_addr = if proc == InvalidOid { None } else { Some(resolve_conv_proc(proc)?.fn_addr) };
+    Ok(Some(ArmedConversion { src, dest, proc, fn_addr }))
+}
+
+pub fn arm_statement_conversions(armed: Option<&'static [ArmedConversion]>) -> Option<&'static [ArmedConversion]> {
+    STATEMENT_CONVERSIONS.try_with(|c| c.replace(armed)).unwrap_or(None)
 }
 
 #[inline]
@@ -439,6 +491,45 @@ pub fn pg_do_encoding_conversion<'mcx>(
     src_encoding: pg_enc,
     dest_encoding: pg_enc,
 ) -> PgResult<Option<PgVec<'mcx, u8>>> {
+    pg_do_encoding_conversion_at(mcx, src, src_encoding, dest_encoding, None)
+}
+
+#[derive(Default)]
+pub struct ConvertMemo {
+    pub(crate) names: [Option<([u8; 64], pg_enc)>; 2],
+    pair: Option<(ConvKey, ArmedConversion)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ConvKey {
+    statement: i64,
+    command: u32,
+    invals: u64,
+}
+
+impl ConvKey {
+    fn now() -> Option<ConvKey> {
+        if !(xact_seams::get_current_statement_start_timestamp::is_installed()
+            && xact_seams::get_current_command_id::is_installed()
+            && sinval_seams::shared_invalid_message_counter::is_installed())
+        {
+            return None;
+        }
+        Some(ConvKey {
+            statement: xact_seams::get_current_statement_start_timestamp::call(),
+            command: xact_seams::get_current_command_id::call(false).ok()?,
+            invals: sinval_seams::shared_invalid_message_counter::call(),
+        })
+    }
+}
+
+pub(crate) fn pg_do_encoding_conversion_at<'mcx>(
+    mcx: Mcx<'mcx>,
+    src: &[u8],
+    src_encoding: pg_enc,
+    dest_encoding: pg_enc,
+    memo: Option<&mut ConvertMemo>,
+) -> PgResult<Option<PgVec<'mcx, u8>>> {
     if src.is_empty() {
         return Ok(None);
     }
@@ -452,27 +543,12 @@ pub fn pg_do_encoding_conversion<'mcx>(
         pg_verify_mbstr(dest_encoding, src, false)?;
         return Ok(None);
     }
-
-    if !xact_seams::is_transaction_state::call() {
-        return Err(internal_error(
-            "cannot perform encoding conversion outside a transaction",
-        ));
-    }
-
-    let proc = namespace_seams::find_default_conversion_proc::call(src_encoding, dest_encoding)?;
-    if proc == InvalidOid {
-        return Err(no_default_conversion_error(src_encoding, dest_encoding));
-    }
+    let fn_addr = conversion_entry(src_encoding, dest_encoding, memo)?;
 
     if src.len() >= MAX_ALLOC_HUGE_SIZE / MAX_CONVERSION_GROWTH {
         return Err(too_long_error(src.len()));
     }
-
-    // General case: C's OidFunctionCall6 re-resolves per call (only the
-    // client<->server default pair is cached); mirrored here.
-    let resolved = resolve_conv_proc(proc)?;
-    let (_, mut result) = convert_with_proc(mcx, resolved, src_encoding, dest_encoding, src, false)?;
-
+    let (_, mut result) = convert_with_proc(mcx, ResolvedConvProc { fn_addr }, src_encoding, dest_encoding, src, false)?;
     if src.len() > 1_000_000 {
         if result.len() >= MAX_ALLOC_SIZE {
             return Err(too_long_error(src.len()));
@@ -480,6 +556,42 @@ pub fn pg_do_encoding_conversion<'mcx>(
         result.shrink_to_fit();
     }
     Ok(Some(result))
+}
+
+/// The entry point converting `src` to `dest`: a pool claim's armed pair (B2: the claim has no catalog; a pair it did
+/// not resolve is a counted miss that takes the catalog path), else the site's memo for this statement, else the
+/// search path's default conversion resolved now (`armed_conversion`, the leader's resolution for a claim too), kept
+/// in the memo.
+fn conversion_entry(src: pg_enc, dest: pg_enc, memo: Option<&mut ConvertMemo>) -> PgResult<PGFunction> {
+    if let Some(armed) = STATEMENT_CONVERSIONS.with(Cell::get) {
+        match armed.iter().find(|a| a.src == src && a.dest == dest) {
+            Some(&ArmedConversion { fn_addr: Some(f), .. }) => return Ok(f),
+            Some(ArmedConversion { fn_addr: None, .. }) => return Err(no_default_conversion_error(src, dest)),
+            None => catcache_seams::note_pool_miss(-2),
+        }
+    }
+    let key = if memo.is_some() { ConvKey::now() } else { None };
+    if let (Some(m), Some(k)) = (memo.as_deref(), key) {
+        if let Some((mk, a)) = m.pair {
+            if mk == k && a.src == src && a.dest == dest {
+                return a.fn_addr.ok_or_else(|| no_default_conversion_error(src, dest));
+            }
+        }
+    }
+    if !xact_seams::is_transaction_state::call() {
+        return Err(internal_error(
+            "cannot perform encoding conversion outside a transaction",
+        ));
+    }
+    // C's OidFunctionCall6 re-resolves per call (only the client<->server default pair is cached); a site's memo keeps
+    // it for the statement
+    let Some(a) = armed_conversion(src, dest)? else {
+        return Err(internal_error("encoding conversion between equal or SQL_ASCII encodings reached its lookup"));
+    };
+    if let (Some(m), Some(k)) = (memo, key) {
+        m.pair = Some((k, a));
+    }
+    a.fn_addr.ok_or_else(|| no_default_conversion_error(src, dest))
 }
 
 /// C `pg_do_encoding_conversion_buf`: `proc` was already looked up; the input
@@ -512,6 +624,19 @@ pub fn pg_do_encoding_conversion_buf<'mcx>(
 #[inline]
 pub fn pg_client_to_server<'mcx>(mcx: Mcx<'mcx>, s: &[u8]) -> PgResult<Option<PgVec<'mcx, u8>>> {
     pg_any_to_server(mcx, s, client_encoding())
+}
+
+/// D4481: whether pg_client_to_server runs pg_any_to_server's identity arm under UTF8: the database encoding is UTF8
+/// and the client's is the same or SQL_ASCII. Then a non-empty string it hands back unconverted (None) was verified by
+/// pg_verify_mbstr(PG_UTF8, ..), whose UTF-8 (no overlongs, no surrogates, nothing past U+10FFFF) is a subset of what
+/// core::str accepts, so the caller need not check it again.
+#[inline]
+pub fn client_to_server_verifies_utf8() -> bool {
+    let db = database_encoding();
+    db == PG_UTF8 && {
+        let client = client_encoding();
+        client == db || client == PG_SQL_ASCII
+    }
 }
 
 /// Always validates, even when no conversion is needed: the input comes from
@@ -1247,7 +1372,8 @@ pub fn report_untranslatable_char(
 // visibility-only change per the 2026-07-28 shipped-edits ruling).
 pub fn byte_sequence(mbstr: &[u8], mblen: i32, len: i32) -> String {
     let jlimit = (mblen.min(len).max(0) as usize).min(8).min(mbstr.len());
-    let mut p = String::with_capacity(jlimit * 5);
+    let mut p = String::new();
+    let _ = p.try_reserve(jlimit * 5);
     for (j, b) in mbstr[..jlimit].iter().enumerate() {
         if j > 0 {
             p.push(' ');

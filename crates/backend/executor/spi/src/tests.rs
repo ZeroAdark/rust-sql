@@ -230,3 +230,18 @@ fn result_code_string_matches_spi_c() {
     assert_eq!(SPI_result_code_string(-5), "Unrecognized SPI code -5");
     assert_eq!(SPI_result_code_string(20), "Unrecognized SPI code 20");
 }
+
+#[test]
+fn dest_startup_misuse_is_an_error() {
+    reset();
+    let cx = MemoryContext::new("spi dest startup");
+    let desc = tupdesc::CreateTemplateTupleDesc(cx.mcx(), 0).unwrap();
+    let err = tuptable::spi_dest_startup(0, &desc).unwrap_err();
+    assert_eq!(err.message(), "spi_dest_startup called while not connected to SPI");
+    SPI_connect().unwrap();
+    tuptable::spi_dest_startup(0, &desc).unwrap();
+    let err = tuptable::spi_dest_startup(0, &desc).unwrap_err();
+    assert_eq!(err.message(), "improper call to spi_dest_startup");
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    SPI_finish().unwrap();
+}

@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/tsearch/ts_selfuncs.c: 1 stack-depth check sites
+286	tsquery_opr_selec	crates/backend/optimizer/plan/planner/src/ts_selfuncs.rs	tsquery_opr_selec	yes	

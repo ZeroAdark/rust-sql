@@ -349,7 +349,8 @@ pub struct PlScanner<'mcx> {
     pushback_aux: [TokenAux; MAX_PUSHBACKS],
     cur_line_start: usize,
     cur_line_end: Option<usize>,
-    cur_line_num: i32,
+    cur_line_num: std::rc::Rc<std::cell::Cell<i32>>,
+    scanorig_shared: std::cell::Cell<Option<std::rc::Rc<[u8]>>>,
 }
 
 impl<'mcx> PlScanner<'mcx> {
@@ -364,8 +365,17 @@ impl<'mcx> PlScanner<'mcx> {
             pushback_aux: Default::default(),
             cur_line_start: 0,
             cur_line_end: scanbuf.iter().position(|&c| c == b'\n'),
-            cur_line_num: 1,
+            cur_line_num: std::rc::Rc::new(std::cell::Cell::new(1)),
+            scanorig_shared: std::cell::Cell::new(None),
         }
+    }
+
+    // One copy of the body per parse for error-context callbacks, which
+    // must own what they read; a copy per expression made parsing quadratic.
+    pub fn scanorig_shared(&self) -> std::rc::Rc<[u8]> {
+        let src = self.scanorig_shared.take().unwrap_or_else(|| self.scanbuf.into());
+        self.scanorig_shared.set(Some(src.clone()));
+        src
     }
 
     pub fn scanbuf(&self) -> &'mcx [u8] {
@@ -427,13 +437,37 @@ impl<'mcx> PlScanner<'mcx> {
             {
                 // A core-SQL keyword that is not PL-reserved: C's reserved-only
                 // core keyword list would have returned plain IDENT.
+                // The identifier is the text as lexed: N'..' lexes as
+                // keyword NCHAR over the one-character text "N".
                 token = IDENT;
-                if aux.lval.str_.is_none() {
-                    aux.lval.str_ = Some(yytext.to_ascii_lowercase());
-                }
+                aux.lval.str_ = Some(yytext.to_ascii_lowercase());
             }
         }
         Ok(token)
+    }
+
+    /// The `a.b` word pairs of `text` as plpgsql_yylex sees them (IDENT '.'
+    /// IDENT: quotes resolved, comments skipped): the qualified references
+    /// resolve_column_ref can be asked about.
+    pub fn dotted_word_pairs(text: &str) -> PgResult<Vec<(String, String)>> {
+        let cx = mcx::MemoryContext::new("plpgsql dotted words");
+        let buf = mcx::slice_borrow_in(cx.mcx(), text.as_bytes())?;
+        let mut sc = PlScanner::new(cx.mcx(), buf);
+        let mut out = Vec::new();
+        let mut prev: [(i32, Option<String>); 2] = [(0, None), (0, None)];
+        loop {
+            let mut aux = TokenAux::default();
+            let tok = sc.internal_yylex(&mut aux)?;
+            if tok == 0 {
+                return Ok(out);
+            }
+            if tok == IDENT && prev[1].0 == '.' as i32 && prev[0].0 == IDENT {
+                if let (Some(a), Some(b)) = (prev[0].1.take(), aux.lval.str_.clone()) {
+                    out.push((a, b));
+                }
+            }
+            prev[0] = core::mem::replace(&mut prev[1], (tok, aux.lval.str_.take()));
+        }
     }
 
     fn push_back(&mut self, token: i32, aux: &TokenAux) -> PgResult<()> {
@@ -583,7 +617,7 @@ impl<'mcx> PlScanner<'mcx> {
 
     fn location_lineno_init(&mut self) {
         self.cur_line_start = 0;
-        self.cur_line_num = 1;
+        self.cur_line_num.set(1);
         self.cur_line_end = self.scanbuf.iter().position(|&c| c == b'\n');
     }
 
@@ -601,18 +635,24 @@ impl<'mcx> PlScanner<'mcx> {
                 break;
             }
             self.cur_line_start = end + 1;
-            self.cur_line_num += 1;
+            self.cur_line_num.set(self.cur_line_num.get() + 1);
             self.cur_line_end = self.scanbuf[self.cur_line_start..]
                 .iter()
                 .position(|&c| c == b'\n')
                 .map(|i| self.cur_line_start + i);
         }
-        self.cur_line_num
+        self.cur_line_num.get()
     }
 
     /// plpgsql_latest_lineno: line of the most recently computed location.
     pub fn latest_lineno(&self) -> i32 {
-        self.cur_line_num
+        self.cur_line_num.get()
+    }
+
+    /// The live "latest line" counter, for a context callback that reports
+    /// plpgsql_latest_lineno at emission time while the parse runs.
+    pub fn latest_lineno_cell(&self) -> std::rc::Rc<std::cell::Cell<i32>> {
+        self.cur_line_num.clone()
     }
 
     /// plpgsql_scanner_errposition (pl_scanner.c:504): 1-based char position.

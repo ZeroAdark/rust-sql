@@ -1,0 +1,11 @@
+-- regress-full-rowsecurity-025
+-- INSERT INTO document VALUES (8, 44, 1, 'regress_rls_bob', 'my third manga');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:8, 2=c23:44, 3=c23:1, 4=c19:#64, 5=c25:'my third manga')
+  write INSERT rel=28335 rti=1 natts=5 indexes=(28342[1]up)
+    check rls insert rel=document (op93(v1.4, T_SQLValueFunction))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=fx64:stmt/imm 5=vl:stmt/imm
+mapped: Result ModifyTable

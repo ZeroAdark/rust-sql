@@ -81,6 +81,10 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    pub fn prepared_transaction_xids_with_subxids() -> PgResult<Vec<TransactionId>>
+);
+
+seam_core::seam!(
     // StandbyRecoverPreparedTransactions() (twophase.c): pg_subtrans entries
     // for prepared transactions during hot-standby init.
     pub fn standby_recover_prepared_transactions() -> PgResult<()>

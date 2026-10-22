@@ -1,0 +1,99 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2e s1c s2c
+step s2e: EXPLAIN (COSTS OFF) WITH c AS (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE) UPDATE job j SET state = 'running' FROM c WHERE j.id = c.id;
+QUERY PLAN                                                                              
+----------------------------------------------------------------------------------------
+Update on job j                                                                         
+  CTE c                                                                                 
+    ->  Limit                                                                           
+          ->  LockRows                                                                  
+                ->  Incremental Sort                                                    
+                      Sort Key: job.run_at, job.id                                      
+                      Presorted Key: job.run_at                                         
+                      ->  Index Scan using job_run_at on job                            
+                            Filter: ((state = 'ready'::text) AND (queue = 'mail'::text))
+  ->  Nested Loop                                                                       
+        ->  CTE Scan on c                                                               
+        ->  Index Scan using job_pkey on job j                                          
+              Index Cond: (id = c.id)                                                   
+(13 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1n s2u s1c s2c s3sel
+step s1n: UPDATE job SET note = 'held' WHERE id = 109;
+step s2u: WITH c AS (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE) UPDATE job j SET state = 'running' FROM c WHERE j.id = c.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, state, note FROM job WHERE state = 'running' OR id = 109 ORDER BY id;
+ id|state  |note
+---+-------+----
+109|running|held
+163|running|n163
+190|running|n190
+(3 rows)
+
+
+starting permutation: s1d s2u s1c s2c s3sel
+step s1d: UPDATE job SET state = 'done' WHERE id = 109;
+step s2u: WITH c AS (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE) UPDATE job j SET state = 'running' FROM c WHERE j.id = c.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, state, note FROM job WHERE state = 'running' OR id = 109 ORDER BY id;
+ id|state  |note
+---+-------+----
+ 82|running|n82 
+109|done   |n109
+163|running|n163
+190|running|n190
+(4 rows)
+
+
+starting permutation: s1x s2u s1c s2c s3sel
+step s1x: DELETE FROM job WHERE id = 109;
+step s2u: WITH c AS (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE) UPDATE job j SET state = 'running' FROM c WHERE j.id = c.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, state, note FROM job WHERE state = 'running' OR id = 109 ORDER BY id;
+ id|state  |note
+---+-------+----
+ 82|running|n82 
+163|running|n163
+190|running|n190
+(3 rows)
+
+
+starting permutation: s1n s2u s1a s2c s3sel
+step s1n: UPDATE job SET note = 'held' WHERE id = 109;
+step s2u: WITH c AS (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE) UPDATE job j SET state = 'running' FROM c WHERE j.id = c.id; <waiting ...>
+step s1a: ROLLBACK;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, state, note FROM job WHERE state = 'running' OR id = 109 ORDER BY id;
+ id|state  |note
+---+-------+----
+109|running|n109
+163|running|n163
+190|running|n190
+(3 rows)
+
+
+starting permutation: s1n s2k s1c s2c s3sel
+step s1n: UPDATE job SET note = 'held' WHERE id = 109;
+step s2k: WITH c AS (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE SKIP LOCKED) UPDATE job j SET state = 'running' FROM c WHERE j.id = c.id;
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT id, state, note FROM job WHERE state = 'running' OR id = 109 ORDER BY id;
+ id|state  |note
+---+-------+----
+ 82|running|n82 
+109|ready  |held
+163|running|n163
+190|running|n190
+(4 rows)
+

@@ -75,8 +75,8 @@ pub fn ginbuild<'mcx>(
 
     build_stats.nEntryPages += 1;
 
-    let mut tmp_ctx = MemoryContext::new_bump("Gin build temporary context");
-    let mut func_ctx = MemoryContext::new_bump("Gin build extract context");
+    let mut tmp_ctx = MemoryContext::new_wholesale("Gin build temporary context");
+    let mut func_ctx = MemoryContext::new_wholesale("Gin build extract context");
 
     // SAFETY: the accumulator never outlives tmp_ctx: it is dropped and
     // rebuilt before every reset, and dropped before tmp_ctx's final drop.
@@ -135,7 +135,7 @@ pub fn ginbuild<'mcx>(
                         break;
                     };
                     check_for_interrupts()?;
-                    let dump_ctx = MemoryContext::new_bump("gin build dump scratch");
+                    let dump_ctx = MemoryContext::new_wholesale("gin build dump scratch");
                     ginEntryInsert(
                         dump_ctx.mcx(),
                         index,
@@ -164,7 +164,7 @@ pub fn ginbuild<'mcx>(
             break;
         };
         check_for_interrupts()?;
-        let dump_ctx = MemoryContext::new_bump("gin build dump scratch");
+        let dump_ctx = MemoryContext::new_wholesale("gin build dump scratch");
         ginEntryInsert(
             dump_ctx.mcx(),
             index,

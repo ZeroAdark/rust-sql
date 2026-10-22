@@ -75,6 +75,10 @@ pub struct SubrootState<'mcx> {
     pub root: PlannerInfo<'mcx>,
     pub processed_tlist: Option<&'mcx NodeList<'mcx>>,
     pub gset_data: Option<GroupingSetsData<'mcx>>,
+    /// While this rel_subroots slot holds a parent level (its child swapped
+    /// in), the slot holding that parent's own parent, if that one is
+    /// swapped out too (C: parent_root, one level further up).
+    pub swapped_up: Option<usize>,
 }
 
 
@@ -90,7 +94,7 @@ pub struct SubPathKeyDesc<'mcx> {
     pub has_volatile: bool,
     pub sortref: u32,
     pub members: PgVec<'mcx, SubPathKeyMember<'mcx>>,
-    pub opfamilies: PgVec<'mcx, u32>,
+    pub opfamilies: &'mcx [u32],
     pub collation: u32,
     pub pk_opfamily: u32,
     pub pk_cmptype: i32,
@@ -110,6 +114,7 @@ pub struct CteSubpathInfo<'mcx> {
     pub plan_id: i32,
     pub pathkey_descs: PgVec<'mcx, SubPathKeyDesc<'mcx>>,
     pub tlist: PgVec<'mcx, SubTle<'mcx>>,
+    pub gravity_fill: bool,
 }
 
 pub struct PlannerRun<'mcx> {
@@ -118,7 +123,7 @@ pub struct PlannerRun<'mcx> {
     pub glob: Glob<'mcx>,
     pub queries: PgVec<'mcx, &'mcx Query<'mcx>>,
     /// C root->processed_tlist shares the (preprocessed) parse targetList
-    /// pointer; root.processed_tlist (NodeId form) stays empty.
+    /// pointer.
     pub processed_tlist: Option<&'mcx NodeList<'mcx>>,
     /// standard_planner's cheap parallel-mode tests; the tree scan they gate
     /// runs after the Query is sealed (see standard_planner).
@@ -153,9 +158,10 @@ pub struct PlannerRun<'mcx> {
     pub pending_part_prune_infos: NodeList<'mcx>,
     /// Pathkey inputs per materialized CTE plan (see CteSubpathInfo).
     pub cte_subpath_infos: PgVec<'mcx, CteSubpathInfo<'mcx>>,
-    /// rel_subroots index holding the parent level while its child subroot is
-    /// swapped in (C: the child's parent_root link, which selfuncs climbs for
-    /// uplevel CTE refs); set only around such re-entries.
+    /// rel_subroots index holding the current level's parent while a child
+    /// subroot is swapped in (C: the child's parent_root link, which selfuncs
+    /// climbs for uplevel CTE refs); kept by swap_with_rel_subroot, and the
+    /// slot's swapped_up links the levels above it.
     pub swapped_parent_subroot: Option<usize>,
     /// First appendrel at the active pull-up level; outer levels share this list.
     pub append_rel_base: usize,
@@ -168,8 +174,9 @@ pub struct PlannerRun<'mcx> {
     /// borrows (planning is single-threaded). COST ONLY: same lookups, same
     /// values, freed with the run's arena — bounded per cycle, never
     /// cross-query state.
-    pub att_stats_memo:
-        core::cell::RefCell<PgVec<'mcx, ((u32, i16, bool), Option<core::ptr::NonNull<()>>)>>,
+    pub att_stats_memo: core::cell::RefCell<
+        mcx::PgMemoMap<'mcx, (u32, i16, bool), Option<core::ptr::NonNull<()>>>,
+    >,
     /// Per-planning-cycle syscache memos (syscache-memo lane; the replanfix2
     /// close-out's residual bucket: operator-shape 16x, ACL mask 8x, amop
     /// probes 14x per replan). Same discipline as att_stats_memo: COST ONLY —
@@ -190,6 +197,7 @@ pub struct PlannerRun<'mcx> {
     /// DestroyPartitionDirectory) and on the error exit alike (C: the
     /// resource owner's relcache release).
     pub partition_directory: Option<core::ptr::NonNull<()>>,
+    pub gravity_finals: Option<PgVec<'mcx, (types_nodes::Node<'mcx>, [types_nodes::Node<'mcx>; 4])>>,
 }
 
 // A run is forgotten at the planner boundary (mcx reset reclaims), never
@@ -201,18 +209,18 @@ mcx::forget_safe_struct!(
         finalrowmarks, subplans, rewind_plan_ids, result_relations,
         append_relations, part_prune_infos, relation_oids, inval_items,
         param_exec_types, all_relids, has_alternative_subplans, prunable_relids },
-    SubrootState<'_> { root, processed_tlist, gset_data },
+    SubrootState<'_> { root, processed_tlist, gset_data, swapped_up },
     SubPathKeyMember<'_> { expr, datatype },
     SubPathKeyDesc<'_> { has_volatile, sortref, members, opfamilies,
         collation, pk_opfamily, pk_cmptype, pk_nulls_first },
     SubTle<'_> { expr, resno, sortgroupref },
-    CteSubpathInfo<'_> { plan_id, pathkey_descs, tlist },
+    CteSubpathInfo<'_> { plan_id, pathkey_descs, tlist, gravity_fill },
     PlannerRun<'_> { mcx, root, glob, queries, processed_tlist,
         assess_parallel, suspended_roots, subroots, rel_subroots,
         minmax_subroots, active_windows, suspended_active_windows, qp_setop,
         rowmarks, gset_data, pending_part_prune_infos, cte_subpath_infos,
         swapped_parent_subroot, append_rel_base, att_stats_memo,
-        syscache_memos, partition_directory },
+        syscache_memos, partition_directory, gravity_finals },
 );
 
 impl<'mcx> PlannerRun<'mcx> {
@@ -237,9 +245,10 @@ impl<'mcx> PlannerRun<'mcx> {
             cte_subpath_infos: PgVec::new_in(mcx),
             swapped_parent_subroot: None,
             append_rel_base: 0,
-            att_stats_memo: core::cell::RefCell::new(PgVec::new_in(mcx)),
+            att_stats_memo: core::cell::RefCell::new(mcx::PgMemoMap::new_in(mcx)),
             syscache_memos: core::cell::Cell::new(None),
             partition_directory: None,
+            gravity_finals: None,
         }
     }
 
@@ -267,11 +276,12 @@ impl<'mcx> PlannerRun<'mcx> {
         let outer = self.identify_outer_params()?;
         let mut new_root = PlannerInfo::new(self.mcx);
         new_root.query_level = self.root.query_level + 1;
+        new_root.gravity_nested = self.root.gravity_nested;
         new_root.outer_params = outer;
         let old = core::mem::replace(&mut self.root, new_root);
         let processed_tlist = self.processed_tlist.take();
         let gset_data = self.gset_data.take();
-        self.suspended_roots.push(SubrootState { root: old, processed_tlist, gset_data });
+        self.suspended_roots.push(SubrootState { root: old, processed_tlist, gset_data, swapped_up: None });
         let aw = core::mem::replace(&mut self.active_windows, PgVec::new_in(self.mcx));
         self.suspended_active_windows.push(aw);
         Ok(())
@@ -287,7 +297,7 @@ impl<'mcx> PlannerRun<'mcx> {
         let old = core::mem::replace(&mut self.root, new_root);
         let processed_tlist = self.processed_tlist.take();
         let gset_data = self.gset_data.take();
-        self.suspended_roots.push(SubrootState { root: old, processed_tlist, gset_data });
+        self.suspended_roots.push(SubrootState { root: old, processed_tlist, gset_data, swapped_up: None });
         let aw = core::mem::replace(&mut self.active_windows, PgVec::new_in(self.mcx));
         self.suspended_active_windows.push(aw);
         Ok(())
@@ -315,7 +325,7 @@ impl<'mcx> PlannerRun<'mcx> {
         self.gset_data = parent.gset_data;
         self.active_windows =
             self.suspended_active_windows.pop().expect("pop without active-windows push");
-        self.minmax_subroots.push(Some(SubrootState { root: sub, processed_tlist: sub_tlist, gset_data: None }));
+        self.minmax_subroots.push(Some(SubrootState { root: sub, processed_tlist: sub_tlist, gset_data: None, swapped_up: None }));
         self.minmax_subroots.len() - 1
     }
 
@@ -345,7 +355,7 @@ impl<'mcx> PlannerRun<'mcx> {
         self.gset_data = parent.gset_data;
         self.active_windows =
             self.suspended_active_windows.pop().expect("pop without active-windows push");
-        self.subroots.push(SubrootState { root: sub, processed_tlist: sub_tlist, gset_data: None });
+        self.subroots.push(SubrootState { root: sub, processed_tlist: sub_tlist, gset_data: None, swapped_up: None });
         self.subroots.len() - 1
     }
 
@@ -374,7 +384,7 @@ impl<'mcx> PlannerRun<'mcx> {
         self.gset_data = parent.gset_data;
         self.active_windows =
             self.suspended_active_windows.pop().expect("pop without active-windows push");
-        self.rel_subroots.push(SubrootState { root: sub, processed_tlist: sub_tlist, gset_data: None });
+        self.rel_subroots.push(SubrootState { root: sub, processed_tlist: sub_tlist, gset_data: None, swapped_up: None });
         self.rel_subroots.len() - 1
     }
 
@@ -385,6 +395,13 @@ impl<'mcx> PlannerRun<'mcx> {
         core::mem::swap(&mut self.root, &mut s.root);
         core::mem::swap(&mut self.processed_tlist, &mut s.processed_tlist);
         core::mem::swap(&mut self.gset_data, &mut s.gset_data);
+        // Entering, the slot now holds the parent; leaving, the parent's own
+        // link becomes the head again (swaps nest, each left before its parent).
+        if self.swapped_parent_subroot == Some(idx) {
+            self.swapped_parent_subroot = s.swapped_up.take();
+        } else {
+            s.swapped_up = self.swapped_parent_subroot.replace(idx);
+        }
     }
 
     /// Abandon the current child level without registering it (C's

@@ -1,30 +1,23 @@
-//! Unit-shaped wiring for crates/_support/seams_init/tests/lint-walker-arms.sh —
-//! the rail for the "missing case arm" bug class (PR #2090's sublevels-up
-//! walker without Aggref/GroupingFunc arms, PR1604-1's expr_collation without
-//! T_NextValueExpr, walsender's dropped command guard): a C switch over a
-//! NodeTag-like enum (or an IsA chain) has an arm the Rust `match` lacks, and
-//! `_ =>` hides it. tools/walker-arms/walker_arms.py pairs every C dispatch
-//! function in the pinned reference tree with its Rust port and diffs the
-//! handled labels; every gap must be adjudicated in lint-walker-arms.allow.
-//!
-//! Lives in seams_init beside the other lint-family wrappers:
-//! `cargo test -p seams_init --test lint_walker_arms`.
 
 use std::path::Path;
 use std::process::Command;
 
 #[test]
 fn walker_arms_lint_passes() {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let repo = manifest_dir()
         .join("../../..")
         .canonicalize()
         .expect("repo root");
     let script = repo.join("crates/_support/seams_init/tests/lint-walker-arms.sh");
     assert!(script.is_file(), "missing {}", script.display());
-    // The lint drives tools/walker-arms/walker_arms.py, an internal tree the
-    // public release tree does not carry; there the census cannot run at all,
-    // so skip loudly instead of failing `cargo test --workspace` for users.
-    let tool = repo.join("tools/walker-arms/walker_arms.py");
+    // The lint drives internal/tools/walker-arms/walker_arms.py, an internal
+    // tree beside the public workspace (PGRUST_INTERNAL_TOOLS overrides it) that
+    // the public release tree does not carry; there the census cannot run at
+    // all, so skip loudly instead of failing `cargo test --workspace` for users.
+    let tools = std::env::var("PGRUST_INTERNAL_TOOLS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| repo.join("../internal/tools"));
+    let tool = tools.join("walker-arms/walker_arms.py");
     if !tool.is_file() {
         eprintln!("walker_arms_lint_passes: SKIP — {} not present (public tree)", tool.display());
         return;
@@ -47,4 +40,11 @@ fn walker_arms_lint_passes() {
          its C counterpart has (port the arm C-exactly, or adjudicate the row \
          in crates/_support/seams_init/tests/lint-walker-arms.allow):\n{report}"
     );
+}
+
+/// D793-b: the checkout under test, read at run time (cargo sets CARGO_MANIFEST_DIR for every test process), never
+/// env!()'s path baked in at compile time: a test binary reused from another checkout would read that checkout's files.
+fn manifest_dir() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| std::env::var_os("CARGO_MANIFEST_DIR").map(Into::into).expect("CARGO_MANIFEST_DIR unset: run under cargo test (D793-b)"))
 }

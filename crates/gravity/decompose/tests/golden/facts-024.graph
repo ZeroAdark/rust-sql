@@ -1,0 +1,10 @@
+-- facts-024
+-- INSERT INTO fu VALUES (101, 101);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:101, 2=c23:101)
+  write INSERT rel=16416 rti=1 natts=2 indexes=(16419[2]ud, 16422[1]x)
+  outs 1=w4:val 2=w4:val
+mapped: Result ModifyTable

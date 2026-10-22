@@ -1,0 +1,11 @@
+-- regress-full-event_trigger-005
+-- SELECT * FROM dropped_objects WHERE schema_name IS NULL OR schema_name <> 'pg_toast';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=358 end=sink
+  nodes n0@0
+  source range rel=47328 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byref8:vl:win/page Attr(6):byref8:vl:win/page Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Offset:byval2:w2:val
+  filter or(isnull(v1.2), op531(v1.2, c25:'pg_toast'))
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9)
+  outs 1=vl:win/page 2=vl:win/page 3=vl:win/page 4=vl:win/page 5=vl:win/page 6=vl:win/page 7=w8:val 8=w8:val 9=w8:val
+mapped: SeqScan

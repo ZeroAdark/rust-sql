@@ -54,7 +54,7 @@ fn join_is_bounded_to_maxpgpath() {
     assert_eq!(join_path_components(&long_head, "x").len(), MAXPGPATH - 1);
     assert_eq!(join_path_components_bytes(long_head.as_bytes(), b"").len(), MAXPGPATH - 1);
     // C's join then canonicalize turns the repeated-prefix candidate into
-    // "po", never "postgres" (regression shape).
+    // "po", never "postgres" (fp-port-path#2 shape).
     assert_eq!(canonicalize_path(&joined), "po");
 }
 

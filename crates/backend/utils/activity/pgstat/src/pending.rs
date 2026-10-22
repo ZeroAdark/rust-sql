@@ -153,9 +153,10 @@ thread_local! {
     static LAST_FLUSH: Cell<TimestampTz> = const { Cell::new(0) };
     // Mirror of !pending.is_empty(), C's bare dlist_is_empty(&pgStatPending)
     // load: the nothing-pending statement must not pay the STATE RefCell
-    // borrow. Contract: never false while pending is non-empty; stale TRUE
-    // falls through to the real check (which then re-clears it).
+    // borrow. Contract: never false while pending is non-empty or EXTRA_PENDING
+    // is set; stale TRUE falls through to the real check (which then re-clears it).
     static HAVE_PENDING: Cell<bool> = const { Cell::new(false) };
+    static EXTRA_PENDING: Cell<bool> = const { Cell::new(false) };
     // Validity epoch for relcache-cached relation-pending count links
     // (rd pgstat_link): bumped by RelationPendingPtr::free before the
     // allocation is released, so a link is dereferenceable iff its stored
@@ -176,9 +177,16 @@ pub(crate) fn with_state<R>(f: impl FnOnce(&mut PgStatState) -> R) -> R {
     STATE.with(|s| {
         let mut slot = s.borrow_mut();
         let st = slot.get_or_insert_with(|| {
+            crate::note_state_built();
             // C's lazily-created pgStatPendingContext; leaked: backend-lifetime.
             let ctx: &'static MemoryContext =
                 ::mcx::session_root("PgStat Pending");
+            // D4682: the teardown retires this root; clear the slot first, so a reused thread's next
+            // session builds a new one.
+            // The pgstat shutdown hook flushed the pending entries first (the exit-callback drain precedes the teardown).
+            ::mcx::register_session_cleanup(Box::new(|| {
+                let _ = STATE.try_with(|c| drop(c.borrow_mut().take()));
+            }));
             let m = ctx.mcx();
             ManuallyDrop::new(PgStatState {
                 ctx,
@@ -200,8 +208,25 @@ pub fn pgstat_have_pending(key: PgStat_HashKey) -> bool {
     STATE.with(|s| s.borrow().as_ref().is_some_and(|st| st.have_pending(key)))
 }
 
-fn pending_is_empty() -> bool {
+pub(crate) fn pending_is_empty() -> bool {
     STATE.with(|s| s.borrow().as_ref().is_none_or(|st| st.pending.is_empty()))
+}
+
+pub fn pgstat_note_extra_pending() {
+    EXTRA_PENDING.with(|c| c.set(true));
+    HAVE_PENDING.with(|c| c.set(true));
+}
+
+pub fn pgstat_install_extra_flush(flush: fn()) {
+    if !pgstat_seams::pgstat_flush_extra::is_installed() {
+        pgstat_seams::pgstat_flush_extra::install(flush);
+    }
+}
+
+fn flush_extra() {
+    if EXTRA_PENDING.with(|c| c.replace(false)) {
+        pgstat_seams::pgstat_flush_extra::call_if(|f| f());
+    }
 }
 
 pub fn pgstat_report_fixed_set() {
@@ -249,7 +274,8 @@ pub fn pgstat_report_stat(mut force: bool) -> i64 {
 #[cold]
 #[inline(never)]
 fn report_stat_slow(mut force: bool) -> i64 {
-    if pending_is_empty() && !pgstat_report_fixed() {
+    let extra = EXTRA_PENDING.with(|c| c.get());
+    if pending_is_empty() && !pgstat_report_fixed() && !extra {
         HAVE_PENDING.with(|c| c.set(false));
         return 0;
     }
@@ -273,6 +299,14 @@ fn report_stat_slow(mut force: bool) -> i64 {
             }
             return PGSTAT_IDLE_INTERVAL;
         }
+    }
+
+    flush_extra();
+    if extra && pending_is_empty() && !pgstat_report_fixed() {
+        LAST_FLUSH.with(|c| c.set(now));
+        PENDING_SINCE.with(|c| c.set(0));
+        HAVE_PENDING.with(|c| c.set(false));
+        return 0;
     }
 
     database::pgstat_update_dbstats(now);

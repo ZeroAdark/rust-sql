@@ -9,6 +9,7 @@ name = "plpgsql"
 path = "src/lib.rs"
 
 [dependencies]
+types_guc = { path = "../../_support/types/types_guc" }
 types_resowner = { path = "../../_support/types/types_resowner" }
 pg_string = { path = "../../common/string" }
 pgsync = { path = "../../_support/pgsync" }
@@ -77,11 +78,14 @@ heaptuple = { path = "../../backend/access/common/heaptuple" }
 types_trigger = { path = "../../_support/types/types_trigger" }
 types_trigger_call = { path = "../../_support/types/types_trigger_call" }
 varlena = { path = "../../backend/utils/adt/varlena" }
+inval = { path = "../../backend/utils/cache/inval" }
+copyfuncs = { path = "../../backend/nodes/copyfuncs" }
 
 [dev-dependencies]
+xact_seams = { path = "../../backend/access/transam/xact_seams" }
+scalar_seams = { path = "../../backend/utils/adt/scalar_seams" }
 dbcommands_seams = { path = "../../backend/commands/dbcommands_seams" }
 aclchk_seams = { path = "../../backend/catalog/aclchk_seams" }
-inval = { path = "../../backend/utils/cache/inval" }
 miscinit_seams = { path = "../../backend/utils/init/miscinit_seams" }
 namespace_seams = { path = "../../backend/catalog/namespace_seams" }
 relation_seams = { path = "../../backend/access/common/relation_seams" }

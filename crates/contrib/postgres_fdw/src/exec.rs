@@ -84,12 +84,12 @@ impl AttInMeta {
     /// relation itself (RelationGetRelationName + the tupdesc's attnames).
     pub(crate) fn build(relname: &str, tupdesc: &TupleDescData<'_>) -> PgResult<AttInMeta> {
         let natts = tupdesc.natts as usize;
-        let mut ctx = Vec::with_capacity(natts);
-        let mut in_funcs = Vec::with_capacity(natts);
-        let mut typioparams = Vec::with_capacity(natts);
-        let mut typmods = Vec::with_capacity(natts);
-        let mut typlens = Vec::with_capacity(natts);
-        let mut typbyvals = Vec::with_capacity(natts);
+        let mut ctx = ::mcx::std_vec_with_capacity("postgres_fdw", natts)?;
+        let mut in_funcs = ::mcx::std_vec_with_capacity("postgres_fdw", natts)?;
+        let mut typioparams = ::mcx::std_vec_with_capacity("postgres_fdw", natts)?;
+        let mut typmods = ::mcx::std_vec_with_capacity("postgres_fdw", natts)?;
+        let mut typlens = ::mcx::std_vec_with_capacity("postgres_fdw", natts)?;
+        let mut typbyvals = ::mcx::std_vec_with_capacity("postgres_fdw", natts)?;
         for i in 0..natts {
             let att = tupdesc.attr(i);
             ctx.push(ConvCtx::Column(
@@ -269,6 +269,34 @@ fn tupdesc_for_join_scan_tuples<'mcx>(
     Ok(tupdesc)
 }
 
+// AttInMeta for join/upper scan tuples: they follow the fdw_scan_tlist-shaped
+// slot; a Var entry names its relation's alias, an expression only its
+// position (postgres_fdw.c:7776-7811). Shared with a direct modify on a join.
+pub(crate) fn join_scan_attin<'mcx>(
+    node: &ForeignScanState<'mcx>,
+    estate: &EStateData<'mcx>,
+) -> PgResult<AttInMeta> {
+    let fsplan = node.plan;
+    let desc = tupdesc_for_join_scan_tuples(node, estate)?;
+    let mut attin = AttInMeta::build("foreign join", &desc)?;
+    let mut ctx = ::mcx::std_vec_with_capacity("postgres_fdw", desc.natts as usize)?;
+    for tle_node in fsplan.fdw_scan_tlist.iter() {
+        let tle = tle_node.as_target_entry().expect("fdw_scan_tlist holds TargetEntries");
+        let mut c = ConvCtx::Expr;
+        if let Some(var) = tle.expr.as_var() {
+            if var.varno > 0 {
+                let rte = estate.es_range_table[(var.varno - 1) as usize];
+                let (relname, colnames) = rte_eref_names(rte);
+                c = var_conv_ctx(&relname, &colnames, var.varattno as i32);
+            }
+        }
+        ctx.push(c);
+    }
+    ::mcx::std_vec_resize("postgres_fdw", &mut ctx, desc.natts as usize, ConvCtx::Expr)?;
+    attin.set_scan_context(ctx, None);
+    Ok(attin)
+}
+
 // postgresBeginForeignScan.
 pub(crate) fn begin_foreign_scan<'mcx>(
     node: &mut ForeignScanState<'mcx>,
@@ -345,26 +373,7 @@ pub(crate) fn begin_foreign_scan<'mcx>(
         let rte = estate.es_range_table[(fsplan.scan.scanrelid - 1) as usize];
         base_scan_attin(rel.name(), &rel.rd_att, rte)?
     } else {
-        // Join/upper scan tuples follow the fdw_scan_tlist-shaped slot; a Var
-        // entry names its relation's alias, an expression only its position.
-        let desc = tupdesc_for_join_scan_tuples(node, estate)?;
-        let mut attin = AttInMeta::build("foreign join", &desc)?;
-        let mut ctx = Vec::with_capacity(desc.natts as usize);
-        for tle_node in fsplan.fdw_scan_tlist.iter() {
-            let tle = tle_node.as_target_entry().expect("fdw_scan_tlist holds TargetEntries");
-            let mut c = ConvCtx::Expr;
-            if let Some(var) = tle.expr.as_var() {
-                if var.varno > 0 {
-                    let rte = estate.es_range_table[(var.varno - 1) as usize];
-                    let (relname, colnames) = rte_eref_names(rte);
-                    c = var_conv_ctx(&relname, &colnames, var.varattno as i32);
-                }
-            }
-            ctx.push(c);
-        }
-        ctx.resize(desc.natts as usize, ConvCtx::Expr);
-        attin.set_scan_context(ctx, None);
-        attin
+        join_scan_attin(node, estate)?
     };
 
     let (param_flinfo, param_exprs) = prepare_query_params(estate, &fsplan.fdw_exprs)?;
@@ -384,7 +393,7 @@ pub(crate) fn begin_foreign_scan<'mcx>(
         attin,
         param_flinfo,
         param_exprs,
-        batch_mcx: mcx::MemoryContext::new_bump("postgres_fdw tuple data"),
+        batch_mcx: mcx::MemoryContext::new_wholesale("postgres_fdw tuple data"),
         tuples: Vec::new(),
         next_tuple: 0,
         fetch_ct_2: 0,
@@ -400,8 +409,8 @@ pub(crate) fn prepare_query_params<'mcx>(
     estate: &mut EStateData<'mcx>,
     fdw_exprs: &NodeList<'mcx>,
 ) -> PgResult<(Vec<FmgrInfo>, Vec<PgBox<'static, ExprState<'static>>>)> {
-    let mut param_flinfo = Vec::with_capacity(fdw_exprs.len());
-    let mut param_exprs = Vec::with_capacity(fdw_exprs.len());
+    let mut param_flinfo = ::mcx::std_vec_with_capacity("postgres_fdw", fdw_exprs.len())?;
+    let mut param_exprs = ::mcx::std_vec_with_capacity("postgres_fdw", fdw_exprs.len())?;
     for expr in fdw_exprs.iter() {
         let (typoutput, _isvarlena) =
             lsyscache::getTypeOutputInfo(nodes_core::node_funcs::expr_type(expr))?;
@@ -436,7 +445,7 @@ pub(crate) fn eval_query_params<'mcx>(
     estate: &mut EStateData<'mcx>,
     ecxt: EcxtId,
 ) -> PgResult<Vec<NullableDatum>> {
-    let mut values = Vec::with_capacity(param_exprs.len());
+    let mut values = ::mcx::std_vec_with_capacity("postgres_fdw", param_exprs.len())?;
     for expr in param_exprs.iter_mut() {
         // SAFETY: the reverse of the compile-time restamp (es_query_cxt-lived).
         let expr = unsafe {
@@ -460,9 +469,9 @@ pub(crate) fn process_query_params<'mcx>(
 ) -> PgResult<Vec<Option<String>>> {
     let nestlevel = crate::transmission::set_transmission_modes();
     let r = (|| -> PgResult<Vec<Option<String>>> {
-        let scratch = mcx::MemoryContext::new_bump("postgres_fdw param output");
+        let scratch = mcx::MemoryContext::new_wholesale("postgres_fdw param output");
         let datums = eval_query_params(param_exprs, estate, ecxt)?;
-        let mut values: Vec<Option<String>> = Vec::with_capacity(datums.len());
+        let mut values: Vec<Option<String>> = ::mcx::std_vec_with_capacity("postgres_fdw", datums.len())?;
         for (nd, flinfo) in datums.iter().zip(param_flinfo.iter_mut()) {
             if nd.isnull {
                 values.push(None);
@@ -514,7 +523,7 @@ fn absorb_batch(state: &mut PgFdwScanState, res: &pgclient::QueryResult) -> PgRe
         return Err(connection::remote_error(res, Some(state.query)));
     }
     let numrows = res.rows.len();
-    state.tuples.reserve(numrows);
+    ::mcx::std_vec_reserve("postgres_fdw", &mut state.tuples, numrows)?;
     for row in &res.rows {
         let tup = make_tuple_from_result_row(state, row)?;
         state.tuples.push(tup);
@@ -586,8 +595,8 @@ fn convert_result_row_inner(
 ) -> PgResult<(Vec<Datum>, Vec<bool>, types_tuple::ItemPointerData)> {
     let natts = attin.natts;
     let nfields = row.len();
-    let mut values = vec![Datum::null(); natts];
-    let mut nulls = vec![true; natts];
+    let mut values = ::mcx::std_vec_from_elem("postgres_fdw", Datum::null(), natts)?;
+    let mut nulls = ::mcx::std_vec_from_elem("postgres_fdw", true, natts)?;
     let mut ctid = types_tuple::ItemPointerData::default();
     types_tuple::itemptr::ItemPointerSetInvalid(&mut ctid);
 
@@ -760,18 +769,7 @@ pub(crate) fn iterate_foreign_scan<'mcx>(
     let slot = estate.slot_mut(scan_slot);
     exectuples::exec_clear_tuple(slot, qmcx);
     if fs_system_col {
-        // make_tuple_from_result_row's heap_form_tuple arm: xmin/xmax/cmin
-        // stomped to zero, the retrieved ctid in t_self and t_ctid.
-        let desc = slot.base().tts_tupleDescriptor.clone().expect("scan slot descriptor");
-        let mut tuple = heaptuple::heap_form_tuple(qmcx, &desc, values, nulls)?;
-        let t = tuple.as_tuple_mut();
-        t.t_self = ctid;
-        let hdr = t.t_data_mut();
-        hdr.t_ctid = ctid;
-        hdr.set_xmax(types_core::xact::InvalidTransactionId);
-        hdr.set_xmin(types_core::xact::InvalidTransactionId);
-        hdr.set_cmin(types_core::xact::InvalidTransactionId);
-        exectuples::exec_store_heap_tuple_owned(slot, qmcx, tuple);
+        store_remote_heap_tuple(slot, qmcx, values, nulls, ctid)?;
         return Ok(true);
     }
     {
@@ -786,6 +784,28 @@ pub(crate) fn iterate_foreign_scan<'mcx>(
     }
     exectuples::exec_store_virtual_tuple(slot);
     Ok(true)
+}
+
+// make_tuple_from_result_row's heap_form_tuple arm: xmin/xmax/cmin stomped to
+// zero, the retrieved ctid in t_self and t_ctid, so system columns read from
+// the slot answer as in C.
+pub(crate) fn store_remote_heap_tuple<'mcx>(
+    slot: &mut types_slot::SlotData<'mcx>,
+    qmcx: mcx::Mcx<'mcx>,
+    values: &[Datum],
+    nulls: &[bool],
+    ctid: types_tuple::ItemPointerData,
+) -> PgResult<()> {
+    let desc = slot.base().tts_tupleDescriptor.clone().expect("slot descriptor");
+    let mut tuple = heaptuple::heap_form_tuple(qmcx, &desc, values, nulls)?;
+    let t = tuple.as_tuple_mut();
+    t.t_self = ctid;
+    let hdr = t.t_data_mut();
+    hdr.t_ctid = ctid;
+    hdr.set_xmax(types_core::xact::InvalidTransactionId);
+    hdr.set_xmin(types_core::xact::InvalidTransactionId);
+    hdr.set_cmin(types_core::xact::InvalidTransactionId);
+    exectuples::exec_force_store_heap_tuple_owned(tuple, slot, qmcx)
 }
 
 // postgresReScanForeignScan. C MOVEs BACKWARD on pre-15 remotes; we always
@@ -902,7 +922,7 @@ pub(crate) fn foreign_async_configure_wait<'mcx>(
     debug_assert!(waiteventset::GetNumRegisteredWaitEvents(wait.set) >= 1);
     match connection::pending_fetch(conn_key)? {
         None => fetch_more_data_begin(node, estate, areq)?,
-        Some(p) if p.requestor_plan_id != areq.requestor_plan_id => {
+        Some(p) if p.requestor_id != areq.requestor_id => {
             // In-flight request from another Append, which may not need more
             // tuples: prefer skipping this request over processing it. But
             // never leave the set with only the postmaster-death event.
@@ -1057,7 +1077,7 @@ fn fetch_more_data_begin<'mcx>(
         state.conn_key,
         &sql,
         state.cursor_number,
-        areq.requestor_plan_id,
+        areq.requestor_id,
         state.query,
     )
 }

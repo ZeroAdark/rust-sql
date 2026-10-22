@@ -1,0 +1,24 @@
+-- bench-012
+-- SELECT a, count(*), sum(b) FROM g GROUP BY a ORDER BY a /* Q12 */;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=2 eligible rows=2000000 end=breaker(slot=0 HashAgg)
+  desc owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n1@1 n0@2^
+  source range rel=16395 rti=1 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.2, 2=v1.3)
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=w8:val
+  outs 1=w8:val 2=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=agg2803*(), 3=agg2107(1=outer.2))
+  outs 1=w4:val 2=w8:val 3=vl:call2107
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8,SumI128@16]+valid 40B order=1+
+group slot=0 producer=p0 node=0 form=Sorted hints=[] layout=[I32]->[Count@8,SumI128@16]+valid 40B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+  agg aggno=1 fn=2107 reg=SumInt128 slot=1 count_slot=- final=Int128Sum class=SumI128 trans=Abi(SumI128) mods=[] expr=agg2107(1=outer.2)
+mapped: SeqScan Agg

@@ -16,26 +16,50 @@ pub fn limitpos(x: u32) -> u16 {
     }
 }
 
+// Plain data (no drop glue); the MaxAllocSize ceiling counts C's sizeof(ParsedWord) units.
+#[derive(Clone, Copy)]
 pub struct ParsedWord<'mcx> {
-    pub word: PgVec<'mcx, u8>,
+    pub word: &'mcx [u8],
     pub nvariant: u16,
     pub flags: u16,
     pub pos: u16,
-    pub apos: PgVec<'mcx, u16>,
+    pub apos: &'mcx [u16],
 }
+
+pub const C_PARSED_WORD_SIZE: usize = 24;
+pub const MAX_LENWORDS: usize = ::mcx::MAX_ALLOC_SIZE / C_PARSED_WORD_SIZE;
 
 pub struct ParsedText<'mcx> {
     pub words: PgVec<'mcx, ParsedWord<'mcx>>,
     pub pos: u32,
+    lenwords: usize,
 }
 
 impl<'mcx> ParsedText<'mcx> {
     pub fn with_capacity(mcx: Mcx<'mcx>, n: usize) -> PgResult<Self> {
+        ::mcx::check_alloc_size(n.saturating_mul(C_PARSED_WORD_SIZE))?;
         Ok(ParsedText {
-            words: { let mut v = ::mcx::PgVec::new_in(mcx); v.try_reserve_exact(n).map_err(|_| mcx.oom(n))?; v },
+            words: ::mcx::vec_with_capacity_huge_in(mcx, n)?,
             pos: 0,
+            lenwords: n,
         })
     }
+
+    pub fn push(&mut self, w: ParsedWord<'mcx>) -> PgResult<()> {
+        if self.words.len() >= self.lenwords {
+            self.lenwords = grow_lenwords(self.lenwords.max(1))?;
+            let additional = self.lenwords - self.words.len();
+            ::mcx::vec_reserve_huge(&mut self.words, additional)?;
+        }
+        self.words.push(w);
+        Ok(())
+    }
+}
+
+pub(crate) fn grow_lenwords(lenwords: usize) -> PgResult<usize> {
+    let lenwords = lenwords.saturating_mul(2);
+    ::mcx::check_alloc_size(lenwords.saturating_mul(C_PARSED_WORD_SIZE))?;
+    Ok(lenwords)
 }
 
 // The ts_cache/wparser surface parsetext consumes; the concrete impl (to_tsany)
@@ -307,13 +331,13 @@ pub fn parsetext<'mcx, E: TsParseEnv<'mcx>>(
                 if lex.flags & TSL_ADDPOS != 0 {
                     prs.pos += 1;
                 }
-                prs.words.push(ParsedWord {
+                prs.push(ParsedWord {
                     nvariant: lex.nvariant,
                     flags: lex.flags & TSL_PREFIX,
                     pos: limitpos(prs.pos),
-                    apos: PgVec::new_in(mcx),
-                    word: lex.lexeme,
-                });
+                    apos: &[],
+                    word: lex.lexeme.leak(),
+                })?;
             }
         }
 

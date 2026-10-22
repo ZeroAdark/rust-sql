@@ -27,12 +27,12 @@ const LIBRARY: &str = "ltree";
 unsafe fn arg_image<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<Vec<u8>> {
     // PG_FREE_IF_COPY parity (ltree_op.c:121): the detoasted copy dies here
     // instead of accumulating in a sort's context.
-    let scratch = mcx::MemoryContext::new_bump("ltree arg detoast");
+    let scratch = mcx::MemoryContext::new_wholesale("ltree arg detoast");
     // SAFETY: forwarded caller contract — non-null varlena arg (strict fn).
     let v = unsafe { types_fmgr::datum_varlena_packed(fcinfo.arg(i), scratch.mcx())? };
     let payload = v.data();
     let total = payload.len() + repr::VARHDRSZ;
-    let mut img = vec![0u8; total];
+    let mut img = ::mcx::std_vec_from_elem("ltree", 0u8, total)?;
     repr::set_varsize(&mut img, total);
     img[repr::VARHDRSZ..].copy_from_slice(payload);
     Ok(img)
@@ -266,13 +266,13 @@ fn fc_ltree_addltree(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult
 
 fn fc_ltree_addtext(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let a = unsafe { arg_image(fcinfo, 0)? };
-    let b = cstring_prefix(unsafe { arg_payload(fcinfo, 1)? }).to_vec();
+    let b = ::mcx::std_vec_from_slice("ltree", &cstring_prefix(unsafe { arg_payload(fcinfo, 1)? }))?;
     let tmp = io::parse_ltree(&b)?;
     ret_image(fcinfo, &op::ltree_concat(&a, &tmp)?)
 }
 
 fn fc_ltree_textadd(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let b = cstring_prefix(unsafe { arg_payload(fcinfo, 0)? }).to_vec();
+    let b = ::mcx::std_vec_from_slice("ltree", &cstring_prefix(unsafe { arg_payload(fcinfo, 0)? }))?;
     let a = unsafe { arg_image(fcinfo, 1)? };
     let tmp = io::parse_ltree(&b)?;
     ret_image(fcinfo, &op::ltree_concat(&tmp, &a)?)
@@ -289,14 +289,14 @@ fn fc_lca(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
         .map(|i| unsafe { arg_image(fcinfo, i) })
         .collect::<PgResult<_>>()?;
     let refs: Vec<&[u8]> = imgs.iter().map(|v| v.as_slice()).collect();
-    match op::lca_inner(&refs) {
+    match op::lca_inner(&refs)? {
         Some(img) => ret_image(fcinfo, &img),
         None => Ok(fcinfo.return_null()),
     }
 }
 
 fn fc_text2ltree(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let s = cstring_prefix(unsafe { arg_payload(fcinfo, 0)? }).to_vec();
+    let s = ::mcx::std_vec_from_slice("ltree", &cstring_prefix(unsafe { arg_payload(fcinfo, 0)? }))?;
     ret_image(fcinfo, &io::parse_ltree(&s)?)
 }
 
@@ -364,7 +364,7 @@ fn array_iter_isparent(la: &[u8], query: &[u8], risparent: bool) -> PgResult<Opt
             op::inner_isparent(query, item)
         };
         if matched {
-            return Ok(Some(item.to_vec()));
+            return Ok(Some(::mcx::std_vec_from_slice("ltree", &item)?));
         }
     }
     Ok(None)
@@ -375,7 +375,7 @@ fn array_iter_ltq(la: &[u8], query: &[u8]) -> PgResult<Option<Vec<u8>>> {
     arr.check_1d_no_nulls()?;
     for item in arr.elements() {
         if op::ltq_regex(item, query)? {
-            return Ok(Some(item.to_vec()));
+            return Ok(Some(::mcx::std_vec_from_slice("ltree", &item)?));
         }
     }
     Ok(None)
@@ -386,7 +386,7 @@ fn array_iter_ltxtq(la: &[u8], query: &[u8]) -> PgResult<Option<Vec<u8>>> {
     arr.check_1d_no_nulls()?;
     for item in arr.elements() {
         if op::ltxtq_exec(item, query)? {
-            return Ok(Some(item.to_vec()));
+            return Ok(Some(::mcx::std_vec_from_slice("ltree", &item)?));
         }
     }
     Ok(None)
@@ -465,7 +465,7 @@ fn fc__lca(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let arr = array::LtreeArray::parse(&la);
     arr.check_1d_no_nulls()?;
     let items: Vec<&[u8]> = arr.elements().collect();
-    match op::lca_inner(&items) {
+    match op::lca_inner(&items)? {
         Some(img) => ret_image(fcinfo, &img),
         None => Ok(fcinfo.return_null()),
     }
@@ -574,21 +574,21 @@ fn fc_ltree_same(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
     Ok(fcinfo.arg(2))
 }
 
-fn entryvec_images(fcinfo: &Fcinfo) -> (usize, Vec<(Vec<u8>, bool)>) {
+fn entryvec_images(fcinfo: &Fcinfo) -> PgResult<(usize, Vec<(Vec<u8>, bool)>)> {
     // SAFETY: gist fmgr protocol.
     let entryvec = unsafe { &*(fcinfo.arg(0).as_usize() as *const GistEntryVector) };
     let n = entryvec.n as usize;
     // Index 0 is real for union; picksplit treats it as the placeholder slot.
-    let entries = entryvec.vector[..n]
-        .iter()
-        .map(|e| (key_image(e.key).to_vec(), false))
-        .collect();
-    (n, entries)
+    let mut entries = ::mcx::std_vec_with_capacity("ltree", n)?;
+    for e in &entryvec.vector[..n] {
+        entries.push((::mcx::std_vec_from_slice("ltree", key_image(e.key))?, false));
+    }
+    Ok((n, entries))
 }
 
 fn fc_ltree_union(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let siglen = get_siglen(&f, gist::LTREE_SIGLEN_DEFAULT);
-    let (_, entries) = entryvec_images(fcinfo);
+    let (_, entries) = entryvec_images(fcinfo)?;
     let img = gist::ltree_union(&entries, siglen)?;
     let size_out = fcinfo.arg(1).as_usize() as *mut i32;
     // SAFETY: size out-param live in the caller frame.
@@ -616,10 +616,10 @@ fn picksplit_common(
     let v = unsafe { &mut *(fcinfo.arg(1).as_usize() as *mut GistSplitVec) };
     let n = entryvec.n as usize;
     // entries[0] is the 1-based placeholder the cores expect.
-    let mut entries: Vec<(Vec<u8>, bool)> = Vec::with_capacity(n);
+    let mut entries: Vec<(Vec<u8>, bool)> = ::mcx::std_vec_with_capacity("ltree", n)?;
     entries.push((Vec::new(), false));
     for e in &entryvec.vector[1..n] {
-        entries.push((key_image(e.key).to_vec(), false));
+        entries.push((::mcx::std_vec_from_slice("ltree", &key_image(e.key))?, false));
     }
     let (spl_left, spl_right, ldatum, rdatum) = split(&entries)?;
     v.spl_left = spl_left;
@@ -637,7 +637,7 @@ fn fc_ltree_picksplit(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult
 fn gist_query_image(fcinfo: &Fcinfo) -> PgResult<Vec<u8>> {
     // SAFETY: the armed result mcx outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    Ok(detoasted_image(mcx, fcinfo.arg(1))?.to_vec())
+    Ok(::mcx::std_vec_from_slice("ltree", &detoasted_image(mcx, fcinfo.arg(1))?)?)
 }
 
 fn fc_ltree_consistent(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -708,7 +708,7 @@ fn fc__ltree_same(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Dat
 #[allow(non_snake_case)] // C-parity name
 fn fc__ltree_union(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let siglen = get_siglen(&f, gist::LTREE_ASIGLEN_DEFAULT);
-    let (_, entries) = entryvec_images(fcinfo);
+    let (_, entries) = entryvec_images(fcinfo)?;
     let img = gist::array_union(&entries, siglen)?;
     let size_out = fcinfo.arg(1).as_usize() as *mut i32;
     // SAFETY: size out-param live in the caller frame.
@@ -949,7 +949,7 @@ mod tests {
     fn lca() {
         let a = img("a.b.c.d");
         let b = img("a.b.e");
-        let r = op::lca_inner(&[a.as_slice(), b.as_slice()]).unwrap();
+        let r = op::lca_inner(&[a.as_slice(), b.as_slice()]).unwrap().unwrap();
         assert_eq!(io::deparse_ltree(&r), b"a.b");
     }
 

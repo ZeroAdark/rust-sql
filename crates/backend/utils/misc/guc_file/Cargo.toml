@@ -9,6 +9,7 @@ name = "guc_file"
 path = "src/lib.rs"
 
 [dependencies]
+conffiles = { path = "../conffiles" }
 types_error = { path = "../../../../_support/types/types_error" }
 types_guc = { path = "../../../../_support/types/types_guc" }
 elog = { path = "../../error/elog" }

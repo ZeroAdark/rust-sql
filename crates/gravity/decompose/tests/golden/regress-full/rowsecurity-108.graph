@@ -1,0 +1,15 @@
+-- regress-full-rowsecurity-108
+-- UPDATE current_check SET payload = payload || '_new' WHERE currentid = 2 RETURNING *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=op654(v1.2, c25:'_new'), 2j=v1.-1)
+  write UPDATE rel=28600 rti=1 natts=3 indexes=() set=(2) returning
+    check rls update rel=current_check (op260(v1.3, T_SQLValueFunction))
+    check rls update rel=current_check (op96(op530(v1.1, c23:2), c23:0))
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  outs 1=vl:call1258 2=fx6:row
+  outs 1=w4:val 2=vl:row 3=vl:row
+mapped: Result ModifyTable

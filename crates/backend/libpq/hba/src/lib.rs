@@ -5,8 +5,8 @@
 //! clientcert=verify-full, as in C's USE_SSL build; ldap parses all options
 //! including ldapurl; oauth parses issuer/scope/validator/
 //! delegate_ident_mapping + check_oauth_validator; gss parses its realm
-//! options — authentication only, hostgssenc lines parse but never match
-//! since gssencmode is unimplemented). Regex auth tokens compile and match
+//! options; hostgssenc / hostnogssenc match on the connection's GSSAPI
+//! encryption state). Regex auth tokens compile and match
 //! via the house regex engine. sspi / bsd are rejected as "not supported by
 //! this build", faithful to a no-SSPI/BSD C build.
 
@@ -25,17 +25,20 @@ mod token;
 mod tokenize;
 
 
+use std::sync::Arc;
+
 use elog::ereport;
 pub use pgstrcasecmp::pg_strcasecmp;
 use types_core::init::UserAuth;
 use types_error::{ErrorLevel, ErrorLocation, PgResult, SqlState, ERRCODE_CONFIG_FILE_ERROR, LOG};
-use types_startup::{AuthToken, HbaLine, Port};
+use types_startup::{AuthToken, HbaLine, ParsedAuthLines, Port};
 
-pub use check::check_hba;
+pub use check::{check_hba, HbaMatch, RemoteHostname};
 pub use parse_hba::parse_hba_line;
-pub use parse_ident::{check_ident_usermap, parse_ident_line, IdentLine};
+pub use parse_ident::{check_ident_usermap, parse_ident_line};
 pub use token::{free_auth_file, open_auth_file, pg_isblank, FileHandle};
 pub use tokenize::tokenize_auth_file;
+pub use types_startup::IdentLine;
 
 pub const CONF_FILE_START_DEPTH: i32 = 0;
 pub const CONF_FILE_MAX_DEPTH: i32 = 10;
@@ -79,18 +82,40 @@ pub struct TokenizedAuthLine {
     pub err_msg: Option<String>,
 }
 
-// C's parsed_hba_lines live in the postmaster and reach backends via fork;
-// the thread rendering is a process global (loads at startup/SIGHUP on the
-// postmaster thread, each backend reads once at auth).
-static PARSED_HBA_LINES: std::sync::RwLock<Vec<HbaLine>> = std::sync::RwLock::new(Vec::new());
-static PARSED_IDENT_LINES: std::sync::RwLock<Vec<IdentLine>> = std::sync::RwLock::new(Vec::new());
+// Postmaster-owned; a backend reads the pair it inherited at launch (InheritParsedAuthLines).
+type Lines<T> = std::sync::RwLock<Option<Arc<Vec<T>>>>;
+static PARSED_HBA_LINES: Lines<HbaLine> = Lines::<HbaLine>::new(None);
+static PARSED_IDENT_LINES: Lines<IdentLine> = Lines::<IdentLine>::new(None);
+
+fn lines_snapshot<T>(lines: &Lines<T>) -> Arc<Vec<T>> {
+    lines
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
+}
+
+pub fn parsed_auth_lines() -> ParsedAuthLines {
+    ParsedAuthLines {
+        hba: lines_snapshot(&PARSED_HBA_LINES),
+        ident: lines_snapshot(&PARSED_IDENT_LINES),
+    }
+}
 
 pub(crate) fn with_parsed_hba_lines<R>(f: impl FnOnce(&[HbaLine]) -> R) -> R {
-    f(&PARSED_HBA_LINES.read().unwrap_or_else(|e| e.into_inner()))
+    if let Some(inherited) = init_small::globals::InheritedParsedAuthLines() {
+        return f(&inherited.hba);
+    }
+    let lines = PARSED_HBA_LINES.read().unwrap_or_else(|e| e.into_inner());
+    f(lines.as_deref().map_or(&[], Vec::as_slice))
 }
 
 pub(crate) fn with_parsed_ident_lines<R>(f: impl FnOnce(&[IdentLine]) -> R) -> R {
-    f(&PARSED_IDENT_LINES.read().unwrap_or_else(|e| e.into_inner()))
+    if let Some(inherited) = init_small::globals::InheritedParsedAuthLines() {
+        return f(&inherited.ident);
+    }
+    let lines = PARSED_IDENT_LINES.read().unwrap_or_else(|e| e.into_inner());
+    f(lines.as_deref().map_or(&[], Vec::as_slice))
 }
 
 pub(crate) fn token_is_member_check(t: &AuthToken) -> bool {
@@ -210,7 +235,8 @@ pub fn load_hba() -> PgResult<bool> {
         return Ok(false);
     }
 
-    *PARSED_HBA_LINES.write().unwrap_or_else(|e| e.into_inner()) = new_parsed_lines;
+    let mut lines = PARSED_HBA_LINES.write().unwrap_or_else(|e| e.into_inner());
+    *lines = Some(Arc::new(new_parsed_lines));
     Ok(true)
 }
 
@@ -247,12 +273,16 @@ pub fn load_ident() -> PgResult<bool> {
         return Ok(false);
     }
 
-    *PARSED_IDENT_LINES.write().unwrap_or_else(|e| e.into_inner()) = new_parsed_lines;
+    let mut lines = PARSED_IDENT_LINES
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    *lines = Some(Arc::new(new_parsed_lines));
     Ok(true)
 }
 
 pub fn hba_getauthmethod(port: &mut Port) -> PgResult<()> {
-    check_hba(port)
+    check_hba(port)?.store(port);
+    Ok(())
 }
 
 pub fn hba_authname(auth_method: UserAuth) -> &'static str {

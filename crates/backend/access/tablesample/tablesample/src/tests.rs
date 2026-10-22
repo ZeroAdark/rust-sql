@@ -55,7 +55,7 @@ fn system_blocks_deterministic() {
         s.begin_sample_scan(&[Datum::from_f32(40.0)], 99).unwrap();
         let mut blocks = vec![];
         loop {
-            let b = s.next_sample_block(50, 0);
+            let b = s.next_sample_block(50, 0).unwrap();
             if b == types_core::InvalidBlockNumber {
                 break;
             }
@@ -123,7 +123,7 @@ fn extension_states_route_params() {
     let mut s = Tsm::SystemRows.init_state();
     let (bulkread, pagemode) = s.begin_sample_scan(&[Datum::from_i64(3)], 11).unwrap();
     assert!(bulkread && pagemode);
-    let b = s.next_sample_block(4, 0);
+    let b = s.next_sample_block(4, 0).unwrap();
     assert!(b < 4);
     assert_eq!(s.next_sample_tuple(b, 2, 0), FirstOffsetNumber);
     assert_eq!(s.next_sample_tuple(b, 2, 3), InvalidOffsetNumber);
@@ -133,7 +133,7 @@ fn extension_states_route_params() {
     let mut s = Tsm::SystemTime.init_state();
     let (bulkread, pagemode) = s.begin_sample_scan(&[Datum::from_f64(0.0)], 11).unwrap();
     assert!(bulkread && pagemode);
-    assert_eq!(s.next_sample_block(4, 0), types_core::InvalidBlockNumber);
+    assert_eq!(s.next_sample_block(4, 0).unwrap(), types_core::InvalidBlockNumber);
     let err = Tsm::SystemTime.init_state().begin_sample_scan(&[Datum::from_f64(-1.0)], 0).unwrap_err();
     assert_eq!(err.sqlstate(), ERRCODE_INVALID_TABLESAMPLE_ARGUMENT);
 }
@@ -152,7 +152,7 @@ fn extension_states_route_params() {
 #[should_panic(expected = "NextSampleBlock called on a TSM without one")]
 fn bernoulli_next_sample_block_panics() {
     let mut s = Tsm::Bernoulli.init_state();
-    s.next_sample_block(1, 0);
+    let _ = s.next_sample_block(1, 0);
 }
 
 /// Witness for the Tsm::get census carve (GetTsmRoutine syscache/fmgr
@@ -269,6 +269,42 @@ fn sample_scan_get_sample_size_carve_witness() {
     )
     .unwrap();
     Tsm::SystemTime.sample_scan_get_sample_size(m, &f8null, 64, 1000.0, 4.0).unwrap();
+}
+
+#[test]
+fn picks_match_the_sequential_walk() {
+    for (pct, seed) in [(0.0f32, 1u32), (3.0, 7), (30.0, 1234), (77.5, 99), (100.0, 5)] {
+        let mut sys = Tsm::System.init_state();
+        sys.begin_sample_scan(&[Datum::from_f32(pct)], seed).unwrap();
+        let mut walked = vec![];
+        loop {
+            let b = sys.next_sample_block(400, 0).unwrap();
+            if b == types_core::InvalidBlockNumber {
+                break;
+            }
+            walked.push(b);
+        }
+        let picked: Vec<u32> = (0..400u32).filter(|&b| sys.picks(b, 1) == Some(true)).collect();
+        assert_eq!(walked, picked, "system at {pct} seed {seed}");
+        assert!((0..400u32).all(|b| sys.picks(b, 1) == sys.picks(b, 291)));
+        let mut ber = Tsm::Bernoulli.init_state();
+        ber.begin_sample_scan(&[Datum::from_f32(pct)], seed).unwrap();
+        for blk in [0u32, 1, 17, 3999] {
+            let mut walked = vec![];
+            loop {
+                let off = ber.next_sample_tuple(blk, 291, 0);
+                if off == InvalidOffsetNumber {
+                    break;
+                }
+                walked.push(off);
+            }
+            let picked: Vec<u16> = (1..=291u16).filter(|&o| ber.picks(blk, o) == Some(true)).collect();
+            assert_eq!(walked, picked, "bernoulli at {pct} seed {seed} block {blk}");
+        }
+    }
+    let mut rows = Tsm::SystemRows.init_state();
+    rows.begin_sample_scan(&[Datum::from_i64(10)], 3).unwrap();
+    assert_eq!(rows.picks(0, 1), None);
 }
 
 /// GetTsmRoutine calls whatever pg_proc row the query names through fmgr,

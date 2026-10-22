@@ -1,0 +1,19 @@
+[package]
+name = "pgrc_marks"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+# C1 L0 (pgrc-plans/C1.md "L0"): the clean->dirty block marks, the registry
+# and the build gate of the colcache images. A LEAF crate on purpose: loom is
+# blocked tree-wide for any crate whose cone reaches pgstat
+# (pgrc_write/tests/loom.rs), so the marks protocol lives where gate 2 can
+# build. Only dependency: the single lock library.
+[dependencies]
+pgsync = { path = "../../../../_support/pgsync" }
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

@@ -1,0 +1,120 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1u s2l s1c s2s
+step s1u: UPDATE lp SET v = 's1', n = n + 10 WHERE k = 2;
+step s2l: WITH u AS (UPDATE lp SET v = 'cte' WHERE k IN (2, 4)) SELECT k, v, n FROM lp WHERE k <= 4 ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+k|v | n
+-+--+--
+1|v1| 1
+2|s1|12
+3|v3| 0
+4|v4| 1
+(4 rows)
+
+step s2s: SELECT k, v, n FROM lp WHERE k <= 5 ORDER BY k;
+k|v  | n
+-+---+--
+1|v1 | 1
+2|cte|12
+3|v3 | 0
+4|cte| 1
+5|v5 | 2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1u s2w s1c s2s
+step s1u: UPDATE lp SET v = 's1', n = n + 10 WHERE k = 2;
+step s2w: WITH u AS (UPDATE lp SET v = 'cte' WHERE k = 4) SELECT k, v, n FROM lp WHERE k <= 4 AND n < 5 ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+k|v |n
+-+--+-
+1|v1|1
+3|v3|0
+4|v4|1
+(3 rows)
+
+step s2s: SELECT k, v, n FROM lp WHERE k <= 5 ORDER BY k;
+k|v  | n
+-+---+--
+1|v1 | 1
+2|s1 |12
+3|v3 | 0
+4|cte| 1
+5|v5 | 2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2l s1c s2s
+step s1d: DELETE FROM lp WHERE k = 3;
+step s2l: WITH u AS (UPDATE lp SET v = 'cte' WHERE k IN (2, 4)) SELECT k, v, n FROM lp WHERE k <= 4 ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+k|v |n
+-+--+-
+1|v1|1
+2|v2|2
+4|v4|1
+(3 rows)
+
+step s2s: SELECT k, v, n FROM lp WHERE k <= 5 ORDER BY k;
+k|v  |n
+-+---+-
+1|v1 |1
+2|cte|2
+4|cte|1
+5|v5 |2
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1u s2m s1c s2s
+step s1u: UPDATE lp SET v = 's1', n = n + 10 WHERE k = 2;
+step s2m: WITH u AS (DELETE FROM lp WHERE k = 1) SELECT k, v FROM lp WHERE k <= 4 ORDER BY k LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+k|v 
+-+--
+1|v1
+2|s1
+(2 rows)
+
+step s2s: SELECT k, v, n FROM lp WHERE k <= 5 ORDER BY k;
+k|v | n
+-+--+--
+2|s1|12
+3|v3| 0
+4|v4| 1
+5|v5| 2
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1u s2l s1a s2s
+step s1u: UPDATE lp SET v = 's1', n = n + 10 WHERE k = 2;
+step s2l: WITH u AS (UPDATE lp SET v = 'cte' WHERE k IN (2, 4)) SELECT k, v, n FROM lp WHERE k <= 4 ORDER BY k FOR UPDATE; <waiting ...>
+step s1a: ROLLBACK;
+step s2l: <... completed>
+k|v |n
+-+--+-
+1|v1|1
+2|v2|2
+3|v3|0
+4|v4|1
+(4 rows)
+
+step s2s: SELECT k, v, n FROM lp WHERE k <= 5 ORDER BY k;
+k|v  |n
+-+---+-
+1|v1 |1
+2|cte|2
+3|v3 |0
+4|cte|1
+5|v5 |2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress

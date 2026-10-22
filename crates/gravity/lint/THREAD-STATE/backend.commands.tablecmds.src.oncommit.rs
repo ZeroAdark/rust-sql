@@ -1,0 +1,1 @@
+backend/commands/tablecmds/src/oncommit.rs	ON_COMMITS	pgport	xact:AtEOXact_on_commit_actions	leader	transaction callbacks: temp tables' ON COMMIT DELETE ROWS / DROP actions, one per such live temp table (per session by design, C's on_commits), pruned at xact and subxact end

@@ -6,7 +6,7 @@ use mcx::{Mcx, MemoryContext, PgFxHashMap, PgVec};
 use types_core::{InvalidOid, Oid};
 use types_error::{PgError, PgResult};
 
-use crate::dynahash_order::DynaHash;
+use crate::dynahash_order::{DynaHash, EntrySlab};
 use crate::{ComputeStats, FetchSource, StdCompute, VacAttrStats, STATISTIC_NUM_SLOTS};
 
 pub(crate) const STATISTIC_KIND_MCELEM: i16 = 4;
@@ -118,7 +118,7 @@ pub(crate) fn compute_array_stats<'mcx>(
     // aset: pruned key copies and chain growth free per C's pfree.
     let key_cx = col_mcx.context().new_child("compute_array_stats keys");
     let key_mcx = key_cx.mcx();
-    let mut items: PgVec<'_, TrackItem<'_>> = PgVec::new_in(col_mcx);
+    let mut items: EntrySlab<'_, TrackItem<'_>> = EntrySlab::new(col_mcx);
     let mut elements_tab = DynaHash::new(key_mcx, num_mcelem_target as i64)?;
     let mut count_tab: PgFxHashMap<'_, i32, i32> =
         PgFxHashMap::with_hasher_in(Default::default(), col_mcx);
@@ -128,7 +128,7 @@ pub(crate) fn compute_array_stats<'mcx>(
     let mut null_elem_cnt = 0i32;
     let mut analyzed_rows = 0i32;
 
-    let mut row_scratch = MemoryContext::new_bump("compute_array_stats row scratch");
+    let mut row_scratch = MemoryContext::new_wholesale("compute_array_stats row scratch");
     for array_no in 0..samplerows {
         // array_typanalyze.c:317: vacuum_delay_point(true) per sample row.
         commands_vacuum::vacuum_delay_point(true)?;
@@ -173,8 +173,8 @@ pub(crate) fn compute_array_stats<'mcx>(
                 let h = hash_elem(elem_value)?;
                 let mut found = None;
                 for &(hh, id) in elements_tab.enter(h)? {
-                    if hh == h && cmp_elems(items[id as usize].key, elem_value)? == 0 {
-                        found = Some(id as usize);
+                    if hh == h && cmp_elems(items[id].key, elem_value)? == 0 {
+                        found = Some(id);
                         break;
                     }
                 }
@@ -190,8 +190,7 @@ pub(crate) fn compute_array_stats<'mcx>(
                     None => {
                         let (key, key_buf) =
                             crate::datum_copy_owned(key_mcx, elem_value, typbyval, typlen)?;
-                        let id = items.len() as u32;
-                        items.push(TrackItem {
+                        let id = items.alloc(TrackItem {
                             key,
                             key_buf,
                             frequency: 1,
@@ -236,7 +235,7 @@ pub(crate) fn compute_array_stats<'mcx>(
         let mut minfreq = element_no;
         let mut maxfreq = 0i64;
         for id in elements_tab.seq() {
-            let it = &items[id as usize];
+            let it = &items[id];
             if it.frequency as i64 > cutoff_freq {
                 sort_idx.push(id);
                 minfreq = minfreq.min(it.frequency as i64);
@@ -264,10 +263,10 @@ pub(crate) fn compute_array_stats<'mcx>(
             // hash_seq order: equal frequencies at the cutoff keep C's set.
             ::pg_qsort::pg_qsort_interruptible(
                 &mut sort_idx[..],
-                |&a, &b| track_cmp(items[a as usize].frequency, items[b as usize].frequency),
+                |&a, &b| track_cmp(items[a].frequency, items[b].frequency),
                 postgres_seams::check_for_interrupts::call,
             )?;
-            minfreq = items[sort_idx[num_mcelem as usize - 1] as usize].frequency as i64;
+            minfreq = items[sort_idx[num_mcelem as usize - 1]].frequency as i64;
         } else {
             num_mcelem = track_len;
         }
@@ -278,7 +277,7 @@ pub(crate) fn compute_array_stats<'mcx>(
             let prefix = &mut sort_idx[..num_mcelem as usize];
             ::pg_qsort::pg_qsort_arg_interruptible(
                 prefix,
-                |&a, &b| cmp_elems(items[a as usize].key, items[b as usize].key),
+                |&a, &b| cmp_elems(items[a].key, items[b].key),
                 postgres_seams::check_for_interrupts::call,
             )?;
 
@@ -287,7 +286,7 @@ pub(crate) fn compute_array_stats<'mcx>(
             let mut mcelem_freqs: PgVec<'mcx, f32> =
                 mcx::vec_with_capacity_in(anl_mcx, num_mcelem as usize + 3)?;
             for &idx in prefix.iter() {
-                let it = &items[idx as usize];
+                let it = &items[idx];
                 mcelem_values.push(crate::datum_copy_in(anl_mcx, it.key, typbyval, typlen)?);
                 mcelem_freqs.push((it.frequency as f64 / nonnull_cnt as f64) as f32);
             }
@@ -357,12 +356,17 @@ pub(crate) fn compute_array_stats<'mcx>(
 
 // array_typanalyze.c:681 prune_element_hashtable: HASH_REMOVE + pfree of the
 // discarded keys (the aset child releases them).
-fn prune_element_table(items: &mut [TrackItem<'_>], elements_tab: &mut DynaHash<'_>, b_current: i32) {
+fn prune_element_table(
+    items: &mut EntrySlab<'_, TrackItem<'_>>,
+    elements_tab: &mut DynaHash<'_>,
+    b_current: i32,
+) {
     elements_tab.prune(|id| {
-        let it = &mut items[id as usize];
+        let it = &mut items[id];
         let keep = it.frequency + it.delta > b_current;
         if !keep {
             it.key_buf = None;
+            items.release(id);
         }
         keep
     });

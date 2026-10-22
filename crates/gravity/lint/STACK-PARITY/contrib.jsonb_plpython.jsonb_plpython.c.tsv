@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 contrib/jsonb_plpython/jsonb_plpython.c: 2 stack-depth check sites
+146	PLyObject_FromJsonbContainer	-	-	unported	PL/Perl, PL/Python and their jsonb transforms are not ported (crates/pl has plpgsql only)
+434	PLyObject_ToJsonbValue	-	-	unported	PL/Perl, PL/Python and their jsonb transforms are not ported (crates/pl has plpgsql only)

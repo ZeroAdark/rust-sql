@@ -29,6 +29,437 @@ test: epq-subq-mergeappend
 test: epq-subq-projectset
 test: epq-subq-samplescan
 test: epq-subq-tablefunc
-test: epq-subq-foreignscan
 test: epq-subq-namedtuplestore
 test: epq-subq-recursive
+test: d682-spi
+test: d696-prefix
+test: d718-entry
+test: ret-epq
+test: d699-recheck-order
+test: v4r297-deferred-excl
+test: d669-ret-source
+test: d882-epq
+test: m6-hosted-alter
+test: epq-subq-subplan
+test: w4-epq-mergejoin
+test: w5j-epq-dag
+test: w5c-epq-copy
+test: w6-merge-nm
+test: w6s-merge-bs
+test: w5-epq-product
+test: d1672-epq-tid
+test: admit-d1933c-nest-outer
+test: modifytable-d3413-vq-write
+# W5 multilock Row A (lowerv4 write/lock_marks.rs): FOR UPDATE / SHARE over several relations, EPQ over each locked site
+test: w5-ml-join
+test: w5-ml-order
+test: w5-ml-skip
+test: w5-ml-nowait
+test: w5-ml-cursor
+test: w5-ml-flip
+test: w5-ml-null
+test: w7r-merge-route
+test: w6o-ret-old-sys
+test: w6-ri-initplan
+test: w6-epq-nestloop
+test: w6r-merge-route-matched
+test: epq-subq-rerun-hash
+test: d839-pgrc-rr-view
+test: w6-rowc
+test: w6-rowc-rev1
+test: w6-rowc-rev1b
+test: w6-rowc-ret
+test: w6-d652s
+test: w6-cnm40-semi
+test: w6-d1933b-anti
+test: w6-d652s-delete
+test: w6-d652s2-routed
+test: w6-cnm40-view
+test: lockrows-15-lock-over-sort
+test: lockrows-d652s-lock-subplan
+test: lockrows-d3563-subplan-claim
+test: lockrows-d3818-left-fills
+test: lockrows-d3846-drain-subplan
+test: lockrows-d3607-copy-probe
+test: lockrows-d3611-joined-lock
+test: lockrows-d3379-sub-set
+test: rxnested-d3379-union-subquery-arm
+test: rxnested-d3379-rowc-join-copy
+test: rxnested-d3379-semi-qual
+test: rxnested-d3379-union-drained
+test: lockrows-d3568-hashset
+test: lockrows-d3592-odoo18
+test: lockrows-9-d2048-null-mark
+test: lockrows-15b-limit-over-sort
+test: lockrows-nest-recheck
+test: mergecmd-d2042-br-deleted
+test: mergecmd-14a-ret-fallthrough
+test: mergecmd-9-copyrow-recheck
+test: w6-d1933b-nest
+test: w6-in-limit
+test: w6-in-conflict
+test: lockrows-l1-rerun
+test: lockrows-d2112-initplan
+test: lockrows-m4-minmax-init
+test: lockrows-d2604-family-sort
+test: lockrows-famlimit
+test: lockrows-famjoin
+test: lockrows-ctecopy
+test: lockrows-reffetch
+test: lockrows-refbuild
+test: lockrows-d2050-write
+test: lockrows-d2674-write
+test: lockrows-d2674-lock
+test: lockrows-refparent
+test: lockrows-reffam
+test: lockrows-withcopy
+test: lockrows-inh117
+test: mergecmd-7-initplan-product
+test: writesubplan-recheck
+test: w6-d1710-initplan-delete
+test: producerchain-nest-ref
+test: producerchain-dedup-ref
+test: producerchain-mat-nests
+test: producerchain-nest-before
+test: drain-a4-merge-matched
+test: drain-dt-update-anti
+test: drain-dt-update-semi
+test: mergecmd-7c-cte-source
+test: mergecmd-13a-nest-reference
+test: mergecmd-d1933-nest-more
+test: w6-agg-copy-row
+test: lockrows-d2636-skip-free
+test: lockrows-d2112-write
+test: semantics-d2028-init-epq
+test: semantics-d2673-nested-init-epq
+test: lockrows-jobq
+test: lockrows-ctelock
+test: lockrows-ctesort
+test: lockrows-incstream
+test: lockrows-incstream-spill
+test: lockrows-incstream-return
+test: lockrows-lk0100
+test: lockrows-q12
+test: lockrows-sublock
+test: lockrows-sublock-limit
+test: lockrows-refnest
+test: lockrows-d3554-sortnest
+test: lockrows-d3555-sortnest-cte
+test: lockrows-d3560-refnest-left
+test: lockrows-d3564-refnest-chain
+test: lockrows-d3562-refanti
+test: lockrows-d3561-procrastinate
+test: lockrows-d3567-refchain
+test: lockrows-d3596-refchain-left
+test: lockrows-d3569-refcopy
+test: lockrows-fammerge
+test: lockrows-tidinit
+test: lockrows-refsort
+test: lockrows-refmerge
+# lockrows UNION-RET + NEST-CLAIM: UPDATE ... RETURNING over the settled union of several result relations (nest inner, data-modifying CTE, pruned index-scan arms), rechecked
+test: lockrows-unionret
+# lockrows FAMCLAIM (gen lk-0116): the partitioned claim UPDATE / DELETE .. WHERE (d, id) IN (SELECT .. LIMIT n FOR UPDATE [SKIP LOCKED]), rechecked
+test: lockrows-famclaim
+test: lockrows-d3502-famcte
+test: mergecmd-d1933-hashed-copy
+test: mergecmd-d2046-don-nest
+test: writesubplan-root
+test: writesubplan-merge-set
+test: writesubplan-nest-copy
+test: writesubplan-conflict-multi
+test: writesubplan-merge-ret
+test: writesubplan-ret-agg
+test: mergecmd-d1685-nmbs-copy
+test: mergecmd-d2046-srf-nest
+test: modifytable-d652h-hashed
+test: modifytable-rowc-noret
+test: modifytable-d3505-cte-nest-inner
+test: modifytable-d3602-river-retry
+test: modifytable-d3603-river-cleaner
+test: modifytable-d3617-pgboss-complete
+test: modifytable-d3618-cte-nest-dedup
+test: modifytable-d3621-batch-complete
+test: modifytable-d3737-django-semi
+test: modifytable-d3739-update-nests
+test: lockrows-d3507-gw-two-writes
+test: lockrows-d3506-gw-in-lock
+test: modifytable-d3397-rowc-sub
+test: modifytable-d652i-initplan
+test: modifytable-d3379-post-same
+# D2904 (a write's recheck beside SubPlan steps and a pending InitPlan): the IR copies an InitPlan's value only where every row reaching the write has forced it, else the runner's recheck forces it as EvalPlanQualStart does (an UPDATE and a DELETE beside an InitPlan read only in an untaken CASE arm: division by zero at the recheck, a VOLATILE one called there, two in one CASE, the runner's own form, one read unconditionally)
+test: write-d2904-pending-initplan
+test: producerchain-probe-nests
+test: producerchain-family-lock-product
+test: producerchain-nest-chain-target
+test: producerchain-left-chain-target
+test: producerchain-bitmap-target
+test: producerchain-probe-chain-target
+test: producerchain-bitmap-outer
+test: mergecmd-g2c-union-recheck
+test: mergecmd-move-recheck
+test: mergecmd-d1933b-material-recheck
+test: mergecmd-union-multipage
+test: producerchain-union-targets
+test: producerchain-union-nest
+# producerchain UNION-NEST (inherit#145): an UPDATE of a partitioned target FROM a flattened UNION ALL under an OR join qual (a
+# nested loop over the union's arms, the targets' Append under a Materialize): EvalPlanQual rescans the members whole.
+test: producerchain-union-nest-copy
+# producerchain B2 (heldout orm-0108 / tw-core-107): UPDATE / DELETE t .. WHERE t.id IN (SELECT .. FROM s JOIN r ..), the HashAggregate
+# over a nested loop of REFERENCE-marked relations the outer of t's index scan: EvalPlanQual refetches both and regroups.
+test: producerchain-dedup-join
+# producerchain B3 (heldout orm-0110): the same over a Hash Join of the REFERENCE-marked relations, unique-ified by Unique over
+# a Sort: EvalPlanQual refetches both, reruns the build and the probe, and sorts the one row again.
+test: producerchain-dedup-hash
+# producerchain rules#445: UPDATE / DELETE of a child FROM its inheritance parent, the target's scan the outer of a nested
+# loop over a Material of the parent's members (the target among them), while another session changes the rows.
+test: producerchain-union-material
+# producerchain ARM (rowsecurity#342 / #343, rules#431-#433): UPDATE / DELETE of an inheritance parent and its children
+# (one arm per target) over a Material of another parent's members, and a view rule's over the COPY-marked view's rows.
+test: producerchain-arm-material
+# producerchain pj211 (partition_join#211): UPDATE / DELETE of a partitioned or plain target under a WHERE EXISTS semi join
+# over a Material of a relation and a COPY-marked LATERAL LIMIT subquery, while another session changes the rows.
+test: producerchain-semi-copy
+test: mergecmd-values-inner
+test: mergecmd-right-merge
+test: mergecmd-do-nothing-join
+test: modifytable-rowc-probe
+test: modifytable-d3399-rowc-join
+# D2052 / D727 (errorhold, core rows re-checked on trunk): an EvalPlanQual recheck forces its pending InitPlans; a
+# BEFORE UPDATE row trigger locks the old row with ExecUpdateLockMode, so FOR KEY SHARE NOWAIT gets it.
+test: d2052-epq-initplan
+test: d727-before-trigger-keyshare
+test: modifytable-rowc-copy
+test: modifytable-d3416-ri-crosscheck
+test: modifytable-rowc-values
+test: writesubplan-ret-view
+test: producerchain-left-probe-chain
+test: producerchain-fn-copy
+# W6-D1112 row B (subplan): an UPDATE through a view WITH CHECK OPTION over an IN (a nested-loop semi join, REFERENCE-marked) whose
+# check option is a hashed SubPlan the host feeds: EvalPlanQual rechecks the join; the check probes the statement's table.
+test: subplan-wco-hashed-recheck
+test: producerchain-union-copy
+# famnest (modifytable, rowsecurity#338 #339's form): an UPDATE / DELETE over a nested loop whose inner is a REFERENCE parent's
+# Append: EvalPlanQual refetches the joined child's row at its junk ctid only in the child its tableoid names, the others empty.
+test: modifytable-famnest
+# DELETE-UNION (modifytable): a DELETE of several result relations over a settled union of their scans (hash build / nest inner), rechecked
+test: modifytable-delete-union
+# ANTINEST (modifytable): an UPDATE / DELETE over a Nested Loop Anti Join (NOT EXISTS over a parameterized index scan), rechecked
+test: modifytable-antinest
+# COPYNEST (modifytable): an UPDATE / DELETE whose target is a nest inner under a subquery row (ROW_MARK_COPY) over a LIMIT, rechecked
+test: modifytable-copynest
+test: modifytable-wcopy
+# writesubplan (regress updatable_views#978, D1112 row B): a routed INSERT into a view WITH CHECK OPTION whose qual is a correlated
+# non-hashed IN over a whole-row value, and a correlated <> ALL, while another session adds or deletes the rows the check reads.
+test: writesubplan-wco-any
+# writesubplan (regress merge#340, D1112): a MERGE whose join filter reads a correlated SubPlan while another session updates
+# or deletes a matched target row: EvalPlanQual re-evaluates the join filter's SubPlan over the new version.
+test: writesubplan-merge-qual
+# writesubplan (regress updatable_views#961-963): a MERGE through a partitioned root whose one leaf probes the hashed source,
+# UPDATE beside a NOT MATCHED INSERT routed through the root, while another session updates, moves or deletes the leaf row.
+test: writesubplan-merge-leaf
+# writesubplan (gen mg-0146 / mg-0159): a MERGE whose target PostgreSQL hashes (Hash Right Join, the source probing), MATCHED
+# beside NOT MATCHED BY SOURCE, while another session updates, moves or deletes a target row.
+test: writesubplan-merge-hashed
+# writesubplan (regress merge#368 / #402): a MERGE through a list-partitioned root whose leaves' scans probe the hashed
+# source (Hash Full Join), MATCHED UPDATE, routed NOT MATCHED INSERT, BY SOURCE UPDATE, while another session updates,
+# moves or deletes a target row.
+test: writesubplan-merge-parts
+# producerchain (nest_write.rs deferred lifted for UPDATE / DELETE): B3's semi join de-duplicated by a HashAggregate over
+# a Hash Join (a grouping beside a hash join), the nested loop's inner the target's index scan, while another session
+# updates, deletes or moves a target row and changes the joined relations.
+test: producerchain-dmlwiden-hashagg
+test: lockrows-j182
+# mergecmd tw-core-197 (D1933 MEMO): a MERGE over a nested loop whose inner is a Memoize over the target's index scan, while
+# another session updates, re-keys or deletes the target row the MERGE waits on (the recheck's Memoize a fresh one).
+test: mergecmd-memo-recheck
+# ROWC-UNION (modifytable): a data-modifying CTE DELETE through a partitioned root over the union of its leaves rechecks in the IR (D655 Row C)
+test: modifytable-rowc-union
+# COPY-EMIT (modifytable): an UPDATE / DELETE over a hash probe of a COPY-marked subquery (a HashSetOp) rechecks in the IR (D2735)
+test: modifytable-copy-emit
+# bulkfix (D2067, core row executor): EvalPlanQualStart's own subplan planstates (eflags 0). A volatile uncorrelated
+# SubPlan runs again under EPQ (epq-subplan-fresh, from pgrust main #2409), and the ALL-over-Material SubPlan of a
+# FOR UPDATE hash join runs again at each recheck (core-d2067-epq-subplan-all).
+test: epq-subplan-fresh
+test: core-d2067-epq-subplan-all
+# D2739 NEST-INNER (modifytable): a data-modifying CTE DELETE whose target is a nested loop inner over a REFERENCE-marked outer rechecks in the IR (subq-0323)
+test: modifytable-nest-inner
+# SEMINEST (modifytable D2747): an UPDATE / DELETE over a Nested Loop Semi Join (EXISTS over a heap scan, the target the outer), rechecked
+test: modifytable-seminest
+# ROWC-UNION-UPDATE (modifytable D2748): a data-modifying CTE UPDATE through a partitioned root over the settled union of its leaves, rechecked in the IR (moves, skips, the moved-row error)
+test: modifytable-rowc-union-update
+# BEFORE-ROW (modifytable D2812): a data-modifying CTE UPDATE / DELETE of one target with BEFORE ROW triggers rechecks in the IR (GetTupleForTrigger's EvalPlanQual leg: moved, changed, deleted, a NULL-returning trigger, a WHEN clause, a rollback)
+test: modifytable-rowc-before
+# ROWC-MERGE (mergecmd D655 Row C): a MERGE in a data-modifying CTE rechecked in the IR (OWN, BUILT and DRAIN forms: matched, re-keyed, deleted, a flipped WHEN condition, a BY SOURCE refusal)
+test: mergecmd-rowc-merge
+# writesubplan D2015 NEST-ARMS (census e2e-ald-write_route-195): a MERGE through a partitioned root over a Nested Loop Left Join whose inner is the Append of its leaves' index (or filtered heap) scans, rechecked per leaf
+test: writesubplan-merge-nestarms
+# writesubplan D2015 UNION-OUTER (held-out parts-0083): the same MERGE through a partitioned root whose nest outer is a flattened UNION ALL of constant rows, rechecked by the first arm's row, the stopped row's source columns acting
+test: writesubplan-merge-unionouter
+# POST (modifytable D2772): an unread data-modifying CTE runs once, after the statement's own rechecked UPDATE / DELETE (its INSERT never per recheck; triggers#500's order)
+test: modifytable-post
+# writesubplan (regress subselect#137): a DELETE / UPDATE of an inheritance parent and its children over a Nested Loop whose outer is a HashAggregate and whose inner is the Append of the parent's seq scan and the children's bitmap heap scans, rechecked per relation
+test: writesubplan-dml-nestunion
+# W234 (ctescan D2644, D1687): two upserts in one statement (regress with#234, a writing CTE ON CONFLICT DO UPDATE beside the own one) under concurrent writers
+test: ctescan-w234-upserts
+# writesubplan (gen setop_core-0157 / 0158): a DELETE / UPDATE .. WHERE k IN (SELECT .. EXCEPT / INTERSECT ..) with the Hash on the target and the subquery the probe, rechecked against the subquery's stored (ROW_MARK_COPY) row
+test: writesubplan-setop-copy
+# D1933 (b): a MERGE over a nested loop whose inner is a Materialize over a bitmap heap scan of the source, rechecked: the fill reruns at the source's stored row through the bitmap scan's recheck quals (an updated, re-keyed or deleted target row; a source row updated after the join read it)
+test: subplan-d1933b-bitmap-fill
+# ROWC-SORTED (mergecmd D655 Row C, merge#304): two data-modifying CTE MERGEs, a Merge Left Join (SORTED) and a Hash Left Join over the first's rows (BUILT over a CTE source), rechecked in the IR (matched, re-keyed, deleted, a flipped WHEN condition, an inner merge join, a rollback)
+test: mergecmd-rowc-sorted
+# D1685 (orm-0357's shape): a MERGE NOT MATCHED BY SOURCE over a flattened UNION ALL of constant rows, hashed, rechecked: a NOT MATCHED BY SOURCE row never rechecks against the union, a MATCHED row decides by the join condition over the stored source row (a re-keyed row matches no other arm); the full join form
+test: drain-d1685-const-union
+# AGA-35 (lockrows 15b beside an InitPlan): the job queue's pop under a LIMIT / OFFSET over a Sort, its filter reading an InitPlan, rechecked in the IR with the InitPlan's value copied (a changed row, a row failing the qual, a changed config row, SKIP LOCKED, NOWAIT, a VOLATILE InitPlan called once, a pending one in a CASE arm)
+test: lockrows-aga35-15b-initplan
+# AGA-35 form 2 (lockrows REFFETCH beside an InitPlan): the job queue's pop over a hash join, LIMIT / OFFSET over a Sort, the locked side's or the REFERENCE side's filter reading an InitPlan, rechecked in the IR with the InitPlan's value copied and the REFERENCE row refetched as the main run saw it (a changed row, a row failing the qual or no longer joining, a changed config row, a changed REFERENCE row, SKIP LOCKED, NOWAIT, a VOLATILE InitPlan called once, a pending one in a CASE arm)
+test: lockrows-aga35-reffetch-initplan
+# AGA-35 form 3 (lockrows REFBUILD beside an InitPlan): the locked relation on the build side of an inner hash join probed by a REFERENCE-marked relation, one table under a LIMIT / OFFSET or a Sort, or a partitioned family, the locked side's or the probe side's filter reading an InitPlan, rechecked in the IR with the InitPlan's value copied and the REFERENCE row refetched as the main run saw it (a changed row, a row failing the qual or re-keyed, a changed config row, a changed REFERENCE row, SKIP LOCKED, NOWAIT, a VOLATILE InitPlan called once, a pending one in a CASE arm)
+test: lockrows-aga35-refbuild-initplan
+# AGA-35 form 4 (lockrows FAMLIMIT beside an InitPlan): the job queue's pop over a partitioned family under a LIMIT / OFFSET over a Sort of its Append, the leaves' filters reading an InitPlan, rechecked in the IR over the row's leaf with the InitPlan's value copied (a changed row, a row failing the qual, a row moved to another leaf: 40001, a changed config row, SKIP LOCKED, NOWAIT, a VOLATILE InitPlan called once, a pending one in a CASE arm, which rows it holds)
+test: lockrows-aga35-famlimit-initplan
+# AGA-35 form 5 (lockrows REFNEST beside an InitPlan): the job queue's claim over an INNER nested loop whose inner is the REFERENCE-marked relation's scan (a Memoize or parameterized index inner, or a Materialize over its scan), the locked outer's or the REFERENCE inner's filter reading an InitPlan, rechecked in the IR with the InitPlan's value copied and the REFERENCE row refetched under the nest's parameters (a changed row, a row failing the qual, a moved join key, a changed config row, a changed REFERENCE row, OFFSET, SKIP LOCKED, NOWAIT, a VOLATILE InitPlan called once, a pending one in a CASE arm, which rows it holds)
+test: lockrows-aga35-refnest-initplan
+# AGA-35 form 6 (lockrows SUBLOCK beside an InitPlan): a LockRows inside a correlated EXISTS SubPlan beside an InitPlan of the outer query, the statement's UPDATE rechecking with the InitPlan's value copied (a changed row, a row failing the inner's qual, a deleted row, SKIP LOCKED, NOWAIT, another row locked through j.ref, a changed config row, a VOLATILE outer InitPlan called once, which rows the SELECT form holds); an InitPlan of the subquery re-armed at the recheck (VOLATILE: called again) and a pending one forced there (division by zero), both answered by the row executor
+test: lockrows-aga35-sublock-initplan
+# AGA-35 form 7 (D652-S1's lock half beside an InitPlan): a row lock over its own relation beside per-row SubPlan steps over an aggregate inner, beside an InitPlan of the outer query, rechecked in the IR with each SubPlan step evaluated again over the newest version under the statement's snapshot and the InitPlan's value copied (a changed row, a changed SubPlan argument, a row failing the SubPlan's qual, a deleted row, SKIP LOCKED, NOWAIT, a changed config row, a changed ledger row, a VOLATILE InitPlan called once, a LIMIT above the lock); a pending one in a CASE arm forced at the recheck (division by zero) and an InitPlan of the subquery re-armed there (VOLATILE: called again), both answered by the row executor
+test: lockrows-aga35-subs-initplan
+# A btree index scan served as the bitmap morsel form reads the index through a frozen index image; leaf splits and a VACUUM that deletes emptied leaf pages, from other sessions, under the reader's snapshot: the same rows as a serial scan, at W0 and W8
+test: idxmorsel-image-split-vacuum
+test: idxmorsel-leaves-split-vacuum
+test: idxmorsel-fullrange-vm
+test: idxmorsel-leaves-ios-vm
+test: idxmorsel-ranges-split-vacuum
+test: lockrows-d3271-nested-initplan
+test: lockrows-d3289-reentry
+test: isowrite-drained-cte
+test: lockrows-d3379-lock-post
+test: lockrows-d3287-left
+test: isowrite-am-routed-leaf
+test: isowrite-am-routed-leaf-byref
+test: lockrows-d3287-values
+test: lockrows-d3287-fammerge-init
+test: isowrite-cte-twice
+test: mergecmd-rowc-probed
+test: lockrows-epq-held-build
+test: isohelp-copy-scan
+test: isowrite-jobq-sort
+test: lockrows-d3379-jobq-hash
+test: lockrows-d3557-refnest-pair
+test: lockrows-d3558-cte-claims
+test: lockrows-d3559-cte-write-claim
+test: lockrows-d3379-lock-nest
+test: gravfix3-d3297-arm-move
+test: lockrows-d3379-lock-pair
+test: lockrows-d3556-pairspool
+test: rxnested-d3466-union-forms
+test: modifytable-d3451-lazysub
+test: lockrows-d3452-refinit
+test: lockrows-d3379-rdrain
+test: lockrows-d3379-claimall
+test: lockrows-d3379-refnest-life
+test: nestwrite-d3282-leaf-recheck
+test: modifytable-d3403-refarm
+test: lockrows-d3287-pullnest
+test: producerchain-fn-dropped
+test: rxnested-d3478-routed-built-leaf
+test: lockrows-d3488-cteclaim
+test: lockrows-d3489-cteclaim-init
+test: epq-pending-initplan
+test: rxnested-d3498-subplan-fresh-rows
+test: nestfast-d3501-decorrelated-write
+test: rxnested-d3477-union-recheck
+test: rxnested-d3483-hashed-union-by-source
+test: rxnested-d3669-drained-function-source
+test: rxnested-d3673-hashed-union-semi
+test: rxnested-d3665-check-view-union
+test: rxnested-d3687-check-view-nest
+test: rxnested-d3689-grouped-reference
+test: rxnested-d3688-memo-reference
+test: rxnested-d3508-nest-union-recheck
+test: rxnested-d3503-semi-result-recheck
+test: rxnested-d3497-union-one-member
+test: rxnested-d3641-union-rescan-original
+test: rxnested-d3704-family-group
+test: drainwrite-right-epq
+test: nestfast-d3636-am-pgrc-to-heap
+test: nestfast-d3632-set-initplan-recheck
+test: rxnested-d3496-returning-original
+test: lockrows-d3506-gw013-exists
+test: lockrows-d3506-gw013-exists-sort
+test: nestfast-d3640-single-leaf-recheck
+test: union-subs-epq
+test: rxcursor-d3631-statext-inval
+test: rxnested-d3468-merge-by-source-union
+test: rxnested-d3658-union-const-arm
+test: rxnested-d3705-copy-row-nest
+test: rxnested-d3706-function-nest-after
+test: rowc-union-br-epq
+test: nestfast-d3653-quiet-values-recheck
+test: nestfast-d3655-subs-pair-recheck
+test: nestfast-d3657-refbuild-pair-recheck
+test: nestfast-d3656-lock-nest-values
+test: nestfast-d3660-sublock-pair-recheck
+test: modifytable-d3650-nest-copy
+test: lockrows-d3650-gw-one-queue
+test: modifytable-d3647-built-copy
+test: lockrows-d3647-gw-batch
+test: nestfast-d3664-routed-drained-recheck
+test: nestfast-d3668-drained-check-recheck
+test: nestfast-d3667-sublock-cte-recheck
+test: modifytable-d3678-volatile-set
+test: modifytable-d3778-closure-move
+test: modifytable-d3605-nest-build
+test: modifytable-d3601-cte-set
+test: lockrows-d3601-river-completer
+test: lockrows-d3601-river-completer-hash
+test: nestfast-d3674-wide-key-recheck
+test: nestfast-d3676-float-key-recheck
+test: nestfast-d3677-raising-key-recheck
+test: nestfast-d3707-claim-no-limit
+test: nestfast-d3708-trigger-subs-recheck
+test: nestfast-d3747-river-schedule
+test: modifytable-d3619-semi-ids
+test: modifytable-d3686-memo-ids
+test: modifytable-d3767-river-rescue
+test: modifytable-d3702-move-subplan-sets
+test: lockrows-material-lock
+test: modifytable-d3714-raising-prune-initplan
+test: lockrows-d3727-pair-hash
+test: gravfix3-d3681-set-write-recheck
+test: modifytable-d3750-cte-function-nest
+test: lockrows-d3777-merge-lock
+test: nestfast-d3792-river-few-due
+test: nestfast-d3795-river-five-a-run
+test: nestfast-d3799-river-large
+test: nestfast-d3800-river-hash-right
+test: nestfast-d3807-river-bloat
+test: lockrows-d3779-refnest-feed
+test: lockrows-d3780-lock-chain
+test: realapp-oban-claim
+test: gravfix3-d3824-drain-copy-recheck
+test: gravfix3-d3838-rowc-initplan
+test: gravfix3-d3825-drain-build-notin
+test: modifytable-d3851-rails-left-joins
+test: modifytable-d3801-rails-alias
+test: gravfix3-d3826-nest-sub-recheck
+test: gravfix3-d3826-update-from-ctid
+test: gravfix3-d3842-xml-init-sub
+test: gravfix3-d3843-cte-sub
+test: gravfix3-d3870-built-held-recheck
+test: gravfix3-d3871-tid-nest-ref
+test: modifytable-d3738-django-m2m
+test: c7-session-carry-alternate
+test: lockrows-d3802-sort-chain
+test: lockrows-d4150-init-family
+test: lockrows-d4154-init-multi
+test: lockrows-d4157-init-sort
+test: lockrows-d4205-out-before-lock
+test: lockrows-d4204-material-pull
+test: lockrows-d3775-copy-pair
+test: lockrows-d3565-refdrain
+test: lockrel-partition-skip
+test: relcache-default-cache
+test: modifytable-d4662-cte-values-nest
+test: modifytable-d4664-cte-merge-ref
+test: modifytable-d4673-cte-initplan-write
+test: lockrows-d4688-refbuild-feed

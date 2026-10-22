@@ -88,9 +88,12 @@ fn each_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo, pairs: Pairs) -> PgResult<V
         return Err(Box::new(PgError::error("return type must be a row type")));
     }
     let mut desc = resolved.result_tuple_desc.expect("composite result carries a tupdesc");
-    ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
+    // BlessTupleDesc (execTuples.c:2262): a named composite keeps its typmod.
+    if desc.tdtypeid == types_core::RECORDOID && desc.tdtypmod < 0 {
+        ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
+    }
 
-    let mut rows = Vec::with_capacity(pairs.len());
+    let mut rows = ::mcx::std_vec_with_capacity("contrib", pairs.len())?;
     for (key, val) in &pairs {
         let k = varlena_result(varlena::cstring_to_text(mcx, key)?);
         let (v, vnull) = match val {
@@ -98,7 +101,7 @@ fn each_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo, pairs: Pairs) -> PgResult<V
             None => (Datum::null(), true),
         };
         let tuple = heaptuple::heap_form_tuple(mcx, &desc, &[k, v], &[false, vnull])?;
-        rows.push(tuple.image().to_vec());
+        rows.push(::mcx::std_vec_from_slice("contrib", &tuple.image())?);
     }
     Ok(rows)
 }

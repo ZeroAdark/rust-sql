@@ -98,7 +98,7 @@ impl MemBio {
         }
     }
 
-    fn contents(&self) -> Vec<u8> {
+    fn contents(&self) -> Option<Vec<u8>> {
         let mut p: *mut c_char = std::ptr::null_mut();
         // SAFETY: BIO_CTRL_INFO on a mem BIO yields (len, data-ptr).
         let len = unsafe {
@@ -110,10 +110,11 @@ impl MemBio {
             )
         };
         if len <= 0 || p.is_null() {
-            return Vec::new();
+            return Some(Vec::new());
         }
         // SAFETY: p points at len readable bytes owned by the BIO.
-        unsafe { std::slice::from_raw_parts(p.cast::<u8>(), len as usize) }.to_vec()
+        let slice = unsafe { std::slice::from_raw_parts(p.cast::<u8>(), len as usize) };
+        ::mcx::std_vec_from_slice("libpq", slice).ok()
     }
 }
 
@@ -130,7 +131,7 @@ pub fn x509_name_print_rfc2253(name: *mut ossl::X509_NAME) -> Option<Vec<u8>> {
     if unsafe { X509_NAME_print_ex(bio.0, name, 0, XN_FLAG_RFC2253) } == -1 {
         return None;
     }
-    Some(bio.contents())
+    bio.contents()
 }
 
 pub fn nid_short_name(nid: c_int) -> Option<String> {
@@ -183,7 +184,9 @@ pub fn x509_name_field_utf8(name: *mut ossl::X509_NAME, field: &std::ffi::CStr) 
         let data = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(name, index));
         ASN1_STRING_print_ex(bio.0, data, CSTRING_ASN1_FLAGS);
     }
-    DnFieldLookup::Value(bio.contents())
+    bio.contents()
+        .map(DnFieldLookup::Value)
+        .unwrap_or(DnFieldLookup::BioFailure)
 }
 
 /// One row of sslinfo.c's ssl_extension_info SRF.
@@ -206,43 +209,43 @@ pub enum X509ExtensionsError {
     PrintFailed(i32),
 }
 
-// sslinfo.c ssl_extension_info's per-call body, walked eagerly: the C SRF
-// ereports out of the executor at the first bad extension, so collecting
-// up-front is observation-equivalent.
-pub fn x509_extensions(
-    cert: *mut ossl::X509,
-) -> Result<Vec<X509ExtensionInfo>, X509ExtensionsError> {
+// sslinfo.c ssl_extension_info's max_calls (X509_get_ext_count).
+pub fn x509_extension_count(cert: *mut ossl::X509) -> c_int {
     // SAFETY: cert is the live peer X509 owned by the connection.
-    let count = unsafe { X509_get_ext_count(cert) };
-    let mut out = Vec::with_capacity(count.max(0) as usize);
-    for i in 0..count {
-        let bio = MemBio::new().ok_or(X509ExtensionsError::BioFailure)?;
-        // SAFETY: i < X509_get_ext_count; ext and obj are borrowed from cert
-        // and only read. OBJ_nid2sn on a known (non-undef) nid is non-NULL.
-        let (name, critical) = unsafe {
-            let ext = X509_get_ext(cert, i);
-            let obj = X509_EXTENSION_get_object(ext);
-            let nid = OBJ_obj2nid(obj);
-            if nid == 0 {
-                return Err(X509ExtensionsError::UnknownExtension(i));
-            }
-            if X509V3_EXT_print(bio.0, ext, 0, 0) <= 0 {
-                return Err(X509ExtensionsError::PrintFailed(i));
-            }
-            (
-                std::ffi::CStr::from_ptr(OBJ_nid2sn(nid))
-                    .to_string_lossy()
-                    .into_owned(),
-                X509_EXTENSION_get_critical(ext) != 0,
-            )
-        };
-        out.push(X509ExtensionInfo {
-            name,
-            value: bio.contents(),
-            critical,
-        });
-    }
-    Ok(out)
+    unsafe { X509_get_ext_count(cert) }
+}
+
+// sslinfo.c ssl_extension_info's per-call body: one extension per call, so
+// a caller that stops early never inspects the later ones.
+pub fn x509_extension_at(
+    cert: *mut ossl::X509,
+    i: c_int,
+) -> Result<X509ExtensionInfo, X509ExtensionsError> {
+    let bio = MemBio::new().ok_or(X509ExtensionsError::BioFailure)?;
+    // SAFETY: i < X509_get_ext_count; ext and obj are borrowed from cert
+    // and only read. OBJ_nid2sn on a known (non-undef) nid is non-NULL.
+    let (name, critical) = unsafe {
+        let ext = X509_get_ext(cert, i);
+        let obj = X509_EXTENSION_get_object(ext);
+        let nid = OBJ_obj2nid(obj);
+        if nid == 0 {
+            return Err(X509ExtensionsError::UnknownExtension(i));
+        }
+        if X509V3_EXT_print(bio.0, ext, 0, 0) <= 0 {
+            return Err(X509ExtensionsError::PrintFailed(i));
+        }
+        (
+            std::ffi::CStr::from_ptr(OBJ_nid2sn(nid))
+                .to_string_lossy()
+                .into_owned(),
+            X509_EXTENSION_get_critical(ext) != 0,
+        )
+    };
+    Ok(X509ExtensionInfo {
+        name,
+        value: bio.contents().ok_or(X509ExtensionsError::BioFailure)?,
+        critical,
+    })
 }
 
 /// be-secure-openssl.c X509_NAME_to_cstring failure arms; the caller owns
@@ -288,7 +291,48 @@ pub fn x509_name_slash_format(name: *mut ossl::X509_NAME) -> Result<Vec<u8>, X50
             ASN1_STRING_print_ex(bio.0, v, CSTRING_ASN1_FLAGS);
         }
     }
-    Ok(bio.contents())
+    bio.contents().ok_or(X509NameError::BioFailure)
+}
+
+pub fn read_dh_params(
+    file: &mut std::fs::File,
+) -> std::io::Result<Result<openssl::dh::Dh<openssl::pkey::Params>, openssl::error::ErrorStack>> {
+    use foreign_types::ForeignType;
+    use std::os::fd::{FromRawFd, IntoRawFd};
+
+    let raw = file.try_clone()?.into_raw_fd();
+    // SAFETY: raw is an owned duplicate; fdopen takes ownership only on success.
+    let stream = unsafe { libc::fdopen(raw, c"r".as_ptr()) };
+    if stream.is_null() {
+        let error = std::io::Error::last_os_error();
+        // SAFETY: fdopen failed, so raw still belongs to us.
+        drop(unsafe { std::fs::File::from_raw_fd(raw) });
+        return Err(error);
+    }
+    // SAFETY: stream is live; BIO_NOCLOSE leaves its ownership here. The PEM
+    // reader borrows the BIO and returns an owned DH or null.
+    let result = unsafe {
+        let bio = ossl::BIO_new_fp(stream, 0);
+        let dh = if bio.is_null() {
+            std::ptr::null_mut()
+        } else {
+            let dh = ossl::PEM_read_bio_DHparams(
+                bio,
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null_mut(),
+            );
+            ossl::BIO_free_all(bio);
+            dh
+        };
+        libc::fclose(stream);
+        if dh.is_null() {
+            Err(openssl::error::ErrorStack::get())
+        } else {
+            Ok(openssl::dh::Dh::from_ptr(dh))
+        }
+    };
+    Ok(result)
 }
 
 // The DN-formatting units below build X509_NAMEs directly (no TLS session)
@@ -328,6 +372,49 @@ mod tests {
             DnFieldLookup::InvalidFieldName => panic!("field {f} invalid"),
             DnFieldLookup::BioFailure => panic!("BIO failure"),
         }
+    }
+
+    // Self-signed leaf with an unregistered-OID extension (1.2.3.4.5) at
+    // position 3, between the standard ones and a critical keyUsage.
+    const UNKNOWN_EXT_CERT: &str = "\
+-----BEGIN CERTIFICATE-----\n\
+MIIDMjCCAhqgAwIBAgIUEvEtOi+vA40OvC+UArfIVrX599UwDQYJKoZIhvcNAQEL\n\
+BQAwFTETMBEGA1UEAwwKcGdydXN0LWV4dDAeFw0yNjA5MTcwMzEwMzJaFw0zNjA5\n\
+MTQwMzEwMzJaMBUxEzARBgNVBAMMCnBncnVzdC1leHQwggEiMA0GCSqGSIb3DQEB\n\
+AQUAA4IBDwAwggEKAoIBAQCo8PgwrzOc2unfNrfCAFgDAkvXhQBz0gXHTMUHAeJ0\n\
+GA5Nomgu1sf85OiAhXEilADy1liTaoreFSynnQaThaXPgIQvrRt76gtu5T3i3oF7\n\
+uyGHF7yER4/VqqIMDWIlkT5kkmSJ1ZS8QHfSpsPXlbKik0wXBOQMirSCXSyZEdUn\n\
+OtXUwO0XrxXaBMav3l3ZNMWVCDoDVxy2mPGoTRebjhCKaYNT+z7AnikCENjhCRIF\n\
+qF4FR/CQ0+jiGQ0MabVy5PdozfD1AyHBBQGhEmosZjYXYjKqXI3dBClv/hkOqWsW\n\
+R3r4KNFJbw0MQukmYKa53l6sJ1DQ8jKzgl+3gil+LmS9AgMBAAGjejB4MB0GA1Ud\n\
+DgQWBBTI0sw3xDo/VyjHLhqtpG6/fEvg+TAfBgNVHSMEGDAWgBTI0sw3xDo/VyjH\n\
+LhqtpG6/fEvg+TAPBgNVHRMBAf8EBTADAQH/MBUGBCoDBAUEDQwLdW5rbm93bi1l\n\
+eHQwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUAA4IBAQA2VpQ/fFDQ9P4l\n\
+I9X9kpd7UOwxzlXD9aop3gH/ED14t2myurDmLmsMHVfserAWbTZrpwTVeXb/JTuC\n\
+WkgsjpuNRolO0tA0EDoSMnFELREsHRqXwP0bgawFoPu9wiMHQkLRnYDqVayVZLNE\n\
+z4mCq4hVYvxeOkalBZc2wWqKah3DcOeKBGuIdk2kDAV7jT1yjQjh6MzX33h8PoKD\n\
+hXjG7UezPeXW7UTgAUq5/14dDpUQvgjUGpWk2y3Lz4xA4zz+ZOYsgEKWLsQhAzsa\n\
+WwDOXbwP3Uvr/rQNWpd5oX62DyurmSfaeZtqPyYsSkDs8u3UhC9CfLjUfxGwG8TY\n\
+eHvFpHUT\n\
+-----END CERTIFICATE-----";
+
+    #[test]
+    fn extension_at_reads_one_position_without_touching_later_ones() {
+        use foreign_types::ForeignType;
+        let cert = openssl::x509::X509::from_pem(UNKNOWN_EXT_CERT.as_bytes()).unwrap();
+        let p = cert.as_ptr();
+        assert_eq!(x509_extension_count(p), 5);
+        let first = x509_extension_at(p, 0).ok().unwrap();
+        assert_eq!(first.name, "subjectKeyIdentifier");
+        assert!(!first.critical);
+        assert!(matches!(
+            x509_extension_at(p, 3),
+            Err(X509ExtensionsError::UnknownExtension(3))
+        ));
+        let last = x509_extension_at(p, 4).ok().unwrap();
+        assert_eq!(last.name, "keyUsage");
+        assert!(last.critical);
+        assert_eq!(last.value, b"Digital Signature");
     }
 
     #[test]

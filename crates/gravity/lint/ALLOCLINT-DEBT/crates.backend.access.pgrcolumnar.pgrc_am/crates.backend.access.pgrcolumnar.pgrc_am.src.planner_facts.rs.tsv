@@ -1,0 +1,12 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/planner_facts.rs
+growth	std::iter::Extend::extend	1
+growth	std::string::String::push	4
+growth	std::string::String::push_str	8
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	18
+macro	std::format	6
+method	slice::join	1
+method	std::borrow::Cow::into_owned	1
+method	std::string::String::from_utf8_lossy	1
+method	std::string::ToString::to_string	2
+type	std::string::String	2

@@ -1,0 +1,85 @@
+-- name: regress-full-merge-092
+-- sql: MERGE INTO classv c USING pg_namespace n ON n.oid = c.relnamespace WHEN MATCHED AND c.oid = 'pg_depend'::regclass THEN UPDATE SET reltuples = reltuples - 1 RETURNING c.oid;
+-- test: merge
+-- shape: 5629ab8dff485e77 seen=1
+-- rel 1259 pg_class am=heap kind=r natts=34
+-- att 1259 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 2 relname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1259 3 relnamespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 4 reltype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 5 reloftype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 6 relowner typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 7 relam typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 8 relfilenode typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 9 reltablespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 10 relpages typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 11 reltuples typid=700 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 12 relallvisible typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 13 relallfrozen typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 14 reltoastrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 15 relhasindex typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 16 relisshared typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 17 relpersistence typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 18 relkind typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 19 relnatts typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1259 20 relchecks typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1259 21 relhasrules typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 22 relhastriggers typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 23 relhassubclass typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 24 relrowsecurity typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 25 relforcerowsecurity typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 26 relispopulated typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 27 relreplident typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 28 relispartition typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 29 relrewrite typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 30 relfrozenxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 31 relminmxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 32 relacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- att 1259 33 reloptions typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- att 1259 34 relpartbound typid=194 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2662 rel=1259 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 2663 rel=1259 keys=2,3 opts=0,0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- idx 3455 rel=1259 keys=9,8 opts=0,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- rel 2615 pg_namespace am=heap kind=r natts=4
+-- att 2615 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2615 2 nspname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 2615 3 nspowner typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2615 4 nspacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2684 rel=2615 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2685 rel=2615 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- rel 30976 classv am=none kind=v natts=34
+-- att 30976 1 oid typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 2 relname typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 30976 3 relnamespace typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 4 reltype typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 5 reloftype typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 6 relowner typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 7 relam typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 8 relfilenode typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 9 reltablespace typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 10 relpages typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 11 reltuples typid=700 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 12 relallvisible typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 13 relallfrozen typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 14 reltoastrelid typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 15 relhasindex typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 16 relisshared typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 17 relpersistence typid=18 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 18 relkind typid=18 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 19 relnatts typid=21 typmod=-1 len=2 byval=t notnull=f
+-- att 30976 20 relchecks typid=21 typmod=-1 len=2 byval=t notnull=f
+-- att 30976 21 relhasrules typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 22 relhastriggers typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 23 relhassubclass typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 24 relrowsecurity typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 25 relforcerowsecurity typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 26 relispopulated typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 27 relreplident typid=18 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 28 relispartition typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 30976 29 relrewrite typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 30 relfrozenxid typid=28 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 31 relminmxid typid=28 typmod=-1 len=4 byval=t notnull=f
+-- att 30976 32 relacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- att 30976 33 reloptions typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- att 30976 34 relpartbound typid=194 typmod=-1 len=-1 byval=f notnull=f
+{PLANNEDSTMT :commandType 5 :queryId 0 :planId 0 :hasReturning true :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {MODIFYTABLE :plan.disabled_nodes 0 :plan.startup_cost 4.205 :plan.total_cost 64.981125 :plan.plan_rows 1474 :plan.plan_width 12 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {VAR :varno 3 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn 1 :location -1} :resno 1 :resname oid :ressortgroupref 0 :resorigtbl 30976 :resorigcol 1 :resjunk false}) :plan.qual <> :plan.lefttree {HASHJOIN :join.plan.disabled_nodes 0 :join.plan.startup_cost 4.205 :join.plan.total_cost 64.981125 :join.plan.plan_rows 1474 :join.plan.plan_width 12 :join.plan.parallel_aware false :join.plan.parallel_safe false :join.plan.async_capable false :join.plan.plan_node_id 1 :join.plan.targetlist ({TARGETENTRY :expr {VAR :varno -2 :varattno 1 :vartype 27 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn -1 :location -1} :resno 1 :resname ctid :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk true} {TARGETENTRY :expr {VAR :varno -1 :varattno 1 :vartype 27 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn -1 :location -1} :resno 2 :resname ctid1 :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk true}) :join.plan.qual <> :join.plan.lefttree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 56.74 :scan.plan.plan_rows 1474 :scan.plan.plan_width 10 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 2 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 3 :varattno -1 :vartype 27 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn -1 :location -1} :resno 1 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false} {TARGETENTRY :expr {VAR :varno 3 :varattno 3 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn 3 :location -1} :resno 2 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b 0) :scan.plan.allParam (b 0) :scan.scanrelid 3 :cb_scan_cols <>} :join.plan.righttree {HASH :plan.disabled_nodes 0 :plan.startup_cost 2.98 :plan.total_cost 2.98 :plan.plan_rows 98 :plan.plan_width 10 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 3 :plan.targetlist ({TARGETENTRY :expr {VAR :varno -2 :varattno 1 :vartype 27 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn -1 :location -1} :resno 1 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false} {TARGETENTRY :expr {VAR :varno -2 :varattno 2 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 1 :location -1} :resno 2 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :plan.qual <> :plan.lefttree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 2.98 :scan.plan.plan_rows 98 :scan.plan.plan_width 10 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 4 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 2 :varattno -1 :vartype 27 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn -1 :location -1} :resno 1 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false} {TARGETENTRY :expr {VAR :varno 2 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 1 :location 44} :resno 2 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b 0) :scan.plan.allParam (b 0) :scan.scanrelid 2 :cb_scan_cols <>} :plan.righttree <> :plan.initPlan <> :plan.extParam (b 0) :plan.allParam (b 0) :hashkeys ({VAR :varno -2 :varattno 2 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 1 :location 44}) :skewTable 1259 :skewColumn 3 :skewInherit false :rows_total 0} :join.plan.initPlan <> :join.plan.extParam (b 0) :join.plan.allParam (b 0) :join.jointype 0 :join.inner_unique true :join.joinqual <> :hashclauses ({OPEXPR :opno 607 :opfuncid 184 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno -2 :varattno 2 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn 3 :location -1} {VAR :varno -1 :varattno 2 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 1 :location 44}) :location -1}) :hashoperators (o 607) :hashcollations (o 0) :hashkeys ({VAR :varno -2 :varattno 2 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn 3 :location -1})} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :operation 5 :canSetTag true :nominalRelation 3 :rootRelation 0 :partColsUpdated false :resultRelations (i 3) :updateColnosLists <> :withCheckOptionLists <> :returningOldAlias old :returningNewAlias new :returningLists (({TARGETENTRY :expr {VAR :varno 3 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn 1 :location -1} :resno 1 :resname oid :ressortgroupref 0 :resorigtbl 30976 :resorigcol 1 :resjunk false})) :fdwPrivLists (<>) :fdwDirectModifyPlans (b) :rowMarks ({PLANROWMARK :rti 2 :prti 2 :rowmarkId 1 :markType 4 :allMarkTypes 16 :strength 0 :waitPolicy 0 :isParent false}) :epqParam 0 :onConflictAction 0 :arbiterIndexes <> :onConflictSet <> :onConflictCols <> :onConflictWhere <> :exclRelRTI 0 :exclRelTlist <> :mergeActionLists (({MERGEACTION :matchKind 0 :commandType 2 :override 0 :qual ({OPEXPR :opno 607 :opfuncid 184 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 3 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn 1 :location -1} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 92 :constvalue 4 [ 48 10 0 0 0 0 0 0 ]}) :location 90}) :targetList ({TARGETENTRY :expr {FUNCEXPR :funcid 312 :funcresulttype 700 :funcretset false :funcvariadic false :funcformat 2 :funccollid 0 :inputcollid 0 :args ({OPEXPR :opno 1117 :opfuncid 282 :opresulttype 701 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 3 :varattno 11 :vartype 700 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn 11 :location -1} {CONST :consttype 701 :consttypmod -1 :constcollid 0 :constlen 8 :constbyval true :constisnull false :location -1 :constvalue 8 [ 0 0 0 0 0 0 240 63 ]}) :location 153}) :location -1} :resno 1 :resname reltuples :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :updateColnos (i 11)})) :mergeJoinConditions (<>)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias {ALIAS :aliasname c :colnames <>} :eref {ALIAS :aliasname c :colnames ("oid" "relname" "relnamespace" "reltype" "reloftype" "relowner" "relam" "relfilenode" "reltablespace" "relpages" "reltuples" "relallvisible" "relallfrozen" "reltoastrelid" "relhasindex" "relisshared" "relpersistence" "relkind" "relnatts" "relchecks" "relhasrules" "relhastriggers" "relhassubclass" "relrowsecurity" "relforcerowsecurity" "relispopulated" "relreplident" "relispartition" "relrewrite" "relfrozenxid" "relminmxid" "relacl" "reloptions" "relpartbound")} :rtekind 0 :relid 30976 :inh false :relkind v :rellockmode 3 :perminfoindex 1 :tablesample <> :lateral false :inFromCl false :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname n :colnames <>} :eref {ALIAS :aliasname n :colnames ("oid" "nspname" "nspowner" "nspacl")} :rtekind 0 :relid 2615 :inh false :relkind r :rellockmode 1 :perminfoindex 2 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_class :colnames ("oid" "relname" "relnamespace" "reltype" "reloftype" "relowner" "relam" "relfilenode" "reltablespace" "relpages" "reltuples" "relallvisible" "relallfrozen" "reltoastrelid" "relhasindex" "relisshared" "relpersistence" "relkind" "relnatts" "relchecks" "relhasrules" "relhastriggers" "relhassubclass" "relrowsecurity" "relforcerowsecurity" "relispopulated" "relreplident" "relispartition" "relrewrite" "relfrozenxid" "relminmxid" "relacl" "reloptions" "relpartbound")} :rtekind 0 :relid 1259 :inh false :relkind r :rellockmode 3 :perminfoindex 3 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname *MERGE* :colnames <>} :rtekind 2 :jointype 0 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1 2 3) :permInfos ({RTEPERMISSIONINFO :relid 30976 :inh true :requiredPerms 6 :checkAsUser 0 :selectedCols (b 8 10 18) :insertedCols (b) :updatedCols (b 18)} {RTEPERMISSIONINFO :relid 2615 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1259 :inh true :requiredPerms 6 :checkAsUser 10 :selectedCols (b 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41) :insertedCols (b) :updatedCols (b 18)}) :resultRelations (i 3) :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks ({PLANROWMARK :rti 2 :prti 2 :rowmarkId 1 :markType 4 :allMarkTypes 16 :strength 0 :waitPolicy 0 :isParent false}) :relationOids (o 30976 2615 1259 2608) :invalItems <> :paramExecTypes (o 0) :utilityStmt <> :stmt_location 0 :stmt_len 172}

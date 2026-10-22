@@ -1,0 +1,12 @@
+# NOALLOC (TD-197 LINT-FP; findings.NOALLOC_ITEMS): findings the IR leg proved allocate nothing, keyed on the line's normalized text. Written by run.sh full + ratchet.py write --noalloc only; an edited line's row goes.
+file	line	kind	item	count	text	class
+crates/backend/commands/copy/src/parquet_cluster.rs	402	method	std::clone::Clone::clone	1	8eebd2ff0937	NOALLOC
+crates/backend/commands/copy/src/parquet_cluster.rs	1242	method	std::clone::Clone::clone	1	c87148ba006f	NOALLOC
+crates/backend/commands/copy/src/parquet_cluster.rs	1243	method	std::clone::Clone::clone	1	dfc054492b86	NOALLOC
+crates/backend/commands/copy/src/parquet_cluster.rs	1359	method	std::clone::Clone::clone	1	0513b439a4d8	NOALLOC
+crates/backend/commands/copy/src/parquet_cluster.rs	1496	method	std::clone::Clone::clone	1	97866e6ed60c	NOALLOC
+crates/backend/commands/copy/src/text_pgrc.rs	1076	method	std::iter::Iterator::collect	1	d19746dd01e1	NOALLOC
+crates/backend/commands/copy/src/text_pgrc.rs	1320	method	std::clone::Clone::clone	1	eb51708d8fe9	NOALLOC
+crates/backend/commands/copy/src/text_pgrc.rs	1323	method	std::clone::Clone::clone	1	2d95966513bb	NOALLOC
+crates/backend/commands/copy/src/text_pgrc.rs	1324	method	std::clone::Clone::clone	1	178aac41a86b	NOALLOC
+crates/backend/commands/copy/src/text_pgrc.rs	1333	method	std::clone::Clone::clone	1	098d9bf6b1e9	NOALLOC

@@ -38,8 +38,9 @@ fn proc_vxid(proc: &PGPROC) -> VirtualTransactionId {
 pub fn GetLockStatusData() -> PgResult<Vec<LockInstanceData>> {
     let procno = crate::my_procno();
     let hdr = lmgr_proc::ProcGlobal();
+    // lock.c GetLockStatusData: palloc'd result arrays; failure is ERROR 53200.
     let mut locks: Vec<LockInstanceData> =
-        Vec::with_capacity(init_small::globals::MaxBackends() as usize);
+        ::mcx::std_vec_with_capacity("GetLockStatusData", init_small::globals::MaxBackends() as usize)?;
 
     // Fast-path arrays first, one backend at a time (C's inconsistent-picture
     // caveat stands: none of these can be involved in conflicts).
@@ -97,7 +98,8 @@ pub fn GetLockStatusData() -> PgResult<Vec<LockInstanceData>> {
     }
 
     let nelements = locks.len() + dynahash::hash_get_num_entries(shared().proclock_hash) as usize;
-    locks.reserve(nelements.saturating_sub(locks.len()));
+    let additional = nelements.saturating_sub(locks.len());
+    ::mcx::std_vec_reserve("GetLockStatusData", &mut locks, additional)?;
 
     let mut seqstat = HASH_SEQ_STATUS::new();
     dynahash::hash_seq_init(&mut seqstat, shared().proclock_hash)?;
@@ -141,10 +143,11 @@ pub fn GetLockStatusData() -> PgResult<Vec<LockInstanceData>> {
 pub fn GetBlockerStatusData(blocked_pid: i32) -> PgResult<BlockedProcsData> {
     let procno = crate::my_procno();
     let max_backends = init_small::globals::MaxBackends() as usize;
+    // lock.c GetBlockerStatusData: palloc'd result arrays; failure is ERROR 53200.
     let mut data = BlockedProcsData {
-        procs: Vec::with_capacity(max_backends),
-        locks: Vec::with_capacity(max_backends),
-        waiter_pids: Vec::with_capacity(max_backends),
+        procs: ::mcx::std_vec_with_capacity("GetBlockerStatusData", max_backends)?,
+        locks: ::mcx::std_vec_with_capacity("GetBlockerStatusData", max_backends)?,
+        waiter_pids: ::mcx::std_vec_with_capacity("GetBlockerStatusData", max_backends)?,
     };
 
     // ProcArrayLock pins the blocked proc's identity; the partition locks pin
@@ -152,16 +155,7 @@ pub fn GetBlockerStatusData(blocked_pid: i32) -> PgResult<BlockedProcsData> {
     let proc_array_lock = lwlock::main_lock(PROC_ARRAY_LOCK);
     lwlock::LWLockAcquire(proc_array_lock, lwlock::LW_SHARED, procno)?;
 
-    // C scans the ProcArray (BackendPidGetProcWithLock); allProcs pid-match is
-    // equivalent for live backends and aux procs never wait on heavyweight locks.
-    let hdr = lmgr_proc::ProcGlobal();
-    let blocked = (blocked_pid != 0)
-        .then(|| {
-            hdr.allProcs[..hdr.allProcCount as usize]
-                .iter()
-                .find(|p| p.pid.load(Relaxed) == blocked_pid)
-        })
-        .flatten();
+    let blocked = procarray_seams::backend_pid_get_proc_with_lock::call(blocked_pid);
 
     if let Some(proc) = blocked {
         for i in 0..NUM_LOCK_PARTITIONS as usize {

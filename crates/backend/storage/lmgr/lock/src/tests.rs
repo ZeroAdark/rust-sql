@@ -8,8 +8,8 @@ use types_core::BackendType;
 use types_error::{ErrorLevel, PgError};
 use types_storage::lock::{
     AccessExclusiveLock, AccessShareLock, DeadLockState, ExclusiveLock, RowExclusiveLock,
-    ShareLock, LOCALLOCKTAG, LOCKACQUIRE_ALREADY_HELD, LOCKACQUIRE_NOT_AVAIL, LOCKACQUIRE_OK,
-    LOCKTAG,
+    ShareLock, LOCALLOCKTAG, LOCKACQUIRE_ALREADY_CLEAR, LOCKACQUIRE_ALREADY_HELD, LOCKACQUIRE_NOT_AVAIL,
+    LOCKACQUIRE_OK, LOCKTAG,
 };
 
 const TESTDB: u32 = 7777;
@@ -26,18 +26,11 @@ const CFG: lmgr_proc::ProcGlobalConfig = lmgr_proc::ProcGlobalConfig {
 
 static NEXT_PID: AtomicI32 = AtomicI32::new(9100);
 
-// Every ereport_msg the crate emits (level, message, detail), for the
-// message-bytes witnesses below.
 fn logged() -> &'static Mutex<Vec<(ErrorLevel, String, Option<String>)>> {
     static LOGGED: OnceLock<Mutex<Vec<(ErrorLevel, String, Option<String>)>>> = OnceLock::new();
     LOGGED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-// Autovacuum-cancel injection (ProcSleep's BlockedByAutoVacuum arm):
-// procno of the waiter that must take a deadlock-timeout alert on its next
-// latch wait; procno whose deadlock check reports BlockedByAutoVacuum; the
-// "autovacuum worker" procno DeadLockCheck would name; and the errno the
-// kill() stand-in returns.
 static DEADLOCK_ALERT_PENDING: AtomicI32 = AtomicI32::new(-1);
 static BLOCKED_BY_AUTOVAC: AtomicI32 = AtomicI32::new(-1);
 static AUTOVAC_BLOCKER: AtomicI32 = AtomicI32::new(-1);
@@ -114,9 +107,6 @@ fn setup() {
             }
         });
         latch_seams::wait_latch_my_latch::set(|_, _, _| {
-            // Deadlock-timeout injection: the armed waiter takes the timeout
-            // alert (CheckDeadLockAlert, as the SIGALRM path would) instead of
-            // parking, exactly once.
             let me = lmgr_proc::MyProc().unwrap_or(-1);
             if me >= 0 && DEADLOCK_ALERT_PENDING.compare_exchange(me, -1, SeqCst, SeqCst).is_ok()
             {
@@ -180,11 +170,14 @@ fn setup() {
             logged().lock().unwrap_or_else(|e| e.into_inner()).push((level, msg, detail));
             Ok(())
         });
-        // warn_not_owned goes through the full-PgError seam (it carries C's
-        // file/line/routine); record it in the same log the tests read.
+        elog_seams::ereport_msg_detail_log::set(|level, msg, detail_log| {
+            logged()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((level, msg, Some(format!("log-only: {detail_log}"))));
+            Ok(())
+        });
         elog_seams::ereport::set(|err| {
-            // proc.c/lock.c wait diagnostics are errdetail_log; a client-visible
-            // detail on those lines is the batch-232 regression.
             assert!(
                 err.detail().is_none() || !err.message().starts_with("process "),
                 "lock-wait LOG carries a client-visible detail: {err:?}"
@@ -218,7 +211,6 @@ fn become_backend() {
     thread_globals();
     if lmgr_proc::MyProc().is_none() {
         lmgr_proc::InitProcess(BackendType::Backend).unwrap();
-        // InitPostgres publishes the database binding in C.
         let procno = lmgr_proc::MyProc().unwrap();
         lmgr_proc::GetPGProcByNumber(procno)
             .databaseId
@@ -257,7 +249,6 @@ fn fastpath_acquire_and_release() {
         LOCKACQUIRE_OK
     );
     assert!(LockHeldByMe(&tag, AccessShareLock, false));
-    // Fast-path grant: nothing ever touched the shared lock table.
     assert_eq!(LockWaiterCount(&tag).unwrap(), 0);
 
     assert!(LockRelease(&tag, AccessShareLock, false).unwrap());
@@ -282,8 +273,56 @@ fn reacquire_increments_local_count() {
     assert!(LockHeldByMe(&tag, RowExclusiveLock, false));
     assert!(LockRelease(&tag, RowExclusiveLock, false).unwrap());
     assert!(!LockHeldByMe(&tag, RowExclusiveLock, false));
-    // Releasing a lock we no longer hold warns and returns false.
     assert!(!LockRelease(&tag, RowExclusiveLock, false).unwrap());
+}
+
+// D3652 P9: MarkLockClear right after an acquire writes through the grant pointer (main-table and fast-path grants);
+// after the LOCALLOCK table changed (100 more entries inserted, so it may have rehashed and moved the entry; or a
+// release) it takes the probe path. Either way the marked entry is the right one: the next acquire reads
+// ALREADY_CLEAR on it and on nothing else.
+#[test]
+fn mark_lock_clear_through_the_grant_pointer_and_after_table_changes() {
+    become_backend();
+    let a = LOCKTAG::transaction(4301);
+    assert_eq!(LockAcquire(&a, ExclusiveLock, false, false).unwrap(), LOCKACQUIRE_OK);
+    MarkLockClear(&a, ExclusiveLock);
+    assert_eq!(LockAcquire(&a, ExclusiveLock, false, false).unwrap(), LOCKACQUIRE_ALREADY_CLEAR);
+
+    let r = rel_tag(6101);
+    assert_eq!(LockAcquire(&r, AccessShareLock, false, false).unwrap(), LOCKACQUIRE_OK);
+    MarkLockClear(&r, AccessShareLock);
+    assert_eq!(LockAcquire(&r, AccessShareLock, false, false).unwrap(), LOCKACQUIRE_ALREADY_CLEAR);
+
+    let b = LOCKTAG::transaction(4302);
+    assert_eq!(LockAcquire(&b, ExclusiveLock, false, false).unwrap(), LOCKACQUIRE_OK);
+    let others: Vec<LOCKTAG> = (0..100).map(|i| LOCKTAG::transaction(5000 + i)).collect();
+    for t in &others {
+        assert_eq!(LockAcquire(t, ExclusiveLock, false, false).unwrap(), LOCKACQUIRE_OK);
+    }
+    MarkLockClear(&b, ExclusiveLock);
+    assert_eq!(LockAcquire(&b, ExclusiveLock, false, false).unwrap(), LOCKACQUIRE_ALREADY_CLEAR);
+
+    let c = LOCKTAG::transaction(4303);
+    assert_eq!(LockAcquire(&c, ExclusiveLock, false, false).unwrap(), LOCKACQUIRE_OK);
+    assert!(LockRelease(&others[0], ExclusiveLock, false).unwrap());
+    MarkLockClear(&c, ExclusiveLock);
+    assert_eq!(LockAcquire(&c, ExclusiveLock, false, false).unwrap(), LOCKACQUIRE_ALREADY_CLEAR);
+    for t in &others[1..] {
+        assert_eq!(LockAcquire(t, ExclusiveLock, false, false).unwrap(), LOCKACQUIRE_ALREADY_HELD);
+    }
+
+    for t in [a, b, c] {
+        assert!(LockRelease(&t, ExclusiveLock, false).unwrap());
+        assert!(LockRelease(&t, ExclusiveLock, false).unwrap());
+        assert!(!LockHeldByMe(&t, ExclusiveLock, false));
+    }
+    for _ in 0..2 {
+        assert!(LockRelease(&r, AccessShareLock, false).unwrap());
+    }
+    for t in &others[1..] {
+        assert!(LockRelease(t, ExclusiveLock, false).unwrap());
+        assert!(LockRelease(t, ExclusiveLock, false).unwrap());
+    }
 }
 
 #[test]
@@ -294,7 +333,6 @@ fn shared_table_transaction_lock() {
         LockAcquire(&tag, ExclusiveLock, false, false).unwrap(),
         LOCKACQUIRE_OK
     );
-    // Transaction locks are not fast-path eligible: shared LOCK exists.
     assert_eq!(LockWaiterCount(&tag).unwrap(), 1);
     assert!(LockRelease(&tag, ExclusiveLock, false).unwrap());
     assert_eq!(LockWaiterCount(&tag).unwrap(), 0);
@@ -329,15 +367,12 @@ fn strong_lock_transfers_fastpath_to_shared_table() {
 
     let t = std::thread::spawn(move || {
         become_backend();
-        // Strong lock: transfers the fast-path lock, then fails on conflict.
         let r = LockAcquire(&tag, AccessExclusiveLock, false, true).unwrap();
         assert_eq!(r, LOCKACQUIRE_NOT_AVAIL);
     });
     t.join().unwrap();
 
-    // Our fast-path lock now lives in the shared table.
     assert_eq!(LockWaiterCount(&tag).unwrap(), 1);
-    // Release must take the refind path and still succeed.
     assert!(LockRelease(&tag, AccessShareLock, false).unwrap());
     assert_eq!(LockWaiterCount(&tag).unwrap(), 0);
 }
@@ -358,8 +393,6 @@ fn blocked_acquire_wakes_on_release() {
         assert!(LockRelease(&tag, ShareLock, false).unwrap());
     });
 
-    // Wait until the waiter has joined the queue (nRequested == 2), then
-    // release; CleanUpLock must wake it.
     while LockWaiterCount(&tag).unwrap() < 2 {
         std::thread::yield_now();
     }
@@ -368,8 +401,6 @@ fn blocked_acquire_wakes_on_release() {
     assert_eq!(LockWaiterCount(&tag).unwrap(), 0);
 }
 
-// upstream 0d3be0501784 (18.4): ProcWakeup cleared the waker's own waitStart
-// instead of the awakened process's, leaving the latter stale.
 #[test]
 fn wakeup_clears_the_woken_procs_wait_start() {
     become_backend();
@@ -398,8 +429,7 @@ fn wakeup_clears_the_woken_procs_wait_start() {
         mine
     });
 
-    // Release only once the waiter is queued AND has stamped waitStart
-    // (ProcSleep stamps it after dropping the partition lock).
+    // ProcSleep stamps waitStart after dropping the partition lock.
     loop {
         let procno = waiter_procno.load(SeqCst);
         if procno >= 0
@@ -435,7 +465,6 @@ fn lock_release_all_cleans_fastpath_and_shared() {
             LOCKACQUIRE_ALREADY_HELD
         );
 
-        // Transaction-end release keeps the session hold.
         LockReleaseAll(1, false).unwrap();
         assert!(!LockHeldByMe(&rel, AccessShareLock, false));
         assert!(LockHeldByMe(&xact, ExclusiveLock, false));
@@ -450,10 +479,6 @@ fn lock_release_all_cleans_fastpath_and_shared() {
 
 #[test]
 fn early_grant_when_ahead_of_conflicting_waiter() {
-    // Lock upgrade: we hold AccessShare, another backend waits for
-    // AccessExclusive behind it; our RowExclusive request conflicts with the
-    // waiter's mode, doesn't conflict with granted locks, and so is granted
-    // immediately ahead of it (JoinWaitQueue's special case).
     become_backend();
     let tag = rel_tag(6005);
     assert_eq!(
@@ -484,10 +509,9 @@ fn early_grant_when_ahead_of_conflicting_waiter() {
 #[test]
 fn shmem_size_positive() {
     setup();
-    assert!(LockManagerShmemSize(CFG.max_prepared_xacts) > 0);
+    assert!(LockManagerShmemSize(CFG.max_prepared_xacts).unwrap() > 0);
 }
 
-// Miri target: the raw intrusive-list kernel, exercised without any globals.
 #[test]
 fn dlist_kernel_roundtrip() {
     use types_storage::ilist::dlist_head;
@@ -535,44 +559,8 @@ fn dlist_kernel_roundtrip() {
     }
 }
 
-// Regression: the fastpath-lock/sinval memory-ordering contract
-// (XPROTO: strong-lock release must publish the releaser's earlier sinval
-// hasMessages store to any backend whose fast-path grant observes the
-// release).
-//
-// C barrier contract this encodes (PostgreSQL 18, verbatim):
-//   - lock.c:991-997: "LWLockAcquire acts as a memory sequencing point, so
-//     it's safe to assume that any strong locker whose increment to
-//     FastPathStrongRelationLocks->counts becomes visible after we test it
-//     has yet to begin to transfer fast-path locks." The count read itself
-//     (lock.c:999) is unlocked; the increment/decrement sit under
-//     SpinLockAcquire/SpinLockRelease (lock.c:1837-1841, 1869-1874).
-//   - s_lock.h:59-77: TAS() must fence so later loads/stores can't move
-//     above the acquisition, and S_UNLOCK() so earlier loads AND stores
-//     can't move below the release — full hardware fences on weakly-ordered
-//     platforms.
-//   - sinvaladt.c:425-437: "Releasing SInvalWriteLock will enforce a full
-//     memory barrier, so these (unlocked) [hasMessages=true] changes will be
-//     committed to memory before we exit the function."
-// So in C, a weak locker that observes the strong-count decrement is
-// guaranteed (full barriers on both sides) to also observe the hasMessages
-// store the DDL backend made before releasing its strong lock. Rust's
-// Acquire/Release Spinlock (types_storage/src/storage.rs: tas = swap(1,
-// Acquire), unlock = store(0, Release)) plus a plain SyncCell count read
-// gives NO such edge: nothing forbids the count decrement becoming visible
-// before the earlier hasMessages store on ARM. The fix pairs SeqCst count
-// transitions (fastpath.rs) with SeqCst hasMessages ops (sinval), restoring
-// the C guarantee: observing the decrement implies observing every store the
-// releasing backend made before it.
-//
-// The test drives the ported protocol shape directly: a "DDL" thread stores
-// a SeqCst flag (standing for sinval's hasMessages) and then decrements the
-// strong-lock count; a "weak locker" thread that observes the count reach
-// zero must observe the flag. Deterministic under the fixed SeqCst pairing;
-// under the old plain-read/Acq-Rel code this assert could fail on
-// weakly-ordered hardware (the explore-branch stressor saw 1-4 misses per
-// ~3000 probes on Apple Silicon) and the unlocked SyncCell read was a data
-// race outright.
+// Strong-lock release must publish the releaser's earlier sinval hasMessages
+// store to any backend whose fast-path grant observes the release.
 #[test]
 fn strong_lock_release_publishes_prior_sinval_store() {
     use std::sync::atomic::AtomicBool;
@@ -580,8 +568,6 @@ fn strong_lock_release_publishes_prior_sinval_store() {
 
     setup();
 
-    // A partition no LOCKTAG in this test suite is known to hash into;
-    // foreign traffic would only lengthen the count==0 wait, not corrupt it.
     const PART: u32 = 1013;
     const ROUNDS: usize = 500;
 
@@ -594,12 +580,9 @@ fn strong_lock_release_publishes_prior_sinval_store() {
             while ROUND_START.load(SeqCst) < i {
                 std::thread::yield_now();
             }
-            // C's unlocked fast-path probe (lock.c:999): once the strong
-            // locker's release (count back to zero) is visible ...
             while crate::fastpath::strong_lock_count(PART) != 0 {
                 std::thread::yield_now();
             }
-            // ... its pre-release invalidation flag must be visible too.
             assert!(
                 HAS_MESSAGES.load(SeqCst),
                 "round {i}: observed strong-lock release without the \
@@ -611,13 +594,9 @@ fn strong_lock_release_publishes_prior_sinval_store() {
 
     for i in 1..=ROUNDS {
         HAS_MESSAGES.store(false, SeqCst);
-        // Strong locker: count up (BeginStrongLockAcquire) ...
         crate::fastpath::increment_strong_lock_count_partition(PART);
         ROUND_START.store(i, SeqCst);
-        // ... queue the invalidation (SIInsertDataEntries hasMessages=true,
-        // done before the lock release) ...
         HAS_MESSAGES.store(true, SeqCst);
-        // ... release the strong lock (count back down).
         crate::fastpath::decrement_strong_lock_count_partition(PART);
         while ROUND_DONE.load(SeqCst) < i {
             std::thread::yield_now();
@@ -626,12 +605,6 @@ fn strong_lock_release_publishes_prior_sinval_store() {
     reader.join().unwrap();
 }
 
-// lock.c:1152-1183 (LockAcquireExtended, dontWait && logLockFailure): the
-// LOCALLOCK is removed when nLocks == 0 and the holders/waiters detail is
-// gathered afterwards from the (still-addressable) entry. pgrust must not
-// look the removed LOCALLOCK up again by tag — the lookup panicked
-// "missing LOCALLOCK" under the partition lock (audit row
-// a186-candidate-fp-lmgr-lock-p1-492af03fce58eed9a851-1).
 #[test]
 fn dontwait_with_log_lock_failure_logs_holders_instead_of_panicking() {
     become_backend();
@@ -666,18 +639,12 @@ fn dontwait_with_log_lock_failure_logs_holders_instead_of_panicking() {
     assert_eq!(hit.as_deref(), Some(expected_detail.as_str()));
 }
 
-// lock.c:4521-4522 (lock_twophase_standby_recover): an unknown lock method in
-// the 2PC record is `elog(ERROR, "unrecognized lock method: %d")` before any
-// use of the record (audit row a186-candidate-fp-lmgr-lock-p2-0b6df8edbe26b4c45258-1).
 #[test]
 fn twophase_standby_recover_rejects_unknown_lock_method() {
     become_backend();
     for bad_method in [0u8, 3u8] {
         let mut tag = rel_tag(6100);
         tag.locktag_lockmethodid = bad_method;
-        // ShareLock: not the AccessExclusiveLock arm, so nothing downstream
-        // masks a missing check.
-        // TwoPhaseLockRecord image (lock.c:4508-4519): LOCKTAG then lockmode.
         let mut rec = [0u8; crate::twophase::SIZEOF_TWOPHASE_LOCK_RECORD];
         rec[0..4].copy_from_slice(&tag.locktag_field1.to_ne_bytes());
         rec[4..8].copy_from_slice(&tag.locktag_field2.to_ne_bytes());
@@ -696,14 +663,6 @@ fn twophase_standby_recover_rejects_unknown_lock_method() {
     }
 }
 
-// resowner.c:1093-1110 (ResourceOwnerForgetLock): a LOCALLOCK owner entry the
-// resource owner does not hold is `elog(ERROR, "lock reference %p is not owned
-// by resource owner %s")` — an ERROR the lock.c callers carry out, never a
-// panic (audit row a186-candidate-fp-resowner-resowner-7a510b223d33252ac326-1).
-// The inconsistency is manufactured the only way it can arise: the owner
-// forgets the lock while the LOCALLOCK still lists it. The owner keeps one
-// unrelated cache entry so the walk reaches the elog, not the preceding
-// `Assert(owner->nlocks > 0)` (resowner.c:1100).
 fn owner_forgets_held_lock(tag: &LOCKTAG, lockmode: i32) {
     let owner = resowner::CurrentResourceOwner();
     resowner::ResourceOwnerRememberLock(
@@ -737,8 +696,6 @@ fn lock_release_reports_unowned_lock_reference_as_error() {
         LOCKACQUIRE_OK
     );
     owner_forgets_held_lock(&tag, AccessShareLock);
-    // lock.c:2128-2145 (LockRelease): the owner slot drains to zero and
-    // ResourceOwnerForgetLock (lock.c:2137) raises the ERROR.
     let err = LockRelease(&tag, AccessShareLock, false)
         .expect_err("ResourceOwnerForgetLock must raise an ERROR, not Ok");
     assert_unowned_lock_error(err);
@@ -748,18 +705,12 @@ fn lock_release_reports_unowned_lock_reference_as_error() {
 fn lock_release_all_reports_unowned_lock_reference_as_error() {
     let t = std::thread::spawn(|| {
         become_backend();
-        // A transaction lock lives in the shared table, so the release
-        // reaches the owner walk before any fpInfoLock/partition LWLock is
-        // taken: the ERROR (or the pre-fix panic) leaves no LWLock held for
-        // the other tests' strong-lock transfers to block on.
         let tag = LOCKTAG::transaction(4260);
         assert_eq!(
             LockAcquire(&tag, ExclusiveLock, false, false).unwrap(),
             LOCKACQUIRE_OK
         );
         owner_forgets_held_lock(&tag, ExclusiveLock);
-        // lock.c:1475-1490 (LockReleaseAll -> RemoveLocalLock): the owner
-        // array walk raises the ERROR at lock.c:1482.
         let err = LockReleaseAll(1, false)
             .expect_err("ResourceOwnerForgetLock must raise an ERROR, not Ok");
         assert_unowned_lock_error(err);
@@ -781,9 +732,6 @@ fn lock_reassign_current_owner_reports_unowned_lock_reference_as_error() {
             LOCKACQUIRE_OK
         );
         owner_forgets_held_lock(&tag, AccessShareLock);
-        // lock.c:2704-2744 (LockReassignOwner): the child's slot moves to the
-        // parent, then ResourceOwnerForgetLock(current) (lock.c:2742) raises
-        // the ERROR.
         let err = LockReassignCurrentOwner(None)
             .expect_err("ResourceOwnerForgetLock must raise an ERROR, not Ok");
         assert_unowned_lock_error(err);
@@ -793,18 +741,12 @@ fn lock_reassign_current_owner_reports_unowned_lock_reference_as_error() {
         .expect("LockReassignCurrentOwner with an unowned lock reference must not panic");
 }
 
-// proc.c:1577-1580 (ProcSleep -> cancel of a blocking autovacuum worker): a
-// kill() failure other than ESRCH is reported as WARNING "could not send
-// signal to process %d: %m" — strerror text, not the raw errno (audit row
-// a186-candidate-fp-lmgr-proc-a4aa426bb91e5ff4c708-1).
 #[test]
 fn autovacuum_cancel_failure_warning_carries_strerror_text() {
     become_backend();
     let autovac_procno = lmgr_proc::MyProc().unwrap();
     let autovac_pid = g::MyProcPid();
     let autovac = lmgr_proc::GetPGProcByNumber(autovac_procno);
-    // Look like an autovacuum worker that is not doing wraparound protection:
-    // statusFlags live in ProcGlobal's mirror, indexed by pgxactoff.
     let off = (MAX_BACKENDS - 1) as usize;
     let saved_off = autovac.pgxactoff.swap(off as i32, SeqCst);
     lmgr_proc::ProcGlobal().statusFlags[off].store(types_storage::storage::PROC_IS_AUTOVACUUM, SeqCst);
@@ -820,9 +762,6 @@ fn autovacuum_cancel_failure_warning_carries_strerror_text() {
     let t = std::thread::spawn(move || {
         become_backend();
         let me = lmgr_proc::MyProc().unwrap();
-        // Arm the injection for THIS waiter: its first latch wait takes the
-        // deadlock-timeout alert, the check reports BlockedByAutoVacuum
-        // naming the holder, and the signal stand-in fails with EPERM.
         AUTOVAC_BLOCKER.store(autovac_procno, SeqCst);
         SIGNAL_ERRNO.store(EPERM, SeqCst);
         BLOCKED_BY_AUTOVAC.store(me, SeqCst);
@@ -833,7 +772,6 @@ fn autovacuum_cancel_failure_warning_carries_strerror_text() {
         assert!(LockRelease(&tag, ShareLock, false).unwrap());
     });
     let waiter = rx.recv().unwrap();
-    // Let the waiter reach the cancel arm before the holder releases.
     let expected = format!(
         "could not send signal to process {autovac_pid}: Operation not permitted"
     );
@@ -853,6 +791,14 @@ fn autovacuum_cancel_failure_warning_carries_strerror_text() {
     }
     assert!(LockRelease(&tag, ExclusiveLock, false).unwrap());
     t.join().unwrap();
+    // proc.c:1555: the cancel line's detail is errdetail_log (server log only).
+    assert!(logged()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|(level, msg, detail)| *level == types_error::DEBUG1
+            && msg.starts_with("sending cancel to blocking autovacuum PID")
+            && detail.as_deref().is_some_and(|d| d.starts_with("log-only: Process "))));
     assert_ne!(DEADLOCK_ALERT_PENDING.load(SeqCst), waiter, "alert never consumed");
     lmgr_proc::ProcGlobal().statusFlags[off].store(0, SeqCst);
     autovac.pgxactoff.store(saved_off, SeqCst);
@@ -873,12 +819,6 @@ fn autovacuum_cancel_failure_warning_carries_strerror_text() {
     );
 }
 
-// audit-18.6 w2-014: LockManagerShmemInit creates both tables through
-// ShmemInitHash (lock.c:465/484), which registers each under its name with
-// hash_get_shared_size (HASHHDR + hash_select_dirsize(max_size) directory
-// slots; shmem.c:353-363), so pg_shmem_allocations lists "LOCK hash" and
-// "PROCLOCK hash" with C's sizes. C attaches by name and size
-// (shmem.c:428-456), the probe used here.
 #[test]
 fn shmem_init_registers_lock_hashes_with_c_shared_size() {
     use dynahash::{hash_get_shared_size, hash_select_dirsize};
@@ -898,13 +838,6 @@ fn shmem_init_registers_lock_hashes_with_c_shared_size() {
     assert!(found, "\"PROCLOCK hash\" is not registered in the ShmemIndex");
 }
 
-// audit-18.6 w2-041 (fp-lmgr-lock-p1): LockManagerShmemInit also allocates
-// the fast-path strong-lock counters with ShmemInitStruct("Fast Path Strong
-// Relation Lock Data", sizeof(FastPathStrongRelationLockData), &found)
-// (lock.c:494-500), so pg_shmem_allocations lists that row with size 4100
-// (slock_t + padding to the uint32 boundary, then uint32 count[1 << 10]).
-// C attaches by name and size (shmem.c:428-456; a size mismatch is an
-// ERROR), the probe used here.
 #[test]
 fn shmem_init_registers_fast_path_strong_relation_lock_data() {
     setup();
@@ -915,12 +848,40 @@ fn shmem_init_registers_fast_path_strong_relation_lock_data() {
     );
 }
 
-// proc.c:1610-1614 formats the lock-wait interval through
-// TimestampDifference, which clamps a nonpositive difference to 0.000 ms.
 #[test]
 fn lock_wait_elapsed_clamps_backward_clock_step() {
     assert_eq!(waitqueue::lock_wait_elapsed(1_000_000, 999_000), (0, 0));
     assert_eq!(waitqueue::lock_wait_elapsed(5, 5), (0, 0));
     assert_eq!(waitqueue::lock_wait_elapsed(0, 1_234_567), (1234, 567));
     assert_eq!(waitqueue::lock_wait_elapsed(10, 1_010), (1, 0));
+}
+
+// lock.c:454-484: both tables start at half NLOCKENTS without HASH_FIXED_SIZE
+// and grow through ShmemAllocNoError until the segment is exhausted.
+#[test]
+fn lock_tables_are_growable_from_half_size() {
+    use types_hash::hsearch::{HASH_ENTER_NULL, HASH_REMOVE};
+    setup();
+    let tables = shared::shared();
+    let max_table_size = shared::NLOCKENTS(CFG.max_prepared_xacts);
+    let tags: Vec<LOCKTAG> = (0..max_table_size as u32 * 3 / 4)
+        .map(|relid| LOCKTAG::relation(TESTDB + 1, 900_000 + relid))
+        .collect();
+    unsafe {
+        assert!(!(*tables.lock_hash).isfixed);
+        assert!(!(*tables.proclock_hash).isfixed);
+        for tag in &tags {
+            let key = tag as *const LOCKTAG as *const u8;
+            let mut found = false;
+            let p = dynahash::hash_search(tables.lock_hash, key, HASH_ENTER_NULL, Some(&mut found))
+                .unwrap();
+            assert!(!found);
+            assert!(!p.is_null(), "growth past init_table_size must not be refused");
+        }
+        assert!(dynahash::hash_get_num_entries(tables.lock_hash) > max_table_size / 2);
+        for tag in &tags {
+            let key = tag as *const LOCKTAG as *const u8;
+            dynahash::hash_search(tables.lock_hash, key, HASH_REMOVE, None).unwrap();
+        }
+    }
 }

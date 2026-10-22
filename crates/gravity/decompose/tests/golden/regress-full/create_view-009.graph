@@ -1,0 +1,11 @@
+-- regress-full-create_view-009
+-- SELECT a::varchar(3) FROM tt1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=3 rows=2
+    row (c1043:'abc', c1043:'0123456789', c1700:'\x00\x80*\x00', c1043:'abcd')
+    row (c1043:'0123456789', c1043:'abc', c1700:'\x00\x81*\x00\xb0\x04', c1043:'abc')
+  project (1=fn669(v3.1, c23:7, c16:1))
+  outs 1=vl:call669
+mapped: ValuesScan

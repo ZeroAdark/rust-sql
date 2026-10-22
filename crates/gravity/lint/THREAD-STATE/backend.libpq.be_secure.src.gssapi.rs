@@ -1,0 +1,1 @@
+backend/libpq/be_secure/src/gssapi.rs	GSS	pgport	at:be_gssapi_close	leader	C port->gss and be-secure-gssapi.c's buffers: this backend's GSSAPI transport, closed by be_gssapi_close; a claim never touches the client connection

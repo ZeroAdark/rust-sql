@@ -1,0 +1,11 @@
+-- regress-full-interval-009
+-- SELECT i AS interval, -i AS um, i * 2.0 AS mul, i * -2.0 AS mul_neg, i * 'infinity' AS mul_inf, i * '-infinity' AS mul_inf_neg, i / 3.0 AS div, i / -3.0 AS div_neg FROM INFINITE_INTERVAL_TBL WHERE NOT isfinite(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1233 end=sink
+  nodes n0@0
+  source range rel=17189 rti=1 am=heap
+    lanes Attr(1):byref8:fx16:win/page Offset:byval2:w2:val
+  filter not(fn1390(v1.1))
+  project (1=v1.1, 2=op1336(v1.1), 3=op1583(v1.1, c701:4611686018427387904), 4=op1583(v1.1, c701:-4611686018427387904), 5=op1583(v1.1, c701:9218868437227405312), 6=op1583(v1.1, c701:-4503599627370496), 7=op1585(v1.1, c701:4613937818241073152), 8=op1585(v1.1, c701:-4609434218613702656))
+  outs 1=fx16:win/page 2=fx16:call1168 3=fx16:call1618 4=fx16:call1618 5=fx16:call1618 6=fx16:call1618 7=fx16:call1326 8=fx16:call1326
+mapped: SeqScan

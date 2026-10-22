@@ -1,0 +1,4 @@
+path	crates/gravity/exec/src/admit/gates.rs
+growth	std::collections::HashSet::insert	1
+growth	std::iter::Extend::extend	2
+growth	std::vec::Vec::push	1

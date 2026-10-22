@@ -1,0 +1,13 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/wal.rs
+growth	pgrc_format::wire::put_u16	3
+growth	pgrc_format::wire::put_u32	17
+growth	pgrc_format::wire::put_u64	7
+growth	pgrc_format::wire::put_u8	5
+growth	std::vec::Vec::extend_from_slice	6
+growth	std::vec::Vec::push	5
+method	pgrc_format::try_to_vec	3
+method	pgrc_format::try_vec	5
+method	std::clone::Clone::clone	20
+method	std::string::ToString::to_string	4
+type	std::string::String	6
+type	std::vec::Vec	10

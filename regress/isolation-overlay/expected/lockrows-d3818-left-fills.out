@@ -1,0 +1,272 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2x s1fk s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0;
+QUERY PLAN                                                                      
+--------------------------------------------------------------------------------
+LockRows                                                                        
+  ->  Nested Loop Left Join                                                     
+        Join Filter: (lf8.fk = lf0.fk)                                          
+        ->  Nested Loop Left Join                                               
+              Join Filter: (lf7.fk = lf0.fk)                                    
+              ->  Nested Loop Left Join                                         
+                    Join Filter: (lf6.fk = lf0.fk)                              
+                    ->  Nested Loop Left Join                                   
+                          Join Filter: (lf5.fk = lf0.fk)                        
+                          ->  Nested Loop Left Join                             
+                                Join Filter: (lf4.fk = lf0.fk)                  
+                                ->  Nested Loop Left Join                       
+                                      Join Filter: (lf3.fk = lf0.fk)            
+                                      ->  Nested Loop Left Join                 
+                                            Join Filter: (lf2.fk = lf0.fk)      
+                                            ->  Nested Loop Left Join           
+                                                  Join Filter: (lf1.fk = lf0.fk)
+                                                  ->  Seq Scan on lf0           
+                                                        Filter: (id = 1)        
+                                                  ->  Seq Scan on lf1           
+                                            ->  Seq Scan on lf2                 
+                                      ->  Seq Scan on lf3                       
+                                ->  Seq Scan on lf4                             
+                          ->  Seq Scan on lf5                                   
+                    ->  Seq Scan on lf6                                         
+              ->  Seq Scan on lf7                                               
+        ->  Seq Scan on lf8                                                     
+(27 rows)
+
+step s1fk: UPDATE lf0 SET fk = 20 WHERE id = 1;
+step s2l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|fk|v|v|v|v|v|v|v|v|v
+--+--+-+-+-+-+-+-+-+-+-
+ 1|20|a| | | | | | | | 
+ 1|20|a| | | | | | | | 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2l s1c
+step s1v: UPDATE lf0 SET v = 'a2' WHERE id = 1;
+step s2l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|fk|v |   v|   v|v|   v|v    |v|   v|   v
+--+--+--+----+----+-+----+-----+-+----+----
+ 1|10|a2|1-10|2-10| |4-10|5-10a| |7-10|8-10
+ 1|10|a2|1-10|2-10| |4-10|5-10b| |7-10|8-10
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1miss s2l s1c
+step s1miss: UPDATE lf0 SET fk = 99 WHERE id = 1;
+step s2l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|fk|v|v|v|v|v|v|v|v|v
+--+--+-+-+-+-+-+-+-+-+-
+ 1|99|a| | | | | | | | 
+ 1|99|a| | | | | | | | 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1ref s2l s1c
+step s1ref: UPDATE lf1 SET v = 'changed' WHERE fk = 10; UPDATE lf5 SET v = 'changed' WHERE id = 502; UPDATE lf0 SET v = 'a2' WHERE id = 1;
+step s2l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|fk|v |   v|   v|v|   v|v    |v|   v|   v
+--+--+--+----+----+-+----+-----+-+----+----
+ 1|10|a2|1-10|2-10| |4-10|5-10a| |7-10|8-10
+ 1|10|a2|1-10|2-10| |4-10|5-10b| |7-10|8-10
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1del s2l s1c
+step s1del: DELETE FROM lf0 WHERE id = 1;
+step s2l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|fk|v|v|v|v|v|v|v|v|v
+--+--+-+-+-+-+-+-+-+-+-
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1fk s2k s1c
+step s1fk: UPDATE lf0 SET fk = 20 WHERE id = 1;
+step s2k: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR NO KEY UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s2k: <... completed>
+id|fk|v|v|v|v|v|v|v|v|v
+--+--+-+-+-+-+-+-+-+-+-
+ 1|20|a| | | | | | | | 
+ 1|20|a| | | | | | | | 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1fk s3l s1c
+step s3x: EXPLAIN (COSTS OFF) SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id + 0 <= 1 FOR UPDATE OF lf0;
+QUERY PLAN                                                                     
+-------------------------------------------------------------------------------
+LockRows                                                                       
+  ->  Hash Left Join                                                           
+        Hash Cond: (lf0.fk = lf8.fk)                                           
+        ->  Hash Left Join                                                     
+              Hash Cond: (lf0.fk = lf7.fk)                                     
+              ->  Hash Left Join                                               
+                    Hash Cond: (lf0.fk = lf6.fk)                               
+                    ->  Hash Left Join                                         
+                          Hash Cond: (lf0.fk = lf5.fk)                         
+                          ->  Hash Left Join                                   
+                                Hash Cond: (lf0.fk = lf4.fk)                   
+                                ->  Hash Left Join                             
+                                      Hash Cond: (lf0.fk = lf3.fk)             
+                                      ->  Hash Left Join                       
+                                            Hash Cond: (lf0.fk = lf2.fk)       
+                                            ->  Hash Left Join                 
+                                                  Hash Cond: (lf0.fk = lf1.fk) 
+                                                  ->  Seq Scan on lf0          
+                                                        Filter: ((id + 0) <= 1)
+                                                  ->  Hash                     
+                                                        ->  Seq Scan on lf1    
+                                            ->  Hash                           
+                                                  ->  Seq Scan on lf2          
+                                      ->  Hash                                 
+                                            ->  Seq Scan on lf3                
+                                ->  Hash                                       
+                                      ->  Seq Scan on lf4                      
+                          ->  Hash                                             
+                                ->  Seq Scan on lf5                            
+                    ->  Hash                                                   
+                          ->  Seq Scan on lf6                                  
+              ->  Hash                                                         
+                    ->  Seq Scan on lf7                                        
+        ->  Hash                                                               
+              ->  Seq Scan on lf8                                              
+(35 rows)
+
+step s1fk: UPDATE lf0 SET fk = 20 WHERE id = 1;
+step s3l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id + 0 <= 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|fk|v|v|v|v|v|v|v|v
+--+--+-+-+-+-+-+-+-+-
+ 1|20|a| | | | | | | 
+ 1|20|a| | | | | | | 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s3l s1c
+step s1v: UPDATE lf0 SET v = 'a2' WHERE id = 1;
+step s3l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id + 0 <= 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|fk|v |   v|   v|v|   v|v|   v|   v
+--+--+--+----+----+-+----+-+----+----
+ 1|10|a2|1-10|2-10| |4-10| |7-10|8-10
+ 1|10|a2|1-10|2-10| |4-10| |7-10|8-10
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1miss s3l s1c
+step s1miss: UPDATE lf0 SET fk = 99 WHERE id = 1;
+step s3l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id + 0 <= 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|fk|v|v|v|v|v|v|v|v
+--+--+-+-+-+-+-+-+-+-
+ 1|99|a| | | | | | | 
+ 1|99|a| | | | | | | 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1ref s3l s1c
+step s1ref: UPDATE lf1 SET v = 'changed' WHERE fk = 10; UPDATE lf5 SET v = 'changed' WHERE id = 502; UPDATE lf0 SET v = 'a2' WHERE id = 1;
+step s3l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id + 0 <= 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|fk|v |   v|   v|v|   v|v|   v|   v
+--+--+--+----+----+-+----+-+----+----
+ 1|10|a2|1-10|2-10| |4-10| |7-10|8-10
+ 1|10|a2|1-10|2-10| |4-10| |7-10|8-10
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s4x s1fk s4l s1c
+step s4x: EXPLAIN (COSTS OFF) SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0;
+QUERY PLAN                                                                            
+--------------------------------------------------------------------------------------
+LockRows                                                                              
+  ->  Nested Loop Left Join                                                           
+        ->  Nested Loop Left Join                                                     
+              ->  Nested Loop Left Join                                               
+                    ->  Nested Loop Left Join                                         
+                          ->  Nested Loop Left Join                                   
+                                ->  Nested Loop Left Join                             
+                                      ->  Nested Loop Left Join                       
+                                            ->  Nested Loop Left Join                 
+                                                  ->  Index Scan using lf0_pkey on lf0
+                                                        Index Cond: (id = 1)          
+                                                  ->  Index Scan using lf1_fk on lf1  
+                                                        Index Cond: (fk = lf0.fk)     
+                                            ->  Index Scan using lf2_fk on lf2        
+                                                  Index Cond: (fk = lf0.fk)           
+                                      ->  Index Scan using lf3_fk on lf3              
+                                            Index Cond: (fk = lf0.fk)                 
+                                ->  Index Scan using lf4_fk on lf4                    
+                                      Index Cond: (fk = lf0.fk)                       
+                          ->  Index Scan using lf5_fk on lf5                          
+                                Index Cond: (fk = lf0.fk)                             
+                    ->  Index Scan using lf6_fk on lf6                                
+                          Index Cond: (fk = lf0.fk)                                   
+              ->  Index Scan using lf7_fk on lf7                                      
+                    Index Cond: (fk = lf0.fk)                                         
+        ->  Index Scan using lf8_fk on lf8                                            
+              Index Cond: (fk = lf0.fk)                                               
+(27 rows)
+
+step s1fk: UPDATE lf0 SET fk = 20 WHERE id = 1;
+step s4l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+id|fk|v|v|v|v|v|v|v|v|v
+--+--+-+-+-+-+-+-+-+-+-
+ 1|20|a| | | | | | | | 
+ 1|20|a| | | | | | | | 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1miss s4l s1c
+step s1miss: UPDATE lf0 SET fk = 99 WHERE id = 1;
+step s4l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+id|fk|v|v|v|v|v|v|v|v|v
+--+--+-+-+-+-+-+-+-+-+-
+ 1|99|a| | | | | | | | 
+ 1|99|a| | | | | | | | 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1ref s4l s1c
+step s1ref: UPDATE lf1 SET v = 'changed' WHERE fk = 10; UPDATE lf5 SET v = 'changed' WHERE id = 502; UPDATE lf0 SET v = 'a2' WHERE id = 1;
+step s4l: SELECT lf0.id, lf0.fk, lf0.v, lf1.v, lf2.v, lf3.v, lf4.v, lf5.v, lf6.v, lf7.v, lf8.v FROM lf0 LEFT JOIN lf1 ON lf1.fk = lf0.fk LEFT JOIN lf2 ON lf2.fk = lf0.fk LEFT JOIN lf3 ON lf3.fk = lf0.fk LEFT JOIN lf4 ON lf4.fk = lf0.fk LEFT JOIN lf5 ON lf5.fk = lf0.fk LEFT JOIN lf6 ON lf6.fk = lf0.fk LEFT JOIN lf7 ON lf7.fk = lf0.fk LEFT JOIN lf8 ON lf8.fk = lf0.fk WHERE lf0.id = 1 FOR UPDATE OF lf0; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+id|fk|v |   v|   v|v|   v|v    |v|   v|   v
+--+--+--+----+----+-+----+-----+-+----+----
+ 1|10|a2|1-10|2-10| |4-10|5-10a| |7-10|8-10
+ 1|10|a2|1-10|2-10| |4-10|5-10b| |7-10|8-10
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress

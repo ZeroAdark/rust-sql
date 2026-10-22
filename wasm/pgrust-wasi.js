@@ -1,8 +1,8 @@
-// pgrust-wasi.js — hand-rolled WASI preview1 host for the pgrust
+// pgrust-wasi.js — hand-rolled WASI preview1 host for the pgrust-fast
 // wasm32-wasip1 single-user `postgres.wasm` module, over an in-memory VFS.
 //
 // This replaces the pgrust-harness.js `pgvfs::host_*` layer the site used for
-// the old wasm32/64-unknown-unknown builds: pgrust builds postgres.wasm
+// the old wasm32/64-unknown-unknown builds: pgrust-fast builds postgres.wasm
 // for wasm32-wasip1 (panic=unwind lowered through standard Wasm exception
 // handling), so the module's entire import surface is the 33
 // `wasi_snapshot_preview1` functions enumerated below — no env::* stubs at
@@ -17,8 +17,11 @@
 //     USER=postgres, PGRUST_TZDIR=/share/timezone, PGRUST_PGSHAREDIR=/share,
 //     PGRUST_RUNTIME=0.
 //   - argv = ["postgres","--single","-D","/pgdata", GUCs..., "postgres"] with
-//     the boot lane's GUC set (max_stack_depth=60000, io_method=sync,
-//     autovacuum=off, wal_sync_method=fdatasync).
+//     the boot lane's GUC set (io_method=sync, autovacuum=off,
+//     wal_sync_method=fdatasync). No max_stack_depth override (D3103): the
+//     server derives its default and the guard's ceiling from the engine
+//     stack the host declares in PGRUST_WASM_ENGINE_STACK (V8's 984 KB when
+//     unset); a forced 60000 used to switch the guard off.
 //   - stdin (fd 0) = the SQL text, read once to EOF; stdout/stderr (fd 1/2)
 //     are captured into the provided sinks.
 //   - proc_exit raises a typed JS exception carrying the exit code; with the
@@ -112,7 +115,26 @@ class Vfs {
     const node = this.nodes.get(key);
     if (!node) return E.NOENT;
     if (node.type === 'dir') return E.ISDIR;
+    if (node.nlink > 1) node.nlink--;
     this.nodes.delete(key);
+    return 0;
+  }
+
+  // Hard link: the module imports path_link for pgrcolumnar's spool
+  // (pgrc_spool link_pending/link_final, pgrc_write wvfs). A second path names the SAME node, so writes
+  // through either path are shared, as with link(2). Snapshots store each path's
+  // bytes separately, so links do not survive a persist/restore round trip.
+  link(from, to) {
+    const fk = this._norm(from), tk = this._norm(to);
+    const node = this.nodes.get(fk);
+    if (!node) return E.NOENT;
+    if (node.type === 'dir') return E.PERM;
+    if (this.nodes.has(tk)) return E.EXIST;
+    const parent = this.nodes.get(tk.slice(0, tk.lastIndexOf('/')) || '/');
+    if (!parent) return E.NOENT;
+    if (parent.type !== 'dir') return E.NOTDIR;
+    this.nodes.set(tk, node);
+    node.nlink = (node.nlink || 1) + 1;
     return 0;
   }
 
@@ -133,6 +155,9 @@ class Vfs {
     const fk = this._norm(from), tk = this._norm(to);
     const node = this.nodes.get(fk);
     if (!node) return E.NOENT;
+    const replaced = this.nodes.get(tk);
+    if (replaced === node) return 0; // rename(2): two names of one file (or one name onto itself) change nothing
+    if (replaced && replaced.nlink > 1) replaced.nlink--;
     if (node.type === 'dir') {
       const prefix = fk + '/';
       for (const [k, v] of [...this.nodes.entries()]) {
@@ -170,13 +195,15 @@ function nowSec() { return Math.floor(Date.now() / 1000); }
 const PREOPEN_FD = 3;
 const ALL_RIGHTS = 0xFFFFFFFFFFFFFFFFn;
 
-export function makeWasi({ image, manifest, vfs: existingVfs, stdinBytes, stdinStream, onStdout, onStderr, argv: argvOverride, env: envOverride, pipes }) {
+// `cancel`: the page's cancel word (an Int32Array over a SharedArrayBuffer; makeGravityHost reads it for the server). A
+// read of the client's input (stdin) clears it: a cancel asks for the statement that is running, so one left from an
+// idle prompt must not end the next statement (PostgreSQL ignores a cancel while it waits for a command).
+export function makeWasi({ image, manifest, vfs: existingVfs, stdinBytes, stdinStream, onStdout, onStderr, argv: argvOverride, env: envOverride, pipes, cancel }) {
   const vfs = existingVfs || new Vfs(image, manifest);
 
   const argv = argvOverride || [
     'postgres', '--single',
     '-D', '/pgdata',
-    '-c', 'max_stack_depth=60000',
     '-c', 'io_method=sync',
     '-c', 'autovacuum=off',
     '-c', 'wal_sync_method=fdatasync',
@@ -245,7 +272,7 @@ export function makeWasi({ image, manifest, vfs: existingVfs, stdinBytes, stdinS
     view.setBigUint64(ptr + 0, 1n, true);                       // dev
     view.setBigUint64(ptr + 8, BigInt(node.ino || 1), true);    // ino
     view.setUint8(ptr + 16, node.type === 'dir' ? FT.DIR : FT.REG);
-    view.setBigUint64(ptr + 24, 1n, true);                      // nlink
+    view.setBigUint64(ptr + 24, BigInt(node.nlink || 1), true); // nlink
     view.setBigUint64(ptr + 32, BigInt(size), true);            // size
     view.setBigUint64(ptr + 40, mtimNs, true);                  // atim
     view.setBigUint64(ptr + 48, mtimNs, true);                  // mtim
@@ -435,6 +462,7 @@ export function makeWasi({ image, manifest, vfs: existingVfs, stdinBytes, stdinS
         : (h.kind === 'piperead' ? h.stream : null);
       if (rstream) {
         const attempt = () => {
+          if (cancel && h.kind === 'stdin') Atomics.store(cancel, 0, 0);
           const view = dv(); const mem = u8();
           let total = 0;
           for (const { ptr, len } of iovs(iovsPtr, iovsLen)) {
@@ -453,6 +481,7 @@ export function makeWasi({ image, manifest, vfs: existingVfs, stdinBytes, stdinS
       }
       let total = 0;
       const mem = u8();
+      if (cancel && h.kind === 'stdin') Atomics.store(cancel, 0, 0);
       for (const { ptr, len } of iovs(iovsPtr, iovsLen)) {
         if (len === 0) continue;
         let chunk;
@@ -612,6 +641,12 @@ export function makeWasi({ image, manifest, vfs: existingVfs, stdinBytes, stdinS
       if (from === null || to === null) return E.BADF;
       return vfs.rename(from, to);
     },
+    path_link(oldDirfd, _oldFlags, oldPtr, oldLen, newDirfd, newPtr, newLen) {
+      const from = atPath(oldDirfd, oldPtr, oldLen);
+      const to = atPath(newDirfd, newPtr, newLen);
+      if (from === null || to === null) return E.BADF;
+      return vfs.link(from, to);
+    },
     path_readlink(_dirfd, _pathPtr, _pathLen, _bufPtr, _bufLen, _usedPtr) {
       return E.INVAL; // the packed image contains no symlinks (built with cp -RL)
     },
@@ -659,23 +694,130 @@ export function makeWasi({ image, manifest, vfs: existingVfs, stdinBytes, stdinS
     sock_send() { return E.NOTSUP; },
   };
 
+  // Every WASI p1 i32 parameter is unsigned (pointers, lengths, fds, flags), but a wasm i32 reaches JS signed: past 2 GiB of
+  // linear memory a pointer is negative and DataView / subarray offsets throw. Convert once here for every import.
+  for (const [name, f] of Object.entries(wasi)) {
+    wasi[name] = (...args) => f(...args.map((x) => (typeof x === 'number' ? x >>> 0 : x)));
+  }
   return { vfs, wasi, setMemory: (m) => { memory = m; } };
 }
 
+// The Gravity JIT host (lane wasmjit stage 2): the server's two `env` imports
+// gravity_install / gravity_uninstall (crates/gravity/backend/src/raw.rs
+// `wasm`). A Gravity program's module (gravity_wasm) imports the server's own
+// memory, function table and shadow-stack pointer, so it shares them; its
+// entries go into free table slots, and a wasm32 function pointer IS a table
+// index, so the server calls them directly. Slots are recycled per run length
+// (exact-size free lists), so install/uninstall of any number of distinct
+// programs keeps the table bounded by the most ever live at once.
+// Synchronous `new WebAssembly.Module` is fine in a Worker (and in node).
+// `stats` is read by the stage-2 witnesses (bounded table, free-list reuse).
+// `cancel` (the page's cancel word, makeWasi) answers the server's pgrust_cancel_poll: 1 once per cancel requested, 0, or
+// -1 without a word (the page is not cross-origin isolated): the server then never polls for one.
+export function makeGravityHost({ failInstall = false, noHost = false, sampleEvery = 1000, onStats = null, cancel = null } = {}) {
+  let ex = null;
+  const free = new Map(); // run length -> [first slot, ...]
+  // samples: [installs, uninstalls, table length, reused] every `sampleEvery` installs (the bounded-table witness)
+  // compileMs / instantiateMs / bytes: the install cost per statement, for an `onStats` caller to report
+  const stats = { installs: 0, uninstalls: 0, failures: 0, reused: 0, grown: 0, samples: [], compileMs: 0, instantiateMs: 0, bytes: 0 };
+  if (onStats) onStats(stats);
+  const enc = new TextEncoder();
+  const env = {
+    gravity_install(ptr, len, n, errPtr, errCap) {
+      if (!ex) return -2;
+      try {
+        if (failInstall) throw new Error('install refused (failInstall: the fallback witness)');
+        // wasm i32 arguments arrive signed: a pointer past 2 GiB is negative until >>> 0
+        ptr >>>= 0; len >>>= 0; errPtr >>>= 0; errCap >>>= 0;
+        const bytes = new Uint8Array(ex.memory.buffer, ptr, len).slice();
+        const t0 = performance.now();
+        const module = new WebAssembly.Module(bytes);
+        const t1 = performance.now();
+        const table = ex.__indirect_function_table;
+        // A module imports the server's memory and stack pointer, and each host it calls as `host_<table index>`
+        // (resolved here from the table): it imports no table, so growing the table never grows a dispatch table per
+        // installed instance (V8 ran out of memory at a few thousand installs when modules imported the table).
+        const env = { memory: ex.memory, __stack_pointer: ex.__stack_pointer };
+        for (const imp of WebAssembly.Module.imports(module)) {
+          if (imp.kind === 'function' && imp.name.startsWith('host_')) env[imp.name] = table.get(Number(imp.name.slice(5)));
+          else if (imp.name === '__indirect_function_table') env[imp.name] = table;
+        }
+        const inst = new WebAssembly.Instance(module, { env });
+        stats.compileMs += t1 - t0;
+        stats.instantiateMs += performance.now() - t1;
+        stats.bytes += len;
+        const runs = free.get(n);
+        let first;
+        if (runs && runs.length) { first = runs.pop(); stats.reused++; }
+        else { first = table.grow(n); stats.grown += n; }
+        for (let i = 0; i < n; i++) table.set(first + i, inst.exports['entry' + i]);
+        stats.installs++;
+        if (stats.installs % sampleEvery === 0) stats.samples.push([stats.installs, stats.uninstalls, table.length, stats.reused]);
+        return first;
+      } catch (e) {
+        stats.failures++;
+        const msg = enc.encode(String(e && e.message || e)).subarray(0, Math.max(0, errCap - 1));
+        const out = new Uint8Array(ex.memory.buffer, errPtr, errCap);
+        out.set(msg);
+        out[msg.length] = 0;
+        return -1;
+      }
+    },
+    pgrust_cancel_poll() {
+      if (!cancel) return -1;
+      return Atomics.exchange(cancel, 0, 0) > 0 ? 1 : 0;
+    },
+    gravity_uninstall(first, n) {
+      first >>>= 0;
+      const table = ex.__indirect_function_table;
+      for (let i = 0; i < n; i++) table.set(first + i, null);
+      if (!free.has(n)) free.set(n, []);
+      free.get(n).push(first);
+      stats.uninstalls++;
+    },
+  };
+  return {
+    env,
+    stats,
+    tableLength: () => (ex ? ex.__indirect_function_table.length : 0),
+    // The JIT is on only when the server exports its table and stack pointer
+    // (wasm-build.sh's link flags); else every install answers -2 (no JIT host).
+    // noHost: the same -2 on purpose (the kit's interpreter arm: no emit, no install).
+    setExports(e) { ex = !noHost && e.__indirect_function_table && e.__stack_pointer ? e : null; },
+  };
+}
+
 // Instantiate + run the module to completion. Returns { exitCode }.
-export async function run({ wasmModule, image, manifest, vfs, stdinBytes, onStdout, onStderr, argv, env }) {
-  const h = makeWasi({ image, manifest, vfs, stdinBytes, onStdout, onStderr, argv, env });
-  const instance = await WebAssembly.instantiate(wasmModule, { wasi_snapshot_preview1: h.wasi });
+export async function run({ wasmModule, image, manifest, vfs, stdinBytes, onStdout, onStderr, argv, env, jitOptions, cancel }) {
+  const h = makeWasi({ image, manifest, vfs, stdinBytes, onStdout, onStderr, argv, env, cancel });
+  const jit = makeGravityHost({ ...jitOptions, cancel });
+  const instance = await WebAssembly.instantiate(wasmModule, { wasi_snapshot_preview1: h.wasi, env: jit.env });
   const ex = instance.exports;
   h.setMemory(ex.memory);
+  jit.setExports(ex);
   let exitCode = 0;
+  let engineStackExhausted = false;
   try {
     ex._start();
   } catch (e) {
     if (e instanceof GuestExit) exitCode = e.code;
-    else throw e;
+    else if (isEngineStackExhausted(e)) {
+      // D3103 backstop: the engine's own stack ran out below the guard (check_stack_depth raises 54001 from a ceiling
+      // derived from PGRUST_WASM_ENGINE_STACK; a chain it does not bound can still get here). The instance is dead (no
+      // unwinding ran), so end the session the way a FATAL does, with one line on stderr, not a host crash.
+      engineStackExhausted = true;
+      exitCode = 1;
+      if (onStderr) onStderr(new TextEncoder().encode(`FATAL:  ${ENGINE_STACK_MESSAGE}\n`));
+    } else throw e;
   }
-  return { exitCode, memoryBytes: ex.memory.buffer.byteLength };
+  return { exitCode, engineStackExhausted, memoryBytes: ex.memory.buffer.byteLength, jit: { ...jit.stats, tableLength: jit.tableLength() } };
 }
 
-export { Vfs, GuestExit };
+// D3103: V8 reports engine stack exhaustion inside wasm as a RangeError ("Maximum call stack size exceeded").
+const ENGINE_STACK_MESSAGE = 'stack depth limit exceeded in the wasm engine (its own stack ran out before the server\'s '
+  + 'max_stack_depth check); the session ended. Raise the host engine stack and declare it in PGRUST_WASM_ENGINE_STACK, or lower max_stack_depth.';
+export function isEngineStackExhausted(e) {
+  return e instanceof RangeError && /call stack/i.test(String(e.message));
+}
+
+export { Vfs, GuestExit, ENGINE_STACK_MESSAGE };

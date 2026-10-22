@@ -207,48 +207,86 @@ fn dict_plain_fallback_fixture() {
 }
 
 #[test]
-fn unsupported_features_error_cleanly() {
-    for (f, needle) in [
-        ("v2pages.parquet", "data page v2"),
-        ("nested.parquet", "nested"),
-        ("gzip.parquet", "GZIP"),
-        ("int96.parquet", "INT96"),
-        ("delta.parquet", "DELTA_BINARY_PACKED"),
-    ] {
-        let path = fixture(f);
-        let r = FileReader::open(&path);
-        let err = match r {
-            Err(e) => format!("{e:?}"),
-            Ok(mut fr) => {
-                // Schema-level features error at open; page-level ones at
-                // first decode.
-                let ncols = fr.meta.columns.len();
-                let cols: Vec<usize> = (0..ncols).collect();
-                let vutf8 = vec![false; ncols];
-                let mut batches: Vec<ColumnBatch> =
-                    fr.meta.columns.iter().map(|c| ColumnBatch::new_for(c.phys)).collect();
-                let mut got = None;
-                'outer: for rg in 0..fr.meta.row_groups.len() {
-                    let mut rgr = match fr.row_group(rg, &cols, &vutf8) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            got = Some(format!("{e:?}"));
-                            break;
-                        }
-                    };
-                    while rgr.rows_remaining() > 0 {
-                        let n = rgr.rows_remaining().min(512) as usize;
-                        if let Err(e) = rgr.read_batches(&mut batches, n) {
-                            got = Some(format!("{e:?}"));
-                            break 'outer;
-                        }
-                    }
-                }
-                got.unwrap_or_else(|| panic!("{f}: expected a clean error"))
-            }
-        };
-        assert!(err.contains(needle), "{f}: error {err:?} lacks {needle:?}");
+fn v2_pages_gzip_delta_int96_decode() {
+    // Formerly the refused set; each now decodes to the generator's rows.
+    let (r, rows) = read_all(&fixture("v2pages.parquet"));
+    assert_eq!(rows as i64, r.meta.num_rows);
+    check_basic_rows(&fixture("v2pages.parquet"));
+    check_basic_rows(&fixture("gzip.parquet"));
+
+    let mut fr = FileReader::open(&fixture("delta.parquet")).unwrap();
+    let mut b = vec![ColumnBatch::new_for(fr.meta.columns[0].phys)];
+    let mut rgr = fr.row_group(0, &[0], &[false]).unwrap();
+    let n = rgr.rows_remaining() as usize;
+    rgr.read_batches(&mut b, n).unwrap();
+    let crate::BatchData::I64(v) = &b[0].data else { panic!("delta type") };
+    assert_eq!(v.len(), 1000);
+    assert!(v.iter().enumerate().all(|(i, &x)| x == i as i64));
+
+    let mut fr = FileReader::open(&fixture("int96.parquet")).unwrap();
+    assert_eq!(fr.meta.columns[0].phys, crate::Phys::Int96);
+    let mut b = vec![ColumnBatch::new_for(crate::Phys::Int96)];
+    let mut rgr = fr.row_group(0, &[0], &[false]).unwrap();
+    let n = rgr.rows_remaining() as usize;
+    rgr.read_batches(&mut b, n).unwrap();
+    let crate::BatchData::I96(v) = &b[0].data else { panic!("int96 type") };
+    assert_eq!(v.len(), 30);
+    for (i, w) in v.iter().enumerate() {
+        assert_eq!(w[2], 2_458_850, "row {i}");
+        let nanos = (u64::from(w[1]) << 32) | u64::from(w[0]);
+        assert_eq!(nanos, i as u64 * 1_000_000_000, "row {i}");
     }
+}
+
+#[test]
+fn nested_list_levels() {
+    // xs: [[1, 2], [3], []] as a 3-level LIST<INT32>: five slots.
+    let mut fr = FileReader::open(&fixture("nested.parquet")).unwrap();
+    let c = &fr.meta.columns[0];
+    assert_eq!(c.name, "xs.list.element");
+    assert_eq!((c.max_def, c.max_rep), (3, 1));
+    assert_eq!(c.ancestors.len(), 2);
+    assert_eq!(c.ancestors[0].logical, crate::Logical::List);
+    assert_eq!(c.ancestors[1].repetition, crate::Repetition::Repeated);
+    let mut b = vec![ColumnBatch::new_for(c.phys)];
+    // Two records, then one.
+    let mut rgr = fr.row_group(0, &[0], &[false]).unwrap();
+    rgr.read_batches(&mut b, 2).unwrap();
+    let crate::BatchData::I32(v) = &b[0].data else { panic!("type") };
+    assert_eq!(v, &[1, 2, 3]);
+    assert_eq!(rgr.levels(0).rep, [0, 1, 0]);
+    assert_eq!(rgr.levels(0).def, [3, 3, 3]);
+    rgr.read_batches(&mut b, 1).unwrap();
+    assert_eq!(b[0].len(), 1);
+    assert!(b[0].is_null(0));
+    assert_eq!(rgr.levels(0).rep, [0]);
+    assert_eq!(rgr.levels(0).def, [1]);
+    assert_eq!(rgr.rows_remaining(), 0);
+}
+
+fn check_basic_rows(path: &str) {
+    let mut fr = FileReader::open(path).unwrap();
+    let ncols = fr.meta.columns.len();
+    let names: Vec<String> = fr.meta.columns.iter().map(|c| c.name.clone()).collect();
+    let cols: Vec<usize> = (0..ncols).collect();
+    let vutf8 = vec![false; ncols];
+    let mut batches: Vec<ColumnBatch> =
+        fr.meta.columns.iter().map(|c| ColumnBatch::new_for(c.phys)).collect();
+    let mut row = 0usize;
+    for rg in 0..fr.meta.row_groups.len() {
+        let mut rgr = fr.row_group(rg, &cols, &vutf8).unwrap();
+        while rgr.rows_remaining() > 0 {
+            let n = rgr.rows_remaining().min(97) as usize;
+            rgr.read_batches(&mut batches, n).unwrap();
+            for k in 0..n {
+                for (c, b) in batches.iter().enumerate() {
+                    check_cell(&names[c], b, k, row + k);
+                }
+            }
+            row += n;
+        }
+    }
+    assert_eq!(row as i64, fr.meta.num_rows);
 }
 
 #[test]
@@ -356,15 +394,23 @@ fn footer_byte_flips_never_panic() {
 
 #[test]
 fn page_byte_flips_never_panic() {
-    // Flip bytes in the page region (before the footer): decoding must
-    // either succeed (bit flip inside value payload) or error - no panics,
-    // no runaway allocations.
-    let path = fixture("uncompressed.parquet");
+    for f in ["uncompressed.parquet", "v2pages.parquet", "delta.parquet", "nested.parquet", "gzip.parquet", "int96.parquet"] {
+        page_flips(f);
+    }
+}
+
+/// Flip bytes in the page region (before the footer): decoding must either
+/// succeed (bit flip inside value payload) or error - no panics, no
+/// runaway allocations. Runs with the page crc check off so flips reach
+/// the decoders.
+fn page_flips(f: &str) {
+    std::env::set_var("PGRUST_PARQUET_CRC", "0");
+    let path = fixture(f);
     let bytes = std::fs::read(&path).unwrap();
     let footer_len =
         u32::from_le_bytes(bytes[bytes.len() - 8..bytes.len() - 4].try_into().unwrap()) as usize;
     let footer_start = bytes.len() - 8 - footer_len;
-    let dir = std::env::temp_dir().join(format!("pqread-pflip-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pqread-pflip-{}-{f}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut x: u64 = 0x13198A2E03707344;
     for n in 0..400 {

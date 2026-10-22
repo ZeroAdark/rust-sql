@@ -1,0 +1,180 @@
+Parsed test spec with 6 sessions
+
+starting permutation: s2p s4p s5p s6p s1c s2c s4c s5c s6c
+step s2p: EXPLAIN (COSTS OFF) UPDATE cik SET val = val + 1000 WHERE id IN (SELECT id FROM (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY g ORDER BY n) rn FROM cis) x WHERE rn <= 3 OFFSET 0) s);
+QUERY PLAN                                                                                                      
+----------------------------------------------------------------------------------------------------------------
+Update on cik                                                                                                   
+  ->  Merge Join                                                                                                
+        Merge Cond: (cik.id = s.id)                                                                             
+        ->  Index Scan using cik_pkey on cik                                                                    
+        ->  Sort                                                                                                
+              Sort Key: s.id                                                                                    
+              ->  HashAggregate                                                                                 
+                    Group Key: s.id                                                                             
+                    ->  Subquery Scan on s                                                                      
+                          ->  Subquery Scan on x                                                                
+                                ->  WindowAgg                                                                   
+                                      Window: w1 AS (PARTITION BY cis.g ORDER BY cis.n ROWS UNBOUNDED PRECEDING)
+                                      Run Condition: (row_number() OVER w1 <= 3)                                
+                                      ->  Sort                                                                  
+                                            Sort Key: cis.g, cis.n                                              
+                                            ->  Seq Scan on cis                                                 
+(16 rows)
+
+step s4p: EXPLAIN (COSTS OFF) DELETE FROM cik WHERE id IN (SELECT id FROM (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY g ORDER BY n) rn FROM cis) x WHERE rn <= 3 OFFSET 0) s);
+QUERY PLAN                                                                                                      
+----------------------------------------------------------------------------------------------------------------
+Delete on cik                                                                                                   
+  ->  Hash Join                                                                                                 
+        Hash Cond: (cik.id = s.id)                                                                              
+        ->  Seq Scan on cik                                                                                     
+        ->  Hash                                                                                                
+              ->  HashAggregate                                                                                 
+                    Group Key: s.id                                                                             
+                    ->  Subquery Scan on s                                                                      
+                          ->  Subquery Scan on x                                                                
+                                ->  WindowAgg                                                                   
+                                      Window: w1 AS (PARTITION BY cis.g ORDER BY cis.n ROWS UNBOUNDED PRECEDING)
+                                      Run Condition: (row_number() OVER w1 <= 3)                                
+                                      ->  Sort                                                                  
+                                            Sort Key: cis.g, cis.n                                              
+                                            ->  Seq Scan on cis                                                 
+(15 rows)
+
+step s5p: EXPLAIN (COSTS OFF) UPDATE cik SET n = -n WHERE id IN (SELECT id FROM (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY g ORDER BY n) rn FROM cis) x WHERE rn <= 3 OFFSET 0) s);
+QUERY PLAN                                                                                                
+----------------------------------------------------------------------------------------------------------
+Update on cik                                                                                             
+  ->  Nested Loop                                                                                         
+        ->  HashAggregate                                                                                 
+              Group Key: s.id                                                                             
+              ->  Subquery Scan on s                                                                      
+                    ->  Subquery Scan on x                                                                
+                          ->  WindowAgg                                                                   
+                                Window: w1 AS (PARTITION BY cis.g ORDER BY cis.n ROWS UNBOUNDED PRECEDING)
+                                Run Condition: (row_number() OVER w1 <= 3)                                
+                                ->  Sort                                                                  
+                                      Sort Key: cis.g, cis.n                                              
+                                      ->  Seq Scan on cis                                                 
+        ->  Index Scan using cik_pkey on cik                                                              
+              Index Cond: (id = s.id)                                                                     
+(14 rows)
+
+step s6p: EXPLAIN (COSTS OFF) UPDATE cik SET val = val + 100 WHERE id IN (SELECT id FROM (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY g ORDER BY n) rn FROM cis) x WHERE rn <= 3 OFFSET 0) s);
+QUERY PLAN                                                                                                      
+----------------------------------------------------------------------------------------------------------------
+Update on cik                                                                                                   
+  ->  Hash Join                                                                                                 
+        Hash Cond: (cik.id = s.id)                                                                              
+        ->  Seq Scan on cik                                                                                     
+        ->  Hash                                                                                                
+              ->  HashAggregate                                                                                 
+                    Group Key: s.id                                                                             
+                    ->  Subquery Scan on s                                                                      
+                          ->  Subquery Scan on x                                                                
+                                ->  WindowAgg                                                                   
+                                      Window: w1 AS (PARTITION BY cis.g ORDER BY cis.n ROWS UNBOUNDED PRECEDING)
+                                      Run Condition: (row_number() OVER w1 <= 3)                                
+                                      ->  Sort                                                                  
+                                            Sort Key: cis.g, cis.n                                              
+                                            ->  Seq Scan on cis                                                 
+(15 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s4c: COMMIT;
+step s5c: COMMIT;
+step s6c: COMMIT;
+
+starting permutation: s1v s1k s1d s1s s2u s1c s2c s4c s5c s6c s3sel
+step s1v: UPDATE cik SET val = val + 5 WHERE id = 7;
+step s1k: UPDATE cik SET id = 7008 WHERE id = 8;
+step s1d: DELETE FROM cik WHERE id = 9;
+step s1s: UPDATE cis SET g = 99 WHERE n IN (3, 16, 29);
+step s2u: UPDATE cik SET val = val + 1000 WHERE id IN (SELECT id FROM (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY g ORDER BY n) rn FROM cis) x WHERE rn <= 3 OFFSET 0) s); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s4c: COMMIT;
+step s5c: COMMIT;
+step s6c: COMMIT;
+step s3sel: SELECT id, val FROM cik WHERE id IN (6, 7, 8, 9, 10, 20, 21, 7008) ORDER BY id;
+  id| val
+----+----
+   6|1006
+   7|1012
+  10|1010
+  20|1020
+  21|  21
+7008|   8
+(6 rows)
+
+
+starting permutation: s1v s1k s1d s1s s4d s1c s4c s2c s5c s6c s3sel
+step s1v: UPDATE cik SET val = val + 5 WHERE id = 7;
+step s1k: UPDATE cik SET id = 7008 WHERE id = 8;
+step s1d: DELETE FROM cik WHERE id = 9;
+step s1s: UPDATE cis SET g = 99 WHERE n IN (3, 16, 29);
+step s4d: DELETE FROM cik WHERE id IN (SELECT id FROM (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY g ORDER BY n) rn FROM cis) x WHERE rn <= 3 OFFSET 0) s); <waiting ...>
+step s1c: COMMIT;
+step s4d: <... completed>
+step s4c: COMMIT;
+step s2c: COMMIT;
+step s5c: COMMIT;
+step s6c: COMMIT;
+step s3sel: SELECT id, val FROM cik WHERE id IN (6, 7, 8, 9, 10, 20, 21, 7008) ORDER BY id;
+  id|val
+----+---
+  21| 21
+7008|  8
+(2 rows)
+
+
+starting permutation: s1v s1k s1d s1s s5u s1c s5c s2c s4c s6c s3sel
+step s1v: UPDATE cik SET val = val + 5 WHERE id = 7;
+step s1k: UPDATE cik SET id = 7008 WHERE id = 8;
+step s1d: DELETE FROM cik WHERE id = 9;
+step s1s: UPDATE cis SET g = 99 WHERE n IN (3, 16, 29);
+step s5u: UPDATE cik SET val = -val WHERE id IN (SELECT id FROM (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY g ORDER BY n) rn FROM cis) x WHERE rn <= 3 OFFSET 0) s); <waiting ...>
+step s1c: COMMIT;
+step s5u: <... completed>
+step s5c: COMMIT;
+step s2c: COMMIT;
+step s4c: COMMIT;
+step s6c: COMMIT;
+step s3sel: SELECT id, val FROM cik WHERE id IN (6, 7, 8, 9, 10, 20, 21, 7008) ORDER BY id;
+  id|val
+----+---
+   6| -6
+   7|-12
+  10|-10
+  20|-20
+  21| 21
+7008|  8
+(6 rows)
+
+
+starting permutation: s1v s1k s1d s1s s6u s1c s6c s2c s4c s5c s3sel
+step s1v: UPDATE cik SET val = val + 5 WHERE id = 7;
+step s1k: UPDATE cik SET id = 7008 WHERE id = 8;
+step s1d: DELETE FROM cik WHERE id = 9;
+step s1s: UPDATE cis SET g = 99 WHERE n IN (3, 16, 29);
+step s6u: UPDATE cik SET val = val + 100 WHERE id IN (SELECT id FROM (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY g ORDER BY n) rn FROM cis) x WHERE rn <= 3 OFFSET 0) s); <waiting ...>
+step s1c: COMMIT;
+step s6u: <... completed>
+step s6c: COMMIT;
+step s2c: COMMIT;
+step s4c: COMMIT;
+step s5c: COMMIT;
+step s3sel: SELECT id, val FROM cik WHERE id IN (6, 7, 8, 9, 10, 20, 21, 7008) ORDER BY id;
+  id|val
+----+---
+   6|106
+   7|112
+  10|110
+  20|120
+  21| 21
+7008|  8
+(6 rows)
+

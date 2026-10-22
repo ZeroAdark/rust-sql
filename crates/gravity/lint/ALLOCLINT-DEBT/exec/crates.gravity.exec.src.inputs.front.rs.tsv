@@ -1,0 +1,10 @@
+path	crates/gravity/exec/src/inputs/front.rs
+growth	std::collections::HashMap::entry	1
+growth	std::vec::Vec::insert	1
+growth	std::vec::Vec::push	5
+method	slice::to_vec	2
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	4
+method	std::vec::Vec::into_boxed_slice	2
+method	str::to_ascii_lowercase	1
+type	std::vec::Vec	2

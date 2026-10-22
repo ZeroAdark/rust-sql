@@ -1,0 +1,9 @@
+-- regress-full-encoding-009
+-- SELECT COUNT(test_encoding(encoding, description, input)) > 0 FROM encoding_tests;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn17483(fn17486($1, $7)))
+  outs 1=vl:call17483
+mapped: Result

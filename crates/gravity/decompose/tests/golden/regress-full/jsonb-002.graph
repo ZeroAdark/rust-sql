@@ -1,0 +1,10 @@
+-- regress-full-jsonb-002
+-- SELECT rec FROM jsonb_populate_record( row(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL, row('x',3,'2012-12-31 15:30:56')::jbpop,NULL)::jsbrec, '{"rec": {"a": "abc", "c": "01.02.2003", "x": 43.2}}' ) q;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn3209 cols=17 fn3209(T_RowExpr, c3802:'\x01\x00\x00 \x03\x00\x00\x807\x00\x00Prec\x00\x03\x00\x00 \x01\x00\x00\x80\x01\x00\x00\x00\x01\x00\x00\x00\x03\x00\x00\x00\x0a\x00\x00\x00\x0a\x00\x00\x10acxabc01.02.2003(\x00\x00\x00\x80\x80+\x00\xd0\x07')]
+  project (1=v1.16)
+  outs 1=?
+mapped: FunctionScan

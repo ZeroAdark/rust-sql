@@ -1,4 +1,5 @@
 use super::*;
+use types_storage::storage::NUM_AUXILIARY_PROCS;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Mutex, Once};
 use types_storage::storage::NUM_SPECIAL_WORKER_PROCS;
@@ -178,6 +179,33 @@ fn send_proc_signal_by_procno_sets_flag_and_latch() {
     cleanup_current();
 }
 
+// D3821: the memory watchdog's raise sets the backend's InterruptPending, its abort byte's ABORT_BIT (what a Gravity
+// kernel's back-edge polls) and its latch, with no pending thread signal (no SIGINT, so QueryCancelPending stays a
+// user's), and only while the slot still holds that pid.
+#[test]
+fn raise_abort_by_procno_sets_interrupt_abort_bit_and_latch_without_a_signal() {
+    setup();
+    let _guard = serial();
+    register(5, 1005, &[]);
+    g::SetInterruptPending(false);
+    g::SetAbortPending(false);
+    let target_latch = &lmgr_proc::GetPGProcByNumber(5).procLatch;
+    target_latch.is_set.store(0, SeqCst);
+
+    assert!(RaiseAbortByProcNumber(5, 1005));
+    assert!(g::InterruptPending() && g::AbortPending());
+    assert_eq!(slot(5).pss_pendingThreadSignals.load(SeqCst), 0, "no thread signal: QueryCancelPending stays a user's");
+    assert!(!g::QueryCancelPending());
+    assert_eq!(target_latch.is_set.load(SeqCst), 1);
+
+    g::SetInterruptPending(false);
+    g::SetAbortPending(false);
+    assert!(!RaiseAbortByProcNumber(5, 9999), "the slot's pid changed");
+    assert!(!RaiseAbortByProcNumber(-1, 1005));
+    assert!(!g::InterruptPending() && !g::AbortPending());
+    cleanup_current();
+}
+
 #[test]
 fn send_proc_signal_searches_by_pid() {
     setup();
@@ -274,6 +302,38 @@ fn barrier_failure_and_error_rearm_the_bits() {
     cleanup_current();
 }
 
+/// D4208: a standing executor parks (ProcSignalRelease) with a barrier its drain ran the handler for but did not process
+/// (a held or abort-only ProcessInterrupts). Its next CHECK_FOR_INTERRUPTS runs without a slot (a Gravity claim between
+/// engagements): a barrier still pending there reached ProcessProcSignalBarrier's slot lookup, which panicked and aborted
+/// the server.
+#[test]
+fn a_parked_executor_keeps_no_barrier_pending() {
+    setup();
+    let _guard = serial();
+    register(17, 1017, &[]);
+    own_local_my_latch();
+    g::SetInterruptPending(false);
+    g::SetProcSignalBarrierPending(false);
+
+    let generation = EmitProcSignalBarrier(ProcSignalBarrierType::PROCSIGNAL_BARRIER_SMGRRELEASE);
+    procsignal_sigusr1_handler();
+    assert!(g::ProcSignalBarrierPending());
+
+    ProcSignalRelease();
+    let s = slot(17);
+    assert_eq!(s.pss_pid.load(Relaxed), 0);
+    assert!(s.pss_barrierGeneration.load(Relaxed) >= generation, "the released slot reads as absorbed");
+    let calls = SMGR_CALLS.load(SeqCst);
+    // ProcessInterrupts' own test, on the thread that now has no slot
+    if g::ProcSignalBarrierPending() {
+        ProcessProcSignalBarrier().unwrap();
+    }
+    assert!(!g::ProcSignalBarrierPending());
+    assert_eq!(SMGR_CALLS.load(SeqCst), calls, "a thread with no slot absorbs nothing");
+    g::SetInterruptPending(false);
+    scrub_barrier_masks();
+}
+
 #[test]
 fn cancel_request_key_checks() {
     setup();
@@ -356,6 +416,39 @@ fn send_proc_signal_pends_sigusr1_and_drain_reaches_cfi_flags() {
     // ProcSignalInit's default SIGUSR1 disposition runs the C handler.
     DrainThreadSignals().unwrap();
     assert!(g::InterruptPending());
+    assert!(g::ProcSignalBarrierPending());
+    g::SetInterruptPending(false);
+    g::SetProcSignalBarrierPending(false);
+    cleanup_current();
+}
+
+// SendProcSignal raises the TARGET's InterruptPending at delivery (C's
+// handler raises it at delivery), so a busy backend's CHECK_FOR_INTERRUPTS —
+// which tests only that flag — reaches the drain; before, the flag rose only
+// once the target drained on its own (a latch wait: idle).
+#[test]
+fn send_proc_signal_raises_the_targets_interrupt_pending_at_delivery() {
+    setup();
+    let _guard = serial();
+    register(12, 1012, &[]);
+    own_local_my_latch();
+    g::SetInterruptPending(false);
+    g::SetProcSignalBarrierPending(false);
+
+    let sender = std::thread::spawn(|| SendProcSignal(1012, ProcSignalReason::PROCSIG_BARRIER, 12));
+    assert_eq!(sender.join().unwrap(), 0);
+    assert!(g::InterruptPending(), "the busy target's CHECK_FOR_INTERRUPTS must see the delivery");
+    assert!(!g::ProcSignalBarrierPending(), "the reason handler itself runs at the target's drain");
+    DrainThreadSignals().unwrap();
+    assert!(g::ProcSignalBarrierPending());
+
+    // By pid (the INVALID_PROC_NUMBER scan) delivers the same way.
+    g::SetInterruptPending(false);
+    g::SetProcSignalBarrierPending(false);
+    let sender = std::thread::spawn(|| SendProcSignal(1012, ProcSignalReason::PROCSIG_BARRIER, INVALID_PROC_NUMBER));
+    assert_eq!(sender.join().unwrap(), 0);
+    assert!(g::InterruptPending());
+    DrainThreadSignals().unwrap();
     assert!(g::ProcSignalBarrierPending());
     g::SetInterruptPending(false);
     g::SetProcSignalBarrierPending(false);
@@ -626,6 +719,115 @@ fn shmem_init_registers_proc_signal_block() {
     assert!(found, "\"ProcSignal\" is not registered in the ShmemIndex");
 }
 
+// a crash-test kill (SendThreadKill, the SIGKILL bit) and a quit (SIGQUIT: quickdie, immediate shutdown) raise the
+// owner's AbortPending byte as a cancel / termination does, so a Gravity kernel polling only that byte at its loop
+// back-edge reaches the drain that runs the disposition (before D784 the byte stayed low: a served loop ran on until a
+// full CHECK_FOR_INTERRUPTS, ~19 s under a 20 s statement_timeout, where PostgreSQL's kill -9 ends it in ~2 ms).
+#[test]
+fn kill_and_quit_raise_the_abort_byte() {
+    setup();
+    let _guard = serial();
+    register(12, 1012, &[]);
+    for (what, send) in [("SendThreadKill", (|| SendThreadKill(1012)) as fn() -> i32), ("SIGQUIT", || SendThreadSignal(1012, libc::SIGQUIT))] {
+        g::SetAbortPending(false);
+        assert_eq!(send(), 0, "{what}: delivered");
+        assert!(g::AbortPending(), "{what}: the abort byte is raised");
+        slot(12).pss_pendingThreadSignals.store(0, Relaxed);
+    }
+    g::SetAbortPending(false);
+    // a signal outside the abort class still leaves it low
+    assert_eq!(SendThreadSignal(1012, libc::SIGHUP), 0);
+    assert!(!g::AbortPending(), "SIGHUP: the abort byte stays low");
+    slot(12).pss_pendingThreadSignals.store(0, Relaxed);
+    cleanup_current();
+}
+
+// a signal outside the abort class (a ProcSignal's SIGUSR1: a barrier, a memory-context dump) raises the byte's
+// service bit, on which a Gravity kernel of the owner runs a full CHECK_FOR_INTERRUPTS and goes on; the abort bit stays
+// low (every abort reader reads that bit alone), and the abort class leaves the service bit alone.
+#[test]
+fn a_deferrable_signal_raises_the_service_bit_only() {
+    setup();
+    let _guard = serial();
+    register(12, 1012, &[]);
+    g::SetAbortPending(false);
+    g::ClearServicePending();
+    assert_eq!(SendThreadSignal(1012, libc::SIGUSR1), 0);
+    assert!(g::ServicePending(), "SIGUSR1: the service bit is raised");
+    assert!(!g::AbortPending(), "SIGUSR1: the abort bit stays low");
+    g::ClearServicePending();
+    slot(12).pss_pendingThreadSignals.store(0, Relaxed);
+    // the ProcSignal road (SendProcSignal: pg_log_backend_memory_contexts, a barrier's emit) raises it too
+    assert_eq!(SendProcSignal(1012, ProcSignalReason::PROCSIG_LOG_MEMORY_CONTEXT, 12), 0);
+    assert!(g::ServicePending() && !g::AbortPending(), "SendProcSignal: the service bit alone");
+    g::ClearServicePending();
+    slot(12).pss_pendingThreadSignals.store(0, Relaxed);
+    slot(12).pss_signalFlags[ProcSignalReason::PROCSIG_LOG_MEMORY_CONTEXT as usize].store(false, Relaxed);
+    assert_eq!(SendThreadSignal(1012, libc::SIGINT), 0);
+    assert!(g::AbortPending() && !g::ServicePending(), "SIGINT: the abort bit alone");
+    g::SetAbortPending(false);
+    slot(12).pss_pendingThreadSignals.store(0, Relaxed);
+    cleanup_current();
+}
+
+#[test]
+fn crash_drain_runs_quit_and_kill_only() {
+    setup();
+    let _guard = serial();
+    register(15, 1015, &[]);
+    static QUITS: AtomicUsize = AtomicUsize::new(0);
+    QUITS.store(0, SeqCst);
+    pqsignal_thread(libc::SIGQUIT, ThreadSignalHandler::Simple(|| {
+        QUITS.fetch_add(1, SeqCst);
+    }));
+    pqsignal_thread(libc::SIGTERM, ThreadSignalHandler::Simple(observe_sigterm));
+    pqsignal_thread(libc::SIGKILL, ThreadSignalHandler::Unset);
+    OBSERVED_SIGTERM.store(false, SeqCst);
+
+    DrainCrashSignals();
+    assert_eq!(QUITS.load(SeqCst), 0);
+    assert_eq!(SendThreadSignal(1015, libc::SIGTERM), 0);
+    assert_eq!(SendThreadSignal(1015, libc::SIGQUIT), 0);
+    assert_eq!(SendThreadKill(1015), 0);
+    DrainCrashSignals();
+    assert_eq!(QUITS.load(SeqCst), 1);
+    assert!(!OBSERVED_SIGTERM.load(SeqCst));
+    let kill = thread_signal_bit(libc::SIGKILL);
+    assert_eq!(
+        slot(15).pss_pendingThreadSignals.load(Relaxed),
+        (1u32 << libc::SIGTERM as u32) | kill,
+        "SIGTERM waits for a real drain point; an Unset SIGKILL stays blocked"
+    );
+
+    DrainThreadSignals().unwrap();
+    assert!(OBSERVED_SIGTERM.load(SeqCst));
+    assert_eq!(slot(15).pss_pendingThreadSignals.load(Relaxed), kill);
+    slot(15).pss_pendingThreadSignals.store(0, Relaxed);
+    pqsignal_thread(libc::SIGQUIT, ThreadSignalHandler::Unset);
+    pqsignal_thread(libc::SIGTERM, ThreadSignalHandler::Unset);
+    cleanup_current();
+
+    // A thread in its pre-identity window (no slot yet) is drained the same way.
+    std::thread::spawn(|| {
+        PreIdentitySignalAdopt(2015);
+        pqsignal_thread(libc::SIGQUIT, ThreadSignalHandler::Simple(|| {
+            QUITS.fetch_add(1, SeqCst);
+        }));
+        pqsignal_thread(libc::SIGTERM, ThreadSignalHandler::Simple(observe_sigterm));
+        OBSERVED_SIGTERM.store(false, SeqCst);
+        assert_eq!(SendThreadSignal(2015, libc::SIGTERM), 0);
+        assert_eq!(SendThreadSignal(2015, libc::SIGQUIT), 0);
+        DrainCrashSignals();
+        assert_eq!(QUITS.load(SeqCst), 2);
+        assert!(!OBSERVED_SIGTERM.load(SeqCst));
+        DrainThreadSignals().unwrap();
+        assert!(OBSERVED_SIGTERM.load(SeqCst));
+        PreIdentitySignalRelease();
+    })
+    .join()
+    .expect("pre-identity crash drain");
+}
+
 #[test]
 fn thread_signal_reaches_backend_children() {
     use std::os::unix::process::ExitStatusExt;
@@ -676,4 +878,37 @@ fn thread_signal_reaches_backend_child_process_group() {
 
     DrainThreadSignals().unwrap();
     cleanup_current();
+}
+
+// pg_signal_backend against a backend already in the procarray but not yet
+// past ProcSignalInit: C's kill(2) succeeds, so the by-ProcNumber path must
+// reach the launcher-registered pre-identity word instead of failing ESRCH.
+#[test]
+fn by_proc_number_signal_reaches_pre_identity_target() {
+    setup();
+    let _guard = serial();
+    let pid = 1_017;
+    PreIdentitySignalPrepare(pid);
+    assert_eq!(SendThreadSignalByProcNumber(17, pid, libc::SIGTERM), 0);
+    let bits = pre_identity_targets()
+        .iter()
+        .find(|e| e.pid == pid)
+        .map(|e| e.bits.load(SeqCst))
+        .unwrap();
+    assert_eq!(bits, thread_signal_bit(libc::SIGTERM));
+    PreIdentitySignalDiscard(pid);
+    assert_eq!(SendThreadSignalByProcNumber(17, pid, libc::SIGTERM), -1);
+}
+
+// signal_child (postmaster.c:3446-3455) signals the process group for SIGABRT
+// too, so send_abort_for_crash/kill reach COPY PROGRAM children.
+#[test]
+fn group_fanout_matches_signal_child() {
+    use crate::signums::*;
+    for s in [SIGINT, SIGTERM, SIGQUIT, SIGKILL, SIGABRT] {
+        assert!(crate::signal_fans_out_to_group(s), "signal {s}");
+    }
+    for s in [SIGHUP, SIGUSR1, SIGUSR2, SIGCHLD] {
+        assert!(!crate::signal_fans_out_to_group(s), "signal {s}");
+    }
 }

@@ -1,0 +1,75 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1c
+step s2x: EXPLAIN (COSTS OFF) UPDATE vq t SET b = t.b || v.x FROM (VALUES (33, 'p'), (36, 'q')) v(n, x) WHERE t.a > v.n AND t.a < 38;
+QUERY PLAN                                     
+-----------------------------------------------
+Update on vq t                                 
+  ->  Nested Loop                              
+        Join Filter: (t.a > "*VALUES*".column1)
+        ->  Seq Scan on vq t                   
+              Filter: (a < 38)                 
+        ->  Materialize                        
+              ->  Values Scan on "*VALUES*"    
+(7 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1u s2u s1c s2s
+step s1u: UPDATE vq SET a = a + 100 WHERE a = 34; UPDATE vq SET b = 's1' WHERE a = 35;
+step s2u: UPDATE vq t SET b = t.b || v.x FROM (VALUES (33, 'p'), (36, 'q')) v(n, x) WHERE t.a > v.n AND t.a < 38; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT a, b FROM vq WHERE a > 30 ORDER BY a;
+  a|b   
+---+----
+ 31|r31 
+ 32|r32 
+ 33|r33 
+ 35|s1p 
+ 36|r36p
+ 37|r37p
+ 38|r38 
+ 39|r39 
+ 40|r40 
+134|r34 
+(10 rows)
+
+
+starting permutation: s1u s2d s1c s2s
+step s1u: UPDATE vq SET a = a + 100 WHERE a = 34; UPDATE vq SET b = 's1' WHERE a = 35;
+step s2d: DELETE FROM vq t USING (VALUES (33, 'p'), (36, 'q')) v(n, x) WHERE t.a > v.n AND t.a < 38; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2s: SELECT a, b FROM vq WHERE a > 30 ORDER BY a;
+  a|b  
+---+---
+ 31|r31
+ 32|r32
+ 33|r33
+ 38|r38
+ 39|r39
+ 40|r40
+134|r34
+(7 rows)
+
+
+starting permutation: s1d s2u s1c s2s
+step s1d: DELETE FROM vq WHERE a = 37;
+step s2u: UPDATE vq t SET b = t.b || v.x FROM (VALUES (33, 'p'), (36, 'q')) v(n, x) WHERE t.a > v.n AND t.a < 38; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT a, b FROM vq WHERE a > 30 ORDER BY a;
+ a|b   
+--+----
+31|r31 
+32|r32 
+33|r33 
+34|r34p
+35|r35p
+36|r36p
+38|r38 
+39|r39 
+40|r40 
+(9 rows)
+

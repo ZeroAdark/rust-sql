@@ -1,0 +1,11 @@
+# V4R-2 (user 2026-09-24): order-dependent float aggregates within 1e-12 relative (float8) / 4 ulps (float4)
+# D3927 (user ruling, main 2026-10-11T13:26:21Z; amends V4R-2 for this shape only): round(<float aggregate>::numeric, n)
+# passes at ONE unit in its n-th decimal (this case was "a numeric column derived from a float aggregate stays exact"
+# before that ruling; two units stay a mismatch: round-numeric-flip-two-units.case)
+sql: SELECT round(sum(x::float8)::numeric, 2) FROM r;
+class: unordered
+verdict: match
+[pg]
+2.50
+[got]
+2.49

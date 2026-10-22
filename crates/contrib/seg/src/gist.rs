@@ -141,7 +141,7 @@ pub fn fc_gseg_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
 
     // the auxiliary array, sorted by center (C computes the center as
     // lower*0.5f + upper*0.5f to dodge overflow)
-    let mut sort_items: Vec<(f32, u16, Seg)> = Vec::with_capacity(maxoff);
+    let mut sort_items: Vec<(f32, u16, Seg)> = ::mcx::std_vec_with_capacity("seg", maxoff)?;
     for i in 1..=maxoff {
         // SAFETY: non-null seg key datums.
         let seg = unsafe { seg_datum(entryvec.vector[i].key) };

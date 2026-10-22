@@ -1,0 +1,30 @@
+-- regress-full-stats_ext-011
+-- SELECT stxname, stxdndistinct, stxddependencies, stxdmcv, stxdinherit FROM pg_statistic_ext s LEFT JOIN pg_statistic_ext_data d ON (d.stxoid = s.oid) WHERE s.stxname = 'ab1_a_b_stats';
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 eligible rows=1 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@2
+  source range rel=3381 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v1.3, c19:#64)
+  project (1=v1.3, 2=v1.1)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=fx64:win/page 2=w8:val
+p1 node=1 eligible rows=50 end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1^
+  source range rel=3429 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6)
+  probe slot=0 inner=n2 JOIN_RIGHT unique marks build-first keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.2))
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=vl:win/page 5=vl:win/page 6=?
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0 consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=0
+  drain matches=slot1 JOIN_RIGHT
+  project (1=inner.1, 2=outer.3, 3=outer.4, 4=outer.5, 5=outer.2)
+  outs 1=fx64:life/breaker 2=vl:life/breaker 3=vl:life/breaker 4=vl:life/breaker 5=w1:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+mapped: SeqScan HashJoin Hash

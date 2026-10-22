@@ -1,0 +1,10 @@
+path	crates/gravity/hosts/src/ops/modifytable/index_maint.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	1
+macro	std::vec	2
+method	slice::to_vec	1
+method	std::boxed::Box::new	3
+method	std::clone::Clone::clone	4
+method	std::iter::Iterator::collect	2
+type	std::boxed::Box	3
+type	std::vec::Vec	2

@@ -26,48 +26,68 @@ static MULTIXACTFUNCS_BUILTINS: &[FmgrBuiltin] = &[FmgrBuiltin {
 }];
 
 struct MemberRows {
-    tuples: Vec<Vec<u8>>,
+    members: Vec<types_storage::multixact::MultiXactMember>,
 }
 
-fn collect_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo, mxid: u32) -> PgResult<MemberRows> {
-    let mut members = Vec::new();
-    GetMultiXactIdMembers(mxid, false, false, &mut |m| members.extend_from_slice(m))?;
-
+fn expected_desc(fcinfo: &mut Fcinfo) -> Option<&'static TupleDescData<'static>> {
     let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
     // SAFETY: expectedDesc contract — the executor armed it with the scan
     // tupdesc, live for the duration of this call.
-    let expected = expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
-    let mcx = fcinfo.result_mcx();
+    expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'static>>().as_ref() })
+}
+
+fn result_desc<'mcx>(
+    mcx: ::mcx::Mcx<'mcx>,
+    flinfo: &FmgrInfo,
+    expected: Option<&TupleDescData<'_>>,
+) -> PgResult<TupleDescData<'mcx>> {
     let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(Box::new(PgError::error("return type must be a row type")));
     }
     let mut desc = resolved.result_tuple_desc.expect("composite result carries a tupdesc");
-    // C: TupleDescGetAttInMetadata blesses the descriptor.
-    ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
+    // C BlessTupleDesc: only an anonymous record gets a typmod assigned.
+    if desc.tdtypeid == types_core::catalog::RECORDOID && desc.tdtypmod < 0 {
+        ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
+    }
     let natts = desc.natts as usize;
+    let live = desc.attrs[..natts].iter().filter(|a| !a.attisdropped).count();
     // DIVERGENCE (multixact.c:3767-3774): C's BuildTupleFromCStrings reads
     // past its two-entry values[] for a wider column definition list and
-    // crashes the backend; refuse with the executor's tupledesc_match text.
-    if natts > 2 {
+    // crashes the backend; refuse with the executor's tupledesc_match text
+    // (dropped attributes are skipped there, execTuples.c:2342).
+    if live > 2 {
         return Err(Box::new(
             PgError::error("function return row and query-specified return row do not match")
                 .with_sqlstate(ERRCODE_DATATYPE_MISMATCH)
                 .with_detail(format!(
-                    "Returned row contains 2 attributes, but query expects {natts}."
+                    "Returned row contains 2 attributes, but query expects {live}."
                 )),
         ));
     }
+    Ok(desc)
+}
+
+fn member_tuple(
+    flinfo: &FmgrInfo,
+    fcinfo: &mut Fcinfo,
+    m: &types_storage::multixact::MultiXactMember,
+) -> PgResult<Datum> {
+    let expected = expected_desc(fcinfo);
+    let mcx = fcinfo.result_mcx();
+    let desc = result_desc(mcx, flinfo, expected)?;
+    let natts = desc.natts as usize;
     let mut attinmeta = funcapi::AttInMetadata::new(&desc)?;
-    let mut tuples = Vec::with_capacity(members.len());
-    for m in &members {
-        let xid = m.xid.to_string();
-        let cstrings = [Some(xid.as_bytes()), Some(mxstatus_to_string(m.status).as_bytes())];
-        let (values, isnull) = attinmeta.build(mcx, &cstrings[..natts])?;
-        let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &isnull)?;
-        tuples.push(tuple.image().to_vec());
+    let xid = m.xid.to_string();
+    let mut live = [Some(xid.as_bytes()), Some(mxstatus_to_string(m.status).as_bytes())]
+        .into_iter();
+    let mut cstrings = ::mcx::std_vec_with_capacity("access", natts)?;
+    for att in &desc.attrs[..natts] {
+        cstrings.push(if att.attisdropped { None } else { live.next().flatten() });
     }
-    Ok(MemberRows { tuples })
+    let (values, isnull) = attinmeta.build(mcx, &cstrings)?;
+    let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &isnull)?;
+    byref_result(mcx, &tuple.image())
 }
 
 pub fn fc_pg_get_multixact_members(
@@ -85,7 +105,14 @@ pub fn fc_pg_get_multixact_members(
     if !flinfo.has_fn_extra() {
         // multixact.c:3739: SRF_FIRSTCALL_INIT precedes the member read.
         funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
-        let rows = match collect_rows(flinfo, fcinfo, mxid) {
+        let rows = (|| {
+            let mut members = Vec::new();
+            GetMultiXactIdMembers(mxid, false, false, &mut |m| members.extend_from_slice(m))?;
+            let expected = expected_desc(fcinfo);
+            result_desc(fcinfo.result_mcx(), flinfo, expected)?;
+            Ok(MemberRows { members })
+        })();
+        let rows = match rows {
             Ok(rows) => rows,
             Err(e) => {
                 funcapi::end_MultiFuncCall(flinfo);
@@ -94,17 +121,20 @@ pub fn fc_pg_get_multixact_members(
         };
         funcapi::per_MultiFuncCall(flinfo).user_fctx = Some(Box::new(rows));
     }
-    let fctx = funcapi::per_MultiFuncCall(flinfo);
-    let idx = fctx.call_cntr as usize;
-    let rows = fctx
+    let idx = funcapi::per_MultiFuncCall(flinfo).call_cntr as usize;
+    // multixact.c:3762-3772: one member is converted per call.
+    let member = funcapi::per_MultiFuncCall(flinfo)
         .user_fctx
         .as_ref()
         .expect("pg_get_multixact_members: rows set at first call")
         .downcast_ref::<MemberRows>()
-        .expect("pg_get_multixact_members: user_fctx is MemberRows");
-    match rows.tuples.get(idx) {
-        Some(img) => {
-            let d = byref_result(fcinfo.result_mcx(), img)?;
+        .expect("pg_get_multixact_members: user_fctx is MemberRows")
+        .members
+        .get(idx)
+        .copied();
+    match member {
+        Some(m) => {
+            let d = member_tuple(flinfo, fcinfo, &m)?;
             Ok(funcapi::srf_return_next(flinfo, fcinfo, d))
         }
         None => Ok(funcapi::srf_return_done(flinfo, fcinfo)),

@@ -38,10 +38,7 @@ pub fn init_seams() {
     indexcmds_seams::choose_relation_name::set(define::ChooseRelationName);
 }
 
-// WaitForOlderSnapshots (indexcmds.c:431): wait out transactions that might
-// still see catalog state older than limit_xmin. With `progress`, the
-// waitfor params of pg_stat_progress_create_index are kept current
-// (indexcmds.c:446/490/497).
+// Wait out transactions that might still see catalog state older than limit_xmin.
 pub fn WaitForOlderSnapshots(
     limit_xmin: types_core::TransactionId,
     progress: bool,
@@ -79,7 +76,6 @@ pub fn WaitForOlderSnapshots(
             }
         }
         if old_snapshots[i].localTransactionId != InvalidLocalTransactionId {
-            // If requested, publish who we're going to wait for.
             if progress {
                 if let Some(holder) = lmgr_proc::ProcNumberGetProc(old_snapshots[i].procNumber) {
                     backend_progress::pgstat_progress_update_param(
@@ -123,13 +119,11 @@ fn req(td: &TupleDescData<'_>, tup: &HeapTupleData<'_>, attno: i32) -> PgResult<
     Ok(d)
 }
 
-// C IsPreferredType (parse_coerce.c).
 fn IsPreferredType(category: i8, type_id: Oid) -> PgResult<bool> {
     let (typcategory, typispreferred) = lsyscache::get_type_category_preferred(type_id)?;
     Ok((category == typcategory || category == TYPCATEGORY_INVALID) && typispreferred)
 }
 
-/// GetDefaultOpClass (indexcmds.c).
 pub fn GetDefaultOpClass(type_id: Oid, am_id: Oid) -> PgResult<Oid> {
     let type_id = lsyscache::getBaseType(type_id)?;
     let (tcategory, _) = lsyscache::get_type_category_preferred(type_id)?;
@@ -201,10 +195,7 @@ fn multiple_default_opclasses(type_id: Oid) -> Box<PgError> {
     )
 }
 
-// Every one of these is `elog(ERROR, "cache lookup failed for <object> %u", oid)`
-// in C: a catchable error whose SQLSTATE is elog's default XX000 /
-// ERRCODE_INTERNAL_ERROR, never a backend abort.  pgrust used to panic!() at
-// these probes, which kills the process instead.
+// Catchable error with ERRCODE_INTERNAL_ERROR, never a backend abort.
 #[track_caller]
 #[cold]
 #[inline(never)]
@@ -216,8 +207,6 @@ pub(crate) fn cache_lookup_failed(what: &str, oid: Oid) -> Box<PgError> {
 mod cache_lookup_error_tests {
     use super::*;
 
-    // C: elog(ERROR, "cache lookup failed for index %u") -- a catchable XX000,
-    // not a backend abort.  These probes used to panic!(), killing the process.
     #[test]
     fn cache_lookup_failure_is_a_catchable_xx000() {
         let e = cache_lookup_failed("index", 16384);

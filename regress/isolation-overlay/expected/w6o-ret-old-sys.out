@@ -1,0 +1,86 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1u s2u s1c s2chk
+step s1u: UPDATE ro SET v = v + 1 WHERE k = 1;
+step s2u: UPDATE ro SET v = v * 2 WHERE k = 1 RETURNING old.ctid, new.ctid, old.v, new.v, age(old.xmin) AS old_age, old.xmin = new.xmin AS same_xmin, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ctid   |ctid   | v| v|old_age|same_xmin|old_xmax_mine
+-------+-------+--+--+-------+---------+-------------
+(0,201)|(0,202)|11|22|      1|f        |t            
+(1 row)
+
+step s2chk: SELECT ctid, * FROM ro WHERE k <= 2 ORDER BY k;
+ctid   |k| v
+-------+-+--
+(0,202)|1|22
+(0,2)  |2|20
+(2 rows)
+
+
+starting permutation: s1u s2uq s1c s2chk
+step s1u: UPDATE ro SET v = v + 1 WHERE k = 1;
+step s2uq: UPDATE ro SET v = v * 2 WHERE k = 1 AND v = 10 RETURNING old.ctid, new.ctid, old.v, new.v; <waiting ...>
+step s1c: COMMIT;
+step s2uq: <... completed>
+ctid|ctid|v|v
+----+----+-+-
+(0 rows)
+
+step s2chk: SELECT ctid, * FROM ro WHERE k <= 2 ORDER BY k;
+ctid   |k| v
+-------+-+--
+(0,201)|1|11
+(0,2)  |2|20
+(2 rows)
+
+
+starting permutation: s1del s2u s1c s2chk
+step s1del: DELETE FROM ro WHERE k = 1;
+step s2u: UPDATE ro SET v = v * 2 WHERE k = 1 RETURNING old.ctid, new.ctid, old.v, new.v, age(old.xmin) AS old_age, old.xmin = new.xmin AS same_xmin, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ctid|ctid|v|v|old_age|same_xmin|old_xmax_mine
+----+----+-+-+-------+---------+-------------
+(0 rows)
+
+step s2chk: SELECT ctid, * FROM ro WHERE k <= 2 ORDER BY k;
+ctid |k| v
+-----+-+--
+(0,2)|2|20
+(1 row)
+
+
+starting permutation: s1u s2oc s1c s2chk
+step s1u: UPDATE ro SET v = v + 1 WHERE k = 1;
+step s2oc: INSERT INTO ro VALUES (1, 0) ON CONFLICT (k) DO UPDATE SET v = ro.v + 1000 RETURNING old.ctid, new.ctid, old.v, new.v, age(old.xmin) AS old_age, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine; <waiting ...>
+step s1c: COMMIT;
+step s2oc: <... completed>
+ctid   |ctid   | v|   v|old_age|old_xmax_mine
+-------+-------+--+----+-------+-------------
+(0,201)|(0,202)|11|1011|      1|t            
+(1 row)
+
+step s2chk: SELECT ctid, * FROM ro WHERE k <= 2 ORDER BY k;
+ctid   |k|   v
+-------+-+----
+(0,202)|1|1011
+(0,2)  |2|  20
+(2 rows)
+
+
+starting permutation: s2own s1c s2chk
+step s2own: UPDATE ro SET v = v + 5 WHERE k = 2 RETURNING old.ctid, new.ctid, old.v, new.v, old.xmin = pg_current_xact_id()::xid AS old_xmin_mine, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine;
+ctid |ctid   | v| v|old_xmin_mine|old_xmax_mine
+-----+-------+--+--+-------------+-------------
+(0,2)|(0,201)|20|25|f            |t            
+(1 row)
+
+step s1c: COMMIT;
+step s2chk: SELECT ctid, * FROM ro WHERE k <= 2 ORDER BY k;
+ctid   |k| v
+-------+-+--
+(0,1)  |1|10
+(0,201)|2|25
+(2 rows)
+

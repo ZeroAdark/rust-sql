@@ -122,13 +122,13 @@ pub fn fc_hstore_from_record(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo)
         types_tuple::heap_deform_tuple(&tuple, &tupdesc, &mut values, &mut nulls);
     }
 
-    let mut pairs: Vec<Pair> = Vec::with_capacity(ncolumns);
+    let mut pairs: Vec<Pair> = ::mcx::std_vec_with_capacity("contrib", ncolumns)?;
     for i in 0..ncolumns {
         let att = &tupdesc.attrs[i];
         if att.attisdropped {
             continue;
         }
-        let key = att.attname.name_str().to_vec();
+        let key = ::mcx::std_vec_from_slice("contrib", &att.attname.name_str())?;
         check_key_len(key.len())?;
         let val = if nulls[i] {
             None
@@ -149,7 +149,7 @@ pub fn fc_hstore_from_record(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo)
                 .unwrap()
                 .proc;
             let d = function_call1_coll_in(proc, InvalidOid, mcx, values[i])?;
-            let v = cstring_bytes(d).to_vec();
+            let v = ::mcx::std_vec_from_slice("hstore", &cstring_bytes(d))?;
             check_val_len(v.len())?;
             Some(v)
         };
@@ -234,7 +234,7 @@ pub fn fc_hstore_populate_record(
         let cstr_storage;
         let cstr: Option<&core::ffi::CStr> = match idx {
             Some(idx) if !hs.val_isnull(idx) => {
-                let mut v = Vec::with_capacity(hs.vallen(idx) + 1);
+                let mut v = ::mcx::std_vec_with_capacity("contrib", hs.vallen(idx) + 1)?;
                 v.extend_from_slice(hs.val(idx));
                 v.push(0);
                 cstr_storage = v;

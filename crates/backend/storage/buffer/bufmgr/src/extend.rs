@@ -181,7 +181,7 @@ fn extend_to_guts(
     // reading the target block (C keeps the caller's original mode here).
     if buffer == InvalidBuffer {
         let (b, acct) =
-            crate::read::ReadBuffer_common_acct(smgr, relpersistence, fork, extend_to - 1, mode, strategy, false)?;
+            crate::read::ReadBuffer_common_acct(smgr, relpersistence, fork, extend_to - 1, mode, strategy)?;
         if let Some(rel) = rel {
             crate::pgstat_count_buffer_acct(rel, acct);
         }

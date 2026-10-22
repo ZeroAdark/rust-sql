@@ -1,5 +1,6 @@
 
 use super::consts::*;
+use super::context::PgpContext;
 use super::mpi::{self, write_mpi, Mpi};
 use super::packet::write_stream_packet;
 use super::pubkey::{KeyMaterial, PubKey, PGP_PUB_ELG_ENCRYPT, PGP_PUB_RSA_ENCRYPT,
@@ -55,6 +56,7 @@ pub fn write_pubenc_sesskey(
     pk: &PubKey,
     cipher_algo: i32,
     sess_key: &[u8],
+    ctx: &mut PgpContext,
 ) -> Result<(), String> {
     let mut body = Vec::new();
     body.push(3); // version
@@ -65,7 +67,7 @@ pub fn write_pubenc_sesskey(
         PGP_PUB_ELG_ENCRYPT => {
             if let KeyMaterial::Elg { p, g, y, .. } = &pk.material {
                 let m = create_secmsg(cipher_algo, sess_key, p.nbytes() as isize - 1)?;
-                let (c1, c2) = mpi::elgamal_encrypt(p, g, y, &m)?;
+                let (c1, c2) = mpi::elgamal_encrypt(p, g, y, &m).map_err(|err| err.report(ctx))?;
                 write_mpi(&mut body, &c1);
                 write_mpi(&mut body, &c2);
             } else {
@@ -75,7 +77,7 @@ pub fn write_pubenc_sesskey(
         PGP_PUB_RSA_ENCRYPT | PGP_PUB_RSA_ENCRYPT_SIGN => {
             if let KeyMaterial::Rsa { n, e, .. } = &pk.material {
                 let m = create_secmsg(cipher_algo, sess_key, n.nbytes() as isize - 1)?;
-                let c = mpi::rsa_encrypt(n, e, &m)?;
+                let c = mpi::rsa_encrypt(n, e, &m).map_err(|err| err.report(ctx))?;
                 write_mpi(&mut body, &c);
             } else {
                 return Err(PGCRYPTO_BUG.to_string());

@@ -1,0 +1,9 @@
+-- bench-106
+-- SELECT p3() /* PL3 */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn16482())
+  outs 1=w8:val
+mapped: Result

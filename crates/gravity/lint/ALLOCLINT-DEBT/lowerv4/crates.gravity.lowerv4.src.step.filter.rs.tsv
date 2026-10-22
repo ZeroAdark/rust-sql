@@ -1,0 +1,6 @@
+path	crates/gravity/lowerv4/src/step/filter.rs
+growth	std::collections::BTreeMap::insert	1
+ir-only	<T as core::convert::Into<U>>::into	1
+ir-only	<alloc::rc::Rc<[T]> as core::convert::From<[T; N]>>::from	1
+method	std::clone::Clone::clone	1
+type	std::rc::Rc	1

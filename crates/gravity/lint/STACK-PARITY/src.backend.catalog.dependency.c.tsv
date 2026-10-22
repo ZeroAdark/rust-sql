@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/catalog/dependency.c: 1 stack-depth check sites
+476	findDependentObjects	crates/backend/catalog/catalog_dependency/src/lib.rs	findDependentObjects	yes	

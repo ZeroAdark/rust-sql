@@ -24,7 +24,7 @@
 use core::cell::RefCell;
 use std::rc::Rc;
 
-use ::mcx::{vec_append_bytes, vec_with_capacity_in, Mcx, PgVec};
+use ::mcx::{vec_with_capacity_in, Mcx, PgVec};
 #[cfg_attr(not(have_re2), allow(unused_imports))]
 use ::regex_spencer::{
     REG_ADVANCED, REG_EXPANDED, REG_ICASE, REG_NLANCH, REG_NLSTOP, REG_NOSUB, REG_QUOTE,
@@ -34,17 +34,12 @@ use ::types_error::{PgError, PgResult, ERRCODE_INVALID_REGULAR_EXPRESSION};
 pub use guc_tables::consts::{REGEX_ENGINE_AUTO, REGEX_ENGINE_RE2, REGEX_ENGINE_SPENCER};
 
 mod classify;
-pub mod program;
+/// The pattern program both tiers run: the per-row tier here (before RE2) and the dictionary path.
+pub use gravity_dict::regexp::program;
 pub use classify::{classify as classify_pattern, re2_compatible, Classification, Compat};
 
 guc_tables::session_guc_cluster!(RegexpAltGucs, REGEXP_ALT_GUCS:
     (regex_engine_cell, i32, regex_engine, set_regex_engine, guc_tables::consts::REGEX_ENGINE_AUTO),
-    // pgrust.regex_pattern_program: the anchored pattern-program fast tier
-    // under the auto RE2 arm (program.rs). OFF = the exact pre-tier RE2
-    // behavior; the toggle exists for the four-engine differential gate and
-    // as an escape hatch, and is read per exec so flips act on cached
-    // patterns immediately.
-    (regex_pattern_program_cell, bool, regex_pattern_program, set_regex_pattern_program, true),
 );
 
 pub fn install() {
@@ -52,12 +47,6 @@ pub fn install() {
         get: regex_engine,
         set: set_regex_engine,
     });
-    guc_tables::vars::pgrust_regex_pattern_program.install_if_absent(
-        guc_tables::GucVarAccessors {
-            get: regex_pattern_program,
-            set: set_regex_pattern_program,
-        },
-    );
     guc_tables::vars::pgrust_regex_re2_linked.install_if_absent(guc_tables::GucVarAccessors {
         get: re2_available,
         set: set_re2_linked_noop,
@@ -88,10 +77,13 @@ pub struct Re2Pattern {
     #[allow(dead_code)]
     inner: Rc<re2::Re2Re>,
     capture_safe: bool,
-    // The anchored pattern-program fast tier (program.rs): compiled once at
-    // auto-dispatch time for CaptureSafe patterns inside the program subset,
-    // consulted by exec for start-of-subject evaluations, RE2 otherwise.
+    // The pattern program (program.rs): compiled once at auto-dispatch time
+    // for CaptureSafe patterns inside the program subset, consulted first by
+    // exec.
     program: Option<Rc<program::Program>>,
+    // D3121: compiled from a translated pattern (\s \m \M), so it runs only
+    // over an ASCII subject (subject_ok).
+    ascii_subject: bool,
 }
 
 impl core::fmt::Debug for Re2Pattern {
@@ -109,8 +101,21 @@ impl Re2Pattern {
         self.capture_safe
     }
 
-    // Whether the anchored pattern-program fast tier compiled for this
-    // pattern (observability + tests).
+    // The per-evaluation data guard: whether RE2 and Spencer provably see the
+    // same subject for this pattern. subject_compatible, and for a translated
+    // pattern (D3121) an ASCII subject with no FS..US (0x1C-0x1F): RE2's \b
+    // and the \s class are ASCII where Spencer follows the collation, and
+    // ICU's u_isspace counts FS..US as space. One pass over the subject.
+    pub fn subject_ok(&self, subject: &[u8]) -> bool {
+        if self.ascii_subject {
+            subject.iter().all(|&b| b != 0 && b < 0x80 && !(0x1C..=0x1F).contains(&b))
+        } else {
+            subject_compatible(subject)
+        }
+    }
+
+    // Whether the pattern program compiled for this pattern (observability +
+    // tests).
     pub fn has_program(&self) -> bool {
         self.program.is_some()
     }
@@ -128,19 +133,14 @@ impl Re2Pattern {
     // Fills out (group 0 first) and returns true on match. out may be empty
     // for a boolean match. start is a byte offset into hay.
     //
-    // The pattern-program fast tier answers start-of-subject evaluations
-    // when it was compiled for this pattern (anchored subset) and the GUC
-    // keeps it on; a budget bail (pathological backtracking) or a nonzero
-    // start falls through to the RE2 arm — the tier can refuse, never
-    // answer differently.
+    // The pattern program answers when it was compiled for this pattern; a
+    // budget refusal (pathological backtracking) or an anchored program asked
+    // past the start falls through to the RE2 arm — the program can refuse,
+    // never answer differently.
     pub fn exec(&self, hay: &[u8], start: usize, out: &mut [GroupSpan]) -> bool {
-        if start == 0 {
-            if let Some(prog) = &self.program {
-                if regex_pattern_program() {
-                    if let Some(matched) = prog.exec(hay, out) {
-                        return matched;
-                    }
-                }
+        if let Some(prog) = &self.program {
+            if let Some(matched) = prog.exec(hay, start, out) {
+                return matched;
             }
         }
         #[cfg(have_re2)]
@@ -232,7 +232,9 @@ mod re2 {
             let raw: &mut [i64] = if 2 * n <= stack.len() {
                 &mut stack
             } else {
-                heap = vec![0i64; 2 * n];
+                heap = Vec::new();
+                let _ = heap.try_reserve_exact(2 * n);
+                heap.resize(2 * n, 0);
                 &mut heap
             };
             let matched = unsafe {
@@ -268,7 +270,8 @@ mod re2 {
 // for forced-re2 quoted patterns that also carry inline flags.
 #[cfg(have_re2)]
 fn re2_escape(pattern: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(pattern.len() * 2);
+    let mut out = Vec::new();
+    let _ = out.try_reserve_exact(pattern.len() * 2);
     for &b in pattern {
         if b.is_ascii() && !b.is_ascii_alphanumeric() && b != b'_' {
             out.push(b'\\');
@@ -286,6 +289,7 @@ fn compile_auto(
     cflags: i32,
     capture_safe: bool,
     needs_longest: bool,
+    ascii_subject: bool,
 ) -> PgResult<Re2Pattern> {
     let quoted = (cflags & !REG_NOSUB) == REG_QUOTE;
     if quoted {
@@ -293,24 +297,31 @@ fn compile_auto(
             inner: Rc::new(re2::compile(pattern, true, false)?),
             capture_safe,
             program: None,
+            ascii_subject: false,
         });
     }
-    let mut full = Vec::with_capacity(pattern.len() + 4);
+    let mut full = ::mcx::std_vec_with_capacity("adt", pattern.len() + 4)?;
     full.extend_from_slice(b"(?s)");
-    full.extend_from_slice(pattern);
+    if ascii_subject {
+        // D3121: \s \m \M translated (classify.rs re2_pattern).
+        full.extend_from_slice(&classify::re2_pattern(pattern));
+    } else {
+        full.extend_from_slice(pattern);
+    }
     let inner = Rc::new(re2::compile(&full, false, needs_longest)?);
-    // The pattern-program fast tier: only for CaptureSafe, alternation-free
+    // The pattern program: only for CaptureSafe, alternation-free
     // (needs_longest=false, so the RE2 arm it mirrors is leftmost-first)
-    // patterns inside program.rs's anchored subset. The group-count check is
+    // patterns inside program.rs's subset. The group-count check is
     // belt-and-suspenders — the subset guarantees it.
-    let program = if capture_safe && !needs_longest {
-        program::compile(pattern)
+    // A translated pattern (D3121) is outside the program subset.
+    let program = if capture_safe && !needs_longest && !ascii_subject {
+        program::Program::compile(pattern)
             .filter(|p| p.ngroups() == inner.ngroups())
             .map(Rc::new)
     } else {
         None
     };
-    Ok(Re2Pattern { inner, capture_safe, program })
+    Ok(Re2Pattern { inner, capture_safe, program, ascii_subject })
 }
 
 // The forced path (regex_engine=re2): no classifier; ICASE/NLSTOP/NLANCH map
@@ -344,9 +355,10 @@ fn compile_forced(pattern: &[u8], cflags: i32) -> PgResult<Re2Pattern> {
                 inner: Rc::new(re2::compile(pattern, true, false)?),
                 capture_safe: true,
                 program: None,
+                ascii_subject: false,
             });
         }
-        let mut full = Vec::with_capacity(pattern.len() + 12);
+        let mut full = ::mcx::std_vec_with_capacity("adt", pattern.len() + 12)?;
         if cflags & REG_ICASE != 0 {
             full.extend_from_slice(b"(?i)");
         }
@@ -369,6 +381,7 @@ fn compile_forced(pattern: &[u8], cflags: i32) -> PgResult<Re2Pattern> {
             inner: Rc::new(re2::compile(&full, false, true)?),
             capture_safe: true,
             program: None,
+            ascii_subject: false,
         })
     }
 }
@@ -407,7 +420,10 @@ fn cache_put(pattern: &[u8], cflags: i32, forced: bool, verdict: Option<Re2Patte
         if cache.len() >= MAX_CACHED {
             cache.pop();
         }
-        cache.insert(0, CachedDispatch { pat: pattern.to_vec(), cflags, forced, verdict });
+        let mut pat = Vec::new();
+        let _ = pat.try_reserve_exact(pattern.len());
+        pat.extend_from_slice(pattern);
+        cache.insert(0, CachedDispatch { pat, cflags, forced, verdict });
     });
 }
 
@@ -449,6 +465,7 @@ pub fn dispatch(pattern: &[u8], cflags: i32, subject: &[u8]) -> PgResult<Option<
                         cflags,
                         c.tier == Compat::CaptureSafe,
                         c.needs_longest,
+                        c.ascii_subject,
                     )
                     .ok(),
                     #[cfg(not(have_re2))]
@@ -459,7 +476,7 @@ pub fn dispatch(pattern: &[u8], cflags: i32, subject: &[u8]) -> PgResult<Option<
             v
         }
     };
-    if verdict.is_some() && !forced && !subject_compatible(subject) {
+    if !forced && verdict.as_ref().is_some_and(|re| !re.subject_ok(subject)) {
         return Ok(None);
     }
     Ok(verdict)
@@ -507,14 +524,14 @@ fn append_replacement(
             None => p = p_end,
         }
         if p > chunk_start {
-            vec_append_bytes(buf, &replace_text[chunk_start..p])?;
+            ::stringinfo::vec_append_binary(buf, &replace_text[chunk_start..p])?;
         }
         if p >= p_end {
             break;
         }
         p += 1;
         if p >= p_end {
-            buf.push(b'\\');
+            ::stringinfo::vec_append_binary(buf, b"\\")?;
             break;
         }
         let c = replace_text[p];
@@ -530,15 +547,15 @@ fn append_replacement(
             p += 1;
             groups[0]
         } else if c == b'\\' {
-            buf.push(b'\\');
+            ::stringinfo::vec_append_binary(buf, b"\\")?;
             p += 1;
             continue;
         } else {
-            buf.push(b'\\');
+            ::stringinfo::vec_append_binary(buf, b"\\")?;
             continue;
         };
         if so >= 0 && eo >= 0 {
-            vec_append_bytes(buf, &src[so as usize..eo as usize])?;
+            ::stringinfo::vec_append_binary(buf, &src[so as usize..eo as usize])?;
         }
     }
     Ok(())
@@ -612,12 +629,12 @@ pub fn replace_text_regexp_re2<'mcx>(
         }
 
         if m_so > copied {
-            vec_append_bytes(&mut buf, &src_text[copied..m_so])?;
+            ::stringinfo::vec_append_binary(&mut buf, &src_text[copied..m_so])?;
         }
         if escape_status > 0 {
             append_replacement(&mut buf, replace_text, &groups[..want_groups], src_text)?;
         } else {
-            vec_append_bytes(&mut buf, replace_text)?;
+            ::stringinfo::vec_append_binary(&mut buf, replace_text)?;
         }
         copied = m_eo;
 
@@ -631,7 +648,7 @@ pub fn replace_text_regexp_re2<'mcx>(
     }
 
     if copied < src_text.len() {
-        vec_append_bytes(&mut buf, &src_text[copied..])?;
+        ::stringinfo::vec_append_binary(&mut buf, &src_text[copied..])?;
     }
     Ok(buf)
 }

@@ -47,8 +47,7 @@ use mcx::Mcx;
 use types_core::{AttrNumber, InvalidOid, Oid, NAMEDATALEN};
 use types_error::{
     PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INSUFFICIENT_PRIVILEGE,
-    ERRCODE_INVALID_TABLE_DEFINITION, ERRCODE_PROGRAM_LIMIT_EXCEEDED,
-    ERRCODE_WARNING_DEPRECATED_FEATURE, ERROR, WARNING,
+    ERRCODE_INVALID_TABLE_DEFINITION, ERRCODE_PROGRAM_LIMIT_EXCEEDED, ERROR,
 };
 
 use commands_tablespace::{TableSpaceRelationId, GLOBALTABLESPACE_OID};
@@ -506,8 +505,8 @@ pub fn DefineRelation<'mcx>(
     // default_table_access_method; InvalidOid for relkinds without table AM.
     // C resolves the AM AFTER MergeAttributes (tablecmds.c:1032), so a bad
     // USING name loses to MergeAttributes' errors; this provisional pass
-    // (missing_ok) only feeds the reloptions dispatch and the pgrcolumnar
-    // type gate — the erroring lookup runs at C's position, below.
+    // (missing_ok) only feeds the reloptions dispatch — the erroring lookup
+    // runs at C's position, below.
     let access_method_id = if let Some(amname) = stmt.accessMethod {
         debug_assert!(
             types_rel::RELKIND_HAS_TABLE_AM(relkind)
@@ -529,13 +528,13 @@ pub fn DefineRelation<'mcx>(
         InvalidOid
     };
     // Reloptions validation dispatches on the resolved relam, not just
-    // relkind: the pgrcolumnar AM owns its option namespace.
+    let mut pgrc_opts = None;
     match relkind {
         types_rel::RELKIND_PARTITIONED_TABLE => {
             reloptions::partitioned_table_reloptions(reloptions.as_deref(), true)?;
         }
-        types_rel::RELKIND_RELATION if reloptions::relam_is_pgrcolumnar(access_method_id) => {
-            reloptions::pgrcolumnar_reloptions(mcx, reloptions.as_deref(), true)?;
+        types_rel::RELKIND_RELATION | types_rel::RELKIND_MATVIEW if reloptions::relam_is_pgrcolumnar(access_method_id) => {
+            pgrc_opts = reloptions::pgrcolumnar_reloptions(mcx, reloptions.as_deref(), true)?;
         }
         _ => {
             reloptions::heap_reloptions(mcx, relkind, reloptions.as_deref(), true)?;
@@ -829,47 +828,14 @@ pub fn DefineRelation<'mcx>(
         },
     };
 
-    // pgrcolumnar accepts only the analytics charter's type surface; refuse at CREATE TABLE
-    // (docs/design/pgrcolumnar-impl.md §3).
-    if access_method_id != InvalidOid
-        && access_method_id != 2
-        && syscache_seams::pg_am_amname::call(access_method_id)?.as_deref() == Some("pgrcolumnar")
-    {
-        // Deprecation posture of record (ADJUDICATION-20260818.md §3, Michael
-        // 2026-08-19): the v1 endgame is MIGRATE to pgrcolumnar2; new v1 tables
-        // warn per the house deprecation style (01P01, cf. the md5-password
-        // worked example in libpq/crypt). A WARNING, not a refusal — existing
-        // v1 batteries keep running until the migration drain completes.
-        elog_seams::ereport::call(
-            PgError::new(WARNING, "creating a table with the deprecated pgrcolumnar access method")
-                .with_sqlstate(ERRCODE_WARNING_DEPRECATED_FEATURE)
-                .with_detail(
-                    "pgrcolumnar (v1) is deprecated; its endgame is migration to pgrcolumnar2.",
-                )
-                .with_hint(
-                    "Use pgrcolumnar2 for new tables; migrate existing tables with \
-                     scripts/pgrust-migrate-v1.sh (ALTER TABLE ... SET ACCESS METHOD pgrcolumnar2).",
-                ),
-        )?;
-        for i in 0..descriptor.natts as usize {
-            let att = descriptor.attr(i);
-            if att.attisdropped {
-                continue;
-            }
-            if pgrcolumnar::ColType::of_type_oid(att.atttypid).is_none() {
-                return Err(Box::new(
-                    PgError::new(
-                        ERROR,
-                        format!(
-                            "pgrcolumnar does not support the type of column \"{}\" (type oid {})",
-                            String::from_utf8_lossy(att.attname.name_str()),
-                            att.atttypid
-                        ),
-                    )
-                    .with_sqlstate(types_error::ERRCODE_FEATURE_NOT_SUPPORTED),
-                ));
-            }
-        }
+    // pgrcolumnar `sorted_by` must name live columns the writer can sort.
+    reloptions::pgrcolumnar_check_sorted_by(pgrc_opts.as_ref(), |key| {
+        sorted_by_column_verdict(&descriptor.attrs, key)
+    })?;
+
+    if access_method_id != InvalidOid && access_method_id != 2 {
+        let amname = syscache_seams::pg_am_amname::call(access_method_id)?;
+        check_table_am_column_types(amname.as_deref(), &relname, &descriptor.attrs)?;
     }
 
     // MergeAttributes' is_partition saved_columns pass (tablecmds.c:3031):
@@ -1007,6 +973,8 @@ pub fn DefineRelation<'mcx>(
         mcx,
         &catalog_heap::HeapCreateParams {
             relname,
+            relid: InvalidOid,
+            reltypeid: InvalidOid,
             relnamespace: namespace_id,
             reltablespace: tablespace_id,
             ownerid: owner_id,
@@ -1301,6 +1269,42 @@ pub fn DefineRelation<'mcx>(
     Ok(relation_id)
 }
 
+// pgrcolumnar cannot store every type: refuse at CREATE TABLE, as its CTAS
+// and SET ACCESS METHOD loads do, rather than create a table it cannot open.
+fn check_table_am_column_types(
+    amname: Option<&str>,
+    relname: &str,
+    attrs: &[types_tuple::tupdesc::FormData_pg_attribute],
+) -> PgResult<()> {
+    if amname == Some("pgrcolumnar") {
+        pgrc_am::schema::check_create_supported(relname, attrs)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod table_am_column_type_tests {
+    use super::*;
+    use types_tuple::tupdesc::FormData_pg_attribute;
+
+    #[test]
+    fn pgrcolumnar_refuses_enum_shaped_column_at_create() {
+        let mut att = FormData_pg_attribute {
+            atttypid: 16395,
+            attlen: 4,
+            attnum: 1,
+            attbyval: true,
+            attalign: b'i' as i8,
+            ..Default::default()
+        };
+        att.attname.data[0] = b'l';
+        let err = check_table_am_column_types(Some("pgrcolumnar"), "col_en", &[att]).unwrap_err();
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
+        assert!(err.message().contains("column \"l\" of relation \"col_en\""), "{}", err.message());
+        assert!(check_table_am_column_types(Some("heap"), "col_en", &[att]).is_ok());
+    }
+}
+
 #[cfg(test)]
 mod build_desc_tests {
     use super::*;
@@ -1403,5 +1407,24 @@ mod cache_lookup_error_tests {
             "cache lookup failed for attribute 3 of relation 16384"
         );
         assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    }
+}
+
+pub(crate) fn sorted_by_column_verdict(
+    atts: &[types_tuple::FormData_pg_attribute],
+    key: &types_rel::reloptions::SortedByKey,
+) -> reloptions::SortedByColumn {
+    let col = key.col.as_str();
+    if !key.path.is_empty() {
+        return match atts.iter().find(|a| !a.attisdropped && a.attname.name_str() == col.as_bytes()) {
+            None => reloptions::SortedByColumn::Missing,
+            Some(a) if a.atttypid != types_core::catalog::JSONBOID => reloptions::SortedByColumn::PathNotJsonb,
+            Some(_) => reloptions::SortedByColumn::Ok,
+        };
+    }
+    match tableam::pgrc_sorted_by_column_sortable(atts, col) {
+        None => reloptions::SortedByColumn::Missing,
+        Some(false) => reloptions::SortedByColumn::Unsortable,
+        Some(true) => reloptions::SortedByColumn::Ok,
     }
 }

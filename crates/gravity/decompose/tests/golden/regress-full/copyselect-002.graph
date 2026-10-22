@@ -1,0 +1,39 @@
+-- regress-full-copyselect-002
+-- copy (select t from test1 where id = 1 UNION select * from v_test1 ORDER BY 1) to stdout;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=4 eligible rows=6 end=breaker(slot=0 Distinct)
+  desc owner=key/0 words=bits@3/5
+  nodes n4@0 n2@2 n1@4 n0@5^
+  source range rel=17634 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(v3.1, c23:1)
+  project (1=v3.2)
+  append arm 0/2
+  project (1=outer.1)
+  project (1=outer.1)
+  outs 1=vl:win/page
+  outs 1=vl:life/breaker
+  outs 1=vl:life/breaker
+p1 node=6 eligible rows=1270 end=breaker(slot=0 Distinct)
+  desc owner=key/0 words=bits@3/5
+  nodes n6@0 n2@1 n1@3 n0@4^
+  source range rel=17634 rti=5 am=heap
+    lanes Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=op654(c25:'v_', v5.2))
+  append arm 1/2
+  project (1=outer.1)
+  project (1=outer.1)
+  outs 1=vl:call1258
+  outs 1=vl:life/breaker
+  outs 1=vl:life/breaker
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1)
+  outs 1=vl:life/breaker
+breaker slot=0 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[Fp128,Fp128]->[MinCode@16,Count@24] 32B order=1+
+breaker slot=0 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[Fp128,Fp128]->[MinCode@16,Count@24] 32B order=1+
+group slot=0 producer=p1 node=0 form=Unique hints=[] layout=[Fp128,Fp128]->[MinCode@16,Count@24] 32B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=25 rep=0 expr=outer.1
+mapped: Append SeqScan Unique

@@ -1,0 +1,324 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1d s2u s1c s2r
+step s1d: UPDATE ih SET d = 6 WHERE id IN (3, 42);
+step s2u: UPDATE ih SET v = (SELECT count(*) FROM ihs WHERE ihs.d = ih.d) * 100 + v WHERE ih.id % 3 = 0; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT tableoid::regclass, id, d, v FROM ih WHERE id % 3 = 0 OR id IN (45, 48, 10, 55) ORDER BY id, d, v;
+tableoid|id|d|  v
+--------+--+-+---
+ih      | 3|6|803
+ih      | 6|1|906
+ih      | 9|4|909
+ih      |10|0| 10
+ih      |12|2|912
+ih      |15|0|815
+ih      |18|3|918
+ih      |21|1|921
+ih      |24|4|924
+ih      |27|2|927
+ih      |30|0|830
+ih      |33|3|933
+ih      |36|1|936
+ih      |39|4|939
+ih_c    |42|6|842
+ih_c    |45|0|845
+ih_c    |48|3|948
+ih_c    |51|1|951
+ih_c    |54|4|954
+ih_c    |55|0| 55
+ih_c    |57|2|957
+ih_c    |60|0|860
+ih_c    |63|3|963
+ih_c    |66|1|966
+ih_c    |69|4|969
+ih_c    |72|2|972
+ih_c    |75|0|875
+ih_c    |78|3|978
+ih_c    |81|1|981
+ih_c    |84|4|984
+ih_c    |87|2|987
+ih_c    |90|0|890
+(32 rows)
+
+
+starting permutation: s1v s2u s1c s2r
+step s1v: UPDATE ih_c SET v = v + 1000, d = d + 1 WHERE id IN (45, 48);
+step s2u: UPDATE ih SET v = (SELECT count(*) FROM ihs WHERE ihs.d = ih.d) * 100 + v WHERE ih.id % 3 = 0; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT tableoid::regclass, id, d, v FROM ih WHERE id % 3 = 0 OR id IN (45, 48, 10, 55) ORDER BY id, d, v;
+tableoid|id|d|   v
+--------+--+-+----
+ih      | 3|3| 903
+ih      | 6|1| 906
+ih      | 9|4| 909
+ih      |10|0|  10
+ih      |12|2| 912
+ih      |15|0| 815
+ih      |18|3| 918
+ih      |21|1| 921
+ih      |24|4| 924
+ih      |27|2| 927
+ih      |30|0| 830
+ih      |33|3| 933
+ih      |36|1| 936
+ih      |39|4| 939
+ih_c    |42|2| 942
+ih_c    |45|1|1945
+ih_c    |48|4|1948
+ih_c    |51|1| 951
+ih_c    |54|4| 954
+ih_c    |55|0|  55
+ih_c    |57|2| 957
+ih_c    |60|0| 860
+ih_c    |63|3| 963
+ih_c    |66|1| 966
+ih_c    |69|4| 969
+ih_c    |72|2| 972
+ih_c    |75|0| 875
+ih_c    |78|3| 978
+ih_c    |81|1| 981
+ih_c    |84|4| 984
+ih_c    |87|2| 987
+ih_c    |90|0| 890
+(32 rows)
+
+
+starting permutation: s1x s2u s1c s2r
+step s1x: DELETE FROM ih WHERE id IN (6, 51); UPDATE ih SET id = id + 1 WHERE id IN (9, 54);
+step s2u: UPDATE ih SET v = (SELECT count(*) FROM ihs WHERE ihs.d = ih.d) * 100 + v WHERE ih.id % 3 = 0; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT tableoid::regclass, id, d, v FROM ih WHERE id % 3 = 0 OR id IN (45, 48, 10, 55) ORDER BY id, d, v;
+tableoid|id|d|  v
+--------+--+-+---
+ih      | 3|3|903
+ih      |10|0| 10
+ih      |10|4|  9
+ih      |12|2|912
+ih      |15|0|815
+ih      |18|3|918
+ih      |21|1|921
+ih      |24|4|924
+ih      |27|2|927
+ih      |30|0|830
+ih      |33|3|933
+ih      |36|1|936
+ih      |39|4|939
+ih_c    |42|2|942
+ih_c    |45|0|845
+ih_c    |48|3|948
+ih_c    |55|0| 55
+ih_c    |55|4| 54
+ih_c    |57|2|957
+ih_c    |60|0|860
+ih_c    |63|3|963
+ih_c    |66|1|966
+ih_c    |69|4|969
+ih_c    |72|2|972
+ih_c    |75|0|875
+ih_c    |78|3|978
+ih_c    |81|1|981
+ih_c    |84|4|984
+ih_c    |87|2|987
+ih_c    |90|0|890
+(30 rows)
+
+
+starting permutation: s1d s1s s2u s1c s2r
+step s1d: UPDATE ih SET d = 6 WHERE id IN (3, 42);
+step s1s: INSERT INTO ihs VALUES (6, 1), (6, 2), (0, 3);
+step s2u: UPDATE ih SET v = (SELECT count(*) FROM ihs WHERE ihs.d = ih.d) * 100 + v WHERE ih.id % 3 = 0; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT tableoid::regclass, id, d, v FROM ih WHERE id % 3 = 0 OR id IN (45, 48, 10, 55) ORDER BY id, d, v;
+tableoid|id|d|  v
+--------+--+-+---
+ih      | 3|6|803
+ih      | 6|1|906
+ih      | 9|4|909
+ih      |10|0| 10
+ih      |12|2|912
+ih      |15|0|815
+ih      |18|3|918
+ih      |21|1|921
+ih      |24|4|924
+ih      |27|2|927
+ih      |30|0|830
+ih      |33|3|933
+ih      |36|1|936
+ih      |39|4|939
+ih_c    |42|6|842
+ih_c    |45|0|845
+ih_c    |48|3|948
+ih_c    |51|1|951
+ih_c    |54|4|954
+ih_c    |55|0| 55
+ih_c    |57|2|957
+ih_c    |60|0|860
+ih_c    |63|3|963
+ih_c    |66|1|966
+ih_c    |69|4|969
+ih_c    |72|2|972
+ih_c    |75|0|875
+ih_c    |78|3|978
+ih_c    |81|1|981
+ih_c    |84|4|984
+ih_c    |87|2|987
+ih_c    |90|0|890
+(32 rows)
+
+
+starting permutation: s1s s2u s1c s2r
+step s1s: INSERT INTO ihs VALUES (6, 1), (6, 2), (0, 3);
+step s2u: UPDATE ih SET v = (SELECT count(*) FROM ihs WHERE ihs.d = ih.d) * 100 + v WHERE ih.id % 3 = 0;
+step s1c: COMMIT;
+step s2r: SELECT tableoid::regclass, id, d, v FROM ih WHERE id % 3 = 0 OR id IN (45, 48, 10, 55) ORDER BY id, d, v;
+tableoid|id|d|  v
+--------+--+-+---
+ih      | 3|3|903
+ih      | 6|1|906
+ih      | 9|4|909
+ih      |10|0| 10
+ih      |12|2|912
+ih      |15|0|815
+ih      |18|3|918
+ih      |21|1|921
+ih      |24|4|924
+ih      |27|2|927
+ih      |30|0|830
+ih      |33|3|933
+ih      |36|1|936
+ih      |39|4|939
+ih_c    |42|2|942
+ih_c    |45|0|845
+ih_c    |48|3|948
+ih_c    |51|1|951
+ih_c    |54|4|954
+ih_c    |55|0| 55
+ih_c    |57|2|957
+ih_c    |60|0|860
+ih_c    |63|3|963
+ih_c    |66|1|966
+ih_c    |69|4|969
+ih_c    |72|2|972
+ih_c    |75|0|875
+ih_c    |78|3|978
+ih_c    |81|1|981
+ih_c    |84|4|984
+ih_c    |87|2|987
+ih_c    |90|0|890
+(32 rows)
+
+
+starting permutation: s1v s2ur s1c s2r
+step s1v: UPDATE ih_c SET v = v + 1000, d = d + 1 WHERE id IN (45, 48);
+step s2ur: UPDATE ih SET v = (SELECT count(*) FROM ihs WHERE ihs.d = ih.d) * 100 + v WHERE ih.id % 9 = 0 RETURNING tableoid::regclass, id, d, v; <waiting ...>
+step s1c: COMMIT;
+step s2ur: <... completed>
+tableoid|id|d|   v
+--------+--+-+----
+ih      | 9|4| 909
+ih      |18|3| 918
+ih      |27|2| 927
+ih      |36|1| 936
+ih_c    |45|1|1945
+ih_c    |54|4| 954
+ih_c    |63|3| 963
+ih_c    |72|2| 972
+ih_c    |81|1| 981
+ih_c    |90|0| 890
+(10 rows)
+
+step s2r: SELECT tableoid::regclass, id, d, v FROM ih WHERE id % 3 = 0 OR id IN (45, 48, 10, 55) ORDER BY id, d, v;
+tableoid|id|d|   v
+--------+--+-+----
+ih      | 3|3|   3
+ih      | 6|1|   6
+ih      | 9|4| 909
+ih      |10|0|  10
+ih      |12|2|  12
+ih      |15|0|  15
+ih      |18|3| 918
+ih      |21|1|  21
+ih      |24|4|  24
+ih      |27|2| 927
+ih      |30|0|  30
+ih      |33|3|  33
+ih      |36|1| 936
+ih      |39|4|  39
+ih_c    |42|2|  42
+ih_c    |45|1|1945
+ih_c    |48|4|1048
+ih_c    |51|1|  51
+ih_c    |54|4| 954
+ih_c    |55|0|  55
+ih_c    |57|2|  57
+ih_c    |60|0|  60
+ih_c    |63|3| 963
+ih_c    |66|1|  66
+ih_c    |69|4|  69
+ih_c    |72|2| 972
+ih_c    |75|0|  75
+ih_c    |78|3|  78
+ih_c    |81|1| 981
+ih_c    |84|4|  84
+ih_c    |87|2|  87
+ih_c    |90|0| 890
+(32 rows)
+
+
+starting permutation: s1x s2ur s1c s2r
+step s1x: DELETE FROM ih WHERE id IN (6, 51); UPDATE ih SET id = id + 1 WHERE id IN (9, 54);
+step s2ur: UPDATE ih SET v = (SELECT count(*) FROM ihs WHERE ihs.d = ih.d) * 100 + v WHERE ih.id % 9 = 0 RETURNING tableoid::regclass, id, d, v; <waiting ...>
+step s1c: COMMIT;
+step s2ur: <... completed>
+tableoid|id|d|  v
+--------+--+-+---
+ih      |18|3|918
+ih      |27|2|927
+ih      |36|1|936
+ih_c    |45|0|845
+ih_c    |63|3|963
+ih_c    |72|2|972
+ih_c    |81|1|981
+ih_c    |90|0|890
+(8 rows)
+
+step s2r: SELECT tableoid::regclass, id, d, v FROM ih WHERE id % 3 = 0 OR id IN (45, 48, 10, 55) ORDER BY id, d, v;
+tableoid|id|d|  v
+--------+--+-+---
+ih      | 3|3|  3
+ih      |10|0| 10
+ih      |10|4|  9
+ih      |12|2| 12
+ih      |15|0| 15
+ih      |18|3|918
+ih      |21|1| 21
+ih      |24|4| 24
+ih      |27|2|927
+ih      |30|0| 30
+ih      |33|3| 33
+ih      |36|1|936
+ih      |39|4| 39
+ih_c    |42|2| 42
+ih_c    |45|0|845
+ih_c    |48|3| 48
+ih_c    |55|0| 55
+ih_c    |55|4| 54
+ih_c    |57|2| 57
+ih_c    |60|0| 60
+ih_c    |63|3|963
+ih_c    |66|1| 66
+ih_c    |69|4| 69
+ih_c    |72|2|972
+ih_c    |75|0| 75
+ih_c    |78|3| 78
+ih_c    |81|1|981
+ih_c    |84|4| 84
+ih_c    |87|2| 87
+ih_c    |90|0|890
+(30 rows)
+

@@ -40,7 +40,7 @@ fn collect_rows(fcinfo: &Fcinfo) -> PgResult<PreparedRows> {
     ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
 
     let rows = prepared_xact_rows();
-    let mut tuples = Vec::with_capacity(rows.len());
+    let mut tuples = ::mcx::std_vec_with_capacity("pg_prepared_xacts", rows.len())?;
     for row in &rows {
         let gid = varlena_result(varlena::cstring_to_text(mcx, row.gid.as_bytes())?);
         let values = [
@@ -51,7 +51,7 @@ fn collect_rows(fcinfo: &Fcinfo) -> PgResult<PreparedRows> {
             Datum::from_u32(row.dbid),
         ];
         let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &[false; 5])?;
-        tuples.push(tuple.image().to_vec());
+        tuples.push(::mcx::std_vec_from_slice("pg_prepared_xacts", tuple.image())?);
     }
     Ok(PreparedRows { tuples })
 }

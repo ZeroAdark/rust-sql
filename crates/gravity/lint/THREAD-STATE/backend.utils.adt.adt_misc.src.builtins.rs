@@ -1,0 +1,2 @@
+backend/utils/adt/adt_misc/src/builtins.rs	BACKUP_SESSION	pgport	at:fc_pg_backup_stop	leader	pg_backup_start runs on the leader; the session's backup state and tablespace map, taken by pg_backup_stop; at most one backup (pg_backup_start refuses a second)
+backend/utils/adt/adt_misc/src/builtins.rs	JIT_PROVIDER_FAILED_LOADING	pgport	exit	thread	a process fact; one-shot latch: this thread's JIT provider probe failed, never re-stat'd

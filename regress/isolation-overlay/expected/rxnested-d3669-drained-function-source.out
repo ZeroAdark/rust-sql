@@ -1,0 +1,202 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2qexp s1qv s2q s1c s2qsel
+step s2qexp: EXPLAIN (COSTS OFF) MERGE INTO fq t USING generate_series(2, 602, 10) g ON t.k = g WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + g WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits;
+QUERY PLAN                                    
+----------------------------------------------
+Merge on fq t                                 
+  ->  Hash Right Join                         
+        Hash Cond: (g.g = t.k)                
+        ->  Function Scan on generate_series g
+        ->  Hash                              
+              ->  Seq Scan on fq t            
+(6 rows)
+
+step s1qv: UPDATE fq SET hits = 7 WHERE k = 12;
+step s2q: MERGE INTO fq t USING generate_series(2, 602, 10) g ON t.k = g WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + g WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+step s2qsel: SELECT k, hits, note FROM fq ORDER BY k, note;
+ k|hits|note
+--+----+----
+ 1|   0|b0  
+ 2| 102|n2  
+ 3|   0|b0  
+11|   0|b0  
+12| 119|n12 
+13|   0|b0  
+21|   0|n21 
+22| 122|n22 
+23|   0|n23 
+(9 rows)
+
+
+starting permutation: s1qkey s2q s1c s2qsel
+step s1qkey: UPDATE fq SET k = 14 WHERE k = 12;
+step s2q: MERGE INTO fq t USING generate_series(2, 602, 10) g ON t.k = g WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + g WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+step s2qsel: SELECT k, hits, note FROM fq ORDER BY k, note;
+ k|hits|note
+--+----+----
+ 1|   0|b0  
+ 2| 102|n2  
+ 3|   0|b0  
+11|   0|b0  
+13|   0|b0  
+14|   0|b0  
+21|   0|n21 
+22| 122|n22 
+23|   0|n23 
+(9 rows)
+
+
+starting permutation: s1qnkey s2q s1c s2qsel
+step s1qnkey: UPDATE fq SET k = 12 WHERE k = 13;
+step s2q: MERGE INTO fq t USING generate_series(2, 602, 10) g ON t.k = g WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + g WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+step s2qsel: SELECT k, hits, note FROM fq ORDER BY k, note;
+ k|hits|note
+--+----+----
+ 1|   0|b0  
+ 2| 102|n2  
+ 3|   0|b0  
+11|   0|b0  
+12|   0|b0  
+12| 112|n12 
+21|   0|n21 
+22| 122|n22 
+23|   0|n23 
+(9 rows)
+
+
+starting permutation: s1qkey s2qs s1c s2qsel
+step s1qkey: UPDATE fq SET k = 14 WHERE k = 12;
+step s2qs: MERGE INTO fq t USING (SELECT g AS k, g % 7 AS w FROM generate_series(1, 60) g) s ON t.k = s.k WHEN MATCHED AND t.k % 10 = 2 THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE THEN UPDATE SET note = 'b' || t.hits; <waiting ...>
+step s1c: COMMIT;
+step s2qs: <... completed>
+step s2qsel: SELECT k, hits, note FROM fq ORDER BY k, note;
+ k|hits|note
+--+----+----
+ 1|   0|n1  
+ 2| 102|n2  
+ 3|   0|n3  
+11|   0|n11 
+13|   0|n13 
+14|   0|b0  
+21|   0|n21 
+22| 101|n22 
+23|   0|n23 
+(9 rows)
+
+
+starting permutation: s2pexp s1pv s2p s1c s2psel
+step s2pexp: EXPLAIN (COSTS OFF) MERGE INTO fp t USING (SELECT g AS k, g % 7 AS w FROM generate_series(2, 602, 10) g) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE;
+QUERY PLAN                                    
+----------------------------------------------
+Merge on fp t                                 
+  Merge on fp1 t_1                            
+  Merge on fp2 t_2                            
+  Merge on fp3 t_3                            
+  ->  Hash Right Join                         
+        Hash Cond: (g.g = t.k)                
+        ->  Function Scan on generate_series g
+        ->  Hash                              
+              ->  Append                      
+                    ->  Seq Scan on fp1 t_1   
+                    ->  Seq Scan on fp2 t_2   
+                    ->  Seq Scan on fp3 t_3   
+(12 rows)
+
+step s1pv: UPDATE fp SET hits = 7 WHERE k = 12;
+step s2p: MERGE INTO fp t USING (SELECT g AS k, g % 7 AS w FROM generate_series(2, 602, 10) g) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+step s2psel: SELECT tableoid::regclass, k, hits, note FROM fp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+fp1     | 1|   0|b0  
+fp1     | 2| 102|n2  
+fp1     | 3|   0|b0  
+fp2     |11|   0|b0  
+fp2     |12| 112|n12 
+fp2     |13|   0|b0  
+fp3     |22| 101|n22 
+(7 rows)
+
+
+starting permutation: s1pkey s2p s1c s2psel
+step s1pkey: UPDATE fp SET k = 14 WHERE k = 12;
+step s2p: MERGE INTO fp t USING (SELECT g AS k, g % 7 AS w FROM generate_series(2, 602, 10) g) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+step s2psel: SELECT tableoid::regclass, k, hits, note FROM fp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+fp1     | 1|   0|b0  
+fp1     | 2| 102|n2  
+fp1     | 3|   0|b0  
+fp2     |11|   0|b0  
+fp2     |13|   0|b0  
+fp2     |14|   0|b0  
+fp3     |22| 101|n22 
+(7 rows)
+
+
+starting permutation: s1pnkey s2p s1c s2psel
+step s1pnkey: UPDATE fp SET k = 12 WHERE k = 13;
+step s2p: MERGE INTO fp t USING (SELECT g AS k, g % 7 AS w FROM generate_series(2, 602, 10) g) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+step s2psel: SELECT tableoid::regclass, k, hits, note FROM fp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+fp1     | 1|   0|b0  
+fp1     | 2| 102|n2  
+fp1     | 3|   0|b0  
+fp2     |11|   0|b0  
+fp2     |12|   0|b0  
+fp2     |12| 105|n12 
+fp3     |22| 101|n22 
+(7 rows)
+
+
+starting permutation: s2pfexp s1pkey s2pf s1c s2psel
+step s2pfexp: EXPLAIN (COSTS OFF) MERGE INTO fp t USING generate_series(2, 602, 10) g ON t.k = g WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + g WHEN NOT MATCHED BY SOURCE THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED AND g < 40 THEN INSERT VALUES (g + 40, g, 'i' || g);
+QUERY PLAN                                    
+----------------------------------------------
+Merge on fp t                                 
+  Merge on fp1 t_1                            
+  Merge on fp2 t_2                            
+  Merge on fp3 t_3                            
+  ->  Hash Full Join                          
+        Hash Cond: (g.g = t.k)                
+        ->  Function Scan on generate_series g
+        ->  Hash                              
+              ->  Append                      
+                    ->  Seq Scan on fp1 t_1   
+                    ->  Seq Scan on fp2 t_2   
+                    ->  Seq Scan on fp3 t_3   
+(12 rows)
+
+step s1pkey: UPDATE fp SET k = 14 WHERE k = 12;
+step s2pf: MERGE INTO fp t USING generate_series(2, 602, 10) g ON t.k = g WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + g WHEN NOT MATCHED BY SOURCE THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED AND g < 40 THEN INSERT VALUES (g + 40, g, 'i' || g); <waiting ...>
+step s1c: COMMIT;
+step s2pf: <... completed>
+step s2psel: SELECT tableoid::regclass, k, hits, note FROM fp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+fp1     | 1|   0|b0  
+fp1     | 2| 102|n2  
+fp1     | 3|   0|b0  
+fp2     |11|   0|b0  
+fp2     |13|   0|b0  
+fp2     |14|   0|b0  
+fp3     |21|   0|b0  
+fp3     |22| 122|n22 
+fp3     |23|   0|b0  
+fp3     |52|  12|i12 
+fp3     |72|  32|i32 
+(11 rows)
+

@@ -1,0 +1,5 @@
+# PostgreSQL 18.6 src/backend/utils/adt/tsvector_op.c: 4 stack-depth check sites
+1625	TS_phrase_execute	crates/backend/utils/adt/tsvector_core/src/execute.rs	ts_phrase_execute	yes	
+1892	TS_execute_recurse	crates/backend/utils/adt/tsvector_core/src/execute.rs	ts_execute_recurse	yes	
+2039	TS_execute_locations_recurse	crates/backend/utils/adt/tsvector_core/src/execute.rs	ts_execute_locations_recurse	yes	
+2162	tsquery_requires_match	crates/backend/utils/adt/tsvector_core/src/op.rs	tsquery_requires_match	yes	

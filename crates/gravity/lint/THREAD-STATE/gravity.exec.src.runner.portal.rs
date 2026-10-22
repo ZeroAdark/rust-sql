@@ -1,0 +1,4 @@
+gravity/exec/src/runner/portal.rs	MEM_WAIT_SERVES	lifetime	exit	thread	portals: this thread serves statements (W1), set by prime_once; a thread-identity flag, never reset; a pool claim's memory wait reads its own copy, false: a Gravity worker has no wait-event slot
+gravity/exec/src/runner/portal.rs	MEM_WAIT_EVENT	lifetime	exit	leader	portals: this thread's GravityMemory wait event id, registered at its first memory wait (W1); never reset
+gravity/exec/src/runner/portal.rs	AWAY	lifetime	at:drain_away	leader	portals: exec slots sent away from their level (D3547); PortalDrop takes each (take_away), drain_away at session end forgets the rest; at most one entry per live named portal sent away
+gravity/exec/src/runner/portal.rs	STEPPING	lifetime	scope:Stepping	leader	portals: token of the portal borrowing a level now (D3547); Stepping guard restores the previous token on every exit

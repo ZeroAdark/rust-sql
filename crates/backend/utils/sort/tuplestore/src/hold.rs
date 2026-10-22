@@ -1,6 +1,3 @@
-// The Rust marshal for C's `Tuplestorestate *` held by PortalData<'static>:
-// generation-checked handles over a thread-local registry (stmt_list shape).
-// A stale handle is a loud panic; ops never re-enter the registry.
 use core::cell::{Cell, RefCell};
 
 use ::mcx::Mcx;
@@ -16,9 +13,7 @@ struct Entry {
 }
 
 thread_local! {
-    // tls-dtor: ManuallyDrop — Tuplestore::drop closes BufFiles (FileClose ->
-    // FD.with), which aborts inside TLS teardown; leaked stores match C's
-    // FATAL-exit leak and the fd belts close the VFDs.
+    // ManuallyDrop: Tuplestore::drop closes BufFiles, which aborts inside TLS teardown.
     static ENTRIES: RefCell<core::mem::ManuallyDrop<Vec<Option<Entry>>>> =
         const { RefCell::new(core::mem::ManuallyDrop::new(Vec::new())) };
     static FREE: RefCell<core::mem::ManuallyDrop<Vec<u32>>> =
@@ -55,8 +50,6 @@ pub fn register(store: Tuplestore) -> TuplestoreHandle {
     encode(idx, generation)
 }
 
-// memgrowth-discriminator (suspect-A census): registry Vec len/capacity and
-// free-list len — raw-Rust slab bytes the context ledger cannot see.
 pub fn slot_census() -> (usize, usize, usize) {
     let (len, cap) = ENTRIES.with(|e| {
         let e = e.borrow();
@@ -95,8 +88,7 @@ pub fn end(h: TuplestoreHandle) {
         return;
     }
     let (idx, generation) = decode(h);
-    // try_with: reachable from guard Drops inside TLS destructors at thread
-    // exit; a destroyed registry must leak, never abort the process.
+    // Reachable from guard Drops inside TLS destructors; a destroyed registry must leak, not abort.
     let entry = ENTRIES.try_with(|e| {
         let mut e = e.borrow_mut();
         match e.get_mut(idx as usize) {
@@ -112,8 +104,6 @@ pub fn end(h: TuplestoreHandle) {
     }
 }
 
-/// Unregister and hand back the store (C: transferring the
-/// `Tuplestorestate *` itself, e.g. into `ReturnSetInfo.setResult`).
 pub fn take(h: TuplestoreHandle) -> Option<crate::Tuplestore> {
     if h.is_null() {
         return None;
@@ -131,7 +121,6 @@ pub fn take(h: TuplestoreHandle) -> Option<crate::Tuplestore> {
     })
 }
 
-// The slot's own allocator IS C's tts_mcxt; ambient there, carried here.
 #[inline]
 fn slot_mcx<'mcx>(slot: &SlotData<'mcx>) -> Mcx<'mcx> {
     *slot.base().tts_values.allocator()
@@ -199,7 +188,7 @@ fn tuple_count_hold(h: TuplestoreHandle) -> i64 {
 }
 
 /// The sidecar row schema: 2x not-null int8, double-aligned, plain storage.
-/// Built per call in a throwaway bump arena (the desc is only read during
+/// Built per call in a throwaway scratch context (the desc is only read during
 /// form/deform; per-row build cost is a named perf lever, not contract
 /// scope — eligible fills are already per-row executor drives).
 fn with_tid_desc<R>(
@@ -208,7 +197,7 @@ fn with_tid_desc<R>(
     use ::types_tuple::{
         CompactAttribute, FormData_pg_attribute, TYPALIGN_DOUBLE, TYPSTORAGE_PLAIN,
     };
-    let ctx = ::mcx::MemoryContext::new_bump("cursor tidstore desc");
+    let ctx = ::mcx::MemoryContext::new_wholesale("cursor tidstore desc");
     let mcx = ctx.mcx();
     let mut compact_attrs = ::mcx::PgVec::new_in(mcx);
     let mut attrs = ::mcx::PgVec::new_in(mcx);

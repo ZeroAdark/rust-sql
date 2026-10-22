@@ -23,6 +23,12 @@ seam_core::seam!(
     ) -> PgResult<PlannedStmt<'mcx>>
 );
 
+seam_core::seam!(
+    /// Whether a module watches planning now (planner_hook's enter / leave taps, pg_stat_statements' plan counters), so a
+    /// statement planned without the planner would hide its planning from it.
+    pub fn planning_tapped() -> bool
+);
+
 /// amcostestimate output shape (C fills the out-params of the AM handler).
 pub struct AmCostEstimate {
     pub index_startup_cost: f64,
@@ -40,6 +46,21 @@ seam_core::seam!(
         jointype: JoinType,
         sjinfo: Option<&'a SpecialJoinInfo<'mcx>>,
     ) -> PgResult<f64>
+);
+
+seam_core::seam!(
+    /// GENP-1 (D3004; PLANNER-CHANGES GENP-1, one read-only seam): the rows PostgreSQL's planner would estimate for a
+    /// plain scan of relation `relid` under `quals` (a plan's scan quals, Vars at varno `varno`), each extern parameter
+    /// bound in `bound_params` taken as its value, as a custom plan would (`clauselist_selectivity` x the rel's tuples,
+    /// `clamp_row_est`). Read-only: a fresh one-relation PlannerRun, no plan built or changed. `None` where the relation
+    /// is not a plain table (an inheritance parent, a partitioned table, a view).
+    pub fn scan_restriction_rows<'a, 'mcx>(
+        mcx: Mcx<'mcx>,
+        relid: Oid,
+        varno: u32,
+        quals: &'a [Node<'mcx>],
+        bound_params: ParamListHandle,
+    ) -> PgResult<Option<f64>>
 );
 
 seam_core::seam!(

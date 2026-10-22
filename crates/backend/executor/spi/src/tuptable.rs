@@ -29,11 +29,16 @@ thread_local! {
     static NEXT_TUPTAB_ID: Cell<u64> = const { Cell::new(1) };
 }
 
+// elog(ERROR) (spi.c:2130-2133, 2177-2181): XX000, catchable.
+fn elog_error(msg: &'static str) -> Box<types_error::PgError> {
+    ereport(types_error::ERROR).errmsg_internal(msg).into_error().into()
+}
+
 pub(crate) fn spi_dest_startup(_operation: i32, typeinfo: &TupleDescData<'_>) -> PgResult<()> {
     let connected = with_current(|conn| conn.tuptable.is_some());
     match connected {
-        None => panic!("spi_dest_startup called while not connected to SPI"),
-        Some(true) => panic!("improper call to spi_dest_startup"),
+        None => return Err(elog_error("spi_dest_startup called while not connected to SPI")),
+        Some(true) => return Err(elog_error("improper call to spi_dest_startup")),
         Some(false) => {}
     }
 
@@ -60,13 +65,17 @@ pub(crate) fn spi_printtup(slot: &mut SlotData<'_>) -> PgResult<bool> {
     let slot_mcx = *slot.base().tts_values.allocator();
     SPI_STACK.with(|s| {
         let mut stack = s.borrow_mut();
-        let conn = stack.last_mut().unwrap_or_else(|| {
-            panic!("spi_printtup called while not connected to SPI")
-        });
-        let id = conn.tuptable.unwrap_or_else(|| panic!("improper call to spi_printtup"));
+        let Some(conn) = stack.last_mut() else {
+            return Err(elog_error("spi_printtup called while not connected to SPI"));
+        };
+        let Some(id) = conn.tuptable else {
+            return Err(elog_error("improper call to spi_printtup"));
+        };
+        // Newest first: callers like connectby keep every earlier table live.
         let entry = conn
             .tuptables
             .iter_mut()
+            .rev()
             .find(|tt| tt.id == id)
             .expect("current tuptable is registered");
         entry.table.with_mut_mcx(|mcx, data| {
@@ -97,6 +106,7 @@ pub(crate) fn spi_printtup(slot: &mut SlotData<'_>) -> PgResult<bool> {
 pub(crate) fn numvals_of(tuptables: &[TuptabEntry], id: u64) -> u64 {
     tuptables
         .iter()
+        .rev()
         .find(|tt| tt.id == id)
         .map(|tt| tt.table.with(|d| d.vals.len() as u64))
         .unwrap_or(0)
@@ -106,7 +116,7 @@ fn locate(h: TuptabHandle) -> Option<(usize, usize)> {
     SPI_STACK.with(|s| {
         let stack = s.borrow();
         for (ci, conn) in stack.iter().enumerate().rev() {
-            if let Some(ti) = conn.tuptables.iter().position(|tt| tt.id == h.0) {
+            if let Some(ti) = conn.tuptables.iter().rposition(|tt| tt.id == h.0) {
                 return Some((ci, ti));
             }
         }
@@ -134,11 +144,11 @@ pub fn SPI_freetuptable(h: TuptabHandle) -> PgResult<()> {
     let removed = SPI_STACK.with(|s| {
         let mut stack = s.borrow_mut();
         let Some(conn) = stack.last_mut() else { return None };
-        let ti = conn.tuptables.iter().position(|tt| tt.id == h.0)?;
+        let ti = conn.tuptables.iter().rposition(|tt| tt.id == h.0)?;
         if conn.tuptable == Some(h.0) {
             conn.tuptable = None;
         }
-        Some(conn.tuptables.swap_remove(ti))
+        Some(conn.tuptables.remove(ti))
     });
     match removed {
         Some(entry) => {

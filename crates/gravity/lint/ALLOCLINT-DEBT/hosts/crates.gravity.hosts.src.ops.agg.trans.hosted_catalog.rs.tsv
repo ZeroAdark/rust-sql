@@ -1,0 +1,3 @@
+path	crates/gravity/hosts/src/ops/agg/trans/hosted_catalog.rs
+growth	std::vec::Vec::push	1
+method	std::vec::Vec::into_boxed_slice	2

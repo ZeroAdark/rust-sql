@@ -165,8 +165,8 @@ impl<'mcx> JumbleState<'mcx> {
         if location >= 0 {
             if self.clocations.len() == self.clocations.capacity() {
                 let want = self.clocations.capacity();
-                let oom = self.clocations.allocator().oom(want);
-                self.clocations.try_reserve(want).map_err(|_| oom)?;
+                let mcx = *self.clocations.allocator();
+                self.clocations.try_reserve(want).map_err(|_| mcx.oom(want))?;
             }
             debug_assert!(len >= -1);
             self.clocations.push(LocationLen {

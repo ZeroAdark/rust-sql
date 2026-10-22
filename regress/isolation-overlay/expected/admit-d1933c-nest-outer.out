@@ -1,0 +1,321 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pb s3pd s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE ot SET x = x + os.id FROM os WHERE os.id < ot.k AND os.w = 7 AND ot.id <= 40;
+QUERY PLAN                         
+-----------------------------------
+Update on ot                       
+  ->  Nested Loop                  
+        Join Filter: (os.id < ot.k)
+        ->  Seq Scan on ot         
+              Filter: (id <= 40)   
+        ->  Materialize            
+              ->  Seq Scan on os   
+                    Filter: (w = 7)
+(8 rows)
+
+step s3pb: EXPLAIN (COSTS OFF) UPDATE ot SET x = x + os.id FROM os WHERE os.id BETWEEN ot.k - 1 AND ot.k AND os.w IN (1, 2) AND ot.id <= 40;
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Update on ot                                                    
+  ->  Nested Loop                                               
+        Join Filter: ((os.id <= ot.k) AND (os.id >= (ot.k - 1)))
+        ->  Seq Scan on ot                                      
+              Filter: (id <= 40)                                
+        ->  Materialize                                         
+              ->  Seq Scan on os                                
+                    Filter: (w = ANY ('{1,2}'::integer[]))      
+(8 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM ot USING os WHERE os.id BETWEEN ot.k - 1 AND ot.k AND os.w IN (1, 2) AND ot.x = 0 AND ot.id <= 40;
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Delete on ot                                                    
+  ->  Nested Loop                                               
+        Join Filter: ((os.id <= ot.k) AND (os.id >= (ot.k - 1)))
+        ->  Bitmap Heap Scan on ot                              
+              Recheck Cond: (id <= 40)                          
+              Filter: (x = 0)                                   
+              ->  Bitmap Index Scan on ot_pkey                  
+                    Index Cond: (id <= 40)                      
+        ->  Materialize                                         
+              ->  Seq Scan on os                                
+                    Filter: (w = ANY ('{1,2}'::integer[]))      
+(11 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1k s1d s2u s1c s2c s3sel s3row
+step s1x: UPDATE ot SET x = x + 1000 WHERE id = 10;
+step s1k: UPDATE ot SET k = 1 WHERE id = 20;
+step s1d: DELETE FROM ot WHERE id = 30;
+step s2u: UPDATE ot SET x = x + os.id FROM os WHERE os.id < ot.k AND os.w = 7 AND ot.id <= 40 RETURNING ot.id, ot.k, ot.x; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id| k|   x
+--+--+----
+ 8| 8|   7
+ 9| 9|   7
+10|10|1007
+11|11|   7
+12|12|   7
+13|13|   7
+14|14|   7
+15|15|   7
+16|16|   7
+17|17|   7
+18|18|   7
+19|19|   7
+21|21|   7
+22|22|   7
+23|23|   7
+24|24|   7
+25|25|   7
+26|26|   7
+27|27|   7
+28|28|   7
+29|29|   7
+31|31|   7
+32|32|   7
+33|33|   7
+34|34|   7
+35|35|   7
+36|36|   7
+37|37|   7
+38|38|   7
+39|39|   7
+40|40|   7
+(31 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ot;
+count| sum| sum
+-----+----+----
+  399|9751|1217
+(1 row)
+
+step s3row: SELECT id, k, x FROM ot WHERE id IN (10, 11, 12, 20, 30, 40, 51, 52, 1012) ORDER BY id;
+id| k|   x
+--+--+----
+10|10|1007
+11|11|   7
+12|12|   7
+20| 1|   0
+40|40|   7
+51| 1|   0
+52| 2|   0
+(7 rows)
+
+
+starting permutation: s1x s1k s1d s1s s2u s1c s2c s3sel s3row
+step s1x: UPDATE ot SET x = x + 1000 WHERE id = 10;
+step s1k: UPDATE ot SET k = 1 WHERE id = 20;
+step s1d: DELETE FROM ot WHERE id = 30;
+step s1s: UPDATE os SET w = 0 WHERE id = 7;
+step s2u: UPDATE ot SET x = x + os.id FROM os WHERE os.id < ot.k AND os.w = 7 AND ot.id <= 40 RETURNING ot.id, ot.k, ot.x; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id| k|   x
+--+--+----
+ 8| 8|   7
+ 9| 9|   7
+10|10|1007
+11|11|   7
+12|12|   7
+13|13|   7
+14|14|   7
+15|15|   7
+16|16|   7
+17|17|   7
+18|18|   7
+19|19|   7
+21|21|   7
+22|22|   7
+23|23|   7
+24|24|   7
+25|25|   7
+26|26|   7
+27|27|   7
+28|28|   7
+29|29|   7
+31|31|   7
+32|32|   7
+33|33|   7
+34|34|   7
+35|35|   7
+36|36|   7
+37|37|   7
+38|38|   7
+39|39|   7
+40|40|   7
+(31 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ot;
+count| sum| sum
+-----+----+----
+  399|9751|1217
+(1 row)
+
+step s3row: SELECT id, k, x FROM ot WHERE id IN (10, 11, 12, 20, 30, 40, 51, 52, 1012) ORDER BY id;
+id| k|   x
+--+--+----
+10|10|1007
+11|11|   7
+12|12|   7
+20| 1|   0
+40|40|   7
+51| 1|   0
+52| 2|   0
+(7 rows)
+
+
+starting permutation: s1k s1d s1i s2d s1c s2c s3sel s3row
+step s1k: UPDATE ot SET k = 1 WHERE id = 20;
+step s1d: DELETE FROM ot WHERE id = 30;
+step s1i: UPDATE ot SET id = id + 1000 WHERE id = 12;
+step s2d: DELETE FROM ot USING os WHERE os.id BETWEEN ot.k - 1 AND ot.k AND os.w IN (1, 2) AND ot.x = 0 AND ot.id <= 40 RETURNING ot.id, ot.k; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| k
+--+--
+ 1| 1
+ 2| 2
+ 3| 3
+10|10
+11|11
+19|19
+21|21
+28|28
+29|29
+37|37
+38|38
+39|39
+(12 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ot;
+count| sum|sum
+-----+----+---
+  387|9513|  0
+(1 row)
+
+step s3row: SELECT id, k, x FROM ot WHERE id IN (10, 11, 12, 20, 30, 40, 51, 52, 1012) ORDER BY id;
+  id| k|x
+----+--+-
+  20| 1|0
+  40|40|0
+  51| 1|0
+  52| 2|0
+1012|12|0
+(5 rows)
+
+
+starting permutation: s1x s1k s2b s1c s2c s3sel s3row
+step s1x: UPDATE ot SET x = x + 1000 WHERE id = 10;
+step s1k: UPDATE ot SET k = 1 WHERE id = 20;
+step s2b: UPDATE ot SET x = x + os.id FROM os WHERE os.id BETWEEN ot.k - 1 AND ot.k AND os.w IN (1, 2) AND ot.id <= 40 RETURNING ot.id, ot.k, ot.x; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+id| k|   x
+--+--+----
+ 1| 1|   1
+ 2| 2|   1
+ 3| 3|   2
+10|10|1010
+11|11|  10
+12|12|  11
+19|19|  19
+21|21|  20
+28|28|  28
+29|29|  28
+30|30|  29
+37|37|  37
+38|38|  37
+39|39|  38
+(14 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ot;
+count| sum| sum
+-----+----+----
+  400|9781|1271
+(1 row)
+
+step s3row: SELECT id, k, x FROM ot WHERE id IN (10, 11, 12, 20, 30, 40, 51, 52, 1012) ORDER BY id;
+id| k|   x
+--+--+----
+10|10|1010
+11|11|  10
+12|12|  11
+20| 1|   0
+30|30|  29
+40|40|   0
+51| 1|   0
+52| 2|   0
+(8 rows)
+
+
+starting permutation: s2u s1x s2c s1c s3sel s3row
+step s2u: UPDATE ot SET x = x + os.id FROM os WHERE os.id < ot.k AND os.w = 7 AND ot.id <= 40 RETURNING ot.id, ot.k, ot.x;
+id| k|x
+--+--+-
+ 8| 8|7
+ 9| 9|7
+10|10|7
+11|11|7
+12|12|7
+13|13|7
+14|14|7
+15|15|7
+16|16|7
+17|17|7
+18|18|7
+19|19|7
+20|20|7
+21|21|7
+22|22|7
+23|23|7
+24|24|7
+25|25|7
+26|26|7
+27|27|7
+28|28|7
+29|29|7
+30|30|7
+31|31|7
+32|32|7
+33|33|7
+34|34|7
+35|35|7
+36|36|7
+37|37|7
+38|38|7
+39|39|7
+40|40|7
+(33 rows)
+
+step s1x: UPDATE ot SET x = x + 1000 WHERE id = 10; <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ot;
+count| sum| sum
+-----+----+----
+  400|9800|1231
+(1 row)
+
+step s3row: SELECT id, k, x FROM ot WHERE id IN (10, 11, 12, 20, 30, 40, 51, 52, 1012) ORDER BY id;
+id| k|   x
+--+--+----
+10|10|1007
+11|11|   7
+12|12|   7
+20|20|   7
+30|30|   7
+40|40|   7
+51| 1|   0
+52| 2|   0
+(8 rows)
+

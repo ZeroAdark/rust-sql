@@ -1,0 +1,6 @@
+# Hot-loop lint findings on today's kernels (docs/gravity/expr.md §2.3 ruling 3): reported, not fixed by P7.
+# One 'kernel loop finding' per line; a new finding or a stale line fails gravity_lint::asm_loop.
+# Regenerate the corpus with scripts/gravity-asm.sh; edit this file only when a kernel changes.
+par_scan_count LBB97_110 stack traffic inside the hot loop: str	q24, [sp, #16]
+par_scan_count LBB97_110 stack traffic inside the hot loop: str	q8, [sp]
+par_scan_count LBB97_110 stack traffic inside the hot loop: ldp	q26, q24, [sp]

@@ -1,0 +1,69 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1done s2done s1c s2show
+step s2x: EXPLAIN (COSTS OFF) WITH results AS (UPDATE ndc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results;
+QUERY PLAN                                                                              
+----------------------------------------------------------------------------------------
+Aggregate                                                                               
+  CTE results                                                                           
+    ->  Update on ndc                                                                   
+          ->  Nested Loop                                                               
+                ->  HashAggregate                                                       
+                      Group Key: "ANY_subquery".unnest                                  
+                      ->  Subquery Scan on "ANY_subquery"                               
+                            ->  ProjectSet                                              
+                                  ->  Result                                            
+                ->  Index Scan using ndc_pkey on ndc                                    
+                      Index Cond: ((name = 'q1'::text) AND (id = "ANY_subquery".unnest))
+                      Filter: (state = 'active'::text)                                  
+  ->  CTE Scan on results                                                               
+(13 rows)
+
+step s1done: UPDATE ndc SET state = 'completed' WHERE name = 'q1' AND id = 2;
+step s2done: WITH results AS (UPDATE ndc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+count
+-----
+    0
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM ndc WHERE id = 2;
+name|id|state    |data|completed_on
+----+--+---------+----+------------
+q1  | 2|completed|   0|            
+(1 row)
+
+
+starting permutation: s1data s2done s1c s2show
+step s1data: UPDATE ndc SET data = data + 1 WHERE name = 'q1' AND id = 2;
+step s2done: WITH results AS (UPDATE ndc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+count
+-----
+    1
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM ndc WHERE id = 2;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 2|completed|   1|Sun Feb 01 00:00:00 2026 PST
+(1 row)
+
+
+starting permutation: s1del s2done s1c s2show
+step s1del: DELETE FROM ndc WHERE name = 'q1' AND id = 2;
+step s2done: WITH results AS (UPDATE ndc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+count
+-----
+    0
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM ndc WHERE id = 2;
+name|id|state|data|completed_on
+----+--+-----+----+------------
+(0 rows)
+

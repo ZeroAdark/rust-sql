@@ -1,15 +1,3 @@
-//! Close-failure witness for controldata_utils.c:125 / :272 — sim-cfg only.
-//! Built by the CI cluster job's root-phase PRE_E2E_CARGO
-//! (`--config=build.rustflags=['--cfg','pgrust_sim'] test -p controldata_utils
-//! --test sim_close_fault --no-run --target-dir target/sim-controldata`) and
-//! executed by scripts/controldata-close-fault-e2e.sh.
-//!
-//! C's get_controlfile_by_exact_path checks CloseTransientFile(fd) and
-//! raises ERROR `could not close file "%s": %m`; update_controlfile checks
-//! close(fd) and raises PANIC with the same text. A kernel close(2) on a
-//! regular file cannot be made to fail from a test, so the fault is injected
-//! through SimVfs's seeded fault plan: the first Close op on a path
-//! containing "pg_control" returns -1/EIO.
 #![cfg(pgrust_sim)]
 
 use controldata_utils::*;
@@ -23,11 +11,9 @@ fn cpath(p: &str) -> CString {
     CString::new(p).unwrap()
 }
 
-// The initdb'd pg_control KAT, compiled in: the e2e phase runs the binary as
-// a user that cannot read the checkout.
+// The e2e phase runs the binary as a user that cannot read the checkout.
 const FIXTURE: &[u8] = include_bytes!("data/pg_control");
 
-/// Fresh per-thread sim disk holding `<DATADIR>/global/pg_control`.
 fn mint_datadir() {
     SimVfs::reset();
     assert_eq!(vfs::mkdir(&cpath(DATADIR), 0o700), 0);
@@ -39,7 +25,6 @@ fn mint_datadir() {
     assert_eq!(vfs::close(fd), 0);
 }
 
-/// The first close of the control file fails with EIO.
 fn arm_close_eio() {
     SeededFaultPlan::install(
         0xB162,
@@ -66,8 +51,6 @@ fn expected_close_message() -> String {
 fn get_controlfile_close_failure_is_error() {
     mint_datadir();
     arm_close_eio();
-    // controldata_utils.c:125: ereport(ERROR, errcode_for_file_access(),
-    // "could not close file \"%s\": %m").
     let err = get_controlfile(DATADIR).expect_err("close EIO must raise, not return the image");
     assert_eq!(err.level(), ERROR);
     assert_eq!(err.sqlstate(), ERRCODE_IO_ERROR);
@@ -100,8 +83,6 @@ fn update_controlfile_close_failure_is_panic() {
     assert!(crc_ok);
     arm_close_eio();
     elog::set_emit_log_hook(Some(capture_report));
-    // controldata_utils.c:272: ereport(PANIC, errcode_for_file_access(),
-    // "could not close file \"%s\": %m").
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         update_controlfile(DATADIR, &mut cf, true)
     }));

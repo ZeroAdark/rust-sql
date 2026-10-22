@@ -1,0 +1,118 @@
+Parsed test spec with 3 sessions
+
+starting permutation: u d c2 c1 read
+step u: UPDATE ep_t SET v = v + 1 WHERE id = 2;
+step d: DELETE FROM ep_t USING ep_b b WHERE ep_t.id = b.id AND ep_t.v < 100; <waiting ...>
+step c2: COMMIT;
+step d: <... completed>
+step c1: COMMIT;
+step read: SELECT * FROM ep_t ORDER BY id;
+id|v
+--+-
+(0 rows)
+
+
+starting permutation: uo d c2 c1 read
+step uo: UPDATE ep_t SET v = v + 500 WHERE id = 2;
+step d: DELETE FROM ep_t USING ep_b b WHERE ep_t.id = b.id AND ep_t.v < 100; <waiting ...>
+step c2: COMMIT;
+step d: <... completed>
+step c1: COMMIT;
+step read: SELECT * FROM ep_t ORDER BY id;
+id|  v
+--+---
+ 2|520
+(1 row)
+
+
+starting permutation: uk d c2 c1 read
+step uk: UPDATE ep_t SET id = id + 1000 WHERE id = 2;
+step d: DELETE FROM ep_t USING ep_b b WHERE ep_t.id = b.id AND ep_t.v < 100; <waiting ...>
+step c2: COMMIT;
+step d: <... completed>
+step c1: COMMIT;
+step read: SELECT * FROM ep_t ORDER BY id;
+  id| v
+----+--
+1002|20
+(1 row)
+
+
+starting permutation: x d c2 c1 read
+step x: DELETE FROM ep_t WHERE id = 2;
+step d: DELETE FROM ep_t USING ep_b b WHERE ep_t.id = b.id AND ep_t.v < 100; <waiting ...>
+step c2: COMMIT;
+step d: <... completed>
+step c1: COMMIT;
+step read: SELECT * FROM ep_t ORDER BY id;
+id|v
+--+-
+(0 rows)
+
+
+starting permutation: ub d c2 c1 read
+step ub: UPDATE ep_b SET n = n + 1 WHERE id = 2;
+step d: DELETE FROM ep_t USING ep_b b WHERE ep_t.id = b.id AND ep_t.v < 100;
+step c2: COMMIT;
+step c1: COMMIT;
+step read: SELECT * FROM ep_t ORDER BY id;
+id|v
+--+-
+(0 rows)
+
+
+starting permutation: u dr c2 c1 read
+step u: UPDATE ep_t SET v = v + 1 WHERE id = 2;
+step dr: DELETE FROM ep_t USING ep_b b WHERE ep_t.id = b.id AND ep_t.v < 100 RETURNING ep_t.*; <waiting ...>
+step c2: COMMIT;
+step dr: <... completed>
+id| v
+--+--
+ 1|10
+ 2|21
+ 3|30
+(3 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM ep_t ORDER BY id;
+id|v
+--+-
+(0 rows)
+
+
+starting permutation: uo dr c2 c1 read
+step uo: UPDATE ep_t SET v = v + 500 WHERE id = 2;
+step dr: DELETE FROM ep_t USING ep_b b WHERE ep_t.id = b.id AND ep_t.v < 100 RETURNING ep_t.*; <waiting ...>
+step c2: COMMIT;
+step dr: <... completed>
+id| v
+--+--
+ 1|10
+ 3|30
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM ep_t ORDER BY id;
+id|  v
+--+---
+ 2|520
+(1 row)
+
+
+starting permutation: x dr c2 c1 read
+step x: DELETE FROM ep_t WHERE id = 2;
+step dr: DELETE FROM ep_t USING ep_b b WHERE ep_t.id = b.id AND ep_t.v < 100 RETURNING ep_t.*; <waiting ...>
+step c2: COMMIT;
+step dr: <... completed>
+id| v
+--+--
+ 1|10
+ 3|30
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM ep_t ORDER BY id;
+id|v
+--+-
+(0 rows)
+

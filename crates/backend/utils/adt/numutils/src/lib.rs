@@ -382,8 +382,7 @@ strtoint!(pg_strtoint64, pg_strtoint64_safe, pg_strtoint64_safe_bytes, i64, "big
 // C strtoul/strtou64 base-0 model + the uint*in_subr checks; cold (oid/xid
 // input paths). When `endloc` the unconsumed tail is returned, else only
 // trailing whitespace may follow.
-fn uintin_subr<'a>(s: &'a str, is_u32: bool, endloc: bool) -> Result<(u64, &'a str), NumErr> {
-    let b = s.as_bytes();
+fn uintin_subr(b: &[u8], is_u32: bool, endloc: bool) -> Result<(u64, &[u8]), NumErr> {
     let len = b.len();
     let mut i = 0usize;
     while i < len && is_space(b[i]) {
@@ -453,18 +452,18 @@ fn uintin_subr<'a>(s: &'a str, is_u32: bool, endloc: bool) -> Result<(u64, &'a s
     } else {
         value
     };
-    Ok((value, &s[endptr..]))
+    Ok((value, &b[endptr..]))
 }
 
 // C reports these from the shared subr, so the wire R/L fields name
 // uint32in_subr / uint64in_subr and numutils.c's ereport lines (18.6).
 fn uintin_report<'a>(
-    r: Result<(u64, &'a str), NumErr>,
-    s: &'a str,
+    r: Result<(u64, &'a [u8]), NumErr>,
+    s: &'a [u8],
     typname: &str,
     is_u32: bool,
     escontext: Option<&mut SoftErrorContext>,
-) -> PgResult<(u64, &'a str)> {
+) -> PgResult<(u64, &'a [u8])> {
     let (funcname, syntax_line, range_line) = if is_u32 {
         ("uint32in_subr", 918, 963)
     } else {
@@ -474,19 +473,38 @@ fn uintin_report<'a>(
         Ok(v) => Ok(v),
         Err(NumErr::OutOfRange) => ereturn(
             escontext,
-            (0, ""),
-            PgError::error(format!("value \"{s}\" is out of range for type {typname}"))
+            (0, &b""[..]),
+            PgError::error_bytes("value \"", s, &format!("\" is out of range for type {typname}"))
                 .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE)
                 .with_location("numutils.c", range_line, funcname),
         ),
         Err(NumErr::InvalidSyntax) => ereturn(
             escontext,
-            (0, ""),
-            PgError::error(format!("invalid input syntax for type {typname}: \"{s}\""))
+            (0, &b""[..]),
+            PgError::error_bytes(&format!("invalid input syntax for type {typname}: \""), s, "\"")
                 .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
                 .with_location("numutils.c", syntax_line, funcname),
         ),
     }
+}
+
+pub fn uint32in_subr_bytes<'a>(
+    s: &'a [u8],
+    endloc: bool,
+    typname: &str,
+    escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<(u32, &'a [u8])> {
+    let (v, rest) = uintin_report(uintin_subr(s, true, endloc), s, typname, true, escontext)?;
+    Ok((v as u32, rest))
+}
+
+pub fn uint64in_subr_bytes<'a>(
+    s: &'a [u8],
+    endloc: bool,
+    typname: &str,
+    escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<(u64, &'a [u8])> {
+    uintin_report(uintin_subr(s, false, endloc), s, typname, false, escontext)
 }
 
 pub fn uint32in_subr<'a>(
@@ -495,8 +513,8 @@ pub fn uint32in_subr<'a>(
     typname: &str,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<(u32, &'a str)> {
-    let (v, rest) = uintin_report(uintin_subr(s, true, endloc), s, typname, true, escontext)?;
-    Ok((v as u32, rest))
+    let (v, rest) = uint32in_subr_bytes(s.as_bytes(), endloc, typname, escontext)?;
+    Ok((v, &s[s.len() - rest.len()..]))
 }
 
 pub fn uint64in_subr<'a>(
@@ -505,7 +523,8 @@ pub fn uint64in_subr<'a>(
     typname: &str,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<(u64, &'a str)> {
-    uintin_report(uintin_subr(s, false, endloc), s, typname, false, escontext)
+    let (v, rest) = uint64in_subr_bytes(s.as_bytes(), endloc, typname, escontext)?;
+    Ok((v, &s[s.len() - rest.len()..]))
 }
 
 fn decimal_length32(v: u32) -> usize {

@@ -1,0 +1,108 @@
+-- tpch-sf10-021
+-- SELECT s_name, count(*) AS numwait FROM supplier, lineitem l1, orders, nation WHERE s_suppkey = l1.l_suppkey AND o_orderkey = l1.l_orderkey AND o_orderstatus = 'F' AND l1.l_receiptdate > l1.l_commitdate AND EXISTS ( SELECT * FROM lineitem l2 WHERE l2.l_orderkey = l1.l_orderkey AND l2.l_suppkey <> l1.l_suppkey) AND NOT EXISTS ( SELECT * FROM lineitem l3 WHERE l3.l_orderkey = l1.l_orderkey AND l3.l_suppkey <> l1.l_suppkey AND l3.l_receiptdate > l3.l_commitdate) AND s_nationkey = n_nationkey AND n_name = 'SAUDI ARABIA' GROUP BY s_name ORDER BY numwait DESC, s_name LIMIT 100 /* TH21 */;
+graph pipelines=10 breakers=9 init_plans=0 root=p9
+p0 node=18 serial site=0 reason=SortedSource end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n18@0 n17@2
+  source range rel=16390 rti=4 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(2):codes4:code:part/dict Offset:byval2:w2:val
+  filter op1054(v4.2, c1042:'SAUDI ARABIA')
+  project (1=v4.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val
+p1 node=16 serial site=0 reason=SortedSource end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p0 words=bits@6/7
+  nodes n16@0 n15@1 n14@3
+  source range rel=16408 rti=1 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(2):codes4:code:part/dict Attr(4):byval4:w4:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7)
+  probe slot=0 inner=n17 JOIN_INNER keys=(outer.4) decls=23/23:I32 clauses=(op96(outer.4, inner.1))
+  project (1=outer.2, 2=outer.1)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=w4:val 2=code:part/dict 3=vl:row 4=w4:val 5=vl:row 6=vl:row 7=vl:row
+  outs 1=code:part/dict 2=w4:val
+p2 node=13 eligible rows=75000 end=breaker(slot=0 HashBuild)
+  desc words=bits@7/8
+  nodes n13@0 n12@2
+  source range rel=16437 rti=3 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(3):codes4:code:part/dict Offset:byval2:w2:val
+  filter op1054(v3.3, c1042:'F')
+  project (1=v3.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val
+p3 node=11 eligible rows=19995351 end=breaker(slot=2 HashBuild)
+  desc consumes=slot0@p2 consumes=slot1@p1 words=bits@8/9
+  nodes n11@0 n10@2 n9@4 n8@6
+  source range rel=16449 rti=2 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(3):byval4:w4:val Attr(12):byval4:w4:val Attr(13):byval4:w4:val Offset:byval2:w2:val
+  filter op1097(v2.13, v2.12)
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9, 10=v2.10, 11=v2.11, 12=v2.12, 13=v2.13, 14=v2.14, 15=v2.15, 16=v2.16)
+  probe slot=0 inner=n12 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.3, 2=outer.1, 3=inner.1)
+  probe slot=1 inner=n14 JOIN_INNER build-first keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.2))
+  project (1=inner.1, 2=outer.1, 3=outer.2, 4=outer.3)
+  build keys=(outer.3) decls=23/23:I32
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=vl:row 6=vl:row 7=vl:row 8=vl:row 9=vl:row 10=vl:row 11=w4:val 12=w4:val 13=w4:val 14=vl:row 15=vl:row 16=vl:row
+  outs 1=w4:val 2=w4:val 3=w4:val
+  outs 1=vl:life/breaker 2=w4:val 3=w4:val 4=w4:val
+p4 node=7 eligible rows=19995351 end=breaker(slot=0 Materialize)
+  desc consumes=slot2@p3
+  nodes n7@0 n6@2^
+  source range rel=16449 rti=7 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(3):byval4:w4:val Attr(12):byval4:w4:val Attr(13):byval4:w4:val Offset:byval2:w2:val
+  filter op1097(v7.13, v7.12)
+  project (1=v7.1, 2=v7.2, 3=v7.3, 4=v7.4, 5=v7.5, 6=v7.6, 7=v7.7, 8=v7.8, 9=v7.9, 10=v7.10, 11=v7.11, 12=v7.12, 13=v7.13, 14=v7.14, 15=v7.15, 16=v7.16)
+  probe slot=2 inner=n8 JOIN_RIGHT_ANTI marks build-first keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.3)) qual=(op518(outer.3, inner.2))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=vl:row 6=vl:row 7=vl:row 8=vl:row 9=vl:row 10=vl:row 11=w4:val 12=w4:val 13=w4:val 14=vl:row 15=vl:row 16=vl:row
+p5 node=6 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashBuild)
+  desc consumes=slot2@p3 consumes=slot0@p4 words=bits@9/10
+  nodes n6@0 n5@2
+  source breaker slot=2
+  drain matches=slot0 JOIN_RIGHT_ANTI
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4)
+  build keys=(outer.4) decls=23/23:I32
+  outs 1=vl:life/breaker 2=w4:val 3=w4:val 4=w4:val
+p6 node=4 eligible rows=59986052 end=breaker(slot=0 Materialize)
+  desc consumes=slot1@p5
+  nodes n4@0 n3@1^
+  source range rel=16449 rti=6 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(3):byval4:w4:val Offset:byval2:w2:val
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=v6.4, 5=v6.5, 6=v6.6, 7=v6.7, 8=v6.8, 9=v6.9, 10=v6.10, 11=v6.11, 12=v6.12, 13=v6.13, 14=v6.14, 15=v6.15, 16=v6.16)
+  probe slot=1 inner=n5 JOIN_RIGHT_SEMI marks keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.4)) qual=(op518(outer.3, inner.2))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=vl:row 6=vl:row 7=vl:row 8=vl:row 9=vl:row 10=vl:row 11=w4:val 12=w4:val 13=w4:val 14=vl:row 15=vl:row 16=vl:row
+p7 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 HashAgg)
+  desc consumes=slot1@p5 consumes=slot0@p6 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n2@2^
+  source breaker slot=1
+  drain matches=slot0 JOIN_RIGHT_SEMI
+  project (1=inner.1)
+  outs 1=vl:life/breaker
+p8 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 TopK)
+  desc consumes=slot2@p7
+  nodes n2@0 n1@1^
+  source breaker slot=2
+  project (1=outer.1, 2=agg2803*())
+  sort keys=2-n:I64,1+:Fp128/Bpchar@950 form=topk count=100 offset=all
+  outs 1=vl:life/breaker 2=w8:val
+p9 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p8
+  nodes n1@0 n0@1
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2)
+  limit count=100 offset=all
+  project (1=outer.1, 2=outer.2)
+  outs 1=vl:life/breaker 2=w8:val
+  outs 1=vl:life/breaker 2=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[Count@8] 16B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[I32]->[Count@8] 16B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p6 layout=[]->[Count@0] 8B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p7 layout=[Fp128,Fp128]->[Count@16,MinCode@24] 32B
+breaker slot=0 kind=TopK budget=Fixed(4064) spill=None producer=p8 layout=[I64,Fp128,Fp128]->[Count@24] 32B order=2-n,1+
+group slot=2 producer=p7 node=2 form=Hashed hints=[] layout=[Fp128,Fp128]->[Count@16,MinCode@24] 32B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=1042 rep=1 image=Bpchar expr=inner.1
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan HashJoin Sort Agg Hash Limit

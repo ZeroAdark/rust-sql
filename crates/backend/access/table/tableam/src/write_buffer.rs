@@ -120,6 +120,28 @@ pub fn write_buffer_receive<'mcx>(
     Ok(())
 }
 
+/// The per-tuple receive body. C's heapam_tuple_insert materializes the
+/// incoming slot in the slot's own context (tts_mcxt); the receiver only
+/// holds its own `mcx`, so it copies into a slot it owns and inserts that.
+pub fn write_single_receive<'mcx>(
+    mcx: Mcx<'mcx>,
+    rel: &Relation<'mcx>,
+    own: &mut Option<SlotData<'mcx>>,
+    slot: &mut SlotData<'mcx>,
+    cid: CommandId,
+    options: i32,
+    bistate: Option<&mut BulkInsertStateData>,
+) -> PgResult<()> {
+    if own.is_none() {
+        *own = Some(crate::table_slot_create(mcx, rel)?);
+    }
+    let own = own.as_mut().expect("just created");
+    exectuples::exec_copy_slot(own, slot, mcx, mcx)?;
+    crate::table_tuple_insert(mcx, rel, own, cid, options, bistate)?;
+    slot.base_mut().tts_tid = own.base().tts_tid;
+    Ok(())
+}
+
 /// Flush the buffered prefix through one `table_multi_insert` call. Also the
 /// receiver-shutdown tail flush (runs before `table_finish_bulk_insert`,
 /// success path only).
@@ -135,6 +157,8 @@ pub fn write_buffer_flush<'mcx>(
         return Ok(());
     }
     let mut refs: Vec<&mut SlotData<'mcx>> = buf.slots[..buf.nused].iter_mut().collect();
+    // C divergence: C inserts these rows one at a time; extend as that path does.
+    let options = options | ::tableam_vocab::TABLE_INSERT_SINGLE_PAGE_EXTEND;
     crate::table_multi_insert(mcx, rel, &mut refs, cid, options, bistate)?;
     buf.nused = 0;
     buf.bytes = 0;

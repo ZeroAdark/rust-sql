@@ -34,7 +34,7 @@ use spi::{
 };
 use types_core::{Oid, OidIsValid};
 use types_error::{PgError, PgResult, SqlState, ERROR};
-use types_portal::params::ParamExternData;
+use types_portal::params::{ParamExternData, PARAM_FLAG_CONST};
 
 use crate::ast::*;
 use crate::errcodes::EXCEPTION_LABEL_MAP;
@@ -72,41 +72,75 @@ const TYPTYPE_DOMAIN: i8 = b'd' as i8;
 const CURSOR_OPT_NO_SCROLL: i32 = 0x0004;
 const CURSOR_OPT_PARALLEL_OK: i32 = 0x0800;
 
-pub(crate) struct Ctx(*mut MemoryContext);
+pub(crate) struct Ctx {
+    ptr: core::cell::Cell<*mut MemoryContext>,
+    // The name a `lazy_aset` context is made under at its first `mcx()`.
+    name: &'static str,
+}
 
 impl Ctx {
-    // Reset-wholesale scratch (C's eval_mcontext / stmt_mcontext discipline).
+    fn made(ctx: MemoryContext, name: &'static str) -> Ctx {
+        Ctx { ptr: core::cell::Cell::new(Box::into_raw(Box::new(ctx))), name }
+    }
+    // Reset-wholesale AllocSet scratch (C's eval_mcontext / stmt_mcontext).
     pub fn new(name: &'static str) -> Ctx {
-        Ctx(Box::into_raw(Box::new(MemoryContext::new_bump(name))))
+        Ctx::made(MemoryContext::new_wholesale(name), name)
+    }
+    // A small, never-reset home (ALLOCSET_START_SMALL_SIZES).
+    pub fn new_start_small(name: &'static str) -> Ctx {
+        Ctx::made(MemoryContext::new_start_small(name), name)
     }
     // C's datum_context (plpgsql_estate_setup, pl_exec.c:4027: the SPI
     // procedure context, an AllocSet): values are pfree'd one at a time on
     // reassignment, so the backend must give chunks back. Never reset()
     // (the aset reset asserts nothing is still charged); dropped with the
-    // estate.
-    pub fn new_aset(name: &'static str) -> Ctx {
-        Ctx(Box::into_raw(Box::new(MemoryContext::new(name))))
+    // estate. Made when the first value is copied into it (D3885): an
+    // invocation whose variables are all by-value makes none, as C's
+    // datum_context costs nothing when nothing is palloc'd in it.
+    pub fn lazy_aset(name: &'static str) -> Ctx {
+        Ctx { ptr: core::cell::Cell::new(core::ptr::null_mut()), name }
     }
     pub fn mcx(&self) -> Mcx<'static> {
+        let mut p = self.ptr.get();
+        if p.is_null() {
+            p = Box::into_raw(Box::new(MemoryContext::new(self.name)));
+            self.ptr.set(p);
+        }
         // SAFETY: reclaimed only in Drop; handles do not outlive the estate.
-        unsafe { (*self.0).mcx() }
+        unsafe { (*p).mcx() }
     }
     pub fn reset(&self) {
+        let p = self.ptr.get();
+        if p.is_null() {
+            return;
+        }
         // SAFETY: as above; no live borrows at reset points (allocations are
         // raw datums, invalidated by contract like C's context reset).
-        unsafe { (*self.0).reset() }
+        unsafe { (*p).reset() }
     }
 }
 
 impl Drop for Ctx {
     fn drop(&mut self) {
+        let p = self.ptr.get();
+        if p.is_null() {
+            return;
+        }
         // SAFETY: Box::into_raw provenance.
-        drop(unsafe { Box::from_raw(self.0) });
+        drop(unsafe { Box::from_raw(p) });
     }
 }
 
+// Cloning shares the field arrays: a record copy keeps its source's shape.
 #[derive(Clone)]
 pub struct RecDesc {
+    /// C er_tupdesc_id: identifies this shape for the per-RECFIELD field
+    /// index cache (C recfield->rectupledescid + finfo); 0 is never issued.
+    pub id: u64,
+    inner: std::rc::Rc<RecDescFields>,
+}
+
+pub struct RecDescFields {
     pub names: Vec<String>,
     pub types: Vec<Oid>,
     pub typmods: Vec<i32>,
@@ -116,17 +150,24 @@ pub struct RecDesc {
     pub dropped: Vec<bool>,
 }
 
+impl core::ops::Deref for RecDesc {
+    type Target = RecDescFields;
+    fn deref(&self) -> &RecDescFields {
+        &self.inner
+    }
+}
+
 impl RecDesc {
-    pub fn from_tupdesc(td: &types_tuple::TupleDescData<'_>) -> RecDesc {
+    pub fn from_tupdesc(td: &types_tuple::TupleDescData<'_>) -> PgResult<RecDesc> {
         let natts = td.attrs.len();
-        let mut d = RecDesc {
-            names: Vec::with_capacity(natts),
-            types: Vec::with_capacity(natts),
-            typmods: Vec::with_capacity(natts),
-            typlens: Vec::with_capacity(natts),
-            typbyvals: Vec::with_capacity(natts),
-            colls: Vec::with_capacity(natts),
-            dropped: Vec::with_capacity(natts),
+        let mut d = RecDescFields {
+            names: ::mcx::std_vec_with_capacity("plpgsql", natts)?,
+            types: ::mcx::std_vec_with_capacity("plpgsql", natts)?,
+            typmods: ::mcx::std_vec_with_capacity("plpgsql", natts)?,
+            typlens: ::mcx::std_vec_with_capacity("plpgsql", natts)?,
+            typbyvals: ::mcx::std_vec_with_capacity("plpgsql", natts)?,
+            colls: ::mcx::std_vec_with_capacity("plpgsql", natts)?,
+            dropped: ::mcx::std_vec_with_capacity("plpgsql", natts)?,
         };
         for a in td.attrs.iter() {
             // attname as stored: expanded_record_lookup_field compares the
@@ -140,7 +181,10 @@ impl RecDesc {
             d.colls.push(a.attcollation);
             d.dropped.push(a.attisdropped);
         }
-        d
+        Ok(RecDesc {
+            id: NEXT_REC_DESC_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
+            inner: std::rc::Rc::new(d),
+        })
     }
 }
 
@@ -153,6 +197,8 @@ pub struct RecSysAttrs {
     xmin: u32,
     xmax: u32,
     cmd: u32,
+    // Invocation-scoped identity; never dereferenced and only returned to its trigger caller.
+    pub trigger_tuple: Option<usize>,
 }
 
 impl RecSysAttrs {
@@ -164,6 +210,7 @@ impl RecSysAttrs {
             xmin: h.xmin_raw(),
             xmax: h.xmax_raw(),
             cmd: h.raw_command_id(),
+            trigger_tuple: None,
         }
     }
 
@@ -186,6 +233,35 @@ impl RecSysAttrs {
 pub enum RecFieldRef {
     User(usize),
     Sys(&'static types_tuple::FormData_pg_attribute),
+}
+
+// Process-wide so a RecDesc id stays unique even if a session changes threads.
+static NEXT_REC_DESC_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+// A field read or write costs one comparison, not a scan of the names
+// (expanded_record_lookup_field runs only when the record's shape changed).
+pub(crate) fn rec_lookup_field_cached(
+    cache: &mut Vec<(u64, u32)>,
+    dno: Dno,
+    desc: &RecDesc,
+    fieldname: &str,
+) -> Option<RecFieldRef> {
+    if let Some(&(id, i)) = cache.get(dno as usize) {
+        if id == desc.id {
+            return Some(RecFieldRef::User(i as usize));
+        }
+    }
+    let r = rec_lookup_field(desc, fieldname);
+    if let Some(RecFieldRef::User(i)) = r {
+        let want = dno as usize + 1;
+        if cache.len() < want && cache.try_reserve(want - cache.len()).is_ok() {
+            cache.resize(want, (0, 0));
+        }
+        if let Some(slot) = cache.get_mut(dno as usize) {
+            *slot = (desc.id, i as u32);
+        }
+    }
+    r
 }
 
 // expanded_record_lookup_field: user columns, then system attributes.
@@ -262,12 +338,16 @@ pub struct RecValue {
     pub owned: Vec<bool>,
 }
 
-impl Clone for RecValue {
-    // A clone shares the field images but not their ownership: the datum
-    // entry the value came from frees them exactly once (C: one
-    // DeleteExpandedObject per expanded record, assign_record_var).
-    fn clone(&self) -> RecValue {
-        RecValue {
+impl RecValue {
+    pub(crate) fn original_trigger_tuple(&self, out: &types_tuple::TupleDescData<'_>) -> Option<usize> {
+        if self.empty || !self.fvalue_valid || !compatible_tupdescs(self.src_desc.as_ref()?, out) {
+            return None;
+        }
+        self.sys.as_ref()?.trigger_tuple
+    }
+
+    pub fn try_clone(&self) -> PgResult<RecValue> {
+        Ok(RecValue {
             desc: self.desc.clone(),
             values: self.values.clone(),
             nulls: self.nulls.clone(),
@@ -275,8 +355,8 @@ impl Clone for RecValue {
             empty: self.empty,
             sys: self.sys.clone(),
             fvalue_valid: self.fvalue_valid,
-            owned: vec![false; self.values.len()],
-        }
+            owned: ::mcx::std_vec_from_elem("plpgsql", false, self.values.len())?,
+        })
     }
 }
 
@@ -308,7 +388,10 @@ pub enum DatumVal {
     /// the invocation's datum context that the variable owns and pfrees on
     /// reassignment; false for values that live in the caller's memory
     /// (arguments) or are by-value / NULL.
-    Var { value: Datum, isnull: bool, freeval: bool },
+    /// `exp`: the value is held as a read/write expanded array (C's form for
+    /// array variables, made on the first in-place use); `value` is then
+    /// unused and readers get the object's flat image.
+    Var { value: Datum, isnull: bool, freeval: bool, exp: Option<arrayfuncs::OwnedExpandedArray> },
     Rec(Option<RecValue>),
     None,
 }
@@ -392,11 +475,9 @@ struct PlanEntry {
     // sources, fixed for the entry's lifetime; a re-prepare rebuilds the
     // entry and recomputes.
     mod_stmt: bool,
-    // Owned copy of the parser-hook tables the plan was prepared under, for
-    // plancache revalidation (C: parserSetup + expr->func->cur_estate). Types
-    // are as-of the last prepare; a between-executions change re-prepares via
-    // the ensure_plan probe first, so revalidation only ever sees the tables
-    // of the in-flight execution.
+    // The parser-hook tables of the last (re-)analysis: plancache
+    // revalidation outside this statement's own SPI call analyzes under them;
+    // inside it, under the running execution's (reanalyze_plpgsql_expr).
     hooks: std::rc::Rc<HookSnapshot>,
     // C PLpgSQL_expr's expr_simple_* fields (pl_exec.c): the compiled
     // simple-expression fast path, FUNCTION lifetime like C's (C stores it
@@ -410,14 +491,19 @@ struct HookSnapshot {
     names: Vec<(String, Dno, Oid, i32, Oid)>,
     params_by_dno: Vec<Option<(Oid, i32, Oid)>>,
     arg_dnos: Vec<Dno>,
-    recs: Vec<String>,
+    recs: Vec<(String, String)>,
     valueless: Vec<(usize, String)>,
+    recfields: Vec<String>,
     resolve_option: parser_small1::PlpgsqlResolveOption,
 }
 
 // RevalidateCachedQuery's re-analysis arm for a plpgsql expression source
-// (C: plpgsql_parser_setup with parserSetupArg = expr): re-analyze the
-// retained raw tree under the hook tables the plan was prepared with.
+// (C: plpgsql_parser_setup with parserSetupArg = expr): names and types
+// resolve against the running execution (C expr->func->cur_estate) when the
+// statement is the one it is executing, else against the tables the plan
+// was prepared with. The datums the analysis references become the entry's
+// parameter list for later executions (C resolve_column_ref adds them to
+// expr->paramnos).
 fn reanalyze_plpgsql_expr(
     _h: plancache::CachedPlanSourceHandle,
     qmcx: Mcx<'static>,
@@ -428,9 +514,25 @@ fn reanalyze_plpgsql_expr(
     arg: i32,
 ) -> PgResult<mcx::PgVec<'static, types_nodes::parsenodes::Query<'static>>> {
     let expr_id = arg as u32;
-    let snap = EXPR_PLANS
-        .with(|t| t.borrow().get(&expr_id).map(|e| std::rc::Rc::clone(&e.hooks)))
-        .expect("reanalyze_plpgsql_expr: plan entry lives while its source does");
+    let live = LIVE_SPI_EXPR.get();
+    let live = (live.0 != 0 && {
+        // SAFETY: set by LiveSpiExpr for the duration of the SPI call that
+        // runs this statement; the expression is the function's AST node.
+        unsafe { &*(live.1 as *const PlExpr) }.expr_id == expr_id
+    })
+    .then_some(live);
+    let snap = match live {
+        Some((estate, expr)) => {
+            // SAFETY: the estate running the SPI call that revalidates (the
+            // spi_param_fetch contract: nothing else uses it while SPI runs).
+            let estate = unsafe { &mut *(estate as *mut Estate<'_>) };
+            // SAFETY: as above.
+            std::rc::Rc::new(estate.hook_snapshot(unsafe { &*(expr as *const PlExpr) })?)
+        }
+        None => EXPR_PLANS
+            .with(|t| t.borrow().get(&expr_id).map(|e| std::rc::Rc::clone(&e.hooks)))
+            .expect("reanalyze_plpgsql_expr: plan entry lives while its source does"),
+    };
     let used = core::cell::RefCell::new(Vec::new());
     let name_entries: Vec<parser_small1::PlpgsqlNameEntry> = snap
         .names
@@ -443,27 +545,80 @@ fn reanalyze_plpgsql_expr(
             collation: *c,
         })
         .collect();
-    let rec_names: Vec<&str> = snap.recs.iter().map(|s| s.as_str()).collect();
+    let rec_names: Vec<(&str, &str)> = snap.recs.iter()
+        .map(|(key, name)| (key.as_str(), name.as_str())).collect();
     let valueless_names: Vec<(usize, &str)> =
         snap.valueless.iter().map(|(r, s)| (*r, s.as_str())).collect();
+    let recfield_keys: Vec<&str> = snap.recfields.iter().map(String::as_str).collect();
     let hooks = parser_small1::PlpgsqlHookState {
         names: &name_entries,
         params_by_dno: &snap.params_by_dno,
         arg_dnos: &snap.arg_dnos,
         recs: &rec_names,
         valueless_recs: &valueless_names,
+        recfields: &recfield_keys,
         resolve_option: snap.resolve_option,
         used: &used,
     };
     let query =
         analyze_seams::parse_analyze_plpgsql::call(qmcx, raw, query_string, &hooks, query_env)?;
-    if query.commandType == types_nodes::nodes_enums::CmdType::CMD_UTILITY {
+    let queries = if query.commandType == types_nodes::nodes_enums::CmdType::CMD_UTILITY {
         let mut v = mcx::PgVec::new_in(qmcx);
         v.try_reserve_exact(1).map_err(|_| qmcx.oom(1))?;
         v.push(query);
-        Ok(v)
+        v
     } else {
-        rewrite_handler_seams::query_rewrite::call(qmcx, query)
+        rewrite_handler_seams::query_rewrite::call(qmcx, query)?
+    };
+    let mut paramnos = used.into_inner();
+    if let Some((_, expr)) = live {
+        // SAFETY: as above.
+        let expr = unsafe { &*(expr as *const PlExpr) };
+        if is_assign_mode(expr.parse_mode) {
+            drop_unread_assign_target(&mut paramnos, &queries)?;
+        }
+    }
+    paramnos.sort_unstable();
+    EXPR_PLANS.with(|t| {
+        if let Some(e) = t.borrow_mut().get_mut(&expr_id) {
+            e.paramnos = paramnos.into();
+            if live.is_some() {
+                e.argtypes = argtypes_of(&snap.params_by_dno);
+                e.hooks = snap;
+            }
+        }
+    });
+    Ok(queries)
+}
+
+fn is_assign_mode(mode: parser_seams::RawParseMode) -> bool {
+    matches!(
+        mode,
+        parser_seams::RawParseMode::RAW_PARSE_PLPGSQL_ASSIGN1
+            | parser_seams::RawParseMode::RAW_PARSE_PLPGSQL_ASSIGN2
+            | parser_seams::RawParseMode::RAW_PARSE_PLPGSQL_ASSIGN3
+    )
+}
+
+fn argtypes_of(params_by_dno: &[Option<(Oid, i32, Oid)>]) -> std::rc::Rc<[Oid]> {
+    params_by_dno
+        .iter()
+        .map(|s| s.map(|(t, _, _)| t).unwrap_or(types_core::InvalidOid))
+        .collect()
+}
+
+// Marks a statement's SPI call as running for the scope; restores on exit.
+struct LiveSpiExpr((usize, usize));
+
+impl LiveSpiExpr {
+    fn set(estate: *mut (), expr: &PlExpr) -> LiveSpiExpr {
+        LiveSpiExpr(LIVE_SPI_EXPR.replace((estate as usize, core::ptr::from_ref(expr) as usize)))
+    }
+}
+
+impl Drop for LiveSpiExpr {
+    fn drop(&mut self) {
+        LIVE_SPI_EXPR.set(self.0);
     }
 }
 
@@ -472,11 +627,56 @@ std::thread_local! {
     // the side table keeps the shared AST immutable). Entries die with the
     // compiled function (free_function_plans).
     // tls-dtor: try_with-safe — SimpleExpr::drop is proc_exit-guarded and plancache CACHE is ManuallyDrop (dtor-less), so late releases cannot hit a destroyed key.
-    static EXPR_PLANS: core::cell::RefCell<FxHashMap<u32, PlanEntry>> =
-        core::cell::RefCell::new(FxHashMap::default());
+    static EXPR_PLANS: core::cell::RefCell<ExprSlab> =
+        const { core::cell::RefCell::new(ExprSlab { slots: Vec::new() }) };
     // expr_id -> CALL OUT-arg row varnos (C stmt->target, cached in fn_cxt).
+    // expr_id -> simple-expression state carried across a re-prepare.
+    static SIMPLE_CARRY: core::cell::RefCell<FxHashMap<u32, SimpleCarry>> =
+        core::cell::RefCell::new(FxHashMap::default());
     static CALL_TARGETS: core::cell::RefCell<FxHashMap<u32, Vec<Dno>>> =
         core::cell::RefCell::new(FxHashMap::default());
+}
+
+// C keeps an expression's plan and simple-expression state in the
+// PLpgSQL_expr itself. Expression ids are dense (comp.rs reissues freed ids),
+// so the side table is a slab indexed by id: an evaluation's take/put is an
+// index, not a hash lookup.
+struct ExprSlab {
+    slots: Vec<Option<PlanEntry>>,
+}
+
+impl ExprSlab {
+    #[inline]
+    fn get(&self, id: &u32) -> Option<&PlanEntry> {
+        self.slots.get(*id as usize).and_then(Option::as_ref)
+    }
+
+    #[inline]
+    fn get_mut(&mut self, id: &u32) -> Option<&mut PlanEntry> {
+        self.slots.get_mut(*id as usize).and_then(Option::as_mut)
+    }
+
+    #[inline]
+    fn contains_key(&self, id: &u32) -> bool {
+        self.get(id).is_some()
+    }
+
+    fn insert(&mut self, id: u32, entry: PlanEntry) -> Option<PlanEntry> {
+        let i = id as usize;
+        assert!(i <= self.slots.len() + (1 << 20), "plpgsql: expression id {id} is not from the id pool");
+        while self.slots.len() <= i {
+            self.slots.push(None);
+        }
+        self.slots[i].replace(entry)
+    }
+
+    fn remove(&mut self, id: &u32) -> Option<PlanEntry> {
+        self.slots.get_mut(*id as usize).and_then(Option::take)
+    }
+
+    fn drain(&mut self) -> impl Iterator<Item = (u32, PlanEntry)> + '_ {
+        self.slots.drain(..).enumerate().filter_map(|(i, e)| e.map(|e| (i as u32, e)))
+    }
 }
 
 pub fn free_function_plans(expr_ids: &[u32]) {
@@ -502,6 +702,37 @@ pub fn free_function_plans(expr_ids: &[u32]) {
             t.remove(id);
         }
     });
+    SIMPLE_CARRY.with(|t| {
+        let mut t = t.borrow_mut();
+        for id in expr_ids {
+            t.remove(id);
+        }
+    });
+    crate::comp::release_expr_ids(expr_ids);
+}
+
+enum SimpleBuild {
+    NotSimple,
+    /// SPI_plan_get_cached_plan failed: C has already reset the expression
+    /// to not simple (pl_exec.c:6078-6085) and it stays so.
+    PlanFailed(Box<PgError>),
+    /// Simple, not compiled: C's ExecInitExprWithParams (and with it every
+    /// EXECUTE ACL check) waits for the first evaluation in a transaction
+    /// (pl_exec.c:6172), never exec_simple_check_plan.
+    Planned,
+    Ready(Box<SimpleExpr>),
+}
+
+// C keeps expr_simple_expr / expr_simple_in_use / expr_simple_lxid when
+// RevalidateCachedQuery re-analyzes the source in place; the re-prepare that
+// stands in for it carries them to the new entry. A simple expression is
+// re-examined only if its replanning succeeds (pl_exec.c:6072-6121).
+#[derive(Clone, Copy)]
+enum SimpleCarry {
+    Redetermine,
+    NotSimple,
+    InUse,
+    Quarantined(u32),
 }
 
 // C PLpgSQL_expr expr_simple_expr/expr_simple_state lifecycle states.
@@ -517,11 +748,13 @@ enum SimpleState {
     /// Taken out by an in-flight evaluation or (re)build (C
     /// expr_simple_in_use, pl_exec.c:6042): a re-entrant evaluation of the
     /// same expression — recursion via a function called inside it — takes
-    /// the SPI path instead. C also uses the flag to quarantine a tree whose
-    /// evaluation was aborted by an error until the next transaction
-    /// (pl_exec.c:6004-6008); here an error unwind simply never puts the
-    /// taken state back, and the next use rebuilds from the plan.
+    /// the SPI path instead.
     InUse,
+    /// The evaluation was aborted by an error in this transaction (C leaves
+    /// expr_simple_in_use set, pl_exec.c:6004-6008 / :6042-6044): the SPI
+    /// path serves the expression until the next transaction, which
+    /// rebuilds from the plan.
+    Quarantined(u32),
 }
 
 // The compiled simple-expression fast path for one expression (C
@@ -551,9 +784,6 @@ struct SimpleExpr {
     psrc: plancache::CachedPlanSourceHandle,
     rettype: Oid,
     rettypmod: i32,
-    // The compiled ExprState carries init_func's EXECUTE ACL verdicts for
-    // this user; C rebuilds per transaction so a role change re-checks.
-    userid: Oid,
     // C expr_simple_lxid (pl_exec.c:6172): the compiled state (its function
     // usage-tracking opcodes included) lives one transaction; plpgsql_xact_cb
     // frees simple_eval_estate at every transaction end (pl_exec.c:8728).
@@ -562,6 +792,12 @@ struct SimpleExpr {
     // expressions containing mutable functions need the CCI + fresh-snapshot
     // ceremony per evaluation (pl_exec.c:6198-6204).
     mutable: bool,
+    // The top-level FuncExpr whose array result the assignment target adopts
+    // (0 = none): a PL/pgSQL callee returns its array R/W to it.
+    adopt_call: usize,
+    // The expression is one Param of a record datum (dno, planned type):
+    // a record assignment from it copies the record's fields directly.
+    bare_rec: Option<(Dno, Oid)>,
     // Datum references compile to ParamCallback steps (C EEOP_PARAM_CALLBACK
     // via plpgsql_param_compile, pl_exec.c:6465-6488) that fetch through
     // simple_param_eval from the estate armed for each evaluation
@@ -596,6 +832,41 @@ std::thread_local! {
     // pool thread's next task must register again; the callback clears the
     // flag as its last act.
     static EXIT_RELEASE_REGISTERED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    // The FuncExpr (address) whose array result the running simple
+    // expression's assignment adopts; read and cleared at PL/pgSQL function
+    // entry, restored at exit.
+    static ACCEPT_ARRAY_RESULT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    // C shared_cast_hash (session casts of non-DO executions), dropped by
+    // release_plpgsql_state_at_exit like the function hash.
+    static SESSION_CASTS: core::cell::RefCell<FxHashMap<(Oid, i32, Oid, i32), SessionCast>> =
+        core::cell::RefCell::new(FxHashMap::default());
+    static SESSION_CAST_GEN: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    static SESSION_CASTS_RESET: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    // Registered once per thread: the callback tables outlive a retained
+    // thread's claims and are fixed-capacity.
+    static SESSION_CAST_CALLBACKS: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    // (estate, expr) of the statement whose SPI call is running, for its
+    // lock-time re-analysis; (0, 0) outside one.
+    static LIVE_SPI_EXPR: core::cell::Cell<(usize, usize)> = const { core::cell::Cell::new((0, 0)) };
+}
+
+// Sets ACCEPT_ARRAY_RESULT for a scope, restoring it on every exit.
+pub(crate) struct AcceptArrayResult(usize);
+
+impl AcceptArrayResult {
+    pub(crate) fn set(call: usize) -> AcceptArrayResult {
+        AcceptArrayResult(ACCEPT_ARRAY_RESULT.replace(call))
+    }
+
+    pub(crate) fn outer(&self) -> usize {
+        self.0
+    }
+}
+
+impl Drop for AcceptArrayResult {
+    fn drop(&mut self) {
+        ACCEPT_ARRAY_RESULT.set(self.0);
+    }
 }
 
 // Backend-exit teardown of plpgsql's per-process state: the compiled-function
@@ -638,6 +909,13 @@ fn release_plpgsql_state_at_exit(_code: i32, _arg: usize) {
         spi::SPI_freeplan(plan);
     }
     CALL_TARGETS.with(|t| t.borrow_mut().clear());
+    // D4312: with the function hash, the plans and the CALL targets gone, and the simple-expression carry with them,
+    // no expression id is keyed on this thread any more, so the id pool starts over for a retained standby's next task.
+    SIMPLE_CARRY.with(|t| t.borrow_mut().clear());
+    crate::comp::reset_expr_ids();
+    let casts = SESSION_CASTS.with(|t| core::mem::take(&mut *t.borrow_mut()));
+    drop(casts);
+    SESSION_CASTS_RESET.set(false);
     EXIT_RELEASE_REGISTERED.with(|c| c.set(false));
 }
 
@@ -669,6 +947,108 @@ unsafe fn simple_param_eval(arg: *mut (), paramid: i32, paramtype: Oid) -> PgRes
     // paramid's are 1-based, dnos 0-based (pl_exec.c:6579).
     let (value, isnull) = estate.datum_as_param(paramid - 1, Some(paramtype))?;
     Ok(NullableDatum { value, isnull })
+}
+
+// plpgsql_param_eval_var's read/write delivery for the expression's
+// expr_rw_param (pl_exec.c:6573-6580).
+unsafe fn simple_param_eval_rw(arg: *mut (), paramid: i32, paramtype: Oid) -> PgResult<NullableDatum> {
+    assert!(!arg.is_null(), "plpgsql: simple expression evaluated without an armed estate");
+    // SAFETY: as simple_param_eval.
+    let estate = unsafe { &mut *arg.cast::<Estate<'_>>() };
+    let dno = paramid - 1;
+    if estate.var_type(dno).typoid != paramtype {
+        return unsafe { simple_param_eval(arg, paramid, paramtype) };
+    }
+    let (value, isnull) = estate.get_var_rw(dno)?;
+    Ok(NullableDatum { value, isnull })
+}
+
+// plpgsql_param_eval_var_transfer (pl_exec.c:6616): the variable's R/W
+// expanded array moves to the expression's context and the variable reads
+// NULL until the assignment takes the result back.
+unsafe fn simple_param_eval_transfer(arg: *mut (), paramid: i32, paramtype: Oid) -> PgResult<NullableDatum> {
+    assert!(!arg.is_null(), "plpgsql: simple expression evaluated without an armed estate");
+    // SAFETY: as simple_param_eval.
+    let estate = unsafe { &mut *arg.cast::<Estate<'_>>() };
+    let dno = paramid - 1;
+    if estate.var_type(dno).typoid != paramtype {
+        return unsafe { simple_param_eval(arg, paramid, paramtype) };
+    }
+    let (value, isnull) = estate.transfer_var_out(dno)?;
+    Ok(NullableDatum { value, isnull })
+}
+
+// plpgsql_param_eval_var_ro for a Param whose consumer reads expanded
+// arrays (Estate::expanded_reader_params): the R/O expanded pointer.
+unsafe fn simple_param_eval_ro(arg: *mut (), paramid: i32, paramtype: Oid) -> PgResult<NullableDatum> {
+    assert!(!arg.is_null(), "plpgsql: simple expression evaluated without an armed estate");
+    // SAFETY: as simple_param_eval.
+    let estate = unsafe { &mut *arg.cast::<Estate<'_>>() };
+    let dno = paramid - 1;
+    if !estate.promise_pending.is_empty() {
+        estate.fulfill_promise(dno)?;
+    }
+    if estate.var_type(dno).typoid == paramtype {
+        let mcx = estate.datum_ctx.mcx();
+        if let DatumVal::Var { value, isnull: false, exp, .. } = &mut estate.datums[dno as usize] {
+            // C holds every array variable expanded (exec_assign_value), so
+            // a[i] on varlena or NULL-bearing elements is O(1), not a walk.
+            if exp.is_none() {
+                *exp = Some(arrayfuncs::expand_array_owned(*value, mcx.context(), None)?);
+            }
+            return Ok(NullableDatum { value: exp.as_ref().unwrap().ro_datum(), isnull: false });
+        }
+    }
+    unsafe { simple_param_eval(arg, paramid, paramtype) }
+}
+
+// C paramFetchArg (the estate) + parserSetupArg (the expression, whose
+// paramnos gate plpgsql_param_fetch) for one SPI call.
+struct SpiFetchArg {
+    estate: *mut (),
+    paramnos: std::rc::Rc<[Dno]>,
+}
+
+// The PL's list for SPI: its fetch only when a slot the expression references
+// (arg.paramnos) was left without a value (setup_param_list's speculative
+// fetch), so a list whose every referenced datum was fetched up front stays a
+// plain hooked list (D2834: Gravity admits it). A datum the expression does
+// not reference has no planned type (argtypes_of: InvalidOid) and no Param
+// reaches it.
+fn spi_param_list<'p>(params: &'p [ParamExternData], arg: &mut SpiFetchArg) -> spi::SpiParamList<'p> {
+    let missing =
+        arg.paramnos.iter().any(|&d| params.get(d as usize).is_some_and(|p| p.ptype == types_core::InvalidOid));
+    let fetch = missing.then(|| {
+        types_portal::params::ParamFetchHook {
+            func: spi_param_fetch,
+            arg: (arg as *mut SpiFetchArg).cast(),
+        }
+    });
+    spi::SpiParamList { params, fetch }
+}
+
+// The SPI list's paramFetch for a slot setup_param_list left without a value
+// (C's plpgsql_param_eval_recfield reached through the compiled Param): the
+// non-speculative fetch, raising its error only now. A datum the expression
+// does not reference is a dummy (pl_exec.c:6327).
+unsafe fn spi_param_fetch(arg: *mut (), paramid: i32) -> PgResult<ParamExternData> {
+    // SAFETY: the caller keeps its SpiFetchArg alive across the SPI call; its
+    // estate pointer comes from the `&mut Estate` running that call.
+    let arg = unsafe { &*arg.cast::<SpiFetchArg>() };
+    let dno = paramid - 1;
+    if arg.paramnos.binary_search(&dno).is_err() {
+        return Ok(ParamExternData {
+            value: Datum::null(),
+            isnull: true,
+            pflags: 0,
+            ptype: types_core::InvalidOid,
+        });
+    }
+    // SAFETY: as above; nothing else uses the estate while SPI runs.
+    let estate = unsafe { &mut *arg.estate.cast::<Estate<'_>>() };
+    Ok(estate
+        .param_fetch(dno, types_core::InvalidOid, false)?
+        .expect("a non-speculative fetch yields a value"))
 }
 
 // Array-typed Vars hold R/W expanded arrays in C (pl_exec.c exec_assign_value
@@ -703,6 +1083,7 @@ fn take_simple(expr_id: u32, take_unknown: bool) -> SimpleTake {
         };
         match e.simple {
             SimpleState::NotSimple | SimpleState::InUse => SimpleTake::Skip,
+            SimpleState::Quarantined(lxid) if lxid == current_lxid() => SimpleTake::Skip,
             SimpleState::Ready(_) => {
                 let SimpleState::Ready(se) =
                     core::mem::replace(&mut e.simple, SimpleState::InUse)
@@ -711,7 +1092,7 @@ fn take_simple(expr_id: u32, take_unknown: bool) -> SimpleTake {
                 };
                 SimpleTake::Ready(se)
             }
-            SimpleState::Unknown => {
+            SimpleState::Unknown | SimpleState::Quarantined(_) => {
                 if !take_unknown {
                     return SimpleTake::Skip;
                 }
@@ -730,15 +1111,241 @@ fn put_simple(expr_id: u32, plan: SpiPlanPtr, state: SimpleState) {
     let orphan = EXPR_PLANS.with(|t| {
         let mut t = t.borrow_mut();
         if let Some(e) = t.get_mut(&expr_id) {
-            if e.plan == plan && matches!(e.simple, SimpleState::InUse) {
-                e.simple = state;
-                return None;
+            if matches!(e.simple, SimpleState::InUse) {
+                if e.plan == plan {
+                    e.simple = state;
+                    return None;
+                }
+                // A re-prepare mid-evaluation carried this evaluation's
+                // busy mark to the new entry; its end releases it there.
+                let (next, orphan) = match state {
+                    SimpleState::Ready(se) => (SimpleState::Unknown, Some(SimpleState::Ready(se))),
+                    other => (other, None),
+                };
+                e.simple = next;
+                return orphan;
             }
         }
         Some(state)
     });
     // Foreign drop code (plan pins, fn_extra) runs outside the map borrow.
     drop(orphan);
+}
+
+// The coercion tree exec_cast_value evaluates (get_cast_hashentry,
+// pl_exec.c:7985-8040) over a Param placeholder; None = no-op.
+fn build_cast_expr(
+    mcx: Mcx<'static>,
+    srctype: Oid,
+    srctypmod: i32,
+    dsttype: Oid,
+    dsttypmod: i32,
+) -> PgResult<Option<types_nodes::Node<'static>>> {
+    use types_nodes::primnodes::{CoercionForm, Param, ParamKind};
+    let placeholder = types_nodes::Node::mk(
+        mcx,
+        Param {
+            paramkind: ParamKind::PARAM_EXTERN,
+            paramid: 1,
+            paramtype: srctype,
+            paramtypmod: srctypmod,
+            paramcollid: lsyscache::typ::get_typcollation(srctype)?,
+            location: -1,
+        },
+    )?;
+
+    let pstate = parser_small1::make_parsestate(mcx, None);
+    let cast_expr = if srctype == UNKNOWNOID || srctype == RECORDOID {
+        None
+    } else {
+        coerce::coerce_to_target_type(
+            mcx,
+            &pstate,
+            placeholder,
+            srctype,
+            dsttype,
+            dsttypmod,
+            coerce::CoercionContext::COERCION_PLPGSQL,
+            CoercionForm::COERCE_IMPLICIT_CAST,
+            -1,
+        )?
+    };
+    let cast_expr = match cast_expr {
+        Some(e) => Some(e),
+        None => {
+            // upstream 54649de65f08 (18.6): Reject calls from SQL to functions that take or return type internal.
+            if srctype == INTERNALOID || dsttype == INTERNALOID {
+                return Err(exec_err(
+                    types_error::ERRCODE_CANNOT_COERCE,
+                    format!(
+                        "cannot cast type {} to {}",
+                        format_type::format_type_be(srctype)?,
+                        format_type::format_type_be(dsttype)?
+                    ),
+                ));
+            }
+            let io = types_nodes::Node::mk(
+                mcx,
+                types_nodes::primnodes::CoerceViaIO {
+                    arg: placeholder,
+                    resulttype: dsttype,
+                    resultcollid: types_core::InvalidOid,
+                    coerceformat: CoercionForm::COERCE_IMPLICIT_CAST,
+                    location: -1,
+                },
+            )?;
+            if dsttypmod != -1 {
+                coerce::coerce_to_target_type(
+                    mcx,
+                    &pstate,
+                    io,
+                    dsttype,
+                    dsttype,
+                    dsttypmod,
+                    coerce::CoercionContext::COERCION_ASSIGNMENT,
+                    CoercionForm::COERCE_IMPLICIT_CAST,
+                    -1,
+                )?
+            } else {
+                Some(io)
+            }
+        }
+    };
+    parser_small1::free_parsestate(pstate)?;
+
+    let Some(cast_expr) = cast_expr else {
+        return Ok(None);
+    };
+    // No-op relabeling of the bare placeholder: skip evaluation.
+    if let Some(r) = cast_expr.as_relabel_type() {
+        if r.arg.as_variant::<Param>().is_some() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(cast_expr))
+}
+
+#[allow(clippy::type_complexity)]
+fn compile_cast(
+    mcx: Mcx<'static>,
+    expr: Option<types_nodes::Node<'static>>,
+    srctype: Oid,
+) -> PgResult<(Option<mcx::PgBox<'static, execexpr::ExprState<'static>>>, Box<[ParamExternData; 1]>)> {
+    let param: Box<[ParamExternData; 1]> = Box::new([ParamExternData {
+        value: Datum::null(),
+        isnull: true,
+        pflags: 0,
+        ptype: srctype,
+    }]);
+    let Some(expr) = expr else {
+        return Ok((None, param));
+    };
+    let bind = types_portal::params::ParamBind {
+        // SAFETY: `param` is a stable Box kept alongside the compiled state.
+        extern_params: Some(unsafe { core::slice::from_raw_parts(param.as_ptr(), 1) }),
+        exec_vals: None,
+        n_exec: 0,
+        param_callback: None,
+        param_expanded: None,
+        param_rw: None,
+        param_ro_expanded: None,
+        extern_fetch: None,
+    };
+    let state = execexpr::exec_init_expr(mcx, Some(expr), bind)?;
+    Ok((state, param))
+}
+
+// C extract_query_dependencies over a cached expression (setrefs.c
+// fix_expr_common): user functions and domains it calls, as syscache
+// (cacheid, hashvalue) pairs; built-ins below FirstUnpinnedObjectId never
+// change.
+fn cast_expr_dependencies(expr: types_nodes::Node<'static>) -> PgResult<Vec<(i32, u32)>> {
+    struct Deps(Vec<(i32, u32)>);
+    impl Deps {
+        fn add(&mut self, cacheid: i32, oid: Oid) -> PgResult<()> {
+            if oid >= 12000 {
+                let hv = cache_syscache::GetSysCacheHashValue(
+                    cacheid,
+                    cache_syscache::SysCacheKey::Value(Datum::from_oid(oid)),
+                    cache_syscache::SysCacheKey::UNUSED,
+                    cache_syscache::SysCacheKey::UNUSED,
+                    cache_syscache::SysCacheKey::UNUSED,
+                )?;
+                self.0.push((cacheid, hv));
+            }
+            Ok(())
+        }
+    }
+    impl<'mcx> nodes_core::NodeWalker<'mcx> for Deps {
+        fn visit(&mut self, node: types_nodes::Node<'mcx>) -> PgResult<bool> {
+            use types_nodes::primnodes::{CoerceToDomain, FuncExpr, OpExpr};
+            if let Some(f) = node.as_variant::<FuncExpr>() {
+                self.add(cache_syscache::PROCOID, f.funcid)?;
+            } else if let Some(o) = node.as_variant::<OpExpr>() {
+                self.add(cache_syscache::PROCOID, o.opfuncid)?;
+            } else if let Some(d) = node.as_variant::<CoerceToDomain>() {
+                self.add(cache_syscache::TYPEOID, d.resulttype)?;
+            }
+            nodes_core::expression_tree_walker(node, self)
+        }
+    }
+    let mut d = Deps(Vec::new());
+    nodes_core::NodeWalker::visit(&mut d, expr)?;
+    Ok(d.0)
+}
+
+// One compiled cast; the expression context outlives the state compiled
+// from it (field order: state first).
+struct CastState {
+    state: mcx::PgBox<'static, execexpr::ExprState<'static>>,
+    param: Box<[ParamExternData; 1]>,
+    #[allow(dead_code)]
+    ctx: Ctx,
+    _expr: std::rc::Rc<Ctx>,
+}
+
+struct SessionCast {
+    expr: Option<types_nodes::Node<'static>>,
+    deps: Vec<(i32, u32)>,
+    valid: bool,
+    generation: u64,
+    state: Option<CastState>,
+    lxid: u32,
+    expr_ctx: std::rc::Rc<Ctx>,
+}
+
+// PlanCacheFuncCallback / PlanCacheSysCallback for cached cast expressions.
+fn session_cast_inval(_arg: Datum, cacheid: i32, hashvalue: u32) {
+    let all = cacheid != cache_syscache::PROCOID && cacheid != cache_syscache::TYPEOID;
+    SESSION_CASTS.with(|t| match t.try_borrow_mut() {
+        Ok(mut t) => {
+            for e in t.values_mut() {
+                if all || e.deps.iter().any(|&(c, h)| c == cacheid && (hashvalue == 0 || h == hashvalue)) {
+                    e.valid = false;
+                }
+            }
+        }
+        Err(_) => SESSION_CASTS_RESET.set(true),
+    });
+}
+
+fn ensure_session_cast_callbacks() -> PgResult<()> {
+    if SESSION_CAST_CALLBACKS.get() {
+        return Ok(());
+    }
+    for cacheid in [
+        cache_syscache::PROCOID,
+        cache_syscache::TYPEOID,
+        cache_syscache::NAMESPACEOID,
+        cache_syscache::OPEROID,
+        cache_syscache::AMOPOPID,
+        cache_syscache::FOREIGNSERVEROID,
+        cache_syscache::FOREIGNDATAWRAPPEROID,
+    ] {
+        inval::invalidate::CacheRegisterSyscacheCallback(cacheid, session_cast_inval, Datum::null())?;
+    }
+    SESSION_CAST_CALLBACKS.set(true);
+    Ok(())
 }
 
 struct CastEntry {
@@ -764,6 +1371,10 @@ pub struct Estate<'a> {
     pub func: &'a PlFunction,
     pub datums: Vec<DatumVal>,
     pub retval: Datum,
+    // The calling assignment adopts this function's array result: RETURN of
+    // an array variable hands its R/W object over instead of flattening.
+    pub(crate) caller_adopts: bool,
+    pub(crate) ret_expanded: Option<arrayfuncs::OwnedExpandedArray>,
     pub retisnull: bool,
     pub rettype: Oid,
     /// RETURN of a record variable (trigger tuple return protocol).
@@ -783,6 +1394,8 @@ pub struct Estate<'a> {
     pub readonly_func: bool,
     pub atomic: bool,
     cast_cache: FxHashMap<(Oid, i32, Oid, i32), CastEntry>,
+    // RECFIELD dno -> (RecDesc id, field index).
+    recfield_idx: Vec<(u64, u32)>,
     // Invocation-lifetime var values (C's "procedure" context).
     datum_ctx: Ctx,
     // Per-evaluation scratch (C's eval_mcontext); reset by exec_eval_cleanup.
@@ -794,6 +1407,8 @@ pub struct Estate<'a> {
     // C's per-execution rec copy of rectypeid; absent = the compiled OID.
     rec_type_overrides: FxHashMap<Dno, Oid>,
     rec_origins: Vec<(usize, RecOrigin)>,
+    bare_rec_wanted: bool,
+    bare_rec_hit: Option<(Dno, Oid)>,
     pub frame: std::rc::Rc<FrameShared>,
     // Trigger promises (pl_exec.c plpgsql_fulfill_promise): the TG_* values
     // are computed on first read, not at entry, so a body that changes what
@@ -807,7 +1422,7 @@ pub struct Estate<'a> {
 // stack so GET DIAGNOSTICS PG_CONTEXT can render every live frame without
 // aliasing the estates.
 pub struct FrameShared {
-    pub sig: String,
+    pub sig: std::rc::Rc<str>,
     pub stmt: core::cell::Cell<Option<(i32, &'static str)>>,
     pub text: core::cell::Cell<Option<&'static str>>,
     // err_var: its declaration lineno wins over the statement's
@@ -818,32 +1433,51 @@ pub struct FrameShared {
 pub struct FrameGuard(u64);
 
 impl FrameGuard {
-    pub fn push_pl(estate: &Estate<'_>) -> FrameGuard {
-        let f = estate.frame.clone();
-        // C's errfinish walks error_context_stack for every elevel: notices
-        // and warnings emitted while this frame is live carry its context
-        // line on the wire (the ERROR path attaches on propagation instead).
-        FrameGuard(elog::push_context_frame(
-            Box::new(move |e| {
-                e.add_context_line(frame_context_line_of(&f));
-            }),
-            true,
-        ))
+    /// A context frame whose closure stays in the pusher's stack frame, as C's ErrorContextCallback does (elog
+    /// `push_context_frame_borrowed`): no allocation per push, and the pop is the slot stack's top (D3885). Use it
+    /// through `pl_frame!` / `spi_frame!`, which declare the closure first and the guard after it.
+    ///
+    /// # Safety
+    /// `callback` stays alive and unmoved until this guard drops: declare the guard after the closure in the same scope.
+    #[inline]
+    pub unsafe fn push_borrowed(callback: &mut (dyn FnMut(&mut PgError) + '_), emit: bool) -> FrameGuard {
+        // SAFETY: the caller's contract is the one push_context_frame_borrowed states.
+        FrameGuard(unsafe { elog::push_context_frame_borrowed(callback, emit) })
     }
+}
 
-    // The SPI level's own _SPI_error_callback frame (spi crate
-    // SpiErrorContext, pushed by SPI_prepare*/SPI_execute*/SPI_cursor_open*)
-    // describes reports raised under it; this frame only mirrors it for
-    // GET DIAGNOSTICS PG_CONTEXT (get_error_context_stack).
-    fn push_spi(query: &str, mode: parser_seams::RawParseMode) -> FrameGuard {
-        let line = spi_context_line(query, mode);
-        FrameGuard(elog::push_context_frame(
-            Box::new(move |e| {
-                e.add_context_line(line.as_str());
-            }),
-            false,
-        ))
-    }
+// The function's own frame (C plpgsql_exec_error_callback) for `$estate`, held to the end of the enclosing scope. C's
+// errfinish walks error_context_stack for every elevel: notices and warnings emitted while this frame is live carry its
+// context line on the wire (the ERROR path attaches on propagation instead).
+macro_rules! pl_frame {
+    ($estate:expr) => {
+        let pl_frame_shared = $estate.frame.clone();
+        let mut pl_frame_callback = move |e: &mut ::types_error::PgError| {
+            e.add_context_line($crate::exec::frame_context_line_of(&pl_frame_shared));
+        };
+        // SAFETY: the closure is a local of this scope, never moved; the guard, declared after it, drops first.
+        let _pl_frame = unsafe { $crate::exec::FrameGuard::push_borrowed(&mut pl_frame_callback, true) };
+    };
+}
+pub(crate) use pl_frame;
+
+// The SPI level's own _SPI_error_callback frame (spi crate SpiErrorContext, pushed by
+// SPI_prepare*/SPI_execute*/SPI_cursor_open*) describes reports raised under it; this frame only mirrors it for
+// GET DIAGNOSTICS PG_CONTEXT (get_error_context_stack), so its line is formatted when a walk reads it, not per
+// statement (D3885). `$guard` names the guard (drop it to pop early).
+macro_rules! spi_frame {
+    ($guard:ident, $query:expr, $mode:expr) => {
+        let mut spi_frame_callback = $crate::exec::spi_frame_callback($query, $mode);
+        // SAFETY: the closure is a local of this scope, never moved; the guard, declared after it, drops first.
+        let $guard = unsafe { $crate::exec::FrameGuard::push_borrowed(&mut spi_frame_callback, false) };
+    };
+}
+
+pub(crate) fn spi_frame_callback<'q>(
+    query: &'q str,
+    mode: parser_seams::RawParseMode,
+) -> impl FnMut(&mut PgError) + 'q {
+    move |e: &mut PgError| e.add_context_line(spi_context_line(query, mode).as_str())
 }
 
 impl Drop for FrameGuard {
@@ -883,13 +1517,12 @@ fn spi_error_context(e: &mut PgError, query: &str, mode: parser_seams::RawParseM
         return;
     }
     let line = spi_context_line(query, mode);
-    // Dedup only an immediately-repeated line (same-level double handling by
-    // the spi port). C runs its callback once per LEVEL: recursive re-entry
-    // legitimately repeats the same expression line at every depth, with the
-    // function's own context line interposed between repeats — a whole-
-    // context `contains` check collapsed those to one line (wire-metadata
-    // workflow, recursive-context finding).
-    if e.context.as_deref().and_then(|c| c.lines().last()) == Some(line.as_str()) {
+    // Suppress only immediate repeats of the complete, possibly multiline entry;
+    // recursive SPI levels repeat it legitimately with function frames interposed.
+    if e.context.as_deref().is_some_and(|c| {
+        c.strip_suffix(line.as_str())
+            .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with('\n'))
+    }) {
         return;
     }
     e.add_context_line(line);
@@ -927,6 +1560,74 @@ fn param_type_mismatch(dno: Dno, current: Oid, planned: Oid) -> Box<PgError> {
             dno + 1
         ),
     )
+}
+
+// count_param_references (pl_exec.c): stops at the second reference.
+struct TargetParamRefs {
+    paramid: i32,
+    count: u32,
+    last: Option<*const ()>,
+}
+
+impl<'mcx> nodes_core::NodeWalker<'mcx> for TargetParamRefs {
+    fn visit(&mut self, node: types_nodes::Node<'mcx>) -> PgResult<bool> {
+        if let Some(p) = node.as_param() {
+            if p.paramkind == types_nodes::primnodes::ParamKind::PARAM_EXTERN
+                && p.paramid == self.paramid
+            {
+                self.last = Some(p as *const types_nodes::primnodes::Param as *const ());
+                self.count += 1;
+                return Ok(self.count > 1);
+            }
+            return Ok(false);
+        }
+        nodes_core::expression_tree_walker(node, self)
+    }
+}
+
+// See Estate::expanded_reader_params.
+struct ExpandedReaderParams<'f> {
+    func: &'f PlFunction,
+    rw: Option<*const ()>,
+    found: Vec<*const ()>,
+}
+
+impl ExpandedReaderParams<'_> {
+    fn note(&mut self, arg: Option<types_nodes::Node<'_>>) {
+        let Some(p) = arg.and_then(|a| a.as_param()) else {
+            return;
+        };
+        let id = p as *const types_nodes::primnodes::Param as *const ();
+        let dno = p.paramid - 1;
+        if p.paramkind == types_nodes::primnodes::ParamKind::PARAM_EXTERN
+            && dno >= 0
+            && (dno as usize) < self.func.datums.len()
+            && self.rw != Some(id)
+            && matches!(&self.func.datums[dno as usize],
+                PlDatum::Var(v) if v.datatype.typisarray && v.datatype.typoid == p.paramtype)
+        {
+            self.found.push(id);
+        }
+    }
+}
+
+impl<'mcx> nodes_core::NodeWalker<'mcx> for ExpandedReaderParams<'_> {
+    fn visit(&mut self, node: types_nodes::Node<'mcx>) -> PgResult<bool> {
+        use types_nodes::primnodes::{FuncExpr, SubscriptingRef};
+        // array_dims, array_ndims, array_lower, array_upper, array_length,
+        // cardinality: PG_GETARG_ANY_ARRAY_P readers.
+        const DIM_READERS: [Oid; 6] = [747, 748, 2091, 2092, 2176, 3179];
+        if let Some(f) = node.as_variant::<FuncExpr>() {
+            if DIM_READERS.contains(&f.funcid) {
+                self.note(f.args.iter().next());
+            }
+        } else if let Some(r) = node.as_variant::<SubscriptingRef>() {
+            if r.refassgnexpr.is_none() && r.reflowerindexpr.len() == 0 {
+                self.note(r.refexpr);
+            }
+        }
+        nodes_core::expression_tree_walker(node, self)
+    }
 }
 
 // Dnos with a Param in the analyzed tree.
@@ -982,19 +1683,23 @@ fn drop_unread_assign_target<'mcx>(
 }
 
 impl<'a> Estate<'a> {
-    pub fn new(func: &'a PlFunction, readonly_func: bool, atomic: bool) -> Estate<'a> {
-        let mut datums = Vec::with_capacity(func.datums.len());
+    pub fn new(func: &'a PlFunction, readonly_func: bool, atomic: bool) -> PgResult<Estate<'a>> {
+        let mut datums = ::mcx::std_vec_with_capacity("plpgsql", func.datums.len())?;
         for d in &func.datums {
             datums.push(match d {
-                PlDatum::Var(_) => DatumVal::Var { value: Datum::null(), isnull: true, freeval: false },
+                PlDatum::Var(_) => {
+                    DatumVal::Var { value: Datum::null(), isnull: true, freeval: false, exp: None }
+                }
                 PlDatum::Rec(_) => DatumVal::Rec(None),
                 _ => DatumVal::None,
             });
         }
-        Estate {
+        Ok(Estate {
             func,
             datums,
             retval: Datum::null(),
+            caller_adopts: false,
+            ret_expanded: None,
             retisnull: true,
             rettype: types_core::InvalidOid,
             ret_rec: None,
@@ -1010,11 +1715,14 @@ impl<'a> Estate<'a> {
             readonly_func,
             atomic,
             cast_cache: FxHashMap::default(),
-            datum_ctx: Ctx::new_aset("PLpgSQL per-invocation values"),
+            recfield_idx: Vec::new(),
+            datum_ctx: Ctx::lazy_aset("PLpgSQL per-invocation values"),
             eval_ctx: Ctx::new("PLpgSQL eval scratch"),
             var_type_overrides: FxHashMap::default(),
             rec_type_overrides: FxHashMap::default(),
             rec_origins: Vec::new(),
+            bare_rec_wanted: false,
+            bare_rec_hit: None,
             trigger_promises: None,
             promise_pending: Vec::new(),
             frame: std::rc::Rc::new(FrameShared {
@@ -1023,7 +1731,7 @@ impl<'a> Estate<'a> {
                 text: core::cell::Cell::new(None),
                 var_lineno: core::cell::Cell::new(None),
             }),
-        }
+        })
     }
 
     fn var_type(&self, dno: Dno) -> &PlType {
@@ -1042,16 +1750,23 @@ impl<'a> Estate<'a> {
     // it is ours to free. `freeable` is true only for a copy
     // copy_to_datum_ctx made (by-ref, non-null).
     pub fn set_var(&mut self, dno: Dno, value: Datum, isnull: bool, freeable: bool) {
+        // assign_simple_var's `var->promise = PLPGSQL_PROMISE_NONE`
+        // (pl_exec.c:8838): an assigned TG_* variable is never fulfilled.
+        if let Some(pos) = self.promise_pending.iter().position(|&d| d == dno) {
+            self.promise_pending.swap_remove(pos);
+        }
         let typlen = self.var_type(dno).typlen;
-        let mcx = self.datum_ctx.mcx();
         match &mut self.datums[dno as usize] {
-            DatumVal::Var { value: v, isnull: n, freeval } => {
+            DatumVal::Var { value: v, isnull: n, freeval, exp } => {
+                *exp = None;
                 if *freeval {
                     // SAFETY: freeval marks a copy_to_datum_ctx copy in
                     // datum_ctx owned solely by this variable; every reader
                     // of the old image finished before the assignment (the
-                    // new value was computed and copied first).
-                    unsafe { free_datum_copy(mcx, *v, typlen) };
+                    // new value was computed and copied first). The context
+                    // is asked for only here: a by-value assignment never
+                    // makes the lazily made datum_ctx (D3885).
+                    unsafe { free_datum_copy(self.datum_ctx.mcx(), *v, typlen) };
                 }
                 *v = value;
                 *n = isnull;
@@ -1061,10 +1776,26 @@ impl<'a> Estate<'a> {
         }
     }
 
+    // exec_stmt_case's datatype swap (pl_exec.c:2584). A value left by an
+    // earlier execution (a WHEN that raised skips the reset) is freed under
+    // the type it was copied with; C's pfree needs no type.
+    fn retype_var(&mut self, dno: Dno, ty: PlType) {
+        self.set_var(dno, Datum::null(), true, false);
+        self.var_type_overrides.insert(dno, ty);
+    }
+
     // plpgsql_exec_function's IN-argument store (pl_exec.c:565): no copy, not
     // freeable, except assign_simple_var's non-atomic detoast arm
     // (pl_exec.c:8794-8811), whose detoasted copy the variable owns.
     pub(crate) fn set_arg_var(&mut self, dno: Dno, value: Datum, isnull: bool) -> PgResult<()> {
+        // pl_exec.c:524-548: a R/W expanded argument is the caller's to give;
+        // the variable takes it over.
+        if !isnull && self.var_type(dno).typisarray {
+            if let Some(obj) = arrayfuncs::adopt_transferred(value) {
+                self.set_var_expanded(dno, obj);
+                return Ok(());
+            }
+        }
         if !self.atomic && !isnull && self.var_type(dno).typlen == -1 {
             let p = value.as_usize() as *const u8;
             // SAFETY: non-null by-ref varlena datum.
@@ -1103,10 +1834,77 @@ impl<'a> Estate<'a> {
         if !self.promise_pending.is_empty() {
             self.fulfill_promise(dno)?;
         }
-        match &self.datums[dno as usize] {
+        match &mut self.datums[dno as usize] {
+            DatumVal::Var { exp: Some(e), .. } => Ok((e.flat_datum()?, false)),
             DatumVal::Var { value, isnull, .. } => Ok((*value, *isnull)),
             _ => panic!("plpgsql: read of non-Var datum {dno}"),
         }
+    }
+
+    // plpgsql_param_eval_var for the expression's read/write Param
+    // (pl_exec.c:6573-6580): the array variable's R/W expanded pointer,
+    // expanding a flat value on first use (C expands on every assignment,
+    // exec_assign_value:5108).
+    fn get_var_rw(&mut self, dno: Dno) -> PgResult<(Datum, bool)> {
+        if !self.promise_pending.is_empty() {
+            self.fulfill_promise(dno)?;
+        }
+        let mcx = self.datum_ctx.mcx();
+        let DatumVal::Var { value, isnull, exp, .. } = &mut self.datums[dno as usize] else {
+            panic!("plpgsql: read of non-Var datum {dno}");
+        };
+        if *isnull {
+            return Ok((Datum::null(), true));
+        }
+        if exp.is_none() {
+            // The flat value stays allocated until the next set_var: an
+            // argument evaluated earlier may still point into it.
+            *exp = Some(arrayfuncs::expand_array_owned(*value, mcx.context(), None)?);
+        }
+        Ok((exp.as_ref().unwrap().rw_datum(), false))
+    }
+
+    fn transfer_var_out(&mut self, dno: Dno) -> PgResult<(Datum, bool)> {
+        let (_, isnull) = self.get_var_rw(dno)?;
+        if isnull {
+            return Ok((Datum::null(), true));
+        }
+        let DatumVal::Var { isnull, exp, .. } = &mut self.datums[dno as usize] else {
+            unreachable!("get_var_rw read a Var");
+        };
+        let obj = exp.take().expect("get_var_rw expanded the value");
+        *isnull = true;
+        Ok((obj.transfer_to_context(self.eval_ctx.mcx().context()), false))
+    }
+
+    // Installs an adopted R/W array as the variable's value (C
+    // assign_simple_var of a transferred expanded object).
+    fn set_var_expanded(&mut self, dno: Dno, obj: arrayfuncs::OwnedExpandedArray) {
+        self.set_var(dno, Datum::null(), false, false);
+        if let DatumVal::Var { exp, .. } = &mut self.datums[dno as usize] {
+            *exp = Some(obj);
+        }
+    }
+
+    // The assignment target's adoptable top-level call: a non-set function
+    // returning exactly the target array variable's type.
+    fn adoptable_call(&self, expr: &PlExpr, sexpr: types_nodes::Node<'static>) -> usize {
+        let target = expr.target_param;
+        let Some(PlDatum::Var(v)) = (target >= 0).then(|| &self.func.datums[target as usize]) else {
+            return 0;
+        };
+        match sexpr.as_variant::<types_nodes::primnodes::FuncExpr>() {
+            Some(f) if v.datatype.typisarray && !f.funcretset && f.funcresulttype == self.var_type(target).typoid => {
+                f as *const types_nodes::primnodes::FuncExpr as usize
+            }
+            _ => 0,
+        }
+    }
+
+    // Whether `d` is the Var's own read/write expanded pointer, i.e. the
+    // expression changed the variable in place (C: newvalue == var->value).
+    fn var_holds_rw(&self, dno: Dno, d: Datum) -> bool {
+        matches!(&self.datums[dno as usize], DatumVal::Var { exp: Some(e), .. } if e.is_rw_datum(d))
     }
 
     // plpgsql_estate_setup's trigger arm: every promise variable starts
@@ -1297,14 +2095,38 @@ impl<'a> Estate<'a> {
                 {
                     let PlanEntry { plan, simple, lex, .. } = e;
                     relex = Some(lex);
+                    let carry = match simple {
+                        SimpleState::Unknown | SimpleState::Ready(_) => SimpleCarry::Redetermine,
+                        SimpleState::NotSimple => SimpleCarry::NotSimple,
+                        SimpleState::InUse => SimpleCarry::InUse,
+                        SimpleState::Quarantined(lxid) => SimpleCarry::Quarantined(lxid),
+                    };
+                    SIMPLE_CARRY.with(|t| t.borrow_mut().insert(expr.expr_id, carry));
                     drop(simple);
                     let _ = spi::SPI_freeplan(plan);
                 }
             }
             None => {}
         }
+        let r = self.prepare_entry(expr, cursor_options, relex);
+        if r.is_err() {
+            SIMPLE_CARRY.with(|t| {
+                if let Some(c @ SimpleCarry::Redetermine) = t.borrow_mut().get_mut(&expr.expr_id) {
+                    *c = SimpleCarry::NotSimple;
+                }
+            });
+        }
+        r
+    }
+
+    fn prepare_entry(
+        &mut self,
+        expr: &PlExpr,
+        cursor_options: i32,
+        relex: Option<LexSettings>,
+    ) -> PgResult<()> {
         let lex = relex.unwrap_or_else(LexSettings::current);
-        let (hooks_names, params_by_dno, recs, valueless) = self
+        let (hooks_names, params_by_dno, recs, valueless, recfields) = self
             .build_hook_tables(expr)
             .map_err(|e| spi_ctx_err(e, &expr.query, expr.parse_mode))?;
         let used = core::cell::RefCell::new(Vec::new());
@@ -1318,27 +2140,26 @@ impl<'a> Estate<'a> {
                 collation: *c,
             })
             .collect();
-        let rec_names: Vec<&str> = recs.iter().map(|s| s.as_str()).collect();
+        let rec_names: Vec<(&str, &str)> = recs.iter()
+            .map(|(key, name)| (key.as_str(), name.as_str())).collect();
         let valueless_names: Vec<(usize, &str)> =
             valueless.iter().map(|(r, s)| (*r, s.as_str())).collect();
-        let resolve_option = match self.func.resolve_option {
-            crate::comp::PLPGSQL_RESOLVE_VARIABLE => parser_small1::PlpgsqlResolveOption::Variable,
-            crate::comp::PLPGSQL_RESOLVE_COLUMN => parser_small1::PlpgsqlResolveOption::Column,
-            _ => parser_small1::PlpgsqlResolveOption::Error,
-        };
+        let recfield_keys: Vec<&str> = recfields.iter().map(String::as_str).collect();
+        let resolve_option = self.resolve_option();
         let hooks = parser_small1::PlpgsqlHookState {
             names: &name_entries,
             params_by_dno: &params_by_dno,
             arg_dnos: &self.func.fn_argvarnos,
             recs: &rec_names,
             valueless_recs: &valueless_names,
+            recfields: &recfield_keys,
             resolve_option,
             used: &used,
         };
         // Warnings emitted during parse/analysis (scanner escape warnings)
         // internalize their cursor onto the expression text, as under C's
         // _SPI_error_callback during SPI_prepare_extended.
-        let prep_frame = FrameGuard::push_spi(&expr.query, expr.parse_mode);
+        spi_frame!(prep_frame, &expr.query, expr.parse_mode);
         let outer = relex.map(|l| LexSettings { escape_string_warning: false, ..l }.install());
         let plan = spi::SPI_prepare_plpgsql(&expr.query, expr.parse_mode, &hooks, cursor_options);
         if let Some(prev) = outer {
@@ -1353,22 +2174,14 @@ impl<'a> Estate<'a> {
             plancache::SetCachedPlanReanalyze(psrc, reanalyze_plpgsql_expr, expr.expr_id as i32);
         }
         let mut paramnos = used.into_inner();
-        if matches!(
-            expr.parse_mode,
-            parser_seams::RawParseMode::RAW_PARSE_PLPGSQL_ASSIGN1
-                | parser_seams::RawParseMode::RAW_PARSE_PLPGSQL_ASSIGN2
-                | parser_seams::RawParseMode::RAW_PARSE_PLPGSQL_ASSIGN3
-        ) {
+        if is_assign_mode(expr.parse_mode) {
             if let Some((psrc, _)) = spi::SPI_plan_single_source(plan) {
                 drop_unread_assign_target(&mut paramnos, plancache::SourceQueryList(psrc))?;
             }
         }
         paramnos.sort_unstable();
         let paramnos: std::rc::Rc<[Dno]> = paramnos.into();
-        let argtypes: std::rc::Rc<[Oid]> = params_by_dno
-            .iter()
-            .map(|s| s.map(|(t, _, _)| t).unwrap_or(types_core::InvalidOid))
-            .collect();
+        let argtypes = argtypes_of(&params_by_dno);
         // C exec_stmt_execsql's one-time mod_stmt derivation (mod_stmt_set).
         let mod_stmt = spi::SPI_plan_command_tags(plan).iter().any(|&tag| {
             tag == types_portal::CMDTAG_INSERT
@@ -1382,25 +2195,66 @@ impl<'a> Estate<'a> {
             arg_dnos: self.func.fn_argvarnos.clone(),
             recs,
             valueless,
+            recfields,
             resolve_option,
         });
+        let simple = match SIMPLE_CARRY.with(|t| t.borrow_mut().remove(&expr.expr_id)) {
+            None | Some(SimpleCarry::Redetermine) => SimpleState::Unknown,
+            Some(SimpleCarry::NotSimple) => SimpleState::NotSimple,
+            Some(SimpleCarry::InUse) => SimpleState::InUse,
+            Some(SimpleCarry::Quarantined(lxid)) => SimpleState::Quarantined(lxid),
+        };
         let old = EXPR_PLANS.with(|t| {
             t.borrow_mut().insert(
                 expr.expr_id,
-                PlanEntry {
-                    plan,
-                    lex,
-                    paramnos,
-                    argtypes,
-                    mod_stmt,
-                    hooks,
-                    simple: SimpleState::Unknown,
-                },
+                PlanEntry { plan, lex, paramnos, argtypes, mod_stmt, hooks, simple },
             )
         });
         debug_assert!(old.is_none(), "ensure_plan: stale path removed the old entry");
         drop(old);
+        self.exec_simple_check_plan(expr)
+    }
+
+    // exec_prepare_plan's exec_simple_check_plan call (pl_exec.c:4196): a
+    // simple-form query gets its generic plan right after the source is
+    // created, so plan-time reports surface here, not at the first
+    // evaluation, and a failed planning leaves the expression not simple
+    // (pl_exec.c:8163-8165).
+    fn exec_simple_check_plan(&mut self, expr: &PlExpr) -> PgResult<()> {
+        let SimpleTake::Build { plan } = take_simple(expr.expr_id, true) else {
+            return Ok(());
+        };
+        match self.build_simple_expr(expr, plan, false) {
+            Ok(SimpleBuild::Ready(se)) => put_simple(expr.expr_id, plan, SimpleState::Ready(se)),
+            Ok(SimpleBuild::Planned) => put_simple(expr.expr_id, plan, SimpleState::Unknown),
+            Ok(SimpleBuild::NotSimple) => put_simple(expr.expr_id, plan, SimpleState::NotSimple),
+            Ok(SimpleBuild::PlanFailed(e)) | Err(e) => {
+                put_simple(expr.expr_id, plan, SimpleState::NotSimple);
+                return Err(e);
+            }
+        }
         Ok(())
+    }
+
+    fn resolve_option(&self) -> parser_small1::PlpgsqlResolveOption {
+        match self.func.resolve_option {
+            crate::comp::PLPGSQL_RESOLVE_VARIABLE => parser_small1::PlpgsqlResolveOption::Variable,
+            crate::comp::PLPGSQL_RESOLVE_COLUMN => parser_small1::PlpgsqlResolveOption::Column,
+            _ => parser_small1::PlpgsqlResolveOption::Error,
+        }
+    }
+
+    fn hook_snapshot(&mut self, expr: &PlExpr) -> PgResult<HookSnapshot> {
+        let (names, params_by_dno, recs, valueless, recfields) = self.build_hook_tables(expr)?;
+        Ok(HookSnapshot {
+            names,
+            params_by_dno,
+            arg_dnos: self.func.fn_argvarnos.clone(),
+            recs,
+            valueless,
+            recfields,
+            resolve_option: self.resolve_option(),
+        })
     }
 
     // plpgsql_parser_setup's resolution tables, flattened from the expr's
@@ -1413,12 +2267,13 @@ impl<'a> Estate<'a> {
     ) -> PgResult<(
         Vec<(String, Dno, Oid, i32, Oid)>,
         Vec<Option<(Oid, i32, Oid)>>,
-        Vec<String>,
+        Vec<(String, String)>,
         Vec<(usize, String)>,
+        Vec<String>,
     )> {
         let func = self.func;
         let mut names: Vec<(String, Dno, Oid, i32, Oid)> = Vec::new();
-        let mut recs: Vec<String> = Vec::new();
+        let mut recs: Vec<(String, String)> = Vec::new();
         let mut valueless: Vec<(usize, String)> = Vec::new();
         let mut pending_valueless: Vec<String> = Vec::new();
         // First binding of a key wins; the set keeps the dedupe O(1) per name
@@ -1433,14 +2288,23 @@ impl<'a> Estate<'a> {
                 names.push(info);
             }
         }
+        let mut recfields: Vec<String> = Vec::new();
+        let mut pending_recfields: Vec<String> = Vec::new();
 
         // C instantiates a NULL named-composite record only when
         // resolve_column_ref finds one of its fields in the query
         // (pl_comp.c:1263 -> pl_exec.c:5575); a query whose text never
-        // names the record cannot, so its rowtype is left unresolved.
-        let qlower = expr.query.to_ascii_lowercase();
-        let mentioned =
-            |refname: &str| qlower.contains(refname.to_ascii_lowercase().as_str());
+        // spells `rec.field` cannot, so its rowtype is left unresolved
+        // (an ALTER of the underlying table inside the function must not
+        // find the record already instantiated over the old descriptor).
+        let pairs = if func.datums.iter().any(|d| matches!(d, PlDatum::RecField(_))) {
+            crate::scanner::PlScanner::dotted_word_pairs(&expr.query)?
+        } else {
+            Vec::new()
+        };
+        let mentioned = |refname: &str, field: &str| -> bool {
+            pairs.iter().any(|(r, f)| r == refname && f == field)
+        };
         let mut params_by_dno: Vec<Option<(Oid, i32, Oid)>> = Vec::new();
         for d in &func.datums {
             params_by_dno.push(match d {
@@ -1449,7 +2313,7 @@ impl<'a> Estate<'a> {
                     Some((t.typoid, t.atttypmod, t.collation))
                 }
                 PlDatum::RecField(f) => {
-                    if mentioned(&self.rec_meta(f.recparentno).refname) {
+                    if mentioned(&self.rec_meta(f.recparentno).refname, &f.fieldname) {
                         self.recfield_type(f)?
                     } else {
                         self.recfield_type_no_instantiate(f)
@@ -1465,7 +2329,7 @@ impl<'a> Estate<'a> {
 
         let mut cur = expr.ns;
         let mut pending: Vec<(String, Dno, Oid, i32, Oid)> = Vec::new();
-        let mut pending_recs: Vec<String> = Vec::new();
+        let mut pending_recs: Vec<(String, String)> = Vec::new();
         while cur >= 0 {
             let item = &func.ns[cur as usize];
             match item.itemtype {
@@ -1509,12 +2373,16 @@ impl<'a> Estate<'a> {
                     // fields the nearer rec lacks must not leak through from
                     // the shadowed one. Label-qualified (pending) entries
                     // are unaffected: they resolve by qualified name.
-                    let is_visible_rec_binding = !recs.contains(&recname);
-                    let rec_mentioned = mentioned(&recname);
+                    let is_visible_rec_binding = !recs.iter().any(|(key, _)| *key == recname);
                     for d in &func.datums {
                         if let PlDatum::RecField(f) = d {
                             if f.recparentno == recno {
-                                let ft = if rec_mentioned {
+                                let fkey = format!("{recname}\0{}", f.fieldname);
+                                if is_visible_rec_binding && !recfields.contains(&fkey) {
+                                    recfields.push(fkey.clone());
+                                }
+                                pending_recfields.push(fkey);
+                                let ft = if mentioned(&recname, &f.fieldname) {
                                     self.recfield_type(f)?
                                 } else {
                                     self.recfield_type_no_instantiate(f)
@@ -1531,7 +2399,7 @@ impl<'a> Estate<'a> {
                         }
                     }
                     if is_visible_rec_binding {
-                        recs.push(recname.clone());
+                        recs.push((recname.clone(), self.rec_meta(recno).refname.clone()));
                     }
                     if matches!(&self.datums[recno as usize], DatumVal::Rec(None))
                         && self.rec_typeid(recno) == RECORDOID
@@ -1541,20 +2409,26 @@ impl<'a> Estate<'a> {
                         }
                         pending_valueless.push(recname.clone());
                     }
-                    pending_recs.push(recname);
+                    pending_recs.push((recname, self.rec_meta(recno).refname.clone()));
                 }
                 NsType::Row => {}
                 NsType::Label => {
-                    if !item.name.is_empty() {
+                    if !item.name.is_empty() && !recs.iter().any(|(key, _)| *key == item.name) {
                         let label = item.name.clone();
                         for (k, dno, t, m, c) in pending.drain(..) {
                             let lk = format!("{label}\0{k}");
                             push_name(&mut names, &mut seen, (lk, dno, t, m, c));
                         }
-                        for r in pending_recs.drain(..) {
+                        for (r, refname) in pending_recs.drain(..) {
                             let lr = format!("{label}\0{r}");
-                            if !recs.contains(&lr) {
-                                recs.push(lr);
+                            if !recs.iter().any(|(key, _)| *key == lr) {
+                                recs.push((lr, refname));
+                            }
+                        }
+                        for k in pending_recfields.drain(..) {
+                            let lk = format!("{label}\0{k}");
+                            if !recfields.contains(&lk) {
+                                recfields.push(lk);
                             }
                         }
                         for r in pending_valueless.drain(..) {
@@ -1567,12 +2441,13 @@ impl<'a> Estate<'a> {
                         pending.clear();
                         pending_recs.clear();
                         pending_valueless.clear();
+                        pending_recfields.clear();
                     }
                 }
             }
             cur = item.prev;
         }
-        Ok((names, params_by_dno, recs, valueless))
+        Ok((names, params_by_dno, recs, valueless, recfields))
     }
 
     // exec_get_datum_type_info REC arm: the declared rectypeid, typmod -1.
@@ -1611,13 +2486,17 @@ impl<'a> Estate<'a> {
         if src.tdtypmod >= 0 {
             return Ok((RECORDOID, src.tdtypmod));
         }
-        let mcx = self.eval_ctx.mcx();
-        let mut td = tupdesc::CreateTupleDescCopy(mcx, &src)?;
+        // C blesses an expanded record's tupdesc once (make_expanded_record_
+        // from_tupdesc); keeping the blessed copy spares every later fetch
+        // a descriptor copy and a registry probe.
+        let mut td = tupdesc::CreateTupleDescCopy(self.datum_ctx.mcx(), &src)?;
         td.tdtypeid = RECORDOID;
-        if td.tdtypmod < 0 {
-            typcache::assign_record_type_typmod(&mut td)?;
+        typcache::assign_record_type_typmod(&mut td)?;
+        let typmod = td.tdtypmod;
+        if let DatumVal::Rec(Some(rv)) = &mut self.datums[recno as usize] {
+            rv.src_desc = Some(std::rc::Rc::new(td));
         }
-        Ok((RECORDOID, td.tdtypmod))
+        Ok((RECORDOID, typmod))
     }
 
     // exec_eval_datum REC arm: materialize the record as a composite Datum in
@@ -1734,6 +2613,9 @@ impl<'a> Estate<'a> {
     // a tuple over the base tupdesc and run domain_check against the
     // DECLARED domain type. The tuple lives in the eval scratch (freed by
     // exec_eval_cleanup), like rec_as_composite_datum's materialization.
+    // External fields are fetched first (ER_get_flat_size,
+    // expandedrecord.c:712-745): the constraint sees the inlined composite,
+    // not a tuple of toast pointers.
     fn rec_domain_check_fields(
         &mut self,
         rectypeid: Oid,
@@ -1742,6 +2624,25 @@ impl<'a> Estate<'a> {
         nulls: &[bool],
     ) -> PgResult<()> {
         let mcx = self.eval_ctx.mcx();
+        let mut inlined: Vec<Datum> = ::mcx::std_vec_from_slice("plpgsql", values)?;
+        for (i, v) in inlined.iter_mut().enumerate() {
+            if nulls[i] || td.attr(i).attlen != -1 || td.attr(i).attisdropped {
+                continue;
+            }
+            let p = v.as_usize() as *const u8;
+            // SAFETY: non-null by-ref varlena datum.
+            unsafe {
+                if types_tuple::varatt::varatt_is_1b_e(p)
+                    && !types_tuple::varatt::varatt_is_external_expanded(p)
+                {
+                    let attr = core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p));
+                    let out = detoast::detoast_external_attr(mcx, attr)?;
+                    *v = Datum::from_usize(out.as_ptr() as usize);
+                    core::mem::forget(out);
+                }
+            }
+        }
+        let values = &inlined[..];
         let tup = heaptuple::heap_form_tuple(mcx, td, values, nulls)?;
         let img = tup.header_ptr();
         core::mem::forget(tup);
@@ -1768,19 +2669,19 @@ impl<'a> Estate<'a> {
         // BASE type's tupdesc (typcache DOMAIN_BASE_INFO).
         let base = Self::rec_base_typeid(rectypeid)?;
         let td = typcache::lookup_rowtype_tupdesc_copy(self.datum_ctx.mcx(), base, -1)?;
-        let desc = RecDesc::from_tupdesc(&td);
+        let desc = RecDesc::from_tupdesc(&td)?;
         let n = desc.types.len();
         self.assign_record_var(
             recno,
             Some(RecValue {
                 desc,
-                values: vec![Datum::null(); n],
-                nulls: vec![true; n],
+                values: ::mcx::std_vec_from_elem("plpgsql", Datum::null(), n)?,
+                nulls: ::mcx::std_vec_from_elem("plpgsql", true, n)?,
                 src_desc: Some(std::rc::Rc::new(td)),
                 empty: true,
                 sys: None,
                 fvalue_valid: false,
-                owned: vec![false; n],
+                owned: ::mcx::std_vec_from_elem("plpgsql", false, n)?,
             }),
         );
         Ok(())
@@ -1815,31 +2716,137 @@ impl<'a> Estate<'a> {
         None
     }
 
-    // setup_param_list: current datum values for the plan's paramnos as
-    // (values, nulls) views for SPI. (The compiled simple-expression path
-    // fetches lazily through simple_param_eval instead.)
-    fn setup_params(&mut self, entry_paramnos: &[Dno], argtypes: &[Oid]) -> PgResult<(Vec<Datum>, Vec<bool>)> {
-        let n = argtypes.len();
-        let mut values = vec![Datum::null(); n];
-        let mut nulls = vec![true; n];
-        for &dno in entry_paramnos {
-            let (v, isnull) = self.datum_as_param(dno, Some(argtypes[dno as usize]))?;
-            values[dno as usize] = v;
-            nulls[dno as usize] = isnull;
+    // setup_param_list (pl_exec.c:6250) + plpgsql_param_fetch's speculative
+    // planning fetch (pl_exec.c:6298-6355): every paramno's current value and
+    // type, except a record field the fetch could fail on, which is left
+    // without a value (ptype InvalidOid) for the executor to fetch through
+    // `fetch` only if evaluation reaches it. A record or field whose type is
+    // no longer the planned one keeps its current type with pflags 0, so the
+    // mismatch is raised only where the Param is evaluated and a served run
+    // delegates the list. A query referencing no PL variable runs with an
+    // empty (C NULL) list, so the plancache serves it the generic plan.
+    fn setup_param_list(
+        &mut self,
+        paramnos: &[Dno],
+        argtypes: &[Oid],
+        speculative: bool,
+    ) -> PgResult<Vec<ParamExternData>> {
+        if paramnos.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok((values, nulls))
+        let mut params = ::mcx::std_vec_with_capacity("plpgsql", argtypes.len())?;
+        params.extend(argtypes.iter().map(|&ptype| ParamExternData {
+            value: Datum::null(),
+            isnull: true,
+            pflags: PARAM_FLAG_CONST,
+            ptype,
+        }));
+        for &dno in paramnos {
+            let planned = argtypes[dno as usize];
+            let is_var = matches!(&self.func.datums[dno as usize], PlDatum::Var(_));
+            params[dno as usize] = match self.param_fetch(dno, planned, speculative)? {
+                Some(p) if !is_var && p.ptype != planned => ParamExternData { pflags: 0, ..p },
+                Some(p) => p,
+                None => ParamExternData {
+                    value: Datum::null(),
+                    isnull: true,
+                    pflags: 0,
+                    ptype: types_core::InvalidOid,
+                },
+            };
+        }
+        Ok(params)
     }
 
     // Params of a plan _SPI_execute_plan runs are evaluated under its
     // _SPI_error_callback (spi.c), so a fetch failure carries the SQL line.
-    fn setup_params_under_spi(
+    // Cursor opens fetch non-speculatively (copyParamList).
+    fn setup_param_list_under_spi(
         &mut self,
         expr: &PlExpr,
-        entry_paramnos: &[Dno],
+        paramnos: &[Dno],
         argtypes: &[Oid],
-    ) -> PgResult<(Vec<Datum>, Vec<bool>)> {
-        self.setup_params(entry_paramnos, argtypes)
+        speculative: bool,
+    ) -> PgResult<Vec<ParamExternData>> {
+        self.setup_param_list(paramnos, argtypes, speculative)
             .map_err(|e| spi_ctx_err(e, &expr.query, expr.parse_mode))
+    }
+
+    fn spi_fetch_arg(&mut self, paramnos: &std::rc::Rc<[Dno]>) -> SpiFetchArg {
+        SpiFetchArg { estate: (self as *mut Estate<'a>).cast(), paramnos: std::rc::Rc::clone(paramnos) }
+    }
+
+    // plpgsql_param_fetch / exec_eval_datum (pl_exec.c:6298, 5301): the
+    // datum's value and CURRENT type (`planned` for a Var, whose type cannot
+    // change). Speculative (planning's fetch) returns None rather than fail
+    // on a field of a NULL record or one its record lacks.
+    fn param_fetch(
+        &mut self,
+        dno: Dno,
+        planned: Oid,
+        speculative: bool,
+    ) -> PgResult<Option<ParamExternData>> {
+        let func = self.func;
+        let (value, isnull, ptype) = match &func.datums[dno as usize] {
+            PlDatum::Var(v) => {
+                let (value, isnull) = self.get_var(dno)?;
+                let ptype = if OidIsValid(planned) { planned } else { v.datatype.typoid };
+                (value, isnull, ptype)
+            }
+            PlDatum::Rec(r) => {
+                let (ptype, _) = self.rec_param_type_mod(r.dno)?;
+                let (value, isnull) = self.rec_as_composite_datum(dno)?;
+                (value, isnull, ptype)
+            }
+            PlDatum::RecField(f) => {
+                if speculative {
+                    match &self.datums[f.recparentno as usize] {
+                        DatumVal::Rec(Some(rv))
+                            if rec_lookup_field_cached(
+                                &mut self.recfield_idx,
+                                f.dno,
+                                &rv.desc,
+                                &f.fieldname,
+                            )
+                            .is_some() => {}
+                        _ => return Ok(None),
+                    }
+                }
+                if matches!(&self.datums[f.recparentno as usize], DatumVal::Rec(None))
+                    && self.rec_typeid(f.recparentno) != RECORDOID
+                {
+                    self.instantiate_empty_rec(f.recparentno)?;
+                }
+                let recname = || match &func.datums[f.recparentno as usize] {
+                    PlDatum::Rec(r) => r.refname.clone(),
+                    _ => String::new(),
+                };
+                let DatumVal::Rec(Some(rv)) = &self.datums[f.recparentno as usize] else {
+                    return Err(Box::new(
+                        elog::ereport(ERROR)
+                            .errcode(types_error::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
+                            .errmsg(format!("record \"{}\" is not assigned yet", recname()))
+                            .errdetail("The tuple structure of a not-yet-assigned record is indeterminate.")
+                            .into_error(),
+                    ));
+                };
+                match rec_lookup_field_cached(&mut self.recfield_idx, f.dno, &rv.desc, &f.fieldname) {
+                    Some(RecFieldRef::User(i)) => (rv.values[i], rv.nulls[i], rv.desc.types[i]),
+                    Some(RecFieldRef::Sys(a)) => match &rv.sys {
+                        Some(s) => (s.get(a.attnum), false, a.atttypid),
+                        None => (Datum::null(), true, a.atttypid),
+                    },
+                    None => {
+                        return Err(exec_err(
+                            types_error::ERRCODE_UNDEFINED_COLUMN,
+                            format!("record \"{}\" has no field \"{}\"", recname(), f.fieldname),
+                        ))
+                    }
+                }
+            }
+            _ => panic!("plpgsql: datum {dno} cannot be a parameter"),
+        };
+        Ok(Some(ParamExternData { value, isnull, pflags: PARAM_FLAG_CONST, ptype }))
     }
 
     // `planned` = the Param's type as of plan preparation. C's compiled
@@ -1850,80 +2857,37 @@ impl<'a> Estate<'a> {
     // pl_exec.c:6797/6838). Plain Vars take C's unchecked fast path
     // (plpgsql_param_eval_var). None = caller is not a plan-param seam.
     fn datum_as_param(&mut self, dno: Dno, planned: Option<Oid>) -> PgResult<(Datum, bool)> {
-        let func = self.func;
-        match &func.datums[dno as usize] {
-            PlDatum::Var(_) => self.get_var(dno),
-            PlDatum::Rec(r) => {
-                if let Some(planned) = planned {
-                    // plpgsql_param_eval_generic's safety check compares the
-                    // type exec_eval_datum reports (pl_exec.c:6836-6843): the
-                    // DECLARED type only for a non-RECORD rec; a
-                    // RECORD-declared rec holding a value reports the value's
-                    // own rowtype (erh->er_typeid) — the same type plan
-                    // preparation resolved via rec_param_type_mod.
-                    let (current, _) = self.rec_param_type_mod(r.dno)?;
-                    if current != planned {
-                        return Err(param_type_mismatch(dno, current, planned));
-                    }
+        let is_var = matches!(&self.func.datums[dno as usize], PlDatum::Var(_));
+        if let (Some(planned), false) = (planned, is_var) {
+            if let PlDatum::Rec(r) = &self.func.datums[dno as usize] {
+                let (current, _) = self.rec_param_type_mod(r.dno)?;
+                if current != planned {
+                    return Err(param_type_mismatch(dno, current, planned));
                 }
-                self.rec_as_composite_datum(dno)
             }
-            PlDatum::RecField(f) => {
-                if matches!(&self.datums[f.recparentno as usize], DatumVal::Rec(None))
-                    && self.rec_typeid(f.recparentno) != RECORDOID
-                {
-                    self.instantiate_empty_rec(f.recparentno)?;
-                }
-                if let DatumVal::Rec(Some(rv)) = &self.datums[f.recparentno as usize] {
-                    let found = rec_lookup_field(&rv.desc, &f.fieldname);
-                    if let Some(found) = found {
-                        let (current, fetched) = match found {
-                            RecFieldRef::User(i) => (rv.desc.types[i], (rv.values[i], rv.nulls[i])),
-                            RecFieldRef::Sys(a) => (
-                                a.atttypid,
-                                match &rv.sys {
-                                    Some(s) => (s.get(a.attnum), false),
-                                    None => (Datum::null(), true),
-                                },
-                            ),
-                        };
-                        if let Some(planned) = planned {
-                            // plpgsql_param_eval_recfield's per-eval
-                            // safety check (pl_exec.c:6797).
-                            if current != planned {
-                                return Err(param_type_mismatch(dno, current, planned));
-                            }
-                        }
-                        return Ok(fetched);
-                    }
-                    let recname = match &self.func.datums[f.recparentno as usize] {
-                        PlDatum::Rec(r) => r.refname.clone(),
-                        _ => String::new(),
-                    };
-                    return Err(exec_err(
-                        types_error::ERRCODE_UNDEFINED_COLUMN,
-                        format!("record \"{recname}\" has no field \"{}\"", f.fieldname),
-                    ));
-                }
-                let recname = match &self.func.datums[f.recparentno as usize] {
-                    PlDatum::Rec(r) => r.refname.clone(),
-                    _ => String::new(),
-                };
-                Err(Box::new(
-                    elog::ereport(ERROR)
-                        .errcode(types_error::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
-                        .errmsg(format!("record \"{recname}\" is not assigned yet"))
-                        .errdetail("The tuple structure of a not-yet-assigned record is indeterminate.")
-                        .into_error(),
-                ))
-            }
-            _ => panic!("plpgsql: datum {dno} cannot be a parameter"),
         }
+        let p = self
+            .param_fetch(dno, planned.unwrap_or(types_core::InvalidOid), false)?
+            .expect("a non-speculative fetch yields a value");
+        if let (Some(planned), false) = (planned, is_var) {
+            if p.ptype != planned {
+                return Err(param_type_mismatch(dno, p.ptype, planned));
+            }
+        }
+        Ok((p.value, p.isnull))
     }
 
     // exec_eval_expr: returns (value, isnull, rettype, rettypmod). Caller
     // must exec_eval_cleanup when done with a by-ref result.
     pub fn exec_eval_expr(&mut self, expr: &PlExpr) -> PgResult<(Datum, bool, Oid, i32)> {
+        self.exec_eval_expr_opts(expr, CURSOR_OPT_PARALLEL_OK)
+    }
+
+    fn exec_eval_expr_opts(
+        &mut self,
+        expr: &PlExpr,
+        cursor_options: i32,
+    ) -> PgResult<(Datum, bool, Oid, i32)> {
         // Steady state first, before any plan-cache traffic: C's
         // exec_eval_expr (pl_exec.c:5673) prepares the plan once per
         // function lifetime and exec_eval_simple_expr revalidates with
@@ -1936,7 +2900,7 @@ impl<'a> Estate<'a> {
             return Ok(r);
         }
 
-        self.ensure_plan(expr, CURSOR_OPT_PARALLEL_OK)?;
+        self.ensure_plan(expr, cursor_options)?;
 
         if let Some(r) = self.exec_eval_simple_expr(expr)? {
             return Ok(r);
@@ -2004,9 +2968,9 @@ impl<'a> Estate<'a> {
             SimpleTake::Skip | SimpleTake::Build { .. } => return Ok(None),
         };
         let se = simple_expr_portal_snapshot(expr.expr_id, se)?;
-        // A different effective user must not ride the compiling user's
-        // function EXECUTE decisions: fall to the slow path, which rebuilds.
-        if se.userid != miscinit_seams::get_user_id::call() || se.lxid != current_lxid() {
+        // Within its transaction the compiled state keeps the EXECUTE ACL
+        // verdicts it was built with, whatever the current user (C).
+        if se.lxid != current_lxid() {
             let plan = se.plan;
             drop(se);
             put_simple(expr.expr_id, plan, SimpleState::Unknown);
@@ -2086,30 +3050,126 @@ impl<'a> Estate<'a> {
             }
         };
         let plan = build;
-        let se = match self.build_simple_expr(expr, plan) {
-            Ok(se) => se,
+        let se = match self.build_simple_expr(expr, plan, true) {
+            Ok(SimpleBuild::Ready(se)) => se,
+            Ok(SimpleBuild::PlanFailed(e)) => {
+                put_simple(expr.expr_id, plan, SimpleState::NotSimple);
+                return Err(e);
+            }
+            Ok(_) => {
+                put_simple(expr.expr_id, plan, SimpleState::NotSimple);
+                return Ok(None);
+            }
             Err(e) => {
                 put_simple(expr.expr_id, plan, SimpleState::Unknown);
                 return Err(e);
             }
         };
-        let Some(se) = se else {
-            put_simple(expr.expr_id, plan, SimpleState::NotSimple);
-            return Ok(None);
-        };
         self.eval_simple_taken(expr, se).map(Some)
     }
 
+    // exec_check_rw_parameter: the RWOPT_TRANSFER rule (a local target
+    // referenced exactly once is passed R/W whatever consumes it), else the
+    // RWOPT_INPLACE rule (the Param the top-level function's support
+    // function names). The node address identifies it to the compiled program.
+    fn rw_param_node(
+        &self,
+        expr: &PlExpr,
+        sexpr: types_nodes::Node<'static>,
+    ) -> PgResult<Option<(*const (), bool)>> {
+        use types_nodes::primnodes::{FuncExpr, OpExpr, Param, RelabelType, SubscriptingRef};
+        let target = expr.target_param;
+        if target < 0
+            || !matches!(&self.func.datums[target as usize], PlDatum::Var(v) if v.datatype.typisarray)
+        {
+            return Ok(None);
+        }
+        if expr.target_is_local {
+            let mut refs = TargetParamRefs { paramid: target + 1, count: 0, last: None };
+            nodes_core::NodeWalker::visit(&mut refs, sexpr)?;
+            if refs.count == 1 {
+                return Ok(refs.last.map(|p| (p, true)));
+            }
+        }
+        let sexpr = match sexpr.as_variant::<RelabelType>() {
+            Some(r) => r.arg,
+            None => sexpr,
+        };
+        let mut args: [Option<types_nodes::Node<'static>>; 2] = [None, None];
+        let funcid = if let Some(f) = sexpr.as_variant::<FuncExpr>() {
+            for (slot, a) in args.iter_mut().zip(f.args.iter()) {
+                *slot = Some(a);
+            }
+            if f.args.len() > 2 {
+                return Ok(None);
+            }
+            f.funcid
+        } else if let Some(o) = sexpr.as_variant::<OpExpr>() {
+            for (slot, a) in args.iter_mut().zip(o.args.iter()) {
+                *slot = Some(a);
+            }
+            if o.args.len() > 2 {
+                return Ok(None);
+            }
+            o.opfuncid
+        } else if let Some(r) = sexpr.as_variant::<SubscriptingRef>() {
+            args = [r.refexpr, r.refassgnexpr];
+            lsyscache::typ::get_typsubscript(r.refcontainertype)?.0
+        } else {
+            return Ok(None);
+        };
+        if !OidIsValid(funcid) {
+            return Ok(None);
+        }
+        let prosupport = lsyscache::function::get_func_support(funcid)?;
+        if !OidIsValid(prosupport) {
+            return Ok(None);
+        }
+        let req = types_nodes::supportnodes::SupportRequestModifyInPlace::new(
+            funcid,
+            &args,
+            target + 1,
+        );
+        let call_cx = ::mcx::MemoryContext::new_bump("plpgsql_rw_param_support");
+        let answer = fmgr_core::oid_function_call1_coll_in(
+            prosupport,
+            0,
+            call_cx.mcx(),
+            Datum::from_usize(core::ptr::from_ref(&req) as usize),
+        )?;
+        let Some(raw) = core::ptr::NonNull::new(answer.as_usize() as *mut ()) else {
+            return Ok(None);
+        };
+        // SAFETY: the support function returned one of the request's own
+        // argument nodes (supportnodes.h contract).
+        let node = unsafe { types_nodes::Node::<'static>::from_raw(raw) };
+        Ok(node.as_variant::<Param>().map(|p| (p as *const Param as *const (), false)))
+    }
+
+    // The array-variable Params whose direct consumer reads an expanded
+    // array itself (arrayfuncs.c AnyArrayType readers, array subscript
+    // fetch): they get the variable's read-only expanded value, as every
+    // reader does in C, instead of a flattened copy.
+    fn expanded_reader_params(
+        &self,
+        sexpr: types_nodes::Node<'static>,
+        rw: Option<*const ()>,
+    ) -> PgResult<Vec<*const ()>> {
+        let mut w = ExpandedReaderParams { func: self.func, rw, found: Vec::new() };
+        nodes_core::NodeWalker::visit(&mut w, sexpr)?;
+        Ok(w.found)
+    }
+
     // exec_simple_check_plan (pl_exec.c:8133) + exec_save_simple_expr
-    // (pl_exec.c:8271), deferred to the first evaluation as before.
-    // Ok(None) = not simple. The caller owns the InUse slot.
+    // (pl_exec.c:8271). The caller owns the InUse slot.
     fn build_simple_expr(
         &mut self,
         expr: &PlExpr,
         plan: SpiPlanPtr,
-    ) -> PgResult<Option<Box<SimpleExpr>>> {
+        compile: bool,
+    ) -> PgResult<SimpleBuild> {
         let Some((psrc, _)) = spi::SPI_plan_single_source(plan) else {
-            return Ok(None);
+            return Ok(SimpleBuild::NotSimple);
         };
         // exec_is_simple_query (pl_exec.c:8161): decided on the analyzed
         // querytree before any generic plan is requested — an embedded
@@ -2118,7 +3178,7 @@ impl<'a> Estate<'a> {
         {
             let queries = plancache::SourceQueryList(psrc);
             if queries.len() != 1 || !exec_is_simple_query(&queries[0]) {
-                return Ok(None);
+                return Ok(SimpleBuild::NotSimple);
             }
         }
         // Planning reports (const-fold errors and warnings) carry the
@@ -2130,76 +3190,119 @@ impl<'a> Estate<'a> {
                 spi_error_context(e, &query, mode);
             }))
         };
+        spi_frame!(frame, &expr.query, expr.parse_mode);
         let cplan = plancache::GetCachedPlan(
             psrc,
             types_portal::ParamListHandle::NULL,
             None,
             types_portal::QueryEnvHandle::NULL,
         );
+        drop(frame);
         elog::pop_emit_context_callback(emit_cb);
-        let cplan = cplan.map_err(|e| spi_ctx_err(e, &expr.query, expr.parse_mode))?;
-        let built = (|| -> PgResult<Option<Box<SimpleExpr>>> {
+        let cplan = match cplan {
+            Ok(c) => c,
+            Err(e) => return Ok(SimpleBuild::PlanFailed(spi_ctx_err(e, &expr.query, expr.parse_mode))),
+        };
+        let built = (|| -> PgResult<SimpleBuild> {
             let stmts = plancache::CachedPlanStmtList(cplan);
             if stmts.len() != 1 {
-                return Ok(None);
+                return Ok(SimpleBuild::NotSimple);
             }
             let stmt = &stmts[0];
             if stmt.commandType != types_nodes::nodes_enums::CmdType::CMD_SELECT
                 || stmt.utilityStmt.is_some()
                 || !stmt.rowMarks.is_nil()
             {
-                return Ok(None);
+                return Ok(SimpleBuild::NotSimple);
             }
             let Some(plan_expr) = simple_result_expr(stmt) else {
-                return Ok(None);
+                return Ok(SimpleBuild::NotSimple);
             };
+            if !compile {
+                return Ok(SimpleBuild::Planned);
+            }
             // C exec_eval_simple_expr compiles under estate->paramLI, whose
             // paramCompile hook (plpgsql_param_compile, pl_exec.c:6465-6488)
             // turns every datum Param into an EEOP_PARAM_CALLBACK step; the
             // Param node's paramtype is the plan-time type the per-eval
             // safety check compares against (pl_exec.c:6797/6838).
-            let bind = types_portal::params::ParamBind {
-                param_callback: Some(simple_param_eval),
-                param_expanded: Some(simple_param_expanded),
-                ..types_portal::params::ParamBind::NONE
-            };
+            // The variable keeps its object for in-place consumers; only a
+            // call that can adopt the object takes it over (the target is
+            // local, so no handler sees the variable in between).
+            let adopt_call = self.adoptable_call(expr, plan_expr.0);
+            let rw = self.rw_param_node(expr, plan_expr.0)?.map(|(p, transfer)| {
+                let fetch: types_portal::params::ParamCallbackFn = if transfer && adopt_call != 0 {
+                    simple_param_eval_transfer
+                } else {
+                    simple_param_eval_rw
+                };
+                (p, fetch)
+            });
+            let ro_params = self.expanded_reader_params(plan_expr.0, rw.map(|r| r.0))?;
             // Function-lifetime memory home for the compiled program (C
             // compiles into simple_eval_estate->es_query_cxt and rebuilds
             // per transaction, pl_exec.c:6172-6180; see SimpleExpr's
             // lifetime note for why no rebuild is needed here).
-            let ctx = Ctx::new("PLpgSQL simple expression");
+            let ctx = Ctx::new_start_small("PLpgSQL simple expression");
+            let ro_params = ::mcx::slice_in(ctx.mcx(), &ro_params)?.leak();
+            let bind = types_portal::params::ParamBind {
+                param_callback: Some(simple_param_eval),
+                param_expanded: Some(simple_param_expanded),
+                param_rw: rw,
+                param_ro_expanded: Some((
+                    ro_params,
+                    simple_param_eval_ro as types_portal::params::ParamCallbackFn,
+                )),
+                ..types_portal::params::ParamBind::NONE
+            };
             let Some(state) = execexpr::exec_init_expr(ctx.mcx(), Some(plan_expr.0), bind)?
             else {
-                return Ok(None);
+                return Ok(SimpleBuild::NotSimple);
             };
             // C exec_save_simple_expr (pl_exec.c:8349): immutable
             // expressions skip the per-eval CCI + snapshot ceremony.
             let mutable = clauses::contain_mutable_functions(plan_expr.0)?;
-            Ok(Some(Box::new(SimpleExpr {
+            let mut bare = plan_expr.0;
+            while let Some(r) = bare.as_variant::<types_nodes::primnodes::RelabelType>() {
+                if r.resulttype != RECORDOID {
+                    break;
+                }
+                bare = r.arg;
+            }
+            let bare_rec = bare
+                .as_variant::<types_nodes::primnodes::Param>()
+                .filter(|p| p.paramkind == types_nodes::primnodes::ParamKind::PARAM_EXTERN)
+                .and_then(|p| {
+                    let dno = p.paramid - 1;
+                    matches!(self.func.datums.get(dno as usize), Some(PlDatum::Rec(_)))
+                        .then_some((dno, p.paramtype))
+                });
+            Ok(SimpleBuild::Ready(Box::new(SimpleExpr {
                 plan,
                 state,
                 cplan,
                 psrc,
                 rettype: plan_expr.1,
-                userid: miscinit_seams::get_user_id::call(),
                 lxid: current_lxid(),
                 rettypmod: plan_expr.2,
                 mutable,
+                adopt_call,
+                bare_rec,
                 ctx,
             })))
         })();
         match built {
-            Ok(Some(se)) => {
+            Ok(SimpleBuild::Ready(se)) => {
                 // First Ready state of this backend: arrange orderly pin
                 // release at proc_exit (see release_plpgsql_state_at_exit;
                 // normally already registered by the compile that produced
                 // this expression).
                 register_exit_release();
-                Ok(Some(se))
+                Ok(SimpleBuild::Ready(se))
             }
-            Ok(None) => {
+            Ok(other) => {
                 plancache::ReleaseCachedPlan(cplan);
-                Ok(None)
+                Ok(other)
             }
             Err(e) => {
                 plancache::ReleaseCachedPlan(cplan);
@@ -2210,8 +3313,8 @@ impl<'a> Estate<'a> {
 
     // The evaluation proper (pl_exec.c:6146-6241): write params, arm the
     // result context, snapshot ceremony if needed, run the program. The
-    // taken state goes back Ready on success; an error drops it (C
-    // quarantines via expr_simple_in_use instead — see SimpleState::InUse).
+    // taken state goes back Ready on success; an error drops it and
+    // quarantines the expression for the rest of the transaction.
     fn eval_simple_taken(
         &mut self,
         expr: &PlExpr,
@@ -2226,13 +3329,21 @@ impl<'a> Estate<'a> {
             }
             Err(e) => {
                 drop(se);
-                put_simple(expr.expr_id, plan, SimpleState::Unknown);
+                put_simple(expr.expr_id, plan, SimpleState::Quarantined(current_lxid()));
                 Err(e)
             }
         }
     }
 
     fn eval_simple_body(&mut self, se: &mut SimpleExpr) -> PgResult<(Datum, bool, Oid, i32)> {
+        if let (true, Some((dno, planned))) = (core::mem::take(&mut self.bare_rec_wanted), se.bare_rec) {
+            let current = self.rec_value_type(dno);
+            if current != planned {
+                return Err(param_type_mismatch(dno, current, planned));
+            }
+            self.bare_rec_hit = Some((dno, planned));
+            return Ok((Datum::null(), true, se.rettype, se.rettypmod));
+        }
         // C pl_exec.c:6154-6164: the program evaluates under an econtext
         // whose ecxt_param_list_info->paramFetchArg is THIS estate; its
         // ParamCallback steps fetch datums through simple_param_eval only
@@ -2252,6 +3363,7 @@ impl<'a> Estate<'a> {
             snapmgr::PushActiveSnapshot(&snap)?;
             pushed = true;
         }
+        let _accept = AcceptArrayResult::set(se.adopt_call);
         let result = (|| {
             let mut slots = execexpr::EvalSlots { scan: None, inner: None, outer: None };
             let r = execexpr::exec_eval_expr(&mut se.state, &mut slots)?;
@@ -2312,13 +3424,14 @@ impl<'a> Estate<'a> {
             let e = t.get(&expr.expr_id).expect("plan ensured");
             (e.plan, e.paramnos.clone(), e.argtypes.clone())
         });
-        let (values, nulls) = self.setup_params_under_spi(expr, &paramnos, &argtypes)?;
-        let _frame = FrameGuard::push_spi(&expr.query, expr.parse_mode);
+        let params = self.setup_param_list_under_spi(expr, &paramnos, &argtypes, true)?;
+        let mut fetch_arg = self.spi_fetch_arg(&paramnos);
+        let params = spi_param_list(&params, &mut fetch_arg);
+        spi_frame!(_frame, &expr.query, expr.parse_mode);
+        let _live = LiveSpiExpr::set((self as *mut Estate<'a>).cast(), expr);
         let rc = spi::SPI_execute_plan_extended(
             plan,
-            &values,
-            &nulls,
-            true,
+            params,
             self.readonly_func,
             false,
             must_return_tuples,
@@ -2371,6 +3484,9 @@ impl<'a> Estate<'a> {
         reqtypmod: i32,
     ) -> PgResult<Datum> {
         let key = (valtype, valtypmod, reqtype, reqtypmod);
+        if OidIsValid(self.func.fn_oid) {
+            return self.session_cast_value(value, isnull, key);
+        }
         let cur_gen = plancache::PlanCacheInvalCounter();
         let cur_lxid = current_lxid();
         let stale = match self.cast_cache.get(&key) {
@@ -2400,118 +3516,93 @@ impl<'a> Estate<'a> {
         dsttype: Oid,
         dsttypmod: i32,
     ) -> PgResult<CastEntry> {
-        use types_nodes::primnodes::{CoercionForm, Param, ParamKind};
-
         // Read before catalog lookups: an inval firing mid-build leaves this
         // entry stamped old, so the next use rebuilds.
         let inval_gen = plancache::PlanCacheInvalCounter();
-        let param: Box<[ParamExternData; 1]> = Box::new([ParamExternData {
-            value: Datum::null(),
-            isnull: true,
-            pflags: 0,
-            ptype: srctype,
-        }]);
-
-        // The coercion tree is built and compiled in the invocation context
-        // (it lives as long as the cache entry).
         let mcx = self.datum_ctx.mcx();
-        let placeholder = types_nodes::Node::mk(
-            mcx,
-            Param {
-                paramkind: ParamKind::PARAM_EXTERN,
-                paramid: 1,
-                paramtype: srctype,
-                paramtypmod: srctypmod,
-                paramcollid: lsyscache::typ::get_typcollation(srctype)?,
-                location: -1,
-            },
-        )?;
+        let expr = build_cast_expr(mcx, srctype, srctypmod, dsttype, dsttypmod)?;
+        let (state, param) = compile_cast(mcx, expr, srctype)?;
+        let state = state.map(|mut st| {
+            st.arm_result_mcx(self.eval_ctx.mcx());
+            st
+        });
+        Ok(CastEntry { state, param, inval_gen, lxid: current_lxid() })
+    }
 
-        let pstate = parser_small1::make_parsestate(mcx, None);
-        let cast_expr = if srctype == UNKNOWNOID || srctype == RECORDOID {
-            None
-        } else {
-            coerce::coerce_to_target_type(
-                mcx,
-                &pstate,
-                placeholder,
-                srctype,
-                dsttype,
-                dsttypmod,
-                coerce::CoercionContext::COERCION_PLPGSQL,
-                CoercionForm::COERCE_IMPLICIT_CAST,
-                -1,
-            )?
-        };
-        let cast_expr = match cast_expr {
-            Some(e) => Some(e),
-            None => {
-                // upstream 54649de65f08 (18.6): Reject calls from SQL to functions that take or return type internal.
-                if srctype == INTERNALOID || dsttype == INTERNALOID {
-                    return Err(exec_err(
-                        types_error::ERRCODE_CANNOT_COERCE,
-                        format!(
-                            "cannot cast type {} to {}",
-                            format_type::format_type_be(srctype)?,
-                            format_type::format_type_be(dsttype)?
-                        ),
-                    ));
-                }
-                let io = types_nodes::Node::mk(
-                    mcx,
-                    types_nodes::primnodes::CoerceViaIO {
-                        arg: placeholder,
-                        resulttype: dsttype,
-                        resultcollid: types_core::InvalidOid,
-                        coerceformat: CoercionForm::COERCE_IMPLICIT_CAST,
-                        location: -1,
-                    },
-                )?;
-                if dsttypmod != -1 {
-                    coerce::coerce_to_target_type(
-                        mcx,
-                        &pstate,
-                        io,
-                        dsttype,
-                        dsttype,
-                        dsttypmod,
-                        coerce::CoercionContext::COERCION_ASSIGNMENT,
-                        CoercionForm::COERCE_IMPLICIT_CAST,
-                        -1,
-                    )?
-                } else {
-                    Some(io)
-                }
+    // get_cast_hashentry's shared_cast_hash arm (pl_exec.c:7952-8070) for
+    // a function's casts: the expression is session-lived and invalidated
+    // only through its dependencies (C GetCachedExpression), the compiled
+    // state is rebuilt once per transaction and shared by every function of
+    // the session, so an EXECUTE privilege checked when the state was built
+    // holds for the rest of the transaction. A state in use (a cast reached
+    // recursively, or one whose evaluation failed) is not reused.
+    fn session_cast_value(
+        &mut self,
+        value: Datum,
+        isnull: &mut bool,
+        key: (Oid, i32, Oid, i32),
+    ) -> PgResult<Datum> {
+        ensure_session_cast_callbacks()?;
+        register_exit_release();
+        let valid = SESSION_CASTS.with(|t| {
+            let mut t = t.borrow_mut();
+            if SESSION_CASTS_RESET.replace(false) {
+                t.values_mut().for_each(|e| e.valid = false);
             }
-        };
-        parser_small1::free_parsestate(pstate)?;
-
-        let Some(cast_expr) = cast_expr else {
-            return Ok(CastEntry { state: None, param, inval_gen, lxid: current_lxid() });
-        };
-        // No-op relabeling of the bare placeholder: skip evaluation.
-        if let Some(r) = cast_expr.as_relabel_type() {
-            if r.arg.as_variant::<Param>().is_some() {
-                return Ok(CastEntry { state: None, param, inval_gen, lxid: current_lxid() });
-            }
+            t.get(&key).is_some_and(|e| e.valid)
+        });
+        if !valid {
+            let expr_ctx = std::rc::Rc::new(Ctx::new_start_small("PLpgSQL cast expression"));
+            let expr = build_cast_expr(expr_ctx.mcx(), key.0, key.1, key.2, key.3)?;
+            let deps = match expr {
+                Some(e) => cast_expr_dependencies(e)?,
+                None => Vec::new(),
+            };
+            let generation = SESSION_CAST_GEN.with(|g| {
+                g.set(g.get() + 1);
+                g.get()
+            });
+            let entry = SessionCast { expr, deps, valid: true, generation, state: None, lxid: 0, expr_ctx };
+            let old = SESSION_CASTS.with(|t| t.borrow_mut().insert(key, entry));
+            drop(old);
         }
-
-        let bind = types_portal::params::ParamBind {
-            // SAFETY: `param` is a stable Box living in the cache entry
-            // alongside the compiled state.
-            extern_params: Some(unsafe {
-                core::slice::from_raw_parts(param.as_ptr(), 1)
-            }),
-            exec_vals: None,
-            n_exec: 0,
-            param_callback: None,
-            param_expanded: None,
+        let cur = current_lxid();
+        let (expr, generation, ready, expr_ctx) = SESSION_CASTS.with(|t| {
+            let mut t = t.borrow_mut();
+            let e = t.get_mut(&key).expect("built above");
+            let ready = e.state.take().filter(|_| e.lxid == cur);
+            (e.expr, e.generation, ready, std::rc::Rc::clone(&e.expr_ctx))
+        });
+        let Some(expr) = expr else {
+            return Ok(value);
         };
-        let Some(mut state) = execexpr::exec_init_expr(mcx, Some(cast_expr), bind)? else {
-            return Ok(CastEntry { state: None, param, inval_gen, lxid: current_lxid() });
+        let mut st = match ready {
+            Some(st) => st,
+            None => {
+                let ctx = Ctx::new_start_small("PLpgSQL cast state");
+                let expr = copyfuncs::copy_object(ctx.mcx(), expr)?;
+                let (state, param) = compile_cast(ctx.mcx(), Some(expr), key.0)?;
+                let Some(state) = state else {
+                    return Ok(value);
+                };
+                CastState { state, param, ctx, _expr: expr_ctx }
+            }
         };
-        state.arm_result_mcx(self.eval_ctx.mcx());
-        Ok(CastEntry { state: Some(state), param, inval_gen, lxid: current_lxid() })
+        st.param[0].value = value;
+        st.param[0].isnull = *isnull;
+        st.state.arm_result_mcx(self.eval_ctx.mcx());
+        let mut slots = execexpr::EvalSlots { scan: None, inner: None, outer: None };
+        let r = execexpr::exec_eval_expr(&mut st.state, &mut slots)?;
+        *isnull = r.isnull;
+        SESSION_CASTS.with(|t| {
+            if let Some(e) = t.borrow_mut().get_mut(&key) {
+                if e.generation == generation && e.valid && e.state.is_none() {
+                    e.state = Some(st);
+                    e.lxid = cur;
+                }
+            }
+        });
+        Ok(r.value)
     }
 
     // convert_value_to_string: type output function in eval scratch.
@@ -2997,7 +4088,7 @@ impl<'a> Estate<'a> {
                         self.func.fn_input_collation,
                         None,
                     )?;
-                    self.var_type_overrides.insert(t_varno, ty);
+                    self.retype_var(t_varno, ty);
                 }
             }
             let (tl, bv) = {
@@ -3161,7 +4252,7 @@ impl<'a> Estate<'a> {
             let slice_len: usize = slice_dims.iter().map(|&d| d as usize).product();
             for s in 0..outer {
                 let sub = arrayfuncs::construct::construct_md_array(
-                    stmt_ctx.mcx(),
+                    self.eval_ctx.mcx(),
                     &elems[s * slice_len..(s + 1) * slice_len],
                     Some(&nulls[s * slice_len..(s + 1) * slice_len]),
                     slice,
@@ -3173,13 +4264,11 @@ impl<'a> Estate<'a> {
                     elmalign as u8,
                 )?;
                 found = true;
-                self.exec_assign_value(
-                    varno,
-                    Datum::from_usize(sub.as_ptr() as usize),
-                    false,
-                    arrtype,
-                    arrtypmod,
-                )?;
+                let sub_ptr = sub.as_ptr() as usize;
+                // The slice is eval scratch (C pfree's it right after the
+                // assignment, pl_exec.c:3126): the reset below frees it.
+                core::mem::forget(sub);
+                self.exec_assign_value(varno, Datum::from_usize(sub_ptr), false, arrtype, arrtypmod)?;
                 self.exec_eval_cleanup();
                 rc = self.exec_stmts(body)?;
                 if let Some(r) = self.loop_rc(label, rc) {
@@ -3377,7 +4466,11 @@ impl<'a> Estate<'a> {
                 // Bake this frame's context with the throw-time stmt/text
                 // before the cleanup markers overwrite them (C's callback ran
                 // at errfinish).
-                let edata = attach_frame_context_at_catch(e, self);
+                let mut edata = attach_frame_context_at_catch(e, self);
+                edata.output_to_server
+                    .get_or_insert_with(|| ::elog::should_output_to_server(edata.level));
+                edata.output_to_client
+                    .get_or_insert_with(|| ::elog::should_output_to_client(edata.level));
                 let outer_context = outer_context_at_catch(self);
                 self.frame.text.set(Some("during exception cleanup"));
                 xact::RollbackAndReleaseCurrentSubTransaction()?;
@@ -3453,11 +4546,125 @@ impl<'a> Estate<'a> {
                 return Err(spi_ctx_err(err, &expr.query, expr.parse_mode));
             }
         }
-        self.ensure_plan(expr, 0)?;
-        let (value, isnull, valtype, valtypmod) = self.exec_eval_expr(expr)?;
+        // C prepares an assignment's plan once (pl_exec.c exec_assign_expr:
+        // expr->plan == NULL); a planned expression goes straight to
+        // exec_eval_expr, whose miss path revalidates.
+        if !planned {
+            self.ensure_plan(expr, 0)?;
+        }
+        let rec_target = matches!(&self.func.datums[target as usize], PlDatum::Rec(_));
+        self.bare_rec_wanted = rec_target;
+        let evaluated = self.exec_eval_expr_opts(expr, 0);
+        self.bare_rec_wanted = false;
+        let (mut value, mut isnull, valtype, valtypmod) = evaluated?;
+        if let Some((src, planned)) = self.bare_rec_hit.take() {
+            if self.assign_rec_from_rec(target, src)? {
+                self.exec_eval_cleanup();
+                return Ok(());
+            }
+            (value, isnull) = self.datum_as_param(src, Some(planned))?;
+        }
         self.exec_assign_value(target, value, isnull, valtype, valtypmod)?;
         self.exec_eval_cleanup();
         Ok(())
+    }
+
+    // exec_move_row_from_datum's expanded-record arm for `rec := other_rec`
+    // where the target takes the source's shape unchanged (declared RECORD,
+    // or the same non-domain rowtype): the fields are copied directly, with
+    // no composite image formed and deformed. Ok(false) = take the general
+    // path (NULL or empty source, external toast fields, any coercion).
+    fn assign_rec_from_rec(&mut self, target: Dno, src: Dno) -> PgResult<bool> {
+        let DatumVal::Rec(Some(sv)) = &self.datums[src as usize] else {
+            return Ok(false);
+        };
+        if sv.empty {
+            return Ok(false);
+        }
+        if src == target {
+            return Ok(true);
+        }
+        for f in 0..sv.values.len() {
+            if !sv.nulls[f] && sv.desc.typlens[f] == -1 {
+                // SAFETY: a non-null varlena field image held by the record.
+                if unsafe { types_tuple::varatt::varatt_is_1b_e(sv.values[f].as_usize() as *const u8) } {
+                    return Ok(false);
+                }
+            }
+        }
+        let src_rectypeid = self.rec_typeid(src);
+        let src_td = sv.src_desc.clone().expect("RecValue carries its source tupdesc");
+        let image_type = if src_rectypeid != RECORDOID {
+            Self::rec_base_typeid(src_rectypeid)?
+        } else {
+            src_td.tdtypeid
+        };
+        self.revalidate_rectypeid(target)?;
+        let rectypeid = self.rec_typeid(target);
+        let held = match &self.datums[target as usize] {
+            DatumVal::Rec(Some(tv)) => tv.src_desc.as_ref().is_some_and(|td| {
+                td.tdtypeid == image_type
+                    && (image_type != RECORDOID || (src_td.tdtypmod == td.tdtypmod && src_td.tdtypmod >= 0))
+            }),
+            _ => false,
+        };
+        let dst_td = if rectypeid == RECORDOID {
+            src_td
+        } else {
+            if Self::rec_base_typeid(rectypeid)? != rectypeid || rectypeid != image_type {
+                return Ok(false);
+            }
+            let var_td = self.declared_rec_tupdesc(rectypeid)?;
+            if !std::rc::Rc::ptr_eq(&var_td, &src_td) {
+                return Ok(false);
+            }
+            var_td
+        };
+        let DatumVal::Rec(Some(sv)) = &self.datums[src as usize] else {
+            unreachable!("source record checked above");
+        };
+        let sys = if sv.fvalue_valid && (rectypeid == RECORDOID || rectypeid == image_type || held) {
+            sv.sys.clone()
+        } else {
+            None
+        };
+        let desc = sv.desc.clone();
+        let mut values = ::mcx::std_vec_from_slice("plpgsql", &sv.values)?;
+        let nulls = ::mcx::std_vec_from_slice("plpgsql", &sv.nulls)?;
+        let natts = values.len();
+        let mut owned = ::mcx::std_vec_from_elem("plpgsql", false, natts)?;
+        for f in 0..natts {
+            if !desc.dropped[f] && !nulls[f] && !desc.typbyvals[f] {
+                values[f] = self.assign_copy_to_datum_ctx(values[f], false, desc.typlens[f], false)?;
+                owned[f] = true;
+            }
+        }
+        self.assign_record_var(
+            target,
+            Some(RecValue {
+                desc,
+                values,
+                nulls,
+                src_desc: Some(dst_td),
+                empty: false,
+                fvalue_valid: sys.is_some(),
+                sys,
+                owned,
+            }),
+        );
+        Ok(true)
+    }
+
+    // The type half of rec_param_type_mod, without registering a typmod.
+    fn rec_value_type(&self, recno: Dno) -> Oid {
+        let rectypeid = self.rec_typeid(recno);
+        if rectypeid != RECORDOID {
+            return rectypeid;
+        }
+        match &self.datums[recno as usize] {
+            DatumVal::Rec(Some(rv)) => rv.src_desc.as_ref().map_or(RECORDOID, |td| td.tdtypeid),
+            _ => RECORDOID,
+        }
     }
 
     // exec_assign_value.
@@ -3471,18 +4678,40 @@ impl<'a> Estate<'a> {
     ) -> PgResult<()> {
         match &self.func.datums[target as usize] {
             PlDatum::Var(v) => {
-                let (reqtype, reqtypmod, typlen, typbyval, typisarray, notnull, refname) = (
+                let (reqtype, reqtypmod, typlen, typbyval, typisarray, notnull) = (
                     v.datatype.typoid,
                     v.datatype.atttypmod,
                     v.datatype.typlen,
                     v.datatype.typbyval,
                     v.datatype.typisarray,
                     v.notnull,
-                    v.refname.clone(),
                 );
+                let mut value = value;
+                if !isnull && typisarray && valtype == reqtype && (valtypmod == reqtypmod || reqtypmod == -1) {
+                    if let Some(obj) = arrayfuncs::adopt_transferred(value) {
+                        self.set_var_expanded(target, obj);
+                        return Ok(());
+                    }
+                }
+                if !isnull && self.var_holds_rw(target, value) {
+                    if valtype == reqtype && (valtypmod == reqtypmod || reqtypmod == -1) {
+                        // Changed in place; the assignment itself is a no-op
+                        // (pl_exec.c:5127-5131) apart from disarming a promise.
+                        if let Some(pos) = self.promise_pending.iter().position(|&d| d == target) {
+                            self.promise_pending.swap_remove(pos);
+                        }
+                        return Ok(());
+                    }
+                    // A cast reads the value like any other consumer.
+                    value = self.get_var(target)?.0;
+                }
                 let newvalue =
                     self.exec_cast_value(value, &mut isnull, valtype, valtypmod, reqtype, reqtypmod)?;
                 if isnull && notnull {
+                    let refname = match &self.func.datums[target as usize] {
+                        PlDatum::Var(v) => v.refname.as_str(),
+                        _ => "",
+                    };
                     return Err(exec_err(
                         types_error::ERRCODE_NULL_VALUE_NOT_ALLOWED,
                         format!(
@@ -3513,7 +4742,12 @@ impl<'a> Estate<'a> {
                 let DatumVal::Rec(Some(rv)) = &self.datums[recno as usize] else {
                     panic!("plpgsql exec_assign_value: rec \"{recname}\" valueless after instantiate");
                 };
-                let i = match rec_lookup_field(&rv.desc, &f.fieldname) {
+                let i = match rec_lookup_field_cached(
+                    &mut self.recfield_idx,
+                    f.dno,
+                    &rv.desc,
+                    &f.fieldname,
+                ) {
                     Some(RecFieldRef::User(i)) => i,
                     Some(RecFieldRef::Sys(_)) => {
                         return Err(exec_err(
@@ -3797,9 +5031,11 @@ impl<'a> Estate<'a> {
             let e = t.get(&query.expr_id).expect("plan ensured");
             (e.plan, e.paramnos.clone(), e.argtypes.clone())
         });
-        let (values, nulls) = self.setup_params_under_spi(query, &paramnos, &argtypes)?;
-        let cursor = SPI_cursor_open_with_paramlist(None, plan, &values, &nulls, self.readonly_func)
-            .map_err(|e| spi_ctx_err(e, &query.query, query.parse_mode))?;
+        let params = self.setup_param_list_under_spi(query, &paramnos, &argtypes, false)?;
+        spi_frame!(frame, &query.query, query.parse_mode);
+        let _live = LiveSpiExpr::set((self as *mut Estate<'a>).cast(), query);
+        let cursor = SPI_cursor_open_with_paramlist(None, plan, &params, self.readonly_func)?;
+        drop(frame);
 
         let result = self.exec_for_query(label, var, &cursor, body, true);
 
@@ -3937,8 +5173,8 @@ impl<'a> Estate<'a> {
             DatumVal::Rec(Some(rv)) => rv.values.len(),
             _ => unreachable!("tuple swap on a valueless record"),
         };
-        let mut values = vec![Datum::null(); natts];
-        let mut nulls = vec![true; natts];
+        let mut values = ::mcx::std_vec_from_elem("plpgsql", Datum::null(), natts)?;
+        let mut nulls = ::mcx::std_vec_from_elem("plpgsql", true, natts)?;
         let sys = spi::tuptable_with(tuptab, |t| {
             for f in 0..natts {
                 let (v, isnull) = spi::SPI_getbinval(&t.vals[i], &t.tupdesc, (f + 1) as i32);
@@ -3947,7 +5183,7 @@ impl<'a> Estate<'a> {
             }
             std::rc::Rc::new(RecSysAttrs::from_tuple(&t.vals[i]))
         });
-        let mut owned = vec![false; natts];
+        let mut owned = ::mcx::std_vec_from_elem("plpgsql", false, natts)?;
         {
             let DatumVal::Rec(Some(rv)) = &self.datums[recno as usize] else {
                 unreachable!("checked above")
@@ -4010,7 +5246,23 @@ impl<'a> Estate<'a> {
         let td = spi::tuptable_with(tuptab, |t| {
             tupdesc::CreateTupleDescCopy(self.datum_ctx.mcx(), &t.tupdesc)
         })?;
-        Ok((RecDesc::from_tupdesc(&td), std::rc::Rc::new(td)))
+        Ok((RecDesc::from_tupdesc(&td)?, std::rc::Rc::new(td)))
+    }
+
+    // make_expanded_record_from_typeid (pl_exec.c:7141 -> expandedrecord.c):
+    // the declared type's CURRENT typcache descriptor, pinned by refcount,
+    // never a descriptor kept from an earlier assignment (ALTER TYPE in
+    // between would otherwise coerce into the old attribute types).
+    fn declared_rec_tupdesc(&self, base: Oid) -> PgResult<std::rc::Rc<types_tuple::TupleDescData<'static>>> {
+        let entry = typcache::lookup_type_cache(base, typcache::TYPECACHE_TUPDESC)?;
+        match entry.tupdesc() {
+            Some(td) => Ok(td),
+            None => Ok(std::rc::Rc::new(typcache::lookup_rowtype_tupdesc_copy(
+                self.datum_ctx.mcx(),
+                base,
+                -1,
+            )?)),
+        }
     }
 
     // exec_move_row with a NULL source tuple.
@@ -4022,27 +5274,20 @@ impl<'a> Estate<'a> {
                 // no per-field coercion, no domain check.
                 self.revalidate_rectypeid(var)?;
                 let base = Self::rec_base_typeid(self.rec_typeid(var))?;
-                let td = match &self.datums[var as usize] {
-                    DatumVal::Rec(Some(RecValue { src_desc: Some(td), .. })) => td.clone(),
-                    _ => std::rc::Rc::new(typcache::lookup_rowtype_tupdesc_copy(
-                        self.datum_ctx.mcx(),
-                        base,
-                        -1,
-                    )?),
-                };
-                let desc = RecDesc::from_tupdesc(&td);
+                let td = self.declared_rec_tupdesc(base)?;
+                let desc = RecDesc::from_tupdesc(&td)?;
                 let n = desc.types.len();
                 self.assign_record_var(
                     var,
                     Some(RecValue {
                         desc,
-                        values: vec![Datum::null(); n],
-                        nulls: vec![true; n],
+                        values: ::mcx::std_vec_from_elem("plpgsql", Datum::null(), n)?,
+                        nulls: ::mcx::std_vec_from_elem("plpgsql", true, n)?,
                         src_desc: Some(td),
                         empty: false,
                         sys: None,
                         fvalue_valid: false,
-                        owned: vec![false; n],
+                        owned: ::mcx::std_vec_from_elem("plpgsql", false, n)?,
                     }),
                 );
                 Ok(())
@@ -4057,8 +5302,8 @@ impl<'a> Estate<'a> {
                     var,
                     &desc,
                     src_desc,
-                    &vec![Datum::null(); n],
-                    &vec![true; n],
+                    &::mcx::std_vec_from_elem("plpgsql", Datum::null(), n)?,
+                    &::mcx::std_vec_from_elem("plpgsql", true, n)?,
                     None,
                     false,
                     false,
@@ -4081,8 +5326,8 @@ impl<'a> Estate<'a> {
             PlDatum::Rec(_) => {
                 let (desc, src_desc) = self.rec_desc_of(tuptab)?;
                 let natts = desc.types.len();
-                let mut values = vec![Datum::null(); natts];
-                let mut nulls = vec![true; natts];
+                let mut values = ::mcx::std_vec_from_elem("plpgsql", Datum::null(), natts)?;
+                let mut nulls = ::mcx::std_vec_from_elem("plpgsql", true, natts)?;
                 let sys = spi::tuptable_with(tuptab, |t| {
                     for f in 0..natts {
                         let (v, isnull) =
@@ -4145,7 +5390,7 @@ impl<'a> Estate<'a> {
         let rectypeid = self.rec_typeid(recno);
         if rectypeid == RECORDOID {
             let natts = srcdesc.types.len();
-            let mut out_values = values.to_vec();
+            let mut out_values = ::mcx::std_vec_from_slice("plpgsql", &values)?;
             for f in 0..natts {
                 if !srcdesc.dropped[f] {
                     out_values[f] = self.assign_copy_to_datum_ctx(
@@ -4164,7 +5409,7 @@ impl<'a> Estate<'a> {
                 Some(RecValue {
                     desc: srcdesc.clone(),
                     values: out_values,
-                    nulls: nulls.to_vec(),
+                    nulls: ::mcx::std_vec_from_slice("plpgsql", &nulls)?,
                     src_desc: Some(src_tupdesc),
                     empty: false,
                     fvalue_valid: sys.is_some(),
@@ -4178,15 +5423,8 @@ impl<'a> Estate<'a> {
         self.revalidate_rectypeid(recno)?;
         let rectypeid = self.rec_typeid(recno);
         let base = Self::rec_base_typeid(rectypeid)?;
-        let var_td = match &self.datums[recno as usize] {
-            DatumVal::Rec(Some(RecValue { src_desc: Some(td), .. })) => td.clone(),
-            _ => std::rc::Rc::new(typcache::lookup_rowtype_tupdesc_copy(
-                self.datum_ctx.mcx(),
-                base,
-                -1,
-            )?),
-        };
-        let dst = RecDesc::from_tupdesc(&var_td);
+        let var_td = self.declared_rec_tupdesc(base)?;
+        let dst = RecDesc::from_tupdesc(&var_td)?;
         let sys = if rectypeid == src_tupdesc.tdtypeid || compatible_tupdescs(&src_tupdesc, &var_td) {
             sys
         } else {
@@ -4202,8 +5440,8 @@ impl<'a> Estate<'a> {
         } else {
             None
         };
-        let mut newvalues = vec![Datum::null(); vtd_natts];
-        let mut newnulls = vec![true; vtd_natts];
+        let mut newvalues = ::mcx::std_vec_from_elem("plpgsql", Datum::null(), vtd_natts)?;
+        let mut newnulls = ::mcx::std_vec_from_elem("plpgsql", true, vtd_natts)?;
         let mut anum = 0usize;
         for fnum in 0..vtd_natts {
             if dst.dropped[fnum] {
@@ -4222,7 +5460,7 @@ impl<'a> Estate<'a> {
                 }
                 (Datum::null(), true, UNKNOWNOID, -1)
             };
-            let v = self.exec_cast_value(
+            let cast = self.exec_cast_value(
                 value,
                 &mut isnull,
                 valtype,
@@ -4230,8 +5468,15 @@ impl<'a> Estate<'a> {
                 dst.types[fnum],
                 dst.typmods[fnum],
             )?;
-            newvalues[fnum] =
-                self.assign_copy_to_datum_ctx(v, isnull, dst.typlens[fnum], dst.typbyvals[fnum])?;
+            // A cast result can live in its step's retained scratch, which the
+            // next field cast through the same entry overwrites; C keeps every
+            // field's result alive in eval_mcontext until the record is built.
+            newvalues[fnum] = if !isnull && !dst.typbyvals[fnum] && cast.as_usize() != value.as_usize() {
+                // SAFETY: a live non-null by-ref datum of the target column's typlen.
+                unsafe { execexpr::agg_datum_copy(self.eval_ctx.mcx(), cast, dst.typlens[fnum])? }
+            } else {
+                cast
+            };
             newnulls[fnum] = isnull;
         }
         // Unassigned source attributes, dropped columns skipped
@@ -4249,6 +5494,16 @@ impl<'a> Estate<'a> {
         // leaves the variable's old value intact.
         if domain_check && base != rectypeid {
             self.rec_domain_check_fields(rectypeid, &var_td, &newvalues, &newnulls)?;
+        }
+        for fnum in 0..vtd_natts {
+            if !dst.dropped[fnum] {
+                newvalues[fnum] = self.assign_copy_to_datum_ctx(
+                    newvalues[fnum],
+                    newnulls[fnum],
+                    dst.typlens[fnum],
+                    dst.typbyvals[fnum],
+                )?;
+            }
         }
         let owned = (0..vtd_natts)
             .map(|f| !dst.dropped[f] && !newnulls[f] && !dst.typbyvals[f])
@@ -4289,8 +5544,8 @@ impl<'a> Estate<'a> {
         }
         let mcx = if scratch { self.eval_ctx.mcx() } else { self.datum_ctx.mcx() };
         let mut td = tupdesc::CreateTemplateTupleDesc(mcx, n as i32)?;
-        let mut values = Vec::with_capacity(n);
-        let mut nulls = Vec::with_capacity(n);
+        let mut values = ::mcx::std_vec_with_capacity("plpgsql", n)?;
+        let mut nulls = ::mcx::std_vec_with_capacity("plpgsql", n)?;
         for (i, &dno) in varnos.iter().enumerate() {
             let (typoid, typmod, current) = match &self.func.datums[dno as usize] {
                 PlDatum::Var(_) => {
@@ -4318,7 +5573,7 @@ impl<'a> Estate<'a> {
         }
         td.tdtypeid = RECORDOID;
         td.tdtypmod = -1;
-        let desc = RecDesc::from_tupdesc(&td);
+        let desc = RecDesc::from_tupdesc(&td)?;
         if !scratch {
             for i in 0..n {
                 values[i] =
@@ -4371,10 +5626,10 @@ impl<'a> Estate<'a> {
         let tup_typmod = td_hdr.typmod();
         let t_len = td_hdr.datum_length();
         let tupdesc = typcache::lookup_rowtype_tupdesc_copy(mcx, tup_type, tup_typmod)?;
-        let desc = RecDesc::from_tupdesc(&tupdesc);
+        let desc = RecDesc::from_tupdesc(&tupdesc)?;
         let natts = desc.types.len();
-        let mut values = vec![Datum::null(); natts];
-        let mut nulls = vec![true; natts];
+        let mut values = ::mcx::std_vec_from_elem("plpgsql", Datum::null(), natts)?;
+        let mut nulls = ::mcx::std_vec_from_elem("plpgsql", true, natts)?;
         // SAFETY: MAXALIGN'd detoasted image of datum_length() bytes.
         let htd = unsafe {
             types_tuple::HeapTupleData::from_raw_parts(
@@ -4396,6 +5651,21 @@ impl<'a> Estate<'a> {
         if retvarno >= 0 {
             match &self.func.datums[retvarno as usize] {
                 PlDatum::Var(v) => {
+                    if self.caller_adopts
+                        && v.datatype.typisarray
+                        && v.datatype.typoid == self.func.fn_rettype
+                    {
+                        if let DatumVal::Var { isnull: false, exp: exp @ Some(_), .. } =
+                            &mut self.datums[retvarno as usize]
+                        {
+                            let obj = exp.take().expect("matched Some");
+                            self.retval = obj.rw_datum();
+                            self.ret_expanded = Some(obj);
+                            self.retisnull = false;
+                            self.rettype = v.datatype.typoid;
+                            return Ok(());
+                        }
+                    }
                     let (value, isnull) = self.get_var(retvarno)?;
                     self.retval = value;
                     self.retisnull = isnull;
@@ -4416,15 +5686,19 @@ impl<'a> Estate<'a> {
                         // ret_rec path must not leave retval unset (null deref in
                         // record_out).
                         let (d, isnull) = self.rec_as_composite_datum(retvarno)?;
+                        // exec_eval_datum REC arm: a RECORD-declared rec
+                        // reports the held value's rowtype (erh->er_typeid),
+                        // so the exit cast can find a cast from it.
+                        let (rettype, _) = self.rec_param_type_mod(retvarno)?;
                         self.ret_rec = None;
                         self.retval = d;
                         self.retisnull = isnull;
-                        self.rettype = rectypeid;
+                        self.rettype = rettype;
                         return Ok(());
                     }
                     match &self.datums[retvarno as usize] {
                         DatumVal::Rec(Some(rv)) if !rv.empty => {
-                            self.ret_rec = Some(rv.clone());
+                            self.ret_rec = Some(rv.try_clone()?);
                             self.retisnull = false;
                             self.rettype =
                                 if rectypeid != RECORDOID { rectypeid } else { RECORDOID };
@@ -4657,7 +5931,7 @@ impl<'a> Estate<'a> {
         };
 
         if *elog_level >= crate::gram::ELOG_ERROR {
-            let mut b = elog::ereport(ERROR).errmsg_internal(err_message);
+            let mut b = elog::ereport(ERROR).errverbatim().errmsg_internal(err_message);
             if let Some(c) = err_code {
                 b = b.errcode(c);
             }
@@ -4686,7 +5960,7 @@ impl<'a> Estate<'a> {
             crate::gram::LOG => types_error::LOG,
             _ => types_error::DEBUG1,
         };
-        let mut b = elog::ereport(level).errmsg_internal(err_message);
+        let mut b = elog::ereport(level).errverbatim().errmsg_internal(err_message);
         if let Some(c) = err_code {
             b = b.errcode(c);
         }
@@ -4774,10 +6048,16 @@ impl<'a> Estate<'a> {
             0
         };
 
-        let (values, nulls) = self.setup_params_under_spi(expr, &paramnos, &argtypes)?;
-        let _frame = FrameGuard::push_spi(&expr.query, expr.parse_mode);
-        let rc = spi::SPI_execute_plan_with_paramlist(plan, &values, &nulls, self.readonly_func, tcount)
+        let params = self.setup_param_list_under_spi(expr, &paramnos, &argtypes, true)?;
+        let mut fetch_arg = self.spi_fetch_arg(&paramnos);
+        let params = spi_param_list(&params, &mut fetch_arg);
+        spi_frame!(frame, &expr.query, expr.parse_mode);
+        let live = LiveSpiExpr::set((self as *mut Estate<'a>).cast(), expr);
+        let rc = spi::SPI_execute_plan_with_paramlist(plan, params, self.readonly_func, tcount)
             .map_err(|e| spi_ctx_err(e, &expr.query, expr.parse_mode))?;
+        drop(live);
+        // spi.c:2825 pops _SPI_error_callback before the INTO assignment runs.
+        drop(frame);
 
         match rc {
             spi::SPI_OK_SELECT
@@ -4902,15 +6182,15 @@ impl<'a> Estate<'a> {
             None
         };
 
-        let (values, nulls) = self.setup_params_under_spi(expr, &paramnos, &argtypes)?;
+        let params = self.setup_param_list_under_spi(expr, &paramnos, &argtypes, true)?;
+        let mut fetch_arg = self.spi_fetch_arg(&paramnos);
+        let params = spi_param_list(&params, &mut fetch_arg);
         let before_lxid = current_lxid();
-        let frame = FrameGuard::push_spi(&expr.query, expr.parse_mode);
+        spi_frame!(frame, &expr.query, expr.parse_mode);
+        let _live = LiveSpiExpr::set((self as *mut Estate<'a>).cast(), expr);
         let rc = spi::SPI_execute_plan_extended(
             plan,
-            &values,
-            &nulls,
-            // C exec_stmt_call: options.params = setup_param_list (hooked).
-            true,
+            params,
             self.readonly_func,
             true,
             false,
@@ -5175,9 +6455,9 @@ impl<'a> Estate<'a> {
         stmt_mcx: Mcx<'_>,
     ) -> PgResult<(Vec<Oid>, Vec<Datum>, Vec<bool>)> {
         let n = params.len();
-        let mut ptypes = Vec::with_capacity(n);
-        let mut pvalues = Vec::with_capacity(n);
-        let mut pnulls = Vec::with_capacity(n);
+        let mut ptypes = ::mcx::std_vec_with_capacity("plpgsql", n)?;
+        let mut pvalues = ::mcx::std_vec_with_capacity("plpgsql", n)?;
+        let mut pnulls = ::mcx::std_vec_with_capacity("plpgsql", n)?;
         for p in params {
             self.ensure_plan(p, CURSOR_OPT_PARALLEL_OK)?;
             let (mut v, isnull, mut t, _m) = self.exec_eval_expr(p)?;
@@ -5229,8 +6509,7 @@ impl<'a> Estate<'a> {
         let stmt_ctx = MemoryContext::new("PLpgSQL EXECUTE params");
         let (ptypes, pvalues, pnulls) = self.exec_eval_using_params(params, stmt_ctx.mcx())?;
 
-        let _frame =
-            FrameGuard::push_spi(&querystr, parser_seams::RawParseMode::RAW_PARSE_DEFAULT);
+        spi_frame!(frame, &querystr, parser_seams::RawParseMode::RAW_PARSE_DEFAULT);
         let rc = spi::SPI_execute_extended(
             &querystr,
             &ptypes,
@@ -5241,6 +6520,7 @@ impl<'a> Estate<'a> {
             None,
         )
         .map_err(|e| spi_ctx_err(e, &querystr, parser_seams::RawParseMode::RAW_PARSE_DEFAULT))?;
+        drop(frame);
 
         match rc {
             spi::SPI_OK_SELECT
@@ -5386,7 +6666,7 @@ impl<'a> Estate<'a> {
         if self.tuple_store.is_none() {
             self.init_tuple_store()?;
         }
-        let dst = RecDesc::from_tupdesc(self.tuple_store_desc.as_ref().expect("initialized"));
+        let dst = RecDesc::from_tupdesc(self.tuple_store_desc.as_ref().expect("initialized"))?;
         let natts = dst.types.len();
 
         if retvarno >= 0 {
@@ -5471,8 +6751,8 @@ impl<'a> Estate<'a> {
                     self.put_tuple_store_values(&v, &n)?;
                 } else {
                     self.put_tuple_store_values(
-                        &vec![Datum::null(); natts],
-                        &vec![true; natts],
+                        &::mcx::std_vec_from_elem("plpgsql", Datum::null(), natts)?,
+                        &::mcx::std_vec_from_elem("plpgsql", true, natts)?,
                     )?;
                 }
             } else {
@@ -5586,7 +6866,7 @@ impl<'a> Estate<'a> {
         self.exec_eval_cleanup();
         let stmt_ctx = MemoryContext::new("PLpgSQL RETURN QUERY EXECUTE params");
         let (ptypes, pvalues, pnulls) = self.exec_eval_using_params(params, stmt_ctx.mcx())?;
-        let _frame = FrameGuard::push_spi(&querystr, parser_seams::RawParseMode::RAW_PARSE_DEFAULT);
+        spi_frame!(_frame, &querystr, parser_seams::RawParseMode::RAW_PARSE_DEFAULT);
         // must_return_tuples = true (pl_exec.c:3626): the SPI level
         // describes its own errors — "empty query does not return
         // tuples" is raised before its callback names a query, so it
@@ -5656,9 +6936,11 @@ impl<'a> Estate<'a> {
             let e = t.get(&query.expr_id).expect("plan ensured");
             (e.plan, e.paramnos.clone(), e.argtypes.clone())
         });
-        let (values, nulls) = self.setup_params_under_spi(query, &paramnos, &argtypes)?;
-        let cursor = spi::SPI_cursor_open_with_paramlist(curname, plan, &values, &nulls, self.readonly_func)
-            .map_err(|e| spi_ctx_err(e, &query.query, query.parse_mode))?;
+        let params = self.setup_param_list_under_spi(query, &paramnos, &argtypes, false)?;
+        spi_frame!(frame, &query.query, query.parse_mode);
+        let _live = LiveSpiExpr::set((self as *mut Estate<'a>).cast(), query);
+        let cursor = spi::SPI_cursor_open_with_paramlist(curname, plan, &params, self.readonly_func)?;
+        drop(frame);
         if curname.is_none() {
             // Verify assignability before storing the portal name
             // (pl_exec.c:4803-4807 -> exec_check_assignable).
@@ -5683,7 +6965,7 @@ impl<'a> Estate<'a> {
     ) -> PgResult<i32> {
         let curname = self.cursor_var_name(curvar)?;
         if let Some(n) = &curname {
-            if spi::SPI_cursor_find(n).is_some() {
+            if spi::SPI_cursor_name_in_use(n) {
                 return Err(exec_err(
                     types_error::ERRCODE_DUPLICATE_CURSOR,
                     format!("cursor \"{n}\" already in use"),
@@ -5755,6 +7037,7 @@ impl<'a> Estate<'a> {
         // SPI_cursor_open copies the values into the portal (copyParamList).
         let stmt_ctx = MemoryContext::new("PLpgSQL OPEN params");
         let (ptypes, pvalues, pnulls) = self.exec_eval_using_params(params, stmt_ctx.mcx())?;
+        spi_frame!(frame, &querystr, parser_seams::RawParseMode::RAW_PARSE_DEFAULT);
         let cursor = spi::SPI_cursor_open_extended(
             curname,
             &querystr,
@@ -5763,8 +7046,8 @@ impl<'a> Estate<'a> {
             &pnulls,
             self.readonly_func,
             cursor_options,
-        )
-        .map_err(|e| spi_ctx_err(e, &querystr, parser_seams::RawParseMode::RAW_PARSE_DEFAULT))?;
+        )?;
+        drop(frame);
         Ok(cursor.portal)
     }
 
@@ -5836,7 +7119,7 @@ impl<'a> Estate<'a> {
     ) -> PgResult<i32> {
         let curname = self.cursor_var_name(curvar)?;
         if let Some(n) = &curname {
-            if spi::SPI_cursor_find(n).is_some() {
+            if spi::SPI_cursor_name_in_use(n) {
                 return Err(exec_err(
                     types_error::ERRCODE_DUPLICATE_CURSOR,
                     format!("cursor \"{n}\" already in use"),
@@ -5873,10 +7156,11 @@ impl<'a> Estate<'a> {
             let e = t.get(&cq.expr_id).expect("plan ensured");
             (e.plan, e.paramnos.clone(), e.argtypes.clone())
         });
-        let (values, nulls) = self.setup_params_under_spi(cq, &paramnos, &argtypes)?;
+        let params = self.setup_param_list_under_spi(cq, &paramnos, &argtypes, false)?;
+        spi_frame!(frame, &cq.query, cq.parse_mode);
         let cursor =
-            spi::SPI_cursor_open_with_paramlist(curname.as_deref(), plan, &values, &nulls, self.readonly_func)
-                .map_err(|e| spi_ctx_err(e, &cq.query, cq.parse_mode))?;
+            spi::SPI_cursor_open_with_paramlist(curname.as_deref(), plan, &params, self.readonly_func)?;
+        drop(frame);
         if curname.is_none() {
             let name = cursor.portal.borrow().name.as_str().to_string();
             self.assign_text_var(curvar, &name)?;
@@ -5946,8 +7230,8 @@ pub(crate) fn convert_values_by_position(
         )
     }
     let n = dst.types.len();
-    let mut out_values = vec![Datum::null(); n];
-    let mut out_nulls = vec![true; n];
+    let mut out_values = ::mcx::std_vec_from_elem("plpgsql", Datum::null(), n)?;
+    let mut out_nulls = ::mcx::std_vec_from_elem("plpgsql", true, n)?;
     let mut j = 0usize;
     let mut nincols = 0;
     let mut noutcols = 0;
@@ -6074,12 +7358,12 @@ fn unpack_sql_state(code: SqlState) -> String {
     String::from_utf8_lossy(&types_error::unpack_sqlstate(code)).into_owned()
 }
 
-// exception_matches_conditions: OTHERS (state 0) matches everything except
+// exception_matches_conditions: OTHERS (state -1) matches everything except
 // query_canceled and assert_failure; category codes match their class.
 fn exception_matches_conditions(e: &PgError, conds: &[PlCondition]) -> bool {
     for c in conds {
         let cs = c.sqlerrstate;
-        if cs.0 == 0 {
+        if cs == PLPGSQL_OTHERS {
             if e.sqlstate != types_error::ERRCODE_QUERY_CANCELED
                 && e.sqlstate != types_error::ERRCODE_ASSERT_FAILURE
             {
@@ -6140,7 +7424,7 @@ fn outer_context_at_catch(estate: &Estate<'_>) -> Option<String> {
     (!rest.is_empty()).then(|| rest.to_string())
 }
 
-fn frame_context_line_of(frame: &FrameShared) -> String {
+pub(crate) fn frame_context_line_of(frame: &FrameShared) -> String {
     let sig = &frame.sig;
     // err_var lineno wins over err_stmt's (plpgsql_exec_error_callback).
     let lineno = match frame.var_lineno.get() {
@@ -6219,6 +7503,41 @@ fn array_datum_copy<'mcx>(mcx: Mcx<'mcx>, value: Datum) -> PgResult<mcx::PgVec<'
 pub(crate) mod cfi_tests {
     use super::*;
 
+    #[test]
+    fn spi_context_suppresses_immediate_complete_entries() {
+        let mode = parser_seams::RawParseMode::RAW_PARSE_DEFAULT;
+        for query in ["select 1/0", "select\n1/0"] {
+            let line = spi_context_line(query, mode);
+            for prefix in ["", "PL/pgSQL function inner_fn() line 1 at EXECUTE\n"] {
+                let context = format!("{prefix}{line}");
+                let mut e = exec_err(types_error::ERRCODE_DIVISION_BY_ZERO, "division by zero".into());
+                e.context = Some(context.clone());
+                spi_error_context(&mut e, query, mode);
+                assert_eq!(e.context.as_deref(), Some(context.as_str()));
+            }
+        }
+    }
+
+    #[test]
+    fn spi_context_preserves_recursive_entries_and_suffix_fragments() {
+        let mode = parser_seams::RawParseMode::RAW_PARSE_DEFAULT;
+        let query = "select\n1/0";
+        let line = spi_context_line(query, mode);
+        for context in [
+            format!("{line}\nPL/pgSQL function recursive_fn() line 1 at EXECUTE"),
+            format!("prefix {line}"),
+            String::new(),
+        ] {
+            let mut e = exec_err(types_error::ERRCODE_DIVISION_BY_ZERO, "division by zero".into());
+            if !context.is_empty() {
+                e.context = Some(context.clone());
+            }
+            spi_error_context(&mut e, query, mode);
+            let expected = if context.is_empty() { line.clone() } else { format!("{context}\n{line}") };
+            assert_eq!(e.context.as_deref(), Some(expected.as_str()));
+        }
+    }
+
     pub(crate) fn tiny_function() -> PlFunction {
         PlFunction {
             fn_signature: "inline_code_block".into(),
@@ -6258,6 +7577,29 @@ pub(crate) mod cfi_tests {
         }
     }
 
+    #[test]
+    fn exception_conditions_distinguish_success_from_others() {
+        let matches = |condition, error| {
+            exception_matches_conditions(
+                &PgError::error("test".to_string()).with_sqlstate(error),
+                &[PlCondition { sqlerrstate: condition, condname: String::new() }],
+            )
+        };
+        let success = types_error::make_sqlstate(*b"00000");
+        let division = types_error::ERRCODE_DIVISION_BY_ZERO;
+        let others = SqlState(-1);
+        assert!(!matches(success, division));
+        assert!(matches(others, division));
+        assert!(matches(division, division));
+        assert!(matches(types_error::make_sqlstate(*b"22000"), division));
+        assert!(!matches(types_error::make_sqlstate(*b"22P02"), division));
+        for error in [types_error::ERRCODE_QUERY_CANCELED, types_error::ERRCODE_ASSERT_FAILURE] {
+            assert!(!matches(others, error));
+            assert!(!matches(success, error));
+            assert!(matches(error, error));
+        }
+    }
+
     // Witness for pl_exec.c:2001-2010's empty-body hangup guard: with the
     // interrupt flag raised, exec_stmts on an EMPTY statement list (a `LOOP`
     // with an empty body iterates exactly this) must reach
@@ -6273,7 +7615,7 @@ pub(crate) mod cfi_tests {
         });
 
         let func = tiny_function();
-        let mut estate = Estate::new(&func, false, true);
+        let mut estate = Estate::new(&func, false, true).unwrap();
 
         init_small::globals::SetInterruptPending(false);
         assert_eq!(estate.exec_stmts(&[]).unwrap(), RC_OK, "no interrupt: RC_OK");
@@ -6291,7 +7633,7 @@ pub(crate) mod cfi_tests {
     #[test]
     fn raise_message_literal_multibyte_not_widened() {
         let func = tiny_function();
-        let mut estate = Estate::new(&func, false, true);
+        let mut estate = Estate::new(&func, false, true).unwrap();
         let stmt = PlStmt::Raise {
             lineno: 1,
             elog_level: crate::gram::ELOG_ERROR,
@@ -6310,7 +7652,7 @@ pub(crate) mod cfi_tests {
     #[test]
     fn raise_message_param_underrun_is_internal_error() {
         let func = tiny_function();
-        let mut estate = Estate::new(&func, false, true);
+        let mut estate = Estate::new(&func, false, true).unwrap();
         let stmt = PlStmt::Raise {
             lineno: 1,
             elog_level: crate::gram::ELOG_ERROR,
@@ -6361,7 +7703,7 @@ pub(crate) mod cfi_tests {
             cursor_options: 0,
         }));
 
-        let mut estate = Estate::new(&func, false, true);
+        let mut estate = Estate::new(&func, false, true).unwrap();
         assert_eq!(estate.param_datum_type(0).unwrap(), INT8OID);
     }
 
@@ -6369,6 +7711,7 @@ pub(crate) mod cfi_tests {
     // pl_exec.c:5243's refusal to assign them (pre-fix: "has no field").
     #[test]
     fn record_fields_include_system_attributes() {
+        // The rec field reads look up pg_type shapes: install the seams here, never rely on a sibling (D2523).
         install_type_seams();
         const INT4OID: Oid = 23;
         const TIDOID: Oid = 27;
@@ -6391,7 +7734,7 @@ pub(crate) mod cfi_tests {
                 fieldname: name.into(),
             }));
         }
-        let mut estate = Estate::new(&func, false, true);
+        let mut estate = Estate::new(&func, false, true).unwrap();
         let mcx = estate.datum_mcx();
         let mut td = tupdesc::CreateTemplateTupleDesc(mcx, 1).unwrap();
         tupdesc::TupleDescInitEntry(&mut td, 1, Some("f1"), INT4OID, -1, 0).unwrap();
@@ -6399,7 +7742,7 @@ pub(crate) mod cfi_tests {
         tup.t_self = types_tuple::ItemPointerData::new(0, 1);
         tup.t_tableOid = 4242;
         let bound = |sys: Option<RecSysAttrs>| RecValue {
-            desc: RecDesc::from_tupdesc(&td),
+            desc: RecDesc::from_tupdesc(&td).unwrap(),
             values: vec![Datum::from_i32(7)],
             nulls: vec![false],
             owned: vec![false],
@@ -6429,11 +7772,53 @@ pub(crate) mod cfi_tests {
         assert_eq!(estate.datum_as_param(1, None).unwrap(), (Datum::null(), true));
     }
 
+    // A field planned as text that now holds an int4 keeps its current type
+    // and is not constant (errorhold_d2834_plpgsql_lazy_spi_params: the served
+    // run read the text slot as an int); a field still of its planned type is.
+    #[test]
+    fn a_field_whose_type_changed_since_planning_is_not_constant() {
+        install_type_seams();
+        const INT4OID: Oid = 23;
+        let mut func = tiny_function();
+        func.datums.push(PlDatum::Rec(PlRec {
+            dno: 0,
+            refname: "r".into(),
+            lineno: 1,
+            rectypeid: RECORDOID,
+            datatype: None,
+            isconst: false,
+            notnull: false,
+            default_val: None,
+        }));
+        func.datums.push(PlDatum::RecField(PlRecField { dno: 1, recparentno: 0, fieldname: "f".into() }));
+        let mut estate = Estate::new(&func, false, true).unwrap();
+        let mcx = estate.datum_mcx();
+        let mut td = tupdesc::CreateTemplateTupleDesc(mcx, 1).unwrap();
+        tupdesc::TupleDescInitEntry(&mut td, 1, Some("f"), INT4OID, -1, 0).unwrap();
+        estate.datums[0] = DatumVal::Rec(Some(RecValue {
+            desc: RecDesc::from_tupdesc(&td).unwrap(),
+            values: vec![Datum::from_i32(7)],
+            nulls: vec![false],
+            owned: vec![false],
+            src_desc: Some(std::rc::Rc::new(tupdesc::CreateTupleDescCopy(mcx, &td).unwrap())),
+            empty: false,
+            fvalue_valid: false,
+            sys: None,
+        }));
+        for speculative in [true, false] {
+            let p = estate.setup_param_list(&[1], &[types_core::InvalidOid, TEXTOID], speculative).unwrap();
+            assert_eq!((p[1].ptype, p[1].pflags, p[1].value), (INT4OID, 0, Datum::from_i32(7)));
+            let p = estate.setup_param_list(&[1], &[types_core::InvalidOid, INT4OID], speculative).unwrap();
+            assert_eq!((p[1].ptype, p[1].pflags), (INT4OID, PARAM_FLAG_CONST));
+        }
+    }
+
     // Whole-record assignment between recs carries the source tuple's system
     // columns while it is valid; r := r is a no-op; a field assignment stops
     // copies, not direct reads (pre-fix the copy read (4294967295,0)).
     #[test]
     fn whole_record_assignment_carries_the_source_tuple() {
+        // The rec field reads look up pg_type shapes: install the seams here, never rely on a sibling (D2523).
         install_type_seams();
         const INT4OID: Oid = 23;
         const TIDOID: Oid = 27;
@@ -6455,21 +7840,24 @@ pub(crate) mod cfi_tests {
         for (dno, recparentno, name) in fields {
             func.datums.push(PlDatum::RecField(PlRecField { dno, recparentno, fieldname: name.into() }));
         }
-        let mut estate = Estate::new(&func, false, true);
+        let mut estate = Estate::new(&func, false, true).unwrap();
         let mcx = estate.datum_mcx();
         let mut td = tupdesc::CreateTemplateTupleDesc(mcx, 1).unwrap();
         tupdesc::TupleDescInitEntry(&mut td, 1, Some("f1"), INT4OID, -1, 0).unwrap();
         let mut tup = heaptuple::heap_form_tuple(mcx, &td, &[Datum::from_i32(7)], &[false]).unwrap();
         tup.t_self = types_tuple::ItemPointerData::new(0, 1);
         tup.t_tableOid = 4242;
+        let tuple_identity = &tup as *const _ as usize;
+        let mut sys = RecSysAttrs::from_tuple(&tup);
+        sys.trigger_tuple = Some(tuple_identity);
         estate.datums[0] = DatumVal::Rec(Some(RecValue {
-            desc: RecDesc::from_tupdesc(&td),
+            desc: RecDesc::from_tupdesc(&td).unwrap(),
             values: vec![Datum::from_i32(7)],
             nulls: vec![false],
             owned: vec![false],
             src_desc: Some(std::rc::Rc::new(tupdesc::CreateTupleDescCopy(mcx, &td).unwrap())),
             empty: false,
-            sys: Some(std::rc::Rc::new(RecSysAttrs::from_tuple(&tup))),
+            sys: Some(std::rc::Rc::new(sys)),
             fvalue_valid: true,
         }));
         let ctid_of = |estate: &mut Estate<'_>, dno: Dno| -> Option<(u32, u16)> {
@@ -6488,7 +7876,16 @@ pub(crate) mod cfi_tests {
             estate.exec_assign_value(target, v, isnull, t, m).unwrap();
         };
 
+        let original_tuple = |estate: &Estate<'_>, dno: usize| {
+            let DatumVal::Rec(Some(rv)) = &estate.datums[dno] else { unreachable!() };
+            rv.try_clone().unwrap().original_trigger_tuple(&td)
+        };
+        assert_eq!(original_tuple(&estate, 0), Some(tuple_identity));
         assign(&mut estate, 1, 0);
+        assert_eq!(original_tuple(&estate, 1), Some(tuple_identity));
+        estate.exec_assign_value(4, Datum::from_i32(7), false, INT4OID, -1).unwrap();
+        assert_eq!(original_tuple(&estate, 0), None);
+        assert_eq!(original_tuple(&estate, 1), Some(tuple_identity));
         assert_eq!(ctid_of(&mut estate, 2), Some((0, 1)));
         assert_eq!(estate.datum_as_param(3, Some(OIDOID)).unwrap(), (Datum::from_oid(4242), false));
 
@@ -6509,7 +7906,7 @@ pub(crate) mod cfi_tests {
         install_type_seams();
 
         let func = tiny_function();
-        let mut estate = Estate::new(&func, false, true);
+        let mut estate = Estate::new(&func, false, true).unwrap();
         let err = match estate.build_cast_entry(INTERNALOID, -1, TEXTOID, -1) {
             Ok(_) => panic!("internal -> text was given a cast entry"),
             Err(e) => e,
@@ -6624,6 +8021,7 @@ pub(crate) mod cfi_tests {
             rd_amcache_hash: Default::default(),
             rd_amcache_gin: Default::default(),
             rd_amcache_spgist: Default::default(),
+            rd_amcache_bloom: Default::default(),
             rd_support: mcx::PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
@@ -6723,7 +8121,7 @@ pub(crate) mod cfi_tests {
             notnull: false,
             default_val: None,
         }));
-        let mut estate = Estate::new(&func, false, true);
+        let mut estate = Estate::new(&func, false, true).unwrap();
 
         estate.revalidate_rectypeid(0).unwrap();
         assert_eq!(estate.rec_typeid(0), COMP_OLD);
@@ -6744,7 +8142,7 @@ pub(crate) mod cfi_tests {
         estate.revalidate_rectypeid(0).unwrap();
         assert_eq!(estate.rec_typeid(0), COMP_NEW);
 
-        let mut estate2 = Estate::new(&func, false, true);
+        let mut estate2 = Estate::new(&func, false, true).unwrap();
         assert_eq!(estate2.rec_typeid(0), COMP_OLD);
         estate2.revalidate_rectypeid(0).unwrap();
         assert_eq!(estate2.rec_typeid(0), COMP_NEW);
@@ -6777,13 +8175,14 @@ pub(crate) mod cfi_tests {
     #[test]
     fn simple_expr_restores_portal_snapshot_before_plan_use() {
         let func = tiny_function();
-        let mut estate = Estate::new(&func, false, false);
+        let mut estate = Estate::new(&func, false, false).unwrap();
         let expr = PlExpr {
             query: "1".into(),
             parse_mode: parser_seams::RawParseMode::RAW_PARSE_PLPGSQL_EXPR,
             ns: 0,
-            expr_id: 0xF5F5_0001,
+            expr_id: crate::comp::alloc_expr_id(),
             target_param: -1,
+            target_is_local: false,
         };
         EXPR_PLANS.with(|t| {
             t.borrow_mut().insert(
@@ -6800,6 +8199,7 @@ pub(crate) mod cfi_tests {
                         arg_dnos: Vec::new(),
                         recs: Vec::new(),
                         valueless: Vec::new(),
+                        recfields: Vec::new(),
                         resolve_option: parser_small1::PlpgsqlResolveOption::Error,
                     }),
                     simple: SimpleState::Unknown,
@@ -6808,8 +8208,84 @@ pub(crate) mod cfi_tests {
         });
         let r = estate.exec_eval_simple_expr(&expr);
         EXPR_PLANS.with(|t| t.borrow_mut().remove(&expr.expr_id));
+        crate::comp::release_expr_ids(&[expr.expr_id]);
         let err = r.err().expect("no portal snapshot can be re-established here");
         assert_eq!(err.message(), "cannot execute SQL without an outer snapshot or portal");
+    }
+}
+
+#[cfg(test)]
+mod var_assign_tests {
+    use super::*;
+
+    fn scalar_type(typoid: Oid, typlen: i16, typbyval: bool) -> PlType {
+        PlType {
+            typoid,
+            ttype: TypeKind::Scalar,
+            typlen,
+            typbyval,
+            typtype: b'b' as i8,
+            collation: types_core::InvalidOid,
+            typisarray: false,
+            atttypmod: -1,
+            typinput: types_core::InvalidOid,
+            typioparam: types_core::InvalidOid,
+            rec_ident: None,
+        }
+    }
+
+    fn var(dno: Dno, name: &str, ty: PlType) -> PlDatum {
+        PlDatum::Var(PlVar {
+            dno,
+            refname: name.into(),
+            lineno: 1,
+            datatype: ty,
+            isconst: false,
+            notnull: false,
+            default_val: None,
+            cursor_explicit_expr: None,
+            cursor_explicit_argrow: -1,
+            cursor_options: 0,
+            promise: PROMISE_NONE,
+        })
+    }
+
+    // assign_simple_var (pl_exec.c:8838): an assignment cancels the TG_*
+    // promise, so the next read returns the assigned value.
+    #[test]
+    fn assignment_disarms_a_pending_promise() {
+        let mut func = super::cfi_tests::tiny_function();
+        func.datums = vec![var(0, "tg_nargs", scalar_type(23, 4, true))];
+        if let PlDatum::Var(v) = &mut func.datums[0] {
+            v.promise = PROMISE_TG_NARGS;
+        }
+        let mut estate = Estate::new(&func, false, true).unwrap();
+        estate.promise_pending = vec![0];
+        estate.set_var(0, Datum::from_i32(42), false, false);
+        assert!(estate.promise_pending.is_empty());
+        let (v, isnull) = estate.get_var(0).unwrap();
+        assert!(!isnull);
+        assert_eq!(v.as_i32(), 42);
+    }
+
+    // exec_stmt_case's retype frees the old by-ref copy under its own
+    // type: a text image released as a 64-byte name overcharged the
+    // datum context.
+    #[test]
+    fn retype_releases_the_old_value_under_its_own_type() {
+        let text = scalar_type(25, -1, false);
+        let name = scalar_type(19, 64, false);
+        let mut func = super::cfi_tests::tiny_function();
+        func.datums = vec![var(0, "t", text)];
+        let mut estate = Estate::new(&func, false, true).unwrap();
+        let src = varlena::cstring_to_text(estate.eval_ctx.mcx(), b"ab").unwrap();
+        let d = fmgr::varlena_result(src);
+        let stored = estate.assign_copy_to_datum_ctx(d, false, -1, false).unwrap();
+        estate.set_var(0, stored, false, true);
+        estate.retype_var(0, name);
+        let (_, isnull) = estate.get_var(0).unwrap();
+        assert!(isnull);
+        assert_eq!(estate.var_type(0).typoid, 19);
     }
 }
 
@@ -6892,20 +8368,32 @@ mod param_fetch_tests {
             }),
             PlDatum::RecField(PlRecField { dno: 1, recparentno: 0, fieldname: "a".into() }),
         ];
-        let mut estate = Estate::new(&func, false, true);
+        let mut estate = Estate::new(&func, false, true).unwrap();
         let expr = PlExpr {
             query: "select pg_typeof(r.a)".into(),
             parse_mode: parser_seams::RawParseMode::RAW_PARSE_DEFAULT,
             ns: 0,
             expr_id: 0,
             target_param: -1,
+            target_is_local: false,
         };
         let argtypes = [types_core::InvalidOid, 23];
-        let err = estate.setup_params_under_spi(&expr, &[1], &argtypes).unwrap_err();
+        let err = estate.setup_param_list_under_spi(&expr, &[1], &argtypes, false).unwrap_err();
         assert_eq!(err.sqlstate, types_error::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE);
         assert_eq!(err.context.as_deref(), Some("SQL statement \"select pg_typeof(r.a)\""));
-        let err = estate.setup_params(&[1], &argtypes).unwrap_err();
+        let err = estate.setup_param_list(&[1], &argtypes, false).unwrap_err();
         assert_eq!(err.context, None);
+        // The execute path's speculative fetch (pl_exec.c:6335) leaves the
+        // field without a value and hands SPI the fetch for evaluation time.
+        let params = estate.setup_param_list(&[1], &argtypes, true).unwrap();
+        assert_eq!((params[1].ptype, params[1].pflags), (types_core::InvalidOid, 0));
+        let mut arg = estate.spi_fetch_arg(&std::rc::Rc::from(vec![1]));
+        let list = spi_param_list(&params, &mut arg);
+        let fetch = list.fetch.expect("a slot without a value brings the fetch");
+        let err = unsafe { (fetch.func)(fetch.arg, 2) }.unwrap_err();
+        assert_eq!(err.sqlstate, types_error::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE);
+        let dummy = unsafe { (fetch.func)(fetch.arg, 1) }.unwrap();
+        assert_eq!(dummy.ptype, types_core::InvalidOid, "datum 0 is not one of the paramnos");
     }
 }
 
@@ -7014,5 +8502,29 @@ mod simple_expr_tests {
         assert!(expr.as_variant::<Const>().is_some());
 
         assert!(simple_result_expr(&stmt(gather(m, var(m, 1), result(m, c)))).is_none());
+    }
+}
+
+#[cfg(test)]
+mod d4312_tests {
+    /// One task's compiles: `n` expression ids its functions hold until the thread's exit drain.
+    fn task_ids(n: usize) -> Vec<u32> {
+        let mut ids: Vec<u32> = (0..n).map(|_| crate::comp::alloc_expr_id()).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// D4312: a retained bgworker standby runs task after task on one thread, and each task's exit drain
+    /// (release_plpgsql_state_at_exit) drops every function, plan, CALL target and simple-expression carry that an
+    /// expression id keys. So the next task reissues the same ids, rather than counting on across tasks until
+    /// ExprSlab::insert's bound (2^20 past the slab) panics.
+    #[test]
+    fn a_retained_threads_next_task_reissues_its_expression_ids() {
+        super::release_plpgsql_state_at_exit(0, 0);
+        let first = task_ids(1000);
+        super::release_plpgsql_state_at_exit(0, 0);
+        let second = task_ids(1000);
+        assert_eq!(second.first(), first.first(), "the next task's ids start where the first task's did");
+        assert_eq!(second, first, "a retained thread's next task reissues the ids its exit drain freed");
     }
 }

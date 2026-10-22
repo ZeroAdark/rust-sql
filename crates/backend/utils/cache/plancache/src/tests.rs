@@ -209,6 +209,25 @@ fn make_saved_source(with_rel: bool) -> CachedPlanSourceHandle {
     h
 }
 
+// plancache.c:432-440 copies the analyzed tree into a small context.
+#[test]
+fn copied_query_tree_lands_in_a_small_context() {
+    install();
+    let raw = select_raw(test_mcx());
+    let h = CreateCachedPlan(Some(&raw), "SELECT 1", CommandTag::SELECT).unwrap();
+    let scratch = test_mcx();
+    let _garbage: PgVec<'static, u8> = mcx::vec_with_capacity_in(scratch, 32 * 1024).unwrap();
+    let qlist = CopyQueryListToSource(h, &[select_query(scratch, false)]).unwrap();
+    CompleteCachedPlan(h, qlist, &[], types_portal::CURSOR_OPT_PARALLEL_OK, true).unwrap();
+    let t = SourceQueryMcx(h).context().stats_tree();
+    assert!(t.arena_footprint <= 2048, "query context holds {} bytes", t.arena_footprint);
+    let list = SourceQueryList(h);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].commandType, CmdType::CMD_SELECT);
+    assert_eq!(list[0].targetList.len(), 1);
+    DropCachedPlan(h);
+}
+
 #[test]
 fn cache_ids_match_c_headers() {
     assert_eq!(PROCOID, 47);
@@ -748,13 +767,16 @@ fn release_after_exit_reclaim_is_abandoned_not_stale() {
     ReleaseAllCachedPlansAtExit(0, 0);
     ReleaseCachedPlan(p);
     DropCachedPlan(h);
-    // A fresh session on a reused thread must get a live registry back.
     with_cache(|pc| assert!(pc.torn_down));
-    with_cache(|pc| pc.torn_down = false);
     let h2 = make_saved_source(true);
+    with_cache(|pc| assert!(!pc.torn_down));
     let p2 = GetCachedPlan(h2, ParamListHandle::NULL, None, QueryEnvHandle::NULL).unwrap();
     ReleaseCachedPlan(p2);
     DropCachedPlan(h2);
+    with_cache(|pc| {
+        assert_eq!(pc.sources.iter().flatten().count(), 0);
+        assert_eq!(pc.plans.iter().flatten().count(), 0);
+    });
 }
 
 // Session-teardown lane (OWNER-DECISIONS B.6): the exit reclaim used to
@@ -790,6 +812,7 @@ fn exit_reclaim_releases_registry_slabs() {
     }
     with_cache(|pc| pc.torn_down = false);
 }
+
 
 // Regression (bug_797bd58f): RevalidateCachedQuery `.take()`s the source's
 // search_path before the fallible SearchPathMatchesCurrentEnvironment probe.
@@ -1102,4 +1125,30 @@ fn retained_coerce_to_domain_is_not_a_query_dependency() {
     record_expr_tree_deps(cd, &mut out, &mut items).unwrap();
     assert!(items.is_empty(), "CoerceToDomain must not add a TYPEOID invalItem");
     assert!(out.is_empty());
+}
+
+#[test]
+fn saved_list_and_plan_pins_track_drops_in_any_order() {
+    install();
+    push_snapshot();
+    let hs: Vec<_> = (0..4).map(|_| make_saved_source(true)).collect();
+    let pinned = GetCachedPlan(hs[3], ParamListHandle::NULL, None, QueryEnvHandle::NULL).unwrap();
+    DropCachedPlan(hs[0]);
+    DropCachedPlan(hs[3]);
+    with_cache(|pc| {
+        assert_eq!(pc.saved_plan_list.len(), 2);
+        for (i, h) in pc.saved_plan_list.clone().into_iter().enumerate() {
+            assert_eq!(source_mut(pc, h).saved_pos, i);
+        }
+        assert!(source_mut(pc, hs[3]).dead, "a pinned source is tombstoned, not freed");
+    });
+    PlanCacheRelCallback(Datum::from_oid(InvalidOid), TEST_RELID);
+    assert!(!CachedPlanIsValid(hs[1]));
+    assert!(!CachedPlanIsValid(hs[2]));
+    ReleaseCachedPlan(pinned);
+    let (idx, _) = decode(hs[3].0);
+    with_cache(|pc| assert!(pc.sources[idx].is_none(), "last release frees the tombstone"));
+    DropCachedPlan(hs[1]);
+    DropCachedPlan(hs[2]);
+    with_cache(|pc| assert!(pc.saved_plan_list.is_empty()));
 }

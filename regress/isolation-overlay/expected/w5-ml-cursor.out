@@ -1,0 +1,77 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2b s2x s2d s2f s1ua s2u s2c s1c s3sel
+step s2b: BEGIN;
+step s2x: EXPLAIN (COSTS OFF) SELECT * FROM mt a, mt b WHERE a.f1 = b.f1 + 5 FOR UPDATE;
+QUERY PLAN                            
+--------------------------------------
+LockRows                              
+  ->  Hash Join                       
+        Hash Cond: ((b.f1 + 5) = a.f1)
+        ->  Seq Scan on mt b          
+        ->  Hash                      
+              ->  Seq Scan on mt a    
+(6 rows)
+
+step s2d: DECLARE c CURSOR FOR SELECT * FROM mt a, mt b WHERE a.f1 = b.f1 + 5 FOR UPDATE;
+step s2f: FETCH 1 FROM c;
+f1|f2|f1|f2
+--+--+--+--
+ 6|r6| 1|r1
+(1 row)
+
+step s1ua: UPDATE mt SET f2 = 's1' WHERE f1 = 6; <waiting ...>
+step s2u: UPDATE mt SET f2 = 'cur' WHERE CURRENT OF c;
+ERROR:  cursor "c" has multiple FOR UPDATE/SHARE references to table "mt"
+step s1ua: <... completed>
+step s2c: COMMIT;
+step s1c: COMMIT;
+step s3sel: SELECT f1, f2 FROM mt WHERE f1 IN (1, 6) ORDER BY f1;
+f1|f2
+--+--
+ 1|r1
+ 6|s1
+(2 rows)
+
+
+starting permutation: s2b s2d s2f s1ub s2c s1c s3sel
+step s2b: BEGIN;
+step s2d: DECLARE c CURSOR FOR SELECT * FROM mt a, mt b WHERE a.f1 = b.f1 + 5 FOR UPDATE;
+step s2f: FETCH 1 FROM c;
+f1|f2|f1|f2
+--+--+--+--
+ 6|r6| 1|r1
+(1 row)
+
+step s1ub: UPDATE mt SET f2 = 's1' WHERE f1 = 1; <waiting ...>
+step s2c: COMMIT;
+step s1ub: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT f1, f2 FROM mt WHERE f1 IN (1, 6) ORDER BY f1;
+f1|f2
+--+--
+ 1|s1
+ 6|r6
+(2 rows)
+
+
+starting permutation: s2b s2ds s2f s2u s1ub s1c s2c s3sel
+step s2b: BEGIN;
+step s2ds: DECLARE c CURSOR FOR SELECT * FROM mt a, mt b WHERE a.f1 = b.f1 + 5 FOR SHARE OF a;
+step s2f: FETCH 1 FROM c;
+f1|f2|f1|f2
+--+--+--+--
+ 6|r6| 1|r1
+(1 row)
+
+step s2u: UPDATE mt SET f2 = 'cur' WHERE CURRENT OF c;
+step s1ub: UPDATE mt SET f2 = 's1' WHERE f1 = 1;
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT f1, f2 FROM mt WHERE f1 IN (1, 6) ORDER BY f1;
+f1|f2 
+--+---
+ 1|s1 
+ 6|cur
+(2 rows)
+

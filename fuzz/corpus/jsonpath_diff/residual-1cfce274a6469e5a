@@ -1,1 +1,0 @@
-$[*].datetime() == $.a.time_tz()

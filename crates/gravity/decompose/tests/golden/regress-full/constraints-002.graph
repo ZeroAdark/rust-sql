@@ -1,0 +1,9 @@
+-- regress-full-constraints-002
+-- SELECT 'one' AS one, nextval('insert_seq');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=c25:'one', 2=fn1574(c2205:20674))
+  outs 1=vl:stmt/imm 2=w8:val
+mapped: Result

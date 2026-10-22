@@ -125,10 +125,10 @@ impl<'m> GtsBuilder<'m> {
         if flag & (SIGNKEY | ALLISTRUE) == SIGNKEY {
             match sign {
                 Some(s) => mcx::vec_append_bytes(&mut img, &s[..len])?,
-                None => img.resize(size, 0),
+                None => ::mcx::pgvec_resize(&mut img, size, 0)?,
             }
         } else {
-            img.resize(size, 0);
+            ::mcx::pgvec_resize(&mut img, size, 0)?;
         }
         Ok(GtsBuilder { img })
     }
@@ -155,7 +155,7 @@ impl<'m> GtsBuilder<'m> {
     }
 }
 
-const SIGLENBIT: fn(usize) -> i32 = |siglen| (siglen * 8) as i32;
+pub const SIGLENBIT: fn(usize) -> i32 = |siglen| (siglen * 8) as i32;
 
 #[inline]
 fn hashval(val: i32, siglen: usize) -> usize {
@@ -615,8 +615,8 @@ fn fc_gtsvector_picksplit(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
         }
     }
 
-    v.spl_left = Vec::with_capacity(maxoff + 1);
-    v.spl_right = Vec::with_capacity(maxoff + 1);
+    v.spl_left = ::mcx::std_vec_with_capacity("adt", maxoff + 1)?;
+    v.spl_right = ::mcx::std_vec_with_capacity("adt", maxoff + 1)?;
 
     if seed_1 == 0 || seed_2 == 0 {
         seed_1 = 1;
@@ -860,8 +860,8 @@ pub(crate) fn gtsquery_picksplit_core(
         }
     }
 
-    v.spl_left = Vec::with_capacity(maxoff + 1);
-    v.spl_right = Vec::with_capacity(maxoff + 1);
+    v.spl_left = ::mcx::std_vec_with_capacity("adt", maxoff + 1)?;
+    v.spl_right = ::mcx::std_vec_with_capacity("adt", maxoff + 1)?;
 
     if seed_1 == 0 || seed_2 == 0 {
         seed_1 = 1;

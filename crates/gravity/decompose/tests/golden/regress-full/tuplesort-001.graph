@@ -1,0 +1,11 @@
+-- regress-full-tuplesort-001
+-- INSERT INTO abbrev_abort_uuids (abort_increasing, abort_decreasing, noabort_increasing, noabort_decreasing) SELECT ('00000000-0000-0000-0000-'||to_char(g.i, '000000000000FM'))::uuid abort_increasing, ('00000000-0000-0000-0000-'||to_char(20000 - g.i, '000000000000FM'))::uuid abort_decreasing, (to_char(g.i % 10009, '00000000FM')||'-0000-0000-0000-'||to_char(g.i, '000000000000FM'))::uuid noabort_increasing, (to_char(((20000 - g.i) % 10009), '00000000FM')||'-0000-0000-0000-'||to_char(20000 - g.i, '000000000000FM'))::uuid noabort_decreasing FROM generate_series(0, 20000, 1) g(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: true } fn1066 fn1066(c23:0, c23:20000, c23:1)]
+  project (1=fn480(fn1574(c2205:46890)), 2=io2950(op654(c25:'00000000-0000-0000-0000-', fn1773(v3.1, c25:'000000000000FM'))), 3=io2950(op654(c25:'00000000-0000-0000-0000-', fn1773(op555(c23:20000, v3.1), c25:'000000000000FM'))), 4=io2950(op654(op654(fn1773(op530(v3.1, c23:10009), c25:'00000000FM'), c25:'-0000-0000-0000-'), fn1773(v3.1, c25:'000000000000FM'))), 5=io2950(op654(op654(fn1773(op530(op555(c23:20000, v3.1), c23:10009), c25:'00000000FM'), c25:'-0000-0000-0000-'), fn1773(op555(c23:20000, v3.1), c25:'000000000000FM'))))
+  write INSERT rel=46891 rti=1 natts=5 indexes=()
+  outs 1=w4:val 2=fx16:call2952 3=fx16:call2952 4=fx16:call2952 5=fx16:call2952
+mapped: ModifyTable FunctionScan

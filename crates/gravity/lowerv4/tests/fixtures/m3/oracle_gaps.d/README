@@ -1,0 +1,2 @@
+Goldens whose rows read state the crate has no source for (CURRENT_DATE is the transaction start's date); pg_regress
+judges them through the server. One file per fixture, `<fixture>.tsv`, one line: why.

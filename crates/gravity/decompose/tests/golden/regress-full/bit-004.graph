@@ -1,0 +1,10 @@
+-- regress-full-bit-004
+-- SELECT a, b, ~a AS "~ a", a & b AS "a & b", a | b AS "a | b", a # b AS "a # b" FROM varbit_table;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1700 end=sink
+  nodes n0@0
+  source range rel=16566 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=op1794(relabel1560(v1.1)), 4=op1791(relabel1560(v1.1), relabel1560(v1.2)), 5=op1792(relabel1560(v1.1), relabel1560(v1.2)), 6=op1793(relabel1560(v1.1), relabel1560(v1.2)))
+  outs 1=vl:win/page 2=vl:win/page 3=vl:call1676 4=vl:call1673 5=vl:call1674 6=vl:call1675
+mapped: SeqScan

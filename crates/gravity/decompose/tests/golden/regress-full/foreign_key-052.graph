@@ -1,0 +1,13 @@
+-- regress-full-foreign_key-052
+-- delete from fkpart1.pkey where a = 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Lock end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=c23:1, 2j=v1.-1, 3j=v1.-6)
+  lock rel=36886 KeyShare Block marks=(rti1:ROW_MARK_KEYSHARE parent)
+  project (1=c23:1, 2j=outer.2, 3j=outer.3)
+  outs 1=w4:val 2=fx6:row 3=w4:val
+  outs 1=w4:val 2=fx6:row 3=w4:val
+mapped: Result LockRows PlanRowMark

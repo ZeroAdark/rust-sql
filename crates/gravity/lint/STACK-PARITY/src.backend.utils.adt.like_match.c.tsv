@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/adt/like_match.c: 1 stack-depth check sites
+89	MatchText	crates/backend/utils/adt/like/src/lib.rs	match_text	yes	

@@ -837,7 +837,7 @@ pub fn getObjectDescription(
             };
             let parname = crate::identity::text_datum_to_string(
                 cache_syscache::SysCacheGetAttrNotNull(cacheid, &tup, 2)?,
-            );
+            )?;
             cache_syscache::ReleaseSysCache(tup);
             Ok(Some(format!("parameter {parname}")))
         }

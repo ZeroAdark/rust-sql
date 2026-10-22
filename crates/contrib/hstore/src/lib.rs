@@ -157,8 +157,8 @@ fn build_text_array_1d<'m>(
     if elems.is_empty() {
         return arrayfuncs::construct::construct_empty_array(mcx, types_core::TEXTOID);
     }
-    let mut datums: Vec<Datum> = Vec::with_capacity(elems.len());
-    let mut nulls: Vec<bool> = Vec::with_capacity(elems.len());
+    let mut datums: Vec<Datum> = ::mcx::std_vec_with_capacity("contrib", elems.len())?;
+    let mut nulls: Vec<bool> = ::mcx::std_vec_with_capacity("contrib", elems.len())?;
     for e in elems {
         match e {
             Some(b) => {
@@ -191,18 +191,27 @@ fn build_text_array_1d<'m>(
 
 fn fc_hstore_in(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes().to_vec();
+    let s = ::mcx::std_vec_from_slice("hstore", &unsafe { fcinfo.arg_cstring(0) }.to_bytes())?;
     match parse::parse_hstore(&s) {
         Ok(pairs) => {
             let pairs = unique_pairs(pairs);
             ret_hstore(fcinfo, &build_hstore(&pairs))
         }
         Err(e) => {
+            if !soft_input_error(&e) {
+                return Err(e);
+            }
             // SAFETY: context, if set, rides per the ErrorSaveNode contract.
             let esc = unsafe { fcinfo.soft_error_context() };
             types_error::ereturn(esc, ret_null(fcinfo), *e)
         }
     }
+}
+
+// hstore_io.c softens only its errsave sites (:67, :81, both 42601); the
+// RESIZEPRSBUF repalloc past MaxAllocSize (:51) stays a hard XX000.
+fn soft_input_error(e: &PgError) -> bool {
+    e.sqlstate == types_error::ERRCODE_SYNTAX_ERROR
 }
 
 // cpw (hstore_io.c): copy, backslash-escaping `"` and `\`.
@@ -273,7 +282,7 @@ fn fc_hstore_recv(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
         .into());
     }
     check_pair_count(pcount as usize)?;
-    let mut pairs: Vec<Pair> = Vec::with_capacity(pcount as usize);
+    let mut pairs: Vec<Pair> = ::mcx::std_vec_with_capacity("contrib", pcount as usize)?;
     for _ in 0..pcount {
         let rawlen = pqformat::pq_getmsgint(buf, 4)? as i32;
         if rawlen < 0 {
@@ -285,13 +294,13 @@ fn fc_hstore_recv(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
         // which runs pg_client_to_server -> pg_verify_mbstr and so rejects
         // invalid encoding and embedded NULs. Raw pq_getmsgbytes accepted
         // bytes C refuses (proofs finding #3, validation-bypass class).
-        let key = pqformat::pq_getmsgtext(fcinfo.result_mcx(), buf, rawlen as usize)?.to_vec();
+        let key = ::mcx::std_vec_from_slice("hstore", &pqformat::pq_getmsgtext(fcinfo.result_mcx(), buf, rawlen as usize)?)?;
         check_key_len(key.len())?;
         let rawlen = pqformat::pq_getmsgint(buf, 4)? as i32;
         let val = if rawlen < 0 {
             None
         } else {
-            let v = pqformat::pq_getmsgtext(fcinfo.result_mcx(), buf, rawlen as usize)?.to_vec();
+            let v = ::mcx::std_vec_from_slice("hstore", &pqformat::pq_getmsgtext(fcinfo.result_mcx(), buf, rawlen as usize)?)?;
             check_val_len(v.len())?;
             Some(v)
         };
@@ -338,13 +347,13 @@ fn fc_hstore_from_text(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
     }
     let b_null = b.isnull;
     // SAFETY: checked non-null above / below.
-    let key = unsafe { arg_text(fcinfo, 0)? }.to_vec();
+    let key = ::mcx::std_vec_from_slice("hstore", &unsafe { arg_text(fcinfo, 0)? })?;
     check_key_len(key.len())?;
     let val = if b_null {
         None
     } else {
         // SAFETY: checked non-null.
-        let v = unsafe { arg_text(fcinfo, 1)? }.to_vec();
+        let v = ::mcx::std_vec_from_slice("hstore", &unsafe { arg_text(fcinfo, 1)? })?;
         check_val_len(v.len())?;
         Some(v)
     };
@@ -461,7 +470,7 @@ fn fc_hstore_from_array(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     let count = elems.len() / 2;
     // hstore_io.c:765.
     check_pair_count(count)?;
-    let mut pairs: Vec<Pair> = Vec::with_capacity(count);
+    let mut pairs: Vec<Pair> = ::mcx::std_vec_with_capacity("contrib", count)?;
     for i in 0..count {
         let key = elems[i * 2].clone().ok_or_else(null_key_err)?;
         check_key_len(key.len())?;
@@ -795,8 +804,8 @@ fn hstore_to_array_common(fcinfo: &mut Fcinfo, ndims: i32) -> PgResult<Datum> {
         ));
     }
     to_array_alloc_guard(count)?;
-    let mut datums: Vec<Datum> = Vec::with_capacity(count * 2);
-    let mut nulls: Vec<bool> = Vec::with_capacity(count * 2);
+    let mut datums: Vec<Datum> = ::mcx::std_vec_with_capacity("contrib", count * 2)?;
+    let mut nulls: Vec<bool> = ::mcx::std_vec_with_capacity("contrib", count * 2)?;
     for i in 0..count {
         datums.push(varlena_result(varlena::cstring_to_text(mcx, hs.key(i))?));
         nulls.push(false);
@@ -898,7 +907,7 @@ fc_hstore_cmp_op! {
 // PG_FREE_IF_COPY (hstore_op.c:1155-1156): detoasted copies die with the
 // call instead of accumulating in a sort's context.
 fn fc_hstore_cmp(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let scratch = ::mcx::MemoryContext::new_bump("hstore cmp detoast");
+    let scratch = ::mcx::MemoryContext::new_wholesale("hstore cmp detoast");
     // SAFETY: catalog args are non-null (strict fn).
     let (a, b) = unsafe { (arg_hstore_in(fcinfo, 0, scratch.mcx())?, arg_hstore_in(fcinfo, 1, scratch.mcx())?) };
     Ok(Datum::from_i32(hstore_cmp(&a, &b)))
@@ -1034,6 +1043,15 @@ mod tests {
         build_hstore(&unique_pairs(pairs.to_vec()))
     }
 
+    // pg_input_is_valid(<512 MiB token>, 'hstore') raises XX000 in C 18.6;
+    // only the parser's 42601 diagnostics reach the soft-error context.
+    #[test]
+    fn only_syntax_errors_are_soft() {
+        assert!(soft_input_error(&parse::parse_hstore(b"a").unwrap_err()));
+        assert!(soft_input_error(&parse::parse_hstore(b"\"a\"=>\"b").unwrap_err()));
+        assert!(!soft_input_error(&mcx::check_alloc_size(1 << 30).unwrap_err()));
+    }
+
     fn pair(k: &str, v: Option<&str>) -> Pair {
         Pair { key: k.as_bytes().to_vec(), val: v.map(|v| v.as_bytes().to_vec()), needfree: false }
     }
@@ -1084,5 +1102,8 @@ mod tests {
         assert_eq!(err.message(), "invalid memory alloc request size 18446744071814584361");
         let err = ::mcx::check_alloc_size(repr::c_int32_alloc_size(1200000020)).unwrap_err();
         assert_eq!(err.message(), "invalid memory alloc request size 1200000020");
+        let n = subs::null_assign_alloc_size(1073741819, 1073741819);
+        let err = ::mcx::check_alloc_size(repr::c_int32_alloc_size(n)).unwrap_err();
+        assert_eq!(err.message(), "invalid memory alloc request size 18446744071562067974");
     }
 }

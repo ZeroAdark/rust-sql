@@ -1,0 +1,10 @@
+-- regress-full-json-002
+-- SELECT row_to_json(j)::jsonb FROM ( SELECT left(E'abcdefghijklmnopqrstuv"\twxyz012345678', a) AS a FROM generate_series(0,37) a ) j;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=2 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, c23:37)]
+  project (1=io3802(fn3155(T_RowExpr)))
+  outs 1=vl:call3806
+mapped: FunctionScan

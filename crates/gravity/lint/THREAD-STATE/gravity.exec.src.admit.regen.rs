@@ -1,0 +1,1 @@
+gravity/exec/src/admit/regen.rs	TABLE	admission	key:the content key (with its build estimate) and the build relation OID	leader	admission: first-seen build relation rows per (key, rel) for growth re-admission; every note matches both; cleared only when full (STAMPS)

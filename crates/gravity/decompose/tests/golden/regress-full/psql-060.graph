@@ -1,0 +1,11 @@
+-- regress-full-psql-060
+-- UPDATE onek SET unique1 = unique1 WHERE false;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=v1.1, 2j=v1.-1)
+  write UPDATE rel=16417 rti=1 natts=16 indexes=(19335[1], 19336[2], 19337[7], 19338[14]) set=(1)
+  outs 1=w4:val 2=fx6:row
+mapped: Result ModifyTable

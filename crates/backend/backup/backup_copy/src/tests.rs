@@ -279,6 +279,38 @@ fn archive_contents_no_report_when_time_threshold_not_met() {
 }
 
 #[test]
+fn archive_contents_reports_progress_after_nobegin_start_time() {
+    let ctx = setup();
+    let mcx = ctx.mcx();
+    NOW.with(|n| n.set(TimestampTz::MIN));
+    let mut sink = bbsink_copystream_new(mcx, false);
+    let mut state = BbsinkState { startptr: 0, starttli: 1, ..Default::default() };
+    ::sink::bbsink_begin_backup(&mut sink, &mut state, 8192).unwrap();
+    drain();
+
+    let progress = |bytes_done: u64| {
+        let mut prog = vec![b'p'];
+        prog.extend_from_slice(&bytes_done.to_be_bytes());
+        vec![Event::Msg(PQ_MSG_COPY_DATA, prog), Event::Flush]
+    };
+
+    state.bytes_done = PROGRESS_REPORT_BYTE_INTERVAL;
+    NOW.with(|n| n.set(3));
+    ::sink::bbsink_archive_contents(&mut sink, &mut state, 1).unwrap();
+    assert_eq!(drain(), progress(state.bytes_done));
+
+    state.bytes_done += PROGRESS_REPORT_BYTE_INTERVAL;
+    NOW.with(|n| n.set(3 + 999_000));
+    ::sink::bbsink_archive_contents(&mut sink, &mut state, 1).unwrap();
+    assert_eq!(drain(), vec![]);
+
+    state.bytes_done += PROGRESS_REPORT_BYTE_INTERVAL;
+    NOW.with(|n| n.set(3 + 1_000_000));
+    ::sink::bbsink_archive_contents(&mut sink, &mut state, 1).unwrap();
+    assert_eq!(drain(), progress(state.bytes_done));
+}
+
+#[test]
 fn end_archive_forces_progress_report() {
     let ctx = setup();
     let mcx = ctx.mcx();

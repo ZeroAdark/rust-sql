@@ -104,7 +104,38 @@ pub struct SupportRequestIndexCondition<'mcx> {
     pub lossy: bool,
 }
 
+/// C SupportRequestModifyInPlace: may `funcid` modify the PARAM_EXTERN
+/// `paramid` among `args` in place? The answer is that Param node or NULL.
+#[repr(C)]
+pub struct SupportRequestModifyInPlace<'a, 'mcx> {
+    tag: NodeTag,
+    pub funcid: Oid,
+    pub args: &'a [Option<Node<'mcx>>],
+    pub paramid: i32,
+}
+
+impl<'a, 'mcx> SupportRequestModifyInPlace<'a, 'mcx> {
+    pub fn new(funcid: Oid, args: &'a [Option<Node<'mcx>>], paramid: i32) -> Self {
+        SupportRequestModifyInPlace { tag: NodeTag::T_SupportRequestModifyInPlace, funcid, args, paramid }
+    }
+}
+
+/// # Safety
+/// As [`support_request_selectivity_mut`], shared.
+pub unsafe fn support_request_modify_in_place<'r, 'a, 'mcx>(
+    p: *const (),
+) -> Option<&'r SupportRequestModifyInPlace<'a, 'mcx>> {
+    // SAFETY: caller contract — tag-first node, live for 'r.
+    unsafe {
+        if *p.cast::<NodeTag>() != NodeTag::T_SupportRequestModifyInPlace {
+            return None;
+        }
+        Some(&*p.cast::<SupportRequestModifyInPlace<'a, 'mcx>>())
+    }
+}
+
 const _: () = {
+    assert!(core::mem::offset_of!(SupportRequestModifyInPlace, tag) == 0);
     assert!(core::mem::offset_of!(SupportRequestRows, tag) == 0);
     assert!(core::mem::offset_of!(SupportRequestCost, tag) == 0);
     assert!(core::mem::offset_of!(SupportRequestSimplify, tag) == 0);

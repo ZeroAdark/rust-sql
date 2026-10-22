@@ -46,9 +46,23 @@ pub fn AccessTempTableNamespace(mcx: Mcx<'_>, force: bool) -> PgResult<()> {
     InitTempTableNamespace(mcx)
 }
 
+/// C has created the (empty) temp namespace here; pg_temp lookups find nothing.
+pub struct DeferredTempNamespace(bool);
+
+pub fn defer_temp_namespace_creation() -> DeferredTempNamespace {
+    DeferredTempNamespace(crate::TEMP_NAMESPACE_DEFERRED.replace(true))
+}
+
+impl Drop for DeferredTempNamespace {
+    fn drop(&mut self) {
+        crate::TEMP_NAMESPACE_DEFERRED.set(self.0);
+    }
+}
+
 // namespace.c:4406-4438, the InitTempTableNamespace guards that run before
 // anything is created; transformCreateStmt applies them at analysis time.
 pub fn check_temp_table_namespace_access() -> PgResult<()> {
+    xact::OrMyXactFlags(types_core::XACT_FLAGS_ACCESSEDTEMPNAMESPACE);
     let dbid = init_small::globals::MyDatabaseId();
     if aclchk_seams::object_aclcheck::call(
         DATABASE_RELATION_ID,
@@ -157,6 +171,9 @@ pub(crate) fn RemoveTempRelationsCallback(_code: i32, _arg: datum::Datum) -> PgR
         snapmgr::PopActiveSnapshot()?;
         result?;
         xact::CommitTransactionCommand()?;
+        // D4682: the session gives its temp namespace up with its contents (a reused thread's next session may get
+        // another proc number, so another pg_temp_N).
+        crate::reset_temp_namespace_for_thread_reuse();
     }
     Ok(())
 }

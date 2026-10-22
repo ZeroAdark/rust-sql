@@ -132,23 +132,23 @@ fn init_local_buffers(slot: &mut Option<LocalBufs>) -> PgResult<()> {
     // localbuf.c:745-753: the three arrays are calloc'd and a refusal is
     // ereport(FATAL, ERRCODE_OUT_OF_MEMORY, "out of memory") — the backend
     // ends, the cluster does not.
-    let mut descs: Vec<BufferDesc> = Vec::new();
-    let mut blocks: Vec<Cell<*mut u8>> = Vec::new();
-    let mut ref_counts: Vec<Cell<i32>> = Vec::new();
-    if descs.try_reserve_exact(nbufs).is_err()
-        || blocks.try_reserve_exact(nbufs).is_err()
-        || ref_counts.try_reserve_exact(nbufs).is_err()
-    {
-        return Err(Box::new(
+    let oom = || {
+        Box::new(
             types_error::PgError::new(types_error::FATAL, "out of memory")
                 .with_sqlstate(types_error::ERRCODE_OUT_OF_MEMORY)
                 .with_error_location(ErrorLocation::new(file!(), line!() as i32, "InitLocalBuffers")),
-        ));
-    }
+        )
+    };
+    let mut descs: Vec<BufferDesc> = Vec::new();
+    descs.try_reserve_exact(nbufs).map_err(|_| oom())?;
     for i in 0..nbufs {
         descs.push(BufferDesc::initial(-(i as i32) - 2, 0));
     }
+    let mut blocks: Vec<Cell<*mut u8>> = Vec::new();
+    blocks.try_reserve_exact(nbufs).map_err(|_| oom())?;
     blocks.resize_with(nbufs, || Cell::new(core::ptr::null_mut()));
+    let mut ref_counts: Vec<Cell<i32>> = Vec::new();
+    ref_counts.try_reserve_exact(nbufs).map_err(|_| oom())?;
     ref_counts.resize_with(nbufs, || Cell::new(0));
     // localbuf.c:784 hash_create: a "dynahash" context labelled with the
     // table name (pg_backend_memory_contexts shows the label as the name).
@@ -501,6 +501,22 @@ pub(crate) fn MarkLocalBufferDirty(buffer: Buffer) {
         }
         set_state(desc, state | BM_DIRTY);
     })
+}
+
+pub(crate) fn local_buffer_state(buffer: Buffer) -> u32 {
+    with(|lb| state_of(&lb.descs[local_bufid(buffer)]))
+}
+
+/// GetLocalPinLimit (localbuf.c:306): headroom for concurrent pin-holders.
+pub(crate) fn GetLocalPinLimit() -> u32 {
+    (num_temp_buffers() / 4).max(0) as u32
+}
+
+/// GetAdditionalLocalPinLimit (localbuf.c:317).
+pub(crate) fn GetAdditionalLocalPinLimit() -> u32 {
+    let total = GetLocalPinLimit();
+    let pinned = with_inited(0, |lb| lb.pinned).max(0) as u32;
+    total.saturating_sub(pinned)
 }
 
 /// StartLocalBufferIO with the AIO wait arm collapsed (io_method=sync).

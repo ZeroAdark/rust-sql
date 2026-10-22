@@ -1,0 +1,11 @@
+path	crates/gravity/exec/src/ops/scan/sites_heap.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	4
+method	std::boxed::Box::new	5
+method	std::clone::Clone::clone	4
+method	std::iter::Iterator::collect	4
+method	std::sync::Arc::new	6
+method	std::vec::Vec::with_capacity	2
+type	std::boxed::Box	5
+type	std::sync::Arc	7
+type	std::vec::Vec	4

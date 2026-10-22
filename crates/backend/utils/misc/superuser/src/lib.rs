@@ -16,6 +16,14 @@ thread_local! {
     static ROLEID_CALLBACK_REGISTERED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// D4682 (client backend thread reuse, launch_backend cpool): a parked thread holds no sinval slot, so a pg_authid
+/// change while it waits never reaches RoleidCallback; the next session starts with no remembered answer, as a fresh
+/// thread does. The callback's registration stays (once per thread).
+pub fn reset_for_thread_reuse() {
+    LAST_ROLEID.set(InvalidOid);
+    LAST_ROLEID_IS_SUPER.set(false);
+}
+
 pub fn superuser() -> PgResult<bool> {
     superuser_arg(miscinit::GetUserId())
 }

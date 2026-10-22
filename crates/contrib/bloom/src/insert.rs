@@ -27,7 +27,7 @@ pub fn blinsert<'mcx>(
     ht_ctid: &ItemPointerData,
     _heap_rel: &Relation<'mcx>,
 ) -> PgResult<bool> {
-    let insert_ctx = mcx::MemoryContext::new_bump("Bloom insert temporary context");
+    let insert_ctx = mcx::MemoryContext::new_wholesale("Bloom insert temporary context");
     let imcx = insert_ctx.mcx();
 
     let mut blstate = init_bloom_state(index)?;

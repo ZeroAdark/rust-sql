@@ -114,6 +114,11 @@ fn escape_out(
 ) -> PgResult<Datum> {
     // SAFETY: catalog args are non-null text/bytea varlenas (strict fn).
     let (pat, esc) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
+    // do_like_escape pallocs plen * 2 + VARHDRSZ before looking at the escape.
+    ::mcx::check_alloc_size(pat.data().len().saturating_mul(2).saturating_add(VARHDRSZ))?;
+    if esc.data() == b"\\" {
+        return Ok(Datum::from_usize(pat.as_ptr() as usize));
+    }
     let mut buf = Vec::new();
     buf.extend_from_slice(&[0; VARHDRSZ]);
     if bytea {

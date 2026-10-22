@@ -101,13 +101,17 @@ pub fn setseed(seed: f64) -> PgResult<()> {
     Ok(())
 }
 
+pub fn reset_seed_for_new_backend() {
+    SEED_SET.set(false);
+}
+
 pub fn drandom() -> f64 {
     with_prng(PgPrng::next_f64)
 }
 
 pub fn drandom_normal(mean: f64, stddev: f64) -> f64 {
     let z = with_prng(PgPrng::normal_f64);
-    stddev * z + mean
+    ::fp_contract::fmadd(stddev, z, mean)
 }
 
 #[cold]

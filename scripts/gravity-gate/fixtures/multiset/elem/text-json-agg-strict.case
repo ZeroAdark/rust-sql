@@ -1,0 +1,12 @@
+# json_agg_strict: elements sorted as json_agg's (D3732: the spooled-drain collect class takes it)
+sql: SELECT g, json_agg_strict(x) FROM t GROUP BY g;
+cols: g	json_agg_strict
+tables: t
+class: unordered
+verdict: match
+[pg]
+1	[1, 2, "a, b"]
+2	[3]
+[got]
+2	[3]
+1	["a, b", 1, 2]

@@ -1,0 +1,1 @@
+a DISTINCT ON text key under an ICU nondeterministic collation: key.coll's sort-key image reads the syscache seam lookup_pg_collation_locale_row the rig never installs (reached once D1517 keys run.pergroup through key.coll; as collate.icu.utf8-039)

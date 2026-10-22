@@ -40,7 +40,7 @@ pub(crate) fn start(sched: &Arc<Scheduler>) {
     // (it has to observe a wedged schedule from outside the model).
     let _ = std::thread::Builder::new()
         .name("pgsync-sim-watchdog".to_string())
-        .spawn(move || run(weak));
+        .spawn(pagegive::pinned(move || run(weak)));
 }
 
 fn run(weak: Weak<Scheduler>) {

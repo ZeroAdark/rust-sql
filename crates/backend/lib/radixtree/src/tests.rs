@@ -442,3 +442,45 @@ fn memory_usage_keeps_freed_leaf_blocks() {
         .map(|slab| slab.stats_tree().arena_footprint).sum();
     assert_eq!(tree.memory_usage(), (leaf_blocks + slab_blocks) as u64);
 }
+
+// RT_SHMEM fanouts: grow and shrink through every class.
+#[test]
+fn dsa_accounted_tree_with_shmem_fanouts() {
+    let mut rng = SplitMix64(7);
+    for &(nkeys, shift) in &[(16usize, 0i32), (63, 0), (256, 0), (3000, 3), (3000, 17)] {
+        let dsa = DsaSizeModel::for_tidstore(64 * 1024 * 1024).unwrap();
+        let mut tree: RadixTree<u64> = RadixTree::create_in_dsa_accounted(test_ctx(), &crate::rt_class_names!("test"), dsa).unwrap();
+        let mut oracle = BTreeMap::new();
+        for _ in 0..nkeys {
+            let key = (rng.next() % (nkeys as u64 * 2)) << shift;
+            tree.set(key, &(key ^ 1)).unwrap();
+            oracle.insert(key, key ^ 1);
+        }
+        for (&k, &v) in &oracle {
+            assert_eq!(*tree.find(k).unwrap(), v);
+        }
+        let mut iter = tree.begin_iterate();
+        for (&k, &v) in &oracle {
+            assert_eq!(iter.next().map(|(key, val)| (key, *val)), Some((k, v)));
+        }
+        assert!(iter.next().is_none());
+        drop(iter);
+        for &k in oracle.keys().step_by(2) {
+            assert!(tree.delete(k));
+        }
+        for (i, (&k, &v)) in oracle.iter().enumerate() {
+            assert_eq!(tree.find(k).copied(), (i % 2 == 1).then_some(v));
+        }
+        assert!(tree.memory_usage() >= 1024 * 1024);
+    }
+}
+
+#[test]
+fn node_slabs_carry_the_callers_prefix() {
+    let ctx = MemoryContext::new("TID storage");
+    let tree: RadixTree<u64> = RadixTree::create_in(ctx, &crate::rt_class_names!("local_ts")).unwrap();
+    let t = tree.store.leaf_ctx.stats_tree();
+    let names: Vec<&str> = t.children.iter().map(|c| c.name).collect();
+    assert!(names.contains(&"local_ts_radix_tree node4"), "{names:?}");
+    assert!(names.contains(&"local_ts_radix_tree node256"), "{names:?}");
+}

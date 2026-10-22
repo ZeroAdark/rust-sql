@@ -1,0 +1,7 @@
+main(%p2_a,%p2_b,%p3_c) {
+entry:
+%p2_x = any %p2_a, %p2_b
+%p2_y = call @external, %p2_x, %p3_c
+ret %p2_y
+}
+external(%p2_a,%p3_b)!

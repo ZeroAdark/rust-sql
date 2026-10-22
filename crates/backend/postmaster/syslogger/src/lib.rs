@@ -17,7 +17,7 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicPtr, Ordering::Relaxed};
 use std::sync::Mutex;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use init_small::globals as g;
 use types_core::{pg_time_t, BackendType, MAXPGPATH};
 use types_error::{
@@ -92,6 +92,30 @@ static SYSLOG_FILE: AtomicPtr<libc::FILE> = AtomicPtr::new(std::ptr::null_mut())
 static CSVLOG_FILE: AtomicPtr<libc::FILE> = AtomicPtr::new(std::ptr::null_mut());
 static JSONLOG_FILE: AtomicPtr<libc::FILE> = AtomicPtr::new(std::ptr::null_mut());
 static FIRST_SYSLOGGER_FILE_TIME: AtomicI64 = AtomicI64::new(0);
+static START_NAMES: Mutex<[Option<String>; 3]> = Mutex::new([None, None, None]);
+static RESUME_CURRENT_FILES: AtomicBool = AtomicBool::new(false);
+
+// C divergence: C's collector survives a crash restart; ours resumes the
+// files current_logfiles names, without announcing the redirection again.
+pub fn set_resume_current_files(on: bool) {
+    RESUME_CURRENT_FILES.store(on, Relaxed);
+}
+
+fn current_file_names() -> [Option<String>; 3] {
+    let mut names = [None, None, None];
+    let Ok(text) = std::fs::read_to_string(LOG_METAINFO_DATAFILE) else { return names };
+    for line in text.lines() {
+        let Some((label, name)) = line.split_once(' ') else { continue };
+        let i = match label {
+            "stderr" => 0,
+            "csvlog" => 1,
+            "jsonlog" => 2,
+            _ => continue,
+        };
+        names[i] = Some(name.to_string());
+    }
+    names
+}
 
 // The unattached logger holds no ProcSignal slot, so SendThreadSignal can't
 // reach it; the postmaster's kill(syslogger, SIGHUP/SIGUSR1) is a direct
@@ -104,7 +128,7 @@ static SYSLOGGER_EXITED: AtomicBool = AtomicBool::new(false);
 fn log_fork_failure(save_errno: i32) -> PgResult<()> {
     ereport(LOG)
         .with_saved_errno(save_errno)
-        .errmsg("could not fork system logger: %m")
+        .errmsg(format!("could not fork system logger: {PCT_M}"))
         .finish(loc("SysLogger_Start"))
 }
 
@@ -216,8 +240,8 @@ pub fn SysLoggerMain(startup_data: &StartupData) -> ! {
 
     // C restart case: point the child's stderr at /dev/null so its inherited
     // pipe-write fd closes. One fd table: fd 2 is every thread's pipe write
-    // end and the collector's own elog already routes via am_syslogger() to
-    // write_syslogger_file — skipped.
+    // end, so the collector's console writes go to elog's syslogger console
+    // fd (the original stderr) instead.
     // C also closes its fork-copy of syslogPipe[1] here; the postmaster's
     // close after dup2 is the only one — skipped.
 
@@ -233,12 +257,14 @@ pub fn SysLoggerMain(startup_data: &StartupData) -> ! {
     let mut st = SysLoggerState::new();
 
     let first_time = FIRST_SYSLOGGER_FILE_TIME.load(Relaxed);
-    st.last_sys_file_name = Some(logfile_getname(first_time, None));
+    let [sys_name, csv_name, json_name] =
+        std::mem::take(&mut *START_NAMES.lock().unwrap_or_else(|e| e.into_inner()));
+    st.last_sys_file_name = sys_name.or_else(|| Some(logfile_getname(first_time, None)));
     if !CSVLOG_FILE.load(Relaxed).is_null() {
-        st.last_csv_file_name = Some(logfile_getname(first_time, Some(".csv")));
+        st.last_csv_file_name = csv_name.or_else(|| Some(logfile_getname(first_time, Some(".csv"))));
     }
     if !JSONLOG_FILE.load(Relaxed).is_null() {
-        st.last_json_file_name = Some(logfile_getname(first_time, Some(".json")));
+        st.last_json_file_name = json_name.or_else(|| Some(logfile_getname(first_time, Some(".json"))));
     }
 
     let mut current_log_dir = Log_directory();
@@ -376,7 +402,7 @@ pub fn SysLoggerMain(startup_data: &StartupData) -> ! {
                 if bytes_read < 0 {
                     let e = last_errno();
                     if e != libc::EINTR {
-                        logger_pipe_report(LOG, e, "could not read from logger pipe: %m")
+                        logger_pipe_report(LOG, e, &format!("could not read from logger pipe: {PCT_M}"))
                             .finish(loc("SysLoggerMain"))?;
                     }
                 } else if bytes_read > 0 {
@@ -415,7 +441,7 @@ pub fn SysLoggerMain(startup_data: &StartupData) -> ! {
 /// postmaster exit (all other children already gone) the write ends are
 /// repointed at /dev/null, which is the last-writer close; then bound-wait
 /// for the collector's final flush.
-fn syslogger_drain_at_exit(_code: i32, _arg: usize) {
+fn syslogger_drain_at_exit() {
     // wasm32: no /dev/null and no dup2 on WASI; the collector never runs
     // (logging_collector requires pipes), so only the bound-wait remains.
     #[cfg(not(target_family = "wasm"))]
@@ -450,7 +476,7 @@ pub fn SysLogger_Start(child_slot: i32) -> PgResult<i32> {
         #[cfg(target_family = "wasm")]
         let pipe_rc = -1;
         if pipe_rc < 0 {
-            logger_pipe_report(FATAL, last_errno(), "could not create pipe for syslog: %m")
+            logger_pipe_report(FATAL, last_errno(), &format!("could not create pipe for syslog: {PCT_M}"))
                 .finish(loc("SysLogger_Start"))?;
         }
         SYSLOG_PIPE_R.store(fds[0], Relaxed);
@@ -471,17 +497,24 @@ pub fn SysLogger_Start(child_slot: i32) -> PgResult<i32> {
         }
     }
 
-    let filename = logfile_getname(first_time, None);
+    let resume = RESUME_CURRENT_FILES.swap(false, Relaxed);
+    let [stderr_name, csv_name, json_name] = if resume { current_file_names() } else { [None, None, None] };
+    let mut names: [Option<String>; 3] = [None, None, None];
+    let filename = stderr_name.unwrap_or_else(|| logfile_getname(first_time, None));
     SYSLOG_FILE.store(logfile_open(&filename, "a", false)?, Relaxed);
+    names[0] = Some(filename);
 
     if elog::config::log_destination() & LOG_DESTINATION_CSVLOG != 0 {
-        let filename = logfile_getname(first_time, Some(".csv"));
+        let filename = csv_name.unwrap_or_else(|| logfile_getname(first_time, Some(".csv")));
         CSVLOG_FILE.store(logfile_open(&filename, "a", false)?, Relaxed);
+        names[1] = Some(filename);
     }
     if elog::config::log_destination() & LOG_DESTINATION_JSONLOG != 0 {
-        let filename = logfile_getname(first_time, Some(".json"));
+        let filename = json_name.unwrap_or_else(|| logfile_getname(first_time, Some(".json")));
         JSONLOG_FILE.store(logfile_open(&filename, "a", false)?, Relaxed);
+        names[2] = Some(filename);
     }
+    *START_NAMES.lock().unwrap_or_else(|e| e.into_inner()) = names;
 
     let syslogger_pid =
         launch_backend::postmaster_child_launch(BackendType::Logger, child_slot, StartupData::None, None);
@@ -492,13 +525,15 @@ pub fn SysLogger_Start(child_slot: i32) -> PgResult<i32> {
     }
 
     if !elog::config::redirection_done() {
-        ereport(LOG)
-            .errmsg("redirecting log output to logging collector process")
-            .errhint(format!(
-                "Future log output will appear in directory \"{}\".",
-                Log_directory()
-            ))
-            .finish(loc("SysLogger_Start"))?;
+        if !resume {
+            ereport(LOG)
+                .errmsg("redirecting log output to logging collector process")
+                .errhint(format!(
+                    "Future log output will appear in directory \"{}\".",
+                    Log_directory()
+                ))
+                .finish(loc("SysLogger_Start"))?;
+        }
 
         let pipe_write = SYSLOG_PIPE_W.load(Relaxed);
         // wasm32: unreachable (pipe creation FATALed above); no dup2 on WASI.
@@ -510,7 +545,7 @@ pub fn SysLogger_Start(child_slot: i32) -> PgResult<i32> {
                 ereport(FATAL)
                     .with_saved_errno(last_errno())
                     .errcode_for_file_access()
-                    .errmsg("could not redirect stdout: %m")
+                    .errmsg(format!("could not redirect stdout: {PCT_M}"))
                     .finish(loc("SysLogger_Start"))?;
             }
             let _ = std::io::stderr().flush();
@@ -521,11 +556,12 @@ pub fn SysLogger_Start(child_slot: i32) -> PgResult<i32> {
                 libc::fcntl(libc::STDERR_FILENO, libc::F_DUPFD_CLOEXEC, 3),
                 Relaxed,
             );
+            elog::config::set_syslogger_console_fd(SYSLOG_ORIG_STDERR.load(Relaxed));
             if libc::dup2(pipe_write, libc::STDERR_FILENO) < 0 {
                 ereport(FATAL)
                     .with_saved_errno(last_errno())
                     .errcode_for_file_access()
-                    .errmsg("could not redirect stderr: %m")
+                    .errmsg(format!("could not redirect stderr: {PCT_M}"))
                     .finish(loc("SysLogger_Start"))?;
             }
             libc::close(pipe_write);
@@ -534,7 +570,7 @@ pub fn SysLogger_Start(child_slot: i32) -> PgResult<i32> {
         let _ = pipe_write;
         SYSLOG_PIPE_W.store(-1, Relaxed);
         elog::config::set_redirection_done(true);
-        ipc::on_proc_exit(syslogger_drain_at_exit, 0);
+        ipc::set_final_exit_hook(syslogger_drain_at_exit);
     }
 
     // C's postmaster closes its fork-copies of the log FILEs here; these ARE
@@ -655,7 +691,7 @@ pub fn write_syslogger_file(buffer: &[u8], destination: i32) {
         unsafe { libc::fwrite(buffer.as_ptr().cast(), 1, buffer.len(), logfile) }
     };
     if rc != buffer.len() {
-        let msg = elog::errno::replace_percent_m("could not write to log file: %m\n", last_errno());
+        let msg = format!("could not write to log file: {}\n", elog::errno::strerror(last_errno()));
         let orig = SYSLOG_ORIG_STDERR.load(Relaxed);
         if orig < 0 {
             elog::write_stderr(&msg);
@@ -730,7 +766,7 @@ fn logfile_open(filename: &str, mode: &str, allow_errors: bool) -> PgResult<*mut
         ereport(if allow_errors { LOG } else { FATAL })
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not open log file \"{filename}\": %m"))
+            .errmsg(format!("could not open log file \"{filename}\": {PCT_M}"))
             .finish(loc("logfile_open"))?;
         set_errno(save_errno);
     }
@@ -847,7 +883,7 @@ fn logfile_getname(timestamp: pg_time_t, suffix: Option<&str>) -> String {
     let len = filename.len().min(MAXPGPATH - 1);
     filename.truncate(filename.floor_char_boundary(len));
     let tz = pgtz::log_timezone().expect("log_timezone not initialized");
-    if let Some(tm) = localtime::pg_localtime(timestamp, tz) {
+    if let Some(tm) = localtime::pg_localtime(timestamp, &tz) {
         // syslogger.c:1424: pg_strftime(filename + len, MAXPGPATH - len, ...)
         // — the NUL slot is inside that size, so MAXPGPATH - len - 1 bytes fit.
         let mut buf = [0u8; MAXPGPATH];
@@ -878,7 +914,7 @@ fn set_next_rotation_time(st: &mut SysLoggerState) {
     let rotinterval = rotation_age as i64 * SECS_PER_MINUTE;
     let mut now = time_now();
     let tz = pgtz::log_timezone().expect("log_timezone not initialized");
-    let gmtoff = localtime::pg_localtime(now, tz).map_or(0, |tm| tm.tm_gmtoff);
+    let gmtoff = localtime::pg_localtime(now, &tz).map_or(0, |tm| tm.tm_gmtoff);
     now += gmtoff;
     now -= now % rotinterval;
     now += rotinterval;
@@ -903,7 +939,7 @@ fn update_metainfo_datafile(st: &SysLoggerState) -> PgResult<()> {
                 ereport(LOG)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not remove file \"{LOG_METAINFO_DATAFILE}\": %m"))
+                    .errmsg(format!("could not remove file \"{LOG_METAINFO_DATAFILE}\": {PCT_M}"))
                     .finish(loc("update_metainfo_datafile"))?;
             }
         }
@@ -935,7 +971,7 @@ fn update_metainfo_datafile(st: &SysLoggerState) -> PgResult<()> {
         ereport(LOG)
             .with_saved_errno(last_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{LOG_METAINFO_DATAFILE_TMP}\": %m"))
+            .errmsg(format!("could not open file \"{LOG_METAINFO_DATAFILE_TMP}\": {PCT_M}"))
             .finish(loc("update_metainfo_datafile"))?;
         return Ok(());
     }
@@ -959,7 +995,7 @@ fn update_metainfo_datafile(st: &SysLoggerState) -> PgResult<()> {
             ereport(LOG)
                 .with_saved_errno(e)
                 .errcode_for_file_access()
-                .errmsg(format!("could not write file \"{LOG_METAINFO_DATAFILE_TMP}\": %m"))
+                .errmsg(format!("could not write file \"{LOG_METAINFO_DATAFILE_TMP}\": {PCT_M}"))
                 .finish(loc("update_metainfo_datafile"))?;
             return Ok(());
         }
@@ -971,7 +1007,7 @@ fn update_metainfo_datafile(st: &SysLoggerState) -> PgResult<()> {
             .with_saved_errno(last_errno())
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not rename file \"{LOG_METAINFO_DATAFILE_TMP}\" to \"{LOG_METAINFO_DATAFILE}\": %m"
+                "could not rename file \"{LOG_METAINFO_DATAFILE_TMP}\" to \"{LOG_METAINFO_DATAFILE}\": {PCT_M}"
             ))
             .finish(loc("update_metainfo_datafile"))?;
     }

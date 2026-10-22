@@ -1,0 +1,2 @@
+backend/postmaster/startup/src/lib.rs	LOG_STARTUP_PROGRESS_INTERVAL	pgport	exit	thread	a SIGHUP setting, process-wide, never carried; log_startup_progress_interval's backing, read by the startup process's progress timeout
+backend/postmaster/startup/src/lib.rs	STARTUP_PROGRESS_PHASE_START_TIME	pgport	exit	thread	the startup process's current progress-phase start, set by enable_startup_progress_timeout, read by has_startup_progress_timeout_expired

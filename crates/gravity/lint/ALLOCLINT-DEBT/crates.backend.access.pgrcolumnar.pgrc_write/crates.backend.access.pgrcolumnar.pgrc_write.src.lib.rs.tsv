@@ -1,0 +1,3 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/lib.rs
+method	std::clone::Clone::clone	4
+type	std::string::String	2

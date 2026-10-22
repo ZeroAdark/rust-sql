@@ -210,7 +210,7 @@ pub fn TransactionIdGetCommitTsData(
     let s = shared();
     if !s.commitTsActive.load(Relaxed) {
         LWLockRelease(CommitTsLock())?;
-        return error_commit_ts_disabled("TransactionIdGetCommitTsData");
+        return error_commit_ts_disabled();
     }
 
     if s.xidLastCommit.load(Relaxed) == xid {
@@ -250,7 +250,7 @@ pub fn GetLatestCommitTsData() -> PgResult<(TransactionId, TimestampTz, RepOrigi
     let s = shared();
     if !s.commitTsActive.load(Relaxed) {
         LWLockRelease(CommitTsLock())?;
-        return error_commit_ts_disabled("GetLatestCommitTsData");
+        return error_commit_ts_disabled();
     }
 
     let xid = s.xidLastCommit.load(Relaxed);
@@ -262,7 +262,7 @@ pub fn GetLatestCommitTsData() -> PgResult<(TransactionId, TimestampTz, RepOrigi
 }
 
 #[cold]
-fn error_commit_ts_disabled<T>(routine: &'static str) -> PgResult<T> {
+fn error_commit_ts_disabled<T>() -> PgResult<T> {
     let hint = if transam_xlog_seams::recovery_in_progress::call() {
         "Make sure the configuration parameter \"track_commit_timestamp\" is set on the primary server."
     } else {
@@ -272,7 +272,7 @@ fn error_commit_ts_disabled<T>(routine: &'static str) -> PgResult<T> {
         .errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
         .errmsg("could not get commit timestamp data")
         .errhint(hint)
-        .finish(loc(routine))?;
+        .finish(loc("error_commit_ts_disabled"))?;
     unreachable!("error_commit_ts_disabled returned");
 }
 

@@ -6,7 +6,7 @@
 //! libicu, absent = a C build without USE_ICU. The Windows
 //! EnumSystemLocalesEx leg (ENUM_SYSTEM_LOCALE) has no target here.
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use mcx::Mcx;
 use pg_collation::CollationForm;
 use pg_locale::{COLLPROVIDER_ICU, COLLPROVIDER_LIBC};
@@ -28,7 +28,7 @@ fn loc(line: i32, func: &'static str) -> ErrorLocation {
 /// "br_FR@euro"); Some(new name) only when a different name was generated.
 pub(crate) fn normalize_libc_locale_name(old: &str) -> Option<String> {
     let o = old.as_bytes();
-    let mut new: Vec<u8> = Vec::with_capacity(o.len());
+    let mut new: Vec<u8> = Vec::new();
     let mut changed = false;
     let mut i = 0;
     while i < o.len() {
@@ -160,7 +160,7 @@ pub fn pg_import_system_collations<'mcx>(mcx: Mcx<'mcx>, nspid: Oid) -> PgResult
             ereport(ERROR)
                 .with_saved_errno(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg("could not execute command \"locale -a\": %m")
+                .errmsg(format!("could not execute command \"locale -a\": {PCT_M}"))
                 .finish(loc(870, "pg_import_system_collations"))?;
         }
 

@@ -1,0 +1,77 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1u s1d s2m s1c s2c s3sel
+step s1u: UPDATE ws_t SET grp = 2, val = val + 1 WHERE id IN (1, 3);
+step s1d: DELETE FROM ws_t WHERE id = 4;
+step s2m: MERGE INTO ws_t t USING ws_s s ON t.id = s.id WHEN MATCHED AND s.id <= 5 AND (SELECT count(*) FROM ws_s s2 WHERE s2.grp = t.grp AND s2.val > t.val) > 1 THEN UPDATE SET val = (SELECT max(s2.val) FROM ws_s s2 WHERE s2.grp = t.grp) + t.val WHEN MATCHED AND s.id <= 5 THEN UPDATE SET val = -1; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val FROM ws_t ORDER BY id;
+id|grp|val
+--+---+---
+ 1|  2|811
+ 2|  2|820
+ 3|  2|831
+ 5|  2|850
+ 6|  0| 60
+ 7|  1| 70
+ 8|  2| 80
+ 9|  0| 90
+(8 rows)
+
+
+starting permutation: s1u s1d s2d s1c s2c s3sel
+step s1u: UPDATE ws_t SET grp = 2, val = val + 1 WHERE id IN (1, 3);
+step s1d: DELETE FROM ws_t WHERE id = 4;
+step s2d: MERGE INTO ws_t t USING ws_s s ON t.id = s.id WHEN MATCHED AND s.id <= 5 AND (SELECT count(*) FROM ws_s s2 WHERE s2.grp = t.grp) > 2 THEN DELETE WHEN MATCHED AND s.id <= 5 THEN UPDATE SET val = (SELECT min(s2.val) FROM ws_s s2 WHERE s2.grp = t.grp); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val FROM ws_t ORDER BY id;
+id|grp|val
+--+---+---
+ 6|  0| 60
+ 7|  1| 70
+ 8|  2| 80
+ 9|  0| 90
+(4 rows)
+
+
+starting permutation: s2m s1u s2c s1c s3sel
+step s2m: MERGE INTO ws_t t USING ws_s s ON t.id = s.id WHEN MATCHED AND s.id <= 5 AND (SELECT count(*) FROM ws_s s2 WHERE s2.grp = t.grp AND s2.val > t.val) > 1 THEN UPDATE SET val = (SELECT max(s2.val) FROM ws_s s2 WHERE s2.grp = t.grp) + t.val WHEN MATCHED AND s.id <= 5 THEN UPDATE SET val = -1;
+step s1u: UPDATE ws_t SET grp = 2, val = val + 1 WHERE id IN (1, 3); <waiting ...>
+step s2c: COMMIT;
+step s1u: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, grp, val FROM ws_t ORDER BY id;
+id|grp|val
+--+---+---
+ 1|  2|711
+ 2|  2|820
+ 3|  2|631
+ 4|  1|740
+ 5|  2|850
+ 6|  0| 60
+ 7|  1| 70
+ 8|  2| 80
+ 9|  0| 90
+(9 rows)
+
+
+starting permutation: s2d s1d s2c s1c s3sel
+step s2d: MERGE INTO ws_t t USING ws_s s ON t.id = s.id WHEN MATCHED AND s.id <= 5 AND (SELECT count(*) FROM ws_s s2 WHERE s2.grp = t.grp) > 2 THEN DELETE WHEN MATCHED AND s.id <= 5 THEN UPDATE SET val = (SELECT min(s2.val) FROM ws_s s2 WHERE s2.grp = t.grp);
+step s1d: DELETE FROM ws_t WHERE id = 4; <waiting ...>
+step s2c: COMMIT;
+step s1d: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, grp, val FROM ws_t ORDER BY id;
+id|grp|val
+--+---+---
+ 3|  0|300
+ 6|  0| 60
+ 7|  1| 70
+ 8|  2| 80
+ 9|  0| 90
+(5 rows)
+

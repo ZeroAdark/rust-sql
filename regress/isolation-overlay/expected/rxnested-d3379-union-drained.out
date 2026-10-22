@@ -1,0 +1,64 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2exp s1keep s1miss s1move s2upd s1c s2c s3sel
+step s2exp: EXPLAIN (COSTS OFF) UPDATE ud_t SET c = 'f' FROM (SELECT a FROM ud_src UNION ALL SELECT a + 1 FROM ud_src WHERE a > 0) ss (a) WHERE (ud_t.a = ss.a AND ud_t.b = 'b') OR ud_t.a = 3;
+QUERY PLAN                                                                             
+---------------------------------------------------------------------------------------
+Update on ud_t                                                                         
+  Update on ud_t ud_t_1                                                                
+  Update on ud_t_c ud_t_2                                                              
+  ->  Nested Loop                                                                      
+        Join Filter: (((ud_t.a = ud_src.a) AND (ud_t.b = 'b'::bpchar)) OR (ud_t.a = 3))
+        ->  Append                                                                     
+              ->  Seq Scan on ud_src                                                   
+              ->  Seq Scan on ud_src_child ud_src_1                                    
+              ->  Subquery Scan on "*SELECT* 2"                                        
+                    ->  Result                                                         
+                          ->  Append                                                   
+                                ->  Seq Scan on ud_src ud_src_3                        
+                                      Filter: (a > 0)                                  
+                                ->  Seq Scan on ud_src_child ud_src_4                  
+                                      Filter: (a > 0)                                  
+        ->  Materialize                                                                
+              ->  Append                                                               
+                    ->  Seq Scan on ud_t ud_t_1                                        
+                          Filter: ((b = 'b'::bpchar) OR (a = 3))                       
+                    ->  Seq Scan on ud_t_c ud_t_2                                      
+                          Filter: ((b = 'b'::bpchar) OR (a = 3))                       
+(21 rows)
+
+step s1keep: UPDATE ud_t_c SET c = 'x' WHERE a = 2;
+step s1miss: UPDATE ONLY ud_t SET b = 'a' WHERE a = 1;
+step s1move: UPDATE ONLY ud_t SET a = 2, b = 'b' WHERE a = 3;
+step s2upd: UPDATE ud_t SET c = 'f' FROM (SELECT a FROM ud_src UNION ALL SELECT a + 1 FROM ud_src WHERE a > 0) ss (a) WHERE (ud_t.a = ss.a AND ud_t.b = 'b') OR ud_t.a = 3; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, c FROM ud_t ORDER BY 1, 2, 3;
+rel   |a|b|c
+------+-+-+-
+ud_t  |1|a|p
+ud_t  |2|a|p
+ud_t  |2|b|f
+ud_t_c|1|a|p
+ud_t_c|2|b|f
+ud_t_c|3|b|f
+(6 rows)
+
+
+starting permutation: s1keep s1miss s1del s2del s1c s2c s3sel
+step s1keep: UPDATE ud_t_c SET c = 'x' WHERE a = 2;
+step s1miss: UPDATE ONLY ud_t SET b = 'a' WHERE a = 1;
+step s1del: DELETE FROM ud_t_c WHERE a = 3;
+step s2del: DELETE FROM ud_t USING (SELECT a FROM ud_src UNION ALL SELECT a + 1 FROM ud_src WHERE a > 0) ss (a) WHERE (ud_t.a = ss.a AND ud_t.b = 'b') OR ud_t.a = 3; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, c FROM ud_t ORDER BY 1, 2, 3;
+rel   |a|b|c
+------+-+-+-
+ud_t  |1|a|p
+ud_t  |2|a|p
+ud_t_c|1|a|p
+(3 rows)
+

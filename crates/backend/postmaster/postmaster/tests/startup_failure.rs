@@ -127,8 +127,10 @@ fn full_ipci_bringup() -> &'static str {
     pmchild_seams::init_postmaster_child_slots::call();
     bgworker::BackgroundWorkerShmemInit().expect("bgworker shmem init");
 
-    let dir = std::env::temp_dir().join(format!("pgrust-startup-failure-{}", std::process::id()));
+    let dir = data_dir_of(std::process::id());
     let _ = std::fs::remove_dir_all(&dir);
+    remove_data_dir_at_exit();
+    println!("data dir {}", dir.display());
     let dir: &'static str = Box::leak(dir.to_str().unwrap().to_string().into_boxed_str());
     write_valid_control_file(dir);
     init_small::globals::SetDataDir(dir);
@@ -141,6 +143,45 @@ fn full_ipci_bringup() -> &'static str {
     waiteventset::InitializeWaitEventSupport().unwrap();
     miscinit::InitProcessLocalLatch().expect("local latch");
     dir
+}
+
+fn data_dir_of(pid: u32) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("pgrust-startup-failure-{pid}"))
+}
+
+/// The scratch data directory is the process's (SetDataDir), and the
+/// postmaster's threads may still use it after the test returns, so it goes
+/// at the process's exit.
+fn remove_data_dir_at_exit() {
+    extern "C" fn gone() {
+        let _ = std::fs::remove_dir_all(data_dir_of(std::process::id()));
+    }
+    extern "C" {
+        fn atexit(f: extern "C" fn()) -> core::ffi::c_int;
+    }
+    // SAFETY: the C library's atexit, given a function that cannot unwind
+    // (it ignores the removal's error).
+    unsafe { atexit(gone) };
+}
+
+/// The test, run alone in a child process, leaves no data directory behind
+/// once the child exits.
+#[test]
+fn a_run_leaves_nothing_behind() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "startup_failure_in_pm_startup_waits_for_live_children", "--nocapture"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let dir = data_dir_of(child.id());
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "child failed: {stdout}");
+    assert!(
+        stdout.contains(&format!("data dir {}", dir.display())),
+        "the child never made its data dir: {stdout}"
+    );
+    assert!(!dir.exists(), "{} left behind", dir.display());
 }
 
 #[test]

@@ -1,0 +1,2 @@
+_support/allocarena/src/own.rs	INLINE_OK	memory	exit	thread	D4692: this thread gives its cache runs back itself (pg:memrelease and the memory runtime idle loop mark themselves; a free past the hot pool on any other thread leaves the run for the releaser while one runs)
+_support/allocarena/src/own.rs	GIVES	memory	exit	thread	D4692: the runs this thread gave back to the kernel (the witness count of its page give-back calls in own.rs)

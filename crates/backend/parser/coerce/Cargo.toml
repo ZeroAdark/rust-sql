@@ -9,6 +9,7 @@ name = "coerce"
 path = "src/lib.rs"
 
 [dependencies]
+stack_depth_core = { path = "../../utils/misc/stack_depth_core" }
 datum = { path = "../../../_support/types/datum" }
 detoast = { path = "../../access/common/detoast" }
 elog = { path = "../../utils/error/elog" }

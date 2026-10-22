@@ -6,11 +6,14 @@
 
 pub mod array;
 pub mod autotune;
+pub mod carry;
 pub mod cnum;
 pub mod enum_lookup;
 pub mod help_config;
+pub mod knob;
 pub mod layers;
 pub mod model;
+mod nondef_list;
 pub mod name;
 pub mod process_config;
 pub mod registry;
@@ -99,11 +102,10 @@ thread_local! {
     };
 }
 
-// reserved_class_prefix plus the DefineCustomStringVariable calls made on
-// this thread; the postmaster's copy is what a child inherits.
+// Custom definitions and reserved prefixes survive fork into each backend.
 struct InheritedCustomState {
     prefixes: Vec<String>,
-    definitions: Vec<CustomStringDefinition>,
+    definitions: Vec<CustomVariableDefinition>,
 }
 
 pub fn reserved_class_prefixes() -> Vec<String> {
@@ -111,43 +113,56 @@ pub fn reserved_class_prefixes() -> Vec<String> {
 }
 
 pub fn inherit_reserved_class_prefixes(prefixes: &[String]) {
-    RESERVED_CLASS_PREFIX.with(|s| s.borrow_mut().prefixes = prefixes.to_vec());
+    RESERVED_CLASS_PREFIX.with(|s| {
+        let mut v = Vec::new();
+        let _ = v.try_reserve(prefixes.len());
+        v.extend_from_slice(prefixes);
+        s.borrow_mut().prefixes = v;
+    });
 }
 
-// A DefineCustomStringVariable call, replayable into a child's rebuilt
-// registry: C's definitions live in the postmaster's address space and
-// survive fork, so a shared_preload_libraries definition holds in every
-// backend (guc.c:5245).
 #[derive(Clone)]
-pub struct CustomStringDefinition {
-    pub name: &'static str,
-    pub short_desc: Option<&'static str>,
-    pub long_desc: Option<&'static str>,
-    pub boot_val: Option<String>,
-    pub context: GucContext,
-    pub flags: i32,
+pub enum CustomVariableDefinition {
+    String {
+        name: &'static str,
+        short_desc: Option<&'static str>,
+        long_desc: Option<&'static str>,
+        boot_val: Option<String>,
+        context: GucContext,
+        flags: i32,
+    },
+    Setting(guc_tables::GucSetting),
 }
 
-pub fn custom_string_definitions() -> Vec<CustomStringDefinition> {
+pub fn custom_variable_definitions() -> Vec<CustomVariableDefinition> {
     RESERVED_CLASS_PREFIX.with(|s| s.borrow().definitions.clone())
 }
 
-pub fn inherit_custom_string_definitions(definitions: &[CustomStringDefinition]) {
-    RESERVED_CLASS_PREFIX.with(|s| s.borrow_mut().definitions = definitions.to_vec());
+pub fn inherit_custom_variable_definitions(definitions: &[CustomVariableDefinition]) {
+    RESERVED_CLASS_PREFIX.with(|s| {
+        let mut v = Vec::new();
+        let _ = v.try_reserve(definitions.len());
+        v.extend_from_slice(definitions);
+        s.borrow_mut().definitions = v;
+    });
 }
 
 // Re-runs the inherited definitions into a freshly built child registry
 // (before the value restore, which needs the real variable to exist).
 pub fn redefine_inherited_custom_variables() -> PgResult<()> {
-    for d in custom_string_definitions() {
-        define_custom_string_variable(
-            d.name,
-            d.short_desc,
-            d.long_desc,
-            d.boot_val.as_deref(),
-            d.context,
-            d.flags,
-        )?;
+    for d in custom_variable_definitions() {
+        match d {
+            CustomVariableDefinition::String {
+                name, short_desc, long_desc, boot_val, context, flags,
+            } => {
+                define_custom_string_variable(
+                    name, short_desc, long_desc, boot_val.as_deref(), context, flags,
+                )?;
+            }
+            CustomVariableDefinition::Setting(setting) => {
+                define_custom_variable(store::build_variable(setting).expect("custom GUC type"))?;
+            }
+        }
     }
     Ok(())
 }
@@ -342,6 +357,43 @@ pub fn GetConfigOption(
     .expect("GUC store not initialized")
 }
 
+/// Where a caller found one option's name in this thread's registry the last
+/// time it asked (`get_config_option_at`): its index, or that it was absent
+/// while the registry held `len` variables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionSlot {
+    Unknown,
+    Found { generation: u64, idx: usize },
+    Missing { generation: u64, len: usize },
+}
+
+/// GetConfigOption(name, missing_ok = true, restrict_privileged = false) for
+/// a caller that reads the same names again after every store mutation: the
+/// name is looked up once and then read by its index (an index stays its
+/// variable's for the registry's life), and an absent name is looked up again
+/// only once the registry has grown (a SET of a new placeholder appends it).
+/// `None` when this thread has no store.
+pub fn get_config_option_at(slot: &std::cell::Cell<OptionSlot>, name: &str) -> Option<Option<String>> {
+    store::with_store(|reg| {
+        let generation = store::store_generation();
+        let record = match slot.get() {
+            OptionSlot::Found { generation: g, idx } if g == generation => reg.live_at(idx).or_else(|| lookup(slot, reg, name, generation)),
+            OptionSlot::Missing { generation: g, len } if g == generation && len == reg.len() => None,
+            _ => lookup(slot, reg, name, generation),
+        };
+        record.map(registry::raw_config_value)
+    })
+}
+
+fn lookup<'r>(slot: &std::cell::Cell<OptionSlot>, reg: &'r GucRegistry, name: &str, generation: u64) -> Option<&'r GucVariable> {
+    let idx = reg.find_index(name);
+    slot.set(match idx {
+        Some(idx) => OptionSlot::Found { generation, idx },
+        None => OptionSlot::Missing { generation, len: reg.len() },
+    });
+    idx.map(|idx| &reg[idx])
+}
+
 // GetConfigOptionFlags (guc.c:4438).
 pub fn GetConfigOptionFlags(name: &str, missing_ok: bool) -> PgResult<i32> {
     store::with_store(|reg| get_config_option_flags(reg, name, missing_ok))
@@ -460,7 +512,7 @@ pub fn DefineCustomStringVariable(
 ) -> PgResult<()> {
     define_custom_string_variable(name, short_desc, long_desc, boot_val, context, flags)?;
     RESERVED_CLASS_PREFIX.with(|s| {
-        s.borrow_mut().definitions.push(CustomStringDefinition {
+        s.borrow_mut().definitions.push(CustomVariableDefinition::String {
             name,
             short_desc,
             long_desc,
@@ -503,7 +555,7 @@ fn define_custom_string_variable(
         flags,
         config_type::PGC_STRING,
     );
-    let mut var = GucVariable::String(model::config_string {
+    let var = GucVariable::String(model::config_string {
         gen,
         variable: &guc_tables::vars::GucPlaceholderVariable,
         value: None,
@@ -511,15 +563,38 @@ fn define_custom_string_variable(
         check_hook: None,
         assign_hook: None,
         show_hook: None,
-        reset_val: None,
+        reset_val: boot_val.map(str::to_owned),
         reset_extra: None,
     });
-    // InitializeOneGUCOption: the default value first, even when a
-    // placeholder value is about to be applied (it may be invalid).
-    registry::initialize_one_guc_option_hooks(&mut var, false)?;
-    if let GucVariable::String(conf) = &mut var {
-        conf.reset_val = conf.boot_val.clone();
+    define_custom_variable(var)
+}
+
+pub fn DefineCustomVariable(setting: guc_tables::GucSetting) -> PgResult<()> {
+    if setting.context() == types_guc::PGC_POSTMASTER
+        && !miscinit::process_shared_preload_libraries_in_progress()
+    {
+        return Err(elog::ereport(types_error::FATAL)
+            .errmsg("cannot create PGC_POSTMASTER variables after startup")
+            .into_error()
+            .into());
     }
+    if setting.flags() & types_guc::GUC_LIST_QUOTE != 0 {
+        return Err(elog::ereport(types_error::FATAL)
+            .errmsg("extensions cannot define GUC_LIST_QUOTE variables")
+            .into_error()
+            .into());
+    }
+    define_custom_variable(store::build_variable(setting).expect("custom GUC type"))?;
+    RESERVED_CLASS_PREFIX.with(|s| {
+        s.borrow_mut().definitions.push(CustomVariableDefinition::Setting(setting));
+    });
+    Ok(())
+}
+
+fn define_custom_variable(mut var: GucVariable) -> PgResult<()> {
+    let name = var.name().to_owned();
+    let name = name.as_str();
+    registry::initialize_one_guc_option_hooks(&mut var, true)?;
     let holder = store::with_store_mut(|reg| reg.define_custom_variable(var))
         .unwrap_or_else(|| Err(Box::new(PgError::error("GUC store is not initialized"))))?;
     let Some(holder) = holder else {
@@ -701,6 +776,7 @@ pub fn init_seams() {
 
     s::new_guc_nest_level::set(NewGUCNestLevel);
     s::get_config_option_missing_ok::set(|name| GetConfigOption(name, true, false));
+    s::knob_read::set(knob::knob_read);
     s::guc_check_errdetail::set(|detail| GUC_check_errdetail(detail));
     s::guc_check_errcode::set(GUC_check_errcode);
     s::guc_check_errhint::set(|hint| GUC_check_errhint(hint));

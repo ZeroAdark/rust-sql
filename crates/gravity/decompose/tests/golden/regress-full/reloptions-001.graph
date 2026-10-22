@@ -1,0 +1,13 @@
+-- regress-full-reloptions-001
+-- SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass AND reloptions IS NULL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1259 rti=1 am=heap index=2662
+    key att=1 op=607 value=c26:45700
+    recheck (op607(v1.1, c26:45700))
+    lanes Attr(33):byref8:vl:win/page
+  filter isnull(v1.33)
+  project (1=v1.33)
+  outs 1=vl:win/page
+mapped: IndexScan

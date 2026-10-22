@@ -1,0 +1,1 @@
+backend/utils/cache/relcache_build/src/index.rs	OPCLASS_CACHE	pgport	exit	leader	relcache build; C's OpClassCache: opclass family / input type / support procs per opclass OID, filled once, never flushed

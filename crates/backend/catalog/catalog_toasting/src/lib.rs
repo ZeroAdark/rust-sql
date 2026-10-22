@@ -58,6 +58,35 @@ pub fn AlterTableCreateToastTable<'mcx>(
 // toasting.c:64-68: the transient heap of a table rewrite (CLUSTER, VACUUM
 // FULL, ALTER TABLE rewrites) gets its toast table with relrewrite =
 // OIDOldToast, the old heap's toast table.
+/// `BootstrapToastTable` (toasting.c): `declare toast <oid> <indexoid> on <rel>`.
+pub fn BootstrapToastTable<'mcx>(
+    mcx: Mcx<'mcx>,
+    rel_name: &str,
+    toast_oid: Oid,
+    toast_index_oid: Oid,
+) -> PgResult<()> {
+    let rv = rel_vocab::RangeVar {
+        catalogname: None,
+        schemaname: None,
+        relname: rel_name,
+        inh: true,
+        relpersistence: types_core::RELPERSISTENCE_PERMANENT,
+        location: -1,
+    };
+    let rel = table::table_openrv(mcx, &rv, AccessExclusiveLock)?;
+    if rel.rd_rel.relkind != types_rel::RELKIND_RELATION && rel.rd_rel.relkind != types_rel::RELKIND_MATVIEW {
+        return Err(Box::new(types_error::PgError::error(format!(
+            "\"{rel_name}\" is not a table or materialized view"
+        ))));
+    }
+    if !create_toast_table(mcx, &rel, toast_oid, toast_index_oid, None, AccessExclusiveLock, false, InvalidOid)? {
+        return Err(Box::new(types_error::PgError::error(format!(
+            "\"{rel_name}\" does not require a toast table"
+        ))));
+    }
+    rel.close(NoLock)
+}
+
 pub fn NewHeapCreateToastTable<'mcx>(
     mcx: Mcx<'mcx>,
     relOid: Oid,
@@ -77,13 +106,15 @@ fn CheckAndCreateToastTable<'mcx>(
     OIDOldToast: Oid,
 ) -> PgResult<()> {
     let rel = table::table_open(mcx, relOid, lockmode)?;
-    create_toast_table(mcx, &rel, reloptions, lockmode, check, OIDOldToast)?;
+    create_toast_table(mcx, &rel, InvalidOid, InvalidOid, reloptions, lockmode, check, OIDOldToast)?;
     rel.close(NoLock)
 }
 
 fn create_toast_table<'mcx>(
     mcx: Mcx<'mcx>,
     rel: &Relation<'mcx>,
+    toast_oid: Oid,
+    toast_index_oid: Oid,
     reloptions: Option<&[u8]>,
     lockmode: types_rel::LOCKMODE,
     check: bool,
@@ -137,6 +168,8 @@ fn create_toast_table<'mcx>(
         mcx,
         &catalog_heap::HeapCreateParams {
             relname: &toast_relname,
+            relid: toast_oid,
+            reltypeid: InvalidOid,
             relnamespace: namespaceid,
             reltablespace: rel.rd_rel.reltablespace,
             ownerid: rel.rd_rel.relowner,
@@ -192,6 +225,7 @@ fn create_toast_table<'mcx>(
         ii_WithoutOverlaps: false,
         ii_CheckedUnchanged: false,
         ii_IndexUnchanged: false,
+        ii_ParallelWorkers: 0,
     };
     let collationIds = [InvalidOid, InvalidOid];
     let opclassIds = [OID_BTREE_OPS_OID, INT4_BTREE_OPS_OID];
@@ -201,7 +235,7 @@ fn create_toast_table<'mcx>(
         mcx,
         &toast_rel,
         toast_idxname.as_bytes(),
-        InvalidOid,
+        toast_index_oid,
         &mut indexInfo,
         &[&b"chunk_id"[..], &b"chunk_seq"[..]],
         catalog_index::BTREE_AM_OID,
@@ -227,9 +261,6 @@ fn create_toast_table<'mcx>(
 
     // Store the toast table's OID in the parent's pg_class row.
     let class_rel = table::table_open(mcx, RELATION_RELATION_ID, RowExclusiveLock)?;
-    if miscinit_seams::is_bootstrap_processing_mode::call() {
-        unported("create_toast_table: bootstrap inplace reltoastrelid update");
-    }
     {
         let mut key = ScanKeyData::empty();
         key.sk_attno = 1;
@@ -238,17 +269,6 @@ fn create_toast_table<'mcx>(
         key.sk_func = fmgr_seams::fmgr_info::call(types_core::fmgr::F_OIDEQ)
             .unwrap_or_else(|e| panic!("fmgr_info(F_OIDEQ) failed: {e:?}"));
         key.sk_argument = Datum::from_oid(relOid);
-        let mut scan = genam::systable_beginscan(
-            mcx,
-            &class_rel,
-            catalog::ClassOidIndexId,
-            true,
-            None,
-            core::slice::from_ref(&key),
-        )?;
-        let Some(reltup) = genam::systable_getnext(mcx, &mut scan)? else {
-            return Err(relation_lookup_failed(relOid));
-        };
         let natts = class_rel.descr().natts as usize;
         let mut values: mcx::PgVec<'_, Datum> = mcx::vec_with_capacity_in(mcx, natts)?;
         let mut isnull: mcx::PgVec<'_, bool> = mcx::vec_with_capacity_in(mcx, natts)?;
@@ -258,17 +278,51 @@ fn create_toast_table<'mcx>(
         replace.resize(natts, false);
         values[Anum_pg_class_reltoastrelid - 1] = Datum::from_oid(toast_relid);
         replace[Anum_pg_class_reltoastrelid - 1] = true;
-        let mut newtup = heaptuple::heap_modify_tuple(
-            mcx,
-            reltup,
-            class_rel.descr(),
-            &values,
-            &isnull,
-            &replace,
-        )?;
-        let otid = reltup.t_self;
-        genam::systable_endscan(mcx, scan)?;
-        catalog_indexing::CatalogTupleUpdate(mcx, &class_rel, &otid, &mut newtup)?;
+        if miscinit_seams::is_bootstrap_processing_mode::call() {
+            // While bootstrapping we cannot UPDATE: overwrite in place.
+            let Some((reltup, state)) = genam::systable_inplace_update_begin(
+                mcx,
+                &class_rel,
+                catalog::ClassOidIndexId,
+                true,
+                core::slice::from_ref(&key),
+            )?
+            else {
+                return Err(relation_lookup_failed(relOid));
+            };
+            let newtup = heaptuple::heap_modify_tuple(
+                mcx,
+                reltup.as_tuple(),
+                class_rel.descr(),
+                &values,
+                &isnull,
+                &replace,
+            )?;
+            genam::systable_inplace_update_finish(mcx, state, newtup.as_tuple())?;
+        } else {
+            let mut scan = genam::systable_beginscan(
+                mcx,
+                &class_rel,
+                catalog::ClassOidIndexId,
+                true,
+                None,
+                core::slice::from_ref(&key),
+            )?;
+            let Some(reltup) = genam::systable_getnext(mcx, &mut scan)? else {
+                return Err(relation_lookup_failed(relOid));
+            };
+            let mut newtup = heaptuple::heap_modify_tuple(
+                mcx,
+                reltup,
+                class_rel.descr(),
+                &values,
+                &isnull,
+                &replace,
+            )?;
+            let otid = reltup.t_self;
+            genam::systable_endscan(mcx, scan)?;
+            catalog_indexing::CatalogTupleUpdate(mcx, &class_rel, &otid, &mut newtup)?;
+        }
     }
     class_rel.close(RowExclusiveLock)?;
 

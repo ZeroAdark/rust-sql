@@ -73,14 +73,31 @@ fn load_libraries(libraries: Option<&str>, gucname: &str, restricted: bool) -> P
     Ok(())
 }
 
+/// The preload window (`process_shared_preload_libraries_in_progress`): open while a boot-time library list loads,
+/// closed by its drop on every way out, an unwind included (C clears the flag after the load returns).
+struct PreloadWindow;
+
+impl PreloadWindow {
+    fn open() -> PreloadWindow {
+        IN_PROGRESS.set(true);
+        PreloadWindow
+    }
+}
+
+impl Drop for PreloadWindow {
+    fn drop(&mut self) {
+        IN_PROGRESS.set(false);
+    }
+}
+
 pub fn process_shared_preload_libraries() -> PgResult<()> {
-    IN_PROGRESS.set(true);
+    let window = PreloadWindow::open();
     let r = load_libraries(
         string_get(&SHARED_PRELOAD_LIBRARIES).as_deref(),
         "shared_preload_libraries",
         false,
     );
-    IN_PROGRESS.set(false);
+    drop(window);
     r?;
     DONE.set(true);
     Ok(())
@@ -95,10 +112,8 @@ pub fn process_preload_contrib() -> PgResult<()> {
     let Some(list) = string_get(&PRELOAD_CONTRIB) else { return Ok(()) };
     // Same boot window as shared_preload_libraries: a pg_init loaded here may
     // install hooks/shmem exactly as if preloaded.
-    IN_PROGRESS.set(true);
-    let r = load_libraries(Some(&list), "preload_contrib", false);
-    IN_PROGRESS.set(false);
-    r
+    let _window = PreloadWindow::open();
+    load_libraries(Some(&list), "preload_contrib", false)
 }
 
 pub fn process_shared_preload_libraries_done() -> bool {
@@ -154,16 +169,31 @@ pub fn process_shmem_requests_in_progress() -> bool {
     SHMEM_REQUESTS_IN_PROGRESS.get()
 }
 
+/// The shmem request window (`process_shmem_requests_in_progress`): open while the libraries' request hooks run, closed
+/// by its drop on every way out, an unwind included.
+struct ShmemRequestWindow;
+
+impl ShmemRequestWindow {
+    fn open() -> ShmemRequestWindow {
+        SHMEM_REQUESTS_IN_PROGRESS.set(true);
+        ShmemRequestWindow
+    }
+}
+
+impl Drop for ShmemRequestWindow {
+    fn drop(&mut self) {
+        SHMEM_REQUESTS_IN_PROGRESS.set(false);
+    }
+}
+
 /// process_shmem_requests (miscinit.c:1931-1937).
 pub fn process_shmem_requests() -> PgResult<()> {
-    SHMEM_REQUESTS_IN_PROGRESS.set(true);
-    let r = SHMEM_REQUEST_HOOKS
+    let _window = ShmemRequestWindow::open();
+    SHMEM_REQUEST_HOOKS
         .read()
         .unwrap()
         .iter()
-        .try_for_each(|hook| hook());
-    SHMEM_REQUESTS_IN_PROGRESS.set(false);
-    r
+        .try_for_each(|hook| hook())
 }
 
 pub(crate) fn install_preload_guc_vars() {

@@ -1,0 +1,16 @@
+[package]
+name = "adt_jsonb_pathstats"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+# pgrust-only (no C counterpart): the binary format of the per-path jsonb
+# statistics slot, shared by ANALYZE (commands/analyze jsonb_typanalyze.rs,
+# the writer) and the planner (optimizer/plan/planner jsonb_stats.rs, the
+# reader). Pure bytes, no dependencies.
+
+[lib]
+name = "adt_jsonb_pathstats"
+path = "src/lib.rs"
+
+[dependencies]

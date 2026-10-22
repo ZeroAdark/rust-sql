@@ -1,0 +1,102 @@
+-- regress-full-with-066
+-- WITH RECURSIVE tab(id_key,link) AS (VALUES (1,17), (2,17), (3,17), (4,17), (6,17), (5,17)), iter (id_key, row_type, link) AS ( SELECT 0, 'base', 17 UNION ( WITH remaining(id_key, row_type, link, min) AS ( SELECT tab.id_key, 'true'::text, iter.link, MIN(tab.id_key) OVER () FROM tab INNER JOIN iter USING (link) WHERE tab.id_key > iter.id_key ), first_remaining AS ( SELECT id_key, row_type, link FROM remaining WHERE id_key=min ), effect AS ( SELECT tab.id_key, 'new'::text, tab.link FROM first_remaining e INNER JOIN tab ON e.id_key=tab.id_key WHERE e.row_type = 'false' ) SELECT * FROM first_remaining UNION ALL SELECT * FROM effect ) ) SELECT * FROM iter;
+graph pipelines=10 breakers=9 init_plans=3 root=p9
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  nodes n1@0
+  source values rti=2 rows=6
+    row (c23:1, c23:17)
+    row (c23:2, c23:17)
+    row (c23:3, c23:17)
+    row (c23:4, c23:17)
+    row (c23:6, c23:17)
+    row (c23:5, c23:17)
+  project (1=v2.1, 2=v2.2)
+  outs 1=w4:val 2=w4:val
+p1 node=10 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  nodes n10@0 n8@1^
+  source const
+  project (1=c23:0, 2=c25:'base', 3=c23:17)
+  outs 1=w4:val 2=vl:stmt/imm 3=w4:val
+p2 node=7 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 HashBuild)
+  desc consumes=slot0@p0 words=bits@5/6
+  nodes n7@0 n6@1
+  source breaker slot=0
+  project (1=v4.1, 2=v4.2)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=w4:val 2=w4:val
+p3 node=5 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Materialize)
+  desc consumes=slot1@p1 consumes=slot2@p2
+  nodes n5@0 n4@1 n3@3^
+  source breaker slot=1
+  project (1=v5.1, 2=v5.2, 3=v5.3)
+  probe slot=2 inner=n6 JOIN_INNER keys=(outer.3) decls=23/23:I32 clauses=(op96(outer.3, inner.2)) qual=(op521(inner.1, outer.1))
+  project (1=inner.1, 2=outer.3)
+  outs 1=w4:val 2=vl:row 3=w4:val
+  outs 1=w4:val 2=w4:val
+p4 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=4 Materialize)
+  desc consumes=slot3@p3
+  nodes n3@0 n2@2
+  source breaker slot=3
+  window ref=1 top partition= order= frame=Range unbounded-preceding..current-row
+    fn resno=4 Aggregate cursor=peers,frame, win2132(outer.1)
+  project (1=outer.1, 2=c25:'true', 3=outer.2, 4=outer.3)
+  filter op96(v3.1, v3.4)
+  project (1=v3.1, 2=v3.2, 3=v3.3)
+  outs 1=w4:val 2=vl:stmt/imm 3=w4:val 4=w4:val
+  outs 1=w4:val 2=vl:row 3=w4:val
+p5 node=18 serial site=-1 reason=NoDrivingSite end=breaker(slot=5 HashBuild)
+  desc consumes=slot4@p4 words=bits@6/7
+  nodes n18@0 n17@2
+  source breaker slot=4
+  filter op98(v15.2, c25:'false')
+  project (1=v15.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val
+p6 node=13 serial site=-1 reason=NoDrivingSite end=breaker(slot=6 Materialize)
+  desc consumes=slot4@p4
+  nodes n13@0 n12@1 n8@3^
+  source breaker slot=4
+  project (1=v13.1, 2=v13.2, 3=v13.3)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=vl:row 3=w4:val
+  outs 1=w4:val 2=vl:life/breaker 3=w4:val
+p7 node=16 serial site=-1 reason=NoDrivingSite end=breaker(slot=6 Materialize)
+  desc consumes=slot0@p0 consumes=slot5@p5
+  nodes n16@0 n15@1 n12@3 n8@5^
+  source breaker slot=0
+  project (1=v16.1, 2=v16.2)
+  probe slot=5 inner=n17 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=c25:'new', 3=outer.2)
+  append arm 1/2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val 2=vl:stmt/imm 3=w4:val
+  outs 1=w4:val 2=vl:life/breaker 3=w4:val
+p8 node=8 serial site=-1 reason=NoDrivingSite end=breaker(slot=7 Materialize)
+  desc consumes=slot1@p1 consumes=slot6@p7
+  nodes n8@0
+  source breaker slot=1
+  iterate body=p7 work=slot1 next=slot6 until=Empty wtparam=1 dedup keys=1=96:I32,2=98:Fp128,3=96:I32 hash-loud reruns=p3,p4,p5,p6,p7
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=vl:life/breaker 3=w4:val
+p9 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot7@p8
+  nodes n0@0
+  source breaker slot=7
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  outs 1=w4:val 2=vl:row 3=w4:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B
+breaker slot=4 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B
+breaker slot=5 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[I32]->[Count@8] 16B
+breaker slot=6 kind=Materialize budget=Share spill=Runs producer=p6 layout=[]->[Count@0] 8B
+breaker slot=6 kind=Materialize budget=Share spill=Runs producer=p7 layout=[]->[Count@0] 8B
+breaker slot=7 kind=Materialize budget=Share spill=Runs producer=p8 layout=[]->[Count@0] 8B
+init_plan id=1 pipeline=p0 link=Cte param=$exec0 slot=0 raise-free
+init_plan id=2 pipeline=p4 link=Cte param=$exec2 slot=4
+init_plan id=3 pipeline=p8 link=Cte param=$exec3 slot=7
+rerun node=8 subplan=-1 pipelines=p3,p4,p5,p6,p7 slots=0,1,2,3,4,5,6
+mapped: Result Append RecursiveUnion SubqueryScan ValuesScan CteScan WorkTableScan HashJoin WindowAgg Hash SubPlan

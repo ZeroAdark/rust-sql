@@ -1,5 +1,5 @@
 // Substrate e2e: real worker threads through bgworker::BackgroundWorkerMain,
-// tuples back through shm_mq/tqueue, C-shaped error rethrow. Harness deltas
+// tuples back through shm_mq, C-shaped error rethrow. Harness deltas
 // from a live server, each the narrowest available: no postmaster thread (the
 // test drives the registered-worker launch/reap the way serverloop would),
 // database_id InvalidOid (no catalog connect), hand-built MVCC active
@@ -14,6 +14,8 @@ use types_error::{PgError, PgResult, ERROR};
 use types_startup::StartupData;
 
 const N_TUPLES: usize = 500;
+/// tqueue.c PARALLEL_TUPLE_QUEUE_SIZE.
+const PARALLEL_TUPLE_QUEUE_SIZE: usize = 65536;
 
 fn serial() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
@@ -236,14 +238,60 @@ fn stub_seams() {
     }
 }
 
+fn data_dir_of(pid: u32) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("pgrust_par_e2e_{pid}"))
+}
+
+/// The process's data directory (every test's working directory, so no
+/// test's end may remove it) goes at the process's exit.
+fn remove_data_dir_at_exit() {
+    extern "C" fn gone() {
+        let _ = std::fs::remove_dir_all(data_dir_of(std::process::id()));
+    }
+    extern "C" {
+        fn atexit(f: extern "C" fn()) -> core::ffi::c_int;
+    }
+    // SAFETY: the C library's atexit, given a function that cannot unwind
+    // (it ignores the removal's error).
+    unsafe { atexit(gone) };
+}
+
+/// A run of this test alone, in a child process, leaves no data directory
+/// behind once the child exits.
+#[test]
+fn a_run_leaves_nothing_behind() {
+    const CHILD: &str = "PGRUST_PAR_E2E_LEAVE_NOTHING_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        setup();
+        return;
+    }
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "a_run_leaves_nothing_behind", "--nocapture"])
+        .env(CHILD, "1")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let dir = data_dir_of(child.id());
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "child failed: {stdout}");
+    assert!(
+        stdout.contains(&format!("data dir {}", dir.display())),
+        "the child never made its data dir: {stdout}"
+    );
+    assert!(!dir.exists(), "{} left behind", dir.display());
+}
+
 fn setup() {
     static SETUP: Once = Once::new();
     SETUP.call_once(|| {
-        let dir = std::env::temp_dir().join(format!("pgrust_par_e2e_{}", std::process::id()));
+        let dir = data_dir_of(std::process::id());
         let _ = std::fs::remove_dir_all(&dir);
         for sub in ["global", "pg_wal", "pg_xact", "pg_subtrans"] {
             std::fs::create_dir_all(dir.join(sub)).unwrap();
         }
+        remove_data_dir_at_exit();
+        println!("data dir {}", dir.display());
         std::env::set_current_dir(&dir).unwrap();
         let dir_str: &'static str =
             Box::leak(dir.to_str().unwrap().to_string().into_boxed_str());
@@ -418,8 +466,11 @@ fn e2e_worker_main(shared: &parallel::ParallelShared) -> PgResult<()> {
     let mut sent = 0f64;
     for i in 0..N_TUPLES {
         let img = tuple_image(me, i);
-        if !tqueue::tqueue_send_bytes(&mut tx, &img)? {
-            break;
+        // tqueueReceiveSlot's queue-facing core: Detached = the leader is gone.
+        match tx.send(&img, false, false)? {
+            shm_mq::ShmMqResult::Detached => break,
+            shm_mq::ShmMqResult::Success => {}
+            r => panic!("shm_mq_send: {r:?}"),
         }
         sent += 1.0;
     }
@@ -850,14 +901,14 @@ fn substrate_happy_path_with_launch_fewer() {
     let leader_procno = g::MyProcNumber();
     let queues: Vec<Arc<shm_mq::ShmMq>> = (0..3)
         .map(|_| {
-            let mq = shm_mq::shm_mq_create(tqueue::PARALLEL_TUPLE_QUEUE_SIZE);
+            let mq = shm_mq::shm_mq_create(PARALLEL_TUPLE_QUEUE_SIZE);
             mq.set_receiver(leader_procno);
             mq
         })
         .collect();
-    let mut readers: Vec<tqueue::TupleQueueReader> = queues
+    let mut readers: Vec<shm_mq::ShmMqHandle> = queues
         .iter()
-        .map(|mq| tqueue::TupleQueueReader::new(shm_mq::shm_mq_attach(Arc::clone(mq))))
+        .map(|mq| shm_mq::shm_mq_attach(Arc::clone(mq)))
         .collect();
     let e2e_shared = Arc::new(E2eShared {
         queues,
@@ -882,14 +933,16 @@ fn substrate_happy_path_with_launch_fewer() {
             if done[w] {
                 continue;
             }
-            let mut d = false;
-            if let Some(bytes) = readers[w].next(true, &mut d).unwrap() {
-                got[w].push(bytes.to_vec());
-                progressed = true;
-            }
-            if d {
-                done[w] = true;
-                progressed = true;
+            match readers[w].receive(true).unwrap() {
+                shm_mq::ShmMqRecv::Success(bytes) => {
+                    got[w].push(bytes.to_vec());
+                    progressed = true;
+                }
+                shm_mq::ShmMqRecv::Detached => {
+                    done[w] = true;
+                    progressed = true;
+                }
+                shm_mq::ShmMqRecv::WouldBlock => {}
             }
         }
         if !progressed {

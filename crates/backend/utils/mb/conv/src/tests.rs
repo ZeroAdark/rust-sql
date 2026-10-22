@@ -299,10 +299,10 @@ fn conv_builtin_lookup() {
     assert_eq!(conv_builtin(4373).unwrap().name, "iso8859_to_utf8");
     assert_eq!(conv_builtin(4302).unwrap().name, "koi8r_to_mic");
     assert_eq!(
-        conv_builtin(4387).unwrap().name,
-        "shift_jis_2004_to_euc_jis_2004"
+        conv_builtin(4387).map(|b| b.name),
+        cfg!(feature = "cjk-encodings").then_some("shift_jis_2004_to_euc_jis_2004")
     );
-    assert_eq!(CONV_BUILTINS.len(), 84);
+    assert_eq!(CONV_BUILTINS.len(), if cfg!(feature = "cjk-encodings") { 84 } else { 42 });
     assert!(conv_builtin(1).is_none());
     assert!(conv_builtin(4350).is_none());
     for w in CONV_BUILTINS.windows(2) {
@@ -310,10 +310,29 @@ fn conv_builtin_lookup() {
     }
 }
 
+/// The `cjk-encodings` feature gates whole C conversion libraries (utf8_and_{big5, euc_cn, euc_jp, euc_kr, euc_tw,
+/// gb18030, gbk, johab, sjis, uhc, euc2004, sjis2004}, euc_cn_and_mic, euc_jp_and_sjis, euc_kr_and_mic, euc_tw_and_big5,
+/// euc2004_sjis2004): without it each of their 42 procedures resolves to no builtin (fmgr's C-language leg then fails
+/// as C's does with the module missing), and every other procedure stays.
+#[test]
+fn cjk_libraries_gated_whole() {
+    let cjk = [4322..=4337, 4352..=4353, 4360..=4371, 4376..=4387];
+    let is_cjk = |oid: Oid| cjk.iter().any(|r| r.contains(&oid));
+    for oid in 4302..=4387 {
+        if (4350..=4351).contains(&oid) {
+            continue; // no conversion procedure
+        }
+        let want = !is_cjk(oid) || cfg!(feature = "cjk-encodings");
+        assert_eq!(conv_builtin(oid).is_some(), want, "oid {oid}");
+    }
+}
+
 use super::utf8_procs::*;
+use wchar::{PG_KOI8R, PG_KOI8U};
+#[cfg(feature = "cjk-encodings")]
 use wchar::{
     PG_BIG5, PG_EUC_CN, PG_EUC_JIS_2004, PG_EUC_JP, PG_EUC_KR, PG_EUC_TW, PG_GB18030, PG_GBK,
-    PG_JOHAB, PG_KOI8R, PG_KOI8U, PG_SHIFT_JIS_2004, PG_SJIS, PG_UHC,
+    PG_JOHAB, PG_SHIFT_JIS_2004, PG_SJIS, PG_UHC,
 };
 
 /// Single-byte families: every byte the to-utf8 tree maps must roundtrip
@@ -363,6 +382,7 @@ fn single_byte_families_roundtrip_all_mapped_bytes() {
 
 /// Double-byte radix families: every verifier-accepted 2-byte code the map
 /// translates must roundtrip.
+#[cfg(feature = "cjk-encodings")]
 #[test]
 fn double_byte_families_roundtrip_all_mapped_codes() {
     let cases: &[(PGFunction, PGFunction, pg_enc)] = &[
@@ -405,6 +425,7 @@ fn double_byte_families_roundtrip_all_mapped_codes() {
     }
 }
 
+#[cfg(feature = "cjk-encodings")]
 #[test]
 fn known_cjk_vectors() {
     assert_eq!(ok(fc_euc_kr_to_utf8, PG_EUC_KR, PG_UTF8, &[0xb0, 0xa1]), "가".as_bytes());
@@ -421,6 +442,7 @@ fn known_cjk_vectors() {
     assert_eq!(ok(fc_utf8_to_gbk, PG_UTF8, PG_GBK, "中".as_bytes()), [0xd6, 0xd0]);
 }
 
+#[cfg(feature = "cjk-encodings")]
 #[test]
 fn gb18030_algorithmic_ranges() {
     // U+10000 is the first algorithmic 4-byte code: 0x90308130.
@@ -456,6 +478,7 @@ fn gb18030_algorithmic_ranges() {
     );
 }
 
+#[cfg(feature = "cjk-encodings")]
 #[test]
 fn euc_jis_2004_combined_maps() {
     // 0xa4f7 <-> U+304B U+309A (first LUmap/ULmap combined row).
@@ -480,6 +503,7 @@ fn euc_jis_2004_combined_maps() {
     );
 }
 
+#[cfg(feature = "cjk-encodings")]
 #[test]
 fn shift_jis_2004_combined_roundtrip() {
     let sjis = ok(
@@ -494,6 +518,7 @@ fn shift_jis_2004_combined_roundtrip() {
     );
 }
 
+#[cfg(feature = "cjk-encodings")]
 #[test]
 fn euc_jp_sjis_direct() {
     use super::euc_jp_and_sjis::{fc_euc_jp_to_sjis, fc_sjis_to_euc_jp};
@@ -526,6 +551,7 @@ fn euc_jp_sjis_direct() {
     assert!(count > 7000, "only {count} X0208 codes roundtrip");
 }
 
+#[cfg(feature = "cjk-encodings")]
 #[test]
 fn euc_jp_sjis_ibm_kanji() {
     use super::euc_jp_and_sjis::{fc_euc_jp_to_sjis, fc_sjis_to_euc_jp};
@@ -547,15 +573,20 @@ fn euc_jp_sjis_ibm_kanji() {
 #[test]
 fn mic_roundtrips() {
     use super::cyrillic_and_mic::{fc_koi8r_to_mic, fc_mic_to_koi8r};
-    use super::euc_cn_and_mic::{fc_euc_cn_to_mic, fc_mic_to_euc_cn};
-    use super::euc_kr_and_mic::{fc_euc_kr_to_mic, fc_mic_to_euc_kr};
-    use super::euc_tw_and_big5::{fc_euc_tw_to_mic, fc_mic_to_euc_tw};
     let mic = ok(fc_koi8r_to_mic, PG_KOI8R, PG_MULE_INTERNAL, &[b'a', 0xc1]);
     assert_eq!(mic, [b'a', LC_KOI8_R, 0xc1]);
     assert_eq!(
         ok(fc_mic_to_koi8r, PG_MULE_INTERNAL, PG_KOI8R, &mic),
         [b'a', 0xc1]
     );
+}
+
+#[cfg(feature = "cjk-encodings")]
+#[test]
+fn cjk_mic_roundtrips() {
+    use super::euc_cn_and_mic::{fc_euc_cn_to_mic, fc_mic_to_euc_cn};
+    use super::euc_kr_and_mic::{fc_euc_kr_to_mic, fc_mic_to_euc_kr};
+    use super::euc_tw_and_big5::{fc_euc_tw_to_mic, fc_mic_to_euc_tw};
     let mic = ok(fc_euc_cn_to_mic, PG_EUC_CN, PG_MULE_INTERNAL, &[0xd6, 0xd0]);
     assert_eq!(mic, [LC_GB2312_80, 0xd6, 0xd0]);
     assert_eq!(
@@ -641,6 +672,7 @@ fn latin_mic_passthrough() {
     assert_eq!(e.sqlstate(), types_error::ERRCODE_UNTRANSLATABLE_CHARACTER);
 }
 
+#[cfg(feature = "cjk-encodings")]
 #[test]
 fn euc2004_sjis2004_direct() {
     use super::euc2004_sjis2004::*;
@@ -691,6 +723,7 @@ fn euc2004_sjis2004_direct() {
     assert_eq!(count, 94 * 94);
 }
 
+#[cfg(feature = "cjk-encodings")]
 #[test]
 fn new_module_error_texts_are_c_exact() {
     let e = err(fc_big5_to_utf8, PG_BIG5, PG_UTF8, &[0xa1]);

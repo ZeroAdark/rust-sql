@@ -90,6 +90,11 @@ fn too_big(len: usize) -> bool {
     len == 0 || len >= (i32::MAX as usize - 4) / NUM_MAX_ITEM_SIZ
 }
 
+// NUM_TOCHAR_prepare (formatting.c:6432): result image admitted before NUM_cache.
+fn num_tochar_admit(len: usize) -> PgResult<()> {
+    ::mcx::check_alloc_size(len * NUM_MAX_ITEM_SIZ + 1 + VARHDRSZ)
+}
+
 #[cold]
 #[inline(never)]
 fn bigint_out_of_range() -> Box<::types_error::PgError> {
@@ -173,6 +178,7 @@ pub fn numeric_to_char<'mcx>(
     if too_big(len) {
         return text_result(mcx, b"");
     }
+    num_tochar_admit(len)?;
     let (format, mut num) = num_cache(len, fmt)?;
 
     if num.is_roman() {
@@ -192,7 +198,7 @@ pub fn numeric_to_char<'mcx>(
             }
             numstr = ns;
         } else if orgnum.first() != Some(&b'-') {
-            let mut ns = Vec::with_capacity(orgnum.len() + 2);
+            let mut ns = ::mcx::std_vec_with_capacity("adt", orgnum.len() + 2)?;
             ns.push(b' ');
             ns.extend_from_slice(&orgnum);
             numstr = ns;
@@ -302,6 +308,7 @@ pub fn int4_to_char<'mcx>(mcx: Mcx<'mcx>, value: i32, fmt: &[u8]) -> PgResult<Va
     if too_big(len) {
         return text_result(mcx, b"");
     }
+    num_tochar_admit(len)?;
     let (format, mut num) = num_cache(len, fmt)?;
 
     let mut out_pre_spaces = 0i32;
@@ -319,8 +326,7 @@ pub fn int4_to_char<'mcx>(mcx: Mcx<'mcx>, value: i32, fmt: &[u8]) -> PgResult<Va
     } else {
         let mut orgnum: Vec<u8>;
         if num.is_multi() {
-            let multi = 10f64.powi(num.multi) as i32;
-            orgnum = value.wrapping_mul(multi).to_string().into_bytes();
+            orgnum = value.wrapping_mul(pow10_as_c_int32(num.multi)).to_string().into_bytes();
             num.pre += num.multi;
         } else {
             orgnum = value.to_string().into_bytes();
@@ -349,6 +355,7 @@ pub fn int8_to_char<'mcx>(mcx: Mcx<'mcx>, value: i64, fmt: &[u8]) -> PgResult<Va
     if too_big(len) {
         return text_result(mcx, b"");
     }
+    num_tochar_admit(len)?;
     let (format, mut num) = num_cache(len, fmt)?;
 
     let mut out_pre_spaces = 0i32;
@@ -367,7 +374,7 @@ pub fn int8_to_char<'mcx>(mcx: Mcx<'mcx>, value: i64, fmt: &[u8]) -> PgResult<Va
         let v = int64_to_numeric(value);
         let orgnum = numeric_out_sci_str(v.num(), num.post);
         if orgnum.first() != Some(&b'-') {
-            let mut ns = Vec::with_capacity(orgnum.len() + 1);
+            let mut ns = ::mcx::std_vec_with_capacity("adt", orgnum.len() + 1)?;
             ns.push(b' ');
             ns.extend_from_slice(&orgnum);
             numstr = ns;
@@ -411,6 +418,7 @@ pub fn float4_to_char<'mcx>(mcx: Mcx<'mcx>, value: f32, fmt: &[u8]) -> PgResult<
     if too_big(len) {
         return text_result(mcx, b"");
     }
+    num_tochar_admit(len)?;
     let (format, mut num) = num_cache(len, fmt)?;
     let mut out_pre_spaces = 0i32;
     let mut sign = 0i32;
@@ -450,7 +458,7 @@ pub fn float4_to_char<'mcx>(mcx: Mcx<'mcx>, value: f32, fmt: &[u8]) -> PgResult<
             // Num.multi); val = value * multi;` — pow computed in DOUBLE and
             // rounded once to float. 10f32.powi accumulates f32 roundings and
             // diverges for large V-digit counts (found by the fmt_num_diff
-            // CI campaign 2026-07-31).
+            // FLEET campaign 2026-07-31).
             let multi = 10f64.powf(num.multi as f64) as f32;
             val = value * multi;
             num.pre += num.multi;
@@ -481,6 +489,7 @@ pub fn float8_to_char<'mcx>(mcx: Mcx<'mcx>, value: f64, fmt: &[u8]) -> PgResult<
     if too_big(len) {
         return text_result(mcx, b"");
     }
+    num_tochar_admit(len)?;
     let (format, mut num) = num_cache(len, fmt)?;
     let mut out_pre_spaces = 0i32;
     let mut sign = 0i32;
@@ -545,7 +554,8 @@ pub fn float8_to_char<'mcx>(mcx: Mcx<'mcx>, value: f64, fmt: &[u8]) -> PgResult<
 
 fn pad_post(orgnum: Vec<u8>, pre: usize, num: &NUMDesc) -> Vec<u8> {
     if num.post != 0 {
-        let mut ns = Vec::with_capacity(pre + num.post as usize + 2);
+        let mut ns = Vec::new();
+        let _ = ns.try_reserve_exact(pre + num.post as usize + 2);
         ns.extend_from_slice(&orgnum);
         ns.push(b'.');
         ns.extend(core::iter::repeat_n(b'0', num.post as usize));
@@ -577,7 +587,10 @@ pub fn numeric_to_number<'mcx>(
     }
     let (format, mut num) = num_cache(len, fmt)?;
 
-    let mut numstr = vec![0u8; len * NUM_MAX_ITEM_SIZ + 1];
+    let numstr_len = len * NUM_MAX_ITEM_SIZ + 1;
+    let mut numstr = Vec::new();
+    let _ = numstr.try_reserve_exact(numstr_len);
+    numstr.resize(numstr_len, 0u8);
     let n = num_processor_from_char(&format, &mut num, value, &mut numstr)?;
 
     let scale = num.post;
@@ -599,6 +612,15 @@ pub fn numeric_to_number<'mcx>(
         Ok(make_result(prod.view())?)
     } else {
         Ok(img)
+    }
+}
+
+fn pow10_as_c_int32(multi: i32) -> i32 {
+    let m = 10f64.powi(multi);
+    if m >= 2147483648.0 || m < -2147483648.0 || m.is_nan() {
+        i32::MIN
+    } else {
+        m as i32
     }
 }
 
@@ -735,11 +757,25 @@ mod tests {
     }
 
     #[test]
+    fn int4_to_char_out_of_range_multiplier_matches_amd64() {
+        let c = ctx();
+        assert_eq!(as_text(&int4_to_char(c.mcx(), 1, b"9V9999999999").unwrap()), " -2147483648");
+        assert_eq!(as_text(&int4_to_char(c.mcx(), 1, b"9V999").unwrap()), " 1000");
+    }
+
+    #[test]
     fn to_number_grouping() {
         let c = ctx();
         let img = numeric_to_number(c.mcx(), b"12,345.6", b"99G999D9").unwrap();
         let mut out = Vec::new();
         ::numeric::numeric_out_into(img.num(), &mut out);
         assert_eq!(String::from_utf8_lossy(&out), "12345.6");
+    }
+
+    #[test]
+    fn to_char_admits_the_result_image_before_the_format() {
+        let err = num_tochar_admit(134217728).unwrap_err();
+        assert_eq!(err.message(), "invalid memory alloc request size 1073741829");
+        assert!(num_tochar_admit(134217727).is_ok());
     }
 }

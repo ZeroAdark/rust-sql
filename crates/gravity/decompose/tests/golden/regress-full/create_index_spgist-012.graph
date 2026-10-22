@@ -1,0 +1,14 @@
+-- regress-full-create_index_spgist-012
+-- EXPLAIN (COSTS OFF) SELECT p, dist FROM quad_point_tbl_ord_seq1 ORDER BY p <-> '0,0' LIMIT 10;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=19809 rti=1 am=heap index=19836 iam=spgist
+    key att=3 op=517 form=orderby value=c600:#16
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:fx16:win/page
+  project (1=index.1, 2=index.2, 3j=op517(index.1, c600:#16))
+  limit count=10 offset=all
+  project (1=outer.1, 2=outer.2, 3j=outer.3)
+  outs 1=fx16:win/page 2=w8:val 3=w8:val
+  outs 1=fx16:win/page 2=w8:val 3=w8:val
+mapped: IndexOnlyScan Limit

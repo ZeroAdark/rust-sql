@@ -1,0 +1,59 @@
+# lowerv4 (docs/gravity/lowerv4/plan.md): every dependency is declared here at M0; a later one is a design revision.
+[package]
+name = "gravity_lowerv4"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+# tests/*.rs build and run as package gravity_lowerv4_it (crates/gravity/lowerv4_it, BD-3): cargo hands every dev-dependency
+# to the lib unit-test harness too, and the rig needs gravity_exec, so with the tests here this crate's 537 unit tests
+# recompiled (41-62 s, the crate-test build's critical path) on every edit to gravity_exec or gravity_hosts.
+autotests = false
+
+[lib]
+name = "gravity_lowerv4"
+path = "src/lib.rs"
+
+[dependencies]
+# C7 runtime half: its leader-class thread-locals are declared through leader_tls!
+leader_tls = { path = "../../_support/leader_tls" }
+gravity_abi = { path = "../abi" }
+gravity_decompose = { path = "../decompose" }
+# D3938 (C3): the condition cache keys by the covered quals' recorded catalog reads (pgrc verdict_cond.rs)
+gravity_deps = { path = "../deps" }
+gravity_dict = { path = "../dict" }
+gravity_driver = { path = "../driver" }
+gravity_expr = { path = "../expr" }
+gravity_fn = { path = "../fn" }
+gravity_ir = { path = "../ir" }
+gravity_kernels = { path = "../kernels" }
+gravity_lower = { path = "../lower" }
+gravity_program = { path = "../program" }
+guc_seams = { path = "../../backend/utils/misc/guc_seams" }
+# planprod P4: the hosted owner's product root is owned by construction (set_owner / set_owner_tree: mcx's std API, on in
+# every server build already through init_small) and adopted by its holder (memledger owners)
+mcx = { path = "../../_support/mcx", features = ["std"] }
+memledger = { path = "../../_support/memledger" }
+pgsync = { path = "../../_support/pgsync" }
+fmgr_core = { path = "../../backend/utils/fmgr/fmgr_core" }
+# D3832: check_stack_depth at each level of the lowerer's recursions (54001, never the thread's stack end)
+stack_depth_core = { path = "../../backend/utils/misc/stack_depth_core" }
+cancelpoll = { path = "../../_support/cancelpoll" }
+# D2457: shapecheck fire signal (user ruling 2026-10-02 06:10Z: a fire call at each optimization's admit point)
+fires = { path = "../../_support/fires" }
+types_core = { path = "../../_support/types/types_core" }
+types_error = { path = "../../_support/types/types_error" }
+types_nodes = { path = "../../_support/types/nodes" }
+types_portal = { path = "../../_support/types/portal" }
+
+[dev-dependencies]
+# only what src/ unit tests use; the integration tests' dependencies are gravity_lowerv4_it's
+gravity_interp = { path = "../backend/interp" }
+init_small = { path = "../../backend/utils/init/init_small" }
+pgtz = { path = "../../backend/timezone/pgtz" }
+xact_seams = { path = "../../backend/access/transam/xact_seams" }
+mbutils_seams = { path = "../../backend/utils/mb/mbutils_seams" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+datum = { path = "../../_support/types/datum" }
+syscache_seams = { path = "../../backend/utils/cache/syscache_seams" }
+types_tuple = { path = "../../_support/types/types_tuple" }
+adt_numeric = { path = "../../backend/utils/adt/numeric" }

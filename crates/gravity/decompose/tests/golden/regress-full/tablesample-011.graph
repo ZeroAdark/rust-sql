@@ -1,0 +1,22 @@
+-- regress-full-tablesample-011
+-- explain (costs off) select * from parted_sample tablesample bernoulli (100);
+graph pipelines=2 breakers=0 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=Host end=sink
+  nodes n1@0 n0@1
+  source sample rel=28900 rti=2 am=heap method=bernoulli handler=3313 args=(c700:1120403456)
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1)
+  append arm 0/2
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p1 node=2 serial site=0 reason=Host end=sink
+  nodes n2@0 n0@1
+  source sample rel=28903 rti=3 am=heap method=bernoulli handler=3313 args=(c700:1120403456)
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v3.1)
+  append arm 1/2
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+mapped: Append SampleScan

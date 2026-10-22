@@ -5,7 +5,7 @@ use types_tuple::varatt;
 fn q(s: &str) -> Result<String, String> {
     match parse_query(s.as_bytes()) {
         Ok(img) => {
-            let items = parse_items(&img);
+            let items = parse_items(&img).unwrap();
             Ok(String::from_utf8(boolquery::deparse(&items).unwrap()).unwrap())
         }
         Err(e) => Err(e.err.message().to_string()),
@@ -79,7 +79,7 @@ fn deep_paren_nesting_is_not_statement_too_complex() {
 
 fn boolop(arr: &[i32], query: &str) -> bool {
     let img = parse_query(query.as_bytes()).unwrap();
-    let items = parse_items(&img);
+    let items = parse_items(&img).unwrap();
     let mut sorted = arr.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
@@ -104,7 +104,7 @@ fn execute_semantics() {
 #[test]
 fn gin_bool_consistent_maps_positionally() {
     let img = parse_query(b"1&(2|3)").unwrap();
-    let items = parse_items(&img);
+    let items = parse_items(&img).unwrap();
     // VAL items in item order: 1, 2, 3.
     assert!(boolquery::gin_bool_consistent(&items, &[true, true, false]).unwrap());
     assert!(boolquery::gin_bool_consistent(&items, &[true, false, true]).unwrap());
@@ -116,7 +116,7 @@ fn gin_bool_consistent_maps_positionally() {
 fn query_has_required_values() {
     let has = |s: &str| {
         let img = parse_query(s.as_bytes()).unwrap();
-        boolquery::query_has_required_values(&parse_items(&img)).unwrap()
+        boolquery::query_has_required_values(&parse_items(&img).unwrap()).unwrap()
     };
     assert!(has("1"));
     assert!(has("1&!2"));
@@ -130,7 +130,7 @@ fn query_has_required_values() {
 #[test]
 fn signconsistent_hashes() {
     let img = parse_query(b"7").unwrap();
-    let items = parse_items(&img);
+    let items = parse_items(&img).unwrap();
     let siglen = 4usize;
     let mut sign = vec![0u8; siglen];
     tool::gensign(&mut sign, &[7], siglen);
@@ -153,7 +153,18 @@ fn int_array_layout_matches_c() {
     let e = IntArray::empty();
     assert_eq!(e.as_bytes().len(), 16);
     assert_eq!(e.ndim(), 0);
-    assert_eq!(e.nelems(), 0);
+    assert_eq!(e.nelems().unwrap(), 0);
+}
+
+#[test]
+fn resize_rejects_gist_doubled_key_over_max_alloc() {
+    let mut a = IntArray::new(1);
+    a.elems_mut()[0] = 7;
+    let err = a.resize(2 * 134_217_725).err().expect("oversized resize must fail");
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+    assert_eq!(a.elems(), &[7]);
+    assert_eq!(a.as_bytes().len(), 28);
 }
 
 #[test]
@@ -172,10 +183,10 @@ fn resize_multidim_dims_rewrite() {
     for v in [4, 3, 2, 1] {
         w.extend_from_slice(&(v as i32).to_ne_bytes());
     }
-    let mut a = IntArray::from_image(&w);
-    assert_eq!(a.nelems(), 4);
+    let mut a = IntArray::from_image(&w).unwrap();
+    assert_eq!(a.nelems().unwrap(), 4);
     assert_eq!(a.elems(), &[4, 3, 2, 1]);
-    a.resize(3);
+    a.resize(3).unwrap();
     assert_eq!(a.dims(), &[3, 1]);
     assert_eq!(a.elems(), &[4, 3, 2]);
 }
@@ -194,7 +205,7 @@ fn null_bearing_array() -> IntArray {
     w.push(0b01);
     w.extend_from_slice(&[0u8; 7]);
     w.extend_from_slice(&5i32.to_ne_bytes());
-    IntArray::from_image(&w)
+    IntArray::from_image(&w).unwrap()
 }
 
 #[test]
@@ -220,7 +231,7 @@ fn checkarrvalid_accepts_bitmap_without_nulls() {
     w.extend_from_slice(&[0u8; 7]);
     w.extend_from_slice(&5i32.to_ne_bytes());
     w.extend_from_slice(&6i32.to_ne_bytes());
-    let a = IntArray::from_image(&w);
+    let a = IntArray::from_image(&w).unwrap();
     a.check_valid().unwrap();
     assert_eq!(a.elems(), &[5, 6]);
 }
@@ -229,7 +240,7 @@ fn checkarrvalid_accepts_bitmap_without_nulls() {
 fn unique_is_adjacent_dedup() {
     let mut a = IntArray::new(5);
     a.elems_mut().copy_from_slice(&[1234234, -30, -30, 234234, -30]);
-    a.unique();
+    a.unique().unwrap();
     assert_eq!(a.elems(), &[1234234, -30, 234234, -30]);
 }
 
@@ -246,9 +257,9 @@ fn inner_set_ops() {
     assert!(!tool::inner_int_overlap(&[1, 5], &[2, 9]));
     let u = tool::inner_int_union(&mk(&[1, 3]), &mk(&[2, 3])).unwrap();
     assert_eq!(u.elems(), &[1, 2, 3]);
-    let i = tool::inner_int_inter(&mk(&[1, 3, 5]), &mk(&[3, 5, 7]));
+    let i = tool::inner_int_inter(&mk(&[1, 3, 5]), &mk(&[3, 5, 7])).unwrap();
     assert_eq!(i.elems(), &[3, 5]);
-    let e = tool::inner_int_inter(&mk(&[1]), &mk(&[2]));
+    let e = tool::inner_int_inter(&mk(&[1]), &mk(&[2])).unwrap();
     assert_eq!(e.ndim(), 0);
 }
 
@@ -278,4 +289,46 @@ fn findoprnd_left_offset_overflow() {
     assert_eq!(e.err.message(), "query_int expression is too complex");
     assert_eq!(e.err.sqlstate(), types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
     assert!(e.soft);
+}
+
+#[test]
+fn cardinality_limit_checks_only_dimensions() {
+    let mut image = IntArray::new(1).as_bytes().to_vec();
+    for (dim, allowed) in [(134217727i32, true), (134217728, false)] {
+        image[16..20].copy_from_slice(&dim.to_ne_bytes());
+        let mut a = IntArray::from_image(&image).unwrap();
+        if allowed {
+            assert_eq!(a.nelems().unwrap(), dim as usize);
+        } else {
+            let err = a.nelems().unwrap_err();
+            assert_eq!(err.sqlstate(), types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+            assert_eq!(
+                err.message(),
+                "array size exceeds the maximum allowed (134217727)"
+            );
+            assert!(a.is_empty().is_err());
+            assert!(a.sort(true).is_err());
+            assert!(a.unique().is_err());
+            assert!(a.resize(1).is_err());
+            assert!(a.copy_flat().is_err());
+        }
+    }
+}
+
+#[test]
+fn deparse_of_a_long_chain_is_linear() {
+    let run = || {
+        let src = (1..=100_000).map(|i| i.to_string()).collect::<Vec<_>>().join(" & ");
+        let t0 = std::time::Instant::now();
+        let out = q(&src).unwrap();
+        (t0.elapsed(), out == src)
+    };
+    let (elapsed, same) = std::thread::Builder::new()
+        .stack_size(512 << 20)
+        .spawn(run)
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(same);
+    assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
 }

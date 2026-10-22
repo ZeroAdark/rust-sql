@@ -1,0 +1,7 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT m FROM (VALUES ('08:00:2b:01:02:03'::macaddr), ('08:00:2b:01:02:01'::macaddr), (NULL)) v(m) ORDER BY m
+cols: m
+[pg]
+08:00:2b:01:02:01
+08:00:2b:01:02:03
+\N

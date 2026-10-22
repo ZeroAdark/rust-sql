@@ -9,11 +9,11 @@ use types_startup::{
     HbaLine, IPCompareMethod, Port,
 };
 
-use crate::parse_hba::enable_gss;
 use crate::{
     pg_strcasecmp, report_log, token_has_regexp, token_is_keyword, token_is_member_check,
     token_matches, token_matches_insensitive, with_parsed_hba_lines,
 };
+use elog::PCT_M;
 
 pub(crate) fn ss_family(sa: &SockAddr) -> i32 {
     if sa.salen == 0 {
@@ -188,31 +188,75 @@ pub(crate) fn hostname_match(pattern: &[u8], actual_hostname: &[u8]) -> bool {
     }
 }
 
-pub(crate) fn check_hostname(port: &mut Port, hostname: &str) -> PgResult<bool> {
+// Port's remote_hostname{,_resolv,_errcode}: check_hostname's lookup cache,
+// carried while the Port is shared-borrowed and stored by HbaMatch::store.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteHostname {
+    pub name: Option<String>,
+    pub resolv: i32,
+    pub errcode: i32,
+}
+
+impl RemoteHostname {
+    pub fn of(port: &Port) -> Self {
+        Self {
+            name: port.remote_hostname.clone(),
+            resolv: port.remote_hostname_resolv,
+            errcode: port.remote_hostname_errcode,
+        }
+    }
+
+    pub fn store(self, port: &mut Port) {
+        port.remote_hostname = self.name;
+        port.remote_hostname_resolv = self.resolv;
+        port.remote_hostname_errcode = self.errcode;
+    }
+}
+
+// check_hba's result: the matched line (implicit reject when none) and the
+// hostname cache as check_hostname left it.
+#[derive(Clone, Debug)]
+pub struct HbaMatch {
+    pub hba: HbaLine,
+    pub remote_hostname: RemoteHostname,
+}
+
+impl HbaMatch {
+    pub fn store(self, port: &mut Port) {
+        port.hba = Some(self.hba);
+        self.remote_hostname.store(port);
+    }
+}
+
+pub(crate) fn check_hostname(
+    port: &Port,
+    cache: &mut RemoteHostname,
+    hostname: &str,
+) -> PgResult<bool> {
     // Quick out if remote host name already known bad.
-    if port.remote_hostname_resolv < 0 {
+    if cache.resolv < 0 {
         return Ok(false);
     }
 
-    if port.remote_hostname.is_none() {
+    if cache.name.is_none() {
         let mut node = String::new();
         let ret = ip::pg_getnameinfo_all(&port.raddr, Some(&mut node), None, ip::sys::NI_NAMEREQD);
         if ret != 0 {
             // remember failure; don't complain in the postmaster log yet
-            port.remote_hostname_resolv = -2;
-            port.remote_hostname_errcode = ret;
+            cache.resolv = -2;
+            cache.errcode = ret;
             return Ok(false);
         }
-        port.remote_hostname = Some(node);
+        cache.name = Some(node);
     }
 
-    let remote_hostname = port.remote_hostname.clone().expect("set above");
+    let remote_hostname = cache.name.clone().expect("set above");
     if !hostname_match(hostname.as_bytes(), remote_hostname.as_bytes()) {
         return Ok(false);
     }
 
     // If we already verified the forward lookup, we're done.
-    if port.remote_hostname_resolv == 1 {
+    if cache.resolv == 1 {
         return Ok(true);
     }
 
@@ -220,8 +264,8 @@ pub(crate) fn check_hostname(port: &mut Port, hostname: &str) -> PgResult<bool> 
     let mut gai_result: Vec<ip::PgAddrInfo> = Vec::new();
     let ret = ip::pg_getaddrinfo_default_hints(&remote_hostname, &mut gai_result);
     if ret != 0 {
-        port.remote_hostname_resolv = -2;
-        port.remote_hostname_errcode = ret;
+        cache.resolv = -2;
+        cache.errcode = ret;
         return Ok(false);
     }
 
@@ -243,7 +287,7 @@ pub(crate) fn check_hostname(port: &mut Port, hostname: &str) -> PgResult<bool> 
         )?;
     }
 
-    port.remote_hostname_resolv = if found { 1 } else { -1 };
+    cache.resolv = if found { 1 } else { -1 };
     Ok(found)
 }
 
@@ -305,15 +349,16 @@ pub(crate) fn check_same_host_or_net(
 pub(crate) fn report_ifaddr_enumeration_error(errno: i32) -> PgResult<()> {
     elog::ereport(LOG)
         .with_saved_errno(errno)
-        .errmsg("error enumerating network interfaces: %m")
+        .errmsg(format!("error enumerating network interfaces: {PCT_M}"))
         .finish(crate::loc(1221, "check_same_host_or_net"))
 }
 
-pub fn check_hba(port: &mut Port) -> PgResult<()> {
+pub fn check_hba(port: &Port) -> PgResult<HbaMatch> {
     // get_role_oid(port->user_name, true) — missing role folds to InvalidOid.
     let user_name = port.user_name.clone().unwrap_or_default();
     let roleid = acl_seams::get_role_oid::call(&user_name, true)?;
     let dbname = port.database_name.clone().unwrap_or_default();
+    let mut remote_hostname = RemoteHostname::of(port);
 
     let matched: Option<HbaLine> = with_parsed_hba_lines(|lines| -> PgResult<Option<HbaLine>> {
         'lines: for hba in lines {
@@ -337,18 +382,18 @@ pub fn check_hba(port: &mut Port) -> PgResult<()> {
                     continue;
                 }
 
-                // GSSAPI encryption is not implemented, so gssenc is never
-                // established: hostgssenc never matches (C: !(port->gss &&
-                // port->gss->enc) skips ctHostGSS).
-                let _ = enable_gss();
-                if hba.conntype == ctHostGSS {
+                // Check GSSAPI state.
+                let gss_enc = port.gss.as_ref().is_some_and(|g| g.encrypted);
+                if gss_enc && hba.conntype == types_startup::ctHostNoGSS {
+                    continue;
+                } else if !gss_enc && hba.conntype == ctHostGSS {
                     continue;
                 }
 
                 // Check IP address.
                 if hba.ip_cmp_method == ipCmpMask {
                     if let Some(hostname) = hba.hostname.clone() {
-                        if !check_hostname(port, &hostname)? {
+                        if !check_hostname(port, &mut remote_hostname, &hostname)? {
                             continue;
                         }
                     } else if !check_ip(&port.raddr, &hba.addr, &hba.mask) {
@@ -381,7 +426,7 @@ pub fn check_hba(port: &mut Port) -> PgResult<()> {
         Ok(None)
     })?;
 
-    port.hba = Some(match matched {
+    let hba = match matched {
         Some(line) => line,
         None => {
             // No matching entry, so tell the user we fell through: reject.
@@ -389,6 +434,9 @@ pub fn check_hba(port: &mut Port) -> PgResult<()> {
             hba.auth_method = uaImplicitReject;
             hba
         }
-    });
-    Ok(())
+    };
+    Ok(HbaMatch {
+        hba,
+        remote_hostname,
+    })
 }

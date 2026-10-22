@@ -1,0 +1,10 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/cleanup.rs
+growth	std::collections::BTreeMap::insert	1
+growth	std::iter::Extend::extend	4
+growth	std::vec::Vec::push	1
+macro	std::format	1
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	3
+method	std::string::ToString::to_string	1
+type	std::collections::BTreeSet	2
+type	std::string::String	1

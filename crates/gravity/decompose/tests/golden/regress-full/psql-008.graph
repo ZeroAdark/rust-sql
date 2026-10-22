@@ -1,0 +1,13 @@
+-- regress-full-psql-008
+-- select format('create index on gexec_test(%I)', attname) from pg_attribute where attrelid = 'gexec_test'::regclass and attnum > 0 order by attnum
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1249 rti=1 am=heap index=2659
+    key att=1 op=607 value=c26:33899
+    key att=5 op=536 value=c23:0
+    recheck (op607(v1.1, c26:33899), op536(v1.5, c23:0))
+    lanes Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val
+  project (1=fn3539(c25:'create index on gexec_test(%I)', v1.2), 2j=v1.5)
+  outs 1=vl:call3539 2=w8:val
+mapped: IndexScan

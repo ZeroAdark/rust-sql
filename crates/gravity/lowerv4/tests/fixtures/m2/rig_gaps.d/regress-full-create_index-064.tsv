@@ -1,0 +1,1 @@
+NULL::unknown: the ProjectSet's unused output the planner types unknown (705); the fixture's type facts carry no pg_type 705 row (end/output.rs facts_of); the server serves it (e2e m5_lockstep.sql, INSERT INTO lsi SELECT generate_series(1, 4), 'abc')

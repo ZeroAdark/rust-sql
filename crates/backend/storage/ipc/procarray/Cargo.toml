@@ -54,3 +54,4 @@ shmem_seams = { path = "../shmem_seams" }
 condition_variable_seams = { path = "../../lmgr/condition_variable_seams" }
 syncrep_seams = { path = "../../../replication/syncrep_seams" }
 autovacuum_seams = { path = "../../../postmaster/autovacuum_seams" }
+lock = { path = "../../lmgr/lock" }

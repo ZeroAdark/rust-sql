@@ -198,7 +198,9 @@ impl TaskSizer {
                     // treat as ramp restart for robustness.
                     TaskMode::Single => 1,
                 };
-                (next, SizingDecision::Ramp)
+                // V4R-70 fair-share clamp (the coalesce rule's, sched.rs): a ramp claim never exceeds this worker's 1/W
+                // of the remainder — a doubled ramp claim on a short section left W/2 workers idle beside 2-unit claims.
+                (next.min((remaining / workers.max(1)).max(1)), SizingDecision::Ramp)
             }
             Phase::Default | Phase::Shutdown => {
                 let w = workers.max(1);

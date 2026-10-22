@@ -1,7 +1,11 @@
 use ::datum::Datum;
-use ::types_core::BackendType;
+use ::types_core::catalog::{
+    BOOLOID, INT4OID, INT8OID, NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMESTAMPTZOID,
+};
+use ::types_core::{BackendType, Oid};
 use ::types_error::{PgError, PgResult};
 use ::types_fmgr::{byref_result, varlena_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
+use ::types_tuple::TupleDescData;
 
 use pgstat::io::{
     io_context_from_index, pgstat_get_io_context_name, pgstat_get_io_object_name,
@@ -180,7 +184,7 @@ pub fn fc_pg_stat_get_io(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
 
         debug_assert!(pgstat::io::pgstat_bktype_io_stats_valid(bktype_stats, bktype));
 
-        if !pgstat_tracks_io_bktype(bktype) {
+        if !pgstat_tracks_io_bktype(bktype) || bktype == BackendType::InstanceAux {
             continue;
         }
 
@@ -216,28 +220,115 @@ pub fn fc_pg_stat_get_backend_io(
     Ok(srf.finish(fcinfo))
 }
 
-fn record_datum(
-    flinfo: &FmgrInfo,
+// pgstatfuncs.c CreateTemplateTupleDesc + BlessTupleDesc: the descriptor is
+// the function's own, whatever the calling pg_proc row declares.
+fn fixed_record_datum(
     fcinfo: &Fcinfo,
+    cols: &[(&str, Oid)],
     values: &[Datum],
     nulls: &[bool],
 ) -> PgResult<Datum> {
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    let mut desc = tupdesc::CreateTemplateTupleDesc(mcx, cols.len() as i32)?;
+    for (i, (name, typ)) in cols.iter().enumerate() {
+        tupdesc::TupleDescInitEntry(&mut desc, i as i16 + 1, Some(name), *typ, -1, 0)?;
+    }
+    desc.tdtypeid = RECORDOID;
+    desc.tdtypmod = -1;
+    ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
+    let tup = heaptuple::heap_form_tuple(mcx, &desc, values, nulls)?;
+    let d = Datum::from_usize(tup.header_ptr() as usize);
+    core::mem::forget(tup);
+    Ok(d)
+}
+
+const PG_STAT_WAL_DESC: [(&str, Oid); PG_STAT_WAL_COLS] = [
+    ("wal_records", INT8OID),
+    ("wal_fpi", INT8OID),
+    ("wal_bytes", NUMERICOID),
+    ("wal_buffers_full", INT8OID),
+    ("stats_reset", TIMESTAMPTZOID),
+];
+
+const PG_STAT_SUBXACT_DESC: [(&str, Oid); 2] =
+    [("subxact_count", INT4OID), ("subxact_overflow", BOOLOID)];
+
+const PG_STAT_ARCHIVER_DESC: [(&str, Oid); 7] = [
+    ("archived_count", INT8OID),
+    ("last_archived_wal", TEXTOID),
+    ("last_archived_time", TIMESTAMPTZOID),
+    ("failed_count", INT8OID),
+    ("last_failed_wal", TEXTOID),
+    ("last_failed_time", TIMESTAMPTZOID),
+    ("stats_reset", TIMESTAMPTZOID),
+];
+
+const PG_STAT_REPLICATION_SLOT_DESC: [(&str, Oid); 10] = [
+    ("slot_name", TEXTOID),
+    ("spill_txns", INT8OID),
+    ("spill_count", INT8OID),
+    ("spill_bytes", INT8OID),
+    ("stream_txns", INT8OID),
+    ("stream_count", INT8OID),
+    ("stream_bytes", INT8OID),
+    ("total_txns", INT8OID),
+    ("total_bytes", INT8OID),
+    ("stats_reset", TIMESTAMPTZOID),
+];
+
+const PG_STAT_SUBSCRIPTION_STATS_DESC: [(&str, Oid); 11] = [
+    ("subid", OIDOID),
+    ("apply_error_count", INT8OID),
+    ("sync_error_count", INT8OID),
+    ("confl_insert_exists", INT8OID),
+    ("confl_update_origin_differs", INT8OID),
+    ("confl_update_exists", INT8OID),
+    ("confl_update_missing", INT8OID),
+    ("confl_delete_origin_differs", INT8OID),
+    ("confl_delete_missing", INT8OID),
+    ("confl_multiple_unique_conflicts", INT8OID),
+    ("stats_reset", TIMESTAMPTZOID),
+];
+
+fn record_datum(
+    flinfo: &FmgrInfo,
+    fcinfo: &mut Fcinfo,
+    values: &[Datum],
+    nulls: &[bool],
+    pad_null: bool,
+) -> PgResult<Datum> {
+    // walreceiver.c:1527: a RETURNS record alias resolves through ReturnSetInfo.expectedDesc.
+    let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
+    // SAFETY: expectedDesc contract — the executor armed it with the scan
+    // tupdesc, live for the duration of this call.
+    let expected = expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
+    let mcx = fcinfo.result_mcx();
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     let Some(tupdesc) = resolved
         .result_tuple_desc
         .filter(|_| resolved.class == funcapi::TypeFuncClass::Composite)
     else {
         return Err(Box::new(PgError::error("return type must be a row type")));
     };
-    let tup = heaptuple::heap_form_tuple(mcx, &tupdesc, values, nulls)?;
+    // walreceiver.c:1530 palloc0(natts): extra alias columns are 0 / not null
+    // (NULL when by-reference, or in the unprivileged all-NULL arm).
+    let natts = tupdesc.natts as usize;
+    let n = natts.min(values.len());
+    let mut vals = ::mcx::std_vec_with_capacity("adt", natts)?;
+    let mut nils = ::mcx::std_vec_with_capacity("adt", natts)?;
+    vals.extend_from_slice(&values[..n]);
+    nils.extend_from_slice(&nulls[..n]);
+    for att in &tupdesc.attrs[n..natts] {
+        vals.push(Datum::from_usize(0));
+        nils.push(pad_null || !att.attbyval);
+    }
+    let tup = heaptuple::heap_form_tuple(mcx, &tupdesc, &vals, &nils)?;
     let d = Datum::from_usize(tup.header_ptr() as usize);
     core::mem::forget(tup); // leak into the arming context (C palloc ownership)
     Ok(d)
 }
 
 fn wal_build_tuple(
-    flinfo: &FmgrInfo,
     fcinfo: &mut Fcinfo,
     wal_counters: PgStat_WalCounters,
     stat_reset_timestamp: i64,
@@ -255,26 +346,23 @@ fn wal_build_tuple(
         nulls[4] = true;
     }
 
-    record_datum(flinfo, fcinfo, &values, &nulls)
+    fixed_record_datum(fcinfo, &PG_STAT_WAL_DESC, &values, &nulls)
 }
 
-pub fn fc_pg_stat_get_wal(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let flinfo = flinfo.expect("pg_stat_get_wal: resolved FmgrInfo required");
+pub fn fc_pg_stat_get_wal(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let wal_stats = pgstat::wal::pgstat_fetch_stat_wal();
-    wal_build_tuple(flinfo, fcinfo, wal_stats.wal_counters, wal_stats.stat_reset_timestamp)
+    wal_build_tuple(fcinfo, wal_stats.wal_counters, wal_stats.stat_reset_timestamp)
 }
 
 pub fn fc_pg_stat_get_backend_wal(
-    flinfo: Option<&mut FmgrInfo>,
+    _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    let flinfo = flinfo.expect("pg_stat_get_backend_wal: resolved FmgrInfo required");
     let pid = fcinfo.args_n::<1>()[0].value.as_i32();
     let Some((backend_stats, _)) = fetch_stat_backend_by_pid(pid) else {
         return Ok(fcinfo.return_null());
     };
     wal_build_tuple(
-        flinfo,
         fcinfo,
         backend_stats.wal_counters,
         backend_stats.stat_reset_timestamp,
@@ -378,10 +466,9 @@ pub fn fc_pg_stat_get_progress_info(
 }
 
 pub fn fc_pg_stat_get_backend_subxact(
-    flinfo: Option<&mut FmgrInfo>,
+    _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    let flinfo = flinfo.expect("pg_stat_get_backend_subxact: resolved FmgrInfo required");
     let proc_number = fcinfo.args_n::<1>()[0].value.as_i32();
     let (values, nulls) = match backend_status::pgstat_get_beentry_by_proc_number(proc_number) {
         Some(be) => (
@@ -393,7 +480,7 @@ pub fn fc_pg_stat_get_backend_subxact(
         ),
         None => ([Datum::from_usize(0); 2], [true, true]),
     };
-    record_datum(flinfo, fcinfo, &values, &nulls)
+    fixed_record_datum(fcinfo, &PG_STAT_SUBXACT_DESC, &values, &nulls)
 }
 
 fn xfn_str(buf: &[u8]) -> &str {
@@ -401,7 +488,7 @@ fn xfn_str(buf: &[u8]) -> &str {
     core::str::from_utf8(&buf[..len]).expect("WAL file names are ASCII")
 }
 
-const PG_STAT_GET_WAL_RECEIVER_COLS: usize = 16;
+const PG_STAT_GET_WAL_RECEIVER_COLS: usize = 15;
 
 // walreceiver.c:pg_stat_get_wal_receiver. No active receiver (pid == 0 ||
 // !ready_to_display, walreceiver.c:1515-1516) is PG_RETURN_NULL(): SQL NULL,
@@ -427,7 +514,7 @@ pub fn fc_pg_stat_get_wal_receiver(
     nulls[0] = false;
     let uid = miscinit::GetUserId();
     if !acl_seams::has_privs_of_role::call(uid, crate::activity::ROLE_PG_READ_ALL_STATS)? {
-        return record_datum(flinfo, fcinfo, &values, &nulls);
+        return record_datum(flinfo, fcinfo, &values, &nulls, true);
     }
 
     values[1] = crate::activity::text_datum(fcinfo, snap.state)?;
@@ -480,7 +567,7 @@ pub fn fc_pg_stat_get_wal_receiver(
         values[14] = crate::activity::text_datum(fcinfo, &snap.conninfo)?;
         nulls[14] = false;
     }
-    record_datum(flinfo, fcinfo, &values, &nulls)
+    record_datum(flinfo, fcinfo, &values, &nulls, false)
 }
 
 const PG_STAT_GET_WAL_SENDERS_COLS: usize = 12;
@@ -596,10 +683,9 @@ pub fn fc_pg_stat_get_wal_senders(
 }
 
 pub fn fc_pg_stat_get_archiver(
-    flinfo: Option<&mut FmgrInfo>,
+    _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    let flinfo = flinfo.expect("pg_stat_get_archiver: resolved FmgrInfo required");
     let a = pgstat::archiver::pgstat_fetch_stat_archiver();
 
     let mut values = [Datum::from_usize(0); 7];
@@ -629,7 +715,7 @@ pub fn fc_pg_stat_get_archiver(
     } else {
         values[6] = Datum::from_i64(a.stat_reset_timestamp);
     }
-    record_datum(flinfo, fcinfo, &values, &nulls)
+    fixed_record_datum(fcinfo, &PG_STAT_ARCHIVER_DESC, &values, &nulls)
 }
 
 const NAMEDATALEN: usize = 64;
@@ -648,11 +734,10 @@ pub(crate) fn pgstat_fetch_replslot(
 }
 
 pub fn fc_pg_stat_get_replication_slot(
-    flinfo: Option<&mut FmgrInfo>,
+    _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
     const COLS: usize = 10;
-    let flinfo = flinfo.expect("pg_stat_get_replication_slot: resolved FmgrInfo required");
     let mut namebuf = [0u8; NAMEDATALEN];
     let name_len = {
         // SAFETY: catalog arg 0 is text (strict function).
@@ -683,15 +768,14 @@ pub fn fc_pg_stat_get_replication_slot(
     } else {
         values[9] = Datum::from_i64(slotent.stat_reset_timestamp);
     }
-    record_datum(flinfo, fcinfo, &values, &nulls)
+    fixed_record_datum(fcinfo, &PG_STAT_REPLICATION_SLOT_DESC, &values, &nulls)
 }
 
 pub fn fc_pg_stat_get_subscription_stats(
-    flinfo: Option<&mut FmgrInfo>,
+    _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
     const COLS: usize = 11;
-    let flinfo = flinfo.expect("pg_stat_get_subscription_stats: resolved FmgrInfo required");
     let subid = fcinfo.args_n::<1>()[0].value.as_oid();
     let subentry = pgstat::subscription::pgstat_fetch_stat_subscription(subid).unwrap_or_default();
 
@@ -708,7 +792,7 @@ pub fn fc_pg_stat_get_subscription_stats(
     } else {
         values[10] = Datum::from_i64(subentry.stat_reset_timestamp);
     }
-    record_datum(flinfo, fcinfo, &values, &nulls)
+    fixed_record_datum(fcinfo, &PG_STAT_SUBSCRIPTION_STATS_DESC, &values, &nulls)
 }
 
 #[cfg(test)]

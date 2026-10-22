@@ -1,0 +1,4 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/granule_source/late.rs
+growth	std::vec::Vec::push	3
+growth	std::vec::Vec::resize	1
+type	std::vec::Vec	1

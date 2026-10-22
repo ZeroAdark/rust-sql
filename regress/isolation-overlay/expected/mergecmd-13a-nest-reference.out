@@ -1,0 +1,122 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1upd s2mrg s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO nr USING nrs ON nr.k = nrs.k WHEN MATCHED THEN UPDATE SET v = nr.v || ' + ' || nrs.w WHEN NOT MATCHED THEN INSERT VALUES (nrs.k + 5000, nrs.w);
+QUERY PLAN                                
+------------------------------------------
+Merge on nr                               
+  ->  Nested Loop Left Join               
+        ->  Seq Scan on nrs               
+        ->  Index Scan using nr_pkey on nr
+              Index Cond: (k = nrs.k)     
+(5 rows)
+
+step s1upd: UPDATE nr SET v = v || ' s1' WHERE k = 13;
+step s2mrg: MERGE INTO nr USING nrs ON nr.k = nrs.k WHEN MATCHED THEN UPDATE SET v = nr.v || ' + ' || nrs.w WHEN NOT MATCHED THEN INSERT VALUES (nrs.k + 5000, nrs.w); <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT * FROM nr WHERE k IN (13, 14, 3000, 5013, 5014, 8000) ORDER BY k;
+   k|v          
+----+-----------
+  13|13 v s1 + a
+  14|14 v + c   
+8000|b          
+(3 rows)
+
+
+starting permutation: s1key s2mrg s1c s2sel
+step s1key: UPDATE nr SET k = 3000 WHERE k = 13;
+step s2mrg: MERGE INTO nr USING nrs ON nr.k = nrs.k WHEN MATCHED THEN UPDATE SET v = nr.v || ' + ' || nrs.w WHEN NOT MATCHED THEN INSERT VALUES (nrs.k + 5000, nrs.w); <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT * FROM nr WHERE k IN (13, 14, 3000, 5013, 5014, 8000) ORDER BY k;
+   k|v       
+----+--------
+  14|14 v + c
+3000|13 v    
+5013|a       
+8000|b       
+(4 rows)
+
+
+starting permutation: s1del s2mrg s1c s2sel
+step s1del: DELETE FROM nr WHERE k = 13;
+step s2mrg: MERGE INTO nr USING nrs ON nr.k = nrs.k WHEN MATCHED THEN UPDATE SET v = nr.v || ' + ' || nrs.w WHEN NOT MATCHED THEN INSERT VALUES (nrs.k + 5000, nrs.w); <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT * FROM nr WHERE k IN (13, 14, 3000, 5013, 5014, 8000) ORDER BY k;
+   k|v       
+----+--------
+  14|14 v + c
+5013|a       
+8000|b       
+(3 rows)
+
+
+starting permutation: s1upd s1src s2mrg s1c s2sel
+step s1upd: UPDATE nr SET v = v || ' s1' WHERE k = 13;
+step s1src: UPDATE nrs SET w = 'z' WHERE k = 13;
+step s2mrg: MERGE INTO nr USING nrs ON nr.k = nrs.k WHEN MATCHED THEN UPDATE SET v = nr.v || ' + ' || nrs.w WHEN NOT MATCHED THEN INSERT VALUES (nrs.k + 5000, nrs.w); <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT * FROM nr WHERE k IN (13, 14, 3000, 5013, 5014, 8000) ORDER BY k;
+   k|v          
+----+-----------
+  13|13 v s1 + a
+  14|14 v + c   
+8000|b          
+(3 rows)
+
+
+starting permutation: s1upd s2del s1c s2sel
+step s1upd: UPDATE nr SET v = v || ' s1' WHERE k = 13;
+step s2del: MERGE INTO nr USING nrs ON nr.k = nrs.k WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (nrs.k + 5000, nrs.w); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2sel: SELECT * FROM nr WHERE k IN (13, 14, 3000, 5013, 5014, 8000) ORDER BY k;
+   k|v
+----+-
+8000|b
+(1 row)
+
+
+starting permutation: s1upd s2mrg s1a s2sel
+step s1upd: UPDATE nr SET v = v || ' s1' WHERE k = 13;
+step s2mrg: MERGE INTO nr USING nrs ON nr.k = nrs.k WHEN MATCHED THEN UPDATE SET v = nr.v || ' + ' || nrs.w WHEN NOT MATCHED THEN INSERT VALUES (nrs.k + 5000, nrs.w); <waiting ...>
+step s1a: ROLLBACK;
+step s2mrg: <... completed>
+step s2sel: SELECT * FROM nr WHERE k IN (13, 14, 3000, 5013, 5014, 8000) ORDER BY k;
+   k|v       
+----+--------
+  13|13 v + a
+  14|14 v + c
+8000|b       
+(3 rows)
+
+
+starting permutation: s1upd s2lim s1c s2sel
+step s1upd: UPDATE nr SET v = v || ' s1' WHERE k = 13;
+step s2lim: MERGE INTO nr USING (SELECT * FROM nrs ORDER BY k LIMIT 2) s ON nr.k = s.k WHEN MATCHED THEN UPDATE SET v = nr.v || ' + ' || s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k + 5000, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2lim: <... completed>
+step s2sel: SELECT * FROM nr WHERE k IN (13, 14, 3000, 5013, 5014, 8000) ORDER BY k;
+ k|v          
+--+-----------
+13|13 v s1 + a
+14|14 v + c   
+(2 rows)
+
+
+starting permutation: s1key s2lim s1c s2sel
+step s1key: UPDATE nr SET k = 3000 WHERE k = 13;
+step s2lim: MERGE INTO nr USING (SELECT * FROM nrs ORDER BY k LIMIT 2) s ON nr.k = s.k WHEN MATCHED THEN UPDATE SET v = nr.v || ' + ' || s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k + 5000, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2lim: <... completed>
+step s2sel: SELECT * FROM nr WHERE k IN (13, 14, 3000, 5013, 5014, 8000) ORDER BY k;
+   k|v       
+----+--------
+  14|14 v + c
+3000|13 v    
+5013|a       
+(3 rows)
+

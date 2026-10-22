@@ -39,6 +39,7 @@ brin_xlog = { path = "../../brin/brin_xlog" }
 generic_xlog = { path = "../generic_xlog" }
 xact = { path = "../xact" }
 rmgrdesc = { path = "../../rmgrdesc" }
+pgrc_wal = { path = "../../pgrcolumnar/pgrc_wal" }
 gin_xlog = { path = "../../gin/gin_xlog" }
 spgist_xlog = { path = "../../spgist/spgist_xlog" }
 gist_xlog = { path = "../../gist/gist_xlog" }

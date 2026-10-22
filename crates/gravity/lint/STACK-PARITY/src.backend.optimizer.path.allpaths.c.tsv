@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/optimizer/path/allpaths.c: 2 stack-depth check sites
+973	set_append_rel_size	crates/backend/optimizer/plan/planner/src/allpaths.rs	set_append_rel_size	yes	
+4560	generate_partitionwise_join_paths	crates/backend/optimizer/plan/planner/src/allpaths.rs	generate_partitionwise_join_paths	yes	

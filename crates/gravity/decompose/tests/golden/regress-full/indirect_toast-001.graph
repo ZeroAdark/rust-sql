@@ -1,0 +1,11 @@
+-- regress-full-indirect_toast-001
+-- SELECT descr, substring(make_tuple_indirect(indtoasttest)::text, 1, 200) FROM indtoasttest;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=630 end=sink
+  nodes n0@0
+  source range rel=39066 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Attr(4):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=fn936(io25(fn39065(v1.0)), c23:1, c23:200))
+  outs 1=vl:win/page 2=vl:call936
+scan-lanes node=0 rti=1 rel=39066 wholerow
+mapped: SeqScan

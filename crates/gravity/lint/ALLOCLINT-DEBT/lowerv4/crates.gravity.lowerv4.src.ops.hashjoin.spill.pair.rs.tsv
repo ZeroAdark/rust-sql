@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/ops/hashjoin/spill/pair.rs
+method	std::clone::Clone::clone	5
+method	std::rc::Rc::new	1
+type	std::rc::Rc	2

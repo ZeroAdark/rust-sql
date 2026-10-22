@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 adt_datetime = { path = "../adt_datetime" }
 format_type = { path = "../format_type" }
+catcache_seams = { path = "../../cache/catcache_seams" }
 adt_timestamp = { path = "../adt_timestamp" }
 numeric = { package = "adt_numeric", path = "../numeric" }
 xact = { path = "../../../access/transam/xact" }

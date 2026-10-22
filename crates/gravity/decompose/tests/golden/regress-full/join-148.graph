@@ -1,0 +1,10 @@
+-- regress-full-join-148
+-- explain (verbose, costs off) select 1 from int4_tbl as i4 inner join ((select 42 as n from int4_tbl x1 left join int8_tbl x2 on f1 = q1) as ss1 right join (select 1 as z) as ss2 on true) on false, lateral (select i4.f1, ss1.n from int8_tbl as i8 limit 1) as ss3;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  gate T_List
+  project (1=c23:1)
+  outs 1=w4:val
+mapped: Result

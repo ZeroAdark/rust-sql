@@ -1,0 +1,122 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2un s1q s2c
+step s2b: BEGIN;
+step s2un: UPDATE d3775u SET name = 'jack2' WHERE id = 1;
+step s1q: SELECT anon_1.users_id, anon_1.users_name, addresses_1.id, addresses_1.email_address FROM (SELECT d3775u.id AS users_id, d3775u.name AS users_name FROM d3775u LIMIT 1 FOR UPDATE) AS anon_1 JOIN d3775a AS addresses_1 ON anon_1.users_id = addresses_1.user_id FOR UPDATE; <waiting ...>
+step s2c: COMMIT;
+step s1q: <... completed>
+users_id|users_name|id|email_address
+--------+----------+--+-------------
+       1|jack2     | 1|jack@bean.com
+(1 row)
+
+
+starting permutation: s2b s2ud s1q s2c
+step s2b: BEGIN;
+step s2ud: DELETE FROM d3775a WHERE user_id = 1; DELETE FROM d3775u WHERE id = 1;
+step s1q: SELECT anon_1.users_id, anon_1.users_name, addresses_1.id, addresses_1.email_address FROM (SELECT d3775u.id AS users_id, d3775u.name AS users_name FROM d3775u LIMIT 1 FOR UPDATE) AS anon_1 JOIN d3775a AS addresses_1 ON anon_1.users_id = addresses_1.user_id FOR UPDATE; <waiting ...>
+step s2c: COMMIT;
+step s1q: <... completed>
+users_id|users_name|id|email_address   
+--------+----------+--+----------------
+       2|ed        | 2|ed@wood.com     
+       2|ed        | 3|ed@bettyboop.com
+       2|ed        | 4|ed@lala.com     
+(3 rows)
+
+
+starting permutation: s2b s2ae s1q s2c
+step s2b: BEGIN;
+step s2ae: UPDATE d3775a SET email_address = 'jack@new.com' WHERE id = 1;
+step s1q: SELECT anon_1.users_id, anon_1.users_name, addresses_1.id, addresses_1.email_address FROM (SELECT d3775u.id AS users_id, d3775u.name AS users_name FROM d3775u LIMIT 1 FOR UPDATE) AS anon_1 JOIN d3775a AS addresses_1 ON anon_1.users_id = addresses_1.user_id FOR UPDATE; <waiting ...>
+step s2c: COMMIT;
+step s1q: <... completed>
+users_id|users_name|id|email_address
+--------+----------+--+-------------
+       1|jack      | 1|jack@new.com 
+(1 row)
+
+
+starting permutation: s2b s2am s1q s2c
+step s2b: BEGIN;
+step s2am: UPDATE d3775a SET user_id = 3 WHERE id = 1;
+step s1q: SELECT anon_1.users_id, anon_1.users_name, addresses_1.id, addresses_1.email_address FROM (SELECT d3775u.id AS users_id, d3775u.name AS users_name FROM d3775u LIMIT 1 FOR UPDATE) AS anon_1 JOIN d3775a AS addresses_1 ON anon_1.users_id = addresses_1.user_id FOR UPDATE; <waiting ...>
+step s2c: COMMIT;
+step s1q: <... completed>
+users_id|users_name|id|email_address
+--------+----------+--+-------------
+(0 rows)
+
+
+starting permutation: s2b s2lu s1nw s2c
+step s2b: BEGIN;
+step s2lu: SELECT id FROM d3775u WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s1nw: SELECT anon_1.users_id, addresses_1.id FROM (SELECT d3775u.id AS users_id FROM d3775u LIMIT 1 FOR UPDATE NOWAIT) AS anon_1 JOIN d3775a AS addresses_1 ON anon_1.users_id = addresses_1.user_id FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "d3775u"
+step s2c: COMMIT;
+
+starting permutation: s2b s2la s1nw s2c
+step s2b: BEGIN;
+step s2la: SELECT id FROM d3775a WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s1nw: SELECT anon_1.users_id, addresses_1.id FROM (SELECT d3775u.id AS users_id FROM d3775u LIMIT 1 FOR UPDATE NOWAIT) AS anon_1 JOIN d3775a AS addresses_1 ON anon_1.users_id = addresses_1.user_id FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "d3775a"
+step s2c: COMMIT;
+
+starting permutation: s2b s2lu s1sk s2c
+step s2b: BEGIN;
+step s2lu: SELECT id FROM d3775u WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s1sk: SELECT anon_1.users_id, addresses_1.id FROM (SELECT d3775u.id AS users_id FROM d3775u LIMIT 1 FOR UPDATE SKIP LOCKED) AS anon_1 JOIN d3775a AS addresses_1 ON anon_1.users_id = addresses_1.user_id FOR UPDATE SKIP LOCKED;
+users_id|id
+--------+--
+       2| 2
+       2| 3
+       2| 4
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2la s1sk s2c
+step s2b: BEGIN;
+step s2la: SELECT id FROM d3775a WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s1sk: SELECT anon_1.users_id, addresses_1.id FROM (SELECT d3775u.id AS users_id FROM d3775u LIMIT 1 FOR UPDATE SKIP LOCKED) AS anon_1 JOIN d3775a AS addresses_1 ON anon_1.users_id = addresses_1.user_id FOR UPDATE SKIP LOCKED;
+users_id|id
+--------+--
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2lu s1e s2c
+step s2b: BEGIN;
+step s2lu: SELECT id FROM d3775u WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s1e: SELECT anon_1.users_id, addresses_1.id FROM (SELECT d3775u.id AS users_id FROM d3775u LIMIT 1 FOR UPDATE) AS anon_1 JOIN d3775a AS addresses_1 ON anon_1.users_id = addresses_1.user_id WHERE addresses_1.email_address = 'nobody' FOR UPDATE;
+users_id|id
+--------+--
+(0 rows)
+
+step s2c: COMMIT;

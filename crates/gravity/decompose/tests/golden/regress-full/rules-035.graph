@@ -1,0 +1,13 @@
+-- regress-full-rules-035
+-- insert into rtest_t4 select a + 1, b from rtest_t9 where a in (20, 30, 40);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@3
+  source range rel=33479 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter any96(v3.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x14\x00\x00\x00\x1e\x00\x00\x00(\x00\x00\x00')
+  filter T_BooleanTest
+  project (1=op551(v3.1, c23:1), 2=v3.2)
+  write INSERT rel=33454 rti=1 natts=2 indexes=()
+  outs 1=w4:val 2=vl:win/page
+mapped: ModifyTable SeqScan

@@ -188,7 +188,8 @@ impl ShredManifest {
         let max_depth = cur.u8()?;
         cur.take(3)?; // reserved
         let ndict = cur.u32()? as usize;
-        let mut dict = Vec::with_capacity(ndict.min(1 << 16));
+        let mut dict = Vec::new();
+        let _ = dict.try_reserve_exact(ndict.min(1 << 16));
         for _ in 0..ndict {
             let len = cur.u32()? as usize;
             let flat = cur.take(len)?;
@@ -203,7 +204,8 @@ impl ShredManifest {
             return Err(ManifestError::DuplicatePath);
         }
         let nelected = cur.u32()? as usize;
-        let mut elected = Vec::with_capacity(nelected.min(1 << 16));
+        let mut elected = Vec::new();
+        let _ = elected.try_reserve_exact(nelected.min(1 << 16));
         for _ in 0..nelected {
             let path_id = cur.u32()?;
             if path_id as usize >= dict.len() {

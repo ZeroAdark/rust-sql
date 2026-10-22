@@ -1,0 +1,23 @@
+-- regress-full-memoize-008
+-- SELECT explain_memoize(' SELECT * FROM flt f1 INNER JOIN flt f2 ON f1.f >= f2.f;', false);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=46974 rti=1 am=heap index=46977
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  nest inner=n2 JOIN_INNER raise-free params=($exec0=outer.1)
+  inner node=3 serial site=0 reason=IndexSource end=sink
+  nodes n3@0 n2@1
+  source index-only rel=46974 rti=2 am=heap index=46977
+    key att=1 op=673 value=$exec0
+    recheck (op673(index.1, $exec0))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  memo entries=1 binary keys=($exec0)
+  project (1=outer.1)
+  project (1=outer.1, 2=inner.1)
+  outs 1=w8:val
+  outs 1=w8:val 2=w8:val
+param $exec0 owner=n0 type=701 rep=w8:val
+mapped: IndexOnlyScan NestLoop NestLoopParam Memoize

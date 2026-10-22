@@ -19,8 +19,8 @@ use crate::files;
 use crate::here;
 use crate::state::{lock_twophase_state, unlock_twophase_state, TwoPhaseState, MY_LOCKED_GXACT, NO_GXACT};
 
-fn decode_rels(buf: &[u8], base: usize, n: usize) -> Vec<RelFileLocator> {
-    let mut v = Vec::with_capacity(n);
+fn decode_rels(buf: &[u8], base: usize, n: usize) -> PgResult<Vec<RelFileLocator>> {
+    let mut v = ::mcx::std_vec_with_capacity("TwoPhase", n)?;
     for i in 0..n {
         let o = base + i * SIZEOF_REL_FILE_LOCATOR;
         let u = |k: usize| u32::from_ne_bytes(buf[o + k..o + k + 4].try_into().unwrap());
@@ -30,11 +30,11 @@ fn decode_rels(buf: &[u8], base: usize, n: usize) -> Vec<RelFileLocator> {
             relNumber: u(8),
         });
     }
-    v
+    Ok(v)
 }
 
-fn decode_stats(buf: &[u8], base: usize, n: usize) -> Vec<XlXactStatsItem> {
-    let mut v = Vec::with_capacity(n);
+fn decode_stats(buf: &[u8], base: usize, n: usize) -> PgResult<Vec<XlXactStatsItem>> {
+    let mut v = ::mcx::std_vec_with_capacity("TwoPhase", n)?;
     for i in 0..n {
         let o = base + i * SIZEOF_XL_XACT_STATS_ITEM;
         let kind = i32::from_ne_bytes(buf[o..o + 4].try_into().unwrap());
@@ -47,11 +47,11 @@ fn decode_stats(buf: &[u8], base: usize, n: usize) -> Vec<XlXactStatsItem> {
             objid: ((hi as u64) << 32) | lo as u64,
         });
     }
-    v
+    Ok(v)
 }
 
 fn decode_invals(buf: &[u8], base: usize, n: usize) -> PgResult<Vec<SharedInvalidationMessage>> {
-    let mut v = Vec::with_capacity(n);
+    let mut v = ::mcx::std_vec_with_capacity("TwoPhase", n)?;
     for i in 0..n {
         let o = base + i * SIZEOF_SHARED_INVAL_MSG;
         let raw: [u8; SIZEOF_SHARED_INVAL_MSG] =
@@ -86,17 +86,17 @@ pub fn FinishPreparedTransaction(gid: &str, is_commit: bool) -> PgResult<()> {
     debug_assert_eq!(hdr.xid, xid);
     let layout = buffer_layout(&hdr, &buf, "FinishPreparedTransaction")?;
     let children: Vec<TransactionId> = {
-        let mut v = Vec::with_capacity(hdr.nsubxacts as usize);
+        let mut v = ::mcx::std_vec_with_capacity("TwoPhase", hdr.nsubxacts as usize)?;
         for i in 0..hdr.nsubxacts as usize {
             let o = layout.children + i * 4;
             v.push(TransactionId::from_ne_bytes(buf[o..o + 4].try_into().unwrap()));
         }
         v
     };
-    let commitrels = decode_rels(&buf, layout.commitrels, hdr.ncommitrels as usize);
-    let abortrels = decode_rels(&buf, layout.abortrels, hdr.nabortrels as usize);
-    let commitstats = decode_stats(&buf, layout.commitstats, hdr.ncommitstats as usize);
-    let abortstats = decode_stats(&buf, layout.abortstats, hdr.nabortstats as usize);
+    let commitrels = decode_rels(&buf, layout.commitrels, hdr.ncommitrels as usize)?;
+    let abortrels = decode_rels(&buf, layout.abortrels, hdr.nabortrels as usize)?;
+    let commitstats = decode_stats(&buf, layout.commitstats, hdr.ncommitstats as usize)?;
+    let abortstats = decode_stats(&buf, layout.abortstats, hdr.nabortstats as usize)?;
     let invalmsgs = decode_invals(&buf, layout.invalmsgs, hdr.ninvalmsgs as usize)?;
 
     let latest_xid = transam::TransactionIdLatest(xid, &children);
@@ -146,14 +146,25 @@ pub fn FinishPreparedTransaction(gid: &str, is_commit: bool) -> PgResult<()> {
         for msg in &invalmsgs {
             match *msg {
                 SharedInvalidationMessage::Catcache(m) => {
-                    l2cache::bump(l2cache::Domain::Cat(m.id as i32));
+                    l2cache::invalidate_key(
+                        l2cache::Domain::Cat(m.id as i32),
+                        l2cache::cat_key(m.id as i32, m.dbId, m.hashValue),
+                    );
+                    // D3866: which rows the prepared transaction changed went with its backend: every row-stamped
+                    // message moves its row's program stamp (inval eoxact `l2_bump_for_messages` with no `touched`)
+                    if l2cache::row_stamped(m.id as i32) {
+                        l2cache::bump_stamp(m.id as i32, m.hashValue, m.dbId);
+                    }
                 }
                 SharedInvalidationMessage::Catalog(_) => l2cache::bump_all_cat(),
                 SharedInvalidationMessage::Relcache(m) => {
                     if m.relId == types_core::InvalidOid {
                         l2cache::bump_all_rel();
                     } else {
-                        l2cache::bump(l2cache::Domain::Rel(m.relId));
+                        l2cache::invalidate_key(
+                            l2cache::Domain::Rel(m.relId),
+                            l2cache::rel_key(m.relId, m.dbId),
+                        );
                     }
                 }
                 _ => {}

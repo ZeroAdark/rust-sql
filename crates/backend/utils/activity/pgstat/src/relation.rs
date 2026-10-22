@@ -1,6 +1,6 @@
 // pgstat_relation.c — relation counting keyed by (dboid, relid); the relcache
-// carries only `pgstat_enabled` (checked by callers, C's macro branch), and
-// C's rel->pgstat_info/trans/parent pointer chases become by-key map access.
+// and scans cache generation-checked links for immediately visible counters.
+// Transactional updates use by-key map access.
 // The per-table trans/upper chain is a per-table stack vec (innermost last);
 // each xact level's `first` list carries table keys.
 
@@ -214,9 +214,6 @@ pub fn pgstat_count_heap_scan(relid: Oid, relisshared: bool) {
     with_counts(relid, relisshared, |c| c.numscans += 1);
 }
 
-// Drain of heapam's per-scan batched tuple counters (one probe per scan, not
-// per row): pgstat_count_heap_getnext for seq scans, pgstat_count_heap_fetch
-// for bitmap heap scans. numscans lands per scan at initscan, as in C.
 pub fn pgstat_count_heap_scan_batched(
     relid: Oid,
     relisshared: bool,
@@ -229,6 +226,21 @@ pub fn pgstat_count_heap_scan_batched(
     with_counts(relid, relisshared, |c| {
         c.tuples_returned += tuples_returned as PgStat_Counter;
         c.tuples_fetched += tuples_fetched as PgStat_Counter;
+    });
+}
+
+pub fn pgstat_count_seq_scans_batched(
+    relid: Oid,
+    relisshared: bool,
+    numscans: u64,
+    tuples_returned: u64,
+) {
+    if numscans == 0 && tuples_returned == 0 {
+        return;
+    }
+    with_counts(relid, relisshared, |c| {
+        c.numscans += numscans as PgStat_Counter;
+        c.tuples_returned += tuples_returned as PgStat_Counter;
     });
 }
 
@@ -248,9 +260,6 @@ pub fn pgstat_count_index_tuples(relid: Oid, relisshared: bool, n: PgStat_Counte
     with_counts(relid, relisshared, |c| c.tuples_returned += n);
 }
 
-// Drain of indexam's per-scan batched counters (the pgstat_count_index_scan /
-// pgstat_count_index_tuples / pgstat_count_heap_fetch macros, one probe per
-// scan). heap_fetches is idx_tup_fetch: C counts it against the index rel.
 pub fn pgstat_count_index_scan_batched(
     relid: Oid,
     relisshared: bool,
@@ -268,8 +277,108 @@ pub fn pgstat_count_index_scan_batched(
     });
 }
 
+/// Backend-local scan link; pending-entry removal invalidates every cached pointer.
+pub struct PgStatRelationCounts {
+    counts: *mut PgStat_TableCounts,
+    generation: u64,
+    relid: Oid,
+    shared: bool,
+    detached: u64,
+}
+
+impl PgStatRelationCounts {
+    pub fn new(relid: Oid, shared: bool) -> Self {
+        Self {
+            counts: core::ptr::null_mut(),
+            generation: 0,
+            relid,
+            shared,
+            detached: 0,
+        }
+    }
+
+    /// The link of a scan with no relation (see `detached`).
+    pub fn detached() -> Self {
+        Self::new(InvalidOid, false)
+    }
+
+    /// The scans a relation-free scan counted since the last take.
+    pub fn take_detached_scans(&mut self) -> u64 {
+        core::mem::take(&mut self.detached)
+    }
+
+    #[inline]
+    pub fn count(&mut self, scans: u64, returned: u64, fetched: u64) {
+        if self.relid == InvalidOid {
+            self.detached += scans;
+            return;
+        }
+        let generation = pgstat_relation_link_gen();
+        if self.generation != generation || self.counts.is_null() {
+            self.counts = pgstat_relation_link_counts(self.relid, self.shared).cast();
+            self.generation = generation;
+        }
+        // SAFETY: the link is backend-local (!Send/!Sync), generation-checked,
+        // and no call between validation and use can remove its allocation.
+        unsafe {
+            (*self.counts).numscans += scans as PgStat_Counter;
+            (*self.counts).tuples_returned += returned as PgStat_Counter;
+            (*self.counts).tuples_fetched += fetched as PgStat_Counter;
+        }
+    }
+}
+
+// Heap scans reuse the descriptor's relation link to stay within the inline
+// executor-node size budget without allocating a second counter handle.
+#[inline]
+pub fn pgstat_count_scan(
+    rel: &types_rel::RelationData<'_>,
+    scans: u64,
+    returned: u64,
+    fetched: u64,
+) {
+    count_scan_link(rel.rd_id, rel.rd_rel.relisshared, &rel.pgstat_link, scans, returned, fetched);
+}
+
+#[inline]
+pub(crate) fn count_scan_link(
+    relid: Oid,
+    shared: bool,
+    link: &core::cell::Cell<(u64, *mut ())>,
+    scans: u64,
+    returned: u64,
+    fetched: u64,
+) {
+    let generation = pgstat_relation_link_gen();
+    let (cached_generation, mut counts) = link.get();
+    if cached_generation != generation || counts.is_null() {
+        counts = pgstat_relation_link_counts(relid, shared);
+        link.set((generation, counts));
+    }
+    // SAFETY: the backend-local relation link is generation-checked and no
+    // intervening call can invalidate it.
+    unsafe {
+        let counts = counts.cast::<PgStat_TableCounts>();
+        (*counts).numscans += scans as PgStat_Counter;
+        (*counts).tuples_returned += returned as PgStat_Counter;
+        (*counts).tuples_fetched += fetched as PgStat_Counter;
+    }
+}
+
 pub fn pgstat_count_buffer_read(relid: Oid, relisshared: bool) {
     with_counts(relid, relisshared, |c| c.blocks_fetched += 1);
+}
+
+/// The counted form: a Gravity section leader folds its workers' block
+/// reads and hits into the relation at merge (one probe, not one per block).
+pub fn pgstat_count_buffer_reads(relid: Oid, relisshared: bool, fetched: u64, hit: u64) {
+    if fetched == 0 && hit == 0 {
+        return;
+    }
+    with_counts(relid, relisshared, |c| {
+        c.blocks_fetched += fetched as PgStat_Counter;
+        c.blocks_hit += hit as PgStat_Counter;
+    });
 }
 
 pub fn pgstat_count_buffer_hit(relid: Oid, relisshared: bool) {
@@ -325,7 +434,7 @@ pub fn pgstat_create_relation(relid: Oid, relisshared: bool) {
     );
 }
 
-pub fn pgstat_drop_relation(relid: Oid, relisshared: bool) {
+pub fn pgstat_drop_relation(relid: Oid, relisshared: bool, pgstat_enabled: bool) {
     let nest_level = xact_seams::get_current_transaction_nest_level::call();
     xact::pgstat_drop_transactional(
         PGSTAT_KIND_RELATION,
@@ -337,16 +446,21 @@ pub fn pgstat_drop_relation(relid: Oid, relisshared: bool) {
         relid as u64,
     );
 
-    // Keep pending transaction counters when tracking is disabled.
-    // The transactional drop above still proceeds.
+    // With track_counts off the dropped relation's transaction counters stay as they are (C PostgreSQL 18.6: a
+    // DROP TABLE after SET track_counts = off leaves pg_stat_get_xact_tuples_* at the counts before it).
     if !crate::pgstat_track_counts() {
         return;
     }
-
     let key = relation_key(relid, relisshared);
     pending::with_state(|st| {
+        // pgstat_should_count_relation: an enabled relation with no pending
+        // entry is associated first, which creates its shared entry even if
+        // the DROP later rolls back.
         if !st.have_pending(key) {
-            return;
+            if !pgstat_enabled {
+                return;
+            }
+            pgstat_prep_relation_pending(st, relid, relisshared);
         }
         // Transactionally zero counters so pg_stat_xact_all_tables shows 0.
         let t = table_mut(st, key);

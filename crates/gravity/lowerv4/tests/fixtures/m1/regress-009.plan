@@ -1,0 +1,12 @@
+-- name: regress-009
+-- sql: SELECT a FROM t WHERE false;
+-- rel 16389 t am=heap kind=r natts=5
+-- att 16389 1 a typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16389 2 b typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16389 3 c typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 16389 4 d typid=1700 typmod=786438 len=-1 byval=f notnull=f
+-- att 16389 5 e typid=1082 typmod=-1 len=4 byval=t notnull=f
+-- idx 16396 rel=16389 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 16398 rel=16389 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16399 rel=16389 keys=2,3 opts=0,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {RESULT :plan.disabled_nodes 0 :plan.startup_cost 0 :plan.total_cost 0 :plan.plan_rows 0 :plan.plan_width 0 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 7} :resno 1 :resname a :ressortgroupref 0 :resorigtbl 16389 :resorigcol 1 :resjunk false}) :plan.qual <> :plan.lefttree <> :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :resconstantqual ({CONST :consttype 16 :consttypmod -1 :constcollid 0 :constlen 1 :constbyval true :constisnull false :location -1 :constvalue 1 [ 0 0 0 0 0 0 0 0 ]})} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname t :colnames ("a" "b" "c" "d" "e")} :rtekind 0 :relid 16389 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 16389 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16389) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 27}

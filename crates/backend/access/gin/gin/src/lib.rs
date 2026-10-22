@@ -17,6 +17,7 @@ pub(crate) mod insert;
 pub(crate) mod logic;
 pub mod opclass; // visibility widened (was pub(crate)) for proofs/jsonb-gin
 pub mod postinglist;
+mod secdef;
 pub(crate) mod scan;
 pub(crate) mod util;
 pub(crate) mod vacuum;

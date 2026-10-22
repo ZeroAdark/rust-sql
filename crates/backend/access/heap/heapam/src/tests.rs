@@ -1,8 +1,12 @@
 use super::*;
 use ::mcx::MemoryContext;
-use ::types_core::{InvalidBuffer, Oid, BLCKSZ, INVALID_PROC_NUMBER, RELPERSISTENCE_PERMANENT};
-use ::types_rel::{FormData_pg_class, LockInfoData, LockRelId, RELKIND_RELATION};
-use ::types_scan::sdir::ForwardScanDirection;
+use ::types_core::{
+    InvalidBuffer, Oid, BLCKSZ, INVALID_PROC_NUMBER, PG_TOAST_NAMESPACE, RELPERSISTENCE_PERMANENT,
+};
+use ::types_rel::{
+    FormData_pg_class, LockInfoData, LockRelId, RELKIND_RELATION, RELKIND_TOASTVALUE,
+};
+use ::types_scan::sdir::{BackwardScanDirection, ForwardScanDirection};
 use ::types_snapshot::SnapshotType;
 use ::types_storage::bufpage::{
     ItemIdData, SizeOfPageHeaderData, LP_DEAD, LP_NORMAL, LP_REDIRECT, LP_UNUSED, PD_ALL_VISIBLE,
@@ -11,7 +15,7 @@ use ::types_tuple::{CompactAttribute, FormData_pg_attribute, NameData, TupleDesc
 use datum::Datum;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, Once};
 
 const INVISIBLE_XMIN: u32 = 999;
@@ -24,8 +28,12 @@ struct Fake {
 }
 
 static FAKE: Mutex<Option<Fake>> = Mutex::new(None);
-// (block, nblocks_hint) of every read_buffer_batched call, in order.
-static BATCH_HINTS: Mutex<Vec<(BlockNumber, BlockNumber)>> = Mutex::new(Vec::new());
+// Every block the read stream pinned, in order.
+static STREAM_READS: Mutex<Vec<BlockNumber>> = Mutex::new(Vec::new());
+// Blocks read_buffer_if_valid finds not resident ((relation, block)), and every
+// block it pinned, in order (D3608).
+static COLD: Mutex<Vec<(Oid, BlockNumber)>> = Mutex::new(Vec::new());
+static DIRECT_READS: Mutex<Vec<BlockNumber>> = Mutex::new(Vec::new());
 // Seam-backed tests share the fake bufmgr; run them serially.
 static SERIAL: Mutex<()> = Mutex::new(());
 
@@ -58,10 +66,50 @@ fn install_seams() {
         bufmgr_seams::read_buffer_strategy::set(|rel, block, _strategy| {
             bufmgr_seams::read_buffer::call(rel, block)
         });
-        bufmgr_seams::read_buffer_batched::set(|rel, block, nblocks_hint, _strategy| {
-            BATCH_HINTS.lock().unwrap().push((block, nblocks_hint));
+        bufmgr_seams::read_buffer_if_valid::set(|rel, block, _strategy| {
+            if COLD.lock().unwrap().contains(&(rel.rd_id, block)) {
+                return Ok(InvalidBuffer);
+            }
+            DIRECT_READS.lock().unwrap().push(block);
             bufmgr_seams::read_buffer::call(rel, block)
         });
+        // Every fake page is resident: StartReadBuffers pins the first
+        // block as a hit and the stream runs its all-cached path.
+        fn stream_pin(rel: Option<&RelationData<'_>>, block: BlockNumber) -> PgResult<Buffer> {
+            STREAM_READS.lock().unwrap().push(block);
+            bufmgr_seams::read_buffer::call(rel.expect("heap streams carry the relation"), block)
+        }
+        bufmgr_seams::start_read_buffers::set(|_op, rel, buffers, blocknum, nblocks, _flags| {
+            if buffers[0] == InvalidBuffer {
+                buffers[0] = stream_pin(rel, blocknum)?;
+            }
+            *nblocks = 1;
+            Ok(false)
+        });
+        bufmgr_seams::start_read_buffer::set(|_op, rel, buffer, blocknum, _flags| {
+            *buffer = stream_pin(rel, blocknum)?;
+            Ok(false)
+        });
+        bufmgr_seams::wait_read_buffers::set(|_op, _rel| panic!("resident pages need no wait"));
+        bufmgr_seams::relation_smgr_locator::set(|rel| ::types_storage::RelFileLocatorBackend {
+            locator: ::types_storage::RelFileLocator {
+                spcOid: 1663,
+                dbOid: 5,
+                relNumber: rel.rd_id,
+            },
+            backend: INVALID_PROC_NUMBER,
+        });
+        bufmgr_seams::io_combine_limit::set(|| 16);
+        bufmgr_seams::get_pin_limit::set(|| 1000);
+        bufmgr_seams::get_additional_pin_limit::set(|| 1000);
+        bufmgr_seams::get_local_pin_limit::set(|| 1000);
+        bufmgr_seams::get_additional_local_pin_limit::set(|| 1000);
+        bufmgr_seams::get_access_strategy_pin_limit::set(|_| 1000);
+        aio_seams::pgaio_enter_batchmode::set(|| Ok(()));
+        aio_seams::pgaio_exit_batchmode::set(|| Ok(()));
+        catalog_seams::is_catalog_relation_oid::set(|relid| relid < 16384);
+        ::guc_tables::vars::effective_io_concurrency
+            .install_if_absent(::guc_tables::GucVarAccessors { get: || 16, set: |_| {} });
         bufmgr_seams::buffer_get_block_number::set(|buf| {
             with_fake(|f| {
                 for pages in f.tables.values() {
@@ -323,11 +371,54 @@ fn test_relation_am<'mcx>(
     user_catalog: bool,
     relam: Oid,
 ) -> Relation<'mcx> {
+    test_relation_full(
+        mcx, oid, replident, user_catalog, relam, RELKIND_RELATION, 2200, RELPERSISTENCE_PERMANENT, false,
+    )
+}
+
+fn test_relation_kind<'mcx>(
+    mcx: Mcx<'mcx>,
+    oid: Oid,
+    replident: u8,
+    user_catalog: bool,
+    relam: Oid,
+    relkind: u8,
+    relnamespace: Oid,
+) -> Relation<'mcx> {
+    test_relation_full(
+        mcx, oid, replident, user_catalog, relam, relkind, relnamespace, RELPERSISTENCE_PERMANENT, false,
+    )
+}
+
+fn test_relation_storage<'mcx>(
+    mcx: Mcx<'mcx>,
+    oid: Oid,
+    replident: u8,
+    user_catalog: bool,
+    relam: Oid,
+    persistence: u8,
+    local: bool,
+) -> Relation<'mcx> {
+    test_relation_full(mcx, oid, replident, user_catalog, relam, RELKIND_RELATION, 2200, persistence, local)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn test_relation_full<'mcx>(
+    mcx: Mcx<'mcx>,
+    oid: Oid,
+    replident: u8,
+    user_catalog: bool,
+    relam: Oid,
+    relkind: u8,
+    relnamespace: Oid,
+    persistence: u8,
+    local: bool,
+) -> Relation<'mcx> {
     let mut relname = NameData::default();
     relname.namestrcpy("t");
     let rd_rel = FormData_pg_class {
         relname,
-        relnamespace: 2200,
+        relnamespace,
         reltype: 0,
         relowner: 10,
         relam,
@@ -339,8 +430,8 @@ fn test_relation_am<'mcx>(
         reltoastrelid: 0,
         relhasindex: false,
         relisshared: false,
-        relpersistence: RELPERSISTENCE_PERMANENT,
-        relkind: RELKIND_RELATION,
+        relpersistence: persistence,
+        relkind,
         relhassubclass: false,
         relrowsecurity: false,
         relispopulated: true,
@@ -354,7 +445,7 @@ fn test_relation_am<'mcx>(
         rd_smgr: Default::default(),
         rd_id: oid,
         rd_backend: INVALID_PROC_NUMBER,
-        rd_islocaltemp: false,
+        rd_islocaltemp: local,
         rd_isvalid: std::cell::Cell::new(true),
         rd_createSubid: std::cell::Cell::new(0),
         rd_newRelfilelocatorSubid: std::cell::Cell::new(0),
@@ -381,6 +472,7 @@ fn test_relation_am<'mcx>(
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -505,13 +597,27 @@ fn seqscan_pagemode_forward_rescan() {
     assert_eq!(scan.rs_nblocks, 2);
     let vals = collect_vals(&mut scan, ForwardScanDirection);
     assert_eq!(vals, vec![(0, 1, 1), (0, 2, 2), (1, 1, 3), (1, 3, 4)]);
-    assert_eq!(scan.rs_pgstat_tuples, 4);
+    assert_eq!(
+        ::pgstat::relation::find_tabstat_entry(oid).unwrap().tuples_returned,
+        4,
+    );
 
-    // Rescan replays the same forward walk. (Backward-execution wave B7:
-    // the backward collect leg - 4,3,2,1 - retired with the stepping arms.)
+    // Falling off the end resets rs_inited: a backward request starts a
+    // fresh scan from the last page (heapam.c:889-897).
+    let vals = collect_vals(&mut scan, BackwardScanDirection);
+    assert_eq!(vals, vec![(1, 3, 4), (1, 1, 3), (0, 2, 2), (0, 1, 1)]);
+
     heap_rescan(&mut scan, None, false, false, false, false).unwrap();
     let vals = collect_vals(&mut scan, ForwardScanDirection);
     assert_eq!(vals, vec![(0, 1, 1), (0, 2, 2), (1, 1, 3), (1, 3, 4)]);
+
+    // Reversing mid-scan: two forward, then backward returns the ones before.
+    heap_rescan(&mut scan, None, false, false, false, false).unwrap();
+    assert!(heap_getnext(&mut scan, ForwardScanDirection).unwrap().is_some());
+    assert!(heap_getnext(&mut scan, ForwardScanDirection).unwrap().is_some());
+    assert!(heap_getnext(&mut scan, ForwardScanDirection).unwrap().is_some());
+    let vals = collect_vals(&mut scan, BackwardScanDirection);
+    assert_eq!(vals, vec![(0, 2, 2), (0, 1, 1)]);
 
     heap_endscan(scan).unwrap();
     quiesced();
@@ -655,26 +761,46 @@ fn advance_block_wraps_and_honors_scanlimits() {
 
     // wraparound from a nonzero start block
     scan.rs_startblock = 2;
-    assert_eq!(heapgettup_initial_block(&mut scan), 2);
+    assert_eq!(heapgettup_initial_block(&mut scan, ForwardScanDirection), 2);
     scan.rs_inited = true;
-    assert_eq!(heapgettup_advance_block(&mut scan, 2).unwrap(), 3);
-    assert_eq!(heapgettup_advance_block(&mut scan, 3).unwrap(), 0);
+    assert_eq!(heapgettup_advance_block(&mut scan, 2, ForwardScanDirection).unwrap(), 3);
+    assert_eq!(heapgettup_advance_block(&mut scan, 3, ForwardScanDirection).unwrap(), 0);
     assert_eq!(
-        heapgettup_advance_block(&mut scan, 1).unwrap(),
+        heapgettup_advance_block(&mut scan, 1, ForwardScanDirection).unwrap(),
         InvalidBlockNumber
     );
 
-    // (backward-execution wave B7: the backward walk legs - 1, 0, wrap to 3,
-    // done at startblock - retired with the backward stepping arms.)
+    // backward: last block first, wrap from 0 to nblocks-1, done at startblock
+    scan.rs_inited = false;
+    assert_eq!(heapgettup_initial_block(&mut scan, BackwardScanDirection), 1);
+    assert_eq!(scan.rs_base.rs_flags & SO_ALLOW_SYNC, 0);
+    scan.rs_inited = true;
+    assert_eq!(heapgettup_advance_block(&mut scan, 1, BackwardScanDirection).unwrap(), 0);
+    assert_eq!(heapgettup_advance_block(&mut scan, 0, BackwardScanDirection).unwrap(), 3);
+    assert_eq!(
+        heapgettup_advance_block(&mut scan, 2, BackwardScanDirection).unwrap(),
+        InvalidBlockNumber
+    );
 
     // setscanlimits: numblocks counts down to InvalidBlockNumber
     scan.rs_inited = false;
     scan.rs_base.rs_flags &= !SO_ALLOW_SYNC;
     heap_setscanlimits(&mut scan, 1, 2);
-    assert_eq!(heapgettup_initial_block(&mut scan), 1);
-    assert_eq!(heapgettup_advance_block(&mut scan, 1).unwrap(), 2);
+    assert_eq!(heapgettup_initial_block(&mut scan, ForwardScanDirection), 1);
+    assert_eq!(heapgettup_advance_block(&mut scan, 1, ForwardScanDirection).unwrap(), 2);
     assert_eq!(
-        heapgettup_advance_block(&mut scan, 2).unwrap(),
+        heapgettup_advance_block(&mut scan, 2, ForwardScanDirection).unwrap(),
+        InvalidBlockNumber
+    );
+
+    // backward under setscanlimits starts at the range's last block
+    scan.rs_inited = false;
+    heap_setscanlimits(&mut scan, 1, 2);
+    assert_eq!(heapgettup_initial_block(&mut scan, BackwardScanDirection), 2);
+    scan.rs_inited = true;
+    assert_eq!(heapgettup_advance_block(&mut scan, 2, BackwardScanDirection).unwrap(), 1);
+    assert_eq!(
+        heapgettup_advance_block(&mut scan, 1, BackwardScanDirection).unwrap(),
         InvalidBlockNumber
     );
 
@@ -746,7 +872,9 @@ fn parallel_pagebatch_partitions_blocks_disjointly() {
         assert!(scans.iter().all(|s| s.rs_nblocks == nblocks));
 
         // Uneven interleave (worker 0 drains two pages per turn) so chunk
-        // boundaries land mid-turn. Record per-worker blocks + global order.
+        // boundaries land mid-turn. Record per-worker blocks + global order;
+        // STREAM_READS holds the claim order (each stream claims ahead).
+        STREAM_READS.lock().unwrap().clear();
         let mut blocks: [Vec<BlockNumber>; 2] = [Vec::new(), Vec::new()];
         let mut order: Vec<BlockNumber> = Vec::new();
         let mut ntuples = 0u64;
@@ -786,11 +914,11 @@ fn parallel_pagebatch_partitions_blocks_disjointly() {
             // chunk_size 2 shows up as same-worker consecutive block pairs.
             assert!(blocks[0].windows(2).any(|p| p[1] == p[0] + 1));
         } else {
-            // chunk_size 1: single-threaded, blocks are handed out strictly
-            // in shared-counter order — the wrapped sequence from startblock.
+            // chunk_size 1: single-threaded, blocks are claimed strictly in
+            // shared-counter order — the wrapped sequence from startblock.
             let expect: Vec<BlockNumber> =
                 (0..nblocks).map(|i| (i + startblock) % nblocks).collect();
-            assert_eq!(order, expect);
+            assert_eq!(*STREAM_READS.lock().unwrap(), expect);
         }
 
         let [a, b] = scans;
@@ -869,13 +997,13 @@ fn tidrange_read_ahead_stops_at_numblocks() {
         &ItemPointerData::new(2, 1),
     );
     assert_eq!(scan.rs_numblocks, 2);
-    BATCH_HINTS.lock().unwrap().clear();
+    STREAM_READS.lock().unwrap().clear();
     let blocks: Vec<u32> = collect_vals(&mut scan, ForwardScanDirection)
         .into_iter()
         .map(|(b, _, _)| b)
         .collect();
     assert_eq!(blocks, vec![1, 2]);
-    assert_eq!(core::mem::take(&mut *BATCH_HINTS.lock().unwrap()), vec![(1, 2)]);
+    assert_eq!(core::mem::take(&mut *STREAM_READS.lock().unwrap()), vec![1, 2]);
     heap_endscan(scan).unwrap();
     quiesced();
 }
@@ -1094,6 +1222,12 @@ pub(crate) fn wal_insert_record_hook(
 static WAL_INSPECT: Mutex<
     Option<Box<dyn for<'a, 'b> Fn(u8, &'a [crate::wal::RegBlock<'b>]) + Send>>,
 > = Mutex::new(None);
+
+static BUFFER_NEEDS_BACKUP: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn wal_buffer_needs_backup_hook(_page_lsn: types_core::XLogRecPtr) -> bool {
+    BUFFER_NEEDS_BACKUP.load(Ordering::Relaxed)
+}
 
 fn install_dml_seams() {
     install_seams();
@@ -1591,6 +1725,107 @@ fn dml_hot_update_same_page() {
     quiesced();
 }
 
+fn same_page_update_bufdata(old_body: &[u8], new_body: &[u8], fpi: bool) -> (u8, Vec<u8>, Vec<u8>) {
+    install_dml_seams();
+    let _serial = serial();
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let oid = fresh_oid();
+    let image = |xmin: u32, body: &[u8]| {
+        let mut img = tuple_image(xmin, 0, 0);
+        img.truncate(24);
+        img.extend_from_slice(body);
+        img
+    };
+    register_table(oid, vec![build_page(&[Item::Tuple(image(10, old_body))], false)]);
+    let rel = test_relation(mcx, oid);
+    let _ = take_xlog();
+    BUFFER_NEEDS_BACKUP.store(fpi, Ordering::Relaxed);
+
+    let otid = ItemPointerData::new(0, 1);
+    let mut newtup = make_writable_tuple(&image(0, new_body));
+    let mut tmfd = TM_FailureData::default();
+    let mut lockmode = LockTupleMode::LockTupleNoKeyExclusive;
+    let mut update_indexes = TU_UpdateIndexes::TU_None;
+    let r = dml::heap_update(
+        &rel,
+        &otid,
+        &mut newtup,
+        7,
+        None,
+        true,
+        &mut tmfd,
+        &mut lockmode,
+        &mut update_indexes,
+    )
+    .unwrap();
+    BUFFER_NEEDS_BACKUP.store(false, Ordering::Relaxed);
+    assert_eq!(r, TM_Result::TM_Ok);
+    let recs = take_xlog();
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0].0, dml::XLOG_HEAP_HOT_UPDATE);
+    assert_eq!(recs[0].2, 1, "same-page update registers one buffer");
+    quiesced();
+    let new = page_tuple_at(oid, 0, 2);
+    let h = new.t_data();
+    let mut hdr = Vec::new();
+    hdr.extend_from_slice(&h.t_infomask2.to_ne_bytes());
+    hdr.extend_from_slice(&h.t_infomask.to_ne_bytes());
+    hdr.push(h.t_hoff);
+    (recs[0].1[7], recs[0].3[0].1.clone(), hdr)
+}
+
+#[test]
+fn dml_same_page_update_logs_unchanged_prefix_and_suffix_lengths() {
+    let old_body: Vec<u8> = (1..=40).collect();
+    let mut new_body = old_body.clone();
+    new_body[20] = 0xEE;
+    let (flags, bufdata, hdr) = same_page_update_bufdata(&old_body, &new_body, false);
+    assert_eq!(flags, dml::XLH_UPDATE_PREFIX_FROM_OLD | dml::XLH_UPDATE_SUFFIX_FROM_OLD);
+    let mut expect = Vec::new();
+    expect.extend_from_slice(&20u16.to_ne_bytes());
+    expect.extend_from_slice(&19u16.to_ne_bytes());
+    expect.extend_from_slice(&hdr);
+    expect.push(0); // bitmap/padding byte between the 23-byte header and t_hoff=24
+    expect.push(0xEE);
+    assert_eq!(bufdata, expect);
+
+    let mut new_body = old_body.clone();
+    new_body[38] = 0xEE;
+    let (flags, bufdata, hdr) = same_page_update_bufdata(&old_body, &new_body, false);
+    assert_eq!(flags, dml::XLH_UPDATE_PREFIX_FROM_OLD);
+    let mut expect = Vec::new();
+    expect.extend_from_slice(&38u16.to_ne_bytes());
+    expect.extend_from_slice(&hdr);
+    expect.push(0);
+    expect.extend_from_slice(&new_body[38..]);
+    assert_eq!(bufdata, expect);
+
+    let mut new_body = old_body.clone();
+    new_body[1] = 0xEE;
+    let (flags, bufdata, hdr) = same_page_update_bufdata(&old_body, &new_body, false);
+    assert_eq!(flags, dml::XLH_UPDATE_SUFFIX_FROM_OLD);
+    let mut expect = Vec::new();
+    expect.extend_from_slice(&38u16.to_ne_bytes());
+    expect.extend_from_slice(&hdr);
+    expect.push(0);
+    expect.extend_from_slice(&new_body[..2]);
+    assert_eq!(bufdata, expect);
+}
+
+#[test]
+fn dml_same_page_update_logs_whole_tuple_when_fpi_is_due() {
+    let old_body: Vec<u8> = (1..=40).collect();
+    let mut new_body = old_body.clone();
+    new_body[20] = 0xEE;
+    let (flags, bufdata, hdr) = same_page_update_bufdata(&old_body, &new_body, true);
+    assert_eq!(flags, 0);
+    let mut expect = hdr;
+    expect.push(0);
+    expect.extend_from_slice(&new_body);
+    assert_eq!(bufdata, expect);
+}
+
 #[test]
 fn dml_update_moves_to_new_page_when_full() {
     install_dml_seams();
@@ -1952,14 +2187,6 @@ static VM_INIT: Once = Once::new();
 
 fn install_vm_seams() {
     VM_INIT.call_once(|| {
-        bufmgr_seams::relation_smgr_locator::set(|rel| ::types_storage::RelFileLocatorBackend {
-            locator: ::types_storage::RelFileLocator {
-                spcOid: 1663,
-                dbOid: 5,
-                relNumber: rel.rd_id,
-            },
-            backend: ::types_core::INVALID_PROC_NUMBER,
-        });
         smgr_seams::smgr_cached_nblocks::set(|rloc, _fork| {
             with_fake(|f| {
                 f.tables
@@ -2191,6 +2418,33 @@ fn logical_insert_contains_new_tuple_and_keeps_data() {
     assert_ne!(recs[0].1[2] & dml::XLH_INSERT_CONTAINS_NEW_TUPLE, 0);
     assert_eq!(recs[0].1[2] & dml::XLH_INSERT_ON_TOAST_RELATION, 0);
     assert_ne!(recs[0].3[0].0 & KEEP_DATA, 0);
+    quiesced();
+}
+
+// XLH_INSERT_ON_TOAST_RELATION follows relkind 't', not the pg_toast namespace: a pgrc
+// companion (relkind 'r' in pg_toast) logs its rows as ordinary rows (RL.md C-1).
+#[test]
+fn logical_insert_toast_flag_follows_relkind() {
+    install_dml_seams();
+    let _serial = serial();
+    let _logical = LogicalOn::new(&[]);
+    let ctx = MemoryContext::new("t");
+    let heap_am = ::tableam_vocab::HEAP_TABLE_AM_OID;
+    let cases = [(RELKIND_RELATION, 0), (RELKIND_TOASTVALUE, dml::XLH_INSERT_ON_TOAST_RELATION)];
+    for (relkind, want) in cases {
+        let oid = fresh_oid();
+        register_table(oid, vec![]);
+        let ns = PG_TOAST_NAMESPACE;
+        let rel = test_relation_kind(ctx.mcx(), oid, b'd', false, heap_am, relkind, ns);
+        let _ = take_xlog();
+        let mut tup = make_writable_tuple(&tuple_image(0, 0, 41));
+        dml::heap_insert(&rel, &mut tup, 7, 0, None).unwrap();
+        let recs = take_xlog();
+        assert_eq!(recs.len(), 1);
+        assert_ne!(recs[0].1[2] & dml::XLH_INSERT_CONTAINS_NEW_TUPLE, 0);
+        let flag = recs[0].1[2] & dml::XLH_INSERT_ON_TOAST_RELATION;
+        assert_eq!(flag, want, "relkind {}", relkind as char);
+    }
     quiesced();
 }
 
@@ -3415,30 +3669,47 @@ fn pagebatch_credits_rows_stored_then_whole_page_on_advance() {
     let mut scan = begin_seqscan(mcx, &rel, mvcc_snapshot(mcx));
 
     assert_eq!(heap_getnextpagebatch(&mut scan).unwrap(), 3);
-    assert_eq!(scan.rs_pgstat_tuples, 0, "staging a page returns nothing yet");
+    assert_eq!(
+        ::pgstat::relation::find_tabstat_entry(oid).unwrap().tuples_returned,
+        0,
+        "staging a page returns nothing yet",
+    );
     batch_credit_upto(&mut scan, 1);
-    assert_eq!(scan.rs_pgstat_tuples, 1, "LIMIT 1 shape: one row returned");
+    assert_eq!(
+        ::pgstat::relation::find_tabstat_entry(oid).unwrap().tuples_returned,
+        1,
+        "LIMIT 1 shape: one row returned",
+    );
     batch_credit_upto(&mut scan, 1);
-    assert_eq!(scan.rs_pgstat_tuples, 1, "re-crediting a row is a no-op");
+    assert_eq!(
+        ::pgstat::relation::find_tabstat_entry(oid).unwrap().tuples_returned,
+        1,
+        "re-crediting a row is a no-op",
+    );
     batch_credit_upto(&mut scan, 2);
-    assert_eq!(scan.rs_pgstat_tuples, 2);
+    assert_eq!(
+        ::pgstat::relation::find_tabstat_entry(oid).unwrap().tuples_returned,
+        2,
+    );
 
     // Advancing past the page: every row on it was handed to the qual.
     assert_eq!(heap_getnextpagebatch(&mut scan).unwrap(), 3);
-    assert_eq!(scan.rs_pgstat_tuples, 3);
+    assert_eq!(
+        ::pgstat::relation::find_tabstat_entry(oid).unwrap().tuples_returned,
+        3,
+    );
     // Exhaustion credits the last page in full.
     assert_eq!(heap_getnextpagebatch(&mut scan).unwrap(), 0);
-    assert_eq!(scan.rs_pgstat_tuples, 6);
+    assert_eq!(
+        ::pgstat::relation::find_tabstat_entry(oid).unwrap().tuples_returned,
+        6,
+    );
     heap_endscan(scan).unwrap();
     quiesced();
 }
 
-// Sitediff N-1: an erroring statement never reaches heap_endscan; C's
-// counts already sit in rel->pgstat_info and are reported at abort, so the
-// scan descriptor's drop drains the batched counters too (and a rescan
-// mid-page leaves the unreturned remainder uncounted).
 #[test]
-fn scan_drop_drains_batched_pgstat_counters() {
+fn scan_counts_are_visible_before_close_and_survive_rescan() {
     install_seams();
     let _serial = serial();
     let ctx = MemoryContext::new("test");
@@ -3472,9 +3743,12 @@ fn scan_drop_drains_batched_pgstat_counters() {
     assert_eq!(counts(before), (1, 0), "numscans lands at initscan (C)");
     assert!(heap_getnext(&mut scan, ForwardScanDirection).unwrap().is_some());
     assert!(heap_getnext(&mut scan, ForwardScanDirection).unwrap().is_some());
-    assert_eq!(scan.rs_pgstat_tuples, 2);
+    assert_eq!(
+        ::pgstat::relation::find_tabstat_entry(oid).unwrap().tuples_returned,
+        2,
+    );
     drop(scan);
-    assert_eq!(counts(before), (1, 2), "drop drained tuples_returned into the pending counts");
+    assert_eq!(counts(before), (1, 2), "drop must not count tuples again");
 
     // Batch feed stopped mid-page, then rescan: only the pulled row counts;
     // the rescan is a second scan.
@@ -3482,13 +3756,12 @@ fn scan_drop_drains_batched_pgstat_counters() {
     assert_eq!(heap_getnextpagebatch(&mut scan).unwrap(), 3);
     batch_credit_upto(&mut scan, 1);
     heap_rescan(&mut scan, None, false, false, false, false).unwrap();
-    assert_eq!(counts(before), (3, 2));
-    assert_eq!(scan.rs_pgstat_tuples, 1);
+    assert_eq!(counts(before), (3, 3));
     let vals = collect_vals(&mut scan, ForwardScanDirection);
     assert_eq!(vals.len(), 4);
-    assert_eq!(scan.rs_pgstat_tuples, 5);
+    assert_eq!(counts(before), (3, 7));
     heap_endscan(scan).unwrap();
-    assert_eq!(counts(before), (3, 7), "heap_endscan drains once; the drop after it sees zeros");
+    assert_eq!(counts(before), (3, 7), "heap_endscan must not count tuples again");
     quiesced();
 }
 
@@ -3507,4 +3780,281 @@ fn datum_is_equal_typlen_minus_two_compares_cstrings() {
     assert!(!crate::dml::datum_is_equal(dat(a), dat(d), false, -2));
     assert!(crate::dml::datum_is_equal(dat(a), dat(a), false, 3));
     assert!(!crate::dml::datum_is_equal(dat(a), dat(d), false, 3));
+}
+
+#[test]
+fn read_stream_scans_reject_other_sessions_empty_temp_tables() {
+    install_seams();
+    let _serial = serial();
+    let ctx = MemoryContext::new("test");
+    let mcx = ctx.mcx();
+    for local in [false, true] {
+        let oid = fresh_oid();
+        register_table(oid, vec![]);
+        let rel = test_relation_storage(
+            mcx,
+            oid,
+            b'd',
+            false,
+            2,
+            ::types_core::RELPERSISTENCE_TEMP,
+            local,
+        );
+        for flags in [SO_TYPE_SEQSCAN, SO_TYPE_TIDRANGESCAN, SO_TYPE_BITMAPSCAN] {
+            let result = heap_beginscan(mcx, &rel, None, 0, PgVec::new_in(mcx), None, flags);
+            if local {
+                assert!(result.is_ok());
+            } else {
+                let err = result
+                    .err()
+                    .expect("other session's temporary table accepted");
+                assert_eq!(err.sqlstate, ::types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
+                assert_eq!(
+                    err.message,
+                    "cannot access temporary tables of other sessions"
+                );
+                let location = err.location.unwrap();
+                assert_eq!(location.filename.as_deref(), Some("read_stream.c"));
+                assert_eq!(location.lineno, 566);
+                assert_eq!(location.funcname.as_deref(), Some("read_stream_begin_impl"));
+            }
+        }
+    }
+    quiesced();
+}
+
+// Rewrite receivers pass HEAP_INSERT_SINGLE_PAGE_EXTEND so a batch grows the
+// heap like C's per-row heap_insert (1, 1, 2, ... pages) rather than by the
+// batch's page estimate.
+fn multi_insert_blocks_after(options: i32) -> usize {
+    install_dml_seams();
+    let _serial = serial();
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let oid = fresh_oid();
+    register_table(oid, vec![]);
+    let rel = test_relation(mcx, oid);
+    let mut owned: Vec<_> = (0..500).map(|i| heap_slot_with(mcx, &tuple_image(0, 0, i))).collect();
+    let mut slots: Vec<_> = owned.iter_mut().collect();
+    let mut bistate = hio::GetBulkInsertState();
+    dml::heap_multi_insert(mcx, &rel, &mut slots, 7, options, Some(&mut bistate)).unwrap();
+    drop(bistate);
+    let n = with_fake(|f| f.tables[&oid].len());
+    quiesced();
+    n
+}
+
+#[test]
+fn single_page_extend_grows_heap_like_per_row_inserts() {
+    let skip_fsm = hio::HEAP_INSERT_SKIP_FSM;
+    assert_eq!(multi_insert_blocks_after(skip_fsm), 3);
+    assert_eq!(multi_insert_blocks_after(skip_fsm | hio::HEAP_INSERT_SINGLE_PAGE_EXTEND), 4);
+}
+
+// heapam.c:679 + read_stream.c fast path: a seqscan positioned on its first
+// tuple holds the current block and the stream's one look-ahead block (C:
+// pg_buffercache shows 2 pinned pages); a direction change drops the
+// look-ahead and rescan/endscan release everything.
+#[test]
+fn seqscan_holds_current_and_lookahead_pin() {
+    install_seams();
+    let _serial = serial();
+    let ctx = MemoryContext::new("test");
+    let mcx = ctx.mcx();
+    let oid = fresh_oid();
+    register_table(
+        oid,
+        (0..4)
+            .map(|i| build_page(&[Item::Tuple(tuple_image(10, 0, i))], true))
+            .collect(),
+    );
+    let rel = test_relation(mcx, oid);
+    let pinned = || with_fake(|f| f.pins.iter().filter(|p| **p > 0).count());
+
+    let mut scan = begin_seqscan(mcx, &rel, mvcc_snapshot(mcx));
+    scan.rs_base.rs_flags &= !SO_ALLOW_SYNC;
+    STREAM_READS.lock().unwrap().clear();
+    assert!(heap_getnext(&mut scan, ForwardScanDirection).unwrap().is_some());
+    assert_eq!(scan.rs_cblock, 0);
+    assert_eq!(pinned(), 2, "current block + one look-ahead block");
+    assert_eq!(*STREAM_READS.lock().unwrap(), vec![0, 1]);
+
+    assert!(heap_getnext(&mut scan, ForwardScanDirection).unwrap().is_some());
+    assert_eq!(scan.rs_cblock, 1);
+    assert_eq!(pinned(), 2);
+
+    // Backward: the stream is reset, so block 2 read ahead is released.
+    let t = heap_getnext(&mut scan, BackwardScanDirection).unwrap();
+    assert!(t.is_some());
+    assert_eq!(scan.rs_cblock, 0);
+
+    heap_rescan(&mut scan, None, false, false, false, false).unwrap();
+    assert_eq!(pinned(), 0);
+    let blocks: Vec<u32> = collect_vals(&mut scan, ForwardScanDirection)
+        .into_iter()
+        .map(|(b, _, _)| b)
+        .collect();
+    assert_eq!(blocks, vec![0, 1, 2, 3]);
+    heap_endscan(scan).unwrap();
+    quiesced();
+}
+
+// heapam.c:1232 + heapam_handler.c:2460: a bitmap heap scan reads its pages
+// through a stream whose per-buffer data is the TBM page result; positioned
+// on the first page it also holds the look-ahead page, and pages past
+// rs_nblocks are skipped outside SERIALIZABLE. The pages are not resident, so
+// the page batch hands the first to the stream (D3608), begun only then.
+#[test]
+fn bitmap_scan_reads_through_stream() {
+    install_seams();
+    let _serial = serial();
+    if !xact_seams::isolation_is_serializable::is_installed() {
+        xact_seams::isolation_is_serializable::set(|| false);
+    }
+    let ctx = MemoryContext::new("test");
+    let mcx = ctx.mcx();
+    let oid = fresh_oid();
+    register_table(
+        oid,
+        (0..4)
+            .map(|i| build_page(&[Item::Tuple(tuple_image(10, 0, i))], true))
+            .collect(),
+    );
+    let rel = test_relation(mcx, oid);
+    let pinned = || with_fake(|f| f.pins.iter().filter(|p| **p > 0).count());
+
+    let mut tbm = ::tidbitmap::TIDBitmap::new(mcx, 1 << 20);
+    let tids: Vec<ItemPointerData> =
+        [0u32, 2, 3, 9].iter().map(|&b| ItemPointerData::new(b, 1)).collect();
+    tbm.add_tuples(&tids, false).unwrap();
+    let mut iter = ::tidbitmap::TbmIterator::private(tbm.begin_private_iterate().unwrap());
+
+    let flags = SO_TYPE_BITMAPSCAN | SO_ALLOW_PAGEMODE;
+    let mut scan =
+        heap_beginscan(mcx, &rel, mvcc_snapshot(mcx), 0, PgVec::new_in(mcx), None, flags).unwrap();
+    assert!(scan.rs_read_stream.is_none(), "begun at the first page that needs it");
+    STREAM_READS.lock().unwrap().clear();
+    DIRECT_READS.lock().unwrap().clear();
+    COLD.lock().unwrap().extend((0..4).map(|b| (oid, b)));
+    let (mut recheck, mut lossy, mut exact) = (true, 0u64, 0u64);
+    let mut next = |scan: &mut HeapScanDescData<'_>| {
+        crate::bitmap::heap_scan_bitmap_next_pagebatch(
+            mcx, scan, Some(&tbm), &mut iter, &mut recheck, &mut lossy, &mut exact,
+        )
+        .unwrap()
+    };
+    assert_eq!(next(&mut scan), 1);
+    assert!(matches!(scan.rs_read_stream.as_deref(), Some(HeapReadStream::Bitmap(_))));
+    assert_eq!(scan.rs_cblock, 0);
+    assert_eq!(pinned(), 2, "current page + one look-ahead page");
+    assert_eq!(*STREAM_READS.lock().unwrap(), vec![0, 2]);
+    assert_eq!(next(&mut scan), 1);
+    assert_eq!(scan.rs_cblock, 2);
+    assert_eq!(next(&mut scan), 1);
+    assert_eq!(scan.rs_cblock, 3);
+    // Block 9 is past rs_nblocks: skipped, never read.
+    assert_eq!(next(&mut scan), 0);
+    assert_eq!(*STREAM_READS.lock().unwrap(), vec![0, 2, 3]);
+    assert!(DIRECT_READS.lock().unwrap().is_empty());
+    assert!(!scan.rs_bitmap_streaming);
+    assert_eq!(pinned(), 0);
+    drop(next);
+    COLD.lock().unwrap().clear();
+    assert_eq!(exact, 3);
+    assert!(!recheck);
+    heap_endscan(scan).unwrap();
+    quiesced();
+}
+
+// D3608: the page batch reads resident pages with one pin each and no stream;
+// the walk's first page that is not resident goes to the stream (begun then),
+// which reads it and the rest of the walk with its look-ahead; the next walk
+// (after a rescan) reads resident pages directly again.
+#[test]
+fn bitmap_pagebatch_reads_resident_pages_directly() {
+    install_seams();
+    let _serial = serial();
+    if !xact_seams::isolation_is_serializable::is_installed() {
+        xact_seams::isolation_is_serializable::set(|| false);
+    }
+    let ctx = MemoryContext::new("test");
+    let mcx = ctx.mcx();
+    let oid = fresh_oid();
+    register_table(
+        oid,
+        (0..5)
+            .map(|i| build_page(&[Item::Tuple(tuple_image(10, 0, i))], true))
+            .collect(),
+    );
+    let rel = test_relation(mcx, oid);
+    let pinned = || with_fake(|f| f.pins.iter().filter(|p| **p > 0).count());
+    let bitmap = |blocks: &[u32]| {
+        let mut tbm = ::tidbitmap::TIDBitmap::new(mcx, 1 << 20);
+        let tids: Vec<ItemPointerData> =
+            blocks.iter().map(|&b| ItemPointerData::new(b, 1)).collect();
+        tbm.add_tuples(&tids, false).unwrap();
+        tbm
+    };
+
+    let flags = SO_TYPE_BITMAPSCAN | SO_ALLOW_PAGEMODE;
+    let mut scan =
+        heap_beginscan(mcx, &rel, mvcc_snapshot(mcx), 0, PgVec::new_in(mcx), None, flags).unwrap();
+    STREAM_READS.lock().unwrap().clear();
+    DIRECT_READS.lock().unwrap().clear();
+    COLD.lock().unwrap().push((oid, 2));
+    let (mut recheck, mut lossy, mut exact) = (true, 0u64, 0u64);
+
+    let mut tbm = bitmap(&[0, 1, 2, 3]);
+    let mut iter = ::tidbitmap::TbmIterator::private(tbm.begin_private_iterate().unwrap());
+    let mut next = |scan: &mut HeapScanDescData<'_>, iter: &mut ::tidbitmap::TbmIterator| {
+        crate::bitmap::heap_scan_bitmap_next_pagebatch(
+            mcx, scan, Some(&tbm), iter, &mut recheck, &mut lossy, &mut exact,
+        )
+        .unwrap()
+    };
+    assert_eq!(next(&mut scan, &mut iter), 1);
+    assert_eq!(scan.rs_cblock, 0);
+    assert_eq!(pinned(), 1, "the current page only: no look-ahead");
+    assert!(scan.rs_read_stream.is_none(), "no stream while the pages are resident");
+    assert_eq!(next(&mut scan, &mut iter), 1);
+    assert_eq!(scan.rs_cblock, 1);
+    assert_eq!(*DIRECT_READS.lock().unwrap(), vec![0, 1]);
+    // Block 2 is not resident: the stream reads it, and 3 as its look-ahead.
+    assert_eq!(next(&mut scan, &mut iter), 1);
+    assert_eq!(scan.rs_cblock, 2);
+    assert!(scan.rs_bitmap_streaming);
+    assert!(matches!(scan.rs_read_stream.as_deref(), Some(HeapReadStream::Bitmap(_))));
+    assert_eq!(*STREAM_READS.lock().unwrap(), vec![2, 3]);
+    assert_eq!(pinned(), 2);
+    assert_eq!(next(&mut scan, &mut iter), 1);
+    assert_eq!(scan.rs_cblock, 3);
+    assert_eq!(next(&mut scan, &mut iter), 0);
+    assert!(!scan.rs_bitmap_streaming, "the walk ran dry");
+    assert_eq!(pinned(), 0);
+    assert_eq!(*DIRECT_READS.lock().unwrap(), vec![0, 1]);
+    drop(next);
+
+    // A second walk after a rescan: resident pages are read directly again.
+    heap_rescan(&mut scan, None, false, false, false, false).unwrap();
+    let mut tbm2 = bitmap(&[1, 4]);
+    let mut iter2 = ::tidbitmap::TbmIterator::private(tbm2.begin_private_iterate().unwrap());
+    let mut next2 = |scan: &mut HeapScanDescData<'_>| {
+        crate::bitmap::heap_scan_bitmap_next_pagebatch(
+            mcx, scan, Some(&tbm2), &mut iter2, &mut recheck, &mut lossy, &mut exact,
+        )
+        .unwrap()
+    };
+    assert_eq!(next2(&mut scan), 1);
+    assert_eq!(scan.rs_cblock, 1);
+    assert_eq!(next2(&mut scan), 1);
+    assert_eq!(scan.rs_cblock, 4);
+    assert_eq!(next2(&mut scan), 0);
+    drop(next2);
+    assert_eq!(*DIRECT_READS.lock().unwrap(), vec![0, 1, 1, 4]);
+    assert_eq!(*STREAM_READS.lock().unwrap(), vec![2, 3]);
+    COLD.lock().unwrap().clear();
+    assert_eq!(pinned(), 0);
+    assert_eq!(exact, 6);
+    heap_endscan(scan).unwrap();
+    quiesced();
 }

@@ -98,7 +98,11 @@ pub fn index_drop<'mcx>(
     if types_rel::RELKIND_HAS_STORAGE(userIndexRelation.rd_rel.relkind) {
         catalog_storage::RelationDropStorage(&userIndexRelation)?;
     }
-    pgstat::relation::pgstat_drop_relation(indexId, userIndexRelation.rd_rel.relisshared);
+    pgstat::relation::pgstat_drop_relation(
+        indexId,
+        userIndexRelation.rd_rel.relisshared,
+        userIndexRelation.pgstat_enabled.get(),
+    );
 
     indexam::index_close(userIndexRelation, NoLock)?;
     relcache::invalidate::RelationForgetRelation(indexId)?;

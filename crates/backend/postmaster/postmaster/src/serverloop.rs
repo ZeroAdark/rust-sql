@@ -16,6 +16,7 @@ use crate::{
     ImmediateShutdown, NoShutdown, FORCED_EXIT_AFTER_LETHAL_SECS, MAXLISTEN,
     SIGKILL_CHILDREN_AFTER_SECS,
 };
+use elog::PCT_M;
 
 const SECS_PER_MINUTE: i64 = 60;
 
@@ -60,7 +61,7 @@ pub fn DetermineSleepTime() -> i64 {
             let seconds = FORCED_EXIT_AFTER_LETHAL_SECS - (now_secs() - lethal_time);
             return (seconds * 1000).max(0);
         }
-        // regression: wake in time for the shutdown-stall watchdog. A
+        // GL-GANGWEDGE-1: wake in time for the shutdown-stall watchdog. A
         // wedged shutdown produces no events at all, so without this the
         // postmaster would sleep on its latch for the full 60s tick and the
         // bound would be quantized to it. Gate on `shutdown_stall_armed` — the
@@ -104,13 +105,17 @@ pub fn DetermineSleepTime() -> i64 {
     }
 
     if next_wakeup != 0 {
-        // Microsecond TimestampTz difference, clamped like C (0 .. 60s), in ms.
         let now = timestamp_seams::get_current_timestamp::call();
-        let ms = (next_wakeup - now).max(0) / 1000;
-        return ms.min(60 * 1000);
+        return bgworker_restart_wait_ms(next_wakeup, now);
     }
 
     60 * 1000
+}
+
+// TimestampDifferenceMilliseconds(now, next_wakeup) (timestamp.c:1774: a
+// fractional millisecond rounds up), clamped like C to 0 .. 60s.
+pub(crate) fn bgworker_restart_wait_ms(next_wakeup: i64, now: i64) -> i64 {
+    (((next_wakeup - now).max(0) + 999) / 1000).min(60 * 1000)
 }
 
 fn now_secs() -> i64 {
@@ -118,7 +123,7 @@ fn now_secs() -> i64 {
     pg_clock::wall_secs()
 }
 
-/// regression shutdown-stall predicate — the pure half, unit-pinned.
+/// GL-GANGWEDGE-1 shutdown-stall predicate — the pure half, unit-pinned.
 ///
 /// True when a NON-immediate shutdown has sat in one shutdown state, without
 /// advancing, for at least `bound` seconds. Deliberately excluded:
@@ -178,6 +183,11 @@ pub(crate) fn shutdown_stall_due(
         && (now - state_since) >= bound
 }
 
+/// D4812: the postmaster's exit callback: the memory threads' queued log writes drained (bounded) before the process exits.
+fn drain_memory_log_at_exit(_code: i32, _arg: usize) {
+    let _ = memruntime::memlog::drain(core::time::Duration::from_millis(memruntime::memlog::SHUTDOWN_WAIT_MS));
+}
+
 pub fn ServerLoop() -> PgResult<i32> {
     // M1: spawn the morsel-runtime worker pool at postmaster start. DEFAULT ON
     // since the M5 boarding flip (runtime::runtime_enabled: `PGRUST_RUNTIME=0`
@@ -187,13 +197,30 @@ pub fn ServerLoop() -> PgResult<i32> {
     // what makes the analytics fast path engage at DOP=cores out of the box
     // for router-covered shapes — no SET, no env var required.
     let _ = launch_backend::rtpool::start_if_enabled();
-    // regression: the process memory watchdog sampler thread. Near-free
+    // GL-MEMWATCH-1: the process memory watchdog sampler thread. Near-free
     // (a 1s tick off every query path); pgrust.memory_watchdog gates the
     // work per tick, so SIGHUP can arm/disarm without a restart.
     {
         let pm_pid = init_small::globals::MyProcPid();
         let pm_start = init_small::globals::MyStartTime();
-        memwatchdog::start(move || {
+        // memory step 6a: the memory broker ticks on the watchdog's thread
+        memruntime::set_broker_tick(launch_backend::rtpool::gravity_membroker_tick());
+        // B0: the work pool follows free room there every 100 ms (broker on, the work pool's actuator)
+        memruntime::set_pool_tick(launch_backend::rtpool::gravity_pool_tick());
+        // D3872: the residency pass, at the memory policy's cadence, on pg:memresident beside it (D4812 part 2)
+        memruntime::set_residency_pass(launch_backend::rtpool::gravity_residency_pass());
+        // C3: decide's fast rungs (Gravity's parked memory and managed caches), run there when it plans them
+        let (fast_bytes, fast_reclaim) = launch_backend::rtpool::gravity_fast_rungs();
+        memruntime::set_fast_rungs(fast_bytes, fast_reclaim);
+        // D3992: the backstop reclaims there before it cancels
+        let (backstop_bytes, backstop_reclaim) = launch_backend::rtpool::gravity_backstop_rungs();
+        memruntime::set_backstop_rungs(backstop_bytes, backstop_reclaim);
+        // D4353: the ladder's R2a count, what its reclaim can free now
+        memruntime::set_ladder_elastic(launch_backend::rtpool::gravity_ladder_elastic());
+        // D4353 (C): R2a stops at each cache's protected floor; R2b's bytes (LADDER-DESIGN 0b)
+        let (ladder_reclaim, ladder_protected) = launch_backend::rtpool::gravity_ladder_floors();
+        memruntime::set_ladder_floors(ladder_reclaim, ladder_protected);
+        memruntime::start(move || {
             // The watchdog logs as the postmaster: %p/%c/%s/%b its own
             // (PostmasterPid is per-thread too; %b = "postmaster" needs it).
             init_small::globals::SetMyProcPid(pm_pid);
@@ -201,13 +228,19 @@ pub fn ServerLoop() -> PgResult<i32> {
             init_small::globals::SetMyStartTime(pm_start);
             launch_backend::logctx::install();
         });
+        // D4812: the memory threads' queued log lines reach the log before the postmaster exits (the exit callbacks run
+        // last-in first: this one before the socket close and the pid file's unlink registered at start)
+        ipc_seams::on_proc_exit::call(drain_memory_log_at_exit, 0);
+        // the ladder pass's landing credit from the start (after memruntime's releaser set its narrower hook), not only
+        // from the reaper's first spawn
+        launch_backend::rtpool::gravity_landing_credit_start();
     }
     // M2 pool-binding: wire the STANDING runtime executor gang (boot
     // captures + spawner install; threads spawn lazily at first
     // engagement). No-op unless PGRUST_RUNTIME=1, with PGRUST_RUNTIME_
     // POOLBIND=0 as the increment kill — the pool's layering above.
     launch_backend::rtgang::install_if_enabled();
-    // regression: test-only fault injector for the shutdown backstop
+    // GL-GANGWEDGE-1: test-only fault injector for the shutdown backstop
     // (PGRUST_TEST_WEDGE_SHM_BUSY_MS). Inert unless the env var is set; routed
     // through launch_backend because tcop/postmaster cannot name parallel
     // (the seam package-cycle rule).
@@ -269,7 +302,7 @@ pub fn ServerLoop() -> PgResult<i32> {
 
         let now = now_secs();
 
-        // regression SHUTDOWN-STALL WATCHDOG. A fast/smart shutdown that
+        // GL-GANGWEDGE-1 SHUTDOWN-STALL WATCHDOG. A fast/smart shutdown that
         // stops advancing through the shutdown states is a WEDGE, not a slow
         // shutdown: every gate past PM_STOP_BACKENDS waits only on children
         // that have already been told to stop. C can wait forever there
@@ -297,6 +330,17 @@ pub fn ServerLoop() -> PgResult<i32> {
             } else {
                 0
             };
+            with_pm(|pm| pm.stall_escalated = true);
+            // Re-enter the shutdown request path as an immediate request
+            // rather than open-coding the escalation: that keeps exactly one
+            // implementation of "become an immediate shutdown" (SIGQUIT
+            // reason, gang fence, TerminateChildren, PM_WAIT_BACKENDS,
+            // abort_start_time) and inherits any future fix to it.
+            crate::PENDING_PM_IMMEDIATE_SHUTDOWN_REQUEST.store(true, Ordering::Release);
+            crate::PENDING_PM_SHUTDOWN_REQUEST.store(true, Ordering::Release);
+            // D4816: act, then log (handle_child_crash's note): the escalation (its SIGQUIT broadcast) before the
+            // marker's synchronous write; the facts above were read before it. Do not restore the old order.
+            let escalated = crate::statemachine::process_pm_shutdown_request();
             // The marker a scored run greps for. One line, unmistakable,
             // carries everything needed to attribute the stall offline.
             report(
@@ -313,15 +357,7 @@ pub fn ServerLoop() -> PgResult<i32> {
                 1758,
                 "ServerLoop",
             );
-            with_pm(|pm| pm.stall_escalated = true);
-            // Re-enter the shutdown request path as an immediate request
-            // rather than open-coding the escalation: that keeps exactly one
-            // implementation of "become an immediate shutdown" (SIGQUIT
-            // reason, gang fence, TerminateChildren, PM_WAIT_BACKENDS,
-            // abort_start_time) and inherits any future fix to it.
-            crate::PENDING_PM_IMMEDIATE_SHUTDOWN_REQUEST.store(true, Ordering::Release);
-            crate::PENDING_PM_SHUTDOWN_REQUEST.store(true, Ordering::Release);
-            crate::statemachine::process_pm_shutdown_request()?;
+            escalated?;
         }
 
         if with_pm(|pm| {
@@ -330,6 +366,16 @@ pub fn ServerLoop() -> PgResult<i32> {
                 && (now - pm.abort_start_time) >= SIGKILL_CHILDREN_AFTER_SECS
         }) {
             let send_abort = guc_tables::vars::send_abort_for_kill.read();
+            // D4816: act, then log (handle_child_crash's note): the kill broadcast and the forced-exit floor's arm
+            // before this LOG line's synchronous write. Do not restore C's order.
+            TerminateChildren(if send_abort { procsignal::signums::SIGABRT } else { procsignal::signums::SIGKILL });
+            with_pm(|pm| {
+                pm.abort_start_time = 0;
+                // Arm the forced-exit floor: the thread rendering of SIGKILL
+                // (SendThreadKill) lands only at a drain point, so unlike
+                // C's, this broadcast can LOSE (GL-DISCONNECT-WEDGE-1).
+                pm.lethal_time = now;
+            });
             report(
                 LOG,
                 format!(
@@ -339,14 +385,6 @@ pub fn ServerLoop() -> PgResult<i32> {
                 1758,
                 "ServerLoop",
             );
-            TerminateChildren(if send_abort { procsignal::signums::SIGABRT } else { procsignal::signums::SIGKILL });
-            with_pm(|pm| {
-                pm.abort_start_time = 0;
-                // Arm the forced-exit floor: the thread rendering of SIGKILL
-                // (SendThreadKill) lands only at a drain point, so unlike
-                // C's, this broadcast can LOSE (regression).
-                pm.lethal_time = now;
-            });
         }
 
         // Forced-exit floor (see FORCED_EXIT_AFTER_LETHAL_SECS): if children
@@ -375,6 +413,9 @@ pub fn ServerLoop() -> PgResult<i32> {
                 // the ceremony normally.
                 with_pm(|pm| pm.lethal_time = 0);
             } else {
+                // D4816: the one line written before its act, as the act is the process's exit (_exit /
+                // ExitPostmaster) with no after to log in. Its write can lengthen this floor by the write's stall;
+                // it gates no peer, as every child already had the kill broadcast (main, 2026-10-17).
                 report(
                     LOG,
                     format!(
@@ -386,6 +427,12 @@ pub fn ServerLoop() -> PgResult<i32> {
                     1758,
                     "ServerLoop",
                 );
+                if crate::supervisor::supervised()
+                    && with_pm(|pm| pm.fatal_error && pm.shutdown == crate::NoShutdown)
+                    && guc_tables::vars::restart_after_crash.read()
+                {
+                    crate::supervisor::exit_for_restart();
+                }
                 ExitPostmaster(1);
             }
         }
@@ -442,6 +489,9 @@ pub fn canAcceptConnections(backend_type: BackendType) -> CacState {
     if !conns_allowed && backend_type == BackendType::Backend {
         return CacState::Shutdown;
     }
+    if backend_type == BackendType::Backend && init_small::instaux::fenced() {
+        return CacState::Fenced;
+    }
 
     CacState::Ok
 }
@@ -485,7 +535,7 @@ pub fn BackendStartup(client_sock: ClientSocket) -> i32 {
         pmchild_seams::release_postmaster_child_slot::call(child_slot);
         let _ = elog::ereport(LOG)
             .with_saved_errno(save_errno)
-            .errmsg("could not fork new process for connection: %m")
+            .errmsg(format!("could not fork new process for connection: {PCT_M}"))
             .finish(loc(3608, "BackendStartup"));
         report_fork_failure_to_client(&client_sock, save_errno);
         return STATUS_ERROR;
@@ -511,7 +561,7 @@ pub fn BackendStartup(client_sock: ClientSocket) -> i32 {
 // the postmaster still owns its fork copy of the accepted socket and closes
 // it on the way out of BackendStartup. Here the socket was handed to a child
 // that never started, so nobody else will ever close it — and an unclosed
-// socket is a client that waits forever (regression).
+// socket is a client that waits forever (GL-FDLIMIT-1).
 pub(crate) fn report_fork_failure_to_client(client_sock: &ClientSocket, errnum: i32) {
     // postmaster.c:3614-3616: "E%s%s\n" with the message and strerror(errnum).
     launch_backend::report_startup_failure_to_client(
@@ -590,6 +640,12 @@ pub fn LaunchMissingBackgroundProcesses() {
         if with_pm(|pm| pm.bgwriter.is_none()) {
             let c = StartChildProcess(BackendType::BgWriter);
             with_pm(|pm| pm.bgwriter = c);
+        }
+        if init_small::instaux::instance_aux_count() > 0
+            && with_pm(|pm| pm.instance_aux.is_none() && pm.shutdown <= crate::SmartShutdown)
+        {
+            let c = StartChildProcess(BackendType::InstanceAux);
+            with_pm(|pm| pm.instance_aux = c);
         }
     }
 

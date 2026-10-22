@@ -18,7 +18,7 @@ use condition_variable::{
     ConditionVariable, ConditionVariableBroadcast, ConditionVariableCancelSleep,
     ConditionVariableTimedSleep,
 };
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use init_small::globals as g;
 use lwlock::{LWLockAcquire, LWLockRelease, LW_EXCLUSIVE, LW_SHARED};
 use mcx::{Mcx, MemoryContext};
@@ -48,6 +48,7 @@ use xlogreader_seams::XLogReaderState as ReaderView;
 
 #[cfg(test)]
 mod tests;
+mod guards;
 
 const MAX_SLEEP_QUANTA: i64 = 150;
 const MS_PER_SLEEP_QUANTUM: i64 = 200;
@@ -302,6 +303,7 @@ fn run_summarizer(context: &mut MemoryContext) -> PgResult<()> {
         // upstream 1d299d6abfcd (18.6): walsummarizer: Guard against WAL files whose tail ends are not valid.
         let maximum_lsn = if switch_lsn != InvalidXLogRecPtr { switch_lsn } else { latest_lsn };
         let end_of_summary_lsn = SummarizeWAL(
+            context.mcx(),
             current_tli,
             current_lsn,
             exact,
@@ -682,6 +684,7 @@ fn ProcessWalSummarizerInterrupts() -> PgResult<()> {
 }
 
 struct SummarizerPageRead<'a> {
+    segment: guards::WalSegmentGuard,
     tli: TimeLineID,
     historic: bool,
     read_upto: XLogRecPtr,
@@ -697,10 +700,13 @@ impl XLogSegmentRoutine for SummarizerPageRead<'_> {
         next_seg_no: XLogSegNo,
         tli: &mut TimeLineID,
     ) -> PgResult<()> {
-        summarizer_wal_segment_open(v, next_seg_no, tli, self.descendant_tlis)
+        summarizer_wal_segment_open(v, next_seg_no, tli, self.descendant_tlis)?;
+        self.segment.0 = v.seg.ws_file;
+        Ok(())
     }
     fn segment_close(&mut self, v: &mut ReaderView) {
-        xlogutils::wal_segment_close(v);
+        self.segment.close();
+        v.seg.ws_file = -1;
     }
 }
 
@@ -729,7 +735,7 @@ fn summarizer_wal_segment_open(
             ereport(ERROR)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m"))
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                 .finish(loc("summarizer_wal_segment_open"))?;
             unreachable!();
         }
@@ -817,6 +823,7 @@ impl XLogReaderRoutine for SummarizerPageRead<'_> {
 
 #[allow(unused_assignments)] // C-parity dead stores: summary_end_lsn init + end-of-WAL branch (walsummarizer.c:915, 998); hoisted
 fn SummarizeWAL(
+    mcx: Mcx<'_>,
     tli: TimeLineID,
     start_lsn: XLogRecPtr,
     exact: bool,
@@ -824,11 +831,10 @@ fn SummarizeWAL(
     maximum_lsn: XLogRecPtr,
     descendant_tlis: &[TimeLineID],
 ) -> PgResult<XLogRecPtr> {
-    let cx = MemoryContext::new("SummarizeWAL");
-    let mcx = cx.mcx();
     let mut brtab = blkreftable::BlockRefTable::new(mcx);
 
     let mut routine = SummarizerPageRead {
+        segment: guards::WalSegmentGuard(-1),
         tli,
         historic: switch_lsn != InvalidXLogRecPtr,
         read_upto: maximum_lsn,
@@ -988,7 +994,7 @@ fn SummarizeWAL(
             ereport(ERROR)
                 .with_saved_errno(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not create file \"{temp_path}\": %m"))
+                .errmsg(format!("could not create file \"{temp_path}\": {PCT_M}"))
                 .finish(loc("SummarizeWAL"))?;
         }
 
@@ -1181,7 +1187,7 @@ fn write_wal_summary(
         return ereport(ERROR)
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not write file \"{path}\": %m"))
+            .errmsg(format!("could not write file \"{path}\": {PCT_M}"))
             .finish(loc("WriteWalSummary"));
     }
     if nbytes != data.len() as isize {
@@ -1518,7 +1524,7 @@ fn wal_summary_contents_rows_in(
         ereport(ERROR)
             .with_saved_errno(fd::get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{path}\": %m"))
+            .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
             .finish(loc("OpenWalSummaryFile"))?;
         unreachable!();
     }
@@ -1531,7 +1537,7 @@ fn wal_summary_contents_rows_in(
             return ereport(ERROR)
                 .with_saved_errno(fd::get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{}\": %m", fd::FilePathName(file)))
+                .errmsg(format!("could not read file \"{}\": {PCT_M}", fd::FilePathName(file)))
                 .finish(loc("ReadWalSummary"))
                 .map(|()| 0);
         }
@@ -1607,7 +1613,7 @@ pub fn RemoveWalSummaryIfOlderThan(ws: &WalSummaryFile, cutoff_time: i64) -> PgR
         ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not stat file \"{path}\": %m"))
+            .errmsg(format!("could not stat file \"{path}\": {PCT_M}"))
             .finish(loc("RemoveWalSummaryIfOlderThan"))?;
         unreachable!();
     }
@@ -1618,7 +1624,7 @@ pub fn RemoveWalSummaryIfOlderThan(ws: &WalSummaryFile, cutoff_time: i64) -> PgR
         ereport(ERROR)
             .with_saved_errno(fd::get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not remove file \"{path}\": %m"))
+            .errmsg(format!("could not remove file \"{path}\": {PCT_M}"))
             .finish(loc("RemoveWalSummaryIfOlderThan"))?;
     }
     elog(DEBUG2, format!("removing file \"{path}\""))?;

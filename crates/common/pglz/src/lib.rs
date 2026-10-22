@@ -164,18 +164,17 @@ const INVALID_ENTRY: u16 = 0;
 
 // C's static hist_start/hist_entries work arrays (rule 10: backend-global is
 // thread-local). Entry 0 is the invalid sentinel and is scribbled on freely.
+// C's arrays sit in .bss and cost nothing until a backend first compresses;
+// allocated on first use so every thread's static TLS block does not carry
+// (and zero-fill) 64 kB of them.
 struct Hist {
     start: [i16; PGLZ_MAX_HISTORY_LISTS],
     entries: [HistEntry; PGLZ_HISTORY_SIZE + 1],
 }
 
 thread_local! {
-    static HIST: core::cell::UnsafeCell<Hist> = const {
-        core::cell::UnsafeCell::new(Hist {
-            start: [0; PGLZ_MAX_HISTORY_LISTS],
-            entries: [HistEntry { next: 0, prev: 0, hindex: 0, pos: 0 }; PGLZ_HISTORY_SIZE + 1],
-        })
-    };
+    static HIST: core::cell::UnsafeCell<Option<Box<Hist>>> =
+        const { core::cell::UnsafeCell::new(None) };
 }
 
 // C reads input through `char` (signed on x86-64/Apple, unsigned on
@@ -340,7 +339,9 @@ pub fn pglz_compress_into(
     HIST.with(|cell| {
         // SAFETY: per-thread scratch; pglz_compress_into never re-enters (the
         // loop below calls nothing that can reach compression again).
-        let hist = unsafe { &mut *cell.get() };
+        let slot = unsafe { &mut *cell.get() };
+        // SAFETY: Hist is plain integers; all-zero is a valid value.
+        let hist = slot.get_or_insert_with(|| unsafe { Box::<Hist>::new_zeroed().assume_init() });
         hist.start[..hashsz].fill(0);
 
         let base = dest.as_mut_ptr().cast::<u8>();

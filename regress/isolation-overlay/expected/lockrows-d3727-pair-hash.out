@@ -1,0 +1,116 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1c s2c
+step s2x: EXPLAIN (COSTS OFF) SELECT s.id, s.field, s.created FROM d3727s s JOIN d3727ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field = 2 LIMIT 21 FOR UPDATE;
+QUERY PLAN                                                  
+------------------------------------------------------------
+Limit                                                       
+  ->  LockRows                                              
+        ->  Hash Join                                       
+              Hash Cond: (s.id = ms.s_id)                   
+              ->  Seq Scan on d3727s s                      
+                    Filter: (field = 2)                     
+              ->  Hash                                      
+                    ->  Bitmap Heap Scan on d3727ms ms      
+                          Recheck Cond: (m_id = 1)          
+                          ->  Bitmap Index Scan on d3727ms_m
+                                Index Cond: (m_id = 1)      
+(11 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1f s2l s1c s2r s2c
+step s1f: UPDATE d3727s SET field = 5 WHERE id = 2;
+step s2l: SELECT s.id, s.field, s.created FROM d3727s s JOIN d3727ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field = 2 LIMIT 21 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|field|created                     
+--+-----+----------------------------
+ 6|    2|Wed Dec 31 16:00:00 2025 PST
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3727s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3727ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c s2r s2c
+step s1m: UPDATE d3727ms SET m_id = 3 WHERE id = 2;
+step s2l: SELECT s.id, s.field, s.created FROM d3727s s JOIN d3727ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field = 2 LIMIT 21 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|field|created                     
+--+-----+----------------------------
+ 6|    2|Wed Dec 31 16:00:00 2025 PST
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3727s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3727ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2l s1c s2r s2c
+step s1k: UPDATE d3727s SET created = '2026-02-01 00:00:00+00' WHERE id = 6;
+step s2l: SELECT s.id, s.field, s.created FROM d3727s s JOIN d3727ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field = 2 LIMIT 21 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|field|created                     
+--+-----+----------------------------
+ 2|    2|Wed Dec 31 16:00:00 2025 PST
+ 6|    2|Sat Jan 31 16:00:00 2026 PST
+(2 rows)
+
+step s2r: SELECT 's' AS t, id FROM d3727s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3727ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1f s2one s1c s2r s2c
+step s1f: UPDATE d3727s SET field = 5 WHERE id = 2;
+step s2one: SELECT s.id, s.field, s.created FROM d3727s s JOIN d3727ms ms ON s.id = ms.s_id WHERE ms.m_id = 1 AND s.field = 2 LIMIT 1 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2one: <... completed>
+id|field|created                     
+--+-----+----------------------------
+ 6|    2|Wed Dec 31 16:00:00 2025 PST
+(1 row)
+
+step s2r: SELECT 's' AS t, id FROM d3727s WHERE age(xmax) = 0 UNION ALL SELECT 'ms', id FROM d3727ms WHERE age(xmax) = 0 ORDER BY 1, 2;
+t |id
+--+--
+ms| 2
+ms| 3
+s | 2
+s | 6
+(4 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress

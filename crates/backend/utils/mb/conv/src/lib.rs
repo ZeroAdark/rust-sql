@@ -13,10 +13,15 @@ pub mod maps;
 // pub visibility: proofs/mbconv calls the fc_* wrappers directly (CBMC
 // cannot devirtualize CONV_BUILTINS fn pointers); no behavior change.
 pub mod cyrillic_and_mic;
+#[cfg(feature = "cjk-encodings")]
 pub mod euc2004_sjis2004;
+#[cfg(feature = "cjk-encodings")]
 pub mod euc_cn_and_mic;
+#[cfg(feature = "cjk-encodings")]
 pub mod euc_jp_and_sjis;
+#[cfg(feature = "cjk-encodings")]
 pub mod euc_kr_and_mic;
+#[cfg(feature = "cjk-encodings")]
 pub mod euc_tw_and_big5;
 pub mod latin2_and_win1250;
 pub mod latin_and_mic;
@@ -39,23 +44,36 @@ use wchar::{
 
 // pg_wchar.h values; wchar keeps its copies private.
 const HIGHBIT: u8 = 0x80;
+#[cfg(feature = "cjk-encodings")]
 const SS2: u8 = 0x8e;
+#[cfg(feature = "cjk-encodings")]
 const SS3: u8 = 0x8f;
 const LC_ISO8859_1: u8 = 0x81;
 const LC_ISO8859_2: u8 = 0x82;
 const LC_ISO8859_3: u8 = 0x83;
 const LC_ISO8859_4: u8 = 0x84;
 const LC_KOI8_R: u8 = 0x8b;
+#[cfg(feature = "cjk-encodings")]
 const LC_GB2312_80: u8 = 0x91;
+#[cfg(feature = "cjk-encodings")]
 const LC_JISX0208: u8 = 0x92;
+#[cfg(feature = "cjk-encodings")]
 const LC_KS5601: u8 = 0x93;
+#[cfg(feature = "cjk-encodings")]
 const LC_JISX0212: u8 = 0x94;
+#[cfg(feature = "cjk-encodings")]
 const LC_CNS11643_1: u8 = 0x95;
+#[cfg(feature = "cjk-encodings")]
 const LC_CNS11643_2: u8 = 0x96;
+#[cfg(feature = "cjk-encodings")]
 const LC_JISX0201K: u8 = 0x89;
+#[cfg(feature = "cjk-encodings")]
 const LC_CNS11643_3: u8 = 0xf6;
+#[cfg(feature = "cjk-encodings")]
 const LC_CNS11643_7: u8 = 0xfa;
+#[cfg(feature = "cjk-encodings")]
 const LC_CNS11643_4: u8 = 0xf7;
+#[cfg(feature = "cjk-encodings")]
 const LCPRV2_B: u8 = 0x9d;
 
 #[inline]
@@ -1047,6 +1065,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: cyrillic_and_mic::fc_win866_to_iso,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4322,
         name: "euc_cn_to_mic",
@@ -1055,6 +1074,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_cn_and_mic::fc_euc_cn_to_mic,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4323,
         name: "mic_to_euc_cn",
@@ -1063,6 +1083,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_cn_and_mic::fc_mic_to_euc_cn,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4324,
         name: "euc_jp_to_sjis",
@@ -1071,6 +1092,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_jp_and_sjis::fc_euc_jp_to_sjis,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4325,
         name: "sjis_to_euc_jp",
@@ -1079,6 +1101,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_jp_and_sjis::fc_sjis_to_euc_jp,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4326,
         name: "euc_jp_to_mic",
@@ -1087,6 +1110,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_jp_and_sjis::fc_euc_jp_to_mic,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4327,
         name: "sjis_to_mic",
@@ -1095,6 +1119,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_jp_and_sjis::fc_sjis_to_mic,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4328,
         name: "mic_to_euc_jp",
@@ -1103,6 +1128,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_jp_and_sjis::fc_mic_to_euc_jp,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4329,
         name: "mic_to_sjis",
@@ -1111,6 +1137,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_jp_and_sjis::fc_mic_to_sjis,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4330,
         name: "euc_kr_to_mic",
@@ -1119,6 +1146,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_kr_and_mic::fc_euc_kr_to_mic,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4331,
         name: "mic_to_euc_kr",
@@ -1127,6 +1155,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_kr_and_mic::fc_mic_to_euc_kr,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4332,
         name: "euc_tw_to_big5",
@@ -1135,6 +1164,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_tw_and_big5::fc_euc_tw_to_big5,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4333,
         name: "big5_to_euc_tw",
@@ -1143,6 +1173,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_tw_and_big5::fc_big5_to_euc_tw,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4334,
         name: "euc_tw_to_mic",
@@ -1151,6 +1182,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_tw_and_big5::fc_euc_tw_to_mic,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4335,
         name: "big5_to_mic",
@@ -1159,6 +1191,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_tw_and_big5::fc_big5_to_mic,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4336,
         name: "mic_to_euc_tw",
@@ -1167,6 +1200,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc_tw_and_big5::fc_mic_to_euc_tw,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4337,
         name: "mic_to_big5",
@@ -1271,6 +1305,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: latin_and_mic::fc_mic_to_latin4,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4352,
         name: "big5_to_utf8",
@@ -1279,6 +1314,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_big5_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4353,
         name: "utf8_to_big5",
@@ -1335,6 +1371,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: fc_win_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4360,
         name: "euc_cn_to_utf8",
@@ -1343,6 +1380,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_euc_cn_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4361,
         name: "utf8_to_euc_cn",
@@ -1351,6 +1389,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_euc_cn,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4362,
         name: "euc_jp_to_utf8",
@@ -1359,6 +1398,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_euc_jp_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4363,
         name: "utf8_to_euc_jp",
@@ -1367,6 +1407,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_euc_jp,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4364,
         name: "euc_kr_to_utf8",
@@ -1375,6 +1416,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_euc_kr_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4365,
         name: "utf8_to_euc_kr",
@@ -1383,6 +1425,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_euc_kr,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4366,
         name: "euc_tw_to_utf8",
@@ -1391,6 +1434,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_euc_tw_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4367,
         name: "utf8_to_euc_tw",
@@ -1399,6 +1443,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_euc_tw,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4368,
         name: "gb18030_to_utf8",
@@ -1407,6 +1452,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_gb18030_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4369,
         name: "utf8_to_gb18030",
@@ -1415,6 +1461,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_gb18030,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4370,
         name: "gbk_to_utf8",
@@ -1423,6 +1470,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_gbk_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4371,
         name: "utf8_to_gbk",
@@ -1463,6 +1511,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: fc_utf8_to_iso8859_1,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4376,
         name: "johab_to_utf8",
@@ -1471,6 +1520,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_johab_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4377,
         name: "utf8_to_johab",
@@ -1479,6 +1529,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_johab,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4378,
         name: "sjis_to_utf8",
@@ -1487,6 +1538,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_sjis_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4379,
         name: "utf8_to_sjis",
@@ -1495,6 +1547,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_sjis,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4380,
         name: "uhc_to_utf8",
@@ -1503,6 +1556,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_uhc_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4381,
         name: "utf8_to_uhc",
@@ -1511,6 +1565,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_uhc,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4382,
         name: "euc_jis_2004_to_utf8",
@@ -1519,6 +1574,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_euc_jis_2004_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4383,
         name: "utf8_to_euc_jis_2004",
@@ -1527,6 +1583,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_euc_jis_2004,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4384,
         name: "shift_jis_2004_to_utf8",
@@ -1535,6 +1592,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_shift_jis_2004_to_utf8,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4385,
         name: "utf8_to_shift_jis_2004",
@@ -1543,6 +1601,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: utf8_procs::fc_utf8_to_shift_jis_2004,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4386,
         name: "euc_jis_2004_to_shift_jis_2004",
@@ -1551,6 +1610,7 @@ pub const CONV_BUILTINS: &[FmgrBuiltin] = &[
         retset: false,
         func: euc2004_sjis2004::fc_euc_jis_2004_to_shift_jis_2004,
     },
+    #[cfg(feature = "cjk-encodings")]
     FmgrBuiltin {
         foid: 4387,
         name: "shift_jis_2004_to_euc_jis_2004",

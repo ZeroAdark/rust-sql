@@ -10,7 +10,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
-use ::elog::{elog, ereport, message_level_is_interesting};
+use ::elog::{elog, ereport, message_level_is_interesting, PCT_M};
 use types_core::{
     BlockNumber, Buffer, ForkNumber, InvalidBlockNumber, InvalidBuffer, Oid, TimeLineID,
     XLogRecPtr, XLogSegNo, INVALID_PROC_NUMBER,
@@ -524,7 +524,7 @@ pub fn CreateFakeRelcacheEntry(rlocator: RelFileLocator) -> FakeRelcacheEntry {
             pgstat_enabled: Cell::new(false),
             pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
             rd_amcache: Default::default(),
-            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
             rd_support: PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
@@ -678,7 +678,7 @@ pub fn wal_segment_open(
         ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{path}\": %m"))
+            .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
             .finish(loc("wal_segment_open"))?;
     }
     unreachable!("wal_segment_open reported below ERROR");
@@ -803,7 +803,7 @@ pub fn WALReadRaiseError(errinfo: &WALReadError) -> PgResult<()> {
             .with_saved_errno(errinfo.wre_errno)
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not read from WAL segment {fname}, offset {}: %m",
+                "could not read from WAL segment {fname}, offset {}: {PCT_M}",
                 errinfo.wre_off
             ))
             .finish(loc("WALReadRaiseError"))?;

@@ -24,15 +24,13 @@ pub fn get_tablespace(mcx: Mcx<'_>, spcid: Oid) -> PgResult<Option<TableSpaceOpt
     if !syscache_seams::pg_tablespace_spcoptions::is_installed() {
         return Ok(None);
     }
-    let Some(Some(datum)) = syscache_seams::pg_tablespace_spcoptions::call(mcx, spcid)? else {
+    let Some(Some(image)) = syscache_seams::pg_tablespace_spcoptions::call(mcx, spcid)? else {
         return Ok(None);
     };
-    let p = datum.as_usize() as *const u8;
-    // SAFETY: not-null spcoptions datum copied out of the syscache tuple into
-    // mcx — a live varlena image readable through its varsize_any extent.
-    let image = unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
-    // tablespace_reloptions(datum, false): unset options read as -1.
-    reloptions::tablespace_reloptions(mcx, Some(image), false)
+    // tablespace_reloptions(datum, false): unset options read as -1. The
+    // image is freed on return: callers pass exact-accounting scratch (a
+    // read stream's), which must not keep lookup garbage charged.
+    reloptions::tablespace_reloptions(mcx, Some(&image[..]), false)
 }
 
 // get_tablespace_page_costs (spccache.c:182-205): the tablespace's own

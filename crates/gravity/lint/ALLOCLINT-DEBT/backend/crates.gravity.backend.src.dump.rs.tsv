@@ -1,0 +1,7 @@
+path	crates/gravity/backend/src/dump.rs
+growth	std::string::String::push	2
+growth	std::string::String::push_str	6
+growth	std::vec::Vec::push	1
+ir-only	core::fmt::Write::write_fmt	15
+macro	std::format	6
+method	std::string::ToString::to_string	2

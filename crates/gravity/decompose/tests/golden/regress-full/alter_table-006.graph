@@ -1,0 +1,9 @@
+-- regress-full-alter_table-006
+-- update bar1 set a = a + 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=Host end=sink
+  nodes n0@0
+  source named rti=1 rel=43150 name=old
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=w4:val
+mapped: NamedTuplestoreScan

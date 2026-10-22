@@ -1,0 +1,10 @@
+-- oltpc-029
+-- INSERT INTO history (h_c_d_id, h_c_w_id, h_c_id, h_d_id, h_w_id, h_date, h_amount, h_data) VALUES (1, 1, 5, 1, 1, now(), 1234::numeric / 100, 'PAY ' || 1::text || '-' || 1::text || '-' || 1::text) /* C36 PAY insert history */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=fn1299(), 2=c23:5, 3=c23:1, 4=c23:1, 5=c21:1, 6=c21:1, 7=c1700:'\x00\x81\x0c\x00H\x0d', 8=c1043:'PAY 1-1-1')
+  write INSERT rel=16428 rti=1 natts=8 indexes=()
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w4:val 5=w2:val 6=w2:val 7=vl:stmt/imm 8=vl:stmt/imm
+mapped: Result ModifyTable

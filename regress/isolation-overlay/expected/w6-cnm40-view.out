@@ -1,0 +1,144 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2plan s1c s2c
+step s2plan: EXPLAIN (costs off) DELETE FROM vt WHERE EXISTS (SELECT * FROM vv WHERE vv.a = vt.a AND vv.c = 20);
+QUERY PLAN                                      
+------------------------------------------------
+Delete on vt                                    
+  ->  Hash Semi Join                            
+        Hash Cond: (vt.a = vs.a)                
+        ->  Seq Scan on vt                      
+        ->  Hash                                
+              ->  Hash Join                     
+                    Hash Cond: (vs.b = vu.b)    
+                    ->  Seq Scan on vs          
+                    ->  Hash                    
+                          ->  Seq Scan on vu    
+                                Filter: (c = 20)
+(11 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1v s2d s1c s2c s3sel
+step s1v: UPDATE vt SET v = v + 1000 WHERE id IN (1, 2, 13);
+step s2d: DELETE FROM vt WHERE EXISTS (SELECT * FROM vv WHERE vv.a = vt.a AND vv.c = 20) RETURNING id, a, v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|a|   v
+--+-+----
+ 1|1|1001
+ 2|2|1002
+ 3|3|   3
+ 5|5|   5
+ 6|6|   6
+10|0|  10
+11|1|  11
+12|2|  12
+13|3|1013
+15|5|  15
+16|6|  16
+20|0|  20
+21|1|  21
+22|2|  22
+23|3|  23
+25|5|  25
+26|6|  26
+30|0|  30
+31|1|  31
+32|2|  32
+33|3|  33
+35|5|  35
+36|6|  36
+40|0|  40
+(24 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(v), sum(a) FROM vt;
+count|sum|sum
+-----+---+---
+   16|352|112
+(1 row)
+
+
+starting permutation: s1key s2d s1c s2c s3sel
+step s1key: UPDATE vt SET a = 9 WHERE id IN (3, 4);
+step s2d: DELETE FROM vt WHERE EXISTS (SELECT * FROM vv WHERE vv.a = vt.a AND vv.c = 20) RETURNING id, a, v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|a| v
+--+-+--
+ 1|1| 1
+ 2|2| 2
+ 5|5| 5
+ 6|6| 6
+10|0|10
+11|1|11
+12|2|12
+13|3|13
+15|5|15
+16|6|16
+20|0|20
+21|1|21
+22|2|22
+23|3|23
+25|5|25
+26|6|26
+30|0|30
+31|1|31
+32|2|32
+33|3|33
+35|5|35
+36|6|36
+40|0|40
+(23 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(v), sum(a) FROM vt;
+count|sum|sum
+-----+---+---
+   17|355|126
+(1 row)
+
+
+starting permutation: s1inner s1v s2d s1c s2c s3sel
+step s1inner: UPDATE vu SET c = 999 WHERE b = 2;
+step s1v: UPDATE vt SET v = v + 1000 WHERE id IN (1, 2, 13);
+step s2d: DELETE FROM vt WHERE EXISTS (SELECT * FROM vv WHERE vv.a = vt.a AND vv.c = 20) RETURNING id, a, v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|a|   v
+--+-+----
+ 1|1|1001
+ 2|2|1002
+ 3|3|   3
+ 5|5|   5
+ 6|6|   6
+10|0|  10
+11|1|  11
+12|2|  12
+13|3|1013
+15|5|  15
+16|6|  16
+20|0|  20
+21|1|  21
+22|2|  22
+23|3|  23
+25|5|  25
+26|6|  26
+30|0|  30
+31|1|  31
+32|2|  32
+33|3|  33
+35|5|  35
+36|6|  36
+40|0|  40
+(24 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(v), sum(a) FROM vt;
+count|sum|sum
+-----+---+---
+   16|352|112
+(1 row)
+

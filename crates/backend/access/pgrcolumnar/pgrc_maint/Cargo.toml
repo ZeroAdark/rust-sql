@@ -1,0 +1,37 @@
+[package]
+name = "pgrc_maint"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bgworker = { path = "../../../postmaster/bgworker" }
+elog = { path = "../../../utils/error/elog" }
+injection_point = { path = "../../../utils/misc/injection_point" }
+init_small = { path = "../../../utils/init/init_small" }
+latch = { path = "../../../storage/ipc/latch" }
+# LOADWAIT F4: the inserter waits for the activation worker's transaction (XactLockTableWait); the worker's SUEL.
+lmgr = { path = "../../../storage/lmgr/lmgr" }
+mcx = { path = "../../../../_support/mcx" }
+pg_clock = { path = "../../../../port/pg_clock" }
+pgrc_am = { path = "../pgrc_am" }
+pgrc_front = { path = "../pgrc_front" }
+pgrc_front_seams = { path = "../pgrc_front_seams" }
+pgrc_ingest_par = { path = "../pgrc_ingest_par" }
+pgrc_write = { path = "../pgrc_write" }
+pgsync = { path = "../../../../_support/pgsync" }
+postgres = { path = "../../../tcop/postgres" }
+postgres_seams = { path = "../../../tcop/postgres_seams" }
+procarray = { path = "../../../storage/ipc/procarray" }
+procsignal = { path = "../../../storage/ipc/procsignal" }
+relfilenumbermap = { path = "../../../utils/cache/relfilenumbermap" }
+table = { path = "../../table/table" }
+tableam_vocab = { path = "../../table/tableam_vocab" }
+types_core = { path = "../../../../_support/types/types_core" }
+types_error = { path = "../../../../_support/types/types_error" }
+types_rel = { path = "../../../../_support/types/rel" }
+types_storage = { path = "../../../../_support/types/types_storage" }
+xact = { path = "../../transam/xact" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

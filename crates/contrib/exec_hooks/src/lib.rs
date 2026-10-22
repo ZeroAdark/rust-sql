@@ -49,6 +49,7 @@ pub struct ExecutorHooks {
     /// C `ExecutorEnd_hook` (before standard_ExecutorEnd); an `Err` aborts
     /// the statement there, exactly like the C hook's ERROR.
     pub end: Option<EndHook>,
+    pub active: Option<fn() -> bool>,
 }
 
 pgsync::process_global! {
@@ -84,6 +85,7 @@ pub fn register(hooks: ExecutorHooks) {
         execmain::tap_executor_finish::install(dispatch_finish);
         execmain::tap_executor_finish_leave::install(dispatch_finish_leave);
         execmain::tap_executor_end::install(dispatch_end);
+        execmain::tap_executor_hooks_active::install(dispatch_active);
     }
 }
 
@@ -128,6 +130,10 @@ dispatch_enter!(dispatch_run, run);
 dispatch_leave!(dispatch_run_leave, run_leave);
 dispatch_enter!(dispatch_finish, finish);
 dispatch_leave!(dispatch_finish_leave, finish_leave);
+
+fn dispatch_active() -> bool {
+    consumers().iter().any(|c| c.active.is_some_and(|f| f()))
+}
 
 // ExecutorEnd: enter order (last-registered first); the first Err returns at
 // once — C's inner `prev_ExecutorEnd` / standard_ExecutorEnd never run once
@@ -234,10 +240,13 @@ mod tests {
             }),
             ..Default::default()
         });
+        assert!(!execmain::tap_executor_hooks_active::call_if_or(false, |f| f()));
         let r = execmain::tap_executor_end::call_if_or(Ok(()), |f| f(h));
         let e = r.expect_err("the raising end consumer must surface from the tap");
         assert_eq!(e.message(), "end hook raised");
         assert!(THIRD_END_AT.load(Ordering::Relaxed) > 0, "outermost end hook ran");
         assert_eq!(FIRST_END_AT.load(Ordering::Relaxed), 0, "inner end hook skipped after the error");
+        register(ExecutorHooks { active: Some(|| true), ..Default::default() });
+        assert!(execmain::tap_executor_hooks_active::call_if_or(false, |f| f()));
     }
 }

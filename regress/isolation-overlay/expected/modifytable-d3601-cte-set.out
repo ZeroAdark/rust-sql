@@ -1,0 +1,150 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1meta s2cte s1c s2show
+step s2x: EXPLAIN (COSTS OFF) WITH job_input AS (SELECT unnest(ARRAY[4, 5, 6, 7, 8]::bigint[]) AS id, unnest(ARRAY[true, true, true, true, false]) AS mm), um AS (UPDATE rj SET meta = rj.meta || jsonb_build_object('k', 1) FROM job_input WHERE rj.id = job_input.id AND rj.id NOT IN (SELECT id FROM rj_done) AND rj.state != 'running' AND job_input.mm RETURNING rj.id, rj.meta) SELECT id, meta FROM um ORDER BY id;
+QUERY PLAN                                                                                               
+---------------------------------------------------------------------------------------------------------
+Sort                                                                                                     
+  Sort Key: um.id                                                                                        
+  CTE um                                                                                                 
+    ->  Update on rj                                                                                     
+          ->  Hash Join                                                                                  
+                Hash Cond: (rj.id = job_input.id)                                                        
+                ->  Seq Scan on rj                                                                       
+                      Filter: ((NOT (ANY (id = (hashed SubPlan 1).col1))) AND (state <> 'running'::text))
+                      SubPlan 1                                                                          
+                        ->  Seq Scan on rj_done                                                          
+                ->  Hash                                                                                 
+                      ->  Subquery Scan on job_input                                                     
+                            Filter: job_input.mm                                                         
+                            ->  ProjectSet                                                               
+                                  ->  Result                                                             
+  ->  CTE Scan on um                                                                                     
+(16 rows)
+
+step s1meta: UPDATE rj SET meta = meta || jsonb_build_object('s1', true) WHERE id = 4;
+step s2cte: WITH job_input AS (SELECT unnest(ARRAY[4, 5, 6, 7, 8]::bigint[]) AS id, unnest(ARRAY[true, true, true, true, false]) AS mm), um AS (UPDATE rj SET meta = rj.meta || jsonb_build_object('k', 1) FROM job_input WHERE rj.id = job_input.id AND rj.id NOT IN (SELECT id FROM rj_done) AND rj.state != 'running' AND job_input.mm RETURNING rj.id, rj.meta) SELECT id, meta FROM um ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+id|meta                
+--+--------------------
+ 4|{"k": 1, "s1": true}
+ 7|{"k": 1}            
+(2 rows)
+
+step s2show: SELECT id, state, meta FROM rj WHERE id BETWEEN 4 AND 8 ORDER BY id;
+id|state    |meta                
+--+---------+--------------------
+ 4|available|{"k": 1, "s1": true}
+ 5|available|{}                  
+ 6|running  |{}                  
+ 7|available|{"k": 1}            
+ 8|available|{}                  
+(5 rows)
+
+
+starting permutation: s1run s2cte s1c s2show
+step s1run: UPDATE rj SET state = 'running' WHERE id = 4;
+step s2cte: WITH job_input AS (SELECT unnest(ARRAY[4, 5, 6, 7, 8]::bigint[]) AS id, unnest(ARRAY[true, true, true, true, false]) AS mm), um AS (UPDATE rj SET meta = rj.meta || jsonb_build_object('k', 1) FROM job_input WHERE rj.id = job_input.id AND rj.id NOT IN (SELECT id FROM rj_done) AND rj.state != 'running' AND job_input.mm RETURNING rj.id, rj.meta) SELECT id, meta FROM um ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+id|meta    
+--+--------
+ 7|{"k": 1}
+(1 row)
+
+step s2show: SELECT id, state, meta FROM rj WHERE id BETWEEN 4 AND 8 ORDER BY id;
+id|state    |meta    
+--+---------+--------
+ 4|running  |{}      
+ 5|available|{}      
+ 6|running  |{}      
+ 7|available|{"k": 1}
+ 8|available|{}      
+(5 rows)
+
+
+starting permutation: s1del s2cte s1c s2show
+step s1del: DELETE FROM rj WHERE id = 4;
+step s2cte: WITH job_input AS (SELECT unnest(ARRAY[4, 5, 6, 7, 8]::bigint[]) AS id, unnest(ARRAY[true, true, true, true, false]) AS mm), um AS (UPDATE rj SET meta = rj.meta || jsonb_build_object('k', 1) FROM job_input WHERE rj.id = job_input.id AND rj.id NOT IN (SELECT id FROM rj_done) AND rj.state != 'running' AND job_input.mm RETURNING rj.id, rj.meta) SELECT id, meta FROM um ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+id|meta    
+--+--------
+ 7|{"k": 1}
+(1 row)
+
+step s2show: SELECT id, state, meta FROM rj WHERE id BETWEEN 4 AND 8 ORDER BY id;
+id|state    |meta    
+--+---------+--------
+ 5|available|{}      
+ 6|running  |{}      
+ 7|available|{"k": 1}
+ 8|available|{}      
+(4 rows)
+
+
+starting permutation: s1done s2cte s1c s2show
+step s1done: UPDATE rj SET meta = meta || jsonb_build_object('s1', true) WHERE id = 4; INSERT INTO rj_done VALUES (4);
+step s2cte: WITH job_input AS (SELECT unnest(ARRAY[4, 5, 6, 7, 8]::bigint[]) AS id, unnest(ARRAY[true, true, true, true, false]) AS mm), um AS (UPDATE rj SET meta = rj.meta || jsonb_build_object('k', 1) FROM job_input WHERE rj.id = job_input.id AND rj.id NOT IN (SELECT id FROM rj_done) AND rj.state != 'running' AND job_input.mm RETURNING rj.id, rj.meta) SELECT id, meta FROM um ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+id|meta                
+--+--------------------
+ 4|{"k": 1, "s1": true}
+ 7|{"k": 1}            
+(2 rows)
+
+step s2show: SELECT id, state, meta FROM rj WHERE id BETWEEN 4 AND 8 ORDER BY id;
+id|state    |meta                
+--+---------+--------------------
+ 4|available|{"k": 1, "s1": true}
+ 5|available|{}                  
+ 6|running  |{}                  
+ 7|available|{"k": 1}            
+ 8|available|{}                  
+(5 rows)
+
+
+starting permutation: s1meta s2ur s1c s2show
+step s1meta: UPDATE rj SET meta = meta || jsonb_build_object('s1', true) WHERE id = 4;
+step s2ur: WITH job_input AS (SELECT unnest(ARRAY[4, 5, 6, 7, 8]::bigint[]) AS id, unnest(ARRAY[true, true, true, true, false]) AS mm), ur AS (UPDATE rj SET state = 'completed' WHERE id IN (7, 9) RETURNING id), um AS (UPDATE rj SET meta = rj.meta || jsonb_build_object('k', 2) FROM job_input WHERE rj.id = job_input.id AND rj.id NOT IN (SELECT id FROM ur) AND rj.state != 'running' AND job_input.mm RETURNING rj.id, rj.meta) SELECT id, meta FROM um ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2ur: <... completed>
+id|meta                
+--+--------------------
+ 4|{"k": 2, "s1": true}
+ 5|{"k": 2}            
+(2 rows)
+
+step s2show: SELECT id, state, meta FROM rj WHERE id BETWEEN 4 AND 8 ORDER BY id;
+id|state    |meta                
+--+---------+--------------------
+ 4|available|{"k": 2, "s1": true}
+ 5|available|{"k": 2}            
+ 6|running  |{}                  
+ 7|completed|{}                  
+ 8|available|{}                  
+(5 rows)
+
+
+starting permutation: s1run s2ur s1c s2show
+step s1run: UPDATE rj SET state = 'running' WHERE id = 4;
+step s2ur: WITH job_input AS (SELECT unnest(ARRAY[4, 5, 6, 7, 8]::bigint[]) AS id, unnest(ARRAY[true, true, true, true, false]) AS mm), ur AS (UPDATE rj SET state = 'completed' WHERE id IN (7, 9) RETURNING id), um AS (UPDATE rj SET meta = rj.meta || jsonb_build_object('k', 2) FROM job_input WHERE rj.id = job_input.id AND rj.id NOT IN (SELECT id FROM ur) AND rj.state != 'running' AND job_input.mm RETURNING rj.id, rj.meta) SELECT id, meta FROM um ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2ur: <... completed>
+id|meta    
+--+--------
+ 5|{"k": 2}
+(1 row)
+
+step s2show: SELECT id, state, meta FROM rj WHERE id BETWEEN 4 AND 8 ORDER BY id;
+id|state    |meta    
+--+---------+--------
+ 4|running  |{}      
+ 5|available|{"k": 2}
+ 6|running  |{}      
+ 7|completed|{}      
+ 8|available|{}      
+(5 rows)
+

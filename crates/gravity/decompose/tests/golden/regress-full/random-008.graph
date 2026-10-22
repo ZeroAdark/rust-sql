@@ -1,0 +1,43 @@
+-- regress-full-random-008
+-- SELECT ks_test_normal_random() OR ks_test_normal_random() OR ks_test_normal_random() AS standard_normal;
+graph pipelines=5 breakers=3 init_plans=2 root=p4
+p0 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  nodes n2@0 n1@2
+  source const
+  srf from rti=2 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, $2)]
+  project (1=fn6212(c701:0, c701:4607182418800017408))
+  sort keys=1+:F64/F64 form=runs
+  outs 1=w8:val
+p1 node=6 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n6@0 n5@1^
+  source breaker slot=0
+  project (1=v4.1)
+  outs 1=w8:val
+p2 node=5 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 PlainAgg)
+  desc consumes=slot1@p1
+  nodes n5@0 n3@2^
+  source breaker slot=1
+  window ref=1 top partition= order= frame=Rows unbounded-preceding..current-row
+    fn resno=1 RowNumber cursor=row,partition, win3100()
+  project (1=op1759(fn1781(outer.2), c1700:'\x80\x80\x01\x00'), 2=outer.1)
+  outs 1=vl:call1725 2=w8:val
+p3 node=3 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p2
+  nodes n3@0
+  source breaker slot=2
+  project (1=op672(agg2120(1=fn1395(op592(op593(op591(c701:4607182418800017408, fn6219(op593(outer.2, c701:4609047870845172685))), c701:4611686018427387904), fn1746(op1761(outer.1, fn1740($2)))))), op593($3, fn1344(fn316($2)))))
+  outs 1=w1:val
+p4 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec1)
+  outs 1=w1:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[F64]->[Count@8] 16B order=1+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B order=1+
+breaker slot=2 kind=PlainAgg budget=Fixed(80) spill=None producer=p2 layout=[]->[MaxI64@0,Count@8]+valid 24B
+group slot=2 producer=p2 node=3 form=Plain hints=[] layout=[]->[MaxI64@0,Count@8]+valid 24B
+  agg aggno=0 fn=2120 reg=MaxF64 slot=0 count_slot=- final=F64Ordered class=Max(F64) trans=Abi(MaxI64) mods=[] expr=agg2120(1=fn1395(op592(op593(op591(c701:4607182418800017408, fn6219(op593(outer.2, c701:4609047870845172685))), c701:4611686018427387904), fn1746(op1761(outer.1, fn1740($2))))))
+init_plan id=1 pipeline=p0 link=Cte param=$exec0 slot=0 vol=v
+init_plan id=2 pipeline=p3 link=Expr param=$exec1 vol=v
+mapped: Result FunctionScan CteScan Sort Agg WindowAgg SubPlan

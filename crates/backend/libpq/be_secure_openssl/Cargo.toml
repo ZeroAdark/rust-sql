@@ -26,3 +26,12 @@ libc = "0.2"
 openssl = { version = "0.10", features = ["vendored"] }
 openssl-sys = "0.9"
 foreign-types = "0.3"
+
+[build-dependencies]
+# D4503: openssl-src's `no-dso` (no dynamic engine / module loading; engines are trimmed anyway). Feature
+# unification applies it to openssl-sys's build-dependency, and the feature change is what makes cargo re-run
+# openssl-sys's build script (and so pick up the OPENSSL_SRC_PERL trim) in target dirs built before it.
+openssl-src = { version = "300.6", features = ["no-dso"] }
+
+[dev-dependencies]
+xact_seams = { path = "../../access/transam/xact_seams" }

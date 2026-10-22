@@ -1,0 +1,112 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1u s2u s1c s2s
+step s1b: BEGIN;
+step s1u: UPDATE d3826cmt SET text = text || '+' WHERE id = 11;
+step s2u: update d3826cmt set text='x' from d3826cmt c1_0 join d3826usr u1_0 on u1_0.id=c1_0.user_id where u1_0.id=1 and d3826cmt.ctid=c1_0.ctid; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT * FROM d3826cmt ORDER BY id;
+id|text|user_id
+--+----+-------
+10|x   |      1
+11|t11+|      1
+12|x   |      1
+20|t20 |      2
+30|t30 |      3
+(5 rows)
+
+
+starting permutation: s1b s1u s2u s1r s2s
+step s1b: BEGIN;
+step s1u: UPDATE d3826cmt SET text = text || '+' WHERE id = 11;
+step s2u: update d3826cmt set text='x' from d3826cmt c1_0 join d3826usr u1_0 on u1_0.id=c1_0.user_id where u1_0.id=1 and d3826cmt.ctid=c1_0.ctid; <waiting ...>
+step s1r: ROLLBACK;
+step s2u: <... completed>
+step s2s: SELECT * FROM d3826cmt ORDER BY id;
+id|text|user_id
+--+----+-------
+10|x   |      1
+11|x   |      1
+12|x   |      1
+20|t20 |      2
+30|t30 |      3
+(5 rows)
+
+
+starting permutation: s1b s1d s2u s1c s2s
+step s1b: BEGIN;
+step s1d: DELETE FROM d3826cmt WHERE id = 12;
+step s2u: update d3826cmt set text='x' from d3826cmt c1_0 join d3826usr u1_0 on u1_0.id=c1_0.user_id where u1_0.id=1 and d3826cmt.ctid=c1_0.ctid; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT * FROM d3826cmt ORDER BY id;
+id|text|user_id
+--+----+-------
+10|x   |      1
+11|x   |      1
+20|t20 |      2
+30|t30 |      3
+(4 rows)
+
+
+starting permutation: s1b s1u s1d s2x s1c s2s
+step s1b: BEGIN;
+step s1u: UPDATE d3826cmt SET text = text || '+' WHERE id = 11;
+step s1d: DELETE FROM d3826cmt WHERE id = 12;
+step s2x: update d3826cmt set text=c1_0.text || '/' || u1_0.name from d3826cmt c1_0 join d3826usr u1_0 on u1_0.id=c1_0.user_id where u1_0.id=1 and d3826cmt.ctid=c1_0.ctid returning d3826cmt.id, d3826cmt.text; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+id|text 
+--+-----
+10|t10/a
+(1 row)
+
+step s2s: SELECT * FROM d3826cmt ORDER BY id;
+id|text |user_id
+--+-----+-------
+10|t10/a|      1
+11|t11+ |      1
+20|t20  |      2
+30|t30  |      3
+(4 rows)
+
+
+starting permutation: s1b s1n s1u s2x s1c s2s
+step s1b: BEGIN;
+step s1n: UPDATE d3826usr SET name = 'renamed' WHERE id = 1;
+step s1u: UPDATE d3826cmt SET text = text || '+' WHERE id = 11;
+step s2x: update d3826cmt set text=c1_0.text || '/' || u1_0.name from d3826cmt c1_0 join d3826usr u1_0 on u1_0.id=c1_0.user_id where u1_0.id=1 and d3826cmt.ctid=c1_0.ctid returning d3826cmt.id, d3826cmt.text; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+id|text 
+--+-----
+10|t10/a
+12|t12/a
+(2 rows)
+
+step s2s: SELECT * FROM d3826cmt ORDER BY id;
+id|text |user_id
+--+-----+-------
+10|t10/a|      1
+11|t11+ |      1
+12|t12/a|      1
+20|t20  |      2
+30|t30  |      3
+(5 rows)
+
+
+starting permutation: s1b s1u s2d s1c s2s
+step s1b: BEGIN;
+step s1u: UPDATE d3826cmt SET text = text || '+' WHERE id = 11;
+step s2d: delete from d3826cmt using d3826cmt c1_0 join d3826usr u1_0 on u1_0.id=c1_0.user_id where u1_0.id=1 and d3826cmt.ctid=c1_0.ctid; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2s: SELECT * FROM d3826cmt ORDER BY id;
+id|text|user_id
+--+----+-------
+11|t11+|      1
+20|t20 |      2
+30|t30 |      3
+(3 rows)
+

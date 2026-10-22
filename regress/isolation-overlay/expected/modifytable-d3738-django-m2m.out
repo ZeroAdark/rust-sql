@@ -1,0 +1,129 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1x3 s2upd s1c s2show
+step s2x: EXPLAIN (COSTS OFF) UPDATE bar SET x = x * 2 WHERE bar.id IN (SELECT U0.id FROM bar U0 LEFT OUTER JOIN bar_m2m U1 ON (U0.id = U1.bar_id));
+QUERY PLAN                                  
+--------------------------------------------
+Update on bar                               
+  ->  Hash Right Semi Join                  
+        Hash Cond: (u0.id = bar.id)         
+        ->  Hash Right Join                 
+              Hash Cond: (u1.bar_id = u0.id)
+              ->  Seq Scan on bar_m2m u1    
+              ->  Hash                      
+                    ->  Seq Scan on bar u0  
+        ->  Hash                            
+              ->  Seq Scan on bar           
+(10 rows)
+
+step s1x3: UPDATE bar SET x = x + 100 WHERE id = 3;
+step s2upd: UPDATE bar SET x = x * 2 WHERE bar.id IN (SELECT U0.id FROM bar U0 LEFT OUTER JOIN bar_m2m U1 ON (U0.id = U1.bar_id)); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2show: SELECT id, x FROM bar ORDER BY id;
+id|  x
+--+---
+ 1|  2
+ 2|  4
+ 3|206
+ 4|  8
+ 5| 10
+ 6| 12
+(6 rows)
+
+
+starting permutation: s1x1 s2upd s1c s2show
+step s1x1: UPDATE bar SET x = x + 100 WHERE id = 1;
+step s2upd: UPDATE bar SET x = x * 2 WHERE bar.id IN (SELECT U0.id FROM bar U0 LEFT OUTER JOIN bar_m2m U1 ON (U0.id = U1.bar_id)); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2show: SELECT id, x FROM bar ORDER BY id;
+id|  x
+--+---
+ 1|202
+ 2|  4
+ 3|  6
+ 4|  8
+ 5| 10
+ 6| 12
+(6 rows)
+
+
+starting permutation: s1key s2upd s1c s2show
+step s1key: UPDATE bar SET id = 99 WHERE id = 5;
+step s2upd: UPDATE bar SET x = x * 2 WHERE bar.id IN (SELECT U0.id FROM bar U0 LEFT OUTER JOIN bar_m2m U1 ON (U0.id = U1.bar_id)); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2show: SELECT id, x FROM bar ORDER BY id;
+id| x
+--+--
+ 1| 2
+ 2| 4
+ 3| 6
+ 4| 8
+ 6|12
+99| 5
+(6 rows)
+
+
+starting permutation: s1del s2upd s1c s2show
+step s1del: DELETE FROM bar WHERE id = 6;
+step s2upd: UPDATE bar SET x = x * 2 WHERE bar.id IN (SELECT U0.id FROM bar U0 LEFT OUTER JOIN bar_m2m U1 ON (U0.id = U1.bar_id)); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2show: SELECT id, x FROM bar ORDER BY id;
+id| x
+--+--
+ 1| 2
+ 2| 4
+ 3| 6
+ 4| 8
+ 5|10
+(5 rows)
+
+
+starting permutation: s1x3 s2updn s1c s2show
+step s1x3: UPDATE bar SET x = x + 100 WHERE id = 3;
+step s2updn: UPDATE bar SET x = -x WHERE bar.id IN (SELECT U0.id FROM bar U0 LEFT OUTER JOIN bar_m2m U1 ON (U0.id = U1.bar_id) WHERE U1.foo_id IS DISTINCT FROM 1); <waiting ...>
+step s1c: COMMIT;
+step s2updn: <... completed>
+step s2show: SELECT id, x FROM bar ORDER BY id;
+id|   x
+--+----
+ 1|  -1
+ 2|  -2
+ 3|-103
+ 4|   4
+ 5|  -5
+ 6|  -6
+(6 rows)
+
+
+starting permutation: s1m2m s2updn s1c s2show
+step s1m2m: DELETE FROM bar_m2m WHERE bar_id = 2;
+step s2updn: UPDATE bar SET x = -x WHERE bar.id IN (SELECT U0.id FROM bar U0 LEFT OUTER JOIN bar_m2m U1 ON (U0.id = U1.bar_id) WHERE U1.foo_id IS DISTINCT FROM 1);
+step s1c: COMMIT;
+step s2show: SELECT id, x FROM bar ORDER BY id;
+id| x
+--+--
+ 1|-1
+ 2|-2
+ 3|-3
+ 4| 4
+ 5|-5
+ 6|-6
+(6 rows)
+
+
+starting permutation: s1key s2del s1c s2show
+step s1key: UPDATE bar SET id = 99 WHERE id = 5;
+step s2del: DELETE FROM bar WHERE bar.id IN (SELECT U0.id FROM bar U0 LEFT OUTER JOIN bar_m2m U1 ON (U0.id = U1.bar_id) WHERE U1.foo_id IS DISTINCT FROM 1); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT id, x FROM bar ORDER BY id;
+id|x
+--+-
+ 4|4
+99|5
+(2 rows)
+

@@ -17,6 +17,7 @@ types_nodes = { path = "../../../_support/types/nodes" }
 types_pathnodes = { path = "../../../_support/types/pathnodes" }
 partcache = { path = "../../utils/cache/partcache" }
 lsyscache = { path = "../../utils/cache/lsyscache" }
+fmgr_seams = { path = "../../utils/fmgr/fmgr_seams" }
 types_fmgr = { path = "../../../_support/types/fmgr" }
 types_rel = { path = "../../../_support/types/rel" }
 types_scan = { path = "../../../_support/types/types_scan" }
@@ -44,3 +45,4 @@ coerce = { path = "../../parser/coerce" }
 format_type = { path = "../../utils/adt/format_type" }
 arrayfuncs = { path = "../../utils/adt/arrayfuncs" }
 adt_scalar = { path = "../../utils/adt/scalar" }
+pg_qsort = { path = "../../../_support/pg_qsort" }

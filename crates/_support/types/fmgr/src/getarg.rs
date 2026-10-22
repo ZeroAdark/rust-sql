@@ -79,7 +79,7 @@ impl<'a> PackedVarlena<'a> {
         let layout = Layout::from_size_align(src.len(), 8).expect("data_expanded layout");
         let dst: core::ptr::NonNull<u8> = mcx
             .allocate(layout)
-            .map_err(|_| mcx.oom(layout.size()))?
+            .map_err(|_| mcx.oom_boxed(layout.size()))?
             .cast();
         // SAFETY: fresh `src.len()`-byte allocation; `src` is a live slice.
         unsafe {
@@ -236,6 +236,15 @@ impl FunctionCallInfoBaseData {
                 ptr: p,
                 _image: PhantomData,
             })
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn arg_varlena_is_extended(&self, i: usize) -> bool {
+        // SAFETY: forwarded caller contract — header readable.
+        unsafe {
+            let p = self.arg_ptr(i);
+            varatt::varatt_is_1b_e(p) || (!varatt::varatt_is_1b(p) && !varatt::varatt_is_4b_u(p))
         }
     }
 

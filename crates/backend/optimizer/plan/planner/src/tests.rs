@@ -15,6 +15,12 @@ use crate::planner;
 // Serializes tests that flip or observe planner strategy GUCs.
 pub(crate) static GUC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+mod affine;
+mod plan_shapes;
+mod gravity_paths;
+mod pgrc_cost;
+mod amcost_pin;
+
 // (level, message) of every ereport_msg the planner emitted, tree-wide.
 pub(crate) fn logged() -> &'static std::sync::Mutex<Vec<(types_error::ErrorLevel, String)>> {
     static LOGGED: std::sync::Mutex<Vec<(types_error::ErrorLevel, String)>> =
@@ -32,6 +38,9 @@ pub(crate) fn install_fixtures() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         crate::init_seams();
+        // subquery_planner reads the parallel-worker seam unconditionally
+        // (the Gravity width-ceiling line); the fixtures are never a worker.
+        parallel_seams::is_parallel_worker::set(|| false);
         miscinit_seams::get_user_id::set(|| 10);
         aclchk_seams::pg_class_aclmask::set(|_, _, mask, _| Ok(mask));
         backend_status_seams::pgstat_report_plan_id::set(|_, _| {});
@@ -45,6 +54,19 @@ pub(crate) fn install_fixtures() {
         syscache_seams::pg_proc_proname::set(|funcid| {
             Ok(match funcid {
                 177 => Some(named("int4pl")),
+                2803 | 2147 => Some(named("count")),
+                2100..=2106 => Some(named("avg")),
+                2107..=2114 => Some(named("sum")),
+                2115..=2130 => Some(named("max")),
+                2131..=2146 => Some(named("min")),
+                2236 | 2238 | 2240 => Some(named("bit_and")),
+                2237 | 2239 | 2241 => Some(named("bit_or")),
+                2517 => Some(named("bool_and")),
+                2518 => Some(named("bool_or")),
+                2519 => Some(named("every")),
+                2335 => Some(named("array_agg")),
+                3538 => Some(named("string_agg")),
+                3972 => Some(named("percentile_disc")),
                 _ => None,
             })
         });
@@ -73,6 +95,20 @@ pub(crate) fn install_fixtures() {
                     typstorage: b'p' as i8,
                     typcollation: 0,
                 }),
+                21 => Some(PgTypeShape {
+                    typlen: 2,
+                    typbyval: true,
+                    typalign: b's' as i8,
+                    typstorage: b'p' as i8,
+                    typcollation: 0,
+                }),
+                1700 => Some(PgTypeShape {
+                    typlen: -1,
+                    typbyval: false,
+                    typalign: b'i' as i8,
+                    typstorage: b'm' as i8,
+                    typcollation: 0,
+                }),
                 25 => Some(PgTypeShape {
                     typlen: -1,
                     typbyval: false,
@@ -91,7 +127,7 @@ pub(crate) fn install_fixtures() {
             })
         });
         syscache_seams::pg_type_typtype::set(|typid| {
-            Ok(matches!(typid, 16 | 20 | 23 | 25 | 3802).then_some(b'b' as i8))
+            Ok(matches!(typid, 16 | 20 | 21 | 23 | 25 | 1700 | 3802).then_some(b'b' as i8))
         });
         syscache_seams::pg_type_io_shape::set(|typid| {
             // (typinput, typoutput) = int4in/out, int8in/out.
@@ -147,6 +183,7 @@ const INT4_GT_OP: u32 = 521;
 const INT8GT_OP: u32 = 413;
 const INT4EQ_PROC: u32 = 65;
 const INT4_BTREE_FAM: u32 = 1976;
+const INT4_BTREE_OPCLASS: u32 = 1978;
 const TEXTEQ_OP: u32 = 98;
 const TEXT_LT_OP: u32 = 664;
 const TEXT_GE_OP: u32 = 667;
@@ -197,17 +234,38 @@ fn install_scan_fixtures() {
             proisstrict: strict,
             proleakproof: false,
         };
-        Ok(match funcid {
+        let found = match funcid {
             177 => Some(shape(23, 2, b'f', true)),
+            463 | 464 | 465 | 1274 | 1278 => Some(shape(20, 2, b'f', true)),
+            178 | 181 => Some(shape(23, 2, b'f', true)),
+            156 => Some(shape(23, 2, b'f', true)),
+            212 | 319 => Some(shape(23, 1, b'f', true)),
+            1724 | 1725 | 1726 | 1727 => Some(shape(1700, 2, b'f', true)),
+            1781 => Some(shape(1700, 1, b'f', true)),
+            141 => Some(shape(23, 2, b'f', true)),
+            2101 => Some(shape(1700, 1, b'a', false)),
+            // R1's count<=N / wrap64 forms and x::int8 bases: int8le, numeric_int8, numeric_mod, int48, int28; the
+            // volatile FILTER test: random(), float8lt.
+            471 | 295 => Some(shape(16, 2, b'f', true)),
+            1779 | 481 | 754 => Some(shape(20, 1, b'f', true)),
+            1728 => Some(shape(1700, 2, b'f', true)),
+            1598 => Some(syscache_seams::PgProcShape { provolatile: b'v' as i8, ..shape(701, 0, b'f', true) }),
+            2107 => Some(shape(1700, 1, b'a', false)),
+            2109 => Some(shape(20, 1, b'a', false)),
+            1840 => Some(shape(20, 2, b'f', false)),
             65 => Some(shape(16, 2, b'f', true)),
             66 => Some(shape(16, 2, b'f', true)),
-            470 => Some(shape(16, 2, b'f', true)),
+            147 => Some(shape(16, 2, b'f', true)),
+            // int8lt / int8gt (int8gt also the order key tests'; both agg_algebra's int8 wrap edge test, D2862 0b).
+            469 | 470 => Some(shape(16, 2, b'f', true)),
             // texteq / text_lt / text_ge / textregexeq.
             67 | 740 | 743 | 1254 => Some(shape(16, 2, b'f', true)),
             // jsonb_eq (by-ref args; JBEQ regression lane).
             JSONBEQ_PROC => Some(shape(16, 2, b'f', true)),
             // pg_proc.dat rows for the plain-agg lane (agg::* tests).
             2803 => Some(shape(20, 0, b'a', false)),
+            2147 => Some(shape(20, 1, b'a', false)),
+            2804 => Some(shape(20, 2, b'f', true)),
             3100 | 3101 => Some(shape(20, 0, b'w', false)),
             2108 => Some(shape(20, 1, b'a', false)),
             1219 => Some(shape(20, 1, b'f', true)),
@@ -215,13 +273,29 @@ fn install_scan_fixtures() {
             // max(int4)/min(int4) + int4larger/int4smaller (minmax lane).
             2116 | 2132 => Some(shape(23, 1, b'a', false)),
             768 | 769 => Some(shape(23, 2, b'f', true)),
+            2117 | 2133 => Some(shape(21, 1, b'a', false)),
+            770 | 771 => Some(shape(21, 2, b'f', true)),
+            2115 | 2131 => Some(shape(20, 1, b'a', false)),
+            1236 | 1237 => Some(shape(20, 2, b'f', true)),
+            2122 | 2138 => Some(shape(1082, 1, b'a', false)),
+            2124 | 2140 => Some(shape(1266, 1, b'a', false)),
+            2128 | 2144 => Some(shape(1186, 1, b'a', false)),
+            2129 | 2145 => Some(shape(25, 1, b'a', false)),
+            2130 | 2146 => Some(shape(1700, 1, b'a', false)),
+            2797 | 2798 => Some(shape(27, 1, b'a', false)),
+            4189 | 4190 => Some(shape(3220, 1, b'a', false)),
+            5099 | 5100 => Some(shape(5069, 1, b'a', false)),
             // generate_series(int4,int4).
             1067 => Some(syscache_seams::PgProcShape { proretset: true, ..shape(23, 2, b'f', true) }),
             // first_val_anyelement(anyelement) shell fn + its sfunc (agg::* lane).
             FIRST_VAL_ANYELEMENT => Some(shape(2283, 1, b'a', false)),
             9998 => Some(shape(2283, 2, b'f', false)),
             _ => None,
-        })
+        };
+        Ok(found.map(|mut s| {
+            s.proleakproof = matches!(funcid, 65 | 66 | 67 | 147 | 469 | 470 | 740 | 743);
+            s
+        }))
     });
     clauses_seams::evaluate_expr::set(|_, _, _, _, _| panic!("evaluate_expr not exercised"));
     syscache_seams::lookup_pg_operator_shape::set(|opno| {
@@ -325,6 +399,18 @@ fn install_scan_fixtures() {
                 oprcanmerge: false,
                 oprcanhash: false,
             }),
+            410 => Some(syscache_seams::PgOperatorShape { oprnamespace: 11,
+                oprleft: 20,
+                oprright: 20,
+                oprresult: 16,
+                oprcom: 410,
+                oprnegate: 411,
+                oprcode: 467,
+                oprrest: 101,
+                oprjoin: 105,
+                oprcanmerge: true,
+                oprcanhash: true,
+            }),
             // int8 > int8 (HAVING-lane tests).
             INT8GT_OP => Some(syscache_seams::PgOperatorShape { oprnamespace: 11,
                 oprleft: 20,
@@ -362,6 +448,12 @@ fn install_scan_fixtures() {
                     amoplefttype: 23,
                     amoprighttype: 23,
                 }),
+                INT8GT_OP => Some(syscache_seams::PgAmopShape {
+                    amopstrategy: 5,
+                    amopsortfamily: 0,
+                    amoplefttype: 20,
+                    amoprighttype: 20,
+                }),
                 _ => None,
             }
         } else if matches!(opno, TEXTEQ_OP | TEXT_LT_OP | TEXT_GE_OP)
@@ -397,6 +489,19 @@ fn install_scan_fixtures() {
                 amopmethod: 403,
             });
         }
+        if matches!(opno, 410 | 412 | INT8GT_OP) {
+            v.push(syscache_seams::PgAmopMemberShape {
+                amopfamily: INT4_BTREE_FAM,
+                amoplefttype: 20,
+                amoprighttype: 20,
+                amopstrategy: match opno {
+                    410 => 3,
+                    412 => 1,
+                    _ => 5,
+                },
+                amopmethod: 403,
+            });
+        }
         if matches!(opno, TEXTEQ_OP | TEXT_LT_OP | TEXT_GE_OP) {
             v.push(syscache_seams::PgAmopMemberShape {
                 amopfamily: TEXT_BTREE_FAM,
@@ -422,13 +527,19 @@ fn install_scan_fixtures() {
         Ok(match (opfamily, left, right, strategy) {
             (INT4_BTREE_FAM, 23, 23, 3) => INT4EQ_OP,
             (INT4_BTREE_FAM, 23, 23, 1) => INT4_LT_OP,
+            (INT4_BTREE_FAM, 23, 23, 5) => INT4_GT_OP,
+            (INT4_BTREE_FAM, 20, 20, 3) => 410,
+            (INT4_BTREE_FAM, 20, 20, 1) => 412,
+            (INT4_BTREE_FAM, 20, 20, 5) => INT8GT_OP,
             _ => 0,
         })
     });
     syscache_seams::pg_proc_cost_shape::set(|funcid| {
         Ok(match funcid {
-            INT4EQ_PROC | 66 | 1219 | 1841 | 470 | 2108 | 768 | 769 | 147 | 67 | 740 | 742
-            | 743 | 1254 | 177 | 9998 | 2803 | JSONBEQ_PROC => {
+            INT4EQ_PROC | 66 | 1219 | 1841 | 469 | 470 | 2108 | 768 | 769 | 147 | 67 | 740 | 742
+            | 743 | 1254 | 177 | 9998 | 2803 | 2147 | 2804 | JSONBEQ_PROC | 463 | 464 | 465
+            | 1274 | 1278 | 178 | 181 | 1724 | 1725 | 1726 | 1781 | 2107 | 2109 | 1840 | 2117 | 2133 | 770 | 771
+            | 2115 | 2131 | 1236 | 1237 | 1727 | 141 | 2101 | 471 | 295 | 1779 | 481 | 754 | 1728 | 1598 | 212 | 319 | 156 => {
                 Some(syscache_seams::PgProcCostShape { procost: 1.0, prorows: 0.0, prosupport: 0 })
             }
             // generate_series(int4,int4): prosupport row estimation is not
@@ -477,7 +588,11 @@ fn install_scan_fixtures() {
         };
         Ok(match aggfnoid {
             2803 => Some(shape(1219)),
+            2147 => Some(shape(2804)),
             2108 => Some(shape(1841)),
+            2109 => Some(shape(1840)),
+            2107 => Some(syscache_seams::PgAggregateShape { aggtranstype: 1700, aggcombinefn: 1724, ..shape(1724) }),
+            2101 => Some(syscache_seams::PgAggregateShape { aggtranstype: 1700, aggcombinefn: 1724, ..shape(1724) }),
             2116 => Some(syscache_seams::PgAggregateShape {
                 aggtransfn: 768,
                 aggsortop: INT4_GT_OP,
@@ -492,6 +607,10 @@ fn install_scan_fixtures() {
                 aggcombinefn: 769,
                 ..shape(769)
             }),
+            2117 => Some(syscache_seams::PgAggregateShape { aggtranstype: 21, aggcombinefn: 770, ..shape(770) }),
+            2133 => Some(syscache_seams::PgAggregateShape { aggtranstype: 21, aggcombinefn: 771, ..shape(771) }),
+            2115 => Some(syscache_seams::PgAggregateShape { aggcombinefn: 1236, ..shape(1236) }),
+            2131 => Some(syscache_seams::PgAggregateShape { aggcombinefn: 1237, ..shape(1237) }),
             // first_val_anyelement(anyelement): STYPE=anyelement, aggtranstype
             // resolves against the call's actual arg type (resolve_aggregate_transtype).
             FIRST_VAL_ANYELEMENT => Some(syscache_seams::PgAggregateShape {
@@ -503,8 +622,8 @@ fn install_scan_fixtures() {
     });
     syscache_seams::pg_aggregate_agginitval::set(|mcx, aggfnoid| {
         Ok(match aggfnoid {
-            2803 => Some(Some(mcx::PgString::from_str_in("0", mcx)?)),
-            2108 | 2116 | 2132 | FIRST_VAL_ANYELEMENT => Some(None),
+            2803 | 2147 => Some(Some(mcx::PgString::from_str_in("0", mcx)?)),
+            2108 | 2107 | 2109 | 2116 | 2132 | 2117 | 2133 | 2115 | 2131 | 2101 | FIRST_VAL_ANYELEMENT => Some(None),
             _ => None,
         })
     });
@@ -570,7 +689,13 @@ fn install_scan_fixtures() {
         })
     });
     syscache_seams::syscache_hash_value_typeoid::set(|typid| Ok(typid));
-    indexcmds_seams::get_default_opclass::set(|_, _| Ok(0));
+    // int4's btree opclass (int4_ops → the int4 family above) is the one default opclass:
+    // the decorrelation's correlation keys resolve their btree equality through typcache
+    //; hash stays unresolved, so hasheqoperator is never set.
+    indexcmds_seams::get_default_opclass::set(|typid, am| Ok(if (typid, am) == (23, 403) { INT4_BTREE_OPCLASS } else { 0 }));
+    syscache_seams::lookup_pg_opclass_shape::set(|opclass| {
+        Ok((opclass == INT4_BTREE_OPCLASS).then_some(syscache_seams::PgOpclassShape { opcmethod: 403, opcfamily: INT4_BTREE_FAM, opcintype: 23, opckeytype: 0 }))
+    });
     syscache_seams::pg_type_base_shape::set(|typid| {
         Ok(match typid {
             // True array types carry the array subscript handler; without it
@@ -596,6 +721,9 @@ fn install_scan_fixtures() {
     // [0,10,20,30,40], stadistinct 10); PTT the text twin (MCV ["bar"->0.20,
     // "foo"->0.10], 5-entry histogram); everything else has no stats row.
     syscache_seams::lookup_pg_statistic_bundle::set(|mcx, relid, attnum, inh| {
+        if let Some(b) = amcost_pin::statistic(mcx, relid, attnum, inh) {
+            return Ok(Some(b));
+        }
         if relid == PTT && attnum == 1 && !inh {
             let mut slots = mcx::PgVec::new_in(mcx);
             let mut mcv_values = mcx::PgVec::new_in(mcx);
@@ -752,6 +880,9 @@ fn install_scan_fixtures() {
     });
     syscache_seams::pg_statistic_stawidth::set(|_, _, _| Ok(None));
     relation_seams::relation_open::set(|mcx, relid, _lockmode| {
+        if let Some(r) = amcost_pin::relation(mcx, relid) {
+            return Ok(r);
+        }
         Ok(match relid {
             TBL => make_heap_rel(mcx),
             IDX => make_index_rel(mcx),
@@ -774,14 +905,17 @@ fn install_scan_fixtures() {
     });
     // Real relcache path: the index list comes off relcache's rd_indexlist
     // cache, fed by pg_class/pg_index fixtures underneath its build seams.
-    relcache_build_seams::scan_pg_relation::set(|relid, _, _| {
+    relcache_build_seams::scan_pg_relation::set(|_, relid, _, _| {
+        if let Some(s) = amcost_pin::scanned_pg_class(relid) {
+            return Ok(Some(s));
+        }
         Ok((relid == TBL).then(|| relcache_build_seams::ScannedPgClass {
             relchecks: 0, relnatts: 0, relhastriggers: false, relhasrules: false, relrewrite: 0,
             form: make_pg_class(TBL, "t", b'r', 2, true),
             options: None,
         }))
     });
-    relcache_build_seams::relation_build_tuple_desc::set(|mcx, _, _, _, _| {
+    relcache_build_seams::relation_build_tuple_desc::set(|mcx, _, _, _, _, _| {
         Ok(std::rc::Rc::new(types_tuple::TupleDescData {
             natts: 0,
             tdtypeid: 0,
@@ -794,6 +928,7 @@ fn install_scan_fixtures() {
     });
     relcache_build_seams::scan_pg_index_shapes::set(|mcx, indrelid| {
         let mut v = mcx::PgVec::new_in(mcx);
+        v.extend(amcost_pin::index_shapes(indrelid));
         if indrelid == TBL {
             v.push(relcache_build_seams::PgIndexListShape {
                 indexrelid: IDX,
@@ -812,6 +947,9 @@ fn install_scan_fixtures() {
     relcache_seams::relation_get_stat_ext_list::set(|mcx, _relid| Ok(mcx::PgVec::new_in(mcx)));
     relcache_seams::relation_get_fkey_list::set(|_relid| Ok(std::rc::Rc::from(Vec::new())));
     bufmgr_seams::relation_get_number_of_blocks_in_fork::set(|rel, _fork| {
+        if let Some(n) = amcost_pin::nblocks(rel.rd_id) {
+            return Ok(n);
+        }
         Ok(match rel.rd_id {
             TBL => 100,
             IDX => 30,
@@ -888,7 +1026,7 @@ fn make_rel_data<'mcx>(
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: mcx::PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -2793,6 +2931,10 @@ mod join {
     #[test]
     fn comma_join_plans_to_inner_nestloop_with_join_filter() {
         let _guc = crate::tests::GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The cost model reads the work_mem-backed GUC slots: install them here, never rely on a sibling.
+        if !guc_tables::vars::work_mem.installed() {
+            init_small::init_seams();
+        }
         let cx = cx();
         let mcx = cx.mcx();
         let stmt = planner(
@@ -3165,6 +3307,10 @@ mod join {
     #[test]
     fn explicit_inner_join_on_matches_comma_join_plan() {
         let _guc = crate::tests::GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The cost model reads the work_mem-backed GUC slots: install them here, never rely on a sibling.
+        if !guc_tables::vars::work_mem.installed() {
+            init_small::init_seams();
+        }
         let cx = cx();
         let mcx = cx.mcx();
         let stmt = planner(
@@ -3319,6 +3465,10 @@ mod join {
     #[test]
     fn left_join_plans_nestloop_left_join() {
         let _guc = crate::tests::GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The cost model reads the work_mem-backed GUC slots: install them here, never rely on a sibling.
+        if !guc_tables::vars::work_mem.installed() {
+            init_small::init_seams();
+        }
         let cx = cx();
         let mcx = cx.mcx();
         let stmt = planner(
@@ -3355,6 +3505,10 @@ mod join {
     #[test]
     fn right_join_flips_to_nestloop_left_join() {
         let _guc = crate::tests::GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The cost model reads the work_mem-backed GUC slots: install them here, never rely on a sibling.
+        if !guc_tables::vars::work_mem.installed() {
+            init_small::init_seams();
+        }
         let cx = cx();
         let mcx = cx.mcx();
         let stmt = planner(
@@ -3389,6 +3543,10 @@ mod join {
     #[test]
     fn left_join_with_strict_where_reduces_to_inner() {
         let _guc = crate::tests::GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The cost model reads the work_mem-backed GUC slots: install them here, never rely on a sibling.
+        if !guc_tables::vars::work_mem.installed() {
+            init_small::init_seams();
+        }
         let cx = cx();
         let mcx = cx.mcx();
         let mut nulling = types_nodes::Bitmapset::empty();
@@ -3706,6 +3864,41 @@ mod join {
         assert_eq!(stmt.rtable.len(), 9);
         assert_eq!(stmt.relationOids.len(), 9);
         assert!(join_children(stmt.planTree.unwrap()).is_some());
+    }
+
+    // geqo_eval releases each tour's joinrels, paths and targets (C deletes
+    // its per-tour context), so the planner's peak does not grow with the
+    // number of tours.
+    #[test]
+    fn geqo_tours_do_not_accumulate_planner_memory() {
+        let _guc = crate::tests::GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        install_fixtures();
+        if !guc_tables::vars::work_mem.installed() {
+            init_small::init_seams();
+        }
+        let peak = |generations: i32| {
+            crate::geqo::set_geqo_generations(generations);
+            let cx = MemoryContext::new("geqo planner");
+            let mcx = cx.mcx();
+            let stmt = planner(
+                mcx,
+                leak_q(mcx, many_comma_join_query(mcx, 8)),
+                "SELECT a1.a FROM jt1 a1, ..., jt1 a8 WHERE chained equijoins",
+                CURSOR_OPT_PARALLEL_OK,
+                ParamListHandle::NULL,
+            )
+            .unwrap();
+            assert!(join_children(stmt.planTree.unwrap()).is_some());
+            cx.stats().peak
+        };
+        crate::geqo::set_geqo_threshold(2);
+        crate::geqo::set_geqo_pool_size(4);
+        let few = peak(4);
+        let many = peak(400);
+        crate::geqo::set_geqo_threshold(12);
+        crate::geqo::set_geqo_pool_size(0);
+        crate::geqo::set_geqo_generations(0);
+        assert!(many < few + few / 4, "peak {many} after 400 tours vs {few} after 4");
     }
 
     // join_collapse_limit=1 forces the syntactic order: (jt3 JOIN jt4)
@@ -4048,6 +4241,11 @@ mod torn_stats_arms {
 
     #[test]
     fn eqjoinsel_torn_mcv_slots_fall_back_to_distinct_ratio() {
+        let _guc = crate::tests::GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The cost model reads the work_mem-backed GUC slots: install them here, never rely on a sibling.
+        if !guc_tables::vars::work_mem.installed() {
+            init_small::init_seams();
+        }
         let cx = cx();
         let mcx = cx.mcx();
         // eqjoinsel_inner over zero (value, freq) pairs: matchprodfreq = 0,
@@ -4495,6 +4693,75 @@ mod having_distinct_sorted {
             sort.as_plan().unwrap().lefttree.unwrap().node_tag(),
             NodeTag::T_SeqScan
         );
+    }
+
+    fn grouped_count_over<'m>(mcx: Mcx<'m>, relid: u32, attno: i16, plus_one: bool) -> Query<'m> {
+        let mut parse = grouped_count_query(mcx, false);
+        let mut rte = Node::build::<types_nodes::parsenodes::RangeTblEntry>(mcx).unwrap();
+        rte.rtekind = RTEKind::RTE_RELATION;
+        rte.relid = relid;
+        rte.relkind = b'r';
+        rte.rellockmode = 1;
+        rte.inh = false;
+        parse.rtable = NodeList::make1(mcx, rte.seal()).unwrap();
+        let var = Node::mk_var(mcx, 1, attno, 23, -1, 0, 0).unwrap();
+        let key = if plus_one {
+            let one = Node::mk_const(mcx, 23, -1, 0, 4, Datum::from_i32(1), false, true).unwrap();
+            Node::mk(
+                mcx,
+                types_nodes::primnodes::OpExpr {
+                    opno: 551,
+                    opfuncid: 177,
+                    opresulttype: 23,
+                    opretset: false,
+                    opcollid: 0,
+                    inputcollid: 0,
+                    args: NodeList::make2(mcx, var, one).unwrap(),
+                    location: -1,
+                },
+            )
+            .unwrap()
+        } else {
+            var
+        };
+        let tle1 = Node::mk_target_entry(mcx, key, 1, Some("k"), false).unwrap();
+        // SAFETY: freshly built tlist; no other reference is live.
+        unsafe {
+            tle1.with_mut::<types_nodes::primnodes::TargetEntry, _>(|t| t.ressortgroupref = 1)
+        }
+        .unwrap();
+        let mut tlist = NodeList::make1(mcx, tle1).unwrap();
+        tlist.lappend(mcx, parse.targetList.nth(1)).unwrap();
+        parse.targetList = tlist;
+        parse
+    }
+
+    fn top_agg_marked<'m>(mcx: Mcx<'m>, parse: Query<'m>, sql: &str) -> bool {
+        let stmt = planner(mcx, leak_q(mcx, parse), sql, CURSOR_OPT_PARALLEL_OK, ParamListHandle::NULL).unwrap();
+        let plan = stmt.planTree.unwrap();
+        plan.as_agg().unwrap_or_else(|| panic!("{sql}: an Agg on top, got {:?}", plan.node_tag())).gravity_groups_default
+    }
+
+    /// An Agg carries whether its group estimate took some key's ndistinct from DEFAULT_NUM_DISTINCT
+    /// (`Agg::gravity_groups_default`, C's estinfo SELFLAG_USED_DEFAULT): `t` has no pg_statistic row, STT's column 1 a
+    /// pinned one (stadistinct 10). A key expression is estimated from its Vars' statistics, so `a + 1` over STT is
+    /// not marked and `val + 1` over `t` is. Nothing in the planner reads the mark: the estimates are the same.
+    #[test]
+    fn an_agg_marks_a_group_estimate_that_took_the_default_ndistinct() {
+        let _guc = crate::tests::GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cx = cx();
+        ensure_work_mem();
+        let mcx = cx.mcx();
+        let cases = [
+            (TBL, 2, false, true, "SELECT val, count(*) FROM t GROUP BY val"),
+            (TBL, 2, true, true, "SELECT val + 1, count(*) FROM t GROUP BY 1"),
+            (STT, 1, false, false, "SELECT a, count(*) FROM stt GROUP BY a"),
+            (STT, 1, true, false, "SELECT a + 1, count(*) FROM stt GROUP BY 1"),
+        ];
+        for (relid, attno, plus_one, want, sql) in cases {
+            assert_eq!(top_agg_marked(mcx, grouped_count_over(mcx, relid, attno, plus_one), sql), want, "{sql}");
+        }
+        assert!(top_agg_marked(mcx, distinct_query(mcx), "SELECT DISTINCT val FROM t"), "a hashed DISTINCT over t");
     }
 }
 
@@ -8595,6 +8862,49 @@ mod add_path_param_pathkeys_masking {
         let ok = crate::pathnode::add_path_precheck(&run, rel, 0, 10.0, 10.0, &[key], &req);
         assert!(!ok, "parameterized candidate's pathkeys must not save it in precheck");
     }
+
+    // wio P257: pathnode.c:635/668/882/909 pfree rejected and displaced
+    // paths; keeping them made a 400-way join exceed MaxAllocSize.
+    #[test]
+    fn rejected_and_displaced_paths_are_freed() {
+        let cx = MemoryContext::new("t");
+        let mcx = cx.mcx();
+        let mut run = crate::run::PlannerRun::new(mcx);
+        let rel = run.root.alloc_rel(RelOptInfo::new(mcx));
+        let first = mk_path(&mut run, rel, 2.0, 0, None, &[]);
+        crate::pathnode::add_path(&mut run, rel, first);
+        let worse = mk_path(&mut run, rel, 5.0, 0, None, &[]);
+        crate::pathnode::add_path(&mut run, rel, worse);
+        assert!(!run.root.path_arena.is_live(worse), "rejected new path is freed");
+        let better = mk_path(&mut run, rel, 1.0, 0, None, &[]);
+        crate::pathnode::add_path(&mut run, rel, better);
+        assert!(!run.root.path_arena.is_live(first), "displaced old path is freed");
+        assert_eq!(run.root.rel(rel).pathlist.as_slice(), &[better]);
+        assert_eq!(run.root.path_arena.live(), 1);
+        for _ in 0..10_000 {
+            let p = mk_path(&mut run, rel, 9.0, 0, None, &[]);
+            crate::pathnode::add_path(&mut run, rel, p);
+        }
+        assert_eq!(run.root.path_arena.live(), 1, "rejected paths do not accumulate");
+    }
+
+    #[test]
+    fn rejected_and_displaced_partial_paths_are_freed() {
+        let cx = MemoryContext::new("t");
+        let mcx = cx.mcx();
+        let mut run = crate::run::PlannerRun::new(mcx);
+        let rel = run.root.alloc_rel(RelOptInfo::new(mcx));
+        run.root.rel_mut(rel).consider_parallel = true;
+        let first = mk_path(&mut run, rel, 2.0, 0, None, &[]);
+        crate::pathnode::add_partial_path(&mut run, rel, first);
+        let worse = mk_path(&mut run, rel, 5.0, 0, None, &[]);
+        crate::pathnode::add_partial_path(&mut run, rel, worse);
+        assert!(!run.root.path_arena.is_live(worse));
+        let better = mk_path(&mut run, rel, 1.0, 0, None, &[]);
+        crate::pathnode::add_partial_path(&mut run, rel, better);
+        assert!(!run.root.path_arena.is_live(first));
+        assert_eq!(run.root.rel(rel).partial_pathlist.as_slice(), &[better]);
+    }
 }
 
 // prepagg.c:152, plancat.c:1524/2133/2194 all report a vanished catalog row
@@ -9610,6 +9920,11 @@ fn statistic_proc_security_check_logs_non_leakproof_at_debug2() {
 // PlannedStmt carries a NULL cell the executor never initializes.
 #[test]
 fn w2_031_alternative_subplan_loser_is_nulled_out_of_subplans() {
+    let _guc = crate::tests::GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // The cost model reads the work_mem-backed GUC slots: install them here, never rely on a sibling.
+    if !guc_tables::vars::work_mem.installed() {
+        init_small::init_seams();
+    }
     let cx = cx();
     let mcx = cx.mcx();
 
@@ -9810,5 +10125,129 @@ mod audit_w2_030 {
         let outer2_id = crate::placeholder::find_placeholder_info(&mut run, &outer2).unwrap();
         let lateral: Vec<i32> = relids_members(&run.root.phinfo(outer2_id).ph_lateral).collect();
         assert_eq!(lateral, vec![1, 5]);
+    }
+}
+
+// expand_virtual_generated_columns over a table with a dropped column: the
+// whole-row RowExpr must carry NULL::int4 for the dropped slot (expandRTE
+// include_dropped), never a Var of type 0 (wio P278/P291).
+#[test]
+fn virtual_expansion_whole_row_drops_to_null_int4() {
+    use crate::prepjointree::{replace_var_expr_su, stored_column_tlist_expr, PullupPhCtx, WRAP_NONE};
+
+    let ctx = MemoryContext::new("virtual-dropped-wholerow");
+    let mcx = ctx.mcx();
+    let mut dropped = int4_attr(1, "........pg.dropped.1........", false);
+    dropped.atttypid = 0;
+    dropped.attisdropped = true;
+    let live = int4_attr(2, "b", false);
+    let gen_expr = Node::mk_const(mcx, 23, -1, 0, 4, Datum::from_i32(42), false, true).unwrap();
+    let mut tlist = NodeList::nil();
+    for (attno, expr) in [
+        (1i16, stored_column_tlist_expr(mcx, &dropped, 1, 1).unwrap()),
+        (2, stored_column_tlist_expr(mcx, &live, 1, 2).unwrap()),
+        (3, gen_expr),
+    ] {
+        tlist.lappend(mcx, Node::mk_target_entry(mcx, expr, attno, None, false).unwrap()).unwrap();
+    }
+    let last_ph_id = std::cell::Cell::new(0u32);
+    let rv_cache = std::cell::RefCell::new(mcx::vec_from_elem_in::<Option<Node<'_>>>(
+        mcx,
+        None,
+        tlist.len() + 1,
+    ));
+    let empty_relids = types_nodes::Bitmapset::empty();
+    let phc = PullupPhCtx {
+        wrap_option: std::cell::Cell::new(WRAP_NONE),
+        last_ph_id: &last_ph_id,
+        rv_cache: &rv_cache,
+        sub_relids: &empty_relids,
+        eref: None,
+        nullinfo: None,
+        result_relation: 0,
+    };
+    let whole_row = Node::mk_var(mcx, 1, 0, 16_384, -1, 0, 0).unwrap();
+    let out = replace_var_expr_su(mcx, whole_row, 1, &tlist, false, Some(&phc), 0)
+        .unwrap()
+        .expect("whole-row Var replaced");
+    let row = out.as_row_expr().expect("RowExpr");
+    assert_eq!(row.args.len(), 3);
+    let first = row.args.nth(0).as_const().expect("dropped slot is a Const");
+    assert!(first.constisnull);
+    assert_eq!(first.consttype, 23);
+    let second = row.args.nth(1).as_var().expect("live column stays a Var");
+    assert_eq!((second.varattno, second.vartype), (2, 23));
+}
+
+// The analyzer's output for `SELECT (SELECT ... (SELECT 1))`, `depth` deep.
+fn nested_sublink_query(mcx: Mcx<'_>, depth: usize) -> Query<'_> {
+    let mut q = select_1_query(mcx);
+    for _ in 0..depth {
+        let sublink = Node::mk(
+            mcx,
+            types_nodes::SubLink {
+                subLinkType: types_nodes::SubLinkType::EXPR_SUBLINK,
+                subLinkId: 0,
+                testexpr: None,
+                operName: NodeList::nil(),
+                subselect: Node::mk(mcx, q).unwrap(),
+                location: 7,
+            },
+        )
+        .unwrap();
+        let tle = Node::mk_target_entry(mcx, sublink, 1, Some("?column?"), false).unwrap();
+        let jointree =
+            alloc_leak_in(mcx, FromExpr { fromlist: NodeList::nil(), quals: None }).unwrap();
+        q = Query {
+            commandType: CmdType::CMD_SELECT,
+            canSetTag: true,
+            jointree: Some(jointree),
+            targetList: NodeList::make1(mcx, tle).unwrap(),
+            hasSubLinks: true,
+            ..Query::default()
+        };
+    }
+    q
+}
+
+// Stack bytes per planner recursion level, measured through the guard.
+// C 18.6 (clang -O2): 1,104 B per nested sub-select (SS_process_sublinks ->
+// make_subplan's copyObject -> subquery_planner). Measured 2026-09-22,
+// opt3/opt0: 4,865/53,773 B.
+#[test]
+fn planner_recursion_stack_per_level_is_capped() {
+    let per_level = stack_depth::measured_bytes_per_level(4 << 20, 1 << 16, |n| {
+        let cx = cx();
+        let mcx = cx.mcx();
+        let q = leak_q(mcx, nested_sublink_query(mcx, n));
+        planner(mcx, q, "SELECT", CURSOR_OPT_PARALLEL_OK, ParamListHandle::NULL).map(|_| ())
+    });
+    eprintln!("planner stack per level: sub-select {per_level} B");
+    let cap = stack_depth::per_level_cap(7_000, 70_000);
+    assert!(per_level <= cap, "nested sub-select planning costs {per_level} B/level (cap {cap})");
+}
+
+mod audit_w2_planner {
+    use super::*;
+
+    // plancat.c:2003: only result < 0 || result > 1 is rejected, so a NaN
+    // estimate (imported statistics) passes. audit fp-util-plancat#1.
+    #[test]
+    fn nan_selectivity_is_accepted() {
+        assert!(crate::plancat::check_selectivity_range(f64::NAN, "restriction").unwrap().is_nan());
+        assert!(crate::plancat::check_selectivity_range(f64::NAN, "join").unwrap().is_nan());
+    }
+
+    // mcv.c:1550: elog(ERROR) "variable not found in statistics object",
+    // never a panic. audit fp-statistics-mcv#1.
+    #[test]
+    fn mcv_missing_attribute_is_error() {
+        let cx = cx();
+        let mcx = cx.mcx();
+        let keys = types_pathnodes::relids::relids_singleton(mcx, 2);
+        assert_eq!(crate::extended_stats::bms_member_index(&keys, 2).unwrap(), 0);
+        let err = crate::extended_stats::bms_member_index(&keys, 3).unwrap_err();
+        assert_eq!(err.message(), "variable not found in statistics object");
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
     }
 }

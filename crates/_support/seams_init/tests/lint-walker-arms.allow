@@ -18,6 +18,9 @@
 #              whose behaviour the Rust wildcard already reproduces
 #   UNREACHABLE the C arm cannot be reached from SQL in this tree (with the
 #              reason); a real divergence would need a new entry point first
+#   DIVERGE    the arm was removed ON PURPOSE and the Rust behaviour differs
+#              from C (cite the commit and the open owner question); not a
+#              claim of equivalence — revisit when the owner rules
 #
 # Add a row only after reading the C arm. Prefer porting the arm C-exactly.
 src/backend/utils/adt/ruleutils.c:get_name_for_var_field|RTEKind|RTE_FUNCTION,RTE_GROUP,RTE_NAMEDTUPLESTORE,RTE_RELATION,RTE_RESULT,RTE_TABLEFUNC,RTE_VALUES	NOOP	every missing C arm is a bare `break` (ruleutils.c get_name_for_var_field); Rust `_ => {}` is the same fallthrough; witness: fixtures/walker-arms-witness.sql
@@ -71,3 +74,4 @@ src/backend/rewrite/rewriteHandler.c:RewriteQuery|NodeTag|T_FromExpr	NOOP	C's Is
 src/backend/rewrite/rewriteManip.c:OffsetVarNodes_walker|NodeTag|T_AppendRelInfo	ELSEWHERE	the only C caller passing AppendRelInfos is pull_up_simple_subquery (prepjointree.c:1441); prepjointree.rs:1235-1252 offsets append_rel_list entries directly (planner arena structs, not Nodes); witness: fixtures/walker-arms-witness.sql
 src/backend/utils/adt/ruleutils.c:set_deparse_plan|NodeTag|T_CustomScan	UNPORTED	carve §2 (docs/design/carve-ratifications.md, no C-extension loading): CustomScan providers are C extension hooks registered via set_rel_pathlist_hook/set_join_pathlist_hook, so no CustomPath/CustomScan/CustomScanState is ever constructed on pgrust; dead arm
 src/backend/foreign/foreign.c:GetExistingLocalJoinPath|NodeTag|T_HashJoin,T_MergeJoin,T_NestLoop	ELSEWHERE	C switches on Path.pathtype (plan-node tags); Rust matches the PathNode variant (HashPath/NestPath/MergePath), a bijection onto the same three arms (pathnode.rs get_existing_local_join_path); every other pathtype is skipped as in C's default
+src/backend/optimizer/path/costsize.c:cost_rescan|NodeTag|T_HashJoin	DIVERGE	cfdfb8221d8: single-batch hash-join rescan discount removed on purpose (Gravity reruns an embedded inner per outer row); a HashJoin rescan now takes the C default (full path cost) instead of the discounted run cost; whether to port the arm back for PG plan-choice parity is an open question for the planner owner (D239)

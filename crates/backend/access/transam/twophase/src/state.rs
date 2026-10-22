@@ -167,8 +167,8 @@ pub fn TwoPhaseShmemInit() -> PgResult<()> {
         shmem_seams::shmem_init_struct::call("Prepared Transaction Table", TwoPhaseShmemSize())?;
     debug_assert!(!found, "TwoPhaseShmemInit: segment already initialized");
     let max = twophase_config::max_prepared_xacts().max(0) as usize;
-    let mut gxacts = Vec::with_capacity(max);
-    let mut prep = Vec::with_capacity(max);
+    let mut gxacts = ::mcx::std_vec_with_capacity("TwoPhaseShmem", max)?;
+    let mut prep = ::mcx::std_vec_with_capacity("TwoPhaseShmem", max)?;
     let base = lmgr_proc::PreparedXactProcsBase();
     let mut free_head = NO_GXACT;
     for i in 0..max {

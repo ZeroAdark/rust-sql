@@ -1,0 +1,52 @@
+The thread-state registry (C7 (b); rule RT, crates/gravity/lint/rules/rt_thread_state.py, whose module doc is the
+format): one file per source file (<path under crates/, '/' as '.'>), one row per thread-local static it declares,
+<path> <static> <owner> <reset> <carry> [<member | note>]. OWNERS holds the owner tags. Every static in RT's scope
+(every source under crates/, tests/ out; C7 coverage E2) has a row here, in ../TLS-DEBT or in ../SCOPE-DEBT.
+The claim rows' members are checked against CLAIM_REGISTRY by hosts worker_arm.rs claim_census_is_pinned.
+
+It replaced hosts/claim-census.tsv (C7 (b)/(c), carry rule only; deleted by the contract entry with RT's TRANSITION
+clause and tools tls_census.py check_claim). Where each check of that census went (each moved one has a planted RT
+selftest case, run.py --selftest):
+  census check (hosts test claim_census_is_pinned = H, tools tls_census.py check_claim = T)  -> home now
+  row shape: >= 3 fields, a known class (H, T)                     -> RT "carry .. is not one of" (planted4), row shape
+  a claim row names its member (H, T)                              -> RT "names its CLAIM_REGISTRY member" (planted5)
+  a debt row says what is missing (H, T)                           -> RT "names what is missing" (planted6)
+  the claim row's member carries it (H)                            -> compiled half: claim_census_is_pinned
+  two lines / two classes for one static (H, T)                    -> RT "two registry rows" (planted3)
+  an unclassified static in the scope (H, T)                       -> RT "is in no registry row" (planted, planted8)
+  a line whose static is gone (H, T)                               -> RT "no such thread-local in the scope" (planted2)
+  the scope: #scope prefixes, tests/ out (H, T)                    -> RT SCOPE (planted7: out of scope = stale;
+                                                                      planted8: a backend prefix needs a row; clean8: tests/)
+  #carry-debt = the debt line count (H, T)                         -> RT: a carry debt row the parent lacks fails
+                                                                      (planted9; CARRY-DEBT printed in RT's note)
+  #scope / #carry-debt header lines present (H)                    -> no header now: the scope is RT's SCOPE
+  each member's static is a thread-local (H)                       -> compiled half: claim_census_is_pinned
+  a member's static with a row is classed claim (H)                -> compiled half (now TLS-DEBT rows too)
+New in RT: owner tags (planted10), reset kinds (planted13), a reset function that exists (planted11) and names the static
+or its block, directly or through one accessor (planted12; clean3 a Drop type, clean5 a CamelCase function, clean6-7 an accessor of the static's file), carry / reset agreement (planted14-16), TLS-DEBT only shrinks
+(planted17, clean2), a registered static's debt row goes (planted18), a row in its source file's file (planted19).
+The runtime half (main 2026-10-12T00:17:07Z): a crates/gravity row with carry leader is declared through leader_tls!
+(crates/_support/leader_tls: `leader_tls::leader_tls! { thread_local! { .. } }`; release builds expand to the plain block,
+debug builds raise ERROR XX000 at any access inside a pool claim) or is a row of ../LEADER-TLS-DEBT, which only
+shrinks (planted20 neither, planted24 a new debt row, clean10 an old one stays); leader_tls! declares leader (or test)
+statics only (planted21); a declared static's debt row goes (planted22); a debt row of no leader row goes (planted23);
+row shape (planted25); clean9 a declared static; clean11 the backend is a later step; clean12 a row whose
+static is gone is spent.
+Macro-declared thread-locals (C7 coverage E1, rt_thread_state.py module doc): each invocation entry of a thread-local
+macro (scalar_global!, session_guc_*!) is a static of the invoking file, with its own row (planted26 an entry with no
+row, planted28 an exported macro invoked in another file); the `$x` template is no static (planted27); a reset through
+the entry's accessor holds, another entry's does not (planted29, clean13); a macro RT cannot read fails (planted30);
+clean14 an invocation in another file with its rows.
+The whole workspace (C7 coverage E2): a static of any crate needs a row (planted31; planted7 is now a row under tests/);
+../SCOPE-DEBT holds the statics the widening found, only shrinks (planted32, clean15), goes when its static is registered
+(planted33), has a row shape (planted34) and is no second debt row (planted35); a row whose static is gone is spent
+(clean16). lint/reports/rt_scope_seed.py wrote the seed: unit-test module statics as owner unittest, test / test rows
+(its --selftest: what proves a #[cfg(test)] parent), the rest as SCOPE-DEBT.
+Clause (d), unwind-safe thread scopes (D4112, D4113 E4): a scope: reset is a Drop guard, a type or a function holding one
+(planted36 a bare pair, clean19 a guard type); ../GUARD-DEBT holds today's bare pairs, only shrinks (planted37, clean17)
+and loses a row whose reset became a guard (planted38); a row's `rig: f, g` pair is called only from cfg(test) code or
+tests/ (planted39, clean18; planted40 a rig function that does not exist).
+Clause (e), state kept across statements (D4114): a growing static (a Vec / map / set / String in its type) whose reset
+is exit or at:<fn> states its bound in its note: a cap, 'per session by design' or 'test mode' (planted41; clean20 a
+cap, clean21 by design, clean22 a Cell); a note naming it per-run or per-statement data with such a reset fails
+(planted42).

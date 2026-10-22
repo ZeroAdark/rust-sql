@@ -1,0 +1,10 @@
+-- regress-full-encoding-002
+-- SELECT convert_to(substring(with_nul, 5, 1), 'UTF8') FROM regress_encoding;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=520 end=sink
+  nodes n0@0
+  source range rel=17488 rti=1 am=heap
+    lanes Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn1717(fn936(v1.3, c23:5, c23:1), c19:#64))
+  outs 1=vl:call1717
+mapped: SeqScan

@@ -6,7 +6,7 @@ use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::sync::atomic::Ordering::Relaxed;
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use mcx::{Mcx, MemoryContext, PgVec};
 use types_core::{
     CommandId, GlobalVisStateHandle, InvalidTransactionId, Oid, ProcNumber, TransactionId,
@@ -18,8 +18,8 @@ use types_snapshot::{SnapshotData, SnapshotType};
 
 #[cfg(test)]
 mod tests;
+mod regheap;
 
-// Rc because snapmgr itself refcounts (regd/active counts), rule 2.3.
 pub type Snapshot = Rc<SnapshotData<'static>>;
 
 pub use procarray::{RecentXmin, TransactionXmin};
@@ -46,7 +46,6 @@ enum Which {
     Catalog,
 }
 
-// Current/SecondarySnapshot alias a static or a registered copy.
 #[derive(Clone)]
 enum SnapRef {
     Static(Which),
@@ -70,11 +69,8 @@ struct SnapMgrState {
     historic_tuplecids: Option<HistoricTupleCids>,
     first_snapshot_set: bool,
     first_xact_snapshot: Option<Snapshot>,
-    // Resource-handle owners (Rc payloads): plain-heap Vecs per docs/no-drop.md.
     active: Vec<ActiveSnapshotElt>,
-    registered: Vec<Snapshot>,
-    // Dead unique copies, xip capacity retained — C's CopySnapshot freelist
-    // palloc in TopTransactionContext (rule 7 retained scratch).
+    registered: regheap::RegHeap,
     copy_freelist: Vec<Snapshot>,
     exported: Vec<ExportedSnapshot>,
 }
@@ -110,10 +106,7 @@ impl SnapMgrState {
 }
 
 thread_local! {
-    // ManuallyDrop keeps the TLS payload !needs_drop (lessons §8).
-    // UnsafeCell, not RefCell (rule 10): every with_state closure is a leaf
-    // (procarray/xact/resowner callees never re-enter this module);
-    // STATE_BUSY enforces in debug.
+    // Every with_state closure is a leaf (procarray/xact/resowner callees never re-enter this module).
     static STATE: UnsafeCell<Option<ManuallyDrop<SnapMgrState>>> = const { UnsafeCell::new(None) };
 }
 
@@ -123,7 +116,6 @@ thread_local! {
     static STATIC_REPLACED: Cell<u64> = const { Cell::new(0) };
 }
 
-// Nonzero: a held static handle defeated array reuse + the reuse fastpath.
 #[cfg(debug_assertions)]
 pub fn static_snapshot_replacements() -> u64 {
     STATIC_REPLACED.get()
@@ -168,17 +160,15 @@ fn init_state(slot: &mut Option<ManuallyDrop<SnapMgrState>>) {
         first_snapshot_set: false,
         first_xact_snapshot: None,
         active: Vec::new(),
-        registered: Vec::new(),
+        registered: regheap::RegHeap::new(),
         copy_freelist: Vec::new(),
         exported: Vec::new(),
     }));
 }
 
 fn with_state<R>(f: impl FnOnce(&mut SnapMgrState) -> R) -> R {
-    // Guard module Drop (no-drop.md): a named-loud panic unwinding out of the
-    // closure (caught at the main-loop) must clear BUSY, or every later
-    // snapmgr call — including abort cleanup — re-panics and the backend
-    // spins forever.
+    // A panic unwinding out of the closure must clear BUSY, or every later
+    // snapmgr call — including abort cleanup — re-panics.
     #[cfg(debug_assertions)]
     struct BusyReset;
     #[cfg(debug_assertions)]
@@ -237,8 +227,6 @@ fn refill_static_locked(
     let target = match Rc::get_mut(slot) {
         Some(target) => target,
         None => {
-            // An outstanding handle aliases the static (C clobbers it);
-            // leave the holder a stale copy, refill a fresh struct.
             #[cfg(debug_assertions)]
             STATIC_REPLACED.set(STATIC_REPLACED.get() + 1);
             *slot = new_static_snapshot(mcx);
@@ -286,7 +274,6 @@ pub fn GetTransactionSnapshot() -> PgResult<Snapshot> {
                 .expect_err("elog(ERROR)"));
             }
 
-            // Xact-snapshot mode: the first snapshot must live to end of xact.
             if xact_seams::isolation_uses_xact_snapshot::call() {
                 let current = if xact_seams::isolation_is_serializable::call() {
                     refill_static_locked(s, Which::Current, |target, mcx| {
@@ -393,19 +380,13 @@ pub fn SnapshotSetCommandId(curcid: CommandId) {
         if let Some(secondary) = &s.secondary {
             s.resolve(secondary).curcid.set(curcid);
         }
-        // Should we do the same with CatalogSnapshot? (C leaves this open.)
     });
 }
 
-// Single-reserve memcpy append (lessons §9), retained capacity.
 fn copy_xids_into(dst: &mut PgVec<'static, TransactionId>, src: &[TransactionId]) {
     dst.clear();
-    dst.reserve(src.len());
-    // SAFETY: capacity reserved above; src/dst don't overlap.
-    unsafe {
-        core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
-        dst.set_len(src.len());
-    }
+    let _ = dst.try_reserve(src.len());
+    dst.extend_from_slice(src);
 }
 
 fn copy_snapshot_locked(s: &mut SnapMgrState, src: &SnapshotData<'static>) -> Snapshot {
@@ -439,7 +420,6 @@ fn copy_snapshot_locked(s: &mut SnapMgrState, src: &SnapshotData<'static>) -> Sn
     rc
 }
 
-// C FreeSnapshot: a dead copy goes back to the freelist, capacity retained.
 fn recycle_copy_locked(s: &mut SnapMgrState, snap: Snapshot) {
     debug_assert!(snap.copied);
     debug_assert_eq!(snap.active_count.get(), 0);
@@ -453,9 +433,6 @@ pub fn CopySnapshot(snapshot: &Snapshot) -> Snapshot {
     with_state(|s| copy_snapshot_locked(s, snapshot))
 }
 
-// C's SerializedSnapshotData byte image rendered thread-native: a plain Send
-// struct (Vec lengths carry xcnt/subxcnt). vistest crosses too — the handle
-// indexes process-global GlobalVis state, valid on any thread.
 #[derive(Clone, Debug)]
 pub struct SerializedSnapshot {
     pub xmin: TransactionId,
@@ -475,12 +452,18 @@ pub fn SerializeSnapshot(snapshot: &Snapshot) -> SerializedSnapshot {
     let subxip = if snapshot.suboverflowed && !snapshot.takenDuringRecovery {
         Vec::new()
     } else {
-        snapshot.subxip[..snapshot.subxcnt.max(0) as usize].to_vec()
+        let mut v = Vec::new();
+        let _ = v.try_reserve(snapshot.subxcnt.max(0) as usize);
+        v.extend_from_slice(&snapshot.subxip[..snapshot.subxcnt.max(0) as usize]);
+        v
     };
+    let mut xip = Vec::new();
+    let _ = xip.try_reserve(snapshot.xcnt as usize);
+    xip.extend_from_slice(&snapshot.xip[..snapshot.xcnt as usize]);
     SerializedSnapshot {
         xmin: snapshot.xmin,
         xmax: snapshot.xmax,
-        xip: snapshot.xip[..snapshot.xcnt as usize].to_vec(),
+        xip,
         subxip,
         suboverflowed: snapshot.suboverflowed,
         takenDuringRecovery: snapshot.takenDuringRecovery,
@@ -523,13 +506,9 @@ pub fn RestoreTransactionSnapshot(
     SetTransactionSnapshot(snapshot, SnapshotSource::Restored { source_proc })
 }
 
-// C's (sourcevxid, sourcepid, source_pgproc) trio: exactly one identification
-// of the source transaction is present per lane.
 #[derive(Clone, Copy)]
 enum SnapshotSource {
-    // ImportSnapshot: sourcevxid + sourcepid from the exported snapshot file.
     Imported { vxid: types_core::VirtualTransactionId, pid: i32 },
-    // RestoreTransactionSnapshot: the parallel leader's PGPROC.
     Restored { source_proc: ProcNumber },
 }
 
@@ -541,8 +520,7 @@ fn SetTransactionSnapshot(sourcesnap: &SerializedSnapshot, source: SnapshotSourc
         debug_assert!(s.first_xact_snapshot.is_none());
         debug_assert!(s.historic.is_none());
 
-        // GetSnapshotData still runs: it sizes the xip arrays and updates the
-        // GlobalVis state, exactly why C calls it before overwriting fields.
+        // GetSnapshotData sizes the xip arrays and updates the GlobalVis state.
         let current = refill_static_locked(s, Which::Current, |target, mcx| {
             procarray::GetSnapshotData(target, mcx)?;
             debug_assert!(sourcesnap.xip.len() <= procarray::GetMaxSnapshotXidCount());
@@ -624,7 +602,6 @@ pub fn PushActiveSnapshotWithLevel(snapshot: &Snapshot, snap_level: i32) -> PgRe
             .last()
             .map(|top| snap_level >= top.as_level)
             .unwrap_or(true));
-        // Checking SecondarySnapshot is probably useless here, but be sure.
         let needs_copy = s.is_ref_to(s.current.as_ref(), snapshot)
             || s.is_ref_to(s.secondary.as_ref(), snapshot)
             || !snapshot.copied;
@@ -766,16 +743,13 @@ pub fn UnregisterSnapshotNoOwner(snapshot: &Snapshot) {
 }
 
 fn registered_remove(s: &mut SnapMgrState, snap: &Snapshot) {
-    if let Some(pos) = s.registered.iter().position(|h| Rc::ptr_eq(h, snap)) {
-        s.registered.swap_remove(pos);
-    }
+    s.registered.remove(snap);
 }
 
 pub fn SnapshotResetXmin() {
     with_state(snapshot_reset_xmin_locked);
 }
 
-// Runs under the state borrow; the proc-xmin write can't re-enter snapmgr.
 fn snapshot_reset_xmin_locked(s: &mut SnapMgrState) {
     if !s.active.is_empty() {
         return;
@@ -787,12 +761,7 @@ fn snapshot_reset_xmin_locked(s: &mut SnapMgrState) {
         return;
     }
 
-    let mut min_xmin = s.registered[0].xmin;
-    for h in &s.registered[1..] {
-        if TransactionIdPrecedes(h.xmin, min_xmin) {
-            min_xmin = h.xmin;
-        }
-    }
+    let min_xmin = s.registered.min_xmin().expect("non-empty");
 
     if TransactionIdPrecedes(my_proc_xmin(), min_xmin) {
         set_my_proc_xmin(min_xmin);
@@ -828,19 +797,36 @@ pub fn AtSubAbort_Snapshot(level: i32) -> PgResult<()> {
 
 pub fn AtEOXact_Snapshot(is_commit: bool, reset_xmin: bool) -> PgResult<()> {
     let (leftover_registered, leftover_active) = with_state(|s| {
+        // D4485: snapmgr.c:1014 does work only for a FirstXactSnapshot (snapmgr.c:1025), exported snapshots
+        // (snapmgr.c:1036), a valid catalog snapshot (InvalidateCatalogSnapshot, snapmgr.c:1067) and, at commit,
+        // leftover registered / active snapshots to warn about (snapmgr.c:1070-1080); with none of them what is left is
+        // the resets of snapmgr.c:1086-1092. The retained-array decay below is pgrust's and runs either way. A debug
+        // build takes the full path and asserts it found nothing.
+        let quiet = s.first_xact_snapshot.is_none()
+            && s.exported.is_empty()
+            && !s.catalog_valid
+            && s.active.is_empty()
+            && s.registered.is_empty();
+        if quiet && !cfg!(debug_assertions) {
+            s.current = None;
+            s.secondary = None;
+            s.first_snapshot_set = false;
+            decay_snapshot_arrays_locked(s);
+            return (false, Vec::new());
+        }
         if let Some(first_xact) = s.first_xact_snapshot.take() {
             debug_assert!(first_xact.regd_count.get() > 0);
             debug_assert!(!s.registered.is_empty());
             registered_remove(s, &first_xact);
         }
         for esnap in core::mem::take(&mut s.exported) {
-            // fd-routed (the P4 inc-4/inc-5 dataplane reroute): the export
-            // file is DATADIR-RELATIVE and must unlink in the server's world
-            // (boot cwd under --cfg pgrust_sim), not the ambient process cwd.
+            // The export file is DATADIR-RELATIVE and must unlink in the
+            // server's world (boot cwd under --cfg pgrust_sim), not the
+            // ambient process cwd.
             if fd::pg_unlink(&esnap.snapfile) < 0 {
                 let _ = ereport(types_error::WARNING)
                     .with_saved_errno(fd::get_errno())
-                    .errmsg(format!("could not unlink file \"{}\": %m", esnap.snapfile))
+                    .errmsg(format!("could not unlink file \"{}\": {PCT_M}", esnap.snapfile))
                     .finish(loc("AtEOXact_Snapshot"));
             }
             registered_remove(s, &esnap.snapshot);
@@ -853,9 +839,6 @@ pub fn AtEOXact_Snapshot(is_commit: bool, reset_xmin: bool) -> PgResult<()> {
         }
 
         let leftover_registered = is_commit && !s.registered.is_empty();
-        // snapmgr.c:1078-1079: C prints each unpopped ActiveSnapshotElt's
-        // address (%p); the element addresses are taken before the stack is
-        // reset, exactly where C walks it.
         let leftover_active: Vec<usize> = if is_commit {
             s.active.iter().map(|elt| elt as *const ActiveSnapshotElt as usize).collect()
         } else {
@@ -870,6 +853,10 @@ pub fn AtEOXact_Snapshot(is_commit: bool, reset_xmin: bool) -> PgResult<()> {
 
         decay_snapshot_arrays_locked(s);
 
+        debug_assert!(
+            !quiet || (!leftover_registered && leftover_active.is_empty()),
+            "D4485: AtEOXact_Snapshot's quiet path skipped work"
+        );
         (leftover_registered, leftover_active)
     });
 
@@ -879,8 +866,6 @@ pub fn AtEOXact_Snapshot(is_commit: bool, reset_xmin: bool) -> PgResult<()> {
             .finish(loc("AtEOXact_Snapshot"))?;
     }
     for active in leftover_active {
-        // elog(WARNING, "snapshot %p still active", active) — glibc's %p is
-        // "0x" + lowercase hex, which is Rust's {:#x} of the address.
         ereport(WARNING)
             .errmsg_internal(format!("snapshot {active:#x} still active"))
             .finish(loc("AtEOXact_Snapshot"))?;
@@ -894,11 +879,9 @@ pub fn AtEOXact_Snapshot(is_commit: bool, reset_xmin: bool) -> PgResult<()> {
     Ok(())
 }
 
-// D3.5 decay (docs/design/connection-scaling.md): GetSnapshotData demand-sizes
-// the xip/subxip arrays, so without decay one concurrency spike would inflate
-// every backend's static snapshots forever. At each transaction end, shrink
-// retained capacity toward procarray's recent demand high-water, with 2x
-// hysteresis so steady-state workloads never touch the allocator.
+// At each transaction end, shrink retained capacity toward procarray's recent
+// demand high-water, with 2x hysteresis so steady-state workloads never touch
+// the allocator.
 fn decay_snapshot_arrays_locked(s: &mut SnapMgrState) {
     let (xip_target, subxip_target) = procarray::SnapshotArrayDecayTargets();
     for slot in [
@@ -906,14 +889,11 @@ fn decay_snapshot_arrays_locked(s: &mut SnapMgrState) {
         &mut s.secondary_data,
         &mut s.catalog_data,
     ] {
-        // A still-aliased static (outstanding handle) is skipped this round.
         if let Some(snap) = Rc::get_mut(slot) {
             shrink_retained(&mut snap.xip, xip_target);
             shrink_retained(&mut snap.subxip, subxip_target);
         }
     }
-    // Copies right-size at copy time, but the freelist retains spike-era
-    // capacity; drop oversized entries (C's FreeSnapshot pfrees outright).
     s.copy_freelist.retain(|c| {
         c.xip.capacity() <= xip_target.saturating_mul(2)
             && c.subxip.capacity() <= subxip_target.saturating_mul(2)
@@ -945,8 +925,6 @@ fn export_file_err(errno: i32, msg: String) -> Box<types_error::PgError> {
         .into()
 }
 
-// ExportSnapshot (snapmgr.c): serialize into pg_snapshots/ and pin a copy
-// for the rest of the transaction; format! rides a per-statement admin path.
 pub fn ExportSnapshot(snapshot: &Snapshot) -> PgResult<String> {
     let top_xid = xact_seams::get_top_transaction_id_if_any::call();
 
@@ -1015,19 +993,14 @@ pub fn ExportSnapshot(snapshot: &Snapshot) -> PgResult<String> {
     }
     let _ = writeln!(w, "rec:{}", snapshot.takenDuringRecovery as u32);
 
-    // fd-routed (the P4 inc-4/inc-5 dataplane reroute): pg_snapshots/ is
-    // DATADIR-RELATIVE — the write must land in the server's world (boot cwd
-    // under --cfg pgrust_sim), not the ambient process cwd. C parity is
-    // snapmgr.c ExportSnapshot's AllocateFile+fwrite+FreeFile+rename tail
-    // (same messages, same "no fsync — the file need not survive a crash");
-    // the choke here is the OpenTransientFile family, the relcache-initfile
-    // reroute precedent.
+    // pg_snapshots/ is DATADIR-RELATIVE — the write must land in the server's
+    // world (boot cwd under --cfg pgrust_sim), not the ambient process cwd.
     let pathtmp = format!("{path}.tmp");
     let tmpfd = fd::OpenTransientFile(&pathtmp, libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY)?;
     if tmpfd < 0 {
         return Err(export_file_err(
             fd::get_errno(),
-            format!("could not create file \"{pathtmp}\": %m"),
+            format!("could not create file \"{pathtmp}\": {PCT_M}"),
         ));
     }
     let bytes = buf.as_bytes();
@@ -1039,7 +1012,7 @@ pub fn ExportSnapshot(snapshot: &Snapshot) -> PgResult<String> {
             fd::CloseTransientFile(tmpfd);
             return Err(export_file_err(
                 errno,
-                format!("could not write to file \"{pathtmp}\": %m"),
+                format!("could not write to file \"{pathtmp}\": {PCT_M}"),
             ));
         }
         off += n as usize;
@@ -1047,28 +1020,19 @@ pub fn ExportSnapshot(snapshot: &Snapshot) -> PgResult<String> {
     if fd::CloseTransientFile(tmpfd) != 0 {
         return Err(export_file_err(
             fd::get_errno(),
-            format!("could not write to file \"{pathtmp}\": %m"),
+            format!("could not write to file \"{pathtmp}\": {PCT_M}"),
         ));
     }
     if fd::pg_rename(&pathtmp, &path) < 0 {
         return Err(export_file_err(
             fd::get_errno(),
-            format!("could not rename file \"{pathtmp}\" to \"{path}\": %m"),
+            format!("could not rename file \"{pathtmp}\" to \"{path}\": {PCT_M}"),
         ));
     }
 
     Ok(path[SNAPSHOT_EXPORT_DIR.len() + 1..].to_string())
 }
 
-// Startup-time cleanup of crashed backends' export files; failures stay LOG.
-//
-// fd-routed over the vfs data plane (the provider-seam/relmapper
-// dataplane-class fix, found by the P4 inc-4 real-initdb cut sweep): the
-// export dir is DATADIR-RELATIVE and must resolve in the server's world
-// (the boot cwd under --cfg pgrust_sim), not the ambient process cwd — the
-// raw std::fs walk made this crash-boot cleanup silently target the wrong
-// world under sim. C parity: AllocateDir + ReadDirExtended(LOG) + unlink,
-// all failures LOG-level (snapmgr.c DeleteAllExportedSnapshotFiles).
 pub fn DeleteAllExportedSnapshotFiles() {
     let s_dir = match fd::AllocateDir(SNAPSHOT_EXPORT_DIR) {
         Ok(d) => d,
@@ -1078,13 +1042,11 @@ pub fn DeleteAllExportedSnapshotFiles() {
         match fd::ReadDirExtended(s_dir, SNAPSHOT_EXPORT_DIR, types_error::LOG) {
             Ok(Some(de)) => {
                 let buf = format!("{SNAPSHOT_EXPORT_DIR}/{}", de.d_name);
-                // snapmgr.c:1606-1609: ereport(LOG, (errcode_for_file_access(),
-                // errmsg("could not remove file \"%s\": %m", buf))).
                 if fd::pg_unlink(&buf) < 0 {
                     let _ = ereport(types_error::LOG)
                         .with_saved_errno(fd::get_errno())
                         .errcode_for_file_access()
-                        .errmsg(format!("could not remove file \"{buf}\": %m"))
+                        .errmsg(format!("could not remove file \"{buf}\": {PCT_M}"))
                         .finish(loc("DeleteAllExportedSnapshotFiles"));
                 }
             }
@@ -1094,13 +1056,8 @@ pub fn DeleteAllExportedSnapshotFiles() {
     let _ = fd::FreeDir(s_dir);
 }
 
-// SNAPSHOT_EXPORT_DIR (snapmgr.c), relative to the data directory (the
-// backend's cwd, as in C).
 const SNAPSHOT_EXPORT_DIR: &str = "pg_snapshots";
 
-// ImportSnapshot (snapmgr.c:1385). Export files are written by
-// ExportSnapshot above, so the whole path is live: C's precondition/
-// identifier/missing-file errors and the parse+install tail.
 pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
     if FirstSnapshotSet()
         || xact_seams::get_top_transaction_id_if_any::call() != InvalidTransactionId
@@ -1131,17 +1088,10 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
             .errcode(types_error::ERRCODE_INVALID_PARAMETER_VALUE)
             .errmsg(format!("invalid snapshot identifier: \"{idstr}\""))
             .into_error()
-            .with_error_location(loc("ImportSnapshot"))
+            .with_location("snapmgr.c", 1429, "ImportSnapshot")
             .into());
     }
 
-    // fd-routed (the P4 inc-5 dataplane reroute, closing the inc-4 ledger's
-    // "ImportSnapshot read surface" rows): pg_snapshots/ is DATADIR-RELATIVE
-    // and must resolve in the server's world (boot cwd under
-    // --cfg pgrust_sim), not the ambient process cwd. C parity: snapmgr.c
-    // ImportSnapshot's AllocateFile probe — errno != ENOENT complains about
-    // the open, ENOENT means the snapshot identifier names nothing.
-    // snprintf(path, MAXPGPATH, ...): the pathname is cut at MAXPGPATH-1 bytes.
     let mut path = format!("{SNAPSHOT_EXPORT_DIR}/{idstr}");
     path.truncate(MAXPGPATH - 1);
     let snapfd = fd::OpenTransientFile(&path, libc::O_RDONLY)?;
@@ -1151,7 +1101,7 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
             return Err(ereport(ERROR)
                 .with_saved_errno(errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\" for reading: %m"))
+                .errmsg(format!("could not open file \"{path}\" for reading: {PCT_M}"))
                 .into_error()
                 .with_error_location(loc("ImportSnapshot"))
                 .into());
@@ -1163,7 +1113,6 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
             .with_error_location(loc("ImportSnapshot"))
             .into());
     }
-    // Read the whole file, then parse ExportSnapshot's line format.
     let mut filebuf = Vec::new();
     let mut off: i64 = 0;
     loop {
@@ -1171,11 +1120,9 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
         let n = fd::pg_pread(snapfd, &mut chunk, off);
         if n < 0 {
             fd::CloseTransientFile(snapfd);
-            // snapmgr.c:1459: elog(ERROR, "could not read file \"%s\": %m",
-            // path) — an elog, so SQLSTATE XX000 (no errcode_for_file_access).
             return Err(ereport(ERROR)
                 .with_saved_errno(fd::get_errno())
-                .errmsg(format!("could not read file \"{path}\": %m"))
+                .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                 .into_error()
                 .with_error_location(loc("ImportSnapshot"))
                 .into());
@@ -1198,7 +1145,6 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
     };
     let text = core::str::from_utf8(&filebuf).map_err(|_| invalid())?;
     let mut lines = text.lines();
-    // parse{Int,Xid,Vxid}FromText: each field is mandatory and ordered.
     let mut field = |prefix: &str| -> PgResult<&str> {
         let line = lines.next().ok_or_else(invalid)?;
         line.strip_prefix(prefix).ok_or_else(|| invalid().into())
@@ -1207,7 +1153,6 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
     let vxid_raw = field("vxid:")?;
     let (src_procno_s, src_lxid_s) = vxid_raw.split_once('/').ok_or_else(invalid)?;
     let src_procno: i32 = src_procno_s.parse().map_err(|_| invalid())?;
-    // LocalTransactionId is uint32 (C parses the vxid with "%d/%u").
     let src_lxid: u32 = src_lxid_s.parse().map_err(|_| invalid())?;
     let src_pid: i64 = field("pid:")?.parse().map_err(|_| invalid())?;
     let src_dbid: types_core::Oid = field("dbid:")?.parse().map_err(|_| invalid())?;
@@ -1220,7 +1165,7 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
     if xcnt > procarray::GetMaxSnapshotXidCount() {
         return Err(invalid());
     }
-    let mut xip = Vec::with_capacity(xcnt);
+    let mut xip = ::mcx::std_vec_with_capacity("ImportSnapshot", xcnt)?;
     for _ in 0..xcnt {
         xip.push(field("xip:")?.parse().map_err(|_| invalid())?);
     }
@@ -1231,14 +1176,13 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
         if sxcnt > procarray::GetMaxSnapshotSubxidCount() {
             return Err(invalid());
         }
-        subxip.reserve(sxcnt);
+        ::mcx::std_vec_reserve("ImportSnapshot", &mut subxip, sxcnt)?;
         for _ in 0..sxcnt {
             subxip.push(field("sxp:")?.parse().map_err(|_| invalid())?);
         }
     }
     let taken_during_recovery = field("rec:")?.parse::<i32>().map_err(|_| invalid())? != 0;
 
-    // Sanity checks on the critical fields (snapmgr.c:1487).
     if src_lxid == 0
         || src_procno < 0
         || src_dbid == types_core::InvalidOid
@@ -1248,8 +1192,6 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
         return Err(invalid());
     }
 
-    // A serializable importer needs a serializable read-compatible source
-    // (predicate.c constraints, snapmgr.c:1497).
     if xact_seams::isolation_is_serializable::call() {
         if src_isolevel != types_core::xact::XACT_SERIALIZABLE {
             return Err(ereport(ERROR)
@@ -1269,8 +1211,6 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
         }
     }
 
-    // Cross-database imports would not be protected by the source's xmin
-    // (snapmgr.c:1512).
     if src_dbid != init_small::globals::MyDatabaseId() {
         return Err(ereport(ERROR)
             .errcode(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
@@ -1319,8 +1259,6 @@ pub fn HaveRegisteredOrActiveSnapshot() -> bool {
     })
 }
 
-// The tuplecid hash is reorderbuffer's (relfilelocator, ctid) -> (cmin, cmax)
-// map; snapmgr stores it opaquely, exactly like C's HTAB *tuplecid_data.
 pub type HistoricTupleCids = std::rc::Rc<dyn std::any::Any>;
 
 pub fn SetupHistoricSnapshot(historic_snapshot: Snapshot, tuplecids: Option<HistoricTupleCids>) {
@@ -1346,10 +1284,6 @@ pub fn HistoricSnapshotGetTupleCids() -> Option<HistoricTupleCids> {
 }
 
 // Callers check TransactionIdIsCurrentTransactionId first, as in C.
-// inline(always): per-tuple hot inside HeapTupleSatisfiesMVCC; the xmin/xmax
-// range exits must fold into the visibility gate (plain #[inline] is refused;
-// the call + by-memory PgResult return cost ~8 insns/tuple — see
-// docs/benchmarks/heapam_visibility.md).
 #[inline(always)]
 pub fn XidInMVCCSnapshot(xid: TransactionId, snapshot: &SnapshotData<'_>) -> PgResult<bool> {
     let mut xid = xid;
@@ -1391,7 +1325,7 @@ pub fn XidInMVCCSnapshot(xid: TransactionId, snapshot: &SnapshotData<'_>) -> PgR
 }
 
 pub fn init_seams() {
-    // D3.2: decoding-time catalog reads must never enter the shared L2 cache.
+    // Decoding-time catalog reads must never enter the shared L2 cache.
     l2cache::set_historic_snapshot_probe(HistoricSnapshotActive);
     snapmgr_seams::invalidate_catalog_snapshot::set(InvalidateCatalogSnapshot);
     snapmgr_seams::snapshot_set_command_id::set(SnapshotSetCommandId);
@@ -1415,6 +1349,7 @@ pub fn init_seams() {
     });
     snapmgr_portal_seams::active_snapshot_set::set(ActiveSnapshotSet);
     snapmgr_portal_seams::pop_active_snapshot::set(PopActiveSnapshot);
+    snapmgr_portal_seams::have_registered_or_active_snapshot::set(HaveRegisteredOrActiveSnapshot);
     snapmgr_seams::get_latest_snapshot::set(GetLatestSnapshot);
     snapmgr_seams::import_snapshot::set(ImportSnapshot);
 }

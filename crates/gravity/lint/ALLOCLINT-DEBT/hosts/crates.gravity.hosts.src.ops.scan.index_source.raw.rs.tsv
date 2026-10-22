@@ -1,0 +1,4 @@
+path	crates/gravity/hosts/src/ops/scan/index_source/raw.rs
+growth	std::vec::Vec::extend_from_slice	1
+ir-only	<alloc::sync::Arc<[T]> as core::convert::From<&[T]>>::from	1
+method	slice::to_vec	2

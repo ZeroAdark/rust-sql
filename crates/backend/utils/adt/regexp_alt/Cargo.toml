@@ -6,7 +6,9 @@ publish.workspace = true
 
 [dependencies]
 memchr = { version = "2", default-features = false }
+gravity_dict = { path = "../../../../gravity/dict" }
 mcx = { path = "../../../../_support/mcx" }
+stringinfo = { path = "../../../../_support/types/stringinfo" }
 types_error = { path = "../../../../_support/types/types_error" }
 regex_spencer = { path = "../../../../_support/types/regex", package = "regex" }
 guc_tables = { path = "../../misc/guc_tables" }

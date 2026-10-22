@@ -1,0 +1,60 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3e s1u s1q s1d s1o s2d s1c s2c s3s
+step s3e: EXPLAIN (COSTS OFF) DELETE FROM ant_c c WHERE NOT EXISTS (SELECT 1 FROM ant_o o WHERE o.cid = c.id) AND c.id > 385 AND c.tier < 5;
+QUERY PLAN                                       
+-------------------------------------------------
+Delete on ant_c c                                
+  ->  Nested Loop Anti Join                      
+        ->  Bitmap Heap Scan on ant_c c          
+              Recheck Cond: (id > 385)           
+              Filter: (tier < 5)                 
+              ->  Bitmap Index Scan on ant_c_pkey
+                    Index Cond: (id > 385)       
+        ->  Index Scan using ant_o_cid on ant_o o
+              Index Cond: (cid = c.id)           
+(9 rows)
+
+step s1u: UPDATE ant_c SET note = note || '*' WHERE id IN (391, 392);
+step s1q: UPDATE ant_c SET tier = 9 WHERE id = 393;
+step s1d: DELETE FROM ant_c WHERE id = 394;
+step s1o: INSERT INTO ant_o VALUES (1000, 395); UPDATE ant_c SET note = note || '+' WHERE id = 395;
+step s2d: DELETE FROM ant_c c WHERE NOT EXISTS (SELECT 1 FROM ant_o o WHERE o.cid = c.id) AND c.id > 385 AND c.tier < 5; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3s: SELECT id, tier, note FROM ant_c WHERE id > 385 ORDER BY id;
+ id|tier|note
+---+----+----
+393|   9|c393
+(1 row)
+
+
+starting permutation: s1u s1q s1d s1o s2u s1c s2c s3s
+step s1u: UPDATE ant_c SET note = note || '*' WHERE id IN (391, 392);
+step s1q: UPDATE ant_c SET tier = 9 WHERE id = 393;
+step s1d: DELETE FROM ant_c WHERE id = 394;
+step s1o: INSERT INTO ant_o VALUES (1000, 395); UPDATE ant_c SET note = note || '+' WHERE id = 395;
+step s2u: UPDATE ant_c c SET note = note || '#' WHERE NOT EXISTS (SELECT 1 FROM ant_o o WHERE o.cid = c.id) AND c.id > 385 AND c.tier < 5; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3s: SELECT id, tier, note FROM ant_c WHERE id > 385 ORDER BY id;
+ id|tier|note  
+---+----+------
+386|   2|c386# 
+387|   0|c387# 
+388|   1|c388# 
+389|   2|c389# 
+390|   0|c390# 
+391|   1|c391*#
+392|   2|c392*#
+393|   9|c393  
+395|   2|c395+#
+396|   0|c396# 
+397|   1|c397# 
+398|   2|c398# 
+399|   0|c399# 
+400|   1|c400# 
+(14 rows)
+

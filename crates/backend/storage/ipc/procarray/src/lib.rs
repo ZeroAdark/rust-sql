@@ -17,8 +17,9 @@ use types_core::{
 use types_error::{PgError, PgResult, ERRCODE_TOO_MANY_CONNECTIONS, FATAL};
 use types_snapshot::SnapshotData;
 use types_storage::storage::{
-    SyncCell, NUM_AUXILIARY_PROCS, PGPROC, PGPROC_MAX_CACHED_SUBXIDS,
+    SyncCell, PGPROC, PGPROC_MAX_CACHED_SUBXIDS,
     PROC_AFFECTS_ALL_HORIZONS, PROC_IN_LOGICAL_DECODING, PROC_IN_VACUUM, PROC_IS_AUTOVACUUM,
+    PROC_IS_DB_MAINT_WORKER,
     PROC_VACUUM_FOR_WRAPAROUND, PROC_VACUUM_STATE_MASK, PROC_XMIN_FLAGS,
 };
 
@@ -213,6 +214,11 @@ pub fn ProcSetStatusFlagAffectsAllHorizons() -> PgResult<()> {
 pub fn ProcSetStatusFlagInVacuum(is_wraparound: bool) -> PgResult<()> {
     let my_procno = MyProc().expect("ProcSetStatusFlagInVacuum without MyProc");
     let me = GetPGProcByNumber(my_procno);
+    debug_assert!(
+        !TransactionIdIsValid(me.xmin.read()),
+        "PROC_IN_VACUUM set after this backend's xmin {} became visible",
+        me.xmin.read()
+    );
 
     LWLockAcquire(ProcArrayLock(), LW_EXCLUSIVE, my_procno)?;
     let mut flags = me.statusFlags.load(Relaxed) | PROC_IN_VACUUM;
@@ -225,6 +231,26 @@ pub fn ProcSetStatusFlagInVacuum(is_wraparound: bool) -> PgResult<()> {
     Ok(())
 }
 
+pub fn ProcSetStatusFlagVacuumForWraparound() -> PgResult<()> {
+    let my_procno = MyProc().expect("ProcSetStatusFlagVacuumForWraparound without MyProc");
+    let me = GetPGProcByNumber(my_procno);
+
+    LWLockAcquire(ProcArrayLock(), LW_EXCLUSIVE, my_procno)?;
+    let flags = me.statusFlags.load(Relaxed) | PROC_VACUUM_FOR_WRAPAROUND;
+    me.statusFlags.store(flags, Relaxed);
+    ProcGlobal().statusFlags[me.pgxactoff.load(Relaxed) as usize].store(flags, Relaxed);
+    LWLockRelease(ProcArrayLock())?;
+    Ok(())
+}
+
+/// Such a transaction must do no regular catalog update. Our own flags: no lock needed.
+pub fn MyProcIsInLazyVacuum() -> bool {
+    match MyProc() {
+        Some(n) => GetPGProcByNumber(n).statusFlags.load(Relaxed) & PROC_IN_VACUUM != 0,
+        None => false,
+    }
+}
+
 /// StartupDecodingContext's walsender arm (logical.c:199): outside a
 /// transaction, announce this backend as a logical-decoding one — its xmin is
 /// enforced via the replication slot, so horizon computation may skip it.
@@ -234,6 +260,19 @@ pub fn ProcSetStatusFlagInLogicalDecoding() -> PgResult<()> {
 
     LWLockAcquire(ProcArrayLock(), LW_EXCLUSIVE, my_procno)?;
     let flags = me.statusFlags.load(Relaxed) | PROC_IN_LOGICAL_DECODING;
+    me.statusFlags.store(flags, Relaxed);
+    ProcGlobal().statusFlags[me.pgxactoff.load(Relaxed) as usize].store(flags, Relaxed);
+    LWLockRelease(ProcArrayLock())?;
+    Ok(())
+}
+
+/// Call once connected to the database; the flag stays until the PGPROC is reinitialized.
+pub fn ProcSetStatusFlagDbMaintWorker() -> PgResult<()> {
+    let my_procno = MyProc().expect("ProcSetStatusFlagDbMaintWorker without MyProc");
+    let me = GetPGProcByNumber(my_procno);
+
+    LWLockAcquire(ProcArrayLock(), LW_EXCLUSIVE, my_procno)?;
+    let flags = me.statusFlags.load(Relaxed) | PROC_IS_DB_MAINT_WORKER;
     me.statusFlags.store(flags, Relaxed);
     ProcGlobal().statusFlags[me.pgxactoff.load(Relaxed) as usize].store(flags, Relaxed);
     LWLockRelease(ProcArrayLock())?;
@@ -467,7 +506,7 @@ fn boot_shmem<T>(what: &str, r: PgResult<T>) -> T {
 pub fn ProcArrayShmemInit() {
     let all_procs = ProcGlobal().allProcs.len();
     // PROCARRAY_MAXPROCS: auxiliary slots never join the array.
-    let max_procs = all_procs - NUM_AUXILIARY_PROCS as usize;
+    let max_procs = all_procs - ::init_small::globals::NumAuxiliaryProcs() as usize;
     let max_kax = TOTAL_MAX_CACHED_SUBXIDS(max_procs);
 
     let size = boot_shmem(
@@ -553,7 +592,7 @@ pub fn ProcArrayShmemResetAfterCrash() {
     let array = procArray();
     assert_eq!(
         array.maxProcs as usize,
-        ProcGlobal().allProcs.len() - NUM_AUXILIARY_PROCS as usize
+        ProcGlobal().allProcs.len() - ::init_small::globals::NumAuxiliaryProcs() as usize
     );
     // SAFETY: [PAL] serialized by ProcArrayLock
     unsafe { array.numProcs.set(0) };
@@ -816,23 +855,29 @@ pub fn BackendPidGetProc(pid: i32) -> Option<&'static PGPROC> {
     if pid == 0 {
         return None; // never match dummy PGPROCs
     }
-    let arrayP = procArray();
-    let hdr = ProcGlobal();
     let myprocno = MyProc().expect("BackendPidGetProc requires MyProc");
-
     LWLockAcquire(ProcArrayLock(), LW_SHARED, myprocno).expect("ProcArrayLock");
-    let mut result = None;
-    // SAFETY: [PAL] serialized by ProcArrayLock
-    for index in 0..unsafe { arrayP.numProcs.get() } as usize {
-        // SAFETY: [PAL] serialized by ProcArrayLock
-        let proc = &hdr.allProcs[unsafe { arrayP.pgprocnos[index].get() } as usize];
-        if proc.pid.load(Relaxed) == pid {
-            result = Some(proc);
-            break;
-        }
-    }
+    let result = BackendPidGetProcWithLock(pid);
     LWLockRelease(ProcArrayLock()).expect("ProcArrayLock release");
     result
+}
+
+// Caller holds ProcArrayLock until it finishes using the returned process.
+pub fn BackendPidGetProcWithLock(pid: i32) -> Option<&'static PGPROC> {
+    if pid == 0 {
+        return None;
+    }
+    let arrayP = procArray();
+    let hdr = ProcGlobal();
+    // SAFETY: caller holds ProcArrayLock.
+    for index in 0..unsafe { arrayP.numProcs.get() } as usize {
+        // SAFETY: caller holds ProcArrayLock.
+        let proc = &hdr.allProcs[unsafe { arrayP.pgprocnos[index].get() } as usize];
+        if proc.pid.load(Relaxed) == pid {
+            return Some(proc);
+        }
+    }
+    None
 }
 
 // BackendXidGetPid (procarray.c): the pid of the backend whose current xid
@@ -1330,7 +1375,7 @@ pub fn GetSnapshotData<'m>(snapshot: &mut SnapshotData<'m>, mcx: Mcx<'m>) -> PgR
     LWLockAcquire(pa_lock, LW_SHARED, myprocno)?;
 
     let latest_completed = FullTransactionId::from_u64(tv.latestCompletedXid.load(Relaxed));
-    // Our own slot only when it is ours, as in TransactionIdIsInProgress (pgrc2 P8): a caller whose PGPROC is not in
+    // Our own slot only when it is ours, as in TransactionIdIsInProgress (pgrc P8): a caller whose PGPROC is not in
     // the array (a pool thread) holds offset 0 or a stale one, and must neither take that slot's xid as its own nor
     // leave it out of xip (a running transaction read as finished: its rows visible once it commits).
     // SAFETY: [PAL] serialized by ProcArrayLock
@@ -1631,11 +1676,13 @@ fn transaction_id_is_in_progress_scan(xid: TransactionId) -> PgResult<bool> {
         let mut xids = cell.borrow_mut();
         xids.clear();
         if xids.capacity() == 0 {
-            xids.reserve_exact(if recovery {
+            // procarray.c: malloc'd once per backend; NULL is ERROR 53200.
+            xids.try_reserve_exact(if recovery {
                 GetMaxSnapshotSubxidCount()
             } else {
                 arrayP.maxProcs as usize
-            });
+            })
+            .map_err(|_| ::mcx::oom_malloc())?;
         }
 
         LWLockAcquire(ProcArrayLock(), LW_SHARED, myprocno)?;
@@ -1646,7 +1693,7 @@ fn transaction_id_is_in_progress_scan(xid: TransactionId) -> PgResult<bool> {
         // exclusive lock) MOVES entries, so a pre-lock sample can alias
         // ANOTHER backend's current slot — the self-skip below then skips a
         // RUNNING transaction and the scan answers a false not-in-progress
-        // (found under regression's connection-churn hot-row repro:
+        // (found under GL-ELR-XIDWAIT's connection-churn hot-row repro:
         // the wrong answer resurrected updated versions via the
         // xmax-aborted visibility arms and forked the version chain; the
         // stale answer was then pinned by CACHED_XID_NOT_IN_PROGRESS).
@@ -1662,10 +1709,6 @@ fn transaction_id_is_in_progress_scan(xid: TransactionId) -> PgResult<bool> {
 
         // SAFETY: [PAL] serialized by ProcArrayLock
         let num_procs = unsafe { arrayP.numProcs.get() } as usize;
-        // Skip our own slot only when it is ours. A caller whose PGPROC is not in the array (a pool thread's
-        // identity: InitProcess without ProcArrayAdd) holds offset 0 from InitProcGlobal, or a stale one, and C's
-        // bare compare would skip whoever sits there: after a restart that is a recovered prepared transaction's
-        // dummy proc, answered not-in-progress (pgrc2 P8: the start-time columnar load dropped its generation).
         // SAFETY: [PAL] serialized by ProcArrayLock
         let mypgxactoff = match usize::try_from(mypgxactoff) {
             Ok(off) if off < num_procs && unsafe { arrayP.pgprocnos[off].get() } == myprocno => mypgxactoff,
@@ -2058,15 +2101,20 @@ pub fn GetOldestTransactionIdConsideredRunning() -> PgResult<TransactionId> {
 /// holding `delay_type` delay flags. The checkpointer snapshots this once
 /// and then waits only for these (xlog.c CreateCheckPoint), so transactions
 /// that start delaying later never hold up the running checkpoint.
-pub fn GetVirtualXIDsDelayingChkpt(delay_type: i32) -> Vec<types_core::VirtualTransactionId> {
+pub fn GetVirtualXIDsDelayingChkpt(
+    delay_type: i32,
+) -> PgResult<Vec<types_core::VirtualTransactionId>> {
     debug_assert!(delay_type != 0);
     let arrayP = procArray();
     let hdr = ProcGlobal();
     let my_procno = MyProc().expect("no MyProc");
-    let mut vxids = Vec::with_capacity(arrayP.maxProcs as usize);
+    // procarray.c: palloc(sizeof(VirtualTransactionId) * maxProcs).
+    let mut vxids: Vec<types_core::VirtualTransactionId> = Vec::new();
+    vxids
+        .try_reserve_exact(arrayP.maxProcs as usize)
+        .map_err(|_| ::mcx::oom_named("GetVirtualXIDsDelayingChkpt", arrayP.maxProcs as usize * 8))?;
 
-    LWLockAcquire(ProcArrayLock(), LW_SHARED, my_procno)
-        .expect("ProcArrayLock for GetVirtualXIDsDelayingChkpt");
+    LWLockAcquire(ProcArrayLock(), LW_SHARED, my_procno)?;
     // SAFETY: [PAL] serialized by ProcArrayLock
     for index in 0..unsafe { arrayP.numProcs.get() } as usize {
         // SAFETY: [PAL] serialized by ProcArrayLock
@@ -2082,8 +2130,8 @@ pub fn GetVirtualXIDsDelayingChkpt(delay_type: i32) -> Vec<types_core::VirtualTr
             }
         }
     }
-    let _ = LWLockRelease(ProcArrayLock());
-    vxids
+    LWLockRelease(ProcArrayLock())?;
+    Ok(vxids)
 }
 
 /// HaveVirtualXIDsDelayingChkpt (procarray.c:3084): are any of the
@@ -2332,7 +2380,7 @@ pub fn CountOtherDBBackends(databaseid: types_core::Oid) -> PgResult<Option<(i32
                 nprepared += 1;
             } else {
                 nbackends += 1;
-                if status_flags & PROC_IS_AUTOVACUUM != 0 && nautovacs < MAXAUTOVACPIDS {
+                if status_flags & (PROC_IS_AUTOVACUUM | PROC_IS_DB_MAINT_WORKER) != 0 && nautovacs < MAXAUTOVACPIDS {
                     autovac_pids[nautovacs] = pid;
                     nautovacs += 1;
                 }
@@ -2464,6 +2512,7 @@ pub fn TerminateOtherDBBackends(databaseId: types_core::Oid) -> PgResult<()> {
 }
 
 pub fn init_seams() {
+    procarray_seams::backend_pid_get_proc_with_lock::set(BackendPidGetProcWithLock);
     procarray_seams::proc_array_add::set(ProcArrayAdd);
     procarray_seams::proc_array_remove::set(ProcArrayRemove);
     procarray_seams::proc_array_clear_transaction::set(ProcArrayClearTransaction);
@@ -2547,7 +2596,10 @@ pub fn GetConflictingVirtualXIDs(
 ) -> PgResult<Vec<types_core::VirtualTransactionId>> {
     let arrayP = procArray();
     let hdr = ProcGlobal();
-    let mut vxids = Vec::with_capacity(arrayP.maxProcs as usize);
+    let mut vxids: Vec<types_core::VirtualTransactionId> = Vec::new();
+    vxids
+        .try_reserve_exact(arrayP.maxProcs as usize + 1)
+        .map_err(|_| ::mcx::oom_malloc())?;
 
     LWLockAcquire(ProcArrayLock(), LW_SHARED, init_small::globals::MyProcNumber())?;
     // SAFETY: [PAL] serialized by ProcArrayLock

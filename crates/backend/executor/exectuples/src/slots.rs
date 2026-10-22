@@ -64,24 +64,45 @@ unsafe fn free_minimal_image(mcx: Mcx<'_>, p: NonNull<MinimalTupleData>) {
     }
 }
 
-// Ownership transfer into the slot: leak the owner, keep the raw view; the
-// SHOULDFREE flag records the free obligation (C's shouldFree bool).
-fn forget_heap(t: HeapTuple<'_>) -> HeapTupleData<'_> {
+// Ownership transfer into the slot: leak the owner, keep the raw view and the
+// context the image lives in; the SHOULDFREE flag records the free obligation
+// (C's shouldFree bool) and `tts_free_mcx` where to discharge it (C's pfree
+// reads it from the chunk header): see [`own_image`].
+fn forget_heap(t: HeapTuple<'_>) -> (HeapTupleData<'_>, Mcx<'_>) {
     // free_heap_image frees by t_len: a t_len shrink desyncs the layout.
     debug_assert_eq!(t.alloc_size(), t.t_len);
+    let mcx = t.mcx();
     // SAFETY: same live image; the owner is forgotten so the view is unique.
     let view =
         unsafe { HeapTupleData::from_raw_parts(t.header_ptr(), t.t_len, t.t_self, t.t_tableOid) };
     core::mem::forget(t);
-    view
+    (view, mcx)
 }
 
-fn forget_minimal(mut t: MinimalTuple<'_>) -> NonNull<MinimalTupleData> {
+fn forget_minimal(mut t: MinimalTuple<'_>) -> (NonNull<MinimalTupleData>, Mcx<'_>) {
     debug_assert!(t.extra_mut().is_empty());
+    let mcx = t.mcx();
     // SAFETY: as_ptr is non-null and points at the initialized header.
     let p = unsafe { NonNull::new_unchecked(t.as_ptr().cast_mut().cast()) };
     core::mem::forget(t);
-    p
+    (p, mcx)
+}
+
+/// The slot now owns its image, which lives in `image_mcx`: the clear frees it
+/// there, whatever context the clear's caller passes. The caller's context is
+/// not the image's whenever the two differ (an image formed in a per-row
+/// context, a clear passing the slot's context), and `Mcx::deallocate`
+/// dispatches on the context it is handed, so freeing through the caller's
+/// would give a foreign chunk to that context's free list.
+#[inline]
+fn own_image<'mcx>(base: &mut SlotBase<'mcx>, image_mcx: Mcx<'mcx>) {
+    base.tts_flags |= TTS_FLAG_SHOULDFREE;
+    base.tts_free_mcx = Some(image_mcx);
+}
+
+#[inline]
+fn owned_image_mcx<'mcx>(base: &SlotBase<'mcx>) -> Mcx<'mcx> {
+    base.tts_free_mcx.expect("SHOULDFREE without its image's context")
 }
 
 /// # Safety
@@ -164,10 +185,15 @@ fn clear_virtual(v: &mut VirtualTupleTableSlot<'_>) {
 }
 
 #[inline]
-fn clear_heap<'mcx>(h: &mut HeapTupleTableSlot<'mcx>, mcx: Mcx<'mcx>) {
+fn clear_heap(h: &mut HeapTupleTableSlot<'_>) {
     if h.base.should_free() {
-        // SAFETY: SHOULDFREE marks a slot-owned heaptuple image in mcx.
-        unsafe { free_heap_image(mcx, h.tuple.as_ref().expect("SHOULDFREE without tuple")) };
+        // SAFETY: SHOULDFREE marks a slot-owned heaptuple image in tts_free_mcx.
+        unsafe {
+            free_heap_image(
+                owned_image_mcx(&h.base),
+                h.tuple.as_ref().expect("SHOULDFREE without tuple"),
+            )
+        };
     }
     h.base.mark_empty();
     h.base.tts_tid = ItemPointerData::invalid();
@@ -176,10 +202,15 @@ fn clear_heap<'mcx>(h: &mut HeapTupleTableSlot<'mcx>, mcx: Mcx<'mcx>) {
 }
 
 #[inline]
-fn clear_minimal<'mcx>(m: &mut MinimalTupleTableSlot<'mcx>, mcx: Mcx<'mcx>) {
+fn clear_minimal(m: &mut MinimalTupleTableSlot<'_>) {
     if m.base.should_free() {
-        // SAFETY: SHOULDFREE marks a slot-owned minimal image in mcx.
-        unsafe { free_minimal_image(mcx, m.mintuple.expect("SHOULDFREE without tuple")) };
+        // SAFETY: SHOULDFREE marks a slot-owned minimal image in tts_free_mcx.
+        unsafe {
+            free_minimal_image(
+                owned_image_mcx(&m.base),
+                m.mintuple.expect("SHOULDFREE without tuple"),
+            )
+        };
     }
     m.base.mark_empty();
     m.base.tts_tid = ItemPointerData::invalid();
@@ -188,17 +219,18 @@ fn clear_minimal<'mcx>(m: &mut MinimalTupleTableSlot<'mcx>, mcx: Mcx<'mcx>) {
 }
 
 #[inline]
-fn clear_buffer<'mcx>(b: &mut BufferHeapTupleTableSlot<'mcx>, mcx: Mcx<'mcx>) {
+fn clear_buffer(b: &mut BufferHeapTupleTableSlot<'_>) {
     if b.base.base.should_free() {
         debug_assert!(!BufferIsValid(b.buffer));
-        // SAFETY: SHOULDFREE marks a slot-owned heaptuple image in mcx.
+        // SAFETY: SHOULDFREE marks a slot-owned heaptuple image in tts_free_mcx.
         unsafe {
             free_heap_image(
-                mcx,
+                owned_image_mcx(&b.base.base),
                 b.base.tuple.as_ref().expect("SHOULDFREE without tuple"),
             )
         };
         b.base.base.tts_flags &= !TTS_FLAG_SHOULDFREE;
+        b.base.base.tts_free_mcx = None;
     }
     if BufferIsValid(b.buffer) {
         let _ = bufmgr_seams::release_buffer::call(b.buffer);
@@ -211,20 +243,19 @@ fn clear_buffer<'mcx>(b: &mut BufferHeapTupleTableSlot<'mcx>, mcx: Mcx<'mcx>) {
 }
 
 /// `mcx` is the slot's owning context (C `tts_mcxt`) for every function here.
+/// The clear itself frees a slot-owned image in the context the image lives
+/// in (`tts_free_mcx`, D3398), never through `mcx`.
 #[inline]
-pub fn exec_clear_tuple<'mcx>(slot: &mut SlotData<'mcx>, mcx: Mcx<'mcx>) {
+pub fn exec_clear_tuple<'mcx>(slot: &mut SlotData<'mcx>, _mcx: Mcx<'mcx>) {
     match slot {
         SlotData::Virtual(v) => clear_virtual(v),
-        SlotData::Heap(h) => clear_heap(h, mcx),
-        SlotData::Minimal(m) => clear_minimal(m, mcx),
-        SlotData::BufferHeap(b) => clear_buffer(b, mcx),
+        SlotData::Heap(h) => clear_heap(h),
+        SlotData::Minimal(m) => clear_minimal(m),
+        SlotData::BufferHeap(b) => clear_buffer(b),
     }
 }
 
 /// Executor-skeleton park: drop a virtual slot's retained materialize
-/// scratch. Materialize allocates it from the CALLER's context (dest
-/// receivers pass their own), so it must not outlive the statement; parked
-/// skeletons do.
 pub fn exec_drop_slot_scratch<'mcx>(slot: &mut SlotData<'mcx>, mcx: Mcx<'mcx>) {
     if let SlotData::Virtual(v) = slot {
         if v.data.capacity() != 0 {
@@ -258,18 +289,17 @@ pub fn exec_store_all_null_tuple<'mcx>(slot: &mut SlotData<'mcx>, mcx: Mcx<'mcx>
 #[inline]
 fn store_heap<'mcx>(
     h: &mut HeapTupleTableSlot<'mcx>,
-    mcx: Mcx<'mcx>,
     tuple: HeapTupleData<'mcx>,
-    owned: bool,
+    owned: Option<Mcx<'mcx>>,
 ) {
-    clear_heap(h, mcx);
+    clear_heap(h);
     h.base.tts_nvalid = 0;
     h.base.tts_tid = tuple.t_self;
     h.off = 0;
     h.tuple = Some(tuple);
     h.base.tts_flags &= !(TTS_FLAG_EMPTY | TTS_FLAG_SHOULDFREE);
-    if owned {
-        h.base.tts_flags |= TTS_FLAG_SHOULDFREE;
+    if let Some(image_mcx) = owned {
+        own_image(&mut h.base, image_mcx);
     }
 }
 
@@ -286,7 +316,7 @@ pub fn exec_store_heap_tuple<'mcx>(
     };
     debug_assert!(h.base.tts_tupleDescriptor.is_some());
     let table_oid = tuple.t_tableOid;
-    store_heap(h, mcx, tuple, false);
+    store_heap(h, tuple, None);
     h.base.tts_tableOid = table_oid;
 }
 
@@ -302,24 +332,24 @@ pub fn exec_store_heap_tuple_owned<'mcx>(
     };
     debug_assert!(h.base.tts_tupleDescriptor.is_some());
     let table_oid = tuple.t_tableOid;
-    store_heap(h, mcx, forget_heap(tuple), true);
+    let (tuple, image_mcx) = forget_heap(tuple);
+    store_heap(h, tuple, Some(image_mcx));
     h.base.tts_tableOid = table_oid;
 }
 
 #[inline]
 fn store_minimal<'mcx>(
     m: &mut MinimalTupleTableSlot<'mcx>,
-    mcx: Mcx<'mcx>,
     mtup: NonNull<MinimalTupleData>,
-    owned: bool,
+    owned: Option<Mcx<'mcx>>,
 ) {
-    clear_minimal(m, mcx);
+    clear_minimal(m);
     m.base.tts_flags &= !TTS_FLAG_EMPTY;
     m.base.tts_nvalid = 0;
     m.off = 0;
     m.mintuple = Some(mtup);
-    if owned {
-        m.base.tts_flags |= TTS_FLAG_SHOULDFREE;
+    if let Some(image_mcx) = owned {
+        own_image(&mut m.base, image_mcx);
     }
 }
 
@@ -340,7 +370,7 @@ pub unsafe fn exec_store_minimal_tuple_ptr<'mcx>(
         wrong_slot("minimal")
     };
     debug_assert!(m.base.tts_tupleDescriptor.is_some());
-    store_minimal(m, mcx, mtup, false);
+    store_minimal(m, mtup, None);
 }
 
 /// C `ExecStoreMinimalTuple(mtup, slot, shouldFree=true)`.
@@ -354,22 +384,24 @@ pub fn exec_store_minimal_tuple_owned<'mcx>(
         wrong_slot("minimal")
     };
     debug_assert!(m.base.tts_tupleDescriptor.is_some());
-    store_minimal(m, mcx, forget_minimal(mtup), true);
+    let (mtup, image_mcx) = forget_minimal(mtup);
+    store_minimal(m, mtup, Some(image_mcx));
 }
 
 // SHOULDFREE arm of the buffer-slot store: off the per-tuple scan path
 // (a scan slot never owns its image between stores).
 #[cold]
 #[inline(never)]
-fn store_buffer_free_owned<'mcx>(b: &mut BufferHeapTupleTableSlot<'mcx>, mcx: Mcx<'mcx>) {
-    // SAFETY: SHOULDFREE marks a slot-owned heaptuple image in mcx.
+fn store_buffer_free_owned(b: &mut BufferHeapTupleTableSlot<'_>) {
+    // SAFETY: SHOULDFREE marks a slot-owned heaptuple image in tts_free_mcx.
     unsafe {
         free_heap_image(
-            mcx,
+            owned_image_mcx(&b.base.base),
             b.base.tuple.as_ref().expect("SHOULDFREE without tuple"),
         )
     };
     b.base.base.tts_flags &= !TTS_FLAG_SHOULDFREE;
+    b.base.base.tts_free_mcx = None;
 }
 
 // Buffer-change arm: runs once per page in a scan, not per tuple; outlined so
@@ -392,7 +424,6 @@ fn store_buffer_new_pin(b: &mut BufferHeapTupleTableSlot<'_>, buffer: Buffer, tr
 #[inline]
 fn store_buffer<'mcx>(
     slot: &mut SlotData<'mcx>,
-    mcx: Mcx<'mcx>,
     tuple: HeapTupleData<'mcx>,
     buffer: Buffer,
     transfer_pin: bool,
@@ -402,7 +433,7 @@ fn store_buffer<'mcx>(
         wrong_slot("buffer heap")
     };
     if b.base.base.should_free() {
-        store_buffer_free_owned(b, mcx);
+        store_buffer_free_owned(b);
     }
 
     b.base.base.tts_nvalid = 0;
@@ -424,22 +455,22 @@ fn store_buffer<'mcx>(
 #[inline]
 pub fn exec_store_buffer_heap_tuple<'mcx>(
     slot: &mut SlotData<'mcx>,
-    mcx: Mcx<'mcx>,
+    _mcx: Mcx<'mcx>,
     tuple: HeapTupleData<'mcx>,
     buffer: Buffer,
 ) {
-    store_buffer(slot, mcx, tuple, buffer, false)
+    store_buffer(slot, tuple, buffer, false)
 }
 
 /// C `ExecStorePinnedBufferHeapTuple`: the caller's pin moves into the slot.
 #[inline]
 pub fn exec_store_pinned_buffer_heap_tuple<'mcx>(
     slot: &mut SlotData<'mcx>,
-    mcx: Mcx<'mcx>,
+    _mcx: Mcx<'mcx>,
     tuple: HeapTupleData<'mcx>,
     buffer: Buffer,
 ) {
-    store_buffer(slot, mcx, tuple, buffer, true)
+    store_buffer(slot, tuple, buffer, true)
 }
 
 #[cold]
@@ -531,9 +562,14 @@ unsafe fn checked_byref_length(
 /// heap/buffer/minimal source, e.g. [`exec_copy_slot`] into a Virtual dest),
 /// `None` for a genuine in-memory Virtual slot (matches C's unconditional
 /// trust).
+/// The scratch is allocated in the slot's own context (the one its values
+/// array lives in), as C's tts_virtual_materialize allocates in
+/// slot->tts_mcxt, never in a caller's: `clear_virtual` keeps it across
+/// clears, so one in a shorter-lived context (a per-row exec context reset
+/// after each row, D3383) would point into bytes the reset hands out again,
+/// and the next row that fits would be written there.
 fn virtual_materialize<'mcx>(
     v: &mut VirtualTupleTableSlot<'mcx>,
-    mcx: Mcx<'mcx>,
     src_image: Option<&[u8]>,
 ) -> PgResult<()> {
     if v.base.should_free() {
@@ -552,6 +588,7 @@ fn virtual_materialize<'mcx>(
         .as_ref()
         .expect("materialize without descriptor");
     let natts = desc.natts as usize;
+    let own = *tts_values.allocator();
     // Pre-sliced by natts: the per-attribute bounds checks fold away.
     let atts = &desc.compact_attrs[..natts];
     let values = &mut tts_values[..natts];
@@ -589,7 +626,7 @@ fn virtual_materialize<'mcx>(
     // Headroom so the copy base is MAXALIGN'd (C's palloc guarantees it).
     let need = sz + MAXIMUM_ALIGNOF;
     if data.len() < need {
-        let mut buf = vec_with_capacity_in::<u8>(mcx, need)?;
+        let mut buf = vec_with_capacity_in::<u8>(own, need)?;
         buf.resize(need, 0);
         *data = buf;
     }
@@ -659,8 +696,9 @@ fn heap_materialize<'mcx>(h: &mut HeapTupleTableSlot<'mcx>, mcx: Mcx<'mcx>) -> P
         }
         Some(t) => heap_copytuple(mcx, t)?,
     };
-    h.tuple = Some(forget_heap(new));
-    h.base.tts_flags |= TTS_FLAG_SHOULDFREE;
+    let (new, image_mcx) = forget_heap(new);
+    h.tuple = Some(new);
+    own_image(&mut h.base, image_mcx);
     Ok(())
 }
 
@@ -685,8 +723,9 @@ fn minimal_materialize<'mcx>(m: &mut MinimalTupleTableSlot<'mcx>, mcx: Mcx<'mcx>
         // SAFETY: stored mintuple is live; copied before the old reference drops.
         Some(p) => heap_copy_minimal_tuple(mcx, unsafe { minimal_bytes(p) }, 0)?,
     };
-    m.mintuple = Some(forget_minimal(new));
-    m.base.tts_flags |= TTS_FLAG_SHOULDFREE;
+    let (new, image_mcx) = forget_minimal(new);
+    m.mintuple = Some(new);
+    own_image(&mut m.base, image_mcx);
     Ok(())
 }
 
@@ -702,7 +741,7 @@ fn buffer_materialize<'mcx>(
     b.base.off = 0;
     b.base.base.tts_nvalid = 0;
 
-    match &b.base.tuple {
+    let image_mcx = match &b.base.tuple {
         None => {
             let desc = b
                 .base
@@ -711,7 +750,9 @@ fn buffer_materialize<'mcx>(
                 .as_ref()
                 .expect("materialize without descriptor");
             let new = heap_form_tuple(mcx, desc, &b.base.base.tts_values, &b.base.base.tts_isnull)?;
-            b.base.tuple = Some(forget_heap(new));
+            let (new, image_mcx) = forget_heap(new);
+            b.base.tuple = Some(new);
+            image_mcx
         }
         Some(t) => {
             let new = heap_copytuple(mcx, t)?;
@@ -719,11 +760,13 @@ fn buffer_materialize<'mcx>(
                 let _ = bufmgr_seams::release_buffer::call(b.buffer);
             }
             b.buffer = InvalidBuffer;
-            b.base.tuple = Some(forget_heap(new));
+            let (new, image_mcx) = forget_heap(new);
+            b.base.tuple = Some(new);
+            image_mcx
         }
-    }
+    };
 
-    b.base.base.tts_flags |= TTS_FLAG_SHOULDFREE;
+    own_image(&mut b.base.base, image_mcx);
     Ok(())
 }
 
@@ -759,7 +802,7 @@ pub fn slot_materialized_image<'a>(slot: &'a SlotData<'_>) -> Option<&'a [u8]> {
 
 pub fn exec_materialize_slot<'mcx>(slot: &mut SlotData<'mcx>, mcx: Mcx<'mcx>) -> PgResult<()> {
     match slot {
-        SlotData::Virtual(v) => virtual_materialize(v, mcx, None),
+        SlotData::Virtual(v) => virtual_materialize(v, None),
         SlotData::Heap(h) => heap_materialize(h, mcx),
         SlotData::Minimal(m) => minimal_materialize(m, mcx),
         SlotData::BufferHeap(b) => buffer_materialize(b, mcx),
@@ -1005,7 +1048,7 @@ pub fn exec_copy_slot<'mcx, 'src>(
             let SlotData::Virtual(v) = dst else {
                 unreachable!("dst matched Virtual above")
             };
-            virtual_materialize(v, dst_mcx, witness)
+            virtual_materialize(v, witness)
         }
         SlotData::Heap(_) => {
             let tuple = exec_copy_slot_heap_tuple(src, src_mcx, dst_mcx)?;
@@ -1036,7 +1079,7 @@ pub fn exec_copy_slot<'mcx, 'src>(
                                 t.t_tableOid,
                             )
                         };
-                        store_buffer(dst, dst_mcx, tuple, s.buffer, false);
+                        store_buffer(dst, tuple, s.buffer, false);
                         return Ok(());
                     }
                 }
@@ -1047,8 +1090,9 @@ pub fn exec_copy_slot<'mcx, 'src>(
                 unreachable!()
             };
             bd.base.base.tts_flags &= !TTS_FLAG_EMPTY;
-            bd.base.tuple = Some(forget_heap(tuple));
-            bd.base.base.tts_flags |= TTS_FLAG_SHOULDFREE;
+            let (tuple, image_mcx) = forget_heap(tuple);
+            bd.base.tuple = Some(tuple);
+            own_image(&mut bd.base.base, image_mcx);
             Ok(())
         }
     }
@@ -1088,8 +1132,9 @@ pub fn exec_force_store_heap_tuple<'mcx>(
                 unreachable!()
             };
             b.base.base.tts_flags &= !TTS_FLAG_EMPTY;
-            b.base.tuple = Some(forget_heap(copy));
-            b.base.base.tts_flags |= TTS_FLAG_SHOULDFREE;
+            let (copy, image_mcx) = forget_heap(copy);
+            b.base.tuple = Some(copy);
+            own_image(&mut b.base.base, image_mcx);
             Ok(())
         }
         _ => {

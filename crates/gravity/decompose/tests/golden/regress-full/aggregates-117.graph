@@ -1,0 +1,37 @@
+-- regress-full-aggregates-117
+-- SELECT dense_rank(x) WITHIN GROUP (ORDER BY x) FROM (VALUES (1),(1),(2),(2),(3),(3)) v(x) GROUP BY (x) ORDER BY 1;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  nodes n3@0 n2@1^
+  source values rti=3 rows=6
+    row (c23:1)
+    row (c23:1)
+    row (c23:2)
+    row (c23:2)
+    row (c23:3)
+    row (c23:3)
+  project (1=v3.1)
+  sort keys=1+:I32 form=runs
+  outs 1=w4:val
+p1 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@1 n0@3^
+  source breaker slot=0
+  project (1=outer.1)
+  group-run stream=0
+  project (1=agg3992(1=outer.1), 2j=outer.1)
+  sort keys=1+:I64 form=runs
+  outs 1=w4:val
+  outs 1=w8:val 2=w4:val
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2j=outer.2)
+  outs 1=w8:val 2=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[I64]->[Count@8] 16B order=1+
+stream 0: group slot=255 producer=p1 node=1 form=Sorted hints=[] layout=[I32]->[Count@8]+valid 24B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  agg aggno=0 fn=3992 reg=Hypothetical slot=- count_slot=- final=Hypo class=Hypothetical(DenseRank) trans=Var mods=[order=1 direct=1] expr=agg3992(1=outer.1)
+mapped: ValuesScan Sort Agg

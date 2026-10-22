@@ -101,9 +101,7 @@ pub fn find_placeholder_info<'mcx>(
     });
     run.root.placeholder_list.push(id);
     if run.root.placeholder_array.len() <= phv.phid as usize {
-        run.root
-            .placeholder_array
-            .resize(phv.phid as usize + 1, None);
+        ::mcx::pgvec_resize(&mut run.root.placeholder_array, phv.phid as usize + 1, None)?;
         run.root.placeholder_array_size = run.root.placeholder_array.len() as i32;
     }
     run.root.placeholder_array[phv.phid as usize] = Some(id);

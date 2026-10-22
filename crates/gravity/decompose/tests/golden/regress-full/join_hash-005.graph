@@ -1,0 +1,13 @@
+-- regress-full-join_hash-005
+-- update pg_class set reltuples = 2, relpages = pg_relation_size('extremely_skewed') / 8192 where relname = 'extremely_skewed';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=1259 rti=1 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v1.2, c19:#64))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byval8:w8:val Attr(31):byval8:w8:val Attr(32):byref8:vl:win/page Attr(33):byref8:vl:win/page Attr(34):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=fn480(op691(fn2332(c2205:29994, c25:'main'), c23:8192)), 2=c700:1073741824, 3j=v1.-1, 4j=v1.1, 5j=v1.2, 6j=v1.3, 7j=v1.4, 8j=v1.5, 9j=v1.6, 10j=v1.7, 11j=v1.8, 12j=v1.9, 13j=v1.12, 14j=v1.13, 15j=v1.14, 16j=v1.15, 17j=v1.16, 18j=v1.17, 19j=v1.18, 20j=v1.19, 21j=v1.20, 22j=v1.21, 23j=v1.22, 24j=v1.23, 25j=v1.24, 26j=v1.25, 27j=v1.26, 28j=v1.27, 29j=v1.28, 30j=v1.29, 31j=v1.30, 32j=v1.31, 33j=v1.32, 34j=v1.33, 35j=v1.34)
+  write UPDATE rel=1259 rti=1 natts=34 indexes=(2662[1]up, 2663[2, 3]u, 3455[9, 8]) set=(10,11)
+  outs 1=w4:val 2=w4:val 3=fx6:row 4=w8:val 5=fx64:win/page 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=w8:val 15=w8:val 16=w8:val 17=w8:val 18=w8:val 19=w8:val 20=w8:val 21=w8:val 22=w8:val 23=w8:val 24=w8:val 25=w8:val 26=w8:val 27=w8:val 28=w8:val 29=w8:val 30=w8:val 31=w8:val 32=w8:val 33=vl:win/page 34=vl:win/page 35=vl:win/page
+mapped: ModifyTable IndexScan

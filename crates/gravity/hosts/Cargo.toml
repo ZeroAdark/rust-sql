@@ -1,0 +1,512 @@
+[package]
+name = "gravity_hosts"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "gravity_hosts"
+path = "src/lib.rs"
+
+[dependencies]
+# D3887: the abort poll of host loops and the poll-gap probe.
+cancelpoll = { path = "../../_support/cancelpoll" }
+gravity_deps = { path = "../deps" }
+fires = { path = "../../_support/fires" }
+stack_depth_core = { path = "../../backend/utils/misc/stack_depth_core" }
+elog = { path = "../../backend/utils/error/elog" }
+pruneheap = { path = "../../backend/access/heap/pruneheap" }
+pruneheap_seams = { path = "../../backend/access/heap/pruneheap_seams" }
+types_fmgr = { path = "../../_support/types/fmgr" }
+gravity_abi = { path = "../abi" }
+# C7 runtime half: arm_once installs the leader_tls pool probe (debug builds)
+leader_tls = { path = "../../_support/leader_tls" }
+gravity_dict = { path = "../dict" }
+guc = { path = "../../backend/utils/misc/guc" }
+guc_seams = { path = "../../backend/utils/misc/guc_seams" }
+gravity_fn = { path = "../fn" }
+gravity_kernels = { path = "../kernels" }
+gravity_driver = { path = "../driver" }
+gravity_program = { path = "../program" }
+gravity_decompose = { path = "../decompose" }
+readfuncs = { path = "../../backend/nodes/readfuncs" }
+relcache_seams = { path = "../../backend/utils/cache/relcache_seams" }
+mcx = { path = "../../_support/mcx" }
+datum = { path = "../../_support/types/datum" }
+types_core = { path = "../../_support/types/types_core" }
+types_error = { path = "../../_support/types/types_error" }
+types_nodes = { path = "../../_support/types/nodes" }
+types_rel = { path = "../../_support/types/rel" }
+types_scan = { path = "../../_support/types/types_scan" }
+types_slot = { path = "../../_support/types/types_slot" }
+types_snapshot = { path = "../../_support/types/snapshot" }
+types_storage = { path = "../../_support/types/types_storage" }
+types_tuple = { path = "../../_support/types/types_tuple" }
+types_nbtree = { path = "../../_support/types/types_nbtree" }
+types_relscan = { path = "../../backend/access/index/relscan" }
+indexam = { path = "../../backend/access/index/indexam" }
+indexam_seams = { path = "../../backend/access/index/indexam_seams" }
+tableam = { path = "../../backend/access/table/tableam" }
+tableam_vocab = { path = "../../backend/access/table/tableam_vocab" }
+table = { path = "../../backend/access/table/table" }
+heapam = { path = "../../backend/access/heap/heapam" }
+tidbitmap = { path = "../../backend/nodes/tidbitmap" }
+tablesample = { path = "../../backend/access/tablesample/tablesample" }
+adt_float = { path = "../../backend/utils/adt/float" }
+pg_prng = { path = "../../common/pg_prng" }
+execmain_seams = { path = "../../backend/executor/execmain_seams" }
+matview_seams = { path = "../../backend/commands/matview_seams" }
+init_small = { path = "../../backend/utils/init/init_small" }
+heaptuple = { path = "../../backend/access/common/heaptuple" }
+trigger = { path = "../../backend/commands/trigger" }
+tupdesc = { path = "../../backend/access/common/tupdesc" }
+types_trigger = { path = "../../_support/types/types_trigger" }
+types_trigger_call = { path = "../../_support/types/types_trigger_call" }
+exectuples = { path = "../../backend/executor/exectuples" }
+# M5 H-c / H-d / H-e (hosts v4/m5.rs ScanStore): the incumbent store-backed scans over a statement-lived executor state
+executils = { path = "../../backend/executor/executils" }
+execscan = { path = "../../backend/executor/execscan" }
+nodefunctionscan = { path = "../../backend/executor/nodefunctionscan" }
+nodetablefuncscan = { path = "../../backend/executor/nodetablefuncscan" }
+nodenamedtuplestorescan = { path = "../../backend/executor/nodenamedtuplestorescan" }
+queryenvironment = { path = "../../backend/utils/misc/queryenvironment" }
+types_portal = { path = "../../_support/types/portal" }
+nodemodifytable = { path = "../../backend/executor/nodemodifytable" }
+rewrite_manip = { path = "../../backend/rewrite/rewrite_manip" }
+execpartition = { path = "../../backend/executor/execpartition" }
+partdesc = { path = "../../backend/partitioning/partdesc" }
+pg_inherits = { path = "../../backend/catalog/pg_inherits" }
+catalog_heap = { path = "../../backend/catalog/catalog_heap" }
+execexpr = { path = "../../backend/executor/execexpr" }
+execindexing = { path = "../../backend/executor/execindexing" }
+lmgr = { path = "../../backend/storage/lmgr/lmgr" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+lsyscache = { path = "../../backend/utils/cache/lsyscache" }
+typcache = { path = "../../backend/utils/cache/typcache" }
+funcapi = { path = "../../backend/utils/fmgr/funcapi" }
+arrayfuncs = { path = "../../backend/utils/adt/arrayfuncs" }
+detoast_seams = { path = "../../backend/access/common/detoast_seams" }
+syscache_seams = { path = "../../backend/utils/cache/syscache_seams" }
+fmgr_core = { path = "../../backend/utils/fmgr/fmgr_core" }
+tuplesort = { path = "../../backend/utils/sort/tuplesort" }
+tuplestore = { path = "../../backend/utils/sort/tuplestore" }
+pairingheap = { path = "../../backend/lib/pairingheap" }
+adt_scalar = { path = "../../backend/utils/adt/scalar" }
+lmgr_seams = { path = "../../backend/storage/lmgr/lmgr_seams" }
+pgstat = { path = "../../backend/utils/activity/pgstat" }
+pgstat_seams = { path = "../../backend/utils/activity/pgstat_seams" }
+xact_seams = { path = "../../backend/access/transam/xact_seams" }
+aclchk_seams = { path = "../../backend/catalog/aclchk_seams" }
+objectaccess = { path = "../../backend/catalog/objectaccess" }
+miscinit_seams = { path = "../../backend/utils/init/miscinit_seams" }
+bufmgr = { path = "../../backend/storage/buffer/bufmgr" }
+bufmgr_seams = { path = "../../backend/storage/buffer/bufmgr_seams" }
+aio_seams = { path = "../../backend/storage/aio/aio_seams" }
+heapam_visibility_seams = { path = "../../backend/access/heap/heapam_visibility_seams" }
+visibilitymap = { path = "../../backend/access/heap/visibilitymap" }
+nbtree = { path = "../../backend/access/nbtree/nbtree" }
+predicate_seams = { path = "../../backend/storage/lmgr/predicate_seams" }
+snapmgr = { path = "../../backend/utils/time/snapmgr" }
+resowner = { path = "../../backend/utils/resowner/resowner" }
+types_resowner = { path = "../../_support/types/types_resowner" }
+fd = { path = "../../backend/storage/file/fd" }
+heaptoast = { path = "../../backend/access/heap/heaptoast" }
+vfs = { path = "../../backend/storage/file/vfs" }
+waiter = { path = "../../backend/storage/ipc/waiter" }
+pgrc_read = { path = "../../backend/access/pgrcolumnar/pgrc_read" }
+pgrc_write = { path = "../../backend/access/pgrcolumnar/pgrc_write" }
+pgrc_format = { path = "../../backend/access/pgrcolumnar/pgrc_format" }
+pgrc_meta = { path = "../../backend/access/pgrcolumnar/pgrc_meta" }
+pgrc_scan = { path = "../../backend/access/pgrcolumnar/pgrc_scan" }
+pgrc_codec = { path = "../../backend/access/pgrcolumnar/pgrc_codec" }
+pgrc_am = { path = "../../backend/access/pgrcolumnar/pgrc_am" }
+transam_xlog = { path = "../../backend/access/transam/transam_xlog" }
+pgsync = { path = "../../_support/pgsync" }
+memledger = { path = "../../_support/memledger" }
+# pagepool P3 (PGRUST_POOL_GRAVITY=1): window segments, build buffers from the page pool
+pagepool = { path = "../../_support/pagepool" }
+mempolicy = { path = "../../_support/mempolicy" }
+# S1 criterion 11: the memory settings view reads REUSE BEFORE RELEASE's switch (allocarena::reuse_on)
+allocarena = { path = "../../_support/allocarena" }
+# The idle loop (memruntime::loops::idle_loop) runs on the hosts' gravity-reuse-idle thread through its hooks.
+memruntime = { path = "../../backend/postmaster/memruntime" }
+pagegive = { path = "../../_support/pagegive" }
+pg_clock = { path = "../../port/pg_clock" }
+# the host's cost profile at server start (cost_host.rs)
+cost_profile = { path = "../../_support/cost_profile" }
+pg_strong_random = { path = "../../port/pg_strong_random" }
+# D4854: the witness hook between a lowering's election reads (facts.rs shred_election).
+injection_point = { path = "../../backend/utils/misc/injection_point" }
+inval = { path = "../../backend/utils/cache/inval" }
+l2cache = { path = "../../backend/utils/cache/l2cache" }
+
+execreplication_seams = { path = "../../backend/executor/execreplication_seams" }
+guc_tables = { path = "../../backend/utils/misc/guc_tables" }
+# M10 (hosts v4/m10_aggs.rs): initialize_peragg's polymorphic transition type and binary-coercion check, and its
+# "does not support use as a window function" text
+coerce = { path = "../../backend/parser/coerce" }
+adt_regproc = { path = "../../backend/utils/adt/regproc" }
+regexp_alt = { path = "../../backend/utils/adt/regexp_alt" }
+regex_spencer = { path = "../../_support/types/regex", package = "regex" }
+procarray_seams = { path = "../../backend/storage/ipc/procarray_seams" }
+# D4246: a claim runs under its leader's TransactionXmin
+procarray = { path = "../../backend/storage/ipc/procarray" }
+
+[dev-dependencies]
+# D4487: the tests read an open part's fault log (OpenPart::faults), kept only under this feature
+pgrc_read = { path = "../../backend/access/pgrcolumnar/pgrc_read", features = ["fault-log"] }
+# the integration-test rig, compiled once as a lib (BD-12): the test files say `use gravity_hosts_rig as common;`
+gravity_hosts_rig = { path = "../hosts_rig" }
+funcapi = { path = "../../backend/utils/fmgr/funcapi" }
+adt_timestamp = { path = "../../backend/utils/adt/adt_timestamp" }
+detoast = { path = "../../backend/access/common/detoast" }
+pgrc_qa = { path = "../../backend/access/pgrcolumnar/pgrc_qa" }
+adt_numeric = { path = "../../backend/utils/adt/numeric" }
+adt_like = { path = "../../backend/utils/adt/like" }
+adt_datetime = { path = "../../backend/utils/adt/adt_datetime" }
+pgtz = { path = "../../backend/timezone/pgtz" }
+regex_core = { path = "../../backend/regex/regex_core" }
+pg_locale = { path = "../../backend/utils/adt/pg_locale" }
+guc_tables = { path = "../../backend/utils/misc/guc_tables" }
+mbutils = { path = "../../backend/utils/mb/mbutils" }
+indexcmds_seams = { path = "../../backend/commands/indexcmds_seams" }
+adt_jsonb = { path = "../../backend/utils/adt/jsonb" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+wchar = { path = "../../common/wchar" }
+memchr = "2"
+zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off
+gravity_parallel = { path = "../parallel" }
+test_boot = { path = "../../_support/test_boot" }
+seam_core = { path = "../../_support/seam_core" }
+rls_seams = { path = "../../backend/utils/misc/rls_seams" }
+genam_seams = { path = "../../backend/access/index/genam_seams" }
+smgr_seams = { path = "../../backend/storage/smgr/smgr_seams" }
+xloginsert_seams = { path = "../../backend/access/transam/xloginsert_seams" }
+predicate_seams = { path = "../../backend/storage/lmgr/predicate_seams" }
+pruneheap_seams = { path = "../../backend/access/heap/pruneheap_seams" }
+freespace_seams = { path = "../../backend/storage/freespace/freespace_seams" }
+catalog_seams = { path = "../../backend/catalog/catalog_seams" }
+relation_seams = { path = "../../backend/access/common/relation_seams" }
+relcache_seams = { path = "../../backend/utils/cache/relcache_seams" }
+fmgr_seams = { path = "../../backend/utils/fmgr/fmgr_seams" }
+multixact_seams = { path = "../../backend/access/transam/multixact_seams" }
+combocid_seams = { path = "../../backend/utils/time/combocid_seams" }
+lock_seams = { path = "../../backend/storage/lmgr/lock_seams" }
+snapmgr_seams = { path = "../../backend/utils/time/snapmgr_seams" }
+transam_seams = { path = "../../backend/access/transam/transam_seams" }
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# gravity_hosts_suite (tests/gravity_hosts_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs it
+# once per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot share
+# a process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text naming
+# process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state call): then
+# it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the file is in
+# exactly one of the two places.
+[[test]]
+name = "gravity_hosts_suite"
+path = "tests/gravity_hosts_suite.rs"
+
+[[test]]
+name = "core_cachepolicy_tinylfu"
+path = "tests/core_cachepolicy_tinylfu.rs"
+
+[[test]]
+name = "core_cvdict_row_codes_owner"
+path = "tests/core_cvdict_row_codes_owner.rs"
+
+[[test]]
+name = "core_d4732_row_codes_flight"
+path = "tests/core_d4732_row_codes_flight.rs"
+
+[[test]]
+name = "core_d263_scratch"
+path = "tests/core_d263_scratch.rs"
+
+[[test]]
+name = "core_d3994_parked_evict"
+path = "tests/core_d3994_parked_evict.rs"
+
+[[test]]
+name = "core_d3994_parked_floor"
+path = "tests/core_d3994_parked_floor.rs"
+
+[[test]]
+name = "core_d3994_rebind_owner"
+path = "tests/core_d3994_rebind_owner.rs"
+
+[[test]]
+name = "core_d3994_release_short"
+path = "tests/core_d3994_release_short.rs"
+
+[[test]]
+name = "core_d4315_deferred_floor"
+path = "tests/core_d4315_deferred_floor.rs"
+
+[[test]]
+name = "core_d4315_unpin_behind"
+path = "tests/core_d4315_unpin_behind.rs"
+
+[[test]]
+name = "core_d4315_walk_unpin"
+path = "tests/core_d4315_walk_unpin.rs"
+
+[[test]]
+name = "core_d4321_fp_cache_scope"
+path = "tests/core_d4321_fp_cache_scope.rs"
+
+[[test]]
+name = "core_d4329_dict_build_gate"
+path = "tests/core_d4329_dict_build_gate.rs"
+
+[[test]]
+name = "core_d4347_walks_read_once"
+path = "tests/core_d4347_walks_read_once.rs"
+
+[[test]]
+name = "core_d4410_released_dicts_free"
+path = "tests/core_d4410_released_dicts_free.rs"
+
+[[test]]
+name = "core_d4464_parked_scratch"
+path = "tests/core_d4464_parked_scratch.rs"
+
+[[test]]
+name = "core_d4464_scratch_owner"
+path = "tests/core_d4464_scratch_owner.rs"
+
+[[test]]
+name = "core_d4482_list_faces"
+path = "tests/core_d4482_list_faces.rs"
+
+[[test]]
+name = "core_d4504_faces_trim"
+path = "tests/core_d4504_faces_trim.rs"
+
+[[test]]
+name = "core_d4552_warm_dict_owner"
+path = "tests/core_d4552_warm_dict_owner.rs"
+
+[[test]]
+name = "core_loadgate_evicts_before_growing"
+path = "tests/core_loadgate_evicts_before_growing.rs"
+
+[[test]]
+name = "core_m4_park"
+path = "tests/core_m4_park.rs"
+
+[[test]]
+name = "core_park_salt"
+path = "tests/core_park_salt.rs"
+
+[[test]]
+name = "core_perms"
+path = "tests/core_perms.rs"
+
+[[test]]
+name = "core_zero_alloc"
+path = "tests/core_zero_alloc.rs"
+
+[[test]]
+name = "d2939_epq_read_one_block"
+path = "tests/d2939_epq_read_one_block.rs"
+
+[[test]]
+name = "d4152_build_pool_given_pages"
+path = "tests/d4152_build_pool_given_pages.rs"
+
+[[test]]
+name = "d4278_resident_table_takes_its_buffer_back"
+path = "tests/d4278_resident_table_takes_its_buffer_back.rs"
+
+[[test]]
+name = "pins_fp_table_scan_holds"
+path = "tests/pins_fp_table_scan_holds.rs"
+
+[[test]]
+name = "d4709_claim_stats_fold"
+path = "tests/d4709_claim_stats_fold.rs"
+
+[[test]]
+name = "d4554_kept_decay"
+path = "tests/d4554_kept_decay.rs"
+
+[[test]]
+name = "d4554_kept_parked"
+path = "tests/d4554_kept_parked.rs"
+
+[[test]]
+name = "d4635_page_hints_forget"
+path = "tests/d4635_page_hints_forget.rs"
+
+[[test]]
+name = "d4665_kept_defaults"
+path = "tests/d4665_kept_defaults.rs"
+
+[[test]]
+name = "d4709_fetch_depot_accounts"
+path = "tests/d4709_fetch_depot_accounts.rs"
+
+[[test]]
+name = "d4681_claim_bind_owner"
+path = "tests/d4681_claim_bind_owner.rs"
+
+[[test]]
+name = "d4802_trim_real_frees"
+path = "tests/d4802_trim_real_frees.rs"
+
+[[test]]
+name = "c11_memory_settings"
+path = "tests/c11_memory_settings.rs"
+
+[[test]]
+name = "dict_d767_bpchar_fp"
+path = "tests/dict_d767_bpchar_fp.rs"
+
+[[test]]
+name = "dict_fp_cache_identity"
+path = "tests/dict_fp_cache_identity.rs"
+
+[[test]]
+name = "dict_cond_table_switch"
+path = "tests/dict_cond_table_switch.rs"
+
+[[test]]
+name = "dict_fp_seed"
+path = "tests/dict_fp_seed.rs"
+
+[[test]]
+name = "dict_fp_stmt_memo"
+path = "tests/dict_fp_stmt_memo.rs"
+
+[[test]]
+name = "dict_lowerv2_fp128_cache"
+path = "tests/dict_lowerv2_fp128_cache.rs"
+
+[[test]]
+name = "dict_derived_fingerprint"
+path = "tests/dict_derived_fingerprint.rs"
+
+[[test]]
+name = "dict_r1b_reuse"
+path = "tests/dict_r1b_reuse.rs"
+
+[[test]]
+name = "facts_d860_relcache_tls"
+path = "tests/facts_d860_relcache_tls.rs"
+
+[[test]]
+name = "facts_index_opc"
+path = "tests/facts_index_opc.rs"
+
+[[test]]
+name = "facts_range"
+path = "tests/facts_range.rs"
+
+[[test]]
+name = "lockrows_lock"
+path = "tests/lockrows_lock.rs"
+
+[[test]]
+name = "membroker_tail_refresh_allocates_nothing"
+path = "tests/membroker_tail_refresh_allocates_nothing.rs"
+
+[[test]]
+name = "modifytable_trigger"
+path = "tests/modifytable_trigger.rs"
+
+[[test]]
+name = "modifytable_write"
+path = "tests/modifytable_write.rs"
+
+[[test]]
+name = "pool_build_buffers"
+path = "tests/pool_build_buffers.rs"
+
+[[test]]
+name = "scan_device_probe"
+path = "tests/scan_device_probe.rs"
+
+[[test]]
+name = "scan_device_probe_lazy"
+path = "tests/scan_device_probe_lazy.rs"
+
+[[test]]
+name = "scan_heap_source"
+path = "tests/scan_heap_source.rs"
+
+[[test]]
+name = "scan_index_source"
+path = "tests/scan_index_source.rs"
+
+[[test]]
+name = "scan_pglfast_c5_bitmap_park"
+path = "tests/scan_pglfast_c5_bitmap_park.rs"
+
+[[test]]
+name = "scan_pgrc_cond_counts_heap"
+path = "tests/scan_pgrc_cond_counts_heap.rs"
+
+[[test]]
+name = "scan_pgrc_granule_census"
+path = "tests/scan_pgrc_granule_census.rs"
+
+[[test]]
+name = "scan_pgrc_unread_switch"
+path = "tests/scan_pgrc_unread_switch.rs"
+
+[[test]]
+name = "scan_pgrc_granule_inplace"
+path = "tests/scan_pgrc_granule_inplace.rs"
+
+[[test]]
+name = "scan_pgrc_granule_packed"
+path = "tests/scan_pgrc_granule_packed.rs"
+
+[[test]]
+name = "scan_pgrc_granule_shred_codes"
+path = "tests/scan_pgrc_granule_shred_codes.rs"
+
+[[test]]
+name = "scan_pgrc_granule_source"
+path = "tests/scan_pgrc_granule_source.rs"
+
+[[test]]
+name = "scan_pgrc_granule_verdicts"
+path = "tests/scan_pgrc_granule_verdicts.rs"
+
+[[test]]
+name = "scan_pgrc_granule_zoneread"
+path = "tests/scan_pgrc_granule_zoneread.rs"
+
+[[test]]
+name = "scan_pgrc_share_held"
+path = "tests/scan_pgrc_share_held.rs"
+
+[[test]]
+name = "scan_pgrc_prime_dirs"
+path = "tests/scan_pgrc_prime_dirs.rs"
+
+[[test]]
+name = "scan_pgrc_residency"
+path = "tests/scan_pgrc_residency.rs"
+
+[[test]]
+name = "scan_v4_m2_bitmap"
+path = "tests/scan_v4_m2_bitmap.rs"
+
+[[test]]
+name = "scan_v4_m2_heap"
+path = "tests/scan_v4_m2_heap.rs"
+
+[[test]]
+name = "scan_v4_m2_index"
+path = "tests/scan_v4_m2_index.rs"
+
+[[test]]
+name = "scan_v4_m2_tid_sample"
+path = "tests/scan_v4_m2_tid_sample.rs"
+
+[[test]]
+name = "scan_v4_m2_tz"
+path = "tests/scan_v4_m2_tz.rs"

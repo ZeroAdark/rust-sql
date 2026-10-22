@@ -1,0 +1,2 @@
+backend/storage/file/vfs/src/sim.rs	SIM	pgport	test	test	the DST sim harness's in-memory filesystem (compiled only under --cfg pgrust_sim, never in a product build): a thread is a universe unless BOUND to a shared one
+backend/storage/file/vfs/src/sim.rs	BOUND	pgport	test	test	the DST sim harness's shared-universe binding (compiled only under --cfg pgrust_sim, never in a product build): adopt_universe binds this thread to its simulated process's universe

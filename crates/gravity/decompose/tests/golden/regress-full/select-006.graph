@@ -1,0 +1,70 @@
+-- regress-full-select-006
+-- select * from onek, (values ((select i from (values(10000), (2), (389), (1000), (2000), ((select 10029))) as foo(i) order by i asc limit 1))) bar (i) where onek.unique1 = bar.i;
+graph pipelines=7 breakers=2 init_plans=4 root=p6
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0
+  source const
+  project (1=c23:10029)
+  outs 1=w4:val
+p1 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 TopK)
+  nodes n4@0 n3@1^
+  source values rti=6 rows=6
+    row (c23:10000)
+    row (c23:2)
+    row (c23:389)
+    row (c23:1000)
+    row (c23:2000)
+    row ($exec0)
+  project (1=v6.1)
+  sort keys=1+:I32 form=topk count=1 offset=all
+  outs 1=w4:val
+p2 node=3 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1
+  nodes n3@0 n2@1
+  source breaker slot=0
+  project (1=outer.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p3 node=5 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n5@0
+  source const
+  project (1=c23:10029)
+  outs 1=w4:val
+p4 node=8 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 TopK)
+  nodes n8@0 n7@1^
+  source values rti=9 rows=6
+    row (c23:10000)
+    row (c23:2)
+    row (c23:389)
+    row (c23:1000)
+    row (c23:2000)
+    row ($exec2)
+  project (1=v9.1)
+  sort keys=1+:I32 form=topk count=1 offset=all
+  outs 1=w4:val
+p5 node=7 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p4
+  nodes n7@0 n6@1
+  source breaker slot=0
+  project (1=outer.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p6 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=16417 rti=1 am=heap index=19335
+    key att=1 op=96 value=$exec3
+    recheck (op96(v1.1, $exec3))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=$exec1)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page 17=w4:val
+breaker slot=0 kind=TopK budget=Fixed(96) spill=None producer=p1 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=0 kind=TopK budget=Fixed(96) spill=None producer=p4 layout=[I32]->[Count@8] 16B order=1+
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+init_plan id=2 pipeline=p2 link=Expr param=$exec1 raise-free
+init_plan id=3 pipeline=p3 link=Expr param=$exec2 raise-free
+init_plan id=4 pipeline=p5 link=Expr param=$exec3 raise-free
+mapped: Result IndexScan ValuesScan Sort Limit SubPlan

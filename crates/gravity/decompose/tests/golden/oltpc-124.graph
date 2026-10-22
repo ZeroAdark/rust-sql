@@ -1,0 +1,15 @@
+-- oltpc-124
+-- UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = $1 AND ol_d_id = $2 AND ol_o_id = $3 /* C97 update int2 col plus int4 const multi-row */
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16504 rti=1 am=heap index=16514
+    key att=3 op=96 value=$1
+    key att=6 op=94 value=$2
+    key att=2 op=96 value=$3
+    recheck (op96(v1.3, $1), op94(v1.6, $2), op96(v1.2, $3))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byref8:vl:win/page Attr(10):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=fn314(op552(v1.8, c23:1)), 2j=v1.-1, 3j=v1.1, 4j=v1.2, 5j=v1.3, 6j=v1.4, 7j=v1.5, 8j=v1.6, 9j=v1.7, 10j=v1.9, 11j=v1.10)
+  write UPDATE rel=16504 rti=1 natts=10 indexes=(16514[3, 6, 2, 7]up) set=(8)
+  outs 1=w2:val 2=fx6:row 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=vl:win/page 11=vl:win/page
+mapped: ModifyTable IndexScan

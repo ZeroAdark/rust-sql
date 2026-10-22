@@ -1,0 +1,17 @@
+-- regress-full-join-143
+-- explain (costs off) select nspname from (select 1 as x) ss1 left join ( select n.nspname, c.relname from pg_class c left join pg_namespace n on n.oid = c.relnamespace where c.relkind = 'r' ) ss2 on false;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project ()
+  nest inner=n2 JOIN_LEFT invariant raise-free params=() qual=(c16:0)
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  gate T_List
+  project (1=v6.2)
+  project (1=inner.1)
+  outs
+  outs 1=fx64:life/breaker
+mapped: Result NestLoop

@@ -1,0 +1,1 @@
+backend/catalog/aclchk/src/grant.rs	BINARY_UPGRADE_RECORD_INIT_PRIVS	pgport	at:SetRecordInitPrivs	leader	C's binary_upgrade_record_init_privs: set and cleared by pg_upgrade's restore around its GRANT / REVOKE

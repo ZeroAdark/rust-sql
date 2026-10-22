@@ -207,6 +207,7 @@ fn make_portal<'mcx>(mcx: Mcx<'mcx>, formats: &[i16]) -> Portal<'mcx> {
         activeSubid: 0,
         createLevel: 0,
         sourceText: None,
+        sourceTextOwned: None,
         commandTag: CMDTAG_UNKNOWN,
         qc: QueryCompletion::default(),
         stmts: StmtListHandle::NULL,
@@ -236,6 +237,8 @@ fn make_portal<'mcx>(mcx: Mcx<'mcx>, formats: &[i16]) -> Portal<'mcx> {
         cursorFillExhausted: false,
         currentOfEligible: None,
         cursorCaptureBatch: false,
+        gravity: 0,
+        memory_owner: None,
         cursorTidStore: TuplestoreHandle::NULL,
     })
 }
@@ -613,4 +616,22 @@ fn debugtup_printatt_writes_raw_value_bytes() {
     expect.extend_from_slice(value);
     expect.extend_from_slice(b"\"\t(typeid = 23, len = 4, typmod = -1, byval = t)\n");
     assert_eq!(out, expect);
+}
+
+#[test]
+fn huge_wire_buffer_is_not_pooled_across_statements() {
+    std::thread::spawn(|| {
+        let mut buf = take_wire_buf().unwrap();
+        buf.append_bytes(&[b'x'; 2 * WIRE_BUF_POOL_MAX]).unwrap();
+        put_wire_buf(buf);
+        assert!(take_wire_buf().unwrap().capacity() <= WIRE_BUF_POOL_MAX);
+
+        let mut buf = take_wire_buf().unwrap();
+        buf.append_bytes(b"row").unwrap();
+        let cap = buf.capacity();
+        put_wire_buf(buf);
+        assert_eq!(take_wire_buf().unwrap().capacity(), cap, "small buffers stay pooled");
+    })
+    .join()
+    .unwrap();
 }

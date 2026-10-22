@@ -1,0 +1,4 @@
+# PostgreSQL 18.6 contrib/ltree/ltxtquery_io.c: 3 stack-depth check sites
+225	makepol	crates/contrib/ltree/src/io.rs	makepol	yes	
+317	findoprnd	crates/contrib/ltree/src/io.rs	findoprnd	yes	
+516	infix	crates/contrib/ltree/src/io.rs	Infix::run	yes	

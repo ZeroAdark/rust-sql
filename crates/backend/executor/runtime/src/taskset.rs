@@ -74,11 +74,29 @@ pub(crate) struct TaskSetRt {
     /// claim extends to the next hard boundary — per-epoch state is never
     /// split across workers (MorselSource::whole_boundary_claims).
     pub(crate) whole_claims: bool,
+    /// The first granule whole claims stop at (MorselSource::whole_until,
+    /// cached at publish); `u64::MAX` when every claim is whole.
+    pub(crate) whole_until: u64,
+    /// The end-game terminal split may cut a whole claim (MorselSource::
+    /// endgame_split, cached at publish).
+    pub(crate) endgame: bool,
     /// Claim coalescing on whole-boundary claims (source-provided, cached
     /// at publish): at low live width one claim may span several epochs —
     /// only for sources whose work body subdivides at epoch edges
     /// (MorselSource::coalesce_claims).
     pub(crate) coalesce: bool,
+    /// D4552 (a): the publishing thread's account; the task set (and its group, when this holds the last reference)
+    /// frees inside it wherever its last reference drops (the memory policy's `ledger_home` knob).
+    pub(crate) home: memledger::Home,
+    /// D4552 (a): last field: the task set's fields drop inside `home` (armed by `Drop`).
+    pub(crate) home_exit: memledger::HomeExit,
+}
+
+impl Drop for TaskSetRt {
+    fn drop(&mut self) {
+        let home = self.home;
+        self.home_exit.arm(&home);
+    }
 }
 
 impl TaskSetRt {

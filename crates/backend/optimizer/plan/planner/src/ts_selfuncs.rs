@@ -121,14 +121,19 @@ fn tsquery_opr_selec(
                     let t = text_exhdr(v);
                     let f = numbers[idx] as f64;
                     if t.len() >= key.len() && &t[..key.len()] == key {
-                        matched += f - matched * f;
+                        matched = crate::fma_sites::ts_mce_accum(matched, f);
                         n_matched += 1;
                     }
-                    allmces += f - allmces * f;
+                    allmces = crate::fma_sites::ts_mce_accum(allmces, f);
                 }
                 let matched = clamp_probability(matched);
                 let allmces = clamp_probability(allmces);
-                let selec = matched + (1.0 - allmces) * (n_matched as f64 / length as f64);
+                let selec = crate::fma_sites::ts_prefix_selec(
+                    matched,
+                    allmces,
+                    n_matched as f64,
+                    length as f64,
+                );
                 // "word:*" must estimate at least as high as "word".
                 f64::max(f64::min(DEFAULT_TS_MATCH_SEL, minfreq as f64 / 2.0), selec)
             } else {
@@ -155,7 +160,7 @@ fn tsquery_opr_selec(
             OP_OR => {
                 let s1 = tsquery_opr_selec(q, i + 1, lookup, minfreq)?;
                 let s2 = tsquery_opr_selec(q, i + opr.left as usize, lookup, minfreq)?;
-                s1 + s2 - s1 * s2
+                crate::fma_sites::or_sel(s1, s2)
             }
             other => {
                 return Err(PgError::error(format!("unrecognized operator: {other}")).into())

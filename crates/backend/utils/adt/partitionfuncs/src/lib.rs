@@ -57,7 +57,7 @@ fn collect_tree_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo, rootrelid: Oid) -> 
     let desc = resolved.result_tuple_desc.expect("composite result carries a tupdesc");
 
     let partitions = pg_inherits::find_all_inheritors(mcx, rootrelid, AccessShareLock)?;
-    let mut tuples = Vec::with_capacity(partitions.len());
+    let mut tuples = ::mcx::std_vec_with_capacity("adt", partitions.len())?;
     for &relid in partitions.iter() {
         let relkind = lookup_relkind(relid)?;
         let ancestors = pg_inherits::get_partition_ancestors(mcx, relid)?;
@@ -84,7 +84,7 @@ fn collect_tree_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo, rootrelid: Oid) -> 
         values[3] = Datum::from_i32(level);
 
         let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &nulls)?;
-        tuples.push(tuple.image().to_vec());
+        tuples.push(::mcx::std_vec_from_slice("adt", &tuple.image())?);
     }
     Ok(TreeRows { tuples })
 }
@@ -100,14 +100,14 @@ pub fn fc_pg_partition_tree(
 ) -> PgResult<Datum> {
     let flinfo = flinfo.expect("pg_partition_tree: NULL flinfo");
     if !flinfo.has_fn_extra() {
+        funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
         let rootrelid = fcinfo.arg_oid(0);
         let rows = if check_rel_can_be_partition(rootrelid)? {
             collect_tree_rows(flinfo, fcinfo, rootrelid)?
         } else {
             TreeRows { tuples: Vec::new() }
         };
-        let fctx = funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
-        fctx.user_fctx = Some(Box::new(rows));
+        funcapi::per_MultiFuncCall(flinfo).user_fctx = Some(Box::new(rows));
     }
     let fctx = funcapi::per_MultiFuncCall(flinfo);
     let idx = fctx.call_cntr as usize;

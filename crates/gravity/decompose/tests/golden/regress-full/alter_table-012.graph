@@ -1,0 +1,10 @@
+-- regress-full-alter_table-012
+-- select * from atacc1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=291 end=sink
+  nodes n0@0
+  source range rel=41754 rti=1 am=heap
+    lanes Offset:byval2:w2:val
+  project ()
+  outs
+mapped: SeqScan

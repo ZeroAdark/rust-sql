@@ -161,14 +161,14 @@ pub(crate) fn cstrings_composite_result(
 ) -> PgResult<Datum> {
     let n = tupdesc.natts as usize;
     debug_assert!(values.len() >= n);
-    let mut datums = vec![Datum::null(); n];
-    let mut nulls = vec![false; n];
+    let mut datums = ::mcx::std_vec_from_elem("pgstattuple", Datum::null(), n)?;
+    let mut nulls = ::mcx::std_vec_from_elem("pgstattuple", false, n)?;
     // The input functions' FmgrInfos (and the scratch their by-reference
     // results live in) must outlive heap_form_tuple's copy.
-    let mut flinfos: Vec<FmgrInfo> = Vec::with_capacity(n);
+    let mut flinfos: Vec<FmgrInfo> = ::mcx::std_vec_with_capacity("pgstattuple", n)?;
     // TupleDescGetAttInMetadata (pgstattuple.c:115) resolves every column's
     // input function before any value is converted.
-    let mut inputs: Vec<Option<(types_core::Oid, types_core::Oid)>> = Vec::with_capacity(n);
+    let mut inputs: Vec<Option<(types_core::Oid, types_core::Oid)>> = ::mcx::std_vec_with_capacity("pgstattuple", n)?;
     for i in 0..n {
         let att = tupdesc.attr(i);
         inputs.push(if att.attisdropped {
@@ -272,10 +272,7 @@ fn qualified_name_parts(
         }
     };
     if names.len() > 3 {
-        // namespace.c:3578 formats this with NameListToString(names): the
-        // parsed list (downcased / unquoted / whitespace-trimmed) joined by
-        // '.', never the raw text argument; the bytes go out as-is.
-        let mut msg = b"improper relation name (too many dotted names): ".to_vec();
+        let mut msg = ::mcx::std_vec_from_slice("pgstattuple", b"improper relation name (too many dotted names): ")?;
         msg.extend_from_slice(&names.join(&b'.'));
         return Err(Box::new(
             PgError::error_raw_message(msg).with_sqlstate(types_error::ERRCODE_SYNTAX_ERROR),

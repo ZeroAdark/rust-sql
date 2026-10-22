@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/ops/shared/values.rs
+growth	std::vec::Vec::push	1
+method	slice::sort_by_key	1
+method	std::iter::Iterator::collect	1

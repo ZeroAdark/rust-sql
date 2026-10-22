@@ -1,0 +1,3 @@
+path	crates/gravity/decompose/src/ops/window.rs
+growth	std::vec::Vec::push	1
+method	std::iter::Iterator::collect	1

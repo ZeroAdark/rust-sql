@@ -1,0 +1,33 @@
+-- regress-full-subselect-047
+-- select * from float_table where float_col in (select num_col from numeric_table);
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=4 eligible rows=1360 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n3@1^
+  source range rel=25209 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v3.1, 2=fn1746(v3.1))
+  outs 1=vl:win/page 2=w8:val
+p1 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p0 words=bits@5/6
+  nodes n3@0 n2@1
+  source breaker slot=0
+  project (1=agg2146(1=outer.1))
+  build keys=(fn1746(outer.1)) decls=701/701:F64
+  outs 1=vl:call2146
+p2 node=1 eligible rows=2260 end=sink
+  desc consumes=slot1@p1
+  nodes n1@0 n0@1
+  source range rel=25214 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  probe slot=1 inner=n2 JOIN_INNER unique keys=(outer.1) decls=701/701:F64 clauses=(op670(outer.1, fn1746(inner.1)))
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[F64]->[MinCode@8,Count@16]+valid 32B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[F64]->[Count@8] 16B
+group slot=0 producer=p0 node=3 form=Hashed hints=[] layout=[F64]->[MinCode@8,Count@16]+valid 32B
+  key 0 word=0 resno=2 kind=F64 attno=0 type=701 rep=0 image=F64 expr=fn1746(v3.1)
+  agg aggno=0 fn=2146 reg=MinVar slot=- count_slot=- final=Rendered class=Min(Num) trans=Var mods=[] expr=agg2146(1=outer.1)
+mapped: SeqScan HashJoin Agg Hash

@@ -55,14 +55,61 @@ fn setup() {
             set: |_| {},
         });
 
-        let dir = std::env::temp_dir().join(format!("pgrust_sync_{}", std::process::id()));
+        let dir = data_dir(std::process::id());
         std::fs::create_dir_all(dir.join("base/5")).unwrap();
+        remove_data_dir_at_exit();
         std::env::set_current_dir(&dir).unwrap();
+        println!("data dir {}", dir.display());
     });
     // Per test thread: VFD cache, pendingOps and GUC mirrors are all TLS.
     init_small::globals::set_enableFsync(true);
     fd::InitFileAccess();
     InitSync().unwrap();
+}
+
+fn data_dir(pid: u32) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("pgrust_sync_{pid}"))
+}
+
+/// The process's data directory (every test's working directory, so no
+/// test's end may remove it) goes at the process's exit.
+fn remove_data_dir_at_exit() {
+    extern "C" fn gone() {
+        let _ = std::fs::remove_dir_all(data_dir(std::process::id()));
+    }
+    extern "C" {
+        fn atexit(f: extern "C" fn()) -> core::ffi::c_int;
+    }
+    // SAFETY: the C library's atexit, given a function that cannot unwind
+    // (it ignores the removal's error).
+    unsafe { atexit(gone) };
+}
+
+/// A run of this test alone, in a child process, leaves no data directory
+/// behind once the child exits.
+#[test]
+fn a_run_leaves_nothing_behind() {
+    const CHILD: &str = "PGRUST_SYNC_LEAVE_NOTHING_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        setup();
+        create_rel_with_block(20099);
+        return;
+    }
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "tests::a_run_leaves_nothing_behind", "--nocapture"])
+        .env(CHILD, "1")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let dir = data_dir(child.id());
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "child failed: {stdout}");
+    assert!(
+        stdout.contains(&format!("data dir {}", dir.display())),
+        "the child never made its data dir: {stdout}"
+    );
+    assert!(!dir.exists(), "{} left behind", dir.display());
 }
 
 fn key(rel: u32) -> RelFileLocatorBackend {
@@ -253,4 +300,35 @@ fn fsync_failure_aborts_process() {
     assert_eq!(out.status.code(), Some(42), "child must unwind PanicExitThread: {out:?}");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("PANIC:  could not fsync file"), "missing PANIC report: {stderr}");
+}
+
+fn pgrc_tag(db: u32, rel: u32) -> FileTag {
+    let locator = RelFileLocator { spcOid: 1663, dbOid: db, relNumber: rel };
+    FileTag::new(SyncRequestHandler::SYNC_HANDLER_PGRC, ForkNumber::MAIN_FORKNUM, locator, 0)
+}
+
+#[test]
+fn pgrc_one_request_per_directory_syncs_its_names() {
+    setup();
+    std::fs::create_dir_all("base/5/pgrc_20010").unwrap();
+    std::fs::write("base/5/pgrc_20010/part-0.pgrc", b"pgrc").unwrap();
+    let loc = pgrc_wal::dir_loc(key(20010).locator);
+    pgrc_wal::sync::register(loc, ["part-0.pgrc".to_string(), "tmp-1-0.pgrct".to_string()]).unwrap();
+    pgrc_wal::sync::register(loc, ["manifest-1.pgrcm".to_string()]).unwrap();
+    assert_eq!(pending_counts().0, 1, "one request per directory");
+    // The renamed-away tmp and the never-written manifest count as done.
+    ProcessSyncRequests().unwrap();
+    assert_eq!(pending_counts().0, 0);
+}
+
+#[test]
+fn pgrc_filter_cancels_its_database_only() {
+    setup();
+    RegisterSyncRequest(pgrc_tag(5, 20011), SyncRequestType::SYNC_REQUEST, false).unwrap();
+    RegisterSyncRequest(pgrc_tag(6, 20011), SyncRequestType::SYNC_REQUEST, false).unwrap();
+    RegisterSyncRequest(pgrc_tag(5, 0), SyncRequestType::SYNC_FILTER_REQUEST, true).unwrap();
+    let canceled = with_pending(|p| p.ops.iter().filter(|(_, e)| e.canceled).map(|(t, _)| t.rlocator.dbOid).collect::<Vec<_>>());
+    assert_eq!(canceled, Some(vec![5]));
+    ProcessSyncRequests().unwrap();
+    assert_eq!(pending_counts().0, 0);
 }

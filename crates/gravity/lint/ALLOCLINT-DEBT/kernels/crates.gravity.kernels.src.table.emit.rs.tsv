@@ -1,0 +1,7 @@
+path	crates/gravity/kernels/src/table/emit.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::reserve_exact	1
+growth	std::vec::Vec::try_reserve_exact	1
+macro	std::vec	1
+method	std::iter::Iterator::collect	1
+type	std::vec::Vec	2

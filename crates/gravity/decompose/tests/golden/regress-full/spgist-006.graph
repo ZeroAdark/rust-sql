@@ -1,0 +1,13 @@
+-- regress-full-spgist-006
+-- explain (costs off) select * from spgist_domain_tbl where f1 = 'fo';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@0
+  source bitmap rel=27131 rti=1 am=heap
+    bitmap index node=1 index=27136 rows=7 iam=spgist
+      key att=1 op=98 form=amop value=c25:'fo'
+    recheck (op98(relabel25(v1.1), c25:'fo'))
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1)
+  outs 1=?
+mapped: BitmapIndexScan BitmapHeapScan

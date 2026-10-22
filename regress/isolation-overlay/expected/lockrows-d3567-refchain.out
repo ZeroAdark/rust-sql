@@ -1,0 +1,234 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2x s1a s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti;
+QUERY PLAN                                                                                                  
+------------------------------------------------------------------------------------------------------------
+Limit                                                                                                       
+  ->  LockRows                                                                                              
+        ->  Sort                                                                                            
+              Sort Key: ((- cti.priority_weight)), crun.execution_date, cti.map_index, cti.task_id          
+              ->  Nested Loop                                                                               
+                    Join Filter: (crun.dag_id = cdag.dag_id)                                                
+                    ->  Hash Join                                                                           
+                          Hash Cond: ((cti.dag_id = crun.dag_id) AND (cti.run_id = crun.run_id))            
+                          ->  Seq Scan on cti                                                               
+                                Filter: (state = 'scheduled'::text)                                         
+                          ->  Hash                                                                          
+                                ->  Seq Scan on crun                                                        
+                                      Filter: ((run_type <> 'backfill'::text) AND (state = 'running'::text))
+                    ->  Index Scan using cdag_pkey on cdag                                                  
+                          Index Cond: (dag_id = cti.dag_id)                                                 
+                          Filter: (NOT is_paused)                                                           
+(16 rows)
+
+step s1a: UPDATE cti SET priority_weight = 0 WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s2l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d12   |t0     |r11   |              0
+d17   |t3     |r16   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s2l s1c
+step s1q: UPDATE cti SET state = 'queued' WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s2l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d17   |t3     |r16   |             10
+d26   |t4     |r25   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c
+step s1m: UPDATE cti SET run_id = 'r12' WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s2l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d17   |t3     |r16   |             10
+d26   |t4     |r25   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2l s1c
+step s1p: UPDATE cdag SET is_paused = true WHERE dag_id = 'd12'; UPDATE cti SET priority_weight = 10 WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s2l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d12   |t0     |r11   |             10
+d17   |t3     |r16   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT 1 FROM cti WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11') FOR UPDATE;
+?column?
+--------
+       1
+(1 row)
+
+step s2sk: SELECT cti.dag_id, cti.task_id, cti.run_id FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 3 FOR UPDATE OF cti SKIP LOCKED;
+dag_id|task_id|run_id
+------+-------+------
+d2    |t5     |r1    
+d6    |t3     |r5    
+d17   |t3     |r16   
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1a s3l s1c
+step s3x: EXPLAIN (COSTS OFF) SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti;
+QUERY PLAN                                                                                                  
+------------------------------------------------------------------------------------------------------------
+Limit                                                                                                       
+  ->  LockRows                                                                                              
+        ->  Sort                                                                                            
+              Sort Key: ((- cti.priority_weight)), crun.execution_date, cti.map_index, cti.task_id          
+              ->  Hash Join                                                                                 
+                    Hash Cond: (crun.dag_id = cdag.dag_id)                                                  
+                    ->  Hash Join                                                                           
+                          Hash Cond: ((cti.dag_id = crun.dag_id) AND (cti.run_id = crun.run_id))            
+                          ->  Seq Scan on cti                                                               
+                                Filter: (state = 'scheduled'::text)                                         
+                          ->  Hash                                                                          
+                                ->  Seq Scan on crun                                                        
+                                      Filter: ((run_type <> 'backfill'::text) AND (state = 'running'::text))
+                    ->  Hash                                                                                
+                          ->  Seq Scan on cdag                                                              
+                                Filter: (NOT is_paused)                                                     
+(16 rows)
+
+step s1a: UPDATE cti SET priority_weight = 0 WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s3l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d12   |t0     |r11   |              0
+d17   |t3     |r16   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s3l s1c
+step s1m: UPDATE cti SET run_id = 'r12' WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s3l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d17   |t3     |r16   |             10
+d26   |t4     |r25   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s3l s1c
+step s1p: UPDATE cdag SET is_paused = true WHERE dag_id = 'd12'; UPDATE cti SET priority_weight = 10 WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s3l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d12   |t0     |r11   |             10
+d17   |t3     |r16   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s4x s1a s4l s1c
+step s4x: EXPLAIN (COSTS OFF) SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti;
+QUERY PLAN                                                                                                  
+------------------------------------------------------------------------------------------------------------
+Limit                                                                                                       
+  ->  LockRows                                                                                              
+        ->  Sort                                                                                            
+              Sort Key: ((- cti.priority_weight)), crun.execution_date, cti.map_index, cti.task_id          
+              ->  Nested Loop                                                                               
+                    Join Filter: (crun.dag_id = cdag.dag_id)                                                
+                    ->  Nested Loop                                                                         
+                          ->  Seq Scan on cti                                                               
+                                Filter: (state = 'scheduled'::text)                                         
+                          ->  Memoize                                                                       
+                                Cache Key: cti.dag_id, cti.run_id                                           
+                                Cache Mode: logical                                                         
+                                ->  Index Scan using crun_dag_id_run_id_key on crun                         
+                                      Index Cond: ((dag_id = cti.dag_id) AND (run_id = cti.run_id))         
+                                      Filter: ((run_type <> 'backfill'::text) AND (state = 'running'::text))
+                    ->  Index Scan using cdag_pkey on cdag                                                  
+                          Index Cond: (dag_id = cti.dag_id)                                                 
+                          Filter: (NOT is_paused)                                                           
+(18 rows)
+
+step s1a: UPDATE cti SET priority_weight = 0 WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s4l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d12   |t0     |r11   |              0
+d17   |t3     |r16   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s4l s1c
+step s1m: UPDATE cti SET run_id = 'r12' WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s4l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d17   |t3     |r16   |             10
+d26   |t4     |r25   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s4l s1c
+step s1p: UPDATE cdag SET is_paused = true WHERE dag_id = 'd12'; UPDATE cti SET priority_weight = 10 WHERE (dag_id, task_id, run_id) = ('d12', 't0', 'r11');
+step s4l: SELECT cti.dag_id, cti.task_id, cti.run_id, cti.priority_weight FROM cti JOIN crun ON crun.dag_id = cti.dag_id AND crun.run_id = cti.run_id JOIN cdag ON cti.dag_id = cdag.dag_id WHERE crun.state = 'running' AND crun.run_type <> 'backfill' AND cti.state = 'scheduled' AND cdag.is_paused = false ORDER BY -cti.priority_weight, crun.execution_date, cti.map_index, cti.task_id LIMIT 4 FOR UPDATE OF cti; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+dag_id|task_id|run_id|priority_weight
+------+-------+------+---------------
+d2    |t5     |r1    |             10
+d6    |t3     |r5    |             10
+d12   |t0     |r11   |             10
+d17   |t3     |r16   |             10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress

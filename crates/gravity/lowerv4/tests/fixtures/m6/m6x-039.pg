@@ -1,0 +1,7 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT x % 3 AS g, count(DISTINCT x % 5), count(DISTINCT x % 7) FROM generate_series(1, 300) x GROUP BY 1
+cols: g	count	count
+[pg]
+0	5	7
+1	5	7
+2	5	7

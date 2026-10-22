@@ -1,0 +1,1 @@
+backend/postmaster/bgworker/src/lib.rs	MY_BGWORKER_ENTRY	pgport	exit	thread	MyBgworkerEntry: this thread's own worker entry (one entry, bounded), set by BackgroundWorkerMain (per task on a retained standby) or adopt_worker_entry for the runtime pool / standing executors; a pool thread reads its own synthetic entry (log backend_type), never the leader's

@@ -162,9 +162,17 @@ pub(crate) fn varlena_body_at(d: Datum) -> Vec<u8> {
             let scratch = mcx::MemoryContext::new("ruleutils detoast");
             let image =
                 detoast::detoast_attr(scratch.mcx(), raw).expect("detoast catalog varlena");
-            image[datum::varlena::VARHDRSZ..].to_vec()
+            let slice = &image[datum::varlena::VARHDRSZ..];
+            let mut out = Vec::new();
+            let _ = out.try_reserve_exact(slice.len());
+            out.extend_from_slice(slice);
+            out
         } else {
-            types_fmgr::PackedVarlena::from_ptr(p).data().to_vec()
+            let slice = types_fmgr::PackedVarlena::from_ptr(p).data();
+            let mut out = Vec::new();
+            let _ = out.try_reserve_exact(slice.len());
+            out.extend_from_slice(slice);
+            out
         }
     }
 }
@@ -192,7 +200,8 @@ pub(crate) fn text_array_at(d: Datum) -> Vec<String> {
     let dataoffset = i32::from_ne_bytes(b[4..8].try_into().unwrap());
     assert!(ndim == 1 && dataoffset == 0, "ruleutils: unexpected catalog text[] shape");
     let dim1 = i32::from_ne_bytes(b[12..16].try_into().unwrap()) as usize;
-    let mut out = Vec::with_capacity(dim1);
+    let mut out = Vec::new();
+    let _ = out.try_reserve_exact(dim1);
     let mut off = 20usize;
     for _ in 0..dim1 {
         // att_align_pointer: a zero pad byte means the element was aligned.
@@ -206,8 +215,11 @@ pub(crate) fn text_array_at(d: Datum) -> Vec<String> {
             let raw = u32::from_ne_bytes(b[off..off + 4].try_into().unwrap());
             (4usize, (raw >> 2) as usize - 4)
         };
-        out.push(String::from_utf8(b[off + hdr..off + hdr + len].to_vec())
-            .expect("non-UTF-8 text[] element"));
+        out.push(
+            core::str::from_utf8(&b[off + hdr..off + hdr + len])
+                .expect("non-UTF-8 text[] element")
+                .to_string(),
+        );
         off += hdr + len;
     }
     out
@@ -224,7 +236,11 @@ pub(crate) fn array_body(d: Datum, elem_width: usize) -> Vec<u8> {
     let dataoffset = i32::from_ne_bytes(b[4..8].try_into().unwrap());
     assert!(ndim == 1 && dataoffset == 0, "ruleutils: unexpected catalog array shape");
     let dim1 = i32::from_ne_bytes(b[12..16].try_into().unwrap()) as usize;
-    b[20..20 + elem_width * dim1].to_vec()
+    let slice = &b[20..20 + elem_width * dim1];
+    let mut out = Vec::new();
+    let _ = out.try_reserve_exact(slice.len());
+    out.extend_from_slice(slice);
+    out
 }
 
 pub(crate) fn str_in<'m>(mcx: Mcx<'m>, s: &str) -> PgResult<&'m str> {
@@ -728,7 +744,7 @@ fn search_path_oids() -> PgResult<Vec<Oid>> {
     let mut path = vec![InvalidOid; 64];
     let n = catalog_namespace::fetch_search_path_array(&mut path)?;
     if n > path.len() {
-        path.resize(n, InvalidOid);
+        ::mcx::std_vec_resize("ruleutils", &mut path, n, InvalidOid)?;
         catalog_namespace::fetch_search_path_array(&mut path)?;
     }
     path.truncate(n);
@@ -1406,7 +1422,8 @@ fn pg_get_constraintdef_worker_full(
         other => {
             // ruleutils.c:2594: elog(ERROR, "invalid constraint type \"%c\"")
             // with the raw byte, catchable.
-            let mut msg = b"invalid constraint type \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"invalid constraint type \"");
             msg.push(other as u8);
             msg.push(b'"');
             return Err(Box::new(PgError::error_raw_message(msg)));

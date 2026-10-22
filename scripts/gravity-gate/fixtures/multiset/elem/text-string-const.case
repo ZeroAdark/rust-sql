@@ -1,0 +1,10 @@
+# string_agg with a plain '..' delimiter
+sql: SELECT string_agg(x, ',') FROM t;
+cols: string_agg
+tables: t
+class: unordered
+verdict: match
+[pg]
+a,b
+[got]
+b,a

@@ -1,0 +1,13 @@
+-- regress-full-tsrf-005
+-- explain (verbose, costs off) SELECT unnest(ARRAY[1, 2]) FROM few WHERE false;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project ()
+  srf tlist [1:Unnest fn2331 fn2331(c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00')]
+  project (1=fn2331(c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00'))
+  outs
+  outs 1=w4:val
+mapped: Result ProjectSet

@@ -29,7 +29,8 @@ mod tests;
 mod visibility;
 
 pub use temp::{
-    check_temp_table_namespace_access, AccessTempTableNamespace, GetTempTableNamespace,
+    check_temp_table_namespace_access, defer_temp_namespace_creation, AccessTempTableNamespace,
+    DeferredTempNamespace, GetTempTableNamespace,
     QualifiedNameGetCreationNamespace,
     RangeVarAdjustRelationPersistence, RangeVarGetAndCheckCreationNamespace,
     RangeVarGetCreationNamespace, ResetTempTableNamespace,
@@ -47,10 +48,9 @@ pub use lookup::{
     TypenameGetTypidExtended, RVR_MISSING_OK, RVR_NOWAIT, RVR_SKIP_LOCKED,
 };
 pub use path::{
-    active_search_path, assign_search_path, check_search_path, fetch_search_path,
-    fetch_search_path_array,
-    CopySearchPathMatcher, GetSearchPathMatcher, InitializeSearchPath, SearchPathMatcher,
-    SearchPathMatchesCurrentEnvironment,
+    active_path_generation, active_search_path, assign_search_path, check_search_path, fetch_search_path,
+    fetch_search_path_array, CopySearchPathMatcher, GetSearchPathMatcher, InitializeSearchPath,
+    SearchPathMatcher, ActiveSearchPathGeneration, SearchPathMatchesCurrentEnvironment,
 };
 pub use visibility::{
     CollationIsVisible, CollationIsVisibleExt, ConversionIsVisible, ConversionIsVisibleExt,
@@ -81,10 +81,30 @@ thread_local! {
     pub(crate) static NAMESPACE_USER: Cell<Oid> = const { Cell::new(InvalidOid) };
     pub(crate) static BASE_CREATION_NAMESPACE: Cell<Oid> = const { Cell::new(InvalidOid) };
     pub(crate) static BASE_TEMP_CREATION_PENDING: Cell<bool> = const { Cell::new(false) };
+    pub(crate) static TEMP_NAMESPACE_DEFERRED: Cell<bool> = const { Cell::new(false) };
     // INVARIANT: never zero (zero means "not known equal" in matchers).
     pub(crate) static ACTIVE_PATH_GENERATION: Cell<u64> = const { Cell::new(1) };
     pub(crate) static NAMESPACE_SEARCH_PATH: RefCell<Option<String>> = const { RefCell::new(None) };
     static PATH: RefCell<Option<ManuallyDrop<mcx::McxOwned<PathStateTy>>>> = const { RefCell::new(None) };
+}
+
+/// D4682 (client backend thread reuse, launch_backend cpool): the temp namespace state back to a fresh thread's (no
+/// temp namespace). RemoveTempRelationsCallback runs it after emptying the namespace at session exit; a parked thread
+/// runs it again (reset_for_thread_reuse) for a session that never committed one.
+pub(crate) fn reset_temp_namespace_for_thread_reuse() {
+    MY_TEMP_NAMESPACE.set(InvalidOid);
+    MY_TEMP_TOAST_NAMESPACE.set(InvalidOid);
+    MY_TEMP_NAMESPACE_SUB_ID.set(InvalidSubTransactionId);
+    TEMP_NAMESPACE_DEFERRED.set(false);
+}
+
+/// D4682: everything of this crate a parked client thread puts back before the next session: the temp namespace
+/// state, and the search path forced to be recomputed (InitializeSearchPath does that again too).
+pub fn reset_for_thread_reuse() {
+    reset_temp_namespace_for_thread_reuse();
+    BASE_SEARCH_PATH_VALID.set(false);
+    NAMESPACE_SEARCH_PATH.with(|c| *c.borrow_mut() = None);
+    path::invalidate_search_path_cache();
 }
 
 fn clear_path_state() {
@@ -423,6 +443,7 @@ fn opername_get_candidate_oids<'mcx>(
 }
 
 pub fn init_seams() {
+    gravity_deps::set_setting_probe(path::search_path_probe);
     namespace_seams::range_var_get_relid::set(seam_range_var_get_relid);
     namespace_seams::range_var_get_relid_extended::set(seam_range_var_get_relid_extended);
     namespace_seams::get_ts_parser_oid::set(get_ts_parser_oid);
@@ -434,6 +455,7 @@ pub fn init_seams() {
     namespace_seams::get_temp_namespace_proc_number::set(GetTempNamespaceProcNumber);
     namespace_seams::initialize_search_path::set(InitializeSearchPath);
     namespace_seams::fetch_search_path::set(fetch_search_path);
+    namespace_seams::active_path_generation::set(active_path_generation);
     namespace_seams::active_search_path::set(active_search_path);
     namespace_seams::find_default_conversion_proc::set(lookup::FindDefaultConversionProc);
     namespace_seams::get_collation_oid::set(lookup::get_collation_oid);

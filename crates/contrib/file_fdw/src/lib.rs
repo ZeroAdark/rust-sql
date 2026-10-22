@@ -28,6 +28,7 @@ use nodeforeignscan::{FdwExecRoutine, ForeignScanState};
 use planner::fdwplan::FdwPlanRoutine;
 use planner::run::PlannerRun;
 use types_slot::EXEC_FLAG_EXPLAIN_ONLY;
+use elog::PCT_M;
 
 const LIBRARY: &str = "file_fdw";
 
@@ -402,11 +403,29 @@ fn estimate_costs(
     fdw_private: &FileFdwPlanState,
 ) -> (f64, f64) {
     let r = run.root.rel(rel_id);
-    let mut run_cost = planner::costsize::gucs::seq_page_cost() * fdw_private.pages as f64;
-    let startup_cost = r.baserestrictcost.startup;
-    let cpu_per_tuple =
-        planner::costsize::gucs::cpu_tuple_cost() * 10.0 + r.baserestrictcost.per_tuple;
-    run_cost += cpu_per_tuple * fdw_private.ntuples;
+    estimate_costs_shape(
+        planner::costsize::gucs::seq_page_cost(),
+        fdw_private.pages as f64,
+        planner::costsize::gucs::cpu_tuple_cost(),
+        r.baserestrictcost.startup,
+        r.baserestrictcost.per_tuple,
+        fdw_private.ntuples,
+    )
+}
+
+fn estimate_costs_shape(
+    seq_page_cost: f64,
+    pages: f64,
+    cpu_tuple_cost: f64,
+    restrict_startup: f64,
+    restrict_per_tuple: f64,
+    ntuples: f64,
+) -> (f64, f64) {
+    let mut run_cost = seq_page_cost * pages;
+    let startup_cost = restrict_startup;
+    // file_fdw.c:1167 (D400)
+    let cpu_per_tuple = ::fp_contract::fmadd(cpu_tuple_cost, 10.0, restrict_per_tuple);
+    run_cost = ::fp_contract::fmadd(cpu_per_tuple, ntuples, run_cost);
     (startup_cost, startup_cost + run_cost)
 }
 
@@ -660,7 +679,7 @@ fn file_begin_foreign_scan<'mcx>(
     for def in node.plan.fdw_private.iter() {
         options.lappend(mcx, def)?;
     }
-    let copycx = Box::new(mcx.context().new_child_bump("COPY"));
+    let copycx = Box::new(mcx.context().new_child_wholesale("COPY"));
     let cstate = begin_copy(&copycx, rel, filename, is_program, &options)?;
     // SAFETY: es_query_cxt restamp, dropped at end-scan before the context
     // resets.
@@ -710,6 +729,8 @@ fn file_iterate_foreign_scan<'mcx>(
     // defaults are re-armed to it after every row.
     let copy_mcx = unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'static>>(f.copycx.mcx()) };
     let cstate = f.cstate.as_mut().expect("cstate live between begin and end");
+    // SAFETY: the boxed cstate outlives this call and does not move in it.
+    let _ctx = unsafe { copy_cmd::CopyFromEmitContext::push(cstate) };
 
     loop {
         let found = {
@@ -766,7 +787,7 @@ fn file_rescan_foreign_scan<'mcx>(
     if let Some(cstate) = f.cstate.take() {
         copy_cmd::EndCopyFrom(cstate)?;
     }
-    f.copycx = Box::new(mcx.context().new_child_bump("COPY"));
+    f.copycx = Box::new(mcx.context().new_child_wholesale("COPY"));
     // SAFETY: undoes the begin-time 'static restamp (same es_query_cxt).
     let options =
         unsafe { core::mem::transmute::<&NodeList<'static>, &NodeList<'mcx>>(&f.options) };
@@ -845,7 +866,7 @@ fn file_analyze_foreign_table<'mcx>(
             elog::ereport(ERROR)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not stat file \"{filename}\": %m"))
+                .errmsg(format!("could not stat file \"{filename}\": {PCT_M}"))
                 .finish(loc("fileAnalyzeForeignTable"))?;
             unreachable!()
         }
@@ -890,8 +911,8 @@ fn file_acquire_sample_rows<'mcx>(
 
     let tupdesc = &onerel.rd_att;
     let natts = tupdesc.natts as usize;
-    let mut values = vec![Datum::null(); natts];
-    let mut nulls = vec![true; natts];
+    let mut values = ::mcx::std_vec_from_elem("file_fdw", Datum::null(), natts)?;
+    let mut nulls = ::mcx::std_vec_from_elem("file_fdw", true, natts)?;
 
     let (filename, is_program, options) = file_get_options(mcx, onerel.rd_id)?;
     let mut cstate = copy_cmd::BeginCopyFrom(
@@ -907,7 +928,7 @@ fn file_acquire_sample_rows<'mcx>(
 
     // C's "file_fdw temporary context": rows are read here, then copied into
     // the caller's context by heap_form_tuple.
-    let mut tupcontext = MemoryContext::new("file_fdw temporary context");
+    let mut tupcontext = sample_row_context();
 
     let mut rstate = commands_analyze::sampling::reservoir_init_selection_state(
         pg_prng::global_prng(|p| p.next_u32()),
@@ -916,8 +937,11 @@ fn file_acquire_sample_rows<'mcx>(
 
     *totalrows = 0.0;
     *totaldeadrows = 0.0;
+    // SAFETY: cstate lives on this frame, unmoved, until the guard drops.
+    let _ctx = unsafe { copy_cmd::CopyFromEmitContext::push(&cstate) };
     loop {
-        vacuum_seams::vacuum_delay_point::call(true)?;
+        vacuum_seams::vacuum_delay_point::call(true)
+            .map_err(|e| copy_cmd::copy_from_error_context(&cstate, e))?;
 
         tupcontext.reset();
         // SAFETY: reset-only context; heap_form_tuple copies out before the
@@ -977,6 +1001,11 @@ fn file_acquire_sample_rows<'mcx>(
     Ok(numrows)
 }
 
+// Per-row MemoryContextReset: unowned by-ref datums live here, not leaks.
+fn sample_row_context() -> MemoryContext {
+    MemoryContext::new_wholesale("file_fdw temporary context")
+}
+
 static PLAN_ROUTINE: FdwPlanRoutine = FdwPlanRoutine {
     get_foreign_rel_size: file_get_foreign_rel_size,
     get_foreign_paths: file_get_foreign_paths,
@@ -1028,6 +1057,16 @@ pub fn init_seams() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sample_row_context_resets_with_unowned_datums() {
+        let mut cx = super::sample_row_context();
+        for _ in 0..2 {
+            let v = ::mcx::vec_with_capacity_in::<u8>(cx.mcx(), 48).unwrap();
+            core::mem::forget(v);
+            cx.reset();
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1049,5 +1088,17 @@ mod tests {
         let routine = unsafe { &*p };
         assert_eq!(routine.kind, FdwKind::FileFdw);
         assert_eq!(routine.tag, types_nodes::NodeTag::T_FdwRoutine);
+    }
+}
+
+#[cfg(test)]
+mod d400_tests {
+    #[test]
+    fn estimate_costs_fma_sites() {
+        let arm = cfg!(target_arch = "aarch64");
+        let (_, total) = super::estimate_costs_shape(1.0, 0.0, 0.01, 0.0, 0.0002, 1.0);
+        assert_eq!(total, if arm { 0.1002 } else { 0.10020000000000001 });
+        let (_, total) = super::estimate_costs_shape(1.0, 1.0, 0.01, 0.0, 0.0, 7.0);
+        assert_eq!(total, if arm { 1.7 } else { 1.7000000000000002 });
     }
 }

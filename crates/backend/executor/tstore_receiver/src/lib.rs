@@ -72,6 +72,11 @@ pub fn set_capture_sidecar(myState: &mut DrTstore<'_>, sidecar: TuplestoreHandle
     myState.capture_sidecar = sidecar;
 }
 
+pub fn plain_store(myState: &DrTstore<'_>) -> Option<TuplestoreHandle> {
+    let plain = !myState.needtoast && myState.tupmap.is_none() && myState.capture_sidecar.is_null();
+    (plain && !myState.tstore.is_null()).then_some(myState.tstore)
+}
+
 pub fn capture_sidecar(myState: &DrTstore<'_>) -> Option<TuplestoreHandle> {
     if myState.capture_sidecar.is_null() {
         None
@@ -91,9 +96,12 @@ impl<'mcx> DrTstore<'mcx> {
         self.tupmap = match &self.target_tupdesc {
             Some(target) => {
                 let msg = self.map_failure_msg.expect("target_tupdesc without map_failure_msg");
-                tuplestore::hold::with_store(self.tstore, |store| {
-                    tupdesc::convert_tuples_by_position(store.mcx(), typeinfo, target, msg)
-                        .map(|tupmap| tupmap.map(|m| m.to_vec()))
+                tuplestore::hold::with_store(self.tstore, |store| -> PgResult<Option<Vec<i16>>> {
+                    let map_opt = tupdesc::convert_tuples_by_position(store.mcx(), typeinfo, target, msg)?;
+                    match map_opt {
+                        Some(m) => Ok(Some(::mcx::std_vec_from_slice("tstoreReceiver", &m)?)),
+                        None => Ok(None),
+                    }
                 })?
             }
             None => None,
@@ -104,7 +112,7 @@ impl<'mcx> DrTstore<'mcx> {
         // C's outvalues/tofree (detoast) and mapslot (tupmap) workspace: one
         // per-row scratch context, reset after every stored row.
         if (self.needtoast || self.tupmap.is_some()) && self.scratch.is_none() {
-            self.scratch = Some(MemoryContext::new_bump("tstoreReceiver workspace"));
+            self.scratch = Some(MemoryContext::new_wholesale("tstoreReceiver workspace"));
         }
         Ok(())
     }

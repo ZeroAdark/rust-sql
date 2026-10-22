@@ -1,0 +1,10 @@
+-- regress-full-plpgsql-042
+-- SELECT * FROM test_ret_rec_dyn(1500) AS (a int, b int, c int);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn39738 cols=3 fn39738(c23:1500)]
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  outs 1=w4:val 2=w4:val 3=w4:val
+mapped: FunctionScan

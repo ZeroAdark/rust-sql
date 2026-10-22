@@ -1,0 +1,225 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2b s2x s1b s1u s2l s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x: EXPLAIN (COSTS OFF) SELECT tableoid::regclass, k, v FROM fi WHERE k IN (2, 12, 13) ORDER BY k FOR UPDATE;
+QUERY PLAN                                                          
+--------------------------------------------------------------------
+LockRows                                                            
+  ->  Sort                                                          
+        Sort Key: fi.k                                              
+        ->  Result                                                  
+              ->  Append                                            
+                    ->  Seq Scan on fi fi_1                         
+                          Filter: (k = ANY ('{2,12,13}'::integer[]))
+                    ->  Seq Scan on fi_c fi_2                       
+                          Filter: (k = ANY ('{2,12,13}'::integer[]))
+                    ->  Seq Scan on fi_d fi_3                       
+                          Filter: (k = ANY ('{2,12,13}'::integer[]))
+(11 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE fi SET v = v || '1' WHERE k = 12;
+step s2l: SELECT tableoid::regclass, k, v FROM fi WHERE k IN (2, 12, 13) ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+tableoid| k|v 
+--------+--+--
+fi_c    | 2|c 
+fi_c    |12|c1
+fi_d    |13|d 
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1m s2l s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1m: UPDATE fi SET k = 100 WHERE k = 12;
+step s2l: SELECT tableoid::regclass, k, v FROM fi WHERE k IN (2, 12, 13) ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+tableoid| k|v
+--------+--+-
+fi_c    | 2|c
+fi_d    |13|d
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1p s2p s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1p: UPDATE fp SET v = 'q' WHERE k = 12;
+step s2p: SELECT tableoid::regclass, k, v FROM fp WHERE k IN (2, 12, 13) ORDER BY v, k DESC FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+tableoid| k|v
+--------+--+-
+fp2     |13|p
+fp2     |12|q
+fp1     | 2|p
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2d s2f1 s2w s2f1 s2f1 s2w s2r s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2d: DECLARE c CURSOR FOR SELECT k FROM fi WHERE k IN (1, 2, 3, 13) ORDER BY k FOR UPDATE;
+step s2f1: FETCH 1 FROM c;
+k
+-
+1
+(1 row)
+
+step s2w: UPDATE fi SET v = 'cur' WHERE CURRENT OF c;
+step s2f1: FETCH 1 FROM c;
+k
+-
+2
+(1 row)
+
+step s2f1: FETCH 1 FROM c;
+k
+-
+3
+(1 row)
+
+step s2w: UPDATE fi SET v = 'cur' WHERE CURRENT OF c;
+step s2r: SELECT tableoid::regclass, k, v FROM fi WHERE v = 'cur' ORDER BY k;
+tableoid|k|v  
+--------+-+---
+fi      |1|cur
+fi_d    |3|cur
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2d s2f1 s2f1 s2f1 s2f1 s2w s2r s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2d: DECLARE c CURSOR FOR SELECT k FROM fi WHERE k IN (1, 2, 3, 13) ORDER BY k FOR UPDATE;
+step s2f1: FETCH 1 FROM c;
+k
+-
+1
+(1 row)
+
+step s2f1: FETCH 1 FROM c;
+k
+-
+2
+(1 row)
+
+step s2f1: FETCH 1 FROM c;
+k
+-
+3
+(1 row)
+
+step s2f1: FETCH 1 FROM c;
+ k
+--
+13
+(1 row)
+
+step s2w: UPDATE fi SET v = 'cur' WHERE CURRENT OF c;
+step s2r: SELECT tableoid::regclass, k, v FROM fi WHERE v = 'cur' ORDER BY k;
+tableoid| k|v  
+--------+--+---
+fi_d    |13|cur
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s3b s3x s1b s1p s3l s1c s3c
+step s3b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s3x: EXPLAIN (COSTS OFF) SELECT tableoid::regclass, k, v FROM fp WHERE k IN (2, 12, 13) ORDER BY k FOR UPDATE;
+QUERY PLAN                                                  
+------------------------------------------------------------
+LockRows                                                    
+  ->  Append                                                
+        ->  Index Scan using fp1_k_idx on fp1 fp_1          
+              Index Cond: (k = ANY ('{2,12,13}'::integer[]))
+        ->  Index Scan using fp2_k_idx on fp2 fp_2          
+              Index Cond: (k = ANY ('{2,12,13}'::integer[]))
+(6 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1p: UPDATE fp SET v = 'q' WHERE k = 12;
+step s3l: SELECT tableoid::regclass, k, v FROM fp WHERE k IN (2, 12, 13) ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+tableoid| k|v
+--------+--+-
+fp1     | 2|p
+fp2     |12|q
+fp2     |13|p
+(3 rows)
+
+step s3c: COMMIT;
+
+starting permutation: s3b s3y s1b s1p s3m s1c s3c
+step s3b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s3y: EXPLAIN (COSTS OFF) SELECT tableoid::regclass, k, v FROM fp WHERE k IN (2, 12, 13) ORDER BY v, k FOR UPDATE;
+QUERY PLAN                                                  
+------------------------------------------------------------
+LockRows                                                    
+  ->  Merge Append                                          
+        Sort Key: fp.v, fp.k                                
+        ->  Index Scan using fp1_v_k_idx on fp1 fp_1        
+              Index Cond: (k = ANY ('{2,12,13}'::integer[]))
+        ->  Index Scan using fp2_v_k_idx on fp2 fp_2        
+              Index Cond: (k = ANY ('{2,12,13}'::integer[]))
+(7 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1p: UPDATE fp SET v = 'q' WHERE k = 12;
+step s3m: SELECT tableoid::regclass, k, v FROM fp WHERE k IN (2, 12, 13) ORDER BY v, k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+tableoid| k|v
+--------+--+-
+fp1     | 2|p
+fp2     |12|q
+fp2     |13|p
+(3 rows)
+
+step s3c: COMMIT;
+
+starting permutation: s3b s3d s3f s3f s3w s3f s3f s3w s3r s3c
+step s3b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s3d: DECLARE m CURSOR FOR SELECT k FROM fp WHERE k IN (2, 9, 12, 13) ORDER BY v, k FOR UPDATE;
+step s3f: FETCH 1 FROM m;
+k
+-
+2
+(1 row)
+
+step s3f: FETCH 1 FROM m;
+k
+-
+9
+(1 row)
+
+step s3w: UPDATE fp SET v = 'cur' WHERE CURRENT OF m;
+step s3f: FETCH 1 FROM m;
+ k
+--
+12
+(1 row)
+
+step s3f: FETCH 1 FROM m;
+ k
+--
+13
+(1 row)
+
+step s3w: UPDATE fp SET v = 'cur' WHERE CURRENT OF m;
+step s3r: SELECT tableoid::regclass, k, v FROM fp WHERE v = 'cur' ORDER BY k;
+tableoid| k|v  
+--------+--+---
+fp1     | 9|cur
+fp2     |13|cur
+(2 rows)
+
+step s3c: COMMIT;

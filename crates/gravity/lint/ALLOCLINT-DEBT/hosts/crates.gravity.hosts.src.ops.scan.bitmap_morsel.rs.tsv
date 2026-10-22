@@ -1,0 +1,6 @@
+path	crates/gravity/hosts/src/ops/scan/bitmap_morsel.rs
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	2
+method	std::sync::Arc::new	1
+type	std::boxed::Box	2
+type	std::sync::Arc	1

@@ -1,7 +1,4 @@
 //! heapam.c SCAN/FETCH read lane; DML (insert/update/delete/lock) is phase 2.
-//! C divergence: the ReadStream prefetcher is collapsed — `rs_prefetch_block`
-//! tracks the block the stream callback would return, computed inline (same
-//! block order, no readahead until bufmgr lands).
 
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
@@ -14,7 +11,7 @@ use ::mcx::{Mcx, PgVec};
 use ::tableam_vocab::{
     ParallelBlockTableScanDescData, Snapshot, TableAm, TableScanDescData, SO_ALLOW_PAGEMODE,
     SO_ALLOW_STRAT, SO_ALLOW_SYNC, SO_TEMP_SNAPSHOT, SO_TYPE_BITMAPSCAN, SO_TYPE_SAMPLESCAN,
-    SO_TYPE_SEQSCAN,
+    SO_TYPE_SEQSCAN, SO_TYPE_TIDRANGESCAN,
 };
 use ::types_core::xact::TransactionIdIsValid;
 use ::types_core::xact::{InvalidTransactionId, TransactionIdPrecedes};
@@ -63,6 +60,29 @@ pub use inplace::{heap_inplace_lock, heap_inplace_unlock, heap_inplace_update_an
 #[cfg(test)]
 mod tests;
 
+/// C rs_read_stream: sequential and TID-range scans stream plain blocks;
+/// bitmap scans carry each page's TBM result as per-buffer data.
+pub enum HeapReadStream<'mcx> {
+    Seq(::read_stream::ReadStream<'mcx>),
+    Bitmap(::read_stream::ReadStream<'mcx, ::tidbitmap::TbmPageResult>),
+}
+
+impl HeapReadStream<'_> {
+    pub fn reset(&mut self) -> PgResult<()> {
+        match self {
+            HeapReadStream::Seq(s) => s.reset(),
+            HeapReadStream::Bitmap(s) => s.reset(),
+        }
+    }
+
+    pub fn end(self) -> PgResult<()> {
+        match self {
+            HeapReadStream::Seq(s) => s.end(),
+            HeapReadStream::Bitmap(s) => s.end(),
+        }
+    }
+}
+
 // HeapScanDescData with C's rs_base embedding; bitmap tail lands with its unit.
 pub struct HeapScanDescData<'mcx> {
     pub rs_base: TableScanDescData<'mcx>,
@@ -76,8 +96,7 @@ pub struct HeapScanDescData<'mcx> {
     pub rs_strategy: BufferAccessStrategy,
     // INVARIANT: when Some, the image lies in the page pinned by rs_cbuf ('mcx erased).
     rs_ctup: Option<HeapTupleData<'mcx>>,
-    // rs_dir deleted (backward-execution wave B7): heap scans step forward
-    // only; the direction-change prefetch reset it powered is dead.
+    pub rs_dir: ScanDirection,
     pub rs_prefetch_block: BlockNumber,
     pub rs_parallelworkerdata: Option<::tableam_vocab::ParallelBlockTableScanWorkerData>,
     pub rs_cindex: u32,
@@ -86,19 +105,8 @@ pub struct HeapScanDescData<'mcx> {
     // pin moves. Keeps the per-tuple walk free of the seam-derive call edge.
     rs_cpage: *mut u8,
     pub rs_vistuples: [OffsetNumber; MaxHeapTuplesPerPage],
-    // One-probe pgstat accumulator (indexam precedent), drained to the
-    // relation's pending counts by `drain_pgstat` (heap_endscan AND Drop:
-    // C's pgstat_count_* macros bump rel->pgstat_info immediately, so a scan
-    // torn down by an erroring statement is still counted; the batch is
-    // pure deferral). Per-tuple counter of the scan's kind: C's
-    // pgstat_count_heap_getnext (tuples_returned / seq_tup_read) for seq
-    // scans, pgstat_count_heap_fetch on the heap rel (tuples_fetched /
-    // idx_tup_fetch) for bitmap heap scans. numscans is counted at initscan
-    // as C does (one probe per scan). Size-neutral with the batch mark below:
-    // SeqScanState rides inline in PlanStateNode (<= 1024 bytes).
-    pub rs_pgstat_tuples: u64,
     // Page-batch feed accounting (heap_getnextpagebatch / bitmap pagebatch):
-    // tuples of the staged page already credited to the pgstat accumulator.
+    // tuples of the staged page already credited to the pending counts.
     // C counts per tuple RETURNED (heapgettup / bitmap next_tuple), so a
     // batch consumer that stops mid-page (LIMIT, EXISTS, an RI check's
     // tcount=1) credits only up to the last row it stored; the remainder of
@@ -109,6 +117,16 @@ pub struct HeapScanDescData<'mcx> {
     // The registered handle behind SO_TEMP_SNAPSHOT: rs_snapshot's lifetime is
     // 'mcx-erased, so the 'static Rc UnregisterSnapshot needs is kept here.
     pub rs_temp_snapshot: Option<std::rc::Rc<SnapshotData<'static>>>,
+    // Sequential, TID-range and bitmap scans read through a stream. A bitmap
+    // scan's is begun at its first page that needs it (bitmap.rs).
+    pub rs_read_stream: Option<Box<HeapReadStream<'mcx>>>,
+    // D3608: the bitmap page batch met a page that was not resident, so this
+    // walk's later pages come from the stream; false again when the walk ends
+    // or the scan is rescanned (bitmap.rs).
+    pub rs_bitmap_streaming: bool,
+    // End of a heap_setscanlimits/heap_set_block_range window (exclusive);
+    // the stream's look-ahead moves rs_numblocks past the staged block.
+    pub rs_range_end: BlockNumber,
 }
 
 impl<'mcx> HeapScanDescData<'mcx> {
@@ -147,22 +165,17 @@ fn check_for_interrupts() -> PgResult<()> {
     Ok(())
 }
 
-// C pgstat_count_heap_scan (initscan): one pending-counts probe per scan /
-// rescan, landed immediately so an erroring statement's scan is counted.
 #[inline]
 fn pgstat_count_heap_scan(scan: &mut HeapScanDescData<'_>) {
     if scan.rs_base.rs_rd.pgstat_enabled.get() {
-        pgstat::relation::pgstat_count_heap_scan(
-            scan.rs_base.rs_rd.rd_id,
-            scan.rs_base.rs_rd.rd_rel.relisshared,
-        );
+        pgstat::relation::pgstat_count_scan(&scan.rs_base.rs_rd, 1, 0, 0);
     }
 }
 
 #[inline]
 fn pgstat_count_heap_getnext(scan: &mut HeapScanDescData<'_>) {
     if scan.rs_base.rs_rd.pgstat_enabled.get() {
-        scan.rs_pgstat_tuples += 1;
+        pgstat::relation::pgstat_count_scan(&scan.rs_base.rs_rd, 0, 1, 0);
     }
 }
 
@@ -178,7 +191,13 @@ pub(crate) fn batch_credit_upto(scan: &mut HeapScanDescData<'_>, upto: u32) {
     let n = (upto - scan.rs_batch_credited) as u64;
     scan.rs_batch_credited = upto;
     if scan.rs_base.rs_rd.pgstat_enabled.get() {
-        scan.rs_pgstat_tuples += n;
+        let bitmap = (scan.rs_base.rs_flags & SO_TYPE_BITMAPSCAN) != 0;
+        pgstat::relation::pgstat_count_scan(
+            &scan.rs_base.rs_rd,
+            0,
+            if bitmap { 0 } else { n },
+            if bitmap { n } else { 0 },
+        );
     }
 }
 
@@ -187,33 +206,6 @@ pub(crate) fn batch_credit_upto(scan: &mut HeapScanDescData<'_>, upto: u32) {
 pub(crate) fn batch_credit_page(scan: &mut HeapScanDescData<'_>) {
     let n = scan.rs_ntuples;
     batch_credit_upto(scan, n);
-}
-
-// The heap_endscan drain of the per-scan batched counters; idempotent
-// (Drop runs it again and sees zeros).
-fn drain_pgstat(scan: &mut HeapScanDescData<'_>) {
-    let n = core::mem::take(&mut scan.rs_pgstat_tuples);
-    if n == 0 {
-        return;
-    }
-    let bitmap = (scan.rs_base.rs_flags & SO_TYPE_BITMAPSCAN) != 0;
-    pgstat::relation::pgstat_count_heap_scan_batched(
-        scan.rs_base.rs_rd.rd_id,
-        scan.rs_base.rs_rd.rd_rel.relisshared,
-        if bitmap { 0 } else { n },
-        if bitmap { n } else { 0 },
-    );
-}
-
-impl Drop for HeapScanDescData<'_> {
-    fn drop(&mut self) {
-        // An erroring statement never reaches heap_endscan (ExecutorEnd is
-        // skipped); C's counts already sit in rel->pgstat_info and are
-        // reported at AbortTransaction, so the abort-path drop drains too.
-        if !std::thread::panicking() {
-            drain_pgstat(self);
-        }
-    }
 }
 
 fn MultiXactIdGetUpdateXid(xmax: MultiXactId, t_infomask: u16) -> PgResult<TransactionId> {
@@ -375,7 +367,7 @@ fn initscan(
     let allow_strat: bool;
     let allow_sync: bool;
     if !scan.rs_base.rs_rd.uses_local_buffers()
-        && scan.rs_nblocks > (init_small::globals::NBuffers() as BlockNumber) / 4
+        && scan.rs_nblocks > (bufmgr_seams::active_buffers_or(init_small::globals::NBuffers()) as BlockNumber) / 4
     {
         allow_strat = (scan.rs_base.rs_flags & SO_ALLOW_STRAT) != 0;
         allow_sync = (scan.rs_base.rs_flags & SO_ALLOW_SYNC) != 0;
@@ -416,12 +408,14 @@ fn initscan(
     }
 
     scan.rs_numblocks = InvalidBlockNumber;
+    scan.rs_range_end = InvalidBlockNumber;
     scan.rs_inited = false;
     scan.rs_ctup = None;
     scan.rs_cbuf = None;
     scan.rs_cblock = InvalidBlockNumber;
     scan.rs_ntuples = 0;
     scan.rs_cindex = 0;
+    scan.rs_dir = ScanDirection::ForwardScanDirection;
     scan.rs_prefetch_block = InvalidBlockNumber;
 
     if let Some(key) = key {
@@ -447,6 +441,7 @@ pub fn heap_setscanlimits(
 
     scan.rs_startblock = start_blk;
     scan.rs_numblocks = num_blks;
+    scan.rs_range_end = start_blk.saturating_add(num_blks);
 }
 
 /// Position the scan on the block-range morsel claim `[b0, b1)` (M1 heap
@@ -482,6 +477,9 @@ pub fn heap_set_block_range(scan: &mut HeapScanDescData<'_>, b0: u64, b1: u64) -
     if let Some(pin) = scan.rs_cbuf.take() {
         pin.release();
     }
+    if let Some(stream) = scan.rs_read_stream.as_mut() {
+        stream.reset()?;
+    }
     scan.rs_cblock = InvalidBlockNumber;
     scan.rs_prefetch_block = InvalidBlockNumber;
     scan.rs_inited = false;
@@ -489,7 +487,26 @@ pub fn heap_set_block_range(scan: &mut HeapScanDescData<'_>, b0: u64, b1: u64) -
     scan.rs_cindex = 0;
     scan.rs_startblock = b0 as BlockNumber;
     scan.rs_numblocks = (b1 - b0) as BlockNumber;
+    scan.rs_range_end = b1 as BlockNumber;
     Ok(())
+}
+
+/// Grow the scan's buffer-access ring to `ring_kb` in place; a ring already
+/// that large is kept. The read stream holds its own handle to the ring
+/// (heap_beginscan), so swapping in a new handle would leave the stream
+/// reading through the old, smaller ring.
+pub fn heap_widen_strategy(scan: &mut HeapScanDescData<'_>, ring_kb: i32) {
+    let Some(ring) = scan.rs_strategy.as_ref() else {
+        return;
+    };
+    let btype = ring.borrow().btype;
+    let wider = bufmgr_seams::get_access_strategy_with_size::call(btype, ring_kb);
+    if let Some(w) = wider.as_ref() {
+        if w.borrow().nbuffers > ring.borrow().nbuffers {
+            core::mem::swap(&mut *ring.borrow_mut(), &mut *w.borrow_mut());
+        }
+    }
+    bufmgr_seams::free_access_strategy::call(wider);
 }
 
 /// End-of-claim pin release (single-executor wave 2, WS-O inc-2 —
@@ -507,6 +524,11 @@ pub fn heap_end_claim_release(scan: &mut HeapScanDescData<'_>) {
     scan.rs_cpage = core::ptr::null_mut();
     if let Some(pin) = scan.rs_cbuf.take() {
         pin.release();
+    }
+    // The stream's look-ahead pins go too. A failed wait on a queued read
+    // leaves them to the stream's abort path; the next access re-raises.
+    if let Some(stream) = scan.rs_read_stream.as_mut() {
+        let _ = stream.reset();
     }
     scan.rs_cblock = InvalidBlockNumber;
     scan.rs_prefetch_block = InvalidBlockNumber;
@@ -532,10 +554,9 @@ pub fn heap_end_claim_release(scan: &mut HeapScanDescData<'_>) {
 ///   their remainder is not a contiguous `[b0, end)` range, and the
 ///   C-parity pin-held posture stands for them.
 ///
-/// Remainder arithmetic (heapgettup_advance_block): on a limited walk
-/// `rs_numblocks` counts the blocks left INCLUDING the currently-staged
-/// one, so `b1 = b0 + rs_numblocks`; on an unlimited 0-started walk,
-/// `b1 = rs_nblocks`. Idempotent across settle/resume cycles: resume sets
+/// Remainder arithmetic: a limited walk ends at `rs_range_end` (the stream
+/// has already advanced `rs_numblocks` past the staged block); on an
+/// unlimited 0-started walk, `b1 = rs_nblocks`. Idempotent across settle/resume cycles: resume sets
 /// `[b0, b1)` via `heap_set_block_range`, whose walk re-reports the same
 /// end at the next suspension.
 pub fn heap_cursor_park_point(scan: &HeapScanDescData<'_>) -> Option<(u64, u64)> {
@@ -555,7 +576,7 @@ pub fn heap_cursor_park_point(scan: &HeapScanDescData<'_>) -> Option<(u64, u64)>
         }
         scan.rs_nblocks as u64
     } else {
-        b0 + scan.rs_numblocks as u64
+        scan.rs_range_end as u64
     };
     debug_assert!(b0 < b1 && b1 <= scan.rs_nblocks as u64);
     Some((b0, b1))
@@ -681,7 +702,7 @@ unsafe fn page_collect_tuples<const ALL_VISIBLE: bool, const CHECK_SERIALIZABLE:
 /// report for this page, never a bounds-check panic. audit-18.6 w2-068.
 #[cold]
 #[inline(never)]
-pub(crate) fn line_pointer_count_corrupted(nline: OffsetNumber) -> Box<::types_error::PgError> {
+pub fn line_pointer_count_corrupted(nline: OffsetNumber) -> Box<::types_error::PgError> {
     Box::new(
         ::types_error::PgError::new(
             ::types_error::ERROR,
@@ -754,17 +775,10 @@ pub fn heap_prepare_pagescan(scan: &mut HeapScanDescData<'_>) -> PgResult<()> {
     Ok(())
 }
 
-// Forward-only (backward-execution wave B7): C heapam.c's backward stepping
-// arms - heapgettup_initial_block's last-block start + syncscan disarm,
-// heapgettup_advance_block's decrement-with-wrap, the start/continue-page
-// last-line walks, and the `+= dir` line stepping - are deleted. The only
-// runtime-direction callers (nodeseqscan / nodetidrangescan es_direction)
-// are forward-invariant below the run seam (deletion-prep B1); every other
-// caller in the tree (index builds/validation, CLUSTER copy, COPY TO, FK
-// validation, typecmds/tablecmds rewrites, partbounds probes, genam) passes
-// ForwardScanDirection literally. C RETAINS backward heap scans; ratified
-// strategy divergence (Michael's 2026-07-17 SCROLL/WITH-HOLD decision).
-pub fn heapgettup_initial_block(scan: &mut HeapScanDescData<'_>) -> BlockNumber {
+pub fn heapgettup_initial_block(
+    scan: &mut HeapScanDescData<'_>,
+    dir: ScanDirection,
+) -> BlockNumber {
     debug_assert!(!scan.rs_inited);
     debug_assert!(scan.rs_base.rs_parallel.is_none());
 
@@ -772,23 +786,48 @@ pub fn heapgettup_initial_block(scan: &mut HeapScanDescData<'_>) -> BlockNumber 
         return InvalidBlockNumber;
     }
 
-    scan.rs_startblock
+    if ScanDirectionIsForward(dir) {
+        return scan.rs_startblock;
+    }
+    // heapam.c:711: no syncscan reporting from a backward scan.
+    scan.rs_base.rs_flags &= !SO_ALLOW_SYNC;
+    if scan.rs_numblocks != InvalidBlockNumber {
+        return (scan.rs_startblock + scan.rs_numblocks - 1) % scan.rs_nblocks;
+    }
+    if scan.rs_startblock > 0 {
+        return scan.rs_startblock - 1;
+    }
+    scan.rs_nblocks - 1
 }
 
 pub fn heapgettup_advance_block(
     scan: &mut HeapScanDescData<'_>,
     mut block: BlockNumber,
+    dir: ScanDirection,
 ) -> PgResult<BlockNumber> {
     debug_assert!(scan.rs_base.rs_parallel.is_none());
 
-    block += 1;
-    if block >= scan.rs_nblocks {
-        block = 0;
-    }
+    if ScanDirectionIsForward(dir) {
+        block += 1;
+        if block >= scan.rs_nblocks {
+            block = 0;
+        }
 
-    // Report before the end-of-scan check: the hint parks at the scan's start.
-    if (scan.rs_base.rs_flags & SO_ALLOW_SYNC) != 0 {
-        syncscan_seams::ss_report_location::call(&scan.rs_base.rs_rd, block)?;
+        // Report before the end-of-scan check: the hint parks at the scan's start.
+        if (scan.rs_base.rs_flags & SO_ALLOW_SYNC) != 0 {
+            syncscan_seams::ss_report_location::call(&scan.rs_base.rs_rd, block)?;
+        }
+
+        if block == scan.rs_startblock {
+            return Ok(InvalidBlockNumber);
+        }
+        if scan.rs_numblocks != InvalidBlockNumber {
+            scan.rs_numblocks -= 1;
+            if scan.rs_numblocks == 0 {
+                return Ok(InvalidBlockNumber);
+            }
+        }
+        return Ok(block);
     }
 
     if block == scan.rs_startblock {
@@ -800,10 +839,13 @@ pub fn heapgettup_advance_block(
             return Ok(InvalidBlockNumber);
         }
     }
-    Ok(block)
+    if block == 0 {
+        block = scan.rs_nblocks;
+    }
+    Ok(block - 1)
 }
 
-// heap_scan_stream_read_next_parallel's block arithmetic, inline.
+// heap_scan_stream_read_next_parallel's block arithmetic.
 fn parallel_next_block(scan: &mut HeapScanDescData<'_>, first: bool) -> PgResult<BlockNumber> {
     let pscan = scan
         .rs_base
@@ -826,7 +868,28 @@ fn parallel_next_block(scan: &mut HeapScanDescData<'_>, first: bool) -> PgResult
     ::tableam_vocab::table_block_parallelscan_nextpage(&scan.rs_base.rs_rd, worker, pbscan)
 }
 
-fn heap_fetch_next_buffer(scan: &mut HeapScanDescData<'_>) -> PgResult<()> {
+/// heap_scan_stream_read_next_parallel / heap_scan_stream_read_next_serial:
+/// the stream callback; runs ahead of the staged block by the look-ahead
+/// distance.
+fn heap_scan_stream_read_next(scan: &mut HeapScanDescData<'_>) -> PgResult<BlockNumber> {
+    let next = if scan.rs_base.rs_parallel.is_some() {
+        debug_assert!(ScanDirectionIsForward(scan.rs_dir));
+        let first = !scan.rs_inited;
+        let b = parallel_next_block(scan, first)?;
+        scan.rs_inited = true;
+        b
+    } else if !scan.rs_inited {
+        let b = heapgettup_initial_block(scan, scan.rs_dir);
+        scan.rs_inited = true;
+        b
+    } else {
+        heapgettup_advance_block(scan, scan.rs_prefetch_block, scan.rs_dir)?
+    };
+    scan.rs_prefetch_block = next;
+    Ok(next)
+}
+
+fn heap_fetch_next_buffer(scan: &mut HeapScanDescData<'_>, dir: ScanDirection) -> PgResult<()> {
     scan.rs_cpage = core::ptr::null_mut();
     if let Some(pin) = scan.rs_cbuf.take() {
         pin.release();
@@ -834,56 +897,40 @@ fn heap_fetch_next_buffer(scan: &mut HeapScanDescData<'_>) -> PgResult<()> {
 
     check_for_interrupts()?;
 
-    let next = if scan.rs_base.rs_parallel.is_some() {
-        let first = !scan.rs_inited;
-        scan.rs_inited = true;
-        parallel_next_block(scan, first)?
-    } else if !scan.rs_inited {
-        let b = heapgettup_initial_block(scan);
-        scan.rs_inited = true;
-        b
-    } else {
-        heapgettup_advance_block(scan, scan.rs_prefetch_block)?
-    };
-    scan.rs_prefetch_block = next;
-
-    if next == InvalidBlockNumber {
-        return Ok(());
-    }
-
-    // Forward scans read the miss run ahead in one combined smgrreadv
-    // (read_stream's combining without its pin handoff); the hint never runs
-    // past relation end or the wrapped serial scan's logical end
-    // (rs_startblock), and bufmgr caps it by io_combine_limit and the md
-    // segment boundary. Parallel chunk boundaries are not capped: an over-read
-    // lands valid in the pool and becomes another worker's hit.
-    let mut nblocks_ahead = if next < scan.rs_nblocks {
-        if scan.rs_base.rs_parallel.is_some() || next >= scan.rs_startblock {
-            scan.rs_nblocks - next
-        } else {
-            scan.rs_startblock - next
+    // heapam.c:671: a direction change restarts the walk from the current
+    // block, dropping what was read ahead in the old direction.
+    if scan.rs_dir != dir {
+        scan.rs_prefetch_block = scan.rs_cblock;
+        if let Some(stream) = scan.rs_read_stream.as_mut() {
+            stream.reset()?;
         }
-    } else {
-        1
-    };
-    // heapam.c:848 heap_scan_stream_read_next_serial stops at rs_numblocks
-    // (heap_setscanlimits / TID-range scans), which counts the staged block.
-    if scan.rs_numblocks != InvalidBlockNumber {
-        nblocks_ahead = nblocks_ahead.min(scan.rs_numblocks.max(1));
     }
-    let buf = if nblocks_ahead > 1 && bufmgr_seams::read_buffer_batched::is_installed() {
-        bufmgr_seams::read_buffer_batched::call(
-            &scan.rs_base.rs_rd,
-            next,
-            nblocks_ahead,
-            scan.rs_strategy.clone(),
-        )?
-    } else {
-        bufmgr_seams::read_buffer_strategy::call(
-            &scan.rs_base.rs_rd,
-            next,
-            scan.rs_strategy.clone(),
-        )?
+    scan.rs_dir = dir;
+
+    let buf = match scan.rs_read_stream.take() {
+        Some(mut stream) => {
+            let r = match &mut *stream {
+                HeapReadStream::Seq(s) => {
+                    s.next_buffer(&mut |_: &mut ()| heap_scan_stream_read_next(scan))
+                }
+                HeapReadStream::Bitmap(_) => unreachable!("bitmap scans do not walk blocks"),
+            };
+            scan.rs_read_stream = Some(stream);
+            r?
+        }
+        // Scan types C gives no stream (heapam.c:1206) read block by block.
+        None => {
+            let next = heap_scan_stream_read_next(scan)?;
+            if next == InvalidBlockNumber {
+                ::types_core::InvalidBuffer
+            } else {
+                bufmgr_seams::read_buffer_strategy::call(
+                    &scan.rs_base.rs_rd,
+                    next,
+                    scan.rs_strategy.clone(),
+                )?
+            }
+        }
     };
     scan.rs_cbuf = BufferPin::adopt(buf);
     if let Some(pin) = scan.rs_cbuf.as_ref() {
@@ -892,20 +939,37 @@ fn heap_fetch_next_buffer(scan: &mut HeapScanDescData<'_>) -> PgResult<()> {
     Ok(())
 }
 
-fn heapgettup_start_page(page: &PageRef<'_>, linesleft: &mut i32, lineoff: &mut OffsetNumber) {
+fn heapgettup_start_page(
+    page: &PageRef<'_>,
+    dir: ScanDirection,
+    linesleft: &mut i32,
+    lineoff: &mut OffsetNumber,
+) {
     *linesleft = page.max_offset_number() as i32 - FirstOffsetNumber as i32 + 1;
-    *lineoff = FirstOffsetNumber;
+    *lineoff = if ScanDirectionIsForward(dir) {
+        FirstOffsetNumber
+    } else {
+        *linesleft as OffsetNumber
+    };
 }
 
 fn heapgettup_continue_page(
     page: &PageRef<'_>,
+    dir: ScanDirection,
     coffset: OffsetNumber,
     linesleft: &mut i32,
     lineoff: &mut OffsetNumber,
 ) {
     let max = page.max_offset_number();
-    *lineoff = coffset + 1;
-    *linesleft = max as i32 - *lineoff as i32 + 1;
+    if ScanDirectionIsForward(dir) {
+        *lineoff = coffset + 1;
+        *linesleft = max as i32 - *lineoff as i32 + 1;
+    } else {
+        // heapam.c:790: a non-MVCC snapshot may have seen the previous tuple
+        // vacuumed away, so re-establish lineoff <= max.
+        *lineoff = max.min(coffset.wrapping_sub(1));
+        *linesleft = *lineoff as i32;
+    }
 }
 
 fn end_of_scan(scan: &mut HeapScanDescData<'_>) {
@@ -926,7 +990,7 @@ fn end_of_scan(scan: &mut HeapScanDescData<'_>) {
 // access/hash/hash/src/util.rs's HASH_PROC_SCRATCH).
 std::thread_local! {
     static KEY_TEST_SCRATCH: core::cell::RefCell<::mcx::MemoryContext> =
-        core::cell::RefCell::new(::mcx::MemoryContext::new_bump("heap key test scratch"));
+        core::cell::RefCell::new(::mcx::MemoryContext::new_wholesale("heap key test scratch"));
 }
 
 fn heap_key_test(
@@ -963,7 +1027,7 @@ fn heap_key_test(
                     cur_key.sk_func.invoke(&mut fcinfo)
                 }
                 Err(_) => {
-                    let ctx = ::mcx::MemoryContext::new_bump("heap key test scratch (reentrant)");
+                    let ctx = ::mcx::MemoryContext::new_wholesale("heap key test scratch (reentrant)");
                     // SAFETY: as above.
                     unsafe { fcinfo.set_result_mcx(ctx.mcx()) };
                     fcinfo.set_arg(0, atp);
@@ -984,7 +1048,7 @@ fn heap_key_test(
 // arms' register pressure onto the per-tuple prologue (8 callee-save pairs
 // observed in the composed lane).
 #[inline(never)]
-fn heapgettup<'mcx>(scan: &mut HeapScanDescData<'mcx>) -> PgResult<()> {
+fn heapgettup<'mcx>(scan: &mut HeapScanDescData<'mcx>, dir: ScanDirection) -> PgResult<()> {
     let nkeys = scan.rs_base.rs_nkeys;
     let mut linesleft: i32 = 0;
     let mut lineoff: OffsetNumber = 0;
@@ -993,7 +1057,7 @@ fn heapgettup<'mcx>(scan: &mut HeapScanDescData<'mcx>) -> PgResult<()> {
 
     loop {
         if !continue_page {
-            heap_fetch_next_buffer(scan)?;
+            heap_fetch_next_buffer(scan, dir)?;
             if scan.rs_cbuf.is_none() {
                 break;
             }
@@ -1013,9 +1077,15 @@ fn heapgettup<'mcx>(scan: &mut HeapScanDescData<'mcx>) -> PgResult<()> {
                 "corrupt heap page: pd_lower overflows the line-pointer bound"
             );
             if continue_page {
-                heapgettup_continue_page(&page, scan.rs_coffset, &mut linesleft, &mut lineoff);
+                heapgettup_continue_page(
+                    &page,
+                    dir,
+                    scan.rs_coffset,
+                    &mut linesleft,
+                    &mut lineoff,
+                );
             } else {
-                heapgettup_start_page(&page, &mut linesleft, &mut lineoff);
+                heapgettup_start_page(&page, dir, &mut linesleft, &mut lineoff);
             }
 
             while linesleft > 0 {
@@ -1069,7 +1139,7 @@ fn heapgettup<'mcx>(scan: &mut HeapScanDescData<'mcx>) -> PgResult<()> {
                     }
                 }
                 linesleft -= 1;
-                lineoff += 1;
+                lineoff = lineoff.wrapping_add(dir as i32 as OffsetNumber);
             }
         }
         continue_page = false;
@@ -1097,14 +1167,14 @@ fn heapgettup<'mcx>(scan: &mut HeapScanDescData<'mcx>) -> PgResult<()> {
 // exhausted. Out of line: keeps the page-advance arm's register pressure off
 // the per-tuple walk's frame.
 #[inline(never)]
-fn pagemode_next_page(scan: &mut HeapScanDescData<'_>) -> PgResult<bool> {
+fn pagemode_next_page(scan: &mut HeapScanDescData<'_>, dir: ScanDirection) -> PgResult<bool> {
     // Leaving the staged page: a batch consumer that ran the page to its
     // end is credited for all of it (no-op for the per-tuple walk, which
     // credits per returned tuple and keeps the mark at rs_ntuples).
     if scan.rs_inited {
         batch_credit_page(scan);
     }
-    heap_fetch_next_buffer(scan)?;
+    heap_fetch_next_buffer(scan, dir)?;
     if scan.rs_cbuf.is_none() {
         return Ok(false);
     }
@@ -1127,25 +1197,33 @@ fn pagemode_next_page(scan: &mut HeapScanDescData<'_>) -> PgResult<bool> {
 // on every returned tuple (measured 2x ns for -12 instr). C gets the same
 // separation from its noinline tts_buffer_heap_store_tuple.
 #[inline(never)]
-fn heapgettup_pagemode<'mcx>(scan: &mut HeapScanDescData<'mcx>) -> PgResult<()> {
+fn heapgettup_pagemode<'mcx>(
+    scan: &mut HeapScanDescData<'mcx>,
+    dir: ScanDirection,
+) -> PgResult<()> {
     let nkeys = scan.rs_base.rs_nkeys;
     let relid = scan.rs_base.rs_rd.rd_id;
+    let step = dir as i32;
     let mut lineindex: i32 = 0;
     let mut linesleft: i32 = 0;
     let mut continue_page = scan.rs_inited;
 
     if scan.rs_inited {
-        lineindex = scan.rs_cindex as i32 + 1;
-        linesleft = scan.rs_ntuples as i32 - lineindex;
+        lineindex = scan.rs_cindex as i32 + step;
+        linesleft = if ScanDirectionIsForward(dir) {
+            scan.rs_ntuples as i32 - lineindex
+        } else {
+            scan.rs_cindex as i32
+        };
     }
 
     loop {
         if !continue_page {
-            if !pagemode_next_page(scan)? {
+            if !pagemode_next_page(scan, dir)? {
                 break;
             }
             linesleft = scan.rs_ntuples as i32;
-            lineindex = 0;
+            lineindex = if ScanDirectionIsForward(dir) { 0 } else { linesleft - 1 };
         }
         continue_page = false;
 
@@ -1201,7 +1279,7 @@ fn heapgettup_pagemode<'mcx>(scan: &mut HeapScanDescData<'mcx>) -> PgResult<()> 
                 return Ok(());
             }
             linesleft -= 1;
-            lineindex += 1;
+            lineindex += step;
         }
     }
 
@@ -1217,7 +1295,7 @@ pub fn heap_getnextpagebatch(scan: &mut HeapScanDescData<'_>) -> PgResult<u32> {
     debug_assert!((scan.rs_base.rs_flags & SO_ALLOW_PAGEMODE) != 0);
     debug_assert!(scan.rs_base.rs_nkeys == 0);
     loop {
-        if !pagemode_next_page(scan)? {
+        if !pagemode_next_page(scan, ScanDirection::ForwardScanDirection)? {
             end_of_scan(scan);
             return Ok(0);
         }
@@ -1536,7 +1614,7 @@ pub fn heap_batch_store_slot<'mcx>(
 
 #[allow(clippy::too_many_arguments)]
 pub fn heap_beginscan<'mcx>(
-    _mcx: Mcx<'mcx>,
+    mcx: Mcx<'mcx>,
     relation: &Relation<'mcx>,
     snapshot: Snapshot<'mcx>,
     nkeys: i32,
@@ -1580,19 +1658,59 @@ pub fn heap_beginscan<'mcx>(
         rs_cbuf: None,
         rs_strategy: None,
         rs_ctup: None,
+        rs_dir: ScanDirection::ForwardScanDirection,
         rs_prefetch_block: InvalidBlockNumber,
         rs_parallelworkerdata: parallel_scan.map(|_| Default::default()),
         rs_cindex: 0,
         rs_ntuples: 0,
         rs_cpage: core::ptr::null_mut(),
         rs_vistuples: [0; MaxHeapTuplesPerPage],
-        rs_pgstat_tuples: 0,
         rs_batch_credited: 0,
         rs_temp_snapshot: None,
+        rs_read_stream: None,
+        rs_bitmap_streaming: false,
+        rs_range_end: InvalidBlockNumber,
     };
 
     initscan(&mut scan, None, false)?;
+    if flags & (SO_TYPE_SEQSCAN | SO_TYPE_TIDRANGESCAN | SO_TYPE_BITMAPSCAN) != 0
+        && relation.rd_rel.relpersistence == ::types_core::RELPERSISTENCE_TEMP
+        && !relation.rd_islocaltemp
+    {
+        return Err(other_session_temp_scan());
+    }
+    // After initscan, which set up the strategy the stream reads with. The
+    // callback takes no lock a backend waits on for IO (SyncScanLock, or
+    // spinlocks/atomics when parallel), so batch mode is safe.
+    if flags & (SO_TYPE_SEQSCAN | SO_TYPE_TIDRANGESCAN) != 0
+        && bufmgr_seams::start_read_buffers::is_installed()
+    {
+        scan.rs_read_stream = Some(Box::new(HeapReadStream::Seq(
+            ::read_stream::read_stream_begin_relation(
+                mcx,
+                ::read_stream::READ_STREAM_SEQUENTIAL | ::read_stream::READ_STREAM_USE_BATCHING,
+                scan.rs_strategy.clone(),
+                relation,
+                ForkNumber::MAIN_FORKNUM,
+            )?,
+        )));
+    }
+    // A bitmap scan's stream is begun by bitmap.rs at the first page that
+    // reads through it (D3608: a page batch over cached pages never does).
     Ok(scan)
+}
+
+#[cold]
+fn other_session_temp_scan() -> Box<PgError> {
+    Box::new(
+        PgError::error("cannot access temporary tables of other sessions")
+            .with_sqlstate(::types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
+            .with_error_location(::types_error::ErrorLocation::new(
+                "read_stream.c",
+                566,
+                "read_stream_begin_impl",
+            )),
+    )
 }
 
 pub fn heap_rescan(
@@ -1632,29 +1750,24 @@ pub fn heap_rescan(
     if let Some(pin) = scan.rs_cbuf.take() {
         pin.release();
     }
-    forget_batch_credit(scan);
+    // Before initscan: read_stream_reset still refers to the old walk.
+    if let Some(stream) = scan.rs_read_stream.as_mut() {
+        stream.reset()?;
+    }
+    scan.rs_bitmap_streaming = false;
 
     initscan(scan, key, true)
 }
 
-// heapam.c:1291/1316 read_stream_reset/read_stream_end: the batched read's
-// unconsumed tail belongs to this scan alone.
-fn forget_batch_credit(scan: &HeapScanDescData<'_>) {
-    if bufmgr_seams::forget_batch_credit::is_installed() {
-        bufmgr_seams::forget_batch_credit::call(
-            scan.rs_base.rs_rd.rd_locator.get(),
-            ForkNumber::MAIN_FORKNUM,
-        );
-    }
-}
-
 pub fn heap_endscan(mut scan: HeapScanDescData<'_>) -> PgResult<()> {
     scan.rs_ctup = None;
-    drain_pgstat(&mut scan);
     if let Some(pin) = scan.rs_cbuf.take() {
         pin.release();
     }
-    forget_batch_credit(&scan);
+    // Before the strategy is freed.
+    if let Some(stream) = scan.rs_read_stream.take() {
+        (*stream).end()?;
+    }
 
     if scan.rs_strategy.is_some() {
         bufmgr_seams::free_access_strategy::call(scan.rs_strategy.take());
@@ -1672,18 +1785,10 @@ pub fn heap_endscan(mut scan: HeapScanDescData<'_>) -> PgResult<()> {
     Ok(())
 }
 
-/// The `direction` parameter stays for table-AM API parity (C's
-/// heap_getnext face); backward stepping is DELETED (backward-execution
-/// wave B7) - a backward direction is asserted away, forward-invariant
-/// below the run seam (deletion-prep B1).
 pub fn heap_getnext<'a, 'mcx>(
     scan: &'a mut HeapScanDescData<'mcx>,
     direction: ScanDirection,
 ) -> PgResult<Option<&'a HeapTupleData<'mcx>>> {
-    debug_assert!(
-        ScanDirectionIsForward(direction),
-        "backward heap scan below the forward-only run seam (deletion-prep B1)"
-    );
     // heapam.c:1350-1353: a scan over a relation whose table AM is not the
     // heap AM is refused (the carrier's rs_am only names the scan shape;
     // heap_beginscan stamps it Heap for every relation it is handed).
@@ -1700,9 +1805,9 @@ pub fn heap_getnext<'a, 'mcx>(
     }
 
     if (scan.rs_base.rs_flags & SO_ALLOW_PAGEMODE) != 0 {
-        heapgettup_pagemode(scan)?;
+        heapgettup_pagemode(scan, direction)?;
     } else {
-        heapgettup(scan)?;
+        heapgettup(scan, direction)?;
     }
 
     if scan.rs_ctup.is_none() {
@@ -1718,14 +1823,10 @@ pub fn heap_getnextslot<'mcx>(
     direction: ScanDirection,
     slot: &mut SlotData<'mcx>,
 ) -> PgResult<bool> {
-    debug_assert!(
-        ScanDirectionIsForward(direction),
-        "backward heap scan below the forward-only run seam (deletion-prep B1)"
-    );
     if (scan.rs_base.rs_flags & SO_ALLOW_PAGEMODE) != 0 {
-        heapgettup_pagemode(scan)?;
+        heapgettup_pagemode(scan, direction)?;
     } else {
-        heapgettup(scan)?;
+        heapgettup(scan, direction)?;
     }
 
     if scan.rs_ctup.is_none() {
@@ -1800,18 +1901,14 @@ pub fn heap_getnextslot_tidrange<'mcx>(
     direction: ScanDirection,
     slot: &mut SlotData<'mcx>,
 ) -> PgResult<bool> {
-    debug_assert!(
-        ScanDirectionIsForward(direction),
-        "backward heap scan below the forward-only run seam (deletion-prep B1)"
-    );
     let mintid = scan.rs_base.rs_mintid;
     let maxtid = scan.rs_base.rs_maxtid;
 
     loop {
         if (scan.rs_base.rs_flags & SO_ALLOW_PAGEMODE) != 0 {
-            heapgettup_pagemode(scan)?;
+            heapgettup_pagemode(scan, direction)?;
         } else {
-            heapgettup(scan)?;
+            heapgettup(scan, direction)?;
         }
 
         let Some(t) = scan.rs_ctup.as_ref() else {
@@ -1820,15 +1917,21 @@ pub fn heap_getnextslot_tidrange<'mcx>(
         };
 
         // setscanlimits bounded the pages; boundary-page TIDs still need
-        // filtering. (B7: the backward boundary arms - stop-below-min /
-        // skip-above-max - are deleted with the backward stepping.)
+        // filtering (heapam.c:1516-1548: descending TIDs end a backward
+        // scan below mintid, ascending ones end a forward scan above maxtid).
         if ItemPointerCompare(&t.t_self, &mintid) < 0 {
             exectuples::exec_clear_tuple(slot, mcx);
+            if !ScanDirectionIsForward(direction) {
+                return Ok(false);
+            }
             continue;
         }
         if ItemPointerCompare(&t.t_self, &maxtid) > 0 {
             exectuples::exec_clear_tuple(slot, mcx);
-            return Ok(false);
+            if ScanDirectionIsForward(direction) {
+                return Ok(false);
+            }
+            continue;
         }
         break;
     }

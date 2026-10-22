@@ -17,7 +17,7 @@ use types_tuple::{
     ATTNULLABLE_INVALID, ATTNULLABLE_UNKNOWN, ATTNULLABLE_VALID,
 };
 
-use crate::{getattr, name_from, oid_key, req, scan_key};
+use crate::{getattr, name_from, oid_key, req, scan_key, CatalogRow};
 
 const Anum_pg_attribute_attrelid: i32 = 1;
 const Anum_pg_attribute_attnum: i32 = 5;
@@ -50,13 +50,12 @@ const ATTRIBUTE_GENERATED_VIRTUAL: i8 = b'v' as i8;
 // descriptor than the heap tuples carry.
 pub(crate) fn relation_build_tuple_desc(
     mcx: Mcx<'static>,
+    smcx: Mcx<'_>,
     relid: Oid,
     form: &FormData_pg_class,
     relnatts: i16,
     relchecks: i16,
 ) -> PgResult<Rc<TupleDescData<'static>>> {
-    let cx = MemoryContext::new("RelationBuildTupleDesc");
-    let smcx = cx.mcx();
     let rel = table::table_open(smcx, ATTRIBUTE_RELATION_ID, AccessShareLock)?;
     let keys = [
         oid_key(Anum_pg_attribute_attrelid, relid),
@@ -88,6 +87,9 @@ pub(crate) fn relation_build_tuple_desc(
             }
         }
         rows.push(a);
+        if rows.len() >= relnatts.max(0) as usize {
+            break;
+        }
     }
     genam::systable_endscan(smcx, scan)?;
     rel.close(AccessShareLock)?;
@@ -528,32 +530,39 @@ fn attr_missing_fetch<'s>(
     Ok(Some((Datum::null(), Some(image))))
 }
 
+const ATTRIBUTE_FIXED_NATTS: i32 = 20;
+
+// RelationBuildTupleDesc (relcache.c:556) copies the fixed part with one
+// memcpy(attp, GETSTRUCT(tup), ATTRIBUTE_FIXED_PART_SIZE); every pg_attribute
+// row has nulls past it (CatalogRow).
 pub(crate) fn decode(
     td: &TupleDescData<'_>,
     tup: &HeapTupleData<'_>,
     relid: Oid,
 ) -> PgResult<FormData_pg_attribute> {
+    let row = CatalogRow::new(td, tup, ATTRIBUTE_FIXED_NATTS);
+    let get = |attno: i32| row.req(attno);
     let a = FormData_pg_attribute {
-        attrelid: req(td, tup, 1)?.as_oid(),
-        attname: name_from(tup, req(td, tup, 2)?),
-        atttypid: req(td, tup, 3)?.as_oid(),
-        attlen: req(td, tup, 4)?.as_i16(),
-        attnum: req(td, tup, 5)?.as_i16(),
-        atttypmod: req(td, tup, 6)?.as_i32(),
-        attndims: req(td, tup, 7)?.as_i16(),
-        attbyval: req(td, tup, 8)?.as_bool(),
-        attalign: req(td, tup, 9)?.as_i8(),
-        attstorage: req(td, tup, 10)?.as_i8(),
-        attcompression: req(td, tup, 11)?.as_i8(),
-        attnotnull: req(td, tup, 12)?.as_bool(),
-        atthasdef: req(td, tup, 13)?.as_bool(),
-        atthasmissing: req(td, tup, 14)?.as_bool(),
-        attidentity: req(td, tup, 15)?.as_i8(),
-        attgenerated: req(td, tup, 16)?.as_i8(),
-        attisdropped: req(td, tup, 17)?.as_bool(),
-        attislocal: req(td, tup, 18)?.as_bool(),
-        attinhcount: req(td, tup, 19)?.as_i16(),
-        attcollation: req(td, tup, 20)?.as_oid(),
+        attrelid: get(1)?.as_oid(),
+        attname: name_from(tup, get(2)?),
+        atttypid: get(3)?.as_oid(),
+        attlen: get(4)?.as_i16(),
+        attnum: get(5)?.as_i16(),
+        atttypmod: get(6)?.as_i32(),
+        attndims: get(7)?.as_i16(),
+        attbyval: get(8)?.as_bool(),
+        attalign: get(9)?.as_i8(),
+        attstorage: get(10)?.as_i8(),
+        attcompression: get(11)?.as_i8(),
+        attnotnull: get(12)?.as_bool(),
+        atthasdef: get(13)?.as_bool(),
+        atthasmissing: get(14)?.as_bool(),
+        attidentity: get(15)?.as_i8(),
+        attgenerated: get(16)?.as_i8(),
+        attisdropped: get(17)?.as_bool(),
+        attislocal: get(18)?.as_bool(),
+        attinhcount: get(19)?.as_i16(),
+        attcollation: get(ATTRIBUTE_FIXED_NATTS)?.as_oid(),
     };
     if a.attnum <= 0 {
         return Err(invalid_attnum(a.attnum, relid));

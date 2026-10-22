@@ -1,0 +1,16 @@
+-- regress-full-create_index-061
+-- EXPLAIN (COSTS OFF) SELECT * FROM bitmap_split_or WHERE (a = 1 OR a = 2) AND b = 2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n3@0 n1@0 n0@0
+  source bitmap rel=19726 rti=1 am=heap
+    bitmap or node=1
+      bitmap index node=2 index=19732 rows=501
+        key att=2 op=96 value=c23:2
+      bitmap index node=3 index=19733 rows=1
+        key att=2 op=96 value=c23:2
+    recheck (or(and(op96(v1.2, c23:2), op96(v1.1, c23:1)), and(op96(v1.2, c23:2), op96(v1.1, c23:2))))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  outs 1=w8:val 2=w8:val 3=w8:val
+mapped: BitmapOr BitmapIndexScan BitmapHeapScan

@@ -14,8 +14,9 @@ use ::types_fmgr::{
 use crate::{
     accum_array_result_arr, array_append_internal, array_cat_internal, array_position_internal,
     array_positions_internal, array_prepend_internal, array_reverse_n, array_shuffle_n,
-    array_sort_with, init_array_result_arr, make_array_result_arr, trim_array_internal, ElemMeta,
-    PositionSearch, ARRAY_GT_OP, ARRAY_LT_OP, F_BTARRAYCMP,
+    array_sort_with, init_array_result_arr, integer_out_of_range, make_array_result_arr,
+    not_one_dimensional, trim_array_internal, ElemMeta, PositionSearch, ARRAY_GT_OP, ARRAY_LT_OP,
+    F_BTARRAYCMP,
 };
 use ::arrayfuncs::foundation::{arr_elemtype, read_dims_lbounds, varsize_any};
 use ::datum::array_build::ArrayBuildStateArr;
@@ -63,6 +64,26 @@ fn multidim_search_unsupported() -> Box<PgError> {
     )
 }
 
+/// The flat state size from which array_append, called as an aggregate's transition function, keeps the state as an
+/// expanded array in the aggcontext (CAND-M10). Below it the flat copy is cheap and an expanded object (a context of
+/// its own) per group would cost more than it saves.
+const EXPANDED_APPEND_MIN_ELEMS: i64 = 64;
+
+/// CAND-M10's gate on the expanded arm of a transition call: true when the flat (non-expanded) array argument
+/// `arr_i` is a 1-D plain 4-byte-header image of at least EXPANDED_APPEND_MIN_ELEMS elements. Smaller (or
+/// multi-dimensional, short-header, compressed, external) states take the flat path.
+fn flat_state_reaches_expanded_min(fcinfo: &Fcinfo, arr_i: usize) -> bool {
+    // SAFETY: arg `arr_i` is a non-null array datum; only a plain 4-byte-header image is sized here.
+    let p = unsafe { fcinfo.arg_ptr(arr_i) };
+    if unsafe { *p } & 0x03 != 0 {
+        return false;
+    }
+    let n = unsafe { ::arrayfuncs::foundation::arr_size(core::slice::from_raw_parts(p, 4)) };
+    let img = unsafe { core::slice::from_raw_parts(p, n) };
+    let (ndims, dims, _) = read_dims_lbounds(img);
+    ndims == 1 && (dims[0] as i64) >= EXPANDED_APPEND_MIN_ELEMS
+}
+
 fn append_prepend_common(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
@@ -70,6 +91,9 @@ fn append_prepend_common(
 ) -> PgResult<Datum> {
     let (arr_i, elem_i) = if is_append { (0, 1) } else { (1, 0) };
     let flinfo = flinfo.expect("array_append/prepend: NULL flinfo");
+    if let Some(d) = append_prepend_expanded(flinfo, fcinfo, is_append, arr_i, elem_i)? {
+        return Ok(d);
+    }
     let mcx = fcinfo.result_mcx();
 
     let (array, meta) = if !fcinfo.argisnull(arr_i) {
@@ -114,6 +138,72 @@ fn append_prepend_common(
     byref_result(mcx, &out)
 }
 
+// fetch_array_arg_replace_nulls + the expanded arm of array_append /
+// array_prepend (array_userfuncs.c:73-279): a read/write expanded argument
+// is changed in place; in an aggregate the argument is expanded into the
+// aggcontext first, so the next transition call receives it read/write.
+// None: neither case, the flat path applies.
+fn append_prepend_expanded(
+    _flinfo: &mut FmgrInfo,
+    fcinfo: &mut Fcinfo,
+    is_append: bool,
+    arr_i: usize,
+    elem_i: usize,
+) -> PgResult<Option<Datum>> {
+    use ::arrayfuncs::expanded::{array_set_element_expanded, rw_expanded_array};
+    let arr_null = fcinfo.argisnull(arr_i);
+    // SAFETY: a non-null array argument is a live varlena datum.
+    let rw = if arr_null { None } else { unsafe { rw_expanded_array(fcinfo.arg(arr_i)) } };
+    let eah = match rw {
+        Some(eah) => eah,
+        None => {
+            // Gravity (CAND-M10): only an Agg that keeps a transition's read/write expanded result
+            // (AggStateNode::expanded_trans: nodeagg and the Gravity hosted aggregates; WindowAgg copies every
+            // result) expands its state, and only from EXPANDED_APPEND_MIN_ELEMS elements on: a smaller state stays
+            // flat (an expanded object is a context of its own per group). C expands in every aggregate.
+            // SAFETY: fcinfo.context, if set, is the live calling node.
+            let Some(node) = (unsafe { fcinfo.agg_state_node() }) else {
+                return Ok(None);
+            };
+            if !node.expanded_trans() || arr_null || !flat_state_reaches_expanded_min(fcinfo, arr_i) {
+                return Ok(None);
+            }
+            let d = ::arrayfuncs::expand_array(fcinfo.arg(arr_i), node.aggcontext_ctx(), None)?;
+            // SAFETY: d is the fresh object's read/write pointer.
+            unsafe { rw_expanded_array(d) }.expect("expand_array returns a R/W pointer")
+        }
+    };
+    // SAFETY: eah is live (the argument's object or the fresh expansion) and
+    // nothing else touches it during this call.
+    let eah = unsafe { &mut *eah };
+    let lb0 = if eah.ndims == 0 { 1 } else { eah.lbound[0] };
+    let indx = match eah.ndims {
+        1 if is_append => lb0.checked_add(eah.dims[0]).ok_or_else(integer_out_of_range)?,
+        1 => lb0.checked_sub(1).ok_or_else(integer_out_of_range)?,
+        0 => 1,
+        _ => return Err(not_one_dimensional()),
+    };
+    let elem_null = fcinfo.argisnull(elem_i);
+    let mcx = fcinfo.result_mcx();
+    let _elem_copy;
+    let elem = if elem_null {
+        Datum::null()
+    } else if eah.typlen == -1 {
+        let img = arg_array_bytes(fcinfo, elem_i, mcx)?;
+        let d = Datum::from_usize(img.as_ptr() as usize);
+        _elem_copy = img;
+        d
+    } else {
+        fcinfo.arg(elem_i)
+    };
+    array_set_element_expanded(eah, &[indx], elem, elem_null)?;
+    if !is_append && eah.ndims == 1 {
+        eah.lbound[0] = lb0;
+    }
+    // SAFETY: eah is an initialized expanded object.
+    Ok(Some(unsafe { ::datum::expandeddatum::eohp_get_rw_datum(&raw const eah.hdr) }))
+}
+
 pub fn fc_array_append(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     append_prepend_common(flinfo, fcinfo, true)
 }
@@ -124,18 +214,16 @@ pub fn fc_array_prepend(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
 
 pub fn fc_array_append_support(
     _flinfo: Option<&mut FmgrInfo>,
-    _fcinfo: &mut Fcinfo,
+    fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    // SupportRequestModifyInPlace is not in the support-node vocabulary yet;
-    // C's fallthrough for every other request is a NULL pointer.
-    Ok(Datum::from_usize(0))
+    Ok(::arrayfuncs::builtins::modify_in_place_support(fcinfo, 0, false))
 }
 
 pub fn fc_array_prepend_support(
     _flinfo: Option<&mut FmgrInfo>,
-    _fcinfo: &mut Fcinfo,
+    fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    Ok(Datum::from_usize(0))
+    Ok(::arrayfuncs::builtins::modify_in_place_support(fcinfo, 1, false))
 }
 
 pub fn fc_array_cat(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -269,27 +357,26 @@ fn position_compute(
 fn position_common(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
-    has_start: bool,
 ) -> PgResult<Datum> {
     if fcinfo.argisnull(0) {
         return Ok(fcinfo.return_null());
     }
     let flinfo = flinfo.expect("array_position: NULL flinfo");
-    match position_compute(flinfo, fcinfo, has_start)? {
+    match position_compute(flinfo, fcinfo, fcinfo.nargs() == 3)? {
         Some(pos) => Ok(Datum::from_i32(pos)),
         None => Ok(fcinfo.return_null()),
     }
 }
 
 pub fn fc_array_position(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    position_common(flinfo, fcinfo, false)
+    position_common(flinfo, fcinfo)
 }
 
 pub fn fc_array_position_start(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    position_common(flinfo, fcinfo, true)
+    position_common(flinfo, fcinfo)
 }
 
 pub fn fc_array_positions(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {

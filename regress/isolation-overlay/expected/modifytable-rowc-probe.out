@@ -1,0 +1,123 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1amt s1st s1cid s2u s1c s2c s3sel s3cnt
+step s1amt: UPDATE rpo SET amt = amt + 1 WHERE id = 3;
+step s1st: UPDATE rpo SET status = 'done' WHERE id = 207;
+step s1cid: UPDATE rpo SET cid = 16 WHERE id = 111;
+step s2u: WITH upd AS (UPDATE rpo o SET status = 'on_hold' FROM rpc c WHERE c.id = o.cid AND NOT c.active AND o.status = 'pending' RETURNING o.id) SELECT count(*) FROM upd; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+count
+-----
+   82
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, status, amt FROM rpo WHERE id IN (3, 111, 207, 303, 411) ORDER BY id;
+ id|cid|status |amt
+---+---+-------+---
+  3|  4|on_hold|  4
+111| 16|pending|111
+207|  8|done   |207
+303|  4|on_hold|303
+411| 12|on_hold|411
+(5 rows)
+
+step s3cnt: SELECT status, count(*) FROM rpo GROUP BY status ORDER BY status;
+status |count
+-------+-----
+done   |  668
+on_hold|   82
+pending|  250
+(3 rows)
+
+
+starting permutation: s1amt s1st s1cid s2d s1c s2c s3sel s3cnt
+step s1amt: UPDATE rpo SET amt = amt + 1 WHERE id = 3;
+step s1st: UPDATE rpo SET status = 'done' WHERE id = 207;
+step s1cid: UPDATE rpo SET cid = 16 WHERE id = 111;
+step s2d: WITH gone AS (DELETE FROM rpo o USING rpc c WHERE c.id = o.cid AND NOT c.active AND o.status = 'pending') SELECT count(*) FROM rpo; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+count
+-----
+ 1000
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, status, amt FROM rpo WHERE id IN (3, 111, 207, 303, 411) ORDER BY id;
+ id|cid|status |amt
+---+---+-------+---
+111| 16|pending|111
+207|  8|done   |207
+(2 rows)
+
+step s3cnt: SELECT status, count(*) FROM rpo GROUP BY status ORDER BY status;
+status |count
+-------+-----
+done   |  668
+pending|  250
+(2 rows)
+
+
+starting permutation: s1amt s1cust s2u s1c s2c s3sel s3cnt
+step s1amt: UPDATE rpo SET amt = amt + 1 WHERE id = 3;
+step s1cust: UPDATE rpc SET active = true WHERE id = 4;
+step s2u: WITH upd AS (UPDATE rpo o SET status = 'on_hold' FROM rpc c WHERE c.id = o.cid AND NOT c.active AND o.status = 'pending' RETURNING o.id) SELECT count(*) FROM upd; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+count
+-----
+   84
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, status, amt FROM rpo WHERE id IN (3, 111, 207, 303, 411) ORDER BY id;
+ id|cid|status |amt
+---+---+-------+---
+  3|  4|on_hold|  4
+111| 12|on_hold|111
+207|  8|on_hold|207
+303|  4|on_hold|303
+411| 12|on_hold|411
+(5 rows)
+
+step s3cnt: SELECT status, count(*) FROM rpo GROUP BY status ORDER BY status;
+status |count
+-------+-----
+done   |  667
+on_hold|   84
+pending|  249
+(3 rows)
+
+
+starting permutation: s1amt s1st s2u s1r s2c s3sel s3cnt
+step s1amt: UPDATE rpo SET amt = amt + 1 WHERE id = 3;
+step s1st: UPDATE rpo SET status = 'done' WHERE id = 207;
+step s2u: WITH upd AS (UPDATE rpo o SET status = 'on_hold' FROM rpc c WHERE c.id = o.cid AND NOT c.active AND o.status = 'pending' RETURNING o.id) SELECT count(*) FROM upd; <waiting ...>
+step s1r: ROLLBACK;
+step s2u: <... completed>
+count
+-----
+   84
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, status, amt FROM rpo WHERE id IN (3, 111, 207, 303, 411) ORDER BY id;
+ id|cid|status |amt
+---+---+-------+---
+  3|  4|on_hold|  3
+111| 12|on_hold|111
+207|  8|on_hold|207
+303|  4|on_hold|303
+411| 12|on_hold|411
+(5 rows)
+
+step s3cnt: SELECT status, count(*) FROM rpo GROUP BY status ORDER BY status;
+status |count
+-------+-----
+done   |  667
+on_hold|   84
+pending|  249
+(3 rows)
+

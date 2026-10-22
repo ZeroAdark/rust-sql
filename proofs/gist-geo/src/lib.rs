@@ -465,7 +465,7 @@ mod proofs {
     // (assume-never-folds law).  Partition is total by construction:
     // cells s1..s12 x {leaf, internal} + the symbolic bad-strategy error
     // harness below cover every u16 strategy; the full-symbolic rows stay
-    // as the CI-tier union claims.
+    // as the fleet-tier union claims.
     macro_rules! box_consistent_cell {
         ($($h:ident: $strat:literal, $leaf:literal;)*) => {$(
             #[kani::proof]
@@ -1346,7 +1346,7 @@ mod proofs {
     // the combined disjunctive-assume strips harnesses wall BOTH solvers at
     // 450s under load (the point_distance per-arm siblings prove at
     // 98-345s) — case-split law: one fenced harness per compute_distance
-    // arm.  The combined harnesses above stay for the CI cluster tier.
+    // arm.  The combined harnesses above stay for the fleet tier.
     macro_rules! bbox_distance_arm {
         ($($h:ident: $idx:ident, $oid:literal, $name:literal, $rech:literal, $arm:literal;)*) => {$(
             #[kani::proof]
@@ -1692,7 +1692,7 @@ mod proofs {
     // (2591/2585): the full-symbolic-strategy harnesses above wall both
     // solvers locally (same class as 2578).  Cells pin strategy to a
     // literal, non-null keys; the null lattice keeps its own symbolic
-    // harnesses via the full rows (CI cluster tier).  Partition: s1..s12 cells
+    // harnesses via the full rows (fleet tier).  Partition: s1..s12 cells
     // + the shared bad-strategy arms of the full harnesses.
     macro_rules! circle_consistent_cell {
         ($($h:ident: $strat:literal;)*) => {$(

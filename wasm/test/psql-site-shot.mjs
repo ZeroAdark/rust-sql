@@ -298,12 +298,12 @@ async function waitFreshSession(goneRe, label) {
 
 async function waitFreshBanner(goneRe, label) {
   if (PSQL) {
-    // The REAL psql banner: "psql (18.3)" + the libpq-style help line. A JS
+    // The REAL psql banner: "psql (18.<minor>)" + the libpq-style help line. A JS
     // synthesized banner would carry neither.
-    return waitFor((t) => /psql \(18\.3\)/.test(t) && /Type "help" for help\./.test(t) &&
+    return waitFor((t) => /psql \(18\.\d+\)/.test(t) && /Type "help" for help\./.test(t) &&
                           /postgres=#/.test(t) && !goneRe.test(t), label, 120000);
   }
-  return waitFor((t) => /pgrust \(PostgreSQL 18\.3 compatible\)/.test(t) &&
+  return waitFor((t) => /pgrust \(PostgreSQL 18\.\d+ compatible\)/.test(t) &&
                         /Type \\\? for psql meta-commands/.test(t) &&
                         /pgrust=#/.test(t) && !goneRe.test(t), label, 120000);
 }

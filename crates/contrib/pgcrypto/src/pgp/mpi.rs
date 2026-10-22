@@ -1,7 +1,7 @@
 
 use super::consts::*;
 use super::context::PgpContext;
-use super::packet::read_fixed;
+use super::pull::{read_fixed, Dcx, PRes, Pull, SliceReader};
 use ::num_bigint::BigUint;
 use ::num_traits::{One, Zero};
 use ::pg_strong_random::pg_strong_random;
@@ -38,14 +38,20 @@ impl Mpi {
     }
 }
 
-/// pgp-mpi.c:80 pgp_mpi_read: two pullf_read_fixed calls (header, body).
+/// pgp-mpi.c:80 pgp_mpi_read over a byte slice at `pos`.
 pub fn read_mpi(data: &[u8], pos: &mut usize, ctx: &mut PgpContext) -> Result<Mpi, String> {
-    let hdr = read_fixed(data, *pos, 2, ctx)?;
+    let mut cx = Dcx::new(ctx);
+    let mut rdr = SliceReader::new(&data[(*pos).min(data.len())..]);
+    let m = read_mpi_pull(&mut rdr, &mut cx)?;
+    *pos += rdr.pos();
+    Ok(m)
+}
+
+/// pgp-mpi.c:80 pgp_mpi_read: two pullf_read_fixed calls (header, body).
+pub fn read_mpi_pull(src: &mut dyn Pull, cx: &mut Dcx) -> PRes<Mpi> {
+    let hdr = read_fixed(src, cx, 2)?;
     let bits = ((hdr[0] as usize) << 8) | hdr[1] as usize;
-    *pos += 2;
-    let nbytes = (bits + 7) / 8;
-    let value = read_fixed(data, *pos, nbytes, ctx)?.to_vec();
-    *pos += nbytes;
+    let value = read_fixed(src, cx, (bits + 7) / 8)?;
     Ok(Mpi::from_bytes(value, bits))
 }
 
@@ -88,15 +94,16 @@ fn rand_bits(bits: usize) -> Result<BigUint, MathError> {
     Ok(BigUint::from_bytes_be(&buf))
 }
 
-/// PXE_PGP_MATH_FAILED from pgp-mpi-openssl.c; `dbg` is the px_debug line
-/// mpi_to_bn emits when an MPI's declared bit count is not its value's.
+/// PXE_PGP_MATH_FAILED from pgp-mpi-openssl.c; `dbg` holds the px_debug
+/// lines mpi_to_bn emitted, one per MPI whose declared bit count is not its
+/// value's.
 pub struct MathError {
-    pub dbg: Option<String>,
+    pub dbg: Vec<String>,
 }
 
 impl MathError {
     pub fn report(self, ctx: &mut super::context::PgpContext) -> String {
-        if let Some(d) = &self.dbg {
+        for d in &self.dbg {
             ctx.dbg(d);
         }
         MATH_FAILED.to_string()
@@ -110,25 +117,38 @@ impl From<MathError> for String {
 }
 
 fn math_failed() -> MathError {
-    MathError { dbg: None }
+    MathError { dbg: Vec::new() }
 }
 
 /// pgp-mpi-openssl.c:45 mpi_to_bn: BN_num_bits(bn) must equal the declared
 /// bit count, or the conversion fails.
-fn to_bn(m: &Mpi) -> Result<BigUint, MathError> {
+fn to_bn(m: &Mpi) -> Result<BigUint, String> {
     let bn = m.to_biguint();
     let bits = bn.bits() as usize;
     if bits != m.bits {
-        return Err(MathError {
-            dbg: Some(format!("mpi_to_bn: bignum conversion failed: mpi={}, bn={bits}", m.bits)),
-        });
+        return Err(format!("mpi_to_bn: bignum conversion failed: mpi={}, bn={bits}", m.bits));
     }
     Ok(bn)
 }
 
-/// BN_mod_exp: a zero modulus is a division by zero, PXE_PGP_MATH_FAILED
+/// C converts every operand (in its declaration order) before testing any
+/// result, so each malformed MPI logs its own line.
+fn to_bns<const N: usize>(mpis: [&Mpi; N]) -> Result<[BigUint; N], MathError> {
+    let mut dbg = Vec::new();
+    let converted = mpis.map(|m| to_bn(m).map_err(|d| dbg.push(d)).ok());
+    if !dbg.is_empty() {
+        return Err(MathError { dbg });
+    }
+    Ok(converted.map(|b| b.expect("every conversion succeeded")))
+}
+
+/// BN_mod_exp: an exponent of zero yields 1 (0 modulo 1) before the modulus
+/// is used; otherwise a zero modulus is a division by zero, PXE_PGP_MATH_FAILED
 /// for every caller in pgp-mpi-openssl.c.
 fn mod_exp(base: &BigUint, exp: &BigUint, modulus: &BigUint) -> Result<BigUint, MathError> {
+    if exp.is_zero() {
+        return Ok(if modulus.is_one() { BigUint::zero() } else { BigUint::one() });
+    }
     if modulus.is_zero() {
         return Err(math_failed());
     }
@@ -136,22 +156,19 @@ fn mod_exp(base: &BigUint, exp: &BigUint, modulus: &BigUint) -> Result<BigUint, 
 }
 
 pub fn rsa_encrypt(n: &Mpi, e: &Mpi, m: &Mpi) -> Result<Mpi, MathError> {
-    let (n, e, m) = (to_bn(n)?, to_bn(e)?, to_bn(m)?);
+    let [m, e, n] = to_bns([m, e, n])?;
     let c = mod_exp(&m, &e, &n)?;
     Ok(Mpi::from_biguint(&c))
 }
 
 pub fn rsa_decrypt(n: &Mpi, d: &Mpi, c: &Mpi) -> Result<Mpi, MathError> {
-    let (n, d, c) = (to_bn(n)?, to_bn(d)?, to_bn(c)?);
+    let [c, d, n] = to_bns([c, d, n])?;
     let m = mod_exp(&c, &d, &n)?;
     Ok(Mpi::from_biguint(&m))
 }
 
 pub fn elgamal_encrypt(p: &Mpi, g: &Mpi, y: &Mpi, m: &Mpi) -> Result<(Mpi, Mpi), MathError> {
-    let p = to_bn(p)?;
-    let g = to_bn(g)?;
-    let y = to_bn(y)?;
-    let m = to_bn(m)?;
+    let [m, p, g, y] = to_bns([m, p, g, y])?;
 
     let k_bits = decide_k_bits(p.bits() as usize);
     let k = rand_bits(k_bits)?;
@@ -163,10 +180,7 @@ pub fn elgamal_encrypt(p: &Mpi, g: &Mpi, y: &Mpi, m: &Mpi) -> Result<(Mpi, Mpi),
 }
 
 pub fn elgamal_decrypt(p: &Mpi, x: &Mpi, c1: &Mpi, c2: &Mpi) -> Result<Mpi, MathError> {
-    let p = to_bn(p)?;
-    let x = to_bn(x)?;
-    let c1 = to_bn(c1)?;
-    let c2 = to_bn(c2)?;
+    let [c1, c2, p, x] = to_bns([c1, c2, p, x])?;
 
     let c1x = mod_exp(&c1, &x, &p)?;
     let inv = mod_inverse(&c1x, &p).ok_or_else(math_failed)?;

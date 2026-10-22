@@ -1,0 +1,15 @@
+# V4R-270 (D7, main 09-26): an equal-not-identical group / DISTINCT key outputs any member of its group; eqk maps the key
+# column's texts to their class under PG's `=` (the rig asks PG); everything else stays exact
+# an interval group key: '1 mon' = '30 days'
+sql: SELECT i, count(*) FROM t GROUP BY i;
+eqk: 1	1 mon	1 mon
+eqk: 1	30 days	1 mon
+eqk: 1	1 day	1 day
+class: unordered
+verdict: match
+[pg]
+1 mon	2
+1 day	1
+[got]
+30 days	2
+1 day	1

@@ -26,7 +26,11 @@ be_secure_seams = { path = "../be_secure_seams" }
 elog = { path = "../../utils/error/elog" }
 injection_point = { path = "../../utils/misc/injection_point" }
 types_core = { path = "../../../_support/types/types_core" }
+mcx = { path = "../../../_support/mcx" }
 libc = "0.2"
+be_gssapi_common = { path = "../be_gssapi_common" }
+guc_tables = { path = "../../utils/misc/guc_tables" }
+ipc_seams = { path = "../../storage/ipc/ipc_seams" }
 
 # openssl-src (vendored C) does not compile for wasm32; on wasm the ssl
 # feature has no dep to activate and the stub arm takes over.
@@ -36,7 +40,6 @@ be_secure_openssl = { path = "../be_secure_openssl", optional = true }
 [dev-dependencies]
 fd = { path = "../../storage/file/fd" }
 ip = { path = "../../../common/ip" }
-ipc_seams = { path = "../../storage/ipc/ipc_seams" }
 latch = { path = "../../storage/ipc/latch" }
 mcx = { path = "../../../_support/mcx" }
 miscinit_seams = { path = "../../utils/init/miscinit_seams" }

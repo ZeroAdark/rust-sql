@@ -162,7 +162,7 @@ fn create_partition_prune_state<'mcx>(
         .get_or_insert_with(|| partdesc::CreatePartitionDirectory(mcx, false));
 
     let mut state = PartitionPruneState {
-        hierarchies: Vec::with_capacity(pruneinfo.prune_infos.len()),
+        hierarchies: ::mcx::std_vec_with_capacity("ExecutorState", pruneinfo.prune_infos.len())?,
         do_initial_prune: false,
         do_exec_prune: false,
         other_subplans: pruneinfo.other_subplans.clone_in(mcx)?,
@@ -172,7 +172,7 @@ fn create_partition_prune_state<'mcx>(
 
     for hierarchy in pruneinfo.prune_infos.iter() {
         let partrelpruneinfos = hierarchy.as_list().expect("prune_infos cell is a List");
-        let mut prunedata = Vec::with_capacity(partrelpruneinfos.len());
+        let mut prunedata = ::mcx::std_vec_with_capacity("ExecutorState", partrelpruneinfos.len())?;
         for pinfo_node in partrelpruneinfos.iter() {
             let pinfo = pinfo_node
                 .as_partitioned_rel_prune_info()
@@ -202,14 +202,14 @@ fn create_partition_prune_state<'mcx>(
                 && partdesc.oids.iter().zip(pinfo.relid_map.iter()).all(|(a, b)| a == b);
             let (subplan_map, subpart_map, leafpart_rti_map) = if identical {
                 (
-                    pinfo.subplan_map.to_vec(),
-                    pinfo.subpart_map.to_vec(),
-                    pinfo.leafpart_rti_map.to_vec(),
+                    ::mcx::std_vec_from_slice("execpartition", &pinfo.subplan_map)?,
+                    ::mcx::std_vec_from_slice("execpartition", &pinfo.subpart_map)?,
+                    ::mcx::std_vec_from_slice("execpartition", &pinfo.leafpart_rti_map)?,
                 )
             } else {
-                let mut subplan_map = vec![-1i32; n_new];
-                let mut subpart_map = vec![-1i32; n_new];
-                let mut rti_map = vec![0i32; n_new];
+                let mut subplan_map = ::mcx::std_vec_from_elem("ExecutorState", -1i32, n_new)?;
+                let mut subpart_map = ::mcx::std_vec_from_elem("ExecutorState", -1i32, n_new)?;
+                let mut rti_map = ::mcx::std_vec_from_elem("ExecutorState", 0i32, n_new)?;
                 let n_old = pinfo.nparts as usize;
                 let mut pd_idx = 0usize;
                 for pp_idx in 0..n_new {
@@ -289,10 +289,12 @@ fn init_prune_context<'mcx>(
     partnatts: usize,
 ) -> PgResult<PruneContext<'mcx>> {
     let mcx = estate.es_query_cxt;
-    let n_steps = steps.len();
-    let mut ctx = PruneContext { exprstates: Vec::new(), cmpfuncs: Vec::new() };
-    ctx.exprstates.resize_with(n_steps * partnatts, || None);
-    ctx.cmpfuncs.resize_with(n_steps * partnatts, || None);
+    let total = steps.len() * partnatts;
+    let mut exprstates = ::mcx::std_vec_with_capacity("ExecutorState", total)?;
+    exprstates.resize_with(total, || None);
+    let mut cmpfuncs = ::mcx::std_vec_with_capacity("ExecutorState", total)?;
+    cmpfuncs.resize_with(total, || None);
+    let mut ctx = PruneContext { exprstates, cmpfuncs };
     let params = estate.param_bind();
     // C compiles exec-pruning step exprs against the parent planstate
     // (execPartition.c:2311); SubPlans in step exprs need the env.
@@ -341,7 +343,7 @@ fn init_exec_partition_prune_contexts<'mcx>(
 
     let mut new_subplan_indexes: Option<Vec<i32>> = None;
     if initially_valid_subplans.num_members() < n_total_subplans {
-        let mut map = vec![0i32; n_total_subplans as usize];
+        let mut map = ::mcx::std_vec_from_elem("ExecutorState", 0i32, n_total_subplans as usize)?;
         let mut newidx = 1;
         let mut i = initially_valid_subplans.next_member(-1);
         while i >= 0 {
@@ -499,7 +501,8 @@ fn get_matching_partitions<'mcx>(
     let ctx = if initial { pprune.initial_ctx.as_mut() } else { pprune.exec_ctx.as_mut() }
         .expect("prune context initialized for this pass");
 
-    let mut results: Vec<Option<PruneStepResult<'mcx>>> = Vec::new();
+    let mut results: Vec<Option<PruneStepResult<'mcx>>> =
+        ::mcx::std_vec_with_capacity("ExecutorState", num_steps)?;
     results.resize_with(num_steps, || None);
     for step in steps.iter() {
         match step.node_tag() {

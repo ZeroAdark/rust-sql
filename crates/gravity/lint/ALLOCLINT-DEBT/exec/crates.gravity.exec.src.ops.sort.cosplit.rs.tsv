@@ -1,0 +1,7 @@
+path	crates/gravity/exec/src/ops/sort/cosplit.rs
+growth	std::iter::Extend::extend	1
+method	std::boxed::Box::new	1
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	2
+type	std::vec::Vec	1

@@ -1,0 +1,14 @@
+-- facts-034
+-- UPDATE fv SET b = b + 1 WHERE id = 6001;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16395 rti=2 am=heap index=16402
+    key att=1 op=521 value=c23:0
+    key att=1 op=96 value=c23:6001
+    recheck (op521(v2.1, c23:0), op96(v2.1, c23:6001))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byref8:vl:win/page Attr(5):byref8:fx16:win/page Attr(6):byval8:w8:val RowId:byval8:w8:val
+  project (1=op551(v2.3, c23:1), 2j=v2.-1, 3j=v2.1, 4j=v2.2, 5j=v2.4, 6j=v2.5, 7j=v2.6)
+  write UPDATE rel=16395 rti=2 natts=6 indexes=(16402[1]up, 16404[2], 16405[3], 16406[2, 3], 16407[0]e, 16408[0]e, 16409[2, 0, 4]e, 16410[2, 3, 4]i, 16411[3]w, 16412[2]:hash, 16413[0]e:gin, 16414[5]:gist, 16415[1]:brin) set=(3) generated=(6s)
+  outs 1=w4:val 2=fx6:row 3=w8:val 4=w8:val 5=vl:win/page 6=fx16:win/page 7=w8:val
+mapped: ModifyTable IndexScan

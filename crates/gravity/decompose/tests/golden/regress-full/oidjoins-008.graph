@@ -1,0 +1,22 @@
+-- regress-full-oidjoins-008
+-- DO $doblock$ declare fk record; nkeys integer; cmd text; err record; begin for fk in select * from pg_get_catalog_foreign_keys() loop raise notice 'checking % % => % %', fk.fktable, fk.fkcols, fk.pktable, fk.pkcols; nkeys := array_length(fk.fkcols, 1); cmd := 'SELECT ctid'; for i in 1 .. nkeys loop cmd := cmd || ', ' || quote_ident(fk.fkcols[i]); end loop; if fk.is_array then cmd := cmd || ' FROM (SELECT ctid'; for i in 1 .. nkeys-1 loop cmd := cmd || ', ' || quote_ident(fk.fkcols[i]); end loop; cmd := cmd || ', unnest(' || quote_ident(fk.fkcols[nkeys]); cmd := cmd || ') as ' || quote_ident(fk.fkcols[nkeys]); cmd := cmd || ' FROM ' || fk.fktable::text || ') fk WHERE '; else cmd := cmd || ' FROM ' || fk.fktable::text || ' fk WHERE '; end if; if fk.is_opt then for i in 1 .. nkeys loop cmd := cmd || quote_ident(fk.fkcols[i]) || ' != 0 AND '; end loop; end if; cmd := cmd || 'NOT EXISTS(SELECT 1 FROM ' || fk.pktable::text || ' pk WHERE '; for i in 1 .. nkeys loop if i > 1 then cmd := cmd || ' AND '; end if; cmd := cmd || 'pk.' || quote_ident(fk.pkcols[i]); cmd := cmd || ' = fk.' || quote_ident(fk.fkcols[i]); end loop; cmd := cmd || ')'; -- raise notice 'cmd = %', cmd; for err in execute cmd loop raise warning 'FK VIOLATION IN %(%): %', fk.fktable, fk.fkcols, err; end loop; end loop; end $doblock$;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=4 end=sink
+  nodes n1@0 n0@2
+  source range rel=3764 rti=1 am=heap
+    lanes Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op608(relabel26(v1.4), c26:0)
+  project (1=v1.-1, 2=v1.4)
+  nest inner=n2 JOIN_ANTI raise-free params=($exec0=outer.2)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index-only rel=1255 rti=2 am=heap index=2690
+    key att=1 op=607 value=relabel26($exec0)
+    recheck (op607(index.1, relabel26($exec0)))
+    lanes
+  project (1=index.1)
+  project (1=outer.1, 2=outer.2)
+  outs 1=fx6:row 2=w8:val
+  outs 1=fx6:row 2=w8:val
+param $exec0 owner=n0 type=24 rep=w8:val
+mapped: SeqScan IndexOnlyScan NestLoop NestLoopParam

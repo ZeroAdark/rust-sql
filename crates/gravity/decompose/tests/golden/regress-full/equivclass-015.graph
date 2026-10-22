@@ -1,0 +1,27 @@
+-- regress-full-equivclass-015
+-- explain (costs off) select * from ec0 m join ec0 n on m.ff = n.ff join ec1 p on m.ff + n.ff = p.f1;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=3 eligible rows=1570 end=breaker(slot=0 Materialize)
+  nodes n3@0 n2@1^
+  source range rel=39127 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v4.1, 2=v4.2, 3=v4.3)
+  spool
+  outs 1=w8:val 2=? 3=?
+p1 node=1 eligible rows=1570 end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source range rel=39121 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  nest inner=n2 JOIN_INNER invariant raise-free params=() qual=(op39111(op684(outer.1, outer.1), inner.2))
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n2@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.1, 5=outer.2, 6=outer.3, 7=inner.1, 8=inner.2, 9=inner.3)
+  outs 1=w8:val 2=w8:val 3=w8:val
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=? 9=?
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+mapped: SeqScan NestLoop Material

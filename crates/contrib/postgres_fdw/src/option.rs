@@ -318,7 +318,7 @@ pub(crate) fn extract_extension_list<'mcx>(
         if extension_oid != types_core::InvalidOid {
             extension_oids.push(extension_oid);
         } else if warn_on_missing {
-            let mut msg = b"extension \"".to_vec();
+            let mut msg = ::mcx::std_vec_from_slice("postgres_fdw", b"extension \"")?;
             msg.extend_from_slice(extension_name);
             msg.extend_from_slice(b"\" is not installed");
             elog::ereport(WARNING)
@@ -336,7 +336,9 @@ pub(crate) fn extract_extension_list<'mcx>(
 // not change them, and a process without a MyProcPort expands them to
 // nothing.
 pub(crate) fn process_pgfdw_appname(appname: &str) -> PgResult<String> {
-    let mut out = String::with_capacity(appname.len());
+    let mut out = String::new();
+    out.try_reserve(appname.len())
+        .map_err(|_| mcx::oom_named("postgres_fdw", appname.len()))?;
     let mut chars = appname.chars();
     while let Some(c) = chars.next() {
         if c != '%' {

@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/access/gist/gist.c: 1 stack-depth check sites
+1463	gistSplit	crates/backend/access/gist/gist/src/insert.rs	gistSplit	yes	

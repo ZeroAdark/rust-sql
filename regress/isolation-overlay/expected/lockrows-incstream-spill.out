@@ -1,0 +1,54 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s1c s2c
+step s2e: EXPLAIN (COSTS OFF) SELECT id, k FROM qj ORDER BY k, id LIMIT 3 FOR UPDATE SKIP LOCKED;
+QUERY PLAN                                   
+---------------------------------------------
+Limit                                        
+  ->  LockRows                               
+        ->  Incremental Sort                 
+              Sort Key: k, id                
+              Presorted Key: k               
+              ->  Index Scan using qj_k on qj
+(6 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1h s2k s1c s2c
+step s1h: SELECT id FROM qj WHERE id IN (1, 3) ORDER BY id FOR UPDATE;
+id
+--
+ 1
+ 3
+(2 rows)
+
+step s2k: SELECT id, k, note FROM qj ORDER BY k, id LIMIT 3 FOR UPDATE SKIP LOCKED;
+id| k|note
+--+--+----
+ 2| 2|n2  
+ 4|10|n4  
+ 5|10|n5  
+(3 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1h s2o s1c s2c
+step s1h: SELECT id FROM qj WHERE id IN (1, 3) ORDER BY id FOR UPDATE;
+id
+--
+ 1
+ 3
+(2 rows)
+
+step s2o: SELECT id, k FROM qj ORDER BY k, id LIMIT 3 OFFSET 299999 FOR UPDATE SKIP LOCKED;
+    id| k
+------+--
+300002|10
+300003|10
+300004|11
+(3 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;

@@ -41,6 +41,7 @@ pub struct IndexAccessInfo {
 
 seam_core::seam!(
     pub fn scan_pg_relation(
+        scratch: Mcx<'_>,
         target_rel_id: Oid,
         index_ok: bool,
         force_non_historic: bool,
@@ -50,6 +51,7 @@ seam_core::seam!(
 seam_core::seam!(
     pub fn relation_build_tuple_desc(
         mcx: Mcx<'static>,
+        scratch: Mcx<'_>,
         relid: Oid,
         form: &FormData_pg_class,
         relnatts: i16,

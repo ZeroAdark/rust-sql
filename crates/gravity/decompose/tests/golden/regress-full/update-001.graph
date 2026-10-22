@@ -1,0 +1,12 @@
+-- regress-full-update-001
+-- UPDATE update_test AS t SET b = 10 WHERE t.a = 10;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=26416 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v1.1, c23:10)
+  project (1=c23:10, 2j=v1.-1, 3j=v1.1, 4j=v1.3)
+  write UPDATE rel=26416 rti=1 natts=3 indexes=() set=(2)
+  outs 1=w4:val 2=fx6:row 3=w8:val 4=vl:win/page
+mapped: ModifyTable SeqScan

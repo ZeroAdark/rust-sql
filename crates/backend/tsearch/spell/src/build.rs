@@ -27,6 +27,29 @@ fn getchar(a: &Affix, n: i32, t: i32) -> u8 {
     getwchar(&a.repl, a.repl.len() as i32, n, t)
 }
 
+struct SpBuild {
+    node_idx: usize,
+    data: Vec<SpNodeData>,
+    cur: SpNodeData,
+    have_cur: bool,
+    lastchar: u8,
+    lownew: i32,
+    i: i32,
+    tail_done: bool,
+}
+
+struct ABuild<'mcx> {
+    node_idx: usize,
+    data: Vec<AffixNodeData<'mcx>>,
+    cur: AffixNodeData<'mcx>,
+    have_cur: bool,
+    naff: Vec<usize>,
+    lastchar: u8,
+    lownew: i32,
+    i: i32,
+    tail_done: bool,
+}
+
 // NIImportOOAffixes' second-pass locals, carried across lines.
 struct OoAffixState {
     type_: Vec<u8>,
@@ -785,7 +808,7 @@ impl<'mcx> IspellDict<'mcx> {
                     )
                     .into());
                 }
-                st.naffix += 1;
+                st.naffix = st.naffix.wrapping_add(1);
                 // C: Conf->AffixData = palloc0(naffix * sizeof(char *)).
                 // palloc0 enforces AllocSizeIsValid, so an oversized alias
                 // count raises "invalid memory alloc request size" BEFORE
@@ -797,7 +820,7 @@ impl<'mcx> IspellDict<'mcx> {
                 // refuses outright (found by spellfam_diff: an `AF` line
                 // whose count atoi-truncates to 1215752191).
                 ::mcx::check_alloc_size(
-                    (st.naffix as usize).saturating_mul(core::mem::size_of::<*const u8>()),
+                    (st.naffix as usize).wrapping_mul(core::mem::size_of::<*const u8>()),
                 )?;
                 self.affix_data
                     .try_reserve(st.naffix as usize)
@@ -1123,6 +1146,9 @@ impl<'mcx> IspellDict<'mcx> {
         Ok(())
     }
 
+    // The recursive frame holds only the SpBuild cursor: the per-level work
+    // lives in never-inlined helpers, so an unoptimized build's frame stays
+    // small enough for word-length recursion (C's mkSPNode frame is tiny).
     fn mk_sp_node(&mut self, low: i32, high: i32, level: i32) -> PgResult<Option<usize>> {
         // RECURSION GUARD. C's mkSPNode (spell.c:1637) recurses once per
         // character of the longest word and carries NO check_stack_depth();
@@ -1147,11 +1173,20 @@ impl<'mcx> IspellDict<'mcx> {
         // non-surface — C's firing point is configuration-dependent even
         // between two C builds via the max_stack_depth GUC.
         check_stack_depth()?;
-        let mcx = self.mcx;
+        let Some(mut b) = self.sp_node_begin(low, high, level)? else {
+            return Ok(None);
+        };
+        while let Some((lo, hi)) = self.sp_node_step(&mut b, high, level)? {
+            let child = self.mk_sp_node(lo, hi, level + 1)?;
+            self.sp_node_child(&mut b, child, level);
+        }
+        self.sp_node_finish(b)
+    }
+
+    #[inline(never)]
+    fn sp_node_begin(&mut self, low: i32, high: i32, level: i32) -> PgResult<Option<SpBuild>> {
         let mut nchar = 0;
         let mut lastchar: u8 = 0;
-        let mut lownew = low;
-
         let mut i = low;
         while i < high {
             let sp = &self.spell[i as usize];
@@ -1161,21 +1196,27 @@ impl<'mcx> IspellDict<'mcx> {
             }
             i += 1;
         }
-
         if nchar == 0 {
             return Ok(None);
         }
+        let node_idx = self.alloc_sp_node(self.mcx)?;
+        Ok(Some(SpBuild {
+            node_idx,
+            data: ::mcx::std_vec_with_capacity("tsearch", nchar as usize)?,
+            cur: SpNodeData::empty(),
+            have_cur: false,
+            lastchar: 0,
+            lownew: low,
+            i: low,
+            tail_done: false,
+        }))
+    }
 
-        let node_idx = self.alloc_sp_node(mcx)?;
-        let mut data: Vec<SpNodeData> = Vec::with_capacity(nchar as usize);
-        let mut cur = SpNodeData::empty();
-        let mut have_cur = false;
-
-        lastchar = 0;
-        i = low;
-        while i < high {
+    #[inline(never)]
+    fn sp_node_step(&mut self, b: &mut SpBuild, high: i32, level: i32) -> PgResult<Option<(i32, i32)>> {
+        while b.i < high {
             let (splen, ch, sp_affix) = {
-                let sp = &self.spell[i as usize];
+                let sp = &self.spell[b.i as usize];
                 (
                     sp.len,
                     if sp.len > level { sp.word[level as usize] } else { 0 },
@@ -1183,58 +1224,75 @@ impl<'mcx> IspellDict<'mcx> {
                 )
             };
             if splen > level {
-                if lastchar != ch {
-                    if lastchar != 0 {
-                        cur.node = self.mk_sp_node(lownew, i, level + 1)?;
-                        lownew = i;
-                        data.push(cur);
-                        cur = SpNodeData::empty();
+                if b.lastchar != ch {
+                    if b.lastchar != 0 {
+                        return Ok(Some((b.lownew, b.i)));
                     }
-                    lastchar = ch;
+                    b.lastchar = ch;
                 }
-                have_cur = true;
-                cur.val = ch;
+                b.have_cur = true;
+                b.cur.val = ch;
                 if splen == level + 1 {
-                    let mut clear_compound_only = false;
-                    if cur.isword && cur.affix != sp_affix as u32 {
-                        let cf_existing = cur.compoundflag;
-                        let cf_new = self.make_compound_flags(sp_affix)?;
-                        clear_compound_only = (FF_COMPOUNDONLY as u32 & cf_existing & cf_new) == 0;
-                        let merged = self.merge_affix(cur.affix as i32, sp_affix)?;
-                        cur.affix = merged as u32 & SPNODE_AFFIX_MASK;
-                    } else {
-                        cur.affix = sp_affix as u32 & SPNODE_AFFIX_MASK;
-                    }
-                    cur.isword = true;
-
-                    let cf = self.make_compound_flags(cur.affix as i32)?;
-                    cur.compoundflag = cf;
-
-                    if (cur.compoundflag & FF_COMPOUNDONLY as u32) != 0
-                        && (cur.compoundflag & FF_COMPOUNDFLAG as u32) == 0
-                    {
-                        cur.compoundflag |= FF_COMPOUNDFLAG as u32;
-                    }
-                    if clear_compound_only {
-                        cur.compoundflag &= !(FF_COMPOUNDONLY as u32);
-                    }
+                    self.sp_node_mark_word(&mut b.cur, sp_affix)?;
                 }
             }
-            i += 1;
+            b.i += 1;
         }
-
-        if have_cur {
-            cur.node = self.mk_sp_node(lownew, high, level + 1)?;
-            data.push(cur);
+        if b.have_cur && !b.tail_done {
+            b.tail_done = true;
+            return Ok(Some((b.lownew, high)));
         }
+        Ok(None)
+    }
 
+    fn sp_node_mark_word(&mut self, cur: &mut SpNodeData, sp_affix: i32) -> PgResult<()> {
+        let mut clear_compound_only = false;
+        if cur.isword && cur.affix != sp_affix as u32 {
+            let cf_existing = cur.compoundflag;
+            let cf_new = self.make_compound_flags(sp_affix)?;
+            clear_compound_only = (FF_COMPOUNDONLY as u32 & cf_existing & cf_new) == 0;
+            let merged = self.merge_affix(cur.affix as i32, sp_affix)?;
+            cur.affix = merged as u32 & SPNODE_AFFIX_MASK;
+        } else {
+            cur.affix = sp_affix as u32 & SPNODE_AFFIX_MASK;
+        }
+        cur.isword = true;
+
+        let cf = self.make_compound_flags(cur.affix as i32)?;
+        cur.compoundflag = cf;
+
+        if (cur.compoundflag & FF_COMPOUNDONLY as u32) != 0
+            && (cur.compoundflag & FF_COMPOUNDFLAG as u32) == 0
+        {
+            cur.compoundflag |= FF_COMPOUNDFLAG as u32;
+        }
+        if clear_compound_only {
+            cur.compoundflag &= !(FF_COMPOUNDONLY as u32);
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn sp_node_child(&self, b: &mut SpBuild, child: Option<usize>, level: i32) {
+        let mut cur = core::mem::replace(&mut b.cur, SpNodeData::empty());
+        cur.node = child;
+        b.data.push(cur);
+        if !b.tail_done {
+            b.lownew = b.i;
+            b.lastchar = self.spell[b.i as usize].word[level as usize];
+        }
+    }
+
+    #[inline(never)]
+    fn sp_node_finish(&mut self, b: SpBuild) -> PgResult<Option<usize>> {
+        let mcx = self.mcx;
         let mut pv: PgVec<SpNodeData> = PgVec::new_in(mcx);
-        pv.try_reserve(data.len()).map_err(|_| mcx.oom(data.len()))?;
-        for d in data {
+        pv.try_reserve(b.data.len()).map_err(|_| mcx.oom(b.data.len()))?;
+        for d in b.data {
             pv.push(d);
         }
-        self.sp_arena[node_idx].data = pv;
-        Ok(Some(node_idx))
+        self.sp_arena[b.node_idx].data = pv;
+        Ok(Some(b.node_idx))
     }
 
     fn alloc_sp_node(&mut self, mcx: Mcx<'mcx>) -> PgResult<usize> {
@@ -1257,11 +1315,27 @@ impl<'mcx> IspellDict<'mcx> {
         // is the frame that killed the spell 10M differential floor four
         // times (ASan stack-overflow, 246 identical mk_a_node frames).
         check_stack_depth()?;
+        let Some(mut b) = self.a_node_begin(low, high, level, type_)? else {
+            return Ok(None);
+        };
+        while let Some((lo, hi)) = self.a_node_step(&mut b, high, level, type_) {
+            let child = self.mk_a_node(lo, hi, level + 1, type_)?;
+            self.a_node_child(&mut b, child, level, type_)?;
+        }
+        self.a_node_finish(b)
+    }
+
+    #[inline(never)]
+    fn a_node_begin(
+        &mut self,
+        low: i32,
+        high: i32,
+        level: i32,
+        type_: i32,
+    ) -> PgResult<Option<ABuild<'mcx>>> {
         let mcx = self.mcx;
         let mut nchar = 0;
         let mut lastchar: u8 = 0;
-        let mut lownew = low;
-
         let mut i = low;
         while i < high {
             let a = &self.affixes[i as usize];
@@ -1274,71 +1348,90 @@ impl<'mcx> IspellDict<'mcx> {
         if nchar == 0 {
             return Ok(None);
         }
-
         let node_idx = self.alloc_a_node(mcx, false)?;
-        let mut data: Vec<AffixNodeData> = Vec::with_capacity(nchar as usize);
-        let mut cur = AffixNodeData::empty(mcx);
-        let mut have_cur = false;
-        let mut naff: Vec<usize> = Vec::new();
+        Ok(Some(ABuild {
+            node_idx,
+            data: ::mcx::std_vec_with_capacity("tsearch", nchar as usize)?,
+            cur: AffixNodeData::empty(mcx),
+            have_cur: false,
+            naff: Vec::new(),
+            lastchar: 0,
+            lownew: low,
+            i: low,
+            tail_done: false,
+        }))
+    }
 
-        lastchar = 0;
-        i = low;
-        while i < high {
+    #[inline(never)]
+    fn a_node_step(&self, b: &mut ABuild<'mcx>, high: i32, level: i32, type_: i32) -> Option<(i32, i32)> {
+        while b.i < high {
             let (replen, ch) = {
-                let a = &self.affixes[i as usize];
+                let a = &self.affixes[b.i as usize];
                 (
                     a.replen(),
                     if a.replen() > level { getchar(a, level, type_) } else { 0 },
                 )
             };
             if replen > level {
-                if lastchar != ch {
-                    if lastchar != 0 {
-                        cur.node = self.mk_a_node(lownew, i, level + 1, type_)?;
-                        if !naff.is_empty() {
-                            let mut aff: PgVec<usize> = PgVec::new_in(mcx);
-                            aff.try_reserve(naff.len()).map_err(|_| mcx.oom(naff.len()))?;
-                            for &x in &naff {
-                                aff.push(x);
-                            }
-                            cur.aff = aff;
-                            naff.clear();
-                        }
-                        data.push(cur);
-                        cur = AffixNodeData::empty(mcx);
-                        lownew = i;
+                if b.lastchar != ch {
+                    if b.lastchar != 0 {
+                        return Some((b.lownew, b.i));
                     }
-                    lastchar = ch;
+                    b.lastchar = ch;
                 }
-                have_cur = true;
-                cur.val = ch;
+                b.have_cur = true;
+                b.cur.val = ch;
                 if replen == level + 1 {
-                    naff.push(i as usize);
+                    b.naff.push(b.i as usize);
                 }
             }
-            i += 1;
+            b.i += 1;
         }
+        if b.have_cur && !b.tail_done {
+            b.tail_done = true;
+            return Some((b.lownew, high));
+        }
+        None
+    }
 
-        if have_cur {
-            cur.node = self.mk_a_node(lownew, high, level + 1, type_)?;
-            if !naff.is_empty() {
-                let mut aff: PgVec<usize> = PgVec::new_in(mcx);
-                aff.try_reserve(naff.len()).map_err(|_| mcx.oom(naff.len()))?;
-                for &x in &naff {
-                    aff.push(x);
-                }
-                cur.aff = aff;
+    #[inline(never)]
+    fn a_node_child(
+        &self,
+        b: &mut ABuild<'mcx>,
+        child: Option<usize>,
+        level: i32,
+        type_: i32,
+    ) -> PgResult<()> {
+        let mcx = self.mcx;
+        let mut cur = core::mem::replace(&mut b.cur, AffixNodeData::empty(mcx));
+        cur.node = child;
+        if !b.naff.is_empty() {
+            let mut aff: PgVec<usize> = PgVec::new_in(mcx);
+            aff.try_reserve(b.naff.len()).map_err(|_| mcx.oom(b.naff.len()))?;
+            for &x in &b.naff {
+                aff.push(x);
             }
-            data.push(cur);
+            cur.aff = aff;
+            b.naff.clear();
         }
+        b.data.push(cur);
+        if !b.tail_done {
+            b.lownew = b.i;
+            b.lastchar = getchar(&self.affixes[b.i as usize], level, type_);
+        }
+        Ok(())
+    }
 
+    #[inline(never)]
+    fn a_node_finish(&mut self, b: ABuild<'mcx>) -> PgResult<Option<usize>> {
+        let mcx = self.mcx;
         let mut pv: PgVec<AffixNodeData> = PgVec::new_in(mcx);
-        pv.try_reserve(data.len()).map_err(|_| mcx.oom(data.len()))?;
-        for d in data {
+        pv.try_reserve(b.data.len()).map_err(|_| mcx.oom(b.data.len()))?;
+        for d in b.data {
             pv.push(d);
         }
-        self.af_arena[node_idx].data = pv;
-        Ok(Some(node_idx))
+        self.af_arena[b.node_idx].data = pv;
+        Ok(Some(b.node_idx))
     }
 
     fn alloc_a_node(&mut self, mcx: Mcx<'mcx>, isvoid: bool) -> PgResult<usize> {
@@ -1502,11 +1595,16 @@ fn strip_prefix<'a>(s: &'a [u8], lit: &[u8]) -> Option<&'a [u8]> {
     }
 }
 
+// spell.c qsorts SPELL pointers: duplicate words keep pg_qsort's tie order.
 fn sort_spell_by<'mcx>(
     spell: &mut PgVec<'mcx, Spell<'mcx>>,
-    mut cmp: impl FnMut(&Spell, &Spell) -> core::cmp::Ordering,
+    cmp: impl FnMut(&Spell, &Spell) -> core::cmp::Ordering,
 ) {
-    spell.as_mut_slice().sort_by(|a, b| cmp(a, b));
+    let order = pg_qsort_order(spell, cmp);
+    let mut taken: Vec<Option<Spell>> = spell.drain(..).map(Some).collect();
+    for &i in &order {
+        spell.push(taken[i].take().expect("permutation"));
+    }
 }
 
 // cmpaffix: type first, then strcmp over repl for prefixes / strbcmp for suffixes.

@@ -51,6 +51,17 @@ pub fn AddPendingSync(rlocator: RelFileLocator) {
     });
 }
 
+// pgrust divergence: a table AM whose main fork is not page-formatted (the
+// pgrcolumnar part file) cannot have its pages WAL-logged at commit, so its
+// pending sync always takes the fsync path, like a truncated relation's.
+pub fn PendingSyncRequireFsync(rlocator: RelFileLocator) {
+    PENDING_SYNCS.with_borrow_mut(|p| {
+        if let Some(s) = p.iter_mut().find(|s| s.rlocator == rlocator) {
+            s.is_truncated = true;
+        }
+    });
+}
+
 pub fn RelFileLocatorSkippingWAL(rlocator: RelFileLocator) -> bool {
     PENDING_SYNCS.with_borrow(|p| p.iter().any(|s| s.rlocator == rlocator))
 }
@@ -89,7 +100,8 @@ fn storage_proc_number(relpersistence: u8) -> PgResult<(ProcNumber, bool)> {
         _ => {
             // storage.c:146 elog(ERROR, "invalid relpersistence: %c", ...):
             // XX000 with the byte rendered as a character.
-            let mut msg = b"invalid relpersistence: ".to_vec();
+            let mut msg =
+                ::mcx::std_vec_from_slice("catalog_storage", b"invalid relpersistence: ")?;
             msg.push(relpersistence);
             return Err(types_error::PgError::error_raw_message(msg).into());
         }
@@ -341,9 +353,17 @@ pub fn log_smgrcreate(rlocator: &RelFileLocator, fork_num: ForkNumber) -> PgResu
 }
 
 pub fn smgrDoPendingDeletes(is_commit: bool) -> PgResult<()> {
+    // D4485: storage.c:673 has no early return, but over an empty pendingDeletes its walk unlinks nothing and nrels
+    // stays 0; its only other work is the GetCurrentTransactionNestLevel() read (an xact state borrow here). An empty
+    // list returns at once; a debug build still walks it and asserts the walk removed nothing.
+    let empty = PENDING.with_borrow(Vec::is_empty);
+    if empty && !cfg!(debug_assertions) {
+        return Ok(());
+    }
     let nest_level = xact::GetCurrentTransactionNestLevel();
     let mut to_unlink: Vec<RelFileLocatorBackend> = Vec::new();
-    PENDING.with_borrow_mut(|p| {
+    let removed = PENDING.with_borrow_mut(|p| {
+        let before = p.len();
         p.retain(|pending| {
             if pending.nest_level < nest_level {
                 return true;
@@ -356,14 +376,30 @@ pub fn smgrDoPendingDeletes(is_commit: bool) -> PgResult<()> {
             }
             false
         });
+        before - p.len()
     });
+    debug_assert!(
+        !empty || (removed == 0 && to_unlink.is_empty()),
+        "D4485: smgrDoPendingDeletes skipped work"
+    );
+    let _ = removed;
     if !to_unlink.is_empty() {
         for key in &to_unlink {
             smgr::smgropen(key.locator, key.backend)?;
         }
         smgr::smgrdounlinkall(&to_unlink, false)?;
+        drop_columnar_dirs(&to_unlink);
     }
     Ok(())
+}
+
+/// A pgrcolumnar relation's table directory goes with its forks; like md's unlink, a failure is a WARNING.
+fn drop_columnar_dirs(rels: &[RelFileLocatorBackend]) {
+    for r in rels {
+        if let Err(e) = pgrc_am::dirpath::remove_dir_by_locator(r.locator, r.backend) {
+            let _ = elog::elog(types_error::WARNING, format!("could not remove table directory: {}", e.message()));
+        }
+    }
 }
 
 pub fn smgrGetPendingDeletes<'mcx>(
@@ -373,6 +409,12 @@ pub fn smgrGetPendingDeletes<'mcx>(
     // C filters on nestLevel >= GetCurrentTransactionNestLevel(): a subxact's
     // abort record must carry only that subxact's creations, never the outer
     // transaction's (redo would drop live relfilenodes).
+    // D4485: an empty pendingDeletes is storage.c:893's `nrels == 0` return (storage.c:907-911) without the walk or
+    // the nest-level read; a debug build still walks it and asserts the result is empty.
+    let empty = PENDING.with_borrow(Vec::is_empty);
+    if empty && !cfg!(debug_assertions) {
+        return Ok(PgVec::new_in(mcx));
+    }
     let nest_level = xact::GetCurrentTransactionNestLevel();
     let mut out = PgVec::new_in(mcx);
     PENDING.with_borrow(|p| {
@@ -385,6 +427,10 @@ pub fn smgrGetPendingDeletes<'mcx>(
             }
         }
     });
+    debug_assert!(
+        !empty || out.is_empty(),
+        "D4485: smgrGetPendingDeletes skipped a pending delete"
+    );
     Ok(out)
 }
 
@@ -401,6 +447,7 @@ pub fn smgrDoPendingSyncs(is_commit: bool, is_parallel_worker: bool) -> PgResult
     let mut srels: Vec<RelFileLocatorBackend> = Vec::new();
     for sync in &syncs {
         let key = RelFileLocatorBackend { locator: sync.rlocator, backend: INVALID_PROC_NUMBER };
+        pgrc_am::dirpath::sync_table_dir(&pgrc_am::dirpath::table_dir_path(sync.rlocator, INVALID_PROC_NUMBER))?;
         smgr::smgropen(sync.rlocator, INVALID_PROC_NUMBER)?;
 
         let mut nblocks = [InvalidBlockNumber; MAX_FORKNUM as usize + 1];
@@ -474,7 +521,7 @@ pub fn RelationPreserveStorage(rlocator: RelFileLocator, at_commit: bool) {
 }
 
 pub fn DropRelationFiles(delrels: &[RelFileLocator], is_redo: bool) -> PgResult<()> {
-    let mut srels = Vec::with_capacity(delrels.len());
+    let mut srels = ::mcx::std_vec_with_capacity("catalog_storage", delrels.len())?;
     for locator in delrels {
         let key = RelFileLocatorBackend { locator: *locator, backend: INVALID_PROC_NUMBER };
         smgr::smgropen(key.locator, key.backend)?;
@@ -492,6 +539,13 @@ pub fn DropRelationFiles(delrels: &[RelFileLocator], is_redo: bool) -> PgResult<
         srels.push(key);
     }
     smgr::smgrdounlinkall(&srels, is_redo)?;
+    drop_columnar_dirs(&srels);
+    // D3150: a pgrcolumnar relation's table directory goes with its storage in replay too (pgrust-only)
+    if is_redo {
+        for locator in delrels {
+            storage_xlog::redo_remove_table_dir(*locator)?;
+        }
+    }
     Ok(())
 }
 

@@ -1,0 +1,12 @@
+-- regress-full-opr_sanity-002
+-- SELECT p1.oid, p1.proname FROM pg_proc as p1 WHERE (prosrc = '' OR prosrc = '-') AND prosqlbody IS NULL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=56 end=sink
+  nodes n0@0
+  source range rel=1255 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(26):byref8:vl:win/page Attr(28):byref8:vl:win/page Offset:byval2:w2:val
+  filter isnull(v1.28)
+  filter or(op98(v1.26, c25:''), op98(v1.26, c25:'-'))
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

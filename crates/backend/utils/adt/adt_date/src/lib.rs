@@ -123,7 +123,9 @@ fn date_out_of_range(s: &[u8]) -> Box<PgError> {
     let e = match core::str::from_utf8(s) {
         Ok(s) => PgError::error(format!("date out of range: \"{s}\"")),
         Err(_) => {
-            let mut msg = b"date out of range: \"".to_vec();
+            let mut msg = Vec::new();
+            let _ = msg.try_reserve(24 + s.len());
+            msg.extend_from_slice(b"date out of range: \"");
             msg.extend_from_slice(s);
             msg.push(b'"');
             PgError::error_raw_message(msg)
@@ -239,6 +241,48 @@ fn decode_str(
 /// On soft error the sentinel is `Ok(0)` with `escontext.error_occurred()`
 /// set (adt_timestamp convention).
 pub fn date_in(
+    s: impl AsRef<[u8]>,
+    escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<DateADT> {
+    let raw = s.as_ref();
+    if let Some(date) = date_in_iso(raw) {
+        return Ok(date);
+    }
+    date_in_general(raw, escontext)
+}
+
+/// `yyyy-mm-dd` exactly, year 0001-9999, a real calendar day: the value the
+/// general parser gives (a four-digit first field is the year under every
+/// DateStyle), without ParseDateTime / DecodeDateTime and their time-zone
+/// lookup. Anything else, every error included, returns None.
+#[inline]
+fn date_in_iso(b: &[u8]) -> Option<DateADT> {
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let mut v = [0i32; 10];
+    for i in [0, 1, 2, 3, 5, 6, 8, 9] {
+        let d = b[i].wrapping_sub(b'0');
+        if d > 9 {
+            return None;
+        }
+        v[i] = d as i32;
+    }
+    let year = v[0] * 1000 + v[1] * 100 + v[2] * 10 + v[3];
+    let month = v[5] * 10 + v[6];
+    let day = v[8] * 10 + v[9];
+    if year < 1 || !(1..=12).contains(&month) || day < 1 {
+        return None;
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    const DAYS: [i32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if day > DAYS[month as usize - 1] + i32::from(month == 2 && leap) {
+        return None;
+    }
+    Some(date2j(year, month, day) - POSTGRES_EPOCH_JDATE)
+}
+
+pub(crate) fn date_in_general(
     s: impl AsRef<[u8]>,
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<DateADT> {
@@ -466,9 +510,10 @@ pub fn date2timestamptz_opt_overflow(
     tm.tm_hour = 0;
     tm.tm_min = 0;
     tm.tm_sec = 0;
-    let z = tz::session_timezone()
-        .unwrap_or_else(|| panic!("session timezone not initialized (pg_timezone_initialize) — date2timestamptz"));
-    let tzoff = tz::DetermineTimeZoneOffset(&mut tm, z);
+    let tzoff = tz::with_required_session_timezone(
+        "session timezone not initialized (pg_timezone_initialize) — date2timestamptz",
+        |z| tz::DetermineTimeZoneOffset(&mut tm, z),
+    );
 
     let result = date as i64 * USECS_PER_DAY + tzoff as i64 * USECS_PER_SEC;
 
@@ -836,9 +881,10 @@ pub fn time_timetz(time: TimeADT) -> PgResult<TimeTzADT> {
     let mut fsec: fsec_t = 0;
     tz::GetCurrentDateTime(&mut tm)?;
     time2tm(time, &mut tm, &mut fsec);
-    let z = tz::session_timezone()
-        .unwrap_or_else(|| panic!("session timezone not initialized (pg_timezone_initialize) — time_timetz"));
-    let tzoff = tz::DetermineTimeZoneOffset(&mut tm, z);
+    let tzoff = tz::with_required_session_timezone(
+        "session timezone not initialized (pg_timezone_initialize) — time_timetz",
+        |z| tz::DetermineTimeZoneOffset(&mut tm, z),
+    );
     Ok(TimeTzADT { time, zone: tzoff })
 }
 
@@ -1099,14 +1145,14 @@ pub fn timetz_zone(zone: &[u8], t: &TimeTzADT) -> PgResult<TimeTzADT> {
         TzLookup::DynTz(tzp) => {
             let now = GetCurrentTransactionStartTimestamp();
             let mut isdst = 0;
-            DetermineTimeZoneAbbrevOffsetTS(now, tzname, tzp, &mut isdst)?
+            DetermineTimeZoneAbbrevOffsetTS(now, tzname, &tzp, &mut isdst)?
         }
         TzLookup::Zone(tzp) => {
             let now = GetCurrentTransactionStartTimestamp();
             let mut tm = pg_tm::default();
             let mut fsec: fsec_t = 0;
             let mut tz = 0;
-            if timestamp2tm(now, Some(&mut tz), &mut tm, &mut fsec, None, Some(tzp)).is_err() {
+            if timestamp2tm(now, Some(&mut tz), &mut tm, &mut fsec, None, Some(&tzp)).is_err() {
                 return Err(timestamp_out_of_range());
             }
             tz
@@ -1121,10 +1167,18 @@ pub fn timetz_izone(zone: &Interval, time: &TimeTzADT) -> PgResult<TimeTzADT> {
 }
 
 pub fn timetz_at_local(t: &TimeTzADT) -> PgResult<TimeTzADT> {
-    let z = tz::session_timezone()
-        .unwrap_or_else(|| panic!("session timezone not initialized (pg_timezone_initialize) — timetz_at_local"));
-    let tzn = tz::pg_get_timezone_name(z).unwrap_or("");
-    timetz_zone(tzn.as_bytes(), t)
+    // The name is copied out of the borrow: timetz_zone looks the zone up (pg_tzset), which is no place to hold it.
+    let mut name = [0u8; tz::TZ_STRLEN_MAX + 1];
+    let n = tz::with_required_session_timezone(
+        "session timezone not initialized (pg_timezone_initialize) — timetz_at_local",
+        |z| {
+            let tzn = tz::pg_get_timezone_name(z).unwrap_or("").as_bytes();
+            let n = tzn.len().min(name.len());
+            name[..n].copy_from_slice(&tzn[..n]);
+            n
+        },
+    );
+    timetz_zone(&name[..n], t)
 }
 
 // C downcase_truncate_identifier: ASCII downcase, then truncate_identifier
@@ -1156,9 +1210,14 @@ fn unit_not_recognized(lowunits: &[u8], typename: &str) -> Box<PgError> {
 }
 
 // date.c:1271 format_type_be(DATEOID): "pg_catalog.date" when another
-// "date" type shadows it on search_path.
+// "date" type shadows it on search_path. A gravity pool thread has no
+// catalog (D1409): there the name is the type's own, "date" (the shadowed
+// spelling needs the session's search path, read on its thread).
 #[cold]
 fn date_type_name() -> PgResult<String> {
+    if !catcache_seams::catalog_readable_here() {
+        return Ok("date".to_owned());
+    }
     format_type::format_type_be(types_core::catalog::DATEOID)
 }
 
@@ -1186,7 +1245,7 @@ pub fn extract_date(units: &[u8], date: DateADT) -> PgResult<PartValue> {
                     numeric_in(lit, -1, None)?.expect("infinity literal parses"),
                 ))
             }
-            _ => Err(unit_not_supported(lowunits, "date")),
+            _ => Err(unit_not_supported(lowunits, &date_type_name()?)),
         };
     }
 

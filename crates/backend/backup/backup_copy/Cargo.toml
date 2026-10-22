@@ -17,6 +17,7 @@ backup_copy_seams = { path = "../backup_copy_seams" }
 pqformat = { path = "../../libpq/pqformat" }
 pqcomm_seams = { path = "../../libpq/pqcomm_seams" }
 timestamp_seams = { path = "../../utils/adt/timestamp_seams" }
+adt_timestamp = { path = "../../utils/adt/adt_timestamp" }
 
 [dev-dependencies]
 mbutils_seams = { path = "../../utils/mb/mbutils_seams" }

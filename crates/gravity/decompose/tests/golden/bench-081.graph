@@ -1,0 +1,33 @@
+-- bench-081
+-- SELECT count(*), sum(gt.v) FROM g JOIN gt ON g.t = gt.t /* J8 */;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=4 eligible rows=1000 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n4@0 n3@1
+  source range rel=16439 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.2, 2=v2.1)
+  build keys=(outer.2) decls=25/25:Fp128@100
+  outs 1=w8:val 2=vl:win/page
+p1 node=2 eligible rows=2000000 end=breaker(slot=1 PlainAgg)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@1 n0@3^
+  source range rel=16395 rti=1 am=heap
+    lanes Attr(5):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6)
+  probe slot=0 inner=n3 JOIN_INNER keys=(outer.5) decls=25/25:Fp128@100 clauses=(op98(outer.5, inner.2))
+  project (1=inner.1)
+  outs 1=w4:val 2=w4:val 3=w8:val 4=w8:val 5=vl:win/page 6=w1:val
+  outs 1=w4:val
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=agg2803*(), 2=agg2108(1=outer.1))
+  outs 1=w8:val 2=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B
+breaker slot=1 kind=PlainAgg budget=Fixed(80) spill=None producer=p1 layout=[]->[Count@0,SumI64@8]+valid 24B
+group slot=1 producer=p1 node=0 form=Plain hints=[] layout=[]->[Count@0,SumI64@8]+valid 24B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+  agg aggno=1 fn=2108 reg=SumInt slot=1 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.1)
+mapped: SeqScan HashJoin Agg Hash

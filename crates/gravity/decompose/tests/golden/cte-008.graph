@@ -1,0 +1,31 @@
+-- cte-008
+-- SELECT a FROM t WHERE a < 3 AND (SELECT count(*) FROM u) > 10;
+graph pipelines=3 breakers=1 init_plans=1 root=p2
+p0 node=3 eligible rows=2000 end=breaker(slot=0 PlainAgg)
+  nodes n3@0 n2@1^
+  source range rel=16405 rti=2 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  outs 1=w4:val 2=w4:val 3=vl:row
+p1 node=2 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n2@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val
+p2 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=16395 rti=1 am=heap index=16402
+    key att=1 op=97 value=c23:3
+    recheck (op97(index.1, c23:3))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  gate T_List
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+group slot=0 producer=p0 node=2 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+init_plan id=1 pipeline=p1 link=Expr param=$exec0 raise-free
+mapped: Result SeqScan IndexOnlyScan Agg SubPlan

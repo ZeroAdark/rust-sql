@@ -1,0 +1,6 @@
+path	crates/backend/access/pgrcolumnar/pgrc_meta/src/psma.rs
+growth	std::vec::Vec::extend_from_slice	2
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	4
+type	std::boxed::Box	2
+type	std::vec::Vec	2

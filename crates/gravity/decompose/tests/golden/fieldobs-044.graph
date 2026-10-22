@@ -1,0 +1,36 @@
+-- fieldobs-044
+-- SELECT regexp_replace(source_url, '^[a-z]+://(?:www\.)?([^/?]+).*$', '\1') AS host, avg(octet_length(source_url)) AS len, count(*) AS n, min(source_url) FROM sightings WHERE source_url <> '' GROUP BY host HAVING count(*) > 1000 ORDER BY len DESC LIMIT 25;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 eligible rows=4992667 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n2@2^
+  source range rel=16464 rti=1 am=pgrc
+    lanes Attr(30):codes4:code:part/dict Offset:byval2:w2:val
+  filter op531(v1.30, c25:'')
+  project (1=fn2284(v1.30, c25:'^[a-z]+://(?:www\.)?([^/?]+).*$', c25:'\1'), 2=v1.30)
+  outs 1=vl:call2284 2=code:part/dict
+p1 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 TopK)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@2^
+  source breaker slot=0
+  filter op413(agg2803*(), c20:1000)
+  project (1=outer.1, 2=agg2101(1=fn1374(outer.2)), 3=agg2803*(), 4=agg2145(1=outer.2))
+  sort keys=2-n:Fp128/NumNormalized form=topk count=25 offset=all
+  outs 1=vl:life/breaker 2=vl:call2101 3=w8:val 4=vl:call2145
+p2 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n1@0 n0@1
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  limit count=25 offset=all
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=vl:life/breaker 2=vl:call2101 3=w8:val 4=vl:call2145
+  outs 1=vl:life/breaker 2=vl:call2101 3=w8:val 4=vl:call2145
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 9 } producer=p0 layout=[Fp128,Fp128]->[AvgI128@16,Count@40,MinVar@48,MinCode@56] 64B
+breaker slot=1 kind=TopK budget=Fixed(1464) spill=None producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=2-n
+group slot=0 producer=p0 node=2 form=Hashed hints=[] layout=[Fp128,Fp128]->[AvgI128@16,Count@40,MinVar@48,MinCode@56] 64B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=25 rep=3 expr=fn2284(v1.30, c25:'^[a-z]+://(?:www\.)?([^/?]+).*$', c25:'\1')
+  agg aggno=0 fn=2101 reg=AvgInt slot=0 count_slot=- final=Int128Avg class=AvgI128 trans=Abi(AvgI128) mods=[] expr=agg2101(1=fn1374(outer.2))
+  agg aggno=1 fn=2803 reg=CountStar slot=1 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+  agg aggno=2 fn=2145 reg=MinCode slot=2 count_slot=- final=Rendered class=Min(Text) trans=Abi(MinCode) mods=[] expr=agg2145(1=outer.2)
+mapped: SeqScan Sort Agg Limit

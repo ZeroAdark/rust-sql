@@ -1,0 +1,2 @@
+backend/storage/ipc/dsm_core/src/dsm.rs	DSM_INIT_DONE	pgport	exit	thread	the thread's dsm_init_done (C static): set at its first create / attach by dsm_backend_startup, never cleared
+backend/storage/ipc/dsm_core/src/dsm.rs	STATE	pgport	at:dsm_backend_shutdown	thread	this thread's attached segment descriptors (C's dlist in TopMemoryContext): a thread's attaches are its own; dsm_backend_shutdown / dsm_detach_all detach them at exit and the session cleanup with_state registers frees the store; one entry per segment the thread has mapped at once

@@ -25,13 +25,13 @@ fn key(q: i64) -> PgssHashKey {
 fn sticky_entries_evicted_first() {
     let mut s = shared(100);
     for q in 0..100 {
-        entry_alloc(&mut s, key(q), b"q", 6, false);
+        entry_alloc(&mut s, key(q), b"q", 6, false).unwrap();
         let e = s.hash.get_mut(&key(q)).unwrap();
         e.counters.calls[PGSS_EXEC] = 1;
         e.counters.usage = 100.0 + q as f64;
     }
     // Next alloc must evict max(10, 5%) = 10 lowest-usage entries.
-    entry_alloc(&mut s, key(1000), b"new", 6, false);
+    entry_alloc(&mut s, key(1000), b"new", 6, false).unwrap();
     assert_eq!(s.hash.len(), 91);
     assert_eq!(s.stats.dealloc, 1);
     for q in 0..10 {
@@ -44,22 +44,22 @@ fn sticky_entries_evicted_first() {
 fn sticky_starts_at_median_and_unsticks() {
     let mut s = shared(10);
     s.cur_median_usage = 42.0;
-    entry_alloc(&mut s, key(1), b"select $1", 6, true);
+    entry_alloc(&mut s, key(1), b"select $1", 6, true).unwrap();
     let e = s.hash.get(&key(1)).unwrap();
     assert!(e.counters.is_sticky());
     assert_eq!(e.counters.usage, 42.0);
-    entry_alloc(&mut s, key(2), b"select 2", 6, false);
+    entry_alloc(&mut s, key(2), b"select 2", 6, false).unwrap();
     assert_eq!(s.hash.get(&key(2)).unwrap().counters.usage, USAGE_INIT);
 }
 
 #[test]
 fn dealloc_decays_usage_and_tracks_mean_len() {
     let mut s = shared(100);
-    entry_alloc(&mut s, key(1), "a".repeat(99).as_bytes(), 6, false);
+    entry_alloc(&mut s, key(1), "a".repeat(99).as_bytes(), 6, false).unwrap();
     let e = s.hash.get_mut(&key(1)).unwrap();
     e.counters.calls[PGSS_EXEC] = 1;
     e.counters.usage = 10.0;
-    entry_dealloc(&mut s);
+    entry_dealloc(&mut s).unwrap();
     // Zapped (only entry, nvictims >= 10 clamps to n) but decay + stats ran.
     assert_eq!(s.stats.dealloc, 1);
     assert_eq!(s.mean_query_len, 100);
@@ -106,7 +106,7 @@ fn dump_record_is_the_c_struct_layout() {
     s.stats.dealloc = 3;
     s.stats.stats_reset = 0x0102_0304_0506_0708;
     let k = PgssHashKey { userid: 10, dbid: 5, queryid: -77, toplevel: true };
-    entry_alloc(&mut s, k, b"select $1 as dumpprobe", 6, false);
+    entry_alloc(&mut s, k, b"select $1 as dumpprobe", 6, false).unwrap();
     let e = s.hash.get_mut(&k).unwrap();
     e.counters.calls[PGSS_EXEC] = 9;
     e.counters.rows = 1234;
@@ -157,7 +157,7 @@ fn dump_roundtrip_keeps_stats_and_skips_sticky() {
     let mut s = shared(10);
     s.stats.dealloc = 2;
     s.stats.stats_reset = 99;
-    entry_alloc(&mut s, key(1), b"select $1", 6, false);
+    entry_alloc(&mut s, key(1), b"select $1", 6, false).unwrap();
     let e = s.hash.get_mut(&key(1)).unwrap();
     e.counters.calls[PGSS_EXEC] = 4;
     e.counters.total_time[PGSS_EXEC] = 1.25;
@@ -166,10 +166,10 @@ fn dump_roundtrip_keeps_stats_and_skips_sticky() {
     e.minmax_stats_since = 2000;
     // Non-UTF8 bytes in a LATIN1 (8) entry load verbatim, as C's fread does.
     let k2 = PgssHashKey { userid: 10, dbid: 7, queryid: 2, toplevel: false };
-    entry_alloc(&mut s, k2, b"select $1 as caf\xe9", 8, false);
+    entry_alloc(&mut s, k2, b"select $1 as caf\xe9", 8, false).unwrap();
     s.hash.get_mut(&k2).unwrap().counters.calls[PGSS_EXEC] = 1;
     // Sticky (never executed): written, skipped on load.
-    entry_alloc(&mut s, key(3), b"select $1, $2", 6, true);
+    entry_alloc(&mut s, key(3), b"select $1, $2", 6, true).unwrap();
 
     let d = dump_of(&s);
     let mut back = shared(10);
@@ -191,7 +191,7 @@ fn dump_roundtrip_keeps_stats_and_skips_sticky() {
 #[test]
 fn dump_rejects_bad_header_version_encoding_and_short_file() {
     let mut s = shared(10);
-    entry_alloc(&mut s, key(1), b"select $1", 6, false);
+    entry_alloc(&mut s, key(1), b"select $1", 6, false).unwrap();
     s.hash.get_mut(&key(1)).unwrap().counters.calls[PGSS_EXEC] = 1;
     let d = dump_of(&s);
 
@@ -225,4 +225,19 @@ fn dump_rejects_bad_header_version_encoding_and_short_file() {
 fn pgss_memsize_matches_c_at_default_max() {
     assert_eq!(crate::gucs::pgss_max(), 5000);
     assert_eq!(crate::pgss_memsize().unwrap(), 64 + 2_310_224);
+}
+
+#[test]
+fn shmem_startup_registers_state_and_hash_rows() {
+    shmem::init_seams();
+    crate::pgss_shmem_register().unwrap();
+    let (_, found) = shmem::ShmemInitStruct("pg_stat_statements", 64).unwrap();
+    assert!(found, "pg_stat_statements state row missing from the ShmemIndex");
+    let mut info = types_hash::hsearch::HASHCTL::default();
+    info.dsize = dynahash::hash_select_dirsize(5000);
+    info.max_dsize = info.dsize;
+    let size = dynahash::hash_get_shared_size(&info, types_hash::hsearch::HASH_DIRSIZE);
+    let (_, found) = shmem::ShmemInitStruct("pg_stat_statements hash", size).unwrap();
+    assert!(found, "pg_stat_statements hash row missing from the ShmemIndex");
+    crate::pgss_shmem_register().unwrap();
 }

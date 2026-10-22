@@ -279,7 +279,7 @@ pub fn decode_frame32(frame: &[u8], out: &mut Vec<f32>) -> Result<usize, FrameEr
 }
 
 /// [`decode_frame32`] emitting `f32::to_bits` images, for engines whose
-/// float value words ARE bit images (the pgrc2 datum-word decode oracle).
+/// float value words ARE bit images (the pgrc datum-word decode oracle).
 pub fn decode_frame_bits32(frame: &[u8], out: &mut Vec<u32>) -> Result<usize, FrameError> {
     let start = out.len();
     decode_frame_inner32(frame, out).inspect_err(|_| out.truncate(start))

@@ -608,7 +608,7 @@ fn builtin_crypto_mode_off_and_fips_arms() {
 }
 
 // openssl.c:168 px_find_digest resolves every EVP_get_digestbyname name, not
-// a fixed six (batch-19 regression / pgcrypto#1 / b3#3).
+// a fixed six (batch-19 fp-contrib-pgcrypto-openssl#3 / pgcrypto#1 / b3#3).
 // Values: live C 18.6 pgcrypto, 2026-09-13.
 #[test]
 fn digest_and_hmac_resolve_every_openssl_name() {
@@ -946,19 +946,22 @@ fn public_subkey_tail_is_parsed_as_a_header() {
 }
 
 // mbuf.c:79 prepare_room: the decrypt output MBuf (pgp-pgsql.c:479,
-// VARSIZE_ANY(data) + 2048) grows by 2*STEP per append, and the growth
-// past MaxAllocSize is mcxt.c's error with that request size (batch-76
-// mbuf#3). The 1 GB plaintext is stood in for by a capacity near the top.
+// VARSIZE_ANY(data) + 2048) grows once per append that does not fit, by
+// the append rounded up to STEP plus a STEP, and the growth past
+// MaxAllocSize is mcxt.c's error with that request size (batch-76 mbuf#3).
 #[test]
 fn decrypt_output_grows_like_prepare_room() {
     let mut ctx = pgp::context::PgpContext::default();
     ctx.mbuf_cap = ::mcx::MAX_ALLOC_SIZE - 10;
+    let mut dst = vec![0u8; ::mcx::MAX_ALLOC_SIZE - 14];
     assert_eq!(
-        pgp::decrypt::mbuf_room(&mut ctx, ::mcx::MAX_ALLOC_SIZE - 9).unwrap_err(),
+        pgp::decrypt::mbuf_append(&mut ctx, &mut dst, b"x").unwrap_err(),
         format!("invalid memory alloc request size {}", ::mcx::MAX_ALLOC_SIZE - 10 + 32768)
     );
-    ctx.mbuf_cap = 1_071_735;
-    assert_eq!(pgp::decrypt::mbuf_room(&mut ctx, 1_073_732_216).unwrap_err(), "invalid memory alloc request size 1073764983");
+    drop(dst);
+    ctx.mbuf_cap = 100;
+    pgp::decrypt::mbuf_append(&mut ctx, &mut Vec::new(), &[0; 40000]).unwrap();
+    assert_eq!(ctx.mbuf_cap, 100 + 65536);
     let msg = pgp::sym_encrypt(b"hello world", b"k", Some(b"s2k-mode=0,compress-algo=0"), true).unwrap();
     let mut ctx = pgp::context::PgpContext::default();
     ctx.text_mode = 1;

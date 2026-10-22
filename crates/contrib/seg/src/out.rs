@@ -80,10 +80,12 @@ pub fn c_format_g(val: f64) -> String {
     }
 }
 
+use types_error::PgResult;
+
 /// C seg.c `restore(result, val, n)`: print `val` with exactly `n`
 /// significant digits (8.00 where %.ng would print 8). Returns the bytes C
 /// would leave in `result`.
-pub fn restore(val: f32, n_in: i32) -> Vec<u8> {
+pub fn restore(val: f32, n_in: i32) -> PgResult<Vec<u8>> {
     // cap the digit count (n <= 0 protects against corrupted data)
     let n = if n_in <= 0 { FLT_DIG } else { n_in.min(FLT_DIG) };
     let sign = val < 0.0;
@@ -94,17 +96,17 @@ pub fn restore(val: f32, n_in: i32) -> Vec<u8> {
 
     // punt if we have 'inf' or similar
     let Some(epos) = bytes.iter().position(|&c| c == b'e') else {
-        return bytes.to_vec();
+        return mcx::std_vec_from_slice("seg", bytes);
     };
     let exp: i32 = e_form[epos + 1..].parse().unwrap();
 
     if exp == 0 {
         // just truncate off the 'e+00'
-        return bytes[..epos].to_vec();
+        return mcx::std_vec_from_slice("seg", &bytes[..epos]);
     }
     if exp.abs() > 4 {
         // %e must be OK
-        return bytes.to_vec();
+        return mcx::std_vec_from_slice("seg", bytes);
     }
 
     // C copies the mantissa digits (skipping '.') into a '0'-prefilled
@@ -113,11 +115,12 @@ pub fn restore(val: f32, n_in: i32) -> Vec<u8> {
     // dp - 10 == 1 (n == 1 has no '.', and C's fallback sets dp past the
     // digit, also 11).
     let mstart = if sign { 1 } else { 0 };
-    let digits: Vec<u8> = bytes[mstart..epos]
-        .iter()
-        .copied()
-        .filter(|&c| c != b'.')
-        .collect();
+    let mut digits: Vec<u8> = mcx::std_vec_with_capacity("seg", epos - mstart)?;
+    for &c in &bytes[mstart..epos] {
+        if c != b'.' {
+            digits.push(c);
+        }
+    }
     debug_assert_eq!(digits.len(), n as usize);
     let dpk: i32 = 1; // dp - 10
 
@@ -159,7 +162,7 @@ pub fn restore(val: f32, n_in: i32) -> Vec<u8> {
         }
         out.extend_from_slice(&digits);
     }
-    out
+    Ok(out)
 }
 
 /// seg.c `significant_digits()`: digits carried by a float literal.
@@ -205,7 +208,7 @@ pub fn sig_digits(s: &[u8]) -> i32 {
 }
 
 /// seg.c `seg_out`.
-pub fn seg_out(seg: &Seg) -> Vec<u8> {
+pub fn seg_out(seg: &Seg) -> PgResult<Vec<u8>> {
     let mut out: Vec<u8> = Vec::new();
 
     if seg.l_ext == b'>' || seg.l_ext == b'<' || seg.l_ext == b'~' {
@@ -214,11 +217,11 @@ pub fn seg_out(seg: &Seg) -> Vec<u8> {
 
     if seg.lower == seg.upper && seg.l_ext == seg.u_ext {
         // built by seg_in off a single point
-        out.extend_from_slice(&restore(seg.lower, seg.l_sigd as i32));
+        out.extend_from_slice(&restore(seg.lower, seg.l_sigd as i32)?);
     } else {
         if seg.l_ext != b'-' {
             // print the lower boundary if exists
-            out.extend_from_slice(&restore(seg.lower, seg.l_sigd as i32));
+            out.extend_from_slice(&restore(seg.lower, seg.l_sigd as i32)?);
             out.push(b' ');
         }
         out.extend_from_slice(b"..");
@@ -229,10 +232,10 @@ pub fn seg_out(seg: &Seg) -> Vec<u8> {
             if seg.u_ext == b'>' || seg.u_ext == b'<' || seg.u_ext == b'~' {
                 out.push(seg.u_ext);
             }
-            out.extend_from_slice(&restore(seg.upper, seg.u_sigd as i32));
+            out.extend_from_slice(&restore(seg.upper, seg.u_sigd as i32)?);
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -240,7 +243,7 @@ mod tests {
     use super::*;
 
     fn r(val: f32, n: i32) -> String {
-        String::from_utf8(restore(val, n)).unwrap()
+        String::from_utf8(restore(val, n).unwrap()).unwrap()
     }
 
     #[test]
@@ -322,24 +325,24 @@ mod tests {
             u_ext,
         };
         // point
-        assert_eq!(seg_out(&seg(1.0, 1.0, 1, 1, 0, 0)), b"1");
+        assert_eq!(seg_out(&seg(1.0, 1.0, 1, 1, 0, 0)).unwrap(), b"1");
         // plain range
-        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, 0, 0)), b"1 .. 2");
+        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, 0, 0)).unwrap(), b"1 .. 2");
         // open-ended
-        assert_eq!(seg_out(&seg(1.0, f32::INFINITY, 1, 0, 0, b'-')), b"1 ..");
+        assert_eq!(seg_out(&seg(1.0, f32::INFINITY, 1, 0, 0, b'-')).unwrap(), b"1 ..");
         assert_eq!(
-            seg_out(&seg(f32::NEG_INFINITY, 2.0, 0, 1, b'-', 0)),
+            seg_out(&seg(f32::NEG_INFINITY, 2.0, 0, 1, b'-', 0)).unwrap(),
             b".. 2"
         );
         assert_eq!(
-            seg_out(&seg(f32::NEG_INFINITY, f32::INFINITY, 0, 0, b'-', b'-')),
+            seg_out(&seg(f32::NEG_INFINITY, f32::INFINITY, 0, 0, b'-', b'-')).unwrap(),
             b".."
         );
         // extensions
-        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, b'<', b'>')), b"<1 .. >2");
+        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, b'<', b'>')).unwrap(), b"<1 .. >2");
         // upstream 0004cab4dc60 (18.6): each boundary keeps its own '~'
-        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, b'~', 0)), b"~1 .. 2");
-        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, 0, b'~')), b"1 .. ~2");
-        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, b'~', b'~')), b"~1 .. ~2");
+        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, b'~', 0)).unwrap(), b"~1 .. 2");
+        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, 0, b'~')).unwrap(), b"1 .. ~2");
+        assert_eq!(seg_out(&seg(1.0, 2.0, 1, 1, b'~', b'~')).unwrap(), b"~1 .. ~2");
     }
 }

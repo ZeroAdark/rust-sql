@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/hashjoin/probe.rs	make	licence	fn	the probe's build placement: eager unless a lazy group admits it; raising outer feeders run before the build on the build-first path; rerun-member builds every call [LICENCE-ASKED; D824,D237,D276,D1902,D1904,D1906,D3296,D3717]

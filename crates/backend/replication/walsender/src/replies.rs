@@ -430,7 +430,8 @@ mod tests {
 // errmsg("invalid standby message type \"%c\"", firstchar): %c stores the
 // byte itself, so a high byte goes out verbatim rather than UTF-8 encoded.
 fn invalid_standby_message_type(firstchar: u8) -> Vec<u8> {
-    let mut msg = b"invalid standby message type \"".to_vec();
+    let mut msg = Vec::with_capacity(32);
+    msg.extend_from_slice(b"invalid standby message type \"");
     msg.push(firstchar);
     msg.push(b'"');
     msg

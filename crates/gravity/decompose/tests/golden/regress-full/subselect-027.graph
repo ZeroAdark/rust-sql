@@ -1,0 +1,10 @@
+-- regress-full-subselect-027
+-- SELECT *, pg_typeof(f1) FROM (SELECT 'foo' AS f1 FROM generate_series(1,3)) ss ORDER BY 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=2 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:3)]
+  project (1=c25:'foo', 2=fn1619(c25:'foo'))
+  outs 1=vl:stmt/imm 2=w4:val
+mapped: FunctionScan

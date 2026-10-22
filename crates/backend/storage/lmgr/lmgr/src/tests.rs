@@ -164,7 +164,7 @@ fn make_rel(mcx: mcx::Mcx<'_>, oid: Oid) -> RelationData<'_> {
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: mcx::PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -383,7 +383,7 @@ fn record_wait_log(error: &PgError, _output_to_server: &mut bool) {
 
 // lmgr.c:684 XactLockTableWaitErrorCb sits on error_context_stack for the
 // whole wait, so the log_lock_waits LOG lines ProcSleep raises mid-wait carry
-// 'while updating tuple (3,7) in relation "reltest"' (batch-232 regression).
+// 'while updating tuple (3,7) in relation "reltest"' (batch-232 fp-lmgr-lmgr#1).
 #[test]
 fn xact_lock_table_wait_decorates_log_reports_raised_while_waiting() {
     install();

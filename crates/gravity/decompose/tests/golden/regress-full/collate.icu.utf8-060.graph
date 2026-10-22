@@ -1,0 +1,11 @@
+-- regress-full-collate.icu.utf8-060
+-- INSERT INTO pagg_tab5 (b, c) SELECT substr('abAB', (i % 4) + 1 , 1), substr('abAB', (i % 2) + 1 , 1) FROM generate_series(0, 5) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, c23:5)]
+  project (1=fn877(c25:'abAB', op551(op530(v3.1, c23:2), c23:1), c23:1), 2=fn877(c25:'abAB', op551(op530(v3.1, c23:4), c23:1), c23:1))
+  write INSERT rel=31494 rti=1 natts=2 indexes=() route=rti1:31494 natts=2
+  outs 1=vl:call877 2=vl:call877
+mapped: ModifyTable FunctionScan

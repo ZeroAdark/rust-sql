@@ -1,4 +1,0 @@
-‚);
-
--- parens are ignf too
-select websh_to_tsquery(

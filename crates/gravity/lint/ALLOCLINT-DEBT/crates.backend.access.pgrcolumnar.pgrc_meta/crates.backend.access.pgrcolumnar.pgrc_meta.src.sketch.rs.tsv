@@ -1,0 +1,15 @@
+path	crates/backend/access/pgrcolumnar/pgrc_meta/src/sketch.rs
+growth	std::collections::BTreeMap::insert	1
+growth	std::collections::BinaryHeap::push	3
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	7
+growth	std::vec::Vec::try_reserve	2
+method	pgrc_format::try_filled	2
+method	pgrc_format::try_to_vec	6
+method	pgrc_format::try_vec	6
+method	slice::sort_by_key	2
+method	std::collections::BinaryHeap::with_capacity	1
+method	std::iter::Iterator::collect	3
+type	std::collections::BinaryHeap	3
+type	std::vec::Vec	4

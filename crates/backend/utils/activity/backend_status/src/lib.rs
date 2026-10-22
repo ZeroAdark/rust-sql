@@ -12,7 +12,7 @@ use types_core::{
     INVALID_PROC_NUMBER, NAMEDATALEN,
 };
 use types_error::PgResult;
-use types_storage::storage::{SyncCell, NUM_AUXILIARY_PROCS};
+use types_storage::storage::SyncCell;
 
 pub use backend_status_seams::BackendState;
 
@@ -51,6 +51,7 @@ pub struct PgBackendStatus {
     pub st_ssl: SyncCell<bool>,
     pub st_sslstatus: PgBackendSSLStatus,
     pub st_gss: SyncCell<bool>,
+    pub st_gssstatus: SyncCell<PgBackendGSSStatus>,
     pub st_state: SyncCell<BackendState>,
     pub st_appname: SyncCell<[u8; NAMELEN]>,
     pub st_progress_command: SyncCell<i32>,
@@ -65,6 +66,35 @@ pub struct PgBackendStatus {
     /// registry slot, so the view reads this instead. `None` = look the
     /// bgworker registry up by pid, as C does.
     pub st_bgw_type_override: SyncCell<Option<&'static str>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PgBackendGSSStatus {
+    pub authenticated: bool,
+    pub encrypted: bool,
+    pub delegated: bool,
+    pub principal: [u8; NAMELEN],
+}
+
+impl PgBackendGSSStatus {
+    const ZERO: Self = Self {
+        authenticated: false,
+        encrypted: false,
+        delegated: false,
+        principal: [0; NAMELEN],
+    };
+
+    fn from_port(port: &types_startup::Port) -> Self {
+        match &port.gss {
+            Some(gss) => Self {
+                authenticated: gss.authenticated,
+                encrypted: gss.encrypted,
+                delegated: gss.delegated,
+                principal: str_to_name(gss.principal.as_deref().unwrap_or("")),
+            },
+            None => Self::ZERO,
+        }
+    }
 }
 
 // PgBackendSSLStatus (backend_status.h); contents only meaningful while
@@ -141,7 +171,7 @@ pub fn swap_my_beentry(saved: &mut Option<&'static PgBackendStatus>) {
 }
 
 fn NumBackendStatSlots() -> i32 {
-    g::MaxBackends() + NUM_AUXILIARY_PROCS
+    g::MaxBackends() + g::NumAuxiliaryProcs()
 }
 
 fn track_activities() -> bool {
@@ -227,10 +257,32 @@ fn write_activity(slot: i32, s: &[u8]) {
     }
 }
 
+pub fn own_activity_for_crash_report(out: &mut [u8]) -> usize {
+    let Some(entry) = MY_BE_ENTRY.try_with(Cell::get).ok().flatten() else { return 0 };
+    let Some(buf) = BACKEND_ACTIVITY_BUFFER.get() else { return 0 };
+    if entry.slot < 0 || (entry.slot as usize + 1) * buf.query_size > buf.total {
+        return 0;
+    }
+    // SAFETY: slot range checked above; writers only shorten at a NUL; no allocation or lock (signal handler caller).
+    let src = unsafe { buf.base.add(entry.slot as usize * buf.query_size) };
+    let mut n = 0;
+    while n < out.len() && n < buf.query_size - 1 {
+        // SAFETY: n < query_size, inside the slot.
+        let b = unsafe { *src.add(n) };
+        if b == 0 {
+            break;
+        }
+        out[n] = if (32..=127).contains(&b) || matches!(b, b'\n' | b'\r' | b'\t') { b } else { b'?' };
+        n += 1;
+    }
+    n
+}
+
 fn read_activity(slot: i32) -> Vec<u8> {
     let qsize = BACKEND_ACTIVITY_BUFFER.get().unwrap().query_size;
     let src = activity_ptr(slot);
-    let mut out = Vec::with_capacity(qsize);
+    let mut out = Vec::new();
+    let _ = out.try_reserve(qsize);
     // SAFETY: src has qsize bytes; concurrent writes only shorten at a NUL.
     unsafe {
         for i in 0..qsize - 1 {
@@ -254,6 +306,16 @@ fn bytes_to_name(b: &[u8]) -> [u8; NAMELEN] {
     let len = b.len().min(NAMELEN - 1);
     out[..len].copy_from_slice(&b[..len]);
     out
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NameBytes([u8; NAMELEN]);
+
+impl NameBytes {
+    pub fn as_bytes(&self) -> &[u8] {
+        let len = self.0.iter().position(|&b| b == 0).unwrap_or(NAMELEN - 1);
+        &self.0[..len]
+    }
 }
 
 fn name_to_string(name: &[u8; NAMELEN]) -> String {
@@ -327,6 +389,7 @@ pub fn BackendStatusShmemInit() -> PgResult<()> {
             st_ssl: SyncCell::new(false),
             st_sslstatus: PgBackendSSLStatus::zeroed(),
             st_gss: SyncCell::new(false),
+            st_gssstatus: SyncCell::new(PgBackendGSSStatus::ZERO),
             st_state: SyncCell::new(BackendState::STATE_UNDEFINED),
             st_appname: SyncCell::new([0; NAMELEN]),
             st_progress_command: SyncCell::new(PROGRESS_COMMAND_INVALID),
@@ -456,8 +519,7 @@ pub fn pgstat_bestart_initial() -> PgResult<()> {
 
 // USE_SSL arm live when the `ssl` feature is on and the target builds
 // vendored OpenSSL (everything but wasm32); the !USE_SSL arm leaves the SSL
-// block zeroed as C does. No ENABLE_GSS arm in this build (gss stays false,
-// as C built without gssapi).
+// block zeroed as C does.
 #[cfg(all(feature = "ssl", not(target_family = "wasm")))]
 fn read_ssl_status() -> PgResult<(bool, PgBackendSSLStatus)> {
     let mut ssl = false;
@@ -513,12 +575,16 @@ pub fn pgstat_bestart_security() -> PgResult<()> {
     assert!(g::HaveMyProcPort());
 
     let (ssl, lssl) = read_ssl_status()?;
+    let (gss, lgss) = g::WithMyProcPort(|port| {
+        (port.gss.is_some(), PgBackendGSSStatus::from_port(port))
+    });
 
     begin_write_activity(beentry);
     // SAFETY: own-backend write / cross-backend read serialized by the st_changecount protocol
     unsafe {
         beentry.st_ssl.set(ssl);
-        beentry.st_gss.set(false);
+        beentry.st_gss.set(gss);
+        beentry.st_gssstatus.set(lgss);
         beentry.st_sslstatus.ssl_bits.set(lssl.ssl_bits.get());
         beentry.st_sslstatus.ssl_version.set(lssl.ssl_version.get());
         beentry.st_sslstatus.ssl_cipher.set(lssl.ssl_cipher.get());
@@ -785,6 +851,17 @@ pub fn pgstat_get_my_plan_id() -> i64 {
     MY_BE_ENTRY.get().map_or(0, |e| unsafe { e.st_plan_id.get() })
 }
 
+pub fn pgstat_backend_running_by_proc_number(procNumber: ProcNumber) -> bool {
+    let Some(e) = usize::try_from(procNumber).ok().and_then(|i| backend_status_array().get(i)) else {
+        return false;
+    };
+    // SAFETY: own-backend write / cross-backend read serialized by the st_changecount protocol
+    matches!(
+        unsafe { e.st_state.get() },
+        BackendState::STATE_RUNNING | BackendState::STATE_FASTPATH
+    )
+}
+
 pub fn pgstat_get_backend_type_by_proc_number(procNumber: ProcNumber) -> BackendType {
     // SAFETY: own-backend write / cross-backend read serialized by the st_changecount protocol
     unsafe { backend_status_array()[procNumber as usize].st_backendType.get() }
@@ -880,10 +957,11 @@ pub struct LocalPgBackendStatus {
     pub st_ssl_bits: i32,
     pub st_ssl_version: String,
     pub st_ssl_cipher: String,
-    pub st_ssl_client_dn: String,
+    pub st_ssl_client_dn: NameBytes,
     pub st_ssl_client_serial: String,
-    pub st_ssl_issuer_dn: String,
+    pub st_ssl_issuer_dn: NameBytes,
     pub st_gss: bool,
+    pub st_gssstatus: PgBackendGSSStatus,
     pub st_state: BackendState,
     pub st_appname: String,
     pub st_activity_raw: Vec<u8>,
@@ -939,10 +1017,11 @@ fn pgstat_read_current_status() {
                     st_ssl_bits: beentry.st_sslstatus.ssl_bits.get(),
                     st_ssl_version: name_to_string(&beentry.st_sslstatus.ssl_version.get()),
                     st_ssl_cipher: name_to_string(&beentry.st_sslstatus.ssl_cipher.get()),
-                    st_ssl_client_dn: name_to_string(&beentry.st_sslstatus.ssl_client_dn.get()),
+                    st_ssl_client_dn: NameBytes(beentry.st_sslstatus.ssl_client_dn.get()),
                     st_ssl_client_serial: name_to_string(&beentry.st_sslstatus.ssl_client_serial.get()),
-                    st_ssl_issuer_dn: name_to_string(&beentry.st_sslstatus.ssl_issuer_dn.get()),
+                    st_ssl_issuer_dn: NameBytes(beentry.st_sslstatus.ssl_issuer_dn.get()),
                     st_gss: beentry.st_gss.get(),
+                    st_gssstatus: beentry.st_gssstatus.get(),
                     st_state: beentry.st_state.get(),
                     st_appname: name_to_string(&beentry.st_appname.get()),
                     // Raw bytes, as C (backend_status.c:911): the readers'

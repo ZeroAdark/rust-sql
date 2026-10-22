@@ -1,0 +1,1 @@
+backend/storage/buffer/bufmgr/src/privref.rs	PRIV	pgport	exit	thread	this thread's private buffer pins (PrivateRefCount: 8 array entries + an overflow map in a session-root context, made by init): a claim's pins are its own thread's, released by its resource owner; it holds at most the pins the thread has at once

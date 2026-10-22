@@ -1,0 +1,43 @@
+-- name: regress-full-sanity_check-002
+-- sql: SELECT relname, relkind FROM pg_class WHERE relkind IN ('v', 'c', 'f', 'p', 'I') AND relfilenode <> 0;
+-- test: sanity_check
+-- shape: 25d54644bb18c092 seen=1
+-- rel 1259 pg_class am=heap kind=r natts=34
+-- att 1259 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 2 relname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1259 3 relnamespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 4 reltype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 5 reloftype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 6 relowner typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 7 relam typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 8 relfilenode typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 9 reltablespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 10 relpages typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 11 reltuples typid=700 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 12 relallvisible typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 13 relallfrozen typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 14 reltoastrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 15 relhasindex typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 16 relisshared typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 17 relpersistence typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 18 relkind typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 19 relnatts typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1259 20 relchecks typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1259 21 relhasrules typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 22 relhastriggers typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 23 relhassubclass typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 24 relrowsecurity typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 25 relforcerowsecurity typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 26 relispopulated typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 27 relreplident typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 28 relispartition typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 29 relrewrite typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 30 relfrozenxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 31 relminmxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 32 relacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- att 1259 33 reloptions typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- att 1259 34 relpartbound typid=194 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2662 rel=1259 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 2663 rel=1259 keys=2,3 opts=0,0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- idx 3455 rel=1259 keys=9,8 opts=0,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 36.475 :scan.plan.plan_rows 135 :scan.plan.plan_width 65 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 2 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location 7} :resno 1 :resname relname :ressortgroupref 0 :resorigtbl 1259 :resorigcol 2 :resjunk false} {TARGETENTRY :expr {VAR :varno 1 :varattno 18 :vartype 18 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 18 :location 16} :resno 2 :resname relkind :ressortgroupref 0 :resorigtbl 1259 :resorigcol 18 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 608 :opfuncid 185 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 8 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 8 :location 95} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 110 :constvalue 4 [ 0 0 0 0 0 0 0 0 ]}) :location 107} {SCALARARRAYOPEXPR :opno 92 :opfuncid 61 :hashfuncid 0 :negfuncid 0 :useOr true :inputcollid 0 :args ({VAR :varno 1 :varattno 18 :vartype 18 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 18 :location 47} {CONST :consttype 1002 :consttypmod -1 :constcollid 0 :constlen -1 :constbyval false :constisnull false :location -1 :constvalue 29 [ 116 0 0 0 1 0 0 0 0 0 0 0 18 0 0 0 5 0 0 0 1 0 0 0 118 99 102 112 73 ]}) :location 55}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 2 8 18)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_class :colnames ("oid" "relname" "relnamespace" "reltype" "reloftype" "relowner" "relam" "relfilenode" "reltablespace" "relpages" "reltuples" "relallvisible" "relallfrozen" "reltoastrelid" "relhasindex" "relisshared" "relpersistence" "relkind" "relnatts" "relchecks" "relhasrules" "relhastriggers" "relhassubclass" "relrowsecurity" "relforcerowsecurity" "relispopulated" "relreplident" "relispartition" "relrewrite" "relfrozenxid" "relminmxid" "relacl" "reloptions" "relpartbound")} :rtekind 0 :relid 1259 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 1259 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 9 15 25) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 1259 0) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 111}

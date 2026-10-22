@@ -46,6 +46,18 @@ thread_local! {
     static CACHED_DB_HASH: Cell<u32> = const { Cell::new(0) };
 }
 
+/// D4682: a reused client backend thread's next session must not see this session's role memberships: pg_hba's
+/// `+group` match and the reserved-connections check read the cache before initialize_acl resets the roles, and a
+/// parked thread receives no invalidations (a REVOKE while it waits).
+pub fn reset_for_thread_reuse() {
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        c.role = [InvalidOid; 3];
+        c.roles.iter_mut().for_each(Vec::clear);
+    });
+    CACHED_DB_HASH.set(0);
+}
+
 pub fn initialize_acl() -> PgResult<()> {
     if !miscinit::IsBootstrapProcessingMode() {
         let dbid = init_small::globals::MyDatabaseId();

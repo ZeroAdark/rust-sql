@@ -1,4 +1,4 @@
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use mcx::Mcx;
 use types_core::primitive::RmgrIds;
 use types_core::{
@@ -22,7 +22,7 @@ fn version_file_fsync_error(versionfile: &str, errno: i32) -> Box<types_error::P
     ereport(fd::data_sync_elevel(ERROR))
         .with_saved_errno(errno)
         .errcode_for_file_access()
-        .errmsg(format!("could not fsync file \"{versionfile}\": %m"))
+        .errmsg(format!("could not fsync file \"{versionfile}\": {PCT_M}"))
         .into_error()
         .into()
 }
@@ -33,10 +33,11 @@ const PG_MAJORVERSION: &str = "18";
 const WAIT_EVENT_VERSION_FILE_SYNC: u32 = 0x0A00_0000 | 65;
 const WAIT_EVENT_VERSION_FILE_WRITE: u32 = 0x0A00_0000 | 66;
 
-struct CreateDBRelInfo {
-    rlocator: RelFileLocator,
-    reloid: Oid,
-    permanent: bool,
+pub(crate) struct CreateDBRelInfo {
+    pub(crate) rlocator: RelFileLocator,
+    pub(crate) reloid: Oid,
+    pub(crate) relam: Oid,
+    pub(crate) permanent: bool,
 }
 
 pub(crate) fn CreateDatabaseUsingWalLog(
@@ -70,6 +71,7 @@ pub(crate) fn CreateDatabaseUsingWalLog(
         lmgr::LockRelationId(&dstrelid, AccessShareLock)?;
 
         bufmgr::CreateAndCopyRelationData(srcrlocator, dstrlocator, relinfo.permanent)?;
+        pgrc_wal::dbcopy::copy_dir_logged(srcrlocator, dstrlocator, relinfo.permanent)?;
 
         lmgr::UnlockRelationId(&srcrelid, AccessShareLock)?;
         lmgr::UnlockRelationId(&dstrelid, AccessShareLock)?;
@@ -89,15 +91,34 @@ pub fn count_swept_relations(mcx: Mcx<'_>, src_dboid: Oid, src_tsid: Oid) -> PgR
     Ok(ScanSourceDatabasePgClass(src_tsid, src_dboid, srcpath.as_str())?.len())
 }
 
-fn ScanSourceDatabasePgClass(
+pub(crate) fn ScanSourceDatabasePgClass(
     tbid: Oid,
     dbid: Oid,
     srcpath: &str,
 ) -> PgResult<Vec<CreateDBRelInfo>> {
     let relfilenumber =
         relmapper::RelationMapOidToFilenumberForDatabase(srcpath, RelationRelationId)?;
+    let mut rlocatorlist = Vec::new();
+    scan_source_catalog(tbid, dbid, RelationRelationId, relfilenumber, &mut |tuple| {
+        if let Some(relinfo) = scan_tuple(tuple, tbid, dbid, srcpath)? {
+            rlocatorlist.push(relinfo);
+        }
+        Ok(())
+    })?;
+    Ok(rlocatorlist)
+}
 
-    let relid = LockRelId { relId: RelationRelationId, dbId: dbid };
+/// Visit every tuple of a source-database catalog visible to the latest
+/// snapshot, reading its pages without a relcache entry (the pg_class scan of
+/// CreateDatabaseUsingWalLog, dbcommands.c:271).
+pub(crate) fn scan_source_catalog(
+    tbid: Oid,
+    dbid: Oid,
+    catalog_relid: Oid,
+    relfilenumber: Oid,
+    visit: &mut dyn FnMut(&HeapTupleData<'_>) -> PgResult<()>,
+) -> PgResult<()> {
+    let relid = LockRelId { relId: catalog_relid, dbId: dbid };
     lmgr::LockRelationId(&relid, AccessShareLock)?;
 
     let rlocator = RelFileLocator { spcOid: tbid, dbOid: dbid, relNumber: relfilenumber };
@@ -111,7 +132,6 @@ fn ScanSourceDatabasePgClass(
     let latest = snapmgr::GetLatestSnapshot()?;
     let snapshot = snapmgr::RegisterSnapshot(Some(&latest))?.expect("registered snapshot");
 
-    let mut rlocatorlist = Vec::new();
     for blkno in 0..nblocks {
         postgres_seams::check_for_interrupts::call()?;
 
@@ -132,27 +152,23 @@ fn ScanSourceDatabasePgClass(
             continue;
         }
 
-        scan_page(page, buf, blkno, tbid, dbid, srcpath, &snapshot, &mut rlocatorlist)?;
+        scan_page(page, buf, blkno, catalog_relid, &snapshot, visit)?;
 
         bufmgr::UnlockReleaseBuffer(buf)?;
     }
     snapmgr::UnregisterSnapshot(Some(&snapshot));
 
     lmgr::UnlockRelationId(&relid, AccessShareLock)?;
-
-    Ok(rlocatorlist)
+    Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn scan_page(
     page: PageRef<'_>,
     buf: types_core::Buffer,
     blkno: BlockNumber,
-    tbid: Oid,
-    dbid: Oid,
-    srcpath: &str,
+    catalog_relid: Oid,
     snapshot: &snapmgr::Snapshot,
-    rlocatorlist: &mut Vec<CreateDBRelInfo>,
+    visit: &mut dyn FnMut(&HeapTupleData<'_>) -> PgResult<()>,
 ) -> PgResult<()> {
     let maxoff = page.max_offset_number();
     for offnum in 1..=maxoff {
@@ -161,14 +177,13 @@ fn scan_page(
             continue;
         }
         debug_assert!(itemid.is_normal());
-
         let mut tid = ItemPointerData::default();
         types_tuple::ItemPointerSet(&mut tid, blkno, offnum);
         // SAFETY: normal item id on a share-locked page; the item image is a
         // live heap tuple readable for its recorded length.
         let (item_ptr, item_len) = unsafe { page.item_raw_unchecked(itemid) };
         let mut tuple = unsafe {
-            HeapTupleData::from_raw_parts(item_ptr, item_len, tid, RelationRelationId)
+            HeapTupleData::from_raw_parts(item_ptr, item_len, tid, catalog_relid)
         };
 
         if heapam_visibility_seams::heap_tuple_satisfies_visibility::call(
@@ -176,16 +191,14 @@ fn scan_page(
             snapshot.as_ref(),
             buf,
         )? {
-            if let Some(relinfo) = scan_tuple(&tuple, tbid, dbid, srcpath)? {
-                rlocatorlist.push(relinfo);
-            }
+            visit(&tuple)?;
         }
     }
     Ok(())
 }
 
 // ScanSourceDatabasePgClassTuple: fixed-offset GETSTRUCT reads of the
-// pg_class prefix (oid, relfilenode, reltablespace, relpersistence, relkind);
+// pg_class prefix (oid, relam, relfilenode, reltablespace, relpersistence, relkind);
 // prefix columns precede any nullable/varlena attribute.
 fn scan_tuple(
     tuple: &HeapTupleData<'_>,
@@ -196,11 +209,11 @@ fn scan_tuple(
     let base = tuple.getstruct();
     // SAFETY: pg_class rows always carry the full fixed prefix (120 bytes);
     // offsets mirror FormData_pg_class field order in pg_class.h.
-    let (oid, relfilenode, reltablespace, relpersistence, relkind) = unsafe {
+    let (oid, relam, relfilenode, reltablespace, relpersistence, relkind) = unsafe {
         let u32_at = |off: usize| -> u32 {
             u32::from_ne_bytes(core::slice::from_raw_parts(base.add(off), 4).try_into().unwrap())
         };
-        (u32_at(0), u32_at(88), u32_at(92), *base.add(118), *base.add(119))
+        (u32_at(0), u32_at(84), u32_at(88), u32_at(92), *base.add(118), *base.add(119))
     };
 
     if reltablespace == crate::GLOBALTABLESPACE_OID
@@ -230,6 +243,7 @@ fn scan_tuple(
             relNumber: relfilenumber,
         },
         reloid: oid,
+        relam,
         permanent: relpersistence == RELPERSISTENCE_PERMANENT,
     }))
 }
@@ -248,7 +262,7 @@ pub(crate) fn CreateDirAndVersionFile(
             return Err(ereport(ERROR)
                 .errcode_for_file_access()
                 .with_saved_errno(errno)
-                .errmsg(format!("could not create directory \"{dbpath}\": %m"))
+                .errmsg(format!("could not create directory \"{dbpath}\": {PCT_M}"))
                 .into_error()
                 .into());
         }
@@ -267,7 +281,7 @@ pub(crate) fn CreateDirAndVersionFile(
     if fdnum < 0 {
         return Err(ereport(ERROR)
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{versionfile}\": %m"))
+            .errmsg(format!("could not create file \"{versionfile}\": {PCT_M}"))
             .into_error()
             .into());
     }
@@ -315,7 +329,7 @@ fn version_file_write_error(versionfile: &str, errno: i32) -> Box<types_error::P
     ereport(ERROR)
         .with_saved_errno(errno)
         .errcode_for_file_access()
-        .errmsg(format!("could not write to file \"{versionfile}\": %m"))
+        .errmsg(format!("could not write to file \"{versionfile}\": {PCT_M}"))
         .into_error()
         .into()
 }

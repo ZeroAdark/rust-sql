@@ -1,0 +1,37 @@
+-- regress-full-subselect-049
+-- select ( select min(tb.id) from tb where tb.aval = (select ta.val from ta where ta.id = tc.aid) ) as min_tb_id from tc;
+graph pipelines=3 breakers=0 init_plans=2 root=p2
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=25217 rti=2 am=heap index=25221
+    key att=1 op=96 value=$exec0
+    recheck (op96(v2.1, $exec0))
+    lanes Attr(2):byval8:w8:val
+  project (1=v2.2)
+  outs 1=w8:val
+p1 node=3 serial site=0 reason=IndexSource end=sink
+  nodes n3@0 n2@2
+  source index rel=25223 rti=3 am=heap index=25227
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  filter op96(v3.2, $exec1)
+  project (1=v3.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val
+p2 node=0 eligible rows=2260 end=sink
+  nodes n0@0
+  source range rel=25229 rti=1 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  subplan 3 nested Expr params=($exec0=v1.2)
+  inner node=4 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n4@0
+  source const
+  project (1=$exec2)
+  project (1=subplan3(v1.2))
+  outs 1=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec1
+init_plan id=2 pipeline=p1 link=Expr param=$exec2 raise-free
+rerun node=0 subplan=3 pipelines=p0,p1 slots=
+param $exec0 owner=subplan3 type=23 rep=w8:val
+mapped: Result SeqScan IndexScan Limit SubPlan

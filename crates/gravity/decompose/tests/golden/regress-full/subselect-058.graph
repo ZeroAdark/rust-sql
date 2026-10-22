@@ -1,0 +1,84 @@
+-- regress-full-subselect-058
+-- delete from road where exists ( select 1 from int4_tbl cross join ( select f1, array(select q1 from int8_tbl) as arr from text_tbl ) ss where road.name = ss.f1 );
+graph pipelines=6 breakers=5 init_plans=0 root=p5
+p0 node=6 eligible rows=2 end=breaker(slot=0 Materialize)
+  nodes n6@0 n5@1^
+  source range rel=16409 rti=5 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v5.-1, 2=v5.1)
+  spool
+  outs 1=fx6:row 2=vl:win/page
+p1 node=4 eligible rows=5 end=breaker(slot=1 HashAgg)
+  desc consumes=slot0@p0 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n3@1 n2@3^
+  source range rel=16400 rti=2 am=heap
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v2.-1)
+  nest inner=n5 JOIN_INNER invariant raise-free params=()
+  inner node=5 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n5@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.1, 2=inner.1, 3=inner.2)
+  outs 1=fx6:row
+  outs 1=fx6:row 2=fx6:life/breaker 3=vl:life/breaker
+p2 node=8 serial site=0 reason=IndexSource end=breaker(slot=2 Materialize)
+  nodes n8@0 n7@1^
+  source index rel=16449 rti=6 am=heap index=19346
+    key att=1 op=98 value=$exec1
+    recheck (op98(v6.1, $exec1))
+    lanes Attr(1):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=v6.1, 2=v6.-6, 3=v6.-1)
+  feed slot=2
+  outs 1=vl:win/page 2=w4:val 3=fx6:row
+p3 node=9 serial site=0 reason=IndexSource end=breaker(slot=2 Materialize)
+  nodes n9@0 n7@1^
+  source index rel=16455 rti=7 am=heap index=19347
+    key att=1 op=98 value=$exec1
+    recheck (op98(v7.1, $exec1))
+    lanes Attr(1):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=v7.1, 2=v7.-6, 3=v7.-1)
+  feed slot=2
+  outs 1=vl:win/page 2=w4:val 3=fx6:row
+p4 node=10 eligible rows=6 end=breaker(slot=2 Materialize)
+  nodes n10@0 n7@2^
+  source range rel=16460 rti=8 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op98(v8.1, $exec1)
+  project (1=v8.1, 2=v8.-6, 3=v8.-1)
+  feed slot=2
+  outs 1=vl:win/page 2=w4:val 3=fx6:row
+p5 node=2 serial site=0 reason=Write end=sink
+  desc consumes=slot1@p1 consumes=slot2@p4
+  nodes n2@0 n1@1 n0@3
+  source breaker slot=1
+  project (1=agg6291(1=outer.1), 2=agg6291(1=outer.2), 3=outer.3)
+  nest inner=n7 JOIN_INNER raise-free params=($exec1=outer.3)
+  inner node=7 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p4
+  nodes n7@0
+  source breaker slot=2
+  append union slot=2 children=3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1j=outer.1, 2j=outer.2, 3j=inner.2, 4j=inner.3)
+  write DELETE rel=16449 rti=6 natts=2 indexes=() marks=2 (rti2:ROW_MARK_REFERENCE, rti5:ROW_MARK_REFERENCE) tableoid=outer.3 route=rti1:16449 natts=2
+    target rti=7 rel=16455 natts=2 indexes=()
+    target rti=8 rel=16460 natts=3 indexes=() map=(1,2,0)
+  outs 1=fx6:call6291 2=fx6:call6291 3=vl:life/breaker
+  outs 1=fx6:call6291 2=fx6:call6291 3=w4:val 4=fx6:life/breaker
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=1 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[Fp128,Fp128]->[MinCode@16,Count@24]+valid 40B
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p2 layout=[]->[Count@0] 8B
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B
+group slot=1 producer=p1 node=2 form=Hashed hints=[] layout=[Fp128,Fp128]->[MinCode@16,Count@24]+valid 40B
+  key 0 word=0 resno=3 kind=Fp128 attno=0 type=25 rep=0 expr=inner.2
+  agg aggno=0 fn=6291 reg=Collect slot=- count_slot=- final=Collect class=Collect(AnyValue) trans=Var mods=[] expr=agg6291(1=outer.1)
+  agg aggno=1 fn=6291 reg=Collect slot=- count_slot=- final=Collect class=Collect(AnyValue) trans=Var mods=[] expr=agg6291(1=outer.2)
+rerun node=1 pipelines=p2,p3,p4 slots=2
+param $exec1 owner=n1 type=25@100 rep=vl:life/breaker
+scan-lanes node=8 rti=6 rel=16449 tableoid
+scan-lanes node=9 rti=7 rel=16455 tableoid
+scan-lanes node=10 rti=8 rel=16460 tableoid
+mapped: ModifyTable Append SeqScan IndexScan NestLoop NestLoopParam Material Agg PlanRowMark

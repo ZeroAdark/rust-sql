@@ -1,0 +1,239 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1v s2m s1c s3sel
+step s1v: UPDATE wmp_t SET bal = bal + 1 WHERE tid = 5;
+step s2m: 
+  MERGE INTO wmp_t t USING wmp_s s ON t.tid = s.sid
+  WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta, val = t.val || ' upd'
+  WHEN NOT MATCHED THEN INSERT VALUES (s.sid, s.delta, 'ins')
+  WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = t.val || ' bys';
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT tableoid::regclass, * FROM wmp_t ORDER BY tid, bal, val;
+tableoid|tid| bal|val     
+--------+---+----+--------
+wmp_t1  |  1| 110|init upd
+wmp_t1  |  2|  20|ins     
+wmp_t1  |  3| 330|init upd
+wmp_t1  |  4|  40|ins     
+wmp_t2  |  5| 551|init upd
+wmp_t2  |  6|  60|ins     
+wmp_t2  |  7| 770|init upd
+wmp_t2  |  8|  80|ins     
+wmp_t3  |  9| 900|init bys
+wmp_t3  | 11|1100|init bys
+wmp_t3  | 13|1300|init bys
+wmp_t3  | 15|1500|init bys
+wmp_t3  | 17|1700|init bys
+wmp_t3  | 19|1900|init bys
+wmp_t3  | 21|2100|init bys
+wmp_t3  | 23|2300|init bys
+wmp_t3  | 25|2500|init bys
+wmp_t3  | 27|2700|init bys
+wmp_t3  | 29|2900|init bys
+wmp_t3  | 31|3100|init bys
+wmp_t3  | 33|3300|init bys
+wmp_t3  | 35|3500|init bys
+wmp_t3  | 37|3700|init bys
+wmp_t3  | 39|3900|init bys
+(24 rows)
+
+
+starting permutation: s1k s2m s1c s3sel
+step s1k: UPDATE wmp_t SET tid = 2 WHERE tid = 3;
+step s2m: 
+  MERGE INTO wmp_t t USING wmp_s s ON t.tid = s.sid
+  WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta, val = t.val || ' upd'
+  WHEN NOT MATCHED THEN INSERT VALUES (s.sid, s.delta, 'ins')
+  WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = t.val || ' bys';
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT tableoid::regclass, * FROM wmp_t ORDER BY tid, bal, val;
+tableoid|tid| bal|val     
+--------+---+----+--------
+wmp_t1  |  1| 110|init upd
+wmp_t1  |  2|  20|ins     
+wmp_t1  |  2| 300|init bys
+wmp_t1  |  3|  30|ins     
+wmp_t1  |  4|  40|ins     
+wmp_t2  |  5| 550|init upd
+wmp_t2  |  6|  60|ins     
+wmp_t2  |  7| 770|init upd
+wmp_t2  |  8|  80|ins     
+wmp_t3  |  9| 900|init bys
+wmp_t3  | 11|1100|init bys
+wmp_t3  | 13|1300|init bys
+wmp_t3  | 15|1500|init bys
+wmp_t3  | 17|1700|init bys
+wmp_t3  | 19|1900|init bys
+wmp_t3  | 21|2100|init bys
+wmp_t3  | 23|2300|init bys
+wmp_t3  | 25|2500|init bys
+wmp_t3  | 27|2700|init bys
+wmp_t3  | 29|2900|init bys
+wmp_t3  | 31|3100|init bys
+wmp_t3  | 33|3300|init bys
+wmp_t3  | 35|3500|init bys
+wmp_t3  | 37|3700|init bys
+wmp_t3  | 39|3900|init bys
+(25 rows)
+
+
+starting permutation: s1mv s2m s1c s3sel
+step s1mv: UPDATE wmp_t SET tid = 9 WHERE tid = 7;
+step s2m: 
+  MERGE INTO wmp_t t USING wmp_s s ON t.tid = s.sid
+  WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta, val = t.val || ' upd'
+  WHEN NOT MATCHED THEN INSERT VALUES (s.sid, s.delta, 'ins')
+  WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = t.val || ' bys';
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s3sel: SELECT tableoid::regclass, * FROM wmp_t ORDER BY tid, bal, val;
+tableoid|tid| bal|val 
+--------+---+----+----
+wmp_t1  |  1| 100|init
+wmp_t1  |  3| 300|init
+wmp_t2  |  5| 500|init
+wmp_t3  |  9| 700|init
+wmp_t3  |  9| 900|init
+wmp_t3  | 11|1100|init
+wmp_t3  | 13|1300|init
+wmp_t3  | 15|1500|init
+wmp_t3  | 17|1700|init
+wmp_t3  | 19|1900|init
+wmp_t3  | 21|2100|init
+wmp_t3  | 23|2300|init
+wmp_t3  | 25|2500|init
+wmp_t3  | 27|2700|init
+wmp_t3  | 29|2900|init
+wmp_t3  | 31|3100|init
+wmp_t3  | 33|3300|init
+wmp_t3  | 35|3500|init
+wmp_t3  | 37|3700|init
+wmp_t3  | 39|3900|init
+(20 rows)
+
+
+starting permutation: s1del s2m s1c s3sel
+step s1del: DELETE FROM wmp_t WHERE tid = 1;
+step s2m: 
+  MERGE INTO wmp_t t USING wmp_s s ON t.tid = s.sid
+  WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta, val = t.val || ' upd'
+  WHEN NOT MATCHED THEN INSERT VALUES (s.sid, s.delta, 'ins')
+  WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = t.val || ' bys';
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT tableoid::regclass, * FROM wmp_t ORDER BY tid, bal, val;
+tableoid|tid| bal|val     
+--------+---+----+--------
+wmp_t1  |  1|  10|ins     
+wmp_t1  |  2|  20|ins     
+wmp_t1  |  3| 330|init upd
+wmp_t1  |  4|  40|ins     
+wmp_t2  |  5| 550|init upd
+wmp_t2  |  6|  60|ins     
+wmp_t2  |  7| 770|init upd
+wmp_t2  |  8|  80|ins     
+wmp_t3  |  9| 900|init bys
+wmp_t3  | 11|1100|init bys
+wmp_t3  | 13|1300|init bys
+wmp_t3  | 15|1500|init bys
+wmp_t3  | 17|1700|init bys
+wmp_t3  | 19|1900|init bys
+wmp_t3  | 21|2100|init bys
+wmp_t3  | 23|2300|init bys
+wmp_t3  | 25|2500|init bys
+wmp_t3  | 27|2700|init bys
+wmp_t3  | 29|2900|init bys
+wmp_t3  | 31|3100|init bys
+wmp_t3  | 33|3300|init bys
+wmp_t3  | 35|3500|init bys
+wmp_t3  | 37|3700|init bys
+wmp_t3  | 39|3900|init bys
+(24 rows)
+
+
+starting permutation: s1b s2m s1c s3sel
+step s1b: UPDATE wmp_t SET bal = 7 WHERE tid = 11;
+step s2m: 
+  MERGE INTO wmp_t t USING wmp_s s ON t.tid = s.sid
+  WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta, val = t.val || ' upd'
+  WHEN NOT MATCHED THEN INSERT VALUES (s.sid, s.delta, 'ins')
+  WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = t.val || ' bys';
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT tableoid::regclass, * FROM wmp_t ORDER BY tid, bal, val;
+tableoid|tid| bal|val     
+--------+---+----+--------
+wmp_t1  |  1| 110|init upd
+wmp_t1  |  2|  20|ins     
+wmp_t1  |  3| 330|init upd
+wmp_t1  |  4|  40|ins     
+wmp_t2  |  5| 550|init upd
+wmp_t2  |  6|  60|ins     
+wmp_t2  |  7| 770|init upd
+wmp_t2  |  8|  80|ins     
+wmp_t3  |  9| 900|init bys
+wmp_t3  | 11|   7|init bys
+wmp_t3  | 13|1300|init bys
+wmp_t3  | 15|1500|init bys
+wmp_t3  | 17|1700|init bys
+wmp_t3  | 19|1900|init bys
+wmp_t3  | 21|2100|init bys
+wmp_t3  | 23|2300|init bys
+wmp_t3  | 25|2500|init bys
+wmp_t3  | 27|2700|init bys
+wmp_t3  | 29|2900|init bys
+wmp_t3  | 31|3100|init bys
+wmp_t3  | 33|3300|init bys
+wmp_t3  | 35|3500|init bys
+wmp_t3  | 37|3700|init bys
+wmp_t3  | 39|3900|init bys
+(24 rows)
+
+
+starting permutation: s1v s2m s1r s3sel
+step s1v: UPDATE wmp_t SET bal = bal + 1 WHERE tid = 5;
+step s2m: 
+  MERGE INTO wmp_t t USING wmp_s s ON t.tid = s.sid
+  WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta, val = t.val || ' upd'
+  WHEN NOT MATCHED THEN INSERT VALUES (s.sid, s.delta, 'ins')
+  WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = t.val || ' bys';
+ <waiting ...>
+step s1r: ROLLBACK;
+step s2m: <... completed>
+step s3sel: SELECT tableoid::regclass, * FROM wmp_t ORDER BY tid, bal, val;
+tableoid|tid| bal|val     
+--------+---+----+--------
+wmp_t1  |  1| 110|init upd
+wmp_t1  |  2|  20|ins     
+wmp_t1  |  3| 330|init upd
+wmp_t1  |  4|  40|ins     
+wmp_t2  |  5| 550|init upd
+wmp_t2  |  6|  60|ins     
+wmp_t2  |  7| 770|init upd
+wmp_t2  |  8|  80|ins     
+wmp_t3  |  9| 900|init bys
+wmp_t3  | 11|1100|init bys
+wmp_t3  | 13|1300|init bys
+wmp_t3  | 15|1500|init bys
+wmp_t3  | 17|1700|init bys
+wmp_t3  | 19|1900|init bys
+wmp_t3  | 21|2100|init bys
+wmp_t3  | 23|2300|init bys
+wmp_t3  | 25|2500|init bys
+wmp_t3  | 27|2700|init bys
+wmp_t3  | 29|2900|init bys
+wmp_t3  | 31|3100|init bys
+wmp_t3  | 33|3300|init bys
+wmp_t3  | 35|3500|init bys
+wmp_t3  | 37|3700|init bys
+wmp_t3  | 39|3900|init bys
+(24 rows)
+

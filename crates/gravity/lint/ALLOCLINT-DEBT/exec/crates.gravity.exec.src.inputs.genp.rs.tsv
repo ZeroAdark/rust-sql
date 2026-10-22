@@ -1,0 +1,6 @@
+path	crates/gravity/exec/src/inputs/genp.rs
+growth	std::vec::Vec::push	6
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

@@ -1,0 +1,106 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1v s2u s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) UPDATE ga_t c SET v = v + 1 WHERE id = 1 AND EXISTS (SELECT 1 FROM ga_r r WHERE r.t = c.t);
+QUERY PLAN                                            
+------------------------------------------------------
+Update on ga_t c                                      
+  ->  Hash Join                                       
+        Hash Cond: (r.t = c.t)                        
+        ->  HashAggregate                             
+              Group Key: r.t                          
+              ->  Seq Scan on ga_r r                  
+        ->  Hash                                      
+              ->  Index Scan using ga_t_pkey on ga_t c
+                    Index Cond: (id = 1)              
+(9 rows)
+
+step s1v: UPDATE ga_t SET v = v + 100 WHERE id = 1;
+step s2u: UPDATE ga_t c SET v = v + 1 WHERE id = 1 AND EXISTS (SELECT 1 FROM ga_r r WHERE r.t = c.t) RETURNING *; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|t    |  v
+--+-----+---
+ 1|apple|101
+(1 row)
+
+step s2sel: SELECT id, t, v FROM ga_t ORDER BY id;
+id|t     |  v
+--+------+---
+ 1|apple |101
+ 2|banana|  0
+ 3|fig   |  0
+(3 rows)
+
+
+starting permutation: s1t s2u s1c s2sel
+step s1t: UPDATE ga_t SET t = 'banana' WHERE id = 1;
+step s2u: UPDATE ga_t c SET v = v + 1 WHERE id = 1 AND EXISTS (SELECT 1 FROM ga_r r WHERE r.t = c.t) RETURNING *; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|t|v
+--+-+-
+(0 rows)
+
+step s2sel: SELECT id, t, v FROM ga_t ORDER BY id;
+id|t     |v
+--+------+-
+ 1|banana|0
+ 2|banana|0
+ 3|fig   |0
+(3 rows)
+
+
+starting permutation: s1v s2d s1c s2sel
+step s1v: UPDATE ga_t SET v = v + 100 WHERE id = 1;
+step s2d: DELETE FROM ga_t c WHERE id = 1 AND EXISTS (SELECT 1 FROM ga_r r WHERE r.t = c.t) RETURNING *; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|t    |  v
+--+-----+---
+ 1|apple|100
+(1 row)
+
+step s2sel: SELECT id, t, v FROM ga_t ORDER BY id;
+id|t     |v
+--+------+-
+ 2|banana|0
+ 3|fig   |0
+(2 rows)
+
+
+starting permutation: s2vexp s1v s2vu s1c s2sel
+step s2vexp: EXPLAIN (COSTS OFF) UPDATE ga_v SET v = v + 1 WHERE id = 1;
+QUERY PLAN                                            
+------------------------------------------------------
+Update on ga_t c                                      
+  ->  Hash Join                                       
+        Hash Cond: (r.t = c.t)                        
+        ->  HashAggregate                             
+              Group Key: r.t                          
+              ->  Seq Scan on ga_r r                  
+        ->  Hash                                      
+              ->  Index Scan using ga_t_pkey on ga_t c
+                    Index Cond: (id = 1)              
+  SubPlan 1                                           
+    ->  Seq Scan on ga_r r_1                          
+          Filter: (t = c.t)                           
+(12 rows)
+
+step s1v: UPDATE ga_t SET v = v + 100 WHERE id = 1;
+step s2vu: UPDATE ga_v SET v = v + 1 WHERE id = 1 RETURNING *; <waiting ...>
+step s1c: COMMIT;
+step s2vu: <... completed>
+id|t    |  v
+--+-----+---
+ 1|apple|101
+(1 row)
+
+step s2sel: SELECT id, t, v FROM ga_t ORDER BY id;
+id|t     |  v
+--+------+---
+ 1|apple |101
+ 2|banana|  0
+ 3|fig   |  0
+(3 rows)
+

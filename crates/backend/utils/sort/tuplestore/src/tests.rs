@@ -83,7 +83,6 @@ fn eof_reader_advances_with_writes() {
         exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(desc.clone()));
     assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
     assert!(!ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
-    // The active read pointer at EOF stays at EOF across puts (C API spec).
     put_i32(&mut ts, &desc, 2);
     assert!(!ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
 }
@@ -180,7 +179,6 @@ fn backward_walks_to_start_then_none() {
     assert!(!ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
     assert!(ts.ateof());
 
-    // C: backward after EOF re-returns the last tuple, then walks back.
     for v in [3, 2, 1] {
         assert!(ts.gettupleslot(false, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), v);
@@ -188,7 +186,6 @@ fn backward_walks_to_start_then_none() {
     assert!(!ts.gettupleslot(false, false, &mut slot, mcx).unwrap());
     assert!(!ts.ateof());
 
-    // Forward again from the start.
     assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
     assert_eq!(read_i32(&mut slot), 1);
 }
@@ -205,7 +202,6 @@ fn backward_before_eof_returns_tuple_before_last() {
     assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
     assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
     assert_eq!(read_i32(&mut slot), 2);
-    // Last returned was 2; backward yields the tuple before it.
     assert!(ts.gettupleslot(false, false, &mut slot, mcx).unwrap());
     assert_eq!(read_i32(&mut slot), 1);
 }
@@ -238,8 +234,6 @@ fn follower_read_pointer_replays_leader_fill() {
 
     let mut slot =
         exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(desc.clone()));
-    // Leader (ptr 0) reads to EOF then fills; the ACTIVE eof pointer stays
-    // at EOF across writes (why CteScanNext returns the subplan slot itself).
     put_i32(&mut ts, &desc, 10);
     assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
     assert_eq!(read_i32(&mut slot), 10);
@@ -248,7 +242,6 @@ fn follower_read_pointer_replays_leader_fill() {
     put_i32(&mut ts, &desc, 30);
     assert!(!ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
 
-    // Follower replays the whole store independently.
     ts.select_read_pointer(follower).unwrap();
     for v in [10, 20, 30] {
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
@@ -279,8 +272,6 @@ fn inactive_eof_pointer_advances_to_next_write() {
     assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
     assert!(!ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
 
-    // Follower hits EOF, becomes inactive, then a write lands: C spec says an
-    // INACTIVE eof pointer un-eofs onto the new tuple.
     ts.select_read_pointer(0).unwrap();
     put_i32(&mut ts, &desc, 2);
     ts.select_read_pointer(follower).unwrap();
@@ -330,7 +321,7 @@ fn hold_registry_roundtrip_and_staleness() {
     exectuples::exec_clear_tuple(&mut slot, mcx);
 
     hold::end(h);
-    hold::end(h); // double-end is a no-op, as C never double-frees a live ptr
+    hold::end(h);
     let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hold::with_store(h, |ts| ts.tuple_count())
     }));
@@ -370,7 +361,6 @@ fn putvalues_packs_varlena_short_form() {
     let mut slot = exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(desc));
     exectuples::exec_store_minimal_tuple_owned(&mut slot, mcx, mtup);
     exectuples::slot_getallattrs(&mut slot);
-    // heap_form packs the 4B-header input to the 1B short form (C fill_val).
     let out = slot.base().tts_values[0];
     let p = out.as_usize() as *const u8;
     let b0 = unsafe { *p };
@@ -397,7 +387,6 @@ fn skiptuples_and_advance_window_navigation() {
     assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
     assert_eq!(read_i32(&mut slot), 4);
 
-    // seekpos == pos refetch shape: advance forward, then read backward.
     assert!(ts.advance(true).unwrap());
     assert!(ts.gettupleslot(false, false, &mut slot, mcx).unwrap());
     assert_eq!(read_i32(&mut slot), 4);
@@ -406,10 +395,8 @@ fn skiptuples_and_advance_window_navigation() {
     assert!(ts.gettupleslot(false, false, &mut slot, mcx).unwrap());
     assert_eq!(read_i32(&mut slot), 0);
 
-    // Forward skip past EOF fails and leaves the pointer at EOF.
     assert!(!ts.skiptuples(50, true).unwrap());
     assert!(!ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
-    // Backward from EOF: last tuple.
     assert!(ts.gettupleslot(false, false, &mut slot, mcx).unwrap());
     assert_eq!(read_i32(&mut slot), 9);
     ts.end();
@@ -422,8 +409,6 @@ fn trim_frees_consumed_tuples() {
     let mut ts = Tuplestore::begin_heap(false, false, 65_536);
     ts.set_eflags(0).unwrap();
     let mut slot = exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(desc.clone()));
-    // Material-under-mergejoin streaming: mark, consume, trim; C's generation
-    // context recycles the drained blocks so memory tracks the live window.
     let mut peak = 0;
     for round in 0..200 {
         for v in 0..1000 {
@@ -448,18 +433,16 @@ fn get_stats_tracks_chunk_space_maximum_across_clear() {
     let mcx = leaked_mcx();
     let desc = int4_desc(mcx, 1);
     let mut ts = Tuplestore::begin_heap(true, false, 64);
-    // Empty store: memtuples array only (2048 ptrs -> aset external chunk).
+    // Empty store: memtuples array only (16 KiB of pointers -> aset external chunk; 2048 on 64-bit, 4096 on wasm32).
     let s0 = ts.get_stats();
     assert_eq!(s0.space_type.name(), "Memory");
-    assert_eq!(s0.max_space, 2048 * 8 + 8);
+    assert_eq!(s0.max_space, 16384 + 8);
     for i in 0..10 {
         ts.putvalues(&desc, &[Datum::from_i32(i)], &[false]).unwrap();
     }
     let s1 = ts.get_stats();
-    // int4 minimal tuple: MAXALIGN(t_len) + 8-byte generation chunk header.
     assert!(s1.max_space > s0.max_space);
     ts.clear();
-    // maxSpace survives clear (C tuplestore_updatemax in tuplestore_clear).
     assert_eq!(ts.get_stats().max_space, s1.max_space);
     ts.end();
 }
@@ -523,7 +506,37 @@ mod spill {
             .unwrap_or(0)
     }
 
-    const N: i32 = 200_000; // ~200k 16B tuples >> 64KB work_mem
+    const N: i32 = 200_000;
+
+    #[test]
+    fn try_end_returns_spill_limit_error_without_panicking() {
+        setup();
+        let (_cwd, dir) = enter_datadir("end-limit");
+        let mcx = leaked_mcx();
+        let desc = int4_desc(mcx, 1);
+        let saved_owner = resowner::CurrentResourceOwner();
+        let owner = resowner::ResourceOwnerCreate(saved_owner, "end-limit").unwrap();
+        resowner::SetCurrentResourceOwner(owner);
+        let saved_limit = guc_tables::vars::temp_file_limit.read();
+        guc_tables::vars::temp_file_limit.write(0);
+        let mut ts = Tuplestore::begin_heap(false, false, 0);
+        put_i32(&mut ts, &desc, 42);
+        assert!(!ts.in_memory());
+        let err = ts.try_end().unwrap_err();
+        guc_tables::vars::temp_file_limit.write(saved_limit);
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED);
+        assert_eq!(err.message(), "temporary file size exceeds \"temp_file_limit\" (0kB)");
+        for phase in [
+            types_resowner::RESOURCE_RELEASE_BEFORE_LOCKS,
+            types_resowner::RESOURCE_RELEASE_LOCKS,
+            types_resowner::RESOURCE_RELEASE_AFTER_LOCKS,
+        ] {
+            resowner::ResourceOwnerRelease(owner, phase, false, false).unwrap();
+        }
+        resowner::SetCurrentResourceOwner(saved_owner);
+        resowner::ResourceOwnerDelete(owner);
+        assert_eq!(temp_files(&dir), 0);
+    }
 
     #[test]
     fn spill_keeps_creation_owner_across_child_release_and_pool_reuse() {
@@ -554,7 +567,6 @@ mod spill {
             resowner::ResourceOwnerDelete(child);
             let remaining = temp_files(&dir);
             if remaining == 0 {
-                // Avoid closing a freed VFD while reporting the ownership failure.
                 std::mem::forget(ts);
                 panic!("child release closed the store's spill file");
             }
@@ -571,6 +583,43 @@ mod spill {
             resowner::SetCurrentResourceOwner(saved);
             resowner::ResourceOwnerDelete(owner);
         }
+    }
+
+    #[test]
+    fn spill_read_scratch_grows_exactly() {
+        setup();
+        let (_cwd, _dir) = enter_datadir("scratch-growth");
+        let mcx = leaked_mcx();
+        let mut ts = Tuplestore::begin_heap(false, false, 0);
+        for natts in [256, 258] {
+            let desc = int4_desc(mcx, natts);
+            let values = vec![Datum::from_i32(natts); natts as usize];
+            ts.putvalues(&desc, &values, &vec![false; natts as usize]).unwrap();
+        }
+        assert!(!ts.in_memory());
+        for natts in [256, 258] {
+            let desc = int4_desc(mcx, natts);
+            let mut slot = exectuples::make_tuple_table_slot(
+                mcx, TupleSlotKind::MinimalTuple, Some(desc),
+            );
+            assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
+            exectuples::slot_getallattrs(&mut slot);
+            for i in 0..natts as usize {
+                assert!(!slot.base().tts_isnull[i]);
+                assert_eq!(slot.base().tts_values[i].as_i32(), natts);
+            }
+            ts.0.with_mut(|st| {
+                let image = st.scratch_image();
+                let required = maxalign(image.len()) / 8;
+                assert_eq!(st.read_scratch[st.activeptr].capacity(), required);
+                let payload = &image[image.len() - natts as usize * 4..];
+                for bytes in payload.chunks_exact(4) {
+                    assert_eq!(bytes, natts.to_ne_bytes());
+                }
+            });
+            exectuples::exec_clear_tuple(&mut slot, mcx);
+        }
+        ts.end();
     }
 
     #[test]
@@ -603,8 +652,6 @@ mod spill {
         ));
         assert!(stats.max_space > 0);
 
-        // Writes resume after reads (READFILE -> WRITEFILE switch); the
-        // active pointer stays at EOF (C API spec), so replay via rescan.
         put_i32(&mut ts, &desc, N);
         assert!(!ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         ts.rescan().unwrap();
@@ -617,13 +664,6 @@ mod spill {
         assert_eq!(temp_files(&dir), 0, "temp file must be removed at end");
     }
 
-    /// The executor's query context is a bump arena whose per-chunk free is
-    /// a no-op, so a per-row READFILE copy handed to a slot there is retained
-    /// until query end: `SELECT count(*) FROM generate_series(1, 5000000)`
-    /// at work_mem=4MB grew RSS by ~130 MB (5M x ~26 B) while C stays flat.
-    /// A spilled store served with `copy == false` must lend its own scratch
-    /// image and allocate nothing in the slot's context; `copy == true`
-    /// still hands out a durable copy (C nodeWindowAgg's contract).
     #[test]
     fn spill_copy_false_reads_do_not_grow_slot_context() {
         setup();
@@ -656,7 +696,6 @@ mod spill {
             "copy=false reads of a spilled store must not allocate in the slot context"
         );
 
-        // copy=true: the held row survives a later read on the same store.
         ts.rescan().unwrap();
         let mut held =
             exectuples::make_tuple_table_slot(bmcx, TupleSlotKind::MinimalTuple, Some(desc.clone()));
@@ -685,14 +724,12 @@ mod spill {
         }
         assert!(!ts.in_memory());
 
-        // Forward to EOF.
         let mut n = 0;
         while ts.gettupleslot(true, false, &mut slot, mcx).unwrap() {
             n += 1;
         }
         assert_eq!(n, N);
 
-        // Backward walk: last tuple first, down to (not incl.) the first.
         let mut v = N - 1;
         while ts.gettupleslot(false, false, &mut slot, mcx).unwrap() {
             assert_eq!(read_i32(&mut slot), v);
@@ -704,7 +741,6 @@ mod spill {
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 0);
 
-        // skiptuples across the file arms.
         assert!(ts.skiptuples(1000, true).unwrap());
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 1001);
@@ -733,22 +769,18 @@ mod spill {
         }
         assert!(!ts.in_memory());
 
-        // Pointer 0 reads ahead 10 tuples.
         for v in 0..10 {
             assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
             assert_eq!(read_i32(&mut slot), v);
         }
-        // Follower still at the start.
         ts.select_read_pointer(follower).unwrap();
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 0);
 
-        // copy_read_pointer: follower jumps to pointer 0's position.
         ts.copy_read_pointer(0, follower).unwrap();
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 10);
 
-        // Back to pointer 0; it is unaffected.
         ts.select_read_pointer(0).unwrap();
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 10);
@@ -775,8 +807,6 @@ mod spill {
         }
         assert!(!ts.in_memory());
 
-        // Pointer 0 lends its row to `outer` (not yet deformed), then pointer 1
-        // reads ahead into `inner`: C's per-read palloc keeps `outer` intact.
         assert!(ts.gettupleslot(true, false, &mut outer, mcx).unwrap());
         ts.select_read_pointer(second).unwrap();
         for v in 0..5 {
@@ -794,22 +824,6 @@ mod spill {
         ts.end();
     }
 
-    /// WAVE-2 WS-M INC-2 OPENER (integration contract §6 WS-M amendment 3):
-    /// the SPILLED store in the WINDOW BUFFER'S EXACT CONFIGURATION —
-    /// `begin_heap(false, ..)` + `set_eflags(0)` (emit pointer 0
-    /// FORWARD-ONLY) + extra pointers allocated per nodewindowagg's
-    /// `prepare_tuplestore`: BACKWARD-capable agg + per-func pointers,
-    /// forward-only frame-head/tail pointers — five pointers at
-    /// independent file positions, interleaved forward reads, mid-stream
-    /// BACKWARD steps and backward `skiptuples` on the capable pointers,
-    /// and EOF-then-backward (C tuplestore.c:1213-1227). This resolves the
-    /// audit-note-vs-source contradiction the wave-2 contract adjudicated
-    /// ("spill status — resolve by unit test at inc-2 start; audit note
-    /// presumed stale"): the ported TSS_WRITEFILE/READFILE arms fully
-    /// support the window's multi-read-pointer + backward configuration,
-    /// so T2-B giant-partition work may proceed. Access patterns mirror
-    /// the proven C-parity idioms of the three tests above; any failure
-    /// here is a genuine source divergence, not fixture drift.
     #[test]
     fn spill_window_buffer_multi_pointer_backward_config() {
         setup();
@@ -819,8 +833,6 @@ mod spill {
         let mut slot =
             exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(desc.clone()));
 
-        // prepare_tuplestore's shape: non-random-access store, pointer 0
-        // re-flagged forward-only, then the window's pointer family.
         let mut ts = Tuplestore::begin_heap(false, false, 64);
         ts.set_eflags(0).unwrap();
         let agg = ts.alloc_read_pointer(EXEC_FLAG_BACKWARD).unwrap();
@@ -833,15 +845,11 @@ mod spill {
         assert!(!ts.in_memory(), "200k tuples must spill at 64KB");
         assert!(temp_files(&dir) > 0);
 
-        // Emit pointer (0) drains a prefix — the per-row emit walk.
         for v in 0..1_000 {
             assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
             assert_eq!(read_i32(&mut slot), v);
         }
 
-        // The frame-tail pointer skips deep into the file; the frame-head
-        // pointer advances a little — both forward-only, both positioned
-        // independently of pointer 0.
         ts.select_read_pointer(tail).unwrap();
         assert!(ts.skiptuples(5_000, true).unwrap());
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
@@ -850,9 +858,6 @@ mod spill {
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 0);
 
-        // The agg pointer reads a frame forward, then BACKWARD-skips to
-        // re-read it (the moving-frame restart cascade's access shape) —
-        // mid-file, while three other pointers sit at distant positions.
         ts.select_read_pointer(agg).unwrap();
         assert!(ts.skiptuples(500, true).unwrap());
         for v in 500..510 {
@@ -864,17 +869,13 @@ mod spill {
             assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
             assert_eq!(read_i32(&mut slot), v);
         }
-        // Single-step backward reads (tuplestore_gettuple(false)): each
-        // returns the tuple before the last one returned.
         assert!(ts.gettupleslot(false, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 508);
         assert!(ts.gettupleslot(false, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 507);
-        // Forward resumes from just after the last returned tuple.
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 508);
 
-        // Pointer-switch seek dance: every pointer kept its own position.
         ts.select_read_pointer(0).unwrap();
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 1_000);
@@ -885,8 +886,6 @@ mod spill {
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 1);
 
-        // The per-func pointer: forward to EOF then the first backward
-        // step returns the LAST tuple (the C EOF special case).
         ts.select_read_pointer(func).unwrap();
         assert!(ts.skiptuples(i64::from(N), true).unwrap());
         assert!(!ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
@@ -895,8 +894,6 @@ mod spill {
         assert!(ts.gettupleslot(false, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), N - 2);
 
-        // copy_read_pointer across spilled positions (the window mark
-        // bookkeeping face): agg jumps to pointer 0's position.
         ts.copy_read_pointer(0, agg).unwrap();
         ts.select_read_pointer(agg).unwrap();
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
@@ -930,7 +927,6 @@ mod spill {
         assert!(ts.gettupleslot(true, false, &mut slot, mcx).unwrap());
         assert_eq!(read_i32(&mut slot), 7);
 
-        // usedDisk sticks across clear (C contract).
         let stats = ts.get_stats();
         assert!(matches!(
             stats.space_type,
@@ -940,26 +936,56 @@ mod spill {
         exectuples::exec_clear_tuple(&mut slot, mcx);
         ts.end();
     }
+
+    /// D2620: an abort's resource-owner release closes a spilled store's file under it (a failed portal's cursor
+    /// store); ending the store afterwards (PortalDrop at the COMMIT / ROLLBACK) must not ask that freed file its size.
+    #[test]
+    fn spill_end_after_abort_release_freed_the_file() {
+        setup();
+        let (_cwd, dir) = enter_datadir("released");
+        let mcx = leaked_mcx();
+        let desc = int4_desc(mcx, 1);
+        let saved = resowner::CurrentResourceOwner();
+        let owner = resowner::ResourceOwnerCreate(saved, "portal").unwrap();
+        resowner::SetCurrentResourceOwner(owner);
+        let mut ts = Tuplestore::begin_heap(false, false, 64);
+        for v in 0..N {
+            put_i32(&mut ts, &desc, v);
+        }
+        assert!(!ts.in_memory());
+        resowner::SetCurrentResourceOwner(saved);
+        for phase in [
+            types_resowner::RESOURCE_RELEASE_BEFORE_LOCKS,
+            types_resowner::RESOURCE_RELEASE_LOCKS,
+            types_resowner::RESOURCE_RELEASE_AFTER_LOCKS,
+        ] {
+            resowner::ResourceOwnerRelease(owner, phase, false, false).unwrap();
+        }
+        assert_eq!(temp_files(&dir), 0, "the abort release closes the spill file");
+        ts.end();
+        resowner::ResourceOwnerDelete(owner);
+        // The pool hands out a sound store afterwards.
+        let mut again = Tuplestore::begin_heap(false, false, 64);
+        put_i32(&mut again, &desc, 5);
+        let mut slot =
+            exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(desc.clone()));
+        assert!(again.gettupleslot(true, false, &mut slot, mcx).unwrap());
+        assert_eq!(read_i32(&mut slot), 5);
+        exectuples::exec_clear_tuple(&mut slot, mcx);
+        again.end();
+    }
 }
 
-// tuplestore.c guard parity (audit-18.6 b054).
 mod guards {
     use ::types_error::{ERRCODE_INTERNAL_ERROR, ERRCODE_UNDEFINED_FILE};
 
     use super::*;
 
-    // tuplestore.c:376 — elog(ERROR, "too late to call tuplestore_set_eflags")
-    // once tuples are in the store; tuplestore.c:401 — elog(ERROR, "too late
-    // to require new tuplestore eflags") for a new pointer wanting more
-    // capability than the store was told to support. Both are backend
-    // errors in C, never a Rust panic.
     #[test]
     fn late_eflags_changes_are_errors_not_panics() {
         let mcx = leaked_mcx();
         let desc = int4_desc(mcx, 1);
         let mut ts = Tuplestore::begin_heap(false, false, 1024);
-        // Before any put, both are fine (a pointer wanting no new capability
-        // stays fine afterwards too).
         ts.set_eflags(0).unwrap();
         assert_eq!(ts.alloc_read_pointer(0).unwrap(), 1);
         put_i32(&mut ts, &desc, 1);
@@ -979,16 +1005,10 @@ mod guards {
             .expect_err("widening the store's eflags after a put must fail");
         assert_eq!(err.message(), "too late to require new tuplestore eflags");
         assert_eq!(err.sqlstate(), ERRCODE_INTERNAL_ERROR);
-        // A pointer within the existing capability is still allocatable.
         assert_eq!(ts.alloc_read_pointer(0).unwrap(), 2);
         ts.end();
     }
 
-    // tuplestore.c:550 et al. — ereport(ERROR, (errcode_for_file_access(),
-    // errmsg("could not seek in tuplestore temporary file"))): the SQLSTATE
-    // follows errno (elog.c errcode_for_file_access: ENOENT -> 58P01, EIO ->
-    // 58030, ENOSPC -> 53100, ...), not the fixed XX000 the helper used to
-    // produce. A failed open leaves ENOENT in errno for the witness.
     #[test]
     fn seek_failure_carries_the_file_access_sqlstate() {
         let missing = std::fs::File::open("/nonexistent/pgrust-b054-seek-witness");
@@ -1000,4 +1020,16 @@ mod guards {
         assert_eq!(err.sqlstate(), ERRCODE_UNDEFINED_FILE);
         assert_ne!(err.sqlstate(), ERRCODE_INTERNAL_ERROR);
     }
+}
+
+#[test]
+fn initial_memtuples_is_c_formula_for_the_pointer_width() {
+    // C: Max(16384 / sizeof(void *), ALLOCSET_SEPARATE_THRESHOLD / sizeof(void *) + 1); D3255: a 64-bit constant
+    // (2048) was half of C's array on wasm32, so EXPLAIN ANALYZE's "Maximum Storage" read 9kB where PostgreSQL reads
+    // 17kB.
+    for (ptr, want) in [(8usize, 2048usize), (4, 4096)] {
+        assert_eq!((16384 / ptr).max(8192 / ptr + 1), want);
+    }
+    assert_eq!(INITIAL_MEMTUPSIZE * PTR_SIZE, 16384);
+    assert_eq!(INITIAL_MEMTUPSIZE, (16384 / PTR_SIZE).max(ALLOCSET_SEPARATE_THRESHOLD / PTR_SIZE + 1));
 }

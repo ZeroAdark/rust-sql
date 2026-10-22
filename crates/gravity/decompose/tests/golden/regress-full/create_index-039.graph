@@ -1,0 +1,31 @@
+-- regress-full-create_index-039
+-- EXPLAIN (COSTS OFF) SELECT count(*) FROM tenk1 t1 WHERE t1.thousand = 42 OR t1.thousand = (SELECT t2.tenthous FROM tenk1 t2 WHERE t2.thousand = t1.tenthous + 1 LIMIT 1);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=60 end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@3^
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(8):byval8:w8:val Attr(11):byval8:w8:val Offset:byval2:w2:val
+  subplan 1 nested Expr params=($exec0=v1.11) conditional
+  inner node=3 serial site=0 reason=IndexSource end=sink
+  nodes n3@0 n2@1
+  source index-only rel=16423 rti=2 am=heap index=19342
+    key att=8 op=96 value=op551($exec0, c23:1)
+    recheck (op96(index.1, op551($exec0, c23:1)))
+    lanes Attr(11):byval8:w8:val
+  project (1=index.2)
+  limit count=1 offset=all
+  project (1=outer.1)
+  filter or(op96(v1.8, c23:42), op96(v1.8, subplan1(v1.11)))
+  project (1=v1.8, 2=v1.11)
+  outs 1=w8:val 2=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+param $exec0 owner=subplan1 type=23 rep=w8:val
+mapped: IndexOnlyScan Agg Limit SubPlan

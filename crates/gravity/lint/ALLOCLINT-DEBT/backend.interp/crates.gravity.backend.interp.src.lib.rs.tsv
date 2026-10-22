@@ -1,0 +1,7 @@
+path	crates/gravity/backend/interp/src/lib.rs
+growth	std::vec::Vec::push	3
+macro	std::vec	5
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::into_boxed_slice	1
+method	std::vec::Vec::with_capacity	2
+type	std::vec::Vec	2

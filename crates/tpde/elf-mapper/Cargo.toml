@@ -1,0 +1,33 @@
+[package]
+name = "tpde_elf_mapper"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+
+[dependencies]
+tpde_assembler = { path = "../assembler" }
+tpde_util = { path = "../util" }
+tpde_disarm = { path = "../disarm" }
+tpde_fadec = { path = "../fadec" }
+mcx = { path = "../../_support/mcx" }
+# G1-A: the code arena's chunks are door 2 of the memory ledger (ProgramCaches account).
+memledger = { path = "../../_support/memledger" }
+mempolicy = { path = "../../_support/mempolicy" }
+types_error = { path = "../../_support/types/types_error" }
+libc = "0.2.189"
+
+[features]
+upstream-oracle = ["tpde_assembler/upstream-oracle"]
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "reference_prepare"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "mcx_support"
+path = "tests/mcx_support.rs"

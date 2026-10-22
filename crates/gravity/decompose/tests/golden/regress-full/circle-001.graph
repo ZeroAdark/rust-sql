@@ -1,0 +1,11 @@
+-- regress-full-circle-001
+-- SELECT f1 FROM CIRCLE_TBL WHERE radius(f1) < 5;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=523 end=sink
+  nodes n0@0
+  source range rel=17138 rti=1 am=heap
+    lanes Attr(1):byref8:fx24:win/page Offset:byval2:w2:val
+  filter op672(fn1470(v1.1), c701:4617315517961601024)
+  project (1=v1.1)
+  outs 1=fx24:win/page
+mapped: SeqScan

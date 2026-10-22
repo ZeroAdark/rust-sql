@@ -1,0 +1,9 @@
+-- regress-full-rangetypes-016
+-- explain (verbose, costs off) select now() <@ tstzrange('2024-01-20 00:00', '2024-01-21 00:00');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=and(op1325(fn1299(), c1184:759052800000000), op1322(fn1299(), c1184:759139200000000)))
+  outs 1=w1:val
+mapped: Result

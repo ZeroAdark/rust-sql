@@ -1,0 +1,11 @@
+-- bench-056
+-- SELECT id, c * 2.5 + b::float8 AS v FROM g WHERE f /* S4 */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=666600 end=sink
+  nodes n0@0
+  source range rel=16395 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(6):byval8:w8:val Offset:byval2:w2:val
+  filter v1.6
+  project (1=v1.1, 2=op591(op594(v1.4, c701:4612811918334230528), fn482(v1.3)))
+  outs 1=w8:val 2=w8:val
+mapped: SeqScan

@@ -1,0 +1,10 @@
+# a different element stays a mismatch
+sql: SELECT g, array_agg(x) FROM t GROUP BY g;
+cols: g	array_agg
+elem: 2	array
+class: unordered
+verdict: mismatch
+[pg]
+1	{1,2,3}
+[got]
+1	{3,1,4}

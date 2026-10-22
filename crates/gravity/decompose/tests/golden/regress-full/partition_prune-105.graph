@@ -1,0 +1,15 @@
+-- regress-full-partition_prune-105
+-- select tableoid::regclass,* from hp_prefix_test where a is null and b is null and c = 3 and d is null
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0
+  source range rel=45587 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  filter isnull(v2.1)
+  filter isnull(v2.2)
+  filter isnull(v2.4)
+  filter op96(v2.3, c23:3)
+  project (1=relabel2205(v2.-6), 2=v2.1, 3=v2.2, 4=v2.3, 5=v2.4)
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val
+scan-lanes node=1 rti=2 rel=45587 tableoid
+mapped: SeqScan

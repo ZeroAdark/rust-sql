@@ -1,0 +1,1 @@
+string_agg / array_agg (t ORDER BY t) under the default collation (D458 host-sorted, hosts v4/m6_agg_distinct.rs): the final's sort compares text through varstr_cmp under the database locale, pg_locale_seams::varstr_cmp_locale, the locale compare the crate rig never installs; the server runner judges it (e2e v4/m6_d458_ordered_agg, PG 18.6 golden)

@@ -1,0 +1,21 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/wvfs.rs
+growth	std::collections::BTreeMap::entry	1
+growth	std::collections::BTreeMap::insert	6
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	2
+growth	std::vec::Vec::resize	1
+macro	std::format	13
+method	pgrc_format::try_filled	1
+method	slice::sort	1
+method	std::borrow::Cow::into_owned	1
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	7
+method	std::ffi::CString::new	1
+method	std::iter::Iterator::collect	1
+method	std::string::String::from_utf8_lossy	1
+method	std::string::ToString::to_string	20
+type	std::boxed::Box	3
+type	std::collections::BTreeMap	1
+type	std::ffi::CString	1
+type	std::string::String	2
+type	std::vec::Vec	1

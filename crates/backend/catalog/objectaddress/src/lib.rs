@@ -1902,7 +1902,7 @@ mod tests {
         assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
     }
 
-    // regression: the %c byte goes out raw.
+    // fp-catalog-objectaddress-p1#4: the %c byte goes out raw.
     #[test]
     fn defacl_objtype_message_carries_the_first_input_byte() {
         let e = unrecognized_defacl_objtype(0xC3);
@@ -1921,7 +1921,7 @@ mod tests {
         assert_eq!(e.message(), "unrecognized default ACL object type \"x\"");
     }
 
-    // objectaddress.c:1702 atoi (regression): INT_MIN is
+    // objectaddress.c:1702 atoi (fp-catalog-objectaddress-p1#2): INT_MIN is
     // representable, larger magnitudes wrap through (int) strtol.
     #[test]
     fn c_atoi_is_int_strtol() {

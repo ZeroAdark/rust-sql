@@ -1,0 +1,25 @@
+# NOALLOC (TD-197 LINT-FP; findings.NOALLOC_ITEMS): findings the IR leg proved allocate nothing, keyed on the line's normalized text. Written by run.sh full + ratchet.py write --noalloc only; an edited line's row goes.
+file	line	kind	item	count	text	class
+crates/backend/access/pgrcolumnar/pgrc_read/src/cursor.rs	1776	method	std::clone::Clone::clone	1	c18b8b0fd764	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/dicthandle.rs	1796	method	std::clone::Clone::clone	1	d7eaa76fe813	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/dicthandle.rs	1804	method	std::clone::Clone::clone	1	d7eaa76fe813	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	112	method	std::clone::Clone::clone	1	52b57a532e45	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	113	method	std::clone::Clone::clone	1	6b3fc2e533a6	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	114	method	std::clone::Clone::clone	1	b88375a2dabf	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	387	method	std::clone::Clone::clone	1	fd5440b56c61	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	493	method	std::clone::Clone::clone	1	4730914761c1	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	1943	method	std::clone::Clone::clone	1	18a6de04afcb	HOMED
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	2022	method	std::clone::Clone::clone	1	e7a8b0cb81b0	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	2518	method	std::clone::Clone::clone	1	aff980bbfc42	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	2625	method	std::clone::Clone::clone	1	a3d13d25cec8	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	2734	method	std::clone::Clone::clone	1	aff980bbfc42	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	2851	method	std::clone::Clone::clone	1	8fa1816f183f	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	2919	method	std::clone::Clone::clone	1	aff980bbfc42	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	3042	method	std::clone::Clone::clone	1	e1328a9f7de0	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	3061	method	std::clone::Clone::clone	1	a427796bf257	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	3172	method	std::clone::Clone::clone	1	89058cd0f4b3	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	3864	method	std::clone::Clone::clone	1	625b20aa3bcb	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	3928	method	std::clone::Clone::clone	1	625b20aa3bcb	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/registry.rs	584	method	std::clone::Clone::clone	1	6f47f6922e3a	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/streams.rs	30	method	std::clone::Clone::clone	1	f5e57cd9962b	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_read/src/streams.rs	31	method	std::clone::Clone::clone	1	a13ed66ad874	NOALLOC

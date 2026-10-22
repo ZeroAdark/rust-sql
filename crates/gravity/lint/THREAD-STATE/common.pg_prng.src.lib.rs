@@ -1,0 +1,1 @@
+common/pg_prng/src/lib.rs	GLOBAL_PRNG	pgport	at:InitProcessGlobals@backend/utils/init/miscinit/src/process.rs	thread	this thread's pg_global_prng_state, one PgPrng; InitProcessGlobals seeds it at every backend or pool task start (launch_backend)

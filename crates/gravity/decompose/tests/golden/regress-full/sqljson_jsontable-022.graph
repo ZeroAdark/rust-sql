@@ -1,0 +1,9 @@
+-- regress-full-sqljson_jsontable-022
+-- SELECT a, a::bool FROM JSON_TABLE(jsonb '{"a":1}', '$' COLUMNS (a dint4_0 EXISTS PATH '$.b' ERROR ON ERROR));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=Host end=sink
+  nodes n0@0
+  source tablefunc rti=1 kind=json_table cols=1 ordinality=-1 doc=T_JsonExpr
+  project (1=v1.1, 2=fn2557(v1.1))
+  outs 1=? 2=w1:val
+mapped: TableFuncScan

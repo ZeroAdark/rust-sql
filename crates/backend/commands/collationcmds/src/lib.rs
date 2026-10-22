@@ -356,13 +356,14 @@ fn creation_namespace<'mcx, 'a>(
     let mut names: [&str; 4] = [""; 4];
     let nnames = qualified.len();
     if !(1..=3).contains(&nnames) {
-        return Err(catalog_namespace::improper_qualified_name_joined(
-            qualified
-                .iter()
-                .map(|n| n.as_string().expect("qualified name").sval)
-                .collect::<Vec<_>>()
-                .join("."),
-        ));
+        let mut joined = String::new();
+        for (i, n) in qualified.iter().enumerate() {
+            if i > 0 {
+                joined.push('.');
+            }
+            joined.push_str(n.as_string().expect("qualified name").sval);
+        }
+        return Err(catalog_namespace::improper_qualified_name_joined(joined));
     }
     for (i, n) in qualified.iter().enumerate() {
         names[i] = n.as_string().expect("qualified name").sval;

@@ -1,0 +1,15 @@
+-- regress-full-collate.icu.utf8-052
+-- SELECT typname FROM pg_type WHERE typname LIKE 'int_' AND 'INT2'::text <> typname COLLATE case_insensitive ORDER BY typname;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=1247 rti=1 am=heap index=2704
+    key att=2 op=257 value=c25:'int'
+    key att=2 op=255 value=c25:'inu'
+    recheck (op257(index.1, c25:'int'), op255(index.1, c25:'inu'))
+    lanes Attr(2):byref8:fx64:win/page
+  filter op1207(index.1, c25:'int_')
+  filter op259(relabel19(index.1), c25:'INT2')
+  project (1=index.1)
+  outs 1=fx64:win/page
+mapped: IndexOnlyScan

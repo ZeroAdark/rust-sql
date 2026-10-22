@@ -3594,38 +3594,6 @@ name = "pglz"
 version = "0.1.0"
 
 [[package]]
-name = "pgrcolumnar"
-version = "0.0.0"
-dependencies = [
- "datum",
- "exectuples",
- "init_small",
- "inval",
- "libc",
- "lz4_flex",
- "mbutils_seams",
- "mcx",
- "pgsync",
- "relpath",
- "smgr_seams",
- "snapmgr",
- "tableam_vocab",
- "transam_seams",
- "tuplesort_seams",
- "types_core",
- "types_error",
- "types_rel",
- "types_scan",
- "types_slot",
- "types_snapshot",
- "types_storage",
- "types_tuple",
- "vfs",
- "xact_seams",
- "zstd",
-]
-
-[[package]]
 name = "pgstat"
 version = "0.0.0"
 dependencies = [
@@ -5133,7 +5101,6 @@ dependencies = [
  "init_small",
  "mcx",
  "multixact",
- "pgrcolumnar",
  "procarray",
  "smgr",
  "snapmgr",

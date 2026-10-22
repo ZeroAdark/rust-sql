@@ -857,3 +857,38 @@ pub fn expr_collation(node: Node<'_>) -> Oid {
         _ => nodes_core::expr_collation(node),
     }
 }
+
+/// IX1 L0 (OC-A a, main 2026-10-06): the attributes of scan relation `scanrelid` (`natts` of them) the expressions of
+/// `lists` (a plan's targetlist and quals) read, by `attno - 1`: what a pgrcolumnar fetch by TID decodes. `None` =
+/// every attribute: a whole-row or system-column Var of the relation (the exact set is not expressible), as a physical
+/// tlist's Vars name every column anyway.
+pub fn scan_needed_attrs<'mcx>(scanrelid: Index, natts: usize, lists: &[&NodeList<'mcx>]) -> PgResult<Option<alloc::boxed::Box<[bool]>>> {
+    struct Cx {
+        scanrelid: i32,
+        needed: alloc::vec::Vec<bool>,
+        opaque: bool,
+    }
+    impl<'mcx> nodes_core::NodeWalker<'mcx> for Cx {
+        fn visit(&mut self, n: Node<'mcx>) -> PgResult<bool> {
+            if let Some(v) = n.as_var() {
+                if v.varno == self.scanrelid && v.varlevelsup == 0 {
+                    match usize::try_from(v.varattno) {
+                        Ok(a) if a >= 1 && a <= self.needed.len() => self.needed[a - 1] = true,
+                        _ => self.opaque = true,
+                    }
+                }
+                return Ok(self.opaque);
+            }
+            nodes_core::expression_tree_walker(n, self)
+        }
+    }
+    let mut cx = Cx { scanrelid: scanrelid as i32, needed: ::mcx::stdvec::try_filled(natts, false, "scan_needed_attrs")?, opaque: false };
+    for list in lists {
+        for n in list.iter() {
+            if nodes_core::NodeWalker::visit(&mut cx, n)? {
+                return Ok(None);
+            }
+        }
+    }
+    Ok((!cx.opaque).then(|| cx.needed.into_boxed_slice()))
+}

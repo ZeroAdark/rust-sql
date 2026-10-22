@@ -1,0 +1,9 @@
+path	crates/gravity/expr/src/emit/host.rs
+growth	std::vec::Vec::extend_from_slice	3
+growth	std::vec::Vec::push	6
+growth	std::vec::Vec::resize	1
+macro	std::vec	9
+method	std::boxed::Box::new	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	1
+type	std::vec::Vec	1

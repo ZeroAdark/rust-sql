@@ -78,7 +78,7 @@ seam_core::seam!(
     pub fn multixact_set_next_mxact(
         next_multi: types_core::MultiXactId,
         next_multi_offset: types_core::MultiXactOffset,
-    )
+    ) -> PgResult<()>
 );
 
 seam_core::seam!(

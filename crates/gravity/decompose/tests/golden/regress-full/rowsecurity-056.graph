@@ -1,0 +1,25 @@
+-- regress-full-rowsecurity-056
+-- UPDATE t2 SET b=t2.b FROM t3 WHERE t2.a = 3 and t3.a = 2 AND f_leak(t2.b) AND f_leak(t3.b);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@4 n0@6
+  source range rel=28361 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v1.2, c23:3)
+  filter op96(op530(v1.2, c23:2), c23:1)
+  filter fn28320(v1.3)
+  project (1=v1.3, 2=v1.-1, 3j=v1.1, 4j=v1.2, 5j=v1.4)
+  nest inner=n3 JOIN_INNER vol=v params=()
+  inner node=3 eligible rows=1 end=sink
+  nodes n3@0
+  source range rel=28367 rti=2 am=heap
+    lanes Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v2.4, c23:2)
+  filter fn28320(v2.3)
+  project (1=v2.-1)
+  project (1=outer.1, 2j=outer.2, 3j=inner.1, 4j=outer.3, 5j=outer.4, 6j=outer.5)
+  write UPDATE rel=28361 rti=1 natts=4 indexes=() set=(3) marks=1 (rti2:ROW_MARK_REFERENCE)
+    check rls update rel=t2 (op96(op530(v1.2, c23:2), c23:1))
+  outs 1=vl:win/page 2=fx6:row 3=w8:val 4=w8:val 5=w8:val
+  outs 1=vl:win/page 2=fx6:row 3=fx6:life/breaker 4=w8:val 5=w8:val 6=w8:val
+mapped: ModifyTable SeqScan NestLoop PlanRowMark

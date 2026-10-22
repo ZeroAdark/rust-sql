@@ -1,0 +1,1 @@
+_support/memledger/src/arena.rs	HOLDER	memory	scope:CacheScope	thread	CACHE-CHARGE: this thread's innermost open holder cache scope (a raw link to its boxed record; the global allocator reads it, cache_took)

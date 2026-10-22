@@ -391,3 +391,45 @@ fn need_escapes_false_hands_empty_strings() {
         vec!["ostart@0", "ofstart \"\" null=false", "str \"\"", "ofend \"\" null=false", "ofstart \"\" null=false", "num 7", "ofend \"\" null=false", "oend@0"]
     );
 }
+
+#[test]
+fn nul_token_detail_stops_at_the_nul() {
+    // C json_token_error's %.*s stops at the NUL (jsonapi.c:2474).
+    let (r, detail, _) = whole(b"[\x00]");
+    assert_eq!(r, JsonError::InvalidToken);
+    assert_eq!(detail, "Token \"\" is invalid.");
+    let (r, detail, _) = chunked(b"[nul\x00]", &[3]);
+    assert_eq!(r, JsonError::InvalidToken);
+    assert_eq!(detail, "Token \"nul\" is invalid.");
+}
+
+#[test]
+fn partial_token_growth_is_checked_per_byte() {
+    // appendStringInfoCharMacro: only the bytes taken into the partial token
+    // count against MaxAllocSize, one at a time.
+    assert!(partial_room(mcx::MAX_ALLOC_SIZE - 2).is_ok());
+    let err = partial_room(mcx::MAX_ALLOC_SIZE - 1).unwrap_err();
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(
+        err.message(),
+        "string buffer exceeds maximum allowed length (1073741823 bytes)"
+    );
+    assert_eq!(
+        err.detail(),
+        Some("Cannot enlarge string buffer containing 1073741822 bytes by 1 more bytes.")
+    );
+}
+
+#[test]
+fn partial_token_admission_reserves_the_terminating_nul() {
+    let max = mcx::MAX_ALLOC_SIZE;
+    assert!(super::partial_admit(0, max - 1).is_ok());
+    assert!(super::partial_admit(max - 2, 1).is_ok());
+    assert!(super::partial_admit(max - 1, 1).is_err());
+    let err = super::partial_admit(1, max - 1).unwrap_err();
+    assert_eq!(err.message(), "string buffer exceeds maximum allowed length (1073741823 bytes)");
+    assert_eq!(
+        err.detail(),
+        Some("Cannot enlarge string buffer containing 1 bytes by 1073741822 more bytes.")
+    );
+}

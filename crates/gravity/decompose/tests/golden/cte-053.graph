@@ -1,0 +1,11 @@
+-- cte-053
+-- INSERT INTO w SELECT i, 'c' || i, i % 7 FROM generate_series(1, 300) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:300)]
+  project (1=fn481(v3.1), 2=op654(c25:'c', io25(v3.1)), 3=op530(v3.1, c23:7), 4=c23:null)
+  write INSERT rel=16423 rti=1 natts=4 indexes=()
+  outs 1=w8:val 2=vl:call1258 3=w4:val 4=w4:val
+mapped: ModifyTable FunctionScan

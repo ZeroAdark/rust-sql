@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use adt_timestamp::{GetCurrentTimestamp, TimestampDifference, TimestampDifferenceExceeds};
 use elog::{elog, ereport};
@@ -46,19 +46,17 @@ static GOT_STANDBY_DELAY_TIMEOUT: AtomicBool = AtomicBool::new(false);
 static GOT_STANDBY_LOCK_TIMEOUT: AtomicBool = AtomicBool::new(false);
 
 // GUC homes (standby.c globals).
-static MAX_STANDBY_ARCHIVE_DELAY: AtomicI32 = AtomicI32::new(30 * 1000);
-static MAX_STANDBY_STREAMING_DELAY: AtomicI32 = AtomicI32::new(30 * 1000);
 static LOG_RECOVERY_CONFLICT_WAITS: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn install_guc_backings() {
     use guc_tables::GucVarAccessors;
     guc_tables::vars::max_standby_archive_delay.install(GucVarAccessors {
-        get: || MAX_STANDBY_ARCHIVE_DELAY.load(Relaxed),
-        set: |v| MAX_STANDBY_ARCHIVE_DELAY.store(v, Relaxed),
+        get: || MAX_STANDBY_ARCHIVE_DELAY.get(),
+        set: |v| MAX_STANDBY_ARCHIVE_DELAY.set(v),
     });
     guc_tables::vars::max_standby_streaming_delay.install(GucVarAccessors {
-        get: || MAX_STANDBY_STREAMING_DELAY.load(Relaxed),
-        set: |v| MAX_STANDBY_STREAMING_DELAY.store(v, Relaxed),
+        get: || MAX_STANDBY_STREAMING_DELAY.get(),
+        set: |v| MAX_STANDBY_STREAMING_DELAY.set(v),
     });
     guc_tables::vars::log_recovery_conflict_waits.install(GucVarAccessors {
         get: || LOG_RECOVERY_CONFLICT_WAITS.load(Relaxed),
@@ -86,6 +84,8 @@ impl RecoveryLockState {
 }
 
 thread_local! {
+    static MAX_STANDBY_ARCHIVE_DELAY: Cell<i32> = const { Cell::new(30 * 1000) };
+    static MAX_STANDBY_STREAMING_DELAY: Cell<i32> = const { Cell::new(30 * 1000) };
     // Startup-thread only (C statics in standby.c). None = tracking not
     // initialized or already shut down.
     static RECOVERY_LOCKS: RefCell<Option<RecoveryLockState>> = const { RefCell::new(None) };
@@ -143,9 +143,9 @@ pub fn ShutdownRecoveryTransactionEnvironment() -> PgResult<()> {
 fn GetStandbyLimitTime() -> TimestampTz {
     let (rtime, from_stream) = xlogrecovery_seams::get_xlog_receipt_time::call();
     let delay = if from_stream {
-        MAX_STANDBY_STREAMING_DELAY.load(Relaxed)
+        MAX_STANDBY_STREAMING_DELAY.get()
     } else {
-        MAX_STANDBY_ARCHIVE_DELAY.load(Relaxed)
+        MAX_STANDBY_ARCHIVE_DELAY.get()
     };
     if delay < 0 {
         return 0;
@@ -690,7 +690,7 @@ pub(crate) mod test_support {
     }
 
     pub fn set_delay_gucs(archive_ms: i32, streaming_ms: i32) {
-        MAX_STANDBY_ARCHIVE_DELAY.store(archive_ms, Relaxed);
-        MAX_STANDBY_STREAMING_DELAY.store(streaming_ms, Relaxed);
+        MAX_STANDBY_ARCHIVE_DELAY.set(archive_ms);
+        MAX_STANDBY_STREAMING_DELAY.set(streaming_ms);
     }
 }

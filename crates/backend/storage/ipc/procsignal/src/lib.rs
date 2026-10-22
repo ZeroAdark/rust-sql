@@ -13,7 +13,7 @@ use init_small::globals as g;
 use types_core::{ProcNumber, INVALID_PROC_NUMBER, MAX_CANCEL_KEY_LENGTH};
 use types_error::{ErrorLocation, PgResult, DEBUG1, DEBUG2, ERROR, LOG};
 use types_storage::storage::{
-    ProcSignalBarrierType, ProcSignalReason, Spinlock, SyncCell, NUM_AUXILIARY_PROCS,
+    ProcSignalBarrierType, ProcSignalReason, Spinlock, SyncCell,
     NUM_PROCSIGNALS,
 };
 
@@ -53,7 +53,7 @@ pub mod signums {
     #[cfg(target_family = "wasm")]
     pub use wasm_signums::*;
 }
-use signums::{SIGINT, SIGKILL, SIGQUIT, SIGSTOP, SIGTERM, SIGUSR1};
+use signums::{SIGABRT, SIGINT, SIGKILL, SIGQUIT, SIGSTOP, SIGTERM, SIGUSR1};
 
 pub struct ProcSignalSlot {
     pss_pid: AtomicI32,
@@ -66,6 +66,7 @@ pub struct ProcSignalSlot {
     pss_pendingThreadSignals: AtomicU32,
     // Owner's leaked InterruptPending flag: CFI-visible pend delivery.
     pss_interruptFlag: std::sync::atomic::AtomicPtr<AtomicBool>,
+    pss_abortFlag: std::sync::atomic::AtomicPtr<std::sync::atomic::AtomicU8>,
     // Extra latch a delivered thread signal must set, beyond the procLatch:
     // renders the wakeup a C signal handler performs itself at delivery time
     // (e.g. the startup process's handlers all call WakeupRecovery(), so a
@@ -92,6 +93,7 @@ impl ProcSignalSlot {
             pss_signalFlags: std::array::from_fn(|_| AtomicBool::new(false)),
             pss_pendingThreadSignals: AtomicU32::new(0),
             pss_interruptFlag: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
+            pss_abortFlag: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             pss_extraWakeLatch: AtomicUsize::new(0),
             pss_hasExtraWakeLatch: AtomicBool::new(false),
             pss_mutex: Spinlock::new(),
@@ -146,7 +148,7 @@ thread_local! {
 // packet — returned ESRCH and was silently dropped. C cannot lose that
 // signal (kill() is kernel-queued and runs process_startup_packet_die when
 // unblocked); here the drop left the backend parked in secure_read forever:
-// PM_WAIT_BACKENDS never drained, the regression watchdog escalated to
+// PM_WAIT_BACKENDS never drained, the GL-GANGWEDGE-1 watchdog escalated to
 // immediate shutdown, and the next start ran crash recovery.
 //
 // The channel: the LAUNCHER registers `pid -> pending word` BEFORE the pid
@@ -333,7 +335,7 @@ fn spin_acquire(lock: &Spinlock) {
 }
 
 fn NumProcSignalSlots() -> i32 {
-    g::MaxBackends() + NUM_AUXILIARY_PROCS
+    g::MaxBackends() + g::NumAuxiliaryProcs()
 }
 
 /// ProcSignalShmemSize (procsignal.c:124-131): NumProcSignalSlots *
@@ -418,6 +420,7 @@ pub fn ProcSignalShmemResetAfterCrash() {
         }
         slot.pss_pendingThreadSignals.store(0, Relaxed);
         slot.pss_interruptFlag.store(std::ptr::null_mut(), Relaxed);
+        slot.pss_abortFlag.store(std::ptr::null_mut(), Relaxed);
         slot.pss_hasExtraWakeLatch.store(false, Relaxed);
         slot.pss_mutex.unlock();
         slot.pss_barrierGeneration.store(u64::MAX, Relaxed);
@@ -473,6 +476,10 @@ fn proc_signal_init_internal(cancel_key: &[u8], register_cleanup: bool) -> PgRes
     slot.pss_hasExtraWakeLatch.store(false, Relaxed);
     slot.pss_interruptFlag.store(
         g::interrupt_pending_flag() as *const _ as *mut AtomicBool,
+        Relaxed,
+    );
+    slot.pss_abortFlag.store(
+        g::abort_pending_flag() as *const _ as *mut std::sync::atomic::AtomicU8,
         Relaxed,
     );
     // upstream 1a9b1cc18e06 (18.6): Fix race between ProcSignalInit() and EmitProcSignalBarrier().
@@ -692,6 +699,13 @@ fn deliver_thread_signal_to_slot(i: usize, pid: i32, bit: u32) -> bool {
         // SAFETY: only ever a Box::leak'd 'static (never freed).
         unsafe { &*flag }.store(true, SeqCst);
     }
+    const ABORT_CLASS: [i32; 4] = [SIGINT, signums::SIGTERM, SIGQUIT, SIGKILL];
+    let abort = slot.pss_abortFlag.load(Relaxed);
+    if !abort.is_null() {
+        let class = if ABORT_CLASS.iter().any(|&s| bit & thread_signal_bit(s) != 0) { g::ABORT_BIT } else { g::SERVICE_BIT };
+        // SAFETY: as above.
+        unsafe { &*abort }.fetch_or(class, SeqCst);
+    }
     slot.pss_mutex.unlock();
     latch::set_latch(&lmgr_proc::GetPGProcByNumber(i as ProcNumber).procLatch);
     // C's handler runs at delivery and may set further latches itself
@@ -712,10 +726,16 @@ fn deliver_thread_signal_to_slot(i: usize, pid: i32, bit: u32) -> bool {
 // pg_signal_backend (signalfuncs.c): the group signals also reach the
 // backend's popen'd children (COPY PROGRAM), which otherwise keep a backend
 // blocked on the pipe past its termination.
+// postmaster.c:3446-3455: the signals signal_child also sends to the group.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(crate) fn signal_fans_out_to_group(signo: i32) -> bool {
+    matches!(signo, SIGINT | SIGTERM | SIGQUIT | SIGKILL | SIGABRT)
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn signal_backend_children(pid: i32, bit: u32) {
     let signo = bit.trailing_zeros() as i32;
-    if signo != SIGINT && signo != SIGTERM && signo != SIGQUIT && signo != SIGKILL {
+    if !signal_fans_out_to_group(signo) {
         return;
     }
     for child in init_small::globals::backend_children(pid) {
@@ -728,6 +748,38 @@ fn signal_backend_children(pid: i32, bit: u32) {
 
 #[cfg(target_family = "wasm")]
 fn signal_backend_children(_pid: i32, _bit: u32) {}
+
+/// D3821: the memory watchdog's cancel, raised on the backend at `procNumber` while it still is `pid`: its
+/// InterruptPending, the ABORT_BIT of its Gravity abort byte (every kernel loop back-edge polls it, and a pool worker
+/// reading it stops) and its latch, as a SIGINT's delivery raises them, but with no pending thread signal: the
+/// backend's QueryCancelPending stays a user's alone, so a pg_cancel_backend in the same window still ends its statement
+/// with 57014. The backend's ProcessInterrupts raises the watchdog's 53200 from its condemnation (mcx governor
+/// `take_watchdog_cancel`), and drops it when the statement it named has ended. False: no such slot, or its pid changed.
+pub fn RaiseAbortByProcNumber(procNumber: ProcNumber, pid: i32) -> bool {
+    let header = proc_signal();
+    let Some(slot) = usize::try_from(procNumber).ok().and_then(|i| header.psh_slot.get(i)) else { return false };
+    if pid <= 0 {
+        return false;
+    }
+    spin_acquire(&slot.pss_mutex);
+    if slot.pss_pid.load(Relaxed) != pid {
+        slot.pss_mutex.unlock();
+        return false;
+    }
+    let flag = slot.pss_interruptFlag.load(Relaxed);
+    if !flag.is_null() {
+        // SAFETY: only ever a Box::leak'd 'static (never freed).
+        unsafe { &*flag }.store(true, SeqCst);
+    }
+    let abort = slot.pss_abortFlag.load(Relaxed);
+    if !abort.is_null() {
+        // SAFETY: as above.
+        unsafe { &*abort }.fetch_or(g::ABORT_BIT, SeqCst);
+    }
+    slot.pss_mutex.unlock();
+    latch::set_latch(&lmgr_proc::GetPGProcByNumber(procNumber).procLatch);
+    true
+}
 
 /// By-ProcNumber thread-signal delivery: signal the single slot the caller
 /// already resolved, rather than re-scanning by pid. signalfuncs
@@ -749,11 +801,44 @@ pub fn SendThreadSignalByProcNumber(procNumber: ProcNumber, pid: i32, signo: i32
     }
     // SIGKILL renders as the kill9 bit here exactly as SendThreadKill does;
     // thread_signal_bit(SIGKILL) is that same bit, so no special-casing.
-    if deliver_thread_signal_to_slot(procNumber as usize, pid, thread_signal_bit(signo)) {
+    // A target already in the procarray but not yet past ProcSignalInit is
+    // still signalable in C (kill(2) reaches the process); it takes the
+    // pre-identity channel, checked first as in deliver_thread_signal.
+    let bit = thread_signal_bit(signo);
+    if deliver_pre_identity_signal(pid, bit) {
+        return 0;
+    }
+    if deliver_thread_signal_to_slot(procNumber as usize, pid, bit) {
         0
     } else {
         set_errno(libc::ESRCH);
         -1
+    }
+}
+
+// Pend `bit` on `pid`'s pre-identity word if the launcher registered one;
+// false when `pid` has no pre-identity entry.
+fn deliver_pre_identity_signal(pid: i32, bit: u32) -> bool {
+    let found = {
+        let v = pre_identity_targets();
+        v.iter().find(|e| e.pid == pid).map(|e| {
+            e.bits.fetch_or(bit, SeqCst);
+            let flag = e.interrupt_flag.load(Acquire);
+            if !flag.is_null() {
+                // SAFETY: only ever a leaked 'static (interrupt_pending_flag).
+                unsafe { &*flag }.store(true, SeqCst);
+            }
+            e.latch_word.load(Acquire)
+        })
+    };
+    match found {
+        Some(latch_word) => {
+            if latch_word != 0 {
+                latch::SetLatch(types_storage::latch::LatchHandle::from_raw(latch_word));
+            }
+            true
+        }
+        None => false,
     }
 }
 
@@ -786,22 +871,7 @@ fn deliver_thread_signal(pid: i32, bit: u32) -> i32 {
     // unadopted entry has no latch, and that is fine — the child is still
     // running its prelude and drains the word at its first drain point before
     // it can park.
-    let found = {
-        let v = pre_identity_targets();
-        v.iter().find(|e| e.pid == pid).map(|e| {
-            e.bits.fetch_or(bit, SeqCst);
-            let flag = e.interrupt_flag.load(Acquire);
-            if !flag.is_null() {
-                // SAFETY: only ever a leaked 'static (interrupt_pending_flag).
-                unsafe { &*flag }.store(true, SeqCst);
-            }
-            e.latch_word.load(Acquire)
-        })
-    };
-    if let Some(latch_word) = found {
-        if latch_word != 0 {
-            latch::SetLatch(types_storage::latch::LatchHandle::from_raw(latch_word));
-        }
+    if deliver_pre_identity_signal(pid, bit) {
         return 0;
     }
 
@@ -832,7 +902,13 @@ pub fn DrainThreadSignals() -> PgResult<()> {
     if slot.pss_pendingThreadSignals.load(Acquire) == 0 {
         return Ok(());
     }
+    // taken under pss_mutex, where every delivery pends its bit AND
+    // raises the abort byte (deliver_thread_signal_to_slot): a bit taken here
+    // has its byte already set, so ProcessInterrupts' consume clears it —
+    // never a byte raised after, into the next statement.
+    spin_acquire(&slot.pss_mutex);
     let mut bits = slot.pss_pendingThreadSignals.swap(0, SeqCst);
+    slot.pss_mutex.unlock();
     let handlers = THREAD_SIGNAL_HANDLERS.with(Cell::get);
     let mut still_blocked: u32 = 0;
     while bits != 0 {
@@ -876,6 +952,63 @@ pub fn DrainThreadSignals() -> PgResult<()> {
     Ok(())
 }
 
+/// the semaphore wait's drain point, for the crash class only. A
+/// thread that dies on the crash path keeps its LWLocks, as a C process's die
+/// with it; its waiters sleep in PGSemaphoreLock, which C's SIGQUIT / SIGKILL
+/// end in semop. Every other pending signal waits for a real drain point.
+pub fn DrainCrashSignals() {
+    let crash = thread_signal_bit(SIGQUIT) | thread_signal_bit(SIGKILL);
+    if let Some(index) = MY_PROC_SIGNAL_SLOT.get() {
+        let slot = &proc_signal().psh_slot[index];
+        if slot.pss_pendingThreadSignals.load(Acquire) & crash == 0 {
+            return;
+        }
+        spin_acquire(&slot.pss_mutex);
+        let bits = slot.pss_pendingThreadSignals.fetch_and(!crash, SeqCst) & crash;
+        slot.pss_mutex.unlock();
+        let keep = run_crash_dispositions(bits);
+        if keep != 0 {
+            slot.pss_pendingThreadSignals.fetch_or(keep, SeqCst);
+        }
+        return;
+    }
+    let Some(word) =
+        MY_PRE_IDENTITY.with(|c| c.borrow().as_ref().map(|(_, w)| std::sync::Arc::clone(w)))
+    else {
+        return;
+    };
+    if word.load(Acquire) & crash == 0 {
+        return;
+    }
+    let keep = run_crash_dispositions(word.fetch_and(!crash, SeqCst) & crash);
+    if keep != 0 {
+        word.fetch_or(keep, SeqCst);
+    }
+}
+
+/// The dispositions of `bits`; returns the bits to pend again (no disposition
+/// yet, or a failed one: a real drain point reports it).
+fn run_crash_dispositions(mut bits: u32) -> u32 {
+    let handlers = THREAD_SIGNAL_HANDLERS.with(Cell::get);
+    let mut keep: u32 = 0;
+    while bits != 0 {
+        let signo = bits.trailing_zeros() as usize;
+        let bit = 1u32 << signo;
+        bits &= bits - 1;
+        match handlers[signo] {
+            ThreadSignalHandler::Ignore => {}
+            ThreadSignalHandler::Simple(f) => f(),
+            ThreadSignalHandler::Fallible(f) => {
+                if f().is_err() {
+                    keep |= bit;
+                }
+            }
+            ThreadSignalHandler::Unset => keep |= bit,
+        }
+    }
+    keep
+}
+
 fn CleanupProcSignalState(_code: i32, _arg: usize) {
     // Clear first so a signal arriving after this point ignores the slot.
     // Tolerate an already-released slot: a standing runtime executor
@@ -885,6 +1018,9 @@ fn CleanupProcSignalState(_code: i32, _arg: usize) {
         return;
     };
     MY_PROC_SIGNAL_SLOT.set(None);
+    // A barrier this thread drained but did not process yet was its slot's, and the released slot reads as absorbed:
+    // a thread that lives on without a slot (a standing executor between engagements) has none left to absorb.
+    g::SetProcSignalBarrierPending(false);
     let slot = &proc_signal().psh_slot[slot_index];
     let my_pid = g::MyProcPid();
 
@@ -904,6 +1040,7 @@ fn CleanupProcSignalState(_code: i32, _arg: usize) {
     // SAFETY: serialized by the ProcSignalSlot pss_mutex spinlock
     unsafe { slot.pss_cancel_key_len.set(0) };
     slot.pss_interruptFlag.store(std::ptr::null_mut(), Relaxed);
+    slot.pss_abortFlag.store(std::ptr::null_mut(), Relaxed);
     slot.pss_hasExtraWakeLatch.store(false, Relaxed);
     // Look absorbed-of-everything so no barrier wait blocks on this slot.
     slot.pss_barrierGeneration.store(u64::MAX, Relaxed);
@@ -918,17 +1055,35 @@ fn CleanupProcSignalState(_code: i32, _arg: usize) {
 
 // C's kill(pid, SIGUSR1). One backend = one thread: the sender cannot run the
 // drain (target thread-locals), so pend SIGUSR1, raise the target's
-// InterruptPending (C's handler sets it at delivery, so a busy backend drains
-// at its next CHECK_FOR_INTERRUPTS) and set its procLatch (slot index ==
-// ProcNumber); the target's drain point runs procsignal_sigusr1_handler.
+// InterruptPending and set its procLatch (slot index == ProcNumber); the
+// target's drain point runs procsignal_sigusr1_handler.
+//
+// C's handler runs at delivery and its reason handlers raise
+// InterruptPending themselves (log-memory-context, barrier, parallel message,
+// recovery conflict), so a BUSY backend services them at its next
+// CHECK_FOR_INTERRUPTS. Here the handler runs only at a drain, and the one
+// drain a busy backend reaches is ProcessInterrupts behind InterruptPending —
+// without the flag a busy backend held every procsignal until it went idle
+// (pg_log_backend_memory_contexts unanswered, DROP DATABASE's barrier wait
+// blocked). The kill path (deliver_thread_signal_to_slot) raises the same
+// flag. Deferral stays C's: ProcessInterrupts drains (the handlers only set
+// flags, as C's async handler does), then returns under HOLD_INTERRUPTS or a
+// critical section with InterruptPending still set. Read outside the slot
+// mutex: the flag is a leaked 'static (never freed), so a recycled slot costs
+// at most one spurious ProcessInterrupts pass in its new owner.
 fn deliver_sigusr1(slot_index: usize) {
     let slot = &proc_signal().psh_slot[slot_index];
     slot.pss_pendingThreadSignals
         .fetch_or(thread_signal_bit(SIGUSR1), SeqCst);
-    let flag = slot.pss_interruptFlag.load(Relaxed);
+    let flag = slot.pss_interruptFlag.load(SeqCst);
     if !flag.is_null() {
         // SAFETY: only ever a Box::leak'd 'static (never freed).
         unsafe { &*flag }.store(true, SeqCst);
+    }
+    let abort = slot.pss_abortFlag.load(SeqCst);
+    if !abort.is_null() {
+        // SAFETY: as above.
+        unsafe { &*abort }.fetch_or(g::SERVICE_BIT, SeqCst);
     }
     latch::set_latch(&lmgr_proc::GetPGProcByNumber(slot_index as ProcNumber).procLatch);
 }

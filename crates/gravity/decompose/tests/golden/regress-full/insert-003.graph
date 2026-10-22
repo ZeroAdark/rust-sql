@@ -1,0 +1,9 @@
+-- regress-full-insert-003
+-- SELECT pg_size_pretty(pg_relation_size('large_tuple_test'::regclass, 'main'));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn2288(fn2332(c2205:17692, c25:'main')))
+  outs 1=vl:call2288
+mapped: Result

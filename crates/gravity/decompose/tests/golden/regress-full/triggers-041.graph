@@ -1,0 +1,25 @@
+-- regress-full-triggers-041
+-- with ins (a) as ( insert into parted2_stmt_trig values (1), (2) returning a ) insert into parted_stmt_trig select a from ins returning tableoid::regclass, a;
+graph pipelines=2 breakers=1 init_plans=1 root=p1
+p0 node=3 serial site=0 reason=Write end=breaker(slot=0 Materialize)
+  nodes n3@0 n2@1
+  source values rti=5 rows=2
+    row (c23:1)
+    row (c23:2)
+  project (1=v5.1)
+  write INSERT rel=21649 rti=4 natts=1 indexes=() returning route=rti4:21649 natts=1
+  project (1=v4.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p1 node=1 serial site=0 reason=Write end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source breaker slot=0
+  project (1=v3.1)
+  write INSERT rel=21640 rti=1 natts=1 indexes=() returning epq=$exec2 route=rti1:21640 natts=1
+  project (1=relabel2205(v1.-6), 2=v1.1)
+  outs 1=w4:val
+  outs 1=w4:val 2=w4:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+init_plan id=1 pipeline=p0 link=Cte param=$exec1 slot=0 vol=v
+mapped: ModifyTable ValuesScan CteScan SubPlan

@@ -1,0 +1,231 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1n s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE;
+QUERY PLAN                                                  
+------------------------------------------------------------
+Limit                                                       
+  ->  LockRows                                              
+        ->  Nested Loop                                     
+              ->  Seq Scan on d80a a                        
+                    Disabled: true                          
+                    Filter: (k <= 9)                        
+              ->  Memoize                                   
+                    Cache Key: a.bid                        
+                    Cache Mode: logical                     
+                    ->  Index Scan using d80b_pkey on d80b b
+                          Index Cond: (id = a.bid)          
+                          Filter: (name <> 'x'::text)       
+(12 rows)
+
+step s1n: UPDATE d80b SET name = name || '+' WHERE id = 1;
+step s2l: SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|b|name
+--+-+-+----
+ 1|1|1|b1+ 
+ 2|2|2|b2  
+ 3|3|3|b3  
+(3 rows)
+
+
+starting permutation: s1k s2l s1c
+step s1k: UPDATE d80b SET id = 10 WHERE id = 1;
+step s2l: SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|b|name
+--+-+-+----
+ 2|2|2|b2  
+ 3|3|3|b3  
+ 4|4|0|b0  
+(3 rows)
+
+
+starting permutation: s1f s2l s1c
+step s1f: UPDATE d80a SET k = 100 WHERE id = 1;
+step s2l: SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|b|name
+--+-+-+----
+ 2|2|2|b2  
+ 3|3|3|b3  
+ 4|4|0|b0  
+(3 rows)
+
+
+starting permutation: s1j s2l s1c
+step s1j: UPDATE d80a SET bid = 2 WHERE id = 1;
+step s2l: SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|b|name
+--+-+-+----
+ 2|2|2|b2  
+ 3|3|3|b3  
+ 4|4|0|b0  
+(3 rows)
+
+
+starting permutation: s1b s2l s1c
+step s1b: UPDATE d80a SET k = k WHERE id = 1; UPDATE d80b SET name = 'both' WHERE id = 1;
+step s2l: SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|b|name
+--+-+-+----
+ 1|1|1|both
+ 2|2|2|b2  
+ 3|3|3|b3  
+(3 rows)
+
+
+starting permutation: s1d s2l s1c
+step s1d: DELETE FROM d80a WHERE id = 1;
+step s2l: SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|b|name
+--+-+-+----
+ 2|2|2|b2  
+ 3|3|3|b3  
+ 4|4|0|b0  
+(3 rows)
+
+
+starting permutation: s1n s2m s1c
+step s1n: UPDATE d80b SET name = name || '+' WHERE id = 1;
+step s2m: SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 LIMIT 3 FOR NO KEY UPDATE OF a FOR SHARE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+id|k|b|name
+--+-+-+----
+ 1|1|1|b1+ 
+ 2|2|2|b2  
+ 3|3|3|b3  
+(3 rows)
+
+
+starting permutation: s1k s2o s1c
+step s1k: UPDATE d80b SET id = 10 WHERE id = 1;
+step s2o: SELECT a.id, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 LIMIT 2 OFFSET 1 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|b|name
+--+-+----
+ 3|3|b3  
+ 4|0|b0  
+(2 rows)
+
+
+starting permutation: s1h s2s s3a s2c s1c
+step s1h: UPDATE d80b SET w = w WHERE id = 2;
+step s2s: BEGIN; SELECT a.id, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 LIMIT 3 FOR UPDATE SKIP LOCKED;
+id|b|name
+--+-+----
+ 1|1|b1  
+ 3|3|b3  
+ 4|0|b0  
+(3 rows)
+
+step s3a: SELECT id FROM d80a WHERE id = 2 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "d80a"
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2z s2x s1j s2l s1c
+step s2z: SET enable_memoize = off;
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE;
+QUERY PLAN                                            
+------------------------------------------------------
+Limit                                                 
+  ->  LockRows                                        
+        ->  Nested Loop                               
+              ->  Seq Scan on d80a a                  
+                    Disabled: true                    
+                    Filter: (k <= 9)                  
+              ->  Index Scan using d80b_pkey on d80b b
+                    Index Cond: (id = a.bid)          
+                    Filter: (name <> 'x'::text)       
+(9 rows)
+
+step s1j: UPDATE d80a SET bid = 2 WHERE id = 1;
+step s2l: SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|b|name
+--+-+-+----
+ 2|2|2|b2  
+ 3|3|3|b3  
+ 4|4|0|b0  
+(3 rows)
+
+
+starting permutation: s2z s1b s2l s1c
+step s2z: SET enable_memoize = off;
+step s1b: UPDATE d80a SET k = k WHERE id = 1; UPDATE d80b SET name = 'both' WHERE id = 1;
+step s2l: SELECT a.id, a.k, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE a.k <= 9 AND b.name <> 'x' LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|b|name
+--+-+-+----
+ 1|1|1|both
+ 2|2|2|b2  
+ 3|3|3|b3  
+(3 rows)
+
+
+starting permutation: s2wx s1w s2w s1c
+step s2wx: EXPLAIN (COSTS OFF) SELECT a.id, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE b.w = 1 AND a.k % 2 = 1 LIMIT 3 FOR UPDATE;
+QUERY PLAN                                            
+------------------------------------------------------
+Limit                                                 
+  ->  LockRows                                        
+        ->  Nested Loop                               
+              Join Filter: (b.id = a.bid)             
+              ->  Seq Scan on d80a a                  
+                    Disabled: true                    
+                    Filter: ((k % 2) = 1)             
+              ->  Index Scan using d80b_pkey on d80b b
+                    Filter: (w = 1)                   
+(9 rows)
+
+step s1w: UPDATE d80b SET w = 0 WHERE id = 1;
+step s2w: SELECT a.id, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE b.w = 1 AND a.k % 2 = 1 LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+id|b|name
+--+-+----
+ 3|3|b3  
+ 7|3|b3  
+11|3|b3  
+(3 rows)
+
+
+starting permutation: s1m s2w s1c
+step s1m: UPDATE d80b SET name = name || '+' WHERE id = 3;
+step s2w: SELECT a.id, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE b.w = 1 AND a.k % 2 = 1 LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+id|b|name
+--+-+----
+ 1|1|b1  
+ 3|3|b3+ 
+ 5|1|b1  
+(3 rows)
+
+
+starting permutation: s1f s2w s1c
+step s1f: UPDATE d80a SET k = 100 WHERE id = 1;
+step s2w: SELECT a.id, b.id AS b, b.name FROM d80a a JOIN d80b b ON b.id = a.bid WHERE b.w = 1 AND a.k % 2 = 1 LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+id|b|name
+--+-+----
+ 3|3|b3  
+ 5|1|b1  
+ 7|3|b3  
+(3 rows)
+

@@ -1,0 +1,98 @@
+-- regress-full-merge-055
+-- EXPLAIN (verbose, costs off) MERGE INTO tgt t USING (SELECT *, (SELECT count(*) FROM ref r WHERE r.ab = s.a + s.b AND r.cd = s.c - s.d) cnt FROM src s) s ON t.a = s.a AND t.b < s.cnt WHEN MATCHED AND t.c > s.cnt THEN UPDATE SET (b, c) = (SELECT s.b, s.cnt);
+graph pipelines=6 breakers=4 init_plans=1 root=p5
+p0 node=4 eligible rows=1850 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n4@0 n3@1
+  source range rel=30766 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.-1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=fx6:row
+p1 node=6 eligible rows=1 end=breaker(slot=1 PlainAgg)
+  nodes n6@0 n5@3^
+  source range rel=30772 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v5.1, op551($exec0, $exec1))
+  filter op96(v5.2, op555($exec2, $exec3))
+  project (1=v5.1, 2=v5.2)
+  outs 1=w8:val 2=w8:val
+p2 node=8 eligible rows=1 end=breaker(slot=2 PlainAgg)
+  nodes n8@0 n7@3^
+  source range rel=30772 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v6.1, op551($exec4, $exec5))
+  filter op96(v6.2, op555($exec6, $exec7))
+  project (1=v6.1, 2=v6.2)
+  outs 1=w8:val 2=w8:val
+p3 node=7 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p2
+  nodes n7@0
+  source breaker slot=2
+  project (1=agg2803*())
+  outs 1=w8:val
+p4 node=11 eligible rows=1 end=breaker(slot=3 PlainAgg)
+  nodes n11@0 n10@3^
+  source range rel=30772 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v8.1, op551($exec11, $exec12))
+  filter op96(v8.2, op555($exec13, $exec14))
+  project (1=v8.1, 2=v8.2)
+  outs 1=w8:val 2=w8:val
+p5 node=2 serial site=1 reason=Write end=sink
+  desc consumes=slot0@p0 consumes=slot1@p1 consumes=slot3@p4
+  nodes n2@0 n1@1 n0@4
+  source range rel=30769 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v1.-1, 2=v1.1, 3=v1.2, 4j=v1.1, 5j=v1.2, 6j=v1.3, 7j=v1.4)
+  subplan 1 nested Expr params=($exec0=inner.1, $exec1=inner.2, $exec2=inner.3, $exec3=inner.4) site=joinqual
+  inner node=5 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n5@0
+  source breaker slot=1
+  project (1=agg2803*())
+  probe slot=0 inner=n3 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1)) qual=(op37(outer.3, subplan1(inner.1, inner.2, inner.3, inner.4)))
+  project (1j=outer.1, 2j=inner.1, 3j=inner.2, 4j=inner.3, 5j=inner.4, 6j=inner.5, 7j=outer.4, 8j=outer.5, 9j=outer.6, 10j=outer.7)
+  subplan 3 nested MultiExpr params=($exec4=inner.2, $exec5=inner.3, $exec6=inner.4, $exec7=inner.5) sets=($exec9,$exec10) conditional
+  inner node=9 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n9@0
+  source const
+  project (1=$exec5, 2=$exec8)
+  subplan 4 nested Expr params=($exec11=inner.2, $exec12=inner.3, $exec13=inner.4, $exec14=inner.5) conditional
+  inner node=10 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot3@p4
+  nodes n10@0
+  source breaker slot=3
+  project (1=agg2803*())
+  write MERGE rel=30769 rti=1 natts=4 indexes=() epq=$exec15 marks=1 (rti4:ROW_MARK_REFERENCE)
+    merge rowid=outer.1 target_cols=(1@7,2@8,3@9,4@10)
+    when matched and (op76(v1.3, subplan4(inner.2, inner.3, inner.4, inner.5))) then update set=(2,3) (1=$exec9, 2=fn480($exec10), 3j=subplan3(inner.2, inner.3, inner.4, inner.5))
+  outs 1=fx6:row 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+  outs 1=fx6:row 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=fx6:life/breaker 7=w8:val 8=w8:val 9=w8:val 10=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=PlainAgg budget=Fixed(64) spill=None producer=p1 layout=[]->[Count@0] 8B
+breaker slot=2 kind=PlainAgg budget=Fixed(64) spill=None producer=p2 layout=[]->[Count@0] 8B
+breaker slot=3 kind=PlainAgg budget=Fixed(64) spill=None producer=p4 layout=[]->[Count@0] 8B
+group slot=1 producer=p1 node=5 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+group slot=2 producer=p2 node=7 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+group slot=3 producer=p4 node=10 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+init_plan id=2 pipeline=p3 link=Expr param=$exec8
+rerun node=1 subplan=1 pipelines=p1 slots=1
+rerun node=0 subplan=3 pipelines=p2,p3 slots=2
+rerun node=0 subplan=4 pipelines=p4 slots=3
+param $exec0 owner=subplan1 type=23 rep=w4:val
+param $exec1 owner=subplan1 type=23 rep=w4:val
+param $exec2 owner=subplan1 type=23 rep=w4:val
+param $exec3 owner=subplan1 type=23 rep=w4:val
+param $exec4 owner=subplan3 type=23 rep=w4:val
+param $exec5 owner=subplan3 type=23 rep=w4:val
+param $exec6 owner=subplan3 type=23 rep=w4:val
+param $exec7 owner=subplan3 type=23 rep=w4:val
+param $exec11 owner=subplan4 type=23 rep=w4:val
+param $exec12 owner=subplan4 type=23 rep=w4:val
+param $exec13 owner=subplan4 type=23 rep=w4:val
+param $exec14 owner=subplan4 type=23 rep=w4:val
+mapped: Result ModifyTable SeqScan HashJoin Agg Hash PlanRowMark SubPlan

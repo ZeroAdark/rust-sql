@@ -17,7 +17,7 @@ use condition_variable::{
     ConditionVariable, ConditionVariableBroadcast, ConditionVariableCancelSleep,
     ConditionVariablePrepareToSleep, ConditionVariableSleep,
 };
-use elog::{elog, ereport, errno};
+use elog::{elog, ereport, errno, PCT_M};
 use init_small::globals as g;
 use lwlock::{LWLock, LWLockAcquire, LWLockPadded, LWLockRelease, LW_EXCLUSIVE, LW_SHARED};
 use types_core::{
@@ -837,7 +837,7 @@ fn ReplicationSlotDropPtr(slot: &'static ReplicationSlot) -> PgResult<()> {
         ereport(if fail_softly { WARNING } else { ERROR })
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not rename file \"{path}\" to \"{tmppath}\": %m"))
+            .errmsg(format!("could not rename file \"{path}\" to \"{tmppath}\": {PCT_M}"))
             .finish(loc("ReplicationSlotDropPtr"))?;
     }
 
@@ -1526,8 +1526,8 @@ pub fn InvalidateObsoleteReplicationSlots(
     if walsender_config::max_replication_slots() == 0 {
         return Ok(invalidated);
     }
-    let oldest_lsn =
-        transam_xlog::XLogSegNoOffsetToRecPtr(oldest_segno, 0, transam_xlog::wal_segment_size());
+    // WR L4b: past the segment start when the checkpoint cuts spool entries inside the segment.
+    let oldest_lsn = transam_xlog::wal_removed_horizon(oldest_segno);
 
     'restart: loop {
         lw(control_lock(), LW_SHARED)?;
@@ -1617,7 +1617,7 @@ pub fn StartupReplicationSlots() -> PgResult<()> {
             return ereport(ERROR)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not open directory \"{PG_REPLSLOT_DIR}\": %m"))
+                .errmsg(format!("could not open directory \"{PG_REPLSLOT_DIR}\": {PCT_M}"))
                 .finish(loc("StartupReplicationSlots"));
         }
     };
@@ -1630,7 +1630,7 @@ pub fn StartupReplicationSlots() -> PgResult<()> {
                 return ereport(ERROR)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not read directory \"{PG_REPLSLOT_DIR}\": %m"))
+                    .errmsg(format!("could not read directory \"{PG_REPLSLOT_DIR}\": {PCT_M}"))
                     .finish(loc("StartupReplicationSlots"));
             }
         };
@@ -1680,7 +1680,7 @@ fn CreateSlotOnDisk(slot: &'static ReplicationSlot) -> PgResult<()> {
         return ereport(ERROR)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create directory \"{tmppath}\": %m"))
+            .errmsg(format!("could not create directory \"{tmppath}\": {PCT_M}"))
             .finish(loc("CreateSlotOnDisk"));
     }
     fd::fsync_fname(&tmppath, true)?;
@@ -1693,7 +1693,7 @@ fn CreateSlotOnDisk(slot: &'static ReplicationSlot) -> PgResult<()> {
         return ereport(ERROR)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not rename file \"{tmppath}\" to \"{path}\": %m"))
+            .errmsg(format!("could not rename file \"{tmppath}\" to \"{path}\": {PCT_M}"))
             .finish(loc("CreateSlotOnDisk"));
     }
 
@@ -1728,7 +1728,7 @@ fn SaveSlotToPath(slot: &'static ReplicationSlot, dir: &str, elevel: ErrorLevel)
         ereport(elevel)
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{tmppath}\": %m"))
+            .errmsg(format!("could not create file \"{tmppath}\": {PCT_M}"))
             .finish(loc("SaveSlotToPath"))?;
         return Ok(());
     }
@@ -1752,7 +1752,7 @@ fn SaveSlotToPath(slot: &'static ReplicationSlot, dir: &str, elevel: ErrorLevel)
         ereport(elevel)
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not write to file \"{tmppath}\": %m"))
+            .errmsg(format!("could not write to file \"{tmppath}\": {PCT_M}"))
             .finish(loc("SaveSlotToPath"))?;
         return Ok(());
     }
@@ -1769,7 +1769,7 @@ fn SaveSlotToPath(slot: &'static ReplicationSlot, dir: &str, elevel: ErrorLevel)
         ereport(elevel)
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{tmppath}\": %m"))
+            .errmsg(format!("could not fsync file \"{tmppath}\": {PCT_M}"))
             .finish(loc("SaveSlotToPath"))?;
         return Ok(());
     }
@@ -1782,7 +1782,7 @@ fn SaveSlotToPath(slot: &'static ReplicationSlot, dir: &str, elevel: ErrorLevel)
         ereport(elevel)
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{tmppath}\": %m"))
+            .errmsg(format!("could not close file \"{tmppath}\": {PCT_M}"))
             .finish(loc("SaveSlotToPath"))?;
         return Ok(());
     }
@@ -1794,7 +1794,7 @@ fn SaveSlotToPath(slot: &'static ReplicationSlot, dir: &str, elevel: ErrorLevel)
         ereport(elevel)
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not rename file \"{tmppath}\" to \"{path}\": %m"))
+            .errmsg(format!("could not rename file \"{tmppath}\" to \"{path}\": {PCT_M}"))
             .finish(loc("SaveSlotToPath"))?;
         return Ok(());
     }
@@ -1834,7 +1834,7 @@ fn RestoreSlotFromDisk(name: &str) -> PgResult<()> {
         return ereport(PANIC)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not remove file \"{tmppath}\": %m"))
+            .errmsg(format!("could not remove file \"{tmppath}\": {PCT_M}"))
             .finish(loc("RestoreSlotFromDisk"));
     }
 
@@ -1847,7 +1847,7 @@ fn RestoreSlotFromDisk(name: &str) -> PgResult<()> {
         return ereport(PANIC)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{path}\": %m"))
+            .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
             .finish(loc("RestoreSlotFromDisk"));
     }
 
@@ -1858,7 +1858,7 @@ fn RestoreSlotFromDisk(name: &str) -> PgResult<()> {
         return ereport(PANIC)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{path}\": %m"))
+            .errmsg(format!("could not fsync file \"{path}\": {PCT_M}"))
             .finish(loc("RestoreSlotFromDisk"));
     }
     waitevent_seams::pgstat_report_wait_end::call();
@@ -1878,7 +1878,7 @@ fn RestoreSlotFromDisk(name: &str) -> PgResult<()> {
             return ereport(PANIC)
                 .with_saved_errno(errno::current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{path}\": %m"))
+                .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                 .finish(loc("RestoreSlotFromDisk"));
         }
         return ereport(PANIC)
@@ -1931,7 +1931,7 @@ fn RestoreSlotFromDisk(name: &str) -> PgResult<()> {
             return ereport(PANIC)
                 .with_saved_errno(errno::current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{path}\": %m"))
+                .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                 .finish(loc("RestoreSlotFromDisk"));
         }
         return ereport(PANIC)
@@ -1946,7 +1946,7 @@ fn RestoreSlotFromDisk(name: &str) -> PgResult<()> {
         return ereport(PANIC)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{path}\": %m"))
+            .errmsg(format!("could not close file \"{path}\": {PCT_M}"))
             .finish(loc("RestoreSlotFromDisk"));
     }
 

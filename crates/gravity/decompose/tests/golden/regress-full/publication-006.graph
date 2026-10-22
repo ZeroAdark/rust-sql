@@ -1,0 +1,10 @@
+-- regress-full-publication-006
+-- SELECT obj_description(p.oid, 'pg_publication') FROM pg_publication p;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=76 end=sink
+  nodes n0@0
+  source range rel=6104 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=fn1215(v1.1, c19:#64))
+  outs 1=vl:call1215
+mapped: SeqScan

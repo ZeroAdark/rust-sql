@@ -1,0 +1,2 @@
+path	crates/gravity/lowerv4/src/ops/agg/numeric/strategies/num_partial.rs
+method	std::iter::Iterator::collect	1

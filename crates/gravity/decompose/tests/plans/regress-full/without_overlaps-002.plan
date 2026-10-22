@@ -1,0 +1,39 @@
+-- name: regress-full-without_overlaps-002
+-- sql: SELECT pg_get_indexdef(conindid, 0, true) FROM pg_constraint WHERE conname = 'temporal_rng_pk';
+-- test: without_overlaps
+-- shape: 303760648a52daa1 seen=6
+-- rel 2606 pg_constraint am=heap kind=r natts=28
+-- att 2606 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 2 conname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 2606 3 connamespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 4 contype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 5 condeferrable typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 6 condeferred typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 7 conenforced typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 8 convalidated typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 9 conrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 10 contypid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 11 conindid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 12 conparentid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 13 confrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 14 confupdtype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 15 confdeltype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 16 confmatchtype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 17 conislocal typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 18 coninhcount typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 2606 19 connoinherit typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 20 conperiod typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 21 conkey typid=1005 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 22 confkey typid=1005 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 23 conpfeqop typid=1028 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 24 conppeqop typid=1028 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 25 conffeqop typid=1028 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 26 confdelsetcols typid=1005 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 27 conexclop typid=1028 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 28 conbin typid=194 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2579 rel=2606 keys=12 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2664 rel=2606 keys=2,3 opts=0,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- idx 2665 rel=2606 keys=9,10,2 opts=0,0,0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=3
+-- idx 2666 rel=2606 keys=10 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2667 rel=2606 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {INDEXSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0.2725 :scan.plan.total_cost 8.2925 :scan.plan.plan_rows 1 :scan.plan.plan_width 32 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {FUNCEXPR :funcid 2507 :funcresulttype 25 :funcretset false :funcvariadic false :funcformat 0 :funccollid 100 :inputcollid 0 :args ({VAR :varno 1 :varattno 11 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 11 :location 23} {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 33 :constvalue 4 [ 0 0 0 0 0 0 0 0 ]} {CONST :consttype 16 :consttypmod -1 :constcollid 0 :constlen 1 :constbyval true :constisnull false :location 36 :constvalue 1 [ 1 0 0 0 0 0 0 0 ]}) :location 7} :resno 1 :resname pg_get_indexdef :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :indexid 2664 :indexqual ({OPEXPR :opno 93 :opfuncid 62 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 950 :args ({VAR :varno -3 :varattno 1 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 4294967293 :varattnosyn 1 :location -1} {CONST :consttype 19 :consttypmod -1 :constcollid 950 :constlen 64 :constbyval false :constisnull false :location 77 :constvalue 64 [ 116 101 109 112 111 114 97 108 95 114 110 103 95 112 107 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]}) :location 75}) :indexqualorig ({OPEXPR :opno 93 :opfuncid 62 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 950 :args ({VAR :varno 1 :varattno 2 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location 67} {CONST :consttype 19 :consttypmod -1 :constcollid 950 :constlen 64 :constbyval false :constisnull false :location 77 :constvalue 64 [ 116 101 109 112 111 114 97 108 95 114 110 103 95 112 107 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]}) :location 75}) :indexorderby <> :indexorderbyorig <> :indexorderbyops <> :indexorderdir 1} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_constraint :colnames ("oid" "conname" "connamespace" "contype" "condeferrable" "condeferred" "conenforced" "convalidated" "conrelid" "contypid" "conindid" "conparentid" "confrelid" "confupdtype" "confdeltype" "confmatchtype" "conislocal" "coninhcount" "connoinherit" "conperiod" "conkey" "confkey" "conpfeqop" "conppeqop" "conffeqop" "confdelsetcols" "conexclop" "conbin")} :rtekind 0 :relid 2606 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 2606 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 9 18) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 2606) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 94}

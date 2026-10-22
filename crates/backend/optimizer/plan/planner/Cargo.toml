@@ -8,10 +8,14 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+fires = { path = "../../../../_support/fires" }
+fp_contract = { path = "../../../../_support/fp_contract" }
+execindexing = { path = "../../../executor/execindexing" }
 foreigncmds_seams = { path = "../../../commands/foreigncmds_seams" }
 pg_class_seams = { path = "../../../catalog/pg_class_seams" }
 execmain = { path = "../../../executor/execmain" }
 nodes_core = { path = "../../../nodes/nodes_core" }
+pg_qsort = { path = "../../../../_support/pg_qsort" }
 parse_agg = { path = "../../../parser/parse_agg" }
 parse_relation = { path = "../../../parser/parse_relation" }
 parser_analyze = { path = "../../../parser/parser_analyze" }
@@ -27,7 +31,10 @@ types_portal = { path = "../../../../_support/types/portal" }
 planner_seams = { path = "../planner_seams" }
 seam_core = { path = "../../../../_support/seam_core" }
 parallel_seams = { path = "../../../access/transam/parallel_seams" }
+transam_xlog = { path = "../../../access/transam/transam_xlog" }
 costsize = { path = "../../path/costsize" }
+cost_profile = { path = "../../../../_support/cost_profile" }
+gravity_fn = { path = "../../../../gravity/fn" }
 allpaths = { path = "../../path/allpaths" }
 pathnode = { path = "../../util/pathnode" }
 equivclass = { path = "../../path/equivclass" }
@@ -43,6 +50,8 @@ aclchk_seams = { path = "../../../catalog/aclchk_seams" }
 miscinit = { path = "../../../utils/init/miscinit" }
 miscinit_seams = { path = "../../../utils/init/miscinit_seams" }
 adt_rangetypes = { path = "../../../utils/adt/rangetypes" }
+adt_jsonb = { path = "../../../utils/adt/jsonb" }
+adt_jsonb_pathstats = { path = "../../../utils/adt/jsonb_pathstats" }
 adt_tsvector_core = { path = "../../../utils/adt/tsvector_core" }
 stack_depth = { path = "../../../utils/misc/stack_depth" }
 typcache = { path = "../../../utils/cache/typcache" }
@@ -61,13 +70,13 @@ fmgr_core = { path = "../../../utils/fmgr/fmgr_core" }
 types_fmgr = { path = "../../../../_support/types/fmgr" }
 lsyscache = { path = "../../../utils/cache/lsyscache" }
 pg_depend = { path = "../../../catalog/pg_depend" }
-nodememoize = { path = "../../../executor/nodememoize" }
 arrayfuncs = { path = "../../../utils/adt/arrayfuncs" }
 format_type = { path = "../../../utils/adt/format_type" }
 mbutils = { path = "../../../utils/mb/mbutils" }
 pg_locale = { path = "../../../utils/adt/pg_locale" }
 regexp_seams = { path = "../../../utils/adt/regexp_seams" }
 guc_tables = { path = "../../../utils/misc/guc_tables" }
+guc_seams = { path = "../../../utils/misc/guc_seams" }
 pgvector_hnsw = { path = "../../../../contrib/pgvector_hnsw" }
 init_small = { path = "../../../utils/init/init_small" }
 tidbitmap = { path = "../../../nodes/tidbitmap" }
@@ -95,8 +104,6 @@ brin = { path = "../../../access/brin/brin" }
 spgist = { path = "../../../access/spgist/spgist" }
 gist = { path = "../../../access/gist/gist" }
 nbtree = { path = "../../../access/nbtree/nbtree" }
-nodeagg = { path = "../../../executor/nodeagg" }
-nodehash = { path = "../../../executor/nodehash" }
 vars = { path = "../../util/vars" }
 coerce = { path = "../../../parser/coerce" }
 parser_small1 = { path = "../../../parser/parser_small1" }
@@ -112,6 +119,7 @@ varlena = { path = "../../../utils/adt/varlena" }
 gin = { path = "../../../access/gin/gin" }
 clauses_seams = { path = "../../util/clauses_seams" }
 elog_seams = { path = "../../../utils/error/elog_seams" }
+xact_seams = { path = "../../../access/transam/xact_seams" }
 pg_prng = { path = "../../../../common/pg_prng" }
 
 [features]

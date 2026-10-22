@@ -1,0 +1,2 @@
+path	crates/gravity/exec/src/runner/start_gates.rs
+ir-only	core::option::Option<&T>::cloned	1

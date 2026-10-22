@@ -1,0 +1,10 @@
+-- regress-full-bit-008
+-- SELECT POSITION(B'1101' IN b), POSITION(B'11011' IN b), b FROM BIT_SHIFT_TABLE ;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2140 end=sink
+  nodes n0@0
+  source range rel=16572 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn1698(v1.1, c1560:'\x04\x00\x00\x00\xd0'), 2=fn1698(v1.1, c1560:'\x05\x00\x00\x00\xd8'), 3=v1.1)
+  outs 1=w4:val 2=w4:val 3=vl:win/page
+mapped: SeqScan

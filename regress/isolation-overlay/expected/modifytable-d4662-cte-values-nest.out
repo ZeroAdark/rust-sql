@@ -1,0 +1,241 @@
+Parsed test spec with 5 sessions
+
+starting permutation: s2pl s3pl s4pl
+step s2pl: EXPLAIN (COSTS OFF) WITH d AS (DELETE FROM d4662i_t USING (VALUES (1), (1)) v(x) WHERE id % 10 = 5 RETURNING id, v) SELECT count(*), sum(v) FROM d;
+QUERY PLAN                                   
+---------------------------------------------
+Aggregate                                    
+  CTE d                                      
+    ->  Delete on d4662i_t                   
+          ->  Nested Loop                    
+                ->  Seq Scan on d4662i_t     
+                      Filter: ((id % 10) = 5)
+                ->  Values Scan on "*VALUES*"
+  ->  CTE Scan on d                          
+(8 rows)
+
+step s3pl: EXPLAIN (COSTS OFF) WITH d AS (DELETE FROM d4662i_t USING (VALUES (5), (15)) v(x) WHERE id = v.x RETURNING id, v, x) SELECT * FROM d ORDER BY id;
+QUERY PLAN                                                     
+---------------------------------------------------------------
+Sort                                                           
+  Sort Key: d.id                                               
+  CTE d                                                        
+    ->  Delete on d4662i_t                                     
+          ->  Nested Loop                                      
+                Join Filter: (d4662i_t.id = "*VALUES*".column1)
+                ->  Seq Scan on d4662i_t                       
+                ->  Values Scan on "*VALUES*"                  
+  ->  CTE Scan on d                                            
+(9 rows)
+
+step s4pl: EXPLAIN (COSTS OFF) WITH d AS (UPDATE d4662i_t SET v = v * 100 + x FROM (VALUES (5), (15)) v(x) WHERE id = v.x RETURNING id, v) SELECT * FROM d ORDER BY id;
+QUERY PLAN                                                          
+--------------------------------------------------------------------
+Sort                                                                
+  Sort Key: d.id                                                    
+  CTE d                                                             
+    ->  Update on d4662i_t                                          
+          ->  Nested Loop                                           
+                ->  Values Scan on "*VALUES*"                       
+                ->  Memoize                                         
+                      Cache Key: "*VALUES*".column1                 
+                      Cache Mode: logical                           
+                      ->  Index Scan using d4662i_t_pkey on d4662i_t
+                            Index Cond: (id = "*VALUES*".column1)   
+  ->  CTE Scan on d                                                 
+(12 rows)
+
+
+starting permutation: s1v s2del s1c s5show
+step s1v: BEGIN; UPDATE d4662i_t SET v = 999 WHERE id = 5;
+step s2del: WITH d AS (DELETE FROM d4662i_t USING (VALUES (1), (1)) v(x) WHERE id % 10 = 5 RETURNING id, v) SELECT count(*), sum(v) FROM d; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+count| sum
+-----+----
+    2|1149
+(1 row)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+id|  v
+--+---
+10|100
+20|200
+(2 rows)
+
+
+starting permutation: s1mv s2del s1c s5show
+step s1mv: BEGIN; UPDATE d4662i_t SET id = 6 + 100 WHERE id = 5;
+step s2del: WITH d AS (DELETE FROM d4662i_t USING (VALUES (1), (1)) v(x) WHERE id % 10 = 5 RETURNING id, v) SELECT count(*), sum(v) FROM d; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+count|sum
+-----+---
+    1|150
+(1 row)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+ id|  v
+---+---
+ 10|100
+ 20|200
+106| 50
+(3 rows)
+
+
+starting permutation: s1in s2del s1c s5show
+step s1in: BEGIN; UPDATE d4662i_t SET id = 25 WHERE id = 5;
+step s2del: WITH d AS (DELETE FROM d4662i_t USING (VALUES (1), (1)) v(x) WHERE id % 10 = 5 RETURNING id, v) SELECT count(*), sum(v) FROM d; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+count|sum
+-----+---
+    2|200
+(1 row)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+id|  v
+--+---
+10|100
+20|200
+(2 rows)
+
+
+starting permutation: s1del s2del s1c s5show
+step s1del: BEGIN; DELETE FROM d4662i_t WHERE id = 5;
+step s2del: WITH d AS (DELETE FROM d4662i_t USING (VALUES (1), (1)) v(x) WHERE id % 10 = 5 RETURNING id, v) SELECT count(*), sum(v) FROM d; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+count|sum
+-----+---
+    1|150
+(1 row)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+id|  v
+--+---
+10|100
+20|200
+(2 rows)
+
+
+starting permutation: s1v s2upd s1c s5show
+step s1v: BEGIN; UPDATE d4662i_t SET v = 999 WHERE id = 5;
+step s2upd: WITH d AS (UPDATE d4662i_t SET v = v + x FROM (VALUES (1), (2)) v(x) WHERE id % 10 = 5 RETURNING id, v, x) SELECT * FROM d ORDER BY id, x; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|   v|x
+--+----+-
+ 5|1000|1
+15| 151|1
+(2 rows)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+id|   v
+--+----
+ 5|1000
+10| 100
+15| 151
+20| 200
+(4 rows)
+
+
+starting permutation: s1in s2upd s1c s5show
+step s1in: BEGIN; UPDATE d4662i_t SET id = 25 WHERE id = 5;
+step s2upd: WITH d AS (UPDATE d4662i_t SET v = v + x FROM (VALUES (1), (2)) v(x) WHERE id % 10 = 5 RETURNING id, v, x) SELECT * FROM d ORDER BY id, x; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|  v|x
+--+---+-
+15|151|1
+25| 51|1
+(2 rows)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+id|  v
+--+---
+10|100
+15|151
+20|200
+25| 51
+(4 rows)
+
+
+starting permutation: s1v s3del s1c s5show
+step s1v: BEGIN; UPDATE d4662i_t SET v = 999 WHERE id = 5;
+step s3del: WITH d AS (DELETE FROM d4662i_t USING (VALUES (5), (15)) v(x) WHERE id = v.x RETURNING id, v, x) SELECT * FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s3del: <... completed>
+id|  v| x
+--+---+--
+ 5|999| 5
+15|150|15
+(2 rows)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+id|  v
+--+---
+10|100
+20|200
+(2 rows)
+
+
+starting permutation: s1in s3del s1c s5show
+step s1in: BEGIN; UPDATE d4662i_t SET id = 25 WHERE id = 5;
+step s3del: WITH d AS (DELETE FROM d4662i_t USING (VALUES (5), (15)) v(x) WHERE id = v.x RETURNING id, v, x) SELECT * FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s3del: <... completed>
+id|  v| x
+--+---+--
+15|150|15
+(1 row)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+id|  v
+--+---
+10|100
+20|200
+25| 50
+(3 rows)
+
+
+starting permutation: s1v s4upd s1c s5show
+step s1v: BEGIN; UPDATE d4662i_t SET v = 999 WHERE id = 5;
+step s4upd: WITH d AS (UPDATE d4662i_t SET v = v * 100 + x FROM (VALUES (5), (15)) v(x) WHERE id = v.x RETURNING id, v) SELECT * FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s4upd: <... completed>
+id|    v
+--+-----
+ 5|99905
+15|15015
+(2 rows)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+id|    v
+--+-----
+ 5|99905
+10|  100
+15|15015
+20|  200
+(4 rows)
+
+
+starting permutation: s1mv s4upd s1c s5show
+step s1mv: BEGIN; UPDATE d4662i_t SET id = 6 + 100 WHERE id = 5;
+step s4upd: WITH d AS (UPDATE d4662i_t SET v = v * 100 + x FROM (VALUES (5), (15)) v(x) WHERE id = v.x RETURNING id, v) SELECT * FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s4upd: <... completed>
+id|    v
+--+-----
+15|15015
+(1 row)
+
+step s5show: SELECT id, v FROM d4662i_t WHERE id % 5 = 0 OR id > 20 ORDER BY id;
+ id|    v
+---+-----
+ 10|  100
+ 15|15015
+ 20|  200
+106|   50
+(4 rows)
+

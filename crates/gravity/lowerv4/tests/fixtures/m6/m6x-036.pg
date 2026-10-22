@@ -1,0 +1,5 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT sum(i), avg(i) FROM (VALUES ('1 day'::interval), ('3 hours'), ('1 mon')) v(i)
+cols: sum	avg
+[pg]
+1 mon 1 day 03:00:00	10 days 09:00:00

@@ -6,6 +6,8 @@
 pub mod ast;
 pub mod comp;
 mod errcodes;
+mod dump;
+mod settings;
 pub mod exec;
 pub mod gram;
 pub mod handler;

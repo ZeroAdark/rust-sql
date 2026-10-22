@@ -106,7 +106,7 @@ const ERROR_BLOCK =
 
 function finish() {
   const checks = [
-    ['banner', /psql \(18\.3/.test(text)],
+    ['banner', /psql \(18\./.test(text)],
     ['prompt', /postgres=# /.test(text)],
     ['connect-brdb', text.includes('You are now connected to database "brdb" as user "postgres".')],
     ['current-db-brdb', text.includes(CURRENT_DB_BRDB)],

@@ -28,8 +28,8 @@ pub trait VarOps {
         Ok(Self::cmp(a, b, ctx)? == 0)
     }
     // gbt_bit_l2n's xfrm; None for every other type.
-    fn l2n(_leaf: &[u8]) -> Option<Vec<u8>> {
-        None
+    fn l2n(_leaf: &[u8]) -> PgResult<Option<Vec<u8>>> {
+        Ok(None)
     }
 }
 
@@ -68,30 +68,37 @@ pub fn key_readable(k: &[u8]) -> VarKey<'_> {
 }
 
 // gbt_var_key_from_datum: leaf key wrapping one detoasted varlena.
-pub fn key_from_datum(u: &[u8]) -> Vec<u8> {
+pub fn key_from_datum(u: &[u8]) -> PgResult<Vec<u8>> {
     let lowersize = varsize(u);
-    let mut r = vec![0u8; lowersize + VARHDRSZ];
+    let mut r = ::mcx::std_vec_from_elem("btree_gist", 0u8, lowersize + VARHDRSZ)?;
     r[VARHDRSZ..].copy_from_slice(&u[..lowersize]);
     set_varsize(&mut r, lowersize + VARHDRSZ);
-    r
+    Ok(r)
 }
 
 // gbt_var_key_copy.
-pub fn key_copy(lower: &[u8], upper: &[u8]) -> Vec<u8> {
+pub fn key_copy(lower: &[u8], upper: &[u8]) -> PgResult<Vec<u8>> {
     let lowersize = varsize(lower);
     let uppersize = varsize(upper);
-    let mut r = vec![0u8; intalign(lowersize) + uppersize + VARHDRSZ];
+    let mut r = ::mcx::std_vec_from_elem(
+        "btree_gist",
+        0u8,
+        intalign(lowersize) + uppersize + VARHDRSZ,
+    )?;
     r[VARHDRSZ..VARHDRSZ + lowersize].copy_from_slice(&lower[..lowersize]);
     r[VARHDRSZ + intalign(lowersize)..VARHDRSZ + intalign(lowersize) + uppersize]
         .copy_from_slice(&upper[..uppersize]);
     set_varsize(&mut r, intalign(lowersize) + uppersize + VARHDRSZ);
-    r
+    Ok(r)
 }
 
 // gbt_var_leaf2node: returns the node image (owned) if the type transforms.
-fn leaf2node<T: VarOps>(leaf: &[u8]) -> Option<Vec<u8>> {
+fn leaf2node<T: VarOps>(leaf: &[u8]) -> PgResult<Option<Vec<u8>>> {
     let r = key_readable(leaf);
-    T::l2n(r.lower).map(|xfrm| key_copy(&xfrm, &xfrm))
+    match T::l2n(r.lower)? {
+        Some(xfrm) => Ok(Some(key_copy(&xfrm, &xfrm)?)),
+        None => Ok(None),
+    }
 }
 
 // gbt_var_node_cp_len.
@@ -143,20 +150,20 @@ fn node_pf_match<T: VarOps>(key: &VarKey<'_>, query: &[u8]) -> bool {
 }
 
 // gbt_var_node_truncate.
-fn node_truncate(node: &[u8], cpf_length: i32) -> Vec<u8> {
+fn node_truncate(node: &[u8], cpf_length: i32) -> PgResult<Vec<u8>> {
     let r = key_readable(node);
     let len1 = (varsize(r.lower) as i32 - VARHDRSZ as i32).min(cpf_length + 1) as usize;
     let len2 = (varsize(r.upper) as i32 - VARHDRSZ as i32).min(cpf_length + 1) as usize;
 
     let si = 2 * VARHDRSZ + intalign(len1 + VARHDRSZ) + len2;
-    let mut out = vec![0u8; si];
+    let mut out = ::mcx::std_vec_from_elem("btree_gist", 0u8, si)?;
     set_varsize(&mut out, si);
     out[VARHDRSZ..VARHDRSZ + len1 + VARHDRSZ].copy_from_slice(&r.lower[..len1 + VARHDRSZ]);
     set_varsize(&mut out[VARHDRSZ..], len1 + VARHDRSZ);
     let o2 = VARHDRSZ + intalign(len1 + VARHDRSZ);
     out[o2..o2 + len2 + VARHDRSZ].copy_from_slice(&r.upper[..len2 + VARHDRSZ]);
     set_varsize(&mut out[o2..], len2 + VARHDRSZ);
-    out
+    Ok(out)
 }
 
 // gbt_var_bin_union; `u` is None before the first union.
@@ -169,7 +176,7 @@ pub fn bin_union<T: VarOps>(
     let eo = {
         let r = key_readable(e);
         if r.is_leaf_shape {
-            match leaf2node::<T>(e) {
+            match leaf2node::<T>(e)? {
                 Some(n) => {
                     node_img = n;
                     key_readable(&node_img)
@@ -190,12 +197,12 @@ pub fn bin_union<T: VarOps>(
                 Some(key_copy(
                     if low { eo.lower } else { ro.lower },
                     if up { eo.upper } else { ro.upper },
-                ))
+                )?)
             } else {
                 None
             }
         }
-        None => Some(key_copy(eo.lower, eo.upper)),
+        None => Some(key_copy(eo.lower, eo.upper)?),
     };
     if let Some(img) = replacement {
         *u = Some(img);
@@ -206,14 +213,14 @@ pub fn bin_union<T: VarOps>(
 // gbt_var_union.
 pub fn union<T: VarOps>(keys: &[&[u8]], ctx: &mut Ctx) -> PgResult<Vec<u8>> {
     let r0 = key_readable(keys[0]);
-    let mut out = Some(key_copy(r0.lower, r0.upper));
+    let mut out = Some(key_copy(r0.lower, r0.upper)?);
     for k in &keys[1..] {
         bin_union::<T>(&mut out, k, ctx)?;
     }
     let mut out = out.expect("union nonempty");
     if T::TRNC {
         let plen = node_cp_len::<T>(&out)?;
-        out = node_truncate(&out, plen + 1);
+        out = node_truncate(&out, plen + 1)?;
     }
     Ok(out)
 }
@@ -236,7 +243,7 @@ pub fn penalty<T: VarOps>(
     let nk = {
         let r = key_readable(new);
         if r.is_leaf_shape {
-            match leaf2node::<T>(new) {
+            match leaf2node::<T>(new)? {
                 Some(n) => {
                     nk_img = n;
                     key_readable(&nk_img)
@@ -298,11 +305,11 @@ pub fn picksplit<T: VarOps>(
 ) -> PgResult<(Vec<u16>, Vec<u16>, Vec<u8>, Vec<u8>)> {
     let maxoff = keys.len() - 1;
     // C leaf2node's temporaries (sv) live for the whole sort.
-    let mut owned: Vec<Option<Vec<u8>>> = Vec::with_capacity(maxoff + 1);
+    let mut owned: Vec<Option<Vec<u8>>> = ::mcx::std_vec_with_capacity("btree_gist", maxoff + 1)?;
     owned.push(None);
     for i in 1..=maxoff {
         let r = key_readable(keys[i]);
-        owned.push(if r.is_leaf_shape { leaf2node::<T>(keys[i]) } else { None });
+        owned.push(if r.is_leaf_shape { leaf2node::<T>(keys[i])? } else { None });
     }
     let mut arr: Vec<(u16, &[u8])> = (1..=maxoff)
         .map(|i| (i as u16, owned[i].as_deref().unwrap_or(keys[i])))
@@ -348,8 +355,8 @@ pub fn picksplit<T: VarOps>(
         let ll = node_cp_len::<T>(&ldatum)?;
         let lr = node_cp_len::<T>(&rdatum)?;
         let ll = ll.max(lr) + 1;
-        ldatum = node_truncate(&ldatum, ll);
-        rdatum = node_truncate(&rdatum, ll);
+        ldatum = node_truncate(&ldatum, ll)?;
+        rdatum = node_truncate(&rdatum, ll)?;
     }
     Ok((spl_left, spl_right, ldatum, rdatum))
 }

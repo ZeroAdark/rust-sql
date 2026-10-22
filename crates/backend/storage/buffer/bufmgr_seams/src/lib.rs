@@ -113,23 +113,14 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // StartReadBuffers/WaitReadBuffers (bufmgr.c) collapsed to the synchronous
-    // sequential-batch case: reads block_num and opportunistically completes
-    // up to min(nblocks_hint, io_combine_limit) - 1 following blocks of the
-    // MAIN fork in one smgrreadv; extras land valid-and-unpinned so the scan's
-    // next requests hit. nblocks_hint must not run past relation end.
-    pub fn read_buffer_batched<'a, 'mcx>(
+    // D3608: the main-fork block pinned when it is resident and valid (a hit, counted as ReadBuffer counts one), or
+    // InvalidBuffer with no IO started and nothing counted: the caller's read stream reads that block. Gravity's bitmap
+    // page batch (heapam bitmap.rs) reads cached pages here and hands its first miss to the stream.
+    pub fn read_buffer_if_valid<'a, 'mcx>(
         rel: &'a types_rel::RelationData<'mcx>,
         block_num: BlockNumber,
-        nblocks_hint: BlockNumber,
         strategy: BufferAccessStrategy,
     ) -> PgResult<Buffer>
-);
-
-seam_core::seam!(
-    // read_stream_end/read_stream_reset for the batched sequential reads: the
-    // scan's unconsumed batch tail stops being credited to it.
-    pub fn forget_batch_credit(locator: RelFileLocator, forknum: ForkNumber)
 );
 
 seam_core::seam!(
@@ -280,6 +271,25 @@ pub(crate) fn buffer_blocks() -> *mut u8 {
     BUFFER_BLOCKS.load(core::sync::atomic::Ordering::Relaxed)
 }
 
+// The shared pool's current active buffer count (shared_buffers until an
+// online resize moves it): advisory proportional limits (scan rings, sync
+// scans, sort thresholds, pin windows) read this instead of the per-thread
+// boot copy of NBuffers.
+static ACTIVE_BUFFERS: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+
+pub fn publish_active_buffers(n: i32) {
+    ACTIVE_BUFFERS.store(n, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// `boot` (the caller's NBuffers) until a pool has been published.
+#[inline]
+pub fn active_buffers_or(boot: i32) -> i32 {
+    match ACTIVE_BUFFERS.load(core::sync::atomic::Ordering::Relaxed) {
+        0 => boot,
+        n => n,
+    }
+}
+
 seam_core::seam!(
     // CheckPointBuffers(flags) (bufmgr.c).
     pub fn check_point_buffers(flags: i32) -> PgResult<()>
@@ -353,3 +363,128 @@ seam_core::seam!(
         elevel: types_error::ErrorLevel,
     ) -> PgResult<()>
 );
+
+seam_core::seam!(
+    // read_buffer_batched by locator (a scan off the relcache: a Gravity
+    // range claim); `(buffer, hit)` for the caller's own read accounting.
+    pub fn read_buffer_batched_without_relcache(
+        rlocator: RelFileLocator,
+        blkno: BlockNumber,
+        nblocks_hint: BlockNumber,
+        strategy: BufferAccessStrategy,
+        permanent: bool,
+    ) -> PgResult<(Buffer, bool)>
+);
+
+seam_core::seam!(
+    // The advisory read-ahead of a run by locator (a Gravity range claim, C's read_stream advice under io_method=sync):
+    // smgrprefetch over [blkno, blkno + nblocks) of the main fork, no residency probe; false = nothing issued (direct I/O).
+    pub fn prefetch_range_without_relcache(rlocator: RelFileLocator, blkno: BlockNumber, nblocks: BlockNumber) -> PgResult<bool>
+);
+pub const MAX_IO_COMBINE_LIMIT: usize = types_storage::smgr::PG_IOV_MAX;
+pub const READ_BUFFERS_ZERO_ON_ERROR: u32 = 1 << 0;
+pub const READ_BUFFERS_ISSUE_ADVICE: u32 = 1 << 1;
+pub const READ_BUFFERS_IGNORE_CHECKSUM_FAILURES: u32 = 1 << 2;
+pub const READ_BUFFERS_SYNCHRONOUSLY: u32 = 1 << 3;
+
+/// ReadBuffersOperation (bufmgr.h); `buffers` is a copy of the caller's
+/// slice. Must not move while IO is in flight (report_return -> io_return).
+pub struct ReadBuffersOperation {
+    pub smgr: RelFileLocatorBackend,
+    pub persistence: u8,
+    pub forknum: ForkNumber,
+    pub strategy: BufferAccessStrategy,
+    pub flags: u32,
+    pub blocknum: BlockNumber,
+    pub nblocks: i16,
+    pub nblocks_done: i16,
+    pub buffers: [Buffer; MAX_IO_COMBINE_LIMIT],
+    pub io_wref: types_storage::buf::PgAioWaitRef,
+    pub io_return: types_storage::aio::PgAioReturn,
+}
+
+impl ReadBuffersOperation {
+    pub fn new(
+        smgr: RelFileLocatorBackend,
+        persistence: u8,
+        forknum: ForkNumber,
+        strategy: BufferAccessStrategy,
+        flags: u32,
+    ) -> Self {
+        ReadBuffersOperation {
+            smgr,
+            persistence,
+            forknum,
+            strategy,
+            flags,
+            blocknum: 0,
+            nblocks: 0,
+            nblocks_done: 0,
+            buffers: [types_core::InvalidBuffer; MAX_IO_COMBINE_LIMIT],
+            io_wref: types_storage::buf::PgAioWaitRef {
+                aio_index: u32::MAX,
+                ..Default::default()
+            },
+            io_return: types_storage::aio::PgAioReturn::default(),
+        }
+    }
+}
+
+seam_core::seam!(
+    // StartReadBuffers (bufmgr.c); `rel` is C's operation->rel.
+    pub fn start_read_buffers<'a, 'mcx>(
+        operation: &mut ReadBuffersOperation,
+        rel: Option<&'a types_rel::RelationData<'mcx>>,
+        buffers: &mut [Buffer],
+        blocknum: BlockNumber,
+        nblocks: &mut i32,
+        flags: u32,
+    ) -> PgResult<bool>
+);
+
+seam_core::seam!(
+    // StartReadBuffer (bufmgr.c).
+    pub fn start_read_buffer<'a, 'mcx>(
+        operation: &mut ReadBuffersOperation,
+        rel: Option<&'a types_rel::RelationData<'mcx>>,
+        buffer: &mut Buffer,
+        blocknum: BlockNumber,
+        flags: u32,
+    ) -> PgResult<bool>
+);
+
+seam_core::seam!(
+    // WaitReadBuffers (bufmgr.c).
+    pub fn wait_read_buffers<'a, 'mcx>(
+        operation: &mut ReadBuffersOperation,
+        rel: Option<&'a types_rel::RelationData<'mcx>>,
+    ) -> PgResult<()>
+);
+
+seam_core::seam!(
+    // bufmgr.c's io_combine_limit.
+    pub fn io_combine_limit() -> i32
+);
+
+seam_core::seam!(
+    pub fn get_pin_limit() -> u32
+);
+
+seam_core::seam!(
+    pub fn get_additional_pin_limit() -> u32
+);
+
+seam_core::seam!(
+    pub fn get_local_pin_limit() -> u32
+);
+
+seam_core::seam!(
+    pub fn get_additional_local_pin_limit() -> u32
+);
+
+seam_core::seam!(
+    pub fn get_access_strategy_pin_limit(strategy: &BufferAccessStrategy) -> i32
+);
+
+#[cfg(test)]
+mod tests;

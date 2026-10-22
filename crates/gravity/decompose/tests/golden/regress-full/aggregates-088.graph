@@ -1,0 +1,19 @@
+-- regress-full-aggregates-088
+-- select test_percentile_disc(0.5) within group (order by thousand) from tenk1;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@1^
+  source index-only rel=16423 rti=1 am=heap index=19342
+    lanes Attr(8):byval8:w8:val
+  project (1=index.1, 2=index.2)
+  outs 1=w4:val 2=w4:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg20525(1=outer.1))
+  outs 1=w4:val
+breaker slot=0 kind=PlainAgg budget=Fixed(72) spill=None producer=p0 layout=[]->[Count@0]+valid 16B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=20525 reg=User slot=- count_slot=- final=User class=User trans=Var mods=[order=1 direct=1] expr=agg20525(1=outer.1)
+mapped: IndexOnlyScan Agg

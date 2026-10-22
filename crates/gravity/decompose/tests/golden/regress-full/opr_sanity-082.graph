@@ -1,0 +1,25 @@
+-- regress-full-opr_sanity-082
+-- SELECT a1.amopfamily, a1.amopopr, o1.oid, o1.oprname FROM pg_amop AS a1, pg_operator AS o1 WHERE a1.amopopr = o1.oid AND a1.amoppurpose = 's' AND (o1.oprrest = 0 OR o1.oprjoin = 0);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=3 eligible rows=489 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@2
+  source range rel=2617 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(14):byval8:w8:val Attr(15):byval8:w8:val Offset:byval2:w2:val
+  filter or(op607(relabel26(v2.14), c26:0), op607(relabel26(v2.15), c26:0))
+  project (1=v2.1, 2=v2.2)
+  build keys=(outer.1) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page
+p1 node=1 eligible rows=937 end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@2
+  source range rel=2602 rti=1 am=heap
+    lanes Attr(2):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Offset:byval2:w2:val
+  filter op92(v1.6, c18:115)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9)
+  probe slot=0 inner=n2 JOIN_INNER unique keys=(outer.7) decls=26/26:I32 clauses=(op607(outer.7, inner.1))
+  project (1=outer.2, 2=outer.7, 3=inner.1, 4=inner.2)
+  outs 1=w4:val 2=w8:val 3=w4:val 4=w4:val 5=w2:val 6=w8:val 7=w8:val 8=w4:val 9=w4:val
+  outs 1=w8:val 2=w8:val 3=w4:val 4=fx64:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+mapped: SeqScan HashJoin Hash

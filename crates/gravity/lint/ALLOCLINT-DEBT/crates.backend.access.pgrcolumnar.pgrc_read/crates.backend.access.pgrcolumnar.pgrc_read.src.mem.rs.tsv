@@ -1,0 +1,3 @@
+path	crates/backend/access/pgrcolumnar/pgrc_read/src/mem.rs
+growth	std::vec::Vec::push	3
+method	std::clone::Clone::clone	1

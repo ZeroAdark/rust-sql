@@ -1,0 +1,16 @@
+-- regress-full-returning-038
+-- UPDATE foo_parted_v SET a = 1, c = c || '->P1' WHERE a = 2 AND c = 'P2' RETURNING 'P2:'||old.dummy, 'P1:'||new.dummy;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n0@3
+  source range rel=43678 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v3.1, c23:2)
+  filter op98(v3.3, c25:'P2')
+  project (1=c23:1, 2=op654(v3.3, c25:'->P1'), 3j=v3.-6, 4j=v3.-1, 5j=v3.2)
+  write UPDATE rel=43678 rti=3 natts=3 indexes=() set=(1,3) returning old=old new=new route=rti2:43670 natts=3 cross-partition
+  project (1=op654(c25:'P2:', T_ReturningExpr), 2=op654(c25:'P1:', T_ReturningExpr))
+  outs 1=w4:val 2=vl:call1258 3=w4:val 4=fx6:row 5=w8:val
+  outs 1=vl:call1258 2=vl:call1258
+scan-lanes node=2 rti=3 rel=43678 tableoid
+mapped: ModifyTable SeqScan

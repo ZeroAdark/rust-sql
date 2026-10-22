@@ -1,0 +1,11 @@
+# a whole statement in one enclosing pair: its ORDER BY is top-level
+sql: (SELECT g, x FROM t ORDER BY g);
+cols: g	x
+class: ordered 1
+verdict: mismatch-order
+[pg]
+1	a
+2	b
+[got]
+2	b
+1	a

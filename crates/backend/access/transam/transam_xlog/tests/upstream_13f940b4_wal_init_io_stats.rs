@@ -68,8 +68,12 @@ fn failed_segment_init_write_is_not_counted() {
     assert_eq!(after.counts[o][c][p] - before.counts[o][c][p], 0);
     assert_eq!(after.bytes[o][c][p] - before.bytes[o][c][p], 0);
     // The temp segment was cleaned up on the error path.
-    let tmppath = format!("pg_wal/xlogtemp.{}", init_small::globals::process_id());
-    assert!(!dir.join(tmppath).exists());
+    let temps: Vec<_> = std::fs::read_dir(dir.join("pg_wal"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.starts_with("xlogtemp."))
+        .collect();
+    assert!(temps.is_empty(), "{temps:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

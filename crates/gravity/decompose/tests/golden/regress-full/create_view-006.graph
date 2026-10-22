@@ -1,0 +1,36 @@
+-- regress-full-create_view-006
+-- SELECT count(*) FROM pg_class where relname LIKE 'mytempview' And relnamespace IN (SELECT OID FROM pg_namespace WHERE nspname LIKE 'pg_temp%');
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 eligible rows=1 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n1@2^
+  source range rel=2615 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op1207(v3.2, c25:'pg_temp%')
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4)
+  build keys=(outer.1) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+p1 node=2 serial site=0 reason=SortedSource end=breaker(slot=1 PlainAgg)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@2 n0@4^
+  source index-only rel=1259 rti=1 am=heap index=2663
+    key att=2 op=254 value=c25:'mytempview'
+    recheck (op254(index.1, c25:'mytempview'))
+    lanes Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val
+  filter op1207(index.1, c25:'mytempview')
+  project (1=index.1, 2=index.2)
+  probe slot=0 inner=n3 JOIN_INNER unique catalog keys=(outer.2) decls=26/26:I32 clauses=(op607(outer.2, inner.1))
+  project ()
+  outs 1=fx64:win/page 2=w4:val
+  outs
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=PlainAgg budget=Fixed(64) spill=None producer=p1 layout=[]->[Count@0] 8B
+group slot=1 producer=p1 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan IndexOnlyScan NestLoop Agg

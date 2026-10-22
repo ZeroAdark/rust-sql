@@ -25,6 +25,9 @@ pub struct BgwSyncState {
     next_passes: u32,
     smoothed_alloc: f32,
     smoothed_density: f32,
+    // The sweep span the saved clock position was measured in; a pool
+    // resize changes it and invalidates the saved position.
+    saved_span: i32,
     wb: Option<WritebackContext>,
 }
 
@@ -45,6 +48,7 @@ impl BgwSyncState {
             next_passes: 0,
             smoothed_alloc: 0.0,
             smoothed_density: 10.0,
+            saved_span: 0,
             wb: None,
         }
     }
@@ -57,7 +61,13 @@ impl BgwSyncState {
 }
 
 pub fn BgBufferSync(state: &mut BgwSyncState) -> PgResult<bool> {
-    let (strategy_buf_id, strategy_passes, recent_alloc) = crate::freelist::StrategySyncStart();
+    crate::wss::tick();
+    let (strategy_buf_id, strategy_passes, recent_alloc, nbuffers) =
+        crate::freelist::strategy_sync_start();
+    if nbuffers != state.saved_span {
+        state.saved_info_valid = false;
+        state.saved_span = nbuffers;
+    }
 
     with_pending_bgwriter_stats(|s| s.buf_alloc += recent_alloc as i64);
 
@@ -67,7 +77,6 @@ pub fn BgBufferSync(state: &mut BgwSyncState) -> PgResult<bool> {
         return Ok(true);
     }
 
-    let nbuffers = crate::buf_hdr::NBuffersInited();
     let plan = bgw_plan_scan(
         state,
         BgwScanInputs {

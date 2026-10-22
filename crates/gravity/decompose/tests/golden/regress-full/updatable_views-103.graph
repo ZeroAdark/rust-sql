@@ -1,0 +1,10 @@
+-- regress-full-updatable_views-103
+-- SELECT * FROM v1 WHERE a=3;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  gate T_List
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4)
+  outs 1=w4:val 2=w8:val 3=vl:row 4=vl:row
+mapped: Result

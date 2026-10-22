@@ -1,0 +1,21 @@
+-- regress-full-join-245
+-- select unique2, x.* from tenk1 a, lateral (select * from int4_tbl b where f1 = a.unique1) x;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=5 end=sink
+  nodes n1@0 n0@1
+  source range rel=16400 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v3.1)
+  nest inner=n2 JOIN_INNER raise-free params=($exec0=outer.1)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=16423 rti=1 am=heap index=19339
+    key att=1 op=96 value=$exec0
+    recheck (op96(v1.1, $exec0))
+    lanes Attr(2):byval8:w8:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  project (1=inner.2, 2=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val 2=w8:val
+param $exec0 owner=n0 type=23 rep=w8:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam

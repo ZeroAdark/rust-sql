@@ -1,0 +1,220 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1get s2get s2rows s4locks s1c s2c s4show
+step s1get: SELECT id, queue_name, attempts, locked_by FROM get_job('worker-0000000001');
+id|queue_name|attempts|locked_by        
+--+----------+--------+-----------------
+ 1|q1        |       1|worker-0000000001
+(1 row)
+
+step s2get: BEGIN; SELECT id, queue_name, attempts, locked_by FROM get_job('worker-0000000002');
+id|queue_name|attempts|locked_by        
+--+----------+--------+-----------------
+ 2|q2        |       1|worker-0000000002
+(1 row)
+
+step s2rows: SELECT queue_name, locked_by, xmax::text::bigint = txid_current() AS mine FROM job_queues ORDER BY 1;
+queue_name|locked_by        |mine
+----------+-----------------+----
+q1        |                 |f   
+q2        |worker-0000000002|t   
+q3        |                 |f   
+(3 rows)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('job_queues') ORDER BY locked_row;
+locked_row|multi|modes   
+----------+-----+--------
+(0,1)     |f    |{Update}
+(0,2)     |f    |{Update}
+(2 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s4show: SELECT 'job' AS t, id::text AS k, queue_name AS q, locked_by, attempts FROM jobs WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', queue_name, NULL, locked_by, NULL FROM job_queues WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t    |k |q |locked_by        |attempts
+-----+--+--+-----------------+--------
+job  |1 |q1|worker-0000000001|       1
+job  |2 |q2|worker-0000000002|       1
+queue|q1|  |worker-0000000001|        
+queue|q2|  |worker-0000000002|        
+(4 rows)
+
+
+starting permutation: s1holdA s2get s1c s2rows s4locks s2c s4show
+step s1holdA: SELECT queue_name FROM job_queues WHERE queue_name = 'q1' FOR UPDATE;
+queue_name
+----------
+q1        
+(1 row)
+
+step s2get: BEGIN; SELECT id, queue_name, attempts, locked_by FROM get_job('worker-0000000002');
+id|queue_name|attempts|locked_by        
+--+----------+--------+-----------------
+ 2|q2        |       1|worker-0000000002
+(1 row)
+
+step s1c: COMMIT;
+step s2rows: SELECT queue_name, locked_by, xmax::text::bigint = txid_current() AS mine FROM job_queues ORDER BY 1;
+queue_name|locked_by        |mine
+----------+-----------------+----
+q1        |                 |f   
+q2        |worker-0000000002|t   
+q3        |                 |f   
+(3 rows)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('job_queues') ORDER BY locked_row;
+locked_row|multi|modes   
+----------+-----+--------
+(0,2)     |f    |{Update}
+(1 row)
+
+step s2c: COMMIT;
+step s4show: SELECT 'job' AS t, id::text AS k, queue_name AS q, locked_by, attempts FROM jobs WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', queue_name, NULL, locked_by, NULL FROM job_queues WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t    |k |q |locked_by        |attempts
+-----+--+--+-----------------+--------
+job  |2 |q2|worker-0000000002|       1
+queue|q2|  |worker-0000000002|        
+(2 rows)
+
+
+starting permutation: s1upd s2wait s1c s2rows s4locks s2c s4show
+step s1upd: UPDATE jobs SET payload = json_build_object('p', 1) WHERE id = 1;
+step s2wait: BEGIN; SELECT jobs.queue_name, jobs.id FROM jobs WHERE (jobs.locked_at IS NULL OR jobs.locked_at < (timestamptz '2026-01-02' - interval '4 hours')) AND (jobs.queue_name IS NULL OR EXISTS (SELECT 1 FROM job_queues WHERE job_queues.queue_name = jobs.queue_name AND (job_queues.locked_at IS NULL OR job_queues.locked_at < (timestamptz '2026-01-02' - interval '4 hours')) FOR UPDATE SKIP LOCKED)) AND run_at <= timestamptz '2026-01-02' AND attempts < max_attempts ORDER BY priority ASC, run_at ASC, id ASC LIMIT 1 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2wait: <... completed>
+queue_name|id
+----------+--
+q1        | 1
+(1 row)
+
+step s2rows: SELECT queue_name, locked_by, xmax::text::bigint = txid_current() AS mine FROM job_queues ORDER BY 1;
+queue_name|locked_by|mine
+----------+---------+----
+q1        |         |t   
+q2        |         |f   
+q3        |         |f   
+(3 rows)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('job_queues') ORDER BY locked_row;
+locked_row|multi|modes         
+----------+-----+--------------
+(0,1)     |f    |{"For Update"}
+(1 row)
+
+step s2c: COMMIT;
+step s4show: SELECT 'job' AS t, id::text AS k, queue_name AS q, locked_by, attempts FROM jobs WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', queue_name, NULL, locked_by, NULL FROM job_queues WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t|k|q|locked_by|attempts
+-+-+-+---------+--------
+(0 rows)
+
+
+starting permutation: s1take s2wait s1c s2rows s4locks s2c s4show
+step s1take: UPDATE jobs SET locked_at = '2026-01-02', locked_by = 'other' WHERE id = 1;
+step s2wait: BEGIN; SELECT jobs.queue_name, jobs.id FROM jobs WHERE (jobs.locked_at IS NULL OR jobs.locked_at < (timestamptz '2026-01-02' - interval '4 hours')) AND (jobs.queue_name IS NULL OR EXISTS (SELECT 1 FROM job_queues WHERE job_queues.queue_name = jobs.queue_name AND (job_queues.locked_at IS NULL OR job_queues.locked_at < (timestamptz '2026-01-02' - interval '4 hours')) FOR UPDATE SKIP LOCKED)) AND run_at <= timestamptz '2026-01-02' AND attempts < max_attempts ORDER BY priority ASC, run_at ASC, id ASC LIMIT 1 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2wait: <... completed>
+queue_name|id
+----------+--
+q2        | 2
+(1 row)
+
+step s2rows: SELECT queue_name, locked_by, xmax::text::bigint = txid_current() AS mine FROM job_queues ORDER BY 1;
+queue_name|locked_by|mine
+----------+---------+----
+q1        |         |t   
+q2        |         |t   
+q3        |         |f   
+(3 rows)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('job_queues') ORDER BY locked_row;
+locked_row|multi|modes         
+----------+-----+--------------
+(0,1)     |f    |{"For Update"}
+(0,2)     |f    |{"For Update"}
+(2 rows)
+
+step s2c: COMMIT;
+step s4show: SELECT 'job' AS t, id::text AS k, queue_name AS q, locked_by, attempts FROM jobs WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', queue_name, NULL, locked_by, NULL FROM job_queues WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t  |k|q |locked_by|attempts
+---+-+--+---------+--------
+job|1|q1|other    |       0
+(1 row)
+
+
+starting permutation: s3holdC s1toC s2wait s1c s3c s2rows s4locks s2c s4show
+step s3holdC: BEGIN; SELECT queue_name FROM job_queues WHERE queue_name = 'q3' FOR UPDATE;
+queue_name
+----------
+q3        
+(1 row)
+
+step s1toC: UPDATE jobs SET queue_name = 'q3' WHERE id = 1;
+step s2wait: BEGIN; SELECT jobs.queue_name, jobs.id FROM jobs WHERE (jobs.locked_at IS NULL OR jobs.locked_at < (timestamptz '2026-01-02' - interval '4 hours')) AND (jobs.queue_name IS NULL OR EXISTS (SELECT 1 FROM job_queues WHERE job_queues.queue_name = jobs.queue_name AND (job_queues.locked_at IS NULL OR job_queues.locked_at < (timestamptz '2026-01-02' - interval '4 hours')) FOR UPDATE SKIP LOCKED)) AND run_at <= timestamptz '2026-01-02' AND attempts < max_attempts ORDER BY priority ASC, run_at ASC, id ASC LIMIT 1 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2wait: <... completed>
+queue_name|id
+----------+--
+q2        | 2
+(1 row)
+
+step s3c: COMMIT;
+step s2rows: SELECT queue_name, locked_by, xmax::text::bigint = txid_current() AS mine FROM job_queues ORDER BY 1;
+queue_name|locked_by|mine
+----------+---------+----
+q1        |         |t   
+q2        |         |t   
+q3        |         |f   
+(3 rows)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('job_queues') ORDER BY locked_row;
+locked_row|multi|modes         
+----------+-----+--------------
+(0,1)     |f    |{"For Update"}
+(0,2)     |f    |{"For Update"}
+(2 rows)
+
+step s2c: COMMIT;
+step s4show: SELECT 'job' AS t, id::text AS k, queue_name AS q, locked_by, attempts FROM jobs WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', queue_name, NULL, locked_by, NULL FROM job_queues WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t|k|q|locked_by|attempts
+-+-+-+---------+--------
+(0 rows)
+
+
+starting permutation: s3holdB s1toB s2wait s3c s1c s2rows s4locks s2c s4show
+step s3holdB: BEGIN; SELECT queue_name FROM job_queues WHERE queue_name = 'q2' FOR UPDATE;
+queue_name
+----------
+q2        
+(1 row)
+
+step s1toB: UPDATE jobs SET queue_name = 'q2' WHERE id = 1;
+step s2wait: BEGIN; SELECT jobs.queue_name, jobs.id FROM jobs WHERE (jobs.locked_at IS NULL OR jobs.locked_at < (timestamptz '2026-01-02' - interval '4 hours')) AND (jobs.queue_name IS NULL OR EXISTS (SELECT 1 FROM job_queues WHERE job_queues.queue_name = jobs.queue_name AND (job_queues.locked_at IS NULL OR job_queues.locked_at < (timestamptz '2026-01-02' - interval '4 hours')) FOR UPDATE SKIP LOCKED)) AND run_at <= timestamptz '2026-01-02' AND attempts < max_attempts ORDER BY priority ASC, run_at ASC, id ASC LIMIT 1 FOR UPDATE; <waiting ...>
+step s3c: COMMIT;
+step s1c: COMMIT;
+step s2wait: <... completed>
+queue_name|id
+----------+--
+q2        | 1
+(1 row)
+
+step s2rows: SELECT queue_name, locked_by, xmax::text::bigint = txid_current() AS mine FROM job_queues ORDER BY 1;
+queue_name|locked_by|mine
+----------+---------+----
+q1        |         |t   
+q2        |         |t   
+q3        |         |f   
+(3 rows)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('job_queues') ORDER BY locked_row;
+locked_row|multi|modes         
+----------+-----+--------------
+(0,1)     |f    |{"For Update"}
+(0,2)     |f    |{"For Update"}
+(2 rows)
+
+step s2c: COMMIT;
+step s4show: SELECT 'job' AS t, id::text AS k, queue_name AS q, locked_by, attempts FROM jobs WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', queue_name, NULL, locked_by, NULL FROM job_queues WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t|k|q|locked_by|attempts
+-+-+-+---------+--------
+(0 rows)
+

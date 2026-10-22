@@ -1449,3 +1449,81 @@ fn deep_join_chain_trips_the_stack_guard_before_the_leaf() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn window_validation_error_locations() {
+    use types_nodes::rawnodes::{
+        WindowDef, FRAMEOPTION_GROUPS, FRAMEOPTION_RANGE, FRAMEOPTION_ROWS,
+        FRAMEOPTION_START_OFFSET_PRECEDING,
+    };
+
+    install_fixture();
+    for expected_line in [2793, 2806, 2855, 2867, 2897, 2904, 2924, 2947] {
+        let ctx = MemoryContext::new("window errors");
+        let mcx = ctx.mcx();
+        let mut pstate = make_parsestate(mcx, None);
+        let mut first = WindowDef {
+            name: Some("w"),
+            ..WindowDef::default()
+        };
+        let mut last = WindowDef {
+            name: Some("v"),
+            refname: Some("w"),
+            ..WindowDef::default()
+        };
+        match expected_line {
+            2793 => last.name = Some("w"),
+            2806 => last.refname = Some("missing"),
+            2855 => last
+                .partitionClause
+                .lappend(mcx, int_a_const(mcx, 1, -1))
+                .unwrap(),
+            2867 => {
+                first
+                    .orderClause
+                    .lappend(
+                        mcx,
+                        sort_by(
+                            mcx,
+                            int_a_const(mcx, 1, -1),
+                            SortByDir::SORTBY_DEFAULT,
+                            SortByNulls::SORTBY_NULLS_DEFAULT,
+                        ),
+                    )
+                    .unwrap();
+                last.orderClause
+                    .lappend(
+                        mcx,
+                        sort_by(
+                            mcx,
+                            int_a_const(mcx, 1, -1),
+                            SortByDir::SORTBY_DEFAULT,
+                            SortByNulls::SORTBY_NULLS_DEFAULT,
+                        ),
+                    )
+                    .unwrap();
+            }
+            2897 | 2904 => {
+                first.frameOptions = FRAMEOPTION_ROWS;
+                if expected_line == 2904 {
+                    last.name = None;
+                }
+            }
+            2924 => last.frameOptions = FRAMEOPTION_RANGE | FRAMEOPTION_START_OFFSET_PRECEDING,
+            2947 => last.frameOptions = FRAMEOPTION_GROUPS,
+            _ => unreachable!(),
+        }
+        let mut defs = NodeList::nil();
+        defs.lappend(mcx, Node::mk(mcx, first).unwrap()).unwrap();
+        defs.lappend(mcx, Node::mk(mcx, last).unwrap()).unwrap();
+        let error =
+            transformWindowDefinitions(mcx, &mut pstate, &defs, &mut NodeList::nil()).unwrap_err();
+        let location = error.location().unwrap();
+        assert_eq!(location.filename.as_deref(), Some("parse_clause.c"));
+        assert_eq!(
+            location.funcname.as_deref(),
+            Some("transformWindowDefinitions")
+        );
+        assert_eq!(location.lineno, expected_line);
+    }
+}

@@ -1,0 +1,23 @@
+-- regress-full-update-008
+-- UPDATE update_test o SET (b,a) = (select a+1,b from update_test i where i.a=o.a and i.b=o.b and i.c is not distinct from o.c);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=26416 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  subplan 1 nested MultiExpr params=($exec0=v1.1, $exec1=v1.2, $exec2=v1.3) sets=($exec3,$exec4)
+  inner node=2 eligible rows=1 end=sink
+  nodes n2@0
+  source range rel=26416 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter not(distinct98(v2.3, $exec2))
+  filter op96(v2.1, $exec0)
+  filter op96(v2.2, $exec1)
+  project (1=op551(v2.1, c23:1), 2=v2.2)
+  project (1=$exec4, 2=$exec3, 3j=subplan1(v1.1, v1.2, v1.3), 4j=v1.-1, 5j=v1.3)
+  write UPDATE rel=26416 rti=1 natts=3 indexes=() set=(1,2) epq=$exec5
+  outs 1=w4:val 2=w4:val 3=vl:call0 4=fx6:row 5=vl:win/page
+param $exec0 owner=subplan1 type=23 rep=w8:val
+param $exec1 owner=subplan1 type=23 rep=w8:val
+param $exec2 owner=subplan1 type=25@100 rep=vl:win/page
+mapped: ModifyTable SeqScan SubPlan

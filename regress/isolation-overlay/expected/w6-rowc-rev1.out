@@ -1,0 +1,339 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2b s1v s2vq s1c s2seq s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rv SET v = v + 100 WHERE id = 3;
+step s2vq: WITH c AS (UPDATE rv SET v = v + 1 WHERE grp = 0 AND nextval('rvsq') > 0 RETURNING id, v) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2vq: <... completed>
+id|  v
+--+---
+ 3|104
+ 6|  7
+ 9| 10
+12| 13
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM rvsq;
+last_value|is_called
+----------+---------
+         5|t        
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rv ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|104|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|  7|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0| 10|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 13|row12
+(12 rows)
+
+
+starting permutation: s2b s1v s2l1 s1c s2c s4sel s4seq
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rv SET v = v + 100 WHERE id = 3;
+step s2l1: WITH c AS (UPDATE rv SET v = v + 1 WHERE grp = 0 RETURNING id, v, nextval('rvsq') AS n) SELECT * FROM c LIMIT 1; <waiting ...>
+step s1c: COMMIT;
+step s2l1: <... completed>
+id|  v|n
+--+---+-
+ 3|104|1
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rv ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|104|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|  7|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0| 10|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 13|row12
+(12 rows)
+
+step s4seq: SELECT last_value, is_called FROM rvsq;
+last_value|is_called
+----------+---------
+         4|t        
+(1 row)
+
+
+starting permutation: s2b s1v12 s2l1 s1c s2c s4sel s4seq
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v12: UPDATE rv SET v = v + 100 WHERE id = 12;
+step s2l1: WITH c AS (UPDATE rv SET v = v + 1 WHERE grp = 0 RETURNING id, v, nextval('rvsq') AS n) SELECT * FROM c LIMIT 1; <waiting ...>
+step s1c: COMMIT;
+step s2l1: <... completed>
+id|v|n
+--+-+-
+ 3|4|1
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rv ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|  4|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|  7|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0| 10|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0|113|row12
+(12 rows)
+
+step s4seq: SELECT last_value, is_called FROM rvsq;
+last_value|is_called
+----------+---------
+         4|t        
+(1 row)
+
+
+starting permutation: s2b s1z s2rz s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1z: UPDATE rv SET v = 103 WHERE id = 6;
+step s2rz: WITH c AS (UPDATE rv SET v = 10 / (v - 103) WHERE grp = 0 RETURNING id, v) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2rz: <... completed>
+ERROR:  division by zero
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rv ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|  3|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|103|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0|  9|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 12|row12
+(12 rows)
+
+
+starting permutation: s2b s1z s2qz s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1z: UPDATE rv SET v = 103 WHERE id = 6;
+step s2qz: WITH c AS (UPDATE rv SET v = v + 1 WHERE grp = 0 AND 10 / (v - 103) <> 7 RETURNING id, v) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2qz: <... completed>
+ERROR:  division by zero
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rv ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|  3|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|103|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0|  9|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 12|row12
+(12 rows)
+
+
+starting permutation: s2b s1v s2g s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rv SET v = v + 100 WHERE id = 3;
+step s2g: SET LOCAL plan_cache_mode = force_generic_plan; SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; DEALLOCATE ALL; PREPARE p(int) AS WITH c AS (UPDATE rv SET grp = grp + 10 WHERE v = $1 RETURNING id, grp, v, t) SELECT * FROM c; EXECUTE p(3); <waiting ...>
+step s1c: COMMIT;
+step s2g: <... completed>
+id|grp|v|t
+--+---+-+-
+(0 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rv ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|103|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|  6|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0|  9|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 12|row12
+(12 rows)
+
+
+starting permutation: s2b s1t s2g s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1t: UPDATE rv SET t = 'new' || id WHERE id = 3;
+step s2g: SET LOCAL plan_cache_mode = force_generic_plan; SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; DEALLOCATE ALL; PREPARE p(int) AS WITH c AS (UPDATE rv SET grp = grp + 10 WHERE v = $1 RETURNING id, grp, v, t) SELECT * FROM c; EXECUTE p(3); <waiting ...>
+step s1c: COMMIT;
+step s2g: <... completed>
+id|grp|v|t   
+--+---+-+----
+ 3| 10|3|new3
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rv ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 3| 10| 3|new3 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 6|  0| 6|row6 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+ 9|  0| 9|row9 
+10|  1|10|row10
+11|  2|11|row11
+12|  0|12|row12
+(12 rows)
+
+
+starting permutation: s2b s1tv s2tr s1c s2c s4t
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+s1: NOTICE:  ar UPDATE id 3 old 3 new 103
+s1: NOTICE:  as UPDATE old rows 1 sum 3
+step s1tv: UPDATE rvt SET v = v + 100 WHERE id = 3;
+step s2tr: WITH c AS (UPDATE rvt SET v = v + 1 WHERE grp = 0 RETURNING id, v) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  ar UPDATE id 3 old 103 new 104
+s2: NOTICE:  ar UPDATE id 6 old 6 new 7
+s2: NOTICE:  as UPDATE old rows 2 sum 109
+step s2tr: <... completed>
+id|  v
+--+---
+ 3|104
+ 6|  7
+(2 rows)
+
+step s2c: COMMIT;
+step s4t: SELECT id, grp, v FROM rvt ORDER BY id;
+id|grp|  v
+--+---+---
+ 1|  1|  1
+ 2|  2|  2
+ 3|  0|104
+ 4|  1|  4
+ 5|  2|  5
+ 6|  0|  7
+(6 rows)
+
+
+starting permutation: s2b s1tv s2trd s1c s2c s4t
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+s1: NOTICE:  ar UPDATE id 3 old 3 new 103
+s1: NOTICE:  as UPDATE old rows 1 sum 3
+step s1tv: UPDATE rvt SET v = v + 100 WHERE id = 3;
+step s2trd: WITH c AS (DELETE FROM rvt WHERE grp = 0 RETURNING id, v) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  ar DELETE id 3 old 103 new <NULL>
+s2: NOTICE:  ar DELETE id 6 old 6 new <NULL>
+step s2trd: <... completed>
+id|  v
+--+---
+ 3|103
+ 6|  6
+(2 rows)
+
+step s2c: COMMIT;
+step s4t: SELECT id, grp, v FROM rvt ORDER BY id;
+id|grp|v
+--+---+-
+ 1|  1|1
+ 2|  2|2
+ 4|  1|4
+ 5|  2|5
+(4 rows)
+
+
+starting permutation: s2b s1v s2ct s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rv SET v = v + 100 WHERE id = 3;
+step s2ct: WITH c AS (UPDATE rv SET v = v + 1 WHERE id = 3 RETURNING id, v, ctid) SELECT * FROM c; <waiting ...>
+step s1c: COMMIT;
+step s2ct: <... completed>
+id|  v|ctid  
+--+---+------
+ 3|104|(0,14)
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rv ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|104|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|  6|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0|  9|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 12|row12
+(12 rows)
+
+
+starting permutation: s2b s1v s2dj s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rv SET v = v + 100 WHERE id = 3;
+step s2dj: WITH d AS (DELETE FROM rv WHERE grp = 0 RETURNING id, v) SELECT d.id, d.v, r.v AS snap_v FROM d JOIN rv r USING (id) ORDER BY 1; <waiting ...>
+step s1c: COMMIT;
+step s2dj: <... completed>
+id|  v|snap_v
+--+---+------
+ 3|103|     3
+ 6|  6|     6
+ 9|  9|     9
+12| 12|    12
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rv ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+10|  1|10|row10
+11|  2|11|row11
+(8 rows)
+

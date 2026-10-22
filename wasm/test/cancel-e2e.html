@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<!-- cancel-e2e.html: headless-browser witness for user cancel (backend.js requestCancel: the page's Stop button and
+     psql's Ctrl-C). Served cross-origin isolated (serve.mjs --isolate), a running pg_sleep(30) and a long join each end
+     with 57014 "canceling statement due to user request" soon after the cancel, the session stays usable, and a cancel
+     at an idle prompt does not end the next statement. ?client=psql drives the real psql.wasm (what Ctrl-C does),
+     ?client=js the wire-mode REPL backend (what Stop does). Not isolated (?isolated=0, no --isolate), the page has no
+     cancel and says so. Drive with:
+       node test/run-browser-e2e.mjs --page cancel-e2e --isolate [--client js]
+       node test/run-browser-e2e.mjs --page cancel-e2e --client js --query isolated=0
+-->
+<meta charset="utf-8">
+<base href="../">
+<title>cancel e2e</title>
+<pre id="transcript"></pre>
+<pre id="verdict">RUNNING</pre>
+<script type="module">
+import { setClientMode, setPsqlHooks, sendPsqlText, bootBackend, installBackend, setStatusListener, cancelAvailable, requestCancel } from './backend.js';
+
+const params = new URLSearchParams(location.search);
+const CLIENT = params.get('client') === 'js' ? 'js' : 'psql';
+const WANT_ISOLATED = params.get('isolated') !== '0';
+const REPORT_TO = params.get('reportTo');
+const transcript = document.getElementById('transcript');
+const verdict = document.getElementById('verdict');
+const NAME = `cancel-browser-e2e-${CLIENT}${WANT_ISOLATED ? '' : '-unisolated'}`;
+const CANCELED = 'canceling statement due to user request';
+const SLEEP = 'select pg_sleep(30);';
+const JOIN = 'select count(*) from generate_series(1, 200000) a, generate_series(1, 200000) b;';
+const CANCEL_AFTER_MS = 1500;
+const checks = [];
+let text = '';
+
+function log(msg) {
+  if (!REPORT_TO) return;
+  const u = new URL(REPORT_TO);
+  u.pathname = '/log';
+  fetch(u, { method: 'POST', body: msg }).catch(() => {});
+}
+function note(s) { text += s + '\n'; transcript.textContent = text; log(s); }
+function check(name, ok, detail = '') { checks.push([name, !!ok]); note(`check ${name}: ${ok ? 'ok' : 'FAIL'} ${detail}`); }
+function report() {
+  const bad = checks.filter(([, ok]) => !ok).map(([n]) => n);
+  verdict.textContent = bad.length === 0 && checks.length > 0 ? `VERDICT: ${NAME} PASS` : `VERDICT: ${NAME} FAIL (${bad.join(',') || 'no checks'})`;
+  if (REPORT_TO) fetch(REPORT_TO, { method: 'POST', body: verdict.textContent + '\n---\n' + text }).catch(() => {});
+}
+window.addEventListener('error', (e) => { check('page-error', false, e.message); report(); });
+window.addEventListener('unhandledrejection', (e) => { check('unhandled-rejection', false, String(e.reason && e.reason.message || e.reason)); report(); });
+setStatusListener((s) => log(`status: ${s}`));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// psql: its output, and a wait for text to appear past a mark
+let psqlOut = '';
+const dec = new TextDecoder();
+async function waitFor(pred, ms) {
+  const t0 = performance.now();
+  while (performance.now() - t0 < ms) {
+    if (pred()) return performance.now() - t0;
+    await sleep(20);
+  }
+  return null;
+}
+
+// One statement: start it, cancel after CANCEL_AFTER_MS (cancel = false: none), and answer { error, ms, cancelToEnd }.
+async function runJs(sql, cancel) {
+  const t0 = performance.now();
+  let tc = null;
+  const timer = cancel ? setTimeout(() => { tc = performance.now(); requestCancel(); }, CANCEL_AFTER_MS) : null;
+  let res;
+  try { res = await window.pgrust.exec(sql); } catch (e) { res = { kind: 'error', text: String(e) }; }
+  clearTimeout(timer);
+  const t1 = performance.now();
+  note(`${sql} -> ${res.kind}: ${(res.text || (res.rows && JSON.stringify(res.rows)) || '').slice(0, 120)} (${Math.round(t1 - t0)} ms)`);
+  return { res, ms: t1 - t0, cancelToEnd: tc === null ? null : t1 - tc };
+}
+async function runPsql(sql, cancel, expect) {
+  const mark = psqlOut.length;
+  const t0 = performance.now();
+  sendPsqlText(sql + '\n');
+  let tc = null;
+  if (cancel) { await sleep(CANCEL_AFTER_MS); tc = performance.now(); requestCancel(); }
+  const waited = await waitFor(() => psqlOut.slice(mark).includes(expect), 60000);
+  const t1 = performance.now();
+  const out = psqlOut.slice(mark);
+  note(`${sql} -> ${JSON.stringify(out.slice(0, 160))} (${Math.round(t1 - t0)} ms)`);
+  return { out, found: waited !== null, ms: t1 - t0, cancelToEnd: tc === null ? null : t1 - tc };
+}
+
+async function main() {
+  check('isolation', self.crossOriginIsolated === WANT_ISOLATED, `crossOriginIsolated=${self.crossOriginIsolated}`);
+  if (CLIENT === 'psql') {
+    setClientMode('psql');
+    setPsqlHooks({ onOut: (b) => { psqlOut += dec.decode(b, { stream: true }); }, onErr: (b) => { psqlOut += dec.decode(b, { stream: true }); }, onExit: () => {} });
+  }
+  installBackend();
+  await bootBackend();
+  check('cancel-available', cancelAvailable() === WANT_ISOLATED, `cancelAvailable=${cancelAvailable()}`);
+  if (!WANT_ISOLATED) {
+    // no cancel: a short statement still runs, and requestCancel says it did nothing
+    check('request-refused', requestCancel() === false);
+    const r = CLIENT === 'js' ? await runJs('select pg_sleep(0.2);', false) : await runPsql('select pg_sleep(0.2);', false, '(1 row)');
+    check('statement-runs', CLIENT === 'js' ? r.res.kind !== 'error' : r.found);
+    return;
+  }
+  if (CLIENT === 'js') {
+    const s = await runJs(SLEEP, true);
+    check('sleep-canceled', s.res.kind === 'error' && String(s.res.text).includes(CANCELED) && s.cancelToEnd < 3000, `cancel->end ${Math.round(s.cancelToEnd)} ms`);
+    const j = await runJs(JOIN, true);
+    check('join-canceled', j.res.kind === 'error' && String(j.res.text).includes(CANCELED) && j.cancelToEnd < 3000, `cancel->end ${Math.round(j.cancelToEnd)} ms`);
+    const a = await runJs("select 'alive' as witness;", false);
+    check('session-alive', a.res.kind === 'table' && JSON.stringify(a.res.rows).includes('alive'));
+    requestCancel(); // idle: dropped at the server's next read
+    const n = await runJs('select pg_sleep(0.5), 42 as answer;', false);
+    check('idle-cancel-dropped', n.res.kind === 'table' && JSON.stringify(n.res.rows).includes('42'));
+  } else {
+    await waitFor(() => /postgres=# /.test(psqlOut), 30000);
+    const s = await runPsql(SLEEP, true, CANCELED);
+    check('sleep-canceled', s.found && s.cancelToEnd < 3000, `cancel->end ${Math.round(s.cancelToEnd)} ms`);
+    const j = await runPsql(JOIN, true, CANCELED);
+    check('join-canceled', j.found && j.cancelToEnd < 3000, `cancel->end ${Math.round(j.cancelToEnd)} ms`);
+    const a = await runPsql("select 'alive' as witness;", false, ' alive');
+    check('session-alive', a.found);
+    requestCancel(); // Ctrl-C at the idle prompt
+    await sleep(200);
+    const n = await runPsql('select pg_sleep(0.5), 42 as answer;', false, '(1 row)');
+    check('idle-cancel-dropped', n.found && !n.out.includes(CANCELED));
+  }
+}
+main().then(report, (e) => { check('main', false, String(e && e.stack || e)); report(); });
+</script>

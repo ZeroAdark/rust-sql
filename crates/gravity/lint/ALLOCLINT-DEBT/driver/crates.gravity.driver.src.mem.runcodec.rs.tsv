@@ -1,0 +1,12 @@
+path	crates/gravity/driver/src/mem/runcodec.rs
+growth	std::vec::Vec::extend_from_slice	4
+growth	std::vec::Vec::extend_from_within	1
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::resize	8
+ir-only	lz4_flex::block::compress::compress_into	1
+macro	std::vec	4
+method	std::boxed::Box::new	3
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	1
+type	std::boxed::Box	3
+type	std::vec::Vec	4

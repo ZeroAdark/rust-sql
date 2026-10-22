@@ -7,7 +7,7 @@ use types_error::{PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_SYNTAX_ERROR,
 use types_nodes::nodes_enums::CmdType;
 use types_nodes::plannodes::PlannedStmt;
 use types_nodes::NodeTag;
-use types_portal::params::{ParamExternData, PARAM_FLAG_CONST};
+use types_portal::params::{ParamExternData, ParamFetchHook, PARAM_FLAG_CONST};
 use types_portal::{
     ParamListHandle, QueryCompletion, QueryDescHandle, CMDTAG_SELECT,
     CURSOR_OPT_PARALLEL_OK,
@@ -122,38 +122,46 @@ pub fn SPI_execute_plan(
     tcount: i64,
 ) -> PgResult<i32> {
     execute_plan_common(
-        ptr, values, nulls, false, read_only, false, false, tcount, None, None, true, None,
+        ptr,
+        PlanArgs::Values { values, nulls },
+        read_only,
+        false,
+        false,
+        tcount,
+        None,
+        None,
+        true,
+        None,
     )
 }
 
-// SPI_execute_plan_with_paramlist (spi.c): C's entry for a PL-built
-// ParamListInfo carrying a paramFetch hook (plpgsql setup_param_list). This
-// port materializes PL variables into value arrays, so the shape matches
-// SPI_execute_plan; the surviving C-observable difference is the hooked
-// provenance bit on the registered params (params.c BuildParamLogString
-// suppression — auto_explain's Query Parameters line).
+// C ParamListInfo as plpgsql's setup_param_list hands it to SPI: the slots
+// it could supply up front, plus its paramFetch for the rest (ptype InvalidOid).
+#[derive(Clone, Copy)]
+pub struct SpiParamList<'a> {
+    pub params: &'a [ParamExternData],
+    pub fetch: Option<ParamFetchHook>,
+}
+
+// SPI_execute_plan_with_paramlist (spi.c): the list is registered hooked
+// (params.c BuildParamLogString suppression: auto_explain's Query Parameters).
 pub fn SPI_execute_plan_with_paramlist(
     ptr: SpiPlanPtr,
-    values: &[Datum],
-    nulls: &[bool],
+    params: SpiParamList<'_>,
     read_only: bool,
     tcount: i64,
 ) -> PgResult<i32> {
     execute_plan_common(
-        ptr, values, nulls, true, read_only, false, false, tcount, None, None, true, None,
+        ptr, PlanArgs::List(params), read_only, false, false, tcount, None, None, true, None,
     )
 }
 
 // SPI_execute_plan_extended's allow_nonatomic / must_return_tuples legs
-// (spi.c); params ride the values/nulls arrays like SPI_execute_plan. The
-// only in-tree caller is plpgsql (C: options.params = a hooked PL paramLI),
-// hence params_hooked.
+// (spi.c); the only in-tree caller is plpgsql (options.params = its list).
 #[allow(clippy::too_many_arguments)]
 pub fn SPI_execute_plan_extended(
     ptr: SpiPlanPtr,
-    values: &[Datum],
-    nulls: &[bool],
-    params_hooked: bool,
+    params: SpiParamList<'_>,
     read_only: bool,
     allow_nonatomic: bool,
     must_return_tuples: bool,
@@ -162,9 +170,7 @@ pub fn SPI_execute_plan_extended(
 ) -> PgResult<i32> {
     execute_plan_common(
         ptr,
-        values,
-        nulls,
-        params_hooked,
+        PlanArgs::List(params),
         read_only,
         allow_nonatomic,
         must_return_tuples,
@@ -192,9 +198,7 @@ pub fn SPI_execute_snapshot(
 ) -> PgResult<i32> {
     execute_plan_common(
         ptr,
-        values,
-        nulls,
-        false,
+        PlanArgs::Values { values, nulls },
         read_only,
         false,
         false,
@@ -206,12 +210,15 @@ pub fn SPI_execute_snapshot(
     )
 }
 
+enum PlanArgs<'a> {
+    Values { values: &'a [Datum], nulls: &'a [bool] },
+    List(SpiParamList<'a>),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_plan_common(
     ptr: SpiPlanPtr,
-    values: &[Datum],
-    nulls: &[bool],
-    params_hooked: bool,
+    args: PlanArgs<'_>,
     read_only: bool,
     allow_nonatomic: bool,
     must_return_tuples: bool,
@@ -227,7 +234,13 @@ fn execute_plan_common(
     let Some(state) = plan::state_snapshot(ptr) else {
         return Ok(SPI_ERROR_ARGUMENT);
     };
-    if state.argtypes.len() != values.len() || values.len() != nulls.len() {
+    let bad_args = match &args {
+        PlanArgs::Values { values, nulls } => {
+            state.argtypes.len() != values.len() || values.len() != nulls.len()
+        }
+        PlanArgs::List(l) => !l.params.is_empty() && l.params.len() != state.argtypes.len(),
+    };
+    if bad_args {
         return Ok(SPI_ERROR_PARAM);
     }
     let res = _SPI_begin_call(true);
@@ -235,7 +248,10 @@ fn execute_plan_common(
         return Ok(res);
     }
 
-    let params = convert_params(&state.argtypes, values, nulls, params_hooked)?;
+    let params = match args {
+        PlanArgs::Values { values, nulls } => convert_params(&state.argtypes, values, nulls, false)?,
+        PlanArgs::List(l) => register_param_list(l)?,
+    };
     let options = SpiExecuteOptions {
         params,
         read_only,
@@ -262,7 +278,7 @@ pub(crate) fn convert_params(
     nulls: &[bool],
     hooked: bool,
 ) -> PgResult<ParamListHandle> {
-    if argtypes.is_empty() {
+    if argtypes.is_empty() || (hooked && values.is_empty()) {
         return Ok(ParamListHandle::NULL);
     }
     let mcx = current_exec_mcx();
@@ -285,6 +301,17 @@ pub(crate) fn convert_params(
             types_portal::params::register(slice)
         }
     })
+}
+
+// The PL's list, copied into the SPI exec context like convert_params'.
+fn register_param_list(l: SpiParamList<'_>) -> PgResult<ParamListHandle> {
+    if l.params.is_empty() {
+        return Ok(ParamListHandle::NULL);
+    }
+    let slice = mcx::slice_borrow_in(current_exec_mcx(), l.params)?;
+    // SAFETY: slice outlives free() — freed in execute_plan_common before the
+    // exec-context reset; the owner keeps fetch.arg live for the call.
+    Ok(unsafe { types_portal::params::register_hooked_fetch(slice, l.fetch) })
 }
 
 pub(crate) fn command_tag_of(stmt: &PlannedStmt<'_>) -> types_core::CommandTag {
@@ -355,7 +382,7 @@ pub(crate) fn _SPI_execute_plan(
             errctx.set_query(plancache::CachedPlanQueryString(psrc));
 
             if plan.oneshot {
-                plan::complete_source(psrc, stmt_index, &plan.argtypes, plan.cursor_options)?;
+                plan::complete_source(psrc, stmt_index, &plan.argtypes, plan.cursor_options, true)?;
             }
 
             if options.must_return_tuples && plancache::CachedPlanResultDesc(psrc).is_none() {
@@ -445,6 +472,9 @@ pub(crate) fn _SPI_execute_plan(
 
                 let res = if stmt.utilityStmt.is_none() {
                     let snap = snapmgr::ActiveSnapshotSet().then(snapmgr::GetActiveSnapshot);
+                    if execmain_seams::note_cplan_for_query_desc::is_installed() {
+                        execmain_seams::note_cplan_for_query_desc::call(cplan);
+                    }
                     let qd = execmain_seams::create_query_desc::call(
                         stmt,
                         query_string,
@@ -646,7 +676,7 @@ fn _SPI_pquery(
     };
 
     let eflags = if fire_triggers { 0 } else { EXEC_FLAG_SKIP_TRIGGERS };
-    let _p8 = execmain::p8census::spi_scope();
+    let _p8 = execmain_seams::p8ctx::spi_scope();
     execmain_seams::executor_start::call(qd, eflags)?;
     execmain_seams::executor_run::call(qd, ForwardScanDirection, tcount, dest)?;
     with_current(|c| c.processed = execmain_seams::query_desc_es_processed::call(qd));

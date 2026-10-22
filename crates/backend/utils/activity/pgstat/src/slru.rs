@@ -88,6 +88,32 @@ pub fn pgstat_count_slru_truncate(slru_idx: i32) {
     with_slru_entry(slru_idx, |e| e.truncate += 1);
 }
 
+/// This thread's pending SLRU counts, taken out (None when it has none): a Gravity pool claim's go to its leader's
+/// pending (`section::take_thread_deltas`, D4241), which reports them.
+pub fn take_slru_pending() -> Option<[PgStat_SLRUStats; SLRU_NUM_ELEMENTS]> {
+    if !HAVE_SLRUSTATS.with(|c| c.replace(false)) {
+        return None;
+    }
+    Some(PENDING_SLRU_STATS.with(|s| core::mem::take(&mut *s.borrow_mut())))
+}
+
+/// Counts another thread took (`take_slru_pending`) added to this thread's pending.
+pub fn add_slru_pending(d: &[PgStat_SLRUStats; SLRU_NUM_ELEMENTS]) {
+    HAVE_SLRUSTATS.with(|c| c.set(true));
+    pending::pgstat_report_fixed_set();
+    PENDING_SLRU_STATS.with(|s| {
+        for (m, o) in s.borrow_mut().iter_mut().zip(d) {
+            m.blocks_zeroed += o.blocks_zeroed;
+            m.blocks_hit += o.blocks_hit;
+            m.blocks_read += o.blocks_read;
+            m.blocks_written += o.blocks_written;
+            m.blocks_exists += o.blocks_exists;
+            m.flush += o.flush;
+            m.truncate += o.truncate;
+        }
+    });
+}
+
 pub fn pgstat_get_slru_name(slru_idx: i32) -> Option<&'static str> {
     if slru_idx < 0 || slru_idx as usize >= SLRU_NUM_ELEMENTS {
         return None;

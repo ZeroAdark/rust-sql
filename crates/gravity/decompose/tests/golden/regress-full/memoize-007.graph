@@ -1,0 +1,25 @@
+-- regress-full-memoize-007
+-- SELECT explain_memoize(' SELECT * FROM expr_key t1 INNER JOIN expr_key t2 ON t1.x = t2.t::numeric AND t1.t::numeric = t2.x;', false);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=40 end=sink
+  nodes n1@0 n0@1
+  source range rel=46968 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2)
+  nest inner=n2 JOIN_INNER params=($exec0=outer.2, $exec1=outer.1)
+  inner node=3 serial site=0 reason=IndexSource end=sink
+  nodes n3@0 n2@2
+  source index-only rel=46968 rti=2 am=heap index=46973
+    key att=1 op=1752 value=io1700($exec0)
+    recheck (op1752(index.1, io1700($exec0)))
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page
+  filter op1752($exec1, io1700(index.2))
+  project (1=index.1, 2=index.2)
+  memo entries=20 keys=($exec1, io1700($exec0))
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  outs 1=vl:win/page 2=vl:win/page
+  outs 1=vl:win/page 2=vl:win/page 3=vl:life/breaker 4=vl:life/breaker
+param $exec0 owner=n0 type=25@100 rep=vl:win/page
+param $exec1 owner=n0 type=1700 rep=vl:win/page
+mapped: SeqScan IndexOnlyScan NestLoop NestLoopParam Memoize

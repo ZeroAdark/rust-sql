@@ -1,0 +1,4 @@
+path	crates/gravity/expr/src/nodes/var.rs
+method	std::iter::Iterator::collect	2
+type	std::boxed::Box	1
+type	std::vec::Vec	1

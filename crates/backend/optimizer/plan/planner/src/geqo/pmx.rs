@@ -17,12 +17,12 @@ pub(super) fn pmx(
     tour2: &[Gene],
     offspring: &mut [Gene],
     num_gene: i32,
-) {
+) -> types_error::PgResult<()> {
     let ng = num_gene as usize;
-    let mut failed = vec![-1i32; ng + 1];
-    let mut from = vec![-1i32; ng + 1];
-    let mut indx = vec![0i32; ng + 1];
-    let mut check_list = vec![0i32; ng + 1];
+    let mut failed = mcx::std_vec_from_elem("geqo", -1i32, ng + 1)?;
+    let mut from = mcx::std_vec_from_elem("geqo", -1i32, ng + 1)?;
+    let mut indx = mcx::std_vec_from_elem("geqo", 0i32, ng + 1)?;
+    let mut check_list = mcx::std_vec_from_elem("geqo", 0i32, ng + 1)?;
 
     for k in 0..ng {
         failed[k] = -1;
@@ -118,4 +118,5 @@ pub(super) fn pmx(
             }
         }
     }
+    Ok(())
 }

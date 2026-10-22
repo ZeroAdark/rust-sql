@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/nodes/readfuncs.c: 1 stack-depth check sites
+578	parseNodeString	crates/backend/nodes/readfuncs/src/lib.rs	Reader::parse_node_string	yes	

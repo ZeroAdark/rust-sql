@@ -1,0 +1,18 @@
+-- regress-full-rangefuncs-020
+-- select rngfunct.rngfuncid, rngfunct.f2 from rngfunct(sin(pi()/2)::int) ORDER BY 1,2;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  nodes n1@0 n0@2^
+  source const
+  srf from rti=1 [1:Other fn40635 cols=2 fn40635(c23:1)]
+  project (1=v1.1, 2=v1.2)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w4:val 2=w4:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2)
+  outs 1=w4:val 2=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+mapped: FunctionScan Sort

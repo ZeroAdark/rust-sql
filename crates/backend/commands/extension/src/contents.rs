@@ -250,7 +250,7 @@ fn squeeze_array<'mcx>(
     array_index: usize,
     elmtype: Oid,
 ) -> PgResult<mcx::PgVec<'mcx, u8>> {
-    let mut squeezed: Vec<Datum> = Vec::with_capacity(dvalues.len() - 1);
+    let mut squeezed: Vec<Datum> = ::mcx::std_vec_with_capacity("commands", dvalues.len() - 1)?;
     squeezed.extend_from_slice(&dvalues[..array_index]);
     squeezed.extend_from_slice(&dvalues[array_index + 1..]);
     let (elmlen, elmbyval, elmalign) = builtin_array_meta(elmtype);

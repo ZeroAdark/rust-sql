@@ -1,0 +1,180 @@
+-- regress-full-domain-058
+-- SELECT * FROM information_schema.check_constraints WHERE (constraint_schema, constraint_name) IN (SELECT constraint_schema, constraint_name FROM information_schema.domain_constraints WHERE domain_name IN ('con', 'dom', 'pos_int', 'things')) ORDER BY constraint_name;
+graph pipelines=7 breakers=6 init_plans=0 root=p6
+p0 node=12 eligible rows=98 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n12@0 n11@1
+  source range rel=2615 rti=11 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v11.2, 2=v11.1)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=fx64:win/page 2=w8:val
+p1 node=22 eligible rows=2246 end=breaker(slot=1 HashBuild)
+  desc words=bits@6/7
+  nodes n22@0 n21@1
+  source range rel=1259 rti=20 am=heap
+    lanes Attr(1):byval8:w8:val Attr(6):byval8:w8:val Offset:byval2:w2:val
+  project (1=v20.6, 2=v20.1)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=w8:val 2=w8:val
+p2 node=32 eligible rows=631 end=breaker(slot=2 HashBuild)
+  desc words=bits@7/8
+  nodes n32@0 n31@1 n30@3
+  source range rel=2606 rti=8 am=heap
+    lanes Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(10):byval8:w8:val Offset:byval2:w2:val
+  project (1=v8.1, 2=v8.2, 3=v8.3, 4=v8.4, 5=v8.5, 6=v8.6, 7=v8.7, 8=v8.8, 9=v8.9, 10=v8.10, 11=v8.11, 12=v8.12, 13=v8.13, 14=v8.14, 15=v8.15, 16=v8.16, 17=v8.17, 18=v8.18, 19=v8.19, 20=v8.20, 21=v8.21, 22=v8.22, 23=v8.23, 24=v8.24, 25=v8.25, 26=v8.26, 27=v8.27, 28=v8.28)
+  nest inner=n33 JOIN_INNER unique vol=s raise-free params=($exec6=outer.10)
+  inner node=34 serial site=0 reason=IndexSource end=sink
+  nodes n34@0 n33@3
+  source index rel=1247 rti=9 am=heap index=2703
+    key att=1 op=607 value=$exec6
+    recheck (op607(v9.1, $exec6))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val
+  filter or(fn2710(v9.4, c25:'USAGE'), fn3143(v9.1, c25:'USAGE'))
+  filter any93(v9.2, c1003:'\x01\x00\x00\x00\x00\x00\x00\x00\x13\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00con\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00dom\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00pos_int\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00things\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+  project (1=v9.3, 2=v9.1)
+  memo entries=3 singlerow keys=($exec6)
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.3, 2=outer.2, 3=inner.1)
+  build keys=(outer.3) decls=26/26:I32
+  outs 1=w4:val 2=fx64:win/page 3=w8:val 4=w1:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w4:val 10=w8:val 11=w4:val 12=w4:val 13=w4:val 14=w1:val 15=w1:val 16=w1:val 17=w1:val 18=w2:val 19=w1:val 20=w1:val 21=vl:row 22=vl:row 23=vl:row 24=vl:row 25=vl:row 26=vl:row 27=vl:row 28=vl:row
+  outs 1=w8:val 2=fx64:win/page 3=w4:val
+p3 node=29 eligible rows=98 end=breaker(slot=3 HashBuild)
+  desc consumes=slot2@p2 words=bits@8/9
+  nodes n29@0 n28@1 n27@3 n26@5 n1@6^
+  source range rel=2615 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.1, 2=v7.2, 3=v7.3, 4=v7.4)
+  probe slot=2 inner=n30 JOIN_INNER keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.3))
+  project (1=inner.1, 2=inner.2)
+  nest inner=n35 JOIN_INNER unique raise-free params=($exec7=outer.1)
+  inner node=35 serial site=0 reason=IndexSource end=sink
+  nodes n35@0
+  source index rel=2615 rti=6 am=heap index=2685
+    key att=1 op=607 value=$exec7
+    recheck (op607(v6.1, $exec7))
+    lanes Attr(2):byref8:fx64:win/page
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=v6.4)
+  project (1=inner.2, 2=outer.2)
+  project (1=outer.1, 2=outer.2)
+  build keys=(outer.1) decls=13718/19:none@950
+  outs 1=w8:val 2=fx64:row 3=w4:val 4=vl:row
+  outs 1=w4:val 2=fx64:life/breaker
+  outs 1=fx64:life/breaker 2=fx64:life/breaker
+  outs 1=fx64:life/breaker 2=fx64:life/breaker
+p4 node=7 eligible rows=7 end=breaker(slot=4 Sort)
+  desc consumes=slot0@p0 consumes=slot3@p3
+  nodes n7@0 n6@2 n5@4 n4@7 n2@9 n1@11 n0@13^
+  source range rel=2606 rti=10 am=heap
+    lanes Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(28):byref8:vl:win/page Offset:byval2:w2:val
+  filter op92(v10.4, c18:99)
+  project (1=v10.1, 2=v10.2, 3=v10.3, 4=v10.4, 5=v10.5, 6=v10.6, 7=v10.7, 8=v10.8, 9=v10.9, 10=v10.10, 11=v10.11, 12=v10.12, 13=v10.13, 14=v10.14, 15=v10.15, 16=v10.16, 17=v10.17, 18=v10.18, 19=v10.19, 20=v10.20, 21=v10.21, 22=v10.22, 23=v10.23, 24=v10.24, 25=v10.25, 26=v10.26, 27=v10.27, 28=v10.28)
+  nest inner=n8 JOIN_LEFT unique raise-free params=($exec0=outer.10)
+  inner node=9 serial site=0 reason=IndexSource end=sink
+  nodes n9@0 n8@1
+  source index rel=1247 rti=15 am=heap index=2703
+    key att=1 op=607 value=$exec0
+    recheck (op607(v15.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  project (1=v15.4, 2=v15.1)
+  memo entries=3 singlerow keys=($exec0)
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.2, 2=outer.28, 3=outer.3, 4=outer.9, 5=inner.1)
+  nest inner=n10 JOIN_LEFT unique raise-free params=($exec1=outer.4)
+  inner node=10 serial site=0 reason=IndexSource end=sink
+  nodes n10@0
+  source index rel=1259 rti=13 am=heap index=2662
+    key att=1 op=607 value=$exec1
+    recheck (op607(v13.1, $exec1))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byval8:w8:val Attr(31):byval8:w8:val Attr(32):byref8:vl:win/page Attr(33):byref8:vl:win/page Attr(34):byref8:vl:win/page
+  project (1=v13.1, 2=v13.2, 3=v13.3, 4=v13.4, 5=v13.5, 6=v13.6, 7=v13.7, 8=v13.8, 9=v13.9, 10=v13.10, 11=v13.11, 12=v13.12, 13=v13.13, 14=v13.14, 15=v13.15, 16=v13.16, 17=v13.17, 18=v13.18, 19=v13.19, 20=v13.20, 21=v13.21, 22=v13.22, 23=v13.23, 24=v13.24, 25=v13.25, 26=v13.26, 27=v13.27, 28=v13.28, 29=v13.29, 30=v13.30, 31=v13.31, 32=v13.32, 33=v13.33, 34=v13.34)
+  filter fn2710(coalesce(inner.6, outer.5), c25:'USAGE')
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1)
+  probe slot=0 inner=n11 JOIN_LEFT unique keys=(outer.3) decls=26/26:I32 clauses=(op607(outer.3, inner.2))
+  project (1=relabel13718(fn861()), 2=relabel13718(inner.1), 3=relabel13718(outer.1), 4=relabel13716(fn1716(outer.2, coalesce(outer.4, c26:0))))
+  append arm 0/2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  probe slot=3 inner=n26 JOIN_SEMI catalog keys=(relabel19(outer.2)) decls=13718/19:none@950 clauses=(op93(inner.1, relabel19(outer.2))) qual=(op93(inner.2, relabel19(outer.3)))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  sort keys=3+:Fp128/ByRef@950#19 form=runs
+  outs 1=w4:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w8:val 10=w8:val 11=w4:val 12=w4:val 13=w4:val 14=w1:val 15=w1:val 16=w1:val 17=w1:val 18=w2:val 19=w1:val 20=w1:val 21=vl:row 22=vl:row 23=vl:row 24=vl:row 25=vl:row 26=vl:row 27=vl:row 28=vl:win/page
+  outs 1=fx64:win/page 2=vl:win/page 3=w8:val 4=w8:val 5=w4:val
+  outs 1=fx64:win/page 2=vl:win/page 3=w8:val 4=w4:val
+  outs 1=fx64:call861 2=fx64:life/breaker 3=fx64:win/page 4=vl:call1716
+  outs 1=? 2=? 3=? 4=?
+  outs 1=? 2=? 3=? 4=?
+p5 node=18 eligible rows=267 end=breaker(slot=4 Sort)
+  desc consumes=slot1@p1 consumes=slot3@p3
+  nodes n18@0 n17@2 n16@4 n15@7 n14@9 n2@11 n1@13 n0@15^
+  source range rel=2606 rti=17 am=heap
+    lanes Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(21):byref8:vl:win/page Offset:byval2:w2:val
+  filter op92(v17.4, c18:110)
+  project (1=v17.1, 2=v17.2, 3=v17.3, 4=v17.4, 5=v17.5, 6=v17.6, 7=v17.7, 8=v17.8, 9=v17.9, 10=v17.10, 11=v17.11, 12=v17.12, 13=v17.13, 14=v17.14, 15=v17.15, 16=v17.16, 17=v17.17, 18=v17.18, 19=v17.19, 20=v17.20, 21=v17.21, 22=v17.22, 23=v17.23, 24=v17.24, 25=v17.25, 26=v17.26, 27=v17.27, 28=v17.28)
+  nest inner=n19 JOIN_LEFT unique raise-free params=($exec2=outer.10)
+  inner node=20 serial site=0 reason=IndexSource end=sink
+  nodes n20@0 n19@1
+  source index rel=1247 rti=22 am=heap index=2703
+    key att=1 op=607 value=$exec2
+    recheck (op607(v22.1, $exec2))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  project (1=v22.4, 2=v22.1)
+  memo entries=3 singlerow keys=($exec2)
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.2, 2=outer.3, 3=outer.9, 4=outer.21, 5=inner.1)
+  probe slot=1 inner=n21 JOIN_LEFT unique keys=(outer.3) decls=26/26:I32 clauses=(op607(outer.3, inner.2))
+  filter fn2710(coalesce(inner.1, outer.5), c25:'USAGE')
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  nest inner=n23 JOIN_LEFT unique raise-free params=($exec3=outer.2)
+  inner node=24 serial site=0 reason=IndexSource end=sink
+  nodes n24@0 n23@1
+  source index rel=2615 rti=18 am=heap index=2685
+    key att=1 op=607 value=$exec3
+    recheck (op607(v18.1, $exec3))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page
+  project (1=v18.2, 2=v18.1)
+  memo entries=2 singlerow keys=($exec3)
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.1, 2=outer.3, 3=outer.4, 4=inner.1)
+  nest inner=n25 JOIN_LEFT unique params=($exec4=outer.2, $exec5=outer.3)
+  inner node=25 serial site=0 reason=IndexSource end=sink
+  nodes n25@0
+  source index rel=1249 rti=24 am=heap index=2659
+    key att=1 op=607 value=$exec4
+    key att=5 op=94 value=T_SubscriptingRef
+    recheck (op607(v24.1, $exec4), op94(v24.5, T_SubscriptingRef))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byref8:vl:win/page Attr(23):byref8:vl:win/page Attr(24):byref8:vl:win/page Attr(25):byref8:vl:win/page
+  project (1=v24.1, 2=v24.2, 3=v24.3, 4=v24.4, 5=v24.5, 6=v24.6, 7=v24.7, 8=v24.8, 9=v24.9, 10=v24.10, 11=v24.11, 12=v24.12, 13=v24.13, 14=v24.14, 15=v24.15, 16=v24.16, 17=v24.17, 18=v24.18, 19=v24.19, 20=v24.20, 21=v24.21, 22=v24.22, 23=v24.23, 24=v24.24, 25=v24.25)
+  project (1=relabel13718(fn861()), 2=relabel13718(outer.4), 3=relabel13718(outer.1), 4=relabel13716(fn3539(c25:'%s IS NOT NULL', coalesce(inner.2, c19:#64))))
+  append arm 1/2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  probe slot=3 inner=n26 JOIN_SEMI catalog keys=(relabel19(outer.2)) decls=13718/19:none@950 clauses=(op93(inner.1, relabel19(outer.2))) qual=(op93(inner.2, relabel19(outer.3)))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  sort keys=3+:Fp128/ByRef@950#19 form=runs
+  outs 1=w4:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w8:val 10=w8:val 11=w4:val 12=w4:val 13=w4:val 14=w1:val 15=w1:val 16=w1:val 17=w1:val 18=w2:val 19=w1:val 20=w1:val 21=vl:win/page 22=vl:row 23=vl:row 24=vl:row 25=vl:row 26=vl:row 27=vl:row 28=vl:row
+  outs 1=fx64:win/page 2=w8:val 3=w8:val 4=vl:win/page 5=w4:val
+  outs 1=fx64:win/page 2=w8:val 3=w8:val 4=vl:win/page
+  outs 1=fx64:win/page 2=w8:val 3=vl:win/page 4=fx64:life/breaker
+  outs 1=fx64:call861 2=fx64:life/breaker 3=fx64:win/page 4=vl:call3539
+  outs 1=? 2=? 3=? 4=?
+  outs 1=? 2=? 3=? 4=?
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot4@p5
+  nodes n0@0
+  source breaker slot=4
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=? 2=? 3=? 4=?
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[Fp128,Fp128]->[Count@16] 24B
+breaker slot=4 kind=Sort budget=Share spill=Runs producer=p4 layout=[Fp128,Fp128]->[Count@16] 24B order=3+
+breaker slot=4 kind=Sort budget=Share spill=Runs producer=p5 layout=[Fp128,Fp128]->[Count@16] 24B order=3+
+param $exec6 owner=n31 type=26 rep=w8:val
+param $exec7 owner=n27 type=26 rep=w4:val
+param $exec0 owner=n6 type=26 rep=w8:val
+param $exec1 owner=n5 type=26 rep=w8:val
+param $exec2 owner=n17 type=26 rep=w8:val
+param $exec3 owner=n15 type=26 rep=w8:val
+param $exec4 owner=n14 type=26 rep=w8:val
+param $exec5 owner=n14 type=1005 rep=vl:win/page
+mapped: Append SeqScan IndexScan NestLoop NestLoopParam HashJoin Material Memoize Sort Hash

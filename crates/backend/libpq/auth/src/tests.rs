@@ -94,12 +94,63 @@ fn setup_backend(pid: i32) {
     g::SetMyLatch(Some(latch));
 }
 
+fn scratch_root_of(pid: u32) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("pgrust_auth_{pid}"))
+}
+
+/// The process's scratch directory: hba files, socket directories and LDAP
+/// files all sit under it, and it goes at the process's exit (a panicking
+/// test skips its own cleanup).
+pub(crate) fn scratch_root() -> std::path::PathBuf {
+    static AT_EXIT: Once = Once::new();
+    AT_EXIT.call_once(|| {
+        extern "C" fn gone() {
+            let _ = std::fs::remove_dir_all(scratch_root_of(std::process::id()));
+        }
+        extern "C" {
+            fn atexit(f: extern "C" fn()) -> core::ffi::c_int;
+        }
+        // SAFETY: the C library's atexit, given a function that cannot
+        // unwind (it ignores the removal's error).
+        unsafe { atexit(gone) };
+    });
+    let root = scratch_root_of(std::process::id());
+    std::fs::create_dir_all(&root).unwrap();
+    root
+}
+
+/// A run of this test alone, in a child process, leaves no scratch directory
+/// behind once the child exits.
+#[test]
+fn a_run_leaves_nothing_behind() {
+    const CHILD: &str = "PGRUST_AUTH_LEAVE_NOTHING_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let _g = GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        load_hba_content_locked("gone.conf", "local all all trust\n");
+        println!("scratch dir {}", scratch_root().display());
+        return;
+    }
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "tests::a_run_leaves_nothing_behind", "--nocapture"])
+        .env(CHILD, "1")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let dir = scratch_root_of(child.id());
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "child failed: {stdout}");
+    assert!(
+        stdout.contains(&format!("scratch dir {}", dir.display())),
+        "the child never made its scratch dir: {stdout}"
+    );
+    assert!(!dir.exists(), "{} left behind", dir.display());
+}
+
 // hba lines are process-global; every test holds GUC_LOCK across load + use.
 fn load_hba_content_locked(name: &str, content: &str) {
     install();
-    let dir = std::env::temp_dir().join(format!("pgrust_auth_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(name);
+    let path = scratch_root().join(name);
     std::fs::write(&path, content).unwrap();
     guc_tables::vars::HbaFileName.write(Some(path.to_string_lossy().into_owned()));
     assert!(hba_seams::load_hba::call());
@@ -163,7 +214,7 @@ fn trust_auth_unix_socket_end_to_end() {
     let _g = GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     load_hba_content_locked("pg_hba.conf", INITDB_DEFAULT_HBA);
 
-    let dir = std::env::temp_dir().join(format!("pgrust_auth_sock_{}", std::process::id()));
+    let dir = scratch_root().join("sock");
     std::fs::create_dir_all(&dir).unwrap();
     let dir_s = dir.to_str().unwrap().to_owned();
     let port_number: u16 = 45455;
@@ -229,7 +280,7 @@ fn auth_fatal_under_port_borrow_reaches_client() {
     let _g = GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     load_hba_content_locked("reject_e2e.conf", "local all all reject\n");
 
-    let dir = std::env::temp_dir().join(format!("pgrust_auth_fatal_{}", std::process::id()));
+    let dir = scratch_root().join("fatal");
     std::fs::create_dir_all(&dir).unwrap();
     let dir_s = dir.to_str().unwrap().to_owned();
     let port_number: u16 = 45456;
@@ -295,7 +346,8 @@ fn port_probes_do_not_panic_under_port_borrow() {
         g::SetMyProcPort(unix_port("alice", "postgres"));
         assert!(g::HaveMyProcPort());
         assert_eq!(g::TryWithMyProcPort(|p| p.user_name.clone()), Some(Some("alice".to_string())));
-        g::WithMyProcPort(|_| {
+        // the trunk's WithMyProcPort is a shared borrow; main's test is about the mutable section
+        g::WithMyProcPortMut(|_| {
             assert!(g::HaveMyProcPort());
             assert_eq!(g::TryWithMyProcPort(|p| p.user_name.clone()), None);
         });
@@ -523,7 +575,7 @@ struct SocketAuth {
 
 impl SocketAuth {
     fn listen(tag: &str, port_number: u16) -> (Self, String) {
-        let dir = std::env::temp_dir().join(format!("pgrust_auth_{tag}_{}", std::process::id()));
+        let dir = scratch_root().join(tag);
         std::fs::create_dir_all(&dir).unwrap();
         let dir_s = dir.to_str().unwrap().to_owned();
         let sock_path = format!("{dir_s}/.s.PGSQL.{port_number}");
@@ -823,7 +875,7 @@ impl TcpAuth {
 fn gss_bad_keytab_fails_after_reading_client_token() {
     setup_backend(4252);
     let _g = GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if let Err(e) = crate::gss_ffi::try_gss() {
+    if let Err(e) = be_gssapi_common::gss_ffi::try_gss() {
         eprintln!("SKIP gss_bad_keytab_fails_after_reading_client_token: {e}");
         return;
     }
@@ -1311,7 +1363,7 @@ pub(crate) mod ldap_fakes {
         }
         b.sign(&key, MessageDigest::sha256()).unwrap();
         let cert = b.build();
-        let dir = std::env::temp_dir().join(format!("pgrust_auth_ldap_{tag}_{}", std::process::id()));
+        let dir = super::scratch_root().join(format!("ldap_{tag}"));
         std::fs::create_dir_all(&dir).unwrap();
         let cert_pem = dir.join("cert.pem");
         std::fs::write(&cert_pem, cert.to_pem().unwrap()).unwrap();
@@ -1592,7 +1644,7 @@ mod ldap_witness {
     // ldap.conf the test wants (OpenLDAP init.c reads it after the system
     // file, so its TLS_* lines win), nothing else is inherited.
     fn ldap_conf(tag: &str, body: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("pgrust_auth_ldapconf_{}", std::process::id()));
+        let dir = super::scratch_root().join("ldapconf");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("{tag}.conf"));
         std::fs::write(&path, body).unwrap();
@@ -1700,6 +1752,24 @@ mod ldap_witness {
             describe(captured)
         );
         assert_eq!(hit.unwrap().detail(), detail, "DETAIL of {message:?}");
+    }
+
+    #[test]
+    fn ldap_unbracketed_ipv6_fails_initialization() {
+        setup_backend(4279);
+        let _g = GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_ldap_env(&ldap_conf("bare_ipv6", "# nothing\n"));
+        load_hba_content_locked(
+            "ldap_bare_ipv6.conf",
+            "local all all ldap ldapserver=::1 ldapport=1 ldapprefix=\"uid=\"\n",
+        );
+        let (outcome, captured, _) = run_ldap_auth("bare_ipv6", 45479, "alice", b"secret");
+        assert_failed_with(
+            &outcome,
+            &captured,
+            "could not initialize LDAP: Bad parameter to an ldap routine",
+            None,
+        );
     }
 
     // auth.c:2255-2290 — no ldapserver: the base DN's trailing DC components

@@ -1,0 +1,31 @@
+-- regress-full-select_parallel-009
+-- explain (costs off) select count(*) from tenk1 where (two, four) not in (select hundred, thousand from tenk2 where thousand > 100);
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=2 eligible rows=8990 end=breaker(slot=0 Distinct)
+  nodes n2@0
+  source range rel=16426 rti=2 am=heap
+    lanes Attr(7):byval8:w8:val Attr(8):byval8:w8:val Offset:byval2:w2:val
+  filter op521(v2.8, c23:100)
+  project (1=v2.7, 2=v2.8)
+  subplan 1 build Any ids=($exec0,$exec1) raise-free test=and(op96(v1.3, $exec0), op96(v1.4, $exec1))
+  outs 1=w8:val 2=w8:val
+p1 node=1 eligible rows=5000 end=breaker(slot=1 PlainAgg)
+  desc consumes=slot0@p0
+  nodes n1@0 n0@3^
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(3):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  subplan 1 hashed Any slot=0 ids=($exec0,$exec1) raise-free test=and(op96(v1.3, $exec0), op96(v1.4, $exec1))
+  filter not(subplan1())
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  outs 1=w4:val 2=w4:val 3=w8:val 4=w8:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=fx64:row 15=fx64:row 16=fx64:row
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32,I32]->[Count@16] 24B
+breaker slot=1 kind=PlainAgg budget=Fixed(64) spill=None producer=p1 layout=[]->[Count@0] 8B
+group slot=1 producer=p1 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan Agg SubPlan

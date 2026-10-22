@@ -289,3 +289,27 @@ fn oversized_code_block_fails_open_not_oob() {
     let way_over = vec![0u32; one_chunk_words * 4];
     assert!(super::install_code(&way_over).is_none());
 }
+
+/// C8 move 7e (born red): a deform kernel's code pages are the program caches' memory (Cache(ProgramCaches), door 2),
+/// not the compiling backend's: before, map_chunk and alloc_code_shared charged the compiling thread's account, which
+/// kept a shared body's pages past the statement and the session that compiled it.
+#[test]
+fn c8_deform_code_pages_are_the_program_caches() {
+    std::thread::spawn(|| {
+        memledger::bind_backend(3991, 1);
+        let a = memledger::Acct::backend(3991);
+        let net = || {
+            memledger::fold();
+            memledger::account_row(a).account_bytes
+        };
+        let b = net();
+        let ret = [0xd65f_03c0u32];
+        let shared = super::install_code_shared(&ret).expect("a shared body");
+        let block = super::install_code(&ret).expect("an arena kernel");
+        assert_eq!(net(), b, "the compiling backend's account holds none of their pages");
+        drop((shared, block));
+        memledger::unbind_backend();
+    })
+    .join()
+    .unwrap();
+}

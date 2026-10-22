@@ -1,0 +1,120 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1v s1k s2d s1c s2c s3sel
+step s1v: UPDATE rp SET v = v + 1000 WHERE id IN (2, 6);
+step s1k: UPDATE rp SET k = 1 WHERE id IN (4, 8);
+step s2d: WITH d AS (DELETE FROM rp WHERE k = 0 RETURNING id, v, pad) SELECT id, v, pad FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|   v|pad
+--+----+---
+ 2|1020|p2 
+ 6|1060|p6 
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, id, k, v, pad FROM rp ORDER BY id;
+tableoid|id|k| v|pad
+--------+--+-+--+---
+rp_1    | 1|1|10|p1 
+rp_1    | 3|1|30|p3 
+rp_1    | 4|1|40|p4 
+rp_2    | 5|1|50|p5 
+rp_2    | 7|1|70|p7 
+rp_2    | 8|1|80|p8 
+(6 rows)
+
+
+starting permutation: s1x s1k s2d s1c s2c s3sel
+step s1x: DELETE FROM rp WHERE id = 2;
+step s1k: UPDATE rp SET k = 1 WHERE id IN (4, 8);
+step s2d: WITH d AS (DELETE FROM rp WHERE k = 0 RETURNING id, v, pad) SELECT id, v, pad FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| v|pad
+--+--+---
+ 6|60|p6 
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, id, k, v, pad FROM rp ORDER BY id;
+tableoid|id|k| v|pad
+--------+--+-+--+---
+rp_1    | 1|1|10|p1 
+rp_1    | 3|1|30|p3 
+rp_1    | 4|1|40|p4 
+rp_2    | 5|1|50|p5 
+rp_2    | 7|1|70|p7 
+rp_2    | 8|1|80|p8 
+(6 rows)
+
+
+starting permutation: s1v s1k s2n s1c s2c s3sel
+step s1v: UPDATE rp SET v = v + 1000 WHERE id IN (2, 6);
+step s1k: UPDATE rp SET k = 1 WHERE id IN (4, 8);
+step s2n: WITH d AS (DELETE FROM rp WHERE k = 0) SELECT 1 AS one; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+one
+---
+  1
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, id, k, v, pad FROM rp ORDER BY id;
+tableoid|id|k| v|pad
+--------+--+-+--+---
+rp_1    | 1|1|10|p1 
+rp_1    | 3|1|30|p3 
+rp_1    | 4|1|40|p4 
+rp_2    | 5|1|50|p5 
+rp_2    | 7|1|70|p7 
+rp_2    | 8|1|80|p8 
+(6 rows)
+
+
+starting permutation: s1m s2d s1c s2c s3sel
+step s1m: UPDATE rp SET id = 7 WHERE id = 4;
+step s2d: WITH d AS (DELETE FROM rp WHERE k = 0 RETURNING id, v, pad) SELECT id, v, pad FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, id, k, v, pad FROM rp ORDER BY id;
+tableoid|id|k| v|pad
+--------+--+-+--+---
+rp_1    | 1|1|10|p1 
+rp_1    | 2|0|20|p2 
+rp_1    | 3|1|30|p3 
+rp_2    | 5|1|50|p5 
+rp_2    | 6|0|60|p6 
+rp_2    | 7|1|70|p7 
+rp_2    | 7|0|40|p4 
+rp_2    | 8|0|80|p8 
+(8 rows)
+
+
+starting permutation: s1v s1x s2d s1r s2c s3sel
+step s1v: UPDATE rp SET v = v + 1000 WHERE id IN (2, 6);
+step s1x: DELETE FROM rp WHERE id = 2;
+step s2d: WITH d AS (DELETE FROM rp WHERE k = 0 RETURNING id, v, pad) SELECT id, v, pad FROM d ORDER BY id; <waiting ...>
+step s1r: ROLLBACK;
+step s2d: <... completed>
+id| v|pad
+--+--+---
+ 2|20|p2 
+ 4|40|p4 
+ 6|60|p6 
+ 8|80|p8 
+(4 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, id, k, v, pad FROM rp ORDER BY id;
+tableoid|id|k| v|pad
+--------+--+-+--+---
+rp_1    | 1|1|10|p1 
+rp_1    | 3|1|30|p3 
+rp_2    | 5|1|50|p5 
+rp_2    | 7|1|70|p7 
+(4 rows)
+

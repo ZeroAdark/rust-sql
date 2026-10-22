@@ -10,7 +10,7 @@ use types_core::catalog::{INT2OID, INT4OID};
 use types_core::{InvalidOid, Oid, OidIsValid};
 use types_error::{
     PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_NULL_VALUE_NOT_ALLOWED,
-    ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE, ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+    ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE,
 };
 use types_fmgr::{function_call1_coll_in, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
 
@@ -91,7 +91,8 @@ fn unrecognized_specifier(fmt: &[u8], cp: usize) -> Box<PgError> {
     let err = match core::str::from_utf8(ch) {
         Ok(s) => PgError::error(format!("unrecognized format() type specifier \"{s}\"")),
         Err(_) => {
-            let mut msg = b"unrecognized format() type specifier \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"unrecognized format() type specifier \"");
             msg.extend_from_slice(ch);
             msg.push(b'"');
             PgError::error_raw_message(msg)
@@ -162,12 +163,6 @@ pub(crate) fn quote_identifier_alloc_check(len: usize, nquotes: usize) -> PgResu
     mcx::check_alloc_size(len + nquotes + 3)
 }
 
-#[cold]
-#[inline(never)]
-fn formatted_concat_limit() -> Box<PgError> {
-    Box::new(PgError::error("out of memory").with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED))
-}
-
 // concat_internal's VARIADIC-array leg == array_to_text_internal with a NULL
 // null_string (varlena.c:5697-5725): null elements skipped.
 fn concat_variadic_array(
@@ -195,21 +190,10 @@ fn concat_variadic_array(
         let s = output_to_bytes(&mut cache.finfo, mcx, value)?;
         if first {
             first = false;
+            out.append_bytes(s)?;
         } else {
-            // Formatted StringInfo appends reserve the formatter's NUL-inclusive estimate.
-            let needed = sepstr.len() + s.len();
-            if out.capacity() - out.len() < 16 {
-                out.enlarge(32)?;
-            }
-            if needed >= out.capacity() - out.len() {
-                if needed >= mcx::MAX_ALLOC_SIZE {
-                    return Err(formatted_concat_limit());
-                }
-                out.enlarge(needed + 1)?;
-            }
-            out.append_bytes(sepstr)?;
+            out.append_formatted(&[sepstr, s])?;
         }
-        out.append_bytes(s)?;
     }
     Ok(types_fmgr::varlena_result(cstring_to_text(mcx, out.as_bytes())?))
 }
@@ -235,7 +219,10 @@ fn concat_internal(
     }
 
     if flinfo.fn_extra_ref::<ConcatFout>().is_none() {
-        let mut infos = Vec::with_capacity(nargs);
+        let mut infos = Vec::new();
+        infos
+            .try_reserve_exact(nargs)
+            .map_err(|_| mcx::oom_named("fmgr_info", nargs * core::mem::size_of::<types_fmgr::FmgrInfo>()))?;
         for i in 0..nargs {
             let valtype = fmgr_seams::get_fn_expr_argtype::call(flinfo, i as i16);
             if !OidIsValid(valtype) {

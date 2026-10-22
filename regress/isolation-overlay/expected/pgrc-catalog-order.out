@@ -1,0 +1,79 @@
+Parsed test spec with 6 sessions
+
+starting permutation: cw cb ci xs wb cc rb rs ni rs rc rs
+step cw: SELECT injection_points_attach('pgrc-bulk-published', 'wait');
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step cb: BEGIN;
+step ci: INSERT INTO pgrc_co SELECT g, 'c' FROM generate_series(1001, 1500) g; <waiting ...>
+step xs: CALL pgrc_seal('pgrc_co');
+step wb: SELECT injection_points_detach('pgrc-bulk-published'); SELECT injection_points_wakeup('pgrc-bulk-published');
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+step ci: <... completed>
+step cc: COMMIT;
+step rb: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step rs: SELECT v, count(*), sum(id) FROM pgrc_co GROUP BY v ORDER BY v;
+v    |count|   sum
+-----+-----+------
+c    |  500|625250
+front|   50|  1275
+(2 rows)
+
+step ni: INSERT INTO pgrc_co SELECT g, 'n' FROM generate_series(3001, 3500) g;
+step rs: SELECT v, count(*), sum(id) FROM pgrc_co GROUP BY v ORDER BY v;
+v    |count|   sum
+-----+-----+------
+c    |  500|625250
+front|   50|  1275
+(2 rows)
+
+step rc: COMMIT;
+step rs: SELECT v, count(*), sum(id) FROM pgrc_co GROUP BY v ORDER BY v;
+v    |count|    sum
+-----+-----+-------
+c    |  500| 625250
+front|   50|   1275
+n    |  500|1625250
+(3 rows)
+
+
+starting permutation: vw vf nf wf rf
+step vw: SELECT injection_points_attach('pgrc-freeze-published', 'wait');
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step vf: VACUUM (FREEZE) pgrc_cf; <waiting ...>
+step nf: INSERT INTO pgrc_cf SELECT g, 'n' FROM generate_series(3001, 3500) g;
+step wf: SELECT injection_points_detach('pgrc-freeze-published'); SELECT injection_points_wakeup('pgrc-freeze-published');
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+step vf: <... completed>
+step rf: SELECT v, count(*), sum(id) FROM pgrc_cf GROUP BY v ORDER BY v;
+v   |count|    sum
+----+-----+-------
+base|  500| 125250
+n   |  500|1625250
+(2 rows)
+

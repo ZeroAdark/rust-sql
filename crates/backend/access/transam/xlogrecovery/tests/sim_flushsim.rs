@@ -921,6 +921,7 @@ fn test_relation<'mcx>(mcx: Mcx<'mcx>, oid: Oid) -> RelationData<'mcx> {
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -1505,16 +1506,19 @@ fn flushsim_writer_child() {
         stats.backstop_self_served.load(Relaxed),
         stats.retry_rearm.load(Relaxed),
     );
-    // L4 conservation: every registration resolves exactly once.
-    if reg != comp + selfs + backstop + retry {
+    let (handoff, laps) =
+        (stats.handoff_leads.load(Relaxed), stats.chain_laps.load(Relaxed));
+    // L4 conservation: every registration resolves exactly once (a `handoff`
+    // lead verdict resolves it too: the waiter retakes the leader path).
+    if reg != comp + selfs + backstop + retry + handoff {
         violation(format!(
-            "L4 conservation: registered {reg} != completed {comp} + self {selfs} + backstop {backstop} + retry {retry}"
+            "L4 conservation: registered {reg} != completed {comp} + self {selfs} + backstop {backstop} + retry {retry} + handoff {handoff}"
         ));
     }
     // Knob-OFF structural inertness.
-    if !pipe_on && (reg + selfs + comp + leader + backstop + retry) != 0 {
+    if !pipe_on && (reg + selfs + comp + leader + backstop + retry + handoff + laps) != 0 {
         violation(format!(
-            "L4 knob-off: pipeline counters nonzero (reg={reg} self={selfs} comp={comp} leader={leader} backstop={backstop} retry={retry})"
+            "L4 knob-off: pipeline counters nonzero (reg={reg} self={selfs} comp={comp} leader={leader} backstop={backstop} retry={retry} handoff={handoff} laps={laps})"
         ));
     }
 
@@ -1544,7 +1548,7 @@ fn flushsim_writer_child() {
     meta.push_str(&format!("cuts={}\n", SimVfs::cut_count()));
     meta.push_str(&format!("killed={}\n", SimVfs::killed()));
     meta.push_str(&format!(
-        "stats=reg:{reg},self:{selfs},comp:{comp},leader:{leader},backstop:{backstop},retry:{retry}\n"
+        "stats=reg:{reg},self:{selfs},comp:{comp},leader:{leader},backstop:{backstop},retry:{retry},handoff:{handoff},laps:{laps}\n"
     ));
     meta.push_str(&format!("max_commit_ms={}\n", MAX_COMMIT_MS.load(Relaxed)));
     meta.push_str(&format!("tree_digest={:#010x}\n", durable_tree_digest()));
@@ -1554,7 +1558,7 @@ fn flushsim_writer_child() {
     std::fs::write(pack.join("meta.txt"), &meta).unwrap();
     std::fs::write(pack.join("ledger.txt"), ledger_dump()).unwrap();
     println!(
-        "FLUSHSIM_WRITER_DONE acked={acked_pre_cut} cuts={} reg={reg} comp={comp} self={selfs} leader={leader} backstop={backstop} retry={retry} violations={}",
+        "FLUSHSIM_WRITER_DONE acked={acked_pre_cut} cuts={} reg={reg} comp={comp} self={selfs} leader={leader} backstop={backstop} retry={retry} handoff={handoff} laps={laps} violations={}",
         SimVfs::cut_count(),
         violations.len()
     );
@@ -1939,9 +1943,16 @@ fn writer_envs(spec: &RunSpec, pack: &std::path::Path) -> Vec<(&'static str, Str
     ];
     // FLIP (Michael-ruled): the default is ON, so OFF trajectories must
     // SPELL the control posture — an omitted var now means armed.
+    // FLUSHSIM_PIPE_ARMED: the armed posture's knob value (default "1"), so
+    // the same trajectories run a refinement token list (e.g.
+    // "absorb+handoff+chain").
     envs.push((
         "PGRUST_FLUSH_PIPELINE",
-        if spec.pipe { "1" } else { "0" }.to_string(),
+        if spec.pipe {
+            std::env::var("FLUSHSIM_PIPE_ARMED").unwrap_or_else(|_| "1".into())
+        } else {
+            "0".into()
+        },
     ));
     if !spec.hold.is_empty() {
         envs.push((HOLD_ENV, spec.hold.clone()));

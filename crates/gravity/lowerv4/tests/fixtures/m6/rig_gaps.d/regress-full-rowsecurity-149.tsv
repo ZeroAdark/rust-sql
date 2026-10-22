@@ -1,0 +1,1 @@
+select rls_f(c) from test_t order by rls_f: rls_f, a function rowsecurity.sql creates, an expression the rig catalog cannot answer (reached once rep.varlena.order is built, M6-TEXT R2)

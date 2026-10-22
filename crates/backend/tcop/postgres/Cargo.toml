@@ -8,10 +8,15 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+memledger = { path = "../../../_support/memledger" }
+fires = { path = "../../../_support/fires" }
+mempolicy = { path = "../../../_support/mempolicy" }
 pg_string = { path = "../../../common/string" }
 libc = "0.2"
 pg_strong_random = { path = "../../../port/pg_strong_random" }
 mcx = { path = "../../../_support/mcx" }
+# pagepool P2: a statement end hands the shelf home when the purger asks (passivate.rs)
+pagepool = { path = "../../../_support/pagepool" }
 types_core = { path = "../../../_support/types/types_core" }
 types_error = { path = "../../../_support/types/types_error" }
 types_portal = { path = "../../../_support/types/portal" }
@@ -29,6 +34,10 @@ elog = { path = "../../utils/error/elog" }
 cmdtag = { path = "../cmdtag" }
 tcop_dest = { path = "../dest" }
 pquery = { path = "../pquery" }
+gravity_entry_seams = { path = "../gravity_entry_seams" }
+# v0.4 re-plan and retry (simple_query.rs `replan_under`, `PlanDependent`): no VOLATILE call, no user operator class
+clauses = { path = "../../optimizer/util/clauses" }
+syscache_seams = { path = "../../utils/cache/syscache_seams" }
 portalmem = { path = "../../utils/mmgr/portalmem" }
 snapmgr = { path = "../../utils/time/snapmgr" }
 xact = { path = "../../access/transam/xact" }
@@ -64,7 +73,7 @@ guc_tables = { path = "../../utils/misc/guc_tables" }
 pgstat = { path = "../../utils/activity/pgstat" }
 plancache = { path = "../../utils/cache/plancache" }
 parse_oper = { path = "../../parser/parse_oper" }
-memwatchdog = { path = "../../postmaster/memwatchdog" }
+memruntime = { path = "../../postmaster/memruntime" }
 catcache = { path = "../../utils/cache/catcache" }
 l2cache = { path = "../../utils/cache/l2cache" }
 relcache = { path = "../../utils/cache/relcache" }
@@ -77,6 +86,8 @@ lsyscache = { path = "../../utils/cache/lsyscache" }
 mbutils = { path = "../../utils/mb/mbutils" }
 varlena = { path = "../../utils/adt/varlena" }
 postgres_seams = { path = "../postgres_seams" }
+# D3962: CHECK_FOR_INTERRUPTS marks Gravity's poll-gap probe (cancelpoll::polled)
+cancelpoll = { path = "../../../_support/cancelpoll" }
 walsender_seams = { path = "../../replication/walsender_seams" }
 slotsync_seams = { path = "../../replication/slotsync_seams" }
 utility_seams = { path = "../utility_seams" }
@@ -114,14 +125,13 @@ pqcomm_simnet = { path = "../../libpq/pqcomm_simnet" }
 # are cfg(pgrust_sim); native builds see only the std pub-use surface (the
 # dep-edge churn is covered by the WS-CORE G1 dep-graph ruling).
 pgsync = { path = "../../../_support/pgsync" }
+pagegive = { path = "../../../_support/pagegive" }
 vfs = { path = "../../storage/file/vfs" }
 # SIMVFS-SHARED P8 corpus body (loadsort::sim_demo, cfg pgrust_sim only;
 # pgrcolumnar was already in this binary's transitive graph).
-pgrcolumnar = { path = "../../access/pgrcolumnar" }
 types_guc = { path = "../../../_support/types/types_guc" }
 
 event_trigger_seams = { path = "../../commands/event_trigger_seams" }
-janitor_seams = { path = "../../postmaster/janitor_seams" }
 logical_worker_seams = { path = "../../replication/logical_worker_seams" }
 
 [dev-dependencies]
@@ -137,7 +147,6 @@ parse_expr = { path = "../../parser/parse_expr" }
 parser_analyze = { path = "../../parser/parser_analyze" }
 rewrite_handler = { path = "../../rewrite/rewrite_handler" }
 planner = { path = "../../optimizer/plan/planner" }
-clauses = { path = "../../optimizer/util/clauses" }
 execmain = { path = "../../executor/execmain" }
 execmain_seams = { path = "../../executor/execmain_seams" }
 utility = { path = "../utility" }
@@ -161,7 +170,6 @@ transam_xlog_seams = { path = "../../access/transam/transam_xlog_seams" }
 subtrans_seams = { path = "../../access/transam/subtrans_seams" }
 xloginsert_seams = { path = "../../access/transam/xloginsert_seams" }
 twophase_seams = { path = "../../access/transam/twophase_seams" }
-syscache_seams = { path = "../../utils/cache/syscache_seams" }
 sinval_seams = { path = "../../storage/ipc/sinval_seams" }
 inval_seams = { path = "../../utils/cache/inval_seams" }
 aclchk_seams = { path = "../../catalog/aclchk_seams" }
@@ -197,6 +205,8 @@ pg_sema_seams = { path = "../../port/pg_sema_seams" }
 types_storage = { path = "../../../_support/types/types_storage" }
 pgstat_seams = { path = "../../utils/activity/pgstat_seams" }
 init_small_seams = { path = "../../utils/init/init_small_seams" }
+# the gravity entry seams, installed by session_tests as the server's startup installs them (gravity_exec::init_seams)
+gravity_exec = { path = "../../../gravity/exec" }
 
 # `pgrust_sim` (non-default cfg): P4 sim arms live behind it; empty/absent
 # in product builds (law 0.1).

@@ -98,6 +98,19 @@ fn support_proc_identity(proc_oid: ::types_core::Oid) -> PgResult<ProcIdentity> 
     Ok(identity)
 }
 
+/// fmgr_info_cxt_security (fmgr.c:166-209): a builtin never takes the
+/// fmgr_security_definer route; any other proc does when its row has
+/// prosecdef or proconfig.
+fn secdef_proc(proc_oid: ::types_core::Oid) -> PgResult<::types_core::Oid> {
+    if proc_oid < ::types_core::catalog::FirstNormalObjectId {
+        return Ok(InvalidOid);
+    }
+    Ok(match ::syscache_seams::lookup_pg_proc_fmgr::call(proc_oid)? {
+        Some(row) if row.prosecdef || !row.proconfig_isnull => proc_oid,
+        _ => InvalidOid,
+    })
+}
+
 /// pg_language.dat: the `c` language's oid.
 const C_LANGUAGE_ID: ::types_core::Oid = 13;
 
@@ -285,6 +298,7 @@ fn init_gin_col(rel: &Relation<'_>, i: usize) -> PgResult<GinColState> {
     // ginutil.c:139-158: the compare proc, or the index key type's default
     // btree comparator from the typcache when the opclass omits it.
     let compare_proc = proc_of(GIN_COMPARE_PROC)?;
+    let mut compare_oid = compare_proc;
     let compare = if compare_proc != InvalidOid {
         resolve_compare(compare_proc)?
     } else {
@@ -308,6 +322,7 @@ fn init_gin_col(rel: &Relation<'_>, i: usize) -> PgResult<GinColState> {
                         .with_sqlstate(::types_error::ERRCODE_UNDEFINED_FUNCTION),
                     ));
                 }
+                compare_oid = cmp_proc;
                 resolve_compare(cmp_proc)?
             }
         }
@@ -373,6 +388,18 @@ fn init_gin_col(rel: &Relation<'_>, i: usize) -> PgResult<GinColState> {
             ))
         }
     };
+    // The Fmgr compare arm's own fmgr_info applies the wrapper itself.
+    let secdef = [
+        match compare {
+            GinCompareFn::Fmgr(_) => InvalidOid,
+            _ => secdef_proc(compare_oid)?,
+        },
+        secdef_proc(extract_value_proc)?,
+        secdef_proc(extract_query_proc)?,
+        secdef_proc(consistent_proc)?,
+        secdef_proc(compare_partial_proc)?,
+        secdef_proc(tri_consistent_proc)?,
+    ];
     Ok(GinColState {
         compare,
         extract_value,
@@ -380,6 +407,7 @@ fn init_gin_col(rel: &Relation<'_>, i: usize) -> PgResult<GinColState> {
         consistent,
         tri_consistent,
         compare_partial,
+        secdef,
         // ginutil.c:208-214: the index collation, else the default
         // collation for collatable storage types of noncollatable keys.
         support_collation: if rel.rd_indcollation[i] != InvalidOid {
@@ -540,7 +568,8 @@ pub fn ginCompareEntries(
     if category_a != GIN_CAT_NORM_KEY {
         return Ok(0);
     }
-    opclass::compare(state.col(attnum), a, b)
+    let col = state.col(attnum);
+    crate::secdef::call(col.secdef_proc(GIN_COMPARE_PROC), || opclass::compare(col, a, b))
 }
 
 /// ginCompareAttEntries: attribute number dominates.
@@ -570,7 +599,7 @@ pub(crate) fn try_sort_by<T: Copy>(
     if n < 2 {
         return Ok(());
     }
-    let mut buf: Vec<T> = items.to_vec();
+    let mut buf: Vec<T> = ::mcx::std_vec_from_slice("access", &items)?;
     let mut width = 1;
     while width < n {
         let mut lo = 0;
@@ -618,7 +647,10 @@ pub fn ginExtractEntries<'mcx>(
         return Ok((entries, categories));
     }
 
-    let (mut entries, null_flags) = opclass::extract_value(mcx, state.col(attnum), value)?;
+    let col = state.col(attnum);
+    let (mut entries, null_flags) = crate::secdef::call(col.secdef_proc(GIN_EXTRACTVALUE_PROC), || {
+        opclass::extract_value(mcx, col, value)
+    })?;
 
     if entries.is_empty() {
         entries.try_reserve(1).map_err(|_| crate::oom(8))?;

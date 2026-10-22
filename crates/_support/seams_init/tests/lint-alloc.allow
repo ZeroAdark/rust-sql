@@ -1,0 +1,289 @@
+# lint-alloc.allow — the std-allocation ratchet ledger (fallible-allocation program).
+# Companion: scripts/lint-alloc.sh (twin enforced copy: crates/_support/seams_init/tests/).
+# Authority: owner ruling 2026-09-15 — allocation failure surfaces as ERROR 53200,
+# never a process abort (docs/bug-campaign-20260913/LANE-FALLIBLE-ALLOC-REPORT.md).
+#
+# SEED: 2026-09-15 census @ origin/main 1aa8f77c1f2 + the lane's pilot conversions
+# (cfg(test)-stripped, prod-only, crates/{backend,pl,contrib}); constant-capacity,
+# `?`-propagated and reserved-capacity (try_reserve-then-resize) calls exempt.
+# THE RATCHET LAW: budgets only shrink, rows only die. A deliberate new site
+# carries an "ALLOC-REVIEW(<who>): <why>" annotation (4th column).
+# Row format (tab-separated): <category>	<file>	<max-sites>[	<annotation>]
+
+# ==== cap ====
+# --- crates/backend/access/heap/heapam (1 sites) ---
+cap	crates/backend/access/heap/heapam/src/dml.rs	1
+# --- crates/backend/access/heap/heapam_xlog (1 sites) ---
+cap	crates/backend/access/heap/heapam_xlog/src/lib.rs	1
+# --- crates/backend/access/heap/rewriteheap (1 sites) ---
+cap	crates/backend/access/heap/rewriteheap/src/lib.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_am (12 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_am/src/ingest.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_batch (2 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_batch/src/mask.rs	2
+# --- crates/backend/access/pgrcolumnar/pgrc_codec (21 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_codec/src/election.rs	9
+cap	crates/backend/access/pgrcolumnar/pgrc_codec/src/jsonbshred.rs	2
+cap	crates/backend/access/pgrcolumnar/pgrc_codec/src/wrapper.rs	4
+# --- crates/backend/access/pgrcolumnar/pgrc_format (13 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_format/src/bankstats.rs	3
+cap	crates/backend/access/pgrcolumnar/pgrc_format/src/manifest.rs	2
+cap	crates/backend/access/pgrcolumnar/pgrc_format/src/meta.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_format/src/part.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_format/src/sidecar.rs	3
+cap	crates/backend/access/pgrcolumnar/pgrc_format/src/sortkey.rs	2
+# --- crates/backend/access/pgrcolumnar/pgrc_ingest_par (2 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_ingest_par/src/lib.rs	2
+# --- crates/backend/access/pgrcolumnar/pgrc_meta (5 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_meta/src/builder.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_meta/src/pcache.rs	2
+# --- crates/backend/access/pgrcolumnar/pgrc_qa (12 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_qa/src/corpus.rs	9
+cap	crates/backend/access/pgrcolumnar/pgrc_qa/src/lib.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_qa/src/mutate.rs	2
+# --- crates/backend/access/pgrcolumnar/pgrc_read (21 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_read/src/dicthandle.rs	3
+cap	crates/backend/access/pgrcolumnar/pgrc_read/src/io.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	3
+cap	crates/backend/access/pgrcolumnar/pgrc_read/src/streams.rs	4
+cap	crates/backend/access/pgrcolumnar/pgrc_read/src/testpart.rs	7
+# --- crates/backend/access/pgrcolumnar/pgrc_scan (6 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_scan/src/prune.rs	2
+cap	crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	2
+cap	crates/backend/access/pgrcolumnar/pgrc_scan/src/spans.rs	2
+# --- crates/backend/access/pgrcolumnar/pgrc_write (52 sites) ---
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/bankplane.rs	3
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/dict.rs	4
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/elect.rs	8
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/ingest.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/par.rs	3
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/publish.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/seal.rs	14
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/shred.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/shred_jsonb.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/sidecar.rs	1
+cap	crates/backend/access/pgrcolumnar/pgrc_write/src/testkit.rs	5
+# --- crates/backend/access/rmgrdesc (2 sites) ---
+cap	crates/backend/access/rmgrdesc/src/xactdesc.rs	2
+# --- crates/backend/access/transam/transam_xlog (1 sites) ---
+cap	crates/backend/access/transam/transam_xlog/src/ctl.rs	1	ALLOC-REVIEW(michaelmalis): boot-time shmem sizing; failure is fatal
+# --- crates/backend/backup/basebackup (4 sites) ---
+cap	crates/backend/backup/basebackup/src/lib.rs	4
+# --- crates/backend/backup/basebackup_incremental (1 sites) ---
+cap	crates/backend/backup/basebackup_incremental/src/lib.rs	1
+# --- crates/backend/executor/runtime (5 sites) ---
+cap	crates/backend/executor/runtime/src/lib.rs	1
+cap	crates/backend/executor/runtime/src/pool.rs	1
+cap	crates/backend/executor/runtime/src/rg.rs	3
+# --- crates/backend/libpq/auth (9 sites) ---
+cap	crates/backend/libpq/auth/src/dnssrv.rs	2
+cap	crates/backend/libpq/auth/src/ldapconf.rs	1
+# --- crates/backend/main/main_main (1 sites) ---
+cap	crates/backend/main/main_main/src/lib.rs	1
+# --- crates/backend/partitioning/partbounds (10 sites) ---
+cap	crates/backend/partitioning/partbounds/src/lib.rs	6
+cap	crates/backend/partitioning/partbounds/src/merge.rs	1
+cap	crates/backend/partitioning/partbounds/src/qual.rs	2
+# --- crates/backend/partitioning/partdesc (1 sites) ---
+cap	crates/backend/partitioning/partdesc/src/lib.rs	1
+# --- crates/backend/postmaster/janitor (11 sites) ---
+cap	crates/backend/postmaster/janitor/src/mint.rs	3
+cap	crates/backend/postmaster/janitor/src/parcopy.rs	1
+cap	crates/backend/postmaster/janitor/src/pool.rs	6
+# --- crates/backend/postmaster/launch_backend (1 sites) ---
+cap	crates/backend/postmaster/launch_backend/src/lib.rs	1
+# --- crates/backend/postmaster/pmchild (1 sites) ---
+cap	crates/backend/postmaster/pmchild/src/lib.rs	1
+# --- crates/backend/storage/buffer/bufmgr (1 sites) ---
+cap	crates/backend/storage/buffer/bufmgr/src/freelist.rs	1	GUC-bounded ring (vacuum_buffer_usage_limit) in a non-Result constructor; deferred
+# --- crates/backend/storage/file/vfs (3 sites) ---
+cap	crates/backend/storage/file/vfs/src/sim.rs	3
+# --- crates/backend/storage/lmgr/lmgr_proc (1 sites) ---
+cap	crates/backend/storage/lmgr/lmgr_proc/src/lib.rs	1	boot-time shmem sizing (InitProcGlobal)
+# --- crates/backend/storage/lmgr/lwlock (1 sites) ---
+cap	crates/backend/storage/lmgr/lwlock/src/lib.rs	1
+# --- crates/backend/test_regress (2 sites) ---
+cap	crates/backend/test_regress/src/lib.rs	2
+# --- crates/backend/timezone/pgtz (1 sites) ---
+cap	crates/backend/timezone/pgtz/src/lib.rs	1
+# --- crates/backend/tsearch/ts_parse (1 sites) ---
+cap	crates/backend/tsearch/ts_parse/src/parse.rs	1
+# --- crates/backend/tsearch/wparser_def (1 sites) ---
+cap	crates/backend/tsearch/wparser_def/src/builtins.rs	1
+# --- crates/contrib/dblink (2 sites) ---
+cap	crates/contrib/dblink/src/registry.rs	2
+# --- crates/contrib/hstore (8 sites) ---
+cap	crates/contrib/hstore/src/gin.rs	1
+cap	crates/contrib/hstore/src/gist.rs	1
+cap	crates/contrib/hstore/src/lib.rs	3
+cap	crates/contrib/hstore/src/records.rs	1
+cap	crates/contrib/hstore/src/repr.rs	2
+# --- crates/contrib/isn (1 sites) ---
+cap	crates/contrib/isn/src/lib.rs	1
+# --- crates/contrib/pg_trgm (15 sites) ---
+cap	crates/contrib/pg_trgm/src/gist.rs	6
+cap	crates/contrib/pg_trgm/src/regexp.rs	8
+cap	crates/contrib/pg_trgm/src/trgm.rs	1
+# --- crates/contrib/pgcrypto (28 sites) ---
+cap	crates/contrib/pgcrypto/src/cipher.rs	3
+cap	crates/contrib/pgcrypto/src/crypt.rs	2
+cap	crates/contrib/pgcrypto/src/crypt/bcrypt.rs	1
+cap	crates/contrib/pgcrypto/src/crypt/shacrypt.rs	2
+cap	crates/contrib/pgcrypto/src/pgp/armor.rs	2
+cap	crates/contrib/pgcrypto/src/pgp/cfb.rs	6
+cap	crates/contrib/pgcrypto/src/pgp/compress.rs	1
+cap	crates/contrib/pgcrypto/src/pgp/encrypt.rs	6
+cap	crates/contrib/pgcrypto/src/pgp/mod.rs	1
+cap	crates/contrib/pgcrypto/src/pgp/mpi.rs	1
+cap	crates/contrib/pgcrypto/src/pgp/pubenc.rs	2
+cap	crates/contrib/pgcrypto/src/pgp/s2k.rs	1
+# --- crates/contrib/unaccent (1 sites) ---
+cap	crates/contrib/unaccent/src/lib.rs	1
+
+# ==== reserve ====
+# --- crates/backend/access/heap/heapam (2 sites) ---
+reserve	crates/backend/access/heap/heapam/src/dml.rs	2
+# --- crates/backend/access/parquet_read (1 sites) ---
+reserve	crates/backend/access/parquet_read/src/codec.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_batch (4 sites) ---
+reserve	crates/backend/access/pgrcolumnar/pgrc_batch/src/batch.rs	2
+reserve	crates/backend/access/pgrcolumnar/pgrc_batch/src/validity.rs	2
+# --- crates/backend/access/pgrcolumnar/pgrc_codec (3 sites) ---
+reserve	crates/backend/access/pgrcolumnar/pgrc_codec/src/wrapper.rs	2
+# --- crates/backend/access/pgrcolumnar/pgrc_format (7 sites) ---
+reserve	crates/backend/access/pgrcolumnar/pgrc_format/src/part.rs	3
+reserve	crates/backend/access/pgrcolumnar/pgrc_format/src/verbatim.rs	3
+reserve	crates/backend/access/pgrcolumnar/pgrc_format/src/wire.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_meta (4 sites) ---
+reserve	crates/backend/access/pgrcolumnar/pgrc_meta/src/batch.rs	3
+reserve	crates/backend/access/pgrcolumnar/pgrc_meta/src/builder.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_qa (2 sites) ---
+reserve	crates/backend/access/pgrcolumnar/pgrc_qa/src/simvfs.rs	2
+# --- crates/backend/access/pgrcolumnar/pgrc_scan (3 sites) ---
+reserve	crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	3
+# --- crates/backend/access/pgrcolumnar/pgrc_write (11 sites) ---
+reserve	crates/backend/access/pgrcolumnar/pgrc_write/src/ingest.rs	1
+reserve	crates/backend/access/pgrcolumnar/pgrc_write/src/meta_standin.rs	1
+reserve	crates/backend/access/pgrcolumnar/pgrc_write/src/par.rs	1
+reserve	crates/backend/access/pgrcolumnar/pgrc_write/src/seal.rs	2
+reserve	crates/backend/access/pgrcolumnar/pgrc_write/src/shred.rs	1
+reserve	crates/backend/access/pgrcolumnar/pgrc_write/src/wvfs.rs	1
+# --- crates/backend/backup/backup_copy (1 sites) ---
+reserve	crates/backend/backup/backup_copy/src/lib.rs	1
+# --- crates/backend/executor/executils (5 sites) ---
+reserve	crates/backend/executor/executils/src/lib.rs	4
+# --- crates/backend/partitioning/partbounds (2 sites) ---
+reserve	crates/backend/partitioning/partbounds/src/lib.rs	1
+reserve	crates/backend/partitioning/partbounds/src/merge.rs	1
+# --- crates/backend/storage/file/vfs (6 sites) ---
+reserve	crates/backend/storage/file/vfs/src/sim.rs	6
+# --- crates/backend/storage/lmgr/lwlock (1 sites) ---
+reserve	crates/backend/storage/lmgr/lwlock/src/lib.rs	1
+# --- crates/backend/tsearch/wparser_def (1 sites) ---
+reserve	crates/backend/tsearch/wparser_def/src/parser.rs	1
+# --- crates/contrib/hstore (2 sites) ---
+reserve	crates/contrib/hstore/src/gist.rs	1
+reserve	crates/contrib/hstore/src/records.rs	1
+# --- crates/contrib/intarray (1 sites) ---
+reserve	crates/contrib/intarray/src/gistbig.rs	1
+# --- crates/contrib/pgcrypto (2 sites) ---
+reserve	crates/contrib/pgcrypto/src/hashing.rs	1
+reserve	crates/contrib/pgcrypto/src/pgp/compress.rs	1
+
+# ==== collect ====
+# --- crates/backend/access/heap/heapam_xlog (3 sites) ---
+collect	crates/backend/access/heap/heapam_xlog/src/lib.rs	3
+# --- crates/backend/access/heap/vacuumlazy (1 sites) ---
+collect	crates/backend/access/heap/vacuumlazy/src/morsels.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_am (1 sites) ---
+collect	crates/backend/access/pgrcolumnar/pgrc_am/src/footer.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_batch (1 sites) ---
+collect	crates/backend/access/pgrcolumnar/pgrc_batch/src/mask.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_codec (3 sites) ---
+# --- crates/backend/access/pgrcolumnar/pgrc_format (5 sites) ---
+collect	crates/backend/access/pgrcolumnar/pgrc_format/src/sidecar.rs	2
+collect	crates/backend/access/pgrcolumnar/pgrc_format/src/verbatim.rs	3
+# --- crates/backend/access/pgrcolumnar/pgrc_meta (9 sites) ---
+collect	crates/backend/access/pgrcolumnar/pgrc_meta/src/ndv.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_qa (7 sites) ---
+collect	crates/backend/access/pgrcolumnar/pgrc_qa/src/corpus.rs	6
+collect	crates/backend/access/pgrcolumnar/pgrc_qa/src/mutate.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_read (5 sites) ---
+collect	crates/backend/access/pgrcolumnar/pgrc_read/src/sidecar.rs	1
+collect	crates/backend/access/pgrcolumnar/pgrc_read/src/testpart.rs	4
+# --- crates/backend/access/pgrcolumnar/pgrc_scan (2 sites) ---
+collect	crates/backend/access/pgrcolumnar/pgrc_scan/src/meta.rs	1
+collect	crates/backend/access/pgrcolumnar/pgrc_scan/src/prune.rs	1
+# --- crates/backend/access/pgrcolumnar/pgrc_write (9 sites) ---
+collect	crates/backend/access/pgrcolumnar/pgrc_write/src/dict.rs	2
+collect	crates/backend/access/pgrcolumnar/pgrc_write/src/elect.rs	1
+collect	crates/backend/access/pgrcolumnar/pgrc_write/src/ingest.rs	1
+collect	crates/backend/access/pgrcolumnar/pgrc_write/src/seal.rs	1
+collect	crates/backend/access/pgrcolumnar/pgrc_write/src/shred.rs	1
+collect	crates/backend/access/pgrcolumnar/pgrc_write/src/testkit.rs	1
+# --- crates/backend/backup/manifest (1 sites) ---
+collect	crates/backend/backup/manifest/src/lib.rs	1
+# --- crates/backend/catalog/catalog_namespace (1 sites) ---
+collect	crates/backend/catalog/catalog_namespace/src/lookup.rs	1	ALLOC-REVIEW(michaelmalis): error-report buffer on non-Result helper
+collect	crates/backend/catalog/objectaddress/src/lib.rs	1	ALLOC-REVIEW(michaelmalis): error-report buffer on non-Result helper (fp-catalog-objectaddress-p1#4 raw %c byte)
+# --- crates/backend/postmaster/postmaster (2 sites) ---
+collect	crates/backend/postmaster/postmaster/src/lib.rs	1
+collect	crates/backend/postmaster/postmaster/src/main_entry.rs	1
+# --- crates/backend/postmaster/syslogger (1 sites) ---
+collect	crates/backend/postmaster/syslogger/src/lib.rs	1
+# --- crates/backend/postmaster/walsummarizer (1 sites) ---
+collect	crates/backend/postmaster/walsummarizer/src/lib.rs	1
+# --- crates/backend/snowball/dict_snowball (1 sites) ---
+collect	crates/backend/snowball/dict_snowball/src/dict.rs	1
+# --- crates/backend/storage/file/vfs (2 sites) ---
+collect	crates/backend/storage/file/vfs/src/sim.rs	2
+# --- crates/backend/storage/ipc/latch (1 sites) ---
+collect	crates/backend/storage/ipc/latch/src/lib.rs	1
+# --- crates/backend/storage/ipc/pmsignal (1 sites) ---
+collect	crates/backend/storage/ipc/pmsignal/src/lib.rs	1
+# --- crates/backend/storage/ipc/waiter (1 sites) ---
+collect	crates/backend/storage/ipc/waiter/src/lib.rs	1	ALLOC-REVIEW(michaelmalis): boot-time waiter slab sized from max backends and leaked; failure is fatal at startup
+# --- crates/backend/storage/lmgr/condition_variable (1 sites) ---
+collect	crates/backend/storage/lmgr/condition_variable/src/lib.rs	1
+# --- crates/backend/storage/lmgr/lmgr_proc (6 sites) ---
+collect	crates/backend/storage/lmgr/lmgr_proc/src/lib.rs	6	boot-time shmem sizing (InitProcGlobal; C ShmemInitStruct FATAL)
+# --- crates/backend/test_regress (3 sites) ---
+collect	crates/backend/test_regress/src/lib.rs	3
+# --- crates/backend/tcop/postgres (2 sites) ---
+collect	crates/backend/tcop/postgres/src/switches.rs	2	ALLOC-REVIEW(michaelmalis): backend-startup argv scan (glibc getopt port, fp-tcop-postgres-p2#2); argv-sized, failure is fatal
+# --- crates/backend/tsearch/spell (1 sites) ---
+collect	crates/backend/tsearch/spell/src/normalize.rs	1
+# --- crates/backend/tsearch/ts_locale (1 sites) ---
+collect	crates/backend/tsearch/ts_locale/src/public.rs	1
+# --- crates/backend/tsearch/ts_parse (1 sites) ---
+collect	crates/backend/tsearch/ts_parse/src/parse.rs	1
+# --- crates/backend/tsearch/wparser_def (1 sites) ---
+collect	crates/backend/tsearch/wparser_def/src/headline.rs	1
+# --- crates/contrib/cube (1 sites) ---
+collect	crates/contrib/cube/src/parse.rs	1
+# --- crates/contrib/dblink (2 sites) ---
+collect	crates/contrib/dblink/src/catalog.rs	1
+collect	crates/contrib/dblink/src/registry.rs	1
+# --- crates/contrib/hstore (9 sites) ---
+collect	crates/contrib/hstore/src/lib.rs	4
+collect	crates/contrib/hstore/src/parse.rs	1
+collect	crates/contrib/hstore/src/repr.rs	2
+collect	crates/contrib/hstore/src/srf.rs	2
+# --- crates/contrib/pg_logicalinspect (1 sites) ---
+collect	crates/contrib/pg_logicalinspect/src/lib.rs	1
+# --- crates/contrib/pg_trgm (2 sites) ---
+collect	crates/contrib/pg_trgm/src/lib.rs	2
+# --- crates/contrib/pgcrypto (23 sites) ---
+collect	crates/contrib/pgcrypto/src/cipher.rs	6
+collect	crates/contrib/pgcrypto/src/crypt/divergence_witness.rs	3
+collect	crates/contrib/pgcrypto/src/crypt/shacrypt.rs	2
+collect	crates/contrib/pgcrypto/src/hashing.rs	1
+collect	crates/contrib/pgcrypto/src/lib.rs	6
+collect	crates/contrib/pgcrypto/src/pgp/armor.rs	2
+collect	crates/contrib/pgcrypto/src/pgp/decrypt.rs	1
+collect	crates/contrib/pgcrypto/src/pgp/pubdec.rs	1
+collect	crates/contrib/pgcrypto/src/pgp/pubkey.rs	1
+# --- crates/contrib/seg (1 sites) ---
+collect	crates/contrib/seg/src/parse.rs	1
+# --- crates/contrib/sslinfo (1 sites) ---
+collect	crates/contrib/sslinfo/src/lib.rs	1

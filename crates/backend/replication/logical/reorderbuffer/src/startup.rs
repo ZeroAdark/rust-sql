@@ -4,11 +4,18 @@ use types_core::NAMEDATALEN;
 use types_error::{ErrorLocation, PgResult, INFO};
 
 use crate::rb_file_error;
+use elog::PCT_M;
 
 const PG_REPLSLOT_DIR: &str = "pg_replslot";
 
 pub(crate) fn replslot_dir() -> Option<PathBuf> {
     init_small::globals::DataDir().map(|d| PathBuf::from(d).join(PG_REPLSLOT_DIR))
+}
+
+// The path as C prints it: relative to DataDir, C's working directory.
+pub(crate) fn datadir_relative(path: &std::path::Path) -> String {
+    let rel = init_small::globals::DataDir().and_then(|d| path.strip_prefix(d).ok());
+    rel.unwrap_or(path).display().to_string()
 }
 
 // ReplicationSlotValidateName's character rules (slot.c); the slot lane owns
@@ -31,7 +38,7 @@ fn read_dir_info(what: &str, dirname: &str, err: &std::io::Error) -> PgResult<()
     elog::ereport(INFO)
         .with_saved_errno(errno)
         .errcode_for_file_access()
-        .errmsg(format!("could not {what} directory \"{dirname}\": %m"))
+        .errmsg(format!("could not {what} directory \"{dirname}\": {PCT_M}"))
         .finish(ErrorLocation::new(file!(), line!() as i32, "ReadDirExtended"))
 }
 
@@ -69,7 +76,7 @@ pub(crate) fn ReorderBufferCleanupSerializedTXNs(slotname: &str) -> PgResult<()>
                 // reorderbuffer.c:4899
                 rb_file_error(
                     format!(
-                        "could not remove file \"{relpath}/{name}\" during removal of {relpath}/xid*: %m"
+                        "could not remove file \"{relpath}/{name}\" during removal of {relpath}/xid*: {PCT_M}"
                     ),
                     &e,
                 )
@@ -85,14 +92,14 @@ pub fn StartupReorderBuffer() -> PgResult<()> {
     };
     let entries = std::fs::read_dir(&dir).map_err(|e| {
         rb_file_error(
-            format!("could not open directory \"{}\": %m", dir.display()),
+            format!("could not open directory \"{}\": {PCT_M}", datadir_relative(&dir)),
             &e,
         )
     })?;
     for entry in entries {
         let entry = entry.map_err(|e| {
             rb_file_error(
-                format!("could not read directory \"{}\": %m", dir.display()),
+                format!("could not read directory \"{}\": {PCT_M}", datadir_relative(&dir)),
                 &e,
             )
         })?;

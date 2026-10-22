@@ -355,7 +355,7 @@ pub fn index_beginscan<'mcx>(
     scan.heapRelation = Some(heapRelation.alias());
     scan.xs_snapshot = Some(snapshot);
 
-    scan.xs_heapfetch = Some(fetch::begin(heapRelation));
+    scan.xs_heapfetch = Some(fetch::begin(heapRelation)?);
 
     Ok(scan)
 }
@@ -434,7 +434,7 @@ pub fn index_beginscan_parallel<'mcx>(
     scan.xs_snapshot = Some(snapshot.clone());
     scan.xs_temp_snapshot = Some(snapshot);
 
-    scan.xs_heapfetch = Some(fetch::begin(heaprel));
+    scan.xs_heapfetch = Some(fetch::begin(heaprel)?);
 
     Ok(scan)
 }
@@ -533,29 +533,11 @@ pub fn index_parkscan(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
     }
     debug_assert!(!scan.xs_temp_snap);
     scan.xs_snapshot = None;
-    // Drain the batched pgstat counters while the index alias is still live
-    // (C counts per call via the pgstat.h macros, so per-run visibility of
-    // the counts matches C; the batch is pure deferral).
-    drain_pgstat_counters(scan);
     // Relation aliases are relcache refcounts (CheckTableNotInUse counts
     // them): a parked scan must hold none.
     scan.heapRelation = None;
     scan.indexRelation = None;
     Ok(())
-}
-
-fn drain_pgstat_counters(scan: &mut IndexScanDescData<'_>) {
-    let index_rel = scan.index_rel();
-    pgstat::relation::pgstat_count_index_scan_batched(
-        index_rel.rd_id,
-        index_rel.rd_rel.relisshared,
-        scan.xs_pgstat_index_scans,
-        scan.xs_pgstat_index_tuples,
-        scan.xs_pgstat_heap_fetches,
-    );
-    scan.xs_pgstat_index_scans = 0;
-    scan.xs_pgstat_index_tuples = 0;
-    scan.xs_pgstat_heap_fetches = 0;
 }
 
 /// Executor-skeleton re-arm: the per-execution slice of `index_beginscan`
@@ -572,20 +554,22 @@ pub fn index_rearmscan<'mcx>(
     if !kind.ampredlocks() {
         predicate::PredicateLockRelation(indexRelation, &snapshot)?;
     }
+    scan.xs_pgstat = types_relscan::PgStatRelationCounts::new(
+        indexRelation.rd_id,
+        indexRelation.rd_rel.relisshared,
+    );
     scan.indexRelation = Some(indexRelation.alias());
     scan.heapRelation = Some(heapRelation.alias());
-    scan.xs_heapfetch = Some(fetch::begin(heapRelation));
+    scan.xs_heapfetch = Some(fetch::begin(heapRelation)?);
     scan.xs_snapshot = Some(snapshot);
+    // RelationGetIndexScan reads these per execution (genam.c); a skeleton
+    // built before promotion must not keep the standby's values.
+    scan.xactStartedInRecovery = xact::TransactionStartedDuringRecovery();
+    scan.ignore_killed_tuples = !scan.xactStartedInRecovery;
     Ok(())
 }
 
 pub fn index_endscan(mut scan: IndexScanDescData<'_>) -> PgResult<()> {
-    // Drain of the per-scan batched pgstat counters (C counts per call via
-    // the pgstat.h macros; increments gate on pgstat_enabled). A parked scan
-    // (skeleton) drained at index_parkscan and holds no relation alias.
-    if scan.indexRelation.is_some() {
-        drain_pgstat_counters(&mut scan);
-    }
     if let Some(heapfetch) = scan.xs_heapfetch.take() {
         fetch::end(heapfetch);
     }
@@ -680,12 +664,18 @@ pub fn index_fetch_heap<'mcx>(
         return Ok(found);
     }
 
+    // IX1 L0: a pgrcolumnar TID names a row ID, not a page: no readahead, no
+    // same-block runs.
+    let pages = scan.xs_heapfetch.as_ref().is_none_or(fetch::reads_pages);
+
     // New heap block (or non-batch row): keep the readahead window primed.
-    prefetch::on_heap_fetch(scan)?;
+    if pages {
+        prefetch::on_heap_fetch(scan)?;
+    }
 
     // Start a run when the index holds more TIDs for this heap page. MVCC
     // verdicts are fill-time-independent; non-MVCC keeps the per-tuple path.
-    if same_page_run_allowed(scan) {
+    if pages && same_page_run_allowed(scan) {
         if let IndexScanOpaque::Btree(so) = &scan.opaque {
             let mut run: [MaybeUninit<ItemPointerData>; INDEX_FETCH_BATCH_MAX] =
                 [const { MaybeUninit::uninit() }; INDEX_FETCH_BATCH_MAX];
@@ -851,14 +841,14 @@ fn same_page_run_allowed(scan: &IndexScanDescData<'_>) -> bool {
 #[inline]
 fn pgstat_count_index_tuples(scan: &mut IndexScanDescData<'_>, n: u64) {
     if scan.index_rel().pgstat_enabled.get() {
-        scan.xs_pgstat_index_tuples += n;
+        scan.xs_pgstat.count(0, n, 0);
     }
 }
 
 #[inline]
 fn pgstat_count_heap_fetch(scan: &mut IndexScanDescData<'_>) {
     if scan.index_rel().pgstat_enabled.get() {
-        scan.xs_pgstat_heap_fetches += 1;
+        scan.xs_pgstat.count(0, 0, 1);
     }
 }
 
@@ -1130,17 +1120,26 @@ mod fetch {
     use super::*;
 
     #[cfg(not(test))]
-    pub fn begin<'mcx>(heapRelation: &Relation<'mcx>) -> IndexFetchTableData<'mcx> {
-        IndexFetchTableData::Table(tableam::table_index_fetch_begin(heapRelation))
+    pub fn begin<'mcx>(heapRelation: &Relation<'mcx>) -> PgResult<IndexFetchTableData<'mcx>> {
+        Ok(IndexFetchTableData::Table(tableam::table_index_fetch_begin(heapRelation)?))
     }
 
     #[cfg(test)]
-    pub fn begin<'mcx>(heapRelation: &Relation<'mcx>) -> IndexFetchTableData<'mcx> {
-        IndexFetchTableData::Mock(types_relscan::MockFetch {
+    pub fn begin<'mcx>(heapRelation: &Relation<'mcx>) -> PgResult<IndexFetchTableData<'mcx>> {
+        Ok(IndexFetchTableData::Mock(types_relscan::MockFetch {
             rel: heapRelation.alias(),
             mock_fetch: Vec::new(),
             resets: 0,
-        })
+        }))
+    }
+
+    /// Whether the fetch's TIDs are pages of the table (`table_index_fetch_reads_pages`; a mock's are).
+    pub fn reads_pages(heapfetch: &IndexFetchTableData<'_>) -> bool {
+        match heapfetch {
+            IndexFetchTableData::Table(t) => tableam::table_index_fetch_reads_pages(t),
+            #[allow(unreachable_patterns)]
+            _ => true,
+        }
     }
 
     pub fn reset(heapfetch: &mut IndexFetchTableData<'_>) {
@@ -1301,9 +1300,10 @@ mod mock {
             xs_orderbynulls: PgVec::new_in(mcx),
             xs_recheckorderby: false,
             xs_prefetch: types_relscan::IndexPrefetchState::reset(),
-            xs_pgstat_index_tuples: 0,
-            xs_pgstat_heap_fetches: 0,
-            xs_pgstat_index_scans: 0,
+            xs_pgstat: types_relscan::PgStatRelationCounts::new(
+                indexRelation.rd_id,
+                indexRelation.rd_rel.relisshared,
+            ),
             xs_nsearches: 0,
         }
     }

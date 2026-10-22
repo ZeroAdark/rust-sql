@@ -1,0 +1,55 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2r2 s1sort s2r1 s2c
+step s2b: BEGIN;
+step s2r2: SELECT id FROM d4205 WHERE id = 202 FOR UPDATE;
+ id
+---
+202
+(1 row)
+
+step s1sort: SELECT id, k, v FROM d4205 WHERE k < 10 ORDER BY k, id LIMIT 3 FOR UPDATE;
+ERROR:  character with byte sequence 0xe2 0x82 0xac in encoding "UTF8" has no equivalent in encoding "LATIN1"
+step s2r1: SELECT id FROM d4205 WHERE id = 101 FOR UPDATE;
+ id
+---
+101
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2r2 s1nw s2r1 s2c
+step s2b: BEGIN;
+step s2r2: SELECT id FROM d4205 WHERE id = 202 FOR UPDATE;
+ id
+---
+202
+(1 row)
+
+step s1nw: SELECT id, k, v FROM d4205 WHERE k < 10 ORDER BY k, id LIMIT 3 FOR UPDATE NOWAIT;
+ERROR:  character with byte sequence 0xe2 0x82 0xac in encoding "UTF8" has no equivalent in encoding "LATIN1"
+step s2r1: SELECT id FROM d4205 WHERE id = 101 FOR UPDATE;
+ id
+---
+101
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2r2 s1idx s2r1 s2c
+step s2b: BEGIN;
+step s2r2: SELECT id FROM d4205 WHERE id = 202 FOR UPDATE;
+ id
+---
+202
+(1 row)
+
+step s1idx: SELECT id, v FROM d4205 WHERE id IN (101, 202, 303) ORDER BY id FOR UPDATE;
+ERROR:  character with byte sequence 0xe2 0x82 0xac in encoding "UTF8" has no equivalent in encoding "LATIN1"
+step s2r1: SELECT id FROM d4205 WHERE id = 101 FOR UPDATE;
+ id
+---
+101
+(1 row)
+
+step s2c: COMMIT;

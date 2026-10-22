@@ -7,19 +7,15 @@ use mcx::{Mcx, PgVec};
 use types_core::{InvalidOid, Oid, BTREE_AM_OID};
 use types_error::PgResult;
 
-// pg_amop.h
 pub const AMOP_SEARCH: u8 = b's';
 pub const AMOP_ORDER: u8 = b'o';
-// stratnum.h
 pub const HTEqualStrategyNumber: i16 = 1;
 pub const BTLessStrategyNumber: i16 = 1;
 pub const BTLessEqualStrategyNumber: i16 = 2;
 pub const BTEqualStrategyNumber: i16 = 3;
 pub const BTGreaterEqualStrategyNumber: i16 = 4;
 pub const BTGreaterStrategyNumber: i16 = 5;
-// hash.h
 pub const HASHSTANDARD_PROC: i16 = 1;
-// pg_am.dat
 pub const HASH_AM_OID: Oid = 405;
 pub const GIST_AM_OID: Oid = 783;
 pub const GIN_AM_OID: Oid = 2742;
@@ -27,7 +23,7 @@ pub const SPGIST_AM_OID: Oid = 4000;
 pub const BRIN_AM_OID: Oid = 3580;
 
 // A non-builtin AM (CREATE ACCESS METHOD over a builtin index handler)
-// behaves as its handler's builtin AM (amapi.c resolves via GetIndexAmRoutine).
+// behaves as its handler's builtin AM.
 fn canonical_index_am(amoid: Oid) -> Oid {
     match syscache_seams::pg_am_amhandler::call(amoid).map(|h| h.map(handler_dispatch_target)) {
         Ok(Some(330)) => BTREE_AM_OID,
@@ -40,9 +36,6 @@ fn canonical_index_am(amoid: Oid) -> Oid {
     }
 }
 
-// fmgr.c:236-247: a LANGUAGE internal handler dispatches by its prosrc, so an
-// internal alias of bthandler IS bthandler (oid 330); LANGUAGE c handlers
-// (the in-tree extension AMs) keep their own oid.
 fn handler_dispatch_target(handler: Oid) -> Oid {
     if fmgr_seams::internal_builtin_oid::is_installed() {
         if let Ok(Some(target)) = fmgr_seams::internal_builtin_oid::call(handler) {
@@ -52,9 +45,6 @@ fn handler_dispatch_target(handler: Oid) -> Oid {
     handler
 }
 
-// amapi.c IndexAmTranslateStrategy over the built-in AMs (bttranslatestrategy
-// / hashtranslatestrategy; gist/gin/spgist/brin define no translator).
-// Non-core AMs need GetIndexAmRoutineByAmId, unported: loud panic.
 fn index_am_translate_strategy(strategy: i16, amoid: Oid, _opfamily: Oid) -> CompareType {
     match amoid {
         BTREE_AM_OID if (1..=5).contains(&strategy) => strategy as CompareType,
@@ -63,7 +53,6 @@ fn index_am_translate_strategy(strategy: i16, amoid: Oid, _opfamily: Oid) -> Com
         HASH_AM_OID | GIST_AM_OID | GIN_AM_OID | SPGIST_AM_OID | BRIN_AM_OID => COMPARE_INVALID,
         _ => match canonical_index_am(amoid) {
             c if c != amoid => index_am_translate_strategy(strategy, c, _opfamily),
-            // hnsw and bloom: amtranslatestrategy == NULL.
             _ => match extension_am_handler_name(amoid).as_deref() {
                 Some(b"hnswhandler") | Some(b"blhandler") => COMPARE_INVALID,
                 _ => panic!(
@@ -74,7 +63,6 @@ fn index_am_translate_strategy(strategy: i16, amoid: Oid, _opfamily: Oid) -> Com
     }
 }
 
-// amapi.c IndexAmTranslateCompareType, same built-in coverage.
 fn index_am_translate_cmptype(cmptype: CompareType, amoid: Oid, _opfamily: Oid) -> StrategyNumber {
     match amoid {
         BTREE_AM_OID if (COMPARE_LT..=COMPARE_GT).contains(&cmptype) => cmptype as StrategyNumber,
@@ -83,7 +71,6 @@ fn index_am_translate_cmptype(cmptype: CompareType, amoid: Oid, _opfamily: Oid) 
         HASH_AM_OID | GIST_AM_OID | GIN_AM_OID | SPGIST_AM_OID | BRIN_AM_OID => InvalidStrategy,
         _ => match canonical_index_am(amoid) {
             c if c != amoid => index_am_translate_cmptype(cmptype, c, _opfamily),
-            // hnsw and bloom: amtranslatecmptype == NULL.
             _ => match extension_am_handler_name(amoid).as_deref() {
                 Some(b"hnswhandler") | Some(b"blhandler") => InvalidStrategy,
                 _ => panic!(
@@ -94,7 +81,6 @@ fn index_am_translate_cmptype(cmptype: CompareType, amoid: Oid, _opfamily: Oid) 
     }
 }
 
-// (amconsistentequality, amconsistentordering) from the built-in AM handlers.
 pub(crate) fn index_am_consistent_flags(amoid: Oid) -> (bool, bool) {
     match amoid {
         BTREE_AM_OID => (true, true),
@@ -102,7 +88,6 @@ pub(crate) fn index_am_consistent_flags(amoid: Oid) -> (bool, bool) {
         GIST_AM_OID | GIN_AM_OID | SPGIST_AM_OID | BRIN_AM_OID => (false, false),
         _ => match canonical_index_am(amoid) {
             c if c != amoid => index_am_consistent_flags(c),
-            // hnsw and bloom handlers: both consistency flags false.
             _ => match extension_am_handler_name(amoid).as_deref() {
                 Some(b"hnswhandler") | Some(b"blhandler") => (false, false),
                 _ => panic!(
@@ -173,16 +158,12 @@ pub fn get_opfamily_member_for_cmptype(
     get_opfamily_member(opfamily, lefttype, righttype, strategy as i16)
 }
 
-// C hardcodes the built-in AMs and falls back to GetIndexAmRoutineByAmId
-// (amapi.c, unported) for others: that arm is a loud panic here.
 fn get_opmethod_canorder(amoid: Oid) -> bool {
     match amoid {
         BTREE_AM_OID => true,
         HASH_AM_OID | GIST_AM_OID | GIN_AM_OID | SPGIST_AM_OID | BRIN_AM_OID => false,
         _ => match canonical_index_am(amoid) {
             c if c != amoid => get_opmethod_canorder(c),
-            // Extension AMs by handler symbol: hnsw and bloom set
-            // amcanorder = false in their handlers.
             _ => match extension_am_handler_name(amoid).as_deref() {
                 Some(b"hnswhandler") | Some(b"blhandler") => false,
                 _ => panic!(
@@ -196,7 +177,11 @@ fn get_opmethod_canorder(amoid: Oid) -> bool {
 fn extension_am_handler_name(amoid: Oid) -> Option<Vec<u8>> {
     let handler = syscache_seams::pg_am_amhandler::call(amoid).ok()??;
     let name = syscache_seams::pg_proc_proname::call(handler).ok()??;
-    Some(name.name_str().to_vec())
+    let s = name.name_str();
+    let mut v = Vec::new();
+    let _ = v.try_reserve(s.len());
+    v.extend_from_slice(s);
+    Some(v)
 }
 
 pub fn get_ordering_op_properties(opno: Oid) -> PgResult<Option<(Oid, Oid, CompareType)>> {
@@ -254,8 +239,6 @@ pub fn get_ordering_op_for_equality_op(opno: Oid, use_lhs_type: bool) -> PgResul
     })
 }
 
-// pg_amop rows for an operator, visitor form (get_op_btree_interpretation's
-// membership probe rides this).
 pub fn with_amop_members(
     opno: Oid,
     mut f: impl FnMut(&syscache_seams::PgAmopMemberShape),
@@ -269,9 +252,8 @@ pub fn with_amop_members(
     })
 }
 
-// op_is_safe_index_member (lsyscache.c): btree/hash opfamily membership,
-// used as a proxy for null-safety and for equality-semantics agreement with
-// the family's other members.
+// Btree/hash opfamily membership is used as a proxy for null-safety and
+// equality-semantics agreement with the family's other members.
 pub fn op_is_safe_index_member(opno: Oid) -> PgResult<bool> {
     with_scratch(|scratch| {
         let members = syscache_seams::lookup_pg_amop_members_by_operator::call(scratch, opno)?;
@@ -289,13 +271,7 @@ pub fn get_mergejoin_opfamilies<'mcx>(mcx: Mcx<'mcx>, opno: Oid) -> PgResult<PgV
     with_scratch(|scratch| {
         let members = syscache_seams::lookup_pg_amop_members_by_operator::call(scratch, opno)?;
         for aform in &members {
-            if get_opmethod_canorder(aform.amopmethod)
-                && index_am_translate_strategy(
-                    aform.amopstrategy,
-                    aform.amopmethod,
-                    aform.amopfamily,
-                ) == COMPARE_EQ
-            {
+            if is_mergejoin_equality(aform) {
                 result.push(aform.amopfamily);
             }
         }
@@ -304,13 +280,14 @@ pub fn get_mergejoin_opfamilies<'mcx>(mcx: Mcx<'mcx>, opno: Oid) -> PgResult<PgV
     Ok(result)
 }
 
-// get_compatible_hash_operators (lsyscache.c:479-561): `want_lhs`/`want_rhs`
-// are C's nullable lhs_opno/rhs_opno out-pointers. A side the caller does not
-// ask for is never looked up (lsyscache.c:528 `if (lhs_opno)`, :543
-// `if (rhs_opno)`), so a family that carries the cross-type operator and only
-// the RHS single-type '=' still satisfies both in-tree callers (nodeSubplan.c
-// and createplan.c pass NULL for lhs). An unrequested side comes back as
-// InvalidOid.
+// get_mergejoin_opfamilies' test: the member is the equality strategy of an ordering opfamily.
+pub(crate) fn is_mergejoin_equality(aform: &syscache_seams::PgAmopMemberShape) -> bool {
+    get_opmethod_canorder(aform.amopmethod)
+        && index_am_translate_strategy(aform.amopstrategy, aform.amopmethod, aform.amopfamily) == COMPARE_EQ
+}
+
+// A side the caller does not ask for is never looked up; an unrequested
+// side comes back as InvalidOid.
 pub fn get_compatible_hash_operators(
     opno: Oid,
     want_lhs: bool,
@@ -320,15 +297,13 @@ pub fn get_compatible_hash_operators(
         let members = syscache_seams::lookup_pg_amop_members_by_operator::call(scratch, opno)?;
         for aform in &members {
             if aform.amopmethod == HASH_AM_OID && aform.amopstrategy == HTEqualStrategyNumber {
-                // No extra lookup needed if given operator is single-type.
                 if aform.amoplefttype == aform.amoprighttype {
                     return Ok(Some((
                         if want_lhs { opno } else { InvalidOid },
                         if want_rhs { opno } else { InvalidOid },
                     )));
                 }
-                // Get the matching single-type operator(s). Failure implies a
-                // bogus opfamily -- continue looking, as C.
+                // Failure implies a bogus opfamily -- continue looking.
                 let mut lhs = InvalidOid;
                 if want_lhs {
                     lhs = get_opfamily_member(
@@ -340,7 +315,6 @@ pub fn get_compatible_hash_operators(
                     if lhs == InvalidOid {
                         continue;
                     }
-                    // Matching LHS found, done if caller doesn't want RHS.
                     if !want_rhs {
                         return Ok(Some((lhs, InvalidOid)));
                     }
@@ -432,7 +406,6 @@ pub fn get_op_index_interpretation<'mcx>(
         }
         let members = syscache_seams::lookup_pg_amop_members_by_operator::call(scratch, op_negator)?;
         for op_form in &members {
-            // C reads amroutine->amcanorder here; same value for built-ins.
             if !get_opmethod_canorder(op_form.amopmethod) {
                 continue;
             }

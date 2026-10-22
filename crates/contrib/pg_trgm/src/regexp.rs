@@ -149,7 +149,7 @@ fn get_color_info(
     scratch: &MemoryContext,
 ) -> PgResult<Vec<ColorInfo>> {
     let ncolors = rex::pg_reg_getnumcolors(regex);
-    let mut colors = Vec::with_capacity(ncolors as usize);
+    let mut colors = ::mcx::std_vec_with_capacity("pg_trgm", ncolors as usize)?;
     for co in 0..ncolors {
         let chars_count = rex::pg_reg_getnumcharacters(regex, co);
         if !(0..=COLOR_COUNT_LIMIT).contains(&chars_count) {
@@ -160,12 +160,12 @@ fn get_color_info(
             });
             continue;
         }
-        let mut chars = vec![0 as types_core::PgWChar; chars_count as usize];
+        let mut chars = ::mcx::std_vec_from_elem("pg_trgm", 0 as types_core::PgWChar, chars_count as usize)?;
         rex::pg_reg_getcharacters(regex, co, &mut chars);
         let mut info = ColorInfo {
             expandable: true,
             contains_non_word: false,
-            word_chars: Vec::with_capacity(chars_count as usize),
+            word_chars: ::mcx::std_vec_with_capacity("pg_trgm", chars_count as usize)?,
         };
         for &c in &chars {
             let Some(mb) = convert_pg_wchar(c, env, scratch)? else {

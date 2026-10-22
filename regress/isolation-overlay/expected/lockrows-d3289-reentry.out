@@ -1,0 +1,305 @@
+Parsed test spec with 2 sessions
+
+starting permutation: plan uj both c1 c2
+step plan: EXPLAIN (COSTS OFF) SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE;
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop                 
+        Join Filter: (a.id = b.id)
+        ->  Seq Scan on nj a      
+        ->  Seq Scan on nk b      
+(5 rows)
+
+step uj: UPDATE nj SET data = 42 WHERE id = 7;
+step both: 
+  SELECT 1;
+  SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE;
+ <waiting ...>
+step c1: COMMIT;
+step both: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|data|id|data
+--+----+--+----
+ 1|   0| 1|   0
+ 2|   0| 2|   0
+ 3|   0| 3|   0
+ 4|   0| 4|   0
+ 5|   0| 5|   0
+ 6|   0| 6|   0
+ 7|  42| 7|   0
+ 8|   0| 8|   0
+ 9|   0| 9|   0
+10|   0|10|   0
+(10 rows)
+
+step c2: COMMIT;
+
+starting permutation: uj one c1 c2
+step uj: UPDATE nj SET data = 42 WHERE id = 7;
+step one: 
+  SELECT 1;
+  SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE OF a;
+ <waiting ...>
+step c1: COMMIT;
+step one: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|data|id|data
+--+----+--+----
+ 1|   0| 1|   0
+ 2|   0| 2|   0
+ 3|   0| 3|   0
+ 4|   0| 4|   0
+ 5|   0| 5|   0
+ 6|   0| 6|   0
+ 7|  42| 7|   0
+ 8|   0| 8|   0
+ 9|   0| 9|   0
+10|   0|10|   0
+(10 rows)
+
+step c2: COMMIT;
+
+starting permutation: uj alone c1 c2
+step uj: UPDATE nj SET data = 42 WHERE id = 7;
+step alone: SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step alone: <... completed>
+id|data|id|data
+--+----+--+----
+ 1|   0| 1|   0
+ 2|   0| 2|   0
+ 3|   0| 3|   0
+ 4|   0| 4|   0
+ 5|   0| 5|   0
+ 6|   0| 6|   0
+ 7|  42| 7|   0
+ 8|   0| 8|   0
+ 9|   0| 9|   0
+10|   0|10|   0
+(10 rows)
+
+step c2: COMMIT;
+
+starting permutation: uj hash c1 c2
+step uj: UPDATE nj SET data = 42 WHERE id = 7;
+step hash: 
+  SET LOCAL enable_hashjoin = on;
+  SET LOCAL enable_nestloop = off;
+  SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE;
+ <waiting ...>
+step c1: COMMIT;
+step hash: <... completed>
+id|data|id|data
+--+----+--+----
+ 1|   0| 1|   0
+ 2|   0| 2|   0
+ 3|   0| 3|   0
+ 4|   0| 4|   0
+ 5|   0| 5|   0
+ 6|   0| 6|   0
+ 7|  42| 7|   0
+ 8|   0| 8|   0
+ 9|   0| 9|   0
+10|   0|10|   0
+(10 rows)
+
+step c2: COMMIT;
+
+starting permutation: hplan uj chain c1 c2
+step hplan: 
+  SET LOCAL enable_hashjoin = on;
+  SET LOCAL enable_nestloop = off;
+  EXPLAIN (COSTS OFF) SELECT * FROM nj a JOIN nd d ON a.id = d.id FOR UPDATE OF a;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Hash Join                   
+        Hash Cond: (a.id = d.id)  
+        ->  Seq Scan on nj a      
+        ->  Hash                  
+              ->  Seq Scan on nd d
+(6 rows)
+
+step uj: UPDATE nj SET data = 42 WHERE id = 7;
+step chain: 
+  SELECT 1;
+  SELECT * FROM nj a JOIN nd d ON a.id = d.id ORDER BY a.id, d.seq;
+  SELECT * FROM nj a JOIN nd d ON a.id = d.id FOR UPDATE OF a;
+ <waiting ...>
+step c1: COMMIT;
+step chain: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|data|id|seq
+--+----+--+---
+ 6|   0| 6|  1
+ 6|   0| 6|  2
+ 7|   0| 7|  1
+ 7|   0| 7|  2
+(4 rows)
+
+id|data|id|seq
+--+----+--+---
+ 6|   0| 6|  2
+ 6|   0| 6|  1
+ 7|  42| 7|  2
+ 7|  42| 7|  1
+(4 rows)
+
+step c2: COMMIT;
+
+starting permutation: mplan uj mboth c1 c2
+step mplan: 
+  SET LOCAL enable_mergejoin = on;
+  SET LOCAL enable_nestloop = off;
+  EXPLAIN (COSTS OFF) SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Merge Join                  
+        Merge Cond: (a.id = b.id) 
+        ->  Sort                  
+              Sort Key: a.id      
+              ->  Seq Scan on nj a
+        ->  Sort                  
+              Sort Key: b.id      
+              ->  Seq Scan on nk b
+(9 rows)
+
+step uj: UPDATE nj SET data = 42 WHERE id = 7;
+step mboth: 
+  SELECT 1;
+  SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE;
+ <waiting ...>
+step c1: COMMIT;
+step mboth: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|data|id|data
+--+----+--+----
+ 1|   0| 1|   0
+ 2|   0| 2|   0
+ 3|   0| 3|   0
+ 4|   0| 4|   0
+ 5|   0| 5|   0
+ 6|   0| 6|   0
+ 7|  42| 7|   0
+ 8|   0| 8|   0
+ 9|   0| 9|   0
+10|   0|10|   0
+(10 rows)
+
+step c2: COMMIT;
+
+starting permutation: mplan uj mone c1 c2
+step mplan: 
+  SET LOCAL enable_mergejoin = on;
+  SET LOCAL enable_nestloop = off;
+  EXPLAIN (COSTS OFF) SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Merge Join                  
+        Merge Cond: (a.id = b.id) 
+        ->  Sort                  
+              Sort Key: a.id      
+              ->  Seq Scan on nj a
+        ->  Sort                  
+              Sort Key: b.id      
+              ->  Seq Scan on nk b
+(9 rows)
+
+step uj: UPDATE nj SET data = 42 WHERE id = 7;
+step mone: 
+  SELECT 1;
+  SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE OF a;
+ <waiting ...>
+step c1: COMMIT;
+step mone: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|data|id|data
+--+----+--+----
+ 1|   0| 1|   0
+ 2|   0| 2|   0
+ 3|   0| 3|   0
+ 4|   0| 4|   0
+ 5|   0| 5|   0
+ 6|   0| 6|   0
+ 7|  42| 7|   0
+ 8|   0| 8|   0
+ 9|   0| 9|   0
+10|   0|10|   0
+(10 rows)
+
+step c2: COMMIT;
+
+starting permutation: cur fetch6 uj fetchall c1 c2
+step cur: DECLARE c CURSOR FOR SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE OF a;
+step fetch6: FETCH 6 FROM c;
+id|data|id|data
+--+----+--+----
+ 1|   0| 1|   0
+ 2|   0| 2|   0
+ 3|   0| 3|   0
+ 4|   0| 4|   0
+ 5|   0| 5|   0
+ 6|   0| 6|   0
+(6 rows)
+
+step uj: UPDATE nj SET data = 42 WHERE id = 7;
+step fetchall: FETCH ALL FROM c; <waiting ...>
+step c1: COMMIT;
+step fetchall: <... completed>
+id|data|id|data
+--+----+--+----
+ 7|  42| 7|   0
+ 8|   0| 8|   0
+ 9|   0| 9|   0
+10|   0|10|   0
+(4 rows)
+
+step c2: COMMIT;
+
+starting permutation: uj cur fetchall c1 c2
+step uj: UPDATE nj SET data = 42 WHERE id = 7;
+step cur: DECLARE c CURSOR FOR SELECT * FROM nj a JOIN nk b ON a.id = b.id FOR UPDATE OF a;
+step fetchall: FETCH ALL FROM c; <waiting ...>
+step c1: COMMIT;
+step fetchall: <... completed>
+id|data|id|data
+--+----+--+----
+ 1|   0| 1|   0
+ 2|   0| 2|   0
+ 3|   0| 3|   0
+ 4|   0| 4|   0
+ 5|   0| 5|   0
+ 6|   0| 6|   0
+ 7|  42| 7|   0
+ 8|   0| 8|   0
+ 9|   0| 9|   0
+10|   0|10|   0
+(10 rows)
+
+step c2: COMMIT;

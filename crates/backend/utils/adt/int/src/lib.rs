@@ -81,9 +81,11 @@ fn integer_out_of_range() -> Box<PgError> {
 #[track_caller]
 #[cold]
 #[inline(never)]
-fn smallint_out_of_range() -> Box<PgError> {
+fn smallint_out_of_range(line: i32, routine: &'static str) -> Box<PgError> {
     Box::new(
-        PgError::error("smallint out of range").with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+        PgError::error("smallint out of range")
+            .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE)
+            .with_location("int.c", line, routine),
     )
 }
 
@@ -365,7 +367,7 @@ pub fn i2toi4(arg1: i16) -> i32 {
 #[inline]
 pub fn i4toi2(arg1: i32) -> PgResult<i16> {
     if arg1 < SHRT_MIN || arg1 > SHRT_MAX {
-        return Err(smallint_out_of_range());
+        return Err(smallint_out_of_range(384, "i4toi2"));
     }
     Ok(arg1 as i16)
 }
@@ -570,7 +572,7 @@ pub fn int4inc(arg: i32) -> PgResult<i32> {
 #[inline]
 pub fn int2um(arg: i16) -> PgResult<i16> {
     if arg == PG_INT16_MIN {
-        return Err(smallint_out_of_range());
+        return Err(smallint_out_of_range(922, "int2um"));
     }
     Ok(-arg)
 }
@@ -584,7 +586,7 @@ pub fn int2up(arg: i16) -> i16 {
 pub fn int2pl(arg1: i16, arg2: i16) -> PgResult<i16> {
     let mut result = 0;
     if pg_add_s16_overflow(arg1, arg2, &mut result) {
-        return Err(smallint_out_of_range());
+        return Err(smallint_out_of_range(944, "int2pl"));
     }
     Ok(result)
 }
@@ -593,7 +595,7 @@ pub fn int2pl(arg1: i16, arg2: i16) -> PgResult<i16> {
 pub fn int2mi(arg1: i16, arg2: i16) -> PgResult<i16> {
     let mut result = 0;
     if pg_sub_s16_overflow(arg1, arg2, &mut result) {
-        return Err(smallint_out_of_range());
+        return Err(smallint_out_of_range(958, "int2mi"));
     }
     Ok(result)
 }
@@ -602,7 +604,7 @@ pub fn int2mi(arg1: i16, arg2: i16) -> PgResult<i16> {
 pub fn int2mul(arg1: i16, arg2: i16) -> PgResult<i16> {
     let mut result = 0;
     if pg_mul_s16_overflow(arg1, arg2, &mut result) {
-        return Err(smallint_out_of_range());
+        return Err(smallint_out_of_range(972, "int2mul"));
     }
     Ok(result)
 }
@@ -614,7 +616,7 @@ pub fn int2div(arg1: i16, arg2: i16) -> PgResult<i16> {
     }
     if arg2 == -1 {
         if arg1 == PG_INT16_MIN {
-            return Err(smallint_out_of_range());
+            return Err(smallint_out_of_range(1004, "int2div"));
         }
         return Ok(-arg1);
     }
@@ -731,7 +733,7 @@ pub fn int4abs(arg1: i32) -> PgResult<i32> {
 #[inline]
 pub fn int2abs(arg1: i16) -> PgResult<i16> {
     if arg1 == PG_INT16_MIN {
-        return Err(smallint_out_of_range());
+        return Err(smallint_out_of_range(1242, "int2abs"));
     }
     Ok(if arg1 < 0 { -arg1 } else { arg1 })
 }

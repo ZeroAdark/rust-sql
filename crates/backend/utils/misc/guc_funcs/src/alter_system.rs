@@ -3,7 +3,7 @@
 
 use std::cmp::Ordering;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_core::Oid;
 use guc::name::guc_name_compare;
 use guc_file::{ConfigVariable, ParseConfigFp, CONF_FILE_START_DEPTH};
@@ -26,7 +26,8 @@ const ACLCHECK_OK: i32 = 0;
 // escape_single_quotes_ascii (src/port/quotes.c): double single quotes and
 // backslashes (config-file strings treat backslash as an escape).
 fn escape_single_quotes_ascii(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
+    let mut out = String::new();
+    let _ = out.try_reserve(src.len());
     for c in src.chars() {
         if c == '\'' || c == '\\' {
             out.push(c);
@@ -230,7 +231,7 @@ pub fn AlterSystemSetConfigFile(stmt: &AlterSystemStmt<'_>) -> PgResult<()> {
     let raw = fd::BasicOpenFile(&tmp_file_name, libc::O_CREAT | libc::O_RDWR | libc::O_TRUNC)?;
     if raw < 0 {
         return Err(file_error(
-            format!("could not open file \"{tmp_file_name}\": %m"),
+            format!("could not open file \"{tmp_file_name}\": {PCT_M}"),
             &std::io::Error::last_os_error(),
         )
         .into());
@@ -273,7 +274,7 @@ fn write_and_sync_auto_conf_tmp(raw: i32, content: &[u8], tmp_file_name: &str) -
                     continue;
                 }
                 return Err(file_error(
-                    format!("could not write to file \"{tmp_file_name}\": %m"),
+                    format!("could not write to file \"{tmp_file_name}\": {PCT_M}"),
                     &std::io::Error::from_raw_os_error(en),
                 )
                 .into());
@@ -282,7 +283,7 @@ fn write_and_sync_auto_conf_tmp(raw: i32, content: &[u8], tmp_file_name: &str) -
                 // C parity (guc.c:4497): a write that makes no progress and
                 // sets no errno is assumed to be out of disk space.
                 return Err(file_error(
-                    format!("could not write to file \"{tmp_file_name}\": %m"),
+                    format!("could not write to file \"{tmp_file_name}\": {PCT_M}"),
                     &std::io::Error::from_raw_os_error(libc::ENOSPC),
                 )
                 .into());
@@ -291,7 +292,7 @@ fn write_and_sync_auto_conf_tmp(raw: i32, content: &[u8], tmp_file_name: &str) -
         }
         if fd::pg_fsync(raw) != 0 {
             return Err(file_error(
-                format!("could not fsync file \"{tmp_file_name}\": %m"),
+                format!("could not fsync file \"{tmp_file_name}\": {PCT_M}"),
                 &std::io::Error::from_raw_os_error(fd::get_errno()),
             )
             .into());
@@ -311,7 +312,7 @@ fn write_and_sync_auto_conf_tmp(raw: i32, content: &[u8], tmp_file_name: &str) -
 fn read_autoconf_via_fd() -> PgResult<Option<Vec<u8>>> {
     let io_err = |en: i32| {
         file_error(
-            format!("could not open file \"{PG_AUTOCONF_FILENAME}\": %m"),
+            format!("could not open file \"{PG_AUTOCONF_FILENAME}\": {PCT_M}"),
             &std::io::Error::from_raw_os_error(en),
         )
     };
@@ -329,7 +330,7 @@ fn read_autoconf_via_fd() -> PgResult<Option<Vec<u8>>> {
         fd::CloseTransientFile(fdnum);
         return Err(io_err(en).into());
     }
-    let mut contents = vec![0u8; fi.size.max(0) as usize];
+    let mut contents = ::mcx::std_vec_from_elem("utils", 0u8, fi.size.max(0) as usize)?;
     let mut r = 0usize;
     while r < contents.len() {
         let n = fd::pg_pread(fdnum, &mut contents[r..], r as i64);

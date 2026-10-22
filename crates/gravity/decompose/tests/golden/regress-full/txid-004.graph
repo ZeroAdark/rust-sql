@@ -1,0 +1,9 @@
+-- regress-full-txid-004
+-- SELECT txid_current_if_assigned() IS NULL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=isnull(fn3348()))
+  outs 1=w1:val
+mapped: Result

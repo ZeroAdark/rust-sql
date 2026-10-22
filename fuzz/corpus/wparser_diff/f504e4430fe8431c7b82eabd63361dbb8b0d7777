@@ -1,3 +1,0 @@
-), to_tsquery('));
-
-SELECT keyword FROM test_tsquery WHERE keyword @> 

@@ -1,0 +1,9 @@
+-- regress-full-create_index-058
+-- SELECT pg_my_temp_schema()::regnamespace as temp_schema_name
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=relabel4089(fn2854()))
+  outs 1=w4:val
+mapped: Result

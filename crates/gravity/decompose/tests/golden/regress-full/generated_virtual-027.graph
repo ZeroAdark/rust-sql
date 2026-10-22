@@ -1,0 +1,13 @@
+-- regress-full-generated_virtual-027
+-- DELETE FROM gtest27 WHERE a IS NULL AND b IS NULL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@3
+  source range rel=33248 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter isnull(v1.1)
+  filter isnull(v1.2)
+  project (1j=v1.-1)
+  write DELETE rel=33248 rti=1 natts=3 indexes=() generated=(3v)
+  outs 1=fx6:row
+mapped: ModifyTable SeqScan

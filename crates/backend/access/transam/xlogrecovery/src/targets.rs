@@ -147,12 +147,22 @@ pub fn recovery_target_tli_requested() -> TimeLineID {
 pub fn recovery_target_inclusive() -> bool {
     guc_tables::vars::recoveryTargetInclusive.read()
 }
-pub fn recovery_target_action() -> i32 {
-    guc_tables::vars::recoveryTargetAction.read()
+// C's validateRecoveryParameters rewrites the startup process's own copy of
+// recoveryTargetAction; the GUC slot here is process-wide and republished by
+// every child's GUC init, so the startup thread keeps its override locally.
+thread_local! {
+    static RECOVERY_TARGET_ACTION_OVERRIDE: Cell<Option<i32>> = const { Cell::new(None) };
 }
 
-pub(crate) fn set_recovery_target_action_shutdown() {
-    guc_tables::vars::recoveryTargetAction.write(RECOVERY_TARGET_ACTION_SHUTDOWN);
+pub fn recovery_target_action() -> i32 {
+    RECOVERY_TARGET_ACTION_OVERRIDE
+        .with(Cell::get)
+        .unwrap_or_else(|| guc_tables::vars::recoveryTargetAction.read())
+}
+
+pub(crate) fn set_recovery_target_action_shutdown(shutdown: bool) {
+    RECOVERY_TARGET_ACTION_OVERRIDE
+        .with(|c| c.set(shutdown.then_some(RECOVERY_TARGET_ACTION_SHUTDOWN)));
 }
 
 pub fn recovery_wakeup_latch() -> LatchHandle {
@@ -160,6 +170,13 @@ pub fn recovery_wakeup_latch() -> LatchHandle {
     let h = LatchHandle::recovery_wakeup();
     INITED.get_or_init(|| latch::InitSharedLatch(h));
     h
+}
+
+pub(crate) fn reset_shared_after_crash() {
+    RECOVERY_PAUSE_STATE.store(RECOVERY_NOT_PAUSED, Relaxed);
+    SHARED_HOT_STANDBY_ACTIVE.store(false, Relaxed);
+    RECOVERY_LAST_XTIME.store(0, Relaxed);
+    CURRENT_CHUNK_START_TIME.store(0, Relaxed);
 }
 
 pub fn WakeupRecovery() {
@@ -498,6 +515,12 @@ pub(crate) fn recoveryStopsAfter(reader: &xlogreader::XLogReaderState<'_>) -> Pg
                 return Ok(true);
             }
         }
+    }
+
+    if target == RecoveryTargetType::Immediate && crate::reached_consistency() {
+        let _ = elog(LOG, "recovery stopping after reaching consistency".to_string());
+        clear_stop(true);
+        return Ok(true);
     }
 
     Ok(false)

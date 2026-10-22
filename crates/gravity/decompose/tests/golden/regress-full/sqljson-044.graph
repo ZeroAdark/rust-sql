@@ -1,0 +1,10 @@
+-- regress-full-sqljson-044
+-- EXPLAIN (VERBOSE, COSTS OFF) SELECT '1' IS JSON AS "any", ('1' || i) IS JSON SCALAR AS "scalar", '[]' IS NOT JSON ARRAY AS "array", '{}' IS JSON OBJECT WITH UNIQUE AS "object" FROM generate_series(1, 3) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:3)]
+  project (1=T_JsonIsPredicate, 2=T_JsonIsPredicate, 3=not(T_JsonIsPredicate), 4=T_JsonIsPredicate)
+  outs 1=w1:val 2=w1:val 3=w1:val 4=w1:val
+mapped: FunctionScan

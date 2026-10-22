@@ -1,0 +1,13 @@
+# RG's registry (lint/rules/rg_spill.py; construct C10, spill coverage, lanes/lifetime/c10-design.md in the plan dir): one
+# row per `NoSpill` reason (crates/gravity/program/src/spill.rs) but `Unrouted` (a Bug by name, never a row): a breaker
+# end that grows past its grant where PostgreSQL 18.6 spills (or bounds it), with the site that names the reason, the
+# owner lane and the bugs it stands behind. A row goes when its reason goes (the site spills, or proves its bound:
+# a constant up to 64 kB, a form PostgreSQL holds in memory too); a landing never adds a row. Done at 0 rows.
+# reason	site path	function	owner	bugs (or -)	what it settles	family (or unreachable)	what a user sees
+# NR-7 (coremem release, the known limitations): field 7 is the operator family a user meets the reason under, one of
+# rg_spill.py's FAMILIES, read from the reason's sites, or `unreachable` when no SQL reaches it (a reason the code shows);
+# field 8 is one plain sentence saying what a user sees and when, the limitation as a doc line. It names no SQLSTATE, so
+# it holds whichever error form the refusal takes.
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named for its reason, holding the row line;
+# this README is not a row. Deleting a row deletes its file, so lanes that delete different rows never touch the same
+# file.

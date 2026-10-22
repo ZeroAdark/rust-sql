@@ -1,0 +1,4 @@
+path	crates/backend/access/pgrcolumnar/pgrc_codec/src/arraydual.rs
+growth	std::vec::Vec::push	4
+method	std::clone::Clone::clone	1
+type	std::vec::Vec	1

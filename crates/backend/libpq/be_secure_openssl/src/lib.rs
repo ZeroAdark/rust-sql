@@ -1,7 +1,4 @@
-// be-secure-openssl.c on the `openssl` crate. The SSL_CTX is process-global
-// (C postmaster forks; here backends are threads sharing the postmaster's
-// context — SSL_CTX is refcounted and thread-safe for SSL_new). The per-
-// connection SSL/peer live in a backend thread-local, not on Port.
+// The SSL context and CA-store flag are inherited together by backend threads.
 //
 // C divergences (openssl-crate API shape):
 // - info/ALPN callbacks are installed at be_tls_init on the shared context,
@@ -21,9 +18,8 @@
 use std::cell::{Cell, RefCell};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use foreign_types::ForeignTypeRef;
 use openssl::dh::Dh;
 use openssl::error::ErrorStack;
@@ -31,7 +27,7 @@ use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::pkey::Params;
 use openssl::ssl::{
-    select_next_proto, AlpnError, ErrorCode, HandshakeError, Ssl, SslContext, SslContextBuilder,
+    select_next_proto, AlpnError, ErrorCode, Ssl, SslContext, SslContextBuilder,
     SslMethod, SslMode, SslOptions, SslSessionCacheMode, SslStream, SslVerifyMode, SslVersion,
 };
 use openssl::x509::verify::X509VerifyFlags;
@@ -50,6 +46,8 @@ use guc_tables::consts::{
 use guc_tables::vars;
 
 mod cffi;
+#[cfg(test)]
+mod openssl_trim;
 
 const WAIT_EVENT_SSL_OPEN_SERVER: u32 = 0x0600_0000 | 5;
 
@@ -77,16 +75,32 @@ fn loc(funcname: &'static str) -> ErrorLocation {
     ErrorLocation::new(site.file(), site.line() as i32, funcname)
 }
 
-static SSL_CONTEXT: RwLock<Option<SslContext>> = RwLock::new(None);
-static SSL_LOADED_VERIFY_LOCATIONS: AtomicBool = AtomicBool::new(false);
+#[derive(Clone, Default)]
+pub struct TlsConfig {
+    context: Option<SslContext>,
+    loaded_verify_locations: bool,
+}
+
+pub fn tls_config_snapshot() -> TlsConfig {
+    SSL_CONFIG.with(|c| c.borrow().clone())
+}
+
+pub fn inherit_tls_config(config: &TlsConfig) {
+    SSL_CONFIG.with(|c| *c.borrow_mut() = config.clone());
+}
 static DUMMY_SSL_PASSWD_CB_CALLED: AtomicBool = AtomicBool::new(false);
 static SSL_IS_SERVER_START: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
+    static SSL_CONFIG: RefCell<TlsConfig> = const { RefCell::new(TlsConfig {
+        context: None,
+        loaded_verify_locations: false,
+    }) };
     static CONN: RefCell<Option<TlsConn>> = const { RefCell::new(None) };
-    static CERT_ERRDETAIL: RefCell<Option<String>> = const { RefCell::new(None) };
+    static CERT_ERRDETAIL: RefCell<Option<PgResult<String>>> = const { RefCell::new(None) };
     static PASSPHRASE_ERR: Cell<Option<Box<types_error::PgError>>> = const { Cell::new(None) };
     static PASSPHRASE_PANIC: Cell<Option<Box<dyn std::any::Any + Send>>> = const { Cell::new(None) };
+    static DEFERRED_INFO: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 struct TlsConn {
@@ -304,10 +318,28 @@ unsafe extern "C" fn info_cb(ssl: *const openssl_sys::SSL, type_: libc::c_int, a
         _ => None,
     };
     if let Some(msg) = msg {
+        // Fired from inside be_tls_read/be_tls_write, whose CONN borrow the
+        // client-directed DEBUG4 report would re-enter through be_tls_write;
+        // emitted once the SSL call returns.
+        if CONN.with(|c| c.try_borrow_mut().is_err()) {
+            DEFERRED_INFO.with(|d| d.borrow_mut().push(msg));
+            return;
+        }
         // unwind-ok: c-callback
-        let _ = std::panic::catch_unwind(|| {
-            let _ = ereport(DEBUG4).errmsg_internal(msg).finish(loc("info_cb"));
-        });
+        let _ = std::panic::catch_unwind(|| emit_info(msg));
+    }
+}
+
+fn emit_info(msg: String) {
+    let _ = ereport(DEBUG4).errmsg_internal(msg).finish(loc("info_cb"));
+}
+
+fn flush_deferred_info() {
+    while let Some(msg) = DEFERRED_INFO.with(|d| {
+        let mut d = d.borrow_mut();
+        (!d.is_empty()).then(|| d.remove(0))
+    }) {
+        emit_info(msg);
     }
 }
 
@@ -317,11 +349,12 @@ unsafe extern "C" fn info_cb(ssl: *const openssl_sys::SSL, type_: libc::c_int, a
 fn prepare_cert_name(bytes: &[u8]) -> String {
     const MAXLEN: usize = 71;
     if bytes.len() > MAXLEN {
-        let mut t = bytes[bytes.len() - MAXLEN..].to_vec();
-        t[0] = b'.';
-        t[1] = b'.';
-        t[2] = b'.';
-        pg_string::pg_clean_ascii_bytes(&t)
+        let mut buf = [0u8; MAXLEN];
+        buf.copy_from_slice(&bytes[bytes.len() - MAXLEN..]);
+        buf[0] = b'.';
+        buf[1] = b'.';
+        buf[2] = b'.';
+        pg_string::pg_clean_ascii_bytes(&buf)
     } else {
         pg_string::pg_clean_ascii_bytes(bytes)
     }
@@ -337,16 +370,13 @@ fn verify_cb(ok: bool, ctx: &mut openssl::x509::X509StoreContextRef) -> bool {
     let mut str = format!("Client certificate verification failed at depth {depth}: {errstring}.");
 
     if let Some(cert) = ctx.current_cert() {
-        // C's X509_NAME_to_cstring ereport(ERROR)s straight out of the
-        // OpenSSL callback; a Rust callback cannot unwind over FFI, so the
-        // error text rides the errdetail slot and the verify fails.
         let (subject, issuer) = match (
             x509_name_to_cstring(cert.subject_name()),
             x509_name_to_cstring(cert.issuer_name()),
         ) {
             (Ok(s), Ok(i)) => (s, i),
             (Err(e), _) | (_, Err(e)) => {
-                CERT_ERRDETAIL.with(|d| *d.borrow_mut() = Some(e.message().to_string()));
+                CERT_ERRDETAIL.with(|d| *d.borrow_mut() = Some(Err(e)));
                 return false;
             }
         };
@@ -364,8 +394,18 @@ fn verify_cb(ok: bool, ctx: &mut openssl::x509::X509StoreContextRef) -> bool {
         ));
     }
 
-    CERT_ERRDETAIL.with(|d| *d.borrow_mut() = Some(str));
+    CERT_ERRDETAIL.with(|d| *d.borrow_mut() = Some(Ok(str)));
     false
+}
+
+fn propagate_verify_error() -> PgResult<()> {
+    CERT_ERRDETAIL.with(|d| {
+        let mut pending = d.borrow_mut();
+        if matches!(*pending, Some(Err(_))) {
+            return pending.take().unwrap().map(|_| ());
+        }
+        Ok(())
+    })
 }
 
 // X509_NAME_to_cstring: "/SN=value" segments via ASN1_STRING_print_ex, then
@@ -385,7 +425,11 @@ fn x509_name_to_cstring(name: &X509NameRef) -> PgResult<Vec<u8>> {
             return ereport(ERROR)
                 .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
                 .errmsg("could not get NID for ASN1_OBJECT object")
-                .finish(loc("X509_NAME_to_cstring"))
+                .finish(ErrorLocation::new(
+                    "be-secure-openssl.c",
+                    1671,
+                    "X509_NAME_to_cstring",
+                ))
                 .map(|()| Vec::new());
         }
         Err(cffi::X509NameError::NoFieldName(nid)) => {
@@ -400,28 +444,37 @@ fn x509_name_to_cstring(name: &X509NameRef) -> PgResult<Vec<u8>> {
     // conversion scratch lives only for this call.
     let cx = mcx::MemoryContext::new("X509_NAME_to_cstring");
     let out = match mbutils::pg_any_to_server(cx.mcx(), &raw, PG_UTF8)? {
-        Some(converted) => converted.as_slice().to_vec(),
+        Some(converted) => ::mcx::std_vec_from_slice("be_secure_openssl", &converted.as_slice())?,
         None => raw,
     };
     Ok(out)
 }
 
 fn load_dh_file(cx: &InitCx, filename: &str) -> PgResult<Option<Dh<Params>>> {
-    let bytes = match std::fs::read(filename) {
-        Ok(b) => b,
+    let file = fd::AllocateFile(filename, "r")?;
+    if file < 0 {
+        ereport(cx.level())
+            .with_saved_errno(fd::get_errno())
+            .errcode_for_file_access()
+            .errmsg(format!("could not open DH parameters file \"{filename}\": {PCT_M}"))
+            .finish(loc("load_dh_file"))?;
+        return Ok(None);
+    }
+    let parsed = fd::with_allocated_stdio(file, cffi::read_dh_params).unwrap();
+    fd::FreeFile(file)?;
+    let parsed = match parsed {
+        Ok(parsed) => parsed,
         Err(e) => {
             ereport(cx.level())
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!(
-                    "could not open DH parameters file \"{filename}\": %m"
-                ))
+                .errmsg(format!("could not open DH parameters file \"{filename}\": {PCT_M}"))
                 .finish(loc("load_dh_file"))?;
             return Ok(None);
         }
     };
 
-    let dh = match Dh::params_from_pem(&bytes) {
+    let dh = match parsed {
         Ok(dh) => dh,
         Err(st) => {
             ereport(cx.level())
@@ -430,7 +483,7 @@ fn load_dh_file(cx: &InitCx, filename: &str) -> PgResult<Option<Dh<Params>>> {
                     "could not load DH parameters file: {}",
                     ssl_errmessage(Some(&st))
                 ))
-                .finish(loc("load_dh_file"))?;
+                .finish(ErrorLocation::new("be-secure-openssl.c", 1063, "load_dh_file"))?;
             return Ok(None);
         }
     };
@@ -824,8 +877,10 @@ pub fn be_tls_init(is_server_start: bool) -> PgResult<i32> {
         select_next_proto(ALPN_PROTOS, client).ok_or_else(|| alpn_no_overlap(client))
     });
 
-    *SSL_CONTEXT.write().unwrap() = Some(ctx.build());
-    SSL_LOADED_VERIFY_LOCATIONS.store(!ssl_ca_file.is_empty(), Ordering::Relaxed);
+    SSL_CONFIG.with(|c| *c.borrow_mut() = TlsConfig {
+        context: Some(ctx.build()),
+        loaded_verify_locations: !ssl_ca_file.is_empty(),
+    });
 
     Ok(0)
 }
@@ -841,12 +896,11 @@ fn alpn_no_overlap(client: &[u8]) -> AlpnError {
 }
 
 pub fn be_tls_destroy() {
-    *SSL_CONTEXT.write().unwrap() = None;
-    SSL_LOADED_VERIFY_LOCATIONS.store(false, Ordering::Relaxed);
+    SSL_CONFIG.with(|c| *c.borrow_mut() = TlsConfig::default());
 }
 
 pub fn ssl_loaded_verify_locations() -> bool {
-    SSL_LOADED_VERIFY_LOCATIONS.load(Ordering::Relaxed)
+    SSL_CONFIG.with(|c| c.borrow().loaded_verify_locations)
 }
 
 pub struct TlsOpen {
@@ -883,6 +937,9 @@ const SSL_R_TLSV1_ALERT_PROTOCOL_VERSION: u64 = 1070;
 const SSL_R_VERSION_TOO_HIGH: u64 = 166;
 const SSL_R_VERSION_TOO_LOW: u64 = 396;
 
+// OpenSSL 3 reason text for SSL_R_UNEXPECTED_EOF_WHILE_READING.
+const UNEXPECTED_EOF_WHILE_READING: &str = "unexpected eof while reading";
+
 fn accept_failure_report(err: &openssl::ssl::Error) -> PgResult<()> {
     match err.code() {
         ErrorCode::SYSCALL => {
@@ -892,14 +949,17 @@ fn accept_failure_report(err: &openssl::ssl::Error) -> PgResult<()> {
                         return ereport(COMMERROR)
                             .with_saved_errno(e)
                             .errcode_for_socket_access()
-                            .errmsg("could not accept SSL connection: %m")
+                            .errmsg(format!("could not accept SSL connection: {PCT_M}"))
                             .finish(loc("be_tls_open_server"));
                     }
                 }
             }
+            // A peer EOF: C's port_bio_ctrl answers BIO_CTRL_EOF, so OpenSSL 3
+            // raises SSL_R_UNEXPECTED_EOF_WHILE_READING (SSL_ERROR_SSL); the
+            // rust-openssl BIO does not, leaving SYSCALL with no errno.
             ereport(COMMERROR)
                 .errcode(ERRCODE_PROTOCOL_VIOLATION)
-                .errmsg("could not accept SSL connection: EOF detected")
+                .errmsg(format!("could not accept SSL connection: {UNEXPECTED_EOF_WHILE_READING}"))
                 .finish(loc("be_tls_open_server"))
         }
         ErrorCode::SSL => {
@@ -929,7 +989,7 @@ fn accept_failure_report(err: &openssl::ssl::Error) -> PgResult<()> {
                     ssl_errmessage(stack)
                 ));
             if let Some(detail) = CERT_ERRDETAIL.with(|d| d.borrow_mut().take()) {
-                b = b.errdetail_internal(detail);
+                b = b.errdetail_internal(detail?);
             }
             if give_proto_hint {
                 let ssl_min = vars::ssl_min_protocol_version.read();
@@ -983,7 +1043,7 @@ fn drain_handshake_wait(events: u32, want_read: bool) -> PgResult<()> {
 pub fn be_tls_open_server(sock: i32, raw_buf: Vec<u8>) -> PgResult<TlsOpen> {
     assert!(CONN.with(|c| c.borrow().is_none()));
 
-    let ctx = SSL_CONTEXT.read().unwrap().clone();
+    let ctx = SSL_CONFIG.with(|c| c.borrow().context.clone());
     let Some(ctx) = ctx else {
         ereport(COMMERROR)
             .errcode(ERRCODE_PROTOCOL_VIOLATION)
@@ -1011,17 +1071,36 @@ pub fn be_tls_open_server(sock: i32, raw_buf: Vec<u8>) -> PgResult<TlsOpen> {
         raw_buf,
         raw_consumed: 0,
     };
+    let mut stream = match SslStream::new(ssl, stream) {
+        Ok(stream) => stream,
+        Err(st) => {
+            ereport(COMMERROR)
+                .errcode(ERRCODE_PROTOCOL_VIOLATION)
+                .errmsg(format!(
+                    "could not set SSL socket: {}",
+                    ssl_errmessage(Some(&st))
+                ))
+                .finish(loc("be_tls_open_server"))?;
+            return Ok(TlsOpen::failed(0));
+        }
+    };
     // C sets port->ssl_in_use before SSL_accept; the cell routes secure_read/
     // write (and socket_close's secure_close) through the TLS arms from here.
     pqcomm::set_ssl_in_use(true);
 
+    CERT_ERRDETAIL.with(|d| *d.borrow_mut() = None);
     clear_err_queue();
-    let mut result = ssl.accept(stream);
+    let mut result = stream.accept();
     let stream = loop {
+        if let Err(err) = propagate_verify_error() {
+            // Error reporting still writes through TLS until connection teardown.
+            CONN.with(|c| *c.borrow_mut() = Some(TlsConn { stream, peer: None }));
+            return Err(err);
+        }
         match result {
-            Ok(s) => break s,
-            Err(HandshakeError::WouldBlock(mid)) => {
-                let want_read = mid.error().code() == ErrorCode::WANT_READ;
+            Ok(()) => break stream,
+            Err(ref err) if matches!(err.code(), ErrorCode::WANT_READ | ErrorCode::WANT_WRITE) => {
+                let want_read = err.code() == ErrorCode::WANT_READ;
                 let waitfor = if want_read {
                     WL_SOCKET_READABLE
                 } else {
@@ -1052,22 +1131,12 @@ pub fn be_tls_open_server(sock: i32, raw_buf: Vec<u8>) -> PgResult<TlsOpen> {
                 // at the timeout / fast shutdown.
                 drain_handshake_wait(events, want_read)?;
                 clear_err_queue();
-                result = mid.handshake();
+                result = stream.accept();
             }
-            Err(HandshakeError::Failure(mid)) => {
-                let remaining = mid.get_ref().raw_remaining();
-                accept_failure_report(mid.error())?;
+            Err(err) => {
+                let remaining = stream.get_ref().raw_remaining();
+                accept_failure_report(&err)?;
                 return Ok(TlsOpen::failed(remaining));
-            }
-            Err(HandshakeError::SetupFailure(st)) => {
-                ereport(COMMERROR)
-                    .errcode(ERRCODE_PROTOCOL_VIOLATION)
-                    .errmsg(format!(
-                        "could not set SSL socket: {}",
-                        ssl_errmessage(Some(&st))
-                    ))
-                    .finish(loc("be_tls_open_server"))?;
-                return Ok(TlsOpen::failed(0));
             }
         }
     };
@@ -1145,7 +1214,7 @@ fn extract_peer_cn(peer: &X509Ref) -> PgResult<Result<Option<Vec<u8>>, ()>> {
     if len == -1 {
         return Ok(Ok(None));
     }
-    let mut buf = vec![0u8; len as usize + 1];
+    let mut buf = ::mcx::std_vec_from_elem("libpq", 0u8, len as usize + 1)?;
     // SAFETY: buf holds len+1 writable bytes as the API requires.
     let r = unsafe {
         cffi::X509_NAME_get_text_by_NID(name, NID_COMMON_NAME, buf.as_mut_ptr().cast(), len + 1)
@@ -1165,11 +1234,13 @@ fn extract_peer_cn(peer: &X509Ref) -> PgResult<Result<Option<Vec<u8>>, ()>> {
 }
 
 pub fn be_tls_close() {
-    CONN.with(|c| {
-        if let Some(mut conn) = c.borrow_mut().take() {
-            let _ = conn.stream.shutdown();
-        }
-    });
+    // Take the connection out first so info_cb's close_notify write-alert
+    // report (be-secure-openssl.c:1320) is not deferred behind the borrow.
+    let conn = CONN.with(|c| c.borrow_mut().take());
+    if let Some(mut conn) = conn {
+        let _ = conn.stream.shutdown();
+    }
+    flush_deferred_info();
 }
 
 pub struct TlsIo {
@@ -1197,11 +1268,16 @@ fn classify_io(res: Result<usize, openssl::ssl::Error>, is_read: bool) -> PgResu
                 waitfor: WL_SOCKET_WRITEABLE,
             }),
             ErrorCode::SYSCALL => {
-                let e = err
-                    .io_error()
-                    .and_then(|io| io.raw_os_error())
-                    .filter(|&e| e != 0)
-                    .unwrap_or(libc::ECONNRESET);
+                let e = err.io_error().and_then(|io| io.raw_os_error()).filter(|&e| e != 0);
+                if e.is_none() && is_read {
+                    // Peer EOF without close_notify: C's SSL_ERROR_SSL arm
+                    // (see accept_failure_report).
+                    ereport(COMMERROR)
+                        .errcode(ERRCODE_PROTOCOL_VIOLATION)
+                        .errmsg(format!("SSL error: {UNEXPECTED_EOF_WHILE_READING}"))
+                        .finish(loc("be_tls_read"))?;
+                }
+                let e = e.unwrap_or(libc::ECONNRESET);
                 Ok(TlsIo {
                     n: -1,
                     errno: e,
@@ -1270,25 +1346,29 @@ fn clear_err_queue() {
 }
 
 pub fn be_tls_read(buf: &mut [u8]) -> PgResult<TlsIo> {
-    CONN.with(|c| {
+    let res = CONN.with(|c| {
         let mut conn = c.borrow_mut();
         let conn = conn
             .as_mut()
             .expect("be_tls_read: no TLS connection on this backend");
         clear_err_queue();
-        classify_io(conn.stream.ssl_read(buf), true)
-    })
+        conn.stream.ssl_read(buf)
+    });
+    flush_deferred_info();
+    classify_io(res, true)
 }
 
 pub fn be_tls_write(buf: &[u8]) -> PgResult<TlsIo> {
-    CONN.with(|c| {
+    let res = CONN.with(|c| {
         let mut conn = c.borrow_mut();
         let conn = conn
             .as_mut()
             .expect("be_tls_write: no TLS connection on this backend");
         clear_err_queue();
-        classify_io(conn.stream.ssl_write(buf), false)
-    })
+        conn.stream.ssl_write(buf)
+    });
+    flush_deferred_info();
+    classify_io(res, false)
 }
 
 pub fn be_tls_get_cipher_bits() -> i32 {
@@ -1391,11 +1471,20 @@ pub fn be_tls_get_peer_dn_field(field: &std::ffi::CStr, issuer: bool) -> Option<
 /// sslinfo.c ssl_extension_info's extension walk; no connection or no peer
 /// certificate yields no rows (C: `max_calls = cert != NULL ?
 /// X509_get_ext_count(cert) : 0`).
-pub fn be_tls_get_peer_extensions() -> Result<Vec<X509ExtensionInfo>, X509ExtensionsError> {
+pub fn be_tls_get_peer_extension_count() -> i32 {
     CONN.with(
         |c| match c.borrow().as_ref().and_then(|conn| conn.peer.as_ref()) {
-            Some(peer) => cffi::x509_extensions(peer.as_ptr()),
-            None => Ok(Vec::new()),
+            Some(peer) => cffi::x509_extension_count(peer.as_ptr()),
+            None => 0,
+        },
+    )
+}
+
+pub fn be_tls_get_peer_extension(pos: i32) -> Result<X509ExtensionInfo, X509ExtensionsError> {
+    CONN.with(
+        |c| match c.borrow().as_ref().and_then(|conn| conn.peer.as_ref()) {
+            Some(peer) => cffi::x509_extension_at(peer.as_ptr(), pos),
+            None => Err(X509ExtensionsError::UnknownExtension(pos)),
         },
     )
 }
@@ -1449,7 +1538,7 @@ pub fn be_tls_get_certificate_hash() -> PgResult<Option<Vec<u8>>> {
         };
 
         match server_cert.digest(algo_type) {
-            Ok(hash) => Ok(Some(hash.as_ref().to_vec())),
+            Ok(hash) => Ok(Some(::mcx::std_vec_from_slice("be_secure_openssl", &hash.as_ref())?)),
             Err(_) => ereport(ERROR)
                 .errmsg_internal("could not generate server certificate hash")
                 .finish(loc("be_tls_get_certificate_hash"))
@@ -1463,11 +1552,37 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering as O};
 
+    #[test]
+    fn inherited_ca_store_survives_parent_reload_and_destroy() {
+        let context = SslContextBuilder::new(SslMethod::tls_server()).unwrap().build();
+        inherit_tls_config(&TlsConfig {
+            context: Some(context.clone()),
+            loaded_verify_locations: true,
+        });
+        let inherited = tls_config_snapshot();
+        be_tls_destroy();
+        assert!(!ssl_loaded_verify_locations());
+        let replacement = SslContextBuilder::new(SslMethod::tls_server()).unwrap().build();
+        inherit_tls_config(&TlsConfig {
+            context: Some(replacement),
+            loaded_verify_locations: false,
+        });
+        std::thread::spawn(move || {
+            inherit_tls_config(&inherited);
+            assert!(ssl_loaded_verify_locations());
+            assert_eq!(tls_config_snapshot().context.unwrap().as_ptr(), context.as_ptr());
+            be_tls_destroy();
+            assert!(!ssl_loaded_verify_locations());
+        }).join().unwrap();
+        assert!(!ssl_loaded_verify_locations());
+        be_tls_destroy();
+    }
+
     // be-secure-openssl.c:649-675 stores whatever bytes
     // X509_NAME_get_text_by_NID copied out of the CN, whatever the entry's
     // string type, and CheckCertAuth strcmp's them through check_usermap. A
     // T61String CN carrying 0xFF is not UTF-8 and must reach the usermap as
-    // that byte, never as U+FFFD (regression).
+    // that byte, never as U+FFFD (fp-libpq-auth-p2#1).
     #[test]
     fn extract_peer_cn_keeps_the_raw_cn_bytes() {
         use foreign_types::ForeignType;
@@ -1515,7 +1630,7 @@ mod tests {
     // be-secure-openssl.c:1177-1190: names over 71 bytes keep their last 71
     // bytes behind "...", and every retained non-printable byte is escaped
     // as C's pg_clean_ascii does — including the tail of a multibyte
-    // character the cut split (batch-232 regression).
+    // character the cut split (batch-232 fp-libpq-be-secure-openssl#7).
     #[test]
     fn prepare_cert_name_escapes_the_bytes_c_keeps() {
         assert_eq!(prepare_cert_name(b"CN=caf\xc3\xa9"), "CN=caf\\xc3\\xa9");
@@ -1546,6 +1661,71 @@ mod tests {
         expected.push_str("\\xa9");
         expected.push_str(&"b".repeat(67));
         assert_eq!(prepare_cert_name(&cut), expected);
+    }
+
+    #[test]
+    fn verification_name_error_preserves_sqlstate() {
+        let cert = X509::from_pem(include_bytes!(
+            "../tests/fixtures/unknown-subject-oid.pem"
+        ))
+        .unwrap();
+        let store = openssl::x509::store::X509StoreBuilder::new()
+            .unwrap()
+            .build();
+        let chain = openssl::stack::Stack::new().unwrap();
+        let mut ctx = openssl::x509::X509StoreContext::new().unwrap();
+        CERT_ERRDETAIL.with(|d| *d.borrow_mut() = None);
+        ctx.init(&store, &cert, &chain, |ctx| {
+            assert!(!ctx.verify_cert()?);
+            assert!(ctx.current_cert().is_some());
+            assert!(!verify_cb(false, ctx));
+            let err = propagate_verify_error().unwrap_err();
+            assert_eq!(err.sqlstate(), ERRCODE_INVALID_PARAMETER_VALUE);
+            assert_eq!(err.level, ERROR);
+            assert_eq!(err.message(), "could not get NID for ASN1_OBJECT object");
+            assert_eq!(
+                err.location(),
+                Some(&ErrorLocation::new(
+                    "be-secure-openssl.c",
+                    1671,
+                    "X509_NAME_to_cstring"
+                ))
+            );
+            assert!(propagate_verify_error().is_ok());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn dh_file_directory_is_a_config_error() {
+        static REPORTS: AtomicUsize = AtomicUsize::new(0);
+        xact_seams::get_current_sub_transaction_id::set(|| 0);
+        openssl::init();
+        let cx = InitCx { is_server_start: false };
+        let previous = elog::set_emit_log_hook(Some(|err, output| {
+            assert_eq!(err.sqlstate(), ERRCODE_CONFIG_FILE_ERROR);
+            assert_eq!(err.message(), "could not load DH parameters file: no start line");
+            assert_eq!(err.location().unwrap().lineno, 1063);
+            REPORTS.fetch_add(1, O::SeqCst);
+            *output = false;
+        }));
+        assert!(load_dh_file(&cx, env!("CARGO_MANIFEST_DIR")).unwrap().is_none());
+        assert_eq!(REPORTS.load(O::SeqCst), 1);
+        let path = std::env::temp_dir().join(format!("dh-params-{}.pem", std::process::id()));
+        std::fs::write(&path, FILE_DH2048).unwrap();
+        let dh = load_dh_file(&cx, path.to_str().unwrap()).unwrap().unwrap();
+        assert_eq!(dh.prime_p().num_bits(), 2048);
+        std::fs::remove_file(&path).unwrap();
+        elog::set_emit_log_hook(Some(|err, output| {
+            assert_eq!(err.sqlstate(), types_error::ERRCODE_UNDEFINED_FILE);
+            assert!(err.message().starts_with("could not open DH parameters file"));
+            REPORTS.fetch_add(1, O::SeqCst);
+            *output = false;
+        }));
+        assert!(load_dh_file(&cx, path.to_str().unwrap()).unwrap().is_none());
+        assert_eq!(REPORTS.load(O::SeqCst), 2);
+        elog::set_emit_log_hook(previous);
     }
 
     static READ_DRAINS: AtomicUsize = AtomicUsize::new(0);
@@ -1620,5 +1800,29 @@ mod tests {
         ] {
             assert_eq!(reason_text(code), text, "SSL_R_ reason code {code}");
         }
+    }
+
+    #[test]
+    fn info_cb_defers_the_report_while_conn_is_borrowed() {
+        let ctx = openssl::ssl::SslContext::builder(openssl::ssl::SslMethod::tls())
+            .unwrap()
+            .build();
+        let ssl = Ssl::new(&ctx).unwrap();
+        const READ_ALERT: libc::c_int = 0x4000 | 0x04;
+        let expected = format!("SSL: read alert (0x0100): \"{}\"", ssl.state_string_long());
+
+        CONN.with(|c| {
+            let _held = c.borrow_mut();
+            // SAFETY: a live SSL handle; the callback only reads its state string.
+            unsafe { info_cb(ssl.as_ptr(), READ_ALERT, 0x0100) };
+        });
+        assert_eq!(DEFERRED_INFO.with(|d| d.borrow().clone()), vec![expected]);
+
+        flush_deferred_info();
+        assert!(DEFERRED_INFO.with(|d| d.borrow().is_empty()));
+
+        // SAFETY: as above.
+        unsafe { info_cb(ssl.as_ptr(), READ_ALERT, 0x0100) };
+        assert!(DEFERRED_INFO.with(|d| d.borrow().is_empty()));
     }
 }

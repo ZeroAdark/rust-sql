@@ -1,0 +1,172 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1_share s2_share s1_svpt s3_for_update s1_share s2_commit s1_commit s3_commit rsel
+step s1_share: select id from tlu_job where id = 1 for share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s2_share: select id from tlu_job where id = 1 for share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s1_svpt: savepoint foo;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3_for_update: select id from tlu_job where id = 1 for update;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s1_share: select id from tlu_job where id = 1 for share;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2_commit: commit;
+step s1_commit: commit;
+step s3_commit: commit;
+step rsel: SELECT * FROM tlu_job ORDER BY id;
+id|name
+--+----
+ 1|a   
+(1 row)
+
+
+starting permutation: s1_share s2_for_update s3_share s3_for_update s1_rollback s3_rollback s2_rollback rsel
+step s1_share: select id from tlu_job where id = 1 for share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s2_for_update: select id from tlu_job where id = 1 for update;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s3_share: select id from tlu_job where id = 1 for share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s3_for_update: select id from tlu_job where id = 1 for update;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1_rollback: rollback;
+step s3_rollback: rollback;
+step s2_rollback: rollback;
+step rsel: SELECT * FROM tlu_job ORDER BY id;
+id|name
+--+----
+ 1|a   
+(1 row)
+
+
+starting permutation: s1_keyshare s2_for_update s3_keyshare s1_update s3_update s1_rollback s3_rollback s2_rollback rsel
+step s1_keyshare: select id from tlu_job where id = 1 for key share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s2_for_update: select id from tlu_job where id = 1 for update;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s3_keyshare: select id from tlu_job where id = 1 for key share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s1_update: update tlu_job set name = 'b' where id = 1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3_update: update tlu_job set name = 'c' where id = 1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1_rollback: rollback;
+step s3_rollback: rollback;
+step s2_rollback: rollback;
+step rsel: SELECT * FROM tlu_job ORDER BY id;
+id|name
+--+----
+ 1|a   
+(1 row)
+
+
+starting permutation: s1_keyshare s2_for_update s3_keyshare s1_update s3_update s1_commit s3_rollback s2_rollback rsel
+step s1_keyshare: select id from tlu_job where id = 1 for key share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s2_for_update: select id from tlu_job where id = 1 for update;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s3_keyshare: select id from tlu_job where id = 1 for key share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s1_update: update tlu_job set name = 'b' where id = 1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s3_update: update tlu_job set name = 'c' where id = 1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1_commit: commit;
+step s3_rollback: rollback;
+step s2_rollback: rollback;
+step rsel: SELECT * FROM tlu_job ORDER BY id;
+id|name
+--+----
+ 1|a   
+(1 row)
+
+
+starting permutation: s1_keyshare s2_for_update s3_keyshare s3_delete s1_rollback s3_rollback s2_rollback rsel
+step s1_keyshare: select id from tlu_job where id = 1 for key share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s2_for_update: select id from tlu_job where id = 1 for update;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s3_keyshare: select id from tlu_job where id = 1 for key share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s3_delete: delete from tlu_job where id = 1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1_rollback: rollback;
+step s3_rollback: rollback;
+step s2_rollback: rollback;
+step rsel: SELECT * FROM tlu_job ORDER BY id;
+id|name
+--+----
+ 1|a   
+(1 row)
+
+
+starting permutation: s1_keyshare s2_for_update s3_keyshare s3_delete s1_rollback s3_commit s2_rollback rsel
+step s1_keyshare: select id from tlu_job where id = 1 for key share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s2_for_update: select id from tlu_job where id = 1 for update;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s3_keyshare: select id from tlu_job where id = 1 for key share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s3_delete: delete from tlu_job where id = 1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1_rollback: rollback;
+step s3_commit: commit;
+step s2_rollback: rollback;
+step rsel: SELECT * FROM tlu_job ORDER BY id;
+id|name
+--+----
+ 1|a   
+(1 row)
+
+
+starting permutation: s1_share s2_for_update s3_for_update s1_rollback s2_rollback s3_rollback rsel
+step s1_share: select id from tlu_job where id = 1 for share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s2_for_update: select id from tlu_job where id = 1 for update;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s3_for_update: select id from tlu_job where id = 1 for update;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s1_rollback: rollback;
+step s2_rollback: rollback;
+step s3_rollback: rollback;
+step rsel: SELECT * FROM tlu_job ORDER BY id;
+id|name
+--+----
+ 1|a   
+(1 row)
+
+
+starting permutation: s1_share s2_update s3_update s1_rollback s2_rollback s3_rollback rsel
+step s1_share: select id from tlu_job where id = 1 for share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s2_update: update tlu_job set name = 'b' where id = 1;
+step s3_update: update tlu_job set name = 'c' where id = 1; <waiting ...>
+step s1_rollback: rollback;
+step s2_rollback: rollback;
+step s3_update: <... completed>
+step s3_rollback: rollback;
+step rsel: SELECT * FROM tlu_job ORDER BY id;
+id|name
+--+----
+ 1|a   
+(1 row)
+
+
+starting permutation: s1_share s2_share s1_update s2_update s1_commit s2_rollback rsel
+step s1_share: select id from tlu_job where id = 1 for share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s2_share: select id from tlu_job where id = 1 for share;
+ERROR:  sqe: statement over columnar relation "tlu_job" is not served (cause: node/lock-rows)
+step s1_update: update tlu_job set name = 'b' where id = 1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2_update: update tlu_job set name = 'b' where id = 1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s1_commit: commit;
+step s2_rollback: rollback;
+step rsel: SELECT * FROM tlu_job ORDER BY id;
+id|name
+--+----
+ 1|a   
+(1 row)
+

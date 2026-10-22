@@ -514,24 +514,32 @@ impl SimNetState {
     /// Queue bytes toward the server, behind any staged segment (stream
     /// order is sacred even under delay faults).
     fn queue_c2s(&mut self, bytes: &[u8], release_at: Option<u64>) {
-        match release_at {
-            Some(at) => self.staged_c2s.push_back(Staged { release_at: at, bytes: bytes.to_vec() }),
-            None if self.staged_c2s.is_empty() => self.c2s.extend(bytes.iter().copied()),
-            None => self
-                .staged_c2s
-                .push_back(Staged { release_at: self.op_seq, bytes: bytes.to_vec() }),
-        }
+        let release_at = match release_at {
+            Some(at) => at,
+            None if self.staged_c2s.is_empty() => {
+                self.c2s.extend(bytes.iter().copied());
+                return;
+            }
+            None => self.op_seq,
+        };
+        let mut b = Vec::new();
+        b.extend_from_slice(bytes);
+        self.staged_c2s.push_back(Staged { release_at, bytes: b });
     }
 
     /// Queue bytes toward the client, behind any staged segment.
     fn queue_s2c(&mut self, bytes: &[u8], release_at: Option<u64>) {
-        match release_at {
-            Some(at) => self.staged_s2c.push_back(Staged { release_at: at, bytes: bytes.to_vec() }),
-            None if self.staged_s2c.is_empty() => self.s2c.extend(bytes.iter().copied()),
-            None => self
-                .staged_s2c
-                .push_back(Staged { release_at: self.op_seq, bytes: bytes.to_vec() }),
-        }
+        let release_at = match release_at {
+            Some(at) => at,
+            None if self.staged_s2c.is_empty() => {
+                self.s2c.extend(bytes.iter().copied());
+                return;
+            }
+            None => self.op_seq,
+        };
+        let mut b = Vec::new();
+        b.extend_from_slice(bytes);
+        self.staged_s2c.push_back(Staged { release_at, bytes: b });
     }
 
     fn log(&mut self, op: &str, end: char, want: usize, got: isize, decision: &str) {

@@ -83,7 +83,7 @@ pub fn ExecCreateTableAs<'mcx>(
     if parser_analyze::tap_post_parse_analyze::is_installed() && queryjumble::IsQueryIdEnabled()
     {
         let js = queryjumble::JumbleQuery(mcx, &mut query)?;
-        parser_analyze::tap_post_parse_analyze::call_if(|f| f(&mut query, &js, source_text));
+        parser_analyze::tap_post_parse_analyze::call_if_or(Ok(()), |f| f(&mut query, &js, source_text))?;
     } else if queryjumble::IsQueryIdEnabled() {
         queryjumble::JumbleQueryDiscard(mcx, &mut query)?;
     }
@@ -303,6 +303,7 @@ fn create_ctas_internal<'mcx>(
         true,
     )?;
     catalog_toasting::NewRelationCreateToastTable(mcx, relid, toast_options.as_deref())?;
+    pgrc_front::ensure_companions(mcx, relid)?;
     if let Some(query) = view_query.take() {
         commands_view::StoreViewQuery(mcx, relid, query, false)?;
         xact::CommandCounterIncrement()?;
@@ -484,9 +485,10 @@ fn intorel_receive<'mcx>(
         )?;
         return Ok(true);
     }
-    tableam::table_tuple_insert(
+    tableam::write_buffer::write_single_receive(
         state.mcx,
         rel,
+        &mut state.own_slot,
         slot,
         state.output_cid,
         state.ti_options,

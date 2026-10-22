@@ -1,0 +1,21 @@
+-- regress-full-reloptions-002
+-- SELECT reloptions FROM pg_class WHERE oid = (SELECT reltoastrelid FROM pg_class WHERE oid = 'reloptions_test'::regclass);
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=1259 rti=2 am=heap index=2662
+    key att=1 op=607 value=c26:45703
+    recheck (op607(v2.1, c26:45703))
+    lanes Attr(14):byval8:w8:val
+  project (1=v2.14)
+  outs 1=w8:val
+p1 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1259 rti=1 am=heap index=2662
+    key att=1 op=607 value=$exec0
+    recheck (op607(v1.1, $exec0))
+    lanes Attr(33):byref8:vl:win/page
+  project (1=v1.33)
+  outs 1=vl:win/page
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: IndexScan SubPlan

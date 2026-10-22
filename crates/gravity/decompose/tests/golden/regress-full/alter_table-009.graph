@@ -1,0 +1,12 @@
+-- regress-full-alter_table-009
+-- select reltoastrelid <> 0 as has_toast_table from pg_class where oid = 'test_storage'::regclass;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1259 rti=1 am=heap index=2662
+    key att=1 op=607 value=c26:42122
+    recheck (op607(v1.1, c26:42122))
+    lanes Attr(14):byval8:w8:val
+  project (1=op608(v1.14, c26:0))
+  outs 1=w1:val
+mapped: IndexScan

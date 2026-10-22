@@ -341,9 +341,9 @@ pub fn text_array_image<'mcx>(mcx: Mcx<'mcx>, d: Datum) -> PgResult<PgVec<'mcx, 
     Ok(full)
 }
 
-// DatumGetArrayTypeP's short-header expansion: catalog reads hand back
-// 1-byte-header images for small arrays; the array walkers assume 4-byte.
-// Returns None when the image is already 4-byte-headed (or absent).
+// DatumGetArrayTypeP: catalog reads hand back short-header, inline-compressed
+// or external images; the array walkers assume a plain 4-byte header.
+// Returns None when the image is already plain (or absent).
 fn expand_short_image<'mcx>(
     mcx: Mcx<'mcx>,
     options: Option<&[u8]>,
@@ -351,12 +351,11 @@ fn expand_short_image<'mcx>(
     use types_tuple::varatt;
     let Some(img) = options else { return Ok(None) };
     // SAFETY: img starts at a live varlena header.
-    if img.is_empty() || !unsafe { varatt::varatt_is_1b(img.as_ptr()) } {
+    if img.is_empty() || unsafe { varatt::varatt_is_4b_u(img.as_ptr()) } {
         return Ok(None);
     }
-    // SAFETY: 1-byte-header varlena checked above.
-    let total = unsafe { varatt::varsize_1b(img.as_ptr()) };
-    let payload = &img[varatt::VARHDRSZ_SHORT..total];
+    let payload = varlena::open_image(mcx, img)?;
+    let payload = payload.as_bytes();
     let len = varatt::VARHDRSZ + payload.len();
     let mut out: PgVec<'mcx, u8> = mcx::vec_with_capacity_in(mcx, len)?;
     mcx::vec_append_bytes(&mut out, &varatt::set_varsize_4b_word(len as u32).to_ne_bytes())?;
@@ -364,13 +363,16 @@ fn expand_short_image<'mcx>(
     Ok(Some(out))
 }
 
-fn option_text_strs<'mcx>(mcx: Mcx<'mcx>, options: &[u8]) -> PgResult<PgVec<'mcx, &'mcx str>> {
+fn option_text_strs<'a, 'mcx>(
+    mcx: Mcx<'mcx>,
+    options: &'a [u8],
+) -> PgResult<PgVec<'mcx, &'a str>> {
     // deconstruct_array_builtin(array, TEXTOID, &optiondatums, NULL, &noptions)
     // (reloptions.c:1365, 1455): any dimensionality; a NULL element is
     // deconstruct_array's 22004 (nullsp == NULL).
     let (elems, nulls) =
         datum::array_build::deconstruct_array_image_nulls(mcx, options, -1, false, b'i')?;
-    let mut out: PgVec<'mcx, &'mcx str> = mcx::vec_with_capacity_in(mcx, elems.len())?;
+    let mut out: PgVec<'mcx, &'a str> = mcx::vec_with_capacity_in(mcx, elems.len())?;
     for (i, &e) in elems.iter().enumerate() {
         if nulls.as_ref().is_some_and(|n| n[i]) {
             return Err(Box::new(
@@ -379,14 +381,14 @@ fn option_text_strs<'mcx>(mcx: Mcx<'mcx>, options: &[u8]) -> PgResult<PgVec<'mcx
             ));
         }
         let p = e.as_usize() as *const u8;
-        // SAFETY: element datums point into the options image passed in.
-        let img = unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
-        let payload = text_payload(img);
-        let s = core::str::from_utf8(payload)
+        // SAFETY: element datums point into the options image passed in, so
+        // they live as long as `options`; borrowing them leaves no per-option
+        // copy behind in the caller's context.
+        let img: &'a [u8] =
+            unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
+        let s = core::str::from_utf8(text_payload(img))
             .unwrap_or_else(|_| panic!("non-UTF-8 reloptions text"));
-        let bytes = mcx::slice_borrow_in(mcx, s.as_bytes())?;
-        // SAFETY: byte-for-byte copy of a &str.
-        out.push(unsafe { core::str::from_utf8_unchecked(bytes) });
+        out.push(s);
     }
     Ok(out)
 }
@@ -397,13 +399,31 @@ pub fn parseRelOptions<'mcx>(
     validate: bool,
     kind: relopt_kind,
 ) -> PgResult<PgVec<'mcx, RelOptValue>> {
+    Ok(parse_rel_options_raw(mcx, options, validate, kind, &[])?.0)
+}
+
+// parseRelOptions plus a side channel for AM-owned STRING options that have
+// no parse-table row (C would add_string_reloption them; the closed table
+// here carries no string type): each name in `raw_names` is captured as its
+// raw value text (`None` = not given) instead of failing as unrecognized.
+fn parse_rel_options_raw<'mcx>(
+    mcx: Mcx<'mcx>,
+    options: Option<&[u8]>,
+    validate: bool,
+    kind: relopt_kind,
+    raw_names: &[&str],
+) -> PgResult<(PgVec<'mcx, RelOptValue>, Vec<Option<&'mcx str>>)> {
     let mut values: PgVec<'mcx, RelOptValue> = PgVec::new_in(mcx);
+    let mut raw: Vec<Option<&'mcx str>> = Vec::new();
+    raw.try_reserve_exact(raw_names.len())
+        .map_err(|_| mcx.oom(raw_names.len() * core::mem::size_of::<Option<&str>>()))?;
+    raw.resize(raw_names.len(), None);
     for def in RELOPTS {
         if def.kinds & kind != 0 {
             values.push(RelOptValue { def, isset: false, val: OptVal::Bool(false) });
         }
     }
-    let Some(options) = options else { return Ok(values) };
+    let Some(options) = options else { return Ok((values, raw)) };
     let expanded = expand_short_image(mcx, Some(options))?;
     let options = match &expanded {
         Some(v) => &v[..],
@@ -422,6 +442,25 @@ pub fn parseRelOptions<'mcx>(
                 break;
             }
         }
+        if !found {
+            for (i, kw) in raw_names.iter().enumerate() {
+                if let Some(v) = text_str.strip_prefix(kw).and_then(|r| r.strip_prefix('=')) {
+                    if raw[i].is_some() && validate {
+                        return Err(ereport(ERROR)
+                            .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
+                            .errmsg(format!("parameter \"{kw}\" specified more than once"))
+                            .into_error()
+                            .into());
+                    }
+                    // main's option_text_strs borrows the image; the raw side channel outlives it: copy into mcx
+                    let bytes = mcx::slice_borrow_in(mcx, v.as_bytes())?;
+                    // SAFETY: byte-for-byte copy of a &str.
+                    raw[i] = Some(unsafe { core::str::from_utf8_unchecked(bytes) });
+                    found = true;
+                    break;
+                }
+            }
+        }
         if !found && validate {
             let name = match text_str.find('=') {
                 Some(p) => &text_str[..p],
@@ -434,7 +473,7 @@ pub fn parseRelOptions<'mcx>(
                 .into());
         }
     }
-    Ok(values)
+    Ok((values, raw))
 }
 
 fn parse_one_reloption(option: &mut RelOptValue, value: &str, validate: bool) -> PgResult<()> {
@@ -677,6 +716,10 @@ fn build_std<'mcx>(
     kind: relopt_kind,
 ) -> PgResult<Option<StdRdOptions>> {
     let values = parseRelOptions(mcx, options, validate, kind)?;
+    std_from_values(&values, validate)
+}
+
+fn std_from_values(values: &[RelOptValue], validate: bool) -> PgResult<Option<StdRdOptions>> {
     if values.is_empty() {
         return Ok(None);
     }
@@ -829,13 +872,9 @@ pub fn heap_reloptions<'mcx>(
     }
 }
 
-// Is relam the pgrcolumnar table AM? The tableam_vocab registry only fills when
-// a pgrcolumnar relation is first built into the relcache, so fall back to the
-// pg_am.amname probe (the same identity rule relcache build uses) — this
-// runs only for non-heap relam values with reloptions present, so the
-// syscache probe is off every hot path.
+// The tableam_vocab registry only fills when a pgrcolumnar relation is first built into the relcache.
 pub fn relam_is_pgrcolumnar(relam: Oid) -> bool {
-    const HEAP_TABLE_AM_OID: Oid = 2; // pg_am.dat (relcache build carries it too)
+    const HEAP_TABLE_AM_OID: Oid = 2;
     relam != ::types_core::InvalidOid
         && relam != HEAP_TABLE_AM_OID
         && (tableam_vocab::is_pgrcolumnar_am_oid(relam)
@@ -845,24 +884,46 @@ pub fn relam_is_pgrcolumnar(relam: Oid) -> bool {
             ))
 }
 
-// pgrcolumnar AM storage options (CREATE TABLE ... USING pgrcolumnar WITH (...)).
-// A closed hand-rolled parse table (no C counterpart — pgrcolumnar is native):
-// cluster_key='col,...' (sort-on-ingest key), codec=auto|lz4|zstd|plain,
-// zstd_level=1..22, codec_cols='col=codec,...' (per-column overrides).
-// Column-name resolution happens at writer open, not here (parse-time has no
-// tupdesc); unknown/invalid values error under validate, are skipped else.
+/// The pgrcolumnar AM's own reloption (no parse-table row; see
+/// AM_OWNED_RELOPTS for its ALTER lock level).
+pub const PGRC_SORTED_BY: &str = "sorted_by";
+pub const PGRC_SHRED_PATHS: &str = "pgrc_shred_paths";
+pub const PGRC_SORTED_BY_PARTIAL: &str = "sorted_by_partial";
+
+/// The `sorted_by_partial` DefElem ALTER adds beside a new `sorted_by`.
+pub fn pgrc_sorted_by_partial_def<'mcx>(mcx: Mcx<'mcx>, on: bool) -> PgResult<::types_nodes::Node<'mcx>> {
+    let arg = ::types_nodes::Node::mk(mcx, ::types_nodes::String { sval: if on { "true" } else { "false" } })?;
+    ::types_nodes::Node::mk(
+        mcx,
+        DefElem {
+            defnamespace: None,
+            defname: Some(PGRC_SORTED_BY_PARTIAL),
+            arg: Some(arg),
+            defaction: ::types_nodes::parsenodes::DefElemAction::DEFELEM_UNSPEC,
+            location: -1,
+        },
+    )
+}
+
+pub const PGRC_SORT_RUNS: &str = "sort_runs";
+
+// pgrcolumnar AM storage options (CREATE TABLE ... USING pgrcolumnar WITH
+// (...)): the heap parse table verbatim plus `sorted_by = 'col[, col ...]'`,
+// the enforced within-part order.
+// Syntax only here (bare names; ASC NULLS LAST is implied and any ordering
+// qualifier is refused); column existence and sortability are the DDL
+// caller's check (`pgrcolumnar_check_sorted_by`) since parse time has no
+// tupdesc.
 pub fn pgrcolumnar_reloptions<'mcx>(
     mcx: Mcx<'mcx>,
     options: Option<&[u8]>,
     validate: bool,
 ) -> PgResult<Option<::types_rel::PgrcolumnarOptions>> {
-    use ::types_rel::{PgrcolumnarCodec, PgrcolumnarOptions};
-    let Some(options) = options else { return Ok(None) };
-    let expanded = expand_short_image(mcx, Some(options))?;
-    let options = match &expanded {
-        Some(v) => &v[..],
-        None => options,
-    };
+    use ::types_rel::PgrcolumnarOptions;
+    let (values, raw) =
+        parse_rel_options_raw(mcx, options, validate, RELOPT_KIND_HEAP, &[PGRC_SORTED_BY, PGRC_SHRED_PATHS, PGRC_SORTED_BY_PARTIAL, PGRC_SORT_RUNS])?;
+    let Some(std) = std_from_values(&values, validate)? else { return Ok(None) };
+    let mut out = PgrcolumnarOptions::new(std);
     let bad = |msg: String| -> Box<::types_error::PgError> {
         ereport(ERROR)
             .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
@@ -870,75 +931,292 @@ pub fn pgrcolumnar_reloptions<'mcx>(
             .into_error()
             .into()
     };
-    let mut out = PgrcolumnarOptions::default();
-    for text_str in option_text_strs(mcx, options)?.iter() {
-        let (name, value) = match text_str.find('=') {
-            Some(p) => (&text_str[..p], &text_str[p + 1..]),
-            None => (&text_str[..], ""),
-        };
-        match name {
-            "cluster_key" => {
-                if !out.set_cluster_key(value) && validate {
-                    return Err(bad(format!("value for \"cluster_key\" is too long")));
-                }
+    if let Some(v) = raw[2] {
+        match v.trim().to_ascii_lowercase().as_str() {
+            "true" | "on" | "yes" | "1" => out.set_sorted_by_partial(true),
+            "false" | "off" | "no" | "0" => {}
+            _ if validate => {
+                return Err(bad(format!(
+                    "invalid value for boolean option \"{PGRC_SORTED_BY_PARTIAL}\": {v}"
+                )))
             }
-            "codec_cols" => {
-                if !out.set_codec_cols(value) && validate {
-                    return Err(bad(format!("value for \"codec_cols\" is too long")));
+            _ => {}
+        }
+    }
+    if let Some(paths) = raw[1] {
+        let mut decls: Vec<::types_rel::reloptions::ShredPathDecl> = Vec::new();
+        for item in paths.split(',').filter(|i| !i.trim().is_empty()) {
+            match ::types_rel::reloptions::ShredPathDecl::parse(item) {
+                Some(d) if !decls.iter().any(|e| e.keys == d.keys) => decls.push(d),
+                Some(d) if validate => {
+                    return Err(bad(format!(
+                        "path \"{}\" appears more than once in \"{PGRC_SHRED_PATHS}\"",
+                        d.keys.join(".")
+                    )))
                 }
+                Some(_) => {}
+                None if validate => {
+                    return Err(ereport(ERROR)
+                        .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
+                        .errmsg(format!(
+                            "invalid value for option \"{PGRC_SHRED_PATHS}\": \"{}\"",
+                            item.trim()
+                        ))
+                        .errdetail(
+                            "An element is a dotted path of object keys with an optional kind: \
+                             a.b:text, a.n:numeric, a.f:bool or a.id:uuid."
+                                .to_string(),
+                        )
+                        .into_error()
+                        .into());
+                }
+                None => {}
             }
-            "codec" => match value {
-                v if v.eq_ignore_ascii_case("auto") => out.codec = PgrcolumnarCodec::Auto,
-                v if v.eq_ignore_ascii_case("lz4") => out.codec = PgrcolumnarCodec::Lz4,
-                v if v.eq_ignore_ascii_case("zstd") => out.codec = PgrcolumnarCodec::Zstd,
-                v if v.eq_ignore_ascii_case("plain") => out.codec = PgrcolumnarCodec::Plain,
-                other => {
-                    if validate {
-                        return Err(ereport(ERROR)
-                            .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
-                            .errmsg(format!("invalid value for enum option \"codec\": {other}"))
-                            .errdetail(
-                                "Valid values are \"auto\", \"lz4\", \"zstd\", and \"plain\"."
-                                    .to_string(),
-                            )
-                            .into_error()
-                            .into());
-                    }
+        }
+        let mut rendered: Vec<String> = Vec::new();
+        rendered
+            .try_reserve_exact(decls.len())
+            .map_err(|_| mcx.oom(decls.len() * core::mem::size_of::<String>()))?;
+        rendered.extend(decls.iter().map(|d| d.render()));
+        let canonical = rendered.join(", ");
+        if !out.set_shred_paths(&canonical) && validate {
+            return Err(bad(format!("value for \"{PGRC_SHRED_PATHS}\" is too long")));
+        }
+    }
+    if let Some(v) = raw[3] {
+        match adt_bool::parse_bool(v) {
+            Some(on) => out.set_sort_runs(on),
+            None if validate => {
+                return Err(bad(format!(
+                    "invalid value for boolean option \"{PGRC_SORT_RUNS}\": {v}"
+                )));
+            }
+            None => {}
+        }
+    }
+    let Some(sorted_by) = raw[0] else { return Ok(Some(out)) };
+    // Names fold like SQL identifiers: unquoted ASCII-lowercased, a
+    // double-quoted name verbatim (quotes stripped, "" unescaped); the
+    // canonical spelling is what gets stored, so the relcache read
+    // (validate = false) and every consumer see resolved names. A path key
+    // (`data->>'kind'`, `data->'commit'->>'collection'`) is read by
+    // PostgreSQL's own parser and stored as SortedByKey::render.
+    let fold = |col: &str| -> String {
+        match col.strip_prefix('"').and_then(|c| c.strip_suffix('"')) {
+            Some(inner) if col.len() >= 2 => inner.replace("\"\"", "\""),
+            _ => col.to_ascii_lowercase(),
+        }
+    };
+    let items: Vec<&str> = ::types_rel::reloptions::split_sorted_by(sorted_by);
+    let mut keys: Vec<::types_rel::reloptions::SortedByKey> = Vec::new();
+    keys.try_reserve_exact(items.len())
+        .map_err(|_| mcx.oom(items.len() * core::mem::size_of::<::types_rel::reloptions::SortedByKey>()))?;
+    for item in &items {
+        let col = item.trim();
+        if is_path_item(col) {
+            match parse_sorted_by_path(mcx, col) {
+                Ok(k) => keys.push(k),
+                Err(why) if validate => {
+                    return Err(ereport(ERROR)
+                        .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
+                        .errmsg(format!(
+                            "invalid value for option \"{PGRC_SORTED_BY}\": \"{col}\""
+                        ))
+                        .errdetail(format!(
+                            "{why} A key is a column, or a chain of -> and a final ->> with \
+                             text keys on a jsonb column, such as data->'commit'->>'collection'."
+                        ))
+                        .into_error()
+                        .into());
                 }
-            },
-            "zstd_level" => match guc::units::parse_int(value, 0) {
-                guc::units::ParseNum::Ok(v) if (1..=22).contains(&v) => out.zstd_level = v,
-                _ => {
-                    if validate {
-                        return Err(bad(format!(
-                            "invalid value for integer option \"zstd_level\": {value} (valid: 1..22)"
-                        )));
-                    }
-                }
-            },
-            // Same name/range as the heap reloption (RELOPTS: 0..1024); the
-            // AlterTableGetRelOptionsLockLevel name lookup already grants it
-            // ShareUpdateExclusiveLock from the heap row.
-            "parallel_workers" => match guc::units::parse_int(value, 0) {
-                guc::units::ParseNum::Ok(v) if (0..=1024).contains(&v) => {
-                    out.parallel_workers = v
-                }
-                _ => {
-                    if validate {
-                        return Err(bad(format!(
-                            "invalid value for integer option \"parallel_workers\": {value} (valid: 0..1024)"
-                        )));
-                    }
-                }
-            },
-            other => {
-                if validate {
-                    return Err(bad(format!("unrecognized parameter \"{other}\"")));
-                }
+                Err(_) => keys.push(::types_rel::reloptions::SortedByKey {
+                    col: fold(col),
+                    path: Vec::new(),
+                }),
+            }
+            continue;
+        }
+        if validate {
+            if col.is_empty() {
+                return Err(bad(format!(
+                    "invalid value for option \"{PGRC_SORTED_BY}\": \"{sorted_by}\" \
+                     (expected a comma-separated list of column names)"
+                )));
+            }
+            if !col.starts_with('"') && col.split_whitespace().nth(1).is_some() {
+                return Err(ereport(ERROR)
+                    .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
+                    .errmsg(format!(
+                        "invalid value for option \"{PGRC_SORTED_BY}\": \"{col}\""
+                    ))
+                    .errdetail(
+                        "Only column names and jsonb paths (data->>'k') are accepted; \
+                         the order is always ASC NULLS LAST."
+                            .to_string(),
+                    )
+                    .into_error()
+                    .into());
+            }
+        }
+        keys.push(::types_rel::reloptions::SortedByKey { col: fold(col), path: Vec::new() });
+    }
+    if validate {
+        for (i, k) in keys.iter().enumerate() {
+            if keys[..i].contains(k) {
+                return Err(if k.path.is_empty() {
+                    bad(format!(
+                        "column \"{}\" appears more than once in \"{PGRC_SORTED_BY}\"",
+                        k.col
+                    ))
+                } else {
+                    bad(format!(
+                        "key \"{}\" appears more than once in \"{PGRC_SORTED_BY}\"",
+                        k.render()
+                    ))
+                });
             }
         }
     }
+    let mut rendered: Vec<String> = Vec::new();
+    rendered
+        .try_reserve_exact(keys.len())
+        .map_err(|_| mcx.oom(keys.len() * core::mem::size_of::<String>()))?;
+    rendered.extend(keys.iter().map(|k| k.render()));
+    let canonical: String = rendered.join(", ");
+    if !out.set_sorted_by(&canonical) && validate {
+        return Err(bad(format!("value for \"{PGRC_SORTED_BY}\" is too long")));
+    }
     Ok(Some(out))
+}
+
+fn is_path_item(item: &str) -> bool {
+    !item.starts_with('"') && item.contains(['-', '(', ':', '>', '\''])
+}
+
+/// Read one `sorted_by` path element with PostgreSQL's grammar
+/// (`SELECT <item>`): a column reference, then `->` steps with a string key
+/// and one final `->>` with a string key. Err = why it is not one.
+fn parse_sorted_by_path(
+    mcx: Mcx<'_>,
+    item: &str,
+) -> Result<::types_rel::reloptions::SortedByKey, &'static str> {
+    let sql = format!("SELECT {item}");
+    let stmts = ::parser_seams::raw_parser::call(mcx, &sql, ::parser_seams::RawParseMode::RAW_PARSE_DEFAULT)
+        .map_err(|_| "It does not parse as an expression.")?;
+    let sel = (stmts.len() == 1)
+        .then(|| stmts.first().and_then(|s| s.stmt))
+        .flatten()
+        .and_then(|n| n.as_select_stmt())
+        .ok_or("It does not parse as one expression.")?;
+    if sel.targetList.len() != 1 || sel.fromClause.len() != 0 || sel.whereClause.is_some() {
+        return Err("It does not parse as one expression.");
+    }
+    let mut node = sel
+        .targetList
+        .nth(0)
+        .as_res_target()
+        .filter(|t| t.name.is_none() && t.indirection.len() == 0)
+        .and_then(|t| t.val)
+        .ok_or("It does not parse as one expression.")?;
+    // walk the left-deep chain from the last step back to the column
+    let mut steps: Vec<(bool, String)> = Vec::new();
+    let col = loop {
+        if let Some(c) = node.as_column_ref() {
+            if c.fields.len() != 1 {
+                return Err("The column must be an unqualified column name.");
+            }
+            let name = c
+                .fields
+                .nth(0)
+                .as_string()
+                .ok_or("The column must be an unqualified column name.")?;
+            break name.sval.to_string();
+        }
+        let e = node.as_a_expr().ok_or("Only -> and ->> are accepted.")?;
+        let op = (e.kind == ::types_nodes::rawnodes::A_Expr_Kind::AEXPR_OP && e.name.len() == 1)
+            .then(|| e.name.nth(0).as_string())
+            .flatten()
+            .map(|s| s.sval)
+            .ok_or("Only -> and ->> are accepted.")?;
+        let text = match op {
+            "->" => false,
+            "->>" => true,
+            _ => return Err("Only -> and ->> are accepted."),
+        };
+        let key = e
+            .rexpr
+            .and_then(|r| r.as_a_const())
+            .and_then(|c| match c.val {
+                Some(::types_nodes::rawnodes::ValUnion::String(s)) => Some(s.sval.to_string()),
+                _ => None,
+            })
+            .ok_or("Each step takes a string literal key (array subscripts are not accepted).")?;
+        steps.push((text, key));
+        node = e.lexpr.ok_or("Only -> and ->> are accepted.")?;
+    };
+    steps.reverse();
+    match steps.split_last() {
+        Some((last, init)) if last.0 && init.iter().all(|s| !s.0) => {}
+        _ => return Err("The path must end with ->> (a text value), with -> before it."),
+    }
+    Ok(::types_rel::reloptions::SortedByKey { col, path: steps.into_iter().map(|s| s.1).collect() })
+}
+
+/// What the DDL caller knows about one `sorted_by` name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortedByColumn {
+    Missing,
+    Unsortable,
+    /// A `->` / `->>` path key on a column that is not jsonb.
+    PathNotJsonb,
+    Ok,
+}
+
+pub fn pgrcolumnar_check_sorted_by(
+    opts: Option<&::types_rel::PgrcolumnarOptions>,
+    classify: impl Fn(&::types_rel::reloptions::SortedByKey) -> SortedByColumn,
+) -> PgResult<()> {
+    let Some(opts) = opts else { return Ok(()) };
+    for key in opts.sorted_by_keys() {
+        let col = key.col.as_str();
+        match classify(&key) {
+            SortedByColumn::Ok => {}
+            SortedByColumn::PathNotJsonb => {
+                return Err(ereport(ERROR)
+                    .errcode(::types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
+                    .errmsg(format!(
+                        "\"{}\" cannot be a \"{PGRC_SORTED_BY}\" key: column \"{col}\" is not jsonb",
+                        key.render()
+                    ))
+                    .into_error()
+                    .into());
+            }
+            SortedByColumn::Missing => {
+                return Err(ereport(ERROR)
+                    .errcode(::types_error::ERRCODE_UNDEFINED_COLUMN)
+                    .errmsg(format!(
+                        "column \"{col}\" named in \"{PGRC_SORTED_BY}\" does not exist"
+                    ))
+                    .into_error()
+                    .into());
+            }
+            SortedByColumn::Unsortable => {
+                return Err(ereport(ERROR)
+                    .errcode(::types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
+                    .errmsg(format!(
+                        "column \"{col}\" cannot be a \"{PGRC_SORTED_BY}\" key"
+                    ))
+                    .errdetail(
+                        "pgrcolumnar sorts integer, date/time, boolean, float, \
+                         uuid-like fixed-width and C-collated text columns."
+                            .to_string(),
+                    )
+                    .into_error()
+                    .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn partitioned_table_reloptions(options: Option<&[u8]>, validate: bool) -> PgResult<()> {
@@ -1320,7 +1598,7 @@ pub fn extractRelOptions<'mcx>(
     let image = text_array_image(mcx, d)?;
     let options = Some(image.as_slice());
     match relkind {
-        RELKIND_RELATION if relam_is_pgrcolumnar(relam) => {
+        RELKIND_RELATION | RELKIND_MATVIEW if relam_is_pgrcolumnar(relam) => {
             Ok(pgrcolumnar_reloptions(mcx, options, false)?.map(RdOptions::Pgrcolumnar))
         }
         RELKIND_RELATION | RELKIND_TOASTVALUE | RELKIND_MATVIEW => {
@@ -1349,6 +1627,24 @@ pub fn AlterTableGetRelOptionsLockLevel(def_list: &NodeList<'_>) -> LOCKMODE {
                 lockmode = opt.lockmode;
             }
         }
+        for (opt, lm) in AM_OWNED_RELOPTS {
+            if *opt == name && lockmode < *lm {
+                lockmode = *lm;
+            }
+        }
     }
     lockmode
 }
+
+// AM-owned string options with no RELOPTS row (C would register them with
+// add_string_reloption): name + the ALTER TABLE SET lock level. `sorted_by`
+// changes plan shapes and the writer's order, so it takes
+// AccessExclusiveLock like every option C registers without an explicit
+// lockmode. `sort_runs` changes only the compaction worker's policy, as
+// autovacuum's options change autovacuum's: ShareUpdateExclusiveLock.
+const AM_OWNED_RELOPTS: &[(&str, LOCKMODE)] = &[
+    (PGRC_SORTED_BY, AccessExclusiveLock),
+    (PGRC_SHRED_PATHS, ShareUpdateExclusiveLock),
+    (PGRC_SORTED_BY_PARTIAL, AccessExclusiveLock),
+    (PGRC_SORT_RUNS, ShareUpdateExclusiveLock),
+];

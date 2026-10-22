@@ -1,0 +1,38 @@
+-- regress-full-window-066
+-- SELECT empno, depname, row_number() OVER (PARTITION BY depname ORDER BY enroll_date) rn, rank() OVER (PARTITION BY depname ORDER BY enroll_date ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk, count(*) OVER (PARTITION BY depname ORDER BY enroll_date RANGE BETWEEN CURRENT ROW AND CURRENT ROW) cnt FROM empsalary;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=3 eligible rows=1070 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n3@0 n2@1^
+  source range rel=38921 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.4, 3=v1.2)
+  sort keys=1+:Fp128@100,2+:Date form=runs
+  outs 1=vl:win/page 2=w8:val 3=w8:val
+p1 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=vl:win/page 2=w8:val 3=w8:val
+p2 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  desc consumes=slot1@p1
+  nodes n1@0 n0@2^
+  source breaker slot=1
+  window ref=1 partition=1=98:Fp128 order=2=1093:Date frame=Rows unbounded-preceding..current-row
+    fn resno=4 RowNumber cursor=row,partition, win3100()
+    fn resno=5 Rank cursor=row,partition,peers, win3101()
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5)
+  outs 1=vl:life/breaker 2=w4:val 3=w8:val 4=w8:val 5=w8:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  window ref=3 top partition=1=98:Fp128 order=2=1093:Date frame=Range current-row..current-row
+    fn resno=5 Aggregate cursor=peers,frame, win2803()
+  project (1=outer.3, 2=outer.1, 3=outer.4, 4=outer.5, 5=outer.6, 6j=outer.2)
+  outs 1=w8:val 2=vl:life/breaker 3=w8:val 4=w8:val 5=w8:val 6=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128,Date]->[Count@24] 32B order=1+,2+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=1+,2+
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128]->[Count@16] 24B order=1+,2+
+mapped: SeqScan Sort WindowAgg

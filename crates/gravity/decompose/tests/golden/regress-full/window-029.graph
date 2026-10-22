@@ -1,0 +1,56 @@
+-- regress-full-window-029
+-- SELECT empno, depname, salary, bonus, depadj, MIN(bonus) OVER (ORDER BY empno), MAX(depadj) OVER () FROM( SELECT *, CASE WHEN enroll_date < '2008-01-01' THEN 2008 - extract(YEAR FROM enroll_date) END * 500 AS bonus, CASE WHEN AVG(salary) OVER (PARTITION BY depname) < salary THEN 200 END AS depadj FROM empsalary )s;
+graph pipelines=6 breakers=5 init_plans=0 root=p5
+p0 node=6 eligible rows=1070 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n6@0 n5@1^
+  source range rel=38921 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4)
+  sort keys=1+:Fp128@100 form=runs
+  outs 1=vl:win/page 2=w8:val 3=w8:val 4=w8:val
+p1 node=5 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n5@0 n4@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=vl:win/page 2=w8:val 3=w8:val 4=w8:val
+p2 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot1@p1
+  nodes n4@0 n3@2 n2@3^
+  source breaker slot=1
+  window ref=1 top partition=1=98:Fp128 order= frame=Range unbounded-preceding..current-row
+    fn resno=6 Aggregate cursor=peers,frame, win2101(outer.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=c1082:null, 5=op1760(case(when op1095(outer.4, c1082:2922) then op1759(c1700:'\x00\x80\xd8\x07', fn6199(c25:'year', outer.4))) else c1700:null, c1700:'\x00\x80\xf4\x01'), 6=case(when op1754(outer.5, fn1740(outer.3)) then c23:200) else c23:null)
+  project (1=v1.2, 2=v1.1, 3=v1.3, 4=v1.5, 5=v1.6)
+  sort keys=1+:I64 form=runs
+  outs 1=vl:life/breaker 2=w8:val 3=w4:val 4=w4:val 5=vl:call1726 6=w4:val
+  outs 1=w8:val 2=vl:row 3=w4:val 4=vl:row 5=w4:val
+p3 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p2
+  nodes n2@0 n1@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5)
+  outs 1=w8:val 2=vl:row 3=w4:val 4=vl:row 5=w4:val
+p4 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  desc consumes=slot1@p3
+  nodes n1@0 n0@2^
+  source breaker slot=1
+  window ref=1 partition= order=1=410:I64 frame=Range unbounded-preceding..current-row
+    fn resno=6 Aggregate cursor=peers,frame, win2146(outer.4)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=vl:life/breaker 3=w4:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker
+p5 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p4
+  nodes n0@0
+  source breaker slot=0
+  window ref=2 top partition= order= frame=Range unbounded-preceding..current-row
+    fn resno=7 Aggregate cursor=peers,frame, win2116(outer.5)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7)
+  outs 1=w8:val 2=vl:life/breaker 3=w4:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker 7=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[I64]->[Count@8] 16B order=1+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B order=1+
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B order=1+
+mapped: SeqScan SubqueryScan Sort WindowAgg

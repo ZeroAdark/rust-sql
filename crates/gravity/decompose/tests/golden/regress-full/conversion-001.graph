@@ -1,0 +1,10 @@
+-- regress-full-conversion-001
+-- SELECT FROM test_enc_setup();
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn40831 fn40831()]
+  project ()
+  outs
+mapped: FunctionScan

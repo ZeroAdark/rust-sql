@@ -213,9 +213,10 @@ fn mk_a_node_deep_affix_raises_54001_not_stack_overflow() {
     ::stack_depth::set_max_stack_depth(MAX_KB);
     ::stack_depth::assign_max_stack_depth(MAX_KB);
     let _ = ::stack_depth::set_stack_base();
-    // Production pairing: clamp the scaled budget to libtest's real 2 MiB
-    // thread stack so the deep recursion trips 54001, not SIGSEGV.
-    ::stack_depth::set_thread_stack_ceiling(2 << 20);
+    // Clamp the scaled budget well inside libtest's 2 MiB thread stack: the
+    // repl is capped at BUFSIZ bytes (1024 on macOS), so the budget must be
+    // small enough for that depth to trip 54001.
+    ::stack_depth::set_thread_stack_ceiling(512 << 10);
 
     // Old-ispell-format affix file with ONE suffix entry whose replacement
     // string is long: `repl` length == mk_a_node recursion depth.
@@ -528,4 +529,22 @@ fn spnode_affix_index_is_nineteen_bits() {
     assert_eq!(leaf_affix(b"5", 5), 5);
     assert_eq!(leaf_affix(b"524287", 524287), 524287);
     assert_eq!(leaf_affix(b"524288", 524288), 0);
+}
+
+#[test]
+fn duplicate_words_keep_pg_qsort_tie_order() {
+    fixtures_dir();
+    let mcx = static_mcx();
+    let d = make_dict(mcx, "spell_dup_onlyincompound", "spell_dup_onlyincompound").unwrap();
+    assert_eq!(lexize(mcx, &d, "foo"), Some(vec!["foo".to_string()]));
+}
+
+#[test]
+fn af_count_int_max_reports_wrapped_alloc_size() {
+    fixtures_dir();
+    let mcx = static_mcx();
+    let Err(e) = make_dict(mcx, "spell_dup_onlyincompound", "spell_af_intmax") else {
+        panic!("AF 2147483647 must fail");
+    };
+    assert_eq!(e, "invalid memory alloc request size 18446744056529682432");
 }

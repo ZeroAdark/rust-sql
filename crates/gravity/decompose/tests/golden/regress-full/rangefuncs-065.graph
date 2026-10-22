@@ -1,0 +1,10 @@
+-- regress-full-rangefuncs-065
+-- select * from testrngfunc() as t(f1 int8,f2 int8);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn40792 cols=2 fn40792()]
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=w8:val
+mapped: FunctionScan

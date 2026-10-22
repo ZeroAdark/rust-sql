@@ -1,0 +1,9 @@
+-- regress-full-rangefuncs-067
+-- explain (verbose, costs off) select * from testrngfunc();
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=c1700:'\x00\x83\x07\x00Q\x05x\x1e', 2=c1700:'\x00\x81\x07\x00x\x05')
+  outs 1=vl:stmt/imm 2=vl:stmt/imm
+mapped: Result

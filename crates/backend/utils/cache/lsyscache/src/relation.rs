@@ -18,13 +18,11 @@ pub fn get_relname_relid(relname: &str, relnamespace: Oid) -> PgResult<Oid> {
     get_relname_relid_bytes(relname.as_bytes(), relnamespace)
 }
 
-// get_relname_relid over C's char* bytes: a makeObjectName-generated name
-// (index_create) may not be UTF-8 in a SQL_ASCII database.
+// A makeObjectName-generated name may not be UTF-8 in a SQL_ASCII database.
 pub fn get_relname_relid_bytes(relname: &[u8], relnamespace: Oid) -> PgResult<Oid> {
     syscache_seams::lookup_pg_class_relid_by_name::call(relname, relnamespace)
 }
 
-// #ifdef NOT_USED in C.
 pub fn get_relnatts(relid: Oid) -> PgResult<i32> {
     Ok(match syscache_seams::lookup_pg_class_ls_shape::call(relid)? {
         Some(reltup) => reltup.relnatts as i32,
@@ -39,9 +37,7 @@ pub fn get_rel_name<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgResult<Option<PgStrin
     }
 }
 
-// Stands in for rd_rel->relrewrite (pg_class.h): the trimmed relcache form
-// does not carry it, so it is read from the pg_class syscache tuple. InvalidOid
-// when the relation is not a transient rewrite heap or is unknown.
+// The trimmed relcache form does not carry relrewrite, so it is read from the pg_class syscache tuple.
 pub fn get_rel_relrewrite(relid: Oid) -> PgResult<Oid> {
     Ok(syscache_seams::pg_class_relrewrite::call(relid)?.unwrap_or(InvalidOid))
 }
@@ -102,8 +98,6 @@ pub fn get_rel_relam(relid: Oid) -> PgResult<Oid> {
     }
 }
 
-// C reads shape + indclass off one INDEXRELID probe; the split projections
-// cost a second probe on this cold path.
 pub fn get_index_column_opclass(index_oid: Oid, attno: i32) -> PgResult<Oid> {
     let Some(rd_index) = syscache_seams::lookup_pg_index_ls_shape::call(index_oid)? else {
         return Ok(InvalidOid);

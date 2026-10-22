@@ -1,0 +1,554 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1b s2b s1c s2bs
+step s1b: UPDATE ib_pt SET n = n + 1 WHERE post_id = 2005 AND tag_id = 36;
+step s2b: MERGE INTO ib_pt pt USING (SELECT post_id, tag_id FROM ib_pt WHERE post_id BETWEEN 2000 AND 2010 AND tag_id > 30) s ON pt.post_id = s.post_id AND pt.tag_id = s.tag_id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN DO NOTHING RETURNING merge_action(), pt.*; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+merge_action|post_id|tag_id|note |n
+------------+-------+------+-----+-
+DELETE      |   2005|    36|n2005|1
+DELETE      |   2010|    31|n2010|0
+(2 rows)
+
+step s2bs: SELECT post_id, tag_id, n FROM ib_pt WHERE post_id IN (2005, 2010) ORDER BY 1, 2;
+post_id|tag_id|n
+-------+------+-
+   2005|     6|0
+   2010|    11|0
+(2 rows)
+
+
+starting permutation: s1bk s2b s1c s2bs
+step s1bk: UPDATE ib_pt SET tag_id = 37 WHERE post_id = 2005 AND tag_id = 36;
+step s2b: MERGE INTO ib_pt pt USING (SELECT post_id, tag_id FROM ib_pt WHERE post_id BETWEEN 2000 AND 2010 AND tag_id > 30) s ON pt.post_id = s.post_id AND pt.tag_id = s.tag_id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN DO NOTHING RETURNING merge_action(), pt.*; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+merge_action|post_id|tag_id|note |n
+------------+-------+------+-----+-
+DELETE      |   2010|    31|n2010|0
+(1 row)
+
+step s2bs: SELECT post_id, tag_id, n FROM ib_pt WHERE post_id IN (2005, 2010) ORDER BY 1, 2;
+post_id|tag_id|n
+-------+------+-
+   2005|     6|0
+   2005|    37|0
+   2010|    11|0
+(3 rows)
+
+
+starting permutation: s1bd s2b s1c s2bs
+step s1bd: DELETE FROM ib_pt WHERE post_id = 2005 AND tag_id = 36;
+step s2b: MERGE INTO ib_pt pt USING (SELECT post_id, tag_id FROM ib_pt WHERE post_id BETWEEN 2000 AND 2010 AND tag_id > 30) s ON pt.post_id = s.post_id AND pt.tag_id = s.tag_id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN DO NOTHING RETURNING merge_action(), pt.*; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+merge_action|post_id|tag_id|note |n
+------------+-------+------+-----+-
+DELETE      |   2010|    31|n2010|0
+(1 row)
+
+step s2bs: SELECT post_id, tag_id, n FROM ib_pt WHERE post_id IN (2005, 2010) ORDER BY 1, 2;
+post_id|tag_id|n
+-------+------+-
+   2005|     6|0
+   2010|    11|0
+(2 rows)
+
+
+starting permutation: s2oe s1o s2o s1c s2os
+step s2oe: EXPLAIN (COSTS OFF) MERGE INTO ib_pt pt USING (SELECT k, t, note FROM ib_s WHERE k BETWEEN 4000 AND 4012 OR k BETWEEN 7000 AND 7006) s ON pt.post_id = s.k AND pt.tag_id = s.t WHEN MATCHED THEN UPDATE SET note = s.note WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.t, s.note);
+QUERY PLAN                                                                                  
+--------------------------------------------------------------------------------------------
+Merge on ib_pt pt                                                                           
+  ->  Nested Loop Left Join                                                                 
+        ->  Bitmap Heap Scan on ib_s                                                        
+              Recheck Cond: (((k >= 4000) AND (k <= 4012)) OR ((k >= 7000) AND (k <= 7006)))
+              ->  BitmapOr                                                                  
+                    ->  Bitmap Index Scan on ib_s_k                                         
+                          Index Cond: ((k >= 4000) AND (k <= 4012))                         
+                    ->  Bitmap Index Scan on ib_s_k                                         
+                          Index Cond: ((k >= 7000) AND (k <= 7006))                         
+        ->  Index Scan using ib_pt_pkey on ib_pt pt                                         
+              Index Cond: ((post_id = ib_s.k) AND (tag_id = ib_s.t))                        
+(11 rows)
+
+step s1o: UPDATE ib_pt SET tag_id = 39 WHERE post_id = 4006 AND tag_id = 7;
+step s2o: MERGE INTO ib_pt pt USING (SELECT k, t, note FROM ib_s WHERE k BETWEEN 4000 AND 4012 OR k BETWEEN 7000 AND 7006) s ON pt.post_id = s.k AND pt.tag_id = s.t WHEN MATCHED THEN UPDATE SET note = s.note WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.t, s.note); <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+step s2os: SELECT post_id, tag_id, note FROM ib_pt WHERE post_id IN (4005, 4006) ORDER BY 1, 2;
+post_id|tag_id|note 
+-------+------+-----
+   4005|     6|n4005
+   4005|    26|n4005
+   4005|    28|s4005
+   4005|    36|n4005
+   4006|     3|n4006
+   4006|     7|s4006
+   4006|    39|n4006
+(7 rows)
+
+
+starting permutation: s1v s2v s1c s2vs
+step s1v: UPDATE ib_t SET v = v || '!' WHERE k = 5;
+step s2v: MERGE INTO ib_t t USING (VALUES (3, 'a'), (7, 'b')) AS v(n, x) ON t.k < v.n AND t.k > v.n - 3 WHEN MATCHED THEN UPDATE SET v = t.v || v.x WHEN NOT MATCHED BY SOURCE AND t.k < 10 THEN DELETE RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+merge_action|k|v   
+------------+-+----
+UPDATE      |1|v1a 
+UPDATE      |2|v2a 
+DELETE      |3|v3  
+DELETE      |4|v4  
+UPDATE      |5|v5!b
+UPDATE      |6|v6b 
+DELETE      |7|v7  
+DELETE      |8|v8  
+DELETE      |9|v9  
+(9 rows)
+
+step s2vs: SELECT * FROM ib_t WHERE k < 12 ORDER BY 1, 2;
+ k|v   
+--+----
+ 1|v1a 
+ 2|v2a 
+ 5|v5!b
+ 6|v6b 
+10|v10 
+11|v11 
+(6 rows)
+
+
+starting permutation: s1vk s2v s1c s2vs
+step s1vk: UPDATE ib_t SET k = 4 WHERE k = 5;
+step s2v: MERGE INTO ib_t t USING (VALUES (3, 'a'), (7, 'b')) AS v(n, x) ON t.k < v.n AND t.k > v.n - 3 WHEN MATCHED THEN UPDATE SET v = t.v || v.x WHEN NOT MATCHED BY SOURCE AND t.k < 10 THEN DELETE RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+merge_action|k|v  
+------------+-+---
+UPDATE      |1|v1a
+UPDATE      |2|v2a
+DELETE      |3|v3 
+DELETE      |4|v4 
+DELETE      |4|v5 
+UPDATE      |6|v6b
+DELETE      |7|v7 
+DELETE      |8|v8 
+DELETE      |9|v9 
+(9 rows)
+
+step s2vs: SELECT * FROM ib_t WHERE k < 12 ORDER BY 1, 2;
+ k|v  
+--+---
+ 1|v1a
+ 2|v2a
+ 6|v6b
+10|v10
+11|v11
+(5 rows)
+
+
+starting permutation: s1w s2w s1c s2ws
+step s1w: UPDATE ib_base SET visibility = 'private' WHERE person = 'Tom';
+step s2w: MERGE INTO ib_rw t USING (VALUES ('Tom'), ('Dick'), ('Harry')) AS v(person) ON t.person = v.person WHEN MATCHED THEN UPDATE SET person = v.person || '+'; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s2ws: SELECT * FROM ib_base ORDER BY 1;
+person|visibility
+------+----------
+Dick  |private   
+Harry+|public    
+Tom   |private   
+(3 rows)
+
+
+starting permutation: s3e s1n s3n s1c s3s
+step s3e: EXPLAIN (COSTS OFF) MERGE INTO ib_one t USING ib_src s ON t.id = s.id WHEN MATCHED THEN UPDATE SET hits = hits + s.n WHEN NOT MATCHED BY SOURCE THEN UPDATE SET hits = -1;
+QUERY PLAN                        
+----------------------------------
+Merge on ib_one t                 
+  ->  Nested Loop Left Join       
+        Join Filter: (t.id = s.id)
+        ->  Seq Scan on ib_one t  
+        ->  Seq Scan on ib_src s  
+(5 rows)
+
+step s1n: UPDATE ib_one SET n = n + 1 WHERE id = 1;
+step s3n: MERGE INTO ib_one t USING ib_empty s ON t.id = s.id WHEN NOT MATCHED BY SOURCE AND t.id = 1 THEN UPDATE SET hits = hits + 5 RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s3n: <... completed>
+merge_action|id|  n|hits
+------------+--+---+----
+UPDATE      | 1|667|   5
+(1 row)
+
+step s3s: SELECT * FROM ib_one ORDER BY id;
+id|  n|hits
+--+---+----
+ 1|667|   5
+ 2|  7|   0
+ 3|  8|   0
+(3 rows)
+
+
+starting permutation: s1n s3m s1c s3s
+step s1n: UPDATE ib_one SET n = n + 1 WHERE id = 1;
+step s3m: MERGE INTO ib_one t USING ib_src s ON t.id = s.id WHEN MATCHED THEN UPDATE SET hits = hits + s.n WHEN NOT MATCHED BY SOURCE THEN UPDATE SET hits = -1 RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+merge_action|id|  n|hits
+------------+--+---+----
+UPDATE      | 1|667|  -1
+UPDATE      | 2|  7|  40
+UPDATE      | 3|  8|  -1
+(3 rows)
+
+step s3s: SELECT * FROM ib_one ORDER BY id;
+id|  n|hits
+--+---+----
+ 1|667|  -1
+ 2|  7|  40
+ 3|  8|  -1
+(3 rows)
+
+
+starting permutation: s1mk s3m s1c s3s
+step s1mk: UPDATE ib_one SET id = 20 WHERE id = 2;
+step s3m: MERGE INTO ib_one t USING ib_src s ON t.id = s.id WHEN MATCHED THEN UPDATE SET hits = hits + s.n WHEN NOT MATCHED BY SOURCE THEN UPDATE SET hits = -1 RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+merge_action|id|  n|hits
+------------+--+---+----
+UPDATE      | 1|666|  -1
+UPDATE      |20|  7|  -1
+UPDATE      | 3|  8|  -1
+(3 rows)
+
+step s3s: SELECT * FROM ib_one ORDER BY id;
+id|  n|hits
+--+---+----
+ 1|666|  -1
+ 3|  8|  -1
+20|  7|  -1
+(3 rows)
+
+
+starting permutation: s2xe s1x s2x s1c s2xs
+step s2xe: EXPLAIN (COSTS OFF) MERGE INTO ib_m t USING (VALUES (1, 5), (2, 6), (9, 7)) v(k, d) ON t.tid IS NOT DISTINCT FROM v.k WHEN MATCHED THEN UPDATE SET bal = t.bal + v.d WHEN NOT MATCHED THEN INSERT VALUES (v.k, v.d, 'v');
+QUERY PLAN                                                            
+----------------------------------------------------------------------
+Merge on ib_m t                                                       
+  ->  Nested Loop Left Join                                           
+        Join Filter: (NOT (t.tid IS DISTINCT FROM "*VALUES*".column1))
+        ->  Values Scan on "*VALUES*"                                 
+        ->  Materialize                                               
+              ->  Seq Scan on ib_m t                                  
+(6 rows)
+
+step s1x: UPDATE ib_m SET bal = bal + 1 WHERE tid = 2;
+step s2x: MERGE INTO ib_m t USING (VALUES (1, 5), (2, 6), (9, 7)) v(k, d) ON t.tid IS NOT DISTINCT FROM v.k WHEN MATCHED THEN UPDATE SET bal = t.bal + v.d WHEN NOT MATCHED THEN INSERT VALUES (v.k, v.d, 'v') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+merge_action|tid|bal|val
+------------+---+---+---
+UPDATE      |  1|105|a  
+UPDATE      |  2|207|b  
+INSERT      |  9|  7|v  
+(3 rows)
+
+step s2xs: SELECT * FROM ib_m ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|105|a  
+  2|207|b  
+  3|300|c  
+  9|  7|v  
+(4 rows)
+
+
+starting permutation: s1xk s2x s1c s2xs
+step s1xk: UPDATE ib_m SET tid = 50 WHERE tid = 2;
+step s2x: MERGE INTO ib_m t USING (VALUES (1, 5), (2, 6), (9, 7)) v(k, d) ON t.tid IS NOT DISTINCT FROM v.k WHEN MATCHED THEN UPDATE SET bal = t.bal + v.d WHEN NOT MATCHED THEN INSERT VALUES (v.k, v.d, 'v') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+merge_action|tid|bal|val
+------------+---+---+---
+UPDATE      |  1|105|a  
+INSERT      |  2|  6|v  
+INSERT      |  9|  7|v  
+(3 rows)
+
+step s2xs: SELECT * FROM ib_m ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|105|a  
+  2|  6|v  
+  3|300|c  
+  9|  7|v  
+ 50|200|b  
+(5 rows)
+
+
+starting permutation: s1xd s2x s1c s2xs
+step s1xd: DELETE FROM ib_m WHERE tid = 2;
+step s2x: MERGE INTO ib_m t USING (VALUES (1, 5), (2, 6), (9, 7)) v(k, d) ON t.tid IS NOT DISTINCT FROM v.k WHEN MATCHED THEN UPDATE SET bal = t.bal + v.d WHEN NOT MATCHED THEN INSERT VALUES (v.k, v.d, 'v') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+merge_action|tid|bal|val
+------------+---+---+---
+UPDATE      |  1|105|a  
+INSERT      |  2|  6|v  
+INSERT      |  9|  7|v  
+(3 rows)
+
+step s2xs: SELECT * FROM ib_m ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|105|a  
+  2|  6|v  
+  3|300|c  
+  9|  7|v  
+(4 rows)
+
+
+starting permutation: s2ae s1a s2a s1c s2as
+step s2ae: EXPLAIN (COSTS OFF) MERGE INTO ib_a m USING (SELECT g AS k, 'src ' || g AS v FROM generate_series(1, 8) g OFFSET 0) o ON m.k = o.k WHEN MATCHED THEN UPDATE SET v = (SELECT b FROM ib_c WHERE ib_c.a = m.r LIMIT 1) WHEN NOT MATCHED THEN INSERT VALUES (o.k, -1, o.v);
+QUERY PLAN                                          
+----------------------------------------------------
+Merge on ib_a m                                     
+  ->  Hash Left Join                                
+        Hash Cond: (o.k = m.k)                      
+        ->  Subquery Scan on o                      
+              ->  Function Scan on generate_series g
+        ->  Hash                                    
+              ->  Seq Scan on ib_a m                
+  SubPlan 1                                         
+    ->  Limit                                       
+          ->  Seq Scan on ib_c                      
+                Filter: (a = m.r)                   
+(11 rows)
+
+step s1a: UPDATE ib_a SET r = 20 WHERE k = 4;
+step s2a: MERGE INTO ib_a m USING (SELECT g AS k, 'src ' || g AS v FROM generate_series(1, 8) g OFFSET 0) o ON m.k = o.k WHEN MATCHED THEN UPDATE SET v = (SELECT b FROM ib_c WHERE ib_c.a = m.r LIMIT 1) WHEN NOT MATCHED THEN INSERT VALUES (o.k, -1, o.v) RETURNING merge_action(), m.*; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+merge_action|k| r|v    
+------------+-+--+-----
+UPDATE      |1| 1|c1   
+INSERT      |2|-1|src 2
+INSERT      |3|-1|src 3
+UPDATE      |4|20|c20  
+INSERT      |5|-1|src 5
+INSERT      |6|-1|src 6
+UPDATE      |7| 7|c7   
+INSERT      |8|-1|src 8
+(8 rows)
+
+step s2as: SELECT * FROM ib_a ORDER BY k;
+ k| r|v    
+--+--+-----
+ 1| 1|c1   
+ 2|-1|src 2
+ 3|-1|src 3
+ 4|20|c20  
+ 5|-1|src 5
+ 6|-1|src 6
+ 7| 7|c7   
+ 8|-1|src 8
+10|10|10 v 
+13|13|13 v 
+16|16|16 v 
+(11 rows)
+
+
+starting permutation: s1ak s2a s1c s2as
+step s1ak: UPDATE ib_a SET k = 5 WHERE k = 4;
+step s2a: MERGE INTO ib_a m USING (SELECT g AS k, 'src ' || g AS v FROM generate_series(1, 8) g OFFSET 0) o ON m.k = o.k WHEN MATCHED THEN UPDATE SET v = (SELECT b FROM ib_c WHERE ib_c.a = m.r LIMIT 1) WHEN NOT MATCHED THEN INSERT VALUES (o.k, -1, o.v) RETURNING merge_action(), m.*; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+ERROR:  duplicate key value violates unique constraint "ib_a_k_key"
+step s2as: SELECT * FROM ib_a ORDER BY k;
+ k| r|v   
+--+--+----
+ 1| 1|1 v 
+ 5| 4|4 v 
+ 7| 7|7 v 
+10|10|10 v
+13|13|13 v
+16|16|16 v
+(6 rows)
+
+
+starting permutation: s2je s1j s2j s1c s2js
+step s2je: EXPLAIN (COSTS OFF) MERGE INTO ib_jobs j USING (SELECT id FROM ib_jobs WHERE state = 'queued' AND queue = 'mail') s ON j.id = s.id WHEN NOT MATCHED BY SOURCE AND j.state = 'queued' THEN UPDATE SET state = 'paused';
+QUERY PLAN                                                                                 
+-------------------------------------------------------------------------------------------
+Merge on ib_jobs j                                                                         
+  ->  Hash Left Join                                                                       
+        Hash Cond: (j.id = ib_jobs.id)                                                     
+        ->  Seq Scan on ib_jobs j                                                          
+        ->  Hash                                                                           
+              ->  Bitmap Heap Scan on ib_jobs                                              
+                    Recheck Cond: ((queue = 'mail'::text) AND (state = 'queued'::text))    
+                    ->  Bitmap Index Scan on ib_jobs_qs                                    
+                          Index Cond: ((queue = 'mail'::text) AND (state = 'queued'::text))
+(9 rows)
+
+step s1j: UPDATE ib_jobs SET n = n + 7 WHERE id = 3;
+step s2j: MERGE INTO ib_jobs j USING (SELECT id FROM ib_jobs WHERE state = 'queued' AND queue = 'mail') s ON j.id = s.id WHEN NOT MATCHED BY SOURCE AND j.state = 'queued' THEN UPDATE SET state = 'paused'; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+step s2js: SELECT id, queue, state, n FROM ib_jobs WHERE id IN (3, 4, 8) ORDER BY id;
+id|queue|state |n
+--+-----+------+-
+ 3|web  |paused|7
+ 4|mail |failed|0
+ 8|mail |queued|0
+(3 rows)
+
+
+starting permutation: s1jq s2j s1c s2js
+step s1jq: UPDATE ib_jobs SET state = 'running' WHERE id = 3;
+step s2j: MERGE INTO ib_jobs j USING (SELECT id FROM ib_jobs WHERE state = 'queued' AND queue = 'mail') s ON j.id = s.id WHEN NOT MATCHED BY SOURCE AND j.state = 'queued' THEN UPDATE SET state = 'paused'; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+step s2js: SELECT id, queue, state, n FROM ib_jobs WHERE id IN (3, 4, 8) ORDER BY id;
+id|queue|state  |n
+--+-----+-------+-
+ 3|web  |running|0
+ 4|mail |failed |0
+ 8|mail |queued |0
+(3 rows)
+
+
+starting permutation: s1a s3t s1c s2as
+step s1a: UPDATE ib_a SET r = 20 WHERE k = 4;
+step s3t: WITH cte AS MATERIALIZED (SELECT g AS a, 'cte ' || g AS b FROM generate_series(1, 40) g) MERGE INTO ib_a m USING (SELECT g AS k, 'src ' || g AS v FROM generate_series(1, 8) g OFFSET 0) o ON m.k = o.k WHEN MATCHED THEN UPDATE SET v = (SELECT b FROM cte WHERE cte.a = m.r LIMIT 1) WHEN NOT MATCHED THEN INSERT VALUES (o.k, -1, o.v) RETURNING merge_action(), m.*; <waiting ...>
+step s1c: COMMIT;
+step s3t: <... completed>
+merge_action|k| r|v     
+------------+-+--+------
+UPDATE      |1| 1|cte 1 
+INSERT      |2|-1|src 2 
+INSERT      |3|-1|src 3 
+UPDATE      |4|20|cte 20
+INSERT      |5|-1|src 5 
+INSERT      |6|-1|src 6 
+UPDATE      |7| 7|cte 7 
+INSERT      |8|-1|src 8 
+(8 rows)
+
+step s2as: SELECT * FROM ib_a ORDER BY k;
+ k| r|v     
+--+--+------
+ 1| 1|cte 1 
+ 2|-1|src 2 
+ 3|-1|src 3 
+ 4|20|cte 20
+ 5|-1|src 5 
+ 6|-1|src 6 
+ 7| 7|cte 7 
+ 8|-1|src 8 
+10|10|10 v  
+13|13|13 v  
+16|16|16 v  
+(11 rows)
+
+
+starting permutation: s1ak s3t s1c s2as
+step s1ak: UPDATE ib_a SET k = 5 WHERE k = 4;
+step s3t: WITH cte AS MATERIALIZED (SELECT g AS a, 'cte ' || g AS b FROM generate_series(1, 40) g) MERGE INTO ib_a m USING (SELECT g AS k, 'src ' || g AS v FROM generate_series(1, 8) g OFFSET 0) o ON m.k = o.k WHEN MATCHED THEN UPDATE SET v = (SELECT b FROM cte WHERE cte.a = m.r LIMIT 1) WHEN NOT MATCHED THEN INSERT VALUES (o.k, -1, o.v) RETURNING merge_action(), m.*; <waiting ...>
+step s1c: COMMIT;
+step s3t: <... completed>
+ERROR:  duplicate key value violates unique constraint "ib_a_k_key"
+step s2as: SELECT * FROM ib_a ORDER BY k;
+ k| r|v   
+--+--+----
+ 1| 1|1 v 
+ 5| 4|4 v 
+ 7| 7|7 v 
+10|10|10 v
+13|13|13 v
+16|16|16 v
+(6 rows)
+
+
+starting permutation: s4te s1h s4t s1c s4s
+step s4te: EXPLAIN (COSTS OFF) WITH cte AS MATERIALIZED (SELECT g AS a, 'cte ' || g AS b FROM generate_series(1, 40) g) MERGE INTO ib_h m USING (SELECT g AS k, 'src ' || g AS v FROM generate_series(1, 8) g OFFSET 0) o ON m.k = o.k WHEN MATCHED THEN UPDATE SET v = (SELECT b FROM cte WHERE cte.a = m.r LIMIT 1) WHEN NOT MATCHED THEN INSERT VALUES (o.k, -1, o.v);
+QUERY PLAN                                                
+----------------------------------------------------------
+Merge on ib_h m                                           
+  CTE cte                                                 
+    ->  Function Scan on generate_series g_1              
+  ->  Hash Right Join                                     
+        Hash Cond: (m.k = o.k)                            
+        ->  Seq Scan on ib_h m                            
+        ->  Hash                                          
+              ->  Subquery Scan on o                      
+                    ->  Function Scan on generate_series g
+  SubPlan 2                                               
+    ->  Limit                                             
+          ->  CTE Scan on cte                             
+                Filter: (a = m.r)                         
+(13 rows)
+
+step s1h: UPDATE ib_h SET r = 20 WHERE k = 4;
+step s4t: WITH cte AS MATERIALIZED (SELECT g AS a, 'cte ' || g AS b FROM generate_series(1, 40) g) MERGE INTO ib_h m USING (SELECT g AS k, 'src ' || g AS v FROM generate_series(1, 8) g OFFSET 0) o ON m.k = o.k WHEN MATCHED THEN UPDATE SET v = (SELECT b FROM cte WHERE cte.a = m.r LIMIT 1) WHEN NOT MATCHED THEN INSERT VALUES (o.k, -1, o.v); <waiting ...>
+step s1c: COMMIT;
+step s4t: <... completed>
+step s4s: SELECT * FROM ib_h WHERE k <= 10 OR k > 400 ORDER BY k;
+ k| r|v     
+--+--+------
+ 1| 1|cte 1 
+ 2|-1|src 2 
+ 3|-1|src 3 
+ 4|20|cte 20
+ 5|-1|src 5 
+ 6|-1|src 6 
+ 7| 7|cte 7 
+ 8|-1|src 8 
+10|10|10 v  
+(9 rows)
+
+
+starting permutation: s1hk s4t s1c s4s
+step s1hk: UPDATE ib_h SET k = 9004 WHERE k = 4;
+step s4t: WITH cte AS MATERIALIZED (SELECT g AS a, 'cte ' || g AS b FROM generate_series(1, 40) g) MERGE INTO ib_h m USING (SELECT g AS k, 'src ' || g AS v FROM generate_series(1, 8) g OFFSET 0) o ON m.k = o.k WHEN MATCHED THEN UPDATE SET v = (SELECT b FROM cte WHERE cte.a = m.r LIMIT 1) WHEN NOT MATCHED THEN INSERT VALUES (o.k, -1, o.v); <waiting ...>
+step s1c: COMMIT;
+step s4t: <... completed>
+step s4s: SELECT * FROM ib_h WHERE k <= 10 OR k > 400 ORDER BY k;
+   k| r|v    
+----+--+-----
+   1| 1|cte 1
+   2|-1|src 2
+   3|-1|src 3
+   4|-1|src 4
+   5|-1|src 5
+   6|-1|src 6
+   7| 7|cte 7
+   8|-1|src 8
+  10|10|10 v 
+9004| 4|4 v  
+(10 rows)
+
+
+starting permutation: s1hd s4t s1c s4s
+step s1hd: DELETE FROM ib_h WHERE k = 7;
+step s4t: WITH cte AS MATERIALIZED (SELECT g AS a, 'cte ' || g AS b FROM generate_series(1, 40) g) MERGE INTO ib_h m USING (SELECT g AS k, 'src ' || g AS v FROM generate_series(1, 8) g OFFSET 0) o ON m.k = o.k WHEN MATCHED THEN UPDATE SET v = (SELECT b FROM cte WHERE cte.a = m.r LIMIT 1) WHEN NOT MATCHED THEN INSERT VALUES (o.k, -1, o.v); <waiting ...>
+step s1c: COMMIT;
+step s4t: <... completed>
+step s4s: SELECT * FROM ib_h WHERE k <= 10 OR k > 400 ORDER BY k;
+ k| r|v    
+--+--+-----
+ 1| 1|cte 1
+ 2|-1|src 2
+ 3|-1|src 3
+ 4| 4|cte 4
+ 5|-1|src 5
+ 6|-1|src 6
+ 7|-1|src 7
+ 8|-1|src 8
+10|10|10 v 
+(9 rows)
+

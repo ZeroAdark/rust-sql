@@ -1,0 +1,10 @@
+path	crates/gravity/exec/src/ops/append/spool.rs
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::resize_with	1
+method	slice::to_vec	1
+method	std::boxed::Box::new	2
+method	std::sync::Arc::new	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	2
+type	std::sync::Arc	1
+type	std::vec::Vec	3

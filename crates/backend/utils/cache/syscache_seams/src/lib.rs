@@ -8,28 +8,22 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // InitCatalogCachePhase2 (syscache.c): opens every syscache's catalog +
-    // index so first-plan buffer counts match C (relcache.c needNewCacheFile).
     pub fn init_catalog_cache_phase2() -> PgResult<()>
 );
 
 seam_core::seam!(
-    // SearchSysCacheExists1(PROCOID, funcid).
     pub fn search_syscache_exists_procoid(funcid: Oid) -> PgResult<bool>
 );
 
 seam_core::seam!(
-    // SearchSysCacheExists2(ATTNUM, relid, attnum).
     pub fn search_syscache_exists_attnum(relid: Oid, attnum: i16) -> PgResult<bool>
 );
 
 seam_core::seam!(
-    // SearchSysCacheExists1(DATABASEOID, dboid).
     pub fn search_syscache_exists_databaseoid(dboid: Oid) -> PgResult<bool>
 );
 
 seam_core::seam!(
-    // SearchSysCacheExists1(TABLESPACEOID, tblspcoid).
     pub fn search_syscache_exists_tablespaceoid(tblspcoid: Oid) -> PgResult<bool>
 );
 
@@ -38,18 +32,14 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // RelationInvalidatesSnapshotsOnly (syscache.c).
     pub fn relation_invalidates_snapshots_only(relid: Oid) -> bool
 );
 
 seam_core::seam!(
-    // SearchSysCache1(RELOID, relid) projected to PgClassShape;
-    // None mirrors !HeapTupleIsValid(tup).
     pub fn lookup_pg_class_by_relid(relid: Oid) -> PgResult<Option<PgClassShape>>
 );
 
 seam_core::seam!(
-    // GETSTRUCT(tuple) as Form_pg_class, projected to PgClassShape.
     pub fn pg_class_shape(tuple: &HeapTupleData<'_>) -> PgClassShape
 );
 
@@ -67,8 +57,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SearchSysCache1(TYPEOID, typid) projected to TupleDescInitEntry's reads;
-    // None mirrors !HeapTupleIsValid(tup).
     pub fn lookup_pg_type_shape(typid: Oid) -> PgResult<Option<PgTypeShape>>
 );
 
@@ -84,14 +72,10 @@ pub struct PgSequenceForm {
 }
 
 seam_core::seam!(
-    // SearchSysCache1(SEQRELID, relid) decoded whole (nextval reads 5 of 8
-    // fields per miss); None mirrors !HeapTupleIsValid(tup).
     pub fn lookup_pg_sequence_form(relid: Oid) -> PgResult<Option<PgSequenceForm>>
 );
 
 seam_core::seam!(
-    // SearchSysCache1(AUTHOID, roleid) projected to pg_authid.rolname
-    // (GetUserNameFromId's single-field read); None mirrors !HeapTupleIsValid.
     pub fn lookup_authid_rolname<'mcx>(
         mcx: mcx::Mcx<'mcx>,
         roleid: Oid,
@@ -99,14 +83,10 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // lookup_authid_rolname, NameData-by-value shape (no allocation; the
-    // executor's CURRENT_USER family reads it per eval).
     pub fn lookup_authid_rolname_data(roleid: Oid) -> PgResult<Option<types_tuple::NameData>>
 );
 
 seam_core::seam!(
-    // SearchSysCache1(AUTHNAME, rolname) projected to (oid, rolsuper) — the
-    // check_session_authorization/check_role read; None mirrors !HeapTupleIsValid.
     pub fn lookup_authid_by_rolname(rolname: &str) -> PgResult<Option<(Oid, bool)>>
 );
 
@@ -120,15 +100,12 @@ pub struct AuthIdSessionShape {
 }
 
 seam_core::seam!(
-    // SearchSysCache1(AUTHNAME, rolename) projected to the five fields
-    // InitializeSessionUserId reads; None mirrors !HeapTupleIsValid.
     pub fn lookup_authid_session_by_rolname(
         rolname: &str,
     ) -> PgResult<Option<AuthIdSessionShape>>
 );
 
 seam_core::seam!(
-    // SearchSysCache1(AUTHOID, roleid), same projection.
     pub fn lookup_authid_session_by_oid(roleid: Oid) -> PgResult<Option<AuthIdSessionShape>>
 );
 
@@ -139,8 +116,6 @@ pub struct AuthIdPasswordShape<'mcx> {
 }
 
 seam_core::seam!(
-    // SearchSysCache1(AUTHNAME, role) projected to the two nullable columns
-    // get_role_password reads; None mirrors !HeapTupleIsValid.
     pub fn lookup_authid_rolpassword<'mcx>(
         mcx: mcx::Mcx<'mcx>,
         rolname: &str,
@@ -184,8 +159,7 @@ pub struct PgAttributeLsShape {
     pub atttypmod: i32,
     pub attcollation: Oid,
     pub attgenerated: i8,
-    // SearchSysCache2(ATTNUM) returns dropped columns too (lsyscache.c:1084
-    // get_attname prints "........pg.dropped.N........"); only the
+    // SearchSysCache2(ATTNUM) returns dropped columns too; only the
     // SearchSysCacheAttName/AttNum callers filter attisdropped, so the row
     // carries the flag and the caller decides.
     pub attisdropped: bool,
@@ -269,7 +243,6 @@ pub struct PgProcFmgrShape {
     pub proretset: bool,
     pub prosecdef: bool,
     pub proconfig_isnull: bool,
-    // The tuple's raw xmin and TID: fmgr.c's CFuncHash up-to-dateness stamp.
     pub xmin: types_core::TransactionId,
     pub tid: types_tuple::ItemPointerData,
 }
@@ -278,7 +251,7 @@ pub struct PgProcFmgrShape {
 pub struct PgProcSecdefShape {
     pub proowner: Oid,
     pub prosecdef: bool,
-    // "name=value" proconfig entries; None = NULL proconfig.
+    // "name=value" proconfig entries.
     pub proconfig: Option<Vec<String>>,
 }
 
@@ -373,8 +346,7 @@ pub struct PgStatisticSlotShape {
 }
 
 seam_core::seam!(
-    // SearchSysCache3(AMOPOPID, opno, purpose, opfamily); purpose is
-    // AMOP_SEARCH b's' / AMOP_ORDER b'o'. None mirrors !HeapTupleIsValid.
+    // purpose is AMOP_SEARCH b's' / AMOP_ORDER b'o'.
     pub fn lookup_pg_amop_by_operator(
         opno: Oid,
         purpose: u8,
@@ -427,8 +399,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SysCacheGetAttr(ATTNUM tuple, attoptions) + datumCopy into mcx.
-    // Outer None mirrors !HeapTupleIsValid; inner None mirrors isnull.
     pub fn pg_attribute_attoptions<'mcx>(
         mcx: Mcx<'mcx>,
         relid: Oid,
@@ -437,13 +407,10 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SysCacheGetAttr(TABLESPACEOID tuple, spcoptions) + datumCopy into mcx
-    // (spccache.c get_tablespace). Outer None mirrors !HeapTupleIsValid;
-    // inner None mirrors isnull.
     pub fn pg_tablespace_spcoptions<'mcx>(
         mcx: Mcx<'mcx>,
         spcid: Oid,
-    ) -> PgResult<Option<Option<Datum>>>
+    ) -> PgResult<Option<Option<PgVec<'mcx, u8>>>>
 );
 
 seam_core::seam!(
@@ -459,7 +426,6 @@ pub struct PgCastShape {
 }
 
 seam_core::seam!(
-    // SearchSysCache2(CASTSOURCETARGET, src, tgt); None mirrors !HeapTupleIsValid.
     pub fn lookup_pg_cast_shape(
         sourcetypeid: Oid,
         targettypeid: Oid,
@@ -467,8 +433,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SearchSysCache4(OPERNAMENSP, oprname, oprleft, oprright, oprnamespace)
-    // projected to the operator oid; InvalidOid on a miss.
     pub fn lookup_pg_operator_oid_exact(
         opername: &str,
         oprleft: Oid,
@@ -478,8 +442,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SearchSysCacheList3(OPERNAMENSP, oprname, oprleft, oprright) projected
-    // to (oid, oprnamespace) per member, catcache list order.
     pub fn lookup_pg_operator_candidates<'mcx>(
         mcx: Mcx<'mcx>,
         opername: &str,
@@ -489,8 +451,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SearchSysCacheList1(OPERNAMENSP, oprname): any member with this oprkind
-    // (OpernameGetCandidates' existence question, pre-visibility).
     pub fn pg_operator_name_candidates_exist(opername: &str, oprkind: i8) -> PgResult<bool>
 );
 
@@ -504,7 +464,6 @@ pub struct PgOperatorNameCandidate {
 }
 
 seam_core::seam!(
-    // SearchSysCacheList1(OPERNAMENSP, oprname), catcache list order.
     pub fn lookup_pg_operator_name_candidates<'mcx>(
         mcx: Mcx<'mcx>,
         opername: &str,
@@ -516,13 +475,9 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SearchSysCache1(OPEROID, opno) projected to (oprname, oprnamespace);
-    // None mirrors !HeapTupleIsValid.
     pub fn pg_operator_oprnamensp(opno: Oid) -> PgResult<Option<(NameData, Oid)>>
 );
 
-// The (name, namespace) pair regconfigout/regdictionaryout read off one
-// TSCONFIGOID/TSDICTOID probe.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PgTsObjectRow {
     pub name: NameData,
@@ -530,32 +485,26 @@ pub struct PgTsObjectRow {
 }
 
 seam_core::seam!(
-    // GetSysCacheOid2(TSCONFIGNAMENSP, cfgname, cfgnamespace); InvalidOid on a miss.
     pub fn lookup_pg_ts_config_oid_by_name_nsp(cfgname: &str, cfgnamespace: Oid) -> PgResult<Oid>
 );
 
 seam_core::seam!(
-    // SearchSysCache1(TSCONFIGOID, cfgid); None mirrors !HeapTupleIsValid.
     pub fn lookup_pg_ts_config_row(cfgid: Oid) -> PgResult<Option<PgTsObjectRow>>
 );
 
 seam_core::seam!(
-    // GetSysCacheOid2(TSDICTNAMENSP, dictname, dictnamespace); InvalidOid on a miss.
     pub fn lookup_pg_ts_dict_oid_by_name_nsp(dictname: &str, dictnamespace: Oid) -> PgResult<Oid>
 );
 
 seam_core::seam!(
-    // GetSysCacheOid2(CONNAMENSP, conname, connamespace); InvalidOid on a miss.
     pub fn lookup_pg_conversion_oid_by_name_nsp(conname: &str, connamespace: Oid) -> PgResult<Oid>
 );
 
 seam_core::seam!(
-    // GetSysCacheOid2(STATEXTNAMENSP, stxname, stxnamespace); InvalidOid on a miss.
     pub fn lookup_pg_statistic_ext_oid_by_name_nsp(stxname: &str, stxnamespace: Oid) -> PgResult<Oid>
 );
 
 seam_core::seam!(
-    // SearchSysCache1(TSDICTOID, dictid); None mirrors !HeapTupleIsValid.
     pub fn lookup_pg_ts_dict_row(dictid: Oid) -> PgResult<Option<PgTsObjectRow>>
 );
 
@@ -569,7 +518,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SearchSysCache1(TYPEOID) -> (typname, typnamespace).
     pub fn pg_type_name_namespace(typid: Oid) -> PgResult<Option<(NameData, Oid)>>
 );
 
@@ -581,16 +529,12 @@ seam_core::seam!(
     pub fn lookup_pg_opclass_shape(opclass: Oid) -> PgResult<Option<PgOpclassShape>>
 );
 
-// SearchSysCache1(CLAOID) projected to (opcname, opcnamespace, opcmethod);
-// parse_utilcmd get_opclass's qualified-name emission.
 seam_core::seam!(
     pub fn pg_opclass_name_namespace_method(
         opclass: Oid,
     ) -> PgResult<Option<(types_tuple::NameData, Oid, Oid)>>
 );
 
-// GetSysCacheOid3(CLAAMNAMENSP): pg_opclass by (opcmethod, opcname,
-// opcnamespace); InvalidOid when absent.
 seam_core::seam!(
     pub fn lookup_pg_opclass_oid_by_name(amid: Oid, opcname: &str, opcnamespace: Oid) -> PgResult<Oid>
 );
@@ -620,7 +564,6 @@ pub struct PgAmprocRow {
 }
 
 seam_core::seam!(
-    // SearchSysCacheList1(AMOPSTRATEGY, opfamily): (rows, list.ordered).
     pub fn lookup_pg_amop_rows<'mcx>(
         mcx: Mcx<'mcx>,
         opfamily: Oid,
@@ -628,7 +571,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SearchSysCacheList1(AMPROCNUM, opfamily): (rows, list.ordered).
     pub fn lookup_pg_amproc_rows<'mcx>(
         mcx: Mcx<'mcx>,
         opfamily: Oid,
@@ -636,8 +578,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SearchSysCacheList1(CLAAMNAMENSP, amoid): (oid, opcfamily, opcintype,
-    // opcdefault, opcname) per opclass of the AM, catcache list order.
     pub fn lookup_pg_opclass_rows_by_am<'mcx>(
         mcx: Mcx<'mcx>,
         amoid: Oid,
@@ -661,17 +601,14 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // fmgr_info's non-builtin leg: the pg_proc fields FmgrInfo needs.
     pub fn lookup_pg_proc_fmgr(funcid: Oid) -> PgResult<Option<PgProcFmgrShape>>
 );
 
 seam_core::seam!(
-    // fmgr_security_definer's pg_proc fetch (fmgr.c:646-682).
     pub fn lookup_pg_proc_secdef(funcid: Oid) -> PgResult<Option<PgProcSecdefShape>>
 );
 
 seam_core::seam!(
-    // fmgr_info_other_lang's pg_language read (fmgr.c).
     pub fn lookup_pg_language_fmgr(langoid: Oid) -> PgResult<Option<PgLanguageFmgrShape>>
 );
 
@@ -712,10 +649,6 @@ pub struct PgProcResultArraysShape<'mcx> {
 }
 
 seam_core::seam!(
-    // SysCacheGetAttr(PROCOID tuple, proallargtypes/proargmodes/proargnames),
-    // arrays deconstructed; the 1-D/no-null/elemtype/equal-length elogs are the
-    // installer's. Inner None per field mirrors attisnull; outer None mirrors
-    // !HeapTupleIsValid.
     pub fn pg_proc_result_arrays<'mcx>(
         mcx: Mcx<'mcx>,
         funcid: Oid,
@@ -723,12 +656,10 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // relname as bytes (C's char*): see lsyscache::get_relname_relid_bytes.
     pub fn lookup_pg_class_relid_by_name(relname: &[u8], relnamespace: Oid) -> PgResult<Oid>
 );
 
 seam_core::seam!(
-    // GetSysCacheOid2(TYPENAMENSP): InvalidOid on miss.
     pub fn lookup_pg_type_oid_by_name(typname: &str, typnamespace: Oid) -> PgResult<Oid>
 );
 
@@ -744,8 +675,6 @@ seam_core::seam!(
     pub fn pg_class_reloftype(relid: Oid) -> PgResult<Option<Oid>>
 );
 
-// pg_class.relrewrite of a relation (None when the relation is unknown); the
-// trimmed FormData_pg_class does not carry it.
 seam_core::seam!(
     pub fn pg_class_relrewrite(relid: Oid) -> PgResult<Option<Oid>>
 );
@@ -798,8 +727,7 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SysCacheGetAttr(PROCOID, proargdefaults): the nodeToString'd default
-    // expression list; inner None = attisnull, outer None = no such proc.
+    // inner None = attisnull, outer None = no such proc.
     pub fn pg_proc_proargdefaults<'mcx>(
         mcx: Mcx<'mcx>,
         funcid: Oid,
@@ -807,11 +735,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // get_primary_key_attnos (pg_constraint.c) projected for parse-time
-    // callers (check_functional_grouping): parser rigs have no storage, so
-    // the systable scan cannot run below them — same projection rationale as
-    // pg_proc_proargdefaults. None = no (usable) primary key; the deferrable
-    // bail lives in the real impl (pg_constraint::get_primary_key_attnos).
     pub fn pg_constraint_primary_key_attnos<'mcx>(
         mcx: Mcx<'mcx>,
         relid: Oid,
@@ -832,31 +755,24 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SysCacheGetAttrNotNull(INDEXRELID tuple, indclass).values[index];
-    // None mirrors !HeapTupleIsValid. PRECONDITION: index < indclass->dim1.
+    // PRECONDITION: index < indclass->dim1.
     pub fn pg_index_indclass_element(index_oid: Oid, index: i32) -> PgResult<Option<Oid>>
 );
 
 seam_core::seam!(
-    // SysCacheGetAttrNotNull(INDEXRELID tuple, indoption).values[index];
-    // None mirrors !HeapTupleIsValid. PRECONDITION: index < indoption->dim1.
+    // PRECONDITION: index < indoption->dim1.
     pub fn pg_index_indoption_element(index_oid: Oid, index: i32) -> PgResult<Option<i16>>
 );
 
 seam_core::seam!(
-    // pg_am.amtype by AMOID; None mirrors !HeapTupleIsValid.
     pub fn pg_am_amtype(amoid: Oid) -> PgResult<Option<i8>>
 );
 
 seam_core::seam!(
-    // pg_am.amhandler by AMOID (RelationInitTableAccessMethod's lookup);
-    // None mirrors !HeapTupleIsValid.
     pub fn pg_am_amhandler(amoid: Oid) -> PgResult<Option<Oid>>
 );
 
 seam_core::seam!(
-    // pg_am.amname by AMOID (pgrcolumnar registration probe); None mirrors
-    // !HeapTupleIsValid.
     pub fn pg_am_amname(amoid: Oid) -> PgResult<Option<String>>
 );
 
@@ -869,7 +785,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // GetSysCacheOid2(SUBSCRIPTIONNAME, dbid, subname); InvalidOid on miss.
     pub fn lookup_pg_subscription_oid(dbid: Oid, subname: &str) -> PgResult<Oid>
 );
 
@@ -888,7 +803,6 @@ pub struct PgProcCostShape {
 }
 
 seam_core::seam!(
-    // SearchSysCache1(PROCOID) projection for add_function_cost/get_function_rows.
     pub fn pg_proc_cost_shape(funcid: Oid) -> PgResult<Option<PgProcCostShape>>
 );
 
@@ -899,8 +813,6 @@ pub struct PgStatisticShape {
 }
 
 seam_core::seam!(
-    // SearchSysCache3(STATRELATTINH) scalar projection; None mirrors
-    // !HeapTupleIsValid. Slot arrays stay behind pg_statistic_slot_shape.
     pub fn lookup_pg_statistic_shape(
         relid: Oid,
         attnum: AttrNumber,
@@ -913,12 +825,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SysCacheGetAttrNotNull(STATRELATTINH, statstuple, attnum) +
-    // DatumGetArrayTypePCopy (lsyscache.c:3536/3586): the detoasted, owned
-    // 4B-header image of one pg_statistic stanumbers<n>/stavalues<n> array
-    // column (attnum = Anum_pg_statistic_stanumbers1/stavalues1 + slot). A
-    // NULL column is syscache.c:641's "unexpected null value in cached tuple"
-    // ERROR.
     pub fn pg_statistic_slot_array_image<'mcx>(
         mcx: Mcx<'mcx>,
         tuple: &HeapTupleData<'_>,
@@ -926,20 +832,13 @@ seam_core::seam!(
     ) -> PgResult<PgVec<'mcx, u8>>
 );
 
-// One pg_statistic slot. Array images are read on first access from the
-// bundle's copy of the pinned tuple image (C's examine_variable keeps the
-// statstuple pinned across the whole estimate, so a row deleted mid-planning
-// by e.g. pg_clear_attribute_stats still serves its arrays) and decoded on
-// first values()/numbers() (get_attstatsslot laziness: the unique-column eq
-// path never touches the arrays at all). Byref `values` datums point into the
-// fetched values_image, whose heap buffer is stable across moves of this struct.
+// Byref `values` datums point into the fetched values_image, whose heap buffer is stable across moves of this struct.
 pub struct PgStatisticSlotData<'mcx> {
     pub kind: i16,
     pub staop: Oid,
     pub stacoll: Oid,
     mcx: Mcx<'mcx>,
-    // MAXALIGN'd heap-tuple image of the pg_statistic row (t_len bytes used)
-    // and this slot's position in it; None for eagerly decoded slots.
+    // MAXALIGN'd heap-tuple image of the pg_statistic row (t_len bytes used).
     image: Option<(&'mcx [u64], u32)>,
     pos: i32,
     images: core::cell::OnceCell<PgStatisticSlotImages<'mcx>>,
@@ -949,10 +848,8 @@ pub struct PgStatisticSlotData<'mcx> {
 
 pub struct PgStatisticSlotImages<'mcx> {
     pub valuetype: Oid,
-    // stakind/staop of slot `pos` in the tuple image the arrays were read from.
     pub stakind: i16,
     pub staop: Oid,
-    // Empty images mirror SQL NULL (decode to empty slices).
     pub values_image: PgVec<'mcx, u8>,
     pub numbers_image: PgVec<'mcx, u8>,
 }
@@ -992,8 +889,6 @@ impl<'mcx> PgStatisticSlotData<'mcx> {
         let s = PgStatisticSlotData::lazy(kind, staop, stacoll, mcx, None, 0);
         let _ = s.images.set(PgStatisticSlotImages {
             valuetype,
-            // Eager decode: images came from the same tuple that yielded
-            // kind/staop, so re-validation in images() is trivially satisfied.
             stakind: kind,
             staop,
             values_image,
@@ -1020,9 +915,7 @@ impl<'mcx> PgStatisticSlotData<'mcx> {
             Some((image, t_len)) => {
                 let img =
                     lookup_pg_statistic_slot_images::call(self.mcx, image, t_len, self.pos)?;
-                // Same image as the bundle probe, so a kind/staop mismatch can
-                // only be a decode fault: never decode arrays under a stale
-                // kind/type.
+                // A kind/staop mismatch can only be a decode fault: never decode arrays under a stale kind/type.
                 if img.stakind != self.kind || img.staop != self.staop {
                     empty()
                 } else {
@@ -1030,7 +923,6 @@ impl<'mcx> PgStatisticSlotData<'mcx> {
                 }
             }
         };
-        // Single lazy-init site (core::cell::OnceCell, single-threaded).
         Ok(self.images.get_or_init(|| img))
     }
 
@@ -1064,9 +956,6 @@ impl<'mcx> PgStatisticSlotData<'mcx> {
 }
 
 seam_core::seam!(
-    // get_attstatsslot's deferred array fetch: extract one slot's
-    // stavalues/stanumbers images from the bundle's copy of the pinned
-    // pg_statistic tuple image (`t_len` bytes of `image`).
     pub fn lookup_pg_statistic_slot_images<'mcx>(
         mcx: Mcx<'mcx>,
         image: &[u64],
@@ -1076,8 +965,7 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // stavalues image decode (get_attstatsslot's deconstruct_array arm);
-    // empty image mirrors SQL NULL. Byref datums point into `image`.
+    // Byref datums point into `image`.
     pub fn decode_pg_statistic_values<'mcx>(
         mcx: Mcx<'mcx>,
         valuetype: Oid,
@@ -1086,7 +974,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // stanumbers (float4[]) image decode; empty image mirrors SQL NULL.
     pub fn decode_pg_statistic_numbers<'mcx>(
         mcx: Mcx<'mcx>,
         image: &[u8],
@@ -1100,25 +987,17 @@ pub struct PgStatisticBundle<'mcx> {
     pub slots: PgVec<'mcx, PgStatisticSlotData<'mcx>>,
 }
 
-// The planner's per-cycle attribute-stats memo (replanfix2 T1) arena-leaks
-// bundles via mcx::forget_box_in: drops reclaim only arena bytes (PgVecs and
-// OnceCell contents are all mcx-backed), so forgetting them loses nothing
-// beyond the arena the planning cycle resets anyway.
+// Drops reclaim only arena bytes (PgVecs and OnceCell contents are all mcx-backed),
+// so forgetting them loses nothing beyond the arena the planning cycle resets anyway.
 mcx::forget_safe_struct!(
     PgStatisticSlotImages<'_> { valuetype, stakind, staop, values_image, numbers_image },
     PgStatisticSlotData<'_> { kind, staop, stacoll, mcx, image, pos, images, values, numbers },
     PgStatisticBundle<'_> { stanullfrac, stawidth, stadistinct, slots },
 );
 
-// The planner's per-cycle syscache memos (syscache-memo lane) arena-leak
-// these Copy PODs the same way; !needs_drop is the whole proof.
 mcx::forget_safe_nodrop!(PgOperatorShape, PgAmopShape, PgAmopMemberShape);
 
 seam_core::seam!(
-    // SearchSysCache3(STATRELATTINH) + full slot decode (the planner's
-    // examine_variable keeps the C statsTuple pinned; here the decode-once
-    // bundle owns a copy of that tuple image and replaces the repeated
-    // get_attstatsslot calls).
     pub fn lookup_pg_statistic_bundle<'mcx>(
         mcx: Mcx<'mcx>,
         relid: Oid,
@@ -1128,13 +1007,11 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SysCacheGetAttr(ATTNUM, ..., Anum_pg_attribute_attstattarget); Ok(None)
-    // mirrors SQL NULL, a missing pg_attribute row is an error.
+    // A missing pg_attribute row is an error.
     pub fn lookup_pg_attribute_stattarget(relid: Oid, attnum: AttrNumber) -> PgResult<Option<i16>>
 );
 
 seam_core::seam!(
-    // pg_type.typanalyze regproc for examine_attribute; InvalidOid = none.
     pub fn pg_type_typanalyze(typid: Oid) -> PgResult<Oid>
 );
 
@@ -1147,19 +1024,14 @@ pub struct StatExtForm<'mcx> {
 }
 
 seam_core::seam!(
-    // SearchSysCache1(STATEXTOID) projected to the planner's reads.
     pub fn statext_form<'mcx>(mcx: Mcx<'mcx>, statoid: Oid) -> PgResult<Option<StatExtForm<'mcx>>>
 );
 
 seam_core::seam!(
-    // SearchSysCache2(STATEXTDATASTXOID) per-kind non-null flags
-    // (ndistinct, dependencies, mcv, expressions); None = no data row.
     pub fn statext_data_kinds(statoid: Oid, inh: bool) -> PgResult<Option<(bool, bool, bool, bool)>>
 );
 
 seam_core::seam!(
-    // SysCacheGetAttr(STATEXTDATASTXOID, anum) detoasted varlena image
-    // (4-byte header included); None = NULL or no data row.
     pub fn statext_data_blob<'mcx>(
         mcx: Mcx<'mcx>,
         statoid: Oid,
@@ -1169,7 +1041,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SysCacheGetAttr(STATEXTOID, stxexprs) as nodeToString text; None = NULL.
     pub fn statext_exprs_src<'mcx>(
         mcx: Mcx<'mcx>,
         statoid: Oid,
@@ -1177,11 +1048,7 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // statext_expressions_load (extended_stats.c): stxdexpr pg_statistic[]
-    // element `idx` decoded to a bundle, None when that element is NULL (no
-    // statistics could be computed for the expression). Slots decode eagerly
-    // — the lazy refetch key targets pg_statistic rows, which these are not.
-    // upstream 83671c0da049 (18.4): Fix set of issues with extended statistics on expressions
+    // Slots decode eagerly — the lazy refetch key targets pg_statistic rows, which these are not.
     pub fn statext_expressions_load<'mcx>(
         mcx: Mcx<'mcx>,
         statoid: Oid,
@@ -1195,17 +1062,14 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // RelationHasSysCache (syscache.c).
     pub fn relation_has_sys_cache(relid: Oid) -> bool
 );
 
 seam_core::seam!(
-    // RelationSupportsSysCache (syscache.c): rel OR supporting-index oid.
+    // rel OR supporting-index oid.
     pub fn relation_supports_sys_cache(relid: Oid) -> bool
 );
 
-// The pg_type columns lookup_type_cache copies into a TypeCacheEntry, plus
-// the typisdefined/typname pair its shell-type ereport needs.
 #[derive(Clone, Copy, Debug)]
 pub struct PgTypeTypcacheShape {
     pub typname: NameData,
@@ -1226,7 +1090,6 @@ seam_core::seam!(
     pub fn lookup_pg_type_typcache_shape(typid: Oid) -> PgResult<Option<PgTypeTypcacheShape>>
 );
 
-// The pg_type columns typcache's domain-constraint crawl reads per stack level.
 #[derive(Clone, Copy, Debug)]
 pub struct PgTypeDomainShape {
     pub typname: NameData,
@@ -1241,23 +1104,17 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // GetSysCacheHashValue1(TYPEOID, typid).
     pub fn syscache_hash_value_typeoid(typid: Oid) -> PgResult<u32>
 );
 
 seam_core::seam!(
-    // GetSysCacheHashValue1(PROCOID, funcid).
     pub fn syscache_hash_value_procoid(funcid: Oid) -> PgResult<u32>
 );
 
 seam_core::seam!(
-    // GetSysCacheOid1(NAMESPACENAME, Anum_pg_namespace_oid, nspname);
-    // InvalidOid on a miss.
     pub fn lookup_pg_namespace_oid_by_name(nspname: &str) -> PgResult<Oid>
 );
 
-// The pg_collation columns pg_locale.c's create arms read off one COLLOID
-// probe, decoded once.
 #[derive(Debug)]
 pub struct PgCollationLocaleRow<'mcx> {
     pub collname: NameData,
@@ -1273,15 +1130,12 @@ pub struct PgCollationLocaleRow<'mcx> {
 }
 
 seam_core::seam!(
-    // SearchSysCache1(COLLOID, collid); None mirrors !HeapTupleIsValid.
     pub fn lookup_pg_collation_locale_row<'mcx>(
         mcx: Mcx<'mcx>,
         collid: Oid,
     ) -> PgResult<Option<PgCollationLocaleRow<'mcx>>>
 );
 
-// The pg_collation columns namespace.c's lookup_collation reads off one
-// COLLNAMEENCNSP probe.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PgCollationNameEncNspRow {
     pub oid: Oid,
@@ -1289,8 +1143,6 @@ pub struct PgCollationNameEncNspRow {
 }
 
 seam_core::seam!(
-    // SearchSysCache3(COLLNAMEENCNSP, collname, encoding, collnamespace);
-    // None mirrors !HeapTupleIsValid.
     pub fn lookup_pg_collation_by_name_enc_nsp(
         collname: &str,
         encoding: i32,
@@ -1298,8 +1150,6 @@ seam_core::seam!(
     ) -> PgResult<Option<PgCollationNameEncNspRow>>
 );
 
-// The pg_aggregate columns parse_func/prepagg/ExecInitAgg read off one
-// AGGFNOID probe, decoded once.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PgAggregateShape {
     pub aggkind: i8,
@@ -1323,13 +1173,10 @@ pub struct PgAggregateShape {
 }
 
 seam_core::seam!(
-    // SearchSysCache1(AGGFNOID, aggfnoid); None mirrors !HeapTupleIsValid.
     pub fn lookup_pg_aggregate_shape(aggfnoid: Oid) -> PgResult<Option<PgAggregateShape>>
 );
 
 seam_core::seam!(
-    // SysCacheGetAttr(AGGFNOID tuple, agginitval) as text; outer None mirrors
-    // !HeapTupleIsValid, inner None mirrors attisnull.
     pub fn pg_aggregate_agginitval<'mcx>(
         mcx: Mcx<'mcx>,
         aggfnoid: Oid,
@@ -1337,17 +1184,12 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // SysCacheGetAttr(AGGFNOID tuple, aggminitval) as text; same contract as
-    // pg_aggregate_agginitval.
     pub fn pg_aggregate_aggminitval<'mcx>(
         mcx: Mcx<'mcx>,
         aggfnoid: Oid,
     ) -> PgResult<Option<Option<PgString<'mcx>>>>
 );
 
-// One SearchSysCacheList1(PROCNAMEARGSNSP, proname) member, projected to
-// FuncnameGetCandidates' reads (proargtypes.values only — the variadic/
-// defaults expansions read the fields and panic upstream).
 #[derive(Debug)]
 pub struct PgProcCandidate<'mcx> {
     pub oid: Oid,
@@ -1359,14 +1201,12 @@ pub struct PgProcCandidate<'mcx> {
 }
 
 seam_core::seam!(
-    // SearchSysCacheList1(PROCNAMEARGSNSP, proname), catcache list order.
     pub fn lookup_pg_proc_name_candidates<'mcx>(
         mcx: Mcx<'mcx>,
         proname: &str,
     ) -> PgResult<PgVec<'mcx, PgProcCandidate<'mcx>>>
 );
 
-// Form_pg_enum + the tuple-header xmin facts check_safe_enum_use reads.
 #[derive(Clone, Copy)]
 pub struct PgEnumShape {
     pub oid: Oid,
@@ -1377,12 +1217,10 @@ pub struct PgEnumShape {
 }
 
 seam_core::seam!(
-    // SearchSysCache1(ENUMOID, enum_oid); None mirrors !HeapTupleIsValid.
     pub fn lookup_pg_enum_by_oid(enum_oid: Oid) -> PgResult<Option<PgEnumShape>>
 );
 
 seam_core::seam!(
-    // SearchSysCache2(ENUMTYPOIDNAME, typid, label).
     pub fn lookup_pg_enum_by_typid_label(typid: Oid, label: &str) -> PgResult<Option<PgEnumShape>>
 );
 
@@ -1403,7 +1241,7 @@ pub struct PgTsDictShape<'mcx> {
     pub dictname: NameData,
     pub dictnamespace: Oid,
     pub dicttemplate: Oid,
-    // dictinitoption text payload (detoasted, header stripped); None = SQL NULL.
+    // dictinitoption text payload (detoasted, header stripped).
     pub dictinitoption: Option<mcx::PgVec<'mcx, u8>>,
 }
 
@@ -1436,7 +1274,6 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // GetSysCacheOid2(TSCONFIGNAMENSP); InvalidOid on a miss.
     pub fn lookup_pg_ts_config_oid_by_name(cfgname: &str, cfgnamespace: Oid) -> PgResult<Oid>
 );
 
@@ -1452,10 +1289,88 @@ pub struct PgTsConfigMapShape {
 }
 
 seam_core::seam!(
-    // All pg_ts_config_map rows for cfgid, sorted (maptokentype, mapseqno) —
-    // the TSConfigMapIndexId scan order ts_cache relies on.
+    // Sorted (maptokentype, mapseqno) — the TSConfigMapIndexId scan order ts_cache relies on.
     pub fn pg_ts_config_map_shapes<'mcx>(
         mcx: mcx::Mcx<'mcx>,
         cfgid: Oid,
     ) -> PgResult<mcx::PgVec<'mcx, PgTsConfigMapShape>>
 );
+
+/// V4R-453 (D1409): a pg_type row as a gravity pool claim is armed with it: the fields lsyscache's type readers
+/// (`get_typlenbyvalalign`, `get_element_type`, `get_array_type`, `getBaseTypeAndTypmod`) project, captured on the leader
+/// (`capture_type_row`) when a hosted aggregate's arena is built. A pool thread has no catcache; its claim reads these.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArmedTypeRow {
+    pub oid: Oid,
+    pub typlen: i16,
+    pub typbyval: bool,
+    pub typalign: i8,
+    pub typstorage: i8,
+    pub typtype: i8,
+    pub typrelid: Oid,
+    pub typsubscript: Oid,
+    pub typelem: Oid,
+    pub typarray: Oid,
+    pub typcollation: Oid,
+    pub typbasetype: Oid,
+    pub typtypmod: i32,
+    /// A range type's pg_range row (get_range_subtype / _collation / _multirange); a multirange's range type
+    /// (get_multirange_range); None / 0 for any other type.
+    pub range: Option<PgRangeShape>,
+    pub multirange_range: Oid,
+}
+
+std::thread_local! {
+    static ARMED_TYPE_ROWS: core::cell::Cell<&'static [ArmedTypeRow]> = const { core::cell::Cell::new(&[]) };
+    /// B2 (workersess): the statement's rows a claim is armed with for its hosted scalar sites, read after the arena's.
+    static STATEMENT_TYPE_ROWS: core::cell::Cell<&'static [ArmedTypeRow]> = const { core::cell::Cell::new(&[]) };
+}
+
+/// B2: arm this thread's claim with the statement's rows (an empty slice disarms; a plain store, safe in an unwind).
+pub fn arm_statement_type_rows(rows: &'static [ArmedTypeRow]) {
+    let _ = STATEMENT_TYPE_ROWS.try_with(|c| c.set(rows));
+}
+
+/// B2: whether `capture_type_row`'s seams are all installed (a backend; a lowering test binary may install only some).
+pub fn type_rows_capturable() -> bool {
+    lookup_pg_type_typcache_shape::is_installed() && pg_type_base_shape::is_installed() && lookup_pg_range_shape::is_installed() && lookup_pg_range_by_multirange::is_installed()
+}
+
+/// The leader's projection of type `oid` (None: no such type), through the same seams lsyscache and typcache read.
+pub fn capture_type_row(oid: Oid) -> PgResult<Option<ArmedTypeRow>> {
+    let (Some(t), Some(b)) = (lookup_pg_type_typcache_shape::call(oid)?, pg_type_base_shape::call(oid)?) else { return Ok(None) };
+    Ok(Some(ArmedTypeRow {
+        oid,
+        typlen: t.typlen,
+        typbyval: t.typbyval,
+        typalign: t.typalign,
+        typstorage: t.typstorage,
+        typtype: t.typtype,
+        typrelid: t.typrelid,
+        typsubscript: t.typsubscript,
+        typelem: t.typelem,
+        typarray: t.typarray,
+        typcollation: t.typcollation,
+        typbasetype: b.typbasetype,
+        typtypmod: b.typtypmod,
+        range: if t.typtype == b'r' as i8 { lookup_pg_range_shape::call(oid)? } else { None },
+        multirange_range: if t.typtype == b'm' as i8 { lookup_pg_range_by_multirange::call(oid)?.unwrap_or(0) } else { 0 },
+    }))
+}
+
+/// Arm this thread with a claim's rows (an empty slice disarms). A plain thread-local store: no allocation, no panic, so
+/// a claim guard's drop may call it during an unwind.
+pub fn arm_type_rows(rows: &'static [ArmedTypeRow]) {
+    let _ = ARMED_TYPE_ROWS.try_with(|c| c.set(rows));
+}
+
+/// The armed row of type `oid` on this thread, if a claim armed one (one thread-local read when none is armed).
+#[inline]
+pub fn armed_type_row(oid: Oid) -> Option<&'static ArmedTypeRow> {
+    let rows = ARMED_TYPE_ROWS.try_with(core::cell::Cell::get).unwrap_or(&[]);
+    let stmt = STATEMENT_TYPE_ROWS.try_with(core::cell::Cell::get).unwrap_or(&[]);
+    if rows.is_empty() && stmt.is_empty() {
+        return None;
+    }
+    rows.iter().find(|r| r.oid == oid).or_else(|| stmt.iter().find(|r| r.oid == oid))
+}

@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+pgrc_front = { path = "../../access/pgrcolumnar/pgrc_front" }
 parser_analyze = { path = "../../parser/parser_analyze" }
 mcx = { path = "../../../_support/mcx" }
 types_core = { path = "../../../_support/types/types_core" }

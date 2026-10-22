@@ -3674,8 +3674,33 @@ fn duplicate_order_by_cursor_through_exprlocation_arms() {
     assert_eq!(e.cursor_position(), Some(32));
     let e = parse_err("(SELECT 1 ORDER BY 1) ORDER BY XMLSERIALIZE(CONTENT x AS text);");
     assert_eq!(e.cursor_position(), Some(32));
+    // nodeFuncs.c has no A_Indirection arm (-1): the list arm skips it.
     let e = parse_err("(SELECT 1 ORDER BY 1) ORDER BY (a).b;");
-    assert_eq!(e.cursor_position(), Some(33));
+    assert_eq!(e.cursor_position(), None);
+    let e = parse_err("(SELECT 1 ORDER BY 1) ORDER BY (a).b, 2;");
+    assert_eq!(e.cursor_position(), Some(39));
+    let e = parse_err("(SELECT ARRAY[1] AS a ORDER BY 1) ORDER BY a[1], a;");
+    assert_eq!(e.cursor_position(), Some(50));
     let e = parse_err("(SELECT 1 ORDER BY 1) ORDER BY '1' IS JSON;");
     assert_eq!(e.cursor_position(), Some(32));
+}
+
+#[test]
+fn duplicate_order_by_cursor_json_merge_default_arms() {
+    // nodeFuncs.c exprLocation places JSON constructors, merge_action() and
+    // DEFAULT at their own location (C cursor 32 for each).
+    for sql in [
+        "(SELECT 1 ORDER BY 1) ORDER BY json_array(1), 2;",
+        "(SELECT 1 ORDER BY 1) ORDER BY merge_action();",
+        "(SELECT 1 ORDER BY 1) ORDER BY DEFAULT;",
+        "(SELECT 1 ORDER BY 1) ORDER BY json_object('a': 1);",
+        "(SELECT 1 ORDER BY 1) ORDER BY json_arrayagg(1);",
+        "(SELECT 1 ORDER BY 1) ORDER BY json_objectagg('k': 1);",
+        "(SELECT 1 ORDER BY 1) ORDER BY json_array(SELECT 1);",
+        "(SELECT 1 ORDER BY 1) ORDER BY json_array() || 'x';",
+    ] {
+        let e = parse_err(sql);
+        assert_eq!(e.message(), "multiple ORDER BY clauses not allowed");
+        assert_eq!(e.cursor_position(), Some(32), "{sql}");
+    }
 }

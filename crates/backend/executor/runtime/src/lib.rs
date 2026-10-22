@@ -42,6 +42,7 @@
 
 mod blocking;
 mod clock;
+pub mod cpuset;
 mod funnel;
 mod ledger;
 
@@ -102,7 +103,7 @@ mod tests;
 
 use std::sync::Arc;
 
-pub use blocking::{blocking_io_section, BlockingIoSection, PermitThreadReg};
+pub use blocking::{blocking_io_section, over_width_section, BlockingIoSection, PermitThreadReg};
 pub use clock::{Clock, MonotonicClock, VirtualClock};
 pub use funnel::{
     DrainStep, FunnelDrain, FunnelProducer, PushOutcome, RowEmitWork, RowFunnel, SpscRing,
@@ -230,8 +231,19 @@ impl RuntimeConfig {
     }
 }
 
-/// Default K of §2.8 ("default small"): 2 standbys.
-pub const DEFAULT_STANDBYS: usize = 2;
+/// Default K of §2.8: 0 standbys (was 2 until 2026-09-15; lane wake).
+/// Every pool thread wakes on every publish, and the kernel places the
+/// burst before any wakee runs: with `cores + 2` wakees on `cores` CPUs two
+/// pairs were stacked on one CPU each, and a stacked pair stayed stacked
+/// for the whole phase (both cache-hot to the load balancer), so the
+/// second thread's first claim waited a scheduler slice (1.1 / 3.2 / 6.3 ms
+/// on a c8g.4xlarge) — 51 % of the pool runs of a short statement. With
+/// K = 0 that share is 18 %, and 0.1 % once the workers are pinned one per
+/// core (launch_backend cpuaff, default ON since the same lane). Standbys
+/// only ever mattered to declared blocking sections (spill I/O in the row
+/// executor; Gravity declares none); `PGRUST_RUNTIME_STANDBYS=2` restores
+/// them.
+pub const DEFAULT_STANDBYS: usize = 0;
 
 #[cfg(not(loom))]
 impl RuntimeConfig {
@@ -243,7 +255,13 @@ impl RuntimeConfig {
         fn env_u64(name: &str) -> Option<u64> {
             std::env::var(name).ok().and_then(|v| v.parse().ok())
         }
-        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        // Never more workers than the CPUs the pool may run on (the
+        // allowed set, one NUMA node when pinned on a multi-node box —
+        // `cpuset`); an explicit PGRUST_RUNTIME_WORKERS is taken as given.
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(cpuset::plan().workers_cap());
         let workers = env_u64("PGRUST_RUNTIME_WORKERS").map(|n| n.max(1) as usize).unwrap_or(cores);
         let standbys =
             env_u64("PGRUST_RUNTIME_STANDBYS").map(|n| n as usize).unwrap_or(DEFAULT_STANDBYS);
@@ -1086,6 +1104,18 @@ impl Runtime {
     /// (and the step-v2 loop is live).
     pub fn wake_spinner_armed(&self) -> bool {
         sched::wake_spinner_enabled()
+    }
+
+    /// Lane wakelit arm (iv): true ⇔ `PGRUST_POOL_WAKE_TREE=1` (step-v2 loop).
+    pub fn wake_tree_armed(&self) -> bool {
+        sched::wake_tree_enabled()
+    }
+
+    /// Lane wakelit arm (iv): a woken worker continues the wake tree (pops
+    /// up to two more parked workers while the publish's fan-out is
+    /// outstanding) before it searches for work.
+    pub fn wake_tree_continue(&self) {
+        self.sched.park.wake_tree_continue();
     }
 
     /// Total actual thread unparks the pool park lot performed (the wakeup

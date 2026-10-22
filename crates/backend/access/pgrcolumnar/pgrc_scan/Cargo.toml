@@ -1,0 +1,44 @@
+# pgrc_scan — the M3-L3 reader/scan driver: claim-plane consumer #2.
+#
+# The v4-native rebuild of the v3 lx_source/pgrc.rs cone on the frozen
+# contracts: batches are pgrc_batch shapes (XC-6..XC-11), claims come
+# from pgrc_claim (XC-1/XC-2), verdicts from pgrc_meta (XC-5 census).
+# The engine executor binding is M4's; this crate is the AM-capable
+# parallel feeder the plan assigns to L3.
+
+[package]
+name = "pgrc_scan"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pgrc_scan"
+path = "src/lib.rs"
+
+[dependencies]
+pagegive = { path = "../../../../_support/pagegive" }
+memledger = { path = "../../../../_support/memledger" }
+datum = { path = "../../../../_support/types/datum" }
+pgrc_batch = { path = "../pgrc_batch" }
+pgrc_claim = { path = "../pgrc_claim" }
+pgrc_codec = { path = "../pgrc_codec" }
+pgrc_format = { path = "../pgrc_format" }
+pgrc_meta = { path = "../pgrc_meta" }
+pgrc_read = { path = "../pgrc_read" }
+# THE single lock library (determinism-lint rawsync law): native world is a
+# verbatim std re-export — identical types, zero cost.
+pgsync = { path = "../../../../_support/pgsync" }
+
+# Real-sealed-part fixtures + the full codec binding (the qa adapters are
+# the current v4 binding meeting point; the product binding is M4's).
+[dev-dependencies]
+pgrc_qa = { path = "../pgrc_qa" }
+pgrc_write = { path = "../pgrc_write" }
+# The shred read-supply twins feed REAL jsonb images (jsonb_in) through the
+# production shred source — the same dev-dep set pgrc_write's shred tests
+# carry.
+adt_jsonb = { path = "../../../utils/adt/jsonb" }
+mcx = { path = "../../../../_support/mcx" }
+mbutils = { path = "../../../utils/mb/mbutils" }
+wchar = { path = "../../../../common/wchar" }

@@ -1,0 +1,12 @@
+-- regress-full-gist-006
+-- explain (verbose, costs off) select p from gist_tbl where circle(p,1) @> circle(point(0,0),0.95);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=27091 rti=1 am=heap index=27097 iam=gist
+    key att=0 op=1511 col=1 form=amop value=c718:#24
+    recheck (op1511(fn1473(index.2, c701:4607182418800017408), c718:#24))
+    lanes Attr(2):byref8:fx16:win/page
+  project (1=index.2)
+  outs 1=fx16:win/page
+mapped: IndexOnlyScan

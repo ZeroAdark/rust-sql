@@ -1,0 +1,124 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1a s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT j.id, w.name FROM rsj j JOIN rsw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j;
+QUERY PLAN                                                                 
+---------------------------------------------------------------------------
+Limit                                                                      
+  ->  LockRows                                                             
+        ->  Sort                                                           
+              Sort Key: j.id                                               
+              ->  Hash Join                                                
+                    Hash Cond: (w.id = j.worker_id)                        
+                    ->  Seq Scan on rsw w                                  
+                    ->  Hash                                               
+                          ->  Bitmap Heap Scan on rsj j                    
+                                Recheck Cond: (state = 'running'::text)    
+                                ->  Bitmap Index Scan on rsj_state         
+                                      Index Cond: (state = 'running'::text)
+(12 rows)
+
+step s1a: UPDATE rsj SET attempts = attempts + 1 WHERE id = 108;
+step s2l: SELECT j.id, j.attempts, w.name FROM rsj j JOIN rsw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|attempts|name
+---+--------+----
+  8|       0|w9  
+108|       1|w109
+208|       0|w209
+(3 rows)
+
+
+starting permutation: s1s s2l s1c
+step s1s: UPDATE rsj SET state = 'done' WHERE id = 108;
+step s2l: SELECT j.id, j.attempts, w.name FROM rsj j JOIN rsw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|attempts|name
+---+--------+----
+  8|       0|w9  
+208|       0|w209
+308|       0|w309
+(3 rows)
+
+
+starting permutation: s1w s2l s1c
+step s1w: UPDATE rsj SET worker_id = 3 WHERE id = 108;
+step s2l: SELECT j.id, j.attempts, w.name FROM rsj j JOIN rsw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|attempts|name
+---+--------+----
+  8|       0|w9  
+208|       0|w209
+308|       0|w309
+(3 rows)
+
+
+starting permutation: s1n s1a s2l s1c
+step s1n: UPDATE rsw SET name = 'renamed' WHERE id = 109;
+step s1a: UPDATE rsj SET attempts = attempts + 1 WHERE id = 108;
+step s2l: SELECT j.id, j.attempts, w.name FROM rsj j JOIN rsw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|attempts|name
+---+--------+----
+  8|       0|w9  
+108|       1|w109
+208|       0|w209
+(3 rows)
+
+
+starting permutation: s1d s2l s1c
+step s1d: DELETE FROM rsj WHERE id = 8;
+step s2l: SELECT j.id, j.attempts, w.name FROM rsj j JOIN rsw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|attempts|name
+---+--------+----
+108|       0|w109
+208|       0|w209
+308|       0|w309
+(3 rows)
+
+
+starting permutation: s1s s2o s1c
+step s1s: UPDATE rsj SET state = 'done' WHERE id = 108;
+step s2o: SELECT j.id, w.name FROM rsj j JOIN rsw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 2 OFFSET 1 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+ id|name
+---+----
+208|w209
+308|w309
+(2 rows)
+
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM rsj WHERE id = 108 FOR UPDATE;
+ id
+---
+108
+(1 row)
+
+step s2sk: SELECT j.id, w.name FROM rsj j JOIN rsw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j SKIP LOCKED;
+ id|name
+---+----
+  8|w9  
+208|w209
+308|w309
+(3 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM rsj WHERE id = 108 FOR UPDATE;
+ id
+---
+108
+(1 row)
+
+step s2nw: SELECT j.id, w.name FROM rsj j JOIN rsw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j NOWAIT;
+ERROR:  could not obtain lock on row in relation "rsj"
+step s1c: COMMIT;

@@ -1,0 +1,32 @@
+-- regress-full-updatable_views-111
+-- UPDATE v2 SET c = 30 WHERE a = 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@5
+  source range rel=24676 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Attr(3):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op521(v3.1, c23:0)
+  filter op96(v3.1, c23:1)
+  subplan 3 nested Exists unknown-eq-false params=($exec2=v3.3) raise-free
+  inner node=3 eligible rows=13 end=sink
+  nodes n3@0
+  source range rel=24681 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v6.1, $exec2)
+  project ()
+  filter subplan3(v3.3)
+  project (1=c23:30, 2j=v3.-1, 3j=v3.1, 4j=v3.2)
+  subplan 1 nested Exists unknown-eq-false params=($exec0=v3.3) raise-free
+  inner node=2 eligible rows=13 end=sink
+  nodes n2@0
+  source range rel=24681 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v4.1, $exec0)
+  project ()
+  write UPDATE rel=24676 rti=3 natts=3 indexes=() set=(3) epq=$exec4
+    check view rel=v1 cascaded (op521(v3.1, c23:0))
+    check view rel=v2 cascaded (subplan1(v3.3))
+  outs 1=w4:val 2=fx6:row 3=w8:val 4=vl:win/page
+param $exec2 owner=subplan3 type=23 rep=w8:val
+param $exec0 owner=subplan1 type=23 rep=w8:val
+mapped: ModifyTable SeqScan SubPlan

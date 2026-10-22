@@ -1,0 +1,1 @@
+the corpus fixtures carry no partition leaves: a cross-partition UPDATE (H-e (c), D687: every routed UPDATE that may move a row) whose leaves the facts source does not know; the server serves it

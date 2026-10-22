@@ -100,7 +100,7 @@ fn long_log_timezone_abbreviation_prints_empty_time() {
     assert!(localtime::tzparse(&name, &mut tzstate, false));
     let mut tzname = [0u8; localtime::TZ_STRLEN_MAX + 1];
     tzname[..name.len()].copy_from_slice(&name);
-    let tz = Box::leak(Box::new(localtime::PgTz { tzname, state: *tzstate }));
+    let tz = localtime::PgTzRef::new(localtime::PgTz { tzname, state: *tzstate });
     pgtz::set_log_timezone(Some(tz));
     let cx = mcx::MemoryContext::new("xlogbackup test");
     let content = build_backup_content(cx.mcx(), &state(), true, WAL_SEG_SIZE).unwrap();

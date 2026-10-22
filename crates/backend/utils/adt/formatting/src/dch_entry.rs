@@ -107,6 +107,8 @@ fn datetime_to_char_body<'mcx>(
     is_interval: bool,
     collid: Oid,
 ) -> PgResult<Vec<u8>> {
+    // formatting.c:4075: the result workspace is admitted before parse_format.
+    ::mcx::check_alloc_size(fmt.len().saturating_mul(DCH_MAX_ITEM_SIZ).saturating_add(1))?;
     let format = fetch_format(fmt, false)?;
     dch_to_char(mcx, &format, is_interval, tmtc, collid)
 }
@@ -156,7 +158,12 @@ pub fn timestamptz_to_char<'mcx>(mcx: Mcx<'mcx>,
     let mut tmtc = TmToChar::zero();
     copy_tm(&mut tmtc.tm, &tm);
     tmtc.fsec = fsec;
-    tmtc.tzn = tzn.map(|s| s.as_bytes().to_vec());
+    tmtc.tzn = tzn.map(|s| {
+        let mut v = Vec::new();
+        let _ = v.try_reserve_exact(s.len());
+        v.extend_from_slice(s.as_bytes());
+        v
+    });
 
     let out = datetime_to_char_body(mcx, &tmtc, fmt, false, collid)?;
     text_result(mcx, &out)
@@ -220,9 +227,9 @@ pub fn to_timestamp<'mcx>(mcx: Mcx<'mcx>,
     let tz = if ftz.has_tz {
         ftz.gmtoffset
     } else {
-        let session = ::adt_datetime::tz::session_timezone()
-            .unwrap_or_else(|| panic!("to_timestamp: session_timezone not initialized"));
-        ::adt_datetime::tz::DetermineTimeZoneOffset(&mut tm, session)
+        ::adt_datetime::tz::with_required_session_timezone("to_timestamp: session_timezone not initialized", |z| {
+            ::adt_datetime::tz::DetermineTimeZoneOffset(&mut tm, z)
+        })
     };
 
     let mut result: Timestamp = 0;
@@ -573,7 +580,7 @@ pub fn do_to_timestamp<'mcx>(
         }
     } else if tmfc.has_tz {
         tz.has_tz = true;
-        match tmfc.tzp {
+        match &tmfc.tzp {
             None => tz.gmtoffset = -tmfc.gmtoffset,
             Some(tzp) => {
                 tz.gmtoffset = ::adt_datetime::tz::DetermineTimeZoneAbbrevOffset(
@@ -927,6 +934,14 @@ mod tests {
     // is formally UB in C, so that is a glibc accident, not a specified
     // behavior. We reject instead.
     #[test]
+    fn to_date_partial_field_quotes_raw_bytes() {
+        let ctx = MemoryContext::new("dch-test");
+        let e = to_date(ctx.mcx(), ::types_core::InvalidOid, "1\u{e9}2020".as_bytes(), b"MMYYYY")
+            .unwrap_err();
+        assert_eq!(e.message_raw.as_deref(), Some(&b"invalid value \"1\xc3\" for \"MM\""[..]));
+    }
+
+    #[test]
     fn to_date_y_yyy_out_of_range_millennia_rejected() {
         let ctx = MemoryContext::new("dch-test");
         let err = |input: &[u8], fmt: &[u8]| {
@@ -1008,5 +1023,14 @@ mod tests {
         assert_eq!(ymd(b"2,024TH", b"Y,YYYth"), (2024, 1, 1));
         assert_eq!(ymd(b"2,024", b"Y,YYY-MM-DD"), (2024, 1, 1));
         assert_eq!(ymd(b"2,024-06-15", b"Y,YYY-MM-DD"), (2024, 6, 15));
+    }
+
+    #[test]
+    fn to_char_admits_the_result_workspace_before_the_format() {
+        let ctx = MemoryContext::new("dch-test");
+        let fmt = vec![b'x'; 90_000_000];
+        let err =
+            timestamp_to_char(ctx.mcx(), ::types_core::InvalidOid, ts_1997(), &fmt).unwrap_err();
+        assert_eq!(err.message(), "invalid memory alloc request size 1080000001");
     }
 }

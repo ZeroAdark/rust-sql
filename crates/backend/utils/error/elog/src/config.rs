@@ -197,6 +197,18 @@ pub fn set_redirection_done(value: bool) {
     REDIRECTION_DONE.store(value, std::sync::atomic::Ordering::Relaxed);
 }
 
+// The collector's own stderr (syslogger.c:219-242): the postmaster's original
+// stderr, never the pipe fd 2 now points at; -1 discards (C's /dev/null).
+static SYSLOGGER_CONSOLE_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+pub fn syslogger_console_fd() -> i32 {
+    SYSLOGGER_CONSOLE_FD.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_syslogger_console_fd(fd: i32) {
+    SYSLOGGER_CONSOLE_FD.store(fd, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn am_syslogger() -> bool {
     AM_SYSLOGGER.with(Cell::get)
 }

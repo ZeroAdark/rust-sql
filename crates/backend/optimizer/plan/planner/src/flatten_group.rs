@@ -323,7 +323,7 @@ fn fg_list_opt<'mcx>(
     list: &NodeList<'mcx>,
 ) -> PgResult<Option<NodeList<'mcx>>> {
     let mut changed = false;
-    let mut out: Vec<Node<'mcx>> = Vec::with_capacity(list.len());
+    let mut out: Vec<Node<'mcx>> = ::mcx::std_vec_with_capacity("optimizer", list.len())?;
     for item in list.iter() {
         match fg_mutate(run, ctx, item)? {
             Some(new) => {
@@ -496,7 +496,7 @@ pub(crate) fn strip_group_nulling_list<'mcx>(
     group_rtindex: i32,
 ) -> PgResult<Option<NodeList<'mcx>>> {
     let mut changed = false;
-    let mut out: Vec<Node<'mcx>> = Vec::with_capacity(list.len());
+    let mut out: Vec<Node<'mcx>> = ::mcx::std_vec_with_capacity("optimizer", list.len())?;
     for item in list.iter() {
         match strip_group_nulling(mcx, item, group_rtindex)? {
             Some(new) => {

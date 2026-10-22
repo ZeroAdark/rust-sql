@@ -1,0 +1,1 @@
+gravity/hosts/src/lib.rs	PENDING	runtime	scope:StashScope	thread	an error a host stashed for this thread's caller (stash), taken by take_error inside the extent of its run (StashScope: exec reentry run_at, a pool claim or job), whose drop puts an outer extent's back and drops what an unwound run left

@@ -19,16 +19,17 @@ use types_tuple::varatt::{varatt_is_1b_e, varsize_any, vartag_external, VARTAG_I
 const SIZEOF_HEAP_TUPLE_HEADER: usize = 23;
 const MIN_HEAP_TUPLE_SIZE: usize = maxalign(SIZEOF_HEAP_TUPLE_HEADER);
 
-fn bits_to_text(bits: &[u8], len: usize) -> String {
-    let mut s = String::with_capacity(len);
+fn bits_to_text(bits: &[u8], len: usize) -> PgResult<String> {
+    let mut s = String::new();
+    s.try_reserve(len).map_err(|_| ::mcx::oom_named("pageinspect", len))?;
     for i in 0..len {
         s.push(if bits[i / 8] & (1 << (i % 8)) != 0 { '1' } else { '0' });
     }
-    s
+    Ok(s)
 }
 
 fn text_to_bits(bytes: &[u8]) -> PgResult<Vec<u8>> {
-    let mut bits = vec![0u8; bytes.len() / 8 + 1];
+    let mut bits = ::mcx::std_vec_from_elem("contrib", 0u8, bytes.len() / 8 + 1)?;
     for (off, &c) in bytes.iter().enumerate() {
         match c {
             b'0' => {}
@@ -41,7 +42,7 @@ fn text_to_bits(bytes: &[u8]) -> PgResult<Vec<u8>> {
                 } else {
                     1
                 };
-                let mut msg = b"invalid character \"".to_vec();
+                let mut msg = ::mcx::std_vec_from_slice("pageinspect", b"invalid character \"")?;
                 msg.extend_from_slice(&bytes[off..(off + len).min(bytes.len())]);
                 msg.extend_from_slice(b"\" in t_bits string");
                 return Err(Box::new(
@@ -64,14 +65,15 @@ pub(crate) fn fc_heap_page_items(
         // SAFETY: the arming context outlives this call.
         let mcx = unsafe { fcinfo.result_mcx_detached() };
         // SAFETY: STRICT bytea arg.
-        let page = unsafe { fcinfo.arg_varlena_packed(0)? }.data().to_vec();
+        let page = ::mcx::std_vec_from_slice("pageinspect", &unsafe { fcinfo.arg_varlena_packed(0)? }.data())?;
         let b = page.as_slice();
         if b.len() < SizeOfPageHeaderData {
             return Err(param_err(format!("input page too small ({} bytes)", b.len())));
         }
+        require_set_context(fcinfo)?;
         let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
         let maxoff = page_max_offset_number(b);
-        let mut rows = Vec::with_capacity(maxoff);
+        let mut rows = ::mcx::std_vec_with_capacity("contrib", maxoff)?;
         for offnum in 1..=maxoff {
             rows.push(heap_page_item_row(mcx, &tupdesc, b, offnum)?);
         }
@@ -113,7 +115,7 @@ fn heap_page_item_row(
 
         values[4] = Datum::from_transaction_id(r_u32(t, 0));
         values[5] = Datum::from_transaction_id(r_u32(t, 4));
-        values[6] = Datum::from_i32(r_u32(t, 8) as i32); // shared with xvac
+        values[6] = Datum::from_u32(r_u32(t, 8)); // shared with xvac
         values[7] = tid_datum(mcx, &t[12..18])?;
         values[8] = Datum::from_i32(t_infomask2 as i32);
         values[9] = Datum::from_i32(t_infomask as i32);
@@ -125,7 +127,7 @@ fn heap_page_item_row(
                 let bitmaplen = BITMAPLEN(natts) as usize;
                 if bitmaplen <= t_hoff - SIZEOF_HEAP_TUPLE_HEADER {
                     let bits = &t[SIZEOF_HEAP_TUPLE_HEADER..SIZEOF_HEAP_TUPLE_HEADER + bitmaplen];
-                    values[11] = text_datum(mcx, bits_to_text(bits, bitmaplen * 8).as_bytes())?;
+                    values[11] = text_datum(mcx, bits_to_text(bits, bitmaplen * 8)?.as_bytes())?;
                 } else {
                     nulls[11] = true;
                 }
@@ -169,7 +171,7 @@ pub(crate) fn fc_tuple_data_split(
         let v = unsafe { fcinfo.arg_varlena_packed(4)? };
         // text_to_cstring + strlen (heapfuncs.c:480): bytes up to the first NUL.
         let b = v.data();
-        Some(b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())].to_vec())
+        Some(::mcx::std_vec_from_slice("contrib", &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())])?)
     };
     let do_detoast = if fcinfo.nargs() >= 6 && !fcinfo.argisnull(5) {
         fcinfo.arg(5).as_bool()
@@ -325,11 +327,12 @@ fn tuple_data_split_internal(
             }
 
             let image: Vec<u8> = if attr.attlen == -1 && do_detoast {
+                detoast_size_check(&tupdata[off..], len)?;
                 // C hands detoast the attribute pointer, which reads its
                 // header words from the bytea itself, not a VARSIZE-bounded copy.
-                detoast_seams::detoast_attr::call(mcx, &tupdata[off..])?.to_vec()
+                ::mcx::std_vec_from_slice("pageinspect", &detoast_seams::detoast_attr::call(mcx, &tupdata[off..])?)?
             } else {
-                let mut img = Vec::with_capacity(len + 4);
+                let mut img = ::mcx::std_vec_with_capacity("contrib", len + 4)?;
                 img.extend_from_slice(&(((len + 4) as u32) << 2).to_ne_bytes());
                 img.extend_from_slice(&tupdata[off..off + len]);
                 img
@@ -352,16 +355,35 @@ fn tuple_data_split_internal(
     }
 
     if tupdata.len() != off {
-        return Err(Box::new(
-            PgError::error("end of tuple reached without looking at all its data")
-                .with_sqlstate(ERRCODE_DATA_CORRUPTED),
-        ));
+        return Err(unread_end());
     }
 
     rel.close(types_rel::AccessShareLock)?;
 
     let image = arrayfuncs::build::make_array_result(mcx, &astate)?;
     byref_result(mcx, &image)
+}
+
+#[cold]
+#[inline(never)]
+fn unread_end() -> Box<PgError> {
+    Box::new(
+        PgError::error("end of tuple reached without looking at all its data")
+            .with_sqlstate(ERRCODE_DATA_CORRUPTED),
+    )
+}
+
+/// D4728: a plain 4-byte header that declares `len` < VARHDRSZ, about to be detoasted. C pg_detoast_datum_copy copies
+/// those 0 to 3 bytes, accumArrayResult's datumCopy reads the copy's 4-byte header past its end, and the tuple's end
+/// check raises XX001 afterwards (heapfuncs.c:417; C's read stays in palloc's 8-byte minimum chunk). The same XX001, with
+/// C's message, comes here before the copy. A compressed header goes on to detoast, which raises C's pglz XX001 without
+/// a copy; without do_detoast nothing is copied short, so that path is unchanged.
+fn detoast_size_check(p: &[u8], len: usize) -> PgResult<()> {
+    // SAFETY: caller has at least one byte at p (a 4-byte header is in bounds: header_fits).
+    if len < types_tuple::varatt::VARHDRSZ && unsafe { types_tuple::varatt::varatt_is_4b_u(p.as_ptr()) } {
+        return Err(unread_end());
+    }
+    Ok(())
 }
 
 /// A 4-byte-header varlena length read needs 4 in-bounds bytes; 1-byte
@@ -392,11 +414,11 @@ pub(crate) fn fc_heap_tuple_infomask_flags(
     let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
     let (raw_names, combined_names) = infomask_flag_names(t_infomask, t_infomask2);
-    let mut raw: Vec<Datum> = Vec::with_capacity(raw_names.len());
+    let mut raw: Vec<Datum> = ::mcx::std_vec_with_capacity("contrib", raw_names.len())?;
     for name in raw_names {
         raw.push(text_datum(mcx, name.as_bytes())?);
     }
-    let mut combined: Vec<Datum> = Vec::with_capacity(combined_names.len());
+    let mut combined: Vec<Datum> = ::mcx::std_vec_with_capacity("contrib", combined_names.len())?;
     for name in combined_names {
         combined.push(text_datum(mcx, name.as_bytes())?);
     }
@@ -484,8 +506,22 @@ mod tests {
     }
 
     #[test]
+    fn detoast_size_check_refuses_a_plain_4_byte_header_under_its_size() {
+        for n in 0u32..4 {
+            let image = (n << 2).to_ne_bytes();
+            let err = detoast_size_check(&image, n as usize).unwrap_err();
+            assert_eq!(err.sqlstate(), ERRCODE_DATA_CORRUPTED, "VARSIZE {n}");
+            assert_eq!(err.message(), "end of tuple reached without looking at all its data");
+        }
+        assert!(detoast_size_check(&(4u32 << 2).to_ne_bytes(), 4).is_ok());
+        assert!(detoast_size_check(&((2u32 << 2) | 0x02).to_ne_bytes(), 2).is_ok());
+        assert!(detoast_size_check(&[0x03], 1).is_ok());
+        assert!(detoast_size_check(&[0x01, 18, 0, 0], 18).is_ok());
+    }
+
+    #[test]
     fn t_bits_round_trip() {
-        assert_eq!(bits_to_text(&[0b0000_0101], 8), "10100000");
+        assert_eq!(bits_to_text(&[0b0000_0101], 8).unwrap(), "10100000");
         let bits = text_to_bits(b"10100000").unwrap();
         assert_eq!(bits[0], 0b0000_0101);
         assert!(text_to_bits(b"10x").is_err());

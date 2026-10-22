@@ -1,0 +1,12 @@
+-- regress-full-rowsecurity-065
+-- INSERT INTO bv1 VALUES (11, 'xxx');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:11, 2=c25:'xxx')
+  write INSERT rel=28453 rti=2 natts=2 indexes=()
+    check rls insert rel=b1 (op96(op530(v2.1, c23:2), c23:0))
+    check view rel=bv1 cascaded (op521(v2.1, c23:0))
+  outs 1=w4:val 2=vl:stmt/imm
+mapped: Result ModifyTable

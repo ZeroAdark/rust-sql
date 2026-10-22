@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/window/rows.rs	Arg::Ev	licence	variant	window arguments evaluated at the fill per row; a raise marked, raised at PG's read [HELD-ERROR; D1232,D3584]

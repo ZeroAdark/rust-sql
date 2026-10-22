@@ -1,0 +1,6 @@
+path	crates/gravity/lowerv4/src/graph.rs
+growth	std::vec::Vec::push	3
+ir-only	<T as core::convert::Into<U>>::into	6
+macro	std::vec	2
+method	std::iter::Iterator::collect	3
+type	std::vec::Vec	1

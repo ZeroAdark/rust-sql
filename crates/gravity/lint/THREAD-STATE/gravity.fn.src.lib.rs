@@ -1,0 +1,2 @@
+gravity/fn/src/lib.rs	PENDING_ERROR	runtime	scope:StashScope@gravity/hosts/src/lib.rs	thread	an error a hosted site parked for this thread's caller (stash_error), taken by the entry's mapping inside the extent of its run (gravity_hosts StashScope: exec reentry run_at, a pool claim or job), whose drop puts an outer extent's back and drops what an unwound run left
+gravity/fn/src/lib.rs	SCRATCH	runtime	call	scratch	gravity_fn's scratch bump context, reset after each with_scratch call (nested calls get their own)

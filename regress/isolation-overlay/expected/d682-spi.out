@@ -1,0 +1,102 @@
+Parsed test spec with 3 sessions
+
+starting permutation: read wx dfn c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wx: UPDATE acc SET bal = bal + 450 WHERE id = 'checking';
+step dfn: SELECT del600(); <waiting ...>
+step c2: COMMIT;
+step dfn: <... completed>
+del600
+------
+     1
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+(1 row)
+
+
+starting permutation: read wk dfn c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wk: UPDATE acc SET id = 'checking' WHERE id = 'checking';
+step dfn: SELECT del600(); <waiting ...>
+step c2: COMMIT;
+step dfn: <... completed>
+del600
+------
+     2
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id|bal
+--+---
+(0 rows)
+
+
+starting permutation: read wx ufn c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wx: UPDATE acc SET bal = bal + 450 WHERE id = 'checking';
+step ufn: SELECT upd600(); <waiting ...>
+step c2: COMMIT;
+step ufn: <... completed>
+upd600
+------
+     1
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+savings | 601
+(2 rows)
+
+
+starting permutation: read wk ufn c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wk: UPDATE acc SET id = 'checking' WHERE id = 'checking';
+step ufn: SELECT upd600(); <waiting ...>
+step c2: COMMIT;
+step ufn: <... completed>
+upd600
+------
+     2
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|601
+savings |601
+(2 rows)
+

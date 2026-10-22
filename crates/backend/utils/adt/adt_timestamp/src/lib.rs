@@ -8,7 +8,7 @@
 
 #![allow(non_snake_case)]
 
-use adt_datetime::tz::{self, PgTz};
+use adt_datetime::tz::{self, PgTz, PgTzRef};
 use adt_datetime::{
     date2isoweek, date2isoyear, date2j, dt2time, isoweek2date, j2date, j2day, pg_tm,
     DateTimeErrorExtra, DateTimeParseError, DecodeDateTime, DecodeSpecial, DecodeTimezone,
@@ -229,7 +229,7 @@ impl DateTimeErrorExtraOwned {
     fn parse_error(
         &self,
         dterr: i32,
-        s: &str,
+        s: &[u8],
         datatype: &str,
         escontext: Option<&mut SoftErrorContext>,
     ) -> PgResult<()> {
@@ -242,17 +242,18 @@ impl DateTimeErrorExtraOwned {
 }
 
 fn timestamp_in_common(
-    s: &str,
+    raw: &[u8],
     typmod: i32,
     mut escontext: Option<&mut SoftErrorContext>,
     with_tz: bool,
 ) -> PgResult<Timestamp> {
     let datatype = if with_tz { "timestamp with time zone" } else { "timestamp" };
+    let s = &*String::from_utf8_lossy(raw);
     let mut workbuf = [0u8; TS_WORKBUF];
     let d = match decode_timestamp_str(s, &mut workbuf)? {
         Ok(d) => d,
         Err((dterr, extra)) => {
-            extra.parse_error(dterr, s, datatype, escontext)?;
+            extra.parse_error(dterr, raw, datatype, escontext)?;
             return Ok(0);
         }
     };
@@ -266,7 +267,7 @@ fn timestamp_in_common(
                 return ereturn(
                     escontext.as_deref_mut(),
                     0,
-                    PgError::error(format!("timestamp out of range: \"{s}\""))
+                    PgError::error_bytes("timestamp out of range: \"", raw, "\"")
                         .with_sqlstate(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
                 );
             }
@@ -289,19 +290,19 @@ fn timestamp_in_common(
 /// On soft error (escontext captured it) the C body returns a NULL datum;
 /// here the sentinel is `Ok(0)` with `escontext.error_occurred()` set.
 pub fn timestamp_in(
-    s: &str,
+    s: impl AsRef<[u8]>,
     typmod: i32,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<Timestamp> {
-    timestamp_in_common(s, typmod, escontext, false)
+    timestamp_in_common(s.as_ref(), typmod, escontext, false)
 }
 
 pub fn timestamptz_in(
-    s: &str,
+    s: impl AsRef<[u8]>,
     typmod: i32,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<TimestampTz> {
-    timestamp_in_common(s, typmod, escontext, true)
+    timestamp_in_common(s.as_ref(), typmod, escontext, true)
 }
 
 pub fn timestamp_out(timestamp: Timestamp, buf: &mut TsBuf) -> PgResult<usize> {
@@ -337,22 +338,28 @@ pub fn timestamptz_out(dt: TimestampTz, buf: &mut TsBuf) -> PgResult<usize> {
 // TimestampTimestampTzRequiresRewrite (timestamp.c): rewrite-free only when
 // the session timezone is a fixed zero offset from UTC.
 pub fn TimestampTimestampTzRequiresRewrite() -> bool {
-    let Some(zone) = tz::session_timezone() else {
-        return true;
-    };
-    let mut offset: i64 = 0;
-    if tz::pg_get_timezone_offset(zone, &mut offset) && offset == 0 {
-        return false;
-    }
-    true
+    session_fixed_offset() != Some(0)
 }
 
 /// The session zone's constant UTC offset in seconds (east positive) when
 /// it has one (`pg_get_timezone_offset`); None for DST-varying zones.
 pub fn session_fixed_offset() -> Option<i64> {
-    let zone = tz::session_timezone()?;
-    let mut offset: i64 = 0;
-    tz::pg_get_timezone_offset(zone, &mut offset).then_some(offset)
+    tz::with_session_timezone(|zone| {
+        let mut offset: i64 = 0;
+        tz::pg_get_timezone_offset(zone?, &mut offset).then_some(offset)
+    })
+}
+
+pub fn session_offset_at(ts: Timestamp) -> Option<i64> {
+    let secs = ts.div_euclid(USECS_PER_SEC) + (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) as i64 * SECS_PER_DAY as i64;
+    // The engine's pg_localtime, read inside the borrow: only the offset and the clock fields are wanted, so the
+    // abbreviation is not interned (adt_datetime's pg_localtime takes a process-wide lock for that).
+    tz::with_session_timezone(|zone| {
+        let tx = localtime::pg_localtime(secs, zone?)?;
+        let local = secs.checked_add(tx.tm_gmtoff)?;
+        let fields = (local.div_euclid(3600).rem_euclid(24), local.div_euclid(60).rem_euclid(60), local.rem_euclid(60));
+        (fields == (tx.tm_hour as i64, tx.tm_min as i64, tx.tm_sec as i64)).then_some(tx.tm_gmtoff)
+    })
 }
 
 /// The session zone's UTC offset in seconds when it is CONSTANT over the
@@ -363,12 +370,11 @@ pub fn session_offset_over(lo: i64, hi: i64) -> Option<i64> {
     if let Some(off) = session_fixed_offset() {
         return Some(off);
     }
-    let zone = tz::session_timezone()?;
-    match localtime::pg_next_dst_boundary(lo, zone) {
+    tz::with_session_timezone(|zone| match localtime::pg_next_dst_boundary(lo, zone?) {
         localtime::NextDstBoundary::NoTransition { before_gmtoff, .. } => Some(before_gmtoff),
         localtime::NextDstBoundary::Boundary(b) if b.boundary > hi => Some(b.before_gmtoff),
         _ => None,
-    }
+    })
 }
 
 pub fn timestamp2tm(
@@ -377,7 +383,7 @@ pub fn timestamp2tm(
     tm: &mut pg_tm,
     fsec: &mut fsec_t,
     tzn: Option<&mut Option<&'static str>>,
-    attimezone: Option<&'static PgTz>,
+    attimezone: Option<&PgTz>,
 ) -> Result<(), ()> {
     let mut time = dt;
     // TMODULO(time, date, USECS_PER_DAY)
@@ -410,16 +416,16 @@ pub fn timestamp2tm(
         return Ok(());
     };
 
-    // C resolves NULL attimezone to session_timezone only on this branch.
-    let attimezone = match attimezone {
-        Some(z) => z,
-        None => tz::session_timezone()
-            .unwrap_or_else(|| panic!("timestamp2tm: session_timezone not initialized")),
-    };
-
     let dt_secs = (dt - *fsec as i64) / USECS_PER_SEC
         + (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) as i64 * SECS_PER_DAY as i64;
-    if let Some(tx) = tz::pg_localtime(dt_secs, attimezone) {
+    // C resolves NULL attimezone to session_timezone only on this branch (borrowed: a per-datum read).
+    let tx = match attimezone {
+        Some(z) => tz::pg_localtime(dt_secs, z),
+        None => tz::with_required_session_timezone("timestamp2tm: session_timezone not initialized", |z| {
+            tz::pg_localtime(dt_secs, z)
+        }),
+    };
+    if let Some(tx) = tx {
         tm.tm_year = tx.tm_year + 1900;
         tm.tm_mon = tx.tm_mon + 1;
         tm.tm_mday = tx.tm_mday;
@@ -621,7 +627,7 @@ pub fn timestamp2timestamptz_opt_overflow(
     let mut tm = pg_tm::default();
     let mut fsec: fsec_t = 0;
     if timestamp2tm(timestamp, None, &mut tm, &mut fsec, None, None).is_ok() {
-        let tz = tz::DetermineTimeZoneOffset(&mut tm, require_session_timezone());
+        let tz = with_session_zone(|z| tz::DetermineTimeZoneOffset(&mut tm, z));
         let result = dt2local(timestamp, -tz);
         if IS_VALID_TIMESTAMP(result) {
             return Ok(result);
@@ -660,27 +666,29 @@ pub fn timestamptz2timestamp(timestamp: TimestampTz) -> PgResult<Timestamp> {
     Ok(result)
 }
 
-pub fn timestamp_cmp_timestamptz_internal(timestamp_val: Timestamp, dt2: TimestampTz) -> i32 {
+pub fn timestamp_cmp_timestamptz_internal(
+    timestamp_val: Timestamp,
+    dt2: TimestampTz,
+) -> PgResult<i32> {
     let mut overflow = 0;
-    let dt1 = timestamp2timestamptz_opt_overflow(timestamp_val, Some(&mut overflow))
-        .expect("timestamp2timestamptz_opt_overflow cannot fail with overflow out");
+    let dt1 = timestamp2timestamptz_opt_overflow(timestamp_val, Some(&mut overflow))?;
     if overflow > 0 {
         // dt1 is larger than any finite timestamp, but less than infinity
-        return if TIMESTAMP_IS_NOEND(dt2) { -1 } else { 1 };
+        return Ok(if TIMESTAMP_IS_NOEND(dt2) { -1 } else { 1 });
     }
     if overflow < 0 {
-        return if TIMESTAMP_IS_NOBEGIN(dt2) { 1 } else { -1 };
+        return Ok(if TIMESTAMP_IS_NOBEGIN(dt2) { 1 } else { -1 });
     }
-    timestamp_cmp_internal(dt1, dt2)
+    Ok(timestamp_cmp_internal(dt1, dt2))
 }
 
-#[cold]
-fn no_session_timezone() -> ! {
-    panic!("session timezone not initialized (pg_timezone_initialize)")
-}
+const NO_SESSION_TIMEZONE: &str = "session timezone not initialized (pg_timezone_initialize)";
 
-fn require_session_timezone() -> &'static PgTz {
-    tz::session_timezone().unwrap_or_else(|| no_session_timezone())
+/// The session zone, borrowed for `f` (`tz::with_required_session_timezone`): these readers run per datum on every
+/// pool worker, where a handle clone + drop is two atomic RMWs on the Arc all workers share.
+#[inline]
+fn with_session_zone<R>(f: impl FnOnce(&PgTz) -> R) -> R {
+    tz::with_required_session_timezone(NO_SESSION_TIMEZONE, f)
 }
 
 /// pg_mbcliplen in byte terms: the longest whole-character prefix of `s`
@@ -734,8 +742,8 @@ fn tz_not_recognized(tzname: &[u8]) -> Box<PgError> {
 
 pub enum TzLookup {
     FixedOffset(i32),
-    DynTz(&'static PgTz),
-    Zone(&'static PgTz),
+    DynTz(PgTzRef),
+    Zone(PgTzRef),
 }
 
 pub fn DecodeTimezoneName(tzname: &[u8]) -> PgResult<TzLookup> {
@@ -746,7 +754,7 @@ pub fn DecodeTimezoneName(tzname: &[u8]) -> PgResult<TzLookup> {
 
     let mut ftype = 0;
     let mut offset = 0;
-    let mut ztz: Option<&'static PgTz> = None;
+    let mut ztz: Option<PgTzRef> = None;
     let mut extra = DateTimeErrorExtra::default();
     let dterr = DecodeTimezoneAbbrev(0, lowzone, &mut ftype, &mut offset, &mut ztz, &mut extra)?;
     if dterr != 0 {
@@ -766,7 +774,7 @@ pub fn DecodeTimezoneName(tzname: &[u8]) -> PgResult<TzLookup> {
     }
 }
 
-pub fn DecodeTimezoneNameToTz(tzname: &[u8]) -> PgResult<&'static PgTz> {
+pub fn DecodeTimezoneNameToTz(tzname: &[u8]) -> PgResult<PgTzRef> {
     match DecodeTimezoneName(tzname)? {
         // flip to the POSIX sign convention
         TzLookup::FixedOffset(offset) => Ok(tz::pg_tzset_offset(-offset as i64)?
@@ -776,7 +784,7 @@ pub fn DecodeTimezoneNameToTz(tzname: &[u8]) -> PgResult<&'static PgTz> {
 }
 
 /// C `lookup_timezone`: text payload instead of a text Datum.
-pub fn lookup_timezone(zone: &[u8]) -> PgResult<&'static PgTz> {
+pub fn lookup_timezone(zone: &[u8]) -> PgResult<PgTzRef> {
     DecodeTimezoneNameToTz(text_to_tzname(zone))
 }
 
@@ -826,8 +834,8 @@ pub fn parse_sane_timezone(tm: &mut pg_tm, zone: &[u8]) -> PgResult<i32> {
 
         tz = match DecodeTimezoneName(tzname)? {
             TzLookup::FixedOffset(val) => -val,
-            TzLookup::DynTz(tzp) => tz::DetermineTimeZoneAbbrevOffset(tm, tzname, tzp),
-            TzLookup::Zone(tzp) => tz::DetermineTimeZoneOffset(tm, tzp),
+            TzLookup::DynTz(tzp) => tz::DetermineTimeZoneAbbrevOffset(tm, tzname, &tzp),
+            TzLookup::Zone(tzp) => tz::DetermineTimeZoneOffset(tm, &tzp),
         };
     }
 
@@ -841,7 +849,7 @@ pub fn timestamptz_to_time_t(t: TimestampTz) -> i64 {
 pub fn DetermineTimeZoneAbbrevOffsetTS(
     ts: TimestampTz,
     abbr: &[u8],
-    tzp: &'static PgTz,
+    tzp: &PgTz,
     isdst: &mut i32,
 ) -> PgResult<i32> {
     let t = timestamptz_to_time_t(ts);
@@ -874,19 +882,19 @@ pub fn timestamp_zone(zone: &[u8], timestamp: Timestamp) -> PgResult<TimestampTz
         TzLookup::DynTz(tzp) => {
             let mut tm = pg_tm::default();
             let mut fsec: fsec_t = 0;
-            if timestamp2tm(timestamp, None, &mut tm, &mut fsec, None, Some(tzp)).is_err() {
+            if timestamp2tm(timestamp, None, &mut tm, &mut fsec, None, Some(&tzp)).is_err() {
                 return Err(timestamp_out_of_range());
             }
-            let tz = -tz::DetermineTimeZoneAbbrevOffset(&mut tm, tzname, tzp);
+            let tz = -tz::DetermineTimeZoneAbbrevOffset(&mut tm, tzname, &tzp);
             dt2local(timestamp, tz)
         }
         TzLookup::Zone(tzp) => {
             let mut tm = pg_tm::default();
             let mut fsec: fsec_t = 0;
-            if timestamp2tm(timestamp, None, &mut tm, &mut fsec, None, Some(tzp)).is_err() {
+            if timestamp2tm(timestamp, None, &mut tm, &mut fsec, None, Some(&tzp)).is_err() {
                 return Err(timestamp_out_of_range());
             }
-            let tz = tz::DetermineTimeZoneOffset(&mut tm, tzp);
+            let tz = tz::DetermineTimeZoneOffset(&mut tm, &tzp);
             let mut r = 0;
             if tm2timestamp(&tm, fsec, Some(tz), &mut r).is_err() {
                 return Err(timestamp_out_of_range());
@@ -912,14 +920,14 @@ pub fn timestamptz_zone(zone: &[u8], timestamp: TimestampTz) -> PgResult<Timesta
         TzLookup::FixedOffset(val) => dt2local(timestamp, -val),
         TzLookup::DynTz(tzp) => {
             let mut isdst = 0;
-            let tz = DetermineTimeZoneAbbrevOffsetTS(timestamp, tzname, tzp, &mut isdst)?;
+            let tz = DetermineTimeZoneAbbrevOffsetTS(timestamp, tzname, &tzp, &mut isdst)?;
             dt2local(timestamp, tz)
         }
         TzLookup::Zone(tzp) => {
             let mut tm = pg_tm::default();
             let mut fsec: fsec_t = 0;
             let mut tz = 0;
-            if timestamp2tm(timestamp, Some(&mut tz), &mut tm, &mut fsec, None, Some(tzp))
+            if timestamp2tm(timestamp, Some(&mut tz), &mut tm, &mut fsec, None, Some(&tzp))
                 .is_err()
             {
                 return Err(timestamp_out_of_range());
@@ -1093,7 +1101,8 @@ pub(crate) fn unit_error(unit: &[u8], suffix: &str) -> PgError {
     match core::str::from_utf8(unit) {
         Ok(s) => PgError::error(format!("unit \"{s}\"{suffix}")),
         Err(_) => {
-            let mut msg = b"unit \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"unit \"");
             msg.extend_from_slice(unit);
             msg.push(b'"');
             msg.extend_from_slice(suffix.as_bytes());
@@ -1259,7 +1268,7 @@ pub fn timestamp_trunc(units: &[u8], timestamp: Timestamp) -> PgResult<Timestamp
 pub fn timestamptz_trunc_internal(
     units: &[u8],
     timestamp: TimestampTz,
-    tzp: &'static PgTz,
+    tzp: &PgTz,
 ) -> PgResult<TimestampTz> {
     let mut low = [0u8; 64];
     let lowunits = downcase_ident(units, &mut low);
@@ -1305,7 +1314,7 @@ pub fn timestamptz_trunc_internal(
 }
 
 pub fn timestamptz_trunc(units: &[u8], timestamp: TimestampTz) -> PgResult<TimestampTz> {
-    timestamptz_trunc_internal(units, timestamp, require_session_timezone())
+    with_session_zone(|z| timestamptz_trunc_internal(units, timestamp, z))
 }
 
 pub fn timestamptz_trunc_zone(
@@ -1314,7 +1323,7 @@ pub fn timestamptz_trunc_zone(
     zone: &[u8],
 ) -> PgResult<TimestampTz> {
     let tzp = lookup_timezone(zone)?;
-    timestamptz_trunc_internal(units, timestamp, tzp)
+    timestamptz_trunc_internal(units, timestamp, &tzp)
 }
 
 pub enum PartValue {
@@ -1643,16 +1652,19 @@ pub fn timeofday_into(buf: &mut [u8; TIMEOFDAY_BUF]) -> usize {
     // DST P2 (contract §1.2): gettimeofday -> pg_clock::wall_timeval().
     let (tv_sec, tv_usec) = pg_clock::wall_timeval();
 
-    let zone = require_session_timezone();
-    let tx = localtime::pg_localtime(tv_sec, zone)
-        .expect("current time within pg_localtime range");
     // The zone abbreviation (%Z) is user-controlled and unbounded: it is
     // formatted on its own, never through a format string, and a part that
     // overflows its 128 bytes is the empty string (C 18.6 pg_strftime).
+    // Both parts are formatted inside the zone's borrow (tm_zone borrows it).
     let mut part1 = [0u8; 128];
     let mut part2 = [0u8; 128];
-    let n1 = strftime::pg_strftime(&mut part1, b"%a %b %d %H:%M:%S", &tx).unwrap_or(0);
-    let n2 = strftime::pg_strftime(&mut part2, b"%Y %Z", &tx).unwrap_or(0);
+    let (n1, n2) = with_session_zone(|zone| {
+        let tx = localtime::pg_localtime(tv_sec, zone).expect("current time within pg_localtime range");
+        (
+            strftime::pg_strftime(&mut part1, b"%a %b %d %H:%M:%S", &tx).unwrap_or(0),
+            strftime::pg_strftime(&mut part2, b"%Y %Z", &tx).unwrap_or(0),
+        )
+    });
 
     // snprintf(buf, sizeof(buf), "%s.%06d %s", part1, (int) tv_usec, part2)
     buf[..n1].copy_from_slice(&part1[..n1]);
@@ -1671,10 +1683,10 @@ pub fn timeofday_into(buf: &mut [u8; TIMEOFDAY_BUF]) -> usize {
     p + n2
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct CurrentTmCache {
     ts: TimestampTz,
-    zone: &'static PgTz,
+    zone: PgTzRef,
     tm: pg_tm,
     fsec: fsec_t,
     tz: i32,
@@ -1685,8 +1697,8 @@ std::thread_local! {
     // within a transaction, so the breakdown recomputes only when the
     // timestamp or the session timezone (identified by pointer, unique per
     // pg_tzset entry) changes.
-    static CURRENT_TM_CACHE: core::cell::Cell<Option<CurrentTmCache>> =
-        const { core::cell::Cell::new(None) };
+    static CURRENT_TM_CACHE: core::cell::RefCell<Option<CurrentTmCache>> =
+        const { core::cell::RefCell::new(None) };
 }
 
 pub fn GetCurrentTimeUsec(
@@ -1695,31 +1707,36 @@ pub fn GetCurrentTimeUsec(
     tzp: Option<&mut i32>,
 ) -> PgResult<()> {
     let cur_ts = xact::GetCurrentTransactionStartTimestamp();
-    let zone = require_session_timezone();
 
-    let cached = CURRENT_TM_CACHE.with(core::cell::Cell::get);
-    let e = match cached {
-        Some(e) if e.ts == cur_ts && core::ptr::eq(e.zone, zone) => e,
-        _ => {
+    // A hit compares the zone by address under the borrow and copies the breakdown out: no handle clone (per datum).
+    let hit = with_session_zone(|zone| {
+        CURRENT_TM_CACHE.with(|c| match &*c.borrow() {
+            Some(e) if e.ts == cur_ts && core::ptr::eq(&*e.zone, zone) => Some((e.tm, e.fsec, e.tz)),
+            _ => None,
+        })
+    });
+    let (etm, efsec, etz) = match hit {
+        Some(h) => h,
+        None => {
             // invalidate first so an error inside timestamp2tm cannot leave a
             // partially-updated entry marked valid
-            CURRENT_TM_CACHE.with(|c| c.set(None));
-            let mut e =
-                CurrentTmCache { ts: cur_ts, zone, tm: pg_tm::default(), fsec: 0, tz: 0 };
-            if timestamp2tm(cur_ts, Some(&mut e.tz), &mut e.tm, &mut e.fsec, None, Some(zone))
-                .is_err()
-            {
+            CURRENT_TM_CACHE.with(|c| *c.borrow_mut() = None);
+            // The entry keeps the zone: this is the one place a handle is taken.
+            let zone = tz::session_timezone().unwrap_or_else(|| panic!("{NO_SESSION_TIMEZONE}"));
+            let mut e = CurrentTmCache { ts: cur_ts, zone, tm: pg_tm::default(), fsec: 0, tz: 0 };
+            if timestamp2tm(cur_ts, Some(&mut e.tz), &mut e.tm, &mut e.fsec, None, Some(&e.zone)).is_err() {
                 return Err(timestamp_out_of_range());
             }
-            CURRENT_TM_CACHE.with(|c| c.set(Some(e)));
-            e
+            let h = (e.tm, e.fsec, e.tz);
+            CURRENT_TM_CACHE.with(|c| *c.borrow_mut() = Some(e));
+            h
         }
     };
 
-    *tm = e.tm;
-    *fsec = e.fsec;
+    *tm = etm;
+    *fsec = efsec;
     if let Some(tzp) = tzp {
-        *tzp = e.tz;
+        *tzp = etz;
     }
     Ok(())
 }

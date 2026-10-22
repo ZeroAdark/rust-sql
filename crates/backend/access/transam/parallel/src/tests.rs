@@ -115,7 +115,7 @@ fn worker_error_clamps_level_and_appends_context() {
     if e.level > ERROR {
         e.level = ERROR;
     }
-    append_parallel_worker_context(&mut e);
+    prepare_relayed_worker_report(&mut e);
     assert_eq!(e.level, ERROR);
     assert_eq!(e.context(), Some("inner frame\nparallel worker"));
 }
@@ -138,6 +138,22 @@ fn frontend_redirect_captures_sub_error_reports() {
     let captured = rx.try_recv().expect("notice did not reach the redirect");
     assert_eq!(captured.message(), "worker says hi");
     assert_eq!(captured.level, types_error::NOTICE);
+}
+
+#[test]
+fn pool_notice_relay_captures_and_restores() {
+    let _s = serial();
+    guc_boot();
+    let before = elog::config::where_to_send_output();
+    let relay = PoolNoticeRelay::default();
+    relay.capture(|| {
+        let _ = elog::elog(types_error::NOTICE, "helper says hi");
+    });
+    assert_eq!(elog::config::where_to_send_output(), before);
+    let captured = relay.take();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].message(), "helper says hi");
+    assert!(relay.take().is_empty());
 }
 
 // C dlist_push_head: AtEOSubXact scans newest-first or inner-subxact
@@ -233,7 +249,7 @@ fn exit_unwind_predicate_covers_all_three_fatal_payloads() {
 
 #[test]
 fn relayed_debug_reports_are_reconstructed_as_debug1() {
-    // pqmq.c:242-250 (audit regression): the leader applies its logging
+    // pqmq.c:242-250 (audit fp-libpq-b2#3): the leader applies its logging
     // thresholds to DEBUG1 for every worker DEBUG level; other levels pass.
     use types_error::{DEBUG2, DEBUG5, INFO, LOG, NOTICE};
     assert_eq!(relayed_notice_level(DEBUG5), DEBUG1);
@@ -243,4 +259,18 @@ fn relayed_debug_reports_are_reconstructed_as_debug1() {
     assert_eq!(relayed_notice_level(INFO), INFO);
     assert_eq!(relayed_notice_level(NOTICE), NOTICE);
     assert_eq!(relayed_notice_level(WARNING), WARNING);
+}
+
+#[test]
+fn relayed_errors_recompute_worker_output_flags() {
+    let _guard = serial();
+    install_debug_parallel_query_accessor();
+    let mut e = types_error::PgError::error("worker error");
+    let server = elog::should_output_to_server(e.level);
+    let client = elog::should_output_to_client(e.level);
+    e.output_to_server = Some(!server);
+    e.output_to_client = Some(!client);
+    prepare_relayed_worker_report(&mut e);
+    assert_eq!(e.output_to_server, Some(server));
+    assert_eq!(e.output_to_client, Some(client));
 }

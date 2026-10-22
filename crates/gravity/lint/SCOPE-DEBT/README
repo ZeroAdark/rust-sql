@@ -1,0 +1,7 @@
+RT's scope debt (crates/gravity/lint/rules/rt_thread_state.py, C7 coverage E2): the thread-locals the scope gained when
+it widened to every source under crates/ outside tests/, not yet in the thread-state registry (../THREAD-STATE). One file
+per source file, one row per static: <path> <static> <owner lane> <what is missing>. A row goes when its static's
+registry row is written. The list only shrinks: on a landing a row the parent lacks fails; a row whose static is gone is
+spent (RT's note counts it; the next edit of the file drops it). Seeded by lint/reports/rt_scope_seed.py, which wrote
+the statics of proven unit-test modules as registry rows (owner unittest, test / test) and the rest here. C7's done
+bar: SCOPE-DEBT 0.

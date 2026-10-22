@@ -1,0 +1,11 @@
+-- regress-full-arrays-021
+-- UPDATE arrtest_s SET a[3:] = '{23, 24, 25}', b[2:][2:] = '{{25,26}, {28,29}}';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=26232 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=T_SubscriptingRef, 2=T_SubscriptingRef, 3j=v1.-1)
+  write UPDATE rel=26232 rti=1 natts=2 indexes=() set=(1,2)
+  outs 1=vl:call0 2=vl:call0 3=fx6:row
+mapped: ModifyTable SeqScan

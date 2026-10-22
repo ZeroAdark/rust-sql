@@ -7,6 +7,9 @@ edition = "2021"
 path = "src/lib.rs"
 
 [dependencies]
+pgrc_front = { path = "../../access/pgrcolumnar/pgrc_front" }
+pgrc_marks = { path = "../../access/pgrcolumnar/pgrc_marks" }
+pgrc_front_seams = { path = "../../access/pgrcolumnar/pgrc_front_seams" }
 types_relscan = { path = "../../access/index/relscan" }
 adt_timestamp = { path = "../../utils/adt/adt_timestamp" }
 rewrite_define = { path = "../../rewrite/rewrite_define" }
@@ -78,11 +81,12 @@ ruleutils_seams = { path = "../../utils/adt/ruleutils_seams" }
 format_type = { path = "../../utils/adt/format_type" }
 catalog_storage = { path = "../../catalog/catalog_storage" }
 tableam = { path = "../../access/table/tableam" }
-pgrcolumnar = { path = "../../access/pgrcolumnar" }
+pgrc_am = { path = "../../access/pgrcolumnar/pgrc_am" }
 adt_acl = { path = "../../utils/adt/acl" }
 aclchk = { path = "../../catalog/aclchk" }
 aclchk_seams = { path = "../../catalog/aclchk_seams" }
 pgstat = { path = "../../utils/activity/pgstat" }
+postgres_seams = { path = "../../tcop/postgres_seams" }
 predicate_seams = { path = "../../storage/lmgr/predicate_seams" }
 relcache_seams = { path = "../../utils/cache/relcache_seams" }
 cache_syscache = { path = "../../utils/cache/cache_syscache" }

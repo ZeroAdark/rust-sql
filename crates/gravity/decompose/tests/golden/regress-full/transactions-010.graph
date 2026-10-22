@@ -1,0 +1,10 @@
+-- regress-full-transactions-010
+-- FETCH ctt;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=0 reason=Write end=sink
+  nodes n2@0 n0@1
+  source const
+  project (1=fn26153(c701:0))
+  write INSERT rel=26155 rti=1 natts=1 indexes=()
+  outs 1=w8:val
+mapped: Result ModifyTable

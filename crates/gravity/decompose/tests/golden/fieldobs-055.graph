@@ -1,0 +1,43 @@
+-- fieldobs-055
+-- SELECT method, quality_grade, flag_reason, CASE WHEN quality_grade = 0 AND flag_reason = 0 THEN source_url ELSE '' END AS origin, media_url AS media, count(*) AS n FROM sightings WHERE site_id = 1 AND observed_on BETWEEN '2024-03-01' AND '2024-05-31' AND has_media GROUP BY method, quality_grade, flag_reason, origin, media ORDER BY n DESC LIMIT 10 OFFSET 1000;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 eligible rows=22754 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n2@5^
+  source range rel=16464 rti=1 am=pgrc
+    lanes !Attr(4):byval4:w4:val !Attr(6):byval4:w4:val Attr(12):byval2:w2:val Attr(13):byval2:w2:val Attr(21):fixed1:w1:val Attr(23):codes4:code:part/dict Attr(29):codes4:code:part/dict Attr(30):codes4:code:part/dict Offset:byval2:w2:val
+    zone lane1 = word0/4
+    zone lane0 >= word0/4
+    zone lane0 <= word0/4
+  filter v1.21
+  filter op96(v1.6, c23:1)
+  filter op1098(v1.4, c1082:8826)
+  filter op1096(v1.4, c1082:8917)
+  project (1=v1.23, 2=v1.13, 3=v1.12, 4=case(when and(op532(v1.13, c23:0), op532(v1.12, c23:0)) then v1.30) else c25:'', 5=v1.29)
+  outs 1=code:part/dict 2=w2:val 3=w2:val 4=vl:part/dict 5=code:part/dict
+p1 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 TopK)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=agg2803*())
+  sort keys=6-n:I64 form=topk count=10 offset=1000
+  outs 1=vl:life/breaker 2=w2:val 3=w2:val 4=vl:life/breaker 5=vl:life/breaker 6=w8:val
+p2 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n1@0 n0@1
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  limit count=10 offset=1000
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=vl:life/breaker 2=w2:val 3=w2:val 4=vl:life/breaker 5=vl:life/breaker 6=w8:val
+  outs 1=vl:life/breaker 2=w2:val 3=w2:val 4=vl:life/breaker 5=vl:life/breaker 6=w8:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[Fp128,Fp128,I32,I32,Fp128,Fp128,Fp128,Fp128]->[Count@64,MinCode@72,MinCode@80,MinCode@88] 96B
+breaker slot=1 kind=TopK budget=Fixed(72784) spill=None producer=p1 layout=[I64]->[Count@8] 16B order=6-n
+group slot=0 producer=p0 node=2 form=Hashed hints=[] layout=[Fp128,Fp128,I32,I32,Fp128,Fp128,Fp128,Fp128]->[Count@64,MinCode@72,MinCode@80,MinCode@88] 96B
+  key 0 word=0 resno=1 kind=Fp128 attno=23 type=25 rep=1 expr=v1.23
+  key 1 word=2 resno=2 kind=I32 attno=13 type=21 expr=v1.13
+  key 2 word=3 resno=3 kind=I32 attno=12 type=21 expr=v1.12
+  key 3 word=4 resno=4 kind=Fp128 attno=0 type=25 rep=2 expr=case(when and(op532(v1.13, c23:0), op532(v1.12, c23:0)) then v1.30) else c25:''
+  key 4 word=6 resno=5 kind=Fp128 attno=29 type=25 rep=3 expr=v1.29
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan Sort Agg Limit

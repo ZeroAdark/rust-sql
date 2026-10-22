@@ -226,7 +226,7 @@ fn collect_lock_rows(mcx: Mcx<'_>) -> PgResult<LockRows> {
     let mut tuples = Vec::new();
     let mut put = |values: &[Datum], nulls: &[bool]| -> PgResult<()> {
         let tuple = heaptuple::heap_form_tuple(mcx, &desc, values, nulls)?;
-        tuples.push(tuple.image().to_vec());
+        tuples.push(::mcx::std_vec_from_slice("adt", &tuple.image())?);
         Ok(())
     };
 
@@ -315,7 +315,7 @@ pub fn fc_pg_lock_status(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
 
 pub fn blocking_pids(blocked_pid: i32) -> PgResult<Vec<i32>> {
     let lock_data = lock::GetBlockerStatusData(blocked_pid)?;
-    let mut pids = Vec::with_capacity(lock_data.locks.len());
+    let mut pids = ::mcx::std_vec_with_capacity("adt", lock_data.locks.len())?;
 
     for bproc in &lock_data.procs {
         let instances = &lock_data.locks[bproc.first_lock..bproc.first_lock + bproc.num_locks];

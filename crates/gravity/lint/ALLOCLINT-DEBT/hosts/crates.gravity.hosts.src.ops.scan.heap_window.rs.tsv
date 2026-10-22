@@ -1,0 +1,5 @@
+path	crates/gravity/hosts/src/ops/scan/heap_window.rs
+growth	std::collections::HashMap::insert	1
+macro	std::format	3
+method	std::sync::Arc::new	1
+type	std::sync::Arc	2

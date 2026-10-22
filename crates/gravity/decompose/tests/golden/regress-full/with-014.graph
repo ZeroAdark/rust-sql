@@ -1,0 +1,177 @@
+-- regress-full-with-014
+-- WITH RECURSIVE outermost(x) AS ( SELECT 1 UNION (WITH innermost1 AS ( SELECT 2 UNION (WITH innermost2 AS ( SELECT 3 UNION (WITH innermost3 AS ( SELECT 4 UNION (WITH innermost4 AS ( SELECT 5 UNION (WITH innermost5 AS ( SELECT 6 UNION (WITH innermost6 AS (SELECT 7) SELECT * FROM innermost6)) SELECT * FROM innermost5)) SELECT * FROM innermost4)) SELECT * FROM innermost3)) SELECT * FROM innermost2)) SELECT * FROM outermost UNION SELECT * FROM innermost1) ) SELECT * FROM outermost ORDER BY 1;
+graph pipelines=17 breakers=16 init_plans=1 root=p16
+p0 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  nodes n4@0 n2@1^
+  source const
+  project (1=c23:1)
+  outs 1=w4:val
+p1 node=40 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Distinct)
+  desc owner=key/0 words=bits@3/5
+  nodes n40@0 n38@1 n37@3 n36@4^
+  source const
+  project (1=c23:6)
+  append arm 0/2
+  project (1=outer.1)
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+  outs 1=w4:val
+p2 node=42 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Distinct)
+  desc owner=key/0 words=bits@3/5
+  nodes n42@0 n38@1 n37@3 n36@4^
+  source const
+  project (1=c23:7)
+  append arm 1/2
+  project (1=outer.1)
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+  outs 1=w4:val
+p3 node=33 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n33@0 n31@1 n30@3^
+  source const
+  project (1=c23:5)
+  append arm 0/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p4 node=36 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 HashAgg)
+  desc consumes=slot1@p2 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n36@0 n31@1 n30@3^
+  source breaker slot=1
+  project (1=outer.1)
+  append arm 1/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p5 node=27 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n27@0 n25@1 n24@3^
+  source const
+  project (1=c23:4)
+  append arm 0/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p6 node=30 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 HashAgg)
+  desc consumes=slot2@p4 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n30@0 n25@1 n24@3^
+  source breaker slot=2
+  project (1=outer.1)
+  append arm 1/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p7 node=21 serial site=-1 reason=NoDrivingSite end=breaker(slot=4 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n21@0 n19@1 n18@3^
+  source const
+  project (1=c23:3)
+  append arm 0/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p8 node=24 serial site=-1 reason=NoDrivingSite end=breaker(slot=4 HashAgg)
+  desc consumes=slot3@p6 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n24@0 n19@1 n18@3^
+  source breaker slot=3
+  project (1=outer.1)
+  append arm 1/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p9 node=15 serial site=-1 reason=NoDrivingSite end=breaker(slot=5 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n15@0 n13@1 n12@3^
+  source const
+  project (1=c23:2)
+  append arm 0/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p10 node=18 serial site=-1 reason=NoDrivingSite end=breaker(slot=5 HashAgg)
+  desc consumes=slot4@p8 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n18@0 n13@1 n12@3^
+  source breaker slot=4
+  project (1=outer.1)
+  append arm 1/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p11 node=9 serial site=-1 reason=NoDrivingSite end=breaker(slot=6 HashAgg)
+  desc consumes=slot0@p0 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n9@0 n7@1 n6@3^
+  source breaker slot=0
+  project (1=v7.1)
+  append arm 0/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p12 node=12 serial site=-1 reason=NoDrivingSite end=breaker(slot=6 HashAgg)
+  desc consumes=slot5@p10 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n12@0 n7@1 n6@3^
+  source breaker slot=5
+  project (1=outer.1)
+  append arm 1/2
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p13 node=6 serial site=-1 reason=NoDrivingSite end=breaker(slot=7 Materialize)
+  desc consumes=slot6@p12
+  nodes n6@0 n2@1^
+  source breaker slot=6
+  project (1=outer.1)
+  outs 1=w4:val
+p14 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=8 Materialize)
+  desc consumes=slot0@p0 consumes=slot7@p13
+  nodes n2@0
+  source breaker slot=0
+  iterate body=p13 work=slot0 next=slot7 until=Empty wtparam=0 dedup keys=1=96:I32 reruns=p11,p12,p13
+  project (1=outer.1)
+  outs 1=w4:val
+p15 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot8@p14
+  nodes n1@0 n0@1^
+  source breaker slot=8
+  project (1=v1.1)
+  sort keys=1+:I32 form=runs
+  outs 1=w4:val
+p16 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p15
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1)
+  outs 1=w4:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=1 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p6 layout=[I32]->[Count@8] 16B
+breaker slot=4 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p7 layout=[I32]->[Count@8] 16B
+breaker slot=4 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p8 layout=[I32]->[Count@8] 16B
+breaker slot=5 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p9 layout=[I32]->[Count@8] 16B
+breaker slot=5 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p10 layout=[I32]->[Count@8] 16B
+breaker slot=6 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p11 layout=[I32]->[Count@8] 16B
+breaker slot=6 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p12 layout=[I32]->[Count@8] 16B
+breaker slot=7 kind=Materialize budget=Share spill=Runs producer=p13 layout=[]->[Count@0] 8B
+breaker slot=8 kind=Materialize budget=Share spill=Runs producer=p14 layout=[]->[Count@0] 8B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p15 layout=[I32]->[Count@8] 16B order=1+
+group slot=1 producer=p2 node=36 form=Unique hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+group slot=2 producer=p4 node=30 form=Hashed hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+group slot=3 producer=p6 node=24 form=Hashed hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+group slot=4 producer=p8 node=18 form=Hashed hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+group slot=5 producer=p10 node=12 form=Hashed hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+group slot=6 producer=p12 node=6 form=Hashed hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+init_plan id=1 pipeline=p14 link=Cte param=$exec1 slot=8 raise-free
+rerun node=2 subplan=-1 pipelines=p11,p12,p13 slots=0,5,6,7
+mapped: Result Append RecursiveUnion CteScan WorkTableScan Sort Agg Unique SubPlan

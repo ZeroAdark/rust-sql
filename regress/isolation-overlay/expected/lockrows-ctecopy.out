@@ -1,0 +1,803 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s1b s1v s2u s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x: EXPLAIN (COSTS OFF) WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id) UPDATE cc SET val = val + 1 WHERE pid IN (SELECT id FROM u);
+QUERY PLAN                        
+----------------------------------
+Update on cc                      
+  CTE u                           
+    ->  Update on cp              
+          ->  Seq Scan on cp      
+                Filter: (grp = 4) 
+  ->  Hash Semi Join              
+        Hash Cond: (cc.pid = u.id)
+        ->  Seq Scan on cc        
+        ->  Hash                  
+              ->  CTE Scan on u   
+(10 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE cc SET val = val + 1000 WHERE id = 3;
+step s2u: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id) UPDATE cc SET val = val + 1 WHERE pid IN (SELECT id FROM u); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid| val
+---+---+----
+  3|  4|1004
+  8|  9|   9
+ 53|  4|  54
+ 58|  9|  59
+103|  4| 104
+108|  9| 109
+153|  4| 154
+158|  9| 159
+203|  4| 204
+208|  9| 209
+253|  4| 254
+258|  9| 259
+303|  4| 304
+308|  9| 309
+353|  4| 354
+358|  9| 359
+(16 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+ 10|   10
+(1 row)
+
+count|  sum
+-----+-----
+  400|81280
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1k s2u s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1k: UPDATE cc SET pid = 9 WHERE id = 3;
+step s2u: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id) UPDATE cc SET val = val + 1 WHERE pid IN (SELECT id FROM u); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|val
+---+---+---
+  3|  9|  3
+  8|  9|  9
+ 53|  4| 54
+ 58|  9| 59
+103|  4|104
+108|  9|109
+153|  4|154
+158|  9|159
+203|  4|204
+208|  9|209
+253|  4|254
+258|  9|259
+303|  4|304
+308|  9|309
+353|  4|354
+358|  9|359
+(16 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+ 10|   10
+(1 row)
+
+count|  sum
+-----+-----
+  400|80279
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1o s2u s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1o: UPDATE cc SET pid = 1 WHERE id = 3;
+step s2u: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id) UPDATE cc SET val = val + 1 WHERE pid IN (SELECT id FROM u); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|val
+---+---+---
+  3|  1|  3
+  8|  9|  9
+ 53|  4| 54
+ 58|  9| 59
+103|  4|104
+108|  9|109
+153|  4|154
+158|  9|159
+203|  4|204
+208|  9|209
+253|  4|254
+258|  9|259
+303|  4|304
+308|  9|309
+353|  4|354
+358|  9|359
+(16 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+ 10|   10
+(1 row)
+
+count|  sum
+-----+-----
+  400|80279
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1d s2u s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1d: DELETE FROM cc WHERE id = 3;
+step s2u: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id) UPDATE cc SET val = val + 1 WHERE pid IN (SELECT id FROM u); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|val
+---+---+---
+  8|  9|  9
+ 53|  4| 54
+ 58|  9| 59
+103|  4|104
+108|  9|109
+153|  4|154
+158|  9|159
+203|  4|204
+208|  9|209
+253|  4|254
+258|  9|259
+303|  4|304
+308|  9|309
+353|  4|354
+358|  9|359
+(15 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+ 10|   10
+(1 row)
+
+count|  sum
+-----+-----
+  399|80276
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1w s2u s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1w: UPDATE cp SET w = 100 WHERE id = 4;
+step s2u: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id) UPDATE cc SET val = val + 1 WHERE pid IN (SELECT id FROM u); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|val
+---+---+---
+  3|  4|  4
+  8|  9|  9
+ 53|  4| 54
+ 58|  9| 59
+103|  4|104
+108|  9|109
+153|  4|154
+158|  9|159
+203|  4|204
+208|  9|209
+253|  4|254
+258|  9|259
+303|  4|304
+308|  9|309
+353|  4|354
+358|  9|359
+(16 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+110|   10
+(1 row)
+
+count|  sum
+-----+-----
+  400|80280
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1g s2u s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1g: UPDATE cp SET grp = 0 WHERE id = 4;
+step s2u: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id) UPDATE cc SET val = val + 1 WHERE pid IN (SELECT id FROM u); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|val
+---+---+---
+  3|  4|  3
+  8|  9|  9
+ 53|  4| 53
+ 58|  9| 59
+103|  4|103
+108|  9|109
+153|  4|153
+158|  9|159
+203|  4|203
+208|  9|209
+253|  4|253
+258|  9|259
+303|  4|303
+308|  9|309
+353|  4|353
+358|  9|359
+(16 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+  9|    9
+(1 row)
+
+count|  sum
+-----+-----
+  400|80272
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2y s1b s1v s2j s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2y: EXPLAIN (COSTS OFF) WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id, w) UPDATE cc SET val = u.w * 10000 + cc.val FROM u WHERE cc.pid = u.id;
+QUERY PLAN                        
+----------------------------------
+Update on cc                      
+  CTE u                           
+    ->  Update on cp              
+          ->  Seq Scan on cp      
+                Filter: (grp = 4) 
+  ->  Hash Join                   
+        Hash Cond: (cc.pid = u.id)
+        ->  Seq Scan on cc        
+        ->  Hash                  
+              ->  CTE Scan on u   
+(10 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE cc SET val = val + 1000 WHERE id = 3;
+step s2j: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id, w) UPDATE cc SET val = u.w * 10000 + cc.val FROM u WHERE cc.pid = u.id; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|  val
+---+---+-----
+  3|  4|11003
+  8|  9|10008
+ 53|  4|10053
+ 58|  9|10058
+103|  4|10103
+108|  9|10108
+153|  4|10153
+158|  9|10158
+203|  4|10203
+208|  9|10208
+253|  4|10253
+258|  9|10258
+303|  4|10303
+308|  9|10308
+353|  4|10353
+358|  9|10358
+(16 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+ 10|   10
+(1 row)
+
+count|   sum
+-----+------
+  400|881200
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1k s2j s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1k: UPDATE cc SET pid = 9 WHERE id = 3;
+step s2j: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id, w) UPDATE cc SET val = u.w * 10000 + cc.val FROM u WHERE cc.pid = u.id; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|  val
+---+---+-----
+  3|  9|    3
+  8|  9|10008
+ 53|  4|10053
+ 58|  9|10058
+103|  4|10103
+108|  9|10108
+153|  4|10153
+158|  9|10158
+203|  4|10203
+208|  9|10208
+253|  4|10253
+258|  9|10258
+303|  4|10303
+308|  9|10308
+353|  4|10353
+358|  9|10358
+(16 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+ 10|   10
+(1 row)
+
+count|   sum
+-----+------
+  400|870200
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2v s1b s1a s2h s1c s2t s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2v: EXPLAIN (COSTS OFF) WITH u AS (UPDATE cq SET w = w + 1 RETURNING id, w) UPDATE cc SET val = val + u.w * 1000 FROM u WHERE cc.pid = u.id AND cc.val < 3;
+QUERY PLAN                           
+-------------------------------------
+Update on cc                         
+  CTE u                              
+    ->  Update on cq                 
+          ->  Seq Scan on cq         
+  ->  Hash Join                      
+        Hash Cond: (u.id = cc.pid)   
+        ->  CTE Scan on u            
+        ->  Hash                     
+              ->  Seq Scan on cc     
+                    Filter: (val < 3)
+(10 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1a: UPDATE cc SET val = 0 WHERE id = 2;
+step s2h: WITH u AS (UPDATE cq SET w = w + 1 RETURNING id, w) UPDATE cc SET val = val + u.w * 1000 FROM u WHERE cc.pid = u.id AND cc.val < 3; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2t: SELECT id, pid, val FROM cc WHERE id <= 3 ORDER BY id; SELECT sum(w) FROM cq;
+id|pid| val
+--+---+----
+ 1|  2|1001
+ 2|  3|1000
+ 3|  4|   3
+(3 rows)
+
+ sum
+----
+5000
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1e s2h s1c s2t s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1e: UPDATE cc SET val = 50 WHERE id = 2;
+step s2h: WITH u AS (UPDATE cq SET w = w + 1 RETURNING id, w) UPDATE cc SET val = val + u.w * 1000 FROM u WHERE cc.pid = u.id AND cc.val < 3; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2t: SELECT id, pid, val FROM cc WHERE id <= 3 ORDER BY id; SELECT sum(w) FROM cq;
+id|pid| val
+--+---+----
+ 1|  2|1001
+ 2|  3|  50
+ 3|  4|   3
+(3 rows)
+
+ sum
+----
+5000
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1p s2h s1c s2t s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1p: UPDATE cc SET pid = 9 WHERE id = 2;
+step s2h: WITH u AS (UPDATE cq SET w = w + 1 RETURNING id, w) UPDATE cc SET val = val + u.w * 1000 FROM u WHERE cc.pid = u.id AND cc.val < 3; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2t: SELECT id, pid, val FROM cc WHERE id <= 3 ORDER BY id; SELECT sum(w) FROM cq;
+id|pid| val
+--+---+----
+ 1|  2|1001
+ 2|  9|   2
+ 3|  4|   3
+(3 rows)
+
+ sum
+----
+5000
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1a s2e s1c s2t s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1a: UPDATE cc SET val = 0 WHERE id = 2;
+step s2e: WITH u AS (UPDATE cq SET w = w + 1 RETURNING id, w) DELETE FROM cc USING u WHERE cc.pid = u.id AND cc.val < 3; <waiting ...>
+step s1c: COMMIT;
+step s2e: <... completed>
+step s2t: SELECT id, pid, val FROM cc WHERE id <= 3 ORDER BY id; SELECT sum(w) FROM cq;
+id|pid|val
+--+---+---
+ 3|  4|  3
+(1 row)
+
+ sum
+----
+5000
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1e s2e s1c s2t s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1e: UPDATE cc SET val = 50 WHERE id = 2;
+step s2e: WITH u AS (UPDATE cq SET w = w + 1 RETURNING id, w) DELETE FROM cc USING u WHERE cc.pid = u.id AND cc.val < 3; <waiting ...>
+step s1c: COMMIT;
+step s2e: <... completed>
+step s2t: SELECT id, pid, val FROM cc WHERE id <= 3 ORDER BY id; SELECT sum(w) FROM cq;
+id|pid|val
+--+---+---
+ 2|  3| 50
+ 3|  4|  3
+(2 rows)
+
+ sum
+----
+5000
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2g s1b s1f s2f s1c s2o s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2g: EXPLAIN (COSTS OFF) WITH wc AS (INSERT INTO cl VALUES (1500, 'f') RETURNING id AS newid) DELETE FROM ch USING wc WHERE ch.id = newid;
+QUERY PLAN                            
+--------------------------------------
+Delete on ch                          
+  Delete on ch ch_1                   
+  Delete on ch1 ch_2                  
+  Delete on ch2 ch_3                  
+  CTE wc                              
+    ->  Insert on cl                  
+          ->  Result                  
+  ->  Hash Join                       
+        Hash Cond: (ch.id = wc.newid) 
+        ->  Append                    
+              ->  Seq Scan on ch ch_1 
+              ->  Seq Scan on ch1 ch_2
+              ->  Seq Scan on ch2 ch_3
+        ->  Hash                      
+              ->  CTE Scan on wc      
+(15 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1f: UPDATE ch SET v = -v WHERE id = 1500;
+step s2f: WITH wc AS (INSERT INTO cl VALUES (1500, 'f') RETURNING id AS newid) DELETE FROM ch USING wc WHERE ch.id = newid; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+step s2o: SELECT tableoid::regclass, id, v FROM ch WHERE id IN (1500, 9999) OR v < 0 ORDER BY id; SELECT count(*) FROM ch; SELECT * FROM cl ORDER BY id;
+tableoid|id|v
+--------+--+-
+(0 rows)
+
+count
+-----
+ 2999
+(1 row)
+
+  id|note
+----+----
+1500|f   
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1m s2f s1c s2o s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1m: UPDATE ch SET id = 9999 WHERE id = 1500;
+step s2f: WITH wc AS (INSERT INTO cl VALUES (1500, 'f') RETURNING id AS newid) DELETE FROM ch USING wc WHERE ch.id = newid; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+step s2o: SELECT tableoid::regclass, id, v FROM ch WHERE id IN (1500, 9999) OR v < 0 ORDER BY id; SELECT count(*) FROM ch; SELECT * FROM cl ORDER BY id;
+tableoid|  id|   v
+--------+----+----
+ch1     |9999|1500
+(1 row)
+
+count
+-----
+ 3000
+(1 row)
+
+  id|note
+----+----
+1500|f   
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1v s2r s1c s2s s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE cc SET val = val + 1000 WHERE id = 3;
+step s2r: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id, w) UPDATE cc SET val = u.w * 10000 + cc.val FROM u WHERE cc.pid = u.id AND cc.id IN (3, 8) RETURNING cc.id, cc.val, u.id, u.w; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|  val|id|w
+--+-----+--+-
+ 3|11003| 4|1
+ 8|10008| 9|1
+(2 rows)
+
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|  val
+---+---+-----
+  3|  4|11003
+  8|  9|10008
+ 53|  4|   53
+ 58|  9|   58
+103|  4|  103
+108|  9|  108
+153|  4|  153
+158|  9|  158
+203|  4|  203
+208|  9|  208
+253|  4|  253
+258|  9|  258
+303|  4|  303
+308|  9|  308
+353|  4|  353
+358|  9|  358
+(16 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1k s2r s1c s2s s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1k: UPDATE cc SET pid = 9 WHERE id = 3;
+step s2r: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id, w) UPDATE cc SET val = u.w * 10000 + cc.val FROM u WHERE cc.pid = u.id AND cc.id IN (3, 8) RETURNING cc.id, cc.val, u.id, u.w; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|  val|id|w
+--+-----+--+-
+ 8|10008| 9|1
+(1 row)
+
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|  val
+---+---+-----
+  3|  9|    3
+  8|  9|10008
+ 53|  4|   53
+ 58|  9|   58
+103|  4|  103
+108|  9|  108
+153|  4|  153
+158|  9|  158
+203|  4|  203
+208|  9|  208
+253|  4|  253
+258|  9|  258
+303|  4|  303
+308|  9|  308
+353|  4|  353
+358|  9|  358
+(16 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1v s2d s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE cc SET val = val + 1000 WHERE id = 3;
+step s2d: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id) DELETE FROM cc WHERE pid IN (SELECT id FROM u); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+id|pid|val
+--+---+---
+(0 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+ 10|   10
+(1 row)
+
+count|  sum
+-----+-----
+  320|64160
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1o s2d s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1o: UPDATE cc SET pid = 1 WHERE id = 3;
+step s2d: WITH u AS (UPDATE cp SET w = w + 1 WHERE grp = 4 RETURNING id) DELETE FROM cc WHERE pid IN (SELECT id FROM u); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+id|pid|val
+--+---+---
+ 3|  1|  3
+(1 row)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+ 10|   10
+(1 row)
+
+count|  sum
+-----+-----
+  321|64163
+(1 row)
+
+id|note
+--+----
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1v s2i s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE cc SET val = val + 1000 WHERE id = 3;
+step s2i: WITH wc AS (INSERT INTO cl VALUES (4, 'new') RETURNING id AS newid) UPDATE cc SET val = val + 1 FROM wc WHERE pid = newid; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid| val
+---+---+----
+  3|  4|1004
+  8|  9|   8
+ 53|  4|  54
+ 58|  9|  58
+103|  4| 104
+108|  9| 108
+153|  4| 154
+158|  9| 158
+203|  4| 204
+208|  9| 208
+253|  4| 254
+258|  9| 258
+303|  4| 304
+308|  9| 308
+353|  4| 354
+358|  9| 358
+(16 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+  0|    0
+(1 row)
+
+count|  sum
+-----+-----
+  400|81208
+(1 row)
+
+id|note
+--+----
+ 4|new 
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1o s2i s1c s2s s2w s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1o: UPDATE cc SET pid = 1 WHERE id = 3;
+step s2i: WITH wc AS (INSERT INTO cl VALUES (4, 'new') RETURNING id AS newid) UPDATE cc SET val = val + 1 FROM wc WHERE pid = newid; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2s: SELECT id, pid, val FROM cc WHERE id IN (3, 8, 53, 403) OR pid IN (4, 9) ORDER BY id;
+ id|pid|val
+---+---+---
+  3|  1|  3
+  8|  9|  8
+ 53|  4| 54
+ 58|  9| 58
+103|  4|104
+108|  9|108
+153|  4|154
+158|  9|158
+203|  4|204
+208|  9|208
+253|  4|254
+258|  9|258
+303|  4|304
+308|  9|308
+353|  4|354
+358|  9|358
+(16 rows)
+
+step s2w: SELECT sum(w), count(*) FILTER (WHERE w > 0) FROM cp; SELECT count(*), sum(val) FROM cc; SELECT * FROM cl ORDER BY id;
+sum|count
+---+-----
+  0|    0
+(1 row)
+
+count|  sum
+-----+-----
+  400|80207
+(1 row)
+
+id|note
+--+----
+ 4|new 
+(1 row)
+
+step s2c: COMMIT;

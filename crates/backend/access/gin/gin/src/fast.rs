@@ -3,6 +3,7 @@
 
 use ::bufmgr_seams as bm;
 use ::datum::Datum;
+use core::mem::ManuallyDrop;
 use ::gin_vocab::*;
 use ::mcx::{Mcx, MemoryContext, PgVec};
 use ::nbtree::itup::{self, ItupBuf};
@@ -31,7 +32,8 @@ const GIN_PAGE_FREESIZE: usize =
     BLCKSZ - MAXALIGN(SizeOfPageHeaderData) - MAXALIGN(core::mem::size_of::<GinPageOpaqueData>());
 
 pub(crate) struct GinTupleCollector<'s> {
-    pub tuples: PgVec<'s, ItupBuf<'s>>,
+    // Tuple images live until the collector's memory context is reset.
+    pub tuples: PgVec<'s, ManuallyDrop<ItupBuf<'s>>>,
     pub sumsize: usize,
 }
 
@@ -42,6 +44,20 @@ impl<'s> GinTupleCollector<'s> {
             sumsize: 0,
         }
     }
+}
+
+fn collector_capacity(len: usize, entries: usize, capacity: usize) -> PgResult<usize> {
+    let limit = ::mcx::MAX_ALLOC_SIZE / core::mem::size_of::<itup::ITup>();
+    let needed = len
+        .checked_add(entries)
+        .filter(|&n| n <= limit)
+        .ok_or_else(|| Box::new(PgError::error("too many entries for GIN index")))?;
+    if capacity != 0 && needed <= capacity {
+        return Ok(capacity);
+    }
+    let capacity = needed.max(16).next_power_of_two();
+    ::mcx::check_alloc_size(capacity * core::mem::size_of::<itup::ITup>())?;
+    Ok(capacity)
 }
 
 /// ginHeapTupleFastCollect.
@@ -57,14 +73,13 @@ pub(crate) fn ginHeapTupleFastCollect<'s>(
 ) -> PgResult<()> {
     let (entries, categories) = ginExtractEntries(mcx, state, attnum, value, is_null)?;
 
-    // ginfast.c:503: protect against integer overflow in the collector's
-    // allocation calculations (MaxAllocSize / sizeof(IndexTuple)).
-    // The collector's element is an ItupBuf handle, not C's 8-byte pointer.
-    if collector.tuples.len() + entries.len()
-        > ::mcx::MAX_ALLOC_SIZE / core::mem::size_of::<ItupBuf>().max(8)
-    {
-        return Err(Box::new(PgError::error("too many entries for GIN index")));
-    }
+    let capacity = collector_capacity(
+        collector.tuples.len(),
+        entries.len(),
+        collector.tuples.capacity(),
+    )?;
+    let additional = capacity - collector.tuples.len();
+    ::mcx::vec_reserve_huge(&mut collector.tuples, additional)?;
 
     for (i, key) in entries.iter().enumerate() {
         let mut itup = crate::entrypage::GinFormTuple(
@@ -85,7 +100,7 @@ pub(crate) fn ginHeapTupleFastCollect<'s>(
         unsafe { itup::set_t_tid(itup.as_mut_ptr(), *ht_ctid) };
         // SAFETY: owned image.
         collector.sumsize += unsafe { itup::index_tuple_size(itup.as_ptr()) };
-        collector.tuples.push(itup);
+        collector.tuples.push(ManuallyDrop::new(itup));
     }
     Ok(())
 }
@@ -94,7 +109,7 @@ pub(crate) fn ginHeapTupleFastCollect<'s>(
 fn write_list_page(
     rel: &Relation<'_>,
     buffer: Buffer,
-    tuples: &[ItupBuf<'_>],
+    tuples: &[ManuallyDrop<ItupBuf<'_>>],
     rightlink: BlockNumber,
 ) -> PgResult<usize> {
     // ginfast.c:71 START_CRIT_SECTION(): page init through UnlockReleaseBuffer.
@@ -132,7 +147,7 @@ fn write_list_page(
 
     if relation_needs_wal(rel) {
         let data = crate::wal::ginxlog_insert_listpage(rightlink, tuples.len() as i32);
-        let mut frags: Vec<&[u8]> = Vec::with_capacity(tuples.len());
+        let mut frags: Vec<&[u8]> = ::mcx::std_vec_with_capacity("access", tuples.len())?;
         for t in tuples {
             // SAFETY: owned images live across the WAL call.
             frags.push(unsafe {
@@ -180,7 +195,7 @@ fn failed_to_add_item(rel: &Relation<'_>) -> Box<PgError> {
 /// makeSublist.
 fn make_sublist(
     rel: &Relation<'_>,
-    tuples: &[ItupBuf<'_>],
+    tuples: &[ManuallyDrop<ItupBuf<'_>>],
     res: &mut GinMetaPageData,
 ) -> PgResult<()> {
     debug_assert!(!tuples.is_empty());
@@ -521,7 +536,7 @@ fn shift_list(
 
         if relation_needs_wal(rel) {
             let data = crate::wal::ginxlog_delete_listpages(&metadata, ndeleted as i32);
-            let mut bufs: Vec<XLogRegBuf<'_>> = Vec::with_capacity(1 + ndeleted);
+            let mut bufs: Vec<XLogRegBuf<'_>> = ::mcx::std_vec_with_capacity("access", 1 + ndeleted)?;
             bufs.push(XLogRegBuf {
                 block_id: 0,
                 buffer: metabuffer,
@@ -677,7 +692,7 @@ pub fn ginInsertCleanup<'s>(
     bm::lock_buffer::call(buffer, GIN_SHARE)?;
     bm::lock_buffer::call(metabuffer, GIN_UNLOCK)?;
 
-    let mut op_ctx = MemoryContext::new_bump("GIN insert cleanup temporary context");
+    let mut op_ctx = MemoryContext::new_wholesale("GIN insert cleanup temporary context");
     // SAFETY: accum is dropped/rebuilt around every op_ctx reset.
     unsafe fn erase<'x>(a: BuildAccumulator<'x>) -> BuildAccumulator<'static> {
         unsafe { core::mem::transmute(a) }
@@ -718,7 +733,7 @@ pub fn ginInsertCleanup<'s>(
                 let Some((attnum, key, category, list)) = accum.next_entry() else {
                     break;
                 };
-                let dump_ctx = MemoryContext::new_bump("gin cleanup dump scratch");
+                let dump_ctx = MemoryContext::new_wholesale("gin cleanup dump scratch");
                 ginEntryInsert(dump_ctx.mcx(), rel, state, attnum, key, category, list, None)?;
                 // ginfast.c:932 vacuum_delay_point(false).
                 crate::vacuum::vacuum_delay_point()?;
@@ -746,7 +761,7 @@ pub fn ginInsertCleanup<'s>(
                     let Some((attnum, key, category, list)) = accum.next_entry() else {
                         break;
                     };
-                    let dump_ctx = MemoryContext::new_bump("gin cleanup dump scratch");
+                    let dump_ctx = MemoryContext::new_wholesale("gin cleanup dump scratch");
                     ginEntryInsert(dump_ctx.mcx(), rel, state, attnum, key, category, list, None)?;
                 }
             }
@@ -796,6 +811,37 @@ mod rem_b006_tests {
     use crate::rem_b006_tests::rig::{self, KeyKind};
     use ::types_error::ERRCODE_INTERNAL_ERROR;
 
+    #[test]
+    fn collector_capacity_uses_pointer_width() {
+        assert_eq!(collector_capacity(0, 40_000_000, 0).unwrap(), 1 << 26);
+        assert_eq!(collector_capacity(1 << 25, 1, 1 << 25).unwrap(), 1 << 26);
+        assert_eq!(collector_capacity(0, 1 << 26, 0).unwrap(), 1 << 26);
+        let err = collector_capacity(1 << 26, 1, 1 << 26).unwrap_err();
+        assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+        assert_eq!(err.sqlstate(), ERRCODE_INTERNAL_ERROR);
+        let err = collector_capacity(0, 1 << 27, 0).unwrap_err();
+        assert_eq!(err.message(), "too many entries for GIN index");
+        assert_eq!(err.sqlstate(), ERRCODE_INTERNAL_ERROR);
+        assert!(collector_capacity(usize::MAX, 1, 0).is_err());
+    }
+
+    #[test]
+    fn collector_reserve_preserves_tuples() {
+        let ctx = MemoryContext::new_bump("collector");
+        let mut collector = GinTupleCollector::new(ctx.mcx());
+        for count in [1, 16, 17, 33] {
+            let capacity = collector_capacity(collector.tuples.len(), count, collector.tuples.capacity()).unwrap();
+            let additional = capacity - collector.tuples.len();
+            ::mcx::vec_reserve_huge(&mut collector.tuples, additional).unwrap();
+            for _ in 0..count {
+                let tuple = ItupBuf::with_size(ctx.mcx(), 8).unwrap();
+                collector.tuples.push(ManuallyDrop::new(tuple));
+            }
+            assert_eq!(collector.tuples.capacity(), capacity);
+            assert!(collector.tuples.iter().all(|t| t.size() == 8));
+        }
+    }
+
     // ginfast.c:89 writeListPage: a tuple that PageAddItem cannot place is
     // elog(ERROR, "failed to add item to index page in \"%s\"") (XX000),
     // never a backend panic
@@ -810,8 +856,8 @@ mod rem_b006_tests {
         let state = rig::one_col_state(KeyKind::Int4);
         // 450 x (16-byte tuple + 4-byte line pointer) > GinListPageSize:
         // the 409th PageAddItem fails.
-        let tuples: Vec<ItupBuf<'_>> = (0..450i32)
-            .map(|k| rig::pending_tuple(mcx, &rel, &state, k, rig::tid(1, 1)))
+        let tuples: Vec<ManuallyDrop<ItupBuf<'_>>> = (0..450i32)
+            .map(|k| ManuallyDrop::new(rig::pending_tuple(mcx, &rel, &state, k, rig::tid(1, 1))))
             .collect();
         let buf = bm::read_buffer::call(&rel, 1).unwrap();
 

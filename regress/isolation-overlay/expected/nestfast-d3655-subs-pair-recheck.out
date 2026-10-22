@@ -1,0 +1,105 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, a.v, (SELECT max(l.amt) FROM d55_l l WHERE l.acct = a.grp) AS m FROM d55_a a WHERE a.id <= LEAST((SELECT lim FROM d55_c WHERE name = 'r' FOR UPDATE), 8) ORDER BY a.id FOR UPDATE;
+QUERY PLAN                                                
+----------------------------------------------------------
+LockRows                                                  
+  InitPlan 2                                              
+    ->  LockRows                                          
+          ->  Index Scan using d55_c_pkey on d55_c        
+                Index Cond: (name = 'r'::text)            
+  ->  Index Scan using d55_a_pkey on d55_a a              
+        Index Cond: (id <= LEAST((InitPlan 2).col1, 8))   
+        SubPlan 1                                         
+          ->  Aggregate                                   
+                ->  Index Scan using d55_l_acct on d55_l l
+                      Index Cond: (acct = a.grp)          
+(11 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1a s2l s1c s2c
+step s1a: UPDATE d55_a SET v = v + 1 WHERE id = 3;
+step s2l: SELECT a.id, a.v, (SELECT max(l.amt) FROM d55_l l WHERE l.acct = a.grp) AS m FROM d55_a a WHERE a.id <= LEAST((SELECT lim FROM d55_c WHERE name = 'r' FOR UPDATE), 8) ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id| v|  m
+--+--+---
+ 1|10|111
+ 2|20|114
+ 3|31|120
+ 4|40|111
+ 5|50|114
+(5 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1g s2l s1c s2c
+step s1g: UPDATE d55_a SET grp = grp + 1 WHERE id = 2;
+step s2l: SELECT a.id, a.v, (SELECT max(l.amt) FROM d55_l l WHERE l.acct = a.grp) AS m FROM d55_a a WHERE a.id <= LEAST((SELECT lim FROM d55_c WHERE name = 'r' FOR UPDATE), 8) ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id| v|  m
+--+--+---
+ 1|10|111
+ 2|20|117
+ 3|30|120
+ 4|40|111
+ 5|50|114
+(5 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1d s2l s1c s2c
+step s1d: DELETE FROM d55_a WHERE id = 4;
+step s2l: SELECT a.id, a.v, (SELECT max(l.amt) FROM d55_l l WHERE l.acct = a.grp) AS m FROM d55_a a WHERE a.id <= LEAST((SELECT lim FROM d55_c WHERE name = 'r' FOR UPDATE), 8) ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id| v|  m
+--+--+---
+ 1|10|111
+ 2|20|114
+ 3|30|120
+ 5|50|114
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1r s2l s1c s2c
+step s1r: UPDATE d55_c SET lim = lim + 2 WHERE name = 'r';
+step s2l: SELECT a.id, a.v, (SELECT max(l.amt) FROM d55_l l WHERE l.acct = a.grp) AS m FROM d55_a a WHERE a.id <= LEAST((SELECT lim FROM d55_c WHERE name = 'r' FOR UPDATE), 8) ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id| v|  m
+--+--+---
+ 1|10|111
+ 2|20|114
+ 3|30|120
+ 4|40|111
+ 5|50|114
+ 6|60|120
+ 7|70|111
+(7 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1a s1r s2l s1c s2c
+step s1a: UPDATE d55_a SET v = v + 1 WHERE id = 3;
+step s1r: UPDATE d55_c SET lim = lim + 2 WHERE name = 'r';
+step s2l: SELECT a.id, a.v, (SELECT max(l.amt) FROM d55_l l WHERE l.acct = a.grp) AS m FROM d55_a a WHERE a.id <= LEAST((SELECT lim FROM d55_c WHERE name = 'r' FOR UPDATE), 8) ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id| v|  m
+--+--+---
+ 1|10|111
+ 2|20|114
+ 3|31|120
+ 4|40|111
+ 5|50|114
+ 6|60|120
+ 7|70|111
+(7 rows)
+
+step s2c: COMMIT;

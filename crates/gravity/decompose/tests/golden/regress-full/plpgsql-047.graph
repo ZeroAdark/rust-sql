@@ -1,0 +1,11 @@
+-- regress-full-plpgsql-047
+-- select sp_add_user('user2');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=6 end=sink
+  nodes n0@0
+  source range rel=39763 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op98(v1.1, $1)
+  project (1=v1.2)
+  outs 1=w8:val
+mapped: SeqScan

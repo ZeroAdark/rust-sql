@@ -1,0 +1,61 @@
+-- regress-full-sequence-009
+-- SELECT * FROM information_schema.sequences WHERE sequence_name IN ('sequence_test2', 'serialtest2_f2_seq', 'serialtest2_f3_seq', 'serialtest2_f4_seq', 'serialtest2_f5_seq', 'serialtest2_f6_seq') ORDER BY sequence_name ASC;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=6 eligible rows=3 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n6@0 n5@1 n4@3
+  source range rel=2224 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(8):byval8:w8:val Offset:byval2:w2:val
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8)
+  nest inner=n7 JOIN_INNER unique vol=s params=($exec0=outer.1)
+  inner node=8 serial site=0 reason=IndexSource end=sink
+  nodes n8@0 n7@4
+  source index rel=1259 rti=3 am=heap index=2662
+    key att=1 op=607 value=$exec0
+    recheck (op607(v3.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(6):byval8:w8:val Attr(18):byval8:w8:val
+  filter op92(v3.18, c18:83)
+  filter or(fn2710(v3.6, c25:'USAGE'), fn2186(v3.1, c25:'SELECT, UPDATE, USAGE'))
+  filter any93(v3.2, c1003:'\x01\x00\x00\x00\x00\x00\x00\x00\x13\x00\x00\x00\x06\x00\x00\x00\x01\x00\x00\x00sequence_test2\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00serialtest2_f2_seq\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00serialtest2_f3_seq\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00serialtest2_f4_seq\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00serialtest2_f5_seq\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00serialtest2_f6_seq\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+  project (1=v3.2, 2=v3.3, 3=v3.1)
+  memo entries=3 singlerow keys=($exec0)
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=outer.2, 5=outer.3, 6=outer.6, 7=outer.5, 8=outer.4, 9=outer.8)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val
+  outs 1=fx64:life/breaker 2=w4:val 3=w4:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val
+p1 node=3 eligible rows=65 end=breaker(slot=1 Sort)
+  desc consumes=slot0@p0 finishing
+  nodes n3@0 n2@2 n1@4 n0@6^
+  source range rel=2615 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter not(fn2855(v2.1))
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4)
+  probe slot=0 inner=n4 JOIN_INNER keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.2))
+  project (1=outer.2, 2=inner.1, 3=inner.3, 4=inner.4, 5=inner.5, 6=inner.6, 7=inner.7, 8=inner.8, 9=inner.9)
+  nest inner=n9 JOIN_ANTI raise-free params=($exec1=outer.3)
+  inner node=9 serial site=0 reason=IndexSource end=sink
+  nodes n9@0
+  source index rel=2608 rti=5 am=heap index=2673
+    key att=1 op=607 value=c26:1259
+    key att=2 op=607 value=$exec1
+    recheck (op607(v5.1, c26:1259), op607(v5.2, $exec1))
+    lanes Attr(7):byval8:w8:val
+  filter op92(v5.7, c18:105)
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7)
+  project (1=relabel13718(fn861()), 2=relabel13718(outer.1), 3=relabel13718(outer.2), 4=relabel13716(fn1081(outer.4, c23:null)), 5=T_CoerceToDomain, 6=T_CoerceToDomain, 7=T_CoerceToDomain, 8=relabel13716(io1043(outer.5)), 9=relabel13716(io1043(outer.6)), 10=relabel13716(io1043(outer.7)), 11=relabel13716(io1043(outer.8)), 12=T_CoerceToDomain)
+  sort keys=3+:Fp128@950#19 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+  outs 1=fx64:win/page 2=fx64:life/breaker 3=w4:val 4=w4:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w1:val
+  outs 1=fx64:call861 2=fx64:win/page 3=fx64:life/breaker 4=vl:call1081 5=? 6=? 7=? 8=vl:call1046 9=vl:call1046 10=vl:call1046 11=vl:call1046 12=?
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=outer.10, 11=outer.11, 12=outer.12)
+  outs 1=? 2=? 3=? 4=? 5=? 6=? 7=? 8=? 9=? 10=? 11=? 12=?
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=3+
+param $exec0 owner=n5 type=26 rep=w8:val
+param $exec1 owner=n1 type=26 rep=w4:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam HashJoin Memoize Sort Hash

@@ -92,7 +92,7 @@ fn int2vector_values(p: *const u8) -> PgResult<Vec<i16>> {
                 .with_sqlstate(types_error::ERRCODE_INVALID_PARAMETER_VALUE),
         ));
     }
-    let mut v = Vec::with_capacity(n);
+    let mut v = ::mcx::std_vec_with_capacity("dblink", n)?;
     for i in 0..n {
         // SAFETY: bounded above against the datum size.
         v.push(unsafe { core::ptr::read_unaligned(p.add(24 + 2 * i).cast::<i16>()) });
@@ -117,7 +117,7 @@ fn get_pkey_attnames<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>) -> PgResult<(i1
         if indnkeyatts > 0 {
             let indkey_ptr = getattr(tup, ANUM_PG_INDEX_INDKEY, idesc).0.as_usize() as *const u8;
             let indkey = int2vector_values(indkey_ptr)?;
-            let mut names = Vec::with_capacity(indnkeyatts as usize);
+            let mut names = ::mcx::std_vec_with_capacity("dblink", indnkeyatts as usize)?;
             for i in 0..indnkeyatts as usize {
                 let attno = indkey[i];
                 let name = tupdesc.attr(attno as usize - 1).attname.name_str();
@@ -153,8 +153,9 @@ fn quote_ident_str(mcx: Mcx<'_>, name: &[u8]) -> PgResult<String> {
 
 // quote_literal_cstr (quote.c): E-prefix whenever a backslash forces
 // doubled-backslash escaping; double ' and \.
-fn quote_literal_str(s: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(s.len() + 2);
+fn quote_literal_str(s: &[u8]) -> PgResult<Vec<u8>> {
+    ::mcx::check_alloc_size(s.len() * 2 + 4)?;
+    let mut out = ::mcx::std_vec_with_capacity("dblink", s.len() + 2)?;
     if s.contains(&b'\\') {
         out.push(b'E');
     }
@@ -166,21 +167,30 @@ fn quote_literal_str(s: &[u8]) -> Vec<u8> {
         out.push(c);
     }
     out.push(b'\'');
-    out
+    Ok(out)
 }
 
 // get_text_array_contents: text[] -> Vec of element strings (None = NULL).
-fn get_text_array_contents(mcx: Mcx<'_>, image: &[u8]) -> PgResult<Vec<Option<Vec<u8>>>> {
+// PG_GETARG_ARRAYTYPE_P detoasts: a short-header array (as stored in a heap
+// row) is widened to the 4B header the array reader expects.
+fn get_text_array_contents(
+    mcx: Mcx<'_>,
+    arr: types_fmgr::PackedVarlena<'_>,
+) -> PgResult<Vec<Option<Vec<u8>>>> {
+    let data = arr.data();
+    let mut image = ::mcx::std_vec_with_capacity("dblink", 4 + data.len())?;
+    image.extend_from_slice(&datum::varlena::set_varsize_4b(4 + data.len()));
+    image.extend_from_slice(data);
     let (datums, nulls) =
-        arrayfuncs::deconstruct_array_builtin(mcx, image, types_core::TEXTOID, true)?;
-    let mut out = Vec::with_capacity(datums.len());
+        arrayfuncs::deconstruct_array_builtin(mcx, &image, types_core::TEXTOID, true)?;
+    let mut out = ::mcx::std_vec_with_capacity("dblink", datums.len())?;
     for (i, d) in datums.iter().enumerate() {
         if nulls[i] {
             out.push(None);
         } else {
             // SAFETY: text element datum from the array image.
             let pv = unsafe { types_fmgr::datum_varlena_packed(*d, mcx)? };
-            out.push(Some(pv.data().to_vec()));
+            out.push(Some(::mcx::std_vec_from_slice("dblink", &pv.data())?));
         }
     }
     Ok(out)
@@ -202,7 +212,7 @@ fn validate_pkattnums(
                 .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
         ));
     }
-    let mut out = Vec::with_capacity(pknumatts as usize);
+    let mut out = ::mcx::std_vec_with_capacity("dblink", pknumatts as usize)?;
     for &pk in pkattnums.iter().take(pknumatts as usize) {
         let pkattnum = pk as i32;
         if pkattnum <= 0 || pkattnum > natts {
@@ -275,7 +285,7 @@ fn get_tuple_of_interest<'mcx>(
         match &src_pkattvals[i] {
             Some(v) => {
                 sql.push_str(" = ");
-                sql.push_str(&String::from_utf8_lossy(&quote_literal_str(v)));
+                sql.push_str(&String::from_utf8_lossy(&quote_literal_str(v)?));
             }
             None => sql.push_str(" IS NULL"),
         }
@@ -350,7 +360,7 @@ fn get_sql_insert(
             None => tuple_value(mcx, &tuple, tupdesc, i as i32 + 1)?,
         };
         match val {
-            Some(v) => buf.extend_from_slice(&quote_literal_str(&v)),
+            Some(v) => buf.extend_from_slice(&quote_literal_str(&v)?),
             None => buf.extend_from_slice(b"NULL"),
         }
         need_comma = true;
@@ -376,7 +386,7 @@ fn get_sql_delete(
         match &tgt_pkattvals[i] {
             Some(v) => {
                 buf.extend_from_slice(b" = ");
-                buf.extend_from_slice(&quote_literal_str(v));
+                buf.extend_from_slice(&quote_literal_str(v)?);
             }
             None => buf.extend_from_slice(b" IS NULL"),
         }
@@ -413,7 +423,7 @@ fn get_sql_update(
             None => tuple_value(mcx, &tuple, tupdesc, i as i32 + 1)?,
         };
         match val {
-            Some(v) => buf.extend_from_slice(&quote_literal_str(&v)),
+            Some(v) => buf.extend_from_slice(&quote_literal_str(&v)?),
             None => buf.extend_from_slice(b"NULL"),
         }
         need_comma = true;
@@ -427,7 +437,7 @@ fn get_sql_update(
         match &tgt_pkattvals[i] {
             Some(v) => {
                 buf.extend_from_slice(b" = ");
-                buf.extend_from_slice(&quote_literal_str(v));
+                buf.extend_from_slice(&quote_literal_str(v)?);
             }
             None => buf.extend_from_slice(b" IS NULL"),
         }
@@ -489,12 +499,12 @@ pub fn fc_dblink_build_sql_insert(
     let relname = unsafe { fcinfo.arg_varlena_packed(0)? };
     let rel = get_rel_from_relname(mcx, relname.data(), AccessShareLock, adt_acl::ACL_SELECT)?;
     let (pkattnums, pknumatts) = build_args(fcinfo, &rel)?;
-    let src = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(3)? }.image())?;
+    let src = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(3)? })?;
     if src.len() as i32 != pknumatts {
         table::table_close(rel, AccessShareLock)?;
         return Err(array_len_mismatch("source"));
     }
-    let tgt = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(4)? }.image())?;
+    let tgt = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(4)? })?;
     if tgt.len() as i32 != pknumatts {
         table::table_close(rel, AccessShareLock)?;
         return Err(array_len_mismatch("target"));
@@ -513,7 +523,7 @@ pub fn fc_dblink_build_sql_delete(
     let relname = unsafe { fcinfo.arg_varlena_packed(0)? };
     let rel = get_rel_from_relname(mcx, relname.data(), AccessShareLock, adt_acl::ACL_SELECT)?;
     let (pkattnums, pknumatts) = build_args(fcinfo, &rel)?;
-    let tgt = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(3)? }.image())?;
+    let tgt = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(3)? })?;
     if tgt.len() as i32 != pknumatts {
         table::table_close(rel, AccessShareLock)?;
         return Err(array_len_mismatch("target"));
@@ -532,12 +542,12 @@ pub fn fc_dblink_build_sql_update(
     let relname = unsafe { fcinfo.arg_varlena_packed(0)? };
     let rel = get_rel_from_relname(mcx, relname.data(), AccessShareLock, adt_acl::ACL_SELECT)?;
     let (pkattnums, pknumatts) = build_args(fcinfo, &rel)?;
-    let src = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(3)? }.image())?;
+    let src = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(3)? })?;
     if src.len() as i32 != pknumatts {
         table::table_close(rel, AccessShareLock)?;
         return Err(array_len_mismatch("source"));
     }
-    let tgt = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(4)? }.image())?;
+    let tgt = get_text_array_contents(mcx, unsafe { fcinfo.arg_varlena_packed(4)? })?;
     if tgt.len() as i32 != pknumatts {
         table::table_close(rel, AccessShareLock)?;
         return Err(array_len_mismatch("target"));
@@ -551,19 +561,52 @@ pub fn fc_dblink_build_sql_update(
 mod tests {
     use super::*;
 
+    // A text[] read from a heap row arrives with a 1-byte header; C's
+    // PG_GETARG_ARRAYTYPE_P expands it, so `{"1"}` must count one key.
+    #[test]
+    fn short_header_text_array_is_expanded() {
+        // 4B image: ndim=1, dataoffset=0, elemtype=TEXT, dim1=1, lbound1=1,
+        // then the text element "1" (4B header, 5 bytes) padded to 4.
+        let mut full = vec![0u8; 24 + 8];
+        full[0..4].copy_from_slice(&((32u32) << 2).to_ne_bytes());
+        full[4..8].copy_from_slice(&1i32.to_ne_bytes());
+        full[12..16].copy_from_slice(&(types_core::TEXTOID as i32).to_ne_bytes());
+        full[16..20].copy_from_slice(&1i32.to_ne_bytes());
+        full[20..24].copy_from_slice(&1i32.to_ne_bytes());
+        full[24..28].copy_from_slice(&((5u32) << 2).to_ne_bytes());
+        full[28] = b'1';
+        let mut short = vec![((full.len() as u8 - 3) << 1) | 1];
+        short.extend_from_slice(&full[4..]);
+        let scratch = mcx::MemoryContext::new("dblink test");
+        for img in [&full, &short] {
+            // SAFETY: inline image, live for the call.
+            let pv = unsafe { types_fmgr::PackedVarlena::from_ptr(img.as_ptr()) };
+            let got = get_text_array_contents(scratch.mcx(), pv).unwrap();
+            assert_eq!(got, vec![Some(b"1".to_vec())]);
+        }
+    }
+
     #[test]
     fn quote_literal_matches_c() {
-        assert_eq!(quote_literal_str(b"plain"), b"'plain'");
-        assert_eq!(quote_literal_str(b"O'Brien"), b"'O''Brien'");
+        assert_eq!(quote_literal_str(b"plain").unwrap(), b"'plain'");
+        assert_eq!(quote_literal_str(b"O'Brien").unwrap(), b"'O''Brien'");
         // backslash forces the E'' prefix and doubled backslash.
-        assert_eq!(quote_literal_str(b"a\\b"), b"E'a\\\\b'");
-        assert_eq!(quote_literal_str(b"x'\\y"), b"E'x''\\\\y'");
+        assert_eq!(quote_literal_str(b"a\\b").unwrap(), b"E'a\\\\b'");
+        assert_eq!(quote_literal_str(b"x'\\y").unwrap(), b"E'x''\\\\y'");
+    }
+
+    #[test]
+    fn quote_literal_admits_like_c_palloc() {
+        // quote_literal_cstr pallocs 2*len+4 (quote.c:111).
+        let big = vec![b'a'; 0x2000_0000];
+        let err = quote_literal_str(&big).unwrap_err();
+        assert_eq!(err.message, "invalid memory alloc request size 1073741828");
     }
 
     #[test]
     fn quote_literal_keeps_non_utf8_bytes() {
-        assert_eq!(quote_literal_str(b"\xff"), b"'\xff'");
-        assert_eq!(quote_literal_str(b"a\xe9'"), b"'a\xe9'''");
+        assert_eq!(quote_literal_str(b"\xff").unwrap(), b"'\xff'");
+        assert_eq!(quote_literal_str(b"a\xe9'").unwrap(), b"'a\xe9'''");
     }
 
     #[test]

@@ -325,6 +325,8 @@ struct RegistryState {
     /// One-shot deferred-startup-sweep request (set at janitor start; the
     /// first tick runs the sweep and a contained failure re-arms it).
     sweep_pending: bool,
+    /// The startup sweep was requested once this server lifetime.
+    startup_sweep_requested: bool,
     /// The janitor's PGPROC number while it is running (launcher_pid
     /// precedent): lets backend-side posts wake the loop instead of
     /// waiting out the tick.
@@ -416,6 +418,7 @@ struct RegistryState {
 pgsync::process_global! {
     static REGISTRY: pgsync::Mutex<RegistryState> = pgsync::Mutex::new(RegistryState {
         sweep_pending: false,
+        startup_sweep_requested: false,
         janitor_proc: None,
         pins: Vec::new(),
         ensures: Vec::new(),
@@ -517,6 +520,22 @@ pub fn janitor_present() -> bool {
 /// contained sweep failure).
 pub fn request_sweep() {
     with_registry(|r| r.sweep_pending = true);
+}
+
+/// The janitor's start-of-life request: the startup sweep runs once per
+/// server lifetime. A restarted janitor inherits this registry (pins,
+/// spares, pending mints) and leaves idle ephemeral databases to the
+/// grace-based reap, so a restart never drops one that is still inside its
+/// grace. Returns whether the sweep was requested.
+pub(crate) fn request_startup_sweep() -> bool {
+    with_registry(|r| {
+        if r.startup_sweep_requested {
+            return false;
+        }
+        r.startup_sweep_requested = true;
+        r.sweep_pending = true;
+        true
+    })
 }
 
 /// One-shot take of the sweep request (janitor loop only).

@@ -24,6 +24,12 @@ use crate::{
 // 3.0000000000000004), so the libm entry point is resolved at runtime.
 mod libm {
     extern "C" {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[link_name = "__error"]
+        pub fn errno_location() -> *mut core::ffi::c_int;
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[link_name = "__errno_location"]
+        pub fn errno_location() -> *mut core::ffi::c_int;
         pub fn erf(x: f64) -> f64;
         pub fn erfc(x: f64) -> f64;
         pub fn tgamma(x: f64) -> f64;
@@ -45,17 +51,52 @@ fn erfc(x: f64) -> f64 {
     unsafe { libm::erfc(x) }
 }
 
+// errno = 0 before the call, errno after it: C reads ERANGE from
+// tgamma/lgamma (float.c dgamma/dlgamma), which glibc sets where the result
+// alone (a subnormal underflow) would not show the range error.
 #[inline]
-fn tgamma(x: f64) -> f64 {
-    // SAFETY: pure libm function, no preconditions.
-    unsafe { libm::tgamma(x) }
+fn tgamma(x: f64) -> (f64, i32) {
+    // SAFETY: pure libm function; errno_location is this thread's errno slot.
+    unsafe {
+        *libm::errno_location() = 0;
+        let r = libm::tgamma(x);
+        (r, *libm::errno_location())
+    }
 }
 
 #[inline]
-fn lgamma(x: f64) -> f64 {
+fn lgamma(x: f64) -> (f64, i32) {
     let mut sign: core::ffi::c_int = 0;
-    // SAFETY: sign is a valid out-pointer for the reentrant variant.
-    unsafe { libm::lgamma_r(x, &mut sign) }
+    // SAFETY: sign is a valid out-pointer for the reentrant variant;
+    // errno_location is this thread's errno slot.
+    unsafe {
+        *libm::errno_location() = 0;
+        let r = libm::lgamma_r(x, &mut sign);
+        (r, *libm::errno_location())
+    }
+}
+
+const ERANGE: i32 = 34;
+
+// float.c:2831-2840 dgamma / :2862-2873 dlgamma range checks.
+pub(crate) fn gamma_range_check(result: f64, errno: i32) -> PgResult<f64> {
+    if errno != 0 || result.is_infinite() || result.is_nan() {
+        if result != 0.0 {
+            return Err(float_overflow_error().into());
+        }
+        return Err(float_underflow_error().into());
+    }
+    if result == 0.0 {
+        return Err(float_underflow_error().into());
+    }
+    Ok(result)
+}
+
+pub(crate) fn lgamma_range_check(arg1: f64, result: f64, errno: i32) -> PgResult<f64> {
+    if errno == ERANGE || (result.is_infinite() && !arg1.is_infinite()) {
+        return Err(float_overflow_error().into());
+    }
+    Ok(result)
 }
 
 #[cold]
@@ -514,13 +555,13 @@ fn asind_q1(c: &DegreeConsts, x: f64) -> f64 {
     if x <= 0.5 {
         (x.asin() / c.asin_0_5) * 30.0
     } else {
-        90.0 - (x.acos() / c.acos_0_5) * 60.0
+        ::fp_contract::fmsub(x.acos() / c.acos_0_5, 60.0, 90.0)
     }
 }
 
 fn acosd_q1(c: &DegreeConsts, x: f64) -> f64 {
     if x <= 0.5 {
-        90.0 - (x.asin() / c.asin_0_5) * 30.0
+        ::fp_contract::fmsub(x.asin() / c.asin_0_5, 30.0, 90.0)
     } else {
         (x.acos() / c.acos_0_5) * 60.0
     }
@@ -531,6 +572,8 @@ fn sind_0_to_30(c: &DegreeConsts, x: f64) -> f64 {
 }
 
 fn cosd_0_to_60(c: &DegreeConsts, x: f64) -> f64 {
+    // float.c:2270 is fmsub(q, 0.5, 1.0) on aarch64, but q * 0.5 is exact
+    // (q is never subnormal), so plain ops give the same bits.
     1.0 - ((1.0 - (x * RADIANS_PER_DEGREE).cos()) / c.one_minus_cos_60) / 2.0
 }
 
@@ -818,26 +861,15 @@ pub fn dgamma(arg1: f64) -> PgResult<f64> {
         }
         result = arg1;
     } else {
-        let r = tgamma(arg1);
-        // No errno here; tgamma has no zeros, so 0/Inf/NaN signal range error.
-        if r.is_infinite() || r.is_nan() {
-            return Err(float_overflow_error().into());
-        }
-        if r == 0.0 {
-            return Err(float_underflow_error().into());
-        }
-        result = r;
+        let (r, errno) = tgamma(arg1);
+        result = gamma_range_check(r, errno)?;
     }
     Ok(result)
 }
 
 pub fn dlgamma(arg1: f64) -> PgResult<f64> {
-    let result = lgamma(arg1);
-    // Infinite result from finite input = overflow or a pole.
-    if result.is_infinite() && !arg1.is_infinite() {
-        return Err(float_overflow_error().into());
-    }
-    Ok(result)
+    let (result, errno) = lgamma(arg1);
+    lgamma_range_check(arg1, result, errno)
 }
 
 pub fn float48pl(arg1: f32, arg2: f64) -> PgResult<f64> {
@@ -1014,6 +1046,9 @@ pub fn width_bucket_float8(operand: f64, bound1: f64, bound2: f64, count: i32) -
             if !(bound2 - bound1).is_infinite() {
                 r = (count as f64 * ((operand - bound1) / (bound2 - bound1))) as i32;
             } else {
+                // float.c:4127 fuses the halvings on aarch64 (fnmsub); a
+                // halving is exact short of subnormals, which cannot move
+                // these ~DBL_MAX differences, so plain ops match.
                 r = (count as f64
                     * ((operand / 2.0 - bound1 / 2.0) / (bound2 / 2.0 - bound1 / 2.0)))
                     as i32;

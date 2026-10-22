@@ -24,12 +24,14 @@ pub struct RdRowSecurity {
 }
 
 pub fn RelationGetRowSecurityDesc<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgResult<Rc<RdRowSecurity>> {
+    // C3: a recorded lowering depends on the relation (its invalidation drops these); the fill's scan is the entry's
+    gravity_deps::note_rel(relid);
     if let Some(hit) = with_state(|st| st.policies_cache.get(&relid).cloned()) {
         return Ok(hit);
     }
-    let rows = relcache_build_seams::scan_pg_policy::call(mcx, relid)?;
+    let rows = gravity_deps::suppressed(|| relcache_build_seams::scan_pg_policy::call(mcx, relid))?;
     let cmcx = cache_mcx();
-    let mut policies: Vec<RowSecurityPolicyMeta> = Vec::with_capacity(rows.len());
+    let mut policies: Vec<RowSecurityPolicyMeta> = ::mcx::std_vec_with_capacity("CacheMemoryContext", rows.len())?;
     for row in rows.iter().rev() {
         policies.push(RowSecurityPolicyMeta {
             policy_name: PgString::from_str_in(row.polname, cmcx)?,

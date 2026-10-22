@@ -68,7 +68,8 @@ pub fn CreateExplainSerializeDestReceiver<'mcx>(
 
 impl<'mcx> SerializeDestReceiver<'mcx> {
     pub fn startup(&mut self, _operation: i32, _typeinfo: &TupleDescData<'_>) -> PgResult<()> {
-        self.tmpcontext = Some(MemoryContext::new("SerializeTupleReceive"));
+        // C resets this per row to discard the out/send results it owns.
+        self.tmpcontext = Some(MemoryContext::new_wholesale("SerializeTupleReceive"));
         self.buf = Some(StringInfo::new_in(self.mcx)?);
         self.metrics = SerializeMetrics::default();
         Ok(())

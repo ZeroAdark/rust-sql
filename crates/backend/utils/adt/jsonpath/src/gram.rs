@@ -1,9 +1,8 @@
-//! Hand-written recursive-descent equivalent of the bison grammar in
-//! jsonpath_gram.y (small, unambiguous under the declared precedences; the
-//! reductions and makeItem* actions are mirrored 1:1). Produces the
-//! JsonPathParseItem tree the flattener consumes. Nodes are leaked into the
-//! caller's mcx (C's palloc model, bulk-freed at context reset), so the tree
-//! is drop-free.
+//! jsonpath_gram.y: Bison 2.3's LALR(1) tables driven by the yacc.c
+//! skeleton's loop, with the grammar actions mirrored 1:1. The state and value
+//! stacks live in the heap (no native recursion) and overflow exactly as
+//! Bison's do at YYMAXDEPTH. Nodes are leaked into the caller's mcx (C's
+//! palloc model, bulk-freed at context reset), so the tree is drop-free.
 
 use core::cell::Cell;
 
@@ -15,7 +14,10 @@ use ::types_error::{
 };
 
 use crate::path::ItemType;
-use crate::scan::{jsonpath_yyerror, jsonpath_yyerror_yytext, Lexeme, Lexer, Token};
+use crate::gram_tables::{
+    YYCHECK, YYDEFACT, YYDEFGOTO, YYPACT, YYPGOTO, YYR1, YYR2, YYTABLE, YYTRANSLATE,
+};
+use crate::scan::{jsonpath_yyerror, jsonpath_yyerror_yytext, Lexer, Token};
 
 pub struct ParseItem<'mcx> {
     pub typ: ItemType,
@@ -234,6 +236,8 @@ fn make_item_like_regex<'mcx>(
 
     // C: validity check only — pg_regcomp + pg_regfree over the wide pattern.
     let wpattern = mbutils::pg_mb2wchar_with_len(mcx, pattern)?;
+    // regcomp.c:403: pg_regcomp compiles under its collation's ctype.
+    regex_core::regex_locale::pg_set_regex_collation(mcx, DEFAULT_COLLATION_OID)?;
     if let Err(e) =
         regex_core::regex_compile::pg_regcomp(mcx, &wpattern, cflags, DEFAULT_COLLATION_OID)
     {
@@ -295,966 +299,371 @@ pub fn jsp_convert_regex_flags(
     Ok(Some(cflags))
 }
 
-/// Syntactic class of a completed subparse — bison's expr vs predicate
-/// nonterminals. Not derivable from the head item type ('(' predicate ')'
-/// followed by an accessor_op is an expr).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Expr,
-    Pred,
+const YYFINAL: i32 = 5;
+const YYLAST: i32 = 239;
+const YYNTOKENS: i32 = 68;
+const YYPACT_NINF: i16 = -47;
+const YYTABLE_NINF: i16 = -137;
+const YYINITDEPTH: usize = 200;
+const YYMAXDEPTH: usize = 10000;
+const YYEOF: i32 = 0;
+
+fn yytranslate(tok: Token) -> i32 {
+    let code: usize = match tok {
+        Token::Char(c) => c as usize,
+        Token::ToP => 258,
+        Token::NullP => 259,
+        Token::TrueP => 260,
+        Token::FalseP => 261,
+        Token::IsP => 262,
+        Token::UnknownP => 263,
+        Token::ExistsP => 264,
+        Token::IdentP => 265,
+        Token::StringP => 266,
+        Token::NumericP => 267,
+        Token::IntP => 268,
+        Token::VariableP => 269,
+        Token::OrP => 270,
+        Token::AndP => 271,
+        Token::NotP => 272,
+        Token::LessP => 273,
+        Token::LessEqualP => 274,
+        Token::EqualP => 275,
+        Token::NotEqualP => 276,
+        Token::GreaterEqualP => 277,
+        Token::GreaterP => 278,
+        Token::AnyP => 279,
+        Token::StrictP => 280,
+        Token::LaxP => 281,
+        Token::LastP => 282,
+        Token::StartsP => 283,
+        Token::WithP => 284,
+        Token::LikeRegexP => 285,
+        Token::FlagP => 286,
+        Token::AbsP => 287,
+        Token::SizeP => 288,
+        Token::TypeP => 289,
+        Token::FloorP => 290,
+        Token::DoubleP => 291,
+        Token::CeilingP => 292,
+        Token::KeyValueP => 293,
+        Token::DatetimeP => 294,
+        Token::BigintP => 295,
+        Token::BooleanP => 296,
+        Token::DateP => 297,
+        Token::DecimalP => 298,
+        Token::IntegerP => 299,
+        Token::NumberP => 300,
+        Token::StringFuncP => 301,
+        Token::TimeP => 302,
+        Token::TimeTzP => 303,
+        Token::TimestampP => 304,
+        Token::TimestampTzP => 305,
+    };
+    YYTRANSLATE[code] as i32
 }
 
-use Kind::{Expr, Pred};
+/// C's List of parse items (list_make1 / lappend), arena cells.
+struct ListCell<'mcx> {
+    item: Item<'mcx>,
+    next: Cell<Option<&'mcx ListCell<'mcx>>>,
+}
+
+#[derive(Clone, Copy)]
+struct List<'mcx> {
+    head: &'mcx ListCell<'mcx>,
+    tail: &'mcx ListCell<'mcx>,
+}
+
+impl<'mcx> List<'mcx> {
+    fn items_in(self, mcx: Mcx<'mcx>) -> PgResult<PgVec<'mcx, Item<'mcx>>> {
+        let mut v = PgVec::new_in(mcx);
+        let mut c = Some(self.head);
+        while let Some(cell) = c {
+            ::mcx::pgvec_reserve(&mut v, 1)?;
+            v.push(cell.item);
+            c = cell.next.get();
+        }
+        Ok(v)
+    }
+}
+
+/// YYSTYPE: the %union members the grammar's symbols carry.
+#[derive(Clone, Copy)]
+enum Value<'mcx> {
+    Empty,
+    Str(&'mcx [u8]),
+    Item(Item<'mcx>),
+    OptItem(Option<Item<'mcx>>),
+    Bool(bool),
+    Op(ItemType),
+    Int(i32),
+    List(Option<List<'mcx>>),
+}
+
+fn take<'mcx>(v: &mut Value<'mcx>) -> Value<'mcx> {
+    core::mem::replace(v, Value::Empty)
+}
+
+fn v_str<'mcx>(v: &mut Value<'mcx>) -> &'mcx [u8] {
+    match take(v) {
+        Value::Str(s) => s,
+        _ => unreachable!("grammar symbol is not a token string"),
+    }
+}
+
+fn v_item<'mcx>(v: &mut Value<'mcx>) -> Item<'mcx> {
+    match take(v) {
+        Value::Item(i) => i,
+        _ => unreachable!("grammar symbol is not an item"),
+    }
+}
+
+fn v_opt_item<'mcx>(v: &mut Value<'mcx>) -> Option<Item<'mcx>> {
+    match take(v) {
+        Value::OptItem(i) => i,
+        _ => unreachable!("grammar symbol is not an optional item"),
+    }
+}
+
+fn v_list<'mcx>(v: &mut Value<'mcx>) -> Option<List<'mcx>> {
+    match take(v) {
+        Value::List(l) => l,
+        _ => unreachable!("grammar symbol is not an item list"),
+    }
+}
+
+fn v_op(v: &mut Value<'_>) -> ItemType {
+    match take(v) {
+        Value::Op(t) => t,
+        _ => unreachable!("grammar symbol is not an item type"),
+    }
+}
+
+fn v_int(v: &mut Value<'_>) -> i32 {
+    match take(v) {
+        Value::Int(n) => n,
+        _ => unreachable!("grammar symbol is not an integer"),
+    }
+}
+
+fn v_bool(v: &mut Value<'_>) -> bool {
+    match take(v) {
+        Value::Bool(b) => b,
+        _ => unreachable!("grammar symbol is not a boolean"),
+    }
+}
+
+fn list_cell<'mcx>(mcx: Mcx<'mcx>, item: Item<'mcx>) -> PgResult<&'mcx ListCell<'mcx>> {
+    Ok(leak_in(alloc_in(mcx, ListCell { item, next: Cell::new(None) })?))
+}
+
+fn list_make1<'mcx>(mcx: Mcx<'mcx>, a: Item<'mcx>) -> PgResult<Value<'mcx>> {
+    let c = list_cell(mcx, a)?;
+    Ok(Value::List(Some(List { head: c, tail: c })))
+}
+
+fn lappend<'mcx>(mcx: Mcx<'mcx>, l: Option<List<'mcx>>, a: Item<'mcx>) -> PgResult<Value<'mcx>> {
+    let l = l.expect("lappend target is a non-empty list");
+    let c = list_cell(mcx, a)?;
+    l.tail.next.set(Some(c));
+    Ok(Value::List(Some(List { head: l.head, tail: c })))
+}
 
 struct Parser<'a, 'e, 's, 'mcx> {
     mcx: Mcx<'mcx>,
     lexer: Lexer<'a, 'mcx>,
-    /// One-token lookahead (bison's), pulled lazily so scanner errors fire in
-    /// C's order. None = not fetched; Some(None) = end of token stream.
-    lookahead: Option<Option<Lexeme<'mcx>>>,
     escontext: &'e mut Option<&'s mut SoftErrorContext>,
-    aborted: bool,
+    result: Option<ParseResult<'mcx>>,
 }
-
-type PK<'mcx> = (Item<'mcx>, Kind);
 
 impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
-    /// RECURSION GUARD (no C-line counterpart in jsonpath_gram.y — see below).
-    ///
-    /// C 18.3's parser is BISON-generated: its parse/value stacks live on the
-    /// HEAP, bounded by YYMAXDEPTH, and exhaustion is a clean soft-errorable
-    /// 42601 "memory exhausted" (jsonpath_yyerror). This hand-written
-    /// recursive-descent port recurses on the NATIVE stack instead, so without
-    /// a guard a deep-enough nesting aborts the whole (thread-per-backend,
-    /// single-process) server: measured pre-fix on the release build with the
-    /// 8 MiB backend stack, `('('*N || '1' || ')'*N)::jsonpath` was OK at
-    /// N=8000 and `fatal runtime error: stack overflow` at N=12000, while real
-    /// PG 18.3 (docker, verbose) parses up to N=9995 and errors 42601 from
-    /// N=9996 (= YYMAXDEPTH).
-    ///
-    /// PARITY DECISION (option (a) of the lane charter): guard with the
-    /// crate-standard check_stack_depth (ERRCODE_STATEMENT_TOO_COMPLEX 54001,
-    /// threshold = max_stack_depth), exactly like the FLATTEN and PRINT walks
-    /// in jsonpath.c:249/529 / path.rs:188/835. We do NOT fabricate C's 42601
-    /// "memory exhausted": mirroring bison's bound exactly would require
-    /// emulating per-production LALR stack growth (the entry count per nesting
-    /// level differs by shape), and an inexact mirror would misclassify inputs
-    /// in the region PG still accepts. Residual (documented in
-    /// fuzz/README-TODO-jsonpath_diff.md, divergence 2): in the deep region
-    /// both sides raise a clean, soft-errorable error, but the errcode (54001
-    /// vs 42601) and the threshold (max_stack_depth bytes vs YYMAXDEPTH
-    /// entries) differ. The region lies far outside the differential's
-    /// MAX_TEXT=512 domain on server-shaped thresholds.
-    ///
-    /// PLACEMENT — one check in parse_unary + one in
-    /// parse_delimited_predicate makes the bound TOTAL, and no single check
-    /// can. The recursive (back-edge) calls of this parser are exactly:
-    /// parse_paren_primary->parse_or, parse_delimited_predicate->{parse_or,
-    /// parse_additive}, parse_accessor_op->parse_or (filter),
-    /// parse_index_elem->parse_additive, parse_comparison->parse_additive
-    /// (rhs), parse_expr_primary->parse_delimited_predicate,
-    /// parse_not->parse_delimited_predicate, and parse_unary->parse_unary.
-    /// Deleting {parse_unary, parse_delimited_predicate} from the call graph
-    /// leaves it acyclic: descending from parse_or or parse_additive, every
-    /// path to any back-edge goes through parse_multiplicative->parse_unary
-    /// or through parse_not->parse_delimited_predicate, and the two leftover
-    /// self-contained cycles (the unary +/- chain and the !(...) chain) each
-    /// contain one of the two directly. Neither check alone suffices: the
-    /// !(!(...)) cycle {not, delimited_predicate, or, and, comparison} and
-    /// the unary-chain cycle {unary} are vertex-disjoint.
-    ///
-    /// ERROR PLUMBING: matches the crate's other in-parser reports (see
-    /// parse_decimal_args) — with an armed escontext the error is recorded
-    /// softly and `aborted` stops parsejsonpath from overwriting it with a
-    /// generic syntax error; without one it raises as a hard PgError. It never
-    /// surfaces as a bare Ok(None) backtrack: `aborted` is checked before any
-    /// alternative could be reported as success.
-    fn check_depth(&mut self) -> POut<()> {
-        match ::stack_depth::check_stack_depth() {
-            Ok(()) => Ok(Some(())),
-            Err(e) => {
-                self.aborted = true;
-                ereturn(self.escontext.as_deref_mut(), None, *e)
-            }
-        }
-    }
-
-    fn fill(&mut self) -> PgResult<()> {
-        if self.lookahead.is_none() {
-            self.lookahead = Some(self.lexer.next_token(self.escontext)?);
-        }
-        Ok(())
-    }
-
-    fn peek_tok(&mut self) -> PgResult<Option<Token>> {
-        self.fill()?;
-        Ok(self.lookahead.as_ref().unwrap().as_ref().map(|l| l.token))
-    }
-
-    fn at_eof(&mut self) -> PgResult<bool> {
-        Ok(self.peek_tok()?.is_none())
-    }
-
-    fn at_char(&mut self, c: u8) -> PgResult<bool> {
-        Ok(matches!(self.peek_tok()?, Some(Token::Char(x)) if x == c))
-    }
-
-    fn advance(&mut self) {
-        debug_assert!(matches!(self.lookahead, Some(Some(_))));
-        self.lookahead = None;
-    }
-
-    // jsonpath_gram.y: expr never starts with EXISTS_P (only a predicate
-    // does), so bison rejects the lookahead before the operand is parsed.
-    fn expr_start(&mut self) -> PgResult<bool> {
-        Ok(self.peek_tok()? != Some(Token::ExistsP))
-    }
-
-    fn expect_char(&mut self, c: u8) -> POut<()> {
-        if self.at_char(c)? {
-            self.advance();
-            Ok(Some(()))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn expect(&mut self, t: Token) -> POut<()> {
-        if self.peek_tok()? == Some(t) {
-            self.advance();
-            Ok(Some(()))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn take_str(&mut self) -> &'mcx [u8] {
-        let l = self
-            .lookahead
-            .as_mut()
-            .expect("take_str without lookahead")
-            .as_mut()
-            .expect("take_str at end of stream");
-        let v = l.value.take().unwrap_or(&[]);
-        self.lookahead = None;
-        v
-    }
-
-    /// Byte span of the current (fetched) lookahead — bison's yytext at the
-    /// point of a syntax error.
-    fn current_span(&self) -> Option<(usize, usize)> {
-        match &self.lookahead {
-            Some(Some(l)) => Some((l.start, l.end)),
-            _ => None,
-        }
-    }
-
-    fn parse_result(&mut self) -> POut<Option<ParseResult<'mcx>>> {
-        // result: /* EMPTY */ -> NULL.
-        if self.at_eof()? {
-            return Ok(Some(None));
-        }
-
-        let lax = match self.peek_tok()? {
-            Some(Token::StrictP) => {
-                self.advance();
-                false
-            }
-            Some(Token::LaxP) => {
-                self.advance();
-                true
-            }
-            _ => true,
-        };
-
-        let (expr, _kind) = match self.parse_or()? {
-            Some(e) => e,
-            None => return Ok(None),
-        };
-        if self.aborted {
-            return Ok(None);
-        }
-        if !self.at_eof()? {
-            return Ok(None);
-        }
-        Ok(Some(Some(ParseResult { expr, lax })))
-    }
-
-    // expr_or_predicate — the full climb; Kind carries which nonterminal the
-    // subparse completed as, and each operator arm enforces bison's
-    // expr-vs-predicate operand classes (wrong class = stop at the operator
-    // token, exactly where the LALR tables error).
-
-    fn parse_or(&mut self) -> POut<PK<'mcx>> {
-        let (mut left, mut lkind) = match self.parse_and()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        while self.peek_tok()? == Some(Token::OrP) {
-            if lkind != Pred {
-                break;
-            }
-            self.advance();
-            let (right, rkind) = match self.parse_and()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if rkind != Pred {
-                return Ok(None);
-            }
-            left = make_item_binary(self.mcx, ItemType::Or, Some(left), Some(right))?;
-            lkind = Pred;
-        }
-        Ok(Some((left, lkind)))
-    }
-
-    fn parse_and(&mut self) -> POut<PK<'mcx>> {
-        let (mut left, mut lkind) = match self.parse_comparison()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        while self.peek_tok()? == Some(Token::AndP) {
-            if lkind != Pred {
-                break;
-            }
-            self.advance();
-            let (right, rkind) = match self.parse_comparison()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if rkind != Pred {
-                return Ok(None);
-            }
-            left = make_item_binary(self.mcx, ItemType::And, Some(left), Some(right))?;
-            lkind = Pred;
-        }
-        Ok(Some((left, lkind)))
-    }
-
-    fn parse_comparison(&mut self) -> POut<PK<'mcx>> {
-        let (left, lkind) = match self.parse_not()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-
-        if lkind == Expr {
-            if let Some(op) = self.comp_op()? {
-                self.advance();
-                if !self.expr_start()? {
-                    return Ok(None);
-                }
-                let (right, rkind) = match self.parse_additive()? {
-                    Some(v) => v,
-                    None => return Ok(None),
-                };
-                if rkind != Expr {
-                    return Ok(None);
-                }
-                return Ok(Some((
-                    make_item_binary(self.mcx, op, Some(left), Some(right))?,
-                    Pred,
-                )));
-            }
-
-            if self.peek_tok()? == Some(Token::StartsP) {
-                self.advance();
-                if self.expect(Token::WithP)?.is_none() {
-                    return Ok(None);
-                }
-                let init = match self.parse_starts_with_initial()? {
-                    Some(v) => v,
-                    None => return Ok(None),
-                };
-                return Ok(Some((
-                    make_item_binary(self.mcx, ItemType::StartsWith, Some(left), Some(init))?,
-                    Pred,
-                )));
-            }
-
-            if self.peek_tok()? == Some(Token::LikeRegexP) {
-                self.advance();
-                if self.peek_tok()? != Some(Token::StringP) {
-                    return Ok(None);
-                }
-                let pattern = self.take_str();
-                let flags = if self.peek_tok()? == Some(Token::FlagP) {
-                    self.advance();
-                    if self.peek_tok()? != Some(Token::StringP) {
-                        return Ok(None);
-                    }
-                    Some(self.take_str())
-                } else {
-                    None
-                };
-                let res =
-                    make_item_like_regex(self.mcx, Some(left), pattern, flags, self.escontext)?;
-                match res {
-                    Some(v) => return Ok(Some((v, Pred))),
-                    None => {
-                        self.aborted = true;
-                        return Ok(None);
-                    }
-                }
-            }
-        }
-
-        Ok(Some((left, lkind)))
-    }
-
-    fn comp_op(&mut self) -> PgResult<Option<ItemType>> {
-        Ok(match self.peek_tok()? {
-            Some(Token::EqualP) => Some(ItemType::Equal),
-            Some(Token::NotEqualP) => Some(ItemType::NotEqual),
-            Some(Token::LessP) => Some(ItemType::Less),
-            Some(Token::GreaterP) => Some(ItemType::Greater),
-            Some(Token::LessEqualP) => Some(ItemType::LessOrEqual),
-            Some(Token::GreaterEqualP) => Some(ItemType::GreaterOrEqual),
-            _ => None,
-        })
-    }
-
-    fn parse_not(&mut self) -> POut<PK<'mcx>> {
-        if self.peek_tok()? == Some(Token::NotP) {
-            self.advance();
-            let p = match self.parse_delimited_predicate()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            return Ok(Some((make_item_unary(self.mcx, ItemType::Not, p)?, Pred)));
-        }
-        self.parse_additive()
-    }
-
-    fn parse_additive(&mut self) -> POut<PK<'mcx>> {
-        let (mut left, mut lkind) = match self.parse_multiplicative()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        loop {
-            let op = if self.at_char(b'+')? {
-                ItemType::Add
-            } else if self.at_char(b'-')? {
-                ItemType::Sub
-            } else {
-                break;
-            };
-            if lkind != Expr {
-                break;
-            }
-            self.advance();
-            if !self.expr_start()? {
-                return Ok(None);
-            }
-            let (right, rkind) = match self.parse_multiplicative()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if rkind != Expr {
-                return Ok(None);
-            }
-            left = make_item_binary(self.mcx, op, Some(left), Some(right))?;
-            lkind = Expr;
-        }
-        Ok(Some((left, lkind)))
-    }
-
-    fn parse_multiplicative(&mut self) -> POut<PK<'mcx>> {
-        let (mut left, mut lkind) = match self.parse_unary()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        loop {
-            let op = if self.at_char(b'*')? {
-                ItemType::Mul
-            } else if self.at_char(b'/')? {
-                ItemType::Div
-            } else if self.at_char(b'%')? {
-                ItemType::Mod
-            } else {
-                break;
-            };
-            if lkind != Expr {
-                break;
-            }
-            self.advance();
-            if !self.expr_start()? {
-                return Ok(None);
-            }
-            let (right, rkind) = match self.parse_unary()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if rkind != Expr {
-                return Ok(None);
-            }
-            left = make_item_binary(self.mcx, op, Some(left), Some(right))?;
-            lkind = Expr;
-        }
-        Ok(Some((left, lkind)))
-    }
-
-    fn parse_unary(&mut self) -> POut<PK<'mcx>> {
-        // Recursion guard leg 1 of 2 — see check_depth for the totality proof.
-        if self.check_depth()?.is_none() {
-            return Ok(None);
-        }
-        if self.at_char(b'+')? {
-            self.advance();
-            if !self.expr_start()? {
-                return Ok(None);
-            }
-            let (e, k) = match self.parse_unary()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if k != Expr {
-                return Ok(None);
-            }
-            return Ok(Some((make_item_unary(self.mcx, ItemType::Plus, e)?, Expr)));
-        }
-        if self.at_char(b'-')? {
-            self.advance();
-            if !self.expr_start()? {
-                return Ok(None);
-            }
-            let (e, k) = match self.parse_unary()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if k != Expr {
-                return Ok(None);
-            }
-            return Ok(Some((make_item_unary(self.mcx, ItemType::Minus, e)?, Expr)));
-        }
-        self.parse_expr_primary()
-    }
-
-    fn parse_expr_primary(&mut self) -> POut<PK<'mcx>> {
-        if self.peek_tok()? == Some(Token::ExistsP) {
-            return Ok(self.parse_delimited_predicate()?.map(|p| (p, Pred)));
-        }
-        if self.at_char(b'(')? {
-            return self.parse_paren_primary();
-        }
-        Ok(self.parse_accessor_expr()?.map(|e| (e, Expr)))
-    }
-
-    fn parse_paren_primary(&mut self) -> POut<PK<'mcx>> {
-        self.advance();
-        let (inner, kind) = match self.parse_or()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        if self.expect_char(b')')?.is_none() {
-            return Ok(None);
-        }
-
-        // '(' predicate ')' IS_P UNKNOWN_P.
-        if self.peek_tok()? == Some(Token::IsP) {
-            if kind != Pred {
-                return Ok(None);
-            }
-            self.advance();
-            if self.expect(Token::UnknownP)?.is_none() {
-                return Ok(None);
-            }
-            return Ok(Some((
-                make_item_unary(self.mcx, ItemType::IsUnknown, inner)?,
-                Pred,
-            )));
-        }
-
-        // '(' expr|predicate ')' accessor_op* — an accessor_expr (expr).
-        if self.at_accessor_op_start()? {
-            let mut list: PgVec<'mcx, Item<'mcx>> = PgVec::new_in(self.mcx);
-            list.push(inner);
-            while self.at_accessor_op_start()? {
-                let op = match self.parse_accessor_op()? {
-                    Some(v) => v,
-                    None => return Ok(None),
-                };
-                list.push(op);
-            }
-            return Ok(Some((make_item_list(&list), Expr)));
-        }
-
-        Ok(Some((inner, kind)))
-    }
-
-    fn parse_accessor_expr(&mut self) -> POut<Item<'mcx>> {
-        let head = match self.parse_path_primary()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        let mut list: PgVec<'mcx, Item<'mcx>> = PgVec::new_in(self.mcx);
-        list.push(head);
-        while self.at_accessor_op_start()? {
-            let op = match self.parse_accessor_op()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            list.push(op);
-        }
-        Ok(Some(make_item_list(&list)))
-    }
-
-    fn parse_delimited_predicate(&mut self) -> POut<Item<'mcx>> {
-        // Recursion guard leg 2 of 2 — see check_depth for the totality proof.
-        if self.check_depth()?.is_none() {
-            return Ok(None);
-        }
-        // EXISTS_P '(' expr ')' — expr only.
-        if self.peek_tok()? == Some(Token::ExistsP) {
-            self.advance();
-            if self.expect_char(b'(')?.is_none() {
-                return Ok(None);
-            }
-            if !self.expr_start()? {
-                return Ok(None);
-            }
-            let (e, k) = match self.parse_additive()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if k != Expr {
-                return Ok(None);
-            }
-            if self.expect_char(b')')?.is_none() {
-                return Ok(None);
-            }
-            return Ok(Some(make_item_unary(self.mcx, ItemType::Exists, e)?));
-        }
-        // '(' predicate ')'.
-        if self.at_char(b'(')? {
-            self.advance();
-            let (p, k) = match self.parse_or()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if k != Pred {
-                return Ok(None);
-            }
-            if self.expect_char(b')')?.is_none() {
-                return Ok(None);
-            }
-            return Ok(Some(p));
-        }
-        Ok(None)
-    }
-
-    fn parse_starts_with_initial(&mut self) -> POut<Item<'mcx>> {
-        match self.peek_tok()? {
-            Some(Token::StringP) => {
-                let s = self.take_str();
-                Ok(Some(make_item_string(self.mcx, Some(s))?))
-            }
-            Some(Token::VariableP) => {
-                let s = self.take_str();
-                Ok(Some(make_item_variable(self.mcx, s)?))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn parse_path_primary(&mut self) -> POut<Item<'mcx>> {
-        match self.peek_tok()? {
-            Some(Token::StringP) => {
-                let s = self.take_str();
-                Ok(Some(make_item_string(self.mcx, Some(s))?))
-            }
-            Some(Token::NullP) => {
-                self.advance();
-                Ok(Some(make_item_string(self.mcx, None)?))
-            }
-            Some(Token::TrueP) => {
-                self.advance();
-                Ok(Some(make_item_bool(self.mcx, true)?))
-            }
-            Some(Token::FalseP) => {
-                self.advance();
-                Ok(Some(make_item_bool(self.mcx, false)?))
-            }
-            Some(Token::NumericP) | Some(Token::IntP) => {
-                let s = self.take_str();
-                Ok(Some(make_item_numeric(self.mcx, s)?))
-            }
-            Some(Token::VariableP) => {
-                let s = self.take_str();
-                Ok(Some(make_item_variable(self.mcx, s)?))
-            }
-            Some(Token::Char(b'$')) => {
-                self.advance();
-                Ok(Some(make_item_type(self.mcx, ItemType::Root)?))
-            }
-            Some(Token::Char(b'@')) => {
-                self.advance();
-                Ok(Some(make_item_type(self.mcx, ItemType::Current)?))
-            }
-            Some(Token::LastP) => {
-                self.advance();
-                Ok(Some(make_item_type(self.mcx, ItemType::Last)?))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn at_accessor_op_start(&mut self) -> PgResult<bool> {
-        Ok(self.at_char(b'.')? || self.at_char(b'[')? || self.at_char(b'?')?)
-    }
-
-    fn parse_accessor_op(&mut self) -> POut<Item<'mcx>> {
-        if self.at_char(b'[')? {
-            return self.parse_array_accessor();
-        }
-
-        // '?' '(' predicate ')' -> Filter.
-        if self.at_char(b'?')? {
-            self.advance();
-            if self.expect_char(b'(')?.is_none() {
-                return Ok(None);
-            }
-            let (p, k) = match self.parse_or()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if k != Pred {
-                return Ok(None);
-            }
-            if self.expect_char(b')')?.is_none() {
-                return Ok(None);
-            }
-            return Ok(Some(make_item_unary(self.mcx, ItemType::Filter, p)?));
-        }
-
-        if self.expect_char(b'.')?.is_none() {
-            return Ok(None);
-        }
-
-        if self.at_char(b'*')? {
-            self.advance();
-            return Ok(Some(make_item_type(self.mcx, ItemType::AnyKey)?));
-        }
-
-        if self.peek_tok()? == Some(Token::AnyP) {
-            return self.parse_any_path();
-        }
-
-        // Method-form keywords: LALR shifts the keyword, then '(' selects the
-        // method production; any other lookahead reduces key_name.
-        let tok = self.peek_tok()?;
-        if let Some(tok) = tok {
-            if let Some(m) = method_optype(tok) {
-                let s = self.take_str();
-                if !self.at_char(b'(')? {
-                    return Ok(Some(make_item_key(self.mcx, s)?));
-                }
-                self.advance();
-                if self.expect_char(b')')?.is_none() {
-                    return Ok(None);
-                }
-                return Ok(Some(make_item_type(self.mcx, m)?));
-            }
-
-            if tok == Token::DecimalP {
-                let s = self.take_str();
-                if !self.at_char(b'(')? {
-                    return Ok(Some(make_item_key(self.mcx, s)?));
-                }
-                return self.parse_decimal_args();
-            }
-
-            if tok == Token::DatetimeP {
-                let s = self.take_str();
-                if !self.at_char(b'(')? {
-                    return Ok(Some(make_item_key(self.mcx, s)?));
-                }
-                self.advance();
-                // opt_datetime_template: STRING_P | empty.
-                let arg = if self.peek_tok()? == Some(Token::StringP) {
-                    let t = self.take_str();
-                    Some(make_item_string(self.mcx, Some(t))?)
-                } else {
-                    None
-                };
-                if self.expect_char(b')')?.is_none() {
-                    return Ok(None);
-                }
-                return Ok(Some(make_item_unary_optional(
-                    self.mcx,
-                    ItemType::Datetime,
-                    arg,
-                )?));
-            }
-
-            let dt = match tok {
-                Token::TimeP => Some(ItemType::Time),
-                Token::TimeTzP => Some(ItemType::TimeTz),
-                Token::TimestampP => Some(ItemType::Timestamp),
-                Token::TimestampTzP => Some(ItemType::TimestampTz),
-                _ => None,
-            };
-            if let Some(dt) = dt {
-                let s = self.take_str();
-                if !self.at_char(b'(')? {
-                    return Ok(Some(make_item_key(self.mcx, s)?));
-                }
-                self.advance();
-                // opt_datetime_precision: INT_P | empty.
-                let arg = if self.peek_tok()? == Some(Token::IntP) {
-                    let t = self.take_str();
-                    Some(make_item_numeric(self.mcx, t)?)
-                } else {
-                    None
-                };
-                if self.expect_char(b')')?.is_none() {
-                    return Ok(None);
-                }
-                return Ok(Some(make_item_unary_optional(self.mcx, dt, arg)?));
-            }
-        }
-
-        if let Some(s) = self.try_key_name()? {
-            return Ok(Some(make_item_key(self.mcx, s)?));
-        }
-
-        Ok(None)
-    }
-
-    fn parse_array_accessor(&mut self) -> POut<Item<'mcx>> {
-        self.advance();
-        if self.at_char(b'*')? {
-            self.advance();
-            if self.expect_char(b']')?.is_none() {
-                return Ok(None);
-            }
-            return Ok(Some(make_item_type(self.mcx, ItemType::AnyArray)?));
-        }
-
-        let mut list: PgVec<'mcx, Item<'mcx>> = PgVec::new_in(self.mcx);
-        let first = match self.parse_index_elem()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        list.push(first);
-        while self.at_char(b',')? {
-            self.advance();
-            let e = match self.parse_index_elem()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            list.push(e);
-        }
-        if self.expect_char(b']')?.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(make_index_array(self.mcx, list)?))
-    }
-
-    /// index_elem: expr | expr TO_P expr — expr only.
-    fn parse_index_elem(&mut self) -> POut<Item<'mcx>> {
-        if !self.expr_start()? {
-            return Ok(None);
-        }
-        let (from, fk) = match self.parse_additive()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        if fk != Expr {
-            return Ok(None);
-        }
-        if self.peek_tok()? == Some(Token::ToP) {
-            self.advance();
-            if !self.expr_start()? {
-                return Ok(None);
-            }
-            let (to, tk) = match self.parse_additive()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if tk != Expr {
-                return Ok(None);
-            }
-            return Ok(Some(make_item_binary(
-                self.mcx,
-                ItemType::Subscript,
-                Some(from),
-                Some(to),
-            )?));
-        }
-        Ok(Some(make_item_binary(self.mcx, ItemType::Subscript, Some(from), None)?))
-    }
-
-    fn parse_any_path(&mut self) -> POut<Item<'mcx>> {
-        self.advance();
-        if !self.at_char(b'{')? {
-            return Ok(Some(make_any(self.mcx, 0, -1)?));
-        }
-        self.advance();
-        let first = match self.parse_any_level()? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        if self.peek_tok()? == Some(Token::ToP) {
-            self.advance();
-            let last = match self.parse_any_level()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            if self.expect_char(b'}')?.is_none() {
-                return Ok(None);
-            }
-            return Ok(Some(make_any(self.mcx, first, last)?));
-        }
-        if self.expect_char(b'}')?.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(make_any(self.mcx, first, first)?))
-    }
-
-    fn parse_any_level(&mut self) -> POut<i32> {
-        match self.peek_tok()? {
-            Some(Token::IntP) => {
-                let s = self.take_str();
-                let text = core::str::from_utf8(s).expect("scanner ints are ASCII");
-                let n = numutils::pg_strtoint32(text)?;
-                Ok(Some(n))
-            }
-            Some(Token::LastP) => {
-                self.advance();
-                Ok(Some(-1))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    /// '.' DECIMAL_P '(' opt_csv_list ')' — keyword already consumed, '('
-    /// peeked-present.
-    fn parse_decimal_args(&mut self) -> POut<Item<'mcx>> {
-        self.advance();
-        let mut list: PgVec<'mcx, Item<'mcx>> = PgVec::new_in(self.mcx);
-        if !self.at_char(b')')? {
-            let first = match self.parse_csv_elem()? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            list.push(first);
-            while self.at_char(b',')? {
-                self.advance();
-                let e = match self.parse_csv_elem()? {
-                    Some(v) => v,
-                    None => return Ok(None),
-                };
-                list.push(e);
-            }
-        }
-        if self.expect_char(b')')?.is_none() {
-            return Ok(None);
-        }
-
-        match list.len() {
-            0 => Ok(Some(make_item_binary(self.mcx, ItemType::Decimal, None, None)?)),
-            1 => {
-                let a = list.pop();
-                Ok(Some(make_item_binary(self.mcx, ItemType::Decimal, a, None)?))
-            }
+    /// The grammar actions. Ok(None) = YYABORT after a soft error.
+    fn reduce(&mut self, rule: u8, rhs: &mut [Value<'mcx>]) -> PgResult<Option<Value<'mcx>>> {
+        use ItemType as T;
+        let mcx = self.mcx;
+        let item = |i: Item<'mcx>| Value::Item(i);
+        let v = match rule {
             2 => {
-                let b = list.pop();
-                let a = list.pop();
-                Ok(Some(make_item_binary(self.mcx, ItemType::Decimal, a, b)?))
+                let lax = v_bool(&mut rhs[0]);
+                let expr = v_item(&mut rhs[1]);
+                self.result = Some(ParseResult { expr, lax });
+                Value::Empty
             }
-            _ => {
-                let r: POut<Item<'mcx>> = ereturn(
-                    self.escontext.as_deref_mut(),
-                    None,
-                    PgError::error("invalid input syntax for type jsonpath")
-                        .with_sqlstate(ERRCODE_SYNTAX_ERROR)
-                        .with_detail(".decimal() can only have an optional precision[,scale]."),
-                );
-                self.aborted = true;
-                r
+            3 => {
+                self.result = None;
+                Value::Empty
             }
-        }
-    }
-
-    fn parse_csv_elem(&mut self) -> POut<Item<'mcx>> {
-        if self.at_char(b'+')? {
-            self.advance();
-            if self.peek_tok()? != Some(Token::IntP) {
-                return Ok(None);
+            4 | 5 | 24 | 35 | 65 | 80 => take(&mut rhs[0]),
+            6 => Value::Bool(false),
+            7 | 8 => Value::Bool(true),
+            9 | 33 | 85 => item(make_item_string(mcx, Some(v_str(&mut rhs[0])))?),
+            10 => item(make_item_string(mcx, None)?),
+            11 => item(make_item_bool(mcx, true)?),
+            12 => item(make_item_bool(mcx, false)?),
+            13 | 14 | 75 | 82 => item(make_item_numeric(mcx, v_str(&mut rhs[0]))?),
+            15 | 34 => item(make_item_variable(mcx, v_str(&mut rhs[0]))?),
+            16 => Value::Op(T::Equal),
+            17 => Value::Op(T::NotEqual),
+            18 => Value::Op(T::Less),
+            19 => Value::Op(T::Greater),
+            20 => Value::Op(T::LessOrEqual),
+            21 => Value::Op(T::GreaterOrEqual),
+            22 | 44 | 63 | 66 => take(&mut rhs[1]),
+            23 => item(make_item_unary(mcx, T::Exists, v_item(&mut rhs[2]))?),
+            25 => {
+                let op = v_op(&mut rhs[1]);
+                let (l, r) = (v_item(&mut rhs[0]), v_item(&mut rhs[2]));
+                item(make_item_binary(mcx, op, Some(l), Some(r))?)
             }
-            let s = self.take_str();
-            let num = make_item_numeric(self.mcx, s)?;
-            return Ok(Some(make_item_unary(self.mcx, ItemType::Plus, num)?));
-        }
-        if self.at_char(b'-')? {
-            self.advance();
-            if self.peek_tok()? != Some(Token::IntP) {
-                return Ok(None);
+            26 | 27 | 47 | 48 | 49 | 50 | 51 => {
+                let op = match rule {
+                    26 => T::And,
+                    27 => T::Or,
+                    47 => T::Add,
+                    48 => T::Sub,
+                    49 => T::Mul,
+                    50 => T::Div,
+                    _ => T::Mod,
+                };
+                let (l, r) = (v_item(&mut rhs[0]), v_item(&mut rhs[2]));
+                item(make_item_binary(mcx, op, Some(l), Some(r))?)
             }
-            let s = self.take_str();
-            let num = make_item_numeric(self.mcx, s)?;
-            return Ok(Some(make_item_unary(self.mcx, ItemType::Minus, num)?));
-        }
-        if self.peek_tok()? == Some(Token::IntP) {
-            let s = self.take_str();
-            return Ok(Some(make_item_numeric(self.mcx, s)?));
-        }
-        Ok(None)
-    }
-
-    fn try_key_name(&mut self) -> PgResult<Option<&'mcx [u8]>> {
-        let Some(tok) = self.peek_tok()? else {
-            return Ok(None);
+            28 => item(make_item_unary(mcx, T::Not, v_item(&mut rhs[1]))?),
+            29 => item(make_item_unary(mcx, T::IsUnknown, v_item(&mut rhs[1]))?),
+            30 => {
+                let (l, r) = (v_item(&mut rhs[0]), v_item(&mut rhs[3]));
+                item(make_item_binary(mcx, T::StartsWith, Some(l), Some(r))?)
+            }
+            31 | 32 => {
+                let expr = v_item(&mut rhs[0]);
+                let pattern = v_str(&mut rhs[2]);
+                let flags = if rule == 32 { Some(v_str(&mut rhs[4])) } else { None };
+                match make_item_like_regex(mcx, Some(expr), pattern, flags, self.escontext)? {
+                    Some(i) => item(i),
+                    None => return Ok(None),
+                }
+            }
+            36 => item(make_item_type(mcx, T::Root)?),
+            37 => item(make_item_type(mcx, T::Current)?),
+            38 => item(make_item_type(mcx, T::Last)?),
+            39 | 54 | 78 => list_make1(mcx, v_item(&mut rhs[0]))?,
+            40 | 41 => {
+                let l = v_list(&mut list_make1(mcx, v_item(&mut rhs[1]))?);
+                lappend(mcx, l, v_item(&mut rhs[3]))?
+            }
+            42 => {
+                let l = v_list(&mut rhs[0]);
+                lappend(mcx, l, v_item(&mut rhs[1]))?
+            }
+            55 | 79 => {
+                let l = v_list(&mut rhs[0]);
+                lappend(mcx, l, v_item(&mut rhs[2]))?
+            }
+            43 => {
+                let l = v_list(&mut rhs[0]).expect("accessor_expr list is non-empty");
+                item(make_item_list(&l.items_in(mcx)?))
+            }
+            45 => item(make_item_unary(mcx, T::Plus, v_item(&mut rhs[1]))?),
+            46 => item(make_item_unary(mcx, T::Minus, v_item(&mut rhs[1]))?),
+            52 => item(make_item_binary(mcx, T::Subscript, Some(v_item(&mut rhs[0])), None)?),
+            53 => {
+                let (l, r) = (v_item(&mut rhs[0]), v_item(&mut rhs[2]));
+                item(make_item_binary(mcx, T::Subscript, Some(l), Some(r))?)
+            }
+            56 => item(make_item_type(mcx, T::AnyArray)?),
+            57 => {
+                let l = v_list(&mut rhs[1]).expect("index_list is non-empty");
+                item(make_index_array(mcx, l.items_in(mcx)?)?)
+            }
+            58 => {
+                let s = v_str(&mut rhs[0]);
+                let text = core::str::from_utf8(s).expect("scanner ints are ASCII");
+                Value::Int(numutils::pg_strtoint32(text)?)
+            }
+            59 => Value::Int(-1),
+            60 => item(make_any(mcx, 0, -1)?),
+            61 => {
+                let n = v_int(&mut rhs[2]);
+                item(make_any(mcx, n, n)?)
+            }
+            62 => {
+                let (f, l) = (v_int(&mut rhs[2]), v_int(&mut rhs[4]));
+                item(make_any(mcx, f, l)?)
+            }
+            64 => item(make_item_type(mcx, T::AnyKey)?),
+            67 => item(make_item_type(mcx, v_op(&mut rhs[1]))?),
+            68 => item(make_item_unary(mcx, T::Filter, v_item(&mut rhs[2]))?),
+            69 => {
+                let l = match v_list(&mut rhs[3]) {
+                    Some(l) => l.items_in(mcx)?,
+                    None => PgVec::new_in(mcx),
+                };
+                match l.len() {
+                    0 => item(make_item_binary(mcx, T::Decimal, None, None)?),
+                    1 => item(make_item_binary(mcx, T::Decimal, Some(l[0]), None)?),
+                    2 => item(make_item_binary(mcx, T::Decimal, Some(l[0]), Some(l[1]))?),
+                    _ => {
+                        return ereturn(
+                            self.escontext.as_deref_mut(),
+                            None,
+                            PgError::error("invalid input syntax for type jsonpath")
+                                .with_sqlstate(ERRCODE_SYNTAX_ERROR)
+                                .with_detail(
+                                    ".decimal() can only have an optional precision[,scale].",
+                                ),
+                        );
+                    }
+                }
+            }
+            70..=74 => {
+                let op = match rule {
+                    70 => T::Datetime,
+                    71 => T::Time,
+                    72 => T::TimeTz,
+                    73 => T::Timestamp,
+                    _ => T::TimestampTz,
+                };
+                item(make_item_unary_optional(mcx, op, v_opt_item(&mut rhs[3]))?)
+            }
+            76 | 77 => {
+                let num = make_item_numeric(mcx, v_str(&mut rhs[1]))?;
+                let op = if rule == 76 { T::Plus } else { T::Minus };
+                item(make_item_unary(mcx, op, num)?)
+            }
+            81 => Value::List(None),
+            83 | 86 => Value::OptItem(Some(v_item(&mut rhs[0]))),
+            84 | 87 => Value::OptItem(None),
+            88 => item(make_item_key(mcx, v_str(&mut rhs[0]))?),
+            89..=123 => take(&mut rhs[0]),
+            124..=136 => Value::Op(match rule {
+                124 => T::Abs,
+                125 => T::Size,
+                126 => T::Type,
+                127 => T::Floor,
+                128 => T::Double,
+                129 => T::Ceiling,
+                130 => T::KeyValue,
+                131 => T::Bigint,
+                132 => T::Boolean,
+                133 => T::Date,
+                134 => T::Integer,
+                135 => T::Number,
+                _ => T::StringFunc,
+            }),
+            _ => unreachable!("jsonpath grammar has no rule {rule}"),
         };
-        // The method-form keywords are consumed by parse_accessor_op before
-        // this fallback; the remaining key_name tokens:
-        let is_key_name = matches!(
-            tok,
-            Token::IdentP
-                | Token::StringP
-                | Token::ToP
-                | Token::NullP
-                | Token::TrueP
-                | Token::FalseP
-                | Token::IsP
-                | Token::UnknownP
-                | Token::ExistsP
-                | Token::StrictP
-                | Token::LaxP
-                | Token::LastP
-                | Token::StartsP
-                | Token::WithP
-                | Token::LikeRegexP
-                | Token::FlagP
-        );
-        if !is_key_name {
-            return Ok(None);
-        }
-        Ok(Some(self.take_str()))
+        Ok(Some(v))
     }
 }
 
-fn method_optype(tok: Token) -> Option<ItemType> {
-    match tok {
-        Token::AbsP => Some(ItemType::Abs),
-        Token::SizeP => Some(ItemType::Size),
-        Token::TypeP => Some(ItemType::Type),
-        Token::FloorP => Some(ItemType::Floor),
-        Token::DoubleP => Some(ItemType::Double),
-        Token::CeilingP => Some(ItemType::Ceiling),
-        Token::KeyValueP => Some(ItemType::KeyValue),
-        Token::BigintP => Some(ItemType::Bigint),
-        Token::BooleanP => Some(ItemType::Boolean),
-        Token::DateP => Some(ItemType::Date),
-        Token::IntegerP => Some(ItemType::Integer),
-        Token::NumberP => Some(ItemType::Number),
-        Token::StringFuncP => Some(ItemType::StringFunc),
-        _ => None,
-    }
+enum Outcome {
+    Accept,
+    Abort,
+    Error(&'static str),
 }
 
-/// C: parsejsonpath (jsonpath_scan.l) — lex lazily (bison's one-token
-/// lookahead), parse, and on a syntax error report through jsonpath_yyerror.
+/// C: parsejsonpath (jsonpath_scan.l) around yyparse (Bison 2.3 yacc.c).
 /// Ok(None) = empty input / soft error.
 pub fn parsejsonpath<'mcx>(
     mcx: Mcx<'mcx>,
@@ -1265,39 +674,124 @@ pub fn parsejsonpath<'mcx>(
     let mut parser = Parser {
         mcx,
         lexer: Lexer::new(mcx, str),
-        lookahead: None,
         escontext: &mut escontext_ref,
-        aborted: false,
+        result: None,
     };
-    let parsed = parser.parse_result()?;
-    let aborted = parser.aborted;
-    // The rejected lookahead's byte span is bison's yytext for the
-    // "syntax error at or near" clause; none at end of input.
-    let err_span = parser.current_span();
+
+    let mut ss: PgVec<'_, i16> = ::mcx::vec_with_capacity_in(mcx, YYINITDEPTH)?;
+    let mut vs: PgVec<'mcx, Value<'mcx>> = ::mcx::vec_with_capacity_in(mcx, YYINITDEPTH)?;
+    // yychar: None = YYEMPTY; Some(YYEOF) once the scanner is exhausted.
+    let mut yychar: Option<i32> = None;
+    let mut yylval: Option<&'mcx [u8]> = None;
+    // yytext: span of the most recently scanned token, None at end of input.
+    let mut yytext: Option<(usize, usize)> = None;
+    let mut state: i32 = 0;
+    ss.push(0);
+    vs.push(Value::Empty);
+
+    let outcome = 'parse: loop {
+        // yysetstate: Bison's stack cannot grow past YYMAXDEPTH entries.
+        if ss.len() >= YYMAXDEPTH {
+            break 'parse Outcome::Error("memory exhausted");
+        }
+
+        let mut n = YYPACT[state as usize] as i32;
+        let rule: i32 = 'act: {
+            if n == YYPACT_NINF as i32 {
+                break 'act YYDEFACT[state as usize] as i32;
+            }
+            let tok = match yychar {
+                Some(t) => t,
+                None => {
+                    let t = match parser.lexer.next_token(parser.escontext)? {
+                        Some(lex) => {
+                            yytext = Some((lex.start, lex.end));
+                            yylval = lex.value;
+                            yytranslate(lex.token)
+                        }
+                        None => {
+                            yytext = None;
+                            yylval = None;
+                            YYEOF
+                        }
+                    };
+                    yychar = Some(t);
+                    t
+                }
+            };
+            n += tok;
+            if n < 0 || n > YYLAST || YYCHECK[n as usize] as i32 != tok {
+                break 'act YYDEFACT[state as usize] as i32;
+            }
+            let act = YYTABLE[n as usize];
+            if act <= 0 {
+                if act == 0 || act == YYTABLE_NINF {
+                    break 'parse Outcome::Error("syntax error");
+                }
+                break 'act -(act as i32);
+            }
+            if act as i32 == YYFINAL {
+                break 'parse Outcome::Accept;
+            }
+            if tok != YYEOF {
+                yychar = None;
+            }
+            state = act as i32;
+            ::mcx::pgvec_reserve(&mut ss, 1)?;
+            ::mcx::pgvec_reserve(&mut vs, 1)?;
+            ss.push(state as i16);
+            vs.push(Value::Str(yylval.take().unwrap_or(&[])));
+            continue 'parse;
+        };
+
+        if rule == 0 {
+            break 'parse Outcome::Error("syntax error");
+        }
+        let len = YYR2[rule as usize] as usize;
+        let base = vs.len() - len;
+        let val = match parser.reduce(rule as u8, &mut vs[base..])? {
+            Some(v) => v,
+            None => break 'parse Outcome::Abort,
+        };
+        vs.truncate(base);
+        ss.truncate(base);
+        let top = *ss.last().expect("state 0 is never popped") as i32;
+        let lhs = YYR1[rule as usize] as i32 - YYNTOKENS;
+        let g = YYPGOTO[lhs as usize] as i32 + top;
+        state = if (0..=YYLAST).contains(&g) && YYCHECK[g as usize] as i32 == top {
+            YYTABLE[g as usize] as i32
+        } else {
+            YYDEFGOTO[lhs as usize] as i32
+        };
+        ::mcx::pgvec_reserve(&mut ss, 1)?;
+        ::mcx::pgvec_reserve(&mut vs, 1)?;
+        ss.push(state as i16);
+        vs.push(val);
+    };
+
+    let result = parser.result.take();
     drop(parser);
 
-    // A scanner soft error recorded mid-stream stands (C: yyerror keeps the
-    // first error), and the parse result is discarded as C's failed yyparse.
+    match outcome {
+        Outcome::Accept => {}
+        Outcome::Abort => return Ok(None),
+        Outcome::Error(message) => {
+            match yytext {
+                Some((s, e)) if s < e && e <= str.len() => {
+                    jsonpath_yyerror_yytext(escontext_ref.as_deref_mut(), &str[s..e], message)?;
+                }
+                _ => {
+                    jsonpath_yyerror(escontext_ref.as_deref_mut(), str, str.len(), message)?;
+                }
+            }
+            return Ok(None);
+        }
+    }
+
+    // A scanner soft error stands; C's caller discards the parse
+    // (jsonPathFromCstring tests SOFT_ERROR_OCCURRED first).
     if escontext_ref.as_ref().is_some_and(|c| c.error_occurred()) {
         return Ok(None);
     }
-
-    match parsed {
-        Some(r) if !aborted => Ok(r),
-        _ => {
-            match err_span {
-                Some((s, e)) if s < e && e <= str.len() => {
-                    jsonpath_yyerror_yytext(
-                        escontext_ref.as_deref_mut(),
-                        &str[s..e],
-                        "syntax error",
-                    )?;
-                }
-                _ => {
-                    jsonpath_yyerror(escontext_ref.as_deref_mut(), str, str.len(), "syntax error")?;
-                }
-            }
-            Ok(None)
-        }
-    }
+    Ok(result)
 }

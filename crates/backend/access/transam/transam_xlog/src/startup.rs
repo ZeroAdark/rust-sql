@@ -1,7 +1,8 @@
 use std::cell::Cell;
 use std::sync::atomic::Ordering::{Relaxed, Release, SeqCst};
 
-use elog::{elog, ereport};
+pub(crate) use adt_timestamp::TimestampDifferenceMilliseconds as timestamp_difference_milliseconds;
+use elog::{elog, ereport, PCT_M};
 use lwlock::{LWLockAcquire, LWLockRelease, LW_EXCLUSIVE};
 use types_core::TransactionId;
 use types_error::{
@@ -56,20 +57,6 @@ thread_local! {
     static CKPT_SYNC_RELS: Cell<i32> = const { Cell::new(0) };
     static CKPT_LONGEST_SYNC: Cell<u64> = const { Cell::new(0) };
     static CKPT_AGG_SYNC_TIME: Cell<u64> = const { Cell::new(0) };
-}
-
-// TimestampDifferenceMilliseconds (utils/adt/timestamp.c:1761-1775): clamp
-// negatives to 0, ceiling-divide microseconds, saturate at INT_MAX.
-pub(crate) fn timestamp_difference_milliseconds(start_time: i64, stop_time: i64) -> i64 {
-    if start_time >= stop_time {
-        return 0;
-    }
-    let diff = stop_time - start_time;
-    if diff >= i32::MAX as i64 * 1000 - 999 {
-        i32::MAX as i64
-    } else {
-        (diff + 999) / 1000
-    }
 }
 
 // CreateCheckPoint / CreateRestartPoint (xlog.c:6963-6964, 7724-7725):
@@ -197,7 +184,7 @@ fn data_path(rel: &str) -> String {
 // PostmasterMain / the standalone InitPostgres path), so loud here too.
 fn str_time(tnow: i64) -> String {
     let tz = pgtz::log_timezone().expect("log_timezone not initialized");
-    let tm = localtime::pg_localtime(tnow, tz).expect("pg_localtime failed for the control file time");
+    let tm = localtime::pg_localtime(tnow, &tz).expect("pg_localtime failed for the control file time");
     let mut buf = [0u8; 128];
     let len = strftime::pg_strftime(&mut buf, b"%Y-%m-%d %H:%M:%S %Z", &tm).unwrap_or(0);
     String::from_utf8_lossy(&buf[..len]).into_owned()
@@ -233,7 +220,7 @@ pub(crate) fn ValidateXLOGDirectoryStructure() -> PgResult<()> {
                 return ereport(FATAL)
                     .with_saved_errno(fd::get_errno())
                     .errcode_for_file_access()
-                    .errmsg(format!("could not create missing directory \"{XLOGDIR}/{sub}\": %m"))
+                    .errmsg(format!("could not create missing directory \"{XLOGDIR}/{sub}\": {PCT_M}"))
                     .finish(loc("ValidateXLOGDirectoryStructure"));
             }
         }
@@ -242,11 +229,16 @@ pub(crate) fn ValidateXLOGDirectoryStructure() -> PgResult<()> {
 }
 
 fn RemoveTempXlogFiles() -> PgResult<()> {
+    let _ = elog::elog(types_error::DEBUG2, "removing all temporary WAL segments");
     let dir = data_path(XLOGDIR);
     let d = fd::AllocateDir(&dir)?;
     while let Some(de) = fd::ReadDir(d, &dir)? {
         if de.d_name.starts_with("xlogtemp.") {
             let _ = fd::pg_unlink(&format!("{dir}/{}", de.d_name));
+            let _ = elog::elog(
+                types_error::DEBUG2,
+                format!("removed temporary WAL segment \"{XLOGDIR}/{}\"", de.d_name),
+            );
         }
     }
     fd::FreeDir(d)?;
@@ -359,13 +351,17 @@ pub fn StartupXLOG() -> PgResult<()> {
     let check_point = control_file().checkPointCopy;
 
     procarray::TransamVariables().nextXid.store(check_point.nextXid.value, Relaxed);
+    // varsup.c:58 memset 0: C's latestCompletedXid is still invalid here, so
+    // recovery adopts its first horizon unconditionally; the FirstNormal
+    // harness seed compares "newer" than any horizon past 2^31.
+    procarray::TransamVariables().latestCompletedXid.store(0, Relaxed);
     varsup::TransamVariables().nextOid.store(check_point.nextOid, Relaxed);
     varsup::TransamVariables().oidCount.store(0, Relaxed);
     if multixact_seams::multixact_set_next_mxact::is_installed() {
         multixact_seams::multixact_set_next_mxact::call(
             check_point.nextMulti,
             check_point.nextMultiOffset,
-        );
+        )?;
     }
     varsup_seams::advance_oldest_clog_xid::call(check_point.oldestXid)?;
     varsup_seams::set_transaction_id_limit::call(check_point.oldestXid, check_point.oldestXidDB)?;
@@ -583,6 +579,11 @@ pub fn StartupXLOG() -> PgResult<()> {
                 .finish(loc("StartupXLOG"));
         }
     }
+
+    // Unlogged pgrcolumnar tables written without fsync under another boot are reset at every start, clean or not
+    // (their files may have gone with the page cache after a clean shutdown).
+    fd::reinit::ResetUnsyncedPgrc()?;
+    smgr_seams::smgr_nblocks_cache_clear::call();
 
     // Reset unlogged relations to their INIT fork contents: after recovery
     // (to include ones created during it), before it is marked complete.
@@ -937,7 +938,7 @@ fn XLogInitNewTimeline(
             return ereport(ERROR)
                 .with_saved_errno(save_errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not close file \"{fname}\": %m"))
+                .errmsg(format!("could not close file \"{fname}\": {PCT_M}"))
                 .finish(loc("XLogInitNewTimeline"));
         }
     }
@@ -1155,7 +1156,7 @@ fn wait_for_delay_chkpt(delay_type: i32) -> PgResult<()> {
     // checkpoint (a continuous commit stream would otherwise starve it).
     // A checkpoint that skips the delay-chkpt wait can capture a torn
     // multi-record update; uninstalled probe must be loud, never a skip.
-    let vxids = procarray_seams::get_virtual_xids_delaying_chkpt::call(delay_type);
+    let vxids = procarray_seams::get_virtual_xids_delaying_chkpt::call(delay_type)?;
     if vxids.is_empty() {
         return Ok(());
     }
@@ -1639,6 +1640,12 @@ pub fn CreateRestartPoint(flags: i32) -> PgResult<bool> {
         subtrans_seams::truncate_subtrans::call(
             procarray_seams::get_oldest_transaction_id_considered_running::call(),
         )?;
+    }
+
+    // WR-TMP: pgrc writer temps of transactions replay proved dead (a COPY cut by the primary's crash gets no
+    // abort record, and the primary's end-of-recovery cleanup is not logged).
+    if xlogrecovery_seams::pgrc_restartpoint_temps::is_installed() {
+        xlogrecovery_seams::pgrc_restartpoint_temps::call();
     }
 
     // xlog.c:7866: LogCheckpointEnd(true).

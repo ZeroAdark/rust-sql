@@ -64,3 +64,6 @@ get_xlog_receipt_time	INTENTIONAL	hot-standby conflict path already loud for oth
 # --- F10-F12: DEAD (deletion candidates per audit recommendation 4) ----------
 pgaio_io_start_readv	DEAD	FileStartReadV has no production caller (re-export only); aio_uring setup is a test fixture
 lookup_pg_transform_shape	DEAD	get_transform_fromsql/tosql have no production callers
+
+# --- D3128 (pgrust main merge): main's native backward scan (#2389), not installed on the Gravity trunk ---
+plan_supports_backward_scan	SKIP	execute_plan keeps the trunk's forward-only guard and every SCROLL portal stays store-armed (D1406 / D2651 replay roads); pquery's is_installed() check takes the store arm; product decision pending (D3128)

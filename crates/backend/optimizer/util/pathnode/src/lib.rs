@@ -1,6 +1,7 @@
 //! pathnode.c: Path constructors + add_path dominance. Cross-cycle callbacks
 //! (estimate_num_groups) ride planner_seams.
 
+use fp_contract::fmadd;
 use mcx::PgVec;
 use types_error::{PgError, PgResult};
 use types_nodes::list::NodeList;
@@ -18,6 +19,8 @@ use types_pathnodes::{
 };
 
 pub use costsize::SubqueryScanInfo;
+
+pub mod gwcost;
 
 pub use types_pathnodes::tag16;
 
@@ -211,14 +214,21 @@ pub fn create_projection_path<'mcx>(
     };
     if dummypp {
         path.startup_cost = sub.startup_cost + (newt.cost.startup - oldt.cost.startup);
-        path.total_cost = sub.total_cost
-            + (newt.cost.startup - oldt.cost.startup)
-            + (newt.cost.per_tuple - oldt.cost.per_tuple) * sub.rows;
+        path.total_cost = projection_dummy_total(
+            sub.total_cost,
+            newt.cost.startup - oldt.cost.startup,
+            newt.cost.per_tuple - oldt.cost.per_tuple,
+            sub.rows,
+        );
     } else {
         path.startup_cost = sub.startup_cost + newt.cost.startup;
-        path.total_cost = sub.total_cost
-            + newt.cost.startup
-            + (gucs::cpu_tuple_cost() + newt.cost.per_tuple) * sub.rows;
+        path.total_cost = projection_total(
+            sub.total_cost,
+            newt.cost.startup,
+            gucs::cpu_tuple_cost(),
+            newt.cost.per_tuple,
+            sub.rows,
+        );
     }
     PathNode::ProjectionPath(ProjectionPath { path, subpath: Some(subpath_id), dummypp })
 }
@@ -255,10 +265,13 @@ pub fn create_set_projection_path<'mcx>(
         rows,
         disabled_nodes: sub.disabled_nodes,
         startup_cost: sub.startup_cost + target.cost.startup,
-        total_cost: sub.total_cost
-            + target.cost.startup
-            + (gucs::cpu_tuple_cost() + target.cost.per_tuple) * sub.rows
-            + (rows - sub.rows) * gucs::cpu_tuple_cost() / 2.0,
+        total_cost: projection_total(
+            sub.total_cost,
+            target.cost.startup,
+            gucs::cpu_tuple_cost(),
+            target.cost.per_tuple,
+            sub.rows,
+        ) + (rows - sub.rows) * gucs::cpu_tuple_cost() / 2.0,
         pathkeys: types_pathnodes::relids::pgvec_clone_shallow(run.mcx, &sub.pathkeys),
     };
     Ok(PathNode::ProjectSetPath(types_pathnodes::ProjectSetPath {
@@ -385,17 +398,87 @@ enum PathCostComparison {
 
 const STD_FUZZ_FACTOR: f64 = 1.01;
 
+/// A path's costs as the comparisons read them (`costs_of`): its width costs at a level that compares them (gwcost.rs,
+/// D3164), else PostgreSQL's own.
+#[derive(Clone, Copy)]
+struct Costs {
+    disabled_nodes: i32,
+    startup_cost: f64,
+    total_cost: f64,
+    param: bool,
+}
+
+#[inline]
+fn costs_of(run: &PlannerRun<'_>, id: PathId) -> Costs {
+    let b = run.root.path(id).base();
+    // a level that compares no width costs (gwcost::active) reads the path's own costs, with no call
+    let (startup_cost, total_cost) =
+        if gwcost::active(run) { gwcost::costs(run, id) } else { (b.startup_cost, b.total_cost) };
+    Costs { disabled_nodes: b.disabled_nodes, startup_cost, total_cost, param: b.param_info.is_some() }
+}
+
+/// `compare_path_costs` over the costs the level compares (`costs_of`).
+pub fn compare_path_costs_at(run: &PlannerRun<'_>, id1: PathId, id2: PathId, criterion: CostSelector) -> i32 {
+    if !gwcost::active(run) {
+        return compare_path_costs(run.root.path(id1).base(), run.root.path(id2).base(), criterion);
+    }
+    let (c1, c2) = (costs_of(run, id1), costs_of(run, id2));
+    if c1.disabled_nodes != c2.disabled_nodes {
+        return if c1.disabled_nodes < c2.disabled_nodes { -1 } else { 1 };
+    }
+    let (a1, b1, a2, b2) = match criterion {
+        CostSelector::Startup => (c1.startup_cost, c2.startup_cost, c1.total_cost, c2.total_cost),
+        CostSelector::Total => (c1.total_cost, c2.total_cost, c1.startup_cost, c2.startup_cost),
+    };
+    if a1 < b1 {
+        return -1;
+    }
+    if a1 > b1 {
+        return 1;
+    }
+    if a2 < b2 {
+        return -1;
+    }
+    if a2 > b2 {
+        return 1;
+    }
+    0
+}
+
+/// `compare_fractional_path_costs` over the costs the level compares (`costs_of`).
+pub fn compare_fractional_path_costs_at(run: &PlannerRun<'_>, id1: PathId, id2: PathId, fraction: f64) -> i32 {
+    if !gwcost::active(run) {
+        return compare_fractional_path_costs(run.root.path(id1).base(), run.root.path(id2).base(), fraction);
+    }
+    let (c1, c2) = (costs_of(run, id1), costs_of(run, id2));
+    if c1.disabled_nodes != c2.disabled_nodes {
+        return if c1.disabled_nodes < c2.disabled_nodes { -1 } else { 1 };
+    }
+    if fraction <= 0.0 || fraction >= 1.0 {
+        return compare_path_costs_at(run, id1, id2, CostSelector::Total);
+    }
+    let cost1 = fmadd(fraction, c1.total_cost - c1.startup_cost, c1.startup_cost);
+    let cost2 = fmadd(fraction, c2.total_cost - c2.startup_cost, c2.startup_cost);
+    if cost1 < cost2 {
+        return -1;
+    }
+    if cost1 > cost2 {
+        return 1;
+    }
+    0
+}
+
 // compare_path_costs_fuzzily (pathnode.c); the parent rel's two consider
 // flags arrive by value.
 fn compare_path_costs_fuzzily(
-    path1: &Path<'_>,
-    path2: &Path<'_>,
+    path1: Costs,
+    path2: Costs,
     fuzz_factor: f64,
     consider_startup: bool,
     consider_param_startup: bool,
 ) -> PathCostComparison {
-    let consider = |p: &Path<'_>| {
-        if p.param_info.is_none() {
+    let consider = |p: &Costs| {
+        if !p.param {
             consider_startup
         } else {
             consider_param_startup
@@ -409,13 +492,13 @@ fn compare_path_costs_fuzzily(
         };
     }
     if path1.total_cost > path2.total_cost * fuzz_factor {
-        if consider(path1) && path2.startup_cost > path1.startup_cost * fuzz_factor {
+        if consider(&path1) && path2.startup_cost > path1.startup_cost * fuzz_factor {
             return PathCostComparison::Different;
         }
         return PathCostComparison::Better2;
     }
     if path2.total_cost > path1.total_cost * fuzz_factor {
-        if consider(path2) && path1.startup_cost > path2.startup_cost * fuzz_factor {
+        if consider(&path2) && path1.startup_cost > path2.startup_cost * fuzz_factor {
             return PathCostComparison::Different;
         }
         return PathCostComparison::Better1;
@@ -430,6 +513,12 @@ fn compare_path_costs_fuzzily(
 }
 
 // PATH_REQ_OUTER (pathnodes.h).
+// D4564: add_path's PATH_REQ_OUTER comparison, out of line once instead of inlined in each of its arms.
+#[inline(never)]
+fn req_outer_subset_compare(a: &Relids<'_>, b: &Relids<'_>) -> types_pathnodes::relids::SubsetCmp {
+    types_pathnodes::relids::relids_subset_compare(a, b)
+}
+
 pub fn path_req_outer<'p, 'mcx>(path: &'p Path<'mcx>) -> &'p Relids<'mcx> {
     match &path.param_info {
         Some(ppi) => &ppi.ppi_req_outer,
@@ -632,8 +721,27 @@ fn check_for_interrupts() {
 }
 
 // add_path (pathnode.c).
+// Some(true) = `new` is a hashed aggregate and `old` an aggregate that is
+// not (prefer new), Some(false) the reverse, None otherwise or when no
+// pgrcolumnar relation feeds the plan.
+fn pgrc_hashed_tie(run: &PlannerRun<'_>, new_id: PathId, old_id: PathId) -> Option<bool> {
+    let hashed = |id: PathId| match run.root.path(id) {
+        PathNode::AggPath(a) => Some(a.aggstrategy == types_pathnodes::AGG_HASHED),
+        _ => None,
+    };
+    let (n, o) = (hashed(new_id)?, hashed(old_id)?);
+    if n == o
+        || !run.root.simple_rel_array.iter().flatten().any(|&r| {
+            run.root.rel(r).amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR != 0
+        })
+    {
+        return None;
+    }
+    Some(n)
+}
+
 pub fn add_path<'mcx>(run: &mut PlannerRun<'mcx>, rel_id: RelId, new_id: PathId) -> PathId {
-    use types_pathnodes::relids::{relids_subset_compare, SubsetCmp};
+    use types_pathnodes::relids::SubsetCmp;
     check_for_interrupts();
     let mut accept_new = true;
     let mut insert_at = 0usize;
@@ -644,15 +752,18 @@ pub fn add_path<'mcx>(run: &mut PlannerRun<'mcx>, rel_id: RelId, new_id: PathId)
     let empty: PgVec<'mcx, PathId> = PgVec::new_in(run.mcx);
     let mut working = core::mem::replace(&mut run.root.rel_mut(rel_id).pathlist, empty);
 
+    // the new path's costs do not change while it is compared
+    let new_costs = costs_of(run, new_id);
     let mut i = 0usize;
     while i < working.len() {
+        let old_costs = costs_of(run, working[i]);
         let new_path = run.root.path(new_id).base();
         let old_path = run.root.path(working[i]).base();
         let mut remove_old = false;
 
         let costcmp = compare_path_costs_fuzzily(
-            new_path,
-            old_path,
+            new_costs,
+            old_costs,
             STD_FUZZ_FACTOR,
             consider_startup,
             consider_param_startup,
@@ -671,10 +782,18 @@ pub fn add_path<'mcx>(run: &mut PlannerRun<'mcx>, rel_id: RelId, new_id: PathId)
                 if old_path.param_info.is_some() { &[] } else { &old_path.pathkeys };
             let keyscmp = compare_pathkeys(new_keys, old_keys);
             if keyscmp != PathKeysComparison::Different {
-                let outercmp = || {
-                    relids_subset_compare(path_req_outer(new_path), path_req_outer(old_path))
-                };
+                // D4564: one out-of-line comparison; the closure is called from 5 arms and inlined each
+                // relids_subset_compare (#[inline]) into add_path (C calls bms_subset_compare out of line)
+                let outercmp = || req_outer_subset_compare(path_req_outer(new_path), path_req_outer(old_path));
+                let hashed_tie =
+                    if costcmp == PathCostComparison::Equal { pgrc_hashed_tie(run, new_id, working[i]) } else { None };
+                match hashed_tie {
+                    Some(true) => remove_old = true,
+                    Some(false) => accept_new = false,
+                    None => {}
+                }
                 match costcmp {
+                    _ if hashed_tie.is_some() => {}
                     PathCostComparison::Equal => match keyscmp {
                         PathKeysComparison::Better1 => {
                             let oc = outercmp();
@@ -705,8 +824,8 @@ pub fn add_path<'mcx>(run: &mut PlannerRun<'mcx>, rel_id: RelId, new_id: PathId)
                                 } else if new_path.rows > old_path.rows {
                                     accept_new = false;
                                 } else if compare_path_costs_fuzzily(
-                                    new_path,
-                                    old_path,
+                                    new_costs,
+                                    old_costs,
                                     1.0000000001,
                                     consider_startup,
                                     consider_param_startup,
@@ -763,13 +882,13 @@ pub fn add_path<'mcx>(run: &mut PlannerRun<'mcx>, rel_id: RelId, new_id: PathId)
         }
 
         if remove_old {
-            working.remove(i);
+            let old_id = working.remove(i);
+            recycle_path(run, old_id);
         } else {
-            let new_path = run.root.path(new_id).base();
-            let old_path = run.root.path(working[i]).base();
-            if new_path.disabled_nodes > old_path.disabled_nodes
-                || (new_path.disabled_nodes == old_path.disabled_nodes
-                    && new_path.total_cost >= old_path.total_cost)
+            // working[i] is the path compared above (nothing was removed)
+            if new_costs.disabled_nodes > old_costs.disabled_nodes
+                || (new_costs.disabled_nodes == old_costs.disabled_nodes
+                    && new_costs.total_cost >= old_costs.total_cost)
             {
                 insert_at = i + 1;
             }
@@ -784,9 +903,19 @@ pub fn add_path<'mcx>(run: &mut PlannerRun<'mcx>, rel_id: RelId, new_id: PathId)
     if accept_new {
         let at = insert_at.min(working.len());
         working.insert(at, new_id);
+    } else {
+        recycle_path(run, new_id);
     }
     run.root.rel_mut(rel_id).pathlist = working;
     new_id
+}
+
+// pathnode.c:635/668: IndexPaths are kept because BitmapHeapPaths may still
+// reference them.
+fn recycle_path(run: &mut PlannerRun<'_>, id: PathId) {
+    if !matches!(run.root.path(id), PathNode::IndexPath(_)) {
+        run.root.free_path(id);
+    }
 }
 
 pub fn add_existing_path(run: &mut PlannerRun<'_>, rel_id: RelId, path_id: PathId) {
@@ -826,7 +955,7 @@ pub fn set_cheapest(run: &mut PlannerRun<'_>, rel_id: RelId) -> PgResult<()> {
                     let best = run.root.path(bp).base();
                     match relids_subset_compare(path_req_outer(path), path_req_outer(best)) {
                         SubsetCmp::Equal => {
-                            if compare_path_costs(path, best, CostSelector::Total) < 0 {
+                            if compare_path_costs_at(run, pid, bp, CostSelector::Total) < 0 {
                                 best_param_path = Some(pid);
                             }
                         }
@@ -842,7 +971,7 @@ pub fn set_cheapest(run: &mut PlannerRun<'_>, rel_id: RelId) -> PgResult<()> {
             cheapest_total_path = Some(pid);
             continue;
         };
-        let cmp = compare_path_costs(run.root.path(s).base(), path, CostSelector::Startup);
+        let cmp = compare_path_costs_at(run, s, pid, CostSelector::Startup);
         if cmp > 0
             || (cmp == 0
                 && compare_pathkeys(&run.root.path(s).base().pathkeys, &path.pathkeys)
@@ -850,7 +979,7 @@ pub fn set_cheapest(run: &mut PlannerRun<'_>, rel_id: RelId) -> PgResult<()> {
         {
             cheapest_startup_path = Some(pid);
         }
-        let cmp = compare_path_costs(run.root.path(t).base(), path, CostSelector::Total);
+        let cmp = compare_path_costs_at(run, t, pid, CostSelector::Total);
         if cmp > 0
             || (cmp == 0
                 && compare_pathkeys(&run.root.path(t).base().pathkeys, &path.pathkeys)
@@ -862,6 +991,9 @@ pub fn set_cheapest(run: &mut PlannerRun<'_>, rel_id: RelId) -> PgResult<()> {
 
     if let Some(t) = cheapest_total_path {
         parameterized_paths.insert(0, t);
+        if gwcost::active(run) && pg_cheapest_total(run, rel_id) != Some(t) {
+            fires::fire("planner.width_cost.moved"); // shapecheck fire signal: width costing chose another cheapest path
+        }
     }
     let cheapest_total = match cheapest_total_path {
         Some(t) => t,
@@ -873,6 +1005,26 @@ pub fn set_cheapest(run: &mut PlannerRun<'_>, rel_id: RelId) -> PgResult<()> {
     rel.cheapest_unique_path = None;
     rel.cheapest_parameterized_paths = parameterized_paths;
     Ok(())
+}
+
+/// The unparameterized path set_cheapest would take as cheapest total by PostgreSQL's costs alone (the moved fire).
+fn pg_cheapest_total(run: &PlannerRun<'_>, rel_id: RelId) -> Option<PathId> {
+    let mut best: Option<PathId> = None;
+    for &pid in run.root.rel(rel_id).pathlist.iter() {
+        let path = run.root.path(pid).base();
+        if path.param_info.is_some() {
+            continue;
+        }
+        let Some(b) = best else {
+            best = Some(pid);
+            continue;
+        };
+        let cmp = compare_path_costs(run.root.path(b).base(), path, CostSelector::Total);
+        if cmp > 0 || (cmp == 0 && compare_pathkeys(&run.root.path(b).base().pathkeys, &path.pathkeys) == PathKeysComparison::Better2) {
+            best = Some(pid);
+        }
+    }
+    best
 }
 
 fn base_path<'mcx>(
@@ -906,24 +1058,20 @@ pub fn calc_non_nestloop_required_outer<'mcx>(
     outer_path: PathId,
     inner_path: PathId,
 ) -> Relids<'mcx> {
-    use types_pathnodes::relids::{relids_copy, relids_is_empty, relids_overlap, relids_union};
-    let outer_paramrels = relids_copy(mcx, path_req_outer(run.root.path(outer_path).base()));
-    let inner_paramrels = relids_copy(mcx, path_req_outer(run.root.path(inner_path).base()));
+    use types_pathnodes::relids::{relids_is_empty, relids_overlap, relids_union};
+    let root = &run.root;
+    let outer_paramrels = path_req_outer(root.path(outer_path).base());
+    let inner_paramrels = path_req_outer(root.path(inner_path).base());
     // Input parameterizations refer to topmost parents until
     // reparameterize_path_by_child runs, so the disallowed-parameterization
     // tests use topmost-parent relids.
     let top_or_self = |r: types_pathnodes::RelId| {
-        if relids_is_empty(&run.root.rel(r).top_parent_relids) {
-            relids_copy(mcx, &run.root.rel(r).relids)
-        } else {
-            relids_copy(mcx, &run.root.rel(r).top_parent_relids)
-        }
+        let rel = root.rel(r);
+        if relids_is_empty(&rel.top_parent_relids) { &rel.relids } else { &rel.top_parent_relids }
     };
-    let outerrelids = top_or_self(run.root.path(outer_path).base().parent);
-    let innerrelids = top_or_self(run.root.path(inner_path).base().parent);
-    debug_assert!(!relids_overlap(&outer_paramrels, &innerrelids));
-    debug_assert!(!relids_overlap(&inner_paramrels, &outerrelids));
-    relids_union(mcx, &outer_paramrels, &inner_paramrels)
+    debug_assert!(!relids_overlap(outer_paramrels, top_or_self(root.path(inner_path).base().parent)));
+    debug_assert!(!relids_overlap(inner_paramrels, top_or_self(root.path(outer_path).base().parent)));
+    relids_union(mcx, outer_paramrels, inner_paramrels)
 }
 
 // join_clause_is_movable_into (restrictinfo.c). The body lives in
@@ -1282,7 +1430,8 @@ pub fn add_partial_path<'mcx>(run: &mut PlannerRun<'mcx>, rel_id: RelId, new_id:
         }
 
         if remove_old {
-            working.remove(i);
+            let old_id = working.remove(i);
+            run.root.free_path(old_id);
         } else {
             if new_path.total_cost >= old_path.total_cost {
                 insert_at = i + 1;
@@ -1298,6 +1447,8 @@ pub fn add_partial_path<'mcx>(run: &mut PlannerRun<'mcx>, rel_id: RelId, new_id:
     if accept_new {
         let at = insert_at.min(working.len());
         working.insert(at, new_id);
+    } else {
+        run.root.free_path(new_id);
     }
     run.root.rel_mut(rel_id).partial_pathlist = working;
 }
@@ -2030,11 +2181,48 @@ pub fn create_group_path<'mcx>(
     let p = run.root.path_mut(id).base_mut();
     let rows = p.rows;
     p.startup_cost += t_startup;
-    p.total_cost += t_startup + t_per_tuple * rows;
+    p.total_cost += tlist_eval_cost(t_startup, t_per_tuple, rows);
     Ok(id)
 }
 
 // create_agg_path (pathnode.c).
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_hashed_distinct_agg_path<'mcx>(
+    run: &mut PlannerRun<'mcx>,
+    rel_id: RelId,
+    subpath_id: PathId,
+    target_id: PtId,
+    aggstrategy: u32,
+    group_clause: PgVec<'mcx, types_pathnodes::NodeId>,
+    qual: PgVec<'mcx, types_pathnodes::NodeId>,
+    aggcosts: &types_pathnodes::AggClauseCosts,
+    num_groups: f64,
+    sets: &[(f64, i32)],
+) -> PgResult<PathId> {
+    debug_assert!(
+        aggstrategy == types_pathnodes::AGG_HASHED || aggstrategy == types_pathnodes::AGG_PLAIN
+    );
+    let id = create_agg_path(
+        run,
+        rel_id,
+        subpath_id,
+        target_id,
+        aggstrategy,
+        types_pathnodes::AGGSPLIT_SIMPLE,
+        group_clause,
+        qual,
+        aggcosts,
+        num_groups,
+    )?;
+    let sub_rows = run.root.path(subpath_id).base().rows;
+    costsize::cost_hashed_distinct_sets(run, id, sub_rows, sets)?;
+    if let PathNode::AggPath(ap) = run.root.path_mut(id) {
+        ap.distinctHashed = true;
+    }
+    Ok(id)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn create_agg_path<'mcx>(
     run: &mut PlannerRun<'mcx>,
@@ -2104,6 +2292,8 @@ pub fn create_agg_path<'mcx>(
         transitionSpace: transition_space,
         groupClause: group_clause,
         qual,
+        distinctHashed: false,
+        gravity_rewrite: None,
     }));
     costsize::cost_agg(
         run,
@@ -2122,27 +2312,13 @@ pub fn create_agg_path<'mcx>(
     // (P7-2 D-8: the Stage-4 §4.4 radix-exchange recost is deleted with the
     // pgrust.lane_parallel_pool tombstone — it was a no-op on every unarmed
     // session, today's only posture.)
-    // Step-0b honest-Gather pricing: a leader hashagg above a Gather on a
-    // pgrcolumnar-fed plan carries an executor-honest spill term (the high-card
-    // cliff). Exact no-op when the scaled working set fits the hash budget
-    // or on any shape the exchange adjust above owns — see costsize.
-    costsize::cost_agg_leader_spill_adjust(
-        run,
-        id,
-        aggstrategy,
-        subpath_id,
-        aggcosts,
-        num_groups,
-        sub_rows,
-        sub_width,
-    );
 
     let target = run.root.pathtarget(target_id);
     let (t_startup, t_per_tuple) = (target.cost.startup, target.cost.per_tuple);
     let p = run.root.path_mut(id).base_mut();
     let rows = p.rows;
     p.startup_cost += t_startup;
-    p.total_cost += t_startup + t_per_tuple * rows;
+    p.total_cost += tlist_eval_cost(t_startup, t_per_tuple, rows);
     Ok(id)
 }
 
@@ -2317,7 +2493,7 @@ pub fn create_groupingsets_path<'mcx>(
     let p = run.root.path_mut(id).base_mut();
     let rows = p.rows;
     p.startup_cost += t_startup;
-    p.total_cost += t_startup + t_per_tuple * rows;
+    p.total_cost += tlist_eval_cost(t_startup, t_per_tuple, rows);
     Ok(id)
 }
 
@@ -2345,8 +2521,12 @@ pub fn create_upper_unique_path<'mcx>(
         rows: num_groups,
         disabled_nodes: sub.disabled_nodes,
         startup_cost: sub.startup_cost,
-        total_cost: sub.total_cost
-            + gucs::cpu_operator_cost() * sub.rows * num_cols as f64,
+        total_cost: per_col_compare_total(
+            sub.total_cost,
+            gucs::cpu_operator_cost(),
+            sub.rows,
+            num_cols as f64,
+        ),
         pathkeys: types_pathnodes::relids::pgvec_clone_shallow(run.mcx, &sub.pathkeys),
     };
     run.root.alloc_path(PathNode::UpperUniquePath(types_pathnodes::UpperUniquePath {
@@ -2378,7 +2558,7 @@ pub fn get_cheapest_fractional_path(run: &PlannerRun<'_>, rel_id: RelId, tuple_f
             continue;
         }
         if Some(pid) == run.root.rel(rel_id).cheapest_total_path
-            || compare_fractional_path_costs(run.root.path(best).base(), path, tuple_fraction) <= 0
+            || compare_fractional_path_costs_at(run, best, pid, tuple_fraction) <= 0
         {
             continue;
         }
@@ -2394,8 +2574,8 @@ pub fn compare_fractional_path_costs(path1: &Path<'_>, path2: &Path<'_>, fractio
     if fraction <= 0.0 || fraction >= 1.0 {
         return compare_path_costs(path1, path2, CostSelector::Total);
     }
-    let cost1 = path1.startup_cost + fraction * (path1.total_cost - path1.startup_cost);
-    let cost2 = path2.startup_cost + fraction * (path2.total_cost - path2.startup_cost);
+    let cost1 = fmadd(fraction, path1.total_cost - path1.startup_cost, path1.startup_cost);
+    let cost2 = fmadd(fraction, path2.total_cost - path2.startup_cost, path2.startup_cost);
     if cost1 < cost2 {
         return -1;
     }
@@ -2405,30 +2585,6 @@ pub fn compare_fractional_path_costs(path1: &Path<'_>, path2: &Path<'_>, fractio
     0
 }
 
-
-// costing-rider leg (2026-07-07): a full-input Sort directly over a
-// Gather/GatherMerge on a pgrcolumnar-fed plan denies the workers the fused
-// bounded-sort feed (top-k admission + ref decode clamp): every surviving row
-// is materialized full-width in a worker, pulled per-row through the tuple
-// queue, and sorted wide in the leader. Measured take-k-sorted forced-shape A/B
-// @ b81a4e09958 (explain-channel jobs -1783458412/-1783458427):
-// GatherMerge-over-worker-Sort 0.956s vs leader-Sort ~7.1s steady-state
-// lane-on (lane-off ties), ~30 units/tuple at the two-key-grouped 163-units/ms anchor.
-// The surcharge is startup+total (a Sort consumes its whole input before the
-// first output row). Heap plans keep C costing.
-fn pgrcolumnar_gather_sort_penalty(run: &PlannerRun<'_>, subpath_id: PathId) -> f64 {
-    let sub = run.root.path(subpath_id);
-    if !matches!(
-        sub,
-        PathNode::GatherPath(_) | PathNode::GatherMergePath(_)
-    ) {
-        return 0.0;
-    }
-    if !costsize::pgrcolumnar_feeds_plan(run) {
-        return 0.0;
-    }
-    costsize::gucs::pgrcolumnar_gather_sort_tuple_cost() * sub.base().rows
-}
 
 pub fn create_sort_path<'mcx>(
     run: &mut PlannerRun<'mcx>,
@@ -2462,6 +2618,7 @@ pub fn create_sort_path<'mcx>(
         .alloc_path(PathNode::SortPath(types_pathnodes::SortPath {
             path,
             subpath: Some(subpath_id),
+            gravity_rewrite: None,
         }));
     costsize::cost_sort(
         run,
@@ -2474,12 +2631,6 @@ pub fn create_sort_path<'mcx>(
         init_small::globals::work_mem(),
         limit_tuples,
     );
-    let penalty = pgrcolumnar_gather_sort_penalty(run, subpath_id);
-    if penalty > 0.0 {
-        let p = run.root.path_mut(id).base_mut();
-        p.startup_cost += penalty;
-        p.total_cost += penalty;
-    }
     id
 }
 
@@ -2515,7 +2666,7 @@ pub fn create_incremental_sort_path<'mcx>(
     let keys = types_pathnodes::relids::pgvec_clone_shallow(run.mcx, &path.pathkeys);
     let id = run.root.alloc_path(PathNode::IncrementalSortPath(
         types_pathnodes::IncrementalSortPath {
-            spath: types_pathnodes::SortPath { path, subpath: Some(subpath_id) },
+            spath: types_pathnodes::SortPath { path, subpath: Some(subpath_id), gravity_rewrite: None },
             nPresortedCols: presorted_keys as i32,
         },
     ));
@@ -2533,12 +2684,6 @@ pub fn create_incremental_sort_path<'mcx>(
         init_small::globals::work_mem(),
         limit_tuples,
     )?;
-    let penalty = pgrcolumnar_gather_sort_penalty(run, subpath_id);
-    if penalty > 0.0 {
-        let p = run.root.path_mut(id).base_mut();
-        p.startup_cost += penalty;
-        p.total_cost += penalty;
-    }
     Ok(id)
 }
 
@@ -2612,7 +2757,7 @@ pub fn create_lockrows_path<'mcx>(
         rows: sub.rows,
         disabled_nodes: sub.disabled_nodes,
         startup_cost: sub.startup_cost,
-        total_cost: sub.total_cost + gucs::cpu_tuple_cost() * sub.rows,
+        total_cost: fmadd(gucs::cpu_tuple_cost(), sub.rows, sub.total_cost),
         pathkeys: PgVec::new_in(mcx),
     };
     run.root.alloc_path(PathNode::LockRowsPath(types_pathnodes::LockRowsPath {
@@ -2738,8 +2883,17 @@ pub fn create_windowagg_path<'mcx>(
     let p = run.root.path_mut(id).base_mut();
     let rows = p.rows;
     p.startup_cost += t_startup;
-    p.total_cost += t_startup + t_per_tuple * rows;
+    p.total_cost += tlist_eval_cost(t_startup, t_per_tuple, rows);
     Ok(id)
+}
+
+#[cold]
+fn missing_unique_equality_operator(sortop: types_pathnodes::Oid) -> Box<PgError> {
+    PgError::error(format!(
+        "could not find equality operator for ordering operator {sortop}"
+    ))
+    .with_location("pathnode.c", 1841, "create_unique_path")
+    .into()
 }
 
 // create_unique_path (pathnode.c). C's semi_can_hash write-back on oversized
@@ -2803,6 +2957,12 @@ pub fn create_unique_path<'mcx>(
             let in_oper = sjinfo.semi_operators[i];
             let sortop = lsyscache::amop::get_ordering_op_for_equality_op(in_oper, false)?;
             if sortop != 0 {
+                let eqop = lsyscache::amop::get_equality_op_for_ordering_op(sortop)?
+                    .map(|(op, _)| op)
+                    .unwrap_or(0);
+                if eqop == 0 {
+                    return Err(missing_unique_equality_operator(sortop));
+                }
                 let expr = *run.root.expr_node(expr_id);
                 let sortref = sort_pathkeys.len() as u32 + 1;
                 let pathkey = planner_seams::make_pathkey_from_sortop::call(
@@ -2929,7 +3089,7 @@ pub fn create_unique_path<'mcx>(
             init_small::globals::work_mem(),
             -1.0,
         );
-        t += gucs::cpu_operator_cost() * rel_rows * num_cols as f64;
+        t = per_col_compare_total(t, gucs::cpu_operator_cost(), rel_rows, num_cols as f64);
         Some((d, s, t))
     } else {
         None
@@ -2939,7 +3099,7 @@ pub fn create_unique_path<'mcx>(
     let mut agg_cost: Option<(i32, f64, f64)> = None;
     if semi_can_hash {
         let hashentrysize = (sub_width + 64) as f64;
-        if hashentrysize * path.rows > ::nodehash::get_hash_memory_limit() as f64 {
+        if hashentrysize * path.rows > ::costsize::exec_sizing::get_hash_memory_limit() as f64 {
             semi_can_hash = false;
         } else {
             let scratch = Path {
@@ -3429,21 +3589,21 @@ pub fn create_setop_path<'mcx>(
         // Sorted mode emits incrementally: one comparison per column per
         // input tuple.
         path.startup_cost = l_startup + r_startup;
-        path.total_cost = l_total
-            + r_total
-            + gucs::cpu_operator_cost() * (l_rows + r_rows) * n_group_cols
-            + gucs::cpu_operator_cost() * output_rows;
+        path.total_cost = fmadd(
+            gucs::cpu_operator_cost(),
+            output_rows,
+            fmadd(gucs::cpu_operator_cost() * (l_rows + r_rows), n_group_cols, l_total + r_total),
+        );
     } else {
-        path.startup_cost = l_total
-            + r_total
-            + gucs::cpu_operator_cost() * (l_rows + r_rows) * n_group_cols;
-        path.total_cost = path.startup_cost + gucs::cpu_operator_cost() * output_rows;
+        path.startup_cost =
+            fmadd(gucs::cpu_operator_cost() * (l_rows + r_rows), n_group_cols, l_total + r_total);
+        path.total_cost = fmadd(gucs::cpu_operator_cost(), output_rows, path.startup_cost);
         if !gucs::enable_hashagg() {
             path.disabled_nodes += 1;
         }
         let hashentrysize = maxalign8(l_width.max(0) as usize)
             + maxalign8(types_tuple::SizeofMinimalTupleHeader);
-        if hashentrysize as f64 * num_groups > ::nodehash::get_hash_memory_limit() as f64 {
+        if hashentrysize as f64 * num_groups > ::costsize::exec_sizing::get_hash_memory_limit() as f64 {
             path.disabled_nodes += 1;
         }
     }
@@ -3481,8 +3641,11 @@ pub fn apply_projection_to_path<'mcx>(
     let p = run.root.path_mut(path_id).base_mut();
     p.pathtarget_id = Some(target_id);
     p.startup_cost += newcost.startup - oldcost.startup;
-    p.total_cost += newcost.startup - oldcost.startup
-        + (newcost.per_tuple - oldcost.per_tuple) * p.rows;
+    p.total_cost += apply_projection_delta(
+        newcost.startup - oldcost.startup,
+        newcost.per_tuple - oldcost.per_tuple,
+        p.rows,
+    );
 
     // Gather/GatherMerge: push a parallel-safe target below so workers help
     // project (a fresh ProjectionPath — never modify the subpath in place);
@@ -3598,16 +3761,19 @@ pub fn add_path_precheck(
     } else {
         run.root.rel(joinrel).consider_param_startup
     };
+    // width costing: the new path's width costs are at least its PostgreSQL costs over the greatest speedup
+    let (startup_cost, total_cost) = gwcost::bound(run, startup_cost, total_cost);
     for &old_id in run.root.rel(joinrel).pathlist.iter() {
         let old = run.root.path(old_id).base();
+        let oc = costs_of(run, old_id);
         if old.disabled_nodes != disabled_nodes {
             if disabled_nodes < old.disabled_nodes {
                 break;
             }
-        } else if total_cost <= old.total_cost * STD_FUZZ_FACTOR {
+        } else if total_cost <= oc.total_cost * STD_FUZZ_FACTOR {
             break;
         }
-        if startup_cost > old.startup_cost * STD_FUZZ_FACTOR || !consider_startup {
+        if startup_cost > oc.startup_cost * STD_FUZZ_FACTOR || !consider_startup {
             let old_keys: &[PathKey] =
                 if old.param_info.is_some() { &[] } else { &old.pathkeys };
             let keyscmp = compare_pathkeys(new_keys, old_keys);
@@ -3950,4 +4116,90 @@ pub fn create_mergejoin_path<'mcx>(
     };
     costsize::final_cost_mergejoin(run, &mut node, workspace, inner_unique)?;
     Ok(run.root.alloc_path(types_pathnodes::PathNode::MergePath(node)))
+}
+
+#[inline]
+// pathnode.c:2965 (D400)
+pub(crate) fn projection_dummy_total(
+    total: f64,
+    d_startup: f64,
+    d_per_tuple: f64,
+    rows: f64,
+) -> f64 {
+    fmadd(d_per_tuple, rows, total + d_startup)
+}
+
+#[inline]
+// pathnode.c:2982/3151 (D400)
+pub(crate) fn projection_total(
+    total: f64,
+    startup: f64,
+    cpu_tuple_cost: f64,
+    per_tuple: f64,
+    rows: f64,
+) -> f64 {
+    fmadd(cpu_tuple_cost + per_tuple, rows, total + startup)
+}
+
+#[inline]
+// pathnode.c:3034 (D400)
+pub(crate) fn apply_projection_delta(d_startup: f64, d_per_tuple: f64, rows: f64) -> f64 {
+    fmadd(d_per_tuple, rows, d_startup)
+}
+
+#[inline]
+// pathnode.c:3303/3440/3609/3765 (D400)
+pub(crate) fn tlist_eval_cost(startup: f64, per_tuple: f64, rows: f64) -> f64 {
+    fmadd(per_tuple, rows, startup)
+}
+
+#[inline]
+// pathnode.c:2020/3357 (D400)
+pub(crate) fn per_col_compare_total(
+    total: f64,
+    cpu_operator_cost: f64,
+    rows: f64,
+    num_cols: f64,
+) -> f64 {
+    fmadd(cpu_operator_cost * rows, num_cols, total)
+}
+
+
+#[cfg(test)]
+mod d400_fma_site_tests {
+    use super::*;
+
+    fn pick(fused: u64, unfused: u64) -> u64 {
+        if cfg!(target_arch = "aarch64") { fused } else { unfused }
+    }
+
+    #[test]
+    fn d400_projection_dummy_total_fuses() {
+        let got = projection_dummy_total(884.8, 4.9626, 0.0432, 740153.0);
+        assert_eq!(got.to_bits(), pick(0x40E00C0BE90FF972, 0x40E00C0BE90FF973));
+    }
+
+    #[test]
+    fn d400_projection_total_fuses() {
+        let got = projection_total(765.65, 4.7084, 0.01, 0.3212, 923875.0);
+        assert_eq!(got.to_bits(), pick(0x4112B917089A0275, 0x4112B917089A0276));
+    }
+
+    #[test]
+    fn d400_apply_projection_delta_fuses() {
+        let got = apply_projection_delta(8.7447, 0.7391, 369315.0);
+        assert_eq!(got.to_bits(), pick(0x4110A925D844D014, 0x4110A925D844D013));
+    }
+
+    #[test]
+    fn d400_tlist_eval_cost_fuses() {
+        let got = tlist_eval_cost(4.2703, 0.3871, 328081.0);
+        assert_eq!(got.to_bits(), pick(0x40FF01C6CE703AFB, 0x40FF01C6CE703AFC));
+    }
+
+    #[test]
+    fn d400_per_col_compare_total_fuses() {
+        let got = per_col_compare_total(2.55, 0.0025, 80570.0, 5.0);
+        assert_eq!(got.to_bits(), pick(0x408F8D6666666667, 0x408F8D6666666666));
+    }
 }

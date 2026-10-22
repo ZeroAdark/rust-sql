@@ -128,7 +128,8 @@ fn startup_message(user: &str, database: &str) -> Vec<u8> {
         body.push(0);
     }
     body.push(0);
-    let mut msg = Vec::with_capacity(4 + body.len());
+    let mut msg = Vec::new();
+    let _ = msg.try_reserve(4 + body.len());
     msg.extend_from_slice(&be_i32(4 + body.len() as i32));
     msg.extend_from_slice(&body);
     msg
@@ -1116,6 +1117,7 @@ fn fault_op_kind(name: &str) -> vfs::sim::OpKind {
         "Mkdir" => Mkdir,
         "Rmdir" => Rmdir,
         "ReadDir" => ReadDir,
+        "Link" => Link,
         other => panic!("PGRUST_SIM_FAULT_PLAN: unknown OpKind '{other}'"),
     }
 }
@@ -1182,11 +1184,13 @@ fn install_fault_plan_from_env() {
         let m = r.get("matcher").expect("rule.matcher");
         let kinds = match m.get("kinds") {
             None | Some(fault_spec_json::J::Null) => None,
-            Some(fault_spec_json::J::Arr(a)) => Some(
-                a.iter()
-                    .map(|k| fault_op_kind(k.strv().expect("kind name")))
-                    .collect::<Vec<_>>(),
-            ),
+            Some(fault_spec_json::J::Arr(a)) => {
+                let mut v = Vec::new();
+                for k in a {
+                    v.push(fault_op_kind(k.strv().expect("kind name")));
+                }
+                Some(v)
+            }
             other => panic!("rule.matcher.kinds malformed: {other:?}"),
         };
         let class = match m.get("class") {
@@ -1368,7 +1372,7 @@ fn run_second_session_inner() -> ::types_error::PgResult<core::convert::Infallib
         let startup = mcx::MemoryContext::new("WireStartup");
         backend_startup::wire_session_initialize(startup.mcx())?;
     }
-    init_small::globals::WithMyProcPort(|p| {
+    init_small::globals::WithMyProcPortMut(|p| {
         let mut un: libc::sockaddr_un = unsafe { std::mem::zeroed() };
         un.sun_family = libc::AF_UNIX as libc::sa_family_t;
         let n = std::mem::size_of::<libc::sockaddr_un>().min(p.raddr.addr.len());
@@ -1470,6 +1474,12 @@ fn run_second_session(spec: &SessionSpec) -> i32 {
 /// universe is PRIVATE — the two sessions do not share a database; the
 /// shared plane is process shmem only. Multi-backend sim over ONE shared
 /// universe is a substrate follow-on, not a demo-lane fix.
+fn clone_argv(argv: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    out.extend(argv.iter().cloned());
+    out
+}
+
 fn second_session_thread(
     argv: Vec<String>,
     datadir: String,
@@ -1492,7 +1502,7 @@ fn second_session_thread(
     pgsync::thread::Builder::new()
         .name(spec.thread_name.into())
         .stack_size(64 * 1024 * 1024)
-        .spawn(move || {
+        .spawn(pagegive::pinned(move || {
             // SIM-HARNESS-CONVERGE fault mode: after the whole-node kill,
             // even the PRELUDE below can panic (its expects read config
             // files through the killed vfs -> EIO). Contain the whole
@@ -1523,7 +1533,7 @@ fn second_session_thread(
                     134
                 }
             }
-        })
+        }))
         .expect("spawn sim-session thread")
 }
 
@@ -1701,21 +1711,6 @@ pub fn PostgresSimNetMain(argv: &[String], username: &str) -> ! {
     ops_report("armed");
     install_fault_plan_from_env();
 
-    // SIMVFS-SHARED P8: the loadsort-prefetch corpus (no server boot —
-    // pure loadsort machinery over the shared universe); never returns.
-    if std::env::var("PGRUST_PERMIT_LOADSORT").is_ok_and(|v| v == "1") {
-        match pgrcolumnar::loadsort::sim_demo::run_prefetch_corpus() {
-            Ok(line) => {
-                println!("{line}");
-                std::process::exit(0);
-            }
-            Err(e) => {
-                println!("LOADSORT-RED {e}");
-                std::process::exit(1);
-            }
-        }
-    }
-
     // The boot session (turn-id 1) runs the setup script to completion before
     // the workers spawn; it is never part of the cross-session schedule.
     install_pump_for("PGRUST_SIMNET_SQL", 1);
@@ -1823,7 +1818,7 @@ pub fn PostgresSimNetMain(argv: &[String], username: &str) -> ! {
         let leader_pid = init_small::globals::process_id() as i32 + 1;
         let leader_slot = register_session_backend(leader_pid);
         let s2 = second_session_thread(
-            argv.to_vec(),
+            clone_argv(argv),
             datadir.clone(),
             snap,
             adopt,
@@ -1947,7 +1942,7 @@ pub fn PostgresSimNetMain(argv: &[String], username: &str) -> ! {
                 Some(register_session_backend(pid))
             };
             handles.push(second_session_thread(
-                argv.to_vec(),
+                clone_argv(argv),
                 datadir.clone(),
                 snap.clone(),
                 adopt,
@@ -2049,7 +2044,7 @@ pub fn PostgresSimNetMain(argv: &[String], username: &str) -> ! {
     let (code1, code2) = if serial {
         let code1 = run_session_on_this_thread("PGRUST_SIMNET_TRANSCRIPT", "PGRUST_SIMNET_OPLOG");
         let s2 = second_session_thread(
-            argv.to_vec(),
+            clone_argv(argv),
             datadir.clone(),
             snap,
             None,
@@ -2058,7 +2053,7 @@ pub fn PostgresSimNetMain(argv: &[String], username: &str) -> ! {
         (code1, s2.join().unwrap_or(101))
     } else {
         let s2 = second_session_thread(
-            argv.to_vec(),
+            clone_argv(argv),
             datadir.clone(),
             snap,
             None,

@@ -20,8 +20,7 @@ use types_storage::lock::{AccessShareLock, RowExclusiveLock, ShareLock};
 use types_tuple::NameData;
 use wchar::{PG_SQL_ASCII, PG_UTF8};
 
-// wasm32: no LC_* names in the wasi libc crate; musl numbering (the
-// pg_locale wasm arm's convention).
+// wasm32: no LC_* names in the wasi libc crate; musl numbering.
 #[cfg(not(target_family = "wasm"))]
 use libc::{LC_COLLATE, LC_CTYPE};
 #[cfg(target_family = "wasm")]
@@ -34,33 +33,27 @@ use crate::{
     GLOBALTABLESPACE_OID, TableSpaceRelationId, XLOG_DBASE_CREATE_FILE_COPY,
 };
 
-// UTF-8-only server encodings (ratified carve,
-// docs/design/carve-ratifications.md §11, 2026-08-18): only UTF8 and
-// SQL_ASCII are accepted server encodings. SQL_ASCII stays creatable because
-// its query text is already gated to ASCII (a UTF-8 subset) per query; every
-// other encoding is refused here at the boundary instead of failing
-// per-feature later.
+// `encoding < 0` means "inherit from the template"; the
+// inherited value is gated again once the template is resolved.
 fn server_encoding_gate(encoding: i32, position: i32) -> Option<Box<types_error::PgError>> {
-    if encoding < 0 || encoding == PG_UTF8 || encoding == PG_SQL_ASCII {
+    if encoding < 0 || encoding == PG_UTF8 {
         return None;
     }
-    Some(
-        ereport(ERROR)
-            .errcode(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
-            .errmsg(format!(
-                "server encoding \"{}\" is not supported by pgrust; only \"UTF8\" and \
-                 \"SQL_ASCII\" server encodings are accepted (UTF-8-only carve, \
-                 docs/design/carve-ratifications.md)",
-                mbutils::pg_encoding_to_char(encoding)
-            ))
-            .errhint(
-                "Restore non-UTF8 dumps into a UTF8 database; client_encoding conversion is \
-                 supported.",
-            )
-            .errposition(position)
-            .into_error()
-            .into(),
-    )
+    let mut b = ereport(ERROR)
+        .errcode(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
+        .errmsg(format!(
+            "server encoding \"{}\" is not supported by pgrust; only the \"UTF8\" server \
+             encoding is accepted (UTF-8-only carve, docs/design/carve-ratifications.md)",
+            mbutils::pg_encoding_to_char(encoding)
+        ))
+        .errhint(
+            "Restore non-UTF8 dumps into a UTF8 database; client_encoding conversion is \
+             supported.",
+        );
+    if position > 0 {
+        b = b.errposition(position);
+    }
+    Some(b.into_error().into())
 }
 
 fn errpos(pstate: Option<&ParseState<'_, '_>>, location: i32) -> i32 {
@@ -69,7 +62,6 @@ fn errpos(pstate: Option<&ParseState<'_, '_>>, location: i32) -> i32 {
     })
 }
 
-// collprovider_name (pg_collation.h).
 fn collprovider_name(c: u8) -> &'static str {
     match c {
         COLLPROVIDER_BUILTIN => "builtin",
@@ -143,11 +135,6 @@ pub fn check_encoding_locale_matches(
     Ok(())
 }
 
-/// One per-tablespace directory copy a FILE_COPY create owes: the exact
-/// (srcpath, dstpath, srctablespace, dsttablespace) tuple the
-/// CreateDatabaseUsingFileCopy loop derives per pg_tablespace row with
-/// template content. Owned Strings on purpose: the janitor's deferred-copy
-/// batch carries these across per-member memory contexts.
 pub struct FileCopyDir {
     pub srcpath: String,
     pub dstpath: String,
@@ -155,19 +142,13 @@ pub struct FileCopyDir {
     pub dst_tablespace: Oid,
 }
 
-/// The deferred half of `createdb_deferred_file_copy`: the created
-/// database's oid plus every directory copy (and matching
-/// XLOG_DBASE_CREATE_FILE_COPY record) the caller now owes before commit.
 pub struct DeferredFileCopy {
     pub db_oid: Oid,
     pub src_dboid: Oid,
     pub dirs: Vec<FileCopyDir>,
 }
 
-/// The XLOG_DBASE_CREATE_FILE_COPY record for ONE copied per-tablespace
-/// directory (the record half of the CreateDatabaseUsingFileCopy loop,
-/// shared with the janitor's deferred-copy WAL phase). MUST be called on
-/// the backend thread that owns the transaction, strictly AFTER the
+/// MUST be called on the backend thread that owns the transaction, strictly AFTER the
 /// directory copy it describes completed (record-implies-copy-complete).
 pub fn log_file_copy_record(
     dst_dboid: Oid,
@@ -190,11 +171,6 @@ pub fn log_file_copy_record(
     Ok(())
 }
 
-/// The enumeration half of the CreateDatabaseUsingFileCopy loop (janitor
-/// deferred-copy support): the same pg_tablespace scan and the same
-/// per-row srcpath-has-content filter, yielding the copy list WITHOUT
-/// copying. Kept separate from CreateDatabaseUsingFileCopy on purpose —
-/// the C-shaped path keeps its exact copy-inside-the-scan interleaving.
 fn enumerate_file_copy_dirs(
     mcx: Mcx<'_>,
     src_dboid: Oid,
@@ -271,6 +247,7 @@ fn CreateDatabaseUsingFileCopy(
         let dstpath = relpath::GetDatabasePath(mcx, dst_dboid, dsttablespace)?;
 
         fd::copydir(srcpath.as_str(), dstpath.as_str(), false)?;
+        pgrc_am::dircopy::copy_table_dirs(srcpath.as_str(), dstpath.as_str(), dsttablespace, dst_dboid)?;
 
         log_file_copy_record(dst_dboid, dsttablespace, src_dboid, srctablespace)?;
     }
@@ -278,20 +255,16 @@ fn CreateDatabaseUsingFileCopy(
     rel.close(AccessShareLock)?;
 
     // Checkpoint before commit so committed FILE_COPY creates never need
-    // ordinary crash-recovery replay (dbcommands.c's #1/#2 scenarios).
+    // ordinary crash-recovery replay.
     if request_checkpoints && !init_small::globals::IsBinaryUpgrade() {
         checkpointer::RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT)?;
     }
     Ok(())
 }
 
-/// The wal_log arm of createdb_failure_cleanup, callable AFTER the failed
-/// transaction is gone (janitor batch-abort cleanup): a wal_log copy runs
-/// through shared buffers, so an aborted-batch member's dirty dst-database
-/// buffers MUST be dropped (and its pending fsync requests forgotten)
-/// BEFORE its datadir is rmtree'd — a checkpointer write into a removed
-/// directory otherwise hard-errors. The lock releases of the in-transaction
-/// cleanup are deliberately absent: the aborting transaction released them.
+/// An aborted-batch member's dirty dst-database buffers MUST be dropped (and
+/// its pending fsync requests forgotten) BEFORE its datadir is rmtree'd — a
+/// checkpointer write into a removed directory otherwise hard-errors.
 pub fn forget_walog_database(dst_dboid: Oid) -> PgResult<()> {
     bufmgr::DropDatabaseBuffers(dst_dboid)?;
     smgr::ForgetDatabaseSyncRequests(dst_dboid)?;
@@ -313,22 +286,13 @@ fn createdb_failure_cleanup(
     crate::remove_dbtablespaces(mcx, dst_dboid)
 }
 
-/// How createdb_guts runs the copy half.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CreatedbCopyMode {
-    /// C-shaped: copy inline, with FILE_COPY's checkpoint pair.
     Inline,
-    /// Batched-mint entry: copy inline, both FILE_COPY checkpoints elided
-    /// (the caller brackets its batch with one pair).
     InlineSkipCheckpoints,
-    /// Deferred-copy entry (parallel batch copy): catalog work only; the
-    /// caller owes the directory copies + WAL records + checkpoint pair.
-    /// FILE_COPY strategy required.
     Deferred,
 }
 
-// createdb(pstate, stmt) (dbcommands.c:684): the pstate feeds
-// errorConflictingDefElem's cursor (dbcommands.c:752-764).
 pub fn createdb<'mcx>(
     mcx: Mcx<'mcx>,
     pstate: Option<&ParseState<'_, '_>>,
@@ -337,66 +301,7 @@ pub fn createdb<'mcx>(
     Ok(createdb_guts(mcx, pstate, stmt, CreatedbCopyMode::Inline)?.0)
 }
 
-/// pgrust-only additive entry (docs/design/test-views.md, "Batched-minting
-/// addendum"; the `dropdb_skip_checkpoint` precedent — the second
-/// sanctioned extension of this C-parity crate): `createdb` minus BOTH of
-/// FILE_COPY's per-create `RequestCheckpoint`s, for the ephemeral-db
-/// janitor's batched mints. The janitor brackets a whole batch with ONE
-/// checkpoint pair inside a single transaction: the FLUSH_ALL pre-checkpoint
-/// before the first copy, this entry once per batch member, the plain
-/// post-checkpoint after the LAST copy, THEN the commit.
-///
-/// Why hoisting the pair out of the loop is safe — C's rationale for each
-/// request (dbcommands.c CreateDatabaseUsingFileCopy) discharges per batch:
-///
-/// 1. Pre-copy FLUSH_ALL ("Force a checkpoint before starting the copy of
-///    the source database... including private buffers of unlogged
-///    relations, so the copy sees every committed page on disk"): one
-///    batch-level FLUSH_ALL covers every member because nothing dirties a
-///    template's per-database files between it and the copies — the batch
-///    transaction itself writes only shared catalogs (pg_database,
-///    pg_shdepend, pg_db_role_setting: global tablespace, never inside the
-///    directories copydir copies; the STRATEGY-PICK probe reads template
-///    pg_class buffers and can dirty them via hint bits, which the janitor
-///    prices separately — a probing pick invalidates the flush mark and
-///    re-pays the member's FLUSH_ALL, mint.rs member_fires_pre), a batch
-///    member's freshly copied database goes through the filesystem rather
-///    than shared buffers, and each member's own `CountOtherDBBackends`
-///    still refuses an occupied source immediately before its copy — in
-///    Deferred mode (createdb_deferred_file_copy) the catalog-time check
-///    no longer sits adjacent to the copy, so the janitor RE-RUNS it per
-///    unique source at the top of the copy phase (run_deferred_copies),
-///    restoring the adjacency at batch grain. A backend that connects to a source and
-///    dirties it AFTER that check is C's own documented FILE_COPY residual
-///    (the "source database must remain idle" caveat); the batch widens
-///    that window from one copy to one batch, it does not add a state.
-///    NOTE the check's honest limit: `CountOtherDBBackends` cannot see a
-///    writer that already DISCONNECTED — a connect-dirty-disconnect
-///    entirely inside the widened window passes every member's check while
-///    its unflushed pages sit in shared buffers. The janitor caller
-///    therefore restricts batch members to templates with
-///    datallowconn = false (verified at preflight AND re-checked inside
-///    the batch transaction), making the widened window unreachable by
-///    ordinary connections; connectable templates mint on the serial path,
-///    whose window is stock C's own one-copy-wide residual.
-/// 2. Post-copy checkpoint before commit ("committed FILE_COPY creates
-///    never need ordinary crash-recovery replay", the #1/#2 scenarios): the
-///    invariant is per-member "commit implies a checkpoint ran after this
-///    member's copy". One post-checkpoint after the last copy, INSIDE the
-///    single transaction that carries every member, precedes the one commit
-///    that makes any member visible — so it holds for all of them. A crash
-///    before the commit aborts every member (scenario-free); a crash after
-///    it finds every copy checkpointed.
-/// 3. `IsBinaryUpgrade` skips both requests in stock createdb; this entry
-///    is janitor-only and never runs in binary upgrade, so the flag gating
-///    stays inside the guts unchanged.
-///
-/// Everything else — option parsing, privilege checks, template occupancy,
-/// catalog insert, WAL FILE_COPY records, failure cleanup, ForceSyncCommit —
-/// is the shared guts, byte-identical; the C-shaped `createdb` entry above
-/// passes `request_checkpoints = true` and keeps its exact behavior. The
-/// flag is a no-op under STRATEGY wal_log (that path has no checkpoint
-/// sites). Callers of this entry MUST bracket their batch:
+/// Callers of this entry MUST bracket their batch:
 /// `RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE |
 /// CHECKPOINT_WAIT | CHECKPOINT_FLUSH_ALL)` before the first call and
 /// `RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE |
@@ -408,24 +313,11 @@ pub fn createdb_skip_checkpoints<'mcx>(
     Ok(createdb_guts(mcx, None, stmt, CreatedbCopyMode::InlineSkipCheckpoints)?.0)
 }
 
-/// pgrust-only additive entry (test-views.md mint-strategy addendum; the
-/// third sanctioned extension of this C-parity crate, extending the
-/// `createdb_skip_checkpoints` precedent): `createdb_skip_checkpoints`
-/// with the FILE_COPY directory copies and their WAL records DEFERRED to
-/// the caller, so the ephemeral-db janitor can fan a whole batch's copies
-/// across worker threads while every catalog mutation, WAL insertion, and
-/// checkpoint stays on the backend thread that owns the transaction.
-///
 /// Contract (violations break FILE_COPY's crash invariant):
 /// - STRATEGY must be file_copy (wal_log has nothing to defer; refused).
 /// - The caller MUST re-run `CountOtherDBBackends` per unique source
 ///   immediately before the deferred copies (aborting the batch if
-///   occupied): this entry's own catalog-time check no longer guards
-///   "immediately before its copy" — a whole batch of catalog work (and
-///   any checkpoint stall) sits in between, where an attaching
-///   anti-wraparound autovacuum worker would survive to write-race the
-///   copy (safety-discharge item 1 above records the widening and the
-///   restored guard).
+///   occupied).
 /// - The caller MUST, before committing the transaction: copy every
 ///   returned dir (srcpath -> dstpath, the fd::copydir shape: top-level
 ///   regular files, honoring file_copy_method, fsync settings, AND the
@@ -576,7 +468,7 @@ fn createdb_guts<'mcx>(
     let mut dbcollate = arg_str(collate_el)?;
     let mut dbctype = arg_str(ctype_el)?;
     let mut dblocale = arg_str(locale_el)?;
-    // Explicit LC_COLLATE/LC_CTYPE override LOCALE (pg_dump emits both).
+    // Explicit LC_COLLATE/LC_CTYPE override LOCALE.
     if let Some(l) = dblocale {
         if dbcollate.is_none() {
             dbcollate = Some(l);
@@ -652,7 +544,6 @@ fn createdb_guts<'mcx>(
             .into());
     }
 
-    // check_can_set_role(GetUserId(), datdba) (acl.c).
     if !adt_acl::member_can_set_role(miscinit::GetUserId(), datdba)? {
         let rolename = miscinit::GetUserNameFromId(mcx, datdba, false)?
             .expect("noerr=false yields a name");
@@ -708,8 +599,6 @@ fn createdb_guts<'mcx>(
         }
     }
     if copy_mode == CreatedbCopyMode::Deferred && dbstrategy != CreateDBStrategy::FileCopy {
-        // Janitor-only entry misuse, not a user-reachable state: wal_log has
-        // no deferrable copy phase.
         return Err(ereport(ERROR)
             .errcode(types_error::ERRCODE_INTERNAL_ERROR)
             .errmsg(
@@ -721,6 +610,9 @@ fn createdb_guts<'mcx>(
 
     if encoding < 0 {
         encoding = src.encoding;
+        if let Some(err) = server_encoding_gate(encoding, 0) {
+            return Err(err.into());
+        }
     }
     let src_collate = src.datcollate.as_str();
     let src_ctype = src.datctype.as_str();
@@ -750,7 +642,6 @@ fn createdb_guts<'mcx>(
             .into());
     }
 
-    // check_locale failures carry a provider-routing hint (dbcommands.c).
     let locale_hint = |b: elog::ErrorBuilder| -> elog::ErrorBuilder {
         if dblocprovider == COLLPROVIDER_BUILTIN {
             b.errhint(
@@ -790,7 +681,6 @@ fn createdb_guts<'mcx>(
 
     check_encoding_locale_matches(encoding, &dbcollate_s, &dbctype_s)?;
 
-    // Validate provider-specific parameters.
     if dblocprovider != COLLPROVIDER_BUILTIN && builtinlocale_el.is_some() {
         return Err(ereport(ERROR)
             .errcode(types_error::ERRCODE_INVALID_OBJECT_DEFINITION)
@@ -817,11 +707,8 @@ fn createdb_guts<'mcx>(
         }
     }
 
-    // Validate and canonicalize the locale for the provider.
     let mut dblocale_s: Option<String> = dblocale_v.map(|s| s.to_owned());
     if dblocprovider == COLLPROVIDER_BUILTIN {
-        // Happens if template0 uses the libc provider but the new database
-        // uses builtin.
         let Some(locale) = dblocale_s.as_deref() else {
             return Err(ereport(ERROR)
                 .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
@@ -841,8 +728,6 @@ fn createdb_guts<'mcx>(
                 .into_error()
                 .into());
         }
-        // Happens if template0 uses the libc provider but the new database
-        // uses icu.
         if dblocale_s.is_none() {
             return Err(ereport(ERROR)
                 .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
@@ -850,9 +735,6 @@ fn createdb_guts<'mcx>(
                 .into_error()
                 .into());
         }
-        // During binary upgrade, or when the locale came from the template
-        // database, preserve the locale string; otherwise canonicalize to a
-        // language tag.
         if !init_small::globals::IsBinaryUpgrade() && !dblocale_from_template {
             let locale = dblocale_s.as_deref().expect("checked non-NULL above");
             let elevel =
@@ -870,7 +752,6 @@ fn createdb_guts<'mcx>(
         }
         pg_locale::icu_validate_locale(dblocale_s.as_deref().expect("checked non-NULL above"))?;
     }
-    // For libc, the locale comes from datcollate and datctype.
     if dblocprovider == COLLPROVIDER_LIBC {
         dblocale_s = None;
     }
@@ -932,7 +813,6 @@ fn createdb_guts<'mcx>(
                 .into());
         }
         if dblocprovider == COLLPROVIDER_ICU {
-            // C Asserts both locales; providers match, so both are ICU-set.
             let val1 = dblocale_s.as_deref().expect("ICU database carries a locale");
             let val2 = src_locale.expect("ICU template carries a locale");
             if val1 != val2 {
@@ -966,8 +846,7 @@ fn createdb_guts<'mcx>(
         }
     }
 
-    // Template collversion check + fill-in. For libc the versioned locale is
-    // datcollate; other providers version datlocale.
+    // For libc the versioned locale is datcollate; other providers version datlocale.
     let versioned_locale = |dbcollate_s: &str, dblocale_s: &Option<String>| -> String {
         if dblocprovider == COLLPROVIDER_LIBC {
             dbcollate_s.to_owned()
@@ -1222,9 +1101,6 @@ fn createdb_guts<'mcx>(
 mod tests {
     use super::*;
 
-    // Provider-lane helpers (previously the whole non-libc lane was a 0A000
-    // fence): collprovider_name spellings for the template-mismatch message,
-    // and the BUILTIN lane's validation/canonicalization with C's errors.
     #[test]
     fn provider_lane_helpers_match_c() {
         assert_eq!(collprovider_name(COLLPROVIDER_BUILTIN), "builtin");
@@ -1249,18 +1125,19 @@ mod tests {
         );
     }
 
-    // UTF-8-only server-encoding carve (docs/design/carve-ratifications.md
-    // §11, ratified 2026-08-18): only UTF8 and SQL_ASCII pass the createdb
-    // gate; everything else is a clean 0A000 with the migration hint.
+    // Only UTF8 passes the createdb gate; SQL_ASCII, LATIN1, WIN1252, EUC_JP are
+    // a clean 0A000 with the migration hint.
     #[test]
     fn utf8_only_server_encoding_gate() {
         assert!(server_encoding_gate(-1, 0).is_none()); // inherited from template
         assert!(server_encoding_gate(PG_UTF8, 0).is_none());
-        assert!(server_encoding_gate(PG_SQL_ASCII, 0).is_none());
 
-        for (enc, name) in
-            [(wchar::PG_LATIN1, "LATIN1"), (wchar::PG_EUC_JP, "EUC_JP")]
-        {
+        for (enc, name) in [
+            (PG_SQL_ASCII, "SQL_ASCII"),
+            (wchar::PG_LATIN1, "LATIN1"),
+            (wchar::PG_WIN1252, "WIN1252"),
+            (wchar::PG_EUC_JP, "EUC_JP"),
+        ] {
             let e = server_encoding_gate(enc, 17).expect("must be rejected");
             assert_eq!(
                 e.sqlstate(),
@@ -1269,8 +1146,8 @@ mod tests {
             assert_eq!(
                 e.message(),
                 format!(
-                    "server encoding \"{name}\" is not supported by pgrust; only \"UTF8\" and \
-                     \"SQL_ASCII\" server encodings are accepted (UTF-8-only carve, \
+                    "server encoding \"{name}\" is not supported by pgrust; only the \"UTF8\" \
+                     server encoding is accepted (UTF-8-only carve, \
                      docs/design/carve-ratifications.md)"
                 )
             );

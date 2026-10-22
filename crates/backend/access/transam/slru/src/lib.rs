@@ -11,7 +11,7 @@ mod shmem;
 pub use guard::LwGuard;
 pub use path::{SlruDir, SlruPath};
 
-use ::elog::ereport;
+use ::elog::{ereport, PCT_M};
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use init_small::globals;
@@ -978,14 +978,14 @@ fn SlruReportIOError<T>(
             .with_saved_errno(en)
             .errcode_for_file_access()
             .errmsg(msg)
-            .errdetail(format!("Could not open file \"{path}\": %m."))
+            .errdetail(format!("Could not open file \"{path}\": {PCT_M}."))
             .finish(at)?,
         SLRU_SEEK_FAILED => ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
             .errmsg(msg)
             .errdetail(format!(
-                "Could not seek in file \"{path}\" to offset {offset}: %m."
+                "Could not seek in file \"{path}\" to offset {offset}: {PCT_M}."
             ))
             .finish(at)?,
         SLRU_READ_FAILED => {
@@ -995,7 +995,7 @@ fn SlruReportIOError<T>(
                     .errcode_for_file_access()
                     .errmsg(msg)
                     .errdetail(format!(
-                        "Could not read from file \"{path}\" at offset {offset}: %m."
+                        "Could not read from file \"{path}\" at offset {offset}: {PCT_M}."
                     ))
                     .finish(at)?
             } else {
@@ -1014,7 +1014,7 @@ fn SlruReportIOError<T>(
                     .errcode_for_file_access()
                     .errmsg(msg)
                     .errdetail(format!(
-                        "Could not write to file \"{path}\" at offset {offset}: %m."
+                        "Could not write to file \"{path}\" at offset {offset}: {PCT_M}."
                     ))
                     .finish(at)?
             } else {
@@ -1030,13 +1030,13 @@ fn SlruReportIOError<T>(
             .with_saved_errno(en)
             .errcode_for_file_access()
             .errmsg(msg)
-            .errdetail(format!("Could not fsync file \"{path}\": %m."))
+            .errdetail(format!("Could not fsync file \"{path}\": {PCT_M}."))
             .finish(at)?,
         SLRU_CLOSE_FAILED => ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
             .errmsg(msg)
-            .errdetail(format!("Could not close file \"{path}\": %m."))
+            .errdetail(format!("Could not close file \"{path}\": {PCT_M}."))
             .finish(at)?,
     }
     // Every cause reports at >= ERROR, so finish always returned Err above.

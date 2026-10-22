@@ -1,0 +1,93 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s1lb s2ab s1na s1c s2c
+step s2b: BEGIN;
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 30 FOR UPDATE;
+QUERY PLAN                          
+------------------------------------
+LockRows                            
+  ->  Hash Join                     
+        Hash Cond: (a.id = b.a_id)  
+        ->  Seq Scan on ma a        
+        ->  Hash                    
+              ->  Seq Scan on mb b  
+                    Filter: (w < 30)
+(7 rows)
+
+step s1lb: SELECT id FROM mb WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2ab: SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 30 FOR UPDATE; <waiting ...>
+step s1na: SELECT id FROM ma WHERE id = 1 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "ma"
+step s2ab: <... completed>
+id|id
+--+--
+ 1| 1
+ 2| 2
+(2 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s2xba s1lb s2ba s1na s1c s2c
+step s2b: BEGIN;
+step s2xba: EXPLAIN (COSTS OFF) SELECT a.id, b.id FROM mb b JOIN ma a ON a.id = b.a_id WHERE b.w < 30 FOR UPDATE;
+QUERY PLAN                          
+------------------------------------
+LockRows                            
+  ->  Hash Join                     
+        Hash Cond: (a.id = b.a_id)  
+        ->  Seq Scan on ma a        
+        ->  Hash                    
+              ->  Seq Scan on mb b  
+                    Filter: (w < 30)
+(7 rows)
+
+step s1lb: SELECT id FROM mb WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2ba: SELECT a.id, b.id FROM mb b JOIN ma a ON a.id = b.a_id WHERE b.w < 30 FOR UPDATE; <waiting ...>
+step s1na: SELECT id FROM ma WHERE id = 1 FOR UPDATE NOWAIT;
+id
+--
+ 1
+(1 row)
+
+step s1c: COMMIT;
+step s2ba: <... completed>
+id|id
+--+--
+ 1| 1
+ 2| 2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1lb s2ab s1ba s1c s2c
+step s2b: BEGIN;
+step s1lb: SELECT id FROM mb WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2ab: SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 30 FOR UPDATE; <waiting ...>
+step s1ba: SELECT a.id, b.id FROM mb b JOIN ma a ON a.id = b.a_id WHERE b.w < 30 FOR UPDATE; <waiting ...>
+step s2ab: <... completed>
+id|id
+--+--
+ 1| 1
+ 2| 2
+(2 rows)
+
+step s1ba: <... completed>
+ERROR:  deadlock detected
+step s1c: COMMIT;
+step s2c: COMMIT;

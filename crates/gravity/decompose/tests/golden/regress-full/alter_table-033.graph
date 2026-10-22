@@ -1,0 +1,18 @@
+-- regress-full-alter_table-033
+-- SELECT check_ddl_rewrite('rewrite_test', $$ ALTER TABLE rewrite_test ADD COLUMN empty1 text, ADD COLUMN notempty1_rewrite serial; $$);
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=1259 rti=2 am=heap index=2662
+    key att=1 op=607 value=c26:42259
+    recheck (op607(v2.1, c26:42259))
+    lanes Attr(8):byval8:w8:val
+  project (1=v2.8)
+  outs 1=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op608(c26:42259, $exec0))
+  outs 1=w1:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: Result IndexScan SubPlan

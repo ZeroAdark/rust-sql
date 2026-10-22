@@ -1,0 +1,11 @@
+-- regress-full-interval-010
+-- SELECT i AS interval, date_trunc('ago', i) FROM INFINITE_INTERVAL_TBL WHERE NOT isfinite(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1233 end=sink
+  nodes n0@0
+  source range rel=17189 rti=1 am=heap
+    lanes Attr(1):byref8:fx16:win/page Offset:byval2:w2:val
+  filter not(fn1390(v1.1))
+  project (1=v1.1, 2=fn1218(c25:'ago', v1.1))
+  outs 1=fx16:win/page 2=fx16:call1218
+mapped: SeqScan

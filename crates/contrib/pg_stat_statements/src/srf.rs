@@ -130,8 +130,8 @@ fn pg_stat_statements_internal(
     let shared = guard.as_ref().expect("checked above");
 
     for (key, entry) in shared.hash.iter() {
-        let mut values: Vec<Datum> = Vec::with_capacity(natts as usize);
-        let mut nulls: Vec<bool> = Vec::with_capacity(natts as usize);
+        let mut values: Vec<Datum> = ::mcx::std_vec_with_capacity("pg_stat_statements", natts as usize)?;
+        let mut nulls: Vec<bool> = ::mcx::std_vec_with_capacity("pg_stat_statements", natts as usize)?;
         let push = |values: &mut Vec<Datum>, nulls: &mut Vec<bool>, d: Datum| {
             values.push(d);
             nulls.push(false);

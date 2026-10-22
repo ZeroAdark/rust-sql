@@ -1,0 +1,18 @@
+-- name: regress-full-publication-006
+-- sql: SELECT obj_description(p.oid, 'pg_publication') FROM pg_publication p;
+-- test: publication
+-- shape: 89ea8d9d81f32f76 seen=2
+-- rel 6104 pg_publication am=heap kind=r natts=10
+-- att 6104 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 6104 2 pubname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 6104 3 pubowner typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 6104 4 puballtables typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 6104 5 pubinsert typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 6104 6 pubupdate typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 6104 7 pubdelete typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 6104 8 pubtruncate typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 6104 9 pubviaroot typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 6104 10 pubgencols typid=18 typmod=-1 len=1 byval=t notnull=t
+-- idx 6110 rel=6104 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 6111 rel=6104 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 20.76 :scan.plan.plan_rows 76 :scan.plan.plan_width 32 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {FUNCEXPR :funcid 1215 :funcresulttype 25 :funcretset false :funcvariadic false :funcformat 0 :funccollid 950 :inputcollid 950 :args ({VAR :varno 1 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 23} {CONST :consttype 19 :consttypmod -1 :constcollid 950 :constlen 64 :constbyval false :constisnull false :location 30 :constvalue 64 [ 112 103 95 112 117 98 108 105 99 97 116 105 111 110 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]}) :location 7} :resno 1 :resname obj_description :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 1)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias {ALIAS :aliasname p :colnames <>} :eref {ALIAS :aliasname p :colnames ("oid" "pubname" "pubowner" "puballtables" "pubinsert" "pubupdate" "pubdelete" "pubtruncate" "pubviaroot" "pubgencols")} :rtekind 0 :relid 6104 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 6104 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 6104) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 69}

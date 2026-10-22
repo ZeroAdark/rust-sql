@@ -2,7 +2,8 @@
 
 mod array_typanalyze;
 mod dynahash_order;
-mod pgrc2_fold;
+mod pgrc_fold;
+mod jsonb_typanalyze;
 mod range_typanalyze;
 mod ts_typanalyze;
 pub mod sampling;
@@ -22,7 +23,6 @@ use types_rel::{
     Relation, RELKIND_FOREIGN_TABLE, RELKIND_MATVIEW, RELKIND_PARTITIONED_TABLE, RELKIND_RELATION,
 };
 use types_scan::scankey::{BTEqualStrategyNumber, ScanKeyData};
-use types_scan::sdir::ScanDirection;
 use types_slot::SlotData;
 use types_storage::buf::BufferAccessStrategy;
 use types_tuple::{FormData_pg_attribute, HeapTupleData, TupleDescData};
@@ -107,6 +107,9 @@ enum ComputeStats {
     TsVector,
     // upstream 017e4e395d0d (18.4): test_custom_types: Test module with fancy custom data types
     Custom(CustomComputeStats),
+    // pgrust-only: per-path jsonb statistics (jsonb_typanalyze.rs; the std
+    // compute still runs first, unchanged). Table columns only.
+    Jsonb { std: StdCompute },
 }
 
 // std_typanalyze's pick, saved by array_typanalyze (C's std_compute_stats).
@@ -298,12 +301,7 @@ fn vacuum<'mcx>(
         xact::CommitTransactionCommand()?;
     }
 
-    commands_vacuum::set_in_vacuum(true);
-    arm_cost_accounting()?;
-    // catch_unwind = C's PG_FINALLY (panics become ERRORs at tcop and the
-    // session survives, so in_vacuum must reset on every exit path).
-    // unwind-ok: log-then-die
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> PgResult<()> {
+    commands_vacuum::vacuum_window(autovacuum_seams::vacuum_update_costs::call, || {
         for vrel in vacrels.iter() {
             if use_own_xacts {
                 xact::StartTransactionCommand()?;
@@ -329,36 +327,12 @@ fn vacuum<'mcx>(
             }
         }
         Ok(())
-    }));
-    commands_vacuum::set_in_vacuum(false);
-    disarm_cost_accounting();
-    match result {
-        Ok(r) => r?,
-        Err(p) => std::panic::resume_unwind(p),
-    }
+    })?;
     if use_own_xacts {
         // Matches the CommitTransaction waiting in PostgresMain.
         xact::StartTransactionCommand()?;
     }
     Ok(())
-}
-
-// vacuum.c:624-630: cost accounting is armed for ANALYZE exactly as for
-// VACUUM (vacuum_delay_point throttles only while VacuumCostActive).
-fn arm_cost_accounting() -> PgResult<()> {
-    commands_vacuum::SetVacuumFailsafeActive(false);
-    autovacuum_seams::vacuum_update_costs::call()?;
-    init_small::globals::SetVacuumCostBalance(0);
-    commands_vacuum::set_vacuum_cost_balance_local(0);
-    commands_vacuum::set_vacuum_shared_cost(None);
-    Ok(())
-}
-
-// vacuum.c:668-674 PG_FINALLY.
-fn disarm_cost_accounting() {
-    init_small::globals::SetVacuumCostActive(false);
-    commands_vacuum::SetVacuumFailsafeActive(false);
-    init_small::globals::SetVacuumCostBalance(0);
 }
 
 pub fn analyze_rel(
@@ -480,7 +454,7 @@ pub fn analyze_rel(
     Ok(())
 }
 
-/// regression lever 3 (analyze-during-load): the sample size the standard
+/// GL-COPYFAST-1 lever 3 (analyze-during-load): the sample size the standard
 /// ANALYZE would use for this relation — the per-column examine pass
 /// (attstattarget-driven minrows, 300x target) maxed with the
 /// extended-statistics floor, exactly do_analyze_rel's targrows arithmetic.
@@ -518,7 +492,7 @@ pub fn inline_analyze_targrows(onerel: &Relation<'_>) -> PgResult<i32> {
     Ok(targrows)
 }
 
-/// regression lever 3: the ANALYZE write half driven from a pre-acquired
+/// GL-COPYFAST-1 lever 3: the ANALYZE write half driven from a pre-acquired
 /// in-stream sample (rows in physical/stream order, formed against the
 /// relation's descriptor; totalrows = the exact loaded row count). Runs the
 /// standard do_analyze_rel body minus acquisition, so pg_statistic,
@@ -588,7 +562,7 @@ fn do_analyze_rel<'mcx>(
     // C's vac_strategy: the BAS_VACUUM ring the sample scan and the index
     // cleanup read through (analyze.c:281 do_analyze_rel bstrategy).
     bstrategy: BufferAccessStrategy,
-    // regression lever 3 (analyze-during-load): Some((rows, totalrows)) =
+    // GL-COPYFAST-1 lever 3 (analyze-during-load): Some((rows, totalrows)) =
     // the sample was already acquired in-stream by the load pipeline (rows in
     // physical/stream order, formed against onerel's descriptor, alive for
     // the whole call); the acquisition phase is skipped and totaldeadrows is
@@ -749,6 +723,7 @@ fn do_analyze_rel<'mcx>(
     let mut totalrows = 0.0f64;
     let mut totaldeadrows = 0.0f64;
     let mut rows: PgVec<'_, HeapTupleData<'_>> = PgVec::new_in(anl_mcx);
+    let mut sampled_children: PgVec<'_, Oid> = PgVec::new_in(anl_mcx);
     if inline_sample.is_none() {
         pgstat_progress_update_param(
             PROGRESS_ANALYZE_PHASE,
@@ -760,8 +735,14 @@ fn do_analyze_rel<'mcx>(
         );
     }
     let anl_trace = analyze_trace();
+    let pgrc_mode = if tableam::TableAm::of(onerel) == Some(tableam::TableAm::Pgrcolumnar) {
+        Some(pgrc_fold::analyze_mode()?)
+    } else {
+        None
+    };
 
-    // P6-5 (M5a ST-2 made LIVE end-to-end): ANALYZE on a pgrcolumnar2 table
+    // P6-5 (M5a ST-2 made LIVE end-to-end): ANALYZE on a pgrcolumnar table
+    // under pgrust.pgrc_analyze_mode = fold (not the default since D3181)
     // serves pg_statistic from the AM's seal-built fold — footer facts,
     // Stats sidecars, HLL NDV — with NO sampling scan. Admission is
     // conservative: single-rel std-typanalyze pass with no index or
@@ -775,17 +756,16 @@ fn do_analyze_rel<'mcx>(
             || hasindex
             || ext_stats_rows > 0
             || acquirefunc.is_some()
-            || tableam::TableAm::of(onerel) != Some(tableam::TableAm::Pgrcolumnar2)
-            || !pgrc2_fold::fold_enabled()
+            || pgrc_mode != Some(pgrc_fold::AnalyzeMode::Fold)
         {
             break 'fold false;
         }
-        let fold = match tableam::pgrc2_analyze_fold(onerel)? {
-            tableam::Pgrc2AnalyzeFold::Folded(f) => f,
-            tableam::Pgrc2AnalyzeFold::Declined(d) => {
+        let fold = match tableam::pgrc_analyze_fold(anl_mcx, onerel)? {
+            tableam::PgrcAnalyzeFold::Folded(f) => f,
+            tableam::PgrcAnalyzeFold::Declined(d) => {
                 if anl_trace {
                     eprintln!(
-                        "ANALYZE|TRACE|pgrc2-fold declined rel={} cause={}",
+                        "ANALYZE|TRACE|pgrc-fold declined rel={} cause={}",
                         onerel.rd_id,
                         d.cause()
                     );
@@ -793,27 +773,43 @@ fn do_analyze_rel<'mcx>(
                 break 'fold false;
             }
         };
-        if !pgrc2_fold::apply_fold(anl_mcx, &fold, &mut vacattrstats)? {
+        let Some(sampled) = pgrc_fold::apply_fold(anl_mcx, &fold, &mut vacattrstats)? else {
             if anl_trace {
                 eprintln!(
-                    "ANALYZE|TRACE|pgrc2-fold declined rel={} cause=render-inadmissible",
+                    "ANALYZE|TRACE|pgrc-fold declined rel={} cause=render-inadmissible",
                     onerel.rd_id
                 );
             }
             break 'fold false;
+        };
+        if !sampled.is_empty() {
+            pgrc_sample_unfolded(anl_mcx, &anl, onerel, &mut vacattrstats, &sampled, targrows)?;
+        }
+        for s in vacattrstats.iter_mut() {
+            if let Some(aopt) =
+                attoptcache::get_attribute_options(anl_mcx, onerel.rd_id, s.tupattnum as i16)?
+            {
+                if aopt.n_distinct != 0.0 {
+                    s.stadistinct = aopt.n_distinct as f32;
+                }
+            }
         }
         update_attstats(onerel.rd_id, false, &vacattrstats)?;
         // Fold-vintage witness AFTER the pg_statistic write (the S-1 honest
         // source-stamping contract).
-        tableam::pgrc2_record_stats_fold_vintage(onerel);
+        if sampled.is_empty() {
+            tableam::pgrc_record_stats_fold_vintage(onerel);
+        }
         totalrows = fold.total_rows as f64;
         totaldeadrows = 0.0;
         if anl_trace {
             eprintln!(
-                "ANALYZE|TRACE|pgrc2-fold served rel={} cols={} rows={}",
+                "ANALYZE|TRACE|pgrc-fold served rel={} cols={} sampled={} rows={} source={}",
                 onerel.rd_id,
                 vacattrstats.len(),
-                fold.total_rows
+                sampled.len(),
+                fold.total_rows,
+                fold.source
             );
         }
         true
@@ -851,6 +847,7 @@ fn do_analyze_rel<'mcx>(
             &mut totalrows,
             &mut totaldeadrows,
             &bstrategy,
+            &mut sampled_children,
         )?
     } else if let Some(f) = acquirefunc {
         f(anl_mcx, onerel, elevel, &mut rows, targrows, &mut totalrows, &mut totaldeadrows)?
@@ -878,23 +875,18 @@ fn do_analyze_rel<'mcx>(
             );
         }
 
-        // Bump: armed cmp frames detoast packed by-ref args here per comparison,
-        // freed wholesale at the per-column reset (C pfrees per call).
-        let mut col_cx = anl.new_child_bump("Analyze Column");
+        // analyze.c:553 col_context: an AllocSet (armed cmp frames detoast
+        // packed by-ref args here per comparison and pfree them C-style);
+        // reset wholesale per column like C's MemoryContextReset.
+        let mut col_cx = anl.new_child_wholesale("Analyze Column");
         let src = FetchSource::Heap { tupdesc, rows: &rows[..numrows as usize] };
-        // Ingest-time footer NDV (whole-stream HLL): sampled Duj1 underestimates
-        // heavy-tailed text NDV 100-1500x, so a present footer count wins.
-        // The inherited pass unions the children's v8 REGISTER sketches
-        // (scalars cannot be combined — a sum double-counts values shared
-        // across children) into an honest parent-level NDV.
-        let footer_ndv = if !inh {
-            if tableam::TableAm::of(onerel) == Some(tableam::TableAm::Pgrcolumnar) {
-                tableam::pgrcolumnar_footer_ndv(onerel)?
-            } else {
-                None
+        // sample_hll: the sample chose the MCV list and histogram with its own n_distinct; only the stored count is
+        // the HyperLogLog's, unless the sample is the whole table (its count is then exact).
+        let hll = match pgrc_mode {
+            Some(pgrc_fold::AnalyzeMode::SampleHll) if !inh && inline_sample.is_none() && (numrows as f64) < totalrows => {
+                pgrc_fold::hll_ndistinct(anl_mcx, onerel)?
             }
-        } else {
-            inherited_pgrcolumnar_footer_ndv(anl_mcx, onerel)?
+            _ => None,
         };
         for s in vacattrstats.iter_mut() {
             let t_col = anl_trace.then(std::time::Instant::now);
@@ -923,19 +915,15 @@ fn do_analyze_rel<'mcx>(
                     ts_typanalyze::compute_tsvector_stats(anl_mcx, col_cx.mcx(), s, &src, numrows)?
                 }
                 ComputeStats::Custom(f) => f(s, &src, numrows, totalrows)?,
+                ComputeStats::Jsonb { std } => {
+                    jsonb_typanalyze::compute_jsonb_stats(
+                        anl_mcx, col_cx.mcx(), s, std, &src, numrows, totalrows,
+                    )?
+                }
             }
-            if let Some(ndv) = &footer_ndv {
-                if s.stats_valid && s.tupattnum >= 1 {
-                    let d = ndv.get(s.tupattnum as usize - 1).copied().unwrap_or(0);
-                    if d > 0 {
-                        let d = (d as f64).min(totalrows.max(1.0));
-                        // Same negative-fraction convention as compute_scalar_stats.
-                        s.stadistinct = if d > 0.1 * totalrows {
-                            -(d / totalrows) as f32
-                        } else {
-                            d as f32
-                        };
-                    }
+            if let Some(nd) = hll.as_deref().and_then(|h| h.iter().find(|e| e.0 == s.tupattnum)).map(|e| e.1) {
+                if s.stats_valid && matches!(s.compute, ComputeStats::Scalar | ComputeStats::Distinct) {
+                    s.stadistinct = nd;
                 }
             }
             // n_distinct / n_distinct_inherited attoptions override
@@ -984,7 +972,7 @@ fn do_analyze_rel<'mcx>(
     }
     if anl_trace {
         // compute bucket includes index/ext stats + the pg_statistic write
-        // (both ~0 on the load shape); acquire has its own pgrcolumnar line.
+        // (both ~0 on the load shape).
         eprintln!(
             "ANALYZE|TRACE|rel={} rows={} acquire={:.3}s compute={:.3}s maxcol=(att {}, {:.3}s)",
             onerel.rd_id,
@@ -1245,7 +1233,7 @@ fn compute_index_stats<'mcx>(
     const MAX_KEYS: usize = types_core::fmgr::INDEX_MAX_KEYS as usize;
     let mut values = [Datum::null(); MAX_KEYS];
     let mut isnull = [false; MAX_KEYS];
-    let mut ind_cx = anl.new_child_bump("Analyze Index");
+    let mut ind_cx = anl.new_child_wholesale("Analyze Index");
     for thisdata in indexdata.iter_mut() {
         let attr_cnt = thisdata.vacattrstats.len();
         if attr_cnt == 0 && thisdata.index_info.ii_Predicate.is_nil() {
@@ -1253,7 +1241,7 @@ fn compute_index_stats<'mcx>(
         }
         {
             let ind_mcx = ind_cx.mcx();
-            let mut per_tuple = ind_cx.new_child_bump("Analyze Index per-tuple");
+            let mut per_tuple = ind_cx.new_child_wholesale("Analyze Index per-tuple");
             let mut slot = exectuples::make_tuple_table_slot(
                 anl_mcx,
                 types_slot::TupleSlotKind::HeapTuple,
@@ -1366,6 +1354,15 @@ fn compute_index_stats<'mcx>(
                             &src,
                             numindexrows as i32,
                         )?,
+                        ComputeStats::Jsonb { std } => jsonb_typanalyze::compute_jsonb_stats(
+                            anl_mcx,
+                            col_cx.mcx(),
+                            stats,
+                            std,
+                            &src,
+                            numindexrows as i32,
+                            totalindexrows,
+                        )?,
                         ComputeStats::Array { std, elem_typeid } => {
                             array_typanalyze::compute_array_stats(
                                 anl_mcx,
@@ -1420,7 +1417,8 @@ fn examine_attribute<'mcx>(
         }
         None => (attr.atttypid, attr.attcollation),
     };
-    let typanalyze = builtin_typanalyze(syscache_seams::pg_type_typanalyze::call(atttypid)?)?;
+    let (typanalyze, secdef) =
+        builtin_typanalyze(syscache_seams::pg_type_typanalyze::call(atttypid)?)?;
     let ty = syscache_seams::lookup_pg_type_shape::call(atttypid)?
         .expect("attribute type row");
 
@@ -1465,21 +1463,34 @@ fn examine_attribute<'mcx>(
 
     // Closed-set typanalyze dispatch (rule 4): std, array 3816, range 3916,
     // multirange 4242, tsvector 3688; other Oids are OidFunctionCall1.
-    let ok = match typanalyze {
-        #[allow(non_upper_case_globals)] // C-parity name
-        InvalidOid => std_typanalyze(&mut stats)?,
-        3816 => array_typanalyze::setup(&mut stats)?,
-        3688 => ts_typanalyze::setup(&mut stats)?,
-        3916 => {
-            stats.compute = ComputeStats::Range { is_multirange: false };
-            range_typanalyze::setup(&mut stats, false)?
-        }
-        4242 => {
-            stats.compute = ComputeStats::Range { is_multirange: true };
-            range_typanalyze::setup(&mut stats, true)?
-        }
-        other => call_custom_typanalyze(mcx, other, &mut stats)?,
-    };
+    // pgrust-only: a jsonb TABLE column (no typanalyze in the C catalog)
+    // diverts to the per-path statistics computer under
+    // pgrust.jsonb_path_stats; it runs the std compute first, unchanged.
+    let ok = with_typanalyze_security(secdef.as_ref(), || {
+        Ok(match typanalyze {
+            #[allow(non_upper_case_globals)] // C-parity name
+            InvalidOid
+                if atttypid == jsonb_typanalyze::JSONBOID
+                    && index_expr.is_none()
+                    && jsonb_typanalyze::enabled() =>
+            {
+                jsonb_typanalyze::setup(&mut stats)?
+            }
+            #[allow(non_upper_case_globals)] // C-parity name
+            InvalidOid => std_typanalyze(&mut stats)?,
+            3816 => array_typanalyze::setup(&mut stats)?,
+            3688 => ts_typanalyze::setup(&mut stats)?,
+            3916 => {
+                stats.compute = ComputeStats::Range { is_multirange: false };
+                range_typanalyze::setup(&mut stats, false)?
+            }
+            4242 => {
+                stats.compute = ComputeStats::Range { is_multirange: true };
+                range_typanalyze::setup(&mut stats, true)?
+            }
+            other => call_custom_typanalyze(mcx, other, &mut stats)?,
+        })
+    })?;
     // upstream 017e4e395d0d (18.4): test_custom_types: Test module with fancy custom data types
     if !ok || stats.minrows <= 0 {
         return Ok(None);
@@ -1517,7 +1528,8 @@ fn examine_expression<'mcx>(
 ) -> PgResult<Option<VacAttrStats<'mcx>>> {
     let atttypid = nodes_core::node_funcs::expr_type(expr);
     let attcollid = nodes_core::node_funcs::expr_collation(expr);
-    let typanalyze = builtin_typanalyze(syscache_seams::pg_type_typanalyze::call(atttypid)?)?;
+    let (typanalyze, secdef) =
+        builtin_typanalyze(syscache_seams::pg_type_typanalyze::call(atttypid)?)?;
     let ty = syscache_seams::lookup_pg_type_shape::call(atttypid)?
         .ok_or_else(|| cache_lookup_failed(atttypid))?;
 
@@ -1559,21 +1571,23 @@ fn examine_expression<'mcx>(
         statypbyval: [ty.typbyval; STATISTIC_NUM_SLOTS],
         statypalign: [ty.typalign as u8; STATISTIC_NUM_SLOTS],
     };
-    let ok = match typanalyze {
-        #[allow(non_upper_case_globals)] // C-parity name
-        InvalidOid => std_typanalyze(&mut stats)?,
-        3816 => array_typanalyze::setup(&mut stats)?,
-        3688 => ts_typanalyze::setup(&mut stats)?,
-        3916 => {
-            stats.compute = ComputeStats::Range { is_multirange: false };
-            range_typanalyze::setup(&mut stats, false)?
-        }
-        4242 => {
-            stats.compute = ComputeStats::Range { is_multirange: true };
-            range_typanalyze::setup(&mut stats, true)?
-        }
-        other => call_custom_typanalyze(mcx, other, &mut stats)?,
-    };
+    let ok = with_typanalyze_security(secdef.as_ref(), || {
+        Ok(match typanalyze {
+            #[allow(non_upper_case_globals)] // C-parity name
+            InvalidOid => std_typanalyze(&mut stats)?,
+            3816 => array_typanalyze::setup(&mut stats)?,
+            3688 => ts_typanalyze::setup(&mut stats)?,
+            3916 => {
+                stats.compute = ComputeStats::Range { is_multirange: false };
+                range_typanalyze::setup(&mut stats, false)?
+            }
+            4242 => {
+                stats.compute = ComputeStats::Range { is_multirange: true };
+                range_typanalyze::setup(&mut stats, true)?
+            }
+            other => call_custom_typanalyze(mcx, other, &mut stats)?,
+        })
+    })?;
     if !ok || stats.minrows <= 0 {
         return Ok(None);
     }
@@ -1601,9 +1615,9 @@ impl<'mcx> statistics::ExprStatsCompute<'mcx> for ExtStatsExprCompute {
     ) -> PgResult<PgVec<'mcx, Option<statistics::ExprStatsRow<'mcx>>>> {
         let mut out: PgVec<'mcx, Option<statistics::ExprStatsRow<'mcx>>> = PgVec::new_in(mcx);
         let col_scratch = MemoryContext::new("Analyze Expression");
-        let mut col_cx = col_scratch.new_child_bump("Analyze Expression scratch");
-        let mut per_tuple = col_scratch.new_child_bump("Analyze Expression per-tuple");
-        let mut expr_scratch = col_scratch.new_child_bump("Analyze Expression values");
+        let mut col_cx = col_scratch.new_child_wholesale("Analyze Expression scratch");
+        let mut per_tuple = col_scratch.new_child_wholesale("Analyze Expression per-tuple");
+        let mut expr_scratch = col_scratch.new_child_wholesale("Analyze Expression values");
         for &expr in exprs {
             let Some(mut stats) = examine_expression(mcx, expr, stattarget)? else {
                 out.push(None);
@@ -1700,6 +1714,15 @@ impl<'mcx> statistics::ExprStatsCompute<'mcx> for ExtStatsExprCompute {
                         tcnt,
                     )?,
                     ComputeStats::Custom(f) => f(&mut stats, &src, tcnt, tcnt as f64)?,
+                    ComputeStats::Jsonb { std } => jsonb_typanalyze::compute_jsonb_stats(
+                        mcx,
+                        col_cx.mcx(),
+                        &mut stats,
+                        std,
+                        &src,
+                        tcnt,
+                        tcnt as f64,
+                    )?,
                 }
                 col_cx.reset();
             }
@@ -1756,11 +1779,52 @@ fn expr_stats_row<'b>(
 // closed-set typanalyze dispatches like the builtin it names (for a
 // non-array type, array_typanalyze.c:117's XX000 instead of the
 // internal-dispatch stub).
-fn builtin_typanalyze(typanalyze: Oid) -> PgResult<Oid> {
+fn builtin_typanalyze(
+    typanalyze: Oid,
+) -> PgResult<(Oid, Option<syscache_seams::PgProcSecdefShape>)> {
     if typanalyze == InvalidOid || !fmgr_seams::internal_builtin_oid::is_installed() {
-        return Ok(typanalyze);
+        return Ok((typanalyze, None));
     }
-    Ok(fmgr_seams::internal_builtin_oid::call(typanalyze)?.unwrap_or(typanalyze))
+    let builtin = fmgr_seams::internal_builtin_oid::call(typanalyze)?.unwrap_or(typanalyze);
+    // fmgr_info_cxt_security: the alias's SET clauses / SECURITY DEFINER
+    // wrap the call (fmgr_security_definer), builtin dispatch or not.
+    let secdef = if builtin != typanalyze {
+        syscache_seams::lookup_pg_proc_secdef::call(typanalyze)?
+            .filter(|row| row.prosecdef || row.proconfig.is_some())
+    } else {
+        None
+    };
+    Ok((builtin, secdef))
+}
+
+fn with_typanalyze_security<R>(
+    secdef: Option<&syscache_seams::PgProcSecdefShape>,
+    f: impl FnOnce() -> PgResult<R>,
+) -> PgResult<R> {
+    let Some(row) = secdef else { return f() };
+    let (save_userid, save_sec_context) = miscinit_seams::get_user_id_and_sec_context::call();
+    let save_nestlevel = if row.proconfig.is_some() {
+        guc_seams::new_guc_nest_level::call()
+    } else {
+        0
+    };
+    if row.prosecdef {
+        miscinit_seams::set_user_id_and_sec_context::call(
+            row.proowner,
+            save_sec_context | types_core::SECURITY_LOCAL_USERID_CHANGE,
+        );
+    }
+    if let Some(cfg) = &row.proconfig {
+        guc_seams::process_guc_array_secdef::call(cfg)?;
+    }
+    let result = f();
+    if row.proconfig.is_some() {
+        guc_seams::at_eoxact_guc::call(true, save_nestlevel)?;
+    }
+    if row.prosecdef {
+        miscinit_seams::set_user_id_and_sec_context::call(save_userid, save_sec_context);
+    }
+    result
 }
 
 fn call_custom_typanalyze<'mcx>(
@@ -1802,6 +1866,41 @@ fn std_typanalyze(stats: &mut VacAttrStats<'_>) -> PgResult<bool> {
     Ok(true)
 }
 
+/// PGRUST_ANALYZE_SEED=<u64> (the v5 identity gate's posture; unset, the
+/// default, keeps PostgreSQL's behaviour): ANALYZE's samplers draw from a
+/// stream seeded by the knob and the relation's name instead of the
+/// backend's global PRNG (analyze.c acquire_sample_rows: pg_global_prng_state),
+/// so two runs of one statement sequence sample the same rows and get the same
+/// statistics, estimates and plans. Read once per process; an unparsable value
+/// is ignored (the default path).
+fn analyze_seed() -> Option<u64> {
+    static SEED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *SEED.get_or_init(|| {
+        std::env::var("PGRUST_ANALYZE_SEED").ok().and_then(|s| s.trim().parse::<u64>().ok())
+    })
+}
+
+/// The sampler's own stream for `onerel` under PGRUST_ANALYZE_SEED (FNV-1a of
+/// the relation's name over the knob), else None: the global PRNG.
+fn sample_prng(onerel: &Relation<'_>) -> Option<pg_prng::PgPrng> {
+    let seed = analyze_seed()?;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ seed;
+    for b in onerel.name().as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Some(pg_prng::PgPrng::seeded(h))
+}
+
+/// One draw: from the relation's seeded stream when there is one, else from
+/// the backend's global PRNG (PostgreSQL's path).
+fn sample_draw<R>(local: &mut Option<pg_prng::PgPrng>, f: impl FnOnce(&mut pg_prng::PgPrng) -> R) -> R {
+    match local {
+        Some(p) => f(p),
+        None => pg_prng::global_prng(f),
+    }
+}
+
 /// Appends up to `targrows` sampled rows; the inherited caller reuses one
 /// vec across children, so replacement/sort indexes are relative to the
 /// vec length at entry (C's rows + numrows subarray).
@@ -1818,10 +1917,7 @@ fn acquire_sample_rows<'mcx>(
 ) -> PgResult<i32> {
     debug_assert!(targrows > 0);
     if tableam::TableAm::of(onerel) == Some(tableam::TableAm::Pgrcolumnar) {
-        return pgrcolumnar_acquire_sample_rows(mcx, onerel, rows, targrows, totalrows, totaldeadrows);
-    }
-    if tableam::TableAm::of(onerel) == Some(tableam::TableAm::Pgrcolumnar2) {
-        return pgrc2_acquire_sample_rows(mcx, onerel, rows, targrows, totalrows, totaldeadrows);
+        return pgrc_acquire_sample_rows(mcx, onerel, rows, targrows, totalrows, totaldeadrows, None);
     }
     let base = rows.len();
     let mut numrows: i32 = 0;
@@ -1834,29 +1930,34 @@ fn acquire_sample_rows<'mcx>(
         bufmgr_seams::relation_get_number_of_blocks_in_fork::call(onerel, ForkNumber::MAIN_FORKNUM)?;
     let oldest_xmin = procarray::GetOldestNonRemovableTransactionId(onerel)?;
 
-    let randseed = pg_prng::global_prng(|p| p.next_u32());
+    let mut sprng = sample_prng(onerel);
+    let randseed = sample_draw(&mut sprng, |p| p.next_u32());
     let (mut bs, nblocks) = sampling::block_sampler_init(totalblocks, targrows as u32, randseed);
 
     pgstat_progress_update_param(PROGRESS_ANALYZE_BLOCKS_TOTAL, nblocks as i64);
 
     let mut rstate =
-        sampling::reservoir_init_selection_state(pg_prng::global_prng(|p| p.next_u32()), targrows as u32);
+        sampling::reservoir_init_selection_state(sample_draw(&mut sprng, |p| p.next_u32()), targrows as u32);
 
     let mut scan = tableam::table_beginscan_analyze(mcx, onerel)?;
     let mut slot = tableam::table_slot_create(mcx, onerel)?;
 
-    // analyze.c:1244-1251: the sample blocks are read through vac_strategy
-    // (the BAS_VACUUM ring), not the plain shared-buffer path.
-    let next_buffer = |bs: &mut sampling::BlockSamplerData| -> PgResult<types_core::Buffer> {
-        if !bs.has_more() {
-            return Ok(types_core::InvalidBuffer);
-        }
-        bufmgr_seams::read_buffer_strategy::call(onerel, bs.next(), bstrategy.clone())
+    // analyze.c:1244: block_sampling_read_stream_next never blocks, so
+    // batch mode is safe.
+    let mut stream = read_stream::read_stream_begin_relation::<()>(
+        mcx,
+        read_stream::READ_STREAM_MAINTENANCE | read_stream::READ_STREAM_USE_BATCHING,
+        bstrategy.clone(),
+        onerel,
+        ForkNumber::MAIN_FORKNUM,
+    )?;
+    let mut next_block = |_: &mut ()| -> PgResult<types_core::BlockNumber> {
+        Ok(if bs.has_more() { bs.next() } else { types_core::InvalidBlockNumber })
     };
 
     let mut blksdone: i64 = 0;
     loop {
-        let buf = next_buffer(&mut bs)?;
+        let buf = stream.next_buffer(&mut next_block)?;
         if !tableam::table_scan_analyze_next_block(mcx, &mut scan, &mut || Ok(buf))? {
             break;
         }
@@ -1881,9 +1982,10 @@ fn acquire_sample_rows<'mcx>(
                     let k = (targrows as f64 * sampling::sampler_random_fract(&mut rstate.randstate))
                         as usize;
                     debug_assert!(k < targrows as usize);
-                    // C heap_freetuple's the replaced copy; here it stays in
-                    // the Analyze arena until context teardown.
-                    rows[base + k] = copy_slot_tuple(mcx, &slot)?;
+                    // heap_freetuple of the replaced copy (analyze.c:1352).
+                    let replaced = core::mem::replace(&mut rows[base + k], copy_slot_tuple(mcx, &slot)?);
+                    // SAFETY: a forgotten copy_slot_tuple image, unaliased once replaced.
+                    unsafe { heaptuple::heap_freetuple(mcx, replaced) };
                 }
                 rowstoskip -= 1.0;
             }
@@ -1893,6 +1995,7 @@ fn acquire_sample_rows<'mcx>(
         blksdone += 1;
         pgstat_progress_update_param(PROGRESS_ANALYZE_BLOCKS_DONE, blksdone);
     }
+    stream.end()?;
     drop(slot);
     tableam::table_endscan(scan)?;
 
@@ -1901,8 +2004,8 @@ fn acquire_sample_rows<'mcx>(
     }
 
     if bs.m > 0 {
-        *totalrows = ((liverows / bs.m as f64) * totalblocks as f64 + 0.5).floor();
-        *totaldeadrows = ((deadrows / bs.m as f64) * totalblocks as f64 + 0.5).floor();
+        *totalrows = extrapolate_rows(liverows, bs.m as f64, totalblocks as f64);
+        *totaldeadrows = extrapolate_rows(deadrows, bs.m as f64, totalblocks as f64);
     } else {
         *totalrows = 0.0;
         *totaldeadrows = 0.0;
@@ -1926,15 +2029,15 @@ fn acquire_sample_rows<'mcx>(
     Ok(numrows)
 }
 
-// P6-5 relstats truth: the relpages ANALYZE writes to pg_class. pgrc2's main
+// P6-5 relstats truth: the relpages ANALYZE writes to pg_class. pgrc's main
 // fork is a deliberately EMPTY smgr file (the O-7 directory lifecycle), so
-// the heap block count sized every pgrc2 rel at relpages 0 — a lie beside
+// the heap block count sized every pgrc rel at relpages 0 — a lie beside
 // the footer-derived pages plan-time estimation serves. Serve the SAME
 // convention table_relation_estimate_size uses: on-disk part bytes at
 // BLCKSZ grain (0 while never-published — C's never-analyzed convention).
 fn analyzable_relpages(onerel: &Relation<'_>) -> PgResult<BlockNumber> {
-    if tableam::TableAm::of(onerel) == Some(tableam::TableAm::Pgrcolumnar2) {
-        return Ok(match tableam::pgrc2_footer_size(onerel)? {
+    if tableam::TableAm::of(onerel) == Some(tableam::TableAm::Pgrcolumnar) {
+        return Ok(match tableam::pgrc_footer_size(onerel)? {
             Some((_rows, bytes)) => bytes.div_ceil(types_core::BLCKSZ as u64) as BlockNumber,
             None => 0,
         });
@@ -1942,25 +2045,104 @@ fn analyzable_relpages(onerel: &Relation<'_>) -> PgResult<BlockNumber> {
     bufmgr_seams::relation_get_number_of_blocks_in_fork::call(onerel, ForkNumber::MAIN_FORKNUM)
 }
 
-// pgrc2's acquirefunc (P6-5): the FAIL-OPEN leg under the M5a ANALYZE fold —
-// runs only when the fold declines (or is killed off). A uniform Vitter
-// reservoir over the AM's one visibility-honest read path (`getnextslot`,
-// Dv-applied): pgrc2 exposes no granule-random fetch face, so skipped rows
-// are decoded and discarded (the conservative election the fold's decline
-// vocabulary buys out of on banked data). totalrows is exact from the
-// manifest (live rows = part rows − Dv deletions); parts carry no dead rows.
-fn pgrc2_acquire_sample_rows<'mcx>(
+// D2621: columns the pgrc fold cannot characterize (pgrc_fold::apply_fold)
+// take C's std compute over a reservoir sample that decodes only them; the
+// rest keep the fold, and a fold NDV beats the sample's, as the pgrcolumnar
+// footer NDV does on the sampling path. D2672: not when the sample holds
+// every row: then C's count is exact (its Haas-Stokes estimate is d when
+// n = N), PostgreSQL's own number, and the fold's HLL is a few percent off.
+fn pgrc_sample_unfolded<'mcx>(
+    anl_mcx: Mcx<'mcx>,
+    anl: &MemoryContext,
+    onerel: &Relation<'mcx>,
+    vacattrstats: &mut [VacAttrStats<'mcx>],
+    sampled: &[(usize, f32, pgrc_fold::Sampled)],
+    targrows: i32,
+) -> PgResult<()> {
+    let tupdesc = onerel.descr();
+    let mut needed: PgVec<'_, bool> = mcx::vec_with_capacity_in(anl_mcx, tupdesc.natts as usize)?;
+    needed.resize(tupdesc.natts as usize, false);
+    for &(i, _, _) in sampled {
+        needed[vacattrstats[i].tupattnum as usize - 1] = true;
+    }
+    let mut rows: PgVec<'_, HeapTupleData<'_>> = PgVec::new_in(anl_mcx);
+    let (mut totalrows, mut totaldeadrows) = (0.0f64, 0.0f64);
+    let numrows = pgrc_acquire_sample_rows(
+        anl_mcx,
+        onerel,
+        &mut rows,
+        targrows,
+        &mut totalrows,
+        &mut totaldeadrows,
+        Some(&needed[..]),
+    )?;
+    if numrows == 0 {
+        return Ok(());
+    }
+    let mut col_cx = anl.new_child_bump("Analyze Column");
+    let src = FetchSource::Heap { tupdesc, rows: &rows[..numrows as usize] };
+    for &(i, fold_ndv, what) in sampled {
+        let s = &mut vacattrstats[i];
+        if what == pgrc_fold::Sampled::PathSlot {
+            // pgrust-only: the fold served the std part; the per-path slot
+            // comes from this sample, as heap's comes from its own.
+            jsonb_typanalyze::compute_jsonb_path_slot(
+                anl_mcx,
+                col_cx.mcx(),
+                s,
+                &src,
+                numrows,
+                totalrows,
+            )?;
+            col_cx.reset();
+            continue;
+        }
+        match s.compute {
+            ComputeStats::Scalar => {
+                compute_scalar_stats(anl_mcx, col_cx.mcx(), s, &src, numrows, totalrows)?
+            }
+            ComputeStats::Distinct => {
+                compute_distinct_stats(anl_mcx, col_cx.mcx(), s, &src, numrows, totalrows)?
+            }
+            ComputeStats::Jsonb { std } => jsonb_typanalyze::compute_jsonb_stats(
+                anl_mcx,
+                col_cx.mcx(),
+                s,
+                std,
+                &src,
+                numrows,
+                totalrows,
+            )?,
+            _ => compute_trivial_stats(s, &src, numrows)?,
+        }
+        if s.stats_valid && fold_ndv != 0.0 && (numrows as f64) < totalrows {
+            s.stadistinct = fold_ndv;
+        }
+        col_cx.reset();
+    }
+    Ok(())
+}
+
+// pgrc's acquirefunc: a uniform Vitter reservoir over the live rows in `getnextslot` order. totalrows is exact (part
+// rows less deletions and the snapshot's tombstones, and the live rows of the front's segments; neither carries dead
+// rows). The draws depend on the row count alone, so the kept stream ordinals are drawn first and only those rows are
+// fetched and formed: the sample (and every statistic) is the one a walk of every row keeps.
+fn pgrc_acquire_sample_rows<'mcx>(
     mcx: Mcx<'mcx>,
     onerel: &Relation<'mcx>,
     rows: &mut PgVec<'mcx, HeapTupleData<'mcx>>,
     targrows: i32,
     totalrows: &mut f64,
     totaldeadrows: &mut f64,
+    needed: Option<&[bool]>,
 ) -> PgResult<i32> {
     let tupdesc = onerel.descr();
     let mut scan = tableam::table_beginscan_analyze(mcx, onerel)?;
+    if let Some(needed) = needed {
+        tableam::table_scan_set_needed_attrs(&mut scan, needed);
+    }
     let mut slot = tableam::table_slot_create(mcx, onerel)?;
-    *totalrows = tableam::pgrc2_analyze_total_rows(&scan) as f64;
+    *totalrows = tableam::pgrc_analyze_total_rows(mcx, &mut scan, &mut slot)? as f64;
     *totaldeadrows = 0.0;
 
     let form = |mcx: Mcx<'mcx>, slot: &SlotData<'mcx>| -> PgResult<HeapTupleData<'mcx>> {
@@ -1978,71 +2160,277 @@ fn pgrc2_acquire_sample_rows<'mcx>(
         Ok(unsafe { HeapTupleData::from_raw_parts(ptr, len, tid, oid) })
     };
 
-    let mut rstate = sampling::reservoir_init_selection_state(
-        pg_prng::global_prng(|p| p.next_u32()),
-        targrows as u32,
-    );
-
-    // (stream ordinal, tuple): replacements land at random reservoir slots;
-    // physical order is restored by the final sort (the correlation stat
-    // reads rows order — the same shape as the v1 sampler).
-    let mut sample: Vec<(u64, HeapTupleData<'mcx>)> = Vec::new();
-    let mut samplerows = 0.0f64;
-    let mut rowstoskip = -1.0f64;
-    let mut ord: u64 = 0;
-    while tableam::table_scan_getnextslot(
-        mcx,
-        &mut scan,
-        ScanDirection::ForwardScanDirection,
-        &mut slot,
-    )? {
-        if (sample.len() as i32) < targrows {
-            let t = form(mcx, &slot)?;
-            sample.push((ord, t));
-        } else {
-            if rowstoskip < 0.0 {
-                rowstoskip =
-                    sampling::reservoir_get_next_s(&mut rstate, samplerows, targrows as u32);
+    // the relation's seeded stream (PGRUST_ANALYZE_SEED) seeds the reservoir, then draws the stored-sample picks
+    let mut prng = sample_prng(onerel);
+    let rstate = sampling::reservoir_init_selection_state(sample_draw(&mut prng, |p| p.next_u32()), targrows as u32);
+    let mut res = Reservoir::new(rstate, targrows);
+    let numrows = {
+        let mut kept = res.ordinals(*totalrows as u64)?;
+        kept.sort_unstable();
+        let base = rows.len();
+        // spec §8.9 (loadstats D): a clean part's k kept rows are k rows drawn uniformly from its stored uniform
+        // sample (the same k: the per-part split of a uniform sample of the live rows); `keys` holds each pushed
+        // row's kept ordinal, so the rows end in `getnextslot` order whichever road served them
+        let mut keys: Vec<u64> = ::mcx::stdvec::try_vec(kept.len(), "analyze")?;
+        let mut stored_parts = 0usize;
+        if kept.len() < kept_capacity_rows(*totalrows) && pgrc_stored_sample_on()? {
+            let parts = tableam::pgrc_analyze_sample_parts(&scan)?;
+            let mut rest: Vec<u64> = ::mcx::stdvec::try_vec(kept.len(), "analyze")?;
+            let (mut i, mut pbase) = (0usize, 0u64);
+            for (p, &(live, clean)) in parts.iter().enumerate() {
+                let end = i + kept[i..].partition_point(|&o| o < pbase + live);
+                let k = end - i;
+                let served = k > 0
+                    && clean
+                    && tableam::pgrc_analyze_stored_sample(
+                        &mut scan,
+                        p,
+                        &mut |n| pick_stored(&mut prng, n, k),
+                        &mut |v, n| {
+                            let b = slot.base_mut();
+                            for c in 0..v.len() {
+                                (b.tts_values[c], b.tts_isnull[c]) = (v[c], n[c]);
+                            }
+                            rows.push(form(mcx, &slot)?);
+                            Ok(())
+                        },
+                    )?;
+                if served {
+                    if rows.len() - base != keys.len() + k {
+                        return Err(PgError::error(format!(
+                            "pgrcolumnar: ANALYZE stored sample of part {p} of \"{}\" served {} of {k} rows",
+                            onerel.name(),
+                            rows.len() - base - keys.len()
+                        ))
+                        .into());
+                    }
+                    keys.extend_from_slice(&kept[i..end]);
+                    stored_parts += 1;
+                } else {
+                    rest.extend_from_slice(&kept[i..end]);
+                }
+                i = end;
+                pbase += live;
             }
-            if rowstoskip <= 0.0 {
-                let k = (targrows as f64 * sampling::sampler_random_fract(&mut rstate.randstate))
-                    as usize;
-                debug_assert!(k < targrows as usize);
-                let t = form(mcx, &slot)?;
-                sample[k] = (ord, t);
+            rest.extend_from_slice(&kept[i..]);
+            if stored_parts > 0 {
+                kept = rest;
             }
-            rowstoskip -= 1.0;
         }
-        ord += 1;
-        samplerows += 1.0;
-    }
+        if analyze_trace() {
+            eprintln!(
+                "ANALYZE-TRACE stored-sample rel={} parts={stored_parts} stored_rows={} scan_rows={}",
+                onerel.name(),
+                keys.len(),
+                kept.len()
+            );
+        }
+        let mut pos: Vec<u64> = ::mcx::stdvec::try_vec(kept.len(), "lib")?;
+        tableam::pgrc_analyze_live_positions(&mut scan, &kept, &mut pos)?;
+        if pos.len() != kept.len() {
+            return Err(PgError::error(format!(
+                "pgrcolumnar: ANALYZE located {} of {} sampled rows of \"{}\"",
+                pos.len(),
+                kept.len(),
+                onerel.name()
+            ))
+            .into());
+        }
+        let not_live = |p: u64| -> Box<PgError> {
+            PgError::error(format!("pgrcolumnar: ANALYZE sample row at position {p} of \"{}\" is not live", onerel.name()))
+                .into()
+        };
+        // D3742: the sampled rows decoded by several threads, each value the bytes the walk below forms; the rows go
+        // through the same slot (only its columns are written) and the same `form`.
+        // r14 merge: the parallel decode serves PART rows only. The front's segment rows (PGRC_SEGMENT_POSITION set,
+        // so the highest positions) are fetched one by one through the line's sampler (pgrc_front::sample::fetch).
+        let nparts = pos.partition_point(|&p| p & tableam::PGRC_SEGMENT_POSITION == 0);
+        let (dop, min_granules) = pgrc_sample_threads()?;
+        let fbase = rows.len();
+        let fetched = if nparts == 0 {
+            tableam::PgrcSampleFetch::Done
+        } else {
+            tableam::pgrc_analyze_fetch_parallel(&mut scan, &pos[..nparts], dop, min_granules, &mut |v, n| {
+            let b = slot.base_mut();
+            for c in 0..v.len() {
+                (b.tts_values[c], b.tts_isnull[c]) = (v[c], n[c]);
+            }
+            rows.push(form(mcx, &slot)?);
+            Ok(())
+            })?
+        };
+        let seq_from = match fetched {
+            tableam::PgrcSampleFetch::Done => nparts,
+            tableam::PgrcSampleFetch::NotLive(p) => return Err(not_live(p)),
+            tableam::PgrcSampleFetch::Declined => {
+                debug_assert_eq!(rows.len(), fbase);
+                0
+            }
+        };
+        if seq_from < pos.len() {
+            tableam::pgrc_analyze_sample_positions(&mut scan, pos.clone());
+            for &p in &pos[seq_from..] {
+                if !tableam::pgrc_analyze_fetch_position(mcx, &mut scan, p, &mut slot)? {
+                    return Err(not_live(p));
+                }
+                rows.push(form(mcx, &slot)?);
+            }
+        }
+        if !keys.is_empty() {
+            keys.extend_from_slice(&kept);
+            order_by_keys(&mut rows[base..], &mut keys)?;
+        }
+        keys.len().max(kept.len()) as i32
+    };
     drop(slot);
     tableam::table_endscan(scan)?;
-
-    sample.sort_unstable_by_key(|&(o, _)| o);
-    let numrows = sample.len() as i32;
-    for (_, t) in sample {
-        rows.push(t);
-    }
-    // The stream is the whole live relation: sampled == live truth (the
-    // manifest count and the scanned count agree by the one-read-path law).
-    debug_assert!(samplerows == *totalrows || *totalrows == 0.0);
     Ok(numrows)
 }
 
-// ---- loadfinal lane knobs (default OFF, fail-closed) -----------------------
-
-// PGRUST_ANALYZE_SAMPLE_POOL=<n>: decode the pgrcolumnar sample's granules on n
-// worker threads (0/unset = the serial per-ref gather path, untouched). The
-// sample positions and row values are identical either way — the reservoir
-// arithmetic is pure PRNG/row-count bookkeeping, run up front.
-fn analyze_sample_pool() -> usize {
-    std::env::var("PGRUST_ANALYZE_SAMPLE_POOL")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(0)
-        .min(64)
+/// `kept.len() < totalrows` in usize: a sample that keeps every live row is the table, no stored sample stands for it.
+fn kept_capacity_rows(totalrows: f64) -> usize {
+    totalrows.min(usize::MAX as f64) as usize
 }
+
+const STORED_SAMPLE_GUC: &str = "pgrust.pgrc_analyze_stored_sample";
+
+/// Spec §8.9 (loadstats D) `pgrust.pgrc_analyze_stored_sample`: on (unset, empty, on/true/1) ANALYZE serves a clean
+/// part's kept rows from its stored Sample section; off (off/false/0) every kept row is read from the columns.
+fn pgrc_stored_sample_on() -> PgResult<bool> {
+    let set = guc::GetConfigOption(STORED_SAMPLE_GUC, true, false)?;
+    let v = set.as_deref().unwrap_or("").trim().to_ascii_lowercase();
+    match v.as_str() {
+        "" | "on" | "true" | "1" => Ok(true),
+        "off" | "false" | "0" => Ok(false),
+        _ => Err(PgError::error(format!("invalid value for parameter \"{STORED_SAMPLE_GUC}\": \"{v}\""))
+            .with_sqlstate(types_error::ERRCODE_INVALID_PARAMETER_VALUE)
+            .with_hint("on or off.")
+            .into()),
+    }
+}
+
+/// `k` of the `n` stored rows, uniformly (Floyd's draw from the sampler's stream), ascending; `None` when the part
+/// keeps more rows than it stores (its rows are read from the columns).
+fn pick_stored(prng: &mut Option<pg_prng::PgPrng>, n: usize, k: usize) -> Option<Vec<usize>> {
+    if k > n {
+        return None;
+    }
+    let mut chosen: Vec<usize> = ::mcx::stdvec::try_vec(k, "analyze").ok()?;
+    for j in (n - k)..n {
+        let t = sample_draw(prng, |p| p.u64_range(0, j as u64)) as usize;
+        chosen.push(if chosen.contains(&t) { j } else { t });
+    }
+    chosen.sort_unstable();
+    Some(chosen)
+}
+
+/// Puts `rows` in ascending `keys` order (the keys are distinct; `keys` ends sorted), swapping rows in place.
+fn order_by_keys<T>(rows: &mut [T], keys: &mut [u64]) -> PgResult<()> {
+    debug_assert_eq!(rows.len(), keys.len());
+    let mut idx: Vec<usize> = ::mcx::stdvec::try_vec(keys.len(), "analyze")?;
+    idx.extend(0..keys.len());
+    idx.sort_unstable_by_key(|&i| keys[i]);
+    // idx[k] = the current index of the row that belongs at k; follow each cycle once
+    for start in 0..idx.len() {
+        let mut k = start;
+        while idx[k] != start {
+            let src = idx[k];
+            rows.swap(k, src);
+            keys.swap(k, src);
+            idx[k] = k;
+            k = src;
+        }
+        idx[k] = k;
+    }
+    Ok(())
+}
+
+/// D3742: the threads that decode a pgrc sample's rows, and the fewest sampled granules that start them.
+/// `pgrust.pgrc_analyze_threads` set: that many threads for any sample (1 = the one-thread walk). Unset: this thread
+/// plus `max_parallel_maintenance_workers` (the cap vacuum's morsels and the btree build take), for a sample in at
+/// least 8 granules per thread ([`default_sample_threads`]; a wider default is the user's call, loadlead 10-13).
+fn pgrc_sample_threads() -> PgResult<(usize, usize)> {
+    Ok(match pgrc_fold::sample_threads()? {
+        Some(n) => (n, 1),
+        None => default_sample_threads(guc_tables::vars::max_parallel_maintenance_workers.read()),
+    })
+}
+
+/// The unset `pgrust.pgrc_analyze_threads`: `1 + max_parallel_maintenance_workers` threads, 8 granules per thread.
+fn default_sample_threads(max_parallel_maintenance_workers: i32) -> (usize, usize) {
+    let dop = 1 + max_parallel_maintenance_workers.max(0) as usize;
+    (dop, 8 * dop)
+}
+
+/// The Vitter reservoir walk, one row at a time: `step` is the reservoir slot the next row takes, if any. Its draws
+/// depend on the row count alone, so walking ordinals keeps the rows a walk of the rows keeps.
+struct Reservoir {
+    rstate: sampling::ReservoirStateData,
+    targrows: i32,
+    filled: usize,
+    samplerows: f64,
+    rowstoskip: f64,
+}
+
+impl Reservoir {
+    fn new(rstate: sampling::ReservoirStateData, targrows: i32) -> Reservoir {
+        Reservoir { rstate, targrows, filled: 0, samplerows: 0.0, rowstoskip: -1.0 }
+    }
+
+    fn step(&mut self) -> Option<usize> {
+        let t = self.targrows.max(0) as usize;
+        let slot = if self.filled < t {
+            self.filled += 1;
+            Some(self.filled - 1)
+        } else {
+            if self.rowstoskip < 0.0 {
+                self.rowstoskip = sampling::reservoir_get_next_s(&mut self.rstate, self.samplerows, self.targrows as u32);
+            }
+            let k = (self.rowstoskip <= 0.0).then(|| {
+                (self.targrows as f64 * sampling::sampler_random_fract(&mut self.rstate.randstate)) as usize
+            });
+            debug_assert!(k.is_none_or(|k| k < t));
+            self.rowstoskip -= 1.0;
+            k
+        };
+        self.samplerows += 1.0;
+        slot
+    }
+
+    /// The stream ordinals kept over `n` rows (unsorted). Once the reservoir is full, a run of rows `step` would skip
+    /// one at a time (its `rowstoskip` count down to 0) is passed in one jump: the skip counts are whole numbers far
+    /// below 2^53, so `rowstoskip` and `samplerows` end where the one-row steps leave them and every draw is the same.
+    fn ordinals(&mut self, n: u64) -> PgResult<Vec<u64>> {
+        let mut kept: Vec<u64> = ::mcx::stdvec::try_vec((self.targrows.max(0) as u64).min(n) as usize, "analyze")?;
+        let full = |r: &Reservoir| r.targrows > 0 && r.filled >= r.targrows as usize;
+        let mut ord = 0u64;
+        while ord < n {
+            if full(self) {
+                if self.rowstoskip < 0.0 {
+                    self.rowstoskip =
+                        sampling::reservoir_get_next_s(&mut self.rstate, self.samplerows, self.targrows as u32);
+                }
+                if self.rowstoskip > 0.0 {
+                    let skip = (self.rowstoskip.ceil() as u64).min(n - ord);
+                    self.rowstoskip -= skip as f64;
+                    self.samplerows += skip as f64;
+                    ord += skip;
+                    continue;
+                }
+            }
+            if let Some(k) = self.step() {
+                if k == kept.len() {
+                    kept.push(ord);
+                } else {
+                    kept[k] = ord;
+                }
+            }
+            ord += 1;
+        }
+        Ok(kept)
+    }
+}
+
 
 // PGRUST_ANALYZE_TRACE=1: decomposition trace lines (acquire / compute /
 // update walls) to stderr — the load-lane postmaster.log harvest channel.
@@ -2051,306 +2439,6 @@ fn analyze_trace() -> bool {
         std::env::var("PGRUST_ANALYZE_TRACE").ok().as_deref().map(str::trim),
         Some("1") | Some("on") | Some("true")
     )
-}
-
-/// The pgrcolumnar reservoir's sample POSITIONS, computed without fetching:
-/// exactly `pgrcolumnar_acquire_sample_rows`'s serial loop with the two fetch
-/// sites recording (ord, rg, rg-global row) instead of materializing the
-/// row — the PRNG call sequence and f64 bookkeeping are verbatim, so the
-/// positions (and their post-sort order) are IDENTICAL to what the serial
-/// path samples from the same reservoir state. Returned sorted by ord
-/// (physical file order — the correlation stat's required rows order).
-fn pgrcolumnar_sample_positions(
-    rgs: &[(u32, u32)],
-    targrows: i32,
-    rstate: &mut sampling::ReservoirStateData,
-) -> Vec<(u64, u32, u32)> {
-    let mut sample: Vec<(u64, u32, u32)> = Vec::new();
-    let mut samplerows = 0.0f64;
-    let mut rowstoskip = -1.0f64;
-    let mut ord: u64 = 0;
-    for &(rg, nrows) in rgs {
-        let mut row: u32 = 0;
-        while row < nrows {
-            if (sample.len() as i32) < targrows {
-                sample.push((ord, rg, row));
-            } else {
-                if rowstoskip < 0.0 {
-                    rowstoskip =
-                        sampling::reservoir_get_next_s(rstate, samplerows, targrows as u32);
-                }
-                let skip = rowstoskip.ceil();
-                let span = (nrows - row) as f64;
-                if skip >= span {
-                    rowstoskip -= span;
-                    samplerows += span;
-                    ord += (nrows - row) as u64;
-                    break;
-                }
-                row += skip as u32;
-                ord += skip as u64;
-                samplerows += skip;
-                rowstoskip = -1.0;
-                let k = (targrows as f64 * sampling::sampler_random_fract(&mut rstate.randstate))
-                    as usize;
-                debug_assert!(k < targrows as usize);
-                sample[k] = (ord, rg, row);
-            }
-            row += 1;
-            ord += 1;
-            samplerows += 1.0;
-        }
-    }
-    sample.sort_unstable_by_key(|&(o, _, _)| o);
-    sample
-}
-
-// pgrcolumnar's acquirefunc (C table_relation_analyze lets the AM supply it):
-// uniform Vitter reservoir over the visible row stream; skipped spans are
-// never decoded (gather_row decodes granules on demand). totalrows is exact
-// from the part footer; pgrcolumnar parts carry no dead rows.
-fn pgrcolumnar_acquire_sample_rows<'mcx>(
-    mcx: Mcx<'mcx>,
-    onerel: &Relation<'mcx>,
-    rows: &mut PgVec<'mcx, HeapTupleData<'mcx>>,
-    targrows: i32,
-    totalrows: &mut f64,
-    totaldeadrows: &mut f64,
-) -> PgResult<i32> {
-    let tupdesc = onerel.descr();
-    let mut scan = tableam::table_beginscan_analyze(mcx, onerel)?;
-    let mut slot = tableam::table_slot_create(mcx, onerel)?;
-    let rgs = tableam::pgrcolumnar_analyze_visible_rgs(&scan)?;
-    let total: u64 = rgs.iter().map(|&(_, n)| n as u64).sum();
-    *totalrows = total as f64;
-    *totaldeadrows = 0.0;
-
-    pgstat_progress_update_param(PROGRESS_ANALYZE_BLOCKS_TOTAL, rgs.len() as i64);
-
-    let fetch = |scan: &mut tableam::TableScanDesc<'mcx>,
-                     slot: &mut SlotData<'mcx>,
-                     rg: u32,
-                     row: u32|
-     -> PgResult<HeapTupleData<'mcx>> {
-        if !tableam::pgrcolumnar_analyze_fetch_row(scan, rg, row, slot) {
-            panic!("pgrcolumnar analyze: sampled row ref out of range");
-        }
-        let b = slot.base();
-        let owned = heaptuple::heap_form_tuple(mcx, tupdesc, &b.tts_values, &b.tts_isnull)?;
-        let (ptr, len, tid, oid) = (
-            owned.image().as_ptr(),
-            owned.as_tuple().t_len,
-            owned.as_tuple().t_self,
-            owned.as_tuple().t_tableOid,
-        );
-        core::mem::forget(owned);
-        // SAFETY: the image was just formed in `mcx` and, forgotten, lives
-        // until that context's teardown; nothing else writes it.
-        Ok(unsafe { HeapTupleData::from_raw_parts(ptr, len, tid, oid) })
-    };
-
-    let mut rstate = sampling::reservoir_init_selection_state(
-        pg_prng::global_prng(|p| p.next_u32()),
-        targrows as u32,
-    );
-
-    // Parallel acquisition (PGRUST_ANALYZE_SAMPLE_POOL >= 1): sample
-    // positions first (pure arithmetic, identical PRNG stream), then decode
-    // the sampled granules on the pool. Rows, values, and final order match
-    // the serial arm below by construction; positions come back ord-sorted,
-    // so tuples append in physical order without the end sort.
-    let pool = analyze_sample_pool();
-    let trace = analyze_trace();
-    let t0 = std::time::Instant::now();
-    if pool >= 1 {
-        let positions = pgrcolumnar_sample_positions(&rgs, targrows, &mut rstate);
-        let refs: Vec<(u32, u32)> =
-            positions.iter().map(|&(_, rg, row)| (rg, row)).collect();
-        let mut formed: i32 = 0;
-        let tasks = {
-            let rows = &mut *rows;
-            let formed = &mut formed;
-            let mut per_row = |slot: &mut SlotData<'_>| -> PgResult<()> {
-                let b = slot.base();
-                let owned =
-                    heaptuple::heap_form_tuple(mcx, tupdesc, &b.tts_values, &b.tts_isnull)?;
-                let (ptr, len, tid, oid) = (
-                    owned.image().as_ptr(),
-                    owned.as_tuple().t_len,
-                    owned.as_tuple().t_self,
-                    owned.as_tuple().t_tableOid,
-                );
-                core::mem::forget(owned);
-                // SAFETY: as the serial arm's fetch — the image was just
-                // formed in `mcx` and, forgotten, lives until that context's
-                // teardown; nothing else writes it.
-                rows.push(unsafe { HeapTupleData::from_raw_parts(ptr, len, tid, oid) });
-                *formed += 1;
-                Ok(())
-            };
-            tableam::pgrcolumnar_analyze_gather_rows(&mut scan, &refs, pool, &mut slot, &mut per_row)?
-        };
-        drop(slot);
-        tableam::table_endscan(scan)?;
-        if trace {
-            eprintln!(
-                "ANALYZE|TRACE|pgrcolumnar acquire: pool={} refs={} granule_tasks={} wall={:.3}s",
-                pool,
-                refs.len(),
-                tasks,
-                t0.elapsed().as_secs_f64()
-            );
-        }
-        return Ok(formed);
-    }
-
-    // (ordinal, tuple): replacements land at random slots; physical order is
-    // restored by the final sort (the correlation stat reads rows order).
-    let mut sample: Vec<(u64, HeapTupleData<'mcx>)> = Vec::new();
-    let mut samplerows = 0.0f64;
-    let mut rowstoskip = -1.0f64;
-    let mut ord: u64 = 0;
-    let mut rgs_done: i64 = 0;
-    for &(rg, nrows) in &rgs {
-        let mut row: u32 = 0;
-        while row < nrows {
-            if (sample.len() as i32) < targrows {
-                let t = fetch(&mut scan, &mut slot, rg, row)?;
-                sample.push((ord, t));
-            } else {
-                if rowstoskip < 0.0 {
-                    rowstoskip =
-                        sampling::reservoir_get_next_s(&mut rstate, samplerows, targrows as u32);
-                }
-                // Skip rowstoskip rows (integer count), then take the next;
-                // spans crossing row groups keep the residual skip.
-                let skip = rowstoskip.ceil();
-                let span = (nrows - row) as f64;
-                if skip >= span {
-                    rowstoskip -= span;
-                    samplerows += span;
-                    ord += (nrows - row) as u64;
-                    break;
-                }
-                row += skip as u32;
-                ord += skip as u64;
-                samplerows += skip;
-                rowstoskip = -1.0;
-                let k = (targrows as f64 * sampling::sampler_random_fract(&mut rstate.randstate))
-                    as usize;
-                debug_assert!(k < targrows as usize);
-                let t = fetch(&mut scan, &mut slot, rg, row)?;
-                sample[k] = (ord, t);
-            }
-            row += 1;
-            ord += 1;
-            samplerows += 1.0;
-        }
-        rgs_done += 1;
-        pgstat_progress_update_param(PROGRESS_ANALYZE_BLOCKS_DONE, rgs_done);
-    }
-    drop(slot);
-    tableam::table_endscan(scan)?;
-
-    sample.sort_unstable_by_key(|&(o, _)| o);
-    let numrows = sample.len() as i32;
-    for (_, t) in sample {
-        rows.push(t);
-    }
-    if trace {
-        eprintln!(
-            "ANALYZE|TRACE|pgrcolumnar acquire: pool=0 refs={} wall={:.3}s",
-            numrows,
-            t0.elapsed().as_secs_f64()
-        );
-    }
-    Ok(numrows)
-}
-
-/// Inherited-pass footer NDV (pgrust-only divergence, the !inh footer-NDV
-/// override's parent-level sibling): union the v8 per-column HLL register
-/// sketches across every pgrcolumnar leaf child, per parent column matched
-/// by name (the convert_tuples_by_name vocabulary). Strictly monotone
-/// fallback: any child that is not pgrcolumnar disqualifies the whole
-/// override (None -> sampled Duj1, exactly as before); a child without a
-/// sketch for a mapped column zeroes that column (0 = unknown, the v2
-/// scalar contract); a child with no committed footer has no committed
-/// rows and contributes nothing. Register union is lossless (per-bucket
-/// maxima), so the parent estimate equals a single sketch built over all
-/// children's rows.
-fn inherited_pgrcolumnar_footer_ndv<'mcx>(
-    mcx: Mcx<'mcx>,
-    onerel: &Relation<'mcx>,
-) -> PgResult<Option<Vec<u64>>> {
-    let table_oids = pg_inherits::find_all_inheritors(mcx, onerel.rd_id, ACCESS_SHARE_LOCK)?;
-    let parent_atts = &onerel.rd_att.attrs;
-    // Per parent column: the running union (None until first contribution)
-    // and a poison flag (a mapped child column without a sketch).
-    let mut acc: Vec<Option<tableam::PgrcolumnarNdvSketch>> =
-        (0..parent_atts.len()).map(|_| None).collect();
-    let mut poisoned = vec![false; parent_atts.len()];
-    let mut any_child = false;
-    for &child_oid in table_oids.iter() {
-        let childrel = table::table_open(mcx, child_oid, NO_LOCK)?;
-        match childrel.rd_rel.relkind {
-            RELKIND_RELATION | RELKIND_MATVIEW => {}
-            _ => {
-                // Partitioned intermediates (incl. a partitioned onerel
-                // itself) carry no storage.
-                table::table_close(childrel, NO_LOCK)?;
-                continue;
-            }
-        }
-        if tableam::TableAm::of(&childrel) != Some(tableam::TableAm::Pgrcolumnar) {
-            // Mixed hierarchy: keep C-parity sampling for the whole parent.
-            table::table_close(childrel, NO_LOCK)?;
-            return Ok(None);
-        }
-        let sketches = tableam::pgrcolumnar_footer_ndv_hll(&childrel)?;
-        if let Some(sketches) = sketches {
-            any_child = true;
-            let child_atts = &childrel.rd_att.attrs;
-            for (pi, patt) in parent_atts.iter().enumerate() {
-                if patt.attisdropped || poisoned[pi] {
-                    continue;
-                }
-                // Child column by name (attnums may diverge across the
-                // hierarchy); pgrcolumnar column index = attnum - 1 (the
-                // footer_ndv consumer's existing contract).
-                let child_sk = child_atts
-                    .iter()
-                    .position(|a| {
-                        !a.attisdropped && a.attname.name_str() == patt.attname.name_str()
-                    })
-                    .and_then(|ci| sketches.get(ci))
-                    .and_then(|s| s.as_ref());
-                match child_sk {
-                    Some(sk) => match &mut acc[pi] {
-                        Some(u) => u.merge(sk),
-                        None => {
-                            let mut u = tableam::PgrcolumnarNdvSketch::default();
-                            u.merge(sk);
-                            acc[pi] = Some(u);
-                        }
-                    },
-                    None => poisoned[pi] = true,
-                }
-            }
-        }
-        table::table_close(childrel, NO_LOCK)?;
-    }
-    if !any_child {
-        return Ok(None);
-    }
-    Ok(Some(
-        acc.iter()
-            .zip(&poisoned)
-            .map(|(u, &p)| match (u, p) {
-                (Some(u), false) => u.estimate().max(1),
-                _ => 0,
-            })
-            .collect(),
-    ))
 }
 
 /// acquire_inherited_sample_rows (analyze.c): the sampled union across all
@@ -2366,6 +2454,7 @@ fn acquire_inherited_sample_rows<'mcx>(
     totalrows: &mut f64,
     totaldeadrows: &mut f64,
     bstrategy: &BufferAccessStrategy,
+    sampled_children: &mut PgVec<'_, Oid>,
 ) -> PgResult<i32> {
     *totalrows = 0.0;
     *totaldeadrows = 0.0;
@@ -2441,6 +2530,7 @@ fn acquire_inherited_sample_rows<'mcx>(
     }
 
     pgstat_progress_update_param(PROGRESS_ANALYZE_CHILD_TABLES_TOTAL, children.len() as i64);
+    sampled_children.extend(children.iter().map(|(c, _, _)| c.rd_id));
 
     let mut numrows: i32 = 0;
     for (i, (childrel, childblocks, acquirefunc)) in children.into_iter().enumerate() {
@@ -2495,11 +2585,15 @@ fn acquire_inherited_sample_rows<'mcx>(
                                 newtup.as_tuple().t_tableOid,
                             );
                             core::mem::forget(newtup);
-                            // SAFETY: the converted image lives in `mcx`
-                            // (Analyze arena) until context teardown.
-                            *row = unsafe {
+                            // heap_freetuple of the child-form row
+                            // (analyze.c:1560); the converted image lives in
+                            // `mcx` until the reservoir is done with it.
+                            // SAFETY: the old image is a forgotten sample copy,
+                            // unaliased once replaced.
+                            let old = core::mem::replace(row, unsafe {
                                 HeapTupleData::from_raw_parts(ptr, len, tid, oid)
-                            };
+                            });
+                            unsafe { heaptuple::heap_freetuple(mcx, old) };
                         }
                     }
                 }
@@ -3232,11 +3326,7 @@ fn compute_scalar_stats<'mcx>(
         }
 
         if values_cnt > 1 {
-            let vc = values_cnt as f64;
-            let corr_xsum = (vc - 1.0) * vc / 2.0;
-            let corr_x2sum = (vc - 1.0) * vc * (2.0 * vc - 1.0) / 6.0;
-            let corr = (vc * corr_xysum - corr_xsum * corr_xsum)
-                / (vc * corr_x2sum - corr_xsum * corr_xsum);
+            let corr = scalar_correlation(values_cnt, corr_xysum);
             let mut corrs: PgVec<'mcx, f32> = mcx::vec_with_capacity_in(anl_mcx, 1)?;
             corrs.push(corr as f32);
             stats.stakind[slot_idx] = STATISTIC_KIND_CORRELATION;
@@ -3295,7 +3385,7 @@ fn analyze_mcv_list(
         let k = n_total * mcv_counts[num_mcv as usize - 1] as f64 / n;
         let variance = n * k * (n_total - k) * (n_total - n) / (n_total * n_total * (n_total - 1.0));
         let stddev = variance.sqrt();
-        if mcv_counts[num_mcv as usize - 1] as f64 > selec * n + 2.0 * stddev + 0.5 {
+        if mcv_counts[num_mcv as usize - 1] as f64 > mcv_keep_bound(selec, n, stddev) {
             break;
         }
         num_mcv -= 1;
@@ -3435,12 +3525,30 @@ fn stat_key(attno: i32, func: types_core::primitive::RegProcedure, arg: Datum) -
     key
 }
 
+fn extrapolate_rows(rows: f64, m: f64, totalblocks: f64) -> f64 {
+    // analyze.c:1333 (D400)
+    fp_contract::fmadd(rows / m, totalblocks, 0.5).floor()
+}
+
+fn scalar_correlation(values_cnt: i32, corr_xysum: f64) -> f64 {
+    let vc = values_cnt as f64;
+    let corr_xsum = (vc - 1.0) * vc / 2.0;
+    let corr_x2sum = (vc - 1.0) * vc * (2.0 * vc - 1.0) / 6.0;
+    let sq = corr_xsum * corr_xsum;
+    // analyze.c:2881 (D400)
+    fp_contract::fnmsub(vc, corr_xysum, sq) / fp_contract::fnmsub(vc, corr_x2sum, sq)
+}
+
+fn mcv_keep_bound(selec: f64, samplerows: f64, stddev: f64) -> f64 {
+    // analyze.c:3071 (D400)
+    fp_contract::fmadd(selec, samplerows, 2.0 * stddev) + 0.5
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        analyze_mcv_list, arm_cost_accounting, attribute_stattarget, compute_scalar_stats,
-        compute_trivial_stats, disarm_cost_accounting, distinct_track_update, ts_typanalyze,
-        varlena_stored_size, ComputeStats, FetchSource, PgError, PgResult, StdAnalyzeData,
+        analyze_mcv_list, attribute_stattarget, compute_scalar_stats, compute_trivial_stats,
+        distinct_track_update, ts_typanalyze, varlena_stored_size, ComputeStats, FetchSource, PgError, PgResult, StdAnalyzeData,
         VacAttrStats, STATISTIC_NUM_SLOTS,
     };
     use datum::Datum;
@@ -3518,23 +3626,27 @@ mod tests {
         assert_eq!(stats.stanumbers[0][10], 1.0);
     }
 
-    // vacuum.c:626 VacuumUpdateCosts runs for ANALYZE too: the driver arms
-    // cost accounting through the seam and PG_FINALLY disarms it.
+    // vacuum.c:626 VacuumUpdateCosts runs for ANALYZE too: the driver's
+    // window arms cost accounting through its update_costs and PG_FINALLY
+    // disarms it.
     #[test]
     fn analyze_driver_arms_and_disarms_cost_accounting() {
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| {
-            autovacuum_seams::vacuum_update_costs::set(|| {
+        init_small::globals::SetVacuumCostBalance(7);
+        commands_vacuum::vacuum_window(
+            || {
                 init_small::globals::SetVacuumCostActive(true);
                 Ok(())
-            })
-        });
-        init_small::globals::SetVacuumCostBalance(7);
-        arm_cost_accounting().unwrap();
-        assert!(init_small::globals::VacuumCostActive());
-        assert_eq!(init_small::globals::VacuumCostBalance(), 0);
-        assert!(!commands_vacuum::VacuumFailsafeActive());
-        disarm_cost_accounting();
+            },
+            || {
+                assert!(commands_vacuum::in_vacuum());
+                assert!(init_small::globals::VacuumCostActive());
+                assert_eq!(init_small::globals::VacuumCostBalance(), 0);
+                assert!(!commands_vacuum::VacuumFailsafeActive());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(!commands_vacuum::in_vacuum());
         assert!(!init_small::globals::VacuumCostActive());
     }
 
@@ -3809,98 +3921,6 @@ pub fn init_seams() {
 }
 
 #[cfg(test)]
-mod sample_positions_tests {
-    use super::{pgrcolumnar_sample_positions, sampling};
-
-    // Literal transcription of the SERIAL pgrcolumnar_acquire_sample_rows loop
-    // with the two fetch sites recording (ord, rg, row) instead of
-    // materializing tuples, ending with the same ord sort — the pre-refactor
-    // behavior the parallel path must reproduce position-for-position.
-    fn reference_positions(
-        rgs: &[(u32, u32)],
-        targrows: i32,
-        rstate: &mut sampling::ReservoirStateData,
-    ) -> Vec<(u64, u32, u32)> {
-        let mut sample: Vec<(u64, u32, u32)> = Vec::new();
-        let mut samplerows = 0.0f64;
-        let mut rowstoskip = -1.0f64;
-        let mut ord: u64 = 0;
-        for &(rg, nrows) in rgs {
-            let mut row: u32 = 0;
-            while row < nrows {
-                if (sample.len() as i32) < targrows {
-                    sample.push((ord, rg, row));
-                } else {
-                    if rowstoskip < 0.0 {
-                        rowstoskip = sampling::reservoir_get_next_s(
-                            rstate,
-                            samplerows,
-                            targrows as u32,
-                        );
-                    }
-                    let skip = rowstoskip.ceil();
-                    let span = (nrows - row) as f64;
-                    if skip >= span {
-                        rowstoskip -= span;
-                        samplerows += span;
-                        ord += (nrows - row) as u64;
-                        break;
-                    }
-                    row += skip as u32;
-                    ord += skip as u64;
-                    samplerows += skip;
-                    rowstoskip = -1.0;
-                    let k = (targrows as f64
-                        * sampling::sampler_random_fract(&mut rstate.randstate))
-                        as usize;
-                    sample[k] = (ord, rg, row);
-                }
-                row += 1;
-                ord += 1;
-                samplerows += 1.0;
-            }
-        }
-        sample.sort_unstable_by_key(|&(o, _, _)| o);
-        sample
-    }
-
-    fn check(rgs: &[(u32, u32)], targrows: i32, seed: u32) {
-        let mut rs_a = sampling::reservoir_init_selection_state(seed, targrows as u32);
-        let mut rs_b = sampling::reservoir_init_selection_state(seed, targrows as u32);
-        let want = reference_positions(rgs, targrows, &mut rs_a);
-        let got = pgrcolumnar_sample_positions(rgs, targrows, &mut rs_b);
-        assert_eq!(want, got, "rgs={rgs:?} targrows={targrows} seed={seed}");
-        let total: u64 = rgs.iter().map(|&(_, n)| n as u64).sum();
-        assert_eq!(got.len() as u64, total.min(targrows as u64));
-        // Ascending physical positions, no duplicates.
-        for w in got.windows(2) {
-            assert!(w[0].0 < w[1].0 && (w[0].1, w[0].2) < (w[1].1, w[1].2));
-        }
-        // Both PRNG streams consumed identically.
-        assert_eq!(rs_a.randstate.next_u64(), rs_b.randstate.next_u64());
-    }
-
-    #[test]
-    fn positions_match_serial_reference() {
-        // Table smaller than / equal to / crossing targrows; uneven RG
-        // geometry incl. 1-row RGs and empty-rg-list; many-RG spans where
-        // skips cross row groups.
-        check(&[], 100, 7);
-        check(&[(0, 50)], 100, 1);
-        check(&[(0, 100)], 100, 2);
-        check(&[(0, 101)], 100, 3);
-        check(&[(0, 1), (1, 1), (2, 1)], 2, 4);
-        check(&[(0, 65_536), (1, 65_536), (2, 40_000)], 300, 5);
-        check(&[(0, 9), (1, 65_536), (2, 1), (3, 12_345), (4, 65_536)], 150, 6);
-        for seed in [11u32, 22, 33, 44] {
-            check(&[(0, 65_536), (1, 65_536), (2, 65_536), (3, 21_111)], 1000, seed);
-        }
-        // Large-N shape: skips are long relative to RGs.
-        check(&[(0, 65_536); 32].iter().enumerate().map(|(i, &(_, n))| (i as u32, n)).collect::<Vec<_>>().as_slice(), 100, 12);
-    }
-}
-
-#[cfg(test)]
 mod cache_lookup_error_tests {
     use super::cache_lookup_failed;
 
@@ -3912,5 +3932,145 @@ mod cache_lookup_error_tests {
         assert_eq!(e.message(), "cache lookup failed for type 16384");
         assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
         assert_eq!(e.level(), types_error::ERROR);
+    }
+}
+
+#[cfg(test)]
+mod reservoir_tests {
+    use super::{sampling, Reservoir};
+
+    fn res(seed: u32, t: i32) -> Reservoir {
+        Reservoir::new(sampling::reservoir_init_selection_state(seed, t as u32), t)
+    }
+
+    #[test]
+    fn a_table_under_the_sample_size_is_kept_whole() {
+        for n in [0u64, 1, 99, 100] {
+            assert_eq!(res(1, 100).ordinals(n).unwrap(), (0..n).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn ordinals_are_the_row_walks_draws() {
+        for (seed, t, n) in [(3u32, 100i32, 101u64), (4, 3000, 250_000), (5, 30000, 1_000_000)] {
+            let mut walk = res(seed, t);
+            let mut slots: Vec<u64> = Vec::new();
+            for ord in 0..n {
+                if let Some(k) = walk.step() {
+                    if k == slots.len() {
+                        slots.push(ord);
+                    } else {
+                        slots[k] = ord;
+                    }
+                }
+            }
+            let kept = res(seed, t).ordinals(n).unwrap();
+            assert_eq!(kept, slots);
+            let mut sorted = kept.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted.len(), t as usize);
+            assert!(sorted.last().is_some_and(|&o| o < n));
+            let mean = sorted.iter().sum::<u64>() as f64 / t as f64;
+            assert!((mean / n as f64 - 0.5).abs() < 0.05, "seed {seed}: mean {mean} of {n}");
+        }
+    }
+
+    /// Unset `pgrust.pgrc_analyze_threads` is this thread plus `max_parallel_maintenance_workers`, whatever the cores.
+    #[test]
+    fn unset_threads_are_one_plus_maintenance_workers() {
+        assert_eq!(super::default_sample_threads(8), (9, 72));
+        assert_eq!(super::default_sample_threads(0), (1, 8));
+        assert_eq!(super::default_sample_threads(-1), (1, 8));
+    }
+
+    /// The skip jumps in `ordinals` keep exactly the one-row walk's ordinals, also at the edges: a one-row reservoir,
+    /// a table one row over the sample, and the hits shape (Algorithm Z's long skips).
+    #[test]
+    fn skip_jumps_keep_the_one_row_walks_ordinals() {
+        for (seed, t, n) in [(6u32, 1i32, 5000u64), (8, 30000, 30001), (9, 30000, 20_000_000), (10, 7, 1_000_003)] {
+            let mut walk = res(seed, t);
+            let mut slots: Vec<u64> = Vec::new();
+            for ord in 0..n {
+                if let Some(k) = walk.step() {
+                    if k == slots.len() {
+                        slots.push(ord);
+                    } else {
+                        slots[k] = ord;
+                    }
+                }
+            }
+            assert_eq!(res(seed, t).ordinals(n).unwrap(), slots, "seed {seed} t {t} n {n}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod stored_sample_tests {
+    use super::{order_by_keys, pick_stored};
+
+    /// loadstats D: a part's pick is a sorted k-subset of its stored rows, the same for the same seeded stream, every
+    /// stored row reachable, and a part that keeps more rows than it stores declines.
+    #[test]
+    fn picks_are_sorted_seeded_subsets() {
+        let mut a = Some(pg_prng::PgPrng::seeded(7));
+        let mut b = Some(pg_prng::PgPrng::seeded(7));
+        let mut seen = [0u32; 256];
+        for k in [0usize, 1, 59, 255, 256] {
+            for _ in 0..40 {
+                let x = pick_stored(&mut a, 256, k).expect("k <= n");
+                assert_eq!(Some(x.clone()), pick_stored(&mut b, 256, k));
+                assert_eq!(x.len(), k);
+                assert!(x.windows(2).all(|w| w[0] < w[1]) && x.iter().all(|&i| i < 256));
+                x.iter().for_each(|&i| seen[i] += 1);
+            }
+        }
+        assert!(seen.iter().all(|&c| c > 0));
+        assert_eq!(pick_stored(&mut a, 256, 257), None);
+        assert_eq!(pick_stored(&mut a, 3, 4), None);
+    }
+
+    /// The rows end in ascending key order (stored rows first, granule rows after, interleaved by part).
+    #[test]
+    fn rows_end_in_key_order() {
+        let mut keys = vec![40u64, 41, 7, 90, 3, 8, 60, 61, 62, 100, 0];
+        let mut rows: Vec<String> = keys.iter().map(|k| format!("r{k}")).collect();
+        order_by_keys(&mut rows, &mut keys).unwrap();
+        let mut want = keys.clone();
+        want.sort_unstable();
+        assert_eq!(keys, want);
+        assert_eq!(rows, want.iter().map(|k| format!("r{k}")).collect::<Vec<_>>());
+    }
+}
+
+#[cfg(test)]
+mod fma_parity_tests {
+    use super::*;
+
+    fn want(fused: u64, unfused: u64) -> f64 {
+        f64::from_bits(if cfg!(target_arch = "aarch64") { fused } else { unfused })
+    }
+
+    #[test]
+    fn correlation_numerator_fused() {
+        let got = scalar_correlation(29218, 7066522923916.0);
+        assert_eq!(got.to_bits(), want(0x3FD9_9767_6A4A_89D5, 0x3FD9_9767_6A4A_89D7).to_bits());
+    }
+
+    #[test]
+    fn correlation_denominator_fused() {
+        let got = scalar_correlation(14131, 686163444398.0);
+        assert_eq!(got.to_bits(), want(0xBFB4_DFFE_124B_4E29, 0xBFB4_DFFE_124B_4E28).to_bits());
+    }
+
+    #[test]
+    fn mcv_keep_bound_fused() {
+        let got = mcv_keep_bound(0.0019531290178733587, 30000.0, 6.3626186842054722);
+        assert_eq!(got.to_bits(), want(0x4051_F46C_438F_8CF3, 0x4051_F46C_438F_8CF4).to_bits());
+    }
+
+    #[test]
+    fn extrapolate_rows_matches_c() {
+        assert_eq!(extrapolate_rows(12345.0, 300.0, 1000.0), 41150.0);
     }
 }

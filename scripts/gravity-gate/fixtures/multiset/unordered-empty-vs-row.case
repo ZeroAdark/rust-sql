@@ -1,0 +1,8 @@
+# an empty result against one row
+sql: SELECT x FROM t WHERE x > 5;
+cols: x
+class: unordered
+verdict: mismatch
+[pg]
+[got]
+6

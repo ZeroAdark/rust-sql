@@ -100,7 +100,11 @@ pub fn array_get_n_items_safe(
     }
     debug_assert!(ret >= 0);
     if ret as i64 > MAX_ARRAY_SIZE {
-        return ereturn(escontext.take(), -1, array_size_exceeded());
+        return ereturn(
+            escontext.take(),
+            -1,
+            array_size_exceeded().with_location("arrayutils.c", 100, "ArrayGetNItemsSafe"),
+        );
     }
     Ok(ret)
 }
@@ -212,7 +216,11 @@ mod tests {
             array_get_n_items(1, &[MAX_ARRAY_SIZE as i32]).unwrap() as i64,
             MAX_ARRAY_SIZE
         );
-        assert!(array_get_n_items(1, &[MAX_ARRAY_SIZE as i32 + 1]).is_err());
+        let err = array_get_n_items(1, &[MAX_ARRAY_SIZE as i32 + 1]).unwrap_err();
+        let location = err.location().unwrap();
+        assert_eq!(location.filename.as_deref(), Some("arrayutils.c"));
+        assert_eq!(location.lineno, 100);
+        assert_eq!(location.funcname.as_deref(), Some("ArrayGetNItemsSafe"));
         // and the ndims-exceeded SOFT path returns the -1 sentinel exactly
         // (kills the `delete -` sentinel mutant, same audit)
         let mut esc = SoftErrorContext::new(true);

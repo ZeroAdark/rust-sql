@@ -1,0 +1,14 @@
+-- regress-full-create_index-017
+-- SELECT circle_center(f1), round(radius(f1)) as radius FROM gcircle_tbl ORDER BY f1 <-> '(200,300)'::point LIMIT 10;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index rel=19370 rti=1 am=heap index=19374 iam=gist
+    key att=1 op=3291 form=orderby value=c600:#16
+    lanes Attr(1):byref8:fx24:win/page
+  project (1=fn1472(v1.1), 2=fn1342(fn1470(v1.1)), 3j=op3291(v1.1, c600:#16))
+  limit count=10 offset=all
+  project (1=outer.1, 2=outer.2, 3j=outer.3)
+  outs 1=fx16:call1472 2=w8:val 3=w8:val
+  outs 1=fx16:call1472 2=w8:val 3=w8:val
+mapped: IndexScan Limit

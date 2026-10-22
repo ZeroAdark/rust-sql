@@ -7,9 +7,9 @@ pub(crate) struct IterEntry {
     pub(crate) lsn: XLogRecPtr,
     pub(crate) change: ChangeId,
     pub(crate) txn: TxnId,
-    // Spilled-transaction restore position (C TXNEntryFile + segno); the file
-    // handle closes on drop where C's IterTXNFinish calls FileClose.
-    pub(crate) file: Option<std::fs::File>,
+    // Spilled-transaction restore position (C TXNEntryFile + segno); the
+    // VFD is closed by iter_txn_finish, as C's IterTXNFinish FileCloses it.
+    pub(crate) file: Option<crate::spill::SpillReader>,
     pub(crate) segno: u64,
 }
 
@@ -136,8 +136,8 @@ impl ReorderBuffer {
         }
 
         *iter_state = Some(IterState {
-            entries: Vec::with_capacity(nr_txns),
-            heap: Vec::with_capacity(nr_txns),
+            entries: ::mcx::std_vec_with_capacity("replication", nr_txns)?,
+            heap: ::mcx::std_vec_with_capacity("replication", nr_txns)?,
             built: false,
             old_change: None,
         });
@@ -146,13 +146,19 @@ impl ReorderBuffer {
             if self.txn(cur).nentries == 0 {
                 continue;
             }
-            let mut file: Option<std::fs::File> = None;
+            let mut file: Option<crate::spill::SpillReader> = None;
             let mut segno: u64 = 0;
             if self.txn(cur).is_serialized() {
                 // Serialize the remaining in-memory changes, then read the
                 // first batch back so the list head below is the lowest LSN.
                 self.serialize_txn(cur)?;
-                self.restore_changes(cur, &mut file, &mut segno)?;
+                // C's error path IterTXNFinish closes a half-read segment.
+                if let Err(e) = self.restore_changes(cur, &mut file, &mut segno) {
+                    if let Some(reader) = file.take() {
+                        let _ = reader.close();
+                    }
+                    return Err(e);
+                }
             }
             let head = self.txn(cur).changes.head;
             debug_assert!(head != INVALID_ID);
@@ -243,9 +249,16 @@ impl ReorderBuffer {
         Ok(Some(change))
     }
 
-    // ReorderBufferIterTXNFinish (reorderbuffer.c:1500): free the pending
-    // old_change; the per-entry files close on drop.
+    // ReorderBufferIterTXNFinish (reorderbuffer.c:1500): FileClose every
+    // entry's open spill segment, then free the pending old_change.
     pub(crate) fn iter_txn_finish(&mut self, mut state: IterState) {
+        for entry in state.entries.iter_mut() {
+            if let Some(reader) = entry.file.take() {
+                // C's FileClose reports a failed close(2) as a LOG/WARNING
+                // and carries on; nothing here can act on it either.
+                let _ = reader.close();
+            }
+        }
         if let Some(old) = state.old_change.take() {
             self.free_change(old, true);
         }

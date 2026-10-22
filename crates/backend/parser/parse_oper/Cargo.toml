@@ -15,6 +15,7 @@ coerce = { path = "../coerce" }
 datum = { path = "../../../_support/types/datum" }
 elog = { path = "../../utils/error/elog" }
 format_type = { path = "../../utils/adt/format_type" }
+gravity_deps = { path = "../../../gravity/deps" }
 inval = { path = "../../utils/cache/inval" }
 lsyscache = { path = "../../utils/cache/lsyscache" }
 mbutils = { path = "../../utils/mb/mbutils" }

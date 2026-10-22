@@ -112,7 +112,7 @@ pub fn digit_buf_heap_realloc(heap: &mut Vec<NumericDigit>, n: usize) {
             .with(|p| p.borrow_mut().pop())
             .unwrap_or_default();
         v.clear();
-        v.reserve(n);
+        let _ = v.try_reserve(n);
         *heap = v;
     } else {
         heap.clear();
@@ -458,7 +458,7 @@ impl NumericImage {
         let total = VARHDRSZ + payload;
         let n = total / 2;
         self.words.clear();
-        self.words.reserve(n);
+        let _ = self.words.try_reserve(n);
         // SAFETY: capacity reserved; u16 has no invalid bit patterns and all
         // words are written before any read (header here, payload by caller).
         unsafe { self.words.set_len(n) };
@@ -669,10 +669,19 @@ pub fn int128_to_var(val: i128, var: &mut NumericVar) {
     let mut i = total;
     let digits_start = var.offset as usize;
     let buf = var.buf.as_mut_slice();
-    while uval != 0 {
+    // the digits past 2^64 by the 128-bit division (a __udivti3 call each), the rest in 64 bits, whose division by the
+    // constant NBASE is a multiply: the same digits either way
+    while uval > u64::MAX as u128 {
         i -= 1;
         let newuval = uval / NBASE as u128;
         buf[digits_start + i as usize] = (uval - newuval * NBASE as u128) as NumericDigit;
+        uval = newuval;
+    }
+    let mut uval = uval as u64;
+    while uval != 0 {
+        i -= 1;
+        let newuval = uval / NBASE as u64;
+        buf[digits_start + i as usize] = (uval - newuval * NBASE as u64) as NumericDigit;
         uval = newuval;
     }
     var.offset += i as u32;

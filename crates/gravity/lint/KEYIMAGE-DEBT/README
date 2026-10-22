@@ -1,0 +1,9 @@
+# RX's registry (lint/rules/rx_keyimage.py; C5 (b), reports/BUG-RECURRENCE-20261011.md §3: one key-image decision read by
+# producer and consumer): the functions outside the key-image home (gravity_fn::typesem) that name a key image
+# (KeyImage, WordImage, KeyEq or an image helper), by repository path, name and owner lane. Seeded from trunk 4c507d6c115.
+# A row goes when its function reads the one decision through the home; a landing never adds a row (a certified move
+# rewrites one).
+# kind: decide (it builds or maps an image), read (it reads a decided image to emit or compare).
+# path	fn	owner	kind	what it names
+# Layout: one row per file, named <path>@<fn> (the row's path with crates/gravity/ dropped and '/' as '.'), holding the
+# row line; this README is not a row. Deleting a row deletes its file.

@@ -11,7 +11,7 @@ use init_small::globals as g;
 use latch::{ResetLatch, SetLatch, WaitLatch};
 use lwlock::{LWLockAcquire, LWLockRelease, LW_EXCLUSIVE};
 use types_core::ProcNumber;
-use types_error::{PgError, PgResult, ERROR};
+use types_error::{ErrorLocation, PgError, PgResult, DEBUG3, DEBUG4, ERROR};
 use types_guc::PGC_SIGHUP;
 use types_storage::aio::{PGAIO_HF_REFERENCES_LOCAL, PGAIO_SUBMIT_BATCH_SIZE};
 use types_storage::latch::LatchHandle;
@@ -39,7 +39,7 @@ const INVALID_PROC: ProcNumber = types_core::INVALID_PROC_NUMBER;
 // "AioWorkerSubmissionQueue" and "AioWorkerControl" (pgaio_worker_shmem_init).
 // Both are serialized by AioWorkerSubmissionQueueLock. C's flexible array
 // members are fixed-size here (queue size is the constant 64; MAX_IO_WORKERS
-// slots), so one struct each is the same block C lays out.
+// slots), so one struct each is the same size C requests.
 struct PgAioWorkerSubmissionQueue {
     size: u32,
     mask: u32,
@@ -48,9 +48,12 @@ struct PgAioWorkerSubmissionQueue {
     sqes: [u32; IO_WORKER_QUEUE_SIZE],
 }
 
+// C stores Latch*; the procno addresses the same shared procLatch. The
+// padding keeps the slot at C's 16 bytes, so "AioWorkerControl" is 520.
+#[repr(C, align(8))]
 struct PgAioWorkerSlot {
-    // C stores Latch*; the procno addresses the same shared procLatch.
     procno: ProcNumber,
+    _latch_pad: u32,
     in_use: bool,
 }
 
@@ -125,7 +128,7 @@ pub(crate) fn pgaio_worker_shmem_init(_first_time: bool) -> PgResult<()> {
         unsafe {
             c.write(PgAioWorkerControl {
                 idle_worker_mask: 0,
-                workers: [const { PgAioWorkerSlot { procno: INVALID_PROC, in_use: false } };
+                workers: [const { PgAioWorkerSlot { procno: INVALID_PROC, _latch_pad: 0, in_use: false } };
                     MAX_IO_WORKERS_USIZE],
             });
         }
@@ -168,6 +171,12 @@ pub(crate) fn pgaio_worker_needs_synchronous_execution(index: u32) -> bool {
 fn queue_insert(q: &mut PgAioWorkerSubmissionQueue, index: u32) -> bool {
     let new_head = (q.head + 1) & q.mask;
     if new_head == q.tail {
+        let report = ereport(DEBUG3);
+        if !report.is_suppressed() {
+            let _ = report.errhidestmt(true).errhidecontext(true)
+                .errmsg_internal(format!("io queue is full, at {} elements", q.size))
+                .finish(ErrorLocation::new("method_worker.c", 190, "pgaio_worker_submission_queue_insert"));
+        }
         return false; // full
     }
     q.sqes[q.head as usize] = index;
@@ -203,6 +212,21 @@ fn choose_idle(c: &mut PgAioWorkerControl) -> Option<usize> {
     Some(worker)
 }
 
+fn worker_debug_io(index: u32, message: std::fmt::Arguments<'_>, line: i32, function: &'static str) {
+    let report = ereport(DEBUG4);
+    if report.is_suppressed() {
+        return;
+    }
+    let h = ioh(index);
+    // SAFETY: the submitting backend or executing worker owns this queued IO.
+    let d = unsafe { h.data() };
+    let _ = report.errhidestmt(true).errhidecontext(true)
+        .errmsg_internal(format!("io {:<10}|op {:<5}|target {:<4}|state {:<16}: {}",
+            index, crate::pgaio_io_op_name(d.op), crate::pgaio_io_target_name(d.target),
+            crate::pgaio_io_state_name(h.state.load(Ordering::Relaxed)), message))
+        .finish(ErrorLocation::new("method_worker.c", line, function));
+}
+
 pub(crate) fn pgaio_worker_submit(staged: &[u32]) -> PgResult<()> {
     for &index in staged {
         crate::handle::pgaio_io_prepare_submit(index);
@@ -228,9 +252,12 @@ fn pgaio_worker_submit_internal(staged: &[u32]) -> PgResult<()> {
             continue;
         }
         if wakeup.is_none() {
-            if let Some(worker) = choose_idle(c) {
+            let worker = choose_idle(c);
+            if let Some(worker) = worker {
                 wakeup = Some(c.workers[worker].procno);
             }
+            worker_debug_io(index, format_args!("choosing worker {}", worker.map_or(-1, |w| w as i32)),
+                274, "pgaio_worker_submit_internal");
         }
     }
     LWLockRelease(queue_lock())?;
@@ -245,14 +272,7 @@ fn pgaio_worker_submit_internal(staged: &[u32]) -> PgResult<()> {
     Ok(())
 }
 
-// Registry-slot release (on_shmem_exit); the executed-IOs witness logs
-// here because worker exit goes through proc_exit
-// (ProcessMainLoopInterrupts), never past the IoWorkerMain loop tail.
 fn pgaio_worker_die(_code: i32, _arg: usize) {
-    let _ = elog::elog(
-        types_error::DEBUG1,
-        format!("io worker executed {} IOs", EXECUTED_IOS.get()),
-    );
     let id = MY_IO_WORKER_ID.get();
     debug_assert!(id >= 0);
     LWLockAcquire(queue_lock(), LW_EXCLUSIVE, g::MyProcNumber()).expect("pgaio_worker_die");
@@ -266,14 +286,6 @@ fn pgaio_worker_die(_code: i32, _arg: usize) {
     LWLockRelease(queue_lock()).expect("pgaio_worker_die");
 }
 
-// Per-worker executed-IOs count: the e2e's flowed-through-workers witness.
-thread_local! {
-    static EXECUTED_IOS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-pub fn pgaio_worker_executed_count() -> u64 {
-    EXECUTED_IOS.get()
-}
 
 pub fn pgaio_worker_register() -> PgResult<()> {
     MY_IO_WORKER_ID.set(-1);
@@ -371,6 +383,8 @@ pub fn pgaio_worker_cycle() -> PgResult<()> {
 
     match io_index {
         Some(index) => {
+            worker_debug_io(index, format_args!("worker {} processing IO", MY_IO_WORKER_ID.get()),
+                511, "IoWorkerMain");
             // C: interrupts held so the reopened fd cannot be closed before
             // execution consumes it.
             g::HoldInterrupts();
@@ -385,7 +399,6 @@ pub fn pgaio_worker_cycle() -> PgResult<()> {
             // pgaio_io_perform_synchronously contains a critical section, so
             // it cannot fail with ERROR/FATAL.
             crate::io::pgaio_io_perform_synchronously(index);
-            EXECUTED_IOS.set(EXECUTED_IOS.get() + 1);
             g::ResumeInterrupts();
         }
         None => {
@@ -410,4 +423,70 @@ pub fn pgaio_worker_cycle() -> PgResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_shmem_sizes_match_c() {
+        // C on LP64: 16 + 4 * 64 and 8 + 16 * 32.
+        assert_eq!(pgaio_worker_queue_shmem_size(), 272);
+        assert_eq!(pgaio_worker_control_shmem_size(), 520);
+        assert_eq!(pgaio_worker_shmem_size(), 792);
+    }
+
+    #[test]
+    fn worker_debug_messages_match_c() {
+        crate::tests::test_ctl();
+        static SEEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn hook(error: &PgError, output: &mut bool) {
+            *output = false;
+            assert!(error.hide_statement);
+            assert!(error.hide_context);
+            let location = error.location.as_ref().unwrap();
+            assert_eq!(location.filename.as_deref(), Some("method_worker.c"));
+            match SEEN.fetch_add(1, Ordering::Relaxed) {
+                0 => {
+                    assert_eq!(error.message, "io queue is full, at 64 elements");
+                    assert_eq!(error.level, DEBUG3);
+                    assert_eq!(location.lineno, 190);
+                }
+                1 => {
+                    assert_eq!(error.message, "io 23        |op readv|target smgr|state SUBMITTED       : choosing worker -1");
+                    assert_eq!(error.level, DEBUG4);
+                    assert_eq!(location.lineno, 274);
+                }
+                2 => {
+                    assert_eq!(error.message, "io 23        |op readv|target smgr|state SUBMITTED       : worker 2 processing IO");
+                    assert_eq!(error.level, DEBUG4);
+                    assert_eq!(location.lineno, 511);
+                }
+                _ => panic!("unexpected log"),
+            }
+        }
+        let old_level = elog::config::log_min_messages();
+        elog::config::set_log_min_messages(DEBUG4);
+        let old_hook = elog::set_emit_log_hook(Some(hook));
+        let mut q = PgAioWorkerSubmissionQueue {
+            size: 64, mask: 63, head: 63, tail: 0, sqes: [0; 64],
+        };
+        assert!(!queue_insert(&mut q, 23));
+        let h = ioh(23);
+        // SAFETY: this handle is exclusively owned by this test.
+        unsafe {
+            h.data().op = types_storage::aio::PGAIO_OP_READV;
+            h.data().target = types_storage::aio::PGAIO_TID_SMGR;
+        }
+        h.state.store(crate::PGAIO_HS_SUBMITTED, Ordering::Relaxed);
+        worker_debug_io(23, format_args!("choosing worker -1"),
+            274, "pgaio_worker_submit_internal");
+        worker_debug_io(23, format_args!("worker 2 processing IO"),
+            511, "IoWorkerMain");
+        assert_eq!(SEEN.load(Ordering::Relaxed), 3);
+        elog::set_emit_log_hook(old_hook);
+        elog::config::set_log_min_messages(old_level);
+        h.state.store(crate::PGAIO_HS_IDLE, Ordering::Relaxed);
+    }
 }

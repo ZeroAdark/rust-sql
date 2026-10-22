@@ -1,0 +1,8 @@
+# Pinned upstream PostgreSQL source used as the reference tree
+# (crates/postgres-18.6-reference, fetched on demand by scripts/pg-reference.sh).
+# Bumping the pin: change these four lines, run scripts/pg-reference.sh, and
+# rename the tree path everywhere if the major version changes.
+version=18.6
+tag=REL_18_6
+url=https://github.com/postgres/postgres/archive/refs/tags/REL_18_6.tar.gz
+sha256=ff9b1187e3ab120282b9f3e09a5efba2425838b3a843150c5cb2f019f47ac400

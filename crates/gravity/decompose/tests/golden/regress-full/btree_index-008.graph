@@ -1,0 +1,13 @@
+-- regress-full-btree_index-008
+-- explain (costs off) select * from btree_bpchar where f1::bpchar like 'foo';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@0
+  source bitmap rel=26336 rti=1 am=heap
+    bitmap index node=1 index=26341 rows=7
+      key att=1 op=1054 value=c1042:'foo'
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  filter op1211(relabel1042(v1.1), c25:'foo')
+  project (1=v1.1)
+  outs 1=vl:win/page
+mapped: BitmapIndexScan BitmapHeapScan

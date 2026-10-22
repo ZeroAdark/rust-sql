@@ -1,0 +1,8 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/bankplane.rs
+growth	std::vec::Vec::push	3
+macro	std::format	2
+method	std::clone::Clone::clone	4
+method	std::iter::Iterator::collect	2
+method	std::vec::Vec::with_capacity	3
+type	std::string::String	1
+type	std::vec::Vec	7

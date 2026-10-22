@@ -1,0 +1,5 @@
+# PostgreSQL 18.6 src/backend/nodes/nodeFuncs.c: 4 stack-depth check sites
+2111	expression_tree_walker_impl	crates/backend/nodes/nodes_core/src/lib.rs	expression_tree_walker_dyn	yes	
+2966	expression_tree_mutator_impl	crates/backend/nodes/nodes_core/src/lib.rs	expression_tree_mutator_dyn	yes	
+4010	raw_expression_tree_walker_impl	crates/backend/nodes/nodes_core/src/lib.rs	raw_expression_tree_walker_dyn	yes	
+4730	planstate_tree_walker_impl	crates/backend/commands/explain/src/node.rs	ExplainNode	yes	

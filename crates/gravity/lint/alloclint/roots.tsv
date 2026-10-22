@@ -1,0 +1,40 @@
+# alloclint phase roots (crosscheck.py; reports/ALLOCLINT-GRAVITY-20261014.md sections 1 and 3), on top of the automatic
+# ones (host! fns / extern "C" fns whose address is taken, HOST_MARK hand-offs, RUNTIME_TRAITS impls).
+# kind<TAB>regex over the demangled name<TAB>why. RUNTIME / LOWERING = roots; STOP-RUNTIME = the runtime walk does not enter
+# (plan work on the run path: compiling a tier-0 code at its first run, a nested statement's admission); STOP-LOWERING = the
+# lowering walk does not enter (the run loop a plan-time entry hands its program to).
+RUNTIME	^gravity_exec::.*::(executor_run|executor_finish|executor_finish_and_park|executor_rearm|executor_rewind|executor_end|exec_current_of)$	exec admit/entry/mod.rs:1350-1805 executor seams
+RUNTIME	^gravity_exec::runner::(.*::)?(execute|fetch|simple|drive|step_slot)$	exec runner execute.rs:13/33/513, drive.rs:45
+RUNTIME	^gravity_driver::entry::(.*::)?(run|run_pipeline|run_claim|resume_claim|run_to_end|recheck|run_nested|run_ahead|pull_nested|build_wait)$	driver entry.rs:700-1655
+RUNTIME	^gravity_driver::section::(.*::)?(open_section|close_section|run_claim)$	driver section.rs:1439/1661, section/raw.rs:41
+RUNTIME	^gravity_parallel::(.*::)?(run_program|run_program_rechecking|run_section|run_with_late|pull_late|pulled_serial|drain_pulled|run_one|run_claim)$	parallel lib.rs:219-1013, worker.rs:23
+RUNTIME	^gravity_pool::(.*::)?(run_morsel|run_led)$	pool lib.rs:439/587/98
+RUNTIME	^gravity_interp::(.*::)?(run|run_depth)$	interp lib.rs:60/64
+RUNTIME	^gravity_wire::(.*::)?(send_framed|send_rows|send_row|frame_rows)$	wire datarow.rs:484-551, datarow/raw.rs:130
+RUNTIME	^gravity_backend::raw::interp_run$	backend raw.rs:79 (Code::interp entry)
+RUNTIME	^gravity_hosts::worker_arm::(.*::)?arm_worker$	hosts worker_arm.rs:32 (each pool claim)
+LOWERING	^gravity_exec::.*::(executor_start|create_query_desc|note_cplan_for_query_desc|cursor_plan_rewind_replays)$	exec admit/entry/mod.rs:354-910
+LOWERING	^gravity_exec::runner::(.*::)?(bind|describe|simple|lookup_or_admit)$	exec runner portal.rs:292/433/334, execute.rs:513
+LOWERING	^gravity_exec::admit::(.*::)?(start|graph|admit_in|install|front_check|progcache_check|compile_program)$	exec explain.rs:29, admit/mod.rs:1092-1937
+LOWERING	^gravity_exec::runner::admission::(.*::)?(admit_any|admit_either|admit_unkeyed)$	exec admission.rs:274/348
+LOWERING	^gravity_lower::(lower_graph|lower_composed|compile|assemble)$	lower lib.rs:162-209
+LOWERING	^gravity_lowerv4::(lower_graph|lower_in|program_order|catch)$	lowerv4 lib.rs:88-101
+LOWERING	^gravity_decompose::(decompose|decompose_in|decompose_plan)$	decompose lib.rs:42-62
+LOWERING	^gravity_backend::(mapped_cached_keyed|warm|promoted|pool_compiled_all)$	backend lib.rs:65/98/275/308
+LOWERING	^gravity_tpde::(compile|compile_with)$	tpde lib.rs:309/315
+STOP-RUNTIME	^gravity_backend::(mapped_cached_keyed|promoted|pool_compiled_all)$	tier-0 promotion compiles on the run path (driver entry.rs:490 -> backend lib.rs:275)
+STOP-RUNTIME	^gravity_backend::promote::	the tier-0 compile pool (promote.rs:73-126)
+STOP-RUNTIME	^gravity_tpde::	TPDE compiles
+STOP-RUNTIME	^gravity_program::(.*::)?Tiered(<[^>]*>)?::promote$	program code.rs:84 (compiles)
+STOP-RUNTIME	^gravity_exec::.*::(executor_start)$	a nested statement re-enters executor_start: its admission is plan work
+STOP-RUNTIME	^gravity_exec::runner::admission::(.*::)?(admit_any|admit_either|admit_unkeyed)$	admission on the run path (runner::simple)
+STOP-RUNTIME	^gravity_exec::runner::(.*::)?lookup_or_admit$	admission
+STOP-RUNTIME	^gravity_exec::admit::(.*::)?(graph|admit_in|install|compile_program)$	admission
+STOP-RUNTIME	^gravity_lower::(lower_graph|lower_composed|compile|assemble)$	lowering
+STOP-RUNTIME	^gravity_lowerv4::(lower_graph|lower_in|program_order)$	lowering
+STOP-RUNTIME	^gravity_decompose::(decompose|decompose_in|decompose_plan)$	planning
+STOP-LOWERING	^gravity_driver::entry::(.*::)?(run|run_pipeline|run_claim|resume_claim|run_to_end|run_nested|run_ahead|pull_nested|build_wait)$	the run loop
+STOP-LOWERING	^gravity_parallel::(.*::)?(run_program|run_program_rechecking|run_section|run_with_late)$	the parallel run
+STOP-LOWERING	^gravity_exec::runner::(.*::)?drive$	runner::simple hands its program to drive
+LOWERING	^gravity_lowerv4::ops::(kind_as|kind)$	lowerv4's per-operator lowering dispatch, which exec's run path calls to prepare an operator lazily (exec ops/sort/topn/proto.rs BuildSide::prepare)
+STOP-RUNTIME	^gravity_lowerv4::ops::(kind_as|kind)$	lowering an operator on the run path is plan work

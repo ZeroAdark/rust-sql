@@ -1,0 +1,3 @@
+path	crates/gravity/exec/src/ops/scan/sites_index_am.rs
+method	std::iter::Iterator::collect	2
+type	std::vec::Vec	2

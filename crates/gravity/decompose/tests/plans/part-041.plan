@@ -1,0 +1,34 @@
+-- name: part-041
+-- sql: DELETE FROM part WHERE k = 7 AND s = 's7';
+-- rel 16395 part am=none kind=p natts=3
+-- att 16395 1 k typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16395 2 v typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16395 3 s typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- idx 16417 rel=16395 keys=1 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16448 rel=16395 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- part 16395 16399 trig=f rules=f
+-- part 16395 16405 trig=f rules=f
+-- part 16395 16411 trig=f rules=f
+-- trigext 16395 before=- after=- instead=- stmt=- trans=- internal=- defer=- rules=f
+-- rel 16405 part2 am=heap kind=r natts=3
+-- att 16405 1 k typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16405 2 v typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16405 3 s typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- idx 16419 rel=16405 keys=1 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16450 rel=16405 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- trigext 16405 before=- after=- instead=- stmt=- trans=- internal=- defer=- rules=f
+-- rel 16411 part3 am=heap kind=r natts=3
+-- att 16411 1 k typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16411 2 v typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16411 3 s typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- idx 16420 rel=16411 keys=1 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16451 rel=16411 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- trigext 16411 before=- after=- instead=- stmt=- trans=- internal=- defer=- rules=f
+-- rel 16399 part1 am=heap kind=r natts=3
+-- att 16399 1 k typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16399 2 v typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16399 3 s typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- idx 16418 rel=16399 keys=1 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16449 rel=16399 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- trigext 16399 before=- after=- instead=- stmt=- trans=- internal=- defer=- rules=f
+{PLANNEDSTMT :commandType 4 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {MODIFYTABLE :plan.disabled_nodes 0 :plan.startup_cost 0.2775 :plan.total_cost 48.5475399319148 :plan.plan_rows 0 :plan.plan_width 0 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist <> :plan.qual <> :plan.lefttree {INDEXSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0.2775 :scan.plan.total_cost 48.5475399319148 :scan.plan.plan_rows 1 :scan.plan.plan_width 10 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 2 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 2 :varattno -6 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 0 :varattnosyn 0 :location -1} :resno 1 :resname tableoid :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk true} {TARGETENTRY :expr {VAR :varno 2 :varattno -1 :vartype 27 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 0 :varattnosyn 0 :location -1} :resno 2 :resname ctid :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk true}) :scan.plan.qual ({OPEXPR :opno 98 :opfuncid 67 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 100 :args ({VAR :varno 2 :varattno 3 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 3 :location -1} {CONST :consttype 25 :consttypmod -1 :constcollid 100 :constlen -1 :constbyval false :constisnull false :location 37 :constvalue 6 [ 24 0 0 0 115 55 ]}) :location 35}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b 0) :scan.plan.allParam (b 0) :scan.scanrelid 2 :indexid 16418 :indexqual ({OPEXPR :opno 96 :opfuncid 65 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno -3 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 4294967293 :varattnosyn 1 :location -1} {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 27 :constvalue 4 [ 7 0 0 0 0 0 0 0 ]}) :location 25}) :indexqualorig ({OPEXPR :opno 96 :opfuncid 65 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 2 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 1 :location -1} {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 27 :constvalue 4 [ 7 0 0 0 0 0 0 0 ]}) :location 25}) :indexorderby <> :indexorderbyorig <> :indexorderbyops <> :indexorderdir 1} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :operation 4 :canSetTag true :nominalRelation 1 :rootRelation 1 :partColsUpdated false :resultRelations (i 2) :updateColnosLists <> :withCheckOptionLists <> :returningOldAlias <> :returningNewAlias <> :returningLists <> :fdwPrivLists (<>) :fdwDirectModifyPlans (b) :rowMarks <> :epqParam 0 :onConflictAction 0 :arbiterIndexes <> :onConflictSet <> :onConflictCols <> :onConflictWhere <> :exclRelRTI 0 :exclRelTlist <> :mergeActionLists <> :mergeJoinConditions <>} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname part :colnames ("k" "v" "s")} :rtekind 0 :relid 16395 :inh true :relkind p :rellockmode 3 :perminfoindex 1 :tablesample <> :lateral false :inFromCl false :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname part :colnames ("k" "v" "s")} :eref {ALIAS :aliasname part :colnames ("k" "v" "s")} :rtekind 0 :relid 16399 :inh false :relkind r :rellockmode 3 :perminfoindex 0 :tablesample <> :lateral false :inFromCl false :securityQuals <>}) :unprunableRelids (b 1 2) :permInfos ({RTEPERMISSIONINFO :relid 16395 :inh true :requiredPerms 10 :checkAsUser 0 :selectedCols (b 8 10) :insertedCols (b) :updatedCols (b)}) :resultRelations (i 2 1) :appendRelations ({APPENDRELINFO :parent_relid 1 :child_relid 2 :parent_reltype 16397 :child_reltype 16401 :translated_vars <> :num_child_cols 3 :parent_colnos ( 1 2 3) :parent_reloid 16395}) :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16395 16399) :invalItems <> :paramExecTypes (o 0) :utilityStmt <> :stmt_location 0 :stmt_len 41}

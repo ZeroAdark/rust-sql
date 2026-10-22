@@ -1,0 +1,1 @@
+past expr.saop: a composite = ANY (ARRAY[int8_tbl rows]), the test table rowtype the rig catalog refuses (no typcache)

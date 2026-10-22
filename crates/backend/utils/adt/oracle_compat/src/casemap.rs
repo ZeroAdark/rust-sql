@@ -47,6 +47,9 @@ fn pg_case<'mcx>(
     let mut needed = worker(mcx, &mut dst, buff, locale)?;
     if needed + 1 > dstsize {
         dstsize = needed + 1;
+        mcx::check_alloc_size(dstsize)?;
+        dst.try_reserve_exact(dstsize - dst.len())
+            .map_err(|_| mcx.oom(dstsize))?;
         dst.resize(dstsize, 0);
         needed = worker(mcx, &mut dst, buff, locale)?;
         debug_assert!(needed + 1 <= dstsize);
@@ -152,5 +155,25 @@ pub fn str_casefold<'mcx>(mcx: Mcx<'mcx>, buff: &[u8], collid: Oid) -> PgResult<
         asc_tolower(mcx, buff)
     } else {
         pg_case(mcx, buff, locale, pg_locale::pg_strfold)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upper_expansion_reserves_exact_capacity() {
+        let ctx = mcx::MemoryContext::new("case expansion");
+        let mut locale = pg_locale::C_LOCALE;
+        locale.provider = pg_locale::COLLPROVIDER_BUILTIN;
+        locale.ctype_is_c = false;
+        locale.builtin_locale = Some("PG_UNICODE_FAST");
+        locale.builtin_casemap_full = true;
+        let input = "\u{023f}".repeat(100);
+        let output = pg_case(ctx.mcx(), input.as_bytes(), &locale, pg_locale::pg_strupper)
+            .unwrap();
+        assert_eq!(&output[..], "\u{2c7e}".repeat(100).as_bytes());
+        assert_eq!(output.capacity(), 301);
     }
 }

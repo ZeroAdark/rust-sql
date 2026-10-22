@@ -125,7 +125,7 @@ const C_SIZEOF_BUFFER_LOOKUP_ENT: usize = 24;
 
 /// BufTableShmemSize (buf_table.c:41): dynahash's estimate for `size`
 /// BufferLookupEnt entries.
-pub fn BufTableShmemSize(size: i32) -> usize {
+pub fn BufTableShmemSize(size: i32) -> PgResult<usize> {
     dynahash::hash_estimate_size(size as i64, C_SIZEOF_BUFFER_LOOKUP_ENT)
 }
 
@@ -144,8 +144,7 @@ pub fn InitBufTable(size: i32) -> PgResult<()> {
         as *mut lwlock::LWLockPadded;
     PARTITION_BASE.store(base, core::sync::atomic::Ordering::Release);
 
-    let per_part = (size as usize / NUM_BUFFER_PARTITIONS as usize) + 1;
-    let cap = (per_part * 2).next_power_of_two().max(16);
+    let cap = partition_cap_for(size);
     let nparts = NUM_BUFFER_PARTITIONS as usize;
     let layout = core::alloc::Layout::array::<Partition>(nparts).unwrap();
     // SAFETY: non-zero layout; fields initialized below before publication.
@@ -190,6 +189,13 @@ pub fn InitBufTable(size: i32) -> PgResult<()> {
         "bufmgr: buffer lookup table initialized twice"
     );
     Ok(())
+}
+
+/// Per-partition slot count InitBufTable sizes for `size` entries; also the
+/// floor BufTableShrinkToFit halves down to.
+fn partition_cap_for(size: i32) -> usize {
+    let per_part = (size.max(0) as usize / NUM_BUFFER_PARTITIONS as usize) + 1;
+    (per_part * 2).next_power_of_two().max(16)
 }
 
 // FxHash-family mix over the 20 tag bytes (rule 9: FxHash for internal
@@ -322,11 +328,19 @@ pub fn BufTableInsert(tag: &buftag, hashcode: u32, buf_id: i32) -> PgResult<i32>
 #[cold]
 #[inline(never)]
 unsafe fn grow(part: &mut Partition) -> PgResult<()> {
-    let old_cap = part.mask as usize + 1;
-    let new_cap = old_cap * 2;
+    let new_cap = (part.mask as usize + 1) * 2;
     let Some(new_entries) = alloc_entries(new_cap) else {
         return Err(oom_error("out of shared memory".to_string(), "BufTableInsert"));
     };
+    // SAFETY: caller holds the exclusive partition lock.
+    unsafe { rehash_into(part, new_entries, new_cap) };
+    Ok(())
+}
+
+/// Moves every entry of `part` into `new_entries` (`new_cap` slots, empty)
+/// and frees the old array. Exclusive partition lock held.
+unsafe fn rehash_into(part: &mut Partition, new_entries: *mut BufferLookupEnt, new_cap: usize) {
+    let old_cap = part.mask as usize + 1;
     let new_mask = (new_cap - 1) as u32;
     for s in 0..old_cap {
         let ent = &*part.entries.add(s);
@@ -348,7 +362,72 @@ unsafe fn grow(part: &mut Partition) -> PgResult<()> {
     part.entries = new_entries;
     part.mask = new_mask;
     part.grow_at = (new_cap - new_cap / 4) as u32;
-    Ok(())
+}
+
+/// Relocation's in-place mapping move: the entry for `tag` must name
+/// `old_id`; it names `new_id` afterwards. False when no such entry exists
+/// (the caller reports hash table corruption). Exclusive partition lock held.
+pub(crate) fn BufTableSetId(tag: &buftag, hashcode: u32, old_id: i32, new_id: i32) -> bool {
+    // SAFETY: exclusive partition lock — sole accessor of this partition.
+    unsafe {
+        let part = &mut *partition_for(hashcode);
+        let mask = part.mask;
+        let mut slot = ideal_slot(hashcode, mask);
+        loop {
+            let ent = &mut *part.entries.add(slot as usize);
+            if ent.key.blockNum == EMPTY_BLOCK {
+                return false;
+            }
+            if ent.key == *tag {
+                if ent.id != old_id {
+                    return false;
+                }
+                ent.id = new_id;
+                return true;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+}
+
+/// Halves partitions left sparse by a pool shrink: each partition, under its
+/// exclusive lock, halves while under a quarter full and above the capacity
+/// InitBufTable would give `size` entries. A refused allocation keeps the
+/// partition as it is. Returns the number of halvings.
+pub(crate) fn BufTableShrinkToFit(size: i32) -> PgResult<u32> {
+    let floor = partition_cap_for(size);
+    let mut halvings = 0u32;
+    for i in 0..NUM_BUFFER_PARTITIONS as u32 {
+        let lock = BufMappingPartitionLock(i);
+        lwlock::LWLockAcquire(lock, lwlock::LW_EXCLUSIVE, init_small::globals::MyProcNumber())?;
+        // SAFETY: exclusive lock on partition i (hashcode i selects it).
+        unsafe {
+            let part = &mut *partition_for(i);
+            loop {
+                let cap = part.mask as usize + 1;
+                let half = cap / 2;
+                if half < floor || part.count as usize * 4 >= cap {
+                    break;
+                }
+                let Some(new_entries) = alloc_entries(half) else { break };
+                rehash_into(part, new_entries, half);
+                halvings += 1;
+            }
+        }
+        lwlock::LWLockRelease(lock)?;
+    }
+    Ok(halvings)
+}
+
+/// Test probe: total slots across all partitions.
+#[cfg(test)]
+pub(crate) fn total_capacity() -> usize {
+    // SAFETY: racy read of partition masks is fine for a quiescent test.
+    unsafe {
+        (0..NUM_BUFFER_PARTITIONS as usize)
+            .map(|i| (*partitions().add(i)).mask as usize + 1)
+            .sum()
+    }
 }
 
 /// Caller holds the partition lock exclusively.

@@ -1,0 +1,5 @@
+backend/access/transam/xlogutils/src/lib.rs	IN_RECOVERY	pgport	exit	thread	C InRecovery: true only in the startup thread while it replays; false on every other thread, as in C's other processes
+backend/access/transam/xlogutils/src/lib.rs	STANDBY_STATE	pgport	exit	thread	C standbyState: the startup thread's hot standby state
+backend/access/transam/xlogutils/src/lib.rs	IGNORE_INVALID_PAGES	pgport	exit	thread	a POSTMASTER / SIGHUP setting, process-wide, never carried (ignore_invalid_pages, POSTMASTER)
+backend/access/transam/xlogutils/src/lib.rs	INVALID_PAGE_TAB	pgport	at:XLogCheckInvalidPages	thread	C invalid_page_tab: pages replay referenced but did not find, bounded by the pages one replay meets (normally none), forgotten as later records drop them and checked and freed at XLogCheckInvalidPages; the startup (replay) thread's own
+backend/access/transam/xlogutils/src/lib.rs	FAKE_REL_CX	pgport	exit	thread	the session-root context behind CreateFakeRelcacheEntry's empty vectors; nothing is allocated in it

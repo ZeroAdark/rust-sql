@@ -6,7 +6,6 @@ use ::types_storage::File;
 use crate::vfd::{self, with_fd};
 
 static SETUP: Once = Once::new();
-// Serializes the tests that chdir into a scratch data directory.
 static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn enter_datadir(dir: &str) -> std::sync::MutexGuard<'static, ()> {
@@ -14,28 +13,17 @@ fn enter_datadir(dir: &str) -> std::sync::MutexGuard<'static, ()> {
     std::fs::create_dir_all(format!("{dir}/base/pgsql_tmp")).unwrap();
     std::env::set_current_dir(dir).unwrap();
     // Sim has no cwd: relative paths resolve against "/" (sim.rs norm_path),
-    // so the datadir-relative temp tree must exist at the sim root. fd's
-    // ENOENT retry (temp.rs OpenTemporaryFileInTablespace) only mkdirs the
-    // pgsql_tmp leaf, never `base` — a real datadir always has `base`.
+    // so the datadir-relative temp tree must exist at the sim root.
     #[cfg(pgrust_sim)]
     vfs_mkdir_p("base/pgsql_tmp");
     guard
 }
 
-// ---------------------------------------------------------------------------
-// DST P4 fixture routing (P1 Ruling 3 Class B, `# pending: sim-fixture-routing`):
-// fixtures are built and asserted through the ACTIVE vfs, so setup, ops, and
-// asserts share one filesystem domain under both cfgs. Under the default cfg
-// these helpers hit PosixVfs — byte-for-byte the same real-fs behavior the old
-// std::fs fixtures had; under `--cfg pgrust_sim` they hit the thread-local
-// SimVfs tree the fd ops actually run against.
-// ---------------------------------------------------------------------------
 
 fn cpath(path: &str) -> std::ffi::CString {
     std::ffi::CString::new(path).unwrap()
 }
 
-/// `mkdir -p` through the active vfs (EEXIST tolerated per component).
 fn vfs_mkdir_p(path: &str) {
     let mut prefix = String::new();
     for comp in path.split('/') {
@@ -55,7 +43,6 @@ fn vfs_mkdir_p(path: &str) {
     }
 }
 
-/// Create/replace a file with `data` through the active vfs.
 fn vfs_write_file(path: &str, data: &[u8]) {
     let fd = vfs::open(
         &cpath(path),
@@ -69,7 +56,6 @@ fn vfs_write_file(path: &str, data: &[u8]) {
     assert_eq!(vfs::close(fd), 0);
 }
 
-/// Whole-file read through the active vfs.
 fn vfs_read_file(path: &str) -> Vec<u8> {
     let fd = vfs::open(&cpath(path), libc::O_RDONLY, 0);
     assert!(fd >= 0, "vfs_read_file open({path}): errno {}", vfs::get_errno());
@@ -83,29 +69,32 @@ fn vfs_read_file(path: &str) -> Vec<u8> {
     buf
 }
 
-/// stat() through the active vfs — the same-domain `Path::exists`.
 fn vfs_path_exists(path: &str) -> bool {
     let mut info = vfs::FileInfo::zeroed();
     vfs::stat(&cpath(path), &mut info) == 0
 }
 
-// Per-thread CHECK_FOR_INTERRUPTS() count (each #[test] runs on its own
-// thread, and nothing here crosses threads): lets tests witness which copy
-// engine actually ran — copy_file checks once per 64KiB chunk, clone_file at
-// most once per 1MiB chunk.
 thread_local! {
     static INTERRUPT_CHECKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    // When set, the next unheld interrupt check raises a query cancel.
     static INTERRUPT_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// The thread whose query cancel is pending: the CHECK_FOR_INTERRUPTS seam above raises it on that thread only (D376's
+// FileSet::drop test; the other tests' threads never see it).
+static PENDING_CANCEL: std::sync::Mutex<Option<std::thread::ThreadId>> = std::sync::Mutex::new(None);
+
+fn pending_cancel() -> bool {
+    *PENDING_CANCEL.lock().unwrap_or_else(std::sync::PoisonError::into_inner) == Some(std::thread::current().id())
+}
+
+fn set_pending_cancel(on: bool) {
+    *PENDING_CANCEL.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = on.then(|| std::thread::current().id());
 }
 
 fn interrupt_checks() -> u64 {
     INTERRUPT_CHECKS.with(std::cell::Cell::get)
 }
 
-// Per-thread record of every pgstat_report_wait_start(wait_event_info) the
-// fd ops made: the witness for the WaitEventIO codes C passes (BufFile
-// read/write, copy_file read/write/copy).
 thread_local! {
     static WAIT_EVENTS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -114,8 +103,6 @@ fn take_wait_events() -> Vec<u32> {
     WAIT_EVENTS.with(|v| std::mem::take(&mut *v.borrow_mut()))
 }
 
-// Per-thread capture of every server-log-bound report (elog emit hook):
-// (level, message) pairs, for the LOG/DEBUG witnesses below.
 thread_local! {
     static LOG_LINES: std::cell::RefCell<Vec<(types_error::ErrorLevel, String)>> =
         const { std::cell::RefCell::new(Vec::new()) };
@@ -129,7 +116,6 @@ fn take_log_lines() -> Vec<(types_error::ErrorLevel, String)> {
     LOG_LINES.with(|v| std::mem::take(&mut *v.borrow_mut()))
 }
 
-// wait_event_types.h WaitEventIO codes (PG_WAIT_IO | index in name order).
 const PG_WAIT_IO: u32 = 0x0A00_0000;
 const WE_BUFFILE_READ: u32 = PG_WAIT_IO + 6;
 const WE_BUFFILE_WRITE: u32 = PG_WAIT_IO + 8;
@@ -145,6 +131,15 @@ fn setup() {
         xact_seams::get_current_sub_transaction_id::set(|| 1);
         postgres_seams::check_for_interrupts::set(|| {
             INTERRUPT_CHECKS.with(|c| c.set(c.get() + 1));
+            // ProcessInterrupts' contract for a pending query cancel (tcop postgres process_interrupts): held off
+            // (InterruptHoldoffCount != 0) it stays pending; else it is consumed (the flag cleared) and raised.
+            if pending_cancel() && init_small::globals::InterruptHoldoffCount() == 0 {
+                set_pending_cancel(false);
+                return Err(Box::new(
+                    types_error::PgError::error("canceling statement due to user request".to_string())
+                        .with_sqlstate(types_error::ERRCODE_QUERY_CANCELED),
+                ));
+            }
             if INTERRUPT_ARMED.with(std::cell::Cell::get)
                 && init_small::globals::InterruptHoldoffCount() == 0
             {
@@ -168,21 +163,50 @@ fn setup() {
     vfd::InitFileAccess();
 }
 
-fn scratch_dir(tag: &str) -> String {
+/// A test's scratch directory: reads as its path (`Deref` to the `String`, `Display`), and is removed with everything
+/// below it when dropped (the test's end, or a panic's unwind), so the suite leaves no pgrust_fd_test_* in the temp dir.
+struct Scratch(String);
+
+impl std::ops::Deref for Scratch {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Scratch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch_dir(tag: &str) -> Scratch {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
         "pgrust_fd_test_{}_{tag}_{n}",
         std::process::id()
     ));
-    // Real-fs side stays: the posix carve-outs (AllocateFile stdio fopen,
-    // OpenPipeStream popen) resolve scratch paths on the real filesystem
-    // under BOTH cfgs (contract §1.1 — stdio/pipes are out of Vfs scope).
+    // AllocateFile and OpenPipeStream resolve scratch paths on the real filesystem under both cfgs.
     std::fs::create_dir_all(&dir).unwrap();
-    // Mirror the scratch dir into the active vfs namespace so vfs-routed
-    // fixtures and fd ops resolve; pure EEXIST no-ops under the default cfg.
     vfs_mkdir_p(dir.to_str().unwrap());
-    dir.to_str().unwrap().to_owned()
+    Scratch(dir.to_str().unwrap().to_owned())
+}
+
+#[test]
+fn scratch_dirs_leave_nothing_behind() {
+    let dir = scratch_dir("gone");
+    std::fs::create_dir_all(format!("{dir}/a/b")).unwrap();
+    std::fs::write(format!("{dir}/a/b/f"), b"x").unwrap();
+    let path = dir.to_string();
+    drop(dir);
+    assert!(!std::path::Path::new(&path).exists(), "{path} left behind");
 }
 
 fn open_rw(path: &str) -> File {
@@ -258,7 +282,6 @@ fn lru_evicts_and_reopens_transparently() {
     setup();
     let dir = scratch_dir("lru");
 
-    // Force the LRU to evict aggressively: every open must close another.
     let saved = vfd::max_safe_fds();
     vfd::set_max_safe_fds_value(1);
 
@@ -308,16 +331,21 @@ fn temp_file_deleted_at_close_and_counted() {
     let _cwd = enter_datadir(&dir);
 
     with_fd(|fd| fd.temporary_files_allowed = true);
+    let base = temp_charged();
     let f = crate::temp::OpenTemporaryFile(true).unwrap();
     assert!(f.0 > 0);
     let path = crate::io::FilePathName(f);
     assert_eq!(crate::io::FileWrite(f, &[7u8; 2048], 0, 0).unwrap(), 2048);
-    assert_eq!(with_fd(|fd| fd.temporary_files_size), 2048);
+    assert_eq!(temp_charged() - base, 2048);
     assert!(vfs_path_exists(&path));
 
     crate::io::FileClose(f).unwrap();
     assert!(!vfs_path_exists(&path));
-    assert_eq!(with_fd(|fd| fd.temporary_files_size), 0);
+    assert_eq!(temp_charged(), base);
+}
+
+fn temp_charged() -> u64 {
+    crate::vfd::temp_account().load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[test]
@@ -362,11 +390,13 @@ fn file_truncate_adjusts_temp_accounting() {
     let _cwd = enter_datadir(&dir);
 
     with_fd(|fd| fd.temporary_files_allowed = true);
+    let base = temp_charged();
     let f = crate::temp::OpenTemporaryFile(true).unwrap();
     assert_eq!(crate::io::FileWrite(f, &[1u8; 4096], 0, 0).unwrap(), 4096);
     assert_eq!(crate::io::FileTruncate(f, 1024, 0).unwrap(), 0);
-    assert_eq!(with_fd(|fd| fd.temporary_files_size), 1024);
+    assert_eq!(temp_charged() - base, 1024);
     crate::io::FileClose(f).unwrap();
+    assert_eq!(temp_charged(), base);
 }
 
 #[test]
@@ -409,11 +439,7 @@ fn durable_rename_and_unlink() {
     assert_eq!(crate::sync::durable_unlink(&new, ::types_error::LOG).unwrap(), -1);
 }
 
-/// Fsyncgate elevel routing (fd.c:4001): data_sync_elevel promotes any
-/// level to PANIC unless data_sync_retry=on (GUC default off,
-/// guc_tables.c:2102) — a failed data fsync must never be retried at a
-/// catchable level. Every mapping-file / segment / SLRU fsync site routes
-/// through this; the default MUST stay PANIC.
+// data_sync_elevel promotes any level to PANIC unless data_sync_retry=on: a failed data fsync must never be retried at a catchable level.
 #[test]
 fn data_sync_elevel_panics_unless_retry_guc() {
     setup();
@@ -425,10 +451,7 @@ fn data_sync_elevel_panics_unless_retry_guc() {
     vfd::set_data_sync_retry(false);
 }
 
-/// fsync_fname (fd.c:3846) raises at data_sync_elevel(ERROR): with the GUC
-/// at default a failure must escalate to backend exit (PanicExitThread
-/// unwind), never return a catchable Err — the guard the rewriteheap
-/// mapping-file sites (rewriteheap.c:923/1238/1252) now rely on.
+// With data_sync_retry at default, fsync_fname failure must escalate to backend exit (PanicExitThread unwind), never return a catchable Err.
 #[test]
 fn fsync_fname_failure_escalates_to_thread_exit() {
     setup();
@@ -442,7 +465,6 @@ fn fsync_fname_failure_escalates_to_thread_exit() {
         ),
         Ok(inner) => panic!("fsync_fname failure returned control at default GUC: {inner:?}"),
     }
-    // With data_sync_retry=on the same failure is an ordinary Err.
     vfd::set_data_sync_retry(true);
     let r = std::panic::catch_unwind(|| crate::sync::fsync_fname(&missing, false));
     vfd::set_data_sync_retry(false);
@@ -560,7 +582,7 @@ fn temp_tablespace_path_shapes() {
 fn temp_tablespace_list_round_robin() {
     setup();
     assert!(!crate::temp::TempTablespacesAreSet());
-    crate::temp::SetTempTablespaces(&[42]);
+    crate::temp::SetTempTablespaces(&[42]).unwrap();
     assert!(crate::temp::TempTablespacesAreSet());
     assert_eq!(crate::temp::GetNextTempTableSpace(), 42);
     assert_eq!(crate::temp::GetNextTempTableSpace(), 42);
@@ -602,27 +624,19 @@ fn check_debug_io_direct_parses_flag_list() {
         vfd::check_debug_io_direct("data, WAL, wal_init"),
         Ok(IO_DIRECT_DATA | IO_DIRECT_WAL | IO_DIRECT_WAL_INIT)
     );
-    // Err = the GUC_check_errdetail text (fd.c:4029/4046).
     assert_eq!(
         vfd::check_debug_io_direct("bogus"),
         Err("Invalid option \"bogus\".".to_string())
     );
 
-    // SplitGUCList semantics, verified against postgres:18.3 (2026-07-31):
-    // 'data wal' -> FATAL: invalid value for parameter "debug_io_direct":
-    // "data wal" / DETAIL: Invalid list syntax in parameter
-    // "debug_io_direct".  (whitespace does NOT separate unquoted items)
     let syntax = Err("Invalid list syntax in parameter \"debug_io_direct\".".to_string());
     assert_eq!(vfd::check_debug_io_direct("data wal"), syntax);
-    // 'data,,wal' -> same FATAL/DETAIL (empty items are a syntax error).
     assert_eq!(vfd::check_debug_io_direct("data,,wal"), syntax);
     assert!(vfd::check_debug_io_direct("data,").is_err());
-    // '"data",wal' -> server started (double-quoted items are legal).
     assert_eq!(
         vfd::check_debug_io_direct("\"data\",wal"),
         Ok(IO_DIRECT_DATA | IO_DIRECT_WAL)
     );
-    // 'data,wal ' -> server started (trailing whitespace trimmed).
     assert_eq!(
         vfd::check_debug_io_direct("data,wal "),
         Ok(IO_DIRECT_DATA | IO_DIRECT_WAL)
@@ -679,8 +693,6 @@ fn pipe_stream_child_starts_with_signals_unblocked() {
     assert_eq!(crate::desc::ClosePipeStream(idx).unwrap(), libc::SIGTERM);
 }
 
-// fd.c:2769 OpenPipeStream -> popen: libc runs `sh -c command` with argv[0]
-// "sh", which the command sees as $0.
 #[test]
 fn pipe_stream_child_sees_argv0_sh() {
     setup();
@@ -692,8 +704,6 @@ fn pipe_stream_child_sees_argv0_sh() {
     assert_eq!(crate::desc::ClosePipeStream(idx).unwrap(), 0);
 }
 
-// pgmkdirp.c:134 leaves `path` cut at the component whose mkdir failed, and
-// tablespace.c:173 reports that prefix, not the full requested path.
 #[cfg(not(pgrust_sim))]
 #[test]
 fn mkdir_p_names_the_component_that_failed() {
@@ -731,11 +741,29 @@ fn pipe_stream_read_drains_child_stdout() {
     assert_eq!(crate::desc::ClosePipeStream(idx).unwrap(), 0);
 }
 
+// OpenPipeStream's fflush(NULL): a row still sitting in an AllocateFile
+// stream's buffer is on disk before the child starts (fd.c:2766).
+#[test]
+fn open_pipe_stream_flushes_allocated_streams_first() {
+    setup();
+    let dir = scratch_dir("popen-flush");
+    let path = format!("{dir}/pending");
+    let w = crate::desc::AllocateFile(&path, "w").unwrap();
+    crate::desc::StdioWrite(w, b"f17\n1\n").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"");
+    let idx = crate::desc::OpenPipeStream(&format!("cat '{path}'"), "r").unwrap();
+    let mut buf = [0u8; 64];
+    let n = crate::desc::PipeStreamRead(idx, &mut buf).unwrap();
+    assert_eq!(&buf[..n], b"f17\n1\n");
+    assert_eq!(crate::desc::ClosePipeStream(idx).unwrap(), 0);
+    crate::desc::StdioWrite(w, b"2\n").unwrap();
+    assert_eq!(crate::desc::FreeFile(w).unwrap(), 0);
+    assert_eq!(std::fs::read(&path).unwrap(), b"f17\n1\n2\n");
+}
+
 #[test]
 fn pipe_stream_write_feeds_child_stdin() {
     setup();
-    // Child asserts the bytes it receives; a mismatch surfaces as exit 9
-    // in the pclose status word.
     let idx =
         crate::desc::OpenPipeStream("test \"$(cat)\" = 'payload' || exit 9", "w").unwrap();
     assert!(idx >= 0);
@@ -748,7 +776,6 @@ fn pipe_stream_write_epipe_when_child_quit() {
     setup();
     let idx = crate::desc::OpenPipeStream("exit 0", "w").unwrap();
     assert!(idx >= 0);
-    // Wait for the child to be gone, then write until the pipe breaks.
     std::thread::sleep(std::time::Duration::from_millis(200));
     let payload = [0u8; 65536];
     let mut saw_epipe = false;
@@ -765,13 +792,8 @@ fn pipe_stream_write_epipe_when_child_quit() {
 
 #[test]
 fn pwrite_zeros_buffer_is_io_aligned() {
-    // O_DIRECT contract (c.h PGIOAlignedBlock, common/file_utils.c
-    // pg_pwrite_zeros): the zero buffer handed to pwritev must be
-    // PG_IO_ALIGN_SIZE-aligned or the kernel EINVALs every FileZero-backed
-    // zero-extension under debug_io_direct=data. macOS has no O_DIRECT, so
-    // the EINVAL itself is Linux-only; the alignment property is testable
-    // everywhere.
-    let addr = crate::io::ZBUFFER.0.as_ptr() as usize;
+    // The zero buffer handed to pwritev must be PG_IO_ALIGN_SIZE-aligned or the kernel EINVALs every FileZero-backed zero-extension under debug_io_direct=data.
+    let addr = crate::io::zero_block().as_ptr() as usize;
     assert_eq!(addr % ::types_storage::bufpage::PG_IO_ALIGN_SIZE, 0);
     assert_eq!(
         core::mem::align_of::<crate::io::IoAlignedBlock>(),
@@ -812,12 +834,11 @@ fn allocate_file_stdio_modes() {
     assert_eq!(vfd::get_errno(), libc::ENOENT);
 }
 
-// DST P1 Ruling 3 Class C regression — the SIM_FD_BASE tripwire that caught
-// the FreeDesc misroute, made permanent. AllocateFile mints its fd posix-side
-// (open_stdio, the fopen carve-out of contract §1.1), so FreeDesc must close
-// it posix-side; routing it through vfs::close makes SimVfs EBADF the foreign
-// fd (below SIM_FD_BASE), FreeFile report -1, and the posix fd leak. The
-// OpenTransientFile RawFd arm is vfs-minted and correctly stays on vfs::close.
+// AllocateFile mints its fd posix-side, so FreeDesc must close it posix-side; routing it through vfs::close makes SimVfs EBADF the foreign fd.
+//
+// The fd under test is the write end of a FIFO: EOF on the read end proves
+// it was closed, which a reused descriptor number (concurrent sibling tests
+// mint and close their own posix fds) cannot fake.
 #[cfg(pgrust_sim)]
 #[test]
 fn allocate_file_stdio_free_closes_posix_side_not_vfs() {
@@ -826,6 +847,12 @@ fn allocate_file_stdio_free_closes_posix_side_not_vfs() {
     setup();
     let dir = scratch_dir("stdio_sim_tripwire");
     let path = format!("{dir}/s");
+    let cpath = std::ffi::CString::new(path.as_str()).unwrap();
+    // SAFETY: cpath is a valid NUL-terminated path; mkfifo creates it fresh.
+    assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+    // SAFETY: opening the read end non-blocking before the writer connects.
+    let rd = unsafe { libc::open(cpath.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK) };
+    assert!(rd >= 0);
 
     let idx = crate::desc::AllocateFile(&path, "w").unwrap();
     assert!(idx >= 0);
@@ -835,32 +862,22 @@ fn allocate_file_stdio_free_closes_posix_side_not_vfs() {
         "stdio fd must be posix-minted (carve-out), got sim-domain fd {raw}"
     );
 
-    // A vfs::close misroute EBADFs inside SimVfs and surfaces here as -1.
     assert_eq!(
         crate::desc::FreeFile(idx).unwrap(),
         0,
         "FreeDesc routed a posix-minted stdio fd through vfs::close"
     );
 
-    // And the posix-side close really happened (pre-fix the fd leaked).
-    assert_eq!(
-        unsafe { libc::fcntl(raw, libc::F_GETFD) },
-        -1,
-        "posix fd {raw} leaked: still open after FreeFile"
-    );
+    let mut b = 0u8;
+    // SAFETY: one-byte read into a local.
+    let n = unsafe { libc::read(rd, (&raw mut b).cast(), 1) };
+    // SAFETY: rd is still ours.
+    unsafe { libc::close(rd) };
+    assert_eq!(n, 0, "posix fd {raw} leaked: still open after FreeFile");
 }
 
 
-// DST P4 finding F1b: every RAII holder of a vfs-minted fd must release
-// through the SAME Vfs provider that minted it. Pre-guard, the holders were
-// plain OwnedFd, whose Drop closes posix-side: any unwind or thread exit with
-// a live holder EBADF'd inside the kernel (the sim fd is foreign there), the
-// sim fd LEAKED in the sim table, and under debug std's IO-safety check
-// aborted the whole test process. P4 fault injection unwinds through exactly
-// these states.
-//
-// Same-thread arm: drop live holders (the FdState-teardown shape, without
-// leaving the thread) and prove the fds were released INTO THE SIM NAMESPACE.
+// Every RAII holder of a vfs-minted fd must release through the same Vfs provider that minted it.
 #[cfg(pgrust_sim)]
 #[test]
 fn dropped_holders_release_into_sim_namespace_not_posix() {
@@ -869,35 +886,27 @@ fn dropped_holders_release_into_sim_namespace_not_posix() {
     setup();
     let dir = scratch_dir("f1b_guard");
 
-    // Holder 1: AllocatedHandle::RawFd (transient desc), vfs-minted.
     let tpath = format!("{dir}/t");
     vfs_write_file(&tpath, b"x");
     let tfd = crate::desc::OpenTransientFile(&tpath, libc::O_RDWR).unwrap();
     assert!(tfd >= vfs::sim::SIM_FD_BASE, "transient fd must be sim-minted");
 
-    // Holder 2: Vfd.fd (VFD cache), vfs-minted.
     let f = open_rw(&format!("{dir}/v"));
     let vraw = with_fd(|fd| {
         fd.vfd_cache[f.0 as usize].fd.as_ref().map(|h| h.as_raw_fd()).unwrap()
     });
     assert!(vraw >= vfs::sim::SIM_FD_BASE, "vfd fd must be sim-minted");
 
-    // Both live sim-side right now.
     let mut info = vfs::FileInfo::zeroed();
     assert_eq!(vfs::fstat(tfd, &mut info), 0);
     assert_eq!(vfs::fstat(vraw, &mut info), 0);
 
-    // The unwind/teardown shape: the holders drop WITHOUT the deliberate
-    // close paths (FreeDesc / FileClose) running.
     with_fd(|fd| {
         fd.allocated_descs.clear();
         fd.vfd_cache.clear();
         fd.nfile = 0;
     });
 
-    // Pre-guard this point was unreachable (debug IO-safety abort) or, with
-    // ub-checks off, both fds were still open sim-side (leaked). The guard
-    // must have released them in the SIM fd table.
     assert_eq!(
         vfs::fstat(tfd, &mut info),
         -1,
@@ -908,11 +917,6 @@ fn dropped_holders_release_into_sim_namespace_not_posix() {
     assert_eq!(vfd::get_errno(), libc::EBADF);
 }
 
-// Thread-exit arm — the exact F1 chain: a panic unwinds out of fd code with
-// live holders, the thread dies, and the FdState TLS destructor drops them.
-// Pre-guard (debug) this aborted the WHOLE test process ("fatal runtime
-// error: IO Safety violation"); the guard must keep the abort machinery out
-// of the picture regardless of TLS destructor ordering.
 #[cfg(pgrust_sim)]
 #[test]
 fn thread_exit_with_live_vfs_fd_holders_does_not_abort_process() {
@@ -925,16 +929,13 @@ fn thread_exit_with_live_vfs_fd_holders_does_not_abort_process() {
         assert!(tfd >= vfs::sim::SIM_FD_BASE);
         let f = open_rw("f1b_thread/v");
         assert!(f.0 > 0);
-        // P4 fault-injection shape: unwind with both holders live.
         panic!("simulated fault-injection unwind");
     })
     .join();
     assert!(joined.is_err(), "the spawned thread must have panicked");
 }
 
-// upstream 6cb307251c5c (18.4): an EINTR from sync_file_range must be
-// retried; the gate compared the -1 return value with EINTR, never fired, and
-// the hint escalated through data_sync_elevel (PANIC at the GUC default).
+// An EINTR from sync_file_range must be retried.
 #[cfg(all(target_os = "linux", pgrust_sim))]
 #[test]
 fn flush_data_retries_sync_file_range_on_eintr() {
@@ -968,8 +969,6 @@ fn flush_data_retries_sync_file_range_on_eintr() {
     assert_eq!(vfs::close(fd), 0);
 }
 
-// Test-process-global: resowner seams install once (seam_core forbids
-// reinstall); every test that needs an owner goes through here.
 fn install_resowner_seams_once() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -993,7 +992,6 @@ fn buffile_write_seek_read_roundtrip() {
     let mcx = ctx.mcx();
     let mut bf = crate::buffile::BufFileCreateTemp(mcx, false).unwrap();
 
-    // Spans several 8KB buffer loads; per-chunk patterns catch misplaced writes.
     let mut expected = Vec::new();
     for i in 0u32..100 {
         let chunk = vec![(i % 251) as u8; 997];
@@ -1007,11 +1005,9 @@ fn buffile_write_seek_read_roundtrip() {
     bf.read_exact(&mut got).unwrap();
     assert_eq!(got, expected);
 
-    // EOF: read_maybe_eof returns 0, plain read returns short.
     let mut tail = [0u8; 8];
     assert_eq!(bf.read_maybe_eof(&mut tail, true).unwrap(), 0);
 
-    // Overwrite mid-file through a dirty-buffer backwards seek.
     assert_eq!(bf.seek(0, 10_000, crate::buffile::SEEK_SET).unwrap(), 0);
     bf.write(&[0xAB; 16]).unwrap();
     assert_eq!(bf.seek(0, 9_990, crate::buffile::SEEK_SET).unwrap(), 0);
@@ -1021,7 +1017,6 @@ fn buffile_write_seek_read_roundtrip() {
     assert_eq!(&window[..10], &expected[9_990..10_000]);
     assert_eq!(&window[26..], &expected[10_016..10_030]);
 
-    // Relative seek; (1, 0) legally aliases end-of-segment-0; segment 2 is EOF.
     assert_eq!(bf.seek(0, 0, crate::buffile::SEEK_CUR).unwrap(), 0);
     assert_eq!(bf.tell(), (0, 10_030));
     assert_eq!(bf.seek(1, 0, crate::buffile::SEEK_SET).unwrap(), 0);
@@ -1039,7 +1034,6 @@ fn parse_filename_for_nontemp_relation_shapes() {
     assert_eq!(parse("16384_fsm"), Some((16384, FSM_FORKNUM, 0)));
     assert_eq!(parse("16384_vm.3"), Some((16384, VISIBILITYMAP_FORKNUM, 3)));
     assert_eq!(parse("16384.2"), Some((16384, MAIN_FORKNUM, 2)));
-    // Leading zeroes, zero values, trailing junk, unknown forks all reject.
     assert_eq!(parse("016384"), None);
     assert_eq!(parse("0"), None);
     assert_eq!(parse("16384_"), None);
@@ -1051,10 +1045,7 @@ fn parse_filename_for_nontemp_relation_shapes() {
     assert_eq!(parse("99999999999999999999"), None);
 }
 
-// Worker FATAL mid-sort ordering (ts-extract grouped-agg, P2): proc_exit's abort
-// cleanup frees the spill VFDs, then the ProcExitThread unwind drops the
-// Tuplesort, whose tapeset close reaches BufFile::close with a dirty buffer.
-// The close must be a no-op, never a write through dead Files.
+// BufFile::close during proc_exit must be a no-op, never a write through dead Files.
 #[test]
 fn buffile_close_after_proc_exit_cleanup_is_inert() {
     setup();
@@ -1070,8 +1061,6 @@ fn buffile_close_after_proc_exit_cleanup_is_inert() {
     let mut bf = crate::buffile::BufFileCreateTemp(ctx.mcx(), false).unwrap();
     bf.write(&[0x5A; 4096]).unwrap(); // dirty write buffer, never flushed
 
-    // The abort resowner release closes and frees the temp-file VFDs while
-    // the BufFile still references them.
     let files: Vec<::types_storage::File> =
         with_fd(|fd| {
             (1..fd.size_vfd_cache() as i32)
@@ -1090,8 +1079,7 @@ fn buffile_close_after_proc_exit_cleanup_is_inert() {
     closed.unwrap();
 }
 
-// Double FileClose must not push a slot onto the freelist twice — aliased
-// slots hand the same VFD to two files (silent cross-file corruption).
+// Double FileClose must not push a slot onto the freelist twice: aliased slots hand the same VFD to two files.
 #[test]
 fn file_close_is_idempotent_no_freelist_aliasing() {
     setup();
@@ -1110,9 +1098,7 @@ fn file_close_is_idempotent_no_freelist_aliasing() {
     crate::io::FileClose(b).unwrap();
 }
 
-// The motivating stable-slot regression: the old swap_remove registry moved
-// the last desc into the freed slot, so freeing the LOWER of two live
-// AllocateFile indices left the higher handle aliased to the wrong desc.
+// Freeing the lower of two live AllocateFile indices must not leave the higher handle aliased to the wrong desc.
 #[test]
 fn allocated_desc_indices_stable_across_out_of_order_free() {
     setup();
@@ -1141,14 +1127,7 @@ fn allocated_desc_indices_stable_across_out_of_order_free() {
     with_fd(|fd| assert!(fd.allocated_descs.is_empty()));
 }
 
-// The 100-warehouse OLTP write bank vu64 finding (notes/fdcap-lane.md): many pg_subtrans SLRU
-// segment fds held open at once by one backend. A thread left at the
-// FD_MINFREE boot default (never handed the postmaster's set_max_safe_fds
-// probe) freezes maxAllocatedDescs at FD_MINFREE/3 = 16; with the probed
-// value applied, reserveAllocatedDesc scales the cap to max_safe_fds/3 and
-// the refusal only fires at the real bound (C fd.c reserveAllocatedDesc).
-// Posix-only: opens real scratch files, absent from the empty SimVfs
-// namespace (the vfs posix-battery fencing precedent).
+// reserveAllocatedDesc scales maxAllocatedDescs to max_safe_fds/3.
 #[cfg(not(pgrust_sim))]
 #[test]
 fn transient_fd_cap_scales_with_max_safe_fds() {
@@ -1174,7 +1153,6 @@ fn transient_fd_cap_scales_with_max_safe_fds() {
         open_fds.push(fd);
     }
 
-    // 17th simultaneous open on the un-inherited default: the ladder's error.
     let err = crate::desc::OpenTransientFile(&path_of(16), libc::O_RDONLY).unwrap_err();
     assert!(
         err.message()
@@ -1182,8 +1160,6 @@ fn transient_fd_cap_scales_with_max_safe_fds() {
         "{err:?}"
     );
 
-    // The postmaster's probed max_safe_fds arrives (launch_backend Inherited):
-    // the same open now succeeds and the cap scales to max_safe_fds/3.
     vfd::set_max_safe_fds_value(120);
     for i in 16..40 {
         let fd = crate::desc::OpenTransientFile(&path_of(i), libc::O_RDONLY).unwrap();
@@ -1191,7 +1167,6 @@ fn transient_fd_cap_scales_with_max_safe_fds() {
         open_fds.push(fd);
     }
 
-    // The guard still holds at the scaled bound, with C's message.
     let err = crate::desc::OpenTransientFile(&path_of(40), libc::O_RDONLY).unwrap_err();
     assert!(
         err.message()
@@ -1207,8 +1182,8 @@ fn transient_fd_cap_scales_with_max_safe_fds() {
 }
 
 // DST P1 inc-4 fence assert: the spill/temp plane (tuplestore, tuplesort,
-// sharedtuplestore, sort_storage, spillset, nodehash) had ZERO raw fs sites
-// at the P1 census and must stay that way — all of its IO rides the fd File*
+// sharedtuplestore, sort_storage, spillset; nodehash went with the row
+// executor) had ZERO raw fs sites at the P1 census and must stay that way — all of its IO rides the fd File*
 // APIs (and therefore the VFS). A hit here means a raw syscall or std::fs
 // call crept into a sim-scoped spill path; route it through fd instead.
 #[test]
@@ -1220,7 +1195,6 @@ fn dst_p1_spill_crates_have_zero_raw_fs_sites() {
         "backend/utils/sort/sharedtuplestore",
         "backend/utils/sort/sort_storage",
         "backend/executor/spillset",
-        "backend/executor/nodehash",
     ];
     let needles = [
         "std::fs::",
@@ -1264,7 +1238,6 @@ fn dst_p1_spill_crates_have_zero_raw_fs_sites() {
                 if path.extension().and_then(|e| e.to_str()) != Some("rs") {
                     continue;
                 }
-                // Prod sites only: test scaffolding may build fixture dirs.
                 let p = path.to_string_lossy().into_owned();
                 if p.ends_with("/tests.rs") || p.contains("/tests/") {
                     continue;
@@ -1296,38 +1269,21 @@ fn dst_p1_spill_crates_have_zero_raw_fs_sites() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// regression: the one-process descriptor budget.
-//
-// C sizes max_safe_fds for ONE backend process. pgrust runs every session as a
-// thread in a single process with a single descriptor table, so the same
-// arithmetic hands the whole limit to every session at once — which is how a
-// 64-connection run exhausted an 8192-descriptor table and killed connection
-// setup. These pin the adapted arithmetic.
-// ---------------------------------------------------------------------------
-
-// A generous limit must still produce C's answer, to the descriptor: the
-// sharing arm may only ever lower the number.
+// C sizes max_safe_fds for one backend process; in pgrust all sessions share a single descriptor table, so compute_max_safe_fds divides the limit.
 #[test]
 fn generous_limit_reproduces_c_arithmetic() {
     let c_answer = 1000i32.min(1000) - ::types_storage::NUM_RESERVED_FDS;
-    // 1M descriptors, 300 live children, 120 sessions: max_files_per_process
-    // still binds.
     assert_eq!(
         vfd::compute_max_safe_fds(1000, 1000, Some(1_048_576), 300, 120),
         c_answer
     );
-    // Unknown ceiling (no getrlimit — the sim/wasm arm) falls back to C's.
     assert_eq!(vfd::compute_max_safe_fds(1000, 1000, None, 300, 120), c_answer);
-    // Single-user boot: one thread, whole budget, C's answer.
     assert_eq!(
         vfd::compute_max_safe_fds(1000, 1000, Some(1_048_576), 1, 1),
         c_answer
     );
 }
 
-// A tight limit must be divided, not handed out whole: 120 sessions inside
-// 16384 descriptors get a share each, and the total stays inside the limit.
 #[test]
 fn tight_limit_is_shared_between_sessions() {
     let ceiling = 16_384;
@@ -1338,8 +1294,6 @@ fn tight_limit_is_shared_between_sessions() {
     assert!(got < c_answer, "sharing must lower the budget: {got} vs {c_answer}");
     assert!(got >= ::types_storage::FD_MINFREE, "{got} should still be workable");
 
-    // The whole server has to fit: every session filling its cache, plus every
-    // live child's setup descriptors, plus the supervisor's.
     let worst_case = (got + ::types_storage::NUM_RESERVED_FDS) as i64 * sessions as i64
         + vfd::PER_SESSION_SETUP_FDS as i64 * children as i64
         + vfd::POSTMASTER_RESERVED_FDS as i64;
@@ -1349,9 +1303,6 @@ fn tight_limit_is_shared_between_sessions() {
     );
 }
 
-// The 8192-descriptor case that broke on raw hardware: the budget must come
-// out too small to run, so the server refuses at boot instead of dying at
-// connection setup (set_max_safe_fds turns this into the FATAL).
 #[test]
 fn insufficient_limit_reports_below_the_floor() {
     let got = vfd::compute_max_safe_fds(1000, 1000, Some(8192), 300, 120);
@@ -1359,6 +1310,86 @@ fn insufficient_limit_reports_below_the_floor() {
         got < ::types_storage::FD_MINFREE,
         "8192 descriptors cannot serve 120 sessions; got {got}"
     );
+}
+
+#[test]
+fn part_fd_slice_comes_out_before_the_sessions_split() {
+    let (ceiling, children, sessions) = (7000, 134, 96);
+    let cap = vfd::compute_part_fd_slice(Some(ceiling), children, sessions);
+    let own = vfd::compute_max_safe_fds(1000, 1000, Some(ceiling), children, sessions);
+    assert_eq!((cap, own), (333, 54));
+    let budget = ::vfs::FdBudget {
+        for_caches: (ceiling - vfd::PER_SESSION_SETUP_FDS * children - vfd::POSTMASTER_RESERVED_FDS) as i64,
+        sessions: sessions as i64,
+        c_bound: (1000 - ::types_storage::NUM_RESERVED_FDS) as i64,
+        reserved: ::types_storage::NUM_RESERVED_FDS as i64,
+        part_floor: vfd::PART_FD_FLOOR as usize,
+        part_cap: cap as usize,
+    };
+    for demand in [0usize, 100, 317, 7500] {
+        let parts = ::vfs::part_fd_slice_of_demand(demand, vfd::PART_FD_FLOOR as usize, cap as usize);
+        let got = ::vfs::session_fd_limit_of(&budget, parts);
+        assert!(got <= own as i64 && got >= ::types_storage::FD_MINFREE as i64, "demand {demand}: {got}");
+        let total = (got + ::types_storage::NUM_RESERVED_FDS as i64) * sessions as i64
+            + vfd::PER_SESSION_SETUP_FDS as i64 * children as i64
+            + vfd::POSTMASTER_RESERVED_FDS as i64
+            + parts as i64;
+        assert!(total <= ceiling as i64, "demand {demand}: {total} > {ceiling}");
+    }
+    assert_eq!(::vfs::session_fd_limit_of(&budget, cap as usize), 51);
+    assert_eq!(vfd::compute_part_fd_slice(Some(1_048_576), 300, 120), vfd::PART_FD_CAP);
+    assert_eq!(vfd::compute_part_fd_slice(Some(8192), 300, 120), vfd::PART_FD_FLOOR);
+    assert_eq!(vfd::compute_part_fd_slice(None, 300, 120), 0);
+}
+
+// macOS: setrlimit ACCEPTS 1<<20 while the kernel stops opens at 10240.
+#[test]
+fn kernel_cap_below_the_soft_limit_is_what_gets_divided() {
+    let sessions = 120;
+    let children = 300;
+
+    let from_soft_limit =
+        vfd::compute_max_safe_fds(1000, 1000, Some(1_048_576), children, sessions);
+    assert_eq!(
+        from_soft_limit,
+        1000 - ::types_storage::NUM_RESERVED_FDS,
+        "a 1M ceiling lets max_files_per_process bind"
+    );
+
+    let from_kernel_cap = vfd::compute_max_safe_fds(1000, 1000, Some(10_240), children, sessions);
+    assert!(
+        from_kernel_cap < from_soft_limit,
+        "the real cap must lower the budget: {from_kernel_cap} vs {from_soft_limit}"
+    );
+
+    let worst_case = (from_kernel_cap + ::types_storage::NUM_RESERVED_FDS) as i64
+        * sessions as i64
+        + vfd::PER_SESSION_SETUP_FDS as i64 * children as i64
+        + vfd::POSTMASTER_RESERVED_FDS as i64;
+    assert!(
+        worst_case <= 10_240,
+        "budget oversubscribes the kernel's table: {worst_case} > 10240"
+    );
+}
+
+#[test]
+fn effective_ceiling_takes_the_smaller_of_limit_and_cap() {
+    assert_eq!(
+        vfd::effective_fd_ceiling(1_048_576, false, Some(10_240)),
+        Some(10_240),
+        "the cap binds when it is below the soft limit"
+    );
+    assert_eq!(
+        vfd::effective_fd_ceiling(1_048_576, false, Some(1_048_576)),
+        Some(1_048_576)
+    );
+    assert_eq!(
+        vfd::effective_fd_ceiling(65_536, false, Some(1_048_576)),
+        Some(65_536)
+    );
+    assert_eq!(vfd::effective_fd_ceiling(65_536, false, None), Some(65_536));
+    assert_eq!(vfd::effective_fd_ceiling(0, true, Some(10_240)), Some(10_240));
+    assert_eq!(vfd::effective_fd_ceiling(0, true, None), None);
 }
 
 // The probe still bounds the answer: a machine that cannot even hand out
@@ -1371,9 +1402,40 @@ fn probe_still_bounds_the_budget() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// copydir / clone_file (copydir.c)
-// ---------------------------------------------------------------------------
+
+// P384: a 4,096-descriptor limit with ~140 children must still boot with a
+// working per-thread cap; the tight part becomes the shed share.
+#[test]
+fn per_thread_cap_keeps_c_formula_under_the_shared_table() {
+    let c_answer = 1000 - ::types_storage::NUM_RESERVED_FDS;
+    assert_eq!(vfd::compute_thread_max_safe_fds(1000, 1000, Some(1_048_576), 300), c_answer);
+    assert_eq!(vfd::compute_thread_max_safe_fds(1000, 1000, None, 300), c_answer);
+    let tight = vfd::compute_thread_max_safe_fds(1000, 1000, Some(4096), 142);
+    assert!(tight >= ::types_storage::FD_MINFREE, "{tight}");
+    let table = 4096 - vfd::PER_SESSION_SETUP_FDS * 142 - vfd::POSTMASTER_RESERVED_FDS;
+    assert!(tight + ::types_storage::NUM_RESERVED_FDS <= table);
+    let share = vfd::compute_max_safe_fds(1000, 1000, Some(4096), 142, 102);
+    assert!(share < ::types_storage::FD_MINFREE, "the shared share is the tight number: {share}");
+    assert!(vfd::compute_thread_max_safe_fds(1000, 1000, Some(1024), 250) < ::types_storage::FD_MINFREE);
+}
+
+#[test]
+fn idle_session_sheds_to_its_share() {
+    setup();
+    let dir = scratch_dir("shed");
+    let files: Vec<File> = (0..8).map(|i| open_rw(&format!("{dir}/s{i}"))).collect();
+    assert!(with_fd(|fd| fd.nfile) >= 8);
+    let saved = vfd::SHED_TARGET.swap(3, std::sync::atomic::Ordering::Relaxed);
+    crate::ShedIdleFiles().unwrap();
+    assert!(with_fd(|fd| fd.nfile) <= 3);
+    vfd::SHED_TARGET.store(saved, std::sync::atomic::Ordering::Relaxed);
+    for (i, &f) in files.iter().enumerate() {
+        assert_eq!(crate::io::FileWrite(f, b"x", i as i64, 0).unwrap(), 1);
+    }
+    for f in files {
+        crate::io::FileClose(f).unwrap();
+    }
+}
 
 #[test]
 fn file_copy_method_boot_default_is_copy() {
@@ -1381,8 +1443,6 @@ fn file_copy_method_boot_default_is_copy() {
     assert_eq!(vfd::file_copy_method(), crate::copydir::FILE_COPY_METHOD_COPY);
 }
 
-/// Recursively collect `dir`-relative (path, is_dir) entries through the
-/// active vfs, sorted for comparison.
 #[cfg(not(pgrust_sim))]
 fn vfs_tree_entries(dir: &str, prefix: &str, out: &mut Vec<(String, bool)>) {
     let mut names = Vec::new();
@@ -1406,7 +1466,6 @@ fn vfs_tree_entries(dir: &str, prefix: &str, out: &mut Vec<(String, bool)>) {
     }
 }
 
-/// Byte-compare two directory trees through the active vfs.
 #[cfg(not(pgrust_sim))]
 fn assert_tree_equal(a: &str, b: &str) {
     let mut ea = Vec::new();
@@ -1425,9 +1484,6 @@ fn assert_tree_equal(a: &str, b: &str) {
     }
 }
 
-/// A source tree with a multi-block binary file past clone_file's 1MiB
-/// chunk (so the copy_file_range loop iterates), an empty file, and a
-/// subdirectory for the recurse arm.
 #[cfg(not(pgrust_sim))]
 fn build_copydir_fixture(src: &str) {
     vfs_mkdir_p(src);
@@ -1451,7 +1507,6 @@ fn copydir_copies_tree_and_refuses_existing_destination() {
     let dst = format!("{dir}/dst");
     crate::copydir::copydir(&src, &dst, true).unwrap();
     assert_tree_equal(&src, &dst);
-    // Destination already exists: MakePGDirectory fails (EEXIST) => ERROR.
     assert!(crate::copydir::copydir(&src, &dst, true).is_err());
     vfd::set_file_copy_method(saved);
 }
@@ -1474,7 +1529,6 @@ fn copydir_clone_matches_copy() {
     // Destination already exists: MakePGDirectory fails (EEXIST) => ERROR.
     assert!(crate::copydir::copydir(&src, &cloned, true).is_err());
 
-    // The same tree through the copy arm must land byte-identical.
     vfd::set_file_copy_method(crate::copydir::FILE_COPY_METHOD_COPY);
     let copied = format!("{dir}/copied");
     let before = interrupt_checks();
@@ -1482,11 +1536,6 @@ fn copydir_clone_matches_copy() {
     let copy_checks = interrupt_checks() - before;
     assert_tree_equal(&src, &copied);
     assert_tree_equal(&cloned, &copied);
-    // Byte-equality alone cannot tell the arms apart; the interrupt-check
-    // cadence can. copy_file checks once per 64KiB chunk of the >1MiB
-    // fixture; clone_file checks at most once per 1MiB chunk (Linux) and
-    // never in-file (macOS). Equal counts would mean the CLONE dispatch
-    // fell through to copy_file.
     assert!(
         clone_checks < copy_checks,
         "clone arm did not run: {clone_checks} interrupt checks vs {copy_checks} for copy"
@@ -1494,18 +1543,12 @@ fn copydir_clone_matches_copy() {
     vfd::set_file_copy_method(saved);
 }
 
-// DST P4 inc-1: crash-recovery property sweep + red battery (sim-only).
 #[cfg(pgrust_sim)]
 mod crash_sweep;
 
 
-// ===========================================================================
-// audit-18.6 remediation b031 (backend/storage/file): C-parity witnesses.
-// ===========================================================================
 
-// The fileset BufFile scaffold shared by the witnesses: resowner seams, an
-// owner, a scratch datadir, temp-file access.
-fn fileset_scaffold(tag: &'static str) -> (String, std::sync::MutexGuard<'static, ()>) {
+fn fileset_scaffold(tag: &'static str) -> (Scratch, std::sync::MutexGuard<'static, ()>) {
     setup();
     install_resowner_seams_once();
     let owner = resowner::ResourceOwnerCreate(types_resowner::ResourceOwner::NULL, tag).unwrap();
@@ -1516,9 +1559,34 @@ fn fileset_scaffold(tag: &'static str) -> (String, std::sync::MutexGuard<'static
     (dir, cwd)
 }
 
-// The "<tempdir>/pgsql_tmp<pid>.<n>.fileset" directory component of a
-// fileset path, so a test can rebuild the set's directory in another
-// tablespace.
+// FileSet::drop deletes the set's directories through fd walkdir, whose CHECK_FOR_INTERRUPTS (the only one in
+// PostgreSQL's fd.c) raised a pending cancel, statement_timeout or terminate into Drop's `let _`: ProcessInterrupts
+// clears the flag before it raises, so the interrupt was lost (a served statement ran on past its spill teardown; a
+// terminated backend lived on). The walk runs with interrupts held: it completes, and the interrupt stays pending.
+#[test]
+fn fileset_drop_keeps_a_pending_interrupt_and_removes_its_files() {
+    let (_dir, _cwd) = fileset_scaffold("fsdropheld");
+    let fs = crate::fileset::FileSet::init().unwrap();
+    let ctx = mcx::MemoryContext::new("fsdropheld");
+    let mut bf = crate::buffile::BufFileCreateFileSet(ctx.mcx(), &fs, "spill").unwrap();
+    bf.write(&[7; 64]).unwrap();
+    bf.close().unwrap();
+    let seg = format!("{}.0", fs.name_path("spill"));
+    assert!(vfs_path_exists(&seg), "the spill segment {seg} was written");
+    let dir = seg[..seg.rfind('/').unwrap()].to_string();
+    let checks = interrupt_checks();
+    set_pending_cancel(true);
+    drop(fs);
+    let pending = pending_cancel();
+    set_pending_cancel(false);
+    assert!(interrupt_checks() > checks, "the directory walk checks for interrupts");
+    assert!(pending, "a cancel pending when the FileSet drops must still be pending after it (not raised into the Drop)");
+    assert_eq!(init_small::globals::InterruptHoldoffCount(), 0, "the drop resumes the interrupts it held");
+    assert!(!vfs_path_exists(&seg), "the spill segment {seg} is removed");
+    assert!(!vfs_path_exists(&dir), "the set's directory {dir} is removed");
+    crate::sync::AtEOXact_Files(true).unwrap();
+}
+
 fn fileset_dir_component(path: &str) -> String {
     path.split('/')
         .find(|c| c.starts_with("pgsql_tmp") && c.ends_with(".fileset"))
@@ -1526,10 +1594,7 @@ fn fileset_dir_component(path: &str) -> String {
         .to_string()
 }
 
-// fileset.c:83-99 FileSetInit: an empty temp_tablespaces GUC (or an
-// InvalidOid entry, which PrepareTempTablespaces stores for the database's
-// own tablespace) means MyDatabaseTableSpace — a database living in a
-// non-default tablespace keeps its filesets there, never in base/pgsql_tmp.
+// An empty temp_tablespaces GUC (or an InvalidOid entry) means MyDatabaseTableSpace: a database living in a non-default tablespace keeps its filesets there, never in base/pgsql_tmp.
 #[test]
 fn fileset_init_places_files_in_the_database_tablespace() {
     setup();
@@ -1538,7 +1603,6 @@ fn fileset_init_places_files_in_the_database_tablespace() {
     let tblspc_tmp = crate::temp::TempTablespacePath(16385);
     assert!(tblspc_tmp.starts_with("pg_tblspc/16385/"));
 
-    // Empty GUC arm.
     crate::sync::AtEOXact_Files(true).unwrap();
     assert!(!crate::temp::TempTablespacesAreSet());
     let fs = crate::fileset::FileSet::init().unwrap();
@@ -1549,8 +1613,7 @@ fn fileset_init_places_files_in_the_database_tablespace() {
     );
     drop(fs);
 
-    // InvalidOid-entry arm.
-    crate::temp::SetTempTablespaces(&[::types_core::InvalidOid]);
+    crate::temp::SetTempTablespaces(&[::types_core::InvalidOid]).unwrap();
     let fs = crate::fileset::FileSet::init().unwrap();
     let path = fs.name_path("x");
     assert!(
@@ -1563,20 +1626,16 @@ fn fileset_init_places_files_in_the_database_tablespace() {
     init_small::globals::SetMyDatabaseTableSpace(saved);
 }
 
-// fileset.c:186 ChooseTablespace hashes each FILE name with hash_any; a
-// BufFile's segments are distinct names ("<name>.<n>"), so with two temp
-// tablespaces the segments of one BufFile spread across both — exactly
-// where C puts them.
+// A BufFile's segments are distinct names ("<name>.<n>"), so with two temp tablespaces the segments of one BufFile spread across both.
 #[cfg(not(pgrust_sim))]
 #[test]
 fn fileset_segments_spread_across_tablespaces_by_segment_name_hash() {
     let (_dir, _cwd) = fileset_scaffold("fsspread");
     let spaces: [::types_core::Oid; 2] = [1663, 16385];
     vfs_mkdir_p(&crate::temp::TempTablespacePath(16385));
-    crate::temp::SetTempTablespaces(&spaces);
+    crate::temp::SetTempTablespaces(&spaces).unwrap();
     let fs = crate::fileset::FileSet::init().unwrap();
 
-    // A name whose segments 0 and 1 hash to different tablespaces.
     let pick = |n: &str| (hashfn::hash_bytes(n.as_bytes()) as usize) % 2;
     let name = (b'a'..=b'z')
         .map(|c| (c as char).to_string())
@@ -1590,7 +1649,6 @@ fn fileset_segments_spread_across_tablespaces_by_segment_name_hash() {
 
     let ctx = mcx::MemoryContext::new("fsspread");
     let mut bf = crate::buffile::BufFileCreateFileSet(ctx.mcx(), &fs, &name).unwrap();
-    // Straddle the 1GB segment boundary: the flush creates segment 1.
     let boundary = 0x4000_0000;
     assert_eq!(bf.seek(0, boundary - 4, crate::buffile::SEEK_SET).unwrap(), 0);
     bf.write(&[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
@@ -1601,9 +1659,7 @@ fn fileset_segments_spread_across_tablespaces_by_segment_name_hash() {
     crate::sync::AtEOXact_Files(true).unwrap();
 }
 
-// buffile.c:231-256 MakeNewFileSetSegment: creating segment N unlinks a
-// leftover segment N+1 (crash-restart debris with the same name) so that
-// BufFileOpenFileSet does not count it as part of the new file.
+// Creating segment N unlinks a leftover segment N+1 (crash-restart debris with the same name) so that BufFileOpenFileSet does not count it as part of the new file.
 #[test]
 fn fileset_segment_create_unlinks_stale_next_segment() {
     let (_dir, _cwd) = fileset_scaffold("fsstale");
@@ -1625,9 +1681,7 @@ fn fileset_segment_create_unlinks_stale_next_segment() {
     crate::sync::AtEOXact_Files(true).unwrap();
 }
 
-// dsm.c:813-829: the last participant's SharedFileSetOnDetach runs inside
-// dsm_detach's HOLD_INTERRUPTS bracket, so a pending cancel cannot abandon
-// the remaining files; the Drop that replaces that callback holds the same.
+// FileSet drop runs inside HOLD_INTERRUPTS, so a pending cancel cannot abandon the remaining files.
 #[cfg(not(pgrust_sim))]
 #[test]
 fn fileset_drop_deletes_every_file_with_interrupts_held() {
@@ -1652,7 +1706,6 @@ fn fileset_drop_deletes_every_file_with_interrupts_held() {
     let dir = paths[0].rsplit_once('/').unwrap().0.to_string();
     INTERRUPT_ARMED.with(|c| c.set(true));
     drop(fs);
-    // The walk's interrupt checks ran held: the cancel is still pending.
     assert!(INTERRUPT_ARMED.with(std::cell::Cell::get), "cancel consumed during drop");
     INTERRUPT_ARMED.with(|c| c.set(false));
     for p in &paths {
@@ -1663,9 +1716,7 @@ fn fileset_drop_deletes_every_file_with_interrupts_held() {
     crate::sync::AtEOXact_Files(true).unwrap();
 }
 
-// fd.c:1700 PathNameDeleteTemporaryDir: stat, so a dangling symlink in place
-// of the directory is "missing" and returns silently — no walkdir, no
-// `could not open directory` LOG.
+// PathNameDeleteTemporaryDir stats, so a dangling symlink in place of the directory is "missing" and returns silently without a walkdir or LOG.
 #[cfg(not(pgrust_sim))]
 #[test]
 fn delete_temporary_dir_ignores_a_dangling_symlink() {
@@ -1682,8 +1733,6 @@ fn delete_temporary_dir_ignores_a_dangling_symlink() {
     assert!(std::fs::symlink_metadata(&link).is_ok(), "the symlink itself is left alone");
 }
 
-// buffile.c:346-349: `could not open temporary file "<name>.0" from BufFile
-// "<name>": %m` — the probed segment name and the BufFile name, not a path.
 #[test]
 fn buffile_open_fileset_missing_names_segment_and_buffile() {
     let (_dir, _cwd) = fileset_scaffold("fsopen");
@@ -1702,8 +1751,6 @@ fn buffile_open_fileset_missing_names_segment_and_buffile() {
     );
 }
 
-// buffile.c:631-639: a short exact read on a fileset BufFile names the file
-// set: `could not read from file set "<name>": read only %zu of %zu bytes`.
 #[test]
 fn buffile_short_read_names_the_file_set() {
     let (_dir, _cwd) = fileset_scaffold("fsshort");
@@ -1722,14 +1769,11 @@ fn buffile_short_read_names_the_file_set() {
     crate::sync::AtEOXact_Files(true).unwrap();
 }
 
-// buffile.c:379-393 BufFileDeleteFileSet: FileSetDelete(..., true) — an
-// unlink failure on an EXISTING segment is an ERROR (`could not unlink
-// temporary file "%s": %m`), not a LOG followed by "unknown BufFile".
+// An unlink failure on an existing segment is an ERROR, not a LOG followed by "unknown BufFile".
 #[test]
 fn buffile_delete_fileset_errors_on_unlink_failure() {
     let (_dir, _cwd) = fileset_scaffold("fsdel");
     let fs = crate::fileset::FileSet::init().unwrap();
-    // A directory where segment 0 should be: stat succeeds, unlink fails.
     let seg0 = format!("{}.0", fs.name_path("d"));
     vfs_mkdir_p(&seg0);
     let err = crate::buffile::BufFileDeleteFileSet(&fs, "d", false).unwrap_err();
@@ -1742,8 +1786,7 @@ fn buffile_delete_fileset_errors_on_unlink_failure() {
     let _ = vfs::rmdir(&cpath(&seg0));
 }
 
-// buffile.c:779 default: elog(ERROR, "invalid whence: %d") — an ERROR, not
-// a thread panic.
+// Invalid seek whence is an elog ERROR, not a thread panic.
 #[test]
 fn buffile_seek_invalid_whence_is_elog_error() {
     let (_dir, _cwd) = fileset_scaffold("bfwhence");
@@ -1755,8 +1798,7 @@ fn buffile_seek_invalid_whence_is_elog_error() {
     bf.close().unwrap();
 }
 
-// buffile.c:761: SEEK_CUR's off_t add wraps (-fwrapv) and the wrapped value
-// fails the range checks as EOF; no overflow trap, position unchanged.
+// SEEK_CUR's off_t add wraps and the wrapped value fails the range checks as EOF; no overflow trap, position unchanged.
 #[test]
 fn buffile_seek_cur_huge_offset_is_eof_not_overflow() {
     let (_dir, _cwd) = fileset_scaffold("bfwrap");
@@ -1768,8 +1810,6 @@ fn buffile_seek_cur_huge_offset_is_eof_not_overflow() {
     bf.close().unwrap();
 }
 
-// buffile.c:951-957 BufFileTruncateFileSet: a segment that cannot be deleted
-// reports `could not delete fileset "<name>.<n>": %m` — segment name, errno.
 #[cfg(not(pgrust_sim))]
 #[test]
 fn buffile_truncate_fileset_missing_segment_message() {
@@ -1780,7 +1820,6 @@ fn buffile_truncate_fileset_missing_segment_message() {
     let boundary = 0x4000_0000;
     assert_eq!(bf.seek(0, boundary - 4, crate::buffile::SEEK_SET).unwrap(), 0);
     bf.write(&[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
-    // Flush: segment 1 now exists on disk.
     assert_eq!(bf.seek(0, 0, crate::buffile::SEEK_SET).unwrap(), 0);
     let seg1 = format!("{}.1", fs.name_path("u"));
     assert!(vfs_path_exists(&seg1));
@@ -1795,10 +1834,7 @@ fn buffile_truncate_fileset_missing_segment_message() {
     crate::sync::AtEOXact_Files(true).unwrap();
 }
 
-// fd.c:4007-4045 check_debug_io_direct: a rejected value goes through
-// GUC_check_errdetail and `return false` — guc.c then raises
-// `invalid value for parameter "debug_io_direct": "<val>"` (22023) with the
-// DETAIL — instead of surfacing the detail text as an XX000 error.
+// A rejected debug_io_direct value goes through GUC_check_errdetail and returns false rather than raising XX000 directly.
 thread_local! {
     static GUC_DETAILS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -1833,8 +1869,7 @@ fn check_debug_io_direct_rejects_through_guc_check_errdetail() {
     assert!(matches!(hook(&mut nv, &mut extra, types_guc::GucSource::PGC_S_FILE), Ok(true)));
 }
 
-// buffile.c:463/545: FileRead/FileWrite carry WAIT_EVENT_BUFFILE_READ /
-// WAIT_EVENT_BUFFILE_WRITE (pg_stat_activity.wait_event BufFileRead/Write).
+// BufFile FileRead and FileWrite carry WAIT_EVENT_BUFFILE_READ and WAIT_EVENT_BUFFILE_WRITE.
 #[test]
 fn buffile_io_reports_buffile_wait_events() {
     let (_dir, _cwd) = fileset_scaffold("bfwait");
@@ -1851,8 +1886,7 @@ fn buffile_io_reports_buffile_wait_events() {
     bf.close().unwrap();
 }
 
-// copydir.c:195/205: copy_file reports WAIT_EVENT_COPY_FILE_READ around the
-// read and WAIT_EVENT_COPY_FILE_WRITE around the write.
+// copy_file reports WAIT_EVENT_COPY_FILE_READ around the read and WAIT_EVENT_COPY_FILE_WRITE around the write.
 #[cfg(not(pgrust_sim))]
 #[test]
 fn copy_file_reports_copy_file_wait_events() {
@@ -1867,9 +1901,7 @@ fn copy_file_reports_copy_file_wait_events() {
     assert_eq!(vfs_read_file(&format!("{dir}/dst")).len(), 70_000);
 }
 
-// fd.c:3746 walkdir -> get_dirent_type(subpath, de, process_symlinks, elevel)
-// (common/file_utils.c:547): an entry that cannot be stat'd — a dangling
-// symlink looked through — logs `could not stat file "%s": %m` at elevel.
+// An entry that cannot be stat'd — a dangling symlink looked through — logs could not stat file at elevel.
 #[cfg(not(pgrust_sim))]
 #[test]
 fn walkdir_logs_unstatable_entries() {
@@ -1889,8 +1921,6 @@ fn walkdir_logs_unstatable_entries() {
     );
 }
 
-// reinit.c:56/264/314: DEBUG1 "resetting unlogged relations: cleanup %d
-// init %d", DEBUG2 "unlinked file \"%s\"", DEBUG2 "copying %s to %s".
 #[cfg(not(pgrust_sim))]
 #[test]
 fn reset_unlogged_relations_emits_debug_lines() {
@@ -1933,9 +1963,7 @@ fn reset_unlogged_relations_emits_debug_lines() {
     assert_eq!(vfs_read_file("base/1/12345"), b"init-fork");
 }
 
-// ereport_startup_progress (postmaster/startup.h) in fd.c:3794/3826 and
-// reinit.c:145/148: once the startup-progress timer fires, the phase logs
-// `<phase>, elapsed time: %ld.%02d s, current path: %s`.
+// Once the startup-progress timer fires, the phase logs elapsed time and current path.
 thread_local! {
     static STARTUP_PROGRESS_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -2025,8 +2053,241 @@ fn buffile_segment_rollover_keeps_creation_owner() {
     resowner::ResourceOwnerDelete(owner);
 }
 
-// rmtree.c:63: an unopenable directory logs WARNING "could not open
-// directory" and reports false (nothing was silently skipped).
+#[test]
+fn temp_charge_counts_against_the_charged_account() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    setup();
+    let dir = scratch_dir("charge");
+    let _cwd = enter_datadir(&dir);
+    with_fd(|fd| fd.temporary_files_allowed = true);
+
+    let leader = std::sync::Arc::new(AtomicU64::new(3 * 1024));
+    let own = crate::vfd::temp_account().load(Ordering::Relaxed);
+    let prev = crate::vfd::charge_temp_to(Some(leader.clone()));
+    let f = crate::temp::OpenTemporaryFile(true).unwrap();
+    assert_eq!(crate::io::FileWrite(f, &[1u8; 2048], 0, 0).unwrap(), 2048);
+    assert_eq!(leader.load(Ordering::Relaxed), 5 * 1024);
+    assert_eq!(crate::vfd::temp_account().load(Ordering::Relaxed), own, "the thread's own account is not charged");
+
+    let saved = guc_tables::vars::temp_file_limit.read();
+    guc_tables::vars::temp_file_limit.write(6);
+    let err = crate::io::FileWrite(f, &[1u8; 2048], 2048, 0).unwrap_err();
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED, "5 kB charged + 2 kB > 6 kB");
+    guc_tables::vars::temp_file_limit.write(saved);
+
+    crate::vfd::charge_temp_to(prev);
+    crate::io::FileClose(f).unwrap();
+    assert_eq!(leader.load(Ordering::Relaxed), 3 * 1024);
+}
+
+// a file of a set charged for its life (spillset's) counts against temp_file_limit until it is deleted, not
+// just while a descriptor is open: spillset closes its files between epochs, so a W8 spill split over workers' files
+// raised 53400 only when enough epochs overlapped. Reopened for writing, the file takes its charge back (its bytes are
+// charged once); the delete credits it on whichever thread: a claim thread writes here, charged to the leader's
+// account, and the leader deletes. A plain set keeps PostgreSQL's rule: a closed file is credited.
+#[test]
+fn file_charged_for_life_counts_until_deleted() {
+    let (_dir, _cwd) = fileset_scaffold("forlife");
+    let leader = crate::vfd::temp_account();
+    let base = temp_charged();
+    let charged = || temp_charged() - base;
+    let saved = guc_tables::vars::temp_file_limit.read();
+    guc_tables::vars::temp_file_limit.write(4); // kB
+
+    let plain = crate::fileset::FileSet::init().unwrap();
+    let p = plain.create("p").unwrap();
+    assert_eq!(crate::io::FileWrite(p, &[1u8; 3072], 0, 0).unwrap(), 3072);
+    crate::io::FileClose(p).unwrap();
+    assert_eq!(charged(), 0, "a plain set's closed file is credited");
+    drop(plain);
+
+    let fs = crate::fileset::FileSet::init_charged_for_life().unwrap();
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            setup();
+            let owner = resowner::ResourceOwnerCreate(types_resowner::ResourceOwner::NULL, "claim").unwrap();
+            resowner_seams::set_current_resource_owner::call(owner);
+            with_fd(|fd| fd.temporary_files_allowed = true);
+            let prev = crate::vfd::charge_temp_to(Some(leader.clone()));
+            let a = fs.create("a").unwrap();
+            assert_eq!(crate::io::FileWrite(a, &[1u8; 2048], 0, 0).unwrap(), 2048);
+            crate::io::FileClose(a).unwrap();
+            crate::vfd::charge_temp_to(prev);
+        });
+    });
+    assert_eq!(charged(), 2048, "closed, the claim's file stays charged to the leader");
+
+    let a = fs.open("a", libc::O_RDWR).unwrap();
+    assert_eq!(crate::io::FileWrite(a, &[2u8; 1024], 2048, 0).unwrap(), 1024, "2 + 3 kB charged would pass 4 kB");
+    assert_eq!(charged(), 3072, "reopened, its first 2 kB are not charged again");
+    crate::io::FileClose(a).unwrap();
+
+    let b = fs.create("b").unwrap();
+    let err = crate::io::FileWrite(b, &[3u8; 2048], 0, 0).unwrap_err();
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED, "closed a's 3 kB + 2 kB > 4 kB");
+    assert_eq!(crate::io::FileWrite(b, &[3u8; 1024], 0, 0).unwrap(), 1024);
+    crate::io::FileClose(b).unwrap();
+    guc_tables::vars::temp_file_limit.write(saved);
+
+    assert!(fs.delete("a", true).unwrap());
+    assert_eq!(charged(), 1024, "a's delete credits its 3 kB");
+    drop(fs);
+    assert_eq!(charged(), 0, "the set's delete credits b");
+    crate::sync::AtEOXact_Files(true).unwrap();
+}
+
+#[test]
+fn delete_temporary_files_with_fans_the_unlinks() {
+    setup();
+    let dir = scratch_dir("d3203");
+    for (name, len) in [("a", 4096usize), ("b", 8192), ("c", 0)] {
+        vfs_write_file(&format!("{dir}/{name}"), &vec![7u8; len]);
+    }
+    vfs_mkdir_p(&format!("{dir}/sub"));
+    let ran = AtomicU32::new(0);
+    let fan = |n: usize, job: &(dyn Fn(usize) + Sync)| {
+        (0..n).rev().for_each(job);
+        ran.fetch_add(n as u32, Ordering::Relaxed);
+    };
+    let got = crate::temp::PathNameDeleteTemporaryFilesWith(&dir, 1, &fan).unwrap();
+    assert_eq!(got, (3, 12288, true));
+    assert_eq!(ran.load(Ordering::Relaxed), 3, "every unlink went through the fan");
+    for name in ["a", "b", "c"] {
+        assert!(!vfs_path_exists(&format!("{dir}/{name}")), "{name} unlinked");
+    }
+    assert!(vfs_path_exists(&format!("{dir}/sub")), "a subdirectory is the walk's");
+    assert!(vfs_path_exists(&dir), "the directory stays");
+
+    for name in ["d", "e"] {
+        vfs_write_file(&format!("{dir}/{name}"), b"xy");
+    }
+    let under = crate::temp::PathNameDeleteTemporaryFilesWith(&dir, 1 << 20, &|_, _| panic!("under the floor the caller unlinks")).unwrap();
+    assert_eq!(under, (2, 4, false));
+    for name in ["d", "e"] {
+        vfs_write_file(&format!("{dir}/{name}"), b"xy");
+    }
+    let unrun = crate::temp::PathNameDeleteTemporaryFilesWith(&dir, 1, &|_, _| {}).unwrap();
+    assert_eq!(unrun, (2, 4, true));
+    for name in ["d", "e"] {
+        assert!(!vfs_path_exists(&format!("{dir}/{name}")), "the caller ran the job the fan left: {name}");
+    }
+    assert_eq!(crate::temp::PathNameDeleteTemporaryFilesWith(&format!("{dir}/absent"), 1, &|_, _| {}).unwrap(), (0, 0, false));
+}
+
+/// A `Send` wrapper for moving a BufFile to another thread in the D3425 tests (production moves its holders the same
+/// way: a Gravity run reader is `Send`).
+struct SendBuf<T>(T);
+// SAFETY: the tests below touch the BufFile on one thread at a time, and its memory context outlives both threads.
+unsafe impl<T> Send for SendBuf<T> {}
+
+fn next_slot(path: &str) -> i32 {
+    let probe = open_rw(path);
+    crate::io::FileClose(probe).unwrap();
+    probe.0
+}
+
+fn slot_holds(slot: i32, seg: &str) -> bool {
+    let leaf = &seg[seg.rfind('/').map_or(0, |i| i + 1)..];
+    with_fd(|fd| {
+        vfd::FileIsValid(fd, slot)
+            && fd.vfd_cache[slot as usize].file_name.as_deref().is_some_and(|n| n.ends_with(&format!("/{leaf}")))
+    })
+}
+
+#[test]
+fn buffile_closed_on_another_thread_leaves_that_threads_file_open() {
+    let (dir, _cwd) = fileset_scaffold("bfforeign");
+    let fs = crate::fileset::FileSet::init().unwrap();
+    let ctx = mcx::MemoryContext::new("bfforeign");
+    let slot = next_slot(&format!("{dir}/probe"));
+    let bf = SendBuf(crate::buffile::BufFileCreateFileSet(ctx.mcx(), &fs, "r").unwrap());
+    let seg = format!("{}.0", fs.name_path("r"));
+    assert!(slot_holds(slot, &seg), "the BufFile's segment took the probe's slot {slot}");
+    let dir_b = dir.clone();
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            let bf = bf;
+            setup();
+            vfs_mkdir_p(&dir_b); // the sim's tree is per thread
+            let mut others = Vec::new();
+            let held = loop {
+                let f = open_rw(&format!("{dir_b}/b{}", others.len()));
+                if f.0 == slot {
+                    break f;
+                }
+                others.push(f);
+                assert!(others.len() < 512, "this thread never opened a file at index {slot}");
+            };
+            bf.0.close().unwrap();
+            assert!(
+                with_fd(|fd| vfd::FileIsValid(fd, held.0)),
+                "closing another thread's BufFile closed this thread's file at index {slot}"
+            );
+            for f in others.into_iter().chain([held]) {
+                crate::io::FileClose(f).unwrap();
+            }
+        });
+    });
+    assert!(slot_holds(slot, &seg), "the owner's own open is closed only on the owner");
+    crate::sync::AtEOXact_Files(true).unwrap();
+    drop(fs);
+}
+
+#[test]
+fn buffile_closed_elsewhere_is_closed_by_its_owner_at_its_next_open() {
+    let (dir, _cwd) = fileset_scaffold("bfdrain");
+    let fs = crate::fileset::FileSet::init().unwrap();
+    let ctx = mcx::MemoryContext::new("bfdrain");
+    let slot = next_slot(&format!("{dir}/probe"));
+    let bf = SendBuf(crate::buffile::BufFileCreateFileSet(ctx.mcx(), &fs, "r").unwrap());
+    let seg = format!("{}.0", fs.name_path("r"));
+    assert!(slot_holds(slot, &seg), "the BufFile's segment took the probe's slot {slot}");
+    let gen = crate::io::FileGeneration(File(slot));
+    assert_ne!(gen, 0, "an open file has a generation");
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            let bf = bf;
+            setup();
+            bf.0.close().unwrap();
+        });
+    });
+    assert!(crate::orphan::pending(), "the close was sent to the owner");
+    assert_eq!(crate::io::FileGeneration(File(slot)), gen, "still open until the owner's next file open");
+    let next = open_rw(&format!("{dir}/next"));
+    assert!(!crate::orphan::pending(), "the owner's open closed what was sent to it");
+    assert!(!slot_holds(slot, &seg), "the BufFile's open is closed");
+    assert_ne!(crate::io::FileGeneration(File(slot)), gen, "the slot no longer holds the BufFile's open");
+    crate::io::FileCloseGeneration(File(slot), gen).unwrap();
+    assert!(with_fd(|fd| vfd::FileIsValid(fd, next.0)), "a stale generation leaves the slot's new open alone");
+    crate::io::FileClose(next).unwrap();
+    crate::sync::AtEOXact_Files(true).unwrap();
+    drop(fs);
+}
+
+// a BufFile whose file was closed under it (an abort's resource-owner release, D2620) and whose slot then went
+// to another open closed THAT open at its own close: the slot is valid again, so the freed-slot check did not see the
+// release. Its close now goes by the slot's generation and leaves the other open alone.
+#[test]
+fn buffile_close_after_its_slot_went_to_another_file_leaves_that_file_open() {
+    let (dir, _cwd) = fileset_scaffold("bfreuse");
+    let fs = crate::fileset::FileSet::init().unwrap();
+    let ctx = mcx::MemoryContext::new("bfreuse");
+    let slot = next_slot(&format!("{dir}/probe"));
+    let bf = crate::buffile::BufFileCreateFileSet(ctx.mcx(), &fs, "r").unwrap();
+    let seg = format!("{}.0", fs.name_path("r"));
+    assert!(slot_holds(slot, &seg), "the BufFile's segment took the probe's slot {slot}");
+    crate::io::FileClose(File(slot)).unwrap();
+    let other = open_rw(&format!("{dir}/other"));
+    assert_eq!(other.0, slot, "the freed slot is the next open's");
+    bf.close().unwrap();
+    assert!(with_fd(|fd| vfd::FileIsValid(fd, other.0)), "the BufFile's close closed the file now at its index");
+    crate::io::FileClose(other).unwrap();
+    crate::sync::AtEOXact_Files(true).unwrap();
+    drop(fs);
+}
+
+
+// An unopenable directory logs WARNING "could not open directory" and reports false.
 #[cfg(not(pgrust_sim))]
 #[test]
 fn rmtree_warns_on_unopenable_directory() {
@@ -2055,12 +2316,10 @@ fn rmtree_warns_on_unopenable_directory() {
     assert!(std::path::Path::new(&format!("{sub}/inner")).exists());
 
     assert!(crate::copydir::rmtree(&dir, true).unwrap());
-    assert!(!std::path::Path::new(&dir).exists());
+    assert!(!std::path::Path::new(dir.as_str()).exists());
 }
 
-// fd.c:1922 PathNameOpenTemporaryFile: a reopened file (any mode) never
-// counts against temp_file_limit; only sqe_spill's writer reopen
-// (FileSet::open_seg) keeps charging itself.
+// A reopened file never counts against temp_file_limit; only FileSet::open_seg keeps charging itself.
 #[test]
 fn reopened_temporary_file_is_not_charged_against_temp_file_limit() {
     let (_dir, _cwd) = fileset_scaffold("fsreopen");
@@ -2087,9 +2346,7 @@ fn reopened_temporary_file_is_not_charged_against_temp_file_limit() {
     crate::sync::AtEOXact_Files(true).unwrap();
 }
 
-// buffile.c:117,162: a fileset BufFile remembers its creating resource
-// owner and extends under it, so releasing a child owner active at the
-// rollover does not close the new segment.
+// A fileset BufFile remembers its creating resource owner and extends under it, so releasing a child owner active at the rollover does not close the new segment.
 #[test]
 fn fileset_buffile_segment_rollover_keeps_creation_owner() {
     let (_dir, _cwd) = fileset_scaffold("fsrollowner");
@@ -2101,8 +2358,6 @@ fn fileset_buffile_segment_rollover_keeps_creation_owner() {
     resowner::SetCurrentResourceOwner(child);
     let boundary = 0x4000_0000;
     assert_eq!(bf.seek(0, boundary - 4, crate::buffile::SEEK_SET).unwrap(), 0);
-    // More than one block straddling the boundary: the dump inside write()
-    // creates segment 1 while the child owner is current.
     let mut payload = vec![0u8; 8192 + 8];
     payload[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
     bf.write(&payload).unwrap();
@@ -2117,8 +2372,6 @@ fn fileset_buffile_segment_rollover_keeps_creation_owner() {
     }
     resowner::SetCurrentResourceOwner(owner);
     resowner::ResourceOwnerDelete(child);
-    // A segment closed by the child's release would hand its VFD slot to
-    // the next open, and the BufFile would read that file instead.
     let other = crate::temp::OpenTemporaryFile(false).unwrap();
     crate::io::FileWrite(other, &[9u8; 8], 0, 0).unwrap();
     let mut bytes = [0; 8];
@@ -2127,4 +2380,39 @@ fn fileset_buffile_segment_rollover_keeps_creation_owner() {
     bf.close().unwrap();
     crate::io::FileClose(other).unwrap();
     crate::sync::AtEOXact_Files(true).unwrap();
+}
+
+#[test]
+#[cfg(not(pgrust_sim))]
+fn copydir_preserves_entry_bytes_recursively() {
+    setup();
+    let dir = scratch_dir("copydir_entry_bytes");
+    let src = format!("{dir}/src");
+    let dst = format!("{dir}/dst");
+    vfs_mkdir_p(&src);
+    #[cfg(target_os = "macos")]
+    let name = "entrée".as_bytes();
+    #[cfg(not(target_os = "macos"))]
+    let name = b"entry-\xff";
+    let sub = vfs::PgPath::from(&src).join(name);
+    assert_eq!(vfs::mkdir(&sub.to_c_string(), 0o700), 0);
+    let file = sub.join(name);
+    let raw = vfs::open(&file.to_c_string(), libc::O_CREAT | libc::O_WRONLY, 0o600);
+    assert!(raw >= 0);
+    assert_eq!(vfs::pwrite(raw, b"payload", 0), 7);
+    assert_eq!(vfs::close(raw), 0);
+    let saved = vfd::file_copy_method();
+    vfd::set_file_copy_method(crate::copydir::FILE_COPY_METHOD_COPY);
+    let saved_fsync = init_small::globals::enableFsync();
+    init_small::globals::set_enableFsync(true);
+    crate::copydir::copydir(&src, &dst, true).unwrap();
+    init_small::globals::set_enableFsync(saved_fsync);
+    vfd::set_file_copy_method(saved);
+    let copied = vfs::PgPath::from(&dst).join(name).join(name);
+    let raw = vfs::open(&copied.to_c_string(), libc::O_RDONLY, 0);
+    assert!(raw >= 0);
+    let mut contents = [0; 7];
+    assert_eq!(vfs::pread(raw, &mut contents, 0), 7);
+    assert_eq!(&contents, b"payload");
+    assert_eq!(vfs::close(raw), 0);
 }

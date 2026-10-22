@@ -1,0 +1,213 @@
+Parsed test spec with 5 sessions
+
+starting permutation: s2x s1v s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT * FROM (SELECT id, v FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s FOR UPDATE;
+QUERY PLAN                                                     
+---------------------------------------------------------------
+LockRows                                                       
+  ->  Subquery Scan on s                                       
+        ->  Limit                                              
+              ->  LockRows                                     
+                    ->  Sort                                   
+                          Sort Key: lqj.prio, lqj.id           
+                          ->  Seq Scan on lqj                  
+                                Filter: (state = 'ready'::text)
+(8 rows)
+
+step s1v: UPDATE lqj SET v = v || '+' WHERE id = 23;
+step s2l: SELECT * FROM (SELECT id, v FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|v   
+--+----
+23|v23+
+22|v22 
+20|v20 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2l s1c
+step s1s: UPDATE lqj SET state = 'done' WHERE id = 23;
+step s2l: SELECT * FROM (SELECT id, v FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|v  
+--+---
+22|v22
+20|v20
+19|v19
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2l s1c
+step s1d: DELETE FROM lqj WHERE id = 23;
+step s2l: SELECT * FROM (SELECT id, v FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|v  
+--+---
+22|v22
+20|v20
+19|v19
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM lqj WHERE id = 23 FOR UPDATE;
+id
+--
+23
+(1 row)
+
+step s2sk: SELECT * FROM (SELECT id, v FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 2) s FOR UPDATE SKIP LOCKED;
+id|v  
+--+---
+22|v22
+20|v20
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM lqj WHERE id = 23 FOR UPDATE;
+id
+--
+23
+(1 row)
+
+step s2nw: SELECT * FROM (SELECT id, v FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 1) s FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "lqj"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1v s3j s1c
+step s3x: EXPLAIN (COSTS OFF) SELECT s.id, s.v, w.name FROM (SELECT id, v, wid FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s JOIN lqw w ON w.id = s.wid FOR UPDATE OF s;
+QUERY PLAN                                                                
+--------------------------------------------------------------------------
+LockRows                                                                  
+  ->  Hash Join                                                           
+        Hash Cond: (w.id = s.wid)                                         
+        ->  Index Scan using lqw_pkey on lqw w                            
+        ->  Hash                                                          
+              ->  Subquery Scan on s                                      
+                    ->  Limit                                             
+                          ->  LockRows                                    
+                                ->  Index Scan using lqj_state_prio on lqj
+                                      Index Cond: (state = 'ready'::text) 
+(10 rows)
+
+step s1v: UPDATE lqj SET v = v || '+' WHERE id = 23;
+step s3j: SELECT s.id, s.v, w.name FROM (SELECT id, v, wid FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s JOIN lqw w ON w.id = s.wid FOR UPDATE OF s; <waiting ...>
+step s1c: COMMIT;
+step s3j: <... completed>
+id|v   |name
+--+----+----
+20|v20 |w1  
+22|v22 |w3  
+23|v23+|w4  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1w s3j s1c
+step s1w: UPDATE lqw SET name = name || '+' WHERE id = 4;
+step s3j: SELECT s.id, s.v, w.name FROM (SELECT id, v, wid FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s JOIN lqw w ON w.id = s.wid FOR UPDATE OF s;
+id|v  |name
+--+---+----
+20|v20|w1  
+22|v22|w3  
+23|v23|w4  
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s4x s1v s4n s1c
+step s4x: EXPLAIN (COSTS OFF) SELECT s.id, s.v, w.name FROM (SELECT id, v, wid FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s JOIN lqw w ON w.id = s.wid FOR UPDATE OF s;
+QUERY PLAN                                                           
+---------------------------------------------------------------------
+LockRows                                                             
+  ->  Nested Loop                                                    
+        Join Filter: (w.id = s.wid)                                  
+        ->  Subquery Scan on s                                       
+              ->  Limit                                              
+                    ->  LockRows                                     
+                          ->  Sort                                   
+                                Sort Key: lqj.prio, lqj.id           
+                                ->  Seq Scan on lqj                  
+                                      Filter: (state = 'ready'::text)
+        ->  Materialize                                              
+              ->  Seq Scan on lqw w                                  
+(12 rows)
+
+step s1v: UPDATE lqj SET v = v || '+' WHERE id = 23;
+step s4n: SELECT s.id, s.v, w.name FROM (SELECT id, v, wid FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s JOIN lqw w ON w.id = s.wid FOR UPDATE OF s; <waiting ...>
+step s1c: COMMIT;
+step s4n: <... completed>
+id|v   |name
+--+----+----
+23|v23+|w4  
+22|v22 |w3  
+20|v20 |w1  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s4n s1c
+step s1s: UPDATE lqj SET state = 'done' WHERE id = 23;
+step s4n: SELECT s.id, s.v, w.name FROM (SELECT id, v, wid FROM lqj WHERE state = 'ready' ORDER BY prio, id LIMIT 3) s JOIN lqw w ON w.id = s.wid FOR UPDATE OF s; <waiting ...>
+step s1c: COMMIT;
+step s4n: <... completed>
+id|v  |name
+--+---+----
+22|v22|w3  
+20|v20|w1  
+19|v19|w4  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s5x s1v4 s5f s1c
+step s5x: EXPLAIN (COSTS OFF) SELECT * FROM (SELECT id, v FROM lqj WHERE state = 'ready' ORDER BY id LIMIT 6 OFFSET 1) s WHERE s.id % 2 = 0 FOR UPDATE;
+QUERY PLAN                                               
+---------------------------------------------------------
+LockRows                                                 
+  ->  Subquery Scan on s                                 
+        Filter: ((s.id % 2) = 0)                         
+        ->  Limit                                        
+              ->  LockRows                               
+                    ->  Index Scan using lqj_pkey on lqj 
+                          Filter: (state = 'ready'::text)
+(7 rows)
+
+step s1v4: UPDATE lqj SET v = v || '+' WHERE id = 4;
+step s5f: SELECT * FROM (SELECT id, v FROM lqj WHERE state = 'ready' ORDER BY id LIMIT 6 OFFSET 1) s WHERE s.id % 2 = 0 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s5f: <... completed>
+id|v  
+--+---
+ 2|v2 
+ 4|v4+
+ 8|v8 
+10|v10
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s4 s5f s1c
+step s1s4: UPDATE lqj SET state = 'done' WHERE id = 4;
+step s5f: SELECT * FROM (SELECT id, v FROM lqj WHERE state = 'ready' ORDER BY id LIMIT 6 OFFSET 1) s WHERE s.id % 2 = 0 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s5f: <... completed>
+id|v  
+--+---
+ 2|v2 
+ 8|v8 
+10|v10
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress

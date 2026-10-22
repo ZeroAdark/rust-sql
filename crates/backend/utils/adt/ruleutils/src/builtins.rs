@@ -28,7 +28,7 @@ fn out_scratch<'a>(flinfo: Option<&'a mut FmgrInfo>, name: &'static str) -> &'a 
 fn text_result(flinfo: Option<&mut FmgrInfo>, name: &'static str, s: &str) -> Datum {
     let buf = out_scratch(flinfo, name);
     buf.clear();
-    buf.reserve(datum::varlena::VARHDRSZ + s.len());
+    let _ = buf.try_reserve_exact(datum::varlena::VARHDRSZ + s.len());
     buf.extend_from_slice(&datum::varlena::set_varsize_4b(datum::varlena::VARHDRSZ + s.len()));
     buf.extend_from_slice(s.as_bytes());
     Datum::from_usize(buf.as_ptr() as usize)
@@ -400,7 +400,7 @@ pub fn fc_pg_get_statisticsobjdef_expressions(
     else {
         return Ok(fcinfo.return_null());
     };
-    let mut texts = Vec::with_capacity(exprs.len());
+    let mut texts = ::mcx::std_vec_with_capacity("ruleutils", exprs.len())?;
     for e in &exprs {
         texts.push(varlena::cstring_to_text(mcx, e.as_bytes())?);
     }

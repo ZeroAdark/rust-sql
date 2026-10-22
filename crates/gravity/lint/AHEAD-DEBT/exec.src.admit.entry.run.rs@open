@@ -1,0 +1,1 @@
+crates/gravity/exec/src/admit/entry/run.rs	open	licence	bind	the entry's open: every Expr key word evaluated before any pipeline, then run_inits [NONE; D899,D2219]

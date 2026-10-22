@@ -1,7 +1,7 @@
 use core::cell::{Cell, UnsafeCell};
 use core::mem::ManuallyDrop;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use mcx::{McxOwned, MemoryContext, PgVec};
 use stringinfo::StringInfo;
 use types_error::{
@@ -11,11 +11,36 @@ use types_error::{
 
 pub const EOF: i32 = -1;
 
-// Fixed 8KB buffers, as C (fragments large results at non-MTU boundaries);
-// the vectored/coalesced-send lever (docs/beat-postgres.md §6) lands at
-// internal_flush, not here.
+// 8KB buffers, as C (fragments large results at non-MTU boundaries); the send
+// buffer grows once to PQ_SEND_BUFFER_GROWN when a message fills it
+// (`set_send_grow`); the vectored/coalesced-send lever (docs/beat-postgres.md
+// §6) lands at internal_flush, not here.
 pub const PQ_SEND_BUFFER_SIZE: usize = 8192;
 pub const PQ_RECV_BUFFER_SIZE: usize = 8192;
+
+/// The size a full send buffer grows to once before it flushes when full (`set_send_grow`; on until set).
+pub const PQ_SEND_BUFFER_GROWN: usize = 64 * 1024;
+
+static SEND_GROW: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(PQ_SEND_BUFFER_GROWN);
+
+/// On: a send buffer a message fills grows once to PQ_SEND_BUFFER_GROWN before it flushes when full, so a result of tens
+/// of kilobytes leaves in one send at the protocol's flush, not one per 8 KiB; off: C's flush when full.
+pub fn set_send_grow(on: bool) {
+    let bytes = if on { PQ_SEND_BUFFER_GROWN } else { PQ_SEND_BUFFER_SIZE };
+    SEND_GROW.store(bytes, core::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn send_grow() -> usize {
+    SEND_GROW.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+// the unit tests run threads side by side: each sets its own size (tests.rs TEST_SEND_GROW)
+#[cfg(test)]
+fn send_grow() -> usize {
+    tests::TEST_SEND_GROW.with(Cell::get)
+}
 
 struct PqState {
     send_pointer: Cell<usize>,
@@ -119,13 +144,15 @@ fn send_init_cold(
 
 // Session-memory teardown (FPBUDGET-1): the PqComm send buffer is freed at
 // clean task end (after the exit-callback stack; nothing sends afterwards).
-// Idempotent per thread: both init paths call it, only the first registers.
+// Once per session: both init paths call it, only the first registers, and
+// the teardown puts REGISTERED back for the thread's next session (D4245).
 fn register_send_teardown() {
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
     if !REGISTERED.replace(true) {
         ::mcx::register_session_cleanup(Box::new(|| {
+            REGISTERED.with(|r| r.set(false));
             SEND.with(|cell| {
                 // SAFETY: same single-thread slot ownership as with_send; no
                 // send routine is live at task-end teardown.
@@ -235,7 +262,7 @@ fn pq_recvbuf() -> PgResult<i32> {
                     let _ = ereport(COMMERROR)
                         .with_saved_errno(e)
                         .errcode_for_socket_access()
-                        .errmsg("could not receive data from client: %m")
+                        .errmsg(format!("could not receive data from client: {PCT_M}"))
                         .finish(loc("pq_recvbuf"));
                 }
                 return Ok(EOF);
@@ -330,7 +357,7 @@ pub fn pq_getbyte_if_available(c: &mut u8) -> PgResult<i32> {
                 let _ = ereport(COMMERROR)
                     .with_saved_errno(e)
                     .errcode_for_socket_access()
-                    .errmsg("could not receive data from client: %m")
+                    .errmsg(format!("could not receive data from client: {PCT_M}"))
                     .finish(loc("pq_getbyte_if_available"));
             }
             EOF
@@ -507,12 +534,18 @@ pub fn pq_getmessage(s: &mut StringInfo<'_>, maxlen: i32) -> PgResult<i32> {
 
 #[inline(always)] // static inline in C
 fn internal_putbytes(st: &PqState, sb: &mut SendBuf<'_>, b: &[u8]) -> PgResult<i32> {
-    let size = sb.buf.len();
+    let mut size = sb.buf.len();
     let mut off = 0usize;
     let mut len = b.len();
 
     while len > 0 {
         if st.send_pointer.get() >= size {
+            // a grow that cannot get its bytes flushes as C does
+            let grow = send_grow();
+            if size < grow && grow_zeroed(&mut sb.buf, grow).is_ok() {
+                size = grow;
+                continue;
+            }
             socket_set_nonblocking(false)?;
             if internal_flush(st, sb)? != 0 {
                 return Ok(EOF);
@@ -613,7 +646,7 @@ fn internal_flush_buffer(
                     let _ = ereport(COMMERROR)
                         .with_saved_errno(e)
                         .errcode_for_socket_access()
-                        .errmsg("could not send data to client: %m")
+                        .errmsg(format!("could not send data to client: {PCT_M}"))
                         .finish(loc("internal_flush_buffer"));
                 }
 
@@ -688,6 +721,20 @@ fn socket_putmessage(msgtype: u8, s: &[u8]) -> PgResult<i32> {
     })
 }
 
+fn socket_putbytes(b: &[u8]) -> PgResult<i32> {
+    PQ.with(|st| {
+        if st.comm_busy.get() {
+            return Ok(0);
+        }
+        st.comm_busy.set(true);
+        let res = with_send(|sb| internal_putbytes(st, sb, b));
+        if res.is_ok() {
+            st.comm_busy.set(false);
+        }
+        res
+    })
+}
+
 fn socket_putmessage_noblock(msgtype: u8, s: &[u8]) -> PgResult<()> {
     let required = PQ.with(|st| st.send_pointer.get()) + 1 + 4 + s.len();
     with_send(|sb| {
@@ -737,6 +784,7 @@ pub struct PQcommMethods {
     pub is_send_pending: fn() -> bool,
     pub putmessage: fn(u8, &[u8]) -> PgResult<i32>,
     pub putmessage_noblock: fn(u8, &[u8]) -> PgResult<()>,
+    pub putbytes: fn(&[u8]) -> PgResult<i32>,
 }
 
 pub static PQ_COMM_SOCKET_METHODS: PQcommMethods = PQcommMethods {
@@ -746,6 +794,7 @@ pub static PQ_COMM_SOCKET_METHODS: PQcommMethods = PQcommMethods {
     is_send_pending: socket_is_send_pending,
     putmessage: socket_putmessage,
     putmessage_noblock: socket_putmessage_noblock,
+    putbytes: socket_putbytes,
 };
 
 thread_local! {
@@ -777,6 +826,10 @@ pub fn pq_putmessage(msgtype: u8, s: &[u8]) -> PgResult<i32> {
     (PQ_COMM_METHODS.with(Cell::get).putmessage)(msgtype, s)
 }
 
+pub fn pq_putbytes(b: &[u8]) -> PgResult<i32> {
+    (PQ_COMM_METHODS.with(Cell::get).putbytes)(b)
+}
+
 pub fn pq_putmessage_noblock(msgtype: u8, s: &[u8]) -> PgResult<()> {
     (PQ_COMM_METHODS.with(Cell::get).putmessage_noblock)(msgtype, s)
 }
@@ -789,9 +842,12 @@ pub fn pq_putmessage_noblock(msgtype: u8, s: &[u8]) -> PgResult<()> {
 /// locked every other transport (sim-net) out of them. Mirrors the
 /// init_socket_seams → init_socket_gucs split.
 pub fn init_seams() {
+    pqcomm_seams::set_send_grow::set(set_send_grow);
     pqcomm_seams::pq_putmessage::set(pq_putmessage);
+    pqcomm_seams::pq_putbytes::set(pq_putbytes);
     pqcomm_seams::pq_putmessage_v2::set(pq_putmessage_v2);
     pqcomm_seams::pq_flush::set(pq_flush);
+    pqcomm_seams::pq_flush_if_writable::set(pq_flush_if_writable);
 }
 
 pub mod socket;

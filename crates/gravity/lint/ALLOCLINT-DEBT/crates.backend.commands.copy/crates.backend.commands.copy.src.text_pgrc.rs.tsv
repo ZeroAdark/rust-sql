@@ -1,0 +1,18 @@
+path	crates/backend/commands/copy/src/text_pgrc.rs
+growth	std::collections::BTreeMap::insert	2
+growth	std::collections::HashMap::insert	1
+growth	std::collections::VecDeque::push_back	1
+growth	std::iter::Extend::extend	3
+growth	std::vec::Vec::push	2
+ir-only	copy_cmd::from::copy_from_error_context	3
+ir-only	copy_cmd::fromparse::<impl copy_cmd::from::CopyFromState>::copy_read_stream	2
+ir-only	copy_cmd::fromparse::<impl copy_cmd::from::CopyFromState>::next_copy_from	1
+ir-only	copy_cmd::textseg::Segmentator::finish	2
+macro	std::vec	2
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	2
+method	std::string::ToString::to_string	2
+method	std::sync::Arc::new	3
+type	std::boxed::Box	2
+type	std::sync::Arc	3

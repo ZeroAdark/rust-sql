@@ -7,7 +7,6 @@ use init_small::globals as g;
 use types_error::{PgResult, ERROR};
 use types_guc::{GucSource, PGC_POSTMASTER};
 use types_storage::aio::{PgAioResult, PgAioResultStatus, PGAIO_OP_INVALID, PGAIO_TID_INVALID};
-use types_storage::storage::NUM_AUXILIARY_PROCS;
 
 use crate::handle::loc;
 use crate::{
@@ -23,11 +22,11 @@ fn AioCtlShmemSize() -> usize {
 fn AioProcs() -> usize {
     // C: a ProcNumber can land on an IO worker, so the table covers
     // every PGPROC-owning slot.
-    (g::MaxBackends() + NUM_AUXILIARY_PROCS) as usize
+    (g::MaxBackends() + g::NumAuxiliaryProcs()) as usize
 }
 
 fn AioChooseMaxConcurrency() -> i32 {
-    let max_backends = g::MaxBackends() + NUM_AUXILIARY_PROCS;
+    let max_backends = g::MaxBackends() + g::NumAuxiliaryProcs();
     let max_proportional_pins = g::NBuffers() / max_backends;
     max_proportional_pins.clamp(1, 64)
 }

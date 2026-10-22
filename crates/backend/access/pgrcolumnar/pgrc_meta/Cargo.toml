@@ -1,0 +1,15 @@
+[package]
+name = "pgrc_meta"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pgrc_meta"
+path = "src/lib.rs"
+
+[dependencies]
+cost_profile = { path = "../../../../_support/cost_profile" }
+memledger = { path = "../../../../_support/memledger" }
+order_key = { path = "../../../../_support/order_key" }
+pgrc_format = { path = "../pgrc_format" }

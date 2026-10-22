@@ -116,6 +116,8 @@ pub(crate) fn install_wal_segment_size() {
 // wal_sync_method_options[] / archive_mode_options[] (xlog.c).
 pub(crate) const WAL_SYNC_METHOD_OPTIONS: &[types_guc::config_enum_entry] = &[
     types_guc::config_enum_entry { name: "fsync", val: crate::WAL_SYNC_METHOD_FSYNC, hidden: false },
+    // HAVE_FSYNC_WRITETHROUGH (port/darwin.h) only.
+    #[cfg(target_os = "macos")]
     types_guc::config_enum_entry { name: "fsync_writethrough", val: crate::WAL_SYNC_METHOD_FSYNC_WRITETHROUGH, hidden: false },
     types_guc::config_enum_entry { name: "fdatasync", val: crate::WAL_SYNC_METHOD_FDATASYNC, hidden: false },
     types_guc::config_enum_entry { name: "open_sync", val: crate::WAL_SYNC_METHOD_OPEN, hidden: false },

@@ -1,0 +1,22 @@
+-- regress-full-replica_identity-001
+-- SELECT count(*) FROM pg_index WHERE indrelid = 'test_replica_identity'::regclass AND indisreplident;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@2^
+  source index rel=2610 rti=1 am=heap index=2678
+    key att=2 op=607 value=c26:28226
+    recheck (op607(v1.2, c26:28226))
+    lanes Attr(15):byval8:w8:val
+  filter v1.15
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21)
+  outs 1=w4:val 2=w4:val 3=w2:val 4=w2:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w1:val 11=w1:val 12=w1:val 13=w1:val 14=w1:val 15=w8:val 16=vl:row 17=vl:row 18=vl:row 19=vl:row 20=vl:row 21=vl:row
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: IndexScan Agg

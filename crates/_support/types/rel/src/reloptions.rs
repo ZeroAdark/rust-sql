@@ -119,86 +119,255 @@ pub struct BrinOptions {
     pub autosummarize: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PgrcolumnarCodec {
-    Auto,
-    Lz4,
-    Zstd,
-    Plain,
-}
+pub const PGRCOLUMNAR_SORTED_BY_MAX: usize = 512;
 
-pub const PGRCOLUMNAR_CLUSTER_KEY_MAX: usize = 512;
-pub const PGRCOLUMNAR_CODEC_COLS_MAX: usize = 2048;
-
-// pgrcolumnar AM storage options (CREATE TABLE ... USING pgrcolumnar WITH (...)).
-// Strings live in fixed inline buffers so RdOptions stays Copy; lengths are
-// validated at option-parse time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PgrcolumnarOptions {
-    pub codec: PgrcolumnarCodec,
-    pub zstd_level: i32,
-    // Same contract as StdRdOptions.parallel_workers (-1 = unset): pins the
-    // planner's worker count for scans of this relation, overriding the
-    // row-group-based default sizing (C's compute_parallel_worker honors
-    // the reloption first; pgrcolumnar does too).
-    pub parallel_workers: i32,
-    cluster_key_len: u16,
-    cluster_key_buf: [u8; PGRCOLUMNAR_CLUSTER_KEY_MAX],
-    codec_cols_len: u16,
-    codec_cols_buf: [u8; PGRCOLUMNAR_CODEC_COLS_MAX],
-}
-
-impl Default for PgrcolumnarOptions {
-    fn default() -> PgrcolumnarOptions {
-        PgrcolumnarOptions {
-            // Ingest default flipped Auto -> Lz4 (train #8): decode-hot
-            // scans want LZ4's decompression speed; ZSTD stays opt-in via
-            // WITH (codec = 'zstd'). New ingests only — existing chunks
-            // carry their codec in the chunk header.
-            codec: PgrcolumnarCodec::Lz4,
-            zstd_level: 3,
-            parallel_workers: -1,
-            cluster_key_len: 0,
-            cluster_key_buf: [0; PGRCOLUMNAR_CLUSTER_KEY_MAX],
-            codec_cols_len: 0,
-            codec_cols_buf: [0; PGRCOLUMNAR_CODEC_COLS_MAX],
-        }
-    }
+    pub std: StdRdOptions,
+    sorted_by_len: u16,
+    sorted_by_buf: [u8; PGRCOLUMNAR_SORTED_BY_MAX],
+    shred_paths_len: u16,
+    shred_paths_buf: [u8; PGRCOLUMNAR_SORTED_BY_MAX],
+    sorted_by_partial: bool,
+    sort_runs: bool,
 }
 
 impl PgrcolumnarOptions {
+    pub fn new(std: StdRdOptions) -> PgrcolumnarOptions {
+        PgrcolumnarOptions {
+            std,
+            sorted_by_len: 0,
+            sorted_by_buf: [0; PGRCOLUMNAR_SORTED_BY_MAX],
+            shred_paths_len: 0,
+            shred_paths_buf: [0; PGRCOLUMNAR_SORTED_BY_MAX],
+            sorted_by_partial: false,
+            sort_runs: false,
+        }
+    }
+
+    pub fn set_sort_runs(&mut self, on: bool) {
+        self.sort_runs = on;
+    }
+
+    pub fn sort_runs(&self) -> bool {
+        self.sort_runs
+    }
+
     /// false = value too long (caller reports the option error).
-    pub fn set_cluster_key(&mut self, v: &str) -> bool {
-        if v.len() > PGRCOLUMNAR_CLUSTER_KEY_MAX {
+    pub fn set_sorted_by(&mut self, v: &str) -> bool {
+        if v.len() > PGRCOLUMNAR_SORTED_BY_MAX {
             return false;
         }
-        self.cluster_key_buf[..v.len()].copy_from_slice(v.as_bytes());
-        self.cluster_key_len = v.len() as u16;
+        self.sorted_by_buf[..v.len()].copy_from_slice(v.as_bytes());
+        self.sorted_by_len = v.len() as u16;
         true
     }
 
-    pub fn set_codec_cols(&mut self, v: &str) -> bool {
-        if v.len() > PGRCOLUMNAR_CODEC_COLS_MAX {
+    pub fn sorted_by(&self) -> &str {
+        // Buffer only ever holds set_sorted_by's UTF-8.
+        core::str::from_utf8(&self.sorted_by_buf[..self.sorted_by_len as usize]).unwrap()
+    }
+
+    /// `sorted_by_partial`: the key was set on a table that held parts, so it
+    /// holds only for the parts written after it (ALTER ... SET sorted_by on
+    /// a non-empty table): no whole-relation order claim.
+    pub fn set_sorted_by_partial(&mut self, v: bool) {
+        self.sorted_by_partial = v;
+    }
+
+    pub fn sorted_by_partial(&self) -> bool {
+        self.sorted_by_partial
+    }
+
+    /// false = value too long (caller reports the option error).
+    pub fn set_shred_paths(&mut self, v: &str) -> bool {
+        if v.len() > PGRCOLUMNAR_SORTED_BY_MAX {
             return false;
         }
-        self.codec_cols_buf[..v.len()].copy_from_slice(v.as_bytes());
-        self.codec_cols_len = v.len() as u16;
+        self.shred_paths_buf[..v.len()].copy_from_slice(v.as_bytes());
+        self.shred_paths_len = v.len() as u16;
         true
     }
 
-    pub fn cluster_key(&self) -> &str {
-        // Buffers only ever hold set_* validated UTF-8.
-        core::str::from_utf8(&self.cluster_key_buf[..self.cluster_key_len as usize]).unwrap()
+    /// The `pgrc_shred_paths` canonical spelling (`a.b:text, c:numeric`).
+    pub fn shred_paths(&self) -> &str {
+        // Buffer only ever holds set_shred_paths's UTF-8.
+        core::str::from_utf8(&self.shred_paths_buf[..self.shred_paths_len as usize]).unwrap()
     }
 
-    pub fn codec_cols(&self) -> &str {
-        core::str::from_utf8(&self.codec_cols_buf[..self.codec_cols_len as usize]).unwrap()
+    /// The declared typed paths, in order; an element that does not
+    /// parse is skipped (DDL validated the spelling).
+    pub fn shred_path_decls(&self) -> Vec<ShredPathDecl> {
+        self.shred_paths().split(',').filter_map(ShredPathDecl::parse).collect()
     }
+
+    /// The declared key columns in order (syntax-checked at parse time;
+    /// whitespace around a name is trimmed). A path key yields its jsonb
+    /// column.
+    pub fn sorted_by_cols(&self) -> impl Iterator<Item = String> {
+        self.sorted_by_keys().into_iter().map(|k| k.col)
+    }
+
+    /// The declared keys in order, read back from the stored canonical
+    /// spelling ([`SortedByKey::render`]: names verbatim). An element that
+    /// does not read as a key comes back as a column of that whole spelling,
+    /// which no live column matches, so the whole key is void.
+    pub fn sorted_by_keys(&self) -> Vec<SortedByKey> {
+        split_sorted_by(self.sorted_by())
+            .into_iter()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(|c| {
+                read_canonical_key(c).unwrap_or_else(|| SortedByKey { col: c.to_string(), path: Vec::new() })
+            })
+            .collect()
+    }
+}
+
+/// The lane kind of a typed path (`pgrc_shred_paths`, DESIGN R3): the
+/// writer's `jsonb_shred::Lane` it is elected at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShredPathKind {
+    Text,
+    Numeric,
+    Bool,
+    Uuid,
+}
+
+impl ShredPathKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            ShredPathKind::Text => "text",
+            ShredPathKind::Numeric => "numeric",
+            ShredPathKind::Bool => "bool",
+            ShredPathKind::Uuid => "uuid",
+        }
+    }
+}
+
+/// One `pgrc_shred_paths` element: `a.b[:kind]`, a dotted path of object
+/// keys (no empty key), kind text (default), int / bigint / numeric, bool
+/// or uuid. The declared path is elected in every part at that kind, ahead
+/// of the cap and with no presence floor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShredPathDecl {
+    pub keys: Vec<String>,
+    pub kind: ShredPathKind,
+}
+
+impl ShredPathDecl {
+    pub fn parse(item: &str) -> Option<ShredPathDecl> {
+        let item = item.trim();
+        let (path, kind) = match item.rsplit_once(':') {
+            Some((p, k)) => (p.trim(), k.trim().to_ascii_lowercase()),
+            None => (item, "text".to_string()),
+        };
+        let kind = match kind.as_str() {
+            "text" => ShredPathKind::Text,
+            "int" | "integer" | "bigint" | "int8" | "int4" | "numeric" => ShredPathKind::Numeric,
+            "bool" | "boolean" => ShredPathKind::Bool,
+            "uuid" => ShredPathKind::Uuid,
+            _ => return None,
+        };
+        let keys: Vec<String> = path.split('.').map(str::to_string).collect();
+        if path.is_empty() || keys.iter().any(|k| k.is_empty()) {
+            return None;
+        }
+        Some(ShredPathDecl { keys, kind })
+    }
+
+    pub fn render(&self) -> String {
+        format!("{}:{}", self.keys.join("."), self.kind.name())
+    }
+}
+
+/// One `sorted_by` key: a column (`path` empty), or a text path on a jsonb
+/// column, `col->'k1'->...->>'kn'` (object keys; `->` steps then one final
+/// `->>`): the writer sorts by PostgreSQL's value of that expression (NULL
+/// when a step meets no object or no key, or the value is JSON null).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SortedByKey {
+    pub col: String,
+    pub path: Vec<String>,
+}
+
+impl SortedByKey {
+    /// The canonical spelling: the name verbatim, then `->'k'` steps and the
+    /// final `->>'k'` (a quote doubled inside a key).
+    pub fn render(&self) -> String {
+        let mut out = self.col.clone();
+        for (i, k) in self.path.iter().enumerate() {
+            out.push_str(if i + 1 == self.path.len() { "->>'" } else { "->'" });
+            out.push_str(&k.replace('\'', "''"));
+            out.push('\'');
+        }
+        out
+    }
+}
+
+/// Split a `sorted_by` value at the commas outside single quotes (path keys)
+/// and double quotes (names).
+pub fn split_sorted_by(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut start, mut sq, mut dq) = (0usize, false, false);
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '\'' if !dq => sq = !sq,
+            '"' if !sq => dq = !dq,
+            ',' if !sq && !dq => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// Read one canonical element back (the inverse of [`SortedByKey::render`]).
+fn read_canonical_key(item: &str) -> Option<SortedByKey> {
+    let cut = item.find("->").unwrap_or(item.len());
+    let col = item[..cut].to_string();
+    let mut rest = &item[cut..];
+    let mut path = Vec::new();
+    let mut texts = Vec::new();
+    while !rest.is_empty() {
+        let text = rest.starts_with("->>");
+        rest = rest.strip_prefix(if text { "->>'" } else { "->'" })?;
+        let mut key = std::string::String::new();
+        let mut end = None;
+        let b = rest.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'\'' {
+                if b.get(i + 1) == Some(&b'\'') {
+                    i += 2;
+                    continue;
+                }
+                end = Some(i);
+                break;
+            }
+            i += 1;
+        }
+        let end = end?;
+        key.push_str(&rest[..end].replace("''", "'"));
+        rest = &rest[end + 1..];
+        path.push(key);
+        texts.push(text);
+    }
+    if let Some((last, init)) = texts.split_last() {
+        if !*last || init.iter().any(|t| *t) {
+            return None;
+        }
+    }
+    Some(SortedByKey { col, path })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RdOptions {
     Std(StdRdOptions),
+    Pgrcolumnar(PgrcolumnarOptions),
     View(ViewOptions),
     BTree(BTOptions),
     Hash(HashOptions),
@@ -206,7 +375,6 @@ pub enum RdOptions {
     Gist(GistOptions),
     SpGist(SpGistOptions),
     Brin(BrinOptions),
-    Pgrcolumnar(PgrcolumnarOptions),
     Hnsw(HnswOptions),
     Bloom(BloomOptions),
 }
@@ -216,14 +384,8 @@ impl RdOptions {
     pub fn std(&self) -> Option<&StdRdOptions> {
         match self {
             RdOptions::Std(o) => Some(o),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn view(&self) -> Option<&ViewOptions> {
-        match self {
-            RdOptions::View(o) => Some(o),
+            // pgrcolumnar carries the heap vocabulary verbatim.
+            RdOptions::Pgrcolumnar(o) => Some(&o.std),
             _ => None,
         }
     }
@@ -236,18 +398,27 @@ impl RdOptions {
         }
     }
 
+    #[inline]
+    pub fn view(&self) -> Option<&ViewOptions> {
+        match self {
+            RdOptions::View(o) => Some(o),
+            _ => None,
+        }
+    }
+
     // RelationGetFillFactor is used by C against whichever option struct the
     // relkind/AM parsed; variants without a fillfactor member fall to default.
     #[inline]
     pub fn fillfactor(&self) -> Option<i32> {
         match self {
             RdOptions::Std(o) => Some(o.fillfactor),
+            RdOptions::Pgrcolumnar(o) => Some(o.std.fillfactor),
             RdOptions::BTree(o) => Some(o.fillfactor),
             RdOptions::Hash(o) => Some(o.fillfactor),
             RdOptions::Gist(o) => Some(o.fillfactor),
             RdOptions::SpGist(o) => Some(o.fillfactor),
             RdOptions::View(_) | RdOptions::Gin(_) | RdOptions::Brin(_)
-            | RdOptions::Pgrcolumnar(_) | RdOptions::Hnsw(_) | RdOptions::Bloom(_) => None,
+            | RdOptions::Hnsw(_) | RdOptions::Bloom(_) => None,
         }
     }
 

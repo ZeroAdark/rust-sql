@@ -1,0 +1,18 @@
+-- name: regress-full-stats_ext-015
+-- sql: SELECT 1 FROM pg_statistic_ext WHERE stxrelid = 'stxdinp'::regclass;
+-- test: stats_ext
+-- shape: c085db5d65d4879e seen=1
+-- rel 3381 pg_statistic_ext am=heap kind=r natts=9
+-- att 3381 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 3381 2 stxrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 3381 3 stxname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 3381 4 stxnamespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 3381 5 stxowner typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 3381 6 stxkeys typid=22 typmod=-1 len=-1 byval=f notnull=t
+-- att 3381 7 stxstattarget typid=21 typmod=-1 len=2 byval=t notnull=f
+-- att 3381 8 stxkind typid=1002 typmod=-1 len=-1 byval=f notnull=t
+-- att 3381 9 stxexprs typid=194 typmod=-1 len=-1 byval=f notnull=f
+-- idx 3379 rel=3381 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 3380 rel=3381 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 3997 rel=3381 keys=3,4 opts=0,0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 1.4875 :scan.plan.plan_rows 1 :scan.plan.plan_width 4 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 7 :constvalue 4 [ 1 0 0 0 0 0 0 0 ]} :resno 1 :resname ?column? :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 607 :opfuncid 184 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 2 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location 37} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 48 :constvalue 4 [ 98 133 0 0 0 0 0 0 ]}) :location 46}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 2)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_statistic_ext :colnames ("oid" "stxrelid" "stxname" "stxnamespace" "stxowner" "stxkeys" "stxstattarget" "stxkind" "stxexprs")} :rtekind 0 :relid 3381 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 3381 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 9) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 3381 34146) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 67}

@@ -1,0 +1,10 @@
+-- regress-full-xml-011
+-- SELECT xmlserialize(content data as character varying(20)) FROM xmltest;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1270 end=sink
+  nodes n0@0
+  source range rel=43870 rti=1 am=heap
+    lanes Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn669(relabel1043(T_XmlExpr), c23:24, c16:0))
+  outs 1=vl:call669
+mapped: SeqScan

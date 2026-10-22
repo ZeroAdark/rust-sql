@@ -1,0 +1,4 @@
+path	crates/gravity/parallel/src/merge.rs
+ir-only	std::collections::hash::map::VacantEntry<K,V,A>::insert	1
+method	std::boxed::Box::new	1
+type	std::boxed::Box	1

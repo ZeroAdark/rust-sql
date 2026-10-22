@@ -1,0 +1,61 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1ren s2find s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT p1_0.id, p1_0.name, p1_0.version, p1_1.birth, p1_2.tax_id FROM jlp_party p1_0 LEFT JOIN jlp_person p1_1 ON p1_0.id = p1_1.id LEFT JOIN jlp_org p1_2 ON p1_0.id = p1_2.id WHERE p1_0.id = 42 FOR NO KEY UPDATE OF p1_0;
+QUERY PLAN                                                           
+---------------------------------------------------------------------
+LockRows                                                             
+  ->  Nested Loop Left Join                                          
+        ->  Nested Loop Left Join                                    
+              ->  Index Scan using jlp_party_pkey on jlp_party p1_0  
+                    Index Cond: (id = 42)                            
+              ->  Index Scan using jlp_person_pkey on jlp_person p1_1
+                    Index Cond: (id = 42)                            
+        ->  Index Scan using jlp_org_pkey on jlp_org p1_2            
+              Index Cond: (id = 42)                                  
+(9 rows)
+
+step s1ren: UPDATE jlp_party SET name = 'renamed', version = version + 1 WHERE id = 42;
+step s2find: SELECT p1_0.id, p1_0.name, p1_0.version, p1_1.birth, p1_2.tax_id FROM jlp_party p1_0 LEFT JOIN jlp_person p1_1 ON p1_0.id = p1_1.id LEFT JOIN jlp_org p1_2 ON p1_0.id = p1_2.id WHERE p1_0.id = 42 FOR NO KEY UPDATE OF p1_0; <waiting ...>
+step s1c: COMMIT;
+step s2find: <... completed>
+id|name   |version|     birth|tax_id
+--+-------+-------+----------+------
+42|renamed|      1|02-12-2000|      
+(1 row)
+
+
+starting permutation: s1ren s1birth s2find s1c
+step s1ren: UPDATE jlp_party SET name = 'renamed', version = version + 1 WHERE id = 42;
+step s1birth: UPDATE jlp_person SET birth = '1999-12-31' WHERE id = 42;
+step s2find: SELECT p1_0.id, p1_0.name, p1_0.version, p1_1.birth, p1_2.tax_id FROM jlp_party p1_0 LEFT JOIN jlp_person p1_1 ON p1_0.id = p1_1.id LEFT JOIN jlp_org p1_2 ON p1_0.id = p1_2.id WHERE p1_0.id = 42 FOR NO KEY UPDATE OF p1_0; <waiting ...>
+step s1c: COMMIT;
+step s2find: <... completed>
+id|name   |version|     birth|tax_id
+--+-------+-------+----------+------
+42|renamed|      1|02-12-2000|      
+(1 row)
+
+
+starting permutation: s1org s2list s1c
+step s1org: UPDATE jlp_party SET version = version + 1 WHERE id = 43; UPDATE jlp_org SET tax_id = 'changed' WHERE id = 43;
+step s2list: SELECT p1_0.id, p1_0.name, p1_0.version, p1_1.birth, p1_2.tax_id FROM jlp_party p1_0 LEFT JOIN jlp_person p1_1 ON p1_0.id = p1_1.id LEFT JOIN jlp_org p1_2 ON p1_0.id = p1_2.id WHERE p1_0.id IN (41, 42, 43) FOR NO KEY UPDATE OF p1_0; <waiting ...>
+step s1c: COMMIT;
+step s2list: <... completed>
+id|name|version|     birth|tax_id
+--+----+-------+----------+------
+41|p41 |      0|          |t41   
+42|p42 |      0|02-12-2000|      
+43|p43 |      1|          |t43   
+(3 rows)
+
+
+starting permutation: s1del s2find s1c
+step s1del: DELETE FROM jlp_person WHERE id = 42; DELETE FROM jlp_party WHERE id = 42;
+step s2find: SELECT p1_0.id, p1_0.name, p1_0.version, p1_1.birth, p1_2.tax_id FROM jlp_party p1_0 LEFT JOIN jlp_person p1_1 ON p1_0.id = p1_1.id LEFT JOIN jlp_org p1_2 ON p1_0.id = p1_2.id WHERE p1_0.id = 42 FOR NO KEY UPDATE OF p1_0; <waiting ...>
+step s1c: COMMIT;
+step s2find: <... completed>
+id|name|version|birth|tax_id
+--+----+-------+-----+------
+(0 rows)
+

@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/adt/json.c: 1 stack-depth check sites
+186	datum_to_json_internal	crates/backend/utils/adt/json/src/tojson.rs	datum_to_json_internal	yes	

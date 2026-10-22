@@ -1,0 +1,2 @@
+backend/utils/error/elog/src/sink.rs	DEBUG_QUERY_NEXT_ID	pgport	exit	thread	the id counter of this thread's DebugQueryStringScope guards (each guard's own stack entry); no data
+backend/utils/error/elog/src/sink.rs	SERVER_LOG_DEFER	memory	exit	thread	the thread's own log machinery (D4812): the server-log writer a memory safety thread installs at its start (memruntime memlog::defer_here, pg:memwatchdog), never set on a claim's thread; a fn pointer, no data

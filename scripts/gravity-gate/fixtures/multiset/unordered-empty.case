@@ -1,0 +1,7 @@
+# two empty results
+sql: SELECT x FROM t WHERE false;
+cols: x
+class: unordered
+verdict: match
+[pg]
+[got]

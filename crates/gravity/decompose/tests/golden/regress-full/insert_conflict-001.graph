@@ -1,0 +1,19 @@
+-- regress-full-insert_conflict-001
+-- explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (key, fruit) do update set fruit = excluded.fruit where exists (select 1 from insertconflicttest ii where ii.key = excluded.key);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:0, 2=c25:'Crowberry')
+  subplan 1 nested Exists unknown-eq-false params=($exec0=inner.1) raise-free
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index-only rel=18240 rti=4 am=heap index=18252
+    key att=1 op=96 value=$exec0
+    recheck (op96(index.1, $exec0))
+    lanes
+  project ()
+  write INSERT rel=18240 rti=1 natts=2 indexes=(18249[1, 2]u, 18250[1, 2]u, 18251[1, 2]u, 18252[1, 0]ue) on_conflict=update arbiter=(18249,18250,18251) excl_rti=2 cols=(2) set=(1=inner.2) where=T_List epq=$exec2
+  outs 1=w4:val 2=vl:stmt/imm
+param $exec0 owner=subplan1 type=23 rep=w4:val
+mapped: Result ModifyTable IndexOnlyScan SubPlan

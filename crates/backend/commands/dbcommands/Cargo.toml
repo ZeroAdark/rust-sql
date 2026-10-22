@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 pgstat = { path = "../../utils/activity/pgstat" }
+l2cache = { path = "../../utils/cache/l2cache" }
 slot_seams = { path = "../../replication/slot_seams" }
 types_core = { path = "../../../_support/types/types_core" }
 types_error = { path = "../../../_support/types/types_error" }
@@ -42,6 +43,8 @@ procsignal = { path = "../../storage/ipc/procsignal" }
 bufmgr = { path = "../../storage/buffer/bufmgr" }
 smgr = { path = "../../storage/smgr/smgr" }
 fd = { path = "../../storage/file/fd" }
+pgrc_am = { path = "../../access/pgrcolumnar/pgrc_am" }
+pgrc_wal = { path = "../../access/pgrcolumnar/pgrc_wal" }
 waitevent_seams = { path = "../../utils/activity/waitevent_seams" }
 checkpointer = { path = "../../postmaster/checkpointer" }
 transam_xlog = { path = "../../access/transam/transam_xlog" }
@@ -67,6 +70,9 @@ xlogrecovery_seams = { path = "../../access/transam/xlogrecovery_seams" }
 relmapper = { path = "../../utils/cache/relmapper" }
 snapmgr = { path = "../../utils/time/snapmgr" }
 commands_tablespace = { path = "../tablespace" }
+catalog_storage_seams = { path = "../../catalog/storage_seams" }
+pgrc_format = { path = "../../access/pgrcolumnar/pgrc_format" }
+storage_xlog = { path = "../../catalog/storage_xlog" }
 commands_define = { path = "../commands_define" }
 parser_small1 = { path = "../../parser/parser_small1" }
 aclchk = { path = "../../catalog/aclchk" }
@@ -78,4 +84,6 @@ postmaster_seams = { path = "../../postmaster/postmaster_seams" }
 standby = { path = "../../storage/ipc/standby" }
 
 [dev-dependencies]
+aio_seams = { path = "../../storage/aio/aio_seams" }
+xact_seams = { path = "../../access/transam/xact_seams" }
 fmgr_core = { path = "../../utils/fmgr/fmgr_core" }

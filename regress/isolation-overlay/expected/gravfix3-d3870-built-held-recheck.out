@@ -1,0 +1,217 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1name s2d s1c s2show s2c
+step s2x: EXPLAIN (COSTS OFF) with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), delete_cte_root (id) as (delete from d3870root r2 where r2.id1_ in (select id.id from id_cte id) returning id1_) select count(*) from id_cte id;
+QUERY PLAN                                        
+--------------------------------------------------
+Aggregate                                         
+  CTE id_cte                                      
+    ->  Hash Join                                 
+          Hash Cond: (l.sid = n.sid)              
+          ->  Hash Join                           
+                Hash Cond: (l.sid = r.id1_)       
+                ->  Seq Scan on d3870leaf l       
+                ->  Hash                          
+                      ->  Seq Scan on d3870root r 
+          ->  Hash                                
+                ->  Seq Scan on d3870non n        
+  CTE delete_cte_root                             
+    ->  Delete on d3870root r2                    
+          ->  Hash Join                           
+                Hash Cond: (id_1.id = r2.id1_)    
+                ->  HashAggregate                 
+                      Group Key: id_1.id          
+                      ->  CTE Scan on id_cte id_1 
+                ->  Hash                          
+                      ->  Seq Scan on d3870root r2
+  ->  CTE Scan on id_cte id                       
+(21 rows)
+
+step s1name: UPDATE d3870root SET name = 'n3' WHERE id1_ = 3;
+step s2d: with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), delete_cte_root (id) as (delete from d3870root r2 where r2.id1_ in (select id.id from id_cte id) returning id1_) select count(*) from id_cte id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+count
+-----
+    2
+(1 row)
+
+step s2show: SELECT r.id1_, r.name, n.sid AS non, l.sid AS leaf FROM d3870root r LEFT JOIN d3870non n ON n.sid = r.id1_ LEFT JOIN d3870leaf l ON l.sid = r.id1_ ORDER BY 1;
+id1_|name|non|leaf
+----+----+---+----
+   1|r1  |   |    
+   2|r2  |  2|    
+   4|r4  |  4|    
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1name s2dr s1c s2show s2c
+step s1name: UPDATE d3870root SET name = 'n3' WHERE id1_ = 3;
+step s2dr: with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), d as (delete from d3870root r2 where r2.id1_ in (select id.id from id_cte id) returning id1_, name) select * from d order by 1; <waiting ...>
+step s1c: COMMIT;
+step s2dr: <... completed>
+id1_|name
+----+----
+   3|n3  
+   5|r5  
+(2 rows)
+
+step s2show: SELECT r.id1_, r.name, n.sid AS non, l.sid AS leaf FROM d3870root r LEFT JOIN d3870non n ON n.sid = r.id1_ LEFT JOIN d3870leaf l ON l.sid = r.id1_ ORDER BY 1;
+id1_|name|non|leaf
+----+----+---+----
+   1|r1  |   |    
+   2|r2  |  2|    
+   4|r4  |  4|    
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1name s2u s1c s2show s2c
+step s1name: UPDATE d3870root SET name = 'n3' WHERE id1_ = 3;
+step s2u: with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), update_cte_root (id) as (update d3870root r2 set name = name || '+s2' where r2.id1_ in (select id.id from id_cte id) returning id1_) select count(*) from id_cte id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+count
+-----
+    2
+(1 row)
+
+step s2show: SELECT r.id1_, r.name, n.sid AS non, l.sid AS leaf FROM d3870root r LEFT JOIN d3870non n ON n.sid = r.id1_ LEFT JOIN d3870leaf l ON l.sid = r.id1_ ORDER BY 1;
+id1_|name |non|leaf
+----+-----+---+----
+   1|r1   |   |    
+   2|r2   |  2|    
+   3|n3+s2|  3|   3
+   4|r4   |  4|    
+   5|r5+s2|  5|   5
+(5 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1name s2ur s1c s2show s2c
+step s1name: UPDATE d3870root SET name = 'n3' WHERE id1_ = 3;
+step s2ur: with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), u as (update d3870root r2 set name = name || '+s2' where r2.id1_ in (select id.id from id_cte id) returning id1_, name) select * from u order by 1; <waiting ...>
+step s1c: COMMIT;
+step s2ur: <... completed>
+id1_|name 
+----+-----
+   3|n3+s2
+   5|r5+s2
+(2 rows)
+
+step s2show: SELECT r.id1_, r.name, n.sid AS non, l.sid AS leaf FROM d3870root r LEFT JOIN d3870non n ON n.sid = r.id1_ LEFT JOIN d3870leaf l ON l.sid = r.id1_ ORDER BY 1;
+id1_|name |non|leaf
+----+-----+---+----
+   1|r1   |   |    
+   2|r2   |  2|    
+   3|n3+s2|  3|   3
+   4|r4   |  4|    
+   5|r5+s2|  5|   5
+(5 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1move s2d s1c s2show s2c
+step s1move: UPDATE d3870root SET id1_ = 7 WHERE id1_ = 3;
+step s2d: with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), delete_cte_root (id) as (delete from d3870root r2 where r2.id1_ in (select id.id from id_cte id) returning id1_) select count(*) from id_cte id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+count
+-----
+    2
+(1 row)
+
+step s2show: SELECT r.id1_, r.name, n.sid AS non, l.sid AS leaf FROM d3870root r LEFT JOIN d3870non n ON n.sid = r.id1_ LEFT JOIN d3870leaf l ON l.sid = r.id1_ ORDER BY 1;
+id1_|name|non|leaf
+----+----+---+----
+   1|r1  |   |    
+   2|r2  |  2|    
+   4|r4  |  4|    
+   7|r3  |  7|   7
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1move s2ur s1c s2show s2c
+step s1move: UPDATE d3870root SET id1_ = 7 WHERE id1_ = 3;
+step s2ur: with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), u as (update d3870root r2 set name = name || '+s2' where r2.id1_ in (select id.id from id_cte id) returning id1_, name) select * from u order by 1; <waiting ...>
+step s1c: COMMIT;
+step s2ur: <... completed>
+id1_|name 
+----+-----
+   5|r5+s2
+(1 row)
+
+step s2show: SELECT r.id1_, r.name, n.sid AS non, l.sid AS leaf FROM d3870root r LEFT JOIN d3870non n ON n.sid = r.id1_ LEFT JOIN d3870leaf l ON l.sid = r.id1_ ORDER BY 1;
+id1_|name |non|leaf
+----+-----+---+----
+   1|r1   |   |    
+   2|r2   |  2|    
+   4|r4   |  4|    
+   5|r5+s2|  5|   5
+   7|r3   |  7|   7
+(5 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2dr s1c s2show s2c
+step s1del: DELETE FROM d3870root WHERE id1_ = 3;
+step s2dr: with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), d as (delete from d3870root r2 where r2.id1_ in (select id.id from id_cte id) returning id1_, name) select * from d order by 1; <waiting ...>
+step s1c: COMMIT;
+step s2dr: <... completed>
+id1_|name
+----+----
+   5|r5  
+(1 row)
+
+step s2show: SELECT r.id1_, r.name, n.sid AS non, l.sid AS leaf FROM d3870root r LEFT JOIN d3870non n ON n.sid = r.id1_ LEFT JOIN d3870leaf l ON l.sid = r.id1_ ORDER BY 1;
+id1_|name|non|leaf
+----+----+---+----
+   1|r1  |   |    
+   2|r2  |  2|    
+   4|r4  |  4|    
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2u s1c s2show s2c
+step s1del: DELETE FROM d3870root WHERE id1_ = 3;
+step s2u: with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), update_cte_root (id) as (update d3870root r2 set name = name || '+s2' where r2.id1_ in (select id.id from id_cte id) returning id1_) select count(*) from id_cte id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+count
+-----
+    2
+(1 row)
+
+step s2show: SELECT r.id1_, r.name, n.sid AS non, l.sid AS leaf FROM d3870root r LEFT JOIN d3870non n ON n.sid = r.id1_ LEFT JOIN d3870leaf l ON l.sid = r.id1_ ORDER BY 1;
+id1_|name |non|leaf
+----+-----+---+----
+   1|r1   |   |    
+   2|r2   |  2|    
+   4|r4   |  4|    
+   5|r5+s2|  5|   5
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1name s2d s1a s2show s2c
+step s1name: UPDATE d3870root SET name = 'n3' WHERE id1_ = 3;
+step s2d: with id_cte (id) as materialized (select l.sid from d3870leaf l join d3870non n on l.sid = n.sid join d3870root r on l.sid = r.id1_), delete_cte_root (id) as (delete from d3870root r2 where r2.id1_ in (select id.id from id_cte id) returning id1_) select count(*) from id_cte id; <waiting ...>
+step s1a: ROLLBACK;
+step s2d: <... completed>
+count
+-----
+    2
+(1 row)
+
+step s2show: SELECT r.id1_, r.name, n.sid AS non, l.sid AS leaf FROM d3870root r LEFT JOIN d3870non n ON n.sid = r.id1_ LEFT JOIN d3870leaf l ON l.sid = r.id1_ ORDER BY 1;
+id1_|name|non|leaf
+----+----+---+----
+   1|r1  |   |    
+   2|r2  |  2|    
+   4|r4  |  4|    
+(3 rows)
+
+step s2c: COMMIT;

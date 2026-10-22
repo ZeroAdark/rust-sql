@@ -271,3 +271,13 @@ fn synthetic_header_bounds() {
     ));
     assert!(tzload(b"synth-charcnt-49", None, &mut sp, false).is_ok());
 }
+
+#[test]
+fn gmt_state_is_shared_across_threads() {
+    install_test_open_tzfile();
+    let here = core::ptr::from_ref(crate::clock::gmt_state());
+    let there = std::thread::spawn(|| core::ptr::from_ref(crate::clock::gmt_state()) as usize)
+        .join()
+        .unwrap();
+    assert_eq!(here as usize, there);
+}

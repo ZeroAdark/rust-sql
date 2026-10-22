@@ -43,7 +43,7 @@ fn ret_null(fcinfo: &mut Fcinfo) -> Datum {
 
 fn fc_seg_in(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is cstring.
-    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes().to_vec();
+    let s = ::mcx::std_vec_from_slice("seg", &unsafe { fcinfo.arg_cstring(0) }.to_bytes())?;
     match parse::parse_seg(&s) {
         Ok(seg) => ret_seg(fcinfo, &seg),
         Err(e) => {
@@ -57,7 +57,7 @@ fn fc_seg_in(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> 
 fn fc_seg_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict fn, non-null seg arg.
     let seg = unsafe { arg_seg(fcinfo, 0) };
-    let mut bytes = out::seg_out(&seg);
+    let mut bytes = out::seg_out(&seg)?;
     bytes.push(0);
     let mcx = fcinfo.result_mcx();
     let mut buf: mcx::PgVec<'_, u8> = mcx::vec_with_capacity_in(mcx, bytes.len())?;

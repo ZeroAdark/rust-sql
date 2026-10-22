@@ -5,6 +5,10 @@
 use elog::{elog, ereport};
 use logical::{filter_by_origin_cb_wrapper, LogicalDecodingContext};
 use mcx::{Mcx, MemoryContext, PgVec};
+use pgrc_format::wal::{
+    BulkRowsRec, DirLoc, RowRec, TupleImage, BULK_ROWS_HEADER_LEN, XLOG_PGRC_BULK_ROWS, XLOG_PGRC_OPMASK,
+    XLOG_PGRC_ROW_DELETE, XLOG_PGRC_ROW_UPDATE,
+};
 use reorderbuffer::{ReorderBufferChange, ReorderBufferChangeData, ReorderBufferChangeType};
 use snapbuild::SnapBuildState;
 use types_core::{
@@ -95,6 +99,69 @@ thread_local! {
     // Truncate relid arrays outlive the decode call inside ReorderBuffer changes.
     static DECODE_CTX: &'static MemoryContext =
         ::mcx::session_root("LogicalDecode");
+    static UNDECODED_SPEC: std::cell::RefCell<std::collections::HashMap<TransactionId, SpecPos>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+// pgrust divergence (TOMB): a speculative insert logged without its tuple (no XLH_INSERT_CONTAINS_NEW_TUPLE: a
+// pgrcolumnar tombstone, inserted HEAP_INSERT_NO_LOGICAL; C never writes one) queues nothing, and neither do its
+// CONFIRM and its super-delete: DecodeInsert remembers the tuple's position under the record's xid, and the matching
+// record is dropped before a change is queued. C would queue the CONFIRM and fail at replay ("invalid ordering of
+// speculative insertion changes"); the WAL is C's, unchanged. A CONFIRM with no entry (this session did not see its
+// insert, the memo was full, or PGRUST_DECODE_SPEC_MEMO=off) still reaches replay, which skips it on a pgrc
+// companion (reorderbuffer replay.rs `change_on_pgrc_companion`).
+// The insert, its CONFIRM and its super-delete are one (sub)transaction's records, so they carry one xid: a backend has
+// one speculative insertion in flight, so an xid holds at most one entry. Every entry of a transaction (and of its
+// subtransactions) is forgotten at its commit, abort, PREPARE, COMMIT / ABORT PREPARED, and a subtransaction's at its
+// abort (xact_decode), so the memo holds only insertions whose CONFIRM is still ahead: one per backend at most.
+type SpecKey = (TransactionId, RelFileLocator, u32, u16);
+type SpecPos = (RelFileLocator, u32, u16);
+const UNDECODED_SPEC_CAP: usize = 65_536;
+
+/// `PGRUST_DECODE_SPEC_MEMO=off` (tests: every such CONFIRM takes replay's companion skip).
+fn spec_memo_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PGRUST_DECODE_SPEC_MEMO").map_or(true, |v| v != "off"))
+}
+
+fn remember_undecoded_spec((xid, loc, block, off): SpecKey) {
+    UNDECODED_SPEC.with(|s| {
+        let mut s = s.borrow_mut();
+        // Full (it never is: one entry per backend): the insertion's CONFIRM takes replay's skip.
+        if s.len() < UNDECODED_SPEC_CAP || s.contains_key(&xid) {
+            s.insert(xid, (loc, block, off));
+        }
+    })
+}
+
+/// Whether `key` is a remembered undecoded speculative insert (forgotten once matched).
+fn take_undecoded_spec((xid, loc, block, off): SpecKey) -> bool {
+    UNDECODED_SPEC.with(|s| {
+        let mut s = s.borrow_mut();
+        let hit = s.get(&xid) == Some(&(loc, block, off));
+        if hit {
+            s.remove(&xid);
+        }
+        hit
+    })
+}
+
+/// A transaction's end (or PREPARE): its entries and its subtransactions' go.
+fn forget_undecoded_spec(xids: &[TransactionId]) {
+    UNDECODED_SPEC.with(|s| {
+        let mut s = s.borrow_mut();
+        if !s.is_empty() {
+            xids.iter().for_each(|x| {
+                s.remove(x);
+            });
+        }
+    })
+}
+
+/// The record's xid and block 0's tuple `offnum`.
+fn spec_key(ctx: &LogicalDecodingContext, offnum: u16) -> Option<SpecKey> {
+    let (locator, _, block, _) = ctx.reader.XLogRecGetBlockTagExtended(0)?;
+    Some((ctx.reader.XLogRecGetXid(), locator, block, offnum))
 }
 
 fn decode_mcx() -> Mcx<'static> {
@@ -152,6 +219,7 @@ pub fn LogicalDecodingProcessRecord(ctx: &mut LogicalDecodingContext) -> PgResul
         RM_HEAP2_ID => heap2_decode(ctx, buf),
         RM_HEAP_ID => heap_decode(ctx, buf),
         RM_LOGICALMSG_ID => logicalmsg_decode(ctx, buf),
+        types_core::RM_PGRC_ID => pgrc_decode(ctx, buf),
         _ => {
             let xid = ctx.reader.XLogRecGetXid();
             ctx.reorder.process_xid(xid, buf.origptr);
@@ -245,6 +313,8 @@ fn xact_decode(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) -> PgRes
             } else {
                 parsed.twophase_xid
             };
+            forget_undecoded_spec(&[xid]);
+            forget_undecoded_spec(&parsed.subxacts);
             let two_phase = if info == XLOG_XACT_COMMIT_PREPARED {
                 !FilterPrepare(ctx, xid, &parsed.twophase_gid)?
             } else {
@@ -260,6 +330,8 @@ fn xact_decode(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) -> PgRes
             } else {
                 parsed.twophase_xid
             };
+            forget_undecoded_spec(&[xid]);
+            forget_undecoded_spec(&parsed.subxacts);
             let two_phase = if info == XLOG_XACT_ABORT_PREPARED {
                 !FilterPrepare(ctx, xid, &parsed.twophase_gid)?
             } else {
@@ -283,6 +355,8 @@ fn xact_decode(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) -> PgRes
         XLOG_XACT_PREPARE => {
             let parsed =
                 xact::parse_prepare_record(ctx.reader.XLogRecGetInfo(), ctx.reader.XLogRecGetData())?;
+            forget_undecoded_spec(&[parsed.twophase_xid]);
+            forget_undecoded_spec(&parsed.subxacts);
 
             // Process the transaction in a two-phase manner iff the output
             // plugin supports two-phase commits and doesn't filter the
@@ -457,7 +531,7 @@ fn standby_decode(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) -> Pg
             let next_xid = u32_at(data, 12);
             let oldest_running_xid = u32_at(data, 16);
             let latest_completed_xid = u32_at(data, 20);
-            let mut xids: Vec<TransactionId> = Vec::with_capacity(total);
+            let mut xids: Vec<TransactionId> = ::mcx::std_vec_with_capacity("replication", total)?;
             for i in 0..total {
                 xids.push(u32_at(data, 24 + i * 4));
             }
@@ -800,14 +874,12 @@ fn logicalmsg_decode(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) ->
     let data = ctx.reader.XLogRecGetData();
     let prefix = data
         .get(24..24 + prefix_size - 1)
-        .expect("prefix bytes validated")
-        .to_vec();
+        .expect("prefix bytes validated");
     let message = data
         .get(24 + prefix_size..24 + prefix_size + message_size)
-        .expect("message bytes validated")
-        .to_vec();
+        .expect("message bytes validated");
     ctx.reorder
-        .queue_message(xid, snapshot, buf.endptr, transactional, &prefix, &message)
+        .queue_message(xid, snapshot, buf.endptr, transactional, prefix, message)
 }
 
 fn DecodeCommit(
@@ -1142,6 +1214,9 @@ fn DecodeInsert(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) -> PgRe
     let flags = data[2];
 
     if flags & XLH_INSERT_CONTAINS_NEW_TUPLE == 0 {
+        if let Some(key) = spec_key(ctx, u16_at(data, 0)).filter(|_| flags & XLH_INSERT_IS_SPECULATIVE != 0 && spec_memo_on()) {
+            remember_undecoded_spec(key);
+        }
         return Ok(());
     }
 
@@ -1263,6 +1338,11 @@ fn DecodeDelete(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) -> PgRe
     let data = ctx.reader.XLogRecGetData();
     validate_heap_main_data_len(data.len(), SizeOfHeapDelete, "XLOG_HEAP_DELETE", "DecodeDelete")?;
     let flags = data[7];
+
+    // The super-delete of an undecoded speculative insert (see UNDECODED_SPEC).
+    if flags & XLH_DELETE_IS_SUPER != 0 && spec_key(ctx, u16_at(data, 4)).is_some_and(take_undecoded_spec) {
+        return Ok(());
+    }
 
     let target_locator = block0_locator(ctx, "DecodeDelete")?;
     if target_locator.dbOid != unsafe { ctx.slot.data.get() }.database {
@@ -1452,6 +1532,12 @@ fn DecodeMultiInsert(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) ->
 }
 
 fn DecodeSpecConfirm(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) -> PgResult<()> {
+    // The confirm of an undecoded speculative insert (see UNDECODED_SPEC); xl_heap_confirm is `offnum`.
+    let data = ctx.reader.XLogRecGetData();
+    if data.len() >= 2 && spec_key(ctx, u16_at(data, 0)).is_some_and(take_undecoded_spec) {
+        return Ok(());
+    }
+
     let target_locator = block0_locator(ctx, "DecodeSpecConfirm")?;
     if target_locator.dbOid != unsafe { ctx.slot.data.get() }.database {
         return Ok(());
@@ -1475,6 +1561,144 @@ fn DecodeSpecConfirm(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) ->
 
     let xid = ctx.reader.XLogRecGetXid();
     ctx.reorder.queue_change(xid, buf.origptr, change, false)
+}
+
+// pgrcolumnar's records (RL): the row changes a pgrc table's DML and bulk loads log on the parent, decoded as
+// heap's are. Every other pgrc record moves rows without changing them (rotation, seal, compile, reclaim) or is
+// physical, and only assigns its xid.
+fn pgrc_decode(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) -> PgResult<()> {
+    let info = ctx.reader.XLogRecGetInfo() & XLOG_PGRC_OPMASK;
+    let xid = ctx.reader.XLogRecGetXid();
+    ctx.reorder.process_xid(xid, buf.origptr);
+
+    if ctx.snapshot_builder.current_state() < SnapBuildState::FullSnapshot {
+        return Ok(());
+    }
+
+    match info {
+        XLOG_PGRC_ROW_DELETE | XLOG_PGRC_ROW_UPDATE | XLOG_PGRC_BULK_ROWS => {
+            if ctx
+                .snapshot_builder
+                .process_change(&mut ctx.reorder, xid, buf.origptr)
+                && !ctx.fast_forward
+            {
+                if info == XLOG_PGRC_BULK_ROWS {
+                    decode_pgrc_bulk_rows(ctx, buf)?;
+                } else {
+                    decode_pgrc_row(ctx, buf, info)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn pgrc_corrupted(function: &'static str, e: pgrc_format::FormatError) -> Box<PgError> {
+    heap_data_corrupted(function, format!("pgrc record is corrupt: {e}"))
+}
+
+fn parent_locator(parent: DirLoc) -> RelFileLocator {
+    RelFileLocator { spcOid: parent.spc, dbOid: parent.db, relNumber: parent.relnumber }
+}
+
+// DecodeXLogTuple over a pgrc tuple image (the same xl_heap_header rule).
+fn pgrc_tuple(
+    ctx: &LogicalDecodingContext,
+    image: TupleImage<'_>,
+) -> PgResult<heaptuple::HeapTuple<'static>> {
+    let mut tuple = ctx.reorder.alloc_tuple_buf(image.data.len())?;
+    tuple.t_self = ItemPointerData::default();
+    tuple.t_tableOid = InvalidOid;
+    tuple.image_mut()[SizeofHeapTupleHeader..].copy_from_slice(image.data);
+    let hdr = tuple.t_data_mut();
+    hdr.t_infomask = image.infomask;
+    hdr.t_infomask2 = image.infomask2;
+    hdr.t_hoff = image.hoff;
+    Ok(tuple)
+}
+
+// ROW_DELETE / ROW_UPDATE: one change on the parent, the old row when the parent's identity is FULL (DecodeDelete /
+// DecodeUpdate's shape).
+fn decode_pgrc_row(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer, info: u8) -> PgResult<()> {
+    let parent = RowRec::decode(info, ctx.reader.XLogRecGetData())
+        .map_err(|e| pgrc_corrupted("decode_pgrc_row", e))?
+        .parent;
+    let rlocator = parent_locator(parent);
+    if rlocator.dbOid != unsafe { ctx.slot.data.get() }.database {
+        return Ok(());
+    }
+    let origin = ctx.reader.XLogRecGetOrigin();
+    if FilterByOrigin(ctx, origin)? {
+        return Ok(());
+    }
+
+    let (oldtuple, newtuple) = {
+        let r = RowRec::decode(info, ctx.reader.XLogRecGetData())
+            .map_err(|e| pgrc_corrupted("decode_pgrc_row", e))?;
+        let old = r.old.map(|t| pgrc_tuple(ctx, t)).transpose()?;
+        let new = r.new.map(|t| pgrc_tuple(ctx, t)).transpose()?;
+        (old, new)
+    };
+    let action = if info == XLOG_PGRC_ROW_DELETE {
+        ReorderBufferChangeType::Delete
+    } else {
+        ReorderBufferChangeType::Update
+    };
+    let mut change = ReorderBufferChange::new(
+        action,
+        ReorderBufferChangeData::Tp {
+            rlocator,
+            clear_toast_afterwards: true,
+            oldtuple,
+            newtuple,
+        },
+    );
+    change.origin_id = origin;
+    let xid = ctx.reader.XLogRecGetXid();
+    ctx.reorder.queue_change(xid, buf.origptr, change, false)
+}
+
+// BULK_ROWS: an INSERT on the parent per row (DecodeMultiInsert's loop); the toast hash is cleared after the last.
+fn decode_pgrc_bulk_rows(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) -> PgResult<()> {
+    const F: &str = "decode_pgrc_bulk_rows";
+    let (parent, ntuples) = {
+        let r = BulkRowsRec::decode(ctx.reader.XLogRecGetData()).map_err(|e| pgrc_corrupted(F, e))?;
+        (r.parent, r.ntuples as usize)
+    };
+    let rlocator = parent_locator(parent);
+    if rlocator.dbOid != unsafe { ctx.slot.data.get() }.database {
+        return Ok(());
+    }
+    let origin = ctx.reader.XLogRecGetOrigin();
+    if FilterByOrigin(ctx, origin)? {
+        return Ok(());
+    }
+    let xid = ctx.reader.XLogRecGetXid();
+
+    // decode walked every tuple's bounds; each step re-borrows the record (queue_change takes the context).
+    let mut off = 0usize;
+    for i in 0..ntuples {
+        let (tuple, next) = {
+            let tuples = &ctx.reader.XLogRecGetData()[BULK_ROWS_HEADER_LEN..];
+            let rec = BulkRowsRec { parent, ntuples: ntuples as u32, tuples };
+            let (image, next) = rec.image_at(off).map_err(|e| pgrc_corrupted(F, e))?;
+            (pgrc_tuple(ctx, image)?, next)
+        };
+        let mut change = ReorderBufferChange::new(
+            ReorderBufferChangeType::Insert,
+            ReorderBufferChangeData::Tp {
+                rlocator,
+                clear_toast_afterwards: i + 1 == ntuples,
+                oldtuple: None,
+                newtuple: Some(tuple),
+            },
+        );
+        change.origin_id = origin;
+        ctx.reorder.queue_change(xid, buf.origptr, change, false)?;
+        off = next;
+    }
+    Ok(())
 }
 
 // `data` covers xl_heap_header followed by the tuple payload.
@@ -1533,7 +1757,16 @@ pub fn DecodingContextFindStartpointWith<R: xlogreader::XLogReaderRoutine>(
 ) -> PgResult<()> {
     let slot = ctx.slot;
 
-    ctx.reader.XLogBeginRead(unsafe { slot.data.get() }.restart_lsn);
+    let restart_lsn = unsafe { slot.data.get() }.restart_lsn;
+    ctx.reader.XLogBeginRead(restart_lsn);
+    let _ = elog(
+        types_error::DEBUG1,
+        format!(
+            "searching for logical decoding starting point, starting at {:X}/{:X}",
+            (restart_lsn >> 32) as u32,
+            restart_lsn as u32
+        ),
+    );
 
     loop {
         let record = ctx.reader.XLogReadRecord(routine)?;
@@ -1572,6 +1805,36 @@ pub fn DecodingContextFindStartpointWith<R: xlogreader::XLogReaderRoutine>(
 
 #[cfg(test)]
 mod tests {
+    // TOMB: an undecoded speculative insert's CONFIRM or super-delete is matched once, by xid and tuple position; an
+    // xid holds one entry (its newest insertion), and a transaction's end forgets its entries and its subxacts'.
+    #[test]
+    fn undecoded_speculative_inserts_match_their_confirm_once() {
+        use super::{forget_undecoded_spec as forget, remember_undecoded_spec as remember, take_undecoded_spec as take};
+        let loc = types_storage::RelFileLocator { spcOid: 1663, dbOid: 5, relNumber: 16390 };
+        let other = types_storage::RelFileLocator { relNumber: 16391, ..loc };
+        let len = || super::UNDECODED_SPEC.with(|s| s.borrow().len());
+        remember((700, loc, 3, 12));
+        assert!(!take((700, loc, 3, 13)) && !take((700, other, 3, 12)) && !take((701, loc, 3, 12)) && !take((700, loc, 4, 12)));
+        assert!(take((700, loc, 3, 12)), "the confirm of the remembered insert");
+        assert!(!take((700, loc, 3, 12)), "matched once");
+        remember((700, loc, 3, 14));
+        remember((700, loc, 5, 1));
+        assert!(!take((700, loc, 3, 14)), "an xid's newer insertion replaces an older one");
+        assert!(take((700, loc, 5, 1)));
+        // A top-level transaction 800 with subtransactions 801, 802, each with an insertion whose CONFIRM never came
+        // (an error between them); 900 is another transaction's, in flight.
+        for x in [800, 801, 802, 900] {
+            remember((x, loc, 1, x as u16));
+        }
+        forget(&[801]);
+        assert_eq!(len(), 3, "a subtransaction's abort forgets its entry");
+        forget(&[800]);
+        forget(&[802]);
+        assert_eq!(len(), 1, "the commit forgets the top xid's and its subxacts'");
+        assert!(take((900, loc, 1, 900)) && len() == 0);
+        forget(&[]);
+    }
+
     // xlog_decode's XLOG_PARAMETER_CHANGE arm (decode.c:167-177): the standby
     // guard is a catchable ERROR with SQLSTATE 55000 and C's exact message.
     #[test]

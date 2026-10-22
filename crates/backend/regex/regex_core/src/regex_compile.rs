@@ -2596,7 +2596,7 @@ pub fn nfatree(v: &mut Vars, t: NodeId) -> RegResult<i64> {
 
 
 pub fn rstacktoodeep() -> i32 {
-    0
+    ::stack_depth::stack_is_too_deep() as i32
 }
 
 const FUNCTIONS: Fns = Fns {
@@ -2633,6 +2633,7 @@ pub fn pg_regcomp<'mcx>(
     collation: Oid,
 ) -> RegResult<RegexT> {
     check_cflags(cflags)?;
+    crate::regex_foundation::reset_transient_cvec();
 
     let mut cm = empty_colormap();
     crate::regex_foundation::initcm(mcx, &mut cm)?;
@@ -2641,9 +2642,13 @@ pub fn pg_regcomp<'mcx>(
     let mut subs: Vec<Option<NodeId>> = Vec::new();
     subs.resize(10, None);
 
+    let mut pat = Vec::new();
+    pat.try_reserve_exact(pattern.len())?;
+    pat.extend_from_slice(pattern);
+
     let mut v = Vars {
         mcx,
-        pattern: pattern.to_vec(),
+        pattern: pat,
         cursor: 0,
         cflags,
         info: 0,

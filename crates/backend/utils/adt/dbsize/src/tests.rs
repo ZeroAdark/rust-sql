@@ -52,7 +52,7 @@ fn scratch_dir(tag: &str) -> std::path::PathBuf {
     d
 }
 
-// audit-18.6 regression: dbsize.c:96 stats the dirent's own name
+// audit-18.6 fp-adt-dbsize#4: dbsize.c:96 stats the dirent's own name
 // bytes; a non-UTF-8 filename (Linux) must be counted, not lossily renamed
 // into an ENOENT skip. Filesystems refusing such names skip that leg.
 #[test]
@@ -69,7 +69,7 @@ fn dir_size_keeps_filename_bytes() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
-// audit-18.6 regression: dbsize.c:264 reports a stat failure with
+// audit-18.6 fp-adt-dbsize#5: dbsize.c:264 reports a stat failure with
 // errcode_for_file_access() and strerror (%m) -- ELOOP is XX000 with libc's
 // text, never Rust's "(os error N)" suffix. db_dir_size already did this.
 #[test]
@@ -87,7 +87,7 @@ fn stat_failures_are_file_access_errors() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
-// audit-18.6 regression: dbsize.c:194/307 hand the NameData bytes to
+// audit-18.6 fp-adt-dbsize#1: dbsize.c:194/307 hand the NameData bytes to
 // get_database_oid / get_tablespace_oid; a non-UTF-8 name (SQL_ASCII
 // chr(255)::name) is C's not-found error with the bytes, never a panic.
 #[test]

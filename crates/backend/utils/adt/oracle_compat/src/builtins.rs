@@ -78,7 +78,7 @@ macro_rules! fc_byteatrim2 {
                 (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?)
             };
             if s.data().is_empty() || set.data().is_empty() {
-                return Ok(fcinfo.arg(0));
+                return Ok(Datum::from_usize(s.as_ptr() as usize));
             }
             let mcx = fcinfo.result_mcx();
             Ok(varlena_result(crate::$core(mcx, s.data(), set.data())?))
@@ -146,8 +146,21 @@ macro_rules! fc_text_n {
 }
 
 fc_text_n! {
-    fc_text_left: text_left;
     fc_text_right: text_right;
+}
+
+pub fn fc_text_left(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let n = fcinfo.arg_i32(1);
+    let mcx = fcinfo.result_mcx();
+    // SAFETY: catalog arg 0 is a non-null text varlena (strict fn).
+    if n >= 0 && unsafe { fcinfo.arg_varlena_is_extended(0) } {
+        // SAFETY: as above.
+        let raw = unsafe { fcinfo.arg_varlena_raw(0) };
+        return Ok(varlena_result(::varlena::text_substring(mcx, raw, 1, n, false)?));
+    }
+    // SAFETY: as above.
+    let s = unsafe { fcinfo.arg_varlena_packed(0)? }.data();
+    Ok(varlena_result(crate::text_left(mcx, s, n)?))
 }
 
 pub fn fc_text_reverse(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {

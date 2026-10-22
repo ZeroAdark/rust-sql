@@ -115,3 +115,50 @@ fn seat_bind_unwinds_on_panic() {
         assert_eq!(g::MyProcPid(), 303, "identity survived the panic in the seat");
     }
 }
+
+#[test]
+fn cycle_wait_events_follow_bound_proc_and_restore_on_unwind() {
+    use types_storage::storage::NUM_SPECIAL_WORKER_PROCS;
+
+    pg_sema_seams::pg_semaphore_create::set(|_| {});
+    waitevent::init_seams();
+    g::SetMaxConnections(1);
+    g::set_max_worker_processes(0);
+    g::SetMaxBackends(1 + NUM_SPECIAL_WORKER_PROCS);
+    lmgr_proc::InitProcGlobal(&lmgr_proc::ProcGlobalConfig {
+        autovacuum_worker_slots: 0,
+        max_wal_senders: 0,
+        max_prepared_xacts: 0,
+        fastpath_lock_groups_per_backend: 1,
+    });
+    WORKER_BASE_INITED.set(true);
+    let a = &lmgr_proc::GetPGProcByNumber(0).wait_event_info;
+    let b = &lmgr_proc::GetPGProcByNumber(1).wait_event_info;
+    const WAL_SYNC: u32 = waitevent::PG_WAIT_IO | 78;
+    const WAL_WRITE: u32 = waitevent::PG_WAIT_IO | 80;
+    for _ in 0..2 {
+        let outer = CycleBind::bind(101, 0, BackendType::WalWriter);
+        ensure_worker_cycle_init().unwrap();
+        waitevent::pgstat_report_wait_start(WAL_SYNC);
+        assert_eq!(a.load(Ordering::Relaxed), WAL_SYNC);
+        waitevent::pgstat_report_wait_end();
+        assert_eq!(a.load(Ordering::Relaxed), 0);
+        let result = std::panic::catch_unwind(|| {
+            let _inner = CycleBind::bind(102, 1, BackendType::BgWriter);
+            waitevent::pgstat_report_wait_start(WAL_WRITE);
+            assert_eq!(b.load(Ordering::Relaxed), WAL_WRITE);
+            assert_eq!(a.load(Ordering::Relaxed), 0);
+            waitevent::pgstat_report_wait_end();
+            panic!("cycle interrupted");
+        });
+        assert!(result.is_err());
+        waitevent::pgstat_report_wait_start(WAL_SYNC);
+        assert_eq!(a.load(Ordering::Relaxed), WAL_SYNC);
+        assert_eq!(b.load(Ordering::Relaxed), 0);
+        waitevent::pgstat_report_wait_end();
+        drop(outer);
+        waitevent::pgstat_report_wait_start(WAL_WRITE);
+        assert_eq!(a.load(Ordering::Relaxed), 0);
+        assert_eq!(b.load(Ordering::Relaxed), 0);
+    }
+}

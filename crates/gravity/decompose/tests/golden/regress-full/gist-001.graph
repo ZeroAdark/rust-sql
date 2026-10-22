@@ -1,0 +1,11 @@
+-- regress-full-gist-001
+-- insert into gist_point_tbl (id, p) select g+100000, point(g*10+1, g*10+1) from generate_series(1, 10000) g;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10000)]
+  project (1=op551(v3.1, c23:100000), 2=fn1440(fn316(op551(op514(v3.1, c23:10), c23:1)), fn316(op551(op514(v3.1, c23:10), c23:1))))
+  write INSERT rel=27083 rti=1 natts=2 indexes=(27086[2]:gist, 27087[2]:gist, 27088[2]:gist, 27089[2]:gist)
+  outs 1=w4:val 2=fx16:call1440
+mapped: ModifyTable FunctionScan

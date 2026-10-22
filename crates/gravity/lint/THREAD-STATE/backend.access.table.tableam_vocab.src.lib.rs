@@ -1,0 +1,3 @@
+backend/access/table/tableam_vocab/src/lib.rs	HEAP_HANDLER_AMS	pgport	key:the pg_am OID	cache	key: the pg_am OID; non-builtin AMs whose handler is heap_tableam_handler, registered by this thread's relcache build of a relation of that AM (relcache build.rs); amhandler never changes for an OID, so an entry never goes stale
+backend/access/table/tableam_vocab/src/lib.rs	PGRCOLUMNAR_AMS	pgport	key:the pg_am OID	cache	key: the pg_am OID; the pg_am rows named pgrcolumnar, registered by this thread's relcache build of a relation of that AM; amname never changes for an OID, so an entry never goes stale
+backend/access/table/tableam_vocab/src/lib.rs	SYNCHRONIZE_SEQSCANS_GUC	pgport	claim	claim	gucs

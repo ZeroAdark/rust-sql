@@ -1,0 +1,1 @@
+backend/storage/ipc/pmsignal/src/lib.rs	NUM_CHILD_FLAGS	pgport	at:PMSignalShmemInit	thread	the postmaster's untrusting local copy of num_child_flags (C static): written by PMSignalShmemInit on the postmaster thread at shared-memory init; no claim's path reads it

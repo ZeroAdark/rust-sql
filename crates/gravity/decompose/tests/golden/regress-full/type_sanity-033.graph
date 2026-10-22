@@ -1,0 +1,23 @@
+-- regress-full-type_sanity-033
+-- SELECT a1.attrelid, a1.attname, t1.oid, t1.typname FROM pg_attribute AS a1, pg_type AS t1 WHERE a1.atttypid = t1.oid AND (a1.attlen != t1.typlen OR a1.attalign != t1.typalign OR a1.attbyval != t1.typbyval OR (a1.attstorage != t1.typstorage AND a1.attstorage != 'p'));
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=3 eligible rows=787 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@1
+  source range rel=1247 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.5, 4=v2.23, 5=v2.6, 6=v2.24)
+  build keys=(outer.1) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w8:val 6=w8:val
+p1 node=1 eligible rows=4310 end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source range rel=1249 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24, 25=v1.25)
+  probe slot=0 inner=n2 JOIN_INNER unique keys=(outer.3) decls=26/26:I32 clauses=(op607(outer.3, inner.1)) qual=(or(op519(outer.4, inner.3), op630(outer.9, inner.4), op85(outer.8, inner.5), and(op630(outer.10, inner.6), op630(outer.10, c18:112))))
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w2:val 6=w4:val 7=w2:val 8=w8:val 9=w8:val 10=w8:val 11=w1:val 12=w1:val 13=w1:val 14=w1:val 15=w1:val 16=w1:val 17=w1:val 18=w1:val 19=w2:val 20=w4:val 21=w2:val 22=vl:row 23=vl:row 24=vl:row 25=vl:row
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=fx64:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+mapped: SeqScan HashJoin Hash

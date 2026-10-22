@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/utils/adt/jsonb_util.c: 2 stack-depth check sites
+1088	JsonbDeepContains	crates/backend/utils/adt/jsonb/src/ops.rs	deep_contains	yes	
+1605	convertJsonbValue	crates/backend/utils/adt/jsonb/src/build.rs	convert_value	yes	check_stack_depth_weighted (D3103)

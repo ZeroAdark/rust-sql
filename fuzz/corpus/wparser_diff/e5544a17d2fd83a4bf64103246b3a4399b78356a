@@ -1,5 +1,0 @@
-€);
-
--- to_tsquery
-
-SELECT to_tsquery(

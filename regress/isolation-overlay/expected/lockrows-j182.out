@@ -1,0 +1,44 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1bump s2lk s1c
+step s1b: BEGIN;
+step s1bump: UPDATE jt3 SET y = y + 100 WHERE x = 5;
+step s2lk: SELECT jt1.*, jt2.*, u.* FROM jt1 JOIN jt2 ON (jt1.a = jt2.a), jt3 AS u FOR UPDATE OF u; <waiting ...>
+step s1c: COMMIT;
+step s2lk: <... completed>
+  a|   b|  a|   b|x|  y
+---+----+---+----+-+---
+100| 100|100|2001|5|120
+100| 100|100|2001|6|  7
+200|1000|200|2000|5|120
+200|1000|200|2000|6|  7
+(4 rows)
+
+
+starting permutation: s1b s1del s2lk s1c
+step s1b: BEGIN;
+step s1del: DELETE FROM jt3 WHERE x = 6;
+step s2lk: SELECT jt1.*, jt2.*, u.* FROM jt1 JOIN jt2 ON (jt1.a = jt2.a), jt3 AS u FOR UPDATE OF u; <waiting ...>
+step s1c: COMMIT;
+step s2lk: <... completed>
+  a|   b|  a|   b|x| y
+---+----+---+----+-+--
+100| 100|100|2001|5|20
+200|1000|200|2000|5|20
+(2 rows)
+
+
+starting permutation: s1b s1refs s2lk s1c
+step s1b: BEGIN;
+step s1refs: UPDATE jt2a SET b = 9; UPDATE jt1 SET a = 7 WHERE a = 200; UPDATE jt3 SET y = y + 100 WHERE x = 5;
+step s2lk: SELECT jt1.*, jt2.*, u.* FROM jt1 JOIN jt2 ON (jt1.a = jt2.a), jt3 AS u FOR UPDATE OF u; <waiting ...>
+step s1c: COMMIT;
+step s2lk: <... completed>
+  a|   b|  a|   b|x|  y
+---+----+---+----+-+---
+100| 100|100|2001|5|120
+100| 100|100|2001|6|  7
+200|1000|200|2000|5|120
+200|1000|200|2000|6|  7
+(4 rows)
+

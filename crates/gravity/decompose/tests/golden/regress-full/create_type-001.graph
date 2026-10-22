@@ -1,0 +1,9 @@
+-- regress-full-create_type-001
+-- SELECT point '(1,2)' <% widget '(0,0,3)' AS t, point '(1,2)' <% widget '(0,0,1)' AS f;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op19295(c600:#16, c19259:#24), 2=op19295(c600:#16, c19259:#24))
+  outs 1=w1:val 2=w1:val
+mapped: Result

@@ -1,0 +1,1 @@
+backend/utils/init/miscinit/src/process.rs	LOCAL_LATCH	pgport	at:release_process_local_latch	thread	this backend thread's local latch slot (C LocalLatchData), claimed once (InitProcessLocalLatch) and reused; LocalLatchReleaseGuard's drop at the thread's top hands it back (release_process_local_latch)

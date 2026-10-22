@@ -37,6 +37,8 @@ fmgr_seams = { path = "../../fmgr/fmgr_seams" }
 types_fmgr = { path = "../../../../_support/types/fmgr" }
 inval_seams = { path = "../inval_seams" }
 l2cache = { path = "../l2cache" }
+memledger = { path = "../../../../_support/memledger" }
+gravity_deps = { path = "../../../../gravity/deps" }
 relcache_build_seams = { path = "../relcache_build_seams" }
 relmapper_seams = { path = "../relmapper_seams" }
 syscache_seams = { path = "../syscache_seams" }
@@ -48,4 +50,5 @@ transam_xlog_seams = { path = "../../../access/transam/transam_xlog_seams" }
 
 [dev-dependencies]
 outfuncs = { path = "../../../nodes/outfuncs" }
+shmem_seams = { path = "../../../storage/ipc/shmem_seams" }
 types_spgist = { path = "../../../../_support/types/types_spgist" }

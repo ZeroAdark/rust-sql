@@ -1,0 +1,26 @@
+-- name: regress-full-window-006
+-- sql: SELECT COUNT(*) OVER w FROM tenk1 WHERE unique2 < 10 WINDOW w AS ();
+-- test: window
+-- shape: 449997083e60cb96 seen=2
+-- rel 16423 tenk1 am=heap kind=r natts=16
+-- att 16423 1 unique1 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 2 unique2 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 3 two typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 4 four typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 5 ten typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 6 twenty typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 7 hundred typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 8 thousand typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 9 twothousand typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 10 fivethous typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 11 tenthous typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 12 odd typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 13 even typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 14 stringu1 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 16423 15 stringu2 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 16423 16 string4 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- idx 19339 rel=16423 keys=1 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19340 rel=16423 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19341 rel=16423 keys=7 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19342 rel=16423 keys=8,11 opts=0,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {WINDOWAGG :plan.disabled_nodes 0 :plan.startup_cost 4.155 :plan.total_cost 4.585 :plan.plan_rows 10 :plan.plan_width 8 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {WINDOWFUNC :winfnoid 2803 :wintype 20 :wincollid 0 :inputcollid 0 :args <> :aggfilter <> :runCondition <> :winref 1 :winstar true :winagg true :location 7} :resno 1 :resname count :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :plan.qual <> :plan.lefttree {INDEXONLYSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0.28500000000000003 :scan.plan.total_cost 4.46 :scan.plan.plan_rows 10 :scan.plan.plan_width 0 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 1 :scan.plan.targetlist <> :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :indexid 19340 :indexqual ({OPEXPR :opno 97 :opfuncid 66 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno -3 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 4294967293 :varattnosyn 1 :location -1} {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 50 :constvalue 4 [ 10 0 0 0 0 0 0 0 ]}) :location 48}) :recheckqual ({OPEXPR :opno 97 :opfuncid 66 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno -3 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location 40} {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 50 :constvalue 4 [ 10 0 0 0 0 0 0 0 ]}) :location 48}) :indexorderby <> :indextlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 2 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location -1} :resno 1 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :indexorderdir 1} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :winname w :winref 1 :partNumCols 0 :partColIdx <> :partOperators <> :partCollations <> :ordNumCols 0 :ordColIdx <> :ordOperators <> :ordCollations <> :frameOptions 1058 :startOffset <> :endOffset <> :runCondition <> :runConditionOrig <> :startInRangeFunc 0 :endInRangeFunc 0 :inRangeColl 0 :inRangeAsc true :inRangeNullsFirst false :topWindow true} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname tenk1 :colnames ("unique1" "unique2" "two" "four" "ten" "twenty" "hundred" "thousand" "twothousand" "fivethous" "tenthous" "odd" "even" "stringu1" "stringu2" "string4")} :rtekind 0 :relid 16423 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 16423 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 9) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16423) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 67}

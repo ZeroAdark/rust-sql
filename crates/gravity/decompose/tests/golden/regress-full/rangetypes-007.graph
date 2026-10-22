@@ -1,0 +1,11 @@
+-- regress-full-rangetypes-007
+-- insert into test_range_gist select int4range(NULL,g*10,'(]') from generate_series(1,100) g;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:100)]
+  project (1=fn3841(c23:null, op514(v3.1, c23:10), c25:'(]'))
+  write INSERT rel=16870 rti=1 natts=1 indexes=(16875[1]:gist)
+  outs 1=vl:call3841
+mapped: ModifyTable FunctionScan

@@ -71,3 +71,12 @@ pub fn be_tls_get_cipher() -> Option<String> {
 pub fn be_tls_get_certificate_hash() -> PgResult<Option<Vec<u8>>> {
     Ok(None)
 }
+
+#[derive(Clone, Default)]
+pub struct TlsConfig;
+
+pub fn tls_config_snapshot() -> TlsConfig {
+    TlsConfig
+}
+
+pub fn inherit_tls_config(_: &TlsConfig) {}

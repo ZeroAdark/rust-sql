@@ -1,0 +1,9 @@
+# D432: an error against a value is a mismatch, whatever the tolerance (e2e-av2-v2agg-049 before its fix)
+sql: SELECT sum(f), avg(f) FROM v2af;
+schema: CREATE TABLE v2af (a int4, r float4, f float8);
+class: unordered
+verdict: mismatch
+[pg]
+NaN	NaN
+[got_error]
+22003	value out of range: overflow

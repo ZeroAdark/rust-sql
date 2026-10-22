@@ -7,7 +7,7 @@ use mcx::{Mcx, MemoryContext};
 use syscache_seams::PgProcShape;
 use types_error::PgResult;
 use types_nodes::parsenodes::Query;
-use types_nodes::primnodes::{FromExpr, FuncExpr, NullIfExpr, OpExpr, ParamKind};
+use types_nodes::primnodes::{FromExpr, FuncExpr, NullIfExpr, OpExpr, ParamKind, SubscriptingRef};
 use types_nodes::{Node, NodeList, NodeTag};
 use types_tuple::PgTypeShape;
 
@@ -215,7 +215,7 @@ fn install_fixtures() {
     });
 }
 
-fn fixture_contain_var_clause(node: Node<'_>) -> bool {
+fn fixture_contain_var_clause(node: Node<'_>) -> PgResult<bool> {
     struct V;
     impl<'mcx> NodeWalker<'mcx> for V {
         fn visit(&mut self, node: Node<'mcx>) -> PgResult<bool> {
@@ -225,7 +225,7 @@ fn fixture_contain_var_clause(node: Node<'_>) -> bool {
             expression_tree_walker(node, self)
         }
     }
-    V.visit(node).unwrap()
+    V.visit(node)
 }
 
 fn cx() -> MemoryContext {
@@ -471,6 +471,28 @@ fn pseudo_constant_and_leaked_vars() {
     assert!(!contain_leaked_vars(greatest).unwrap());
     let consts_only = minmax(mcx, true, &[int4_const(mcx, Some(1)), int4_const(mcx, Some(2))]);
     assert!(!contain_leaked_vars(consts_only).unwrap());
+
+    // SubscriptingRef: a fetch is leakproof, a store (a rule-rewritten
+    // assignment landing in a qual) is not (clauses.c:1355-1365).
+    let arr = Node::mk_var(mcx, 1, 2, 1007, -1, 0, 0).unwrap();
+    assert!(!contain_leaked_vars(sbsref(mcx, arr, None)).unwrap());
+    assert!(contain_leaked_vars(sbsref(mcx, arr, Some(int4_const(mcx, Some(7))))).unwrap());
+}
+
+fn sbsref<'mcx>(mcx: Mcx<'mcx>, refexpr: Node<'mcx>, assign: Option<Node<'mcx>>) -> Node<'mcx> {
+    Node::mk(
+        mcx,
+        SubscriptingRef {
+            refcontainertype: 1007,
+            refelemtype: 23,
+            refrestype: 23,
+            reftypmod: -1,
+            refexpr: Some(refexpr),
+            refassgnexpr: assign,
+            ..Default::default()
+        },
+    )
+    .unwrap()
 }
 
 #[test]
@@ -995,7 +1017,7 @@ fn text_const(mcx: Mcx<'_>) -> Node<'_> {
 // (stable, e.g. timetz_in/interval_in/time_in), the rebuilt CoerceViaIO's arg
 // is linitial(args) — the folded cstring Const. Deparse then prints
 // ('...'::cstring)::<type>, which is what real PG shows in EXPLAIN
-// (regression test).
+// (antithesis RB-4).
 #[test]
 fn eval_const_coerce_via_io_stable_input_fn_keeps_cast_over_cstring_const() {
     let ctx = cx();

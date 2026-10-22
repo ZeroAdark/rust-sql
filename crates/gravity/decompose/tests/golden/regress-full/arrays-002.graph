@@ -1,0 +1,9 @@
+-- regress-full-arrays-002
+-- SELECT array_sort(a) FROM (VALUES ('[-1:0]={7,1}'::int[])) v(a);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\xff\xff\xff\xff\x01\x00\x00\x00\x07\x00\x00\x00')
+  outs 1=vl:stmt/imm
+mapped: Result

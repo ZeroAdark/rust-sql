@@ -236,7 +236,8 @@ impl<'a> Parser<'a> {
 
 pub fn b64url_decode(s: &str) -> Result<Vec<u8>, String> {
     let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4 + 3);
+    let mut out = Vec::new();
+    out.try_reserve(bytes.len() * 3 / 4 + 3).map_err(|_| "out of memory")?;
     let mut acc: u32 = 0;
     let mut nbits = 0;
     let mut n = 0;
@@ -267,7 +268,8 @@ pub fn b64url_decode(s: &str) -> Result<Vec<u8>, String> {
 
 pub fn b64url_encode(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    let mut out = String::new();
+    let _ = out.try_reserve(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
         let v = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);

@@ -1,0 +1,11 @@
+-- regress-full-indexing-015
+-- insert into idxpart select 2^g, format('two to power of %s', g) from generate_series(15, 17) g;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:15, c23:17)]
+  project (1=fn317(op965(c701:4611686018427387904, fn316(v3.1))), 2=fn3539(c25:'two to power of %s', v3.1))
+  write INSERT rel=46462 rti=1 natts=2 indexes=() route=rti1:46462 natts=2
+  outs 1=w4:val 2=vl:call3539
+mapped: ModifyTable FunctionScan

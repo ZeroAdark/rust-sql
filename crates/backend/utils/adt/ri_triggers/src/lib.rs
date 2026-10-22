@@ -97,8 +97,13 @@ struct RiConstraintInfo {
 
 fn cache_mcx() -> &'static MemoryContext {
     thread_local! {
-        static CTX: &'static MemoryContext = {
+        static CTX: core::cell::Cell<Option<&'static MemoryContext>> = const { core::cell::Cell::new(None) };
+    }
+    CTX.with(|c| match c.get() {
+        Some(cx) => cx,
+        None => {
             let cx = ::mcx::session_root("RI cache context");
+            c.set(Some(cx));
             // LIFO: empty the droppy TLS caches before the context is freed.
             ::mcx::register_session_cleanup(Box::new(|| {
                 RI_CONSTRAINT_CACHE.with(|c| drop(c.borrow_mut().take()));
@@ -106,11 +111,12 @@ fn cache_mcx() -> &'static MemoryContext {
                 // The syscache callback list is session-scoped too, so the
                 // next session on this thread must re-register.
                 RI_HASHTABLES_BUILT.with(|f| f.set(false));
+                // D4682: and the root's slot: a reused thread's next session makes a new one.
+                let _ = CTX.try_with(|c| c.set(None));
             }));
             cx
-        };
-    }
-    CTX.with(|c| *c)
+        }
+    })
 }
 
 thread_local! {
@@ -1362,7 +1368,7 @@ fn RI_FKey_fk_upd_check_required<'mcx>(
     }
     // C: if the old row was inserted by our own transaction, fire anyway
     // (the UPDATE invalidates the INSERT's pending check).
-    if xact_seams::transaction_id_is_current_transaction_id::call(old_tup.t_data().xmin()) {
+    if xact_seams::transaction_id_is_current_transaction_id::call(old_tup.t_data().xmin_raw()) {
         return Ok(true);
     }
     if ri_KeysEqual(fk_rel, old_tup, new_tup, &riinfo, false)? {
@@ -1851,7 +1857,7 @@ fn ri_ReportViolation<'mcx>(
     let has_perm = if partgone {
         true
     } else {
-        (|| -> PgResult<bool> {
+        let probe = (|| -> PgResult<bool> {
             if rls_seams::check_enable_rls::call(rel.rd_id, types_core::InvalidOid, true)?
                 == rls_seams::CheckEnableRls::RlsEnabled
             {
@@ -1877,8 +1883,11 @@ fn ri_ReportViolation<'mcx>(
                 }
             }
             Ok(true)
-        })()
-        .unwrap_or(false)
+        })();
+        match probe {
+            Ok(b) => b,
+            Err(e) => return e,
+        }
     };
     let mut key_names = String::new();
     let mut key_values = String::new();
@@ -1897,7 +1906,10 @@ fn ri_ReportViolation<'mcx>(
             let val = if isnull {
                 "null".to_string()
             } else {
-                datum_output_text(mcx, att.atttypid, d).unwrap_or_else(|_| "???".to_string())
+                match datum_output_text(mcx, att.atttypid, d) {
+                    Ok(v) => v,
+                    Err(e) => return e,
+                }
             };
             if idx > 0 {
                 key_names.push_str(", ");
@@ -2275,7 +2287,8 @@ fn ri_GenerateQualCollation(
 }
 
 fn quote_one_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len() + 2);
+    let mut out = String::new();
+    let _ = out.try_reserve(name.len() + 2);
     out.push('"');
     for c in name.chars() {
         if c == '"' {
@@ -2320,7 +2333,7 @@ fn datum_image_eq(
     if typbyval {
         // Compare at typlen width: a formed-then-deformed datum may differ
         // from the original in the upper bits (C 49315de).
-        let (x, y) = (a.as_usize(), b.as_usize());
+        let (x, y) = (a.as_u64(), b.as_u64());
         return Ok(match typlen {
             1 => x as u8 == y as u8,
             2 => x as u16 == y as u16,
@@ -2438,6 +2451,14 @@ fn conname_str(riinfo: &RiConstraintInfo) -> &str {
 // table_tuple_satisfies_snapshot(SnapshotSelf) over a fresh TID fetch.
 fn tuple_satisfies_self(rel: &Relation<'_>, tup: &HeapTupleData<'_>) -> PgResult<bool> {
     let scratch = MemoryContext::new("ri-snapshot-self");
+    // TRIGGERS: a pgrcolumnar row (a foreign key from a pgrc table) is fetched by its position through the table
+    // AM: live under SnapshotSelf unless a tombstone SnapshotSelf sees (a later command's delete or update) hides it.
+    if tableam_vocab::is_pgrcolumnar_am_oid(rel.rd_rel.relam) {
+        let mcx = scratch.mcx();
+        let snap = Some(std::rc::Rc::new(types_snapshot::SnapshotData::sentinel(mcx, types_snapshot::SNAPSHOT_SELF)));
+        let mut slot = tableam::table_slot_create(mcx, rel)?;
+        return tableam::table_tuple_fetch_row_version(mcx, rel, &tup.t_self, &snap, &mut slot);
+    }
     let snap = types_snapshot::SnapshotData::sentinel(scratch.mcx(), types_snapshot::SNAPSHOT_SELF);
     let mut res = heapam::heap_fetch(rel, &snap, tup.t_self, false)?;
     let found = res.found;

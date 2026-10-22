@@ -1,0 +1,82 @@
+-- regress-full-domain-057
+-- SELECT * FROM information_schema.domains WHERE domain_name IN ('con', 'dom', 'pos_int', 'things') ORDER BY domain_name;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=11 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n12@0 n11@0 n10@3
+  source bitmap rel=1247 rti=2 am=heap
+    bitmap index node=12 index=2704 rows=4
+      key att=2 op=93 form=any value=c1003:'\x01\x00\x00\x00\x00\x00\x00\x00\x13\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00con\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00dom\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00pos_int\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00things\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+    recheck (any93(v2.2, c1003:'\x01\x00\x00\x00\x00\x00\x00\x00\x13\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00con\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00dom\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00pos_int\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00things\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(7):byval8:w8:val Attr(14):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(29):byval8:w8:val Attr(31):byref8:vl:win/page Offset:byval2:w2:val
+  filter op92(v2.7, c18:100)
+  filter or(fn2710(v2.4, c25:'USAGE'), fn3143(v2.1, c25:'USAGE'))
+  project (1=v2.2, 2=v2.14, 3=v2.5, 4=v2.26, 5=v2.27, 6=v2.31, 7=v2.3, 8=v2.29)
+  sort keys=8+:I32 form=runs
+  outs 1=fx64:win/page 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=vl:win/page 7=w8:val 8=w8:val
+p1 node=8 serial site=0 reason=IndexSource end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p0 words=bits@5/6
+  nodes n8@0 n7@1 n6@3 n5@5
+  source index rel=3456 rti=9 am=heap index=3085
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val
+  project (1=v9.1, 2=v9.2, 3=v9.3, 4=v9.4, 5=v9.5, 6=v9.6, 7=v9.7, 8=v9.8, 9=v9.9, 10=v9.10, 11=v9.11, 12=v9.12)
+  nest inner=n9 JOIN_INNER unique raise-free params=($exec0=outer.3, $exec1=outer.2)
+  inner node=9 serial site=0 reason=IndexSource end=sink
+  nodes n9@0
+  source index rel=2615 rti=10 am=heap index=2685
+    key att=1 op=607 value=$exec0
+    recheck (op607(v10.1, $exec0))
+    lanes Attr(2):byref8:fx64:win/page
+  filter or(op643(v10.2, c19:#64), op643($exec1, c19:#64))
+  project (1=v10.1, 2=v10.2, 3=v10.3, 4=v10.4)
+  project (1=outer.2, 2=outer.1, 3=inner.2)
+  merge slot=0 inner=n10 JOIN_RIGHT clauses=(op607(outer.2, inner.8)) reversals=[false] nulls_first=[false]
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=inner.5, 6=inner.6, 7=inner.7, 8=outer.1, 9=outer.3)
+  build keys=(outer.7) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w4:val 5=w1:val 6=w1:val 7=w4:val 8=vl:row 9=vl:row 10=vl:row 11=vl:row 12=vl:row
+  outs 1=fx64:win/page 2=w8:val 3=fx64:life/breaker
+  outs 1=fx64:life/breaker 2=w4:val 3=w2:val 4=w4:val 5=w4:val 6=vl:life/breaker 7=w4:val 8=fx64:win/page 9=fx64:life/breaker
+p2 node=4 eligible rows=98 end=breaker(slot=0 Sort)
+  desc consumes=slot1@p1 finishing
+  nodes n4@0 n3@1 n2@3 n1@5 n0@7^
+  source range rel=2615 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4)
+  probe slot=1 inner=n5 JOIN_INNER keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.7))
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=inner.5, 6=inner.6, 7=inner.8, 8=inner.9, 9=outer.2)
+  nest inner=n13 JOIN_INNER unique raise-free params=($exec2=outer.4)
+  inner node=13 serial site=0 reason=IndexSource end=sink
+  nodes n13@0
+  source index rel=1247 rti=5 am=heap index=2703
+    key att=1 op=607 value=$exec2
+    recheck (op607(v5.1, $exec2))
+    lanes Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7, 8=v5.8, 9=v5.9, 10=v5.10, 11=v5.11, 12=v5.12, 13=v5.13, 14=v5.14, 15=v5.15, 16=v5.16, 17=v5.17, 18=v5.18, 19=v5.19, 20=v5.20, 21=v5.21, 22=v5.22, 23=v5.23, 24=v5.24, 25=v5.25, 26=v5.26, 27=v5.27, 28=v5.28, 29=v5.29, 30=v5.30, 31=v5.31, 32=v5.32)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=inner.2, 11=inner.3)
+  nest inner=n14 JOIN_INNER unique raise-free params=($exec3=outer.11)
+  inner node=14 serial site=0 reason=IndexSource end=sink
+  nodes n14@0
+  source index rel=2615 rti=6 am=heap index=2685
+    key att=1 op=607 value=$exec3
+    recheck (op607(v6.1, $exec3))
+    lanes Attr(2):byref8:fx64:win/page
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=v6.4)
+  project (1=relabel13718(fn861()), 2=relabel13718(outer.9), 3=relabel13718(outer.1), 4=relabel13716(case(when and(op608(outer.2, c26:0), op532(outer.3, c23:-1)) then c25:'ARRAY', when op93(inner.2, c19:#64) then fn1081(outer.4, c23:null)) else c25:'USER-DEFINED'), 5=T_CoerceToDomain, 6=T_CoerceToDomain, 7=c13718:null, 8=c13718:null, 9=c13718:null, 10=relabel13718(case(when notnull(outer.8) then fn861()) else c19:null), 11=relabel13718(outer.8), 12=relabel13718(outer.7), 13=T_CoerceToDomain, 14=T_CoerceToDomain, 15=T_CoerceToDomain, 16=T_CoerceToDomain, 17=relabel13716(fn13711(outer.4, outer.5)), 18=T_CoerceToDomain, 19=relabel13716(outer.6), 20=relabel13718(fn861()), 21=relabel13718(inner.2), 22=relabel13718(outer.10), 23=c13718:null, 24=c13718:null, 25=c13718:null, 26=T_CoerceToDomain, 27=c13718:#64)
+  sort keys=3+:Fp128@950#19 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+  outs 1=fx64:life/breaker 2=w4:val 3=w2:val 4=w4:val 5=w4:val 6=vl:life/breaker 7=fx64:life/breaker 8=fx64:life/breaker 9=fx64:win/page
+  outs 1=fx64:life/breaker 2=w4:val 3=w2:val 4=w4:val 5=w4:val 6=vl:life/breaker 7=fx64:life/breaker 8=fx64:life/breaker 9=fx64:win/page 10=fx64:life/breaker 11=w4:val
+  outs 1=fx64:call861 2=fx64:win/page 3=fx64:life/breaker 4=vl:call1081 5=? 6=? 7=? 8=? 9=? 10=fx64:call861 11=fx64:life/breaker 12=fx64:life/breaker 13=? 14=? 15=? 16=? 17=vl:call13711 18=? 19=vl:life/breaker 20=fx64:call861 21=fx64:life/breaker 22=fx64:life/breaker 23=? 24=? 25=? 26=? 27=?
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=c13718:null, 8=c13718:null, 9=c13718:null, 10=outer.10, 11=outer.11, 12=outer.12, 13=outer.13, 14=outer.14, 15=outer.15, 16=outer.16, 17=outer.17, 18=outer.18, 19=outer.19, 20=outer.20, 21=outer.21, 22=outer.22, 23=c13718:null, 24=c13718:null, 25=c13718:null, 26=outer.26, 27=c13718:#64)
+  outs 1=? 2=? 3=? 4=? 5=? 6=? 7=? 8=? 9=? 10=? 11=? 12=? 13=? 14=? 15=? 16=? 17=? 18=? 19=? 20=? 21=? 22=? 23=? 24=? 25=? 26=? 27=?
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=8+
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128]->[Count@16] 24B order=3+
+param $exec0 owner=n7 type=26 rep=w8:val
+param $exec1 owner=n7 type=19@950 rep=fx64:win/page
+param $exec2 owner=n2 type=26 rep=w4:val
+param $exec3 owner=n1 type=26 rep=w4:val
+mapped: SeqScan IndexScan BitmapIndexScan BitmapHeapScan NestLoop NestLoopParam MergeJoin HashJoin Sort Hash

@@ -1,0 +1,39 @@
+[package]
+name = "gravity_prewarm"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "gravity_prewarm"
+path = "src/lib.rs"
+
+[dependencies]
+pgrc_am = { path = "../../backend/access/pgrcolumnar/pgrc_am" }
+gravity_hosts = { path = "../hosts" }
+gravity_backend = { path = "../backend" }
+gravity_exec = { path = "../exec" }
+bgworker = { path = "../../backend/postmaster/bgworker" }
+datum = { path = "../../_support/types/datum" }
+ipc = { path = "../../backend/storage/ipc/ipc" }
+pmsignal = { path = "../../backend/storage/ipc/pmsignal" }
+xact = { path = "../../backend/access/transam/xact" }
+relation = { path = "../../backend/access/common/relation" }
+table = { path = "../../backend/access/table/table" }
+relcache = { path = "../../backend/utils/cache/relcache" }
+lsyscache = { path = "../../backend/utils/cache/lsyscache" }
+relfilenumbermap = { path = "../../backend/utils/cache/relfilenumbermap" }
+bufmgr = { path = "../../backend/storage/buffer/bufmgr" }
+genam = { path = "../../backend/access/index/genam" }
+pg_database = { path = "../../backend/catalog/pg_database" }
+types_tuple = { path = "../../_support/types/types_tuple" }
+types_rel = { path = "../../_support/types/rel" }
+init_small = { path = "../../backend/utils/init/init_small" }
+mcx = { path = "../../_support/mcx" }
+elog = { path = "../../backend/utils/error/elog" }
+pgsync = { path = "../../_support/pgsync" }
+pg_clock = { path = "../../port/pg_clock" }
+waiter = { path = "../../backend/storage/ipc/waiter" }
+types_core = { path = "../../_support/types/types_core" }
+types_error = { path = "../../_support/types/types_error" }
+types_storage = { path = "../../_support/types/types_storage" }

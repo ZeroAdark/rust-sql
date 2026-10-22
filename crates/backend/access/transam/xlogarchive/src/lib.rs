@@ -9,7 +9,7 @@
 #![allow(non_snake_case)]
 #![allow(clippy::result_large_err)]
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use init_small::globals as g;
 use types_storage::waiteventset::{WL_EXIT_ON_PM_DEATH, WL_LATCH_SET, WL_TIMEOUT};
 use transam_xlog::{
@@ -73,14 +73,14 @@ pub fn RestoreArchivedFile(
             ereport(FATAL)
                 .with_saved_errno(fd::get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove file \"{xlogpath}\": %m"))
+                .errmsg(format!("could not remove file \"{xlogpath}\": {PCT_M}"))
                 .finish(loc("RestoreArchivedFile"))?;
         }
     } else if fd::get_errno() != libc::ENOENT {
         ereport(FATAL)
             .with_saved_errno(fd::get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not stat file \"{xlogpath}\": %m"))
+            .errmsg(format!("could not stat file \"{xlogpath}\": {PCT_M}"))
             .finish(loc("RestoreArchivedFile"))?;
     }
 
@@ -156,7 +156,7 @@ pub fn RestoreArchivedFile(
             ereport(elevel)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not stat file \"{xlogpath}\": %m"))
+                .errmsg(format!("could not stat file \"{xlogpath}\": {PCT_M}"))
                 .errdetail(
                     "\"restore_command\" returned a zero exit status, but stat() failed.",
                 )
@@ -237,7 +237,7 @@ pub fn KeepFileRestoredFromArchive(path: &str, xlogfname: &str) -> PgResult<()> 
             ereport(FATAL)
                 .with_saved_errno(fd::get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove file \"{xlogfpath}\": %m"))
+                .errmsg(format!("could not remove file \"{xlogfpath}\": {PCT_M}"))
                 .finish(loc("KeepFileRestoredFromArchive"))?;
         }
         reload = true;
@@ -279,7 +279,7 @@ pub fn XLogArchiveNotify(xlog: &str) -> PgResult<()> {
         ereport(LOG)
             .with_saved_errno(saved_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create archive status file \"{archive_status_path}\": %m"))
+            .errmsg(format!("could not create archive status file \"{archive_status_path}\": {PCT_M}"))
             .finish(loc("XLogArchiveNotify"))?;
         return Ok(());
     }
@@ -287,7 +287,7 @@ pub fn XLogArchiveNotify(xlog: &str) -> PgResult<()> {
         ereport(LOG)
             .with_saved_errno(saved_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not write archive status file \"{archive_status_path}\": %m"))
+            .errmsg(format!("could not write archive status file \"{archive_status_path}\": {PCT_M}"))
             .finish(loc("XLogArchiveNotify"))?;
         return Ok(());
     }
@@ -324,7 +324,7 @@ pub fn XLogArchiveForceDone(xlog: &str) -> PgResult<()> {
         ereport(LOG)
             .with_saved_errno(saved_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create archive status file \"{archive_done}\": %m"))
+            .errmsg(format!("could not create archive status file \"{archive_done}\": {PCT_M}"))
             .finish(loc("XLogArchiveForceDone"))?;
         return Ok(());
     }
@@ -332,7 +332,7 @@ pub fn XLogArchiveForceDone(xlog: &str) -> PgResult<()> {
         ereport(LOG)
             .with_saved_errno(saved_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not write archive status file \"{archive_done}\": %m"))
+            .errmsg(format!("could not write archive status file \"{archive_done}\": {PCT_M}"))
             .finish(loc("XLogArchiveForceDone"))?;
         return Ok(());
     }

@@ -1,0 +1,162 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1sal s2ua s1c s2dshow
+step s2x: EXPLAIN (COSTS OFF) UPDATE developers __active_record_update_alias SET salary = 1 FROM developers INNER JOIN developers_projects ON developers_projects.developer_id = developers.id INNER JOIN projects ON projects.id = developers_projects.project_id WHERE projects.name = 'Active Controller' AND developers.id = __active_record_update_alias.id;
+QUERY PLAN                                                                                   
+---------------------------------------------------------------------------------------------
+Update on developers __active_record_update_alias                                            
+  ->  Nested Loop                                                                            
+        ->  Nested Loop                                                                      
+              ->  Hash Join                                                                  
+                    Hash Cond: (developers_projects.project_id = projects.id)                
+                    ->  Seq Scan on developers_projects                                      
+                    ->  Hash                                                                 
+                          ->  Seq Scan on projects                                           
+                                Filter: (name = 'Active Controller'::text)                   
+              ->  Index Scan using developers_pkey on developers __active_record_update_alias
+                    Index Cond: (id = developers_projects.developer_id)                      
+        ->  Index Scan using developers_pkey on developers                                   
+              Index Cond: (id = developers_projects.developer_id)                            
+(13 rows)
+
+step s1sal: UPDATE developers SET salary = salary + 5 WHERE id = 1;
+step s2ua: UPDATE developers __active_record_update_alias SET salary = 1 FROM developers INNER JOIN developers_projects ON developers_projects.developer_id = developers.id INNER JOIN projects ON projects.id = developers_projects.project_id WHERE projects.name = 'Active Controller' AND developers.id = __active_record_update_alias.id RETURNING __active_record_update_alias.id, __active_record_update_alias.salary; <waiting ...>
+step s1c: COMMIT;
+step s2ua: <... completed>
+id|salary
+--+------
+ 1|     1
+(1 row)
+
+step s2dshow: SELECT id, salary FROM developers ORDER BY id;
+id|salary
+--+------
+ 1|     1
+ 2|150000
+ 3|  9000
+(3 rows)
+
+
+starting permutation: s1did s2ua s1c s2dshow
+step s1did: UPDATE developers SET id = 99 WHERE id = 1;
+step s2ua: UPDATE developers __active_record_update_alias SET salary = 1 FROM developers INNER JOIN developers_projects ON developers_projects.developer_id = developers.id INNER JOIN projects ON projects.id = developers_projects.project_id WHERE projects.name = 'Active Controller' AND developers.id = __active_record_update_alias.id RETURNING __active_record_update_alias.id, __active_record_update_alias.salary; <waiting ...>
+step s1c: COMMIT;
+step s2ua: <... completed>
+id|salary
+--+------
+(0 rows)
+
+step s2dshow: SELECT id, salary FROM developers ORDER BY id;
+id|salary
+--+------
+ 2|150000
+ 3|  9000
+99| 80000
+(3 rows)
+
+
+starting permutation: s2xa s1em s2addr s1c s2ashow
+step s2xa: EXPLAIN (COSTS OFF) UPDATE addresses SET email_address = users.name FROM users, dingalings WHERE users.id = addresses.user_id AND users.name = 'ed' AND addresses.id = dingalings.address_id AND dingalings.id = 1;
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Update on addresses                                             
+  ->  Nested Loop                                               
+        ->  Nested Loop                                         
+              ->  Index Scan using dingalings_pkey on dingalings
+                    Index Cond: (id = 1)                        
+              ->  Index Scan using addresses_pkey on addresses  
+                    Index Cond: (id = dingalings.address_id)    
+        ->  Index Scan using users_pkey on users                
+              Index Cond: (id = addresses.user_id)              
+              Filter: (name = 'ed'::text)                       
+(10 rows)
+
+step s1em: UPDATE addresses SET email_address = 'moved@x.com' WHERE id = 2;
+step s2addr: UPDATE addresses SET email_address = users.name FROM users, dingalings WHERE users.id = addresses.user_id AND users.name = 'ed' AND addresses.id = dingalings.address_id AND dingalings.id = 1 RETURNING addresses.id, addresses.email_address; <waiting ...>
+step s1c: COMMIT;
+step s2addr: <... completed>
+id|email_address
+--+-------------
+ 2|ed           
+(1 row)
+
+step s2ashow: SELECT id, user_id, email_address FROM addresses ORDER BY id;
+id|user_id|email_address   
+--+-------+----------------
+ 1|      1|jack@bean.com   
+ 2|      2|ed              
+ 3|      2|ed@bettyboop.com
+ 4|      2|ed@lala.com     
+ 5|      3|fred@fred.com   
+(5 rows)
+
+
+starting permutation: s1uid s2addr s1c s2ashow
+step s1uid: UPDATE addresses SET user_id = 1 WHERE id = 2;
+step s2addr: UPDATE addresses SET email_address = users.name FROM users, dingalings WHERE users.id = addresses.user_id AND users.name = 'ed' AND addresses.id = dingalings.address_id AND dingalings.id = 1 RETURNING addresses.id, addresses.email_address; <waiting ...>
+step s1c: COMMIT;
+step s2addr: <... completed>
+id|email_address
+--+-------------
+(0 rows)
+
+step s2ashow: SELECT id, user_id, email_address FROM addresses ORDER BY id;
+id|user_id|email_address   
+--+-------+----------------
+ 1|      1|jack@bean.com   
+ 2|      1|ed@wood.com     
+ 3|      2|ed@bettyboop.com
+ 4|      2|ed@lala.com     
+ 5|      3|fred@fred.com   
+(5 rows)
+
+
+starting permutation: s2xl s1ld s2ldel s1c s2lshow
+step s2xl: EXPLAIN (COSTS OFF) DELETE FROM login WHERE login.id IN (SELECT U0.id FROM login U0 INNER JOIN orgunit U1 ON (U0.orgunit_id = U1.id) WHERE (U0.id = 1 AND U1.name IS NOT NULL));
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Delete on login                                              
+  ->  Nested Loop Semi Join                                  
+        ->  Index Scan using login_pkey on login             
+              Index Cond: (id = 1)                           
+        ->  Nested Loop                                      
+              ->  Index Scan using login_pkey on login u0    
+                    Index Cond: (id = 1)                     
+              ->  Index Scan using orgunit_pkey on orgunit u1
+                    Index Cond: (id = u0.orgunit_id)         
+(9 rows)
+
+step s1ld: UPDATE login SET description = 'changed', orgunit_id = 2 WHERE id = 1;
+step s2ldel: DELETE FROM login WHERE login.id IN (SELECT U0.id FROM login U0 INNER JOIN orgunit U1 ON (U0.orgunit_id = U1.id) WHERE (U0.id = 1 AND U1.name IS NOT NULL)) RETURNING id, description; <waiting ...>
+step s1c: COMMIT;
+step s2ldel: <... completed>
+id|description
+--+-----------
+ 1|changed    
+(1 row)
+
+step s2lshow: SELECT id, description, orgunit_id FROM login ORDER BY id;
+id|description|orgunit_id
+--+-----------+----------
+ 2|l2         |         2
+ 3|l3         |         1
+(2 rows)
+
+
+starting permutation: s1lid s2ldel s1c s2lshow
+step s1lid: UPDATE login SET id = 7 WHERE id = 1;
+step s2ldel: DELETE FROM login WHERE login.id IN (SELECT U0.id FROM login U0 INNER JOIN orgunit U1 ON (U0.orgunit_id = U1.id) WHERE (U0.id = 1 AND U1.name IS NOT NULL)) RETURNING id, description; <waiting ...>
+step s1c: COMMIT;
+step s2ldel: <... completed>
+id|description
+--+-----------
+(0 rows)
+
+step s2lshow: SELECT id, description, orgunit_id FROM login ORDER BY id;
+id|description|orgunit_id
+--+-----------+----------
+ 2|l2         |         2
+ 3|l3         |         1
+ 7|l1         |         1
+(3 rows)
+

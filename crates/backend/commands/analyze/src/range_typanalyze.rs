@@ -74,9 +74,9 @@ pub(crate) fn compute_range_stats<'mcx>(
 ) -> PgResult<()> {
     let base_typid = lsyscache::getBaseType(stats.attrtypid)?;
     let mut ctx = range_ctx(base_typid, is_multirange)?;
-    // Bump scratch: detoasted images and subdiff results leak by design and
-    // an exact-accounting context would assert at reset.
-    let scratch = MemoryContext::new_bump("compute_range_stats scratch");
+    // Wholesale-reset AllocSet scratch (C pallocs these in the analyze column
+    // context): detoasted images and subdiff results leak by design.
+    let scratch = MemoryContext::new_wholesale("compute_range_stats scratch");
     let col_mcx = scratch.mcx();
     let has_subdiff = ctx.subdiff.is_some();
 

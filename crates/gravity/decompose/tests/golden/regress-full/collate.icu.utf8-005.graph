@@ -1,0 +1,13 @@
+-- regress-full-collate.icu.utf8-005
+-- EXPLAIN (COSTS OFF) SELECT * FROM test1ci WHERE x LIKE 'abc' COLLATE case_insensitive;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=31225 rti=1 am=heap index=31240
+    key att=1 op=98 value=c25:'abc'
+    recheck (op98(v1.1, c25:'abc'))
+    lanes Attr(1):byref8:vl:win/page
+  filter op1209(v1.1, c25:'abc')
+  project (1=v1.1)
+  outs 1=vl:win/page
+mapped: IndexScan

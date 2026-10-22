@@ -1,0 +1,23 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/granule_source.rs
+growth	std::collections::HashMap::entry	1
+growth	std::collections::HashMap::insert	1
+growth	std::collections::HashSet::insert	1
+growth	std::iter::Extend::extend	7
+growth	std::vec::Vec::extend_from_slice	5
+growth	std::vec::Vec::push	22
+growth	std::vec::Vec::reserve	5
+growth	std::vec::Vec::resize	25
+growth	std::vec::Vec::resize_with	6
+growth	std::vec::Vec::try_reserve_exact	1
+ir-only	<alloc::sync::Arc<[T],A> as core::convert::From<alloc::vec::Vec<T,A>>>::from	12
+macro	std::vec	16
+method	slice::to_vec	7
+method	std::boxed::Box::new	10
+method	std::clone::Clone::clone	29
+method	std::iter::Iterator::collect	24
+method	std::sync::Arc::new	10
+method	std::vec::Vec::into_boxed_slice	2
+method	std::vec::Vec::with_capacity	5
+type	std::boxed::Box	13
+type	std::sync::Arc	27
+type	std::vec::Vec	30

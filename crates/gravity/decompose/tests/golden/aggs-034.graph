@@ -1,0 +1,10 @@
+-- aggs-034
+-- SELECT coalesce(j, '{}'::jsonb) FROM g;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2000 end=sink
+  nodes n0@0
+  source range rel=16396 rti=1 am=heap
+    lanes Attr(24):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=coalesce(v1.24, c3802:'\x00\x00\x00 '))
+  outs 1=vl:win/page
+mapped: SeqScan

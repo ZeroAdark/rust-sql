@@ -86,7 +86,7 @@ fn regex_role_token_recompile_failure_does_not_panic() {
     // state; the port must degrade to "no match" (implicit reject), not
     // panic the backend.
     let mut port = unix_port("alice", "postgres");
-    hba::check_hba(&mut port).unwrap();
+    hba::hba_getauthmethod(&mut port).unwrap();
     assert!(REGCOMP_CALLS.load(Ordering::SeqCst) >= 2, "execution-time compile attempted");
     assert_eq!(port.hba.as_ref().map(|h| h.auth_method), Some(uaImplicitReject));
 }

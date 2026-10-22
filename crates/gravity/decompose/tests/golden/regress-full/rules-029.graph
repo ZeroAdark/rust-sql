@@ -1,0 +1,11 @@
+-- regress-full-rules-029
+-- insert into rtest_t4 values (1, 'Record should go to rtest_t4');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=c23:1, 2=c25:'Record should go to rtest_t4')
+  write INSERT rel=33469 rti=7 natts=2 indexes=()
+  outs 1=w4:val 2=vl:stmt/imm
+mapped: Result ModifyTable

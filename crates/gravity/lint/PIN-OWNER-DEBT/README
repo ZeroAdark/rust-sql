@@ -1,0 +1,12 @@
+# RO's registry (lint/rules/ro_owner.py; C8 "owned, measured charges", the user-approved step-2 spec, design
+# lanes/memlead/C8-DESIGN.md §5): the sites outside the owned-charge home (memledger's Charge) that still move ledger bytes by
+# hand (charge / discharge / *_to / *_from / *_kind / pool_charge / transfer / give_back / take_back / enter / set_mapped)
+# or keep a cache reservation or a bare account with no owner (a part use and a worker-set depot entry are checked at
+# their definitions and need no row: ro_owner.py's module doc), by repository path, site (the
+# function, Type::fn inside an impl, or the struct), owner lane, the C8 area move that removes it (move1 .. move7), the
+# count of such constructs the site holds, and what it moves or keeps. A row goes when its move puts the site on a Charge;
+# a landing never adds a row nor raises a count (a certified move rewrites one). Test code is out of scope.
+# path	site	owner	move	count	what it moves or keeps
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<site> (the row's path with crates/
+# dropped, '/' as '.', the site's '::' as '.'), holding the row line; this README is not a row.
+# Deleting a row deletes its file, so lanes that delete different rows never touch the same file.

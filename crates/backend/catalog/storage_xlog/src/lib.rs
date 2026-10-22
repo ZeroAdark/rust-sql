@@ -1,12 +1,23 @@
 // storage_xlog.h + storage.c smgr_redo.
 use types_core::{BlockNumber, ForkNumber, InvalidBlockNumber, INVALID_PROC_NUMBER, MAX_FORKNUM};
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_error::{ErrorLocation, PgError, PgResult, ERRCODE_DATA_CORRUPTED, ERROR, PANIC};
 use types_storage::{RelFileLocator, RelFileLocatorBackend};
 use xlogreader_seams::XLogReaderState;
 
 pub const XLOG_SMGR_CREATE: u8 = 0x10;
 pub const XLOG_SMGR_TRUNCATE: u8 = 0x20;
+/// pgrust-only: create a pgrcolumnar relation's table directory. Its payload
+/// is the relation's RelFileLocator. Columnar data itself is never logged, so
+/// only directories copied empty by CREATE DATABASE are logged this way.
+pub const XLOG_SMGR_CREATE_TABLE_DIR: u8 = 0x70;
+pub const SIZEOF_XL_SMGR_CREATE_TABLE_DIR: usize = 12;
+/// pgrust-only (D3150): a pgrcolumnar publish's generation stamp. Payload: the relation's RelFileLocator, then
+/// `pgrc_am::walgen::WalGen::payload` (the generation, its publisher, the base it chained on, the base's
+/// publisher). Redo writes it into the table directory as the WALGEN file, so a node built from a base backup and WAL
+/// knows the generations it replayed but has no files for (columnar data itself is never logged).
+pub const XLOG_SMGR_TABLE_DIR_GEN: u8 = pgrc_am::walgen::SMGR_INFO;
+pub const SIZEOF_XL_SMGR_TABLE_DIR_GEN: usize = 12 + pgrc_am::walgen::WalGen::PAYLOAD_LEN;
 
 /// sizeof(xl_smgr_create): RelFileLocator (3 * Oid) + ForkNumber (int).
 const SIZEOF_XL_SMGR_CREATE: usize = 16;
@@ -141,12 +152,95 @@ pub fn smgr_redo(record: &mut XLogReaderState) -> PgResult<()> {
         }
         xlogutils::FreeFakeRelcacheEntry(fakerel);
         Ok(())
+    } else if info == XLOG_SMGR_CREATE_TABLE_DIR {
+        smgr_check_len(xlrec, SIZEOF_XL_SMGR_CREATE_TABLE_DIR, "XLOG_SMGR_CREATE_TABLE_DIR")?;
+        let locator = RelFileLocator::new(
+            u32::from_ne_bytes(xlrec[0..4].try_into().unwrap()),
+            u32::from_ne_bytes(xlrec[4..8].try_into().unwrap()),
+            u32::from_ne_bytes(xlrec[8..12].try_into().unwrap()),
+        );
+        redo_create_table_dir(locator)
+    } else if info == XLOG_SMGR_TABLE_DIR_GEN {
+        smgr_check_len(xlrec, SIZEOF_XL_SMGR_TABLE_DIR_GEN, "XLOG_SMGR_TABLE_DIR_GEN")?;
+        let locator = RelFileLocator::new(
+            u32::from_ne_bytes(xlrec[0..4].try_into().unwrap()),
+            u32::from_ne_bytes(xlrec[4..8].try_into().unwrap()),
+            u32::from_ne_bytes(xlrec[8..12].try_into().unwrap()),
+        );
+        let stamp = pgrc_am::walgen::WalGen::from_payload(&xlrec[12..]).expect("length checked above");
+        redo_table_dir_gen(locator, stamp)
     } else {
         // storage.c:1094: elog(PANIC, "smgr_redo: unknown op code %u", info) —
         // a PANIC-level XX000 report the recovery error path owns, never a
         // Rust panic!() unwinding the startup redo thread.
         Err(panic_err(format!("smgr_redo: unknown op code {info}")))
     }
+}
+
+/// The pgrcolumnar table directory of `locator`: beside its main fork (pgrc_am dirpath.rs's rule).
+pub fn table_dir_of(locator: RelFileLocator) -> String {
+    let main = relpath_seams::relpathperm::call(locator, ForkNumber::MAIN_FORKNUM);
+    let name = pgrc_format::dirlayout::table_dir_name(locator.relNumber as u64);
+    match main.rfind('/') {
+        Some(i) => format!("{}/{}", &main[..i], name),
+        None => name,
+    }
+}
+
+fn redo_create_table_dir(locator: RelFileLocator) -> PgResult<()> {
+    let dir = table_dir_of(locator);
+    if fd::MakePGDirectory(&dir) != 0 {
+        let errno = fd::get_errno();
+        if errno != libc::EEXIST {
+            return Err(ereport(ERROR)
+                .with_saved_errno(errno)
+                .errcode_for_file_access()
+                .errmsg(format!("could not create directory \"{dir}\": {PCT_M}"))
+                .into_error()
+                .into());
+        }
+    }
+    let parent = match dir.rfind('/') {
+        Some(i) => &dir[..i],
+        None => ".",
+    };
+    fd::fsync_fname(parent, true)
+}
+
+/// D3150: the publish's stamp into the table directory, made when the base backup brought none (a table first loaded
+/// after it): `WALGEN` replaced through `WALGEN.tmp` and a durable rename. The catalog judges it against the files when
+/// it loads the directory (pgrc_am catalog::load_dir).
+fn redo_table_dir_gen(locator: RelFileLocator, stamp: pgrc_am::walgen::WalGen) -> PgResult<()> {
+    use pgrc_am::walgen::{WALGEN_FILE_NAME, WALGEN_TMP_FILE_NAME};
+    redo_create_table_dir(locator)?;
+    let dir = table_dir_of(locator);
+    let tmp = format!("{dir}/{WALGEN_TMP_FILE_NAME}");
+    let path = format!("{dir}/{WALGEN_FILE_NAME}");
+    let text = stamp.encode();
+    if let Err(errno) = fd::write_whole_file(&tmp, text.as_bytes(), true) {
+        return Err(file_err(errno, format!("could not write file \"{tmp}\": {PCT_M}")));
+    }
+    fd::durable_rename(&tmp, &path, ERROR)?;
+    Ok(())
+}
+
+/// D3150: replay of a dropped relation's storage (commit / abort redo, DropRelationFiles) also removes its pgrcolumnar
+/// table directory, as the dropping transaction's own commit did on the primary (pgrc_am session.rs): a stamp replayed
+/// before the drop recreated it, and a directory a backup copied would outlive its relation.
+pub fn redo_remove_table_dir(locator: RelFileLocator) -> PgResult<()> {
+    let dir = table_dir_of(locator);
+    let mut md = fd::FileInfo::zeroed();
+    if fd::pg_lstat(&dir, &mut md) != 0 {
+        return Ok(()); // never a table directory here: nothing to remove
+    }
+    fd::rmtree(&dir, true)?;
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn file_err(errno: i32, msg: String) -> Box<PgError> {
+    ereport(ERROR).with_saved_errno(errno).errcode_for_file_access().errmsg(msg).into_error().into()
 }
 
 // elog(PANIC) — an unrecoverable redo error (smgr_redo's unknown op code).

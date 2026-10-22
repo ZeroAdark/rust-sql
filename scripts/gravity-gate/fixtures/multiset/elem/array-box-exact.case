@@ -1,0 +1,10 @@
+# a box array's ; delimiter: exact
+sql: SELECT array_agg(b) FROM t;
+cols: array_agg
+elem: 1	array
+class: unordered
+verdict: mismatch
+[pg]
+{(1,1),(0,0);(2,2),(1,1)}
+[got]
+{(2,2),(1,1);(1,1),(0,0)}

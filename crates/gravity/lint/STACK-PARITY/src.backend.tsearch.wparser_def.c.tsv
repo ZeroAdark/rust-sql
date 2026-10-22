@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/tsearch/wparser_def.c: 2 stack-depth check sites
+640	p_ishost	crates/backend/tsearch/wparser_def/src/parser.rs	p_ishost	yes	
+669	p_isURLPath	crates/backend/tsearch/wparser_def/src/parser.rs	p_isurlpath	yes	

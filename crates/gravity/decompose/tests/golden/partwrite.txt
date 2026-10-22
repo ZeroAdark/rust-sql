@@ -1,0 +1,3 @@
+routed writes 199: insert 58 update 88 delete 31 merge 22
+cross-partition 39; targets under a root 288; non-identity maps 99; unmapped child columns 59
+streamed arms 167; arms joining before the write 36

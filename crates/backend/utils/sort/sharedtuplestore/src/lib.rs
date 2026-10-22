@@ -305,7 +305,7 @@ impl<'mcx> SharedTuplestoreAccessor<'mcx> {
         self.read_bytes += 4;
         let size = u32::from_ne_bytes(size_buf) as usize;
         self.read_buffer.clear();
-        self.read_buffer.resize(size.div_ceil(8), 0);
+        ::mcx::pgvec_resize(&mut self.read_buffer, size.div_ceil(8), 0)?;
         // SAFETY: u64 backing reinterpreted as bytes; length covers size.
         let image: &mut [u8] = unsafe {
             core::slice::from_raw_parts_mut(self.read_buffer.as_mut_ptr().cast(), size)

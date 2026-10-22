@@ -40,7 +40,7 @@ fn varlena_payload(image: &[u8]) -> &[u8] {
 
 pub(crate) fn extract_value(hs_image: &[u8]) -> PgResult<Vec<Vec<u8>>> {
     let hs = HstoreView::from_vardata(varlena_payload(hs_image));
-    let mut entries = Vec::with_capacity(2 * hs.count());
+    let mut entries = ::mcx::std_vec_with_capacity("contrib", 2 * hs.count())?;
     for i in 0..hs.count() {
         entries.push(makeitem(hs.key(i), KEYFLAG));
         if hs.val_isnull(i) {

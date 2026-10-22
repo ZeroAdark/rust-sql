@@ -1,0 +1,78 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1k s2i s1c s2s s2c
+step s1k: UPDATE fp SET valid_at = daterange('2000-01-01', '2000-01-20') WHERE name = 'a';
+step s2i: INSERT INTO fc VALUES ('[1,2)', daterange('2000-01-10', '2000-02-15'), '[1,2)'); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+ERROR:  insert or update on table "fc" violates foreign key constraint "fc_fk"
+step s2s: SELECT * FROM fc ORDER BY id, valid_at;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2c: COMMIT;
+
+starting permutation: s1w s2i s1c s2s s2c
+step s1w: UPDATE fp SET valid_at = daterange('1999-12-01', '2000-02-01') WHERE name = 'a';
+step s2i: INSERT INTO fc VALUES ('[1,2)', daterange('2000-01-10', '2000-02-15'), '[1,2)'); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2s: SELECT * FROM fc ORDER BY id, valid_at;
+id   |valid_at               |parent_id
+-----+-----------------------+---------
+[1,2)|[01-10-2000,02-15-2000)|[1,2)    
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1d s2i s1c s2s s2c
+step s1d: DELETE FROM fp WHERE name = 'b';
+step s2i: INSERT INTO fc VALUES ('[1,2)', daterange('2000-01-10', '2000-02-15'), '[1,2)'); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+ERROR:  insert or update on table "fc" violates foreign key constraint "fc_fk"
+step s2s: SELECT * FROM fc ORDER BY id, valid_at;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2c: COMMIT;
+
+starting permutation: s1v s2a s1c s2c
+step s1v: UPDATE lp SET v = v + 10 WHERE id = 1 AND v = 1;
+step s2a: SELECT count(*), sum(v) FROM (SELECT v FROM lp WHERE id = 1 AND v < 50 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+count|sum
+-----+---
+    2| 13
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1q s2b s1c s2c
+step s1q: UPDATE lp SET v = 100 WHERE id = 2;
+step s2b: SELECT count(*), sum(v) FROM (SELECT v FROM lp WHERE v < 50 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+count|sum
+-----+---
+    4| 12
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1v s2b s1c s2c
+step s1v: UPDATE lp SET v = v + 10 WHERE id = 1 AND v = 1;
+step s2b: SELECT count(*), sum(v) FROM (SELECT v FROM lp WHERE v < 50 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+count|sum
+-----+---
+    5| 25
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1m s2a s1c s2c
+step s1m: UPDATE lp SET id = 2 WHERE id = 1 AND v = 2;
+step s2a: SELECT count(*), sum(v) FROM (SELECT v FROM lp WHERE id = 1 AND v < 50 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;

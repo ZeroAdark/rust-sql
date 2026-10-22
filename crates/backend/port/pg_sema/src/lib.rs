@@ -141,7 +141,14 @@ pub fn PGSemaphoreLock(procno: ProcNumber) {
             continue;
         }
         let _ = waiter::park();
-        // Notified, or cadence recheck: loop re-tests the count.
+        // Notified, or cadence recheck: loop re-tests the count. A lap with
+        // no count is where a crash-class kill ends the owner (D2938): the
+        // route is retired first, the hook may not return.
+        if s.count.load(Acquire) == 0 && pg_sema_seams::pg_semaphore_wait_lap::is_installed() {
+            s.waiter.store(0, SeqCst);
+            published = false;
+            pg_sema_seams::pg_semaphore_wait_lap::call();
+        }
     }
 }
 
@@ -209,5 +216,29 @@ mod tests {
             PGSemaphoreUnlock(3);
             waiter.join().unwrap();
         }
+
+        // D2938: a lap that ends without a count runs the wait-lap hook with
+        // the wake route retired, so the hook can end the owner and leave no
+        // residue; an owner the hook lets live keeps waiting for its count.
+        struct LapExit;
+        static DIE_AT_LAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        pg_sema_seams::pg_semaphore_wait_lap::set(|| {
+            if DIE_AT_LAP.swap(false, SeqCst) {
+                std::panic::panic_any(LapExit);
+            }
+        });
+        PGSemaphoreCreate(4);
+        PGSemaphoreReset(4);
+        DIE_AT_LAP.store(true, SeqCst);
+        let died = std::thread::spawn(|| PGSemaphoreLock(4))
+            .join()
+            .expect_err("the hook ends the parked owner");
+        assert!(died.is::<LapExit>());
+        assert_eq!(sema(4).waiter.load(SeqCst), 0, "no wake route outlives the owner");
+        let waiter = std::thread::spawn(|| PGSemaphoreLock(4));
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert!(!waiter.is_finished(), "a lap without a count keeps the owner waiting");
+        PGSemaphoreUnlock(4);
+        waiter.join().unwrap();
     }
 }

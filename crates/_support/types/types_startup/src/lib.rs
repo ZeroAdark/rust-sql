@@ -1,6 +1,6 @@
 //! Startup vocabulary: `tcop/backend_startup.h`, the `libpq/libpq-be.h`
 //! pre-auth subset (ClientSocket, Port) plus Port's hba surface and the
-//! `libpq/hba.h` record types. SSL/GSS state is not this build.
+//! `libpq/hba.h` record types.
 
 #![allow(non_upper_case_globals)]
 
@@ -156,6 +156,20 @@ impl HbaLine {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct IdentLine {
+    pub linenumber: i32,
+    pub usermap: String,
+    pub system_user: AuthToken,
+    pub pg_user: AuthToken,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ParsedAuthLines {
+    pub hba: std::sync::Arc<Vec<HbaLine>>,
+    pub ident: std::sync::Arc<Vec<IdentLine>>,
+}
+
 pub const TIMESTAMP_MINUS_INFINITY: TimestampTz = i64::MIN;
 
 // scram-common.h SCRAM_MAX_KEY_LEN (= SHA-256 digest length).
@@ -170,6 +184,7 @@ pub enum CacState {
     Recovery,
     NotHotStandby,
     TooMany,
+    Fenced, // pgrust-only: the instance aux fenced the instance
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -219,6 +234,14 @@ impl ConnectionTiming {
     };
 }
 
+#[derive(Debug, Default)]
+pub struct GssInfo {
+    pub principal: Option<String>,
+    pub authenticated: bool,
+    pub encrypted: bool,
+    pub delegated: bool,
+}
+
 #[derive(Debug)]
 pub struct Port {
     pub sock: i32,
@@ -243,6 +266,7 @@ pub struct Port {
     pub keepalives_count: i32,
     pub tcp_user_timeout: i32,
     pub ssl_in_use: bool,
+    pub gss: Option<GssInfo>,
     pub alpn_used: bool,
     // C: char *peer_cn / *peer_dn (TopMemoryContext copies); the SSL* itself
     // is the openssl backend's thread-local, not a Port field. peer_cn is the
@@ -264,7 +288,21 @@ pub struct Port {
     pub remote_hostname_errcode: i32,
 }
 
+// What a finished SCRAM exchange stores in Port (auth-scram.c writes them
+// through the Port pointer; here the exchange is on a shared borrow).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScramKeys {
+    pub client_key: [u8; SCRAM_MAX_KEY_LEN],
+    pub server_key: [u8; SCRAM_MAX_KEY_LEN],
+}
+
 impl Port {
+    pub fn set_scram_keys(&mut self, keys: ScramKeys) {
+        self.scram_client_key = keys.client_key;
+        self.scram_server_key = keys.server_key;
+        self.has_scram_keys = true;
+    }
+
     pub fn new(client_sock: &ClientSocket) -> Self {
         Self {
             sock: client_sock.sock,
@@ -289,6 +327,7 @@ impl Port {
             keepalives_count: 0,
             tcp_user_timeout: 0,
             ssl_in_use: false,
+            gss: None,
             alpn_used: false,
             peer_cn: None,
             peer_dn: None,
@@ -308,3 +347,28 @@ pub const CANCEL_REQUEST_OFFSET_BACKEND_PID: usize = 4;
 pub const CANCEL_REQUEST_OFFSET_AUTH_CODE: usize = 8;
 
 pub type ChildPid = pid_t;
+
+/// The Port fields log_line_prefix and csvlog/jsonlog read, copied so the
+/// log path can see them while ClientAuthentication holds the Port mutably.
+#[derive(Clone, Debug)]
+pub struct PortLogView {
+    pub laddr: SockAddr,
+    pub remote_host: String,
+    pub remote_port: String,
+    pub database_name: Option<String>,
+    pub user_name: Option<String>,
+    pub application_name: Option<String>,
+}
+
+impl Port {
+    pub fn log_view(&self) -> PortLogView {
+        PortLogView {
+            laddr: self.laddr,
+            remote_host: self.remote_host.clone(),
+            remote_port: self.remote_port.clone(),
+            database_name: self.database_name.clone(),
+            user_name: self.user_name.clone(),
+            application_name: self.application_name.clone(),
+        }
+    }
+}

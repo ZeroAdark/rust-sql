@@ -1,0 +1,1 @@
+backend/utils/cache/relmapper/src/lib.rs	STATE	pgport	xact:AtEOXact_RelationMap	leader	session envelope; relation maps (reloaded by RelationMapInvalidate) and active / pending updates, cleared at transaction end by AtEOXact_RelationMap

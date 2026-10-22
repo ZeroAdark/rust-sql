@@ -1,0 +1,6 @@
+path	crates/gravity/hosts/src/ops/window/raw.rs
+growth	std::collections::HashMap::insert	1
+growth	std::vec::Vec::push	1
+method	std::boxed::Box::new	1
+method	std::vec::Vec::into_boxed_slice	1
+type	std::boxed::Box	1

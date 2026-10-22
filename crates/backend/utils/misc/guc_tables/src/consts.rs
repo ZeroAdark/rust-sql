@@ -4,6 +4,10 @@ pub const BACKSLASH_QUOTE_OFF: i32 = 0;
 pub const BACKSLASH_QUOTE_ON: i32 = 1;
 pub const BACKSLASH_QUOTE_SAFE_ENCODING: i32 = 2;
 pub const BLCKSZ: i32 = 8192;
+pub const DEFAULT_PGSOCKET_DIR: &str = match option_env!("PGRUST_DEFAULT_PGSOCKET_DIR") {
+    Some(d) => d,
+    None => "/tmp",
+};
 pub const BYTEA_OUTPUT_ESCAPE: i32 = 0;
 pub const BYTEA_OUTPUT_HEX: i32 = 1;
 pub const COMPUTE_QUERY_ID_AUTO: i32 = 2;
@@ -32,6 +36,7 @@ pub const CONSTRAINT_EXCLUSION_OFF: i32 = 0;
 pub const CONSTRAINT_EXCLUSION_ON: i32 = 1;
 pub const CONSTRAINT_EXCLUSION_PARTITION: i32 = 2;
 pub const DATA_DIR_SYNC_METHOD_FSYNC: i32 = 0;
+pub const DATA_DIR_SYNC_METHOD_SYNCFS: i32 = 1;
 pub const DEBUG1: i32 = types_error::DEBUG1.0;
 pub const DEBUG2: i32 = types_error::DEBUG2.0;
 pub const DEBUG3: i32 = types_error::DEBUG3.0;
@@ -72,16 +77,13 @@ pub const DEFAULT_MIN_WAL_SEGS: i32 = 5;
 // (notes/ppool-lane.md:58), standing-executor worker-launch eliminated
 // (notes/m2-pool-binding.md:293). Anchoring C's ~1-2ms=1000 => 175us ~= 100.
 // CONTINGENCY: honest only while the runtime pool is the executor; a shape
-// that falls to the LEGACY cold-spawn Gather (~11ms full backend boot —
-// priced by costsize/gucs.rs's PGRCOLUMNAR_PARALLEL_SETUP_MULTIPLIER x this
-// GUC on pgrcolumnar plans) is under-priced here — the runtime router's
+// that falls to the LEGACY cold-spawn Gather (~11ms full backend boot) is
+// under-priced here — the runtime router's
 // coverage is the mitigation (docs/design/jit-parallel-defaults.md).
 pub const DEFAULT_PARALLEL_SETUP_COST: f64 = 100.0;
 // C's 0.1 prices a cross-process shm_mq copy of one tuple. pgrust moves tuples
 // worker->leader in-process through a chunked Arc ring at ~27ns/tuple (the
-// pgrcolumnar measurement, costsize/gucs.rs; pgrcolumnar plans price
-// transfer at PGRCOLUMNAR_PARALLEL_TUPLE_MULTIPLIER=0.5 x this GUC = 0.005
-// at this default, the pure-pointer-walk chunked path). 0.01 = 10x below
+// pure-pointer-walk chunked path). 0.01 = 10x below
 // C, the in-process MinimalTuple-memcpy rate ~= one tuple's cpu_tuple_cost.
 pub const DEFAULT_PARALLEL_TUPLE_COST: f64 = 0.01;
 pub const DEFAULT_RANDOM_PAGE_COST: f64 = 4.0;
@@ -95,6 +97,12 @@ pub const ERROR: i32 = types_error::ERROR.0;
 pub const FATAL: i32 = types_error::FATAL.0;
 pub const FILE_COPY_METHOD_CLONE: i32 = 1;
 pub const FILE_COPY_METHOD_COPY: i32 = 0;
+// fd.h FileExtendMethod: POSIX_FALLOCATE exists only with HAVE_POSIX_FALLOCATE.
+#[cfg(target_os = "linux")]
+pub const FILE_EXTEND_METHOD_POSIX_FALLOCATE: i32 = 0;
+#[cfg(target_os = "linux")]
+pub const FILE_EXTEND_METHOD_WRITE_ZEROS: i32 = 1;
+#[cfg(not(target_os = "linux"))]
 pub const FILE_EXTEND_METHOD_WRITE_ZEROS: i32 = 0;
 pub const FUNC_MAX_ARGS: i32 = 100;
 pub const HOURS_PER_DAY: i32 = 24;
@@ -169,20 +177,46 @@ pub const RECOVERY_PREFETCH_TRY: i32 = 2;
 pub const REGEX_ENGINE_SPENCER: i32 = 0;
 pub const REGEX_ENGINE_RE2: i32 = 1;
 pub const REGEX_ENGINE_AUTO: i32 = 2;
-// pgrust-only parallel-engine selector (M5-0, docs/design/m5-planner.md
-// §2.2): legacy = the ported Gather machinery byte-for-byte (runtime arms
-// only via the per-arm bench GUCs, which layer BENEATH this switch);
-// runtime = the M5 unified admission router owns plan-shape routing.
-pub const PARALLEL_ENGINE_LEGACY: i32 = 0;
-pub const PARALLEL_ENGINE_RUNTIME: i32 = 1;
 // pgrust-only version identities — the SINGLE source of truth for both
 // numbers (dl-verstring ruling 2026-08-06). Every rendered banner
 // (version(), the postmaster startup line) derives from these two consts;
 // never write either number anywhere else in the server source. Hosted here
 // because guc_tables already owns the SQL-visible `server_version` default,
 // which references PG_COMPAT_VERSION below.
-pub const PGRUST_VERSION: &str = "0.3.1";
+pub const PGRUST_VERSION: &str = "0.4-beta";
 pub const PG_COMPAT_VERSION: &str = "18.6";
+// The build id beside PGRUST_VERSION ("pgrust 0.4-beta, build 1a2b3c4"). It is
+// NOT a build-time const here: a per-commit value in guc_tables would
+// recompile every crate that depends on guc_tables after each commit. The
+// server binary's own crate (main_main, which nothing depends on) stamps the
+// id at build time (PGRUST_BUILD_ID, else the checkout's HEAD) and installs it
+// once at process start; the banners read it from here at run time. Not
+// installed (a tree without .git built without PGRUST_BUILD_ID, a unit test)
+// = no id.
+static PGRUST_BUILD_SUFFIX: pgsync::OnceLock<String> = pgsync::OnceLock::new();
+
+/// Installs the build id; the first call wins. "" = no id.
+pub fn set_pgrust_build_id(id: &str) {
+    let id = id.trim();
+    let _ = PGRUST_BUILD_SUFFIX.set(if id.is_empty() {
+        String::new()
+    } else {
+        format!(", build {id}")
+    });
+}
+
+/// ", build <id>", or "" when no id is installed.
+pub fn pgrust_build_suffix() -> &'static str {
+    PGRUST_BUILD_SUFFIX.get().map_or("", String::as_str)
+}
+
+/// pgrust's identity as every banner prints it: "pgrust 0.4-beta, build
+/// 1a2b3c4", or "pgrust 0.4-beta" with no build id. `postgres --version`
+/// never carries it: C pg_ctl / initdb / pg_upgrade / pg_rewind compare that
+/// line byte for byte with "postgres (PostgreSQL) 18.6".
+pub fn pgrust_identity() -> String {
+    format!("pgrust {PGRUST_VERSION}{}", pgrust_build_suffix())
+}
 pub const RECOVERY_TARGET_ACTION_PAUSE: i32 = 0;
 pub const RELSEG_SIZE: i32 = 131072;
 // tcopprot.h restrict_nonsystem_relation_kind flag bits.
@@ -238,3 +272,64 @@ pub const XMLBINARY_BASE64: i32 = 0;
 pub const XMLBINARY_HEX: i32 = 1;
 pub const XMLOPTION_CONTENT: i32 = 1;
 pub const XMLOPTION_DOCUMENT: i32 = 0;
+
+// pgrust.memory_broker (pgrust-only, lane membroker, memory step 5): Gravity's one memory budget. off = today's caps byte
+// for byte and nothing computed; advise (default) = the budget and its consumers computed and reported, nothing applied;
+// on = the actuators in pgrust.memory_broker_actuators apply it.
+pub const MEMORY_BROKER_OFF: i32 = 0;
+pub const MEMORY_BROKER_ADVISE: i32 = 1;
+pub const MEMORY_BROKER_ON: i32 = 2;
+
+// pgrust.gravity_admit (pgrust-only, docs/gravity/exec.md "Admission from the
+// graph"): graph admits from the plan's graph; shape turns that off (a refusal).
+pub const GRAVITY_ADMIT_SHAPE: i32 = 0;
+pub const GRAVITY_ADMIT_GRAPH: i32 = 1;
+// pgrust.point_path (pgrust-only): the statements served without the planner or Gravity (gravity exec runner/point.rs).
+pub const POINT_PATH_OFF: i32 = 0;
+pub const POINT_PATH_ON: i32 = 1;
+pub const POINT_PATH_STRICT: i32 = 2;
+// pgrust.point_noplan (pgrust-only): a point statement's plan reused from the session's memo of the plans the planner
+// built for its shape (gravity exec runner/point/skip.rs).
+pub const POINT_NOPLAN_OFF: i32 = 0;
+pub const POINT_NOPLAN_ON: i32 = 1;
+pub const POINT_NOPLAN_STRICT: i32 = 2;
+// pgrust.gravity_lowerer (pgrust-only): v1 (the ladder) and v2 (lowerv2) are removed (tags ladder-final,
+// lowerv2-final; the check hook refuses them); auto = v3.
+pub const GRAVITY_LOWERER_V1: i32 = 0;
+pub const GRAVITY_LOWERER_V2: i32 = 1;
+pub const GRAVITY_LOWERER_AUTO: i32 = 2;
+pub const GRAVITY_LOWERER_V3: i32 = 3;
+// pgrust.gravity_groupingsets_rewrite (planner::groupingsets_union): off | on | force.
+pub const GRAVITY_GS_REWRITE_OFF: i32 = 0;
+pub const GRAVITY_GS_REWRITE_ON: i32 = 1;
+pub const GRAVITY_GS_REWRITE_FORCE: i32 = 2;
+// pgrust.gravity_unnest (planner::unnest): off | strict | contained.
+pub const GRAVITY_UNNEST_OFF: i32 = 0;
+pub const GRAVITY_UNNEST_STRICT: i32 = 1;
+pub const GRAVITY_UNNEST_CONTAINED: i32 = 2;
+// pgrust.gravity_cte_pushdown (planner::cte_or, D3342): off | strict | contained | fill (D4779: the readers' filters
+// applied inside Gravity's fill of the CTE, PostgreSQL's plan as without the push).
+pub const GRAVITY_CTE_PUSHDOWN_OFF: i32 = 0;
+pub const GRAVITY_CTE_PUSHDOWN_STRICT: i32 = 1;
+pub const GRAVITY_CTE_PUSHDOWN_CONTAINED: i32 = 2;
+pub const GRAVITY_CTE_PUSHDOWN_FILL: i32 = 3;
+// pgrust.gravity_exact_size (gravity exec knobs/grant.rs, exactsize): none | build | final | all, a bit set: build = the
+// hash build's counted sizes, final = the owner side's, all = both.
+pub const GRAVITY_EXACT_SIZE_NONE: i32 = 0;
+pub const GRAVITY_EXACT_SIZE_BUILD: i32 = 1;
+pub const GRAVITY_EXACT_SIZE_FINAL: i32 = 2;
+pub const GRAVITY_EXACT_SIZE_ALL: i32 = 3;
+// pgrust.gravity_jit_perfmap (gravity_backend perfmap): off | func | tags.
+pub const GRAVITY_JIT_PERFMAP_OFF: i32 = 0;
+pub const GRAVITY_JIT_PERFMAP_FUNC: i32 = 1;
+pub const GRAVITY_JIT_PERFMAP_TAGS: i32 = 2;
+// pgrust.memory_cancel_rule (mempolicy::decide::Rule): threshold (today's 90 % cancel, the default) | projection (C3's
+// ladder: tranches, throttle, the projection cancel by fair share).
+pub const MEMORY_CANCEL_RULE_THRESHOLD: i32 = 0;
+pub const MEMORY_CANCEL_RULE_PROJECTION: i32 = 1;
+// pgrust.memory_ladder (mempolicy::ladder, LADDER-DESIGN section 10): off (the default) | shadow (the ladder decides at
+// every sample and logs it; the watchdog still acts) | on (section 10 step 3: the gates climb R1-R4b and wait on the free
+// epoch; R2b and R6 stay the watchdog's until step 6).
+pub const MEMORY_LADDER_OFF: i32 = 0;
+pub const MEMORY_LADDER_SHADOW: i32 = 1;
+pub const MEMORY_LADDER_ON: i32 = 2;

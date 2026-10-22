@@ -1,0 +1,123 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1bump s2upd s1c s2show
+step s2x: EXPLAIN (COSTS OFF) UPDATE sjr SET state = 'created' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[md5('50')::uuid, md5('100')::uuid])) AND state = 'cancelled' RETURNING retry_count, state;
+QUERY PLAN                                                                 
+---------------------------------------------------------------------------
+Update on sjr                                                              
+  ->  Nested Loop Semi Join                                                
+        Join Filter: (sjr.id = "ANY_subquery".unnest)                      
+        ->  Seq Scan on sjr                                                
+              Filter: ((name = 'q1'::text) AND (state = 'cancelled'::text))
+        ->  Materialize                                                    
+              ->  Subquery Scan on "ANY_subquery"                          
+                    ->  ProjectSet                                         
+                          ->  Result                                       
+(9 rows)
+
+step s1bump: UPDATE sjr SET retry_count = retry_count + 10 WHERE id = md5('50')::uuid;
+step s2upd: UPDATE sjr SET state = 'created' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[md5('50')::uuid, md5('100')::uuid])) AND state = 'cancelled' RETURNING retry_count, state; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+retry_count|state  
+-----------+-------
+         12|created
+          1|created
+(2 rows)
+
+step s2show: SELECT state, retry_count FROM sjr WHERE id IN (md5('50')::uuid, md5('100')::uuid, md5('9999')::uuid) ORDER BY retry_count, state;
+state  |retry_count
+-------+-----------
+created|          1
+created|         12
+(2 rows)
+
+
+starting permutation: s1act s2upd s1c s2show
+step s1act: UPDATE sjr SET state = 'active' WHERE id = md5('50')::uuid;
+step s2upd: UPDATE sjr SET state = 'created' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[md5('50')::uuid, md5('100')::uuid])) AND state = 'cancelled' RETURNING retry_count, state; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+retry_count|state  
+-----------+-------
+          1|created
+(1 row)
+
+step s2show: SELECT state, retry_count FROM sjr WHERE id IN (md5('50')::uuid, md5('100')::uuid, md5('9999')::uuid) ORDER BY retry_count, state;
+state  |retry_count
+-------+-----------
+created|          1
+active |          2
+(2 rows)
+
+
+starting permutation: s1move s2upd s1c s2show
+step s1move: UPDATE sjr SET id = md5('9999')::uuid WHERE id = md5('50')::uuid;
+step s2upd: UPDATE sjr SET state = 'created' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[md5('50')::uuid, md5('100')::uuid])) AND state = 'cancelled' RETURNING retry_count, state; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+retry_count|state  
+-----------+-------
+          1|created
+(1 row)
+
+step s2show: SELECT state, retry_count FROM sjr WHERE id IN (md5('50')::uuid, md5('100')::uuid, md5('9999')::uuid) ORDER BY retry_count, state;
+state    |retry_count
+---------+-----------
+created  |          1
+cancelled|          2
+(2 rows)
+
+
+starting permutation: s1del s2upd s1c s2show
+step s1del: DELETE FROM sjr WHERE id = md5('50')::uuid;
+step s2upd: UPDATE sjr SET state = 'created' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[md5('50')::uuid, md5('100')::uuid])) AND state = 'cancelled' RETURNING retry_count, state; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+retry_count|state  
+-----------+-------
+          1|created
+(1 row)
+
+step s2show: SELECT state, retry_count FROM sjr WHERE id IN (md5('50')::uuid, md5('100')::uuid, md5('9999')::uuid) ORDER BY retry_count, state;
+state  |retry_count
+-------+-----------
+created|          1
+(1 row)
+
+
+starting permutation: s1bump s2cte s1c s2show
+step s1bump: UPDATE sjr SET retry_count = retry_count + 10 WHERE id = md5('50')::uuid;
+step s2cte: WITH results AS (UPDATE sjr SET state = 'created' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[md5('50')::uuid, md5('100')::uuid])) AND state = 'cancelled' RETURNING retry_count) SELECT COUNT(*), SUM(retry_count) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+count|sum
+-----+---
+    2| 13
+(1 row)
+
+step s2show: SELECT state, retry_count FROM sjr WHERE id IN (md5('50')::uuid, md5('100')::uuid, md5('9999')::uuid) ORDER BY retry_count, state;
+state  |retry_count
+-------+-----------
+created|          1
+created|         12
+(2 rows)
+
+
+starting permutation: s1act s2cte s1c s2show
+step s1act: UPDATE sjr SET state = 'active' WHERE id = md5('50')::uuid;
+step s2cte: WITH results AS (UPDATE sjr SET state = 'created' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[md5('50')::uuid, md5('100')::uuid])) AND state = 'cancelled' RETURNING retry_count) SELECT COUNT(*), SUM(retry_count) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+count|sum
+-----+---
+    1|  1
+(1 row)
+
+step s2show: SELECT state, retry_count FROM sjr WHERE id IN (md5('50')::uuid, md5('100')::uuid, md5('9999')::uuid) ORDER BY retry_count, state;
+state  |retry_count
+-------+-----------
+created|          1
+active |          2
+(2 rows)
+

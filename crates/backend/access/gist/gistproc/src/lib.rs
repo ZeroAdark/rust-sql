@@ -259,8 +259,8 @@ fn fc_gist_box_same(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<
 // fallbackSplit.
 fn fallback_split(entryvec: &GistEntryVector, v: &mut GistSplitVec, fcinfo: &Fcinfo) -> PgResult<()> {
     let maxoff = (entryvec.n - 1) as usize;
-    v.spl_left = Vec::with_capacity(maxoff + 2);
-    v.spl_right = Vec::with_capacity(maxoff + 2);
+    v.spl_left = ::mcx::std_vec_with_capacity("access", maxoff + 2)?;
+    v.spl_right = ::mcx::std_vec_with_capacity("access", maxoff + 2)?;
     let mut union_l: Option<BOX> = None;
     let mut union_r: Option<BOX> = None;
 
@@ -415,8 +415,8 @@ fn fc_gist_box_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
         }
     }
 
-    let mut intervals_lower = vec![SplitInterval::default(); nentries];
-    let mut intervals_upper = vec![SplitInterval::default(); nentries];
+    let mut intervals_lower = ::mcx::std_vec_from_elem("access", SplitInterval::default(), nentries)?;
+    let mut intervals_upper = ::mcx::std_vec_from_elem("access", SplitInterval::default(), nentries)?;
 
     for dim in 0..2i32 {
         for i in 1..=maxoff {
@@ -496,12 +496,12 @@ fn fc_gist_box_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
         return Ok(fcinfo.arg(1));
     }
 
-    v.spl_left = Vec::with_capacity(nentries);
-    v.spl_right = Vec::with_capacity(nentries);
+    v.spl_left = ::mcx::std_vec_with_capacity("access", nentries)?;
+    v.spl_right = ::mcx::std_vec_with_capacity("access", nentries)?;
 
     let mut left_box = BOX::default();
     let mut right_box = BOX::default();
-    let mut common_entries: Vec<CommonEntry> = Vec::with_capacity(nentries);
+    let mut common_entries: Vec<CommonEntry> = ::mcx::std_vec_with_capacity("access", nentries)?;
 
     macro_rules! place_left {
         ($b:expr, $off:expr) => {{

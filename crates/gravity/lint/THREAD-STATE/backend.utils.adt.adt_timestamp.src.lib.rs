@@ -1,0 +1,1 @@
+backend/utils/adt/adt_timestamp/src/lib.rs	CURRENT_TM_CACHE	pgport	key:the transaction start timestamp and the session zone pointer	cache	key: the timestamp and the zone; GetCurrentTimeUsec's broken-down now()

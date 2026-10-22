@@ -154,8 +154,8 @@ pub(crate) fn fc_page_header(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo)
     } else {
         values[0] = Datum::from_u64(lsn);
     }
-    values[1] = Datum::from_i16(pd_checksum(b) as i16);
-    values[2] = Datum::from_i16(pd_flags(b) as i16);
+    values[1] = Datum::from_u16(pd_checksum(b));
+    values[2] = Datum::from_u16(pd_flags(b));
 
     // pageinspect >= 1.10 uses int4 instead of int2 for those fields.
     match tupdesc.attr(3).atttypid {

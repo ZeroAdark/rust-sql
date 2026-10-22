@@ -1,7 +1,4 @@
-//! jsonfuncs.c SRF slice: jsonb_object_keys, jsonb_array_elements[_text],
-//! jsonb_each[_text] over the funcapi ValuePerCall frame. C materializes
-//! rows up front (tuplestore / first-call collection); the owned row vectors
-//! here are the same cost shape.
+//! jsonfuncs.c SRF slice: jsonb_object_keys (ValuePerCall), jsonb_array_elements[_text] and jsonb_each[_text] (materialized tuplestore, per-row tmp_cxt reset).
 
 extern crate alloc;
 
@@ -9,8 +6,7 @@ use alloc::vec::Vec;
 
 use crate::build::item_to_jsonb_image;
 
-// jsonfuncs.c materialises through a tuplestore: rows are admitted under
-// MaxAllocSize and every growth is fallible, so an oversized set is an ERROR.
+// jsonb_object_keys collects under MaxAllocSize with fallible growth.
 fn admit<T>(rows: &mut Vec<T>) {
     let n = rows.len() + 1;
     if ::mcx::check_alloc_size(n.saturating_mul(core::mem::size_of::<T>().max(16))).is_err()
@@ -32,10 +28,10 @@ use crate::container::*;
 use crate::getfield::value_as_text;
 use crate::iter::{JsonbIterator, WjbToken};
 use datum::Datum;
+use funcapi::{InitMaterializedSRF, MAT_SRF_BLESS, MAT_SRF_USE_EXPECTED_DESC};
 use mcx::Mcx;
-use types_core::catalog::{JSONBOID, RECORDOID, TEXTOID};
 use types_error::{PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE};
-use types_fmgr::{byref_result, varlena_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
+use types_fmgr::{varlena_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
 
 #[track_caller]
 #[cold]
@@ -47,14 +43,12 @@ fn invalid_param(msg: String) -> Box<PgError> {
 // Owned cross-call rows (per-call memory resets between SRF calls).
 enum SrfRows {
     Texts(Vec<Option<Vec<u8>>>),
-    Images(Vec<Vec<u8>>),
-    Tuples(Vec<Vec<u8>>),
 }
 
 fn detoast_owned(fcinfo: &Fcinfo) -> PgResult<Vec<u8>> {
     let mcx = fcinfo.result_mcx();
     let jb = super::builtins::arg_jsonb(fcinfo, 0, mcx)?;
-    Ok(jb.as_bytes().to_vec())
+    Ok(::mcx::std_vec_from_slice("adt", &jb.as_bytes())?)
 }
 
 fn srf_drive(
@@ -87,12 +81,6 @@ fn srf_drive(
                     .expect("text result"),
             ),
         }),
-        SrfRows::Images(v) => v
-            .get(idx)
-            .map(|img| Some(byref_result(mcx, img).expect("image result"))),
-        SrfRows::Tuples(v) => v
-            .get(idx)
-            .map(|img| Some(byref_result(mcx, img).expect("tuple result"))),
     };
     match out {
         Some(Some(d)) => Ok(funcapi::srf_return_next(flinfo, fcinfo, d)),
@@ -161,141 +149,114 @@ fn elements_check(payload: &[u8]) -> PgResult<()> {
     Ok(())
 }
 
-pub fn fc_jsonb_array_elements(
+// C: the value column of one row; text mode maps json null to SQL null.
+fn value_datum(tmp: Mcx<'_>, v: JsonbItem<'_>, as_text: bool) -> PgResult<(Datum, bool)> {
+    if as_text {
+        Ok(match value_as_text(tmp, &v)? {
+            Some(t) => (varlena_result(t), false),
+            None => (Datum::null(), true),
+        })
+    } else {
+        Ok((super::builtins::image_result(item_to_jsonb_image(tmp, v)?), false))
+    }
+}
+
+// C: elements_worker_jsonb.
+fn elements_worker(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
+    name: &'static str,
+    as_text: bool,
 ) -> PgResult<Datum> {
-    srf_drive(flinfo, fcinfo, "jsonb_array_elements", |fcinfo| {
-        let image = detoast_owned(fcinfo)?;
-        let payload = &image[..];
+    let flinfo = flinfo.unwrap_or_else(|| panic!("{name}: NULL flinfo"));
+    // SAFETY: executor arms the result mcx pre-call; it outlives this frame.
+    let mcx = unsafe { fcinfo.result_mcx_detached() };
+    let mut srf = InitMaterializedSRF(
+        mcx,
+        flinfo,
+        fcinfo,
+        MAT_SRF_USE_EXPECTED_DESC | MAT_SRF_BLESS,
+    )?;
+    {
+        let jb = super::builtins::arg_jsonb(fcinfo, 0, mcx)?;
+        let payload = jb.as_bytes();
         elements_check(payload)?;
-        let mcx = fcinfo.result_mcx();
+        let mut tmp_cxt = mcx.context().new_child_wholesale("jsonb_array_elements temporary cxt");
         let mut it = JsonbIterator::init(mcx, payload)?;
-        let mut rows: Vec<Vec<u8>> = Vec::new();
         loop {
             let (tok, v) = it.next(true);
             match tok {
                 WjbToken::Done => break,
                 WjbToken::Elem => {
-                    admit(&mut rows);
-                    rows.push(owned(&item_to_jsonb_image(mcx, v)?[..]))
+                    let (val, val_null) = value_datum(tmp_cxt.mcx(), v, as_text)?;
+                    srf.putvalues(&[val], &[val_null])?;
+                    tmp_cxt.reset();
                 }
                 _ => {}
             }
         }
-        Ok(SrfRows::Images(rows))
-    })
+    }
+    Ok(srf.finish(fcinfo))
+}
+
+pub fn fc_jsonb_array_elements(
+    flinfo: Option<&mut FmgrInfo>,
+    fcinfo: &mut Fcinfo,
+) -> PgResult<Datum> {
+    elements_worker(flinfo, fcinfo, "jsonb_array_elements", false)
 }
 
 pub fn fc_jsonb_array_elements_text(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    srf_drive(flinfo, fcinfo, "jsonb_array_elements_text", |fcinfo| {
-        let image = detoast_owned(fcinfo)?;
-        let payload = &image[..];
-        elements_check(payload)?;
-        let mcx = fcinfo.result_mcx();
+    elements_worker(flinfo, fcinfo, "jsonb_array_elements_text", true)
+}
+
+// C: each_worker_jsonb.
+fn each_worker(
+    flinfo: Option<&mut FmgrInfo>,
+    fcinfo: &mut Fcinfo,
+    name: &'static str,
+    as_text: bool,
+) -> PgResult<Datum> {
+    let flinfo = flinfo.unwrap_or_else(|| panic!("{name}: NULL flinfo"));
+    // SAFETY: executor arms the result mcx pre-call; it outlives this frame.
+    let mcx = unsafe { fcinfo.result_mcx_detached() };
+    let mut srf = InitMaterializedSRF(mcx, flinfo, fcinfo, MAT_SRF_BLESS)?;
+    {
+        let jb = super::builtins::arg_jsonb(fcinfo, 0, mcx)?;
+        let payload = jb.as_bytes();
+        require_object(payload, name)?;
+        let mut tmp_cxt = mcx.context().new_child_wholesale("jsonb_each temporary cxt");
         let mut it = JsonbIterator::init(mcx, payload)?;
-        let mut rows: Vec<Option<Vec<u8>>> = Vec::new();
         loop {
-            let (tok, v) = it.next(true);
+            let (tok, k) = it.next(true);
             match tok {
                 WjbToken::Done => break,
-                WjbToken::Elem => {
-                    admit(&mut rows);
-                    rows.push(text_row(mcx, &v)?)
+                WjbToken::Key => {
+                    let JsonbItem::String(key) = k else {
+                        panic!("object key is not a string")
+                    };
+                    let tmp = tmp_cxt.mcx();
+                    let key = varlena_result(varlena::cstring_to_text(tmp, key)?);
+                    let (vtok, v) = it.next(true);
+                    debug_assert_eq!(vtok, WjbToken::Value);
+                    let (val, val_null) = value_datum(tmp, v, as_text)?;
+                    srf.putvalues(&[key, val], &[false, val_null])?;
+                    tmp_cxt.reset();
                 }
                 _ => {}
             }
         }
-        Ok(SrfRows::Texts(rows))
-    })
-}
-
-fn text_row(mcx: Mcx<'_>, v: &JsonbItem<'_>) -> PgResult<Option<Vec<u8>>> {
-    Ok(value_as_text(mcx, v)?.map(|t| {
-        let img = t.as_bytes();
-        varlena_data(img).to_vec()
-    }))
-}
-
-fn varlena_data(image: &[u8]) -> &[u8] {
-    debug_assert!(image[0] & 0x01 == 0);
-    &image[4..]
-}
-
-// One (key text, value jsonb-or-text) row formed into a composite datum
-// image with a freshly built 2-column rowtype.
-fn each_rows(fcinfo: &Fcinfo, as_text: bool, name: &str) -> PgResult<SrfRows> {
-    let image = detoast_owned(fcinfo)?;
-    let payload = &image[..];
-    require_object(payload, name)?;
-    let mcx = fcinfo.result_mcx();
-
-    let mut desc = tupdesc::CreateTemplateTupleDesc(mcx, 2)?;
-    tupdesc::TupleDescInitEntry(&mut desc, 1, Some("key"), TEXTOID, -1, 0)?;
-    tupdesc::TupleDescInitEntry(
-        &mut desc,
-        2,
-        Some("value"),
-        if as_text { TEXTOID } else { JSONBOID },
-        -1,
-        0,
-    )?;
-    desc.tdtypeid = RECORDOID;
-    desc.tdtypmod = -1;
-    // C: BlessTupleDesc — the rows are anonymous record datums; record_out
-    // needs the registered typmod stamped into each tuple header.
-    ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
-
-    let mut it = JsonbIterator::init(mcx, payload)?;
-    let mut rows: Vec<Vec<u8>> = Vec::new();
-    loop {
-        let (tok, k) = it.next(true);
-        match tok {
-            WjbToken::Done => break,
-            WjbToken::Key => {
-                let JsonbItem::String(key) = k else {
-                    panic!("object key is not a string")
-                };
-                let key_datum = varlena_result(varlena::cstring_to_text(mcx, key)?);
-                let (vtok, v) = it.next(true);
-                debug_assert_eq!(vtok, WjbToken::Value);
-                let (val_datum, val_null) = if as_text {
-                    match value_as_text(mcx, &v)? {
-                        Some(t) => (varlena_result(t), false),
-                        None => (Datum::null(), true),
-                    }
-                } else {
-                    (
-                        super::builtins::image_result(item_to_jsonb_image(mcx, v)?),
-                        false,
-                    )
-                };
-                let tuple = heaptuple::heap_form_tuple(
-                    mcx,
-                    &desc,
-                    &[key_datum, val_datum],
-                    &[false, val_null],
-                )?;
-                admit(&mut rows);
-                rows.push(owned(tuple.image()));
-            }
-            _ => {}
-        }
     }
-    Ok(SrfRows::Tuples(rows))
+    Ok(srf.finish(fcinfo))
 }
 
 pub fn fc_jsonb_each(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    srf_drive(flinfo, fcinfo, "jsonb_each", |fcinfo| {
-        each_rows(fcinfo, false, "jsonb_each")
-    })
+    each_worker(flinfo, fcinfo, "jsonb_each", false)
 }
 
 pub fn fc_jsonb_each_text(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    srf_drive(flinfo, fcinfo, "jsonb_each_text", |fcinfo| {
-        each_rows(fcinfo, true, "jsonb_each_text")
-    })
+    each_worker(flinfo, fcinfo, "jsonb_each_text", true)
 }

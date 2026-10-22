@@ -76,10 +76,14 @@ fn in_hex_accumulator_overflows_like_sscanf() {
         macaddr_in("-fffffffe:00:00:00:00:00", None).unwrap(),
         macaddr_in("02:00:00:00:00:00", None).unwrap()
     );
+    // Magnitude overflow is ULONG_MAX with the sign dropped (C 18.6 rejects
+    // "-fffffffffffffffff" with 22003 where the wrapped negation would be 1).
     for s in [
         "10000000000000000:00:00:00:00:00",
         "1ffffffff:00:00:00:00:00",
         "ffffffff:00:00:00:00:00",
+        "-fffffffffffffffff:00:00:00:00:00",
+        "-0x10000000000000000:00:00:00:00:00",
     ] {
         let err = macaddr_in(s, None).unwrap_err();
         assert_eq!(err.sqlstate(), ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE, "{s}");

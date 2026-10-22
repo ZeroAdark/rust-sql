@@ -381,7 +381,7 @@ fn KnownAssignedXidsReset() -> PgResult<()> {
     LWLockRelease(ProcArrayLock())
 }
 
-fn MaintainLatestCompletedXidRecovery(latest_xid: TransactionId) {
+pub(crate) fn MaintainLatestCompletedXidRecovery(latest_xid: TransactionId) {
     let tv = TransamVariables();
     let cur_latest = FullTransactionId::from_u64(tv.latestCompletedXid.load(Relaxed));
     debug_assert!(TransactionIdIsValid(latest_xid));
@@ -462,7 +462,11 @@ pub fn ProcArrayApplyRecoveryInfo(running: &RunningTransactionsData<'_>) -> PgRe
     LWLockAcquire(ProcArrayLock(), LW_EXCLUSIVE, my_procno())?;
     let locked = (|| -> PgResult<()> {
         let total = (running.xcnt + running.subxcnt) as usize;
-        let mut xids: Vec<TransactionId> = Vec::with_capacity(total);
+        // procarray.c: palloc'd; failure is ERROR 53200, never an abort.
+        let mut xids: Vec<TransactionId> = Vec::new();
+        xids.try_reserve_exact(total).map_err(|_| {
+            ::mcx::oom_named("ProcArrayApplyRecoveryInfo", total * core::mem::size_of::<TransactionId>())
+        })?;
         for &xid in &running.xids[..total] {
             if transam_seams::transaction_id_did_commit::call(xid)?
                 || transam_seams::transaction_id_did_abort::call(xid)?

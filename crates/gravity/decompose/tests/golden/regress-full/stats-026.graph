@@ -1,0 +1,10 @@
+-- regress-full-stats-026
+-- SELECT wal_bytes AS backend_wal_bytes_before from pg_stat_get_backend_wal(pg_backend_pid())
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn6313 cols=5 fn6313(fn2026())]
+  project (1=v1.3)
+  outs 1=vl:row
+mapped: FunctionScan

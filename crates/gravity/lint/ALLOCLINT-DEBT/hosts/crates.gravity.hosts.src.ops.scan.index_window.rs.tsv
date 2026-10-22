@@ -1,0 +1,9 @@
+path	crates/gravity/hosts/src/ops/scan/index_window.rs
+growth	std::vec::Vec::push	5
+macro	std::vec	8
+method	slice::to_vec	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	5
+method	std::iter::Iterator::collect	1
+type	std::boxed::Box	1
+type	std::vec::Vec	5

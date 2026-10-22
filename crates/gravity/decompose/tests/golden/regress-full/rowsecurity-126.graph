@@ -1,0 +1,15 @@
+-- regress-full-rowsecurity-126
+-- INSERT INTO r1 VALUES (10) ON CONFLICT (a) DO UPDATE SET a = 30 RETURNING *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:10)
+  write INSERT rel=28699 rti=1 natts=1 indexes=(28703[1]up) on_conflict=update arbiter=(28703) excl_rti=2 cols=(1) set=(1=c23:30) returning
+    check rls insert rel=r1 (op97(v1.1, c23:20))
+    check rls conflict rel=r1 (op97(v1.1, c23:20))
+    check rls update rel=r1 (op97(v1.1, c23:20))
+  project (1=v1.1)
+  outs 1=w4:val
+  outs 1=w4:val
+mapped: Result ModifyTable

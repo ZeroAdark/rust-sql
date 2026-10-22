@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/cache/partcache.c: 1 stack-depth check sites
+349	generate_partition_qual	crates/backend/partitioning/partdesc/src/lib.rs	generate_partition_qual	yes	

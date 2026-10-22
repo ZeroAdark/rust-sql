@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 contrib/jsonb_plperl/jsonb_plperl.c: 2 stack-depth check sites
+71	Jsonb_to_SV	-	-	unported	PL/Perl, PL/Python and their jsonb transforms are not ported (crates/pl has plpgsql only)
+187	SV_to_JsonbValue	-	-	unported	PL/Perl, PL/Python and their jsonb transforms are not ported (crates/pl has plpgsql only)

@@ -1,0 +1,15 @@
+# NOALLOC (TD-197 LINT-FP; findings.NOALLOC_ITEMS): findings the IR leg proved allocate nothing, keyed on the line's normalized text. Written by run.sh full + ratchet.py write --noalloc only; an edited line's row goes.
+file	line	kind	item	count	text	class
+crates/backend/access/pgrcolumnar/pgrc_scan/src/meta.rs	26	method	std::clone::Clone::clone	1	726b855a5b74	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/prune.rs	72	method	std::clone::Clone::clone	1	d7f5fd4b61a3	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/prune.rs	73	method	std::clone::Clone::clone	1	96f3b31b671f	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	176	method	std::clone::Clone::clone	1	3eb22cfa1039	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	177	method	std::clone::Clone::clone	1	033b7036ff71	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	178	method	std::clone::Clone::clone	1	03990d630035	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	179	method	std::clone::Clone::clone	1	0c9592779ddb	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	180	method	std::clone::Clone::clone	1	49d7dd27a115	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	181	method	std::clone::Clone::clone	1	e80a9d69a836	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	182	method	std::clone::Clone::clone	1	a00eaf52544f	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	187	method	std::clone::Clone::clone	1	253fbbc210d1	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	192	method	std::clone::Clone::clone	1	28ca55ee2804	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_scan/src/scan.rs	193	method	std::clone::Clone::clone	1	4d6a828c6905	NOALLOC

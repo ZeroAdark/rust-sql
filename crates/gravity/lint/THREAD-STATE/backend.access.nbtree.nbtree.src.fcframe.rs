@@ -1,0 +1,1 @@
+backend/access/nbtree/nbtree/src/fcframe.rs	PROC_SCRATCH	pgport	call	scratch	the generic btree proc arm's detoast scratch, reset per outermost with_proc_scratch (a re-entrant call takes a fresh context)

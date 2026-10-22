@@ -1,0 +1,1 @@
+backend/utils/cache/typcache/src/lib.rs	STATE	pgport	at:TypeCacheRelCallback@backend/utils/cache/typcache/src/invalidate.rs	leader	session envelope; the type cache, entries reset by its invalidation callbacks (TypeCacheRelCallback ..), dropped by the session cleanup new_state registers

@@ -1,0 +1,11 @@
+-- regress-full-tsearch-001
+-- SELECT mapcfg, maptokentype, mapseqno FROM pg_ts_config_map WHERE mapcfg = 0 OR mapdict = 0;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=3603 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  filter or(op607(v1.1, c26:0), op607(v1.4, c26:0))
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  outs 1=w8:val 2=w8:val 3=w8:val
+mapped: SeqScan

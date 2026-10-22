@@ -1,0 +1,9 @@
+path	crates/gravity/driver/src/mem/fence.rs
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::resize	1
+macro	std::vec	2
+method	std::boxed::Box::new	3
+method	std::clone::Clone::clone	3
+method	std::iter::Iterator::collect	1
+type	std::boxed::Box	5

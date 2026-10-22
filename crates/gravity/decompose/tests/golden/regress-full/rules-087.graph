@@ -1,0 +1,23 @@
+-- regress-full-rules-087
+-- WITH data(hat_name, hat_color) AS MATERIALIZED ( VALUES ('h8', 'green'), ('h9', 'blue'), ('h7', 'forbidden') ) INSERT INTO hats SELECT * FROM data RETURNING *;
+graph pipelines=2 breakers=1 init_plans=1 root=p1
+p0 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  nodes n2@0
+  source values rti=8 rows=3
+    row (c25:'h8', c25:'green')
+    row (c25:'h9', c25:'blue')
+    row (c25:'h7', c25:'forbidden')
+  project (1=v8.1, 2=v8.2)
+  outs 1=vl:row 2=vl:row
+p1 node=1 serial site=0 reason=Write end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source breaker slot=0
+  project (1=fn668(relabel1042(v7.1), c23:14, c16:0), 2=fn668(relabel1042(v7.2), c23:14, c16:0))
+  write INSERT rel=33838 rti=5 natts=2 indexes=(33841[1]u) on_conflict=update arbiter=(33841) excl_rti=6 cols=(1,2) set=(1=v5.1, 2=inner.2) where=T_List returning epq=$exec1
+  project (1=v5.1, 2=v5.2)
+  outs 1=vl:call668 2=vl:call668
+  outs 1=vl:row 2=vl:row
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+init_plan id=1 pipeline=p0 link=Cte param=$exec0 slot=0 raise-free
+mapped: ModifyTable ValuesScan CteScan SubPlan

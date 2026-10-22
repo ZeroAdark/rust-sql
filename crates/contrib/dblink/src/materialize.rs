@@ -21,10 +21,10 @@ struct AttInMeta {
 impl AttInMeta {
     fn build(tupdesc: &TupleDescData<'_>) -> PgResult<AttInMeta> {
         let natts = tupdesc.natts as usize;
-        let mut dropped = Vec::with_capacity(natts);
-        let mut in_funcs = Vec::with_capacity(natts);
-        let mut typioparams = Vec::with_capacity(natts);
-        let mut typmods = Vec::with_capacity(natts);
+        let mut dropped = ::mcx::std_vec_with_capacity("dblink", natts)?;
+        let mut in_funcs = ::mcx::std_vec_with_capacity("dblink", natts)?;
+        let mut typioparams = ::mcx::std_vec_with_capacity("dblink", natts)?;
+        let mut typmods = ::mcx::std_vec_with_capacity("dblink", natts)?;
         for i in 0..natts {
             let att = tupdesc.attr(i);
             if att.attisdropped {
@@ -117,8 +117,8 @@ fn build_row(
     cols: &[Option<&[u8]>],
 ) -> PgResult<()> {
     let natts = attinmeta.natts;
-    let mut values = vec![Datum::null(); natts];
-    let mut isnull = vec![true; natts];
+    let mut values = ::mcx::std_vec_from_elem("dblink", Datum::null(), natts)?;
+    let mut isnull = ::mcx::std_vec_from_elem("dblink", true, natts)?;
     for i in 0..natts {
         if attinmeta.dropped[i] {
             continue;
@@ -213,7 +213,7 @@ impl<'m, 'f> TupleSink<'m, 'f> {
             fcinfo_ptr: fcinfo,
             srf: None,
             attinmeta: None,
-            scratch: mcx::MemoryContext::new_bump("dblink temporary context"),
+            scratch: mcx::MemoryContext::new_wholesale("dblink temporary context"),
             guc_nestlevel: -1,
         }
     }
@@ -279,8 +279,8 @@ pub fn materialize_result(
         return Err(rowtype_mismatch());
     }
     let nestlevel = if res.rows.is_empty() { -1 } else { gucs.apply()? };
-    let mut scratch = mcx::MemoryContext::new_bump("dblink temporary context");
-    let mut cols: Vec<Option<&[u8]>> = Vec::with_capacity(res.nfields);
+    let mut scratch = mcx::MemoryContext::new_wholesale("dblink temporary context");
+    let mut cols: Vec<Option<&[u8]>> = ::mcx::std_vec_with_capacity("dblink", res.nfields)?;
     for row in &res.rows {
         cols.clear();
         cols.extend(row.iter().map(|c| c.as_deref()));

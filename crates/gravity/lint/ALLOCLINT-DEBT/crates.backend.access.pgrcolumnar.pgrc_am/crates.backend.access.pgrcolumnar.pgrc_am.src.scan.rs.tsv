@@ -1,0 +1,20 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/scan.rs
+growth	std::iter::Extend::extend	4
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	26
+growth	std::vec::Vec::resize	2
+growth	std::vec::Vec::resize_with	3
+growth	std::vec::Vec::try_reserve	4
+growth	std::vec::Vec::try_reserve_exact	3
+macro	std::format	2
+macro	std::vec	3
+method	std::boxed::Box::new	7
+method	std::clone::Clone::clone	11
+method	std::iter::Iterator::collect	12
+method	std::string::ToString::to_string	2
+method	std::sync::Arc::new	3
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	8
+type	std::string::String	1
+type	std::sync::Arc	6
+type	std::vec::Vec	6

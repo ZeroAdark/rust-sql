@@ -326,6 +326,7 @@ fn eager_region_id(first_start: u32, block: u32) -> usize {
 impl EagerScanShared {
     pub fn new(
         remaining_successes: u32,
+        orig_success_limit: u32,
         first_region_fails: u32,
         max_fails_per_region: u32,
         first_region_start: u32,
@@ -355,7 +356,7 @@ impl EagerScanShared {
             max_fails_per_region: AtomicU32::new(max_fails_per_region),
             first_region_start,
             region_fails,
-            orig_success_limit: remaining_successes,
+            orig_success_limit,
         }
     }
 
@@ -740,7 +741,8 @@ pub fn merge_dead_runs(locals: &[VacScanLocal]) -> Vec<DeadRun> {
     let mut cursors: Vec<std::iter::Peekable<std::slice::Iter<'_, DeadRun>>> =
         locals.iter().map(|l| l.runs.iter().peekable()).collect();
     let total: usize = locals.iter().map(|l| l.runs.len()).sum();
-    let mut out = Vec::with_capacity(total);
+    let mut out = Vec::new();
+    let _ = out.try_reserve(total);
     loop {
         let mut best: Option<(usize, u32)> = None;
         for (i, c) in cursors.iter_mut().enumerate() {

@@ -5,6 +5,7 @@ use ::types_core::Oid;
 use ::types_error::PgResult;
 use std::path::Path;
 use ::types_fmgr::{FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction};
+use ::elog::PCT_M;
 
 pub fn fc_pg_size_bytes(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is a non-null text varlena (strict fn).
@@ -37,12 +38,19 @@ fn calculate_relation_size(
             Err(e) => {
                 return Err(file_access_error(
                     &e,
-                    format!("could not stat file \"{pathname}\": %m"),
+                    format!("could not stat file \"{pathname}\": {PCT_M}"),
                 ))
             }
         }
     }
     Ok(totalsize)
+}
+
+fn main_fork_dir_size(rel: &types_rel::Relation<'_>) -> PgResult<i64> {
+    if !tableam_seams::table_relation_dir_size::is_installed() {
+        return Ok(0);
+    }
+    Ok(tableam_seams::table_relation_dir_size::call(rel)? as i64)
 }
 
 fn rel_key(rel: &types_rel::Relation<'_>) -> ::types_storage::RelFileLocatorBackend {
@@ -90,7 +98,9 @@ pub fn fc_pg_relation_size(
     let rel_oid = fcinfo.arg_oid(0);
     // SAFETY: catalog arg 1 is a non-null text varlena (strict fn).
     let forkname_b = unsafe { fcinfo.arg_varlena_packed(1)? };
-    let forkname = String::from_utf8_lossy(forkname_b.data()).into_owned();
+    let forkname_b = forkname_b.data();
+    let end = forkname_b.iter().position(|&b| b == 0).unwrap_or(forkname_b.len());
+    let forkname = String::from_utf8_lossy(&forkname_b[..end]).into_owned();
     let mcx = fcinfo.result_mcx();
     let Some(rel) =
         relation_seams::try_relation_open::call(mcx, rel_oid, types_rel::AccessShareLock)?
@@ -98,7 +108,10 @@ pub fn fc_pg_relation_size(
         return Ok(fcinfo.return_null());
     };
     let forknum = forkname_to_number(&forkname)?;
-    let size = calculate_relation_size(rel_key(&rel), forknum)?;
+    let mut size = calculate_relation_size(rel_key(&rel), forknum)?;
+    if forknum == types_core::ForkNumber::MAIN_FORKNUM {
+        size += main_fork_dir_size(&rel)?;
+    }
     rel.close(types_rel::AccessShareLock)?;
     Ok(Datum::from_i64(size))
 }
@@ -243,7 +256,7 @@ fn read_dir_entry<T>(entry: std::io::Result<T>, path: &Path) -> PgResult<T> {
     entry.map_err(|e| {
         file_access_error(
             &e,
-            format!("could not read directory \"{}\": %m", path.display()),
+            format!("could not read directory \"{}\": {PCT_M}", path.display()),
         )
     })
 }
@@ -268,10 +281,14 @@ pub(crate) fn db_dir_size(path: &Path) -> PgResult<i64> {
             Err(e) => {
                 return Err(file_access_error(
                     &e,
-                    format!("could not stat file \"{}\": %m", filename.display()),
+                    format!("could not stat file \"{}\": {PCT_M}", filename.display()),
                 ))
             }
         }
+    }
+    // pgrcolumnar table directories inside the database directory: their files, beyond the dirent counted above
+    if tableam_seams::database_dir_am_size::is_installed() {
+        dirsize += tableam_seams::database_dir_am_size::call(&path.to_string_lossy())? as i64;
     }
     Ok(dirsize)
 }
@@ -304,7 +321,7 @@ fn calculate_database_size(db_oid: Oid) -> PgResult<i64> {
             // ReadDirExtended (fd.c:2997) over a failed AllocateDir.
             return Err(file_access_error(
                 &e,
-                "could not open directory \"pg_tblspc\": %m".to_string(),
+                format!("could not open directory \"pg_tblspc\": {PCT_M}"),
             ))
         }
     };
@@ -434,7 +451,7 @@ pub(crate) fn tablespace_dir_size(tblspc_path: &Path) -> PgResult<i64> {
             Err(e) => {
                 return Err(file_access_error(
                     &e,
-                    format!("could not stat file \"{}\": %m", pathname.display()),
+                    format!("could not stat file \"{}\": {PCT_M}", pathname.display()),
                 ))
             }
         };
@@ -510,7 +527,7 @@ fn calculate_toast_table_size(mcx: ::mcx::Mcx<'_>, toastrelid: Oid) -> PgResult<
 }
 
 fn calculate_table_size(mcx: ::mcx::Mcx<'_>, rel: &types_rel::Relation<'_>) -> PgResult<i64> {
-    let mut size = calculate_all_forks_size(rel_key(rel))?;
+    let mut size = calculate_all_forks_size(rel_key(rel))? + main_fork_dir_size(rel)?;
     if rel.rd_rel.reltoastrelid != 0 {
         size += calculate_toast_table_size(mcx, rel.rd_rel.reltoastrelid)?;
     }

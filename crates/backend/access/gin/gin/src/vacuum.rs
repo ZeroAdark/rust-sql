@@ -401,7 +401,7 @@ pub(crate) fn ginVacuumPostingTreeLeaves(
 
     let mut has_void_page = false;
     loop {
-        let mut tmp_ctx = MemoryContext::new_bump("Gin vacuum temporary context");
+        let mut tmp_ctx = MemoryContext::new_wholesale("Gin vacuum temporary context");
         ginVacuumPostingTreeLeaf(tmp_ctx.mcx(), gvs, buffer)?;
         // SAFETY: pin + exclusive lock held.
         let (empty, rightlink) = {
@@ -665,7 +665,7 @@ fn ginbulkdelete_guts<'mcx>(
 
     let mut roots: Vec<BlockNumber> = Vec::new();
     loop {
-        let mut scratch = MemoryContext::new_bump("Gin vacuum temporary context");
+        let mut scratch = MemoryContext::new_wholesale("Gin vacuum temporary context");
         let res_page = ginVacuumEntryPage(scratch.mcx(), &mut gvs, buffer, &mut roots)?;
 
         // SAFETY: pin + exclusive lock held.

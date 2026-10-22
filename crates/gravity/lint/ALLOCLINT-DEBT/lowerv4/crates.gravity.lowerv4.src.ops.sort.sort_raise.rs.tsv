@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/ops/sort/sort_raise.rs
+ir-only	<T as core::convert::Into<U>>::into	1
+method	std::iter::Iterator::collect	1
+type	std::vec::Vec	1

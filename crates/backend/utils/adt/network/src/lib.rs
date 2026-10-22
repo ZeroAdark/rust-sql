@@ -129,7 +129,8 @@ fn quoted(prefix: &str, input: &[u8], suffix: &str) -> PgError {
     match core::str::from_utf8(input) {
         Ok(s) => PgError::error(format!("{prefix}{s}{suffix}")),
         Err(_) => {
-            let mut msg = prefix.as_bytes().to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(prefix.as_bytes());
             msg.extend_from_slice(input);
             msg.extend_from_slice(suffix.as_bytes());
             PgError::error_raw_message(msg)

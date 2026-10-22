@@ -1,0 +1,11 @@
+-- regress-full-interval-011
+-- SELECT i AS interval, justify_days(i), justify_hours(i), justify_interval(i) FROM INFINITE_INTERVAL_TBL WHERE NOT isfinite(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1233 end=sink
+  nodes n0@0
+  source range rel=17189 rti=1 am=heap
+    lanes Attr(1):byref8:fx16:win/page Offset:byval2:w2:val
+  filter not(fn1390(v1.1))
+  project (1=v1.1, 2=fn1295(v1.1), 3=fn1175(v1.1), 4=fn2711(v1.1))
+  outs 1=fx16:win/page 2=fx16:call1295 3=fx16:call1175 4=fx16:call2711
+mapped: SeqScan

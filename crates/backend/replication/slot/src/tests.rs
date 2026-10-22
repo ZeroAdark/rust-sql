@@ -186,6 +186,9 @@ fn invalidation_cause_names() {
 
 // One-shot lwlock / proc / procarray / slot-array bring-up (the twophase
 // crate's test setup, minus its own state).
+/// Every ShmemIndex registration made through the bring-up seam: (name, size).
+static SHMEM_ROWS: std::sync::Mutex<Vec<(String, usize)>> = std::sync::Mutex::new(Vec::new());
+
 fn shmem_setup() {
     static SETUP: std::sync::Once = std::sync::Once::new();
     SETUP.call_once(|| {
@@ -238,6 +241,14 @@ fn shmem_setup() {
         shmem_seams::mul_size::set(|a, b| Ok(a.checked_mul(b).expect("size overflow")));
         shmem_seams::shmem_alloc::set(|size| {
             Ok(Box::leak(vec![0u8; size].into_boxed_slice()).as_mut_ptr())
+        });
+        shmem_seams::shmem_init_struct::set(|name, size| {
+            SHMEM_ROWS.lock().unwrap().push((name.to_string(), size));
+            let layout = std::alloc::Layout::from_size_align(size.max(1), 128).unwrap();
+            // SAFETY: non-zero size; leaked like C shmem.
+            let p = unsafe { std::alloc::alloc_zeroed(layout) };
+            assert!(!p.is_null());
+            Ok((p, false))
         });
         xact_seams::transaction_id_is_current_transaction_id::set(|_| false);
         xact_seams::get_current_sub_transaction_id::set(|| 1);
@@ -498,28 +509,18 @@ fn slot_state_file_io_reports_wait_events() {
 // slot.c:186-212: ReplicationSlotsShmemSize is max_replication_slots *
 // sizeof(ReplicationSlot) (288 on LP64; offsetof(replication_slots) == 0) and
 // ReplicationSlotsShmemInit registers it as the "ReplicationSlot Ctl"
-// ShmemIndex row pg_shmem_allocations lists (audit regression).
+// ShmemIndex row pg_shmem_allocations lists (audit fp-replication-slot#2).
 #[test]
 fn shmem_init_registers_replication_slot_ctl_in_shmem_index() {
-    static ROWS: std::sync::Mutex<Vec<(String, usize)>> = std::sync::Mutex::new(Vec::new());
-    let ours = !shmem_seams::shmem_init_struct::is_installed();
-    if ours {
-        shmem_seams::shmem_init_struct::set(|name, size| {
-            ROWS.lock().unwrap().push((name.to_string(), size));
-            let layout = std::alloc::Layout::from_size_align(size.max(1), 128).unwrap();
-            // SAFETY: non-zero size; leaked like C shmem.
-            let p = unsafe { std::alloc::alloc_zeroed(layout) };
-            assert!(!p.is_null());
-            Ok((p, false))
-        });
-    }
+    // Bring-up first: max_replication_slots and the ShmemIndex recorder are
+    // set once there, so this test cannot race the other slot tests over the
+    // GUC (the harness runs tests on parallel threads).
+    shmem_setup();
     let n = walsender_config::max_replication_slots();
     assert!(n > 0);
     assert_eq!(crate::ReplicationSlotsShmemSize(), n as usize * 288);
-    ROWS.lock().unwrap().clear();
+    SHMEM_ROWS.lock().unwrap().clear();
     crate::register_shmem_ctl().unwrap();
-    let rows = ROWS.lock().unwrap();
-    if ours {
-        assert_eq!(rows.as_slice(), &[("ReplicationSlot Ctl".to_string(), n as usize * 288)]);
-    }
+    let rows = SHMEM_ROWS.lock().unwrap();
+    assert_eq!(rows.as_slice(), &[("ReplicationSlot Ctl".to_string(), n as usize * 288)]);
 }

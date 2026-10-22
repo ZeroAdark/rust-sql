@@ -1,0 +1,77 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2k s1k
+step s2x: EXPLAIN (COSTS OFF) SELECT j.id, j.grp FROM d07 j WHERE j.id <= 10 AND EXISTS (SELECT 1 FROM d07 k WHERE k.id = j.id + 1 FOR SHARE) FOR UPDATE OF j;
+QUERY PLAN                                            
+------------------------------------------------------
+LockRows                                              
+  ->  Index Scan using d07_pkey on d07 j              
+        Index Cond: (id <= 10)                        
+        Filter: EXISTS(SubPlan 1)                     
+        SubPlan 1                                     
+          ->  LockRows                                
+                ->  Index Scan using d07_pkey on d07 k
+                      Index Cond: (id = (j.id + 1))   
+(8 rows)
+
+step s2k: COMMIT;
+step s1k: COMMIT;
+
+starting permutation: s1g s2l s1k s2k
+step s1g: UPDATE d07 SET grp = 7 WHERE id = 2;
+step s2l: SELECT j.id, j.grp FROM d07 j WHERE j.id <= 10 AND EXISTS (SELECT 1 FROM d07 k WHERE k.id = j.id + 1 FOR SHARE) FOR UPDATE OF j; <waiting ...>
+step s1k: COMMIT;
+step s2l: <... completed>
+id|grp
+--+---
+ 1|  1
+ 2|  7
+ 3|  0
+ 4|  1
+ 5|  2
+ 6|  0
+ 7|  1
+ 8|  2
+ 9|  0
+10|  1
+(10 rows)
+
+step s2k: COMMIT;
+
+starting permutation: s1d s2l s1k s2k
+step s1d: DELETE FROM d07 WHERE id = 5;
+step s2l: SELECT j.id, j.grp FROM d07 j WHERE j.id <= 10 AND EXISTS (SELECT 1 FROM d07 k WHERE k.id = j.id + 1 FOR SHARE) FOR UPDATE OF j; <waiting ...>
+step s1k: COMMIT;
+step s2l: <... completed>
+id|grp
+--+---
+ 1|  1
+ 2|  2
+ 3|  0
+ 6|  0
+ 7|  1
+ 8|  2
+ 9|  0
+10|  1
+(8 rows)
+
+step s2k: COMMIT;
+
+starting permutation: s1m s2l s1k s2k
+step s1m: UPDATE d07 SET id = 30 WHERE id = 7;
+step s2l: SELECT j.id, j.grp FROM d07 j WHERE j.id <= 10 AND EXISTS (SELECT 1 FROM d07 k WHERE k.id = j.id + 1 FOR SHARE) FOR UPDATE OF j; <waiting ...>
+step s1k: COMMIT;
+step s2l: <... completed>
+id|grp
+--+---
+ 1|  1
+ 2|  2
+ 3|  0
+ 4|  1
+ 5|  2
+ 8|  2
+ 9|  0
+10|  1
+(8 rows)
+
+step s2k: COMMIT;

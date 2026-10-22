@@ -1,0 +1,151 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1u s2u s1c s3s
+step s1u: UPDATE ps SET v = v + 100 WHERE k = 1;
+step s2u: WITH c AS (UPDATE ps SET v = v * 10 WHERE k IN (1, 4)) UPDATE ps SET v = v + 1 WHERE k <= 2; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s3s: SELECT k, v FROM ps ORDER BY k;
+k|  v
+-+---
+1|102
+2|  3
+3|  3
+4| 40
+5|  5
+6|  6
+(6 rows)
+
+
+starting permutation: s1u s2u s1a s3s
+step s1u: UPDATE ps SET v = v + 100 WHERE k = 1;
+step s2u: WITH c AS (UPDATE ps SET v = v * 10 WHERE k IN (1, 4)) UPDATE ps SET v = v + 1 WHERE k <= 2; <waiting ...>
+step s1a: ABORT;
+step s2u: <... completed>
+step s3s: SELECT k, v FROM ps ORDER BY k;
+k| v
+-+--
+1| 2
+2| 3
+3| 3
+4|40
+5| 5
+6| 6
+(6 rows)
+
+
+starting permutation: s1k s2u s1c s3s
+step s1k: UPDATE ps SET k = 10 WHERE k = 1;
+step s2u: WITH c AS (UPDATE ps SET v = v * 10 WHERE k IN (1, 4)) UPDATE ps SET v = v + 1 WHERE k <= 2; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s3s: SELECT k, v FROM ps ORDER BY k;
+ k| v
+--+--
+ 2| 3
+ 3| 3
+ 4|40
+ 5| 5
+ 6| 6
+10| 1
+(6 rows)
+
+
+starting permutation: s1d s2u s1c s3s
+step s1d: DELETE FROM ps WHERE k = 1;
+step s2u: WITH c AS (UPDATE ps SET v = v * 10 WHERE k IN (1, 4)) UPDATE ps SET v = v + 1 WHERE k <= 2; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s3s: SELECT k, v FROM ps ORDER BY k;
+k| v
+-+--
+2| 3
+3| 3
+4|40
+5| 5
+6| 6
+(5 rows)
+
+
+starting permutation: s1o s2u s1c s3s
+step s1o: UPDATE ps SET v = v + 100 WHERE k = 4;
+step s2u: WITH c AS (UPDATE ps SET v = v * 10 WHERE k IN (1, 4)) UPDATE ps SET v = v + 1 WHERE k <= 2; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s3s: SELECT k, v FROM ps ORDER BY k;
+k|   v
+-+----
+1|   2
+2|   3
+3|   3
+4|1040
+5|   5
+6|   6
+(6 rows)
+
+
+starting permutation: s1u s2d s1c s3s
+step s1u: UPDATE ps SET v = v + 100 WHERE k = 1;
+step s2d: WITH c AS (DELETE FROM ps WHERE k IN (1, 4)) UPDATE ps SET v = v + 1 WHERE k <= 2; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s3s: SELECT k, v FROM ps ORDER BY k;
+k|  v
+-+---
+1|102
+2|  3
+3|  3
+5|  5
+6|  6
+(5 rows)
+
+
+starting permutation: s1o s2d s1c s3s
+step s1o: UPDATE ps SET v = v + 100 WHERE k = 4;
+step s2d: WITH c AS (DELETE FROM ps WHERE k IN (1, 4)) UPDATE ps SET v = v + 1 WHERE k <= 2; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s3s: SELECT k, v FROM ps ORDER BY k;
+k|v
+-+-
+1|2
+2|3
+3|3
+5|5
+6|6
+(5 rows)
+
+
+starting permutation: s1u s2i s1c s3s
+step s1u: UPDATE ps SET v = v + 100 WHERE k = 1;
+step s2i: WITH c AS (INSERT INTO ps VALUES (1, -1) ON CONFLICT (k) DO NOTHING) DELETE FROM ps WHERE k = 1; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s3s: SELECT k, v FROM ps ORDER BY k;
+k| v
+-+--
+1|-1
+2| 2
+3| 3
+4| 4
+5| 5
+6| 6
+(6 rows)
+
+
+starting permutation: s1d s2i s1c s3s
+step s1d: DELETE FROM ps WHERE k = 1;
+step s2i: WITH c AS (INSERT INTO ps VALUES (1, -1) ON CONFLICT (k) DO NOTHING) DELETE FROM ps WHERE k = 1; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s3s: SELECT k, v FROM ps ORDER BY k;
+k| v
+-+--
+1|-1
+2| 2
+3| 3
+4| 4
+5| 5
+6| 6
+(6 rows)
+

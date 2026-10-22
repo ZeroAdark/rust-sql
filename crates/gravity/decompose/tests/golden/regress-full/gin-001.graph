@@ -1,0 +1,9 @@
+-- regress-full-gin-001
+-- select gin_clean_pending_list('t_gin_test_tbl_i_j_idx') is not null;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=notnull(fn3789(c2205:27071)))
+  outs 1=w1:val
+mapped: Result

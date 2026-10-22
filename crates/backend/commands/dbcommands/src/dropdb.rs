@@ -131,9 +131,9 @@ fn set_database_invalid(
     };
     let desc = pgdbrel.descr();
     let natts = desc.natts as usize;
-    let mut values = vec![Datum::null(); natts];
-    let isnull = vec![false; natts];
-    let mut replace = vec![false; natts];
+    let mut values = ::mcx::std_vec_from_elem("commands", Datum::null(), natts)?;
+    let isnull = ::mcx::std_vec_from_elem("commands", false, natts)?;
+    let mut replace = ::mcx::std_vec_from_elem("commands", false, natts)?;
     values[Anum_pg_database_datconnlimit as usize - 1] = Datum::from_i32(DATCONNLIMIT_INVALID_DB);
     replace[Anum_pg_database_datconnlimit as usize - 1] = true;
     let newtup =
@@ -388,6 +388,7 @@ fn dropdb_guts(
 
     bufmgr::DropDatabaseBuffers(db_id)?;
     smgr::ForgetDatabaseSyncRequests(db_id)?;
+    l2cache::forget_database(db_id);
 
     if request_checkpoint {
         checkpointer::RequestCheckpoint(

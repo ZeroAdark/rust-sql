@@ -1,0 +1,90 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1done s2done s1c s2show
+step s2x: EXPLAIN (COSTS OFF) WITH results AS (UPDATE pbc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4, 6])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results;
+QUERY PLAN                                                                      
+--------------------------------------------------------------------------------
+Aggregate                                                                       
+  CTE results                                                                   
+    ->  Update on pbc                                                           
+          Update on pbc_q1 pbc_1                                                
+          ->  Hash Semi Join                                                    
+                Hash Cond: (pbc_1.id = "ANY_subquery".unnest)                   
+                ->  Seq Scan on pbc_q1 pbc_1                                    
+                      Filter: ((name = 'q1'::text) AND (state = 'active'::text))
+                ->  Hash                                                        
+                      ->  Subquery Scan on "ANY_subquery"                       
+                            ->  ProjectSet                                      
+                                  ->  Result                                    
+  ->  CTE Scan on results                                                       
+(13 rows)
+
+step s1done: UPDATE pbc SET state = 'completed' WHERE name = 'q1' AND id = 2;
+step s2done: WITH results AS (UPDATE pbc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4, 6])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+count
+-----
+    2
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM pbc WHERE id IN (2, 4, 6) ORDER BY id;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 2|completed|   0|                            
+q1  | 4|completed|   0|Sun Feb 01 00:00:00 2026 PST
+q1  | 6|completed|   0|Sun Feb 01 00:00:00 2026 PST
+(3 rows)
+
+
+starting permutation: s1data s2done s1c s2show
+step s1data: UPDATE pbc SET data = data + 1 WHERE name = 'q1' AND id = 2;
+step s2done: WITH results AS (UPDATE pbc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4, 6])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+count
+-----
+    3
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM pbc WHERE id IN (2, 4, 6) ORDER BY id;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 2|completed|   1|Sun Feb 01 00:00:00 2026 PST
+q1  | 4|completed|   0|Sun Feb 01 00:00:00 2026 PST
+q1  | 6|completed|   0|Sun Feb 01 00:00:00 2026 PST
+(3 rows)
+
+
+starting permutation: s1del s2done s1c s2show
+step s1del: DELETE FROM pbc WHERE name = 'q1' AND id = 4;
+step s2done: WITH results AS (UPDATE pbc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4, 6])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+count
+-----
+    2
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM pbc WHERE id IN (2, 4, 6) ORDER BY id;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 2|completed|   0|Sun Feb 01 00:00:00 2026 PST
+q1  | 6|completed|   0|Sun Feb 01 00:00:00 2026 PST
+(2 rows)
+
+
+starting permutation: s1move s2done s1c s2show
+step s1move: UPDATE pbc SET name = 'q2' WHERE name = 'q1' AND id = 2;
+step s2done: WITH results AS (UPDATE pbc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4, 6])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2show: SELECT name, id, state, data, completed_on FROM pbc WHERE id IN (2, 4, 6) ORDER BY id;
+name|id|state |data|completed_on
+----+--+------+----+------------
+q2  | 2|active|   0|            
+q1  | 4|active|   0|            
+q1  | 6|active|   0|            
+(3 rows)
+

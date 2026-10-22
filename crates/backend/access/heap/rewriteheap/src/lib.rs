@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use heapam::freeze::heap_freeze_tuple;
 use heapam::HeapTupleHeaderGetUpdateXid;
 use heaptuple::{heap_copytuple, HeapTuple};
@@ -167,8 +167,14 @@ struct UnresolvedTupData<'mcx> {
 struct RewriteMappingFile {
     off: u64,
     path: PathBuf,
-    file: std::fs::File,
+    vfd: types_storage::File,
     mappings: Vec<[u8; LOGICAL_REWRITE_MAPPING_SIZE]>,
+}
+
+impl Drop for RewriteMappingFile {
+    fn drop(&mut self) {
+        let _ = fd::FileClose(self.vfd);
+    }
 }
 
 pub struct RewriteState<'mcx> {
@@ -367,30 +373,13 @@ fn logical_heap_rewrite_flush_mappings(state: &mut RewriteState<'_>) -> PgResult
 // keeps in src->path. Advances src->off on success.
 fn logical_mapping_file_write(src: &mut RewriteMappingFile, waldata: &[u8]) -> PgResult<()> {
     let len = waldata.len();
-    report_wait_start(WAIT_EVENT_LOGICAL_REWRITE_WRITE);
-    #[cfg(unix)]
-    let written: i64 = {
-        use std::os::unix::io::AsRawFd;
-        fd::pg_pwrite(src.file.as_raw_fd(), waldata, src.off as i64) as i64
-    };
-    #[cfg(not(unix))]
-    let written: i64 = {
-        use std::io::{Seek, SeekFrom, Write};
-        let mut f = &src.file;
-        match f.seek(SeekFrom::Start(src.off)).and_then(|_| f.write(waldata)) {
-            Ok(n) => n as i64,
-            Err(e) => {
-                fd::set_errno(e.raw_os_error().unwrap_or(0));
-                -1
-            }
-        }
-    };
-    report_wait_end();
+    let written =
+        fd::FileWrite(src.vfd, waldata, src.off as i64, WAIT_EVENT_LOGICAL_REWRITE_WRITE)? as i64;
     if written != len as i64 {
         return ereport(ERROR)
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not write to file \"{}\", wrote {} of {}: %m",
+                "could not write to file \"{}\", wrote {} of {}: {PCT_M}",
                 mapping_relpath(&src.path),
                 written,
                 len
@@ -405,15 +394,13 @@ fn logical_mapping_file_write(src: &mut RewriteMappingFile, waldata: &[u8]) -> P
 // on one mapping file (fd.c FileSync brackets the fsync with
 // pgstat_report_wait_start/end).
 fn logical_mapping_file_sync(src: &RewriteMappingFile) -> PgResult<()> {
-    report_wait_start(WAIT_EVENT_LOGICAL_REWRITE_SYNC);
-    let rc = pg_fsync_file(&src.file);
-    report_wait_end();
+    let rc = fd::FileSync(src.vfd, WAIT_EVENT_LOGICAL_REWRITE_SYNC)?;
     if rc != 0 {
         // C rewriteheap.c:923: data_sync_elevel(ERROR) — PANIC at default
         // data_sync_retry=off; a failed fsync must never be retried.
         return ereport(fd::data_sync_elevel(ERROR))
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{}\": %m", mapping_relpath(&src.path)))
+            .errmsg(format!("could not fsync file \"{}\": {PCT_M}", mapping_relpath(&src.path)))
             .finish(loc(921, "logical_end_heap_rewrite"));
     }
     Ok(())
@@ -453,7 +440,7 @@ fn checkpoint_fsync_mapping_file(file: &std::fs::File, path: &std::path::Path) -
         // lost mapping data.
         return ereport(fd::data_sync_elevel(ERROR))
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{}\": %m", mapping_relpath(&path)))
+            .errmsg(format!("could not fsync file \"{}\": {PCT_M}", mapping_relpath(&path)))
             .finish(loc(1249, "CheckPointLogicalRewriteHeap"));
     }
     Ok(())
@@ -476,6 +463,19 @@ fn logical_end_heap_rewrite(state: &mut RewriteState<'_>) -> PgResult<()> {
     Ok(())
 }
 
+fn open_mapping_file(path: PathBuf) -> PgResult<RewriteMappingFile> {
+    let vfd =
+        fd::PathNameOpenFile(&path.to_string_lossy(), libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY)?;
+    if vfd.0 < 0 {
+        ereport(ERROR)
+            .with_saved_errno(fd::get_errno())
+            .errcode_for_file_access()
+            .errmsg(format!("could not create file \"{}\": {PCT_M}", mapping_relpath(&path)))
+            .finish(loc(977, "logical_rewrite_log_mapping"))?;
+    }
+    Ok(RewriteMappingFile { off: 0, path, vfd, mappings: Vec::new() })
+}
+
 // logical_rewrite_log_mapping (rewriteheap.c:935): buffer one (old->new)
 // mapping for 'xid', creating the per-xid mapping file on first use.
 fn logical_rewrite_log_mapping(
@@ -493,20 +493,8 @@ fn logical_rewrite_log_mapping(
             xid,
             xact_seams::get_current_transaction_id::call()?,
         );
-        let path = mappings_dir().join(name);
-        let file = match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(f) => f,
-            Err(e) => {
-                return ereport(ERROR)
-                    .with_saved_errno(e.raw_os_error().unwrap_or(0))
-                    .errcode_for_file_access()
-                    .errmsg(format!("could not create file \"{}\": %m", mapping_relpath(&path)))
-                    .finish(loc(977, "logical_rewrite_log_mapping"));
-            }
-        };
-        state
-            .rs_logical_mappings
-            .insert(xid, RewriteMappingFile { off: 0, path, file, mappings: Vec::new() });
+        let src = open_mapping_file(mappings_dir().join(name))?;
+        state.rs_logical_mappings.insert(xid, src);
     }
     let src = state.rs_logical_mappings.get_mut(&xid).unwrap();
     src.mappings.push(*map);
@@ -807,7 +795,7 @@ pub fn CheckPointLogicalRewriteHeap() -> PgResult<()> {
             return ereport(ERROR)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not open directory \"{PG_LOGICAL_MAPPINGS_DIR}\": %m"))
+                .errmsg(format!("could not open directory \"{PG_LOGICAL_MAPPINGS_DIR}\": {PCT_M}"))
                 .finish(loc(1177, "CheckPointLogicalRewriteHeap"));
         }
     };
@@ -850,7 +838,7 @@ pub fn CheckPointLogicalRewriteHeap() -> PgResult<()> {
                 return ereport(ERROR)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not remove file \"{}\": %m", mapping_relpath(&path)))
+                    .errmsg(format!("could not remove file \"{}\": {PCT_M}", mapping_relpath(&path)))
                     .finish(loc(1224, "CheckPointLogicalRewriteHeap"));
             }
         } else {
@@ -862,7 +850,7 @@ pub fn CheckPointLogicalRewriteHeap() -> PgResult<()> {
                     return ereport(ERROR)
                         .with_saved_errno(e.raw_os_error().unwrap_or(0))
                         .errcode_for_file_access()
-                        .errmsg(format!("could not open file \"{}\": %m", mapping_relpath(&path)))
+                        .errmsg(format!("could not open file \"{}\": {PCT_M}", mapping_relpath(&path)))
                         .finish(loc(1237, "CheckPointLogicalRewriteHeap"));
                 }
             };
@@ -872,7 +860,7 @@ pub fn CheckPointLogicalRewriteHeap() -> PgResult<()> {
                 fd::set_errno(e.raw_os_error().unwrap_or(0));
                 return ereport(ERROR)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not close file \"{}\": %m", mapping_relpath(&path)))
+                    .errmsg(format!("could not close file \"{}\": {PCT_M}", mapping_relpath(&path)))
                     .finish(loc(1244, "CheckPointLogicalRewriteHeap"));
             }
         }

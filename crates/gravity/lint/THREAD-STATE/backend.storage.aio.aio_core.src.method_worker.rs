@@ -1,0 +1,1 @@
+backend/storage/aio/aio_core/src/method_worker.rs	MY_IO_WORKER_ID	pgport	at:pgaio_worker_die	thread	method_worker.c MyIoWorkerId: an I/O worker's own slot, set by pgaio_worker_register, back to -1 by pgaio_worker_die; -1 on every other thread

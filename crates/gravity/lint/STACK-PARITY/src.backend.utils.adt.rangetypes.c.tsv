@@ -1,0 +1,8 @@
+# PostgreSQL 18.6 src/backend/utils/adt/rangetypes.c: 7 stack-depth check sites
+104	range_in	crates/backend/utils/adt/rangetypes/src/io.rs	range_in	yes	
+151	range_out	crates/backend/utils/adt/rangetypes/src/io.rs	range_out	yes	
+190	range_recv	crates/backend/utils/adt/rangetypes/src/io.rs	range_recv	yes	
+273	range_send	crates/backend/utils/adt/rangetypes/src/io.rs	range_send	yes	
+1264	range_cmp	crates/backend/utils/adt/rangetypes/src/ops.rs	range_cmp_internal	yes	
+1407	hash_range	crates/backend/utils/adt/rangetypes/src/ops.rs	hash_range_internal	yes	
+1474	hash_range_extended	crates/backend/utils/adt/rangetypes/src/ops.rs	hash_range_extended_internal	yes	

@@ -119,7 +119,15 @@ struct Arena {
     slots: Vec<Slot>,
     free: Vec<u32>,
     callbacks: Vec<(ResourceReleaseCallback, Datum)>,
+    // First generation of a slot re-grown after a trim: a stale handle to a
+    // trimmed index never matches its successor.
+    regrow_generation: u32,
+    // Slab bytes charged to the mcx footprint ledger.
+    charged: usize,
 }
+
+// Slots kept across a trim: the few owners a session keeps alive.
+const ARENA_KEEP_SLOTS: usize = 64;
 
 impl Arena {
     const fn new() -> Arena {
@@ -127,7 +135,37 @@ impl Arena {
             slots: Vec::new(),
             free: Vec::new(),
             callbacks: Vec::new(),
+            regrow_generation: 0,
+            charged: 0,
         }
+    }
+
+    fn sync_charge(&mut self) {
+        let bytes = self.slots.capacity() * core::mem::size_of::<Slot>();
+        if bytes > self.charged {
+            ::mcx::global_footprint::charge_raw(bytes - self.charged);
+        } else if bytes < self.charged {
+            ::mcx::global_footprint::uncharge_raw(self.charged - bytes);
+        }
+        self.charged = bytes;
+    }
+
+    // C pfrees each owner into TopMemoryContext; here the slab would keep a
+    // deep subtransaction stack's slots for the session. Drops the free tail
+    // and returns the excess capacity once the slab is mostly free.
+    fn trim(&mut self) {
+        if self.slots.capacity() <= ARENA_KEEP_SLOTS || self.free.len() * 2 < self.slots.len() {
+            return;
+        }
+        while self.slots.last().is_some_and(|slot| !slot.live) {
+            let slot = self.slots.pop().expect("non-empty");
+            self.regrow_generation = self.regrow_generation.max(slot.generation);
+        }
+        let len = self.slots.len();
+        self.free.retain(|&idx| (idx as usize) < len);
+        self.slots.shrink_to(len.max(ARENA_KEEP_SLOTS));
+        self.free.shrink_to(ARENA_KEEP_SLOTS);
+        self.sync_charge();
     }
 
     fn alloc(&mut self, parent: ResourceOwner, name: &'static str) -> PgResult<ResourceOwner> {
@@ -155,12 +193,16 @@ impl Arena {
         } else {
             self.slots.try_reserve(1).map_err(|_| oom())?;
             let idx = self.slots.len() as u32;
+            let generation = self.regrow_generation;
             self.slots.push(Slot {
-                generation: 0,
+                generation,
                 live: true,
                 data: ResourceOwnerData::new(parent, name),
             });
-            Ok(ResourceOwner::from_parts(idx, 0))
+            if self.slots.capacity() * core::mem::size_of::<Slot>() != self.charged {
+                self.sync_charge();
+            }
+            Ok(ResourceOwner::from_parts(idx, generation))
         }
     }
 
@@ -212,6 +254,7 @@ thread_local! {
     static CUR_TRANSACTION_OWNER: Cell<ResourceOwner> = const { Cell::new(ResourceOwner::NULL) };
     static TOP_TRANSACTION_OWNER: Cell<ResourceOwner> = const { Cell::new(ResourceOwner::NULL) };
     static AUX_PROCESS_OWNER: Cell<ResourceOwner> = const { Cell::new(ResourceOwner::NULL) };
+    static STANDING_OWNER: Cell<ResourceOwner> = const { Cell::new(ResourceOwner::NULL) };
 }
 
 // INVARIANT (single entry): no closure passed here re-enters with_arena.
@@ -226,18 +269,27 @@ pub fn session_mem_teardown() {
     ARENA.with(|cell| {
         // SAFETY: task-end teardown — no arena entry is live (single thread).
         let arena = unsafe { &mut **cell.get() };
-        *arena = Arena {
-            slots: Vec::new(),
-            free: Vec::new(),
-            callbacks: Vec::new(),
-        };
+        ::mcx::global_footprint::uncharge_raw(arena.charged);
+        *arena = Arena::new();
     });
+    STANDING_OWNER.with(|c| c.set(ResourceOwner::NULL));
+    // D4682: every handle into the dropped arena is stale; a reused backend thread's next session starts with
+    // no owner, as a new thread does (a stale CURRENT_OWNER hit bad_owner in its first catalog lock).
+    for cell in [&CURRENT_OWNER, &CUR_TRANSACTION_OWNER, &TOP_TRANSACTION_OWNER, &AUX_PROCESS_OWNER] {
+        cell.with(|c| c.set(ResourceOwner::NULL));
+    }
 }
 
 // memgrowth-discriminator (suspect-A census): the owner arena is a raw-Rust
 // slab of 1024-byte slots — its Vec backing is plain global-allocator memory,
 // invisible to the mcx context ledger. (slots len, slots capacity, free-list
 // len); resident slab bytes = capacity × 1024.
+/// Top-level transaction end: gives back the slab a deep subtransaction
+/// stack grew.
+pub fn trim_owner_arena() {
+    with_arena(|a| a.trim());
+}
+
 pub fn arena_census() -> (usize, usize, usize) {
     with_arena(|a| (a.slots.len(), a.slots.capacity(), a.free.len()))
 }
@@ -1116,6 +1168,10 @@ pub fn SetAuxProcessResourceOwner(owner: ResourceOwner) {
     AUX_PROCESS_OWNER.with(|c| c.set(owner));
 }
 
+pub fn SetStandingResourceOwner(owner: ResourceOwner) {
+    STANDING_OWNER.with(|c| c.set(owner));
+}
+
 pub fn ResourceOwnerStateClean() -> bool {
     ResourceOwnerStateIssue().is_none()
 }
@@ -1137,23 +1193,23 @@ pub fn ResourceOwnerStateIssueAllowing(parked: ResourceOwner) -> Option<&'static
     if !AuxProcessResourceOwner().is_null() {
         return Some("auxiliary process resource owner is still live");
     }
+    let standing = STANDING_OWNER.with(|c| c.get());
     if with_arena(|a| {
         a.slots.iter().enumerate().find_map(|(index, slot)| {
             if !slot.live {
                 return None;
             }
             let owner = ResourceOwner::from_parts(index as u32, slot.generation);
-            if owner == parked
-                && slot.data.parent.is_null()
+            let empty = slot.data.parent.is_null()
                 && slot.data.firstchild.is_null()
                 && slot.data.nextchild.is_null()
                 && slot.data.narr == 0
                 && slot.data.nhash == 0
-                && slot.data.capacity == 0
                 && slot.data.aio_handles.is_empty()
                 && slot.data.nlocks == 0
-                && !slot.data.releasing
-            {
+                && !slot.data.releasing;
+            // the pooled owner never grew; the standing owner keeps the hash its claims grew
+            if empty && ((owner == parked && slot.data.capacity == 0) || owner == standing) {
                 return None;
             }
             Some(slot.data.name)

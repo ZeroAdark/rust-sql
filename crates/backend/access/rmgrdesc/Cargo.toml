@@ -9,6 +9,7 @@ name = "rmgrdesc"
 path = "src/lib.rs"
 
 [dependencies]
+mcx = { path = "../../../_support/mcx" }
 types_spgist = { path = "../../../_support/types/types_spgist" }
 types_brin = { path = "../../../_support/types/types_brin" }
 types_core = { path = "../../../_support/types/types_core" }
@@ -23,6 +24,9 @@ stringinfo = { path = "../../../_support/types/stringinfo" }
 xlogreader_seams = { path = "../transam/xlogreader_seams" }
 controldata_utils = { path = "../../../common/controldata_utils" }
 relpath_seams = { path = "../../../common/relpath_seams" }
+pgrc_format = { path = "../pgrcolumnar/pgrc_format" }
+# D3150: the publish generation stamp (pgrc_am walgen.rs: record payload + WALGEN file).
+pgrc_am = { path = "../pgrcolumnar/pgrc_am" }
 xact = { path = "../transam/xact" }
 clog = { path = "../transam/clog" }
 commit_ts = { path = "../transam/commit_ts" }

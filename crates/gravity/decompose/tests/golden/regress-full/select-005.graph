@@ -1,0 +1,24 @@
+-- regress-full-select-005
+-- select * from onek, (values(147, 'RFAAAA'), (931, 'VJAAAA')) as v (i, j) WHERE onek.unique1 = v.i and onek.stringu1 = v.j;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source values rti=3 rows=2
+    row (c23:147, c25:'RFAAAA')
+    row (c23:931, c25:'VJAAAA')
+  project (1=v3.1, 2=v3.2)
+  nest inner=n2 JOIN_INNER raise-free params=($exec0=outer.2, $exec1=outer.1)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=16417 rti=1 am=heap index=19338
+    key att=14 op=254 value=relabel25($exec0)
+    recheck (op254(v1.14, relabel25($exec0)))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page
+  filter op96($exec1, v1.1)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=inner.5, 6=inner.6, 7=inner.7, 8=inner.8, 9=inner.9, 10=inner.10, 11=inner.11, 12=inner.12, 13=inner.13, 14=inner.14, 15=inner.15, 16=inner.16, 17=outer.1, 18=outer.2)
+  outs 1=w4:val 2=vl:row
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=fx64:life/breaker 15=fx64:life/breaker 16=fx64:life/breaker 17=w4:val 18=vl:row
+param $exec0 owner=n0 type=25@100 rep=vl:row
+param $exec1 owner=n0 type=23 rep=w4:val
+mapped: IndexScan ValuesScan NestLoop NestLoopParam

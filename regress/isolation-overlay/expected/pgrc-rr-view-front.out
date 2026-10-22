@@ -1,0 +1,251 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1rr s1agg s2rows s2del mseal s1bulk s1agg s1some s1c ragg
+setup_delete
+------------
+done        
+(1 row)
+
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|sum|min|max|sum
+-----+---+---+---+---
+   13|104|  1| 15|  0
+(1 row)
+
+step s2rows: COPY pgrc_t FROM PROGRAM 'seq -f %g,2 601 605' WITH (FORMAT csv) WHERE random() >= 0;
+step s2del: DELETE FROM pgrc_t WHERE id IN (1, 11, 602);
+step mseal: CALL pgrc_seal('pgrc_t');
+step s1bulk: COPY pgrc_t FROM PROGRAM 'seq -f %g,1 1001 1040' WITH (FORMAT csv);
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   53|40924|  1|1040| 40
+(1 row)
+
+step s1some: SELECT id, v FROM pgrc_t WHERE id < 20 OR id > 3000 ORDER BY id;
+id|v
+--+-
+ 1|0
+ 2|0
+ 4|0
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|0
+12|0
+14|0
+15|0
+(13 rows)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   55|43325|  2|1040| 48
+(1 row)
+
+
+starting permutation: s1rr s1agg s2rows mseal s1bulk s1row s1agg s1some s1c ragg
+setup_delete
+------------
+done        
+(1 row)
+
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|sum|min|max|sum
+-----+---+---+---+---
+   13|104|  1| 15|  0
+(1 row)
+
+step s2rows: COPY pgrc_t FROM PROGRAM 'seq -f %g,2 601 605' WITH (FORMAT csv) WHERE random() >= 0;
+step mseal: CALL pgrc_seal('pgrc_t');
+step s1bulk: COPY pgrc_t FROM PROGRAM 'seq -f %g,1 1001 1040' WITH (FORMAT csv);
+step s1row: COPY pgrc_t FROM PROGRAM 'echo 3001,1' WITH (FORMAT csv) WHERE random() >= 0;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   54|43925|  1|3001| 41
+(1 row)
+
+step s1some: SELECT id, v FROM pgrc_t WHERE id < 20 OR id > 3000 ORDER BY id;
+  id|v
+----+-
+   1|0
+   2|0
+   4|0
+   5|0
+   6|0
+   7|0
+   8|0
+   9|0
+  10|0
+  11|0
+  12|0
+  14|0
+  15|0
+3001|1
+(14 rows)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   59|46940|  1|3001| 51
+(1 row)
+
+
+starting permutation: s1rr s1row s1agg s2rows s2del mseal s1bulk s1agg s1some s1c ragg
+setup_delete
+------------
+done        
+(1 row)
+
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1row: COPY pgrc_t FROM PROGRAM 'echo 3001,1' WITH (FORMAT csv) WHERE random() >= 0;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count| sum|min| max|sum
+-----+----+---+----+---
+   14|3105|  1|3001|  1
+(1 row)
+
+step s2rows: COPY pgrc_t FROM PROGRAM 'seq -f %g,2 601 605' WITH (FORMAT csv) WHERE random() >= 0;
+step s2del: DELETE FROM pgrc_t WHERE id IN (1, 11, 602);
+step mseal: CALL pgrc_seal('pgrc_t');
+step s1bulk: COPY pgrc_t FROM PROGRAM 'seq -f %g,1 1001 1040' WITH (FORMAT csv);
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   54|43925|  1|3001| 41
+(1 row)
+
+step s1some: SELECT id, v FROM pgrc_t WHERE id < 20 OR id > 3000 ORDER BY id;
+  id|v
+----+-
+   1|0
+   2|0
+   4|0
+   5|0
+   6|0
+   7|0
+   8|0
+   9|0
+  10|0
+  11|0
+  12|0
+  14|0
+  15|0
+3001|1
+(14 rows)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   56|46326|  2|3001| 49
+(1 row)
+
+
+starting permutation: s1ser s1agg s2rows s2del mseal s1bulk s1row s1agg s1some s1c ragg
+setup_delete
+------------
+done        
+(1 row)
+
+step s1ser: BEGIN ISOLATION LEVEL SERIALIZABLE;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|sum|min|max|sum
+-----+---+---+---+---
+   13|104|  1| 15|  0
+(1 row)
+
+step s2rows: COPY pgrc_t FROM PROGRAM 'seq -f %g,2 601 605' WITH (FORMAT csv) WHERE random() >= 0;
+step s2del: DELETE FROM pgrc_t WHERE id IN (1, 11, 602);
+step mseal: CALL pgrc_seal('pgrc_t');
+step s1bulk: COPY pgrc_t FROM PROGRAM 'seq -f %g,1 1001 1040' WITH (FORMAT csv);
+step s1row: COPY pgrc_t FROM PROGRAM 'echo 3001,1' WITH (FORMAT csv) WHERE random() >= 0;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   54|43925|  1|3001| 41
+(1 row)
+
+step s1some: SELECT id, v FROM pgrc_t WHERE id < 20 OR id > 3000 ORDER BY id;
+  id|v
+----+-
+   1|0
+   2|0
+   4|0
+   5|0
+   6|0
+   7|0
+   8|0
+   9|0
+  10|0
+  11|0
+  12|0
+  14|0
+  15|0
+3001|1
+(14 rows)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   56|46326|  2|3001| 49
+(1 row)
+
+
+starting permutation: s1rc s1agg s2rows s2del mseal s1bulk s1row s1agg s1some s1c ragg
+setup_delete
+------------
+done        
+(1 row)
+
+step s1rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|sum|min|max|sum
+-----+---+---+---+---
+   13|104|  1| 15|  0
+(1 row)
+
+step s2rows: COPY pgrc_t FROM PROGRAM 'seq -f %g,2 601 605' WITH (FORMAT csv) WHERE random() >= 0;
+step s2del: DELETE FROM pgrc_t WHERE id IN (1, 11, 602);
+step mseal: CALL pgrc_seal('pgrc_t');
+step s1bulk: COPY pgrc_t FROM PROGRAM 'seq -f %g,1 1001 1040' WITH (FORMAT csv);
+step s1row: COPY pgrc_t FROM PROGRAM 'echo 3001,1' WITH (FORMAT csv) WHERE random() >= 0;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   56|46326|  2|3001| 49
+(1 row)
+
+step s1some: SELECT id, v FROM pgrc_t WHERE id < 20 OR id > 3000 ORDER BY id;
+  id|v
+----+-
+   2|0
+   4|0
+   5|0
+   6|0
+   7|0
+   8|0
+   9|0
+  10|0
+  12|0
+  14|0
+  15|0
+3001|1
+(12 rows)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM pgrc_t;
+count|  sum|min| max|sum
+-----+-----+---+----+---
+   56|46326|  2|3001| 49
+(1 row)
+

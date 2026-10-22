@@ -70,7 +70,14 @@ fn RecordTransactionCommitGuts(xp: XsPtr, mcx: mcx::Mcx<'_>) -> PgResult<Transac
     } else {
         mcx::PgVec::new_in(mcx)
     };
-    let children = committed_children_in(xp)?;
+    // D4485: without an xid C reads the committed children only for `Assert(nchildren == 0)` (xact.c:1368;
+    // AssignTransactionId gives a child an xid only after its parent has one): the release build skips the copy there,
+    // a debug build still takes it and the assert below checks it.
+    let children = if mark_xid_committed || cfg!(debug_assertions) {
+        committed_children_in(xp)?
+    } else {
+        Vec::new()
+    };
     let dropped_stats = pgstat::xact::pgstat_get_transactional_drops(mcx, true)?;
     let (inval_msgs, relcache_init_file_inval) = if xlog_seams::xlog_standby_info_active::call() {
         inval::eoxact::xactGetCommittedInvalidationMessages(mcx)?
@@ -462,6 +469,8 @@ fn CommitTransaction(xp: XsPtr) -> PgResult<()> {
     if tablecmds_seams::pre_commit_on_commit_actions::is_installed() {
         tablecmds_seams::pre_commit_on_commit_actions::call()?;
     }
+    // D3888: the relcache messages of the relations built from the operator families this transaction changed
+    inval::eoxact::PreCommit_Inval()?;
 
     // Sync files created but not WAL-logged; must precede
     // AtEOXact_RelationMap to avoid committed-but-broken files.
@@ -565,7 +574,7 @@ fn CommitTransaction(xp: XsPtr) -> PgResult<()> {
     if combocid_seams::at_eoxact_combocid::is_installed() {
         combocid_seams::at_eoxact_combocid::call();
     }
-    // AtEOXact_HashTables dissolves (crate docs).
+    dynahash::AtEOXact_HashTables(true);
     pgstat::xact::AtEOXact_PgStat(true, is_parallel_worker);
     snapmgr_seams::at_eoxact_snapshot::call(true, false)?;
     if launcher_seams::at_eoxact_apply_launcher::is_installed() {
@@ -629,6 +638,8 @@ fn PrepareTransaction(xp: XsPtr) -> PgResult<()> {
     if tablecmds_seams::pre_commit_on_commit_actions::is_installed() {
         tablecmds_seams::pre_commit_on_commit_actions::call()?;
     }
+    // D3888: the relcache messages of the relations built from the operator families this transaction changed
+    inval::eoxact::PreCommit_Inval()?;
 
     if catalog_storage_seams::smgr_do_pending_syncs::is_installed() {
         catalog_storage_seams::smgr_do_pending_syncs::call(true, false)?;
@@ -771,7 +782,8 @@ fn PrepareTransaction(xp: XsPtr) -> PgResult<()> {
     if combocid_seams::at_eoxact_combocid::is_installed() {
         combocid_seams::at_eoxact_combocid::call();
     }
-    // AtEOXact_HashTables dissolves; no AtEOXact_PgStat (pgstat fixed above).
+    dynahash::AtEOXact_HashTables(true);
+    // No AtEOXact_PgStat (pgstat fixed above).
     snapmgr_seams::at_eoxact_snapshot::call(true, true)?;
     if launcher_seams::at_eoxact_apply_launcher::is_installed() {
         launcher_seams::at_eoxact_apply_launcher::call(false);
@@ -807,6 +819,8 @@ fn PrepareTransaction(xp: XsPtr) -> PgResult<()> {
 
 fn AbortTransaction(xp: XsPtr) -> PgResult<()> {
     init_small::globals::HoldInterrupts();
+    init_small::globals::ForgetInterruptRaised();
+    init_small::globals::SetRedeliverInterrupts(0);
 
     if lmgr_proc::globals::TransactionTimeout() > 0 {
         timeout::disable_timeout(timeout_seams::TRANSACTION_TIMEOUT, false);
@@ -937,7 +951,7 @@ fn AbortTransaction(xp: XsPtr) -> PgResult<()> {
         if combocid_seams::at_eoxact_combocid::is_installed() {
             combocid_seams::at_eoxact_combocid::call();
         }
-        // AtEOXact_HashTables dissolves.
+        dynahash::AtEOXact_HashTables(false);
         pgstat::xact::AtEOXact_PgStat(false, is_parallel_worker);
         if launcher_seams::at_eoxact_apply_launcher::is_installed() {
             launcher_seams::at_eoxact_apply_launcher::call(false);
@@ -1948,7 +1962,7 @@ fn CommitSubTransaction() -> PgResult<()> {
     }
     namespace_seams::at_eosubxact_namespace::call(true, my, parent);
     fd::AtEOSubXact_Files(true, my, parent);
-    // AtEOSubXact_HashTables dissolves.
+    dynahash::AtEOSubXact_HashTables(true, nesting_level);
     pgstat::xact::AtEOSubXact_PgStat(true, nesting_level);
     snapmgr_seams::at_subcommit_snapshot::call(nesting_level);
 
@@ -1968,6 +1982,7 @@ fn CommitSubTransaction() -> PgResult<()> {
 
 fn AbortSubTransaction() -> PgResult<()> {
     init_small::globals::HoldInterrupts();
+    init_small::globals::ForgetInterruptRaised();
 
     AtSubAbort_Memory();
     AtSubAbort_ResourceOwner();
@@ -2064,7 +2079,7 @@ fn AbortSubTransaction() -> PgResult<()> {
         }
         namespace_seams::at_eosubxact_namespace::call(false, my, parent);
         fd::AtEOSubXact_Files(false, my, parent);
-        // AtEOSubXact_HashTables dissolves.
+        dynahash::AtEOSubXact_HashTables(false, nesting_level);
         pgstat::xact::AtEOSubXact_PgStat(false, nesting_level);
         snapmgr_seams::at_subabort_snapshot::call(nesting_level)?;
     }

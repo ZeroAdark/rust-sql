@@ -8,7 +8,8 @@ use types_core::{
     XLogRecPtr, RELPERSISTENCE_PERMANENT,
 };
 use types_error::{PgResult, DEBUG2};
-use types_rel::{RelationData, RELKIND_SEQUENCE};
+use reorderbuffer_seams::CompanionKind;
+use types_rel::{RelationData, RELKIND_SEQUENCE, RELKIND_TOASTVALUE};
 use types_snapshot::SnapshotData;
 use types_storage::SharedInvalidationMessage;
 
@@ -20,16 +21,17 @@ use crate::{
     RBTXN_IS_SERIALIZED_CLEAR, RBTXN_IS_STREAMED, RBTXN_SENT_PREPARE,
 };
 // rd_rel->relrewrite (reorderbuffer.c:2359): the trimmed relcache form does
-// not carry pg_class.relrewrite, so it is read from pg_class (under the same
-// historic snapshot the relcache entry was built under). Every rewrite heap
-// is named pg_temp_<oid> by make_new_heap (cluster.c), so only such names pay
-// the catalog read; relrewrite itself decides.
+// not carry pg_class.relrewrite, so it is read from the pg_class syscache.
+// Only make_new_heap's pg_temp_<oid> heaps and toast tables (the transient
+// heap's pg_toast_<oid>) can carry it, so other relations skip the lookup.
 fn is_rewrite_heap(relation: &RelationData<'static>) -> PgResult<bool> {
-    if !relation.rd_rel.relname.name_str().starts_with(b"pg_temp_") {
+    if relation.rd_rel.relkind != RELKIND_TOASTVALUE
+        && !relation.rd_rel.relname.name_str().starts_with(b"pg_temp_")
+    {
         return Ok(false);
     }
-    let scanned = relcache_build_seams::scan_pg_relation::call(relation.rd_id, true, false)?;
-    Ok(scanned.is_some_and(|c| c.relrewrite != InvalidOid))
+    let relrewrite = syscache_seams::pg_class_relrewrite::call(relation.rd_id)?;
+    Ok(relrewrite.is_some_and(|r| r != InvalidOid))
 }
 
 
@@ -37,6 +39,16 @@ pub(crate) fn relation_is_logically_logged(relation: &RelationData<'static>) -> 
     transam_xlog_seams::xlog_logical_info_active::call()
         && relation.rd_rel.relpersistence == RELPERSISTENCE_PERMANENT
         && !catalog::IsCatalogRelation(relation)
+}
+
+// A companion is a plain table in pg_toast, where C only ever has toast tables, so it is classified before the toast test.
+pub(crate) fn companion_of(relation: &RelationData<'_>) -> Option<(Oid, CompanionKind)> {
+    use reorderbuffer_seams::pgrc_companion_of as classify;
+    let rel = &relation.rd_rel;
+    if !classify::is_installed() {
+        return None;
+    }
+    classify::call(rel.relnamespace, rel.relname.name_str(), rel.relkind)
 }
 
 pub(crate) fn execute_invalidations(msgs: &[SharedInvalidationMessage]) -> PgResult<()> {
@@ -271,6 +283,9 @@ impl ReorderBuffer {
     }
 
     pub(crate) fn cleanup_txn(&mut self, txn: TxnId) -> PgResult<()> {
+        // Toast chunks stashed on the top may be accounted to a subxact
+        // (their change's txn): release them while every subxact is live.
+        self.toast_reset(txn);
         let subs: Vec<TxnId> = dl_iter(&self.txns, self.txn(txn).subtxns, |t| t.node).collect();
         for sub in subs {
             debug_assert!(self.txn(sub).is_known_subxact());
@@ -639,6 +654,9 @@ impl ReorderBuffer {
 
             let action = self.change(cur).action;
             match action {
+                // A confirm with no speculative insert pending is a pgrc tombstone's (its insert is NO_LOGICAL).
+                InternalSpecConfirm
+                    if specinsert.is_none() && self.change_on_pgrc_companion(cur)? => {}
                 InternalSpecConfirm | Insert | Update | Delete => {
                     let mut work = cur;
                     if action == InternalSpecConfirm {
@@ -893,29 +911,40 @@ impl ReorderBuffer {
                 && (self.output_rewrites || !is_rewrite_heap(relation)?)
                 && relation.rd_rel.relkind != RELKIND_SEQUENCE
             {
-                if !catalog::IsToastRelation(relation) {
-                    self.toast_replace(txn, relation, work)?;
-                    let mut change = self.changes[work as usize].take().expect("live change");
-                    // ReorderBufferApplyChange (reorderbuffer.c:2072).
-                    let cb = if streaming {
-                        self.callbacks
-                            .stream_change
-                            .expect("streamed replay requires the stream_change callback")
-                    } else {
-                        self.callbacks.apply_change
-                    };
-                    let r = cb(self, txn, relation, &mut change);
-                    self.changes[work as usize] = Some(change);
-                    r?;
-                    if clear_toast {
-                        self.toast_reset(txn);
+                match companion_of(relation) {
+                    Some((_, CompanionKind::Tombstone)) => {}
+                    // The change goes out on the parent: the segment has the parent's attributes, dropped columns included.
+                    Some((parent, CompanionKind::Segment { .. })) => {
+                        let parent_rel = relcache::RelationIdGetRelation(parent)?.ok_or_else(|| {
+                            rb_error(format!(
+                                "could not open relation with OID {parent} (parent of \"{}\")",
+                                relation.name()
+                            ))
+                        })?;
+                        if relation_is_logically_logged(&parent_rel) {
+                            self.toast_replace(txn, relation, work)?;
+                            self.apply_change(txn, &parent_rel, work, streaming)?;
+                        }
+                        if clear_toast {
+                            self.toast_reset(txn);
+                        }
                     }
-                } else if self.change(work).action == Insert {
-                    debug_assert!(has_new);
-                    debug_assert!(specinsert.is_none(), "spec-insert into a toast relation");
-                    let state = iterstate.as_mut().expect("iterator initialized");
-                    self.iter_extract_change(state, work);
-                    self.toast_append_chunk(txn, relation, work)?;
+                    None if !catalog::IsToastRelation(relation) => {
+                        self.toast_replace(txn, relation, work)?;
+                        self.apply_change(txn, relation, work, streaming)?;
+                        if clear_toast {
+                            self.toast_reset(txn);
+                        }
+                    }
+                    None => {
+                        if self.change(work).action == Insert {
+                            debug_assert!(has_new);
+                            debug_assert!(specinsert.is_none(), "spec-insert into a toast relation");
+                            let state = iterstate.as_mut().expect("iterator initialized");
+                            self.iter_extract_change(state, work);
+                            self.toast_append_chunk(txn, relation, work)?;
+                        }
+                    }
                 }
             }
         }
@@ -924,6 +953,40 @@ impl ReorderBuffer {
             self.free_change(si, true);
         }
         Ok(())
+    }
+
+    fn apply_change(
+        &mut self,
+        txn: TxnId,
+        relation: &RelationData<'static>,
+        work: ChangeId,
+        streaming: bool,
+    ) -> PgResult<()> {
+        let mut change = self.changes[work as usize].take().expect("live change");
+        let cb = if streaming {
+            self.callbacks
+                .stream_change
+                .expect("streamed replay requires the stream_change callback")
+        } else {
+            self.callbacks.apply_change
+        };
+        let r = cb(self, txn, relation, &mut change);
+        self.changes[work as usize] = Some(change);
+        r
+    }
+
+    fn change_on_pgrc_companion(&self, cur: ChangeId) -> PgResult<bool> {
+        let ReorderBufferChangeData::Tp { rlocator, .. } = &self.change(cur).data else {
+            return Ok(false);
+        };
+        let reloid = relfilenumbermap_seams::relid_by_relfilenumber::call(
+            rlocator.spcOid,
+            rlocator.relNumber,
+        )?;
+        if reloid == InvalidOid {
+            return Ok(false);
+        }
+        Ok(relcache::RelationIdGetRelation(reloid)?.is_some_and(|r| companion_of(&r).is_some()))
     }
 
     fn apply_message(&mut self, txn: TxnId, cur: ChangeId, streaming: bool) -> PgResult<()> {

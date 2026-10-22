@@ -1,0 +1,72 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) UPDATE d74_a SET note = note || '+' WHERE id < 7 AND (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) NOT IN (SELECT * FROM d74_s);
+QUERY PLAN                                                                                                                                                                                                                                                                                                                                                                                              
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Update on d74_a                                                                                                                                                                                                                                                                                                                                                                                         
+  ->  Seq Scan on d74_a                                                                                                                                                                                                                                                                                                                                                                                 
+        Filter: ((id < 7) AND (NOT (ANY ((c1 = (hashed SubPlan 1).col1) AND (c2 = (hashed SubPlan 1).col2) AND (c3 = (hashed SubPlan 1).col3) AND (c4 = (hashed SubPlan 1).col4) AND (c5 = (hashed SubPlan 1).col5) AND (c6 = (hashed SubPlan 1).col6) AND (c7 = (hashed SubPlan 1).col7) AND (c8 = (hashed SubPlan 1).col8) AND (c9 = (hashed SubPlan 1).col9) AND (c10 = (hashed SubPlan 1).col10)))))
+        SubPlan 1                                                                                                                                                                                                                                                                                                                                                                                       
+          ->  Seq Scan on d74_s                                                                                                                                                                                                                                                                                                                                                                         
+(5 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1k s2u s1c s2s s2c
+step s1k: UPDATE d74_a SET c1 = 30, c2 = 30, c3 = 30, c4 = 30, c5 = 30, c6 = 30, c7 = 30, c8 = 30, c9 = 30, c10 = 30 WHERE id = 2;
+step s2u: UPDATE d74_a SET note = note || '+' WHERE id < 7 AND (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) NOT IN (SELECT * FROM d74_s); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, c1, c7, note FROM d74_a WHERE id < 8 ORDER BY id;
+id|c1|c7|note
+--+--+--+----
+ 1| 1| 1|n1+ 
+ 2|30|30|n2  
+ 3| 3| 3|n3+ 
+ 4| 4| 4|n4+ 
+ 5| 5| 5|n5  
+ 6| 6| 6|n6+ 
+ 7| 7| 7|n7  
+(7 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s2u s1c s2s s2c
+step s1n: UPDATE d74_a SET note = note || '*' WHERE id = 2;
+step s2u: UPDATE d74_a SET note = note || '+' WHERE id < 7 AND (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) NOT IN (SELECT * FROM d74_s); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, c1, c7, note FROM d74_a WHERE id < 8 ORDER BY id;
+id|c1|c7|note
+--+--+--+----
+ 1| 1| 1|n1+ 
+ 2| 2| 2|n2*+
+ 3| 3| 3|n3+ 
+ 4| 4| 4|n4+ 
+ 5| 5| 5|n5  
+ 6| 6| 6|n6+ 
+ 7| 7| 7|n7  
+(7 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1z s2u s1c s2s s2c
+step s1z: UPDATE d74_a SET c7 = NULL WHERE id = 2;
+step s2u: UPDATE d74_a SET note = note || '+' WHERE id < 7 AND (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) NOT IN (SELECT * FROM d74_s); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, c1, c7, note FROM d74_a WHERE id < 8 ORDER BY id;
+id|c1|c7|note
+--+--+--+----
+ 1| 1| 1|n1+ 
+ 2| 2|  |n2+ 
+ 3| 3| 3|n3+ 
+ 4| 4| 4|n4+ 
+ 5| 5| 5|n5  
+ 6| 6| 6|n6+ 
+ 7| 7| 7|n7  
+(7 rows)
+
+step s2c: COMMIT;

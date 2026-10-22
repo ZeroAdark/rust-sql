@@ -1,1 +1,0 @@
-4$.a.datetime("HH24:MI TZH") == $.b.timestamp(2)

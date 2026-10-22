@@ -1,0 +1,11 @@
+-- regress-full-rangetypes-001
+-- SELECT * FROM textrange_test WHERE 'e'::text <@ tr;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=7 end=sink
+  nodes n0@0
+  source range rel=16864 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  filter op3889(v1.1, c25:'e')
+  project (1=v1.1)
+  outs 1=?
+mapped: SeqScan

@@ -1,0 +1,81 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.a, t.b, v.x FROM d3656_t t JOIN (VALUES (3, 'p'), (5, 'q')) v(n, x) ON t.a < v.n WHERE t.a < 6 FOR UPDATE OF t;
+QUERY PLAN                                     
+-----------------------------------------------
+LockRows                                       
+  ->  Nested Loop                              
+        Join Filter: (t.a < "*VALUES*".column1)
+        ->  Seq Scan on d3656_t t              
+              Filter: (a < 6)                  
+        ->  Materialize                        
+              ->  Values Scan on "*VALUES*"    
+(7 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1k s2n s1c s2c
+step s1k: UPDATE d3656_t SET a = 4 WHERE a = 1;
+step s2n: SELECT t.a, t.b, v.x FROM d3656_t t JOIN (VALUES (3, 'p'), (5, 'q')) v(n, x) ON t.a < v.n WHERE t.a < 6 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+a|b |x
+-+--+-
+4|r1|q
+2|r2|p
+2|r2|q
+3|r3|q
+4|r4|q
+(5 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1f s2n s1c s2c
+step s1f: UPDATE d3656_t SET a = 9 WHERE a = 2;
+step s2n: SELECT t.a, t.b, v.x FROM d3656_t t JOIN (VALUES (3, 'p'), (5, 'q')) v(n, x) ON t.a < v.n WHERE t.a < 6 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+a|b |x
+-+--+-
+1|r1|p
+1|r1|q
+3|r3|q
+4|r4|q
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1b s2n s1c s2c
+step s1b: UPDATE d3656_t SET b = 'n3' WHERE a = 3;
+step s2n: SELECT t.a, t.b, v.x FROM d3656_t t JOIN (VALUES (3, 'p'), (5, 'q')) v(n, x) ON t.a < v.n WHERE t.a < 6 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+a|b |x
+-+--+-
+1|r1|p
+1|r1|q
+2|r2|p
+2|r2|q
+3|n3|q
+4|r4|q
+(6 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k s1f s1b s2n s1c s2c
+step s1k: UPDATE d3656_t SET a = 4 WHERE a = 1;
+step s1f: UPDATE d3656_t SET a = 9 WHERE a = 2;
+step s1b: UPDATE d3656_t SET b = 'n3' WHERE a = 3;
+step s2n: SELECT t.a, t.b, v.x FROM d3656_t t JOIN (VALUES (3, 'p'), (5, 'q')) v(n, x) ON t.a < v.n WHERE t.a < 6 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+a|b |x
+-+--+-
+4|r1|q
+3|n3|q
+4|r4|q
+(3 rows)
+
+step s2c: COMMIT;

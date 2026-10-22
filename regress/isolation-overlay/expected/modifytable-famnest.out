@@ -1,0 +1,152 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3eu s1t s1p s2u s1c s2c s3sel
+step s3eu: EXPLAIN (COSTS OFF) UPDATE fnt SET b = fnt.b || '+' || fnp.b FROM fnp WHERE fnt.a = 3 AND fnt.id > 100 AND fnt.b > 's' AND fnp.a = 3 AND fnp.id % 10 = fnt.id % 10;
+QUERY PLAN                                                        
+------------------------------------------------------------------
+Update on fnt                                                     
+  ->  Nested Loop                                                 
+        Join Filter: ((fnt.id % 10) = (fnp.id % 10))              
+        ->  Seq Scan on fnt                                       
+              Filter: ((id > 100) AND (b > 's'::text) AND (a = 3))
+        ->  Append                                                
+              ->  Seq Scan on fnp fnp_1                           
+                    Filter: (a = 3)                               
+              ->  Seq Scan on fnc1 fnp_2                          
+                    Filter: (a = 3)                               
+              ->  Seq Scan on fnc2 fnp_3                          
+                    Filter: (a = 3)                               
+(12 rows)
+
+step s1t: UPDATE fnt SET b = b || '*' WHERE id IN (101, 103, 105);
+step s1p: UPDATE fnp SET a = 4, b = b || '#' WHERE id IN (1, 13, 25);
+step s2u: UPDATE fnt SET b = fnt.b || '+' || fnp.b FROM fnp WHERE fnt.a = 3 AND fnt.id > 100 AND fnt.b > 's' AND fnp.a = 3 AND fnp.id % 10 = fnt.id % 10; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM fnt ORDER BY id;
+ id|a|b        
+---+-+---------
+101|3|t101*+p1 
+102|4|t102     
+103|3|t103*+c13
+105|3|t105*+c25
+107|3|t107     
+(5 rows)
+
+
+starting permutation: s1t s1q s1d s2u s1c s2c s3sel
+step s1t: UPDATE fnt SET b = b || '*' WHERE id IN (101, 103, 105);
+step s1q: UPDATE fnt SET a = 4 WHERE id = 103;
+step s1d: DELETE FROM fnt WHERE id = 105;
+step s2u: UPDATE fnt SET b = fnt.b || '+' || fnp.b FROM fnp WHERE fnt.a = 3 AND fnt.id > 100 AND fnt.b > 's' AND fnp.a = 3 AND fnp.id % 10 = fnt.id % 10; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM fnt ORDER BY id;
+ id|a|b       
+---+-+--------
+101|3|t101*+p1
+102|4|t102    
+103|4|t103*   
+107|3|t107    
+(4 rows)
+
+
+starting permutation: s3ed s1t s1p s2d s1c s2c s3sel
+step s3ed: EXPLAIN (COSTS OFF) DELETE FROM fnt USING fnp WHERE fnt.a = 3 AND fnt.id > 100 AND fnt.b > 's' AND fnp.a = 3 AND fnp.id % 10 = fnt.id % 10;
+QUERY PLAN                                                        
+------------------------------------------------------------------
+Delete on fnt                                                     
+  ->  Nested Loop                                                 
+        Join Filter: ((fnt.id % 10) = (fnp.id % 10))              
+        ->  Seq Scan on fnt                                       
+              Filter: ((id > 100) AND (b > 's'::text) AND (a = 3))
+        ->  Append                                                
+              ->  Seq Scan on fnp fnp_1                           
+                    Filter: (a = 3)                               
+              ->  Seq Scan on fnc1 fnp_2                          
+                    Filter: (a = 3)                               
+              ->  Seq Scan on fnc2 fnp_3                          
+                    Filter: (a = 3)                               
+(12 rows)
+
+step s1t: UPDATE fnt SET b = b || '*' WHERE id IN (101, 103, 105);
+step s1p: UPDATE fnp SET a = 4, b = b || '#' WHERE id IN (1, 13, 25);
+step s2d: DELETE FROM fnt USING fnp WHERE fnt.a = 3 AND fnt.id > 100 AND fnt.b > 's' AND fnp.a = 3 AND fnp.id % 10 = fnt.id % 10; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM fnt ORDER BY id;
+ id|a|b   
+---+-+----
+102|4|t102
+107|3|t107
+(2 rows)
+
+
+starting permutation: s1t s1q s2d s1c s2c s3sel
+step s1t: UPDATE fnt SET b = b || '*' WHERE id IN (101, 103, 105);
+step s1q: UPDATE fnt SET a = 4 WHERE id = 103;
+step s2d: DELETE FROM fnt USING fnp WHERE fnt.a = 3 AND fnt.id > 100 AND fnt.b > 's' AND fnp.a = 3 AND fnp.id % 10 = fnt.id % 10; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM fnt ORDER BY id;
+ id|a|b    
+---+-+-----
+102|4|t102 
+103|4|t103*
+107|3|t107 
+(3 rows)
+
+
+starting permutation: s1t s1p s2u s1r s2c s3sel
+step s1t: UPDATE fnt SET b = b || '*' WHERE id IN (101, 103, 105);
+step s1p: UPDATE fnp SET a = 4, b = b || '#' WHERE id IN (1, 13, 25);
+step s2u: UPDATE fnt SET b = fnt.b || '+' || fnp.b FROM fnp WHERE fnt.a = 3 AND fnt.id > 100 AND fnt.b > 's' AND fnp.a = 3 AND fnp.id % 10 = fnt.id % 10; <waiting ...>
+step s1r: ROLLBACK;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM fnt ORDER BY id;
+ id|a|b       
+---+-+--------
+101|3|t101+p1 
+102|4|t102    
+103|3|t103+c13
+105|3|t105+c25
+107|3|t107    
+(5 rows)
+
+
+starting permutation: s1k s2u s1c s2c s3sel
+step s1k: UPDATE fnt SET id = 113 WHERE id = 101;
+step s2u: UPDATE fnt SET b = fnt.b || '+' || fnp.b FROM fnp WHERE fnt.a = 3 AND fnt.id > 100 AND fnt.b > 's' AND fnp.a = 3 AND fnp.id % 10 = fnt.id % 10; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM fnt ORDER BY id;
+ id|a|b       
+---+-+--------
+102|4|t102    
+103|3|t103+c13
+105|3|t105+c25
+107|3|t107    
+113|3|t101    
+(5 rows)
+
+
+starting permutation: s1k s2d s1c s2c s3sel
+step s1k: UPDATE fnt SET id = 113 WHERE id = 101;
+step s2d: DELETE FROM fnt USING fnp WHERE fnt.a = 3 AND fnt.id > 100 AND fnt.b > 's' AND fnp.a = 3 AND fnp.id % 10 = fnt.id % 10; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM fnt ORDER BY id;
+ id|a|b   
+---+-+----
+102|4|t102
+107|3|t107
+113|3|t101
+(3 rows)
+

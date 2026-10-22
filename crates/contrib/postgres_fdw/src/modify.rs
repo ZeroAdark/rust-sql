@@ -280,6 +280,30 @@ fn parse_batch_size(value: &str) -> i32 {
     }
 }
 
+// postgresGetForeignModifyBatchSize (postgres_fdw.c:2034-2094): the option
+// value, gated by RETURNING / WCO / row triggers, clamped by the 65535-param
+// limit. C gates on ri_projectReturning — any local RETURNING list, whether
+// or not the remote statement returns columns (postgres_fdw.c:2070).
+fn foreign_modify_batch_size<'mcx>(
+    mcx: Mcx<'mcx>,
+    rel: &types_rel::Relation<'mcx>,
+    local_returning: bool,
+    has_wco: bool,
+    target_attrs: &[i32],
+) -> PgResult<i32> {
+    let has_insert_row_triggers = rel.rd_hastriggers
+        && relcache_seams::relation_get_trigger_desc::call(rel.rd_id)?
+            .is_some_and(|t| t.trig_insert_before_row || t.trig_insert_after_row);
+    if local_returning || has_wco || has_insert_row_triggers || target_attrs.is_empty() {
+        return Ok(1);
+    }
+    let p_nums = target_attrs
+        .iter()
+        .filter(|&&a| rel.rd_att.attr(a as usize - 1).attgenerated == 0)
+        .count();
+    let opt = get_batch_size_option(mcx, rel.rd_id)?;
+    Ok(if p_nums > 0 { opt.min((65535 / p_nums) as i32).max(1) } else { opt.max(1) })
+}
 
 // ---------- executor half ----------
 
@@ -420,25 +444,7 @@ pub(crate) fn begin_foreign_modify<'mcx>(
                 .as_list()
                 .map(|l| l.is_nil())
                 .unwrap_or(true);
-        let has_insert_row_triggers = rel.rd_hastriggers
-            && relcache_seams::relation_get_trigger_desc::call(rel.rd_id)?
-                .is_some_and(|t| t.trig_insert_before_row || t.trig_insert_after_row);
-        // C gates on ri_projectReturning — any local RETURNING list, whether
-        // or not the remote statement returns columns (postgres_fdw.c:2070).
-        if local_returning || has_wco || has_insert_row_triggers || target_attrs.is_empty() {
-            1
-        } else {
-            let p_nums = target_attrs
-                .iter()
-                .filter(|&&a| rel.rd_att.attr(a as usize - 1).attgenerated == 0)
-                .count();
-            let opt = get_batch_size_option(mcx, rel.rd_id)?;
-            if p_nums > 0 {
-                opt.min((65535 / p_nums) as i32).max(1)
-            } else {
-                opt.max(1)
-            }
-        }
+        foreign_modify_batch_size(mcx, rel, local_returning, has_wco, &target_attrs)?
     };
     if operation == CmdType::CMD_INSERT {
         estate.es_fdw_batch_sizes.push((rti, batch_size));
@@ -489,7 +495,7 @@ fn create_foreign_modify<'mcx>(
     can_set_tag: bool,
 ) -> PgResult<Box<dyn core::any::Any>> {
     let attin = AttInMeta::build(rel.name(), &rel.rd_att)?;
-    let mut attgenerated = Vec::with_capacity(target_attrs.len());
+    let mut attgenerated = ::mcx::std_vec_with_capacity("postgres_fdw", target_attrs.len())?;
     let mut out_fn_oids = Vec::new();
     for &attnum in &target_attrs {
         let att = rel.rd_att.attr(attnum as usize - 1);
@@ -503,7 +509,7 @@ fn create_foreign_modify<'mcx>(
     let user = foreigncmds::foreign::GetUserMapping(mcx, userid, table.serverid)?;
     let conn_key = connection::get_connection(mcx, &user, true)?;
     let p_nums = attgenerated.iter().filter(|&&g| !g).count();
-    let mut p_flinfo: Vec<FmgrInfo> = Vec::with_capacity(out_fn_oids.len() + 1);
+    let mut p_flinfo: Vec<FmgrInfo> = ::mcx::std_vec_with_capacity("postgres_fdw", out_fn_oids.len() + 1)?;
     let mut ctid_attno: i16 = 0;
     if operation == CmdType::CMD_UPDATE || operation == CmdType::CMD_DELETE {
         let tlist = subplan_tlist.expect("UPDATE/DELETE has a subplan");
@@ -541,15 +547,16 @@ fn create_foreign_modify<'mcx>(
         can_set_tag,
         ctid_attno,
         p_flinfo,
-        temp_mcx: mcx::MemoryContext::new_bump("postgres_fdw temporary data"),
-        returning_mcx: mcx::MemoryContext::new_bump("postgres_fdw returning data"),
+        temp_mcx: mcx::MemoryContext::new_wholesale("postgres_fdw temporary data"),
+        returning_mcx: mcx::MemoryContext::new_wholesale("postgres_fdw returning data"),
     }))
 }
 
 // postgresBeginForeignInsert (postgres_fdw.c:2157): a routed foreign
 // partition transmits every non-dropped column; the INSERT is deparsed
-// against a copy of the routing root's RTE naming the leaf. Batching is not
-// modeled on this path (batch_size = 1).
+// against a copy of the routing root's RTE naming the leaf. The batch size
+// is what ExecInitRoutingInfo / CopyFrom read back through
+// GetForeignModifyBatchSize (execPartition.c:1047, copyfrom.c:951).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn begin_foreign_insert<'mcx>(
     node: &'mcx ModifyTable<'mcx>,
@@ -613,6 +620,8 @@ pub(crate) fn begin_foreign_insert<'mcx>(
             .is_some_and(|t| t.trig_insert_after_row);
     let wco: Vec<Node<'mcx>> = wco_list.iter().collect();
     let returning: Vec<Node<'mcx>> = returning_list.iter().collect();
+    let batch_size =
+        foreign_modify_batch_size(mcx, rel, !returning.is_empty(), !wco.is_empty(), &target_attrs)?;
     let mut sql: PgString<'mcx> = PgString::new_in(mcx);
     let mut retrieved_attrs: PgVec<'mcx, i32> = PgVec::new_in(mcx);
     let values_end_len = deparse::deparse_insert_sql(
@@ -643,7 +652,7 @@ pub(crate) fn begin_foreign_insert<'mcx>(
         values_end_len,
         has_returning,
         retrieved,
-        1,
+        batch_size,
         node.canSetTag,
     )?))
 }
@@ -771,7 +780,7 @@ fn execute_foreign_modify<'mcx>(
     }
 
     // Convert parameters to text (C convert_prep_stmt_params).
-    let mut p_values: Vec<Option<String>> = Vec::with_capacity(st.p_flinfo.len());
+    let mut p_values: Vec<Option<String>> = ::mcx::std_vec_with_capacity("postgres_fdw", st.p_flinfo.len())?;
     let mut pindex = 0usize;
     if operation == CmdType::CMD_UPDATE || operation == CmdType::CMD_DELETE {
         let mut isnull = false;
@@ -877,15 +886,11 @@ fn flush_pending_inserts<'mcx>(
             }
         }
         let mcx = estate.es_query_cxt;
-        let rel = estate.es_relations[(st.rti - 1) as usize]
-            .as_ref()
-            .expect("result relation opened");
         let mut sql: PgString<'mcx> = PgString::new_in(mcx);
         deparse::rebuild_insert_sql(
             &mut sql,
-            rel,
             &st.orig_query,
-            &st.target_attrs,
+            &st.attgenerated,
             st.values_end,
             st.p_nums as i32,
             n - 1,
@@ -924,6 +929,21 @@ fn flush_pending_inserts<'mcx>(
     Ok(())
 }
 
+pub(crate) fn foreign_modify_disable_batching(state: &mut dyn core::any::Any) {
+    let st = state
+        .downcast_mut::<PgFdwModifyState>()
+        .expect("ri_FdwState is PgFdwModifyState");
+    debug_assert_eq!(st.pending_rows, 0, "batching disabled before the first row");
+    st.batch_size = 1;
+}
+
+pub(crate) fn foreign_modify_state_batch_size(state: &dyn core::any::Any) -> i32 {
+    state
+        .downcast_ref::<PgFdwModifyState>()
+        .expect("ri_FdwState is PgFdwModifyState")
+        .batch_size
+}
+
 // The FdwModifyRoutine flush hook (C ExecPendingInserts' per-rel half).
 pub(crate) fn flush_foreign_modify<'mcx>(
     state: &mut dyn core::any::Any,
@@ -947,22 +967,30 @@ fn store_returning_result<'mcx>(
         convert_result_row(attin, &st.retrieved_attrs, row, st.returning_mcx.mcx())?;
     let mcx = estate.es_query_cxt;
     let slot = &mut estate.es_tupleTable[slot_id.0 as usize];
-    exectuples::exec_clear_tuple(slot, mcx);
-    {
-        let base = slot.base_mut();
-        base.tts_values.clear();
-        base.tts_values.extend_from_slice(&values);
-        base.tts_isnull.clear();
-        base.tts_isnull.extend_from_slice(&nulls);
-        base.tts_tid = ctid;
-    }
-    exectuples::exec_store_virtual_tuple(slot);
-    Ok(())
+    crate::exec::store_remote_heap_tuple(slot, mcx, &values, &nulls, ctid)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{cmd_tuples, parse_batch_size};
+    use super::{cmd_tuples, init_returning_filter, parse_batch_size};
+    use types_nodes::list::NodeList;
+    use types_nodes::Node;
+
+    // A direct UPDATE on a join (wio P224): the target row is rebuilt from the
+    // retrieved fdw_scan_tlist entries of the target rel only.
+    #[test]
+    fn returning_filter_maps_target_columns_and_ctid() {
+        let cx = mcx::MemoryContext::new("t");
+        let m = cx.mcx();
+        let mut tl: NodeList<'_> = NodeList::nil();
+        for (resno, (varno, attno)) in [(1, 2), (2, 2), (1, -1), (1, 1), (1, 3)].into_iter().enumerate() {
+            let var = Node::mk_var(m, varno, attno, 23, -1, 0, 0).unwrap();
+            tl.lappend(m, Node::mk_target_entry(m, var, resno as i16 + 1, None, false).unwrap()).unwrap();
+        }
+        let f = init_returning_filter(&tl, 1, &[1, 2, 3, 4], 3, executils::ExecSlotId(0)).unwrap();
+        assert_eq!(f.attno_map, vec![4, 1, 0]);
+        assert_eq!(f.ctid_attno, 3);
+    }
 
     // postgres_fdw.c:7983 reads batch_size through parse_int: octal, hex,
     // surrounding whitespace and rounded floats are all accepted, and an
@@ -1107,10 +1135,7 @@ fn find_modifytable_subplan<'mcx>(
     }
 }
 
-// postgresPlanDirectModify, base-relation arm. Divergences (both fall back
-// to the safe per-row DML path): inherited-child targets
-// (get_translated_update_targetlist) and foreign-join targets (no EPQ-capable
-// pushed join paths are generated under UPDATE/DELETE).
+// postgresPlanDirectModify.
 pub(crate) fn plan_direct_modify<'mcx>(
     run: &mut PlannerRun<'mcx>,
     plan: &mut ModifyTable<'mcx>,
@@ -1125,27 +1150,30 @@ pub(crate) fn plan_direct_modify<'mcx>(
     let Some(subplan) = find_modifytable_subplan(plan, result_relation, subplan_index) else {
         return Ok(false);
     };
-    {
+    let (scanrelid, fs_relids): (u32, Vec<i32>) = {
         let fs = subplan.as_foreign_scan().expect("checked");
         if !fs.scan.plan.qual.is_nil() {
             return Ok(false);
         }
-        if fs.scan.scanrelid == 0 {
-            return Ok(false);
+        (fs.scan.scanrelid, fs.fs_relids.iter().collect())
+    };
+    let foreignrel = if scanrelid == 0 {
+        let mut relids = types_pathnodes::relids::relids_empty();
+        for m in fs_relids {
+            types_pathnodes::relids::relids_add_member_mut(mcx, &mut relids, m as u32);
         }
-    }
-    if result_relation as i32 != run.parse().resultRelation {
-        return Ok(false);
-    }
-    let foreignrel = run.root.simple_rel_array[result_relation as usize]
-        .expect("result relation has a RelOptInfo");
+        planner::joinrels::find_join_rel(&run.root, &relids).expect("a RelOptInfo for the foreign join")
+    } else {
+        run.root.simple_rel_array[result_relation as usize].expect("result relation has a RelOptInfo")
+    };
 
     let mut tlist_nodes: Vec<Node<'mcx>> = Vec::new();
     let mut target_attrs: Vec<i32> = Vec::new();
     if operation == CmdType::CMD_UPDATE {
-        let colnos: Vec<i32> =
-            run.root.update_colnos.iter().map(|&a| a as i32).collect();
-        for (tle_node, &attno) in run.processed_tlist().iter().zip(colnos.iter()) {
+        let (processed_tlist, colnos) =
+            planner::get_translated_update_targetlist(run, result_relation)?;
+        for (tle_node, &attno) in processed_tlist.iter().zip(colnos.iter()) {
+            let attno = attno as i32;
             let tle = tle_node.as_target_entry().expect("TargetEntry");
             debug_assert!(!tle.resjunk);
             if attno <= 0 {
@@ -1169,19 +1197,22 @@ pub(crate) fn plan_direct_modify<'mcx>(
             .copied()
             .collect();
 
-    let returning_list: Vec<Node<'mcx>> = if plan.returningLists.is_nil() {
-        Vec::new()
-    } else {
+    let rte = run.rte(result_relation as usize);
+    let rel = table::table_open(mcx, rte.relid, types_rel::lock::NoLock)?;
+
+    let local_returning = !plan.returningLists.is_nil();
+    let mut returning_list: NodeList<'mcx> = if local_returning {
         plan.returningLists
             .nth(subplan_index)
             .as_list()
             .expect("returningLists cell is a List")
-            .iter()
-            .collect()
+            .clone_in(mcx)?
+    } else {
+        NodeList::nil()
     };
-
-    let rte = run.rte(result_relation as usize);
-    let rel = table::table_open(mcx, rte.relid, types_rel::lock::NoLock)?;
+    if local_returning && scanrelid == 0 {
+        returning_list = build_remote_returning(mcx, result_relation, &rel, &returning_list)?;
+    }
     let mut retrieved_attrs: PgVec<'mcx, i32> = PgVec::new_in(mcx);
     let mut ctx = deparse::DeparseCtx {
         run,
@@ -1237,7 +1268,7 @@ pub(crate) fn plan_direct_modify<'mcx>(
     }
     fdw_private.lappend(mcx, Node::mk_int_list(mcx, ra)?)?;
     fdw_private.lappend(mcx, Node::mk_boolean(mcx, plan.canSetTag)?)?;
-    fdw_private.lappend(mcx, Node::mk_boolean(mcx, !returning_list.is_empty())?)?;
+    fdw_private.lappend(mcx, Node::mk_boolean(mcx, local_returning)?)?;
 
     // SAFETY: exclusive plan-tree ownership at create_plan time (the same
     // contract createplan/setrefs rely on for in-place plan rewrites).
@@ -1247,11 +1278,94 @@ pub(crate) fn plan_direct_modify<'mcx>(
             f.resultRelation = result_relation;
             f.fdw_exprs = fdw_exprs;
             f.fdw_private = fdw_private;
+            if scanrelid == 0 {
+                f.scan.plan.lefttree = None;
+                if !returning_list.is_nil() {
+                    rebuild_fdw_scan_tlist(mcx, f, returning_list)?;
+                }
+            }
             f.scan.plan.async_capable = false;
+            PgResult::Ok(())
         })
     }
-    .expect("ForeignScan node");
+    .expect("ForeignScan node")?;
     Ok(true)
+}
+
+// build_remote_returning (postgres_fdw.c:4446): the RETURNING Vars a direct
+// UPDATE/DELETE on a join fetches from the remote; a whole-row target
+// reference expands to every live column.
+fn build_remote_returning<'mcx>(
+    mcx: Mcx<'mcx>,
+    rtindex: u32,
+    rel: &types_rel::Relation<'mcx>,
+    returning_list: &NodeList<'mcx>,
+) -> PgResult<NodeList<'mcx>> {
+    let vars = vars::pull_var_clause(
+        mcx,
+        Node::mk_list(mcx, returning_list.clone_in(mcx)?)?,
+        vars::PVC_INCLUDE_PLACEHOLDERS,
+    )?;
+    let is_target_var = |n: Node<'mcx>, pred: &dyn Fn(i16) -> bool| {
+        n.as_var().is_some_and(|v| v.varno == rtindex as i32 && pred(v.varattno))
+    };
+    let mut tlist: NodeList<'mcx> = NodeList::nil();
+    if vars.iter().any(|n| is_target_var(n, &|a| a == 0)) {
+        for i in 0..rel.rd_att.natts as usize {
+            let att = rel.rd_att.attr(i);
+            if att.attisdropped {
+                continue;
+            }
+            let var = Node::mk_var(
+                mcx,
+                rtindex as i32,
+                (i + 1) as i16,
+                att.atttypid,
+                att.atttypmod,
+                att.attcollation,
+                0,
+            )?;
+            let resno = tlist.len() as i16 + 1;
+            tlist.lappend(mcx, Node::mk_target_entry(mcx, var, resno, None, false)?)?;
+        }
+    }
+    for n in vars.iter() {
+        if is_target_var(n, &|a| a <= 0 && i32::from(a) != SelfItemPointerAttributeNumber) {
+            continue;
+        }
+        if tlist_member(&tlist, n) {
+            continue;
+        }
+        let resno = tlist.len() as i16 + 1;
+        tlist.lappend(mcx, Node::mk_target_entry(mcx, n, resno, None, false)?)?;
+    }
+    Ok(tlist)
+}
+
+fn tlist_member<'mcx>(tlist: &NodeList<'mcx>, expr: Node<'mcx>) -> bool {
+    tlist.iter().any(|t| {
+        types_nodes::equal::equal(t.as_target_entry().expect("TargetEntry").expr, expr)
+    })
+}
+
+// rebuild_fdw_scan_tlist (postgres_fdw.c:4547): the remote RETURNING entries
+// first, then every old fdw_scan_tlist entry they lack, so setrefs still finds
+// the junk columns.
+fn rebuild_fdw_scan_tlist<'mcx>(
+    mcx: Mcx<'mcx>,
+    fscan: &mut types_nodes::plannodes::ForeignScan<'mcx>,
+    mut tlist: NodeList<'mcx>,
+) -> PgResult<()> {
+    for tle in fscan.fdw_scan_tlist.iter() {
+        let expr = tle.as_target_entry().expect("TargetEntry").expr;
+        if tlist_member(&tlist, expr) {
+            continue;
+        }
+        let resno = tlist.len() as i16 + 1;
+        tlist.lappend(mcx, Node::mk_target_entry(mcx, expr, resno, None, false)?)?;
+    }
+    fscan.fdw_scan_tlist = tlist;
+    Ok(())
 }
 
 // C PgFdwDirectModifyState (executor half).
@@ -1277,6 +1391,42 @@ struct PgFdwDirectModifyState {
     result: Option<pgclient::QueryResult>,
     batch_mcx: mcx::MemoryContext,
     attin: Option<AttInMeta>,
+    /// A direct modify on a join: the scan tuple follows fdw_scan_tlist and
+    /// RETURNING reads the target row rebuilt from it.
+    filter: Option<ReturningFilter>,
+}
+
+// init_returning_filter's map (postgres_fdw.c:4690): for each target
+// attribute its fdw_scan_tlist position (0 = NULL), and the ctid entry.
+struct ReturningFilter {
+    attno_map: Vec<usize>,
+    ctid_attno: usize,
+    result_slot: ExecSlotId,
+}
+
+fn init_returning_filter<'mcx>(
+    fdw_scan_tlist: &NodeList<'mcx>,
+    rtindex: u32,
+    retrieved_attrs: &[i32],
+    natts: usize,
+    result_slot: ExecSlotId,
+) -> PgResult<ReturningFilter> {
+    let mut attno_map = ::mcx::std_vec_from_elem("postgres_fdw", 0usize, natts)?;
+    let mut ctid_attno = 0;
+    for (k, tle) in fdw_scan_tlist.iter().enumerate() {
+        let i = k + 1;
+        let var = tle.as_target_entry().expect("TargetEntry").expr.as_var().expect("fdw_scan_tlist Var");
+        if var.varno != rtindex as i32 || !retrieved_attrs.contains(&(i as i32)) {
+            continue;
+        }
+        if i32::from(var.varattno) == SelfItemPointerAttributeNumber {
+            ctid_attno = i;
+        } else {
+            debug_assert!(var.varattno > 0);
+            attno_map[var.varattno as usize - 1] = i;
+        }
+    }
+    Ok(ReturningFilter { attno_map, ctid_attno, result_slot })
 }
 
 fn dmstate<'a>(
@@ -1296,14 +1446,20 @@ pub(crate) fn begin_direct_modify<'mcx>(
     }
     let mcx = estate.es_query_cxt;
     let fsplan = node.plan;
-    debug_assert!(fsplan.scan.scanrelid > 0, "join direct modify is not planned");
+    let is_join = fsplan.scan.scanrelid == 0;
 
     let userid = if fsplan.checkAsUser != InvalidOid {
         fsplan.checkAsUser
     } else {
         miscinit::GetUserId()
     };
-    let rel = node.ss.ss_currentRelation.as_ref().expect("direct modify scans the target rel");
+    let join_target;
+    let rel = if is_join {
+        join_target = estate.exec_open_scan_relation(fsplan.resultRelation, eflags)?;
+        &join_target
+    } else {
+        node.ss.ss_currentRelation.as_ref().expect("direct modify scans the target rel")
+    };
     let table = foreigncmds::foreign::GetForeignTable(mcx, rel.rd_id)?;
     let user = foreigncmds::foreign::GetUserMapping(mcx, userid, table.serverid)?;
     let conn_key = connection::get_connection(mcx, &user, false)?;
@@ -1336,11 +1492,25 @@ pub(crate) fn begin_direct_modify<'mcx>(
         .expect("fdw_private[4] is the local RETURNING flag")
         .boolval;
 
-    let attin = if has_returning {
+    let mut filter = None;
+    let attin = if !has_returning {
+        None
+    } else if is_join {
+        let result_slot = estate.exec_init_extra_tuple_slot(
+            Some(rel.rd_att.clone()),
+            types_slot::TupleSlotKind::Virtual,
+        );
+        filter = Some(init_returning_filter(
+            &fsplan.fdw_scan_tlist,
+            fsplan.resultRelation,
+            &retrieved_attrs,
+            rel.rd_att.natts as usize,
+            result_slot,
+        )?);
+        Some(crate::exec::join_scan_attin(node, estate)?)
+    } else {
         let rte = estate.es_range_table[(fsplan.scan.scanrelid - 1) as usize];
         Some(crate::exec::base_scan_attin(rel.name(), &rel.rd_att, rte)?)
-    } else {
-        None
     };
 
     let (param_flinfo, param_exprs) =
@@ -1362,6 +1532,7 @@ pub(crate) fn begin_direct_modify<'mcx>(
         result: None,
         batch_mcx: mcx::MemoryContext::new_bump("postgres_fdw direct modify data"),
         attin,
+        filter,
     }));
     Ok(())
 }
@@ -1411,6 +1582,7 @@ pub(crate) fn iterate_direct_modify<'mcx>(
     }
     let scan_slot = node.ss.ss_ScanTupleSlot;
     let instr_idx = node.ss.instr_idx;
+    let has_system_cols = node.plan.fsSystemCol;
     let qmcx = estate.es_query_cxt;
     let state = dmstate(node).expect("fdw_state set by BeginDirectModify");
     // The local query has no RETURNING: just clear the slot
@@ -1451,9 +1623,9 @@ pub(crate) fn iterate_direct_modify<'mcx>(
                 .expect("scan slot has a descriptor")
                 .natts as usize;
             base.tts_values.clear();
-            base.tts_values.resize(natts, Datum::null());
+            ::mcx::pgvec_resize(&mut base.tts_values, natts, Datum::null())?;
             base.tts_isnull.clear();
-            base.tts_isnull.resize(natts, true);
+            ::mcx::pgvec_resize(&mut base.tts_isnull, natts, true)?;
         }
         exectuples::exec_store_virtual_tuple(slot);
         estate.es_direct_returning_slot = Some(scan_slot);
@@ -1471,20 +1643,72 @@ pub(crate) fn iterate_direct_modify<'mcx>(
     };
     state.next_tuple += 1;
     let slot = estate.slot_mut(scan_slot);
-    exectuples::exec_clear_tuple(slot, qmcx);
-    {
+    if has_system_cols {
+        crate::exec::store_remote_heap_tuple(slot, qmcx, &values, &nulls, ctid)?;
+    } else {
+        exectuples::exec_clear_tuple(slot, qmcx);
         let base = slot.base_mut();
         base.tts_values.clear();
         base.tts_values.extend_from_slice(&values);
         base.tts_isnull.clear();
         base.tts_isnull.extend_from_slice(&nulls);
         base.tts_tid = ctid;
+        exectuples::exec_store_virtual_tuple(slot);
     }
-    exectuples::exec_store_virtual_tuple(slot);
     // Hand the rel-format RETURNING tuple to ModifyTable's direct arm (C
     // stores it into ri_projectReturning's econtext scantuple).
-    estate.es_direct_returning_slot = Some(scan_slot);
+    estate.es_direct_returning_slot = Some(match &state.filter {
+        None => scan_slot,
+        Some(f) => apply_returning_filter(f, estate, &values, &nulls, qmcx, has_system_cols)?,
+    });
     Ok(true)
+}
+
+// apply_returning_filter (postgres_fdw.c:4763): the target row out of a join
+// scan tuple, ctid restored from its column.
+fn apply_returning_filter<'mcx>(
+    f: &ReturningFilter,
+    estate: &mut EStateData<'mcx>,
+    values: &[Datum],
+    nulls: &[bool],
+    qmcx: Mcx<'mcx>,
+    has_system_cols: bool,
+) -> PgResult<ExecSlotId> {
+    let slot = estate.slot_mut(f.result_slot);
+    exectuples::exec_clear_tuple(slot, qmcx);
+    {
+        let base = slot.base_mut();
+        base.tts_values.clear();
+        base.tts_isnull.clear();
+        for &j in &f.attno_map {
+            if j == 0 {
+                base.tts_values.push(Datum::null());
+                base.tts_isnull.push(true);
+            } else {
+                base.tts_values.push(values[j - 1]);
+                base.tts_isnull.push(nulls[j - 1]);
+            }
+        }
+        if f.ctid_attno > 0 && !nulls[f.ctid_attno - 1] {
+            // SAFETY: tidin's result, retained in the batch context: a
+            // pointer datum to an ItemPointerData.
+            base.tts_tid =
+                unsafe { *(values[f.ctid_attno - 1].as_usize() as *const ItemPointerData) };
+        }
+    }
+    exectuples::exec_store_virtual_tuple(slot);
+    if has_system_cols {
+        // postgres_fdw.c:4830: materialize a heap tuple so the system
+        // columns read as in C.
+        let base = slot.base();
+        let (vals, isnull, tid) = (
+            ::mcx::slice_in(qmcx, &base.tts_values)?,
+            ::mcx::slice_in(qmcx, &base.tts_isnull)?,
+            base.tts_tid,
+        );
+        crate::exec::store_remote_heap_tuple(slot, qmcx, &vals, &isnull, tid)?;
+    }
+    Ok(f.result_slot)
 }
 
 // postgresEndDirectModify.

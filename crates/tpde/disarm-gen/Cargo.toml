@@ -1,0 +1,29 @@
+[package]
+name = "tpde_disarm_gen"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "BSD-3-Clause"
+
+[features]
+upstream-oracle = []
+
+[[bin]]
+name = "disarm-gen"
+path = "src/main.rs"
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "encoder_generated"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "decoder_generated"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "encoder_helpers"
+required-features = ["upstream-oracle"]

@@ -13,6 +13,13 @@ name = "postgres"
 path = "src/bin/postgres.rs"
 
 [features]
+default = ["cjk-encodings", "pagepool-global"]
+# The East-Asian conversion libraries (conv's `cjk-encodings`: C's utf8_and_{big5, euc_cn, euc_jp, euc_kr, euc_tw,
+# gb18030, gbk, johab, sjis, uhc, euc2004, sjis2004}, euc_cn_and_mic, euc_jp_and_sjis, euc_kr_and_mic, euc_tw_and_big5,
+# euc2004_sjis2004; ~1.84 MB of maps). ON by default: every build has them. A server built without it answers as a C
+# install with those modules missing (could not access file "utf8_and_sjis": No such file or directory, 58P01).
+# conv's every other edge is default-features = false, so this row decides it for the whole graph.
+cjk-encodings = ["conv/cjk-encodings"]
 # Antithesis harness builds only (antithesis/ directory): SDK assertions +
 # sancov coverage instrumentation. OFF by default — product builds compile
 # none of it. The harness image build (root Dockerfile, ARG ANTITHESIS=1)
@@ -39,12 +46,20 @@ oauth-test-validator = [
     "oauth_validators/test-validator",
     "guc_tables/oauth-test-validator",
 ]
+# ON by default (the user 2026-10-18): the pool's `PoolAlloc` as the global allocator under `Rescue` (small tier up to
+# 1 KiB, class-General blocks above). mimalloc stays the C allocator. Which one serves is decided at start (the user
+# 2026-10-18: "for now can we run mimalloc on x86 and hearth on graviton?"; bin/postgres.rs's by_arch_default!): Hearth on
+# Linux aarch64 and x86_64 (x86_64 since D4872), mimalloc elsewhere; PGRUST_ALLOCATOR=hearth or =mimalloc at start chooses either on any architecture. A build without Hearth at all is
+# `--no-default-features --features cjk-encodings`.
+pagepool-global = ["pagepool/global", "init_small/pool-global"]
 
 [dependencies]
 # Feature carriers for oauth-test-validator (both already in the graph
 # transitively via seams_init / guc).
 oauth_validators = { path = "../../libpq/oauth_validators" }
 guc_tables = { path = "../../utils/misc/guc_tables" }
+# Feature carrier for cjk-encodings (in the graph transitively via fmgr_core).
+conv = { path = "../../utils/mb/conv", default-features = false }
 # Antithesis SDK (assertions/lifecycle); portable, but only compiled under
 # the `antithesis` feature.
 antithesis_sdk = { version = "0.2.9", optional = true }
@@ -59,24 +74,36 @@ types_error = { path = "../../../_support/types/types_error" }
 elog = { path = "../../utils/error/elog" }
 guc = { path = "../../utils/misc/guc" }
 init_small = { path = "../../utils/init/init_small" }
+# D4556: the charge_usable knob's default, read by the allocator's start (tune_allocator)
+mempolicy = { path = "../../../_support/mempolicy" }
 stack_depth = { path = "../../utils/misc/stack_depth" }
 ps_status = { path = "../../utils/misc/ps_status" }
 pg_locale = { path = "../../utils/adt/pg_locale" }
 pg_path = { path = "../../../port/pg_path" }
 postmaster = { path = "../../postmaster/postmaster" }
-memwatchdog = { path = "../../postmaster/memwatchdog" }
+bootstrap = { path = "../../bootstrap/bootstrap" }
+memruntime = { path = "../../postmaster/memruntime" }
 # regression: the POOL-QOS memory governor's fallback usage probe
-# (install_qos_mem_probe) — install-only dep, mirroring memwatchdog's
+# (install_qos_mem_probe) — install-only dep, mirroring memruntime's
 # allocator-stats install above it in bin/postgres.rs.
 runtime = { path = "../../executor/runtime" }
 postgres_seams = { path = "../../tcop/postgres_seams" }
+# D3124: the process spill factory, installed in every mode (bin/postgres.rs run)
+gravity_pool = { path = "../../../gravity/pool" }
 seams_init = { path = "../../../_support/seams_init" }
 
 # mimalloc is a C allocator; wasm32 std already defaults to dlmalloc, and
 # bin/postgres.rs cfg-outs the global-alloc + release hook there.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 mimalloc = "0.1"
-libmimalloc-sys = { version = "0.1", features = ["extended"] }
+# D3143 P1: `no_thp` (MI_NO_THP) keeps mimalloc from advising its arenas MADV_HUGEPAGE (the wio P273 idle-session
+# footprint) and calls no prctl; the global allocator advises large blocks itself (init_small::oom, heap_thp_policy).
+libmimalloc-sys = { version = "0.1", features = ["extended", "no_thp", "override"] }
+# ALLOC-LADDER (c) / D4321 step 1: pgrust's own arenas for mimalloc and the cache arena's heap
+allocarena = { path = "../../../_support/allocarena" }
+# pagepool P2: mcx blocks from the page pool (PGRUST_POOL_MCX=1), its door and probe on the ledger
+pagepool = { path = "../../../_support/pagepool" }
+memledger = { path = "../../../_support/memledger" }
 
 # The Antithesis coverage runtime links only on the platform Antithesis runs
 # (linux/amd64); target-scoping keeps macOS/aarch64 dev builds working even

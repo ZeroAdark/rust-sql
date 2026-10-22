@@ -1,0 +1,5 @@
+path	crates/gravity/kernels/src/ops/sort/topn/parthaving.rs
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::resize	1
+growth	std::vec::Vec::try_reserve	1
+growth	std::vec::Vec::try_reserve_exact	1

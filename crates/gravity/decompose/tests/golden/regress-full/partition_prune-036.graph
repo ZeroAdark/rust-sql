@@ -1,0 +1,13 @@
+-- regress-full-partition_prune-036
+-- delete from boolpart where a is null;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n0@2
+  source range rel=44929 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter isnull(v2.1)
+  project (1j=v2.-6, 2j=v2.-1)
+  write DELETE rel=44929 rti=2 natts=1 indexes=() route=rti1:44926 natts=1
+  outs 1=w4:val 2=fx6:row
+scan-lanes node=2 rti=2 rel=44929 tableoid
+mapped: ModifyTable SeqScan

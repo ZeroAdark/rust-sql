@@ -1,0 +1,39 @@
+-- regress-full-join-087
+-- SELECT * FROM ( SELECT 1 as key1 ) sub1 LEFT JOIN ( SELECT sub3.key3, value2, COALESCE(value2, 66) as value3 FROM ( SELECT 1 as key3 ) sub3 LEFT JOIN ( SELECT sub5.key5, COALESCE(sub6.value1, 1) as value2 FROM ( SELECT 1 as key5 ) sub5 LEFT JOIN ( SELECT 2 as key6, 42 as value1 ) sub6 ON sub5.key5 = sub6.key6 ) sub4 ON sub4.key5 = sub3.key3 ) sub2 ON sub1.key1 = sub2.key3;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  nodes n3@0 n2@1
+  source const
+  project ()
+  nest inner=n4 JOIN_LEFT invariant raise-free params=()
+  inner node=5 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n5@0 n4@1
+  source const
+  project ()
+  nest inner=n6 JOIN_LEFT invariant raise-free params=() qual=(c16:0)
+  inner node=6 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n6@0
+  source const
+  gate T_List
+  project (1=c23:42)
+  project (1=coalesce(inner.1, c23:1))
+  project (1=inner.1, 2=c23:1, 3=coalesce(inner.1, c23:66))
+  spool
+  outs
+  outs 1=w4:val 2=w4:val 3=w4:val
+p1 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source const
+  project ()
+  nest inner=n2 JOIN_LEFT invariant raise-free params=()
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n2@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1=c23:1, 2=inner.2, 3=inner.1, 4=inner.3)
+  outs
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+mapped: Result NestLoop

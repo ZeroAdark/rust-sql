@@ -1,0 +1,13 @@
+-- regress-full-updatable_views-045
+-- MERGE INTO rw_view2 t USING (SELECT x, 'R'||x FROM generate_series(0,3) x) AS s(a,b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b WHEN NOT MATCHED AND s.a > 0 THEN INSERT VALUES (s.a, s.b);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=24308 rti=1 am=heap index=24315
+    key att=1 op=96 value=$17
+    recheck (op96(v1.1, $17))
+    lanes Attr(1):byval8:w8:val RowId:byval8:w8:val
+  project (1=$15, 2j=v1.-1, 3j=v1.1)
+  write UPDATE rel=24308 rti=1 natts=2 indexes=(24315[1]up) set=(2)
+  outs 1=vl:row 2=fx6:row 3=w8:val
+mapped: ModifyTable IndexScan

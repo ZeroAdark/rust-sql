@@ -1,0 +1,1 @@
+#![doc = "Mirrors main_main's allocator features (libmimalloc-sys's, and init_small's `pool-global` from its default `pagepool-global`) for the crate-test feature guard (TD-201, ct-carriers.txt); change it whenever main_main's changes."]

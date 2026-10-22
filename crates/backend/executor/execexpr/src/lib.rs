@@ -15,11 +15,11 @@
 extern crate alloc;
 
 mod arrayops;
+pub mod batchreg;
 mod compile;
 pub mod domain;
 mod hstoresubs;
 mod interp;
-pub mod jit;
 mod jsonbsubs;
 mod steps;
 #[cfg(test)]
@@ -39,19 +39,20 @@ pub use compile::{
     exec_build_grouping_equal, exec_build_hash32_from_attrs, exec_build_hash32_from_exprs,
     exec_build_merge_projection_info_subplans, exec_build_param_set_equal,
     exec_build_projection_info,
-    exec_build_projection_info_subplans, exec_build_window_projection_info,
-    exec_build_window_projection_info_subplans, execute_acl_session_begin,
-    execute_acl_session_end, exec_init_expr, exec_init_expr_subplans,
-    exec_init_expr_subplans_agg, exec_init_expr_with_case_test,
+    exec_build_projection_info_subplans, exec_build_projection_info_subplans_merge,
+    exec_build_window_projection_info,
+    exec_build_window_projection_info_subplans, execute_acl_window, exec_init_expr, exec_init_expr_subplans,
+    exec_init_expr_subplans_agg, exec_init_expr_subplans_agg_merge, exec_init_expr_with_case_test,
     exec_init_expr_with_case_test_subplans, exec_init_qual,
     exec_init_qual_subplans, expr_type, lane_scan_qual, recheck_execute_acls, AggBind,
     AggOrderedSpec, AggTransSpec,
-    EconomyWindow, LaneBoolTest, LaneClause, LaneCmpClause, LaneCmpRhs, LaneQualShape, LaneSuffix,
-    SubplanCompileEnv, WinBind, INDEX_VAR, INNER_VAR, OUTER_VAR,
+    EconomyWindow, ExecuteAclWindow, LaneBoolTest, LaneClause, LaneCmpClause, LaneCmpRhs, LaneQualShape, LaneSuffix,
+    MergeActionCell, SubplanCompileEnv, WinBind, INDEX_VAR, INNER_VAR, OUTER_VAR,
 };
 pub use interp::{
-    agg_datum_copy, agg_datum_free, agg_datum_replace, exec_eval_expr, exec_eval_expr_outcome, exec_project,
-    exec_project_outcome, exec_project_prearmed, exec_project_returning,
+    agg_copy_trans_value, agg_datum_copy, agg_datum_free, agg_datum_replace, agg_trans_value_copy, exec_eval_expr,
+    exec_eval_expr_outcome, exec_eval_expr_outcome_ret, exec_project, exec_project_outcome, exec_project_outcome_ret,
+    exec_project_prearmed, exec_project_returning,
     exec_project_returning_outcome, exec_qual, exec_qual_outcome, EvalOutcome, EvalSlots,
     QualOutcome, Resume, RetSlot, RetSlots, SuspendKind, Suspension,
 };
@@ -73,13 +74,28 @@ pub fn evaluate_expr<'mcx>(
     result_typmod: i32,
     result_collation: types_core::Oid,
 ) -> types_error::PgResult<types_nodes::Node<'mcx>> {
-    use types_nodes::primnodes::Const;
-
     // C runs the one-shot ExprState in a temporary context freed after the
     // result is copied out; intermediates never accumulate in the caller's.
     let tmp = mcx.context().new_child("evaluate_expr");
     let tmcx = tmp.mcx();
-    let mut state = exec_init_expr(tmcx, Some(expr), ParamBind::NONE)?.expect("expr is Some");
+    let state = exec_init_expr(tmcx, Some(expr), ParamBind::NONE)?.expect("expr is Some");
+    evaluate_prepared_expr(mcx, tmcx, state, result_type, result_typmod, result_collation)
+}
+
+/// Evaluate an ExprState from [`exec_init_expr`] (built in `tmcx`) once and
+/// copy the result into a Const in `mcx`. Split from [`evaluate_expr`] for
+/// C's ExecPrepareExprList callers, which initialize every expression before
+/// evaluating any.
+pub fn evaluate_prepared_expr<'mcx, 't>(
+    mcx: mcx::Mcx<'mcx>,
+    tmcx: mcx::Mcx<'t>,
+    mut state: mcx::PgBox<'t, ExprState<'t>>,
+    result_type: types_core::Oid,
+    result_typmod: i32,
+    result_collation: types_core::Oid,
+) -> types_error::PgResult<types_nodes::Node<'mcx>> {
+    use types_nodes::primnodes::Const;
+
     state.arm_result_mcx(tmcx);
     let mut slots = EvalSlots {
         scan: None,

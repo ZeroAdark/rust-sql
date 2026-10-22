@@ -1,0 +1,11 @@
+# FETCH FIRST .. WITH TIES cuts no tie
+sql: SELECT g, x FROM t ORDER BY g FETCH FIRST 1 ROWS WITH TIES;
+cols: g	x
+class: ordered 1
+verdict: match
+[pg]
+1	a
+1	b
+[got]
+1	b
+1	a

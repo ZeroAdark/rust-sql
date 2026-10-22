@@ -1,0 +1,9 @@
+# NULL is not the empty string
+sql: SELECT k, v FROM t;
+cols: k	v
+class: unordered
+verdict: mismatch
+[pg]
+1	\N
+[got]
+1	

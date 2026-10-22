@@ -1,0 +1,9 @@
+backend/tcop/postgres/src/lib.rs	XACT_STARTED	isojoin	owner, reset, carry
+backend/tcop/postgres/src/lib.rs	DOING_EXTENDED_QUERY_MESSAGE	isojoin	owner, reset, carry
+backend/tcop/postgres/src/lib.rs	IGNORE_TILL_SYNC	isojoin	owner, reset, carry
+backend/tcop/postgres/src/lib.rs	DOING_COMMAND_READ	isojoin	owner, reset, carry
+backend/tcop/postgres/src/lib.rs	ECHO_QUERY	isojoin	owner, reset, carry
+backend/tcop/postgres/src/lib.rs	USE_SEMI_NEWLINE_NEWLINE	isojoin	owner, reset, carry
+backend/tcop/postgres/src/lib.rs	RECOVERY_CONFLICT_PENDING_REASONS	isojoin	owner, reset, carry
+backend/tcop/postgres/src/lib.rs	SAVE_RUSAGE	isojoin	owner, reset, carry
+backend/tcop/postgres/src/lib.rs	RESTRICT_NONSYSTEM_RELATION_KIND_STRING	isojoin	owner, reset, carry

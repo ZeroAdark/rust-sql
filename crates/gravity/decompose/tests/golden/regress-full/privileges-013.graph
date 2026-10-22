@@ -1,0 +1,10 @@
+-- regress-full-privileges-013
+-- CREATE TABLE atest12 as SELECT x AS a, 10001 - x AS b FROM generate_series(1,10000) x;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10000)]
+  project (1=v1.1, 2=op555(c23:10001, v1.1))
+  outs 1=w4:val 2=w4:val
+mapped: FunctionScan

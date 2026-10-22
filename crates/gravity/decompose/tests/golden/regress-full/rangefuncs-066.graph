@@ -1,0 +1,12 @@
+-- regress-full-rangefuncs-066
+-- SELECT get_users();
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project ()
+  srf tlist [1:Other fn40805 fn40805()]
+  project (1=fn40805())
+  outs
+  outs 1=?
+mapped: Result ProjectSet

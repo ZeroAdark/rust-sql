@@ -1,0 +1,164 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2b s1l s2lk s1c s2c s4sel s4seq
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l: UPDATE rl SET v = v + 100 WHERE id = 1;
+step s2lk: WITH u AS (UPDATE rw SET v = v + 1 WHERE id <= 2 RETURNING id, v, nextval('rlsq') AS n) SELECT id, v FROM rl WHERE id <= 2 ORDER BY id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2lk: <... completed>
+id|  v
+--+---
+ 1|101
+ 2|  2
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT 'rw' AS t, id, v FROM rw UNION ALL SELECT 'rl', id, v FROM rl ORDER BY 1, 2;
+t |id|  v
+--+--+---
+rl| 1|101
+rl| 2|  2
+rl| 3|  3
+rl| 4|  4
+rw| 1|  2
+rw| 2|  3
+rw| 3|  3
+rw| 4|  4
+(8 rows)
+
+step s4seq: SELECT last_value, is_called FROM rlsq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+
+starting permutation: s2b s1l s2lk2 s1c s2c s4sel s4seq
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l: UPDATE rl SET v = v + 100 WHERE id = 1;
+step s2lk2: WITH u AS (UPDATE rw SET v = v + 1 WHERE id <= 2 RETURNING id, v, nextval('rlsq') AS n) SELECT id, v FROM rl WHERE id <= 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2lk2: <... completed>
+id|  v
+--+---
+ 1|101
+ 2|  2
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT 'rw' AS t, id, v FROM rw UNION ALL SELECT 'rl', id, v FROM rl ORDER BY 1, 2;
+t |id|  v
+--+--+---
+rl| 1|101
+rl| 2|  2
+rl| 3|  3
+rl| 4|  4
+rw| 1|  2
+rw| 2|  3
+rw| 3|  3
+rw| 4|  4
+(8 rows)
+
+step s4seq: SELECT last_value, is_called FROM rlsq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+
+starting permutation: s2b s1l s2lkd s1c s2c s4sel s4seq
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l: UPDATE rl SET v = v + 100 WHERE id = 1;
+step s2lkd: WITH d AS (DELETE FROM rw WHERE id = 2 RETURNING id, nextval('rlsq') AS n) SELECT id, v FROM rl WHERE id <= 2 ORDER BY id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2lkd: <... completed>
+id|  v
+--+---
+ 1|101
+ 2|  2
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT 'rw' AS t, id, v FROM rw UNION ALL SELECT 'rl', id, v FROM rl ORDER BY 1, 2;
+t |id|  v
+--+--+---
+rl| 1|101
+rl| 2|  2
+rl| 3|  3
+rl| 4|  4
+rw| 1|  1
+rw| 3|  3
+rw| 4|  4
+(7 rows)
+
+step s4seq: SELECT last_value, is_called FROM rlsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+
+starting permutation: s2b s1l s2lkl s1c s2c s4sel s4seq
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l: UPDATE rl SET v = v + 100 WHERE id = 1;
+step s2lkl: WITH u AS (UPDATE rw SET v = v + 1 WHERE id <= 2 RETURNING id, v, nextval('rlsq') AS n) SELECT id, v FROM rl WHERE id <= 3 ORDER BY id LIMIT 1 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2lkl: <... completed>
+id|  v
+--+---
+ 1|101
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT 'rw' AS t, id, v FROM rw UNION ALL SELECT 'rl', id, v FROM rl ORDER BY 1, 2;
+t |id|  v
+--+--+---
+rl| 1|101
+rl| 2|  2
+rl| 3|  3
+rl| 4|  4
+rw| 1|  2
+rw| 2|  3
+rw| 3|  3
+rw| 4|  4
+(8 rows)
+
+step s4seq: SELECT last_value, is_called FROM rlsq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+
+starting permutation: s2b s1w s2lk s1c s2c s4sel s4seq
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1w: UPDATE rw SET v = v + 100 WHERE id = 1;
+step s2lk: WITH u AS (UPDATE rw SET v = v + 1 WHERE id <= 2 RETURNING id, v, nextval('rlsq') AS n) SELECT id, v FROM rl WHERE id <= 2 ORDER BY id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2lk: <... completed>
+id|v
+--+-
+ 1|1
+ 2|2
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT 'rw' AS t, id, v FROM rw UNION ALL SELECT 'rl', id, v FROM rl ORDER BY 1, 2;
+t |id|  v
+--+--+---
+rl| 1|  1
+rl| 2|  2
+rl| 3|  3
+rl| 4|  4
+rw| 1|102
+rw| 2|  3
+rw| 3|  3
+rw| 4|  4
+(8 rows)
+
+step s4seq: SELECT last_value, is_called FROM rlsq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+

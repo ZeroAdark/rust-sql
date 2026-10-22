@@ -1,0 +1,7 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (box 11, M5-RIG 09-26): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT * FROM string_to_table('a b c', ' ') s
+cols: s
+[pg]
+a
+b
+c

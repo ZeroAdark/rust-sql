@@ -62,13 +62,16 @@ fn superuser_check(func_name: &str) -> PgResult<()> {
 }
 
 fn composite_result(
-    fcinfo: &Fcinfo,
+    fcinfo: &mut Fcinfo,
     flinfo: &mut FmgrInfo,
     values: &[Datum],
     nulls: &[bool],
 ) -> PgResult<Datum> {
+    let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
+    // SAFETY: the executor's expectedDesc remains live for this call.
+    let expected = expected_desc.map(|p| unsafe { p.cast().as_ref() });
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(Box::new(PgError::error("return type must be a row type")));
     }

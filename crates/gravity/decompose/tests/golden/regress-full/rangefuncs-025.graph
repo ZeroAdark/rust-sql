@@ -1,0 +1,10 @@
+-- regress-full-rangefuncs-025
+-- select * from array_to_set(array['one', 'two']) as t(f1 int,f2 text);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Other fn40788 cols=2 fn40788(c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x1c\x00\x00\x00one\x00\x1c\x00\x00\x00two\x00')]
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=vl:row
+mapped: FunctionScan

@@ -1,0 +1,169 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1u s2d s1c s2r s2t
+step s1u: UPDATE rb SET v = v + 1000 WHERE id IN (1, 2, 11, 12);
+step s2d: WITH d AS (DELETE FROM rb WHERE k IN (1, 2) RETURNING id, v) SELECT count(*), sum(v) FROM d; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+count|  sum
+-----+-----
+   40|15581
+(1 row)
+
+step s2r: SELECT id, v, op FROM rblog ORDER BY id, op;
+ id|   v|op    
+---+----+------
+ 11|1034|DELETE
+ 11|  33|UPDATE
+ 21|  63|DELETE
+ 22|  66|DELETE
+ 31|  93|DELETE
+ 41| 123|DELETE
+ 61| 183|DELETE
+ 72| 216|DELETE
+ 82| 246|DELETE
+ 92| 276|DELETE
+111| 333|DELETE
+121| 363|DELETE
+122| 366|DELETE
+132| 396|DELETE
+161| 483|DELETE
+162| 486|DELETE
+181| 543|DELETE
+182| 546|DELETE
+191| 573|DELETE
+(19 rows)
+
+step s2t: SELECT tableoid::regclass, count(*), sum(v) FROM rb GROUP BY 1 ORDER BY 1;
+tableoid|count|  sum
+--------+-----+-----
+rb0     |   91|29412
+rb1     |   69|19308
+(2 rows)
+
+
+starting permutation: s1k s1d s2d s1c s2r s2t
+step s1k: UPDATE rb SET k = 9 WHERE id IN (21, 22);
+step s1d: DELETE FROM rb WHERE id IN (31, 32);
+step s2d: WITH d AS (DELETE FROM rb WHERE k IN (1, 2) RETURNING id, v) SELECT count(*), sum(v) FROM d; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+count|  sum
+-----+-----
+   36|11262
+(1 row)
+
+step s2r: SELECT id, v, op FROM rblog ORDER BY id, op;
+ id|  v|op    
+---+---+------
+ 11| 33|DELETE
+ 21| 63|UPDATE
+ 22| 66|UPDATE
+ 31| 93|DELETE
+ 41|123|DELETE
+ 61|183|DELETE
+ 72|216|DELETE
+ 82|246|DELETE
+ 92|276|DELETE
+111|333|DELETE
+121|363|DELETE
+122|366|DELETE
+132|396|DELETE
+161|483|DELETE
+162|486|DELETE
+181|543|DELETE
+182|546|DELETE
+191|573|DELETE
+(18 rows)
+
+step s2t: SELECT tableoid::regclass, count(*), sum(v) FROM rb GROUP BY 1 ORDER BY 1;
+tableoid|count|  sum
+--------+-----+-----
+rb0     |   91|29412
+rb1     |   71|19439
+(2 rows)
+
+
+starting permutation: s1u s2u s1c s2r s2t
+step s1u: UPDATE rb SET v = v + 1000 WHERE id IN (1, 2, 11, 12);
+step s2u: WITH u AS (UPDATE rb SET v = k WHERE k IN (1, 2) RETURNING id, v) SELECT count(*), sum(v) FROM u; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+count|sum
+-----+---
+   40| 78
+(1 row)
+
+step s2r: SELECT id, v, op FROM rblog ORDER BY id, op;
+ id|   v|op    
+---+----+------
+ 11|  33|UPDATE
+ 11|1034|UPDATE
+ 21|  63|UPDATE
+ 22|  66|UPDATE
+ 31|  93|UPDATE
+ 41| 123|UPDATE
+ 61| 183|UPDATE
+ 72| 216|UPDATE
+ 82| 246|UPDATE
+ 92| 276|UPDATE
+111| 333|UPDATE
+121| 363|UPDATE
+122| 366|UPDATE
+132| 396|UPDATE
+161| 483|UPDATE
+162| 486|UPDATE
+181| 543|UPDATE
+182| 546|UPDATE
+191| 573|UPDATE
+(19 rows)
+
+step s2t: SELECT tableoid::regclass, count(*), sum(v) FROM rb GROUP BY 1 ORDER BY 1;
+tableoid|count|  sum
+--------+-----+-----
+rb0     |  113|29446
+rb1     |   87|19352
+(2 rows)
+
+
+starting permutation: s1k s1d s2u s1c s2r s2t
+step s1k: UPDATE rb SET k = 9 WHERE id IN (21, 22);
+step s1d: DELETE FROM rb WHERE id IN (31, 32);
+step s2u: WITH u AS (UPDATE rb SET v = k WHERE k IN (1, 2) RETURNING id, v) SELECT count(*), sum(v) FROM u; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+count|sum
+-----+---
+   36| 69
+(1 row)
+
+step s2r: SELECT id, v, op FROM rblog ORDER BY id, op;
+ id|  v|op    
+---+---+------
+ 11| 33|UPDATE
+ 21| 63|UPDATE
+ 22| 66|UPDATE
+ 31| 93|DELETE
+ 41|123|UPDATE
+ 61|183|UPDATE
+ 72|216|UPDATE
+ 82|246|UPDATE
+ 92|276|UPDATE
+111|333|UPDATE
+121|363|UPDATE
+122|366|UPDATE
+132|396|UPDATE
+161|483|UPDATE
+162|486|UPDATE
+181|543|UPDATE
+182|546|UPDATE
+191|573|UPDATE
+(18 rows)
+
+step s2t: SELECT tableoid::regclass, count(*), sum(v) FROM rb GROUP BY 1 ORDER BY 1;
+tableoid|count|  sum
+--------+-----+-----
+rb0     |  112|29444
+rb1     |   86|19476
+(2 rows)
+

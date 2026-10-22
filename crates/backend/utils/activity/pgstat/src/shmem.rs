@@ -77,12 +77,14 @@ pub struct PgStat_StatTabEntry {
     pub total_autoanalyze_time: PgStat_Counter,
 }
 
-#[derive(Clone, Copy, Debug)]
+// Boxed: per-backend IO matrices are ~3 kB, and an unboxed variant would size
+// every relation entry (here and in each session's snapshot) to match.
+#[derive(Clone, Debug)]
 pub enum SharedEntry {
     Relation(PgStat_StatTabEntry),
     Database(PgStat_StatDBEntry),
     Function(crate::function::PgStat_StatFuncEntry),
-    Backend(crate::backend::PgStat_Backend),
+    Backend(Box<crate::backend::PgStat_Backend>),
     ReplSlot(crate::replslot::PgStat_StatReplSlotEntry),
     Subscription(crate::subscription::PgStat_StatSubEntry),
 }
@@ -90,6 +92,17 @@ pub enum SharedEntry {
 type Store = HashMap<PgStat_HashKey, SharedEntry, FxBuildHasher>;
 
 static SHARED_STATS: Mutex<Store> = Mutex::new(HashMap::with_hasher(FxBuildHasher));
+
+/// D4702: the shared stats holder's home (`Consumer::SharedStats`). The map's table and its entries' own heap (a backend
+/// entry's box) are made and freed there whichever session adds or drops an entry: a pooled standby made its backend
+/// entry inside its leader's task (pgstat_bestart's create) and dropped it at its own park (pgstat_shutdown_hook), and a
+/// DROP TABLE / DATABASE drops entries other sessions made, each free below the freeing account's base. Entered only
+/// around an insert, a remove or a clear; a flush into an existing entry, a reset in place and every read stay outside
+/// (a snapshot's or an export's clones are the reader's).
+#[inline]
+fn holder() -> Option<memledger::Entered> {
+    memledger::Home::of(memledger::Acct::of(memledger::Consumer::SharedStats)).enter()
+}
 
 pub(crate) fn flush_relation(key: PgStat_HashKey, counts: &PgStat_TableCounts) {
     let scan_ts = if counts.numscans != 0 {
@@ -207,6 +220,7 @@ pub(crate) fn flush_subscription(
 
 pub(crate) fn drop_entry(key: PgStat_HashKey) {
     let mut store = pgsync::lock(&SHARED_STATS);
+    let _home = holder();
     let existed = store.remove(&key).is_some();
     // pgstat_drop_entry (pgstat_shmem.c:1027): database stats contain other
     // stats — dropping the database entry also drops every entry of that
@@ -230,18 +244,19 @@ pub(crate) fn ensure_entry_for_pending(key: PgStat_HashKey) -> bool {
         PGSTAT_KIND_SUBSCRIPTION as KS,
     };
     let mut store = pgsync::lock(&SHARED_STATS);
-    let mut created = false;
-    store.entry(key).or_insert_with(|| {
-        created = true;
-        match key.kind {
-            KR => SharedEntry::Relation(PgStat_StatTabEntry::default()),
-            KD => SharedEntry::Database(PgStat_StatDBEntry::default()),
-            KF => SharedEntry::Function(Default::default()),
-            KS => SharedEntry::Subscription(Default::default()),
-            other => panic!("pending entry for unported stats kind {other:?}"),
-        }
-    });
-    created
+    if store.contains_key(&key) {
+        return false;
+    }
+    let entry = match key.kind {
+        KR => SharedEntry::Relation(PgStat_StatTabEntry::default()),
+        KD => SharedEntry::Database(PgStat_StatDBEntry::default()),
+        KF => SharedEntry::Function(Default::default()),
+        KS => SharedEntry::Subscription(Default::default()),
+        other => panic!("pending entry for unported stats kind {other:?}"),
+    };
+    let _home = holder();
+    store.insert(key, entry);
+    true
 }
 
 pub(crate) fn entry_exists(key: PgStat_HashKey) -> bool {
@@ -250,17 +265,19 @@ pub(crate) fn entry_exists(key: PgStat_HashKey) -> bool {
 
 pub(crate) fn copy_entry(src: PgStat_HashKey, dst: PgStat_HashKey) {
     let mut store = pgsync::lock(&SHARED_STATS);
-    if let Some(&e) = store.get(&src) {
+    let _home = holder();
+    if let Some(e) = store.get(&src).cloned() {
         store.insert(dst, e);
     }
 }
 
 pub(crate) fn update_relation_entry(key: PgStat_HashKey, f: impl FnOnce(&mut PgStat_StatTabEntry)) {
     let mut store = pgsync::lock(&SHARED_STATS);
-    let SharedEntry::Relation(tabentry) = store
-        .entry(key)
-        .or_insert(SharedEntry::Relation(PgStat_StatTabEntry::default()))
-    else {
+    if !store.contains_key(&key) {
+        let _home = holder();
+        store.insert(key, SharedEntry::Relation(PgStat_StatTabEntry::default()));
+    }
+    let Some(SharedEntry::Relation(tabentry)) = store.get_mut(&key) else {
         unreachable!("relation key holds non-relation shared entry")
     };
     f(tabentry);
@@ -271,10 +288,11 @@ pub(crate) fn update_backend_entry(
     f: impl FnOnce(&mut crate::backend::PgStat_Backend),
 ) {
     let mut store = pgsync::lock(&SHARED_STATS);
-    let SharedEntry::Backend(entry) = store
-        .entry(key)
-        .or_insert(SharedEntry::Backend(Default::default()))
-    else {
+    if !store.contains_key(&key) {
+        let _home = holder();
+        store.insert(key, SharedEntry::Backend(Box::default()));
+    }
+    let Some(SharedEntry::Backend(entry)) = store.get_mut(&key) else {
         unreachable!("backend key holds non-backend shared entry")
     };
     f(entry);
@@ -285,10 +303,11 @@ pub(crate) fn update_replslot_entry(
     f: impl FnOnce(&mut crate::replslot::PgStat_StatReplSlotEntry),
 ) {
     let mut store = pgsync::lock(&SHARED_STATS);
-    let SharedEntry::ReplSlot(entry) = store
-        .entry(key)
-        .or_insert(SharedEntry::ReplSlot(Default::default()))
-    else {
+    if !store.contains_key(&key) {
+        let _home = holder();
+        store.insert(key, SharedEntry::ReplSlot(Default::default()));
+    }
+    let Some(SharedEntry::ReplSlot(entry)) = store.get_mut(&key) else {
         unreachable!("replslot key holds non-replslot shared entry")
     };
     f(entry);
@@ -299,10 +318,11 @@ pub(crate) fn update_subscription_entry(
     f: impl FnOnce(&mut crate::subscription::PgStat_StatSubEntry),
 ) {
     let mut store = pgsync::lock(&SHARED_STATS);
-    let SharedEntry::Subscription(entry) = store
-        .entry(key)
-        .or_insert(SharedEntry::Subscription(Default::default()))
-    else {
+    if !store.contains_key(&key) {
+        let _home = holder();
+        store.insert(key, SharedEntry::Subscription(Default::default()));
+    }
+    let Some(SharedEntry::Subscription(entry)) = store.get_mut(&key) else {
         unreachable!("subscription key holds non-subscription shared entry")
     };
     f(entry);
@@ -310,10 +330,11 @@ pub(crate) fn update_subscription_entry(
 
 pub(crate) fn update_database_entry(key: PgStat_HashKey, f: impl FnOnce(&mut PgStat_StatDBEntry)) {
     let mut store = pgsync::lock(&SHARED_STATS);
-    let SharedEntry::Database(dbentry) = store
-        .entry(key)
-        .or_insert(SharedEntry::Database(PgStat_StatDBEntry::default()))
-    else {
+    if !store.contains_key(&key) {
+        let _home = holder();
+        store.insert(key, SharedEntry::Database(PgStat_StatDBEntry::default()));
+    }
+    let Some(SharedEntry::Database(dbentry)) = store.get_mut(&key) else {
         unreachable!("database key holds non-database shared entry")
     };
     f(dbentry);
@@ -327,6 +348,11 @@ thread_local! {
 
 pub(crate) fn force_snapshot_clear_on_next_access() {
     FORCE_SNAPSHOT_CLEAR.with(|c| c.set(true));
+}
+
+#[cfg(test)]
+pub(crate) fn forced_snapshot_clear_pending() -> bool {
+    FORCE_SNAPSHOT_CLEAR.with(Cell::get)
 }
 
 pub(crate) fn consume_forced_snapshot_clear() {
@@ -359,7 +385,7 @@ pub(crate) fn build_snapshot() {
         debug_assert!(snap.stats.is_empty());
         let my_dboid = init_small::globals::MyDatabaseId();
         let store = pgsync::lock(&SHARED_STATS);
-        for (&key, &entry) in store.iter() {
+        for (&key, entry) in store.iter() {
             // database stats are accessed_across_databases in C
             if key.dboid != my_dboid
                 && key.dboid != InvalidOid
@@ -367,7 +393,7 @@ pub(crate) fn build_snapshot() {
             {
                 continue;
             }
-            snap.stats.insert(key, Some(entry));
+            snap.stats.insert(key, Some(entry.clone()));
         }
         snap.snapshot_timestamp = timestamp_seams::get_current_timestamp::call();
         snap.mode = PGSTAT_FETCH_CONSISTENCY_SNAPSHOT;
@@ -403,7 +429,7 @@ pub(crate) fn fetch_entry(key: PgStat_HashKey) -> Option<SharedEntry> {
     }
 
     if consistency > PGSTAT_FETCH_CONSISTENCY_NONE {
-        let cached = SNAPSHOT.with(|s| s.borrow().stats.get(&key).copied());
+        let cached = SNAPSHOT.with(|s| s.borrow().stats.get(&key).cloned());
         if let Some(entry) = cached {
             return entry;
         }
@@ -412,12 +438,12 @@ pub(crate) fn fetch_entry(key: PgStat_HashKey) -> Option<SharedEntry> {
         }
     }
 
-    let entry = pgsync::lock(&SHARED_STATS).get(&key).copied();
+    let entry = pgsync::lock(&SHARED_STATS).get(&key).cloned();
     if consistency == PGSTAT_FETCH_CONSISTENCY_CACHE {
         SNAPSHOT.with(|s| {
             let mut snap = s.borrow_mut();
             snap.mode = PGSTAT_FETCH_CONSISTENCY_CACHE;
-            snap.stats.insert(key, entry);
+            snap.stats.insert(key, entry.clone());
         });
     }
     entry
@@ -429,6 +455,7 @@ pub(crate) fn clear_snapshot() {
         snap.mode = PGSTAT_FETCH_CONSISTENCY_NONE;
         snap.stats.clear();
     });
+    FORCE_SNAPSHOT_CLEAR.with(|c| c.set(false));
     crate::archiver::pgstat_archiver_snapshot_clear();
     crate::bgwriter::pgstat_bgwriter_snapshot_clear();
     crate::checkpointer::pgstat_checkpointer_snapshot_clear();
@@ -458,7 +485,7 @@ pub(crate) fn export_entries(mut f: impl FnMut(PgStat_HashKey, SharedEntry)) {
     // happen while the store is locked.
     let entries: Vec<_> = {
         let store = pgsync::lock(&SHARED_STATS);
-        store.iter().map(|(&key, &entry)| (key, entry)).collect()
+        store.iter().map(|(&key, entry)| (key, entry.clone())).collect()
     };
     for (key, entry) in entries {
         f(key, entry);
@@ -466,7 +493,9 @@ pub(crate) fn export_entries(mut f: impl FnMut(PgStat_HashKey, SharedEntry)) {
 }
 
 pub(crate) fn import_entry(key: PgStat_HashKey, entry: SharedEntry) {
-    pgsync::lock(&SHARED_STATS).insert(key, entry);
+    let mut store = pgsync::lock(&SHARED_STATS);
+    let _home = holder();
+    store.insert(key, entry);
 }
 
 // The `found` of pgstat_read_statsfile's dshash_find_or_insert.
@@ -479,7 +508,9 @@ pub(crate) fn clear_all_entries() {
     // fresh-world guarantee even if a plain lock().unwrap() site slips back
     // in later — pgsync::lock already tolerates poison, this clears the flag.
     SHARED_STATS.clear_poison();
-    pgsync::lock(&SHARED_STATS).clear();
+    let mut store = pgsync::lock(&SHARED_STATS);
+    let _home = holder();
+    store.clear();
 }
 
 #[cfg(test)]
@@ -496,7 +527,7 @@ fn reset_entry_contents(entry: &mut SharedEntry, ts: TimestampTz) {
             d.stat_reset_timestamp = ts;
         }
         SharedEntry::Backend(b) => {
-            *b = Default::default();
+            **b = Default::default();
             b.stat_reset_timestamp = ts;
         }
         SharedEntry::ReplSlot(r) => {
@@ -512,9 +543,11 @@ fn reset_entry_contents(entry: &mut SharedEntry, ts: TimestampTz) {
 
 fn reset_database_timestamp(store: &mut Store, dboid: types_core::Oid, ts: TimestampTz) {
     let key = PgStat_HashKey { kind: PGSTAT_KIND_DATABASE, dboid, objid: 0 };
-    let SharedEntry::Database(d) =
-        store.entry(key).or_insert(SharedEntry::Database(PgStat_StatDBEntry::default()))
-    else {
+    if !store.contains_key(&key) {
+        let _home = holder();
+        store.insert(key, SharedEntry::Database(PgStat_StatDBEntry::default()));
+    }
+    let Some(SharedEntry::Database(d)) = store.get_mut(&key) else {
         unreachable!("database key holds non-database shared entry")
     };
     d.stat_reset_timestamp = ts;

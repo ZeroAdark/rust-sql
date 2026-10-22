@@ -118,7 +118,9 @@ thread_local! {
             have_iostats: false,
             backend_has_iostats: false,
         }) };
-    static SNAPSHOT_IO: RefCell<Option<PgStat_IO>> = const { RefCell::new(None) };
+    // Boxed: a 50 KB value inline would be zeroed into every thread's static
+    // TLS block, where C's static snapshot costs nothing until it is used.
+    static SNAPSHOT_IO: RefCell<Option<Box<PgStat_IO>>> = const { RefCell::new(None) };
     // pgBufferUsage.{shared,local}_blk_{read,write}_time (instrument.h), in
     // ns ticks; instrument's pg_buffer_usage reads them.
     static SHARED_BLK_READ_TIME: Cell<i64> = const { Cell::new(0) };
@@ -227,6 +229,41 @@ pub fn local_blk_write_time() -> i64 {
     LOCAL_BLK_WRITE_TIME.with(Cell::get)
 }
 
+/// pgBufferUsage's block I/O times (ns ticks), in this order: shared read, shared write, local read, local write.
+pub type BlockTimes = [i64; 4];
+
+fn time_cells() -> [&'static std::thread::LocalKey<Cell<i64>>; 4] {
+    [&SHARED_BLK_READ_TIME, &SHARED_BLK_WRITE_TIME, &LOCAL_BLK_READ_TIME, &LOCAL_BLK_WRITE_TIME]
+}
+
+/// This thread's pgBufferUsage block I/O times now.
+pub fn block_times() -> BlockTimes {
+    let c = time_cells();
+    core::array::from_fn(|i| c[i].with(Cell::get))
+}
+
+/// This thread's times since `then` (a `block_times` of it), taken out: its times are back at `then`. A Gravity pool
+/// claim hands its leader its I/O time this way (D4241), as bufmgr `counters::take_since` hands its block counts
+/// (InstrAccumParallelQuery's role).
+pub fn take_block_times_since(then: &BlockTimes) -> BlockTimes {
+    let c = time_cells();
+    core::array::from_fn(|i| {
+        c[i].with(|x| {
+            let d = x.get().wrapping_sub(then[i]);
+            x.set(then[i]);
+            d
+        })
+    })
+}
+
+/// Times another thread took (`take_block_times_since`) added to this thread's.
+pub fn add_block_times(d: &BlockTimes) {
+    let c = time_cells();
+    for (cell, n) in c.iter().zip(d) {
+        cell.with(|x| x.set(x.get().wrapping_add(*n)));
+    }
+}
+
 // Zero start means timing disabled: pgstat_count_io_op_time skips the diff.
 pub fn pgstat_prepare_io_time(track_io_guc: bool) -> i64 {
     if track_io_guc {
@@ -292,7 +329,7 @@ pub fn pgstat_count_io_op_time(
 
 pub fn pgstat_fetch_stat_io() -> PgStat_IO {
     pgstat_io_snapshot_build();
-    SNAPSHOT_IO.with(|s| s.borrow().expect("io snapshot built above"))
+    SNAPSHOT_IO.with(|s| **s.borrow().as_ref().expect("io snapshot built above"))
 }
 
 pub(crate) fn pgstat_io_snapshot_build() {
@@ -310,7 +347,13 @@ pub(crate) fn pgstat_io_snapshot_build() {
 
 pub(crate) fn pgstat_io_snapshot_cb() {
     let shared = *pgsync::lock(&SHARED_IO);
-    SNAPSHOT_IO.with(|s| *s.borrow_mut() = Some(shared));
+    SNAPSHOT_IO.with(|s| {
+        let mut slot = s.borrow_mut();
+        match slot.as_mut() {
+            Some(snap) => **snap = shared,
+            None => *slot = Some(Box::new(shared)),
+        }
+    });
 }
 
 pub(crate) fn pgstat_io_snapshot_clear() {
@@ -351,6 +394,42 @@ pub(crate) fn import_io_stats(v: PgStat_IO) {
 
 pub(crate) fn export_io_stats() -> PgStat_IO {
     *pgsync::lock(&SHARED_IO)
+}
+
+// The stats file keeps C's layout: InstanceAux is pgrust-only (WAL IO only)
+// and has no row there, as in pg_stat_io.
+const FILE_BKTYPES: usize = BACKEND_NUM_TYPES - 1;
+const SKIP: usize = BackendType::InstanceAux as usize;
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(crate) struct PgStat_IO_File {
+    stat_reset_timestamp: TimestampTz,
+    stats: [PgStat_BktypeIO; FILE_BKTYPES],
+}
+
+impl Default for PgStat_IO_File {
+    fn default() -> Self {
+        PgStat_IO_File { stat_reset_timestamp: 0, stats: [BKTYPE_IO_ZERO; FILE_BKTYPES] }
+    }
+}
+
+pub(crate) fn export_io_file() -> PgStat_IO_File {
+    let v = export_io_stats();
+    let mut f = PgStat_IO_File { stat_reset_timestamp: v.stat_reset_timestamp, ..Default::default() };
+    for (j, i) in (0..BACKEND_NUM_TYPES).filter(|&i| i != SKIP).enumerate() {
+        f.stats[j] = v.stats[i];
+    }
+    f
+}
+
+pub(crate) fn import_io_file(f: PgStat_IO_File) {
+    let mut v = IO_STATS_ZERO;
+    v.stat_reset_timestamp = f.stat_reset_timestamp;
+    for (j, i) in (0..BACKEND_NUM_TYPES).filter(|&i| i != SKIP).enumerate() {
+        v.stats[i] = f.stats[j];
+    }
+    import_io_stats(v);
 }
 
 #[cfg(test)]
@@ -422,13 +501,16 @@ pub fn pgstat_tracks_io_object(
             | B::StandaloneBackend
             | B::Startup
             | B::WalSummarizer
+            | B::InstanceAux
             | B::WalWriter
             | B::WalReceiver
     );
     if no_temp_rel && io_context == C::IOCONTEXT_NORMAL && io_object == O::TempRelation {
         return false;
     }
-    if matches!(bktype, B::WalSummarizer | B::WalReceiver | B::WalWriter) && io_object != O::Wal {
+    if matches!(bktype, B::WalSummarizer | B::InstanceAux | B::WalReceiver | B::WalWriter)
+        && io_object != O::Wal
+    {
         return false;
     }
     if matches!(bktype, B::Checkpointer | B::BgWriter)

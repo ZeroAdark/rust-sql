@@ -1,0 +1,18 @@
+-- regress-full-misc_functions-007
+-- select (w).size = 16777216 as ok from (select pg_ls_waldir() w) ss where length((w).name) = 24 limit 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0 n2@1 n1@3 n0@5
+  source const
+  project ()
+  srf tlist [1:Other fn3354 fn3354()]
+  project (1=fn3354())
+  filter op96(fn1317(T_FieldSelect), c23:24)
+  project (1=op416(T_FieldSelect, c23:16777216))
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs
+  outs 1=vl:call3354
+  outs 1=w1:val
+  outs 1=w1:val
+mapped: Result ProjectSet SubqueryScan Limit

@@ -1,5 +1,5 @@
 //! EXHAUSTIVE native differential for the 4 timetz_part tz-arm Kani cells
-//! (CI cluster 33d7d09d31 triage; cascade step a0 EXHAUSTIVE-DIFF, domains <=
+//! (fleet 33d7d09d31 triage; cascade step a0 EXHAUSTIVE-DIFF, domains <=
 //! ~2^32 enumerated natively against the C oracle).
 //!
 //! The cells' proof domain factors exactly: zone ranges over the contract

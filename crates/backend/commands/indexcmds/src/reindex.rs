@@ -1,5 +1,3 @@
-// ExecReindex/ReindexIndex/ReindexTable + ReindexMultipleTables/Partitions/
-// MultipleInternal + ReindexRelationConcurrently (indexcmds.c).
 use backend_progress::progress::{
     PROGRESS_CREATEIDX_ACCESS_METHOD_OID, PROGRESS_CREATEIDX_COMMAND,
     PROGRESS_CREATEIDX_COMMAND_REINDEX_CONCURRENTLY, PROGRESS_CREATEIDX_INDEX_OID,
@@ -23,9 +21,7 @@ use types_error::{
 };
 
 // Every path in this file is reached only from ExecReindex, i.e. an actual
-// REINDEX statement is always driving the call (unlike catalog_index's
-// reindex_index/reindex_relation, which CLUSTER/VACUUM FULL/TRUNCATE also
-// call with no statement). C's guard is `if (stmt)`; here it is unconditional.
+// REINDEX statement is always driving the call.
 fn collect_reindex_cb() -> impl FnMut(Oid) {
     let tag = cmdtag::GetCommandTagEnum(b"REINDEX");
     move |index_id: Oid| {
@@ -71,7 +67,6 @@ pub fn ExecReindex<'mcx>(
             "concurrently" => concurrently = explain::defGetBoolean(opt)?,
             "tablespace" => tablespacename = Some(explain::defGetString(mcx, opt)?),
             name => {
-                // C: parser_errposition(pstate, opt->location) (indexcmds.c:2862).
                 return Err(Box::new(
                     (*err(
                         format!("unrecognized REINDEX option \"{name}\""),
@@ -295,12 +290,13 @@ fn ReindexTable<'mcx>(
 
 const Anum_pg_class_oid: usize = 1;
 const Anum_pg_class_relnamespace: usize = 3;
+const Anum_pg_class_relam: usize = 7;
 const Anum_pg_class_relfilenode: usize = 8;
+const Anum_pg_class_relhasindex: usize = 15;
 const Anum_pg_class_relisshared: usize = 16;
 const Anum_pg_class_relpersistence: usize = 17;
 const Anum_pg_class_relkind: usize = 18;
 
-// ReindexMultipleTables (indexcmds.c:3108).
 fn ReindexMultipleTables<'mcx>(
     mcx: Mcx<'mcx>,
     stmt: &ReindexStmt<'mcx>,
@@ -419,6 +415,21 @@ fn ReindexMultipleTables<'mcx>(
                 concurrent_warning = true;
                 continue;
             }
+            if concurrent && get(Anum_pg_class_relhasindex).as_bool() && pgrc_relam(get(Anum_pg_class_relam).as_oid())? {
+                elog_seams::ereport::call(
+                    PgError::new(
+                        WARNING,
+                        format!(
+                            "pgrcolumnar does not support REINDEX CONCURRENTLY, skipping \"{}\"",
+                            lsyscache::get_rel_name(mcx, relid)?
+                                .map(|s| s.as_str().to_string())
+                                .unwrap_or_default()
+                        ),
+                    )
+                    .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
+                )?;
+                continue;
+            }
             if params.tablespace_oid != InvalidOid {
                 let relfilenode = get(Anum_pg_class_relfilenode).as_oid();
                 let mapped = types_rel::RELKIND_HAS_STORAGE(relkind) && relfilenode == InvalidOid;
@@ -464,9 +475,8 @@ fn oid_key_at(attno: usize, oid: Oid) -> types_scan::scankey::ScanKeyData {
     key
 }
 
-// ReindexPartitions (indexcmds.c:3348); C's error-context callback covers only
-// PreventInTransactionBlock (pushed then popped around it), so the CONTEXT
-// line is attached to that error alone.
+// C's error-context callback covers only PreventInTransactionBlock, so the
+// CONTEXT line is attached to that error alone.
 fn ReindexPartitions<'mcx>(
     mcx: Mcx<'mcx>,
     relid: Oid,
@@ -511,7 +521,7 @@ fn ReindexPartitions<'mcx>(
     ReindexMultipleInternal(mcx, &partitions, params)
 }
 
-// ReindexMultipleInternal (indexcmds.c:3442): one transaction per relation.
+// One transaction per relation.
 fn ReindexMultipleInternal<'mcx>(
     mcx: Mcx<'mcx>,
     relids: &[Oid],
@@ -617,14 +627,31 @@ struct ReindexIndexInfo {
     safe: bool,
 }
 
-/// The four progress params ReindexRelationConcurrently re-reports per index
-/// (indexcmds.c:3608-3614), in C's order.
 const PROGRESS_INDEX: [usize; 4] = [
     PROGRESS_CREATEIDX_COMMAND,
     PROGRESS_CREATEIDX_PHASE,
     PROGRESS_CREATEIDX_INDEX_OID,
     PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
 ];
+
+/// Whether `relam` is pgrcolumnar's, for a pg_class row no relcache entry has registered yet (by name, as relcache does).
+fn pgrc_relam(relam: Oid) -> PgResult<bool> {
+    if relam == InvalidOid || relam == tableam_vocab::HEAP_TABLE_AM_OID {
+        return Ok(false);
+    }
+    Ok(tableam_vocab::is_pgrcolumnar_am_oid(relam)
+        || syscache_seams::pg_am_amname::call(relam)?.as_deref() == Some("pgrcolumnar"))
+}
+
+fn pgrc_refuse_concurrent_reindex(heap: &types_rel::RelationData<'_>) -> PgResult<()> {
+    if tableam_vocab::is_pgrcolumnar_am_oid(heap.rd_rel.relam) {
+        return Err(err(
+            "pgrcolumnar does not support REINDEX CONCURRENTLY".to_string(),
+            ERRCODE_FEATURE_NOT_SUPPORTED,
+        ));
+    }
+    Ok(())
+}
 
 /// `pgstat_progress_start_command` + the four-param report C repeats at
 /// indexcmds.c:3959-3965, 4134-4139 and 4200-4205.
@@ -644,8 +671,6 @@ fn report_concurrent_index(idx: &ReindexIndexInfo, phase: i64) {
     );
 }
 
-// ReindexRelationConcurrently (indexcmds.c:3568). Progress reporting is
-// unported; the six-phase protocol is C-exact.
 fn ReindexRelationConcurrently<'mcx>(
     mcx: Mcx<'mcx>,
     relationOid: Oid,
@@ -699,6 +724,9 @@ fn ReindexRelationConcurrently<'mcx>(
             }
 
             let index_list = relcache::indexlist::RelationGetIndexList(mcx, relationOid)?;
+            if !index_list.is_empty() {
+                pgrc_refuse_concurrent_reindex(&heapRelation)?;
+            }
             for &cell_oid in index_list.iter() {
                 collect_index_for_concurrent_reindex(mcx, cell_oid, &mut index_ids)?;
             }
@@ -743,6 +771,7 @@ fn ReindexRelationConcurrently<'mcx>(
             } else {
                 table::table_open(mcx, heap_id, ShareUpdateExclusiveLock)?
             };
+            pgrc_refuse_concurrent_reindex(&heapRelation)?;
             if params.tablespace_oid != InvalidOid && catalog::IsSystemRelation(&heapRelation) {
                 return Err(err(
                     format!(
@@ -789,7 +818,6 @@ fn ReindexRelationConcurrently<'mcx>(
         ));
     }
 
-    // Phase 1: create the new indexes in the catalog and take session locks.
     let mut new_index_ids: mcx::PgVec<'mcx, ReindexIndexInfo> = mcx::PgVec::new_in(mcx);
     let mut relation_locks: mcx::PgVec<'mcx, LockRelId> = mcx::PgVec::new_in(mcx);
     let mut lock_tags: mcx::PgVec<'mcx, LOCKTAG> = mcx::PgVec::new_in(mcx);
@@ -811,15 +839,12 @@ fn ReindexRelationConcurrently<'mcx>(
         index_ids[i].am_id = indexRel.rd_rel.relam;
 
         if indexRel.rd_rel.relpersistence == RELPERSISTENCE_TEMP as u8 {
-            // C elog(ERROR) (indexcmds.c:3957): XX000, never a panic.
             return Err(Box::new(
                 PgError::error("cannot reindex a temporary table concurrently")
                     .with_sqlstate(ERRCODE_INTERNAL_ERROR),
             ));
         }
 
-        // indexcmds.c:3959-3965: the command row targets this index while
-        // its copy is created ("initializing" = phase 0).
         report_concurrent_index(&index_ids[i], 0);
 
         let concurrent_name = crate::define::ChooseRelationName(
@@ -869,8 +894,6 @@ fn ReindexRelationConcurrently<'mcx>(
 
         heapRel.close(types_rel::NoLock)?;
 
-        // index.c: EventTriggerCollectSimpleCommand(RelationRelationId,
-        // newIndexId, stmt) — unconditional here (see collect_reindex_cb).
         event_trigger::EventTriggerCollectSimpleCommand(
             ObjectAddress::set(RELATION_RELATION_ID, new_index_id),
             ObjectAddress::set(InvalidOid, InvalidOid),
@@ -894,8 +917,6 @@ fn ReindexRelationConcurrently<'mcx>(
     xact::CommitTransactionCommand()?;
     xact::StartTransactionCommand()?;
 
-    // Phase 2: build the new indexes, one transaction each.
-    // indexcmds.c:4104
     backend_progress::pgstat_progress_update_param(
         PROGRESS_CREATEIDX_PHASE,
         PROGRESS_CREATEIDX_PHASE_WAIT_1,
@@ -912,8 +933,6 @@ fn ReindexRelationConcurrently<'mcx>(
         let snap = snapmgr::GetTransactionSnapshot()?;
         snapmgr::PushActiveSnapshot(&snap)?;
 
-        // Update progress for the index to build, with the correct parent
-        // table involved (indexcmds.c:4134-4139).
         report_concurrent_index(newidx, PROGRESS_CREATEIDX_PHASE_BUILD);
 
         catalog_index::index_concurrently_build(mcx, newidx.table_id, newidx.index_id)?;
@@ -922,13 +941,10 @@ fn ReindexRelationConcurrently<'mcx>(
         xact::CommitTransactionCommand()?;
     }
 
-    // upstream e4527519b77e (18.6): Fix propagation of indimmediate flag in index_create_copy()
     injection_point::injection_point("reindex-conc-index-built")?;
 
     xact::StartTransactionCommand()?;
 
-    // Phase 3: let the new indexes catch up, then validate, one per xact.
-    // indexcmds.c:4165
     backend_progress::pgstat_progress_update_param(
         PROGRESS_CREATEIDX_PHASE,
         PROGRESS_CREATEIDX_PHASE_WAIT_2,
@@ -947,7 +963,6 @@ fn ReindexRelationConcurrently<'mcx>(
         let snapshot = snapmgr::RegisterSnapshot(Some(&snap))?.expect("registered snapshot");
         snapmgr::PushActiveSnapshot(&snapshot)?;
 
-        // indexcmds.c:4200-4205
         report_concurrent_index(newidx, PROGRESS_CREATEIDX_PHASE_VALIDATE_IDXSCAN);
 
         catalog_index::validate_index(mcx, newidx.table_id, newidx.index_id, &snapshot)?;
@@ -959,7 +974,6 @@ fn ReindexRelationConcurrently<'mcx>(
         xact::CommitTransactionCommand()?;
         xact::StartTransactionCommand()?;
 
-        // indexcmds.c:4235
         backend_progress::pgstat_progress_update_param(
             PROGRESS_CREATEIDX_PHASE,
             PROGRESS_CREATEIDX_PHASE_WAIT_3,
@@ -969,7 +983,6 @@ fn ReindexRelationConcurrently<'mcx>(
         xact::CommitTransactionCommand()?;
     }
 
-    // Phase 4: swap the indexes.
     xact::StartTransactionCommand()?;
     procarray::SetIndexsafeProcflags()?;
 
@@ -1003,8 +1016,6 @@ fn ReindexRelationConcurrently<'mcx>(
     xact::CommitTransactionCommand()?;
     xact::StartTransactionCommand()?;
 
-    // Phase 5: mark the old indexes dead.
-    // indexcmds.c:4331
     backend_progress::pgstat_progress_update_param(
         PROGRESS_CREATEIDX_PHASE,
         PROGRESS_CREATEIDX_PHASE_WAIT_4,
@@ -1022,8 +1033,6 @@ fn ReindexRelationConcurrently<'mcx>(
     xact::CommitTransactionCommand()?;
     xact::StartTransactionCommand()?;
 
-    // Phase 6: drop the old indexes.
-    // indexcmds.c:4373
     backend_progress::pgstat_progress_update_param(
         PROGRESS_CREATEIDX_PHASE,
         PROGRESS_CREATEIDX_PHASE_WAIT_5,
@@ -1058,7 +1067,6 @@ fn ReindexRelationConcurrently<'mcx>(
 
     xact::StartTransactionCommand()?;
 
-    // indexcmds.c:4451
     backend_progress::pgstat_progress_end_command();
 
     if verbose {

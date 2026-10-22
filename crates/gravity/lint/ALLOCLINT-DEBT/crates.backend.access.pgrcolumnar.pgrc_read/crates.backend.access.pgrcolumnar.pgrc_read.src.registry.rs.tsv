@@ -1,0 +1,9 @@
+path	crates/backend/access/pgrcolumnar/pgrc_read/src/registry.rs
+growth	std::collections::BTreeMap::entry	1
+growth	std::vec::Vec::push	1
+method	slice::sort_by_key	1
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	2
+method	std::sync::Arc::new	1
+type	std::sync::Arc	3
+type	std::vec::Vec	1

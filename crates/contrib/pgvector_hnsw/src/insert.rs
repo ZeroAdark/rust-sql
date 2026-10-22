@@ -194,9 +194,9 @@ fn add_element_on_disk(
     let min_combined_size = etup_size + neighbor_tuple_size(0, m) + SIZE_OF_ITEM_ID;
 
     let mut etup: Vec<u8> = Vec::new();
-    set_element_tuple(&mut etup, pool, e_id);
+    set_element_tuple(&mut etup, pool, e_id)?;
     let mut ntup: Vec<u8> = Vec::new();
-    set_neighbor_tuple(&mut ntup, pool, e_id, m);
+    set_neighbor_tuple(&mut ntup, pool, e_id, m)?;
 
     let mut current_page = insert_page;
     let mut new_insert_page = INVALID_BLOCK;
@@ -411,7 +411,7 @@ fn load_neighbors(
     lm: i32,
     lc: i32,
 ) -> PgResult<Vec<Candidate>> {
-    let mut out: Vec<Candidate> = Vec::with_capacity(lm as usize);
+    let mut out: Vec<Candidate> = ::mcx::std_vec_with_capacity("pgvector_hnsw", lm as usize)?;
     let mut tids = [[0u8; 6]; 200];
     if !load_neighbor_tids(pool, element, &mut tids[..lm as usize], index, m, lm, lc)? {
         return Ok(out);
@@ -667,16 +667,15 @@ fn find_duplicate_on_disk(
         .iter()
         .copied()
         .collect();
-    let value: Vec<u8> = pool.get(element).value.as_ref().expect("value").to_vec();
+    let value: Vec<u8> = ::mcx::std_vec_from_slice("pgvector_hnsw", &pool.get(element).value.as_ref().expect("value"))?;
     for neighbor in items {
         let nvalue = pool
             .get(neighbor.element)
             .value
             .as_ref()
-            .expect("neighbor value loaded (inserting search keeps vecs)")
-            .to_vec();
+            .expect("neighbor value loaded (inserting search keeps vecs)");
         // datumIsEqual(value, neighborValue, false, -1): whole-image compare.
-        if value != nvalue {
+        if value.as_slice() != nvalue.as_slice() {
             return Ok(false);
         }
         if add_duplicate_on_disk(index, pool, element, neighbor.element, building, op_mcx)? {
@@ -763,7 +762,7 @@ pub fn insert_tuple_on_disk(
     heaptid: &ItemPointerData,
     building: bool,
 ) -> PgResult<bool> {
-    let op = mcx::MemoryContext::new_bump("hnsw insert on disk");
+    let op = mcx::MemoryContext::new_wholesale("hnsw insert on disk");
     let op_mcx = op.mcx();
     let mut lockmode: LOCKMODE = ShareLock;
 
@@ -840,7 +839,7 @@ pub fn form_index_value<'m>(
         let d = Datum::from_usize(img.as_ptr() as usize);
         let norm = {
             let np = support.normprocinfo.as_mut().expect("some");
-            types_fmgr::function_call1_coll(np, support.collation, d)?.as_f64()
+            types_fmgr::function_call1_coll_in(np, support.collation, mcx, d)?.as_f64()
         };
         if !(norm > 0.0) {
             return Ok(None);
@@ -863,7 +862,7 @@ pub fn hnswinsert<'mcx>(
         return Ok(false);
     }
     check_type_supported(index)?;
-    let insert_ctx = mcx::MemoryContext::new_bump("Hnsw insert temporary context");
+    let insert_ctx = mcx::MemoryContext::new_wholesale("Hnsw insert temporary context");
     let imcx = insert_ctx.mcx();
 
     let mut support = init_support(index)?;

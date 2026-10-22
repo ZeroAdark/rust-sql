@@ -9,7 +9,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, Ordering};
 
 use ::elog::elog;
-use ::mcx::{Allocator, MemoryContext};
+use ::mcx::{add_size, mul_size, Allocator, MemoryContext};
 use ::types_core::Size;
 use ::types_error::{
     PgError, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_OUT_OF_MEMORY, FATAL, PANIC, WARNING,
@@ -560,7 +560,7 @@ unsafe fn init_htab(hashp: *mut HTAB, nelem: i64) -> bool {
     true
 }
 
-pub fn hash_estimate_size(num_entries: i64, entrysize: Size) -> Size {
+pub fn hash_estimate_size(num_entries: i64, entrysize: Size) -> PgResult<Size> {
     let n_buckets = next_pow2_long(num_entries);
     let n_segments = next_pow2_long((n_buckets - 1) / DEF_SEGSIZE + 1);
     let mut n_dir_entries = DEF_DIRSIZE;
@@ -569,14 +569,23 @@ pub fn hash_estimate_size(num_entries: i64, entrysize: Size) -> Size {
     }
 
     let mut size = MAXALIGN(size_of::<HASHHDR>());
-    size += n_dir_entries as usize * size_of::<HASHSEGMENT>();
-    size += n_segments as usize * MAXALIGN(DEF_SEGSIZE as usize * size_of::<*mut HASHELEMENT>());
+    size = add_size(size, mul_size(n_dir_entries as usize, size_of::<HASHSEGMENT>())?)?;
+    size = add_size(
+        size,
+        mul_size(
+            n_segments as usize,
+            MAXALIGN(DEF_SEGSIZE as usize * size_of::<*mut HASHELEMENT>()),
+        )?,
+    )?;
     let element_alloc_cnt = choose_nelem_alloc(entrysize) as i64;
     let n_element_allocs = (num_entries - 1) / element_alloc_cnt + 1;
     let element_size = MAXALIGN(size_of::<HASHELEMENT>()) + MAXALIGN(entrysize);
-    size += (n_element_allocs * element_alloc_cnt) as usize * element_size;
+    size = add_size(
+        size,
+        mul_size(n_element_allocs as usize, mul_size(element_alloc_cnt as usize, element_size)?)?,
+    )?;
 
-    size
+    Ok(size)
 }
 
 pub fn hash_select_dirsize(num_entries: i64) -> i64 {
@@ -1284,15 +1293,7 @@ fn frozen_error(op: &str, hashp: *mut HTAB) -> Box<PgError> {
 
 pub fn my_log2(num: i64) -> i32 {
     let num = num.min(i64::MAX / 2);
-    pg_ceil_log2_64(num)
-}
-
-fn pg_ceil_log2_64(num: i64) -> i32 {
-    if num <= 1 {
-        return 0;
-    }
-    let v = (num - 1) as u64;
-    (64 - v.leading_zeros()) as i32
+    ::pg_bitutils::pg_ceil_log2_64(num as u64) as i32
 }
 
 fn next_pow2_long(num: i64) -> i64 {

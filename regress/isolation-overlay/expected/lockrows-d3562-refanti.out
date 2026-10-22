@@ -1,0 +1,215 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2x s1a s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE;
+QUERY PLAN                                              
+--------------------------------------------------------
+Limit                                                   
+  ->  LockRows                                          
+        ->  Nested Loop Anti Join                       
+              ->  Index Scan using rat_claim on rat t   
+                    Index Cond: (status = 'ready'::text)
+              ->  Index Scan using ral_task on ral l    
+                    Index Cond: (task_id = t.id)        
+(7 rows)
+
+step s1a: UPDATE rat SET attempts = attempts + 10 WHERE id = 3;
+step s2l: SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts
+--+--------
+ 3|      10
+ 7|       1
+11|       2
+19|       1
+23|       2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2l s1c
+step s1s: UPDATE rat SET status = 'done' WHERE id = 3;
+step s2l: SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts
+--+--------
+ 7|       1
+11|       2
+19|       1
+23|       2
+27|       0
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2l s1c
+step s1l: INSERT INTO ral VALUES (3, 'x'); UPDATE rat SET attempts = attempts + 10 WHERE id = 3;
+step s2l: SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts
+--+--------
+ 3|      10
+ 7|       1
+11|       2
+19|       1
+23|       2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1u s2l s1c
+step s1u: DELETE FROM ral WHERE task_id = 15; UPDATE rat SET attempts = attempts + 10 WHERE id = 3;
+step s2l: SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts
+--+--------
+ 3|      10
+ 7|       1
+11|       2
+19|       1
+23|       2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT id FROM rat WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2sk: SELECT t.id FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE SKIP LOCKED;
+id
+--
+ 7
+11
+19
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2nw s1c
+step s1k: SELECT id FROM rat WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2nw: SELECT t.id FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "rat"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1a s3l s1c
+step s3x: EXPLAIN (COSTS OFF) SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE;
+QUERY PLAN                                                
+----------------------------------------------------------
+Limit                                                     
+  ->  LockRows                                            
+        ->  Sort                                          
+              Sort Key: t.priority DESC, t.run_at         
+              ->  Hash Anti Join                          
+                    Hash Cond: (t.id = l.task_id)         
+                    ->  Seq Scan on rat t                 
+                          Filter: (status = 'ready'::text)
+                    ->  Hash                              
+                          ->  Seq Scan on ral l           
+(10 rows)
+
+step s1a: UPDATE rat SET attempts = attempts + 10 WHERE id = 3;
+step s3l: SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|attempts
+--+--------
+ 3|      10
+ 7|       1
+11|       2
+19|       1
+23|       2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s3l s1c
+step s1l: INSERT INTO ral VALUES (3, 'x'); UPDATE rat SET attempts = attempts + 10 WHERE id = 3;
+step s3l: SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|attempts
+--+--------
+ 3|      10
+ 7|       1
+11|       2
+19|       1
+23|       2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s3l s1c
+step s1s: UPDATE rat SET status = 'done' WHERE id = 3;
+step s3l: SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM ral l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|attempts
+--+--------
+ 7|       1
+11|       2
+19|       1
+23|       2
+27|       0
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s4x s1a s4l s1c
+step s4x: EXPLAIN (COSTS OFF) SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM rah h WHERE h.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE;
+QUERY PLAN                                              
+--------------------------------------------------------
+Limit                                                   
+  ->  LockRows                                          
+        ->  Nested Loop Anti Join                       
+              Join Filter: (h.task_id = t.id)           
+              ->  Index Scan using rat_claim on rat t   
+                    Index Cond: (status = 'ready'::text)
+              ->  Materialize                           
+                    ->  Seq Scan on rah h               
+(8 rows)
+
+step s1a: UPDATE rat SET attempts = attempts + 10 WHERE id = 3;
+step s4l: SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM rah h WHERE h.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+id|attempts
+--+--------
+ 3|      10
+11|       2
+15|       0
+19|       1
+23|       2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1h s4l s1c
+step s1h: INSERT INTO rah VALUES (3, 'x'); UPDATE rat SET attempts = attempts + 10 WHERE id = 3;
+step s4l: SELECT t.id, t.attempts FROM rat t WHERE t.status = 'ready' AND NOT EXISTS (SELECT 1 FROM rah h WHERE h.task_id = t.id) ORDER BY t.priority DESC, t.run_at LIMIT 5 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+id|attempts
+--+--------
+ 3|      10
+11|       2
+15|       0
+19|       1
+23|       2
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress

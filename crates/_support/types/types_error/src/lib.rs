@@ -2,6 +2,12 @@
 
 extern crate alloc;
 
+#[cfg(feature = "std")]
+extern crate std;
+
+#[cfg(feature = "std")]
+pub mod severity;
+
 pub mod error;
 pub mod exceptions;
 pub mod pg_error;

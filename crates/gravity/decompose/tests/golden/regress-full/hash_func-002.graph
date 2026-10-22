@@ -1,0 +1,16 @@
+-- regress-full-hash_func-002
+-- SELECT v as value, hashint8(v)::bit(32) as standard, hashint8extended(v, 0)::bit(32) as extended0, hashint8extended(v, 1)::bit(32) as extended1 FROM (VALUES (0), (1), (17), (42), (550273), (207112489)) x(v) WHERE hashint8(v)::bit(32) != hashint8extended(v, 0)::bit(32) OR hashint8(v)::bit(32) = hashint8extended(v, 1)::bit(32);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=6
+    row (c23:0)
+    row (c23:1)
+    row (c23:17)
+    row (c23:42)
+    row (c23:550273)
+    row (c23:207112489)
+  filter or(op1785(fn1683(fn949(fn481(v2.1)), c23:32), fn2075(fn442(fn481(v2.1), c20:0), c23:32)), op1784(fn1683(fn949(fn481(v2.1)), c23:32), fn2075(fn442(fn481(v2.1), c20:1), c23:32)))
+  project (1=v2.1, 2=fn1683(fn949(fn481(v2.1)), c23:32), 3=fn2075(fn442(fn481(v2.1), c20:0), c23:32), 4=fn2075(fn442(fn481(v2.1), c20:1), c23:32))
+  outs 1=w4:val 2=vl:call1683 3=vl:call2075 4=vl:call2075
+mapped: ValuesScan

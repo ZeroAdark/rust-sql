@@ -85,6 +85,31 @@ fn install_coll_stub() {
 }
 
 #[test]
+fn an_armed_thread_resolves_the_leaders_collations_without_a_catalog() {
+    install_coll_stub();
+    const OID: Oid = 16390;
+    TEST_COLL_ROW.with(|r| r.set(Some(TestCollRow { provider: COLLPROVIDER_LIBC, collate: Some("C"), ctype: Some("C"), locale: None, version: None })));
+    let leader = pg_newlocale_from_collation(OID).unwrap() as *const PgLocale as usize;
+    TEST_COLL_ROW.with(|r| r.set(None));
+    let snap = resolved_collations().unwrap();
+    assert!(snap.iter().any(|&(o, l)| o == OID && l as *const PgLocale as usize == leader), "the leader's snapshot holds {OID}");
+    assert!(core::ptr::eq(resolved_collations().unwrap(), snap), "an unchanged cache keeps its snapshot");
+    let (bare, armed, disarmed) = std::thread::spawn(move || {
+        let bare = pg_newlocale_from_collation(OID).map(|_| ()).map_err(|e| e.message().to_owned());
+        arm_collations(snap);
+        let armed = pg_newlocale_from_collation(OID).map(|l| l as *const PgLocale as usize).map_err(|e| e.message().to_owned());
+        arm_collations(&[]);
+        let disarmed = pg_newlocale_from_collation(OID).is_err();
+        (bare, armed, disarmed)
+    })
+    .join()
+    .unwrap();
+    assert_eq!(bare, Err(format!("cache lookup failed for collation {OID}")), "a bare worker thread cannot build the locale");
+    assert_eq!(armed, Ok(leader), "an armed worker resolves the leader's locale");
+    assert!(disarmed);
+}
+
+#[test]
 fn c_collation_resolves_without_catalog() {
     let l = pg_newlocale_from_collation(C_COLLATION_OID).unwrap();
     assert_eq!(l.provider, COLLPROVIDER_LIBC);
@@ -166,8 +191,8 @@ fn init_database_collation_libc_noncc_builds_collator() {
     init_database_collation().unwrap();
     let l = pg_newlocale_from_collation(DEFAULT_COLLATION_OID).unwrap();
     assert!(l.is_default && l.deterministic);
-    assert!(!l.collate_is_c && !l.ctype_is_c);
-    // en_US.UTF-8 strcoll: case-insensitive-ish primary weights, unlike memcmp.
+    // en_US.UTF-8 strcoll: case-insensitive-ish primary weights under glibc, unlike memcmp.
+    #[cfg(not(target_os = "macos"))]
     assert!(l.pg_strncoll(b"apple", b"Banana").unwrap() < 0);
     assert!(l.pg_strncoll(b"a", b"a").unwrap() == 0);
 }
@@ -695,6 +720,15 @@ fn collation_scratch_buffers_have_palloc_admission() {
     assert_eq!(e.message(), "invalid memory alloc request size 1073741824");
 }
 
+#[test]
+fn nondeterministic_hash_sort_key_has_palloc_admission() {
+    assert!(nondeterministic_hash_buf_admission(0).is_ok());
+    assert!(nondeterministic_hash_buf_admission(mcx::MAX_ALLOC_SIZE - 1).is_ok());
+    let err = nondeterministic_hash_buf_admission(mcx::MAX_ALLOC_SIZE).unwrap_err();
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+}
+
 // pg_locale.c:1141 builds the REFRESH VERSION hint with
 // quote_qualified_identifier: reserved words quote, plain names do not.
 #[test]
@@ -703,4 +737,59 @@ fn version_mismatch_hint_quotes_like_ruleutils() {
     assert_eq!(version_mismatch_target(Some("public"), "b226coll"), "public.b226coll");
     assert_eq!(version_mismatch_target(Some("My Schema"), "x"), "\"My Schema\".x");
     assert_eq!(version_mismatch_target(None, "user"), "\"user\"");
+}
+
+#[test]
+fn terminated_collation_preserves_length_aware_allocation_limit() {
+    let err = libc_locale::strncoll_buf_admission(536_870_912, 536_870_912).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741826");
+    let locale = create_pg_locale_libc("en_US.UTF-8", "en_US.UTF-8").unwrap();
+    for (a, b) in [(b"a\0".as_slice(), b"b\0".as_slice()), (b"same\0", b"same\0")] {
+        assert_eq!(locale.pg_strcoll(a, b).unwrap().signum(),
+            locale.pg_strncoll(&a[..a.len() - 1], &b[..b.len() - 1]).unwrap().signum());
+    }
+}
+
+// pg_perm_setlocale installs the database ctype for every provider; plain
+// ctype calls follow the backend's recorded LC_CTYPE.
+#[test]
+fn backend_ctype_follows_recorded_lc_ctype() {
+    std::thread::spawn(|| {
+        crate::setup::record_thread_locale(crate::lc::LC_CTYPE, "C");
+        assert_eq!(crate::backend_toupper(b'a'), b'A');
+        assert!(!crate::backend_isalpha(0xC3));
+        #[cfg(target_os = "macos")]
+        {
+            crate::setup::record_thread_locale(crate::lc::LC_CTYPE, "en_US.UTF-8");
+            assert!(crate::backend_isalpha(0xC3));
+            assert_eq!(crate::backend_toupper(0xE9), 0xC9);
+        }
+    })
+    .join()
+    .unwrap();
+}
+
+/// C7 (c): a pool claim arms its leader's database ctype (database_ctype_is_c, the LC_CTYPE record) and its end puts the
+/// thread's own back; a claim on a thread that already matches has nothing to put back.
+#[test]
+fn a_claim_carries_the_database_ctype_and_puts_the_threads_back() {
+    std::thread::spawn(|| {
+        crate::setup::record_thread_locale(crate::lc::LC_CTYPE, "en_US.utf8");
+        set_database_ctype_is_c(false);
+        let leader = capture_database_ctype();
+        std::thread::spawn(move || {
+            set_database_ctype_is_c(true);
+            let own = arm_database_ctype(&leader).unwrap().expect("the pool thread's ctype differs");
+            assert!(!database_ctype_is_c());
+            assert_eq!(crate::setup::thread_locale(crate::lc::LC_CTYPE).as_deref(), Some("en_US.utf8"));
+            assert!(arm_database_ctype(&leader).unwrap().is_none(), "already armed: nothing to put back");
+            restore_database_ctype(own);
+            assert!(database_ctype_is_c());
+            assert_eq!(crate::setup::thread_locale(crate::lc::LC_CTYPE), None);
+        })
+        .join()
+        .unwrap();
+    })
+    .join()
+    .unwrap();
 }

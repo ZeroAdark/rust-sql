@@ -57,6 +57,7 @@ fn get_snapbuild_state_desc(state: i32) -> &'static str {
 #[cold]
 fn invalid_filename_err(name: &[u8]) -> Box<PgError> {
     // pg_logicalinspect.c:89 prints the text_to_cstring bytes as given.
+    // ALLOC-REVIEW(antigravity): error-report buffer (invalid_filename_err builds PgError on ereport path)
     let mut msg = b"invalid snapshot file name \"".to_vec();
     msg.extend_from_slice(name);
     msg.push(b'"');

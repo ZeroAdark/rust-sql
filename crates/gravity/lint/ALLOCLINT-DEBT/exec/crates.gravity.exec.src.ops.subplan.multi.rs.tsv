@@ -1,0 +1,2 @@
+path	crates/gravity/exec/src/ops/subplan/multi.rs
+method	std::iter::Iterator::collect	2

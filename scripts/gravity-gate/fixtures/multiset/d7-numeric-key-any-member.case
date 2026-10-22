@@ -1,0 +1,15 @@
+# V4R-270 (D7, main 09-26): an equal-not-identical group / DISTINCT key outputs any member of its group; eqk maps the key
+# column's texts to their class under PG's `=` (the rig asks PG); everything else stays exact
+# a numeric group key: PG shows 1.5, v4 the group's other member 1.50
+sql: SELECT n, count(*) FROM t GROUP BY n;
+eqk: 1	1.5	1.5
+eqk: 1	1.50	1.5
+eqk: 1	2.25	2.25
+class: unordered
+verdict: match
+[pg]
+1.5	2
+2.25	1
+[got]
+2.25	1
+1.50	2

@@ -1,0 +1,72 @@
+-- regress-full-update-026
+-- UPDATE range_parted set c = (case when c = 96 then 110 else c + 1 end) WHERE a = 'b' and b > 10 and c >= 96;
+graph pipelines=4 breakers=0 init_plans=0 root=p3
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@4 n0@6
+  source range rel=26491 rti=3 am=heap
+    lanes Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Attr(5):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op413(v3.4, c20:10)
+  filter op1757(v3.3, c1700:'\x00\x80`\x00')
+  filter op98(v3.5, c25:'b')
+  project (1=case(when op1752(v3.3, c1700:'\x00\x80`\x00') then c1700:'\x00\x80n\x00') else op1758(v3.3, c1700:'\x00\x80\x01\x00'), 2=v3.-6, 3=v3.-1)
+  append arm 0/4
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=26491 rti=3 natts=5 indexes=() set=(3) tableoid=outer.2 route=rti1:26452 natts=5 cross-partition map=(5,4,3,2,1)
+    target rti=5 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=6 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=7 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+  outs 1=vl:call1724 2=w4:val 3=fx6:row
+  outs 1=vl:life/breaker 2=w4:val 3=fx6:life/breaker
+p1 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n1@4 n0@6
+  source range rel=26481 rti=5 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op413(v5.5, c20:10)
+  filter op1757(v5.2, c1700:'\x00\x80`\x00')
+  filter op98(v5.4, c25:'b')
+  project (1=case(when op1752(v5.2, c1700:'\x00\x80`\x00') then c1700:'\x00\x80n\x00') else op1758(v5.2, c1700:'\x00\x80\x01\x00'), 2=v5.-6, 3=v5.-1)
+  append arm 1/4
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=26491 rti=3 natts=5 indexes=() set=(3) tableoid=outer.2 route=rti1:26452 natts=5 cross-partition map=(5,4,3,2,1)
+    target rti=5 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=6 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=7 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+  outs 1=vl:call1724 2=w4:val 3=fx6:row
+  outs 1=vl:life/breaker 2=w4:val 3=fx6:life/breaker
+p2 node=4 serial site=1 reason=Write end=sink
+  nodes n4@0 n1@4 n0@6
+  source range rel=26486 rti=6 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op413(v6.5, c20:10)
+  filter op1757(v6.2, c1700:'\x00\x80`\x00')
+  filter op98(v6.4, c25:'b')
+  project (1=case(when op1752(v6.2, c1700:'\x00\x80`\x00') then c1700:'\x00\x80n\x00') else op1758(v6.2, c1700:'\x00\x80\x01\x00'), 2=v6.-6, 3=v6.-1)
+  append arm 2/4
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=26491 rti=3 natts=5 indexes=() set=(3) tableoid=outer.2 route=rti1:26452 natts=5 cross-partition map=(5,4,3,2,1)
+    target rti=5 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=6 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=7 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+  outs 1=vl:call1724 2=w4:val 3=fx6:row
+  outs 1=vl:life/breaker 2=w4:val 3=fx6:life/breaker
+p3 node=5 serial site=1 reason=Write end=sink
+  nodes n5@0 n1@4 n0@6
+  source range rel=26455 rti=7 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op413(v7.4, c20:10)
+  filter op1757(v7.2, c1700:'\x00\x80`\x00')
+  filter op98(v7.3, c25:'b')
+  project (1=case(when op1752(v7.2, c1700:'\x00\x80`\x00') then c1700:'\x00\x80n\x00') else op1758(v7.2, c1700:'\x00\x80\x01\x00'), 2=v7.-6, 3=v7.-1)
+  append arm 3/4
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=26491 rti=3 natts=5 indexes=() set=(3) tableoid=outer.2 route=rti1:26452 natts=5 cross-partition map=(5,4,3,2,1)
+    target rti=5 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=6 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=7 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+  outs 1=vl:call1724 2=w4:val 3=fx6:row
+  outs 1=vl:life/breaker 2=w4:val 3=fx6:life/breaker
+scan-lanes node=2 rti=3 rel=26491 tableoid
+scan-lanes node=3 rti=5 rel=26481 tableoid
+scan-lanes node=4 rti=6 rel=26486 tableoid
+scan-lanes node=5 rti=7 rel=26455 tableoid
+mapped: ModifyTable Append SeqScan

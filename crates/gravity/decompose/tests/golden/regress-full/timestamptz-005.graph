@@ -1,0 +1,24 @@
+-- regress-full-timestamptz-005
+-- WITH tzs (tz) AS (VALUES ('+1'), ('+1:'), ('+1:0'), ('+100'), ('+1:00'), ('+01:00'), ('+10'), ('+1000'), ('+10:'), ('+10:0'), ('+10:00'), ('+10:00:'), ('+10:00:1'), ('+10:00:01'), ('+10:00:10')) SELECT make_timestamptz(2010, 2, 27, 3, 45, 00, tz), tz FROM tzs;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=15
+    row (c25:'+1')
+    row (c25:'+1:')
+    row (c25:'+1:0')
+    row (c25:'+100')
+    row (c25:'+1:00')
+    row (c25:'+01:00')
+    row (c25:'+10')
+    row (c25:'+1000')
+    row (c25:'+10:')
+    row (c25:'+10:0')
+    row (c25:'+10:00')
+    row (c25:'+10:00:')
+    row (c25:'+10:00:1')
+    row (c25:'+10:00:01')
+    row (c25:'+10:00:10')
+  project (1=fn3463(c23:2010, c23:2, c23:27, c23:3, c23:45, c701:0, v2.1), 2=v2.1)
+  outs 1=w8:val 2=vl:row
+mapped: ValuesScan

@@ -25,9 +25,9 @@ gin_validate = { path = "../../gin/gin_validate" }
 cache_syscache = { path = "../../../utils/cache/cache_syscache" }
 catcache = { path = "../../../utils/cache/catcache" }
 fmgr_core = { path = "../../../utils/fmgr/fmgr_core" }
+mcx = { path = "../../../../_support/mcx" }
 guc_seams = { path = "../../../utils/misc/guc_seams" }
 
 [dev-dependencies]
-mcx = { path = "../../../../_support/mcx" }
 types_tuple = { path = "../../../../_support/types/types_tuple" }
 heaptuple = { path = "../../common/heaptuple" }

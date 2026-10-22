@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/executor/execExpr.c: 1 stack-depth check sites
+925	ExecInitExprRec	crates/backend/executor/execexpr/src/compile.rs	init_expr_rec	yes	

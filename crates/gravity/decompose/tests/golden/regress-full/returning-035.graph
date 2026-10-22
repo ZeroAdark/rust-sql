@@ -1,0 +1,13 @@
+-- regress-full-returning-035
+-- DELETE FROM zerocol RETURNING old.tableoid::regclass, old.ctid, new.tableoid::regclass, new.ctid, ctid, *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=43664 rti=1 am=heap
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write DELETE rel=43664 rti=1 natts=0 indexes=() returning old=old new=new
+  project (1=relabel2205(v1.-6), 2=v1.-1, 3=relabel2205(v1.-6), 4=v1.-1, 5=v1.-1)
+  outs 1=fx6:row
+  outs 1=w4:val 2=fx6:row 3=w4:val 4=fx6:row 5=fx6:row
+mapped: ModifyTable SeqScan

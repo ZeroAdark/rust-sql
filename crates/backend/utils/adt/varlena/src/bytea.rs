@@ -238,7 +238,7 @@ pub fn byteaout_into(v: &[u8], mode: i32, out: &mut Vec<u8>) -> PgResult<()> {
         // varlena.c:406 pallocs len*2+3 outright: over MaxAllocSize it is
         // palloc's own XX000, not the escape arm's 54000.
         ::mcx::check_alloc_size(v.len().saturating_mul(2).saturating_add(3))?;
-        out.reserve(v.len() * 2 + 3);
+        ::mcx::std_vec_reserve("adt", out, v.len() * 2 + 3)?;
         out.push(b'\\');
         out.push(b'x');
         // SAFETY: reserve above covers 2 bytes per input byte past the "\x";
@@ -267,7 +267,7 @@ pub fn byteaout_into(v: &[u8], mode: i32, out: &mut Vec<u8>) -> PgResult<()> {
                     .into(),
             );
         }
-        out.reserve(len as usize);
+        ::mcx::std_vec_reserve("adt", out, len as usize)?;
         for &c in v {
             match c {
                 b'\\' => out.extend_from_slice(b"\\\\"),

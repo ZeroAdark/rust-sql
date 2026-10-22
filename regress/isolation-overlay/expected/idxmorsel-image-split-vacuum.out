@@ -1,0 +1,133 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2del s1b s3vac s2ins s1w0 s1w8 s1any s1c s1w0 s1w8 s1any
+step s2del: DELETE FROM sv WHERE k BETWEEN 8000 AND 20000 OR k % 6 = 0;
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM sv WHERE k < 0;
+count
+-----
+    0
+(1 row)
+
+step s3vac: VACUUM sv;
+step s2ins: INSERT INTO sv SELECT 100000 + i, i * 2 + 1, 'q' || i FROM generate_series(400, 26000) i;
+step s1w0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+12333|360505000|180252500|1000|50000
+(1 row)
+
+step s1w8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+12333|360505000|180252500|1000|50000
+(1 row)
+
+step s1any: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint) FROM sv WHERE k = ANY (ARRAY(SELECT g * 6 + 1 FROM generate_series(150, 8000) g) || ARRAY(SELECT g * 2 FROM generate_series(500, 25000) g));
+count|      sum
+-----+---------
+12333|360505000
+(1 row)
+
+step s1c: COMMIT;
+step s1w0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|       sum| min|  max
+-----+---------+----------+----+-----
+36833|985255000|2942615250|1000|50000
+(1 row)
+
+step s1w8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|       sum| min|  max
+-----+---------+----------+----+-----
+36833|985255000|2942615250|1000|50000
+(1 row)
+
+step s1any: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint) FROM sv WHERE k = ANY (ARRAY(SELECT g * 6 + 1 FROM generate_series(150, 8000) g) || ARRAY(SELECT g * 2 FROM generate_series(500, 25000) g));
+count|      sum
+-----+---------
+20184|552469801
+(1 row)
+
+
+starting permutation: s1b s2bi s1w0 s2a s3vac s1w8 s1any s1c s1w0 s1w8
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM sv WHERE k < 0;
+count
+-----
+    0
+(1 row)
+
+step s2bi: BEGIN; INSERT INTO sv SELECT 200000 + i, i * 2 + 1, 'r' || i FROM generate_series(400, 26000) i;
+step s1w0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+24501|624775500|312387750|1000|50000
+(1 row)
+
+step s2a: ROLLBACK;
+step s3vac: VACUUM sv;
+step s1w8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+24501|624775500|312387750|1000|50000
+(1 row)
+
+step s1any: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint) FROM sv WHERE k = ANY (ARRAY(SELECT g * 6 + 1 FROM generate_series(150, 8000) g) || ARRAY(SELECT g * 2 FROM generate_series(500, 25000) g));
+count|      sum
+-----+---------
+24501|624775500
+(1 row)
+
+step s1c: COMMIT;
+step s1w0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+24501|624775500|312387750|1000|50000
+(1 row)
+
+step s1w8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+24501|624775500|312387750|1000|50000
+(1 row)
+
+
+starting permutation: s2del s1b s1w0 s3vac s1w8 s2ins s1w0 s1w8 s1c s1w8
+step s2del: DELETE FROM sv WHERE k BETWEEN 8000 AND 20000 OR k % 6 = 0;
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM sv WHERE k < 0;
+count
+-----
+    0
+(1 row)
+
+step s1w0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+12333|360505000|180252500|1000|50000
+(1 row)
+
+step s3vac: VACUUM sv;
+step s1w8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+12333|360505000|180252500|1000|50000
+(1 row)
+
+step s2ins: INSERT INTO sv SELECT 100000 + i, i * 2 + 1, 'q' || i FROM generate_series(400, 26000) i;
+step s1w0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+12333|360505000|180252500|1000|50000
+(1 row)
+
+step s1w8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|      sum| min|  max
+-----+---------+---------+----+-----
+12333|360505000|180252500|1000|50000
+(1 row)
+
+step s1c: COMMIT;
+step s1w8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(k) FROM sv WHERE k BETWEEN 1000 AND 50000;
+count|      sum|       sum| min|  max
+-----+---------+----------+----+-----
+36833|985255000|2942615250|1000|50000
+(1 row)
+

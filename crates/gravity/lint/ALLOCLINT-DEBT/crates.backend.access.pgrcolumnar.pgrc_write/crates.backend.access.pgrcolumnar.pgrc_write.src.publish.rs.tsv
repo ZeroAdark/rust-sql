@@ -1,0 +1,21 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/publish.rs
+growth	std::collections::BTreeMap::entry	2
+growth	std::collections::BTreeSet::insert	1
+growth	std::iter::Extend::extend	4
+growth	std::vec::Vec::extend_from_slice	2
+growth	std::vec::Vec::push	12
+ir-only	<core::iter::adapters::cloned::Cloned<I> as core::iter::traits::iterator::Iterator>::next	1
+macro	std::format	2
+macro	std::vec	3
+method	pgrc_format::try_to_vec	1
+method	slice::join	2
+method	slice::sort_by_key	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	31
+method	std::iter::Iterator::collect	27
+method	std::string::ToString::to_string	1
+method	std::sync::Arc::new	2
+type	std::boxed::Box	1
+type	std::string::String	4
+type	std::sync::Arc	2
+type	std::vec::Vec	26

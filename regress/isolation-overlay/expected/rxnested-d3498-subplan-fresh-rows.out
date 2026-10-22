@@ -1,0 +1,131 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1v s2u s1c s2s s2v
+step s1v: UPDATE sr_t SET v = 1 WHERE id = 1;
+step s2u: UPDATE sr_t SET v = 100 WHERE id <= ALL (SELECT nextval('sr_q')); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT last_value FROM sr_q;
+last_value
+----------
+         2
+(1 row)
+
+step s2v: SELECT id, v FROM sr_t ORDER BY id;
+id|  v
+--+---
+ 1|100
+ 2|  0
+ 3|  0
+ 4|  0
+(4 rows)
+
+
+starting permutation: s1key s2u s1c s2s s2v
+step s1key: UPDATE sr_t SET id = 7 WHERE id = 1;
+step s2u: UPDATE sr_t SET v = 100 WHERE id <= ALL (SELECT nextval('sr_q')); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT last_value FROM sr_q;
+last_value
+----------
+         2
+(1 row)
+
+step s2v: SELECT id, v FROM sr_t ORDER BY id;
+id|v
+--+-
+ 2|0
+ 3|0
+ 4|0
+ 7|0
+(4 rows)
+
+
+starting permutation: s1v s2d s1c s2s s2v
+step s1v: UPDATE sr_t SET v = 1 WHERE id = 1;
+step s2d: DELETE FROM sr_t WHERE id <= ALL (SELECT nextval('sr_q')) RETURNING id, v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|v
+--+-
+ 1|1
+(1 row)
+
+step s2s: SELECT last_value FROM sr_q;
+last_value
+----------
+         2
+(1 row)
+
+step s2v: SELECT id, v FROM sr_t ORDER BY id;
+id|v
+--+-
+ 2|0
+ 3|0
+ 4|0
+(3 rows)
+
+
+starting permutation: s1two s2u1 s1c s2s s2v
+step s1two: UPDATE sr_t SET v = v + 1 WHERE id IN (1, 2);
+step s2u1: UPDATE sr_t SET v = 100 WHERE id <= ALL (SELECT nextval('sr_q') + 1); <waiting ...>
+step s1c: COMMIT;
+step s2u1: <... completed>
+step s2s: SELECT last_value FROM sr_q;
+last_value
+----------
+         3
+(1 row)
+
+step s2v: SELECT id, v FROM sr_t ORDER BY id;
+id|  v
+--+---
+ 1|100
+ 2|100
+ 3|  0
+ 4|  0
+(4 rows)
+
+
+starting permutation: s1v s2f s1c s2s s2v
+step s1v: UPDATE sr_t SET v = 1 WHERE id = 1;
+step s2f: UPDATE sr_t SET v = 100 WHERE v = 0 AND id <= ALL (SELECT nextval('sr_q')); <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+step s2s: SELECT last_value FROM sr_q;
+last_value
+----------
+         1
+(1 row)
+
+step s2v: SELECT id, v FROM sr_t ORDER BY id;
+id|v
+--+-
+ 1|1
+ 2|0
+ 3|0
+ 4|0
+(4 rows)
+
+
+starting permutation: s1key s2f s1c s2s s2v
+step s1key: UPDATE sr_t SET id = 7 WHERE id = 1;
+step s2f: UPDATE sr_t SET v = 100 WHERE v = 0 AND id <= ALL (SELECT nextval('sr_q')); <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+step s2s: SELECT last_value FROM sr_q;
+last_value
+----------
+         2
+(1 row)
+
+step s2v: SELECT id, v FROM sr_t ORDER BY id;
+id|v
+--+-
+ 2|0
+ 3|0
+ 4|0
+ 7|0
+(4 rows)
+

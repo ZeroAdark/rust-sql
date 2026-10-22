@@ -1,0 +1,15 @@
+-- regress-full-updatable_views-062
+-- DELETE FROM rw_view2 WHERE base_a = 1.05 RETURNING base_a, s, c, t;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@3
+  source range rel=24443 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op671(v3.1, c701:0)
+  filter op670(v3.1, c701:4607407598781385933)
+  project (1j=v3.-1)
+  write DELETE rel=24443 rti=3 natts=1 indexes=() returning
+  project (1=v3.1, 2=fn1604(v3.1), 3=fn1605(v3.1), 4=op593(fn1604(v3.1), fn1605(v3.1)))
+  outs 1=fx6:row
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val
+mapped: ModifyTable SeqScan

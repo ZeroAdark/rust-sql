@@ -1,0 +1,176 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2e s2ep s1c s2c
+step s2e: EXPLAIN (COSTS OFF) UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 100 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a = s.a - 1));
+QUERY PLAN                                                              
+------------------------------------------------------------------------
+Update on ls_t s                                                        
+  ->  Bitmap Heap Scan on ls_t s                                        
+        Recheck Cond: (id <= 4)                                         
+        Filter: ((b = 100) OR (ANY ((a - 1) = (hashed SubPlan 2).col1)))
+        ->  Bitmap Index Scan on ls_t_pkey                              
+              Index Cond: (id <= 4)                                     
+        SubPlan 2                                                       
+          ->  Seq Scan on ls_t s2                                       
+(8 rows)
+
+step s2ep: EXPLAIN (COSTS OFF) UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 100 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a > s.a + 25));
+QUERY PLAN                                      
+------------------------------------------------
+Update on ls_t s                                
+  ->  Bitmap Heap Scan on ls_t s                
+        Recheck Cond: (id <= 4)                 
+        Filter: ((b = 100) OR EXISTS(SubPlan 1))
+        ->  Bitmap Index Scan on ls_t_pkey      
+              Index Cond: (id <= 4)             
+        SubPlan 1                               
+          ->  Seq Scan on ls_t s2               
+                Filter: (a > (s.a + 25))        
+(9 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1a21 s2h s1c s2c s3sel
+step s1a21: UPDATE ls_t SET a = 21 WHERE id = 2;
+step s2h: UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 100 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a = s.a - 1)); <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM ls_t ORDER BY id;
+id| a|b
+--+--+-
+ 1|10|0
+ 2|21|1
+ 3|20|0
+ 4|31|0
+ 5|40|0
+ 6|50|0
+(6 rows)
+
+
+starting permutation: s1a12 s2h s1c s2c s3sel
+step s1a12: UPDATE ls_t SET a = 12 WHERE id = 2;
+step s2h: UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 100 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a = s.a - 1)); <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM ls_t ORDER BY id;
+id| a|b
+--+--+-
+ 1|10|0
+ 2|12|1
+ 3|20|0
+ 4|31|0
+ 5|40|0
+ 6|50|0
+(6 rows)
+
+
+starting permutation: s1a33 s2h s1c s2c s3sel
+step s1a33: UPDATE ls_t SET a = 33 WHERE id = 2;
+step s2h: UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 100 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a = s.a - 1)); <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM ls_t ORDER BY id;
+id| a|b
+--+--+-
+ 1|10|0
+ 2|33|0
+ 3|20|0
+ 4|31|0
+ 5|40|0
+ 6|50|0
+(6 rows)
+
+
+starting permutation: s1b100 s2h s1c s2c s3sel
+step s1b100: UPDATE ls_t SET b = 100 WHERE id = 2;
+step s2h: UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 100 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a = s.a - 1)); <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM ls_t ORDER BY id;
+id| a|  b
+--+--+---
+ 1|10|  0
+ 2|11|101
+ 3|20|  0
+ 4|31|  0
+ 5|40|  0
+ 6|50|  0
+(6 rows)
+
+
+starting permutation: s1b7 s2z s1c s2c s3sel
+step s1b7: UPDATE ls_t SET b = 7 WHERE id = 2;
+step s2z: UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 0 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a = s.a - 1)); <waiting ...>
+step s1c: COMMIT;
+step s2z: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM ls_t ORDER BY id;
+id| a|b
+--+--+-
+ 1|10|1
+ 2|11|8
+ 3|20|1
+ 4|31|1
+ 5|40|0
+ 6|50|0
+(6 rows)
+
+
+starting permutation: s1b7a35 s2z s1c s2c s3sel
+step s1b7a35: UPDATE ls_t SET b = 7, a = 35 WHERE id = 2;
+step s2z: UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 0 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a = s.a - 1)); <waiting ...>
+step s1c: COMMIT;
+step s2z: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM ls_t ORDER BY id;
+id| a|b
+--+--+-
+ 1|10|1
+ 2|35|7
+ 3|20|1
+ 4|31|1
+ 5|40|0
+ 6|50|0
+(6 rows)
+
+
+starting permutation: s1a12 s2p s1c s2c s3sel
+step s1a12: UPDATE ls_t SET a = 12 WHERE id = 2;
+step s2p: UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 100 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a > s.a + 25)); <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM ls_t ORDER BY id;
+id| a|b
+--+--+-
+ 1|10|1
+ 2|12|1
+ 3|20|1
+ 4|31|0
+ 5|40|0
+ 6|50|0
+(6 rows)
+
+
+starting permutation: s1a33 s2p s1c s2c s3sel
+step s1a33: UPDATE ls_t SET a = 33 WHERE id = 2;
+step s2p: UPDATE ls_t s SET b = b + 1 WHERE s.id <= 4 AND (s.b = 100 OR EXISTS (SELECT 1 FROM ls_t s2 WHERE s2.a > s.a + 25)); <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, a, b FROM ls_t ORDER BY id;
+id| a|b
+--+--+-
+ 1|10|1
+ 2|33|0
+ 3|20|1
+ 4|31|0
+ 5|40|0
+ 6|50|0
+(6 rows)
+

@@ -1,0 +1,10 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/statsrun.rs
+growth	pgrc_format::wire::put_u16	2
+growth	pgrc_format::wire::put_u32	6
+growth	pgrc_format::wire::put_u64	2
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	8
+method	pgrc_format::try_to_vec	2
+method	pgrc_format::try_vec	3
+method	std::iter::Iterator::collect	2
+type	std::vec::Vec	2

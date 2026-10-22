@@ -1,0 +1,9 @@
+# PostgreSQL 18.6 src/backend/utils/adt/rowtypes.c: 8 stack-depth check sites
+92	record_in	crates/backend/utils/adt/rowtypes/src/lib.rs	fc_record_in	yes	
+344	record_out	crates/backend/utils/adt/rowtypes/src/lib.rs	fc_record_out	yes	
+496	record_recv	crates/backend/utils/adt/rowtypes/src/lib.rs	fc_record_recv	yes	
+702	record_send	crates/backend/utils/adt/rowtypes/src/lib.rs	fc_record_send	yes	
+848	record_cmp	crates/backend/utils/adt/rowtypes/src/lib.rs	record_cmp	yes	
+1092	record_eq	crates/backend/utils/adt/rowtypes/src/lib.rs	fc_record_eq	yes	
+1825	hash_record	crates/backend/utils/adt/rowtypes/src/lib.rs	hash_record_common	yes	
+1946	hash_record_extended	crates/backend/utils/adt/rowtypes/src/lib.rs	hash_record_common	yes	shared with hash_record

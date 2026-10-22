@@ -1,0 +1,10 @@
+# jsonb_agg_strict: elements sorted as jsonb_agg's (D3732); a changed element still differs
+sql: SELECT jsonb_agg_strict(x) FROM t;
+cols: jsonb_agg_strict
+tables: t
+class: unordered
+verdict: mismatch
+[pg]
+[1, 2, "b"]
+[got]
+["c", 1, 2]

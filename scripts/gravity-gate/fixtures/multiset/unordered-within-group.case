@@ -1,0 +1,11 @@
+# WITHIN GROUP (ORDER BY ..) orders the aggregate's input only
+sql: SELECT g, percentile_disc(0.5) WITHIN GROUP (ORDER BY x) FROM t GROUP BY g;
+cols: g	percentile_disc
+class: unordered
+verdict: match
+[pg]
+1	10
+2	20
+[got]
+2	20
+1	10

@@ -1,0 +1,11 @@
+-- regress-full-stats-019
+-- SELECT shobj_description(d.oid, 'pg_database') as description_before FROM pg_database d WHERE datname = current_database()
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=1262 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v1.2, fn861())
+  project (1=fn1993(v1.1, c19:#64))
+  outs 1=vl:call1993
+mapped: SeqScan

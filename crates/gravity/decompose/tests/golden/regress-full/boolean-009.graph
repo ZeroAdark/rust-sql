@@ -1,0 +1,19 @@
+-- regress-full-boolean-009
+-- SELECT d, b IS TRUE AS istrue, b IS NOT TRUE AS isnottrue, b IS FALSE AS isfalse, b IS NOT FALSE AS isnotfalse, b IS UNKNOWN AS isunknown, b IS NOT UNKNOWN AS isnotunknown FROM booltbl3 ORDER BY o;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=1250 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n1@0 n0@1^
+  source range rel=16512 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=T_BooleanTest, 3=T_BooleanTest, 4=T_BooleanTest, 5=T_BooleanTest, 6=T_BooleanTest, 7=T_BooleanTest, 8j=v1.3)
+  sort keys=8+:I32 form=runs
+  outs 1=vl:win/page 2=w1:val 3=w1:val 4=w1:val 5=w1:val 6=w1:val 7=w1:val 8=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8j=outer.8)
+  outs 1=vl:win/page 2=w1:val 3=w1:val 4=w1:val 5=w1:val 6=w1:val 7=w1:val 8=w8:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=8+
+mapped: SeqScan Sort

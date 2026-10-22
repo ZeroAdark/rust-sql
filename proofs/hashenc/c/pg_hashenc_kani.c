@@ -5,7 +5,7 @@
  *   - src/common/base64.c @ postgres-src
  *     62d6c7d3df6287f1bd83199c1a746e50d31571a0 (REL_18 "Stamp 18.3", the
  *     repo's vendored ground-truth checkout
- *     ../pgrust-reference/vendor/postgres-src): _base64, b64lookup,
+ *     ../pgrust-fabled/vendor/postgres-src): _base64, b64lookup,
  *     pg_b64_encode, pg_b64_decode, pg_b64_enc_len, pg_b64_dec_len.
  *   - src/common/md5_common.c @ same ref: bytesToHex (exported as
  *     pg_kani_bytes_to_hex).

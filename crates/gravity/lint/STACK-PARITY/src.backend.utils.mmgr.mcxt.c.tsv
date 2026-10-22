@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/mmgr/mcxt.c: 1 stack-depth check sites
+908	MemoryContextStatsInternal	crates/backend/utils/mmgr/mcxt_stats/src/lib.rs	stats_internal	yes	

@@ -259,8 +259,8 @@ impl TsmState {
 
     /// `NextSampleBlock`; `donetuples` = scan's returned count. Bernoulli
     /// has none.
-    pub fn next_sample_block(&mut self, nblocks: BlockNumber, donetuples: i64) -> BlockNumber {
-        match self {
+    pub fn next_sample_block(&mut self, nblocks: BlockNumber, donetuples: i64) -> PgResult<BlockNumber> {
+        Ok(match self {
             TsmState::Bernoulli(_) => {
                 panic!("NextSampleBlock called on a TSM without one (tsmapi.h)")
             }
@@ -282,8 +282,8 @@ impl TsmState {
                 }
             }
             TsmState::SystemRows(s) => s.next_sample_block(nblocks, donetuples),
-            TsmState::SystemTime(s) => s.next_sample_block(nblocks),
-        }
+            TsmState::SystemTime(s) => return s.next_sample_block(nblocks),
+        })
     }
 
     /// `NextSampleTuple`.
@@ -325,6 +325,16 @@ impl TsmState {
     }
 }
 
+impl TsmState {
+    pub fn picks(&self, blockno: BlockNumber, offset: OffsetNumber) -> Option<bool> {
+        match self {
+            TsmState::Bernoulli(s) => Some((hash_u32s(&[blockno, offset as u32, s.seed]) as u64) < s.cutoff),
+            TsmState::System(s) => Some((hash_u32s(&[blockno, s.seed]) as u64) < s.cutoff),
+            _ => None,
+        }
+    }
+}
+
 // The shared percent validation + cutoff of bernoulli/system beginsamplescan.
 fn percent_cutoff(param: Datum) -> PgResult<(u64, f64)> {
     let percent = param.as_f32() as f64;
@@ -339,7 +349,7 @@ impl tableam_vocab::SampleScanDriver for TsmState {
     fn has_next_sample_block(&self) -> bool {
         TsmState::has_next_sample_block(self)
     }
-    fn next_sample_block(&mut self, nblocks: BlockNumber, donetuples: i64) -> BlockNumber {
+    fn next_sample_block(&mut self, nblocks: BlockNumber, donetuples: i64) -> PgResult<BlockNumber> {
         TsmState::next_sample_block(self, nblocks, donetuples)
     }
     fn next_sample_tuple(

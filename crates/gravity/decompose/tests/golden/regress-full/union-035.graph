@@ -1,0 +1,41 @@
+-- regress-full-union-035
+-- SELECT f1 FROM float8_tbl EXCEPT SELECT f1 FROM int4_tbl ORDER BY 1;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=3 eligible rows=5 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n1@1^
+  source range rel=16394 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v3.1)
+  outs 1=w8:val
+p1 node=5 eligible rows=5 end=breaker(slot=1 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n5@0 n4@1 n1@2^
+  source range rel=16400 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v4.1)
+  project (1=fn316(v2.1))
+  outs 1=w8:val
+  outs 1=w8:val
+p2 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 Sort)
+  desc consumes=slot0@p0 consumes=slot1@p1
+  nodes n1@0 n0@2^
+  source breaker slot=0
+  setop Except hashed left=slot0 right=slot1 groups=5 keys=1=670:F64
+  project (1=outer.1)
+  sort keys=1+:F64/F64 form=runs
+  outs 1=w8:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p2
+  nodes n0@0
+  source breaker slot=2
+  project (1=outer.1)
+  outs 1=w8:val
+breaker slot=0 kind=HashAgg budget=Pool spill=None producer=p0 layout=[F64]->[Count@8,Count@16,MinCode@24] 32B
+breaker slot=1 kind=HashAgg budget=Pool spill=None producer=p1 layout=[F64]->[Count@8,MinCode@16] 24B
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p2 layout=[F64]->[Count@8] 16B order=1+
+group slot=0 producer=p0 node=1 form=Hashed hints=[] layout=[F64]->[Count@8,Count@16,MinCode@24] 32B
+  key 0 word=0 resno=1 kind=F64 attno=1 type=701 rep=2 image=F64 expr=v3.1
+group slot=1 producer=p1 node=1 form=Hashed hints=[] layout=[F64]->[Count@8,MinCode@16] 24B
+  key 0 word=0 resno=1 kind=F64 attno=0 type=701 rep=1 image=F64 expr=fn316(v2.1)
+mapped: SeqScan SubqueryScan Sort SetOp

@@ -1,0 +1,106 @@
+-- regress-full-partition_join-020
+-- EXPLAIN (COSTS OFF) SELECT * FROM prt1 t1 JOIN prt1 t2 ON t1.a = t2.a WHERE t1.a IN (SELECT a FROM prt1 t3);
+graph pipelines=9 breakers=6 init_plans=0 root=p8
+p0 node=7 eligible rows=125 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n7@0 n6@1
+  source range rel=43946 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v12.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val
+p1 node=5 eligible rows=125 end=breaker(slot=1 HashBuild)
+  desc words=bits@6/7
+  nodes n5@0 n4@1
+  source range rel=43946 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v9.1, 2=v9.2, 3=v9.3)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p2 node=14 eligible rows=125 end=breaker(slot=2 HashBuild)
+  desc words=bits@7/8
+  nodes n14@0 n13@1
+  source range rel=43956 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v13.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val
+p3 node=12 eligible rows=125 end=breaker(slot=3 HashBuild)
+  desc words=bits@8/9
+  nodes n12@0 n11@1
+  source range rel=43956 rti=10 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v10.1, 2=v10.2, 3=v10.3)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p4 node=21 eligible rows=50 end=breaker(slot=4 HashBuild)
+  desc words=bits@9/10
+  nodes n21@0 n20@1
+  source range rel=43951 rti=14 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v14.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val
+p5 node=19 eligible rows=50 end=breaker(slot=5 HashBuild)
+  desc words=bits@10/11
+  nodes n19@0 n18@1
+  source range rel=43951 rti=11 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v11.1, 2=v11.2, 3=v11.3)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p6 node=3 eligible rows=125 end=sink
+  desc consumes=slot1@p1 consumes=slot0@p0
+  nodes n3@0 n2@1 n1@3 n0@5
+  source range rel=43946 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v6.1, 2=v6.2, 3=v6.3)
+  probe slot=1 inner=n4 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  probe slot=0 inner=n6 JOIN_SEMI build-first keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=vl:life/breaker
+p7 node=10 eligible rows=125 end=sink
+  desc consumes=slot3@p3 consumes=slot2@p2
+  nodes n10@0 n9@1 n8@3 n0@5
+  source range rel=43956 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v7.1, 2=v7.2, 3=v7.3)
+  probe slot=3 inner=n11 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  probe slot=2 inner=n13 JOIN_SEMI build-first keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=vl:life/breaker
+p8 node=17 eligible rows=50 end=sink
+  desc consumes=slot5@p5 consumes=slot4@p4
+  nodes n17@0 n16@1 n15@3 n0@5
+  source range rel=43951 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v8.1, 2=v8.2, 3=v8.3)
+  probe slot=5 inner=n18 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  probe slot=4 inner=n20 JOIN_SEMI build-first keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=vl:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[Count@8] 16B
+breaker slot=4 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[I32]->[Count@8] 16B
+breaker slot=5 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[I32]->[Count@8] 16B
+mapped: Append SeqScan HashJoin Hash

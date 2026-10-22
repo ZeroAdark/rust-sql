@@ -1,0 +1,112 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1upd s2mrg s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO sr_t t USING generate_series(1995, 2003) g ON t.id = g WHEN MATCHED AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1, val = t.val + g WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN INSERT (id, n, val) VALUES (g, -g, 0);
+QUERY PLAN                                      
+------------------------------------------------
+Merge on sr_t t                                 
+  ->  Nested Loop Left Join                     
+        ->  Function Scan on generate_series g  
+        ->  Index Scan using sr_t_pkey on sr_t t
+              Index Cond: (id = g.g)            
+(5 rows)
+
+step s1upd: UPDATE sr_t SET hits = hits + 10, val = val + 1 WHERE id = 1998;
+step s2mrg: MERGE INTO sr_t t USING generate_series(1995, 2003) g ON t.id = g WHEN MATCHED AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1, val = t.val + g WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN INSERT (id, n, val) VALUES (g, -g, 0); <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, n, val, hits FROM sr_t WHERE id >= 1995 ORDER BY id;
+  id|    n| val|hits
+----+-----+----+----
+1995| 1995|2810|   1
+1996| 1996|2848|   1
+1997| 1997|2886|   1
+1998| 1998|2925|  11
+1999| 1999|2962|   1
+2000| 2000|2000|   1
+2001|-2001|   0|   0
+2002|-2002|   0|   0
+2003|-2003|   0|   0
+(9 rows)
+
+
+starting permutation: s1key s2mrg s1c s2sel
+step s1key: UPDATE sr_t SET id = 1998000 WHERE id = 1998;
+step s2mrg: MERGE INTO sr_t t USING generate_series(1995, 2003) g ON t.id = g WHEN MATCHED AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1, val = t.val + g WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN INSERT (id, n, val) VALUES (g, -g, 0); <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, n, val, hits FROM sr_t WHERE id >= 1995 ORDER BY id;
+     id|    n| val|hits
+-------+-----+----+----
+   1995| 1995|2810|   1
+   1996| 1996|2848|   1
+   1997| 1997|2886|   1
+   1998|-1998|   0|   0
+   1999| 1999|2962|   1
+   2000| 2000|2000|   1
+   2001|-2001|   0|   0
+   2002|-2002|   0|   0
+   2003|-2003|   0|   0
+1998000| 1998| 926|   0
+(10 rows)
+
+
+starting permutation: s1del s2mrg s1c s2sel
+step s1del: DELETE FROM sr_t WHERE id = 1998;
+step s2mrg: MERGE INTO sr_t t USING generate_series(1995, 2003) g ON t.id = g WHEN MATCHED AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1, val = t.val + g WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN INSERT (id, n, val) VALUES (g, -g, 0); <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, n, val, hits FROM sr_t WHERE id >= 1995 ORDER BY id;
+  id|    n| val|hits
+----+-----+----+----
+1995| 1995|2810|   1
+1996| 1996|2848|   1
+1997| 1997|2886|   1
+1998|-1998|   0|   0
+1999| 1999|2962|   1
+2000| 2000|2000|   1
+2001|-2001|   0|   0
+2002|-2002|   0|   0
+2003|-2003|   0|   0
+(9 rows)
+
+
+starting permutation: s1qual s2mrg s1c s2sel
+step s1qual: UPDATE sr_t SET hits = 100 WHERE id = 1998;
+step s2mrg: MERGE INTO sr_t t USING generate_series(1995, 2003) g ON t.id = g WHEN MATCHED AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1, val = t.val + g WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN INSERT (id, n, val) VALUES (g, -g, 0); <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, n, val, hits FROM sr_t WHERE id >= 1995 ORDER BY id;
+  id|    n| val|hits
+----+-----+----+----
+1995| 1995|2810|   1
+1996| 1996|2848|   1
+1997| 1997|2886|   1
+1998| 1998| 926| 100
+1999| 1999|2962|   1
+2000| 2000|2000|   1
+2001|-2001|   0|   0
+2002|-2002|   0|   0
+2003|-2003|   0|   0
+(9 rows)
+
+
+starting permutation: s1upd s2mrg s1a s2sel
+step s1upd: UPDATE sr_t SET hits = hits + 10, val = val + 1 WHERE id = 1998;
+step s2mrg: MERGE INTO sr_t t USING generate_series(1995, 2003) g ON t.id = g WHEN MATCHED AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1, val = t.val + g WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN INSERT (id, n, val) VALUES (g, -g, 0); <waiting ...>
+step s1a: ROLLBACK;
+step s2mrg: <... completed>
+step s2sel: SELECT id, n, val, hits FROM sr_t WHERE id >= 1995 ORDER BY id;
+  id|    n| val|hits
+----+-----+----+----
+1995| 1995|2810|   1
+1996| 1996|2848|   1
+1997| 1997|2886|   1
+1998| 1998|2924|   1
+1999| 1999|2962|   1
+2000| 2000|2000|   1
+2001|-2001|   0|   0
+2002|-2002|   0|   0
+2003|-2003|   0|   0
+(9 rows)
+

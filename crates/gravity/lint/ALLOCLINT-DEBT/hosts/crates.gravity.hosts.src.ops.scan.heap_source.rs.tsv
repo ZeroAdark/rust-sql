@@ -1,0 +1,9 @@
+path	crates/gravity/hosts/src/ops/scan/heap_source.rs
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	9
+macro	std::vec	6
+method	std::sync::Arc::new	2
+method	std::vec::Vec::into_boxed_slice	3
+method	std::vec::Vec::with_capacity	4
+type	std::sync::Arc	6
+type	std::vec::Vec	6

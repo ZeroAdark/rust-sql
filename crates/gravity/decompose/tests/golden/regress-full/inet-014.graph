@@ -1,0 +1,11 @@
+-- regress-full-inet-014
+-- SELECT inet_merge(c, i) FROM INET_TBL WHERE inet_same_family(c, i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=293 end=sink
+  nodes n0@0
+  source range rel=17193 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter fn4071(relabel869(v1.1), v1.2)
+  project (1=fn4063(relabel869(v1.1), v1.2))
+  outs 1=vl:call4063
+mapped: SeqScan

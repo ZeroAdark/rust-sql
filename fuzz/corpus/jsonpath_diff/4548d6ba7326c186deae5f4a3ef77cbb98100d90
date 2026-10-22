@@ -1,1 +1,0 @@
-$ ? (@ like_regex "patt@rHHHHHHHHHXHHHHHHHHHHHHHHMHHHHHHHHHHHHHHHHHHHHHHHAHHHHHHHHHHLHHHHHH$.g ? (exists (@.x .*? (@ == 07)))^^^^^^^^.s (exists (@.x .*? (@ == 07))tring()s ^^^^^^^^^^^^^^^^^^^^^^^^^^g^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" flag "isim")

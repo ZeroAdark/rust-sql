@@ -343,7 +343,6 @@ pub fn AtEOXact_Buffers(is_commit: bool) {
         CheckForBufferLeaks();
     }
     debug_assert!(privref::overflow_count() == 0);
-    crate::read::clear_batch_credits();
     crate::localbuf::AtEOXact_LocalBuffers(is_commit);
 }
 

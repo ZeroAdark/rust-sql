@@ -328,6 +328,15 @@ fn refresh_matview_datafill<'mcx>(
     }
     let query = rewritten.into_iter().next().expect("checked above");
 
+    let query_node = types_nodes::Node::mk(mcx, query)?;
+    let volatile = clauses::contain_volatile_functions(query_node)?;
+    // SAFETY: fresh node; this call holds its only live access.
+    let query: Query<'mcx> = unsafe { query_node.with_mut::<Query, _>(core::mem::take) }
+        .expect("rewritten matview query");
+    if let tcop_dest::DestReceiver::TransientRel(state) = dest {
+        state.multi_insert_ok = !volatile;
+    }
+
     let plan = postgres::simple_query::pg_plan_query(
         mcx,
         mcx::leak_in(mcx::alloc_in(mcx, query)?),
@@ -622,7 +631,9 @@ fn transientrel_startup<'mcx>(
     state.ti_options = tableam_vocab::TABLE_INSERT_SKIP_FSM | tableam_vocab::TABLE_INSERT_FROZEN;
     state.bistate = Some(heapam::GetBulkInsertState());
     // W1 multi-insert buffering (PGRUST_CTAS_MULTIINSERT, default ON).
-    state.mibuf = tableam::write_buffer::write_buffer_begin(&rel);
+    if state.multi_insert_ok {
+        state.mibuf = tableam::write_buffer::write_buffer_begin(&rel);
+    }
     state.rel = Some(rel);
     Ok(())
 }
@@ -644,9 +655,10 @@ fn transientrel_receive<'mcx>(
         )?;
         return Ok(true);
     }
-    tableam::table_tuple_insert(
+    tableam::write_buffer::write_single_receive(
         state.mcx,
         rel,
+        &mut state.own_slot,
         slot,
         state.output_cid,
         state.ti_options,

@@ -1,0 +1,16 @@
+[package]
+name = "ct_carrier_mimalloc"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Hearth (pagepool#3883, a248dc6de0a): main_main's default feature `pagepool-global` turns on init_small's `pool-global`;
+# a narrow crate-test build without main_main resolved init_small without it (the guard's 'ws only: init_small|pool-global').
+init_small = { path = "../../backend/utils/init/init_small", features = ["pool-global"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+libmimalloc-sys = { version = "0.1", features = ["extended", "no_thp", "override"] }

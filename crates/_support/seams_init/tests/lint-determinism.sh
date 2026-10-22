@@ -93,8 +93,10 @@
 # accepts a new raw site, add a row carrying a "DST-REVIEW(<who>): <why>"
 # marker. Marker discipline on NEW/RAISED rows is enforced by HUMAN REVIEW
 # of allowlist diffs — this lint cannot distinguish a new row from a seeded
-# one. What the lint machine-enforces: malformed DST-REVIEW text, duplicate
-# rows, and budget<1 are CONFIG-FAILs (exit 2), and every marker row is
+# one. What the lint machine-enforces: malformed DST-REVIEW text and
+# budget<1 are CONFIG-FAILs (exit 2); two rows for one [category] file (the
+# file merges by union, .gitattributes) take the larger budget with a NOTE;
+# row order never matters; and every marker row is
 # surfaced as a NOTE on every run so train diffs carry exceptions visibly.
 # Rows whose sites vanished get a stale WARN: delete them. Rows whose sites
 # shrank get a shrink WARN: lower the budget.
@@ -142,7 +144,9 @@
 # Unit-shaped:  cargo test -p seams_init --test lint_determinism
 set -u
 
-REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+# REPO is the public workspace root (this file is public/crates/_support/seams_init/tests/*.sh);
+# git rev-parse --show-toplevel would return the monorepo root, one level up.
+REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
 TREE="${LINT_DETERMINISM_TREE:-$REPO}"
 ALLOWLIST="${LINT_DETERMINISM_ALLOWLIST:-$REPO/crates/_support/seams_init/tests/lint-determinism.allow}"
 MODE="check"
@@ -259,7 +263,7 @@ FNR == 1 {
         print "rand\t" rel
     if (line ~ /thread::spawn|thread::Builder|libc::(fork|pthread_create)($|[^A-Za-z0-9_])/)
         print "spawn\t" rel
-    if (line ~ /(^|[^A-Za-z0-9_])env::(var|var_os|vars|vars_os|set_var|remove_var)($|[^A-Za-z0-9_])|(^|[^A-Za-z0-9_])env::[{*]|libc::(getenv|setenv|unsetenv|putenv)($|[^A-Za-z0-9_])/)
+    if (line ~ /(^|[^A-Za-z0-9_])env::(var|var_os|vars|vars_os|set_var|remove_var)($|[^A-Za-z0-9_])|(^|[^A-Za-z0-9_:])env::[{*]|std::env::[{*]|libc::(getenv|setenv|unsetenv|putenv)($|[^A-Za-z0-9_])/)
         print "env\t" rel
     if (line ~ /(^|[^A-Za-z0-9_])(Condvar|mpsc)($|[^A-Za-z0-9_])|crossbeam_channel|crossbeam::channel|thread::park|thread::sleep|libc::(nanosleep|usleep|sleep)($|[^A-Za-z0-9_])/)
         print "blocking\t" rel
@@ -350,18 +354,20 @@ awk -F'\t' -v out="$TMP/allow" '
             err = 1; next
         }
         key = cat "\t" path
-        if (key in seen) {
-            printf "CONFIG-ERROR: duplicate allowlist row for [%s] %s (%s:%d)\n", cat, path, FILENAME, FNR
-            err = 1; next
-        }
-        seen[key] = 1
         if (annot ~ /DST-REVIEW/ && annot !~ /DST-REVIEW\([^)]+\):/) {
             printf "CONFIG-ERROR: malformed review marker on [%s] %s (want \"DST-REVIEW(<who>): <why>\"): %s\n", cat, path, annot
             err = 1; next
         }
-        print cat "\t" path "\t" budget "\t" annot > out
+        if (key in seen) {
+            printf "NOTE(duplicate-allowlist): [%s] %s has two rows (%s:%d and %d, a union merge of two landings): the larger budget applies; fold them into one row.\n", cat, path, FILENAME, seen[key], FNR
+            if (budget + 0 <= best[key]) next
+        } else {
+            keys[++nk] = key
+        }
+        seen[key] = FNR; best[key] = budget + 0
+        row[key] = cat "\t" path "\t" budget "\t" annot
     }
-    END { exit err }
+    END { for (i = 1; i <= nk; i++) print row[keys[i]] > out; exit err }
 ' "$ALLOWLIST"
 [ $? -eq 0 ] || { echo "lint-determinism CONFIG-FAIL (bad allowlist)"; exit 2; }
 touch "$TMP/allow"

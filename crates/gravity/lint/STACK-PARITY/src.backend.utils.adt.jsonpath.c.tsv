@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/utils/adt/jsonpath.c: 2 stack-depth check sites
+249	flattenJsonPathParseItem	crates/backend/utils/adt/jsonpath/src/path.rs	flatten_item	yes	
+529	printJsonPathItem	crates/backend/utils/adt/jsonpath/src/path.rs	print_item	yes	

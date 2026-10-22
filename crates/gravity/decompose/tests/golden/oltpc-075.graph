@@ -1,0 +1,23 @@
+-- oltpc-075
+-- SELECT c.c_discount, c.c_last, c.c_credit, w.w_tax FROM customer c JOIN warehouse w ON w.w_id = c.c_w_id WHERE c.c_w_id = $1 AND c.c_d_id = $2 AND c.c_id = $3 /* C20 NO customer-warehouse join2 */
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index rel=16384 rti=1 am=heap index=16410
+    key att=3 op=96 value=$1
+    key att=4 op=94 value=$2
+    key att=2 op=96 value=$3
+    recheck (op96(v1.3, $1), op94(v1.4, $2), op96(v1.2, $3))
+    lanes Attr(9):byref8:vl:win/page Attr(16):byref8:vl:win/page Attr(18):byref8:vl:win/page
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21)
+  nest inner=n2 JOIN_INNER invariant raise-free params=()
+  inner node=2 eligible rows=1 end=sink
+  nodes n2@0
+  source range rel=16448 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(8):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(v2.1, $1)
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9)
+  project (1=outer.18, 2=outer.9, 3=outer.16, 4=inner.8)
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w2:val 5=w2:val 6=w2:val 7=vl:row 8=vl:row 9=vl:win/page 10=vl:row 11=vl:row 12=vl:row 13=vl:row 14=vl:row 15=vl:row 16=vl:win/page 17=vl:row 18=vl:win/page 19=vl:row 20=vl:row 21=vl:row
+  outs 1=vl:win/page 2=vl:win/page 3=vl:win/page 4=vl:life/breaker
+mapped: SeqScan IndexScan NestLoop

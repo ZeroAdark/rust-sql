@@ -20,7 +20,7 @@
 # USER env) applies verbatim.
 set -u
 
-REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"  # the public workspace root (git toplevel is the monorepo)
 PGINSTALL="${PGINSTALL:-}"
 for cand in "$PGINSTALL" /tmp/pgrust_pginstall/bin /opt/homebrew/bin; do
     [ -n "$cand" ] && [ -x "$cand/initdb" ] && PGBIN="$cand" && break
@@ -34,7 +34,7 @@ WASM_BIN="${PGRUST_WASM_BIN:-$REPO/target/wasm32-wasip1/debug/postgres.wasm}"
 [ -f "$WASM_BIN" ] || { echo "no wasm binary at $WASM_BIN (wasm/wasm-build.sh)"; exit 2; }
 
 . "$REPO/wasm/lib/scratch.sh"
-WORK="${WASM_NET_E2E_DIR:-$(scratch_datadir pgrust-wasm-net-e2e)}"
+WORK="${WASM_NET_E2E_DIR:-$(scratch_datadir pgrust-fast-wasm-net-e2e)}"
 scratch_adopt "$WORK"
 rm -rf "$WORK"; mkdir -p "$WORK"
 
@@ -89,7 +89,7 @@ python3 "$REPO/wasm/pgwire_stdio_driver.py" \
 echo "=== wasm --stdio-wire session (wasmtime) ==="
 python3 "$REPO/wasm/pgwire_stdio_driver.py" \
     --sql "$WORK/wire.sql" --stderr "$WORK/wasm.err" -- \
-    wasmtime run -W exceptions=y,max-wasm-stack=16777216 \
+    wasmtime run -W exceptions=y,max-wasm-stack=16777216 --preload env="$REPO/wasm/gravity-jit-stub.wat" \
     --dir "$WORK::/work" \
     --env USER=postgres \
     --env PGRUST_TZDIR=/work/share/timezone \

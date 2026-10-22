@@ -70,8 +70,25 @@ pub fn SearchCatCacheList(
     v2: CatCKey<'_>,
     v3: CatCKey<'_>,
 ) -> PgResult<CatCList> {
+    if gravity_deps::armed() {
+        gravity_deps::note_cat_list(cache_id);
+        return gravity_deps::suppressed(|| search_list(cache_id, nkeys, v1, v2, v3));
+    }
+    search_list(cache_id, nkeys, v1, v2, v3)
+}
+
+fn search_list(
+    cache_id: i32,
+    nkeys: i32,
+    v1: CatCKey<'_>,
+    v2: CatCKey<'_>,
+    v3: CatCKey<'_>,
+) -> PgResult<CatCList> {
     let keys = [v1, v2, v3, CatCKey::UNUSED];
 
+    if !with_state(|st| st.registered(cache_id)) {
+        return Err(crate::unregistered(cache_id)); // V4R-453
+    }
     if !with_state(|st| st.cache(cache_id).initialized) {
         crate::init::catalog_cache_initialize_cache(cache_id)?;
     }
@@ -225,6 +242,7 @@ pub(crate) fn adopt_members(
             payload_len: byref_len as u32,
             members: member_vec,
         };
+        st.ch_nlisted += members.len() as i32;
         let cache = st.cache_mut(cache_id);
         let slot = cache.cl_alloc(cl);
         for i in 0..members.len() {
@@ -287,6 +305,7 @@ fn build_list_scan(
 
         let mut inner_err: Option<Box<types_error::PgError>> = None;
         let ordered = genam_seams::systable_scan_catalog::call(
+            scan_mcx,
             &relation,
             indexoid,
             index_ok,
@@ -331,10 +350,14 @@ fn build_list_scan(
 /// Reuse a usable existing entry for `ntp` or create one; temp refcount++.
 /// `None`: the new entry went stale mid-flatten (caller restarts the scan).
 fn reuse_or_create_member(cache_id: i32, ntp: &HeapTupleData<'_>) -> PgResult<Option<u32>> {
+    let (kinds, nkeys, keyno, tupdesc) = with_state(|st| {
+        let c = st.cache(cache_id);
+        (c.cc_kind, c.cc_nkeys, c.cc_keyno, c.cc_tupdesc.expect("list build before phase-2 init"))
+    });
+    // Outside the state borrow: detoasting an external text key re-enters the caches.
+    let hv = compute_tuple_hash_value(&kinds, nkeys, &keyno, tupdesc, ntp)?;
     let found = with_state(|st| {
         let cache = st.cache(cache_id);
-        let tupdesc = cache.cc_tupdesc.expect("list build before phase-2 init");
-        let hv = compute_tuple_hash_value(&cache.cc_kind, cache.cc_nkeys, &cache.cc_keyno, tupdesc, ntp)?;
         let bi = hash_index(hv, cache.cc_nbuckets);
         let mut cur = cache.cc_bucket[bi];
         while cur != NONE {
@@ -364,12 +387,19 @@ fn reuse_or_create_member(cache_id: i32, ntp: &HeapTupleData<'_>) -> PgResult<Op
 
 /// `ReleaseCatCacheList(list)`.
 pub fn ReleaseCatCacheList(list: CatCList) {
-    with_state(|st| {
-        let cl = &mut st.cache_mut(list.cache_id).lists[list.slot as usize];
-        debug_assert!(cl.refcount > 0);
-        cl.refcount -= 1;
-        if cl.dead && cl.refcount == 0 {
-            remove_cl(st, list.cache_id, list.slot);
-        }
-    });
+    drop(list);
+}
+
+impl Drop for CatCList {
+    fn drop(&mut self) {
+        let (cache_id, slot) = (self.cache_id, self.slot);
+        crate::with_live_state(|st| {
+            let cl = &mut st.cache_mut(cache_id).lists[slot as usize];
+            debug_assert!(cl.refcount > 0);
+            cl.refcount -= 1;
+            if cl.dead && cl.refcount == 0 {
+                remove_cl(st, cache_id, slot);
+            }
+        });
+    }
 }

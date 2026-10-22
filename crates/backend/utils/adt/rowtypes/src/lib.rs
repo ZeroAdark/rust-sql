@@ -85,7 +85,10 @@ pub fn fc_record_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
         None => true,
     };
     if refresh {
-        let mut columns = Vec::with_capacity(ncolumns);
+        let mut columns = Vec::new();
+        columns
+            .try_reserve_exact(ncolumns)
+            .map_err(|_| mcx.oom(ncolumns * core::mem::size_of::<Option<ColumnIOData>>()))?;
         columns.resize_with(ncolumns, || None);
         flinfo.set_fn_extra(RecordIOData {
             record_type: tup_type,
@@ -135,6 +138,7 @@ pub fn fc_record_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
         let d = function_call1_coll_in(proc, InvalidOid, mcx, values[i])?;
         let value = cstring_bytes(d);
         let (nq, extra) = record_out_quoting(value);
+        record_out_column_room(buf.len(), extra)?;
         buf.append_written(extra, |dst| {
             let mut w = 0usize;
             // SAFETY: writes below total exactly `extra` bytes at `dst`
@@ -166,6 +170,14 @@ pub fn fc_record_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
     let mut buf = buf.into_vec();
     buf.push(0);
     Ok(cstring_result(buf))
+}
+
+// C appends per byte: overflow fails at the one-byte enlarge at MaxAllocSize - 1.
+fn record_out_column_room(len: usize, extra: usize) -> PgResult<()> {
+    if len + extra > ::mcx::MAX_ALLOC_SIZE - 1 {
+        ::stringinfo::enlarge_target(::mcx::MAX_ALLOC_SIZE - 1, 0, 1)?;
+    }
+    Ok(())
 }
 
 // rowtypes.c:445 record_out needquote plus the exact escaped output length,
@@ -257,7 +269,10 @@ fn hash_record_common(
         None => true,
     };
     if refresh {
-        let mut columns = Vec::with_capacity(ncolumns);
+        let mut columns = Vec::new();
+        columns
+            .try_reserve_exact(ncolumns)
+            .map_err(|_| mcx.oom(ncolumns * core::mem::size_of::<Option<ColumnHashData>>()))?;
         columns.resize_with(ncolumns, || None);
         flinfo.set_fn_extra(RecordHashData {
             record_type: tup_type,
@@ -648,7 +663,8 @@ fn compare_memo<'a>(
         None => true,
     };
     if refresh {
-        let mut columns = Vec::with_capacity(ncols);
+        let mut columns = Vec::new();
+        let _ = columns.try_reserve_exact(ncols);
         columns.resize_with(ncols, || None);
         flinfo.set_fn_extra(RecordCompareData {
             record1_type: InvalidOid,
@@ -1158,7 +1174,8 @@ fn malformed_record<'a>(
     let err = match core::str::from_utf8(string) {
         Ok(s) => ::types_error::PgError::error(alloc::format!("malformed record literal: \"{s}\"")),
         Err(_) => {
-            let mut msg = b"malformed record literal: \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"malformed record literal: \"");
             msg.extend_from_slice(string);
             msg.push(b'"');
             ::types_error::PgError::error_raw_message(msg)
@@ -1220,7 +1237,10 @@ pub fn fc_record_in(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
         None => true,
     };
     if refresh {
-        let mut columns = Vec::with_capacity(ncolumns);
+        let mut columns = Vec::new();
+        columns
+            .try_reserve_exact(ncolumns)
+            .map_err(|_| mcx.oom(ncolumns * core::mem::size_of::<Option<ColumnInData>>()))?;
         columns.resize_with(ncolumns, || None);
         flinfo.set_fn_extra(RecordInData {
             record_type: tup_type,
@@ -1326,7 +1346,7 @@ pub fn fc_record_in(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
         let cstr_storage;
         let cstr: Option<&core::ffi::CStr> = match column_data {
             Some(d) => {
-                let mut v = Vec::with_capacity(d.len() + 1);
+                let mut v = ::mcx::std_vec_with_capacity("adt", d.len() + 1)?;
                 v.extend_from_slice(d);
                 v.push(0);
                 cstr_storage = v;
@@ -1424,7 +1444,10 @@ pub fn fc_record_recv(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         None => true,
     };
     if refresh {
-        let mut columns = Vec::with_capacity(ncolumns);
+        let mut columns = Vec::new();
+        columns
+            .try_reserve_exact(ncolumns)
+            .map_err(|_| mcx.oom(ncolumns * core::mem::size_of::<Option<ColumnRecvData>>()))?;
         columns.resize_with(ncolumns, || None);
         flinfo.set_fn_extra(RecordRecvData {
             record_type: tup_type,
@@ -1545,7 +1568,10 @@ pub fn fc_record_send(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         None => true,
     };
     if refresh {
-        let mut columns = Vec::with_capacity(ncolumns);
+        let mut columns = Vec::new();
+        columns
+            .try_reserve_exact(ncolumns)
+            .map_err(|_| mcx.oom(ncolumns * core::mem::size_of::<Option<ColumnRecvData>>()))?;
         columns.resize_with(ncolumns, || None);
         flinfo.set_fn_extra(RecordRecvData {
             record_type: r.tup_type,

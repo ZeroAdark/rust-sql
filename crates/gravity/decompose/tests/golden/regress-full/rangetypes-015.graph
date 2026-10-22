@@ -1,0 +1,9 @@
+-- regress-full-rangetypes-015
+-- explain (verbose, costs off) select current_date <@ daterange('2002-09-25'::date, 'Infinity', '[)');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=and(op1098(T_SQLValueFunction, c1082:998), op1095(T_SQLValueFunction, c1082:2147483647)))
+  outs 1=w1:val
+mapped: Result

@@ -1,4 +1,0 @@
-Å;
-
--- Check stop word deletion, a and s are stop-words
-SELECT to_tsquery(

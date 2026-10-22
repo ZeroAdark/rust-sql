@@ -1,0 +1,68 @@
+-- regress-full-foreign_key-061
+-- UPDATE fkpart11.pk SET a = a + 1 RETURNING tableoid::pg_catalog.regclass, *;
+graph pipelines=4 breakers=0 init_plans=0 root=p3
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@1 n0@3
+  source range rel=37983 rti=3 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=op551(v3.2, c23:1), 2=v3.-6, 3=v3.-1)
+  append arm 0/4
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=37983 rti=3 natts=2 indexes=(37989[2]up) set=(2) returning tableoid=outer.2 route=rti1:37874 natts=2 cross-partition map=(2,1)
+    target rti=4 rel=37997 natts=3 indexes=(38003[3]up) set=(3) returning map=(2,0,1)
+    target rti=5 rel=37919 natts=2 indexes=(37922[1]up) set=(1) returning
+    target rti=6 rel=37933 natts=2 indexes=(37936[1]up) set=(1) returning
+  project (1=relabel2205(v3.-6), 2=v3.2, 3=v3.1)
+  outs 1=w4:val 2=w4:val 3=fx6:row
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:row
+p1 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n1@1 n0@3
+  source range rel=37997 rti=4 am=heap
+    lanes Attr(3):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=op551(v4.3, c23:1), 2=v4.-6, 3=v4.-1)
+  append arm 1/4
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=37983 rti=3 natts=2 indexes=(37989[2]up) set=(2) returning tableoid=outer.2 route=rti1:37874 natts=2 cross-partition map=(2,1)
+    target rti=4 rel=37997 natts=3 indexes=(38003[3]up) set=(3) returning map=(2,0,1)
+    target rti=5 rel=37919 natts=2 indexes=(37922[1]up) set=(1) returning
+    target rti=6 rel=37933 natts=2 indexes=(37936[1]up) set=(1) returning
+  project (1=relabel2205(v4.-6), 2=v4.3, 3=v4.1)
+  outs 1=w4:val 2=w4:val 3=fx6:row
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:row
+p2 node=4 serial site=1 reason=Write end=sink
+  nodes n4@0 n1@1 n0@3
+  source range rel=37919 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=op551(v5.1, c23:1), 2=v5.-6, 3=v5.-1)
+  append arm 2/4
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=37983 rti=3 natts=2 indexes=(37989[2]up) set=(2) returning tableoid=outer.2 route=rti1:37874 natts=2 cross-partition map=(2,1)
+    target rti=4 rel=37997 natts=3 indexes=(38003[3]up) set=(3) returning map=(2,0,1)
+    target rti=5 rel=37919 natts=2 indexes=(37922[1]up) set=(1) returning
+    target rti=6 rel=37933 natts=2 indexes=(37936[1]up) set=(1) returning
+  project (1=relabel2205(v5.-6), 2=v5.1, 3=v5.2)
+  outs 1=w4:val 2=w4:val 3=fx6:row
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:row
+p3 node=5 serial site=1 reason=Write end=sink
+  nodes n5@0 n1@1 n0@3
+  source range rel=37933 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=op551(v6.1, c23:1), 2=v6.-6, 3=v6.-1)
+  append arm 3/4
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=37983 rti=3 natts=2 indexes=(37989[2]up) set=(2) returning tableoid=outer.2 route=rti1:37874 natts=2 cross-partition map=(2,1)
+    target rti=4 rel=37997 natts=3 indexes=(38003[3]up) set=(3) returning map=(2,0,1)
+    target rti=5 rel=37919 natts=2 indexes=(37922[1]up) set=(1) returning
+    target rti=6 rel=37933 natts=2 indexes=(37936[1]up) set=(1) returning
+  project (1=relabel2205(v6.-6), 2=v6.1, 3=v6.2)
+  outs 1=w4:val 2=w4:val 3=fx6:row
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:row
+scan-lanes node=2 rti=3 rel=37983 tableoid
+scan-lanes node=3 rti=4 rel=37997 tableoid
+scan-lanes node=4 rti=5 rel=37919 tableoid
+scan-lanes node=5 rti=6 rel=37933 tableoid
+mapped: ModifyTable Append SeqScan

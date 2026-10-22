@@ -49,7 +49,7 @@ seam_core::tap!(
         ok: bool,
         source_text: &'a str,
         qc: Option<&'a QueryCompletion>,
-    )
+    ) -> PgResult<()>
 );
 
 // C's hookable entry; no plugin surface exists, so this IS standard_ProcessUtility.
@@ -75,19 +75,32 @@ pub fn ProcessUtility<'p, 'a, 's, 'd, 'q, 'mcx>(
         .as_ref()
         .is_none_or(|qc| qc.commandTag == types_portal::CMDTAG_UNKNOWN));
     let mut qc = qc;
-    let r = standard_ProcessUtility(
-        mcx,
-        pstmt,
-        source_text,
-        read_only_tree,
-        context,
-        params,
-        query_env,
-        dest,
-        qc.as_deref_mut(),
-    );
-    tap_process_utility_leave::call_if(|f| f(r.is_ok(), source_text, qc.as_deref()));
-    r
+    let mut run = || {
+        standard_ProcessUtility(
+            mcx,
+            pstmt,
+            source_text,
+            read_only_tree,
+            context,
+            params,
+            query_env,
+            dest,
+            qc.as_deref_mut(),
+        )
+    };
+    let r = if tap_process_utility_leave::is_installed() {
+        // unwind-ok: stmt-boundary — PG_FINALLY: the leave tap runs, then the unwind resumes
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|p| {
+            let _ = tap_process_utility_leave::call_if_or(Ok(()), |f| f(false, source_text, None));
+            std::panic::resume_unwind(p)
+        })
+    } else {
+        run()
+    };
+    let leave =
+        tap_process_utility_leave::call_if_or(Ok(()), |f| f(r.is_ok(), source_text, qc.as_deref()));
+    r?;
+    leave
 }
 
 #[cold]
@@ -894,6 +907,7 @@ fn slow_switch<'mcx>(
                             relid,
                             toast_options.as_deref(),
                         )?;
+                        pgrc_front::ensure_companions(mcx, relid)?;
                     }
                     T_CreateForeignTableStmt => {
                         let cstmt = stmt
@@ -1237,8 +1251,8 @@ fn slow_switch<'mcx>(
             // C: commandCollected = true — each generated CREATE FOREIGN TABLE
             // collects itself through the recursive ProcessUtility call
             // (utility.c:1619).
-            let commands = foreigncmds::ImportForeignSchema(mcx, stmt)?;
-            exec_import_foreign_schema_commands(mcx, stmt, &commands)?;
+            let (fdwname, commands) = foreigncmds::ImportForeignSchema(mcx, stmt)?;
+            exec_import_foreign_schema_commands(mcx, stmt, fdwname, &commands)?;
             Ok(None)
         }
 
@@ -1922,9 +1936,8 @@ const NAMESPACE_RELATION_ID: types_core::Oid = 2615;
 
 // ImportForeignSchema's back half (foreigncmds.c:1529-1603): each generated
 // command runs as a subcommand, skipping analysis/rewrite/planning as C does.
-// C overwrites relation->schemaname with local_schema post-parse so the
-// FDW-returned command text cannot redirect the object elsewhere; we do the
-// same in place through the just-parsed node (see the loop below).
+// As C, relation->schemaname is overwritten with local_schema post-parse so
+// FDW-returned command text cannot redirect the object elsewhere.
 // foreigncmds.c:1558 pg_parse_query(cmd): the PARSER STATISTICS bracket of
 // postgres.c:610-616 wraps every FDW-generated command.
 pub(crate) fn pg_parse_import_command<'mcx>(
@@ -1950,6 +1963,7 @@ pub(crate) fn pg_parse_import_command<'mcx>(
 fn exec_import_foreign_schema_commands<'mcx>(
     mcx: Mcx<'mcx>,
     stmt: &types_nodes::rawnodes::ImportForeignSchemaStmt<'mcx>,
+    fdwname: &str,
     commands: &[&str],
 ) -> PgResult<()> {
     let mut dest = tcop_dest::CreateDestReceiver(types_dest::CommandDest::None);
@@ -1966,8 +1980,8 @@ fn exec_import_foreign_schema_commands<'mcx>(
                 node.as_variant::<types_nodes::rawnodes::CreateForeignTableStmt>()
             else {
                 return Err(Box::new(types_error::PgError::error(format!(
-                    "foreign-data wrapper returned incorrect statement type {:?}",
-                    node.node_tag()
+                    "foreign-data wrapper \"{fdwname}\" returned incorrect statement type {}",
+                    node.node_tag() as u16
                 ))));
             };
             let relation = cstmt
@@ -2498,9 +2512,8 @@ fn exec_alter_table_stmt<'mcx>(
         let tag = CreateCommandTag(parsetree);
         event_trigger::EventTriggerAlterTableStart(tag);
         event_trigger::EventTriggerAlterTableRelid(relid);
-        let res = tablecmds::AlterTable(mcx, relid, lockmode, stmt, source_text, tag);
+        tablecmds::AlterTable(mcx, relid, lockmode, stmt, source_text, tag)?;
         event_trigger::EventTriggerAlterTableEnd();
-        res?;
     } else {
         elog_seams::ereport_msg::call(
             types_error::NOTICE,

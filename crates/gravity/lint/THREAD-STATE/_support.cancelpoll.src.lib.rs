@@ -1,0 +1,3 @@
+_support/cancelpoll/src/lib.rs	BYTE	pgport	scope:Scope	thread	the abort byte of the kernel call this thread runs; scoped's Scope guard lends it and its Drop puts the previous one back, an unwind too
+_support/cancelpoll/src/lib.rs	SEEN	pgport	scope:Scope	thread	a host loop of the running kernel call stopped for the abort bit; Scope clears it at entry and its Drop puts the outer value back (with a nested call's stop)
+_support/cancelpoll/src/lib.rs	PROBE	pgport	scope:Scope	thread	the poll-gap probe's stretch on this thread (probe on only); Scope's Drop closes the call's stretch (probe_exit), an unwind too

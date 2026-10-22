@@ -1,0 +1,86 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1amt s1st s1cid s1amt2 s1reg s2u s1c s2c s3sel s3cnt
+step s2x: EXPLAIN (COSTS OFF) WITH upd AS (UPDATE jo o SET total = o.total + 100 FROM jc c, jr r WHERE c.id = o.cid AND r.id = c.region AND r.closed AND o.status = 'done' RETURNING o.id, o.total) SELECT count(*), sum(total) FROM upd;
+QUERY PLAN                                              
+--------------------------------------------------------
+Aggregate                                               
+  CTE upd                                               
+    ->  Update on jo o                                  
+          ->  Hash Join                                 
+                Hash Cond: (o.cid = c.id)               
+                ->  Seq Scan on jo o                    
+                      Filter: (status = 'done'::text)   
+                ->  Hash                                
+                      ->  Hash Join                     
+                            Hash Cond: (c.region = r.id)
+                            ->  Seq Scan on jc c        
+                            ->  Hash                    
+                                  ->  Seq Scan on jr r  
+                                        Filter: closed  
+  ->  CTE Scan on upd                                   
+(15 rows)
+
+step s1amt: UPDATE jo SET total = total + 1 WHERE id = 19;
+step s1st: UPDATE jo SET status = 'pending' WHERE id = 22;
+step s1cid: UPDATE jo SET cid = 2 WHERE id = 25;
+step s1amt2: UPDATE jo SET total = total + 1 WHERE id = 28;
+step s1reg: UPDATE jr SET closed = false WHERE id = 9;
+step s2u: WITH upd AS (UPDATE jo o SET total = o.total + 100 FROM jc c, jr r WHERE c.id = o.cid AND r.id = c.region AND r.closed AND o.status = 'done' RETURNING o.id, o.total) SELECT count(*), sum(total) FROM upd; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+count|  sum
+-----+-----
+  398|50155
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, status, total FROM jo WHERE id IN (19, 22, 25, 28, 49) ORDER BY id;
+id|cid|status |total
+--+---+-------+-----
+19| 20|done   |  120
+22| 23|pending|   22
+25|  2|done   |   25
+28| 29|done   |  129
+49| 50|done   |  149
+(5 rows)
+
+step s3cnt: SELECT status, count(*), sum(total) FROM jo GROUP BY status ORDER BY status;
+status   |count|  sum
+---------+-----+-----
+cancelled| 1000|24500
+done     |  999|64280
+pending  | 1001|24522
+(3 rows)
+
+
+starting permutation: s1amt s1st s2u s1r s2c s3sel s3cnt
+step s1amt: UPDATE jo SET total = total + 1 WHERE id = 19;
+step s1st: UPDATE jo SET status = 'pending' WHERE id = 22;
+step s2u: WITH upd AS (UPDATE jo o SET total = o.total + 100 FROM jc c, jr r WHERE c.id = o.cid AND r.id = c.region AND r.closed AND o.status = 'done' RETURNING o.id, o.total) SELECT count(*), sum(total) FROM upd; <waiting ...>
+step s1r: ROLLBACK;
+step s2u: <... completed>
+count|  sum
+-----+-----
+  400|50400
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, status, total FROM jo WHERE id IN (19, 22, 25, 28, 49) ORDER BY id;
+id|cid|status|total
+--+---+------+-----
+19| 20|done  |  119
+22| 23|done  |  122
+25| 26|done  |  125
+28| 29|done  |  128
+49| 50|done  |  149
+(5 rows)
+
+step s3cnt: SELECT status, count(*), sum(total) FROM jo GROUP BY status ORDER BY status;
+status   |count|  sum
+---------+-----+-----
+cancelled| 1000|24500
+done     | 1000|64500
+pending  | 1000|24500
+(3 rows)
+

@@ -1,0 +1,21 @@
+-- regress-full-create_view-007
+-- SELECT relname, relkind, reloptions FROM pg_class WHERE oid in ('mysecview1'::regclass, 'mysecview2'::regclass, 'mysecview3'::regclass, 'mysecview4'::regclass, 'mysecview7'::regclass, 'mysecview8'::regclass, 'mysecview9'::regclass) ORDER BY relname;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n2@0 n1@0 n0@1^
+  source bitmap rel=1259 rti=1 am=heap
+    bitmap index node=2 index=2662 rows=7
+      key att=1 op=607 form=any value=c1028:'\x01\x00\x00\x00\x00\x00\x00\x00\x1a\x00\x00\x00\x07\x00\x00\x00\x01\x00\x00\x00UN\x00\x00YN\x00\x00]N\x00\x00aN\x00\x00eN\x00\x00iN\x00\x00mN\x00\x00'
+    recheck (any607(v1.1, c1028:'\x01\x00\x00\x00\x00\x00\x00\x00\x1a\x00\x00\x00\x07\x00\x00\x00\x01\x00\x00\x00UN\x00\x00YN\x00\x00]N\x00\x00aN\x00\x00eN\x00\x00iN\x00\x00mN\x00\x00'))
+    lanes Attr(2):byref8:fx64:win/page Attr(18):byval8:w8:val Attr(33):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.2, 2=v1.18, 3=v1.33)
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=fx64:win/page 2=w8:val 3=vl:win/page
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=fx64:win/page 2=w8:val 3=vl:win/page
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+mapped: BitmapIndexScan BitmapHeapScan Sort

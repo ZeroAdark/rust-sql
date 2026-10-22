@@ -1004,7 +1004,7 @@ fn num_picksplit<T: NumProc>(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
     let entryvec = unsafe { &*(fcinfo.arg(0).as_usize() as *const GistEntryVector) };
     let v = unsafe { &mut *(fcinfo.arg(1).as_usize() as *mut GistSplitVec) };
     let maxoff = (entryvec.n - 1) as usize;
-    let mut keys: Vec<&[u8]> = Vec::with_capacity(maxoff + 1);
+    let mut keys: Vec<&[u8]> = ::mcx::std_vec_with_capacity("btree_gist", maxoff + 1)?;
     keys.push(&[]);
     for e in &entryvec.vector[1..=maxoff] {
         keys.push(num_key::<T>(e.key));
@@ -1064,8 +1064,8 @@ fn fc_gbt_timetz_consistent(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
 trait VarProc: VarOps + Sized {
     fn ssup_cmp(x: Datum, y: Datum, coll: Oid, mcx: Mcx<'_>) -> PgResult<i32>;
     // bit's non-leaf consistent transforms the query with gbt_bit_xfrm.
-    fn query_for_node(q: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-        std::borrow::Cow::Borrowed(q)
+    fn query_for_node(q: &[u8]) -> PgResult<std::borrow::Cow<'_, [u8]>> {
+        Ok(std::borrow::Cow::Borrowed(q))
     }
 }
 
@@ -1085,14 +1085,14 @@ fn var_ssup_image<'m>(mcx: Mcx<'m>, d: Datum) -> PgResult<std::borrow::Cow<'m, [
                 varatt::varsize_1b(p) - varatt::VARHDRSZ_SHORT,
             );
             let total = VARHDRSZ + src.len();
-            let mut buf = Vec::with_capacity(total);
+            let mut buf = ::mcx::std_vec_with_capacity("btree_gist", total)?;
             buf.extend_from_slice(&varatt::set_varsize_4b_word(total as u32).to_ne_bytes());
             buf.extend_from_slice(src);
             Ok(Cow::Owned(buf))
         } else {
             let raw = core::slice::from_raw_parts(p, varatt::varsize_any(p));
             let scratch = mcx::MemoryContext::new("gbt ssup detoast");
-            let flat = detoast::detoast_attr(scratch.mcx(), raw)?.to_vec();
+            let flat = ::mcx::std_vec_from_slice("btree_gist", &detoast::detoast_attr(scratch.mcx(), raw)?)?;
             let _ = mcx;
             Ok(Cow::Owned(flat))
         }
@@ -1176,16 +1176,16 @@ impl VarProc for NumericV {
 }
 
 // gbt_bit_xfrm: bit payload bytes as an INTALIGN-padded bytea image.
-fn bit_xfrm(leaf: &[u8]) -> Vec<u8> {
+fn bit_xfrm(leaf: &[u8]) -> PgResult<Vec<u8>> {
     // leaf = full varbit image: [4B varlena hdr | 4B bit count | bit bytes].
     let bitbytes = var::varsize(leaf) - VARHDRSZ - 4;
     let sz = bitbytes + VARHDRSZ;
     let padded = (sz + 3) & !3;
-    let mut out = vec![0u8; padded];
+    let mut out = ::mcx::std_vec_from_elem("btree_gist", 0u8, padded)?;
     var::set_varsize(&mut out, padded);
     out[VARHDRSZ..VARHDRSZ + bitbytes]
         .copy_from_slice(&leaf[VARHDRSZ + 4..VARHDRSZ + 4 + bitbytes]);
-    out
+    Ok(out)
 }
 
 struct BitV;
@@ -1201,8 +1201,8 @@ impl VarOps for BitV {
     fn eq(a: &[u8], b: &[u8], _: &mut Ctx) -> PgResult<bool> {
         Ok(a[VARHDRSZ..] == b[VARHDRSZ..])
     }
-    fn l2n(leaf: &[u8]) -> Option<Vec<u8>> {
-        Some(bit_xfrm(leaf))
+    fn l2n(leaf: &[u8]) -> PgResult<Option<Vec<u8>>> {
+        Ok(Some(bit_xfrm(leaf)?))
     }
 }
 impl VarProc for BitV {
@@ -1212,8 +1212,8 @@ impl VarProc for BitV {
         let (a, b) = (ssup_lower(&ai), ssup_lower(&bi));
         Ok(adt_varbit::bit_cmp_payload(&a[VARHDRSZ..], &b[VARHDRSZ..]))
     }
-    fn query_for_node(q: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-        std::borrow::Cow::Owned(bit_xfrm(q))
+    fn query_for_node(q: &[u8]) -> PgResult<std::borrow::Cow<'_, [u8]>> {
+        Ok(std::borrow::Cow::Owned(bit_xfrm(q)?))
     }
 }
 
@@ -1230,7 +1230,7 @@ fn var_compress<T: VarProc>(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
     // SAFETY: the armed result mcx outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
     let leaf = detoasted_image(mcx, entry.key)?;
-    let img = var::key_from_datum(leaf);
+    let img = var::key_from_datum(leaf)?;
     let key = image_result(fcinfo, &img)?;
     entry_result(fcinfo, &GISTENTRY::init(key, entry.offset, true, entry.page_is_leaf))
 }
@@ -1249,7 +1249,7 @@ fn var_consistent<T: VarProc>(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
     let r = if entry.page_is_leaf {
         var::consistent::<T>(&key, query, strategy, true, &mut c)?
     } else {
-        let q = T::query_for_node(query);
+        let q = T::query_for_node(query)?;
         var::consistent::<T>(&key, &q, strategy, false, &mut c)?
     };
     Ok(Datum::from_bool(r))
@@ -1299,7 +1299,7 @@ fn var_picksplit<T: VarProc>(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
     let entryvec = unsafe { &*(fcinfo.arg(0).as_usize() as *const GistEntryVector) };
     let v = unsafe { &mut *(fcinfo.arg(1).as_usize() as *mut GistSplitVec) };
     let maxoff = (entryvec.n - 1) as usize;
-    let mut keys: Vec<&[u8]> = Vec::with_capacity(maxoff + 1);
+    let mut keys: Vec<&[u8]> = ::mcx::std_vec_with_capacity("btree_gist", maxoff + 1)?;
     keys.push(&[]);
     for e in &entryvec.vector[1..=maxoff] {
         keys.push(var_key(e.key));
@@ -1331,7 +1331,7 @@ fn fc_gbt_numeric_penalty(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
     let mut c = ctx(f, fcinfo);
 
     let rk = var::key_readable(org);
-    let mut uni = Some(var::key_copy(rk.lower, rk.upper));
+    let mut uni = Some(var::key_copy(rk.lower, rk.upper)?);
     var::bin_union::<NumericV>(&mut uni, newe, &mut c)?;
     let uni = uni.expect("union set");
     let ok = var::key_readable(org);

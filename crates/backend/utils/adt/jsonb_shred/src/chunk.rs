@@ -20,10 +20,11 @@ pub struct Bitmap {
 
 impl Bitmap {
     pub fn new(nbits: u32) -> Bitmap {
-        Bitmap {
-            nbits,
-            words: vec![0; nbits.div_ceil(64) as usize],
-        }
+        let nwords = nbits.div_ceil(64) as usize;
+        let mut words = Vec::new();
+        let _ = words.try_reserve_exact(nwords);
+        words.resize(nwords, 0);
+        Bitmap { nbits, words }
     }
 
     pub fn len(&self) -> u32 {

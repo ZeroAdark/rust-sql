@@ -1,0 +1,43 @@
+[package]
+name = "tpde_util"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+autotests = false
+
+[dependencies]
+mcx = { path = "../../_support/mcx" }
+types_error = { path = "../../_support/types/types_error" }
+
+[features]
+upstream-oracle = []
+checked = []
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "bitset"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "function_ref"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "asan"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "small_vector"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "bump_allocator"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "segmented_vector"
+required-features = ["upstream-oracle"]

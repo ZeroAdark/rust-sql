@@ -6,6 +6,8 @@
 //! server (`psql -f script.sql | head -1`: the later statement must not run),
 //! is gate/sigpipe-gate.sh.
 
+#![cfg(unix)]
+
 use std::os::unix::io::FromRawFd;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};

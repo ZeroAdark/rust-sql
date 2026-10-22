@@ -1,0 +1,13 @@
+-- regress-full-subselect-002
+-- EXPLAIN (COSTS OFF) SELECT unique1, stringu1 FROM onek WHERE stringu1::name IN (VALUES('RFAAAA'), ('VJAAAA'));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@0
+  source bitmap rel=16417 rti=1 am=heap
+    bitmap index node=1 index=19338 rows=3
+      key att=14 op=254 form=any value=c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00(\x00\x00\x00RFAAAA\x00\x00(\x00\x00\x00VJAAAA\x00\x00'
+    recheck (any254(v1.14, c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00(\x00\x00\x00RFAAAA\x00\x00(\x00\x00\x00VJAAAA\x00\x00'))
+    lanes Attr(1):byval8:w8:val Attr(14):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.14)
+  outs 1=w8:val 2=fx64:win/page
+mapped: BitmapIndexScan BitmapHeapScan

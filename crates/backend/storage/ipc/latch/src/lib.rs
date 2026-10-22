@@ -291,7 +291,13 @@ pub fn WaitLatch(
     if report {
         waitevent_seams::pgstat_report_wait_start::call(wait_event_info);
     }
+    // D3962: a wait on MyLatch with interrupts processable is no gap for Gravity's poll-gap probe: the cancel's signal sets
+    // the latch and the caller polls at the wake (ProcSleep's lock waits)
+    let polled = cancelpoll::probe_on() && latch.is_some() && latch == MyLatch() && interrupts_processable();
+    // a direct call, not `polled.then(cancelpoll::waiting)`: `waiting` is #[track_caller], so the probe line names this site
+    let wait = if polled { Some(cancelpoll::waiting()) } else { None };
     let res = wait_latch_on_waiter(latch, timeout);
+    drop(wait);
     if report {
         waitevent_seams::pgstat_report_wait_end::call();
     }
@@ -299,6 +305,11 @@ pub fn WaitLatch(
     drain_timeout_interrupt();
     drain_thread_signals()?;
     Ok(res)
+}
+
+/// C's INTERRUPTS_CAN_BE_PROCESSED: a cancel that wakes the wait is processed at the caller's CHECK_FOR_INTERRUPTS.
+fn interrupts_processable() -> bool {
+    init_small::globals::InterruptHoldoffCount() == 0 && init_small::globals::QueryCancelHoldoffCount() == 0 && init_small::globals::CritSectionCount() == 0
 }
 
 fn wait_latch_on_waiter(latch: Option<LatchHandle>, timeout: Option<i64>) -> u32 {
@@ -321,6 +332,7 @@ fn wait_latch_on_waiter(latch: Option<LatchHandle>, timeout: Option<i64>) -> u32
         }
         let Some(l) = l else {
             // No latch to wake us: a pure timed sleep (C: epoll on nothing).
+            memledger::park_fold();
             match remaining {
                 Some(r) => {
                     waiter::sleep(core::time::Duration::from_millis(r as u64));
@@ -341,7 +353,12 @@ fn wait_latch_on_waiter(latch: Option<LatchHandle>, timeout: Option<i64>) -> u32
             l.set_maybe_sleeping(false);
             return WL_LATCH_SET;
         }
+        // D4781 (`fold_on_park`): the thread parks until the latch is set or the timeout
+        memledger::park_fold();
         let _ = match remaining {
+            #[cfg(target_family = "wasm")]
+            Some(r) => park_until_due(r),
+            #[cfg(not(target_family = "wasm"))]
             Some(r) => waiter::park_timeout(core::time::Duration::from_millis(r as u64)),
             None => waiter::park(),
         };
@@ -354,6 +371,25 @@ fn wait_latch_on_waiter(latch: Option<LatchHandle>, timeout: Option<i64>) -> u32
 // The thread model's SIGALRM delivery point: C's handler interrupts the sleep
 // itself; here the timeout timer thread posts + SetLatches, and the woken
 // backend fires its timeout handlers before returning (notes/timeout-threads.md).
+/// wasm32: no timer thread can set the latch at an armed timeout (the timeout crate's wasm note), so a timed park lasts
+/// `DUE_SLICE_MS` at most, and then fires an expired abort-class deadline itself; its post sets this latch, which the
+/// wait loop re-tests (pg_sleep then raises the timeout at its CHECK_FOR_INTERRUPTS).
+#[cfg(target_family = "wasm")]
+fn park_until_due(remaining_ms: i64) -> waiter::ParkResult {
+    const DUE_SLICE_MS: i64 = 10;
+    let parked = waiter::park_timeout(core::time::Duration::from_millis(remaining_ms.min(DUE_SLICE_MS) as u64));
+    if timeout_seams::fire_due::is_installed() {
+        timeout_seams::fire_due::call();
+    }
+    // the embedder's cancel sets the backend's latch, as a SIGINT's delivery does
+    if init_small::globals::PollHostCancel() {
+        if let Some(l) = init_small::globals::MyLatch() {
+            SetLatch(l);
+        }
+    }
+    parked
+}
+
 fn drain_timeout_interrupt() {
     if timeout_seams::process_timeout_interrupt::is_installed() {
         timeout_seams::process_timeout_interrupt::call();

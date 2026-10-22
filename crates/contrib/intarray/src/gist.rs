@@ -32,7 +32,7 @@ fn get_num_ranges(f: &Option<&mut FmgrInfo>) -> i32 {
 fn same_core(a: &IntArray, b: &IntArray) -> PgResult<bool> {
     a.check_valid()?;
     b.check_valid()?;
-    if a.nelems() != b.nelems() {
+    if a.nelems()? != b.nelems()? {
         return Ok(false);
     }
     Ok(a.elems() == b.elems())
@@ -52,17 +52,17 @@ pub(crate) fn fc_g_int_consistent(
     // SAFETY: the armed result mcx outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
     let query_img = detoasted_image(mcx, fcinfo.arg(1))?;
-    let key = IntArray::from_image(crate::key_image(entry.key));
+    let key = IntArray::from_image(crate::key_image(entry.key))?;
 
     if strategy == BOOLEAN_SEARCH_STRATEGY {
-        let items = boolquery::parse_items(query_img);
+        let items = boolquery::parse_items(query_img)?;
         let retval = boolquery::execconsistent(&items, &key, entry.page_is_leaf)?;
         return Ok(Datum::from_bool(retval));
     }
 
-    let mut query = IntArray::from_image(query_img);
+    let mut query = IntArray::from_image(query_img)?;
     query.check_valid()?;
-    query.prepare();
+    query.prepare()?;
 
     let retval = match strategy {
         RT_OVERLAP => inner_int_overlap(key.elems(), query.elems()),
@@ -94,22 +94,22 @@ pub(crate) fn fc_g_int_union(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
     // SAFETY: gist fmgr protocol.
     let entryvec = unsafe { &*(fcinfo.arg(0).as_usize() as *const GistEntryVector) };
     let mut totlen = 0usize;
-    let mut ents: Vec<IntArray> = Vec::with_capacity(entryvec.n as usize);
+    let mut ents: Vec<IntArray> = ::mcx::std_vec_with_capacity("intarray", entryvec.n as usize)?;
     for e in &entryvec.vector[..entryvec.n as usize] {
-        let ent = IntArray::from_image(crate::key_image(e.key));
+        let ent = IntArray::from_image(crate::key_image(e.key))?;
         ent.check_valid()?;
-        totlen += ent.nelems();
+        totlen += ent.nelems()?;
         ents.push(ent);
     }
-    let mut res = IntArray::new(totlen);
+    let mut res = IntArray::try_new(totlen)?;
     let mut off = 0usize;
     for ent in &ents {
-        let nel = ent.nelems();
+        let nel = ent.nelems()?;
         res.elems_mut()[off..off + nel].copy_from_slice(ent.elems());
         off += nel;
     }
-    res.sort(true);
-    res.unique();
+    res.sort(true)?;
+    res.unique()?;
     let size_out = fcinfo.arg(1).as_usize() as *mut i32;
     // SAFETY: size out-param live in the caller frame.
     unsafe { *size_out = res.as_bytes().len() as i32 };
@@ -124,14 +124,14 @@ pub(crate) fn fc_g_int_compress(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -
     let mcx = unsafe { fcinfo.result_mcx_detached() };
 
     if entry.leafkey {
-        let mut r = IntArray::from_image(detoasted_image(mcx, entry.key)?);
+        let mut r = IntArray::from_image(detoasted_image(mcx, entry.key)?)?;
         r.check_valid()?;
-        r.prepare();
-        if r.nelems() as i64 >= 2 * num_ranges as i64 {
+        r.prepare()?;
+        if r.nelems()? as i64 >= 2 * num_ranges as i64 {
             return Err(PgError::error(format!(
                 "input array is too big ({} maximum allowed, {} current), use gist__intbig_ops opclass instead",
                 2 * num_ranges - 1,
-                r.nelems()
+                r.nelems()?
             ))
             .with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED)
             .into());
@@ -142,14 +142,14 @@ pub(crate) fn fc_g_int_compress(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -
     }
 
     let img = detoasted_image(mcx, entry.key)?;
-    let mut r = IntArray::from_image(img);
+    let mut r = IntArray::from_image(img)?;
     r.check_valid()?;
-    if r.is_empty() {
+    if r.is_empty()? {
         return Ok(fcinfo.arg(0));
     }
-    let len = r.nelems() as i32;
+    let len = r.nelems()? as i32;
     if len as i64 >= 2 * num_ranges as i64 {
-        r.resize(2 * len as usize);
+        r.resize(2 * len as usize)?;
         let dr = r.elems_mut();
         // lenr = ranges we may remove by merging consecutive ints.
         let mut lenr = len - num_ranges;
@@ -203,7 +203,7 @@ pub(crate) fn fc_g_int_compress(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -
             .with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED)
             .into());
         }
-        r.resize(len as usize);
+        r.resize(len as usize)?;
         let key = image_result(fcinfo, r.as_bytes())?;
         let retval = GISTENTRY::init(key, entry.offset, false, entry.page_is_leaf);
         return entry_result(fcinfo, &retval);
@@ -222,7 +222,7 @@ pub(crate) fn fc_g_int_decompress(
     // SAFETY: the armed result mcx outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
     let img = detoasted_image(mcx, entry.key)?;
-    let input = IntArray::from_image(img);
+    let input = IntArray::from_image(img)?;
     input.check_valid()?;
 
     let rebuild_with = |fcinfo: &Fcinfo, bytes: &[u8]| -> PgResult<Datum> {
@@ -231,10 +231,10 @@ pub(crate) fn fc_g_int_decompress(
         entry_result(fcinfo, &retval)
     };
 
-    if input.is_empty() {
+    if input.is_empty()? {
         return if was_plain { Ok(fcinfo.arg(0)) } else { rebuild_with(fcinfo, input.as_bytes()) };
     }
-    let lenin = input.nelems() as i32;
+    let lenin = input.nelems()? as i32;
     if (lenin as i64) < 2 * num_ranges as i64 {
         return if was_plain { Ok(fcinfo.arg(0)) } else { rebuild_with(fcinfo, input.as_bytes()) };
     }
@@ -249,7 +249,7 @@ pub(crate) fn fc_g_int_decompress(
         .into());
     }
 
-    let mut r = IntArray::new(lenr as usize);
+    let mut r = IntArray::try_new(lenr as usize)?;
     {
         let dr = r.elems_mut();
         let mut w = 0usize;
@@ -280,19 +280,19 @@ pub(crate) fn fc_g_int_penalty(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
     // SAFETY: gist fmgr protocol.
     let origentry = unsafe { entry_arg(fcinfo, 0) };
     let newentry = unsafe { entry_arg(fcinfo, 1) };
-    let orig = IntArray::from_image(crate::key_image(origentry.key));
-    let newk = IntArray::from_image(crate::key_image(newentry.key));
+    let orig = IntArray::from_image(crate::key_image(origentry.key))?;
+    let newk = IntArray::from_image(crate::key_image(newentry.key))?;
     let ud = inner_int_union(&orig, &newk)?;
     let result = fcinfo.arg(2).as_usize() as *mut f32;
     // SAFETY: penalty out-param live in the caller frame.
-    unsafe { *result = ud.nelems() as f32 - orig.nelems() as f32 };
+    unsafe { *result = ud.nelems()? as f32 - orig.nelems()? as f32 };
     Ok(fcinfo.arg(2))
 }
 
 pub(crate) fn fc_g_int_same(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let _ = f;
-    let a = IntArray::from_image(crate::key_image(fcinfo.arg(0)));
-    let b = IntArray::from_image(crate::key_image(fcinfo.arg(1)));
+    let a = IntArray::from_image(crate::key_image(fcinfo.arg(0)))?;
+    let b = IntArray::from_image(crate::key_image(fcinfo.arg(1)))?;
     let result = fcinfo.arg(2).as_usize() as *mut bool;
     // SAFETY: result out-param live in the caller frame.
     unsafe { *result = same_core(&a, &b)? };
@@ -313,18 +313,20 @@ pub(crate) fn fc_g_int_picksplit(
     let entryvec = unsafe { &*(fcinfo.arg(0).as_usize() as *const GistEntryVector) };
     let v = unsafe { &mut *(fcinfo.arg(1).as_usize() as *mut GistSplitVec) };
 
-    let key = |i: usize| IntArray::from_image(crate::key_image(entryvec.vector[i].key));
+    let key = |i: usize| -> PgResult<IntArray> {
+        IntArray::from_image(crate::key_image(entryvec.vector[i].key))
+    };
 
     let seed_maxoff = (entryvec.n - 2) as usize;
     let mut firsttime = true;
     let mut waste: f32 = 0.0;
     let (mut seed_1, mut seed_2) = (0usize, 0usize);
     for i in 1..seed_maxoff {
-        let datum_alpha = key(i);
+        let datum_alpha = key(i)?;
         for j in i + 1..=seed_maxoff {
-            let datum_beta = key(j);
-            let size_union = inner_int_union(&datum_alpha, &datum_beta)?.nelems() as f32;
-            let size_inter = crate::tool::inner_int_inter(&datum_alpha, &datum_beta).nelems() as f32;
+            let datum_beta = key(j)?;
+            let size_union = inner_int_union(&datum_alpha, &datum_beta)?.nelems()? as f32;
+            let size_inter = crate::tool::inner_int_inter(&datum_alpha, &datum_beta)?.nelems()? as f32;
             let size_waste = size_union - size_inter;
             if size_waste > waste || firsttime {
                 waste = size_waste;
@@ -340,10 +342,10 @@ pub(crate) fn fc_g_int_picksplit(
         seed_2 = 2;
     }
 
-    let mut datum_l = key(seed_1).copy_flat();
-    let mut size_l = datum_l.nelems() as f32;
-    let mut datum_r = key(seed_2).copy_flat();
-    let mut size_r = datum_r.nelems() as f32;
+    let mut datum_l = key(seed_1)?.copy_flat()?;
+    let mut size_l = datum_l.nelems()? as f32;
+    let mut datum_r = key(seed_2)?.copy_flat()?;
+    let mut size_r = datum_r.nelems()? as f32;
 
     let maxoff = (entryvec.n - 1) as usize;
     #[derive(Clone, Copy)]
@@ -351,11 +353,11 @@ pub(crate) fn fc_g_int_picksplit(
         pos: usize,
         cost: f32,
     }
-    let mut costvector: Vec<SplitCost> = Vec::with_capacity(maxoff);
+    let mut costvector: Vec<SplitCost> = ::mcx::std_vec_with_capacity("intarray", maxoff)?;
     for i in 1..=maxoff {
-        let datum_alpha = key(i);
-        let size_alpha = inner_int_union(&datum_l, &datum_alpha)?.nelems() as f32;
-        let size_beta = inner_int_union(&datum_r, &datum_alpha)?.nelems() as f32;
+        let datum_alpha = key(i)?;
+        let size_alpha = inner_int_union(&datum_l, &datum_alpha)?.nelems()? as f32;
+        let size_beta = inner_int_union(&datum_r, &datum_alpha)?.nelems()? as f32;
         costvector.push(SplitCost {
             pos: i,
             cost: ((size_alpha - size_l) - (size_beta - size_r)).abs(),
@@ -373,8 +375,8 @@ pub(crate) fn fc_g_int_picksplit(
         }
     });
 
-    let mut spl_left: Vec<u16> = Vec::with_capacity(maxoff + 1);
-    let mut spl_right: Vec<u16> = Vec::with_capacity(maxoff + 1);
+    let mut spl_left: Vec<u16> = ::mcx::std_vec_with_capacity("intarray", maxoff + 1)?;
+    let mut spl_right: Vec<u16> = ::mcx::std_vec_with_capacity("intarray", maxoff + 1)?;
     for sc in &costvector {
         let i = sc.pos;
         if i == seed_1 {
@@ -385,11 +387,11 @@ pub(crate) fn fc_g_int_picksplit(
             spl_right.push(i as u16);
             continue;
         }
-        let datum_alpha = key(i);
+        let datum_alpha = key(i)?;
         let union_dl = inner_int_union(&datum_l, &datum_alpha)?;
         let union_dr = inner_int_union(&datum_r, &datum_alpha)?;
-        let size_alpha = union_dl.nelems() as f32;
-        let size_beta = union_dr.nelems() as f32;
+        let size_alpha = union_dl.nelems()? as f32;
+        let size_beta = union_dr.nelems()? as f32;
 
         if f64::from(size_alpha - size_l)
             < f64::from(size_beta - size_r)

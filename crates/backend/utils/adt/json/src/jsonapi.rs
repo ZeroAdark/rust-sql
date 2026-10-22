@@ -9,7 +9,7 @@
 
 pub mod incremental;
 
-use stack_depth::check_stack_depth;
+use stack_depth::check_stack_depth_weighted;
 use types_error::PgResult;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -519,11 +519,20 @@ pub(crate) fn errdetail_for(
 }
 
 fn errdetail_for_bytes(error: JsonError, token: &[u8], byte_at_terminator: Option<u8>) -> Vec<u8> {
+    // C's %.*s stops at the first NUL of the token (jsonapi.c json_token_error).
+    let token = &token[..token.iter().position(|&b| b == 0).unwrap_or(token.len())];
     let quoted = |prefix: &str, suffix: &str| {
-        let mut out = Vec::with_capacity(prefix.len() + token.len() + suffix.len());
+        let mut out = Vec::new();
+        let _ = out.try_reserve_exact(prefix.len() + token.len() + suffix.len());
         out.extend_from_slice(prefix.as_bytes());
         out.extend_from_slice(token);
         out.extend_from_slice(suffix.as_bytes());
+        out
+    };
+    let lit = |b: &[u8]| {
+        let mut out = Vec::new();
+        let _ = out.try_reserve_exact(b.len());
+        out.extend_from_slice(b);
         out
     };
     match error {
@@ -540,22 +549,22 @@ fn errdetail_for_bytes(error: JsonError, token: &[u8], byte_at_terminator: Optio
         JsonError::ExpectedArrayNext => quoted("Expected \",\" or \"]\", but found \"", "\"."),
         JsonError::ExpectedColon => quoted("Expected \":\", but found \"", "\"."),
         JsonError::ExpectedJson => quoted("Expected JSON value, but found \"", "\"."),
-        JsonError::ExpectedMore => b"The input string ended unexpectedly.".to_vec(),
+        JsonError::ExpectedMore => lit(b"The input string ended unexpectedly."),
         JsonError::ExpectedObjectFirst => {
             quoted("Expected string or \"}\", but found \"", "\".")
         }
         JsonError::ExpectedObjectNext => quoted("Expected \",\" or \"}\", but found \"", "\"."),
         JsonError::ExpectedString => quoted("Expected string, but found \"", "\"."),
         JsonError::InvalidToken => quoted("Token \"", "\" is invalid."),
-        JsonError::UnicodeCodePointZero => b"\\u0000 cannot be converted to text.".to_vec(),
+        JsonError::UnicodeCodePointZero => lit(b"\\u0000 cannot be converted to text."),
         JsonError::UnicodeEscapeFormat => {
-            b"\"\\u\" must be followed by four hexadecimal digits.".to_vec()
+            lit(b"\"\\u\" must be followed by four hexadecimal digits.")
         }
         JsonError::UnicodeHighSurrogate => {
-            b"Unicode high surrogate must not follow a high surrogate.".to_vec()
+            lit(b"Unicode high surrogate must not follow a high surrogate.")
         }
         JsonError::UnicodeLowSurrogate => {
-            b"Unicode low surrogate must follow a high surrogate.".to_vec()
+            lit(b"Unicode low surrogate must follow a high surrogate.")
         }
         JsonError::UnicodeUntranslatable => format!(
             "Unicode escape value could not be translated to the server's encoding {}.",
@@ -563,11 +572,11 @@ fn errdetail_for_bytes(error: JsonError, token: &[u8], byte_at_terminator: Optio
         )
         .into_bytes(),
         JsonError::NestingTooDeep => {
-            b"JSON nested too deep, maximum permitted depth is 6400.".to_vec()
+            lit(b"JSON nested too deep, maximum permitted depth is 6400.")
         }
         // C: JSON_INCOMPLETE falls through the switch to the "unexpected
         // json parse error type: %d" fallback (JsonParseErrorType value 1).
-        JsonError::Incomplete => b"unexpected json parse error type: 1".to_vec(),
+        JsonError::Incomplete => lit(b"unexpected json parse error type: 1"),
         JsonError::SemActionFailed | JsonError::Success => Vec::new(),
     }
 }
@@ -619,7 +628,8 @@ fn parse_object_field(lex: &mut JsonLex<'_>) -> PgResult<JsonError> {
 }
 
 fn parse_object(lex: &mut JsonLex<'_>) -> PgResult<JsonError> {
-    check_stack_depth()?;
+    // D3103: native-heavy on wasm32 (~6 engine bytes per shadow byte), so it charges the weighted depth.
+    check_stack_depth_weighted()?;
 
     let r = lex.lex();
     if r != JsonError::Success {
@@ -658,7 +668,8 @@ fn parse_array_element(lex: &mut JsonLex<'_>) -> PgResult<JsonError> {
 }
 
 fn parse_array(lex: &mut JsonLex<'_>) -> PgResult<JsonError> {
-    check_stack_depth()?;
+    // D3103: native-heavy on wasm32 (~6 engine bytes per shadow byte), so it charges the weighted depth.
+    check_stack_depth_weighted()?;
 
     let mut result = lex.lex_expect(ParseCtx::ArrayStart, JsonToken::ArrayStart);
     if result == JsonError::Success && lex.token_type != JsonToken::ArrayEnd {
@@ -879,7 +890,7 @@ impl<'src, 'mcx> JsonLexDe<'src, 'mcx> {
                     // Backend lexers carry GetDatabaseEncoding(); a frontend
                     // caller (parse_manifest) names UTF8 (jsonapi.c:2136).
                     if ch <= 0x7F {
-                        self.strval.push(ch as u8);
+                        mcx::vec_append_bytes(&mut self.strval, &[ch as u8])?;
                     } else if self.lex.encoding == wchar::PG_UTF8 {
                         let mut buf = [0u8; 4];
                         wchar::unicode_to_utf8(ch, &mut buf);
@@ -903,18 +914,20 @@ impl<'src, 'mcx> JsonLexDe<'src, 'mcx> {
                             .lex
                             .fail_at_char_end(s, JsonError::UnicodeLowSurrogate));
                     }
-                    match input[s] {
-                        c @ (b'"' | b'\\' | b'/') => self.strval.push(c),
-                        b'b' => self.strval.push(0x08),
-                        b'f' => self.strval.push(0x0c),
-                        b'n' => self.strval.push(b'\n'),
-                        b'r' => self.strval.push(b'\r'),
-                        b't' => self.strval.push(b'\t'),
+                    // appendStringInfoChar (jsonapi.c:2176): growth clamps at MaxAllocSize.
+                    let esc = match input[s] {
+                        c @ (b'"' | b'\\' | b'/') => c,
+                        b'b' => 0x08,
+                        b'f' => 0x0c,
+                        b'n' => b'\n',
+                        b'r' => b'\r',
+                        b't' => b'\t',
                         _ => {
                             self.lex.token_start = Some(s);
                             return Ok(self.lex.fail_at_char_end(s, JsonError::EscapingInvalid));
                         }
-                    }
+                    };
+                    mcx::vec_append_bytes(&mut self.strval, &[esc])?;
                 }
             } else {
                 if hi_surrogate != -1 {
@@ -1048,7 +1061,8 @@ fn parse_object_sem<'mcx>(
     lex: &mut JsonLexDe<'_, 'mcx>,
     sem: &mut impl JsonSem<'mcx>,
 ) -> PgResult<JsonError> {
-    check_stack_depth()?;
+    // D3103: native-heavy on wasm32 (~6 engine bytes per shadow byte), so it charges the weighted depth.
+    check_stack_depth_weighted()?;
 
     if !sem.object_start(&lex.lex)? {
         return Ok(JsonError::SemActionFailed);
@@ -1117,7 +1131,8 @@ fn parse_array_sem<'mcx>(
     lex: &mut JsonLexDe<'_, 'mcx>,
     sem: &mut impl JsonSem<'mcx>,
 ) -> PgResult<JsonError> {
-    check_stack_depth()?;
+    // D3103: native-heavy on wasm32 (~6 engine bytes per shadow byte), so it charges the weighted depth.
+    check_stack_depth_weighted()?;
 
     if !sem.array_start(&lex.lex)? {
         return Ok(JsonError::SemActionFailed);

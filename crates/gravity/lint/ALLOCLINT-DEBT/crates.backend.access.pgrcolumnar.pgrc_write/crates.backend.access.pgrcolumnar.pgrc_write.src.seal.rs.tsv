@@ -1,0 +1,24 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/seal.rs
+growth	pgrc_format::verbatim::encode_validity_bitmap	1
+growth	pgrc_format::wire::pad_to	12
+growth	std::iter::Extend::extend	10
+growth	std::vec::Vec::append	1
+growth	std::vec::Vec::extend_from_slice	15
+growth	std::vec::Vec::push	48
+growth	std::vec::Vec::resize	2
+growth	std::vec::Vec::try_reserve	1
+growth	std::vec::Vec::try_reserve_exact	1
+macro	std::format	3
+macro	std::vec	5
+method	pgrc_format::try_to_vec	7
+method	pgrc_format::try_vec	1
+method	slice::sort_by	1
+method	slice::sort_by_key	3
+method	slice::to_vec	1
+method	std::boxed::Box::new	6
+method	std::clone::Clone::clone	30
+method	std::iter::Iterator::collect	43
+method	std::vec::Vec::with_capacity	13
+type	std::boxed::Box	6
+type	std::string::String	1
+type	std::vec::Vec	44

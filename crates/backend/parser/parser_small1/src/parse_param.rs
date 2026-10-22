@@ -101,15 +101,18 @@ pub struct PlpgsqlHookState<'p> {
     /// Function argument dnos in signature order: `$n` resolves through
     /// slot n-1 only (C's ns holds just parameter names, pl_comp.c:1062).
     pub arg_dnos: &'p [i32],
-    /// Record/row variable names (incl. label-qualified) for the
+    /// Record/row lookup keys paired with declared names for the
     /// "record has no field" error arm of resolve_column_ref.
-    pub recs: &'p [&'p str],
+    pub recs: &'p [(&'p str, &'p str)],
     /// Valueless RECORD-typed recs: any field reference is 55000 at parse
     /// (C make_datum_param -> exec_get_datum_type_info -> instantiate).
     /// Paired with the `names` length when the binding was met: a
     /// label-qualified match pushed before it belongs to a nearer namespace
     /// level and wins (pl_funcs.c:156 plpgsql_ns_lookup walks level by level).
     pub valueless_recs: &'p [(usize, &'p str)],
+    /// Keys of the RECFIELD datums the PL/pgSQL scanner built; it builds none
+    /// for a field spelled as a reserved PL/pgSQL keyword (`r.end`).
+    pub recfields: &'p [&'p str],
     pub resolve_option: PlpgsqlResolveOption,
     /// Out-param: dnos the analysis referenced (C expr->paramnos).
     pub used: &'p RefCell<Vec<i32>>,
@@ -377,29 +380,36 @@ pub fn plpgsql_paramref_hook<'mcx>(
 /// make_datum_param's type lookup raises 42703 (pl_exec.c:5496-5499).
 pub fn plpgsql_resolve_column_ref<'mcx>(
     mcx: Mcx<'mcx>,
-    _pstate: &ParseState<'_, 'mcx>,
+    pstate: &ParseState<'_, 'mcx>,
     parstate: &PlpgsqlHookState<'_>,
     fields: &[&str],
     location: i32,
-    _error_if_no_field: bool,
-    _encoding: pg_enc,
+    error_if_no_field: bool,
+    encoding: pg_enc,
 ) -> PgResult<Option<Node<'mcx>>> {
     if fields.is_empty() || fields.len() > 3 {
         return Ok(None);
     }
     let key = fields.join("\0");
     let found = parstate.names.iter().position(|e| e.key == key);
+    let field_ref = fields.len() >= 2 && fields[fields.len() - 1] != WHOLE_ROW_FIELD;
+    let has_recfield = field_ref && parstate.recfields.contains(&key.as_str());
     // A whole-row reference reports the record's declared type instead
     // (pl_exec.c exec_get_datum_type_info, REC arm); the 55000 waits for the
     // execution-time fetch.
-    if fields.len() >= 2 && fields[fields.len() - 1] != WHOLE_ROW_FIELD {
+    if has_recfield {
         let prefix = fields[..fields.len() - 1].join("\0");
         if parstate
             .valueless_recs
             .iter()
             .any(|(rank, r)| *r == prefix && found.is_none_or(|pos| *rank <= pos))
         {
-            let recname = fields[fields.len() - 2];
+            // C names the rec's declared refname, not an ALIAS as written.
+            let recname = parstate
+                .recs
+                .iter()
+                .find(|(key, _)| *key == prefix)
+                .map_or(fields[fields.len() - 2], |(_, refname)| *refname);
             // C's error comes from exec_get_datum_type_info (no cursor);
             // the SPI callback then supplies the statement context line.
             return Err(Box::new(
@@ -426,26 +436,36 @@ pub fn plpgsql_resolve_column_ref<'mcx>(
             },
         )?));
     }
-    if fields.len() >= 2 && fields[fields.len() - 1] != WHOLE_ROW_FIELD {
-        // C reports against the last-1 prefix that named a rec/row.
+    if field_ref {
         let prefix = fields[..fields.len() - 1].join("\0");
-        if parstate.recs.iter().any(|r| *r == prefix) {
-            let recname = fields[fields.len() - 2];
+        if let Some((_, refname)) = parstate.recs.iter().find(|(key, _)| *key == prefix) {
             let field = fields[fields.len() - 1];
-            // No errposition: C's reachable error for a field the record's
-            // current tuple lacks is exec_get_datum_type_info's RECFIELD arm
-            // (pl_exec.c:5496-5499, no cursor; the SPI callback supplies the
-            // statement context). resolve_column_ref's own errposition arm
-            // (pl_comp.c:1219-1223) is "should not get here" defensive code.
-            return Err(Box::new(
-                ereport(ERROR)
-                    .errcode(types_error::ERRCODE_UNDEFINED_COLUMN)
-                    .errmsg(alloc::format!(
-                        "record \"{recname}\" has no field \"{field}\""
-                    ))
-                    .into_error()
-                    .with_error_location(loc("resolve_column_ref")),
-            ));
+            if has_recfield {
+                // The RECFIELD exists but the record's current tuple lacks
+                // the field: exec_get_datum_type_info's error, no cursor.
+                return Err(Box::new(
+                    ereport(ERROR)
+                        .errcode(types_error::ERRCODE_UNDEFINED_COLUMN)
+                        .errmsg(alloc::format!(
+                            "record \"{refname}\" has no field \"{field}\""
+                        ))
+                        .into_error()
+                        .with_error_location(loc("resolve_column_ref")),
+                ));
+            }
+            if error_if_no_field {
+                let recname = fields[fields.len() - 2];
+                return Err(Box::new(
+                    ereport(ERROR)
+                        .errcode(types_error::ERRCODE_UNDEFINED_COLUMN)
+                        .errmsg(alloc::format!(
+                            "record \"{recname}\" has no field \"{field}\""
+                        ))
+                        .errposition(parser_errposition(pstate, location, encoding))
+                        .into_error()
+                        .with_error_location(loc("resolve_column_ref")),
+                ));
+            }
         }
     }
     Ok(None)

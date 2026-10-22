@@ -1,0 +1,146 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s2c s1c
+step s2e: EXPLAIN (COSTS OFF) MERGE INTO uo_t s USING (SELECT 900010 AS id, date '2023-03-03' AS d UNION ALL SELECT 1, date '2022-12-08') v ON s.id = v.id AND s.d = v.d WHEN MATCHED THEN UPDATE SET qty = qty + 100, region = s.region || ' m' || v.id WHEN NOT MATCHED THEN INSERT (id, d, region) VALUES (v.id, v.d, 'ins' || v.id);
+QUERY PLAN                                                                      
+--------------------------------------------------------------------------------
+Merge on uo_t s                                                                 
+  Merge on uo_t1 s_1                                                            
+  Merge on uo_t2 s_2                                                            
+  ->  Nested Loop Left Join                                                     
+        ->  Append                                                              
+              ->  Result                                                        
+              ->  Result                                                        
+        ->  Append                                                              
+              ->  Index Scan using uo_t1_id_d_idx on uo_t1 s_1                  
+                    Index Cond: ((id = (900010)) AND (d = ('03-03-2023'::date)))
+              ->  Index Scan using uo_t2_id_d_idx on uo_t2 s_2                  
+                    Index Cond: ((id = (900010)) AND (d = ('03-03-2023'::date)))
+(12 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1u1 s2m s1c s2sel s2c
+step s1u1: UPDATE uo_t SET region = 'upd' WHERE id = 1;
+step s2m: MERGE INTO uo_t s USING (SELECT 900010 AS id, date '2023-03-03' AS d UNION ALL SELECT 1, date '2022-12-08') v ON s.id = v.id AND s.d = v.d WHEN MATCHED THEN UPDATE SET qty = qty + 100, region = s.region || ' m' || v.id WHEN NOT MATCHED THEN INSERT (id, d, region) VALUES (v.id, v.d, 'ins' || v.id); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, id, d, qty, region FROM uo_t WHERE id IN (1, 900010, 900011) ORDER BY id, d, qty NULLS FIRST, region;
+tableoid|    id|         d|qty|region    
+--------+------+----------+---+----------
+uo_t1   |     1|12-08-2022|   |ins1      
+uo_t1   |     1|12-08-2022|  5|upd       
+uo_t2   |900010|03-03-2023|107|r9 m900010
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1u9 s2m s1c s2sel s2c
+step s1u9: UPDATE uo_t SET region = 'upd' WHERE id = 900010;
+step s2m: MERGE INTO uo_t s USING (SELECT 900010 AS id, date '2023-03-03' AS d UNION ALL SELECT 1, date '2022-12-08') v ON s.id = v.id AND s.d = v.d WHEN MATCHED THEN UPDATE SET qty = qty + 100, region = s.region || ' m' || v.id WHEN NOT MATCHED THEN INSERT (id, d, region) VALUES (v.id, v.d, 'ins' || v.id); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, id, d, qty, region FROM uo_t WHERE id IN (1, 900010, 900011) ORDER BY id, d, qty NULLS FIRST, region;
+tableoid|    id|         d|qty|region     
+--------+------+----------+---+-----------
+uo_t1   |     1|12-08-2022|105|r1 m1      
+uo_t2   |900010|03-03-2023|107|upd m900010
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1d1 s2m s1c s2sel s2c
+step s1d1: DELETE FROM uo_t WHERE id = 1;
+step s2m: MERGE INTO uo_t s USING (SELECT 900010 AS id, date '2023-03-03' AS d UNION ALL SELECT 1, date '2022-12-08') v ON s.id = v.id AND s.d = v.d WHEN MATCHED THEN UPDATE SET qty = qty + 100, region = s.region || ' m' || v.id WHEN NOT MATCHED THEN INSERT (id, d, region) VALUES (v.id, v.d, 'ins' || v.id); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, id, d, qty, region FROM uo_t WHERE id IN (1, 900010, 900011) ORDER BY id, d, qty NULLS FIRST, region;
+tableoid|    id|         d|qty|region    
+--------+------+----------+---+----------
+uo_t1   |     1|12-08-2022|   |ins1      
+uo_t2   |900010|03-03-2023|107|r9 m900010
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k1 s2k s1c s2sel s2c
+step s1k1: UPDATE uo_t SET id = 900011, d = '2022-12-09' WHERE id = 1;
+step s2k: MERGE INTO uo_t s USING (SELECT 900011 AS id, date '2022-12-09' AS d UNION ALL SELECT 1, date '2022-12-08') v ON s.id = v.id AND s.d = v.d WHEN MATCHED THEN UPDATE SET qty = qty + 100, region = s.region || ' m' || v.id WHEN NOT MATCHED THEN INSERT (id, d, region) VALUES (v.id, v.d, 'ins' || v.id); <waiting ...>
+step s1c: COMMIT;
+step s2k: <... completed>
+step s2sel: SELECT tableoid::regclass, id, d, qty, region FROM uo_t WHERE id IN (1, 900010, 900011) ORDER BY id, d, qty NULLS FIRST, region;
+tableoid|    id|         d|qty|region   
+--------+------+----------+---+---------
+uo_t2   |900010|03-03-2023|  7|r9       
+uo_t1   |900011|12-09-2022|   |ins900011
+uo_t1   |900011|12-09-2022|105|r1 m1    
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1mv s2m s1c s2sel s2c
+step s1mv: UPDATE uo_t SET d = '2023-05-05' WHERE id = 1;
+step s2m: MERGE INTO uo_t s USING (SELECT 900010 AS id, date '2023-03-03' AS d UNION ALL SELECT 1, date '2022-12-08') v ON s.id = v.id AND s.d = v.d WHEN MATCHED THEN UPDATE SET qty = qty + 100, region = s.region || ' m' || v.id WHEN NOT MATCHED THEN INSERT (id, d, region) VALUES (v.id, v.d, 'ins' || v.id); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2sel: SELECT tableoid::regclass, id, d, qty, region FROM uo_t WHERE id IN (1, 900010, 900011) ORDER BY id, d, qty NULLS FIRST, region;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2c: COMMIT;
+
+starting permutation: s1u1 s2m s1a s2sel s2c
+step s1u1: UPDATE uo_t SET region = 'upd' WHERE id = 1;
+step s2m: MERGE INTO uo_t s USING (SELECT 900010 AS id, date '2023-03-03' AS d UNION ALL SELECT 1, date '2022-12-08') v ON s.id = v.id AND s.d = v.d WHEN MATCHED THEN UPDATE SET qty = qty + 100, region = s.region || ' m' || v.id WHEN NOT MATCHED THEN INSERT (id, d, region) VALUES (v.id, v.d, 'ins' || v.id); <waiting ...>
+step s1a: ROLLBACK;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, id, d, qty, region FROM uo_t WHERE id IN (1, 900010, 900011) ORDER BY id, d, qty NULLS FIRST, region;
+tableoid|    id|         d|qty|region    
+--------+------+----------+---+----------
+uo_t1   |     1|12-08-2022|105|r1 m1     
+uo_t2   |900010|03-03-2023|107|r9 m900010
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1u1 s2r s1c s2sel s2c
+step s1u1: UPDATE uo_t SET region = 'upd' WHERE id = 1;
+step s2r: MERGE INTO uo_t s USING (SELECT 900010 AS id, date '2023-03-03' AS d UNION ALL SELECT 1, date '2022-12-08') v ON s.id = v.id AND s.d = v.d WHEN MATCHED THEN UPDATE SET qty = qty + 100, region = s.region || ' m' || v.id WHEN NOT MATCHED THEN INSERT (id, d, region) VALUES (v.id, v.d, 'ins' || v.id) RETURNING merge_action(), v.id, s.*; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+merge_action|    id|    id|         d|qty|region    
+------------+------+------+----------+---+----------
+UPDATE      |900010|900010|03-03-2023|107|r9 m900010
+INSERT      |     1|     1|12-08-2022|   |ins1      
+(2 rows)
+
+step s2sel: SELECT tableoid::regclass, id, d, qty, region FROM uo_t WHERE id IN (1, 900010, 900011) ORDER BY id, d, qty NULLS FIRST, region;
+tableoid|    id|         d|qty|region    
+--------+------+----------+---+----------
+uo_t1   |     1|12-08-2022|   |ins1      
+uo_t1   |     1|12-08-2022|  5|upd       
+uo_t2   |900010|03-03-2023|107|r9 m900010
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k1 s2kr s1c s2sel s2c
+step s1k1: UPDATE uo_t SET id = 900011, d = '2022-12-09' WHERE id = 1;
+step s2kr: MERGE INTO uo_t s USING (SELECT 900011 AS id, date '2022-12-09' AS d UNION ALL SELECT 1, date '2022-12-08') v ON s.id = v.id AND s.d = v.d WHEN MATCHED THEN UPDATE SET qty = qty + 100, region = s.region || ' m' || v.id WHEN NOT MATCHED THEN INSERT (id, d, region) VALUES (v.id, v.d, 'ins' || v.id) RETURNING merge_action(), v.id, s.*; <waiting ...>
+step s1c: COMMIT;
+step s2kr: <... completed>
+merge_action|    id|    id|         d|qty|region   
+------------+------+------+----------+---+---------
+INSERT      |900011|900011|12-09-2022|   |ins900011
+UPDATE      |     1|900011|12-09-2022|105|r1 m1    
+(2 rows)
+
+step s2sel: SELECT tableoid::regclass, id, d, qty, region FROM uo_t WHERE id IN (1, 900010, 900011) ORDER BY id, d, qty NULLS FIRST, region;
+tableoid|    id|         d|qty|region   
+--------+------+----------+---+---------
+uo_t2   |900010|03-03-2023|  7|r9       
+uo_t1   |900011|12-09-2022|   |ins900011
+uo_t1   |900011|12-09-2022|105|r1 m1    
+(3 rows)
+
+step s2c: COMMIT;

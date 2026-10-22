@@ -1,0 +1,101 @@
+[package]
+name = "gravity_kernels"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "gravity_kernels"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+gravity_abi = { path = "../abi" }
+gravity_dict = { path = "../dict" }
+gravity_fn = { path = "../fn" }
+
+[dev-dependencies]
+# the integration-test rig, compiled once as a lib (BD-12): the test files say `use gravity_kernels_rig as common;`
+gravity_kernels_rig = { path = "../kernels_rig" }
+# the walks' fit test (dict/strategies/front_light.rs `fit`): the cost home's least squares
+cost_profile = { path = "../../_support/cost_profile" }
+gravity_program = { path = "../program" }
+# D1293: tests/d1293_compare_error.rs arms the collation compare seam to raise
+pg_locale_seams = { path = "../../backend/utils/adt/pg_locale_seams" }
+
+[features]
+# The hand kernel bodies (docs/gravity/kernels.md "Build"): off in the server build; the hand programs, the lab rigs and the tests that drive them turn it on.
+hand-kernels = ["gravity_program/hand", "gravity_kernels_rig/hand-kernels"]
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# gravity_kernels_suite (tests/gravity_kernels_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs
+# it once per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot
+# share a process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text
+# naming process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state
+# call): then it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the
+# file is in exactly one of the two places.
+[[test]]
+name = "gravity_kernels_suite"
+path = "tests/gravity_kernels_suite.rs"
+
+[[test]]
+name = "agg_cand25_head_coll"
+path = "tests/agg_cand25_head_coll.rs"
+
+[[test]]
+name = "core_d1293_compare_error"
+path = "tests/core_d1293_compare_error.rs"
+
+[[test]]
+name = "core_fp_strength"
+path = "tests/core_fp_strength.rs"
+
+[[test]]
+name = "core_host_abi"
+path = "tests/core_host_abi.rs"
+required-features = ["hand-kernels"]
+
+[[test]]
+name = "core_v4r16_guard"
+path = "tests/core_v4r16_guard.rs"
+
+[[test]]
+name = "lab_kernels"
+path = "tests/lab_kernels.rs"
+required-features = ["hand-kernels"]
+
+[[test]]
+name = "lab_leader"
+path = "tests/lab_leader.rs"
+required-features = ["hand-kernels"]
+
+[[test]]
+name = "lab_run_base"
+path = "tests/lab_run_base.rs"
+required-features = ["hand-kernels"]
+
+[[test]]
+name = "lab_section_end"
+path = "tests/lab_section_end.rs"
+required-features = ["hand-kernels"]
+
+[[test]]
+name = "sort_c1_stream_recycle"
+path = "tests/sort_c1_stream_recycle.rs"
+required-features = ["hand-kernels"]
+
+[[test]]
+name = "sort_d1061_sort_readers"
+path = "tests/sort_d1061_sort_readers.rs"
+required-features = ["hand-kernels"]
+
+[[test]]
+name = "sort_d457_sort_at_consumed"
+path = "tests/sort_d457_sort_at_consumed.rs"
+required-features = ["hand-kernels"]
+
+[[test]]
+name = "sort_new43_stream_rearm"
+path = "tests/sort_new43_stream_rearm.rs"
+required-features = ["hand-kernels"]

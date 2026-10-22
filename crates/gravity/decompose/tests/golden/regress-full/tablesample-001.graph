@@ -1,0 +1,11 @@
+-- regress-full-tablesample-001
+-- INSERT INTO test_tablesample SELECT i, repeat(i::text, 200) FROM generate_series(0, 9) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, c23:9)]
+  project (1=v3.1, 2=fn1622(io25(v3.1), c23:200))
+  write INSERT rel=28884 rti=1 natts=2 indexes=()
+  outs 1=w4:val 2=vl:call1622
+mapped: ModifyTable FunctionScan

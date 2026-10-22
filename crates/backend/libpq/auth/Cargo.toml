@@ -15,6 +15,7 @@ auth_sasl = { path = "../auth_sasl" }
 auth_scram = { path = "../auth_scram" }
 auth_seams = { path = "../auth_seams" }
 be_secure = { path = "../be_secure" }
+be_gssapi_common = { path = "../be_gssapi_common" }
 crypt = { path = "../crypt" }
 guc_tables = { path = "../../utils/misc/guc_tables" }
 pg_strong_random = { path = "../../../port/pg_strong_random" }

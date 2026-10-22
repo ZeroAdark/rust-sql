@@ -1,0 +1,18 @@
+-- regress-full-join-162
+-- explain (costs off) select ss1.f1 from int4_tbl as t1 left join (int4_tbl as t2 right join int4_tbl as t3 on null left join (int4_tbl as t4 right join int8_tbl as t5 on null) on t2.f1 = t4.f1 left join ((select f1 from int4_tbl as t6) as ss1 inner join int8_tbl as t7 on null) on t5.q1 = t7.q2) on false;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=5 end=sink
+  nodes n1@0 n0@1
+  source range rel=16400 rti=1 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=v1.1)
+  nest inner=n2 JOIN_LEFT invariant raise-free params=() qual=(c16:0)
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  gate T_List
+  project (1=v14.1)
+  project (1=inner.1)
+  outs 1=w4:val
+  outs 1=w4:val
+mapped: Result SeqScan NestLoop

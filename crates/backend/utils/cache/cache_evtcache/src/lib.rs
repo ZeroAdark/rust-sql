@@ -74,6 +74,13 @@ thread_local! {
         const { RefCell::new([Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()]) };
 }
 
+/// D4682 (client backend thread reuse, launch_backend cpool): the cache is not a session root's, so the session
+/// teardown leaves it; the next session on a parked thread (maybe in another database) rebuilds it, as a fresh thread.
+pub fn reset_for_thread_reuse() {
+    STATE.set(CacheState::NeedsRebuild);
+    CACHE.with(|c| c.borrow_mut().iter_mut().for_each(Vec::clear));
+}
+
 pub fn EventCacheLookup<'mcx>(
     mcx: Mcx<'mcx>,
     event: EventTriggerEvent,

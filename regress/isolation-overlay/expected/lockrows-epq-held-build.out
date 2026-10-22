@@ -1,0 +1,47 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2e s1d s2r s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2e: EXPLAIN (COSTS OFF) SELECT a.id, b.id FROM ha a JOIN hb b ON b.a_id = a.id WHERE b.w > 0 AND 100 / (a.v - 999) < 1000 FOR UPDATE;
+QUERY PLAN                                            
+------------------------------------------------------
+LockRows                                              
+  ->  Hash Join                                       
+        Hash Cond: (b.a_id = a.id)                    
+        ->  Seq Scan on hb b                          
+              Filter: (w > 0)                         
+        ->  Hash                                      
+              ->  Seq Scan on ha a                    
+                    Filter: ((100 / (v - 999)) < 1000)
+(8 rows)
+
+step s1d: UPDATE ha SET v = 999 WHERE id = 3; UPDATE hb SET w = -1 WHERE a_id = 3;
+step s2r: SELECT a.id, b.id FROM ha a JOIN hb b ON b.a_id = a.id WHERE b.w > 0 AND 100 / (a.v - 999) < 1000 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|id
+--+--
+ 1| 1
+ 2| 2
+ 4| 4
+ 5| 5
+ 1| 6
+ 2| 7
+ 4| 9
+ 5|10
+ 1|11
+ 2|12
+ 4|14
+ 5|15
+(12 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1f s2r s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1f: UPDATE hb SET w = w WHERE id = 1; UPDATE ha SET v = 999 WHERE id = 3; UPDATE hb SET w = -1 WHERE a_id = 3;
+step s2r: SELECT a.id, b.id FROM ha a JOIN hb b ON b.a_id = a.id WHERE b.w > 0 AND 100 / (a.v - 999) < 1000 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+ERROR:  division by zero
+step s2c: COMMIT;

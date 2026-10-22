@@ -1002,6 +1002,8 @@ pub fn walk_select_stmt<'mcx, W: NodeWalker<'mcx> + ?Sized>(
     s: &'mcx SelectStmt<'mcx>,
     w: &mut W,
 ) -> PgResult<bool> {
+    // C nodeFuncs.c:4010: set-op chains recurse through larg/rarg here.
+    stack_depth_core::check_stack_depth()?;
     if let types_nodes::DistinctClause::On(l) = &s.distinctClause {
         if walk_list(l, w)? {
             return Ok(true);

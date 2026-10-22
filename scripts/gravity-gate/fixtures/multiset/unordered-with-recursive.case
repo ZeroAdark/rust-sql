@@ -1,0 +1,14 @@
+# WITH RECURSIVE .. SELECT
+sql: WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3)
+sql: SELECT n FROM r;
+cols: n
+class: unordered
+verdict: match
+[pg]
+1
+2
+3
+[got]
+3
+2
+1

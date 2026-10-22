@@ -1,0 +1,80 @@
+Parsed test spec with 2 sessions
+
+starting permutation: b3 w1 bc chk seq
+step b3: UPDATE w6q SET c = c + 10 WHERE id = 3;
+step w1: UPDATE w6q SET c = c + 1 WHERE id <= 3 AND c < (SELECT max(k) + 100 FROM w6k WHERE w6_bump(k)); <waiting ...>
+step bc: COMMIT;
+step w1: <... completed>
+step chk: SELECT id, c FROM w6q ORDER BY id;
+id| c
+--+--
+ 1| 2
+ 2| 3
+ 3|14
+ 4| 4
+ 5| 5
+ 6| 6
+ 7| 7
+ 8| 8
+(8 rows)
+
+step seq: SELECT last_value, is_called FROM w6_seq;
+last_value|is_called
+----------+---------
+         3|t        
+(1 row)
+
+
+starting permutation: b5 w2 bc chk seq
+step b5: UPDATE w6q SET c = c + 10 WHERE id = 5;
+step w2: UPDATE w6q SET c = c + 1 WHERE id = 5 AND (id > 4 OR c < (SELECT max(k) + 100 FROM w6k WHERE w6_bump(k))); <waiting ...>
+step bc: COMMIT;
+step w2: <... completed>
+step chk: SELECT id, c FROM w6q ORDER BY id;
+id| c
+--+--
+ 1| 1
+ 2| 2
+ 3| 3
+ 4| 4
+ 5|16
+ 6| 6
+ 7| 7
+ 8| 8
+(8 rows)
+
+step seq: SELECT last_value, is_called FROM w6_seq;
+last_value|is_called
+----------+---------
+         3|t        
+(1 row)
+
+
+starting permutation: b5 w3 bc chk seq
+step b5: UPDATE w6q SET c = c + 10 WHERE id = 5;
+step w3: UPDATE w6q SET c = c + 1 WHERE id = 5 AND c < 10 RETURNING id, (SELECT max(k) FROM w6k WHERE w6_bump(k)) AS m; <waiting ...>
+step bc: COMMIT;
+step w3: <... completed>
+id|m
+--+-
+(0 rows)
+
+step chk: SELECT id, c FROM w6q ORDER BY id;
+id| c
+--+--
+ 1| 1
+ 2| 2
+ 3| 3
+ 4| 4
+ 5|15
+ 6| 6
+ 7| 7
+ 8| 8
+(8 rows)
+
+step seq: SELECT last_value, is_called FROM w6_seq;
+last_value|is_called
+----------+---------
+         1|f        
+(1 row)
+

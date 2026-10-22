@@ -1,0 +1,3 @@
+path	crates/gravity/driver/src/mem/feedback.rs
+growth	std::vec::Vec::extend_from_slice	7
+growth	std::vec::Vec::push	4

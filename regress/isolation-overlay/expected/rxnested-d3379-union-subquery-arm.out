@@ -1,0 +1,115 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE ut SET b = 'u', x = ut.x + 1 FROM (SELECT a FROM us UNION ALL SELECT a + 1 FROM us WHERE n % 2 = 0) ss (a) WHERE ut.a = ss.a;
+QUERY PLAN                                           
+-----------------------------------------------------
+Update on ut                                         
+  Update on ut1 ut_1                                 
+  Update on ut2 ut_2                                 
+  Update on ut3 ut_3                                 
+  Update on ut4 ut_4                                 
+  ->  Merge Join                                     
+        Merge Cond: (us.a = ut.a)                    
+        ->  Sort                                     
+              Sort Key: us.a                         
+              ->  Append                             
+                    ->  Seq Scan on us               
+                    ->  Subquery Scan on "*SELECT* 2"
+                          ->  Seq Scan on us us_1    
+                                Filter: ((n % 2) = 0)
+        ->  Sort                                     
+              Sort Key: ut.a                         
+              ->  Append                             
+                    ->  Seq Scan on ut1 ut_1         
+                    ->  Seq Scan on ut2 ut_2         
+                    ->  Seq Scan on ut3 ut_3         
+                    ->  Seq Scan on ut4 ut_4         
+(21 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1d s1i s1r s2u s1c s2c s3sel
+step s1x: UPDATE ut SET x = x + 10 WHERE a IN (1, 2, 3);
+step s1d: DELETE FROM ut WHERE a = 3;
+step s1i: INSERT INTO us VALUES (3, 6), (0, 8);
+step s1r: DELETE FROM us WHERE n IN (2, 4);
+step s2u: UPDATE ut SET b = 'u', x = ut.x + 1 FROM (SELECT a FROM us UNION ALL SELECT a + 1 FROM us WHERE n % 2 = 0) ss (a) WHERE ut.a = ss.a; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b| x
+---+-+-+--
+ut1|1|u|11
+ut2|2|u|11
+ut4|4|a| 0
+(3 rows)
+
+
+starting permutation: s2u s1x s2c s1c s3sel
+step s2u: UPDATE ut SET b = 'u', x = ut.x + 1 FROM (SELECT a FROM us UNION ALL SELECT a + 1 FROM us WHERE n % 2 = 0) ss (a) WHERE ut.a = ss.a;
+step s1x: UPDATE ut SET x = x + 10 WHERE a IN (1, 2, 3); <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b| x
+---+-+-+--
+ut1|1|u|11
+ut2|2|u|11
+ut3|3|u|11
+ut4|4|a| 0
+(4 rows)
+
+
+starting permutation: s1m s2u s1c s2c s3sel
+step s1m: UPDATE ut SET a = 4 WHERE a = 2;
+step s2u: UPDATE ut SET b = 'u', x = ut.x + 1 FROM (SELECT a FROM us UNION ALL SELECT a + 1 FROM us WHERE n % 2 = 0) ss (a) WHERE ut.a = ss.a; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b|x
+---+-+-+-
+ut1|1|a|0
+ut3|3|a|0
+ut4|4|a|0
+ut4|4|a|0
+(4 rows)
+
+
+starting permutation: s1x s1d s1i s1r s2d s1c s2c s3sel
+step s1x: UPDATE ut SET x = x + 10 WHERE a IN (1, 2, 3);
+step s1d: DELETE FROM ut WHERE a = 3;
+step s1i: INSERT INTO us VALUES (3, 6), (0, 8);
+step s1r: DELETE FROM us WHERE n IN (2, 4);
+step s2d: DELETE FROM ut USING (SELECT a FROM us UNION ALL SELECT a + 1 FROM us WHERE n % 2 = 0) ss (a) WHERE ut.a = ss.a; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b|x
+---+-+-+-
+ut4|4|a|0
+(1 row)
+
+
+starting permutation: s1m s2d s1c s2c s3sel
+step s1m: UPDATE ut SET a = 4 WHERE a = 2;
+step s2d: DELETE FROM ut USING (SELECT a FROM us UNION ALL SELECT a + 1 FROM us WHERE n % 2 = 0) ss (a) WHERE ut.a = ss.a; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b|x
+---+-+-+-
+ut1|1|a|0
+ut3|3|a|0
+ut4|4|a|0
+ut4|4|a|0
+(4 rows)
+

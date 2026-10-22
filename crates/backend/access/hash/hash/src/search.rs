@@ -29,7 +29,7 @@ pub(crate) struct HashScanCtx<'a, 'mcx> {
     pub ignore_killed_tuples: bool,
     pub keys: &'a [ScanKeyData],
     pub xs_heaptid: &'a mut ItemPointerData,
-    pub xs_pgstat_index_scans: &'a mut u64,
+    pub xs_pgstat: &'a mut types_relscan::PgStatRelationCounts,
     pub xs_nsearches: &'a mut u64,
 }
 
@@ -165,7 +165,7 @@ pub(crate) fn _hash_first(ctx: &mut HashScanCtx<'_, '_>, dir: ScanDirection) -> 
     let rel = ctx.rel;
 
     if rel.pgstat_enabled.get() {
-        *ctx.xs_pgstat_index_scans += 1;
+        ctx.xs_pgstat.count(1, 0, 0);
     }
     // C hashsearch.c:301-302 (scan->instrument->nsearches++).
     *ctx.xs_nsearches += 1;

@@ -109,16 +109,21 @@ fn dch_cache_getnew(st: &mut DchCacheState, str: &[u8], std: bool, format: Rc<[F
         let age = st.counter;
         let e = &mut st.cache[old_idx];
         e.valid = true;
-        e.str = str.to_vec();
+        e.str.clear();
+        let _ = e.str.try_reserve_exact(str.len());
+        e.str.extend_from_slice(str);
         e.std = std;
         e.format = format;
         e.age = age;
     } else {
         st.counter += 1;
         let age = st.counter;
+        let mut entry_str = Vec::new();
+        let _ = entry_str.try_reserve_exact(str.len());
+        entry_str.extend_from_slice(str);
         st.cache.push(DchCacheEntry {
             format,
-            str: str.to_vec(),
+            str: entry_str,
             std,
             valid: true,
             age,
@@ -168,16 +173,21 @@ fn num_cache_getnew(st: &mut NumCacheState, str: &[u8], format: Rc<[FormatNode]>
         let age = st.counter;
         let e = &mut st.cache[old_idx];
         e.valid = true;
-        e.str = str.to_vec();
+        e.str.clear();
+        let _ = e.str.try_reserve_exact(str.len());
+        e.str.extend_from_slice(str);
         e.format = format;
         e.num = num;
         e.age = age;
     } else {
         st.counter += 1;
         let age = st.counter;
+        let mut entry_str = Vec::new();
+        let _ = entry_str.try_reserve_exact(str.len());
+        entry_str.extend_from_slice(str);
         st.cache.push(NumCacheEntry {
             format,
-            str: str.to_vec(),
+            str: entry_str,
             valid: true,
             age,
             num,

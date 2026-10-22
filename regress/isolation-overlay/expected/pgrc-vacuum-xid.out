@@ -1,0 +1,43 @@
+Parsed test spec with 3 sessions
+
+starting permutation: vattach vvac odetach oafter oscan owake rseg rsel rins rchk rfile rins2 rchk rsel
+step vattach: DO $$ BEGIN PERFORM injection_points_attach('pgrc-vacuum-flushed', 'wait'); END $$;
+step vvac: VACUUM pgrc_vx; <waiting ...>
+step odetach: DO $$ BEGIN PERFORM injection_points_detach('pgrc-vacuum-flushed'); END $$;
+step oafter: CREATE TABLE pgrc_vx_after (i int);
+step oscan: SELECT count(*) > 0 AS scanned FROM pg_class;
+scanned
+-------
+t      
+(1 row)
+
+step owake: DO $$ BEGIN PERFORM injection_points_wakeup('pgrc-vacuum-flushed'); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+step vvac: <... completed>
+step rseg: SELECT c.relfilenode <> s.relfilenode AS seg0_reset FROM pg_class c, pgrc_vx_seg s WHERE c.relname = 'pgrc_seg_' || 'pgrc_vx'::regclass::oid || '_0';
+seg0_reset
+----------
+t         
+(1 row)
+
+step rsel: SELECT count(*), sum(id) FROM pgrc_vx;
+count|  sum
+-----+-----
+  200|20100
+(1 row)
+
+step rins: INSERT INTO pgrc_vx VALUES (201, 'y');
+step rchk: CHECKPOINT;
+step rfile: SELECT (pg_stat_file(pg_relation_filepath(c.oid), true)).size IS NULL AS seg0_file_gone FROM pg_class c WHERE c.relname = 'pgrc_seg_' || 'pgrc_vx'::regclass::oid || '_0';
+seg0_file_gone
+--------------
+f             
+(1 row)
+
+step rins2: INSERT INTO pgrc_vx VALUES (202, 'z');
+step rchk: CHECKPOINT;
+step rsel: SELECT count(*), sum(id) FROM pgrc_vx;
+count|  sum
+-----+-----
+  202|20503
+(1 row)
+

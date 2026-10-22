@@ -226,6 +226,65 @@ fn decode_pg_attribute_roundtrips_a_formed_row() {
     assert!(a.attislocal);
 }
 
+#[test]
+fn fixed_prefix_present_reads_the_null_bitmap_prefix() {
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let td = pg_attribute_tupdesc(mcx);
+    let (_nb, attname) = name_datum(mcx, "a");
+    let mut values = [Datum::null(); 25];
+    values[1] = attname;
+    let mut nulls = [false; 25];
+    for n in nulls.iter_mut().skip(20) {
+        *n = true;
+    }
+    let t = heaptuple::heap_form_tuple(mcx, &td, &values, &nulls).unwrap();
+    assert!(crate::fixed_prefix_present(&td, t.as_tuple(), 20));
+    assert!(crate::fixed_prefix_present(&td, t.as_tuple(), 16));
+    assert!(!crate::fixed_prefix_present(&td, t.as_tuple(), 21));
+    assert!(!crate::fixed_prefix_present(&td, t.as_tuple(), 26));
+    nulls[16] = true;
+    let t = heaptuple::heap_form_tuple(mcx, &td, &values, &nulls).unwrap();
+    assert!(crate::fixed_prefix_present(&td, t.as_tuple(), 8));
+    assert!(crate::fixed_prefix_present(&td, t.as_tuple(), 16));
+    assert!(!crate::fixed_prefix_present(&td, t.as_tuple(), 17));
+    assert!(!crate::fixed_prefix_present(&td, t.as_tuple(), 20));
+}
+
+#[test]
+fn decode_pg_attribute_null_in_fixed_part_is_an_error() {
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let td = pg_attribute_tupdesc(mcx);
+    let (_nb, attname) = name_datum(mcx, "relnamespace");
+
+    let mut values = [Datum::null(); 25];
+    let mut nulls = [false; 25];
+    values[0] = Datum::from_oid(1259);
+    values[1] = attname;
+    values[2] = Datum::from_oid(26);
+    values[3] = Datum::from_i16(4);
+    values[4] = Datum::from_i16(3);
+    values[5] = Datum::from_i32(-1);
+    values[6] = Datum::from_i16(0);
+    values[7] = Datum::from_bool(true);
+    values[8] = Datum::from_i8(b'i' as i8);
+    values[9] = Datum::from_i8(b'p' as i8);
+    values[10] = Datum::from_i8(0);
+    values[11] = Datum::from_bool(true);
+    values[17] = Datum::from_bool(true);
+    values[18] = Datum::from_i16(0);
+    values[19] = Datum::from_oid(0);
+    nulls[16] = true;
+    for n in nulls.iter_mut().skip(20) {
+        *n = true;
+    }
+
+    let tup = heaptuple::heap_form_tuple(mcx, &td, &values, &nulls).unwrap();
+    let err = attrs::decode(&td, tup.as_tuple(), 1259).unwrap_err();
+    assert!(err.to_string().contains("unexpected null in catalog column 17"), "{err}");
+}
+
 #[repr(C)]
 struct FakeOidVector {
     hdr: array::oidvector,

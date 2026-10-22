@@ -6,7 +6,9 @@ use init_small::globals;
 use lwlock::{LWLock, LWLockPadded};
 use types_core::{Buffer, ForkNumber, InvalidBlockNumber, InvalidOid, BLCKSZ, INVALID_PROC_NUMBER};
 use types_error::PgResult;
-use types_storage::buf::{buftag, PgAioWaitRef, BM_LOCKED, FREENEXT_END_OF_LIST};
+use types_storage::buf::{
+    buftag, PgAioWaitRef, BM_LOCKED, FREENEXT_END_OF_LIST, FREENEXT_NOT_IN_LIST,
+};
 use types_storage::LWTRANCHE_BUFFER_CONTENT;
 
 pub const BUFFERDESC_PAD_TO_SIZE: usize = 64;
@@ -179,9 +181,11 @@ pub fn buffer_pool_initialized() -> bool {
     !POOL.descs.load(Ordering::Relaxed).is_null()
 }
 
+/// Descriptor high-water: every id below it has an initialized descriptor
+/// (active, draining or retired). Whole-pool loops iterate to it.
 #[inline]
 pub fn NBuffersInited() -> i32 {
-    POOL.nbuffers.load(Ordering::Relaxed)
+    POOL.nbuffers.load(Ordering::Acquire)
 }
 
 #[inline]
@@ -257,50 +261,44 @@ pub fn BufferManagerShmemSize() -> PgResult<usize> {
 }
 
 /// BufferManagerShmemInit (buf_init.c) minus localbuf/checkpoint carve-outs.
+/// The arrays live in the extent reservation (sized for
+/// pgrust.buffer_pool_max); only the boot extents' descriptors are written.
 pub fn BufferManagerShmemInit() -> PgResult<()> {
     let n = globals::NBuffers();
     assert!(n > 0, "NBuffers not set");
     let nu = n as usize;
+    let geo = crate::extent::geometry_from_gucs(n)?;
+    let res = crate::extent::reserve(&geo)?;
 
     // buf_init.c:77-101: the pool's four ShmemIndex rows, C's names, sizes
-    // and order (pg_shmem_allocations lists them); the arrays live in them.
-    let (descs, _) =
-        shmem::ShmemInitStruct("Buffer Descriptors", mcx::mul_size(nu, BUFFERDESC_PAD_TO_SIZE)?)?;
-    let descs = descs as *mut BufferDescPadded;
-    let (blocks, _) = shmem::ShmemInitStruct(
+    // and order (pg_shmem_allocations lists them) over the reservation.
+    shmem::ShmemIndexAdopt(
+        "Buffer Descriptors",
+        mcx::mul_size(nu, BUFFERDESC_PAD_TO_SIZE)?,
+        res.descs,
+    )?;
+    shmem::ShmemIndexAdopt(
         "Buffer Blocks",
         mcx::add_size(mcx::mul_size(nu, BLCKSZ)?, PG_IO_ALIGN_SIZE)?,
+        res.blocks,
     )?;
-    let blocks = blocks.wrapping_add(blocks.align_offset(PG_IO_ALIGN_SIZE));
-    let (io_cvs, _) = shmem::ShmemInitStruct(
+    shmem::ShmemIndexAdopt(
         "Buffer IO Condition Variables",
         mcx::mul_size(nu, C_SIZEOF_CONDITION_VARIABLE_MINIMALLY_PADDED)?,
+        res.cvs,
     )?;
-    let io_cvs = io_cvs as *mut ConditionVariable;
     shmem::ShmemInitStruct("Checkpoint BufferIds", mcx::mul_size(nu, C_SIZEOF_CKPT_SORT_ITEM)?)?;
-    for i in 0..nu {
-        let free_next = if i + 1 < nu {
-            (i + 1) as i32
-        } else {
-            FREENEXT_END_OF_LIST
-        };
-        // SAFETY: in-bounds write into the fresh allocation.
-        unsafe {
-            core::ptr::write(
-                descs.add(i),
-                BufferDescPadded {
-                    desc: BufferDesc::initial(i as i32, free_next),
-                },
-            );
-            core::ptr::write(io_cvs.add(i), ConditionVariable::new());
-        }
-    }
-    POOL.blocks.store(blocks, Ordering::Relaxed);
+    let descs = res.descs as *mut BufferDescPadded;
+    let io_cvs = res.cvs as *mut ConditionVariable;
+    let boot = geo.boot_buffers;
+    // SAFETY: fresh reservation, nothing published yet.
+    unsafe { write_descriptors(descs, io_cvs, 0, boot, true) };
+    POOL.blocks.store(res.blocks, Ordering::Relaxed);
     POOL.io_cvs.store(io_cvs, Ordering::Relaxed);
-    POOL.nbuffers.store(n, Ordering::Relaxed);
+    POOL.nbuffers.store(boot, Ordering::Release);
     // C's extern BufferBlocks: lets BufferGetPage stay a header inline in
     // pin-holding consumers (bufmgr_seams::BufferPin::page()).
-    bufmgr_seams::publish_buffer_blocks(blocks);
+    bufmgr_seams::publish_buffer_blocks(res.blocks);
     // `descs` is the publish flag: stored last, Release orders the fields
     // (and the initialized array) before it.
     assert!(
@@ -315,29 +313,87 @@ pub fn BufferManagerShmemInit() -> PgResult<()> {
         "bufmgr: buffer pool initialized twice"
     );
 
-    crate::freelist::StrategyInitialize(n)?;
+    crate::freelist::StrategyInitialize(boot)?;
     Ok(())
+}
+
+/// Writes the boot image of descriptors and IO CVs `[lo, hi)`; `linked`
+/// chains them into a fresh freelist order (boot), else they are left out of
+/// the list for the caller to push.
+///
+/// # Safety
+/// No other thread can reach these descriptors: they are above the published
+/// high-water (or the pool is unpublished / all children are dead).
+unsafe fn write_descriptors(
+    descs: *mut BufferDescPadded,
+    io_cvs: *mut ConditionVariable,
+    lo: i32,
+    hi: i32,
+    linked: bool,
+) {
+    for i in lo..hi {
+        let free_next = if !linked {
+            FREENEXT_NOT_IN_LIST
+        } else if i + 1 < hi {
+            i + 1
+        } else {
+            FREENEXT_END_OF_LIST
+        };
+        // SAFETY: caller contract; i is inside the reservation.
+        unsafe {
+            core::ptr::write(
+                descs.add(i as usize),
+                BufferDescPadded {
+                    desc: BufferDesc::initial(i, free_next),
+                },
+            );
+            core::ptr::write(io_cvs.add(i as usize), ConditionVariable::new());
+        }
+    }
+}
+
+/// First activation of never-used extents: writes `[lo, hi)` (unlinked) and
+/// raises the descriptor high-water, Release after the writes, so whole-pool
+/// loops that load NBuffersInited() see initialized descriptors.
+pub(crate) fn init_descriptor_range(lo: i32, hi: i32) {
+    debug_assert!(lo == NBuffersInited() && hi > lo && hi <= crate::extent::max_buffers());
+    // SAFETY: [lo, hi) is above the published high-water, unreachable by any
+    // other thread; the resizer is serialized.
+    unsafe {
+        write_descriptors(
+            pool_descs() as *mut BufferDescPadded,
+            POOL.io_cvs.load(Ordering::Relaxed),
+            lo,
+            hi,
+            false,
+        )
+    };
+    POOL.nbuffers.store(hi, Ordering::Release);
 }
 
 /// Crash-cycle reset in place to the BufferManagerShmemInit boot image — never
 /// re-run init (leaks NBuffers×8K). Page bytes stay: cleared tags make them
-/// unreachable (notes/crash-restart-design.md).
+/// unreachable (notes/crash-restart-design.md). Extents a resize activated
+/// past the boot set are retired; retired boot extents come back.
 pub fn BufferManagerShmemResetAfterCrash() {
     // In-flight uring DMA targets pool pages; wait it out before recycling.
     if aio_seams::uring_drain_all_raw::is_installed() {
         aio_seams::uring_drain_all_raw::call();
     }
     let n = NBuffersInited();
+    let boot = crate::extent::boot_buffers();
     assert!(
-        n > 0 && n == globals::NBuffers(),
+        n > 0 && crate::extent::nbuffers_guc() == globals::NBuffers(),
         "bufmgr: NBuffers changed across the crash cycle"
     );
     for i in 0..n {
         let desc = GetBufferDescriptor(i);
-        let free_next = if i + 1 < n {
+        let free_next = if i + 1 < boot {
             i + 1
-        } else {
+        } else if i + 1 == boot {
             FREENEXT_END_OF_LIST
+        } else {
+            FREENEXT_NOT_IN_LIST
         };
         // SAFETY: every child is dead (crash choreography); the postmaster
         // thread has exclusive access — no pin, lock holder, or waiter exists.
@@ -363,8 +419,9 @@ pub fn BufferManagerShmemResetAfterCrash() {
             );
         }
     }
+    crate::resize::reset_after_crash();
     crate::buf_table::BufTableResetAfterCrash();
-    crate::freelist::StrategyResetAfterCrash(n);
+    crate::freelist::StrategyResetAfterCrash(boot);
 }
 
 pub fn LockBufHdr(desc: &BufferDesc) -> u32 {

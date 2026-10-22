@@ -1,0 +1,3 @@
+backend/utils/adt/acl/src/membership.rs	CACHE	pgport	at:RoleMembershipCacheCallback	leader	privilege checks run on the leader; role-membership lists, emptied by RoleMembershipCacheCallback (syscache inval) and at initialize_acl
+backend/utils/adt/acl/src/membership.rs	CACHED_DB_HASH	pgport	at:initialize_acl	leader	privilege checks run on the leader; this database's DATABASEOID hash, rewritten by initialize_acl at session init
+backend/utils/adt/acl/src/membership.rs	CALLBACKS_REGISTERED	pgport	exit	leader	privilege checks run on the leader; once-per-thread flag for the three syscache callback registrations

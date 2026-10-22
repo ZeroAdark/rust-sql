@@ -1,0 +1,4 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/scanstats.rs
+growth	std::string::String::push_str	2
+growth	std::vec::Vec::push	2
+macro	std::format	3

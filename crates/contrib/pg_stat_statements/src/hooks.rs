@@ -75,9 +75,9 @@ pub(crate) fn pgss_post_parse_analyze(
     query: &mut Query<'_>,
     jstate: &queryjumble::JumbleState<'_>,
     source_text: &str,
-) {
+) -> PgResult<()> {
     if !pgss_enabled(nesting_level()) {
-        return;
+        return Ok(());
     }
 
     // EXECUTE accumulates onto the underlying PREPARE; clear its queryId
@@ -85,7 +85,7 @@ pub(crate) fn pgss_post_parse_analyze(
     if let Some(u) = query.utilityStmt {
         if gucs::pgss_track_utility() && u.node_tag() == NodeTag::T_ExecuteStmt {
             query.queryId = 0;
-            return;
+            return Ok(());
         }
     }
 
@@ -103,8 +103,9 @@ pub(crate) fn pgss_post_parse_analyze(
             Some(jstate),
             0,
             0,
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// `pgss_planner` (enter half).
@@ -124,13 +125,13 @@ pub(crate) fn pgss_planner_leave(
     stmt_location: i32,
     stmt_len: i32,
     query_string: &str,
-) {
+) -> PgResult<()> {
     nesting_add(-1);
     let frame = PLAN_FRAMES
         .with(|f| f.borrow_mut().pop())
         .expect("pgss_planner_leave without enter");
     if !(frame.tracked && ok) {
-        return;
+        return Ok(());
     }
     let snap = frame.snap.expect("tracked plan frame carries a snapshot");
     pgss_store(
@@ -146,18 +147,18 @@ pub(crate) fn pgss_planner_leave(
         None,
         0,
         0,
-    );
+    )
 }
 
 /// `pgss_ExecutorStart`: arm queryDesc->totaltime for tracked statements.
 pub(crate) fn pgss_executor_start(h: QueryDescHandle) {
-    execmain::with_qd(h, |qd| {
-        if pgss_enabled(nesting_level()) && unsafe { qd.plannedstmt().queryId.get() } != 0 {
+    execmain::with_hook_qd(h, |qd| {
+        if pgss_enabled(nesting_level()) && unsafe { qd.plannedstmt.queryId.get() } != 0 {
             // Fresh per execution: a rearmed parked portal reuses the
             // QueryDesc, so overwrite rather than C's if-NULL alloc.
             let mut instr = Box::new(Instrumentation::default());
             instrument::instr_init(&mut instr, INSTRUMENT_ALL);
-            qd.totaltime = Some(instr);
+            *qd.totaltime = Some(instr);
         }
         // Not tracked: leave qd.totaltime alone. C's if-NULL alloc never
         // clears, and another exec_hooks consumer (auto_explain) may have
@@ -185,24 +186,16 @@ pub(crate) fn pgss_executor_finish_leave(_h: QueryDescHandle) {
 /// `pgss_ExecutorEnd` (no error path of its own; the chain's end hook is
 /// fallible for auto_explain's sake).
 pub(crate) fn pgss_executor_end(h: QueryDescHandle) -> PgResult<()> {
-    execmain::with_qd(h, |qd| {
-        let pstmt = qd.plannedstmt();
+    execmain::with_hook_qd(h, |qd| {
+        let pstmt = qd.plannedstmt;
         let query_id = unsafe { pstmt.queryId.get() };
         if query_id == 0 || qd.totaltime.is_none() || !pgss_enabled(nesting_level()) {
-            return;
+            return Ok(());
         }
         let (stmt_location, stmt_len) = (pstmt.stmt_location, pstmt.stmt_len);
-        let source_text = qd.source_text();
-        let (rows, pw_to_launch, pw_launched) = match qd.exec.as_ref() {
-            Some(exec) => exec.with(|d| {
-                (
-                    d.estate.es_total_processed,
-                    d.estate.es_parallel_workers_to_launch,
-                    d.estate.es_parallel_workers_launched,
-                )
-            }),
-            None => (0, 0, 0),
-        };
+        let source_text = qd.source_text;
+        let (rows, pw_to_launch, pw_launched) =
+            (qd.total_processed, qd.parallel_workers_to_launch, qd.parallel_workers_launched);
         let t = qd.totaltime.as_deref_mut().expect("checked above");
         instrument::instr_end_loop(t);
         pgss_store(
@@ -218,9 +211,8 @@ pub(crate) fn pgss_executor_end(h: QueryDescHandle) -> PgResult<()> {
             None,
             i64::from(pw_to_launch),
             i64::from(pw_launched),
-        );
-    });
-    Ok(())
+        )
+    })
 }
 
 /// `pgss_ProcessUtility` (enter half): zero the pstmt queryId in place and
@@ -255,7 +247,7 @@ pub(crate) fn pgss_process_utility_leave(
     ok: bool,
     source_text: &str,
     qc: Option<&QueryCompletion>,
-) {
+) -> PgResult<()> {
     let frame = UTIL_FRAMES
         .with(|f| f.borrow_mut().pop())
         .expect("pgss_process_utility_leave without enter");
@@ -263,7 +255,7 @@ pub(crate) fn pgss_process_utility_leave(
         nesting_add(-1);
     }
     if !(frame.tracked && ok) {
-        return;
+        return Ok(());
     }
     let rows = match qc {
         Some(qc)
@@ -290,5 +282,5 @@ pub(crate) fn pgss_process_utility_leave(
         None,
         0,
         0,
-    );
+    )
 }

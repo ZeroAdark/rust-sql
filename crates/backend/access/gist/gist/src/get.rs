@@ -19,6 +19,8 @@ use ::types_relscan::{IndexScanDescData, IndexScanOpaque};
 use ::types_scan::scankey::{SK_ISNULL, SK_SEARCHNOTNULL, SK_SEARCHNULL};
 use ::types_scan::sdir::ScanDirection;
 use ::types_storage::bufpage::MaxIndexTuplesPerPage;
+use ::types_tuple::htup::HeapTupleData;
+use ::types_tuple::itemptr::ItemPointerData;
 
 use crate::util::{
     gist_index_getattr, gist_tuple_is_invalid, gistFetchTupleValues, gistcheckpage,
@@ -243,7 +245,7 @@ fn gist_scan_page(
             blkno: opaque.rightlink,
             parentlsn,
             heap: None,
-            distances: my_distances.to_vec(),
+            distances: ::mcx::std_vec_from_slice("access", &my_distances)?,
         });
     }
 
@@ -255,7 +257,7 @@ fn gist_scan_page(
     so.nPageData = 0;
     so.curPageData = 0;
     so.fetch_buf.clear();
-    scan.xs_itup = None;
+    scan.xs_hitup = None;
 
     so.curPageLSN = bufmgr::buffer_get_lsn_atomic::call(pin.buffer());
 
@@ -334,7 +336,7 @@ fn gist_scan_page(
                 item.recontup = Some(fetch_recontup(so, &rel, it)?);
             }
             if so.pageData.len() <= so.nPageData {
-                so.pageData.resize(so.nPageData + 1, GISTSearchHeapItem::default());
+                ::mcx::std_vec_resize("access", &mut so.pageData, so.nPageData + 1, GISTSearchHeapItem::default())?;
             }
             so.pageData[so.nPageData] = item;
             so.nPageData += 1;
@@ -380,12 +382,22 @@ fn gist_scan_page(
     Ok(ntids)
 }
 
-// IOS reconstruction: form an index tuple over fetchTupdesc from the fetched
-// values into so.fetch_buf (C forms a heap tuple, gistutil.c:720, so the
-// values are not re-compressed; StoreIndexTuple deforms to the same columns).
-// Extends fetch_buf: a realloc dangles every outstanding xs_itup into the
-// buffer — callers must run only from gist_scan_page's fill, after it nulls
-// xs_itup and before any item is published.
+// gistFetchTuple's image (gistutil.c:720): a heap tuple, so a fetched key
+// wider than an index row (8191 bytes) still reaches the scan.
+pub(crate) fn form_fetch_tuple<'m>(
+    mcx: Mcx<'m>,
+    tupdesc: &::types_tuple::TupleDescData<'_>,
+    values: &[Datum],
+    isnull: &[bool],
+) -> PgResult<::heaptuple::HeapTuple<'m>> {
+    ::heaptuple::heap_form_tuple(mcx, tupdesc, values, isnull)
+}
+
+// IOS reconstruction: gistFetchTuple (gistutil.c:720) forms a heap tuple over
+// fetchTupdesc into so.fetch_buf, published as xs_hitup (no index-row size
+// limit). Extends fetch_buf: a realloc dangles every outstanding xs_hitup
+// into the buffer — callers must run only from gist_scan_page's fill, after
+// it nulls xs_hitup and before any item is published.
 fn fetch_recontup(
     so: &mut GISTScanOpaqueData<'_>,
     rel: &Relation<'_>,
@@ -403,21 +415,14 @@ fn fetch_recontup(
             .fetchTupdesc
             .clone()
             .expect("gistrescan set fetchTupdesc for IOS");
-        let formed = ::nbtree::itup::index_form_tuple_uncompressed(
-            mcx,
-            &tupdesc,
-            &fetchatt[..natts],
-            &isnull[..natts],
-        )?;
+        let formed = form_fetch_tuple(mcx, &tupdesc, &fetchatt[..natts], &isnull[..natts])?;
         let off = so.fetch_buf.len() as u32;
-        // SAFETY: formed owned image of formed.size() bytes.
-        let img = unsafe { core::slice::from_raw_parts(formed.as_ptr(), formed.size()) };
-        so.fetch_buf.extend_from_slice(img);
-        // 8-align the next tuple (itup deform requires it)
+        so.fetch_buf.extend_from_slice(formed.image());
+        // 8-align the next tuple (heap deform requires it)
         while so.fetch_buf.len() % 8 != 0 {
             so.fetch_buf.push(0);
         }
-        (off, img.len() as u32)
+        (off, formed.as_tuple().t_len)
     };
     so.temp.reset();
     Ok((off, len))
@@ -442,15 +447,8 @@ fn fetch_recontup_owned(
             .fetchTupdesc
             .clone()
             .expect("gistrescan set fetchTupdesc for IOS");
-        let formed = ::nbtree::itup::index_form_tuple_uncompressed(
-            mcx,
-            &tupdesc,
-            &fetchatt[..natts],
-            &isnull[..natts],
-        )?;
-        // SAFETY: formed owned image of formed.size() bytes.
-        let img = unsafe { core::slice::from_raw_parts(formed.as_ptr(), formed.size()) };
-        ReconTup::from_bytes(img)
+        let formed = form_fetch_tuple(mcx, &tupdesc, &fetchatt[..natts], &isnull[..natts])?;
+        ReconTup::from_bytes(formed.image())
     };
     so.temp.reset();
     Ok(out)
@@ -513,7 +511,7 @@ fn store_orderby_distances(
 
 // getNextNearest (gistget.c:497).
 fn get_next_nearest(scan: &mut IndexScanDescData<'_>) -> PgResult<bool> {
-    scan.xs_itup = None;
+    scan.xs_hitup = None;
     {
         let IndexScanOpaque::Gist(so) = &mut scan.opaque else {
             crate::non_gist_opaque()
@@ -542,10 +540,11 @@ fn get_next_nearest(scan: &mut IndexScanDescData<'_>) -> PgResult<bool> {
                     crate::non_gist_opaque()
                 };
                 so.cur_recontup = heap.recontup;
-                scan.xs_itup = so
-                    .cur_recontup
-                    .as_ref()
-                    .map(|t| core::ptr::NonNull::new(t.as_ptr() as *mut u8).expect("recontup ptr"));
+                // SAFETY: cur_recontup owns the aligned heap_form_tuple image
+                // until the next gettuple/rescan/endscan.
+                scan.xs_hitup = so.cur_recontup.as_ref().map(|t| unsafe {
+                    HeapTupleData::from_raw_parts(t.as_ptr(), t.len(), ItemPointerData::invalid(), 0)
+                });
             }
             return Ok(true);
         }
@@ -555,15 +554,18 @@ fn get_next_nearest(scan: &mut IndexScanDescData<'_>) -> PgResult<bool> {
     }
 }
 
+const MAX_INDEX_TUPLES_PER_PAGE: usize = MaxIndexTuplesPerPage;
+
 fn record_killed(so: &mut GISTScanOpaqueData<'_>, offnum: OffsetNumber) {
     let killed = so
         .killedItems
-        .get_or_insert_with(|| Vec::with_capacity(MaxIndexTuplesPerPage));
-    if (so.numKilled as usize) < MaxIndexTuplesPerPage {
+        .get_or_insert_with(|| Vec::with_capacity(MAX_INDEX_TUPLES_PER_PAGE));
+    if (so.numKilled as usize) < MAX_INDEX_TUPLES_PER_PAGE {
         if killed.len() <= so.numKilled as usize {
-            killed.resize(so.numKilled as usize + 1, 0);
+            killed.push(offnum);
+        } else {
+            killed[so.numKilled as usize] = offnum;
         }
-        killed[so.numKilled as usize] = offnum;
         so.numKilled += 1;
     }
 }
@@ -576,11 +578,17 @@ fn publish_item(scan: &mut IndexScanDescData<'_>) {
     scan.xs_heaptid = item.heapPtr;
     scan.xs_recheck = item.recheck;
     if scan.xs_want_itup {
-        let (off, _len) = item.recontup.expect("IOS items carry recontup");
-        // xs_itup points into fetch_buf; valid until the next page/rescan.
-        scan.xs_itup = core::ptr::NonNull::new(
-            so.fetch_buf[off as usize..].as_ptr() as *mut u8,
-        );
+        let (off, len) = item.recontup.expect("IOS items carry recontup");
+        // SAFETY: fetch_buf holds the aligned heap_form_tuple image until the
+        // next page/rescan.
+        scan.xs_hitup = Some(unsafe {
+            HeapTupleData::from_raw_parts(
+                so.fetch_buf[off as usize..].as_ptr(),
+                len,
+                ItemPointerData::invalid(),
+                0,
+            )
+        });
     }
     so.curPageData += 1;
 }
@@ -617,9 +625,9 @@ pub fn gistgettuple(scan: &mut IndexScanDescData<'_>, dir: ScanDirection) -> PgR
         fc
     };
     if first_call {
-        scan.xs_pgstat_index_scans += 1;
+        scan.xs_pgstat.count(1, 0, 0);
         scan.xs_nsearches += 1;
-        scan.xs_itup = None;
+        scan.xs_hitup = None;
         gist_scan_page(scan, GIST_ROOT_BLKNO, 0, &[], None)?;
     }
 
@@ -712,9 +720,9 @@ pub fn gistgetbitmap(
         so.curPageData = 0;
         so.nPageData = 0;
     }
-    scan.xs_pgstat_index_scans += 1;
+    scan.xs_pgstat.count(1, 0, 0);
     scan.xs_nsearches += 1;
-    scan.xs_itup = None;
+    scan.xs_hitup = None;
 
     let mut ntids = gist_scan_page(scan, GIST_ROOT_BLKNO, 0, &[], Some(tbm))?;
 

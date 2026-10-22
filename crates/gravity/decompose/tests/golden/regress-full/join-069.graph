@@ -1,0 +1,21 @@
+-- regress-full-join-069
+-- explain (costs off) select a.* from tenk1 a where unique1 not in (select unique2 from tenk1 b);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 Distinct)
+  nodes n1@0
+  source index-only rel=16423 rti=2 am=heap index=19340
+    lanes Attr(2):byval8:w8:val
+  project (1=index.1)
+  subplan 1 build Any ids=($exec0) raise-free test=op96(v1.1, $exec0)
+  outs 1=w4:val
+p1 node=0 eligible rows=5000 end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page Offset:byval2:w2:val
+  subplan 1 hashed Any slot=0 ids=($exec0) raise-free test=op96(v1.1, $exec0)
+  filter not(subplan1())
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page
+breaker slot=0 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+mapped: SeqScan IndexOnlyScan SubPlan

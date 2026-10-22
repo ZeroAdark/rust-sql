@@ -13,6 +13,7 @@ elog = { path = "../../utils/error/elog" }
 fd = { path = "../../storage/file/fd" }
 guc_tables = { path = "../../utils/misc/guc_tables" }
 types_error = { path = "../../../_support/types/types_error" }
+mcx = { path = "../../../_support/mcx" }
 libc = "0.2"
 
 [dev-dependencies]

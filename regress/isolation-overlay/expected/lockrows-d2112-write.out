@@ -1,0 +1,67 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s1v s2ur s1c s2seq s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE wi SET v = v + 100 WHERE id = 3;
+step s2ur: UPDATE wi SET v = CASE WHEN v > 0 THEN v + 1 ELSE (SELECT nextval('wisq'))::int END WHERE grp = 0 RETURNING id, v; <waiting ...>
+step s1c: COMMIT;
+step s2ur: <... completed>
+id|  v
+--+---
+ 3|104
+ 6|  7
+ 9| 10
+12| 13
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM wisq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1v s2dr s1c s2seq s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE wi SET v = v + 100 WHERE id = 3;
+step s2dr: DELETE FROM wi WHERE grp = 0 AND CASE WHEN v > 0 THEN true ELSE (SELECT nextval('wisq') > 0) END RETURNING id; <waiting ...>
+step s1c: COMMIT;
+step s2dr: <... completed>
+id
+--
+ 3
+ 6
+ 9
+12
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM wisq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1v s2ux s1c s2seq s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE wi SET v = v + 100 WHERE id = 3;
+step s2ux: UPDATE wi SET v = v + (SELECT nextval('wisq'))::int WHERE grp = 0 RETURNING id, v; <waiting ...>
+step s1c: COMMIT;
+step s2ux: <... completed>
+id|  v
+--+---
+ 3|104
+ 6|  7
+ 9| 10
+12| 13
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM wisq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+step s2c: COMMIT;

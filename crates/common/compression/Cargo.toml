@@ -15,4 +15,4 @@ pgstrcasecmp = { path = "../../port/pgstrcasecmp" }
 # reported as "this build does not support compression with ZSTD", which is
 # exactly C's !USE_ZSTD arm.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-zstd = "0.13"
+zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off

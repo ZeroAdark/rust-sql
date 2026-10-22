@@ -1193,14 +1193,16 @@ pub fn jsonpath_yyerror_yytext(
             escontext,
             (),
             PgError::error(format!("{message} at end of jsonpath input"))
-                .with_sqlstate(ERRCODE_SYNTAX_ERROR),
+                .with_sqlstate(ERRCODE_SYNTAX_ERROR)
+                .with_location("jsonpath_scan.l", 378, "jsonpath_yyerror"),
         )
     } else {
         ereturn(
             escontext,
             (),
             PgError::error_bytes(&format!("{message} at or near \""), yytext, "\" of jsonpath input")
-                .with_sqlstate(ERRCODE_SYNTAX_ERROR),
+                .with_sqlstate(ERRCODE_SYNTAX_ERROR)
+                .with_location("jsonpath_scan.l", 386, "jsonpath_yyerror"),
         )
     }
 }

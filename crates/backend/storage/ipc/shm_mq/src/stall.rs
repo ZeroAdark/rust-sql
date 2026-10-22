@@ -315,7 +315,7 @@ pub fn park_now_ms() -> i64 {
 /// lives in one crate and the latch sleep in another, so the caller cannot
 /// hold a `StallDetector` across iterations the way `gather_readnext` does.
 ///
-/// regression: the quantum used to build a fresh `StallDetector` on every
+/// GL-SYNCWEDGE-1: the quantum used to build a fresh `StallDetector` on every
 /// call. `start_ms` therefore re-armed once per 1000 ms recheck, the 60 s
 /// report deadline could never mature, and a leader that parked for 12m53s in
 /// production emitted NOT ONE log line. This type keeps the detector across
@@ -405,7 +405,7 @@ mod stall_tests {
         assert_eq!(reports, 1, "one report for a 75-minute park at a 5 s cadence");
     }
 
-    // The regression defect, stated executably: a park loop that builds a
+    // The GL-SYNCWEDGE-1 defect, stated executably: a park loop that builds a
     // FRESH detector for every 1000 ms quantum re-arms `start_ms` each lap, so
     // the 60 s report deadline never matures. 12m53s of parking, zero reports.
     // This is exactly what parallel::wait_on_my_latch did.

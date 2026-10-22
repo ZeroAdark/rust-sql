@@ -1,0 +1,9 @@
+-- regress-full-expressions-013
+-- select a, a in (1::myint,2::myint,3::myint,4::myint,5::myint,6::myint,7::myint,8::myint) as not_hashed, a in (1::myint,2::myint,3::myint,4::myint,5::myint,6::myint,7::myint,8::myint,9::myint) as hashed from inttest;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op96(relabel23($1), relabel23($2)))
+  outs 1=w1:val
+mapped: Result

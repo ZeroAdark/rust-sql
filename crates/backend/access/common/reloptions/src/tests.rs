@@ -267,40 +267,157 @@ fn index_am_parses() {
 }
 
 #[test]
-fn pgrcolumnar_parallel_workers_reloption() {
+fn pgrcolumnar_sorted_by_reloption() {
     let cx = MemoryContext::new("t");
     let mcx = cx.mcx();
+    let image = |defs: &[(&str, &str)]| {
+        let mut l = NodeList::nil();
+        for (k, v) in defs {
+            l.lappend(mcx, def(mcx, None, k, Some(v))).unwrap();
+        }
+        transformRelOptions(mcx, None, &l, None, HEAP_RELOPT_NAMESPACES, true, false)
+            .unwrap()
+            .unwrap()
+    };
 
-    // Accepted and parsed (the CREATE/ALTER SET path).
-    let l = NodeList::make1(mcx, def(mcx, None, "parallel_workers", Some("16"))).unwrap();
-    let img = transformRelOptions(mcx, None, &l, None, HEAP_RELOPT_NAMESPACES, true, false)
-        .unwrap()
-        .unwrap();
+    // sorted_by rides alongside the heap vocabulary; names are trimmed.
+    let img = image(&[("sorted_by", " k , v"), ("parallel_workers", "3")]);
     let o = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap().unwrap();
-    assert_eq!(o.parallel_workers, 16);
-
-    // Default is unset (-1), matching StdRdOptions.
-    let l = NodeList::make1(mcx, def(mcx, None, "codec", Some("lz4"))).unwrap();
-    let img = transformRelOptions(mcx, None, &l, None, HEAP_RELOPT_NAMESPACES, true, false)
-        .unwrap()
-        .unwrap();
-    let o = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap().unwrap();
-    assert_eq!(o.parallel_workers, -1);
-
-    // Range-validated like the heap reloption (0..1024).
-    let l = NodeList::make1(mcx, def(mcx, None, "parallel_workers", Some("2000"))).unwrap();
-    let img = transformRelOptions(mcx, None, &l, None, HEAP_RELOPT_NAMESPACES, true, false)
-        .unwrap()
-        .unwrap();
-    let e = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap_err();
+    assert_eq!(o.sorted_by_cols().collect::<Vec<_>>(), ["k", "v"]);
+    assert_eq!(o.std.parallel_workers, 3);
+    assert_eq!(RdOptions::Pgrcolumnar(o).std().unwrap().parallel_workers, 3);
     assert_eq!(
-        e.message(),
-        "invalid value for integer option \"parallel_workers\": 2000 (valid: 0..1024)"
+        AlterTableGetRelOptionsLockLevel(
+            &NodeList::make1(mcx, def(mcx, None, "sorted_by", Some("k"))).unwrap()
+        ),
+        AccessExclusiveLock
     );
 
-    // ALTER TABLE SET lock level comes from the shared name table: SUEL.
-    let l = NodeList::make1(mcx, def(mcx, None, "parallel_workers", None)).unwrap();
-    assert_eq!(AlterTableGetRelOptionsLockLevel(&l), ShareUpdateExclusiveLock);
+    let img = image(&[("sorted_by", "StationID, \"Event Date\", \"a\"\"b\"")]);
+    let o = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap().unwrap();
+    assert_eq!(o.sorted_by_cols().collect::<Vec<_>>(), ["stationid", "Event Date", "a\"b"]);
+    assert_eq!(o.sorted_by(), "stationid, Event Date, a\"b");
+    let img = image(&[("sorted_by", "K, k")]);
+    let e = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap_err();
+    assert_eq!(e.message(), "column \"k\" appears more than once in \"sorted_by\"");
+
+    // Absent = no key; validate=false (relcache) tolerates anything.
+    let img = image(&[("parallel_workers", "3")]);
+    let o = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap().unwrap();
+    assert_eq!(o.sorted_by_cols().count(), 0);
+    let img = image(&[("sorted_by", "k DESC")]);
+    assert!(pgrcolumnar_reloptions(mcx, Some(&img), false).is_ok());
+
+    for (opts, want) in [
+        (vec![("sorted_by", "k DESC")], "invalid value for option \"sorted_by\": \"k DESC\""),
+        (vec![("sorted_by", "k nulls first")], "invalid value for option \"sorted_by\": \"k nulls first\""),
+        (vec![("sorted_by", "k, k")], "column \"k\" appears more than once in \"sorted_by\""),
+        (vec![("sorted_by", "k,,v")], "invalid value for option \"sorted_by\": \"k,,v\" (expected a comma-separated list of column names)"),
+        (vec![("sorted_by", "k"), ("sorted_by", "v")], "parameter \"sorted_by\" specified more than once"),
+    ] {
+        let img = image(&opts);
+        let e = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap_err();
+        assert_eq!(e.message(), want);
+    }
+    let img = image(&[("sorted_by", "k")]);
+    let e = heap_reloptions(mcx, RELKIND_RELATION, Some(&img), true).unwrap_err();
+    assert_eq!(e.message(), "unrecognized parameter \"sorted_by\"");
+
+    // The DDL check: a missing column and an unsortable one refuse with
+    // their own messages; a valid key passes.
+    let img = image(&[("sorted_by", "k, v")]);
+    let o = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap();
+    assert!(pgrcolumnar_check_sorted_by(o.as_ref(), |_| SortedByColumn::Ok).is_ok());
+    let e = pgrcolumnar_check_sorted_by(o.as_ref(), |c| {
+        if c.col == "v" { SortedByColumn::Missing } else { SortedByColumn::Ok }
+    })
+    .unwrap_err();
+    assert_eq!(e.message(), "column \"v\" named in \"sorted_by\" does not exist");
+    let e = pgrcolumnar_check_sorted_by(o.as_ref(), |_| SortedByColumn::Unsortable).unwrap_err();
+    assert_eq!(e.message(), "column \"k\" cannot be a \"sorted_by\" key");
+}
+
+#[test]
+fn pgrcolumnar_shred_paths_and_partial_reloptions() {
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let image = |defs: &[(&str, &str)]| {
+        let mut l = NodeList::nil();
+        for (k, v) in defs {
+            l.lappend(mcx, def(mcx, None, k, Some(v))).unwrap();
+        }
+        transformRelOptions(mcx, None, &l, None, HEAP_RELOPT_NAMESPACES, true, false)
+            .unwrap()
+            .unwrap()
+    };
+    let img = image(&[("pgrc_shred_paths", " kind , commit.collection:TEXT, time_us:int, f:bool, id:uuid")]);
+    let o = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap().unwrap();
+    assert_eq!(o.shred_paths(), "kind:text, commit.collection:text, time_us:numeric, f:bool, id:uuid");
+    let d = o.shred_path_decls();
+    assert_eq!(d.len(), 5);
+    assert_eq!(d[1].keys, ["commit", "collection"]);
+    assert!(!o.sorted_by_partial());
+    let img = image(&[("sorted_by", "k"), ("sorted_by_partial", "true")]);
+    let o = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap().unwrap();
+    assert!(o.sorted_by_partial());
+    for (v, want) in [
+        ("a:date", "invalid value for option \"pgrc_shred_paths\": \"a:date\""),
+        ("a..b", "invalid value for option \"pgrc_shred_paths\": \"a..b\""),
+        ("a:text, a:bool", "path \"a\" appears more than once in \"pgrc_shred_paths\""),
+    ] {
+        let img = image(&[("pgrc_shred_paths", v)]);
+        let e = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap_err();
+        assert_eq!(e.message(), want);
+    }
+    let img = image(&[("sorted_by_partial", "maybe")]);
+    assert!(pgrcolumnar_reloptions(mcx, Some(&img), true).is_err());
+}
+
+#[test]
+fn pgrcolumnar_sort_runs_reloption() {
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let image = |defs: &[(&str, &str)]| {
+        let mut l = NodeList::nil();
+        for (k, v) in defs {
+            l.lappend(mcx, def(mcx, None, k, Some(v))).unwrap();
+        }
+        transformRelOptions(mcx, None, &l, None, HEAP_RELOPT_NAMESPACES, true, false)
+            .unwrap()
+            .unwrap()
+    };
+    let img = image(&[("sorted_by", "k")]);
+    assert!(!pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap().unwrap().sort_runs());
+    for (v, on) in [("on", true), ("true", true), ("1", true), ("off", false), ("false", false)] {
+        let img = image(&[("sorted_by", "k"), ("sort_runs", v)]);
+        let o = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap().unwrap();
+        assert_eq!(o.sort_runs(), on, "{v}");
+        assert_eq!(o.sorted_by(), "k");
+    }
+    let img = image(&[("sort_runs", "on")]);
+    assert!(pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap().unwrap().sort_runs());
+    let img = image(&[("sort_runs", "maybe")]);
+    let e = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap_err();
+    assert_eq!(e.message(), "invalid value for boolean option \"sort_runs\": maybe");
+    assert!(!pgrcolumnar_reloptions(mcx, Some(&img), false).unwrap().unwrap().sort_runs());
+    let img = image(&[("sort_runs", "on"), ("sort_runs", "off")]);
+    let e = pgrcolumnar_reloptions(mcx, Some(&img), true).unwrap_err();
+    assert_eq!(e.message(), "parameter \"sort_runs\" specified more than once");
+    let img = image(&[("sort_runs", "on")]);
+    let e = heap_reloptions(mcx, RELKIND_RELATION, Some(&img), true).unwrap_err();
+    assert_eq!(e.message(), "unrecognized parameter \"sort_runs\"");
+    assert_eq!(
+        AlterTableGetRelOptionsLockLevel(
+            &NodeList::make1(mcx, def(mcx, None, "sort_runs", Some("on"))).unwrap()
+        ),
+        ShareUpdateExclusiveLock
+    );
+    let both = {
+        let mut l = NodeList::make1(mcx, def(mcx, None, "sort_runs", Some("on"))).unwrap();
+        l.lappend(mcx, def(mcx, None, "sorted_by", Some("k"))).unwrap();
+        l
+    };
+    assert_eq!(AlterTableGetRelOptionsLockLevel(&both), AccessExclusiveLock);
 }
 
 #[test]
@@ -317,4 +434,54 @@ fn lock_levels() {
     .unwrap();
     assert_eq!(AlterTableGetRelOptionsLockLevel(&l), AccessExclusiveLock);
     assert_eq!(AlterTableGetRelOptionsLockLevel(&NodeList::nil()), AccessExclusiveLock);
+}
+
+// DatumGetArrayTypeP detoasts: an attoptions image stored inline-compressed
+// (a padded option value past the toast threshold) parses like the plain one.
+#[test]
+fn compressed_options_image_is_detoasted() {
+    use core::mem::MaybeUninit;
+    ::detoast::init_seams();
+    let padded = format!("{}1", "0".repeat(3000));
+    let padded: &str = &padded;
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let list = NodeList::make1(mcx, def(mcx, None, "n_distinct", Some(padded))).unwrap();
+    let plain = transformRelOptions(mcx, None, &list, None, &[], false, false).unwrap().unwrap();
+    let input = &plain[types_tuple::varatt::VARHDRSZ..];
+    let mut dest = vec![MaybeUninit::<u8>::uninit(); pglz::pglz_max_output(input.len())];
+    let n = pglz::pglz_compress_into(input, &mut dest, &pglz::PGLZ_STRATEGY_ALWAYS).unwrap();
+    let total = 8 + n;
+    let mut image = Vec::with_capacity(total);
+    image.extend_from_slice(&(((total as u32) << 2) | 0x02).to_ne_bytes());
+    image.extend_from_slice(&(input.len() as u32).to_ne_bytes());
+    image.extend(dest[..n].iter().map(|b| unsafe { b.assume_init() }));
+    let opts = attribute_reloptions(mcx, Some(&image), false).unwrap().unwrap();
+    assert_eq!(opts.n_distinct, 1.0);
+    let list2 = NodeList::make1(mcx, def(mcx, None, "n_distinct_inherited", Some("2"))).unwrap();
+    let merged = transformRelOptions(mcx, Some(&image), &list2, None, &[], false, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(texts_of(&merged), [format!("n_distinct={padded}"), "n_distinct_inherited=2".into()]);
+}
+
+// The option texts are borrowed from the image: a parse leaves nothing
+// charged in the caller's context once the parsed values are dropped.
+#[test]
+fn parse_leaves_nothing_charged_in_the_callers_context() {
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let l = NodeList::make2(
+        mcx,
+        def(mcx, None, "seq_page_cost", Some("1.1")),
+        def(mcx, None, "random_page_cost", Some("2")),
+    )
+    .unwrap();
+    let img = transformRelOptions(mcx, None, &l, None, &[], false, false).unwrap().unwrap();
+    let mut scratch = MemoryContext::new("scratch");
+    let o = tablespace_reloptions(scratch.mcx(), Some(&img), false).unwrap().unwrap();
+    assert_eq!(o.seq_page_cost, 1.1);
+    assert_eq!(o.random_page_cost, 2.0);
+    assert_eq!(scratch.used(), 0);
+    scratch.reset();
 }

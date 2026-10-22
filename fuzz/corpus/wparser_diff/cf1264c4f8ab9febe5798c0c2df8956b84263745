@@ -1,7 +1,0 @@
-Å;
-
-CREATE UNIQUE INDEX bt_tsq ON test_tsquery (keyword);
-
-SET enqble_seqscan=OFF;
-
-SELECT COUNT(*) Fsquer$ WHERE keyword <  

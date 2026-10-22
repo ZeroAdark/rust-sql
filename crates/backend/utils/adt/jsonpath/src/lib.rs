@@ -4,6 +4,7 @@
 
 pub mod builtins;
 pub mod gram;
+mod gram_tables;
 pub mod mutability;
 pub mod path;
 pub mod scan;

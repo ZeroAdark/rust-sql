@@ -1,0 +1,23 @@
+[package]
+name = "allocarena"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+# pgrust's own address space for mimalloc (ALLOC-LADDER (c), LADDER-DESIGN sections 5 + 6): general arenas and one
+# exclusive cache arena handed to mimalloc v3 through `mi_manage_memory`, with a commit callback that counts what
+# mimalloc takes into the memory ledger (memledger::arena) and wakes the ladder past its line.
+[lib]
+name = "allocarena"
+path = "src/lib.rs"
+
+[dependencies]
+memledger = { path = "../memledger" }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+libmimalloc-sys = { version = "0.1", features = ["extended", "no_thp"] }
+libc = "0.2"
+
+[dev-dependencies]
+mimalloc = "0.1"
+init_small = { path = "../../backend/utils/init/init_small" }

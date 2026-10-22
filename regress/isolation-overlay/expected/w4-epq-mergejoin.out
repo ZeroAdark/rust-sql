@@ -1,0 +1,182 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2plan s3plan s2bigplan
+step s2plan: EXPLAIN (costs off) UPDATE mt SET v = mt.v * 10 + ms.w FROM ms WHERE mt.k = ms.k;
+QUERY PLAN                       
+---------------------------------
+Update on mt                     
+  ->  Merge Join                 
+        Merge Cond: (ms.k = mt.k)
+        ->  Sort                 
+              Sort Key: ms.k     
+              ->  Seq Scan on ms 
+        ->  Sort                 
+              Sort Key: mt.k     
+              ->  Seq Scan on mt 
+(9 rows)
+
+step s3plan: EXPLAIN (costs off) UPDATE mt SET v = mt.v * 10 + ms.w FROM ms WHERE mt.k = ms.k;
+QUERY PLAN                             
+---------------------------------------
+Update on mt                           
+  ->  Merge Join                       
+        Merge Cond: (ms.k = mt.k)      
+        ->  Index Scan using ms_k on ms
+        ->  Index Scan using mt_k on mt
+(5 rows)
+
+step s2bigplan: SET work_mem = '64kB'; EXPLAIN (costs off) UPDATE mbig SET v = mbig.v + mbs.w FROM mbs WHERE mbig.k = mbs.k;
+QUERY PLAN                              
+----------------------------------------
+Update on mbig                          
+  ->  Merge Join                        
+        Merge Cond: (mbs.k = mbig.k)    
+        ->  Sort                        
+              Sort Key: mbs.k           
+              ->  Seq Scan on mbs       
+        ->  Materialize                 
+              ->  Sort                  
+                    Sort Key: mbig.k    
+                    ->  Seq Scan on mbig
+(10 rows)
+
+
+starting permutation: s1v s2upd s1c s2chk
+s1: WARNING:  there is already a transaction in progress
+step s1v: UPDATE mt SET v = v + 100 WHERE id = 1;
+step s2upd: UPDATE mt SET v = mt.v * 10 + ms.w FROM ms WHERE mt.k = ms.k; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT * FROM mt ORDER BY id;
+id|k|   v
+--+-+----
+ 1|1|1101
+ 2|2| 202
+ 3|3|  30
+ 4|4| 404
+ 5|4| 504
+ 6|4| 604
+ 7|7| 707
+(7 rows)
+
+
+starting permutation: s1key s2upd s1c s2chk
+step s1key: UPDATE mt SET k = 99 WHERE id = 1;
+step s2upd: UPDATE mt SET v = mt.v * 10 + ms.w FROM ms WHERE mt.k = ms.k; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT * FROM mt ORDER BY id;
+id| k|  v
+--+--+---
+ 1|99| 10
+ 2| 2|202
+ 3| 3| 30
+ 4| 4|404
+ 5| 4|504
+ 6| 4|604
+ 7| 7|707
+(7 rows)
+
+
+starting permutation: s1src s2upd s1c s2chk
+step s1src: UPDATE mt SET v = v + 100 WHERE id = 1; UPDATE ms SET w = w + 1000 WHERE k = 1;
+step s2upd: UPDATE mt SET v = mt.v * 10 + ms.w FROM ms WHERE mt.k = ms.k; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT * FROM mt ORDER BY id;
+id|k|   v
+--+-+----
+ 1|1|1101
+ 2|2| 202
+ 3|3|  30
+ 4|4| 404
+ 5|4| 504
+ 6|4| 604
+ 7|7| 707
+(7 rows)
+
+
+starting permutation: s1v s2merge s1c s2chk
+step s1v: UPDATE mt SET v = v + 100 WHERE id = 1;
+step s2merge: MERGE INTO mt USING ms ON mt.k = ms.k WHEN MATCHED THEN UPDATE SET v = mt.v * 10 + ms.w; <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+step s2chk: SELECT * FROM mt ORDER BY id;
+id|k|   v
+--+-+----
+ 1|1|1101
+ 2|2| 202
+ 3|3|  30
+ 4|4| 404
+ 5|4| 504
+ 6|4| 604
+ 7|7| 707
+(7 rows)
+
+
+starting permutation: s1del s2del s1c s2chk
+step s1del: DELETE FROM mt WHERE id = 1;
+step s2del: DELETE FROM mt USING ms WHERE mt.k = ms.k; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2chk: SELECT * FROM mt ORDER BY id;
+id|k| v
+--+-+--
+ 3|3|30
+(1 row)
+
+
+starting permutation: s1mid s2upd s1c s2chk
+step s1mid: UPDATE mt SET v = v + 100 WHERE id = 5;
+step s2upd: UPDATE mt SET v = mt.v * 10 + ms.w FROM ms WHERE mt.k = ms.k; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT * FROM mt ORDER BY id;
+id|k|   v
+--+-+----
+ 1|1| 101
+ 2|2| 202
+ 3|3|  30
+ 4|4| 404
+ 5|4|1504
+ 6|4| 604
+ 7|7| 707
+(7 rows)
+
+
+starting permutation: s1v s3upd s1c s2chk
+step s1v: UPDATE mt SET v = v + 100 WHERE id = 1;
+step s3upd: UPDATE mt SET v = mt.v * 10 + ms.w FROM ms WHERE mt.k = ms.k; <waiting ...>
+step s1c: COMMIT;
+step s3upd: <... completed>
+step s2chk: SELECT * FROM mt ORDER BY id;
+id|k|   v
+--+-+----
+ 1|1|1101
+ 2|2| 202
+ 3|3|  30
+ 4|4| 404
+ 5|4| 504
+ 6|4| 604
+ 7|7| 707
+(7 rows)
+
+
+starting permutation: s1big s2big s1c s2bigchk
+step s1big: UPDATE mbig SET v = v + 1 WHERE id = 777;
+step s2big: SET work_mem = '64kB'; UPDATE mbig SET v = mbig.v + mbs.w FROM mbs WHERE mbig.k = mbs.k; <waiting ...>
+step s1c: COMMIT;
+step s2big: <... completed>
+step s2bigchk: SELECT count(*), sum(v), min(v), max(v) FROM mbig; SELECT id, k, v FROM mbig WHERE id IN (776, 777, 778) ORDER BY id;
+count|     sum|min| max
+-----+--------+---+----
+20000|49990001|  0|4999
+(1 row)
+
+ id|  k|  v
+---+---+---
+776|776|776
+777|777|778
+778|778|778
+(3 rows)
+

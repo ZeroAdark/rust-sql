@@ -347,13 +347,13 @@ fn char2wchar_default(head: &[u8]) -> PgResult<Vec<u32>> {
     out.try_reserve_exact(n1).map_err(|_| ::mcx::oom_named("char2wchar", n1 * 4))?;
     out.resize(n1, 0);
     // SAFETY: nul is NUL-terminated; at most out.len() wchars written.
-    let n = unsafe {
+    let n = ::pg_locale::with_backend_ctype(|| unsafe {
         mbstowcs(
             out.as_mut_ptr(),
             nul.as_ptr() as *const core::ffi::c_char,
             out.len(),
         )
-    };
+    });
     if n == usize::MAX {
         ::mbutils::pg_verifymbstr(head, false)?;
         return Err(invalid_multibyte_for_locale());
@@ -365,7 +365,7 @@ fn char2wchar_default(head: &[u8]) -> PgResult<Vec<u32>> {
     // than input bytes — an embedded NUL stops mbstowcs at 0 while lenstr
     // stays 1, so `p_iswhat` indexed an empty vector. Keep C's shape (found
     // by wparser_diff, lane p1-mb-contribc).
-    out.resize(head.len() + 1, 0);
+    ::mcx::std_vec_resize("tsearch", &mut out, head.len() + 1, 0)?;
     if n < out.len() {
         out[n] = 0;
     }
@@ -474,7 +474,7 @@ enum IsWhat {
 impl IsWhat {
     fn byte_fn(self, c: u32) -> i32 {
         // SAFETY: pure ctype calls.
-        unsafe {
+        ::pg_locale::with_backend_ctype(|| unsafe {
             match self {
                 IsWhat::Alnum => isalnum(c as c_int),
                 IsWhat::Alpha => isalpha(c as c_int),
@@ -482,11 +482,11 @@ impl IsWhat {
                 IsWhat::Space => isspace(c as c_int),
                 IsWhat::Xdigit => isxdigit(c as c_int),
             }
-        }
+        })
     }
     fn wide_fn(self, c: u32) -> i32 {
         // SAFETY: pure wctype calls.
-        unsafe {
+        ::pg_locale::with_backend_ctype(|| unsafe {
             match self {
                 IsWhat::Alnum => iswalnum(c),
                 IsWhat::Alpha => iswalpha(c),
@@ -494,7 +494,7 @@ impl IsWhat {
                 IsWhat::Space => iswspace(c),
                 IsWhat::Xdigit => iswxdigit(c),
             }
-        }
+        })
     }
 }
 

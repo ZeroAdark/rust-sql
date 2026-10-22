@@ -201,6 +201,7 @@ pub(crate) fn fc_hash_page_items(
     require_superuser("raw page")?;
 
     let rows = if !flinfo.has_fn_extra() {
+        require_set_context(fcinfo)?;
         // SAFETY: the arming context outlives this call.
         let mcx = unsafe { fcinfo.result_mcx_detached() };
         let page = RawPage::arg(fcinfo, 0)?;
@@ -209,7 +210,7 @@ pub(crate) fn fc_hash_page_items(
 
         let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
         let maxoff = page_max_offset_number(b);
-        let mut rows = Vec::with_capacity(maxoff);
+        let mut rows = ::mcx::std_vec_with_capacity("contrib", maxoff)?;
         for offnum in 1..=maxoff {
             let id = page_item_id(b, offnum);
             let pos = id.off as usize;

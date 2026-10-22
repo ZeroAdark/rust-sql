@@ -1,0 +1,12 @@
+-- regress-full-enum-006
+-- SELECT * FROM enumtest WHERE col = 'orange';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=16792 rti=1 am=heap index=16795
+    key att=1 op=3516 value=c16697:16700
+    recheck (op3516(index.1, c16697:16700))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  outs 1=?
+mapped: IndexOnlyScan

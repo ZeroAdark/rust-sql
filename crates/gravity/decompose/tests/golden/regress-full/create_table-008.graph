@@ -1,0 +1,10 @@
+-- regress-full-create_table-008
+-- insert into volatile_partbound_test values (current_timestamp);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=fn2027(T_SQLValueFunction))
+  write INSERT rel=19223 rti=1 natts=1 indexes=() route=rti1:19223 natts=1
+  outs 1=w8:val
+mapped: Result ModifyTable

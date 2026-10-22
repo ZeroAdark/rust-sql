@@ -1,0 +1,10 @@
+-- regress-full-multirangetypes-003
+-- SELECT nmr, isempty(nmr), lower(nmr), upper(nmr) FROM nummultirange_test ORDER BY nmr;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=17211 rti=1 am=heap index=17216
+    lanes Attr(1):byref8:vl:win/page
+  project (1=index.1, 2=fn4237(index.1), 3=fn4235(index.1), 4=fn4236(index.1))
+  outs 1=vl:win/page 2=w1:val 3=vl:call4235 4=vl:call4236
+mapped: IndexOnlyScan

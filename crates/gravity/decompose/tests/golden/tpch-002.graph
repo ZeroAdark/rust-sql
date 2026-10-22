@@ -1,0 +1,132 @@
+-- tpch-002
+-- SELECT s_acctbal, s_name, n_name, p_partkey, p_mfgr, s_address, s_phone, s_comment FROM part, supplier, partsupp, nation, region WHERE p_partkey = ps_partkey AND s_suppkey = ps_suppkey AND p_size = 15 AND p_type LIKE '%BRASS' AND s_nationkey = n_nationkey AND n_regionkey = r_regionkey AND r_name = 'EUROPE' AND ps_supplycost = ( SELECT min(ps_supplycost) FROM partsupp, supplier, nation, region WHERE p_partkey = ps_partkey AND s_suppkey = ps_suppkey AND s_nationkey = n_nationkey AND n_regionkey = r_regionkey AND r_name = 'EUROPE') ORDER BY s_acctbal DESC, n_name, s_name, p_partkey LIMIT 100 /* TH2 */;
+graph pipelines=9 breakers=8 init_plans=0 root=p8
+p0 node=20 eligible rows=9 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n20@0 n19@3
+  source range rel=16408 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byref8:vl:win/page Attr(5):byref8:vl:win/page Attr(6):byval8:w8:val Offset:byval2:w2:val
+  filter op1209(relabel25(v1.5), c25:'%BRASS')
+  filter op96(v1.6, c23:15)
+  project (1=v1.1, 2=v1.3)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=vl:win/page
+p1 node=18 eligible rows=1 end=breaker(slot=1 HashBuild)
+  desc words=bits@6/7
+  nodes n18@0 n17@2
+  source range rel=16397 rti=15 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op1054(v15.2, c1042:'EUROPE')
+  project (1=v15.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val
+p2 node=16 eligible rows=25 end=breaker(slot=2 HashBuild)
+  desc consumes=slot1@p1 words=bits@7/8
+  nodes n16@0 n15@1 n14@3
+  source range rel=16402 rti=14 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v14.1, 2=v14.2, 3=v14.3, 4=v14.4)
+  probe slot=1 inner=n17 JOIN_INNER unique keys=(outer.3) decls=23/23:I32 clauses=(op96(outer.3, inner.1))
+  project (1=outer.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=vl:row 3=w8:val 4=vl:row
+  outs 1=w8:val
+p3 node=13 eligible rows=100 end=breaker(slot=1 HashBuild)
+  desc consumes=slot2@p2 words=bits@8/9
+  nodes n13@0 n12@1 n11@3
+  source range rel=16420 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v13.1, 2=v13.2, 3=v13.3, 4=v13.4, 5=v13.5, 6=v13.6, 7=v13.7)
+  probe slot=2 inner=n14 JOIN_INNER keys=(outer.4) decls=23/23:I32 clauses=(op96(outer.4, inner.1))
+  project (1=outer.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=vl:row 3=vl:row 4=w8:val 5=vl:row 6=vl:row 7=vl:row
+  outs 1=w8:val
+p4 node=10 eligible rows=8000 end=breaker(slot=2 HashAgg)
+  desc consumes=slot1@p3 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n10@0 n9@1 n8@3^
+  source range rel=16430 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(4):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v12.1, 2=v12.2, 3=v12.3, 4=v12.4, 5=v12.5)
+  probe slot=1 inner=n11 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  project (1=outer.1, 2=outer.4)
+  outs 1=w8:val 2=w8:val 3=w4:val 4=vl:win/page 5=vl:row
+  outs 1=w8:val 2=vl:win/page
+p5 node=23 eligible rows=25 end=breaker(slot=1 HashBuild)
+  desc words=bits@9/10
+  nodes n23@0 n3@1^
+  source range rel=16402 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=vl:win/page 3=w8:val 4=vl:row
+p6 node=24 eligible rows=1 end=breaker(slot=3 HashBuild)
+  desc words=bits@10/11
+  nodes n24@0 n2@2^
+  source range rel=16397 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op1054(v5.2, c1042:'EUROPE')
+  project (1=v5.1, 2=v5.2, 3=v5.3)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=vl:win/page 3=vl:row
+p7 node=8 serial site=-1 reason=NoDrivingSite end=breaker(slot=4 TopK)
+  desc consumes=slot2@p4 consumes=slot0@p0 consumes=slot1@p5 consumes=slot3@p6
+  nodes n8@0 n6@1 n5@3 n4@5 n3@7 n2@9 n1@11^
+  source breaker slot=2
+  project (1=outer.1, 2=agg2146(1=outer.2))
+  probe slot=0 inner=n19 JOIN_INNER unique build-first keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=inner.1, 2=inner.2, 3=outer.1, 4=outer.2)
+  nest inner=n21 JOIN_INNER raise-free eq=#0:op96:fam1977:23/23:L params=($exec0=outer.3, $exec1=outer.4) qual=(op96(outer.1, inner.1))
+  inner node=21 serial site=0 reason=IndexSource end=sink
+  nodes n21@0
+  source index rel=16430 rti=3 am=heap index=16488
+    key att=1 op=96 value=$exec0
+    recheck (op96(v3.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(4):byref8:vl:win/page
+  filter op1752($exec1, v3.4)
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4, 5=v3.5)
+  project (1=outer.1, 2=outer.2, 3=inner.2)
+  nest inner=n22 JOIN_INNER unique raise-free params=($exec2=outer.3)
+  inner node=22 serial site=0 reason=IndexSource end=sink
+  nodes n22@0
+  source index rel=16420 rti=2 am=heap index=16486
+    key att=1 op=96 value=$exec2
+    recheck (op96(v2.1, $exec2))
+    lanes Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Attr(5):byref8:vl:win/page Attr(6):byref8:vl:win/page Attr(7):byref8:vl:win/page
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7)
+  project (1=outer.1, 2=outer.2, 3=inner.6, 4=inner.2, 5=inner.3, 6=inner.5, 7=inner.7, 8=inner.4)
+  probe slot=1 inner=n23 JOIN_INNER unique catalog keys=(outer.8) decls=23/23:I32 clauses=(op96(inner.1, outer.8))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=inner.2, 9=inner.3)
+  probe slot=3 inner=n24 JOIN_INNER unique catalog keys=(outer.9) decls=23/23:I32 clauses=(op96(inner.1, outer.9))
+  project (1=outer.3, 2=outer.4, 3=outer.8, 4=outer.1, 5=outer.2, 6=outer.5, 7=outer.6, 8=outer.7)
+  sort keys=1-n:I64/NumMantissa.2,3+:Fp128/Bpchar@950,2+:Fp128/Bpchar@950,4+:I32 form=topk count=100 offset=all
+  outs 1=w4:val 2=vl:call2146
+  outs 1=w4:val 2=vl:life/breaker 3=w4:val 4=vl:call2146
+  outs 1=w4:val 2=vl:life/breaker 3=w4:val
+  outs 1=w4:val 2=vl:life/breaker 3=vl:life/breaker 4=vl:life/breaker 5=vl:life/breaker 6=vl:life/breaker 7=vl:life/breaker 8=w4:val
+  outs 1=w4:val 2=vl:life/breaker 3=vl:life/breaker 4=vl:life/breaker 5=vl:life/breaker 6=vl:life/breaker 7=vl:life/breaker 8=vl:life/breaker 9=w4:val
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=vl:life/breaker 4=w4:val 5=vl:life/breaker 6=vl:life/breaker 7=vl:life/breaker 8=vl:life/breaker
+p8 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot4@p7
+  nodes n1@0 n0@1
+  source breaker slot=4
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8)
+  limit count=100 offset=all
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8)
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=vl:life/breaker 4=w4:val 5=vl:life/breaker 6=vl:life/breaker 7=vl:life/breaker 8=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=vl:life/breaker 4=w4:val 5=vl:life/breaker 6=vl:life/breaker 7=vl:life/breaker 8=vl:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[I32]->[MinI64@8,Count@16]+valid 32B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p6 layout=[I32]->[Count@8] 16B
+breaker slot=4 kind=TopK budget=Fixed(8864) spill=None producer=p7 layout=[I64,Fp128,Fp128,Fp128,Fp128,I32]->[Count@48] 56B order=1-n,3+,2+,4+
+group slot=2 producer=p4 node=8 form=Hashed hints=[] layout=[I32]->[MinI64@8,Count@16]+valid 32B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  agg aggno=0 fn=2146 reg=MinNum slot=0 count_slot=- final=Numeric scale=2 class=Min(Num) trans=Abi(MinI64) mods=[] expr=agg2146(1=outer.2)
+param $exec0 owner=n5 type=23 rep=w4:val
+param $exec1 owner=n5 type=1700 rep=vl:call2146
+param $exec2 owner=n4 type=23 rep=w4:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam HashJoin Sort Agg Hash Limit

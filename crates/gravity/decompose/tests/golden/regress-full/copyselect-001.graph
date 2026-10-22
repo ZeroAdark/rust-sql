@@ -1,0 +1,14 @@
+-- regress-full-copyselect-001
+-- copy (select t from test1 where id=3 for update) to stdout;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Lock end=sink
+  nodes n1@0 n0@2
+  source range rel=17634 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v1.1, c23:3)
+  project (1=v1.2, 2j=v1.-1)
+  lock rel=17634 Exclusive Block marks=(rti1:ROW_MARK_EXCLUSIVE)
+  project (1=outer.1, 2j=outer.2)
+  outs 1=vl:win/page 2=fx6:row
+  outs 1=vl:win/page 2=fx6:row
+mapped: SeqScan LockRows PlanRowMark

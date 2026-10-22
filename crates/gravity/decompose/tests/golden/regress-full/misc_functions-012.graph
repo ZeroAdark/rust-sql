@@ -1,0 +1,20 @@
+-- regress-full-misc_functions-012
+-- select * from (select (pg_timezone_names()).name) ptn where name='UTC' limit 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=4 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n4@0 n3@1 n2@3 n1@4 n0@6
+  source const
+  project ()
+  srf tlist [1:Other fn2856 fn2856()]
+  project (1=fn2856())
+  project (1=T_FieldSelect)
+  filter op98(v1.1, c25:'UTC')
+  project (1=v1.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs
+  outs 1=vl:call2856
+  outs 1=vl:call0
+  outs 1=vl:row
+  outs 1=vl:row
+mapped: Result ProjectSet SubqueryScan Limit

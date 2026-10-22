@@ -1,0 +1,13 @@
+-- regress-full-fast_default-020
+-- SELECT COALESCE(c_bigint, pk), COALESCE(c_text, pk::text) FROM T ORDER BY pk LIMIT 10;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index rel=47682 rti=1 am=heap index=47686
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page
+  project (1=coalesce(v1.2, fn481(v1.1)), 2=coalesce(v1.3, io25(v1.1)), 3j=v1.1)
+  limit count=10 offset=all
+  project (1=outer.1, 2=outer.2, 3j=outer.3)
+  outs 1=w8:val 2=vl:call46 3=w8:val
+  outs 1=w8:val 2=vl:call46 3=w8:val
+mapped: IndexScan Limit

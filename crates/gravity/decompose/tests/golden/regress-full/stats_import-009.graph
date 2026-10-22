@@ -1,0 +1,63 @@
+-- regress-full-stats_import-009
+-- SELECT COUNT(*) FROM pg_stats WHERE schemaname = 'stats_import' AND tablename = 'test' AND inherited = false AND attname = 'arange';
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=8 eligible rows=1 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n8@0 n2@2^
+  source range rel=2615 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v7.2, c19:#64)
+  project (1=v7.1, 2=v7.2, 3=v7.3, 4=v7.4)
+  build keys=(outer.1) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+p1 node=5 serial site=0 reason=SortedSource end=breaker(slot=1 PlainAgg)
+  desc consumes=slot0@p0
+  nodes n5@0 n4@2 n3@4 n2@6 n0@8^
+  source index rel=1259 rti=3 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v3.2, c19:#64))
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Attr(24):byval8:w8:val
+  filter or(not(v3.24), not(fn3298(v3.1)))
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4, 5=v3.5, 6=v3.6, 7=v3.7, 8=v3.8, 9=v3.9, 10=v3.10, 11=v3.11, 12=v3.12, 13=v3.13, 14=v3.14, 15=v3.15, 16=v3.16, 17=v3.17, 18=v3.18, 19=v3.19, 20=v3.20, 21=v3.21, 22=v3.22, 23=v3.23, 24=v3.24, 25=v3.25, 26=v3.26, 27=v3.27, 28=v3.28, 29=v3.29, 30=v3.30, 31=v3.31, 32=v3.32, 33=v3.33, 34=v3.34)
+  nest inner=n6 JOIN_INNER raise-free params=($exec0=outer.1)
+  inner node=6 serial site=0 reason=IndexSource end=sink
+  nodes n6@0
+  source index-only rel=2619 rti=2 am=heap index=2696
+    key att=1 op=607 value=$exec0
+    key att=3 op=91 value=c16:0
+    recheck (op607(index.1, $exec0), op91(index.3, c16:0))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=index.1, 2=index.2, 3=index.3)
+  project (1=inner.1, 2=inner.2, 3=outer.1, 4=outer.3)
+  nest inner=n7 JOIN_INNER unique raise-free eq=#1:op607:fam1990:26/26:L params=($exec1=outer.1, $exec2=outer.2) qual=(fn3023(outer.3, inner.5, c25:'select'), op607(outer.3, inner.1))
+  inner node=7 serial site=0 reason=IndexSource end=sink
+  nodes n7@0
+  source index rel=1249 rti=5 am=heap index=2659
+    key att=1 op=607 value=$exec1
+    key att=5 op=94 value=$exec2
+    recheck (op607(v5.1, $exec1), op94(v5.5, $exec2))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val Attr(17):byval8:w8:val
+  filter not(v5.17)
+  filter op93(v5.2, c19:#64)
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7, 8=v5.8, 9=v5.9, 10=v5.10, 11=v5.11, 12=v5.12, 13=v5.13, 14=v5.14, 15=v5.15, 16=v5.16, 17=v5.17, 18=v5.18, 19=v5.19, 20=v5.20, 21=v5.21, 22=v5.22, 23=v5.23, 24=v5.24, 25=v5.25)
+  project (1=outer.4)
+  probe slot=0 inner=n8 JOIN_INNER unique catalog keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.1))
+  project (1=c19:null, 2=c19:null, 3=c19:null, 4=c16:null, 5=c700:null, 6=c23:null, 7=c700:null, 8=c2277:null, 9=c1021:null, 10=c2277:null, 11=c700:null, 12=c2277:null, 13=c1021:null, 14=c1021:null, 15=c2277:null, 16=c700:null, 17=c2277:null)
+  outs 1=w8:val 2=fx64:row 3=w8:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=w4:val 15=w1:val 16=w1:val 17=w1:val 18=w1:val 19=w2:val 20=w2:val 21=w1:val 22=w1:val 23=w1:val 24=w8:val 25=w1:val 26=w1:val 27=w1:val 28=w1:val 29=w4:val 30=w4:val 31=w4:val 32=vl:row 33=vl:row 34=vl:row
+  outs 1=w4:val 2=w2:val 3=w8:val 4=w8:val
+  outs 1=w8:val
+  outs 1=fx64:stmt/imm 2=fx64:stmt/imm 3=fx64:stmt/imm 4=w1:val 5=w4:val 6=w4:val 7=w4:val 8=vl:stmt/imm 9=vl:stmt/imm 10=vl:stmt/imm 11=w4:val 12=vl:stmt/imm 13=vl:stmt/imm 14=vl:stmt/imm 15=vl:stmt/imm 16=w4:val 17=vl:stmt/imm
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=PlainAgg budget=Fixed(64) spill=None producer=p1 layout=[]->[Count@0] 8B
+group slot=1 producer=p1 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+param $exec0 owner=n4 type=26 rep=w8:val
+param $exec1 owner=n3 type=26 rep=w4:val
+param $exec2 owner=n3 type=21 rep=w2:val
+mapped: SeqScan IndexScan IndexOnlyScan NestLoop NestLoopParam Agg

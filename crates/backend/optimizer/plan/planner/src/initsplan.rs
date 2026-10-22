@@ -2133,7 +2133,7 @@ pub fn make_restrictinfo<'mcx>(
         },
         norm_selec: -1.0,
         outer_selec: -1.0,
-        mergeopfamilies: PgVec::new_in(mcx),
+        mergeopfamilies: &[],
         left_ec: None,
         right_ec: None,
         left_em: None,
@@ -2213,7 +2213,7 @@ fn check_mergejoinable(run: &mut PlannerRun<'_>, rinfo: RinfoId) -> PgResult<()>
     if crate::syscache_memo::op_mergejoinable(run, opno, lefttype)?
         && !clauses::contain_volatile_functions(clause)?
     {
-        let fams = lsyscache::get_mergejoin_opfamilies(run.mcx, opno)?;
+        let fams = lsyscache::run_memo::get_mergejoin_opfamilies(run, opno)?;
         run.root.rinfo_mut(rinfo).mergeopfamilies = fams;
     }
     Ok(())
@@ -2570,13 +2570,13 @@ pub fn remove_useless_groupby_columns<'mcx>(run: &mut PlannerRun<'mcx>) -> PgRes
 
     let nrtes = parse.rtable.len() + 1;
     let mut groupbyattnos: PgVec<'mcx, types_pathnodes::Relids<'mcx>> = PgVec::new_in(mcx);
-    let mut groupbycols: Vec<Vec<GroupByColInfo<'mcx>>> = Vec::with_capacity(nrtes);
+    let mut groupbycols: Vec<Vec<GroupByColInfo<'mcx>>> = ::mcx::std_vec_with_capacity("optimizer", nrtes)?;
     for _ in 0..nrtes {
         groupbyattnos.push(crate::relnode::relids_empty());
         groupbycols.push(Vec::new());
     }
     let mut tryremove = false;
-    let group_clause = crate::relnode::pgvec_clone_shallow(mcx, &run.root.processed_groupClause);
+    let group_clause = run.root.processed_groupClause;
     for &sgc_id in group_clause.iter() {
         let (sgref, eqop) = {
             let sgc = run
@@ -2725,12 +2725,12 @@ pub fn remove_useless_groupby_columns<'mcx>(run: &mut PlannerRun<'mcx>) -> PgRes
                 new_groupby.push(sgc_id);
             }
         }
-        run.root.processed_groupClause = new_groupby;
+        run.root.processed_groupClause = ::mcx::freeze_fit(new_groupby);
     }
     Ok(())
 }
 
-fn get_sortgroupclause_tle<'mcx>(
+pub(crate) fn get_sortgroupclause_tle<'mcx>(
     sortgroupref: types_core::Index,
     tlist: &types_nodes::NodeList<'mcx>,
 ) -> &'mcx types_nodes::primnodes::TargetEntry<'mcx> {

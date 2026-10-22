@@ -1,7 +1,8 @@
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 use datum::Datum;
-use mcx::PgVec;
+use mcx::{Mcx, PgVec};
 use types_error::PgResult;
 use types_portal::TuplestoreHandle;
 use types_slot::SlotData;
@@ -12,8 +13,7 @@ pub struct SqlFunctionDestState<'mcx> {
     pub tstore: TuplestoreHandle,
     pub clean_desc: Rc<TupleDescData<'mcx>>,
     pub clean_map: &'mcx [i16],
-    pub only_first: bool,
-    pub received: bool,
+    pub row_slot: Option<(NonNull<SlotData<'mcx>>, Mcx<'mcx>)>,
     pub values: PgVec<'mcx, Datum>,
     pub isnull: PgVec<'mcx, bool>,
 }

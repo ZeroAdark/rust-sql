@@ -105,7 +105,7 @@ fn wait_for_lockers_guts<'m>(
     }
 
     // Collect the transactions we need to wait on
-    let mut holders = Vec::with_capacity(locktags.len());
+    let mut holders = ::mcx::std_vec_with_capacity("WaitForLockersMultiple", locktags.len())?;
     let mut total: i64 = 0;
     for locktag in locktags {
         let conflicts = get_conflicts(locktag)?;

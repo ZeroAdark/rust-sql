@@ -1,0 +1,68 @@
+-- tpch-sf10-022
+-- SELECT cntrycode, count(*) AS numcust, sum(c_acctbal) AS totacctbal FROM ( SELECT substring(c_phone FROM 1 FOR 2) AS cntrycode, c_acctbal FROM customer WHERE substring(c_phone FROM 1 FOR 2) IN ('13', '31', '23', '29', '30', '18', '17') AND c_acctbal > ( SELECT avg(c_acctbal) FROM customer WHERE c_acctbal > 0.00 AND substring(c_phone FROM 1 FOR 2) IN ('13', '31', '23', '29', '30', '18', '17')) AND NOT EXISTS ( SELECT * FROM orders WHERE o_custkey = c_custkey)) AS custsale GROUP BY cntrycode ORDER BY cntrycode /* TH22 */;
+graph pipelines=7 breakers=5 init_plans=1 root=p6
+p0 node=7 eligible rows=26250 end=breaker(slot=0 PlainAgg)
+  nodes n7@0 n6@3^
+  source range rel=16426 rti=5 am=pgrc
+    lanes Attr(5):codes4:code:part/dict Attr(6):fixed8:pn15.2:win/arena Offset:byval2:w2:val
+  filter op1756(v5.6, c1700:'\x00\x81')
+  filter any98(fn936(fn401(v5.5), c23:1, c23:2), c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x07\x00\x00\x00\x01\x00\x00\x00\x18\x00\x00\x0013\x00\x00\x18\x00\x00\x0031\x00\x00\x18\x00\x00\x0023\x00\x00\x18\x00\x00\x0029\x00\x00\x18\x00\x00\x0030\x00\x00\x18\x00\x00\x0018\x00\x00\x18\x00\x00\x0017\x00\x00')
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7, 8=v5.8)
+  outs 1=w4:val 2=vl:row 3=vl:row 4=w4:val 5=code:part/dict 6=pn15.2:win/arena 7=vl:row 8=vl:row
+p1 node=6 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n6@0
+  source breaker slot=0
+  project (1=agg2103(1=outer.6))
+  outs 1=vl:call2103
+p2 node=5 eligible rows=17500 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n5@0 n4@3
+  source range rel=16426 rti=3 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(5):codes4:code:part/dict Attr(6):fixed8:pn15.2:win/arena Offset:byval2:w2:val
+  filter op1756(v3.6, $exec0)
+  filter any98(fn936(fn401(v3.5), c23:1, c23:2), c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x07\x00\x00\x00\x01\x00\x00\x00\x18\x00\x00\x0013\x00\x00\x18\x00\x00\x0031\x00\x00\x18\x00\x00\x0023\x00\x00\x18\x00\x00\x0029\x00\x00\x18\x00\x00\x0030\x00\x00\x18\x00\x00\x0018\x00\x00\x18\x00\x00\x0017\x00\x00')
+  project (1=v3.5, 2=v3.6, 3=v3.1)
+  build keys=(outer.3) decls=23/23:I32
+  outs 1=code:part/dict 2=pn15.2:win/arena 3=w4:val
+p3 node=3 eligible rows=15000000 end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p2
+  nodes n3@0 n2@1^
+  source range rel=16437 rti=4 am=pgrc
+    lanes Attr(2):byval4:w4:val Offset:byval2:w2:val
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9)
+  probe slot=0 inner=n4 JOIN_RIGHT_ANTI marks build-first keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.3))
+  outs 1=w4:val 2=w4:val 3=vl:row 4=vl:row 5=w4:val 6=vl:row 7=vl:row 8=w4:val 9=vl:row
+p4 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 HashAgg)
+  desc consumes=slot0@p2 consumes=slot1@p3 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n1@2^
+  source breaker slot=0
+  drain matches=slot1 JOIN_RIGHT_ANTI
+  project (1=fn936(fn401(inner.1), c23:1, c23:2), 2=inner.2)
+  outs 1=vl:call936 2=vl:life/breaker
+p5 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot2@p4
+  nodes n1@0 n0@1^
+  source breaker slot=2
+  project (1=outer.1, 2=agg2803*(), 3=agg2114(1=outer.2))
+  sort keys=1+:Fp128@950 form=runs
+  outs 1=vl:life/breaker 2=w8:val 3=vl:call2114
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p5
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=vl:life/breaker 2=w8:val 3=vl:call2114
+breaker slot=0 kind=PlainAgg budget=Fixed(88) spill=None producer=p0 layout=[]->[AvgNum@0,Count@24] 32B
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[Fp128,Fp128]->[Count@16,SumNum@24,MinCode@40]+valid 56B
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p5 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+group slot=0 producer=p0 node=6 form=Plain hints=[] layout=[]->[AvgNum@0,Count@24] 32B
+  agg aggno=0 fn=2103 reg=AvgNum slot=0 count_slot=- final=NumericAvg scale=2 class=AvgNum trans=Abi(AvgNum) mods=[] expr=agg2103(1=outer.6)
+group slot=2 producer=p4 node=1 form=Hashed hints=[] layout=[Fp128,Fp128]->[Count@16,SumNum@24,MinCode@40]+valid 56B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=25 rep=2 expr=fn936(fn401(inner.1), c23:1, c23:2)
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+  agg aggno=1 fn=2114 reg=SumNum slot=1 count_slot=- final=Numeric scale=2 class=SumNum trans=Abi(SumNum) mods=[] expr=agg2114(1=outer.2)
+init_plan id=1 pipeline=p1 link=Expr param=$exec0
+mapped: SeqScan HashJoin Sort Agg Hash SubPlan

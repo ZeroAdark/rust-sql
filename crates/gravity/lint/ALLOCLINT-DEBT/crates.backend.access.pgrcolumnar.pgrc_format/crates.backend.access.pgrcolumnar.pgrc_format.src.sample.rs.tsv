@@ -1,0 +1,9 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/sample.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	17
+growth	std::vec::Vec::insert	1
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::try_reserve_exact	1
+method	pgrc_format::try_filled	1
+method	pgrc_format::try_vec	2
+type	std::vec::Vec	3

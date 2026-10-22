@@ -7,9 +7,11 @@ pub mod checksum;
 #[cfg(test)]
 mod tests;
 
+use elog::ereport;
+use fd::buffile::{BufFile, BufFileCreateTemp, SEEK_SET};
 use mcx::{Mcx, PgVec};
 use types_core::{pg_time_t, Oid, TimeLineID, XLogRecPtr, MAXPGPATH};
-use types_error::{PgError, PgResult};
+use types_error::{ErrorLocation, PgError, PgResult, ERROR};
 
 use localtime::pg_gmtime;
 use pg_sha2::{PgSha256Ctx, PG_SHA256_DIGEST_LENGTH};
@@ -50,6 +52,12 @@ fn err(msg: impl Into<String>) -> Box<PgError> {
     PgError::error(msg).into()
 }
 
+#[track_caller]
+fn loc(func: &'static str) -> ErrorLocation {
+    let site = core::panic::Location::caller();
+    ErrorLocation::new(site.file(), site.line() as i32, func)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackupManifestOption {
     Yes,
@@ -65,7 +73,8 @@ pub struct BackupManifestInfo<'mcx> {
     enabled: bool,
     checksum_type: PgChecksumType,
     manifest_ctx: Option<PgSha256Ctx>,
-    buf: Option<PgVec<'mcx, u8>>,
+    mcx: Option<Mcx<'mcx>>,
+    buffile: Option<BufFile<'mcx>>,
     manifest_size: u64,
     force_encode: bool,
     first_file: bool,
@@ -78,7 +87,8 @@ impl<'mcx> BackupManifestInfo<'mcx> {
             enabled: false,
             checksum_type: PgChecksumType::None,
             manifest_ctx: None,
-            buf: None,
+            mcx: None,
+            buffile: None,
             manifest_size: 0,
             force_encode: false,
             first_file: false,
@@ -92,10 +102,6 @@ impl<'mcx> BackupManifestInfo<'mcx> {
 
     pub fn manifest_size(&self) -> u64 {
         self.manifest_size
-    }
-
-    pub fn bytes(&self) -> &[u8] {
-        self.buf.as_deref().unwrap_or(&[])
     }
 }
 
@@ -171,7 +177,8 @@ pub fn InitializeBackupManifest<'mcx>(
 
     if want_manifest != MANIFEST_OPTION_NO {
         manifest.enabled = true;
-        manifest.buf = Some(PgVec::new_in(mcx));
+        manifest.mcx = Some(mcx);
+        manifest.buffile = Some(BufFileCreateTemp(mcx, false)?);
         manifest.manifest_ctx = Some(PgSha256Ctx::init_sha256());
     }
 
@@ -219,7 +226,7 @@ pub fn AddFileToBackupManifest(
         pathname
     };
 
-    let mcx = *manifest.buf.as_ref().expect("manifest enabled").allocator();
+    let mcx = manifest.mcx.expect("manifest enabled");
     let mut buf: PgVec<'_, u8> = PgVec::new_in(mcx);
     if manifest.first_file {
         sb_push(&mut buf, b'\n')?;
@@ -346,9 +353,16 @@ pub fn AddWALInfoToBackupManifest<'mcx>(
     Ok(())
 }
 
-pub fn SendBackupManifest<'a>(manifest: &'a mut BackupManifestInfo<'_>) -> PgResult<&'a [u8]> {
+/// backup_manifest.c SendBackupManifest: finalize the checksum, rewind the
+/// temp file and hand it to the sink in `buffer_length` chunks. `contents`
+/// receives the exact-read into the sink buffer to perform and the chunk size.
+pub fn SendBackupManifest(
+    manifest: &mut BackupManifestInfo<'_>,
+    buffer_length: usize,
+    mut contents: impl FnMut(&mut dyn FnMut(&mut [u8]) -> PgResult<()>, usize) -> PgResult<()>,
+) -> PgResult<()> {
     if !IsManifestEnabled(manifest) {
-        return Ok(manifest.bytes());
+        return Ok(());
     }
 
     manifest.still_checksumming = false;
@@ -362,7 +376,7 @@ pub fn SendBackupManifest<'a>(manifest: &'a mut BackupManifestInfo<'_>) -> PgRes
 
     let mut checksumstringbuf = [0u8; PG_SHA256_DIGEST_STRING_LENGTH];
     {
-        let mcx = *manifest.buf.as_ref().expect("manifest enabled").allocator();
+        let mcx = manifest.mcx.expect("manifest enabled");
         let mut tmp: PgVec<'_, u8> = PgVec::new_in(mcx);
         hex_append(&mut tmp, &digest)?;
         checksumstringbuf[..tmp.len()].copy_from_slice(&tmp);
@@ -376,7 +390,24 @@ pub fn SendBackupManifest<'a>(manifest: &'a mut BackupManifestInfo<'_>) -> PgRes
     AppendStringToManifest(manifest, &checksumstringbuf[..end])?;
     AppendStringToManifest(manifest, b"\"}\n")?;
 
-    Ok(manifest.bytes())
+    let mut buffile = manifest.buffile.take().expect("manifest enabled");
+    if buffile.seek(0, 0, SEEK_SET)? != 0 {
+        ereport(ERROR)
+            .with_saved_errno(fd::get_errno())
+            .errcode_for_file_access()
+            .errmsg("could not rewind temporary file")
+            .finish(loc("SendBackupManifest"))?;
+    }
+
+    let mut manifest_bytes_done = 0u64;
+    while manifest_bytes_done < manifest.manifest_size {
+        let bytes_to_read =
+            (buffer_length as u64).min(manifest.manifest_size - manifest_bytes_done) as usize;
+        contents(&mut |dst: &mut [u8]| buffile.read_exact(dst), bytes_to_read)?;
+        manifest_bytes_done += bytes_to_read as u64;
+    }
+
+    buffile.close()
 }
 
 fn AppendStringToManifest(manifest: &mut BackupManifestInfo, s: &[u8]) -> PgResult<()> {
@@ -386,8 +417,7 @@ fn AppendStringToManifest(manifest: &mut BackupManifestInfo, s: &[u8]) -> PgResu
             ctx.update(s);
         }
     }
-    let buf = manifest.buf.as_mut().expect("manifest enabled");
-    sb_extend(buf, s)?;
+    manifest.buffile.as_mut().expect("manifest enabled").write(s)?;
     manifest.manifest_size += len as u64;
     Ok(())
 }

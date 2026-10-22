@@ -1,0 +1,10 @@
+-- regress-full-updatable_views-084
+-- MERGE INTO rw_view2 t USING (VALUES (60)) AS v(a) ON t.a = v.a WHEN NOT MATCHED THEN INSERT VALUES (v.a);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=$14, 2=c23:10)
+  write INSERT rel=24552 rti=1 natts=2 indexes=()
+  outs 1=w4:val 2=w4:val
+mapped: Result ModifyTable

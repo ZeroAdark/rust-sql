@@ -1,0 +1,2 @@
+regress-full-uuid-009	regress heap/fold	served
+regress-full-uuid-009	regress rows/scan	served

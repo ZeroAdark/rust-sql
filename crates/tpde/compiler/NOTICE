@@ -1,0 +1,26 @@
+Rust translation of TPDE CompilerBase.hpp (the compiler-state half),
+ValueRef.hpp, ValuePartRef.hpp, ScratchReg.hpp and GenericValuePart.hpp,
+revision 116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception. Original sources and license
+texts are retained under tests/reference (LICENSES/ and manifest.json); the
+translated files, as pinned there:
+  tpde/include/tpde/CompilerBase.hpp
+    sha256 fc87e49f1caa5b9f7d2ce6240b9abb60003ae8f2e4fd142e604471f4a8eeb3c9
+    git blob fe9d002e5e88a7581b486caf35877a7f3f6d3369
+  tpde/include/tpde/ValueRef.hpp
+    sha256 3feb5e6f6e5bdbfb10d60b744186ea5136e6e489ae5eb38d36328913508f80c0
+    git blob 6cf8ea516dcf7a21d0db86b1fdc9660222f78c8f
+  tpde/include/tpde/ValuePartRef.hpp
+    sha256 47896f9923bcde380f1e9a6750602a01804b20f67aa588df3c97d001aadb2f16
+    git blob e029dbbd3700c685948bbe914ba2c24176f4c0d0
+  tpde/include/tpde/ScratchReg.hpp
+    sha256 81017a04986cf24eb63b70a5c05cd6931abc36dae94950363a38c45128549169
+    git blob bc013d789541622fba48dd4af81e7fa0b992c121
+  tpde/include/tpde/GenericValuePart.hpp
+    sha256 6db3eaf05defadcecf060f3346027a675d97cea6fbdb6b9854d4d8c81d6dbd81
+    git blob d1c16a8afdb07179c97d4042d2f5514d0c4ef807
+Rust changes include borrow-checked value/part references, explicit guard state
+machines for frames, branches, PHIs and assignment stores, budgeted context
+allocation and checked arithmetic. See
+docs/tpde-rewrite/coverage/compiler-state.md.

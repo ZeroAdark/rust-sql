@@ -413,7 +413,7 @@ fn checkAllTheSame(
     if let Some(labels) = out.node_labels.as_mut() {
         let the_label = labels[the_node as usize];
         labels.clear();
-        labels.resize(out.n_nodes, the_label);
+        ::mcx::pgvec_resize(labels, out.n_nodes, the_label)?;
     }
 
     Ok(true)
@@ -443,7 +443,7 @@ fn doPickSplit<'m>(
     // borrowed old leaf images: (page item slices stay valid under our locks)
     let mut old_leaf_offs: PgVec<'m, OffsetNumber> = ::mcx::vec_with_capacity_in(mcx, n)?;
     // droppy elements (ItupBuf wraps PgVec): std Vec, not the no-drop arena
-    let mut new_leafs: Vec<ItupBuf<'m>> = Vec::with_capacity(n);
+    let mut new_leafs: Vec<ItupBuf<'m>> = ::mcx::std_vec_with_capacity("access", n)?;
     let mut leaf_page_select: PgVec<'m, u8> = ::mcx::vec_with_capacity_in(mcx, n)?;
 
     xlrec.stateSrc = spgxlogState {
@@ -570,7 +570,7 @@ fn doPickSplit<'m>(
         out.has_prefix = false;
         out.n_nodes = 1;
         out.node_labels = None;
-        out.map_tuples_to_nodes.resize(n_tuples, 0);
+        ::mcx::pgvec_resize(&mut out.map_tuples_to_nodes, n_tuples, 0)?;
 
         for i in 0..n_tuples {
             if natts > 1 {
@@ -609,7 +609,7 @@ fn doPickSplit<'m>(
     };
 
     // form nodes + inner tuple
-    let mut node_imgs: Vec<ItupBuf<'m>> = Vec::with_capacity(out.n_nodes);
+    let mut node_imgs: Vec<ItupBuf<'m>> = ::mcx::std_vec_with_capacity("access", out.n_nodes)?;
     for i in 0..out.n_nodes {
         let (label, labelisnull) = match out.node_labels.as_ref() {
             Some(l) => (l[i], false),
@@ -636,7 +636,7 @@ fn doPickSplit<'m>(
 
     // per-node space accounting
     let mut leaf_sizes: PgVec<'m, i32> = PgVec::new_in(mcx);
-    leaf_sizes.resize(out.n_nodes, 0);
+    ::mcx::pgvec_resize(&mut leaf_sizes, out.n_nodes, 0)?;
     for i in 0..max_to_include {
         let nn = picksplit_node_index(out.map_tuples_to_nodes[i], out.n_nodes)?;
         leaf_sizes[nn] += (new_leafs[i].size() + SIZEOF_ITEM_ID_DATA) as i32;
@@ -682,7 +682,7 @@ fn doPickSplit<'m>(
         }
         // BUG-GUARD: nToInsert semantics — C counts live old tuples
         // (n_tuples-1) plus optionally the new one
-        leaf_page_select.resize(n_to_insert, 0);
+        ::mcx::pgvec_resize(&mut leaf_page_select, n_to_insert, 0)?;
     } else if n_tuples == 1 && total_leaf_sizes > SPGIST_PAGE_CAPACITY {
         new_leaf_buffer = InvalidBuffer;
         debug_assert!(include_new);
@@ -698,7 +698,7 @@ fn doPickSplit<'m>(
         xlrec.initDest = init_dest;
 
         let mut node_page_select: PgVec<'m, u8> = PgVec::new_in(mcx);
-        node_page_select.resize(out.n_nodes, 0);
+        ::mcx::pgvec_resize(&mut node_page_select, out.n_nodes, 0)?;
 
         let mut curspace = current_free_space as i64;
         let mut newspace = buf_page_mut(new_leaf_buffer).as_ref().exact_free_space() as i64;
@@ -1346,7 +1346,7 @@ fn spgSplitNodeAction<'m>(
         let inner = item_slice(&pr, current.offnum);
         let inner_hdr = SpGistInnerTupleHeader::decode(inner);
 
-        let mut prefix_nodes: Vec<ItupBuf<'m>> = Vec::with_capacity(prefixNNodes as usize);
+        let mut prefix_nodes: Vec<ItupBuf<'m>> = ::mcx::std_vec_with_capacity("access", prefixNNodes as usize)?;
         for i in 0..prefixNNodes as usize {
             let (label, labelisnull) = if prefixNodeLabels.is_null() {
                 (Datum::null(), true)
@@ -1528,6 +1528,7 @@ pub fn spgdoinsert<'m>(
     let mut leaf_datums = [Datum::null(); K];
 
     if !isnull {
+        state.require_choose()?;
         if state.has_compress() {
             leaf_datums[spgKeyColumn] = state.call_compress(mcx, datums[spgKeyColumn])?;
         } else {

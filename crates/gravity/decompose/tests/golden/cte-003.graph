@@ -1,0 +1,11 @@
+-- cte-003
+-- INSERT INTO tree SELECT i, CASE WHEN i = 1 THEN NULL ELSE (i / 2) END, 'n' || i FROM generate_series(1, 1000) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:1000)]
+  project (1=v3.1, 2=case(when op96(v3.1, c23:1) then c23:null) else op528(v3.1, c23:2), 3=op654(c25:'n', io25(v3.1)))
+  write INSERT rel=16414 rti=1 natts=3 indexes=(16420[1]up, 16422[2])
+  outs 1=w4:val 2=w4:val 3=vl:call1258
+mapped: ModifyTable FunctionScan

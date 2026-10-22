@@ -1,15 +1,18 @@
-// Serial temp-file BufFile; the FileSet (shared) arms are loud. Arena data,
+// Temp-file BufFile, serial and FileSet (participant-shared) arms. Arena data,
 // no Drop: the VFDs are FD_CLOSE_AT_EOXACT+FD_DELETE_AT_CLOSE, so abort
 // cleanup is AtEOXact_Files; close() is the normal-path release.
 use core::cell::Cell;
 
-use ::elog::ereport;
+use ::elog::{ereport, PCT_M};
 use ::mcx::{vec_with_capacity_in, Mcx, PgVec};
 use ::types_error::{PgResult, ERROR};
-use ::types_storage::File;
+use ::types_storage::{File, WriteChunk};
 
 use crate::fileset::FileSetKey;
-use crate::io::{file_path_name_lossy, FileClose, FileRead, FileSize, FileTruncate, FileWrite};
+use crate::io::{
+    file_path_name_lossy, FileCloseGeneration, FileGeneration, FileRead, FileSize, FileTruncate, FileWrite, FileWriteV,
+    PG_IOV_MAX,
+};
 use crate::temp::OpenTemporaryFile;
 use crate::vfd::{get_errno, loc};
 use crate::wait_event::{
@@ -18,6 +21,7 @@ use crate::wait_event::{
 
 const BLCKSZ: usize = 8192;
 const MAX_PHYSICAL_FILESIZE: i64 = 0x4000_0000;
+const THROUGH: usize = 4 * BLCKSZ;
 
 pub const SEEK_SET: i32 = 0;
 pub const SEEK_CUR: i32 = 1;
@@ -52,6 +56,40 @@ pub fn temp_blk_write_time() -> i64 {
     TEMP_BLK_WRITE_TIME.with(Cell::get)
 }
 
+/// The thread's temp-file counters, in this order: blocks read, blocks written, read time, write time.
+pub type TempUsage = [i64; 4];
+
+fn temp_cells() -> [&'static std::thread::LocalKey<Cell<i64>>; 4] {
+    [&TEMP_BLKS_READ, &TEMP_BLKS_WRITTEN, &TEMP_BLK_READ_TIME, &TEMP_BLK_WRITE_TIME]
+}
+
+/// This thread's temp-file counters now.
+pub fn temp_snapshot() -> TempUsage {
+    let c = temp_cells();
+    core::array::from_fn(|i| c[i].with(Cell::get))
+}
+
+/// D4116: this thread's temp-file counts since `then` (a `temp_snapshot`), taken out: its counters are back at `then`.
+/// A Gravity pool claim hands its spill I/O to the section's leader this way (InstrAccumParallelQuery's role).
+pub fn temp_take_since(then: &TempUsage) -> TempUsage {
+    let c = temp_cells();
+    core::array::from_fn(|i| {
+        c[i].with(|x| {
+            let d = x.get().wrapping_sub(then[i]);
+            x.set(then[i]);
+            d
+        })
+    })
+}
+
+/// Counts another thread took (`temp_take_since`) added to this thread's counters.
+pub fn temp_add(d: &TempUsage) {
+    let c = temp_cells();
+    for i in 0..4 {
+        c[i].with(|x| x.set(x.get().wrapping_add(d[i])));
+    }
+}
+
 // INSTR_TIME_SET_CURRENT under track_io_timing, INSTR_TIME_SET_ZERO
 // otherwise (buffile.c:459/532). The "zero = not timing" sentinel is C's.
 #[inline]
@@ -77,6 +115,8 @@ fn io_timing_accum(acc: &'static std::thread::LocalKey<Cell<i64>>, io_start: i64
 pub struct BufFile<'mcx> {
     // All files except the last have length exactly MAX_PHYSICAL_FILESIZE.
     files: PgVec<'mcx, File>,
+    gens: PgVec<'mcx, u64>,
+    owner: Option<std::thread::ThreadId>,
     is_inter_xact: bool,
     resowner: types_resowner::ResourceOwner,
     dirty: bool,
@@ -103,7 +143,7 @@ pub fn PrepareTempTablespaces() -> PgResult<()> {
     }
     let spaces = guc_tables::vars::temp_tablespaces.read();
     if spaces.as_deref().unwrap_or("").is_empty() {
-        crate::temp::SetTempTablespaces(&[]);
+        crate::temp::SetTempTablespaces(&[])?;
         return Ok(());
     }
     tablespace_seams::prepare_temp_tablespaces::call()
@@ -115,10 +155,14 @@ pub fn BufFileCreateTemp<'mcx>(mcx: Mcx<'mcx>, inter_xact: bool) -> PgResult<Buf
     debug_assert!(pfile.0 >= 0);
     let mut files = vec_with_capacity_in(mcx, 1)?;
     files.push(pfile);
+    let mut gens = vec_with_capacity_in(mcx, 1)?;
+    gens.push(FileGeneration(pfile));
     let mut buffer = vec_with_capacity_in(mcx, BLCKSZ)?;
     buffer.resize(BLCKSZ, 0);
     Ok(BufFile {
         files,
+        gens,
+        owner: crate::orphan::owner(),
         is_inter_xact: inter_xact,
         resowner: resowner_seams::current_resource_owner::call(),
         dirty: false,
@@ -167,11 +211,15 @@ pub fn BufFileCreateFileSet<'mcx>(
     let file = make_new_fileset_segment(&key, name.as_bytes(), 0)?;
     let mut files = vec_with_capacity_in(mcx, 1)?;
     files.push(file);
+    let mut gens = vec_with_capacity_in(mcx, 1)?;
+    gens.push(FileGeneration(file));
     let name = copy_name(mcx, name)?;
     let mut buffer = vec_with_capacity_in(mcx, BLCKSZ)?;
     buffer.resize(BLCKSZ, 0);
     Ok(BufFile {
         files,
+        gens,
+        owner: crate::orphan::owner(),
         is_inter_xact: false,
         resowner: resowner_seams::current_resource_owner::call(),
         dirty: false,
@@ -198,6 +246,7 @@ fn open_fileset_common<'mcx>(
     let key = fileset.key();
     let mode = if read_only { libc::O_RDONLY } else { libc::O_RDWR };
     let mut files: PgVec<'mcx, File> = vec_with_capacity_in(mcx, 16)?;
+    let mut gens: PgVec<'mcx, u64> = vec_with_capacity_in(mcx, 16)?;
     let mut segment_name;
     loop {
         segment_name = seg_name(name.as_bytes(), files.len());
@@ -206,6 +255,7 @@ fn open_fileset_common<'mcx>(
             break;
         }
         files.push(f);
+        gens.push(FileGeneration(f));
         // buffile.c:321: cancel point per 1GB segment (TB-scale spill sets
         // mean thousands of opens); crate idiom per copydir.rs.
         postgres_seams::check_for_interrupts::call()?;
@@ -220,7 +270,7 @@ fn open_fileset_common<'mcx>(
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not open temporary file \"{segment_name}\" from BufFile \"{name}\": %m"
+                "could not open temporary file \"{segment_name}\" from BufFile \"{name}\": {PCT_M}"
             ))
             .finish(loc("BufFileOpenFileSet"))?;
     }
@@ -229,6 +279,8 @@ fn open_fileset_common<'mcx>(
     buffer.resize(BLCKSZ, 0);
     Ok(Some(BufFile {
         files,
+        gens,
+        owner: crate::orphan::owner(),
         is_inter_xact: false,
         resowner: resowner_seams::current_resource_owner::call(),
         dirty: false,
@@ -295,11 +347,47 @@ pub fn BufFileDeleteFileSet(
 }
 
 impl<'mcx> BufFile<'mcx> {
+    /// `BufFileExportFileSet` (buffile.c:398): flush and make the file
+    /// read-only so other participants can open it by name.
+    pub fn export_fileset(&mut self) -> PgResult<()> {
+        debug_assert!(self.fileset.is_some());
+        debug_assert!(!self.read_only);
+        self.flush()?;
+        self.read_only = true;
+        Ok(())
+    }
+
+    /// `BufFileAppend` (buffile.c:891): concatenate `source`'s segments onto
+    /// this fileset BufFile; returns the block number where `source` begins.
+    pub fn append(&mut self, source: BufFile<'mcx>) -> PgResult<i64> {
+        const BUFFILE_SEG_SIZE: i64 = MAX_PHYSICAL_FILESIZE / BLCKSZ as i64;
+        let start_block = self.files.len() as i64 * BUFFILE_SEG_SIZE;
+        debug_assert!(self.fileset.is_some());
+        debug_assert!(source.read_only);
+        debug_assert!(!source.dirty);
+        if self.resowner != source.resowner {
+            ereport(ERROR)
+                .errmsg_internal("could not append BufFile with non-matching resource owner")
+                .finish(loc("BufFileAppend"))?;
+        }
+        // the two Files' indices must name one VFD table, and each carries its slot generation
+        if self.owner != source.owner {
+            ereport(ERROR)
+                .errmsg_internal("could not append BufFile opened on another thread")
+                .finish(loc("BufFileAppend"))?;
+        }
+        ::mcx::pgvec_reserve(&mut self.files, source.files.len())?;
+        ::mcx::pgvec_reserve(&mut self.gens, source.gens.len())?;
+        self.files.extend(source.files.iter().copied());
+        self.gens.extend(source.gens.iter().copied());
+        Ok(start_block)
+    }
+
     /// `BufFileTruncateFileSet` (buffile.c:911): truncate at (fileno,
     /// offset), removing whole segments past the point.
     pub fn truncate_fileset(&mut self, fileno: i32, offset: i64) -> PgResult<()> {
         let fileset = self.fileset.expect("truncate_fileset on a fileset BufFile");
-        let name = self.name.as_ref().map(|b| b.to_vec()).expect("fileset BufFile has a name");
+        let name: &[u8] = self.name.as_ref().expect("fileset BufFile has a name").as_slice();
         let mut num_files = self.files.len() as i32;
         let mut new_file = fileno;
         let mut new_offset = self.cur_offset;
@@ -310,13 +398,13 @@ impl<'mcx> BufFile<'mcx> {
         let mut i = self.files.len() as i32 - 1;
         while i >= fileno {
             if (i != fileno || offset == 0) && i != 0 {
-                let segment_name = seg_name(&name, i as usize);
-                FileClose(self.files[i as usize])?;
+                let segment_name = seg_name(name, i as usize);
+                FileCloseGeneration(self.files[i as usize], self.gens[i as usize])?;
                 if !fileset.delete(&segment_name, true)? {
                     ereport(ERROR)
                         .with_saved_errno(get_errno())
                         .errcode_for_file_access()
-                        .errmsg(format!("could not delete fileset \"{segment_name}\": %m"))
+                        .errmsg(format!("could not delete fileset \"{segment_name}\": {PCT_M}"))
                         .finish(loc("BufFileTruncateFileSet"))?;
                 }
                 num_files -= 1;
@@ -330,7 +418,7 @@ impl<'mcx> BufFile<'mcx> {
                         .with_saved_errno(get_errno())
                         .errcode_for_file_access()
                         .errmsg(format!(
-                            "could not truncate file \"{}\": %m",
+                            "could not truncate file \"{}\": {PCT_M}",
                             file_path_name_lossy(self.files[i as usize])
                         ))
                         .finish(loc("BufFileTruncateFileSet"))?;
@@ -341,6 +429,7 @@ impl<'mcx> BufFile<'mcx> {
             i -= 1;
         }
         self.files.truncate(num_files as usize);
+        self.gens.truncate(num_files as usize);
 
         // Adjust the buffered position to the new end where it overlaps.
         if new_file == self.cur_file
@@ -379,10 +468,14 @@ impl<'mcx> BufFile<'mcx> {
         let pfile = pfile?;
         debug_assert!(pfile.0 >= 0);
         self.files.push(pfile);
+        self.gens.push(FileGeneration(pfile));
         Ok(())
     }
 
     pub fn close(mut self) -> PgResult<()> {
+        if !self.on_owner(self.dirty) {
+            return Ok(());
+        }
         // proc_exit already ran the abort resowner release: every temp-file
         // VFD here is freed, and flushing the dirty buffer would write
         // through dead Files. Late drop glue (Tuplesort/Tuplestore on the
@@ -392,11 +485,53 @@ impl<'mcx> BufFile<'mcx> {
         if ::elog::config::proc_exit_inprogress() {
             return Ok(());
         }
-        self.flush()?;
-        for i in 0..self.files.len() {
-            FileClose(self.files[i])?;
+        // likewise once an abort's resource-owner release closed these files (a failed portal's store, ended at
+        // the transaction's cleanup): the dirty buffer has no file to go to and nothing is left to close. C never
+        // revisits such a BufFile; its memory dies with the portal.
+        if self.released() {
+            return Ok(());
         }
-        Ok(())
+        // The files close even when the flush fails (a write past temp_file_limit): a pool thread's resource owner
+        // never releases them.
+        let flushed = self.flush();
+        self.close_files().and(flushed)
+    }
+
+    pub fn abandon(self) -> PgResult<()> {
+        if !self.on_owner(false) || ::elog::config::proc_exit_inprogress() || !crate::vfd::fd_tls_alive() {
+            return Ok(());
+        }
+        self.close_files()
+    }
+
+    fn on_owner(&self, unflushed: bool) -> bool {
+        match self.owner {
+            Some(owner) if !crate::orphan::is_current(owner) => {
+                if unflushed {
+                    let _ = ereport(::types_error::LOG)
+                        .errmsg_internal(format!(
+                            "BufFile closed on a thread that did not open it: {} unwritten bytes dropped",
+                            self.nbytes
+                        ))
+                        .finish(loc("BufFileClose"));
+                }
+                crate::orphan::send(owner, self.files.iter().copied().zip(self.gens.iter().copied()));
+                false
+            }
+            _ => true,
+        }
+    }
+
+    fn released(&self) -> bool {
+        crate::vfd::fd_tls_alive() && self.files.iter().zip(self.gens.iter()).any(|(&f, &g)| FileGeneration(f) != g)
+    }
+
+    fn close_files(&self) -> PgResult<()> {
+        let mut closed = Ok(());
+        for (&file, &gen) in self.files.iter().zip(self.gens.iter()) {
+            closed = closed.and(FileCloseGeneration(file, gen));
+        }
+        closed
     }
 
     fn load_buffer(&mut self) -> PgResult<()> {
@@ -570,6 +705,120 @@ impl<'mcx> BufFile<'mcx> {
         Ok(())
     }
 
+    /// spillopt #3 (no C counterpart): `write` of several spans in order, a spill epoch's partition bytes. Under
+    /// `THROUGH` bytes in all they take `write`; else the buffer is flushed and the spans go from the caller's memory to
+    /// the segment files in gathered writes (`FileWriteV`, up to `PG_IOV_MAX` spans and to the segment's end each), not
+    /// copied through the 8 KB buffer (a 2 GB spill was ~260k 8 KB writes, each a copy). The same file layout,
+    /// `temp_file_limit` (in `FileWriteV`) and counters (blocks = bytes / BLCKSZ rounded up).
+    pub fn write_spans(&mut self, spans: &[&[u8]]) -> PgResult<()> {
+        debug_assert!(!self.read_only);
+        if spans.iter().map(|s| s.len()).sum::<usize>() < THROUGH {
+            return spans.iter().try_for_each(|s| self.write(s));
+        }
+        self.flush()?;
+        self.cur_offset += self.pos as i64;
+        (self.pos, self.nbytes) = (0, 0);
+        let (mut at, mut skip) = (0usize, 0usize); // the next span, and its bytes already written
+        let mut iov: [WriteChunk<'_>; PG_IOV_MAX] = [WriteChunk::from_slice(&[]); PG_IOV_MAX];
+        while at < spans.len() {
+            if spans[at].len() == skip {
+                (at, skip) = (at + 1, 0);
+                continue;
+            }
+            if self.cur_offset >= MAX_PHYSICAL_FILESIZE {
+                while (self.cur_file + 1) >= self.files.len() as i32 {
+                    self.extend()?;
+                }
+                self.cur_file += 1;
+                self.cur_offset = 0;
+            }
+            let mut room = (MAX_PHYSICAL_FILESIZE - self.cur_offset) as usize;
+            let mut n = 0usize;
+            for (k, sp) in spans[at..].iter().enumerate() {
+                let sp = if k == 0 { &sp[skip..] } else { *sp };
+                if sp.is_empty() {
+                    continue;
+                }
+                if n == PG_IOV_MAX || room == 0 {
+                    break;
+                }
+                let take = sp.len().min(room);
+                iov[n] = WriteChunk::from_slice(&sp[..take]);
+                (n, room) = (n + 1, room - take);
+            }
+            let thisfile = self.files[self.cur_file as usize];
+            let io_start = io_timing_start();
+            let written = FileWriteV(thisfile, &iov[..n], self.cur_offset, WAIT_EVENT_BUFFILE_WRITE)?;
+            if written <= 0 {
+                return write_failed(thisfile);
+            }
+            io_timing_accum(&TEMP_BLK_WRITE_TIME, io_start);
+            self.cur_offset += written as i64;
+            TEMP_BLKS_WRITTEN.with(|c| c.set(c.get() + (written as u64).div_ceil(BLCKSZ as u64) as i64));
+            let mut left = written as usize;
+            while left > 0 {
+                let rest = spans[at].len() - skip;
+                if left < rest {
+                    skip += left;
+                    break;
+                }
+                left -= rest;
+                (at, skip) = (at + 1, 0);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn read_through_exact(&mut self, ptr: &mut [u8]) -> PgResult<()> {
+        if ptr.len() < THROUGH {
+            return self.read_exact(ptr);
+        }
+        self.flush()?;
+        let mut nread = 0usize;
+        if self.pos < self.nbytes {
+            let n = ((self.nbytes - self.pos) as usize).min(ptr.len());
+            ptr[..n].copy_from_slice(&self.buffer[self.pos as usize..self.pos as usize + n]);
+            self.pos += n as i32;
+            nread = n;
+        }
+        if nread < ptr.len() {
+            self.cur_offset += self.pos as i64;
+            (self.pos, self.nbytes) = (0, 0);
+        }
+        while nread < ptr.len() {
+            if self.cur_offset >= MAX_PHYSICAL_FILESIZE && (self.cur_file + 1) < self.files.len() as i32 {
+                self.cur_file += 1;
+                self.cur_offset = 0;
+            }
+            let room = (MAX_PHYSICAL_FILESIZE - self.cur_offset).max(0) as usize;
+            let n = (ptr.len() - nread).min(room);
+            if n == 0 {
+                break;
+            }
+            let thisfile = self.files[self.cur_file as usize];
+            let io_start = io_timing_start();
+            let got = FileRead(thisfile, &mut ptr[nread..nread + n], self.cur_offset, WAIT_EVENT_BUFFILE_READ)?;
+            if got < 0 {
+                return read_failed(thisfile);
+            }
+            if got == 0 {
+                break;
+            }
+            io_timing_accum(&TEMP_BLK_READ_TIME, io_start);
+            self.cur_offset += got as i64;
+            nread += got as usize;
+            TEMP_BLKS_READ.with(|c| c.set(c.get() + (got as u64).div_ceil(BLCKSZ as u64) as i64));
+        }
+        if nread != ptr.len() {
+            let msg = match &self.name {
+                Some(name) => format!("could not read from file set \"{}\": read only {nread} of {} bytes", String::from_utf8_lossy(name), ptr.len()),
+                None => format!("could not read from temporary file: read only {nread} of {} bytes", ptr.len()),
+            };
+            ereport(ERROR).errcode_for_file_access().errmsg(msg).finish(loc("BufFileReadCommon"))?;
+        }
+        Ok(())
+    }
+
     /// 0 on success, EOF (-1) if an impossible seek was attempted.
     pub fn seek(&mut self, fileno: i32, offset: i64, whence: i32) -> PgResult<i32> {
         let mut new_file: i32;
@@ -679,7 +928,7 @@ impl<'mcx> BufFile<'mcx> {
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not determine size of temporary file \"{}\" from BufFile \"{name}\": %m",
+                "could not determine size of temporary file \"{}\" from BufFile \"{name}\": {PCT_M}",
                 file_path_name_lossy(self.files[self.files.len() - 1])
             ))
             .finish(location)
@@ -693,7 +942,7 @@ fn read_failed(file: File) -> PgResult<()> {
     ereport(ERROR)
         .with_saved_errno(get_errno())
         .errcode_for_file_access()
-        .errmsg(format!("could not read file \"{}\": %m", file_path_name_lossy(file)))
+        .errmsg(format!("could not read file \"{}\": {PCT_M}", file_path_name_lossy(file)))
         .finish(loc("BufFileLoadBuffer"))
         .map(|_| ())
 }
@@ -704,7 +953,7 @@ fn write_failed(file: File) -> PgResult<()> {
     ereport(ERROR)
         .with_saved_errno(get_errno())
         .errcode_for_file_access()
-        .errmsg(format!("could not write to file \"{}\": %m", file_path_name_lossy(file)))
+        .errmsg(format!("could not write to file \"{}\": {PCT_M}", file_path_name_lossy(file)))
         .finish(loc("BufFileDumpBuffer"))
         .map(|_| ())
 }

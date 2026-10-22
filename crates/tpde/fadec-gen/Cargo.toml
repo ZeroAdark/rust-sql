@@ -1,0 +1,17 @@
+[package]
+name = "tpde_fadec_gen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "BSD-3-Clause"
+
+[features]
+upstream-oracle = []
+
+[[bin]]
+name = "fadec-gen"
+path = "src/main.rs"
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]

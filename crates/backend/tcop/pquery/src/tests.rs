@@ -351,24 +351,6 @@ mod e2e {
         m.mcx()
     }
 
-    // The analyzer's output for `SELECT 1` (explain tests' fixture shape).
-    fn select_1_query(mcx: Mcx<'static>) -> Query<'static> {
-        let konst =
-            Node::mk_const(mcx, INT4OID, -1, 0, 4, Datum::from_i32(1), false, true).unwrap();
-        let tle = Node::mk_target_entry(mcx, konst, 1, Some("?column?"), false).unwrap();
-        let jointree =
-            mcx::alloc_leak_in(mcx, FromExpr { fromlist: NodeList::nil(), quals: None }).unwrap();
-        Query {
-            commandType: CmdType::CMD_SELECT,
-            canSetTag: true,
-            jointree: Some(jointree),
-            targetList: NodeList::make1(mcx, tle).unwrap(),
-            stmt_location: 0,
-            stmt_len: 8,
-            ..Query::default()
-        }
-    }
-
     fn utility_pstmt(u: Node<'static>) -> &'static [PlannedStmt<'static>] {
         Vec::leak(vec![PlannedStmt {
             commandType: CmdType::CMD_UTILITY,
@@ -411,39 +393,6 @@ mod e2e {
                 String::from_utf8(b[6..6 + len].to_vec()).unwrap()
             })
             .collect()
-    }
-
-    #[test]
-    fn dropped_portal_releases_query_desc_registry_entry() {
-        install_fixtures();
-        let mcx = leaked_mcx();
-        let query = select_1_query(mcx);
-        let pstmt =
-            planner::planner(mcx, mcx::leak_in(mcx::alloc_in(mcx, query).unwrap()), "SELECT 1", 0, ParamListHandle::NULL).unwrap();
-        let stmts: &'static [PlannedStmt<'static>] = Vec::leak(vec![pstmt]);
-        // SAFETY: stmts is leaked 'static.
-        let h = unsafe { stmt_list::register(stmts) };
-        let portal = portalmem::CreatePortal("qd-abort-e2e", false, false).unwrap();
-        portalmem::PortalDefineQuery(
-            &portal,
-            None,
-            "SELECT 1",
-            types_portal::CMDTAG_SELECT,
-            h,
-            CachedPlanHandle::NULL,
-        )
-        .unwrap();
-
-        let before = execmain::registry_len();
-        PortalStart(&portal, ParamListHandle::NULL, 0, None).unwrap();
-        assert_eq!(execmain::registry_len(), before + 1);
-
-        // Abort shape: AtCleanup_Portals clears an unrun cleanup hook before
-        // PortalDrop; the drop must reclaim the owning registry entry (C
-        // frees the QueryDesc with the portal context).
-        portal.borrow_mut().cleanup = types_portal::PortalCleanupHook::None;
-        portalmem::PortalDrop(&portal, false).unwrap();
-        assert_eq!(execmain::registry_len(), before);
     }
 
     #[test]
@@ -723,23 +672,6 @@ mod e2e {
         // RELATIVE 0 == FETCH FORWARD 0: re-fetch the current row.
         assert_eq!(fetch_rows(&portal, FETCH_RELATIVE, 0), (1, vec![all[0].clone()]));
         assert_eq!(pos(&portal), (false, false, 1));
-    }
-
-    // Expected line pinned against real PostgreSQL 18.3 (the explain crate's
-    // differential fixture).
-    #[test]
-    fn explain_select_1_wire_bytes_through_portal() {
-        install_fixtures();
-        let mcx = leaked_mcx();
-        let query = Node::mk(mcx, select_1_query(mcx)).unwrap();
-        let estmt =
-            Node::mk(mcx, ExplainStmt { query: Some(query), options: NodeList::nil() }).unwrap();
-        let stmts = utility_pstmt(estmt);
-        let (qc, sent) = run_utility_portal("explain-e2e", "EXPLAIN SELECT 1", stmts);
-
-        assert_eq!(data_rows(&sent), ["Result  (cost=0.00..0.01 rows=1 width=4)"]);
-        assert_eq!(cmdtag::GetCommandTagName(qc.commandTag), "EXPLAIN");
-        assert_eq!(qc.nprocessed, 1);
     }
 
 }

@@ -139,10 +139,10 @@ fn disable_and_reschedule() {
 
     reschedule_timeouts();
 
-    // A posted wake with everything disabled is C's spurious SIGALRM: the
-    // drain only SetLatches.
+    clear_interrupt_bytes();
     advance_ms(60_000);
-    drain_when_posted();
+    assert_no_wake();
+    ProcessTimeoutInterrupt();
     assert!(FIRED.with(|f| f.borrow().is_empty()));
 }
 
@@ -174,7 +174,6 @@ fn reinit_keeps_long_deadlines_armable() {
     RegisterTimeout(STATEMENT_TIMEOUT, handler_a);
 
     // Pre-init phase: long arm (physical deadline far in the future), then
-    // disable — the wake deliberately stays armed (C itimer parity).
     enable_timeout_after(STATEMENT_TIMEOUT, 6_000);
     disable_timeout(STATEMENT_TIMEOUT, false);
 
@@ -207,6 +206,81 @@ fn timer_post_raises_interrupt_pending() {
     // post, so a CPU-bound CHECK_FOR_INTERRUPTS reaches ProcessInterrupts.
     assert!(globals::InterruptPending());
     globals::SetInterruptPending(false);
+}
+
+fn clear_interrupt_bytes() {
+    globals::SetInterruptPending(false);
+    globals::SetAbortPending(false);
+    POSTED.with(|p| p.borrow().as_ref().unwrap().store(false, O::SeqCst));
+}
+
+fn assert_no_wake() {
+    std::thread::sleep(Duration::from_millis(60));
+    assert!(!POSTED.with(|p| p.borrow().as_ref().unwrap().load(O::SeqCst)), "stale wake posted");
+    assert!(!globals::InterruptPending(), "stale wake raised InterruptPending");
+    assert!(!globals::AbortPending(), "stale wake raised AbortPending");
+}
+
+#[test]
+fn disabled_timeout_wake_is_withdrawn() {
+    let _serial = setup_thread(9011);
+    RegisterTimeout(STATEMENT_TIMEOUT, handler_a);
+    clear_interrupt_bytes();
+
+    enable_timeout_after(STATEMENT_TIMEOUT, 5);
+    disable_timeout(STATEMENT_TIMEOUT, false);
+    advance_ms(10);
+    assert_no_wake();
+
+    enable_timeout_after(STATEMENT_TIMEOUT, 5);
+    disable_all_timeouts(false);
+    advance_ms(10);
+    assert_no_wake();
+    assert!(FIRED.with(|f| f.borrow().is_empty()));
+}
+
+#[test]
+fn rescheduled_later_wake_does_not_fire_early() {
+    let _serial = setup_thread(9012);
+    RegisterTimeout(STATEMENT_TIMEOUT, handler_a);
+    clear_interrupt_bytes();
+
+    enable_timeout_after(STATEMENT_TIMEOUT, 5);
+    enable_timeout_after(STATEMENT_TIMEOUT, 500);
+    advance_ms(10);
+    assert_no_wake();
+    assert!(get_timeout_active(STATEMENT_TIMEOUT));
+
+    advance_ms(500);
+    drain_when_posted();
+    assert_eq!(FIRED.with(|f| f.borrow().clone()), vec!["a"]);
+    assert!(globals::InterruptPending());
+    assert!(globals::AbortPending());
+    clear_interrupt_bytes();
+}
+
+#[test]
+fn abort_byte_only_for_abort_class() {
+    let _serial = setup_thread(9013);
+    RegisterTimeout(STATEMENT_TIMEOUT, handler_a);
+    RegisterTimeout(DEADLOCK_TIMEOUT, handler_b);
+    clear_interrupt_bytes();
+
+    enable_timeout_after(DEADLOCK_TIMEOUT, 5);
+    advance_ms(10);
+    drain_when_posted();
+    assert_eq!(FIRED.with(|f| f.borrow().clone()), vec!["b"]);
+    assert!(globals::InterruptPending());
+    assert!(!globals::AbortPending(), "a deadlock timeout is not abort class");
+    clear_interrupt_bytes();
+
+    enable_timeout_after(STATEMENT_TIMEOUT, 5);
+    advance_ms(10);
+    drain_when_posted();
+    assert_eq!(FIRED.with(|f| f.borrow().clone()), vec!["b", "a"]);
+    assert!(globals::InterruptPending());
+    assert!(globals::AbortPending());
+    clear_interrupt_bytes();
 }
 
 static REARM_ID: AtomicI64 = AtomicI64::new(-1);
@@ -292,4 +366,208 @@ fn seams_installed_once() {
     timeout_seams::disable_all_timeouts::call(false).unwrap();
     timeout_seams::reschedule_timeouts::call().unwrap();
     timeout_seams::process_timeout_interrupt::call();
+}
+
+// the statement deadline passes while the shared timer thread cannot run (under load it waits on the run queue
+// for a CPU; here it is held off the slots lock), and the backend reaches a CHECK_FOR_INTERRUPTS right after. As in
+// PostgreSQL, whose SIGALRM is delivered to the backend itself on expiry (timeout.c handle_sig_alarm), that check must
+// fire the timeout (fire_due at the run's end, then the check's drain): the handler runs, the indicator is set,
+// InterruptPending and the abort byte are raised. Before the fix only the timer thread's post could fire it, so the
+// check found nothing and the statement completed.
+#[test]
+fn statement_deadline_fires_at_the_backends_check_while_the_timer_thread_is_stalled() {
+    let _serial = setup_thread(9014);
+    RegisterTimeout(STATEMENT_TIMEOUT, handler_a);
+    for i in 0..20 {
+        clear_interrupt_bytes();
+        FIRED.with(|f| f.borrow_mut().clear());
+
+        enable_timeout_after(STATEMENT_TIMEOUT, 5);
+        {
+            let _stall = timer().slots.lock().unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            advance_ms(10);
+        }
+        fire_due();
+        ProcessTimeoutInterrupt();
+
+        assert_eq!(FIRED.with(|f| f.borrow().clone()), vec!["a"], "iteration {i}: the expired deadline did not fire at the check");
+        assert!(get_timeout_indicator(STATEMENT_TIMEOUT, true), "iteration {i}");
+        assert!(globals::InterruptPending(), "iteration {i}");
+        assert!(globals::AbortPending(), "iteration {i}");
+        assert!(!get_timeout_active(STATEMENT_TIMEOUT), "iteration {i}");
+
+        // The stalled timer thread must not fire it a second time once it gets the lock.
+        clear_interrupt_bytes();
+        std::thread::sleep(Duration::from_millis(20));
+        ProcessTimeoutInterrupt();
+        assert_eq!(FIRED.with(|f| f.borrow().clone()), vec!["a"], "iteration {i}: fired twice");
+    }
+    clear_interrupt_bytes();
+}
+
+#[test]
+fn fire_due_is_inert_after_disable() {
+    let _serial = setup_thread(9015);
+    RegisterTimeout(STATEMENT_TIMEOUT, handler_a);
+    clear_interrupt_bytes();
+    FIRED.with(|f| f.borrow_mut().clear());
+    enable_timeout_after(STATEMENT_TIMEOUT, 5);
+    disable_timeout(STATEMENT_TIMEOUT, false);
+    advance_ms(10);
+    assert!(!fire_due());
+    ProcessTimeoutInterrupt();
+    assert!(FIRED.with(|f| f.borrow().is_empty()));
+    assert!(!globals::InterruptPending());
+    assert!(!globals::AbortPending());
+    clear_interrupt_bytes();
+}
+
+#[test]
+fn abort_deadline_behind_a_nearer_wake_raises_the_abort_byte() {
+    let _serial = setup_thread(9016);
+    RegisterTimeout(IDLE_STATS_UPDATE_TIMEOUT, handler_b);
+    RegisterTimeout(STATEMENT_TIMEOUT, handler_a);
+    clear_interrupt_bytes();
+    FIRED.with(|f| f.borrow_mut().clear());
+    enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT, 5);
+    enable_timeout_after(STATEMENT_TIMEOUT, 60);
+    let posted = POSTED.with(|p| p.borrow().as_ref().map(std::sync::Arc::clone).unwrap());
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !posted.load(O::SeqCst) {
+        assert!(std::time::Instant::now() < deadline, "the nearer wake never fired");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(globals::InterruptPending());
+    assert!(!globals::AbortPending(), "the nearer wake is not of the abort class");
+    while !globals::AbortPending() {
+        assert!(std::time::Instant::now() < deadline, "the statement timeout behind the nearer wake never raised the abort byte");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    advance_ms(70);
+    ProcessTimeoutInterrupt();
+    assert_eq!(FIRED.with(|f| f.borrow().clone()), vec!["b", "a"]);
+    assert!(get_timeout_indicator(STATEMENT_TIMEOUT, true));
+    assert!(!get_timeout_active(STATEMENT_TIMEOUT));
+    clear_interrupt_bytes();
+}
+
+// Idle passivation's shape (ready-for-query enables a non-abort timeout, the next command disables it): one wake serves
+// every later re-enable, as C's setitimer avoidance; it fires early, fires nothing, and re-arms at the real deadline. An
+// abort-class timeout never rides such a wake, and its own wake is withdrawn with it.
+#[test]
+fn a_non_abort_wake_serves_later_reenables() {
+    let _serial = setup_thread(9017);
+    RegisterTimeout(IDLE_STATS_UPDATE_TIMEOUT, handler_b);
+    RegisterTimeout(STATEMENT_TIMEOUT, handler_a);
+    clear_interrupt_bytes();
+    FIRED.with(|f| f.borrow_mut().clear());
+    let slot_ns = || timer().slots.lock().unwrap().get(&globals::MyProcPid()).and_then(|s| s.deadline).map(|d| d.as_ns());
+    enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT, 50);
+    let first = slot_ns().expect("armed");
+    for _ in 0..3 {
+        disable_timeout(IDLE_STATS_UPDATE_TIMEOUT, false);
+        assert_eq!(slot_ns(), Some(first), "the non-abort wake stays when the last timeout goes");
+        advance_ms(10);
+        enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT, 50);
+        assert_eq!(slot_ns(), Some(first), "a later deadline keeps the earlier wake");
+    }
+    drain_when_posted();
+    assert!(FIRED.with(|f| f.borrow().is_empty()), "the early wake fires nothing");
+    assert!(get_timeout_active(IDLE_STATS_UPDATE_TIMEOUT));
+    assert!(slot_ns().expect("re-armed") > first, "re-armed at the real deadline");
+    advance_ms(60);
+    drain_when_posted();
+    assert_eq!(FIRED.with(|f| f.borrow().clone()), vec!["b"]);
+
+    clear_interrupt_bytes();
+    enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT, 50);
+    disable_timeout(IDLE_STATS_UPDATE_TIMEOUT, false);
+    enable_timeout_after(STATEMENT_TIMEOUT, 100);
+    assert!(timer().slots.lock().unwrap().get(&globals::MyProcPid()).is_some_and(|s| s.abort_flag.is_some()), "re-armed with the abort byte");
+    disable_timeout(STATEMENT_TIMEOUT, false);
+    assert_eq!(slot_ns(), None, "an abort-class wake is withdrawn");
+    assert_no_wake();
+    clear_interrupt_bytes();
+}
+
+// ready-for-query enables a non-abort timeout, the next command disables it; the wake left armed expires inside
+// the statement with no timeout active. C's handler then finds alarm_enabled false: it resets signal_pending and sets the
+// latch, nothing else. No post, no InterruptPending (a grant queue read it as an interrupt: D3069). A re-enable after the
+// expiry arms a wake of its own at the real deadline.
+#[test]
+fn a_wake_left_after_the_last_timeout_went_only_sets_the_latch() {
+    let _serial = setup_thread(9018);
+    RegisterTimeout(IDLE_STATS_UPDATE_TIMEOUT, handler_b);
+    clear_interrupt_bytes();
+    FIRED.with(|f| f.borrow_mut().clear());
+    let slot_ns = || timer().slots.lock().unwrap().get(&globals::MyProcPid()).and_then(|s| s.deadline).map(|d| d.as_ns());
+    let latch = globals::MyLatch().unwrap();
+    enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT, 20);
+    disable_timeout(IDLE_STATS_UPDATE_TIMEOUT, false);
+    assert!(slot_ns().is_some(), "the non-abort wake is kept for a later re-enable");
+    assert!(signal_pending());
+    latch::latch_ref(latch).is_set.store(0, O::SeqCst);
+    advance_ms(30);
+    assert_no_wake();
+    assert_eq!(slot_ns(), None, "the wake was delivered");
+    assert!(!signal_pending(), "its delivery reset signal_pending");
+    assert_eq!(latch::latch_ref(latch).is_set.load(O::SeqCst), 1, "its delivery set the latch, as C's handler does");
+    ProcessTimeoutInterrupt();
+    assert!(FIRED.with(|f| f.borrow().is_empty()));
+
+    enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT, 20);
+    assert!(slot_ns().is_some(), "re-armed");
+    advance_ms(30);
+    drain_when_posted();
+    assert_eq!(FIRED.with(|f| f.borrow().clone()), vec!["b"]);
+    assert!(globals::InterruptPending());
+    clear_interrupt_bytes();
+}
+
+// The Dekker pair: a wake delivered while a re-enable is between disable_alarm and its ride check is seen by one side.
+// Either the post found the alarm enabled (it posts; the drain fires nothing early and re-arms) or the re-enable found
+// signal_pending reset (it arms its own wake). Repeated re-enables around the kept wake's expiry never lose the timeout.
+#[test]
+fn a_reenable_racing_the_kept_wake_never_loses_the_timeout() {
+    let _serial = setup_thread(9019);
+    RegisterTimeout(IDLE_STATS_UPDATE_TIMEOUT, handler_b);
+    for round in 0..20 {
+        clear_interrupt_bytes();
+        FIRED.with(|f| f.borrow_mut().clear());
+        enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT, 1);
+        disable_timeout(IDLE_STATS_UPDATE_TIMEOUT, false);
+        advance_ms(1);
+        std::thread::sleep(Duration::from_micros(200 * (round % 8)));
+        enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT, 5);
+        advance_ms(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while FIRED.with(|f| f.borrow().is_empty()) {
+            assert!(std::time::Instant::now() < deadline, "round {round}: the re-enabled timeout never fired");
+            ProcessTimeoutInterrupt();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(FIRED.with(|f| f.borrow().clone()), vec!["b"]);
+    }
+    clear_interrupt_bytes();
+}
+
+// wio P303: the process was stopped past the deadline and the waiter woke
+// before the timer thread posted; the drain still delivers the expired wake.
+#[test]
+fn expired_wake_is_delivered_without_timer_post() {
+    let _serial = setup_thread(9012);
+    RegisterTimeout(STATEMENT_TIMEOUT, handler_a);
+    enable_timeout_after(STATEMENT_TIMEOUT, 50);
+    if let Some(slot) = timer().slots.lock().unwrap().get_mut(&9012) {
+        slot.deadline = None;
+    }
+    std::thread::sleep(Duration::from_millis(80));
+    advance_ms(60);
+    ProcessTimeoutInterrupt();
+    assert_eq!(FIRED.with(|f| f.borrow_mut().drain(..).collect::<Vec<_>>()), vec!["a"]);
+    assert!(get_timeout_indicator(STATEMENT_TIMEOUT, true));
+    ProcessTimeoutInterrupt();
+    assert!(FIRED.with(|f| f.borrow().is_empty()));
+    disable_all_timeouts(false);
 }

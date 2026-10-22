@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::io::BufRead;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -7,6 +8,7 @@ use types_startup::AuthToken;
 
 use crate::token::{free_auth_file, make_auth_token, next_token, open_auth_file, FileHandle};
 use crate::{report_log, TokenizedAuthLine, CONF_FILE_START_DEPTH};
+use elog::PCT_M;
 
 // errno after a failed open_auth_file (C reads the ambient errno for the
 // include_if_exists ENOENT test).
@@ -51,7 +53,7 @@ pub(crate) fn next_field_expand(
             let inc = String::from_utf8_lossy(&buf[1..]).into_owned();
             tokenize_expand_file(&mut tokens, filename, &inc, elevel, depth + 1, err_msg, tok_lines)?;
         } else {
-            tokens.push(make_auth_token(&buf, initial_quote));
+            tokens.push(make_auth_token(&buf, initial_quote)?);
         }
 
         if !(trailing_comma && err_msg.is_none()) {
@@ -142,9 +144,9 @@ impl TokenizeErrorContext {
         let callback = {
             let linenum = Rc::clone(&linenum);
             let filename = filename.to_owned();
-            elog::push_emit_context_callback(Box::new(move |e| {
+            elog::push_context_frame(Box::new(move |e| {
                 e.add_context_line(crate::line_context(linenum.get(), &filename));
-            }))
+            }), true)
         };
         TokenizeErrorContext { linenum, callback }
     }
@@ -156,14 +158,16 @@ impl Drop for TokenizeErrorContext {
     }
 }
 
-pub fn tokenize_auth_file(
+pub fn tokenize_auth_file<R: BufRead>(
     filename: &str,
-    file: &FileHandle,
+    file: &FileHandle<R>,
     tok_lines: &mut Vec<TokenizedAuthLine>,
     elevel: ErrorLevel,
     depth: i32,
 ) -> PgResult<()> {
-    let mut lines = LineIter::new(&file.content);
+    let mut reader = file.reader.borrow_mut();
+    let mut lines = LineReader::new(&mut *reader);
+    let mut buf = Vec::new();
     let mut line_number: i32 = 1;
     let errcontext = TokenizeErrorContext::push(filename, line_number);
 
@@ -171,16 +175,15 @@ pub fn tokenize_auth_file(
         tok_lines.clear();
     }
 
-    while lines.peek().is_some() {
+    while !lines.done {
         let mut current_line: Vec<Vec<AuthToken>> = Vec::new();
         let mut err_msg: Option<String> = None;
         let mut last_backslash_buflen: usize = 0;
         let mut continuations: i32 = 0;
 
         // Collect the next input line, handling backslash continuations.
-        let mut buf: Vec<u8> = Vec::new();
-        while let Some(raw) = lines.next() {
-            buf.extend_from_slice(&raw);
+        buf.clear();
+        while lines.append(&mut buf)? {
             while matches!(buf.last(), Some(b'\n') | Some(b'\r')) {
                 buf.pop();
             }
@@ -191,6 +194,10 @@ pub fn tokenize_auth_file(
                 continuations += 1;
                 continue;
             }
+            break;
+        }
+
+        if lines.read_errno.is_some() {
             break;
         }
 
@@ -265,65 +272,160 @@ pub fn tokenize_auth_file(
         errcontext.linenum.set(line_number);
     }
 
-    if let Some(errno) = file.read_errno {
+    if let Some(errno) = lines.read_errno {
         elog::ereport(elevel)
             .with_saved_errno(errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not read file \"{filename}\": %m"))
+            .errmsg(format!("could not read file \"{filename}\": {PCT_M}"))
             .finish(crate::loc(769, "tokenize_auth_file"))?;
     }
 
     Ok(())
 }
 
-// pg_get_line_append: content is split on '\n'; an embedded NUL truncates the
-// piece (C strlen) and hides its newline, so the next physical line is glued on.
-struct LineIter<'a> {
-    rest: &'a [u8],
+struct LineReader<R> {
+    reader: R,
+    maxlen: usize,
+    done: bool,
+    read_errno: Option<i32>,
 }
 
-impl<'a> LineIter<'a> {
-    fn new(content: &'a [u8]) -> Self {
-        Self { rest: content }
+impl<R: BufRead> LineReader<R> {
+    fn new(reader: R) -> Self {
+        Self { reader, maxlen: 1024, done: false, read_errno: None }
     }
 
-    fn peek(&self) -> Option<&'a [u8]> {
-        if self.rest.is_empty() {
-            None
-        } else {
-            Some(self.rest)
-        }
-    }
-}
-
-impl<'a> Iterator for LineIter<'a> {
-    type Item = Vec<u8>;
-
-    fn next(&mut self) -> Option<Vec<u8>> {
-        if self.rest.is_empty() {
-            return None;
-        }
-        let mut line = Vec::new();
-        loop {
-            let end = self
-                .rest
-                .iter()
-                .position(|&c| c == b'\n')
-                .map_or(self.rest.len(), |i| i + 1);
-            let piece = &self.rest[..end];
-            self.rest = &self.rest[end..];
-            match piece.iter().position(|&c| c == 0) {
-                None => {
-                    line.extend_from_slice(piece);
-                    return Some(line);
-                }
-                Some(z) => {
-                    line.extend_from_slice(&piece[..z]);
-                    if self.rest.is_empty() {
-                        return Some(line);
+    fn append(&mut self, buf: &mut Vec<u8>) -> PgResult<bool> {
+        let orig_len = buf.len();
+        while !self.done {
+            mcx::std_vec_reserve("hba", buf, self.maxlen - buf.len())?;
+            let mut remaining = self.maxlen - buf.len() - 1;
+            let mut read_any = false;
+            let mut nul = false;
+            while remaining > 0 {
+                let bytes = match self.reader.fill_buf() {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.read_errno = Some(e.raw_os_error().unwrap_or(0));
+                        self.done = true;
+                        buf.truncate(orig_len);
+                        return Ok(false);
                     }
+                };
+                if bytes.is_empty() {
+                    self.done = true;
+                    break;
+                }
+                let bytes = &bytes[..bytes.len().min(remaining)];
+                let end = bytes.iter().position(|&b| b == b'\n').map_or(bytes.len(), |i| i + 1);
+                let newline = bytes[end - 1] == b'\n';
+                if !nul {
+                    let len = bytes[..end].iter().position(|&b| b == 0).unwrap_or(end);
+                    buf.extend_from_slice(&bytes[..len]);
+                    nul = len < end;
+                }
+                self.reader.consume(end);
+                remaining -= end;
+                read_any = true;
+                if newline {
+                    break;
                 }
             }
+            if !read_any {
+                break;
+            }
+            if buf.len() > orig_len && buf.last() == Some(&b'\n') {
+                return Ok(true);
+            }
+            self.maxlen = line_capacity(buf.len(), self.maxlen)?;
         }
+        Ok(buf.len() > orig_len)
+    }
+}
+
+fn line_capacity(len: usize, maxlen: usize) -> PgResult<usize> {
+    const LIMIT: usize = mcx::MAX_ALLOC_SIZE;
+    if 128 >= LIMIT.saturating_sub(len) {
+        return line_limit_error(len);
+    }
+    let needed = len + 128 + 1;
+    Ok(if needed <= maxlen { maxlen } else { (maxlen * 2).max(needed.next_power_of_two()).min(LIMIT) })
+}
+
+#[cold]
+fn line_limit_error(len: usize) -> PgResult<usize> {
+    let mut report = elog::ereport(types_error::ERROR)
+        .errcode(types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED)
+        .errmsg(format!("string buffer exceeds maximum allowed length ({} bytes)", mcx::MAX_ALLOC_SIZE))
+        .errdetail(format!("Cannot enlarge string buffer containing {len} bytes by 128 more bytes."));
+    if let Some(context) = elog::GetErrorContextStack() {
+        report = report.errcontext_msg(context);
+    }
+    report.finish(types_error::ErrorLocation::new("stringinfo.c", 360, "enlargeStringInfo"))?;
+    unreachable!()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_growth_limit_has_c_diagnostics() {
+        let limit = mcx::MAX_ALLOC_SIZE;
+        assert_eq!(line_capacity(limit - 129, limit).unwrap(), limit);
+        let _context = TokenizeErrorContext::push("auth.conf", 7);
+        let err = line_capacity(limit - 128, limit).unwrap_err();
+        assert_eq!(err.sqlstate, types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+        assert_eq!(err.message, "string buffer exceeds maximum allowed length (1073741823 bytes)");
+        assert_eq!(err.detail.as_deref(), Some("Cannot enlarge string buffer containing 1073741695 bytes by 128 more bytes."));
+        assert_eq!(err.context.as_deref(), Some("line 7 of configuration file \"auth.conf\""));
+        assert_eq!(err.location, Some(types_error::ErrorLocation::new("stringinfo.c", 360, "enlargeStringInfo")));
+    }
+
+    #[test]
+    fn incremental_lines_preserve_capacity_and_continuation_length() {
+        let mut lines = LineReader::new(&b"abc\\\nxyz\nlast"[..]);
+        lines.maxlen = 8;
+        let mut buf = Vec::new();
+        assert!(lines.append(&mut buf).unwrap());
+        assert_eq!(buf, b"abc\\\n");
+        assert_eq!(lines.maxlen, 8);
+        buf.truncate(3);
+        assert!(lines.append(&mut buf).unwrap());
+        assert_eq!(buf, b"abcxyz\n");
+        assert_eq!(lines.maxlen, 8);
+        buf.clear();
+        assert!(lines.append(&mut buf).unwrap());
+        assert_eq!(buf, b"last");
+        assert_eq!(lines.maxlen, 256);
+        assert!(!lines.append(&mut buf).unwrap());
+
+        let mut lines = LineReader::new(&b"abc\\\ndefgh\n"[..]);
+        lines.maxlen = 8;
+        buf.clear();
+        assert!(lines.append(&mut buf).unwrap());
+        buf.truncate(3);
+        assert!(lines.append(&mut buf).unwrap());
+        assert_eq!(buf, b"abcdefgh\n");
+        assert_eq!(lines.maxlen, 256);
+    }
+
+    #[test]
+    fn chunk_growth_and_many_short_lines() {
+        let input = b"abcdefghijk\na\nb\nc\n";
+        let mut lines = LineReader::new(std::io::BufReader::with_capacity(2, &input[..]));
+        lines.maxlen = 8;
+        let mut buf = Vec::new();
+        assert!(lines.append(&mut buf).unwrap());
+        assert_eq!(buf, b"abcdefghijk\n");
+        assert_eq!(lines.maxlen, 256);
+        for expected in [b"a\n", b"b\n", b"c\n"] {
+            buf.clear();
+            assert!(lines.append(&mut buf).unwrap());
+            assert_eq!(buf, expected);
+            assert_eq!(lines.maxlen, 256);
+        }
+        buf.clear();
+        assert!(!lines.append(&mut buf).unwrap());
     }
 }

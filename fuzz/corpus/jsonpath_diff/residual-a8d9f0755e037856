@@ -1,1 +1,0 @@
-4$.a.timestamp_tz() > $.b.time_tz(2)

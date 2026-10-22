@@ -1,0 +1,66 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1u s1d s2i s1c s2c s3sel
+step s1u: UPDATE wc_t SET c = c + 1000, b = 'u' WHERE a = 2;
+step s1d: DELETE FROM wc_t WHERE a = 3;
+step s2i: INSERT INTO wc_t VALUES (1, 'n'), (2, 'n'), (3, 'n') ON CONFLICT (a) DO UPDATE SET (b, c) = (SELECT wc_t.b || '+' || count(*), max(s.v) + wc_t.c FROM wc_s s WHERE s.g = wc_t.c % 3); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT a, b, c FROM wc_t ORDER BY a;
+a|b   |   c
+-+----+----
+1|b1+4|  80
+2|u+4 |1104
+3|n   |    
+4|b4  |  40
+(4 rows)
+
+
+starting permutation: s1u s2x s1c s2c s3sel
+step s1u: UPDATE wc_t SET c = c + 1000, b = 'u' WHERE a = 2;
+step s2x: INSERT INTO wc_t AS t VALUES (2, 'x'), (4, 'x') ON CONFLICT (a) DO UPDATE SET (c, b) = (SELECT t.c + 1, t.b || excluded.b) WHERE t.c < 2000; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT a, b, c FROM wc_t ORDER BY a;
+a|b  |   c
+-+---+----
+1|b1 |  10
+2|ux |1021
+3|b3 |  30
+4|b4x|  41
+(4 rows)
+
+
+starting permutation: s2i s1u s2c s1c s3sel
+step s2i: INSERT INTO wc_t VALUES (1, 'n'), (2, 'n'), (3, 'n') ON CONFLICT (a) DO UPDATE SET (b, c) = (SELECT wc_t.b || '+' || count(*), max(s.v) + wc_t.c FROM wc_s s WHERE s.g = wc_t.c % 3);
+step s1u: UPDATE wc_t SET c = c + 1000, b = 'u' WHERE a = 2; <waiting ...>
+step s2c: COMMIT;
+step s1u: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT a, b, c FROM wc_t ORDER BY a;
+a|b   |   c
+-+----+----
+1|b1+4|  80
+2|u   |1097
+3|b3+4| 114
+4|b4  |  40
+(4 rows)
+
+
+starting permutation: s2x s1u s2c s1c s3sel
+step s2x: INSERT INTO wc_t AS t VALUES (2, 'x'), (4, 'x') ON CONFLICT (a) DO UPDATE SET (c, b) = (SELECT t.c + 1, t.b || excluded.b) WHERE t.c < 2000;
+step s1u: UPDATE wc_t SET c = c + 1000, b = 'u' WHERE a = 2; <waiting ...>
+step s2c: COMMIT;
+step s1u: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT a, b, c FROM wc_t ORDER BY a;
+a|b  |   c
+-+---+----
+1|b1 |  10
+2|u  |1021
+3|b3 |  30
+4|b4x|  41
+(4 rows)
+

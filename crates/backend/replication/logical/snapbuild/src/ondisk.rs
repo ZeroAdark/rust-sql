@@ -1,4 +1,4 @@
-use elog::{ereport, errno};
+use elog::{ereport, errno, PCT_M};
 use types_core::{TransactionId, XLogRecPtr};
 use types_error::{PgResult, ERRCODE_DATA_CORRUPTED, ERRCODE_OUT_OF_MEMORY, ERROR};
 
@@ -216,11 +216,11 @@ pub struct SnapBuildOnDisk {
     pub catchange: Vec<TransactionId>,
 }
 
-pub(crate) fn build_image(builder: &SnapBuild, catchange_xip: &[TransactionId]) -> Vec<u8> {
+pub(crate) fn build_image(builder: &SnapBuild, catchange_xip: &[TransactionId]) -> PgResult<Vec<u8>> {
     let committed: &[TransactionId] = &builder.committed_xip;
     let needed_length =
         SNAP_BUILD_HEADER_SIZE + 4 * (committed.len() + catchange_xip.len());
-    let mut image = vec![0u8; needed_length];
+    let mut image = ::mcx::std_vec_from_elem("snapbuild", 0u8, needed_length)?;
 
     put(&mut image, OFF_MAGIC, &SNAPBUILD_MAGIC.to_ne_bytes());
     put(&mut image, OFF_VERSION, &SNAPBUILD_VERSION.to_ne_bytes());
@@ -267,7 +267,7 @@ pub(crate) fn build_image(builder: &SnapBuild, catchange_xip: &[TransactionId]) 
 
     let checksum = image_checksum(&image);
     put(&mut image, OFF_CHECKSUM, &checksum.to_ne_bytes());
-    image
+    Ok(image)
 }
 
 pub(crate) fn image_checksum(image: &[u8]) -> u32 {
@@ -298,7 +298,7 @@ fn restore_contents(fd: i32, dest: &mut [u8], path: &str) -> PgResult<()> {
             return ereport(ERROR)
                 .with_saved_errno(save_errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{path}\": %m"))
+                .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                 .finish(loc("SnapBuildRestoreContents"));
         }
         return ereport(ERROR)
@@ -352,7 +352,7 @@ fn alloc_zeroed(buf: &mut Vec<u8>, sz: usize, path: &str) -> PgResult<()> {
             ))
             .finish(loc("SnapBuildRestoreSnapshot"));
     }
-    buf.resize(sz, 0);
+    ::mcx::std_vec_resize("replication", buf, sz, 0)?;
     Ok(())
 }
 
@@ -367,7 +367,7 @@ pub fn restore_snapshot(lsn: XLogRecPtr, missing_ok: bool) -> PgResult<Option<Sn
         return ereport(ERROR)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{path}\": %m"))
+            .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
             .finish(loc("SnapBuildRestoreSnapshot"))
             .map(|_| None);
     }
@@ -441,7 +441,7 @@ pub fn restore_snapshot(lsn: XLogRecPtr, missing_ok: bool) -> PgResult<Option<Sn
         return ereport(ERROR)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{path}\": %m"))
+            .errmsg(format!("could not close file \"{path}\": {PCT_M}"))
             .finish(loc("SnapBuildRestoreSnapshot"))
             .map(|_| None);
     }

@@ -1,0 +1,12 @@
+-- regress-full-equivclass-002
+-- explain (costs off) select * from ec1 where ff = f1 and f1 = '42'::int8alias2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=39127 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op39111(v1.1, v1.2)
+  filter op39114(v1.2, c39096:42)
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  outs 1=w8:val 2=? 3=?
+mapped: SeqScan

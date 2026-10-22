@@ -225,7 +225,10 @@ fn match_text<M: MatchMode>(mut t: &[u8], mut p: &[u8], locale: &PgLocale) -> Pg
             let sublen = p.len() - p1.len();
             let mut buf: Vec<u8>;
             let subpat: &[u8] = if found_escape {
-                buf = Vec::with_capacity(sublen);
+                // like_match.c: palloc(sublen); failure is ERROR 53200.
+                buf = Vec::new();
+                buf.try_reserve_exact(sublen)
+                    .map_err(|_| ::mcx::oom_named("like_match subpattern", sublen))?;
                 let mut c = &p[..sublen];
                 while !c.is_empty() {
                     if c[0] == b'\\' {

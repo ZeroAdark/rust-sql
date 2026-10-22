@@ -1,0 +1,75 @@
+-- regress-full-psql-097
+-- SELECT n.nspname as "Schema", c.relname as "Name", pg_catalog.pg_get_userbyid(c.relowner) as "Owner", CASE c.relkind WHEN 'p' THEN 'partitioned table' WHEN 'I' THEN 'partitioned index' END as "Type", inh.inhparent::pg_catalog.regclass as "Parent name", c2.oid::pg_catalog.regclass as "Table" FROM pg_catalog.pg_class c LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace LEFT JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid LEFT JOIN pg_catalog.pg_class c2 ON i.indrelid = c2.oid LEFT JOIN pg_catalog.pg_inherits inh ON c.oid = inh.inhrelid WHERE c.relkind IN ('p','I','') AND c.relname OPERATOR(pg_catalog.~) E'^(no\\.such\\.partitioned\\.relation)$' COLLATE pg_catalog.default AND n.nspname OPERATOR(pg_catalog.~) E'^(no\\.such\\.schema)$' COLLATE pg_catalog.default ORDER BY "Schema", "Type" DESC, "Parent name" NULLS FIRST, "Name";
+graph pipelines=5 breakers=4 init_plans=0 root=p4
+p0 node=6 serial site=0 reason=IndexSource end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n6@0 n5@3
+  source index rel=1259 rti=1 am=heap index=2663
+    key att=2 op=254 value=c25:'no.such.partitioned.relation'
+    recheck (op254(v1.2, c25:'no.such.partitioned.relation'))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(6):byval8:w8:val Attr(18):byval8:w8:val
+  filter op639(v1.2, c25:'^(no\.such\.partitioned\.relation)$')
+  filter any92(v1.18, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00pI\x00')
+  project (1=v1.2, 2=v1.6, 3=v1.18, 4=v1.3, 5=v1.1)
+  build keys=(outer.5) decls=26/26:I32
+  outs 1=fx64:win/page 2=w8:val 3=w8:val 4=w8:val 5=w8:val
+p1 node=4 eligible rows=59 end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n4@0 n3@1^
+  source range rel=2611 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v8.1, 2=v8.2, 3=v8.3, 4=v8.4)
+  probe slot=0 inner=n5 JOIN_RIGHT unique marks build-first keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.5))
+  outs 1=w8:val 2=w8:val 3=w4:val 4=w1:val
+p2 node=10 eligible rows=1 end=breaker(slot=2 HashBuild)
+  desc words=bits@6/7
+  nodes n10@0 n1@2^
+  source range rel=2615 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op639(v2.2, c25:'^(no\.such\.schema)$')
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4)
+  build keys=(outer.1) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+p3 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Sort)
+  desc consumes=slot0@p0 consumes=slot1@p1 consumes=slot2@p2
+  nodes n3@0 n2@2 n1@4 n0@6^
+  source breaker slot=0
+  drain matches=slot1 JOIN_RIGHT
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=inner.5, 6=outer.2)
+  nest inner=n7 JOIN_LEFT raise-free params=($exec0=outer.5)
+  inner node=8 serial site=0 reason=IndexSource end=sink
+  nodes n8@0 n7@1
+  source index rel=2610 rti=4 am=heap index=2679
+    key att=1 op=607 value=$exec0
+    recheck (op607(v4.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9, 10=v4.10, 11=v4.11, 12=v4.12, 13=v4.13, 14=v4.14, 15=v4.15, 16=v4.16, 17=v4.17, 18=v4.18, 19=v4.19, 20=v4.20, 21=v4.21)
+  nest inner=n9 JOIN_LEFT unique raise-free params=($exec1=outer.2)
+  inner node=9 serial site=0 reason=IndexSource end=sink
+  nodes n9@0
+  source index-only rel=1259 rti=6 am=heap index=2662
+    key att=1 op=607 value=$exec1
+    recheck (op607(index.1, $exec1))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  project (1=outer.1, 2=inner.1)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=inner.2, 6=outer.6)
+  probe slot=2 inner=n10 JOIN_INNER unique catalog keys=(outer.4) decls=26/26:I32 clauses=(op607(outer.4, inner.1))
+  project (1=inner.2, 2=outer.1, 3=fn1642(outer.2), 4=case[outer.3](when op92(T_CaseTestExpr, c18:112) then c25:'partitioned table', when op92(T_CaseTestExpr, c18:73) then c25:'partitioned index') else c25:null, 5=relabel2205(outer.6), 6=relabel2205(outer.5))
+  sort keys=1+:Fp128@950#19,4-n:Fp128@100,5+n:I32,2+:Fp128@950#19 form=runs
+  outs 1=fx64:life/breaker 2=w4:val 3=w1:val 4=w4:val 5=w4:val 6=w4:val
+  outs 1=fx64:life/breaker 2=w4:val 3=w1:val 4=w4:val 5=w4:val 6=w4:val
+  outs 1=fx64:life/breaker 2=fx64:life/breaker 3=fx64:call1642 4=vl:stmt/imm 5=w4:val 6=w4:val
+p4 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot3@p3
+  nodes n0@0
+  source breaker slot=3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=fx64:life/breaker 2=fx64:life/breaker 3=fx64:call1642 4=vl:stmt/imm 5=w4:val 6=w4:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=Sort budget=Share spill=Runs producer=p3 layout=[Fp128,Fp128,Fp128,Fp128,I32,Fp128,Fp128]->[Count@56] 64B order=1+,4-n,5+n,2+
+param $exec0 owner=n2 type=26 rep=w4:val
+param $exec1 owner=n7 type=26 rep=w8:val
+mapped: SeqScan IndexScan IndexOnlyScan NestLoop NestLoopParam HashJoin Sort Hash

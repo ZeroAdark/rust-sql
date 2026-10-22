@@ -1,0 +1,11 @@
+-- regress-full-point-002
+-- SELECT p.* FROM POINT_TBL p WHERE not box '(0,0,100,100)' @> p.f1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1848 end=sink
+  nodes n0@0
+  source range rel=16406 rti=1 am=heap
+    lanes Attr(1):byref8:fx16:win/page Offset:byval2:w2:val
+  filter not(op511(v1.1, c603:#32))
+  project (1=v1.1)
+  outs 1=fx16:win/page
+mapped: SeqScan

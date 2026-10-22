@@ -1,0 +1,256 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1a s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT DISTINCT "distinctAlias"."Post_id" AS "ids_Post_id" FROM (SELECT "Post"."id" AS "Post_id", "Post"."title" AS "Post_title", "Post"."authorId" AS "Post_authorId", "Post__Post_author"."id" AS "Post__Post_author_id", "Post__Post_author"."name" AS "Post__Post_author_name" FROM fp "Post" LEFT JOIN fu "Post__Post_author" ON "Post__Post_author"."id"="Post"."authorId" WHERE (("Post"."id" = 1)) FOR UPDATE OF "Post") "distinctAlias" ORDER BY "Post_id" ASC LIMIT 1;
+QUERY PLAN                                                                            
+--------------------------------------------------------------------------------------
+Limit                                                                                 
+  ->  Unique                                                                          
+        ->  Sort                                                                      
+              Sort Key: "distinctAlias"."Post_id"                                     
+              ->  Subquery Scan on "distinctAlias"                                    
+                    ->  LockRows                                                      
+                          ->  Nested Loop Left Join                                   
+                                ->  Index Scan using fp_pkey on fp "Post"             
+                                      Index Cond: (id = 1)                            
+                                ->  Index Scan using fu_pkey on fu "Post__Post_author"
+                                      Index Cond: (id = "Post"."authorId")            
+(11 rows)
+
+step s1a: UPDATE fp SET title = title || '!' WHERE id = 1;
+step s2l: SELECT DISTINCT "distinctAlias"."Post_id" AS "ids_Post_id" FROM (SELECT "Post"."id" AS "Post_id", "Post"."title" AS "Post_title", "Post"."authorId" AS "Post_authorId", "Post__Post_author"."id" AS "Post__Post_author_id", "Post__Post_author"."name" AS "Post__Post_author_name" FROM fp "Post" LEFT JOIN fu "Post__Post_author" ON "Post__Post_author"."id"="Post"."authorId" WHERE (("Post"."id" = 1)) FOR UPDATE OF "Post") "distinctAlias" ORDER BY "Post_id" ASC LIMIT 1; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ids_Post_id
+-----------
+          1
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1i s2l s1c
+step s1i: UPDATE fp SET id = 10 WHERE id = 1;
+step s2l: SELECT DISTINCT "distinctAlias"."Post_id" AS "ids_Post_id" FROM (SELECT "Post"."id" AS "Post_id", "Post"."title" AS "Post_title", "Post"."authorId" AS "Post_authorId", "Post__Post_author"."id" AS "Post__Post_author_id", "Post__Post_author"."name" AS "Post__Post_author_name" FROM fp "Post" LEFT JOIN fu "Post__Post_author" ON "Post__Post_author"."id"="Post"."authorId" WHERE (("Post"."id" = 1)) FOR UPDATE OF "Post") "distinctAlias" ORDER BY "Post_id" ASC LIMIT 1; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ids_Post_id
+-----------
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2n s1c
+step s1a: UPDATE fp SET title = title || '!' WHERE id = 1;
+step s2n: SELECT DISTINCT d.pid, d.title, d.uname FROM (SELECT p.id AS pid, p.title, u.id AS uid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id IN (1, 3, 4) FOR UPDATE OF p) d ORDER BY d.pid LIMIT 5; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+pid|title        |uname 
+---+-------------+------
+  1|About Timber!|Timber
+  3|Anonymous    |      
+  4|More Timber  |Timber
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2n s1c
+step s1m: UPDATE fp SET "authorId" = 2 WHERE id = 1;
+step s2n: SELECT DISTINCT d.pid, d.title, d.uname FROM (SELECT p.id AS pid, p.title, u.id AS uid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id IN (1, 3, 4) FOR UPDATE OF p) d ORDER BY d.pid LIMIT 5; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+pid|title       |uname 
+---+------------+------
+  1|About Timber|      
+  3|Anonymous   |      
+  4|More Timber |Timber
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1z s2n s1c
+step s1z: UPDATE fp SET "authorId" = NULL WHERE id = 1;
+step s2n: SELECT DISTINCT d.pid, d.title, d.uname FROM (SELECT p.id AS pid, p.title, u.id AS uid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id IN (1, 3, 4) FOR UPDATE OF p) d ORDER BY d.pid LIMIT 5; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+pid|title       |uname 
+---+------------+------
+  1|About Timber|      
+  3|Anonymous   |      
+  4|More Timber |Timber
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2n s1c
+step s1g: UPDATE fp SET "authorId" = 3 WHERE id = 3;
+step s2n: SELECT DISTINCT d.pid, d.title, d.uname FROM (SELECT p.id AS pid, p.title, u.id AS uid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id IN (1, 3, 4) FOR UPDATE OF p) d ORDER BY d.pid LIMIT 5; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+pid|title       |uname 
+---+------------+------
+  1|About Timber|Timber
+  3|Anonymous   |      
+  4|More Timber |Timber
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2n s1c
+step s1r: UPDATE fu SET name = 'renamed' WHERE id = 1; UPDATE fp SET title = title || '!' WHERE id = 1;
+step s2n: SELECT DISTINCT d.pid, d.title, d.uname FROM (SELECT p.id AS pid, p.title, u.id AS uid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id IN (1, 3, 4) FOR UPDATE OF p) d ORDER BY d.pid LIMIT 5; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+pid|title        |uname 
+---+-------------+------
+  1|About Timber!|Timber
+  3|Anonymous    |      
+  4|More Timber  |Timber
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1i s2n s1c
+step s1i: UPDATE fp SET id = 10 WHERE id = 1;
+step s2n: SELECT DISTINCT d.pid, d.title, d.uname FROM (SELECT p.id AS pid, p.title, u.id AS uid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id IN (1, 3, 4) FOR UPDATE OF p) d ORDER BY d.pid LIMIT 5; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+pid|title      |uname 
+---+-----------+------
+  3|Anonymous  |      
+  4|More Timber|Timber
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2s s1c
+step s1m: UPDATE fp SET "authorId" = 2 WHERE id = 1;
+step s2s: SELECT DISTINCT d.pid, d.uname FROM (SELECT p.id AS pid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id IN (1, 3, 4) FOR SHARE OF p) d ORDER BY d.pid LIMIT 5; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+pid|uname 
+---+------
+  1|      
+  3|      
+  4|Timber
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM fp WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2sk: SELECT DISTINCT d.pid, d.uname FROM (SELECT p.id AS pid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id IN (1, 3, 4) FOR UPDATE OF p SKIP LOCKED) d ORDER BY d.pid LIMIT 5;
+pid|uname 
+---+------
+  3|      
+  4|Timber
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM fp WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2nw: SELECT DISTINCT d.pid FROM (SELECT p.id AS pid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id = 1 FOR UPDATE OF p NOWAIT) d ORDER BY d.pid LIMIT 1;
+ERROR:  could not obtain lock on row in relation "fp"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1z s2c s1c
+step s1z: UPDATE fp SET "authorId" = NULL WHERE id = 1;
+step s2c: SELECT count(*), count(d.uname), max(d.title) FROM (SELECT p.id AS pid, p.title, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id IN (1, 3) FOR UPDATE OF p) d; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+count|count|max      
+-----+-----+---------
+    2|    0|Anonymous
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2hx s1m s2h s1c
+step s2hx: EXPLAIN (COSTS OFF) SELECT DISTINCT d.pid, d.uname FROM (SELECT p.id AS pid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id <= 4 FOR UPDATE OF p) d ORDER BY d.pid;
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Sort                                                            
+  Sort Key: d.pid                                               
+  ->  HashAggregate                                             
+        Group Key: d.pid, d.uname                               
+        ->  Subquery Scan on d                                  
+              ->  LockRows                                      
+                    ->  Hash Left Join                          
+                          Hash Cond: (p."authorId" = u.id)      
+                          ->  Bitmap Heap Scan on fp p          
+                                Recheck Cond: (id <= 4)         
+                                ->  Bitmap Index Scan on fp_pkey
+                                      Index Cond: (id <= 4)     
+                          ->  Hash                              
+                                ->  Seq Scan on fu u            
+(14 rows)
+
+step s1m: UPDATE fp SET "authorId" = 2 WHERE id = 1;
+step s2h: SELECT DISTINCT d.pid, d.uname FROM (SELECT p.id AS pid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id <= 4 FOR UPDATE OF p) d ORDER BY d.pid; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+pid|uname 
+---+------
+  1|      
+  2|Umed  
+  3|      
+  4|Timber
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1z s2h s1c
+step s1z: UPDATE fp SET "authorId" = NULL WHERE id = 1;
+step s2h: SELECT DISTINCT d.pid, d.uname FROM (SELECT p.id AS pid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id <= 4 FOR UPDATE OF p) d ORDER BY d.pid; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+pid|uname 
+---+------
+  1|      
+  2|Umed  
+  3|      
+  4|Timber
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2h s1c
+step s1r: UPDATE fu SET name = 'renamed' WHERE id = 1; UPDATE fp SET title = title || '!' WHERE id = 1;
+step s2h: SELECT DISTINCT d.pid, d.uname FROM (SELECT p.id AS pid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id <= 4 FOR UPDATE OF p) d ORDER BY d.pid; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+pid|uname 
+---+------
+  1|Timber
+  2|Umed  
+  3|      
+  4|Timber
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1i s2h s1c
+step s1i: UPDATE fp SET id = 10 WHERE id = 1;
+step s2h: SELECT DISTINCT d.pid, d.uname FROM (SELECT p.id AS pid, u.name AS uname FROM fp p LEFT JOIN fu u ON u.id = p."authorId" WHERE p.id <= 4 FOR UPDATE OF p) d ORDER BY d.pid; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+pid|uname 
+---+------
+  2|Umed  
+  3|      
+  4|Timber
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress

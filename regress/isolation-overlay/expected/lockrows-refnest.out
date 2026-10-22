@@ -1,0 +1,234 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2x s1a s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j;
+QUERY PLAN                                                
+----------------------------------------------------------
+Limit                                                     
+  ->  LockRows                                            
+        ->  Nested Loop                                   
+              ->  Index Scan using rnj_pkey on rnj j      
+                    Filter: (state = 'running'::text)     
+              ->  Memoize                                 
+                    Cache Key: j.worker_id                
+                    Cache Mode: logical                   
+                    ->  Index Scan using rnw_pkey on rnw w
+                          Index Cond: (id = j.worker_id)  
+(10 rows)
+
+step s1a: UPDATE rnj SET attempts = attempts + 1 WHERE id = 8;
+step s2l: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|name
+--+----
+ 8|w9  
+18|w19 
+28|w9  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2l s1c
+step s1s: UPDATE rnj SET state = 'done' WHERE id = 8;
+step s2l: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|name
+--+----
+18|w19 
+28|w9  
+38|w19 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1w s2l s1c
+step s1w: UPDATE rnj SET worker_id = 3 WHERE id = 8;
+step s2l: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|name
+--+----
+18|w19 
+28|w9  
+38|w19 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s1a s2l s1c
+step s1n: UPDATE rnw SET name = 'renamed' WHERE id = 9;
+step s1a: UPDATE rnj SET attempts = attempts + 1 WHERE id = 8;
+step s2l: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|name
+--+----
+ 8|w9  
+18|w19 
+28|w9  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2l s1c
+step s1d: DELETE FROM rnj WHERE id = 18;
+step s2l: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|name
+--+----
+ 8|w9  
+28|w9  
+38|w19 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2o s1c
+step s1s: UPDATE rnj SET state = 'done' WHERE id = 8;
+step s2o: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 2 OFFSET 1 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|name
+--+----
+28|w9  
+38|w19 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM rnj WHERE id = 8 FOR UPDATE;
+id
+--
+ 8
+(1 row)
+
+step s2sk: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j SKIP LOCKED;
+id|name
+--+----
+18|w19 
+28|w9  
+38|w19 
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM rnj WHERE id = 8 FOR UPDATE;
+id
+--
+ 8
+(1 row)
+
+step s2nw: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j NOWAIT;
+ERROR:  could not obtain lock on row in relation "rnj"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1a s3l s1c
+step s3x: EXPLAIN (COSTS OFF) SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j;
+QUERY PLAN                                           
+-----------------------------------------------------
+Limit                                                
+  ->  LockRows                                       
+        ->  Nested Loop                              
+              ->  Index Scan using rnj_pkey on rnj j 
+                    Filter: (state = 'running'::text)
+              ->  Index Scan using rnw_pkey on rnw w 
+                    Index Cond: (id = j.worker_id)   
+(7 rows)
+
+step s1a: UPDATE rnj SET attempts = attempts + 1 WHERE id = 8;
+step s3l: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|name
+--+----
+ 8|w9  
+18|w19 
+28|w9  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s3l s1c
+step s1s: UPDATE rnj SET state = 'done' WHERE id = 8;
+step s3l: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|name
+--+----
+18|w19 
+28|w9  
+38|w19 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1w s3l s1c
+step s1w: UPDATE rnj SET worker_id = 3 WHERE id = 8;
+step s3l: SELECT j.id, w.name FROM rnj j JOIN rnw w ON w.id = j.worker_id WHERE j.state = 'running' ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|name
+--+----
+18|w19 
+28|w9  
+38|w19 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s4x s1q s4l s1c
+step s4x: EXPLAIN (COSTS OFF) SELECT i.wh, i.qty FROM rni i JOIN rnp p ON p.id = i.pid WHERE p.id = 42 ORDER BY i.wh FOR UPDATE OF i;
+QUERY PLAN                                          
+----------------------------------------------------
+LockRows                                            
+  ->  Nested Loop                                   
+        ->  Index Scan using rni_pkey on rni i      
+              Index Cond: (pid = 42)                
+        ->  Materialize                             
+              ->  Index Scan using rnp_pkey on rnp p
+                    Index Cond: (id = 42)           
+(7 rows)
+
+step s1q: UPDATE rni SET qty = qty + 100 WHERE wh = 2 AND pid = 42;
+step s4l: SELECT i.wh, i.qty, p.name FROM rni i JOIN rnp p ON p.id = i.pid WHERE p.id = 42 ORDER BY i.wh FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+wh|qty|name
+--+---+----
+ 1| 45|p42 
+ 2|176|p42 
+ 3|  7|p42 
+ 4| 38|p42 
+ 5| 69|p42 
+ 6|  0|p42 
+ 7| 31|p42 
+ 8| 62|p42 
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s4l s1c
+step s1m: UPDATE rni SET pid = 43 WHERE wh = 3 AND pid = 42;
+ERROR:  duplicate key value violates unique constraint "rni_pkey"
+step s4l: SELECT i.wh, i.qty, p.name FROM rni i JOIN rnp p ON p.id = i.pid WHERE p.id = 42 ORDER BY i.wh FOR UPDATE OF i;
+wh|qty|name
+--+---+----
+ 1| 45|p42 
+ 2| 76|p42 
+ 3|  7|p42 
+ 4| 38|p42 
+ 5| 69|p42 
+ 6|  0|p42 
+ 7| 31|p42 
+ 8| 62|p42 
+(8 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

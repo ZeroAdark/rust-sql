@@ -32,8 +32,55 @@ use crate::Runtime;
 /// and a non-blocking boundary reap after EVERY step — completions run
 /// (IoToken unpark-all) and issuer pins drop before the worker runs its
 /// next task or parks.
+
+/// Lane wakelit arm (iii), `PGRUST_POOL_SPIN_US=<µs>` (default 0 = off):
+/// a worker that is about to park spins on the park-lot epoch for at most
+/// this window first. Consecutive phases of one statement are published
+/// microseconds apart, so a worker that never parks between them never
+/// re-enters the kernel's wake placement — the burst that stacks two
+/// wakees on one CPU (§2.2af) does not happen for phases 2..n. The spin
+/// runs with the execution permit RELEASED and is bounded; an idle pool
+/// costs one window per worker after its last phase and nothing after.
+fn spin_us() -> u64 {
+    static V: crate::sync::OnceLock<u64> = crate::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("PGRUST_POOL_SPIN_US").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0)
+    })
+}
+
+/// Spin on the epoch for the configured window; true = the epoch moved
+/// (new work or a wake) and the caller skips the park. The window is a
+/// `pg_clock` deadline (the process monotonic clock; virtual under DST,
+/// where the arm stays off: a spin has no yield point to advance time).
+fn spin_for_epoch(rt: &Runtime, epoch: u64) -> bool {
+    let us = spin_us();
+    if us == 0 {
+        return false;
+    }
+    let deadline = pg_clock::Deadline::after(std::time::Duration::from_micros(us));
+    loop {
+        if rt.park_epoch() != epoch {
+            return true;
+        }
+        if deadline.expired() {
+            return false;
+        }
+        std::hint::spin_loop();
+    }
+}
+
 pub fn worker_loop(rt: &Arc<Runtime>, worker: usize) {
     let mut local = rt.worker_local(worker);
+    // purge timing: this thread's purges count as an executor worker's
+    mcx::purge_phase(3);
+    // ALLOC-LADDER (b): the ladder's first rung reaches a parked worker through the park lot; the worker collects its own
+    // allocator pages at its next idle park (`mcx::answer_collect`)
+    mcx::set_collect_wake(|| {
+        if let Some(rt) = crate::global() {
+            rt.notify_source_progress();
+        }
+    });
+    let mut collect_seen = mcx::collect_counts().0;
     let ring = crate::io::worker_enter(rt);
     rt.register_worker_ring(worker, ring);
     // Register this thread for the spill blocking-section facade (M3.5
@@ -61,6 +108,11 @@ pub fn worker_loop(rt: &Arc<Runtime>, worker: usize) {
         // points, consumed by the directed park); submissions elide their
         // notify while any worker is in that window (ParkLot::wake_work).
         let spinner_mode = rt.wake_spinner_armed();
+        // Lane wakelit arm (iv): the wake TREE also parks on the directed
+        // stack (a tree wake pops registered parkers) and each wakee
+        // continues the tree before it searches.
+        let tree_mode = rt.wake_tree_armed();
+        let directed = spinner_mode || tree_mode;
         let parker = std::sync::Arc::new(pgsync::WorkerParker::new());
         if spinner_mode {
             rt.spin_enter_worker(&mut local);
@@ -104,10 +156,15 @@ pub fn worker_loop(rt: &Arc<Runtime>, worker: usize) {
                         crate::io::note_permit(false);
                         rt.execution_permits().release();
                         exit.held = false;
-                        if spinner_mode {
-                            rt.park_worker_directed(epoch, &parker, &mut local);
-                        } else {
-                            rt.park(epoch);
+                        if !spin_for_epoch(rt, epoch) {
+                            if directed {
+                                rt.park_worker_directed(epoch, &parker, &mut local);
+                            } else {
+                                rt.park(epoch);
+                            }
+                            if tree_mode {
+                                rt.wake_tree_continue();
+                            }
                         }
                     } else {
                         std::thread::yield_now();
@@ -115,13 +172,21 @@ pub fn worker_loop(rt: &Arc<Runtime>, worker: usize) {
                 }
                 Step::Idle => {
                     retries = 0;
+                    collect_seen = mcx::answer_collect(collect_seen);
                     crate::io::note_permit(false);
                     rt.execution_permits().release();
                     exit.held = false;
-                    if spinner_mode {
-                        rt.park_worker_directed(epoch, &parker, &mut local);
-                    } else {
-                        rt.park(epoch);
+                    if !spin_for_epoch(rt, epoch) {
+                        // D4781 (`fold_on_park`): an idle worker's pending counts reach its account before it parks
+                        memledger::park_fold();
+                        if directed {
+                            rt.park_worker_directed(epoch, &parker, &mut local);
+                        } else {
+                            rt.park(epoch);
+                        }
+                        if tree_mode {
+                            rt.wake_tree_continue();
+                        }
                     }
                 }
                 Step::Stop => break,
@@ -146,7 +211,11 @@ pub fn worker_loop(rt: &Arc<Runtime>, worker: usize) {
                 // yield rather than burn the permit path (and the loom models
                 // require the no-lone-progress hint on exactly this edge).
                 Step::Retry => std::thread::yield_now(),
-                Step::Idle => rt.park(epoch),
+                Step::Idle => {
+                    collect_seen = mcx::answer_collect(collect_seen);
+                    memledger::park_fold();
+                    rt.park(epoch)
+                }
                 Step::Stop => break,
             }
         }
@@ -161,7 +230,10 @@ struct LoopExit<'a> {
 
 impl Drop for LoopExit<'_> {
     fn drop(&mut self) {
-        if self.held {
+        // D611: an unwind out of worker_step already gave the step permit back
+        // (sched.rs PermitOnUnwind), or gave it up in an aio wait or a bound
+        // serve; release only the permit this thread still holds.
+        if self.held && crate::io::permit_held() {
             crate::io::note_permit(false);
             self.rt.execution_permits().release();
         }
@@ -184,7 +256,7 @@ impl WorkerPool {
         Self::spawn_with(rt, |ordinal, body| {
             std::thread::Builder::new()
                 .name(format!("pgrust-rtworker-{ordinal}"))
-                .spawn(body)
+                .spawn(pagegive::pinned(body))
         })
     }
 

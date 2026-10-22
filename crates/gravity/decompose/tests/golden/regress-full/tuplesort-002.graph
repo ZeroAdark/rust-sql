@@ -1,0 +1,14 @@
+-- regress-full-tuplesort-002
+-- INSERT INTO abbrev_abort_uuids (abort_increasing, abort_decreasing, noabort_increasing, noabort_decreasing) SELECT abort_increasing, abort_decreasing, noabort_increasing, noabort_decreasing FROM abbrev_abort_uuids WHERE (id < 10 OR id > 19990) AND id % 3 = 0 AND abort_increasing is not null;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@4
+  source range rel=46891 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx16:win/page Attr(3):byref8:fx16:win/page Attr(4):byref8:fx16:win/page Attr(5):byref8:fx16:win/page Offset:byval2:w2:val
+  filter notnull(v3.2)
+  filter or(op97(v3.1, c23:10), op521(v3.1, c23:19990))
+  filter op96(op530(v3.1, c23:3), c23:0)
+  project (1=fn480(fn1574(c2205:46890)), 2=v3.2, 3=v3.3, 4=v3.4, 5=v3.5)
+  write INSERT rel=46891 rti=1 natts=5 indexes=()
+  outs 1=w4:val 2=fx16:win/page 3=fx16:win/page 4=fx16:win/page 5=fx16:win/page
+mapped: ModifyTable SeqScan

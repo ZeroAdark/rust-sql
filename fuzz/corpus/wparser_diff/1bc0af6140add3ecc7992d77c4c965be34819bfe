@@ -1,3 +1,0 @@
-Å;
-re stop-words
-SELECT to_tsquery(

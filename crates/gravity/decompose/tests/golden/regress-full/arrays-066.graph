@@ -1,0 +1,16 @@
+-- regress-full-arrays-066
+-- select array(select array['Hello', i::text] from generate_series(9,11) i);
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0
+  source const
+  srf from rti=2 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:9, c23:11)]
+  project (1=array(c25:'Hello', io25(v2.1)))
+  outs 1=vl:call0
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec0)
+  outs 1=vl:row
+init_plan id=1 pipeline=p0 link=Array param=$exec0 raise-free
+mapped: Result FunctionScan SubPlan

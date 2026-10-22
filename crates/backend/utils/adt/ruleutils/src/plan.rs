@@ -61,7 +61,7 @@ pub fn deparse_context_for_plan_tree<'mcx>(
     dpns.subplans = Some(&pstmt.subplans);
     if !pstmt.appendRelations.is_nil() {
         let mut appendrels: Vec<Option<&'mcx types_nodes::plannodes::AppendRelInfo<'mcx>>> =
-            vec![None; ntables + 1];
+            ::mcx::std_vec_from_elem("ruleutils", None, ntables + 1)?;
         for n in pstmt.appendRelations.iter() {
             let appinfo = n.as_append_rel_info().expect("appendRelations cell");
             let crelid = appinfo.child_relid as usize;
@@ -218,7 +218,7 @@ pub(crate) fn push_ancestor_plan<'mcx>(
     let AncestorEntry::Plan(plan) = ps.ancestors[ancestor_idx] else {
         panic!("push_ancestor_plan: SubPlan ancestor cell");
     };
-    ps.ancestors = ps.ancestors[ancestor_idx + 1..].to_vec();
+    ps.ancestors.drain(..=ancestor_idx);
     set_deparse_plan(&mut ps, plan, dpns.subplans);
     save
 }

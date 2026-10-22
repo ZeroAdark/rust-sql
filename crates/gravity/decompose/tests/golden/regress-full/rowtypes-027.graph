@@ -1,0 +1,15 @@
+-- regress-full-rowtypes-027
+-- select row_to_json(q) from (select thousand as x, tenthous as y from tenk1 where thousand = 42 and tenthous < 2000 offset 0) q;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=16423 rti=2 am=heap index=19342
+    key att=8 op=96 value=c23:42
+    key att=11 op=97 value=c23:2000
+    recheck (op96(index.1, c23:42), op97(index.2, c23:2000))
+    lanes Attr(8):byval8:w8:val Attr(11):byval8:w8:val
+  project (1=index.1, 2=index.2)
+  project (1=fn3155(v1.0))
+  outs 1=w4:val 2=w4:val
+  outs 1=vl:call3155
+mapped: IndexOnlyScan SubqueryScan

@@ -1,0 +1,1 @@
+backend/commands/prepare/src/lib.rs	PREPARED_QUERIES	pgport	at:destroy_prepared_queries_at_exit	leader	the session's prepared-statement hash table, per session by design (C's prepared_queries); destroyed by destroy_prepared_queries_at_exit (on_proc_exit), emptied by DEALLOCATE ALL / DISCARD ALL; read by EXECUTE and pg_prepared_statement (proparallel r) on the leader

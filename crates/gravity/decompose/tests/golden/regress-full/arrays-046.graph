@@ -1,0 +1,12 @@
+-- regress-full-arrays-046
+-- insert into arr_pk_tbl(pk, f1[1:2]) values (1, '{6,7,8}') on conflict (pk) do update set f1[1] = excluded.f1[1], f1[2] = excluded.f1[2], f1[3] = excluded.f1[3] returning pk, f1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:1, 2=T_SubscriptingRef)
+  write INSERT rel=26267 rti=1 natts=2 indexes=(26273[1]up) on_conflict=update arbiter=(26273) excl_rti=2 cols=(2) set=(1=T_SubscriptingRef) returning
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=vl:call0
+  outs 1=w4:val 2=vl:row
+mapped: Result ModifyTable

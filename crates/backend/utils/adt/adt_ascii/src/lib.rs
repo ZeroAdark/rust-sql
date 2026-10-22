@@ -52,7 +52,7 @@ pub fn pg_to_ascii(src: &[u8], dest: &mut [u8], enc: pg_enc) -> PgResult<()> {
 fn encode_to_ascii<'mcx>(mcx: Mcx<'mcx>, data: &[u8], enc: pg_enc) -> PgResult<Datum> {
     let mut out = varlena::image_with_header(mcx, data.len())?;
     let start = out.len();
-    out.resize(start + data.len(), 0);
+    ::mcx::pgvec_resize(&mut out, start + data.len(), 0)?;
     pg_to_ascii(data, &mut out[start..], enc)?;
     Ok(varlena_result(Varlena::from_image(out)))
 }

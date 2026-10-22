@@ -1,0 +1,10 @@
+-- regress-full-strings-005
+-- SELECT CAST(f1 AS char(10)) AS "char(text)" FROM TEXT_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2 end=sink
+  nodes n0@0
+  source range rel=16409 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn668(relabel1042(v1.1), c23:14, c16:1))
+  outs 1=vl:call668
+mapped: SeqScan

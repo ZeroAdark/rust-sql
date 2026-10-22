@@ -187,6 +187,11 @@ fn disabled_module_arms_and_error_texts() {
     let err = TransactionIdGetCommitTsData(100).err().unwrap();
     assert_eq!(err.message(), "could not get commit timestamp data");
     assert_eq!(err.sqlstate(), ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE);
+    // commit_ts.c:381: the reporting routine is error_commit_ts_disabled.
+    assert_eq!(
+        err.location().and_then(|l| l.funcname.as_deref()),
+        Some("error_commit_ts_disabled")
+    );
     assert_eq!(
         err.hint(),
         Some("Make sure the configuration parameter \"track_commit_timestamp\" is set.")

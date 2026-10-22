@@ -1,0 +1,10 @@
+# a sorted subquery feeds it: exact (fails closed)
+sql: SELECT array_agg(x) FROM (SELECT x FROM t ORDER BY x) s;
+cols: array_agg
+tables: t
+class: unordered
+verdict: mismatch
+[pg]
+{1,2}
+[got]
+{2,1}

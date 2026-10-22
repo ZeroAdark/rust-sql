@@ -1,0 +1,2 @@
+path	crates/gravity/lowerv4/src/ops/sort/topn/lower.rs
+method	std::iter::Iterator::collect	1

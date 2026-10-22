@@ -448,7 +448,7 @@ pub fn getObjectIdentityParts<'mcx>(
             let schema = namespace_name_or_temp(mcx, row.namespace)?;
             let nspname = crate::description::get_namespace_name(row.namespace)?;
             let mut args = String::new();
-            let mut objargs = Vec::with_capacity(row.argtypes.len());
+            let mut objargs = ::mcx::std_vec_with_capacity("catalog", row.argtypes.len())?;
             for (i, &t) in row.argtypes.iter().enumerate() {
                 let tn = format_type::format_type_be_qualified(t)?;
                 if i > 0 {
@@ -938,7 +938,7 @@ pub fn getObjectIdentityParts<'mcx>(
                 return Ok(None);
             };
             let d = cache_syscache::SysCacheGetAttrNotNull(cacheid, &tup, 2)?;
-            let parname = text_datum_to_string(d);
+            let parname = text_datum_to_string(d)?;
             cache_syscache::ReleaseSysCache(tup);
             // C: parname is appended unquoted.
             Ok(Some(ObjectIdentity {
@@ -1207,24 +1207,27 @@ fn syscache_name_att(cacheid: i32, oid: Oid, attnum: i32) -> PgResult<Option<Str
     Ok(Some(name))
 }
 
-pub(crate) fn text_datum_to_string(d: Datum) -> String {
+pub(crate) fn text_datum_to_string(d: Datum) -> PgResult<String> {
+    use types_tuple::varatt;
     let p = d.as_usize() as *const u8;
-    // SAFETY: non-null detoasted text column datum from the syscache tuple.
+    // SAFETY: non-null text column datum inside a held syscache tuple; the
+    // length comes from its own varlena header.
     unsafe {
-        let (off, len) = if types_tuple::varatt::varatt_is_1b(p) {
+        if varatt::varatt_is_1b_e(p) || (!varatt::varatt_is_1b(p) && !varatt::varatt_is_4b_u(p)) {
+            let raw = core::slice::from_raw_parts(p, varatt::varsize_any(p));
+            let cx = mcx::MemoryContext::new("objectaddress detoast");
+            let image = detoast::detoast_attr(cx.mcx(), raw)?;
+            return Ok(String::from_utf8_lossy(&image[varatt::VARHDRSZ..]).into_owned());
+        }
+        let (off, len) = if varatt::varatt_is_1b(p) {
             (
-                types_tuple::varatt::VARHDRSZ_SHORT,
-                types_tuple::varatt::varsize_1b(p) - types_tuple::varatt::VARHDRSZ_SHORT,
+                varatt::VARHDRSZ_SHORT,
+                varatt::varsize_1b(p) - varatt::VARHDRSZ_SHORT,
             )
         } else {
-            (
-                types_tuple::varatt::VARHDRSZ,
-                types_tuple::varatt::varsize_4b(p) - types_tuple::varatt::VARHDRSZ,
-            )
+            (varatt::VARHDRSZ, varatt::varsize_4b(p) - varatt::VARHDRSZ)
         };
-        core::str::from_utf8(core::slice::from_raw_parts(p.add(off), len))
-            .expect("catalog text is valid UTF-8")
-            .to_string()
+        Ok(String::from_utf8_lossy(core::slice::from_raw_parts(p.add(off), len)).into_owned())
     }
 }
 
@@ -1255,12 +1258,13 @@ fn proc_row(oid: Oid) -> PgResult<Option<ProcNaming>> {
     debug_assert!(!argnull);
     // oidvector image: 24B 1-D array header, then n 4-byte oids.
     let p = argd.as_usize() as *const u8;
-    // SAFETY: NOT NULL pg_proc.proargtypes oidvector under its declared size.
     let argtypes = unsafe {
         let n = u32::from_ne_bytes(*(p.add(16) as *const [u8; 4])) as usize;
-        (0..n)
-            .map(|i| u32::from_ne_bytes(*(p.add(24 + i * 4) as *const [u8; 4])) as Oid)
-            .collect::<Vec<Oid>>()
+        let mut out = ::mcx::std_vec_with_capacity("objectaddress", n)?;
+        for i in 0..n {
+            out.push(u32::from_ne_bytes(*(p.add(24 + i * 4) as *const [u8; 4])) as Oid);
+        }
+        out
     };
     cache_syscache::ReleaseSysCache(ht);
     Ok(Some(ProcNaming { name, namespace, kind, argtypes }))

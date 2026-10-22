@@ -39,6 +39,7 @@ multixact = { path = "../../../access/transam/multixact" }
 twophase = { path = "../../../access/transam/twophase" }
 sinval = { path = "../sinval" }
 latch = { path = "../latch" }
+waiter = { path = "../waiter" }
 pmsignal = { path = "../pmsignal" }
 procsignal = { path = "../procsignal" }
 aio_core = { path = "../../aio/aio_core" }

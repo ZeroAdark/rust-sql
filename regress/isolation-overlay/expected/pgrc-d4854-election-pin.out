@@ -1,0 +1,80 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2a s1q s2c s2w s2q
+step s2a: SELECT injection_points_attach('gravity-shred-election-read', 'wait');
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step s1q: SELECT j ->> 'a' AS a, j ->> 'b' AS b, count(*) FROM pgrc_d4854 GROUP BY 1, 2 ORDER BY 1, 2; <waiting ...>
+step s2c: 
+    DO $$ BEGIN
+        IF (SELECT a.amname FROM pg_class c JOIN pg_am a ON a.oid = c.relam WHERE c.oid = 'pgrc_d4854'::regclass) <> 'heap' THEN
+            PERFORM pgrc_compact('pgrc_d4854', 'concat');
+        END IF;
+    END $$;
+
+step s2w: SELECT injection_points_detach('gravity-shred-election-read'); SELECT injection_points_wakeup('gravity-shred-election-read');
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+step s1q: <... completed>
+a |b | count
+--+--+------
+0 |y0| 74899
+0 |y1| 74898
+1 |y0| 74898
+1 |y1| 74899
+2 |y0| 74899
+2 |y1| 74898
+3 |y0| 74898
+3 |y1| 74898
+4 |y0| 74898
+4 |y1| 74898
+5 |y0| 74898
+5 |y1| 74898
+6 |y0| 74898
+6 |y1| 74899
+7 |y0|     1
+x0|y0|175094
+x0|y1|175096
+x1|y0|175096
+x1|y1|175097
+x2|y0|175097
+x2|y1|175095
+(21 rows)
+
+step s2q: SELECT j ->> 'a' AS a, j ->> 'b' AS b, count(*) FROM pgrc_d4854 GROUP BY 1, 2 ORDER BY 1, 2;
+a |b | count
+--+--+------
+0 |y0| 74899
+0 |y1| 74898
+1 |y0| 74898
+1 |y1| 74899
+2 |y0| 74899
+2 |y1| 74898
+3 |y0| 74898
+3 |y1| 74898
+4 |y0| 74898
+4 |y1| 74898
+5 |y0| 74898
+5 |y1| 74898
+6 |y0| 74898
+6 |y1| 74899
+7 |y0|     1
+x0|y0|175094
+x0|y1|175096
+x1|y0|175096
+x1|y1|175097
+x2|y0|175097
+x2|y1|175095
+(21 rows)
+

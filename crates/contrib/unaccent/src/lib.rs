@@ -101,9 +101,15 @@ fn config_warning(msg: &str, rd: &TsearchReadline<'_>) {
     );
 }
 
+#[derive(Debug)]
+pub enum ParseRuleError {
+    Syntax(i32),
+    Oom(Box<PgError>),
+}
+
 // C initTrie's line parser, states as in C: 0 initial, 1 in src, 2 after
 // src, 3 in trg, 4 in quoted trg, 5 after trg, -1/-2 syntax errors.
-fn parse_rule_line(line: &[u8]) -> Result<Option<(&[u8], Vec<u8>)>, i32> {
+pub fn parse_rule_line(line: &[u8]) -> Result<Option<(&[u8], Vec<u8>)>, ParseRuleError> {
     let mut state: i32 = 0;
     let mut src: (usize, usize) = (0, 0);
     let mut trg: (usize, usize) = (0, 0);
@@ -168,7 +174,7 @@ fn parse_rule_line(line: &[u8]) -> Result<Option<(&[u8], Vec<u8>)>, i32> {
         state = -2;
     }
     if state <= 0 && state != 0 {
-        return Err(state);
+        return Err(ParseRuleError::Syntax(state));
     }
     if state == 0 {
         return Ok(None);
@@ -177,7 +183,8 @@ fn parse_rule_line(line: &[u8]) -> Result<Option<(&[u8], Vec<u8>)>, i32> {
     let trg_bytes = &line[trg.0..trg.1];
     let trgstore = if trgquoted {
         let inner = &trg_bytes[1..trg_bytes.len() - 1];
-        let mut out = Vec::with_capacity(inner.len());
+        let mut out = ::mcx::std_vec_with_capacity("unaccent", inner.len())
+            .map_err(ParseRuleError::Oom)?;
         let mut j = 0usize;
         while j < inner.len() {
             out.push(inner[j]);
@@ -188,7 +195,8 @@ fn parse_rule_line(line: &[u8]) -> Result<Option<(&[u8], Vec<u8>)>, i32> {
         }
         out
     } else {
-        trg_bytes.to_vec()
+        ::mcx::std_vec_from_slice("unaccent", trg_bytes)
+            .map_err(ParseRuleError::Oom)?
     };
 
     Ok(Some((&line[src.0..src.1], trgstore)))
@@ -205,10 +213,8 @@ fn init_trie(mcx: Mcx<'static>, filename: &[u8]) -> PgResult<UnaccentTrie> {
         nodes: PgVec::new_in(mcx),
         replacements: PgVec::new_in(mcx),
     };
-    // tsearch_readline_callback sits on error_context_stack from begin to
-    // end: every WARNING and ERROR raised while the file is open carries
-    // the line-in-flight context (C:265/269, placeChar:72, and the reader's
-    // own encoding errors — line-only, C:185).
+    // tsearch_readline_callback: every report while the file is open carries
+    // the line context (C:265/269, placeChar:72; line-only for C:185).
     loop {
         let line = match rd.readline() {
             Ok(Some(line)) => line,
@@ -226,14 +232,15 @@ fn init_trie(mcx: Mcx<'static>, filename: &[u8]) -> PgResult<UnaccentTrie> {
                 }
             }
             Ok(None) => {}
-            Err(-1) => config_warning(
+            Err(ParseRuleError::Syntax(-1)) => config_warning(
                 "invalid syntax: more than two strings in unaccent rule",
                 &rd,
             ),
-            Err(_) => config_warning(
+            Err(ParseRuleError::Syntax(_)) => config_warning(
                 "invalid syntax: unfinished quoted string in unaccent rule",
                 &rd,
             ),
+            Err(ParseRuleError::Oom(e)) => return rd.with_context(Err(e)),
         }
     }
     Ok(trie)
@@ -275,17 +282,15 @@ pub fn unaccent_lexize<'mcx>(
         if let Some((ridx, matchlen)) = trie.find_replace_to(&token[i..]) {
             if buf.is_none() {
                 let mut b = vec_with_capacity_in(mcx, token.len())?;
-                b.extend_from_slice(&token[..i]);
+                ::mcx::vec_append_bytes(&mut b, &token[..i])?;
                 buf = Some(b);
             }
-            buf.as_mut()
-                .expect("just initialized")
-                .extend_from_slice(&trie.replacements[ridx]);
+            ::mcx::vec_append_bytes(buf.as_mut().expect("just initialized"), &trie.replacements[ridx])?;
             i += matchlen;
         } else {
             let matchlen = ::mbutils::pg_mblen_range(&token[i..])?.max(1) as usize;
             if let Some(b) = buf.as_mut() {
-                b.extend_from_slice(&token[i..i + matchlen]);
+                ::mcx::vec_append_bytes(b, &token[i..i + matchlen])?;
             }
             i += matchlen;
         }
@@ -357,7 +362,7 @@ fn fc_unaccent_dict(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     };
 
     // SAFETY: both SQL signatures are strict; the text arg is non-null.
-    let token = unsafe { fcinfo.arg_varlena_packed(str_arg)? }.data().to_vec();
+    let token = ::mcx::std_vec_from_slice("unaccent", &unsafe { fcinfo.arg_varlena_packed(str_arg)? }.data())?;
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
 

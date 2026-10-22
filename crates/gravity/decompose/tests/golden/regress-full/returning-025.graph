@@ -1,0 +1,17 @@
+-- regress-full-returning-025
+-- UPDATE foo SET f4 = 700 WHERE f1 = 6 RETURNING old, (old).f4, (old).*, new, (new).f4, (new).*;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n1@2 n0@3
+  source range rel=43613 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Attr(3):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v2.1, c23:6)
+  project (1=v2.-6, 2=v2.-1, 3j=v2.1, 4j=v2.2, 5j=v2.3)
+  project (1=c20:700, 2j=outer.1, 3j=outer.2, 4j=outer.3, 5j=outer.4, 6j=outer.5)
+  write UPDATE rel=43613 rti=2 natts=4 indexes=(43660[1]u) set=(4) returning old=old new=new route=rti1:43613 natts=4
+  project (1=v2.0, 2=v2.4, 3=v2.1, 4=v2.2, 5=v2.3, 6=v2.4, 7=v2.0, 8=v2.4, 9=v2.1, 10=v2.2, 11=v2.3, 12=v2.4)
+  outs 1=w4:val 2=fx6:row 3=w8:val 4=vl:win/page 5=w8:val
+  outs 1=w8:val 2=w4:val 3=fx6:row 4=w8:val 5=vl:win/page 6=w8:val
+  outs 1=? 2=w8:val 3=w8:val 4=vl:win/page 5=w8:val 6=w8:val 7=? 8=w8:val 9=w8:val 10=vl:win/page 11=w8:val 12=w8:val
+scan-lanes node=3 rti=2 rel=43613 tableoid
+mapped: Result ModifyTable SeqScan

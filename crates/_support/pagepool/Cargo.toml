@@ -1,0 +1,63 @@
+[package]
+name = "pagepool"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+# pgrust's warm page pool: one reservation of address space cut into 2 MiB superpages, 64 KiB runs and blocks, kept
+# warm across frees and given back to the OS only on pressure (a whole-superpage remap, never a MADV_DONTNEED over a
+# whole 2 MiB range). It sits below mcx and the global allocator: no pgsync on any take / give path, no heap use there.
+# The memory ledger's pool door is installed by the binary (`set_door`); the claim cap falls back to the ledger's B.
+[lib]
+name = "pagepool"
+path = "src/lib.rs"
+
+[dependencies]
+pg_clock = { path = "../../port/pg_clock" }
+
+# Out of the loom build (their pgsync statics are not const under loom); the loom test models the central stack only.
+[target.'cfg(not(loom))'.dependencies]
+memledger = { path = "../memledger" }
+mempolicy = { path = "../mempolicy" }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+libc = "0.2"
+pagegive = { path = "../pagegive" }
+
+# pphatch (`global`): PGRUST_ALLOCATOR=mimalloc forwards every PoolAlloc call to mimalloc, the server's other allocator
+# (and so does the server's default off Linux, by_arch_default!, the user 2026-10-18; PGRUST_ALLOCATOR=hearth keeps
+# the pool there).
+# Not under cfg(pagepool_tsan) (scripts/pagepool-tsan.sh): there the hatch forwards to System, so no test binary links
+# mimalloc, whose malloc override (the dev-dependency's `override` feature, unified onto it) would take malloc from TSan.
+[target.'cfg(all(not(target_family = "wasm"), not(pagepool_tsan)))'.dependencies]
+mimalloc = { version = "0.1", optional = true }
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
+# The shuttle models (tests/shuttle_*.rs, RUSTFLAGS="--cfg shuttle"): src/sync.rs's scheduling points need it in the lib.
+[target.'cfg(shuttle)'.dependencies]
+shuttle = "0.9"
+
+# tests/microbench.rs, tests/small_bench.rs: against mimalloc as the server builds it (main_main's libmimalloc-sys features).
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+mimalloc = "0.1"
+libmimalloc-sys = { version = "0.1", features = ["extended", "no_thp", "override"] }
+
+# D4855: binaries whose checks read a process-wide pool count run their tests on the main thread (tests/one_thread)
+[[test]]
+name = "global_live"
+harness = false
+
+[[test]]
+name = "global_fit_tail"
+harness = false
+
+[features]
+# P6: the small tier and the global allocator face.
+global = ["dep:mimalloc"]
+# P6: the C malloc / free override (implies `global`).
+c-override = ["global"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(pgrust_sim)", "cfg(shuttle)", "cfg(pagepool_tsan)"] }

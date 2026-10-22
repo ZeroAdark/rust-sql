@@ -1,0 +1,14 @@
+-- regress-full-returning-022
+-- INSERT INTO foo VALUES (4, 'conflict'), (5, 'ok') ON CONFLICT (f1) DO UPDATE SET f2 = excluded.f2||'ed', f3 = -1 RETURNING WITH (OLD AS o, NEW AS n) o.tableoid::regclass, o.ctid, o.*, n.tableoid::regclass, n.ctid, n.*, *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source values rti=2 rows=2
+    row (c23:4, c25:'conflict')
+    row (c23:5, c25:'ok')
+  project (1=v2.1, 2=v2.2, 3=c23:42, 4=c20:99)
+  write INSERT rel=43613 rti=1 natts=4 indexes=(43660[1]u) on_conflict=update arbiter=(43660) excl_rti=3 cols=(2,3) set=(1=op654(inner.2, c25:'ed'), 2=c23:-1) returning old=o new=n
+  project (1=relabel2205(v1.-6), 2=v1.-1, 3=v1.1, 4=v1.2, 5=v1.3, 6=v1.4, 7=relabel2205(v1.-6), 8=v1.-1, 9=v1.1, 10=v1.2, 11=v1.3, 12=v1.4, 13=v1.1, 14=v1.2, 15=v1.3, 16=v1.4)
+  outs 1=w4:val 2=vl:row 3=w4:val 4=w8:val
+  outs 1=w4:val 2=fx6:row 3=w4:val 4=vl:row 5=w4:val 6=w8:val 7=w4:val 8=fx6:row 9=w4:val 10=vl:row 11=w4:val 12=w8:val 13=w4:val 14=vl:row 15=w4:val 16=w8:val
+mapped: ModifyTable ValuesScan

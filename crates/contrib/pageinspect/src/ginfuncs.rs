@@ -148,6 +148,7 @@ pub(crate) fn fc_gin_leafpage_items(
 ) -> PgResult<Datum> {
     let flinfo = flinfo.expect("gin_leafpage_items: resolved FmgrInfo required");
     require_superuser("raw page")?;
+    require_set_context(fcinfo)?;
 
     let rows = if !flinfo.has_fn_extra() {
         // SAFETY: the arming context outlives this call.
@@ -194,7 +195,7 @@ pub(crate) fn fc_gin_leafpage_items(
             let first = gin::postinglist::seg_first(seg);
             let mut decoded = mcx::vec_new_in::<types_tuple::itemptr::ItemPointerData>(mcx);
             gin::postinglist::ginPostingListDecodeAllSegments(seg, &mut decoded)?;
-            let mut tids = Vec::with_capacity(decoded.len());
+            let mut tids = ::mcx::std_vec_with_capacity("contrib", decoded.len())?;
             for ip in decoded.iter() {
                 tids.push(tid_datum(mcx, &tid_bytes(*ip))?);
             }

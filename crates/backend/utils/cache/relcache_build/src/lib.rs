@@ -31,6 +31,7 @@ pub fn init_seams() {
         index::relation_init_index_access_info,
     );
     relcache_build_seams::scan_pg_index_shapes::set(index::scan_pg_index_shapes);
+    relcache_seams::support_family_relids::set(index::support_family_relids);
     relcache_build_seams::scan_exclusion_ops::set(index::scan_exclusion_ops);
     relcache_build_seams::build_trigger_desc::set(triggers::build_trigger_desc);
     typcache_seams::scan_domain_check_constraints::set(domain::scan_domain_check_constraints);
@@ -67,6 +68,49 @@ pub(crate) fn req(td: &TupleDescData<'_>, tup: &HeapTupleData<'_>, attno: i32) -
         return Err(unexpected_null(attno));
     }
     Ok(d)
+}
+
+pub(crate) struct CatalogRow<'r, 't, 'd> {
+    td: &'r TupleDescData<'d>,
+    tup: &'r HeapTupleData<'t>,
+    fixed: i32,
+}
+
+impl<'r, 't, 'd> CatalogRow<'r, 't, 'd> {
+    pub(crate) fn new(td: &'r TupleDescData<'d>, tup: &'r HeapTupleData<'t>, nfixed: i32) -> Self {
+        let fixed = if fixed_prefix_present(td, tup, nfixed) { nfixed } else { 0 };
+        CatalogRow { td, tup, fixed }
+    }
+
+    #[inline]
+    pub(crate) fn req(&self, attno: i32) -> PgResult<Datum> {
+        if attno >= 1 && attno <= self.fixed {
+            // SAFETY: fixed_prefix_present: attno <= nfixed <= both natts, and
+            // no column up to attno is null or varlena (the catalog's GETSTRUCT
+            // prefix), so the cached-offset read stays inside the row image.
+            Ok(unsafe { types_tuple::fastgetattr_fixed(self.tup, attno, self.td) })
+        } else {
+            req(self.td, self.tup, attno)
+        }
+    }
+}
+
+pub(crate) fn fixed_prefix_present(td: &TupleDescData<'_>, tup: &HeapTupleData<'_>, nfixed: i32) -> bool {
+    if nfixed < 1 || td.natts < nfixed || (tup.t_data().natts() as i32) < nfixed {
+        return false;
+    }
+    if tup.no_nulls() {
+        return true;
+    }
+    let n = nfixed as usize;
+    // SAFETY: a HEAP_HASNULL row carries a null bitmap at t_bits covering the
+    // row's natts (>= nfixed here) bits, so its first ceil(n / 8) bytes lie
+    // inside the tuple header.
+    let bits = unsafe {
+        slice::from_raw_parts(tup.header_ptr().add(types_tuple::SizeofHeapTupleHeader), n.div_ceil(8))
+    };
+    let tail = (1u8 << (n % 8)).wrapping_sub(1);
+    bits[..n / 8].iter().all(|&b| b == 0xFF) && bits[n / 8..].iter().all(|&b| b & tail == tail)
 }
 
 #[track_caller]

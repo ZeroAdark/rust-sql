@@ -1,0 +1,9 @@
+-- regress-full-case-015
+-- SELECT CASE volfoo('bar') WHEN 'foo'::foodomain THEN 'is foo' ELSE 'is not foo' END;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=case[fn25383(c25:'bar')](when op25385(T_CaseTestExpr, c25382:'foo') then c25:'is foo') else c25:'is not foo')
+  outs 1=vl:stmt/imm
+mapped: Result

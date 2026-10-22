@@ -193,6 +193,10 @@ fn EventTriggerInvoke(fn_oid_list: &[Oid], event: &'static str, tag: CommandTag)
     // C: check_stack_depth() (EventTriggerInvoke, event_trigger.c) — event
     // triggers whose actions fire further event triggers recurse here.
     stack_depth_core::check_stack_depth()?;
+    // event_trigger.c:1092: each trigger runs in its own context, reset after
+    // the call; by-ref results (an internal-language alias of a text
+    // function) land there.
+    let mut context = ::mcx::MemoryContext::new_wholesale("event trigger context");
     let mut first = true;
     for &fnoid in fn_oid_list {
         elog::ereport(types_error::DEBUG1)
@@ -211,6 +215,8 @@ fn EventTriggerInvoke(fn_oid_list: &[Oid], event: &'static str, tag: CommandTag)
         let mut flinfo = fmgr_core::fmgr_info(fnoid)?;
         let mut fcinfo = fmgr::LocalFcinfo::<0>::new(InvalidOid);
         fcinfo.context = Some(core::ptr::NonNull::from(&mut trigdata).cast());
+        // SAFETY: the context outlives this invocation; reset only after it.
+        unsafe { fcinfo.set_result_mcx(context.mcx()) };
         // C: pgstat_init_function_usage's `pgstat_track_functions <= fn_stats`
         // early-out, hoisted to the caller as the crate's API requires.
         let fcu = if flinfo.fn_stats < fmgr::TRACK_FUNC_ALL
@@ -224,6 +230,7 @@ fn EventTriggerInvoke(fn_oid_list: &[Oid], event: &'static str, tag: CommandTag)
         if let Some(fcu) = &fcu {
             pgstat::function::pgstat_end_function_usage(fcu, true);
         }
+        context.reset();
     }
     Ok(())
 }
@@ -369,9 +376,9 @@ fn reset_database_has_login_event_triggers(mcx: Mcx<'_>) -> PgResult<()> {
     .as_bool();
     if hasloginevt {
         let natts = descr.natts as usize;
-        let mut values = vec![datum::Datum::null(); natts];
-        let nulls = vec![false; natts];
-        let mut replace = vec![false; natts];
+        let mut values = ::mcx::std_vec_from_elem("commands", datum::Datum::null(), natts)?;
+        let nulls = ::mcx::std_vec_from_elem("commands", false, natts)?;
+        let mut replace = ::mcx::std_vec_from_elem("commands", false, natts)?;
         values[pg_database::Anum_pg_database_dathasloginevt as usize - 1] =
             datum::Datum::from_bool(false);
         replace[pg_database::Anum_pg_database_dathasloginevt as usize - 1] = true;

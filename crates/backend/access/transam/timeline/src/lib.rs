@@ -2,7 +2,7 @@
 #![allow(non_upper_case_globals)]
 #![allow(clippy::result_large_err)]
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use elog::errno::current_errno;
 use mcx::{vec_with_capacity_in, Mcx, PgVec};
 use types_core::{TimeLineID, XLogRecPtr};
@@ -97,7 +97,7 @@ fn read_history_file_or_absent(path: &str, func: &'static str) -> PgResult<Optio
             ereport(FATAL)
                 .with_saved_errno(current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m"))
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                 .finish(loc(func))?;
         }
         return Ok(None);
@@ -123,7 +123,7 @@ fn read_history_file_or_absent(path: &str, func: &'static str) -> PgResult<Optio
             ereport(ERROR)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{path}\": %m"))
+                .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                 .finish(loc(func))?;
             unreachable!()
         }
@@ -254,7 +254,7 @@ pub fn existsTimeLineHistory(
             ereport(FATAL)
                 .with_saved_errno(current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m"))
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                 .finish(loc("existsTimeLineHistory"))?;
         }
         Ok(false)
@@ -274,10 +274,9 @@ pub fn findNewestTimeLine(
     Ok(newestTLI)
 }
 
-// timeline.c:472 names the temp file by getpid(): backends are threads of one
-// process here, so the per-backend MyProcPid keeps concurrent creators apart.
+// C: xlogtemp.<pid>. Unique per call here: segment creation on other threads shares the namespace.
 fn xlog_temp_path() -> String {
-    format!("{XLOGDIR}/xlogtemp.{}", init_small::globals::MyProcPid())
+    format!("{XLOGDIR}/xlogtemp.{}", init_small::globals::temp_file_tag())
 }
 
 fn create_temp_history_file(tmppath: &str, func: &'static str) -> PgResult<i32> {
@@ -288,7 +287,7 @@ fn create_temp_history_file(tmppath: &str, func: &'static str) -> PgResult<i32> 
         ereport(ERROR)
             .with_saved_errno(current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{tmppath}\": %m"))
+            .errmsg(format!("could not create file \"{tmppath}\": {PCT_M}"))
             .finish(loc(func))?;
     }
     Ok(fd_)
@@ -323,7 +322,7 @@ fn write_all_or_unlink(
         ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not write to file \"{tmppath}\": %m"))
+            .errmsg(format!("could not write to file \"{tmppath}\": {PCT_M}"))
             .finish(loc(func))?;
     }
     waitevent_seams::pgstat_report_wait_end::call();
@@ -341,7 +340,7 @@ fn fsync_and_close_temp(
         ereport(fd::data_sync_elevel(ERROR))
             .with_saved_errno(current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{tmppath}\": %m"))
+            .errmsg(format!("could not fsync file \"{tmppath}\": {PCT_M}"))
             .finish(loc(func))?;
     }
     waitevent_seams::pgstat_report_wait_end::call();
@@ -350,7 +349,7 @@ fn fsync_and_close_temp(
         ereport(ERROR)
             .with_saved_errno(current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{tmppath}\": %m"))
+            .errmsg(format!("could not close file \"{tmppath}\": {PCT_M}"))
             .finish(loc(func))?;
     }
     Ok(())
@@ -383,7 +382,7 @@ pub fn writeTimeLineHistory(
             ereport(ERROR)
                 .with_saved_errno(current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m"))
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                 .finish(loc("writeTimeLineHistory"))?;
         }
         // Not there, so assume parent has no parents
@@ -403,7 +402,7 @@ pub fn writeTimeLineHistory(
                 ereport(ERROR)
                     .with_saved_errno(current_errno())
                     .errcode_for_file_access()
-                    .errmsg(format!("could not read file \"{path}\": %m"))
+                    .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                     .finish(loc("writeTimeLineHistory"))?;
             }
             if nbytes == 0 {
@@ -423,7 +422,7 @@ pub fn writeTimeLineHistory(
             ereport(ERROR)
                 .with_saved_errno(current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not close file \"{path}\": %m"))
+                .errmsg(format!("could not close file \"{path}\": {PCT_M}"))
                 .finish(loc("writeTimeLineHistory"))?;
         }
     }

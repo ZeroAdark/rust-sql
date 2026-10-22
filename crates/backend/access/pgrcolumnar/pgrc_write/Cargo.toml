@@ -1,0 +1,98 @@
+[package]
+name = "pgrc_write"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pgrc_write"
+path = "src/lib.rs"
+
+[dependencies]
+# meta_coalesce_gap (facts.rs): the device regime's read costs.
+cost_profile = { path = "../../../../_support/cost_profile" }
+# The minimal claim plane (XC-1/XC-2; lanev4-parallel-contract.md §2/§3).
+# Parallel COPY is its FIRST consumer (the ruled COPY-on-morsels amendment):
+# workers claim capture-chunk morsels through the shared cursor; ordering
+# lives wholly in the sink (the input-order cut cursor).
+pgrc_claim = { path = "../pgrc_claim" }
+pgrc_format = { path = "../pgrc_format" }
+pgrc_codec = { path = "../pgrc_codec" }
+# TY-3 writer wiring (lanev4): the vendored jsonb shred machinery behind the
+# `ShredLaneSource` seam (`src/shred_jsonb.rs`). Already in the cone via
+# pgrc_codec — no new dependency surface, no cycle. `mcx` is the scratch
+# context `shred_chunk` requires (locally scoped per seal; no statics).
+adt_jsonb_shred = { path = "../../../utils/adt/jsonb_shred" }
+# seal.rs jsonb_path_text: a path sort key's value (already in the cone
+# through adt_jsonb_shred).
+adt_jsonb = { path = "../../../utils/adt/jsonb" }
+mcx = { path = "../../../../_support/mcx" }
+# D3808: a load's in-flight bytes charge the memory ledger's load account
+# (memledger::LOAD_IN_FLIGHT) and the memory policy's room bounds them; both
+# crates depend on pgsync only.
+memledger = { path = "../../../../_support/memledger" }
+mempolicy = { path = "../../../../_support/mempolicy" }
+# M3-E's real metadata plane. The seal driver has always spoken the frozen
+# `ColumnMetaBuilder` ABI (spec §19.7); until this lane it drove a stand-in
+# that emitted exact `nonnull` and nothing else, so every sealed part carried
+# no min/max, no PSMA, no blooms and no NDV. Pure crate (no I/O, no locks, no
+# statics) and it depends only on pgrc_format + order_key, so this closes no
+# cycle. See `src/meta_wire.rs`.
+pgrc_meta = { path = "../pgrc_meta" }
+# facts.rs: the walk-side fold inputs come from an open part.
+pgrc_read = { path = "../pgrc_read" }
+# Inline-compressed varlena normalization on ingest (detoast-and-decompress
+# law, charter §7). Pure crate, zero deps.
+pglz = { path = "../../../../common/pglz" }
+# All file I/O routes through the sanctioned Vfs choke (determinism-lint law;
+# under --cfg pgrust_sim the same calls hit SimVfs, composing M3-K's crash
+# batteries under this writer unchanged).
+vfs = { path = "../../../../backend/storage/file/vfs" }
+# GL-BULKWRITE-1 (#686): the bulk-write dirty-page governor. Hooked ONLY in
+# RealVfs (production); MemVfs and the sim harness never see governor ops
+# (the governor self-disarms under --cfg pgrust_sim).
+write_governor = { path = "../../../../backend/storage/file/write_governor" }
+libc = "0.2"
+# D4225: the fsync GUC (`enableFsync`), read by `wvfs::pg_fsync` as fd's pg_fsync reads it, so fsync=off reaches
+# every pgrcolumnar fsync. A globals crate pgrc_am already depends on: no cycle.
+init_small = { path = "../../../utils/init/init_small" }
+# The #253 commit fence: publish arms a synchronous commit-record flush
+# exactly like the v1 storage did (seam-guarded; uninstalled in unit
+# tests, installed by xact in a real backend).
+xact_seams = { path = "../../transam/xact_seams" }
+# NOTE (M3-I): NO `runtime` dependency here, deliberately — since M3-H
+# (#473) `pgrc_am` depends on this crate inside the table-AM cone, and
+# runtime → parallel → … → tableam → pgrc_am would close a cycle. The
+# rtpool binding for parallel ingest lives one crate up (`pgrc_ingest_par`).
+# THE single lock library (three worlds: native/loom/sim). The parallel
+# ingest coordinator's Mutex/Condvar come from here so the same faces run
+# under loom models unchanged.
+pgsync = { path = "../../../../_support/pgsync" }
+# P-1: the publish and catalog phase clocks on the DEBUG1 publish line (the sanctioned clock route).
+pg_clock = { path = "../../../../port/pg_clock" }
+# D4368: the serial writer's ladder wait sleeps through the waiter (the clock
+# provider), as the grant pool's admission poll does; waiter is a leaf
+# (pgsync + pg_clock), no cycle.
+waiter = { path = "../../../storage/ipc/waiter" }
+# SIMD UTF-8 validation for the per-part text-semantics claim
+# verification (elect.rs resolve_text_policy) — the same crate parquet_read
+# uses for its decode-side validators.
+simdutf8 = "0.1"
+
+[dev-dependencies]
+adt_numeric = { path = "../../../utils/adt/numeric" }
+# D4487: the tests read an open part's fault log (OpenPart::faults), kept only under this feature
+pgrc_read = { path = "../pgrc_read", features = ["fault-log"] }
+# The shred_jsonb tests feed REAL jsonb images (jsonb_in) — the same
+# dev-dep set pgrc_codec's jsonb_lanes suite carries (adt_jsonb itself is a
+# normal dependency).
+mbutils = { path = "../../../utils/mb/mbutils" }
+wchar = { path = "../../../../common/wchar" }
+
+# tests/loom.rs model builders (the pgsync pattern: the loom dependency for
+# the crate's own loom models).
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(pgrust_sim)"] }

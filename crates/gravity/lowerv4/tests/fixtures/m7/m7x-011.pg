@@ -1,0 +1,20 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M7-RIG m7x table-free join rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT a.x FROM (SELECT CASE WHEN g % 7 = 0 THEN NULL ELSE g % 9 END AS x FROM generate_series(1, 50) g) a WHERE EXISTS (SELECT 1 FROM (VALUES (2), (2), (3), (NULL), (5)) b(y) WHERE b.y = a.x)
+cols: x
+[pg]
+2
+3
+5
+2
+3
+2
+5
+2
+3
+5
+2
+3
+5
+2
+3
+5

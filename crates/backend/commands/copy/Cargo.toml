@@ -14,6 +14,11 @@ path = "src/lib.rs"
 pgsync = { path = "../../../_support/pgsync" }
 datum = { path = "../../../_support/types/datum" }
 mcx = { path = "../../../_support/mcx" }
+# D3808: a load's in-flight bytes charge the memory ledger's load account
+# (memledger::LOAD_IN_FLIGHT) and the memory policy's room bounds them; both
+# crates depend on pgsync only.
+memledger = { path = "../../../_support/memledger" }
+mempolicy = { path = "../../../_support/mempolicy" }
 stringinfo = { path = "../../../_support/types/stringinfo" }
 types_core = { path = "../../../_support/types/types_core" }
 types_error = { path = "../../../_support/types/types_error" }
@@ -32,6 +37,11 @@ pqformat = { path = "../../libpq/pqformat" }
 exectuples = { path = "../../executor/exectuples" }
 execindexing = { path = "../../executor/execindexing" }
 nodemodifytable = { path = "../../executor/nodemodifytable" }
+# COPY into a foreign table (copyfrom.c BeginForeignInsert/ExecForeignInsert):
+# the FDW reads the row from an EState tuple table; the provider is resolved
+# through the foreigncmds seam.
+executils = { path = "../../executor/executils" }
+foreigncmds_seams = { path = "../foreigncmds_seams" }
 execexpr = { path = "../../executor/execexpr" }
 execpartition = { path = "../../executor/execpartition" }
 rewrite_handler = { path = "../../rewrite/rewrite_handler" }
@@ -76,12 +86,15 @@ types_trigger = { path = "../../../_support/types/types_trigger" }
 trigger = { path = "../trigger" }
 libc = "0.2"
 # Morsel-parallel COPY (parallel.rs): runtime stream source + pinned RG,
-# full-identity helpers, pgrcolumnar chunk encoders, leader-latch wakes.
+# full-identity helpers, leader-latch wakes.
 runtime = { path = "../../executor/runtime" }
+# parquet_pgrc.rs decoded-RG handoff: leader park/worker unpark on the
+# sanctioned waiter hub (the rg.rs Completion precedent — determinism-lint
+# blocking conversion; no raw Condvar).
+waiter = { path = "../../storage/ipc/waiter" }
 parallel = { path = "../../access/transam/parallel" }
 latch = { path = "../../storage/ipc/latch" }
 types_storage = { path = "../../../_support/types/types_storage" }
-pgrcolumnar = { path = "../../access/pgrcolumnar" }
 # copyfast lever 3 (analyze-during-load): the merge pump reservoir-samples
 # via commands_analyze's Vitter kernels and hands the sample to its
 # standard ANALYZE compute/write half; heaptuple/pg_prng for sample-tuple
@@ -93,6 +106,16 @@ memchr = "2"
 # FORMAT 'parquet' (fromparquet.rs): the general parquet reader + text-datum
 # construction + type names for schema-mismatch errors.
 parquet_read = { path = "../../access/parquet_read" }
+arrayfuncs = { path = "../../utils/adt/arrayfuncs" }
+# M4X parquet-parallel lane: order-preserving parallel COPY FROM parquet
+# into pgrcolumnar (parquet_pgrc.rs). copy_cmd is the executor-altitude
+# driver the M3-H split-crate law names: pgrc_am (below runtime) hands out
+# the writer + providers; pgrc_ingest_par (above runtime) is the rtpool
+# binding; pgrc_write carries the capture currency (RawDatum).
+pgrc_am = { path = "../../access/pgrcolumnar/pgrc_am" }
+pgrc_front = { path = "../../access/pgrcolumnar/pgrc_front" }
+pgrc_ingest_par = { path = "../../access/pgrcolumnar/pgrc_ingest_par" }
+pgrc_write = { path = "../../access/pgrcolumnar/pgrc_write" }
 varlena = { path = "../../utils/adt/varlena" }
 format_type = { path = "../../utils/adt/format_type" }
 

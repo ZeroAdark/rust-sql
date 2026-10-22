@@ -1,1 +1,0 @@
-Nexists($.a.datetime()) && $.b.date() == $.c.date()

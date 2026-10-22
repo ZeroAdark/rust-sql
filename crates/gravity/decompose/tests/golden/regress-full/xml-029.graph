@@ -1,0 +1,9 @@
+-- regress-full-xml-029
+-- select * from xmltable('d/r' passing '<d><r><c><![CDATA[<hello> &"<>!<a>foo</a>]]></c></r><r><c>2</c></r></d>' columns c text);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=Host end=sink
+  nodes n0@0
+  source tablefunc rti=1 kind=xmltable cols=1 ordinality=-1 doc=c142:'<d><r><c><![CDATA[<hello> &"<>!<a>foo</a>]]></c></r><r><c>2</c></r></d>' row=c25:'d/r'
+  project (1=v1.1)
+  outs 1=vl:row
+mapped: TableFuncScan

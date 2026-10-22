@@ -386,7 +386,8 @@ impl<'a, 'x, 'mcx: 'a> ExecCtx<'a, 'x, 'mcx> {
         match found {
             None => {
                 // jsonpath_exec.c:3145 pnstrdup's the raw name bytes into %s.
-                let mut msg = b"could not find jsonpath variable \"".to_vec();
+                let mut msg = Vec::new();
+                msg.extend_from_slice(b"could not find jsonpath variable \"");
                 msg.extend_from_slice(name);
                 msg.push(b'"');
                 Err(Box::new(
@@ -2277,9 +2278,9 @@ fn time_timetz_tz(t: TimeADT) -> PgResult<TimeTzADT> {
 }
 
 fn session_tz_offset(tm: &mut adt_datetime::consts::pg_tm) -> i32 {
-    let session = adt_datetime::tz::session_timezone()
-        .unwrap_or_else(|| panic!("jsonpath datetime: session_timezone not initialized"));
-    adt_datetime::tz::DetermineTimeZoneOffset(tm, session)
+    adt_datetime::tz::with_required_session_timezone("jsonpath datetime: session_timezone not initialized", |z| {
+        adt_datetime::tz::DetermineTimeZoneOffset(tm, z)
+    })
 }
 
 /// Deep-copy a read-side item into a build-side value tree (C: pushJsonbValue
@@ -2586,7 +2587,7 @@ fn compare_datetime(
         (Timestamp(ts1), Timestamp(ts2)) => timestamp_cmp(*ts1, *ts2),
         (Timestamp(ts1), TimestampTz(ts2)) => {
             check_tz("timestamp", "timestamptz")?;
-            adt_timestamp::timestamp_cmp_timestamptz_internal(*ts1, *ts2)
+            adt_timestamp::timestamp_cmp_timestamptz_internal(*ts1, *ts2)?
         }
         (Timestamp(_), Time(_) | TimeTz(_)) => return Ok(None),
 
@@ -2596,7 +2597,7 @@ fn compare_datetime(
         }
         (TimestampTz(ts1), Timestamp(ts2)) => {
             check_tz("timestamp", "timestamptz")?;
-            -adt_timestamp::timestamp_cmp_timestamptz_internal(*ts2, *ts1)
+            -adt_timestamp::timestamp_cmp_timestamptz_internal(*ts2, *ts1)?
         }
         (TimestampTz(ts1), TimestampTz(ts2)) => timestamp_cmp(*ts1, *ts2),
         (TimestampTz(_), Time(_) | TimeTz(_)) => return Ok(None),
@@ -2629,6 +2630,12 @@ fn detoasted_passing_image<'mcx>(mcx: Mcx<'mcx>, val: Datum) -> PgResult<&'mcx [
     // SAFETY: a non-null varlena datum; varsize_any reads only its own header
     // (external pointers included).
     let raw = unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
+    if raw[0] & 0x03 == 0 {
+        // pg_detoast_datum returns a plain 4B varlena as is; copying it on every
+        // $var reference made each reference O(size) (C is O(1)).
+        // SAFETY: the PASSING datum outlives the path evaluation that reads it.
+        return Ok(unsafe { core::slice::from_raw_parts(p, raw.len()) });
+    }
     let image: &'mcx [u8] = detoast_seams::detoast_attr::call(mcx, raw)?.leak();
     Ok(image)
 }
@@ -2852,7 +2859,7 @@ pub fn jsonb_path_query_core(
     vars: JsonPathVars<'_, '_>,
     silent: bool,
     tz: bool,
-) -> PgResult<alloc::vec::Vec<alloc::vec::Vec<u8>>> {
+) -> PgResult<PathQueryRows> {
     let mut found = JsonValueList::new(mcx)?;
     execute_json_path(
         mcx,
@@ -2863,11 +2870,84 @@ pub fn jsonb_path_query_core(
         Some(&mut found),
         tz,
     )?;
-    let mut rows = alloc::vec::Vec::with_capacity(found.len());
+    let base_range = jb_payload.as_ptr_range();
+    let mut rows = ::mcx::std_vec_with_capacity("adt", found.len())?;
+    let mut uses_base = false;
     for v in found.as_slice() {
-        rows.push(jbv_to_jsonb_image(mcx, v)?[..].to_vec());
+        // C returns found items as jbvBinary into the copied input and
+        // builds each row's jsonb per call; converting every container up
+        // front costs the sum of all result sizes (quadratic for `$.**`).
+        let row = match v {
+            JbV::Binary(c) if base_range.contains(&c.as_ptr()) => {
+                uses_base = true;
+                PathQueryRow::Base {
+                    off: c.as_ptr() as usize - base_range.start as usize,
+                    len: c.len(),
+                }
+            }
+            _ => PathQueryRow::Image(::mcx::std_vec_from_slice(
+                "adt",
+                &jbv_to_jsonb_image(mcx, v)?[..],
+            )?),
+        };
+        rows.push(row);
     }
-    Ok(rows)
+    let base = if uses_base {
+        ::mcx::std_vec_from_slice("adt", jb_payload)?
+    } else {
+        alloc::vec::Vec::new()
+    };
+    Ok(PathQueryRows { base, rows })
+}
+
+enum PathQueryRow {
+    Base { off: usize, len: usize },
+    Image(alloc::vec::Vec<u8>),
+}
+
+/// The result set of `jsonb_path_query`: an owned copy of the input plus
+/// one row reference per item, materialized into a jsonb image per call.
+pub struct PathQueryRows {
+    base: alloc::vec::Vec<u8>,
+    rows: alloc::vec::Vec<PathQueryRow>,
+}
+
+impl PathQueryRows {
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.base.len()
+            + self
+                .rows
+                .iter()
+                .map(|r| match r {
+                    PathQueryRow::Base { .. } => core::mem::size_of::<PathQueryRow>(),
+                    PathQueryRow::Image(i) => core::mem::size_of::<PathQueryRow>() + i.len(),
+                })
+                .sum::<usize>()
+    }
+
+    /// Full jsonb image (varlena header included) of row `idx`.
+    pub fn image<'mcx>(&self, mcx: Mcx<'mcx>, idx: usize) -> PgResult<Option<PgVec<'mcx, u8>>> {
+        match self.rows.get(idx) {
+            None => Ok(None),
+            Some(PathQueryRow::Image(img)) => {
+                let mut out = mcx::vec_with_capacity_in(mcx, img.len())?;
+                mcx::vec_append_bytes(&mut out, img)?;
+                Ok(Some(out))
+            }
+            Some(PathQueryRow::Base { off, len }) => {
+                jbv_to_jsonb_image(mcx, &JbV::Binary(&self.base[*off..*off + *len])).map(Some)
+            }
+        }
+    }
 }
 
 /// C: jsonb_path_query_array_internal core — full jsonb image.
@@ -3108,7 +3188,8 @@ fn missing_key_err(key: &[u8]) -> PgError {
     let e = match core::str::from_utf8(key) {
         Ok(key) => PgError::error(format!("JSON object does not contain key \"{key}\"")),
         Err(_) => {
-            let mut msg = b"JSON object does not contain key \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"JSON object does not contain key \"");
             msg.extend_from_slice(key);
             msg.push(b'"');
             PgError::error_raw_message(msg)

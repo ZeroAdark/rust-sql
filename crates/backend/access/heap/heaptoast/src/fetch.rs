@@ -52,6 +52,102 @@ fn int4_scan_key(
     k
 }
 
+pub(crate) struct ChunkSink<'a> {
+    valueid: Oid,
+    relname: &'a str,
+    totalchunks: i32,
+    startchunk: i32,
+    endchunk: i32,
+    sliceoffset: i32,
+    slicelength: i32,
+    attrsize: i32,
+    expectedchunk: i32,
+}
+
+impl<'a> ChunkSink<'a> {
+    pub(crate) fn new(valueid: Oid, relname: &'a str, attrsize: i32, sliceoffset: i32, slicelength: i32) -> Self {
+        let max_chunk = TOAST_MAX_CHUNK_SIZE as i32;
+        let startchunk = sliceoffset / max_chunk;
+        ChunkSink {
+            valueid,
+            relname,
+            totalchunks: (attrsize - 1) / max_chunk + 1,
+            startchunk,
+            endchunk: (sliceoffset + slicelength - 1) / max_chunk,
+            sliceoffset,
+            slicelength,
+            attrsize,
+            expectedchunk: startchunk,
+        }
+    }
+
+    /// One chunk tuple's `chunk_seq` and `chunk_data` varlena image.
+    pub(crate) fn put(&mut self, curchunk: i32, chunk: &[u8], result: &mut [u8]) -> PgResult<()> {
+        let max_chunk = TOAST_MAX_CHUNK_SIZE as i32;
+        let (valueid, relname) = (self.valueid, self.relname);
+        let first = *chunk.first().ok_or_else(|| toasted_toast_chunk(valueid, relname))?;
+        let chunkdata: &[u8] = if (first & 0x03) == 0 && chunk.len() >= VARHDRSZ {
+            &chunk[VARHDRSZ..]
+        } else if (first & 0x01) == 0x01 && first != 0x01 {
+            // short header: heap_form_tuple can pack even PLAIN columns
+            &chunk[VARHDRSZ_SHORT..]
+        } else {
+            return Err(toasted_toast_chunk(valueid, relname));
+        };
+        let chunksize = chunkdata.len() as i32;
+        let (startchunk, endchunk, totalchunks) = (self.startchunk, self.endchunk, self.totalchunks);
+
+        if curchunk != self.expectedchunk {
+            return Err(corrupted(format!(
+                "unexpected chunk number {curchunk} (expected {}) for toast value {valueid} in {relname}",
+                self.expectedchunk
+            )));
+        }
+        if curchunk > endchunk {
+            return Err(corrupted(format!(
+                "unexpected chunk number {curchunk} (out of range {startchunk}..{endchunk}) for toast value {valueid} in {relname}"
+            )));
+        }
+        let expected_size = if curchunk < totalchunks - 1 {
+            max_chunk
+        } else {
+            self.attrsize - (totalchunks - 1) * max_chunk
+        };
+        if chunksize != expected_size {
+            return Err(corrupted(format!(
+                "unexpected chunk size {chunksize} (expected {expected_size}) in chunk {curchunk} of {totalchunks} for toast value {valueid} in {relname}"
+            )));
+        }
+
+        let mut chcpystrt = 0i32;
+        let mut chcpyend = chunksize - 1;
+        if curchunk == startchunk {
+            chcpystrt = self.sliceoffset % max_chunk;
+        }
+        if curchunk == endchunk {
+            chcpyend = (self.sliceoffset + self.slicelength - 1) % max_chunk;
+        }
+
+        let dst = (VARHDRSZ as i32 + curchunk * max_chunk - self.sliceoffset + chcpystrt) as usize;
+        let n = (chcpyend - chcpystrt + 1) as usize;
+        result[dst..dst + n]
+            .copy_from_slice(&chunkdata[chcpystrt as usize..chcpystrt as usize + n]);
+
+        self.expectedchunk += 1;
+        Ok(())
+    }
+
+    pub(crate) fn finish(&self) -> PgResult<()> {
+        if self.expectedchunk != self.endchunk + 1 {
+            return Err(corrupted(format!(
+                "missing chunk number {} for toast value {} in {}",
+                self.expectedchunk, self.valueid, self.relname
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// C `heap_fetch_toast_slice`: writes chunk bytes into `result`'s data area
 /// (`result` is the full varlena image, header already set by the caller).
 pub fn heap_fetch_toast_slice<'mcx>(
@@ -113,7 +209,7 @@ pub fn heap_fetch_toast_slice<'mcx>(
     )?;
 
     // Chunks arrive in (valueid, chunkidx) index order.
-    let mut expectedchunk = startchunk;
+    let mut sink = ChunkSink::new(valueid, toastrel.name(), attrsize, sliceoffset, slicelength);
     loop {
         let Some(ttup) =
             genam::systable_getnext_ordered(mcx, &mut toastscan, ForwardScanDirection)?
@@ -130,64 +226,9 @@ pub fn heap_fetch_toast_slice<'mcx>(
         debug_assert!(!isnull);
         // SAFETY: non-null deformed varlena datum into the scan slot.
         let chunk = unsafe { va_slice(chunk_datum) };
-
-        let chunkdata: &[u8] = if (chunk[0] & 0x03) == 0 {
-            &chunk[VARHDRSZ..]
-        } else if (chunk[0] & 0x01) == 0x01 && chunk[0] != 0x01 {
-            // short header: heap_form_tuple can pack even PLAIN columns
-            &chunk[VARHDRSZ_SHORT..]
-        } else {
-            return Err(toasted_toast_chunk(valueid, toastrel.name()));
-        };
-        let chunksize = chunkdata.len() as i32;
-
-        if curchunk != expectedchunk {
-            return Err(corrupted(format!(
-                "unexpected chunk number {curchunk} (expected {expectedchunk}) for toast value {valueid} in {}",
-                toastrel.name()
-            )));
-        }
-        if curchunk > endchunk {
-            return Err(corrupted(format!(
-                "unexpected chunk number {curchunk} (out of range {startchunk}..{endchunk}) for toast value {valueid} in {}",
-                toastrel.name()
-            )));
-        }
-        let expected_size = if curchunk < totalchunks - 1 {
-            max_chunk
-        } else {
-            attrsize - (totalchunks - 1) * max_chunk
-        };
-        if chunksize != expected_size {
-            return Err(corrupted(format!(
-                "unexpected chunk size {chunksize} (expected {expected_size}) in chunk {curchunk} of {totalchunks} for toast value {valueid} in {}",
-                toastrel.name()
-            )));
-        }
-
-        let mut chcpystrt = 0i32;
-        let mut chcpyend = chunksize - 1;
-        if curchunk == startchunk {
-            chcpystrt = sliceoffset % max_chunk;
-        }
-        if curchunk == endchunk {
-            chcpyend = (sliceoffset + slicelength - 1) % max_chunk;
-        }
-
-        let dst = (VARHDRSZ as i32 + curchunk * max_chunk - sliceoffset + chcpystrt) as usize;
-        let n = (chcpyend - chcpystrt + 1) as usize;
-        result[dst..dst + n]
-            .copy_from_slice(&chunkdata[chcpystrt as usize..chcpystrt as usize + n]);
-
-        expectedchunk += 1;
+        sink.put(curchunk, chunk, result)?;
     }
-
-    if expectedchunk != endchunk + 1 {
-        return Err(corrupted(format!(
-            "missing chunk number {expectedchunk} for toast value {valueid} in {}",
-            toastrel.name()
-        )));
-    }
+    sink.finish()?;
 
     genam::systable_endscan_ordered(mcx, toastscan)?;
     toast_close_indexes(toastidxs, AccessShareLock)?;
@@ -220,6 +261,10 @@ pub fn toast_fetch_datum<'mcx>(mcx: Mcx<'mcx>, attr: &[u8]) -> PgResult<PgVec<'m
         return Ok(result);
     }
 
+    if let Some(map) = crate::worker::entered() {
+        crate::worker::fetch_slice(mcx, &map, &toast_pointer, attrsize, 0, attrsize, &mut result)?;
+        return Ok(result);
+    }
     let toastrel = open_toast_relation(mcx, toast_pointer.va_toastrelid, AccessShareLock)?;
     heap_fetch_toast_slice(
         mcx,
@@ -284,6 +329,10 @@ pub fn toast_fetch_datum_slice<'mcx>(
         return Ok(result);
     }
 
+    if let Some(map) = crate::worker::entered() {
+        crate::worker::fetch_slice(mcx, &map, &toast_pointer, attrsize, sliceoffset, slicelength, &mut result)?;
+        return Ok(result);
+    }
     let toastrel = open_toast_relation(mcx, toast_pointer.va_toastrelid, AccessShareLock)?;
     heap_fetch_toast_slice(
         mcx,

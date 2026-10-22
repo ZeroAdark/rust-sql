@@ -91,6 +91,7 @@ pgstat = { path = "../../../utils/activity/pgstat" }
 backend_status_seams = { path = "../../../utils/activity/backend_status_seams" }
 
 [dev-dependencies]
+waiteventset_seams = { path = "../../../storage/ipc/waiteventset_seams" }
 adt_int = { path = "../../../utils/adt/int" }
 wchar = { path = "../../../../common/wchar" }
 

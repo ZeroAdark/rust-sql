@@ -1,0 +1,676 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2e s2c
+step s2e: EXPLAIN (COSTS OFF) UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 AND id > 50 ORDER BY id LIMIT 1 FOR UPDATE) RETURNING id, v;
+QUERY PLAN                                                                                            
+------------------------------------------------------------------------------------------------------
+Update on lkc                                                                                         
+  Update on lkc_a lkc_1                                                                               
+  Update on lkc_b lkc_2                                                                               
+  Update on lkc_d lkc_3                                                                               
+  ->  Nested Loop                                                                                     
+        ->  HashAggregate                                                                             
+              Group Key: "ANY_subquery".d, "ANY_subquery".id                                          
+              ->  Subquery Scan on "ANY_subquery"                                                     
+                    ->  Limit                                                                         
+                          ->  LockRows                                                                
+                                ->  Sort                                                              
+                                      Sort Key: lkc_4.id                                              
+                                      ->  Append                                                      
+                                            ->  Seq Scan on lkc_a lkc_5                               
+                                                  Filter: ((v > 0) AND (id > 50) AND ((id % 50) = 33))
+                                            ->  Seq Scan on lkc_b lkc_6                               
+                                                  Filter: ((v > 0) AND (id > 50) AND ((id % 50) = 33))
+                                            ->  Seq Scan on lkc_d lkc_7                               
+                                                  Filter: ((v > 0) AND (id > 50) AND ((id % 50) = 33))
+        ->  Append                                                                                    
+              ->  Index Scan using lkc_a_pkey on lkc_a lkc_1                                          
+                    Index Cond: ((d = "ANY_subquery".d) AND (id = "ANY_subquery".id))                 
+              ->  Index Scan using lkc_b_pkey on lkc_b lkc_2                                          
+                    Index Cond: ((d = "ANY_subquery".d) AND (id = "ANY_subquery".id))                 
+              ->  Index Scan using lkc_d_pkey on lkc_d lkc_3                                          
+                    Index Cond: ((d = "ANY_subquery".d) AND (id = "ANY_subquery".id))                 
+(26 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s2r s1c s2c s3sel
+s1: WARNING:  there is already a transaction in progress
+step s1n: UPDATE lkc SET v = v + 1 WHERE id = 83;
+step s2r: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 AND id > 50 ORDER BY id LIMIT 1 FOR UPDATE) RETURNING id, v, tableoid::regclass AS leaf; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|  v|leaf 
+--+---+-----
+83|-84|lkc_b
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33|  33
+lkc_b|  83| -84
+lkc_b| 133| 133
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1d s2r s1c s2c s3sel
+step s1d: UPDATE lkc SET v = -v WHERE id = 83;
+step s2r: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 AND id > 50 ORDER BY id LIMIT 1 FOR UPDATE) RETURNING id, v, tableoid::regclass AS leaf; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+ id|   v|leaf 
+---+----+-----
+133|-133|lkc_b
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33|  33
+lkc_b|  83| -83
+lkc_b| 133|-133
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1x s2r s1c s2c s3sel
+step s1x: DELETE FROM lkc WHERE id = 83;
+step s2r: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 AND id > 50 ORDER BY id LIMIT 1 FOR UPDATE) RETURNING id, v, tableoid::regclass AS leaf; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+ id|   v|leaf 
+---+----+-----
+133|-133|lkc_b
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33|  33
+lkc_b| 133|-133
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(23 rows)
+
+
+starting permutation: s1k s2r s1c s2c s3sel
+step s1k: UPDATE lkc SET id = id + 1000 WHERE id = 83;
+ERROR:  duplicate key value violates unique constraint "lkc_b_pkey"
+step s2r: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 AND id > 50 ORDER BY id LIMIT 1 FOR UPDATE) RETURNING id, v, tableoid::regclass AS leaf;
+id|  v|leaf 
+--+---+-----
+83|-83|lkc_b
+(1 row)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33|  33
+lkc_b|  83| -83
+lkc_b| 133| 133
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1m s2r s1c s2c s3sel
+step s1m: UPDATE lkc SET d = d + 100 WHERE id = 83;
+step s2r: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 AND id > 50 ORDER BY id LIMIT 1 FOR UPDATE) RETURNING id, v, tableoid::regclass AS leaf; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33|  33
+lkc_d|  83|  83
+lkc_b| 133| 133
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1n s2r s1a s2c s3sel
+step s1n: UPDATE lkc SET v = v + 1 WHERE id = 83;
+step s2r: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 AND id > 50 ORDER BY id LIMIT 1 FOR UPDATE) RETURNING id, v, tableoid::regclass AS leaf; <waiting ...>
+step s1a: ROLLBACK;
+step s2r: <... completed>
+id|  v|leaf 
+--+---+-----
+83|-83|lkc_b
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33|  33
+lkc_b|  83| -83
+lkc_b| 133| 133
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1n s2k s1c s2c s3sel
+step s1n: UPDATE lkc SET v = v + 1 WHERE id = 83;
+step s2k: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 AND id > 50 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, v;
+ id|   v
+---+----
+133|-133
+(1 row)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33|  33
+lkc_b|  83|  84
+lkc_b| 133|-133
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1d s2x s1c s2c s3sel
+step s1d: UPDATE lkc SET v = -v WHERE id = 83;
+step s2x: DELETE FROM lkc WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 AND id > 50 ORDER BY id LIMIT 1 FOR UPDATE) RETURNING id, d; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+ id|         d
+---+----------
+133|05-13-2024
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33|  33
+lkc_b|  83| -83
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(23 rows)
+
+
+starting permutation: s1n s2u s1c s2c s3sel
+step s1n: UPDATE lkc SET v = v + 1 WHERE id = 83;
+step s2u: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 ORDER BY id LIMIT 3 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33| -33
+lkc_b|  83| -84
+lkc_b| 133|-133
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1d s2u s1c s2c s3sel
+step s1d: UPDATE lkc SET v = -v WHERE id = 83;
+step s2u: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 ORDER BY id LIMIT 3 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33| -33
+lkc_b|  83| -83
+lkc_b| 133|-133
+lkc_d| 183|-183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s2he s1c s2c
+step s2he: EXPLAIN (COSTS OFF) UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 ORDER BY id LIMIT 9 FOR UPDATE);
+QUERY PLAN                                                                              
+----------------------------------------------------------------------------------------
+Update on lkc                                                                           
+  Update on lkc_a lkc_1                                                                 
+  Update on lkc_b lkc_2                                                                 
+  Update on lkc_d lkc_3                                                                 
+  ->  Hash Semi Join                                                                    
+        Hash Cond: ((lkc.d = "ANY_subquery".d) AND (lkc.id = "ANY_subquery".id))        
+        ->  Append                                                                      
+              ->  Seq Scan on lkc_a lkc_1                                               
+              ->  Seq Scan on lkc_b lkc_2                                               
+              ->  Seq Scan on lkc_d lkc_3                                               
+        ->  Hash                                                                        
+              ->  Subquery Scan on "ANY_subquery"                                       
+                    ->  Limit                                                           
+                          ->  LockRows                                                  
+                                ->  Sort                                                
+                                      Sort Key: lkc_4.id                                
+                                      ->  Append                                        
+                                            ->  Seq Scan on lkc_a lkc_5                 
+                                                  Filter: ((v > 0) AND ((id % 50) = 33))
+                                            ->  Seq Scan on lkc_b lkc_6                 
+                                                  Filter: ((v > 0) AND ((id % 50) = 33))
+                                            ->  Seq Scan on lkc_d lkc_7                 
+                                                  Filter: ((v > 0) AND ((id % 50) = 33))
+(23 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1n s2h s1c s2c s3sel
+step s1n: UPDATE lkc SET v = v + 1 WHERE id = 83;
+step s2h: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 ORDER BY id LIMIT 9 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33| -33
+lkc_b|  83| -84
+lkc_b| 133|-133
+lkc_d| 183|-183
+lkc_a| 233|-233
+lkc_b| 283|-283
+lkc_b| 333|-333
+lkc_d| 383|-383
+lkc_a| 433|-433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1d s2h s1c s2c s3sel
+step s1d: UPDATE lkc SET v = -v WHERE id = 83;
+step s2h: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 ORDER BY id LIMIT 9 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33| -33
+lkc_b|  83| -83
+lkc_b| 133|-133
+lkc_d| 183|-183
+lkc_a| 233|-233
+lkc_b| 283|-283
+lkc_b| 333|-333
+lkc_d| 383|-383
+lkc_a| 433|-433
+lkc_b| 483|-483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1x s2h s1c s2c s3sel
+step s1x: DELETE FROM lkc WHERE id = 83;
+step s2h: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 ORDER BY id LIMIT 9 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33| -33
+lkc_b| 133|-133
+lkc_d| 183|-183
+lkc_a| 233|-233
+lkc_b| 283|-283
+lkc_b| 333|-333
+lkc_d| 383|-383
+lkc_a| 433|-433
+lkc_b| 483|-483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(23 rows)
+
+
+starting permutation: s1n s2h s1a s2c s3sel
+step s1n: UPDATE lkc SET v = v + 1 WHERE id = 83;
+step s2h: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 ORDER BY id LIMIT 9 FOR UPDATE); <waiting ...>
+step s1a: ROLLBACK;
+step s2h: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33| -33
+lkc_b|  83| -83
+lkc_b| 133|-133
+lkc_d| 183|-183
+lkc_a| 233|-233
+lkc_b| 283|-283
+lkc_b| 333|-333
+lkc_d| 383|-383
+lkc_a| 433|-433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1m s2h s1c s2c s3sel
+step s1m: UPDATE lkc SET d = d + 100 WHERE id = 83;
+step s2h: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 ORDER BY id LIMIT 9 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33|  33
+lkc_d|  83|  83
+lkc_b| 133| 133
+lkc_d| 183| 183
+lkc_a| 233| 233
+lkc_b| 283| 283
+lkc_b| 333| 333
+lkc_d| 383| 383
+lkc_a| 433| 433
+lkc_b| 483| 483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+
+
+starting permutation: s1n s2hk s1c s2c s3sel
+step s1n: UPDATE lkc SET v = v + 1 WHERE id = 83;
+step s2hk: UPDATE lkc SET v = -v WHERE (d, id) IN (SELECT d, id FROM lkc WHERE v > 0 AND id % 50 = 33 ORDER BY id LIMIT 9 FOR UPDATE SKIP LOCKED);
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, v FROM lkc WHERE id % 50 = 33 AND id < 1200 OR v <= 0 ORDER BY id;
+leaf |  id|   v
+-----+----+----
+lkc_a|  33| -33
+lkc_b|  83|  84
+lkc_b| 133|-133
+lkc_d| 183|-183
+lkc_a| 233|-233
+lkc_b| 283|-283
+lkc_b| 333|-333
+lkc_d| 383|-383
+lkc_a| 433|-433
+lkc_b| 483|-483
+lkc_b| 533| 533
+lkc_d| 583| 583
+lkc_a| 633| 633
+lkc_b| 683| 683
+lkc_b| 733| 733
+lkc_d| 783| 783
+lkc_a| 833| 833
+lkc_b| 883| 883
+lkc_b| 933| 933
+lkc_d| 983| 983
+lkc_a|1033|1033
+lkc_b|1083|1083
+lkc_b|1133|1133
+lkc_d|1183|1183
+(24 rows)
+

@@ -1,0 +1,10 @@
+# PostgreSQL 18.6 src/backend/commands/tablecmds.c: 9 stack-depth check sites
+6954	find_composite_type_dependencies	crates/backend/commands/tablecmds/src/alter.rs	find_composite_type_dependencies_impl	yes	the shared body of find_composite_type_dependencies (_rel)
+7249	ATExecAddColumn	crates/backend/commands/tablecmds/src/alter.rs	ATExecAddColumn	yes	
+7930	ATExecSetNotNull	crates/backend/commands/tablecmds/src/alter.rs	ATExecSetNotNull	yes	
+9313	ATExecDropColumn	crates/backend/commands/tablecmds/src/alter.rs	ATExecDropColumn	yes	
+9934	ATAddCheckNNConstraint	crates/backend/commands/tablecmds/src/alter.rs	ATAddCheckNNConstraint	yes	
+12443	ATExecAlterConstrEnforceability	crates/backend/commands/tablecmds/src/fk.rs	alter_constr_enforceability	yes	
+12586	ATExecAlterConstrDeferrability	crates/backend/commands/tablecmds/src/fk.rs	alter_constr_deferrability	yes	
+13025	QueueFKConstraintValidation	crates/backend/commands/tablecmds/src/fk.rs	queue_fk_constraint_validation	yes	
+14111	dropconstraint_internal	crates/backend/commands/tablecmds/src/alter.rs	dropconstraint_internal	yes	

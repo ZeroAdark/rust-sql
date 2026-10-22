@@ -1,0 +1,99 @@
+# shape-id	serial-prefix-class	runtime-prefix-class
+# serial-prefix-class: none | nosort   (the serial training vector runs every
+#   statement at width 0, plan-default otherwise, except where the cost model
+#   picks a sort shape the product would not ship)
+# runtime-prefix-class: w8 | default   (see pgo/README.md "engine classes": the
+#   runtime vector runs the statement at width 8, or at the server's default
+#   width; NOT any published per-query vector. Assignment is by SHAPE CLASS:
+#   point and index lookups, correlated subqueries, the recursive CTE, per-row
+#   windows, DISTINCT ON, ordered-set and string aggregates and the
+#   unbounded sort train at the server default; the scans, aggregates,
+#   joins and sorts over the fact table train wide)
+J1	none	w8
+J2	none	w8
+J3	none	w8
+J4	none	w8
+J5	none	w8
+J6	none	w8
+J7	none	w8
+J8	none	w8
+J9	none	w8
+J10	none	w8
+J11	none	w8
+J12	none	default
+J13	none	w8
+J14	none	w8
+J15	none	w8
+J16	none	w8
+J17	none	w8
+J18	none	w8
+J19	none	w8
+J20	none	w8
+J21	none	w8
+J22	none	w8
+J23	none	w8
+J24	none	w8
+J25	none	w8
+J26	none	w8
+J27	none	default
+J28	none	w8
+J29	none	default
+J30	none	w8
+J31	none	w8
+J32	none	w8
+J33	none	w8
+J34	none	w8
+J35	none	w8
+J36	none	w8
+J37	none	w8
+J38	none	w8
+J39	none	default
+J40	none	w8
+J41	none	w8
+J42	none	w8
+J43	none	default
+J44	none	w8
+J45	none	w8
+J46	none	w8
+J47	none	w8
+J48	none	w8
+J49	none	w8
+J50	none	w8
+J51	none	w8
+J52	none	w8
+J53	none	w8
+J54	none	w8
+J55	none	w8
+J56	none	w8
+J57	none	w8
+J58	none	w8
+J59	none	default
+J60	none	default
+J61	none	w8
+J62	none	w8
+J63	none	w8
+J64	none	default
+J65	none	w8
+J66	none	default
+J67	none	w8
+J68	none	w8
+J69	none	w8
+J70	none	w8
+J71	none	w8
+J72	none	w8
+J73	none	w8
+J74	none	default
+J75	none	w8
+J76	none	w8
+J77	none	w8
+J78	none	default
+J79	none	w8
+J80	none	w8
+J81	none	w8
+J82	none	default
+J83	none	default
+J84	none	default
+J85	none	default
+J86	none	w8
+J87	none	default
+J88	none	w8

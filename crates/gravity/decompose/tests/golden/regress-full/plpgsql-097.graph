@@ -1,0 +1,36 @@
+-- regress-full-plpgsql-097
+-- UPDATE multi_test SET i = i;
+graph pipelines=4 breakers=2 init_plans=1 root=p3
+p0 node=3 serial site=-1 reason=Host end=breaker(slot=0 PlainAgg)
+  nodes n3@0 n2@1 n1@3^
+  source named rti=5 rel=39974 name=new_test
+  project ()
+  append arm 0/2
+  project ()
+  outs
+  outs
+p1 node=4 serial site=-1 reason=Host end=breaker(slot=0 PlainAgg)
+  nodes n4@0 n2@1 n1@3^
+  source named rti=6 rel=39974 name=new_test
+  project ()
+  append arm 1/2
+  project ()
+  outs
+  outs
+p2 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1
+  nodes n1@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec0)
+  outs 1=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p1 layout=[]->[Count@0] 8B
+group slot=0 producer=p1 node=1 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+init_plan id=1 pipeline=p2 link=Expr param=$exec0 raise-free
+mapped: Result Append NamedTuplestoreScan Agg SubPlan

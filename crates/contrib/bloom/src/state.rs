@@ -45,13 +45,12 @@ fn hash_proc_oid(index: &Relation<'_>, attno_0based: usize) -> types_core::Oid {
         .unwrap_or(0)
 }
 
-/// initBloomState. C caches the metapage options in rd_amcache; this Relation
-/// has no bloom amcache slot, so each construction re-reads the metapage's
-/// frozen options (one shared-locked buffer read; behaviorally identical).
+/// initBloomState: the metapage options are read once per relcache entry
+/// and kept in its bloom rd_amcache slot.
 pub fn init_bloom_state(index: &Relation<'_>) -> PgResult<BloomState> {
     let ncolumns = index.rd_att.natts as usize;
-    let mut hash_fn = Vec::with_capacity(ncolumns);
-    let mut collations = Vec::with_capacity(ncolumns);
+    let mut hash_fn = ::mcx::std_vec_with_capacity("bloom", ncolumns)?;
+    let mut collations = ::mcx::std_vec_with_capacity("bloom", ncolumns)?;
     for i in 0..ncolumns {
         let oid = hash_proc_oid(index, i);
         if oid == 0 {
@@ -66,7 +65,15 @@ pub fn init_bloom_state(index: &Relation<'_>) -> PgResult<BloomState> {
         collations.push(index.rd_indcollation.get(i).copied().unwrap_or(0));
     }
 
-    let opts = read_metapage_options(index)?;
+    let cached = index.rd_amcache_bloom.borrow().as_deref().copied();
+    let opts = match cached {
+        Some(opts) => opts,
+        None => {
+            let opts = read_metapage_options(index)?;
+            *index.rd_amcache_bloom.borrow_mut() = Some(Box::new(opts));
+            opts
+        }
+    };
     let size_of_bloom_tuple = opts.size_of_bloom_tuple();
 
     Ok(BloomState {
@@ -121,14 +128,14 @@ pub fn bloom_form_tuple(
     values: &[Datum],
     isnull: &[bool],
 ) -> PgResult<Vec<u8>> {
-    let mut tuple = vec![0u8; state.size_of_bloom_tuple];
+    let mut tuple = ::mcx::std_vec_from_elem("bloom", 0u8, state.size_of_bloom_tuple)?;
     let blk = types_tuple::itemptr::ItemPointerGetBlockNumberNoCheck(iptr);
     let off = types_tuple::itemptr::ItemPointerGetOffsetNumberNoCheck(iptr);
     tuple[0..2].copy_from_slice(&((blk >> 16) as u16).to_ne_bytes());
     tuple[2..4].copy_from_slice(&((blk & 0xFFFF) as u16).to_ne_bytes());
     tuple[4..6].copy_from_slice(&off.to_ne_bytes());
 
-    let mut sign = vec![0u16; state.opts.bloom_length as usize];
+    let mut sign = ::mcx::std_vec_from_elem("bloom", 0u16, state.opts.bloom_length as usize)?;
     for i in 0..state.ncolumns {
         if isnull[i] {
             continue;

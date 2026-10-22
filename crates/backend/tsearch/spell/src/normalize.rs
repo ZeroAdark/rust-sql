@@ -191,7 +191,7 @@ impl<'mcx> IspellDict<'mcx> {
         let mut pnewword: Vec<u8> = Vec::new();
 
         if self.find_word(word, &[], flag)? != 0 {
-            forms.push(word.to_vec());
+            forms.push(::mcx::std_vec_from_slice("tsearch", &word)?);
         }
 
         let mut pnode = self.prefix;
@@ -214,7 +214,7 @@ impl<'mcx> IspellDict<'mcx> {
                     None,
                 )?;
                 if ok {
-                    let affflag = self.affixes[aff_idx].flag.as_slice().to_vec();
+                    let affflag = ::mcx::std_vec_from_slice("tsearch", self.affixes[aff_idx].flag.as_slice())?;
                     if self.find_word(&newword, &affflag, flag)? != 0 {
                         Self::add_to_result(&mut forms, &newword);
                     }
@@ -243,7 +243,7 @@ impl<'mcx> IspellDict<'mcx> {
                     Some(0),
                 )?;
                 if ok {
-                    let aff_i_flag = self.affixes[aff_i].flag.as_slice().to_vec();
+                    let aff_i_flag = ::mcx::std_vec_from_slice("tsearch", self.affixes[aff_i].flag.as_slice())?;
                     let aff_i_flagflags = self.affixes[aff_i].flagflags;
                     if self.find_word(&newword, &aff_i_flag, flag)? != 0 {
                         Self::add_to_result(&mut forms, &newword);
@@ -287,7 +287,7 @@ impl<'mcx> IspellDict<'mcx> {
                                 {
                                     Vec::new()
                                 } else {
-                                    self.affixes[aff_j].flag.as_slice().to_vec()
+                                    ::mcx::std_vec_from_slice("tsearch", self.affixes[aff_j].flag.as_slice())?
                                 };
                                 if self.find_word(&pnewword, &ff, flag)? != 0 {
                                     Self::add_to_result(&mut forms, &pnewword);
@@ -356,7 +356,7 @@ impl<'mcx> IspellDict<'mcx> {
         let mut node = if snode.is_some() { snode } else { self.dictionary };
         let mut level = if snode.is_some() { minpos } else { startpos };
 
-        let mut notprobed = vec![1u8; wordlen as usize];
+        let mut notprobed = ::mcx::std_vec_from_elem("tsearch", 1u8, wordlen as usize)?;
         let mut var = match orig {
             Some(o) => SplitVar::copy_from(o),
             None => SplitVar::new(),
@@ -392,7 +392,7 @@ impl<'mcx> IspellDict<'mcx> {
                 }
 
                 let buf: Vec<u8> = if lenaff > 0 {
-                    word[startpos as usize..(startpos + lenaff) as usize].to_vec()
+                    ::mcx::std_vec_from_slice("tsearch", &word[startpos as usize..(startpos + lenaff) as usize])?
                 } else {
                     Vec::new()
                 };
@@ -465,7 +465,7 @@ impl<'mcx> IspellDict<'mcx> {
                 {
                     if level > minpos {
                         if wordlen == level + 1 {
-                            var.add_stem(word[startpos as usize..wordlen as usize].to_vec());
+                            var.add_stem(::mcx::std_vec_from_slice("tsearch", &word[startpos as usize..wordlen as usize])?);
                             result.insert(0, var);
                             return Ok(result);
                         } else {
@@ -473,7 +473,7 @@ impl<'mcx> IspellDict<'mcx> {
                                 node, Some(&var), word, wordlen, startpos, level,
                             )?;
                             level += 1;
-                            var.add_stem(word[startpos as usize..level as usize].to_vec());
+                            var.add_stem(::mcx::std_vec_from_slice("tsearch", &word[startpos as usize..level as usize])?);
                             node = self.dictionary;
                             startpos = level;
                             result.append(&mut more);
@@ -488,7 +488,7 @@ impl<'mcx> IspellDict<'mcx> {
             level += 1;
         }
 
-        var.add_stem(word[startpos as usize..wordlen as usize].to_vec());
+        var.add_stem(::mcx::std_vec_from_slice("tsearch", &word[startpos as usize..wordlen as usize])?);
         result.insert(0, var);
         Ok(result)
     }

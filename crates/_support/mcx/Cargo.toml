@@ -14,19 +14,25 @@ path = "src/lib.rs"
 # context create/destroy (global pool mutex contention at high backend
 # counts). Enabled by the server graph (init_small); no_std consumers keep
 # the global pools. Kill switch at runtime: PGRUST_MCX_POOL_STRIPE=0.
-std = []
+std = ["dep:memledger"]
 # aset-guard: back each chunk with an mmap'd region abutting a PROT_NONE guard
 # page so overruns fault at the offending write. Debugging only.
-aset-guard = ["dep:libc"]
+aset-guard = []
 # aset-stats: count keeper-block mallocs / recycle reuses via mcx::alloc_stats().
 aset-stats = []
 
 [dependencies]
+# G1-A: mapped blocks (heap.rs) are door 2 of the memory ledger (std builds: the server).
+memledger = { path = "../memledger", optional = true }
+# The governor's refusals (fits_raw, the block-grain check) are the memory policy's (mempolicy::admit), in every build.
+mempolicy = { path = "../mempolicy" }
 types_error = { path = "../types/types_error" }
-libc = { version = "0.2", optional = true }
+libc = "0.2"
 allocator-api2 = { version = "0.2", default-features = false, features = ["alloc"] }
 hashbrown = { version = "0.14", default-features = false, features = ["allocator-api2", "ahash", "inline-more"] }
 rustc-hash = { version = "2", default-features = false }
 
 [dev-dependencies]
 mimalloc = "0.1"
+# tests/pool_source.rs: the page pool as the block source; pool_global_source.rs: and PoolAlloc as the global allocator
+pagepool = { path = "../pagepool", features = ["global"] }

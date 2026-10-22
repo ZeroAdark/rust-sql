@@ -1,0 +1,22 @@
+-- regress-full-rowsecurity-083
+-- SELECT * FROM document WHERE did = 13;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 eligible rows=3 end=sink
+  nodes n1@0
+  source range rel=28327 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op98(v2.2, c25:'novel')
+  filter case(when op93(T_SQLValueFunction, c19:#64) then any96(v2.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x0b\x00\x00\x00!\x00\x00\x00'), when op93(T_SQLValueFunction, c19:#64) then any96(v2.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x16\x00\x00\x00,\x00\x00\x00')) else c16:0
+  project (1=v2.1)
+  outs 1=w8:val
+p1 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=28335 rti=1 am=heap index=28342
+    key att=1 op=96 value=c23:13
+    recheck (op96(v1.1, c23:13))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byref8:fx64:win/page Attr(5):byref8:vl:win/page Attr(6):byref8:vl:win/page
+  filter op96(v1.2, $exec0)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=fx64:win/page 5=vl:win/page 6=vl:win/page
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 vol=s
+mapped: SeqScan IndexScan SubPlan

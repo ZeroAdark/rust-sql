@@ -1,0 +1,9 @@
+-- regress-full-case-001
+-- SELECT '7' AS "None", CASE WHEN random() < 0 THEN 1 END AS "NULL on no matches";
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=c25:'7', 2=case(when op672(fn1598(), c701:0) then c23:1) else c23:null)
+  outs 1=vl:stmt/imm 2=w4:val
+mapped: Result

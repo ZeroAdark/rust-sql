@@ -1,0 +1,5 @@
+path	crates/gravity/lowerv4/src/step/expr_ext.rs
+method	std::iter::Iterator::collect	1
+method	std::rc::Rc::new	1
+type	std::rc::Rc	2
+type	std::vec::Vec	1

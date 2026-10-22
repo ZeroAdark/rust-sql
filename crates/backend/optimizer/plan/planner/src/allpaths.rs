@@ -629,7 +629,11 @@ fn set_append_rel_size(run: &mut PlannerRun<'_>, rel: RelId, rti: usize) -> PgRe
         let child_rows = run.root.rel(childrel).rows;
         parent_tuples += run.root.rel(childrel).tuples;
         parent_rows += child_rows;
-        parent_size += run.root.rel_reltarget(childrel).width as f64 * child_rows;
+        parent_size = crate::fma_sites::width_accum(
+            parent_size,
+            run.root.rel_reltarget(childrel).width as f64,
+            child_rows,
+        );
 
         let n = run.root.rel_reltarget(rel).exprs.len();
         debug_assert_eq!(n, run.root.rel_reltarget(childrel).exprs.len());
@@ -655,7 +659,8 @@ fn set_append_rel_size(run: &mut PlannerRun<'_>, rel: RelId, rti: usize) -> PgRe
                 child_width = lsyscache::get_typavgwidth(typid, typmod)?;
             }
             debug_assert!(child_width > 0);
-            parent_attrsizes[pndx] += child_width as f64 * child_rows;
+            parent_attrsizes[pndx] =
+                crate::fma_sites::width_accum(parent_attrsizes[pndx], child_width as f64, child_rows);
         }
     }
 
@@ -1012,11 +1017,7 @@ fn get_cheapest_parameterized_child_path<'mcx>(
                 continue;
             }
             if let Some(b) = best {
-                if crate::pathnode::compare_path_costs(
-                    run.root.path(b).base(),
-                    p,
-                    crate::pathnode::CostSelector::Total,
-                ) <= 0
+                if crate::pathnode::compare_path_costs_at(run, b, pid, crate::pathnode::CostSelector::Total) <= 0
                 {
                     continue;
                 }
@@ -1035,11 +1036,7 @@ fn get_cheapest_parameterized_child_path<'mcx>(
                         required_outer
                     ));
                     if let Some(b) = best {
-                        if crate::pathnode::compare_path_costs(
-                            run.root.path(b).base(),
-                            run.root.path(np).base(),
-                            crate::pathnode::CostSelector::Total,
-                        ) <= 0
+                        if crate::pathnode::compare_path_costs_at(run, b, np, crate::pathnode::CostSelector::Total) <= 0
                         {
                             continue;
                         }
@@ -1477,21 +1474,17 @@ fn set_rel_consider_parallel(run: &mut PlannerRun<'_>, rel: RelId, rti: usize) -
                 return Ok(());
             }
             // M4-S4 at consider_parallel grain (the partitioned hole,
-            // [sqe-generic-b]): zeroing the pgrc2 baserel's workers in
+            // [sqe-generic-b]): zeroing the pgrc baserel's workers in
             // create_plain_partial_paths kept Gather off SINGLE-rel
             // plans, but an appendrel parent could still build a
             // Parallel Append from the children's NON-partial paths and
-            // Gather it (observed: partitioned pgrc2 at scale plans
+            // Gather it (observed: partitioned pgrc at scale plans
             // `Gather Merge -> Sort -> Parallel Append`, refusing
             // node/gather-merge instead of reaching the Append
-            // recognizer). Parallelism over pgrcolumnar2 is the sqe
-            // pool's (v2-76 / PC-2.2); mark the rel parallel-unsafe so
-            // line-610 child propagation turns every ancestor appendrel
-            // serial. The `PGRUST_SQE_PLANNER_GATHER=1` hatch restores
-            // the old posture wholesale.
-            if run.root.rel(rel).amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR2 != 0
-                && !sqe_planner_gather_enabled()
-            {
+            // recognizer). No PG Gather over pgrcolumnar (v2-76 /
+            // PC-2.2); mark the rel parallel-unsafe so line-610 child
+            // propagation turns every ancestor appendrel serial.
+            if run.root.rel(rel).amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR != 0 {
                 return Ok(());
             }
             if let Some(ts) = rte.tablesample {
@@ -1591,16 +1584,14 @@ fn set_plain_rel_pathlist(run: &mut PlannerRun<'_>, rel: RelId) -> PgResult<()> 
     Ok(())
 }
 
-// pgrcolumnar v5 sorted-column pathkeys (sorted-groupexec inc2): one extra
-// serial seqscan path per useful ordering of the footer-proven sorted
-// columns. Each claimed column is independently non-decreasing over the
-// whole part, so ANY permutation of the claimed columns is a valid
-// lexicographic ordering; candidates lead with each column in turn so a
-// GROUP BY/ORDER BY on any single proven column can match. Exprs come from
+// pgrcolumnar sorted-scan pathkeys: one extra
+// serial seqscan path for the enforced `sorted_by` key, a LEXICOGRAPHIC
+// order in declaration order, so the one candidate is the declared prefix —
+// it ends at the first column the query does not reference. Exprs come from
 // the rel's reltarget (canonical Vars; an unreferenced column can serve no
 // pathkey), ECs are looked up create_it=false (the index-path discipline),
 // and useless tails are truncated — no useful prefix means no extra path.
-// Partial paths claim nothing (per-worker RG dispatch order is not proven).
+// Partial paths claim nothing.
 fn create_pgrcolumnar_sorted_paths<'mcx>(
     run: &mut PlannerRun<'mcx>,
     rel: RelId,
@@ -1611,7 +1602,7 @@ fn create_pgrcolumnar_sorted_paths<'mcx>(
         return Ok(());
     }
     let relid_index = run.root.rel(rel).relid;
-    let mut vars: Vec<(i16, types_nodes::node_tree::Node<'mcx>)> = Vec::with_capacity(nsorted);
+    let mut vars: Vec<(i16, types_nodes::node_tree::Node<'mcx>)> = ::mcx::std_vec_with_capacity("optimizer", nsorted)?;
     for i in 0..nsorted {
         let attno = run.root.rel(rel).pgrcolumnar_sorted_attnos[i];
         let found = run.root.rel_reltarget(rel).exprs.iter().find_map(|&id| {
@@ -1624,8 +1615,17 @@ fn create_pgrcolumnar_sorted_paths<'mcx>(
             vars.push((attno, n));
         }
     }
+    let mut prefix = Vec::new();
+    for i in 0..nsorted {
+        let attno = run.root.rel(rel).pgrcolumnar_sorted_attnos[i];
+        match vars.iter().find(|(a, _)| *a == attno) {
+            Some(v) => prefix.push(*v),
+            None => break,
+        }
+    }
+    vars = prefix;
     let mut added: Vec<mcx::PgVec<'mcx, types_pathnodes::PathKey>> = Vec::new();
-    for lead in 0..vars.len() {
+    for lead in 0..vars.len().min(1) {
         let relids = crate::relnode::relids_copy(run.mcx, &run.root.rel(rel).relids);
         let mut cand: mcx::PgVec<'mcx, types_pathnodes::PathKey> = mcx::PgVec::new_in(run.mcx);
         for j in std::iter::once(lead).chain((0..vars.len()).filter(|&j| j != lead)) {
@@ -1644,7 +1644,27 @@ fn create_pgrcolumnar_sorted_paths<'mcx>(
         if cand.is_empty() || added.iter().any(|a| a.as_slice() == cand.as_slice()) {
             continue;
         }
+        // D4568 part 2 (pgrust.pgrc_merge_skip_hash_group, default on): no merged path whose order would only presort
+        // a GROUP BY a hash aggregate serves (pathkeys.rs `presorts_hash_group_only`)
+        // r15 merge: the line dropped `lexicographic` (every sorted claim is pgrc's, lexicographic): the pgrc amflag instead
+        if run.root.rel(rel).amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR != 0
+            && guc_tables::backing::pgrust_pgrc_merge_skip_hash_group()
+            && crate::pathkeys::presorts_hash_group_only(run, &cand)
+        {
+            continue;
+        }
         let id = crate::pathnode::create_seqscan_path(run, rel, required_outer, 0)?;
+        if run.root.rel(rel).amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR != 0 {
+            // D4469 road 2: the scan merges its parts' sorted streams (createplan marks it); the planner's estimate of
+            // their count prices the merge
+            let (parts, granules) = (run.root.rel(rel).pgrcolumnar_parts, run.root.rel(rel).pgrcolumnar_granules.max(1));
+            let base = run.root.path(id).base();
+            let granule = (base.total_cost - base.startup_cost) / granules as f64;
+            let (startup, cost) = costsize::pgrc_merge::merge_cost(parts, base.rows, granule, costsize::gucs::cpu_operator_cost(), costsize::gucs::cpu_tuple_cost());
+            let base = run.root.path_mut(id).base_mut();
+            base.startup_cost += startup;
+            base.total_cost += startup + cost;
+        }
         run.root.path_mut(id).base_mut().pathkeys =
             types_pathnodes::relids::pgvec_clone_shallow(run.mcx, &cand);
         add_path(run, rel, id);
@@ -1654,60 +1674,15 @@ fn create_pgrcolumnar_sorted_paths<'mcx>(
 }
 
 // create_plain_partial_paths (allpaths.c).
-/// gather-hop (M5 close): the pgrc2 planner-parallel lever —
-/// `PGRUST_SQE_PLANNER_GATHER=1|on` lifts the M4-S4 no-partial-paths
-/// suppression over lanev4-engine rels so the planner emits its natural
-/// Gather/GatherMerge trees and the engine seam hops them. DEFAULT OFF (the
-/// M4-S4 production posture); boot env, OnceLock-cached — the lane-knob
-/// idiom (process-constant per run, never per statement).
-fn sqe_planner_gather_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        matches!(std::env::var("PGRUST_SQE_PLANNER_GATHER").as_deref(), Ok("1") | Ok("on"))
-    })
-}
-
 fn create_plain_partial_paths(run: &mut PlannerRun<'_>, rel: RelId) -> PgResult<()> {
     let parallel_workers = {
         let r = run.root.rel(rel);
         let max = crate::gucs::max_parallel_workers_per_gather();
-        // pgrcolumnar rels size from their own scan geometry (row-group
-        // count; see compute_pgrcolumnar_parallel_worker), honoring the
-        // parallel_workers reloption first. Heap rels keep C's page-ladder
-        // sizing untouched. (P7-2 D-8: the Stage-4 lane_pool forced-DOP
-        // arming is deleted with the pgrust.lane_parallel_pool tombstone.)
-        if r.amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR2 != 0 {
-            // M4-S4: NO planner partial paths over lanev4-engine rels —
+        // Heap rels keep C's page-ladder sizing.
+        if r.amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR != 0 {
             // and therefore no Gather (generate_gather_paths no-ops on an
-            // empty partial list). Parallelism over pgrcolumnar2 is the
-            // sqe statement-grain pool's, elected at the seam over the
-            // claim plane (v2-76 / PC-2.2 "no PG Gather hosting"; ES-4.4
-            // curve-empty election). Before this arm, the pgrc2 estimate
-            // arm's honest rel sizing (real part bytes) fed the heap page
-            // ladder below and Gathered every big-bank plan out of the
-            // seam's routed class (the S3-cells finding-3 posture pin,
-            // now retired engine-side).
-            //
-            // gather-hop (M5 close): `PGRUST_SQE_PLANNER_GATHER=1` LIFTS
-            // the suppression — the planner sizes parallelism off the
-            // honest rel pages exactly like heap and the SEAM hops the
-            // resulting Gather/GatherMerge interposition (the v4 engine's
-            // own DOP replaces the classic scaffolding on every routed
-            // shape; unrouted shapes fall to the classic machinery — or
-            // to the Amendment 7 refusal when strict is armed). DEFAULT
-            // OFF: the M4-S4 posture stays the production stance; the
-            // lever exists for the parallel-posture routing e2e and the
-            // pool-vs-planner DOP attribution takes.
-            if sqe_planner_gather_enabled() {
-                ::allpaths::compute_parallel_worker(r, r.pages as f64, -1.0, max)
-            } else {
-                0
-            }
-        } else if r.amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR != 0 {
-            // (P7-2 D-8: the Stage-4 lane_pool forced-DOP arm is deleted with
-            // the pgrust.lane_parallel_pool tombstone — the disarmed default,
-            // the ordinary pgrcolumnar worker computation, is the only arm.)
-            ::allpaths::compute_pgrcolumnar_parallel_worker(r, r.tuples, max)
+            // empty partial list): v2-76 / PC-2.2 "no PG Gather hosting".
+            0
         } else {
             ::allpaths::compute_parallel_worker(r, r.pages as f64, -1.0, max)
         }

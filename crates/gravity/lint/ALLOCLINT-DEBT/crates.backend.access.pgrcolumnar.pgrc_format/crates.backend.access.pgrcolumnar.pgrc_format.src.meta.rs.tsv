@@ -1,0 +1,11 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/meta.rs
+growth	pgrc_format::wire::put_i128	2
+growth	pgrc_format::wire::put_i64	4
+growth	pgrc_format::wire::put_u16	7
+growth	pgrc_format::wire::put_u32	13
+growth	pgrc_format::wire::put_u64	5
+growth	pgrc_format::wire::put_u8	3
+growth	std::vec::Vec::extend_from_slice	1
+method	pgrc_format::try_vec	1
+method	std::vec::Vec::with_capacity	2
+type	std::vec::Vec	2

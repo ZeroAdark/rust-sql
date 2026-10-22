@@ -3,6 +3,7 @@
 #![allow(non_upper_case_globals)]
 
 mod qc_tables;
+mod recomp_hash;
 mod tables;
 
 use mcx::{vec_with_capacity_in, Mcx, PgVec};
@@ -112,6 +113,7 @@ impl pg_unicode_decomposition {
         self.dec_size_flags & DECOMP_COMPAT as uint8 != 0
     }
 
+    #[cfg(test)]
     fn no_compose(self) -> bool {
         self.dec_size_flags & DECOMP_NO_COMPOSE as uint8 != 0
     }
@@ -243,19 +245,17 @@ fn recompose_code(start: pg_wchar, code: pg_wchar) -> Option<pg_wchar> {
         return Some(start + code - TBASE);
     }
 
-    // Only decomposition_size() == 2 entries can match: the start character has
-    // already been recomposed partially, so a perfect match on the size-two
-    // sub-table suffices (per the C comment).
-    UnicodeDecompMain
-        .iter()
-        .filter(|entry| entry.decomposition_size() == 2)
-        .filter(|entry| !entry.no_compose() && !entry.is_compat())
-        .find_map(|entry| {
-            let index = entry.dec_index as usize;
-            (UnicodeDecomp_codepoints[index] == start
-                && UnicodeDecomp_codepoints[index + 1] == code)
-                .then_some(entry.codepoint)
-        })
+    // Backend (non-FRONTEND) path: perfect-hash inverse lookup keyed by the
+    // two codepoints in network byte order.
+    let key = ((u64::from(start) << 32) | u64::from(code)).to_be_bytes();
+    let h = recomp_hash::recomp_hash_func(&key);
+    if !(0..recomp_hash::NUM_RECOMPS).contains(&h) {
+        return None;
+    }
+    let entry = &UnicodeDecompMain[recomp_hash::RecompInverseLookup[h as usize] as usize];
+    let index = entry.dec_index as usize;
+    (UnicodeDecomp_codepoints[index] == start && UnicodeDecomp_codepoints[index + 1] == code)
+        .then_some(entry.codepoint)
 }
 
 fn canonical_order(chars: &mut [pg_wchar]) {
@@ -639,5 +639,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    // The backend's perfect-hash recomposition agrees with the frontend's
+    // linear scan (unicode_norm.c recompose_code, both #ifdef arms).
+    #[test]
+    fn recompose_hash_matches_linear_scan() {
+        let mut n = 0;
+        for entry in UnicodeDecompMain.iter() {
+            let index = entry.dec_index as usize;
+            let composable = entry.decomposition_size() == 2 && !entry.no_compose() && !entry.is_compat();
+            if entry.decomposition_size() != 2 {
+                continue;
+            }
+            let (a, b) = (UnicodeDecomp_codepoints[index], UnicodeDecomp_codepoints[index + 1]);
+            let got = recompose_code(a, b);
+            if composable {
+                assert_eq!(got, Some(entry.codepoint), "U+{a:04X}+U+{b:04X}");
+                n += 1;
+            } else {
+                assert_ne!(got, Some(entry.codepoint), "U+{a:04X}+U+{b:04X}");
+            }
+        }
+        assert_eq!(n, recomp_hash::NUM_RECOMPS);
+        assert_eq!(recompose_code('a' as pg_wchar, 'a' as pg_wchar), None);
+        assert_eq!(recompose_code('e' as pg_wchar, 0x301), Some(0xe9));
     }
 }

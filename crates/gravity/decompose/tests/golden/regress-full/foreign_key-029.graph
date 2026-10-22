@@ -1,0 +1,22 @@
+-- regress-full-foreign_key-029
+-- delete from t1 where a = 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@1 n0@3
+  source index rel=36006 rti=1 am=heap index=36012
+    key att=1 op=96 value=c23:1
+    recheck (op96(v1.1, c23:1))
+    lanes RowId:byval8:w8:val
+  project (1=v1.-1, 2=v1.1)
+  nest inner=n3 JOIN_INNER invariant raise-free params=()
+  inner node=3 eligible rows=11 end=sink
+  nodes n3@0
+  source range rel=36014 rti=4 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v4.2, c23:1)
+  project (1=v4.-1, 2=v4.2)
+  project (1j=inner.1, 2j=outer.1)
+  write DELETE rel=36014 rti=4 natts=2 indexes=() marks=1 (rti1:ROW_MARK_REFERENCE)
+  outs 1=fx6:row 2=w4:val
+  outs 1=fx6:life/breaker 2=fx6:row
+mapped: ModifyTable SeqScan IndexScan NestLoop PlanRowMark

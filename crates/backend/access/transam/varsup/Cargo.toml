@@ -17,6 +17,7 @@ elog = { path = "../../../utils/error/elog" }
 init_small = { path = "../../../utils/init/init_small" }
 miscinit = { path = "../../../utils/init/miscinit" }
 guc_tables = { path = "../../../utils/misc/guc_tables" }
+l2cache = { path = "../../../utils/cache/l2cache" }
 lwlock = { path = "../../../storage/lmgr/lwlock" }
 lmgr_proc = { path = "../../../storage/lmgr/lmgr_proc" }
 pmsignal = { path = "../../../storage/ipc/pmsignal" }

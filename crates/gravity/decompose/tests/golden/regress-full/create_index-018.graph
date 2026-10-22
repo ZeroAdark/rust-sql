@@ -1,0 +1,20 @@
+-- regress-full-create_index-018
+-- SELECT point(x,x), (SELECT f1 FROM gpolygon_tbl ORDER BY f1 <-> point(x,x) LIMIT 1) as c FROM generate_series(0,10,1) x;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: true } fn1066 fn1066(c23:0, c23:10, c23:1)]
+  subplan 1 nested Expr params=($exec0=v1.1)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@1
+  source index rel=19365 rti=2 am=heap index=19373 iam=gist
+    key att=1 op=3289 form=orderby value=fn1440(fn316($exec0), fn316($exec0))
+    lanes Attr(1):byref8:vl:win/page
+  project (1=v2.1, 2j=op3289(v2.1, fn1440(fn316($exec0), fn316($exec0))))
+  limit count=1 offset=all
+  project (1=outer.1, 2j=outer.2)
+  project (1=fn1440(fn316(v1.1), fn316(v1.1)), 2=subplan1(v1.1))
+  outs 1=fx16:call1440 2=vl:call0
+param $exec0 owner=subplan1 type=23 rep=w4:val
+mapped: IndexScan FunctionScan Limit SubPlan

@@ -1,0 +1,102 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1i s2u s1c s2c s3sel s3sum
+step s1i: UPDATE sk SET id = 1003 WHERE id = 3;
+step s2u: UPDATE sk SET val = -val WHERE id IN (SELECT id FROM ss WHERE grp = 2); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, val FROM sk WHERE id IN (3, 8, 13, 18, 23, 1003) ORDER BY id;
+  id| val
+----+----
+   8| -80
+  13|-130
+  18|-180
+  23|-230
+1003|  30
+(5 rows)
+
+step s3sum: SELECT count(*) FILTER (WHERE val < 0), sum(val) FROM sk;
+count|   sum
+-----+------
+   59|621460
+(1 row)
+
+
+starting permutation: s1v s1d s2u s1c s2c s3sel s3sum
+step s1v: UPDATE sk SET val = 200 WHERE id = 8;
+step s1d: DELETE FROM sk WHERE id = 13;
+step s2u: UPDATE sk SET val = -val WHERE id IN (SELECT id FROM ss WHERE grp = 2); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, val FROM sk WHERE id IN (3, 8, 13, 18, 23, 1003) ORDER BY id;
+id| val
+--+----
+ 3| -30
+ 8|-200
+18|-180
+23|-230
+(4 rows)
+
+step s3sum: SELECT count(*) FILTER (WHERE val < 0), sum(val) FROM sk;
+count|   sum
+-----+------
+   59|621410
+(1 row)
+
+
+starting permutation: s1v s1w s2e s1c s2c s3sel s3sum
+step s1v: UPDATE sk SET val = 200 WHERE id = 8;
+step s1w: UPDATE sk SET val = 5000 WHERE id = 18;
+step s2e: UPDATE sk t SET val = -t.val WHERE EXISTS (SELECT 1 FROM ss s WHERE s.id = t.id AND s.grp = 2 AND s.v > t.val); <waiting ...>
+step s1c: COMMIT;
+step s2e: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, val FROM sk WHERE id IN (3, 8, 13, 18, 23, 1003) ORDER BY id;
+id| val
+--+----
+ 3| -30
+ 8|-200
+13|-130
+18|5000
+23|-230
+(5 rows)
+
+step s3sum: SELECT count(*) FILTER (WHERE val < 0), sum(val) FROM sk;
+count|   sum
+-----+------
+    6|804540
+(1 row)
+
+
+starting permutation: s1i s1v s1d s2d s1c s2c s3sel s3sum
+step s1i: UPDATE sk SET id = 1003 WHERE id = 3;
+step s1v: UPDATE sk SET val = 200 WHERE id = 8;
+step s1d: DELETE FROM sk WHERE id = 13;
+step s2d: DELETE FROM sk WHERE id IN (SELECT id FROM ss WHERE grp = 2 AND v < 40) RETURNING id, val; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|val
+--+---
+ 8|200
+18|180
+23|230
+28|280
+33|330
+38|380
+(6 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, val FROM sk WHERE id IN (3, 8, 13, 18, 23, 1003) ORDER BY id;
+  id|val
+----+---
+1003| 30
+(1 row)
+
+step s3sum: SELECT count(*) FILTER (WHERE val < 0), sum(val) FROM sk;
+count|   sum
+-----+------
+    0|800390
+(1 row)
+

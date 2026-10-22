@@ -1,0 +1,2 @@
+backend/utils/activity/pgstat/src/wal.rs	PREV_WAL_USAGE	pgport	at:pgstat_wal_flush_cb	thread	prevWalUsage: this thread's pgWalUsage at its last WAL stats flush (set at init, pgstat_wal_init_backend_cb, and by each pgstat_wal_flush_cb); read only by the thread's own report, which a pool thread never runs
+backend/utils/activity/pgstat/src/wal.rs	SNAPSHOT_WAL	pgport	at:pgstat_wal_snapshot_clear	leader	the stats snapshot's WAL copy: read by pg_stat_get_wal (proparallel r: the leader's), cleared with the snapshot at transaction end (clear_snapshot)

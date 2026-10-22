@@ -1,0 +1,209 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2cnt s2plan s1c
+step s2cnt: SELECT count(*) FROM ct; SELECT count(*) FROM cb;
+count
+-----
+    3
+(1 row)
+
+count
+-----
+ 2000
+(1 row)
+
+step s2plan: EXPLAIN (costs off) UPDATE ct SET f2 = ct.f2 + cv.f2 FROM cv WHERE cv.f1 = ct.f1 RETURNING cv;
+QUERY PLAN                          
+------------------------------------
+Update on ct                        
+  ->  Hash Join                     
+        Hash Cond: (cb.f1 = ct.f1)  
+        ->  Seq Scan on cb          
+              Filter: ((f1 % 2) = 0)
+        ->  Hash                    
+              ->  Seq Scan on ct    
+(7 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1v s2view s1c s2chk
+step s1v: UPDATE ct SET f2 = f2 + 1 WHERE f1 = 2;
+step s2view: UPDATE ct SET f2 = ct.f2 + cv.f2 FROM cv WHERE cv.f1 = ct.f1 RETURNING cv; <waiting ...>
+step s1c: COMMIT;
+step s2view: <... completed>
+cv       
+---------
+(2,20,b2)
+(4,40,b4)
+(6,60,b6)
+(3 rows)
+
+step s2chk: SELECT * FROM ct ORDER BY f1;
+f1| f2
+--+---
+ 2| 41
+ 4| 80
+ 6|120
+(3 rows)
+
+
+starting permutation: s1base s2view s1c s2chk
+step s1base: UPDATE ct SET f2 = f2 + 1 WHERE f1 = 2; UPDATE cb SET f3 = 'changed' WHERE f1 = 2;
+step s2view: UPDATE ct SET f2 = ct.f2 + cv.f2 FROM cv WHERE cv.f1 = ct.f1 RETURNING cv; <waiting ...>
+step s1c: COMMIT;
+step s2view: <... completed>
+cv       
+---------
+(2,20,b2)
+(4,40,b4)
+(6,60,b6)
+(3 rows)
+
+step s2chk: SELECT * FROM ct ORDER BY f1;
+f1| f2
+--+---
+ 2| 41
+ 4| 80
+ 6|120
+(3 rows)
+
+
+starting permutation: s1key s2view s1c s2chk
+step s1key: UPDATE ct SET f1 = 3 WHERE f1 = 2;
+step s2view: UPDATE ct SET f2 = ct.f2 + cv.f2 FROM cv WHERE cv.f1 = ct.f1 RETURNING cv; <waiting ...>
+step s1c: COMMIT;
+step s2view: <... completed>
+cv       
+---------
+(4,40,b4)
+(6,60,b6)
+(2 rows)
+
+step s2chk: SELECT * FROM ct ORDER BY f1;
+f1| f2
+--+---
+ 3| 20
+ 4| 80
+ 6|120
+(3 rows)
+
+
+starting permutation: s1v s2fn s1c s2chk
+step s1v: UPDATE ct SET f2 = f2 + 1 WHERE f1 = 2;
+step s2fn: UPDATE ct SET f2 = ct.f2 + cfn.f2 FROM cfn() WHERE cfn.f1 = ct.f1 RETURNING cfn; <waiting ...>
+step s1c: COMMIT;
+step s2fn: <... completed>
+cfn      
+---------
+(2,20,b2)
+(4,40,b4)
+(6,60,b6)
+(3 rows)
+
+step s2chk: SELECT * FROM ct ORDER BY f1;
+f1| f2
+--+---
+ 2| 41
+ 4| 80
+ 6|120
+(3 rows)
+
+
+starting permutation: s2plano s1c
+step s2plano: EXPLAIN (costs off) UPDATE ct SET f2 = ct.f2 + cvo.f2 FROM cvo WHERE cvo.f1 = ct.f1 RETURNING cvo;
+QUERY PLAN                                
+------------------------------------------
+Update on ct                              
+  ->  Hash Join                           
+        Hash Cond: (cvo.f1 = ct.f1)       
+        ->  Subquery Scan on cvo          
+              ->  Seq Scan on cb          
+                    Filter: ((f1 % 2) = 0)
+        ->  Hash                          
+              ->  Seq Scan on ct          
+(8 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1v s2viewo s1c s2chk
+step s1v: UPDATE ct SET f2 = f2 + 1 WHERE f1 = 2;
+step s2viewo: UPDATE ct SET f2 = ct.f2 + cvo.f2 FROM cvo WHERE cvo.f1 = ct.f1 RETURNING cvo; <waiting ...>
+step s1c: COMMIT;
+step s2viewo: <... completed>
+cvo      
+---------
+(2,20,b2)
+(4,40,b4)
+(6,60,b6)
+(3 rows)
+
+step s2chk: SELECT * FROM ct ORDER BY f1;
+f1| f2
+--+---
+ 2| 41
+ 4| 80
+ 6|120
+(3 rows)
+
+
+starting permutation: s1base s2viewo s1c s2chk
+step s1base: UPDATE ct SET f2 = f2 + 1 WHERE f1 = 2; UPDATE cb SET f3 = 'changed' WHERE f1 = 2;
+step s2viewo: UPDATE ct SET f2 = ct.f2 + cvo.f2 FROM cvo WHERE cvo.f1 = ct.f1 RETURNING cvo; <waiting ...>
+step s1c: COMMIT;
+step s2viewo: <... completed>
+cvo      
+---------
+(2,20,b2)
+(4,40,b4)
+(6,60,b6)
+(3 rows)
+
+step s2chk: SELECT * FROM ct ORDER BY f1;
+f1| f2
+--+---
+ 2| 41
+ 4| 80
+ 6|120
+(3 rows)
+
+
+starting permutation: s1key s2viewo s1c s2chk
+step s1key: UPDATE ct SET f1 = 3 WHERE f1 = 2;
+step s2viewo: UPDATE ct SET f2 = ct.f2 + cvo.f2 FROM cvo WHERE cvo.f1 = ct.f1 RETURNING cvo; <waiting ...>
+step s1c: COMMIT;
+step s2viewo: <... completed>
+cvo      
+---------
+(4,40,b4)
+(6,60,b6)
+(2 rows)
+
+step s2chk: SELECT * FROM ct ORDER BY f1;
+f1| f2
+--+---
+ 3| 20
+ 4| 80
+ 6|120
+(3 rows)
+
+
+starting permutation: s1v s2fno s1c s2chk
+step s1v: UPDATE ct SET f2 = f2 + 1 WHERE f1 = 2;
+step s2fno: UPDATE ct SET f2 = ct.f2 + cfno.f2 FROM cfno() WHERE cfno.f1 = ct.f1 RETURNING cfno; <waiting ...>
+step s1c: COMMIT;
+step s2fno: <... completed>
+cfno     
+---------
+(2,20,b2)
+(4,40,b4)
+(6,60,b6)
+(3 rows)
+
+step s2chk: SELECT * FROM ct ORDER BY f1;
+f1| f2
+--+---
+ 2| 41
+ 4| 80
+ 6|120
+(3 rows)
+

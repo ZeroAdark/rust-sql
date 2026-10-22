@@ -44,10 +44,6 @@ unsafe fn arg_text<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<&'a [u8]> {
     Ok(unsafe { fcinfo.arg_varlena_packed(i) }?.data())
 }
 
-unsafe fn arg_text_str(fcinfo: &Fcinfo, i: usize) -> PgResult<String> {
-    Ok(String::from_utf8_lossy(unsafe { arg_text(fcinfo, i) }?).into_owned())
-}
-
 // text_to_cstring hands C a NUL-terminated copy: bytes past an embedded NUL
 // are invisible to the C string consumers below.
 unsafe fn arg_text_cstr<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<&'a [u8]> {
@@ -505,8 +501,8 @@ fn strerror(errnum: i32) -> String {
 
 fn fc_regress_setenv(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict fn, text args.
-    let envvar = unsafe { arg_text_str(fcinfo, 0) }?;
-    let envval = unsafe { arg_text_str(fcinfo, 1) }?;
+    let envvar = unsafe { arg_text_cstr(fcinfo, 0) }?;
+    let envval = unsafe { arg_text_cstr(fcinfo, 1) }?;
     if !superuser::superuser()? {
         return Err(err("must be superuser to change environment variables".to_string()));
     }
@@ -541,23 +537,44 @@ fn fc_wait_pid(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum
     if !superuser::superuser()? {
         return Err(err("must be superuser to check PID liveness".to_string()));
     }
+    let under_postmaster = init_small::globals::IsUnderPostmaster();
+    wait_for_pid(pid, under_postmaster, |pid| {
+        under_postmaster
+            && (procarray::BackendPidGetProc(pid).is_some()
+                || lmgr_proc::AuxiliaryPidGetProc(pid).is_some())
+    })
+}
+
+// Synthetic pids gone from the proc arrays have exited; never kill(2) them.
+fn wait_for_pid(
+    pid: i32,
+    synthetic_pids: bool,
+    mut backend_exists: impl FnMut(i32) -> bool,
+) -> PgResult<Datum> {
+    let backend = synthetic_pids || backend_exists(pid);
     loop {
-        // wasm32: no processes and no kill(2) on WASI — every probed pid is
-        // dead, so the wait returns immediately (matches miscinit's
-        // pid_appears_live wasm arm).
-        #[cfg(target_family = "wasm")]
-        {
-            let _ = pid;
-            break;
-        }
-        // SAFETY: kill(pid, 0) sends nothing; it only probes liveness.
-        #[cfg(not(target_family = "wasm"))]
-        if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
-            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            if errno != libc::ESRCH {
-                return Err(err(format!("could not check PID {pid} liveness: {}", strerror(errno))));
+        if backend {
+            if !backend_exists(pid) {
+                break;
             }
-            break;
+        } else {
+            // wasm32: no processes and no kill(2) on WASI — every probed pid is
+            // dead, so the wait returns immediately (matches miscinit's
+            // pid_appears_live wasm arm).
+            #[cfg(target_family = "wasm")]
+            {
+                let _ = pid;
+                break;
+            }
+            // SAFETY: kill(pid, 0) sends nothing; it only probes liveness.
+            #[cfg(not(target_family = "wasm"))]
+            if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+                let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                if errno != libc::ESRCH {
+                    return Err(err(format!("could not check PID {pid} liveness: {}", strerror(errno))));
+                }
+                break;
+            }
         }
         // CHECK_FOR_INTERRUPTS() — route a pending interrupt through the
         // ported ProcessInterrupts seam (the gist/spgist/gin/hash pattern).
@@ -1073,8 +1090,8 @@ fn fc_test_text_to_bytea(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
 
 fn fc_test_mblen_func(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict fn, text args.
-    let func = unsafe { arg_text_str(fcinfo, 0) }?;
-    let encoding = unsafe { arg_text_str(fcinfo, 1) }?;
+    let func = unsafe { arg_text_cstr(fcinfo, 0) }?;
+    let encoding = unsafe { arg_text_cstr(fcinfo, 1) }?;
     let data = unsafe { arg_text(fcinfo, 2) }?;
     let size = data.len();
     let offset = fcinfo.arg_i32(3);
@@ -1093,18 +1110,18 @@ fn fc_test_mblen_func(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
         )
     };
 
-    let result: i32 = match func.as_str() {
-        "pg_mblen_unbounded" if !in_range => 1,
-        "pg_mblen_unbounded" => mbutils::pg_mblen(at_offset),
-        "pg_mblen_cstr" => mblen_cstr(at_offset)?,
-        "pg_mblen_with_len" if !in_range => return Err(no_bytes_left()),
-        "pg_mblen_with_len" => {
+    let result: i32 = match func {
+        b"pg_mblen_unbounded" if !in_range => 1,
+        b"pg_mblen_unbounded" => mbutils::pg_mblen(at_offset),
+        b"pg_mblen_cstr" => mblen_cstr(at_offset)?,
+        b"pg_mblen_with_len" if !in_range => return Err(no_bytes_left()),
+        b"pg_mblen_with_len" => {
             mbutils::pg_mblen_with_len(at_offset, (size - offset as usize) as i32)?
         }
-        "pg_mblen_range" if !in_range => return Err(no_bytes_left()),
-        "pg_mblen_range" => mbutils::pg_mblen_range(at_offset)?,
-        "pg_encoding_mblen" => {
-            let enc = mbutils::pg_char_to_encoding(&encoding);
+        b"pg_mblen_range" if !in_range => return Err(no_bytes_left()),
+        b"pg_mblen_range" => mbutils::pg_mblen_range(at_offset)?,
+        b"pg_encoding_mblen" => {
+            let enc = mbutils::pg_char_to_encoding_bytes(encoding);
             match at_offset {
                 [] => 1,
                 [b] => wchar::pg_encoding_mblen(enc, &[*b, 0]),
@@ -1132,11 +1149,14 @@ fn mblen_cstr(bytes: &[u8]) -> PgResult<i32> {
 fn fc_test_text_to_wchars(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mcx = fcinfo.result_mcx();
     // SAFETY: strict fn, text args.
-    let encoding_name = unsafe { arg_text_str(fcinfo, 0) }?;
+    let encoding_name = unsafe { arg_text_cstr(fcinfo, 0) }?;
     let data = unsafe { arg_text(fcinfo, 1) }?;
-    let encoding = mbutils::pg_char_to_encoding(&encoding_name);
+    let encoding = mbutils::pg_char_to_encoding_bytes(encoding_name);
     if encoding < 0 {
-        return Err(err(format!("unknown encoding name: {encoding_name}")));
+        return Err(err(format!(
+            "unknown encoding name: {}",
+            String::from_utf8_lossy(encoding_name)
+        )));
     }
     let datums: Vec<Datum> = if !data.is_empty() {
         let wchars = mbutils::pg_encoding_mb2wchar_with_len(mcx, encoding, data)?;
@@ -1164,16 +1184,19 @@ fn fc_test_text_to_wchars(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
 fn fc_test_wchars_to_text(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mcx = fcinfo.result_mcx();
     // SAFETY: strict fn; arg0 text, arg1 int4[] varlena.
-    let encoding_name = unsafe { arg_text_str(fcinfo, 0) }?;
+    let encoding_name = unsafe { arg_text_cstr(fcinfo, 0) }?;
     // SAFETY: strict fn; arg 1 is a non-null int4[] varlena.
     let p = unsafe { fcinfo.arg_ptr(1) };
     let total = unsafe { ::types_tuple::varatt::varsize_any(p) };
     // SAFETY: a live varlena of `total` bytes.
     let raw = unsafe { core::slice::from_raw_parts(p, total) };
     let array = ::detoast_seams::detoast_attr::call(mcx, raw)?;
-    let encoding = mbutils::pg_char_to_encoding(&encoding_name);
+    let encoding = mbutils::pg_char_to_encoding_bytes(encoding_name);
     if encoding < 0 {
-        return Err(err(format!("unknown encoding name: {encoding_name}")));
+        return Err(err(format!(
+            "unknown encoding name: {}",
+            String::from_utf8_lossy(encoding_name)
+        )));
     }
     let (datums, nulls) =
         arrayfuncs::construct::deconstruct_array_builtin(mcx, &array, ::types_core::INT4OID, true)?;
@@ -1185,7 +1208,7 @@ fn fc_test_wchars_to_text(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
             }
             wchars.push(d.as_i32() as wchar::pg_wchar);
         }
-        mbutils::pg_encoding_wchar2mb_with_len(mcx, encoding, &wchars)?.to_vec()
+        ::mcx::std_vec_from_slice("src", &mbutils::pg_encoding_wchar2mb_with_len(mcx, encoding, &wchars)?)?
     } else {
         Vec::new()
     };
@@ -1197,8 +1220,7 @@ fn fc_test_wchars_to_text(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
 fn fc_test_valid_server_encoding(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict fn, text arg.
     let name = unsafe { arg_text_cstr(fcinfo, 0) }?;
-    let name = String::from_utf8_lossy(name);
-    Ok(Datum::from_bool(mbutils::pg_valid_server_encoding(&name) >= 0))
+    Ok(Datum::from_bool(mbutils::pg_valid_server_encoding_bytes(name) >= 0))
 }
 
 /* ==================== binary_coercible(oid, oid) ========================= */
@@ -1713,6 +1735,30 @@ mod tests {
         assert_eq!(err.sqlstate(), ERRCODE_QUERY_CANCELED);
         // The interrupt was consumed on the seam side; the flag is clean.
         assert!(!init_small::globals::InterruptPending());
+
+        init_small::globals::SetInterruptPending(true);
+        let err = wait_for_pid(i32::MAX, false, |_| true).unwrap_err();
+        assert_eq!(err.sqlstate(), ERRCODE_QUERY_CANCELED);
+        assert!(!init_small::globals::InterruptPending());
+    }
+
+    #[test]
+    fn wait_pid_synthetic_backend_exit() {
+        for target in [i32::MAX, std::process::id() as i32] {
+            let mut probes = 0;
+            wait_for_pid(target, false, |pid| {
+                assert_eq!(pid, target);
+                probes += 1;
+                probes < 4
+            }).unwrap();
+            assert_eq!(probes, 4);
+        }
+    }
+
+    #[test]
+    fn wait_pid_gone_synthetic_pid_returns() {
+        let me = std::process::id() as i32;
+        wait_for_pid(me, true, |_| false).unwrap();
     }
 
     // s_lock.c backoff seams for the spinlock arms: set-once per process,

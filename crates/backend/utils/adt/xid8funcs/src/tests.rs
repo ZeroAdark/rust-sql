@@ -20,8 +20,6 @@ fn strtou64_libc_semantics() {
     assert_eq!(strtou64(b"x1"), (0, 0));
     assert_eq!(strtou64(b""), (0, 0));
     assert_eq!(strtou64(b"18446744073709551615"), (u64::MAX, 20));
-    // Overflow clamps to ULLONG_MAX and SKIPS negation (libc ERANGE path;
-    // ground-truthed against host strtoull; snapio_diff divergence repro).
     assert_eq!(strtou64(b"-18446744073709551616"), (u64::MAX, 21));
     assert_eq!(strtou64(b"-518446744073709551616"), (u64::MAX, 22));
 }
@@ -35,7 +33,7 @@ fn parse_out_round_trip() {
         "12:18:14,16",
         "12:16:14,14",
         "31:31:",
-        "8589934593:8589934593:", // epoch 2
+        "8589934593:8589934593:",
         "8589934593:8589934595:8589934594",
     ] {
         let v = parse(mcx, s).unwrap().unwrap();
@@ -45,10 +43,6 @@ fn parse_out_round_trip() {
     }
 }
 
-// A 52,000,000-xip snapshot (416 MB image, 457 MB of text) prints in C; the
-// old 21-bytes-per-xip upfront reservation (1,092,000,044) tripped
-// MaxAllocSize before a byte was written. The buffer now grows with the
-// text, StringInfo-style, and the reservation is bounded.
 #[test]
 fn out_reservation_never_exceeds_max_alloc() {
     assert!(out_reservation(52_000_000) <= MAX_ALLOC_SIZE);
@@ -70,10 +64,10 @@ fn parse_errors_22p02() {
     let ctx = MemoryContext::new("t");
     let mcx = ctx.mcx();
     for s in [
-        "31:12:",   // xmax < xmin
-        "0:1:",     // invalid xmin
-        "12:13:0",  // xip < xmin
-        "12:16:14,13", // out of order
+        "31:12:",
+        "0:1:",
+        "12:13:0",
+        "12:16:14,13",
         "12:16:14,,16",
         "12:16:14 16",
         "12",
@@ -81,7 +75,7 @@ fn parse_errors_22p02() {
         "12:13",
         ":",
         "",
-        "12:13:14", // xip >= xmax
+        "12:13:14",
     ] {
         let err = parse(mcx, s).unwrap_err();
         assert_eq!(err.sqlstate(), types_error::ERRCODE_INVALID_TEXT_REPRESENTATION, "input {s}");
@@ -108,7 +102,6 @@ fn image_layout_matches_c() {
     let ctx = MemoryContext::new("t");
     let mcx = ctx.mcx();
     let v = parse(mcx, "12:18:14,16").unwrap().unwrap();
-    // varlena total = 24-byte header block + 2 * 8.
     assert_eq!(v.varsize(), 24 + 16);
     let s = view(&v);
     assert_eq!(s.nxip(), 2);
@@ -125,13 +118,12 @@ fn visible_fxid_linear_and_bsearch() {
     let v = parse(mcx, "10:100:20,30,40").unwrap().unwrap();
     let s = view(&v);
     assert!(is_visible_fxid(9, &s));
-    assert!(is_visible_fxid(10, &s)); // not in xip
+    assert!(is_visible_fxid(10, &s));
     assert!(!is_visible_fxid(100, &s));
     assert!(!is_visible_fxid(200, &s));
     assert!(!is_visible_fxid(30, &s));
     assert!(is_visible_fxid(31, &s));
 
-    // > USE_BSEARCH_IF_NXIP_GREATER xips takes the bsearch arm.
     let xips: Vec<u64> = (100..164).step_by(2).collect();
     let img = snapshot_image(mcx, 100, 1000, &xips).unwrap();
     let s = view(&img);
@@ -172,7 +164,6 @@ fn recv_vectors() {
     let s = view(&v);
     assert_eq!((s.nxip(), s.xmin(), s.xmax()), (2, 12, 18));
 
-    // duplicate xip collapses (C's i--/nxip-- dance).
     let mut si = si_of(&mk(3, 12, 18, &[14, 14, 16]));
     let v = snapshot_recv(mcx, &mut si).unwrap();
     let s = view(&v);
@@ -183,9 +174,9 @@ fn recv_vectors() {
         mk(-1, 12, 18, &[]),
         mk(0, 18, 12, &[]),
         mk(0, 0, 12, &[]),
-        mk(1, 12, 18, &[11]), // xip < xmin
-        mk(1, 12, 18, &[19]), // xip > xmax
-        mk(2, 12, 18, &[16, 14]), // out of order
+        mk(1, 12, 18, &[11]),
+        mk(1, 12, 18, &[19]),
+        mk(2, 12, 18, &[16, 14]),
     ] {
         let mut si = si_of(&bad);
         let err = snapshot_recv(mcx, &mut si).unwrap_err();
@@ -195,16 +186,12 @@ fn recv_vectors() {
 
 #[test]
 fn allowable_at_epochs() {
-    // xid at or below next's low word: same epoch.
     assert_eq!(full_xid_from_allowable_at((3 << 32) | 100, 50), (3 << 32) | 50);
-    // xid above next's low word: previous epoch.
     assert_eq!(full_xid_from_allowable_at((3 << 32) | 100, 200), (2 << 32) | 200);
-    // special xids keep epoch 0.
     assert_eq!(full_xid_from_allowable_at((3 << 32) | 100, 2), 2);
     assert_eq!(full_xid_from_allowable_at((3 << 32) | 100, 0), 0);
 }
 
-// xid8funcs.c:323 "%s": the input bytes verbatim (SQL_ASCII high bytes).
 #[test]
 fn bad_format_keeps_non_utf8_input_bytes() {
     let ctx = MemoryContext::new("t");

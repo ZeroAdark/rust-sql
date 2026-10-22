@@ -1,0 +1,19 @@
+-- regress-full-collate-023
+-- SELECT collation for ((SELECT a FROM collate_test1 LIMIT 1));
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 eligible rows=1270 end=sink
+  nodes n2@0 n1@1
+  source range rel=27668 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3162($exec0))
+  outs 1=vl:call3162
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: Result SeqScan Limit SubPlan

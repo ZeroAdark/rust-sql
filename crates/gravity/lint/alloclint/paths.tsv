@@ -1,0 +1,6 @@
+# alloclint paths (crosscheck.py `paths` column; report section 4): path<TAB>operator families (regex, full match) whose
+# runtime roots reach a site<TAB>why. An operator family is a plain name (<crate>/src/**/ops/<op>/, kernels' par_* and agg
+# tables); `shared` = no named-path family reaches the site but shared machinery does (`x:y` families: run machinery run:*,
+# expression evaluation expr:*, lowerv4's shared:* helpers, exec / hosts code outside ops/): it may lie on any path; `other` = reached only from other operator families; `-` = no family.
+D4432	scan|hashjoin|agg|sort	TPC-H q09 W8 SF10 (BUGS-OPEN D4432): pgrc scans of part / supplier / lineitem / partsupp / orders / nation, five hash joins, the hash aggregate by (nation, o_year), the final sort
+HASHAGG-W8	scan|agg|group	W8 hash aggregates over a wide pgrc table, memlead's 'g residual' (lanes/memlead/STATUS.md 10-14 exit report): pgrc scan, hash aggregate / grouped distinct

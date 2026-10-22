@@ -1,0 +1,12 @@
+-- regress-full-triggers-015
+-- UPDATE main_view SET b = 31 WHERE a = 20;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=21345 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v3.1, c23:20)
+  project (1=c23:31, 2j=T_RowExpr, 3j=v3.-1)
+  write UPDATE rel=21427 rti=2 natts=2 indexes=() set=(2) marks=1 (rti3:ROW_MARK_REFERENCE) view instead=iud wholerow=outer.2
+  outs 1=w4:val 2=? 3=fx6:row
+mapped: ModifyTable SeqScan PlanRowMark

@@ -1,0 +1,13 @@
+-- name: regress-024
+-- sql: SELECT a FROM t TABLESAMPLE SYSTEM (10);
+-- rel 16395 t am=heap kind=r natts=5
+-- att 16395 1 a typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16395 2 b typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16395 3 c typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 16395 4 d typid=1700 typmod=786438 len=-1 byval=f notnull=f
+-- att 16395 5 e typid=1082 typmod=-1 len=4 byval=t notnull=f
+-- idx 16402 rel=16395 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 16404 rel=16395 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16405 rel=16395 keys=2,3 opts=0,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- trigext 16395 before=- after=- instead=- stmt=- trans=- internal=- defer=- rules=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SAMPLESCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 17 :scan.plan.plan_rows 500 :scan.plan.plan_width 4 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 7} :resno 1 :resname a :ressortgroupref 0 :resorigtbl 16395 :resorigcol 1 :resjunk false}) :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :tablesample {TABLESAMPLECLAUSE :tsmhandler 3314 :args ({CONST :consttype 700 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location -1 :constvalue 4 [ 0 0 32 65 0 0 0 0 ]}) :repeatable <>}} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname t :colnames ("a" "b" "c" "d" "e")} :rtekind 0 :relid 16395 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 16395 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16395) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 39}

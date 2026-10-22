@@ -1,5 +1,3 @@
-// index.c concurrent slice: index_concurrently_create_copy/_build/_swap/
-// _set_dead, index_set_state_flags, validate_index.
 use datum::Datum;
 use mcx::Mcx;
 use types_core::{InvalidOid, Oid, INDEX_RELATION_ID, RELATION_RELATION_ID};
@@ -49,6 +47,8 @@ pub enum IndexStateFlagsAction {
     CreateSetValid,
     DropClearValid,
     DropSetDead,
+    /// pgrcolumnar's renumber: neither planned nor written until a rebuild (`reindex_index` restores both flags).
+    PgrcClearValidReady,
 }
 
 fn getattr_null(
@@ -91,7 +91,6 @@ fn name_datum<'mcx>(mcx: Mcx<'mcx>, s: &[u8]) -> PgResult<mcx::PgVec<'mcx, u8>> 
     Ok(buf)
 }
 
-// index_set_state_flags (index.c:3503).
 pub fn index_set_state_flags<'mcx>(
     mcx: Mcx<'mcx>,
     indexId: Oid,
@@ -140,12 +139,30 @@ pub fn index_set_state_flags<'mcx>(
             set(Anum_pg_index_indisready, false, &mut values, &mut replace);
             set(Anum_pg_index_indislive, false, &mut values, &mut replace);
         }
+        IndexStateFlagsAction::PgrcClearValidReady => {
+            set(Anum_pg_index_indisvalid, false, &mut values, &mut replace);
+            set(Anum_pg_index_indisready, false, &mut values, &mut replace);
+        }
     }
     let otid = tup.t_self;
     let mut newtup = heaptuple::heap_modify_tuple(mcx, tup, desc, &values, &nulls, &replace)?;
     genam::systable_endscan(mcx, scan)?;
     catalog_indexing::CatalogTupleUpdate(mcx, &pg_index, &otid, &mut newtup)?;
     pg_index.close(RowExclusiveLock)
+}
+
+/// IX1 L1: a pgrcolumnar renumber moves every row's ID, so the table's indexes go unusable in its first transaction and
+/// stay so (a crash between) until `reindex_relation` rebuilds them. Whether the table has any.
+pub fn pgrc_indexes_set_unusable<'mcx>(mcx: Mcx<'mcx>, heap: &Relation<'mcx>) -> PgResult<bool> {
+    let ids = relcache::indexlist::RelationGetIndexList(mcx, heap.rd_id)?;
+    for &id in ids.iter() {
+        index_set_state_flags(mcx, id, IndexStateFlagsAction::PgrcClearValidReady)?;
+    }
+    if ids.is_empty() {
+        return Ok(false);
+    }
+    inval::invalidate::CacheInvalidateRelcache(heap)?;
+    Ok(true)
 }
 
 // index_concurrently_create_copy (index.c:1300).
@@ -167,15 +184,12 @@ pub fn index_concurrently_create_copy<'mcx>(
     }
 
     let form = indexRelation.rd_index.as_ref().expect("index relation");
-    // upstream e4527519b77e (18.6): Fix propagation of indimmediate flag in index_create_copy()
     let mut flags = INDEX_CREATE_SKIP_BUILD | INDEX_CREATE_CONCURRENT;
-    // Old index is deferrable, do the same for the new index.
     if !form.indimmediate {
         flags |= INDEX_CREATE_DEFERRABLE;
     }
     let nattrs = oldInfo.ii_NumIndexAttrs as usize;
 
-    // indclass off the pg_index row (the Form does not carry it).
     let mut opclass_ids: mcx::PgVec<'mcx, Oid> = mcx::vec_with_capacity_in(mcx, nattrs)?;
     {
         let pg_index = table::table_open(mcx, INDEX_RELATION_ID, types_rel::AccessShareLock)?;
@@ -198,7 +212,6 @@ pub fn index_concurrently_create_copy<'mcx>(
         pg_index.close(types_rel::AccessShareLock)?;
     }
 
-    // reloptions off the pg_class row.
     let mut reloptions_img: Option<mcx::PgVec<'mcx, u8>> = None;
     {
         let pg_class = table::table_open(mcx, RELATION_RELATION_ID, types_rel::AccessShareLock)?;
@@ -223,8 +236,7 @@ pub fn index_concurrently_create_copy<'mcx>(
         pg_class.close(types_rel::AccessShareLock)?;
     }
 
-    // Raw (non-flattened) expression/predicate trees, straight off the catalog
-    // sources, as C insists for the new index's definition.
+    // Raw (non-flattened) expression/predicate trees, straight off the catalog sources, as C insists for the new index's definition.
     let mut newInfo = execindexing::BuildIndexInfo(mcx, &indexRelation)?;
     if let Some(src) = form.indexprs_src.as_ref() {
         let node = readfuncs::stringToNode(mcx, src.as_str())?;
@@ -242,7 +254,7 @@ pub fn index_concurrently_create_copy<'mcx>(
     let index_desc = indexRelation.descr();
     for i in 0..nattrs {
         let att = &index_desc.attrs[i];
-        // Bytes: an index column name may be byte-clipped (SQL_ASCII).
+        // An index column name may be byte-clipped (SQL_ASCII).
         colnames.push(mcx::slice_borrow_in(mcx, att.attname.name_str())?);
     }
 
@@ -312,7 +324,6 @@ pub fn index_concurrently_create_copy<'mcx>(
     Ok(newIndexId)
 }
 
-// index_concurrently_build (index.c:1485).
 pub fn index_concurrently_build<'mcx>(
     mcx: Mcx<'mcx>,
     heapRelationId: Oid,
@@ -333,7 +344,7 @@ pub fn index_concurrently_build<'mcx>(
     indexInfo.ii_Concurrent = true;
     indexInfo.ii_BrokenHotChain = false;
 
-    crate::index_build(mcx, &heapRel, &indexRelation, &mut indexInfo, false)?;
+    crate::index_build(mcx, &heapRel, &indexRelation, &mut indexInfo, false, true)?;
 
     guc::AtEOXact_GUC(false, save_nestlevel);
     guard.restore();
@@ -344,7 +355,6 @@ pub fn index_concurrently_build<'mcx>(
     index_set_state_flags(mcx, indexRelationId, IndexStateFlagsAction::CreateSetReady)
 }
 
-// validate_index (index.c:3350).
 pub fn validate_index<'mcx>(
     mcx: Mcx<'mcx>,
     heapId: Oid,
@@ -353,7 +363,6 @@ pub fn validate_index<'mcx>(
 ) -> PgResult<()> {
     use backend_progress::progress::*;
 
-    // index.c:3389-3404: phase VALIDATE_IDXSCAN, counters reset.
     backend_progress::pgstat_progress_update_multi_param(
         &[
             PROGRESS_CREATEIDX_PHASE,
@@ -392,14 +401,12 @@ pub fn validate_index<'mcx>(
         let mut cb = |tid: &types_tuple::itemptr::ItemPointerData| state.collect(tid);
         indexam::index_bulk_delete_collect(mcx, &ivinfo, &mut cb)?;
     }
-    // Execute the sort (index.c:3462-3473).
     backend_progress::pgstat_progress_update_multi_param(
         &[PROGRESS_CREATEIDX_PHASE, PROGRESS_SCAN_BLOCKS_DONE, PROGRESS_SCAN_BLOCKS_TOTAL],
         &[PROGRESS_CREATEIDX_PHASE_VALIDATE_SORT, 0, 0],
     );
     state.tuplesort.performsort()?;
 
-    // Now scan the heap and "merge" it with the index (index.c:3479-3480).
     backend_progress::pgstat_progress_update_param(
         PROGRESS_CREATEIDX_PHASE,
         PROGRESS_CREATEIDX_PHASE_VALIDATE_TABLESCAN,
@@ -415,7 +422,6 @@ pub fn validate_index<'mcx>(
 
     indexam::index_insert_cleanup(&indexRelation, &mut indexInfo.ii_AmCache)?;
 
-    // index.c:3493-3495: elog(DEBUG2) with %.0f counts (not translated).
     elog_seams::ereport::call(
         ::types_error::PgError::new(
             ::types_error::DEBUG2,
@@ -434,7 +440,6 @@ pub fn validate_index<'mcx>(
     heapRelation.close(NoLock)
 }
 
-// index_concurrently_swap (index.c:1552).
 pub fn index_concurrently_swap<'mcx>(
     mcx: Mcx<'mcx>,
     newIndexId: Oid,
@@ -444,7 +449,6 @@ pub fn index_concurrently_swap<'mcx>(
     let oldClassRel = indexam::index_open(mcx, oldIndexId, ShareUpdateExclusiveLock)?;
     let newClassRel = indexam::index_open(mcx, newIndexId, ShareUpdateExclusiveLock)?;
 
-    // pg_class: swap relname and relispartition; old updated first as C.
     {
         let pg_class = table::table_open(mcx, RELATION_RELATION_ID, RowExclusiveLock)?;
         let desc = pg_class.descr();
@@ -510,7 +514,6 @@ pub fn index_concurrently_swap<'mcx>(
         pg_class.close(RowExclusiveLock)?;
     }
 
-    // pg_index: move constraint flags to the new index, valid/invalid swap.
     {
         let pg_index = table::table_open(mcx, INDEX_RELATION_ID, RowExclusiveLock)?;
         let desc = pg_index.descr();
@@ -582,7 +585,6 @@ pub fn index_concurrently_swap<'mcx>(
         pg_index.close(RowExclusiveLock)?;
     }
 
-    // Move constraints and their triggers over to the new index.
     {
         let mut constraintOids = pg_depend::get_index_ref_constraints(mcx, oldIndexId)?;
         let indexConstraintOid = pg_depend::get_index_constraint(mcx, oldIndexId)?;
@@ -620,9 +622,9 @@ pub fn index_concurrently_swap<'mcx>(
                     let mut nulls: mcx::PgVec<'_, bool> = mcx::vec_with_capacity_in(mcx, natts)?;
                     let mut replace: mcx::PgVec<'_, bool> =
                         mcx::vec_with_capacity_in(mcx, natts)?;
-                    values.resize(natts, Datum::null());
+                    ::mcx::pgvec_resize(&mut values, natts, Datum::null())?;
                     nulls.resize(natts, false);
-                    replace.resize(natts, false);
+                    ::mcx::pgvec_resize(&mut replace, natts, false)?;
                     values[pg_constraint::Anum_pg_constraint_conindid as usize - 1] =
                         Datum::from_oid(newIndexId);
                     replace[pg_constraint::Anum_pg_constraint_conindid as usize - 1] = true;
@@ -677,9 +679,9 @@ pub fn index_concurrently_swap<'mcx>(
                             mcx::vec_with_capacity_in(mcx, natts)?;
                         let mut replace: mcx::PgVec<'_, bool> =
                             mcx::vec_with_capacity_in(mcx, natts)?;
-                        values.resize(natts, Datum::null());
-                        nulls.resize(natts, false);
-                        replace.resize(natts, false);
+                        ::mcx::pgvec_resize(&mut values, natts, Datum::null())?;
+                        ::mcx::pgvec_resize(&mut nulls, natts, false)?;
+                        ::mcx::pgvec_resize(&mut replace, natts, false)?;
                         values[Anum_pg_trigger_tgconstrindid as usize - 1] =
                             Datum::from_oid(newIndexId);
                         replace[Anum_pg_trigger_tgconstrindid as usize - 1] = true;
@@ -698,7 +700,6 @@ pub fn index_concurrently_swap<'mcx>(
         pg_trigger.close(RowExclusiveLock)?;
     }
 
-    // Move comment if any.
     {
         let description = table::table_open(mcx, DescriptionRelationId, RowExclusiveLock)?;
         let desc = description.descr();
@@ -729,7 +730,6 @@ pub fn index_concurrently_swap<'mcx>(
         description.close(NoLock)?;
     }
 
-    // Swap inheritance relationship with a parent index, if a partition.
     if lsyscache::get_rel_relispartition(oldIndexId)? {
         let ancestors = pg_inherits::get_partition_ancestors(mcx, oldIndexId)?;
         let parentIndexRelid = ancestors[0];
@@ -737,7 +737,7 @@ pub fn index_concurrently_swap<'mcx>(
         pg_inherits::StoreSingleInheritance(mcx, newIndexId, parentIndexRelid, 1)?;
     }
 
-    // Swap all dependencies of and on the two indexes; no CCI in between.
+    // No CCI in between.
     pg_depend::changeDependenciesOf(mcx, RELATION_RELATION_ID, newIndexId, oldIndexId)?;
     pg_depend::changeDependenciesOn(mcx, RELATION_RELATION_ID, newIndexId, oldIndexId)?;
     pg_depend::changeDependenciesOf(mcx, RELATION_RELATION_ID, oldIndexId, newIndexId)?;
@@ -755,7 +755,6 @@ pub fn index_concurrently_swap<'mcx>(
     indexam::index_close(newClassRel, NoLock)
 }
 
-// index_concurrently_set_dead (index.c:1823).
 pub fn index_concurrently_set_dead<'mcx>(mcx: Mcx<'mcx>, heapId: Oid, indexId: Oid) -> PgResult<()> {
     let userHeapRelation = table::table_open(mcx, heapId, ShareUpdateExclusiveLock)?;
     let userIndexRelation = indexam::index_open(mcx, indexId, ShareUpdateExclusiveLock)?;

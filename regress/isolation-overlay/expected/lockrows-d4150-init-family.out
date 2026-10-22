@@ -1,0 +1,145 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2c s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x;
+QUERY PLAN                                                           
+---------------------------------------------------------------------
+LockRows                                                             
+  InitPlan 1                                                         
+    ->  Aggregate                                                    
+          ->  Subquery Scan on y2                                    
+                ->  LockRows                                         
+                      ->  Append                                     
+                            ->  Bitmap Heap Scan on ifr_1 y_1        
+                                  Recheck Cond: (id <= 13)           
+                                  ->  Bitmap Index Scan on ifr_1_pkey
+                                        Index Cond: (id <= 13)       
+                            ->  Bitmap Heap Scan on ifr_2 y_2        
+                                  Recheck Cond: (id <= 13)           
+                                  ->  Bitmap Index Scan on ifr_2_pkey
+                                        Index Cond: (id <= 13)       
+  ->  Seq Scan on ifx x                                              
+        Filter: (NOT COALESCE((valid <@ (InitPlan 1).col1), false))  
+(16 rows)
+
+step s1u: UPDATE ifr SET valid = int4range(120, 128) WHERE id = 12;
+step s2c: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x;
+id
+--
+ 5
+(1 row)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1u s2s s1c
+step s1u: UPDATE ifr SET valid = int4range(120, 128) WHERE id = 12;
+step s2s: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id
+--
+ 3
+ 5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2c s1c
+step s1k: UPDATE ifr SET id = 14 WHERE id = 13;
+step s2c: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+id
+--
+ 4
+ 5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1kv s2c s1c
+step s1kv: UPDATE ifr SET id = 11, valid = int4range(120, 128) WHERE id = 12;
+step s2c: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+id
+--
+ 3
+ 5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2c s1c
+step s1d: DELETE FROM ifr WHERE id = 12;
+step s2c: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+id
+--
+ 3
+ 5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2c s1c
+step s1m: UPDATE ifr SET id = 3 WHERE id = 12;
+step s2c: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1x s2c s1c
+step s1x: UPDATE ifx SET id = 40 WHERE id = 5;
+step s2c: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+id
+--
+40
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1xd s2c s1c
+step s1xd: DELETE FROM ifx WHERE id = 5;
+step s2c: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+id
+--
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM ifr WHERE id = 12 FOR UPDATE;
+id
+--
+12
+(1 row)
+
+step s2nw: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y NOWAIT) y2), false) FOR KEY SHARE OF x;
+ERROR:  could not obtain lock on row in relation "ifr_2"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM ifr WHERE id = 12 FOR UPDATE;
+id
+--
+12
+(1 row)
+
+step s2sk: SELECT x.id FROM ifx x WHERE NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM ifr y WHERE y.id <= 13 FOR KEY SHARE OF y SKIP LOCKED) y2), false) FOR KEY SHARE OF x;
+id
+--
+ 3
+ 5
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

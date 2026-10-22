@@ -1,0 +1,2 @@
+path	crates/gravity/exec/src/admit/entry/raw.rs
+ir-only	alloc::boxed::Box<T>::from_raw	1

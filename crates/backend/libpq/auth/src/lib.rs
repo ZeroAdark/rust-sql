@@ -6,7 +6,8 @@
 //! search+bind, ldaps / StartTLS, DNS SRV discovery), radius (RFC 2865 over UDP), oauth
 //! (OAUTHBEARER via CheckSASLAuth + auth_oauth), pam (CheckPAMAuth over
 //! dlopened libpam), and gss (pg_GSS_recvauth over the system GSSAPI
-//! library; authentication only, no gssencmode). sspi / bsd never reach
+//! library, or the principal check alone on a GSSAPI-encrypted connection).
+//! sspi / bsd never reach
 //! dispatch — hba rejects those methods in this build.
 
 #![allow(non_snake_case)]
@@ -24,7 +25,6 @@ mod ldapconf;
 #[cfg(not(target_family = "wasm"))]
 mod radius;
 mod gss;
-mod gss_ffi;
 mod pam;
 mod pam_ffi;
 #[cfg(test)]
@@ -38,15 +38,15 @@ use radius::CheckRADIUSAuth;
 // wasm32: WASI has no TCP/UDP sockets; like ident_inet, the network auth
 // methods fail as the C "can't reach the server" arms do.
 #[cfg(target_family = "wasm")]
-fn CheckLDAPAuth(_port: &mut Port) -> PgResult<i32> {
+fn CheckLDAPAuth(_port: &Port) -> PgResult<i32> {
     Ok(STATUS_ERROR)
 }
 #[cfg(target_family = "wasm")]
-fn CheckRADIUSAuth(_port: &mut Port) -> PgResult<i32> {
+fn CheckRADIUSAuth(_port: &Port) -> PgResult<i32> {
     Ok(STATUS_ERROR)
 }
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use hba::pg_isblank;
 use mcx::MemoryContext;
 use types_core::init::{
@@ -58,7 +58,7 @@ use types_error::{
     ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION,
     ERRCODE_INVALID_PASSWORD, ERRCODE_PROTOCOL_VIOLATION, ERROR, FATAL, LOG,
 };
-use types_startup::{clientCertDN, clientCertFull, clientCertOff, Port};
+use types_startup::{clientCertDN, clientCertFull, clientCertOff, Port, ScramKeys};
 
 pub const STATUS_OK: i32 = 0;
 pub const STATUS_ERROR: i32 = -1;
@@ -215,9 +215,18 @@ pub fn set_authn_id(port: &Port, id: &str) -> PgResult<()> {
 }
 
 pub fn ClientAuthentication(port: &mut Port) -> PgResult<()> {
-    let mut logdetail: Option<String> = None;
-
     hba::hba_getauthmethod(port)?;
+    if let Some(keys) = authenticate(port)? {
+        port.set_scram_keys(keys);
+    }
+    Ok(())
+}
+
+// ClientAuthentication after hba_getauthmethod, on a shared Port so the log
+// sink's Port reads nest; the one write (SCRAM keys) is handed back.
+fn authenticate(port: &mut Port) -> PgResult<Option<ScramKeys>> {
+    let mut logdetail: Option<String> = None;
+    let mut keys: Option<ScramKeys> = None;
 
     postgres_seams::check_for_interrupts::call()?;
 
@@ -231,24 +240,26 @@ pub fn ClientAuthentication(port: &mut Port) -> PgResult<()> {
             return ereport(FATAL)
                 .errcode(ERRCODE_CONFIG_FILE_ERROR)
                 .errmsg("client certificates can only be checked if a root certificate store is available")
-                .finish(loc(404, "ClientAuthentication"));
+                .finish(loc(404, "ClientAuthentication"))
+                .map(|()| None);
         }
         if !port.peer_cert_valid {
             return ereport(FATAL)
                 .errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION)
                 .errmsg("connection requires a valid client certificate")
-                .finish(loc(414, "ClientAuthentication"));
+                .finish(loc(414, "ClientAuthentication"))
+                .map(|()| None);
         }
     }
 
     let auth_method = port_auth_method(port);
 
     let status: i32 = match auth_method {
-        m if m == uaReject => return reject_arm(port, true),
-        m if m == uaImplicitReject => return reject_arm(port, false),
+        m if m == uaReject => return reject_arm(port, true).map(|()| None),
+        m if m == uaImplicitReject => return reject_arm(port, false).map(|()| None),
         m if m == uaPeer => auth_peer(port)?,
         m if m == uaIdent => ident_inet(port)?,
-        m if m == uaMD5 || m == uaSCRAM => CheckPWChallengeAuth(port, &mut logdetail)?,
+        m if m == uaMD5 || m == uaSCRAM => CheckPWChallengeAuth(port, &mut logdetail, &mut keys)?,
         m if m == uaPassword => CheckPasswordAuth(port, &mut logdetail)?,
         m if m == uaLDAP => CheckLDAPAuth(port)?,
         m if m == uaRADIUS => CheckRADIUSAuth(port)?,
@@ -261,6 +272,7 @@ pub fn ClientAuthentication(port: &mut Port) -> PgResult<()> {
                 port,
                 None,
                 &mut oauth_logdetail,
+                &mut keys,
                 sendAuthRequest,
             )?
         }
@@ -269,11 +281,14 @@ pub fn ClientAuthentication(port: &mut Port) -> PgResult<()> {
             pam::CheckPAMAuth(port, port.user_name.clone().unwrap_or_default().as_str(), b"")?
         }
         m if m == uaGSS => {
-            // GSS encryption is never established in this build, so C's
-            // port->gss->enc shortcut (pg_GSS_checkauth directly) is
-            // unreachable: always ask for the AP-REQ exchange.
-            sendAuthRequest(port, AUTH_REQ_GSS, &[])?;
-            gss::pg_GSS_recvauth(port)?
+            let gss = port.gss.get_or_insert_with(Default::default);
+            gss.authenticated = true;
+            if gss.encrypted {
+                gss::pg_GSS_checkauth_encrypted(port)?
+            } else {
+                sendAuthRequest(port, AUTH_REQ_GSS, &[])?;
+                gss::pg_GSS_recvauth(port)?
+            }
         }
         // sspi/bsd: hba rejects these methods in this build.
         m => unreachable!("ClientAuthentication: unreachable auth method {m}"),
@@ -312,7 +327,7 @@ pub fn ClientAuthentication(port: &mut Port) -> PgResult<()> {
         auth_failed(port, status, logdetail.as_deref())?;
     }
 
-    Ok(())
+    Ok(keys)
 }
 
 #[cold]
@@ -484,7 +499,7 @@ fn ident_inet(port: &Port) -> PgResult<i32> {
         ereport(LOG)
             .with_saved_errno(errnum)
             .errcode_for_socket_access()
-            .errmsg("could not create socket for Ident connection: %m")
+            .errmsg(format!("could not create socket for Ident connection: {PCT_M}"))
             .finish(loc(1742, "ident_inet"))?;
         return Ok(STATUS_ERROR);
     }
@@ -544,7 +559,7 @@ fn ident_inet_exchange(
             .with_saved_errno(errnum)
             .errcode_for_socket_access()
             .errmsg(format!(
-                "could not bind to local address \"{local_addr_s}\": %m"
+                "could not bind to local address \"{local_addr_s}\": {PCT_M}"
             ))
             .finish(loc(1755, "ident_inet"))?;
         return Ok(None);
@@ -564,7 +579,7 @@ fn ident_inet_exchange(
             .with_saved_errno(errnum)
             .errcode_for_socket_access()
             .errmsg(format!(
-                "could not connect to Ident server at address \"{remote_addr_s}\", port {ident_port}: %m"
+                "could not connect to Ident server at address \"{remote_addr_s}\", port {ident_port}: {PCT_M}"
             ))
             .finish(loc(1767, "ident_inet"))?;
         return Ok(None);
@@ -589,7 +604,7 @@ fn ident_inet_exchange(
             .with_saved_errno(errnum)
             .errcode_for_socket_access()
             .errmsg(format!(
-                "could not send query to Ident server at address \"{remote_addr_s}\", port {ident_port}: %m"
+                "could not send query to Ident server at address \"{remote_addr_s}\", port {ident_port}: {PCT_M}"
             ))
             .finish(loc(1789, "ident_inet"))?;
         return Ok(None);
@@ -618,7 +633,7 @@ fn ident_inet_exchange(
             .with_saved_errno(errnum)
             .errcode_for_socket_access()
             .errmsg(format!(
-                "could not receive response from Ident server at address \"{remote_addr_s}\", port {ident_port}: %m"
+                "could not receive response from Ident server at address \"{remote_addr_s}\", port {ident_port}: {PCT_M}"
             ))
             .finish(loc(1806, "ident_inet"))?;
         return Ok(None);
@@ -703,7 +718,7 @@ fn auth_peer(port: &Port) -> PgResult<i32> {
                 ereport(LOG)
                     .with_saved_errno(errnum)
                     .errcode_for_socket_access()
-                    .errmsg("could not get peer credentials: %m")
+                    .errmsg(format!("could not get peer credentials: {PCT_M}"))
                     .finish(loc(1878, "auth_peer"))?;
             }
             return Ok(STATUS_ERROR);
@@ -719,7 +734,7 @@ fn auth_peer(port: &Port) -> PgResult<i32> {
     if rc != 0 {
         ereport(LOG)
             .with_saved_errno(rc)
-            .errmsg(format!("could not look up local user ID {}: %m", uid as i64))
+            .errmsg(format!("could not look up local user ID {}: {PCT_M}", uid as i64))
             .finish(loc(1888, "auth_peer"))?;
         return Ok(STATUS_ERROR);
     }
@@ -736,9 +751,10 @@ fn auth_peer(port: &Port) -> PgResult<i32> {
     // strcmp's pw_name's bytes as C does; the text-typed authn id renders them.
     // SAFETY: getpwuid_r returned 0 with a non-NULL pw, so pw_name points at
     // a NUL-terminated string inside `buf`.
-    let pw_name = unsafe { std::ffi::CStr::from_ptr(pwbuf.pw_name) }
-        .to_bytes()
-        .to_vec();
+    let pw_name = ::mcx::std_vec_from_slice(
+        "auth",
+        unsafe { std::ffi::CStr::from_ptr(pwbuf.pw_name) }.to_bytes(),
+    )?;
     set_authn_id(port, &String::from_utf8_lossy(&pw_name))?;
 
     let hba = port.hba.as_ref().expect("auth_peer: port->hba is NULL");
@@ -754,7 +770,9 @@ fn reject_arm(port: &Port, explicit_reject: bool) -> PgResult<()> {
     let mut hostinfo = String::new();
     ip::pg_getnameinfo_all(&port.raddr, Some(&mut hostinfo), None, ip::sys::NI_NUMERICHOST);
 
-    let encryption_state = if port.ssl_in_use {
+    let encryption_state = if port.gss.as_ref().is_some_and(|g| g.encrypted) {
+        "GSS encryption"
+    } else if port.ssl_in_use {
         "SSL encryption"
     } else {
         "no encryption"
@@ -907,10 +925,10 @@ pub fn recv_password_packet(_port: &Port) -> PgResult<Option<Vec<u8>>> {
     // Do not echo password to logs, for security.
     elog(DEBUG5, "received password packet")?;
 
-    Ok(Some(data[..strlen].to_vec()))
+    Ok(Some(::mcx::std_vec_from_slice("auth", &data[..strlen])?))
 }
 
-fn CheckPasswordAuth(port: &mut Port, logdetail: &mut Option<String>) -> PgResult<i32> {
+fn CheckPasswordAuth(port: &Port, logdetail: &mut Option<String>) -> PgResult<i32> {
     sendAuthRequest(port, AUTH_REQ_PASSWORD, &[])?;
 
     let Some(passwd) = recv_password_packet(port)? else {
@@ -932,7 +950,11 @@ fn CheckPasswordAuth(port: &mut Port, logdetail: &mut Option<String>) -> PgResul
     Ok(result)
 }
 
-fn CheckPWChallengeAuth(port: &mut Port, logdetail: &mut Option<String>) -> PgResult<i32> {
+fn CheckPWChallengeAuth(
+    port: &Port,
+    logdetail: &mut Option<String>,
+    keys: &mut Option<ScramKeys>,
+) -> PgResult<i32> {
     let auth_method = port_auth_method(port);
     debug_assert!(auth_method == uaSCRAM || auth_method == uaMD5);
 
@@ -957,6 +979,7 @@ fn CheckPWChallengeAuth(port: &mut Port, logdetail: &mut Option<String>) -> PgRe
             port,
             shadow_pass.as_deref(),
             logdetail,
+            keys,
             sendAuthRequest,
         )?
     };
@@ -1050,6 +1073,15 @@ pub fn init_seams() {
     });
 }
 
+// A mutable MyProcPort borrow across the exchange panics on its first log
+// line ("connection authenticated", any FATAL): writes get their own borrows.
 fn client_authentication_entry() -> PgResult<()> {
-    init_small::globals::WithMyProcPort(ClientAuthentication)
+    use init_small::globals::{WithMyProcPort, WithMyProcPortLogged, WithMyProcPortMut};
+    let matched = WithMyProcPort(hba::check_hba)?;
+    WithMyProcPortMut(|port| matched.store(port));
+    // main's GSS arm writes port.gss: a mutable borrow that keeps publishing the log view (main's WithMyProcPortLogged)
+    if let Some(keys) = WithMyProcPortLogged(authenticate)? {
+        WithMyProcPortMut(|port| port.set_scram_keys(keys));
+    }
+    Ok(())
 }

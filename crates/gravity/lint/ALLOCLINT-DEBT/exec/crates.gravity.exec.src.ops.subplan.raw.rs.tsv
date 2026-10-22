@@ -1,0 +1,6 @@
+path	crates/gravity/exec/src/ops/subplan/raw.rs
+growth	std::vec::Vec::extend_from_slice	4
+growth	std::vec::Vec::resize	1
+macro	std::vec	1
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

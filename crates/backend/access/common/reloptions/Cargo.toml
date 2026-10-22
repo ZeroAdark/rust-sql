@@ -19,6 +19,9 @@ guc = { path = "../../../utils/misc/guc" }
 define = { path = "../../../commands/define" }
 elog = { path = "../../../utils/error/elog" }
 varlena = { path = "../../../utils/adt/varlena" }
+parser_seams = { path = "../../../parser/parser_seams" }
 tableam_vocab = { version = "0.1.0", path = "../../table/tableam_vocab" }
 
 [dev-dependencies]
+detoast = { path = "../detoast" }
+pglz = { path = "../../../../common/pglz" }

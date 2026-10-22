@@ -1,0 +1,11 @@
+# a star item before the matching expression: positions unknown, exact
+sql: SELECT *, x + 1 FROM t ORDER BY x + 1;
+cols: x	?column?
+class: exact
+verdict: mismatch-order
+[pg]
+1	2
+2	3
+[got]
+2	3
+1	2

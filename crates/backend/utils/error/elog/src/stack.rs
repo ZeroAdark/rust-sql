@@ -49,14 +49,29 @@ thread_local! {
 
 struct EmitContextCallback {
     id: u64,
-    callback: Box<dyn FnMut(&mut PgError)>,
+    callback: ContextCallback,
     emit: bool,
     walk: bool,
 }
 
+enum ContextCallback {
+    Owned(Box<dyn FnMut(&mut PgError)>),
+    Borrowed(*mut (dyn FnMut(&mut PgError) + 'static)),
+}
+
+impl ContextCallback {
+    fn call(&mut self, error: &mut PgError) {
+        match self {
+            ContextCallback::Owned(f) => f(error),
+            // SAFETY: push_context_frame_borrowed's contract: the closure outlives its entry and is not moved meanwhile.
+            ContextCallback::Borrowed(f) => unsafe { (**f)(error) },
+        }
+    }
+}
+
 thread_local! { static EMIT_CONTEXT_NEXT_ID: Cell<u64> = const { Cell::new(1) }; }
 
-fn push_context_callback(callback: Box<dyn FnMut(&mut PgError)>, emit: bool, walk: bool) -> u64 {
+fn push_context_callback(callback: ContextCallback, emit: bool, walk: bool) -> u64 {
     let id = EMIT_CONTEXT_NEXT_ID.with(|n| {
         let id = n.get();
         n.set(id + 1);
@@ -68,28 +83,190 @@ fn push_context_callback(callback: Box<dyn FnMut(&mut PgError)>, emit: bool, wal
 }
 
 pub fn push_emit_context_callback(callback: Box<dyn FnMut(&mut PgError)>) -> u64 {
-    push_context_callback(callback, true, false)
+    push_context_callback(ContextCallback::Owned(callback), true, false)
 }
 
 /// A frame GetErrorContextStack walks; `emit` also decorates non-ERROR reports.
 pub fn push_context_frame(callback: Box<dyn FnMut(&mut PgError)>, emit: bool) -> u64 {
-    push_context_callback(callback, emit, true)
+    push_context_callback(ContextCallback::Owned(callback), emit, true)
 }
 
-pub fn pop_emit_context_callback(id: u64) {
+/// # Safety
+/// `callback` must stay alive, and must not move, until `pop_emit_context_callback` has run for the returned id. Hold
+/// the id in a guard declared after the closure in the same scope (it drops first, unwinding included) and never leak it.
+#[inline]
+pub unsafe fn push_context_frame_borrowed(callback: &mut (dyn FnMut(&mut PgError) + '_), emit: bool) -> u64 {
+    let raw: core::ptr::NonNull<dyn FnMut(&mut PgError) + '_> = core::ptr::NonNull::from(callback);
+    // SAFETY: only the lifetime is erased; the contract above keeps the closure alive while the entry exists.
+    let callback: core::ptr::NonNull<dyn FnMut(&mut PgError) + 'static> = unsafe { core::mem::transmute(raw) };
+    let id = EMIT_CONTEXT_NEXT_ID.with(|n| {
+        let id = n.get();
+        n.set(id + 1);
+        id
+    });
+    if !BORROWED_FRAMES.with(|b| b.push(id, BorrowedFrame { callback, emit, walk: true })) {
+        push_borrowed_spill(id, callback, emit);
+    }
+    id
+}
+
+#[inline(never)]
+fn push_borrowed_spill(id: u64, callback: core::ptr::NonNull<dyn FnMut(&mut PgError)>, emit: bool) {
+    let callback = ContextCallback::Borrowed(callback.as_ptr());
+    EMIT_CONTEXT_CALLBACKS.with(|s| s.borrow_mut().push(EmitContextCallback { id, callback, emit, walk: true }));
+}
+
+const BORROWED_SLOTS: usize = 32;
+
+#[derive(Clone, Copy)]
+struct BorrowedFrame {
+    callback: core::ptr::NonNull<dyn FnMut(&mut PgError)>,
+    emit: bool,
+    walk: bool,
+}
+
+struct BorrowedFrames {
+    len: Cell<usize>,
+    ids: [Cell<u64>; BORROWED_SLOTS],
+    frames: [Cell<Option<BorrowedFrame>>; BORROWED_SLOTS],
+}
+
+impl BorrowedFrames {
+    #[inline]
+    fn push(&self, id: u64, frame: BorrowedFrame) -> bool {
+        let n = self.len.get();
+        if n >= BORROWED_SLOTS {
+            return false;
+        }
+        self.ids[n].set(id);
+        self.frames[n].set(Some(frame));
+        self.len.set(n + 1);
+        true
+    }
+
+    #[inline]
+    fn pop_top(&self, id: u64) -> bool {
+        let n = self.len.get();
+        if n == 0 || n > BORROWED_SLOTS || self.ids[n - 1].get() != id {
+            return false;
+        }
+        self.len.set(n - 1);
+        true
+    }
+
+    fn remove(&self, id: u64) -> bool {
+        let n = self.len.get();
+        let Some(pos) = (0..n).rev().find(|&i| self.ids[i].get() == id) else {
+            return false;
+        };
+        for i in pos..n - 1 {
+            self.ids[i].set(self.ids[i + 1].get());
+            self.frames[i].set(self.frames[i + 1].get());
+        }
+        self.len.set(n - 1);
+        true
+    }
+
+    fn id(&self, i: usize) -> u64 {
+        self.ids[i].get()
+    }
+
+    fn get(&self, i: usize) -> BorrowedFrame {
+        self.frames[i].get().expect("a slot below len is filled")
+    }
+
+    fn clear(&self) {
+        self.len.set(0);
+    }
+}
+
+thread_local! {
+    static BORROWED_FRAMES: BorrowedFrames = const {
+        BorrowedFrames {
+            len: Cell::new(0),
+            ids: [const { Cell::new(0) }; BORROWED_SLOTS],
+            frames: [const { Cell::new(None) }; BORROWED_SLOTS],
+        }
+    };
+}
+
+fn for_each_frame_innermost(mut f: impl FnMut(bool, bool, u64, &mut dyn FnMut(&mut PgError))) {
     EMIT_CONTEXT_CALLBACKS.with(|s| {
         let mut st = s.borrow_mut();
-        if let Some(pos) = st.iter().position(|c| c.id == id) {
-            st.remove(pos);
+        BORROWED_FRAMES.with(|b| {
+            let mut i = st.len();
+            let mut j = b.len.get().min(BORROWED_SLOTS);
+            loop {
+                let take_general = match (i, j) {
+                    (0, 0) => break,
+                    (_, 0) => true,
+                    (0, _) => false,
+                    _ => st[i - 1].id > b.id(j - 1),
+                };
+                if take_general {
+                    i -= 1;
+                    let e = &mut st[i];
+                    let (emit, walk, id) = (e.emit, e.walk, e.id);
+                    let cb = &mut e.callback;
+                    f(emit, walk, id, &mut |err: &mut PgError| cb.call(err));
+                } else {
+                    j -= 1;
+                    let (e, id) = (b.get(j), b.id(j));
+                    // SAFETY: push_context_frame_borrowed's contract: the closure is alive and unmoved while its
+                    // slot is filled.
+                    let cb = unsafe { &mut *e.callback.as_ptr() };
+                    f(e.emit, e.walk, id, cb);
+                }
+            }
+        })
+    });
+}
+
+/// C's saved `error_context_stack` pointer: the frames registered before
+/// this mark (see `apply_emit_context_callbacks_below`).
+pub fn context_stack_mark() -> u64 {
+    EMIT_CONTEXT_NEXT_ID.with(Cell::get)
+}
+
+/// errfinish's context walk over a report re-thrown under a saved
+/// `error_context_stack` (parallel.c:1193 ProcessParallelMessage): only the
+/// emit frames registered before `mark`, innermost first.
+pub fn apply_emit_context_callbacks_below(error: &mut PgError, mark: u64) {
+    for_each_frame_innermost(|emit, _walk, id, cb| {
+        if emit && id < mark {
+            cb(&mut *error);
         }
     });
+}
+
+#[inline]
+pub fn pop_emit_context_callback(id: u64) {
+    if !BORROWED_FRAMES.with(|b| b.pop_top(id)) {
+        pop_emit_context_callback_slow(id);
+    }
+}
+
+#[inline(never)]
+fn pop_emit_context_callback_slow(id: u64) {
+    if BORROWED_FRAMES.with(|b| b.remove(id)) {
+        return;
+    }
+    let popped = EMIT_CONTEXT_CALLBACKS.with(|s| {
+        let mut st = s.borrow_mut();
+        if st.last().is_some_and(|c| c.id == id) {
+            st.pop()
+        } else {
+            st.iter().rposition(|c| c.id == id).map(|pos| st.remove(pos))
+        }
+    });
+    drop(popped);
 }
 
 // C's error_context_stack walk over the top frame: `emit` selects the frames
 // that decorate a report (errfinish), otherwise the ones GetErrorContextStack
 // reads.
 fn run_context_callbacks(emit: bool) {
-    if EMIT_CONTEXT_CALLBACKS.with(|s| s.borrow().is_empty()) {
+    if no_context_frames() {
         return;
     }
     // Clone the in-flight error out, run the callbacks over the clone, then
@@ -99,11 +276,9 @@ fn run_context_callbacks(emit: bool) {
         Some(e) => e,
         None => return,
     };
-    EMIT_CONTEXT_CALLBACKS.with(|s| {
-        let mut st = s.borrow_mut();
-        // innermost-registered first, as C walks error_context_stack.
-        for entry in st.iter_mut().rev().filter(|c| if emit { c.emit } else { c.walk }) {
-            (entry.callback)(&mut error);
+    for_each_frame_innermost(|e, w, _id, cb| {
+        if if emit { e } else { w } {
+            cb(&mut error);
         }
     });
     STACK.with(|s| {
@@ -111,6 +286,17 @@ fn run_context_callbacks(emit: bool) {
             f.error = error;
         }
     });
+}
+
+// errhidecontext keeps CONTEXT out of the server log. When the in-flight report also goes to no client and no
+// emit_log_hook reads it, its context is printed nowhere, so errfinish does not walk the emit frames for it. Otherwise
+// a LOG line emitted at every level of an N-deep SQL function recursion runs N callbacks each, O(N^2) for the
+// recursion: Gravity's diagnostic lines under regress infinite_recurse ran past 15 min.
+fn context_read_by_no_one() -> bool {
+    !sink::emit_log_hook_installed()
+        && STACK.with(|s| {
+            s.borrow().frames.last().is_some_and(|f| f.error.hide_context && !f.output_to_client)
+        })
 }
 
 /// pcb_error_callback over the in-flight (non-ERROR) report.
@@ -158,6 +344,11 @@ pub fn suppress_statement() {
 /// proc_exit_prepare's `error_context_stack = NULL`.
 pub fn clear_emit_context_callbacks() {
     EMIT_CONTEXT_CALLBACKS.with(|s| s.borrow_mut().clear());
+    BORROWED_FRAMES.with(BorrowedFrames::clear);
+}
+
+fn no_context_frames() -> bool {
+    BORROWED_FRAMES.with(|b| b.len.get() == 0) && EMIT_CONTEXT_CALLBACKS.with(|s| s.borrow().is_empty())
 }
 
 #[cold]
@@ -171,13 +362,29 @@ pub fn in_error_recursion_trouble() -> bool {
     STACK.with(|s| s.borrow().recursion_depth > 2)
 }
 
+#[test]
+fn recursive_error_strings_are_ascii() {
+    for depth in [2, 3] {
+        STACK.with(|s| s.borrow_mut().recursion_depth = depth);
+        let mut buf = vec![b'M'];
+        let result = crate::report::err_sendbytes(&mut buf, b"caf\xc3\xa9 \x80\xff\x7f\0ignored");
+        STACK.with(|s| s.borrow_mut().recursion_depth = 0);
+        result.unwrap();
+        let expected: &[u8] = if depth > 2 {
+            b"Mcaf?? ??\x7f\0"
+        } else {
+            b"Mcaf\xc3\xa9 \x80\xff\x7f\0"
+        };
+        assert_eq!(buf, expected);
+    }
+}
+
 /// True when this thread carries no in-flight error state: no open error
 /// frames and no emit-context callbacks. The session-envelope boundary
 /// (harvested with SessionEnvelope Phase 0, elog side ported from
 /// 9a8eff9b1) refuses to bind or unbind across a dirty error boundary.
 pub fn error_stack_clean() -> bool {
-    STACK.with(|s| s.borrow().frames.is_empty())
-        && EMIT_CONTEXT_CALLBACKS.with(|s| s.borrow().is_empty())
+    STACK.with(|s| s.borrow().frames.is_empty()) && no_context_frames()
 }
 
 #[cold]
@@ -231,6 +438,8 @@ pub fn errstart(elevel: ErrorLevel, domain: Option<&str>) -> bool {
         // The C-shaped stack API takes its location from errfinish's
         // arguments; drop the constructor's capture (it would point here).
         error.location = None;
+        error.output_to_server = Some(output_to_server);
+        error.output_to_client = Some(output_to_client);
         // Save errno immediately so error parameter eval can't change it.
         error.saved_errno = Some(errno::current_errno());
         let domain = domain.unwrap_or("postgres");
@@ -330,12 +539,13 @@ pub fn errfinish(filename: Option<&str>, lineno: i32, funcname: Option<&str>) ->
     }
 
     apply_armed_parser_errposition();
-    run_context_callbacks(true);
+    if !context_read_by_no_one() {
+        run_context_callbacks(true);
+    }
 
     let emitted = emit_top_frame();
 
     let _ = pop_top_frame();
-    emitted?;
 
     // Perform error recovery action as specified by elevel.
     if elevel == FATAL {
@@ -366,6 +576,12 @@ pub fn errfinish(filename: Option<&str>, lineno: i32, funcname: Option<&str>) ->
         // "retry a failed fsync and trust the kernel", i.e. data loss.
         std::panic::panic_any(types_error::PanicExitThread);
     }
+
+    // a terminate the frontend send raised (secure_write's
+    // ProcessClientWriteInterrupt, the client not reading) ends the caller:
+    // in C that ereport(FATAL) exits from inside the send and this elog
+    // never returns.
+    emitted?;
 
     // C ends with CHECK_FOR_INTERRUPTS(); the interrupt machinery owns that
     // and it is the caller's responsibility here.
@@ -438,6 +654,12 @@ pub fn EmitErrorReport() -> PgResult<()> {
 #[cold]
 #[inline(never)]
 pub fn emit_error_report_for(error: &PgError) {
+    let _ = try_emit_error_report_for(error);
+}
+
+#[cold]
+#[inline(never)]
+pub fn try_emit_error_report_for(error: &PgError) -> PgResult<()> {
     report::reset_formatted_log_time();
     let traced;
     let error = if error.backtrace.is_none()
@@ -454,8 +676,12 @@ pub fn emit_error_report_for(error: &PgError) {
     } else {
         error
     };
-    let mut output_to_server = policy::should_output_to_server(error.level);
-    let output_to_client = policy::should_output_to_client(error.level);
+    let mut output_to_server = error
+        .output_to_server
+        .unwrap_or_else(|| policy::should_output_to_server(error.level));
+    let output_to_client = error
+        .output_to_client
+        .unwrap_or_else(|| policy::should_output_to_client(error.level));
     if output_to_server {
         sink::call_emit_log_hook(error, &mut output_to_server);
     }
@@ -464,15 +690,17 @@ pub fn emit_error_report_for(error: &PgError) {
     }
     if output_to_client {
         // The client-encoding conversion failure is what C's PG_CATCH then
-        // reports in place of the original error (its text is ASCII).
+        // reports in place of the original error (its text is ASCII). A
+        // terminate raised by the send ends the caller instead of being
+        // discarded.
         if let Err(e) = report::send_message_to_frontend(error) {
             if e.level >= FATAL {
-                let _ = ThrowErrorData(*e);
-            } else {
-                let _ = report::send_message_to_frontend(&e);
+                return Err(e);
             }
+            return report::send_message_to_frontend(&e);
         }
     }
+    Ok(())
 }
 
 /// No-handler arm of errstart (elog.c:375-381): with `PG_exception_stack ==
@@ -487,6 +715,8 @@ pub fn emit_unhandled_error_report(error: &PgError) {
     if error.level == ERROR {
         let mut promoted = error.clone();
         promoted.level = FATAL;
+        promoted.output_to_server = Some(policy::should_output_to_server(FATAL));
+        promoted.output_to_client = Some(policy::should_output_to_client(FATAL));
         emit_error_report_for(&promoted);
         return;
     }
@@ -514,6 +744,24 @@ pub fn panic_on_crit_section_escape(error: &PgError) {
     flush_all();
     // C abort(): the catchable crash class, as in errfinish's PANIC arm.
     std::panic::panic_any(types_error::PanicExitThread);
+}
+
+/// D2933 (user 2026-09-29: "when crashing, the whole system should abort like
+/// postgres does"): a plain Rust panic -- a payload that is neither a
+/// structured error (`PgError` / `Box<PgError>`) nor an exit payload
+/// (ProcExitThread, PanicExitThread, KilledBySignal, PoolRetireRaw) -- is C's
+/// abort() (a failed Assert, a SIGSEGV), never an ERROR. A containment layer
+/// that caught one hands it here: the unwind goes on as `PanicExitThread`, so
+/// the thread dies as crashed and the postmaster runs the crash restart. The
+/// panic hook (seams_init install_panic_hook) already printed the message, the
+/// location and the query, as C's TRAP line does; resume_unwind does not run
+/// the hook again.
+#[cold]
+#[inline(never)]
+pub fn abort_on_plain_panic(payload: Box<dyn std::any::Any + Send>) -> ! {
+    drop(payload);
+    flush_all();
+    std::panic::resume_unwind(Box::new(types_error::PanicExitThread))
 }
 
 // Current-frame mutators (errcode, errmsg, errdetail, ...). Each returns
@@ -623,6 +871,17 @@ pub fn ereport_msg(elevel: ErrorLevel, msg: String, detail: Option<String>) -> P
     if let Some(detail) = detail {
         errdetail(&detail)?;
     }
+    errfinish(None, 0, None)
+}
+
+#[cold]
+#[inline(never)]
+pub fn ereport_msg_detail_log(elevel: ErrorLevel, msg: String, detail_log: String) -> PgResult<()> {
+    if !errstart(elevel, None) {
+        return Ok(());
+    }
+    errmsg_internal(&msg)?;
+    errdetail_log(&detail_log)?;
     errfinish(None, 0, None)
 }
 
@@ -809,6 +1068,7 @@ pub fn ThrowErrorData(edata: PgError) -> PgResult<()> {
         }
         new.hide_statement = edata.hide_statement;
         new.hide_context = edata.hide_context;
+        new.context_abandoned = edata.context_abandoned;
 
         st.recursion_depth -= 1;
     });

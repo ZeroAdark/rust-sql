@@ -1,0 +1,328 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2e s1c s2c
+step s2e: EXPLAIN (COSTS OFF) UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE) RETURNING id, queue, attempts;
+QUERY PLAN                                                                        
+----------------------------------------------------------------------------------
+Update on job                                                                     
+  InitPlan 1                                                                      
+    ->  Limit                                                                     
+          ->  LockRows                                                            
+                ->  Index Scan using job_ready on job job_1                       
+                      Filter: ((state = 'ready'::text) AND (queue = 'mail'::text))
+  ->  Index Scan using job_pkey on job                                            
+        Index Cond: (id = (InitPlan 1).col1)                                      
+(8 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1n s2u s1c s2c s3sel
+step s1n: UPDATE job SET note = 'held', attempts = attempts + 10 WHERE id = 5;
+step s2u: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE) RETURNING id, queue, attempts, note; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|queue|attempts|note
+--+-----+--------+----
+ 5|mail |      11|held
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+ 5|running|      11|held
+10|ready  |       0|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|ready  |       0|n25 
+(5 rows)
+
+
+starting permutation: s1d s2u s1c s2c s3sel
+step s1d: UPDATE job SET state = 'done' WHERE id = 5;
+step s2u: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE) RETURNING id, queue, attempts, note; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|queue|attempts|note
+--+-----+--------+----
+10|mail |       1|n10 
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+ 5|done   |       0|n5  
+10|running|       1|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|ready  |       0|n25 
+(5 rows)
+
+
+starting permutation: s1x s2u s1c s2c s3sel
+step s1x: DELETE FROM job WHERE id = 5;
+step s2u: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE) RETURNING id, queue, attempts, note; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|queue|attempts|note
+--+-----+--------+----
+10|mail |       1|n10 
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+10|running|       1|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|ready  |       0|n25 
+(4 rows)
+
+
+starting permutation: s1p s2u s1c s2c s3sel
+step s1p: UPDATE job SET prio = 4 WHERE id = 5;
+step s2u: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE) RETURNING id, queue, attempts, note; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|queue|attempts|note
+--+-----+--------+----
+ 5|mail |       1|n5  
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+ 5|running|       1|n5  
+10|ready  |       0|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|ready  |       0|n25 
+(5 rows)
+
+
+starting permutation: s1n s2u s1a s2c s3sel
+step s1n: UPDATE job SET note = 'held', attempts = attempts + 10 WHERE id = 5;
+step s2u: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE) RETURNING id, queue, attempts, note; <waiting ...>
+step s1a: ROLLBACK;
+step s2u: <... completed>
+id|queue|attempts|note
+--+-----+--------+----
+ 5|mail |       1|n5  
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+ 5|running|       1|n5  
+10|ready  |       0|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|ready  |       0|n25 
+(5 rows)
+
+
+starting permutation: s1n s2s s1c s2c s3sel
+step s1n: UPDATE job SET note = 'held', attempts = attempts + 10 WHERE id = 5;
+step s2s: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, queue, attempts, note;
+id|queue|attempts|note
+--+-----+--------+----
+10|mail |       1|n10 
+(1 row)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+ 5|ready  |      10|held
+10|running|       1|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|ready  |       0|n25 
+(5 rows)
+
+
+starting permutation: s1d s2d s1c s2c s3sel
+step s1d: UPDATE job SET state = 'done' WHERE id = 5;
+step s2d: DELETE FROM job WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE) RETURNING id, note; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|note
+--+----
+10|n10 
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state|attempts|note
+--+-----+--------+----
+ 5|done |       0|n5  
+15|ready|       0|n15 
+20|done |       0|n20 
+25|ready|       0|n25 
+(4 rows)
+
+
+starting permutation: s1n s2d s1c s2c s3sel
+step s1n: UPDATE job SET note = 'held', attempts = attempts + 10 WHERE id = 5;
+step s2d: DELETE FROM job WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE) RETURNING id, note; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|note
+--+----
+ 5|held
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state|attempts|note
+--+-----+--------+----
+10|ready|       0|n10 
+15|ready|       0|n15 
+20|done |       0|n20 
+25|ready|       0|n25 
+(4 rows)
+
+
+starting permutation: s1n s2k s1c s2c s3sel
+step s1n: UPDATE job SET note = 'held', attempts = attempts + 10 WHERE id = 5;
+step s2k: DELETE FROM job WHERE id = (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, note;
+id|note
+--+----
+10|n10 
+(1 row)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state|attempts|note
+--+-----+--------+----
+ 5|ready|      10|held
+15|ready|       0|n15 
+20|done |       0|n20 
+25|ready|       0|n25 
+(4 rows)
+
+
+starting permutation: s2ie s1c s2c
+step s2ie: EXPLAIN (COSTS OFF) UPDATE job SET state = 'running' WHERE id IN (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 3 FOR UPDATE) RETURNING id;
+QUERY PLAN                                                                                        
+--------------------------------------------------------------------------------------------------
+Update on job                                                                                     
+  ->  Nested Loop                                                                                 
+        ->  HashAggregate                                                                         
+              Group Key: "ANY_subquery".id                                                        
+              ->  Subquery Scan on "ANY_subquery"                                                 
+                    ->  Limit                                                                     
+                          ->  LockRows                                                            
+                                ->  Index Scan using job_ready on job job_1                       
+                                      Filter: ((state = 'ready'::text) AND (queue = 'mail'::text))
+        ->  Index Scan using job_pkey on job                                                      
+              Index Cond: (id = "ANY_subquery".id)                                                
+(11 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1n s2i s1c s2c s3sel
+step s1n: UPDATE job SET note = 'held', attempts = attempts + 10 WHERE id = 5;
+step s2i: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id IN (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 3 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+ 5|running|      11|held
+10|running|       1|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|running|       1|n25 
+(5 rows)
+
+
+starting permutation: s1d s2i s1c s2c s3sel
+step s1d: UPDATE job SET state = 'done' WHERE id = 5;
+step s2i: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id IN (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 3 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+ 5|done   |       0|n5  
+10|running|       1|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|running|       1|n25 
+35|running|       1|n35 
+(6 rows)
+
+
+starting permutation: s1x s2i s1c s2c s3sel
+step s1x: DELETE FROM job WHERE id = 5;
+step s2i: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id IN (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 3 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+10|running|       1|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|running|       1|n25 
+35|running|       1|n35 
+(5 rows)
+
+
+starting permutation: s1n s2j s1c s2c s3sel
+step s1n: UPDATE job SET note = 'held', attempts = attempts + 10 WHERE id = 5;
+step s2j: UPDATE job SET state = 'running', attempts = attempts + 1 WHERE id IN (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 3 FOR UPDATE SKIP LOCKED);
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state  |attempts|note
+--+-------+--------+----
+ 5|ready  |      10|held
+10|running|       1|n10 
+15|ready  |       0|n15 
+20|done   |       0|n20 
+25|running|       1|n25 
+35|running|       1|n35 
+(6 rows)
+
+
+starting permutation: s1d s2x s1c s2c s3sel
+step s1d: UPDATE job SET state = 'done' WHERE id = 5;
+step s2x: DELETE FROM job WHERE id IN (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 3 FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state|attempts|note
+--+-----+--------+----
+ 5|done |       0|n5  
+15|ready|       0|n15 
+20|done |       0|n20 
+(3 rows)
+
+
+starting permutation: s1n s2x s1a s2c s3sel
+step s1n: UPDATE job SET note = 'held', attempts = attempts + 10 WHERE id = 5;
+step s2x: DELETE FROM job WHERE id IN (SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY prio, id LIMIT 3 FOR UPDATE); <waiting ...>
+step s1a: ROLLBACK;
+step s2x: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, state, attempts, note FROM job WHERE id IN (5, 10, 15, 20, 25) OR state = 'running' ORDER BY id;
+id|state|attempts|note
+--+-----+--------+----
+15|ready|       0|n15 
+20|done |       0|n20 
+(2 rows)
+

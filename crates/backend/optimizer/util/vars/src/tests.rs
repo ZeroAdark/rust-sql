@@ -325,5 +325,68 @@ fn seam_installed_and_consistent() {
     let mcx = ctx.mcx();
     let v = var(mcx, 1, 1, 0);
     assert!(var_seams::contain_var_clause::is_installed());
-    assert!(var_seams::contain_var_clause::call(v));
+    assert!(var_seams::contain_var_clause::call(v).unwrap());
+}
+
+#[test]
+fn flatten_join_alias_vars_expands_subquery_placeholder_relids() {
+    use types_nodes::primnodes::{JoinExpr, PlaceHolderVar, RangeTblRef};
+    let ctx = cx();
+    let mcx = ctx.mcx();
+    let rtable = NodeList::make3(
+        mcx, dummy_rte(mcx), dummy_rte(mcx), join_rte(mcx, var(mcx, 1, 1, 0)),
+    ).unwrap();
+    let join = Node::mk(mcx, JoinExpr {
+        jointype: types_nodes::jointype::JoinType::JOIN_INNER,
+        isNatural: false,
+        larg: Node::mk(mcx, RangeTblRef { rtindex: 1 }).unwrap(),
+        rarg: Node::mk(mcx, RangeTblRef { rtindex: 2 }).unwrap(),
+        usingClause: NodeList::nil(), join_using_alias: None,
+        quals: None, alias: None, rtindex: 3,
+    }).unwrap();
+    let jt = Node::mk_mut(mcx, FromExpr {
+        fromlist: NodeList::make1(mcx, join).unwrap(), quals: None,
+    }).unwrap().seal_ref();
+    for levelsup in [0, 1, 2] {
+        let mut phrels = Bitmapset::empty();
+        phrels.add_member(mcx, 3).unwrap();
+        let mut nulling = Bitmapset::empty();
+        nulling.add_member(mcx, 4).unwrap();
+        let phv = Node::mk(mcx, PlaceHolderVar {
+            phexpr: var(mcx, 1, 1, levelsup), phrels,
+            phnullingrels: nulling, phid: 1, phlevelsup: levelsup,
+        }).unwrap();
+        let q = query_tlist_var(mcx, phv);
+        let out = flatten_join_alias_vars(mcx, &rtable, Some(jt), None, q).unwrap();
+        let result = out.as_query().unwrap().targetList.nth(0)
+            .as_target_entry().unwrap().expr.as_place_holder_var().unwrap();
+        let expected = if levelsup == 1 { vec![1, 2] } else { vec![3] };
+        assert_eq!(result.phrels.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(result.phnullingrels.iter().collect::<Vec<_>>(), vec![4]);
+        assert_eq!(phv.as_place_holder_var().unwrap().phrels.iter().collect::<Vec<_>>(), vec![3]);
+    }
+}
+
+// var.c contain_var_clause: the walk's check_stack_depth ERROR (54001)
+// reaches the caller through the seam instead of panicking.
+#[test]
+fn contain_var_clause_seam_propagates_stack_depth_error() {
+    let r = std::thread::spawn(|| {
+        let ctx = cx();
+        let mcx = ctx.mcx();
+        let arg = var(mcx, 1, 1, 0);
+        let op = Node::mk(
+            mcx,
+            OpExpr { opno: 96, opfuncid: 65, opresulttype: 16, args: NodeList::make2(mcx, arg, arg).unwrap(), ..Default::default() },
+        )
+        .unwrap();
+        stack_depth_core::set_stack_base();
+        stack_depth_core::set_enforced_stack_budget_for_tests(1);
+        let r = var_seams::contain_var_clause::call(op).map_err(|e| e.sqlstate());
+        stack_depth_core::set_enforced_stack_budget_for_tests(isize::MAX);
+        r
+    })
+    .join()
+    .expect("seam must not panic");
+    assert_eq!(r, Err(types_error::ERRCODE_STATEMENT_TOO_COMPLEX));
 }

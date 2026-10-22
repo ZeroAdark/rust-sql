@@ -1,0 +1,19 @@
+-- regress-full-rowsecurity-129
+-- SELECT * FROM r1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=28708 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op521(op514(v1.1, c23:10), c23:10)
+  subplan 1 nested Expr params=($exec0=v1.1)
+  inner node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0
+  source const
+  project (1=op514($exec0, c23:100))
+  filter op97(subplan1(v1.1), c23:400)
+  filter op96(op514(op514(v1.1, c23:10), c23:10), op514(v1.1, c23:100))
+  project (1=v1.1, 2=op514(v1.1, c23:10), 3=op514(v1.1, c23:100))
+  outs 1=w8:val 2=w4:val 3=w4:val
+param $exec0 owner=subplan1 type=23 rep=w8:val
+mapped: Result SeqScan SubPlan

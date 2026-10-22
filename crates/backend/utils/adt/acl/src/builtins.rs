@@ -49,7 +49,9 @@ fn aclitem_result(fcinfo: &Fcinfo, item: &AclItem) -> PgResult<Datum> {
 fn arg_text_str<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<Cow<'a, str>> {
     // SAFETY: catalog arg type text — non-null varlena (strict fn).
     let v = unsafe { fcinfo.arg_varlena_packed(i) }?;
-    Ok(String::from_utf8_lossy(v.data()))
+    let b = v.data();
+    let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+    Ok(String::from_utf8_lossy(&b[..end]))
 }
 
 fn arg_name_str<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<Cow<'a, str>> {
@@ -226,7 +228,8 @@ fn fc_acldefault_sql(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         other => {
             // acl.c:969 elog(ERROR, "...: %c", objtypec): the one byte goes
             // out verbatim (NUL truncates), never re-encoded as UTF-8.
-            let mut msg = b"unrecognized object type abbreviation: ".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"unrecognized object type abbreviation: ");
             msg.push(other);
             return Err(Box::new(PgError::error_raw_message(msg)));
         }

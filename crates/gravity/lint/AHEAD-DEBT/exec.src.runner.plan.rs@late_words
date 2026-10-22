@@ -1,0 +1,1 @@
+crates/gravity/exec/src/runner/plan.rs	late_words	licence	bind	a producer's runtime keys evaluated at its index-order start, before its consumer's first pull (PG at the scan's first pull) [NONE; D899,D2736]

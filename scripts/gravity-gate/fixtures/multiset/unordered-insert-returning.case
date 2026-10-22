@@ -1,0 +1,13 @@
+# INSERT .. RETURNING fixes no order (its inner ORDER BY / LIMIT do not count)
+sql: INSERT INTO t SELECT x FROM s ORDER BY 1 LIMIT 3 RETURNING x;
+cols: x
+class: unordered
+verdict: match
+[pg]
+1
+2
+3
+[got]
+2
+3
+1

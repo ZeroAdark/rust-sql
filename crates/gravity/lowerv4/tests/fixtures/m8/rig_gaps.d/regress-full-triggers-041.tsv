@@ -1,0 +1,1 @@
+a routed INSERT whose partition leaves the facts source does not know: the corpus fixtures carry no partition facts (the server serves it, ok vs PostgreSQL: CT-2's regress run, V4R-474)

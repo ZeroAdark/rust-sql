@@ -1,0 +1,18 @@
+-- regress-full-subselect-100
+-- select * from json_tab t1 left join (select json_array(1, a) from json_tab t2) s on false;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=2550 end=sink
+  nodes n1@0 n0@1
+  source range rel=25317 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  nest inner=n2 JOIN_LEFT invariant params=() qual=(c16:0)
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  gate T_List
+  project (1=T_JsonConstructorExpr)
+  project (1=outer.1, 2=inner.1)
+  outs 1=w8:val
+  outs 1=w8:val 2=vl:life/breaker
+mapped: Result SeqScan NestLoop

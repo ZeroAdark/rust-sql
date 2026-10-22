@@ -1,0 +1,40 @@
+-- name: regress-full-constraints-017
+-- sql: SELECT r.conname, pg_catalog.pg_get_constraintdef(r.oid, true) FROM pg_catalog.pg_constraint r WHERE r.conrelid = '21011' AND r.contype = 'c' ORDER BY 1;
+-- test: constraints
+-- shape: 131104c9956f55d5 seen=69
+-- op 660 family=1994 strat=1
+-- rel 2606 pg_constraint am=heap kind=r natts=28
+-- att 2606 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 2 conname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 2606 3 connamespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 4 contype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 5 condeferrable typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 6 condeferred typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 7 conenforced typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 8 convalidated typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 9 conrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 10 contypid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 11 conindid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 12 conparentid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 13 confrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2606 14 confupdtype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 15 confdeltype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 16 confmatchtype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 17 conislocal typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 18 coninhcount typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 2606 19 connoinherit typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 20 conperiod typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2606 21 conkey typid=1005 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 22 confkey typid=1005 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 23 conpfeqop typid=1028 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 24 conppeqop typid=1028 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 25 conffeqop typid=1028 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 26 confdelsetcols typid=1005 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 27 conexclop typid=1028 typmod=-1 len=-1 byval=f notnull=f
+-- att 2606 28 conbin typid=194 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2579 rel=2606 keys=12 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2664 rel=2606 keys=2,3 opts=0,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- idx 2665 rel=2606 keys=9,10,2 opts=0,0,0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=3
+-- idx 2666 rel=2606 keys=10 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2667 rel=2606 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SORT :plan.disabled_nodes 0 :plan.startup_cost 8.305 :plan.total_cost 8.31 :plan.plan_rows 1 :plan.plan_width 96 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {VAR :varno -2 :varattno 1 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location -1} :resno 1 :resname conname :ressortgroupref 1 :resorigtbl 2606 :resorigcol 2 :resjunk false} {TARGETENTRY :expr {VAR :varno -2 :varattno 2 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 0 :varattnosyn 0 :location -1} :resno 2 :resname pg_get_constraintdef :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :plan.qual <> :plan.lefttree {INDEXSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0.2725 :scan.plan.total_cost 8.295 :scan.plan.plan_rows 1 :scan.plan.plan_width 96 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 1 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 2 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location 7} :resno 1 :resname conname :ressortgroupref 1 :resorigtbl 2606 :resorigcol 2 :resjunk false} {TARGETENTRY :expr {FUNCEXPR :funcid 2508 :funcresulttype 25 :funcretset false :funcvariadic false :funcformat 0 :funccollid 100 :inputcollid 0 :args ({VAR :varno 1 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 50} {CONST :consttype 16 :consttypmod -1 :constcollid 0 :constlen 1 :constbyval true :constisnull false :location 57 :constvalue 1 [ 1 0 0 0 0 0 0 0 ]}) :location 18} :resno 2 :resname pg_get_constraintdef :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 92 :opfuncid 61 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 4 :vartype 18 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 4 :location 126} {CONST :consttype 18 :consttypmod -1 :constcollid 0 :constlen 1 :constbyval true :constisnull false :location 138 :constvalue 1 [ 99 0 0 0 0 0 0 0 ]}) :location 136}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :indexid 2665 :indexqual ({OPEXPR :opno 607 :opfuncid 184 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno -3 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 4294967293 :varattnosyn 1 :location -1} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 114 :constvalue 4 [ 19 82 0 0 0 0 0 0 ]}) :location 112}) :indexqualorig ({OPEXPR :opno 607 :opfuncid 184 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 9 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 9 :location 101} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 114 :constvalue 4 [ 19 82 0 0 0 0 0 0 ]}) :location 112}) :indexorderby <> :indexorderbyorig <> :indexorderbyops <> :indexorderdir 1} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :numCols 1 :sortColIdx ( 1) :sortOperators ( 660) :collations ( 950) :nullsFirst ( false)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias {ALIAS :aliasname r :colnames <>} :eref {ALIAS :aliasname r :colnames ("oid" "conname" "connamespace" "contype" "condeferrable" "condeferred" "conenforced" "convalidated" "conrelid" "contypid" "conindid" "conparentid" "confrelid" "confupdtype" "confdeltype" "confmatchtype" "conislocal" "coninhcount" "connoinherit" "conperiod" "conkey" "confkey" "conpfeqop" "conppeqop" "conffeqop" "confdelsetcols" "conexclop" "conbin")} :rtekind 0 :relid 2606 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 2606 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8 9 11 16) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 2606 21011 21011) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 152}

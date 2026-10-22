@@ -6,7 +6,7 @@ use ::types_core::Oid;
 use ::types_error::PgResult;
 use ::std::rc::Rc;
 use ::ts_cache::TSDictionaryCacheEntry;
-use ::types_fmgr::{function_call1_coll, function_call2_coll_in, function_call3_coll};
+use ::types_fmgr::{function_call1_coll_in, function_call2_coll_in, function_call3_coll};
 
 use crate::cache_bind::{self, ConfigMap, ParserFns};
 
@@ -107,9 +107,9 @@ impl<'mcx> ::ts_parse::TsParseEnv<'mcx> for CacheEnv<'mcx> {
     }
 
     fn prs_end(&mut self) -> PgResult<()> {
-        let prsdata = self.prsdata;
+        let (prsdata, mcx) = (self.prsdata, self.mcx);
         let (_, prs) = self.ensure()?;
-        function_call1_coll(&mut prs.end, InvalidOid, prsdata).map(|_| ())
+        function_call1_coll_in(&mut prs.end, InvalidOid, mcx, prsdata).map(|_| ())
     }
 
     fn map_len(&mut self, toktype: i32) -> PgResult<usize> {

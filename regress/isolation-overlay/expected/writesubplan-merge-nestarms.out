@@ -1,0 +1,208 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2e s1upd s2m s1c s2sel s2c
+step s2e: EXPLAIN (COSTS OFF) MERGE INTO na_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED AND t.n >= 0 THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b);
+QUERY PLAN                                                
+----------------------------------------------------------
+Merge on na_t t                                           
+  Merge on na_t1 t_1                                      
+  Merge on na_t2 t_2                                      
+  ->  Nested Loop Left Join                               
+        ->  Values Scan on "*VALUES*"                     
+        ->  Append                                        
+              ->  Index Scan using na_t1_pkey on na_t1 t_1
+                    Index Cond: (k = "*VALUES*".column1)  
+              ->  Index Scan using na_t2_pkey on na_t2 t_2
+                    Index Cond: (k = "*VALUES*".column1)  
+(10 rows)
+
+step s1upd: UPDATE na_t SET val = 'a1' WHERE k = 10;
+step s2m: MERGE INTO na_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED AND t.n >= 0 THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM na_t WHERE k IN (10, 12, 51, 10110, 10149) ORDER BY k;
+tableoid| k|val | n
+--------+--+----+--
+na_t1   |10|a1 m|11
+na_t1   |51|ins | 2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1neg s2m s1c s2sel s2c
+step s1neg: UPDATE na_t SET n = -1 WHERE k = 10;
+step s2m: MERGE INTO na_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED AND t.n >= 0 THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM na_t WHERE k IN (10, 12, 51, 10110, 10149) ORDER BY k;
+tableoid| k|val|n
+--------+--+---+-
+na_t1   |51|ins|2
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2m s1c s2sel s2c
+step s1del: DELETE FROM na_t WHERE k = 10;
+step s2m: MERGE INTO na_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED AND t.n >= 0 THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM na_t WHERE k IN (10, 12, 51, 10110, 10149) ORDER BY k;
+tableoid| k|val|n
+--------+--+---+-
+na_t1   |10|ins|1
+na_t1   |51|ins|2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1key s2m s1c s2sel s2c
+step s1key: UPDATE na_t SET k = 12 WHERE k = 10;
+step s2m: MERGE INTO na_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED AND t.n >= 0 THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM na_t WHERE k IN (10, 12, 51, 10110, 10149) ORDER BY k;
+tableoid| k|val| n
+--------+--+---+--
+na_t1   |10|ins| 1
+na_t1   |12|v10|10
+na_t1   |51|ins| 2
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1mv s2m s1c s2sel s2c
+step s1mv: UPDATE na_t SET k = 10149 WHERE k = 10;
+step s2m: MERGE INTO na_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED AND t.n >= 0 THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2sel: SELECT tableoid::regclass, k, val, n FROM na_t WHERE k IN (10, 12, 51, 10110, 10149) ORDER BY k;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2c: COMMIT;
+
+starting permutation: s1upd s2m s1a s2sel s2c
+step s1upd: UPDATE na_t SET val = 'a1' WHERE k = 10;
+step s2m: MERGE INTO na_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED AND t.n >= 0 THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1a: ROLLBACK;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM na_t WHERE k IN (10, 12, 51, 10110, 10149) ORDER BY k;
+tableoid| k|val  | n
+--------+--+-----+--
+na_t1   |10|v10 m|11
+na_t1   |51|ins  | 2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1upd s2r s1c s2sel s2c
+step s1upd: UPDATE na_t SET val = 'a1' WHERE k = 10;
+step s2r: MERGE INTO na_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED AND t.n >= 0 THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b) RETURNING merge_action(), tableoid::regclass, t.*; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+merge_action|tableoid| k|val | n
+------------+--------+--+----+--
+UPDATE      |na_t1   |10|a1 m|11
+INSERT      |na_t1   |51|ins | 2
+(2 rows)
+
+step s2sel: SELECT tableoid::regclass, k, val, n FROM na_t WHERE k IN (10, 12, 51, 10110, 10149) ORDER BY k;
+tableoid| k|val | n
+--------+--+----+--
+na_t1   |10|a1 m|11
+na_t1   |51|ins | 2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2r s1c s2sel s2c
+step s1del: DELETE FROM na_t WHERE k = 10;
+step s2r: MERGE INTO na_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED AND t.n >= 0 THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b) RETURNING merge_action(), tableoid::regclass, t.*; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+merge_action|tableoid| k|val|n
+------------+--------+--+---+-
+INSERT      |na_t1   |10|ins|1
+INSERT      |na_t1   |51|ins|2
+(2 rows)
+
+step s2sel: SELECT tableoid::regclass, k, val, n FROM na_t WHERE k IN (10, 12, 51, 10110, 10149) ORDER BY k;
+tableoid| k|val|n
+--------+--+---+-
+na_t1   |10|ins|1
+na_t1   |51|ins|2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1both s2two s1c s2sel s2c
+step s1both: UPDATE na_t SET val = val || '!' WHERE k IN (10, 10110);
+step s2two: MERGE INTO na_t t USING (VALUES (10, 1), (10110, 2)) s(a, b) ON t.k = s.a WHEN MATCHED THEN UPDATE SET val = t.val || ' m' WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1c: COMMIT;
+step s2two: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM na_t WHERE k IN (10, 12, 51, 10110, 10149) ORDER BY k;
+tableoid|    k|val   | n
+--------+-----+------+--
+na_t1   |   10|v10! m|10
+na_t2   |10110|ins   | 2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s3e s1hu s3m s1c s3sel s2c
+step s3e: EXPLAIN (COSTS OFF) MERGE INTO nh_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b);
+QUERY PLAN                                          
+----------------------------------------------------
+Merge on nh_t t                                     
+  Merge on nh_t1 t_1                                
+  Merge on nh_t2 t_2                                
+  ->  Nested Loop Left Join                         
+        ->  Values Scan on "*VALUES*"               
+        ->  Append                                  
+              ->  Seq Scan on nh_t1 t_1             
+                    Filter: (k = "*VALUES*".column1)
+              ->  Seq Scan on nh_t2 t_2             
+                    Filter: (k = "*VALUES*".column1)
+(10 rows)
+
+step s1hu: UPDATE nh_t SET val = 'a1' WHERE k = 10;
+step s3m: MERGE INTO nh_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM nh_t WHERE k IN (10, 12, 51) ORDER BY k, val;
+tableoid| k|val | n
+--------+--+----+--
+nh_t1   |10|a1 m|11
+nh_t1   |51|ins | 2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1hd s3m s1c s3sel s2c
+step s1hd: DELETE FROM nh_t WHERE k = 10;
+step s3m: MERGE INTO nh_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM nh_t WHERE k IN (10, 12, 51) ORDER BY k, val;
+tableoid| k|val|n
+--------+--+---+-
+nh_t1   |10|ins|1
+nh_t1   |51|ins|2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1hk s3m s1c s3sel s2c
+step s1hk: UPDATE nh_t SET k = 12 WHERE k = 10;
+step s3m: MERGE INTO nh_t t USING (VALUES (10, 1), (51, 2)) s(a, b) ON t.k = s.a WHEN MATCHED THEN UPDATE SET val = t.val || ' m', n = t.n + s.b WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'ins', s.b); <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM nh_t WHERE k IN (10, 12, 51) ORDER BY k, val;
+tableoid| k|val| n
+--------+--+---+--
+nh_t1   |10|ins| 1
+nh_t1   |12|v10|10
+nh_t1   |51|ins| 2
+(3 rows)
+
+step s2c: COMMIT;

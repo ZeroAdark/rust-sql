@@ -76,7 +76,7 @@ fn pg_largeobject_aclmask_snapshot<'mcx>(
         Some(image) => {
             let payload = &image[VARHDRSZ..];
             let n = adt_acl::varlena::check_acl_payload(payload)?;
-            let mut items: Vec<AclItem> = Vec::with_capacity(n);
+            let mut items: Vec<AclItem> = ::mcx::std_vec_with_capacity("catalog", n)?;
             for i in 0..n {
                 items.push(adt_acl::varlena::read_acl_item(payload, i));
             }

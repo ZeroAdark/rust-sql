@@ -16,6 +16,9 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use mcx::MemoryContext;
 use types_error::PgResult;
 
+mod dsa_model;
+pub use dsa_model::DsaSizeModel;
+
 const RT_SPAN: i32 = 8;
 const RT_NODE_MAX_SLOTS: usize = 1 << RT_SPAN;
 const RT_CHUNK_MASK: u64 = (RT_NODE_MAX_SLOTS - 1) as u64;
@@ -105,7 +108,7 @@ pub enum SizeClass {
     Class256,
 }
 
-const NUM_SIZE_CLASSES: usize = 5;
+pub const NUM_SIZE_CLASSES: usize = 5;
 
 const CLASS_FANOUT: [usize; NUM_SIZE_CLASSES] = [
     RT_FANOUT_4,
@@ -123,13 +126,49 @@ const CLASS_ALLOC_SIZE: [usize; NUM_SIZE_CLASSES] = [
     size_of::<Node256>(),
 ];
 
-const CLASS_NAME: [&str; NUM_SIZE_CLASSES] = [
-    "radix_tree node4",
-    "radix_tree node16_lo",
-    "radix_tree node16_hi",
-    "radix_tree node48",
-    "radix_tree node256",
+// RT_SHMEM's fanouts fit each node into a DSA size class (radixtree.h:579).
+const SHMEM_FANOUT_16_LO: usize = (160 - offset_of!(Node16, children)) / size_of::<RtSlot>();
+const SHMEM_FANOUT_48: usize = {
+    let f = (768 - offset_of!(Node48, children)) / size_of::<RtSlot>();
+    if f < RT_FANOUT_48_MAX { f } else { RT_FANOUT_48_MAX }
+};
+const SHMEM_CLASS_FANOUT: [usize; NUM_SIZE_CLASSES] =
+    [RT_FANOUT_4, SHMEM_FANOUT_16_LO, RT_FANOUT_16_HI, SHMEM_FANOUT_48, RT_FANOUT_256];
+const SHMEM_CLASS_ALLOC_SIZE: [usize; NUM_SIZE_CLASSES] = [
+    CLASS_ALLOC_SIZE[0],
+    offset_of!(Node16, children) + SHMEM_FANOUT_16_LO * size_of::<RtSlot>(),
+    CLASS_ALLOC_SIZE[2],
+    offset_of!(Node48, children) + SHMEM_FANOUT_48 * size_of::<RtSlot>(),
+    CLASS_ALLOC_SIZE[4],
 ];
+
+#[inline(always)]
+fn class_fanout<S: RtStore>(store: &S, class: SizeClass) -> usize {
+    if store.shmem_layout() {
+        SHMEM_CLASS_FANOUT[class as usize]
+    } else {
+        CLASS_FANOUT[class as usize]
+    }
+}
+
+/// radixtree.h:652-672: `RT_STR(RT_PREFIX) "_radix_tree nodeN"`, the
+/// prefix being the including module's template parameter.
+pub type RtClassNames = [&'static str; NUM_SIZE_CLASSES];
+
+#[macro_export]
+macro_rules! rt_class_names {
+    ($prefix:literal) => {
+        [
+            concat!($prefix, "_radix_tree node4"),
+            concat!($prefix, "_radix_tree node16_lo"),
+            concat!($prefix, "_radix_tree node16_hi"),
+            concat!($prefix, "_radix_tree node48"),
+            concat!($prefix, "_radix_tree node256"),
+        ]
+    };
+}
+
+const CLASS_NAME: RtClassNames = rt_class_names!("rt");
 
 const fn slab_block_size(allocsize: usize) -> usize {
     let want = (allocsize * 32).next_power_of_two();
@@ -236,27 +275,50 @@ pub trait RtStore {
     /// # Safety: `ptr` came from `alloc_leaf(layout)` on this store.
     unsafe fn free_leaf(&self, ptr: NonNull<u8>, layout: Layout);
     fn memory_usage(&self) -> u64;
+    /// RT_SHMEM fanouts (never above the local ones).
+    fn shmem_layout(&self) -> bool {
+        false
+    }
 }
 
 pub struct LocalStore {
     leaf_ctx: MemoryContext,
     node_slabs: [MemoryContext; NUM_SIZE_CLASSES],
+    dsa: Option<core::cell::RefCell<DsaSizeModel>>,
 }
+
+// sizeof(RT_RADIX_TREE_CONTROL) under RT_SHMEM (LP64).
+const RT_SHMEM_CONTROL_SIZE: usize = 64;
 
 impl LocalStore {
     fn new(parent: &MemoryContext) -> LocalStore {
-        Self::in_ctx(parent.new_child("radix_tree"))
+        Self::in_ctx(parent.new_child("radix_tree"), &CLASS_NAME)
     }
 
-    fn in_ctx(leaf_ctx: MemoryContext) -> LocalStore {
+    fn in_ctx(leaf_ctx: MemoryContext, names: &RtClassNames) -> LocalStore {
         let node_slabs = core::array::from_fn(|i| {
             leaf_ctx.new_child_slab(
-                CLASS_NAME[i],
+                names[i],
                 slab_block_size(CLASS_ALLOC_SIZE[i]),
                 CLASS_ALLOC_SIZE[i],
             )
         });
-        LocalStore { leaf_ctx, node_slabs }
+        LocalStore { leaf_ctx, node_slabs, dsa: None }
+    }
+
+    #[inline(always)]
+    fn dsa_allocate(&self, size: usize) -> PgResult<()> {
+        match &self.dsa {
+            Some(m) => m.borrow_mut().allocate(size),
+            None => Ok(()),
+        }
+    }
+
+    #[inline(always)]
+    fn dsa_free(&self, size: usize) {
+        if let Some(m) = &self.dsa {
+            m.borrow_mut().free(size);
+        }
     }
 }
 
@@ -271,6 +333,7 @@ impl RtStore for LocalStore {
         // SAFETY: every CLASS_ALLOC_SIZE is a small nonzero multiple of 8.
         let layout = unsafe { Layout::from_size_align_unchecked(size, 8) };
         let ctx = &self.node_slabs[class as usize];
+        self.dsa_allocate(SHMEM_CLASS_ALLOC_SIZE[class as usize])?;
         match mcx::Allocator::allocate(&ctx.mcx(), layout) {
             Ok(p) => Ok(p.cast()),
             Err(_) => Err(ctx.oom(size).into()),
@@ -282,11 +345,13 @@ impl RtStore for LocalStore {
         let size = CLASS_ALLOC_SIZE[class as usize];
         // SAFETY: as alloc_node.
         let layout = Layout::from_size_align_unchecked(size, 8);
+        self.dsa_free(SHMEM_CLASS_ALLOC_SIZE[class as usize]);
         mcx::Allocator::deallocate(&self.node_slabs[class as usize].mcx(), ptr, layout);
     }
 
     #[inline]
     fn alloc_leaf(&self, layout: Layout) -> PgResult<NonNull<u8>> {
+        self.dsa_allocate(layout.size())?;
         match mcx::Allocator::allocate(&self.leaf_ctx.mcx(), layout) {
             Ok(p) => Ok(p.cast()),
             Err(_) => Err(self.leaf_ctx.oom(layout.size()).into()),
@@ -295,14 +360,23 @@ impl RtStore for LocalStore {
 
     #[inline]
     unsafe fn free_leaf(&self, ptr: NonNull<u8>, layout: Layout) {
+        self.dsa_free(layout.size());
         mcx::Allocator::deallocate(&self.leaf_ctx.mcx(), ptr, layout);
     }
 
+    #[inline(always)]
+    fn shmem_layout(&self) -> bool {
+        self.dsa.is_some()
+    }
+
     fn memory_usage(&self) -> u64 {
+        if let Some(m) = &self.dsa {
+            return m.borrow().total_size() as u64;
+        }
         // C: MemoryContextMemAllocated(leaf_context, recurse = true).
-        let mut total = self.leaf_ctx.stats().arena_footprint as u64;
+        let mut total = self.leaf_ctx.mem_allocated() as u64;
         for slab in &self.node_slabs {
-            total += slab.stats().arena_footprint as u64;
+            total += slab.mem_allocated() as u64;
         }
         total
     }
@@ -375,8 +449,20 @@ impl<V: RtValue> RadixTree<V> {
     /// Leaves allocate directly in `ctx` and node slabs as its children —
     /// C's varlen RT_CREATE shape (`tree->leaf_context = ctx`), so the
     /// caller's insert-only/bump context choice reaches the leaves.
-    pub fn create_in(ctx: MemoryContext) -> PgResult<RadixTree<V>> {
-        Tree::with_store(LocalStore::in_ctx(ctx))
+    pub fn create_in(ctx: MemoryContext, names: &RtClassNames) -> PgResult<RadixTree<V>> {
+        Tree::with_store(LocalStore::in_ctx(ctx, names))
+    }
+
+    /// `create_in` with RT_SHMEM's layout and dsa_get_total_size accounting.
+    pub fn create_in_dsa_accounted(
+        ctx: MemoryContext,
+        names: &RtClassNames,
+        mut dsa: DsaSizeModel,
+    ) -> PgResult<RadixTree<V>> {
+        dsa.allocate(RT_SHMEM_CONTROL_SIZE)?;
+        let mut store = LocalStore::in_ctx(ctx, names);
+        store.dsa = Some(core::cell::RefCell::new(dsa));
+        Tree::with_store(store)
     }
 }
 
@@ -758,16 +844,16 @@ unsafe fn alloc_node<S: RtStore>(store: &S, kind: u8, class: SizeClass) -> PgRes
     }
     let node = ptr as *mut RtNode;
     (*node).kind = kind;
-    (*node).fanout = CLASS_FANOUT[class as usize] as u8;
+    (*node).fanout = class_fanout(store, class) as u8;
     Ok(node)
 }
 
 unsafe fn free_node<S: RtStore>(store: &S, node: *mut RtNode) {
     let class = match (*node).fanout as usize {
         RT_FANOUT_4 => SizeClass::Class4,
-        RT_FANOUT_16_LO => SizeClass::Class16Lo,
+        RT_FANOUT_16_LO | SHMEM_FANOUT_16_LO => SizeClass::Class16Lo,
         RT_FANOUT_16_HI => SizeClass::Class16Hi,
-        RT_FANOUT_48 => SizeClass::Class48,
+        RT_FANOUT_48 | SHMEM_FANOUT_48 => SizeClass::Class48,
         0 => SizeClass::Class256,
         // SAFETY: fanout is one of the five values written by alloc_node.
         _ => core::hint::unreachable_unchecked(),
@@ -1057,20 +1143,21 @@ unsafe fn grow_node_16<S: RtStore>(
     chunk: u8,
 ) -> PgResult<*mut RtSlot> {
     let n16 = node as *mut Node16;
-    if ((*n16).base.fanout as usize) < RT_FANOUT_16_HI {
-        debug_assert_eq!((*n16).base.fanout as usize, RT_FANOUT_16_LO);
+    let lo = (*n16).base.fanout as usize;
+    if lo < RT_FANOUT_16_HI {
+        debug_assert_eq!(lo, class_fanout(store, SizeClass::Class16Lo));
         let newnode = alloc_node(store, RT_NODE_KIND_16, SizeClass::Class16Hi)?;
         let new16 = newnode as *mut Node16;
 
         copy_common(newnode, node);
-        debug_assert_eq!((*n16).base.count as usize, RT_FANOUT_16_LO);
+        debug_assert_eq!((*n16).base.count as usize, lo);
         let insertpos = node_16_get_insertpos(n16, chunk);
         copy_arrays_for_insert(
             addr_of_mut!((*new16).chunks).cast(),
             node16_children(new16),
             addr_of!((*n16).chunks).cast(),
             node16_children(n16),
-            RT_FANOUT_16_LO,
+            lo,
             insertpos,
         );
         (*new16).chunks[insertpos] = chunk;
@@ -1362,7 +1449,8 @@ unsafe fn remove_child_256<S: RtStore>(
     (*n256).base.count = (*n256).base.count.wrapping_sub(1);
     debug_assert!((*n256).base.count > 0);
 
-    let shrink_threshold = BITS_PER_BITMAPWORD.min(RT_FANOUT_48 / 4 * 3);
+    let shrink_threshold =
+        BITS_PER_BITMAPWORD.min(class_fanout(store, SizeClass::Class48) / 4 * 3);
     if ((*n256).base.count as usize) <= shrink_threshold {
         shrink_node_256(store, parent_slot, node);
     }
@@ -1408,7 +1496,7 @@ unsafe fn remove_child_48<S: RtStore>(
     (*n48).slot_idxs[chunk as usize] = RT_INVALID_SLOT_IDX;
     (*n48).base.count -= 1;
 
-    let shrink_threshold = RT_FANOUT_16_LO / 4 * 3;
+    let shrink_threshold = class_fanout(store, SizeClass::Class16Lo) / 4 * 3;
     if ((*n48).base.count as usize) <= shrink_threshold {
         shrink_node_48(store, parent_slot, node);
     }

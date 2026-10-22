@@ -8,7 +8,7 @@
 use std::io::Write;
 use std::sync::atomic::Ordering::Relaxed;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_core::{TimeLineID, XLogRecPtr, XLogSegNo};
 use types_error::{
     ErrorLocation, PgResult, DEBUG2, ERRCODE_INVALID_PARAMETER_VALUE,
@@ -61,6 +61,23 @@ std::thread_local! {
         const { core::cell::Cell::new(SessionBackupState::None) };
 }
 
+// A low-level backup is counted in pgrc_spool while it runs: pgrc writers log bytes, not references, because nothing
+// appends the referenced files to a backup this server does not send itself.
+std::thread_local! {
+    static LOWLEVEL_WANTED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    static LOWLEVEL_ACTIVE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+pub fn want_lowlevel_backup() {
+    LOWLEVEL_WANTED.with(|c| c.set(true));
+}
+
+fn end_lowlevel_backup() {
+    if LOWLEVEL_ACTIVE.with(|c| c.replace(false)) {
+        pgrc_spool::lowlevel_backup_end();
+    }
+}
+
 // static bool already_done in register_persistent_abort_backup_handler (xlog.c).
 std::thread_local! {
     static ABORT_HANDLER_REGISTERED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
@@ -81,31 +98,12 @@ pub fn get_backup_status() -> SessionBackupState {
 // do_pg_backup_start — xlog.c:8842.
 // ===========================================================================
 
-/// Validate a caller-supplied backup label before it is stored in `state.name`
-/// and later embedded verbatim (`LABEL: <name>\n`) into the backup_label and
-/// `*.backup` history files by build_backup_content.
-///
-/// C (xlog.c:8860) rejects only over-length labels. We additionally reject any
-/// label containing a newline or carriage return: such a byte would forge whole
-/// metadata lines into backup_label / the history file (e.g. an injected
-/// `INCREMENTAL FROM LSN`, `START TIMELINE`, or `BACKUP FROM: standby` line),
-/// which read_backup_label parses at restore time — a CRLF-injection that can
-/// silently corrupt or misdirect a restore. This is the single chokepoint every
-/// backup label (pg_backup_start SQL function and the BASE_BACKUP replication
-/// command) passes through, so rejecting here neutralizes the injection for all
-/// entry points and both output files.
+// Labels remain opaque bytes, including CR/LF, as in C.
 fn check_backup_label(backupidstr: &[u8]) -> PgResult<()> {
     if backupidstr.len() > MAXPGPATH {
         return ereport(ERROR)
             .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
             .errmsg(format!("backup label too long (max {MAXPGPATH} bytes)"))
-            .finish(loc("do_pg_backup_start"));
-    }
-
-    if backupidstr.iter().any(|&b| b == b'\n' || b == b'\r') {
-        return ereport(ERROR)
-            .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
-            .errmsg("backup label contains invalid characters")
             .finish(loc("do_pg_backup_start"));
     }
 
@@ -124,6 +122,7 @@ pub fn do_pg_backup_start(
     tblspcmapfile: &mut Vec<u8>,
 ) -> PgResult<()> {
     let backup_started_in_recovery = RecoveryInProgress();
+    let lowlevel = LOWLEVEL_WANTED.with(|c| c.replace(false));
 
     // During recovery, WAL level need not be checked: it's impossible to get
     // here during recovery with an insufficient level.
@@ -146,6 +145,12 @@ pub fn do_pg_backup_start(
     WALInsertLockAcquireExclusive();
     XLogCtl().Insert.runningBackups.fetch_add(1, Relaxed);
     WALInsertLockRelease();
+
+    // WALMODE: before the checkpoint below, so every pgrc reference the backup's WAL holds was refused (bytes).
+    if lowlevel && !backup_started_in_recovery {
+        pgrc_spool::lowlevel_backup_begin();
+        LOWLEVEL_ACTIVE.with(|c| c.set(true));
+    }
 
     // Ensure runningBackups is decremented if the body fails. Critical: session
     // state is only updated after this block. (C: PG_ENSURE_ERROR_CLEANUP with
@@ -297,7 +302,7 @@ fn collect_tablespaces(
             let n = fd::pg_readlink(&fullpath, &mut buf);
             if n < 0 {
                 ereport(WARNING)
-                    .errmsg(format!("could not read symbolic link \"{fullpath}\": %m"))
+                    .errmsg(format!("could not read symbolic link \"{fullpath}\": {PCT_M}"))
                     .finish(loc("do_pg_backup_start"))
                     .ok();
                 return Ok(false);
@@ -323,7 +328,7 @@ fn collect_tablespaces(
 
             tblspcmapfile.extend_from_slice(d_name.as_bytes());
             tblspcmapfile.push(b' ');
-            tblspcmapfile.extend_from_slice(&escape_tablespace_link_path(lp));
+            tblspcmapfile.extend_from_slice(&escape_tablespace_link_path(lp)?);
             tblspcmapfile.push(b'\n');
         } else if md.is_dir() {
             // allow_in_place_tablespaces: a directory directly under pg_tblspc.
@@ -379,6 +384,7 @@ pub fn do_pg_backup_stop(state: &mut BackupState, waitforarchive: bool) -> PgRes
     SESSION_BACKUP_STATE.with(|c| c.set(SessionBackupState::None));
 
     WALInsertLockRelease();
+    end_lowlevel_backup();
 
     // A standby must not have been promoted during a backup taken on it.
     if state.started_in_recovery && !backup_stopped_in_recovery {
@@ -524,14 +530,14 @@ fn write_backup_history_file(
     state: &BackupState,
     wal_segment_size: i32,
 ) -> PgResult<()> {
-    let ctx = mcx::MemoryContext::new_bump("on-line backup history");
+    let ctx = mcx::MemoryContext::new_wholesale("on-line backup history");
     let content = xlogbackup::build_backup_content(ctx.mcx(), state, true, wal_segment_size)?;
 
     let idx = fd::AllocateFile(histfilepath, "w")?;
     if idx < 0 {
         return ereport(ERROR)
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{histfilepath}\": %m"))
+            .errmsg(format!("could not create file \"{histfilepath}\": {PCT_M}"))
             .finish(loc("do_pg_backup_stop"));
     }
 
@@ -545,7 +551,7 @@ fn write_backup_history_file(
     if !write_ok || freed != 0 {
         return ereport(ERROR)
             .errcode_for_file_access()
-            .errmsg(format!("could not write file \"{histfilepath}\": %m"))
+            .errmsg(format!("could not write file \"{histfilepath}\": {PCT_M}"))
             .finish(loc("do_pg_backup_stop"));
     }
     Ok(())
@@ -572,6 +578,7 @@ fn do_pg_abort_backup_impl(during_backup_start: bool) -> PgResult<()> {
 
         SESSION_BACKUP_STATE.with(|c| c.set(SessionBackupState::None));
         WALInsertLockRelease();
+        end_lowlevel_backup();
 
         if !during_backup_start {
             ereport(WARNING)
@@ -586,6 +593,10 @@ fn do_pg_abort_backup_impl(during_backup_start: bool) -> PgResult<()> {
 /// The before_shmem_exit callback shape (xlog.c:9444): (code, arg) where
 /// arg carries during_backup_start.
 fn do_pg_abort_backup_callback(_code: i32, arg: datum::Datum) -> PgResult<()> {
+    if !arg.as_bool() {
+        // D4682: the persistent registration is spent; a reused thread's next session registers again.
+        ABORT_HANDLER_REGISTERED.with(|c| c.set(false));
+    }
     do_pg_abort_backup_impl(arg.as_bool())
 }
 
@@ -664,15 +675,15 @@ fn IsBackupHistoryFileName(fname: &str) -> bool {
     fname.len() > XLOG_FNAME_LEN && hex_run == XLOG_FNAME_LEN && fname.ends_with(".backup")
 }
 
-fn escape_tablespace_link_path(linkpath: &[u8]) -> Vec<u8> {
-    let mut escapedpath = Vec::with_capacity(linkpath.len());
+fn escape_tablespace_link_path(linkpath: &[u8]) -> PgResult<Vec<u8>> {
+    let mut escapedpath = ::mcx::std_vec_with_capacity("backup", linkpath.len())?;
     for &c in linkpath {
         if c == b'\n' || c == b'\r' || c == b'\\' {
             escapedpath.push(b'\\');
         }
         escapedpath.push(c);
     }
-    escapedpath
+    Ok(escapedpath)
 }
 
 #[cfg(test)]
@@ -680,33 +691,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tablespace_map_link_path_bytes_are_verbatim() {
-        assert_eq!(escape_tablespace_link_path("/tmp/tbs_\u{e9}".as_bytes()), "/tmp/tbs_\u{e9}".as_bytes());
-        assert_eq!(escape_tablespace_link_path(b"/t\xff/a\\b\nc\rd"), b"/t\xff/a\\\\b\\\nc\\\rd");
+    fn tablespace_map_escape() {
+        assert_eq!(escape_tablespace_link_path("/tmp/tbs_\u{e9}".as_bytes()).unwrap(), "/tmp/tbs_\u{e9}".as_bytes());
+        assert_eq!(escape_tablespace_link_path(b"/t\xff/a\\b\nc\rd").unwrap(), b"/t\xff/a\\\\b\\\nc\\\rd");
     }
 
     #[test]
     fn check_backup_label_accepts_ordinary_labels() {
         check_backup_label(b"nightly backup 2026-08-22").unwrap();
         check_backup_label(b"").unwrap();
-        // Non-ASCII/invalid-UTF8-adjacent bytes are fine; only line delimiters
-        // and over-length are rejected (label stays server-encoding opaque).
         check_backup_label("café backup — ticket #42".as_bytes()).unwrap();
         check_backup_label(b"a\xffb").unwrap();
     }
 
     #[test]
-    fn check_backup_label_rejects_newline_injection() {
-        // A newline would forge a whole backup_label metadata line at restore.
-        check_backup_label(b"a\nINCREMENTAL FROM LSN: 0/1").err().unwrap();
-        // Carriage return is rejected too (CRLF injection).
-        check_backup_label(b"a\rBACKUP FROM: standby").err().unwrap();
-        check_backup_label(b"trailing newline\n").err().unwrap();
+    fn check_backup_label_accepts_line_delimiters() {
+        for label in [
+            b"a\nINCREMENTAL FROM LSN: 0/1".as_slice(),
+            b"a\rBACKUP FROM: standby",
+            b"trailing newline\n",
+            b"first\r\nsecond",
+        ] {
+            check_backup_label(label).unwrap();
+            let mut state = BackupState::default();
+            state.set_name(label);
+            assert_eq!(state.name_bytes(), label);
+        }
     }
 
     #[test]
     fn check_backup_label_rejects_over_length() {
+        check_backup_label(&[b'x'; MAXPGPATH]).unwrap();
         let long = "x".repeat(MAXPGPATH + 1);
-        check_backup_label(long.as_bytes()).err().unwrap();
+        let err = check_backup_label(long.as_bytes()).unwrap_err();
+        assert_eq!(err.sqlstate, ERRCODE_INVALID_PARAMETER_VALUE);
+        assert_eq!(err.message, "backup label too long (max 1024 bytes)");
     }
 }

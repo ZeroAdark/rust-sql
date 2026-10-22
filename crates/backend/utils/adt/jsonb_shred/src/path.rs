@@ -25,15 +25,26 @@ impl JsonPath {
     /// Convenience for hint construction from dotted names. Only usable for
     /// keys without dots; real key bytes go through [`JsonPath::new`].
     pub fn from_dotted(s: &str) -> JsonPath {
-        JsonPath {
-            segs: s.split('.').map(|p| p.as_bytes().to_vec()).collect(),
+        let mut segs = Vec::new();
+        for p in s.split('.') {
+            let mut seg = Vec::new();
+            let _ = seg.try_reserve_exact(p.len());
+            seg.extend_from_slice(p.as_bytes());
+            segs.push(seg);
         }
+        JsonPath { segs }
     }
 
-    pub fn from_borrowed(segs: &[&[u8]]) -> JsonPath {
-        JsonPath {
-            segs: segs.iter().map(|s| s.to_vec()).collect(),
+    pub fn from_borrowed(segs_in: &[&[u8]]) -> JsonPath {
+        let mut segs = Vec::new();
+        let _ = segs.try_reserve_exact(segs_in.len());
+        for s in segs_in {
+            let mut seg = Vec::new();
+            let _ = seg.try_reserve_exact(s.len());
+            seg.extend_from_slice(s);
+            segs.push(seg);
         }
+        JsonPath { segs }
     }
 
     pub fn is_root(&self) -> bool {
@@ -81,11 +92,16 @@ impl JsonPath {
         let mut cur = bytes;
         let nseg = u16::from_le_bytes(cur.get(..2)?.try_into().ok()?) as usize;
         cur = &cur[2..];
-        let mut segs = Vec::with_capacity(nseg);
+        let mut segs = Vec::new();
+        let _ = segs.try_reserve_exact(nseg);
         for _ in 0..nseg {
             let len = u32::from_le_bytes(cur.get(..4)?.try_into().ok()?) as usize;
             cur = &cur[4..];
-            segs.push(cur.get(..len)?.to_vec());
+            let slice = cur.get(..len)?;
+            let mut seg = Vec::new();
+            let _ = seg.try_reserve_exact(slice.len());
+            seg.extend_from_slice(slice);
+            segs.push(seg);
             cur = &cur[len..];
         }
         if !cur.is_empty() {

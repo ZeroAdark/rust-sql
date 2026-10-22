@@ -1,0 +1,14 @@
+# NOALLOC (TD-197 LINT-FP; findings.NOALLOC_ITEMS): findings the IR leg proved allocate nothing, keyed on the line's normalized text. Written by run.sh full + ratchet.py write --noalloc only; an edited line's row goes.
+file	line	kind	item	count	text	class
+crates/gravity/expr/src/catalog.rs	94	method	std::clone::Clone::clone	1	9762e185b208	NOALLOC
+crates/gravity/expr/src/catalog.rs	95	method	std::clone::Clone::clone	1	03265da39f16	NOALLOC
+crates/gravity/expr/src/catalog.rs	97	method	std::clone::Clone::clone	1	460680e9c820	NOALLOC
+crates/gravity/expr/src/lib.rs	64	method	std::boxed::Box::new	1	076fcc93001b	COLD-TEXT
+crates/gravity/expr/src/nodes/array.rs	226	method	std::clone::Clone::clone	1	f890d553ad7c	NOALLOC
+crates/gravity/expr/src/nodes/cast.rs	298	method	std::boxed::Box::new	1	4a2cdac4044c	COLD-TEXT
+crates/gravity/expr/src/nodes/cast.rs	307	method	std::boxed::Box::new	1	4a2cdac4044c	COLD-TEXT
+crates/gravity/expr/src/nodes/cast.rs	326	method	std::boxed::Box::new	1	4a2cdac4044c	COLD-TEXT
+crates/gravity/expr/src/nodes/cast.rs	336	method	std::boxed::Box::new	1	4a2cdac4044c	COLD-TEXT
+crates/gravity/expr/src/nodes/json.rs	622	method	std::boxed::Box::new	1	4a2cdac4044c	COLD-TEXT
+crates/gravity/expr/src/nodes/param.rs	105	method	std::boxed::Box::new	1	4a49b97c3923	COLD-TEXT
+crates/gravity/expr/src/nodes/var.rs	175	method	std::boxed::Box::new	1	4a49b97c3923	COLD-TEXT

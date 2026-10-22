@@ -1,0 +1,63 @@
+-- tpch-sf10-003
+-- SELECT l_orderkey, sum(l_extendedprice * (1 - l_discount)) AS revenue, o_orderdate, o_shippriority FROM customer, orders, lineitem WHERE c_mktsegment = 'BUILDING' AND c_custkey = o_custkey AND l_orderkey = o_orderkey AND o_orderdate < CAST('1995-03-15' AS date) AND l_shipdate > CAST('1995-03-15' AS date) GROUP BY l_orderkey, o_orderdate, o_shippriority ORDER BY revenue DESC, o_orderdate LIMIT 10 /* TH3 */;
+graph pipelines=5 breakers=4 init_plans=0 root=p4
+p0 node=9 eligible rows=7500 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n9@0 n8@2
+  source range rel=16426 rti=1 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(7):codes4:code:part/dict Offset:byval2:w2:val
+  filter op1054(v1.7, c1042:'BUILDING')
+  project (1=v1.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val
+p1 node=7 eligible rows=6670423 end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p0 words=bits@6/7
+  nodes n7@0 n6@2 n5@4
+  source range rel=16437 rti=2 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(2):byval4:w4:val Attr(5):byval4:w4:val Attr(8):byval4:w4:val Offset:byval2:w2:val
+    zone lane2 < word0/4
+  filter op1095(v2.5, c1082:-1753)
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9)
+  probe slot=0 inner=n8 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  project (1=outer.5, 2=outer.8, 3=outer.1)
+  build keys=(outer.3) decls=23/23:I32
+  outs 1=w4:val 2=w4:val 3=vl:row 4=vl:row 5=w4:val 6=vl:row 7=vl:row 8=w4:val 9=vl:row
+  outs 1=w4:val 2=w4:val 3=w4:val
+p2 node=4 eligible rows=18031054 end=breaker(slot=0 HashAgg)
+  desc consumes=slot1@p1 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n3@2 n2@4^
+  source range rel=16449 rti=3 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(6):fixed8:pn15.2:win/arena Attr(7):fixed8:pn15.2:win/arena Attr(11):byval4:w4:val Offset:byval2:w2:val
+    zone lane3 > word0/4
+  filter op1097(v3.11, c1082:-1753)
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4, 5=v3.5, 6=v3.6, 7=v3.7, 8=v3.8, 9=v3.9, 10=v3.10, 11=v3.11, 12=v3.12, 13=v3.13, 14=v3.14, 15=v3.15, 16=v3.16)
+  probe slot=1 inner=n5 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.3))
+  project (1=outer.1, 2=inner.1, 3=inner.2, 4=outer.6, 5=outer.7)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=vl:row 6=pn15.2:win/arena 7=pn15.2:win/arena 8=vl:row 9=vl:row 10=vl:row 11=w4:val 12=w4:val 13=w4:val 14=vl:row 15=vl:row 16=vl:row
+  outs 1=w4:val 2=w4:val 3=w4:val 4=pn15.2:win/arena 5=pn15.2:win/arena
+p3 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 TopK)
+  desc consumes=slot0@p2
+  nodes n2@0 n1@1^
+  source breaker slot=0
+  project (1=outer.1, 2=agg2114(1=op1760(outer.4, op1759(c1700:'\x00\x80\x01\x00', outer.5))), 3=outer.2, 4=outer.3)
+  sort keys=2-n:Fp128/NumNormalized,3+:Date form=topk count=10 offset=all
+  outs 1=w4:val 2=vl:call2114 3=w4:val 4=w4:val
+p4 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p3
+  nodes n1@0 n0@1
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  limit count=10 offset=all
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=w4:val 2=vl:call2114 3=w4:val 4=w4:val
+  outs 1=w4:val 2=vl:call2114 3=w4:val 4=w4:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32,Date,I32]->[SumNumWide@24,Count@56]+valid 72B
+breaker slot=1 kind=TopK budget=Fixed(624) spill=None producer=p3 layout=[Fp128,Fp128,Date]->[Count@24] 32B order=2-n,3+
+group slot=0 producer=p2 node=2 form=Hashed hints=[] layout=[I32,Date,I32]->[SumNumWide@24,Count@56]+valid 72B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  key 1 word=1 resno=2 kind=Date attno=0 type=1082 expr=inner.1
+  key 2 word=2 resno=3 kind=I32 attno=0 type=23 expr=inner.2
+  agg aggno=0 fn=2114 reg=SumNum slot=0 count_slot=- final=Numeric scale=4 class=SumNum trans=Abi(SumNumWide) mods=[] expr=agg2114(1=op1760(outer.4, op1759(c1700:'\x00\x80\x01\x00', outer.5)))
+mapped: SeqScan HashJoin Sort Agg Hash Limit

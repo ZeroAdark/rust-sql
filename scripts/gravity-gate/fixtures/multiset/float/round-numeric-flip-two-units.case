@@ -1,0 +1,8 @@
+# D3927's limit: round(<float aggregate>::numeric, n) passes at one unit in its n-th decimal, not two
+sql: SELECT round(sum(x::float8)::numeric, 2) FROM r;
+class: unordered
+verdict: mismatch
+[pg]
+2.50
+[got]
+2.48

@@ -192,6 +192,9 @@ pub fn get_namespace_name_or_temp<'mcx>(
 }
 
 pub fn get_range_subtype(range_oid: Oid) -> PgResult<Oid> {
+    if let Some(r) = syscache_seams::armed_type_row(range_oid) {
+        return Ok(r.range.map_or(InvalidOid, |g| g.rngsubtype)); // V4R-453: a gravity pool claim's row
+    }
     Ok(match syscache_seams::lookup_pg_range_shape::call(range_oid)? {
         Some(rngtup) => rngtup.rngsubtype,
         None => InvalidOid,
@@ -199,6 +202,9 @@ pub fn get_range_subtype(range_oid: Oid) -> PgResult<Oid> {
 }
 
 pub fn get_range_collation(range_oid: Oid) -> PgResult<Oid> {
+    if let Some(r) = syscache_seams::armed_type_row(range_oid) {
+        return Ok(r.range.map_or(InvalidOid, |g| g.rngcollation)); // V4R-453: a gravity pool claim's row
+    }
     Ok(match syscache_seams::lookup_pg_range_shape::call(range_oid)? {
         Some(rngtup) => rngtup.rngcollation,
         None => InvalidOid,
@@ -206,6 +212,9 @@ pub fn get_range_collation(range_oid: Oid) -> PgResult<Oid> {
 }
 
 pub fn get_range_multirange(range_oid: Oid) -> PgResult<Oid> {
+    if let Some(r) = syscache_seams::armed_type_row(range_oid) {
+        return Ok(r.range.map_or(InvalidOid, |g| g.rngmultitypid)); // V4R-453: a gravity pool claim's row
+    }
     Ok(match syscache_seams::lookup_pg_range_shape::call(range_oid)? {
         Some(rngtup) => rngtup.rngmultitypid,
         None => InvalidOid,
@@ -213,6 +222,9 @@ pub fn get_range_multirange(range_oid: Oid) -> PgResult<Oid> {
 }
 
 pub fn get_multirange_range(multirange_oid: Oid) -> PgResult<Oid> {
+    if let Some(r) = syscache_seams::armed_type_row(multirange_oid) {
+        return Ok(r.multirange_range); // V4R-453: a gravity pool claim's row
+    }
     Ok(
         match syscache_seams::lookup_pg_range_by_multirange::call(multirange_oid)? {
             Some(rngtypid) => rngtypid,

@@ -1,0 +1,158 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pr s3pu s3pd s1c s2c
+step s3pr: EXPLAIN (COSTS OFF) UPDATE pn_v SET value = 11 FROM pn_i4 a JOIN pn_i4 b ON (a.f1 = (SELECT f1 FROM pn_i4 c WHERE c.f1 = b.f1)) WHERE ordnum = a.f1;
+QUERY PLAN                                                    
+--------------------------------------------------------------
+Update on pn_t                                                
+  ->  Hash Join                                               
+        Hash Cond: (pn_t.ordnum = (SubPlan 1))                
+        ->  Nested Loop                                       
+              Join Filter: (a.f1 = pn_t.ordnum)               
+              ->  Nested Loop                                 
+                    Join Filter: (pn_t.ordnum = pn_t_1.ordnum)
+                    ->  Seq Scan on pn_t                      
+                          Filter: (ttype = 'wt'::bpchar)      
+                    ->  Materialize                           
+                          ->  Seq Scan on pn_t pn_t_1         
+                                Filter: (ttype = 'wt'::bpchar)
+              ->  Seq Scan on pn_i4 a                         
+        ->  Hash                                              
+              ->  Seq Scan on pn_i4 b                         
+              SubPlan 1                                       
+                ->  Seq Scan on pn_i4 c                       
+                      Filter: (f1 = b.f1)                     
+(18 rows)
+
+step s3pu: EXPLAIN (COSTS OFF) UPDATE pn_u SET n = pn_u.n + 1 FROM pn_i4 a, pn_i4 b WHERE pn_u.ordnum BETWEEN a.f1 AND a.f1 AND pn_u.k2 = b.f1;
+QUERY PLAN                                                            
+----------------------------------------------------------------------
+Update on pn_u                                                        
+  ->  Nested Loop                                                     
+        Join Filter: ((pn_u.ordnum >= a.f1) AND (pn_u.ordnum <= a.f1))
+        ->  Hash Join                                                 
+              Hash Cond: (pn_u.k2 = b.f1)                             
+              ->  Seq Scan on pn_u                                    
+              ->  Hash                                                
+                    ->  Seq Scan on pn_i4 b                           
+        ->  Materialize                                               
+              ->  Seq Scan on pn_i4 a                                 
+(10 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM pn_u USING pn_i4 a, pn_i4 b WHERE pn_u.ordnum BETWEEN a.f1 AND a.f1 AND pn_u.k2 = b.f1;
+QUERY PLAN                                                            
+----------------------------------------------------------------------
+Delete on pn_u                                                        
+  ->  Nested Loop                                                     
+        Join Filter: ((pn_u.ordnum >= a.f1) AND (pn_u.ordnum <= a.f1))
+        ->  Hash Join                                                 
+              Hash Cond: (pn_u.k2 = b.f1)                             
+              ->  Seq Scan on pn_u                                    
+              ->  Hash                                                
+                    ->  Seq Scan on pn_i4 b                           
+        ->  Materialize                                               
+              ->  Seq Scan on pn_i4 a                                 
+(10 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1p s1k s2r s1c s2c s3t
+step s1p: UPDATE pn_t SET partnum = 'p' || partnum WHERE ordnum IN (0, -2147483647);
+step s1k: UPDATE pn_t SET ordnum = 7 WHERE ordnum = 123456;
+step s2r: UPDATE pn_v SET value = 11 FROM pn_i4 a JOIN pn_i4 b ON (a.f1 = (SELECT f1 FROM pn_i4 c WHERE c.f1 = b.f1)) WHERE ordnum = a.f1; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2c: COMMIT;
+step s3t: SELECT ttype, ordnum, partnum, value FROM pn_t ORDER BY ordnum;
+ttype|     ordnum|partnum|value
+-----+-----------+-------+-----
+wt   |-2147483647|      3|   11
+xx   |    -123456|      4|  4.5
+wt   |          0|      1|   11
+wt   |          5|      5|  5.5
+wt   |          7|      2|  2.5
+(5 rows)
+
+
+starting permutation: s1t s1b s2r s1c s2c s3t
+step s1t: UPDATE pn_t SET ttype = 'xx' WHERE ordnum = 0;
+step s1b: UPDATE pn_i4 SET f1 = 1 WHERE f1 = 123456;
+step s2r: UPDATE pn_v SET value = 11 FROM pn_i4 a JOIN pn_i4 b ON (a.f1 = (SELECT f1 FROM pn_i4 c WHERE c.f1 = b.f1)) WHERE ordnum = a.f1; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2c: COMMIT;
+step s3t: SELECT ttype, ordnum, partnum, value FROM pn_t ORDER BY ordnum;
+ttype|     ordnum|partnum|value
+-----+-----------+-------+-----
+wt   |-2147483647|      3|   11
+xx   |    -123456|      4|  4.5
+xx   |          0|      1|  1.5
+wt   |          5|      5|  5.5
+wt   |     123456|      2|   11
+(5 rows)
+
+
+starting permutation: s2r s1p s2c s1c s3t
+step s2r: UPDATE pn_v SET value = 11 FROM pn_i4 a JOIN pn_i4 b ON (a.f1 = (SELECT f1 FROM pn_i4 c WHERE c.f1 = b.f1)) WHERE ordnum = a.f1;
+step s1p: UPDATE pn_t SET partnum = 'p' || partnum WHERE ordnum IN (0, -2147483647); <waiting ...>
+step s2c: COMMIT;
+step s1p: <... completed>
+step s1c: COMMIT;
+step s3t: SELECT ttype, ordnum, partnum, value FROM pn_t ORDER BY ordnum;
+ttype|     ordnum|partnum|value
+-----+-----------+-------+-----
+wt   |-2147483647|p3     |   11
+xx   |    -123456|4      |  4.5
+wt   |          0|p1     |   11
+wt   |          5|5      |  5.5
+wt   |     123456|2      |   11
+(5 rows)
+
+
+starting permutation: s1n s1m s1j s1d s2u s1c s2c s3u
+step s1n: UPDATE pn_u SET n = n + 100 WHERE ordnum = 0;
+step s1m: UPDATE pn_u SET ordnum = 7 WHERE ordnum = 123456;
+step s1j: UPDATE pn_u SET k2 = -123456 WHERE ordnum = -2147483647;
+step s1d: DELETE FROM pn_u WHERE ordnum = -123456;
+step s2u: UPDATE pn_u SET n = pn_u.n + 1 FROM pn_i4 a, pn_i4 b WHERE pn_u.ordnum BETWEEN a.f1 AND a.f1 AND pn_u.k2 = b.f1 RETURNING pn_u.ordnum, pn_u.k2, pn_u.n, b.f1; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ordnum|k2|  n|f1
+------+--+---+--
+     0| 0|101| 0
+(1 row)
+
+step s2c: COMMIT;
+step s3u: SELECT ordnum, k2, n FROM pn_u ORDER BY ordnum;
+     ordnum|     k2|  n
+-----------+-------+---
+-2147483647|-123456|  0
+          0|      0|101
+          5|      0|  0
+          7| 123456|  0
+(4 rows)
+
+
+starting permutation: s1n s1j s1d s1b s2d s1c s2c s3u
+step s1n: UPDATE pn_u SET n = n + 100 WHERE ordnum = 0;
+step s1j: UPDATE pn_u SET k2 = -123456 WHERE ordnum = -2147483647;
+step s1d: DELETE FROM pn_u WHERE ordnum = -123456;
+step s1b: UPDATE pn_i4 SET f1 = 1 WHERE f1 = 123456;
+step s2d: DELETE FROM pn_u USING pn_i4 a, pn_i4 b WHERE pn_u.ordnum BETWEEN a.f1 AND a.f1 AND pn_u.k2 = b.f1 RETURNING pn_u.ordnum, pn_u.k2, b.f1; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+ordnum|    k2|    f1
+------+------+------
+     0|     0|     0
+123456|123456|123456
+(2 rows)
+
+step s2c: COMMIT;
+step s3u: SELECT ordnum, k2, n FROM pn_u ORDER BY ordnum;
+     ordnum|     k2|n
+-----------+-------+-
+-2147483647|-123456|0
+          5|      0|0
+(2 rows)
+

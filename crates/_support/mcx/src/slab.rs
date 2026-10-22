@@ -1,19 +1,21 @@
 // slab.c (PG16 rewrite) backend: fixed-size chunks, fullest-block-first blocklist lanes,
 // per-block freelist threaded through free chunk bytes. Blocks are allocated aligned to
-// their (power-of-two) size, so free recovers the block by masking the chunk address —
-// no per-chunk header (C pays 8 bytes + a decode).
+// their (power-of-two) size, so free recovers the block by masking the chunk address;
+// no chunk header is kept, but chunks and blocks take C's footprint (slab.c:349/:355).
 
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
-use allocator_api2::alloc::{AllocError, Allocator, Global};
+use allocator_api2::alloc::AllocError;
 
 use crate::aset::POOL_MAX_ALIGN;
 use crate::Acct;
 
 const SLAB_BLOCKLIST_COUNT: usize = 3;
 const SLAB_MAXIMUM_EMPTY_BLOCKS: usize = 10;
-const SLAB_BLKHDRSZ: usize = (core::mem::size_of::<SlabBlock>() + 7) & !7;
+const SLAB_BLKHDRSZ: usize = 48;
+const SLAB_CHUNKHDRSZ: usize = 8;
+const _: () = assert!(core::mem::size_of::<SlabBlock>() <= SLAB_BLKHDRSZ);
 
 #[repr(C)]
 struct SlabBlock {
@@ -46,6 +48,7 @@ pub(crate) struct SlabArena {
     emptyblocks: alloc::vec::Vec<usize>,
     mem_allocated: usize,
     nblocks: usize,
+    nfree: usize,
     // upstream 3f3eefc28892 (18.4): Detect pfree or repalloc of a previously-freed memory chunk.
     // Chunks currently on a block freelist, by address (C marks the chunk header;
     // chunks here have none). Debug builds only.
@@ -57,7 +60,8 @@ impl SlabArena {
     pub(crate) fn new(block_size: usize, chunk_size: usize) -> SlabArena {
         assert!(block_size.is_power_of_two() && block_size >= 1024);
         assert!(chunk_size > 0);
-        let full_chunk_size = (chunk_size.max(core::mem::size_of::<usize>()) + 7) & !7;
+        let full_chunk_size =
+            SLAB_CHUNKHDRSZ + ((chunk_size.max(core::mem::size_of::<usize>()) + 7) & !7);
         let chunks_per_block = (block_size - SLAB_BLKHDRSZ) / full_chunk_size;
         assert!(
             chunks_per_block >= 1,
@@ -78,6 +82,7 @@ impl SlabArena {
             emptyblocks: alloc::vec::Vec::new(),
             mem_allocated: 0,
             nblocks: 0,
+            nfree: 0,
             #[cfg(debug_assertions)]
             freed: crate::freed::FreedSet::new(),
         }
@@ -89,6 +94,18 @@ impl SlabArena {
 
     pub(crate) fn nblocks(&self) -> usize {
         self.nblocks
+    }
+
+    #[inline(always)]
+    fn publish_free(&self, acct: &Acct) {
+        acct.free_chunks.set(self.nfree);
+        acct.window_tail.set(self.nfree * self.full_chunk_size);
+    }
+
+    fn publish_blocks(&self, acct: &Acct) {
+        acct.arena_nblocks.set(self.nblocks - self.emptyblocks.len());
+        acct.empty_blocks.set(self.emptyblocks.len());
+        self.publish_free(acct);
     }
 
     // C's two's-complement trick: 0 stays 0, everything else lands in 1..COUNT.
@@ -176,6 +193,8 @@ impl SlabArena {
         debug_assert!(addr != 0);
         debug_assert_eq!(self.blocklist_index(block_mut(addr).nfree), i);
         let chunk = self.next_free_chunk(addr);
+        self.nfree -= 1;
+        self.publish_free(acct);
         let new_i = self.blocklist_index(block_mut(addr).nfree);
         if new_i != i {
             self.unlink(i, addr);
@@ -184,7 +203,7 @@ impl SlabArena {
                 self.cur_blocklist_index = self.find_next_blocklist_index();
             }
         }
-        Ok(chunk_slice(chunk, self.full_chunk_size))
+        Ok(chunk_slice(chunk, self.full_chunk_size - SLAB_CHUNKHDRSZ))
     }
 
     #[cold]
@@ -196,12 +215,13 @@ impl SlabArena {
             addr = a;
         } else {
             acct.check_limit(self.block_size)?;
+            acct.admit_block(self.block_size);
             self.emptyblocks
                 .try_reserve(SLAB_MAXIMUM_EMPTY_BLOCKS)
                 .map_err(|_| AllocError)?;
             let layout = Layout::from_size_align(self.block_size, self.block_size)
                 .map_err(|_| AllocError)?;
-            let p = Global.allocate(layout)?;
+            let p = crate::heap::allocate_for(layout, &acct.led)?;
             addr = p.cast::<u8>().as_ptr().expose_provenance();
             // SAFETY: fresh block; header fits its prefix (chunks_per_block >= 1).
             unsafe {
@@ -220,12 +240,14 @@ impl SlabArena {
             acct.commit_block(self.block_size, self.mem_allocated, self.nblocks);
         }
         let chunk = self.next_free_chunk(addr);
+        self.nfree += self.chunks_per_block as usize - 1;
+        self.publish_blocks(acct);
         let i = self.blocklist_index(block_mut(addr).nfree);
         // Lane 0 (full blocks) legitimately chains: chunks_per_block == 1.
         debug_assert!(i == 0 || self.blocklist[i as usize] == 0);
         self.push_head(i, addr);
         self.cur_blocklist_index = i;
-        Ok(chunk_slice(chunk, self.full_chunk_size))
+        Ok(chunk_slice(chunk, self.full_chunk_size - SLAB_CHUNKHDRSZ))
     }
 
     /// # Safety: `ptr` is live from this arena with `layout` (Allocator contract).
@@ -244,6 +266,8 @@ impl SlabArena {
             debug_assert!(b.nfree <= self.chunks_per_block);
             b.nfree
         };
+        self.nfree += 1;
+        self.publish_free(acct);
         let cur_i = self.blocklist_index(nfree - 1);
         let new_i = self.blocklist_index(nfree);
         if cur_i != new_i {
@@ -270,18 +294,21 @@ impl SlabArena {
     #[inline(never)]
     fn block_emptied(&mut self, addr: usize, i: u32, acct: &Acct) {
         self.unlink(i, addr);
+        self.nfree -= self.chunks_per_block as usize;
         if self.emptyblocks.len() < SLAB_MAXIMUM_EMPTY_BLOCKS {
             self.emptyblocks.push(addr);
         } else {
-            self.release_block_bytes(addr);
+            self.release_block_bytes(addr, Some(&acct.led));
             acct.uncommit_block(self.block_size, self.mem_allocated, self.nblocks);
         }
+        self.publish_blocks(acct);
         if self.cur_blocklist_index == i && self.blocklist[(i & 3) as usize] == 0 {
             self.cur_blocklist_index = self.find_next_blocklist_index();
         }
     }
 
-    fn release_block_bytes(&mut self, addr: usize) {
+    // `led`: the context's, for a block freed while it lives; None at a reset or drop, whose caller resets the Led.
+    fn release_block_bytes(&mut self, addr: usize, led: Option<&crate::owner::Led>) {
         #[cfg(debug_assertions)]
         self.freed.forget_block(addr, self.block_size);
         self.mem_allocated -= self.block_size;
@@ -289,27 +316,32 @@ impl SlabArena {
         self.nblocks -= 1;
         // SAFETY: block is empty (or arena reset/teardown); layout matches its allocation.
         unsafe {
-            Global.deallocate(
+            let (p, l) = (
                 NonNull::new_unchecked(core::ptr::with_exposed_provenance_mut::<u8>(addr)),
                 Layout::from_size_align_unchecked(self.block_size, self.block_size),
             );
+            match led {
+                Some(led) => crate::heap::deallocate_for(p, l, led),
+                None => crate::heap::free_block(p, l, None),
+            }
         }
     }
 
     pub(crate) fn reset(&mut self) {
         while let Some(addr) = self.emptyblocks.pop() {
-            self.release_block_bytes(addr);
+            self.release_block_bytes(addr, None);
         }
         for i in 0..SLAB_BLOCKLIST_COUNT {
             let mut addr = self.blocklist[i];
             while addr != 0 {
                 let next = block_mut(addr).next;
-                self.release_block_bytes(addr);
+                self.release_block_bytes(addr, None);
                 addr = next;
             }
             self.blocklist[i] = 0;
         }
         self.cur_blocklist_index = 0;
+        self.nfree = 0;
         debug_assert_eq!(self.mem_allocated, 0);
         debug_assert_eq!(self.nblocks, 0);
     }
@@ -358,11 +390,15 @@ mod tests {
             window_tail: Cell::new(0),
             live_chunk_bytes: Cell::new(0),
             free_chunks: Cell::new(0),
+            empty_blocks: Cell::new(0),
             is_bump: true,
             wholesale_reset: Cell::new(false),
+            send_root: Cell::new(false),
+            unpooled: false,
             kind: "Slab",
             parent: None,
             children: RefCell::new(alloc::vec::Vec::new()),
+            led: crate::owner::Led::NEW,
         }
     }
 
@@ -375,10 +411,11 @@ mod tests {
     #[test]
     fn geometry_matches_c_shape() {
         let a = SlabArena::new(SLAB_DEFAULT_BLOCK_SIZE, CHUNK);
-        assert_eq!(a.full_chunk_size, 72);
+        assert_eq!(a.full_chunk_size, 80);
+        assert_eq!(a.chunks_per_block, 101);
         assert_eq!(
             a.chunks_per_block as usize,
-            (SLAB_DEFAULT_BLOCK_SIZE - SLAB_BLKHDRSZ) / 72
+            (SLAB_DEFAULT_BLOCK_SIZE - SLAB_BLKHDRSZ) / 80
         );
         assert!((a.chunks_per_block >> a.blocklist_shift) < (SLAB_BLOCKLIST_COUNT as u32 - 1));
         assert_eq!(a.blocklist_index(0), 0);
@@ -459,6 +496,38 @@ mod tests {
     }
 
     #[test]
+    fn stats_track_free_chunks_and_empty_blocks() {
+        let mut a = SlabArena::new(SLAB_DEFAULT_BLOCK_SIZE, CHUNK);
+        let acct = acct();
+        let cpb = a.chunks_per_block as usize;
+        let mut ptrs = alloc::vec::Vec::new();
+        for _ in 0..cpb + 3 {
+            ptrs.push(a.alloc(l(), &acct).unwrap().cast::<u8>());
+        }
+        assert_eq!(acct.arena_nblocks.get(), 2);
+        assert_eq!(acct.free_chunks.get(), cpb - 3);
+        assert_eq!(acct.window_tail.get(), (cpb - 3) * a.full_chunk_size);
+        assert_eq!(acct.empty_blocks.get(), 0);
+        for p in ptrs.drain(..cpb) {
+            // SAFETY: live chunk.
+            unsafe { a.dealloc(p, l(), &acct) };
+        }
+        assert_eq!(acct.arena_nblocks.get(), 1);
+        assert_eq!(acct.empty_blocks.get(), 1);
+        assert_eq!(acct.free_chunks.get(), cpb - 3);
+        let p = a.alloc(l(), &acct).unwrap().cast::<u8>();
+        assert_eq!(acct.free_chunks.get(), cpb - 4);
+        ptrs.push(p);
+        for p in ptrs {
+            // SAFETY: live chunk.
+            unsafe { a.dealloc(p, l(), &acct) };
+        }
+        assert_eq!(acct.arena_nblocks.get(), 0);
+        assert_eq!(acct.empty_blocks.get(), 2);
+        assert_eq!(acct.free_chunks.get(), 0);
+    }
+
+    #[test]
     fn block_mask_recovers_block_for_every_chunk() {
         let mut a = SlabArena::new(SLAB_DEFAULT_BLOCK_SIZE, CHUNK);
         let acct = acct();
@@ -474,10 +543,10 @@ mod tests {
 
     #[test]
     fn one_chunk_per_block_chains_full_blocks() {
-        let mut a = SlabArena::new(1024, 984);
+        let mut a = SlabArena::new(1024, 968);
         assert_eq!(a.chunks_per_block, 1);
         let acct = acct();
-        let layout = Layout::from_size_align(984, 8).unwrap();
+        let layout = Layout::from_size_align(968, 8).unwrap();
         let p0 = a.alloc(layout, &acct).unwrap().cast::<u8>();
         let p1 = a.alloc(layout, &acct).unwrap().cast::<u8>();
         let p2 = a.alloc(layout, &acct).unwrap().cast::<u8>();

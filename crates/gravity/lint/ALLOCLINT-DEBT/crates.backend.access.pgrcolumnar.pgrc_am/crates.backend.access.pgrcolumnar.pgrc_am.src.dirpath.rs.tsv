@@ -1,0 +1,9 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/dirpath.rs
+growth	std::vec::Vec::push	1
+macro	std::format	7
+macro	std::vec	1
+method	std::ffi::CString::new	2
+method	std::string::String::from_utf8_lossy	1
+method	std::string::ToString::to_string	2
+type	std::ffi::CString	2
+type	std::string::String	1

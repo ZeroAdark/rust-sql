@@ -212,6 +212,12 @@ fn tzsets_dir() -> &'static str {
         if let Ok(share) = std::env::var("PGRUST_PGSHAREDIR") {
             return format!("{share}/timezonesets");
         }
+        if let Some(staged) = std::env::current_exe().ok().and_then(|e| {
+            let d = e.parent()?.join("share/timezonesets");
+            d.is_dir().then(|| d.to_string_lossy().into_owned())
+        }) {
+            return staged;
+        }
         if let Ok(tzdir) = std::env::var("PGRUST_TZDIR") {
             if let Some((parent, _)) = tzdir.rsplit_once('/') {
                 return format!("{parent}/timezonesets");
@@ -375,10 +381,20 @@ fn load_tzoffsets_from(dir: &str, filename: &str) -> Option<&'static ZoneAbbrevT
             is_dst: e.is_dst,
         });
     }
-    let entries: Vec<_> = array
-        .iter()
-        .map(|e| (e.abbrev.to_vec(), e.zone.map(<[u8]>::to_vec), e.offset, e.is_dst))
-        .collect();
+    let mut entries = Vec::new();
+    let _ = entries.try_reserve(array.len());
+    for e in &array {
+        let mut abbrev = Vec::new();
+        let _ = abbrev.try_reserve(e.abbrev.len());
+        abbrev.extend_from_slice(e.abbrev);
+        let zone = e.zone.map(|z| {
+            let mut zv = Vec::new();
+            let _ = zv.try_reserve(z.len());
+            zv.extend_from_slice(z);
+            zv
+        });
+        entries.push((abbrev, zone, e.offset, e.is_dst));
+    }
     let key = format!("{dir}/{filename}");
     let mut tables = TABLES.lock().unwrap();
     if let Some(cached) = tables.get(&key) {

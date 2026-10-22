@@ -1,3 +1,0 @@
-comment = 'bugs/batch-230-mixed-lowtail script-context extension'
-default_version = '1.0'
-relocatable = true

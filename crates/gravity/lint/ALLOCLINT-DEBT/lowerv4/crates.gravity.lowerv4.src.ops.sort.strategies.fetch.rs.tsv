@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/ops/sort/strategies/fetch.rs
+growth	std::vec::Vec::push	1
+method	std::iter::Iterator::collect	2
+type	std::vec::Vec	2

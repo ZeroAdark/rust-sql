@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+rustc-hash = "2"
 stack_depth_core = { path = "../../misc/stack_depth_core" }
 init_small = { path = "../../init/init_small" }
 postgres_seams = { path = "../../../tcop/postgres_seams" }
@@ -33,6 +34,7 @@ parse_oper = { path = "../../../parser/parse_oper" }
 parser_small1 = { path = "../../../parser/parser_small1" }
 readfuncs = { path = "../../../nodes/readfuncs" }
 relcache = { path = "../../cache/relcache" }
+lmgr_seams = { path = "../../../storage/lmgr/lmgr_seams" }
 genam = { path = "../../../access/index/genam" }
 table = { path = "../../../access/table/table" }
 snapmgr = { path = "../../time/snapmgr" }

@@ -1,25 +1,10 @@
-//! Unit-shaped wiring for crates/_support/seams_init/tests/lint-determinism.sh — the DST P0
-//! determinism-fencing ratchet (docs/design/dst-and-wasm.md, P0 phasing row
-//! + §3.3 blocking census). Ten categories of raw nondeterminism (fs, time,
-//! rand, spawn, env, blocking, plus the P3 §1.3 layer-2 widened arms join,
-//! barrier, once, scope — dst-p3-scheduler.md §3 rows 14/15/18/19, seeded
-//! by the P3-CENSUS Wave-1 entry gate) are grepped over production code and
-//! diffed against the budgeted ledger in crates/_support/seams_init/tests/lint-determinism.allow; budgets
-//! may only shrink and rows may only die. Deliberate exceptions carry a
-//! "DST-REVIEW(<who>): <why>" marker — a review convention enforced by
-//! humans diffing the allowlist (the lint cannot tell a new row from a
-//! seeded one); the lint's part is CONFIG-FAILing malformed markers and
-//! surfacing marker rows as NOTEs on every run.
-//!
-//! Lives in seams_init beside the lint-seam-installs wrapper (the lint-family
-//! precedent): `cargo test -p seams_init --test lint_determinism`.
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    manifest_dir().to_path_buf()
         .join("../../..")
         .canonicalize()
         .expect("repo root")
@@ -46,7 +31,6 @@ fn run_lint(tree: Option<&std::path::Path>, allowlist: Option<&std::path::Path>)
     (out.status.success(), report)
 }
 
-/// Scratch dir unique per test (tests run concurrently in one process).
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lint-determinism-{}-{}", std::process::id(), name));
     let _ = fs::remove_dir_all(&dir);
@@ -54,12 +38,6 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-/// The lint is green on the real tree with the seeded ledger: no raw
-/// fs/time/rand/spawn/env/blocking site exists outside the allowlist, and
-/// no budget has been exceeded. A failure here means a new raw
-/// nondeterminism primitive was introduced — route it through the
-/// sanctioned surface named in the violation line, or (deliberately,
-/// reviewed) add a DST-REVIEW row.
 #[test]
 fn determinism_lint_passes() {
     let (ok, report) = run_lint(None, None);
@@ -74,8 +52,6 @@ fn determinism_lint_passes() {
     );
 }
 
-/// NEGATIVE: a synthetic new raw-fs site with no allowlist row must fail,
-/// naming the file and the category.
 #[test]
 fn new_raw_fs_site_fails_named() {
     let dir = scratch("newsite");
@@ -98,8 +74,6 @@ fn new_raw_fs_site_fails_named() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// NEGATIVE: growth past a row's budget (the ratchet) must fail even though
-/// the file has a row.
 #[test]
 fn budget_growth_fails_ratchet() {
     let dir = scratch("ratchet");
@@ -122,8 +96,6 @@ fn budget_growth_fails_ratchet() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// NEGATIVE-turned-warning: a row whose sites vanished must WARN stale but
-/// still pass (delete-the-row hygiene, not a gate).
 #[test]
 fn removed_site_warns_stale() {
     let dir = scratch("stale");
@@ -142,8 +114,6 @@ fn removed_site_warns_stale() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// NEGATIVE: libc syscall-surface sites (the review's biggest evasion class)
-/// are censused — fs, time, and blocking each catch their libc primitives.
 #[test]
 fn libc_surface_fails_per_category() {
     let dir = scratch("libc");
@@ -174,9 +144,6 @@ fn libc_surface_fails_per_category() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// NEGATIVE: import-line evasions — `use std::fs::{...}` braced groups and
-/// `use std::env::var;`-style fn imports — are counted at the use line.
-/// thread::sleep is a blocking site.
 #[test]
 fn import_line_and_sleep_evasions_fail() {
     let dir = scratch("imports");
@@ -204,10 +171,6 @@ fn import_line_and_sleep_evasions_fail() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// NEGATIVE: the P3 §1.3 layer-2 widened arms — a raw std::sync::Barrier,
-/// a zero-arg thread join, a racing get_or_init, and a thread::scope gang
-/// each fail under their own category (the census-blind classes the
-/// adversarial review proved live; dst-p3-scheduler.md §3 rows 14/15/18/19).
 #[test]
 fn widened_arms_barrier_join_once_scope_fail() {
     let dir = scratch("widened");
@@ -242,8 +205,6 @@ fn widened_arms_barrier_join_once_scope_fail() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// NEGATIVE: a "//" inside a string literal is not a comment — the fs call
-/// after it on the same line is still censused (string-aware scanner).
 #[test]
 fn comment_tokens_inside_strings_do_not_hide_sites() {
     let dir = scratch("strlit");
@@ -268,10 +229,6 @@ fn comment_tokens_inside_strings_do_not_hide_sites() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// cfg-attr stripping edges: `#[cfg(any(feature = "x", test))]` (test not
-/// first) IS stripped; `#[cfg(not(test))]` is NEVER stripped (it is
-/// production code); a char-literal '{' or b"/*" inside a cfg(test) mod
-/// must not poison the scan of production code after the mod.
 #[test]
 fn cfg_edges_and_literal_poison_handled() {
     let dir = scratch("cfgedges");
@@ -320,9 +277,6 @@ fn cfg_edges_and_literal_poison_handled() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// An unclosed block comment at EOF leaves the scanner state open — that is
-/// surfaced as WARN(scan-poison) (diagnosed, not silently swallowed) and
-/// does not gate.
 #[test]
 fn eof_poison_warns_but_passes() {
     let dir = scratch("poison");
@@ -341,8 +295,6 @@ fn eof_poison_warns_but_passes() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// A DST-REVIEW-marked row is accepted and surfaced as a NOTE (this is how
-/// deliberate exceptions stay visible in every train diff).
 #[test]
 fn review_marker_row_accepted_and_noted() {
     let dir = scratch("review");
@@ -367,4 +319,84 @@ fn review_marker_row_accepted_and_noted() {
         "marker rows must surface as NOTEs:\n{report}"
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// POSITIVE: the sanctioned routes the D238 fix moved Gravity onto are
+/// NOT flagged, so converting a site never needs a ledger row: pgsync lock /
+/// once types, pg_clock MonoStamp / Deadline (elapsed_ns, not the name-flagged
+/// `.elapsed(`), the waiter's sleep, pg_strong_random, the fd layer's whole-file
+/// helpers and the VFS's read_dir. And test support under a `test/` directory
+/// (FixturePool's home behind the fixture-pool feature) is outside the scan.
+#[test]
+fn sanctioned_routes_and_test_dirs_are_clean() {
+    let dir = scratch("sanctioned");
+    let src_dir = dir.join("tree/crates/gravity/synthetic/src");
+    fs::create_dir_all(src_dir.join("test")).unwrap();
+    fs::write(
+        src_dir.join("lib.rs"),
+        "use pgsync::{Mutex, OnceLock, RwLock};\n\
+         use pg_clock::MonoStamp;\n\
+         static M: Mutex<u8> = Mutex::new(0);\n\
+         static R: RwLock<u8> = RwLock::new(0);\n\
+         static O: OnceLock<u8> = OnceLock::new();\n\
+         pub fn routes(dir: &std::ffi::CStr) -> u64 {\n\
+         \x20   let t0 = MonoStamp::now();\n\
+         \x20   let deadline = pg_clock::Deadline::after(core::time::Duration::from_millis(2));\n\
+         \x20   while !deadline.expired() { waiter::sleep(core::time::Duration::from_millis(2)); }\n\
+         \x20   let mut kb = [0u8; 16];\n\
+         \x20   let _ = pg_strong_random::pg_strong_random(&mut kb);\n\
+         \x20   let _ = fd::sync::read_whole_file(\"global/seed\");\n\
+         \x20   let _ = fd::sync::write_whole_file(\"global/seed.tmp\", &kb, false);\n\
+         \x20   let _ = fd::sync::pg_rename(\"global/seed.tmp\", \"global/seed\");\n\
+         \x20   let _ = vfs::read_dir(dir);\n\
+         \x20   let _ = (M.lock(), R.read(), O.set(1));\n\
+         \x20   t0.elapsed_ns()\n\
+         }\n",
+    )
+    .unwrap();
+    fs::write(
+        src_dir.join("test/fixture.rs"),
+        "pub fn raw() { let h = std::thread::spawn(|| std::thread::sleep(std::time::Duration::from_millis(1))); let _ = h.join(); }\n",
+    )
+    .unwrap();
+    let allow = dir.join("empty.allow");
+    fs::write(&allow, "# empty\n").unwrap();
+
+    let (ok, report) = run_lint(Some(&dir.join("tree")), Some(&allow));
+    assert!(ok, "a sanctioned route or a test/ file was flagged:\n{report}");
+    assert!(report.contains("lint-determinism PASS"), "expected PASS marker:\n{report}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn env_group_import_arm_is_std_env_only() {
+    let dir = scratch("envarm");
+    let tree = dir.join("tree/crates/gravity");
+    for (krate, body) in [
+        ("synthetic_crate", "use crate::frame::env::{AggRow, Env};\nuse super::env::*;\n"),
+        ("synthetic_std", "use std::env::{var, vars};\n"),
+        ("synthetic_bare", "use std::env;\nuse env::{var as getenv};\n"),
+        ("synthetic_nested", "use std::{env::{var_os}};\n"),
+    ] {
+        fs::create_dir_all(tree.join(krate).join("src")).unwrap();
+        fs::write(tree.join(krate).join("src/lib.rs"), body).unwrap();
+    }
+    let allow = dir.join("empty.allow");
+    fs::write(&allow, "# empty\n").unwrap();
+
+    let (ok, report) = run_lint(Some(&dir.join("tree")), Some(&allow));
+    assert!(!ok, "std's env group imports must fail:\n{report}");
+    for want in ["synthetic_std", "synthetic_bare", "synthetic_nested"] {
+        let want = format!("VIOLATION(new-site): [env] crates/gravity/{want}/src/lib.rs");
+        assert!(report.contains(&want), "missing {want:?} in:\n{report}");
+    }
+    assert!(!report.contains("crates/gravity/synthetic_crate/"), "a crate-path env module was flagged:\n{report}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// D793-b: the checkout under test, read at run time (cargo sets CARGO_MANIFEST_DIR for every test process), never
+/// env!()'s path baked in at compile time: a test binary reused from another checkout would read that checkout's files.
+fn manifest_dir() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| std::env::var_os("CARGO_MANIFEST_DIR").map(Into::into).expect("CARGO_MANIFEST_DIR unset: run under cargo test (D793-b)"))
 }

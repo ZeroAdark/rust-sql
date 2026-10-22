@@ -102,7 +102,7 @@ impl<'mcx> PartitionTupleRouting<'mcx> {
             }),
             &rel,
         )?;
-        let mut supfuncs = Vec::with_capacity(key.partnatts as usize);
+        let mut supfuncs = ::mcx::std_vec_with_capacity("execpartition", key.partnatts as usize)?;
         for f in key.partsupfunc.iter() {
             let fn_oid = f.borrow().fn_oid;
             supfuncs.push(
@@ -252,7 +252,7 @@ impl<'mcx> PartitionTupleRouting<'mcx> {
                         mcx,
                         rel,
                         cur_slot,
-                        None,
+                        modified_cols,
                         Some(root_rel),
                     ));
                 }
@@ -357,7 +357,7 @@ impl<'mcx> PartitionTupleRouting<'mcx> {
                             mcx,
                             target,
                             check_slot,
-                            None,
+                            modified_cols,
                             Some(root_rel),
                         ));
                     }
@@ -452,6 +452,7 @@ pub fn partition_constraint_violation<'mcx>(
         format!("new row for relation \"{table}\" violates partition constraint"),
     )
     .with_sqlstate(ERRCODE_CHECK_VIOLATION)
+    .with_location("execMain.c", 1969, "ExecPartitionCheckEmitError")
     .with_schema_name(
         lsyscache::misc::get_namespace_name(mcx, rel.rd_rel.relnamespace)
             .ok()
@@ -563,10 +564,10 @@ pub fn slot_value_description<'mcx>(
             core::ffi::CStr::from_ptr(out.as_usize() as *const core::ffi::c_char)
         }
         .to_bytes();
-        // execMain.c:2490 takes the output bytes unvalidated (a SQL_ASCII
-        // value need not be UTF-8); the detail is a String, so render lossily.
+        // A SQL_ASCII database's text output may hold any high-bit byte: never assume UTF-8 here (D2060; the
+        // message then carries U+FFFD for such a byte, the same byte-for-byte residual D2022 names)
         let s = String::from_utf8_lossy(s);
-        let s = s.as_ref();
+        let s: &str = &s;
         if s.len() <= MAX_FIELD_LEN {
             buf.push_str(s);
         } else {
@@ -882,7 +883,9 @@ fn no_partition_error(
     const MAX_FIELD_LEN: usize = 64;
     // The detail is bytes: a type's text output need not be UTF-8 in a
     // SQL_ASCII database and execPartition.c:1697 appends it as-is.
-    let mut keydesc = b"Partition key of the failing row contains (".to_vec();
+    let mut keydesc =
+        ::mcx::std_vec_from_slice("execpartition", b"Partition key of the failing row contains (")
+            .unwrap_or_default();
     // pg_get_partkeydef_columns handles expression keys.
     let cols = ruleutils_seams::pg_get_partkeydef_columns::call(mcx, pd.rel.rd_id)
         .ok()
@@ -906,7 +909,7 @@ fn no_partition_error(
             let s = unsafe {
                 core::ffi::CStr::from_ptr(out.as_usize() as *const core::ffi::c_char)
             };
-            Ok(s.to_bytes().to_vec())
+            ::mcx::std_vec_from_slice("execpartition", s.to_bytes())
         })()
         .unwrap_or_default();
         // execPartition.c:1684-1693: clip at maxfieldlen bytes on a

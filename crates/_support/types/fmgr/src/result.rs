@@ -84,7 +84,7 @@ pub fn byref_result(mcx: Mcx<'_>, image: &[u8]) -> PgResult<Datum> {
     let layout = Layout::from_size_align(image.len(), 8).expect("byref_result layout");
     let dst: core::ptr::NonNull<u8> = mcx
         .allocate(layout)
-        .map_err(|_| mcx.oom(layout.size()))?
+        .map_err(|_| mcx.oom_boxed(layout.size()))?
         .cast();
     // SAFETY: fresh `image.len()`-byte allocation; `image` is a live slice.
     unsafe {

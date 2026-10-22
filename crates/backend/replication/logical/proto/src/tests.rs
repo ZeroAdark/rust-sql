@@ -593,3 +593,37 @@ fn tuple_column_length_is_checked_as_palloc_size_first() {
     let e = logicalrep_read_tuple(&mut r).err().unwrap();
     assert_eq!(e.message(), "insufficient data left in message");
 }
+
+// proto.c:626: logicalrep_read_truncate reads the flags with
+// pq_getmsgint(in, 1), so a TRUNCATE body that ends after nrelids fails in
+// pq_copymsgbytes ("insufficient data left in message"), not pq_getmsgbyte.
+#[test]
+fn truncate_missing_flags_is_pq_copymsgbytes_short_data() {
+    let body = 0u32.to_be_bytes();
+    let mut r = Reader::new(&body);
+    let e = logicalrep_read_truncate(&mut r).unwrap_err();
+    assert_eq!(e.message(), "insufficient data left in message");
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_PROTOCOL_VIOLATION);
+
+    let mut body = 1u32.to_be_bytes().to_vec();
+    body.push(TRUNCATE_CASCADE | TRUNCATE_RESTART_SEQS);
+    body.extend_from_slice(&42u32.to_be_bytes());
+    let mut r = Reader::new(&body);
+    assert_eq!(logicalrep_read_truncate(&mut r).unwrap(), (vec![42], true, true));
+}
+
+#[test]
+fn insert_unknown_representation_preserves_message_bytes() {
+    for kind in [0x80, 0xff, b'?', 0] {
+        let body = [0, 0, 0, 1, b'N', 0, 1, kind];
+        let error = logicalrep_read_insert(&mut Reader::new(&body)).err().unwrap();
+        let actual = error.message_raw.as_deref().unwrap_or(error.message().as_bytes());
+        println!("kind={kind:02x} message_hex={}", actual.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        let mut expected = b"unrecognized data representation type '".to_vec();
+        if kind != 0 {
+            expected.extend_from_slice(&[kind, b'\'']);
+        }
+        assert_eq!(actual, expected);
+        assert_eq!(error.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    }
+}

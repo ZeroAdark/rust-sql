@@ -1,0 +1,10 @@
+-- regress-full-insert_conflict-012
+-- insert into insertconflictv values (1,'bar') on conflict (f1) do update set f2 = excluded.f2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:1, 2=c25:'bar')
+  write INSERT rel=18275 rti=3 natts=2 indexes=(18281[1]up) on_conflict=update arbiter=(18281) excl_rti=4 cols=(2) set=(1=inner.2)
+  outs 1=w4:val 2=vl:stmt/imm
+mapped: Result ModifyTable

@@ -715,50 +715,21 @@ fn synchronize_slots(conn: &mut PgConn) -> PgResult<bool> {
         if row.len() != SLOT_QUERY_NFIELDS {
             return invalid_response(&format!("a row of {}", row.len()));
         }
-        let text = |i: usize| -> Option<String> {
-            row.get(i)
-                .and_then(|c| c.as_ref())
-                .map(|v| String::from_utf8_lossy(v).into_owned())
-        };
-        let (Some(name), Some(plugin), Some(database)) = (text(0), text(1), text(8)) else {
+        let Some(remote_slot) = remote_slot_from_row(row)? else {
             return invalid_response("a NULL slot_name, plugin or database");
-        };
-        // LSN and xmin may be null if the slot is invalidated on the primary.
-        let confirmed_lsn = text(2).map(|s| parse_lsn(&s)).unwrap_or(InvalidXLogRecPtr);
-        let restart_lsn = text(3).map(|s| parse_lsn(&s)).unwrap_or(InvalidXLogRecPtr);
-        let catalog_xmin = text(4)
-            .and_then(|s| s.trim().parse::<u32>().ok())
-            .unwrap_or(InvalidTransactionId);
-        let two_phase = text(5).as_deref() == Some("t");
-        let two_phase_at = text(6).map(|s| parse_lsn(&s)).unwrap_or(InvalidXLogRecPtr);
-        let failover = text(7).as_deref() == Some("t");
-        let invalidated = match text(9) {
-            None => RS_INVAL_NONE,
-            Some(cause) => GetSlotInvalidationCause(&cause).0,
         };
 
         // An RS_EPHEMERAL remote slot has invalid LSNs/xmin while still
         // valid: skip it this cycle.
-        if (restart_lsn == InvalidXLogRecPtr
-            || confirmed_lsn == InvalidXLogRecPtr
-            || catalog_xmin == InvalidTransactionId)
-            && invalidated == RS_INVAL_NONE
+        if (remote_slot.restart_lsn == InvalidXLogRecPtr
+            || remote_slot.confirmed_lsn == InvalidXLogRecPtr
+            || remote_slot.catalog_xmin == InvalidTransactionId)
+            && remote_slot.invalidated == RS_INVAL_NONE
         {
             continue;
         }
 
-        remote_slot_list.push(RemoteSlot {
-            name,
-            plugin,
-            database,
-            two_phase,
-            failover,
-            restart_lsn,
-            confirmed_lsn,
-            two_phase_at,
-            catalog_xmin,
-            invalidated,
-        });
+        remote_slot_list.push(remote_slot);
     }
 
     // Drop local slots that no longer need to be synced.
@@ -783,17 +754,54 @@ fn synchronize_slots(conn: &mut PgConn) -> PgResult<bool> {
     Ok(some_slot_updated)
 }
 
-fn parse_lsn(s: &str) -> XLogRecPtr {
-    let mut it = s.trim().split('/');
-    let hi = it
-        .next()
-        .and_then(|p| u64::from_str_radix(p, 16).ok())
-        .unwrap_or(0);
-    let lo = it
-        .next()
-        .and_then(|p| u64::from_str_radix(p, 16).ok())
-        .unwrap_or(0);
-    (hi << 32) | lo
+// libpqrcv_processTuples builds the row with the declared column types'
+// input functions (BuildTupleFromCStrings), so malformed text is the type's
+// 22P02 error, never a silent zero; NULL is allowed only where slotsync.c:889
+// reads isnull (the LSNs, xmin and invalidation_reason).
+fn remote_slot_from_row(row: &[Option<Vec<u8>>]) -> PgResult<Option<RemoteSlot>> {
+    let text = |i: usize| -> Option<String> {
+        row[i].as_ref().map(|v| String::from_utf8_lossy(v).into_owned())
+    };
+    let lsn = |i: usize| -> PgResult<XLogRecPtr> {
+        match row[i].as_ref() {
+            None => Ok(InvalidXLogRecPtr),
+            Some(v) => adt_pg_lsn::pg_lsn_in(v, None),
+        }
+    };
+    let boolean = |i: usize| -> PgResult<bool> {
+        match row[i].as_ref() {
+            None => Ok(false),
+            Some(v) => adt_bool::boolin(v, None),
+        }
+    };
+    let (Some(name), Some(plugin), Some(database)) = (text(0), text(1), text(8)) else {
+        return Ok(None);
+    };
+    let confirmed_lsn = lsn(2)?;
+    let restart_lsn = lsn(3)?;
+    let catalog_xmin = match text(4) {
+        None => InvalidTransactionId,
+        Some(s) => numutils::uint32in_subr(&s, false, "xid", None)?.0,
+    };
+    let two_phase = boolean(5)?;
+    let two_phase_at = lsn(6)?;
+    let failover = boolean(7)?;
+    let invalidated = match text(9) {
+        None => RS_INVAL_NONE,
+        Some(cause) => GetSlotInvalidationCause(&cause).0,
+    };
+    Ok(Some(RemoteSlot {
+        name,
+        plugin,
+        database,
+        two_phase,
+        failover,
+        restart_lsn,
+        confirmed_lsn,
+        two_phase_at,
+        catalog_xmin,
+        invalidated,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,7 +1458,7 @@ pub fn SlotSyncShmemResetAfterCrash() {
 /// slotsync_failure_callback + SyncReplicationSlots: sync once over the given
 /// connection with C's ensure-error-cleanup shape.
 pub fn SyncReplicationSlots(conn: &mut PgConn) -> PgResult<()> {
-    let body = |conn: &mut PgConn| -> PgResult<()> {
+    with_sync_cleanup(|| {
         // upstream 94efd308bcec (18.4): Enhance slot synchronization API to respect promotion signal.
         record_started_with();
         check_and_set_sync_info(init_small::globals::MyProcPid())?;
@@ -1463,22 +1471,29 @@ pub fn SyncReplicationSlots(conn: &mut PgConn) -> PgResult<()> {
 
         reset_syncing_flag();
         Ok(())
-    };
+    })
+}
 
-    match body(conn) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // slotsync_failure_callback.
-            if MyReplicationSlot().is_some() {
-                let _ = ReplicationSlotRelease();
-            }
-            let _ = ReplicationSlotCleanup(true);
-            if slot::syncing_replication_slots() {
-                reset_syncing_flag();
-            }
-            Err(e)
-        }
+fn slotsync_failure_callback(_code: i32, _arg: datum::Datum) -> PgResult<()> {
+    if MyReplicationSlot().is_some() {
+        ReplicationSlotRelease()?;
     }
+    ReplicationSlotCleanup(true)?;
+    if slot::syncing_replication_slots() {
+        reset_syncing_flag();
+    }
+    Ok(())
+}
+
+fn with_sync_cleanup(body: impl FnOnce() -> PgResult<()>) -> PgResult<()> {
+    let arg = datum::Datum::from_usize(0);
+    ipc::before_shmem_exit(slotsync_failure_callback, arg)?;
+    let result = body();
+    ipc::cancel_before_shmem_exit(slotsync_failure_callback, arg)?;
+    if result.is_err() {
+        slotsync_failure_callback(0, arg)?;
+    }
+    result
 }
 
 /// The whole `pg_sync_replication_slots()` body past its pre-checks

@@ -1,0 +1,14 @@
+-- oltpc-019
+-- INSERT INTO order_line (ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_dist_info) SELECT 999999, 1::int, 1::int, 1, 17::int, 1::int, 5::int, 5::int * 1.50::numeric, CASE 1::int WHEN 1 THEN s_dist_01 WHEN 2 THEN s_dist_02 WHEN 3 THEN s_dist_03 WHEN 4 THEN s_dist_04 WHEN 5 THEN s_dist_05 WHEN 6 THEN s_dist_06 WHEN 7 THEN s_dist_07 WHEN 8 THEN s_dist_08 WHEN 9 THEN s_dist_09 ELSE s_dist_10 END FROM stock WHERE s_i_id = 17 AND s_w_id = 1 /* C26 NO insert order_line select from stock */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16462 rti=3 am=heap index=16482
+    key att=1 op=96 value=c23:17
+    key att=2 op=96 value=c23:1
+    recheck (op96(v3.1, c23:17), op96(v3.2, c23:1))
+    lanes Attr(7):byref8:vl:win/page
+  project (1=c1184:null, 2=c23:999999, 3=c23:1, 4=c23:17, 5=c23:1, 6=c21:1, 7=c21:1, 8=c21:5, 9=c1700:'\x00\x81\x07\x00\x88\x13', 10=v3.7)
+  write INSERT rel=16504 rti=1 natts=10 indexes=(16514[3, 6, 2, 7]up)
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=w2:val 7=w2:val 8=w2:val 9=vl:stmt/imm 10=vl:win/page
+mapped: ModifyTable IndexScan

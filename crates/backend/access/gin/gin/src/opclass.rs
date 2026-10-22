@@ -246,7 +246,7 @@ pub(crate) fn compare(col: &GinColState, a: Datum, b: Datum) -> PgResult<i32> {
         GinCompareFn::Fmgr(cmp_proc) => {
             let mut finfo = ::fmgr_seams::fmgr_info::call(cmp_proc)
                 .expect("GIN compare support function resolved at initGinState");
-            let cx = ::mcx::MemoryContext::new_bump("gin fmgr key compare");
+            let cx = ::mcx::MemoryContext::new_wholesale("gin fmgr key compare");
             ::types_fmgr::function_call2_coll_in(
                 &mut finfo,
                 col.support_collation,
@@ -795,7 +795,7 @@ pub fn gincost_extract_query(
         .with_sqlstate(::types_error::ERRCODE_INTERNAL_ERROR)));
     }
     let f = crate::util::resolve_extract_query(extract)?;
-    let scratch = ::mcx::MemoryContext::new_bump("gincost extract scratch");
+    let scratch = ::mcx::MemoryContext::new_wholesale("gincost extract scratch");
     let out = extract_query(scratch.mcx(), f, collation, query, strategy)?;
     let npartial = out.partial_match.iter().filter(|&&p| p).count() as i32;
     Ok((out.entries.len() as i32, npartial, out.search_mode))

@@ -1,0 +1,60 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1t s2d s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) DELETE FROM fg_t o WHERE EXISTS (SELECT 1 FROM fg_p p WHERE p.id = o.k AND p.v LIKE 'q%');
+QUERY PLAN                                                    
+--------------------------------------------------------------
+Delete on fg_t o                                              
+  ->  Nested Loop                                             
+        Join Filter: (p.id = o.k)                             
+        ->  HashAggregate                                     
+              Group Key: p.id                                 
+              ->  Append                                      
+                    ->  Index Scan using fg_p_id on fg_p p_1  
+                          Filter: (v ~~ 'q%'::text)           
+                    ->  Index Scan using fg_p1_id on fg_p1 p_2
+                          Filter: (v ~~ 'q%'::text)           
+                    ->  Index Scan using fg_p2_id on fg_p2 p_3
+                          Filter: (v ~~ 'q%'::text)           
+        ->  Seq Scan on fg_t o                                
+              Disabled: true                                  
+(14 rows)
+
+step s1t: UPDATE fg_t SET t = t || '!' WHERE k = 2;
+step s2d: DELETE FROM fg_t o WHERE EXISTS (SELECT 1 FROM fg_p p WHERE p.id = o.k AND p.v LIKE 'q%'); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT k, t FROM fg_t ORDER BY k, t;
+k|t
+-+-
+9|d
+(1 row)
+
+
+starting permutation: s1k s2d s1c s2sel
+step s1k: UPDATE fg_t SET k = 3 WHERE k = 2;
+step s2d: DELETE FROM fg_t o WHERE EXISTS (SELECT 1 FROM fg_p p WHERE p.id = o.k AND p.v LIKE 'q%'); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT k, t FROM fg_t ORDER BY k, t;
+k|t
+-+-
+3|b
+9|d
+(2 rows)
+
+
+starting permutation: s1t s2u s1c s2sel
+step s1t: UPDATE fg_t SET t = t || '!' WHERE k = 2;
+step s2u: UPDATE fg_t o SET t = t || '+' WHERE EXISTS (SELECT 1 FROM fg_p p WHERE p.id = o.k AND p.v LIKE 'q%'); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT k, t FROM fg_t ORDER BY k, t;
+k|t  
+-+---
+1|a+ 
+2|b!+
+3|c+ 
+9|d  
+(4 rows)
+

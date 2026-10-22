@@ -160,9 +160,8 @@ pub struct TupleConstr<'mcx> {
     pub defval: PgVec<'mcx, AttrDefault<'mcx>>,
     pub check: PgVec<'mcx, ConstrCheck<'mcx>>,
     pub missing: PgVec<'mcx, AttrMissing>,
-    // Owned images behind by-ref am_value entries; FreeTupleDesc's per-datum
-    // pfree (tupdesc.c:530) is this store dropping with the descriptor.
-    pub missing_store: PgVec<'mcx, u8>,
+    // Each by-ref am_value owns a separate allocation, bounded by MaxAllocSize.
+    pub missing_store: PgVec<'mcx, PgVec<'mcx, u8>>,
     pub num_defval: u16,
     // CheckNNConstraintFetch's found count (relcache.c:4699), as C.
     pub num_check: u16,

@@ -1,0 +1,147 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s2ef s1c s2c
+step s2e: EXPLAIN (COSTS OFF) DECLARE cx CURSOR FOR SELECT i.a, j.w FROM pn i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE;
+QUERY PLAN                         
+-----------------------------------
+LockRows                           
+  ->  Nested Loop                  
+        Join Filter: (j.a = i.a)   
+        ->  Seq Scan on pn i       
+        ->  Materialize            
+              ->  Seq Scan on pj j 
+                    Filter: (w = 4)
+(7 rows)
+
+step s2ef: EXPLAIN (COSTS OFF) DECLARE cx CURSOR FOR SELECT i.a FROM pi i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE OF i;
+QUERY PLAN                           
+-------------------------------------
+LockRows                             
+  ->  Nested Loop                    
+        Join Filter: (j.a = i.a)     
+        ->  Append                   
+              ->  Seq Scan on pi i_1 
+              ->  Seq Scan on pi1 i_2
+              ->  Seq Scan on pi2 i_3
+        ->  Materialize              
+              ->  Seq Scan on pj j   
+                    Filter: (w = 4)  
+(10 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1b s2n s2nf s1c s2c
+step s1b: UPDATE pn SET b = b + 10 WHERE a = 4; UPDATE pi SET b = b + 10 WHERE a = 4;
+step s2n: DECLARE cn CURSOR FOR SELECT i.a, i.b, j.w FROM pn i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE;
+step s2nf: FETCH ALL FROM cn; <waiting ...>
+step s1c: COMMIT;
+step s2nf: <... completed>
+ a| b|w
+--+--+-
+ 4|11|4
+ 9| 0|4
+14| 2|4
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1a s2n s2nf s1c s2c
+step s1a: UPDATE pn SET a = 90 WHERE a = 9; UPDATE pi SET a = 90 WHERE a = 9;
+step s2n: DECLARE cn CURSOR FOR SELECT i.a, i.b, j.w FROM pn i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE;
+step s2nf: FETCH ALL FROM cn; <waiting ...>
+step s1c: COMMIT;
+step s2nf: <... completed>
+ a|b|w
+--+-+-
+ 4|1|4
+14|2|4
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1w s2n s2nf s1c s2c
+step s1w: UPDATE pj SET w = 0 WHERE a = 14; UPDATE pn SET b = b + 10 WHERE a = 14; UPDATE pi SET b = b + 10 WHERE a = 14;
+step s2n: DECLARE cn CURSOR FOR SELECT i.a, i.b, j.w FROM pn i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE;
+step s2nf: FETCH ALL FROM cn; <waiting ...>
+step s1c: COMMIT;
+step s2nf: <... completed>
+a|b|w
+-+-+-
+4|1|4
+9|0|4
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1d s2n s2nf s1c s2c
+step s1d: DELETE FROM pn WHERE a = 4; DELETE FROM pi WHERE a = 4;
+step s2n: DECLARE cn CURSOR FOR SELECT i.a, i.b, j.w FROM pn i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE;
+step s2nf: FETCH ALL FROM cn; <waiting ...>
+step s1c: COMMIT;
+step s2nf: <... completed>
+ a|b|w
+--+-+-
+ 9|0|4
+14|2|4
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1b s2f s2ff s1c s2c
+step s1b: UPDATE pn SET b = b + 10 WHERE a = 4; UPDATE pi SET b = b + 10 WHERE a = 4;
+step s2f: DECLARE cf CURSOR FOR SELECT i.tableoid::regclass, i.a, i.b FROM pi i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE OF i;
+step s2ff: FETCH ALL FROM cf; <waiting ...>
+step s1c: COMMIT;
+step s2ff: <... completed>
+tableoid| a| b
+--------+--+--
+pi      | 4|11
+pi1     | 9| 0
+pi2     |14| 2
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1a s2f s2ff s1c s2c
+step s1a: UPDATE pn SET a = 90 WHERE a = 9; UPDATE pi SET a = 90 WHERE a = 9;
+step s2f: DECLARE cf CURSOR FOR SELECT i.tableoid::regclass, i.a, i.b FROM pi i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE OF i;
+step s2ff: FETCH ALL FROM cf; <waiting ...>
+step s1c: COMMIT;
+step s2ff: <... completed>
+tableoid| a|b
+--------+--+-
+pi      | 4|1
+pi2     |14|2
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1w s2f s2ff s1c s2c
+step s1w: UPDATE pj SET w = 0 WHERE a = 14; UPDATE pn SET b = b + 10 WHERE a = 14; UPDATE pi SET b = b + 10 WHERE a = 14;
+step s2f: DECLARE cf CURSOR FOR SELECT i.tableoid::regclass, i.a, i.b FROM pi i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE OF i;
+step s2ff: FETCH ALL FROM cf; <waiting ...>
+step s1c: COMMIT;
+step s2ff: <... completed>
+tableoid| a| b
+--------+--+--
+pi      | 4| 1
+pi1     | 9| 0
+pi2     |14|12
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1d s2f s2ff s1c s2c
+step s1d: DELETE FROM pn WHERE a = 4; DELETE FROM pi WHERE a = 4;
+step s2f: DECLARE cf CURSOR FOR SELECT i.tableoid::regclass, i.a, i.b FROM pi i JOIN pj j ON j.a = i.a WHERE j.w = 4 FOR UPDATE OF i;
+step s2ff: FETCH ALL FROM cf; <waiting ...>
+step s1c: COMMIT;
+step s2ff: <... completed>
+tableoid| a|b
+--------+--+-
+pi1     | 9|0
+pi2     |14|2
+(2 rows)
+
+step s2c: COMMIT;

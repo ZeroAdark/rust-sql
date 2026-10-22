@@ -149,3 +149,15 @@ fn defgetqualifiedname_non_name_is_42601() {
     assert_eq!(e.message(), "argument of parser must be a name");
     assert_eq!(e.sqlstate(), types_error::ERRCODE_SYNTAX_ERROR);
 }
+
+// buildDefItem: a Float needs strtod to consume the whole value with errno 0,
+// so overflowing decimals stay strings and hex floats become Floats.
+#[test]
+fn deserialize_float_follows_strtod() {
+    let ctx = mcx::MemoryContext::new("tsearchcmds-test");
+    let items = deserialize_deflist(ctx.mcx(), b"a = 1e400, b = 0x1ffffffff, c = 2.5e-3, d = inf").unwrap();
+    assert_eq!(items[0].value, Some(DefValue::Str("1e400")));
+    assert_eq!(items[1].value, Some(DefValue::Float("0x1ffffffff")));
+    assert_eq!(items[2].value, Some(DefValue::Float("2.5e-3")));
+    assert_eq!(items[3].value, Some(DefValue::Float("inf")));
+}

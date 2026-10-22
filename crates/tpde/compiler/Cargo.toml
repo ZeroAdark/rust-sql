@@ -1,0 +1,39 @@
+[package]
+name = "tpde_compiler"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+autotests = false
+
+[dependencies]
+tpde_core = { path = "../core" }
+tpde_function_writer = { path = "../function-writer" }
+tpde_assembler = { path = "../assembler" }
+tpde_base = { path = "../base", default-features = false }
+tpde_util = { path = "../util" }
+mcx = { path = "../../_support/mcx" }
+types_error = { path = "../../_support/types/types_error" }
+
+[features]
+upstream-oracle = []
+logging = ["tpde_base/logging"]
+
+[[test]]
+name = "scratch_generic"
+
+[[test]]
+name = "branches"
+
+[[test]]
+name = "fixed_register_backup"
+
+[dev-dependencies]
+tpde_test_ir = { path = "../test-ir" }
+
+[[test]]
+name = "compiler_fixture"
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]

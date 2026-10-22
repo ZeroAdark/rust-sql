@@ -1,0 +1,9 @@
+-- regress-full-privileges-043
+-- select has_table_privilege(current_user,'atest1','select');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn1922(T_SQLValueFunction, c25:'atest1', c25:'select'))
+  outs 1=w1:val
+mapped: Result

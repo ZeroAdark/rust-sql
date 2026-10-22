@@ -1,0 +1,88 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2cnt s2plan
+step s2cnt: SELECT count(*) FROM nt; SELECT count(*) FROM ns;
+count
+-----
+    3
+(1 row)
+
+count
+-----
+    3
+(1 row)
+
+step s2plan: EXPLAIN (costs off) MERGE INTO nt t USING ns s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w);
+QUERY PLAN                        
+----------------------------------
+Merge on nt t                     
+  ->  Hash Left Join              
+        Hash Cond: (s.k = t.k)    
+        ->  Seq Scan on ns s      
+        ->  Hash                  
+              ->  Seq Scan on nt t
+(6 rows)
+
+
+starting permutation: s1del s2merge s1c s2chk
+s1: WARNING:  there is already a transaction in progress
+step s1del: DELETE FROM nt WHERE k = 1;
+step s2merge: MERGE INTO nt t USING ns s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+step s2chk: SELECT * FROM nt ORDER BY k;
+k|  v|note
+-+---+----
+1|100|dflt
+2|220|dflt
+3| 30|dflt
+4|400|dflt
+(4 rows)
+
+
+starting permutation: s1key s2merge s1c s2chk
+step s1key: UPDATE nt SET k = 11 WHERE k = 1;
+step s2merge: MERGE INTO nt t USING ns s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+step s2chk: SELECT * FROM nt ORDER BY k;
+ k|  v|note
+--+---+----
+ 1|100|dflt
+ 2|220|dflt
+ 3| 30|dflt
+ 4|400|dflt
+11| 10|dflt
+(5 rows)
+
+
+starting permutation: s1v s2merge s1c s2chk
+step s1v: UPDATE nt SET v = v + 1000 WHERE k = 1;
+step s2merge: MERGE INTO nt t USING ns s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+step s2chk: SELECT * FROM nt ORDER BY k;
+k|   v|note
+-+----+----
+1|1110|dflt
+2| 220|dflt
+3|  30|dflt
+4| 400|dflt
+(4 rows)
+
+
+starting permutation: s1ins s2merge s1c s2chk
+step s1ins: INSERT INTO nt VALUES (4, 44, 's1');
+step s2merge: MERGE INTO nt t USING ns s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+ERROR:  duplicate key value violates unique constraint "nt_pkey"
+step s2chk: SELECT * FROM nt ORDER BY k;
+k| v|note
+-+--+----
+1|10|dflt
+2|20|dflt
+3|30|dflt
+4|44|s1  
+(4 rows)
+

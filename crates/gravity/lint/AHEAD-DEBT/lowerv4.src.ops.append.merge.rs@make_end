@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/append/merge.rs	make_end	licence	fn	a MergeAppend's breaker form reads its arms whole past PG's early stop (run_ahead / ahead_unchecked, else whole_read) [LICENCE-ASKED; D449,D2733]

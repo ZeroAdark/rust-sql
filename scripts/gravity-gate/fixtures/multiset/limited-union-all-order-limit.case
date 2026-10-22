@@ -1,0 +1,11 @@
+# UNION ALL .. ORDER BY 1 LIMIT n: the ORDER BY covers every column
+sql: SELECT x FROM t UNION ALL SELECT x FROM u ORDER BY 1 LIMIT 2;
+cols: x
+class: limited 1
+verdict: mismatch-order
+[pg]
+1
+2
+[got]
+2
+1

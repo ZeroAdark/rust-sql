@@ -1,0 +1,22 @@
+-- regress-full-limit-006
+-- SELECT ''::text AS ten, unique1, unique2, stringu1 FROM onek ORDER BY unique1 OFFSET 990;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=2 eligible rows=2943 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n2@0 n1@1^
+  source range rel=16417 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(14):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=c25:'', 2=v1.1, 3=v1.2, 4=v1.14)
+  sort keys=2+:I32 form=runs
+  outs 1=vl:stmt/imm 2=w8:val 3=w8:val 4=fx64:win/page
+p1 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source breaker slot=0
+  project (1=c25:'', 2=outer.2, 3=outer.3, 4=outer.4)
+  limit count=all offset=990
+  project (1=c25:'', 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=vl:stmt/imm 2=w8:val 3=w8:val 4=fx64:win/page
+  outs 1=vl:stmt/imm 2=w8:val 3=w8:val 4=fx64:win/page
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=2+
+mapped: SeqScan Sort Limit

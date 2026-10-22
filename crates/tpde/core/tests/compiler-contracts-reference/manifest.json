@@ -1,0 +1,136 @@
+{
+  "repository": "https://github.com/tpde2/tpde",
+  "revision": "116b2b83eb8491fd63c017285c91b007b8a26a67",
+  "files": [
+    {
+      "path": "LICENSES/Apache-2.0.txt",
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "git_blob": "137069b823873b8bcf42979bcf8e9371052d26a2"
+    },
+    {
+      "path": "LICENSES/LLVM-exception.txt",
+      "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+      "git_blob": "fa4b725a0ee50ef723ce5292865e54de7b0bfca4"
+    },
+    {
+      "path": "tpde/include/tpde/Analyzer.hpp",
+      "sha256": "b8a83edfc8b1df87bf8d118269694fb85de8ae6c1fdb6e8cb7d527a83d0e05d1",
+      "git_blob": "3b5f43db5b1e8fd413610508e8a7ff835425bd7a"
+    },
+    {
+      "path": "tpde/include/tpde/Assembler.hpp",
+      "sha256": "3338a43e4c9cbb9391aea9f626a78c4d1e45e8243100ac1768e3d605a04bf82a",
+      "git_blob": "28a775e846d5b2d399f85b7d8c010b50c781b686"
+    },
+    {
+      "path": "tpde/include/tpde/AssignmentPartRef.hpp",
+      "sha256": "d17019175e6d48bc46fcfbeea621a289261fe35ece1f77b504ea1124fe8e82cd",
+      "git_blob": "f64e6b93d9d14b809bd66701219eca9617d77759"
+    },
+    {
+      "path": "tpde/include/tpde/Compiler.hpp",
+      "sha256": "ac1684d00c31ac2dd293d2bf25bb6198db1c12a6e9859c55c8139ed9f771a93c",
+      "git_blob": "6c68f87c36fc47b66774a8a495dd7b04b217303b"
+    },
+    {
+      "path": "tpde/include/tpde/CompilerBase.hpp",
+      "sha256": "fc87e49f1caa5b9f7d2ce6240b9abb60003ae8f2e4fd142e604471f4a8eeb3c9",
+      "git_blob": "fe9d002e5e88a7581b486caf35877a7f3f6d3369"
+    },
+    {
+      "path": "tpde/include/tpde/CompilerConfig.hpp",
+      "sha256": "a18968748f0ec94f84e25df2852a42a6f8a34165a4276b295b2d14dd2c361c01",
+      "git_blob": "4c0b6a268489845922507b95c50a247a2ab3cb68"
+    },
+    {
+      "path": "tpde/include/tpde/DWARF.hpp",
+      "sha256": "c58e0448f8c47899cc1da1a44f2697b319316f778ef22b44493864f58110cdc8",
+      "git_blob": "8ca753475edac18ffc3a29239e633722d9417f6d"
+    },
+    {
+      "path": "tpde/include/tpde/FunctionWriter.hpp",
+      "sha256": "3922b9973b36f6798a1298bb9d98aa9e8d02e0cb71ca4d9eafd1c851d96879da",
+      "git_blob": "ca56524a56889323bf26b164c47f70d4f91591f6"
+    },
+    {
+      "path": "tpde/include/tpde/GenericValuePart.hpp",
+      "sha256": "6db3eaf05defadcecf060f3346027a675d97cea6fbdb6b9854d4d8c81d6dbd81",
+      "git_blob": "d1c16a8afdb07179c97d4042d2f5514d0c4ef807"
+    },
+    {
+      "path": "tpde/include/tpde/IRAdaptor.hpp",
+      "sha256": "8bda554248095c4816410bca495a2367afd129fce19f484e336a6231b35a15b3",
+      "git_blob": "7901ec449d82d71dbe6f89e41e5716e7b77c1b79"
+    },
+    {
+      "path": "tpde/include/tpde/RegisterFile.hpp",
+      "sha256": "bebe0eb919a90dfa3fd6e285ce1cf9a37cb950a00cb38363b42c4903c1399d99",
+      "git_blob": "8d383367523b9b4b62489087d8b963089b5dd055"
+    },
+    {
+      "path": "tpde/include/tpde/ScratchReg.hpp",
+      "sha256": "81017a04986cf24eb63b70a5c05cd6931abc36dae94950363a38c45128549169",
+      "git_blob": "bc013d789541622fba48dd4af81e7fa0b992c121"
+    },
+    {
+      "path": "tpde/include/tpde/ValLocalIdx.hpp",
+      "sha256": "d736ab9c83e1670f1ab2af852c4b0af9919be287fee76e00cc2409cc8309110c",
+      "git_blob": "411edd575d737c968be10a674b2cb76e23222e08"
+    },
+    {
+      "path": "tpde/include/tpde/ValueAssignment.hpp",
+      "sha256": "6f7b6ca33f30ba7b73f9bcd67e6ccc2504eba19586a661ece2d3cc0cf3de92ae",
+      "git_blob": "66e647b22b41b527433429f10e0a9b3e3abb4ded"
+    },
+    {
+      "path": "tpde/include/tpde/ValuePartRef.hpp",
+      "sha256": "47896f9923bcde380f1e9a6750602a01804b20f67aa588df3c97d001aadb2f16",
+      "git_blob": "e029dbbd3700c685948bbe914ba2c24176f4c0d0"
+    },
+    {
+      "path": "tpde/include/tpde/ValueRef.hpp",
+      "sha256": "3feb5e6f6e5bdbfb10d60b744186ea5136e6e489ae5eb38d36328913508f80c0",
+      "git_blob": "6cf8ea516dcf7a21d0db86b1fdc9660222f78c8f"
+    },
+    {
+      "path": "tpde/include/tpde/base.hpp",
+      "sha256": "c13348df72171026eff9bc6bd284c6abdfac5d1cd170fdecf47c6fd9fe744d31",
+      "git_blob": "9d30b7b6231d544fefe99e5ba2b380ddfb9cd935"
+    },
+    {
+      "path": "tpde/include/tpde/util/AddressSanitizer.hpp",
+      "sha256": "dcf7daca345337a6e0e6c9e404fde9ff46db82f965f60064ef2398ef032d0cfa",
+      "git_blob": "01230c28409568eb2498267997b588a76a825a9d"
+    },
+    {
+      "path": "tpde/include/tpde/util/BumpAllocator.hpp",
+      "sha256": "b3a86498d97eaf23d0aa07ac40042a2459bea303f83908bfac363ba461fef3d5",
+      "git_blob": "b63195b7ed9614de59786cf4ca2d90ad25c0cb07"
+    },
+    {
+      "path": "tpde/include/tpde/util/SmallBitSet.hpp",
+      "sha256": "6a30866595af0de0f3dd1cffb272c9e6311a3529a1897a7f51182d995769004f",
+      "git_blob": "ce9d3201f9d1a8448cf27216b92b4b431d9f7bfa"
+    },
+    {
+      "path": "tpde/include/tpde/util/SmallVector.hpp",
+      "sha256": "e9dbbb6f5e064e7692b75bf291515d63668679d89baeb5a707357205b017c835",
+      "git_blob": "6976ba96d104c7bc75b1ba0bc44604f4beacd000"
+    },
+    {
+      "path": "tpde/include/tpde/util/VectorWriter.hpp",
+      "sha256": "30fc608f50814f5f2054b272c4be0cc3dc43998977b94506521347f0982cac9a",
+      "git_blob": "a0b1ad63034e8ecee32ee6d290e6d97fc4b797ea"
+    },
+    {
+      "path": "tpde/include/tpde/util/function_ref.hpp",
+      "sha256": "0dfcbeb592dad207817dcf41f642aa883b3b043d5865428bfb0bc1ff1614b53b",
+      "git_blob": "97600d43c3a45cb9f3d6bb518324f380b452613d"
+    },
+    {
+      "path": "tpde/include/tpde/util/misc.hpp",
+      "sha256": "12ebd71ec005fb31546f6f2c16bcc6af90e4560189973e06e949ca74febcefe3",
+      "git_blob": "5b7ae6a88ae61adb0513bb609b2ebdb537a20856"
+    }
+  ]
+}

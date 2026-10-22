@@ -9,8 +9,15 @@ use core::ptr::NonNull;
 
 use ::types_fmgr::{
     thin_arg, varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
-    PGFunction, ThinBuiltin, ThinFcinfo,
+    OutInto, PGFunction, ThinBuiltin, ThinFcinfo, OUT_CHARS_INT,
 };
+
+// C pallocs each cstring result into the caller's context (fmgr's result
+// contract: fresh in the given context, or an input); rendered in place.
+#[inline(always)]
+fn out_cstring(fcinfo: &Fcinfo, cap: usize, render: impl FnOnce(&mut [u8]) -> usize) -> PgResult<Datum> {
+    ::types_fmgr::out_cstring(fcinfo, cap, render)
+}
 
 // Raw server-encoding bytes: C quotes the cstring as-is in its messages.
 fn in_arg<'a>(fcinfo: &'a Fcinfo) -> &'a [u8] {
@@ -25,12 +32,9 @@ pub fn fc_int2in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     Ok(Datum::from_i16(crate::int2in(num, esc)?))
 }
 
-pub fn fc_int2out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let [a] = fcinfo.args_n::<1>();
-    let v = a.value.as_i16();
-    let mut buf = [0u8; 16];
-    let len = crate::int2out(v, &mut buf);
-    Ok(::types_fmgr::cstring_scratch(flinfo, "int2out", &buf[..len]))
+pub fn fc_int2out(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let v = fcinfo.args_n::<1>()[0].value.as_i16();
+    out_cstring(fcinfo, 7, |buf| crate::int2out(v, buf))
 }
 
 pub fn fc_int2vectorin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -65,6 +69,8 @@ pub fn fc_int2vectorout(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
     // Only once it passes is the header a genuine 1-D vector whose dim1 is a
     // real field.
     crate::check_valid_int2vector(hdr.ndim, hdr.dataoffset, hdr.elemtype)?;
+    // int.c:244 palloc(nnums * 7 + 1): a negative dim1 is a huge Size.
+    ::mcx::check_alloc_size(hdr.dim1.wrapping_mul(7).wrapping_add(1) as i64 as usize)?;
     // Then reject a crafted dim1 that claims more int2s than the datum's
     // varlena size can hold, before forming the values slice (OOB read). A
     // valid dim1==0 vector fits and passes. Routes to the SAME error as the
@@ -91,12 +97,9 @@ pub fn fc_int4in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     Ok(Datum::from_i32(crate::int4in(num, esc)?))
 }
 
-pub fn fc_int4out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let [a] = fcinfo.args_n::<1>();
-    let v = a.value.as_i32();
-    let mut buf = [0u8; 16];
-    let len = crate::int4out(v, &mut buf);
-    Ok(::types_fmgr::cstring_scratch(flinfo, "int4out", &buf[..len]))
+pub fn fc_int4out(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let v = fcinfo.args_n::<1>()[0].value.as_i32();
+    out_cstring(fcinfo, 12, |buf| crate::int4out(v, buf))
 }
 
 pub fn fc_int2recv(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -249,27 +252,6 @@ pub fn fc_hashint2extended(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) 
     )))
 }
 
-// C hashchar is `hash_uint32((int32) PG_GETARG_CHAR(0))`, whose value
-// depends on the platform's `char` signedness: sign-extended on
-// x86-64/macOS, zero-extended on aarch64 (unsigned char). pgrust pins the
-// aarch64 arm — zero-extend the byte — so `"char"` hashes are stable on
-// the deployment target and independent of the compiler's char sign.
-// (Ruling 2026-07-29; upstream is platform-dependent, bug reported.)
-pub fn fc_hashchar(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let [a] = fcinfo.args_n::<1>();
-    let c = a.value.as_char() as u8 as u32;
-    Ok(Datum::from_u32(::hashfn::hash_bytes_uint32(c)))
-}
-
-pub fn fc_hashcharextended(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let [a, seed] = fcinfo.args_n::<2>();
-    let c = a.value.as_char() as u8 as u32;
-    Ok(Datum::from_u64(::hashfn::hash_bytes_uint32_extended(
-        c,
-        seed.value.as_i64() as u64,
-    )))
-}
-
 pub fn fc_hashint4extended(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let [a, seed] = fcinfo.args_n::<2>();
     Ok(Datum::from_u64(::hashfn::hash_bytes_uint32_extended(
@@ -397,9 +379,9 @@ pub fn fc_generate_series_int4_support(
 ) -> PgResult<Datum> {
     let [a] = fcinfo.args_n::<1>();
     let p = a.value.as_usize() as *mut ();
-    // The estimated argument trees live in this bump arena and die with it;
+    // The estimated argument trees live in this scratch context and die with it;
     // the request's node lifetime is unified with it below.
-    let cx = ::mcx::MemoryContext::new_bump("generate_series support estimate");
+    let cx = ::mcx::MemoryContext::new_wholesale("generate_series support estimate");
     // SAFETY: prosupport contract — the internal arg points at a live
     // tag-first support-request node exclusively owned by this call.
     let Some(req) = (unsafe { ::types_nodes::supportnodes::support_request_rows_mut(p) }) else {
@@ -565,12 +547,10 @@ pub const INT_BUILTINS: &[FmgrBuiltin] = &[
     b(1253, "int2abs", 1, fc_int2abs),
     b(5044, "int4gcd", 2, fc_int4gcd),
     b(5046, "int4lcm", 2, fc_int4lcm),
-    b(446, "hashcharextended", 2, fc_hashcharextended),
     b(450, "hashint4", 1, fc_hashint4),
     b(425, "hashint4extended", 2, fc_hashint4extended),
     b(449, "hashint2", 1, fc_hashint2),
     b(441, "hashint2extended", 2, fc_hashint2extended),
-    b(454, "hashchar", 1, fc_hashchar),
     b(768, "int4larger", 2, fc_int4larger),
     b(769, "int4smaller", 2, fc_int4smaller),
     b(770, "int2larger", 2, fc_int2larger),
@@ -693,4 +673,25 @@ pub static INT_THIN: &[ThinBuiltin] = &[
     t(2558, 1, fc_bool_int4, th_bool_int4),
     t(5044, 2, fc_int4gcd, th_int4gcd),
     t(5046, 2, fc_int4lcm, th_int4lcm),
+];
+
+// int2out / int4out into the caller's buffer (printtup, COPY TO): the same renderers, no allocation.
+fn int2_bound(_: Datum) -> Option<usize> {
+    Some(6)
+}
+unsafe fn int2_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: the caller's 6 writable bytes (int2_bound).
+    Ok(crate::int2out(v.as_i16(), unsafe { core::slice::from_raw_parts_mut(dst, 6) }))
+}
+fn int4_bound(_: Datum) -> Option<usize> {
+    Some(11)
+}
+unsafe fn int4_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: the caller's 11 writable bytes (int4_bound).
+    Ok(crate::int4out(v.as_i32(), unsafe { core::slice::from_raw_parts_mut(dst, 11) }))
+}
+
+pub static INT_OUT_INTO: &[OutInto] = &[
+    OutInto { foid: 39, bound: int2_bound, render: int2_render, chars: Some(OUT_CHARS_INT) },
+    OutInto { foid: 43, bound: int4_bound, render: int4_render, chars: Some(OUT_CHARS_INT) },
 ];

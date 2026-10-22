@@ -1,0 +1,10 @@
+-- regress-full-rangefuncs-064
+-- explain (verbose, costs off) select * from array_to_set(array['one', 'two']) as t(f1 numeric(4,2),f2 text);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=2 [1:Subscripts fn1192 fn1192(c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x1c\x00\x00\x00one\x00\x1c\x00\x00\x00two\x00', c23:1)]
+  project (1=fn1703(fn1740(v2.1), c23:262150), 2=T_SubscriptingRef)
+  outs 1=vl:call1703 2=vl:call0
+mapped: FunctionScan

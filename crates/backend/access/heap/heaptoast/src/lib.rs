@@ -11,6 +11,7 @@ mod fetch;
 mod helper;
 mod internals;
 mod toast;
+pub mod worker;
 
 #[cfg(test)]
 mod tests;

@@ -1,0 +1,17 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/runrev.rs
+growth	pgrc_format::wire::put_u32	6
+growth	pgrc_format::wire::put_u64	6
+growth	pgrc_format::wire::put_u8	4
+growth	std::vec::Vec::extend_from_slice	3
+growth	std::vec::Vec::push	6
+growth	std::vec::Vec::resize	1
+macro	std::vec	1
+method	pgrc_format::try_vec	1
+method	std::boxed::Box::new	4
+method	std::clone::Clone::clone	6
+method	std::iter::Iterator::collect	1
+method	std::sync::Arc::new	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	4
+type	std::sync::Arc	1
+type	std::vec::Vec	2

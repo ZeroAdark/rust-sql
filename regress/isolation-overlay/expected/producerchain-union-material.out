@@ -1,0 +1,271 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pd s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE uc1 SET x = uc1.x + up.a FROM up WHERE up.a < uc1.k AND up.k = 7 AND uc1.a <= 40;
+QUERY PLAN                                  
+--------------------------------------------
+Update on uc1                               
+  ->  Nested Loop                           
+        Join Filter: (up.a < uc1.k)         
+        ->  Seq Scan on uc1                 
+              Filter: (a <= 40)             
+        ->  Materialize                     
+              ->  Append                    
+                    ->  Seq Scan on up up_1 
+                          Filter: (k = 7)   
+                    ->  Seq Scan on uc1 up_2
+                          Filter: (k = 7)   
+                    ->  Seq Scan on uc2 up_3
+                          Filter: (k = 7)   
+(13 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM uc1 USING up WHERE up.a BETWEEN uc1.k - 1 AND uc1.k AND up.k IN (1, 2) AND uc1.x = 0 AND uc1.a <= 40;
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Delete on uc1                                                   
+  ->  Nested Loop                                               
+        Join Filter: ((up.a <= uc1.k) AND (up.a >= (uc1.k - 1)))
+        ->  Seq Scan on uc1                                     
+              Filter: ((a <= 40) AND (x = 0))                   
+        ->  Materialize                                         
+              ->  Append                                        
+                    ->  Seq Scan on up up_1                     
+                          Filter: (k = ANY ('{1,2}'::integer[]))
+                    ->  Seq Scan on uc1 up_2                    
+                          Filter: (k = ANY ('{1,2}'::integer[]))
+                    ->  Seq Scan on uc2 up_3                    
+                          Filter: (k = ANY ('{1,2}'::integer[]))
+(13 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1k s1d s2u s1c s2c s3sel s3row
+step s1x: UPDATE uc1 SET x = x + 1000 WHERE a = 10;
+step s1k: UPDATE uc1 SET k = 1 WHERE a = 20;
+step s1d: DELETE FROM uc1 WHERE a = 30;
+step s2u: UPDATE uc1 SET x = uc1.x + up.a FROM up WHERE up.a < uc1.k AND up.k = 7 AND uc1.a <= 40 RETURNING uc1.a, uc1.k, uc1.x; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ a| k|   x
+--+--+----
+ 8| 8|   7
+ 9| 9|   7
+10|10|1007
+11|11|   7
+12|12|   7
+13|13|   7
+14|14|   7
+15|15|   7
+16|16|   7
+17|17|   7
+18|18|   7
+19|19|   7
+21|21|   7
+22|22|   7
+23|23|   7
+24|24|   7
+25|25|   7
+26|26|   7
+27|27|   7
+28|28|   7
+29|29|   7
+31|31|   7
+32|32|   7
+33|33|   7
+34|34|   7
+35|35|   7
+36|36|   7
+37|37|   7
+38|38|   7
+39|39|   7
+40|40|   7
+(31 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ONLY uc1;
+count| sum| sum
+-----+----+----
+  399|9751|1217
+(1 row)
+
+step s3row: SELECT a, k, x FROM ONLY uc1 WHERE a IN (8, 9, 10, 11, 20, 30, 40) ORDER BY a;
+ a| k|   x
+--+--+----
+ 8| 8|   7
+ 9| 9|   7
+10|10|1007
+11|11|   7
+20| 1|   0
+40|40|   7
+(6 rows)
+
+
+starting permutation: s1x s1k s1d s1s s2u s1c s2c s3sel s3row
+step s1x: UPDATE uc1 SET x = x + 1000 WHERE a = 10;
+step s1k: UPDATE uc1 SET k = 1 WHERE a = 20;
+step s1d: DELETE FROM uc1 WHERE a = 30;
+step s1s: UPDATE ONLY up SET k = 0 WHERE a = 7;
+step s2u: UPDATE uc1 SET x = uc1.x + up.a FROM up WHERE up.a < uc1.k AND up.k = 7 AND uc1.a <= 40 RETURNING uc1.a, uc1.k, uc1.x; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ a| k|   x
+--+--+----
+ 8| 8|   7
+ 9| 9|   7
+10|10|1007
+11|11|   7
+12|12|   7
+13|13|   7
+14|14|   7
+15|15|   7
+16|16|   7
+17|17|   7
+18|18|   7
+19|19|   7
+21|21|   7
+22|22|   7
+23|23|   7
+24|24|   7
+25|25|   7
+26|26|   7
+27|27|   7
+28|28|   7
+29|29|   7
+31|31|   7
+32|32|   7
+33|33|   7
+34|34|   7
+35|35|   7
+36|36|   7
+37|37|   7
+38|38|   7
+39|39|   7
+40|40|   7
+(31 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ONLY uc1;
+count| sum| sum
+-----+----+----
+  399|9751|1217
+(1 row)
+
+step s3row: SELECT a, k, x FROM ONLY uc1 WHERE a IN (8, 9, 10, 11, 20, 30, 40) ORDER BY a;
+ a| k|   x
+--+--+----
+ 8| 8|   7
+ 9| 9|   7
+10|10|1007
+11|11|   7
+20| 1|   0
+40|40|   7
+(6 rows)
+
+
+starting permutation: s1k s1d s2d s1c s2c s3sel s3row
+step s1k: UPDATE uc1 SET k = 1 WHERE a = 20;
+step s1d: DELETE FROM uc1 WHERE a = 30;
+step s2d: DELETE FROM uc1 USING up WHERE up.a BETWEEN uc1.k - 1 AND uc1.k AND up.k IN (1, 2) AND uc1.x = 0 AND uc1.a <= 40 RETURNING uc1.a, uc1.k; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+ a| k
+--+--
+ 1| 1
+ 2| 2
+ 3| 3
+10|10
+11|11
+12|12
+13|13
+14|14
+19|19
+21|21
+23|23
+24|24
+25|25
+28|28
+29|29
+37|37
+38|38
+39|39
+(18 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ONLY uc1;
+count| sum|sum
+-----+----+---
+  381|9402|  0
+(1 row)
+
+step s3row: SELECT a, k, x FROM ONLY uc1 WHERE a IN (8, 9, 10, 11, 20, 30, 40) ORDER BY a;
+ a| k|x
+--+--+-
+ 8| 8|0
+ 9| 9|0
+20| 1|0
+40|40|0
+(4 rows)
+
+
+starting permutation: s2u s1x s2c s1c s3sel s3row
+step s2u: UPDATE uc1 SET x = uc1.x + up.a FROM up WHERE up.a < uc1.k AND up.k = 7 AND uc1.a <= 40 RETURNING uc1.a, uc1.k, uc1.x;
+ a| k|x
+--+--+-
+ 8| 8|7
+ 9| 9|7
+10|10|7
+11|11|7
+12|12|7
+13|13|7
+14|14|7
+15|15|7
+16|16|7
+17|17|7
+18|18|7
+19|19|7
+20|20|7
+21|21|7
+22|22|7
+23|23|7
+24|24|7
+25|25|7
+26|26|7
+27|27|7
+28|28|7
+29|29|7
+30|30|7
+31|31|7
+32|32|7
+33|33|7
+34|34|7
+35|35|7
+36|36|7
+37|37|7
+38|38|7
+39|39|7
+40|40|7
+(33 rows)
+
+step s1x: UPDATE uc1 SET x = x + 1000 WHERE a = 10; <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ONLY uc1;
+count| sum| sum
+-----+----+----
+  400|9800|1231
+(1 row)
+
+step s3row: SELECT a, k, x FROM ONLY uc1 WHERE a IN (8, 9, 10, 11, 20, 30, 40) ORDER BY a;
+ a| k|   x
+--+--+----
+ 8| 8|   7
+ 9| 9|   7
+10|10|1007
+11|11|   7
+20|20|   7
+30|30|   7
+40|40|   7
+(7 rows)
+

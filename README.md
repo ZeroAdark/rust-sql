@@ -1,13 +1,12 @@
 <h1 align="center">pgrust</h1>
 
 <p align="center">
-  <strong>A Rust rewrite of Postgres that's faster than Postgres and ClickHouse.</strong>
+  <strong>A Rust rewrite of Postgres.</strong>
 </p>
 
 <p align="center">
   <img alt="Postgres 18.6" src="https://img.shields.io/badge/Postgres-18.6-336791">
-  <img alt="Regression suite: 100%" src="https://img.shields.io/badge/regression_suite-46%2C066%2F46%2C066-brightgreen">
-  <img alt="Version: v0.3.1" src="https://img.shields.io/badge/version-v0.3.1-blue">
+  <img alt="Version: v0.4-beta" src="https://img.shields.io/badge/version-v0.4--beta-blue">
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
 </p>
 
@@ -23,177 +22,80 @@
 
 <br />
 
-> **New: v0.3.1** is a bug-fix release. [Release notes](RELEASE-NOTES.md) · [What's new in v0.3](#whats-new-in-v03)
->
-> [Video of Michael's talk at PlanetScale on pgrust](https://www.youtube.com/watch?v=7L_nG3EBjck) and the [slides](https://drive.google.com/file/d/1_wDk4HPE9-MuiPBo_X-QdJUmFtVV0p8p/view)
+> **New:** [Video of Michael's talk at PlanetScale on pgrust](https://www.youtube.com/watch?v=7L_nG3EBjck) — and the [slides](https://drive.google.com/file/d/1_wDk4HPE9-MuiPBo_X-QdJUmFtVV0p8p/view).
 >
 > [How AI Changes the Economics of JIT Compilers](https://malisper.me/how-ai-changes-the-economics-of-jit-compilers/)
+>
+> **v0.4-beta is out:** [the release post](https://pgrust.com/blog/pgrust-v0-4-beta/) and [what's new](#whats-new-in-v04-beta).
 
 pgrust is a re-implementation of Postgres meant to show what Postgres would
 look like if it was built in 2026. It is wire compatible and even SQL dialect
-compatible with Postgres. It passes
-[all 46,066 tests in Postgres' regression suite](https://malisper.me/pgrust-passes-100-of-postgresqls-regression-tests/).
-For the story of why we're building it, see
-[pgrust: rebuilding Postgres in Rust with AI](https://malisper.me/pgrust-rebuilding-postgres-in-rust-with-ai/).
+compatible with Postgres.
 
 Every line is Rust, written to match the behavior of the C implementation.
 Rust makes it easy to re-architect several core Postgres pieces. pgrust has:
 
-- A new vectorized push-based, JIT compiled executor
+- Gravity, a new vectorized push-based, JIT compiled query engine
 - A thread based concurrency model
 - A query scheduler designed to keep any individual query from taking down
   your database
-- A built-in OOM killer that gives pgrust control of what happens when you're
-  running low on memory, greatly reducing the chance of your whole DB being
-  taken down by the OS OOM killer
+- An automatic memory manager: one memory budget, sized from the machine,
+  covers the buffer pool, the columnar caches and running queries, and gives
+  pgrust control of what happens when you're running low on memory, greatly
+  reducing the chance of your whole DB being taken down by the OS OOM killer
 
-and many other really awesome pieces. The scheduler and the OOM killer go
+and many other really awesome pieces. The scheduler and the memory manager go
 after two of
 [the four horsemen behind thousands of Postgres outages](https://malisper.me/the-four-horsemen-behind-thousands-of-postgres-outages/).
-
-## Status
-
-We don't recommend running pgrust in production (yet), but we are
-successfully running it ourselves internally. Keep Postgres as the source
-of truth for data you can't afford to lose.
-
-pgrust currently passes the Postgres regression suite. It's faster than
-Postgres and ClickHouse, but it still has a lot of bugs. Our #1 priority right
-now is testing and reliability.
-
-If you need production ready Postgres today, use Postgres.
-
-Existing PostgreSQL extensions do not work. There is no stable extension ABI
-in pgrust yet. Some bundled contrib modules are ported, but PL/Python,
-PL/Perl, and PL/Tcl are not.
-
-pgrust is specifically tuned for Graviton4 and the JIT compiler only targets
-Graviton4. pgrust will still work on other platforms, but will not have
-similar performance.
-
-## Performance
-
-Measured on `c8g.4xlarge` (AWS Graviton4) against PostgreSQL 18.3.
-
-On the ClickBench combined score, pgrust scored 18.5% faster than ClickHouse
-and hundreds of times faster than PostgreSQL. This was using pgrcolumnar,
-pgrust's builtin columnar layout.
-
-On sysbench-oltp, pgrust achieved 30% higher throughput than Postgres 18.3 on
-read-only workloads at 300GB scale.
-
-For a code-level walkthrough of one part of that speedup, read
-[Rebuilding Postgres for 300x faster analytics: batching, operator fusion, and SIMD](https://malisper.me/how-we-made-postgres-hundreds-of-times-faster-the-query-engine/).
-
-These runs were reviewed independently by **Greg Smith**, author of
-*PostgreSQL 9.0 High Performance*.
-
-Two honest caveats. We had previously reported that pgrust was over 50%
-faster than Postgres. On Kubernetes we measure a larger OLTP gap, 50-60%
-rather than 30%, and we have not isolated why the same binaries behave
-differently there than on bare EC2, so we quote the lower number. Second, the
-binaries we publish are generic for their architecture. The benchmark numbers
-come from builds tuned for Graviton4 (`-Ctarget-cpu=neoverse-v2`), so you
-will not reproduce them exactly from a download.
-
-Benchmarks and durability settings are unchanged from a default install:
-`fsync` is on. The harnesses are in [`benchmarks/`](benchmarks/) so you can
-run them yourself.
-
-## Writing
-
-- [How AI Changes the Economics of JIT Compilers](https://malisper.me/how-ai-changes-the-economics-of-jit-compilers/):
-  building a copy-and-patch ARM64 JIT in Rust.
-- [Rebuilding Postgres for 300x faster analytics: batching, operator fusion, and SIMD](https://malisper.me/how-we-made-postgres-hundreds-of-times-faster-the-query-engine/):
-  how pgrust makes analytical queries faster.
-- [Postgres in Rust: three dead ends before we passed 100% of the regression suite](https://malisper.me/postgres-in-rust-regression-suite/): what failed
-  before pgrust reached full regression-suite compatibility.
-- [pgrust: Rebuilding Postgres in Rust with AI](https://malisper.me/pgrust-rebuilding-postgres-in-rust-with-ai/):
-  why we started the project.
-
-## Testing
-
-The most common question we get about pgrust is: how can anyone trust it?
-Just because we passed the test suite doesn't mean our code is correct.
-Getting to the point where people can trust pgrust is our number one priority
-today. (Getting the regression suite to pass at all took three failed
-attempts; we wrote up the dead ends in
-[Postgres in Rust: getting the regression suite to pass](https://malisper.me/postgres-in-rust-regression-suite/).)
-
-To achieve that goal, we're taking several different approaches:
-
-1. Of the 3000 user facing Postgres functions, we've been able to formally
-   verify 1000 of them have identical behavior in pgrust with
-   [Kani](https://github.com/model-checking/kani). In the process of doing so
-   we found 12 divergences between pgrust and Postgres. Four of those
-   were bugs in Postgres itself. See [`proofs/`](proofs/).
-2. We're engaging with [Antithesis](https://antithesis.com) to do simulation
-   testing of pgrust to battle test pgrust.
-3. We're doing aggressive differential fuzz testing to ensure pgrust's
-   behavior is identical to Postgres's.
-
-### Conformance suite
-
-The regression suite we run is PostgreSQL's own `src/test/regress`, vendored
-unmodified at `crates/postgres-18.6-reference/src/test/regress` and driven by
-upstream `pg_regress` against a pgrust server (`scripts/pg-regress-fast.sh`;
-gate: every one of the 231 `parallel_schedule` files passes byte-for-byte
-against the vendor expected output). Prerequisites, the exact local and CI cluster
-commands, what the harness counts (files vs lines vs queries), and what can
-and cannot be said about the "46,066" figure are in
-[`docs/conformance/README.md`](docs/conformance/README.md); the gate contract
-is [`docs/conformance/regress-gate.md`](docs/conformance/regress-gate.md).
-
-## Unsafe Code
-
-pgrust uses unsafe code, but only for the specific things that need it.
-Postgres represents every internal value as a Datum, an untyped 8 byte
-value, and Rust has no safe equivalent, so the code that packs and unpacks
-internal values is unsafe. The same goes for the places where pgrust must
-match Postgres' memory layouts byte for byte.
-
-If there are particular unsafes that are not necessary and removing them
-would not have an impact on performance, let us know, as we would love to
-remove more unsafes.
 
 ## Quickstart
 
 **In your browser:** <https://pgrust.com>, a full pgrust server compiled to
 WebAssembly, no install.
 
-**On your machine:** pgrust does not ship its own `initdb` or `psql` yet, so
-each flow below installs the PostgreSQL 18 client tools first, then downloads
-pgrust, then initializes and starts a database. Paste the blocks top to
-bottom.
+**On your machine:** download a release tarball from
+<https://pgrust.com/downloads/v0.4-beta/>. Each one is self-contained: it
+carries pgrust's own `bin/postgres`, `bin/initdb` and `bin/psql` plus the
+share files they read, so you do not need a PostgreSQL install. The Linux
+binaries need glibc 2.34 or newer (Debian 12, Ubuntu 22.04, RHEL/Rocky 9 and
+later); the macOS binaries need macOS 11 or newer.
 
-### macOS (Apple Silicon)
+| Tarball | Runs on |
+|---|---|
+| [`pgrust-0.4-beta-linux-x86_64.tar.gz`](https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-linux-x86_64.tar.gz) | any x86-64 CPU |
+| [`pgrust-0.4-beta-linux-aarch64.tar.gz`](https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-linux-aarch64.tar.gz) | any 64-bit Arm CPU |
+| [`pgrust-0.4-beta-linux-x86_64-znver3.tar.gz`](https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-linux-x86_64-znver3.tar.gz) | tuned for AMD Zen 3 and newer |
+| [`pgrust-0.4-beta-linux-aarch64-neoverse-v2.tar.gz`](https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-linux-aarch64-neoverse-v2.tar.gz) | tuned for Neoverse-V2 (AWS Graviton4, NVIDIA Grace) |
+| [`pgrust-0.4-beta-macos-arm64.tar.gz`](https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-macos-arm64.tar.gz) | macOS on Apple Silicon |
+| [`pgrust-0.4-beta-macos-x86_64.tar.gz`](https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-macos-x86_64.tar.gz) | macOS on Intel |
+| [`pgrust-0.4-beta-macos-universal.tar.gz`](https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-macos-universal.tar.gz) | macOS, either (both architectures in one binary) |
+
+The Linux builds are profile-guided optimized. The tuned builds use
+instructions only those CPUs (and newer ones) have; when in doubt, take the
+generic build. Every tarball has a `.sha256` file next to it, and
+[`MANIFEST.txt`](https://pgrust.com/downloads/v0.4-beta/MANIFEST.txt) lists
+them all.
+
+### Linux
 
 ```bash
-# PostgreSQL 18 client tools (initdb, psql). The formula is keg-only, so
-# Homebrew does not put it on your PATH; the export is required.
-brew install postgresql@18
-export PATH="$(brew --prefix postgresql@18)/bin:$PATH"
+# Pick your build: linux-x86_64, linux-aarch64, linux-x86_64-znver3 or
+# linux-aarch64-neoverse-v2 (see the table above).
+PLATFORM=linux-x86_64
 
-# Download pgrust and verify the checksum. Download with curl: curl does not
-# set the quarantine flag a browser download gets, so Gatekeeper stays out of
-# the way (see the note below).
-curl -LO https://pgrust.com/downloads/v0.3/pgrust-0.3-macos-arm64
-curl -LO https://pgrust.com/downloads/v0.3/pgrust-0.3-macos-arm64.sha256
-shasum -a 256 -c pgrust-0.3-macos-arm64.sha256
-chmod +x pgrust-0.3-macos-arm64
+# Download pgrust, verify the checksum and unpack it.
+curl -LO "https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-$PLATFORM.tar.gz"
+curl -LO "https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-$PLATFORM.tar.gz.sha256"
+sha256sum -c "pgrust-0.4-beta-$PLATFORM.tar.gz.sha256"
+tar xzf "pgrust-0.4-beta-$PLATFORM.tar.gz"
+cd pgrust-0.4-beta-linux-*/
 
-# Create a data directory using Postgres' initdb.
-initdb -D /tmp/pgrust-data --no-locale --encoding UTF8 -U postgres
-
-# pgrust reads the timezone database and other data files from a Postgres
-# share directory at runtime. Without these two variables it looks in
-# /usr/local/pgsql/share and refuses to start.
-export PGRUST_PGSHAREDIR="$(brew --prefix postgresql@18)/share/postgresql"
-export PGRUST_TZDIR="$PGRUST_PGSHAREDIR/timezone"
+# Create a data directory with pgrust's initdb.
+bin/initdb -D /tmp/pgrust-data --no-locale --encoding UTF8 -U postgres
 
 # Start the server. It runs in the foreground and logs to this terminal.
 ulimit -s 65520
-RUST_MIN_STACK=33554432 ./pgrust-0.3-macos-arm64 \
+RUST_MIN_STACK=33554432 bin/postgres \
   -D /tmp/pgrust-data \
   -k /tmp -p 5432 \
   -c listen_addresses= \
@@ -201,67 +103,68 @@ RUST_MIN_STACK=33554432 ./pgrust-0.3-macos-arm64 \
   -c max_stack_depth=60000
 ```
 
-Leave the server running and connect from a second terminal:
+Leave the server running and connect from a second terminal, in the same
+directory:
 
 ```bash
-export PATH="$(brew --prefix postgresql@18)/bin:$PATH"
-psql -h /tmp -p 5432 -U postgres -c "select version()"
+bin/psql -h /tmp -p 5432 -U postgres -c "select version()"
 ```
 
-You should see `PostgreSQL 18.6 (pgrust 0.3)`.
+You should see `PostgreSQL 18.6 (pgrust 0.4-beta, build <commit>) on ...`,
+where `<commit>` is the short commit the binary was built from.
+`bin/postgres --version` prints `pgrust 0.4-beta (PostgreSQL 18.6 compatible)`.
 
-**macOS Intel:** the same flow works with `pgrust-0.3-macos-x86_64` in place
-of `pgrust-0.3-macos-arm64` (`brew --prefix` handles the different Homebrew
-prefix). There is also `pgrust-0.3-macos-universal`, a universal binary
-covering both.
+### Docker
 
-**A note on Gatekeeper:** the binaries are not yet notarized by Apple. If you
-download with curl as above, the file is never quarantined and none of this
-comes up. If you download with a browser instead, macOS will refuse to run
-the binary with "Apple could not verify ... is free of malware". Clear the
-quarantine flag with `xattr -d com.apple.quarantine pgrust-0.3-macos-arm64`,
-or approve the binary under System Settings > Privacy & Security > "Open
-Anyway".
-
-### Linux (Debian and Ubuntu)
+The prebuilt image on Docker Hub,
+[`malisper/pgrust`](https://hub.docker.com/r/malisper/pgrust), is a drop-in
+replacement for the official `postgres` image: same env vars
+(`POSTGRES_PASSWORD`, `POSTGRES_USER`, `POSTGRES_DB`, `PGDATA`, ...), same
+`/docker-entrypoint-initdb.d` init scripts, same data volume at
+`/var/lib/postgresql/data`. It carries the same `postgres` and `initdb`
+binaries as the Linux release tarballs above, and initializes the cluster with
+pgrust's own `initdb`; the only C PostgreSQL component in the image is `psql`
+for the init scripts. `malisper/pgrust:v0.4-beta` is multi-arch (amd64 +
+arm64); `v0.4-beta-amd64` and `v0.4-beta-arm64` pin one architecture.
 
 ```bash
-# Pick your architecture.
-PLATFORM=linux-x86_64    # or: linux-aarch64
+docker run -d --name pgrust -e POSTGRES_PASSWORD=secret -p 5432:5432 malisper/pgrust:v0.4-beta
+```
 
-# PostgreSQL 18 client tools (initdb, psql) from the PGDG apt repo. On
-# Debian and Ubuntu, initdb ships in the server package, postgresql-18, and
-# is not placed on PATH, hence the export.
-sudo apt-get update
-sudo apt-get install -y curl ca-certificates gnupg
-sudo install -d /usr/share/postgresql-common/pgdg
-sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-  https://www.postgresql.org/media/keys/ACCC4CF8.asc
-echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" \
-  | sudo tee /etc/apt/sources.list.d/pgdg.list
-sudo apt-get update
-sudo apt-get install -y postgresql-18 postgresql-client-18
-export PATH="/usr/lib/postgresql/18/bin:$PATH"
+Then connect, with your own `psql` or the one in the image:
 
-# Download pgrust and verify the checksum.
-curl -LO "https://pgrust.com/downloads/v0.3/pgrust-0.3-$PLATFORM"
-curl -LO "https://pgrust.com/downloads/v0.3/pgrust-0.3-$PLATFORM.sha256"
-sha256sum -c "pgrust-0.3-$PLATFORM.sha256"
-chmod +x "pgrust-0.3-$PLATFORM"
+```bash
+psql -h localhost -p 5432 -U postgres
+docker exec -it pgrust psql -U postgres
+```
 
-# Create a data directory using Postgres' initdb.
-initdb -D /tmp/pgrust-data --no-locale --encoding UTF8 -U postgres
+`malisper/pgrust:latest` still points at v0.3; use the `v0.4-beta` tag to get
+this release. A data volume written by v0.3 holding columnar tables needs the
+dump and restore described under
+[Stopping, restarting, cleaning up](#stopping-restarting-cleaning-up).
 
-# pgrust reads the timezone database and other data files from a Postgres
-# share directory at runtime. Without these two variables it looks in
-# /usr/local/pgsql/share and refuses to start. Debian builds Postgres
-# against the system tzdata, so PGRUST_TZDIR points at zoneinfo.
-export PGRUST_PGSHAREDIR=/usr/share/postgresql/18
-export PGRUST_TZDIR=/usr/share/zoneinfo
+### macOS
+
+```bash
+# Pick your build: macos-arm64 (Apple Silicon), macos-x86_64 (Intel) or
+# macos-universal (both).
+PLATFORM=macos-arm64
+
+# Download pgrust, verify the checksum and unpack it. Download with curl: curl
+# does not set the quarantine flag a browser download gets, so Gatekeeper stays
+# out of the way (see the note below).
+curl -LO "https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-$PLATFORM.tar.gz"
+curl -LO "https://pgrust.com/downloads/v0.4-beta/pgrust-0.4-beta-$PLATFORM.tar.gz.sha256"
+shasum -a 256 -c "pgrust-0.4-beta-$PLATFORM.tar.gz.sha256"
+tar xzf "pgrust-0.4-beta-$PLATFORM.tar.gz"
+cd "pgrust-0.4-beta-$PLATFORM"
+
+# Create a data directory with pgrust's initdb.
+bin/initdb -D /tmp/pgrust-data --no-locale --encoding UTF8 -U postgres
 
 # Start the server. It runs in the foreground and logs to this terminal.
 ulimit -s 65520
-RUST_MIN_STACK=33554432 "./pgrust-0.3-$PLATFORM" \
+RUST_MIN_STACK=33554432 bin/postgres \
   -D /tmp/pgrust-data \
   -k /tmp -p 5432 \
   -c listen_addresses= \
@@ -269,13 +172,31 @@ RUST_MIN_STACK=33554432 "./pgrust-0.3-$PLATFORM" \
   -c max_stack_depth=60000
 ```
 
-Leave the server running and connect from a second terminal:
+Leave the server running and connect from a second terminal, in the same
+directory:
 
 ```bash
-psql -h /tmp -p 5432 -U postgres -c "select version()"
+bin/psql -h /tmp -p 5432 -U postgres -c "select version()"
 ```
 
-You should see `PostgreSQL 18.6 (pgrust 0.3)`.
+**A note on Gatekeeper:** the macOS binaries are signed ad hoc, not notarized
+by Apple. Downloaded with curl as above, they are never quarantined and none
+of this comes up. If you download with a browser instead, macOS refuses to run
+them with "Apple could not verify ... is free of malware". Clear the flag with
+`xattr -dr com.apple.quarantine pgrust-0.4-beta-$PLATFORM`, or approve each
+binary under System Settings > Privacy & Security > "Open Anyway".
+
+### Columnar tables
+
+Columnar storage (`pgrcolumnar`) is a table access method. Register it once in
+each database, then create tables with `USING pgrcolumnar`:
+
+```sql
+CREATE ACCESS METHOD pgrcolumnar TYPE TABLE HANDLER heap_tableam_handler;
+
+CREATE TABLE events (id bigint, kind text, val double precision, at timestamp)
+  USING pgrcolumnar;
+```
 
 ### Stopping, restarting, cleaning up
 
@@ -293,9 +214,79 @@ You should see `PostgreSQL 18.6 (pgrust 0.3)`.
   connecting; it is easy to silently connect to the wrong server and wonder
   why nothing behaves like pgrust.
 - **If startup fails with** `could not open directory
-  "/usr/local/pgsql/share/timezone"`, the `PGRUST_PGSHAREDIR` and
-  `PGRUST_TZDIR` variables from the quickstart are not set in the shell
-  running the server.
+  "/usr/local/pgsql/share/timezone"`, the server cannot find its share files.
+  It reads them from the `share` directory beside the binary, so run
+  `bin/postgres` from the unpacked tarball as is, without moving the binary
+  away from `bin/share`. `PGRUST_PGSHAREDIR` and `PGRUST_TZDIR` point it
+  elsewhere.
+- **Columnar tables from v0.3** (`USING pgrcolumnar`) are refused with an
+  error saying the table is in the v0.3.x columnar format. Dump them with the
+  v0.3 binary (`pg_dump`) and restore them into v0.4-beta.
+
+## Status
+
+We don't recommend running pgrust in production (yet), but we are
+successfully running it ourselves internally. Keep Postgres as the source
+of truth for data you can't afford to lose.
+
+pgrust still has a lot of bugs. Our #1 priority right now is testing and
+reliability.
+
+If you need production ready Postgres today, use Postgres.
+
+PostgreSQL extensions don't work out of the box: there is no stable
+extension ABI in pgrust yet. But pgrust ships a large number of them,
+including pgvector, pg_cron, pg_stat_statements, pg_trgm, hstore, pgcrypto,
+postgres_fdw and most of contrib. PL/Python, PL/Perl and PL/Tcl are not
+supported yet.
+
+## Performance
+
+Measured on `c8g.4xlarge` (AWS Graviton4), pgrust with pgrcolumnar, its
+builtin columnar layout, runs ClickBench's analytical queries up to 1,600x
+faster than PostgreSQL (per query, cold runs, against PostgreSQL's published
+results on the same instance type).
+
+For a code-level walkthrough of one part of that speedup, read
+[how batching, operator fusion, and SIMD speed up the query engine](https://malisper.me/how-we-made-postgres-hundreds-of-times-faster-the-query-engine/).
+
+## Writing
+
+- [How AI Changes the Economics of JIT Compilers](https://malisper.me/how-ai-changes-the-economics-of-jit-compilers/):
+  building a copy-and-patch ARM64 JIT in Rust.
+- [pgrust: Rebuilding Postgres in Rust with AI](https://malisper.me/pgrust-rebuilding-postgres-in-rust-with-ai/):
+  why we started the project.
+
+## Testing
+
+The most common question we get about pgrust is: how can anyone trust it?
+Passing a test suite doesn't mean our code is correct.
+Getting to the point where people can trust pgrust is our number one priority
+today.
+
+To achieve that goal, we're taking several different approaches:
+
+1. Of the 3,400 user facing Postgres functions, we've formally verified
+   that 1,397 have identical behavior in pgrust with
+   [Kani](https://github.com/model-checking/kani); 466 more are tested
+   against Postgres. The ledger is
+   [`proofs/USER_FACING_FUNCTIONS.tsv`](proofs/USER_FACING_FUNCTIONS.tsv).
+2. We're engaging with [Antithesis](https://antithesis.com) to do simulation
+   testing of pgrust to battle test pgrust.
+3. We're doing aggressive differential fuzz testing to ensure pgrust's
+   behavior is identical to Postgres's.
+
+## Unsafe Code
+
+pgrust uses unsafe code, but only for the specific things that need it.
+Postgres represents every internal value as a Datum, an untyped 8 byte
+value, and Rust has no safe equivalent, so the code that packs and unpacks
+internal values is unsafe. The same goes for the places where pgrust must
+match Postgres' memory layouts byte for byte.
+
+If there are particular unsafes that are not necessary and removing them
+would not have an impact on performance, let us know, as we would love to
+remove more unsafes.
 
 ## Building from source
 
@@ -307,61 +298,97 @@ automatically) and the RE2 regex library:
 - macOS: `brew install re2 pkg-config`
 
 ```bash
-cargo build --release --locked --bin postgres
+cargo build --release --locked -p main_main -p initdb
 ```
 
-The server binary lands at `target/release/postgres`. Run it exactly like the
-downloaded binaries in the quickstart, including `PGRUST_PGSHAREDIR` and
-`PGRUST_TZDIR`. Release builds refuse to compile without RE2 on purpose: a
+`select version()` names the build: a build in a git checkout prints its short
+commit (`PostgreSQL 18.6 (pgrust 0.4-beta, build 1a2b3c4) on ...`); set
+`PGRUST_BUILD_ID` at build time to choose the id, or build outside git for none.
+`postgres --version` prints `pgrust 0.4-beta (PostgreSQL 18.6 compatible)`;
+`postgres -V` prints `postgres (PostgreSQL) 18.6`, the line PostgreSQL's own
+`pg_ctl`, `initdb` and `pg_upgrade` check.
+
+The server binary lands at `target/release/postgres`, pgrust's `initdb` beside
+it, and the share tree it needs (`postgres.bki`, the setup SQL, `timezone`,
+`timezonesets`, tsearch data, extension files) is staged at `target/release/share/`. No C
+PostgreSQL is involved in creating or running a cluster:
+
+```bash
+target/release/initdb -D /tmp/pgrust-data --no-locale --encoding UTF8 -U postgres
+ulimit -s 65520
+RUST_MIN_STACK=33554432 target/release/postgres -D /tmp/pgrust-data \
+  -k /tmp -p 5432 -c listen_addresses= -c io_method=sync -c max_stack_depth=60000
+```
+
+The time zone database is PostgreSQL 18.6's own compiled tzdata, read from
+`share/timezone` beside the binary (never the host `zoneinfo`, like C built
+without `--with-system-tzdata`). To use the system zoneinfo instead, build with
+`PGRUST_SYSTEM_TZDATA=/usr/share/zoneinfo` (C's `--with-system-tzdata`);
+`PGRUST_TZDIR` and `PGRUST_PGSHAREDIR` remain runtime overrides, not
+requirements. A data directory made
+by stock PostgreSQL 18 `initdb` still works too (same on-disk format).
+Release builds refuse to compile without RE2 on purpose: a
 build with only the fallback regex engine is drastically slower on regex
 heavy workloads. The binaries we publish additionally use `--profile dist`,
 which turns on fat LTO; it produces a faster binary but takes much longer to
 compile.
 
-## Docker
+## What's new in v0.4-beta
 
-The prebuilt image on Docker Hub is a drop-in replacement for the official
-`postgres` image: same env vars (`POSTGRES_PASSWORD`, `POSTGRES_USER`,
-`POSTGRES_DB`, `PGDATA`, ...), same `/docker-entrypoint-initdb.d` init
-scripts, same data volume at `/var/lib/postgresql/data`. Multi-arch
-(amd64 + arm64):
+- **Gravity, a new query engine.** Gravity runs every query and every kind
+  of statement (DML with ON CONFLICT and RETURNING, triggers, row locks,
+  cursors, PL/pgSQL and SPI, COPY) with PostgreSQL's semantics, on columnar
+  tables and on the ordinary row store alike. It replaces our previous
+  engine and runs analytical queries as much as 3x faster than ClickHouse. Its JIT
+  was rewritten around a new low-level IR: it compiles each plan to AArch64
+  or x86-64 machine code, and to WebAssembly in the browser build, or
+  interprets it when compiling would not pay off.
+- **pgrcolumnar grows up.** `pgrcolumnar` stores compressed, immutable parts
+  with zone maps, delete vectors and background compaction. Reads see
+  PostgreSQL MVCC snapshots, and writes are transactional: they roll back
+  with the transaction. Small inserts land in a row-store front that is
+  folded into columnar parts in the background, and UPDATE and DELETE mark
+  rows in delete vectors instead of rewriting parts (ON CONFLICT and MERGE
+  are not supported on columnar tables yet). Columnar tables take
+  non-unique B-tree, hash, GiST, SP-GiST and GIN indexes, are written to
+  WAL, so they survive crashes and replicate to standbys, and support row
+  locks and a `sorted_by` table option.
+- **One memory budget** covers the buffer pool, the columnar caches and
+  running queries. Near the memory limit pgrust cancels the statement holding
+  the most memory instead of letting the OS kill the server.
+- **jsonb statistics.** `ANALYZE` collects statistics on the keys and values
+  inside `jsonb` columns, and the planner uses them for `->`, `->>`, `#>`,
+  `#>>` and `?`, `?|`, `?&`, so it estimates jsonb filters instead of
+  guessing. On by default (`pgrust.jsonb_path_stats`).
+- **The condition cache.** Filter results on columnar tables are reused
+  across statements over the same immutable data. `full` is the default
+  (also spelled `on`) and stores match counts too. `rows` keeps row
+  selections and per-dictionary-code filter tables without counts;
+  `granule` keeps only empty-granule verdicts; `off` disables predicate
+  reuse. `pgrust.dict_filter_cache` and `pgrust.zone_store` turn off the
+  per-dictionary-code filter tables and the zone-map result store on their
+  own. Sizing feedback, data caches, and startup prewarm have separate
+  controls.
+- **pgrust's own `initdb`**, and `pg_cron` 1.6 is included.
+- **Upgrading:** columnar tables from v0.3 must be dumped and restored. UTF8 is
+  the only server encoding.
 
-```bash
-docker run -d --name pgrust -e POSTGRES_PASSWORD=secret -p 5432:5432 malisper/pgrust:v0.3
-```
+v0.4-beta is a beta: it shows what is coming in v0.4 while we finish
+stabilizing the rest.
 
-Then connect:
+## Developing in the open
 
-```bash
-psql -h localhost -p 5432 -U postgres
-```
-
-To build the image from source instead, the repo's
-[`Dockerfile`](Dockerfile) uses BuildKit cache mounts, so build it with buildx
-(the default on current Docker; on older installs run
-`DOCKER_BUILDKIT=1 docker build` instead):
-
-```bash
-docker buildx build --load -t pgrust .
-```
-
-## What's new in v0.3
-
-This release is mostly about making pgrust more reliable.
-
-- We're now on PostgreSQL 18.6, including its bug and security fixes.
-- `cbstore` is now `pgrcolumnar`. Update SQL that uses `USING cbstore` to
-  `USING pgrcolumnar`; the old name no longer works.
+Up to v0.3 we developed pgrust privately and published it in large monthly
+releases. Starting with v0.4-beta, development happens in this repository:
+features, optimizations and bug fixes are pushed here as soon as they are
+ready, instead of being held back for the next release.
 
 ## Implementation
 
 **Executor**
 
-- A new vectorized, push-based executor with JIT compilation.
-- A JIT that emits machine code directly, cutting compile time from ~50ms to
-  ~5µs. It currently targets neoverse-v2 (Graviton4) only.
-- A cache-optimized hash table that adapts its strategy to maximize L1/L2
-  hits. Used for aggregations today.
+- Gravity, a vectorized, push-based executor that compiles plans to machine
+  code (AArch64 and x86-64) with a JIT that emits code directly.
 
 **Parallelism**
 
@@ -375,25 +402,21 @@ This release is mostly about making pgrust more reliable.
 **Storage**
 
 - `pgrcolumnar`, a column-oriented format with dictionary encoding and
-  several other compression schemes.
+  several other compression schemes, WAL-logged.
 - Pipelined `fsync`. A worker releases its locks after calling `fsync` but
   before it completes. This is safe because the query is not acknowledged,
-  and none of its effects are observable, until the `fsync` finishes. It
-  speeds up highly contended updates by 30-50x.
+  and none of its effects are observable, until the `fsync` finishes.
 
 **Other**
 
-- A built-in OOM killer. Near the machine's memory limit, pgrust picks a
-  worker to kill, so that one query dies and the server itself can keep
-  running.
-- Executable layout optimized with PGO
+- The automatic memory manager. Near the machine's memory limit, pgrust
+  cancels the statement holding the most memory, so that one query dies and
+  the server itself can keep running.
 
 ## Roadmap
 
-pgrust proves we can achieve better performance than Postgres and ClickHouse
-while maintaining identical behavior to Postgres. Next we're working on
-testing and battle testing pgrust and making it so people can trust pgrust
-with their data.
+Next we're working on testing and battle testing pgrust and making it so
+people can trust pgrust with their data.
 
 Beyond that we want to add:
 
@@ -415,7 +438,12 @@ if there is a Postgres behavior you want matched.
 ## License
 
 pgrust is licensed under [AGPL-3.0](LICENSE). Portions derived from
-PostgreSQL remain under the PostgreSQL License; see [`NOTICE`](NOTICE).
+PostgreSQL remain under the PostgreSQL License. The JIT's code generator
+(`crates/tpde/`) is ported from TPDE (Apache-2.0 WITH LLVM-exception) and
+Fadec and Disarm (BSD-3-Clause). See [`NOTICE`](NOTICE).
+
+Acknowledgements: the research and other systems whose ideas pgrust uses are
+credited in [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md).
 
 ## Contact
 

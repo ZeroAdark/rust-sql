@@ -1,0 +1,183 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1u s2u s1c s2r
+step s1u: UPDATE du SET pop = pop + 1000 WHERE id IN (1, 3, 29);
+step s2u: UPDATE du u SET pop = u.pop + 1 + coalesce(length(c.name), 0) FROM dc c RIGHT JOIN dt t ON c.id = t.cid WHERE u.id = t.id AND t.id <= 30; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT id, pop FROM du WHERE id <= 30 OR id > 500 ORDER BY id;
+id| pop
+--+----
+ 1|1014
+ 2|  24
+ 3|1031
+ 4|  44
+ 5|  54
+ 6|  61
+ 7|  74
+ 8|  84
+ 9|  91
+10| 105
+11| 115
+12| 121
+13| 135
+14| 145
+15| 151
+16| 165
+17| 175
+18| 181
+19| 195
+20| 205
+21| 211
+22| 225
+23| 235
+24| 241
+25| 255
+26| 265
+27| 271
+28| 285
+29|1291
+30| 301
+(30 rows)
+
+
+starting permutation: s1d s1k s2u s1c s2r
+step s1d: DELETE FROM du WHERE id IN (2, 6);
+step s1k: UPDATE du SET id = id + 500 WHERE id IN (4, 9);
+step s2u: UPDATE du u SET pop = u.pop + 1 + coalesce(length(c.name), 0) FROM dc c RIGHT JOIN dt t ON c.id = t.cid WHERE u.id = t.id AND t.id <= 30; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT id, pop FROM du WHERE id <= 30 OR id > 500 ORDER BY id;
+ id|pop
+---+---
+  1| 14
+  3| 31
+  5| 54
+  7| 74
+  8| 84
+ 10|105
+ 11|115
+ 12|121
+ 13|135
+ 14|145
+ 15|151
+ 16|165
+ 17|175
+ 18|181
+ 19|195
+ 20|205
+ 21|211
+ 22|225
+ 23|235
+ 24|241
+ 25|255
+ 26|265
+ 27|271
+ 28|285
+ 29|291
+ 30|301
+504| 40
+509| 90
+(28 rows)
+
+
+starting permutation: s1m s2u s1c s2r
+step s1m: UPDATE du SET pop = -1 WHERE id = 8; DELETE FROM du WHERE id = 8; UPDATE du SET id = 8 WHERE id = 7;
+step s2u: UPDATE du u SET pop = u.pop + 1 + coalesce(length(c.name), 0) FROM dc c RIGHT JOIN dt t ON c.id = t.cid WHERE u.id = t.id AND t.id <= 30; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT id, pop FROM du WHERE id <= 30 OR id > 500 ORDER BY id;
+id|pop
+--+---
+ 1| 14
+ 2| 24
+ 3| 31
+ 4| 44
+ 5| 54
+ 6| 61
+ 8| 70
+ 9| 91
+10|105
+11|115
+12|121
+13|135
+14|145
+15|151
+16|165
+17|175
+18|181
+19|195
+20|205
+21|211
+22|225
+23|235
+24|241
+25|255
+26|265
+27|271
+28|285
+29|291
+30|301
+(29 rows)
+
+
+starting permutation: s1u s2d s1c s2r
+step s1u: UPDATE du SET pop = pop + 1000 WHERE id IN (1, 3, 29);
+step s2d: DELETE FROM du u USING dc c RIGHT JOIN dt t ON c.id = t.cid WHERE u.id = t.id AND t.id <= 30 AND (c.id IS NULL OR u.pop > 1000); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2r: SELECT id, pop FROM du WHERE id <= 30 OR id > 500 ORDER BY id;
+id| pop
+--+----
+ 1|1010
+ 2|  20
+ 4|  40
+ 5|  50
+ 7|  70
+ 8|  80
+10| 100
+11| 110
+13| 130
+14| 140
+16| 160
+17| 170
+19| 190
+20| 200
+22| 220
+23| 230
+25| 250
+26| 260
+28| 280
+(19 rows)
+
+
+starting permutation: s1d s1k s2d s1c s2r
+step s1d: DELETE FROM du WHERE id IN (2, 6);
+step s1k: UPDATE du SET id = id + 500 WHERE id IN (4, 9);
+step s2d: DELETE FROM du u USING dc c RIGHT JOIN dt t ON c.id = t.cid WHERE u.id = t.id AND t.id <= 30 AND (c.id IS NULL OR u.pop > 1000); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2r: SELECT id, pop FROM du WHERE id <= 30 OR id > 500 ORDER BY id;
+ id|pop
+---+---
+  1| 10
+  5| 50
+  7| 70
+  8| 80
+ 10|100
+ 11|110
+ 13|130
+ 14|140
+ 16|160
+ 17|170
+ 19|190
+ 20|200
+ 22|220
+ 23|230
+ 25|250
+ 26|260
+ 28|280
+504| 40
+509| 90
+(19 rows)
+

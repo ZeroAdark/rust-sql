@@ -1,0 +1,7 @@
+path	crates/gravity/program/src/cache.rs
+growth	std::collections::HashMap::insert	4
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::into_boxed_slice	1
+type	std::collections::HashMap	1
+type	std::vec::Vec	1

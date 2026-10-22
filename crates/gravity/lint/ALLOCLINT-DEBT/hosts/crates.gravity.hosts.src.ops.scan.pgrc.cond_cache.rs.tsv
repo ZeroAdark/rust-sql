@@ -1,0 +1,11 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/cond_cache.rs
+growth	std::collections::BTreeMap::insert	1
+growth	std::collections::HashMap::insert	1
+growth	std::vec::Vec::extend_from_slice	4
+growth	std::vec::Vec::push	2
+method	std::clone::Clone::clone	1
+method	std::sync::Arc::new	1
+method	std::vec::Vec::into_boxed_slice	1
+method	std::vec::Vec::with_capacity	2
+type	std::sync::Arc	2
+type	std::vec::Vec	3

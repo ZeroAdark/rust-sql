@@ -1,0 +1,6 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2, box 17, M3-L1 09-25): COPY (<sql>) TO STDOUT over a fresh initdb
+sql: select a, b from (values (1,2),(2,3)) v(a,b) group by a,b, grouping sets(a);
+cols: a	b
+[pg]
+1	2
+2	3

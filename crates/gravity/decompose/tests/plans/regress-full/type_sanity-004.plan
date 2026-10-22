@@ -1,0 +1,40 @@
+-- name: regress-full-type_sanity-004
+-- sql: SELECT t1.oid, t1.typname FROM pg_type as t1 WHERE (t1.typtype = 'c' AND t1.typrelid = 0) OR (t1.typtype != 'c' AND t1.typrelid != 0);
+-- test: type_sanity
+-- shape: 9673b0bc423be375 seen=1
+-- rel 1247 pg_type am=heap kind=r natts=32
+-- att 1247 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 2 typname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1247 3 typnamespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 4 typowner typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 5 typlen typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1247 6 typbyval typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 7 typtype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 8 typcategory typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 9 typispreferred typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 10 typisdefined typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 11 typdelim typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 12 typrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 13 typsubscript typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 14 typelem typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 15 typarray typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 16 typinput typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 17 typoutput typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 18 typreceive typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 19 typsend typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 20 typmodin typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 21 typmodout typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 22 typanalyze typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 23 typalign typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 24 typstorage typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 25 typnotnull typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 26 typbasetype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 27 typtypmod typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 28 typndims typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 29 typcollation typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 30 typdefaultbin typid=194 typmod=-1 len=-1 byval=f notnull=f
+-- att 1247 31 typdefault typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1247 32 typacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2703 rel=1247 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 2704 rel=1247 keys=2,3 opts=0,0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 34.74 :scan.plan.plan_rows 315 :scan.plan.plan_width 68 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 7} :resno 1 :resname oid :ressortgroupref 0 :resorigtbl 1247 :resorigcol 1 :resjunk false} {TARGETENTRY :expr {VAR :varno 1 :varattno 2 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location 15} :resno 2 :resname typname :ressortgroupref 0 :resorigtbl 1247 :resorigcol 2 :resjunk false}) :scan.plan.qual ({BOOLEXPR :boolop or :args ({BOOLEXPR :boolop and :args ({OPEXPR :opno 92 :opfuncid 61 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 7 :vartype 18 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 7 :location 52} {CONST :consttype 18 :consttypmod -1 :constcollid 0 :constlen 1 :constbyval true :constisnull false :location 65 :constvalue 1 [ 99 0 0 0 0 0 0 0 ]}) :location 63} {OPEXPR :opno 607 :opfuncid 184 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 12 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 12 :location 73} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 87 :constvalue 4 [ 0 0 0 0 0 0 0 0 ]}) :location 85}) :location -1} {BOOLEXPR :boolop and :args ({OPEXPR :opno 630 :opfuncid 70 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 7 :vartype 18 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 7 :location 98} {CONST :consttype 18 :consttypmod -1 :constcollid 0 :constlen 1 :constbyval true :constisnull false :location 112 :constvalue 1 [ 99 0 0 0 0 0 0 0 ]}) :location 109} {OPEXPR :opno 608 :opfuncid 185 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 12 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 12 :location 120} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 135 :constvalue 4 [ 0 0 0 0 0 0 0 0 ]}) :location 132}) :location -1}) :location -1}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 1 2 7 12)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias {ALIAS :aliasname t1 :colnames <>} :eref {ALIAS :aliasname t1 :colnames ("oid" "typname" "typnamespace" "typowner" "typlen" "typbyval" "typtype" "typcategory" "typispreferred" "typisdefined" "typdelim" "typrelid" "typsubscript" "typelem" "typarray" "typinput" "typoutput" "typreceive" "typsend" "typmodin" "typmodout" "typanalyze" "typalign" "typstorage" "typnotnull" "typbasetype" "typtypmod" "typndims" "typcollation" "typdefaultbin" "typdefault" "typacl")} :rtekind 0 :relid 1247 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 1247 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8 9 14 19) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 1247 0 0) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 137}

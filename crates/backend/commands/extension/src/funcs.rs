@@ -23,7 +23,7 @@ fn name_datum<'mcx>(mcx: Mcx<'mcx>, s: &str) -> PgResult<Datum> {
 
 // convert_requires_to_datum (extension.c:2681).
 fn convert_requires_to_datum(mcx: Mcx<'_>, requires: &[String]) -> PgResult<Datum> {
-    let mut datums: Vec<Datum> = Vec::with_capacity(requires.len());
+    let mut datums: Vec<Datum> = ::mcx::std_vec_with_capacity("commands", requires.len())?;
     for r in requires {
         datums.push(name_datum(mcx, r)?);
     }
@@ -159,7 +159,7 @@ pub fn fc_pg_extension_update_paths(
         // SAFETY: name argument datum — 64 NUL-padded bytes.
         let bytes = unsafe { core::slice::from_raw_parts(p, 64) };
         let len = bytes.iter().position(|&b| b == 0).unwrap_or(64);
-        bytes[..len].to_vec()
+        ::mcx::std_vec_from_slice("commands", &bytes[..len])?
     };
 
     check_valid_extension_name_bytes(&extname)?;
@@ -206,7 +206,7 @@ pub fn fc_pg_extension_config_dump(
 ) -> PgResult<Datum> {
     let tableoid = fcinfo.arg(0).as_oid();
     // SAFETY: catalog arg type text — non-null varlena (strict function).
-    let wherecond: Vec<u8> = unsafe { fcinfo.arg_varlena_packed(1)? }.data().to_vec();
+    let wherecond: Vec<u8> = ::mcx::std_vec_from_slice("extension", &unsafe { fcinfo.arg_varlena_packed(1)? }.data())?;
     // SAFETY: executor arms es_query_cxt pre-call; it outlives this frame.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
     crate::contents::extension_config_dump(mcx, tableoid, &wherecond)?;

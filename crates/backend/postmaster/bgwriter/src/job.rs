@@ -20,7 +20,10 @@ use bgjobs::{CycleOutcome, CycleReason};
 use types_core::{pid_t, ProcNumber};
 use types_error::PgError;
 
-use crate::{bgwriter_cycle, BgWriterState, HIBERNATE_FACTOR};
+use crate::{
+    bgwriter_cycle, BgWriterState, HIBERNATE_FACTOR, WAIT_EVENT_BGWRITER_HIBERNATE,
+    WAIT_EVENT_BGWRITER_MAIN,
+};
 
 /// The bgwriter job: the generic aux-job shell around [`BgWriterDaemon`].
 pub type BgWriterJob = auxjob::AuxJob<BgWriterDaemon>;
@@ -169,6 +172,8 @@ impl auxjob::AuxDaemon for BgWriterDaemon {
         let _stamp = OverlayStamp::stamp(&overlay);
         let mut st = self.state.lock().unwrap();
         let delay = Duration::from_millis(overlay.delay_ms.max(1) as u64);
+        // C's WaitLatch return: the idle wait event stamped at re-arm ends.
+        waitevent_seams::pgstat_report_wait_end::call();
 
         if st.hibernating {
             bufmgr::StrategyNotifyBgWriter(-1);
@@ -179,6 +184,7 @@ impl auxjob::AuxDaemon for BgWriterDaemon {
             st.armed = false;
             st.hibernating = true;
             bufmgr::StrategyNotifyBgWriter(procno);
+            waitevent_seams::pgstat_report_wait_start::call(WAIT_EVENT_BGWRITER_HIBERNATE);
             return CycleOutcome::Sleep(delay * HIBERNATE_FACTOR as u32);
         }
 
@@ -186,7 +192,10 @@ impl auxjob::AuxDaemon for BgWriterDaemon {
             Ok(can_hibernate) => {
                 st.armed = can_hibernate && st.inner.prev_hibernate;
                 st.inner.prev_hibernate = can_hibernate;
-                CycleOutcome::Sleep(delay)
+                waitevent_seams::pgstat_report_wait_start::call(WAIT_EVENT_BGWRITER_MAIN);
+                CycleOutcome::Sleep(
+                    st.inner.giveback_wait_ms.map_or(delay, |ms| Duration::from_millis(u64::from(ms.max(1)))),
+                )
             }
             Err(err) => {
                 // The daemons' uniform error leg, minus the inline sleep

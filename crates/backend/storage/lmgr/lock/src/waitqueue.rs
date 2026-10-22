@@ -21,8 +21,6 @@ use crate::my_procno;
 
 const PG_WAIT_LOCK: u32 = 0x0300_0000;
 
-// LOCK.waitProcs ops: C's dclist over PGPROC.links as ProcNumbers, [PART].
-
 fn links_of(procno: ProcNumber) -> &'static types_storage::storage::SyncCell<proclist_node> {
     &lmgr_proc::GetPGProcByNumber(procno).links
 }
@@ -112,7 +110,7 @@ unsafe fn wq_delete(lock: *mut LOCK, procno: ProcNumber) {
     q.count -= 1;
 }
 
-// Deletion-safe iteration; SAFETY contract: the lock's partition LWLock held.
+// SAFETY contract: the lock's partition LWLock held.
 pub unsafe fn wq_foreach(lock: *mut LOCK, mut body: impl FnMut(ProcNumber) -> bool) {
     let mut cur = (*lock).waitProcs.list.head;
     while cur != INVALID_PROC_NUMBER {
@@ -125,7 +123,7 @@ pub unsafe fn wq_foreach(lock: *mut LOCK, mut body: impl FnMut(ProcNumber) -> bo
     }
 }
 
-/// DeadLockCheck's queue rearrangement; SAFETY contract: all partition LWLocks held exclusive.
+/// SAFETY contract: all partition LWLocks held exclusive.
 pub unsafe fn SetWaitQueueOrder(lock: *mut LOCK, procs: &[ProcNumber]) {
     debug_assert_eq!((*lock).waitProcs.count as usize, procs.len());
     (*lock).waitProcs.list.head = INVALID_PROC_NUMBER;
@@ -136,7 +134,6 @@ pub unsafe fn SetWaitQueueOrder(lock: *mut LOCK, procs: &[ProcNumber]) {
     }
 }
 
-/// Join the wait queue on locallock's lock; may grant immediately instead.
 /// SAFETY contract: the lock's partition LWLock held exclusive; the caller
 /// releases it before ProcSleep.
 pub(crate) unsafe fn JoinWaitQueue(
@@ -158,7 +155,6 @@ pub(crate) unsafe fn JoinWaitQueue(
     // SAFETY: [PART] serialized by the lock partition lock
     unsafe { proc.heldLocks.set(my_proc_held_locks); }
 
-    // Group members' holds give us their priority in the queue.
     if leader != INVALID_PROC_NUMBER {
         crate::shared::foreach_proclock_on_lock(lock, |other| {
             if (*other).groupLeader == leader {
@@ -168,8 +164,6 @@ pub(crate) unsafe fn JoinWaitQueue(
         });
     }
 
-    // Go ahead of any waiter that must wait for locks we already hold
-    // (cheap early deadlock avoidance).
     let mut insert_before = INVALID_PROC_NUMBER;
     let mut early_deadlock = false;
     let mut granted_instead = false;
@@ -243,7 +237,6 @@ pub(crate) unsafe fn JoinWaitQueue(
     PROC_WAIT_STATUS_WAITING
 }
 
-/// ProcSleep wrapper with tracing/awaited-lock bookkeeping (lock.c WaitOnLock).
 pub(crate) fn WaitOnLock(
     localtag: &LOCALLOCKTAG,
     hashcode: u32,
@@ -261,14 +254,12 @@ pub(crate) fn WaitOnLock(
             Ok(result)
         }
         Err(e) => {
-            // awaited lock stays set until LockErrorCleanup.
             ps_status_seams::set_ps_display_remove_suffix::call();
             Err(e)
         }
     }
 }
 
-/// Sleep until the lock joined in JoinWaitQueue is granted (or deadlock).
 pub fn ProcSleep(localtag: &LOCALLOCKTAG) -> PgResult<ProcWaitStatus> {
     let lockmode = localtag.mode;
     let (lock, hashcode) = with_local(|state| {
@@ -283,9 +274,7 @@ pub fn ProcSleep(localtag: &LOCALLOCKTAG) -> PgResult<ProcWaitStatus> {
     debug_assert_eq!(awaited_lock().map(|(t, _)| t), Some(*localtag));
     debug_assert!(!lwlock::LWLockHeldByMe(partition_lock));
 
-    // Awaited-lock cleanup is armed: a backend in recovery (not Startup)
-    // that holds the pin Startup is waiting for must ERROR 40P01 here,
-    // not sleep. The InHotStandby wait path below is Startup-only.
+    // A backend in recovery (not Startup) that holds the pin Startup is waiting for must ERROR 40P01 here, not sleep.
     if transam_xlog_seams::recovery_in_progress::is_installed()
         && transam_xlog_seams::recovery_in_progress::call()
         && !(xlogutils_seams::in_recovery::is_installed()
@@ -294,16 +283,7 @@ pub fn ProcSleep(localtag: &LOCALLOCKTAG) -> PgResult<ProcWaitStatus> {
         standby_seams::check_recovery_conflict_deadlock::call()?;
     }
 
-    // InHotStandby (proc.c) — standbyState >= SNAPSHOT_PENDING, a per-process
-    // (here per-thread, xlogutils) state only the STARTUP process ever sets:
-    // only its lock waits delegate to standby.c's
-    // ResolveRecoveryConflictWithLock, with the deadlock_timeout-based
-    // "recovery still waiting" reporting when log_recovery_conflict_waits.
-    // NOT RecoveryInProgress(): that is true for every backend on a standby,
-    // and routing a regular backend's lock wait through the startup-only
-    // conflict path breaks its wakeup and deadlock detection (031 case 5:
-    // the cursor session's table2 wait hung 120s and the buffer-pin deadlock
-    // never got the chance to resolve).
+    // Routing a regular backend's lock wait through the startup-only conflict path breaks its wakeup and deadlock detection.
     let in_hot_standby = xlogutils_seams::in_hot_standby::is_installed()
         && xlogutils_seams::in_hot_standby::call();
     let standby_wait_start: i64 = if in_hot_standby {
@@ -340,8 +320,7 @@ pub fn ProcSleep(localtag: &LOCALLOCKTAG) -> PgResult<ProcWaitStatus> {
                 lmgr_proc::globals::DeadlockTimeout(),
             )?;
         }
-        // Reuse the timer's start time as waitStart; written without the
-        // partition lock (pg_locks may transiently see null waitstart).
+        // Written without the partition lock (pg_locks may transiently see null waitstart).
         proc.waitStart
             .write(timeout_seams::get_timeout_start_time::call(
                 timeout_seams::DEADLOCK_TIMEOUT,
@@ -352,14 +331,11 @@ pub fn ProcSleep(localtag: &LOCALLOCKTAG) -> PgResult<ProcWaitStatus> {
         if in_hot_standby {
             let maybe_log_conflict = standby_wait_start != 0 && !logged_recovery_conflict;
 
-            // Set a timer and wait for that or for the lock to be granted.
             standby_seams::resolve_recovery_conflict_with_lock::call(
                 localtag.lock,
                 maybe_log_conflict,
             )?;
 
-            // Log if the startup process has waited longer than
-            // deadlock_timeout for a recovery conflict on lock.
             if maybe_log_conflict {
                 let now = timestamp_seams::get_current_timestamp::call();
                 let deadlock_timeout = lmgr_proc::globals::DeadlockTimeout() as i64;
@@ -434,8 +410,6 @@ pub fn ProcSleep(localtag: &LOCALLOCKTAG) -> PgResult<ProcWaitStatus> {
         }
     }
 
-    // Recovery conflict on lock resolved, but the startup process waited
-    // longer than deadlock_timeout for it: close out the log pair.
     if in_hot_standby && logged_recovery_conflict {
         standby_seams::log_recovery_conflict::call(
             types_storage::storage::ProcSignalReason::PROCSIG_RECOVERY_CONFLICT_LOCK,
@@ -450,11 +424,7 @@ pub fn ProcSleep(localtag: &LOCALLOCKTAG) -> PgResult<ProcWaitStatus> {
     Ok(my_wait_status)
 }
 
-/// proc.c's DS_BLOCKED_BY_AUTOVACUUM arm: SIGINT the autovacuum worker that
-/// hard-blocks us, unless it is working to prevent Xid wraparound.
 #[cold]
-// elog's %m expansion (strerror(errno)); C prints the text, so a NULL from
-// strerror is not expected for any errno kill() returns.
 fn strerror(errnum: i32) -> String {
     // SAFETY: strerror returns a pointer to a NUL-terminated process-lifetime
     // string; it is copied out immediately.
@@ -469,7 +439,6 @@ fn strerror(errnum: i32) -> String {
 }
 
 fn cancel_blocking_autovacuum(lock: *mut LOCK, lockmode: LOCKMODE) -> PgResult<()> {
-    // Signal/errno constants inlined (the seam takes plain ints).
     const SIGINT: i32 = 2;
     const ESRCH: i32 = 3;
 
@@ -478,9 +447,7 @@ fn cancel_blocking_autovacuum(lock: *mut LOCK, lockmode: LOCKMODE) -> PgResult<(
     };
     let autovac = lmgr_proc::GetPGProcByNumber(blocker);
 
-    // Grab info we need, then release the lock immediately. C's race note:
-    // the worker can switch transactions before the signal lands; worst case
-    // a for-wraparound vacuum is canceled.
+    // The worker can switch transactions before the signal lands; worst case a for-wraparound vacuum is canceled.
     let proc_array_lock = lwlock::main_lock(PROC_ARRAY_LOCK);
     lwlock::LWLockAcquire(proc_array_lock, lwlock::LW_EXCLUSIVE, my_procno())?;
     let status_flags = lmgr_proc::ProcGlobal().statusFlags
@@ -492,7 +459,6 @@ fn cancel_blocking_autovacuum(lock: *mut LOCK, lockmode: LOCKMODE) -> PgResult<(
         unsafe { ((*lock).tag.locktag_lockmethodid, (*lock).tag) };
     lwlock::LWLockRelease(proc_array_lock)?;
 
-    // Only do it if the worker is not working to protect against Xid wraparound.
     if status_flags & PROC_IS_AUTOVACUUM != 0 && status_flags & PROC_VACUUM_FOR_WRAPAROUND == 0 {
         let pid = autovac.pid.load(Relaxed);
 
@@ -501,13 +467,14 @@ fn cancel_blocking_autovacuum(lock: *mut LOCK, lockmode: LOCKMODE) -> PgResult<(
             lockmode,
         );
         let tag_desc = lmgr_seams::describe_lock_tag::call(locktag_copy);
-        elog_seams::ereport_msg::call(
+        // proc.c:1555: errdetail_log, server log only.
+        elog_seams::ereport_msg_detail_log::call(
             DEBUG1,
             format!("sending cancel to blocking autovacuum PID {pid}"),
-            Some(format!(
+            format!(
                 "Process {} waits for {modename} on {tag_desc}.",
                 init_small::globals::MyProcPid()
-            )),
+            ),
         )?;
 
         // kill(pid, SIGINT); the worker exiting first is expected (ESRCH).
@@ -525,8 +492,7 @@ fn cancel_blocking_autovacuum(lock: *mut LOCK, lockmode: LOCKMODE) -> PgResult<(
     Ok(())
 }
 
-// proc.c:1610-1614: TimestampDifference clamps a nonpositive interval to
-// zero, so a backward clock step reports 0.000 ms.
+// TimestampDifference clamps a nonpositive interval to zero, so a backward clock step reports 0.000 ms.
 pub(crate) fn lock_wait_elapsed(start: i64, now: i64) -> (i64, i64) {
     let diff = (now - start).max(0);
     let (secs, usecs) = (diff / 1_000_000, diff % 1_000_000);
@@ -560,8 +526,6 @@ fn log_lock_wait_progress(
     };
     let detail = format!("{noun}: {holders}. Wait queue: {waiters}.");
 
-    // proc.c:1650-1677 errdetail_log_plural: the holder/waiter detail goes to
-    // the server log only.
     let log_with_detail = |cline: i32, msg: String| {
         elog_seams::ereport::call(
             types_error::PgError::new(LOG, msg)
@@ -600,7 +564,6 @@ fn log_lock_wait_progress(
     Ok(())
 }
 
-/// Wake `procno` (success case only) and unlink it from the wait queue.
 /// SAFETY contract: the lock's partition LWLock held exclusive.
 pub unsafe fn ProcWakeup(procno: ProcNumber, waitStatus: ProcWaitStatus) {
     let proc = lmgr_proc::GetPGProcByNumber(procno);
@@ -620,13 +583,11 @@ pub unsafe fn ProcWakeup(procno: ProcNumber, waitStatus: ProcWaitStatus) {
         proc.waitProcLock.set(std::ptr::null_mut());
     }
     proc.waitStatus.store(waitStatus, Release);
-    // upstream 0d3be0501784 (18.4): Fix ProcWakeup() resetting wrong waitStart field.
     proc.waitStart.write(0);
 
     latch_seams::set_latch::call(&proc.procLatch);
 }
 
-/// Wake all waiters that are no longer blocked.
 /// SAFETY contract: the lock's partition LWLock held exclusive.
 pub unsafe fn ProcLockWakeup(lockMethodTable: LockMethod, lock: *mut LOCK) {
     if (*lock).waitProcs.count == 0 {
@@ -640,8 +601,6 @@ pub unsafe fn ProcLockWakeup(lockMethodTable: LockMethod, lock: *mut LOCK) {
         // SAFETY: [PART] serialized by the lock partition lock
         let proclock: *mut PROCLOCK = unsafe { waiter.waitProcLock.get() };
 
-        // Waken if it conflicts with neither earlier waiters' requests nor
-        // already-held locks.
         if lockMethodTable.conflictTab[lockmode as usize] & ahead_requests == 0
             && !lock_check_conflicts_raw(lockMethodTable, lockmode, lock, proclock, waiter_no)
         {
@@ -654,7 +613,6 @@ pub unsafe fn ProcLockWakeup(lockMethodTable: LockMethod, lock: *mut LOCK) {
     });
 }
 
-/// Remove a proc that failed to get the lock from the wait queue it is on.
 /// The partition lock for `hashcode` must be held by the caller.
 pub fn RemoveFromWaitQueue(procno: ProcNumber, hashcode: u32) {
     let proc = lmgr_proc::GetPGProcByNumber(procno);
@@ -684,18 +642,13 @@ pub fn RemoveFromWaitQueue(procno: ProcNumber, hashcode: u32) {
         proc.waitProcLock.set(std::ptr::null_mut());
         proc.waitStatus.store(PROC_WAIT_STATUS_ERROR, Release);
 
-        // Delete the proclock now if it holds nothing, and wake any newly
-        // unblocked waiters.
         CleanUpLock(wait_lock, proclock, lock_method, hashcode, true)
             .expect("CleanUpLock failed in RemoveFromWaitQueue");
     }
 }
 
-/// DEADLOCK_TIMEOUT expiry: check for a deadlock and, if hard, boot ourselves
-/// off the lock.
 pub fn CheckDeadLock() -> PgResult<()> {
-    // Lazy deadlock workspace (D3.5): allocate BEFORE taking every partition
-    // lock — keeps C's "the check itself never allocates" invariant.
+    // Allocate BEFORE taking every partition lock — keeps C's "the check itself never allocates" invariant.
     deadlock_seams::init_dead_lock_checking::call()?;
     let procno = my_procno();
     for i in 0..NUM_LOCK_PARTITIONS as usize {
@@ -703,7 +656,7 @@ pub fn CheckDeadLock() -> PgResult<()> {
     }
 
     let proc = lmgr_proc::GetPGProcByNumber(procno);
-    // Awoken in the interim? (Unlinked from the queue == granted.)
+    // Unlinked from the queue == granted.
     // SAFETY: [PART] serialized by the lock partition lock
     if !unsafe { proc.links.get() }.is_detached() {
         let state = deadlock_seams::dead_lock_check::call(procno);
@@ -725,7 +678,6 @@ pub fn CheckDeadLock() -> PgResult<()> {
     Ok(())
 }
 
-/// PIDs of holders and waiters of the awaited lock, for wait logging.
 /// The lock's partition lock must be held.
 pub fn GetLockHoldersAndWaiters(localtag: &LOCALLOCKTAG, hashcode: u32) -> (String, String, i32) {
     debug_assert!(lwlock::LWLockHeldByMe(LockHashPartitionLock(hashcode)));

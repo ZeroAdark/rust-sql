@@ -205,6 +205,7 @@ pub fn XLOGShmemInit() {
     }
     let xlog_buffers = xlog_buffers();
 
+    // ALLOC-REVIEW(michaelmalis): boot-time shmem sizing; failure is fatal
     let mut xlblocks = Vec::with_capacity(xlog_buffers as usize);
     for _ in 0..xlog_buffers {
         xlblocks.push(AtomicU64::new(InvalidXLogRecPtr));

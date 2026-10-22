@@ -1,0 +1,3 @@
+path	crates/gravity/lower/src/admit/mod.rs
+method	std::boxed::Box::new	1
+type	std::boxed::Box	1

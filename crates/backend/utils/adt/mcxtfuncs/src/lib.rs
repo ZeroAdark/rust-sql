@@ -12,7 +12,7 @@ use ::types_fmgr::{
 };
 use ::types_core::ProcNumber;
 use ::types_storage::ProcSignalReason::{self, PROCSIG_LOG_MEMORY_CONTEXT};
-use elog::ereport;
+use elog::{ereport, PCT_M};
 
 #[cfg(test)]
 mod tests;
@@ -97,6 +97,32 @@ fn put_context_row(
     srf.putvalues(&values, &nulls)
 }
 
+#[repr(C)]
+struct MemoryContextId {
+    context: *const TreeStats,
+    id: i32,
+}
+
+fn with_context_id_table<T>(
+    mcx: Mcx<'_>,
+    visit: impl FnOnce(*mut types_hash::hsearch::HTAB) -> PgResult<T>,
+) -> PgResult<T> {
+    use types_hash::hsearch::{HASHCTL, HASH_BLOBS, HASH_CONTEXT, HASH_ELEM};
+    let mut ctl = HASHCTL::new();
+    ctl.keysize = core::mem::size_of::<*const TreeStats>();
+    ctl.entrysize = core::mem::size_of::<MemoryContextId>();
+    ctl.hcxt = (mcx.context() as *const mcx::MemoryContext).cast_mut().cast();
+    let table = dynahash::hash_create(
+        "pg_get_backend_memory_contexts",
+        256,
+        &ctl,
+        HASH_ELEM | HASH_BLOBS | HASH_CONTEXT,
+    )?;
+    let result = visit(table);
+    dynahash::hash_destroy(table);
+    result
+}
+
 pub fn fc_pg_get_backend_memory_contexts(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
@@ -104,35 +130,50 @@ pub fn fc_pg_get_backend_memory_contexts(
     let flinfo = flinfo.expect("pg_get_backend_memory_contexts: resolved FmgrInfo required");
     // SAFETY: executor arms es_query_cxt pre-call; it outlives this frame.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let mut srf = funcapi::InitMaterializedSRF(mcx, flinfo, fcinfo, 0)?;
-    debug_assert_eq!(srf.tupdesc.natts as usize, COLS);
+    with_context_id_table(mcx, |table| {
+        let mut srf = funcapi::InitMaterializedSRF(mcx, flinfo, fcinfo, 0)?;
+        debug_assert_eq!(srf.tupdesc.natts as usize, COLS);
 
-    // breadth-first ids (C keeps them stable near the roots)
-    // C parents every context under TopMemoryContext (mcxt.c); the forest here
-    // is flat, so the view grafts the other roots under the real
-    // TopMemoryContext row to keep C's parentage shape (level 1 = one row).
-    let mut forest = mcxt_stats::backend_context_forest();
-    if let Some(i) = forest.iter().position(|t| t.name == "TopMemoryContext") {
-        let mut top = forest.remove(i);
-        top.children.append(&mut forest);
-        forest.push(top);
-    }
-    let mut queue: std::collections::VecDeque<(&TreeStats, Vec<i32>)> = Default::default();
-    let mut next_id = 1i32;
-    for root in &forest {
-        queue.push_back((root, Vec::new()));
-    }
-    while let Some((node, parent_path)) = queue.pop_front() {
-        let mut path = parent_path;
-        path.push(next_id);
-        next_id += 1;
-        put_context_row(&mut srf, mcx, node, &path)?;
-        for child in &node.children {
-            queue.push_back((child, path.clone()));
+        // breadth-first ids (C keeps them stable near the roots)
+        let forest = mcxt_stats::backend_context_tree();
+        let mut queue: std::collections::VecDeque<(&TreeStats, Vec<&TreeStats>)> = Default::default();
+        let mut next_id = 1i32;
+        for root in &forest {
+            queue.push_back((root, Vec::new()));
         }
-    }
+        while let Some((node, parent_path)) = queue.pop_front() {
+            let mut path = parent_path;
+            let key = node as *const TreeStats;
+            let entry = dynahash::hash_search(
+                table,
+                (&key as *const *const TreeStats).cast(),
+                types_hash::hsearch::HASH_ENTER,
+                None,
+            )? as *mut MemoryContextId;
+            // SAFETY: the table reserves MemoryContextId-sized entries for pointer keys.
+            unsafe { (*entry).id = next_id };
+            next_id += 1;
+            path.push(node);
+            let mut ids = mcx::vec_with_capacity_in(mcx, path.len())?;
+            for ancestor in &path {
+                let key = *ancestor as *const TreeStats;
+                let entry = dynahash::hash_search(
+                    table,
+                    (&key as *const *const TreeStats).cast(),
+                    types_hash::hsearch::HASH_FIND,
+                    None,
+                )? as *const MemoryContextId;
+                // SAFETY: every ancestor was inserted before its children were queued.
+                ids.push(unsafe { (*entry).id });
+            }
+            put_context_row(&mut srf, mcx, node, &ids)?;
+            for child in &node.children {
+                queue.push_back((child, path.clone()));
+            }
+        }
 
-    Ok(srf.finish(fcinfo))
+        Ok(srf.finish(fcinfo))
+    })
 }
 
 pub fn fc_pg_log_backend_memory_contexts(
@@ -188,7 +229,7 @@ fn log_backend_memory_contexts(
         // the strerror text of the errno SendProcSignal set (ESRCH).
         ereport(WARNING)
             .with_saved_errno(errno)
-            .errmsg(format!("could not send signal to process {pid}: %m"))
+            .errmsg(format!("could not send signal to process {pid}: {PCT_M}"))
             .finish(loc("pg_log_backend_memory_contexts"))?;
         return Ok(false);
     }

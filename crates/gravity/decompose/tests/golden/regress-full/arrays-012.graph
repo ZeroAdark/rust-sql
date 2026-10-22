@@ -1,0 +1,12 @@
+-- regress-full-arrays-012
+-- UPDATE arrtest SET c[NULL:1] = '{"can''t assign"}' WHERE array_dims(c) is not null;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=26218 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byref8:vl:win/page Attr(6):byref8:vl:win/page Attr(7):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter notnull(fn747(v1.3))
+  project (1=T_SubscriptingRef, 2j=v1.-1, 3j=v1.1, 4j=v1.2, 5j=v1.4, 6j=v1.5, 7j=v1.6, 8j=v1.7)
+  write UPDATE rel=26218 rti=1 natts=7 indexes=() set=(3)
+  outs 1=vl:call0 2=fx6:row 3=vl:win/page 4=vl:win/page 5=vl:win/page 6=vl:win/page 7=vl:win/page 8=vl:win/page
+mapped: ModifyTable SeqScan

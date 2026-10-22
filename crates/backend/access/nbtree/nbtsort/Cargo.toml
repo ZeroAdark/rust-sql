@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+pgsync = { path = "../../../../_support/pgsync" }
+instrument = { path = "../../../executor/instrument" }
 backend_progress = { path = "../../../utils/activity/backend_progress" }
 bufmgr = { path = "../../../storage/buffer/bufmgr" }
 bulkwrite = { path = "../../../storage/smgr/bulkwrite" }
@@ -38,6 +40,11 @@ postgres_seams = { path = "../../../tcop/postgres_seams" }
 catalog = { path = "../../../catalog/catalog" }
 procarray = { path = "../../../storage/ipc/procarray" }
 clauses = { path = "../../../optimizer/util/clauses" }
+tableam = { path = "../../table/tableam" }
+snapmgr = { path = "../../../utils/time/snapmgr" }
+backend_status = { path = "../../../utils/activity/backend_status" }
+lmgr_proc = { path = "../../../storage/lmgr/lmgr_proc" }
 
 [dev-dependencies]
+transam_xlog_seams = { path = "../../transam/transam_xlog_seams" }
 syscache_seams = { path = "../../../utils/cache/syscache_seams" }

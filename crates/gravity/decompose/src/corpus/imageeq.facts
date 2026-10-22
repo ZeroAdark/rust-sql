@@ -1,0 +1,19 @@
+# The bootstrap catalog's image equalities (KeySem slice 4, D345 / D434): test data, not a code list. corpus::load reads
+# these lines for every fixture after the fixture's own '-- imageeq' lines (a fixture's own line for an operator wins).
+# The server answers Facts::op_image_eq from the key home, gravity_fn typesem keysem::image (IMAGE_EQ, INT_CROSS_EQ);
+# lowerv4 tests/keysem_image_fixture.rs checks these rows equal to the home's.
+# own = of int2 / int4 / int8 / oid / date / bool / char
+-- imageeq 94 left=21 right=21
+-- imageeq 96 left=23 right=23
+-- imageeq 410 left=20 right=20
+-- imageeq 607 left=26 right=26
+-- imageeq 1093 left=1082 right=1082
+-- imageeq 91 left=16 right=16
+-- imageeq 92 left=18 right=18
+# the integer = across widths: int48 / int84 / int24 / int42 / int28 / int82
+-- imageeq 15 left=23 right=20
+-- imageeq 416 left=20 right=23
+-- imageeq 532 left=21 right=23
+-- imageeq 533 left=23 right=21
+-- imageeq 1862 left=21 right=20
+-- imageeq 1868 left=20 right=21

@@ -10,7 +10,8 @@ use crate::layout::{
 // C `"%s"` of the parser's input: the bytes verbatim (SQL_ASCII high bytes
 // reach the wire as C sends them).
 pub fn input_message(level: ErrorLevel, prefix: &str, input: &[u8]) -> PgError {
-    let mut msg = Vec::with_capacity(prefix.len() + input.len() + 2);
+    let mut msg = Vec::new();
+    let _ = msg.try_reserve_exact(prefix.len() + input.len() + 2);
     msg.extend_from_slice(prefix.as_bytes());
     msg.push(b'"');
     msg.extend_from_slice(input);
@@ -101,18 +102,24 @@ impl<'s, 'e, 'mcx> TsvParser<'s, 'e, 'mcx> {
         self.off >= self.input.len()
     }
 
+    // pg_mblen_cstr: a sequence running into the terminator is invalid (mbutils.c:1052).
     #[inline]
-    fn mblen(&self) -> usize {
+    fn mblen(&self) -> PgResult<usize> {
         if self.at_end() {
-            1
-        } else {
-            ::mbutils::pg_mblen(&self.input[self.off..]) as usize
+            return Ok(1);
         }
+        let rest = &self.input[self.off..];
+        let cl = ::mbutils::pg_mblen(rest) as usize;
+        if cl > rest.len() {
+            return Err(::mbutils::report_invalid_encoding(::mbutils::GetDatabaseEncoding(), rest));
+        }
+        Ok(cl)
     }
 
-    fn copy_char(&mut self) {
-        let cl = self.mblen().min(self.input.len() - self.off);
+    fn copy_char(&mut self) -> PgResult<()> {
+        let cl = self.mblen()?;
         self.word.extend_from_slice(&self.input[self.off..self.off + cl]);
+        Ok(())
     }
 
     #[cold]
@@ -147,7 +154,7 @@ impl<'s, 'e, 'mcx> TsvParser<'s, 'e, 'mcx> {
                     {
                         return self.syntax_error();
                     } else if !ts_isspace(c) {
-                        self.copy_char();
+                        self.copy_char()?;
                         state = St::WaitEndWord;
                     }
                 }
@@ -164,7 +171,7 @@ impl<'s, 'e, 'mcx> TsvParser<'s, 'e, 'mcx> {
                             .with_sqlstate(ERRCODE_SYNTAX_ERROR),
                         );
                     }
-                    self.copy_char();
+                    self.copy_char()?;
                     state = if oldstate == 1 { St::WaitEndCmplx } else { St::WaitEndWord };
                 }
                 St::WaitEndWord => {
@@ -188,7 +195,7 @@ impl<'s, 'e, 'mcx> TsvParser<'s, 'e, 'mcx> {
                         }
                         state = St::InPosInfo;
                     } else {
-                        self.copy_char();
+                        self.copy_char()?;
                     }
                 }
                 St::WaitEndCmplx => {
@@ -199,12 +206,12 @@ impl<'s, 'e, 'mcx> TsvParser<'s, 'e, 'mcx> {
                     } else if self.at_end() {
                         return self.syntax_error();
                     } else {
-                        self.copy_char();
+                        self.copy_char()?;
                     }
                 }
                 St::WaitCharCmplx => {
                     if !self.is_web && c == b'\'' {
-                        self.copy_char();
+                        self.copy_char()?;
                         state = St::WaitEndCmplx;
                     } else {
                         if self.word.is_empty() {
@@ -299,7 +306,7 @@ impl<'s, 'e, 'mcx> TsvParser<'s, 'e, 'mcx> {
                     }
                 }
             }
-            self.off += self.mblen();
+            self.off += self.mblen()?;
         }
     }
 }

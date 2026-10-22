@@ -1,0 +1,306 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pp s3pd s3pn s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE ct SET x = ct.x + 1 FROM ci() s WHERE s.k = ct.k AND ct.id % 150 = 0 AND s.w <> 3;
+QUERY PLAN                                  
+--------------------------------------------
+Update on ct                                
+  ->  Hash Join                             
+        Hash Cond: (s.k = ct.k)             
+        ->  Subquery Scan on s              
+              Filter: (s.w <> 3)            
+              ->  Seq Scan on cs            
+        ->  Hash                            
+              ->  Seq Scan on ct            
+                    Filter: ((id % 150) = 0)
+(9 rows)
+
+step s3pp: EXPLAIN (COSTS OFF) UPDATE ct SET x = ct.x + 2 FROM cp() s WHERE s.k = ct.k AND ct.id % 150 = 0 AND s.w <> 1;
+QUERY PLAN                                  
+--------------------------------------------
+Update on ct                                
+  ->  Hash Join                             
+        Hash Cond: (s.k = ct.k)             
+        ->  Function Scan on cp s           
+              Filter: (w <> 1)              
+        ->  Hash                            
+              ->  Seq Scan on ct            
+                    Filter: ((id % 150) = 0)
+(8 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM ct USING ci() s WHERE s.k = ct.k AND ct.id % 150 = 0 AND s.w IN (0, 2);
+QUERY PLAN                                            
+------------------------------------------------------
+Delete on ct                                          
+  ->  Hash Join                                       
+        Hash Cond: (s.k = ct.k)                       
+        ->  Subquery Scan on s                        
+              Filter: (s.w = ANY ('{0,2}'::integer[]))
+              ->  Seq Scan on cs                      
+        ->  Hash                                      
+              ->  Seq Scan on ct                      
+                    Filter: ((id % 150) = 0)          
+(9 rows)
+
+step s3pn: EXPLAIN (COSTS OFF) UPDATE cn SET active = true, x = cn.x + i.x FROM unnest(ARRAY[(10, 5), (11, 7)]::cn_in[]) i WHERE cn_kt(cn.*) = cn_ki(i.*);
+QUERY PLAN                                     
+-----------------------------------------------
+Update on cn                                   
+  ->  Nested Loop                              
+        Join Filter: (cn_kt(cn.*) = cn_ki(i.*))
+        ->  Function Scan on unnest i          
+        ->  Materialize                        
+              ->  Seq Scan on cn               
+(6 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1k s1d s1s s2u s1c s2c s3sel s3row
+step s1x: UPDATE ct SET x = x + 1000 WHERE id IN (300, 600, 900);
+step s1k: UPDATE ct SET k = k + 5000 WHERE id = 450;
+step s1d: DELETE FROM ct WHERE id = 750;
+step s1s: UPDATE cs SET v = 'changed' WHERE k IN (300, 600);
+step s2u: UPDATE ct SET x = ct.x + 1 FROM ci() s WHERE s.k = ct.k AND ct.id % 150 = 0 AND s.w <> 3 RETURNING ct.id, ct.k, ct.x, s.v, s; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ id|  k|   x|v   |s           
+---+---+----+----+------------
+150|150|   1|v150|(150,v150,2)
+300|300|1001|v300|(300,v300,0)
+600|600|1001|v600|(600,v600,0)
+900|900|1001|v900|(900,v900,0)
+(4 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ct;
+count|   sum| sum
+-----+------+----
+  899|409700|3004
+(1 row)
+
+step s3row: SELECT id, k, x FROM ct WHERE id IN (150, 300, 450, 600, 750, 900) ORDER BY id;
+ id|   k|   x
+---+----+----
+150| 150|   1
+300| 300|1001
+450|5450|   0
+600| 600|1001
+900| 900|1001
+(5 rows)
+
+
+starting permutation: s1x s1k s1d s1s s2p s1c s2c s3sel s3row s3calls
+step s1x: UPDATE ct SET x = x + 1000 WHERE id IN (300, 600, 900);
+step s1k: UPDATE ct SET k = k + 5000 WHERE id = 450;
+step s1d: DELETE FROM ct WHERE id = 750;
+step s1s: UPDATE cs SET v = 'changed' WHERE k IN (300, 600);
+step s2p: UPDATE ct SET x = ct.x + 2 FROM cp() s WHERE s.k = ct.k AND ct.id % 150 = 0 AND s.w <> 1 RETURNING ct.id, ct.x, s.v; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+ id|   x|v   
+---+----+----
+150|   2|v150
+300|1002|v300
+600|1002|v600
+900|1002|v900
+(4 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ct;
+count|   sum| sum
+-----+------+----
+  899|409700|3008
+(1 row)
+
+step s3row: SELECT id, k, x FROM ct WHERE id IN (150, 300, 450, 600, 750, 900) ORDER BY id;
+ id|   k|   x
+---+----+----
+150| 150|   2
+300| 300|1002
+450|5450|   0
+600| 600|1002
+900| 900|1002
+(5 rows)
+
+step s3calls: SELECT last_value FROM ccalls;
+last_value
+----------
+         1
+(1 row)
+
+
+starting permutation: s1x s1k s1d s2d s1c s2c s3sel s3row
+step s1x: UPDATE ct SET x = x + 1000 WHERE id IN (300, 600, 900);
+step s1k: UPDATE ct SET k = k + 5000 WHERE id = 450;
+step s1d: DELETE FROM ct WHERE id = 750;
+step s2d: DELETE FROM ct USING ci() s WHERE s.k = ct.k AND ct.id % 150 = 0 AND s.w IN (0, 2) RETURNING ct.id, s.v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+ id|v   
+---+----
+150|v150
+300|v300
+600|v600
+900|v900
+(4 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ct;
+count|   sum|sum
+-----+------+---
+  895|407750|  0
+(1 row)
+
+step s3row: SELECT id, k, x FROM ct WHERE id IN (150, 300, 450, 600, 750, 900) ORDER BY id;
+ id|   k|x
+---+----+-
+450|5450|0
+(1 row)
+
+
+starting permutation: s1n s1m s2n s1c s2c s3cn
+step s1n: UPDATE cn SET x = x + 100 WHERE id = 10;
+step s1m: UPDATE cn SET id = 12 WHERE id = 11;
+step s2n: UPDATE cn SET active = true, x = cn.x + i.x FROM unnest(ARRAY[(10, 5), (11, 7)]::cn_in[]) i WHERE cn_kt(cn.*) = cn_ki(i.*) RETURNING cn.id, cn.x, i; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+id|  x|i     
+--+---+------
+10|115|(10,5)
+(1 row)
+
+step s2c: COMMIT;
+step s3cn: SELECT id, active, x FROM cn ORDER BY id;
+id|active|  x
+--+------+---
+ 1|f     |  1
+10|t     |115
+12|t     | 11
+(3 rows)
+
+
+starting permutation: s2u s1x s2c s1c s3sel s3row
+step s2u: UPDATE ct SET x = ct.x + 1 FROM ci() s WHERE s.k = ct.k AND ct.id % 150 = 0 AND s.w <> 3 RETURNING ct.id, ct.k, ct.x, s.v, s;
+ id|  k|x|v   |s           
+---+---+-+----+------------
+150|150|1|v150|(150,v150,2)
+300|300|1|v300|(300,v300,0)
+450|450|1|v450|(450,v450,2)
+600|600|1|v600|(600,v600,0)
+750|750|1|v750|(750,v750,2)
+900|900|1|v900|(900,v900,0)
+(6 rows)
+
+step s1x: UPDATE ct SET x = x + 1000 WHERE id IN (300, 600, 900); <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ct;
+count|   sum| sum
+-----+------+----
+  900|405450|3006
+(1 row)
+
+step s3row: SELECT id, k, x FROM ct WHERE id IN (150, 300, 450, 600, 750, 900) ORDER BY id;
+ id|  k|   x
+---+---+----
+150|150|   1
+300|300|1001
+450|450|   1
+600|600|1001
+750|750|   1
+900|900|1001
+(6 rows)
+
+
+starting permutation: s3pq s3pm s1c s2c
+step s3pq: EXPLAIN (COSTS OFF) UPDATE ct SET x = ct.x + 3 FROM (SELECT * FROM cs OFFSET 0) s WHERE s.k = ct.k AND ct.id % 150 = 0 AND s.w <> 3;
+QUERY PLAN                                  
+--------------------------------------------
+Update on ct                                
+  ->  Hash Join                             
+        Hash Cond: (s.k = ct.k)             
+        ->  Subquery Scan on s              
+              Filter: (s.w <> 3)            
+              ->  Seq Scan on cs            
+        ->  Hash                            
+              ->  Seq Scan on ct            
+                    Filter: ((id % 150) = 0)
+(9 rows)
+
+step s3pm: EXPLAIN (COSTS OFF) MERGE INTO ct USING (SELECT * FROM cs OFFSET 0) s ON s.k = ct.k AND ct.id % 150 = 0 WHEN MATCHED AND s.w <> 1 THEN UPDATE SET x = ct.x + 4;
+QUERY PLAN                                  
+--------------------------------------------
+Merge on ct                                 
+  ->  Hash Join                             
+        Hash Cond: (s.k = ct.k)             
+        ->  Subquery Scan on s              
+              ->  Seq Scan on cs            
+        ->  Hash                            
+              ->  Seq Scan on ct            
+                    Filter: ((id % 150) = 0)
+(8 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1k s1d s1s s2q s1c s2c s3sel s3row
+step s1x: UPDATE ct SET x = x + 1000 WHERE id IN (300, 600, 900);
+step s1k: UPDATE ct SET k = k + 5000 WHERE id = 450;
+step s1d: DELETE FROM ct WHERE id = 750;
+step s1s: UPDATE cs SET v = 'changed' WHERE k IN (300, 600);
+step s2q: UPDATE ct SET x = ct.x + 3 FROM (SELECT * FROM cs OFFSET 0) s WHERE s.k = ct.k AND ct.id % 150 = 0 AND s.w <> 3 RETURNING ct.id, ct.k, ct.x, s.v; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+ id|  k|   x|v   
+---+---+----+----
+150|150|   3|v150
+300|300|1003|v300
+600|600|1003|v600
+900|900|1003|v900
+(4 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ct;
+count|   sum| sum
+-----+------+----
+  899|409700|3012
+(1 row)
+
+step s3row: SELECT id, k, x FROM ct WHERE id IN (150, 300, 450, 600, 750, 900) ORDER BY id;
+ id|   k|   x
+---+----+----
+150| 150|   3
+300| 300|1003
+450|5450|   0
+600| 600|1003
+900| 900|1003
+(5 rows)
+
+
+starting permutation: s1x s1k s1d s1s s2m s1c s2c s3sel s3row
+step s1x: UPDATE ct SET x = x + 1000 WHERE id IN (300, 600, 900);
+step s1k: UPDATE ct SET k = k + 5000 WHERE id = 450;
+step s1d: DELETE FROM ct WHERE id = 750;
+step s1s: UPDATE cs SET v = 'changed' WHERE k IN (300, 600);
+step s2m: MERGE INTO ct USING (SELECT * FROM cs OFFSET 0) s ON s.k = ct.k AND ct.id % 150 = 0 WHEN MATCHED AND s.w <> 1 THEN UPDATE SET x = ct.x + 4; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM ct;
+count|   sum| sum
+-----+------+----
+  899|409700|3016
+(1 row)
+
+step s3row: SELECT id, k, x FROM ct WHERE id IN (150, 300, 450, 600, 750, 900) ORDER BY id;
+ id|   k|   x
+---+----+----
+150| 150|   4
+300| 300|1004
+450|5450|   0
+600| 600|1004
+900| 900|1004
+(5 rows)
+

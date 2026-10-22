@@ -1,0 +1,11 @@
+-- regress-full-gin-008
+-- insert into t_gin_test_tbl select array[1, g, g/10], array[2, g, g/10] from generate_series(1, 20000) g;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:20000)]
+  project (1=array(c23:1, v3.1, op528(v3.1, c23:10)), 2=array(c23:2, v3.1, op528(v3.1, c23:10)))
+  write INSERT rel=27066 rti=1 natts=2 indexes=(27071[1, 2]:gin)
+  outs 1=vl:call0 2=vl:call0
+mapped: ModifyTable FunctionScan

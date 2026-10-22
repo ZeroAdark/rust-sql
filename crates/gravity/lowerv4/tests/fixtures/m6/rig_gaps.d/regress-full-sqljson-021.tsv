@@ -1,0 +1,1 @@
+sqljson-021: the fixture plan keeps a JsonExpr (JSON_OBJECTAGG / JSON_ARRAYAGG output) the emitter refuses by Shape; the server serves the statement (regress, box 28 09-26)

@@ -1,0 +1,1 @@
+test_bytea_to_text(): a function encoding.sql creates; the rig catalog has no pg_proc row

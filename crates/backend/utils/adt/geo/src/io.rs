@@ -81,16 +81,28 @@ impl<'a> Cursor<'a> {
         self.cur() == 0
     }
 
+    // The slice single_decode hands float8in_internal.  C hands strtod a
+    // pointer into the literal and strtod touches only the number token, so
+    // the slice is bounded the same way: leading isspace, then ASCII bytes
+    // that are neither isspace nor the pair delimiter (strtod's decimal, hex
+    // and inf/nan(...) forms never consume ',' or a non-ASCII byte), then the
+    // trailing isspace float8in_internal reports as consumed.  Validating the
+    // whole remaining literal as UTF-8 here instead made every point cost the
+    // rest of the string: a multi-million-point path parsed quadratically.
     #[inline]
     fn tail(&self) -> &'a str {
-        // ASCII-only consumption keeps pos on a char boundary; strtod stops
-        // at the first non-UTF-8 byte just as it stops at any other junk.
-        let rest = &self.bytes[self.pos.min(self.bytes.len())..];
-        match core::str::from_utf8(rest) {
-            Ok(s) => s,
-            // SAFETY: valid_up_to bounds the longest valid UTF-8 prefix.
-            Err(e) => unsafe { core::str::from_utf8_unchecked(&rest[..e.valid_up_to()]) },
+        let start = self.pos.min(self.bytes.len());
+        let mut end = self.ws_end(start);
+        while end < self.bytes.len() {
+            let b = self.bytes[end];
+            if !b.is_ascii() || isspace_c_locale(b) || b == DELIM {
+                break;
+            }
+            end += 1;
         }
+        end = self.ws_end(end);
+        // Every byte in start..end is ASCII, so the check cannot fail.
+        core::str::from_utf8(&self.bytes[start..end]).unwrap_or_default()
     }
 
     // C `strrchr(str, c) == str`: the last occurrence of c is the current byte.

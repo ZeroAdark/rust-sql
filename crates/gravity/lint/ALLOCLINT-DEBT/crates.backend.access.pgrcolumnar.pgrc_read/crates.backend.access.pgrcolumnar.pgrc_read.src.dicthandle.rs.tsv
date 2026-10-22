@@ -1,0 +1,13 @@
+path	crates/backend/access/pgrcolumnar/pgrc_read/src/dicthandle.rs
+growth	std::vec::Vec::push	4
+macro	std::vec	2
+method	pgrc_format::try_vec	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	6
+method	std::sync::Arc::new	1
+method	std::vec::Vec::into_boxed_slice	1
+method	std::vec::Vec::with_capacity	2
+type	std::boxed::Box	1
+type	std::sync::Arc	1
+type	std::vec::Vec	2

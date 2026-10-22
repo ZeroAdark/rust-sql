@@ -1,0 +1,193 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s1c
+step s2e: EXPLAIN (COSTS OFF) SELECT rs.id, rs.k, rs.v, rb.id FROM rs LEFT JOIN rb ON rb.k = rs.k AND rb.id < 20 FOR UPDATE OF rs;
+QUERY PLAN                                
+------------------------------------------
+LockRows                                  
+  ->  Hash Right Join                     
+        Hash Cond: (rb.k = rs.k)          
+        ->  Index Scan using rb_pkey on rb
+              Index Cond: (id < 20)       
+        ->  Hash                          
+              ->  Seq Scan on rs          
+(7 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1v s2l s1c
+step s1v: UPDATE rs SET v = 'a' WHERE id = 2;
+step s2l: SELECT rs.id, rs.k, rs.v, rb.id FROM rs LEFT JOIN rb ON rb.k = rs.k AND rb.id < 20 FOR UPDATE OF rs; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|v   |id
+--+-+----+--
+ 2|2|a   | 1
+ 3|3|init| 2
+ 4|4|init| 3
+ 5|5|init| 4
+ 6|6|init| 5
+ 1|1|init| 6
+ 2|2|a   | 7
+ 3|3|init| 8
+ 4|4|init| 9
+ 5|5|init|10
+ 6|6|init|11
+ 1|1|init|12
+ 2|2|a   |13
+ 3|3|init|14
+ 4|4|init|15
+ 5|5|init|16
+ 6|6|init|17
+ 1|1|init|18
+ 2|2|a   |19
+ 7|7|init|  
+(20 rows)
+
+
+starting permutation: s1k8 s2l s1c
+step s1k8: UPDATE rs SET k = 8 WHERE id = 2;
+step s2l: SELECT rs.id, rs.k, rs.v, rb.id FROM rs LEFT JOIN rb ON rb.k = rs.k AND rb.id < 20 FOR UPDATE OF rs; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|v   |id
+--+-+----+--
+ 2|8|init|  
+ 3|3|init| 2
+ 4|4|init| 3
+ 5|5|init| 4
+ 6|6|init| 5
+ 1|1|init| 6
+ 2|8|init|  
+ 3|3|init| 8
+ 4|4|init| 9
+ 5|5|init|10
+ 6|6|init|11
+ 1|1|init|12
+ 2|8|init|  
+ 3|3|init|14
+ 4|4|init|15
+ 5|5|init|16
+ 6|6|init|17
+ 1|1|init|18
+ 2|8|init|  
+ 7|7|init|  
+(20 rows)
+
+
+starting permutation: s1k3 s2l s1c
+step s1k3: UPDATE rs SET k = 3 WHERE id = 2;
+step s2l: SELECT rs.id, rs.k, rs.v, rb.id FROM rs LEFT JOIN rb ON rb.k = rs.k AND rb.id < 20 FOR UPDATE OF rs; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|v   |id
+--+-+----+--
+ 2|3|init|  
+ 3|3|init| 2
+ 4|4|init| 3
+ 5|5|init| 4
+ 6|6|init| 5
+ 1|1|init| 6
+ 2|3|init|  
+ 3|3|init| 8
+ 4|4|init| 9
+ 5|5|init|10
+ 6|6|init|11
+ 1|1|init|12
+ 2|3|init|  
+ 3|3|init|14
+ 4|4|init|15
+ 5|5|init|16
+ 6|6|init|17
+ 1|1|init|18
+ 2|3|init|  
+ 7|7|init|  
+(20 rows)
+
+
+starting permutation: s1del s2l s1c
+step s1del: DELETE FROM rs WHERE id = 2;
+step s2l: SELECT rs.id, rs.k, rs.v, rb.id FROM rs LEFT JOIN rb ON rb.k = rs.k AND rb.id < 20 FOR UPDATE OF rs; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|v   |id
+--+-+----+--
+ 3|3|init| 2
+ 4|4|init| 3
+ 5|5|init| 4
+ 6|6|init| 5
+ 1|1|init| 6
+ 3|3|init| 8
+ 4|4|init| 9
+ 5|5|init|10
+ 6|6|init|11
+ 1|1|init|12
+ 3|3|init|14
+ 4|4|init|15
+ 5|5|init|16
+ 6|6|init|17
+ 1|1|init|18
+ 7|7|init|  
+(16 rows)
+
+
+starting permutation: s1u7 s2l s1c
+step s1u7: UPDATE rs SET k = 1, v = 'b' WHERE id = 7;
+step s2l: SELECT rs.id, rs.k, rs.v, rb.id FROM rs LEFT JOIN rb ON rb.k = rs.k AND rb.id < 20 FOR UPDATE OF rs; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|k|v   |id
+--+-+----+--
+ 2|2|init| 1
+ 3|3|init| 2
+ 4|4|init| 3
+ 5|5|init| 4
+ 6|6|init| 5
+ 1|1|init| 6
+ 2|2|init| 7
+ 3|3|init| 8
+ 4|4|init| 9
+ 5|5|init|10
+ 6|6|init|11
+ 1|1|init|12
+ 2|2|init|13
+ 3|3|init|14
+ 4|4|init|15
+ 5|5|init|16
+ 6|6|init|17
+ 1|1|init|18
+ 2|2|init|19
+ 7|1|b   |  
+(20 rows)
+
+
+starting permutation: s1k8 s2k s1c
+step s1k8: UPDATE rs SET k = 8 WHERE id = 2;
+step s2k: SELECT rs.id, rs.k, rs.v, rb.id FROM rs LEFT JOIN rb ON rb.k = rs.k AND rb.id < 20 FOR UPDATE OF rs SKIP LOCKED;
+id|k|v   |id
+--+-+----+--
+ 3|3|init| 2
+ 4|4|init| 3
+ 5|5|init| 4
+ 6|6|init| 5
+ 1|1|init| 6
+ 3|3|init| 8
+ 4|4|init| 9
+ 5|5|init|10
+ 6|6|init|11
+ 1|1|init|12
+ 3|3|init|14
+ 4|4|init|15
+ 5|5|init|16
+ 6|6|init|17
+ 1|1|init|18
+ 7|7|init|  
+(16 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1k8 s2n s1c
+step s1k8: UPDATE rs SET k = 8 WHERE id = 2;
+step s2n: SELECT rs.id, rs.k, rs.v, rb.id FROM rs LEFT JOIN rb ON rb.k = rs.k AND rb.id < 20 FOR SHARE OF rs NOWAIT;
+ERROR:  could not obtain lock on row in relation "rs"
+step s1c: COMMIT;

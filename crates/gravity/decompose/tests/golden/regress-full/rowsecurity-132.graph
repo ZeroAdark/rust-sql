@@ -1,0 +1,18 @@
+-- regress-full-rowsecurity-132
+-- SELECT * FROM rls_tbl;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 eligible rows=2550 end=sink
+  nodes n1@0
+  source range rel=28736 rti=2 am=heap
+    lanes Offset:byval2:w2:val
+  project ()
+  outs
+p1 node=0 eligible rows=1275 end=sink
+  nodes n0@0
+  source range rel=28739 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter $exec0
+  project (1=v1.1)
+  outs 1=w8:val
+init_plan id=1 pipeline=p0 link=Exists param=$exec0 raise-free
+mapped: SeqScan SubPlan

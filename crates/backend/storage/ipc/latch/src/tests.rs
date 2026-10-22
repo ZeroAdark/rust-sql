@@ -267,7 +267,7 @@ fn wait_latch_parks_until_cross_thread_set_latch() {
 
 #[test]
 fn wait_latch_timed_recovers_lost_wake_within_cadence() {
-    // regression (the recovery-boot wedge, chaos seed 45101 round 14): the
+    // GL-RECWAKE-1 (the recovery-boot wedge, chaos seed 45101 round 14): the
     // lost-wake shape is "flag stored, wake dropped" — is_set lands but no
     // unpark is ever delivered. A timed WaitLatch whose caller deadline is
     // long (checkpointer main lap = checkpoint_timeout ~300s) must still
@@ -552,7 +552,7 @@ fn wait_latch_runs_thread_signal_drain() {
 // (checkpointer.c:400-410). C's handler stores the flag at delivery; the
 // thread-model handler runs at a drain, so a signal delivered before the
 // ResetLatch must be drained at WaitLatch entry or the reset swallows the
-// only wake and the thread parks forever (XAAB, PM_WAIT_CHECKPOINTER wedge).
+// only wake and the thread parks forever (P001, PM_WAIT_CHECKPOINTER wedge).
 #[test]
 fn wait_latch_drains_signal_delivered_before_reset_latch() {
     let _g = TEST_LOCK.lock().unwrap();
@@ -604,7 +604,7 @@ fn local_latch_slab_scales_with_configured_backends() {
     assert!(high > LOCAL_LATCH_CAP, "high water {high} never left the boot slab");
 }
 
-// -- mailbox_send_on_my_latch (regression) ----------------------------------
+// -- mailbox_send_on_my_latch (fp-libpq-b2#1) ----------------------------------
 //
 // pqmq.c:184-187: a worker whose leader queue is full waits on MyLatch and
 // runs CHECK_FOR_INTERRUPTS after every wake, so a cancel/terminate aimed at
@@ -650,6 +650,9 @@ mod mailbox_send {
                 }
                 Ok(())
             });
+            // the sender goes before the report: the leader's next try_recv after `done` sees Disconnected, not a
+            // sender still alive in this thread's last instructions
+            drop(tx);
             SetMyLatch(None);
             done_tx.send(r).unwrap();
         });

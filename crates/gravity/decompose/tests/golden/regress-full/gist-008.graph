@@ -1,0 +1,14 @@
+-- regress-full-gist-008
+-- explain (verbose, costs off) select p from gist_tbl order by circle(p,1) <-> point(0,0) limit 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=27091 rti=1 am=heap index=27097 iam=gist
+    key att=0 op=3291 col=1 form=orderby value=c600:#16
+    lanes Attr(2):byref8:fx16:win/page
+  project (1=index.2, 2j=op3291(fn1473(index.2, c701:4607182418800017408), c600:#16))
+  limit count=1 offset=all
+  project (1=outer.1, 2j=outer.2)
+  outs 1=fx16:win/page 2=w8:val
+  outs 1=fx16:win/page 2=w8:val
+mapped: IndexOnlyScan Limit

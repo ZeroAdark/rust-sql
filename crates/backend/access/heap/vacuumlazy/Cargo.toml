@@ -9,6 +9,7 @@ name = "vacuumlazy"
 path = "src/lib.rs"
 
 [dependencies]
+pgsync = { path = "../../../../_support/pgsync" }
 pg_clock = { path = "../../../../port/pg_clock" }
 pg_prng_seams = { path = "../../../../port/pg_prng_seams" }
 mcx = { path = "../../../../_support/mcx" }
@@ -23,7 +24,10 @@ tidstore = { path = "../../common/tidstore" }
 guc_tables = { path = "../../../utils/misc/guc_tables" }
 miscinit = { path = "../../../utils/init/miscinit" }
 tableam_vocab = { path = "../../table/tableam_vocab" }
+tableam = { path = "../../table/tableam" }
+relation_seams = { path = "../../common/relation_seams" }
 tableam_seams = { path = "../../table/tableam_seams" }
+pgrc_am = { path = "../../pgrcolumnar/pgrc_am" }
 commands_vacuum = { path = "../../../commands/vacuum" }
 vacuumparallel = { path = "../../../commands/vacuumparallel" }
 xact = { path = "../../transam/xact" }
@@ -38,6 +42,7 @@ heapam = { path = "../heapam" }
 indexam = { path = "../../index/indexam" }
 heapam_visibility_seams = { path = "../heapam_visibility_seams" }
 bufmgr_seams = { path = "../../../storage/buffer/bufmgr_seams" }
+read_stream = { path = "../../../storage/aio/read_stream" }
 procarray_seams = { path = "../../../storage/ipc/procarray_seams" }
 relcache_seams = { path = "../../../utils/cache/relcache_seams" }
 xloginsert_seams = { path = "../../transam/xloginsert_seams" }

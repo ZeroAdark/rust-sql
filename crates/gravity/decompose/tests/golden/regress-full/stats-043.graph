@@ -1,0 +1,9 @@
+-- regress-full-stats-043
+-- SELECT wait_for_hot_stats();
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn2626(fn1746(op1759(fn6203(c25:'epoch', op1327(fn2649(), c1186:#16)), fn6203(c25:'epoch', fn2649())))))
+  outs 1=?
+mapped: Result

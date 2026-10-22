@@ -1,0 +1,13 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/rowid_alloc.rs
+growth	std::collections::BTreeMap::insert	3
+growth	std::vec::Vec::push	4
+macro	std::format	14
+method	std::boxed::Box::new	8
+method	std::clone::Clone::clone	9
+method	std::iter::Iterator::collect	5
+method	std::string::ToString::to_string	2
+method	std::sync::Arc::new	1
+type	std::boxed::Box	8
+type	std::string::String	1
+type	std::sync::Arc	2
+type	std::vec::Vec	5

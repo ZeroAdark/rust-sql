@@ -1,0 +1,1 @@
+gravity/prewarm/src/lib.rs	OWED	pgrc	at:pass_on	thread	the pre-warm bgworker's chain argument: bgw_main sets it once it holds its database; pass_on takes it when it hands the chain on (bgw_main's end, or owed_at_exit at the worker's exit, a FATAL too); only that worker's own thread touches it

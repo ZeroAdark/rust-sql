@@ -1,0 +1,64 @@
+-- name: regress-full-privileges-050
+-- sql: SELECT backend_type FROM pg_stat_activity WHERE CASE WHEN COALESCE(usesysid, 10) = 10 THEN terminate_nothrow(pid) END;
+-- test: privileges
+-- shape: 479855076ab161b9 seen=1
+-- rel 1260 pg_authid am=heap kind=r natts=12
+-- att 1260 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1260 2 rolname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1260 3 rolsuper typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 4 rolinherit typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 5 rolcreaterole typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 6 rolcreatedb typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 7 rolcanlogin typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 8 rolreplication typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 9 rolbypassrls typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 10 rolconnlimit typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1260 11 rolpassword typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1260 12 rolvaliduntil typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- idx 2676 rel=1260 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2677 rel=1260 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- rel 1262 pg_database am=heap kind=r natts=18
+-- att 1262 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 2 datname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1262 3 datdba typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 4 encoding typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 5 datlocprovider typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 6 datistemplate typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 7 datallowconn typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 8 dathasloginevt typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 9 datconnlimit typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 10 datfrozenxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 11 datminmxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 12 dattablespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 13 datcollate typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 1262 14 datctype typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 1262 15 datlocale typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1262 16 daticurules typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1262 17 datcollversion typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1262 18 datacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2671 rel=1262 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2672 rel=1262 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- rel 12226 pg_stat_activity am=none kind=v natts=22
+-- att 12226 1 datid typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 12226 2 datname typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 12226 3 pid typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 12226 4 leader_pid typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 12226 5 usesysid typid=26 typmod=-1 len=4 byval=t notnull=f
+-- att 12226 6 usename typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 12226 7 application_name typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12226 8 client_addr typid=869 typmod=-1 len=-1 byval=f notnull=f
+-- att 12226 9 client_hostname typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12226 10 client_port typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 12226 11 backend_start typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- att 12226 12 xact_start typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- att 12226 13 query_start typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- att 12226 14 state_change typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- att 12226 15 wait_event_type typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12226 16 wait_event typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12226 17 state typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12226 18 backend_xid typid=28 typmod=-1 len=4 byval=t notnull=f
+-- att 12226 19 backend_xmin typid=28 typmod=-1 len=4 byval=t notnull=f
+-- att 12226 20 query_id typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 12226 21 query typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12226 22 backend_type typid=25 typmod=-1 len=-1 byval=f notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {FUNCTIONSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0.0025 :scan.plan.total_cost 26.2525 :scan.plan.plan_rows 50 :scan.plan.plan_width 32 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 2 :varattno 18 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 18 :location -1} :resno 1 :resname backend_type :ressortgroupref 0 :resorigtbl 12226 :resorigcol 22 :resjunk false}) :scan.plan.qual ({CASEEXPR :casetype 16 :casecollid 0 :arg <> :args ({CASEWHEN :expr {OPEXPR :opno 607 :opfuncid 184 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({COALESCEEXPR :coalescetype 26 :coalescecollid 0 :args ({VAR :varno 2 :varattno 3 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 3 :location -1} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 77 :constvalue 4 [ 10 0 0 0 0 0 0 0 ]}) :location 58} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 83 :constvalue 4 [ 10 0 0 0 0 0 0 0 ]}) :location 81} :result {FUNCEXPR :funcid 27505 :funcresulttype 16 :funcretset false :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 0 :args ({VAR :varno 2 :varattno 2 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 2 :location -1}) :location 91} :location 53}) :defresult {CONST :consttype 16 :consttypmod -1 :constcollid 0 :constlen 1 :constbyval true :constisnull true :location -1 :constvalue <>} :location 48}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 2 :functions ({RANGETBLFUNCTION :funcexpr {FUNCEXPR :funcid 2022 :funcresulttype 2249 :funcretset true :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 0 :args ({CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull true :location -1 :constvalue <>}) :location -1} :funccolcount 31 :funccolnames <> :funccoltypes <> :funccoltypmods <> :funccolcollations <> :funcparams (b)}) :funcordinality false} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_stat_activity :colnames ("datid" "datname" "pid" "leader_pid" "usesysid" "usename" "application_name" "client_addr" "client_hostname" "client_port" "backend_start" "xact_start" "query_start" "state_change" "wait_event_type" "wait_event" "state" "backend_xid" "backend_xmin" "query_id" "query" "backend_type")} :rtekind 1 :subquery <> :security_barrier false :relid 12226 :inh false :relkind v :rellockmode 1 :perminfoindex 1 :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname s :colnames <>} :eref {ALIAS :aliasname s :colnames ("datid" "pid" "usesysid" "application_name" "state" "query" "wait_event_type" "wait_event" "xact_start" "query_start" "backend_start" "state_change" "client_addr" "client_hostname" "client_port" "backend_xid" "backend_xmin" "backend_type" "ssl" "sslversion" "sslcipher" "sslbits" "ssl_client_dn" "ssl_client_serial" "ssl_issuer_dn" "gss_auth" "gss_princ" "gss_enc" "gss_delegation" "leader_pid" "query_id")} :rtekind 3 :functions <> :funcordinality false :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname d :colnames <>} :eref {ALIAS :aliasname d :colnames ("oid" "datname" "datdba" "encoding" "datlocprovider" "datistemplate" "datallowconn" "dathasloginevt" "datconnlimit" "datfrozenxid" "datminmxid" "dattablespace" "datcollate" "datctype" "datlocale" "daticurules" "datcollversion" "datacl")} :rtekind 0 :relid 1262 :inh false :relkind r :rellockmode 1 :perminfoindex 2 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("datid" "pid" "usesysid" "application_name" "state" "query" "wait_event_type" "wait_event" "xact_start" "query_start" "backend_start" "state_change" "client_addr" "client_hostname" "client_port" "backend_xid" "backend_xmin" "backend_type" "ssl" "sslversion" "sslcipher" "sslbits" "ssl_client_dn" "ssl_client_serial" "ssl_issuer_dn" "gss_auth" "gss_princ" "gss_enc" "gss_delegation" "leader_pid" "query_id" "oid" "datname" "datdba" "encoding" "datlocprovider" "datistemplate" "datallowconn" "dathasloginevt" "datconnlimit" "datfrozenxid" "datminmxid" "dattablespace" "datcollate" "datctype" "datlocale" "daticurules" "datcollversion" "datacl")} :rtekind 2 :jointype 1 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname u :colnames <>} :eref {ALIAS :aliasname u :colnames ("oid" "rolname" "rolsuper" "rolinherit" "rolcreaterole" "rolcreatedb" "rolcanlogin" "rolreplication" "rolbypassrls" "rolconnlimit" "rolpassword" "rolvaliduntil")} :rtekind 0 :relid 1260 :inh false :relkind r :rellockmode 1 :perminfoindex 3 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("datid" "pid" "usesysid" "application_name" "state" "query" "wait_event_type" "wait_event" "xact_start" "query_start" "backend_start" "state_change" "client_addr" "client_hostname" "client_port" "backend_xid" "backend_xmin" "backend_type" "ssl" "sslversion" "sslcipher" "sslbits" "ssl_client_dn" "ssl_client_serial" "ssl_issuer_dn" "gss_auth" "gss_princ" "gss_enc" "gss_delegation" "leader_pid" "query_id" "oid" "datname" "datdba" "encoding" "datlocprovider" "datistemplate" "datallowconn" "dathasloginevt" "datconnlimit" "datfrozenxid" "datminmxid" "dattablespace" "datcollate" "datctype" "datlocale" "daticurules" "datcollversion" "datacl" "oid" "rolname" "rolsuper" "rolinherit" "rolcreaterole" "rolcreatedb" "rolcanlogin" "rolreplication" "rolbypassrls" "rolconnlimit" "rolpassword" "rolvaliduntil")} :rtekind 2 :jointype 1 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1 3 5) :permInfos ({RTEPERMISSIONINFO :relid 12226 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 10 12 29) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1262 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1260 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 12226 1262 1260 10 10) :invalItems ({PLANINVALITEM :cacheId 47 :hashValue 1682321049}) :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 117}

@@ -1,0 +1,1 @@
+backend/utils/cache/lsyscache/src/statistics.rs	GET_ATTAVGWIDTH_HOOK	pgport	exit	leader	planner hook (get_attavgwidth_hook), installed by a module's _PG_init through set_get_attavgwidth_hook; never put back

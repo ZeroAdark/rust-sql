@@ -1,0 +1,10 @@
+-- oltpc-016
+-- INSERT INTO new_order (no_o_id, no_d_id, no_w_id) VALUES (999999, 1, 1) /* C23 NO insert new_order */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:1, 2=c23:999999, 3=c21:1)
+  write INSERT rel=16484 rti=1 natts=3 indexes=(16490[1, 3, 2]up)
+  outs 1=w4:val 2=w4:val 3=w2:val
+mapped: Result ModifyTable

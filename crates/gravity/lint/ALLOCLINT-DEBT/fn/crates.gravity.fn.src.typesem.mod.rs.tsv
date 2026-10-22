@@ -1,0 +1,8 @@
+path	crates/gravity/fn/src/typesem/mod.rs
+growth	std::vec::Vec::extend_from_slice	21
+growth	std::vec::Vec::push	19
+growth	std::vec::Vec::resize	1
+method	std::boxed::Box::new	5
+method	std::vec::Vec::with_capacity	2
+type	std::boxed::Box	6
+type	std::vec::Vec	2

@@ -1,0 +1,14 @@
+-- regress-full-foreign_key-012
+-- DELETE FROM fk_notpartitioned_pk WHERE b = 142857;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@0 n0@1
+  source bitmap rel=36352 rti=1 am=heap
+    bitmap index node=2 index=36357 rows=11
+      key att=2 op=96 value=c23:142857
+    recheck (op96(v1.2, c23:142857))
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write DELETE rel=36352 rti=1 natts=2 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable BitmapIndexScan BitmapHeapScan

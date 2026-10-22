@@ -1,0 +1,3 @@
+gravity/hosts/src/facts.rs	LEAD	deps	key:(relid, what its read held)	leader	lowering facts: heap_twin's lead relation, served while relid matches and its recorded reads (gravity_deps Held, C3 S4e) stand, replayed into the asker's recording; read again otherwise
+gravity/hosts/src/facts.rs	WLEAD	deps	key:(relid, what its read held)	leader	lowering facts: write_twin's lead write facts, served while relid matches and its recorded reads (gravity_deps Held, C3 S4e) stand; read again otherwise
+gravity/hosts/src/facts.rs	FUNCS	deps	key:(funcid, what its read held)	cache	the last 4 RelcacheFacts::func answers, each served while what its read held (gravity_deps Held, C3 S4e) stands

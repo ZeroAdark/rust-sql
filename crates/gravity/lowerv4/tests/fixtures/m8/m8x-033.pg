@@ -1,0 +1,8 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M8-RIG): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT x, (SELECT y FROM generate_series(1, 10) y WHERE y > x ORDER BY y DESC LIMIT 1) AS top FROM generate_series(1, 4) x
+cols: x	top
+[pg]
+1	10
+2	10
+3	10
+4	10

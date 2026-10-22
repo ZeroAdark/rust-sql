@@ -1,0 +1,3 @@
+path	crates/gravity/exec/src/admit/site_tpl.rs
+method	slice::to_vec	1
+method	std::iter::Iterator::collect	1

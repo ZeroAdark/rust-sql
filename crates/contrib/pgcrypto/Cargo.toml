@@ -9,6 +9,8 @@ name = "pgcrypto"
 path = "src/lib.rs"
 
 [dependencies]
+guc_tables = { path = "../../backend/utils/misc/guc_tables" }
+types_guc = { path = "../../_support/types/types_guc" }
 pg_string = { path = "../../common/string" }
 datum = { path = "../../_support/types/datum" }
 mcx = { path = "../../_support/mcx" }

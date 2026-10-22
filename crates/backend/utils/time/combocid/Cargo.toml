@@ -8,6 +8,7 @@ publish.workspace = true
 combocid_seams = { path = "../combocid_seams" }
 heapam = { path = "../../../access/heap/heapam" }
 init_small = { path = "../../init/init_small" }
+mcx = { path = "../../../../_support/mcx" }
 types_core = { path = "../../../../_support/types/types_core" }
 types_error = { path = "../../../../_support/types/types_error" }
 types_tuple = { path = "../../../../_support/types/types_tuple" }

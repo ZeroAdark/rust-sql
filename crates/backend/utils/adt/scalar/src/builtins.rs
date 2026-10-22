@@ -1,7 +1,7 @@
 use ::datum::Datum;
 use ::types_core::Oid;
 use ::types_error::PgResult;
-use ::types_fmgr::{FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction};
+use ::types_fmgr::{FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, OutInto, PGFunction, OUT_CHARS_INT};
 
 macro_rules! fc_oid2 {
     ($($fc:ident: $core:ident;)*) => {$(
@@ -68,19 +68,17 @@ pub fn fc_mxid_age(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
 
 pub fn fc_oidin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of oidin is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    let s = String::from_utf8_lossy(s.to_bytes());
+    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract.
     let esc = unsafe { fcinfo.soft_error_context() };
-    let (v, _) = ::numutils::uint32in_subr(&s, false, "oid", esc)?;
+    let (v, _) = ::numutils::uint32in_subr_bytes(s, false, "oid", esc)?;
     Ok(Datum::from_oid(v))
 }
 
-pub fn fc_oidout(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let [a] = fcinfo.args_n::<1>();
-    let mut buf = [0u8; 11];
-    let len = ::numutils::pg_ultoa_n(a.value.as_oid(), &mut buf);
-    Ok(::types_fmgr::cstring_scratch(flinfo, "oidout", &buf[..len]))
+pub fn fc_oidout(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let v = fcinfo.args_n::<1>()[0].value.as_oid();
+    let mcx = fcinfo.result_mcx();
+    Ok(::types_fmgr::cstring_result(crate::oidout(mcx, v)?))
 }
 
 pub fn fc_oidrecv(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -99,21 +97,19 @@ pub fn fc_oidsend(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
 
 pub fn fc_xidin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of xidin is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    let s = String::from_utf8_lossy(s.to_bytes());
+    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract.
     let esc = unsafe { fcinfo.soft_error_context() };
-    let (v, _) = ::numutils::uint32in_subr(&s, false, "xid", esc)?;
+    let (v, _) = ::numutils::uint32in_subr_bytes(s, false, "xid", esc)?;
     Ok(Datum::from_u32(v))
 }
 
 pub fn fc_cidin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of cidin is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    let s = String::from_utf8_lossy(s.to_bytes());
+    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract.
     let esc = unsafe { fcinfo.soft_error_context() };
-    let (v, _) = ::numutils::uint32in_subr(&s, false, "cid", esc)?;
+    let (v, _) = ::numutils::uint32in_subr_bytes(s, false, "cid", esc)?;
     Ok(Datum::from_u32(v))
 }
 
@@ -161,11 +157,10 @@ pub fn fc_hash_uint32_extended(
 
 pub fn fc_xid8in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of xid8in is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    let s = String::from_utf8_lossy(s.to_bytes());
+    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract.
     let esc = unsafe { fcinfo.soft_error_context() };
-    let (v, _) = ::numutils::uint64in_subr(&s, false, "xid8", esc)?;
+    let (v, _) = ::numutils::uint64in_subr_bytes(s, false, "xid8", esc)?;
     Ok(Datum::from_u64(v))
 }
 
@@ -285,7 +280,8 @@ pub(crate) fn tid_syntax(s: &[u8]) -> ::types_error::PgError {
     let err = match core::str::from_utf8(s) {
         Ok(s) => ::types_error::PgError::error(format!("invalid input syntax for type tid: \"{s}\"")),
         Err(_) => {
-            let mut msg = b"invalid input syntax for type tid: \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"invalid input syntax for type tid: \"");
             msg.extend_from_slice(s);
             msg.push(b'"');
             ::types_error::PgError::error_raw_message(msg)
@@ -486,23 +482,23 @@ const OIDVECTOR_HDRSZ: usize = core::mem::size_of::<::array::oidvector>();
 
 pub fn fc_oidvectorin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of oidvectorin is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    let s = String::from_utf8_lossy(s.to_bytes());
+    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract.
     let mut esc = unsafe { fcinfo.soft_error_context() };
     let mcx = fcinfo.result_mcx();
     let mut img: ::mcx::PgVec<u8> = ::mcx::vec_with_capacity_in(mcx, OIDVECTOR_HDRSZ + 32 * 4)?;
     img.resize(OIDVECTOR_HDRSZ, 0);
-    let mut rest: &str = &s;
+    let mut rest: &[u8] = s;
     let mut n: i32 = 0;
     loop {
         // C-locale isspace (includes \x0B).
-        rest = rest
-            .trim_start_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\x0B' | '\x0C' | '\r'));
+        while let [b' ' | b'\t' | b'\n' | b'\x0B' | b'\x0C' | b'\r', tail @ ..] = rest {
+            rest = tail;
+        }
         if rest.is_empty() {
             break;
         }
-        let (v, r) = ::numutils::uint32in_subr(rest, true, "oid", esc.as_deref_mut())?;
+        let (v, r) = ::numutils::uint32in_subr_bytes(rest, true, "oid", esc.as_deref_mut())?;
         ::mcx::vec_append_bytes(&mut img, &v.to_ne_bytes())?;
         rest = r;
         n += 1;
@@ -519,7 +515,9 @@ pub fn fc_oidvectorin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
 
 pub fn fc_oidvectorout(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict catalog arg is a non-null plain-storage oidvector.
-    let (_, values) = unsafe { arg_oidvector_checked(fcinfo, 0) }?;
+    let (v, values) = unsafe { arg_oidvector_checked(fcinfo, 0) }?;
+    // oid.c:195 palloc(nnums * 12 + 1): a negative dim1 is a huge Size.
+    ::mcx::check_alloc_size(v.dim1.wrapping_mul(12).wrapping_add(1) as i64 as usize)?;
     let mcx = fcinfo.result_mcx();
     let mut out: ::mcx::PgVec<u8> = ::mcx::vec_with_capacity_in(mcx, values.len() * 12 + 1)?;
     let mut scratch = [0u8; 10];
@@ -643,3 +641,13 @@ pub const SCALAR_BUILTINS: &[FmgrBuiltin] = &[
     b(2796, "tidsmaller", 2, fc_tidsmaller),
     b(1294, "currtid_byrelname", 2, fc_currtid_byrelname),
 ];
+
+fn oid_bound(_: Datum) -> Option<usize> {
+    Some(10)
+}
+unsafe fn oid_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: the caller's 10 writable bytes (oid_bound).
+    Ok(::numutils::pg_ultoa_n(v.as_oid(), unsafe { core::slice::from_raw_parts_mut(dst, 10) }))
+}
+
+pub static OID_OUT_INTO: &[OutInto] = &[OutInto { foid: 1799, bound: oid_bound, render: oid_render, chars: Some(OUT_CHARS_INT) }];

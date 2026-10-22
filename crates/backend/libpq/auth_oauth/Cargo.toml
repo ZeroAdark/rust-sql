@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 pgsync = { path = "../../../_support/pgsync" }
 auth_sasl = { path = "../auth_sasl" }
+dfmgr = { path = "../../utils/fmgr/dfmgr" }
 elog = { path = "../../utils/error/elog" }
 hba = { path = "../hba" }
 miscinit = { path = "../../utils/init/miscinit" }

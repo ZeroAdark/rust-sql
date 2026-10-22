@@ -142,11 +142,11 @@ fn redo_convert_uncompressed_leaf(bytes: &mut [u8]) -> PgResult<()> {
         )));
     }
     let totalsize = if nuncompressed > 0 {
-        let mut items: Vec<u64> = Vec::with_capacity(nuncompressed);
+        let mut items: Vec<u64> = ::mcx::std_vec_with_capacity("access", nuncompressed)?;
         for i in 0..nuncompressed {
             items.push(read_item(bytes, GinDataPageDataOffset + i * 6));
         }
-        let plist = encode_items(&items);
+        let plist = encode_items(&items)?;
         if plist.len() > GinDataPageMaxDataSize {
             return Err(corrupt_err(format!(
                 "GIN redo recompress: pre-9.4 leaf posting list size {} exceeds page capacity {GinDataPageMaxDataSize}",
@@ -347,7 +347,7 @@ fn redo_recompress(buffer: Buffer, rdata: &[u8]) -> PgResult<()> {
             "GIN redo recompress: pd_lower {pd_lower} outside posting-list bounds [{list_start}, {page_end}]"
         )));
     }
-    let orig: Vec<u8> = bytes[list_start..pd_lower].to_vec();
+    let orig: Vec<u8> = ::mcx::std_vec_from_slice("gin", &bytes[list_start..pd_lower])?;
 
     let mut oldoff = 0usize; // offset into orig
     let mut write_ptr = list_start;
@@ -495,14 +495,14 @@ fn recompress_additems(oldseg: &[u8], items: &[u8]) -> PgResult<Vec<u8>> {
             old.push(val);
         }
     }
-    let mut new: Vec<u64> = Vec::with_capacity(items.len() / 6);
+    let mut new: Vec<u64> = ::mcx::std_vec_with_capacity("access", items.len() / 6)?;
     let mut off = 0usize;
     while off < items.len() {
         new.push(read_item(items, off));
         off += 6;
     }
 
-    let mut all: Vec<u64> = Vec::with_capacity(old.len() + new.len());
+    let mut all: Vec<u64> = ::mcx::std_vec_with_capacity("access", old.len() + new.len())?;
     let (mut i, mut j) = (0usize, 0usize);
     while i < old.len() && j < new.len() {
         if old[i] < new[j] {
@@ -516,13 +516,13 @@ fn recompress_additems(oldseg: &[u8], items: &[u8]) -> PgResult<Vec<u8>> {
     all.extend_from_slice(&old[i..]);
     all.extend_from_slice(&new[j..]);
 
-    Ok(encode_items(&all))
+    encode_items(&all)
 }
 
 /// One posting-list segment (ginCompressPostingList's image, no size cap) over
 /// sorted item values: first item verbatim, nbytes, varbyte deltas, SHORTALIGN.
-fn encode_items(all: &[u64]) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::with_capacity(8 + all.len() * 7);
+fn encode_items(all: &[u64]) -> PgResult<Vec<u8>> {
+    let mut out: Vec<u8> = ::mcx::std_vec_with_capacity("gin", 8 + all.len() * 7)?;
     out.extend_from_slice(&[0u8; 8]);
     write_item(&mut out, 0, all[0]);
     let mut prev = all[0];
@@ -540,7 +540,7 @@ fn encode_items(all: &[u64]) -> Vec<u8> {
     if nbytes & 1 != 0 {
         out.push(0);
     }
-    out
+    Ok(out)
 }
 
 fn read_item(b: &[u8], off: usize) -> u64 {

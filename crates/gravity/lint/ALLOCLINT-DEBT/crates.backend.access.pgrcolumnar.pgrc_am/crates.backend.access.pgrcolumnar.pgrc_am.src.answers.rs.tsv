@@ -1,0 +1,6 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/answers.rs
+growth	pgrc_format::try_resize	1
+growth	std::vec::Vec::push	4
+method	pgrc_format::try_to_vec	1
+method	std::iter::Iterator::collect	2
+type	std::vec::Vec	2

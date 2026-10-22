@@ -155,26 +155,36 @@ thread_local! {
         const { core::cell::RefCell::new(None) };
 }
 
+/// C3: a memo hit stands for the catcache search it skips: a recording notes that search's row (gravity_deps), as the
+/// search itself would, so a lowering records the same reads warm or cold.
+#[inline]
+fn noted_hit(cache_id: i32, k1: Oid, k2: Option<Oid>) {
+    if gravity_deps::armed() {
+        note_row(cache_id, k1, k2);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn note_row(cache_id: i32, k1: Oid, k2: Option<Oid>) {
+    let key2 = k2.map_or(SysCacheKey::UNUSED, |k| SysCacheKey::Value(Datum::from_oid(k)));
+    let h = gravity_deps::suppressed(|| crate::GetSysCacheHashValue(cache_id, SysCacheKey::Value(Datum::from_oid(k1)), key2, SysCacheKey::UNUSED, SysCacheKey::UNUSED));
+    match h {
+        Ok(h) => gravity_deps::note_cat(cache_id, h),
+        Err(_) => gravity_deps::note_cat_list(cache_id),
+    }
+}
+
 // INVARIANT: `f` must not re-enter syscache/catcache (probe or insert only;
 // the decode itself runs outside the borrow).
 fn with_memos<R>(f: impl FnOnce(&mut ShapeMemos) -> R) -> R {
     MEMOS.with(|cell| {
         let mut slot = cell.borrow_mut();
-        let m = slot.get_or_insert_with(|| {
-            let mcx = mcx::session_root("SysCacheShapeMemos").mcx();
-            // LIFO: empty the droppy TLS memos before the context is freed.
-            mcx::register_session_cleanup(Box::new(|| {
-                MEMOS.with(|c| drop(c.borrow_mut().take()));
-            }));
-            ShapeMemos {
-                mcx,
-                epoch: catcache::inval_epoch(),
-                type_shape: mcx::PgHashMap::with_capacity_in(64, mcx),
-                type_base: mcx::PgHashMap::with_capacity_in(64, mcx),
-                proc: mcx::PgHashMap::with_capacity_in(64, mcx),
-                cast: mcx::PgHashMap::with_capacity_in(64, mcx),
-            }
-        });
+        // the session's first use builds the memos out of line (every call site instantiates this function)
+        if slot.is_none() {
+            *slot = Some(new_memos());
+        }
+        let m = slot.as_mut().expect("memos built above");
         let e = catcache::inval_epoch();
         if m.epoch != e {
             m.epoch = e;
@@ -187,6 +197,24 @@ fn with_memos<R>(f: impl FnOnce(&mut ShapeMemos) -> R) -> R {
     })
 }
 
+#[cold]
+#[inline(never)]
+fn new_memos() -> ShapeMemos {
+    let mcx = mcx::session_root("SysCacheShapeMemos").mcx();
+    // LIFO: empty the droppy TLS memos before the context is freed.
+    mcx::register_session_cleanup(Box::new(|| {
+        MEMOS.with(|c| drop(c.borrow_mut().take()));
+    }));
+    ShapeMemos {
+        mcx,
+        epoch: catcache::inval_epoch(),
+        type_shape: mcx::PgHashMap::with_capacity_in(64, mcx),
+        type_base: mcx::PgHashMap::with_capacity_in(64, mcx),
+        proc: mcx::PgHashMap::with_capacity_in(64, mcx),
+        cast: mcx::PgHashMap::with_capacity_in(64, mcx),
+    }
+}
+
 fn tupdesc_for(cache_id: i32) -> &'static TupleDescData<'static> {
     use core::cell::Cell;
     use crate::cacheinfo::SYS_CACHE_SIZE;
@@ -195,11 +223,20 @@ fn tupdesc_for(cache_id: i32) -> &'static TupleDescData<'static> {
         // this flat memo cannot go stale (getattr calls this per column).
         static TDS: [Cell<Option<&'static TupleDescData<'static>>>; SYS_CACHE_SIZE] =
             const { [const { Cell::new(None) }; SYS_CACHE_SIZE] };
+        // D4682: the catcache's session cleanup frees the descriptors; this memo is cleared before it (a cleanup
+        // registered at the session's first fill), so a reused backend thread's next session starts empty.
+        static TDS_ARMED: Cell<bool> = const { Cell::new(false) };
     }
     TDS.with(|a| match a[cache_id as usize].get() {
         Some(td) => td,
         None => {
             let td = tupdesc_for_slow(cache_id);
+            if !TDS_ARMED.replace(true) {
+                ::mcx::register_session_cleanup(Box::new(|| {
+                    let _ = TDS.try_with(|a| a.iter().for_each(|c| c.set(None)));
+                    let _ = TDS_ARMED.try_with(|c| c.set(false));
+                }));
+            }
             a[cache_id as usize].set(Some(td));
             td
         }
@@ -392,6 +429,7 @@ fn pg_class_relname(relid: Oid) -> PgResult<Option<types_tuple::NameData>> {
 
 fn lookup_pg_type_shape(typid: Oid) -> PgResult<Option<PgTypeShape>> {
     if let Some(hit) = with_memos(|m| m.type_shape.get(&typid).copied()) {
+        noted_hit(TYPEOID, typid, None);
         return Ok(hit);
     }
     let shape = lookup_pg_type_shape_uncached(typid)?;
@@ -1309,6 +1347,7 @@ fn lookup_pg_amproc(opfamily: Oid, lefttype: Oid, righttype: Oid, procnum: i16) 
 
 fn pg_type_base_shape(typid: Oid) -> PgResult<Option<syscache_seams::PgTypeBaseShape>> {
     if let Some(hit) = with_memos(|m| m.type_base.get(&typid).copied()) {
+        noted_hit(TYPEOID, typid, None);
         return Ok(hit);
     }
     let shape = pg_type_base_shape_uncached(typid)?;
@@ -1388,6 +1427,7 @@ mod io_shape_memo {
 
 fn pg_type_io_shape(typid: Oid) -> PgResult<Option<syscache_seams::PgTypeIoShape>> {
     if let Some(shape) = io_shape_memo::get(typid) {
+        noted_hit(TYPEOID, typid, None);
         return Ok(Some(shape));
     }
     let Some(tuple) = SearchSysCache1(TYPEOID, SysCacheKey::Value(Datum::from_oid(typid)))? else {
@@ -1477,6 +1517,7 @@ fn pg_proc_proname(funcid: Oid) -> PgResult<Option<types_tuple::NameData>> {
 
 fn lookup_pg_proc_shape(funcid: Oid) -> PgResult<Option<syscache_seams::PgProcShape>> {
     if let Some(hit) = with_memos(|m| m.proc.get(&funcid).copied()) {
+        noted_hit(PROCOID, funcid, None);
         return Ok(hit);
     }
     let shape = lookup_pg_proc_shape_uncached(funcid)?;
@@ -1579,7 +1620,7 @@ fn lookup_pg_proc_secdef(funcid: Oid) -> PgResult<Option<syscache_seams::PgProcS
         Some(img) => {
             let elems =
                 datum::array_build::deconstruct_array_image(cx.mcx(), &img, -1, false, b'i')?;
-            let mut out = Vec::with_capacity(elems.len());
+            let mut out = ::mcx::std_vec_with_capacity("CacheMemoryContext", elems.len())?;
             for e in elems.iter() {
                 let ep = e.as_usize() as *const u8;
                 // The element's self-declared varlena length is untrusted on-disk
@@ -1886,6 +1927,7 @@ fn pg_operator_name_candidates_exist(opername: &str, oprkind: i8) -> PgResult<bo
 fn lookup_pg_cast_shape(sourcetypeid: Oid, targettypeid: Oid) -> PgResult<Option<PgCastShape>> {
     let key = ((sourcetypeid as u64) << 32) | targettypeid as u64;
     if let Some(hit) = with_memos(|m| m.cast.get(&key).copied()) {
+        noted_hit(CASTSOURCETARGET, sourcetypeid, Some(targettypeid));
         return Ok(hit);
     }
     let shape = lookup_pg_cast_shape_uncached(sourcetypeid, targettypeid)?;
@@ -2524,6 +2566,9 @@ fn lookup_pg_statistic_bundle<'mcx>(
     // pg_clear_attribute_stats) still serves its arrays: own a copy of the image.
     let t_len = t.t_len;
     let mut image: PgVec<'mcx, u64> = PgVec::new_in(mcx);
+    image
+        .try_reserve_exact(t_len.div_ceil(8) as usize)
+        .map_err(|_| mcx.oom(t_len as usize))?;
     image.resize(t_len.div_ceil(8) as usize, 0);
     // SAFETY: the pinned image is readable for t_len bytes and the u64 buffer
     // holds at least that many bytes.
@@ -2969,9 +3014,12 @@ fn pg_attribute_attoptions<'mcx>(
 }
 
 // spccache.c get_tablespace: SearchSysCache1(TABLESPACEOID) +
-// SysCacheGetAttr(spcoptions); the varlena image is copied into mcx so the
-// caller parses it after ReleaseSysCache.
-fn pg_tablespace_spcoptions<'mcx>(mcx: Mcx<'mcx>, spcid: Oid) -> PgResult<Option<Option<Datum>>> {
+// SysCacheGetAttr(spcoptions); the varlena image is copied into an owned mcx
+// buffer so the caller parses it after ReleaseSysCache and then frees it.
+fn pg_tablespace_spcoptions<'mcx>(
+    mcx: Mcx<'mcx>,
+    spcid: Oid,
+) -> PgResult<Option<Option<PgVec<'mcx, u8>>>> {
     const ANUM_PG_TABLESPACE_SPCOPTIONS: i32 = 5;
     let Some(tuple) =
         SearchSysCache1(TABLESPACEOID, SysCacheKey::Value(Datum::from_oid(spcid)))?
@@ -2997,7 +3045,7 @@ fn pg_tablespace_spcoptions<'mcx>(mcx: Mcx<'mcx>, spcid: Oid) -> PgResult<Option
             check_tuple_slice(&t, src, len)?;
             // SAFETY: `[src, src+len)` validated against the tuple image above.
             let bytes = unsafe { core::slice::from_raw_parts(src, len) };
-            Some(Datum::from_usize(mcx::slice_in(mcx, bytes)?.leak().as_ptr() as usize))
+            Some(mcx::slice_in(mcx, bytes)?)
         }
     };
     drop(t);

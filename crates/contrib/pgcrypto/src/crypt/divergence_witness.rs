@@ -100,6 +100,8 @@ fn div_d1_dollar2_must_error() {
 // ---------------------------------------------------------------------------
 #[test]
 fn div_d2_dollar2b_is_des_in_c() {
+    // The DES fallback calls CHECK_FOR_INTERRUPTS: install the seam here, never rely on a sibling.
+    super::cfi_test_support::arm_cfi(u64::MAX);
     let got = crypt_ok("foox", "$2b$06$......................");
     assert_eq!(
         got,

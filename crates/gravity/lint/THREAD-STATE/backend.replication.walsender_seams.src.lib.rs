@@ -1,0 +1,2 @@
+backend/replication/walsender_seams/src/lib.rs	AM_WALSENDER	pgport	exit	thread	am_walsender: this connection is a walsender, set once from its startup packet; read by auth / hba, signal setup, the main loop, admission and slot acquire, never by a claim
+backend/replication/walsender_seams/src/lib.rs	AM_DB_WALSENDER	pgport	exit	thread	am_db_walsender: replication=database, set once from the startup packet; read by auth / hba, backend startup and postinit only

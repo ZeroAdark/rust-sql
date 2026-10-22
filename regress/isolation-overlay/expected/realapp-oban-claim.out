@@ -1,0 +1,212 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1f s2f s1c s2c s2r
+step s2x: EXPLAIN (COSTS OFF) WITH "subset" AS (SELECT so0."id" AS "id" FROM ob_jobs AS so0 WHERE (so0."state" = 'available') AND (so0."queue" = 'default') ORDER BY so0."priority", so0."scheduled_at", so0."id" LIMIT 3 FOR UPDATE SKIP LOCKED) UPDATE ob_jobs AS o0 SET "state" = 'executing', "attempted_at" = '2026-10-01 10:45', "attempted_by" = ARRAY['node2', 'u2'], "attempt" = o0."attempt" + 1 FROM "subset" AS f1 WHERE (TRUE) AND (o0."id" = f1."id") AND (o0."attempt" < o0."max_attempts") RETURNING o0."id", o0."state", o0."attempt", o0."attempted_by";
+QUERY PLAN                                                                                            
+------------------------------------------------------------------------------------------------------
+Update on ob_jobs o0                                                                                  
+  CTE subset                                                                                          
+    ->  Limit                                                                                         
+          ->  LockRows                                                                                
+                ->  Index Scan using ob_jobs_state_queue_priority_scheduled_at_id_index on ob_jobs so0
+                      Index Cond: ((state = 'available'::ob_state) AND (queue = 'default'::text))     
+  ->  Nested Loop                                                                                     
+        ->  CTE Scan on subset f1                                                                     
+        ->  Index Scan using ob_jobs_pkey on ob_jobs o0                                               
+              Index Cond: (id = f1.id)                                                                
+              Filter: (attempt < max_attempts)                                                        
+(11 rows)
+
+step s1f: WITH "subset" AS (SELECT so0."id" AS "id" FROM ob_jobs AS so0 WHERE (so0."state" = 'available') AND (so0."queue" = 'default') ORDER BY so0."priority", so0."scheduled_at", so0."id" LIMIT 2 FOR UPDATE SKIP LOCKED) UPDATE ob_jobs AS o0 SET "state" = 'executing', "attempted_at" = '2026-10-01 10:40', "attempted_by" = ARRAY['node1', 'u1'], "attempt" = o0."attempt" + 1 FROM "subset" AS f1 WHERE (TRUE) AND (o0."id" = f1."id") AND (o0."attempt" < o0."max_attempts") RETURNING o0."id", o0."state", o0."attempt", o0."attempted_by";
+id|state    |attempt|attempted_by
+--+---------+-------+------------
+ 1|executing|      1|{node1,u1}  
+ 2|executing|      1|{node1,u1}  
+(2 rows)
+
+step s2f: WITH "subset" AS (SELECT so0."id" AS "id" FROM ob_jobs AS so0 WHERE (so0."state" = 'available') AND (so0."queue" = 'default') ORDER BY so0."priority", so0."scheduled_at", so0."id" LIMIT 3 FOR UPDATE SKIP LOCKED) UPDATE ob_jobs AS o0 SET "state" = 'executing', "attempted_at" = '2026-10-01 10:45', "attempted_by" = ARRAY['node2', 'u2'], "attempt" = o0."attempt" + 1 FROM "subset" AS f1 WHERE (TRUE) AND (o0."id" = f1."id") AND (o0."attempt" < o0."max_attempts") RETURNING o0."id", o0."state", o0."attempt", o0."attempted_by";
+id|state    |attempt|attempted_by
+--+---------+-------+------------
+ 4|executing|      1|{node2,u2}  
+ 3|executing|      1|{node2,u2}  
+ 5|executing|      1|{node2,u2}  
+(3 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s2r: SELECT id, state, queue, attempt, attempted_by, scheduled_at, completed_at, cancelled_at FROM ob_jobs ORDER BY id;
+id|state    |queue  |attempt|attempted_by|scheduled_at            |completed_at            |cancelled_at
+--+---------+-------+-------+------------+------------------------+------------------------+------------
+ 1|executing|default|      1|{node1,u1}  |Thu Oct 01 10:01:00 2026|                        |            
+ 2|executing|default|      1|{node1,u1}  |Thu Oct 01 10:02:00 2026|                        |            
+ 3|executing|default|      1|{node2,u2}  |Thu Oct 01 10:03:00 2026|                        |            
+ 4|executing|default|      1|{node2,u2}  |Thu Oct 01 10:04:00 2026|                        |            
+ 5|executing|default|      1|{node2,u2}  |Thu Oct 01 10:05:00 2026|                        |            
+ 6|executing|mail   |      1|            |Thu Oct 01 10:06:00 2026|                        |            
+ 7|scheduled|mail   |      0|            |Thu Oct 01 10:07:00 2026|                        |            
+ 8|scheduled|mail   |      0|            |Thu Oct 01 10:08:00 2026|                        |            
+ 9|completed|mail   |      1|            |Thu Oct 01 10:09:00 2026|Thu Oct 01 10:21:00 2026|            
+10|completed|mail   |      1|            |Thu Oct 01 10:10:00 2026|Thu Oct 01 10:22:00 2026|            
+11|available|events |      0|            |Thu Oct 01 10:11:00 2026|                        |            
+12|available|events |      0|            |Thu Oct 01 10:12:00 2026|                        |            
+(12 rows)
+
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1x s2f s1c s2c s2r
+step s1x: UPDATE ob_jobs AS o0 SET "state" = 'cancelled', "cancelled_at" = '2026-10-01 10:41' WHERE (o0."id" = 1) AND (o0."state" NOT IN ('cancelled','completed','discarded'));
+step s2f: WITH "subset" AS (SELECT so0."id" AS "id" FROM ob_jobs AS so0 WHERE (so0."state" = 'available') AND (so0."queue" = 'default') ORDER BY so0."priority", so0."scheduled_at", so0."id" LIMIT 3 FOR UPDATE SKIP LOCKED) UPDATE ob_jobs AS o0 SET "state" = 'executing', "attempted_at" = '2026-10-01 10:45', "attempted_by" = ARRAY['node2', 'u2'], "attempt" = o0."attempt" + 1 FROM "subset" AS f1 WHERE (TRUE) AND (o0."id" = f1."id") AND (o0."attempt" < o0."max_attempts") RETURNING o0."id", o0."state", o0."attempt", o0."attempted_by";
+id|state    |attempt|attempted_by
+--+---------+-------+------------
+ 2|executing|      1|{node2,u2}  
+ 4|executing|      1|{node2,u2}  
+ 3|executing|      1|{node2,u2}  
+(3 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s2r: SELECT id, state, queue, attempt, attempted_by, scheduled_at, completed_at, cancelled_at FROM ob_jobs ORDER BY id;
+id|state    |queue  |attempt|attempted_by|scheduled_at            |completed_at            |cancelled_at            
+--+---------+-------+-------+------------+------------------------+------------------------+------------------------
+ 1|cancelled|default|      0|            |Thu Oct 01 10:01:00 2026|                        |Thu Oct 01 10:41:00 2026
+ 2|executing|default|      1|{node2,u2}  |Thu Oct 01 10:02:00 2026|                        |                        
+ 3|executing|default|      1|{node2,u2}  |Thu Oct 01 10:03:00 2026|                        |                        
+ 4|executing|default|      1|{node2,u2}  |Thu Oct 01 10:04:00 2026|                        |                        
+ 5|available|default|      0|            |Thu Oct 01 10:05:00 2026|                        |                        
+ 6|executing|mail   |      1|            |Thu Oct 01 10:06:00 2026|                        |                        
+ 7|scheduled|mail   |      0|            |Thu Oct 01 10:07:00 2026|                        |                        
+ 8|scheduled|mail   |      0|            |Thu Oct 01 10:08:00 2026|                        |                        
+ 9|completed|mail   |      1|            |Thu Oct 01 10:09:00 2026|Thu Oct 01 10:21:00 2026|                        
+10|completed|mail   |      1|            |Thu Oct 01 10:10:00 2026|Thu Oct 01 10:22:00 2026|                        
+11|available|events |      0|            |Thu Oct 01 10:11:00 2026|                        |                        
+12|available|events |      0|            |Thu Oct 01 10:12:00 2026|                        |                        
+(12 rows)
+
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2k s1c s2c s2r
+step s1k: UPDATE ob_jobs AS o0 SET "state" = 'cancelled', "cancelled_at" = '2026-10-01 10:41' WHERE (o0."id" = 6) AND (o0."state" NOT IN ('cancelled','completed','discarded'));
+step s2k: UPDATE ob_jobs AS o0 SET "state" = 'completed', "completed_at" = '2026-10-01 10:46' WHERE (o0."id" = 6) AND (o0."state" = ANY(ARRAY['executing']::ob_state[])) AND (o0."attempted_at" = '2026-10-01 10:30'); <waiting ...>
+step s1c: COMMIT;
+step s2k: <... completed>
+step s2c: COMMIT;
+step s2r: SELECT id, state, queue, attempt, attempted_by, scheduled_at, completed_at, cancelled_at FROM ob_jobs ORDER BY id;
+id|state    |queue  |attempt|attempted_by|scheduled_at            |completed_at            |cancelled_at            
+--+---------+-------+-------+------------+------------------------+------------------------+------------------------
+ 1|available|default|      0|            |Thu Oct 01 10:01:00 2026|                        |                        
+ 2|available|default|      0|            |Thu Oct 01 10:02:00 2026|                        |                        
+ 3|available|default|      0|            |Thu Oct 01 10:03:00 2026|                        |                        
+ 4|available|default|      0|            |Thu Oct 01 10:04:00 2026|                        |                        
+ 5|available|default|      0|            |Thu Oct 01 10:05:00 2026|                        |                        
+ 6|cancelled|mail   |      1|            |Thu Oct 01 10:06:00 2026|                        |Thu Oct 01 10:41:00 2026
+ 7|scheduled|mail   |      0|            |Thu Oct 01 10:07:00 2026|                        |                        
+ 8|scheduled|mail   |      0|            |Thu Oct 01 10:08:00 2026|                        |                        
+ 9|completed|mail   |      1|            |Thu Oct 01 10:09:00 2026|Thu Oct 01 10:21:00 2026|                        
+10|completed|mail   |      1|            |Thu Oct 01 10:10:00 2026|Thu Oct 01 10:22:00 2026|                        
+11|available|events |      0|            |Thu Oct 01 10:11:00 2026|                        |                        
+12|available|events |      0|            |Thu Oct 01 10:12:00 2026|                        |                        
+(12 rows)
+
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2s s1c s2c s2r
+step s1r: UPDATE ob_jobs SET scheduled_at = '2026-10-01 12:00' WHERE id = 8;
+step s2s: UPDATE ob_jobs AS o0 SET "state" = 'available' FROM (SELECT so0."id" AS "id", so0."state" AS "state" FROM ob_jobs AS so0 WHERE (so0."state" IN ('scheduled','retryable')) AND (so0."scheduled_at" <= '2026-10-01 11:00') ORDER BY so0."scheduled_at" DESC, so0."id" DESC LIMIT 5000) AS s1 WHERE (o0."id" = s1."id") RETURNING o0."id", o0."queue", s1."state"; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|queue|state    
+--+-----+---------
+ 8|mail |scheduled
+ 7|mail |scheduled
+(2 rows)
+
+step s2c: COMMIT;
+step s2r: SELECT id, state, queue, attempt, attempted_by, scheduled_at, completed_at, cancelled_at FROM ob_jobs ORDER BY id;
+id|state    |queue  |attempt|attempted_by|scheduled_at            |completed_at            |cancelled_at
+--+---------+-------+-------+------------+------------------------+------------------------+------------
+ 1|available|default|      0|            |Thu Oct 01 10:01:00 2026|                        |            
+ 2|available|default|      0|            |Thu Oct 01 10:02:00 2026|                        |            
+ 3|available|default|      0|            |Thu Oct 01 10:03:00 2026|                        |            
+ 4|available|default|      0|            |Thu Oct 01 10:04:00 2026|                        |            
+ 5|available|default|      0|            |Thu Oct 01 10:05:00 2026|                        |            
+ 6|executing|mail   |      1|            |Thu Oct 01 10:06:00 2026|                        |            
+ 7|available|mail   |      0|            |Thu Oct 01 10:07:00 2026|                        |            
+ 8|available|mail   |      0|            |Thu Oct 01 12:00:00 2026|                        |            
+ 9|completed|mail   |      1|            |Thu Oct 01 10:09:00 2026|Thu Oct 01 10:21:00 2026|            
+10|completed|mail   |      1|            |Thu Oct 01 10:10:00 2026|Thu Oct 01 10:22:00 2026|            
+11|available|events |      0|            |Thu Oct 01 10:11:00 2026|                        |            
+12|available|events |      0|            |Thu Oct 01 10:12:00 2026|                        |            
+(12 rows)
+
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2p s1c s2c s2r
+step s1a: UPDATE ob_jobs AS o0 SET "state" = 'available', "max_attempts" = GREATEST(o0."max_attempts", o0."attempt" + 1), "scheduled_at" = '2026-10-01 10:42', "completed_at" = NULL, "cancelled_at" = NULL, "discarded_at" = NULL FROM (SELECT so0.id AS id, so0.queue AS queue, so0.state AS state FROM ob_jobs AS so0 WHERE (so0."id" = 9) AND (so0."state" NOT IN ('available','executing'))) AS s1 WHERE (o0."id" = s1."id") RETURNING s1."id", s1."queue", s1."state";
+id|queue|state    
+--+-----+---------
+ 9|mail |completed
+(1 row)
+
+step s2p: DELETE FROM ob_jobs AS o0 USING (SELECT so0."id" AS "id", so0."queue" AS "queue", so0."state" AS "state" FROM ob_jobs AS so0 WHERE ((((so0."state" = 'completed') AND (so0."scheduled_at" < '2026-10-01 11:00')) OR ((so0."state" = 'cancelled') AND (so0."cancelled_at" < '2026-10-01 11:00'))) OR ((so0."state" = 'discarded') AND (so0."discarded_at" < '2026-10-01 11:00'))) AND (NOT (so0."queue" IS NULL)) LIMIT 10000) AS s1 WHERE (o0."id" = s1."id") RETURNING s1."id", s1."queue", s1."state"; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+id|queue|state    
+--+-----+---------
+ 9|mail |completed
+10|mail |completed
+(2 rows)
+
+step s2c: COMMIT;
+step s2r: SELECT id, state, queue, attempt, attempted_by, scheduled_at, completed_at, cancelled_at FROM ob_jobs ORDER BY id;
+id|state    |queue  |attempt|attempted_by|scheduled_at            |completed_at|cancelled_at
+--+---------+-------+-------+------------+------------------------+------------+------------
+ 1|available|default|      0|            |Thu Oct 01 10:01:00 2026|            |            
+ 2|available|default|      0|            |Thu Oct 01 10:02:00 2026|            |            
+ 3|available|default|      0|            |Thu Oct 01 10:03:00 2026|            |            
+ 4|available|default|      0|            |Thu Oct 01 10:04:00 2026|            |            
+ 5|available|default|      0|            |Thu Oct 01 10:05:00 2026|            |            
+ 6|executing|mail   |      1|            |Thu Oct 01 10:06:00 2026|            |            
+ 7|scheduled|mail   |      0|            |Thu Oct 01 10:07:00 2026|            |            
+ 8|scheduled|mail   |      0|            |Thu Oct 01 10:08:00 2026|            |            
+11|available|events |      0|            |Thu Oct 01 10:11:00 2026|            |            
+12|available|events |      0|            |Thu Oct 01 10:12:00 2026|            |            
+(10 rows)
+
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2a s1c s2c s2r
+step s1d: UPDATE ob_jobs AS o0 SET "state" = 'completed', "completed_at" = '2026-10-01 10:43' WHERE (o0."id" = 11) AND (o0."state" = ANY(ARRAY['available']::ob_state[]));
+step s2a: UPDATE ob_jobs AS o0 SET "state" = 'cancelled', "cancelled_at" = '2026-10-01 10:47' FROM (SELECT so0.id AS id, so0.queue AS queue, so0.state AS state FROM ob_jobs AS so0 WHERE (so0."queue" = 'events') AND (so0."state" NOT IN ('cancelled','completed','discarded'))) AS s1 WHERE (o0."id" = s1."id") RETURNING s1."id", s1."queue", s1."state"; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|queue |state    
+--+------+---------
+11|events|available
+12|events|available
+(2 rows)
+
+step s2c: COMMIT;
+step s2r: SELECT id, state, queue, attempt, attempted_by, scheduled_at, completed_at, cancelled_at FROM ob_jobs ORDER BY id;
+id|state    |queue  |attempt|attempted_by|scheduled_at            |completed_at            |cancelled_at            
+--+---------+-------+-------+------------+------------------------+------------------------+------------------------
+ 1|available|default|      0|            |Thu Oct 01 10:01:00 2026|                        |                        
+ 2|available|default|      0|            |Thu Oct 01 10:02:00 2026|                        |                        
+ 3|available|default|      0|            |Thu Oct 01 10:03:00 2026|                        |                        
+ 4|available|default|      0|            |Thu Oct 01 10:04:00 2026|                        |                        
+ 5|available|default|      0|            |Thu Oct 01 10:05:00 2026|                        |                        
+ 6|executing|mail   |      1|            |Thu Oct 01 10:06:00 2026|                        |                        
+ 7|scheduled|mail   |      0|            |Thu Oct 01 10:07:00 2026|                        |                        
+ 8|scheduled|mail   |      0|            |Thu Oct 01 10:08:00 2026|                        |                        
+ 9|completed|mail   |      1|            |Thu Oct 01 10:09:00 2026|Thu Oct 01 10:21:00 2026|                        
+10|completed|mail   |      1|            |Thu Oct 01 10:10:00 2026|Thu Oct 01 10:22:00 2026|                        
+11|cancelled|events |      0|            |Thu Oct 01 10:11:00 2026|Thu Oct 01 10:43:00 2026|Thu Oct 01 10:47:00 2026
+12|cancelled|events |      0|            |Thu Oct 01 10:12:00 2026|                        |Thu Oct 01 10:47:00 2026
+(12 rows)
+
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress

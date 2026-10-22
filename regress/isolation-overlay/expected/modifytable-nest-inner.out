@@ -1,0 +1,106 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1q s1m s1j s1x s2d s1c s2c s3sel
+step s1q: UPDATE no_i SET qty = qty + 1000 WHERE order_id = 2 AND line = 1;
+step s1m: UPDATE no_i SET order_id = 3, line = 7 WHERE order_id = 4 AND line = 1;
+step s1j: UPDATE no_i SET order_id = 8, line = 9 WHERE order_id = 6 AND line = 1;
+step s1x: DELETE FROM no_i WHERE order_id = 8 AND line = 2;
+step s2d: WITH d AS (DELETE FROM no_i WHERE order_id IN (SELECT id FROM no_o WHERE status = 'cancelled') RETURNING order_id, line, qty) SELECT order_id, line, qty FROM d ORDER BY order_id, line; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+order_id|line| qty
+--------+----+----
+       2|   1|1021
+       2|   2|  22
+       4|   2|  42
+       6|   2|  62
+       8|   1|  81
+(5 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT order_id, line, qty FROM no_i WHERE order_id <= 9 ORDER BY order_id, line;
+order_id|line|qty
+--------+----+---
+       1|   1| 11
+       1|   2| 12
+       3|   1| 31
+       3|   2| 32
+       3|   7| 41
+       5|   1| 51
+       5|   2| 52
+       7|   1| 71
+       7|   2| 72
+       8|   9| 61
+       9|   1| 91
+       9|   2| 92
+(12 rows)
+
+
+starting permutation: s1o s2d s1c s2c s3sel
+step s1o: UPDATE no_o SET status = 'open' WHERE id = 2; UPDATE no_i SET qty = qty + 1 WHERE order_id = 2 AND line = 2;
+step s2d: WITH d AS (DELETE FROM no_i WHERE order_id IN (SELECT id FROM no_o WHERE status = 'cancelled') RETURNING order_id, line, qty) SELECT order_id, line, qty FROM d ORDER BY order_id, line; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+order_id|line|qty
+--------+----+---
+       2|   1| 21
+       2|   2| 23
+       4|   1| 41
+       4|   2| 42
+       6|   1| 61
+       6|   2| 62
+       8|   1| 81
+       8|   2| 82
+(8 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT order_id, line, qty FROM no_i WHERE order_id <= 9 ORDER BY order_id, line;
+order_id|line|qty
+--------+----+---
+       1|   1| 11
+       1|   2| 12
+       3|   1| 31
+       3|   2| 32
+       5|   1| 51
+       5|   2| 52
+       7|   1| 71
+       7|   2| 72
+       9|   1| 91
+       9|   2| 92
+(10 rows)
+
+
+starting permutation: s1q s1x s2d s1r s2c s3sel
+step s1q: UPDATE no_i SET qty = qty + 1000 WHERE order_id = 2 AND line = 1;
+step s1x: DELETE FROM no_i WHERE order_id = 8 AND line = 2;
+step s2d: WITH d AS (DELETE FROM no_i WHERE order_id IN (SELECT id FROM no_o WHERE status = 'cancelled') RETURNING order_id, line, qty) SELECT order_id, line, qty FROM d ORDER BY order_id, line; <waiting ...>
+step s1r: ROLLBACK;
+step s2d: <... completed>
+order_id|line|qty
+--------+----+---
+       2|   1| 21
+       2|   2| 22
+       4|   1| 41
+       4|   2| 42
+       6|   1| 61
+       6|   2| 62
+       8|   1| 81
+       8|   2| 82
+(8 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT order_id, line, qty FROM no_i WHERE order_id <= 9 ORDER BY order_id, line;
+order_id|line|qty
+--------+----+---
+       1|   1| 11
+       1|   2| 12
+       3|   1| 31
+       3|   2| 32
+       5|   1| 51
+       5|   2| 52
+       7|   1| 71
+       7|   2| 72
+       9|   1| 91
+       9|   2| 92
+(10 rows)
+

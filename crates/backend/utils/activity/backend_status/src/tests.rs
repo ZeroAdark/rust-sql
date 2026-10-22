@@ -1,6 +1,7 @@
 use std::sync::{Mutex, MutexGuard, Once};
 
 use super::*;
+use types_storage::storage::NUM_AUXILIARY_PROCS;
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -341,4 +342,50 @@ fn snapshot_keeps_raw_activity_bytes_for_clipping() {
 #[test]
 fn crashed_backend_activity_keeps_whitespace_and_del() {
     assert_eq!(ascii_safe(b"a\tb\nc\rd\x7fe\x01f\xc3\xa9g\0zz"), "a\tb\nc\rd\x7fe?f??g");
+}
+
+#[test]
+fn gss_security_status_survives_backend_snapshot() {
+    let _guard = bringup();
+    let procno = my_pgproc(4343);
+    start_backend(procno, 4343);
+    let mut port = types_startup::Port::new(&types_startup::ClientSocket {
+        sock: -1,
+        raddr: SockAddr::zeroed(),
+    });
+    port.gss = Some(types_startup::GssInfo {
+        principal: Some("postgres@PGBUG.TEST".into()),
+        authenticated: true,
+        encrypted: false,
+        delegated: true,
+    });
+    g::SetMyProcPort(port);
+    pgstat_bestart_security().unwrap();
+    pgstat_clear_backend_status_snapshot();
+    let entry = pgstat_get_beentry_by_proc_number(procno).unwrap();
+    assert!(entry.st_gss);
+    assert!(entry.st_gssstatus.authenticated);
+    assert!(!entry.st_gssstatus.encrypted);
+    assert!(entry.st_gssstatus.delegated);
+    assert_eq!(name_to_string(&entry.st_gssstatus.principal), "postgres@PGBUG.TEST");
+    g::WithMyProcPortMut(|port| port.gss.as_mut().unwrap().principal = Some("x".repeat(100)));
+    pgstat_bestart_security().unwrap();
+    pgstat_clear_backend_status_snapshot();
+    let entry = pgstat_get_beentry_by_proc_number(procno).unwrap();
+    assert_eq!(entry.st_gssstatus.principal, bytes_to_name(&[b'x'; 100]));
+    g::WithMyProcPortMut(|port| port.gss = None);
+    pgstat_bestart_security().unwrap();
+    pgstat_clear_backend_status_snapshot();
+    let entry = pgstat_get_beentry_by_proc_number(procno).unwrap();
+    assert!(!entry.st_gss);
+    assert_eq!(entry.st_gssstatus, PgBackendGSSStatus::ZERO);
+}
+
+#[test]
+fn truncated_ssl_dn_keeps_raw_bytes() {
+    let dn = format!("/CN={}\u{e9}tail", "a".repeat(58));
+    let name = NameBytes(bytes_to_name(dn.as_bytes()));
+    let stored = name.as_bytes();
+    assert_eq!(stored.len(), 63);
+    assert_eq!(stored[62], 0xC3);
 }

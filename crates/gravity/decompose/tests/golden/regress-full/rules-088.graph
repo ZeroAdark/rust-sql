@@ -1,0 +1,23 @@
+-- regress-full-rules-088
+-- MERGE INTO rule_merge1 t USING (SELECT 1 AS a) s ON t.a = s.a WHEN MATCHED AND t.a < 2 THEN UPDATE SET b = b || ' updated by merge' WHEN MATCHED AND t.a > 2 THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, '');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=0 reason=Write end=sink
+  nodes n2@0 n1@1 n0@3
+  source const
+  project ()
+  nest inner=n3 JOIN_LEFT invariant raise-free params=()
+  inner node=3 eligible rows=6 end=sink
+  nodes n3@0
+  source range rel=33853 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v1.1, c23:1)
+  project (1=v1.-1, 2j=v1.1, 3j=v1.2)
+  project (1j=inner.1, 2j=inner.2, 3j=inner.3)
+  write MERGE rel=33853 rti=1 natts=2 indexes=()
+    merge rowid=outer.1 target_cols=(1@2,2@3)
+    when matched and (op97(v1.1, c23:2)) then update set=(2) (1=op654(v1.2, c25:' updated by merge'))
+    when matched and (op521(v1.1, c23:2)) then delete
+    when not matched then insert (1=c23:1, 2=c25:'')
+  outs
+  outs 1=fx6:life/breaker 2=w4:val 3=vl:life/breaker
+mapped: Result ModifyTable SeqScan NestLoop

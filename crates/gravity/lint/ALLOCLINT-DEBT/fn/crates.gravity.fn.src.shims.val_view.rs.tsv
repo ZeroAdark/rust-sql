@@ -1,0 +1,8 @@
+path	crates/gravity/fn/src/shims/val_view.rs
+growth	std::vec::Vec::extend_from_slice	3
+growth	std::vec::Vec::push	3
+macro	std::format	4
+method	std::boxed::Box::new	1
+type	std::boxed::Box	1
+type	std::string::String	2
+type	std::vec::Vec	5

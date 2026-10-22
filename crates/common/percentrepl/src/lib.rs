@@ -99,7 +99,7 @@ mod tests {
         assert!(err.message().contains("invalid value for parameter"));
     }
 
-    // regression: percentrepl.c:125 reports the single byte after '%'.
+    // fp-common-b5#2: percentrepl.c:125 reports the single byte after '%'.
     #[test]
     fn unknown_multibyte_placeholder_reports_its_first_byte() {
         let err = replace_percent_placeholders("%\u{e9}", "p", &[('f', Some("x"))]).unwrap_err();

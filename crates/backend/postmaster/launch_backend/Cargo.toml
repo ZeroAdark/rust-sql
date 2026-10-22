@@ -20,7 +20,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(pgrust_sim)'] }
 test-crash-primitive = []
 
 [dependencies]
-lwlock = { path = "../../storage/lmgr/lwlock" }
+pg_sema_seams = { path = "../../port/pg_sema_seams" }
+be_secure = { path = "../../libpq/be_secure", default-features = false }
 guc = { path = "../../utils/misc/guc" }
 pmsignal = { path = "../../storage/ipc/pmsignal" }
 types_core = { path = "../../../_support/types/types_core" }
@@ -30,8 +31,17 @@ types_dest = { path = "../../../_support/types/types_dest" }
 fd = { path = "../../storage/file/fd" }
 dfmgr = { path = "../../utils/fmgr/dfmgr" }
 objectaccess = { path = "../../catalog/objectaccess" }
+hba = { path = "../../libpq/hba" }
 miscinit = { path = "../../utils/init/miscinit" }
 runtime = { path = "../../executor/runtime" }
+# cpuaff: the page pool's helper threads follow the workers' NUMA node (pagepool::set_helper_cpus).
+pagepool = { path = "../../../_support/pagepool" }
+# loadstats (c): hands the runtime pool to pgrc_am for ANALYZE's sample windows (pgrc_am::scan::install_sample_pool).
+pgrc_am = { path = "../../access/pgrcolumnar/pgrc_am" }
+gravity_pool = { path = "../../../gravity/pool" }
+gravity_parallel = { path = "../../../gravity/parallel" }
+gravity_hosts = { path = "../../../gravity/hosts" }
+gravity_prewarm = { path = "../../../gravity/prewarm" }
 bgjobs = { path = "../bgjobs" }
 stack_depth = { path = "../../utils/misc/stack_depth" }
 backend_startup = { path = "../../tcop/backend_startup" }
@@ -49,8 +59,10 @@ walreceiver = { path = "../../replication/walreceiver" }
 slotsync = { path = "../../replication/slotsync" }
 postmaster_startup = { path = "../startup" }
 walwriter = { path = "../walwriter" }
+instaux = { path = "../instaux" }
 pmchild_seams = { path = "../pmchild_seams" }
 postmaster_seams = { path = "../postmaster_seams" }
+startup_seams = { path = "../startup_seams" }
 interrupt = { path = "../interrupt" }
 procsignal = { path = "../../storage/ipc/procsignal" }
 ipc = { path = "../../storage/ipc/ipc" }
@@ -66,11 +78,22 @@ types_error = { path = "../../../_support/types/types_error" }
 # builds see an (effectively empty) support crate; only `--cfg pgrust_sim`
 # compiles the scheduler arm.
 pgsync = { path = "../../../_support/pgsync" }
+pagegive = { path = "../../../_support/pagegive" }
 # SIMVFS-SHARED (s2 §6 item 1): shared-universe capture/adopt at the spawn
 # doors — sim-only code paths; vfs is a leaf crate (no cycle).
 vfs = { path = "../../storage/file/vfs" }
 sinval = { path = "../../storage/ipc/sinval" }
 mcx = { path = "../../../_support/mcx" }
+memledger = { path = "../../../_support/memledger" }
+mempolicy = { path = "../../../_support/mempolicy" }
+pqcomm = { path = "../../libpq/pqcomm" }
+pgstat = { path = "../../utils/activity/pgstat" }
+mbutils = { path = "../../utils/mb/mbutils" }
+catalog_namespace = { path = "../../catalog/catalog_namespace" }
+superuser = { path = "../../utils/misc/superuser" }
+attoptcache = { path = "../../utils/cache/attoptcache" }
+cache_evtcache = { path = "../../utils/cache/cache_evtcache" }
+adt_acl = { path = "../../utils/adt/acl" }
 mcxt_stats = { path = "../../utils/mmgr/mcxt_stats" }
 waiteventset = { path = "../../storage/ipc/waiteventset" }
 waiteventset_seams = { path = "../../storage/ipc/waiteventset_seams" }

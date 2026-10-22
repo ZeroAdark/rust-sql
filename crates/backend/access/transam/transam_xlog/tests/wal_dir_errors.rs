@@ -34,12 +34,9 @@ fn wal_dir_failures_report_like_c() {
 
     std::fs::set_permissions(&wal, std::fs::Permissions::from_mode(0o555)).unwrap();
     let err = transam_xlog::write::XLogFileInit(1, 1).unwrap_err();
-    let tmppath = format!("pg_wal/xlogtemp.{}", init_small::globals::MyProcPid());
-    assert_eq!(
-        err.message(),
-        format!("could not create file \"{tmppath}\": Permission denied"),
-        "{err}"
-    );
+    let msg = err.message().to_string();
+    let pfx = format!("could not create file \"pg_wal/xlogtemp.{}.", init_small::globals::process_id());
+    assert!(msg.starts_with(&pfx) && msg.ends_with("\": Permission denied"), "{msg}");
     assert_eq!(err.sqlstate(), types_error::ERRCODE_INSUFFICIENT_PRIVILEGE);
 
     std::fs::set_permissions(&wal, std::fs::Permissions::from_mode(0o000)).unwrap();

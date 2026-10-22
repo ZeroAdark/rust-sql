@@ -1,0 +1,9 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/mapcache.rs
+growth	std::string::String::push_str	3
+macro	std::format	5
+method	std::boxed::Box::new	1
+method	std::ffi::CString::new	1
+method	std::sync::Arc::new	1
+type	std::boxed::Box	1
+type	std::ffi::CString	1
+type	std::sync::Arc	2

@@ -1,0 +1,50 @@
+
+Execution tree of successfully compiled PL/pgSQL function p158_dump(bigint):
+
+Function's data area:
+    entry 0: VAR a                type int8 (typoid 20) atttypmod -1
+    entry 1: VAR found            type bool (typoid 16) atttypmod -1
+
+Function's statements:
+  1:BLOCK <<*unnamed*>>
+  1:  RETURN '1'
+    END -- *unnamed*
+
+End of execution tree of function p158_dump(bigint)
+
+
+Execution tree of successfully compiled PL/pgSQL function p158_loop(bigint):
+
+Function's data area:
+    entry 0: VAR a                type int8 (typoid 20) atttypmod -1
+    entry 1: VAR found            type bool (typoid 16) atttypmod -1
+    entry 2: VAR s                type int8 (typoid 20) atttypmod -1
+                                  DEFAULT '0' target 2 (local)
+    entry 3: VAR i                type int4 (typoid 23) atttypmod -1
+
+Function's statements:
+  1:BLOCK <<*unnamed*>>
+  1:  FORI i NORMAL
+        lower = '1'
+        upper = 'a'
+  1:    ASSIGN var 2 := 's := s + i' target 2 (local)
+      ENDFORI
+  1:  RETURN variable 2
+    END -- *unnamed*
+
+End of execution tree of function p158_loop(bigint)
+
+
+Execution tree of successfully compiled PL/pgSQL function inline_code_block:
+
+Function's data area:
+    entry 0: VAR found            type bool (typoid 16) atttypmod -1
+
+Function's statements:
+  1:BLOCK <<*unnamed*>>
+  1:  PERFORM expr = 'SELECT 1'
+  0:  RETURN NULL
+    END -- *unnamed*
+
+End of execution tree of function inline_code_block
+

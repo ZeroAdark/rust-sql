@@ -166,7 +166,7 @@ fn cross_backend_set_latch_wakes_blocked_wait() {
 
 #[test]
 fn fd_parked_wait_recovers_lost_latch_wake_within_cadence() {
-    // regression: the lost-wake shape at the fd-park boundary — is_set
+    // GL-RECWAKE-1: the lost-wake shape at the fd-park boundary — is_set
     // lands but the unpark (and so the wake-pipe byte) is never delivered.
     // An UNTIMED WaitEventSetWait must still observe the set latch within
     // one recheck-cadence period (1s default), not block in epoll/kqueue
@@ -531,5 +531,15 @@ fn stale_wake_before_park_does_not_turn_an_infinite_wait_into_a_spin() {
     unsafe {
         libc::close(a);
         libc::close(b);
+    }
+}
+
+#[test]
+fn wake_pipe_failure_uses_c_text() {
+    let err = crate::wake_pipe_failure(libc::EMFILE);
+    if cfg!(target_os = "linux") {
+        assert_eq!(err.message(), "signalfd() failed");
+    } else {
+        assert_eq!(err.message(), "pipe() failed: Too many open files");
     }
 }

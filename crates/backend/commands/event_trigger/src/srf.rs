@@ -22,7 +22,7 @@ fn text_datum(mcx: Mcx<'_>, s: &str) -> PgResult<Datum> {
 }
 
 fn text_array_datum(mcx: Mcx<'_>, items: &[String]) -> PgResult<Datum> {
-    let mut elems: Vec<Datum> = Vec::with_capacity(items.len());
+    let mut elems: Vec<Datum> = ::mcx::std_vec_with_capacity("commands", items.len())?;
     for s in items {
         elems.push(text_datum(mcx, s)?);
     }

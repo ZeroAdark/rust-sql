@@ -11,6 +11,7 @@ use ::types_resowner::ResourceOwner;
 use crate::*;
 
 thread_local! {
+    static PERSIST_SPAWN: Cell<usize> = const { Cell::new(0) };
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static CUR_SUBID: Cell<SubTransactionId> = const { Cell::new(1) };
     static NEST_LEVEL: Cell<i32> = const { Cell::new(1) };
@@ -66,6 +67,9 @@ fn install() {
         });
         portalcmds_seams::persist_holdable_portal::set(|p| {
             log(format!("persist({})", p.borrow().name.as_str()));
+            for i in 0..PERSIST_SPAWN.with(|c| c.replace(0)) {
+                CreatePortal(&format!("spawned{i}"), false, false)?;
+            }
             Ok(())
         });
         tuplestore_hold_seams::tuplestore_begin_heap_hold::set(|ra| {
@@ -87,6 +91,7 @@ fn install() {
 
 fn setup() {
     install();
+    PERSIST_SPAWN.with(|c| c.set(0));
     EnablePortalManager();
     EVENTS.with(|e| e.borrow_mut().clear());
     CUR_SUBID.set(1);
@@ -179,6 +184,36 @@ fn split_character_at_byte_63_keeps_names_distinct() {
     assert!(GetPortalByName(Some(&name_a)).is_none());
     assert!(GetPortalByName(Some(&name_b)).unwrap().ptr_eq(&b));
     PortalDrop(&b, false).unwrap();
+}
+
+// wio P334: ROLLBACK of many open portals walks the table once in scan order
+// (C's hash_seq_search), cleaning and dropping each portal exactly once.
+#[test]
+fn abort_cleanup_walks_many_portals_once_in_scan_order() {
+    setup();
+    let n = 3000;
+    for i in 0..n {
+        let p = CreatePortal(&format!("c{i}"), false, false).unwrap();
+        define_simple(&p, "q");
+        p.borrow_mut().status = PORTAL_READY;
+    }
+    let order: Vec<String> = with_mgr(|m| {
+        m.scan_order().map(|p| p.borrow().name.as_str().to_owned()).collect()
+    })
+    .unwrap();
+    assert_eq!(order.len(), n);
+    EVENTS.with(|e| e.borrow_mut().clear());
+    AtAbort_Portals().unwrap();
+    let cleaned: Vec<String> = events()
+        .into_iter()
+        .filter_map(|e| e.strip_prefix("cleanup(").map(|s| s.trim_end_matches(')').to_owned()))
+        .collect();
+    assert_eq!(cleaned, order);
+    AtCleanup_Portals().unwrap();
+    assert_eq!(table_len(), 0);
+    for name in &order {
+        assert!(GetPortalByName(Some(name)).is_none());
+    }
 }
 
 // portalmem.c:595 deletes the context: a parked (pooled) PortalContext is
@@ -775,4 +810,81 @@ fn taken_parked_portal_context_is_identified_unnamed() {
     let ident = taken.borrow().portalContext.as_ref().expect("portalContext").ident();
     assert_eq!(ident.as_deref(), Some("<unnamed>"));
     PortalDrop(&taken, false).unwrap();
+}
+
+// portalmem.c:1214: portals created mid-HoldPortal shift the scan order.
+#[test]
+fn hold_pinned_portals_survives_portals_created_while_holding() {
+    setup();
+    let first = CreatePortal("pina", false, false).unwrap();
+    let second = CreatePortal("pinz", false, false).unwrap();
+    for p in [&first, &second] {
+        define_simple(p, "q");
+        let mut b = p.borrow_mut();
+        b.portalPinned = true;
+        b.strategy = PORTAL_ONE_SELECT;
+        b.status = PORTAL_READY;
+    }
+    PERSIST_SPAWN.with(|c| c.set(24));
+    HoldPinnedPortals().unwrap();
+    assert!(first.borrow().autoHeld);
+    assert!(second.borrow().autoHeld);
+    assert_eq!(events().iter().filter(|e| e.starts_with("persist(")).count(), 2);
+    for p in [&first, &second] {
+        p.borrow_mut().portalPinned = false;
+        PortalDrop(p, false).unwrap();
+    }
+    for i in 0..24 {
+        let p = GetPortalByName(Some(&format!("spawned{i}"))).unwrap();
+        PortalDrop(&p, false).unwrap();
+    }
+}
+
+#[test]
+fn define_query_source_copy_is_freed_with_the_portal() {
+    setup();
+    let text = "PREPARE p1(int) AS SELECT v FROM t1 WHERE id = $1";
+    let cycle = || {
+        let portal = CreateNewPortal().unwrap();
+        PortalDefineQuery(&portal, None, text, CMDTAG_SELECT, StmtListHandle::NULL, CachedPlanHandle::NULL)
+            .unwrap();
+        assert_eq!(portal.borrow().sourceText.unwrap(), text);
+        PortalDrop(&portal, false).unwrap();
+    };
+    let top_used = || with_mgr(|m| m.top.used()).unwrap();
+    for _ in 0..(2 * PORTAL_POOL_MAX) {
+        cycle();
+    }
+    let before = top_used();
+    for _ in 0..1000 {
+        cycle();
+    }
+    assert_eq!(top_used(), before, "TopPortalContext grew over 1000 define/drop cycles");
+}
+
+#[test]
+fn dyna_order_nth_matches_scan_order_across_mutations() {
+    let mut order = DynaOrder::new();
+    let check = |order: &mut DynaOrder| {
+        let expect: Vec<PortalName> = order.iter().cloned().collect();
+        for (i, name) in expect.iter().enumerate() {
+            assert!(order.nth(i) == Some(name), "sequential nth({i})");
+        }
+        assert!(order.nth(expect.len()).is_none());
+        for i in (0..expect.len()).rev().step_by(7) {
+            assert!(order.nth(i) == Some(&expect[i]), "backward nth({i})");
+        }
+    };
+    for i in 0..300 {
+        order.insert(PortalName::new(&format!("c{i}")));
+        if i % 37 == 0 {
+            check(&mut order);
+        }
+    }
+    check(&mut order);
+    let _ = order.nth(150);
+    for i in (0..300).step_by(3) {
+        order.remove(&PortalName::new(&format!("c{i}")));
+    }
+    check(&mut order);
 }

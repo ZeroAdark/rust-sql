@@ -1,0 +1,12 @@
+-- regress-full-partition_prune-017
+-- explain (costs off) select * from rlp where a = 16 and b in ('not', 'in', 'here');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0
+  source range rel=44809 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v3.2, c23:16)
+  filter any98(relabel25(v3.1), c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x1c\x00\x00\x00not\x00\x18\x00\x00\x00in\x00\x00 \x00\x00\x00here')
+  project (1=v3.2, 2=v3.1)
+  outs 1=w8:val 2=vl:win/page
+mapped: SeqScan

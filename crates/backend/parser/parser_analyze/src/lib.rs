@@ -23,7 +23,7 @@ use parser_small1::{
     free_parsestate, make_parsestate, setup_parse_fixed_parameters, ParseExprKind, ParseState,
 };
 use types_core::Oid;
-use types_error::PgResult;
+use types_error::{PgError, PgResult};
 use types_nodes::nodes_enums::CmdType;
 use types_nodes::parsenodes::{Query, QuerySource};
 use types_nodes::primnodes::{FromExpr, VarReturningType};
@@ -42,7 +42,7 @@ seam_core::tap!(
         query: &'a mut Query<'mcx>,
         jstate: &'a queryjumble::JumbleState<'mcx>,
         source_text: &'a str,
-    )
+    ) -> PgResult<()>
 );
 
 pub fn init_seams() {
@@ -80,7 +80,7 @@ pub fn parse_analyze_fixedparams<'a, 'mcx>(
 
     if tap_post_parse_analyze::is_installed() && queryjumble::IsQueryIdEnabled() {
         let js = queryjumble::JumbleQuery(mcx, &mut query)?;
-        tap_post_parse_analyze::call_if(|f| f(&mut query, &js, source_text));
+        tap_post_parse_analyze::call_if_or(Ok(()), |f| f(&mut query, &js, source_text))?;
     } else if queryjumble::IsQueryIdEnabled() {
         queryjumble::JumbleQueryDiscard(mcx, &mut query)?;
     }
@@ -125,7 +125,7 @@ pub fn parse_analyze_sql_fn<'a, 'mcx>(
 
     if tap_post_parse_analyze::is_installed() && queryjumble::IsQueryIdEnabled() {
         let js = queryjumble::JumbleQuery(mcx, &mut query)?;
-        tap_post_parse_analyze::call_if(|f| f(&mut query, &js, source_text));
+        tap_post_parse_analyze::call_if_or(Ok(()), |f| f(&mut query, &js, source_text))?;
     } else if queryjumble::IsQueryIdEnabled() {
         queryjumble::JumbleQueryDiscard(mcx, &mut query)?;
     }
@@ -182,7 +182,7 @@ pub fn parse_analyze_varparams<'a, 'mcx>(
     pstate.p_sourcetext = Some(source_text.as_bytes());
 
     let parstate = parser_small1::VarParamState {
-        param_types: std::rc::Rc::new(core::cell::RefCell::new(param_types.to_vec())),
+        param_types: std::rc::Rc::new(core::cell::RefCell::new(::mcx::std_vec_from_slice("parser", &param_types)?)),
     };
     parser_small1::setup_parse_variable_parameters(&mut pstate, parstate.clone());
 
@@ -207,7 +207,7 @@ pub fn parse_analyze_varparams<'a, 'mcx>(
 
     if tap_post_parse_analyze::is_installed() && queryjumble::IsQueryIdEnabled() {
         let js = queryjumble::JumbleQuery(mcx, &mut query)?;
-        tap_post_parse_analyze::call_if(|f| f(&mut query, &js, source_text));
+        tap_post_parse_analyze::call_if_or(Ok(()), |f| f(&mut query, &js, source_text))?;
     } else if queryjumble::IsQueryIdEnabled() {
         queryjumble::JumbleQueryDiscard(mcx, &mut query)?;
     }
@@ -245,7 +245,7 @@ pub fn parse_analyze_plpgsql<'a, 'mcx>(
 
     if tap_post_parse_analyze::is_installed() && queryjumble::IsQueryIdEnabled() {
         let js = queryjumble::JumbleQuery(mcx, &mut query)?;
-        tap_post_parse_analyze::call_if(|f| f(&mut query, &js, source_text));
+        tap_post_parse_analyze::call_if_or(Ok(()), |f| f(&mut query, &js, source_text))?;
     } else if queryjumble::IsQueryIdEnabled() {
         queryjumble::JumbleQueryDiscard(mcx, &mut query)?;
     }
@@ -457,10 +457,10 @@ fn transformCallStmt<'mcx>(
         None => expanded,
         Some(modes) => {
             if modes.len() != expanded.len() {
-                panic!(
+                return Err(Box::new(PgError::error(format!(
                     "proargmodes is not a 1-D char array of length {} or it contains nulls",
                     expanded.len()
-                );
+                ))));
             }
             let mut inargs = types_nodes::NodeList::nil();
             for (i, n) in expanded.iter().enumerate() {
@@ -473,7 +473,12 @@ fn transformCallStmt<'mcx>(
                         // (exprType, Param dno reads), so the node is shared.
                         outargs.lappend(mcx, n)?;
                     }
-                    m => panic!("invalid argmode {} for procedure", m as u8 as char),
+                    m => {
+                        return Err(Box::new(PgError::error(format!(
+                            "invalid argmode {} for procedure",
+                            m as u8 as char
+                        ))))
+                    }
                 }
             }
             inargs

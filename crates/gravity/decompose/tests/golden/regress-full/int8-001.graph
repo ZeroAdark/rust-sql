@@ -1,0 +1,11 @@
+-- regress-full-int8-001
+-- SELECT q1, q2, q1 * q2 AS multiply FROM INT8_TBL WHERE q1 < 1000 or (q2 > 0 and q2 < 1000);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2 end=sink
+  nodes n0@0
+  source range rel=16403 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter or(op412(v1.1, c20:1000), and(op413(v1.2, c20:0), op412(v1.2, c20:1000)))
+  project (1=v1.1, 2=v1.2, 3=op686(v1.1, v1.2))
+  outs 1=w8:val 2=w8:val 3=w8:val
+mapped: SeqScan

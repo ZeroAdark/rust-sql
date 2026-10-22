@@ -85,7 +85,7 @@ fn XLogFileName(tli: TimeLineID, logSegNo: XLogSegNo, wal_segsz_bytes: i32) -> S
 // Log timezone, not session timezone; C NULL-derefs on failure — loud here.
 fn format_backup_time(t: pg_time_t) -> ([u8; 128], usize) {
     let tz = pgtz::log_timezone().expect("log_timezone not initialized");
-    let tm = localtime::pg_localtime(t, tz).expect("pg_localtime failed for backup time");
+    let tm = localtime::pg_localtime(t, &tz).expect("pg_localtime failed for backup time");
     let mut buf = [0u8; 128];
     // upstream c6e7a9ef30a2 (18.4): Guard against unsafe conditions in usage of pg_strftime().
     let len = strftime::pg_strftime(&mut buf, b"%Y-%m-%d %H:%M:%S %Z", &tm).unwrap_or(0);

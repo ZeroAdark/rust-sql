@@ -1,0 +1,13 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (box 11, M5-RIG 09-26): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT generate_series(1, 5) OFFSET 2
+cols: generate_series
+[pg]
+3
+4
+5
+[pg_full]
+1
+2
+3
+4
+5

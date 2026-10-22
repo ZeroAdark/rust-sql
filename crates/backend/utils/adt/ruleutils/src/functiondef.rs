@@ -152,7 +152,10 @@ fn char_array_checked(d: Datum) -> Result<Vec<u8>, ()> {
         return Err(());
     }
     let dim1 = rd(12) as usize;
-    Ok(b[20..20 + dim1].to_vec())
+    let mut out = Vec::new();
+    let _ = out.try_reserve_exact(dim1);
+    out.extend_from_slice(&b[20..20 + dim1]);
+    Ok(out)
 }
 
 // ruleutils.c:3027 " COST %g": float4 promoted to double, C printf %g.

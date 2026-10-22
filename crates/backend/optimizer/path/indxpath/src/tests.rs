@@ -13,12 +13,12 @@ fn match_index_to_operand_reports_missing_index_expression() {
     let mut index = IndexOptInfo::new(mcx);
     index.ncolumns = 1;
     index.nkeycolumns = 1;
-    index.indexkeys.push(0);
+    index.indexkeys = &[0];
     let err = match_index_to_operand(&run, operand, 0, &index)
         .expect_err("C elog(ERROR)s on a missing index expression");
     assert_eq!(err.message(), "wrong number of index expressions");
     let expr = Node::mk(mcx, Var { varno: 1, varattno: 1, vartype: 23, ..Default::default() }).unwrap();
     let id = run.root.alloc_expr_node(expr);
-    index.indexprs.push(id);
+    index.indexprs = mcx::slice_borrow_in(mcx, &[id]).unwrap();
     assert!(match_index_to_operand(&run, operand, 0, &index).unwrap());
 }

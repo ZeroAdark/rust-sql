@@ -51,10 +51,10 @@ pub fn fc_bpcharin(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
     // it explicitly: without this, atttypmod near INT32_MAX reserves ~2GiB and
     // then stamps a length that does not fit varlena's 30-bit size field.
     ::mcx::check_alloc_size(VARHDRSZ + clip.total)?;
-    buf.reserve(VARHDRSZ + clip.total);
+    ::mcx::std_vec_reserve("adt", buf, VARHDRSZ + clip.total)?;
     buf.extend_from_slice(&datum::varlena::set_varsize_4b(VARHDRSZ + clip.total));
     buf.extend_from_slice(&s[..clip.copy]);
-    buf.resize(VARHDRSZ + clip.total, b' ');
+    ::mcx::std_vec_resize("adt", buf, VARHDRSZ + clip.total, b' ')?;
     Ok(Datum::from_usize(buf.as_ptr() as usize))
 }
 
@@ -78,7 +78,7 @@ pub fn fc_varcharin(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     // atttypmod the way bpchar's space-padding can — the guard is here for
     // parity with C's error on a ~1GiB input rather than an infallible abort.
     ::mcx::check_alloc_size(VARHDRSZ + len)?;
-    buf.reserve(VARHDRSZ + len);
+    ::mcx::std_vec_reserve("adt", buf, VARHDRSZ + len)?;
     buf.extend_from_slice(&datum::varlena::set_varsize_4b(VARHDRSZ + len));
     buf.extend_from_slice(&s[..len]);
     Ok(Datum::from_usize(buf.as_ptr() as usize))
@@ -89,7 +89,7 @@ fn fc_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo, name: &'static str
     let payload = unsafe { fcinfo.arg_varlena_packed(0)? }.data();
     let buf = out_scratch(flinfo, name);
     buf.clear();
-    buf.reserve(payload.len() + 1);
+    ::mcx::std_vec_reserve("adt", buf, payload.len() + 1)?;
     buf.extend_from_slice(payload);
     buf.push(0);
     Ok(Datum::from_usize(buf.as_ptr() as usize))
@@ -178,24 +178,16 @@ pub fn fc_name_bpchar(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
     Ok(varlena_result(crate::name_bpchar(mcx, name)?))
 }
 
-fn arg_array_image<'a>(fcinfo: &'a Fcinfo) -> &'a [u8] {
-    // SAFETY: strict arg 0 is a non-null, in-memory (never toasted) typmod array.
-    unsafe {
-        let p = fcinfo.arg_ptr(0);
-        core::slice::from_raw_parts(p, arrayfuncs::foundation::varsize_any(p))
-    }
-}
-
 pub fn fc_bpchartypmodin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let arr = arg_array_image(fcinfo);
     let mcx = fcinfo.result_mcx();
-    Ok(Datum::from_i32(crate::bpchartypmodin(mcx, arr)?))
+    let arr = arrayfuncs::builtins::arg_array_bytes(fcinfo, 0, mcx)?;
+    Ok(Datum::from_i32(crate::bpchartypmodin(mcx, &arr)?))
 }
 
 pub fn fc_varchartypmodin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let arr = arg_array_image(fcinfo);
     let mcx = fcinfo.result_mcx();
-    Ok(Datum::from_i32(crate::varchartypmodin(mcx, arr)?))
+    let arr = arrayfuncs::builtins::arg_array_bytes(fcinfo, 0, mcx)?;
+    Ok(Datum::from_i32(crate::varchartypmodin(mcx, &arr)?))
 }
 
 fn fc_typmodout(
@@ -277,8 +269,8 @@ pub fn fc_bpcharlen(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
 
 pub fn fc_bpcharoctetlen(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is a non-null bpchar varlena (strict fn).
-    let payload = unsafe { fcinfo.arg_varlena_packed(0)? }.data();
-    Ok(Datum::from_i32(crate::bpcharoctetlen(payload)))
+    let raw = unsafe { fcinfo.arg_varlena_raw(0) };
+    Ok(Datum::from_i32(::varlena::builtins::raw_octet_length(raw)))
 }
 
 pub fn fc_hashbpchar(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {

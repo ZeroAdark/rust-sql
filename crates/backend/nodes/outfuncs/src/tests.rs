@@ -938,20 +938,29 @@ fn xid_list_node_writes_the_x_list() {
 
 // A node tag without a ported writer must be a catchable, typed refusal
 // carrying C outNode's message ("could not dump unrecognized node type: %d",
-// outfuncs.c default arm), never a process panic. CompositeTypeStmt has no
-// writer (its raw tree is not in the debug_print_* ported set yet).
+// outfuncs.c default arm), never a process panic. InlineCodeBlock has no
+// writer (internal execution state, not serializable).
 #[test]
 fn unported_node_tag_is_a_typed_refusal_not_a_panic() {
     let ctx = MemoryContext::new("t");
     let mcx = ctx.mcx();
-    let stmt = Node::mk(mcx, types_nodes::rawnodes::CompositeTypeStmt::default()).unwrap();
+    let stmt = Node::mk(
+        mcx,
+        types_nodes::parsenodes::InlineCodeBlock {
+            source_text: "",
+            lang_oid: 0,
+            lang_is_trusted: false,
+            atomic: false,
+        },
+    )
+    .unwrap();
     let err = nodeToString(mcx, stmt).unwrap_err();
     assert_eq!(err.sqlstate(), types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
     assert_eq!(
         err.message(),
         format!(
             "could not dump unrecognized node type: {}",
-            types_nodes::NodeTag::T_CompositeTypeStmt as u16
+            types_nodes::NodeTag::T_InlineCodeBlock as u16
         )
     );
 }
@@ -1221,8 +1230,7 @@ fn planner_records_write_c_outfuncs_format() {
     )
     .unwrap();
     let clause = root.alloc_expr_node(clause);
-    let mut mergeopfamilies = mcx::PgVec::new_in(mcx);
-    mergeopfamilies.push(1976);
+    let mergeopfamilies: &[u32] = &[1976];
     let rinfo = root.alloc_rinfo(RestrictInfo {
         clause,
         is_pushed_down: true,
@@ -1262,7 +1270,7 @@ fn planner_records_write_c_outfuncs_format() {
         right_hasheqoperator: 96,
     });
     let mut canonical = EquivalenceClass::new(mcx);
-    canonical.ec_opfamilies.push(1976);
+    canonical.ec_opfamilies = &[1976];
     canonical.ec_members.push(em1);
     canonical.ec_members.push(em2);
     canonical.ec_sources.push(rinfo);
@@ -1379,5 +1387,346 @@ fn window_agg_empty_column_arrays_print_as_allocated() {
         ),
         "{}",
         s.as_str()
+    );
+}
+
+#[test]
+fn create_table_matches_c_parse_tree() {
+    use types_nodes::rawnodes::{ColumnDef, CreateStmt, TypeName};
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut names = NodeList::make1(mcx, Node::mk_string(mcx, "pg_catalog").unwrap()).unwrap();
+    names.lappend(mcx, Node::mk_string(mcx, "int4").unwrap()).unwrap();
+    let typename = Node::mk(mcx, TypeName {
+        names,
+        typemod: -1,
+        location: 72,
+        ..Default::default()
+    }).unwrap();
+    let column = Node::mk(mcx, ColumnDef {
+        colname: Some("a"),
+        typeName: Some(typename),
+        is_local: true,
+        location: 70,
+        ..Default::default()
+    }).unwrap();
+    let relation = Node::mk(mcx, types_nodes::primnodes::RangeVar {
+        relname: Some("t"),
+        inh: true,
+        relpersistence: b'p',
+        location: 68,
+        ..Default::default()
+    }).unwrap();
+    let stmt = Node::mk(mcx, CreateStmt {
+        relation: relation.as_variant(),
+        tableElts: NodeList::make1(mcx, column).unwrap(),
+        ..Default::default()
+    }).unwrap();
+    let expected = "{CREATESTMT :relation {RANGEVAR :catalogname <> :schemaname <> :relname t :inh true :relpersistence p :alias <> :location 68} :tableElts ({COLUMNDEF :colname a :typeName {TYPENAME :names (\"pg_catalog\" \"int4\") :typeOid 0 :setof false :pct_type false :typmods <> :typemod -1 :arrayBounds <> :location 72} :compression <> :inhcount 0 :is_local true :is_not_null false :is_from_type false :storage <> :storage_name <> :raw_default <> :cooked_default <> :identity <> :identitySequence <> :generated <> :collClause <> :collOid 0 :constraints <> :fdwoptions <> :location 70}) :inhRelations <> :partbound <> :partspec <> :ofTypename <> :constraints <> :nnconstraints <> :options <> :oncommit 0 :tablespacename <> :accessMethod <> :if_not_exists false}";
+    assert_eq!(crate::nodeToStringWithLocations(mcx, stmt).unwrap().as_str(), expected);
+    assert_eq!(nodeToString(mcx, stmt).unwrap().as_str(), expected.replace(":location 68", ":location -1").replace(":location 72", ":location -1").replace(":location 70", ":location -1"));
+}
+
+
+#[test]
+fn plan_nodes_match_c_format() {
+    use types_nodes::plannodes::{ForeignScan, NamedTuplestoreScan, SampleScan, Scan, TableFuncScan};
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+
+    let sample = Node::mk(mcx, SampleScan {
+        scan: Scan { scanrelid: 2, ..Default::default() },
+        tablesample: None,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, sample).unwrap().as_str(),
+        "{SAMPLESCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 0 :scan.plan.plan_rows 0 :scan.plan.plan_width 0 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist <> :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 2 :tablesample <>}"
+    );
+
+    let foreign = Node::mk(mcx, ForeignScan {
+        scan: Scan { scanrelid: 3, ..Default::default() },
+        operation: types_nodes::nodes_enums::CmdType::CMD_SELECT,
+        resultRelation: 0,
+        checkAsUser: 0,
+        fs_server: 16384,
+        fdw_exprs: NodeList::nil(),
+        fdw_private: NodeList::nil(),
+        fdw_scan_tlist: NodeList::nil(),
+        fdw_recheck_quals: NodeList::nil(),
+        fs_relids: Bitmapset::empty(),
+        fs_base_relids: Bitmapset::empty(),
+        fsSystemCol: false,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, foreign).unwrap().as_str(),
+        "{FOREIGNSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 0 :scan.plan.plan_rows 0 :scan.plan.plan_width 0 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist <> :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 3 :operation 1 :resultRelation 0 :checkAsUser 0 :fs_server 16384 :fdw_exprs <> :fdw_private <> :fdw_scan_tlist <> :fdw_recheck_quals <> :fs_relids (b) :fs_base_relids (b) :fsSystemCol false}"
+    );
+
+    let named = Node::mk(mcx, NamedTuplestoreScan {
+        scan: Scan { scanrelid: 1, ..Default::default() },
+        enrname: Some("tuplestore"),
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, named).unwrap().as_str(),
+        "{NAMEDTUPLESTORESCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 0 :scan.plan.plan_rows 0 :scan.plan.plan_width 0 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist <> :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :enrname tuplestore}"
+    );
+
+    let tablefunc = Node::mk(mcx, TableFuncScan {
+        scan: Scan { scanrelid: 4, ..Default::default() },
+        tablefunc: None,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, tablefunc).unwrap().as_str(),
+        "{TABLEFUNCSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 0 :scan.plan.plan_rows 0 :scan.plan.plan_width 0 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist <> :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 4 :tablefunc <>}"
+    );
+}
+
+#[test]
+fn partition_pruning_nodes_match_c_format() {
+    use types_nodes::plannodes::{
+        AppendRelInfo, PartitionPruneInfo, PartitionPruneStepCombine, PartitionPruneStepOp,
+        PartitionedRelPruneInfo,
+    };
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+
+    let prune_info = Node::mk(mcx, PartitionPruneInfo {
+        relids: Bitmapset::empty(),
+        prune_infos: NodeList::nil(),
+        other_subplans: Bitmapset::empty(),
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, prune_info).unwrap().as_str(),
+        "{PARTITIONPRUNEINFO :relids (b) :prune_infos <> :other_subplans (b)}"
+    );
+
+    let rel_prune = Node::mk(mcx, PartitionedRelPruneInfo {
+        rtindex: 1,
+        present_parts: Bitmapset::empty(),
+        nparts: 2,
+        subplan_map: &[0, 1],
+        subpart_map: &[-1, -1],
+        leafpart_rti_map: &[0, 0],
+        relid_map: &[1001, 1002],
+        initial_pruning_steps: NodeList::nil(),
+        exec_pruning_steps: NodeList::nil(),
+        execparamids: Bitmapset::empty(),
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, rel_prune).unwrap().as_str(),
+        "{PARTITIONEDRELPRUNEINFO :rtindex 1 :present_parts (b) :nparts 2 :subplan_map ( 0 1) :subpart_map ( -1 -1) :leafpart_rti_map ( 0 0) :relid_map ( 1001 1002) :initial_pruning_steps <> :exec_pruning_steps <> :execparamids (b)}"
+    );
+
+    let step_op = Node::mk(mcx, PartitionPruneStepOp {
+        step_id: 0,
+        opstrategy: 1,
+        exprs: NodeList::nil(),
+        cmpfns: types_nodes::list::OidList::nil(),
+        nullkeys: Bitmapset::empty(),
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, step_op).unwrap().as_str(),
+        "{PARTITIONPRUNESTEPOP :step.step_id 0 :opstrategy 1 :exprs <> :cmpfns <> :nullkeys (b)}"
+    );
+
+    let step_comb = Node::mk(mcx, PartitionPruneStepCombine {
+        step_id: 1,
+        combineOp: 0,
+        source_stepids: types_nodes::list::IntList::nil(),
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, step_comb).unwrap().as_str(),
+        "{PARTITIONPRUNESTEPCOMBINE :step.step_id 1 :combineOp 0 :source_stepids <>}"
+    );
+
+    let append_rel = Node::mk(mcx, AppendRelInfo {
+        parent_relid: 1,
+        child_relid: 2,
+        parent_reltype: 100,
+        child_reltype: 200,
+        num_child_cols: 2,
+        parent_colnos: &[1, 2],
+        parent_reloid: 1000,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, append_rel).unwrap().as_str(),
+        "{APPENDRELINFO :parent_relid 1 :child_relid 2 :parent_reltype 100 :child_reltype 200 :translated_vars <> :num_child_cols 2 :parent_colnos ( 1 2) :parent_reloid 1000}"
+    );
+}
+
+#[test]
+fn utility_statements_match_c_format() {
+    use types_nodes::parsenodes::{AlterTableStmt, CopyStmt, DefElem, ExplainStmt, VacuumStmt};
+    use types_nodes::rawnodes::{CreateTableAsStmt, IndexStmt, ViewStmt, ViewCheckOption};
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+
+    let def = Node::mk(mcx, DefElem {
+        defnamespace: None,
+        defname: Some("verbose"),
+        arg: None,
+        defaction: types_nodes::parsenodes::DefElemAction::DEFELEM_UNSPEC,
+        location: 42,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, def).unwrap().as_str(),
+        "{DEFELEM :defnamespace <> :defname verbose :arg <> :defaction 0 :location -1}"
+    );
+
+    let explain = Node::mk(mcx, ExplainStmt {
+        query: None,
+        options: NodeList::make1(mcx, def).unwrap(),
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, explain).unwrap().as_str(),
+        "{EXPLAINSTMT :query <> :options ({DEFELEM :defnamespace <> :defname verbose :arg <> :defaction 0 :location -1})}"
+    );
+
+    let ctas = Node::mk(mcx, CreateTableAsStmt {
+        query: None,
+        into: None,
+        objtype: types_nodes::parsenodes::ObjectType::OBJECT_TABLE,
+        is_select_into: false,
+        if_not_exists: false,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, ctas).unwrap().as_str(),
+        "{CREATETABLEASSTMT :query <> :into <> :objtype 41 :is_select_into false :if_not_exists false}"
+    );
+
+    let copy = Node::mk(mcx, CopyStmt {
+        relation: None,
+        query: None,
+        attlist: NodeList::nil(),
+        is_from: true,
+        is_program: false,
+        filename: Some("/dev/null"),
+        options: NodeList::nil(),
+        whereClause: None,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, copy).unwrap().as_str(),
+        "{COPYSTMT :relation <> :query <> :attlist <> :is_from true :is_program false :filename /dev/null :options <> :whereClause <>}"
+    );
+
+    let idx = Node::mk(mcx, IndexStmt {
+        idxname: Some("my_idx"),
+        relation: None,
+        accessMethod: Some("btree"),
+        tableSpace: None,
+        indexParams: NodeList::nil(),
+        indexIncludingParams: NodeList::nil(),
+        options: NodeList::nil(),
+        whereClause: None,
+        excludeOpNames: NodeList::nil(),
+        idxcomment: None,
+        indexOid: 0,
+        oldNumber: 0,
+        oldCreateSubid: 0,
+        oldFirstRelfilelocatorSubid: 0,
+        unique: false,
+        nulls_not_distinct: false,
+        primary: false,
+        isconstraint: false,
+        iswithoutoverlaps: false,
+        deferrable: false,
+        initdeferred: false,
+        transformed: false,
+        concurrent: false,
+        if_not_exists: false,
+        reset_default_tblspc: false,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, idx).unwrap().as_str(),
+        "{INDEXSTMT :idxname my_idx :relation <> :accessMethod btree :tableSpace <> :indexParams <> :indexIncludingParams <> :options <> :whereClause <> :excludeOpNames <> :idxcomment <> :indexOid 0 :oldNumber 0 :oldCreateSubid 0 :oldFirstRelfilelocatorSubid 0 :unique false :nulls_not_distinct false :primary false :isconstraint false :iswithoutoverlaps false :deferrable false :initdeferred false :transformed false :concurrent false :if_not_exists false :reset_default_tblspc false}"
+    );
+
+    let alter = Node::mk(mcx, AlterTableStmt {
+        relation: None,
+        cmds: NodeList::nil(),
+        objtype: types_nodes::parsenodes::ObjectType::OBJECT_TABLE,
+        missing_ok: false,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, alter).unwrap().as_str(),
+        "{ALTERTABLESTMT :relation <> :cmds <> :objtype 41 :missing_ok false}"
+    );
+
+    let view = Node::mk(mcx, ViewStmt {
+        view: None,
+        aliases: NodeList::nil(),
+        query: None,
+        replace: false,
+        options: NodeList::nil(),
+        withCheckOption: ViewCheckOption::NO_CHECK_OPTION,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, view).unwrap().as_str(),
+        "{VIEWSTMT :view <> :aliases <> :query <> :replace false :options <> :withCheckOption 0}"
+    );
+
+    let vac = Node::mk(mcx, VacuumStmt {
+        options: NodeList::nil(),
+        rels: NodeList::nil(),
+        is_vacuumcmd: true,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, vac).unwrap().as_str(),
+        "{VACUUMSTMT :options <> :rels <> :is_vacuumcmd true}"
+    );
+}
+
+#[test]
+fn clause_nodes_match_c_format() {
+    use types_nodes::primnodes::CollateClause;
+    use types_nodes::rawnodes::{IntoClause, OnCommitAction, PartitionElem, PartitionSpec, PartitionStrategy};
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+
+    let coll = Node::mk(mcx, CollateClause {
+        arg: None,
+        collname: NodeList::nil(),
+        location: 10,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, coll).unwrap().as_str(),
+        "{COLLATECLAUSE :arg <> :collname <> :location -1}"
+    );
+
+    let into = Node::mk(mcx, IntoClause {
+        rel: None,
+        colNames: NodeList::nil(),
+        accessMethod: None,
+        options: NodeList::nil(),
+        onCommit: OnCommitAction::ONCOMMIT_NOOP,
+        tableSpaceName: None,
+        viewQuery: None,
+        skipData: false,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, into).unwrap().as_str(),
+        "{INTOCLAUSE :rel <> :colNames <> :accessMethod <> :options <> :onCommit 0 :tableSpaceName <> :viewQuery <> :skipData false}"
+    );
+
+    let elem = Node::mk(mcx, PartitionElem {
+        name: Some("col1"),
+        expr: None,
+        collation: NodeList::nil(),
+        opclass: NodeList::nil(),
+        location: -1,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, elem).unwrap().as_str(),
+        "{PARTITIONELEM :name col1 :expr <> :collation <> :opclass <> :location -1}"
+    );
+
+    let spec = Node::mk(mcx, PartitionSpec {
+        strategy: PartitionStrategy::Range,
+        partParams: NodeList::make1(mcx, elem).unwrap(),
+        location: 5,
+    }).unwrap();
+    assert_eq!(
+        nodeToString(mcx, spec).unwrap().as_str(),
+        "{PARTITIONSPEC :strategy 114 :partParams ({PARTITIONELEM :name col1 :expr <> :collation <> :opclass <> :location -1}) :location -1}"
     );
 }

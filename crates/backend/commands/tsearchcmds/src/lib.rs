@@ -184,7 +184,7 @@ fn lookup_ts_object_in_search_path(cache_id: i32, objname: &str) -> PgResult<Oid
         if n <= path.len() {
             return first_ts_object_on_path(cache_id, objname, &path[..n]);
         }
-        path.resize(n, InvalidOid);
+        ::mcx::std_vec_resize("commands", &mut path, n, InvalidOid)?;
     }
 }
 
@@ -1020,7 +1020,7 @@ fn getTokenTypes<'mcx>(
         ))));
     }
     let mut flinfo = fmgr_seams::fmgr_info::call(lextype)?;
-    let list = types_fmgr::function_call1_coll(&mut flinfo, InvalidOid, Datum::from_i64(0))?;
+    let list = types_fmgr::function_call1_coll_in(&mut flinfo, InvalidOid, mcx, Datum::from_i64(0))?;
     // wparser_def contract: pointer Datum to a caller-owned Vec<LexDescr>.
     // SAFETY: produced by fc_prsd_lextype's Box::into_raw immediately above.
     let descrs: Box<Vec<ts_locale::LexDescr>> =

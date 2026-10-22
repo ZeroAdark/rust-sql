@@ -137,8 +137,8 @@ fn vacuum_leaf_page(
     for_pending: bool,
 ) -> PgResult<()> {
     let max = buf_page_mut(buffer).as_ref().max_offset_number();
-    let mut predecessor = vec![InvalidOffsetNumber; max as usize + 1];
-    let mut deletable = vec![false; max as usize + 1];
+    let mut predecessor = ::mcx::std_vec_from_elem("access", InvalidOffsetNumber, max as usize + 1)?;
+    let mut deletable = ::mcx::std_vec_from_elem("access", false, max as usize + 1)?;
     let mut n_deletable = 0usize;
 
     {
@@ -707,24 +707,43 @@ fn spgvacuumscan<'mcx>(
     state.stats.num_index_tuples = 0.0;
     state.stats.pages_deleted = 0;
 
-    let mut current: BlockNumber = SPGIST_METAPAGE_BLKNO + 1;
+    // spgvacuum.c:830: block_range_read_stream_cb takes no locks, so batch
+    // mode is safe.
+    let stream_cxt = ::mcx::MemoryContext::new("spgvacuumscan");
+    let mut stream = ::read_stream::read_stream_begin_relation_data::<()>(
+        stream_cxt.mcx(),
+        ::read_stream::READ_STREAM_MAINTENANCE
+            | ::read_stream::READ_STREAM_FULL
+            | ::read_stream::READ_STREAM_USE_BATCHING,
+        info.strategy.clone(),
+        index,
+        ForkNumber::MAIN_FORKNUM,
+    )?;
+    let first = SPGIST_METAPAGE_BLKNO + 1;
+    let mut p = ::read_stream::BlockRangeReadStreamPrivate::new(first, first);
     let mut num_pages;
     loop {
         num_pages = relation_length_for_scan(index)?;
-        if current >= num_pages {
+        if p.current_blocknum >= num_pages {
             break;
         }
-        while current < num_pages {
+        p.last_exclusive = num_pages;
+        loop {
             // vacuum_delay_point while not holding any buffer lock
             vacuum_delay_point()?;
-            let buffer = read_vacuum_buffer(info, current)?;
+            let buffer = stream.next_buffer(&mut |_: &mut ()| Ok(p.next_block()))?;
+            if buffer == ::types_core::InvalidBuffer {
+                break;
+            }
             spgvacuumpage(&mut state, buffer)?;
             if !state.pending.is_empty() {
                 spgprocesspending(&mut state)?;
             }
-            current += 1;
         }
+        // The stream calls no callback after InvalidBuffer until reset.
+        stream.reset()?;
     }
+    stream.end()?;
 
     // Propagate the local lastUsedPages cache to the metablock.
     SpGistUpdateMetaPage(index)?;
@@ -887,6 +906,42 @@ mod scan_length_tests {
         index.rd_createSubid.set(1);
         assert_eq!(relation_length_for_scan(&index).unwrap(), 7);
         assert_eq!((EXT_LOCKS.load(SeqCst), EXT_UNLOCKS.load(SeqCst)), (l0 + 1, u0 + 1));
+    }
+
+    // spgvacuum.c:830: the physical scan streams [first, nblocks), so the
+    // first read asks for the whole remaining range (READ_STREAM_FULL).
+    #[test]
+    fn vacuum_scan_streams_the_remaining_block_range() {
+        let _g = crate::tests::lock();
+        install();
+        ::read_stream::testing::install_stream_env();
+        snapmgr_seams::active_snapshot_xmin::set(|| 1);
+        bufmgr::read_buffer_extended::set(|_, _, _, _, _| {
+            panic!("physical vacuum scan must combine cold pages")
+        });
+        bufmgr::start_read_buffers::set(|op, _rel, _buffers, blocknum, nblocks, _flags| {
+            assert_eq!(blocknum, SPGIST_METAPAGE_BLKNO + 1);
+            assert_eq!(*nblocks, 7 - blocknum as i32);
+            assert!(op.strategy.is_none());
+            Err(Box::new(PgError::error("batch read failed")))
+        });
+        let cx = MemoryContext::new_bump("vacuum batch test");
+        let index = crate::tests::index_rel(cx.mcx());
+        let heap = crate::tests::heap_rel(cx.mcx());
+        index.rd_createSubid.set(1);
+        let info = IndexVacuumInfo {
+            index: &index,
+            heaprel: &heap,
+            analyze_only: false,
+            report_progress: false,
+            estimated_count: false,
+            message_level: ::types_error::DEBUG2,
+            num_heap_tuples: 0.0,
+            strategy: None,
+        };
+        let err = spgvacuumscan(&info, &mut IndexBulkDeleteResult::default(), None, None)
+            .unwrap_err();
+        assert_eq!(err.message, "batch read failed");
     }
 }
 

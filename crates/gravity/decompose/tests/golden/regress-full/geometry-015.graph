@@ -1,0 +1,10 @@
+-- regress-full-geometry-015
+-- SELECT npoints(f1) AS npoints, f1 AS polygon FROM POLYGON_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1360 end=sink
+  nodes n0@0
+  source range rel=17119 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn1556(v1.1), 2=v1.1)
+  outs 1=w4:val 2=vl:win/page
+mapped: SeqScan

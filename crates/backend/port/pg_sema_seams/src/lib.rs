@@ -15,3 +15,7 @@ seam_core::seam!(
 seam_core::seam!(
     pub fn pg_semaphore_unlock(procno: ProcNumber)
 );
+
+seam_core::seam!(
+    pub fn pg_semaphore_wait_lap()
+);

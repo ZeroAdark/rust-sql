@@ -1,0 +1,9 @@
+-- regress-full-copy2-001
+-- copy check_con_tbl from stdin;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op521(T_FieldSelect, c23:0))
+  outs 1=w1:val
+mapped: Result

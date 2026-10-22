@@ -32,7 +32,10 @@ fn clip_locale_symbol(sym: &[u8]) -> &[u8] {
 }
 
 pub fn fill_str(c: u8, max: usize) -> Vec<u8> {
-    vec![c; max]
+    let mut v = Vec::new();
+    let _ = v.try_reserve_exact(max);
+    v.resize(max, c);
+    v
 }
 
 pub fn int_to_roman(number: i32) -> Vec<u8> {
@@ -636,6 +639,7 @@ impl NumFromChar<'_> {
 
     fn write_number(&mut self, c: u8) {
         if self.number_p >= self.number.len() {
+            let _ = self.number.try_reserve(1);
             self.number.resize(self.number_p + 1, 0);
         }
         self.number[self.number_p] = c;
@@ -977,7 +981,7 @@ pub fn num_processor_from_char(
                     let numlen = digits.len();
                     let npp = np.number_p;
                     if npp + numlen > np.number.len() {
-                        np.number.resize(npp + numlen, 0);
+                        ::mcx::std_vec_resize("adt", &mut np.number, npp + numlen, 0)?;
                     }
                     np.number[npp..npp + numlen].copy_from_slice(digits.as_bytes());
                     np.number_p += numlen;

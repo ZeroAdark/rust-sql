@@ -1,0 +1,3 @@
+gravity/exec/src/admit/entry/shelf.rs	SHELF	admission	statement:end_of_statement	leader	ExecutorStart / Run of the backend: nested statements' shelved serves (D1559 S2); end_of_statement at top-level end and xact end, drain at session end
+gravity/exec/src/admit/entry/shelf.rs	DRAIN	admission	at:drain	leader	ExecutorStart / Run of the backend: once-per-session Portals-phase cleanup registration flag; drain (session end) clears it
+gravity/exec/src/admit/entry/shelf.rs	XACT	admission	exit	leader	ExecutorStart / Run of the backend: AT_XACT_END callback registered once per thread (xact callbacks live on the thread); never reset

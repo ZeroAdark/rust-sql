@@ -438,7 +438,7 @@ mod proofs {
 
     // ---------- dsqrt: full-symbolic harness (model-defect carve-outs) ----------
     //
-    // TRIAGE 2026-07-30 (CI cluster FAILED at 33d7d09d31, mechanism isolated —
+    // TRIAGE 2026-07-30 (fleet FAILED at 33d7d09d31, mechanism isolated —
     // resolves the "mechanism isolation owed" runqueue note): the plain
     // fallible_un form of this harness FAILED in the goto-linked program
     // for exactly the TWO already-documented model defects, NOT a
@@ -528,7 +528,7 @@ mod proofs {
                     assert!(r.is_nan() && cval.is_nan());
                 } else if a.is_subnormal() {
                     // SECOND CBMC sqrt-model defect arm (decoded 2026-07-29
-                    // from the CI cluster FAILED, concrete index 7 = min
+                    // from the fleet FAILED, concrete index 7 = min
                     // denormal 0x1): CBMC's sqrt model mis-rounds SUBNORMAL
                     // inputs — real silicon gives the exact
                     // 0x1e60000000000000 (= 2^-537), proven bit-exact
@@ -553,7 +553,7 @@ mod proofs {
     /// iteration per grid row; CBMC reports each unwind copy's assertion
     /// separately, naming the failing index.
     ///
-    /// TRIAGE 2026-07-30: the CI cluster swept this diagnostic as a suite
+    /// TRIAGE 2026-07-30: the fleet swept this diagnostic as a suite
     /// member and it FAILED at grid index 7 (min denormal 0x1) — the
     /// SAME CBMC sqrt subnormal mis-round carve spots_dsqrt carries
     /// (native bits pinned in tests/dsqrt_grid_native.rs). It predated

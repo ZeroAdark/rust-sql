@@ -1,0 +1,10 @@
+-- regress-full-plpgsql-064
+-- select * from tftest(10);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:5)]
+  project (1=c23:10, 2=op551(c23:10, v1.1))
+  outs 1=w4:val 2=w4:val
+mapped: FunctionScan

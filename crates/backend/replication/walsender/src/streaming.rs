@@ -10,7 +10,7 @@
 
 use core::ffi::c_long;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use repl_gram::{ReplicationKind, StartReplicationCmd};
 use types_core::{InvalidXLogRecPtr, TimeLineID, TimestampTz, XLogRecPtr, XLogSegNo};
 use types_error::{
@@ -24,10 +24,10 @@ use xlogreader_seams::XLogReaderState as ReaderView;
 use crate::WalSndState;
 
 // MAX_SEND_SIZE (walsender.c:111): XLOG_BLCKSZ * 16.
-const MAX_SEND_SIZE: usize = transam_xlog::XLOG_BLCKSZ * 16;
+pub(crate) const MAX_SEND_SIZE: usize = transam_xlog::XLOG_BLCKSZ * 16;
 
 // WAIT_EVENT_WAL_SENDER_MAIN (wait_event_types.h): pg_stat_activity tag only.
-const WAIT_EVENT_WAL_SENDER_MAIN: u32 = 0x05000000 | 15;
+pub(crate) const WAIT_EVENT_WAL_SENDER_MAIN: u32 = 0x05000000 | 15;
 
 fn loc(line: i32, func: &'static str) -> ErrorLocation {
     ErrorLocation::new("src/backend/replication/walsender.c", line, func)
@@ -212,7 +212,9 @@ pub fn StartReplication(mcx: mcx::Mcx<'_>, cmd: &StartReplicationCmd) -> PgResul
 
         let mut reader =
             PhysicalReader(XLogReaderState::allocate(mcx, transam_xlog::wal_segment_size())?);
+        crate::pgrc_files::start(cmd.startpoint);
         let r = WalSndLoop(&mut |()| XLogSendPhysical(&mut reader.0), false);
+        crate::pgrc_files::stop();
 
         crate::REPLICATION_ACTIVE.with(|c| c.set(false));
         r?;
@@ -355,6 +357,16 @@ pub fn XLogSendPhysical(reader: &mut XLogReaderState<'_>) -> PgResult<()> {
         set_caught_up(false);
     }
 
+    // pgrcolumnar parts by reference (WR L3): the files of references below endptr go first.
+    let files_end = crate::pgrc_files::before_send(startptr, endptr, send_rqst_ptr)?;
+    if files_end < endptr {
+        endptr = files_end;
+        set_caught_up(false);
+        if endptr == startptr {
+            return crate::pgrc_files::wait_for_reply();
+        }
+    }
+
     let nbytes = (endptr - startptr) as usize;
     debug_assert!(nbytes <= MAX_SEND_SIZE);
 
@@ -399,7 +411,7 @@ fn xlog_send_physical_emit(
     };
     let next_tli = crate::SEND_TIME_LINE_NEXT_TLI.with(|c| c.get());
 
-    let mut wal_buf = vec![0u8; nbytes];
+    let mut wal_buf = ::mcx::std_vec_from_elem("walsender", 0u8, nbytes)?;
     // C's `startptr` / `nbytes` are advanced past the bytes served from the
     // WAL buffers (walsender.c:3367-3369); `read_from` / `read_off` are those
     // cursors and, like C's, persist across a cascading `retry`.
@@ -512,12 +524,12 @@ impl XLogSegmentRoutine for WalSndSegment {
                 .with_saved_errno(en)
                 .errcode_for_file_access()
                 .errmsg(format!("requested WAL segment {fname} has already been removed"))
-                .finish(loc(3119, "WalSndSegmentOpen"))?;
+                .finish(loc(3120, "WalSndSegmentOpen"))?;
         } else {
             ereport(ERROR)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m"))
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                 .finish(loc(3125, "WalSndSegmentOpen"))?;
         }
         unreachable!("WalSndSegmentOpen reported below ERROR");
@@ -544,10 +556,12 @@ pub(crate) fn wal_read_raise_error(
             .with_saved_errno(errinfo.wre_errno)
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not read from WAL segment {fname}, offset {}: %m",
+                "could not read from WAL segment {fname}, offset {}: {PCT_M}",
                 errinfo.wre_off
             ))
-            .finish(loc(1057, "WALReadRaiseError"))
+            .finish(ErrorLocation::new(
+                "src/backend/access/transam/xlogutils.c", 1060, "WALReadRaiseError",
+            ))
     } else {
         ereport(ERROR)
             .errcode(types_error::ERRCODE_DATA_CORRUPTED)
@@ -555,7 +569,9 @@ pub(crate) fn wal_read_raise_error(
                 "could not read from WAL segment {fname}, offset {}: read {} of {}",
                 errinfo.wre_off, errinfo.wre_read, errinfo.wre_req
             ))
-            .finish(loc(1064, "WALReadRaiseError"))
+            .finish(ErrorLocation::new(
+                "src/backend/access/transam/xlogutils.c", 1068, "WALReadRaiseError",
+            ))
     }
 }
 
@@ -821,6 +837,27 @@ pub(crate) fn reset_my_latch() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn wal_read_errors_report_xlogutils_location() {
+        for (read, line) in [(-1, 1060), (0, 1068)] {
+            let err = wal_read_raise_error(&xlogreader_seams::WALReadError {
+                wre_errno: libc::EIO,
+                wre_off: 8192,
+                wre_req: 8192,
+                wre_read: read,
+                wre_seg: xlogreader_seams::WALOpenSegment {
+                    ws_file: -1,
+                    ws_segno: 1,
+                    ws_tli: 1,
+                },
+            }).unwrap_err();
+            let location = err.location.unwrap();
+            assert_eq!(location.filename.as_deref(), Some("xlogutils.c"));
+            assert_eq!(location.lineno, line);
+            assert_eq!(location.funcname.as_deref(), Some("WALReadRaiseError"));
+        }
+    }
+
     // WalSndShutdown (walsender.c:386): a Remote destination becomes None so
     // no report from the exit callbacks reaches the standby; other
     // destinations are left alone.
@@ -843,12 +880,19 @@ mod tests {
         let cx = mcx::MemoryContext::new("PhysicalReader test");
         let mut reader =
             PhysicalReader(XLogReaderState::allocate(cx.mcx(), 16 * 1024 * 1024).unwrap());
-        // SAFETY: a descriptor this test owns.
-        let fd = unsafe { libc::open(b"/dev/null\0".as_ptr().cast(), libc::O_RDONLY) };
-        assert!(fd >= 0);
-        reader.0.v.seg.ws_file = fd;
+        // The segment is the write end of a pipe: EOF on the read end proves
+        // it was closed, which a reused descriptor number cannot fake.
+        let mut ends = [-1i32; 2];
+        // SAFETY: pipe fills the two-element array.
+        assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+        let [rd, wr] = ends;
+        reader.0.v.seg.ws_file = wr;
         drop(reader);
-        // SAFETY: probing a descriptor number; EBADF is the expected outcome.
-        assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1, "segment descriptor still open");
+        let mut b = 0u8;
+        // SAFETY: one-byte read into a local.
+        let n = unsafe { libc::read(rd, (&raw mut b).cast(), 1) };
+        // SAFETY: rd is still ours.
+        unsafe { libc::close(rd) };
+        assert_eq!(n, 0, "segment descriptor still open");
     }
 }

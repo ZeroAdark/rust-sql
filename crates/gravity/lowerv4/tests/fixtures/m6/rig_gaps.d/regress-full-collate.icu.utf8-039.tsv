@@ -1,0 +1,1 @@
+a text key under an ICU nondeterministic collation: the syscache seam lookup_pg_collation_locale_row the rig never installs (reached once rep.varlena.order is built, M6-TEXT R2; as collate.icu.utf8-016)

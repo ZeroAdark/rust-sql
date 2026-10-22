@@ -1,0 +1,3 @@
+-- regress-full-create_am-005
+-- SELECT COUNT(a), COUNT(1) FILTER(WHERE a=1) FROM heapmv;
+refused: SeqScan node=1 state=shape reason=table access method

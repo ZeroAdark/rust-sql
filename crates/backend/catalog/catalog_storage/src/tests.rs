@@ -153,3 +153,17 @@ fn serialize_pending_syncs_omits_commit_time_deletes() {
     PENDING_SYNCS.with_borrow_mut(|p| p.clear());
     PENDING.with_borrow_mut(|p| p.clear());
 }
+
+#[test]
+fn require_fsync_marks_only_the_pending_locator() {
+    PENDING_SYNCS.with_borrow_mut(|p| p.clear());
+    let part = RelFileLocator::new(1663, 5, 16530);
+    let heap = RelFileLocator::new(1663, 5, 16531);
+    AddPendingSync(part);
+    AddPendingSync(heap);
+    PendingSyncRequireFsync(part);
+    PendingSyncRequireFsync(RelFileLocator::new(1663, 5, 16532));
+    let got = PENDING_SYNCS.with_borrow(|p| p.iter().map(|s| (s.rlocator, s.is_truncated)).collect::<Vec<_>>());
+    assert_eq!(got, vec![(part, true), (heap, false)]);
+    PENDING_SYNCS.with_borrow_mut(|p| p.clear());
+}

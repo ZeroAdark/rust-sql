@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/nodes/copyfuncs.c: 1 stack-depth check sites
+185	copyObjectImpl	crates/backend/nodes/copyfuncs/src/lib.rs	copy_node	yes	

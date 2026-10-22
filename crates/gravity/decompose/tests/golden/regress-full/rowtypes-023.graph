@@ -1,0 +1,10 @@
+-- regress-full-rowtypes-023
+-- select row_to_json(ss) from (select q1 as a, q2 as b from int8_tbl) as ss;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=5 end=sink
+  nodes n0@0
+  source range rel=16403 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=fn3155(T_RowExpr))
+  outs 1=vl:call3155
+mapped: SeqScan

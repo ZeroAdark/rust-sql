@@ -1,0 +1,34 @@
+-- regress-full-opr_sanity-043
+-- SELECT o1.oid, o1.oprname FROM pg_operator AS o1 WHERE o1.oprcanhash AND NOT EXISTS (SELECT 1 FROM pg_amop WHERE amopmethod = (SELECT oid FROM pg_am WHERE amname = 'hash') AND amopopr = o1.oid AND amopstrategy = 1);
+graph pipelines=3 breakers=1 init_plans=1 root=p2
+p0 node=4 eligible rows=1 end=sink
+  nodes n4@0
+  source range rel=2601 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v3.2, c19:#64)
+  project (1=v3.1)
+  outs 1=w8:val
+p1 node=3 eligible rows=37 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@3
+  source range rel=2602 rti=2 am=heap
+    lanes Attr(5):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v2.8, $exec0)
+  filter op94(v2.5, c21:1)
+  project (1=v2.7)
+  build keys=(outer.1) decls=26/26:I32
+  outs 1=w8:val
+p2 node=1 eligible rows=46 end=sink
+  desc consumes=slot0@p1
+  nodes n1@0 n0@2
+  source range rel=2617 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(7):byval8:w8:val Offset:byval2:w2:val
+  filter v1.7
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15)
+  probe slot=0 inner=n2 JOIN_ANTI keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=w4:val 5=w1:val 6=w1:val 7=w8:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=w4:val 15=w4:val
+  outs 1=w8:val 2=fx64:win/page
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: SeqScan HashJoin Hash SubPlan

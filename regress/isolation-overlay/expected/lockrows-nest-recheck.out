@@ -1,0 +1,641 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2bm s2b s2xa s2a s2c
+step s2bm: SET enable_indexscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xa: EXPLAIN (COSTS OFF) SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a;
+QUERY PLAN                                     
+-----------------------------------------------
+LockRows                                       
+  ->  Nested Loop                              
+        ->  Seq Scan on nra a                  
+              Filter: (id <= 3)                
+        ->  Bitmap Heap Scan on nrl l          
+              Recheck Cond: (a.id = acct)      
+              Filter: (kind = 'cr'::text)      
+              ->  Bitmap Index Scan on nrl_acct
+                    Index Cond: (acct = a.id)  
+(9 rows)
+
+step s2a: SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a;
+id|bal|  id| amt
+--+---+----+----
+ 1| 10| 400| 400
+ 1| 10| 800| 800
+ 1| 10|1200|1200
+ 1| 10|1600|1600
+ 1| 10|2000|2000
+ 2| 20|   1|   1
+ 2| 20| 401| 401
+ 2| 20| 801| 801
+ 2| 20|1201|1201
+ 2| 20|1601|1601
+ 3| 30|   2|   2
+ 3| 30| 402| 402
+ 3| 30| 802| 802
+ 3| 30|1202|1202
+ 3| 30|1602|1602
+(15 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2bm s2b s1a2 s2a s1c s2c
+step s2bm: SET enable_indexscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1a2: UPDATE nra SET bal = bal + 1 WHERE id = 2;
+step s2a: SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|bal|  id| amt
+--+---+----+----
+ 1| 10| 400| 400
+ 1| 10| 800| 800
+ 1| 10|1200|1200
+ 1| 10|1600|1600
+ 1| 10|2000|2000
+ 2| 21|   1|   1
+ 2| 21| 401| 401
+ 2| 21| 801| 801
+ 2| 21|1201|1201
+ 2| 21|1601|1601
+ 3| 30|   2|   2
+ 3| 30| 402| 402
+ 3| 30| 802| 802
+ 3| 30|1202|1202
+ 3| 30|1602|1602
+(15 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2bm s2b s1a2k s2a s1c s2c
+step s2bm: SET enable_indexscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1a2k: UPDATE nra SET id = id + 1000 WHERE id = 2;
+step s2a: SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|bal|  id| amt
+--+---+----+----
+ 1| 10| 400| 400
+ 1| 10| 800| 800
+ 1| 10|1200|1200
+ 1| 10|1600|1600
+ 1| 10|2000|2000
+ 3| 30|   2|   2
+ 3| 30| 402| 402
+ 3| 30| 802| 802
+ 3| 30|1202|1202
+ 3| 30|1602|1602
+(10 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2bm s2b s1l2 s1a2 s2a s1c s2c
+step s2bm: SET enable_indexscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l2: UPDATE nrl SET amt = amt + 5000 WHERE id = 401;
+step s1a2: UPDATE nra SET bal = bal + 1 WHERE id = 2;
+step s2a: SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|bal|  id| amt
+--+---+----+----
+ 1| 10| 400| 400
+ 1| 10| 800| 800
+ 1| 10|1200|1200
+ 1| 10|1600|1600
+ 1| 10|2000|2000
+ 2| 21|   1|   1
+ 2| 21| 401| 401
+ 2| 21| 801| 801
+ 2| 21|1201|1201
+ 2| 21|1601|1601
+ 3| 30|   2|   2
+ 3| 30| 402| 402
+ 3| 30| 802| 802
+ 3| 30|1202|1202
+ 3| 30|1602|1602
+(15 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2bm s2b s1l2m s1a2 s2a s1c s2c
+step s2bm: SET enable_indexscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l2m: UPDATE nrl SET acct = 3 WHERE id = 401;
+step s1a2: UPDATE nra SET bal = bal + 1 WHERE id = 2;
+step s2a: SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|bal|  id| amt
+--+---+----+----
+ 1| 10| 400| 400
+ 1| 10| 800| 800
+ 1| 10|1200|1200
+ 1| 10|1600|1600
+ 1| 10|2000|2000
+ 2| 21|   1|   1
+ 2| 21| 401| 401
+ 2| 21| 801| 801
+ 2| 21|1201|1201
+ 2| 21|1601|1601
+ 3| 30|   2|   2
+ 3| 30| 402| 402
+ 3| 30| 802| 802
+ 3| 30|1202|1202
+ 3| 30|1602|1602
+(15 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2ix s2b s2xa s1l2 s1a2 s2a s1c s2c
+step s2ix: SET enable_seqscan = off; SET enable_bitmapscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xa: EXPLAIN (COSTS OFF) SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a;
+QUERY PLAN                                    
+----------------------------------------------
+LockRows                                      
+  ->  Nested Loop                             
+        ->  Index Scan using nra_pkey on nra a
+              Index Cond: (id <= 3)           
+        ->  Index Scan using nrl_acct on nrl l
+              Index Cond: (acct = a.id)       
+              Filter: (kind = 'cr'::text)     
+(7 rows)
+
+step s1l2: UPDATE nrl SET amt = amt + 5000 WHERE id = 401;
+step s1a2: UPDATE nra SET bal = bal + 1 WHERE id = 2;
+step s2a: SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|bal|  id| amt
+--+---+----+----
+ 1| 10| 400| 400
+ 1| 10| 800| 800
+ 1| 10|1200|1200
+ 1| 10|1600|1600
+ 1| 10|2000|2000
+ 2| 21|   1|   1
+ 2| 21| 401| 401
+ 2| 21| 801| 801
+ 2| 21|1201|1201
+ 2| 21|1601|1601
+ 3| 30|   2|   2
+ 3| 30| 402| 402
+ 3| 30| 802| 802
+ 3| 30|1202|1202
+ 3| 30|1602|1602
+(15 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2seq s2b s2xa s1l2 s1a2 s2a s1c s2c
+step s2seq: SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_material = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xa: EXPLAIN (COSTS OFF) SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a;
+QUERY PLAN                               
+-----------------------------------------
+LockRows                                 
+  ->  Nested Loop                        
+        Join Filter: (a.id = l.acct)     
+        ->  Seq Scan on nra a            
+              Filter: (id <= 3)          
+        ->  Seq Scan on nrl l            
+              Filter: (kind = 'cr'::text)
+(7 rows)
+
+step s1l2: UPDATE nrl SET amt = amt + 5000 WHERE id = 401;
+step s1a2: UPDATE nra SET bal = bal + 1 WHERE id = 2;
+step s2a: SELECT a.id, a.bal, l.id, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id <= 3 AND l.kind = 'cr' FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|bal|  id| amt
+--+---+----+----
+ 1| 10| 400| 400
+ 1| 10| 800| 800
+ 1| 10|1200|1200
+ 1| 10|1600|1600
+ 1| 10|2000|2000
+ 2| 21|   1|   1
+ 2| 21| 401| 401
+ 2| 21| 801| 801
+ 2| 21|1201|1201
+ 2| 21|1601|1601
+ 3| 30|   2|   2
+ 3| 30| 402| 402
+ 3| 30| 802| 802
+ 3| 30|1202|1202
+ 3| 30|1602|1602
+(15 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2xl s1l5 s2l s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xl: EXPLAIN (COSTS OFF) SELECT a.id, l.id, l.acct, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id = 5 FOR UPDATE OF l;
+QUERY PLAN                                     
+-----------------------------------------------
+LockRows                                       
+  ->  Nested Loop                              
+        ->  Seq Scan on nra a                  
+              Filter: (id = 5)                 
+        ->  Bitmap Heap Scan on nrl l          
+              Recheck Cond: (acct = 5)         
+              ->  Bitmap Index Scan on nrl_acct
+                    Index Cond: (acct = 5)     
+(8 rows)
+
+step s1l5: UPDATE nrl SET amt = amt + 5000 WHERE id = 404;
+step s2l: SELECT a.id, l.id, l.acct, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id = 5 FOR UPDATE OF l; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|  id|acct| amt
+--+----+----+----
+ 5|   4|   5|   4
+ 5| 204|   5| 204
+ 5| 404|   5|5404
+ 5| 604|   5| 604
+ 5| 804|   5| 804
+ 5|1004|   5|1004
+ 5|1204|   5|1204
+ 5|1404|   5|1404
+ 5|1604|   5|1604
+ 5|1804|   5|1804
+(10 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s1l5m s2l s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l5m: UPDATE nrl SET acct = 6 WHERE id = 404;
+step s2l: SELECT a.id, l.id, l.acct, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id = 5 FOR UPDATE OF l; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|  id|acct| amt
+--+----+----+----
+ 5|   4|   5|   4
+ 5| 204|   5| 204
+ 5| 604|   5| 604
+ 5| 804|   5| 804
+ 5|1004|   5|1004
+ 5|1204|   5|1204
+ 5|1404|   5|1404
+ 5|1604|   5|1604
+ 5|1804|   5|1804
+(9 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s1l5d s2l s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l5d: DELETE FROM nrl WHERE id = 804;
+step s2l: SELECT a.id, l.id, l.acct, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id = 5 FOR UPDATE OF l; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|  id|acct| amt
+--+----+----+----
+ 5|   4|   5|   4
+ 5| 204|   5| 204
+ 5| 404|   5| 404
+ 5| 604|   5| 604
+ 5|1004|   5|1004
+ 5|1204|   5|1204
+ 5|1404|   5|1404
+ 5|1604|   5|1604
+ 5|1804|   5|1804
+(9 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2nos s2b s2xl s1l5 s2l s1c s2c
+step s2nos: SET enable_seqscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xl: EXPLAIN (COSTS OFF) SELECT a.id, l.id, l.acct, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id = 5 FOR UPDATE OF l;
+QUERY PLAN                                     
+-----------------------------------------------
+LockRows                                       
+  ->  Nested Loop                              
+        ->  Index Scan using nra_pkey on nra a 
+              Index Cond: (id = 5)             
+        ->  Bitmap Heap Scan on nrl l          
+              Recheck Cond: (acct = 5)         
+              ->  Bitmap Index Scan on nrl_acct
+                    Index Cond: (acct = 5)     
+(8 rows)
+
+step s1l5: UPDATE nrl SET amt = amt + 5000 WHERE id = 404;
+step s2l: SELECT a.id, l.id, l.acct, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id = 5 FOR UPDATE OF l; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|  id|acct| amt
+--+----+----+----
+ 5|   4|   5|   4
+ 5| 204|   5| 204
+ 5| 404|   5|5404
+ 5| 604|   5| 604
+ 5| 804|   5| 804
+ 5|1004|   5|1004
+ 5|1204|   5|1204
+ 5|1404|   5|1404
+ 5|1604|   5|1604
+ 5|1804|   5|1804
+(10 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2nos s2b s1l5m s2l s1c s2c
+step s2nos: SET enable_seqscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l5m: UPDATE nrl SET acct = 6 WHERE id = 404;
+step s2l: SELECT a.id, l.id, l.acct, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id = 5 FOR UPDATE OF l; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|  id|acct| amt
+--+----+----+----
+ 5|   4|   5|   4
+ 5| 204|   5| 204
+ 5| 604|   5| 604
+ 5| 804|   5| 804
+ 5|1004|   5|1004
+ 5|1204|   5|1204
+ 5|1404|   5|1404
+ 5|1604|   5|1604
+ 5|1804|   5|1804
+(9 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2ix s2b s2xl s1l5m s2l s1c s2c
+step s2ix: SET enable_seqscan = off; SET enable_bitmapscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xl: EXPLAIN (COSTS OFF) SELECT a.id, l.id, l.acct, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id = 5 FOR UPDATE OF l;
+QUERY PLAN                                    
+----------------------------------------------
+LockRows                                      
+  ->  Nested Loop                             
+        ->  Index Scan using nra_pkey on nra a
+              Index Cond: (id = 5)            
+        ->  Index Scan using nrl_acct on nrl l
+              Index Cond: (acct = 5)          
+(6 rows)
+
+step s1l5m: UPDATE nrl SET acct = 6 WHERE id = 404;
+step s2l: SELECT a.id, l.id, l.acct, l.amt FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id = 5 FOR UPDATE OF l; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|  id|acct| amt
+--+----+----+----
+ 5|   4|   5|   4
+ 5| 204|   5| 204
+ 5| 604|   5| 604
+ 5| 804|   5| 804
+ 5|1004|   5|1004
+ 5|1204|   5|1204
+ 5|1404|   5|1404
+ 5|1604|   5|1604
+ 5|1804|   5|1804
+(9 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2xs s1a7 s2s s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xs: EXPLAIN (COSTS OFF) SELECT a.id, a.bal, l.id, l.acct FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id IN (7, 8) ORDER BY l.id FOR UPDATE;
+QUERY PLAN                                                 
+-----------------------------------------------------------
+LockRows                                                   
+  ->  Sort                                                 
+        Sort Key: l.id                                     
+        ->  Nested Loop                                    
+              ->  Seq Scan on nra a                        
+                    Filter: (id = ANY ('{7,8}'::integer[]))
+              ->  Bitmap Heap Scan on nrl l                
+                    Recheck Cond: (a.id = acct)            
+                    ->  Bitmap Index Scan on nrl_acct      
+                          Index Cond: (acct = a.id)        
+(10 rows)
+
+step s1a7: UPDATE nra SET bal = bal + 1 WHERE id = 7;
+step s2s: SELECT a.id, a.bal, l.id, l.acct FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id IN (7, 8) ORDER BY l.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|bal|  id|acct
+--+---+----+----
+ 7| 71|   6|   7
+ 8| 80|   7|   8
+ 7| 71| 206|   7
+ 8| 80| 207|   8
+ 7| 71| 406|   7
+ 8| 80| 407|   8
+ 7| 71| 606|   7
+ 8| 80| 607|   8
+ 7| 71| 806|   7
+ 8| 80| 807|   8
+ 7| 71|1006|   7
+ 8| 80|1007|   8
+ 7| 71|1206|   7
+ 8| 80|1207|   8
+ 7| 71|1406|   7
+ 8| 80|1407|   8
+ 7| 71|1606|   7
+ 8| 80|1607|   8
+ 7| 71|1806|   7
+ 8| 80|1807|   8
+(20 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s1l8m s2s s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l8m: UPDATE nrl SET acct = 9 WHERE id = 407;
+step s2s: SELECT a.id, a.bal, l.id, l.acct FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id IN (7, 8) ORDER BY l.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|bal|  id|acct
+--+---+----+----
+ 7| 70|   6|   7
+ 8| 80|   7|   8
+ 7| 70| 206|   7
+ 8| 80| 207|   8
+ 7| 70| 406|   7
+ 7| 70| 606|   7
+ 8| 80| 607|   8
+ 7| 70| 806|   7
+ 8| 80| 807|   8
+ 7| 70|1006|   7
+ 8| 80|1007|   8
+ 7| 70|1206|   7
+ 8| 80|1207|   8
+ 7| 70|1406|   7
+ 8| 80|1407|   8
+ 7| 70|1606|   7
+ 8| 80|1607|   8
+ 7| 70|1806|   7
+ 8| 80|1807|   8
+(19 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2nos s2b s2xs s1l8m s2s s1c s2c
+step s2nos: SET enable_seqscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xs: EXPLAIN (COSTS OFF) SELECT a.id, a.bal, l.id, l.acct FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id IN (7, 8) ORDER BY l.id FOR UPDATE;
+QUERY PLAN                                                     
+---------------------------------------------------------------
+LockRows                                                       
+  ->  Sort                                                     
+        Sort Key: l.id                                         
+        ->  Nested Loop                                        
+              ->  Index Scan using nra_pkey on nra a           
+                    Index Cond: (id = ANY ('{7,8}'::integer[]))
+              ->  Bitmap Heap Scan on nrl l                    
+                    Recheck Cond: (a.id = acct)                
+                    ->  Bitmap Index Scan on nrl_acct          
+                          Index Cond: (acct = a.id)            
+(10 rows)
+
+step s1l8m: UPDATE nrl SET acct = 9 WHERE id = 407;
+step s2s: SELECT a.id, a.bal, l.id, l.acct FROM nra a JOIN nrl l ON l.acct = a.id WHERE a.id IN (7, 8) ORDER BY l.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|bal|  id|acct
+--+---+----+----
+ 7| 70|   6|   7
+ 8| 80|   7|   8
+ 7| 70| 206|   7
+ 8| 80| 207|   8
+ 7| 70| 406|   7
+ 7| 70| 606|   7
+ 8| 80| 607|   8
+ 7| 70| 806|   7
+ 8| 80| 807|   8
+ 7| 70|1006|   7
+ 8| 80|1007|   8
+ 7| 70|1206|   7
+ 8| 80|1207|   8
+ 7| 70|1406|   7
+ 8| 80|1407|   8
+ 7| 70|1606|   7
+ 8| 80|1607|   8
+ 7| 70|1806|   7
+ 8| 80|1807|   8
+(19 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2xt s1l2t s2t s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xt: EXPLAIN (COSTS OFF) SELECT a.id, l.id, l.amt, c.id FROM nra a JOIN nrl l ON l.acct = a.id JOIN nrc c ON c.l_id = l.id WHERE a.id <= 3 FOR UPDATE OF l;
+QUERY PLAN                                           
+-----------------------------------------------------
+LockRows                                             
+  ->  Nested Loop                                    
+        ->  Nested Loop                              
+              ->  Seq Scan on nra a                  
+                    Filter: (id <= 3)                
+              ->  Bitmap Heap Scan on nrl l          
+                    Recheck Cond: (a.id = acct)      
+                    ->  Bitmap Index Scan on nrl_acct
+                          Index Cond: (acct = a.id)  
+        ->  Index Scan using nrc_l on nrc c          
+              Index Cond: (l_id = l.id)              
+(11 rows)
+
+step s1l2t: UPDATE nrl SET amt = amt + 5000 WHERE id = 201;
+step s2t: SELECT a.id, l.id, l.amt, c.id FROM nra a JOIN nrl l ON l.acct = a.id JOIN nrc c ON c.l_id = l.id WHERE a.id <= 3 FOR UPDATE OF l; <waiting ...>
+step s1c: COMMIT;
+step s2t: <... completed>
+id|  id| amt| id
+--+----+----+---
+ 1| 600| 600|200
+ 1|1200|1200|400
+ 1|1800|1800|600
+ 2| 201|5201| 67
+ 2| 801| 801|267
+ 2|1401|1401|467
+ 3| 402| 402|134
+ 3|1002|1002|334
+ 3|1602|1602|534
+(9 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s1c3 s2ta s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1c3: UPDATE nrc SET l_id = 7 WHERE id = 134;
+step s2ta: SELECT a.id, l.id, c.id, c.l_id FROM nra a JOIN nrl l ON l.acct = a.id JOIN nrc c ON c.l_id = l.id WHERE a.id <= 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2ta: <... completed>
+id|  id| id|l_id
+--+----+---+----
+ 1| 600|200| 600
+ 1|1200|400|1200
+ 1|1800|600|1800
+ 2| 201| 67| 201
+ 2| 801|267| 801
+ 2|1401|467|1401
+ 3|1002|334|1002
+ 3|1602|534|1602
+(8 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2nos s2b s2xv s1a2 s2v s1c s2c
+step s2nos: SET enable_seqscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xv: EXPLAIN (COSTS OFF) SELECT a.id, a.bal FROM nra a JOIN (VALUES (2), (5), (9)) v(k) ON v.k = a.id FOR UPDATE OF a;
+QUERY PLAN                                         
+---------------------------------------------------
+LockRows                                           
+  ->  Nested Loop                                  
+        ->  Values Scan on "*VALUES*"              
+        ->  Index Scan using nra_pkey on nra a     
+              Index Cond: (id = "*VALUES*".column1)
+(5 rows)
+
+step s1a2: UPDATE nra SET bal = bal + 1 WHERE id = 2;
+step s2v: SELECT a.id, a.bal FROM nra a JOIN (VALUES (2), (5), (9)) v(k) ON v.k = a.id FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+id|bal
+--+---
+ 2| 21
+ 5| 50
+ 9| 90
+(3 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2nos s2b s1a2k s2v s1c s2c
+step s2nos: SET enable_seqscan = off;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1a2k: UPDATE nra SET id = id + 1000 WHERE id = 2;
+step s2v: SELECT a.id, a.bal FROM nra a JOIN (VALUES (2), (5), (9)) v(k) ON v.k = a.id FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+id|bal
+--+---
+ 5| 50
+ 9| 90
+(2 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress

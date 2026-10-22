@@ -1,0 +1,6 @@
+path	crates/backend/access/pgrcolumnar/pgrc_read/src/streams.rs
+growth	std::vec::Vec::push	4
+method	std::clone::Clone::clone	1
+method	std::string::ToString::to_string	1
+method	std::vec::Vec::with_capacity	4
+type	std::vec::Vec	6

@@ -1,0 +1,9 @@
+-- regress-full-case-014
+-- SELECT CASE (CASE vol('bar') WHEN 'foo' THEN 'it was foo!' WHEN vol(null) THEN 'null input' WHEN 'bar' THEN 'it was bar!' END ) WHEN 'it was foo!' THEN 'foo recognized' WHEN 'it was bar!' THEN 'bar recognized' ELSE 'unrecognized' END;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=case[case[fn25380(c25:'bar')](when op98(T_CaseTestExpr, c25:'foo') then c25:'it was foo!', when op98(T_CaseTestExpr, fn25380(c25:null)) then c25:'null input', when op98(T_CaseTestExpr, c25:'bar') then c25:'it was bar!') else c25:null](when op98(T_CaseTestExpr, c25:'it was foo!') then c25:'foo recognized', when op98(T_CaseTestExpr, c25:'it was bar!') then c25:'bar recognized') else c25:'unrecognized')
+  outs 1=vl:stmt/imm
+mapped: Result

@@ -4,6 +4,28 @@ use mcx::MemoryContext;
 use types_fmgr::FmgrInfo;
 use types_nodes::Node;
 
+#[test]
+fn small_bound_sort_comparison_order_and_error() {
+    let mut items = vec![1, 2];
+    let error = try_sort_by(&mut items, |a, b| {
+        Err(Box::new(PgError::error(format!(
+            "bound comparison: {a} versus {b}"
+        ))))
+    })
+    .unwrap_err();
+    assert_eq!(error.message(), "bound comparison: 1 versus 2");
+
+    let mut items = vec![3, 1, 2];
+    let mut calls = Vec::new();
+    try_sort_by(&mut items, |a, b| {
+        calls.push((*a, *b));
+        Ok(a - b)
+    })
+    .unwrap();
+    assert_eq!(items, [1, 2, 3]);
+    assert_eq!(calls, [(3, 1), (3, 2), (1, 2)]);
+}
+
 fn static_mcx() -> Mcx<'static> {
     Box::leak(Box::new(MemoryContext::new("partbounds test"))).mcx()
 }
@@ -40,6 +62,7 @@ fn test_key(strategy: u8) -> PartitionKeyData {
         parttypbyval,
         parttypalign,
         parttypcoll: one_oid(0),
+        cmp_scratch: RefCell::new(None),
         _ctx: None,
     }
 }

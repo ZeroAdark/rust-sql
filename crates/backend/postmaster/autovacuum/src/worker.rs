@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::sync::atomic::Ordering::Relaxed;
 
 use init_small::globals as g;
-use mcx::{Mcx, MemoryContext, PgVec};
+use mcx::{Mcx, MemoryContext, PgFxHashMap, PgVec};
 use tableam_vocab::{
     VacOptValue, VacuumParams, VACOPT_ANALYZE, VACOPT_PROCESS_MAIN, VACOPT_SKIP_DATABASE_STATS,
     VACOPT_SKIP_LOCKED, VACOPT_VACUUM,
@@ -15,7 +15,7 @@ use types_core::{
     BackendType, FirstNormalTransactionId, InvalidOid, MultiXactId, Oid, OidIsValid,
     ProcessingMode, TransactionId, NAMESPACE_RELATION_ID, RELATION_RELATION_ID,
 };
-use types_error::{PgError, PgResult, DEBUG1, DEBUG3, ERROR, FATAL, LOG, WARNING};
+use types_error::{PgError, PgResult, DEBUG1, DEBUG3, FATAL, LOG, WARNING};
 use types_nodes::parsenodes::{DropBehavior, VacuumRelation};
 use types_nodes::{Node, NodeList};
 use types_rel::lock::{AccessShareLock, AccessExclusiveLock};
@@ -67,10 +67,7 @@ pub(crate) fn recover_error_state(err: &PgError) {
     g::SetCritSectionCount(0);
 }
 
-pub(crate) fn pg_error_from_panic(
-    payload: Box<dyn std::any::Any + Send>,
-    fallback_msg: &str,
-) -> PgError {
+pub(crate) fn pg_error_from_panic(payload: Box<dyn std::any::Any + Send>) -> PgError {
     if payload.is::<ipc::ProcExitThread>()
         || payload.is::<types_error::PanicExitThread>()
         || payload.is::<ipc::KilledBySignal>()
@@ -79,14 +76,7 @@ pub(crate) fn pg_error_from_panic(
     }
     match ::types_error::pg_error_from_panic(payload) {
         Ok(e) => e,
-        Err(payload) => {
-            let msg = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_else(|| fallback_msg.to_string());
-            PgError::new(ERROR, msg)
-        }
+        Err(payload) => elog::abort_on_plain_panic(payload),
     }
 }
 
@@ -127,7 +117,7 @@ pub fn AutoVacWorkerMain(startup_data: &StartupData) -> ! {
     // whole cluster (postgres.c run_one_iteration precedent).
     // unwind-ok: stmt-boundary
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(worker_body))
-        .unwrap_or_else(|payload| Err(Box::new(pg_error_from_panic(payload, "autovacuum worker panicked"))))
+        .unwrap_or_else(|payload| Err(Box::new(pg_error_from_panic(payload))))
     {
         Ok(()) => {}
         Err(e) => {
@@ -356,10 +346,24 @@ fn fetch_av_class_row(mcx: Mcx<'_>, relid: Oid) -> PgResult<Option<AvClassRow>> 
     Ok(row)
 }
 
-struct AvRelation {
-    ar_toastrelid: Oid,
-    ar_hasrelopts: bool,
-    ar_reloptions: AutoVacOpts,
+// autovacuum.c:1969 "TOAST to main relid map": a hash keyed by toast relid
+// (O(1) per lookup); the first main relation naming a toast relid wins.
+struct ToastMap<'m> {
+    map: PgFxHashMap<'m, Oid, Option<AutoVacOpts>>,
+}
+
+impl<'m> ToastMap<'m> {
+    fn new(mcx: Mcx<'m>) -> Self {
+        ToastMap { map: PgFxHashMap::with_hasher_in(Default::default(), mcx) }
+    }
+
+    fn enter(&mut self, toastrelid: Oid, main_relopts: Option<AutoVacOpts>) {
+        self.map.entry(toastrelid).or_insert(main_relopts);
+    }
+
+    fn main_relopts(&self, toastrelid: Oid) -> Option<AutoVacOpts> {
+        self.map.get(&toastrelid).copied().flatten()
+    }
 }
 
 struct AutovacTable {
@@ -400,7 +404,7 @@ pub fn do_autovacuum() -> PgResult<()> {
 
     let mut table_oids: PgVec<'_, Oid> = PgVec::new_in(mcx);
     let mut orphan_oids: PgVec<'_, Oid> = PgVec::new_in(mcx);
-    let mut table_toast_map: PgVec<'_, AvRelation> = PgVec::new_in(mcx);
+    let mut table_toast_map = ToastMap::new(mcx);
 
     // Pass 1: relations and matviews; collect toast->main reloption mapping.
     {
@@ -435,14 +439,8 @@ pub fn do_autovacuum() -> PgResult<()> {
                 table_oids.push(row.oid);
             }
 
-            if OidIsValid(row.reltoastrelid)
-                && !table_toast_map.iter().any(|h| h.ar_toastrelid == row.reltoastrelid)
-            {
-                table_toast_map.push(AvRelation {
-                    ar_toastrelid: row.reltoastrelid,
-                    ar_hasrelopts: row.avopts.is_some(),
-                    ar_reloptions: row.avopts.unwrap_or(EMPTY_AV_OPTS),
-                });
+            if OidIsValid(row.reltoastrelid) {
+                table_toast_map.enter(row.reltoastrelid, row.avopts);
             }
         }
         genam::systable_endscan(smcx, scan)?;
@@ -465,12 +463,7 @@ pub fn do_autovacuum() -> PgResult<()> {
             }
             let mut avopts = row.avopts;
             if avopts.is_none() {
-                if let Some(h) = table_toast_map
-                    .iter()
-                    .find(|h| h.ar_toastrelid == row.oid && h.ar_hasrelopts)
-                {
-                    avopts = Some(h.ar_reloptions);
-                }
+                avopts = table_toast_map.main_relopts(row.oid);
             }
             let tabentry = pgstat::pgstat_fetch_stat_tabentry_ext(row.relisshared, row.oid);
             let (dovacuum, _doanalyze, _wraparound) = relation_needs_vacanalyze(
@@ -651,7 +644,7 @@ pub fn do_autovacuum() -> PgResult<()> {
                 }
                 autovacuum_do_vac_analyze(tmcx, &tab, bstrategy.clone(), &nspname, &relname)
             }))
-            .unwrap_or_else(|payload| Err(Box::new(pg_error_from_panic(payload, "autovacuum worker panicked"))));
+            .unwrap_or_else(|payload| Err(Box::new(pg_error_from_panic(payload))));
             match vac_result {
                 Ok(()) => {
                     g::SetQueryCancelPending(false);
@@ -815,8 +808,6 @@ fn autovac_report_activity(tab: &AutovacTable, nspname: &str, relname: &str) {
     }
     activity.push_str(&suffix[..end]);
 
-    // Set statement_timestamp() to current time for pg_stat_activity
-    // (autovacuum.c:3238): query_start advances per relation.
     xact::SetCurrentStatementStartTimestamp();
 
     backend_status_seams::pgstat_report_activity::call(
@@ -879,7 +870,7 @@ fn perform_work_item(workitem: &shmem::WorkItem) -> PgResult<()> {
         Ok(())
     }))
     .unwrap_or_else(|payload| {
-        Err(Box::new(pg_error_from_panic(payload, "autovacuum worker panicked")))
+        Err(Box::new(pg_error_from_panic(payload)))
     });
     if let Err(mut err) = result {
         // C's PG_CATCH: adorn, report, abort, restart, continue. FATAL never
@@ -907,7 +898,6 @@ fn perform_work_item(workitem: &shmem::WorkItem) -> PgResult<()> {
 fn autovac_report_workitem(workitem: &shmem::WorkItem, nspname: &str, relname: &str) {
     let activity = workitem_activity_string(workitem, nspname, relname);
 
-    // Set statement_timestamp() to current time for pg_stat_activity.
     xact::SetCurrentStatementStartTimestamp();
 
     backend_status_seams::pgstat_report_activity::call(
@@ -946,7 +936,7 @@ fn workitem_activity_string(
 fn table_recheck_autovac(
     mcx: Mcx<'_>,
     relid: Oid,
-    table_toast_map: &[AvRelation],
+    table_toast_map: &ToastMap<'_>,
     effective_multixact_freeze_max_age: i32,
 ) -> PgResult<Option<AutovacTable>> {
     let Some(row) = fetch_av_class_row(mcx, relid)? else {
@@ -955,12 +945,7 @@ fn table_recheck_autovac(
 
     let mut avopts = row.avopts;
     if avopts.is_none() && row.relkind == RELKIND_TOASTVALUE {
-        if let Some(h) = table_toast_map
-            .iter()
-            .find(|h| h.ar_toastrelid == relid && h.ar_hasrelopts)
-        {
-            avopts = Some(h.ar_reloptions);
-        }
+        avopts = table_toast_map.main_relopts(relid);
     }
 
     let tabentry = pgstat::pgstat_fetch_stat_tabentry_ext(row.relisshared, relid);
@@ -1234,6 +1219,27 @@ fn loc(routine: &'static str) -> types_error::ErrorLocation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toast_map_keeps_first_main_relation_and_scales() {
+        let cx = MemoryContext::new("toast map");
+        let mut m = ToastMap::new(cx.mcx());
+        let opts = AutoVacOpts { enabled: false, ..EMPTY_AV_OPTS };
+        m.enter(10, Some(opts));
+        m.enter(10, None);
+        m.enter(11, None);
+        assert!(m.main_relopts(10).is_some_and(|o| !o.enabled));
+        assert!(m.main_relopts(11).is_none());
+        assert!(m.main_relopts(12).is_none());
+        let start = std::time::Instant::now();
+        for oid in 100_000..300_000 {
+            m.enter(oid, None);
+        }
+        for oid in 100_000..300_000 {
+            assert!(m.main_relopts(oid).is_none());
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
 
     fn row(reltuples: f32, relpages: i32, relallfrozen: i32) -> AvClassRow {
         AvClassRow {

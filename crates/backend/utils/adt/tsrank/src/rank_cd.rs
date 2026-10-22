@@ -170,13 +170,19 @@ fn cover(
     }
 }
 
+const DOCREPRESENTATION_SIZE: usize = 24;
+
 fn get_docrep<'mcx>(
     mcx: Mcx<'mcx>,
     txt: TsVec<'_>,
     qr: &QueryRep<'_, '_>,
 ) -> PgResult<Option<PgVec<'mcx, DocRep<'mcx>>>> {
     let q = qr.q;
-    let mut raw: PgVec<(WordEntryPos, usize, usize)> = PgVec::new_in(mcx);
+    // raw mirrors C's doc array (24-byte DocRepresentation): allocated at
+    // 4 * query size and doubled by repalloc, so MaxAllocSize trips where C's does.
+    let mut c_len = q.size() * 4;
+    mcx::check_alloc_size(DOCREPRESENTATION_SIZE * c_len)?;
+    let mut raw: PgVec<(WordEntryPos, usize, usize)> = mcx::vec_with_capacity_in(mcx, c_len)?;
 
     for i in 0..q.size() {
         let Item::Val(curoperand) = q.item(i) else { continue };
@@ -187,6 +193,14 @@ fn get_docrep<'mcx>(
             let e = txt.entry(entry);
             if !e.haspos() {
                 continue;
+            }
+            let dimt = txt.positions(e).len();
+            if raw.len() + dimt >= c_len {
+                while raw.len() + dimt >= c_len {
+                    c_len *= 2;
+                }
+                mcx::check_alloc_size(DOCREPRESENTATION_SIZE * c_len)?;
+                raw.try_reserve_exact(c_len - raw.len()).map_err(|_| mcx.oom(c_len))?;
             }
             for &p in txt.positions(e) {
                 if curoperand.weight == 0
@@ -209,8 +223,11 @@ fn get_docrep<'mcx>(
             .then(a.1.cmp(&b.1))
     });
 
+    // C joins the items in place; reserve one DocRep per (pos, entry) group.
+    let groups = 1 + raw.windows(2).filter(|w| w[0].0 != w[1].0 || w[0].1 != w[1].1).count();
+    mcx::check_alloc_size(groups.saturating_mul(core::mem::size_of::<DocRep>()))?;
     let mut doc: PgVec<DocRep> = PgVec::new_in(mcx);
-    doc.try_reserve_exact(raw.len()).map_err(|_| mcx.oom(raw.len()))?;
+    doc.try_reserve_exact(groups).map_err(|_| mcx.oom(groups))?;
     let mut cur: Option<DocRep> = None;
     for (p, entry, item) in raw.iter().copied() {
         match cur.as_mut() {

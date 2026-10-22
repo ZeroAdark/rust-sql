@@ -134,7 +134,7 @@ fn deconstruct_text_array<'mcx>(
     let img = detoast::detoast_attr(mcx, varlena_image(d))?;
     let (elems, nulls) =
         arrayfuncs::construct::deconstruct_array_builtin(mcx, &img, TEXTOID, true)?;
-    let mut out = Vec::with_capacity(elems.len());
+    let mut out = ::mcx::std_vec_with_capacity("catalog", elems.len())?;
     for (i, elem) in elems.iter().enumerate() {
         if nulls[i] {
             out.push(None);
@@ -156,7 +156,7 @@ fn null_element_err() -> Box<PgError> {
 // textarray_to_strvaluelist (objectaddress.c).
 fn textarray_to_strvaluelist<'mcx>(mcx: Mcx<'mcx>, d: Datum) -> PgResult<Vec<Node<'mcx>>> {
     let elems = deconstruct_text_array(mcx, d)?;
-    let mut out = Vec::with_capacity(elems.len());
+    let mut out = ::mcx::std_vec_with_capacity("catalog", elems.len())?;
     for elem in elems {
         let Some(s) = elem else {
             return Err(null_element_err().into());
@@ -176,7 +176,7 @@ fn strlist_to_textarray<'mcx>(mcx: Mcx<'mcx>, items: &[String]) -> PgResult<Datu
         let img = arrayfuncs::construct_empty_array(mcx, TEXTOID)?;
         return Ok(Datum::from_usize(img.leak().as_ptr() as usize));
     }
-    let mut elems: Vec<Datum> = Vec::with_capacity(items.len());
+    let mut elems: Vec<Datum> = ::mcx::std_vec_with_capacity("catalog", items.len())?;
     for s in items {
         elems.push(text_datum(mcx, s)?);
     }
@@ -430,7 +430,7 @@ fn fc_pg_get_object_address(
             | OBJECT_AMPROC
     ) {
         let elems = deconstruct_text_array(mcx, argsarr)?;
-        let mut out = Vec::with_capacity(elems.len());
+        let mut out = ::mcx::std_vec_with_capacity("catalog", elems.len())?;
         for elem in elems {
             let Some(s) = elem else {
                 return Err(null_element_err().into());
@@ -517,7 +517,7 @@ fn fc_pg_get_object_address(
             objnode = Some(list_node(mcx, &[name[0], args[0]])?);
         }
         OBJECT_DEFACL => {
-            let mut cells = Vec::with_capacity(name.len() + 1);
+            let mut cells = ::mcx::std_vec_with_capacity("catalog", name.len() + 1)?;
             cells.push(args[0]);
             cells.extend_from_slice(&name);
             objnode = Some(list_node(mcx, &cells)?);
@@ -589,11 +589,15 @@ fn acl_attr_image(
     tup: &types_tuple::HeapTupleData<'_>,
     attnum: i32,
     desc: &types_tuple::TupleDescData<'_>,
-) -> Option<Vec<u8>> {
+) -> PgResult<Option<Vec<u8>>> {
     let mut isnull = false;
     // SAFETY: attnum comes from the ObjectProperty row / pg_attribute layout.
     let d = unsafe { types_tuple::heap_getattr(tup, attnum, desc, &mut isnull) };
-    (!isnull).then(|| varlena_image(d).to_vec())
+    if isnull {
+        Ok(None)
+    } else {
+        Ok(Some(::mcx::std_vec_from_slice("objectaddress", varlena_image(d))?))
+    }
 }
 
 // pg_get_acl (objectaddress.c): NULL, never error, for nonexistent objects.
@@ -645,8 +649,11 @@ fn fc_pg_get_acl(
             None,
             &keys,
         )?;
-        let img = genam::systable_getnext(mcx, &mut scan)?
-            .and_then(|tup| acl_attr_image(tup, ANUM_PG_ATTRIBUTE_ATTACL, rel.descr()));
+        let tup = genam::systable_getnext(mcx, &mut scan)?;
+        let img = match tup {
+            Some(tup) => acl_attr_image(tup, ANUM_PG_ATTRIBUTE_ATTACL, rel.descr())?,
+            None => None,
+        };
         genam::systable_endscan(mcx, scan)?;
         rel.close(types_rel::AccessShareLock)?;
         img
@@ -654,6 +661,7 @@ fn fc_pg_get_acl(
         description::scan_one_row(mcx, catalog_id, prop.oid_index_oid, objid, |tup, desc| {
             acl_attr_image(tup, anum_acl, desc)
         })?
+        .transpose()?
         .flatten()
     };
 

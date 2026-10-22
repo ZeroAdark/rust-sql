@@ -1,0 +1,9 @@
+-- regress-full-random-003
+-- SELECT ks_test_uniform_random() OR ks_test_uniform_random() OR ks_test_uniform_random() AS uniform;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=or(fn26167(), fn26167(), fn26167()))
+  outs 1=w1:val
+mapped: Result

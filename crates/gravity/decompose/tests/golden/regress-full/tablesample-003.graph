@@ -1,0 +1,10 @@
+-- regress-full-tablesample-003
+-- SELECT id FROM test_tablesample TABLESAMPLE SYSTEM (50) REPEATABLE (NULL);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=Host end=sink
+  nodes n0@0
+  source sample rel=28884 rti=1 am=heap method=system handler=3314 args=(c700:1112014848) repeatable=c701:null
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  outs 1=w8:val
+mapped: SampleScan

@@ -1,0 +1,16 @@
+# ORDER BY + LIMIT cutting a tie group: another member of the cut group
+sql: SELECT g, x FROM t ORDER BY g LIMIT 2;
+cols: g	x
+class: limited 1
+verdict: match
+[pg]
+1	a
+1	b
+[pg_full]
+1	a
+1	b
+1	c
+2	d
+[got]
+1	c
+1	a

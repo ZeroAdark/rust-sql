@@ -1,0 +1,173 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pd s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE gt SET x = x + gb.v FROM ga, gb WHERE gb.ga_id = ga.id AND gt.gb_id = gb.id AND ga.w = 1;
+QUERY PLAN                                   
+---------------------------------------------
+Update on gt                                 
+  ->  Nested Loop                            
+        ->  Nested Loop                      
+              Join Filter: (ga.id = gb.ga_id)
+              ->  Seq Scan on ga             
+                    Filter: (w = 1)          
+              ->  Seq Scan on gb             
+        ->  Index Scan using gt_gb on gt     
+              Index Cond: (gb_id = gb.id)    
+(9 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM gt USING ga, gb WHERE gb.ga_id = ga.id AND gt.gb_id = gb.id AND ga.w = 1;
+QUERY PLAN                                   
+---------------------------------------------
+Delete on gt                                 
+  ->  Nested Loop                            
+        ->  Nested Loop                      
+              Join Filter: (ga.id = gb.ga_id)
+              ->  Seq Scan on ga             
+                    Filter: (w = 1)          
+              ->  Seq Scan on gb             
+        ->  Index Scan using gt_gb on gt     
+              Index Cond: (gb_id = gb.id)    
+(9 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1k s1d s1b s1a s2u s1c s2c s3sel s3row
+step s1x: UPDATE gt SET x = x + 1000 WHERE id = 405;
+step s1k: UPDATE gt SET gb_id = 5 WHERE id = 805;
+step s1d: DELETE FROM gt WHERE id = 1205;
+step s1b: UPDATE gb SET v = v + 100 WHERE id = 6;
+step s1a: UPDATE ga SET w = 2 WHERE id = 1;
+step s2u: UPDATE gt SET x = x + gb.v FROM ga, gb WHERE gb.ga_id = ga.id AND gt.gb_id = gb.id AND ga.w = 1 RETURNING gt.id, gt.gb_id, gt.x, gb.v, ga.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+  id|gb_id|   x|  v|id
+----+-----+----+---+--
+   5|    6|  60| 60| 1
+ 405|    6|1060| 60| 1
+1605|    6|  60| 60| 1
+  11|   12| 120|120| 1
+ 411|   12| 120|120| 1
+ 811|   12| 120|120| 1
+1211|   12| 120|120| 1
+1611|   12| 120|120| 1
+   2|    3|  30| 30| 4
+ 402|    3|  30| 30| 4
+ 802|    3|  30| 30| 4
+1202|    3|  30| 30| 4
+1602|    3|  30| 30| 4
+   8|    9|  90| 90| 4
+ 408|    9|  90| 90| 4
+ 808|    9|  90| 90| 4
+1208|    9|  90| 90| 4
+1608|    9|  90| 90| 4
+(18 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(gb_id), sum(x) FROM gt;
+count|   sum| sum
+-----+------+----
+ 1999|400993|2380
+(1 row)
+
+step s3row: SELECT id, gb_id, x FROM gt WHERE id IN (5, 405, 805, 1205, 1605, 2) ORDER BY id;
+  id|gb_id|   x
+----+-----+----
+   2|    3|  30
+   5|    6|  60
+ 405|    6|1060
+ 805|    5|   0
+1605|    6|  60
+(5 rows)
+
+
+starting permutation: s1x s1k s1d s2d s1c s2c s3sel s3row
+step s1x: UPDATE gt SET x = x + 1000 WHERE id = 405;
+step s1k: UPDATE gt SET gb_id = 5 WHERE id = 805;
+step s1d: DELETE FROM gt WHERE id = 1205;
+step s2d: DELETE FROM gt USING ga, gb WHERE gb.ga_id = ga.id AND gt.gb_id = gb.id AND ga.w = 1 RETURNING gt.id, gb.id, ga.id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+  id|id|id
+----+--+--
+   5| 6| 1
+ 405| 6| 1
+1605| 6| 1
+  11|12| 1
+ 411|12| 1
+ 811|12| 1
+1211|12| 1
+1611|12| 1
+   2| 3| 4
+ 402| 3| 4
+ 802| 3| 4
+1202| 3| 4
+1602| 3| 4
+   8| 9| 4
+ 408| 9| 4
+ 808| 9| 4
+1208| 9| 4
+1608| 9| 4
+(18 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(gb_id), sum(x) FROM gt;
+count|   sum|sum
+-----+------+---
+ 1981|400855|  0
+(1 row)
+
+step s3row: SELECT id, gb_id, x FROM gt WHERE id IN (5, 405, 805, 1205, 1605, 2) ORDER BY id;
+ id|gb_id|x
+---+-----+-
+805|    5|0
+(1 row)
+
+
+starting permutation: s2u s1x s2c s1c s3sel s3row
+step s2u: UPDATE gt SET x = x + gb.v FROM ga, gb WHERE gb.ga_id = ga.id AND gt.gb_id = gb.id AND ga.w = 1 RETURNING gt.id, gt.gb_id, gt.x, gb.v, ga.id;
+  id|gb_id|  x|  v|id
+----+-----+---+---+--
+   5|    6| 60| 60| 1
+ 405|    6| 60| 60| 1
+ 805|    6| 60| 60| 1
+1205|    6| 60| 60| 1
+1605|    6| 60| 60| 1
+  11|   12|120|120| 1
+ 411|   12|120|120| 1
+ 811|   12|120|120| 1
+1211|   12|120|120| 1
+1611|   12|120|120| 1
+   2|    3| 30| 30| 4
+ 402|    3| 30| 30| 4
+ 802|    3| 30| 30| 4
+1202|    3| 30| 30| 4
+1602|    3| 30| 30| 4
+   8|    9| 90| 90| 4
+ 408|    9| 90| 90| 4
+ 808|    9| 90| 90| 4
+1208|    9| 90| 90| 4
+1608|    9| 90| 90| 4
+(20 rows)
+
+step s1x: UPDATE gt SET x = x + 1000 WHERE id = 405; <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT count(*), sum(gb_id), sum(x) FROM gt;
+count|   sum| sum
+-----+------+----
+ 2000|401000|2500
+(1 row)
+
+step s3row: SELECT id, gb_id, x FROM gt WHERE id IN (5, 405, 805, 1205, 1605, 2) ORDER BY id;
+  id|gb_id|   x
+----+-----+----
+   2|    3|  30
+   5|    6|  60
+ 405|    6|1060
+ 805|    6|  60
+1205|    6|  60
+1605|    6|  60
+(6 rows)
+

@@ -1,0 +1,11 @@
+-- regress-full-privileges-042
+-- SELECT priv_testfunc4(true);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=605 end=sink
+  nodes n0@0
+  source range rel=27196 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter v1.2
+  project (1=relabel25(v1.1))
+  outs 1=vl:win/page
+mapped: SeqScan

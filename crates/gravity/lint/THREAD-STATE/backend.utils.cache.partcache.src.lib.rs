@@ -1,0 +1,1 @@
+backend/utils/cache/partcache/src/lib.rs	STATE	pgport	at:PartCacheRelCallback	leader	session envelope; partition keys per relid, dropped (all on InvalidOid) by the relcache callback PartCacheRelCallback; taken at session teardown

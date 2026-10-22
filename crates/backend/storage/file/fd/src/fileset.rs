@@ -16,8 +16,8 @@ use ::types_storage::File;
 use crate::vfd::{with_fd, FD_TEMP_FILE_LIMIT};
 use crate::temp::{
     GetTempTablespaces, PathNameCreateTemporaryDir, PathNameCreateTemporaryFile,
-    PathNameDeleteTemporaryDir, PathNameDeleteTemporaryFile, PathNameOpenTemporaryFile,
-    TempTablespacePath,
+    PathNameDeleteTemporaryDir, PathNameDeleteTemporaryFile, PathNameDeleteTemporaryFilesWith,
+    PathNameOpenTemporaryFile, TempTablespacePath,
 };
 
 const PG_TEMP_FILE_PREFIX: &str = "pgsql_tmp";
@@ -41,6 +41,7 @@ pub struct FileSetKey {
     number: u32,
     ntablespaces: usize,
     tablespaces: [Oid; FILESET_MAX_TABLESPACES],
+    for_life: bool,
 }
 
 impl FileSetKey {
@@ -69,19 +70,31 @@ impl FileSetKey {
     /// the per-tablespace directory on demand; errors on failure.
     pub fn create(&self, name: &str) -> PgResult<File> {
         let path = self.file_path(name);
-        let file = PathNameCreateTemporaryFile(&path, false)?;
-        if file.0 > 0 {
-            return Ok(file);
+        let mut file = PathNameCreateTemporaryFile(&path, false)?;
+        if file.0 <= 0 {
+            let tablespace = self.choose_tablespace(name);
+            PathNameCreateTemporaryDir(&TempTablespacePath(tablespace), &self.dir_path(tablespace))?;
+            file = PathNameCreateTemporaryFile(&path, true)?;
         }
-        // If we failed, see if we need to create the directory on demand.
-        let tablespace = self.choose_tablespace(name);
-        PathNameCreateTemporaryDir(&TempTablespacePath(tablespace), &self.dir_path(tablespace))?;
-        PathNameCreateTemporaryFile(&path, true)
+        if self.for_life {
+            crate::vfd::charge_for_life(file, true);
+        }
+        Ok(file)
     }
 
     /// `FileSetOpen` (fileset.c:123): File(<=0) when the file doesn't exist.
     pub fn open(&self, name: &str, mode: i32) -> PgResult<File> {
-        PathNameOpenTemporaryFile(&self.file_path(name), mode)
+        let file = PathNameOpenTemporaryFile(&self.file_path(name), mode)?;
+        if self.for_life {
+            // PathNameOpenTemporaryFile no longer charges a reopen (fd.c:1922);
+            // a writer reopening a file charged for its life (spillset's next
+            // epoch) must be, so the file takes its charge back.
+            if file.0 > 0 && mode & libc::O_RDWR != 0 {
+                with_fd(|fd| fd.vfd_cache[file.0 as usize].fdstate |= FD_TEMP_FILE_LIMIT);
+            }
+            crate::vfd::charge_for_life(file, false);
+        }
+        Ok(file)
     }
 
     /// `FileSetDelete` (fileset.c:136): true if the file existed.
@@ -98,6 +111,15 @@ impl FileSetKey {
             PathNameDeleteTemporaryDir(&self.dir_path(tblspc))?;
         }
         Ok(())
+    }
+
+    pub fn delete_files_with(&self, min_bytes: u64, fan: &dyn Fn(usize, &(dyn Fn(usize) + Sync))) -> PgResult<(usize, u64, bool)> {
+        let mut all = (0, 0, false);
+        for &tblspc in &self.tablespaces[..self.ntablespaces] {
+            let (n, bytes, fanned) = PathNameDeleteTemporaryFilesWith(&self.dir_path(tblspc), min_bytes, fan)?;
+            all = (all.0 + n, all.1 + bytes, all.2 || fanned);
+        }
+        Ok(all)
     }
 }
 
@@ -135,8 +157,15 @@ impl FileSet {
                     .expect("fetch_update closure never fails"),
                 ntablespaces,
                 tablespaces,
+                for_life: false,
             },
         })
+    }
+
+    pub fn init_charged_for_life() -> PgResult<FileSet> {
+        let mut fs = FileSet::init()?;
+        fs.key.for_life = true;
+        Ok(fs)
     }
 
     /// The set's identity, for BufFiles and other name-keyed users.
@@ -167,6 +196,14 @@ impl FileSet {
     /// `FileSetDeleteAll`.
     pub fn delete_all(&self) -> PgResult<()> {
         self.key.delete_all()
+    }
+
+    pub fn delete_files_with(&self, min_bytes: u64, fan: &dyn Fn(usize, &(dyn Fn(usize) + Sync))) -> PgResult<(usize, u64, bool)> {
+        if !crate::vfd::fd_tls_alive() {
+            return Ok((0, 0, false));
+        }
+        let _held = init_small::globals::hold_interrupts();
+        self.key.delete_files_with(min_bytes, fan)
     }
 
     // ---- pgrust-only base-name placement (sqe_spill's segment scheme) ----
@@ -210,13 +247,18 @@ impl Drop for FileSet {
     // tls-dtor: try_with-safe — a TLS-parked SpillSet/FileSet can be dropped
     // during TLS teardown, where delete_all's dir walk (AllocateDir -> FD.with)
     // aborts. Skip then; the startup pgsql_tmp reaper removes the leak.
+    // the walk runs with interrupts held. Its CHECK_FOR_INTERRUPTS
+    // (walkdir, the only one in fd.c) would otherwise raise a pending cancel,
+    // statement_timeout or terminate into this `let _`: ProcessInterrupts
+    // clears the flags before it raises, so the interrupt was lost (the
+    // statement ran on; a terminated backend lived). Held, the walk always
+    // completes and the interrupt stays pending for the caller's next check.
     fn drop(&mut self) {
         if crate::vfd::fd_tls_alive() {
             // dsm.c:813: the last-detach cleanup runs with interrupts held so
             // a cancel cannot abandon the remaining files.
-            init_small::globals::HoldInterrupts();
+            let _held = init_small::globals::hold_interrupts();
             let _ = self.delete_all();
-            init_small::globals::ResumeInterrupts();
         }
     }
 }

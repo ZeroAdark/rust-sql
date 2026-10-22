@@ -51,7 +51,7 @@
 //!     inside the group; every session_replication_role group RESETs it. No
 //!     group can leak state into a later group.
 //!   - Sections are VERBATIM (the PRNG only picks the shape), so each group
-//!     is byte-identical for a given seed. CI-PENDING: authored against
+//!     is byte-identical for a given seed. FLEET-PENDING: authored against
 //!     PG18 semantics; A/B identity + coverage delta are witnessed on the
 //!     CI cluster (docs/fuzzing/findings-triggers.md).
 

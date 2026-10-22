@@ -1,0 +1,52 @@
+Parsed test spec with 3 sessions
+
+starting permutation: i1 c1 i2 c2 read
+step i1: INSERT INTO v297x VALUES (100, 's1');
+step c1: COMMIT;
+step i2: INSERT INTO v297x VALUES (100, 's2');
+step c2: COMMIT;
+ERROR:  conflicting key value violates exclusion constraint "v297x_c"
+step read: SELECT k, s FROM v297x WHERE k >= 100 ORDER BY k, s;
+  k|s 
+---+--
+100|s1
+(1 row)
+
+
+starting permutation: i1 i2 r2 c1 read
+step i1: INSERT INTO v297x VALUES (100, 's1');
+step i2: INSERT INTO v297x VALUES (100, 's2');
+step r2: ROLLBACK;
+step c1: COMMIT;
+step read: SELECT k, s FROM v297x WHERE k >= 100 ORDER BY k, s;
+  k|s 
+---+--
+100|s1
+(1 row)
+
+
+starting permutation: i1 i2 r1 c2 read
+step i1: INSERT INTO v297x VALUES (100, 's1');
+step i2: INSERT INTO v297x VALUES (100, 's2');
+step r1: ROLLBACK;
+step c2: COMMIT;
+step read: SELECT k, s FROM v297x WHERE k >= 100 ORDER BY k, s;
+  k|s 
+---+--
+100|s2
+(1 row)
+
+
+starting permutation: i1 i2 imm2 r1 c2 read
+step i1: INSERT INTO v297x VALUES (100, 's1');
+step i2: INSERT INTO v297x VALUES (100, 's2');
+step imm2: SET CONSTRAINTS ALL IMMEDIATE; <waiting ...>
+step r1: ROLLBACK;
+step imm2: <... completed>
+step c2: COMMIT;
+step read: SELECT k, s FROM v297x WHERE k >= 100 ORDER BY k, s;
+  k|s 
+---+--
+100|s2
+(1 row)
+

@@ -1,3 +1,0 @@
-family	harness	wall_s
-aclcheck	proofs::spot_aclitemin_literals	20
-brin-minmax	proofs::eq_uuid_add_value_nulls	41

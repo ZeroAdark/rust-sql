@@ -1,0 +1,10 @@
+-- regress-full-oidjoins-002
+-- DO $doblock$ declare fk record; nkeys integer; cmd text; err record; begin for fk in select * from pg_get_catalog_foreign_keys() loop raise notice 'checking % % => % %', fk.fktable, fk.fkcols, fk.pktable, fk.pkcols; nkeys := array_length(fk.fkcols, 1); cmd := 'SELECT ctid'; for i in 1 .. nkeys loop cmd := cmd || ', ' || quote_ident(fk.fkcols[i]); end loop; if fk.is_array then cmd := cmd || ' FROM (SELECT ctid'; for i in 1 .. nkeys-1 loop cmd := cmd || ', ' || quote_ident(fk.fkcols[i]); end loop; cmd := cmd || ', unnest(' || quote_ident(fk.fkcols[nkeys]); cmd := cmd || ') as ' || quote_ident(fk.fkcols[nkeys]); cmd := cmd || ' FROM ' || fk.fktable::text || ') fk WHERE '; else cmd := cmd || ' FROM ' || fk.fktable::text || ' fk WHERE '; end if; if fk.is_opt then for i in 1 .. nkeys loop cmd := cmd || quote_ident(fk.fkcols[i]) || ' != 0 AND '; end loop; end if; cmd := cmd || 'NOT EXISTS(SELECT 1 FROM ' || fk.pktable::text || ' pk WHERE '; for i in 1 .. nkeys loop if i > 1 then cmd := cmd || ' AND '; end if; cmd := cmd || 'pk.' || quote_ident(fk.pkcols[i]); cmd := cmd || ' = fk.' || quote_ident(fk.fkcols[i]); end loop; cmd := cmd || ')'; -- raise notice 'cmd = %', cmd; for err in execute cmd loop raise warning 'FK VIOLATION IN %(%): %', fk.fktable, fk.fkcols, err; end loop; end loop; end $doblock$;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Other fn6159 cols=6 fn6159()]
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6)
+  outs 1=w4:val 2=vl:row 3=w4:val 4=vl:row 5=w1:val 6=w1:val
+mapped: FunctionScan

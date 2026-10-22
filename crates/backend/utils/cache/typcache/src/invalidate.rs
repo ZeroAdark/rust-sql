@@ -64,6 +64,7 @@ fn invalidate_composite_entry(
 
 pub(crate) fn TypeCacheRelCallback(_arg: Datum, relid: Oid) {
     with_state(|st| {
+        st.rel_invals = st.rel_invals.wrapping_add(1);
         let TypCacheState { type_cache, rel_id_to_type_id, first_domain_type_entry, .. } =
             st;
         if relid != InvalidOid {

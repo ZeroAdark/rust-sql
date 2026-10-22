@@ -18,3 +18,5 @@ types_tuple = { path = "../../_support/types/types_tuple" }
 pg_prng = { path = "../../common/pg_prng" }
 pg_clock = { path = "../../port/pg_clock" }
 dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
+init_small = { path = "../../backend/utils/init/init_small" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }

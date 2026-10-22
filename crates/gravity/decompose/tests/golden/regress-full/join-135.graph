@@ -1,0 +1,35 @@
+-- regress-full-join-135
+-- explain (costs off) select a.unique1, b.unique1, c.unique1, coalesce(b.twothousand, a.twothousand) from tenk1 a left join tenk1 b on b.thousand = a.unique1 left join tenk1 c on c.unique2 = coalesce(b.twothousand, a.twothousand) where a.unique2 < 10 and coalesce(b.twothousand, a.twothousand) = 44;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@1 n0@4
+  source index rel=16423 rti=1 am=heap index=19340
+    key att=2 op=97 value=c23:10
+    recheck (op97(v1.2, c23:10))
+    lanes Attr(1):byval8:w8:val Attr(9):byval8:w8:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  nest inner=n3 JOIN_LEFT raise-free params=($exec0=outer.1)
+  inner node=3 serial site=0 reason=IndexSource end=sink
+  nodes n4@0 n3@0
+  source bitmap rel=16423 rti=2 am=heap
+    bitmap index node=4 index=19342 rows=10
+      key att=8 op=96 value=$exec0
+    recheck (op96(v2.8, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(9):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9, 10=v2.10, 11=v2.11, 12=v2.12, 13=v2.13, 14=v2.14, 15=v2.15, 16=v2.16)
+  filter op96(coalesce(inner.9, outer.9), c23:44)
+  project (1=outer.1, 2=outer.9, 3=inner.1, 4=inner.9)
+  nest inner=n5 JOIN_LEFT invariant raise-free params=()
+  inner node=5 serial site=0 reason=IndexSource end=sink
+  nodes n5@0
+  source index rel=16423 rti=4 am=heap index=19340
+    key att=2 op=96 value=c23:44
+    recheck (op96(v4.2, c23:44))
+    lanes Attr(1):byval8:w8:val
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9, 10=v4.10, 11=v4.11, 12=v4.12, 13=v4.13, 14=v4.14, 15=v4.15, 16=v4.16)
+  project (1=outer.1, 2=outer.3, 3=inner.1, 4=coalesce(outer.4, outer.2))
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w8:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=fx64:row 15=fx64:row 16=fx64:row
+  outs 1=w8:val 2=w8:val 3=w4:val 4=w4:val
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w4:val
+param $exec0 owner=n1 type=23 rep=w8:val
+mapped: IndexScan BitmapIndexScan BitmapHeapScan NestLoop NestLoopParam

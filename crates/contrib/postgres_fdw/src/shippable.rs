@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::mem::ManuallyDrop;
 
-use mcx::{Mcx, MemoryContext, PgHashMap};
+use mcx::{Mcx, PgHashMap};
 use types_core::{catalog::FirstGenbkiObjectId, InvalidOid, Oid};
 use types_error::PgResult;
 
@@ -54,7 +54,12 @@ pub fn is_shippable(
         if slot.is_none() {
             // Backend-lifetime table (C: hash_create at first use); flushed
             // wholesale when pg_foreign_server changes (extensions option).
-            let cache_mcx = Box::leak(Box::new(MemoryContext::new("Shippability cache"))).mcx();
+            // D4682: a session root, its slot cleared before the teardown retires it, so a reused backend thread's
+            // next session (maybe in another database) starts empty.
+            let cache_mcx = ::mcx::session_root("Shippability cache").mcx();
+            ::mcx::register_session_cleanup(Box::new(|| {
+                let _ = SHIPPABLE_CACHE.try_with(|c| c.borrow_mut().take());
+            }));
             inval::invalidate::CacheRegisterSyscacheCallback(
                 cache_syscache::cacheinfo::FOREIGNSERVEROID,
                 invalidate_shippable_cache_callback,

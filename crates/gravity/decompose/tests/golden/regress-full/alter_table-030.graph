@@ -1,0 +1,9 @@
+-- regress-full-alter_table-030
+-- SELECT check_ddl_rewrite('rewrite_test', $$ ALTER TABLE rewrite_test ADD COLUMN empty1 text, ADD COLUMN notempty1_rewrite serial; $$);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn42258(c2205:42259, c25:'\x0a  ALTER TABLE rewrite_test\x0a      ADD COLUMN empty1 text,\x0a      ADD COLUMN notempty1_rewrite serial;\x0a'))
+  outs 1=w1:val
+mapped: Result

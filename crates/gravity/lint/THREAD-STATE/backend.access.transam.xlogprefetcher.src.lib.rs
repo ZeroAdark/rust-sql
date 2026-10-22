@@ -1,0 +1,2 @@
+backend/access/transam/xlogprefetcher/src/lib.rs	RECOVERY_PREFETCH	pgport	exit	thread	a POSTMASTER / SIGHUP setting, process-wide, never carried (recovery_prefetch, SIGHUP); installed by init_seams
+backend/access/transam/xlogprefetcher/src/lib.rs	RECONFIGURE_COUNT	pgport	exit	thread	C XLogPrefetchReconfigureCount: bumped by this thread's assign hooks (XLogPrefetchReconfigure); the prefetcher re-reads its settings when it moves

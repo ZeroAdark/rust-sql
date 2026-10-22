@@ -1,0 +1,10 @@
+-- regress-full-stats_ext-116
+-- CREATE TABLE sb_1 AS SELECT gs % 10 AS x, gs % 10 AS y, gs % 10 AS z FROM generate_series(1, 1e4) AS gs;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesNumeric { step: false } fn3260 fn3260(c1700:'\x00\x80\x01\x00', c1700:'\x01\x80\x01\x00')]
+  project (1=op1762(v1.1, c1700:'\x00\x80\x0a\x00'), 2=op1762(v1.1, c1700:'\x00\x80\x0a\x00'), 3=op1762(v1.1, c1700:'\x00\x80\x0a\x00'))
+  outs 1=vl:call1729 2=vl:call1729 3=vl:call1729
+mapped: FunctionScan

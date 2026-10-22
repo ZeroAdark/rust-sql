@@ -1,0 +1,10 @@
+-- regress-full-sqljson_queryfuncs-018
+-- SELECT * FROM unnest(JSON_QUERY(jsonb '[{"a": 1, "t": ["foo", []]}, {"a": 2, "jb": [{}, true]}]', '$' RETURNING sqljsonb_rec[]));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Unnest fn2331 cols=5 fn2331(T_JsonExpr)]
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5)
+  outs 1=w4:val 2=vl:row 3=vl:row 4=vl:row 5=?
+mapped: FunctionScan

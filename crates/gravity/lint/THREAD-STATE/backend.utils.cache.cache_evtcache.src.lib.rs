@@ -1,0 +1,3 @@
+backend/utils/cache/cache_evtcache/src/lib.rs	STATE	pgport	at:InvalidateEventCacheCallback	leader	session envelope; event-trigger cache validity, set back to NeedsRebuild by InvalidateEventCacheCallback on an EVENTTRIGGEROID invalidation
+backend/utils/cache/cache_evtcache/src/lib.rs	CALLBACK_REGISTERED	pgport	exit	leader	session envelope; once-per-thread flag: the EVENTTRIGGEROID syscache callback is registered
+backend/utils/cache/cache_evtcache/src/lib.rs	CACHE	pgport	at:InvalidateEventCacheCallback	leader	session envelope; event triggers per event, emptied by InvalidateEventCacheCallback on an EVENTTRIGGEROID invalidation; per session by design (evtcache.c's cache)

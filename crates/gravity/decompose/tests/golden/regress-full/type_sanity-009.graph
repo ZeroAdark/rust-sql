@@ -1,0 +1,11 @@
+-- regress-full-type_sanity-009
+-- SELECT t1.oid, t1.typname FROM pg_type as t1 WHERE (t1.typinput = 0 OR t1.typoutput = 0);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2 end=sink
+  nodes n0@0
+  source range rel=1247 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(16):byval8:w8:val Attr(17):byval8:w8:val Offset:byval2:w2:val
+  filter or(op607(relabel26(v1.16), c26:0), op607(relabel26(v1.17), c26:0))
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

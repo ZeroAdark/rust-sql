@@ -1,0 +1,11 @@
+-- part-003
+-- INSERT INTO u SELECT i, i % 300 FROM generate_series(1, 400) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:400)]
+  project (1=v3.1, 2=op530(v3.1, c23:300))
+  write INSERT rel=16433 rti=1 natts=2 indexes=(16437[1]up)
+  outs 1=w4:val 2=w4:val
+mapped: ModifyTable FunctionScan

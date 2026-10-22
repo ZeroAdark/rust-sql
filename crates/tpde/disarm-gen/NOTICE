@@ -1,0 +1,13 @@
+This package is a fresh Rust translation of Disarm's parse.py generator and
+consumes its desc.txt and feat.txt inputs from upstream revision
+2d13d3f410a52daff1c5d8ef07d623332f372560:
+https://github.com/aengelke/disarm
+
+Disarm copyright (c) 2024, Alexis Engelke. All rights reserved.
+The upstream BSD-3-Clause license is reproduced in reference/LICENSE.
+Exact source hashes and Git blob identities are in reference/manifest.json.
+
+reference/parse.py is a pristine test-only oracle. Production generation uses
+Rust and does not execute or depend on this Python reference implementation.
+reference/decode.c is a pristine test-only source for decoder helper signatures
+and arithmetic controls; its runtime implementation is a separate port unit.

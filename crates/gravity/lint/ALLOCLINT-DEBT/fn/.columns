@@ -1,0 +1,16 @@
+# the crate's columns at the last full `ratchet.py write` (never judged; USER RULING 2026-10-14T18:52:43Z: COLD-TEXT
+# = Cold-tagged error / refusal / log text, a named class out of the debt total; COLD-UNPROVEN and MISTAGGED are in it;
+# USER RULING via main 2026-10-14T23:20:10Z: TYPE-MENTION = a type named on a line with no allocation finding, out of it)
+# USER GO via main 2026-10-15T11:46:31Z: REFCOUNT-CLONE = an Rc / Arc / Weak clone alone on its line, out of it too
+# USER RULING via memacct 2026-10-15T18:5xZ: REFCOUNT-CLONE-INLINE = one beside other findings, out of it too
+# TD-197 amendment (memacct GO 2026-10-15T20:3xZ): NOALLOC = a Clone / ToOwned / Extend the IR proved allocates
+# nothing (.noalloc), UNREACHED = a finding in a function only test code reaches (unreached.tsv), out of it too
+debt	238
+type-mention	161
+cold-text	180
+cold-unproven	1
+mistagged	46
+refcount-clone	0
+refcount-clone-inline	0
+noalloc	5
+unreached	0

@@ -291,7 +291,6 @@ fn prepare_execute_deallocate_round_trip() {
     install();
     let ctx = MemoryContext::new("t");
 
-    // PREPARE through the utility dispatch and the real plancache.
     let select = node_mk(&ctx, SelectStmt::default());
     let prep = node_mk(
         &ctx,
@@ -304,7 +303,6 @@ fn prepare_execute_deallocate_round_trip() {
     assert!(plancache::CachedPlanIsValid(entry.plansource));
     assert_eq!(PLANNER_CALLS.with(Cell::get), 0);
 
-    // Duplicate PREPARE: C's 42P05.
     let select2 = node_mk(&ctx, SelectStmt::default());
     let prep2 = node_mk(
         &ctx,
@@ -313,7 +311,6 @@ fn prepare_execute_deallocate_round_trip() {
     let err = run_utility(prep2, SOURCE).unwrap_err();
     assert_eq!(err.sqlstate(), ERRCODE_DUPLICATE_PSTATEMENT);
 
-    // First EXECUTE builds the generic plan and runs it.
     let exec = node_mk(&ctx, ExecuteStmt { name: Some("p1"), params: NodeList::nil() });
     let qc = run_utility(exec, "EXECUTE p1").unwrap();
     assert_eq!(qc.commandTag, CMDTAG_SELECT);
@@ -321,19 +318,16 @@ fn prepare_execute_deallocate_round_trip() {
     assert_eq!(PLANNER_CALLS.with(Cell::get), 1);
     assert_eq!(QD_RUNS.with(Cell::get), 1);
 
-    // Second EXECUTE is the warm hit: no replan, same cached stmt list.
     let exec2 = node_mk(&ctx, ExecuteStmt { name: Some("p1"), params: NodeList::nil() });
     let qc = run_utility(exec2, "EXECUTE p1").unwrap();
     assert_eq!(qc.nprocessed, 1);
     assert_eq!(PLANNER_CALLS.with(Cell::get), 1);
     assert_eq!(QD_RUNS.with(Cell::get), 2);
 
-    // UtilityReturnsTuples/UtilityTupleDescriptor see the prepared entry.
     let exec3 = node_mk(&ctx, ExecuteStmt { name: Some("p1"), params: NodeList::nil() });
     assert!(utility::UtilityReturnsTuples(exec3));
     assert!(utility::UtilityTupleDescriptor(exec3).unwrap().is_some());
 
-    // DEALLOCATE drops the entry and the plancache source.
     let dealloc = node_mk(
         &ctx,
         DeallocateStmt { name: Some("p1"), isall: false, location: -1 },
@@ -355,7 +349,6 @@ fn inval_callback_flushes_the_saved_plan() {
         &ctx,
         PrepareStmt { name: Some("p_inval"), argtypes: NodeList::nil(), query: Some(select) },
     );
-    // The stub parser always names p1; store under p_inval via direct calls.
     let _ = prep;
     let tag = CommandTag::SELECT;
     let raw = RawStmt { stmt: Some(select), stmt_location: 0, stmt_len: 0 };
@@ -411,7 +404,6 @@ fn empty_statement_name_is_rejected() {
     assert_eq!(err.sqlstate(), ERRCODE_INVALID_PSTATEMENT_DEFINITION);
 }
 
-// EvaluateParams' arity check (C prepare.c 42601).
 #[test]
 fn execute_with_wrong_parameter_count_is_42601() {
     install();
@@ -445,9 +437,8 @@ fn execute_with_wrong_parameter_count_is_42601() {
     assert!(err.message().contains("wrong number of parameters"));
 }
 
-// An error between EvaluateParams and PortalStart (here CREATE TABLE AS
-// EXECUTE of a non-SELECT, prepare.c 208) has no portal-owned params yet:
-// the registry slot must still be released.
+// An error between EvaluateParams and PortalStart has no portal-owned params
+// yet: the registry slot must still be released.
 #[test]
 fn failing_parameterized_execute_frees_the_params_slot() {
     install();
@@ -502,15 +493,15 @@ fn explain_execute_utility_invokes_callback() {
     let ctx = MemoryContext::new("t");
     let raw_notify = node_mk(
         &ctx,
-        NotifyStmt { conditionname: Some("yafk"), payload: None },
+        NotifyStmt { conditionname: Some("d140"), payload: None },
     );
     let raw = RawStmt { stmt: Some(raw_notify), stmt_location: 0, stmt_len: 0 };
     let plansource =
-        plancache::CreateCachedPlan(Some(&raw), "NOTIFY yafk", CommandTag::SELECT).unwrap();
+        plancache::CreateCachedPlan(Some(&raw), "NOTIFY d140", CommandTag::SELECT).unwrap();
     let qmcx = plancache::SourceQueryMcx(plansource);
     let notify = Node::mk(
         qmcx,
-        NotifyStmt { conditionname: Some("yafk"), payload: None },
+        NotifyStmt { conditionname: Some("d140"), payload: None },
     )
     .unwrap();
     let mut qlist = mcx::PgVec::new_in(qmcx);
@@ -551,11 +542,6 @@ fn deallocate_command_tags() {
     assert_eq!(cmdtag::GetCommandTagName(utility::CreateCommandTag(all)), "DEALLOCATE ALL");
 }
 
-// regression: C never hash_destroy()s prepared_queries because the
-// backend process dies with it; one backend = one (reused) thread here, so
-// the table's first creation registers an on_proc_exit callback that
-// hash_destroy()s it and leaves the next session on this thread with C's
-// `prepared_queries = NULL`.
 static EXIT_CB: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 fn record_exit_cb(f: fn(i32, usize), _arg: usize) {
@@ -582,8 +568,6 @@ fn prepared_queries_table_is_destroyed_at_proc_exit() {
             .unwrap();
         StorePreparedStatement(name, plansource, true).unwrap();
     };
-    // This thread's first prepared statement creates the table and
-    // registers its exit teardown.
     store("px1");
     assert!(FetchPreparedStatement("px1", false).unwrap().is_some());
     let cb = EXIT_CB.load(Ordering::SeqCst);

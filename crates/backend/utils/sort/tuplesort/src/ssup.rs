@@ -99,6 +99,9 @@ pub enum SortComparator {
 pub struct ShimCmp {
     pub fn_addr: PGFunction,
     pub fn_oid: Oid,
+    // Identifies this setup's FmgrInfo carrier (C: one SortShimExtra per
+    // SortSupport), so keys sharing a proc never share fn_extra.
+    pub slot: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -268,12 +271,34 @@ fn namefastcmp_c(a: &[u8], b: &[u8]) -> i32 {
 }
 
 std::thread_local! {
+    // Retained std buffers: this mcx-less comparator shares backend scratch.
+    static COLL_BUFFERS: core::cell::RefCell<(Vec<u8>, Vec<u8>)> =
+        const { core::cell::RefCell::new((Vec::new(), Vec::new())) };
+
     // ManuallyDrop: fn_extra Drop reaches other TLS registries, whose
     // destruction order at thread exit is unspecified — a panic in a TLS
     // dtor aborts the process. Leaks with the backend, like C's exit free.
     static SHIM_FLINFO: core::cell::RefCell<
-        core::mem::ManuallyDrop<Option<(Oid, ::types_fmgr::FmgrInfo)>>,
-    > = const { core::cell::RefCell::new(core::mem::ManuallyDrop::new(None)) };
+        core::mem::ManuallyDrop<Vec<(u32, Oid, ::types_fmgr::FmgrInfo)>>,
+    > = const { core::cell::RefCell::new(core::mem::ManuallyDrop::new(Vec::new())) };
+    static SHIM_NEXT_SLOT: core::cell::Cell<u32> = const { core::cell::Cell::new(1) };
+}
+
+// Live carriers kept per backend; an evicted one is re-resolved fresh (an
+// empty fn_extra re-memoizes), so the bound only costs a refill.
+const SHIM_CARRIERS: usize = 16;
+
+fn shim_carrier_put(entry: (u32, Oid, ::types_fmgr::FmgrInfo)) {
+    SHIM_FLINFO.with(|c| {
+        let mut v = c.borrow_mut();
+        if let Some(i) = v.iter().position(|e| e.0 == entry.0) {
+            v.remove(i);
+        }
+        if v.len() >= SHIM_CARRIERS {
+            v.remove(0);
+        }
+        v.push(entry);
+    });
 }
 
 // Refresh the per-thread shim flinfo carrier with the FmgrInfo resolved at
@@ -284,11 +309,14 @@ std::thread_local! {
 // takes effect; without this the backend-lifetime carrier would serve the
 // stale resolution across the change. Called from the Shim-producing arms of
 // comparator_for_* (the FinishSortSupportFunction-equivalent setup points).
-fn install_shim_flinfo(fn_oid: Oid, flinfo: ::types_fmgr::FmgrInfo) {
-    // Same normal-execution assignment shim_cmp performs: the replaced Option
-    // (if any) drops here, not at thread exit — that final drop is what the
-    // ManuallyDrop wrapper on SHIM_FLINFO suppresses.
-    SHIM_FLINFO.with(|c| **c.borrow_mut() = Some((fn_oid, flinfo)));
+fn install_shim_flinfo(fn_oid: Oid, flinfo: ::types_fmgr::FmgrInfo) -> u32 {
+    let slot = SHIM_NEXT_SLOT.with(|n| {
+        let s = n.get();
+        n.set(s.wrapping_add(1).max(1));
+        s
+    });
+    shim_carrier_put((slot, fn_oid, flinfo));
+    slot
 }
 
 // TLS carrier = C's ssup_cxt-lived flinfo (record_cmp memoizes in fn_extra);
@@ -300,14 +328,19 @@ fn install_shim_flinfo(fn_oid: Oid, flinfo: ::types_fmgr::FmgrInfo) {
 // same cell (C: each sort's ssup_cxt holds its own flinfo).
 #[inline(never)]
 fn shim_cmp(shim: ShimCmp, x: Datum, y: Datum, collation: Oid, mcx: Mcx<'_>) -> i32 {
-    let taken = SHIM_FLINFO.with(|c| core::mem::take(&mut **c.borrow_mut()));
+    let taken = SHIM_FLINFO.with(|c| {
+        let mut v = c.borrow_mut();
+        v.iter()
+            .rposition(|e| e.0 == shim.slot && e.1 == shim.fn_oid)
+            .map(|i| v.remove(i))
+    });
     let call = match taken {
-        Some(e) if e.0 == shim.fn_oid => Ok(e),
-        _ => ::fmgr_seams::fmgr_info::call(shim.fn_oid).map(|fl| (shim.fn_oid, fl)),
+        Some(e) => Ok(e),
+        None => ::fmgr_seams::fmgr_info::call(shim.fn_oid).map(|fl| (shim.slot, shim.fn_oid, fl)),
     }
     .and_then(|mut entry| {
-        let r = ::types_fmgr::function_call2_coll_in(&mut entry.1, collation, mcx, x, y);
-        SHIM_FLINFO.with(|c| **c.borrow_mut() = Some(entry));
+        let r = ::types_fmgr::function_call2_coll_in(&mut entry.2, collation, mcx, x, y);
+        shim_carrier_put(entry);
         r
     });
     match call {
@@ -350,7 +383,13 @@ pub(crate) fn varstrfastcmp_locale(
     } else {
         (a1, a2)
     };
-    let result = match locale.pg_strncoll(a1, a2) {
+    let compared = COLL_BUFFERS.with(|cell| {
+        let mut buffers = cell.borrow_mut();
+        fill_coll_buffer(&mut buffers.0, a1)?;
+        fill_coll_buffer(&mut buffers.1, a2)?;
+        locale.pg_strcoll(&buffers.0, &buffers.1)
+    });
+    let result = match compared {
         Ok(r) => r,
         // As shim_cmp: the comparator sits under infallible qsort plumbing;
         // C's ereport(ERROR) out of strncoll_icu (pg_locale_icu.c:489,
@@ -362,6 +401,21 @@ pub(crate) fn varstrfastcmp_locale(
         return varlena::varstrfastcmp_c(a1, a2);
     }
     result
+}
+
+pub(crate) fn coll_buffer_size(len: usize) -> types_error::PgResult<usize> {
+    let size = len.saturating_add(1);
+    mcx::check_alloc_size(size)?;
+    Ok(size)
+}
+
+fn fill_coll_buffer(buf: &mut Vec<u8>, value: &[u8]) -> types_error::PgResult<()> {
+    let size = coll_buffer_size(value.len())?;
+    buf.clear();
+    mcx::std_vec_reserve("tuplesort collation", buf, size)?;
+    buf.extend_from_slice(value);
+    buf.push(0);
+    Ok(())
 }
 
 fn nul_truncate(s: &[u8]) -> &[u8] {
@@ -398,7 +452,7 @@ pub(crate) unsafe fn with_varlena_payload<R>(d: Datum, f: impl FnOnce(&[u8]) -> 
 /// `p` heads a live external or inline-compressed varlena image.
 #[cold]
 unsafe fn detoast_payload<R>(p: *const u8, f: impl FnOnce(&[u8]) -> R) -> R {
-    let scratch = ::mcx::MemoryContext::new_bump("varstr cmp detoast");
+    let scratch = ::mcx::MemoryContext::new_wholesale("varstr cmp detoast");
     let raw = core::slice::from_raw_parts(p, ::types_tuple::varatt::varsize_any(p));
     let img = ::detoast_seams::detoast_attr::call(scratch.mcx(), raw)
         // Infallible qsort plumbing above; a detoast failure is C's
@@ -531,6 +585,9 @@ pub enum AbbrevKind {
     Uuid,
     Network,
     Numeric,
+    /// gist_bbox_zorder_abbrev_convert (gistproc.c): the low corner's
+    /// z-order; the abbrev key tells -0 from +0 where the full compare ties.
+    GistPointZorder,
 }
 
 /// Armed abbreviation: the key's `comparator` becomes `Unsigned` over
@@ -615,6 +672,7 @@ pub(crate) fn abbrev_arm_for(comparator: SortComparator) -> Option<AbbrevArm> {
         SortComparator::Uuid => AbbrevKind::Uuid,
         SortComparator::Network => AbbrevKind::Network,
         SortComparator::Numeric => AbbrevKind::Numeric,
+        SortComparator::GistPointZorder => AbbrevKind::GistPointZorder,
         _ => return None,
     };
     Some(AbbrevArm { kind, full_comparator: comparator })
@@ -656,11 +714,29 @@ fn canonical_sortsupport_proc(proc_oid: Oid) -> PgResult<Oid> {
     if ::fmgr_seams::internal_builtin_oid::is_installed() {
         if let Some(builtin) = ::fmgr_seams::internal_builtin_oid::call(proc_oid)? {
             if is_builtin_sortsupport(builtin) {
+                apply_alias_proconfig(proc_oid)?;
                 return Ok(builtin);
             }
         }
     }
     Ok(0)
+}
+
+// fmgr_info routes an alias carrying proconfig through fmgr_security_definer
+// (fmgr.c:724), so its SET clauses run (and can fail) around the call.
+fn apply_alias_proconfig(proc_oid: Oid) -> PgResult<()> {
+    if !::syscache_seams::lookup_pg_proc_secdef::is_installed() {
+        return Ok(());
+    }
+    let Some(row) = ::syscache_seams::lookup_pg_proc_secdef::call(proc_oid)? else {
+        return Ok(());
+    };
+    let Some(cfg) = row.proconfig else {
+        return Ok(());
+    };
+    let save_nestlevel = ::guc_seams::new_guc_nest_level::call();
+    ::guc_seams::process_guc_array_secdef::call(&cfg)?;
+    ::guc_seams::at_eoxact_guc::call(true, save_nestlevel)
 }
 
 /// The MJExamineQuals (nodeMergejoin.c) comparator resolve: BTSORTSUPPORT_PROC
@@ -721,8 +797,8 @@ pub fn comparator_for_opfamily(
                 let flinfo = ::fmgr_seams::fmgr_info::call(sort_function)?;
                 let fn_addr = flinfo.fn_addr();
                 // Fresh per-setup resolution, as C fmgr_info_cxt's per shim.
-                install_shim_flinfo(sort_function, flinfo);
-                SortComparator::Shim(ShimCmp { fn_addr, fn_oid: sort_function })
+                let slot = install_shim_flinfo(sort_function, flinfo);
+                SortComparator::Shim(ShimCmp { fn_addr, fn_oid: sort_function, slot })
             }
         }
         // Invariant tripwire: the constant set at ssup.rs:10-33 is complete
@@ -755,14 +831,18 @@ pub fn comparator_for_gist_index_col(opfamily: Oid, opcintype: Oid) -> PgResult<
         opcintype,
         GIST_SORTSUPPORT_PROC_NUM,
     )?;
+    let ssup_proc = match ::fmgr_seams::internal_builtin_oid::is_installed() {
+        true => ::fmgr_seams::internal_builtin_oid::call(ssup_proc)?.unwrap_or(ssup_proc),
+        false => ssup_proc,
+    };
     match ssup_proc {
         F_GIST_POINT_SORTSUPPORT => Ok(SortComparator::GistPointZorder),
         F_RANGE_SORTSUPPORT => {
             let flinfo = ::fmgr_seams::fmgr_info::call(F_RANGE_CMP)?;
             let fn_addr = flinfo.fn_addr();
             // Fresh per-setup resolution, as C fmgr_info_cxt's per shim.
-            install_shim_flinfo(F_RANGE_CMP, flinfo);
-            Ok(SortComparator::Shim(ShimCmp { fn_addr, fn_oid: F_RANGE_CMP }))
+            let slot = install_shim_flinfo(F_RANGE_CMP, flinfo);
+            Ok(SortComparator::Shim(ShimCmp { fn_addr, fn_oid: F_RANGE_CMP, slot }))
         }
         // C: PrepareSortSupportFromGistIndexRel's elog(ERROR) (sortsupport.c).
         0 => Err(Box::new(PgError::error(format!(
@@ -880,8 +960,8 @@ pub fn comparator_for_index_col(
                 let flinfo = ::fmgr_seams::fmgr_info::call(sort_function)?;
                 let fn_addr = flinfo.fn_addr();
                 // Fresh per-setup resolution, as C fmgr_info_cxt's per shim.
-                install_shim_flinfo(sort_function, flinfo);
-                SortComparator::Shim(ShimCmp { fn_addr, fn_oid: sort_function })
+                let slot = install_shim_flinfo(sort_function, flinfo);
+                SortComparator::Shim(ShimCmp { fn_addr, fn_oid: sort_function, slot })
             }
         }
         // Invariant tripwire: the constant set at ssup.rs:10-33 is complete

@@ -87,7 +87,7 @@ fn make_arg_ctx(mcx: Mcx<'_>) -> PgResult<NonNull<MemoryContext>> {
     let raw = mcx.allocate(layout).map_err(|_| mcx.oom(layout.size()))?;
     let p: NonNull<MemoryContext> = raw.cast();
     // SAFETY: fresh allocation of the exact layout.
-    unsafe { p.write(mcx.context().new_child_bump("Table function arguments")) };
+    unsafe { p.write(mcx.context().new_child_wholesale("Table function arguments")) };
     // SAFETY: fires exactly once, before the arena bytes are reclaimed.
     mcx.context()
         .register_reset_callback(move || unsafe { core::ptr::drop_in_place(p.as_ptr()) });
@@ -115,24 +115,9 @@ impl<'mcx> ScanNode<'mcx> for FunctionScanState<'mcx> {
         let mcx = estate.es_query_cxt;
 
         if self.simple {
-            let fs = &mut self.funcstates[0];
-            if fs.tstore.is_none() {
-                let mut store = exec_make_table_function_result(
-                    &mut fs.setexpr,
-                    &fs.tupdesc,
-                    self.eflags & EXEC_FLAG_BACKWARD != 0,
-                    estate,
-                    self.ss.ps_ExprContext,
-                    // SAFETY: arena slot armed by make_arg_ctx; exclusive
-                    // during the scan (dropped only by the estate reset cb).
-                    unsafe { self.arg_mcx.as_mut() },
-                )?;
-                store.rescan()?;
-                fs.tstore = Some(store);
-            }
-            let fs = &mut self.funcstates[0];
-            let slot = estate.slot_mut(self.ss.ss_ScanTupleSlot);
-            return fs.tstore.as_mut().unwrap().gettupleslot(forward, false, slot, mcx);
+            let scan_slot = self.ss.ss_ScanTupleSlot;
+            let store = exec_function_scan_materialize(self, estate, 0)?;
+            return store.gettupleslot(forward, false, estate.slot_mut(scan_slot), mcx);
         }
 
         // Move the ordinal off either end by exactly one before the
@@ -149,21 +134,7 @@ impl<'mcx> ScanNode<'mcx> for FunctionScanState<'mcx> {
         let mut alldone = true;
 
         for funcno in 0..self.funcstates.len() {
-            let fs = &mut self.funcstates[funcno];
-            if fs.tstore.is_none() {
-                let mut store = exec_make_table_function_result(
-                    &mut fs.setexpr,
-                    &fs.tupdesc,
-                    self.eflags & EXEC_FLAG_BACKWARD != 0,
-                    estate,
-                    self.ss.ps_ExprContext,
-                    // SAFETY: arena slot armed by make_arg_ctx; exclusive
-                    // during the scan (dropped only by the estate reset cb).
-                    unsafe { self.arg_mcx.as_mut() },
-                )?;
-                store.rescan()?;
-                fs.tstore = Some(store);
-            }
+            exec_function_scan_materialize(self, estate, funcno)?;
             let fs = &mut self.funcstates[funcno];
             let func_slot = fs.func_slot.expect("general path has per-function slots");
             let got = if fs.rowcount != -1 && fs.rowcount < oldpos {
@@ -184,7 +155,7 @@ impl<'mcx> ScanNode<'mcx> for FunctionScanState<'mcx> {
                     fs.rowcount = self.ordinal;
                 }
                 self.scratch.clear();
-                self.scratch.resize(colcount, NullableDatum::null());
+                ::mcx::pgvec_resize(&mut self.scratch, colcount, NullableDatum::null())?;
             } else {
                 let fslot = estate.slot_mut(func_slot);
                 exectuples::slot_getallattrs(fslot);
@@ -216,6 +187,59 @@ impl<'mcx> ScanNode<'mcx> for FunctionScanState<'mcx> {
             exectuples::exec_store_virtual_tuple(estate.slot_mut(self.ss.ss_ScanTupleSlot));
         }
         Ok(!alldone)
+    }
+}
+
+/// Runs function `funcno` now if its store does not exist yet, exactly as the
+/// scan's first fetch does, and returns the store rewound to its start. The
+/// store stays owned by the node: `exec_end_function_scan` and a
+/// changed-parameter rescan end it; any other rescan only rewinds it.
+pub fn exec_function_scan_materialize<'a, 'mcx>(
+    node: &'a mut FunctionScanState<'mcx>,
+    estate: &mut EStateData<'mcx>,
+    funcno: usize,
+) -> PgResult<&'a mut Tuplestore> {
+    let fs = &mut node.funcstates[funcno];
+    if fs.tstore.is_none() {
+        let mut store = exec_make_table_function_result(
+            &mut fs.setexpr,
+            &fs.tupdesc,
+            node.eflags & EXEC_FLAG_BACKWARD != 0,
+            estate,
+            node.ss.ps_ExprContext,
+            // SAFETY: arena slot armed by make_arg_ctx; exclusive
+            // during the scan (dropped only by the estate reset cb).
+            unsafe { node.arg_mcx.as_mut() },
+        )?;
+        store.rescan()?;
+        fs.tstore = Some(store);
+    }
+    Ok(fs.tstore.as_mut().expect("materialized above"))
+}
+
+impl<'mcx> FunctionScanState<'mcx> {
+    /// One function and no ORDINALITY: the scan row is that function's store row.
+    pub fn is_simple(&self) -> bool {
+        self.simple
+    }
+
+    pub fn nfuncs(&self) -> usize {
+        self.funcstates.len()
+    }
+
+    /// The row type of function `funcno`'s store.
+    pub fn func_tupdesc(&self, funcno: usize) -> &Rc<TupleDescData<'mcx>> {
+        &self.funcstates[funcno].tupdesc
+    }
+
+    /// The number of scan-row columns function `funcno` fills (the plan's count).
+    pub fn func_colcount(&self, funcno: usize) -> usize {
+        self.funcstates[funcno].colcount as usize
+    }
+
+    /// Function `funcno`'s store, None until it is materialized and after it is ended.
+    pub fn func_store_mut(&mut self, funcno: usize) -> Option<&mut Tuplestore> {
+        self.funcstates[funcno].tstore.as_mut()
     }
 }
 
@@ -676,7 +700,7 @@ fn run_value_per_call<'mcx>(
         // materialize fill produces its WHOLE result set here — without this
         // the fill is cancel/die-deaf for its entire duration (the incumbent
         // path wedges on user cancel, and a statement-task chase can never
-        // land — regression found it via a wedged gang board). The
+        // land — GL-STMTTASK-1 found it via a wedged gang board). The
         // pending-flag pre-test is the tuplestore cfi() shape: one TLS read
         // per row; the seam dispatch only on a pending interrupt (also keeps
         // seam-less unit-test processes runnable).

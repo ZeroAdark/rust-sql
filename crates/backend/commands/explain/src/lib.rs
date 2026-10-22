@@ -19,11 +19,12 @@ use types_nodes::rawnodes::{CreateTableAsStmt, IntoClause};
 use types_nodes::plannodes::PlannedStmt;
 use types_nodes::{Node, NodeTag};
 use types_portal::{ParamListHandle, QueryEnvHandle, CURSOR_OPT_PARALLEL_OK};
-use types_slot::{EXEC_FLAG_EXPLAIN_GENERIC, EXEC_FLAG_EXPLAIN_ONLY};
+use types_slot::{EXEC_FLAG_EXPLAIN_GENERIC, EXEC_FLAG_EXPLAIN_ONLY, EXEC_FLAG_RUN_WHOLE};
 use types_tuple::TupleDescData;
 use tupdesc::{CreateTemplateTupleDesc, TupleDescInitEntry};
 
 mod format;
+mod gravity;
 mod node;
 mod state;
 #[cfg(test)]
@@ -85,13 +86,13 @@ pub fn ExplainQuery<'mcx>(
     if parser_analyze::tap_post_parse_analyze::is_installed() && queryjumble::IsQueryIdEnabled()
     {
         let js = queryjumble::JumbleQuery(mcx, &mut query)?;
-        parser_analyze::tap_post_parse_analyze::call_if(|f| f(&mut query, &js, query_string));
+        parser_analyze::tap_post_parse_analyze::call_if_or(Ok(()), |f| f(&mut query, &js, query_string))?;
     } else if queryjumble::IsQueryIdEnabled() {
         queryjumble::JumbleQueryDiscard(mcx, &mut query)?;
     }
     let rewritten = rewrite_handler_seams::query_rewrite::call(mcx, query)?;
 
-    ExplainBeginOutput(&mut es);
+    ExplainBeginOutput(&mut es)?;
     if rewritten.is_empty() {
         if es.format == EXPLAIN_FORMAT_TEXT {
             es.str.append_str("Query rewrites to nothing\n")?;
@@ -105,7 +106,7 @@ pub fn ExplainQuery<'mcx>(
             }
         }
     }
-    ExplainEndOutput(&mut es);
+    ExplainEndOutput(&mut es)?;
     debug_assert_eq!(es.indent, 0);
 
     let tupdesc = ExplainResultDesc(mcx, stmt)?;
@@ -224,16 +225,17 @@ fn mem_counters_since(mcx: Mcx<'_>, before: (usize, usize)) -> MemCounters {
 }
 
 // explain.c show_memory_counters.
-fn show_memory_counters(es: &mut ExplainState<'_>, mem_counters: &MemCounters) {
+fn show_memory_counters(es: &mut ExplainState<'_>, mem_counters: &MemCounters) -> PgResult<()> {
     let mem_used_kb = bytes_to_kilobytes(mem_counters.totalspace - mem_counters.freespace);
     let mem_allocated_kb = bytes_to_kilobytes(mem_counters.totalspace);
     if es.format == EXPLAIN_FORMAT_TEXT {
-        ExplainIndentText(es);
-        append!(es, "Memory: used={mem_used_kb}kB  allocated={mem_allocated_kb}kB\n");
+        ExplainIndentText(es)?;
+        append!(es, "Memory: used={mem_used_kb}kB  allocated={mem_allocated_kb}kB\n")?;
     } else {
-        ExplainPropertyUInteger("Memory Used", Some("kB"), mem_used_kb, es);
-        ExplainPropertyUInteger("Memory Allocated", Some("kB"), mem_allocated_kb, es);
+        ExplainPropertyUInteger("Memory Used", Some("kB"), mem_used_kb, es)?;
+        ExplainPropertyUInteger("Memory Allocated", Some("kB"), mem_allocated_kb, es)?;
     }
+    Ok(())
 }
 
 // "into" is None unless explaining the contents of a CreateTableAsStmt.
@@ -256,10 +258,10 @@ fn ExplainOneUtility<'mcx>(
             if createas_seams::create_table_as_rel_exists::call(mcx, ctas)? {
                 match ctas.objtype {
                     ObjectType::OBJECT_TABLE => {
-                        ExplainDummyGroup("CREATE TABLE AS", None, es);
+                        ExplainDummyGroup("CREATE TABLE AS", None, es)?;
                     }
                     ObjectType::OBJECT_MATVIEW => {
-                        ExplainDummyGroup("CREATE MATERIALIZED VIEW", None, es);
+                        ExplainDummyGroup("CREATE MATERIALIZED VIEW", None, es)?;
                     }
                     other => panic!("unexpected object type: {}", other as i32),
                 }
@@ -280,7 +282,7 @@ fn ExplainOneUtility<'mcx>(
                 && queryjumble::IsQueryIdEnabled()
             {
                 let js = queryjumble::JumbleQuery(mcx, &mut query)?;
-                parser_analyze::tap_post_parse_analyze::call_if(|f| f(&mut query, &js, query_string));
+                parser_analyze::tap_post_parse_analyze::call_if_or(Ok(()), |f| f(&mut query, &js, query_string))?;
             } else if queryjumble::IsQueryIdEnabled() {
                 queryjumble::JumbleQueryDiscard(mcx, &mut query)?;
             }
@@ -318,7 +320,7 @@ fn ExplainOneUtility<'mcx>(
                 && queryjumble::IsQueryIdEnabled()
             {
                 let js = queryjumble::JumbleQuery(mcx, &mut query)?;
-                parser_analyze::tap_post_parse_analyze::call_if(|f| f(&mut query, &js, query_string));
+                parser_analyze::tap_post_parse_analyze::call_if_or(Ok(()), |f| f(&mut query, &js, query_string))?;
             } else if queryjumble::IsQueryIdEnabled() {
                 queryjumble::JumbleQueryDiscard(mcx, &mut query)?;
             }
@@ -405,14 +407,14 @@ fn ExplainOneUtility<'mcx>(
             if es.format == EXPLAIN_FORMAT_TEXT {
                 es.str.append_str("NOTIFY\n")?;
             } else {
-                ExplainDummyGroup("Notify", None, es);
+                ExplainDummyGroup("Notify", None, es)?;
             }
         }
         _ => {
             if es.format == EXPLAIN_FORMAT_TEXT {
                 es.str.append_str("Utility statements have no plan structure\n")?;
             } else {
-                ExplainDummyGroup("Utility Statement", None, es);
+                ExplainDummyGroup("Utility Statement", None, es)?;
             }
         }
     }
@@ -525,7 +527,9 @@ fn ExplainOnePlanRef<'mcx>(
         instrument_option,
     )?;
     let mut qd_owner = QueryDescOwner(qd);
-    let mut eflags = if es.analyze { 0 } else { EXEC_FLAG_EXPLAIN_ONLY };
+    // pgrust-only EXEC_FLAG_RUN_WHOLE: the run below is count 0 to the end
+    // (types_slot); C's eflags under ANALYZE are 0.
+    let mut eflags = if es.analyze { EXEC_FLAG_RUN_WHOLE } else { EXEC_FLAG_EXPLAIN_ONLY };
     if es.generic {
         eflags |= EXEC_FLAG_EXPLAIN_GENERIC;
     }
@@ -571,94 +575,32 @@ fn ExplainOnePlanRef<'mcx>(
         totaltime += elapsed_time(&starttime);
     }
 
-    // sqe P2-1 statement verdict, plan-only evaluation order: on the
-    // non-ANALYZE path the verdict must be taken BEFORE ExplainPrintPlan —
-    // statement_verdict's record_engaged is what fills es_engine_events
-    // (under EXEC_FLAG_ENGINE_REPORT), and ExplainPrintPlan is what prints
-    // the per-node `Engine: sqe (engaged: <family>)` lines from those
-    // records. Evaluated after it (the old order), EXPLAIN (ENGINE)
-    // without ANALYZE printed an attribution-less plan. The ANALYZE path
-    // keeps its execution-recorded events and takes the verdict at the
-    // original post-print site (output byte-identical there).
-    let sqe_verdict = if es.analyze {
-        None
-    } else {
-        execmain_seams::query_desc_sqe_verdict::call(qd)
-    };
-    ExplainOpenGroup("Query", None, true, es);
+    ExplainOpenGroup("Query", None, true, es)?;
     es.qd = qd;
     ExplainPrintPlan(mcx, es, pstmt)?;
-    // sqe P2-1 statement-level verdict (census-surface §3): appears ONLY
-    // for statements over pgrcolumnar2 relations (heap EXPLAIN output
-    // stays byte-identical). Plain EXPLAIN prints the refusal instead of
-    // raising; execution (and EXPLAIN ANALYZE) raises the R1 error.
-    let sqe_verdict = if es.analyze {
-        execmain_seams::query_desc_sqe_verdict::call(qd)
-    } else {
-        sqe_verdict
-    };
-    if let Some((engaged, detail, sqlstate)) = sqe_verdict {
-        // Heap-face rung 2: an unrecognized heap shape routes to the
-        // incumbent (censused, not refused) — its verdict is the miss
-        // class, distinguished by the `heap-miss/` detail (no sqlstate:
-        // nothing errors on this path).
-        let incumbent = !engaged && sqlstate.is_empty() && detail.starts_with("heap-miss/");
-        if es.format == EXPLAIN_FORMAT_TEXT {
-            ExplainIndentText(es);
-            if engaged {
-                es.str.append_str(&format!("SQE: engine (family: {detail})\n"))?;
-            } else if incumbent {
-                es.str.append_str(&format!("SQE: incumbent (miss: {detail})\n"))?;
-            } else {
-                es.str.append_str(&format!(
-                    "SQE: refused (cause: {detail}, sqlstate: {sqlstate})\n"
-                ))?;
-            }
-        } else {
-            ExplainPropertyText(
-                "SQE",
-                if engaged {
-                    "engine"
-                } else if incumbent {
-                    "incumbent"
-                } else {
-                    "refused"
-                },
-                es,
-            );
-            if engaged {
-                ExplainPropertyText("SQE Family", &detail, es);
-            } else if incumbent {
-                ExplainPropertyText("SQE Miss Class", &detail, es);
-            } else {
-                ExplainPropertyText("SQE Refusal Cause", &detail, es);
-                ExplainPropertyText("SQE Refusal SQLSTATE", &sqlstate, es);
-            }
-        }
-    }
     es.qd = types_portal::QueryDescHandle::NULL;
 
     if bufusage.is_some_and(|bu| peek_buffer_usage(es, bu)) || mem_counters.is_some() {
-        ExplainOpenGroup("Planning", Some("Planning"), true, es);
+        ExplainOpenGroup("Planning", Some("Planning"), true, es)?;
         if es.format == EXPLAIN_FORMAT_TEXT {
-            ExplainIndentText(es);
+            ExplainIndentText(es)?;
             es.str.append_str("Planning:\n")?;
             es.indent += 1;
         }
         if let Some(bu) = bufusage {
-            show_buffer_usage(es, bu);
+            show_buffer_usage(es, bu)?;
         }
         if let Some(mc) = mem_counters {
-            show_memory_counters(es, mc);
+            show_memory_counters(es, mc)?;
         }
         if es.format == EXPLAIN_FORMAT_TEXT {
             es.indent -= 1;
         }
-        ExplainCloseGroup("Planning", Some("Planning"), true, es);
+        ExplainCloseGroup("Planning", Some("Planning"), true, es)?;
     }
 
     if es.summary {
-        ExplainPropertyFloat("Planning Time", Some("ms"), 1000.0 * planduration.as_secs_f64(), 3, es);
+        ExplainPropertyFloat("Planning Time", Some("ms"), 1000.0 * planduration.as_secs_f64(), 3, es)?;
     }
 
     // Print info about runtime of triggers (explain.c:832).
@@ -667,7 +609,7 @@ fn ExplainOnePlanRef<'mcx>(
     }
 
     if es.costs {
-        ExplainPrintJITSummary(es, qd);
+        ExplainPrintJITSummary(es, qd)?;
     }
 
     // ExplainPrintJITSummary: C prints a JIT block only when a loaded JIT
@@ -680,7 +622,7 @@ fn ExplainOnePlanRef<'mcx>(
     // (docs/optimizations/jit-deform.md, GUC/EXPLAIN mapping).
 
     if es.serialize != EXPLAIN_SERIALIZE_NONE {
-        ExplainPrintSerialize(es, &serializeMetrics);
+        ExplainPrintSerialize(es, &serializeMetrics)?;
     }
 
     if let Some(hook) = crate::state::explain_per_plan_hook() {
@@ -698,9 +640,9 @@ fn ExplainOnePlanRef<'mcx>(
     totaltime += elapsed_time(&starttime);
 
     if es.summary && es.analyze {
-        ExplainPropertyFloat("Execution Time", Some("ms"), 1000.0 * totaltime, 3, es);
+        ExplainPropertyFloat("Execution Time", Some("ms"), 1000.0 * totaltime, 3, es)?;
     }
-    ExplainCloseGroup("Query", None, true, es);
+    ExplainCloseGroup("Query", None, true, es)?;
     Ok(())
 }
 
@@ -725,13 +667,14 @@ const PGJIT_DEFORM: i32 = 1 << 4;
 
 // explain.c ExplainPrintJITSummary. The worker-instr merge is absent: jit
 // runs leader-only, so the leader's counters are the total.
-fn ExplainPrintJITSummary(es: &mut ExplainState<'_>, qd: types_portal::QueryDescHandle) {
+fn ExplainPrintJITSummary(es: &mut ExplainState<'_>, qd: types_portal::QueryDescHandle) -> PgResult<()> {
     let (jit_flags, created_functions, generation_nanos) =
         execmain_seams::query_desc_jit_instr::call(qd);
     if jit_flags & PGJIT_PERFORM == 0 {
-        return;
+        return Ok(());
     }
-    ExplainPrintJIT(es, jit_flags, created_functions, generation_nanos);
+    ExplainPrintJIT(es, jit_flags, created_functions, generation_nanos)?;
+    Ok(())
 }
 
 // explain.c ExplainPrintJIT.
@@ -740,25 +683,25 @@ fn ExplainPrintJIT(
     jit_flags: i32,
     created_functions: i32,
     generation_nanos: u64,
-) {
+) -> PgResult<()> {
     if created_functions == 0 {
-        return;
+        return Ok(());
     }
     // Copy-and-patch has no inlining/optimization/emission phases and no
     // separate deform counter; those print 0.000 and Total == Generation.
     let generation_ms = 1000.0 * (generation_nanos as f64 / 1e9);
     let onoff = |set: bool| if set { "true" } else { "false" };
 
-    ExplainOpenGroup("JIT", Some("JIT"), true, es);
+    ExplainOpenGroup("JIT", Some("JIT"), true, es)?;
 
     if es.format == EXPLAIN_FORMAT_TEXT {
-        ExplainIndentText(es);
+        ExplainIndentText(es)?;
         es.str.append_str("JIT:\n").expect("explain output append");
         es.indent += 1;
 
-        ExplainPropertyInteger("Functions", None, created_functions as i64, es);
+        ExplainPropertyInteger("Functions", None, created_functions as i64, es)?;
 
-        ExplainIndentText(es);
+        ExplainIndentText(es)?;
         append!(
             es,
             "Options: Inlining {}, Optimization {}, Expressions {}, Deforming {}\n",
@@ -766,50 +709,51 @@ fn ExplainPrintJIT(
             onoff(jit_flags & PGJIT_OPT3 != 0),
             onoff(jit_flags & PGJIT_EXPR != 0),
             onoff(jit_flags & PGJIT_DEFORM != 0),
-        );
+        )?;
 
         if es.analyze && es.timing {
-            ExplainIndentText(es);
+            ExplainIndentText(es)?;
             append!(
                 es,
                 "Timing: Generation {generation_ms:.3} ms (Deform 0.000 ms), \
                  Inlining 0.000 ms, Optimization 0.000 ms, Emission 0.000 ms, \
                  Total {generation_ms:.3} ms\n",
-            );
+            )?;
         }
 
         es.indent -= 1;
     } else {
-        ExplainPropertyInteger("Functions", None, created_functions as i64, es);
+        ExplainPropertyInteger("Functions", None, created_functions as i64, es)?;
 
-        ExplainOpenGroup("Options", Some("Options"), true, es);
-        ExplainPropertyBool("Inlining", jit_flags & PGJIT_INLINE != 0, es);
-        ExplainPropertyBool("Optimization", jit_flags & PGJIT_OPT3 != 0, es);
-        ExplainPropertyBool("Expressions", jit_flags & PGJIT_EXPR != 0, es);
-        ExplainPropertyBool("Deforming", jit_flags & PGJIT_DEFORM != 0, es);
-        ExplainCloseGroup("Options", Some("Options"), true, es);
+        ExplainOpenGroup("Options", Some("Options"), true, es)?;
+        ExplainPropertyBool("Inlining", jit_flags & PGJIT_INLINE != 0, es)?;
+        ExplainPropertyBool("Optimization", jit_flags & PGJIT_OPT3 != 0, es)?;
+        ExplainPropertyBool("Expressions", jit_flags & PGJIT_EXPR != 0, es)?;
+        ExplainPropertyBool("Deforming", jit_flags & PGJIT_DEFORM != 0, es)?;
+        ExplainCloseGroup("Options", Some("Options"), true, es)?;
 
         if es.analyze && es.timing {
-            ExplainOpenGroup("Timing", Some("Timing"), true, es);
+            ExplainOpenGroup("Timing", Some("Timing"), true, es)?;
 
-            ExplainOpenGroup("Generation", Some("Generation"), true, es);
-            ExplainPropertyFloat("Deform", Some("ms"), 0.0, 3, es);
-            ExplainPropertyFloat("Total", Some("ms"), generation_ms, 3, es);
-            ExplainCloseGroup("Generation", Some("Generation"), true, es);
+            ExplainOpenGroup("Generation", Some("Generation"), true, es)?;
+            ExplainPropertyFloat("Deform", Some("ms"), 0.0, 3, es)?;
+            ExplainPropertyFloat("Total", Some("ms"), generation_ms, 3, es)?;
+            ExplainCloseGroup("Generation", Some("Generation"), true, es)?;
 
-            ExplainPropertyFloat("Inlining", Some("ms"), 0.0, 3, es);
-            ExplainPropertyFloat("Optimization", Some("ms"), 0.0, 3, es);
-            ExplainPropertyFloat("Emission", Some("ms"), 0.0, 3, es);
-            ExplainPropertyFloat("Total", Some("ms"), generation_ms, 3, es);
+            ExplainPropertyFloat("Inlining", Some("ms"), 0.0, 3, es)?;
+            ExplainPropertyFloat("Optimization", Some("ms"), 0.0, 3, es)?;
+            ExplainPropertyFloat("Emission", Some("ms"), 0.0, 3, es)?;
+            ExplainPropertyFloat("Total", Some("ms"), generation_ms, 3, es)?;
 
-            ExplainCloseGroup("Timing", Some("Timing"), true, es);
+            ExplainCloseGroup("Timing", Some("Timing"), true, es)?;
         }
     }
-    ExplainCloseGroup("JIT", Some("JIT"), true, es);
+    ExplainCloseGroup("JIT", Some("JIT"), true, es)?;
+    Ok(())
 }
 
 // explain.c ExplainPrintSerialize.
-fn ExplainPrintSerialize(es: &mut ExplainState<'_>, metrics: &explain_dr::SerializeMetrics) {
+fn ExplainPrintSerialize(es: &mut ExplainState<'_>, metrics: &explain_dr::SerializeMetrics) -> PgResult<()> {
     let format = if es.serialize == EXPLAIN_SERIALIZE_TEXT {
         "text"
     } else {
@@ -817,10 +761,10 @@ fn ExplainPrintSerialize(es: &mut ExplainState<'_>, metrics: &explain_dr::Serial
         "binary"
     };
 
-    ExplainOpenGroup("Serialization", Some("Serialization"), true, es);
+    ExplainOpenGroup("Serialization", Some("Serialization"), true, es)?;
 
     if es.format == EXPLAIN_FORMAT_TEXT {
-        ExplainIndentText(es);
+        ExplainIndentText(es)?;
         if es.timing {
             append!(
                 es,
@@ -828,32 +772,33 @@ fn ExplainPrintSerialize(es: &mut ExplainState<'_>, metrics: &explain_dr::Serial
                 1000.0 * metrics.timeSpent.get_double(),
                 bytes_to_kilobytes(metrics.bytesSent),
                 format
-            );
+            )?;
         } else {
             append!(
                 es,
                 "Serialization: output={}kB  format={}\n",
                 bytes_to_kilobytes(metrics.bytesSent),
                 format
-            );
+            )?;
         }
         if es.buffers && peek_buffer_usage(es, &metrics.bufferUsage) {
             es.indent += 1;
-            show_buffer_usage(es, &metrics.bufferUsage);
+            show_buffer_usage(es, &metrics.bufferUsage)?;
             es.indent -= 1;
         }
     } else {
         if es.timing {
-            ExplainPropertyFloat("Time", Some("ms"), 1000.0 * metrics.timeSpent.get_double(), 3, es);
+            ExplainPropertyFloat("Time", Some("ms"), 1000.0 * metrics.timeSpent.get_double(), 3, es)?;
         }
-        ExplainPropertyUInteger("Output Volume", Some("kB"), bytes_to_kilobytes(metrics.bytesSent), es);
-        ExplainPropertyText("Format", format, es);
+        ExplainPropertyUInteger("Output Volume", Some("kB"), bytes_to_kilobytes(metrics.bytesSent), es)?;
+        ExplainPropertyText("Format", format, es)?;
         if es.buffers {
-            show_buffer_usage(es, &metrics.bufferUsage);
+            show_buffer_usage(es, &metrics.bufferUsage)?;
         }
     }
 
-    ExplainCloseGroup("Serialization", Some("Serialization"), true, es);
+    ExplainCloseGroup("Serialization", Some("Serialization"), true, es)?;
+    Ok(())
 }
 
 pub(crate) fn peek_buffer_usage(es: &ExplainState<'_>, usage: &BufferUsage) -> bool {
@@ -880,18 +825,18 @@ fn buffer_usage_flags(u: &BufferUsage) -> (bool, bool, bool, bool, bool, bool) {
     )
 }
 
-pub(crate) fn show_buffer_usage(es: &mut ExplainState<'_>, usage: &BufferUsage) {
+pub(crate) fn show_buffer_usage(es: &mut ExplainState<'_>, usage: &BufferUsage) -> PgResult<()> {
     if es.format != EXPLAIN_FORMAT_TEXT {
-        ExplainPropertyInteger("Shared Hit Blocks", None, usage.shared_blks_hit, es);
-        ExplainPropertyInteger("Shared Read Blocks", None, usage.shared_blks_read, es);
-        ExplainPropertyInteger("Shared Dirtied Blocks", None, usage.shared_blks_dirtied, es);
-        ExplainPropertyInteger("Shared Written Blocks", None, usage.shared_blks_written, es);
-        ExplainPropertyInteger("Local Hit Blocks", None, usage.local_blks_hit, es);
-        ExplainPropertyInteger("Local Read Blocks", None, usage.local_blks_read, es);
-        ExplainPropertyInteger("Local Dirtied Blocks", None, usage.local_blks_dirtied, es);
-        ExplainPropertyInteger("Local Written Blocks", None, usage.local_blks_written, es);
-        ExplainPropertyInteger("Temp Read Blocks", None, usage.temp_blks_read, es);
-        ExplainPropertyInteger("Temp Written Blocks", None, usage.temp_blks_written, es);
+        ExplainPropertyInteger("Shared Hit Blocks", None, usage.shared_blks_hit, es)?;
+        ExplainPropertyInteger("Shared Read Blocks", None, usage.shared_blks_read, es)?;
+        ExplainPropertyInteger("Shared Dirtied Blocks", None, usage.shared_blks_dirtied, es)?;
+        ExplainPropertyInteger("Shared Written Blocks", None, usage.shared_blks_written, es)?;
+        ExplainPropertyInteger("Local Hit Blocks", None, usage.local_blks_hit, es)?;
+        ExplainPropertyInteger("Local Read Blocks", None, usage.local_blks_read, es)?;
+        ExplainPropertyInteger("Local Dirtied Blocks", None, usage.local_blks_dirtied, es)?;
+        ExplainPropertyInteger("Local Written Blocks", None, usage.local_blks_written, es)?;
+        ExplainPropertyInteger("Temp Read Blocks", None, usage.temp_blks_read, es)?;
+        ExplainPropertyInteger("Temp Written Blocks", None, usage.temp_blks_written, es)?;
         if guc_tables::vars::track_io_timing.read() {
             ExplainPropertyFloat(
                 "Shared I/O Read Time",
@@ -899,141 +844,142 @@ pub(crate) fn show_buffer_usage(es: &mut ExplainState<'_>, usage: &BufferUsage) 
                 usage.shared_blk_read_time.get_millisec(),
                 3,
                 es,
-            );
+            )?;
             ExplainPropertyFloat(
                 "Shared I/O Write Time",
                 Some("ms"),
                 usage.shared_blk_write_time.get_millisec(),
                 3,
                 es,
-            );
+            )?;
             ExplainPropertyFloat(
                 "Local I/O Read Time",
                 Some("ms"),
                 usage.local_blk_read_time.get_millisec(),
                 3,
                 es,
-            );
+            )?;
             ExplainPropertyFloat(
                 "Local I/O Write Time",
                 Some("ms"),
                 usage.local_blk_write_time.get_millisec(),
                 3,
                 es,
-            );
+            )?;
             ExplainPropertyFloat(
                 "Temp I/O Read Time",
                 Some("ms"),
                 usage.temp_blk_read_time.get_millisec(),
                 3,
                 es,
-            );
+            )?;
             ExplainPropertyFloat(
                 "Temp I/O Write Time",
                 Some("ms"),
                 usage.temp_blk_write_time.get_millisec(),
                 3,
                 es,
-            );
+            )?;
         }
-        return;
+        return Ok(());
     }
     let (has_shared, has_local, has_temp, has_shared_timing, has_local_timing, has_temp_timing) =
         buffer_usage_flags(usage);
 
     if has_shared || has_local || has_temp {
-        ExplainIndentText(es);
-        append!(es, "Buffers:");
+        ExplainIndentText(es)?;
+        append!(es, "Buffers:")?;
         if has_shared {
-            append!(es, " shared");
+            append!(es, " shared")?;
             if usage.shared_blks_hit > 0 {
-                append!(es, " hit={}", usage.shared_blks_hit);
+                append!(es, " hit={}", usage.shared_blks_hit)?;
             }
             if usage.shared_blks_read > 0 {
-                append!(es, " read={}", usage.shared_blks_read);
+                append!(es, " read={}", usage.shared_blks_read)?;
             }
             if usage.shared_blks_dirtied > 0 {
-                append!(es, " dirtied={}", usage.shared_blks_dirtied);
+                append!(es, " dirtied={}", usage.shared_blks_dirtied)?;
             }
             if usage.shared_blks_written > 0 {
-                append!(es, " written={}", usage.shared_blks_written);
+                append!(es, " written={}", usage.shared_blks_written)?;
             }
             if has_local || has_temp {
-                append!(es, ",");
+                append!(es, ",")?;
             }
         }
         if has_local {
-            append!(es, " local");
+            append!(es, " local")?;
             if usage.local_blks_hit > 0 {
-                append!(es, " hit={}", usage.local_blks_hit);
+                append!(es, " hit={}", usage.local_blks_hit)?;
             }
             if usage.local_blks_read > 0 {
-                append!(es, " read={}", usage.local_blks_read);
+                append!(es, " read={}", usage.local_blks_read)?;
             }
             if usage.local_blks_dirtied > 0 {
-                append!(es, " dirtied={}", usage.local_blks_dirtied);
+                append!(es, " dirtied={}", usage.local_blks_dirtied)?;
             }
             if usage.local_blks_written > 0 {
-                append!(es, " written={}", usage.local_blks_written);
+                append!(es, " written={}", usage.local_blks_written)?;
             }
             if has_temp {
-                append!(es, ",");
+                append!(es, ",")?;
             }
         }
         if has_temp {
-            append!(es, " temp");
+            append!(es, " temp")?;
             if usage.temp_blks_read > 0 {
-                append!(es, " read={}", usage.temp_blks_read);
+                append!(es, " read={}", usage.temp_blks_read)?;
             }
             if usage.temp_blks_written > 0 {
-                append!(es, " written={}", usage.temp_blks_written);
+                append!(es, " written={}", usage.temp_blks_written)?;
             }
         }
-        append!(es, "\n");
+        append!(es, "\n")?;
     }
 
     if has_shared_timing || has_local_timing || has_temp_timing {
-        ExplainIndentText(es);
-        append!(es, "I/O Timings:");
+        ExplainIndentText(es)?;
+        append!(es, "I/O Timings:")?;
         if has_shared_timing {
-            append!(es, " shared");
+            append!(es, " shared")?;
             if !usage.shared_blk_read_time.is_zero() {
-                append!(es, " read={:.3}", usage.shared_blk_read_time.get_millisec());
+                append!(es, " read={:.3}", usage.shared_blk_read_time.get_millisec())?;
             }
             if !usage.shared_blk_write_time.is_zero() {
-                append!(es, " write={:.3}", usage.shared_blk_write_time.get_millisec());
+                append!(es, " write={:.3}", usage.shared_blk_write_time.get_millisec())?;
             }
             if has_local_timing || has_temp_timing {
-                append!(es, ",");
+                append!(es, ",")?;
             }
         }
         if has_local_timing {
-            append!(es, " local");
+            append!(es, " local")?;
             if !usage.local_blk_read_time.is_zero() {
-                append!(es, " read={:.3}", usage.local_blk_read_time.get_millisec());
+                append!(es, " read={:.3}", usage.local_blk_read_time.get_millisec())?;
             }
             if !usage.local_blk_write_time.is_zero() {
-                append!(es, " write={:.3}", usage.local_blk_write_time.get_millisec());
+                append!(es, " write={:.3}", usage.local_blk_write_time.get_millisec())?;
             }
             if has_temp_timing {
-                append!(es, ",");
+                append!(es, ",")?;
             }
         }
         if has_temp_timing {
-            append!(es, " temp");
+            append!(es, " temp")?;
             if !usage.temp_blk_read_time.is_zero() {
-                append!(es, " read={:.3}", usage.temp_blk_read_time.get_millisec());
+                append!(es, " read={:.3}", usage.temp_blk_read_time.get_millisec())?;
             }
             if !usage.temp_blk_write_time.is_zero() {
-                append!(es, " write={:.3}", usage.temp_blk_write_time.get_millisec());
+                append!(es, " write={:.3}", usage.temp_blk_write_time.get_millisec())?;
             }
         }
-        append!(es, "\n");
+        append!(es, "\n")?;
     }
+    Ok(())
 }
 
 // show_wal_usage (explain.c).
-pub(crate) fn show_wal_usage(es: &mut ExplainState<'_>, usage: &WalUsage) {
+pub(crate) fn show_wal_usage(es: &mut ExplainState<'_>, usage: &WalUsage) -> PgResult<()> {
     if es.format == EXPLAIN_FORMAT_TEXT {
         // Show only positive counter values.
         if usage.wal_records > 0
@@ -1041,28 +987,29 @@ pub(crate) fn show_wal_usage(es: &mut ExplainState<'_>, usage: &WalUsage) {
             || usage.wal_bytes > 0
             || usage.wal_buffers_full > 0
         {
-            ExplainIndentText(es);
-            append!(es, "WAL:");
+            ExplainIndentText(es)?;
+            append!(es, "WAL:")?;
             if usage.wal_records > 0 {
-                append!(es, " records={}", usage.wal_records);
+                append!(es, " records={}", usage.wal_records)?;
             }
             if usage.wal_fpi > 0 {
-                append!(es, " fpi={}", usage.wal_fpi);
+                append!(es, " fpi={}", usage.wal_fpi)?;
             }
             if usage.wal_bytes > 0 {
-                append!(es, " bytes={}", usage.wal_bytes);
+                append!(es, " bytes={}", usage.wal_bytes)?;
             }
             if usage.wal_buffers_full > 0 {
-                append!(es, " buffers full={}", usage.wal_buffers_full);
+                append!(es, " buffers full={}", usage.wal_buffers_full)?;
             }
-            append!(es, "\n");
+            append!(es, "\n")?;
         }
     } else {
-        ExplainPropertyInteger("WAL Records", None, usage.wal_records, es);
-        ExplainPropertyInteger("WAL FPI", None, usage.wal_fpi, es);
-        ExplainPropertyUInteger("WAL Bytes", None, usage.wal_bytes, es);
-        ExplainPropertyInteger("WAL Buffers Full", None, usage.wal_buffers_full, es);
+        ExplainPropertyInteger("WAL Records", None, usage.wal_records, es)?;
+        ExplainPropertyInteger("WAL FPI", None, usage.wal_fpi, es)?;
+        ExplainPropertyUInteger("WAL Bytes", None, usage.wal_bytes, es)?;
+        ExplainPropertyInteger("WAL Buffers Full", None, usage.wal_buffers_full, es)?;
     }
+    Ok(())
 }
 
 // ExplainPrintTriggers (explain.c:832-871): report_triggers over
@@ -1085,7 +1032,7 @@ pub fn ExplainPrintTriggers<'mcx>(
         execmain_seams::query_desc_trigger_instrument::call(qd)
     };
 
-    ExplainOpenGroup("Triggers", Some("Triggers"), false, es);
+    ExplainOpenGroup("Triggers", Some("Triggers"), false, es)?;
 
     let n_resultrels = rels.iter().filter(|r| r.kind == OPENED).count();
     let show_relname = n_resultrels > 1
@@ -1097,7 +1044,7 @@ pub fn ExplainPrintTriggers<'mcx>(
         }
     }
 
-    ExplainCloseGroup("Triggers", Some("Triggers"), false, es);
+    ExplainCloseGroup("Triggers", Some("Triggers"), false, es)?;
     Ok(())
 }
 
@@ -1116,7 +1063,7 @@ fn report_triggers<'mcx>(
             continue;
         }
 
-        ExplainOpenGroup("Trigger", None, true, es);
+        ExplainOpenGroup("Trigger", None, true, es)?;
 
         let conname = if *tgconstraint != types_core::InvalidOid {
             lsyscache::get_constraint_name(mcx, *tgconstraint)?.map(|s| s.as_str().to_owned())
@@ -1149,18 +1096,18 @@ fn report_triggers<'mcx>(
                 es.str.append_str(&format!(": calls={:.0}\n", instr.ntuples))?;
             }
         } else {
-            ExplainPropertyText("Trigger Name", tgname, es);
+            ExplainPropertyText("Trigger Name", tgname, es)?;
             if let Some(c) = &conname {
-                ExplainPropertyText("Constraint Name", c, es);
+                ExplainPropertyText("Constraint Name", c, es)?;
             }
-            ExplainPropertyText("Relation", &r.relname, es);
+            ExplainPropertyText("Relation", &r.relname, es)?;
             if es.timing {
-                ExplainPropertyFloat("Time", Some("ms"), 1000.0 * instr.total, 3, es);
+                ExplainPropertyFloat("Time", Some("ms"), 1000.0 * instr.total, 3, es)?;
             }
-            ExplainPropertyFloat("Calls", None, instr.ntuples, 0, es);
+            ExplainPropertyFloat("Calls", None, instr.ntuples, 0, es)?;
         }
 
-        ExplainCloseGroup("Trigger", None, true, es);
+        ExplainCloseGroup("Trigger", None, true, es)?;
     }
     Ok(())
 }

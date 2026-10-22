@@ -23,7 +23,7 @@ use condition_variable::{
     ConditionVariableSleep,
 };
 use datum::Datum;
-use elog::{elog, ereport, errno};
+use elog::{elog, ereport, errno, PCT_M};
 use lwlock::{LWLockAcquire, LWLockPadded, LWLockRelease, LW_EXCLUSIVE, LW_SHARED};
 use mcx::Mcx;
 use types_core::{
@@ -212,7 +212,7 @@ fn text_datum_to_bytes(mcx: Mcx<'_>, d: Datum) -> PgResult<Vec<u8>> {
     // text_to_cstring(&full_image) call kept the 4-byte varlena header glued
     // to the front of every roname read back through this path.
     let payload = varlena::open_image(mcx, raw)?;
-    Ok(payload.as_bytes().to_vec())
+    Ok(::mcx::std_vec_from_slice("replication", &payload.as_bytes())?)
 }
 
 fn text_datum(mcx: Mcx<'_>, s: &[u8]) -> PgResult<Datum> {
@@ -579,7 +579,7 @@ pub fn CheckPointReplicationOrigin() -> PgResult<()> {
         ereport(PANIC)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not remove file \"{tmppath}\": %m"))
+            .errmsg(format!("could not remove file \"{tmppath}\": {PCT_M}"))
             .finish(loc("CheckPointReplicationOrigin"))?;
         unreachable!();
     }
@@ -590,7 +590,7 @@ pub fn CheckPointReplicationOrigin() -> PgResult<()> {
         ereport(PANIC)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{tmppath}\": %m"))
+            .errmsg(format!("could not create file \"{tmppath}\": {PCT_M}"))
             .finish(loc("CheckPointReplicationOrigin"))?;
         unreachable!();
     }
@@ -623,7 +623,7 @@ pub fn CheckPointReplicationOrigin() -> PgResult<()> {
             ereport(PANIC)
                 .with_saved_errno(save_errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not write to file \"{tmppath}\": %m"))
+                .errmsg(format!("could not write to file \"{tmppath}\": {PCT_M}"))
                 .finish(loc("CheckPointReplicationOrigin"))?;
         unreachable!();
         }
@@ -667,7 +667,7 @@ pub fn CheckPointReplicationOrigin() -> PgResult<()> {
         ereport(PANIC)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{tmppath}\": %m"))
+            .errmsg(format!("could not close file \"{tmppath}\": {PCT_M}"))
             .finish(loc("CheckPointReplicationOrigin"))?;
         unreachable!();
     }
@@ -701,7 +701,7 @@ pub fn StartupReplicationOrigin() -> PgResult<()> {
             ereport(PANIC)
                 .with_saved_errno(errno::current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m"))
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                 .finish(loc("StartupReplicationOrigin"))?;
         unreachable!();
         }
@@ -718,7 +718,7 @@ pub fn StartupReplicationOrigin() -> PgResult<()> {
             ereport(PANIC)
                 .with_saved_errno(errno::current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{path}\": %m"))
+                .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                 .finish(loc("StartupReplicationOrigin"))?;
         unreachable!();
         }
@@ -818,7 +818,7 @@ pub fn StartupReplicationOrigin() -> PgResult<()> {
         ereport(PANIC)
             .with_saved_errno(errno::current_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{path}\": %m"))
+            .errmsg(format!("could not close file \"{path}\": {PCT_M}"))
             .finish(loc("StartupReplicationOrigin"))?;
         unreachable!();
     }
@@ -1076,6 +1076,8 @@ pub fn replorigin_get_progress(node: RepOriginId, flush: bool) -> PgResult<XLogR
 // ReplicationOriginExitCleanup (origin.c): tear down a configured session
 // origin during process exit.
 fn ReplicationOriginExitCleanup(_code: i32, _arg: usize) {
+    // D4682: the registration is spent; a reused thread's next session registers again.
+    REGISTERED_CLEANUP.set(false);
     let Some(state) = SESSION_REPLICATION_STATE.get() else {
         return;
     };

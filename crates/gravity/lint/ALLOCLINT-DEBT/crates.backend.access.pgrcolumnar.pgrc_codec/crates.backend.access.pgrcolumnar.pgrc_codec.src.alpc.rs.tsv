@@ -1,0 +1,5 @@
+path	crates/backend/access/pgrcolumnar/pgrc_codec/src/alpc.rs
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	2
+type	std::sync::Arc	1
+type	std::vec::Vec	2

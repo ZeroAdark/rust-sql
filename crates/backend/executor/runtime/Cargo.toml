@@ -16,6 +16,11 @@ path = "src/lib.rs"
 # src/sync.rs; the heavy binder re-export (`parallel`) is cfg(not(loom)) so
 # the loom build cone stays small.
 [dependencies]
+# ALLOC-LADDER (b): the pool's workers answer the ladder's collect ask (mcx::answer_collect)
+mcx = { path = "../../../_support/mcx" }
+# D4552 (a): a resource group and its task sets free inside the account that made them (memledger::Home)
+memledger = { path = "../../../_support/memledger" }
+pagegive = { path = "../../../_support/pagegive" }
 # THE single lock library (permit-s1): src/sync.rs is a facade over it.
 pgsync = { path = "../../../_support/pgsync" }
 pg_clock = { path = "../../../port/pg_clock" }

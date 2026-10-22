@@ -1,0 +1,10 @@
+-- regress-full-date-002
+-- SELECT f1 as "date", date_part('year', f1) AS year, date_part('month', f1) AS month, date_part('day', f1) AS day, date_part('quarter', f1) AS quarter, date_part('decade', f1) AS decade, date_part('century', f1) AS century, date_part('millennium', f1) AS millennium, date_part('isoyear', f1) AS isoyear, date_part('week', f1) AS week, date_part('dow', f1) AS dow, date_part('isodow', f1) AS isodow, date_part('doy', f1) AS doy, date_part('julian', f1) AS julian, date_part('epoch', f1) AS epoch FROM date_tbl;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2550 end=sink
+  nodes n0@0
+  source range rel=17141 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=fn2021(c25:'year', fn2024(v1.1)), 3=fn2021(c25:'month', fn2024(v1.1)), 4=fn2021(c25:'day', fn2024(v1.1)), 5=fn2021(c25:'quarter', fn2024(v1.1)), 6=fn2021(c25:'decade', fn2024(v1.1)), 7=fn2021(c25:'century', fn2024(v1.1)), 8=fn2021(c25:'millennium', fn2024(v1.1)), 9=fn2021(c25:'isoyear', fn2024(v1.1)), 10=fn2021(c25:'week', fn2024(v1.1)), 11=fn2021(c25:'dow', fn2024(v1.1)), 12=fn2021(c25:'isodow', fn2024(v1.1)), 13=fn2021(c25:'doy', fn2024(v1.1)), 14=fn2021(c25:'julian', fn2024(v1.1)), 15=fn2021(c25:'epoch', fn2024(v1.1)))
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=w8:val 15=w8:val
+mapped: SeqScan

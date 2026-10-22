@@ -13,6 +13,7 @@ types_fmgr = { path = "../../../../_support/types/fmgr" }
 fmgr_seams = { path = "../../fmgr/fmgr_seams" }
 lsyscache = { path = "../lsyscache" }
 inval = { path = "../inval" }
+gravity_deps = { path = "../../../../gravity/deps" }
 syscache_seams = { path = "../syscache_seams" }
 typcache_seams = { path = "../typcache_seams" }
 indexcmds_seams = { path = "../../../commands/indexcmds_seams" }

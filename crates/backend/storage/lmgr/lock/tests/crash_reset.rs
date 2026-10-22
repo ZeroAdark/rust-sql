@@ -130,6 +130,7 @@ fn setup() {
     ps_status_seams::set_ps_display_suffix::set(|_| {});
     ps_status_seams::set_ps_display_remove_suffix::set(|| {});
     elog_seams::ereport_msg::set(|_, _, _| Ok(()));
+    elog_seams::ereport_msg_detail_log::set(|_, _, _| Ok(()));
     lmgr_seams::describe_lock_tag::set(|tag| format!("{tag:?}"));
 
     shmem_seams::add_size::set(|a, b| Ok(a.checked_add(b).expect("size overflow")));

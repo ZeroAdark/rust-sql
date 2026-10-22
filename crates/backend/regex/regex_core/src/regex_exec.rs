@@ -152,9 +152,13 @@ impl SmallDfaSpace {
 // The safe-Rust equivalent of that zero-cost space is a retained per-thread
 // pair: zeroed once per thread, dirty reuse after (every row is written by
 // pickss before it is read, same discipline C relies on for its stack).
+// h1/h2 do the same for C's MALLOCed (never zeroed) dfa arrays, which a
+// fresh per-call Vec would zero-fill in full (hundreds of MB for 40k states).
 pub struct ExecScratch {
     s1: SmallDfaSpace,
     s2: SmallDfaSpace,
+    h1: Option<HeapSpace>,
+    h2: Option<HeapSpace>,
 }
 
 impl ExecScratch {
@@ -162,7 +166,18 @@ impl ExecScratch {
         ExecScratch {
             s1: SmallDfaSpace::new(),
             s2: SmallDfaSpace::new(),
+            h1: None,
+            h2: None,
         }
+    }
+}
+
+// C frees its dfa per call; a retained one that used more than this is freed.
+const HEAP_RETAIN_BYTES: usize = 16 << 20;
+
+fn release_if_large(slot: &mut Option<HeapSpace>, used_bytes: usize) {
+    if used_bytes > HEAP_RETAIN_BYTES {
+        *slot = None;
     }
 }
 
@@ -182,48 +197,113 @@ const C_SIZEOF_SSET: usize = 56;
 const C_SIZEOF_ARCP: usize = 16;
 const C_SIZEOF_PTR: usize = core::mem::size_of::<usize>();
 
-fn zeroed_u32_vec(n: usize) -> RegResult<Vec<u32>> {
-    crate::regex_error::check_alloc_request(n, core::mem::size_of::<u32>())?;
-    let mut v: Vec<u32> = Vec::new();
-    v.try_reserve_exact(n)?;
-    v.resize(n, 0);
-    Ok(v)
+// SAFETY: implementors accept the all-zero bit pattern (integer fields only).
+unsafe trait ZeroValid: Copy {}
+unsafe impl ZeroValid for u32 {}
+unsafe impl ZeroValid for Arcp {}
+unsafe impl ZeroValid for Sset {}
+
+// libc calloc, like C's MALLOC: demand-zero pages, only rows pickss hands out
+// become resident (the global allocator may zero a recycled block up front).
+struct LazyArray<T: ZeroValid> {
+    ptr: core::ptr::NonNull<T>,
+    len: usize,
+}
+
+impl<T: ZeroValid> LazyArray<T> {
+    fn zeroed(n: usize, c_size: usize) -> RegResult<LazyArray<T>> {
+        crate::regex_error::check_alloc_request(n, c_size)?;
+        let layout = Self::layout(n)?;
+        if layout.size() == 0 {
+            return Ok(LazyArray { ptr: core::ptr::NonNull::dangling(), len: n });
+        }
+        // SAFETY: non-zero-size layout.
+        let p = unsafe { std::alloc::GlobalAlloc::alloc_zeroed(&std::alloc::System, layout) };
+        let ptr = core::ptr::NonNull::new(p.cast::<T>()).ok_or(RegError(REG_ESPACE))?;
+        Ok(LazyArray { ptr, len: n })
+    }
+
+    fn layout(n: usize) -> RegResult<alloc::alloc::Layout> {
+        alloc::alloc::Layout::array::<T>(n).map_err(|_| RegError(REG_ESPACE))
+    }
+}
+
+impl<T: ZeroValid> core::ops::Deref for LazyArray<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        // SAFETY: ptr holds len initialized Ts (zeroed, ZeroValid, or written).
+        unsafe { core::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl<T: ZeroValid> core::ops::DerefMut for LazyArray<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        // SAFETY: as in deref; &mut self is exclusive.
+        unsafe { core::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl<T: ZeroValid> Drop for LazyArray<T> {
+    fn drop(&mut self) {
+        let layout = Self::layout(self.len).expect("layout checked at allocation");
+        if layout.size() != 0 {
+            // SAFETY: allocated by System with this layout in zeroed().
+            unsafe {
+                std::alloc::GlobalAlloc::dealloc(&std::alloc::System, self.ptr.as_ptr().cast(), layout)
+            };
+        }
+    }
 }
 
 pub struct HeapSpace {
-    ssets: Vec<Sset>,
-    statesarea: Vec<u32>,
-    outs: Vec<u32>,
-    incarea: Vec<Arcp>,
+    ssets: LazyArray<Sset>,
+    statesarea: LazyArray<u32>,
+    outs: LazyArray<u32>,
+    incarea: LazyArray<Arcp>,
+}
+
+fn heap_dims(cnfa: &Cnfa) -> RegResult<(usize, usize, usize)> {
+    let nss: usize = (cnfa.nstates as usize)
+        .checked_mul(2)
+        .ok_or(RegError(REG_ESPACE))?;
+    let wordsper: usize = (cnfa.nstates as usize).div_ceil(UBITS);
+    let ncolors: usize = cnfa.ncolors as usize;
+    // upstream f3cee4dc4330 (18.4): Harden our regex engine against integer overflow in size calculations.
+    // C newdfa's bound: no array below may exceed INT_MAX members, on any word size.
+    let int_max = i32::MAX as usize;
+    if wordsper >= int_max / (nss + WORK) || ncolors >= int_max / nss {
+        return Err(RegError(REG_ETOOBIG));
+    }
+    let statesarea_words = nss
+        .checked_add(WORK)
+        .and_then(|n| n.checked_mul(wordsper))
+        .ok_or(RegError(REG_ESPACE))?;
+    let vec_area = nss.checked_mul(ncolors).ok_or(RegError(REG_ESPACE))?;
+    Ok((nss, statesarea_words, vec_area))
 }
 
 impl HeapSpace {
     fn for_cnfa(cnfa: &Cnfa) -> RegResult<HeapSpace> {
-        let nss: usize = (cnfa.nstates as usize)
-            .checked_mul(2)
-            .ok_or(RegError(REG_ESPACE))?;
-        let wordsper: usize = (cnfa.nstates as usize).div_ceil(UBITS);
-        let ncolors: usize = cnfa.ncolors as usize;
-        // upstream f3cee4dc4330 (18.4): Harden our regex engine against integer overflow in size calculations.
-        // C newdfa's bound: no array below may exceed INT_MAX members, on any word size.
-        let int_max = i32::MAX as usize;
-        if wordsper >= int_max / (nss + WORK) || ncolors >= int_max / nss {
-            return Err(RegError(REG_ETOOBIG));
-        }
-        let statesarea_words = nss
-            .checked_add(WORK)
-            .and_then(|n| n.checked_mul(wordsper))
-            .ok_or(RegError(REG_ESPACE))?;
-        let vec_area = nss.checked_mul(ncolors).ok_or(RegError(REG_ESPACE))?;
+        let (nss, statesarea_words, vec_area) = heap_dims(cnfa)?;
         Ok(HeapSpace {
-            ssets: fill_vec(nss, Sset::blank(), C_SIZEOF_SSET)?,
-            statesarea: zeroed_u32_vec(statesarea_words)?,
-            outs: {
-                crate::regex_error::check_alloc_request(vec_area, C_SIZEOF_PTR)?;
-                zeroed_u32_vec(vec_area)?
-            },
-            incarea: fill_vec(vec_area, Arcp::null(), C_SIZEOF_ARCP)?,
+            ssets: LazyArray::zeroed(nss, C_SIZEOF_SSET)?,
+            statesarea: LazyArray::zeroed(statesarea_words, core::mem::size_of::<u32>())?,
+            outs: LazyArray::zeroed(vec_area, C_SIZEOF_PTR)?,
+            incarea: LazyArray::zeroed(vec_area, C_SIZEOF_ARCP)?,
         })
+    }
+
+    // C's size checks and alloc-size errors run on every newdfa.
+    fn fits(&self, cnfa: &Cnfa) -> RegResult<bool> {
+        let (nss, statesarea_words, vec_area) = heap_dims(cnfa)?;
+        crate::regex_error::check_alloc_request(nss, C_SIZEOF_SSET)?;
+        crate::regex_error::check_alloc_request(statesarea_words, core::mem::size_of::<u32>())?;
+        crate::regex_error::check_alloc_request(vec_area, C_SIZEOF_PTR)?;
+        crate::regex_error::check_alloc_request(vec_area, C_SIZEOF_ARCP)?;
+        Ok(self.ssets.len() >= nss
+            && self.statesarea.len() >= statesarea_words
+            && self.outs.len() >= vec_area
+            && self.incarea.len() >= vec_area)
     }
 }
 
@@ -349,6 +429,13 @@ pub struct Dfa<'s> {
 }
 
 impl Dfa<'_> {
+    fn used_bytes(&self) -> usize {
+        let row = self.wordsper * core::mem::size_of::<u32>()
+            + self.ncolors * (core::mem::size_of::<u32>() + core::mem::size_of::<Arcp>())
+            + core::mem::size_of::<Sset>();
+        self.nssused.saturating_mul(row)
+    }
+
     fn meta(&self) -> DfaMeta {
         DfaMeta {
             nssets: self.nssets,
@@ -483,7 +570,15 @@ pub fn newdfa<'s>(
             &mut sml.incarea,
         ))
     } else {
-        let h = heap.insert(HeapSpace::for_cnfa(cnfa)?);
+        let reuse = match heap.as_ref() {
+            Some(h) => h.fits(cnfa)?,
+            None => false,
+        };
+        if !reuse {
+            *heap = None;
+            *heap = Some(HeapSpace::for_cnfa(cnfa)?);
+        }
+        let h = heap.as_mut().expect("heap space installed above");
         Ok(dfa_from_parts(
             meta,
             &mut h.ssets,
@@ -1259,10 +1354,9 @@ fn find(
     let search_start = v.search_start;
     let stop = v.stop;
     let mut cold: Option<usize> = None;
-    let close = {
-        let mut sheap = None;
-        let mut s = newdfa(v.eflags, &g.search, &mut scratch.s1, &mut sheap)?;
-        shortest(v,
+    let (close, used) = {
+        let mut s = newdfa(v.eflags, &g.search, &mut scratch.s1, &mut scratch.h1)?;
+        let close = shortest(v,
             g,
             &mut s,
             &g.search,
@@ -1272,8 +1366,10 @@ fn find(
             stop,
             Some(&mut cold),
             None,
-        )
+        );
+        (close, s.used_bytes())
     };
+    release_if_large(&mut scratch.h1, used);
     let close = close?;
 
     let _ = REG_EXPECT;
@@ -1289,18 +1385,24 @@ fn find(
     let open = cold.expect("find: cold set when close found");
     let mut cold: Option<usize> = None;
 
-    let mut dheap = None;
-    let mut d = newdfa(v.eflags, cnfa, &mut scratch.s1, &mut dheap)?;
+    let mut d = newdfa(v.eflags, cnfa, &mut scratch.s1, &mut scratch.h1)?;
     let mut begin = open;
     let mut end: Option<usize> = None;
+    let mut r = Ok(());
     while begin <= close {
         let mut hitend = false;
-        let r = if shorter {
+        let e = if shorter {
             shortest(v, g, &mut d, cnfa, cm, begin, begin, stop, None, Some(&mut hitend))
         } else {
             longest(v, g, &mut d, cnfa, cm, begin, stop, Some(&mut hitend))
         };
-        end = r?;
+        match e {
+            Ok(e) => end = e,
+            Err(err) => {
+                r = Err(err);
+                break;
+            }
+        }
         if hitend && cold.is_none() {
             cold = Some(begin);
         }
@@ -1309,8 +1411,11 @@ fn find(
         }
         begin += 1;
     }
-    let end = end.expect("find: search RE succeeded so loop should find an end");
+    let used = d.used_bytes();
     drop(d);
+    release_if_large(&mut scratch.h1, used);
+    r?;
+    let end = end.expect("find: search RE succeeded so loop should find an end");
     let _ = cold;
 
     debug_assert!(v.nmatch > 0);
@@ -1330,17 +1435,26 @@ fn cfind(
     cm: &ColorMap,
     scratch: &mut ExecScratch,
 ) -> RegResult<i32> {
-    let mut sheap = None;
-    let mut dheap = None;
-    let (sml1, sml2) = (&mut scratch.s1, &mut scratch.s2);
-    let mut s = newdfa(v.eflags, &g.search, sml1, &mut sheap)?;
-    let mut d = newdfa(v.eflags, cnfa, sml2, &mut dheap)?;
+    let ExecScratch { s1, s2, h1, h2 } = scratch;
+    let mut s = newdfa(v.eflags, &g.search, s1, h1)?;
+    let mut d = match newdfa(v.eflags, cnfa, s2, h2) {
+        Ok(d) => d,
+        Err(e) => {
+            let used = s.used_bytes();
+            drop(s);
+            release_if_large(h1, used);
+            return Err(e);
+        }
+    };
 
     let mut cold: Option<usize> = None;
     let ret = cfindloop(v, g, cnfa, cm, &mut d, &mut s, &mut cold);
 
+    let (dused, sused) = (d.used_bytes(), s.used_bytes());
     drop(d);
     drop(s);
+    release_if_large(h2, dused);
+    release_if_large(h1, sused);
     let ret = ret?;
     let _ = cold; // C surfaces it via details.rm_extend (no out-param here).
     Ok(ret)
@@ -1498,7 +1612,11 @@ fn pg_regexec_code(
 
     if backref && nmatch <= g.nsub {
         v_nmatch = g.nsub + 1;
-        work = alloc::vec![(-1isize, -1isize); v_nmatch];
+        work = Vec::new();
+        if work.try_reserve_exact(v_nmatch).is_err() {
+            return REG_ESPACE;
+        }
+        work.resize(v_nmatch, (-1isize, -1isize));
         zapallsubs(&mut work, v_nmatch);
     } else {
         if nmatch > 0 {
@@ -1528,8 +1646,16 @@ fn pg_regexec_code(
     debug_assert!(g.nlacons >= 0);
     let nlacons = g.nlacons as usize;
     let ladfas: Vec<Option<SubDfa>> = (0..nlacons).map(|_| None).collect();
-    let lblastcss: Vec<Option<usize>> = alloc::vec![None; nlacons];
-    let lblastcp: Vec<Option<usize>> = alloc::vec![None; nlacons];
+    let mut lblastcss: Vec<Option<usize>> = Vec::new();
+    if lblastcss.try_reserve_exact(nlacons).is_err() {
+        return REG_ESPACE;
+    }
+    lblastcss.resize(nlacons, None);
+    let mut lblastcp: Vec<Option<usize>> = Vec::new();
+    if lblastcp.try_reserve_exact(nlacons).is_err() {
+        return REG_ESPACE;
+    }
+    lblastcp.resize(nlacons, None);
 
     let mut v = ExecVars {
         eflags: flags,

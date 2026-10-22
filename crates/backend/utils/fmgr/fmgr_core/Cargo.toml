@@ -83,7 +83,8 @@ signalfuncs = { path = "../../../storage/ipc/signalfuncs" }
 lockfuncs = { path = "../../adt/lockfuncs" }
 pseudorandomfuncs = { path = "../../adt/pseudorandomfuncs" }
 trigfuncs = { path = "../../adt/trigfuncs" }
-conv = { path = "../../mb/conv" }
+# default-features = false: the CJK conversion libraries come from the server binary's `cjk-encodings` feature (main_main)
+conv = { path = "../../mb/conv", default-features = false }
 mcx = { path = "../../../../_support/mcx" }
 syscache_seams = { path = "../../cache/syscache_seams" }
 guc_seams = { path = "../../misc/guc_seams" }

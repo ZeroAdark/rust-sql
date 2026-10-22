@@ -1,0 +1,93 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1wait s1rr s1agg mdetach s2del mbear mflush mflush s2wake s1c mflush mflush mclear ragg
+setup_delete
+------------
+done        
+(1 row)
+
+step s1wait: DO $$ BEGIN PERFORM injection_points_attach('pgrc-front-served-clear', 'wait'); PERFORM injection_points_attach('pgrc-front-scan-start', 'wait'); END $$;
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1agg: SELECT count(*), sum(v) FROM pgrc_g; <waiting ...>
+step mdetach: DO $$ BEGIN PERFORM injection_points_detach('pgrc-front-served-clear'); PERFORM injection_points_detach('pgrc-front-scan-start'); END $$;
+step s2del: DO $$ BEGIN DELETE FROM pgrc_g WHERE id IN (7, 8); END $$;
+step mbear: SELECT pgrc_tomb_blocks_in('pgrc_g', 1, 1000000) AS tomb_blocks;
+tomb_blocks
+-----------
+t          
+(1 row)
+
+step mflush: CALL pgrc_seal('pgrc_g');
+step mflush: CALL pgrc_seal('pgrc_g');
+step s2wake: DO $$ BEGIN PERFORM injection_points_wakeup('pgrc-front-served-clear'); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+              DO $$ BEGIN PERFORM injection_points_wakeup('pgrc-front-scan-start'); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+step s1agg: <... completed>
+count| sum
+-----+----
+   99|4950
+(1 row)
+
+step s1c: COMMIT;
+step mflush: CALL pgrc_seal('pgrc_g');
+step mflush: CALL pgrc_seal('pgrc_g');
+step mclear: SELECT pgrc_tomb_blocks_in('pgrc_g', 0, 0) AS no_tomb_blocks;
+no_tomb_blocks
+--------------
+t             
+(1 row)
+
+step ragg: SELECT count(*), sum(v) FROM pgrc_g;
+count| sum
+-----+----
+   97|4935
+(1 row)
+
+
+starting permutation: s2del s1rr s1agg mflush mbear mflush mbear s1agg s1c mflush mclear ragg
+setup_delete
+------------
+done        
+(1 row)
+
+step s2del: DO $$ BEGIN DELETE FROM pgrc_g WHERE id IN (7, 8); END $$;
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1agg: SELECT count(*), sum(v) FROM pgrc_g;
+count| sum
+-----+----
+   97|4935
+(1 row)
+
+step mflush: CALL pgrc_seal('pgrc_g');
+step mbear: SELECT pgrc_tomb_blocks_in('pgrc_g', 1, 1000000) AS tomb_blocks;
+tomb_blocks
+-----------
+t          
+(1 row)
+
+step mflush: CALL pgrc_seal('pgrc_g');
+step mbear: SELECT pgrc_tomb_blocks_in('pgrc_g', 1, 1000000) AS tomb_blocks;
+tomb_blocks
+-----------
+t          
+(1 row)
+
+step s1agg: SELECT count(*), sum(v) FROM pgrc_g;
+count| sum
+-----+----
+   97|4935
+(1 row)
+
+step s1c: COMMIT;
+step mflush: CALL pgrc_seal('pgrc_g');
+step mclear: SELECT pgrc_tomb_blocks_in('pgrc_g', 0, 0) AS no_tomb_blocks;
+no_tomb_blocks
+--------------
+t             
+(1 row)
+
+step ragg: SELECT count(*), sum(v) FROM pgrc_g;
+count| sum
+-----+----
+   97|4935
+(1 row)
+

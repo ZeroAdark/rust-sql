@@ -1,0 +1,18 @@
+-- regress-full-float8-010
+-- SELECT x, sind(x), sind(x) IN (-1,-0.5,0,0.5,1) AS sind_exact FROM (VALUES (0), (30), (90), (150), (180), (210), (270), (330), (360)) AS t(x);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=9
+    row (c23:0)
+    row (c23:30)
+    row (c23:90)
+    row (c23:150)
+    row (c23:180)
+    row (c23:210)
+    row (c23:270)
+    row (c23:330)
+    row (c23:360)
+  project (1=v2.1, 2=fn2735(fn316(v2.1)), 3=any670(fn2735(fn316(v2.1)), c1022:'\x01\x00\x00\x00\x00\x00\x00\x00\xbd\x02\x00\x00\x05\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\xf0\xbf\x00\x00\x00\x00\x00\x00\xe0\xbf\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xe0?\x00\x00\x00\x00\x00\x00\xf0?'))
+  outs 1=w4:val 2=w8:val 3=w1:val
+mapped: ValuesScan

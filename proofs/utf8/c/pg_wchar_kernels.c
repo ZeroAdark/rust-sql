@@ -1,7 +1,7 @@
 /*
  * Vendored verbatim from PostgreSQL src/common/wchar.c (master; bodies
  * cross-checked byte-equivalent to the REL_18_3 vendor copy at
- * pgrust-reference/vendor/postgres-src, fetched 2026-07-28 from the repo's
+ * pgrust-fabled/vendor/postgres-src, fetched 2026-07-28 from the repo's
  * proofs/utf8/wchar_full.c snapshot): the per-encoding mblen/dsplen
  * kernels plus the UTF-8 display-width chain
  * (utf8_to_unicode + mbbisearch + ucs_wcwidth + pg_utf_dsplen).

@@ -1,0 +1,1 @@
+D1262	subplan	its grouping-set arm places its own SubPlans now (v5 subplan 11 (d)), so it reaches the InitPlan over a rerun set's pipeline, which refuses by name until its cell is re-decided per rerun (ExecReScanSetParamPlan)

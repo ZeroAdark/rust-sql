@@ -112,7 +112,7 @@ pub struct Instrumentation {
     pub walusage: WalUsage,
 }
 
-/// EA-on-morsels pipeline report (pgrust docs/design/ea-morsels.md §4;
+/// EA-on-morsels pipeline report (pgrust-fast docs/design/ea-morsels.md §4;
 /// no C counterpart). One record per engaged runtime pipeline phase,
 /// constructed by the arm's leader merge on a clean Completed outcome and
 /// read by EXPLAIN through the query_desc_runtime_ea_pipeline seam. All
@@ -161,7 +161,81 @@ pub struct RuntimeEaPipeline {
     pub morsel_max_ns: u64,
 }
 
-/// EXPLAIN (ENGINE) wire vocabulary (pgrust single-executor Phase 0.2;
+/// Gravity's EXPLAIN ANALYZE of one plan node (pgrust-fast docs/gravity/entry.md §4; no C
+/// counterpart), read through the query_desc_gravity_node seam. A served statement runs its plain program, so a node's
+/// rows are printed only where the run counts them exactly: `Counted` prints PostgreSQL's TIMING OFF form
+/// `(actual rows=R loops=L)`, `NotCounted` prints `(actual: not counted)` (never a guessed count, never a time).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GravityNodeRows {
+    Counted { rows: f64, loops: f64 },
+    NotCounted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GravityPipeline {
+    pub id: u16,
+    pub arm: &'static str,
+    pub width: u16,
+    pub ns: u64,
+    pub claims: u64,
+    pub why: &'static str,
+    pub site: i16,
+    pub at: u64,
+    pub buf: [i64; 10],
+}
+
+impl GravityPipeline {
+    pub fn verdict(&self) -> Option<alloc::string::String> {
+        match (self.why, self.site) {
+            ("", _) => None,
+            (why, s) if s < 0 => Some(alloc::string::String::from(why)), // alloc: Cold
+            (why, s) => Some(alloc::format!("{why}@{s}")), // alloc: Cold
+        }
+    }
+
+    pub fn token(&self) -> alloc::string::String {
+        let mut s = alloc::format!("p{}:{}", self.id, self.arm); // alloc: Cold
+        if self.width > 0 {
+            s.push_str(&alloc::format!("/W{}", self.width)); // alloc: Cold
+        }
+        if let Some(v) = self.verdict() {
+            s.push('/');
+            s.push_str(&v);
+        }
+        s
+    }
+}
+
+pub fn served_pipes(pipes: &[GravityPipeline], lead_ns: u64) -> alloc::string::String {
+    if pipes.is_empty() {
+        return alloc::string::String::new();
+    }
+    let tokens: alloc::vec::Vec<alloc::string::String> = pipes.iter().map(GravityPipeline::token).collect(); // alloc: Cold
+    alloc::format!(" pipes={} lead_ms={:.3}", tokens.join(","), lead_ns as f64 / 1e6) // alloc: Cold
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GravityReport {
+    pub shape: &'static str,
+    pub road: &'static str,
+    pub width: u16,
+    pub sections: u32,
+    pub claims: u64,
+    pub program_pipelines: u32,
+    pub sites: u32,
+    pub pipelines: alloc::vec::Vec<GravityPipeline>,
+    pub run_ns: u64,
+    pub lead_ns: u64,
+    pub admit_ns: u64,
+    pub memo: bool,
+    pub granules: [u64; 3],
+    pub opens: u64,
+    pub spilled: u64,
+    pub rows_road: u32, // PGRCSERVE G6: sites over the table AM's rows (the rows road)
+    pub rows_pushed: alloc::vec::Vec<(i32, u32)>, // their pushed conjuncts: (SeqScan plan_node_id, qual position)
+}
+
+/// EXPLAIN (ENGINE) wire vocabulary (pgrust-fast single-executor Phase 0.2;
 /// no C counterpart): which engine owned a plan node's execution. Mirror of
 /// `executils::EngineKind` — the seam crate cannot depend on executils, so
 /// this repr(u8) twin rides the seam (`query_desc_engine_events`), the same
@@ -330,5 +404,31 @@ impl HashInstrumentation {
         self.nbatch = self.nbatch.max(other.nbatch);
         self.nbatch_original = self.nbatch_original.max(other.nbatch_original);
         self.space_peak = self.space_peak.max(other.space_peak);
+    }
+}
+
+#[cfg(test)]
+mod gravity_pipeline_tests {
+    use super::*;
+
+    fn row(id: u16, arm: &'static str, width: u16, why: &'static str, site: i16) -> GravityPipeline {
+        GravityPipeline { id, arm, width, ns: 1_000_000, claims: 0, why, site, at: 0, buf: [0; 10] }
+    }
+
+    #[test]
+    fn tokens_name_the_arm_width_and_verdict() {
+        assert_eq!(row(0, "section", 16, "", -1).token(), "p0:section/W16");
+        assert_eq!(row(3, "emit", 0, "NoDrivingSite", -1).token(), "p3:emit/NoDrivingSite");
+        assert_eq!(row(2, "serial", 0, "Host", 3).token(), "p2:serial/Host@3");
+        assert_eq!(row(1, "serial", 0, "", -1).token(), "p1:serial");
+        assert_eq!(row(2, "serial", 0, "Host", 3).verdict().as_deref(), Some("Host@3"));
+        assert_eq!(row(1, "section", 8, "", -1).verdict(), None);
+    }
+
+    #[test]
+    fn served_pipes_joins_the_rows_and_the_lead() {
+        let rows = [row(0, "section", 8, "", -1), row(1, "emit", 0, "NoDrivingSite", -1)];
+        assert_eq!(served_pipes(&rows, 10_700_000), " pipes=p0:section/W8,p1:emit/NoDrivingSite lead_ms=10.700");
+        assert_eq!(served_pipes(&[], 5), "");
     }
 }

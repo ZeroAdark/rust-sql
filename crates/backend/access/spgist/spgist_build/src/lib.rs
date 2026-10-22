@@ -107,7 +107,7 @@ pub fn spgbuild<'mcx>(
     let mut state = spgist::initSpGistState(mcx, index)?;
     state.isBuild = true;
     let mut indtuples: u64 = 0;
-    let mut temp = MemoryContext::new_bump("SP-GiST build temporary context");
+    let mut temp = MemoryContext::new_wholesale("SP-GiST build temporary context");
 
     let reltuples = execindexing::table_index_build_scan(
         mcx,

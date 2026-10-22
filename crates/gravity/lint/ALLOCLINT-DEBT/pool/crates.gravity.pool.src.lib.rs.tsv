@@ -1,0 +1,11 @@
+path	crates/gravity/pool/src/lib.rs
+growth	std::vec::Vec::resize_with	3
+macro	std::vec	3
+method	std::boxed::Box::new	5
+method	std::clone::Clone::clone	1
+method	std::sync::Arc::new	4
+method	std::vec::Vec::into_boxed_slice	3
+method	std::vec::Vec::with_capacity	3
+type	std::boxed::Box	7
+type	std::sync::Arc	8
+type	std::vec::Vec	5

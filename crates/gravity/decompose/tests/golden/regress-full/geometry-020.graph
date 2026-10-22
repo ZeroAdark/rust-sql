@@ -1,0 +1,11 @@
+-- regress-full-geometry-020
+-- SELECT f1, f1::polygon FROM CIRCLE_TBL WHERE f1 >= '<(0,0),1>';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=8 end=sink
+  nodes n0@0
+  source range rel=17138 rti=1 am=heap
+    lanes Attr(1):byref8:fx24:win/page Offset:byval2:w2:val
+  filter op1505(v1.1, c718:#24)
+  project (1=v1.1, 2=fn1475(c23:12, v1.1))
+  outs 1=fx24:win/page 2=vl:call1475
+mapped: SeqScan

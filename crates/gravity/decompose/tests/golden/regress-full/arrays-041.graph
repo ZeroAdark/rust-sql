@@ -1,0 +1,20 @@
+-- regress-full-arrays-041
+-- SELECT ROW(1,2) || array_agg(x) FROM (VALUES (ROW(3,4)), (ROW(5,6))) v(x);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@1^
+  source values rti=2 rows=2
+    row (c2249:'\x03\x00\x00\x00\xc9\x08\x00\x00\xff\xff\xff\xff\x00\x00\x02\x00\x00\x00\x18\x00\x03\x00\x00\x00\x04\x00\x00\x00')
+    row (c2249:'\x03\x00\x00\x00\xc9\x08\x00\x00\xff\xff\xff\xff\x00\x00\x02\x00\x00\x00\x18\x00\x05\x00\x00\x00\x06\x00\x00\x00')
+  project (1=v2.1)
+  outs 1=vl:row
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=op374(c2249:'\x03\x00\x00\x00\xc9\x08\x00\x00\xff\xff\xff\xff\x00\x00\x02\x00\x00\x00\x18\x00\x01\x00\x00\x00\x02\x00\x00\x00', agg2335(1=outer.1)))
+  outs 1=?
+breaker slot=0 kind=PlainAgg budget=Fixed(72) spill=None producer=p0 layout=[]->[Count@0]+valid 16B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=2335 reg=Collect slot=- count_slot=- final=Collect class=Collect(Array) trans=Var mods=[] expr=agg2335(1=outer.1)
+mapped: ValuesScan Agg

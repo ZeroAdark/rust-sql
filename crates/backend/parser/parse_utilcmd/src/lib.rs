@@ -826,7 +826,8 @@ fn typename_type_mod_src<'mcx>(
         )
     }
 
-    let mut cstrings: Vec<mcx::PgVec<'mcx, u8>> = Vec::with_capacity(tn.typmods.len());
+    let mut cstrings: Vec<mcx::PgVec<'mcx, u8>> =
+        ::mcx::std_vec_with_capacity("parse_utilcmd", tn.typmods.len())?;
     for tm in tn.typmods.iter() {
         let cstr: Option<String> = if let Some(ac) = tm.as_a_const() {
             match ac.val {
@@ -1899,17 +1900,16 @@ pub fn transformCreateStmt<'mcx>(
             relation.location,
             mbutils::GetDatabaseEncoding(),
         );
-        if e.cursor_position.is_none() && pos > 0 {
+        if e.cursor_position.is_none() && pos > 0 && e.sqlstate() != ERRCODE_QUERY_CANCELED {
             e.cursor_position = Some(pos);
         }
         e
     };
-    // Unqualified TEMP targets skip the analysis-time probe: C's call is a
-    // no-op for them beyond creating the temp namespace, a side effect our
-    // cached-plan revalidation lane cannot absorb yet (plancache loud); it
-    // still happens at execution (DefineRelation).
+    // Defer only temp namespace creation: cached-plan revalidation cannot
+    // absorb that side effect yet. Existing temp namespaces need the ACL check.
     let probe = relation.schemaname.is_some()
-        || relation.relpersistence != types_core::RELPERSISTENCE_TEMP;
+        || relation.relpersistence != types_core::RELPERSISTENCE_TEMP
+        || catalog_namespace::my_temp_namespace() != InvalidOid;
     let mut nspid = InvalidOid;
     let mut existing_relid = InvalidOid;
     let mut adjusted_persistence = relation.relpersistence;
@@ -1924,11 +1924,14 @@ pub fn transformCreateStmt<'mcx>(
         // check still runs here, before the columns are looked at.
         catalog_namespace::check_temp_table_namespace_access().map_err(at_rel)?;
     }
+    let _deferred_temp = (!probe && catalog_namespace::my_temp_namespace() == InvalidOid)
+        .then(catalog_namespace::defer_temp_namespace_creation);
     if stmt.if_not_exists {
         let existing_relid = if probe {
             existing_relid
         } else {
-            RangeVarGetAndCheckCreationNamespace(mcx, relation, types_rel::NoLock, true)?.1
+            RangeVarGetAndCheckCreationNamespace(mcx, relation, types_rel::NoLock, true)
+                .map_err(at_rel)?.1
         };
         if existing_relid != InvalidOid {
             // C: inside an extension script, insist the pre-existing object
@@ -4110,7 +4113,7 @@ mod tests {
 
     #[test]
     fn transform_index_constraint_overlaps_before_include() {
-        // a fuzzing round overlaps-prec (recorded run,
+        // a fuzzing round overlaps-prec (run 1701f43cdb3787befc34cc00308f1a29-59-13,
         // seed 764198082900334493): C processes key columns — including the
         // WITHOUT OVERLAPS range/multirange check (parse_utilcmd.c:2808) —
         // before the INCLUDE list (parse_utilcmd.c:2841), so a non-range
@@ -4166,7 +4169,7 @@ mod tests {
 
     #[test]
     fn transform_index_constraint_dup_pkey_beats_using_index() {
-        // a fuzzing round pkusingindex (recorded run,
+        // a fuzzing round pkusingindex (run b06122a0724ea9d22a905d228d73548d-59-13,
         // seed 1833222682333586209): a second PRIMARY KEY that is also a USING
         // INDEX form reports 42P16 multiple-primary-keys, not the 0A000 USING
         // INDEX rejection — upstream checks the duplicate PK at the top of

@@ -1,0 +1,9 @@
+# no plan elem: the element order stays exact
+sql: SELECT array_agg(x) FROM t;
+cols: array_agg
+class: unordered
+verdict: mismatch
+[pg]
+{1,2}
+[got]
+{2,1}

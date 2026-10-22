@@ -1,0 +1,29 @@
+-- cte-004
+-- SELECT a FROM t WHERE b = (SELECT max(y) FROM u);
+graph pipelines=3 breakers=0 init_plans=2 root=p2
+p0 node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@1
+  source index-only rel=16405 rti=2 am=heap index=16413 backward
+    key att=2 op=0 form=notnull value=notnull(index.1)
+    recheck (notnull(index.1))
+    lanes Attr(2):byval8:w8:val
+  project (1=index.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p1 node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0
+  source const
+  project (1=$exec0)
+  outs 1=w4:val
+p2 node=0 eligible rows=50 end=sink
+  nodes n0@0
+  source range rel=16395 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v1.2, $exec1)
+  project (1=v1.1)
+  outs 1=w8:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+init_plan id=2 pipeline=p1 link=Expr param=$exec1 raise-free
+mapped: Result SeqScan IndexOnlyScan Limit SubPlan

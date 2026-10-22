@@ -1,0 +1,3 @@
+path	crates/gravity/kernels/src/ops/sort/rowsort.rs
+growth	std::vec::Vec::resize_with	1
+growth	std::vec::Vec::shrink_to	1

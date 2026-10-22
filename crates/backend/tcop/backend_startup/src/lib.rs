@@ -13,7 +13,7 @@
 
 #![allow(clippy::result_large_err)]
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use mcx::{Mcx, MemoryContext, PgVec};
 use types_core::{ProtocolVersion, STATUS_ERROR, STATUS_OK};
 use types_dest::CommandDest;
@@ -84,7 +84,7 @@ pub fn backend_main(startup_data: &StartupData) -> ! {
     let client_sock = init_small::globals::MyClientSocket()
         .expect("MyClientSocket must be set before BackendMain");
 
-    let top = MemoryContext::new("TopMemoryContext");
+    let top = init_small::globals::TopMemoryContext();
     // mcxt.c:375-379: ErrorContext sits under TopMemoryContext (errors are
     // PgResult here, so it only carries the pg_backend_memory_contexts row).
     let _error_context = top.new_child("ErrorContext");
@@ -156,14 +156,14 @@ pub fn wire_session_initialize(mcx: Mcx<'_>) -> PgResult<()> {
     elog::config::set_client_auth_in_progress(true);
 
     let port = pqcomm_seams::pq_init::call(&client_sock)?;
-    init_small::globals::SetMyProcPort(port);
+    install_startup_port(port);
 
     elog::config::set_where_to_send_output(CommandDest::Remote);
 
     timeout_seams::initialize_timeouts::call();
     libpq_pqsignal::block_startup_signals();
 
-    init_small::globals::WithMyProcPort(|p| p.remote_host = "[local]".to_string());
+    init_small::globals::WithMyProcPortMut(|p| p.remote_host = "[local]".to_string());
     if log_connections::get() & LOG_CONNECTION_RECEIPT != 0 {
         ereport(LOG)
             .errmsg("connection received: host=[local]")
@@ -209,6 +209,11 @@ pub fn wire_session_initialize(mcx: Mcx<'_>) -> PgResult<()> {
     Ok(())
 }
 
+fn install_startup_port(port: types_startup::Port) {
+    init_small::globals::SetMyProcPort(port);
+    mcx::register_session_cleanup(Box::new(init_small::globals::SessionMemTeardownPort));
+}
+
 // BackendInitialize: C terminates on failure; here Err after the report ran.
 fn backend_initialize(mcx: Mcx<'_>, client_sock: &ClientSocket, cac: CacState) -> PgResult<()> {
     fd::ReserveExternalFD()?;
@@ -221,7 +226,7 @@ fn backend_initialize(mcx: Mcx<'_>, client_sock: &ClientSocket, cac: CacState) -
     elog::config::set_client_auth_in_progress(true);
 
     let port = pqcomm_seams::pq_init::call(client_sock)?;
-    init_small::globals::SetMyProcPort(port);
+    install_startup_port(port);
 
     elog::config::set_where_to_send_output(CommandDest::Remote);
 
@@ -231,7 +236,7 @@ fn backend_initialize(mcx: Mcx<'_>, client_sock: &ClientSocket, cac: CacState) -
     // drained at the client-IO wakes; delivery before ProcSignalInit rides
     // the pre-identity channel (procsignal::PreIdentitySignalAdopt at
     // launch). Without BOTH halves, TerminateChildren's SIGTERM was lost and
-    // a half-open connection wedged PM_WAIT_BACKENDS until the regression
+    // a half-open connection wedged PM_WAIT_BACKENDS until the GL-GANGWEDGE
     // watchdog forced crash recovery. PostgresMain's
     // install_thread_signal_handlers replaces this with die(), as C does.
     procsignal::pqsignal_thread(
@@ -254,7 +259,7 @@ fn backend_initialize(mcx: Mcx<'_>, client_sock: &ClientSocket, cac: CacState) -
             .finish(loc(211, "BackendInitialize"))?;
     }
 
-    init_small::globals::WithMyProcPort(|p| {
+    init_small::globals::WithMyProcPortMut(|p| {
         p.remote_host = remote_host.clone();
         p.remote_port = remote_port.clone();
     });
@@ -279,7 +284,7 @@ fn backend_initialize(mcx: Mcx<'_>, client_sock: &ClientSocket, cac: CacState) -
         && strspn(&remote_host, b"0123456789ABCDEFabcdef:") < remote_host.len()
     {
         let rh = remote_host.clone();
-        init_small::globals::WithMyProcPort(|p| p.remote_hostname = Some(rh.clone()));
+        init_small::globals::WithMyProcPortMut(|p| p.remote_hostname = Some(rh.clone()));
     }
 
     timeout_seams::register_timeout::call(
@@ -356,6 +361,10 @@ fn reject_for_cac_state(cac: CacState) -> PgResult<()> {
         CacState::TooMany => ereport(FATAL)
             .errcode(ERRCODE_TOO_MANY_CONNECTIONS)
             .errmsg("sorry, too many clients already")
+            .finish(f),
+        CacState::Fenced => ereport(FATAL)
+            .errcode(ERRCODE_CANNOT_CONNECT_NOW)
+            .errmsg("the database system is fenced")
             .finish(f),
     }
 }
@@ -488,7 +497,7 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
         pqcomm::pq_endmsgread();
 
         let proto: ProtocolVersion = read_be_u32(&buf, 0);
-        init_small::globals::WithMyProcPort(|p| p.proto = proto);
+        init_small::globals::WithMyProcPortMut(|p| p.proto = proto);
 
         if proto == CANCEL_REQUEST_CODE {
             process_cancel_request_packet(&buf, len)?;
@@ -538,22 +547,54 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
             }
             continue;
         } else if proto == NEGOTIATE_GSS_CODE && !gss_done {
-            // No ENABLE_GSS in this build: GSSok = 'N'.
+            // No GSSAPI encryption on Unix sockets, over a direct SSL
+            // connection, or without a loadable GSSAPI library (C: !ENABLE_GSS).
+            let (laddr, ssl_in_use) =
+                init_small::globals::WithMyProcPort(|p| (p.laddr, p.ssl_in_use));
+            let gss_ok = if ip::sockaddr_family(&laddr) != ip::sys::AF_UNIX
+                && !ssl_in_use
+                && be_secure::gssapi::gssenc_available()
+            {
+                b'G'
+            } else {
+                b'N'
+            };
             if trace_connection_negotiation::get() {
                 ereport(LOG)
-                    .errmsg("GSSENCRequest rejected")
-                    .finish(loc(654, "ProcessStartupPacket"))?;
+                    .errmsg(if gss_ok == b'G' {
+                        "GSSENCRequest accepted"
+                    } else {
+                        "GSSENCRequest rejected"
+                    })
+                    .finish(loc(665, "ProcessStartupPacket"))?;
             }
-            if !write_negotiation_byte(b'N', "GSSAPI")? {
+            if !write_negotiation_byte(gss_ok, "GSSAPI")? {
                 return Ok(STATUS_ERROR);
+            }
+            if gss_ok == b'G' {
+                let sock = init_small::globals::WithMyProcPort(|p| p.sock);
+                if be_secure::gssapi::secure_open_gssapi(sock)? == -1 {
+                    return Ok(STATUS_ERROR);
+                }
+                let delegated = be_secure::gssapi::be_gssapi_get_delegation();
+                init_small::globals::WithMyProcPortMut(|p| {
+                    p.gss = Some(types_startup::GssInfo {
+                        encrypted: true,
+                        delegated,
+                        ..Default::default()
+                    })
+                });
             }
             if pqcomm::pq_buffer_remaining_data() > 0 {
                 return ereport(FATAL)
                 .errcode(ERRCODE_PROTOCOL_VIOLATION)
                 .errmsg("received unencrypted data after GSSAPI encryption request")
                 .errdetail("This could be either a client-software bug or evidence of an attempted man-in-the-middle attack.")
-                .finish(loc(681, "ProcessStartupPacket"))
+                .finish(loc(694, "ProcessStartupPacket"))
                 .map(|()| STATUS_ERROR);
+            }
+            if gss_ok == b'G' {
+                ssl_done = true;
             }
             gss_done = true;
             continue;
@@ -583,7 +624,7 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
             let mut offset = SIZEOF_PROTOCOL_VERSION as usize;
             let len = len as usize;
 
-            init_small::globals::WithMyProcPort(|p| p.guc_options.clear());
+            init_small::globals::WithMyProcPortMut(|p| p.guc_options.clear());
 
             while offset < len {
                 if buf[offset] == 0 {
@@ -603,15 +644,15 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
                 match name.as_str() {
                     "database" => {
                         let v = val.clone();
-                        init_small::globals::WithMyProcPort(|p| p.database_name = Some(v.clone()));
+                        init_small::globals::WithMyProcPortMut(|p| p.database_name = Some(v.clone()));
                     }
                     "user" => {
                         let v = val.clone();
-                        init_small::globals::WithMyProcPort(|p| p.user_name = Some(v.clone()));
+                        init_small::globals::WithMyProcPortMut(|p| p.user_name = Some(v.clone()));
                     }
                     "options" => {
                         let v = val.clone();
-                        init_small::globals::WithMyProcPort(|p| {
+                        init_small::globals::WithMyProcPortMut(|p| {
                             p.cmdline_options = Some(v.clone())
                         });
                     }
@@ -641,7 +682,7 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
                         }
                     }
                     _ if name_bytes.starts_with(b"_pq_.") => {
-                        unrecognized_protocol_options.push(name_bytes.to_vec());
+                        unrecognized_protocol_options.push(::mcx::std_vec_from_slice("backend_startup", &name_bytes)?);
                     }
                     _ => {
                         // C stores the raw value (backend_startup.c:814) and
@@ -657,13 +698,13 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
                                 Some(c) if core::str::from_utf8(val_bytes).is_err() => c.clone(),
                                 _ => val.clone(),
                             };
-                            init_small::globals::WithMyProcPort(|p| {
+                            init_small::globals::WithMyProcPortMut(|p| {
                                 p.guc_options.push(n.clone());
                                 p.guc_options.push(v.clone());
                             });
                         }
                         if let Some(cleaned) = cleaned {
-                            init_small::globals::WithMyProcPort(|p| {
+                            init_small::globals::WithMyProcPortMut(|p| {
                                 p.application_name = Some(cleaned.clone())
                             });
                         }
@@ -698,7 +739,7 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
                 .map(|()| STATUS_ERROR);
         }
 
-        init_small::globals::WithMyProcPort(|p| {
+        init_small::globals::WithMyProcPortMut(|p| {
             if p.database_name.as_deref().unwrap_or("").is_empty() {
                 p.database_name = p.user_name.clone();
             }
@@ -717,7 +758,7 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
         // Normal (physical) walsenders are not connected to a particular
         // database; logical-replication walsenders keep theirs.
         if am_walsender && !walsender_seams::am_db_walsender() {
-            init_small::globals::WithMyProcPort(|p| p.database_name = Some(String::new()));
+            init_small::globals::WithMyProcPortMut(|p| p.database_name = Some(String::new()));
         }
 
         return Ok(STATUS_OK);
@@ -740,7 +781,7 @@ fn write_negotiation_byte(byte: u8, which: &str) -> PgResult<bool> {
         }
         builder
             .errcode_for_socket_access()
-            .errmsg(format!("failed to send {which} negotiation response: %m"))
+            .errmsg(format!("failed to send {which} negotiation response: {PCT_M}"))
             .finish(loc(609, "ProcessStartupPacket"))?;
         return Ok(false);
     }
@@ -927,14 +968,13 @@ fn strspn(s: &str, accept: &[u8]) -> usize {
     s.bytes().take_while(|b| accept.contains(b)).count()
 }
 
+// backend_startup.c:864-867 cuts at NAMEDATALEN-1 bytes, through a multibyte
+// character; a cut that lands mid-character is kept as the lossy form so the
+// lookup fails like C's (never backed off to the shorter valid name).
 fn truncate_namedatalen(name: &mut Option<String>) {
     if let Some(n) = name {
         if n.len() >= NAMEDATALEN {
-            let mut cut = NAMEDATALEN - 1;
-            while !n.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            n.truncate(cut);
+            *n = String::from_utf8_lossy(&n.as_bytes()[..NAMEDATALEN - 1]).into_owned();
         }
     }
 }

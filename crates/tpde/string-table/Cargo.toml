@@ -1,0 +1,17 @@
+[package]
+name = "tpde_string_table"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+
+[dependencies]
+mcx = { path = "../../_support/mcx" }
+types_error = { path = "../../_support/types/types_error" }
+
+[features]
+upstream-oracle = []
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]

@@ -1,0 +1,26 @@
+//! `ops::modifytable` (v5 serial step, landing 5: module lines written by modexit.py).
+pub(crate) mod delete;
+pub(crate) mod delete_built;
+pub(crate) mod early_as;
+pub(crate) mod face;
+pub(crate) mod insert;
+pub mod merge;
+pub(crate) mod nest_outer;
+pub(crate) mod nest_ref;
+pub(crate) mod nest_write;
+pub(crate) mod onconflict;
+pub(crate) mod post;
+pub(crate) mod premise;
+pub(crate) mod ret_cols;
+pub(crate) mod ret_stored;
+pub(crate) mod ret_sys;
+pub(crate) mod returning;
+pub(crate) mod rowop;
+pub(crate) mod rowop_epq;
+pub(crate) mod rowop_step;
+pub(crate) mod rowop_sub;
+pub mod strategies;
+pub(crate) mod triggers;
+pub(crate) mod update;
+pub(crate) mod update_built;
+pub(crate) mod update_cells;

@@ -9,7 +9,7 @@ use elog::{elog, ereport};
 use mcx::MemoryContext;
 use stringinfo::StringInfo;
 use types_error::{ErrorLocation, PgResult, DEBUG4, ERRCODE_PROTOCOL_VIOLATION, ERROR};
-use types_startup::Port;
+use types_startup::{Port, ScramKeys};
 
 pub const PG_SASL_EXCHANGE_CONTINUE: i32 = 0;
 pub const PG_SASL_EXCHANGE_SUCCESS: i32 = 1;
@@ -44,10 +44,13 @@ pub trait SaslMech {
     fn exchange(
         &self,
         state: &mut Self::State,
-        port: &mut Port,
+        port: &Port,
         input: Option<&[u8]>,
         logdetail: &mut Option<String>,
     ) -> PgResult<(i32, Option<Vec<u8>>)>;
+    fn session_keys(&self, _state: &Self::State) -> Option<ScramKeys> {
+        None
+    }
 }
 
 fn loc(line: i32, func: &'static str) -> ErrorLocation {
@@ -56,9 +59,10 @@ fn loc(line: i32, func: &'static str) -> ErrorLocation {
 
 pub fn CheckSASLAuth<M: SaslMech>(
     mech: &M,
-    port: &mut Port,
+    port: &Port,
     shadow_pass: Option<&str>,
     logdetail: &mut Option<String>,
+    keys: &mut Option<ScramKeys>,
     send_auth_request: impl Fn(&Port, AuthRequest, &[u8]) -> PgResult<()>,
 ) -> PgResult<i32> {
     let scratch = MemoryContext::new("CheckSASLAuth");
@@ -97,7 +101,7 @@ pub fn CheckSASLAuth<M: SaslMech>(
         )?;
 
         let input: Option<Vec<u8>> = if initial {
-            let selected_mech = pqformat::pq_getmsgrawstring(&mut buf)?.to_vec();
+            let selected_mech = ::mcx::std_vec_from_slice("auth_sasl", &pqformat::pq_getmsgrawstring(&mut buf)?)?;
             // Missing/invalid secret still inits: doomed mock auth, so failure
             // is indistinguishable from a wrong password.
             opaq = Some(mech.init(port, &selected_mech, shadow_pass)?);
@@ -107,11 +111,11 @@ pub fn CheckSASLAuth<M: SaslMech>(
             if inputlen == -1 {
                 None
             } else {
-                Some(pqformat::pq_getmsgbytes(&mut buf, inputlen as usize)?.to_vec())
+                Some(::mcx::std_vec_from_slice("auth_sasl", &pqformat::pq_getmsgbytes(&mut buf, inputlen as usize)?)?)
             }
         } else {
             let len = buf.len();
-            Some(pqformat::pq_getmsgbytes(&mut buf, len)?.to_vec())
+            Some(::mcx::std_vec_from_slice("auth_sasl", &pqformat::pq_getmsgbytes(&mut buf, len)?)?)
         };
         pqformat::pq_getmsgend(&buf)?;
         drop(buf);
@@ -147,5 +151,6 @@ pub fn CheckSASLAuth<M: SaslMech>(
     if result != PG_SASL_EXCHANGE_SUCCESS {
         return Ok(STATUS_ERROR);
     }
+    *keys = opaq.as_ref().and_then(|state| mech.session_keys(state));
     Ok(STATUS_OK)
 }

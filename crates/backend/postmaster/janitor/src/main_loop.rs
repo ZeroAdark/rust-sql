@@ -32,26 +32,24 @@ const TICK_MS: i64 = 500;
 /// classes).
 const PG_WAIT_EXTENSION: u32 = 0x0700_0000;
 
-/// The bgw_main entry (registered in lib.rs). The wrapper exists to make the
-/// containment contract's exit loud: any unrecoverable error is prefixed
-/// with an explicit disabled-until-restart log before the FATAL-clean
-/// status-1 exit (BGW_NEVER_RESTART then keeps the registration from
-/// respawning; the server stays up).
+/// The bgw_main entry (registered in lib.rs). Every exit is logged with its
+/// reason before the FATAL-clean status-1 exit; the postmaster restarts the
+/// worker after JANITOR_RESTART_SECS unless the server is shutting down.
 pub(crate) fn janitor_bgw_main(main_arg: u64) -> PgResult<()> {
     let r = janitor_main(main_arg);
     if let Err(e) = &r {
-        // SIGTERM shutdown arrives as bgworker_die's FATAL 57P01 — normal
-        // server shutdown, not a janitor failure.
-        if e.sqlstate() != ERRCODE_ADMIN_SHUTDOWN {
-            let _ = log_report(
-                WARNING,
-                format!(
-                    "pgrust ephemeral-db janitor: unrecoverable error; the janitor is DISABLED \
-                     until the server restarts (no ephemeral database will be swept or reaped): {}",
-                    e.message()
-                ),
-            );
-        }
+        // SIGTERM (server shutdown or pg_terminate_backend) arrives as
+        // bgworker_die's FATAL 57P01; anything else is a janitor failure.
+        let level = if e.sqlstate() == ERRCODE_ADMIN_SHUTDOWN { LOG } else { WARNING };
+        let _ = log_report(
+            level,
+            format!(
+                "pgrust ephemeral-db janitor exiting: {}; it will be restarted in {}s unless \
+                 the server is shutting down",
+                e.message(),
+                crate::JANITOR_RESTART_SECS
+            ),
+        );
     }
     r
 }
@@ -77,16 +75,13 @@ fn janitor_main(_main_arg: u64) -> PgResult<()> {
     impl Drop for ClearProc {
         fn drop(&mut self) {
             registry::set_janitor_proc(None);
-            // Exit drain (D2): BGW_NEVER_RESTART means nothing will ever
-            // service the Ensure queue again — fail every pending entry and
-            // wake its waiters (parking on a latch with only a deadline as
-            // the escape is a hang in spec terms). Runs on FATAL unwinds
-            // too, which is the point.
+            // Exit drain (D2): nothing services the Ensure queue until the
+            // restarted janitor runs — fail every pending entry and wake its
+            // waiters (retryable 57P03) rather than park them on a deadline.
+            // Runs on FATAL unwinds too, which is the point.
             mint::fail_pending_and_wake(
                 &types_error::PgError::error(
-                    "the pgrust ephemeral-db janitor exited; it is disabled until the server \
-                     restarts"
-                        .to_string(),
+                    "the pgrust ephemeral-db janitor exited; it is restarting".to_string(),
                 )
                 .with_sqlstate(types_error::ERRCODE_CANNOT_CONNECT_NOW),
             );
@@ -117,7 +112,7 @@ fn janitor_main(_main_arg: u64) -> PgResult<()> {
     // and falls back to normal grace-based reaping. Pins do not survive
     // restart; any pin present by sweep time was taken in that reconnect
     // window and is honored — sweep_pass re-reads the pin table.)
-    registry::request_sweep();
+    registry::request_startup_sweep();
 
     let mut streaks = StreakTracker::new();
     let mut maint_state = maint::MaintState::new();
@@ -138,8 +133,8 @@ fn janitor_main(_main_arg: u64) -> PgResult<()> {
 
         // PGC_SIGHUP reload (grace): GUC stores are thread-local, so the
         // loop must run the reload idiom itself (checkpointer/launcher
-        // precedent). A broken config file must not kill a NEVER_RESTART
-        // worker: contain and keep the old values.
+        // precedent). A broken config file must not kill the worker:
+        // contain and keep the old values.
         if interrupt::ConfigReloadPending() {
             interrupt::SetConfigReloadPending(false);
             if let Err(e) = guc_file::ProcessConfigFile(types_guc::GucContext::PGC_SIGHUP) {
@@ -632,5 +627,25 @@ mod tests {
         registry::remove_seal_waiter(gen, 12);
         registry::gc_seals();
         registry::set_janitor_proc(None);
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    // wio P167: a terminated janitor comes back; the restart does not repeat
+    // the startup sweep.
+    #[test]
+    fn janitor_restarts_and_sweeps_once_per_server_lifetime() {
+        let w = crate::janitor_worker();
+        assert_ne!(w.bgw_restart_time, bgworker::BGW_NEVER_RESTART);
+        assert!(w.bgw_restart_time >= 0);
+
+        let first = crate::registry::request_startup_sweep();
+        let again = crate::registry::request_startup_sweep();
+        assert!(!again, "a restarted janitor must not re-arm the startup sweep");
+        if first {
+            assert!(crate::registry::take_sweep_request());
+        }
+        assert!(!crate::registry::take_sweep_request());
     }
 }

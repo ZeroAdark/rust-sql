@@ -1,0 +1,1 @@
+pg_sequences' output (data_type regtype): an output column whose type the rig catalog does not know (reached once nest.memo is built, MC-1 V4R-419): the rig catalog has no pg_type row the test's output needs

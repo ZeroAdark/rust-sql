@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/parser/analyze.c: 1 stack-depth check sites
+2064	transformSetOperationTree	crates/backend/parser/parser_analyze/src/set_op.rs	transformSetOperationTree	yes	

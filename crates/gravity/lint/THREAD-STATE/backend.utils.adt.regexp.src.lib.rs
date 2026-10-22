@@ -1,0 +1,1 @@
+backend/utils/adt/regexp/src/lib.rs	RE_CACHE	pgport	key:pattern, flags, collation, database encoding and default ctype	cache	key: pattern, flags, collation, database encoding, the default locale ctype (D3532); compiled regexes

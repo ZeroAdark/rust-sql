@@ -1,0 +1,11 @@
+-- regress-full-stats_ext-079
+-- INSERT INTO mcv_lists (a, b, c) SELECT 1, 2, 3 FROM generate_series(1,1000) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:1000)]
+  project (1=c25:null, 2=c1700:null, 3=c23:1, 4=c1043:'2', 5=c1082:null, 6=c1700:'\x00\x80\x03\x00', 7=c1043:null, 8=c1007:null)
+  write INSERT rel=34262 rti=1 natts=8 indexes=()
+  outs 1=vl:stmt/imm 2=vl:stmt/imm 3=w4:val 4=vl:stmt/imm 5=w4:val 6=vl:stmt/imm 7=vl:stmt/imm 8=vl:stmt/imm
+mapped: ModifyTable FunctionScan

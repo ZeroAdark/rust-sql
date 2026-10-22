@@ -1,0 +1,208 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1v s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE amt = 99) ORDER BY a.id LIMIT 3 FOR UPDATE OF a;
+QUERY PLAN                                          
+----------------------------------------------------
+Limit                                               
+  ->  LockRows                                      
+        ->  Merge Semi Join                         
+              Merge Cond: (a.id = rml.acct)         
+              ->  Index Scan using rma_pkey on rma a
+              ->  Index Scan using rml_acct on rml  
+                    Filter: (amt = '99'::numeric)   
+(7 rows)
+
+step s1v: UPDATE rma SET ver = ver + 1 WHERE id = 100;
+step s2l: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE amt = 99) ORDER BY a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|ver
+---+---
+100|  1
+200|  0
+300|  0
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1i s2l s1c
+step s1i: UPDATE rma SET id = -100 WHERE id = 100;
+step s2l: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE amt = 99) ORDER BY a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|ver
+---+---
+200|  0
+300|  0
+400|  0
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2l s1c
+step s1d: DELETE FROM rma WHERE id = 100;
+step s2l: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE amt = 99) ORDER BY a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|ver
+---+---
+200|  0
+300|  0
+400|  0
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s1v s2l s1c
+step s1l: UPDATE rml SET amt = 0 WHERE acct = 100 AND amt = 99;
+step s1v: UPDATE rma SET ver = ver + 1 WHERE id = 100;
+step s2l: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE amt = 99) ORDER BY a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|ver
+---+---
+100|  1
+200|  0
+300|  0
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2s s1c
+step s1k: SELECT id FROM rma WHERE id = 100 FOR UPDATE;
+ id
+---
+100
+(1 row)
+
+step s2s: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE amt = 99) ORDER BY a.id LIMIT 3 FOR UPDATE OF a SKIP LOCKED;
+ id|ver
+---+---
+200|  0
+300|  0
+400|  0
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2n s1c
+step s1k: SELECT id FROM rma WHERE id = 100 FOR UPDATE;
+ id
+---
+100
+(1 row)
+
+step s2n: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE amt = 99) ORDER BY a.id LIMIT 3 FOR UPDATE OF a NOWAIT;
+ERROR:  could not obtain lock on row in relation "rma"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2w s1c
+step s1v: UPDATE rma SET ver = ver + 1 WHERE id = 100;
+step s2w: SELECT a.id, a.ver FROM rma a WHERE EXISTS (SELECT 1 FROM rml r WHERE r.acct = a.id AND r.amt > 98 AND 1 / (r.amt - 98 - 2 * a.ver) > 0) ORDER BY a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+ id|ver
+---+---
+200|  0
+300|  0
+400|  0
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2z s1c
+step s1r: UPDATE rma SET id = -100, ver = 1 WHERE id = 100;
+step s2z: SELECT a.id, a.ver FROM rma a WHERE EXISTS (SELECT 1 FROM rml r WHERE r.acct = a.id AND r.amt > 98 AND 1 / (r.amt - 98 - a.ver) > 0) ORDER BY a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2z: <... completed>
+ id|ver
+---+---
+200|  0
+300|  0
+400|  0
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2z s1c
+step s1v: UPDATE rma SET ver = ver + 1 WHERE id = 100;
+step s2z: SELECT a.id, a.ver FROM rma a WHERE EXISTS (SELECT 1 FROM rml r WHERE r.acct = a.id AND r.amt > 98 AND 1 / (r.amt - 98 - a.ver) > 0) ORDER BY a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2z: <... completed>
+ERROR:  division by zero
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3m s2fx s1v s2f s1c
+step s3m: INSERT INTO rml VALUES (90002, 102, -1);
+step s2fx: EXPLAIN (COSTS OFF) SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE 1 / (amt + 1) > 0) AND a.id > 98 ORDER BY a.id LIMIT 4 FOR UPDATE OF a;
+QUERY PLAN                                                                        
+----------------------------------------------------------------------------------
+Limit                                                                             
+  ->  LockRows                                                                    
+        ->  Merge Semi Join                                                       
+              Merge Cond: (a.id = rml.acct)                                       
+              ->  Index Scan using rma_pkey on rma a                              
+                    Index Cond: (id > 98)                                         
+              ->  Index Scan using rml_acct on rml                                
+                    Filter: (('1'::numeric / (amt + '1'::numeric)) > '0'::numeric)
+(8 rows)
+
+step s1v: UPDATE rma SET ver = ver + 1 WHERE id = 100;
+step s2f: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE 1 / (amt + 1) > 0) AND a.id > 98 ORDER BY a.id LIMIT 4 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+ id|ver
+---+---
+ 99|  0
+100|  1
+101|  0
+102|  0
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3m s1v s2g s1c
+step s3m: INSERT INTO rml VALUES (90002, 102, -1);
+step s1v: UPDATE rma SET ver = ver + 1 WHERE id = 100;
+step s2g: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE 1 / (amt + 1) > 0) AND a.id > 98 ORDER BY a.id LIMIT 5 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2g: <... completed>
+ERROR:  division by zero
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s1m s2g s1c
+step s1v: UPDATE rma SET ver = ver + 1 WHERE id = 100;
+step s1m: UPDATE rml SET amt = -1 WHERE acct = 102;
+step s2g: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE 1 / (amt + 1) > 0) AND a.id > 98 ORDER BY a.id LIMIT 5 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2g: <... completed>
+ id|ver
+---+---
+ 99|  0
+100|  1
+101|  0
+102|  0
+103|  0
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s1n s2g s1c
+step s1v: UPDATE rma SET ver = ver + 1 WHERE id = 100;
+step s1n: INSERT INTO rml VALUES (90003, 102, -1);
+step s2g: SELECT a.id, a.ver FROM rma a WHERE a.id IN (SELECT acct FROM rml WHERE 1 / (amt + 1) > 0) AND a.id > 98 ORDER BY a.id LIMIT 5 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2g: <... completed>
+ id|ver
+---+---
+ 99|  0
+100|  1
+101|  0
+102|  0
+103|  0
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress

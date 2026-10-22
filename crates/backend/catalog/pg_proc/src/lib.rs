@@ -418,7 +418,7 @@ pub fn ProcedureCreateWithTransforms<'mcx>(
         Some(names) => {
             // std Vec: scratch holding droppy Varlena handles (PgVec's
             // !needs_drop gate rejects them); freed after the copy below.
-            let mut texts = Vec::with_capacity(names.len());
+            let mut texts = ::mcx::std_vec_with_capacity("catalog", names.len())?;
             let mut elems: mcx::PgVec<'mcx, Datum> = mcx::vec_with_capacity_in(mcx, names.len())?;
             for &n in names {
                 texts.push(varlena::cstring_to_text(mcx, n.as_bytes())?);
@@ -498,7 +498,7 @@ pub fn ProcedureCreateWithTransforms<'mcx>(
     let proconfig_image = match a.proconfig {
         Some(entries) => {
             // std Vec: scratch holding droppy Varlena handles (as proargnames).
-            let mut texts = Vec::with_capacity(entries.len());
+            let mut texts = ::mcx::std_vec_with_capacity("catalog", entries.len())?;
             let mut elems: mcx::PgVec<'mcx, Datum> = mcx::vec_with_capacity_in(mcx, entries.len())?;
             for e in entries {
                 texts.push(varlena::cstring_to_text(mcx, e.as_bytes())?);
@@ -954,7 +954,7 @@ pub fn ProcedureCreateWithTransforms<'mcx>(
             guc_seams::process_guc_array_secdef::call(items)?;
         }
         let mut flinfo = fmgr_core::fmgr_info(a.languageValidator)?;
-        types_fmgr::function_call1_coll(&mut flinfo, InvalidOid, Datum::from_oid(retval))?;
+        types_fmgr::function_call1_coll_in(&mut flinfo, InvalidOid, mcx, Datum::from_oid(retval))?;
         if set_items.is_some() {
             guc_seams::at_eoxact_guc::call(true, save_nestlevel)?;
         }

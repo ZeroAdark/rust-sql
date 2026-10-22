@@ -1,4 +1,4 @@
-use ::mcx::{vec_append_bytes, vec_with_capacity_in, Mcx, PgVec};
+use ::mcx::{vec_with_capacity_in, Mcx, PgVec};
 use ::regex::{RegMatch, RegexecResult, REG_NOSUB};
 use ::types_core::Oid;
 use ::types_error::{PgError, PgResult, ERRCODE_INVALID_REGULAR_EXPRESSION};
@@ -59,14 +59,14 @@ fn append_regexp_substr(
             None => p = p_end,
         }
         if p > chunk_start {
-            vec_append_bytes(buf, &replace_text[chunk_start..p])?;
+            ::stringinfo::vec_append_binary(buf, &replace_text[chunk_start..p])?;
         }
         if p >= p_end {
             break;
         }
         p += 1;
         if p >= p_end {
-            buf.push(b'\\');
+            ::stringinfo::vec_append_binary(buf, b"\\")?;
             break;
         }
 
@@ -83,11 +83,11 @@ fn append_regexp_substr(
             eo = pmatch[0].rm_eo;
             p += 1;
         } else if c == b'\\' {
-            buf.push(b'\\');
+            ::stringinfo::vec_append_binary(buf, b"\\")?;
             p += 1;
             continue;
         } else {
-            buf.push(b'\\');
+            ::stringinfo::vec_append_binary(buf, b"\\")?;
             continue;
         }
 
@@ -97,7 +97,7 @@ fn append_regexp_substr(
             chunk_off +=
                 charlen_to_bytelen(&src_text[chunk_off..], (so - data_pos as i64) as i32)? as usize;
             let chunk_len = charlen_to_bytelen(&src_text[chunk_off..], (eo - so) as i32)? as usize;
-            vec_append_bytes(buf, &src_text[chunk_off..chunk_off + chunk_len])?;
+            ::stringinfo::vec_append_binary(buf, &src_text[chunk_off..chunk_off + chunk_len])?;
         }
     }
     Ok(())
@@ -197,7 +197,7 @@ pub fn replace_text_regexp<'mcx>(
         if pmatch[0].rm_so - data_pos as i64 > 0 {
             let chunk_len =
                 charlen_to_bytelen(&src_text[start_off..], (pmatch[0].rm_so - data_pos as i64) as i32)?;
-            vec_append_bytes(&mut buf, &src_text[start_off..start_off + chunk_len as usize])?;
+            ::stringinfo::vec_append_binary(&mut buf, &src_text[start_off..start_off + chunk_len as usize])?;
             start_off += chunk_len as usize;
             data_pos = pmatch[0].rm_so as i32;
         }
@@ -205,7 +205,7 @@ pub fn replace_text_regexp<'mcx>(
         if escape_status > 0 {
             append_regexp_substr(&mut buf, replace_text, &pmatch, src_text, start_off, data_pos)?;
         } else {
-            vec_append_bytes(&mut buf, replace_text)?;
+            ::stringinfo::vec_append_binary(&mut buf, replace_text)?;
         }
 
         start_off +=
@@ -223,7 +223,7 @@ pub fn replace_text_regexp<'mcx>(
     }
 
     if (data_pos as i64) < data_len {
-        vec_append_bytes(&mut buf, &src_text[start_off..])?;
+        ::stringinfo::vec_append_binary(&mut buf, &src_text[start_off..])?;
     }
 
     Ok(buf)

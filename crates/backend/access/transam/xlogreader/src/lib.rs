@@ -755,7 +755,7 @@ impl<'mcx> XLogReaderState<'mcx> {
             if self.decode_buffer_size == 0 {
                 self.decode_buffer_size = DEFAULT_DECODE_BUFFER_SIZE;
             }
-            self.decode_buffer.resize(self.decode_buffer_size, 0);
+            ::mcx::pgvec_resize(&mut self.decode_buffer, self.decode_buffer_size, 0).ok()?;
             self.decode_buffer_head = 0;
             self.decode_buffer_tail = 0;
         }
@@ -2223,6 +2223,7 @@ fn decode_record<'mcx>(
 enum RestoreErr {
     InvalidBlock,
     InvalidState,
+    #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
     NotSupportedByBuild(&'static str),
     UnknownMethod,
     DecompressFailure,
@@ -2271,6 +2272,7 @@ fn restore_image_core(
         return Err(RestoreErr::InvalidState);
     }
     let mut tmp = [core::mem::MaybeUninit::<u8>::uninit(); BLCKSZ];
+    let mut decoded: [u8; BLCKSZ];
     let src: &[u8] = if BKPIMAGE_COMPRESSED(bimg_info) {
         if bimg_info & BKPIMAGE_COMPRESS_PGLZ != 0 {
             match pglz::pglz_decompress(image, &mut tmp[..BLCKSZ - hole_length], true) {
@@ -2279,11 +2281,17 @@ fn restore_image_core(
                 None => return Err(RestoreErr::DecompressFailure),
             }
         } else if bimg_info & BKPIMAGE_COMPRESS_LZ4 != 0 {
-            // USE_LZ4 not defined in this build (the C #else branch).
-            return Err(RestoreErr::NotSupportedByBuild("LZ4"));
+            decoded = [0u8; BLCKSZ];
+            let out = &mut decoded[..BLCKSZ - hole_length];
+            match lz4_flex::block::decompress_into(image, out) {
+                Ok(n) if n > 0 => out,
+                _ => return Err(RestoreErr::DecompressFailure),
+            }
         } else if bimg_info & BKPIMAGE_COMPRESS_ZSTD != 0 {
-            // USE_ZSTD not defined in this build (the C #else branch).
-            return Err(RestoreErr::NotSupportedByBuild("zstd"));
+            decoded = [0u8; BLCKSZ];
+            let out = &mut decoded[..BLCKSZ - hole_length];
+            zstd_decompress(image, out)?;
+            out
         } else {
             return Err(RestoreErr::UnknownMethod);
         }
@@ -2300,6 +2308,18 @@ fn restore_image_core(
             .copy_from_slice(&src[hole_offset..BLCKSZ - hole_length]);
     }
     Ok(())
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn zstd_decompress(image: &[u8], out: &mut [u8]) -> Result<(), RestoreErr> {
+    zstd::zstd_safe::decompress(out, image)
+        .map(|_| ())
+        .map_err(|_| RestoreErr::DecompressFailure)
+}
+
+#[cfg(target_family = "wasm")]
+fn zstd_decompress(_image: &[u8], _out: &mut [u8]) -> Result<(), RestoreErr> {
+    Err(RestoreErr::NotSupportedByBuild("zstd"))
 }
 
 #[cfg(target_os = "macos")]

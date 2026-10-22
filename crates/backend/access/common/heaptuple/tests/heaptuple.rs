@@ -602,6 +602,28 @@ fn too_many_columns_is_sqlstate_54011() {
     assert_eq!(err.sqlstate(), types_error::ERRCODE_TOO_MANY_COLUMNS);
 }
 
+#[test]
+fn a_row_shorter_than_its_descriptor_raises_42804() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let cols: Vec<CompactAttribute> = (0..19).map(|_| attr(8, true, 8)).collect();
+    let desc = make_desc(mcx, &cols);
+    let values = vec![Datum::from_i64(7); 17];
+    let isnull = vec![false; 17];
+    let Err(err) = heap_form_tuple(mcx, &desc, &values, &isnull) else {
+        panic!("expected error")
+    };
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_DATATYPE_MISMATCH);
+    let Err(err) = heap_form_minimal_tuple(mcx, &desc, &values, &isnull, 0) else {
+        panic!("expected error")
+    };
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_DATATYPE_MISMATCH);
+    let nulls19 = vec![false; 19];
+    assert!(heap_form_minimal_tuple(mcx, &desc, &values, &nulls19, 0).is_err());
+    let values19 = vec![Datum::from_i64(7); 19];
+    assert!(heap_form_tuple(mcx, &desc, &values19, &nulls19).is_ok());
+}
+
 // heaptuple.c:1166 palloc0(HEAPTUPLESIZE + len): the 24-byte HeapTupleData
 // counts toward MaxAllocSize. Only the header of the varlena is read before
 // the size check fires, so the datum need not be backed by 1 GiB.

@@ -16,6 +16,9 @@ vfs = { path = "../vfs" }
 elog = { path = "../../../utils/error/elog" }
 # THE single lock library (three worlds); native = verbatim std re-exports.
 pgsync = { path = "../../../../_support/pgsync" }
+# D3808: the budget is the memory policy's (mempolicy::load::write_budget);
+# the crate depends on pgsync only.
+mempolicy = { path = "../../../../_support/mempolicy" }
 libc = "0.2"
 
 [lints.rust]

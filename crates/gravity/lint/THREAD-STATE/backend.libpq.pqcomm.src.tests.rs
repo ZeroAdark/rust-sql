@@ -1,0 +1,12 @@
+backend/libpq/pqcomm/src/tests.rs	WIRE	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	INPUT	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	WRITE_CHUNK	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	WRITE_ERRNO	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	WRITE_ERRNOS	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	READ_ERRNOS	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	HAVE_PORT	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	NOBLOCK	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	WRITE_FATAL	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	SEEN	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	CLEANUPS	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs
+backend/libpq/pqcomm/src/tests.rs	TEST_SEND_GROW	unittest	test	test	#[cfg(test)] mod of backend/libpq/pqcomm/src/lib.rs

@@ -1,0 +1,13 @@
+-- regress-full-merge-005
+-- MERGE INTO target USING (SELECT 1) ON true WHEN MATCHED THEN DO NOTHING;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=30687 rti=1 am=heap
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write MERGE rel=30687 rti=1 natts=2 indexes=()
+    merge rowid=outer.1 target_cols=()
+    when matched then do nothing
+  outs 1=fx6:row
+mapped: ModifyTable SeqScan

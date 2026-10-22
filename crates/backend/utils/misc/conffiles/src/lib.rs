@@ -4,13 +4,8 @@ mod tests;
 use std::path::{Component, Path, PathBuf};
 
 use conffiles_seams::ConfFilesInDir;
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_error::{ErrorLevel, PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE, ERROR};
-
-// is_absolute_path (port/path.c), POSIX target.
-fn is_absolute_path(location: &str) -> bool {
-    location.starts_with('/')
-}
 
 // Lexical canonicalize_path (port/path.c): collapses . / .. / duplicate
 // separators without touching the filesystem, so not-yet-existing paths work.
@@ -40,8 +35,9 @@ fn canonicalize_path_lexically(path: &Path) -> PathBuf {
     out
 }
 
-pub fn absolute_config_location(location: &str, calling_file: Option<&Path>) -> PathBuf {
-    if is_absolute_path(location) {
+pub fn absolute_config_location(location: impl AsRef<Path>, calling_file: Option<&Path>) -> PathBuf {
+    let location = location.as_ref();
+    if location.is_absolute() {
         return PathBuf::from(location);
     }
     let base = match calling_file {
@@ -112,7 +108,7 @@ pub fn get_conf_files_in_dir(
                 elevel,
                 &error,
                 format!(
-                    "could not open configuration directory \"{}\": %m",
+                    "could not open configuration directory \"{}\": {PCT_M}",
                     directory.display()
                 ),
             );
@@ -133,7 +129,7 @@ pub fn get_conf_files_in_dir(
                 return Err(io_error(
                     ERROR,
                     &error,
-                    format!("could not read directory \"{}\": %m", directory.display()),
+                    format!("could not read directory \"{}\": {PCT_M}", directory.display()),
                 )
                 .into())
             }
@@ -161,7 +157,7 @@ pub fn get_conf_files_in_dir(
                 let pg_error = io_error(
                     elevel,
                     &error,
-                    format!("could not stat file \"{}\": %m", filename.display()),
+                    format!("could not stat file \"{}\": {PCT_M}", filename.display()),
                 );
                 return resolve(
                     elevel,

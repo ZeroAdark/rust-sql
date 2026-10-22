@@ -1,0 +1,11 @@
+-- regress-full-select-004
+-- select foo from (select null offset 0) as foo;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c25:null)
+  project (1=v1.0)
+  outs 1=vl:stmt/imm
+  outs 1=vl:row
+mapped: Result SubqueryScan

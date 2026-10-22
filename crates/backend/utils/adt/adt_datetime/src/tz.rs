@@ -5,7 +5,8 @@
 //! that convention, exactly as C's callers expect; timestamp2tm converts.
 
 use core::cell::Cell;
-use core::sync::atomic::{AtomicPtr, Ordering};
+
+use pgsync::Mutex;
 
 use crate::calendar::date2j;
 use crate::consts::{
@@ -13,20 +14,35 @@ use crate::consts::{
     SECS_PER_DAY, SECS_PER_MINUTE, TOKMAXLEN, TZ, UNIX_EPOCH_JDATE,
 };
 
-pub use localtime::PgTz;
+pub use localtime::{PgTz, PgTzRef};
 pub use pgtz::{
     log_timezone, pg_timezone_initialize, pg_tzset, pg_tzset_offset, session_timezone,
-    set_log_timezone, set_session_timezone,
+    set_log_timezone, set_session_timezone, with_session_timezone,
 };
 
-use localtime::{NextDstBoundary, TZ_STRLEN_MAX};
+pub use localtime::TZ_STRLEN_MAX;
+use localtime::NextDstBoundary;
 use types_error::PgResult;
+
+/// [`with_session_timezone`] for a reader that needs a zone (every backend has one after `pg_timezone_initialize`):
+/// `missing` is the panic text when there is none. The per-datum date / timestamp / timestamptz readers take this,
+/// never a `session_timezone()` handle (a clone + drop per row on the Arc all pool workers share).
+#[inline]
+pub fn with_required_session_timezone<R>(missing: &'static str, f: impl FnOnce(&PgTz) -> R) -> R {
+    with_session_timezone(|z| f(z.unwrap_or_else(|| no_session_timezone(missing))))
+}
+
+#[cold]
+#[inline(never)]
+fn no_session_timezone(missing: &'static str) -> ! {
+    panic!("{missing}")
+}
 
 pub fn pg_tz_acceptable(tz: &PgTz) -> bool {
     localtime::pg_tz_acceptable(tz)
 }
 
-pub fn pg_get_timezone_name(tz: &'static PgTz) -> Option<&'static str> {
+pub fn pg_get_timezone_name(tz: &PgTz) -> Option<&str> {
     core::str::from_utf8(localtime::pg_get_timezone_name(tz)).ok()
 }
 
@@ -160,13 +176,69 @@ pub fn pg_get_timezone_offset(tzp: &PgTz, gmtoff: &mut i64) -> bool {
 /// DetermineTimeZoneOffset convention (the caller flips once more to match
 /// zoneabbrevtbl's convention).
 pub fn session_tz_abbrev_probe(lowtoken: &[u8]) -> Option<(bool, i32, i32)> {
-    let tz = session_timezone()?;
     let (up, n) = upcase_abbrev(lowtoken);
-    let (isfixed, gmtoff, isdst) = localtime::pg_timezone_abbrev_is_known(&up[..n], tz)?;
+    let (isfixed, gmtoff, isdst) =
+        with_session_timezone(|tz| localtime::pg_timezone_abbrev_is_known(&up[..n], tz?))?;
     Some((isfixed, -(gmtoff as i32), isdst))
 }
 
-fn convert(tx: localtime::PgTm<'static>) -> pg_tm {
+// pg_tm.tm_zone is `&'static str` across the adt crates while the zone is a
+// session-cache handle: intern the abbreviation text (bytes, not tz states).
+// Every breakdown under a zone (timestamp2tm: timestamptz output, ::date,
+// date_trunc, + interval, extract) interns, per datum, on every pool worker at
+// once. So a text seen before is found in INTERN_FAST with plain loads (no
+// read-modify-write: the slots' lines stay shared in every core's cache); only
+// a new text takes the lock (a lock per datum was the next shared line after
+// the session zone's refcount: claimsbench t01, 4 workers, 43 % of CPU in
+// __aarch64_cas4_acq / swp4_rel / lock_contended). A process meets a few dozen
+// abbreviations; past INTERN_SLOTS the rest are found under the lock as before.
+const INTERN_SLOTS: usize = 64;
+static INTERN_FAST: [pgsync::OnceLock<&'static str>; INTERN_SLOTS] =
+    [const { pgsync::OnceLock::new() }; INTERN_SLOTS];
+
+fn intern_abbrev(abbr: Option<&str>) -> Option<&'static str> {
+    let abbr = abbr?;
+    // slots fill in order under the lock: the first empty one ends the published run
+    for slot in &INTERN_FAST {
+        match slot.get() {
+            Some(&s) if s == abbr => return Some(s),
+            Some(_) => {}
+            None => break,
+        }
+    }
+    Some(intern_locked(abbr))
+}
+
+#[cold]
+#[inline(never)]
+fn intern_locked(abbr: &str) -> &'static str {
+    use std::collections::BTreeSet;
+    static INTERNED: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
+    let mut set = ::pgsync::lock(&INTERNED);
+    let s: &'static str = match set.get(abbr) {
+        Some(&s) => s,
+        None => {
+            let leaked: &'static str = Box::leak(abbr.to_owned().into_boxed_str());
+            set.insert(leaked);
+            leaked
+        }
+    };
+    // Publish it unless a slot has it already (a reader that scanned before
+    // the publish lands here too); only this lock's holder sets a slot.
+    for slot in &INTERN_FAST {
+        match slot.get() {
+            Some(&p) if p == s => break,
+            Some(_) => {}
+            None => {
+                let _ = slot.set(s);
+                break;
+            }
+        }
+    }
+    s
+}
+
+fn convert(tx: localtime::PgTm<'_>) -> pg_tm {
     pg_tm {
         tm_sec: tx.tm_sec,
         tm_min: tx.tm_min,
@@ -178,14 +250,14 @@ fn convert(tx: localtime::PgTm<'static>) -> pg_tm {
         tm_yday: tx.tm_yday,
         tm_isdst: tx.tm_isdst,
         tm_gmtoff: tx.tm_gmtoff,
-        tm_zone: tx.tm_zone,
+        tm_zone: intern_abbrev(tx.tm_zone),
     }
 }
 
 /// POSIX-convention result (see the engine's PgTm doc): tm_year is year-1900,
 /// tm_mon 0-based — converted at the timestamp2tm boundary, not here.
 #[allow(non_snake_case)]
-pub fn pg_localtime(t: i64, tzp: &'static PgTz) -> Option<pg_tm> {
+pub fn pg_localtime(t: i64, tzp: &PgTz) -> Option<pg_tm> {
     localtime::pg_localtime(t, tzp).map(convert)
 }
 
@@ -203,7 +275,9 @@ pub struct TzEntry<'a> {
 }
 
 pub struct DynamicZoneAbbrev {
-    tz: AtomicPtr<PgTz>,
+    // C: `pg_tz *tz`, resolved on first use; the slot's own handle outlives
+    // the resolving session's cache (the table is process-shared).
+    tz: Mutex<Option<PgTzRef>>,
     zone: &'static [u8],
 }
 
@@ -237,7 +311,8 @@ pub fn zoneabbrevtbl() -> Option<&'static ZoneAbbrevTable> {
 // here the table is permanent, so tzparser interns one per file name.
 #[allow(non_snake_case)]
 pub fn ConvertTimeZoneAbbrevs(abbrevs: &[TzEntry<'_>]) -> &'static ZoneAbbrevTable {
-    let mut tokens: Vec<DateTkn> = Vec::with_capacity(abbrevs.len());
+    let mut tokens: Vec<DateTkn> = Vec::new();
+    let _ = tokens.try_reserve_exact(abbrevs.len());
     let mut dynamic: Vec<DynamicZoneAbbrev> = Vec::new();
     for abbr in abbrevs {
         let mut token = [0u8; TOKMAXLEN + 1];
@@ -246,8 +321,8 @@ pub fn ConvertTimeZoneAbbrevs(abbrevs: &[TzEntry<'_>]) -> &'static ZoneAbbrevTab
         let (typ, value) = match abbr.zone {
             Some(zone) => {
                 dynamic.push(DynamicZoneAbbrev {
-                    tz: AtomicPtr::new(core::ptr::null_mut()),
-                    zone: Box::leak(zone.to_vec().into_boxed_slice()),
+                    tz: Mutex::new(None),
+                    zone: Box::leak(Box::<[u8]>::from(zone)),
                 });
                 (DYNTZ, (dynamic.len() - 1) as i32)
             }
@@ -273,21 +348,16 @@ pub fn FetchDynamicTimeZone<'a>(
     tbl: &'a ZoneAbbrevTable,
     tp: &'a DateTkn,
     extra: &mut DateTimeErrorExtra<'a>,
-) -> PgResult<Option<&'static PgTz>> {
+) -> PgResult<Option<PgTzRef>> {
     debug_assert_eq!(tp.typ as i32, DYNTZ);
     let dtza = &tbl.dynamic[tp.value as usize];
-    // Acquire/Release: the table is process-shared, so the pointee's bytes
-    // (built by whichever thread resolved the zone first) must be published
-    // with the pointer. pg_tzset's entries are process-permanent, which is
-    // what makes caching the pointer here sound at all.
-    let cached = dtza.tz.load(Ordering::Acquire);
-    if !cached.is_null() {
-        // SAFETY: the slot only ever holds &'static PgTz from pg_tzset below.
-        return Ok(Some(unsafe { &*cached }));
+    if let Some(tz) = pgsync::lock(&dtza.tz).clone() {
+        return Ok(Some(tz));
     }
     match pg_tzset(dtza.zone)? {
         Some(tz) => {
-            dtza.tz.store(tz as *const PgTz as *mut PgTz, Ordering::Release);
+            let mut slot = pgsync::lock(&dtza.tz);
+            let tz = slot.get_or_insert(tz).clone();
             Ok(Some(tz))
         }
         None => {

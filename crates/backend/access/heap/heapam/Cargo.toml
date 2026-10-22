@@ -24,6 +24,7 @@ init_small = { path = "../../../utils/init/init_small" }
 elog = { path = "../../../utils/error/elog" }
 injection_point = { path = "../../../utils/misc/injection_point" }
 bufmgr_seams = { path = "../../../storage/buffer/bufmgr_seams" }
+read_stream = { path = "../../../storage/aio/read_stream" }
 predicate_seams = { path = "../../../storage/lmgr/predicate_seams" }
 pruneheap_seams = { path = "../pruneheap_seams" }
 syncscan_seams = { path = "../../common/syncscan_seams" }
@@ -57,6 +58,7 @@ elog_seams = { path = "../../../utils/error/elog_seams" }
 xact = { path = "../../transam/xact" }
 miscinit_seams = { path = "../../../utils/init/miscinit_seams" }
 lmgr_proc = { path = "../../../storage/lmgr/lmgr_proc" }
+latch_seams = { path = "../../../storage/ipc/latch_seams" }
 
 [dev-dependencies]
 smgr_seams = { path = "../../../storage/smgr/smgr_seams" }
@@ -78,7 +80,6 @@ aio_seams = { path = "../../../storage/aio/aio_seams" }
 waitevent_seams = { path = "../../../utils/activity/waitevent_seams" }
 pg_sema_seams = { path = "../../../port/pg_sema_seams" }
 s_lock_seams = { path = "../../../storage/lmgr/s_lock_seams" }
-latch_seams = { path = "../../../storage/ipc/latch_seams" }
 ipc_seams = { path = "../../../storage/ipc/ipc_seams" }
 deadlock_seams = { path = "../../../storage/lmgr/deadlock_seams" }
 pmsignal_seams = { path = "../../../storage/ipc/pmsignal_seams" }

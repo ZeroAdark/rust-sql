@@ -11,6 +11,7 @@ enum ConverterState {
     Uuid(::adt_uuid::abbrev::UuidAbbrevState),
     Network(::adt_network::abbrev::NetworkAbbrevState),
     Numeric(::adt_numeric::sortsupport::NumericAbbrevState),
+    GistPointZorder,
 }
 
 /// varstr_abbrev_convert non-C arm (varlena.c): abbreviated keys are
@@ -60,6 +61,7 @@ impl VarStrXfrmState {
                 if bsize < self.buf2.len() {
                     break bsize;
                 }
+                let _ = self.buf2.try_reserve(bsize + 1 - self.buf2.len());
                 self.buf2.resize(bsize + 1, 0);
             }
         };
@@ -114,6 +116,7 @@ impl AbbrevState {
             AbbrevKind::Numeric => {
                 ConverterState::Numeric(::adt_numeric::sortsupport::NumericAbbrevState::new())
             }
+            AbbrevKind::GistPointZorder => ConverterState::GistPointZorder,
         };
         AbbrevState { full_comparator: arm.full_comparator, conv }
     }
@@ -135,6 +138,13 @@ impl AbbrevState {
                 s.convert(::adt_network::InetRef::from_payload(b))
             }),
             ConverterState::Numeric(s) => with_varlena_payload(original, |b| s.convert(b)),
+            ConverterState::GistPointZorder => {
+                let b = ::types_core::geo::BOX::from_datum_bytes(core::slice::from_raw_parts(
+                    original.as_usize() as *const u8,
+                    32,
+                ));
+                ::types_core::geo::point_zorder_internal(b.low.x as f32, b.low.y as f32)
+            }
         };
         Datum::from_u64(word)
     }
@@ -146,6 +156,8 @@ impl AbbrevState {
             ConverterState::Uuid(s) => s.abort(memtupcount),
             ConverterState::Network(s) => s.abort(memtupcount),
             ConverterState::Numeric(s) => s.abort(memtupcount),
+            // gist_bbox_zorder_abbrev_abort: never abort.
+            ConverterState::GistPointZorder => false,
         }
     }
 }

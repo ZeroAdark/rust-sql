@@ -1,0 +1,11 @@
+-- regress-full-update-017
+-- UPDATE part_b_10_b_20 set b = b - 6;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=op689(v1.4, c23:6), 2j=v1.-1)
+  write UPDATE rel=26460 rti=1 natts=5 indexes=() set=(4) route=rti1:26460 natts=5
+  outs 1=w8:val 2=fx6:row
+mapped: Result ModifyTable

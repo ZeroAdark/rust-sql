@@ -1,0 +1,11 @@
+-- regress-full-multirangetypes-001
+-- SELECT * FROM nummultirange_test WHERE multirange_contains_elem(nmr, 4.0);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=4 end=sink
+  nodes n0@0
+  source range rel=17211 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  filter fn4249(v1.1, c1700:'\x80\x80\x04\x00')
+  project (1=v1.1)
+  outs 1=vl:win/page
+mapped: SeqScan

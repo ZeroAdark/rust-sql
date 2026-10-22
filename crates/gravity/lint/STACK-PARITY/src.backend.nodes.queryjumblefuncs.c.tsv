@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/nodes/queryjumblefuncs.c: 2 stack-depth check sites
+485	IsSquashableConstant	crates/backend/nodes/queryjumble/src/walker.rs	is_squashable_constant	yes	
+575	_jumbleNode	crates/backend/nodes/queryjumble/src/walker.rs	jumble_node	yes	

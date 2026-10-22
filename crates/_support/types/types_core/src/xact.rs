@@ -218,7 +218,7 @@ impl FullTransactionId {
     }
 
     pub const fn is_normal(self) -> bool {
-        TransactionIdIsNormal(self.xid())
+        self.value >= FirstNormalFullTransactionId.value
     }
 
     pub const fn precedes(self, other: FullTransactionId) -> bool {
@@ -316,3 +316,17 @@ pub enum TimeoutId {
 pub use TimeoutId::*;
 
 pub const MAX_TIMEOUTS: i32 = USER_TIMEOUT as i32 + 10;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_xid_is_normal_compares_whole_value_like_transam_h() {
+        assert!(!FullTransactionId::from_u64(0).is_normal());
+        assert!(!FullTransactionId::from_u64(2).is_normal());
+        assert!(FullTransactionId::from_u64(3).is_normal());
+        assert!(FullTransactionId::from_epoch_and_xid(1, 0).is_normal());
+        assert!(FullTransactionId::from_u64(4294967296 + 2).is_normal());
+    }
+}

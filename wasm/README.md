@@ -1,6 +1,6 @@
 # pgrust wasm webapp
 
-Runs the pgrust single-user `postgres.wasm` module **in the browser**
+Runs the pgrust-fast single-user `postgres.wasm` module **in the browser**
 (and in Node), over an in-memory VFS holding an `initdb`'d datadir. Type SQL
 into an interactive `pgrust=#` terminal, get a psql-style table back —
 PostgreSQL, reimplemented in Rust, compiled to WebAssembly, executing
@@ -11,7 +11,7 @@ Lineage: this site is the pgrust.com demo ported from the original pgrust
 UI/REPL/format layers are carried over intact; the **host layer is new**: the
 old build targeted `wasm32/64-unknown-unknown` and spoke a custom
 `pgvfs::host_*` ABI (27 imports + 161 `env::*` trap stubs, `pgrust-harness.js`),
-while pgrust builds `postgres.wasm` for **wasm32-wasip1** with
+while pgrust-fast builds `postgres.wasm` for **wasm32-wasip1** with
 panic=unwind lowered through standard Wasm exception handling — so the module
 imports exactly the **33 `wasi_snapshot_preview1` functions** and nothing
 else, implemented here in `pgrust-wasi.js`.
@@ -49,9 +49,11 @@ until you press **reset**.
 Verified in Node (v25), Chrome, and WebKit/JavaScriptCore. **One asset leg
 serves every engine**: the wasm32-wasip1 module uses the standardized exnref
 wasm-EH encoding plus baseline post-MVP features (bulk-memory, reference-types,
-multivalue, nontrapping-fptoint, sign-ext, extended-const — **no SIMD, no
-memory64, no threads**), all accepted by current Chrome, Firefox, and
-Safari/iOS Safari. The old desktop-wasm64 / Safari-wasm32 dual-asset split is
+multivalue, nontrapping-fptoint, sign-ext, extended-const) and **simd128**
+(wasm-build.sh turns it on; **no memory64, no threads**), all accepted by
+Chrome 91+, Firefox 89+ and Safari/iOS Safari 16.4+. An older engine, one
+without SIMD, gets a "this browser is too old" message before the worker boots
+(backend.js `simdSupported`: `WebAssembly.validate` of a 31-byte SIMD module). The old desktop-wasm64 / Safari-wasm32 dual-asset split is
 gone, and the old wasm32 float8/Datum limitation is fixed (the ILP32 Datum
 audit in the wasm boot lane), so float8 examples run everywhere.
 
@@ -83,7 +85,7 @@ audit in the wasm boot lane), so float8 examples run everywhere.
     WebKit/Safari incl. iOS here — no JSPI in WebKit as of mid-2026): each
     statement runs `postgres --single` to completion in a fresh module
     instance over the SHARED long-lived VFS, exactly the original model —
-    datadir writes persist REPL-style, session state does not. pgrust's
+    datadir writes persist REPL-style, session state does not. pgrust-fast's
     `--single` exits through a completed shutdown checkpoint, so every next
     boot is a normal clean restart.
 - **Persistence across page reloads** (the `persist` toggle): the worker
@@ -212,6 +214,7 @@ resource/size property of that dev asset and always gate on the release module.
 | `build.sh` | Assembles the asset directory (wasm module + packed VFS; mints the datadir with C initdb when not given one). |
 | `verify.html` | Headless-driver page: runs two queries through the real worker, writes VERIFY_PASS/FAIL to `document.title`. |
 | `test/decode-utf8.test.mjs` | Node unit test (`node wasm/test/decode-utf8.test.mjs`): streaming UTF-8 chunk decoding round-trips multi-byte characters split across output chunks (public issue #34). |
+| `test/vfs-link.test.mjs` | Node unit test (`node wasm/test/vfs-link.test.mjs`): the VFS hard links behind the `path_link` import (D4947): shared node, link count through unlink / rename / filestat, `rename(x, x)` a no-op. |
 | `psqlsession.js` | `?client=psql`: the real `psql.wasm` cross-piped to `postgres --stdio-wire` instance(s) over host pipes (fd 4/5), with the psql→server frame splitter that spots `Terminate` and respawns the server on the same VFS so `\c` is a real reconnect; the server→psql splitter that spots `ReadyForQuery` (the persist cadence); and `stop()`, the psql-first teardown behind `reset`. |
 | `run-node-psql.mjs` | Node CLI harness for the two-instance psql topology (script mode, no browser) — the ground truth behind `crates/bin/psql/gate/run-wasm-gate.sh`. |
 | `test/psql-e2e.html` + `test/run-browser-e2e.mjs` | Browser battery for `?client=psql`: the page decides its own verdict and POSTs it to the driver's listener (DOM polling races the async battery). |
@@ -291,7 +294,7 @@ The module is a `wasm32-wasip1` build (pinned nightly, `-Zbuild-std` with
 - **stdio**: fd 0 feeds the SQL statement text; fd 1/2 are captured for
   `format.js` (results) and diagnostics (ERROR/NOTICE lines).
 - **process/env**: `args_get`/`args_sizes_get` supply
-  `postgres --single -D /pgdata -c max_stack_depth=60000 -c io_method=sync
+  `postgres --single -D /pgdata -c io_method=sync
   -c autovacuum=off -c wal_sync_method=fdatasync -c shared_buffers=32MB
   postgres`; `environ_get` supplies `USER=postgres`,
   `PGRUST_TZDIR=/share/timezone`, `PGRUST_PGSHAREDIR=/share`,

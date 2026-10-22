@@ -1,0 +1,9 @@
+-- oltp-011.1
+-- SELECT c_id, c_balance FROM customer WHERE c_w_id = 1 AND c_d_id = 1 AND c_last = tpcc_name(4) AND c_first = 'First' || 5::text /* served */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=relabel1043(op654(op654(T_SubscriptingRef, T_SubscriptingRef), T_SubscriptingRef)))
+  outs 1=vl:call1258
+mapped: Result

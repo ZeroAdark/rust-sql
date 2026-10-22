@@ -1,0 +1,1 @@
+backend/executor/execexpr/src/domain.rs	STATE	pgport	key:domain oid and its constraint cache identity	cache	domain_check_input's engine: per domain OID a compiled check memo, revalidated against the domain constraint cache's identity at every call (UpdateDomainConstraintRef), the fn_extra analog

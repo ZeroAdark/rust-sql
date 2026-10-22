@@ -1,0 +1,185 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1key s2u s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k;
+QUERY PLAN                                     
+-----------------------------------------------
+Update on ur_t t                               
+  ->  Hash Join                                
+        Hash Cond: ("*SELECT* 1".k = t.id)     
+        ->  Append                             
+              ->  Subquery Scan on "*SELECT* 1"
+                    ->  Seq Scan on ur_s       
+                          Filter: (w > 0)      
+              ->  Result                       
+        ->  Hash                               
+              ->  Seq Scan on ur_t t           
+(10 rows)
+
+step s1key: UPDATE ur_t SET id = 25 WHERE id = 5;
+step s2u: UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   1
+25|50| 250
+(2 rows)
+
+
+starting permutation: s1v s2u s1c s2sel
+step s1v: UPDATE ur_t SET v = v + 1 WHERE id = 5;
+step s2u: UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|51|  50
+ 7|70|   1
+(2 rows)
+
+
+starting permutation: s1del s2u s1c s2sel
+step s1del: DELETE FROM ur_t WHERE id = 5;
+step s2u: UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   1
+(1 row)
+
+
+starting permutation: s1src s2u s1c s2sel
+step s1src: UPDATE ur_s SET w = 999 WHERE k = 5;
+step s2u: UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k;
+step s1c: COMMIT;
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|50|  50
+ 7|70|   1
+(2 rows)
+
+
+starting permutation: s1key s2d s1c s2sel
+step s1key: UPDATE ur_t SET id = 25 WHERE id = 5;
+step s2d: DELETE FROM ur_t t USING (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 1 RETURNING t.id, t.v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| v
+--+--
+25|50
+ 7|70
+(2 rows)
+
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id|v|hits
+--+-+----
+(0 rows)
+
+
+starting permutation: s1key s2ub s1c s2sel
+step s1key: UPDATE ur_t SET id = 25 WHERE id = 5;
+step s2ub: UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_s UNION ALL SELECT 7, 1) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2ub: <... completed>
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   1
+25|50| 250
+(2 rows)
+
+
+starting permutation: s2mexp s1key s2m s1c s2sel
+step s2mexp: EXPLAIN (COSTS OFF) MERGE INTO ur_t t USING (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w;
+QUERY PLAN                                     
+-----------------------------------------------
+Merge on ur_t t                                
+  ->  Hash Join                                
+        Hash Cond: ("*SELECT* 1".k = t.id)     
+        ->  Append                             
+              ->  Subquery Scan on "*SELECT* 1"
+                    ->  Seq Scan on ur_s       
+                          Filter: (w > 0)      
+              ->  Result                       
+        ->  Hash                               
+              ->  Seq Scan on ur_t t           
+(10 rows)
+
+step s1key: UPDATE ur_t SET id = 25 WHERE id = 5;
+step s2m: MERGE INTO ur_t t USING (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   1
+25|50|  50
+(2 rows)
+
+
+starting permutation: s1v s2m s1c s2sel
+step s1v: UPDATE ur_t SET v = v + 1 WHERE id = 5;
+step s2m: MERGE INTO ur_t t USING (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|51|  50
+ 7|70|   1
+(2 rows)
+
+
+starting permutation: s1del s2m s1c s2sel
+step s1del: DELETE FROM ur_t WHERE id = 5;
+step s2m: MERGE INTO ur_t t USING (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   1
+(1 row)
+
+
+starting permutation: s1src s2m s1c s2sel
+step s1src: UPDATE ur_s SET w = 999 WHERE k = 5;
+step s2m: MERGE INTO ur_t t USING (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w;
+step s1c: COMMIT;
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|50|  50
+ 7|70|   1
+(2 rows)
+
+
+starting permutation: s1key s2mq s1c s2sel
+step s1key: UPDATE ur_t SET id = 25 WHERE id = 5;
+step s2mq: MERGE INTO ur_t t USING (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s ON t.id = s.k WHEN MATCHED AND s.w < 100 THEN DELETE WHEN MATCHED THEN UPDATE SET hits = 999; <waiting ...>
+step s1c: COMMIT;
+step s2mq: <... completed>
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id|v|hits
+--+-+----
+(0 rows)
+
+
+starting permutation: s1key s2m2 s1c s2sel
+step s1key: UPDATE ur_t SET id = 25 WHERE id = 5;
+step s2m2: MERGE INTO ur_t t USING (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 25, 260) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s1c: COMMIT;
+step s2m2: <... completed>
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   0
+25|50|  50
+(2 rows)
+

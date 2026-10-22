@@ -166,6 +166,23 @@ pub fn InvalidateSystemCaches() -> PgResult<()> {
 }
 
 pub fn AcceptInvalidationMessages() -> PgResult<()> {
+    // C3: a cache rebuilt here is no read of the lowering recording on this thread
+    if gravity_deps::armed() {
+        return gravity_deps::suppressed(accept);
+    }
+    accept()
+}
+
+/// The recursion depth `accept` raised for its extended invalidation, put back on any exit (an unwind too).
+struct DepthBack(i32);
+
+impl Drop for DepthBack {
+    fn drop(&mut self) {
+        crate::ACCEPT_RECURSION_DEPTH.set(self.0);
+    }
+}
+
+fn accept() -> PgResult<()> {
     sinval_seams::receive_shared_invalid_messages::call(
         &mut |msg| LocalExecuteInvalidationMessage(msg),
         &mut || InvalidateSystemCaches(),
@@ -176,8 +193,9 @@ pub fn AcceptInvalidationMessages() -> PgResult<()> {
         let depth = crate::ACCEPT_RECURSION_DEPTH.get();
         if depth < crate::debug_discard_caches() {
             crate::ACCEPT_RECURSION_DEPTH.set(depth + 1);
+            let back = DepthBack(depth);
             let result = InvalidateSystemCachesExtended(true);
-            crate::ACCEPT_RECURSION_DEPTH.set(depth);
+            drop(back);
             result?;
         }
     }

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use mcx::{Mcx, MemoryContext};
+use mcx::{Mcx, MemoryContext, PinnedContext};
 use types_core::Oid;
 use types_error::PgResult;
 use types_nodes::Node;
@@ -49,29 +49,42 @@ pub struct RdRules {
     // std Vec justified: Rc-owned droppy owner outside the arenas
     // (rd_supportinfo precedent); drop = C's MemoryContextDelete(rulescxt).
     pub rules: Vec<RewriteRuleMeta>,
+    // D4468's test: the context the fill's handle named (it must be `_rulescxt`'s own).
+    #[cfg(test)]
+    fill_cxt: *const MemoryContext,
     // C's rulescxt ("relation rules" child of CacheMemoryContext): owns every
-    // tree in `rules`. Declared last so the trees' handles drop first; freed
-    // with the last holder, i.e. after invalidation once no consumer is mid-use.
-    _rulescxt: MemoryContext,
+    // tree in `rules`. Pinned before the fill takes its handle, so moving the
+    // set into its Rc never moves the context the trees were read through.
+    // Declared last so the trees' handles drop first (PinnedContext::handle's
+    // contract); freed with the last holder, i.e. after invalidation once no
+    // consumer is mid-use.
+    _rulescxt: PinnedContext,
 }
 
 // Rule-5 cache keyed by relid in the relcache state, not a RelationData
 // field (trimmed entry has no relhasrules; callers key on relkind).
 pub fn RelationGetRules<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgResult<Option<Rc<RdRules>>> {
+    // C3: a recorded lowering depends on the relation (its invalidation drops these); the fill's scan is the entry's
+    gravity_deps::note_rel(relid);
     if let Some(hit) = with_state(|st| st.rules_cache.get(&relid).cloned()) {
         return Ok(Some(hit));
     }
     // No state borrow across the scan: it re-enters the relcache.
-    let rows = relcache_build_seams::scan_pg_rewrite::call(mcx, relid)?;
+    let rows = gravity_deps::suppressed(|| relcache_build_seams::scan_pg_rewrite::call(mcx, relid))?;
     if rows.is_empty() {
         return Ok(None);
     }
-    let rulescxt = MemoryContext::new("relation rules");
-    // SAFETY: every allocation below lands in `rulescxt`, which the returned
-    // RdRules owns and drops after its `rules` field; the handles are only
-    // reachable through the Rc<RdRules>, so nothing outlives the context.
-    let rmcx: Mcx<'static> = unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'static>>(rulescxt.mcx()) };
-    let mut rules: Vec<RewriteRuleMeta> = Vec::with_capacity(rows.len());
+    let rulescxt = PinnedContext::new(with_state(|st| st.root).new_child("relation rules"));
+    // relcache.c:771-775: a CacheMemoryContext child identified by the relation name.
+    if let Some((rel, _)) = crate::store::lookup_ent(relid) {
+        rulescxt.set_ident(Some(rel.name()));
+    }
+    // SAFETY: the context sits in its PinnedContext box before this handle is
+    // taken, so moving `rulescxt` into RdRules and the Rc below never moves it.
+    // Every tree read through the handle is reachable only through that
+    // Rc<RdRules> (consumers copy_* out), and `rules` drops before `_rulescxt`.
+    let rmcx: Mcx<'static> = unsafe { rulescxt.handle() };
+    let mut rules: Vec<RewriteRuleMeta> = ::mcx::std_vec_with_capacity("CacheMemoryContext", rows.len())?;
     for row in rows.iter() {
         rules.push(RewriteRuleMeta {
             rule_id: row.rule_id,
@@ -86,7 +99,12 @@ pub fn RelationGetRules<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgResult<Option<Rc<
             actions: readfuncs::stringToNode(rmcx, row.ev_action)?,
         });
     }
-    let built = Rc::new(RdRules { rules, _rulescxt: rulescxt });
+    let built = Rc::new(RdRules {
+        rules,
+        #[cfg(test)]
+        fill_cxt: rmcx.context() as *const MemoryContext,
+        _rulescxt: rulescxt,
+    });
     with_state(|st| st.rules_cache.insert(relid, Rc::clone(&built)));
     Ok(Some(built))
 }
@@ -204,5 +222,17 @@ mod tests {
         assert!(super::RelationGetRules(mcx, 21001).unwrap().is_none());
         assert!(super::RelationGetRules(mcx, 21001).unwrap().is_none());
         assert_eq!(SCANS.with(|c| c.get()), 4);
+    }
+
+    // D4468, born red on trunk fe036520dab: the fill read the trees through a handle on the `rulescxt` local, then moved
+    // that context into RdRules and the Rc, so the handle named an address the set no longer owned.
+    #[test]
+    fn the_rule_trees_are_read_through_the_sets_own_context() {
+        install();
+        let ctx = MemoryContext::new("t");
+        super::forget(21000);
+        let r = super::RelationGetRules(ctx.mcx(), 21000).unwrap().expect("view has a rule");
+        let owned: &MemoryContext = &r._rulescxt;
+        assert!(core::ptr::eq(r.fill_cxt, owned));
     }
 }

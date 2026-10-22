@@ -1,0 +1,2 @@
+backend/catalog/objectaccess/src/lib.rs	OBJECT_ACCESS_HOOK	pgport	at:set_object_access_hook	thread	a library's object access hook; launch_backend copies the launching thread's into each child (a shared_preload_libraries hook reaches every thread), a LOAD sets it on its session's thread only. Gravity fires it in its ExecutorStart gates (gravity_exec runner start_gates.rs, gravity_expr func.rs execute_gate)
+backend/catalog/objectaccess/src/lib.rs	OBJECT_ACCESS_HOOK_STR	pgport	at:set_object_access_hook_str	thread	as OBJECT_ACCESS_HOOK: the string-named form

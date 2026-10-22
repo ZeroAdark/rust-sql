@@ -1,0 +1,12 @@
+-- regress-full-privileges-006
+-- SELECT unnest(pg_get_acl('pg_class'::regclass, 'atest2'::regclass::oid, 0));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project ()
+  srf tlist [1:Unnest fn2331 fn2331(fn6385(c26:1259, c26:27196, c23:0))]
+  project (1=fn2331(fn6385(c26:1259, c26:27196, c23:0)))
+  outs
+  outs 1=fx16:call2331
+mapped: Result ProjectSet

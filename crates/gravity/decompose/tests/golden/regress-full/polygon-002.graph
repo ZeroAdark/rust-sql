@@ -1,0 +1,19 @@
+-- regress-full-polygon-002
+-- INSERT INTO quad_poly_tbl SELECT (x - 1) * 100 + y, polygon(circle(point(x * 10, y * 10), 1 + (x + y) % 10)) FROM generate_series(1, 100) x, generate_series(1, 100) y;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=0 reason=Write end=sink
+  nodes n2@0 n1@2 n0@4
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:100)]
+  project (1=v3.1)
+  nest inner=n3 JOIN_INNER invariant raise-free params=()
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0
+  source const
+  srf from rti=4 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:100)]
+  project (1=v4.1)
+  project (1=op551(op514(op555(outer.1, c23:1), c23:100), inner.1), 2=fn1475(c23:12, fn1473(fn1440(fn316(op514(outer.1, c23:10)), fn316(op514(inner.1, c23:10))), fn316(op551(c23:1, op530(op551(outer.1, inner.1), c23:10))))))
+  write INSERT rel=17124 rti=1 natts=2 indexes=()
+  outs 1=w4:val
+  outs 1=w4:val 2=vl:call1475
+mapped: ModifyTable FunctionScan NestLoop

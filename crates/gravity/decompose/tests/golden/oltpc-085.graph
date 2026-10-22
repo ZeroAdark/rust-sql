@@ -1,0 +1,14 @@
+-- oltpc-085
+-- UPDATE warehouse SET w_ytd = w_ytd + $1::numeric / 100 WHERE w_id = $2 RETURNING w_name, w_street_1, w_street_2, w_city, w_state, w_zip /* C30 PAY warehouse update returning */
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=16448 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byref8:vl:win/page Attr(6):byref8:vl:win/page Attr(7):byref8:vl:win/page Attr(8):byref8:vl:win/page Attr(9):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v1.1, $2)
+  project (1=fn1703(op1758(v1.9, op1761($1, c1700:'\x00\x80d\x00')), c23:1048582), 2j=v1.-1, 3j=v1.1, 4j=v1.2, 5j=v1.3, 6j=v1.4, 7j=v1.5, 8j=v1.6, 9j=v1.7, 10j=v1.8)
+  write UPDATE rel=16448 rti=1 natts=9 indexes=(16460[1]up) set=(9) returning
+  project (1=v1.2, 2=v1.3, 3=v1.4, 4=v1.5, 5=v1.6, 6=v1.7)
+  outs 1=vl:call1703 2=fx6:row 3=w8:val 4=vl:win/page 5=vl:win/page 6=vl:win/page 7=vl:win/page 8=vl:win/page 9=vl:win/page 10=vl:win/page
+  outs 1=vl:win/page 2=vl:win/page 3=vl:win/page 4=vl:win/page 5=vl:win/page 6=vl:win/page
+mapped: ModifyTable SeqScan

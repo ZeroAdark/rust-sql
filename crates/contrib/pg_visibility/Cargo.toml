@@ -25,6 +25,7 @@ typcache_seams = { path = "../../backend/utils/cache/typcache_seams" }
 heaptuple = { path = "../../backend/access/common/heaptuple" }
 relation = { path = "../../backend/access/common/relation" }
 bufmgr = { path = "../../backend/storage/buffer/bufmgr" }
+read_stream = { path = "../../backend/storage/aio/read_stream" }
 bufmgr_seams = { path = "../../backend/storage/buffer/bufmgr_seams" }
 heapam = { path = "../../backend/access/heap/heapam" }
 heapam_visibility = { path = "../../backend/access/heap/heapam_visibility" }

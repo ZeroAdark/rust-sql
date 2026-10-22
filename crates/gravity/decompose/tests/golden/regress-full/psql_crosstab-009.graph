@@ -1,0 +1,11 @@
+-- regress-full-psql_crosstab-009
+-- INSERT INTO ctv_data SELECT 1, x, '*' || x FROM generate_series(1,10) x;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10)]
+  project (1=c23:1, 2=v3.1, 3=op654(c25:'*', io25(v3.1)))
+  write INSERT rel=34072 rti=1 natts=3 indexes=()
+  outs 1=w4:val 2=w4:val 3=vl:call1258
+mapped: ModifyTable FunctionScan

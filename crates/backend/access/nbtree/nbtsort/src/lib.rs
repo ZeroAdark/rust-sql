@@ -1,11 +1,13 @@
-// nbtsort.c, serial build: spool via tuplesort + _bt_load page accumulation,
-// duplicate keys merged into posting lists. Loud: launched-gang parallel
-// builds (never ported — see pool.rs census); the M4.2 pool arm (pool.rs,
-// kill switch PGRUST_RUNTIME_INDEXBUILD_POOL default OFF) parallelizes the
-// SCAN phase onto morsel-pool workers and feeds the same leader-owned
-// spools, so the sort + load tail below is one code path for both arms.
+// nbtsort.c: spool via tuplesort + _bt_load page accumulation, duplicate keys
+// merged into posting lists. Parallel builds (parallel.rs) follow C: workers
+// and the leader each scan part of the heap into a partial sort, and the
+// leader's tuplesort merges their runs before the same load tail. The M4.2
+// pool arm (pool.rs, kill switch PGRUST_RUNTIME_INDEXBUILD_POOL default OFF)
+// instead parallelizes only the SCAN phase onto morsel-pool workers feeding
+// the leader's spools; when armed it takes precedence.
 #![allow(non_snake_case)]
 
+mod parallel;
 mod pool;
 
 use ::mcx::Mcx;
@@ -79,17 +81,55 @@ pub fn btbuild<'mcx>(
         ))));
     }
 
-    let mut sortstate = spool_begin(heap, index, indexInfo)?;
+    // _bt_spools_heapscan: nbtsort.c:385-388.
+    pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE, PROGRESS_BTREE_PHASE_INDEXBUILD_TABLESCAN);
+
+    let btleader = if indexInfo.ii_ParallelWorkers > 0 && !pool::pool_build_enabled() {
+        parallel::bt_begin_parallel(
+            mcx,
+            heap,
+            index,
+            indexInfo,
+            indexInfo.ii_Concurrent,
+            indexInfo.ii_ParallelWorkers,
+        )?
+    } else {
+        None
+    };
+    let coordinate = |sharedsort: &std::sync::Arc<tuplesort::Sharedsort>, l: &parallel::BTLeader| {
+        tuplesort::SortCoordinate {
+            is_worker: false,
+            n_participants: l.nparticipanttuplesorts,
+            sharedsort: std::sync::Arc::clone(sharedsort),
+        }
+    };
+    let coordinate1 = btleader.as_ref().map(|l| coordinate(&l.btshared.sharedsort, l));
+
+    // The leader's sort gets the same maintenance_work_mem as a serial sort;
+    // by the time it merges, the workers have released theirs.
+    let mut sortstate = tuplesort::Tuplesort::begin_index_btree_coordinated(
+        heap,
+        index,
+        indexInfo.ii_Unique,
+        indexInfo.ii_NullsNotDistinct,
+        init_small::globals::maintenance_work_mem(),
+        coordinate1.as_ref(),
+        tuplesort::TUPLESORT_NONE,
+    )?;
     // Unique builds route dead tuples into a second spool, kept out of the
     // uniqueness check and merged back in _bt_load (nbtsort.c:436); it gets
     // only work_mem.
     let mut spool2 = if indexInfo.ii_Unique {
-        Some(tuplesort::Tuplesort::begin_index_btree(
+        let coordinate2 = btleader.as_ref().map(|l| {
+            coordinate(l.btshared.sharedsort2.as_ref().expect("unique build has spool2 state"), l)
+        });
+        Some(tuplesort::Tuplesort::begin_index_btree_coordinated(
             heap,
             index,
             false,
             false,
             init_small::globals::work_mem(),
+            coordinate2.as_ref(),
             tuplesort::TUPLESORT_NONE,
         )?)
     } else {
@@ -98,12 +138,24 @@ pub fn btbuild<'mcx>(
     let mut havedead = false;
     let mut indtuples = 0.0f64;
 
-    // M4.2 pool arm (default OFF): pool workers scan block-range morsels
-    // and stream FORMED tuple images; the routing below is the serial
-    // callback's, image form. Fallback (refusal-class only, nothing
-    // consumed) keeps the serial scan byte-identical.
-    let mut pool_fed: Option<f64> = None;
-    {
+    let parallel_scan = match &btleader {
+        Some(l) => Some(parallel::bt_parallel_heapscan(l)?),
+        None => None,
+    };
+
+    let mut scanned: Option<f64> = None;
+    if let Some(r) = &parallel_scan {
+        havedead = r.havedead;
+        indtuples = r.indtuples;
+        if r.brokenhotchain {
+            indexInfo.ii_BrokenHotChain = true;
+        }
+        scanned = Some(r.reltuples);
+    } else {
+        // M4.2 pool arm (default OFF): pool workers scan block-range morsels
+        // and stream FORMED tuple images; the routing below is the serial
+        // callback's, image form. Fallback (refusal-class only, nothing
+        // consumed) keeps the serial scan byte-identical.
         let mut put = |image: &[u8], alive: bool| -> PgResult<()> {
             if alive || spool2.is_none() {
                 sortstate.put_index_tuple_image(image)?;
@@ -117,14 +169,11 @@ pub fn btbuild<'mcx>(
         if let pool::PoolFeed::Fed { reltuples } =
             pool::pool_feed_spools(heap, index, indexInfo, &mut put)?
         {
-            pool_fed = Some(reltuples);
+            scanned = Some(reltuples);
         }
     }
 
-    // nbtsort.c:387-388.
-    pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE, PROGRESS_BTREE_PHASE_INDEXBUILD_TABLESCAN);
-
-    let reltuples = match pool_fed {
+    let reltuples = match scanned {
         Some(r) => r,
         None => execindexing::table_index_build_scan(
             mcx,
@@ -157,23 +206,11 @@ pub fn btbuild<'mcx>(
     }
 
     leafbuild(mcx, heap, index, sortstate, spool2, indexInfo.ii_Unique)?;
+    if let Some(l) = btleader {
+        parallel::bt_end_parallel(l)?;
+    }
 
     Ok(IndexBuildResult { heap_tuples: reltuples, index_tuples: indtuples })
-}
-
-fn spool_begin<'mcx>(
-    heap: &Relation<'mcx>,
-    index: &Relation<'mcx>,
-    indexInfo: &IndexInfo<'_>,
-) -> PgResult<tuplesort::Tuplesort> {
-    tuplesort::Tuplesort::begin_index_btree(
-        heap,
-        index,
-        indexInfo.ii_Unique,
-        indexInfo.ii_NullsNotDistinct,
-        init_small::globals::maintenance_work_mem(),
-        tuplesort::TUPLESORT_NONE,
-    )
 }
 
 /// btbuildempty (nbtree.c): unlogged indexes' INIT_FORKNUM metapage.

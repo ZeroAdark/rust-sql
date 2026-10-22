@@ -30,7 +30,7 @@ pub fn morph_to_tsquery<'mcx>(
         pushval_morph(mcx, &mut env, val, weight, prefix, qoperator, &mut acts)?;
         for a in acts {
             match a {
-                QPush::Value { word, weight, prefix } => p.push_value(&word, weight, prefix)?,
+                QPush::Value { word, weight, prefix } => p.push_value(word, weight, prefix)?,
                 QPush::Op { oper, distance } => p.push_operator(oper, distance),
                 QPush::Stop => p.push_stop(),
             }

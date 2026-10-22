@@ -1011,17 +1011,47 @@ mod stack_guard {
             return;
         }
         let exe = std::env::current_exe().unwrap();
-        for (kind, depth) in CASES {
-            let out = std::process::Command::new(&exe)
-                .args([
-                    "--exact",
-                    "--nocapture",
-                    "tests::stack_guard::range_deep_nesting_raises_54001_and_does_not_abort",
-                ])
-                .env("RANGE_STACK_PROBE_KIND", kind)
-                .env("RANGE_STACK_PROBE_DEPTH", depth.to_string())
-                .output()
-                .unwrap();
+        // The probes are independent processes: up to RUST_TEST_THREADS of them at once (the ct pool's tokens for this
+        // binary; else the CPUs), judged below in CASES order (was one after another, ~60 s; buildprof BD-15).
+        let width = std::env::var("RUST_TEST_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+            .clamp(1, CASES.len());
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let mut outs: Vec<Option<std::process::Output>> = CASES.iter().map(|_| None).collect();
+        std::thread::scope(|s| {
+            let workers: Vec<_> = (0..width)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut mine = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some((kind, depth)) = CASES.get(i) else { break mine };
+                            let out = std::process::Command::new(&exe)
+                                .args([
+                                    "--exact",
+                                    "--nocapture",
+                                    "tests::stack_guard::range_deep_nesting_raises_54001_and_does_not_abort",
+                                ])
+                                .env("RANGE_STACK_PROBE_KIND", kind)
+                                .env("RANGE_STACK_PROBE_DEPTH", depth.to_string())
+                                .output()
+                                .unwrap();
+                            mine.push((i, out));
+                        }
+                    })
+                })
+                .collect();
+            for w in workers {
+                match w.join() {
+                    Ok(mine) => mine.into_iter().for_each(|(i, out)| outs[i] = Some(out)),
+                    Err(e) => std::panic::resume_unwind(e),
+                }
+            }
+        });
+        for ((kind, depth), out) in CASES.iter().zip(outs) {
+            let out = out.expect("every probe ran");
             let se = String::from_utf8_lossy(&out.stderr);
             let line = se.lines().find(|l| l.starts_with("PROBE")).unwrap_or_else(|| {
                 panic!("{kind}/{depth}: process died without a verdict (stack overflow): {se}")
@@ -1194,4 +1224,32 @@ fn bound_escape_reserves_exact_length() {
     assert_eq!(crate::io::bound_escape_len(b"", true), 2);
     assert_eq!(crate::io::bound_escape_len(b"a\"b\\c", true), 9);
     assert_eq!(crate::io::bound_escape_len(&[b'a'; 4096], false), 4096);
+}
+
+#[test]
+fn parse_bound_growth_reserves_terminator() {
+    let cx = MemoryContext::new("t");
+    for (literal, expected) in [
+        (&b"[1234567890123456,)"[..], &b"1234567890123456"[..]),
+        (&br"[123456789012345\6,)"[..], &b"1234567890123456"[..]),
+        (&br#"["123456789012345""",)"#[..], &br#"123456789012345""#[..]),
+    ] {
+        let parsed = crate::io::range_parse(cx.mcx(), literal, None).unwrap().unwrap();
+        let bound = parsed.lbound.unwrap();
+        assert_eq!(&bound[..], expected);
+        assert!(bound.capacity() > bound.len());
+    }
+}
+
+#[test]
+fn parse_bound_stringinfo_growth_ceiling() {
+    let cap = 536_870_912;
+    let max = 1_073_741_823;
+    assert_eq!(::stringinfo::enlarge_target(cap - 1, cap, 1).unwrap(), max);
+    assert_eq!(::stringinfo::enlarge_target(cap, cap, 1).unwrap(), max);
+    assert_eq!(::stringinfo::enlarge_target(max - 2, max, 1).unwrap(), max);
+    let err = ::stringinfo::enlarge_target(max - 1, max, 1).unwrap_err();
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(err.message(), "string buffer exceeds maximum allowed length (1073741823 bytes)");
+    assert_eq!(err.detail(), Some("Cannot enlarge string buffer containing 1073741822 bytes by 1 more bytes."));
 }

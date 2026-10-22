@@ -15,3 +15,5 @@ mbutils_seams = { path = "../mbutils_seams" }
 fmgr_seams = { path = "../../fmgr/fmgr_seams" }
 xact_seams = { path = "../../../access/transam/xact_seams" }
 namespace_seams = { path = "../../../catalog/namespace_seams" }
+catcache_seams = { path = "../../cache/catcache_seams" }
+sinval_seams = { path = "../../../storage/ipc/sinval_seams" }

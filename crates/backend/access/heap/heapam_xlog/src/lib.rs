@@ -21,6 +21,7 @@ use types_tuple::{
 };
 use xlogreader_seams::XLogReaderState;
 use xlogutils::{XLogInitBufferForRedo, XLogReadBufferForRedo, BLK_NEEDS_REDO};
+use elog::PCT_M;
 
 pub const XLOG_HEAP_INSERT: u8 = 0x00;
 pub const XLOG_HEAP_DELETE: u8 = 0x10;
@@ -1356,10 +1357,38 @@ fn heap_xlog_visible(record: &mut XLogReaderState) -> PgResult<()> {
     Ok(())
 }
 
+/// C1 L1 (pgrc-plans/C1.md "L1"): called once per MAIN-fork block reference
+/// of every heap / heap2 record replayed successfully, after the page change.
+/// A `fn(RelFileLocator, BlockNumber)` stored as usize (the `inval.rs`
+/// engine-flush hook shape: no new dependency in a heap crate); 0 = unset.
+static REDO_BLOCK_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Install the redo block hook (the colcache marks; set once at seam init).
+pub fn set_redo_block_hook(f: fn(types_storage::RelFileLocator, types_core::BlockNumber)) {
+    REDO_BLOCK_HOOK.store(f as usize, std::sync::atomic::Ordering::Release);
+}
+
+fn redo_block_hook(record: &XLogReaderState) {
+    let p = REDO_BLOCK_HOOK.load(std::sync::atomic::Ordering::Acquire);
+    if p == 0 {
+        return;
+    }
+    // SAFETY: only ever stored from a `fn(RelFileLocator, BlockNumber)` in set_redo_block_hook.
+    let f = unsafe { std::mem::transmute::<usize, fn(types_storage::RelFileLocator, types_core::BlockNumber)>(p) };
+    let max = record.record.as_ref().map_or(-1, |r| r.max_block_id as i32);
+    for id in 0..=max {
+        if let Some((loc, fork, blk, _)) = record.block_tag_extended(id as u8) {
+            if fork == types_core::ForkNumber::MAIN_FORKNUM {
+                f(loc, blk);
+            }
+        }
+    }
+}
+
 pub fn heap_redo(record: &mut XLogReaderState) -> PgResult<()> {
     let info = record.record.as_ref().expect("heap_redo with no decoded record").xl_info
         & !XLR_INFO_MASK;
-    match info & XLOG_HEAP_OPMASK {
+    let out = match info & XLOG_HEAP_OPMASK {
         XLOG_HEAP_INSERT => heap_xlog_insert(record),
         XLOG_HEAP_DELETE => heap_xlog_delete(record),
         // TRUNCATE exists for logical decoding only; replay is a no-op.
@@ -1370,13 +1399,17 @@ pub fn heap_redo(record: &mut XLogReaderState) -> PgResult<()> {
         XLOG_HEAP_LOCK => heap_xlog_lock_common(record, false),
         XLOG_HEAP_INPLACE => heap_xlog_inplace(record),
         other => Err(panic_err(format!("heap_redo: unknown op code {other}"))),
+    };
+    if out.is_ok() {
+        redo_block_hook(record);
     }
+    out
 }
 
 pub fn heap2_redo(record: &mut XLogReaderState) -> PgResult<()> {
     let info = record.record.as_ref().expect("heap2_redo with no decoded record").xl_info
         & !XLR_INFO_MASK;
-    match info & XLOG_HEAP_OPMASK {
+    let out = match info & XLOG_HEAP_OPMASK {
         XLOG_HEAP2_PRUNE_ON_ACCESS | XLOG_HEAP2_PRUNE_VACUUM_SCAN
         | XLOG_HEAP2_PRUNE_VACUUM_CLEANUP => heap_xlog_prune_freeze(record),
         XLOG_HEAP2_VISIBLE => heap_xlog_visible(record),
@@ -1386,7 +1419,11 @@ pub fn heap2_redo(record: &mut XLogReaderState) -> PgResult<()> {
         XLOG_HEAP2_NEW_CID => Ok(()),
         XLOG_HEAP2_REWRITE => heap_xlog_logical_rewrite(record),
         other => Err(panic_err(format!("heap2_redo: unknown op code {other}"))),
+    };
+    if out.is_ok() {
+        redo_block_hook(record);
     }
+    out
 }
 
 // heap_xlog_logical_rewrite (rewriteheap.c:1073): recreate the logical
@@ -1445,7 +1482,7 @@ fn heap_xlog_logical_rewrite(record: &mut XLogReaderState) -> PgResult<()> {
         fd::set_errno(e.raw_os_error().unwrap_or(0));
         elog::ereport(types_error::ERROR)
             .errcode_for_file_access()
-            .errmsg(format!("could not {what}: %m"))
+            .errmsg(format!("could not {what}: {PCT_M}"))
             .finish(types_error::ErrorLocation::new(
                 "src/backend/access/heap/rewriteheap.c",
                 1073,
@@ -1511,7 +1548,7 @@ fn heap_xlog_logical_rewrite(record: &mut XLogReaderState) -> PgResult<()> {
     if rc != 0 {
         return elog::ereport(fd::data_sync_elevel(types_error::ERROR))
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{relpath}\": %m"))
+            .errmsg(format!("could not fsync file \"{relpath}\": {PCT_M}"))
             .finish(types_error::ErrorLocation::new(
                 "src/backend/access/heap/rewriteheap.c",
                 1133,

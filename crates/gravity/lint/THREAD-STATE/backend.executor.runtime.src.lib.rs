@@ -1,0 +1,1 @@
+backend/executor/runtime/src/lib.rs	SESSION_RESIDUE	pgport	at:evict_session_residue_for_unbound_work	thread	this pool thread's hint that it parked a session retention (note_session_residue); the unbound-work gate evicts it

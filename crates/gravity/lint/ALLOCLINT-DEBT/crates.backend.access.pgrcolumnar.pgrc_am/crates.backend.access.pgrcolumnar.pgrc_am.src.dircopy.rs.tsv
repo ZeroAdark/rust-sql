@@ -1,0 +1,8 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/dircopy.rs
+growth	std::vec::Vec::push	1
+macro	std::format	6
+method	slice::sort_by_key	1
+method	std::iter::Iterator::collect	2
+method	std::string::ToString::to_string	1
+type	std::string::String	1
+type	std::vec::Vec	1

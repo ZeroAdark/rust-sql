@@ -1,0 +1,93 @@
+-- regress-full-tsearch-019
+-- SELECT * from ts_debug('english', '5aew.werc.ewr:8100/?xx');
+graph pipelines=6 breakers=3 init_plans=2 root=p5
+p0 node=11 eligible rows=1 end=sink
+  nodes n11@0
+  source range rel=3602 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(5):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v6.1, c26:13654)
+  project (1=v6.5)
+  outs 1=w8:val
+p1 node=12 eligible rows=1 end=sink
+  nodes n12@0
+  source range rel=3602 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(5):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v7.1, c26:13654)
+  project (1=v7.5)
+  outs 1=w8:val
+p2 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@2
+  source const
+  srf from rti=2 [1:Other fn3713 cols=3 fn3713($exec6)]
+  project (1=v2.2, 2=v2.3, 3=v2.1)
+  build keys=(outer.3) decls=23/23:I32
+  outs 1=vl:row 2=vl:row 3=w4:val
+p3 node=7 serial site=0 reason=IndexSource end=breaker(slot=1 TopK)
+  nodes n7@0 n6@1^
+  source index rel=3603 rti=4 am=heap index=3609
+    key att=1 op=607 value=c26:13654
+    key att=2 op=96 value=$exec2
+    recheck (op607(v4.1, c26:13654), op96(v4.2, $exec2))
+    lanes Attr(3):byval8:w8:val Attr(4):byval8:w8:val
+  project (1=relabel3769(v4.4), 2j=isnull(fn3723(relabel3769(v4.4), $exec1)), 3j=v4.3)
+  sort keys=2+:I32,3+:I32 form=topk count=1 offset=all
+  outs 1=w8:val 2=w1:val 3=w8:val
+p4 node=10 serial site=0 reason=IndexSource end=breaker(slot=2 TopK)
+  nodes n10@0 n9@1^
+  source index rel=3603 rti=5 am=heap index=3609
+    key att=1 op=607 value=c26:13654
+    key att=2 op=96 value=$exec4
+    recheck (op607(v5.1, c26:13654), op96(v5.2, $exec4))
+    lanes Attr(3):byval8:w8:val Attr(4):byval8:w8:val
+  project (1=fn3723(relabel3769(v5.4), $exec3), 2j=isnull(fn3723(relabel3769(v5.4), $exec3)), 3j=v5.3)
+  sort keys=2+:I32,3+:I32 form=topk count=1 offset=all
+  outs 1=vl:call3723 2=w1:val 3=w8:val
+p5 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2 consumes=slot1@p3 consumes=slot2@p4
+  nodes n1@0 n0@2
+  source const
+  srf from rti=1 [1:Other fn3715 cols=2 fn3715($exec5, c25:'5aew.werc.ewr:8100/?xx')]
+  project (1=v1.1, 2=v1.2)
+  probe slot=0 inner=n2 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.3))
+  subplan 1 nested Array params=($exec0=outer.1) raise-free
+  inner node=4 serial site=0 reason=IndexSource end=sink
+  nodes n4@0
+  source index rel=3603 rti=3 am=heap index=3609
+    key att=1 op=607 value=c26:13654
+    key att=2 op=96 value=$exec0
+    recheck (op607(v3.1, c26:13654), op96(v3.2, $exec0))
+    lanes Attr(3):byval8:w8:val Attr(4):byval8:w8:val
+  project (1=relabel3769(v3.4), 2j=v3.3)
+  subplan 2 nested Expr params=($exec1=outer.2, $exec2=outer.1)
+  inner node=6 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p3
+  nodes n6@0 n5@1
+  source breaker slot=1
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  limit count=1 offset=all
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  subplan 3 nested Expr params=($exec3=outer.2, $exec4=outer.1)
+  inner node=9 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p4
+  nodes n9@0 n8@1
+  source breaker slot=2
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  limit count=1 offset=all
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  project (1=inner.1, 2=inner.2, 3=outer.2, 4=subplan1(outer.1), 5=subplan2(outer.2, outer.1), 6=subplan3(outer.2, outer.1))
+  outs 1=w4:val 2=vl:row
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=vl:row 4=? 5=w4:val 6=vl:call0
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=TopK budget=Fixed(112) spill=None producer=p3 layout=[I32,I32]->[Count@16] 24B order=2+,3+
+breaker slot=2 kind=TopK budget=Fixed(112) spill=None producer=p4 layout=[I32,I32]->[Count@16] 24B order=2+,3+
+init_plan id=4 pipeline=p0 link=Expr param=$exec5
+init_plan id=5 pipeline=p1 link=Expr param=$exec6
+rerun node=0 subplan=2 pipelines=p3 slots=1
+rerun node=0 subplan=3 pipelines=p4 slots=2
+param $exec0 owner=subplan1 type=23 rep=w4:val
+param $exec1 owner=subplan2 type=25@100 rep=vl:row
+param $exec2 owner=subplan2 type=23 rep=w4:val
+param $exec3 owner=subplan3 type=25@100 rep=vl:row
+param $exec4 owner=subplan3 type=23 rep=w4:val
+mapped: SeqScan IndexScan FunctionScan HashJoin Sort Hash Limit SubPlan

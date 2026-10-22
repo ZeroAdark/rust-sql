@@ -109,7 +109,9 @@ pub fn LookupExplicitNamespace(nspname: &str, missing_ok: bool) -> PgResult<Oid>
         if OidIsValid(my_temp_namespace()) {
             return Ok(my_temp_namespace());
         }
-        // Fall through: missing temp namespace means the object cannot exist.
+        if crate::TEMP_NAMESPACE_DEFERRED.get() {
+            return Ok(InvalidOid);
+        }
     }
 
     let namespaceId = get_namespace_oid(nspname, missing_ok)?;
@@ -241,6 +243,7 @@ pub fn DeconstructQualifiedName<'a>(names: &[&'a str]) -> PgResult<(Option<&'a s
 
 #[cold]
 fn raw_name_message(prefix: &[u8], names: &[&[u8]], suffix: &[u8]) -> Vec<u8> {
+    // ALLOC-REVIEW(michaelmalis): error-report buffer on non-Result helper
     let mut message = prefix.to_vec();
     for (i, name) in names.iter().enumerate() {
         if i > 0 {
@@ -413,6 +416,8 @@ pub fn OpernameGetCandidates<'mcx>(
     let raw = syscache_seams::lookup_pg_operator_name_candidates::call(mcx, opername)?;
     let mut result: mcx::PgVec<'mcx, OperCandidate> = mcx::PgVec::new_in(mcx);
     let mut pathposes: mcx::PgVec<'mcx, usize> = mcx::PgVec::new_in(mcx);
+    let mut by_args: mcx::PgFxHashMap<'mcx, [Oid; 2], usize> =
+        mcx::PgFxHashMap::with_capacity_and_hasher_in(raw.len(), Default::default(), mcx);
     let mtn = my_temp_namespace();
     for cand in raw.iter() {
         if oprkind != 0 && cand.oprkind != oprkind {
@@ -437,10 +442,7 @@ pub fn OpernameGetCandidates<'mcx>(
                 if !found {
                     continue;
                 }
-                if let Some(prev) = result
-                    .iter()
-                    .position(|p| p.args == [cand.oprleft, cand.oprright])
-                {
+                if let Some(&prev) = by_args.get(&[cand.oprleft, cand.oprright]) {
                     debug_assert_ne!(pathpos, pathposes[prev]);
                     if pathpos > pathposes[prev] {
                         continue;
@@ -451,6 +453,7 @@ pub fn OpernameGetCandidates<'mcx>(
                 }
             }
         }
+        by_args.insert([cand.oprleft, cand.oprright], result.len());
         result.push(OperCandidate {
             oid: cand.oid,
             args: [cand.oprleft, cand.oprright],
@@ -1109,6 +1112,9 @@ pub fn FuncnameGetCandidatesExtended<'mcx>(
 
     let raw = syscache_seams::lookup_pg_proc_name_candidates::call(mcx, funcname)?;
     let mut result: mcx::PgVec<'mcx, FuncCandidate<'mcx>> = mcx::PgVec::new_in(mcx);
+    let mut by_sig: mcx::PgFxHashMap<'mcx, mcx::PgBox<'mcx, [Oid]>, usize> =
+        mcx::PgFxHashMap::with_capacity_and_hasher_in(raw.len(), Default::default(), mcx);
+    let mut removed: mcx::PgVec<'mcx, bool> = mcx::vec_with_capacity_in(mcx, raw.len())?;
     let mut any_special = false;
     let mtn = my_temp_namespace();
     for cand in raw {
@@ -1269,13 +1275,9 @@ pub fn FuncnameGetCandidatesExtended<'mcx>(
         // C ignores defaulted arguments when deciding what is a duplicate,
         // prefers the earlier-in-path then the non-variadic form, and marks
         // an undecidable pair ambiguous (oid = InvalidOid, new one dropped).
+        let sig = &new.args[..(new.nargs - new.ndargs) as usize];
         if !result.is_empty() && (any_special || namespace_id.is_none()) {
-            let cmp_nargs = (new.nargs - new.ndargs) as usize;
-            let prev = result.iter().position(|p| {
-                cmp_nargs == (p.nargs - p.ndargs) as usize
-                    && new.args[..cmp_nargs] == p.args[..cmp_nargs]
-            });
-            if let Some(prev) = prev {
+            if let Some(&prev) = by_sig.get(sig) {
                 let preference = if pathpos != result[prev].pathpos {
                     pathpos - result[prev].pathpos
                 } else if variadic && result[prev].nvargs == 0 {
@@ -1288,15 +1290,24 @@ pub fn FuncnameGetCandidatesExtended<'mcx>(
                 if preference > 0 {
                     continue;
                 } else if preference < 0 {
-                    result.remove(prev);
+                    removed[prev] = true;
                 } else {
                     result[prev].oid = InvalidOid;
                     continue;
                 }
             }
         }
+        let mut key = mcx::vec_with_capacity_in(mcx, sig.len())?;
+        key.extend_from_slice(sig);
+        by_sig.insert(key.into_boxed_slice(), result.len());
         result.push(new);
+        removed.push(false);
     }
+    let mut i = 0;
+    result.retain(|_| {
+        i += 1;
+        !removed[i - 1]
+    });
     // C prepends; head-first order = reverse acceptance order.
     result.reverse();
     Ok(result)
@@ -1351,7 +1362,7 @@ mod match_named_call_tests {
     }
 
     // upstream 7f0e1aac7a7b (18.6): Replace fixed-size, too-short array with a palloc'd one.
-    // CALL xaeg(<100 positional>, o1 => NULL, ..., o5 => NULL): positions
+    // CALL p110(<100 positional>, o1 => NULL, ..., o5 => NULL): positions
     // 100..104 are set by the named-argument loop and 105..109 are filled in
     // by the defaults loop -- both index arggiven past FUNC_MAX_ARGS.
     #[test]

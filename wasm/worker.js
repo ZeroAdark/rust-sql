@@ -82,6 +82,15 @@ let snapGen = 0;
 let snapSlot = null;
 let restoredFromSnapshot = false;
 
+// User cancel (the page's Stop button, psql's Ctrl-C): the page's word in a SharedArrayBuffer, which the server reads
+// while a statement runs (pgrust-wasi.js pgrust_cancel_poll). It comes in the page's 'hello' message, null when the
+// page is not cross-origin isolated (no SharedArrayBuffer): then there is no cancel. Every server instance gets it, so
+// boot waits for the hello (a page that never sends one boots without cancel after HELLO_WAIT_MS).
+let cancelWord = null;
+let helloSeen;
+const hello = new Promise((resolve) => { helloSeen = resolve; });
+const HELLO_WAIT_MS = 5000;
+
 function post(m) { self.postMessage(m); }
 
 function openWasmCache() {
@@ -143,7 +152,7 @@ function prepareSql(sql) {
   // The single-user backend ends a statement at every newline, so flatten each
   // SQL statement onto one line before feeding it in.
   // (The old harness appended an explicit CHECKPOINT here because the reference
-  // build's shutdown checkpoint never completed; pgrust's --single exits
+  // build's shutdown checkpoint never completed; pgrust-fast's --single exits
   // through a completed shutdown checkpoint — pg_control is DB_SHUTDOWNED —
   // so the next boot over the mutated VFS is a normal clean restart.)
   return normalizeSingleUserInput(sql) || 'SELECT 1;\n';
@@ -154,6 +163,7 @@ async function runPreparedSql(sql) {
   const result = await run({
     wasmModule,
     vfs,
+    cancel: cancelWord,
     stdinBytes: new TextEncoder().encode(prepareSql(sql)),
     onStdout: (b) => outChunks.push(b),
     onStderr: (b) => errChunks.push(b),
@@ -180,6 +190,7 @@ async function startWireSession() {
   session = new WireSession({
     wasmModule,
     vfs,
+    cancel: cancelWord,
     onStderr: (b) => sessionStderr.push(b),
   });
   await session.start(); // handshake through the first ReadyForQuery
@@ -332,6 +343,7 @@ async function startPsqlSession() {
     psqlStdin: stdin,
     psqlArgv: ['psql'],
     psqlEnv: { USER: 'postgres', PSQL_INTERACTIVE: '1' },
+    cancel: cancelWord,
     onPsqlStdout: (b) => { if (mine()) post({ type: 'psql-out', data: b }); },
     onPsqlStderr: (b) => { if (mine()) post({ type: 'psql-err', data: b }); },
     onServerStderr: (b) => { if (mine()) post({ type: 'psql-log', data: b }); },
@@ -439,6 +451,7 @@ async function init() {
     ]);
     baseImage = new Uint8Array(imgBuf);
     manifest = manResp;
+    await Promise.race([hello, new Promise((resolve) => setTimeout(resolve, HELLO_WAIT_MS))]);
 
     // Persistence: a present snapshot means the toggle was on last visit.
     store = await openOpfsStore();
@@ -553,6 +566,11 @@ async function handleRunWire(id, sql, t0) {
 self.onmessage = (ev) => {
   const id = ev.data.id;
   const kind = ev.data.type;
+  if (kind === 'hello') {
+    cancelWord = ev.data.cancel instanceof Int32Array ? ev.data.cancel : null;
+    helloSeen();
+    return;
+  }
   // psql client mode: terminal keystrokes bypass the run chain — they are
   // stream bytes, not statements.
   if (kind === 'psql-line') {

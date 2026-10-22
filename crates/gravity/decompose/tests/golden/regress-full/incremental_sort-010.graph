@@ -1,0 +1,11 @@
+-- regress-full-incremental_sort-010
+-- insert into t(a, b) select (case when i < 5 then i else 9 end), i from generate_series(1, 1000) n(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:1000)]
+  project (1=case(when op97(v3.1, c23:5) then v3.1) else c23:9, 2=v3.1)
+  write INSERT rel=31538 rti=1 natts=2 indexes=()
+  outs 1=w4:val 2=w4:val
+mapped: ModifyTable FunctionScan

@@ -1,0 +1,1 @@
+crates/gravity/exec/src/admit/mod.rs	graph	licence	bind	admission at Bind re-estimates a generic plan's scans with the param values (estimators may fold STABLE calls / run user oprrest; PG never for a generic plan); LIMIT / OFFSET extern params folded as constants (PG at the Limit's first call) [NONE; D3004,D3005]

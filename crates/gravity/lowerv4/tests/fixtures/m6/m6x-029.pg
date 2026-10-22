@@ -1,0 +1,6 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT u, count(*) FROM (VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid), ('00000000-0000-0000-0000-000000000000'), ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11')) v(u) GROUP BY u
+cols: u	count
+[pg]
+00000000-0000-0000-0000-000000000000	1
+a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11	2

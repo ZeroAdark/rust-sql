@@ -1,0 +1,42 @@
+[package]
+name = "tpde_core"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+autotests = false
+
+[dependencies]
+tpde_assembler = { path = "../assembler" }
+tpde_base = { path = "../base", default-features = false }
+tpde_util = { path = "../util" }
+mcx = { path = "../../_support/mcx" }
+types_error = { path = "../../_support/types/types_error" }
+
+[features]
+upstream-oracle = []
+logging = ["tpde_base/logging"]
+
+[[test]]
+name = "register_file"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "ir_adaptor"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "analyzer"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "value_assignment"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "assignment_part_ref"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "compiler_contracts"
+required-features = ["upstream-oracle"]

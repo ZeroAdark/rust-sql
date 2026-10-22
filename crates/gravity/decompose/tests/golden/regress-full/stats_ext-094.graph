@@ -1,0 +1,11 @@
+-- regress-full-stats_ext-094
+-- INSERT INTO expr_stats SELECT mod(i,10), fipshash(mod(i,10)::text), fipshash(mod(i,10)::text) FROM generate_series(1,1000) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:1000)]
+  project (1=fn941(v3.1, c23:10), 2=fn407(fn877(fn1946(fn3420(io17(io25(fn941(v3.1, c23:10)))), c25:'hex'), c23:1, c23:32)), 3=fn877(fn1946(fn3420(io17(io25(fn941(v3.1, c23:10)))), c25:'hex'), c23:1, c23:32))
+  write INSERT rel=34340 rti=1 natts=3 indexes=()
+  outs 1=w4:val 2=fx64:call407 3=vl:call877
+mapped: ModifyTable FunctionScan

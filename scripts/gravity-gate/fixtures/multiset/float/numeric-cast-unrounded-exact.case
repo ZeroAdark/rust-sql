@@ -1,0 +1,8 @@
+# D3927's limit: a float aggregate cast to numeric without round() stays exact
+sql: SELECT sum(x::float8)::numeric FROM r;
+class: unordered
+verdict: mismatch
+[pg]
+2.5000000000000004
+[got]
+2.5

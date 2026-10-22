@@ -100,6 +100,10 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    pub fn active_path_generation() -> PgResult<u64>
+);
+
+seam_core::seam!(
     // recomputeNamespacePath + activeSearchPath (namespace.c): the path a
     // name lookup walks; never creates a pending temp namespace.
     pub fn active_search_path<'mcx>(mcx: mcx::Mcx<'mcx>) -> PgResult<mcx::PgVec<'mcx, Oid>>

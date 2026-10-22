@@ -1,0 +1,13 @@
+-- regress-full-triggers-035
+-- update stmt_trig_on_empty_upd set a = a where false returning a+1 as aa;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=v1.1, 2j=c26:null, 3j=c27:null)
+  write UPDATE rel=21560 rti=1 natts=1 indexes=() set=(1) returning route=rti1:21560 natts=1
+  project (1=op551(v1.1, c23:1))
+  outs 1=w4:val 2=w4:val 3=fx6:stmt/imm
+  outs 1=w4:val
+mapped: Result ModifyTable

@@ -1,0 +1,46 @@
+Parsed test spec with 3 sessions
+
+starting permutation: abegin aalter ains vvacall acommit rseg rsel
+step abegin: BEGIN;
+step aalter: ALTER TABLE pgrc_vr SET ACCESS METHOD pgrcolumnar;
+step ains: INSERT INTO pgrc_vr SELECT g, 'x' FROM generate_series(101, 200) g;
+step vvacall: VACUUM; <waiting ...>
+step acommit: COMMIT;
+step vvacall: <... completed>
+step rseg: SELECT count(*) AS segments FROM pg_class WHERE relname LIKE 'pgrc\_seg\_' || 'pgrc_vr'::regclass::oid || '\_%';
+segments
+--------
+       2
+(1 row)
+
+step rsel: SELECT count(*), sum(id) FROM pgrc_vr;
+count|  sum
+-----+-----
+  200|20100
+(1 row)
+
+
+starting permutation: abegin aalter ains acommit rseg vvac rseg rsel
+step abegin: BEGIN;
+step aalter: ALTER TABLE pgrc_vr SET ACCESS METHOD pgrcolumnar;
+step ains: INSERT INTO pgrc_vr SELECT g, 'x' FROM generate_series(101, 200) g;
+step acommit: COMMIT;
+step rseg: SELECT count(*) AS segments FROM pg_class WHERE relname LIKE 'pgrc\_seg\_' || 'pgrc_vr'::regclass::oid || '\_%';
+segments
+--------
+       1
+(1 row)
+
+step vvac: VACUUM pgrc_vr;
+step rseg: SELECT count(*) AS segments FROM pg_class WHERE relname LIKE 'pgrc\_seg\_' || 'pgrc_vr'::regclass::oid || '\_%';
+segments
+--------
+       2
+(1 row)
+
+step rsel: SELECT count(*), sum(id) FROM pgrc_vr;
+count|  sum
+-----+-----
+  200|20100
+(1 row)
+

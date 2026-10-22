@@ -1,0 +1,11 @@
+-- regress-full-partition_prune-021
+-- explain (costs off) select * from rlp where a = 1 or a = 7;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=13 end=sink
+  nodes n1@0
+  source range rel=44801 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter or(op96(v2.1, c23:1), op96(v2.1, c23:7))
+  project (1=v2.1, 2=v2.2)
+  outs 1=w8:val 2=vl:win/page
+mapped: SeqScan

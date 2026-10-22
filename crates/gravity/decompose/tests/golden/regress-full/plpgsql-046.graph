@@ -1,0 +1,10 @@
+-- regress-full-plpgsql-046
+-- select x, pg_typeof(x), y, pg_typeof(y) from f1(11, array[1, 2], 42, 34.5);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn39747 cols=2 fn39747(c23:11, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00', c1700:'\x00\x80*\x00', c1700:'\x80\x80"\x00\x88\x13')]
+  project (1=v1.1, 2=fn1619(v1.1), 3=v1.2, 4=fn1619(v1.2))
+  outs 1=vl:row 2=w4:val 3=? 4=w4:val
+mapped: FunctionScan

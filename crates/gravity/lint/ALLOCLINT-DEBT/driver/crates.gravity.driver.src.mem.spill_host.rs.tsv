@@ -1,0 +1,5 @@
+path	crates/gravity/driver/src/mem/spill_host.rs
+growth	std::vec::Vec::push	7
+method	slice::to_vec	1
+method	std::boxed::Box::new	1
+type	std::boxed::Box	2

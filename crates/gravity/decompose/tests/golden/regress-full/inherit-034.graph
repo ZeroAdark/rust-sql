@@ -1,0 +1,38 @@
+-- regress-full-inherit-034
+-- select 1 - id as c from (select id from matest3 t1 union all select id * 2 from matest3 t2) ss order by c;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=2 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n2@0 n1@1^
+  source index rel=23069 rti=4 am=heap index=23080
+    lanes Attr(1):byval8:w8:val
+  project (1=v4.1, 2j=op555(c23:1, v4.1))
+  feed slot=0 ordered
+  outs 1=w8:val 2=w4:val
+p1 node=4 eligible rows=1270 end=breaker(slot=1 Sort)
+  desc finishing
+  nodes n4@0 n3@1^
+  source range rel=23069 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op514(v5.1, c23:2), 2j=op555(c23:1, op514(v5.1, c23:2)))
+  sort keys=2+:I32 form=runs
+  outs 1=w4:val 2=w4:val
+p2 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot1@p1
+  nodes n3@0 n1@1^
+  source breaker slot=1
+  project (1=outer.1, 2j=outer.2)
+  feed slot=0 ordered
+  outs 1=w4:val 2=w4:val
+p3 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n1@0 n0@2
+  source breaker slot=0
+  append merge slot=0 children=2 keys=2+:I32
+  project (1=outer.1, 2j=outer.2)
+  project (1=outer.2)
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[I32]->[Count@8] 16B order=2+
+mapped: Result MergeAppend SeqScan IndexScan Sort

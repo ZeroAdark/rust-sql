@@ -1,0 +1,23 @@
+-- regress-077
+-- SELECT t.a, u.z FROM t RIGHT JOIN u ON t.b = u.y;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=3 eligible rows=5000 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@1
+  source range rel=16395 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=w8:val 2=w8:val
+p1 node=1 eligible rows=2000 end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source range rel=16406 rti=2 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  probe slot=0 inner=n2 JOIN_LEFT keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.2))
+  project (1=inner.1, 2=outer.3)
+  outs 1=w4:val 2=w8:val 3=vl:win/page
+  outs 1=w4:val 2=vl:win/page
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+mapped: SeqScan HashJoin Hash

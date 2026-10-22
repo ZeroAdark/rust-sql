@@ -8,7 +8,7 @@ use crate::settings::date_order;
 use crate::tables::{DATETKTBL, DELTATKTBL};
 use crate::tz::{
     self, session_tz_abbrev_probe, zoneabbrevtbl, DetermineTimeZoneAbbrevOffset,
-    DetermineTimeZoneOffset, FetchDynamicTimeZone, PgTz,
+    DetermineTimeZoneOffset, FetchDynamicTimeZone, PgTzRef,
 };
 use types_error::PgResult;
 
@@ -152,16 +152,16 @@ thread_local! {
         const { [const { Cell::new(None) }; MAXDATEFIELDS] };
     static DELTACACHE: [Cell<Option<&'static DateTkn>>; MAXDATEFIELDS] =
         const { [const { Cell::new(None) }; MAXDATEFIELDS] };
-    static TZABBREVCACHE: [Cell<TzAbbrevCache>; MAXDATEFIELDS] =
-        const { [const { Cell::new(TzAbbrevCache::EMPTY) }; MAXDATEFIELDS] };
+    static TZABBREVCACHE: [core::cell::RefCell<TzAbbrevCache>; MAXDATEFIELDS] =
+        const { [const { core::cell::RefCell::new(TzAbbrevCache::EMPTY) }; MAXDATEFIELDS] };
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct TzAbbrevCache {
     abbrev: [u8; TOKMAXLEN + 1],
     ftype: i8,
     offset: i32,
-    tz: Option<&'static PgTz>,
+    tz: Option<PgTzRef>,
 }
 
 impl TzAbbrevCache {
@@ -172,7 +172,7 @@ impl TzAbbrevCache {
 pub fn ClearTimeZoneAbbrevCache() {
     TZABBREVCACHE.with(|c| {
         for slot in c {
-            slot.set(TzAbbrevCache::EMPTY);
+            *slot.borrow_mut() = TzAbbrevCache::EMPTY;
         }
     });
 }
@@ -224,17 +224,18 @@ pub fn DecodeTimezoneAbbrev<'a>(
     lowtoken: &'a [u8],
     ftype: &mut i32,
     offset: &mut i32,
-    tz: &mut Option<&'static PgTz>,
+    tz: &mut Option<PgTzRef>,
     _extra: &mut DateTimeErrorExtra<'a>,
 ) -> PgResult<i32> {
     TZABBREVCACHE.with(|cache| {
-        let tzc = cache[field].get();
+        let tzc = cache[field].borrow();
         if tokcmp(lowtoken, &tzc.abbrev) == 0 && tzc.abbrev[0] != 0 {
             *ftype = tzc.ftype as i32;
             *offset = tzc.offset;
-            *tz = tzc.tz;
+            *tz = tzc.tz.clone();
             return Ok(0);
         }
+        drop(tzc);
 
         if let Some((isfixed, off, isdst)) = session_tz_abbrev_probe(lowtoken) {
             *ftype = if isfixed { if isdst != 0 { DTZ } else { TZ } } else { DYNTZ };
@@ -244,8 +245,8 @@ pub fn DecodeTimezoneAbbrev<'a>(
             strlcpy_tok(&mut ent.abbrev, lowtoken);
             ent.ftype = *ftype as i8;
             ent.offset = *offset;
-            ent.tz = *tz;
-            cache[field].set(ent);
+            ent.tz = tz.clone();
+            *cache[field].borrow_mut() = ent;
             return Ok(0);
         }
 
@@ -272,8 +273,8 @@ pub fn DecodeTimezoneAbbrev<'a>(
                 strlcpy_tok(&mut ent.abbrev, lowtoken);
                 ent.ftype = *ftype as i8;
                 ent.offset = *offset;
-                ent.tz = *tz;
-                cache[field].set(ent);
+                ent.tz = tz.clone();
+                *cache[field].borrow_mut() = ent;
             }
         }
         Ok(0)
@@ -285,7 +286,7 @@ pub fn DecodeTimezoneAbbrev<'a>(
 pub fn DecodeTimezoneAbbrevPrefix(
     str_: &[u8],
     offset: &mut i32,
-    tz: &mut Option<&'static PgTz>,
+    tz: &mut Option<PgTzRef>,
 ) -> PgResult<i32> {
     *offset = 0;
     *tz = None;
@@ -1119,8 +1120,8 @@ pub fn DecodeDateTime<'a>(
     let mut isjulian = false;
     let mut is2digits = false;
     let mut bc = false;
-    let mut namedTz: Option<&'static PgTz> = None;
-    let mut abbrevTz: Option<&'static PgTz> = None;
+    let mut namedTz: Option<PgTzRef> = None;
+    let mut abbrevTz: Option<PgTzRef> = None;
     let mut abbrev: Option<&[u8]> = None;
 
     let have_tz = tzp.is_some();
@@ -1371,7 +1372,7 @@ pub fn DecodeDateTime<'a>(
                 // timezone abbrevs take precedence over built-in tokens
                 let mut type_ = 0;
                 let mut val = 0;
-                let mut valtz: Option<&'static PgTz> = None;
+                let mut valtz: Option<PgTzRef> = None;
                 let dterr =
                     DecodeTimezoneAbbrev(i, field[i], &mut type_, &mut val, &mut valtz, extra)?;
                 if dterr != 0 {
@@ -1573,14 +1574,14 @@ pub fn DecodeDateTime<'a>(
             if fmask & DTK_M(DTZMOD) != 0 {
                 return Ok(DTERR_BAD_FORMAT);
             }
-            tzv = DetermineTimeZoneOffset(tm, z);
+            tzv = DetermineTimeZoneOffset(tm, &z);
         }
 
         if let Some(z) = abbrevTz {
             if fmask & DTK_M(DTZMOD) != 0 {
                 return Ok(DTERR_BAD_FORMAT);
             }
-            tzv = DetermineTimeZoneAbbrevOffset(tm, abbrev.unwrap(), z);
+            tzv = DetermineTimeZoneAbbrevOffset(tm, abbrev.unwrap(), &z);
         }
 
         // timezone not specified? then use session timezone
@@ -1588,10 +1589,10 @@ pub fn DecodeDateTime<'a>(
             if fmask & DTK_M(DTZMOD) != 0 {
                 return Ok(DTERR_BAD_FORMAT);
             }
-            let Some(z) = tz::session_timezone() else {
-                panic!("session timezone not initialized (pg_timezone_initialize) — DecodeDateTime");
-            };
-            tzv = DetermineTimeZoneOffset(tm, z);
+            tzv = tz::with_required_session_timezone(
+                "session timezone not initialized (pg_timezone_initialize) — DecodeDateTime",
+                |z| DetermineTimeZoneOffset(tm, z),
+            );
         }
     }
 
@@ -1618,8 +1619,8 @@ pub fn DecodeTimeOnly<'a>(
     let mut is2digits = false;
     let mut bc = false;
     let mut mer = HR24;
-    let mut namedTz: Option<&'static PgTz> = None;
-    let mut abbrevTz: Option<&'static PgTz> = None;
+    let mut namedTz: Option<PgTzRef> = None;
+    let mut abbrevTz: Option<PgTzRef> = None;
     let mut abbrev: Option<&[u8]> = None;
 
     let have_tz = tzp.is_some();
@@ -1845,7 +1846,7 @@ pub fn DecodeTimeOnly<'a>(
             DTK_STRING | DTK_SPECIAL => {
                 let mut type_ = 0;
                 let mut val = 0;
-                let mut valtz: Option<&'static PgTz> = None;
+                let mut valtz: Option<PgTzRef> = None;
                 let dterr =
                     DecodeTimezoneAbbrev(i, field[i], &mut type_, &mut val, &mut valtz, extra)?;
                 if dterr != 0 {
@@ -1980,7 +1981,7 @@ pub fn DecodeTimeOnly<'a>(
             return Ok(DTERR_BAD_FORMAT);
         }
         let mut gmtoff = 0i64;
-        if tz::pg_get_timezone_offset(z, &mut gmtoff) {
+        if tz::pg_get_timezone_offset(&z, &mut gmtoff) {
             // non-DST zone: no date needed
             tzv = -(gmtoff as i32);
         } else {
@@ -1988,7 +1989,7 @@ pub fn DecodeTimeOnly<'a>(
             if fmask & DTK_DATE_M != DTK_DATE_M {
                 return Ok(DTERR_BAD_FORMAT);
             }
-            tzv = DetermineTimeZoneOffset(tm, z);
+            tzv = DetermineTimeZoneOffset(tm, &z);
         }
     }
 
@@ -2010,7 +2011,7 @@ pub fn DecodeTimeOnly<'a>(
         tt.tm_hour = tm.tm_hour;
         tt.tm_min = tm.tm_min;
         tt.tm_sec = tm.tm_sec;
-        tzv = DetermineTimeZoneAbbrevOffset(&mut tt, abbrev.unwrap(), z);
+        tzv = DetermineTimeZoneAbbrevOffset(&mut tt, abbrev.unwrap(), &z);
         tm.tm_isdst = tt.tm_isdst;
     }
 
@@ -2033,10 +2034,10 @@ pub fn DecodeTimeOnly<'a>(
         tt.tm_hour = tm.tm_hour;
         tt.tm_min = tm.tm_min;
         tt.tm_sec = tm.tm_sec;
-        let Some(z) = tz::session_timezone() else {
-            panic!("session timezone not initialized (pg_timezone_initialize) — DecodeTimeOnly");
-        };
-        tzv = DetermineTimeZoneOffset(&mut tt, z);
+        tzv = tz::with_required_session_timezone(
+            "session timezone not initialized (pg_timezone_initialize) — DecodeTimeOnly",
+            |z| DetermineTimeZoneOffset(&mut tt, z),
+        );
         tm.tm_isdst = tt.tm_isdst;
     }
 
@@ -2046,15 +2047,16 @@ pub fn DecodeTimeOnly<'a>(
     Ok(0)
 }
 
+// C's pg_add_*_overflow always stores the wrapped sum, even when it then
+// reports overflow; the helpers below store it too before returning false.
 #[inline]
 fn int64_multiply_add(val: i64, multiplier: i64, sum: &mut i64) -> bool {
-    match val.checked_mul(multiplier).and_then(|p| sum.checked_add(p)) {
-        Some(v) => {
-            *sum = v;
-            true
-        }
-        None => false,
-    }
+    let Some(product) = val.checked_mul(multiplier) else {
+        return false;
+    };
+    let (v, overflow) = sum.overflowing_add(product);
+    *sum = v;
+    !overflow
 }
 
 fn AdjustFractMicroseconds(mut frac: f64, scale: i64, itm_in: &mut pg_itm_in) -> bool {
@@ -2069,13 +2071,9 @@ fn AdjustFractMicroseconds(mut frac: f64, scale: i64, itm_in: &mut pg_itm_in) ->
     } else if frac < -0.5 {
         usec -= 1;
     }
-    match itm_in.tm_usec.checked_add(usec) {
-        Some(v) => {
-            itm_in.tm_usec = v;
-            true
-        }
-        None => false,
-    }
+    let (v, overflow) = itm_in.tm_usec.overflowing_add(usec);
+    itm_in.tm_usec = v;
+    !overflow
 }
 
 fn AdjustFractDays(mut frac: f64, scale: i32, itm_in: &mut pg_itm_in) -> bool {
@@ -2084,10 +2082,11 @@ fn AdjustFractDays(mut frac: f64, scale: i32, itm_in: &mut pg_itm_in) -> bool {
     }
     frac *= scale as f64;
     let extra_days = frac as i32;
-    let Some(v) = itm_in.tm_mday.checked_add(extra_days) else {
-        return false;
-    };
+    let (v, overflow) = itm_in.tm_mday.overflowing_add(extra_days);
     itm_in.tm_mday = v;
+    if overflow {
+        return false;
+    }
     frac -= extra_days as f64;
     AdjustFractMicroseconds(frac, USECS_PER_DAY, itm_in)
 }
@@ -2095,13 +2094,9 @@ fn AdjustFractDays(mut frac: f64, scale: i32, itm_in: &mut pg_itm_in) -> bool {
 fn AdjustFractYears(frac: f64, scale: i32, itm_in: &mut pg_itm_in) -> bool {
     // C rint() rounds half to even
     let extra_months = (frac * scale as f64 * MONTHS_PER_YEAR as f64).round_ties_even() as i32;
-    match itm_in.tm_mon.checked_add(extra_months) {
-        Some(v) => {
-            itm_in.tm_mon = v;
-            true
-        }
-        None => false,
-    }
+    let (v, overflow) = itm_in.tm_mon.overflowing_add(extra_months);
+    itm_in.tm_mon = v;
+    !overflow
 }
 
 fn AdjustMicroseconds(val: i64, fval: f64, scale: i64, itm_in: &mut pg_itm_in) -> bool {
@@ -2115,39 +2110,33 @@ fn AdjustDays(val: i64, scale: i32, itm_in: &mut pg_itm_in) -> bool {
     if val < i32::MIN as i64 || val > i32::MAX as i64 {
         return false;
     }
-    match (val as i32).checked_mul(scale).and_then(|days| itm_in.tm_mday.checked_add(days)) {
-        Some(v) => {
-            itm_in.tm_mday = v;
-            true
-        }
-        None => false,
-    }
+    let Some(days) = (val as i32).checked_mul(scale) else {
+        return false;
+    };
+    let (v, overflow) = itm_in.tm_mday.overflowing_add(days);
+    itm_in.tm_mday = v;
+    !overflow
 }
 
 fn AdjustMonths(val: i64, itm_in: &mut pg_itm_in) -> bool {
     if val < i32::MIN as i64 || val > i32::MAX as i64 {
         return false;
     }
-    match itm_in.tm_mon.checked_add(val as i32) {
-        Some(v) => {
-            itm_in.tm_mon = v;
-            true
-        }
-        None => false,
-    }
+    let (v, overflow) = itm_in.tm_mon.overflowing_add(val as i32);
+    itm_in.tm_mon = v;
+    !overflow
 }
 
 fn AdjustYears(val: i64, scale: i32, itm_in: &mut pg_itm_in) -> bool {
     if val < i32::MIN as i64 || val > i32::MAX as i64 {
         return false;
     }
-    match (val as i32).checked_mul(scale).and_then(|years| itm_in.tm_year.checked_add(years)) {
-        Some(v) => {
-            itm_in.tm_year = v;
-            true
-        }
-        None => false,
-    }
+    let Some(years) = (val as i32).checked_mul(scale) else {
+        return false;
+    };
+    let (v, overflow) = itm_in.tm_year.overflowing_add(years);
+    itm_in.tm_year = v;
+    !overflow
 }
 
 fn ClearPgItmIn(itm_in: &mut pg_itm_in) {
@@ -2801,6 +2790,65 @@ pub fn CheckDateTokenTables() -> bool {
     debug_assert_eq!(UNIX_EPOCH_JDATE, date2j(1970, 1, 1));
     debug_assert_eq!(POSTGRES_EPOCH_JDATE, date2j(2000, 1, 1));
     CheckDateTokenTable(&DATETKTBL) && CheckDateTokenTable(&DELTATKTBL)
+}
+
+#[cfg(test)]
+mod adjust_overflow_tests {
+    use super::*;
+
+    // On the add overflow C leaves the wrapped sum in the field.
+    #[test]
+    fn adjust_helpers_store_wrapped_sum_on_overflow() {
+        let base = pg_itm_in { tm_usec: 0, tm_mday: 0, tm_mon: 0, tm_year: 0 };
+
+        let mut itm = pg_itm_in { tm_mday: i32::MAX, ..base };
+        assert!(!AdjustFractDays(1.0, 1, &mut itm));
+        assert_eq!(itm.tm_mday, i32::MIN);
+
+        let mut itm = pg_itm_in { tm_usec: i64::MAX, ..base };
+        assert!(!AdjustMicroseconds(1, 0.0, 1, &mut itm));
+        assert_eq!(itm.tm_usec, i64::MIN);
+
+        let mut itm = pg_itm_in { tm_usec: i64::MAX, ..base };
+        assert!(!AdjustFractMicroseconds(0.75, 1, &mut itm));
+        assert_eq!(itm.tm_usec, i64::MIN);
+
+        let mut sum = i64::MIN;
+        assert!(!int64_multiply_add(-1, 1, &mut sum));
+        assert_eq!(sum, i64::MAX);
+        // A multiply overflow never reaches the add: the sum is untouched.
+        let mut sum = 5;
+        assert!(!int64_multiply_add(i64::MAX, 2, &mut sum));
+        assert_eq!(sum, 5);
+
+        let mut itm = pg_itm_in { tm_mday: i32::MAX, ..base };
+        assert!(!AdjustDays(1, 1, &mut itm));
+        assert_eq!(itm.tm_mday, i32::MIN);
+        let mut itm = pg_itm_in { tm_mday: 7, ..base };
+        assert!(!AdjustDays(i32::MAX as i64, 2, &mut itm));
+        assert_eq!(itm.tm_mday, 7);
+
+        let mut itm = pg_itm_in { tm_mon: i32::MIN, ..base };
+        assert!(!AdjustMonths(-1, &mut itm));
+        assert_eq!(itm.tm_mon, i32::MAX);
+
+        let mut itm = pg_itm_in { tm_year: i32::MAX, ..base };
+        assert!(!AdjustYears(1, 1, &mut itm));
+        assert_eq!(itm.tm_year, i32::MIN);
+        let mut itm = pg_itm_in { tm_year: 7, ..base };
+        assert!(!AdjustYears(i32::MAX as i64, 1000, &mut itm));
+        assert_eq!(itm.tm_year, 7);
+
+        let mut itm = pg_itm_in { tm_mon: i32::MAX, ..base };
+        assert!(!AdjustFractYears(0.5, 1, &mut itm));
+        assert_eq!(itm.tm_mon, i32::MIN + 5);
+
+        // In range, every helper still adds and returns true.
+        let mut itm = base;
+        assert!(AdjustDays(3, 7, &mut itm) && AdjustMonths(2, &mut itm));
+        assert!(AdjustYears(1, 10, &mut itm) && AdjustMicroseconds(4, 0.5, 2, &mut itm));
+        assert_eq!(itm, pg_itm_in { tm_usec: 9, tm_mday: 21, tm_mon: 2, tm_year: 10 });
+    }
 }
 
 #[cfg(test)]

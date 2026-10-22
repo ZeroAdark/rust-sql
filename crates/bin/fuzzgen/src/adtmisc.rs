@@ -2556,7 +2556,7 @@ fn gen_activity(g: &mut Gen) -> Vec<StmtKind> {
         2 => "SELECT state, xact_start IS NOT NULL, query <> '' \
               FROM pg_stat_activity WHERE pid = pg_backend_pid();"
             .to_string(),
-        // Round-13 (recorded run, seed
+        // Round-13 (run 72b2e74701d0e1310d59d39345e716da-59-13, seed
         // 4146339408691531505, 7 findings): pg_stat_get_backend_*(integer)
         // takes a BACKEND ID (pg_stat_get_backend_idset numbering), not a
         // PID. Passing pg_backend_pid() addresses an arbitrary live slot —

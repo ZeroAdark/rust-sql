@@ -24,7 +24,24 @@ fn setup() {
     fd::InitFileAccess();
 }
 
-fn scratch_file(tag: &str, mode: u32) -> String {
+/// A test's key file: reads as its path (`Deref` to the `String`), and is removed when dropped (the test's end, or a
+/// panic's unwind), so the suite leaves no pgrust_besec_* in the temp dir.
+struct KeyFile(String);
+
+impl std::ops::Deref for KeyFile {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.0
+    }
+}
+
+impl Drop for KeyFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn scratch_file(tag: &str, mode: u32) -> KeyFile {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
@@ -33,7 +50,15 @@ fn scratch_file(tag: &str, mode: u32) -> String {
     ));
     std::fs::write(&path, b"KEY").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
-    path.to_str().unwrap().to_owned()
+    KeyFile(path.to_str().unwrap().to_owned())
+}
+
+#[test]
+fn scratch_files_leave_nothing_behind() {
+    let path = scratch_file("gone", 0o600);
+    let name = path.to_string();
+    drop(path);
+    assert!(!std::path::Path::new(&name).exists(), "{name} left behind");
 }
 
 // The GUC backing is process-global; passphrase tests must not interleave.

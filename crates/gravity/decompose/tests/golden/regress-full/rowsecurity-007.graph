@@ -1,0 +1,60 @@
+-- regress-full-rowsecurity-007
+-- SELECT * FROM pg_policies WHERE schemaname = 'regress_rls_schema' AND tablename = 'document' ORDER BY policyname;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=5 serial site=0 reason=IndexSource end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n5@0 n4@1
+  source index rel=1259 rti=3 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v3.2, c19:#64))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val
+  project (1=v3.2, 2=v3.1, 3=v3.3)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=fx64:win/page 2=w8:val 3=w8:val
+p1 node=8 eligible rows=8 end=breaker(slot=1 Sort)
+  desc finishing
+  nodes n8@0 n7@2^
+  source range rel=1260 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter any607(v7.1, $exec0)
+  project (1=v7.2)
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=fx64:win/page
+p2 node=3 eligible rows=41 end=breaker(slot=2 Sort)
+  desc consumes=slot0@p0 consumes=slot1@p1 finishing
+  nodes n3@0 n2@1 n1@3 n0@6^
+  source range rel=3256 rti=2 am=heap
+    lanes Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byref8:vl:win/page Attr(7):byref8:vl:win/page Attr(8):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8)
+  probe slot=0 inner=n4 JOIN_INNER unique keys=(outer.3) decls=26/26:I32 clauses=(op607(outer.3, inner.2))
+  project (1=outer.2, 2=outer.5, 3=outer.6, 4=outer.4, 5=outer.7, 6=outer.3, 7=outer.8, 8=inner.1, 9=inner.3)
+  nest inner=n6 JOIN_INNER unique invariant raise-free eq=#0:op607:fam1990:26/26:L params=() qual=(op607(outer.9, inner.1))
+  inner node=6 eligible rows=1 end=sink
+  nodes n6@0
+  source range rel=2615 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v5.2, c19:#64)
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4)
+  subplan 1 nested Array params=($exec0=outer.3) conditional raise-free
+  inner node=7 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n7@0
+  source breaker slot=1
+  project (1=outer.1)
+  project (1=inner.2, 2=outer.8, 3=outer.1, 4=case(when outer.2 then c25:'PERMISSIVE') else c25:'RESTRICTIVE', 5=case(when op1070(outer.3, c1028:'\x01\x00\x00\x00\x00\x00\x00\x00\x1a\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00') then c1003:'\x01\x00\x00\x00\x00\x00\x00\x00\x13\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00public\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00') else subplan1(outer.3), 6=case[outer.4](when op92(T_CaseTestExpr, c18:114) then c25:'SELECT', when op92(T_CaseTestExpr, c18:97) then c25:'INSERT', when op92(T_CaseTestExpr, c18:119) then c25:'UPDATE', when op92(T_CaseTestExpr, c18:100) then c25:'DELETE', when op92(T_CaseTestExpr, c18:42) then c25:'ALL') else c25:null, 7=fn1716(outer.5, outer.6), 8=fn1716(outer.7, outer.6))
+  sort keys=3+:Fp128@950#19 form=runs
+  outs 1=w4:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w8:val 6=vl:win/page 7=vl:win/page 8=vl:win/page
+  outs 1=fx64:win/page 2=w8:val 3=vl:win/page 4=w8:val 5=vl:win/page 6=w8:val 7=vl:win/page 8=fx64:life/breaker 9=w4:val
+  outs 1=fx64:life/breaker 2=fx64:life/breaker 3=fx64:win/page 4=vl:stmt/imm 5=vl:call0 6=vl:stmt/imm 7=vl:call1716 8=vl:call1716
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p2
+  nodes n0@0
+  source breaker slot=2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8)
+  outs 1=fx64:life/breaker 2=fx64:life/breaker 3=fx64:win/page 4=vl:stmt/imm 5=vl:call0 6=vl:stmt/imm 7=vl:call1716 8=vl:call1716
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128]->[Count@16] 24B order=3+
+rerun node=1 subplan=1 pipelines=p1 slots=1
+param $exec0 owner=subplan1 type=1028 rep=vl:win/page
+mapped: SeqScan IndexScan NestLoop HashJoin Sort Hash SubPlan

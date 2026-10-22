@@ -28,10 +28,17 @@ pub struct TriggerFmgrCache {
 impl TriggerFmgrCache {
     pub fn get(&mut self, tgindx: usize, tgfoid: types_core::Oid) -> PgResult<&mut FmgrInfo> {
         if self.finfo.len() <= tgindx {
+            let needed = tgindx + 1 - self.finfo.len();
+            self.finfo
+                .try_reserve(needed)
+                .map_err(|_| mcx::oom_named("TriggerFmgrCache", needed * core::mem::size_of::<Option<FmgrInfo>>()))?;
             self.finfo.resize_with(tgindx + 1, || None);
         }
         let slot = &mut self.finfo[tgindx];
-        if slot.is_none() {
+        // C: ri_TrigFunctions and the TriggerDesc come from one ResultRelInfo;
+        // the cache is keyed apart from the descriptor, so an index may name
+        // another trigger's function.
+        if slot.as_ref().is_none_or(|f| f.fn_oid != tgfoid) {
             *slot = Some(fmgr_seams::fmgr_info::call(tgfoid)?);
         }
         Ok(slot.as_mut().expect("just filled"))
@@ -228,6 +235,10 @@ impl<'a, 'mcx> TriggerWhenEval<'a, 'mcx> {
 
     fn compile(&mut self, idx: usize, trigger: &Trigger<'_>, rel: &Relation<'mcx>) -> PgResult<()> {
         if self.cache.states.len() <= idx {
+            let needed = idx + 1 - self.cache.states.len();
+            self.cache.states
+                .try_reserve(needed)
+                .map_err(|_| self.mcx.oom(needed * core::mem::size_of::<Option<PgBox<'mcx, execexpr::ExprState<'mcx>>>>()))?;
             self.cache.states.resize_with(idx + 1, || None);
         }
         if self.cache.states[idx].is_some() {
@@ -441,7 +452,37 @@ pub fn ExecBRInsertTriggers<'mcx>(
     when: &mut TriggerWhenEval<'_, 'mcx>,
     slot: &mut SlotData<'mcx>,
 ) -> PgResult<bool> {
-    insert_row_triggers(mcx, rel, trigdesc, fmgr, when, slot, false)
+    insert_row_triggers(mcx, mcx, rel, trigdesc, fmgr, when, slot, false)
+}
+
+// ExecBRInsertTriggers with the caller's per-tuple context: the trigger call
+// and its returned image live in `per_tuple_mcx` (copyfrom.c runs the row
+// loop in GetPerTupleMemoryContext(estate), reset per row), the slot's own
+// copy of a replacement row stays in `mcx`.
+pub fn ExecBRInsertTriggersIn<'mcx>(
+    mcx: Mcx<'mcx>,
+    per_tuple_mcx: Mcx<'_>,
+    rel: &Relation<'mcx>,
+    trigdesc: &types_trigger::TriggerDesc<'static>,
+    fmgr: &mut TriggerFmgrCache,
+    when: &mut TriggerWhenEval<'_, 'mcx>,
+    slot: &mut SlotData<'mcx>,
+) -> PgResult<bool> {
+    insert_row_triggers(mcx, per_tuple_mcx, rel, trigdesc, fmgr, when, slot, false)
+}
+
+// ExecIRInsertTriggers with the caller's per-tuple context (as
+// ExecBRInsertTriggersIn).
+pub fn ExecIRInsertTriggersIn<'mcx>(
+    mcx: Mcx<'mcx>,
+    per_tuple_mcx: Mcx<'_>,
+    rel: &Relation<'mcx>,
+    trigdesc: &types_trigger::TriggerDesc<'static>,
+    fmgr: &mut TriggerFmgrCache,
+    when: &mut TriggerWhenEval<'_, 'mcx>,
+    slot: &mut SlotData<'mcx>,
+) -> PgResult<bool> {
+    insert_row_triggers(mcx, per_tuple_mcx, rel, trigdesc, fmgr, when, slot, true)
 }
 
 // ExecIRInsertTriggers (trigger.c), standalone-caller form (COPY FROM into a
@@ -454,11 +495,12 @@ pub fn ExecIRInsertTriggers<'mcx>(
     when: &mut TriggerWhenEval<'_, 'mcx>,
     slot: &mut SlotData<'mcx>,
 ) -> PgResult<bool> {
-    insert_row_triggers(mcx, rel, trigdesc, fmgr, when, slot, true)
+    insert_row_triggers(mcx, mcx, rel, trigdesc, fmgr, when, slot, true)
 }
 
 fn insert_row_triggers<'mcx>(
     mcx: Mcx<'mcx>,
+    per_tuple_mcx: Mcx<'_>,
     rel: &Relation<'mcx>,
     trigdesc: &types_trigger::TriggerDesc<'static>,
     fmgr: &mut TriggerFmgrCache,
@@ -510,7 +552,7 @@ fn insert_row_triggers<'mcx>(
         let finfo = fmgr.get(i, trigger.tgfoid)?;
         let mut tdata =
             types_trigger_call::TriggerData::from_raw(tg_event, rel, Some(cur_nn), None, trigger);
-        let ret = ExecCallTriggerFunc(mcx, &mut tdata, finfo, None)?;
+        let ret = ExecCallTriggerFunc(per_tuple_mcx, &mut tdata, finfo, None)?;
         match ret {
             None => return Ok(false),
             Some(p) if p == cur_nn => {}
@@ -518,16 +560,20 @@ fn insert_row_triggers<'mcx>(
                 // SAFETY: the trigger's returned tuple, live in the per-call
                 // context; copied into the slot before reuse.
                 let returned = unsafe { p.as_ref() };
-                let nulled = check_modified_virtual_generated(mcx, rel, returned)?;
+                let nulled = check_modified_virtual_generated(per_tuple_mcx, rel, returned)?;
                 let returned = nulled.as_ref().map_or(returned, |t| t.as_tuple());
                 let img = unsafe {
                     core::slice::from_raw_parts(returned.header_ptr(), returned.t_len as usize)
                 };
-                let mut buf = mcx::vec_with_capacity_in(mcx, img.len())?;
-                mcx::vec_append_bytes(&mut buf, img).map_err(|_| mcx.oom(img.len()))?;
+                // The per-tuple copy the slot consumes within this row cycle
+                // (nodeModifyTable's row_mcx shape; C stores the trigger's own
+                // per-tuple tuple without copying): a heap slot copies it into
+                // `mcx` as its owned tuple, a virtual slot deforms it.
+                let mut buf = mcx::vec_with_capacity_in(per_tuple_mcx, img.len())?;
+                mcx::vec_append_bytes(&mut buf, img).map_err(|_| per_tuple_mcx.oom(img.len()))?;
                 let ptr = buf.as_ptr();
                 core::mem::forget(buf);
-                // SAFETY: fresh query-context copy of the returned image.
+                // SAFETY: fresh per-tuple copy of the returned image.
                 let copy = unsafe {
                     HeapTupleData::from_raw_parts(
                         ptr,
@@ -544,8 +590,9 @@ fn insert_row_triggers<'mcx>(
                 // error; ExecIRInsertTriggers has no such arm.
                 if !instead
                     && trigger.tgisclone
-                    && !execpartition::exec_partition_check(
-                        mcx,
+                    && !execpartition::exec_partition_check_in(
+                        when.mcx,
+                        per_tuple_mcx,
                         &mut when.cache.partition_check,
                         rel,
                         slot,
@@ -822,18 +869,30 @@ impl Drop for TriggerDepthGuard {
 // consume or copy it before then (C: SPI trigger returns palloc'd in the
 // per-tuple context).
 // `instr` is the caller's ri_TrigInstrument + tgindx (trigger.c:2318,
-// :2352/:2400 InstrStartNode/InstrStopNode(1)); None outside EXPLAIN ANALYZE
-// and from the after-trigger queue, which brackets the whole event itself.
 pub fn ExecCallTriggerFunc<'a, 'mcx>(
     per_tuple_mcx: Mcx<'_>,
     trigdata: &mut TriggerData<'a, 'mcx>,
     finfo: &mut FmgrInfo,
+    instr: Option<&mut types_core::instrument::Instrumentation>,
+) -> PgResult<Option<NonNull<HeapTupleData<'a>>>> {
+    call_trigger_func(per_tuple_mcx, trigdata, finfo, instr, true)
+}
+
+pub(crate) fn call_trigger_func<'a, 'mcx>(
+    per_tuple_mcx: Mcx<'_>,
+    trigdata: &mut TriggerData<'a, 'mcx>,
+    finfo: &mut FmgrInfo,
     mut instr: Option<&mut types_core::instrument::Instrumentation>,
+    level: bool,
 ) -> PgResult<Option<NonNull<HeapTupleData<'a>>>> {
     debug_assert_eq!(finfo.fn_oid, trigdata.tg_trigger.tgfoid);
     if let Some(i) = instr.as_deref_mut() {
         ::instrument::instr_start_node(i);
     }
+    let counted = match instr.is_none() && level && crate::instr::active() {
+        true => crate::instr::start(trigdata.tg_relation, None, trigdata.tg_trigger.tgoid)?.then_some((trigdata.tg_relation.rd_id, trigdata.tg_trigger.tgoid)),
+        false => None,
+    };
     let mut fcinfo = LocalFcinfo::<0>::fresh(types_core::InvalidOid);
     fcinfo.context = trigdata.fm_node_ptr();
     // SAFETY: the scratch context outlives this single invocation.
@@ -855,6 +914,9 @@ pub fn ExecCallTriggerFunc<'a, 'mcx>(
     }
     if let Some(i) = instr {
         ::instrument::instr_stop_node(i, 1.0);
+    }
+    if let Some((relid, tgoid)) = counted {
+        crate::instr::stop(relid, tgoid);
     }
     if fcinfo.isnull {
         return Err(returned_null(finfo.fn_oid));
@@ -882,6 +944,25 @@ mod tests {
     #[test]
     fn update_of_null_modified_cols_skips() {
         assert!(!update_of_cols_match(&[1, 2], None));
+    }
+
+    // audit trigger-p2#1: an index cached for one trigger's function must
+    // not serve another trigger's event that lands on the same index.
+    #[test]
+    fn fmgr_cache_follows_the_trigger_function() {
+        fn fake(oid: types_core::Oid) -> PgResult<FmgrInfo> {
+            let mut f = FmgrInfo::unresolved();
+            f.fn_oid = oid;
+            Ok(f)
+        }
+        if !fmgr_seams::fmgr_info::is_installed() {
+            fmgr_seams::fmgr_info::set(fake);
+        }
+        let mut cache = TriggerFmgrCache::default();
+        assert_eq!(cache.get(1, 100).unwrap().fn_oid, 100);
+        assert_eq!(cache.get(1, 200).unwrap().fn_oid, 200);
+        assert_eq!(cache.get(0, 300).unwrap().fn_oid, 300);
+        assert_eq!(cache.get(1, 200).unwrap().fn_oid, 200);
     }
 
     #[test]

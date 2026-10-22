@@ -1,0 +1,11 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT n FROM (VALUES (1.5::numeric), (2.25), (-1), ('NaN'), (0), (1e20), (NULL)) v(n) ORDER BY n
+cols: n
+[pg]
+-1
+0
+1.5
+2.25
+100000000000000000000
+NaN
+\N

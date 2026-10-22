@@ -6,7 +6,7 @@
 
 use core::cell::{Cell, RefCell};
 
-use ::elog::{elog, ereport};
+use ::elog::{elog, ereport, PCT_M};
 use ::mcx::{MemoryContext, PgHashMap, PgVec};
 use ::types_core::BackendType;
 use ::types_error::{ErrorLocation, PgError, PgResult, DEBUG1, ERRCODE_OUT_OF_MEMORY, ERROR, WARNING};
@@ -107,7 +107,8 @@ fn syncfiletag(tag: &FileTag) -> PgResult<FileTagOpResult> {
                 errno: md::last_errno(),
             })
         }
-        // INVARIANT: the five arms above exhaust the handlers that are ever
+        SyncRequestHandler::SYNC_HANDLER_PGRC => pgrc_wal::sync::syncfiletag(tag),
+        // INVARIANT: the six arms above exhaust the handlers that are ever
         // enqueued. The only remaining variant is SYNC_HANDLER_NONE, which is
         // never attached to a request: every SLRU enqueue is guarded by
         // `sync_handler != SYNC_HANDLER_NONE` (access/transam/slru/src/lib.rs:922,
@@ -120,6 +121,7 @@ fn syncfiletag(tag: &FileTag) -> PgResult<FileTagOpResult> {
 fn unlinkfiletag(tag: &FileTag) -> PgResult<FileTagOpResult> {
     match tag.handler {
         SyncRequestHandler::SYNC_HANDLER_MD => smgr::mdunlinkfiletag(*tag),
+        SyncRequestHandler::SYNC_HANDLER_PGRC => pgrc_wal::sync::unlinkfiletag(tag),
         // INVARIANT: C's syncsw rows for the SLRU handlers have no
         // unlinkfiletag, and nothing here enqueues one either — the only
         // SYNC_UNLINK_REQUEST producer is md's register_unlink_segment
@@ -131,6 +133,7 @@ fn unlinkfiletag(tag: &FileTag) -> PgResult<FileTagOpResult> {
 fn filetagmatches(tag: &FileTag, candidate: &FileTag) -> bool {
     match tag.handler {
         SyncRequestHandler::SYNC_HANDLER_MD => smgr::mdfiletagmatches(*tag, *candidate),
+        SyncRequestHandler::SYNC_HANDLER_PGRC => pgrc_wal::sync::filetagmatches(tag, candidate),
         // INVARIANT: only SYNC_FILTER_REQUESTs reach this, and their only
         // producer is md's ForgetDatabaseSyncRequests
         // (storage/smgr/md/src/lib.rs:1343), which always tags SYNC_HANDLER_MD.
@@ -200,7 +203,7 @@ pub fn SyncPostCheckpoint() -> PgResult<()> {
             ereport(WARNING)
                 .with_saved_errno(r.errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove file \"{}\": %m", r.path))
+                .errmsg(format!("could not remove file \"{}\": {PCT_M}", r.path))
                 .finish(loc("SyncPostCheckpoint"))?;
         }
 
@@ -334,7 +337,7 @@ pub fn ProcessSyncRequests() -> PgResult<()> {
                     ereport(fd::data_sync_elevel(ERROR))
                         .with_saved_errno(r.errno)
                         .errcode_for_file_access()
-                        .errmsg(format!("could not fsync file \"{}\": %m", r.path))
+                        .errmsg(format!("could not fsync file \"{}\": {PCT_M}", r.path))
                         .finish(loc("ProcessSyncRequests"))?;
                     unreachable!("fsync-failure ereport returned");
                 }
@@ -343,7 +346,7 @@ pub fn ProcessSyncRequests() -> PgResult<()> {
                     .with_saved_errno(r.errno)
                     .errcode_for_file_access()
                     .errmsg_internal(format!(
-                        "could not fsync file \"{}\" but retrying: %m",
+                        "could not fsync file \"{}\" but retrying: {PCT_M}",
                         r.path
                     ))
                     .finish(loc("ProcessSyncRequests"))?;

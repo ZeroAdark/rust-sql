@@ -1,8 +1,3 @@
-//! src/common/controldata_utils.c — get_controlfile / update_controlfile over
-//! the pg_control.h on-disk image (byte-exact; every offset asserted vs C).
-//! Struct declarations mirror transam_xlog::control_file field-for-field so
-//! the two converge when the xlog lane adopts this unit.
-
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 #![allow(clippy::result_large_err)]
@@ -101,8 +96,7 @@ pub const SIZEOF_CONTROL_FILE_DATA: usize = 296;
 pub const OFFSETOF_CRC: usize = 292;
 pub const SIZEOF_CHECKPOINT: usize = 88;
 
-// Offsets from a clang offsetof dump of catalog/pg_control.h (REL_18_3, LP64);
-// the CRC and the on-disk image depend on every one of them.
+// The CRC and the on-disk image depend on every one of them.
 const _: () = {
     assert!(size_of::<ControlFileData>() == SIZEOF_CONTROL_FILE_DATA);
     assert!(size_of::<CheckPoint>() == SIZEOF_CHECKPOINT);
@@ -361,8 +355,7 @@ impl ControlFileData {
         }
     }
 
-    /// The exact byte image C writes (padding holes zeroed, matching the C
-    /// side's zeroed shmem/buffer images).
+    // Padding holes zeroed, matching the C side's zeroed shmem/buffer images.
     pub fn to_disk_bytes(&self) -> [u8; SIZEOF_CONTROL_FILE_DATA] {
         macro_rules! o {
             ($f:ident) => {
@@ -418,8 +411,6 @@ pub fn crc_of_image(image: &[u8]) -> u32 {
 
 #[track_caller]
 fn loc(func: &'static str) -> ErrorLocation {
-    // pgrust is Rust: report where in OUR source this was raised.
-    // #[track_caller] resolves to the call site, not this helper.
     let site = core::panic::Location::caller();
     ErrorLocation::new(site.file(), site.line() as i32, func)
 }
@@ -428,16 +419,10 @@ fn c_path(path: &str) -> std::ffi::CString {
     std::ffi::CString::new(path.as_bytes()).unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
 }
 
-// wait_event_names.txt IO section (waitevent's WAIT_EVENT_IO_NAMES order):
-// ControlFileSyncUpdate = 11, ControlFileWriteUpdate = 13 under PG_WAIT_IO.
 const PG_WAIT_IO: u32 = 0x0A00_0000;
 const WAIT_EVENT_CONTROL_FILE_SYNC_UPDATE: u32 = PG_WAIT_IO | 11;
 const WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE: u32 = PG_WAIT_IO | 13;
 
-/// controldata_utils.c `#ifndef FRONTEND` pgstat_report_wait_start: the
-/// backend installs the wait seams at boot (seams_init); a process that
-/// never installs them (frontend bins, plain crate tests) IS C's FRONTEND
-/// build, where the calls are compiled out.
 #[inline]
 fn wait_start(wait_event_info: u32) {
     if waitevent_seams::pgstat_report_wait_start::is_installed() {
@@ -452,16 +437,10 @@ fn wait_end() {
     }
 }
 
-// controldata_utils.c:79/222/260 `#ifndef FRONTEND` arms: the backend's
-// read opens through OpenTransientFile and its update through BasicOpenFile,
-// both of which reach BasicOpenFilePerm's EMFILE/ENFILE loop (fd.c
-// ReleaseLruFile release-and-retry); the update syncs through pg_fsync
-// (wal_sync_method). A process that never installed the file seams is C's
-// FRONTEND build. The read side takes the BasicOpenFile seam rather than
-// open_transient_file: the descriptor is closed on every path before the
-// function returns, so the transient registration (xact seam, which the
-// test_boot harnesses do not install) would never be consulted, while the
-// LRU retry is what the read needs.
+// The read side takes the BasicOpenFile seam rather than open_transient_file:
+// the descriptor is closed on every path before the function returns, so the
+// transient registration (xact seam, which the test_boot harnesses do not
+// install) would never be consulted, while the LRU retry is what the read needs.
 fn basic_open_file(path: &str, flags: i32) -> i32 {
     if file_seams::basic_open_file::is_installed() {
         return file_seams::basic_open_file::call(path, flags);
@@ -476,7 +455,6 @@ fn pg_fsync(fd: i32) -> i32 {
     vfs::fsync(fd)
 }
 
-/// get_controlfile(DataDir, &crc_ok): the CRC verdict is returned, not raised.
 pub fn get_controlfile(datadir: &str) -> PgResult<(ControlFileData, bool)> {
     get_controlfile_by_exact_path(&format!("{datadir}/{XLOG_CONTROL_FILE}"))
 }
@@ -484,7 +462,6 @@ pub fn get_controlfile(datadir: &str) -> PgResult<(ControlFileData, bool)> {
 pub fn get_controlfile_by_exact_path(path: &str) -> PgResult<(ControlFileData, bool)> {
     const F: &str = "get_controlfile_by_exact_path";
 
-    // controldata_utils.c:79 OpenTransientFile(ControlFilePath, O_RDONLY | PG_BINARY).
     let fd = basic_open_file(path, libc::O_RDONLY);
     if fd < 0 {
         let e = strerror(vfs::get_errno());
@@ -527,7 +504,6 @@ pub fn get_controlfile_by_exact_path(path: &str) -> PgResult<(ControlFileData, b
             .finish(loc(F))?;
         unreachable!()
     }
-    // controldata_utils.c:125: CloseTransientFile(fd) != 0 is an ERROR.
     if vfs::close(fd) != 0 {
         let e = strerror(vfs::get_errno());
         ereport(ERROR)
@@ -549,8 +525,7 @@ pub fn get_controlfile_by_exact_path(path: &str) -> PgResult<(ControlFileData, b
     Ok((control_file, crc_ok))
 }
 
-/// update_controlfile(DataDir, ControlFile, do_sync). Backend flavor: all I/O
-/// failures are PANIC; the caller holds ControlFileLock.
+// The caller holds ControlFileLock.
 pub fn update_controlfile(
     datadir: &str,
     control_file: &mut ControlFileData,
@@ -558,7 +533,6 @@ pub fn update_controlfile(
 ) -> PgResult<()> {
     const F: &str = "update_controlfile";
 
-    // DST P2 (contract §1.2): control-file stamp on pg_clock::wall_secs().
     control_file.time = pg_clock::wall_secs() as pg_time_t;
 
     let mut image = control_file.to_disk_bytes();
@@ -566,8 +540,7 @@ pub fn update_controlfile(
     control_file.crc = crc;
     put!(image, OFFSETOF_CRC, crc);
 
-    // Write PG_CONTROL_FILE_SIZE bytes, zero-padding the excess, to avoid
-    // premature-EOF errors on read.
+    // Zero-pad the excess to avoid premature-EOF errors on read.
     let mut buffer = [0u8; PG_CONTROL_FILE_SIZE];
     buffer[..SIZEOF_CONTROL_FILE_DATA].copy_from_slice(&image);
 
@@ -581,9 +554,6 @@ pub fn update_controlfile(
             .finish(loc(F));
     }
 
-    // Single pwrite of the whole PG_CONTROL_FILE_SIZE image at offset 0 —
-    // the 512 B sector-atomicity floor (PG_CONTROL_MAX_SAFE_SIZE) rides one
-    // syscall, as before.
     wait_start(WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE);
     let mut written = 0usize;
     while written < buffer.len() {
@@ -617,7 +587,6 @@ pub fn update_controlfile(
         wait_end();
     }
 
-    // controldata_utils.c:272: close(fd) != 0 is a PANIC.
     if vfs::close(fd) != 0 {
         let e = strerror(vfs::get_errno());
         return ereport(PANIC)

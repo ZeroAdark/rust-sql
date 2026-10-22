@@ -1,0 +1,7 @@
+Rust translation of TPDE ELF.hpp, Assembler, and AssemblerElf, revision
+116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception; license texts and original
+reference sources are retained under tests/upstream. Modifications include Rust
+ownership, budgeted context storage, checked inputs/arithmetic, and explicit
+little-endian output. See the coverage record for intentional divergences.

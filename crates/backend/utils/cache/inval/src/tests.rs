@@ -423,12 +423,17 @@ fn accept_drains_queue_filtering_foreign_databases() {
             }),
         ]);
     });
+    let cat4 = l2cache::Domain::Cat(4);
+    l2cache::sync_view(cat4);
+    let before = l2cache::current_gen(cat4);
     clear_events();
     AcceptInvalidationMessages().unwrap();
-    assert_eq!(
-        events(),
-        vec!["snapshot".to_string(), "syscache_invalidate(4,99)".to_string()]
-    );
+    let moved = l2cache::current_gen(cat4) != before;
+    let exact = vec!["snapshot".to_string(), "syscache_invalidate(4,99)".to_string()];
+    let mut advanced = exact.clone();
+    advanced.push("snapshot".to_string());
+    let ev = events();
+    assert!(ev == exact || moved && ev == advanced, "events {ev:?} (Cat(4) generation moved during the call: {moved})");
 }
 
 #[test]
@@ -486,4 +491,68 @@ fn committed_replay_logs_at_debug4_like_c() {
         ],
         "inval.c:1142/1147 DEBUG4 lines (nmsgs <= 0 logs nothing)"
     );
+}
+
+#[test]
+fn pending_touch_names_what_the_transaction_registered() {
+    // D3866 (step 2): the summary `PendingInvalidationsTouch` reads, kept as messages are registered
+    install();
+    assert!(!crate::PendingInvalidationsTouch(&[100, 200], &[3, 47, 82]));
+    CacheInvalidateRelcacheByRelid(100).unwrap();
+    assert!(crate::PendingInvalidationsTouch(&[100], &[]));
+    assert!(!crate::PendingInvalidationsTouch(&[200, 300], &[3, 47, 82]));
+    let register = |cache_id: i32| {
+        with_state(|state| {
+            let mcx = state.mcx;
+            let info = registration::prepare_invalidation_state(state).unwrap();
+            registration::register_catcache_invalidation(mcx, state, info, cache_id, 7, 5).unwrap();
+        })
+    };
+    // a pg_proc (47) row the transaction created: no program stamp moves; AMOPOPID (3) is stamped whole
+    register(47);
+    assert!(!crate::PendingInvalidationsTouch(&[200], &[47, 82]));
+    // C3 S5d: but a read made under the DDL may have found the created row
+    assert!(crate::PendingInvalidationsTouchParts(&[200], &[], &[47], true));
+    assert!(!crate::PendingInvalidationsTouchParts(&[200], &[200], &[82], true));
+    register(3);
+    assert!(crate::PendingInvalidationsTouch(&[200], &[3]));
+    assert!(!crate::PendingInvalidationsTouch(&[200], &[47, 82]));
+    // a committed pg_proc row changed
+    with_state(|state| state.stamp_touched |= crate::eoxact::stamp_bit(47));
+    assert!(crate::PendingInvalidationsTouch(&[200], &[47]));
+    AtEOXact_Inval(true).unwrap();
+    assert!(!crate::PendingInvalidationsTouch(&[100], &[3, 47]));
+    CacheInvalidateCatalog(1247).unwrap();
+    assert!(crate::PendingInvalidationsTouch(&[], &[]));
+    AtEOXact_Inval(false).unwrap();
+    CacheInvalidateRelcacheAll().unwrap();
+    assert!(crate::PendingInvalidationsTouch(&[12345], &[]));
+    AtEOXact_Inval(false).unwrap();
+    assert!(!crate::PendingInvalidationsTouch(&[12345], &[]));
+}
+
+fn family_relids<'mcx>(mcx: mcx::Mcx<'mcx>, families: &[Oid]) -> types_error::PgResult<mcx::PgVec<'mcx, Oid>> {
+    let mut v = mcx::PgVec::new_in(mcx);
+    if families == [77] {
+        v.push(300);
+        v.push(301);
+    }
+    Ok(v)
+}
+
+#[test]
+fn pre_commit_names_the_relations_built_from_a_changed_family() {
+    // D3888: a family a support catalog row named (invalidate.rs `support_family`) sends, before the commit, the relcache
+    // messages of the indexes and partitioned tables built from it; a transaction that named none sends nothing more
+    install();
+    relcache_seams::support_family_relids::set(family_relids);
+    PreCommit_Inval().unwrap();
+    assert!(!crate::PendingInvalidationsTouch(&[300], &[]));
+    with_state(|state| state.support_families.push(77));
+    PreCommit_Inval().unwrap();
+    assert!(crate::PendingInvalidationsTouch(&[300], &[]) && crate::PendingInvalidationsTouch(&[301], &[]));
+    assert!(with_state(|state| state.support_families.is_empty()));
+    AtEOXact_Inval(true).unwrap();
+    let rels: Vec<Oid> = sent_flat().iter().filter_map(|m| match m { SharedInvalidationMessage::Relcache(r) => Some(r.relId), _ => None }).collect();
+    assert!(rels.contains(&300) && rels.contains(&301), "{rels:?}");
 }

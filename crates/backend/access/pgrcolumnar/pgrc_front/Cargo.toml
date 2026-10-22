@@ -1,0 +1,89 @@
+[package]
+name = "pgrc_front"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+# PGRCPRIV: pgrc_compact's privilege rule, VACUUM's (owner / MAINTAIN).
+aclchk_seams = { path = "../../../catalog/aclchk_seams" }
+bufmgr = { path = "../../../storage/buffer/bufmgr" }
+bufmgr_seams = { path = "../../../storage/buffer/bufmgr_seams" }
+datum = { path = "../../../../_support/types/datum" }
+detoast = { path = "../../common/detoast" }
+elog = { path = "../../../utils/error/elog" }
+exectuples = { path = "../../../executor/exectuples" }
+freespace_seams = { path = "../../../storage/freespace/freespace_seams" }
+# IXDMLPATH2: the option caches are re-read after a GUC change (guc::store::store_mutation_count).
+guc = { path = "../../../utils/misc/guc" }
+guc_seams = { path = "../../../utils/misc/guc_seams" }
+heapam = { path = "../../heap/heapam" }
+heaptoast_seams = { path = "../../heap/heaptoast_seams" }
+heaptuple = { path = "../../common/heaptuple" }
+init_small = { path = "../../../utils/init/init_small" }
+latch_seams = { path = "../../../storage/ipc/latch_seams" }
+lmgr = { path = "../../../storage/lmgr/lmgr" }
+lock = { path = "../../../storage/lmgr/lock" }
+lock_seams = { path = "../../../storage/lmgr/lock_seams" }
+# RESID-VACFLUSH: a manual VACUUM's drain bounds its queued attempts (LockTimeout) in a subtransaction.
+lmgr_proc = { path = "../../../storage/lmgr/lmgr_proc" }
+miscinit_seams = { path = "../../../utils/init/miscinit_seams" }
+resowner = { path = "../../../utils/resowner/resowner" }
+mcx = { path = "../../../../_support/mcx" }
+pgrc_am = { path = "../pgrc_am" }
+# K1: the compaction policy (pure).
+pgrc_compact = { path = "../pgrc_compact" }
+pgrc_format = { path = "../pgrc_format" }
+pgrc_front_seams = { path = "../pgrc_front_seams" }
+pgrc_wal_seams = { path = "../pgrc_wal_seams" }
+pgrc_write = { path = "../pgrc_write" }
+pgsync = { path = "../../../../_support/pgsync" }
+# AUTOSTATS: the parent's insert / update / delete counts (heap's pgstat_count_heap_* at its DML sites).
+pgstat = { path = "../../../utils/activity/pgstat" }
+# The determinism lint's sanctioned surfaces (compaction's clock, part stat / dir scan, pause sleep).
+pg_clock = { path = "../../../../port/pg_clock" }
+pg_rusage = { path = "../../../utils/misc/pg_rusage" }
+vfs = { path = "../../../storage/file/vfs" }
+waiter = { path = "../../../storage/ipc/waiter" }
+# COMPACTP item 4: the L0 cap's wait event (PgrcL0Cap, an extension wait event).
+waitevent = { path = "../../../utils/activity/waitevent" }
+postgres_seams = { path = "../../../tcop/postgres_seams" }
+predicate_seams = { path = "../../../storage/lmgr/predicate_seams" }
+procarray = { path = "../../../storage/ipc/procarray" }
+snapmgr = { path = "../../../utils/time/snapmgr" }
+superuser_seams = { path = "../../../utils/misc/superuser_seams" }
+tableam_seams = { path = "../../table/tableam_seams" }
+types_storage = { path = "../../../../_support/types/types_storage" }
+table = { path = "../../table/table" }
+tableam_vocab = { path = "../../table/tableam_vocab" }
+types_core = { path = "../../../../_support/types/types_core" }
+types_fmgr = { path = "../../../../_support/types/fmgr" }
+# K1: pgrc_compact_stats returns text.
+varlena = { path = "../../../utils/adt/varlena" }
+types_nodes = { path = "../../../../_support/types/nodes" }
+types_error = { path = "../../../../_support/types/types_error" }
+types_rel = { path = "../../../../_support/types/rel" }
+types_scan = { path = "../../../../_support/types/types_scan" }
+types_snapshot = { path = "../../../../_support/types/snapshot" }
+types_slot = { path = "../../../../_support/types/types_slot" }
+types_trigger = { path = "../../../../_support/types/types_trigger" }
+types_tuple = { path = "../../../../_support/types/types_tuple" }
+pgrc_marks = { path = "../pgrc_marks" }
+xact = { path = "../../transam/xact" }
+xact_seams = { path = "../../transam/xact_seams" }
+# TOMB: the retired tombstone heap's reset (its index, the fold's age, and the standby conflict record)
+relation_seams = { path = "../../common/relation_seams" }
+relcache_seams = { path = "../../../utils/cache/relcache_seams" }
+transam_xlog_seams = { path = "../../transam/transam_xlog_seams" }
+types_nbtree = { path = "../../../../_support/types/types_nbtree" }
+varsup = { path = "../../transam/varsup" }
+xloginsert_seams = { path = "../../transam/xloginsert_seams" }
+# TOMB: the Gravity spec's pause point (pgrc-front-served-clear)
+injection_point = { path = "../../../utils/misc/injection_point" }
+# TOMB: a named tombstone heap's miss accepts invalidations (tombs::relid)
+inval_seams = { path = "../../../utils/cache/inval_seams" }
+# IXPERF F3b: the tombstone heaps' OIDs are kept until a pg_class name invalidation (a syscache callback)
+inval = { path = "../../../utils/cache/inval" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

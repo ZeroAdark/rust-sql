@@ -373,7 +373,7 @@ fn ondisk_known_answer() {
     b.next_phase_at = InvalidTransactionId;
     b.committed_xip.extend_from_slice(&[10, 11]);
 
-    let image = ondisk::build_image(&b, &[12]);
+    let image = ondisk::build_image(&b, &[12]).unwrap();
     assert_eq!(image.len(), 156);
     assert_eq!(u32::from_ne_bytes(image[0..4].try_into().unwrap()), SNAPBUILD_MAGIC);
     assert_eq!(u32::from_ne_bytes(image[8..12].try_into().unwrap()), SNAPBUILD_VERSION);
@@ -637,4 +637,26 @@ fn short_snapshot_write_without_errno_is_reported_as_enospc() {
         libc::close(rd);
         libc::close(wr);
     }
+}
+
+// snapbuild.c:550/620: the resource owner current when the snapshot was
+// exported comes back after the export transaction is aborted;
+// CleanupTransaction alone leaves it NULL.
+#[test]
+fn exported_snapshot_owner_is_saved_and_restored() {
+    let _l = test_lock();
+    let owner = resowner::ResourceOwnerCreate(types_resowner::ResourceOwner::NULL, "walsender")
+        .unwrap();
+    resowner::SetCurrentResourceOwner(owner);
+    SAVED_RESOURCE_OWNER_DURING_EXPORT.set(resowner::CurrentResourceOwner());
+    resowner::SetCurrentResourceOwner(types_resowner::ResourceOwner::NULL);
+    resowner::SetCurrentResourceOwner(SAVED_RESOURCE_OWNER_DURING_EXPORT.take());
+    assert_eq!(resowner::CurrentResourceOwner(), owner);
+    assert!(SAVED_RESOURCE_OWNER_DURING_EXPORT.get().is_null());
+    // An abort-time reset drops the saved owner as C's does.
+    SAVED_RESOURCE_OWNER_DURING_EXPORT.set(owner);
+    snap_build_reset_exported_snapshot_state();
+    assert!(SAVED_RESOURCE_OWNER_DURING_EXPORT.get().is_null());
+    resowner::SetCurrentResourceOwner(types_resowner::ResourceOwner::NULL);
+    resowner::ResourceOwnerDelete(owner);
 }

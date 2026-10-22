@@ -1,0 +1,11 @@
+-- regress-full-insert-034
+-- insert into list_parted select 'gg', s.a from generate_series(1, 9) s(a);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:9)]
+  project (1=c25:'gg', 2=v3.1)
+  write INSERT rel=17776 rti=1 natts=2 indexes=() route=rti1:17776 natts=2
+  outs 1=vl:stmt/imm 2=w4:val
+mapped: ModifyTable FunctionScan

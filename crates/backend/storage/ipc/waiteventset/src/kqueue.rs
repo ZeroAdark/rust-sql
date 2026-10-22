@@ -44,7 +44,7 @@ impl BackendSet {
         }
         Ok(BackendSet {
             kqueue_fd: kq,
-            ret_events: Vec::with_capacity(nevents.max(0) as usize),
+            ret_events: ::mcx::std_vec_with_capacity("storage", nevents.max(0) as usize)?,
         })
     }
 

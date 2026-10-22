@@ -1,0 +1,20 @@
+-- regress-full-aggregates-082
+-- select rank('adam'::varchar) within group (order by x) from (values ('fred'),('jim')) v(x);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@1^
+  source values rti=2 rows=2
+    row (c25:'fred')
+    row (c25:'jim')
+  project (1=v2.1)
+  outs 1=vl:row
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg3986(1=outer.1))
+  outs 1=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(72) spill=None producer=p0 layout=[]->[Count@0]+valid 16B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=3986 reg=Hypothetical slot=- count_slot=- final=Hypo class=Hypothetical(Rank) trans=Var mods=[order=1 direct=1] expr=agg3986(1=outer.1)
+mapped: ValuesScan Agg

@@ -1,0 +1,17 @@
+-- regress-full-foreign_data-023
+-- SELECT has_server_privilege( (SELECT oid FROM pg_foreign_server WHERE srvname='s8'), 'USAGE');
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0
+  source range rel=1417 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v2.2, c19:#64)
+  project (1=v2.1)
+  outs 1=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3011($exec0, c25:'USAGE'))
+  outs 1=w1:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: Result SeqScan SubPlan

@@ -25,6 +25,7 @@
 #![allow(non_snake_case)]
 
 use types_error::PgResult;
+use elog::PCT_M;
 
 /// C `IpcMemoryState` (sysv_shmem.c): how a given segment id relates to this
 /// process. Variant order and meaning are C's.
@@ -75,7 +76,7 @@ fn detach_at(addr: *mut libc::c_void, line: i32, func: &'static str) -> PgResult
         let errnum = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         elog::ereport(types_error::LOG)
             .with_saved_errno(errnum)
-            .errmsg_internal(format!("shmdt({addr:p}) failed: %m"))
+            .errmsg_internal(format!("shmdt({addr:p}) failed: {PCT_M}"))
             .finish(types_error::ErrorLocation::new("sysv_shmem.c", line, func))?;
     }
     Ok(())
@@ -254,7 +255,7 @@ pub fn PGSharedMemoryCreate(dsm_cleanup: fn(u32) -> PgResult<()>) -> PgResult<()
         return elog::ereport(types_error::FATAL)
             .with_saved_errno(errnum)
             .errcode_for_file_access()
-            .errmsg(format!("could not stat data directory \"{datadir}\": %m"))
+            .errmsg(format!("could not stat data directory \"{datadir}\": {PCT_M}"))
             .finish(types_error::ErrorLocation::new("sysv_shmem.c", 716, "PGSharedMemoryCreate"));
     }
 

@@ -151,6 +151,7 @@ pub struct LibXml2 {
     pub xmlInitParser: unsafe extern "C" fn(),
     xmlFreeVar: *const xmlFreeFunc,
     pub xmlStrdup: unsafe extern "C" fn(cur: *const c_uchar) -> *mut c_uchar,
+    pub xmlGetUTF8Char: unsafe extern "C" fn(utf: *const c_uchar, len: *mut c_int) -> c_int,
     pub xmlStrlen: unsafe extern "C" fn(s: *const c_uchar) -> c_int,
     pub xmlNewParserCtxt: unsafe extern "C" fn() -> *mut xmlParserCtxt,
     pub xmlFreeParserCtxt: unsafe extern "C" fn(ctxt: *mut xmlParserCtxt),
@@ -259,6 +260,18 @@ pub struct LibXml2 {
     pub xmlXPathCastBooleanToNumber: unsafe extern "C" fn(val: c_int) -> f64,
     pub xmlXPathCastNumberToString: unsafe extern "C" fn(val: f64) -> *mut c_uchar,
     pub xmlSetExternalEntityLoader: unsafe extern "C" fn(f: Option<xmlExternalEntityLoader>),
+    pub xmlReadMemory: unsafe extern "C" fn(
+        buffer: *const c_char,
+        size: c_int,
+        URL: *const c_char,
+        encoding: *const c_char,
+        options: c_int,
+    ) -> *mut xmlDoc,
+    pub xmlDocGetRootElement: unsafe extern "C" fn(doc: *const xmlDoc) -> *mut xmlNode,
+    pub xmlXPathCastToNumber: unsafe extern "C" fn(val: *mut xmlXPathObject) -> f64,
+    pub xmlXPathCastToBoolean: unsafe extern "C" fn(val: *mut xmlXPathObject) -> c_int,
+    pub xmlBufferWriteChar: unsafe extern "C" fn(buf: *mut xmlBuffer, string: *const c_char),
+    pub xmlBufferWriteCHAR: unsafe extern "C" fn(buf: *mut xmlBuffer, string: *const c_uchar),
     pub xmlSetStructuredErrorFunc:
         unsafe extern "C" fn(ctx: *mut c_void, handler: Option<xmlStructuredErrorFunc>),
 }
@@ -336,6 +349,7 @@ fn load() -> Result<&'static LibXml2, String> {
         xmlInitParser: resolve!(xmlInitParser),
         xmlFreeVar,
         xmlStrdup: resolve!(xmlStrdup),
+        xmlGetUTF8Char: resolve!(xmlGetUTF8Char),
         xmlStrlen: resolve!(xmlStrlen),
         xmlNewParserCtxt: resolve!(xmlNewParserCtxt),
         xmlFreeParserCtxt: resolve!(xmlFreeParserCtxt),
@@ -382,6 +396,12 @@ fn load() -> Result<&'static LibXml2, String> {
         xmlXPathCastBooleanToNumber: resolve!(xmlXPathCastBooleanToNumber),
         xmlXPathCastNumberToString: resolve!(xmlXPathCastNumberToString),
         xmlSetExternalEntityLoader: resolve!(xmlSetExternalEntityLoader),
+        xmlReadMemory: resolve!(xmlReadMemory),
+        xmlDocGetRootElement: resolve!(xmlDocGetRootElement),
+        xmlXPathCastToNumber: resolve!(xmlXPathCastToNumber),
+        xmlXPathCastToBoolean: resolve!(xmlXPathCastToBoolean),
+        xmlBufferWriteChar: resolve!(xmlBufferWriteChar),
+        xmlBufferWriteCHAR: resolve!(xmlBufferWriteCHAR),
         xmlSetStructuredErrorFunc: resolve!(xmlSetStructuredErrorFunc),
     })))
 }
@@ -392,7 +412,8 @@ pub unsafe fn node_type(node: *mut xmlNode) -> c_int {
 }
 
 pub fn cstr(bytes: &[u8]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(bytes.len() + 1);
+    let mut v = Vec::new();
+    let _ = v.try_reserve_exact(bytes.len() + 1);
     v.extend_from_slice(bytes);
     v.push(0);
     v
@@ -405,7 +426,10 @@ pub unsafe fn xmlchar_to_vec(p: *const c_uchar) -> Vec<u8> {
     // SAFETY: p is a NUL-terminated libxml string per caller contract.
     unsafe {
         let len = (xml2().xmlStrlen)(p) as usize;
-        std::slice::from_raw_parts(p, len).to_vec()
+        let mut v = Vec::new();
+        let _ = v.try_reserve_exact(len);
+        v.extend_from_slice(std::slice::from_raw_parts(p, len));
+        v
     }
 }
 
@@ -417,7 +441,10 @@ pub unsafe fn buffer_to_vec(buf: *mut xmlBuffer) -> Vec<u8> {
         if content.is_null() {
             Vec::new()
         } else {
-            std::slice::from_raw_parts(content, len).to_vec()
+            let mut v = Vec::new();
+            let _ = v.try_reserve_exact(len);
+            v.extend_from_slice(std::slice::from_raw_parts(content, len));
+            v
         }
     }
 }

@@ -75,9 +75,9 @@ fn adjust_cmax_passthrough_for_committed_xmin() {
 #[test]
 fn combo_cids_are_reused_and_allocated_in_order() {
     setup();
-    let a = GetComboCommandId(1, 2);
-    let b = GetComboCommandId(3, 4);
-    let c = GetComboCommandId(1, 2);
+    let a = GetComboCommandId(1, 2).unwrap();
+    let b = GetComboCommandId(3, 4).unwrap();
+    let c = GetComboCommandId(1, 2).unwrap();
     assert_eq!(a, 0);
     assert_eq!(b, 1);
     assert_eq!(c, a);
@@ -88,8 +88,8 @@ fn combo_cids_are_reused_and_allocated_in_order() {
 #[test]
 fn serialize_restore_roundtrip_across_thread() {
     setup();
-    assert_eq!(GetComboCommandId(1, 2), 0);
-    assert_eq!(GetComboCommandId(3, 4), 1);
+    assert_eq!(GetComboCommandId(1, 2).unwrap(), 0);
+    assert_eq!(GetComboCommandId(3, 4).unwrap(), 1);
 
     let state = SerializeComboCIDState();
     assert_eq!(&state[..], &[(1, 2), (3, 4)]);
@@ -100,8 +100,8 @@ fn serialize_restore_roundtrip_across_thread() {
         assert_eq!(GetRealCmax(0), 2);
         assert_eq!(GetRealCmin(1), 3);
         assert_eq!(GetRealCmax(1), 4);
-        assert_eq!(GetComboCommandId(3, 4), 1);
-        assert_eq!(GetComboCommandId(5, 6), 2);
+        assert_eq!(GetComboCommandId(3, 4).unwrap(), 1);
+        assert_eq!(GetComboCommandId(5, 6).unwrap(), 2);
     })
     .join()
     .unwrap();
@@ -132,10 +132,10 @@ fn restored_state_resolves_tuple_combo_cids_on_worker_thread() {
 #[test]
 fn at_eoxact_forgets_combo_state() {
     setup();
-    assert_eq!(GetComboCommandId(1, 2), 0);
-    assert_eq!(GetComboCommandId(5, 6), 1);
+    assert_eq!(GetComboCommandId(1, 2).unwrap(), 0);
+    assert_eq!(GetComboCommandId(5, 6).unwrap(), 1);
     AtEOXact_ComboCid();
-    assert_eq!(GetComboCommandId(5, 6), 0);
+    assert_eq!(GetComboCommandId(5, 6).unwrap(), 0);
 }
 
 #[test]

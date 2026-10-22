@@ -1,0 +1,111 @@
+-- regress-full-stats-010
+-- CREATE TABLE prevstats AS SELECT t.seq_scan, t.seq_tup_read, t.idx_scan, t.idx_tup_fetch, (b.heap_blks_read + b.heap_blks_hit) AS heap_blks, (b.idx_blks_read + b.idx_blks_hit) AS idx_blks, pg_stat_get_snapshot_timestamp() as snap_ts FROM pg_catalog.pg_stat_user_tables AS t, pg_catalog.pg_statio_user_tables AS b WHERE t.relname='tenk2' AND b.relname='tenk2';
+graph pipelines=6 breakers=5 init_plans=0 root=p5
+p0 node=5 serial site=0 reason=IndexSource end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n5@0 n4@2
+  source index rel=1259 rti=5 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v5.2, c19:#64))
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Attr(14):byval8:w8:val Attr(18):byval8:w8:val
+  filter any92(v5.18, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00rtm')
+  project (1=v5.1, 2=v5.3, 3=v5.14)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=w8:val 2=w8:val 3=w8:val
+p1 node=13 serial site=0 reason=IndexSource end=breaker(slot=1 HashBuild)
+  desc words=bits@6/7
+  nodes n13@0 n12@2
+  source index rel=1259 rti=14 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v14.2, c19:#64))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(18):byval8:w8:val
+  filter any92(v14.18, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00rtmp')
+  project (1=v14.1, 2=v14.2, 3=v14.3)
+  build keys=(outer.3) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w8:val
+p2 node=11 eligible rows=95 end=breaker(slot=2 Sort)
+  desc consumes=slot1@p1 finishing
+  nodes n11@0 n10@3 n9@5 n8@7^
+  source range rel=2615 rti=17 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter all643(v17.2, c1003:'\x01\x00\x00\x00\x00\x00\x00\x00\x13\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00pg_catalog\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00information_schema\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+  filter op640(v17.2, c25:'^pg_toast')
+  project (1=v17.1, 2=v17.2, 3=v17.3, 4=v17.4)
+  probe slot=1 inner=n12 JOIN_INNER unique keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.3))
+  project (1=inner.1, 2=inner.2, 3=outer.2)
+  nest inner=n14 JOIN_LEFT raise-free params=($exec1=outer.1)
+  inner node=14 serial site=0 reason=IndexSource end=sink
+  nodes n15@0 n14@0
+  source bitmap rel=2610 rti=15 am=heap
+    bitmap index node=15 index=2678 rows=2
+      key att=2 op=607 value=$exec1
+    recheck (op607($exec1, v15.2))
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v15.1, 2=v15.2, 3=v15.3, 4=v15.4, 5=v15.5, 6=v15.6, 7=v15.7, 8=v15.8, 9=v15.9, 10=v15.10, 11=v15.11, 12=v15.12, 13=v15.13, 14=v15.14, 15=v15.15, 16=v15.16, 17=v15.17, 18=v15.18, 19=v15.19, 20=v15.20, 21=v15.21)
+  project (1=outer.1, 2=outer.3, 3=outer.2, 4=inner.1)
+  sort keys=1+:I32,2+:Fp128@950#19 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+  outs 1=w4:val 2=fx64:life/breaker 3=fx64:win/page
+  outs 1=w4:val 2=fx64:win/page 3=fx64:life/breaker 4=w4:val
+p3 node=8 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 HashAgg)
+  desc consumes=slot2@p2 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n8@0 n7@1^
+  source breaker slot=2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=w4:val 2=fx64:win/page 3=fx64:life/breaker 4=w4:val
+p4 node=18 serial site=0 reason=IndexSource end=breaker(slot=4 PlainAgg)
+  nodes n19@0 n18@0 n17@1^
+  source bitmap rel=2610 rti=20 am=heap
+    bitmap index node=19 index=2678 rows=2
+      key att=2 op=607 value=$exec0
+    recheck (op607(v20.2, $exec0))
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v20.1, 2=v20.2, 3=v20.3, 4=v20.4, 5=v20.5, 6=v20.6, 7=v20.7, 8=v20.8, 9=v20.9, 10=v20.10, 11=v20.11, 12=v20.12, 13=v20.13, 14=v20.14, 15=v20.15, 16=v20.16, 17=v20.17, 18=v20.18, 19=v20.19, 20=v20.20, 21=v20.21)
+  outs 1=w8:val 2=w4:val 3=w2:val 4=w2:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w1:val 11=w1:val 12=w1:val 13=w1:val 14=w1:val 15=w1:val 16=vl:row 17=vl:row 18=vl:row 19=vl:row 20=vl:row 21=vl:row
+p5 node=3 eligible rows=95 end=sink
+  desc consumes=slot0@p0 consumes=slot3@p3 consumes=slot4@p4
+  nodes n3@0 n2@3 n1@5 n0@7
+  source range rel=2615 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter all643(v8.2, c1003:'\x01\x00\x00\x00\x00\x00\x00\x00\x13\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00pg_catalog\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00information_schema\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+  filter op640(v8.2, c25:'^pg_toast')
+  project (1=v8.1, 2=v8.2, 3=v8.3, 4=v8.4)
+  probe slot=0 inner=n4 JOIN_INNER unique keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.2))
+  project (1=inner.1)
+  nest inner=n7 JOIN_INNER invariant vol=s params=()
+  inner node=7 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot3@p3
+  nodes n7@0
+  source breaker slot=3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=fn1928(outer.1), 5=c1184:null, 6=fn1929(outer.1), 7=fn1779(agg2107(1=fn1928(outer.4))), 8=c1184:null, 9=op684(fn1779(agg2107(1=fn1930(outer.4))), fn1930(outer.1)), 10=c20:null, 11=c20:null, 12=c20:null, 13=c20:null, 14=c20:null, 15=c20:null, 16=c20:null, 17=c20:null, 18=c20:null, 19=c1184:null, 20=c1184:null, 21=c1184:null, 22=c1184:null, 23=c20:null, 24=c20:null, 25=c20:null, 26=c20:null, 27=c701:null, 28=c701:null, 29=c701:null, 30=c701:null)
+  project (1=inner.4, 2=inner.6, 3=inner.7, 4=inner.9, 5=outer.1)
+  nest inner=n17 JOIN_LEFT vol=s params=($exec0=outer.5)
+  inner node=17 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot4@p4
+  nodes n17@0
+  source breaker slot=4
+  project (1=fn1779(agg2107(1=op685(fn1934(outer.1), fn1935(outer.1)))), 2=fn1779(agg2107(1=fn1935(outer.1))))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=op684(op685(fn1934(outer.5), fn1935(outer.5)), fn1935(outer.5)), 6=op684(inner.1, inner.2), 7=fn3788())
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+  outs 1=w4:val
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w4:val
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p2 layout=[I32,Fp128,Fp128]->[Count@24] 32B order=1+,2+
+breaker slot=3 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32,Fp128,Fp128,Fp128,Fp128]->[SumI128@40,SumI128@56,MinCode@72,MinCode@80,Count@88]+valid 104B order=1+,2+,3+
+breaker slot=4 kind=PlainAgg budget=Fixed(96) spill=None producer=p4 layout=[]->[SumI128@0,SumI128@16,Count@32] 40B
+group slot=3 producer=p3 node=7 form=Sorted hints=[] layout=[I32,Fp128,Fp128,Fp128,Fp128]->[SumI128@40,SumI128@56,MinCode@72,MinCode@80,Count@88]+valid 104B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=26 expr=outer.1
+  key 1 word=1 resno=2 kind=Fp128 attno=0 type=19 rep=2 expr=outer.2
+  key 2 word=3 resno=3 kind=Fp128 attno=0 type=19 rep=3 expr=outer.3
+  agg aggno=0 fn=2107 reg=SumInt128 slot=0 count_slot=- final=Int128Sum class=SumI128 trans=Abi(SumI128) mods=[] expr=agg2107(1=fn1928(outer.4))
+  agg aggno=1 fn=2107 reg=SumInt128 slot=1 count_slot=- final=Int128Sum class=SumI128 trans=Abi(SumI128) mods=[] expr=agg2107(1=fn1930(outer.4))
+group slot=4 producer=p4 node=17 form=Plain hints=[] layout=[]->[SumI128@0,SumI128@16,Count@32] 40B
+  agg aggno=0 fn=2107 reg=SumInt128 slot=0 count_slot=- final=Int128Sum class=SumI128 trans=Abi(SumI128) mods=[] expr=agg2107(1=op685(fn1934(outer.1), fn1935(outer.1)))
+  agg aggno=1 fn=2107 reg=SumInt128 slot=1 count_slot=- final=Int128Sum class=SumI128 trans=Abi(SumI128) mods=[] expr=agg2107(1=fn1935(outer.1))
+rerun node=1 pipelines=p1,p2,p3 slots=1,2,3 kept
+rerun node=0 pipelines=p4 slots=4
+param $exec1 owner=n9 type=26 rep=w4:val
+param $exec0 owner=n0 type=26 rep=w4:val
+mapped: SeqScan IndexScan BitmapIndexScan BitmapHeapScan NestLoop NestLoopParam HashJoin Sort Agg Hash

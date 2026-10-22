@@ -1,0 +1,212 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1body s2del s1c s2show s2count
+step s2x: EXPLAIN (COSTS OFF) DELETE FROM comments WHERE comments.id IN (SELECT comments.id FROM comments INNER JOIN posts ON posts.id = comments.post_id INNER JOIN authors ON authors.id = posts.author_id WHERE authors.banned = TRUE);
+QUERY PLAN                                                                               
+-----------------------------------------------------------------------------------------
+Delete on comments                                                                       
+  ->  Hash Semi Join                                                                     
+        Hash Cond: (comments.id = comments_1.id)                                         
+        ->  Seq Scan on comments                                                         
+        ->  Hash                                                                         
+              ->  Nested Loop                                                            
+                    ->  Nested Loop                                                      
+                          ->  Seq Scan on authors                                        
+                                Filter: banned                                           
+                          ->  Bitmap Heap Scan on posts                                  
+                                Recheck Cond: (author_id = authors.id)                   
+                                ->  Bitmap Index Scan on index_posts_on_author_id        
+                                      Index Cond: (author_id = authors.id)               
+                    ->  Index Scan using index_comments_on_post_id on comments comments_1
+                          Index Cond: (post_id = posts.id)                               
+(15 rows)
+
+step s1body: UPDATE comments SET body = 'edited' WHERE id = 248;
+step s2del: DELETE FROM comments WHERE comments.id IN (SELECT comments.id FROM comments INNER JOIN posts ON posts.id = comments.post_id INNER JOIN authors ON authors.id = posts.author_id WHERE authors.banned = TRUE); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT id, post_id, body, flagged FROM comments WHERE id IN (248, 900248, 30248) ORDER BY id;
+id|post_id|body|flagged
+--+-------+----+-------
+(0 rows)
+
+step s2count: SELECT count(*), count(*) FILTER (WHERE flagged) FROM comments;
+count|count
+-----+-----
+89982|    0
+(1 row)
+
+
+starting permutation: s1move s2del s1c s2show s2count
+step s1move: UPDATE comments SET post_id = 1 WHERE id = 248;
+step s2del: DELETE FROM comments WHERE comments.id IN (SELECT comments.id FROM comments INNER JOIN posts ON posts.id = comments.post_id INNER JOIN authors ON authors.id = posts.author_id WHERE authors.banned = TRUE); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT id, post_id, body, flagged FROM comments WHERE id IN (248, 900248, 30248) ORDER BY id;
+id|post_id|body|flagged
+--+-------+----+-------
+(0 rows)
+
+step s2count: SELECT count(*), count(*) FILTER (WHERE flagged) FROM comments;
+count|count
+-----+-----
+89982|    0
+(1 row)
+
+
+starting permutation: s1del s2del s1c s2show s2count
+step s1del: DELETE FROM comments WHERE id = 248;
+step s2del: DELETE FROM comments WHERE comments.id IN (SELECT comments.id FROM comments INNER JOIN posts ON posts.id = comments.post_id INNER JOIN authors ON authors.id = posts.author_id WHERE authors.banned = TRUE); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT id, post_id, body, flagged FROM comments WHERE id IN (248, 900248, 30248) ORDER BY id;
+id|post_id|body|flagged
+--+-------+----+-------
+(0 rows)
+
+step s2count: SELECT count(*), count(*) FILTER (WHERE flagged) FROM comments;
+count|count
+-----+-----
+89982|    0
+(1 row)
+
+
+starting permutation: s1id s2del s1c s2show s2count
+step s1id: UPDATE comments SET id = 900248 WHERE id = 248;
+step s2del: DELETE FROM comments WHERE comments.id IN (SELECT comments.id FROM comments INNER JOIN posts ON posts.id = comments.post_id INNER JOIN authors ON authors.id = posts.author_id WHERE authors.banned = TRUE); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT id, post_id, body, flagged FROM comments WHERE id IN (248, 900248, 30248) ORDER BY id;
+    id|post_id|body|flagged
+------+-------+----+-------
+900248|    249|b248|f      
+(1 row)
+
+step s2count: SELECT count(*), count(*) FILTER (WHERE flagged) FROM comments;
+count|count
+-----+-----
+89983|    0
+(1 row)
+
+
+starting permutation: s1body s2upd s1c s2show s2count
+step s1body: UPDATE comments SET body = 'edited' WHERE id = 248;
+step s2upd: UPDATE comments SET flagged = TRUE WHERE comments.id IN (SELECT comments.id FROM comments INNER JOIN posts ON posts.id = comments.post_id INNER JOIN authors ON authors.id = posts.author_id WHERE authors.banned = TRUE) RETURNING id, post_id, body; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+   id|post_id|body  
+-----+-------+------
+  248|    249|edited
+ 5248|   5249|b5248 
+10248|  10249|b10248
+15248|  15249|b15248
+20248|  20249|b20248
+25248|  25249|b25248
+30248|    249|b30248
+35248|   5249|b35248
+40248|  10249|b40248
+45248|  15249|b45248
+50248|  20249|b50248
+55248|  25249|b55248
+60248|    249|b60248
+65248|   5249|b65248
+70248|  10249|b70248
+75248|  15249|b75248
+80248|  20249|b80248
+85248|  25249|b85248
+(18 rows)
+
+step s2show: SELECT id, post_id, body, flagged FROM comments WHERE id IN (248, 900248, 30248) ORDER BY id;
+   id|post_id|body  |flagged
+-----+-------+------+-------
+  248|    249|edited|t      
+30248|    249|b30248|t      
+(2 rows)
+
+step s2count: SELECT count(*), count(*) FILTER (WHERE flagged) FROM comments;
+count|count
+-----+-----
+90000|   18
+(1 row)
+
+
+starting permutation: s1move s2upd s1c s2show s2count
+step s1move: UPDATE comments SET post_id = 1 WHERE id = 248;
+step s2upd: UPDATE comments SET flagged = TRUE WHERE comments.id IN (SELECT comments.id FROM comments INNER JOIN posts ON posts.id = comments.post_id INNER JOIN authors ON authors.id = posts.author_id WHERE authors.banned = TRUE) RETURNING id, post_id, body; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+   id|post_id|body  
+-----+-------+------
+  248|      1|b248  
+ 5248|   5249|b5248 
+10248|  10249|b10248
+15248|  15249|b15248
+20248|  20249|b20248
+25248|  25249|b25248
+30248|    249|b30248
+35248|   5249|b35248
+40248|  10249|b40248
+45248|  15249|b45248
+50248|  20249|b50248
+55248|  25249|b55248
+60248|    249|b60248
+65248|   5249|b65248
+70248|  10249|b70248
+75248|  15249|b75248
+80248|  20249|b80248
+85248|  25249|b85248
+(18 rows)
+
+step s2show: SELECT id, post_id, body, flagged FROM comments WHERE id IN (248, 900248, 30248) ORDER BY id;
+   id|post_id|body  |flagged
+-----+-------+------+-------
+  248|      1|b248  |t      
+30248|    249|b30248|t      
+(2 rows)
+
+step s2count: SELECT count(*), count(*) FILTER (WHERE flagged) FROM comments;
+count|count
+-----+-----
+90000|   18
+(1 row)
+
+
+starting permutation: s1id s2upd s1c s2show s2count
+step s1id: UPDATE comments SET id = 900248 WHERE id = 248;
+step s2upd: UPDATE comments SET flagged = TRUE WHERE comments.id IN (SELECT comments.id FROM comments INNER JOIN posts ON posts.id = comments.post_id INNER JOIN authors ON authors.id = posts.author_id WHERE authors.banned = TRUE) RETURNING id, post_id, body; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+   id|post_id|body  
+-----+-------+------
+ 5248|   5249|b5248 
+10248|  10249|b10248
+15248|  15249|b15248
+20248|  20249|b20248
+25248|  25249|b25248
+30248|    249|b30248
+35248|   5249|b35248
+40248|  10249|b40248
+45248|  15249|b45248
+50248|  20249|b50248
+55248|  25249|b55248
+60248|    249|b60248
+65248|   5249|b65248
+70248|  10249|b70248
+75248|  15249|b75248
+80248|  20249|b80248
+85248|  25249|b85248
+(17 rows)
+
+step s2show: SELECT id, post_id, body, flagged FROM comments WHERE id IN (248, 900248, 30248) ORDER BY id;
+    id|post_id|body  |flagged
+------+-------+------+-------
+ 30248|    249|b30248|t      
+900248|    249|b248  |f      
+(2 rows)
+
+step s2count: SELECT count(*), count(*) FILTER (WHERE flagged) FROM comments;
+count|count
+-----+-----
+90000|   17
+(1 row)
+

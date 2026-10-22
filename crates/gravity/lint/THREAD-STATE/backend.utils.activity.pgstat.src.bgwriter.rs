@@ -1,0 +1,2 @@
+backend/utils/activity/pgstat/src/bgwriter.rs	PENDING_BGWRITER_STATS	pgport	at:pgstat_report_bgwriter	thread	the bgwriter's pending counts (PendingBgWriterStats), bumped by BgBufferSync on the bgwriter's own thread, zeroed by its pgstat_report_bgwriter flush
+backend/utils/activity/pgstat/src/bgwriter.rs	SNAPSHOT_BGWRITER	pgport	at:pgstat_bgwriter_snapshot_clear	leader	the stats snapshot's bgwriter copy: read by pg_stat_get_bgwriter_* (proparallel r: the leader's), cleared with the snapshot at transaction end (clear_snapshot)

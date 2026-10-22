@@ -331,7 +331,7 @@ fn bit_cmp_payload_returns_memcmp_difference() {
     assert_eq!(bit_cmp_payload(&f[4..], &e[4..]), 1);
 }
 
-// regression: varbit.c:235 formats the bad digit with pg_mblen_cstr,
+// fp-adt-varbit#1: varbit.c:235 formats the bad digit with pg_mblen_cstr,
 // whose terminator scan (mbutils.c:1052-1054) raises the invalid-byte-sequence
 // error for a lead byte whose character would run past the end of the string.
 #[test]
@@ -347,4 +347,47 @@ fn truncated_multibyte_digit_is_invalid_byte_sequence() {
     assert_eq!(e.message(), "invalid byte sequence for encoding \"UTF8\": 0xe9");
     let e = bit_in_cstr(mcx, b"1\xc3\xa9").unwrap_err();
     assert_eq!(e.message(), "\"é\" is not a valid binary digit");
+}
+
+// PG_GETARG_ARRAYTYPE_P detoasts: a typmod array that passed through a formed
+// tuple arrives with a 1-byte header.
+mod typmodin_short_header {
+    use ::datum::Datum;
+    use ::mcx::MemoryContext;
+    use ::types_fmgr::LocalFcinfo;
+
+    fn install_short_expand() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            if !::detoast_seams::detoast_attr::is_installed() {
+                ::detoast_seams::detoast_attr::set(|mcx, image| {
+                    assert_eq!(image[0] & 0x01, 0x01, "1B short header");
+                    let total = image.len() + 3;
+                    let mut v = ::mcx::vec_with_capacity_in(mcx, total)?;
+                    ::mcx::vec_append_bytes(&mut v, &((total as u32) << 2).to_ne_bytes())?;
+                    ::mcx::vec_append_bytes(&mut v, &image[1..])?;
+                    Ok(v)
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn bittypmodin_detoasts_short_header_array() {
+        install_short_expand();
+        let mut body = Vec::new();
+        for w in [1i32, 0, 2275, 1, 1] {
+            body.extend_from_slice(&w.to_ne_bytes());
+        }
+        body.extend_from_slice(b"5\0" as &[u8]);
+        let mut img = vec![(((body.len() + 1) as u8) << 1) | 0x01];
+        img.extend_from_slice(&body);
+        let ctx = MemoryContext::new_bump("t");
+        let mut fci = LocalFcinfo::<1>::fresh(0);
+        // SAFETY: ctx outlives the call.
+        unsafe { fci.set_result_mcx(ctx.mcx()) };
+        fci.set_arg(0, Datum::from_usize(img.as_ptr() as usize));
+        let d = crate::fc_bittypmodin(None, &mut fci).unwrap();
+        assert_eq!(d.as_i32(), 5);
+    }
 }

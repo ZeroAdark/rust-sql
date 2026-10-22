@@ -215,3 +215,27 @@ fn fmt_g_matches_c_printf() {
     assert_eq!(fmt_g(f64::INFINITY), "Infinity");
     assert_eq!(fmt_g(f64::NEG_INFINITY), "-Infinity");
 }
+
+// pseudorandomfuncs.c:117 `(stddev * z) + mean` is fmadd on aarch64.
+// PG 18.6 pgdg aarch64 / amd64 after setseed(0.5), live SQL. glibc
+// libm only (z's last ulp depends on ln/sin).
+#[cfg(target_os = "linux")]
+#[test]
+fn drandom_normal_fmadd() {
+    let arm = cfg!(target_arch = "aarch64");
+    setseed(0.5).unwrap();
+    assert_eq!(drandom_normal(1.1, 3.7), 10.657997879593871);
+    let want = if arm { -0.5699657694872223 } else { -0.5699657694872222 };
+    assert_eq!(drandom_normal(1.1, 3.7), want);
+    let want = if arm { 7.864445562205447 } else { 7.8644455622054465 };
+    assert_eq!(drandom_normal(0.3, 7.77), want);
+}
+
+#[test]
+fn reset_seed_for_new_backend_forgets_setseed() {
+    setseed(0.42).unwrap();
+    let seeded = drandom();
+    setseed(0.42).unwrap();
+    reset_seed_for_new_backend();
+    assert_ne!(drandom().to_bits(), seeded.to_bits());
+}

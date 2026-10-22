@@ -96,6 +96,7 @@ fn make_portal(mcx: Mcx<'_>) -> Portal<'_> {
         activeSubid: 0,
         createLevel: 0,
         sourceText: None,
+        sourceTextOwned: None,
         commandTag: CMDTAG_UNKNOWN,
         qc: QueryCompletion::default(),
         stmts: StmtListHandle::NULL,
@@ -125,6 +126,8 @@ fn make_portal(mcx: Mcx<'_>) -> Portal<'_> {
         cursorFillExhausted: false,
         currentOfEligible: None,
         cursorCaptureBatch: false,
+        gravity: 0,
+        memory_owner: None,
         cursorTidStore: TuplestoreHandle::NULL,
     })
 }

@@ -1,0 +1,12 @@
+-- regress-full-insert_conflict-019
+-- insert into selfconflict values (4,1), (4,2) on conflict(f1) do update set f2 = 0;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source values rti=2 rows=2
+    row (c23:4, c23:1)
+    row (c23:4, c23:2)
+  project (1=v2.1, 2=v2.2)
+  write INSERT rel=18322 rti=1 natts=2 indexes=(18326[1]up) on_conflict=update arbiter=(18326) excl_rti=3 cols=(2) set=(1=c23:0)
+  outs 1=w4:val 2=w4:val
+mapped: ModifyTable ValuesScan

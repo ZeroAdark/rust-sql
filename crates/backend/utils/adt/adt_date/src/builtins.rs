@@ -12,7 +12,7 @@ use ::types_core::Oid;
 use ::types_error::PgResult;
 use ::types_fmgr::{
     byref_result, overlaps_common, varlena_result, FmgrBuiltin, FmgrInfo,
-    FunctionCallInfoBaseData as Fcinfo, PGFunction,
+    FunctionCallInfoBaseData as Fcinfo, OutInto, PGFunction, OUT_CHARS_DATETIME,
 };
 
 use crate::{DateADT, TimeTzADT};
@@ -79,11 +79,14 @@ pub fn fc_date_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
     Ok(Datum::from_i32(crate::date_in(s, esc)?))
 }
 
-pub fn fc_date_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+pub fn fc_date_out(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let date = arg_date(fcinfo, 0);
-    let mut buf: crate::DateBuf = [0; MAXDATELEN + 1];
-    let len = crate::date_out(date, &mut buf);
-    Ok(::types_fmgr::cstring_scratch(flinfo, "date_out", &buf[..len]))
+    ::types_fmgr::out_cstring(fcinfo, MAXDATELEN + 2, |buf| crate::date_out(date, date_buf(buf)))
+}
+
+// A DateBuf view of the first MAXDATELEN + 1 bytes of `buf`.
+fn date_buf(buf: &mut [u8]) -> &mut crate::DateBuf {
+    (&mut buf[..MAXDATELEN + 1]).try_into().expect("a DateBuf's bytes")
 }
 
 pub fn fc_date_recv(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -637,18 +640,18 @@ pub fn fc_interval_finite(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -
 
 pub fn fc_timestamp_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let typmod = fcinfo.arg_i32(2);
-    let s = in_arg(fcinfo);
+    let s = in_raw(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_i64(adt_timestamp::timestamp_in(&s, typmod, esc)?))
+    Ok(Datum::from_i64(adt_timestamp::timestamp_in(s, typmod, esc)?))
 }
 
 pub fn fc_timestamptz_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let typmod = fcinfo.arg_i32(2);
-    let s = in_arg(fcinfo);
+    let s = in_raw(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_i64(adt_timestamp::timestamptz_in(&s, typmod, esc)?))
+    Ok(Datum::from_i64(adt_timestamp::timestamptz_in(s, typmod, esc)?))
 }
 
 pub fn fc_timestamp_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -1293,3 +1296,15 @@ pub const DATE_BUILTINS: &[FmgrBuiltin] = &[
     b(6201, "extract_timetz", 2, fc_extract_timetz),
     b(6336, "timetz_at_local", 1, fc_timetz_at_local),
 ];
+
+// date_out into the caller's buffer (printtup, COPY TO): the same renderer (DateStyle read per call), no allocation.
+fn date_bound(_: Datum) -> Option<usize> {
+    Some(MAXDATELEN + 1)
+}
+unsafe fn date_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: the caller's MAXDATELEN + 1 writable bytes (date_bound).
+    let buf = unsafe { &mut *dst.cast::<crate::DateBuf>() };
+    Ok(crate::date_out(v.as_i32(), buf))
+}
+
+pub static DATE_OUT_INTO: &[OutInto] = &[OutInto { foid: 1085, bound: date_bound, render: date_render, chars: Some(OUT_CHARS_DATETIME) }];

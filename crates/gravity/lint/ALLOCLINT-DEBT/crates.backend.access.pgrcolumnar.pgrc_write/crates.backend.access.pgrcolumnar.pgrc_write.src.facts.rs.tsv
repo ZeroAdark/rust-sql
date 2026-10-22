@@ -1,0 +1,12 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/facts.rs
+growth	pgrc_format::try_reserve_more	1
+growth	std::collections::BTreeMap::insert	1
+growth	std::iter::Extend::extend	3
+growth	std::vec::Vec::extend_from_slice	2
+growth	std::vec::Vec::push	15
+method	pgrc_format::try_filled	1
+method	pgrc_format::try_to_vec	1
+method	pgrc_format::try_vec	10
+method	std::clone::Clone::clone	35
+method	std::iter::Iterator::collect	8
+type	std::vec::Vec	18

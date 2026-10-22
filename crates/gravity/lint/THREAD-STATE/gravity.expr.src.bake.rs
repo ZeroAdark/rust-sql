@@ -1,0 +1,1 @@
+gravity/expr/src/bake.rs	SCOPES	lowering	scope:Scope	leader	admission scope: the IR bake log, one Scope guard per admission (exec Front holds it) or lowering (lower key.rs lowering_reads_lists); its drop closes it (an unwind too)

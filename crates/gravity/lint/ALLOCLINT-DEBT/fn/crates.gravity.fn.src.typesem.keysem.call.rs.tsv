@@ -1,0 +1,6 @@
+path	crates/gravity/fn/src/typesem/keysem/call.rs
+growth	std::collections::HashSet::insert	1
+growth	std::vec::Vec::push	1
+method	std::iter::Iterator::partition	1
+type	std::collections::HashSet	1
+type	std::vec::Vec	2

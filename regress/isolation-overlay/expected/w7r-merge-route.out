@@ -1,0 +1,85 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2cnt s2plan
+step s2cnt: SELECT count(*) FROM rt; SELECT count(*) FROM rs;
+count
+-----
+    2
+(1 row)
+
+count
+-----
+   64
+(1 row)
+
+step s2plan: EXPLAIN (costs off) MERGE INTO rt t USING rs s ON t.k = s.k WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w);
+QUERY PLAN                           
+-------------------------------------
+Merge on rt t                        
+  Merge on rtd t_1                   
+  ->  Hash Left Join                 
+        Hash Cond: (s.k = t_1.k)     
+        ->  Seq Scan on rs s         
+        ->  Hash                     
+              ->  Seq Scan on rtd t_1
+(7 rows)
+
+
+starting permutation: s1ins s2merge s1c s2chk
+s1: WARNING:  there is already a transaction in progress
+step s1ins: INSERT INTO rt VALUES (160, -1);
+step s2merge: MERGE INTO rt t USING rs s ON t.k = s.k WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+ERROR:  duplicate key value violates unique constraint "rtd_pkey"
+step s2chk: SELECT tableoid::regclass, * FROM rt WHERE k < 1000 ORDER BY k; SELECT count(*) FROM rt WHERE k >= 1000;
+tableoid|  k| v
+--------+---+--
+rtd     |  1|10
+rtd     |150|20
+rtd     |160|-1
+(3 rows)
+
+count
+-----
+    0
+(1 row)
+
+
+starting permutation: s1ins s2merge s1a s2chk
+step s1ins: INSERT INTO rt VALUES (160, -1);
+step s2merge: MERGE INTO rt t USING rs s ON t.k = s.k WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1a: ROLLBACK;
+step s2merge: <... completed>
+step s2chk: SELECT tableoid::regclass, * FROM rt WHERE k < 1000 ORDER BY k; SELECT count(*) FROM rt WHERE k >= 1000;
+tableoid|  k|   v
+--------+---+----
+rtd     |  1|  10
+rtd     |  5| 500
+rtd     |150|  20
+rtd     |160|1600
+(4 rows)
+
+count
+-----
+   60
+(1 row)
+
+
+starting permutation: s1del s2merge s1c s2chk
+step s1del: DELETE FROM rt WHERE k = 150;
+step s2merge: MERGE INTO rt t USING rs s ON t.k = s.k WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w);
+step s1c: COMMIT;
+step s2chk: SELECT tableoid::regclass, * FROM rt WHERE k < 1000 ORDER BY k; SELECT count(*) FROM rt WHERE k >= 1000;
+tableoid|  k|   v
+--------+---+----
+rtd     |  1|  10
+rtd     |  5| 500
+rtd     |160|1600
+(3 rows)
+
+count
+-----
+   60
+(1 row)
+

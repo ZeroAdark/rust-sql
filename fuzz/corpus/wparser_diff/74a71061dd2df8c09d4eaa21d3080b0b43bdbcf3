@@ -1,6 +1,0 @@
-;
-
-SET enable_indexscan=OFF;
-SET enab”š “itmapscan=ON;
-
-explain (costs offLECT counÙt(*) FROM ô_tsvector WHERE a @@ 

@@ -1,0 +1,11 @@
+-- regress-full-create_aggregate-002
+-- SELECT aggfnoid, aggtransfn, aggcombinefn, aggtranstype::regtype, aggserialfn, aggdeserialfn, aggfinalmodify FROM pg_aggregate WHERE aggfnoid = 'myavg'::REGPROC;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=2600 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(14):byval8:w8:val Attr(17):byval8:w8:val Offset:byval2:w2:val
+  filter op607(relabel26(v1.1), c26:20528)
+  project (1=v1.1, 2=v1.4, 3=v1.6, 4=relabel2206(v1.17), 5=v1.7, 6=v1.8, 7=v1.14)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+mapped: SeqScan

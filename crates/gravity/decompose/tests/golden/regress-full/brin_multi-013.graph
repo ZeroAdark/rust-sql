@@ -1,0 +1,11 @@
+-- regress-full-brin_multi-013
+-- INSERT INTO brin_timestamp_test SELECT '4713-01-01 00:00:01 BC'::timestamptz + (i || ' seconds')::interval FROM generate_series(1,30) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:30)]
+  project (1=op1327(c1184:-211810176421000000, io1186(op654(io25(v3.1), c25:' seconds'))))
+  write INSERT rel=30106 rti=1 natts=1 indexes=()
+  outs 1=w8:val
+mapped: ModifyTable FunctionScan

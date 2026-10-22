@@ -1,0 +1,28 @@
+-- name: facts-006
+-- sql: SELECT a FROM fd ORDER BY a;
+-- rel 16395 fd am=heap kind=r natts=6
+-- att 16395 1 id typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16395 2 a typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16395 3 b typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16395 4 t typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 16395 5 p typid=600 typmod=-1 len=16 byval=f notnull=f
+-- att 16395 6 g typid=23 typmod=-1 len=4 byval=t notnull=f gen=s
+-- idx 16402 rel=16395 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 16404 rel=16395 keys=2 opts=3 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16405 rel=16395 keys=3 opts=2 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16406 rel=16395 keys=2,3 opts=1,2 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- idx 16407 rel=16395 keys=0 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16408 rel=16395 keys=0 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16409 rel=16395 keys=2,0,4 opts=0,3,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=3
+-- idx 16410 rel=16395 keys=2,3,4 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16411 rel=16395 keys=3 opts=0 unique=f am=btree partial=t deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16412 rel=16395 keys=2 opts=0 unique=f am=hash partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16413 rel=16395 keys=0 opts=0 unique=f am=gin partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16414 rel=16395 keys=5 opts=0 unique=f am=gist partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 16415 rel=16395 keys=1 opts=0 unique=f am=brin partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- trigext 16395 before=- after=- instead=- stmt=- trans=- internal=- defer=- rules=f
+-- idxexprs 16407 ({OPEXPR :opno 551 :opfuncid 177 :opresulttype 23 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 2 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location -1} {VAR :varno 1 :varattno 3 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 3 :location -1}) :location -1})
+-- idxexprs 16408 ({FUNCEXPR :funcid 870 :funcresulttype 25 :funcretset false :funcvariadic false :funcformat 0 :funccollid 100 :inputcollid 100 :args ({VAR :varno 1 :varattno 4 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 4 :location -1}) :location -1})
+-- idxexprs 16409 ({OPEXPR :opno 514 :opfuncid 141 :opresulttype 23 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 3 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 3 :location -1} {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location -1 :constvalue 4 [ 2 0 0 0 0 0 0 0 ]}) :location -1})
+-- idxexprs 16413 ({FUNCEXPR :funcid 3745 :funcresulttype 3614 :funcretset false :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 100 :args ({CONST :consttype 3734 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location -1 :constvalue 4 [ 164 14 0 0 0 0 0 0 ]} {VAR :varno 1 :varattno 4 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 4 :location -1}) :location -1})
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {INDEXONLYSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0.2775 :scan.plan.total_cost 126.24727966028678 :scan.plan.plan_rows 2000 :scan.plan.plan_width 4 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno -3 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location 7} :resno 1 :resname a :ressortgroupref 1 :resorigtbl 16395 :resorigcol 2 :resjunk false}) :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :indexid 16404 :indexqual <> :recheckqual <> :indexorderby <> :indextlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 2 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location -1} :resno 1 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :indexorderdir -1} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname fd :colnames ("id" "a" "b" "t" "p" "g")} :rtekind 0 :relid 16395 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 16395 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 9) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16395) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 27}

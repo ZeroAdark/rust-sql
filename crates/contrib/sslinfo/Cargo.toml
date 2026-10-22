@@ -17,6 +17,8 @@ types_tuple = { path = "../../_support/types/types_tuple" }
 adt_numeric = { path = "../../backend/utils/adt/numeric" }
 dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
 funcapi = { path = "../../backend/utils/fmgr/funcapi" }
+heaptuple = { path = "../../backend/access/common/heaptuple" }
+typcache_seams = { path = "../../backend/utils/cache/typcache_seams" }
 init_small = { path = "../../backend/utils/init/init_small" }
 mbutils = { path = "../../backend/utils/mb/mbutils" }
 varlena = { path = "../../backend/utils/adt/varlena" }

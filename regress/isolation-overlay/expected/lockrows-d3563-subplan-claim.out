@@ -1,0 +1,118 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2a s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.note, (SELECT q.name FROM sq q WHERE q.id = t.queue_id) AS qname FROM st t WHERE t.status = 'ready' ORDER BY t.id LIMIT 2 FOR UPDATE;
+QUERY PLAN                                          
+----------------------------------------------------
+Limit                                               
+  ->  LockRows                                      
+        ->  Index Scan using st_pkey on st t        
+              Filter: (status = 'ready'::text)      
+              SubPlan 1                             
+                ->  Index Scan using sq_pkey on sq q
+                      Index Cond: (id = t.queue_id) 
+(7 rows)
+
+step s1u: UPDATE st SET note = 'changed' WHERE id = 1;
+step s2a: SELECT t.id, t.note, (SELECT q.name FROM sq q WHERE q.id = t.queue_id) AS qname FROM st t WHERE t.status = 'ready' ORDER BY t.id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note   |qname 
+--+-------+------
+ 1|changed|queue2
+ 2|n2     |queue3
+(2 rows)
+
+
+starting permutation: s1m s2a s1c
+step s1m: UPDATE st SET note = 'moved', queue_id = 4 WHERE id = 1;
+step s2a: SELECT t.id, t.note, (SELECT q.name FROM sq q WHERE q.id = t.queue_id) AS qname FROM st t WHERE t.status = 'ready' ORDER BY t.id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note |qname 
+--+-----+------
+ 1|moved|queue4
+ 2|n2   |queue3
+(2 rows)
+
+
+starting permutation: s1r s2a s1c
+step s1r: UPDATE sq SET name = 'renamed' WHERE id = 4; UPDATE st SET note = 'moved', queue_id = 4 WHERE id = 1;
+step s2a: SELECT t.id, t.note, (SELECT q.name FROM sq q WHERE q.id = t.queue_id) AS qname FROM st t WHERE t.status = 'ready' ORDER BY t.id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note |qname 
+--+-----+------
+ 1|moved|queue4
+ 2|n2   |queue3
+(2 rows)
+
+
+starting permutation: s1s s2a s1c
+step s1s: UPDATE st SET status = 'done' WHERE id = 1;
+step s2a: SELECT t.id, t.note, (SELECT q.name FROM sq q WHERE q.id = t.queue_id) AS qname FROM st t WHERE t.status = 'ready' ORDER BY t.id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note|qname 
+--+----+------
+ 2|n2  |queue3
+ 3|n3  |queue4
+(2 rows)
+
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT id FROM st WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2sk: SELECT t.id, t.note, (SELECT q.name FROM sq q WHERE q.id = t.queue_id) AS qname FROM st t WHERE t.status = 'ready' ORDER BY t.id LIMIT 2 FOR UPDATE SKIP LOCKED;
+id|note|qname 
+--+----+------
+ 2|n2  |queue3
+ 3|n3  |queue4
+(2 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s2xs s1m s2srt s1c
+step s2xs: EXPLAIN (COSTS OFF) SELECT t.id, t.note, (SELECT q.name FROM sq q WHERE q.id = t.queue_id) AS qname FROM st t WHERE t.status = 'ready' ORDER BY t.id + 0 LIMIT 2 FOR UPDATE;
+QUERY PLAN                                                
+----------------------------------------------------------
+Limit                                                     
+  ->  LockRows                                            
+        ->  Result                                        
+              ->  Sort                                    
+                    Disabled: true                        
+                    Sort Key: ((t.id + 0))                
+                    ->  Seq Scan on st t                  
+                          Disabled: true                  
+                          Filter: (status = 'ready'::text)
+              SubPlan 1                                   
+                ->  Index Scan using sq_pkey on sq q      
+                      Index Cond: (id = t.queue_id)       
+(12 rows)
+
+step s1m: UPDATE st SET note = 'moved', queue_id = 4 WHERE id = 1;
+step s2srt: SELECT t.id, t.note, (SELECT q.name FROM sq q WHERE q.id = t.queue_id) AS qname FROM st t WHERE t.status = 'ready' ORDER BY t.id + 0 LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2srt: <... completed>
+id|note |qname 
+--+-----+------
+ 1|moved|queue4
+ 2|n2   |queue3
+(2 rows)
+
+
+starting permutation: s1r s2srt s1c
+step s1r: UPDATE sq SET name = 'renamed' WHERE id = 4; UPDATE st SET note = 'moved', queue_id = 4 WHERE id = 1;
+step s2srt: SELECT t.id, t.note, (SELECT q.name FROM sq q WHERE q.id = t.queue_id) AS qname FROM st t WHERE t.status = 'ready' ORDER BY t.id + 0 LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2srt: <... completed>
+id|note |qname 
+--+-----+------
+ 1|moved|queue4
+ 2|n2   |queue3
+(2 rows)
+

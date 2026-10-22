@@ -1,0 +1,6 @@
+path	crates/gravity/lowerv4/src/pipes.rs
+growth	std::vec::Vec::push	3
+method	std::iter::Iterator::collect	2
+method	std::vec::Vec::with_capacity	1
+type	std::rc::Rc	1
+type	std::vec::Vec	3

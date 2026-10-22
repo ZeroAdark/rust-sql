@@ -1,0 +1,4 @@
+# PostgreSQL 18.6 src/backend/optimizer/prep/prepjointree.c: 3 stack-depth check sites
+501	pull_up_sublinks_jointree_recurse	crates/backend/optimizer/plan/planner/src/subselect.rs	pull_up_sublinks_jointree_recurse	yes	
+1153	pull_up_subqueries_recurse	crates/backend/optimizer/plan/planner/src/prepjointree.rs	find_pullable_subquery	yes	
+2267	is_simple_union_all_recurse	crates/backend/optimizer/plan/planner/src/prepjointree.rs	is_simple_union_all_recurse	yes	

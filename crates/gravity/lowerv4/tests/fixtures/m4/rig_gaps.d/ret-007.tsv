@@ -1,0 +1,1 @@
+RETURNING ret_t (D774 serves the whole row): the output column's type is the target's rowtype, which the fixture's rel line does not carry (no reltype) and the rig catalog cannot answer; e2e m4_d774_ret_row / m4_returning serve it on the server

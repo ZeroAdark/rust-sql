@@ -1,0 +1,38 @@
+-- tpch-sf10-019
+-- SELECT sum(l_extendedprice * (1 - l_discount)) AS revenue FROM lineitem, part WHERE (p_partkey = l_partkey AND p_brand = 'Brand#12' AND p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG') AND l_quantity >= 1 AND l_quantity <= 1 + 10 AND p_size BETWEEN 1 AND 5 AND l_shipmode IN ('AIR', 'AIR REG') AND l_shipinstruct = 'DELIVER IN PERSON') OR (p_partkey = l_partkey AND p_brand = 'Brand#23' AND p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK') AND l_quantity >= 10 AND l_quantity <= 10 + 10 AND p_size BETWEEN 1 AND 10 AND l_shipmode IN ('AIR', 'AIR REG') AND l_shipinstruct = 'DELIVER IN PERSON') OR (p_partkey = l_partkey AND p_brand = 'Brand#34' AND p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG') AND l_quantity >= 20 AND l_quantity <= 20 + 10 AND p_size BETWEEN 1 AND 15 AND l_shipmode IN ('AIR', 'AIR REG') AND l_shipinstruct = 'DELIVER IN PERSON') /* TH19 */;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 eligible rows=111 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n1@3^
+  source range rel=16396 rti=2 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(4):codes4:code:part/dict Attr(6):byval4:w4:val Attr(7):codes4:code:part/dict Offset:byval2:w2:val
+    zone lane2 >= word0/4
+  filter op525(v2.6, c23:1)
+  filter or(and(op1054(v2.4, c1042:'Brand#12'), any1054(v2.7, c1014:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x04\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00,\x00\x00\x00SM CASE\x00(\x00\x00\x00SM BOX\x00\x00,\x00\x00\x00SM PACK\x00(\x00\x00\x00SM PKG\x00\x00'), op523(v2.6, c23:5)), and(op1054(v2.4, c1042:'Brand#23'), any1054(v2.7, c1014:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x04\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00,\x00\x00\x00MED BAG\x00,\x00\x00\x00MED BOX\x00,\x00\x00\x00MED PKG\x000\x00\x00\x00MED PACK'), op523(v2.6, c23:10)), and(op1054(v2.4, c1042:'Brand#34'), any1054(v2.7, c1014:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x04\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00,\x00\x00\x00LG CASE\x00(\x00\x00\x00LG BOX\x00\x00,\x00\x00\x00LG PACK\x00(\x00\x00\x00LG PKG\x00\x00'), op523(v2.6, c23:15)))
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val 2=vl:row 3=vl:row 4=code:part/dict 5=vl:row 6=w4:val 7=code:part/dict 8=vl:row 9=vl:row
+p1 node=2 eligible rows=1 end=breaker(slot=1 PlainAgg)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@4 n0@6^
+  source range rel=16449 rti=1 am=pgrc
+    lanes Attr(2):byval4:w4:val Attr(5):fixed8:pn15.2:win/arena Attr(6):fixed8:pn15.2:win/arena Attr(7):fixed8:pn15.2:win/arena Attr(14):codes4:code:part/dict Attr(15):codes4:code:part/dict Offset:byval2:w2:val
+  filter op1054(v1.14, c1042:'DELIVER IN PERSON')
+  filter any1054(v1.15, c1014:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x04\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x1c\x00\x00\x00AIR\x00,\x00\x00\x00AIR REG\x00')
+  filter or(and(op1757(v1.5, c1700:'\x00\x80\x01\x00'), op1755(v1.5, c1700:'\x00\x80\x0b\x00')), and(op1757(v1.5, c1700:'\x00\x80\x0a\x00'), op1755(v1.5, c1700:'\x00\x80\x14\x00')), and(op1757(v1.5, c1700:'\x00\x80\x14\x00'), op1755(v1.5, c1700:'\x00\x80\x1e\x00')))
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  probe slot=0 inner=n3 JOIN_INNER catalog keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1)) qual=(or(and(op1054(inner.4, c1042:'Brand#12'), any1054(inner.7, c1014:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x04\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00,\x00\x00\x00SM CASE\x00(\x00\x00\x00SM BOX\x00\x00,\x00\x00\x00SM PACK\x00(\x00\x00\x00SM PKG\x00\x00'), op1757(outer.5, c1700:'\x00\x80\x01\x00'), op1755(outer.5, c1700:'\x00\x80\x0b\x00'), op523(inner.6, c23:5)), and(op1054(inner.4, c1042:'Brand#23'), any1054(inner.7, c1014:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x04\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00,\x00\x00\x00MED BAG\x00,\x00\x00\x00MED BOX\x00,\x00\x00\x00MED PKG\x000\x00\x00\x00MED PACK'), op1757(outer.5, c1700:'\x00\x80\x0a\x00'), op1755(outer.5, c1700:'\x00\x80\x14\x00'), op523(inner.6, c23:10)), and(op1054(inner.4, c1042:'Brand#34'), any1054(inner.7, c1014:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x04\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00,\x00\x00\x00LG CASE\x00(\x00\x00\x00LG BOX\x00\x00,\x00\x00\x00LG PACK\x00(\x00\x00\x00LG PKG\x00\x00'), op1757(outer.5, c1700:'\x00\x80\x14\x00'), op1755(outer.5, c1700:'\x00\x80\x1e\x00'), op523(inner.6, c23:15))))
+  project (1=outer.6, 2=outer.7)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=pn15.2:win/arena 6=pn15.2:win/arena 7=pn15.2:win/arena 8=vl:row 9=vl:row 10=vl:row 11=w4:val 12=w4:val 13=w4:val 14=code:part/dict 15=code:part/dict 16=vl:row
+  outs 1=pn15.2:win/arena 2=pn15.2:win/arena
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=agg2114(1=op1760(outer.1, op1759(c1700:'\x00\x80\x01\x00', outer.2))))
+  outs 1=vl:call2114
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=PlainAgg budget=Fixed(104) spill=None producer=p1 layout=[]->[SumNumWide@0,Count@32]+valid 48B
+group slot=1 producer=p1 node=0 form=Plain hints=[] layout=[]->[SumNumWide@0,Count@32]+valid 48B
+  agg aggno=0 fn=2114 reg=SumNum slot=0 count_slot=- final=Numeric scale=4 class=SumNum trans=Abi(SumNumWide) mods=[] expr=agg2114(1=op1760(outer.1, op1759(c1700:'\x00\x80\x01\x00', outer.2)))
+mapped: SeqScan NestLoop Agg

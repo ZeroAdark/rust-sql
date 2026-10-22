@@ -1,0 +1,21 @@
+-- cte-006
+-- SELECT a, (SELECT y FROM u WHERE x = 7) + b AS s FROM t WHERE a < 3;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=16405 rti=2 am=heap index=16411
+    key att=1 op=96 value=c23:7
+    recheck (op96(v2.1, c23:7))
+    lanes Attr(2):byval8:w8:val
+  project (1=v2.2)
+  outs 1=w8:val
+p1 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=16395 rti=1 am=heap index=16402
+    key att=1 op=97 value=c23:3
+    recheck (op97(v1.1, c23:3))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=v1.1, 2=op551($exec0, v1.2))
+  outs 1=w8:val 2=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: IndexScan SubPlan

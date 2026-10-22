@@ -735,7 +735,7 @@ pub fn thesaurus_lexize<'m>(
                     nlex += 1;
                     p += 1;
                 }
-                let mut infos: Vec<Option<usize>> = vec![None; nlex];
+                let mut infos: Vec<Option<usize>> = ::mcx::std_vec_from_elem("tsearch", None, nlex)?;
                 let mut i = 0usize;
                 while i < nlex {
                     infos[i] = find_the_lexeme(d, Some(&arr[basevar + i].lexeme));

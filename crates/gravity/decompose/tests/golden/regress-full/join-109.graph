@@ -1,0 +1,10 @@
+-- regress-full-join-109
+-- explain (verbose, costs off) select table_catalog, table_name from int4_tbl t1 inner join (int8_tbl t2 left join information_schema.column_udt_usage on null) on null;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  gate T_List
+  project (1=relabel13718(fn861()), 2=relabel13718(v7.2))
+  outs 1=fx64:call861 2=fx64:row
+mapped: Result

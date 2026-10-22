@@ -1,0 +1,12 @@
+# no header: the ORDER BY name resolves through the select item's alias (TPC-H Q11's value DESC)
+sql: SELECT ps_partkey, sum(ps_supplycost * ps_availqty) AS value FROM partsupp GROUP BY ps_partkey ORDER BY value DESC;
+class: ordered 2
+verdict: match
+[pg]
+7	100
+3	100
+5	90
+[got]
+3	100
+7	100
+5	90

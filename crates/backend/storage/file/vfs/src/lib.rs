@@ -1,5 +1,6 @@
 //! `backend-storage-file-vfs` — the DST P1 VFS contract surface (contract v1,
-//! frozen at tag `vfs-trait-v1`).
+//! frozen at tag `vfs-trait-v1`; revised to v2 at tag `vfs-trait-v2`, see the
+//! [`Vfs`] trait's revision note).
 //!
 //! The [`Vfs`] trait exists for **shape enforcement and SimVfs conformance**,
 //! not dynamic dispatch. Product builds monomorphize [`ActiveVfs`] =
@@ -126,6 +127,7 @@ pub struct FileInfo {
     pub ino: u64,
     pub uid: u32,
     pub gid: u32,
+    pub blksize: i64,
 }
 
 impl FileInfo {
@@ -140,6 +142,7 @@ impl FileInfo {
             ino: 0,
             uid: 0,
             gid: 0,
+            blksize: 0,
         }
     }
 
@@ -162,25 +165,232 @@ impl FileInfo {
 /// Errno-carrying result for the ops that can't express failure in-band.
 pub type VfsResult<T> = Result<T, c_int>;
 
+// ---------------------------------------------------------------------------
+// PgPath — an OS path as the kernel sees it: raw bytes, no encoding. C's
+// `char path[MAXPGPATH]` carries dirent names, readlink targets and WAL
+// record payloads untouched; a `String` at this layer would force a lossy
+// UTF-8 decode (U+FFFD) that the kernel then fails to resolve. Convert to
+// `str` only where C itself renders the bytes as text (an ereport message,
+// a manifest "Encoded-Path" decision), never before a syscall or a tar
+// header.
+// ---------------------------------------------------------------------------
+
+/// Owned byte path. `Deref<Target = [u8]>` for slicing/comparison;
+/// [`PgPath::to_c_string`] is the syscall boundary.
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PgPath(Vec<u8>);
+
+impl PgPath {
+    pub const fn new() -> Self {
+        PgPath(Vec::new())
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        PgPath(bytes.to_owned())
+    }
+
+    pub fn from_vec(bytes: Vec<u8>) -> Self {
+        PgPath(bytes)
+    }
+
+    #[cfg(any(unix, target_os = "wasi"))]
+    pub fn from_os_str(s: &std::ffi::OsStr) -> Self {
+        #[cfg(unix)]
+        use std::os::unix::ffi::OsStrExt;
+        #[cfg(target_os = "wasi")]
+        use std::os::wasi::ffi::OsStrExt;
+        PgPath(s.as_bytes().to_owned())
+    }
+
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+
+    /// The bytes as an `OsStr` (unix/wasi: the same bytes, no re-encoding),
+    /// for the few std::fs composites fd does not front.
+    #[cfg(any(unix, target_os = "wasi"))]
+    pub fn as_os_str(&self) -> &std::ffi::OsStr {
+        #[cfg(unix)]
+        use std::os::unix::ffi::OsStrExt;
+        #[cfg(target_os = "wasi")]
+        use std::os::wasi::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(&self.0)
+    }
+
+    #[cfg(any(unix, target_os = "wasi"))]
+    pub fn as_std_path(&self) -> &std::path::Path {
+        std::path::Path::new(self.as_os_str())
+    }
+
+    /// The syscall form. An interior NUL (impossible for a kernel-sourced
+    /// name) degrades to the empty path, which every op rejects with ENOENT
+    /// — fd's `cpath` contract.
+    pub fn to_c_string(&self) -> std::ffi::CString {
+        std::ffi::CString::new(self.0.clone()).unwrap_or_default()
+    }
+
+    /// Valid UTF-8 view, if the bytes are; the honest gate for callers whose
+    /// C counterpart parses the name as text (relation file names, WAL
+    /// segment names).
+    pub fn as_str(&self) -> Option<&str> {
+        core::str::from_utf8(&self.0).ok()
+    }
+
+    /// Message rendering (U+FFFD for undecodable bytes) — the point at which
+    /// C's `%s` in an ereport meets pgrust's `String` messages.
+    pub fn to_string_lossy(&self) -> String {
+        String::from_utf8_lossy(&self.0).into_owned()
+    }
+
+    /// `self + "/" + name` (C: `snprintf(pathbuf, "%s/%s", path, de->d_name)`).
+    pub fn join(&self, name: &[u8]) -> PgPath {
+        // MAXPGPATH-bounded; grown in place like every other path buffer.
+        let mut v = Vec::new();
+        v.extend_from_slice(&self.0);
+        v.push(b'/');
+        v.extend_from_slice(name);
+        PgPath(v)
+    }
+
+    pub fn push_bytes(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+
+    /// The last component (bytes after the final '/'; the whole path when
+    /// there is none).
+    pub fn file_name(&self) -> &[u8] {
+        match self.0.iter().rposition(|&b| b == b'/') {
+            Some(i) => &self.0[i + 1..],
+            None => &self.0,
+        }
+    }
+
+    /// The bytes before the final '/', if any.
+    pub fn parent(&self) -> Option<&[u8]> {
+        self.0.iter().rposition(|&b| b == b'/').map(|i| &self.0[..i])
+    }
+}
+
+impl core::ops::Deref for PgPath {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for PgPath {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<&str> for PgPath {
+    fn from(s: &str) -> Self {
+        PgPath(s.as_bytes().to_owned())
+    }
+}
+
+impl From<&String> for PgPath {
+    fn from(s: &String) -> Self {
+        PgPath(s.as_bytes().to_owned())
+    }
+}
+
+impl From<String> for PgPath {
+    fn from(s: String) -> Self {
+        PgPath(s.into_bytes())
+    }
+}
+
+impl From<Vec<u8>> for PgPath {
+    fn from(v: Vec<u8>) -> Self {
+        PgPath(v)
+    }
+}
+
+impl From<&[u8]> for PgPath {
+    fn from(b: &[u8]) -> Self {
+        PgPath(b.to_owned())
+    }
+}
+
+impl PartialEq<str> for PgPath {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other.as_bytes()
+    }
+}
+
+impl PartialEq<&str> for PgPath {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == other.as_bytes()
+    }
+}
+
+impl PartialEq<[u8]> for PgPath {
+    fn eq(&self, other: &[u8]) -> bool {
+        self.0 == other
+    }
+}
+
+impl core::fmt::Display for PgPath {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&String::from_utf8_lossy(&self.0))
+    }
+}
+
+impl core::fmt::Debug for PgPath {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", String::from_utf8_lossy(&self.0))
+    }
+}
+
 enum DirIterInner {
     /// Kernel readdir order, "." and ".." elided (std::fs::read_dir semantics —
     /// identical to what fd's AllocateDir has always exposed to its callers).
     Posix(std::fs::ReadDir),
     /// SimVfs constructor: a pre-collected name list (BTree order — the
     /// deterministic-readdir rule).
-    Named(std::vec::IntoIter<String>),
+    Named(std::vec::IntoIter<PgPath>),
 }
 
-/// Directory iterator. Yields entry names (lossy UTF-8, matching fd's
-/// `ReadDirExtended`), never "." or "..". `Err(errno)` mirrors a readdir
-/// failure mid-stream.
+/// Directory iterator. Yields entry names as the kernel returned them
+/// ([`PgPath`] — raw `d_name` bytes, exactly C's `struct dirent`), never "."
+/// or "..". `Err(errno)` mirrors a readdir failure mid-stream. fd's
+/// `ReadDirExtended` is where the historical lossy-UTF-8 `DirEnt` view is
+/// derived; byte-faithful walkers use `with_allocated_dir_path`.
 pub struct VfsDirIter(DirIterInner);
+
+/// C `struct dirent` d_type as readdir(3) reported it: `Unknown` is
+/// DT_UNKNOWN (and every type get_dirent_type does not classify), which the
+/// SimVfs arm always reports.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VfsDType {
+    Unknown,
+    Reg,
+    Dir,
+    Lnk,
+}
+
+/// One readdir(3) entry: raw `d_name` bytes plus `d_type`.
+pub struct VfsDirEnt {
+    pub d_name: PgPath,
+    pub d_type: VfsDType,
+}
 
 impl VfsDirIter {
     /// SimVfs constructor: names must already be in deterministic (BTree)
     /// order and exclude "." / "..".
     pub fn from_names(names: Vec<String>) -> Self {
-        VfsDirIter(DirIterInner::Named(names.into_iter()))
+        let mut paths = Vec::new();
+        for name in names {
+            paths.push(PgPath::from(name));
+        }
+        VfsDirIter(DirIterInner::Named(paths.into_iter()))
     }
 
     pub(crate) fn from_read_dir(rd: std::fs::ReadDir) -> Self {
@@ -188,14 +398,24 @@ impl VfsDirIter {
     }
 }
 
-impl Iterator for VfsDirIter {
-    type Item = Result<String, c_int>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl VfsDirIter {
+    /// The next entry with its `d_type` (the Posix arm reads the dirent's
+    /// type; std stats a DT_UNKNOWN entry itself, which is C's fallback).
+    pub fn next_entry(&mut self) -> Option<Result<VfsDirEnt, c_int>> {
         match &mut self.0 {
             DirIterInner::Posix(rd) => match rd.next() {
                 Some(Ok(entry)) => {
-                    Some(Ok(entry.file_name().to_string_lossy().into_owned()))
+                    let d_type = match entry.file_type() {
+                        Ok(ft) if ft.is_dir() => VfsDType::Dir,
+                        Ok(ft) if ft.is_file() => VfsDType::Reg,
+                        Ok(ft) if ft.is_symlink() => VfsDType::Lnk,
+                        _ => VfsDType::Unknown,
+                    };
+                    #[cfg(any(unix, target_os = "wasi"))]
+                    let d_name = PgPath::from_os_str(&entry.file_name());
+                    #[cfg(not(any(unix, target_os = "wasi")))]
+                    let d_name = PgPath::from(entry.file_name().to_string_lossy().into_owned());
+                    Some(Ok(VfsDirEnt { d_name, d_type }))
                 }
                 Some(Err(e)) => {
                     let en = e.raw_os_error().unwrap_or(libc::EIO);
@@ -204,8 +424,18 @@ impl Iterator for VfsDirIter {
                 }
                 None => None,
             },
-            DirIterInner::Named(names) => names.next().map(Ok),
+            DirIterInner::Named(names) => {
+                names.next().map(|d_name| Ok(VfsDirEnt { d_name, d_type: VfsDType::Unknown }))
+            }
         }
+    }
+}
+
+impl Iterator for VfsDirIter {
+    type Item = Result<PgPath, c_int>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_entry().map(|r| r.map(|e| e.d_name))
     }
 }
 
@@ -246,12 +476,24 @@ pub struct FdSoftLimitRaise {
     /// Errno of the last rejected setrlimit (0 = no raise attempted, or the
     /// raise succeeded).
     pub setrlimit_errno: i32,
+    /// Per-process cap the KERNEL enforces regardless of RLIMIT_NOFILE
+    /// (`kern.maxfilesperproc`, `fs.nr_open`); `None` if unreadable. macOS
+    /// accepts a soft limit far above it and then fails `open()` at it, so
+    /// budget arithmetic must take the smaller of this and `soft_after`.
+    pub kernel_per_process_cap: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
 // The Vfs trait — the contract surface (signatures binding, names normative).
 // FROZEN at tag vfs-trait-v1; any op-set or signature change after that tag is
 // a contract revision, not a lane decision.
+//
+// Contract v2 (op-set revision, tag `vfs-trait-v2`, ruled 2026-09-25 for
+// pgrcolumnar parts by reference, WR): `link` — link(2), a second name for a
+// file. Both PosixVfs and SimVfs implement it; SimVfs gives the new dirent
+// the same durability law as every namespace op (volatile until its parent
+// directory is fsynced) and a crash keeps each durable name (nlink = the
+// number of durable names). Additive: no existing op changed.
 //
 // v1 op-set note (folded in at freeze time): `rmdir` was added to the contract
 // draft's list — fd's fenced clusters remove directories (RemovePgTempFiles,
@@ -298,6 +540,14 @@ pub trait Vfs {
     /// Linux (returns positive errno on failure, EINTR possible), F_RDADVISE
     /// on macOS (-1/errno on failure).
     fn fadvise_willneed(&self, fd: c_int, off: off_t, len: off_t) -> c_int;
+    /// Random-access hint over the whole file; MAY no-op. Posix: posix_fadvise(RANDOM)
+    /// on Linux (no kernel read-ahead on this fd — exact preads stay exact), F_RDAHEAD 0
+    /// on macOS.
+    fn fadvise_random(&self, fd: c_int) -> c_int;
+    /// Page-cache residency of `[off, off+len)` (a query: changes nothing): `out` = [pages in the page cache, pages the
+    /// range spans]; 0 on success, -1/errno on failure. Posix: cachestat(2) on Linux (ENOSYS before 6.5: the caller
+    /// takes the residency as unknown), EOPNOTSUPP elsewhere. Sim: its files live in memory, every page is cached.
+    fn cachestat(&self, fd: c_int, off: off_t, len: off_t, out: &mut [u64; 2]) -> c_int;
 
     // -- namespace --
     fn stat(&self, path: &CStr, out: &mut FileInfo) -> c_int;
@@ -308,6 +558,10 @@ pub trait Vfs {
     fn unlink(&self, path: &CStr) -> c_int;
     /// Atomic; durable_rename composes ABOVE in fd.
     fn rename(&self, from: &CStr, to: &CStr) -> c_int;
+    /// Contract v2: link(2) — `to` becomes a second name of the file at
+    /// `from`. -1/errno: EEXIST if `to` exists, EPERM for a directory, EXDEV
+    /// across file systems (Posix), ENOENT.
+    fn link(&self, from: &CStr, to: &CStr) -> c_int;
     fn mkdir(&self, path: &CStr, mode: mode_t) -> c_int;
     fn rmdir(&self, path: &CStr) -> c_int;
     /// SimVfs: deterministic (BTree) order. Never yields "." or "..".
@@ -382,16 +636,137 @@ shims! {
     fn fallocate(fd: c_int, off: off_t, len: off_t) -> c_int;
     fn file_size(fd: c_int) -> off_t;
     fn fadvise_willneed(fd: c_int, off: off_t, len: off_t) -> c_int;
+    fn fadvise_random(fd: c_int) -> c_int;
+    fn cachestat(fd: c_int, off: off_t, len: off_t, out: &mut [u64; 2]) -> c_int;
     fn stat(path: &CStr, out: &mut FileInfo) -> c_int;
     fn fstat(fd: c_int, out: &mut FileInfo) -> c_int;
     fn lstat(path: &CStr, out: &mut FileInfo) -> c_int;
     fn read_link(path: &CStr, buf: &mut [u8]) -> isize;
     fn unlink(path: &CStr) -> c_int;
     fn rename(from: &CStr, to: &CStr) -> c_int;
+    fn link(from: &CStr, to: &CStr) -> c_int;
     fn mkdir(path: &CStr, mode: mode_t) -> c_int;
     fn rmdir(path: &CStr) -> c_int;
     fn read_dir(path: &CStr) -> VfsResult<VfsDirIter>;
     fn fd_budget_probe(max_to_probe: usize) -> usize;
+}
+
+// ---------------------------------------------------------------------------
+// The part files' share of the one-process descriptor budget (D2873), sized
+// by demand. Additive, next to the contract: fd records the budget it divides
+// (the arithmetic of the split stays fd's), the part reader's pool records how
+// many part files it holds, and both already depend on this crate. The parts
+// take what they hold plus a floor, at most a cap; each session's file cache
+// gets an equal share of the rest. A server with few or no part files keeps
+// the per-session share it had before parts were counted.
+// ---------------------------------------------------------------------------
+
+/// What `fd::set_max_safe_fds` divides between the sessions' file caches and the
+/// part-file pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FdBudget {
+    /// The descriptors left for caches: the ceiling less every child's setup
+    /// descriptors and the postmaster's reserve.
+    pub for_caches: i64,
+    /// The sessions that may each fill a file cache.
+    pub sessions: i64,
+    /// C's per-session answer, min(usable fds, max_files_per_process) less the
+    /// reserve: the share never exceeds it.
+    pub c_bound: i64,
+    /// The descriptors each session keeps outside its cache (NUM_RESERVED_FDS).
+    pub reserved: i64,
+    /// The fewest and the most descriptors the part pool takes.
+    pub part_floor: usize,
+    pub part_cap: usize,
+}
+
+/// The part pool's slice when it holds `demand` part files: those plus the
+/// floor, at most the cap.
+pub fn part_fd_slice_of_demand(demand: usize, floor: usize, cap: usize) -> usize {
+    demand.saturating_add(floor).min(cap)
+}
+
+/// Each session's file-cache limit (max_safe_fds) when the part pool takes
+/// `slice`: an equal share of what the parts leave, less the reserve, never
+/// above C's answer, never below 1.
+pub fn session_fd_limit_of(b: &FdBudget, slice: usize) -> i64 {
+    let share = (b.for_caches - slice as i64) / b.sessions.max(1) - b.reserved;
+    b.c_bound.min(share).max(1)
+}
+
+mod fd_budget {
+    use core::sync::atomic::{AtomicI64, AtomicUsize};
+    pub(super) static FOR_CACHES: AtomicI64 = AtomicI64::new(0);
+    pub(super) static SESSIONS: AtomicI64 = AtomicI64::new(1);
+    pub(super) static C_BOUND: AtomicI64 = AtomicI64::new(0);
+    pub(super) static RESERVED: AtomicI64 = AtomicI64::new(0);
+    pub(super) static PART_FLOOR: AtomicUsize = AtomicUsize::new(0);
+    /// 0 = no budget recorded (no RLIMIT_NOFILE known: the sim world, a
+    /// library harness): no part slice, no session limit.
+    pub(super) static PART_CAP: AtomicUsize = AtomicUsize::new(0);
+    pub(super) static PART_DEMAND: AtomicUsize = AtomicUsize::new(0);
+    /// 0 = none.
+    pub(super) static SESSION_LIMIT: AtomicI64 = AtomicI64::new(0);
+}
+
+fn fd_budget_now() -> FdBudget {
+    use core::sync::atomic::Ordering::Relaxed;
+    use fd_budget::*;
+    FdBudget {
+        for_caches: FOR_CACHES.load(Relaxed),
+        sessions: SESSIONS.load(Relaxed),
+        c_bound: C_BOUND.load(Relaxed),
+        reserved: RESERVED.load(Relaxed),
+        part_floor: PART_FLOOR.load(Relaxed),
+        part_cap: PART_CAP.load(Relaxed),
+    }
+}
+
+fn recompute_session_fd_limit() {
+    let b = fd_budget_now();
+    if b.part_cap == 0 {
+        return;
+    }
+    let limit = session_fd_limit_of(&b, part_fd_slice());
+    fd_budget::SESSION_LIMIT.store(limit, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Record the budget `fd::set_max_safe_fds` divides (at boot, before any part
+/// is opened).
+pub fn set_fd_budget(b: FdBudget) {
+    use core::sync::atomic::Ordering::Relaxed;
+    use fd_budget::*;
+    FOR_CACHES.store(b.for_caches, Relaxed);
+    SESSIONS.store(b.sessions.max(1), Relaxed);
+    C_BOUND.store(b.c_bound, Relaxed);
+    RESERVED.store(b.reserved, Relaxed);
+    PART_FLOOR.store(b.part_floor, Relaxed);
+    PART_CAP.store(b.part_cap, Relaxed);
+    recompute_session_fd_limit();
+}
+
+/// The part files the pool holds now (its caller serializes the calls: the
+/// pool's lock).
+pub fn set_part_fd_demand(n: usize) {
+    fd_budget::PART_DEMAND.store(n, core::sync::atomic::Ordering::Relaxed);
+    recompute_session_fd_limit();
+}
+
+/// The descriptors the process-wide part-file pool may hold open now: the part
+/// files it holds plus the floor, at most the cap. 0 = no budget recorded.
+pub fn part_fd_slice() -> usize {
+    use core::sync::atomic::Ordering::Relaxed;
+    let cap = fd_budget::PART_CAP.load(Relaxed);
+    if cap == 0 {
+        return 0;
+    }
+    part_fd_slice_of_demand(fd_budget::PART_DEMAND.load(Relaxed), fd_budget::PART_FLOOR.load(Relaxed), cap)
+}
+
+/// Each session's file-cache limit under the part pool's current demand (fd
+/// takes the lower of it and the session's own max_safe_fds). 0 = none.
+pub fn session_fd_limit() -> i64 {
+    fd_budget::SESSION_LIMIT.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +923,7 @@ pub fn raise_fd_soft_limit_to_hard() -> FdSoftLimitRaise {
         getrlimit_failed: true,
         getrlimit_errno: libc::ENOSYS,
         setrlimit_errno: 0,
+        kernel_per_process_cap: None,
     }
 }
 

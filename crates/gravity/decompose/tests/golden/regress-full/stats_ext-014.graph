@@ -1,0 +1,11 @@
+-- regress-full-stats_ext-014
+-- INSERT INTO stxdinp SELECT 1, a/100, a/100 FROM generate_series(1, 999) a;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:999)]
+  project (1=c23:1, 2=op528(v3.1, c23:100), 3=op528(v3.1, c23:100))
+  write INSERT rel=34146 rti=1 natts=3 indexes=() route=rti1:34146 natts=3
+  outs 1=w4:val 2=w4:val 3=w4:val
+mapped: ModifyTable FunctionScan

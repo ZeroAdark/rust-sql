@@ -968,7 +968,7 @@ mod proofs {
         /// is EXCLUDED (both sides run a trivial 2^31-iteration loop —
         /// unbounded for the solver, value-identical). fast.
         /// unwind 6: concrete_varlena::<4>'s fill loop runs 4 iterations
-        /// (CI cluster fail: unwinding assertion at unwind(4)).
+        /// (fleet fail: unwinding assertion at unwind(4)).
         #[kani::unwind(6)]
         fn eq_repeat_err_plane() {
             install_oc(PG_LATIN1);
@@ -1524,7 +1524,7 @@ mod proofs {
         /// VARHDRSZ in-theorem). Compares through REL_18's own pg_ltoa
         /// (C-file shim 8). Expected class: ladder.
         /// unwind 12: pg_ultoa_n emits up to 7 digits (2/iter) and the
-        /// byte-compare loop runs n <= 9 iterations (CI cluster fail:
+        /// byte-compare loop runs n <= 9 iterations (fleet fail:
         /// unwinding assertion at unwind(4)).
         #[kani::unwind(12)]
         fn eq_anychar_typmodout_band() {
@@ -1540,7 +1540,7 @@ mod proofs {
         /// largest valid typmod), INT32_MAX, INT32_MIN (negative ->
         /// empty-string plane). fast.
         /// unwind 14: INT32_MAX emits 10 digits -> compare loop n <= 12
-        /// (CI cluster fail: unwinding assertion at unwind(6)).
+        /// (fleet fail: unwinding assertion at unwind(6)).
         #[kani::unwind(14)]
         fn spot_anychar_typmodout_wide() {
             install_vc(PG_LATIN1);
@@ -1588,7 +1588,7 @@ mod proofs {
         /// Rust 22001s). The original b"abcdef" was VACUOUS: both sides
         /// errored with the same class (maxlen only appears in message
         /// text, out of proof), so the skew was invisible to the
-        /// error-class-only compare — CI cluster 994f9977 caught the control
+        /// error-class-only compare — fleet 994f9977 caught the control
         /// passing (broken-gate class).
         #[kani::unwind(10)]
         fn control_varchar_clip_skew() {

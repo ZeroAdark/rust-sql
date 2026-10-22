@@ -1,0 +1,10 @@
+-- regress-full-create_am-004
+-- CREATE TABLE heaptable USING heap AS SELECT a, repeat(a::text, 100) FROM generate_series(1,9) AS a;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:9)]
+  project (1=v1.1, 2=fn1622(io25(v1.1), c23:100))
+  outs 1=w4:val 2=vl:call1622
+mapped: FunctionScan

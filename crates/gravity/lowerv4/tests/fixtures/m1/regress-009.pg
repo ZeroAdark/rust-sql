@@ -1,0 +1,5 @@
+# PostgreSQL 18.6 (box 19, 09-24): COPY (<sql>) TO STDOUT, t as in decompose/tests/plans/regress-nodes.sql (no rows needed)
+sql: SELECT a FROM t WHERE false;
+cols: a
+class: unordered
+[pg]

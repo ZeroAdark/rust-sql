@@ -8,7 +8,7 @@
 // EXCEPT the backend: queries run against OUR wasm engine (backend.js +
 // worker.js), not the design's mock.
 
-import { installBackend, bootBackend, resetBackend, setStatusListener, getBuildInfo, getEngineMode, setPersist, getPersistState, setPersistListener, setClientMode, setPsqlHooks, sendPsqlText, flushPersist } from './backend.js';
+import { installBackend, bootBackend, resetBackend, setStatusListener, getBuildInfo, getEngineMode, setPersist, getPersistState, setPersistListener, setClientMode, setPsqlHooks, sendPsqlText, flushPersist, cancelAvailable, requestCancel, CANCEL_UNAVAILABLE } from './backend.js';
 import { jspiSupported } from './wiresession.js';
 
 // ---- client selection ----------------------------------------------------
@@ -932,6 +932,8 @@ inputEl.addEventListener('keydown', (e) => {
     if (inputEl.selectionStart !== inputEl.selectionEnd) return;
     e.preventDefault();
     pushLine(curPrompt, inputEl.value + '^C', '#7e8794');
+    // psql's Ctrl-C: cancel the running statement (a no-op at an idle prompt: the server drops it at its next read)
+    requestCancel();
     if (CLIENT !== 'psql') {
       buffer = ''; setPrompt('pgrust=# ');
     }
@@ -941,6 +943,16 @@ inputEl.addEventListener('keydown', (e) => {
 });
 
 document.getElementById('btn-clear').addEventListener('click', () => { clearScreen(); maybeFocusInput(); });
+
+// ---- stop (user cancel of the running statement; backend.js requestCancel) ---
+const stopBtnEl = document.getElementById('btn-stop');
+stopBtnEl.addEventListener('click', () => { requestCancel(); maybeFocusInput(); });
+function updateStopUi() {
+  stopBtnEl.disabled = !cancelAvailable();
+  stopBtnEl.title = cancelAvailable() ? 'Cancel the running statement (Ctrl-C)' : CANCEL_UNAVAILABLE;
+  stopBtnEl.style.opacity = cancelAvailable() ? '' : '0.5';
+  stopBtnEl.style.cursor = cancelAvailable() ? 'pointer' : 'not-allowed';
+}
 document.getElementById('btn-reset').addEventListener('click', () => { doReset(); maybeFocusInput(); });
 
 // ---- persist toggle (OPFS datadir snapshots — see worker.js/snapshot.js) -----
@@ -1146,6 +1158,7 @@ bootBackend().then(() => {
   booted = true;
   updateBuildUi();
   updatePersistUi();
+  updateStopUi();
   buildExamples();
   if (CLIENT === 'psql') {
     // The REAL psql owns the terminal: clear the boot chatter, replay its

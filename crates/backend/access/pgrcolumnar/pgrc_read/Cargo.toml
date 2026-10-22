@@ -1,0 +1,51 @@
+# pgrc_read — the pgrcolumnar reader (chunk M3-F).
+#
+# Dependency cone is deliberately tiny: the frozen format crate, the pgsync
+# world-switching sync layer, and the vfs I/O choke (the sanctioned file
+# surface — no raw std::fs / libc fs calls, so no determinism-ledger rows).
+# Keeping pgstat/catcache-reaching deps OUT of this cone is what keeps the
+# crate loom-buildable (the lx_agg/lx_join loom wall lesson).
+
+[package]
+name = "pgrc_read"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pgrc_read"
+path = "src/lib.rs"
+
+[dependencies]
+# D3887: the abort poll of the long loops (a dictionary region's build, the part cache's trim).
+cancelpoll = { path = "../../../../_support/cancelpoll" }
+# G1-A: the part cache's census moves bytes to its memory ledger account.
+memledger = { path = "../../../../_support/memledger" }
+# The part cache's trim target is the memory policy's (mempolicy::cache).
+mempolicy = { path = "../../../../_support/mempolicy" }
+# D4135: a lazily faulted dictionary reservation gives its whole pages back before any fault writes them.
+pagegive = { path = "../../../../_support/pagegive" }
+# C.23: under PoolAlloc a dictionary reservation of a superpage and up is the pool's never-touched base pages.
+pagepool = { path = "../../../../_support/pagepool" }
+cost_profile = { path = "../../../../_support/cost_profile" }
+# dicthandle.rs: the shapecheck fire record (dict.stream_rest).
+fires = { path = "../../../../_support/fires" }
+libc = "0.2"
+pgrc_batch = { path = "../pgrc_batch" }
+pgrc_format = { path = "../pgrc_format" }
+pgsync = { path = "../../../../_support/pgsync" }
+vfs = { path = "../../../storage/file/vfs" }
+
+# D4487: an open part keeps its fault log (`OpenPart::faults`, the tests' witness of what it read) only under this
+# feature (the dependent crates' tests turn it on as a dev-dependency), cfg(test) and loom; production keeps none.
+[features]
+fault-log = []
+
+# tests/loom.rs model builders (the pgsync pattern: the loom dependency for
+# production sync lives in pgsync; this row exists solely for the crate's
+# own loom models).
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

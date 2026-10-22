@@ -23,14 +23,6 @@ use wchar::pg_enc;
 use crate::parse_param::ParseRefHookState;
 use crate::parser_errposition_source;
 
-#[track_caller]
-fn loc(funcname: &'static str) -> ErrorLocation {
-    // pgrust is Rust: report where in OUR source this was raised.
-    // #[track_caller] resolves to the call site, not this helper.
-    let site = core::panic::Location::caller();
-    ErrorLocation::new(site.file(), site.line() as i32, funcname)
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[repr(u32)]
 #[allow(non_camel_case_types)]
@@ -246,7 +238,7 @@ pub fn free_parsestate(pstate: ParseState<'_, '_>) -> PgResult<()> {
                     "target lists can have at most {MaxTupleAttributeNumber} entries"
                 ))
                 .into_error()
-                .with_error_location(loc("free_parsestate")),
+                .with_error_location(ErrorLocation::new("parse_node.c", 83, "free_parsestate")),
         ));
     }
     if let Some(rel) = pstate.p_target_relation {

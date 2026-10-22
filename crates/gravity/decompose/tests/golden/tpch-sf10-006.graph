@@ -1,0 +1,26 @@
+-- tpch-sf10-006
+-- SELECT sum(l_extendedprice * l_discount) AS revenue FROM lineitem WHERE l_shipdate >= CAST('1994-01-01' AS date) AND l_shipdate < CAST('1995-01-01' AS date) AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24 /* TH6 */;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=1 end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@6^
+  source range rel=16449 rti=1 am=pgrc
+    lanes Attr(5):fixed8:pn15.2:win/arena Attr(6):fixed8:pn15.2:win/arena Attr(7):fixed8:pn15.2:win/arena Attr(11):byval4:w4:val Offset:byval2:w2:val
+    zone lane3 >= word0/4
+    zone lane3 < word0/4
+  filter op1098(v1.11, c1082:-2191)
+  filter op1095(v1.11, c1082:-1826)
+  filter op1757(v1.7, c1700:'\x7f\x81\xf4\x01')
+  filter op1755(v1.7, c1700:'\x7f\x81\xbc\x02')
+  filter op1754(v1.5, c1700:'\x00\x80\x18\x00')
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=pn15.2:win/arena 6=pn15.2:win/arena 7=pn15.2:win/arena 8=vl:row 9=vl:row 10=vl:row 11=w4:val 12=w4:val 13=w4:val 14=vl:row 15=vl:row 16=vl:row
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2114(1=op1760(outer.6, outer.7)))
+  outs 1=vl:call2114
+breaker slot=0 kind=PlainAgg budget=Fixed(96) spill=None producer=p0 layout=[]->[SumNumWide@0,Count@32] 40B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[SumNumWide@0,Count@32] 40B
+  agg aggno=0 fn=2114 reg=SumNum slot=0 count_slot=- final=Numeric scale=4 class=SumNum trans=Abi(SumNumWide) mods=[] expr=agg2114(1=op1760(outer.6, outer.7))
+mapped: SeqScan Agg

@@ -140,6 +140,7 @@ fn index_rel_natts<'mcx>(
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support,
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),

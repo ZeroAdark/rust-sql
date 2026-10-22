@@ -1,0 +1,11 @@
+# OVER (ORDER BY ..) orders the window, not the result
+sql: SELECT x, row_number() OVER (ORDER BY x) FROM t;
+cols: x	row_number
+class: unordered
+verdict: match
+[pg]
+a	1
+b	2
+[got]
+b	2
+a	1

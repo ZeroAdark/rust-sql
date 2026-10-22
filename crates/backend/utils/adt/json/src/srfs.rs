@@ -1,7 +1,7 @@
-//! jsonfuncs.c json-half SRFs: json_object_keys, json_each[_text],
-//! json_array_elements[_text]. C materializes rows up front (tuplestore /
-//! first-call collection); the owned row vectors here are the same cost
-//! shape, driven through the funcapi ValuePerCall frame.
+//! jsonfuncs.c json-half SRFs: json_object_keys (ValuePerCall, first-call
+//! key collection as C), json_each[_text] and json_array_elements[_text]
+//! (InitMaterializedSRF tuplestore sinks fed row by row as C, with C's
+//! per-row tmp_cxt reset).
 
 extern crate alloc;
 
@@ -10,22 +10,27 @@ use alloc::vec::Vec;
 use crate::funcs::{invalid_param, parse_sem_or_ereport};
 use crate::jsonapi::{JsonLex, JsonLexDe, JsonSem, JsonSemToken, JsonToken};
 use datum::Datum;
-use mcx::Mcx;
-use types_core::catalog::{JSONOID, RECORDOID, TEXTOID};
+use funcapi::{InitMaterializedSRF, MaterializedSRF, MAT_SRF_BLESS, MAT_SRF_USE_EXPECTED_DESC};
+use mcx::{Mcx, MemoryContext};
 use types_error::PgResult;
 use types_fmgr::{byref_result, varlena_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
 
-// Owned cross-call rows (per-call memory resets between SRF calls).
-pub(crate) enum SrfRows {
+// Owned cross-call rows (per-call memory resets between SRF calls). Public for the Gravity SRF cells
+// (gravity_fn srf.rs); `Tuples` is no longer built here since json_each streams into a tuplestore (pgrust main),
+// but the cells still name it.
+pub enum SrfRows {
     Texts(Vec<Option<Vec<u8>>>),
     Tuples(Vec<Vec<u8>>),
 }
 
-// jsonfuncs.c materialises through a tuplestore: rows are admitted under
-// MaxAllocSize and every growth is fallible, so an oversized set is an ERROR.
+// jsonfuncs.c okeys_object_field_start: the char * array starts at 256
+// slots and doubles when full, so MaxAllocSize is hit only by the repalloc
+// of 2 * count pointers.
 fn admit<T>(rows: &mut Vec<T>) -> PgResult<()> {
-    let n = rows.len() + 1;
-    ::mcx::check_alloc_size(n.saturating_mul(core::mem::size_of::<T>().max(16)))?;
+    let n = rows.len();
+    if n >= 256 && n.is_power_of_two() {
+        ::mcx::check_alloc_size(n.saturating_mul(2 * core::mem::size_of::<*const u8>()))?;
+    }
     rows.try_reserve(1).map_err(|_| ::mcx::oom_named("json SRF", core::mem::size_of::<T>()).into())
 }
 
@@ -44,8 +49,8 @@ pub(crate) fn srf_drive(
 ) -> PgResult<Datum> {
     let flinfo = flinfo.unwrap_or_else(|| panic!("{name}: NULL flinfo"));
     if !flinfo.has_fn_extra() {
-        let rows = collect(fcinfo)?;
         let fctx = funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
+        let rows = collect(fcinfo)?;
         fctx.user_fctx = Some(Box::new(rows));
     }
     let fctx = funcapi::per_MultiFuncCall(flinfo);
@@ -116,7 +121,7 @@ impl<'mcx> JsonSem<'mcx> for OkeysState<'mcx> {
 }
 
 /// C: json_object_keys — the first-call key collection.
-pub(crate) fn object_keys_rows(mcx: Mcx<'_>, json: &[u8]) -> PgResult<SrfRows> {
+pub fn object_keys_rows(mcx: Mcx<'_>, json: &[u8]) -> PgResult<SrfRows> {
     let mut lex = JsonLexDe::new(mcx, json, mbutils::GetDatabaseEncoding());
     let mut state = OkeysState {
         keys: Vec::new(),
@@ -126,13 +131,24 @@ pub(crate) fn object_keys_rows(mcx: Mcx<'_>, json: &[u8]) -> PgResult<SrfRows> {
     Ok(SrfRows::Texts(state.keys))
 }
 
+// Where json_each / json_array_elements put each row: C's tuplestore sink with the per-row tmp_cxt reset (the fmgr
+// path, pgrust main), or owned values collected for the Gravity SRF cells (each_pairs / elements_rows).
+enum RowSink<'a, 'mcx, T> {
+    Srf { sink: &'a mut MaterializedSRF<'mcx>, tmp_cxt: MemoryContext },
+    Collect(Vec<T>),
+}
+
+fn owned_opt(v: Option<&[u8]>) -> PgResult<Option<Vec<u8>>> {
+    v.map(owned).transpose()
+}
+
 struct EachState<'a, 'mcx> {
     input: &'a [u8],
     normalize: bool,
     next_scalar: bool,
     normalized_scalar: Option<&'mcx [u8]>,
     result_start: usize,
-    pairs: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+    out: RowSink<'a, 'mcx, (Vec<u8>, Option<Vec<u8>>)>,
 }
 
 impl<'mcx> JsonSem<'mcx> for EachState<'_, 'mcx> {
@@ -161,17 +177,32 @@ impl<'mcx> JsonSem<'mcx> for EachState<'_, 'mcx> {
         if lex.lex_level != 1 {
             return Ok(true);
         }
-        let val = if isnull && self.normalize {
+        let input = self.input;
+        let val: Option<&[u8]> = if isnull && self.normalize {
             None
         } else if self.next_scalar {
             let s = self.normalized_scalar.expect("scalar recorded");
             self.next_scalar = false;
-            Some(s.to_vec())
+            Some(s)
         } else {
-            Some(self.input[self.result_start..lex.prev_token_terminator].to_vec())
+            Some(&input[self.result_start..lex.prev_token_terminator])
         };
-        admit(&mut self.pairs)?;
-        self.pairs.push((owned(fname)?, val));
+        match &mut self.out {
+            RowSink::Srf { sink, tmp_cxt } => {
+                let tmp = tmp_cxt.mcx();
+                let key = varlena_result(varlena::cstring_to_text(tmp, fname)?);
+                let (val, val_null) = match val {
+                    None => (Datum::null(), true),
+                    Some(b) => (varlena_result(varlena::cstring_to_text(tmp, b)?), false),
+                };
+                sink.putvalues(&[key, val], &[false, val_null])?;
+                tmp_cxt.reset();
+            }
+            RowSink::Collect(pairs) => {
+                admit(pairs)?;
+                pairs.push((owned(fname)?, owned_opt(val)?));
+            }
+        }
         Ok(true)
     }
 
@@ -198,9 +229,40 @@ impl<'mcx> JsonSem<'mcx> for EachState<'_, 'mcx> {
     }
 }
 
-/// C: each_worker — rows materialized as composite images with a freshly
-/// built 2-column rowtype.
-pub(crate) fn each_rows(mcx: Mcx<'_>, json: &[u8], as_text: bool) -> PgResult<SrfRows> {
+/// C: each_worker.
+pub(crate) fn each_worker(
+    flinfo: &mut FmgrInfo,
+    fcinfo: &mut Fcinfo,
+    as_text: bool,
+) -> PgResult<Datum> {
+    // SAFETY: executor arms the result mcx pre-call; it outlives this frame.
+    let mcx = unsafe { fcinfo.result_mcx_detached() };
+    let mut srf = InitMaterializedSRF(mcx, flinfo, fcinfo, MAT_SRF_BLESS)?;
+    {
+        // SAFETY: catalog arg 0 is a non-null json varlena (strict fn).
+        let json = unsafe { fcinfo.arg_varlena_packed(0)? };
+        let json = json.data();
+        let mut lex = JsonLexDe::new(mcx, json, mbutils::GetDatabaseEncoding());
+        let mut state = EachState {
+            input: json,
+            normalize: as_text,
+            next_scalar: false,
+            normalized_scalar: None,
+            result_start: 0,
+            out: RowSink::Srf {
+                sink: &mut srf,
+                tmp_cxt: mcx.context().new_child_wholesale("json_each temporary cxt"),
+            },
+        };
+        parse_sem_or_ereport(&mut lex, &mut state)?;
+    }
+    Ok(srf.finish(fcinfo))
+}
+
+/// C: each_worker's parse — the (key, value) pairs before they are formed into rows (the
+/// value bytes are the raw json text, or the normalized string / None for a null when `as_text`).
+/// The Gravity json_each cell's entry (gravity_fn srf.rs).
+pub fn each_pairs(mcx: Mcx<'_>, json: &[u8], as_text: bool) -> PgResult<Vec<(Vec<u8>, Option<Vec<u8>>)>> {
     let mut lex = JsonLexDe::new(mcx, json, mbutils::GetDatabaseEncoding());
     let mut state = EachState {
         input: json,
@@ -208,40 +270,11 @@ pub(crate) fn each_rows(mcx: Mcx<'_>, json: &[u8], as_text: bool) -> PgResult<Sr
         next_scalar: false,
         normalized_scalar: None,
         result_start: 0,
-        pairs: Vec::new(),
+        out: RowSink::Collect(Vec::new()),
     };
     parse_sem_or_ereport(&mut lex, &mut state)?;
-
-    let mut desc = tupdesc::CreateTemplateTupleDesc(mcx, 2)?;
-    tupdesc::TupleDescInitEntry(&mut desc, 1, Some("key"), TEXTOID, -1, 0)?;
-    tupdesc::TupleDescInitEntry(
-        &mut desc,
-        2,
-        Some("value"),
-        if as_text { TEXTOID } else { JSONOID },
-        -1,
-        0,
-    )?;
-    desc.tdtypeid = RECORDOID;
-    desc.tdtypmod = -1;
-    // C: BlessTupleDesc (jsonfuncs.c each_worker, InitMaterializedSRF(fcinfo,
-    // MAT_SRF_BLESS)) — the rows are anonymous record datums; record_out
-    // needs the registered typmod stamped into each tuple header.
-    ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
-
-    let mut rows: Vec<Vec<u8>> = Vec::with_capacity(state.pairs.len());
-    for (key, val) in &state.pairs {
-        let key_datum = varlena_result(varlena::cstring_to_text(mcx, key)?);
-        let (val_datum, val_null) = match val {
-            None => (Datum::null(), true),
-            Some(bytes) => (varlena_result(varlena::cstring_to_text(mcx, bytes)?), false),
-        };
-        let tuple =
-            heaptuple::heap_form_tuple(mcx, &desc, &[key_datum, val_datum], &[false, val_null])?;
-        admit(&mut rows)?;
-        rows.push(owned(tuple.image())?);
-    }
-    Ok(SrfRows::Tuples(rows))
+    let RowSink::Collect(pairs) = state.out else { unreachable!("collect sink") };
+    Ok(pairs)
 }
 
 struct ElementsState<'a, 'mcx> {
@@ -251,7 +284,7 @@ struct ElementsState<'a, 'mcx> {
     next_scalar: bool,
     normalized_scalar: Option<&'mcx [u8]>,
     result_start: usize,
-    rows: Vec<Option<Vec<u8>>>,
+    out: RowSink<'a, 'mcx, Option<Vec<u8>>>,
 }
 
 impl<'mcx> JsonSem<'mcx> for ElementsState<'_, 'mcx> {
@@ -270,16 +303,30 @@ impl<'mcx> JsonSem<'mcx> for ElementsState<'_, 'mcx> {
         if lex.lex_level != 1 {
             return Ok(true);
         }
-        admit(&mut self.rows)?;
-        if isnull && self.normalize {
-            self.rows.push(None);
+        let input = self.input;
+        let val: Option<&[u8]> = if isnull && self.normalize {
+            None
         } else if self.next_scalar {
             let s = self.normalized_scalar.expect("scalar recorded");
             self.next_scalar = false;
-            self.rows.push(Some(owned(s)?));
+            Some(s)
         } else {
-            self.rows
-                .push(Some(owned(&self.input[self.result_start..lex.prev_token_terminator])?));
+            Some(&input[self.result_start..lex.prev_token_terminator])
+        };
+        match &mut self.out {
+            RowSink::Srf { sink, tmp_cxt } => {
+                let tmp = tmp_cxt.mcx();
+                let (val, val_null) = match val {
+                    None => (Datum::null(), true),
+                    Some(b) => (varlena_result(varlena::cstring_to_text(tmp, b)?), false),
+                };
+                sink.putvalues(&[val], &[val_null])?;
+                tmp_cxt.reset();
+            }
+            RowSink::Collect(rows) => {
+                admit(rows)?;
+                rows.push(owned_opt(val)?);
+            }
         }
         Ok(true)
     }
@@ -311,8 +358,47 @@ impl<'mcx> JsonSem<'mcx> for ElementsState<'_, 'mcx> {
     }
 }
 
-/// C: elements_worker's parse (lexer escapes only when as_text, as C).
-pub(crate) fn elements_rows(
+/// C: elements_worker (lexer escapes only when as_text, as C).
+pub(crate) fn elements_worker(
+    flinfo: &mut FmgrInfo,
+    fcinfo: &mut Fcinfo,
+    function_name: &'static str,
+    as_text: bool,
+) -> PgResult<Datum> {
+    // SAFETY: executor arms the result mcx pre-call; it outlives this frame.
+    let mcx = unsafe { fcinfo.result_mcx_detached() };
+    let mut srf = InitMaterializedSRF(
+        mcx,
+        flinfo,
+        fcinfo,
+        MAT_SRF_USE_EXPECTED_DESC | MAT_SRF_BLESS,
+    )?;
+    {
+        // SAFETY: catalog arg 0 is a non-null json varlena (strict fn).
+        let json = unsafe { fcinfo.arg_varlena_packed(0)? };
+        let json = json.data();
+        let mut lex =
+            JsonLexDe::with_escapes(mcx, json, mbutils::GetDatabaseEncoding(), as_text);
+        let mut state = ElementsState {
+            input: json,
+            function_name,
+            normalize: as_text,
+            next_scalar: false,
+            normalized_scalar: None,
+            result_start: 0,
+            out: RowSink::Srf {
+                sink: &mut srf,
+                tmp_cxt: mcx.context().new_child_wholesale("json_array_elements temporary cxt"),
+            },
+        };
+        parse_sem_or_ereport(&mut lex, &mut state)?;
+    }
+    Ok(srf.finish(fcinfo))
+}
+
+/// C: elements_worker's parse (lexer escapes only when as_text, as C): the Gravity json_array_elements cell's
+/// entry (gravity_fn srf.rs).
+pub fn elements_rows(
     mcx: Mcx<'_>,
     json: &[u8],
     function_name: &'static str,
@@ -326,8 +412,25 @@ pub(crate) fn elements_rows(
         next_scalar: false,
         normalized_scalar: None,
         result_start: 0,
-        rows: Vec::new(),
+        out: RowSink::Collect(Vec::new()),
     };
     parse_sem_or_ereport(&mut lex, &mut state)?;
-    Ok(SrfRows::Texts(state.rows))
+    let RowSink::Collect(rows) = state.out else { unreachable!("collect sink") };
+    Ok(SrfRows::Texts(rows))
+}
+
+#[cfg(test)]
+mod admit_tests {
+    // 2^26 keys fill C's array; the next key repallocs 2^27 pointers (1 GB).
+    #[test]
+    fn admit_follows_c_pointer_array_doubling() {
+        let mut v: super::Vec<()> = super::Vec::new();
+        v.resize(44_739_243, ());
+        assert!(super::admit(&mut v).is_ok());
+        v.resize(1 << 25, ());
+        assert!(super::admit(&mut v).is_ok());
+        v.resize(1 << 26, ());
+        let e = super::admit(&mut v).unwrap_err();
+        assert_eq!(e.message(), "invalid memory alloc request size 1073741824");
+    }
 }

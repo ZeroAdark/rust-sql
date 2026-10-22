@@ -1,0 +1,14 @@
+# PostgreSQL 18.6 (m4_write_golden.py): the tables before, the statement, its rows, count and tables after
+plan: oltp-032
+table: 16534 ol_del k:int8
+unique: 16534 ol_del_pkey k
+[before 16534]
+12344
+12345
+12346
+[pg]
+[tag]
+1
+[after 16534]
+12344
+12346

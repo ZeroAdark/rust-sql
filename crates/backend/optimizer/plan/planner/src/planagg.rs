@@ -275,8 +275,7 @@ fn build_minmax_path<'mcx>(
     let path_fraction = if final_rows > 1.0 { 1.0 / final_rows } else { 1.0 };
 
     let pathlist = crate::relnode::pgvec_clone_shallow(mcx, &run.root.rel(final_rel).pathlist);
-    let query_pathkeys =
-        crate::relnode::pgvec_clone_shallow(mcx, &run.root.query_pathkeys);
+    let query_pathkeys = run.root.query_pathkeys;
     let sorted_path = crate::pathkeys::get_cheapest_fractional_path_for_pathkeys(
         run,
         &pathlist,
@@ -297,7 +296,7 @@ fn build_minmax_path<'mcx>(
         let p = run.root.path(sorted_path).base();
         (p.startup_cost, p.total_cost)
     };
-    let path_cost = startup + path_fraction * (total - startup);
+    let path_cost = crate::fma_sites::fractional_cost(startup, total, path_fraction);
 
     let subroot_idx = run.pop_root_to_minmax_subroot();
     mminfo.pathcost = path_cost;
@@ -307,15 +306,17 @@ fn build_minmax_path<'mcx>(
 }
 
 fn minmax_qp_callback<'mcx>(run: &mut PlannerRun<'mcx>) -> PgResult<()> {
-    run.root.group_pathkeys = PgVec::new_in(run.mcx);
+    run.root.group_pathkeys = &[];
     run.root.num_groupby_pathkeys = 0;
-    run.root.window_pathkeys = PgVec::new_in(run.mcx);
-    run.root.distinct_pathkeys = PgVec::new_in(run.mcx);
+    run.root.window_pathkeys = &[];
+    run.root.distinct_pathkeys = &[];
     let parse = run.parse();
-    run.root.sort_pathkeys =
-        crate::pathkeys::make_pathkeys_for_sortclauses(run, &parse.sortClause, &parse.targetList)?;
-    run.root.query_pathkeys =
-        crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.sort_pathkeys);
+    run.root.sort_pathkeys = ::mcx::freeze_fit(crate::pathkeys::make_pathkeys_for_sortclauses(
+        run,
+        &parse.sortClause,
+        &parse.targetList,
+    )?);
+    run.root.query_pathkeys = run.root.sort_pathkeys;
     Ok(())
 }
 

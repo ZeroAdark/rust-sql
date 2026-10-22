@@ -1,0 +1,10 @@
+-- regress-full-sqljson_queryfuncs-023
+-- SELECT json_value('"aaa"', path RETURNING json) FROM jsonpaths;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1360 end=sink
+  nodes n0@0
+  source range rel=39416 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=T_JsonExpr)
+  outs 1=vl:call0
+mapped: SeqScan

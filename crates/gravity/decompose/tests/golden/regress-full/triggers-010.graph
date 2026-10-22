@@ -1,0 +1,9 @@
+-- regress-full-triggers-010
+-- insert into trigger_test values(1,'insert');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=io25(relabel2205($7)))
+  outs 1=vl:call46
+mapped: Result

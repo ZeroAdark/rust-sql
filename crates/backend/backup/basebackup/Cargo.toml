@@ -26,6 +26,9 @@ blkreftable = { path = "../../../common/blkreftable" }
 ps_status_seams = { path = "../../utils/misc/ps_status_seams" }
 ps_status = { path = "../../utils/misc/ps_status" }
 fd = { path = "../../storage/file/fd" }
+pgrc_format = { path = "../../access/pgrcolumnar/pgrc_format" }
+pgrc_spool = { path = "../../access/pgrcolumnar/pgrc_spool" }
+resowner = { path = "../../utils/resowner/resowner" }
 init_small = { path = "../../utils/init/init_small" }
 transam_xlog = { path = "../../access/transam/transam_xlog" }
 xlogbackup = { path = "../../access/transam/xlogbackup" }

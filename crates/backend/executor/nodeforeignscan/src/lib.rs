@@ -276,8 +276,6 @@ pub fn exec_init_foreign_scan<'mcx>(
     eflags: i32,
 ) -> PgResult<ForeignScanState<'mcx>> {
     debug_assert!(eflags & (EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK) == 0);
-    // The outer (EPQ) subplan, if any, is initialized by the executor
-    // wrapper (procnode ForeignScanNode) before this runs.
     let direct = node.operation != CmdType::CMD_SELECT;
     debug_assert_eq!(direct, node.resultRelation != 0);
 
@@ -348,7 +346,7 @@ pub fn exec_init_foreign_scan<'mcx>(
         })?
     };
 
-    let mut state = ForeignScanState {
+    Ok(ForeignScanState {
         ss,
         plan: node,
         fdw_recheck_quals,
@@ -356,15 +354,23 @@ pub fn exec_init_foreign_scan<'mcx>(
         table_oid,
         fdw_state: None,
         chg_param: false,
-    };
-    if direct {
+    })
+}
+
+pub fn exec_begin_foreign_scan<'mcx>(
+    state: &mut ForeignScanState<'mcx>,
+    estate: &mut EStateData<'mcx>,
+    eflags: i32,
+) -> PgResult<()> {
+    let fdwroutine = state.fdwroutine;
+    if state.plan.operation != CmdType::CMD_SELECT {
         (fdw_exec_routine(fdwroutine).begin_direct.expect("direct-modify provider"))(
-            &mut state, estate, eflags,
+            state, estate, eflags,
         )?;
     } else {
-        (fdw_exec_routine(fdwroutine).begin)(&mut state, estate, eflags)?;
+        (fdw_exec_routine(fdwroutine).begin)(state, estate, eflags)?;
     }
-    Ok(state)
+    Ok(())
 }
 
 pub fn exec_end_foreign_scan<'mcx>(

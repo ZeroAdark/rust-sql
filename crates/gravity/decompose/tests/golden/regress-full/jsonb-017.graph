@@ -1,0 +1,12 @@
+-- regress-full-jsonb-017
+-- update test_jsonb_subscript set test_json['a'] = '1' where id = 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=39285 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v1.1, c23:1)
+  project (1=T_SubscriptingRef, 2j=v1.-1, 3j=v1.1)
+  write UPDATE rel=39285 rti=1 natts=2 indexes=() set=(2)
+  outs 1=vl:call0 2=fx6:row 3=w8:val
+mapped: ModifyTable SeqScan

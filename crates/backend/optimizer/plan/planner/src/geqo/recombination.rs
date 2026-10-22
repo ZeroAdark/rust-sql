@@ -31,6 +31,6 @@ pub(super) struct City {
 // ERX driver; switching operators is a build-time choice, as in C.
 #[cfg(feature = "geqo_nondefault_operators")]
 #[allow(dead_code)]
-pub(super) fn alloc_city_table(num_gene: i32) -> Vec<City> {
-    vec![City::default(); (num_gene + 1) as usize]
+pub(super) fn alloc_city_table(num_gene: i32) -> types_error::PgResult<Vec<City>> {
+    mcx::std_vec_from_elem("geqo", City::default(), (num_gene + 1) as usize)
 }

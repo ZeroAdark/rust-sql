@@ -1,0 +1,10 @@
+-- regress-full-domain-035
+-- select pg_typeof(f1[1]) from dposintatable;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1360 end=sink
+  nodes n0@0
+  source range rel=40391 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn1619(T_SubscriptingRef))
+  outs 1=w4:val
+mapped: SeqScan

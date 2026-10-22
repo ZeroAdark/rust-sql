@@ -1,0 +1,3 @@
+backend/catalog/catalog_namespace/src/path.rs	SPCACHE	pgport	key:role and search_path text	cache	C's SearchPathCache: each entry under the role and the search_path text it was computed for; reset whole past SPCACHE_RESET_THRESHOLD (256) entries or when SEARCH_PATH_CACHE_VALID drops (a namespace or role invalidation)
+backend/catalog/catalog_namespace/src/path.rs	SEARCH_PATH_CACHE_VALID	pgport	at:invalidate_search_path_cache	leader	C's searchPathCacheValid: dropped by a namespace or role invalidation (InvalidationCallback)
+backend/catalog/catalog_namespace/src/path.rs	CALLBACKS_REGISTERED	pgport	exit	thread	this thread registered its namespace and role invalidation callbacks once (InitializeSearchPath)

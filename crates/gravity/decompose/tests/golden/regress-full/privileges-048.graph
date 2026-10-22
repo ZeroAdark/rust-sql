@@ -1,0 +1,9 @@
+-- regress-full-privileges-048
+-- SELECT loread(lo_open(1001, x'20000'::int), 32);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn954(fn952(c26:1001, c23:131072), c23:32))
+  outs 1=vl:call954
+mapped: Result

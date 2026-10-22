@@ -51,25 +51,33 @@ pub struct TSParserCacheEntry {
 pub struct TSDictionaryCacheEntry {
     pub dict_id: Oid,
     pub isvalid: Cell<bool>,
-    pub lexize_oid: Oid,
-    // Owns dict_data and everything the init method allocated: C's per-entry
-    // dictCtx, a child of CacheMemoryContext identified by the dictionary
-    // name (ts_cache.c:312-316), kept whether or not the template has an
-    // init method. Heap-pinned: Mcx handles into it live inside dict_data
-    // (PgVec allocators).
-    _dict_ctx: std::boxed::Box<MemoryContext>,
-    pub dict_data: usize,
-    dict_drop: Option<ts_locale::dict_api::DictDropFn>,
-    lexize: RefCell<FmgrInfo>,
+    state: RefCell<TSDictionaryState>,
 }
 
-impl Drop for TSDictionaryCacheEntry {
-    fn drop(&mut self) {
-        if let Some(f) = self.dict_drop {
-            // SAFETY: dict_data is the init method's state in _dict_ctx, which
-            // is still alive here (fields drop after this body).
+struct TSDictionaryState {
+    // Heap-pinned: dictionary state contains Mcx handles into this context.
+    ctx: Box<MemoryContext>,
+    dict_data: usize,
+    dict_drop: Option<ts_locale::dict_api::DictDropFn>,
+    lexize: Option<FmgrInfo>,
+}
+
+impl TSDictionaryState {
+    fn clear(&mut self) {
+        if let Some(f) = self.dict_drop.take() {
+            // SAFETY: dict_data belongs to the still-live context and is dropped once.
             unsafe { f(self.dict_data) }
         }
+        self.dict_data = 0;
+        self.lexize = None;
+        self.ctx.set_ident(None);
+        self.ctx.reset();
+    }
+}
+
+impl Drop for TSDictionaryState {
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 
@@ -86,12 +94,20 @@ impl TSDictionaryCacheEntry {
             Some(s) => s as *mut DictSubState as usize,
             None => 0,
         };
-        let mut lexize = self.lexize.borrow_mut();
+        let mut state = self
+            .state
+            .try_borrow_mut()
+            .map_err(|_| cache_lookup_failed("dictionary", self.dict_id))?;
+        let dict_data = state.dict_data;
+        let lexize = state
+            .lexize
+            .as_mut()
+            .ok_or_else(|| cache_lookup_failed("dictionary", self.dict_id))?;
         let d = function_call4_coll_in(
-            &mut lexize,
+            lexize,
             InvalidOid,
             result_mcx,
-            Datum::from_usize(self.dict_data),
+            Datum::from_usize(dict_data),
             Datum::from_usize(token.as_ptr() as usize),
             Datum::from_i32(token.len() as i32),
             Datum::from_usize(dstate_word),
@@ -290,37 +306,54 @@ pub fn lookup_ts_dictionary_cache(dictId: Oid) -> PgResult<Rc<TSDictionaryCacheE
         return Ok(hit);
     }
 
-    // C ts_cache.c:312-316: AllocSetContextCreate(CacheMemoryContext,
-    // "TS dictionary") + MemoryContextCopyAndSetIdentifier(dictname).
-    let root = with_state(|st| st.root);
-    let ctx = std::boxed::Box::new(root.new_child("TS dictionary"));
-    let (template_oid, init_oid, lexize_oid, dict_data);
+    let lookup_ctx = MemoryContext::new("TS dictionary lookup");
+    let dict = syscache_seams::lookup_pg_ts_dict_shape::call(lookup_ctx.mcx(), dictId)?
+        .ok_or_else(|| cache_lookup_failed("dictionary", dictId))?;
+    let template_oid = dict.dicttemplate;
+    if template_oid == InvalidOid {
+        return Err(
+            PgError::error(format!("text search dictionary {dictId} has no template")).into(),
+        );
+    }
+    let tmpl = syscache_seams::lookup_pg_ts_template_shape::call(template_oid)?
+        .ok_or_else(|| cache_lookup_failed("template", template_oid))?;
+    let init_oid = tmpl.tmplinit;
+    let lexize_oid = tmpl.tmpllexize;
+    if lexize_oid == InvalidOid {
+        // C ts_cache.c:279 formats template->tmpllexize (InvalidOid here).
+        return Err(PgError::error(format!(
+            "text search template {lexize_oid} has no lexize method"
+        ))
+        .into());
+    }
+
+    let entry = with_state(|st| {
+        Rc::clone(st.dicts.entry(dictId).or_insert_with(|| {
+            Rc::new(TSDictionaryCacheEntry {
+                dict_id: dictId,
+                isvalid: Cell::new(false),
+                state: RefCell::new(TSDictionaryState {
+                    ctx: Box::new(st.root.new_child_wholesale("TS dictionary")),
+                    dict_data: 0,
+                    dict_drop: None,
+                    lexize: None,
+                }),
+            })
+        }))
+    });
+    let mut state = entry
+        .state
+        .try_borrow_mut()
+        .map_err(|_| cache_lookup_failed("dictionary", dictId))?;
+    state.clear();
+    let ctx = &state.ctx;
+    let dict_data;
     let mut dict_drop = None;
     {
-        // SAFETY: 'static stands for "as long as the Box in _dict_ctx lives";
-        // the box pins the context address across the move into the entry.
-        let dmcx: Mcx<'static> = unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'static>>(ctx.mcx()) };
-        let dict = syscache_seams::lookup_pg_ts_dict_shape::call(dmcx, dictId)?
-            .ok_or_else(|| cache_lookup_failed("dictionary", dictId))?;
-        template_oid = dict.dicttemplate;
-        if template_oid == InvalidOid {
-            return Err(PgError::error(format!(
-                "text search dictionary {dictId} has no template"
-            ))
-            .into());
-        }
-        let tmpl = syscache_seams::lookup_pg_ts_template_shape::call(template_oid)?
-            .ok_or_else(|| cache_lookup_failed("template", template_oid))?;
-        init_oid = tmpl.tmplinit;
-        lexize_oid = tmpl.tmpllexize;
-        if lexize_oid == InvalidOid {
-            // C ts_cache.c:279 formats template->tmpllexize (InvalidOid here).
-            return Err(PgError::error(format!(
-                "text search template {lexize_oid} has no lexize method"
-            ))
-            .into());
-        }
-
+        // SAFETY: the context is pinned and outlives its dictionary state;
+        // clear drops that state before resetting the context.
+        let dmcx: Mcx<'static> =
+            unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'static>>(ctx.mcx()) };
         ctx.set_ident(Some(&*String::from_utf8_lossy(dict.dictname.name_str())));
 
         dict_data = if init_oid != InvalidOid {
@@ -349,17 +382,12 @@ pub fn lookup_ts_dictionary_cache(dictId: Oid) -> PgResult<Rc<TSDictionaryCacheE
         };
     }
 
-    let entry = Rc::new(TSDictionaryCacheEntry {
-        dict_id: dictId,
-        isvalid: Cell::new(true),
-        lexize_oid,
-        _dict_ctx: ctx,
-        dict_data,
-        dict_drop,
-        lexize: RefCell::new(fmgr_seams::fmgr_info::call(lexize_oid)?),
-    });
+    state.dict_data = dict_data;
+    state.dict_drop = dict_drop;
+    state.lexize = Some(fmgr_seams::fmgr_info::call(lexize_oid)?);
+    drop(state);
+    entry.isvalid.set(true);
     with_state(|st| {
-        st.dicts.insert(dictId, Rc::clone(&entry));
         st.last_dict = Some(Rc::clone(&entry));
     });
     Ok(entry)

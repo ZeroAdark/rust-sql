@@ -1,0 +1,1 @@
+backend/commands/trigger/src/exec.rs	TRIGGER_DEPTH	pgport	scope:TriggerDepthGuard	leader	C's MyTriggerDepth: raised by TriggerDepthGuard around each trigger function call, whose Drop puts it back; read by pg_trigger_depth() (tier C, not pool_hosted: hir.rs pool_unsafe_site keeps it on the leader) and the trigger instr levels; triggers fire on the leader

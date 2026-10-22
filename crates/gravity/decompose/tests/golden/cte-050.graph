@@ -1,0 +1,23 @@
+-- cte-050
+-- SELECT a FROM t WHERE a < 3 AND b < (SELECT y FROM u WHERE u.x = t.a) AND c <> 'x';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=16395 rti=1 am=heap index=16402
+    key att=1 op=97 value=c23:3
+    recheck (op97(v1.1, c23:3))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page
+  filter op531(v1.3, c25:'x')
+  subplan 1 nested Expr params=($exec0=v1.1)
+  inner node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=16405 rti=2 am=heap index=16411
+    key att=1 op=96 value=$exec0
+    recheck (op96(v2.1, $exec0))
+    lanes Attr(2):byval8:w8:val
+  project (1=v2.2)
+  filter op97(v1.2, subplan1(v1.1))
+  project (1=v1.1)
+  outs 1=w8:val
+param $exec0 owner=subplan1 type=23 rep=w8:val
+mapped: IndexScan SubPlan

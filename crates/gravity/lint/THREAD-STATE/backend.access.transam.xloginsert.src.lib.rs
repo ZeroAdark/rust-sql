@@ -1,0 +1,1 @@
+backend/access/transam/xloginsert/src/lib.rs	SCRATCH	pgport	call	scratch	C xloginsert.c's registered buffers and rdata chain: allocated once (InitXLogInsert), filled per record from XLogBeginInsert and reset after each insert (XLogResetInsertion)

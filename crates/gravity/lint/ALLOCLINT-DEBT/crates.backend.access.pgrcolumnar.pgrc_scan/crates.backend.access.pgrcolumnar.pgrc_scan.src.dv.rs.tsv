@@ -1,0 +1,7 @@
+path	crates/backend/access/pgrcolumnar/pgrc_scan/src/dv.rs
+growth	std::collections::BTreeMap::insert	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	3
+method	std::iter::Iterator::collect	1
+type	std::boxed::Box	2
+type	std::collections::BTreeMap	2

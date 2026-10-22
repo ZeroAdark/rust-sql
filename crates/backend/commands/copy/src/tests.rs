@@ -141,9 +141,9 @@ fn mk_state<'mcx>(
         defmap: PgVec::new_in(mcx),
         where_clause: types_nodes::NodeList::nil(),
         relname: String::new(),
+        relname_only: false,
         escontext: None,
         num_errors: 0,
-        in_skip_row_notice: false,
         defaults: mcx::vec_from_elem_in(mcx, false, 8),
         bytes_processed: 0,
         volatile_defexprs: false,
@@ -263,16 +263,49 @@ fn out_then_in_round_trips() {
     );
 }
 
+/// A COPY source file under the temp dir, removed on drop: the readers drop
+/// it once the file is open (unlink after open), and a panic's unwind takes
+/// it too.
+struct DataFile(std::path::PathBuf);
+
+impl Drop for DataFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// The calling thread's source file for `tag` (each test runs on its own
+/// thread).
+fn data_path(tag: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "copy-test-{}-{tag}-{:?}.data",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+fn data_file(tag: &str, content: &[u8]) -> DataFile {
+    let file = DataFile(data_path(tag));
+    std::fs::write(&file.0, content).unwrap();
+    file
+}
+
+#[test]
+fn copy_sources_leave_nothing_behind() {
+    assert_eq!(read_lines_from_file(b"x\n").0, vec![b"x".to_vec()]);
+    assert!(!data_path("lines").exists(), "{} left behind", data_path("lines").display());
+    assert_eq!(read_lines_csv(b"y\n"), vec![b"y".to_vec()]);
+    assert!(!data_path("csvlines").exists(), "{} left behind", data_path("csvlines").display());
+}
+
 fn read_lines_from_file(content: &[u8]) -> (Vec<Vec<u8>>, bool) {
     setup_fd();
-    let dir = std::env::temp_dir().join(format!("copy-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("lines-{:?}.data", std::thread::current().id()));
-    std::fs::write(&path, content).unwrap();
+    let file = data_file("lines", content);
 
     let mcx = test_ctx().mcx();
     let mut st = mk_state(mcx, b'\t', "\\N");
-    let fd = fd::AllocateFile(path.to_str().unwrap(), "rb").unwrap();
+    let fd = fd::AllocateFile(file.0.to_str().unwrap(), "rb").unwrap();
+    drop(file);
     assert!(fd >= 0);
     st.src = CopySrc::File { fd, filename: "" };
 
@@ -419,15 +452,13 @@ fn csv_out_then_in_round_trips() {
 
 fn read_lines_csv(content: &[u8]) -> Vec<Vec<u8>> {
     setup_fd();
-    let dir = std::env::temp_dir().join(format!("copy-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("csvlines-{:?}.data", std::thread::current().id()));
-    std::fs::write(&path, content).unwrap();
+    let file = data_file("csvlines", content);
 
     let mcx = test_ctx().mcx();
     let mut st = mk_state(mcx, b',', "");
     st.opts.csv_mode = true;
-    let fd = fd::AllocateFile(path.to_str().unwrap(), "rb").unwrap();
+    let fd = fd::AllocateFile(file.0.to_str().unwrap(), "rb").unwrap();
+    drop(file);
     st.src = CopySrc::File { fd, filename: "" };
 
     let mut lines = Vec::new();
@@ -747,21 +778,28 @@ fn could_not_stat_file_is_c_shaped() {
     assert_eq!(e.sqlstate(), types_error::ERRCODE_IO_ERROR);
 }
 
-// copy.c:574 for the PROGRAM / STDIN sources of a parquet load: the refusal
-// BeginCopyFrom raises is C's format error, cursor on the format option.
+// copy.c:574 for the PROGRAM / STDIN sources of a parquet load: C's format
+// error at the format option, raised in option order before any later
+// option's parquet-specific refusal.
 #[test]
 fn parquet_format_refusal_points_at_the_format_option() {
     setup_fd();
     let mcx = test_ctx().mcx();
-    let src = "COPY t FROM PROGRAM 'echo 1' WITH (format parquet)";
-    let opts = opt_list(mcx, &[defelem_at(mcx, "format", "parquet", 35)]);
-    let e = crate::parquet_format_not_recognized(&opts, Some(src));
+    let src = "COPY t FROM PROGRAM 'echo 1' WITH (format parquet, delimiter ',')";
+    let opts = opt_list(
+        mcx,
+        &[defelem_at(mcx, "format", "parquet", 35), defelem_at(mcx, "delimiter", ",", 51)],
+    );
+    let Err(e) = crate::process_copy_options(mcx, true, false, &opts, Some(src)) else {
+        panic!("parquet accepted for a non-file source");
+    };
     assert_eq!(e.message(), "COPY format \"parquet\" not recognized");
     assert_eq!(e.sqlstate(), types_error::ERRCODE_INVALID_PARAMETER_VALUE);
     assert_eq!(e.cursor_position(), Some(36));
-    // No source text: the error still carries C's message and SQLSTATE.
-    let e = crate::parquet_format_not_recognized(&opts, None);
-    assert_eq!(e.sqlstate(), types_error::ERRCODE_INVALID_PARAMETER_VALUE);
+    let Err(e) = crate::process_copy_options(mcx, true, true, &opts, Some(src)) else {
+        panic!("delimiter accepted with parquet");
+    };
+    assert_eq!(e.message(), "cannot specify DELIMITER with parquet format");
 }
 
 #[test]
@@ -817,6 +855,207 @@ fn binary_field_handles_fragmentation_and_truncation() {
     }
 }
 
+// Lane dop (2026-09-15): the parquet driver's DOP and decode budget derive from the machine.
+#[test]
+fn parquet_dop_is_the_pool_width_never_clamped_at_32() {
+    use crate::parallel::dop_for;
+    assert_eq!(dop_for(None, 16), 16);
+    assert_eq!(dop_for(None, 96), 96, "the v1 min(…, 32) clamp is gone");
+    assert_eq!(dop_for(None, 192), 192);
+    assert_eq!(dop_for(Some(128), 192), 128, "the knob is honoured above 32");
+    assert_eq!(dop_for(Some(0), 16), 1);
+    assert_eq!(dop_for(Some(10_000), 192), runtime::MAX_EXTERNAL_LANES as u64);
+}
+
+#[test]
+fn parquet_budget_is_legacy_on_16_cores_and_a_sixteenth_of_headroom_above() {
+    use crate::parallel::{parquet_budget_for, LEGACY_PARQUET_BUDGET_BYTES};
+    let gb = |n: u64| n << 30;
+    // the 16-core class keeps the memory-safe 2048 MB whatever the headroom
+    assert_eq!(parquet_budget_for(16, Some(gb(27))), LEGACY_PARQUET_BUDGET_BYTES);
+    assert_eq!(parquet_budget_for(8, Some(gb(352))), LEGACY_PARQUET_BUDGET_BYTES);
+    // a wider pool takes a sixteenth of the headroom (the metal: 22 GB, window ≈ 38 on hits)
+    assert_eq!(parquet_budget_for(192, Some(gb(352))), gb(22));
+    assert_eq!(parquet_budget_for(96, Some(gb(352))), gb(22));
+    // never below the legacy value, and legacy when the headroom is unknown
+    assert_eq!(parquet_budget_for(192, Some(gb(16))), LEGACY_PARQUET_BUDGET_BYTES);
+    assert_eq!(parquet_budget_for(192, None), LEGACY_PARQUET_BUDGET_BYTES);
+}
+
+// Parallel text COPY (textseg.rs): the leader's cut points and preset line
+// numbers must make each chunk's serial reader produce exactly the rows,
+// line numbers and first error of one serial reader over the whole input.
+#[derive(Debug, PartialEq)]
+enum RawRow {
+    Row(u64, Vec<Option<Vec<u8>>>),
+    Err(u64, String),
+}
+
+fn raw_rows(st: &mut CopyFromState<'_, '_>, csv: bool, header: bool) -> Vec<RawRow> {
+    let mut out = Vec::new();
+    loop {
+        if st.cur_lineno == 0 && header {
+            st.cur_lineno += 1;
+            match st.copy_read_line(csv) {
+                Err(e) => {
+                    out.push(RawRow::Err(st.cur_lineno, e.message().to_string()));
+                    return out;
+                }
+                Ok(true) => return out,
+                Ok(false) => {}
+            }
+        }
+        st.cur_lineno += 1;
+        let done = match st.copy_read_line(csv) {
+            Ok(d) => d,
+            Err(e) => {
+                out.push(RawRow::Err(st.cur_lineno, e.message().to_string()));
+                return out;
+            }
+        };
+        if done && st.line_buf.is_empty() {
+            return out;
+        }
+        let n = if csv { st.copy_read_attributes_csv() } else { st.copy_read_attributes_text() };
+        match n {
+            Ok(n) => out.push(RawRow::Row(st.cur_lineno, fields_of(st, n))),
+            Err(e) => {
+                out.push(RawRow::Err(st.cur_lineno, e.message().to_string()));
+                return out;
+            }
+        }
+    }
+}
+
+fn seg_state<'mcx>(mcx: Mcx<'mcx>, csv: bool, escape: u8, header: bool) -> CopyFromState<'mcx, 'static> {
+    let mut st = mk_state(mcx, if csv { b',' } else { b'\t' }, if csv { "" } else { "\\N" });
+    st.opts.csv_mode = csv;
+    st.opts.escape = escape;
+    if header {
+        st.opts.header_line = crate::CopyHeaderChoice::True;
+    }
+    st
+}
+
+fn seg_vs_serial(input: &[u8], csv: bool, escape: u8, header: bool) {
+    use crate::textseg::{ChunkCursor, SegOpts, Segmentator};
+    use std::sync::Arc;
+    setup_fd();
+    mbutils::SetDatabaseEncoding(wchar::PG_UTF8).unwrap();
+    let mcx = test_ctx().mcx();
+    let mut st = seg_state(mcx, csv, escape, header);
+    let owned = input.to_vec();
+    let mut pos = 0usize;
+    st.src = CopySrc::Callback {
+        cb: Box::new(move |dst, _| {
+            let n = (owned.len() - pos).min(dst.len()).min(5);
+            dst[..n].copy_from_slice(&owned[pos..pos + n]);
+            pos += n;
+            Ok(n)
+        }),
+    };
+    let serial = raw_rows(&mut st, csv, header);
+    for (grain, grains) in [(1u64, 1u64), (2, 1), (2, 3)] {
+        for bs in [1usize, 2, 3, 7, input.len().max(1)] {
+            let o = SegOpts {
+                csv,
+                quote: b'"',
+                escape,
+                header,
+                grain,
+                grains,
+                target_bytes: u64::MAX,
+                max_line_bytes: 1 << 30,
+            };
+            let mut seg = Segmentator::new(o);
+            let mut descs = Vec::new();
+            for b in input.chunks(bs) {
+                seg.feed(&Arc::new(crate::textseg::seg_block(b)), &mut descs).unwrap();
+                if seg.input_complete() {
+                    break;
+                }
+            }
+            seg.finish(&mut descs);
+            let mut par = Vec::new();
+            let n = descs.len();
+            for (i, d) in descs.into_iter().enumerate() {
+                assert_eq!(d.last, i + 1 == n);
+                if !d.last {
+                    assert_eq!(d.rows % grain, 0, "non-final chunk {i} is not whole grains");
+                }
+                let mut cst = seg_state(mcx, csv, escape, header);
+                cst.src = CopySrc::Chunk { cur: ChunkCursor::new(d.segs, None), parked: None };
+                cst.cur_lineno = d.lineno_before;
+                cst.eol_type = d.eol_at_start;
+                let rows = raw_rows(&mut cst, csv, header);
+                let errored = rows.iter().any(|r| matches!(r, RawRow::Err(..)));
+                if !errored {
+                    assert_eq!(rows.len() as u64, d.rows, "chunk {i} row count (grain {grain} bs {bs})");
+                }
+                par.extend(rows);
+                if errored {
+                    break;
+                }
+            }
+            assert_eq!(
+                par, serial,
+                "input {:?} csv {csv} grain {grain}x{grains} block {bs}",
+                String::from_utf8_lossy(input)
+            );
+        }
+    }
+}
+
+#[test]
+fn segmentation_matches_the_serial_reader_text() {
+    let cases: &[&[u8]] = &[
+        b"a\tb\nc\td\ne\tf\ng\th\ni\tj\n",
+        b"a\nb\nc\nd\ne",
+        b"x\\\ny\nz\n\\\\\nw\\\rv\nlast\n",
+        b"a\nb\n\\.\nignored\nmore\n",
+        b"a\nb\nc\n\\.",
+        b"a\nb\nc\n\\.x\nd\n",
+        b"a\nb\nab\\.\nc\n",
+        b"a\r\nb\r\nc\r\nd\r\ne\r\n",
+        b"a\rb\rc\rd\r",
+        b"a\r\nb\nc\r\nd\n",
+        b"a\nb\r\nc\n",
+        b"a\rb\nc\r",
+        b"\n\n\na\n\n",
+        b"",
+        b"only",
+        b"a\nb\nc\r",
+    ];
+    for c in cases {
+        seg_vs_serial(c, false, b'"', false);
+        seg_vs_serial(c, false, b'"', true);
+    }
+}
+
+#[test]
+fn segmentation_matches_the_serial_reader_csv() {
+    let cases: &[&[u8]] = &[
+        b"a,1\n\"b\nb\",2\nc,3\nd,4\ne,5\n\"f\n\nf\",6\ng,7\nh,8\ni,9\n",
+        b"\"x\ny\",1\na,2\nb,3\nc,4\n",
+        b"\"x\ry\",1\r\na,2\r\n\"q\r\nq\",3\r\nb,4\r\n",
+        b"\"a\"\"b\",1\n\"\"\"\",2\n\"\",3\n,4\n",
+        b"a,1\n\"unterminated\n,2\nb,3\n",
+        b"a,1\nb,2\r\nc,3\n",
+        b"a\rb\r\"c\rd\"\re\r",
+        b"h1,h2\n1,2\n3,4\n5,6\n",
+        b"a,\"b\\\"\nc\",1\nd,2\ne,3\n",
+        b"\\.\n",
+        b"a\n\\.\nb\n",
+        b"",
+        b"x,y",
+    ];
+    for c in cases {
+        seg_vs_serial(c, true, b'"', false);
+        seg_vs_serial(c, true, b'"', true);
+        seg_vs_serial(c, true, b'\\', false);
+    }
+}
+
 // After a soft error C's cur_attname/cur_attval stay set (copyfromparse.c
 // NextCopyFrom soft-error return), so a line-level error on the NEXT line
 // reports the previous column, with whatever attribute_buf holds at the old
@@ -861,7 +1100,7 @@ fn stale_column_context_survives_the_next_line() {
     assert_eq!(e.context(), Some("COPY t3, line 3: \"2\""));
 }
 
-// regression: file_fdw.c:789 checks for interrupts with
+// fp-contrib-file_fdw-file_fdw#5: file_fdw.c:789 checks for interrupts with
 // CopyFromErrorCallback still installed, so a cancel there carries the COPY
 // relation and line.
 #[test]
@@ -878,4 +1117,44 @@ fn interrupt_between_soft_errors_carries_the_copy_context() {
     assert_eq!(e.sqlstate(), types_error::ERRCODE_QUERY_CANCELED);
     assert_eq!(e.message(), "canceling statement due to user request");
     assert_eq!(e.context(), Some("COPY t5, line 4"));
+}
+
+// copyfrom.c:258-262 + 466-470: a foreign batch flush (here the one after the
+// input ended, cursor past the last line) reports only the relation (wio P225).
+#[test]
+fn foreign_batch_flush_context_names_only_the_relation() {
+    setup_fd();
+    let mcx = test_ctx().mcx();
+    let mut st = mk_state(mcx, b'\t', "\\N");
+    st.relname = "rem2".into();
+    st.line_buf_valid = true;
+    st.cur_lineno = 2;
+    let e = copy_from_error_context(&st, crate::fromparse::extra_data());
+    assert_eq!(e.context(), Some("COPY rem2, line 2: \"\""));
+    st.relname_only = true;
+    let e = copy_from_error_context(&st, crate::fromparse::extra_data());
+    assert_eq!(e.context(), Some("COPY rem2"));
+}
+
+// enlargeStringInfo (stringinfo.c) for COPY FROM's line and attribute
+// buffers: 54000 with C's DETAIL at MaxAllocSize, and growth past a 512 MB
+// buffer clamps to MaxAllocSize instead of requesting 1 GB.
+#[test]
+fn copy_buffers_grow_like_stringinfo() {
+    let e = crate::fromparse::stringinfo_check(1_073_676_288, 65_536).unwrap_err();
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(e.message(), "string buffer exceeds maximum allowed length (1073741823 bytes)");
+    assert_eq!(
+        e.detail(),
+        Some("Cannot enlarge string buffer containing 1073676288 bytes by 65536 more bytes.")
+    );
+    assert!(crate::fromparse::stringinfo_check(0, mcx::MAX_ALLOC_SIZE - 1).is_ok());
+    assert!(crate::fromparse::stringinfo_check(1, mcx::MAX_ALLOC_SIZE - 1).is_err());
+    assert_eq!(mcx::grow_target(536_870_912, 536_870_913), mcx::MAX_ALLOC_SIZE);
+    let mcx = test_ctx().mcx();
+    let mut v: PgVec<'_, u8> = PgVec::new_in(mcx);
+    crate::fromparse::stringinfo_append(&mut v, b"abc").unwrap();
+    crate::fromparse::stringinfo_reserve(&mut v, 100).unwrap();
+    assert!(v.capacity() >= 100);
+    assert!(crate::fromparse::stringinfo_reserve(&mut v, mcx::MAX_ALLOC_SIZE + 1).is_err());
 }

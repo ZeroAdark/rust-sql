@@ -2,9 +2,7 @@
 // Deferred (named panics): toast, MultiXact wait lanes,
 // speculative-insert driver, index-attr bitmaps (updates on relhasindex
 // rels), bulk insert + heap_multi_insert, heap_lock_tuple (phase 3).
-// C divergences: crit sections pend miscadmin; WAL prefix/suffix
-// compression off (XLogCheckBufferNeedsBackup pends xloginsert; C also
-// disables it under wal_level=logical), records stay redo-compatible.
+// C divergences: crit sections pend miscadmin.
 use ::bufmgr_seams::{BufferPin, BUFFER_LOCK_EXCLUSIVE, BUFFER_LOCK_UNLOCK};
 use ::tableam_vocab::{
     BulkInsertStateData, LockTupleMode, LockWaitPolicy, TM_FailureData, TM_Result, TU_UpdateIndexes,
@@ -13,8 +11,8 @@ use ::types_core::xact::{InvalidTransactionId, InvalidXLogRecPtr, TransactionIdI
 use ::types_core::{CommandId, InvalidBlockNumber, MultiXactId, TransactionId};
 use ::types_error::{PgError, PgResult, ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE};
 use ::types_rel::{
-    RelationData, RELKIND_FOREIGN_TABLE, RELKIND_MATVIEW, RELKIND_RELATION, REPLICA_IDENTITY_FULL,
-    REPLICA_IDENTITY_NOTHING,
+    RelationData, RELKIND_FOREIGN_TABLE, RELKIND_MATVIEW, RELKIND_RELATION, RELKIND_TOASTVALUE,
+    REPLICA_IDENTITY_FULL, REPLICA_IDENTITY_NOTHING,
 };
 use ::types_snapshot::SnapshotData;
 use ::types_storage::bufpage::{ItemIdData, PageMut, PageRef, SizeofHeapTupleHeader};
@@ -63,6 +61,8 @@ pub const XLH_UPDATE_NEW_ALL_VISIBLE_CLEARED: u8 = 1 << 1;
 pub const XLH_UPDATE_CONTAINS_OLD_TUPLE: u8 = 1 << 2;
 pub const XLH_UPDATE_CONTAINS_OLD_KEY: u8 = 1 << 3;
 pub const XLH_UPDATE_CONTAINS_NEW_TUPLE: u8 = 1 << 4;
+pub const XLH_UPDATE_PREFIX_FROM_OLD: u8 = 1 << 5;
+pub const XLH_UPDATE_SUFFIX_FROM_OLD: u8 = 1 << 6;
 pub const XLH_LOCK_ALL_FROZEN_CLEARED: u8 = 1 << 0;
 
 // upstream f581fa729d8e (18.5): Fix VM clear WAL logging by registering VM blocks
@@ -279,6 +279,24 @@ fn heap_prepare_insert(
     Ok(())
 }
 
+/// The armed backend parks in latch waits (interrupts held off, so only a
+/// kill's disposition ends it), at most 60 s; one-shot.
+#[cold]
+#[inline(never)]
+fn crash_test_park() -> PgResult<()> {
+    use types_storage::waiteventset::{WL_EXIT_ON_PM_DEATH, WL_LATCH_SET, WL_TIMEOUT};
+    if init_small::globals::crash_test_park_pid() != init_small::globals::MyProcPid() {
+        return Ok(());
+    }
+    init_small::globals::set_crash_test_park_pid(0);
+    for _ in 0..600 {
+        postgres_seams::check_for_interrupts::call()?;
+        latch_seams::wait_latch_my_latch::call(WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH, 100, 0);
+        latch_seams::reset_latch_my_latch::call();
+    }
+    Ok(())
+}
+
 fn needs_toast(relation: &RelationData<'_>, tup: &HeapTupleData<'_>) -> bool {
     (relation.rd_rel.relkind == RELKIND_RELATION || relation.rd_rel.relkind == RELKIND_MATVIEW)
         && (tup.has_external() || tup.t_len as usize > TOAST_TUPLE_THRESHOLD)
@@ -377,6 +395,9 @@ pub fn heap_insert(
         }
 
         bufmgr_seams::mark_buffer_dirty::call(pin.buffer())?;
+        if init_small::globals::crash_test_park_pid() != 0 {
+            crash_test_park()?;
+        }
 
         if relation_needs_wal(relation) {
             if relation_is_accessible_in_logical_decoding(relation) {
@@ -405,7 +426,9 @@ pub fn heap_insert(
             {
                 flags |= XLH_INSERT_CONTAINS_NEW_TUPLE;
                 bufflags |= REGBUF_KEEP_DATA;
-                if catalog_seams::is_toast_relation::call(relation) {
+                // relkind, not the pg_toast namespace (C's IsToastRelation): pgrc companions are
+                // relkind 'r' in pg_toast, and their rows are not toast chunks.
+                if relation.rd_rel.relkind == RELKIND_TOASTVALUE {
                     flags |= XLH_INSERT_ON_TOAST_RELATION;
                 }
             }
@@ -513,9 +536,39 @@ fn heap_multi_insert_pages(
             npages += 1;
             page_avail = fresh;
         }
-        page_avail -= tup_sz;
+        // C's size_t arithmetic: a tuple wider than a fresh page's room (a low
+        // fillfactor) wraps page_avail, so every later tuple counts as fitting.
+        page_avail = page_avail.wrapping_sub(tup_sz);
     }
     npages
+}
+
+#[cfg(test)]
+mod multi_insert_pages_tests {
+    use super::*;
+
+    #[test]
+    fn a_tuple_wider_than_a_fresh_page_wraps_like_c() {
+        // fillfactor 10: saveFreeSpace = 90 % of the block, a fresh page holds
+        // 796 bytes, and each 1000-byte tuple is wider than that.
+        let save = ::types_core::BLCKSZ * 90 / 100;
+        let image = vec![0u64; 1000 / 8];
+        // SAFETY: image is 8-aligned and readable for t_len bytes; only t_len is read.
+        let tup = || unsafe {
+            HeapTupleData::from_raw_parts(
+                image.as_ptr().cast(),
+                1000,
+                ItemPointerData::default(),
+                ::types_core::InvalidOid,
+            )
+        };
+        let tuples = [tup(), tup(), tup()];
+        // C: the first tuple bumps npages and wraps page_avail; the rest fit.
+        assert_eq!(heap_multi_insert_pages(&tuples, 0, save), 2);
+        assert_eq!(heap_multi_insert_pages(&tuples, 2, save), 2);
+        // A tuple that fits a fresh page keeps the plain count.
+        assert_eq!(heap_multi_insert_pages(&tuples, 0, 0), 1);
+    }
 }
 
 /// `heap_multi_insert`: slots are materialized in place; `tts_tid` and the
@@ -661,7 +714,10 @@ pub fn heap_multi_insert<'mcx>(
         // heapam.c:2452: a pending cancel aborts the batch between pages.
         crate::check_for_interrupts()?;
 
-        if ndone == 0 || !starting_with_empty_page {
+        if options & crate::hio::HEAP_INSERT_SINGLE_PAGE_EXTEND != 0 {
+            npages = 1;
+            npages_used = 0;
+        } else if ndone == 0 || !starting_with_empty_page {
             npages = heap_multi_insert_pages(&heaptuples, ndone, save_free_space);
             npages_used = 0;
         } else {
@@ -2534,15 +2590,48 @@ fn log_heap_update(
         XLOG_HEAP_UPDATE
     };
 
-    // Prefix/suffix WAL compression needs XLogCheckBufferNeedsBackup; off
-    // until xloginsert lands (C also disables it when need_tuple_data;
-    // records stay redo-compatible, just larger).
+    let same_buf = oldbuf.buffer() == newbuf.buffer();
+    let old_hoff = oldtup.t_data().t_hoff as usize;
+    let new_hoff = newtup.t_data().t_hoff as usize;
+    let mut prefixlen = 0usize;
+    let mut suffixlen = 0usize;
+    if same_buf && !need_tuple_data && !crate::wal::buffer_needs_backup(newbuf.page().lsn()) {
+        // SAFETY: both images are t_len readable bytes with t_hoff <= t_len.
+        let (oldp, newp) = unsafe {
+            (
+                core::slice::from_raw_parts(oldtup.getstruct(), oldtup.t_len as usize - old_hoff),
+                core::slice::from_raw_parts(newtup.getstruct(), newtup.t_len as usize - new_hoff),
+            )
+        };
+        let minlen = oldp.len().min(newp.len());
+        prefixlen = oldp[..minlen].iter().zip(&newp[..minlen]).take_while(|(a, b)| a == b).count();
+        if prefixlen < 3 {
+            prefixlen = 0;
+        }
+        suffixlen = oldp
+            .iter()
+            .rev()
+            .zip(newp.iter().rev())
+            .take(minlen - prefixlen)
+            .take_while(|(a, b)| a == b)
+            .count();
+        if suffixlen < 3 {
+            suffixlen = 0;
+        }
+    }
+
     let mut flags = 0u8;
     if all_visible_cleared {
         flags |= XLH_UPDATE_OLD_ALL_VISIBLE_CLEARED;
     }
     if new_all_visible_cleared {
         flags |= XLH_UPDATE_NEW_ALL_VISIBLE_CLEARED;
+    }
+    if prefixlen > 0 {
+        flags |= XLH_UPDATE_PREFIX_FROM_OLD;
+    }
+    if suffixlen > 0 {
+        flags |= XLH_UPDATE_SUFFIX_FROM_OLD;
     }
     if need_tuple_data {
         flags |= XLH_UPDATE_CONTAINS_NEW_TUPLE;
@@ -2576,25 +2665,58 @@ fn log_heap_update(
         bufflags |= REGBUF_KEEP_DATA;
     }
 
+    let mut prefix_suffix = [0u8; 4];
+    let mut n_ps = 0usize;
+    if prefixlen > 0 {
+        prefix_suffix[n_ps..n_ps + 2].copy_from_slice(&(prefixlen as u16).to_ne_bytes());
+        n_ps += 2;
+    }
+    if suffixlen > 0 {
+        prefix_suffix[n_ps..n_ps + 2].copy_from_slice(&(suffixlen as u16).to_ne_bytes());
+        n_ps += 2;
+    }
     let xlhdr = xl_heap_header(newtup.t_data());
-    // SAFETY: tuple image is t_len readable bytes.
-    let body = unsafe {
-        core::slice::from_raw_parts(
-            newtup.header_ptr().add(SizeofHeapTupleHeader),
-            newtup.t_len as usize - SizeofHeapTupleHeader,
+    debug_assert!(SizeofHeapTupleHeader + prefixlen + suffixlen <= newtup.t_len as usize);
+    // SAFETY: tuple image is t_len readable bytes; the ranges below stay
+    // within [SizeofHeapTupleHeader, t_len - suffixlen].
+    let (body, bitmap, after_prefix) = unsafe {
+        let base = newtup.header_ptr();
+        (
+            core::slice::from_raw_parts(
+                base.add(SizeofHeapTupleHeader),
+                newtup.t_len as usize - SizeofHeapTupleHeader - suffixlen,
+            ),
+            core::slice::from_raw_parts(
+                base.add(SizeofHeapTupleHeader),
+                new_hoff - SizeofHeapTupleHeader,
+            ),
+            core::slice::from_raw_parts(
+                base.add(new_hoff + prefixlen),
+                newtup.t_len as usize - new_hoff - prefixlen - suffixlen,
+            ),
         )
+    };
+    let mut new_bufdata: [&[u8]; 4] = [&prefix_suffix[..n_ps], &xlhdr, &[], &[]];
+    let n_bufdata = if prefixlen == 0 {
+        new_bufdata[2] = body;
+        3
+    } else if bitmap.is_empty() {
+        new_bufdata[2] = after_prefix;
+        3
+    } else {
+        new_bufdata[2] = bitmap;
+        new_bufdata[3] = after_prefix;
+        4
     };
 
     let rloc = relation.rd_locator.get();
-    let same_buf = oldbuf.buffer() == newbuf.buffer();
-    let new_bufdata: [&[u8]; 2] = [&xlhdr, body];
     let new_reg = crate::wal::reg_block(
         0,
         rloc,
         ItemPointerGetBlockNumber(&newtup.t_self),
         newbuf.buffer(),
         bufflags,
-        &new_bufdata,
+        &new_bufdata[..n_bufdata],
     );
     let old_key_hdr;
     let mut main_data: [&[u8]; 3] = [&xlrec, &[], &[]];
@@ -2791,7 +2913,7 @@ pub fn heap_update(
                 // in-progress updater can't be in the multi anymore after
                 // MultiXactIdWait, so committed-vs-aborted decides.
                 let update_xact = if !HEAP_XMAX_IS_LOCKED_ONLY(oldtup.t_data().t_infomask) {
-                    HeapTupleHeaderGetUpdateXid(oldtup.t_data())?
+                    crate::HeapTupleGetUpdateXid(oldtup.t_data())?
                 } else {
                     InvalidTransactionId
                 };

@@ -1,0 +1,7 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/rowid.rs
+growth	pgrc_format::wire::put_u32	5
+growth	pgrc_format::wire::put_u64	1
+growth	std::vec::Vec::extend_from_slice	2
+method	pgrc_format::try_vec	2
+method	std::iter::Iterator::collect	2
+type	std::vec::Vec	2

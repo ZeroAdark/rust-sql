@@ -1,0 +1,49 @@
+Parsed test spec with 2 sessions
+
+starting permutation: upd keyv c1 c2
+step upd: 
+	UPDATE table_a SET n = n + 1, value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET v = v + 100 WHERE k = 1;
+	UPDATE table_c SET y = y + 10;
+
+step keyv: SELECT ta.id, ta.n, ta.value, (SELECT sum(tb.v + tc.y) FROM table_b tb JOIN table_c tc ON tb.g = tc.g + ta.n WHERE tb.k = ta.id) AS s FROM table_a ta WHERE ta.id = 1 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step keyv: <... completed>
+id|n|value         |  s
+--+-+--------------+---
+ 1|2|newTableAValue|111
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd srfv c1 c2
+step upd: 
+	UPDATE table_a SET n = n + 1, value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET v = v + 100 WHERE k = 1;
+	UPDATE table_c SET y = y + 10;
+
+step srfv: SELECT ta.id, ta.n, (SELECT sum(tb.v) FROM generate_series(0, ta.n) s JOIN table_b tb ON tb.g = s WHERE tb.k = ta.id) AS s FROM table_a ta WHERE ta.id = 1 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step srfv: <... completed>
+id|n| s
+--+-+--
+ 1|2|81
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd updv c1 c2
+step upd: 
+	UPDATE table_a SET n = n + 1, value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET v = v + 100 WHERE k = 1;
+	UPDATE table_c SET y = y + 10;
+
+step updv: UPDATE table_a ta SET value = ta.value || '/' || (SELECT count(*) FROM table_b tb JOIN table_c tc ON tb.g = tc.g + ta.n WHERE tb.k = ta.id) WHERE ta.id = 1 RETURNING ta.id, ta.n, ta.value; <waiting ...>
+step c1: COMMIT;
+step updv: <... completed>
+id|n|value           
+--+-+----------------
+ 1|2|newTableAValue/6
+(1 row)
+
+step c2: COMMIT;

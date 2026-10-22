@@ -1,4 +1,0 @@
-Å);
-
--- NOT is ignored in quotes
-select websearch_to_tsquery(

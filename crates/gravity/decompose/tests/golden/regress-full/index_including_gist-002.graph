@@ -1,0 +1,11 @@
+-- regress-full-index_including_gist-002
+-- INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,10) AS x;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10)]
+  project (1=v3.1, 2=op514(c23:2, v3.1), 3=op514(c23:3, v3.1), 4=fn1421(fn1440(fn316(v3.1), fn316(op551(v3.1, c23:1))), fn1440(fn316(op514(c23:2, v3.1)), fn316(op551(op514(c23:2, v3.1), c23:1)))))
+  write INSERT rel=20472 rti=1 natts=4 indexes=()
+  outs 1=w4:val 2=w4:val 3=w4:val 4=fx32:call1421
+mapped: ModifyTable FunctionScan

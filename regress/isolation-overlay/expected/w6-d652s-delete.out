@@ -1,0 +1,64 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1p s1q s1v s1g s2d s1c s2c s3sel
+step s1p: UPDATE dk SET val = 11 WHERE id = 1;
+step s1q: UPDATE dk SET pad = 'q' WHERE id = 3;
+step s1v: UPDATE dk SET val = 1000 WHERE id = 5;
+step s1g: UPDATE dk SET grp = 0 WHERE id = 7;
+step s2d: DELETE FROM dk t WHERE t.val < (SELECT max(v) FROM ds WHERE ds.grp = t.grp) AND t.id <= 7; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val, pad FROM dk ORDER BY id;
+id|grp| val|pad
+--+---+----+---
+ 2|  0|  20|p2 
+ 4|  0|  40|p4 
+ 5|  1|1000|p5 
+ 6|  0|  60|p6 
+ 7|  0|  70|p7 
+ 8|  0|  80|p8 
+(6 rows)
+
+
+starting permutation: s1p s1x s2d s1c s2c s3sel
+step s1p: UPDATE dk SET val = 11 WHERE id = 1;
+step s1x: DELETE FROM dk WHERE id = 3;
+step s2d: DELETE FROM dk t WHERE t.val < (SELECT max(v) FROM ds WHERE ds.grp = t.grp) AND t.id <= 7; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val, pad FROM dk ORDER BY id;
+id|grp|val|pad
+--+---+---+---
+ 2|  0| 20|p2 
+ 4|  0| 40|p4 
+ 6|  0| 60|p6 
+ 8|  0| 80|p8 
+(4 rows)
+
+
+starting permutation: s1p s1v s2r s1c s2c s3sel
+step s1p: UPDATE dk SET val = 11 WHERE id = 1;
+step s1v: UPDATE dk SET val = 1000 WHERE id = 5;
+step s2r: DELETE FROM dk t WHERE t.val < (SELECT max(v) FROM ds WHERE ds.grp = t.grp) AND t.id <= 7 RETURNING id, val; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|val
+--+---
+ 1| 11
+ 3| 30
+ 7| 70
+(3 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val, pad FROM dk ORDER BY id;
+id|grp| val|pad
+--+---+----+---
+ 2|  0|  20|p2 
+ 4|  0|  40|p4 
+ 5|  1|1000|p5 
+ 6|  0|  60|p6 
+ 8|  0|  80|p8 
+(5 rows)
+

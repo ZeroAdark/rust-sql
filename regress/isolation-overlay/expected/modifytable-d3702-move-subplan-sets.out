@@ -1,0 +1,121 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1u s2m s1c s2r
+step s1u: UPDATE mv SET c = c - 60, v = v + 1 WHERE id IN (1, 3);
+step s2m: UPDATE mvv SET k = k + 10 WHERE id IN (1, 2, 3, 4); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM mv ORDER BY id;
+part|id| k| v|  c
+----+--+--+--+---
+mv0 | 1| 1|11| 90
+mv1 | 2|12|20|160
+mv2 | 3|21|31|110
+mv2 | 4|22|40|180
+mv2 | 5|21|50|190
+mv2 | 6|22|60|200
+(6 rows)
+
+
+starting permutation: s1c10 s2mc s1c s2r
+step s1c10: UPDATE mv SET c = c + 10 WHERE id = 1;
+step s2mc: UPDATE mvv SET k = k + 10, c = c - 55 WHERE id IN (1, 2); <waiting ...>
+step s1c: COMMIT;
+step s2mc: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM mv ORDER BY id;
+part|id| k| v|  c
+----+--+--+--+---
+mv1 | 1|11|10|105
+mv1 | 2|12|20|105
+mv1 | 3|11|30|170
+mv1 | 4|12|40|180
+mv2 | 5|21|50|190
+mv2 | 6|22|60|200
+(6 rows)
+
+
+starting permutation: s1d s2m s1c s2r
+step s1d: DELETE FROM mv WHERE id = 3;
+step s2m: UPDATE mvv SET k = k + 10 WHERE id IN (1, 2, 3, 4); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM mv ORDER BY id;
+part|id| k| v|  c
+----+--+--+--+---
+mv1 | 1|11|10|150
+mv1 | 2|12|20|160
+mv2 | 4|22|40|180
+mv2 | 5|21|50|190
+mv2 | 6|22|60|200
+(5 rows)
+
+
+starting permutation: s1k s2m s1c s2r
+step s1k: UPDATE mv SET k = k + 1 WHERE id IN (1, 3);
+step s2m: UPDATE mvv SET k = k + 10 WHERE id IN (1, 2, 3, 4); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM mv ORDER BY id;
+part|id| k| v|  c
+----+--+--+--+---
+mv1 | 1|12|10|150
+mv1 | 2|12|20|160
+mv2 | 3|22|30|170
+mv2 | 4|22|40|180
+mv2 | 5|21|50|190
+mv2 | 6|22|60|200
+(6 rows)
+
+
+starting permutation: s1u s2w s1c s2r
+step s1u: UPDATE mv SET c = c - 60, v = v + 1 WHERE id IN (1, 3);
+step s2w: UPDATE mv SET k = k + 10 WHERE (SELECT max(c1) + 0 * c FROM mtab) < c AND id IN (1, 3); <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM mv ORDER BY id;
+part|id| k| v|  c
+----+--+--+--+---
+mv0 | 1| 1|11| 90
+mv0 | 2| 2|20|160
+mv2 | 3|21|31|110
+mv1 | 4|12|40|180
+mv2 | 5|21|50|190
+mv2 | 6|22|60|200
+(6 rows)
+
+
+starting permutation: s1x s2m s1c s2r
+step s1x: UPDATE mv SET k = 15 WHERE id = 1;
+step s2m: UPDATE mvv SET k = k + 10 WHERE id IN (1, 2, 3, 4); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2r: SELECT tableoid::regclass AS part, * FROM mv ORDER BY id;
+part|id| k| v|  c
+----+--+--+--+---
+mv1 | 1|15|10|150
+mv0 | 2| 2|20|160
+mv1 | 3|11|30|170
+mv1 | 4|12|40|180
+mv2 | 5|21|50|190
+mv2 | 6|22|60|200
+(6 rows)
+
+
+starting permutation: s1c10 s1t s2m s1c s2r
+step s1c10: UPDATE mv SET c = c + 10 WHERE id = 1;
+step s1t: INSERT INTO mtab VALUES (165);
+step s2m: UPDATE mvv SET k = k + 10 WHERE id IN (1, 2, 3, 4); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2r: SELECT tableoid::regclass AS part, * FROM mv ORDER BY id;
+part|id| k| v|  c
+----+--+--+--+---
+mv1 | 1|11|10|160
+mv1 | 2|12|20|160
+mv2 | 3|21|30|170
+mv2 | 4|22|40|180
+mv2 | 5|21|50|190
+mv2 | 6|22|60|200
+(6 rows)
+

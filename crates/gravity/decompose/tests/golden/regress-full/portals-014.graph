@@ -1,0 +1,52 @@
+-- regress-full-portals-014
+-- DELETE FROM current_check WHERE CURRENT OF c1 RETURNING *;
+graph pipelines=3 breakers=0 init_plans=0 root=p2
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@1 n0@3
+  source tid rel=26193 rti=2 am=heap form=current
+    tid T_CurrentOfExpr
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v2.-6, 2=v2.-1)
+  append arm 0/3
+  project (1j=outer.1, 2j=outer.2)
+  write DELETE rel=26193 rti=2 natts=2 indexes=() returning tableoid=outer.1 route=rti1:26193 natts=2
+    target rti=3 rel=26198 natts=2 indexes=() returning
+    target rti=4 rel=26203 natts=2 indexes=() returning
+  project (1=v2.1, 2=v2.2)
+  outs 1=w4:val 2=fx6:row
+  outs 1=w4:val 2=fx6:life/breaker
+  outs 1=w4:val 2=vl:row
+p1 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n1@1 n0@3
+  source tid rel=26198 rti=3 am=heap form=current
+    tid T_CurrentOfExpr
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v3.-6, 2=v3.-1)
+  append arm 1/3
+  project (1j=outer.1, 2j=outer.2)
+  write DELETE rel=26193 rti=2 natts=2 indexes=() returning tableoid=outer.1 route=rti1:26193 natts=2
+    target rti=3 rel=26198 natts=2 indexes=() returning
+    target rti=4 rel=26203 natts=2 indexes=() returning
+  project (1=v3.1, 2=v3.2)
+  outs 1=w4:val 2=fx6:row
+  outs 1=w4:val 2=fx6:life/breaker
+  outs 1=w4:val 2=vl:row
+p2 node=4 serial site=1 reason=Write end=sink
+  nodes n4@0 n1@1 n0@3
+  source tid rel=26203 rti=4 am=heap form=current
+    tid T_CurrentOfExpr
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v4.-6, 2=v4.-1)
+  append arm 2/3
+  project (1j=outer.1, 2j=outer.2)
+  write DELETE rel=26193 rti=2 natts=2 indexes=() returning tableoid=outer.1 route=rti1:26193 natts=2
+    target rti=3 rel=26198 natts=2 indexes=() returning
+    target rti=4 rel=26203 natts=2 indexes=() returning
+  project (1=v4.1, 2=v4.2)
+  outs 1=w4:val 2=fx6:row
+  outs 1=w4:val 2=fx6:life/breaker
+  outs 1=w4:val 2=vl:row
+scan-lanes node=2 rti=2 rel=26193 tableoid
+scan-lanes node=3 rti=3 rel=26198 tableoid
+scan-lanes node=4 rti=4 rel=26203 tableoid
+mapped: ModifyTable Append TidScan

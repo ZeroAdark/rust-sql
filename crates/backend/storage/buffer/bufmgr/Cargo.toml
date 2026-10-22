@@ -9,6 +9,12 @@ name = "bufmgr"
 path = "src/lib.rs"
 
 [dependencies]
+# G1-A: the block array's active extents are door 2 of the memory ledger (SharedBuffers account).
+memledger = { path = "../../../../_support/memledger" }
+mempolicy = { path = "../../../../_support/mempolicy" }
+pagegive = { path = "../../../../_support/pagegive" }
+pgsync = { path = "../../../../_support/pgsync" }
+read_stream = { path = "../../aio/read_stream" }
 aio_core = { path = "../../aio/aio_core" }
 shmem = { path = "../../ipc/shmem" }
 bufmgr_seams = { path = "../bufmgr_seams" }
@@ -52,6 +58,15 @@ latch = { path = "../../ipc/latch" }
 postgres_seams = { path = "../../../tcop/postgres_seams" }
 ps_status_seams = { path = "../../../utils/misc/ps_status_seams" }
 timestamp_seams = { path = "../../../utils/adt/timestamp_seams" }
+libc = "0.2"
+pg_clock = { path = "../../../../port/pg_clock" }
+funcapi = { path = "../../../utils/fmgr/funcapi" }
+heaptuple = { path = "../../../access/common/heaptuple" }
+superuser_seams = { path = "../../../utils/misc/superuser_seams" }
+types_fmgr = { path = "../../../../_support/types/fmgr" }
+snapmgr_seams = { path = "../../../utils/time/snapmgr_seams" }
+snapmgr_portal_seams = { path = "../../../utils/time/snapmgr_portal_seams" }
+xact_seams = { path = "../../../access/transam/xact_seams" }
 
 [dev-dependencies]
 types_tuple = { path = "../../../../_support/types/types_tuple" }
@@ -61,4 +76,3 @@ pg_sema = { path = "../../../port/pg_sema" }
 s_lock_seams = { path = "../../lmgr/s_lock_seams" }
 waitevent_seams = { path = "../../../utils/activity/waitevent_seams" }
 waiteventset = { path = "../../ipc/waiteventset" }
-xact_seams = { path = "../../../access/transam/xact_seams" }

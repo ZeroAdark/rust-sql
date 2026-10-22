@@ -74,7 +74,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
 /// ran it (and prints the same GMT text C would).
 fn format_in_log_timezone(secs: i64, fmt: &[u8]) -> Option<String> {
     let tz = ::localtime::globals::log_timezone()?;
-    let tm = ::localtime::pg_localtime(secs, tz)?;
+    let tm = ::localtime::pg_localtime(secs, &tz)?;
     let mut buf = [0u8; 128];
     Some(match ::strftime::pg_strftime(&mut buf, fmt, &tm) {
         Some(n) => String::from_utf8_lossy(&buf[..n]).into_owned(),
@@ -687,6 +687,30 @@ pub fn send_message_to_server_log(edata: &PgError) {
 }
 
 pub fn write_console(line: &[u8]) {
+    if config::am_syslogger() {
+        write_syslogger_console(line);
+        return;
+    }
+    // D4812: a memory safety thread's line goes to its writer off the thread
+    if sink::defer_server_log(line) {
+        return;
+    }
+    let _ = std::io::stderr().write_all(line);
+}
+
+// fd 2 is the collector's own input pipe in the one-process model: writing
+// there duplicates the line into the logfile and can block on a full pipe.
+#[cfg(not(target_family = "wasm"))]
+fn write_syslogger_console(line: &[u8]) {
+    let fd = config::syslogger_console_fd();
+    if fd >= 0 {
+        // SAFETY: a private dup of the postmaster's original stderr.
+        let _ = unsafe { libc::write(fd, line.as_ptr().cast(), line.len()) };
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn write_syslogger_console(line: &[u8]) {
     let _ = std::io::stderr().write_all(line);
 }
 
@@ -740,7 +764,8 @@ pub fn write_pipe_chunks(data: &[u8], dest: i32) {
     }
 
     let write_chunk = |payload: &[u8], flags: u8| {
-        let mut chunk = Vec::with_capacity(PIPE_HEADER_SIZE + payload.len());
+        let mut chunk = Vec::new();
+        let _ = chunk.try_reserve(PIPE_HEADER_SIZE + payload.len());
         chunk.extend_from_slice(&pipe_proto_header(payload.len() as u16, pid, flags));
         chunk.extend_from_slice(payload);
         write_fd2(&chunk);
@@ -756,6 +781,10 @@ pub fn write_pipe_chunks(data: &[u8], dest: i32) {
 }
 
 fn write_fd2(chunk: &[u8]) {
+    // D4812: a memory safety thread's chunk goes to its writer off the thread (one chunk a write, as here)
+    if sink::defer_server_log(chunk) {
+        return;
+    }
     // SAFETY: the pointer/length pair describes a live buffer; write(2) has
     // no other preconditions and the result is deliberately ignored.
     unsafe {
@@ -798,8 +827,12 @@ pub fn err_sendbytes(buf: &mut Vec<u8>, s: &[u8]) -> PgResult<()> {
         Some(n) => &s[..n],
         None => s,
     };
-    let converted = !stack::in_error_recursion_trouble()
-        && ::mbutils_seams::pg_server_to_client::is_installed()
+    if stack::in_error_recursion_trouble() {
+        buf.extend(s.iter().map(|&b| if b.is_ascii() { b } else { b'?' }));
+        buf.push(0);
+        return Ok(());
+    }
+    let converted = ::mbutils_seams::pg_server_to_client::is_installed()
         && ERR_CONVERT_CX.with(|cell| {
             let Ok(mut slot) = cell.try_borrow_mut() else {
                 return Ok(false);
@@ -827,7 +860,7 @@ pub fn err_sendbytes(buf: &mut Vec<u8>, s: &[u8]) -> PgResult<()> {
                 Ok(None) => Ok(false),
                 // Raised at recursion depth 3 in C (errfinish, EmitErrorReport,
                 // errstart), where error_context_stack is abandoned.
-                Err(e) => Err(Box::new((*e).with_hide_context(true))),
+                Err(e) => Err(Box::new((*e).with_hide_context(true).with_context_abandoned())),
             };
             cx.reset();
             done
@@ -853,6 +886,10 @@ fn send_field_bytes(
     err_sendbytes(buf, value)
 }
 
+/// the send's own error is returned. pq_putmessage / pq_flush reach secure_write, whose
+/// ProcessClientWriteInterrupt runs CHECK_FOR_INTERRUPTS when a terminate is pending and the client is not
+/// reading: ProcessInterrupts clears ProcDiePending and raises the FATAL. In C that ereport(FATAL) never returns (it
+/// exits from inside the send); discarded here, the terminate was lost and the backend lived on.
 #[cold]
 #[inline(never)]
 pub fn send_message_to_frontend(edata: &PgError) -> PgResult<()> {
@@ -980,6 +1017,10 @@ pub fn write_stderr(message: &str) {
 }
 
 pub fn vwrite_stderr(message: &str) {
+    // D4812: a memory safety thread's text goes to its writer off the thread
+    if sink::defer_server_log(message.as_bytes()) {
+        return;
+    }
     let mut stderr = std::io::stderr().lock();
     let _ = stderr.write_all(message.as_bytes());
     let _ = stderr.flush();

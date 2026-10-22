@@ -265,17 +265,12 @@ thread_local! {
 /// initializes the VFD cache, smgr, buffer access, sync and xloginsert
 /// scratch (found live in the bgwriter chain: AllocateVfd "InitFileAccess
 /// not called?"; CI cluster job ...-0f92). Needs the identity bind (BaseInit
-/// asserts MyProc). The wait-event storage BaseInit points at the bound
-/// PGPROC is reset afterward so waits of FOREIGN tasks later scheduled on
-/// this worker are not attributed to the daemon's pg_stat_activity row.
+/// asserts MyProc). CycleBind owns the wait-event storage binding.
 pub fn ensure_worker_cycle_init() -> Result<(), Box<PgError>> {
     if WORKER_BASE_INITED.get() {
         return Ok(());
     }
     postinit::BaseInit()?;
-    if waitevent_seams::pgstat_reset_wait_event_storage::is_installed() {
-        waitevent_seams::pgstat_reset_wait_event_storage::call();
-    }
     WORKER_BASE_INITED.set(true);
     Ok(())
 }
@@ -323,11 +318,21 @@ impl CycleBind {
         g::SetMyProcNumber(procno);
         g::SetMyLatch(Some(LatchHandle::proc(procno)));
         miscinit::SetMyBackendType(btype);
+        if waitevent_seams::pgstat_set_wait_event_storage::is_installed() {
+            waitevent_seams::pgstat_set_wait_event_storage::call(
+                &lmgr_proc::GetPGProcByNumber(procno).wait_event_info,
+            );
+        }
         // Buffer pins and the error leg's ReleaseAuxProcessResources route
         // through the per-cycle owner (found live: worker
         // ResourceOwnerEnlarge on the NULL owner, CI cluster job ...-24fb).
         resowner::SetCurrentResourceOwner(cycle_owner);
         resowner::SetAuxProcessResourceOwner(cycle_owner);
+        if waitevent_seams::pgstat_set_wait_event_storage::is_installed() {
+            waitevent_seams::pgstat_set_wait_event_storage::call(
+                &lmgr_proc::GetPGProcByNumber(procno).wait_event_info,
+            );
+        }
         prev
     }
 }
@@ -354,11 +359,23 @@ impl Drop for CycleBind {
             }
         }
         resowner::ResourceOwnerDelete(self.cycle_owner);
+        if waitevent_seams::pgstat_reset_wait_event_storage::is_installed() {
+            waitevent_seams::pgstat_reset_wait_event_storage::call();
+        }
         miscinit::SetMyBackendType(self.prev_btype);
         g::SetMyLatch(self.prev_latch);
         lmgr_proc::unbind_task_proc(self.prev_task_proc);
         g::SetMyProcNumber(self.prev_procno);
         g::SetMyProcPid(self.prev_pid);
+        if self.prev_procno != INVALID_PROC_NUMBER {
+            if waitevent_seams::pgstat_set_wait_event_storage::is_installed() {
+                waitevent_seams::pgstat_set_wait_event_storage::call(
+                    &lmgr_proc::GetPGProcByNumber(self.prev_procno).wait_event_info,
+                );
+            }
+        } else if waitevent_seams::pgstat_reset_wait_event_storage::is_installed() {
+            waitevent_seams::pgstat_reset_wait_event_storage::call();
+        }
     }
 }
 

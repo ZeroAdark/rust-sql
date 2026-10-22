@@ -12,6 +12,7 @@ use ::pqformat::{
     pq_beginmessage, pq_endmessage, pq_putemptymessage, pq_puttextmessage, pq_sendbyte,
     pq_sendint16, pq_sendint64, pq_sendstring,
 };
+use ::adt_timestamp::TimestampDifferenceMilliseconds;
 use ::timestamp_seams::get_current_timestamp;
 use ::mcx::Mcx;
 use ::types_core::{Size, TimeLineID, TimestampTz, XLogRecPtr};
@@ -113,7 +114,7 @@ impl<'mcx> BbsinkOps<'mcx> for BbsinkCopystream<'mcx> {
         if targetbytes <= state.bytes_done {
             let now = get_current_timestamp::call();
             self.bytes_done_at_last_time_check = state.bytes_done;
-            let ms = timestamp_difference_milliseconds(self.last_progress_report_time, now);
+            let ms = TimestampDifferenceMilliseconds(self.last_progress_report_time, now);
             if ms >= PROGRESS_REPORT_MILLISECOND_THRESHOLD || now < self.last_progress_report_time {
                 self.last_progress_report_time = now;
                 let mut buf = pq_beginmessage(self.mcx, PQ_MSG_COPY_DATA)?;
@@ -235,18 +236,6 @@ fn format_lsn(lsn: XLogRecPtr) -> String {
     let hi = (lsn >> 32) as u32;
     let lo = lsn as u32;
     format!("{hi:X}/{lo:X}")
-}
-
-fn timestamp_difference_milliseconds(start: TimestampTz, stop: TimestampTz) -> i64 {
-    if start >= stop {
-        return 0;
-    }
-    let diff = stop - start;
-    if diff >= (i32::MAX as i64 - 999) * 1000 {
-        i32::MAX as i64
-    } else {
-        (diff + 999) / 1000
-    }
 }
 
 pub fn init_seams() {}

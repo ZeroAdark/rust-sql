@@ -1,0 +1,58 @@
+Parsed test spec with 2 sessions
+
+starting permutation: g2 alt g1 g2 rb g2
+step g2: SELECT count(*) AS groups, sum(n) AS rows, max(n) AS biggest FROM (SELECT c, count(*) AS n FROM m6apt GROUP BY c) s;
+groups|rows|biggest
+------+----+-------
+    14|1202|    100
+(1 row)
+
+step alt: BEGIN; ALTER TYPE m6ap ADD ATTRIBUTE z int; UPDATE m6apt SET c = ROW((c).a, (c).b, g % 3)::m6ap WHERE g % 5 = 0;
+step g1: SELECT count(*) AS groups, sum(n) AS rows, max(n) AS biggest FROM (SELECT c, count(*) AS n FROM m6apt GROUP BY c) s;
+groups|rows|biggest
+------+----+-------
+    26|1202|     80
+(1 row)
+
+step g2: SELECT count(*) AS groups, sum(n) AS rows, max(n) AS biggest FROM (SELECT c, count(*) AS n FROM m6apt GROUP BY c) s;
+groups|rows|biggest
+------+----+-------
+    14|1202|    100
+(1 row)
+
+step rb: ROLLBACK;
+step g2: SELECT count(*) AS groups, sum(n) AS rows, max(n) AS biggest FROM (SELECT c, count(*) AS n FROM m6apt GROUP BY c) s;
+groups|rows|biggest
+------+----+-------
+    14|1202|    100
+(1 row)
+
+
+starting permutation: alt g1 g2 cm g2 g1
+step alt: BEGIN; ALTER TYPE m6ap ADD ATTRIBUTE z int; UPDATE m6apt SET c = ROW((c).a, (c).b, g % 3)::m6ap WHERE g % 5 = 0;
+step g1: SELECT count(*) AS groups, sum(n) AS rows, max(n) AS biggest FROM (SELECT c, count(*) AS n FROM m6apt GROUP BY c) s;
+groups|rows|biggest
+------+----+-------
+    26|1202|     80
+(1 row)
+
+step g2: SELECT count(*) AS groups, sum(n) AS rows, max(n) AS biggest FROM (SELECT c, count(*) AS n FROM m6apt GROUP BY c) s; <waiting ...>
+step cm: COMMIT;
+step g2: <... completed>
+groups|rows|biggest
+------+----+-------
+    26|1202|     80
+(1 row)
+
+step g2: SELECT count(*) AS groups, sum(n) AS rows, max(n) AS biggest FROM (SELECT c, count(*) AS n FROM m6apt GROUP BY c) s;
+groups|rows|biggest
+------+----+-------
+    26|1202|     80
+(1 row)
+
+step g1: SELECT count(*) AS groups, sum(n) AS rows, max(n) AS biggest FROM (SELECT c, count(*) AS n FROM m6apt GROUP BY c) s;
+groups|rows|biggest
+------+----+-------
+    26|1202|     80
+(1 row)
+

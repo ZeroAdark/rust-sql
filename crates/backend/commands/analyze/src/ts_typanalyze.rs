@@ -5,7 +5,7 @@ use datum::Datum;
 use mcx::{Mcx, MemoryContext, PgVec};
 use types_error::PgResult;
 
-use crate::dynahash_order::DynaHash;
+use crate::dynahash_order::{DynaHash, EntrySlab};
 use crate::{ComputeStats, FetchSource, VacAttrStats};
 
 const TEXT_EQUAL_OPERATOR: types_core::Oid = 98;
@@ -67,7 +67,7 @@ pub(crate) fn compute_tsvector_stats<'mcx>(
     // aset: pruned lexeme copies and chain growth free per C's pfree.
     let key_cx = col_mcx.context().new_child("compute_tsvector_stats lexemes");
     let key_mcx = key_cx.mcx();
-    let mut items: PgVec<'_, TrackItem<'_>> = PgVec::new_in(col_mcx);
+    let mut items: EntrySlab<'_, TrackItem<'_>> = EntrySlab::new(col_mcx);
     let mut lexemes_tab = DynaHash::new(key_mcx, num_mcelem_target as i64)?;
 
     let mut b_current = 1i32;
@@ -75,7 +75,7 @@ pub(crate) fn compute_tsvector_stats<'mcx>(
     let mut null_cnt = 0i32;
     let mut total_width = 0.0f64;
 
-    let mut row_scratch = MemoryContext::new_bump("compute_tsvector_stats row scratch");
+    let mut row_scratch = MemoryContext::new_wholesale("compute_tsvector_stats row scratch");
     for vector_no in 0..samplerows {
         // ts_typanalyze.c:207: vacuum_delay_point(true) per sample row.
         commands_vacuum::vacuum_delay_point(true)?;
@@ -105,8 +105,8 @@ pub(crate) fn compute_tsvector_stats<'mcx>(
                 let h = hashfn::hash_bytes(lexeme);
                 let mut found = None;
                 for &(hh, id) in lexemes_tab.enter(h)? {
-                    if hh == h && items[id as usize].key.as_deref() == Some(lexeme) {
-                        found = Some(id as usize);
+                    if hh == h && items[id].key.as_deref() == Some(lexeme) {
+                        found = Some(id);
                         break;
                     }
                 }
@@ -114,18 +114,19 @@ pub(crate) fn compute_tsvector_stats<'mcx>(
                     Some(idx) => items[idx].frequency += 1,
                     None => {
                         let key = mcx::slice_in(key_mcx, lexeme)?;
-                        let id = items.len() as u32;
-                        items.push(TrackItem { key: Some(key), frequency: 1, delta: b_current - 1 });
+                        let id =
+                            items.alloc(TrackItem { key: Some(key), frequency: 1, delta: b_current - 1 });
                         lexemes_tab.insert(h, id);
                     }
                 }
                 lexeme_no += 1;
                 if lexeme_no % bucket_width as i64 == 0 {
                     lexemes_tab.prune(|id| {
-                        let it = &mut items[id as usize];
+                        let it = &mut items[id];
                         let keep = it.frequency + it.delta > b_current;
                         if !keep {
                             it.key = None;
+                            items.release(id);
                         }
                         keep
                     });
@@ -150,7 +151,7 @@ pub(crate) fn compute_tsvector_stats<'mcx>(
         let mut minfreq = lexeme_no;
         let mut maxfreq = 0i64;
         for id in lexemes_tab.seq() {
-            let it = &items[id as usize];
+            let it = &items[id];
             if it.frequency as i64 > cutoff_freq {
                 sort_table.push(id);
                 minfreq = minfreq.min(it.frequency as i64);
@@ -178,17 +179,17 @@ pub(crate) fn compute_tsvector_stats<'mcx>(
             // hash_seq order: equal frequencies at the cutoff keep C's set.
             ::pg_qsort::pg_qsort_interruptible(
                 &mut sort_table[..],
-                |&a, &b| track_cmp(items[a as usize].frequency, items[b as usize].frequency),
+                |&a, &b| track_cmp(items[a].frequency, items[b].frequency),
                 postgres_seams::check_for_interrupts::call,
             )?;
-            minfreq = items[sort_table[num_mcelem as usize - 1] as usize].frequency as i64;
+            minfreq = items[sort_table[num_mcelem as usize - 1]].frequency as i64;
         } else {
             num_mcelem = track_len;
         }
 
         if num_mcelem > 0 {
             let prefix = &mut sort_table[..num_mcelem as usize];
-            let lexeme_of = |id: u32| items[id as usize].key.as_deref().expect("retained lexeme");
+            let lexeme_of = |id: u32| items[id].key.as_deref().expect("retained lexeme");
             ::pg_qsort::pg_qsort_interruptible(
                 prefix,
                 |&a, &b| lexeme_compare(lexeme_of(a), lexeme_of(b)),
@@ -201,7 +202,7 @@ pub(crate) fn compute_tsvector_stats<'mcx>(
                 mcx::vec_with_capacity_in(anl_mcx, num_mcelem as usize + 2)?;
             for &id in prefix.iter() {
                 mcelem_values.push(text_datum_in(anl_mcx, lexeme_of(id))?);
-                mcelem_freqs.push((items[id as usize].frequency as f64 / nonnull_cnt as f64) as f32);
+                mcelem_freqs.push((items[id].frequency as f64 / nonnull_cnt as f64) as f32);
             }
             mcelem_freqs.push((minfreq as f64 / nonnull_cnt as f64) as f32);
             mcelem_freqs.push((maxfreq as f64 / nonnull_cnt as f64) as f32);

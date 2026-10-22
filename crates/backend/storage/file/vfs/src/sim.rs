@@ -140,6 +140,7 @@ pub enum OpKind {
     Fallocate,
     FileSize,
     FadviseWillneed,
+    FadviseRandom,
     Stat,
     Fstat,
     Lstat,
@@ -150,6 +151,8 @@ pub enum OpKind {
     Rmdir,
     ReadDir,
     FdBudgetProbe,
+    /// Contract v2.
+    Link,
 }
 
 /// Description of the op the fault plan is consulted about. `pread`/`pwrite`
@@ -2268,6 +2271,36 @@ impl Vfs for SimVfs {
         })
     }
 
+    fn cachestat(&self, fd: c_int, off: off_t, len: off_t, out: &mut [u64; 2]) -> c_int {
+        // the sim's pages: its files live in memory, so a range's pages up to the file's end are all cached
+        const PAGE: u64 = 4096;
+        with(|st| match st.file_of_fd(fd) {
+            Ok(node) => {
+                let (lo, hi) = (off.max(0) as u64, off.max(0) as u64 + len.max(0) as u64);
+                let end = hi.min(st.file_mut(node).volatile.len() as u64).max(lo);
+                *out = [end.div_ceil(PAGE) - lo / PAGE, hi.div_ceil(PAGE) - lo / PAGE];
+                0
+            }
+            Err(e) => fail(e),
+        })
+    }
+
+    fn fadvise_random(&self, fd: c_int) -> c_int {
+        with(|st| {
+            if refuse_if_killed(st, OpKind::FadviseRandom) {
+                return fail(libc::EIO);
+            }
+            let opath = st.fd_path(fd);
+            if let Some(e) = gate_simple(
+                st,
+                &OpDesc { kind: OpKind::FadviseRandom, path: opath.as_deref(), fd: Some(fd), offset: None, len: None },
+            ) {
+                return fail(e);
+            }
+            0 // hint; MAY no-op
+        })
+    }
+
     fn stat(&self, path: &CStr, out: &mut FileInfo) -> c_int {
         let p = match norm_path(path) {
             Ok(p) => p,
@@ -2510,6 +2543,48 @@ impl Vfs for SimVfs {
                     st.namespace.insert(new_key, id);
                 }
             }
+            0
+        })
+    }
+
+    /// Contract v2: a second dirent on the source's node. Volatile until the
+    /// target's parent directory is fsynced, like any namespace op.
+    fn link(&self, from: &CStr, to: &CStr) -> c_int {
+        let (fp, tp) = match (norm_path(from), norm_path(to)) {
+            (Ok(a), Ok(b)) => (a, b),
+            (Err(e), _) | (_, Err(e)) => return fail(e),
+        };
+        with(|st| {
+            if refuse_if_killed(st, OpKind::Link) {
+                return fail(libc::EIO);
+            }
+            if let Some(e) = gate_simple(
+                st,
+                &OpDesc { kind: OpKind::Link, path: Some(&tp), fd: None, offset: None, len: None },
+            ) {
+                return fail(e);
+            }
+            let Some(src) = st.lookup(&fp) else {
+                return fail(libc::ENOENT);
+            };
+            if matches!(st.nodes[src].node, Node::Dir(_)) {
+                return fail(libc::EPERM); // Linux: link(2) on a directory
+            }
+            if st.lookup(&tp).is_some() {
+                return fail(libc::EEXIST);
+            }
+            let (tparent, tname) = match split_parent(&tp) {
+                Ok(v) => v,
+                Err(e) => return fail(e),
+            };
+            let tpid = match st.dir_id(&tparent) {
+                Ok(v) => v,
+                Err(e) => return fail(e),
+            };
+            st.dir_set_entry(tpid, &tname, src);
+            st.namespace.insert(tp, src);
+            let f = st.file_mut(src);
+            f.nlink += 1;
             0
         })
     }
@@ -2785,6 +2860,24 @@ mod tests {
         assert_eq!(v.close(fd2), 0);
     }
 
+    /// cachestat: the sim's pages to the file's end are cached, the range's pages past it are not; a bad fd fails.
+    #[test]
+    fn cachestat_reports_the_in_memory_pages() {
+        let v = fresh();
+        let fd = open_rw_create(&v, "/cs");
+        assert_eq!(v.pwrite(fd, &[1u8; 10000], 0), 10000);
+        let mut out = [9u64; 2];
+        assert_eq!(v.cachestat(fd, 0, 10000, &mut out), 0);
+        assert_eq!(out, [3, 3]);
+        assert_eq!(v.cachestat(fd, 4096, 16384, &mut out), 0);
+        assert_eq!(out, [2, 4], "pages past the end are not cached");
+        assert_eq!(v.cachestat(fd, 0, 0, &mut out), 0);
+        assert_eq!(out, [0, 0]);
+        assert_eq!(v.close(fd), 0);
+        assert_eq!(v.cachestat(fd, 0, 4096, &mut out), -1);
+        assert_eq!(get_errno(), libc::EBADF);
+    }
+
     #[test]
     fn o_excl_o_trunc_and_errno_semantics() {
         let v = fresh();
@@ -2864,6 +2957,63 @@ mod tests {
         assert_eq!(v.pread(fd2, &mut buf, 0), 8);
         assert_eq!(&buf, b"SYNCED--");
         assert_eq!(v.close(fd2), 0);
+    }
+
+    /// Contract v2: a link is a dirent like any other — lost by a crash before
+    /// its parent's fsync, kept (with the shared data) after it.
+    #[test]
+    fn link_is_volatile_until_its_parent_fsync_and_shares_the_file() {
+        let v = fresh();
+        assert_eq!(v.mkdir(&c("/t"), 0o700 as mode_t), 0);
+        assert_eq!(v.mkdir(&c("/s"), 0o700 as mode_t), 0);
+        dir_fsync(&v, "/");
+        let fd = open_rw_create(&v, "/t/part");
+        assert_eq!(v.pwrite(fd, b"PARTDATA", 0), 8);
+        assert_eq!(v.fsync(fd), 0);
+        assert_eq!(v.close(fd), 0);
+        dir_fsync(&v, "/t");
+        assert_eq!(v.link(&c("/t/part"), &c("/s/pending")), 0);
+        v.crash();
+        let mut fi = FileInfo::zeroed();
+        assert_eq!(v.stat(&c("/s/pending"), &mut fi), -1, "unsynced link lost");
+        assert_eq!(v.stat(&c("/t/part"), &mut fi), 0);
+        assert_eq!(fi.nlink, 1);
+
+        assert_eq!(v.link(&c("/t/part"), &c("/s/pending")), 0);
+        dir_fsync(&v, "/s");
+        // The table name goes (reclaim); the spool name keeps the data.
+        assert_eq!(v.unlink(&c("/t/part")), 0);
+        dir_fsync(&v, "/t");
+        v.crash();
+        assert_eq!(v.stat(&c("/t/part"), &mut fi), -1);
+        assert_eq!(v.stat(&c("/s/pending"), &mut fi), 0);
+        assert_eq!(fi.nlink, 1);
+        let fd = v.open(&c("/s/pending"), libc::O_RDONLY, 0 as mode_t);
+        let mut buf = [0u8; 8];
+        assert_eq!(v.pread(fd, &mut buf, 0), 8);
+        assert_eq!(&buf, b"PARTDATA");
+        assert_eq!(v.close(fd), 0);
+
+        // Both names durable: a crash keeps both, one inode, nlink 2.
+        assert_eq!(v.link(&c("/s/pending"), &c("/t/part")), 0);
+        dir_fsync(&v, "/t");
+        v.crash();
+        assert_eq!(v.stat(&c("/t/part"), &mut fi), 0);
+        assert_eq!(fi.nlink, 2);
+        let fd = v.open(&c("/t/part"), libc::O_RDWR, 0 as mode_t);
+        assert_eq!(v.pwrite(fd, b"X", 0), 1);
+        assert_eq!(v.close(fd), 0);
+        let fd = v.open(&c("/s/pending"), libc::O_RDONLY, 0 as mode_t);
+        assert_eq!(v.pread(fd, &mut buf, 0), 8);
+        assert_eq!(&buf, b"XARTDATA", "one file under two names");
+        assert_eq!(v.close(fd), 0);
+
+        set_errno(0);
+        assert_eq!(v.link(&c("/nope"), &c("/s/x")), -1);
+        assert_eq!(get_errno(), libc::ENOENT);
+        set_errno(0);
+        assert_eq!(v.link(&c("/t/part"), &c("/missing/x")), -1);
+        assert_eq!(get_errno(), libc::ENOENT);
     }
 
     #[test]
@@ -3039,6 +3189,23 @@ mod tests {
         let fin = format!("{dir}/data.bin");
         assert_eq!(v.rename(&c(&tmp), &c(&fin)), 0);
 
+        // contract v2: a second name shares the file; a taken name is EEXIST
+        let lnk = format!("{dir}/data.lnk");
+        out.push(v.link(&c(&fin), &c(&lnk)).to_le_bytes().to_vec());
+        set_errno(0);
+        out.push(v.link(&c(&fin), &c(&lnk)).to_le_bytes().to_vec());
+        out.push(get_errno().to_le_bytes().to_vec());
+        set_errno(0);
+        out.push(v.link(&c(&dir), &c(&format!("{dir}/dir.lnk"))).to_le_bytes().to_vec());
+        out.push(get_errno().to_le_bytes().to_vec());
+        let mut li = FileInfo::zeroed();
+        assert_eq!(v.stat(&c(&lnk), &mut li), 0);
+        out.push(li.nlink.to_le_bytes().to_vec());
+        let lfd = v.open(&c(&lnk), libc::O_RDWR, 0 as mode_t);
+        assert!(lfd >= 0);
+        out.push(vec![v.pwrite(lfd, b"L", 0) as u8]);
+        assert_eq!(v.close(lfd), 0);
+
         let fd = v.open(&c(&fin), libc::O_RDONLY, 0 as mode_t);
         assert!(fd >= 0);
         out.push(v.file_size(fd).to_le_bytes().to_vec());
@@ -3072,6 +3239,11 @@ mod tests {
         out.push(fi.size.to_le_bytes().to_vec());
         assert_eq!(v.close(fd), 0);
         assert_eq!(v.unlink(&c(&fin)), 0);
+        let mut li = FileInfo::zeroed();
+        assert_eq!(v.stat(&c(&lnk), &mut li), 0);
+        out.push(li.nlink.to_le_bytes().to_vec());
+        out.push(li.size.to_le_bytes().to_vec());
+        assert_eq!(v.unlink(&c(&lnk)), 0);
         assert_eq!(v.rmdir(&c(&dir)), 0);
         out
     }

@@ -39,7 +39,9 @@ fn install_test_gucs() {
     });
 }
 
-fn bringup() {
+fn bringup() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         shmem::init_seams();
@@ -106,11 +108,12 @@ fn bringup() {
         transam_xlog::init_seams();
         install_test_gucs();
         init_seams();
+        remove_data_dir_at_exit();
     });
     guc::store::initialize_guc_options().unwrap();
     // PGSharedMemoryCreate stats DataDir and walks the System V key space
     // from its inode (sysv_shmem.c:716, :764): give it a real directory.
-    let dir = std::env::temp_dir().join(format!("pgrust-ipci-{}", std::process::id()));
+    let dir = data_dir_of(std::process::id());
     std::fs::create_dir_all(&dir).unwrap();
     init_small::globals::SetDataDir(dir.to_str().unwrap());
     // Unseeded prng = xoroshiro zero fixed point; InitProcessGlobals seeds it.
@@ -119,13 +122,61 @@ fn bringup() {
     g::SetMaxConnections(100);
     g::set_max_worker_processes(8);
     g::SetMaxBackends(100 + 16 + 8 + 10 + 2);
+    serial
+}
+
+fn data_dir_of(pid: u32) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("pgrust-ipci-{pid}"))
+}
+
+/// The process's data directory (SetDataDir: every test's, so no test's end
+/// may remove it) goes at the process's exit.
+fn remove_data_dir_at_exit() {
+    extern "C" fn gone() {
+        let _ = std::fs::remove_dir_all(data_dir_of(std::process::id()));
+    }
+    extern "C" {
+        fn atexit(f: extern "C" fn()) -> core::ffi::c_int;
+    }
+    // SAFETY: the C library's atexit, given a function that cannot unwind
+    // (it ignores the removal's error).
+    unsafe { atexit(gone) };
+}
+
+/// A run of this test alone, in a child process, leaves no data directory
+/// behind once the child exits.
+#[test]
+fn a_run_leaves_nothing_behind() {
+    const CHILD: &str = "PGRUST_IPCI_LEAVE_NOTHING_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let _serial = bringup();
+        let dir = data_dir_of(std::process::id());
+        assert!(dir.exists());
+        println!("data dir {}", dir.display());
+        return;
+    }
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "tests::a_run_leaves_nothing_behind", "--nocapture"])
+        .env(CHILD, "1")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let dir = data_dir_of(child.id());
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "child failed: {stdout}");
+    assert!(
+        stdout.contains(&format!("data dir {}", dir.display())),
+        "the child never made its data dir: {stdout}"
+    );
+    assert!(!dir.exists(), "{} left behind", dir.display());
 }
 
 static STARTUP_HOOK_RUNS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn create_shared_memory_and_semaphores_end_to_end() {
-    bringup();
+    let _serial = bringup();
     register_shmem_startup_hook(|| {
         STARTUP_HOOK_RUNS.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -185,7 +236,7 @@ fn create_shared_memory_and_semaphores_end_to_end() {
 // MAP_HUGETLB the GUC keeps its -1 boot value.
 #[test]
 fn initialize_shmem_gucs_counts_huge_pages_like_c() {
-    bringup();
+    let _serial = bringup();
 
     ipci_seams::initialize_shmem_gucs::call(4).unwrap();
     let (size_b, _) = CalculateShmemSize(&proc_global_config(4)).unwrap();
@@ -218,7 +269,7 @@ fn initialize_shmem_gucs_counts_huge_pages_like_c() {
 
 #[test]
 fn calculate_shmem_size_rounds_and_counts_addin() {
-    bringup();
+    let _serial = bringup();
     let cfg = proc_global_config(4);
     let (size, num_semas) = CalculateShmemSize(&cfg).unwrap();
     assert_eq!(size % 8192, 0);
@@ -243,7 +294,7 @@ fn calculate_shmem_size_rounds_and_counts_addin() {
 // PGSemaphoreData to PG_CACHE_LINE_SIZE (128); the SysV build (macOS) is 8.
 #[test]
 fn shmem_size_terms_match_c_18_6_census() {
-    bringup();
+    let _serial = bringup();
     assert_eq!(g::MaxBackends(), 136);
     // hot_standby boots on (transam_xlog's GUC install): Proc Array +
     // KnownAssignedXids + KnownAssignedXidsValid.
@@ -259,7 +310,7 @@ fn shmem_size_terms_match_c_18_6_census() {
     // descriptors + cache-line pad, blocks + I/O-align pad, freelist.c's
     // estimate, I/O CVs + pad, checkpoint sort items.
     let nbuffers = g::NBuffers() as usize;
-    let strategy = dynahash::hash_estimate_size((nbuffers + 128) as i64, 24) + 32;
+    let strategy = dynahash::hash_estimate_size((nbuffers + 128) as i64, 24).unwrap() + 32;
     assert_eq!(
         bufmgr::BufferManagerShmemSize().unwrap(),
         nbuffers * 64 + 128 + 4096 + nbuffers * 8192 + strategy + nbuffers * 16 + 128 + nbuffers * 20
@@ -268,7 +319,7 @@ fn shmem_size_terms_match_c_18_6_census() {
 
 #[test]
 fn request_addin_outside_hook_is_fatal() {
-    bringup();
+    let _serial = bringup();
     let err = std::panic::catch_unwind(|| RequestAddinShmemSpace(1, false))
         .expect_err("FATAL must not return");
     let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();

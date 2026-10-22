@@ -152,3 +152,55 @@ fn config_map_shape_matches_c() {
     assert_eq!(config_map_of(&hundred).expect("100 per token type is the cap")[5].dict_ids.len(), 100);
     assert!(config_map_of(&[]).expect("no rows").is_empty());
 }
+
+#[test]
+fn dictionary_rebuild_reuses_retained_entry_and_context() {
+    syscache_seams::lookup_pg_ts_dict_shape::set(|_, _| {
+        Ok(Some(syscache_seams::PgTsDictShape {
+            dictname: Default::default(),
+            dictnamespace: 1,
+            dicttemplate: 1,
+            dictinitoption: None,
+        }))
+    });
+    syscache_seams::lookup_pg_ts_template_shape::set(|_| {
+        Ok(Some(syscache_seams::PgTsTemplateShape {
+            tmplinit: InvalidOid,
+            tmpllexize: with_state(|st| st.current_config),
+        }))
+    });
+    fmgr_seams::fmgr_info::set(|oid| {
+        Ok(FmgrInfo::new(
+            |info, _| Ok(Datum::from_usize(info.unwrap().fn_oid as usize)),
+            oid,
+            4,
+            false,
+            false,
+        ))
+    });
+    with_state(|st| st.current_config = 11);
+    let retained = lookup_ts_dictionary_cache(42).unwrap();
+    let ctx = {
+        let state = retained.state.borrow();
+        mcx::alloc_leak_in(state.ctx.mcx(), 42_u64).unwrap();
+        &*state.ctx as *const MemoryContext
+    };
+    let results = MemoryContext::new("dictionary-test");
+    assert_eq!(
+        retained
+            .call_lexize(results.mcx(), b"sample", None)
+            .unwrap(),
+        11
+    );
+    InvalidateDictCallBack(Datum::null(), TSDICTOID, 0);
+    with_state(|st| st.current_config = 12);
+    let rebuilt = lookup_ts_dictionary_cache(42).unwrap();
+    assert!(Rc::ptr_eq(&retained, &rebuilt));
+    assert_eq!(ctx, &*rebuilt.state.borrow().ctx as *const MemoryContext);
+    assert_eq!(
+        retained
+            .call_lexize(results.mcx(), b"sample", None)
+            .unwrap(),
+        12
+    );
+}

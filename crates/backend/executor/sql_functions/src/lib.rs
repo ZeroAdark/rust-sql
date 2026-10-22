@@ -14,6 +14,7 @@ mod retval;
 mod srf_inline;
 
 use std::cell::Cell;
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 use datum::Datum;
@@ -382,7 +383,6 @@ struct SqlFcacheState<'mcx> {
     params_buf: PgVec<'mcx, ParamExternData>,
     params_h: ParamListHandle,
     tstore: TuplestoreHandle,
-    row_store: TuplestoreHandle,
     junk: Option<JunkState<'mcx>>,
     jf_generation: i32,
     cplan: CachedPlanHandle,
@@ -455,23 +455,37 @@ fn release_execution_state(s: &mut SqlFcacheState<'_>) {
         tuplestore::hold::end(s.tstore);
         s.tstore = TuplestoreHandle::NULL;
     }
-    if !s.row_store.is_null() {
-        tuplestore::hold::end(s.row_store);
-        s.row_store = TuplestoreHandle::NULL;
-    }
     if !s.params_h.is_null() {
         types_portal::params::free(s.params_h);
         s.params_h = ParamListHandle::NULL;
     }
 }
 
-// DR_sqlfunction receiveSlot (functions.c:2644), tuplestore-backed for both
-// the accumulate and keep-first legs.
+// DR_sqlfunction receiveSlot (functions.c:2644): into the tuplestore, else the first row into the junk slot (:2665).
 fn sqlfunction_receive<'mcx>(
     state: &mut sql_functions_seams::SqlFunctionDestState<'mcx>,
     slot: &mut SlotData<'mcx>,
 ) -> PgResult<bool> {
-    if state.only_first && state.received {
+    if let Some((mut keep, keep_mcx)) = state.row_slot {
+        // SAFETY: row_slot is the live fcache's junkfilter slot (postquel_start), borrowed by nothing else meanwhile.
+        let keep = unsafe { keep.as_mut() };
+        if !keep.base().is_empty() {
+            return Ok(true);
+        }
+        exectuples::slot_getallattrs(slot);
+        let b = slot.base();
+        let k = keep.base_mut();
+        for (j, &src) in state.clean_map.iter().enumerate() {
+            if src == 0 {
+                k.tts_values[j] = Datum::null();
+                k.tts_isnull[j] = true;
+            } else {
+                k.tts_values[j] = b.tts_values[(src - 1) as usize];
+                k.tts_isnull[j] = b.tts_isnull[(src - 1) as usize];
+            }
+        }
+        exectuples::exec_store_virtual_tuple(keep);
+        exectuples::exec_materialize_slot(keep, keep_mcx)?;
         return Ok(true);
     }
     exectuples::slot_getallattrs(slot);
@@ -488,7 +502,6 @@ fn sqlfunction_receive<'mcx>(
         }
     }
     tuplestore::hold::putvalues(state.tstore, &state.clean_desc, &state.values, &state.isnull)?;
-    state.received = true;
     Ok(true)
 }
 
@@ -517,36 +530,9 @@ pub fn fmgr_sql(
     };
 
     if flinfo.fn_extra_ref::<SqlFcacheGuard>().is_none() {
-        let owned =
-            McxOwned::<SqlFcacheTy>::try_new(MemoryContext::new("SQL function cache"), |mcx| {
-                Ok(SqlFcacheState {
-                    entry: None,
-                    params_buf: PgVec::new_in(mcx),
-                    params_h: ParamListHandle::NULL,
-                    tstore: TuplestoreHandle::NULL,
-                    row_store: TuplestoreHandle::NULL,
-                    junk: None,
-                    jf_generation: -1,
-                    cplan: CachedPlanHandle::default(),
-                    next_query_index: 0,
-                    frame: Rc::new(ExecFrame::default()),
-                    eslist: Vec::new(),
-                    lazy_eval_ok: false,
-                    lazy_eval: false,
-                    random_access: false,
-                    active: false,
-                })
-            })?;
-        flinfo.set_fn_extra(SqlFcacheGuard(owned));
+        new_fcache(flinfo)?;
     }
-
-    let fncollation = fcinfo.fncollation;
-    let nargs = fcinfo.nargs();
-    assert!(nargs <= cache::MAX_SQL_FN_ARGS, "fmgr_sql: >FUNC_MAX_ARGS arguments");
-    let mut arg_vals = [datum::NullableDatum::null(); cache::MAX_SQL_FN_ARGS];
-    for i in 0..nargs {
-        arg_vals[i] = datum::NullableDatum { value: fcinfo.arg(i), isnull: fcinfo.argisnull(i) };
-    }
+    assert!(fcinfo.nargs() <= cache::MAX_SQL_FN_ARGS, "fmgr_sql: >FUNC_MAX_ARGS arguments");
 
     // init_sql_fcache (functions.c:535): reset error debris, resume a
     // suspended set-returning execution, or (re)bind entry and params.
@@ -561,80 +547,7 @@ pub fn fmgr_sql(
         })
     };
     if !resuming {
-        let expected_desc: Option<&TupleDescData<'_>> = fcinfo.rsinfo_mut().and_then(|rsi| {
-            rsi.expectedDesc.map(|p| {
-                // SAFETY: fmNodePtr contract — the executor armed
-                // expectedDesc with a live tupdesc for this call.
-                unsafe { p.cast::<TupleDescData<'_>>().as_ref() }
-            })
-        });
-        let e = cache::cached_sql_function(flinfo, fncollation, expected_desc)?;
-        let guard = flinfo.fn_extra_mut::<SqlFcacheGuard>().expect("set above");
-        guard.0.with_mut_mcx(|mcx, s| {
-            let changed = match &s.entry {
-                Some(old) => !Rc::ptr_eq(old, &e),
-                None => true,
-            };
-            if changed {
-                s.junk = None;
-                s.jf_generation = -1;
-                s.frame = Rc::new(e.owned.with(|es| ExecFrame {
-                    fname: es.fname.to_string(),
-                    src: es.src.to_string(),
-                    error_query_index: Cell::new(0),
-                }));
-            }
-            s.entry = Some(e.clone());
-            e.owned.with(|es| -> PgResult<()> {
-                // postquel_sub_params (functions.c:1478) binds fcinfo->nargs
-                // params: a FunctionCall3 of a one-argument cast function
-                // (ri_triggers.c:3079) passes more than the body declares,
-                // and the surplus are never referenced.
-                let declared = |i: usize| match es.argtypes.get(i) {
-                    Some(&t) => (t, es.argtyplen[i]),
-                    None => (types_core::InvalidOid, 0),
-                };
-                if s.params_buf.len() != nargs {
-                    if !s.params_h.is_null() {
-                        types_portal::params::free(s.params_h);
-                        s.params_h = ParamListHandle::NULL;
-                    }
-                    s.params_buf.clear();
-                    s.params_buf.try_reserve_exact(nargs.max(1)).map_err(|_| mcx.oom(nargs))?;
-                    for i in 0..nargs {
-                        let (ptype, typlen) = declared(i);
-                        s.params_buf.push(ParamExternData {
-                            value: sql_fn_param_value(arg_vals[i].value, arg_vals[i].isnull, typlen),
-                            isnull: arg_vals[i].isnull,
-                            pflags: PARAM_FLAG_CONST,
-                            ptype,
-                        });
-                    }
-                } else {
-                    for i in 0..nargs {
-                        let (ptype, typlen) = declared(i);
-                        s.params_buf[i].value =
-                            sql_fn_param_value(arg_vals[i].value, arg_vals[i].isnull, typlen);
-                        s.params_buf[i].isnull = arg_vals[i].isnull;
-                        s.params_buf[i].ptype = ptype;
-                    }
-                }
-                Ok(())
-            })?;
-            if !s.params_buf.is_empty() && s.params_h.is_null() {
-                // functions.c:1490 makeParamList: a plain list (paramFetch
-                // NULL, so auto_explain logs its Query Parameters), owned by
-                // the function for the engine's PL-provenance gate.
-                // SAFETY: freed in release_execution_state before the buffer
-                // is next reallocated.
-                s.params_h = unsafe { types_portal::params::register_pl_owned(&s.params_buf) };
-            }
-            s.lazy_eval_ok = lazy_eval_ok;
-            s.lazy_eval = false;
-            s.next_query_index = 0;
-            s.frame.error_query_index.set(0);
-            Ok(())
-        })?;
+        bind_call(flinfo, fcinfo, lazy_eval_ok)?;
     }
 
     let guard = flinfo.fn_extra_ref::<SqlFcacheGuard>().expect("set above");
@@ -719,6 +632,116 @@ pub fn fmgr_sql(
             Ok(fcinfo.return_null())
         }
     }
+}
+
+#[inline(never)]
+fn new_fcache(flinfo: &mut FmgrInfo) -> PgResult<()> {
+    let owned =
+        McxOwned::<SqlFcacheTy>::try_new(MemoryContext::new_start_small("SQL function cache"), |mcx| {
+            Ok(SqlFcacheState {
+                entry: None,
+                params_buf: PgVec::new_in(mcx),
+                params_h: ParamListHandle::NULL,
+                tstore: TuplestoreHandle::NULL,
+                junk: None,
+                jf_generation: -1,
+                cplan: CachedPlanHandle::default(),
+                next_query_index: 0,
+                frame: Rc::new(ExecFrame::default()),
+                eslist: Vec::new(),
+                lazy_eval_ok: false,
+                lazy_eval: false,
+                random_access: false,
+                active: false,
+            })
+        })?;
+    flinfo.set_fn_extra(SqlFcacheGuard(owned));
+    Ok(())
+}
+
+// init_sql_fcache's (re)bind half (functions.c:535): the entry for this call, then postquel_sub_params.
+#[inline(never)]
+fn bind_call(
+    flinfo: &mut FmgrInfo,
+    fcinfo: &mut FunctionCallInfoBaseData,
+    lazy_eval_ok: bool,
+) -> PgResult<()> {
+    let fncollation = fcinfo.fncollation;
+    let nargs = fcinfo.nargs();
+    let expected_desc: Option<&TupleDescData<'_>> = fcinfo.rsinfo_mut().and_then(|rsi| {
+        rsi.expectedDesc.map(|p| {
+            // SAFETY: fmNodePtr contract — the executor armed expectedDesc with a live tupdesc for this call.
+            unsafe { p.cast::<TupleDescData<'_>>().as_ref() }
+        })
+    });
+    let held = flinfo.fn_extra_ref::<SqlFcacheGuard>().and_then(|g| g.0.with(|s| s.entry.clone()));
+    let e = match held {
+        Some(old) if old.unchanged(flinfo.fn_oid)? => old,
+        _ => cache::cached_sql_function(flinfo, fncollation, expected_desc)?,
+    };
+    let guard = flinfo.fn_extra_mut::<SqlFcacheGuard>().expect("set above");
+    guard.0.with_mut_mcx(|mcx, s| {
+        let changed = match &s.entry {
+            Some(old) => !Rc::ptr_eq(old, &e),
+            None => true,
+        };
+        if changed {
+            s.junk = None;
+            s.jf_generation = -1;
+            s.frame = Rc::new(e.owned.with(|es| ExecFrame {
+                fname: es.fname.to_string(),
+                src: es.src.to_string(),
+                error_query_index: Cell::new(0),
+            }));
+        }
+        s.entry = Some(e.clone());
+        e.owned.with(|es| -> PgResult<()> {
+            // postquel_sub_params (functions.c:1478) binds fcinfo->nargs params: a FunctionCall3 of a one-argument
+            // cast function (ri_triggers.c:3079) passes more than the body declares, and the surplus are never
+            // referenced (D2774, pgrust main #2232 87d7e2c28fd).
+            let declared = |i: usize| match es.argtypes.get(i) {
+                Some(&t) => (t, es.argtyplen[i]),
+                None => (types_core::InvalidOid, 0),
+            };
+            if s.params_buf.len() != nargs {
+                if !s.params_h.is_null() {
+                    types_portal::params::free(s.params_h);
+                    s.params_h = ParamListHandle::NULL;
+                }
+                s.params_buf.clear();
+                s.params_buf.try_reserve_exact(nargs.max(1)).map_err(|_| mcx.oom(nargs))?;
+                for i in 0..nargs {
+                    let (ptype, typlen) = declared(i);
+                    s.params_buf.push(ParamExternData {
+                        value: sql_fn_param_value(fcinfo.arg(i), fcinfo.argisnull(i), typlen),
+                        isnull: fcinfo.argisnull(i),
+                        pflags: PARAM_FLAG_CONST,
+                        ptype,
+                    });
+                }
+            } else {
+                for i in 0..nargs {
+                    let (ptype, typlen) = declared(i);
+                    s.params_buf[i].value =
+                        sql_fn_param_value(fcinfo.arg(i), fcinfo.argisnull(i), typlen);
+                    s.params_buf[i].isnull = fcinfo.argisnull(i);
+                    s.params_buf[i].ptype = ptype;
+                }
+            }
+            Ok(())
+        })?;
+        if !s.params_buf.is_empty() && s.params_h.is_null() {
+            // SAFETY: freed in release_execution_state before the buffer
+            // is next reallocated.
+            s.params_h = unsafe { types_portal::params::register_pl_owned(&s.params_buf) };
+        }
+        s.lazy_eval_ok = lazy_eval_ok;
+        s.lazy_eval = false;
+        s.next_query_index = 0;
+        s.frame.error_query_index.set(0);
+        Ok(())
+    })?;
+    Ok(())
 }
 
 #[track_caller]
@@ -877,15 +900,9 @@ fn take_single_result<'mcx>(
     facts: EntryFacts,
     result_mcx: Mcx<'_>,
 ) -> PgResult<(Datum, bool)> {
-    let row_store = state.row_store;
-    if row_store.is_null() {
-        return Ok((Datum::null(), true));
-    }
+    // functions.c postquel_get_single_result: the row the receiver kept in the junkfilter's result slot, if any.
     let junk = state.junk.as_mut().expect("result extraction requires a junkfilter");
-    let got = tuplestore::hold::with_store(row_store, |st| {
-        st.gettupleslot(true, false, &mut junk.slot, mcx)
-    })?;
-    if !got {
+    if junk.slot.base().is_empty() {
         return Ok((Datum::null(), true));
     }
     let result = if facts.returns_tuple {
@@ -900,7 +917,6 @@ fn take_single_result<'mcx>(
         }
     };
     exectuples::exec_clear_tuple(&mut junk.slot, mcx);
-    tuplestore::hold::with_store(row_store, |st| st.clear());
     Ok(result)
 }
 
@@ -938,6 +954,8 @@ fn init_execution_state<'mcx>(
     let stmt_list = plancache::CachedPlanStmtList(state.cplan);
 
     let mut lasttages: Option<usize> = None;
+    let n = stmt_list.len();
+    state.eslist.try_reserve_exact(n).map_err(|_| mcx.oom(n * core::mem::size_of::<ExecState<'_>>()))?;
     for (idx, stmt) in stmt_list.iter().enumerate() {
         if let Some(u) = stmt.utilityStmt {
             check_body_utility_node(u)?;
@@ -1111,7 +1129,7 @@ fn current_query_string(state: &SqlFcacheState<'_>) -> &'static str {
     plancache::CachedPlanQueryString(psrc)
 }
 
-// postquel_start (functions.c:1275).
+#[inline(never)]
 fn postquel_start<'mcx>(
     mcx: Mcx<'mcx>,
     state: &mut SqlFcacheState<'mcx>,
@@ -1136,27 +1154,24 @@ fn postquel_start<'mcx>(
             }
             state.tstore
         } else {
-            if state.row_store.is_null() {
-                // functions.c:2665 keeps this one row in the junkfilter slot:
-                // no spill budget, so temp_file_limit never applies to it.
-                state.row_store = tuplestore::hold::register(tuplestore::Tuplestore::begin_heap(
-                    false, false, i32::MAX,
-                ));
-            } else {
-                tuplestore::hold::with_store(state.row_store, |st| st.clear());
-            }
-            state.row_store
+            TuplestoreHandle::NULL
         };
-        let junk = state.junk.as_ref().expect("setsResult requires junkfilter");
-        let n = junk.clean_map.len();
+        let junk = state.junk.as_mut().expect("setsResult requires junkfilter");
+        let (row_slot, values, isnull) = if materialize {
+            let n = junk.clean_map.len();
+            (None, mcx::vec_with_capacity_in(mcx, n)?, mcx::vec_with_capacity_in(mcx, n)?)
+        } else {
+            // functions.c:1359: the receiver keeps the first row in the emptied junk slot.
+            exectuples::exec_clear_tuple(&mut junk.slot, mcx);
+            (Some((NonNull::from(&mut junk.slot), mcx)), PgVec::new_in(mcx), PgVec::new_in(mcx))
+        };
         tcop_dest::DestReceiver::SqlFunction(sql_functions_seams::SqlFunctionDestState {
             tstore: target,
             clean_desc: junk.clean_desc.clone(),
             clean_map: junk.clean_map,
-            only_first: !facts.returns_set,
-            received: false,
-            values: mcx::vec_with_capacity_in(mcx, n)?,
-            isnull: mcx::vec_with_capacity_in(mcx, n)?,
+            row_slot,
+            values,
+            isnull,
         })
     } else {
         tcop_dest::CreateDestReceiver(CommandDest::None)
@@ -1164,6 +1179,11 @@ fn postquel_start<'mcx>(
 
     let query_string = current_query_string(state);
     let snap = snapmgr::ActiveSnapshotSet().then(snapmgr::GetActiveSnapshot);
+    // the plan behind this QueryDesc, as SPI and pquery note it: a body's generic plan takes the executor entry's filed
+    // program, or execmain's parked executor skeleton, on re-execution (both keyed by the CachedPlan)
+    if !state.cplan.is_null() && execmain_seams::note_cplan_for_query_desc::is_installed() {
+        execmain_seams::note_cplan_for_query_desc::call(state.cplan);
+    }
     let qd = execmain_seams::create_query_desc::call(
         stmt,
         query_string,
@@ -1194,23 +1214,7 @@ fn postquel_getnext<'mcx>(
     let stmt_list = plancache::CachedPlanStmtList(state.cplan);
     let stmt = &stmt_list[state.eslist[i].stmt_idx];
     if stmt.commandType == CmdType::CMD_UTILITY {
-        let query_string = current_query_string(state);
-        let params_h = state.params_h;
-        // functions.c:1314: a utility statement runs in its own subcontext,
-        // deleted at postquel_end; the executor path makes its own.
-        let subcontext = MemoryContext::new("SQL function execution");
-        let mut dest = tcop_dest::CreateDestReceiver(CommandDest::None);
-        utility_seams::process_utility::call(
-            subcontext.mcx(),
-            stmt,
-            query_string,
-            true,
-            utility_seams::ProcessUtilityContext::PROCESS_UTILITY_QUERY,
-            params_h,
-            QueryEnvHandle::NULL,
-            &mut dest,
-            None,
-        )?;
+        postquel_utility(state, stmt)?;
         return Ok(true);
     }
     let es = &mut state.eslist[i];
@@ -1221,7 +1225,33 @@ fn postquel_getnext<'mcx>(
     Ok(count == 0 || execmain_seams::query_desc_es_processed::call(qd) == 0)
 }
 
-// postquel_end (functions.c:1440).
+// postquel_getnext's utility arm, in its own frame (its subcontext and receiver stay off the executor path's stack).
+#[inline(never)]
+fn postquel_utility(
+    state: &SqlFcacheState<'_>,
+    stmt: &types_nodes::plannodes::PlannedStmt<'_>,
+) -> PgResult<()> {
+    let query_string = current_query_string(state);
+    let params_h = state.params_h;
+    // functions.c:1314: a utility statement runs in its own subcontext,
+    // deleted at postquel_end; the executor path makes its own.
+    let subcontext = MemoryContext::new("SQL function execution");
+    let mut dest = tcop_dest::CreateDestReceiver(CommandDest::None);
+    utility_seams::process_utility::call(
+        subcontext.mcx(),
+        stmt,
+        query_string,
+        true,
+        utility_seams::ProcessUtilityContext::PROCESS_UTILITY_QUERY,
+        params_h,
+        QueryEnvHandle::NULL,
+        &mut dest,
+        None,
+    )
+}
+
+// postquel_end (functions.c:1440). Not inlined, as postquel_start.
+#[inline(never)]
 fn postquel_end(state: &mut SqlFcacheState<'_>, i: usize) -> PgResult<()> {
     let stmt_list = plancache::CachedPlanStmtList(state.cplan);
     let is_utility = stmt_list[state.eslist[i].stmt_idx].commandType == CmdType::CMD_UTILITY;
@@ -1369,7 +1399,8 @@ fn fc_fmgr_sql_validator(
             };
             if let Some(body) = prosqlbody.as_ref() {
                 let queries = cache::sqlbody_queries(mcx, body)?;
-                let mut lists: Vec<PgVec<'_, Query<'_>>> = Vec::with_capacity(queries.len());
+                let mut lists: Vec<PgVec<'_, Query<'_>>> =
+                    ::mcx::std_vec_with_capacity("sql_functions", queries.len())?;
                 for q in queries.into_iter() {
                     if q.commandType != CmdType::CMD_UTILITY {
                         rewrite_handler_seams::acquire_rewrite_locks::call(mcx, &q, true, false)?;
@@ -1406,7 +1437,7 @@ fn fc_fmgr_sql_validator(
             for n in argnames.iter() {
                 name_refs.push(n.as_str());
             }
-            let mut lists: Vec<PgVec<'_, Query<'_>>> = Vec::with_capacity(raw_list.len());
+            let mut lists: Vec<PgVec<'_, Query<'_>>> = ::mcx::std_vec_with_capacity("ExecutorState", raw_list.len())?;
             for raw in raw_list.iter() {
                 cache::usage_reset();
                 let query = analyze_seams::parse_analyze_sql_fn::call(

@@ -1,0 +1,22 @@
+-- regress-full-join-267
+-- select * from int4_tbl i left join lateral (select coalesce(i) from int2_tbl j where i.f1 = j.f1) k on true;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=5 end=sink
+  nodes n1@0 n0@1
+  source range rel=16400 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.0)
+  nest inner=n2 JOIN_LEFT raise-free params=($exec0=outer.2, $exec1=outer.1)
+  inner node=2 eligible rows=1 end=sink
+  nodes n2@0
+  source range rel=16397 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op533($exec1, v4.1)
+  project (1=v4.1, 2=coalesce($exec0))
+  project (1=outer.1, 2=inner.2)
+  outs 1=w8:val 2=?
+  outs 1=w8:val 2=?
+param $exec0 owner=n0 type=16402 rep=?
+param $exec1 owner=n0 type=23 rep=w8:val
+scan-lanes node=1 rti=1 rel=16400 wholerow
+mapped: SeqScan NestLoop NestLoopParam

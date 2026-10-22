@@ -31,7 +31,7 @@ fn pending_interrupt_routes_through_process_interrupts_seam() {
     assert!(crate::check_for_interrupts().is_ok());
 }
 
-// regression: the per-page delay points in gistvacuumscan and
+// fp-gist-gistvacuum#1: the per-page delay points in gistvacuumscan and
 // gistvacuum_delete_empty_pages reach vacuum_delay_point even while
 // VacuumCostActive is false, so a pending autovacuum config reload is
 // processed mid-scan (gistvacuum.c:248, :492).

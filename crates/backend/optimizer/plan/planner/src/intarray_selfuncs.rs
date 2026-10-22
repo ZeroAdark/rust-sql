@@ -25,13 +25,13 @@ struct QItem {
     val: i32,
 }
 
-fn parse_items(image: &[u8]) -> Vec<QItem> {
+fn parse_items(image: &[u8]) -> PgResult<Vec<QItem>> {
     if image.len() < 8 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let size = (i32::from_ne_bytes(image[4..8].try_into().unwrap()).max(0) as usize)
         .min((image.len() - 8) / 8);
-    let mut items = Vec::with_capacity(size);
+    let mut items = mcx::std_vec_with_capacity("planner", size)?;
     for i in 0..size {
         let off = 8 + i * 8;
         items.push(QItem {
@@ -40,7 +40,7 @@ fn parse_items(image: &[u8]) -> Vec<QItem> {
             val: i32::from_ne_bytes(image[off + 4..off + 8].try_into().unwrap()),
         });
     }
-    items
+    Ok(items)
 }
 
 pub(crate) fn int_matchsel<'mcx>(
@@ -85,7 +85,7 @@ pub(crate) fn int_matchsel<'mcx>(
     }
 
     let image = crate::selfuncs::varlena_image_any(run.mcx, c.constvalue)?;
-    let items = parse_items(image);
+    let items = parse_items(image)?;
     // Empty query matches nothing.
     if items.is_empty() {
         return Ok(0.0);
@@ -137,7 +137,8 @@ fn int_query_opr_selec(
             }
             v if v == '|' as i32 => {
                 let s2 = int_query_opr_selec(items, pos + item.left as i32, lookup)?;
-                s1 + s2 - s1 * s2
+                // _int_selfuncs.c:316 (D400).
+                crate::fma_sites::or_sel(s1, s2)
             }
             other => {
                 return Err(PgError::error(format!("unrecognized operator: {other}")).into())
@@ -153,4 +154,26 @@ fn int_query_opr_selec(
 
     // Clamp intermediate results to stay sane despite roundoff error.
     Ok(clamp_probability(selec))
+}
+
+#[cfg(test)]
+mod d400_tests {
+    use super::*;
+
+    // `1|2|3` in intarray's postfix layout: [1, 2, |(-2), 3, |(-2)]. The
+    // root's s2 is the inner OR's double, so s1 * s2 is inexact. aarch64
+    // pin: GCC 13.3 -O2 of `s1 + s2 - s1 * s2` (fadd + fmsub, as _int.so);
+    // x86-64 rounds the product first.
+    #[test]
+    fn or_selectivity_fmsub() {
+        let v = |val| QItem { typ: ITEM_VAL, left: 0, val };
+        let or = QItem { typ: ITEM_OPR, left: -2, val: '|' as i32 };
+        let or2 = QItem { typ: ITEM_OPR, left: -2, val: '|' as i32 };
+        let items = [v(1), v(2), or, v(3), or2];
+        let elems = [Datum::from_i32(1), Datum::from_i32(2), Datum::from_i32(3)];
+        let freqs = [0.064f32, 0.758, 0.591];
+        let sel = int_query_opr_selec(&items, 4, Some((&elems, &freqs, 0.064))).unwrap();
+        let want = if cfg!(target_arch = "aarch64") { 0.9073566031517982 } else { 0.9073566031517983 };
+        assert_eq!(sel, want);
+    }
 }

@@ -1,0 +1,3 @@
+backend/utils/sort/tuplestore/src/hold.rs	ENTRIES	pgport	at:end	leader	the portal tuplestores behind TuplestoreHandles; a handle resolves only on the thread that registered it (elsewhere: a stale-handle panic), and no Gravity host reads one; bounded by the live stores: end / take frees each slot, release_registry hands the slabs back at session teardown
+backend/utils/sort/tuplestore/src/hold.rs	FREE	pgport	at:end	leader	the free slots of ENTRIES, reused by register; bounded by ENTRIES' length
+backend/utils/sort/tuplestore/src/hold.rs	GENERATION	pgport	exit	leader	the generation counter stamped into each handle register makes

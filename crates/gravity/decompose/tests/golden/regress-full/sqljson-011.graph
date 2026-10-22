@@ -1,0 +1,9 @@
+-- regress-full-sqljson-011
+-- SELECT JSON_OBJECT('a': '123', 'b': JSON_OBJECT('a': 111, 'b': 'aaa' RETURNING jsonb));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=T_JsonConstructorExpr)
+  outs 1=vl:call0
+mapped: Result

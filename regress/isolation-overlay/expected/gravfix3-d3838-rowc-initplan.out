@@ -1,0 +1,125 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1upd s2nv s1c s2show s2c
+step s2x: EXPLAIN (COSTS OFF) with id_cte (id) as materialized (select a1_0.id from d3838a a1_0 where a1_0.id = 2), u (id) as (update d3838a a set serial = 's' || (select nextval('d3838s')) where a.id in (select id.id from id_cte id) returning id) select count(*) from id_cte id;
+QUERY PLAN                                                  
+------------------------------------------------------------
+Aggregate                                                   
+  CTE id_cte                                                
+    ->  Index Only Scan using d3838a_pkey on d3838a a1_0    
+          Index Cond: (id = 2)                              
+  CTE u                                                     
+    ->  Update on d3838a a                                  
+          InitPlan 2                                        
+            ->  Result                                      
+          ->  Nested Loop                                   
+                ->  HashAggregate                           
+                      Group Key: id_1.id                    
+                      ->  CTE Scan on id_cte id_1           
+                ->  Index Scan using d3838a_pkey on d3838a a
+                      Index Cond: (id = id_1.id)            
+  ->  CTE Scan on id_cte id                                 
+(15 rows)
+
+step s1upd: UPDATE d3838a SET body_weight = 99 WHERE id = 2;
+step s2nv: with id_cte (id) as materialized (select a1_0.id from d3838a a1_0 where a1_0.id = 2), u as (update d3838a a set serial = 's' || (select nextval('d3838s')) where a.id in (select id.id from id_cte id) returning a.id, a.body_weight, a.serial) select * from u; <waiting ...>
+step s1c: COMMIT;
+step s2nv: <... completed>
+id|body_weight|serial
+--+-----------+------
+ 2|         99|s2    
+(1 row)
+
+step s2show: SELECT a.*, (SELECT last_value FROM d3838s) AS seq FROM d3838a a ORDER BY id;
+id|body_weight|mother_id|serial|seq
+--+-----------+---------+------+---
+ 1|         10|         |a1    |  2
+ 2|         99|         |s2    |  2
+ 3|         30|         |a3    |  2
+ 4|         40|         |a4    |  2
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1upd s2nv2 s1c s2show s2c
+step s1upd: UPDATE d3838a SET body_weight = 99 WHERE id = 2;
+step s2nv2: with id_cte (id) as materialized (select a1_0.id from d3838a a1_0 where a1_0.id in (2, 3)), u as (update d3838a a set serial = 's' || (select nextval('d3838s')) where a.id in (select id.id from id_cte id) returning a.id, a.body_weight, a.serial) select * from u order by id; <waiting ...>
+step s1c: COMMIT;
+step s2nv2: <... completed>
+id|body_weight|serial
+--+-----------+------
+ 2|         99|s2    
+ 3|         30|s1    
+(2 rows)
+
+step s2show: SELECT a.*, (SELECT last_value FROM d3838s) AS seq FROM d3838a a ORDER BY id;
+id|body_weight|mother_id|serial|seq
+--+-----------+---------+------+---
+ 1|         10|         |a1    |  2
+ 2|         99|         |s2    |  2
+ 3|         30|         |s1    |  2
+ 4|         40|         |a4    |  2
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1upd s2mom s1c s2show s2c
+step s1upd: UPDATE d3838a SET body_weight = 99 WHERE id = 2;
+step s2mom: with id_cte (id) as materialized (select a1_0.id from d3838a a1_0 where a1_0.id = 2), update_cte_a (id) as (update d3838a a1_0 set mother_id = (select a2_0.id from d3838a a2_0 where a2_0.id = 1) where a1_0.id in (select id.id from id_cte id) returning id) select count(*) from id_cte id; <waiting ...>
+step s1c: COMMIT;
+step s2mom: <... completed>
+count
+-----
+    1
+(1 row)
+
+step s2show: SELECT a.*, (SELECT last_value FROM d3838s) AS seq FROM d3838a a ORDER BY id;
+id|body_weight|mother_id|serial|seq
+--+-----------+---------+------+---
+ 1|         10|         |a1    |  1
+ 2|         99|        1|a2    |  1
+ 3|         30|         |a3    |  1
+ 4|         40|         |a4    |  1
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2nv s1c s2show s2c
+step s1del: DELETE FROM d3838a WHERE id = 2;
+step s2nv: with id_cte (id) as materialized (select a1_0.id from d3838a a1_0 where a1_0.id = 2), u as (update d3838a a set serial = 's' || (select nextval('d3838s')) where a.id in (select id.id from id_cte id) returning a.id, a.body_weight, a.serial) select * from u; <waiting ...>
+step s1c: COMMIT;
+step s2nv: <... completed>
+id|body_weight|serial
+--+-----------+------
+(0 rows)
+
+step s2show: SELECT a.*, (SELECT last_value FROM d3838s) AS seq FROM d3838a a ORDER BY id;
+id|body_weight|mother_id|serial|seq
+--+-----------+---------+------+---
+ 1|         10|         |a1    |  1
+ 3|         30|         |a3    |  1
+ 4|         40|         |a4    |  1
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1upd s2nv s1a s2show s2c
+step s1upd: UPDATE d3838a SET body_weight = 99 WHERE id = 2;
+step s2nv: with id_cte (id) as materialized (select a1_0.id from d3838a a1_0 where a1_0.id = 2), u as (update d3838a a set serial = 's' || (select nextval('d3838s')) where a.id in (select id.id from id_cte id) returning a.id, a.body_weight, a.serial) select * from u; <waiting ...>
+step s1a: ROLLBACK;
+step s2nv: <... completed>
+id|body_weight|serial
+--+-----------+------
+ 2|         20|s1    
+(1 row)
+
+step s2show: SELECT a.*, (SELECT last_value FROM d3838s) AS seq FROM d3838a a ORDER BY id;
+id|body_weight|mother_id|serial|seq
+--+-----------+---------+------+---
+ 1|         10|         |a1    |  1
+ 2|         20|         |s1    |  1
+ 3|         30|         |a3    |  1
+ 4|         40|         |a4    |  1
+(4 rows)
+
+step s2c: COMMIT;

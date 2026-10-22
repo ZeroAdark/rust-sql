@@ -1,0 +1,1 @@
+backend/parser/parse_oper/src/lib.rs	OPR_CACHE	pgport	key:operator name, search path and argument types	cache	parse_oper.c's OprCacheHash; OPERNAMENSP and CASTSOURCETARGET invalidations empty it (InvalidateOprCacheCallBack), idle passivation drops its buckets (PassivateOprCache)

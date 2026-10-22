@@ -1,0 +1,194 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pr s3pv s3pu s3pd s1c s2c
+step s3pr: EXPLAIN (COSTS OFF) UPDATE mv SET descrip = 'r' WHERE pid = 5;
+QUERY PLAN                                 
+-------------------------------------------
+Update on mc                               
+  ->  Nested Loop Left Join                
+        ->  Nested Loop                    
+              ->  Seq Scan on mc           
+                    Filter: (pid = 5)      
+              ->  Materialize              
+                    ->  Seq Scan on mp     
+                          Filter: (pid = 5)
+        ->  Materialize                    
+              ->  Seq Scan on mc mc_1      
+                    Filter: (pid = 5)      
+(11 rows)
+
+step s3pv: EXPLAIN (COSTS OFF) UPDATE mv SET descrip = 'v' WHERE txt IN ('p2', 'p5', 'p6', 'p8');
+QUERY PLAN                                                             
+-----------------------------------------------------------------------
+Update on mc                                                           
+  ->  Nested Loop Left Join                                            
+        Join Filter: (mp.pid = mc_1.pid)                               
+        ->  Nested Loop                                                
+              Join Filter: (mc.pid = mp.pid)                           
+              ->  Seq Scan on mc                                       
+              ->  Materialize                                          
+                    ->  Seq Scan on mp                                 
+                          Filter: (txt = ANY ('{p2,p5,p6,p8}'::text[]))
+        ->  Materialize                                                
+              ->  Seq Scan on mc mc_1                                  
+(11 rows)
+
+step s3pu: EXPLAIN (COSTS OFF) UPDATE mc SET n = mc.n + 1 FROM mp LEFT JOIN mq USING (pid) WHERE mc.pid = mp.pid AND mp.txt IN ('p2', 'p5', 'p6', 'p8');
+QUERY PLAN                                                             
+-----------------------------------------------------------------------
+Update on mc                                                           
+  ->  Nested Loop Left Join                                            
+        Join Filter: (mp.pid = mq.pid)                                 
+        ->  Nested Loop                                                
+              Join Filter: (mc.pid = mp.pid)                           
+              ->  Seq Scan on mc                                       
+              ->  Materialize                                          
+                    ->  Seq Scan on mp                                 
+                          Filter: (txt = ANY ('{p2,p5,p6,p8}'::text[]))
+        ->  Materialize                                                
+              ->  Seq Scan on mq                                       
+(11 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM mc USING mp LEFT JOIN mq USING (pid) WHERE mc.pid = mp.pid AND mp.txt IN ('p2', 'p5', 'p6', 'p8');
+QUERY PLAN                                                             
+-----------------------------------------------------------------------
+Delete on mc                                                           
+  ->  Nested Loop Left Join                                            
+        Join Filter: (mp.pid = mq.pid)                                 
+        ->  Nested Loop                                                
+              Join Filter: (mc.pid = mp.pid)                           
+              ->  Seq Scan on mc                                       
+              ->  Materialize                                          
+                    ->  Seq Scan on mp                                 
+                          Filter: (txt = ANY ('{p2,p5,p6,p8}'::text[]))
+        ->  Materialize                                                
+              ->  Seq Scan on mq                                       
+(11 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1k s2r s1c s2c s3sel
+step s1k: UPDATE mc SET pid = 7 WHERE descrip = 'c5';
+step s2r: UPDATE mv SET descrip = 'r' WHERE pid = 5; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT pid, descrip, n FROM mc ORDER BY pid, descrip;
+pid|descrip|n
+---+-------+-
+  1|c1     |0
+  2|c2     |0
+  5|r      |1
+  6|c6     |0
+  7|c5     |0
+  8|c8     |0
+(6 rows)
+
+
+starting permutation: s1n s2r s1c s2c s3sel
+step s1n: UPDATE mc SET n = n + 100 WHERE descrip = 'c6';
+step s2r: UPDATE mv SET descrip = 'r' WHERE pid = 5;
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT pid, descrip, n FROM mc ORDER BY pid, descrip;
+pid|descrip|  n
+---+-------+---
+  1|c1     |  0
+  2|c2     |  0
+  5|r      |  1
+  5|r      |  1
+  6|c6     |100
+  8|c8     |  0
+(6 rows)
+
+
+starting permutation: s1n s1k s1d s1p s2v s1c s2c s3sel
+step s1n: UPDATE mc SET n = n + 100 WHERE descrip = 'c6';
+step s1k: UPDATE mc SET pid = 7 WHERE descrip = 'c5';
+step s1d: DELETE FROM mc WHERE descrip = 'c2';
+step s1p: UPDATE mp SET txt = 'moved' WHERE pid = 8;
+step s2v: UPDATE mv SET descrip = 'v' WHERE txt IN ('p2', 'p5', 'p6', 'p8'); <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT pid, descrip, n FROM mc ORDER BY pid, descrip;
+pid|descrip|  n
+---+-------+---
+  1|c1     |  0
+  5|v      |  1
+  6|v      |101
+  7|c5     |  0
+  8|v      |  1
+(5 rows)
+
+
+starting permutation: s1n s1k s1d s1q s2u s1c s2c s3sel
+step s1n: UPDATE mc SET n = n + 100 WHERE descrip = 'c6';
+step s1k: UPDATE mc SET pid = 7 WHERE descrip = 'c5';
+step s1d: DELETE FROM mc WHERE descrip = 'c2';
+step s1q: INSERT INTO mq VALUES (8, 'q8');
+step s2u: UPDATE mc SET n = mc.n + 1 FROM mp LEFT JOIN mq USING (pid) WHERE mc.pid = mp.pid AND mp.txt IN ('p2', 'p5', 'p6', 'p8') RETURNING mc.pid, mc.descrip, mc.n, mq.tag; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+pid|descrip|  n|tag
+---+-------+---+---
+  5|c5b    |  1|q5 
+  6|c6     |101|q6 
+  8|c8     |  1|   
+(3 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT pid, descrip, n FROM mc ORDER BY pid, descrip;
+pid|descrip|  n
+---+-------+---
+  1|c1     |  0
+  5|c5b    |  1
+  6|c6     |101
+  7|c5     |  0
+  8|c8     |  1
+(5 rows)
+
+
+starting permutation: s1n s1k s1p s1q s2d s1c s2c s3sel
+step s1n: UPDATE mc SET n = n + 100 WHERE descrip = 'c6';
+step s1k: UPDATE mc SET pid = 7 WHERE descrip = 'c5';
+step s1p: UPDATE mp SET txt = 'moved' WHERE pid = 8;
+step s1q: INSERT INTO mq VALUES (8, 'q8');
+step s2d: DELETE FROM mc USING mp LEFT JOIN mq USING (pid) WHERE mc.pid = mp.pid AND mp.txt IN ('p2', 'p5', 'p6', 'p8') RETURNING mc.pid, mc.descrip, mq.tag; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+pid|descrip|tag
+---+-------+---
+  2|c2     |   
+  5|c5b    |q5 
+  6|c6     |q6 
+  8|c8     |   
+(4 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT pid, descrip, n FROM mc ORDER BY pid, descrip;
+pid|descrip|n
+---+-------+-
+  1|c1     |0
+  7|c5     |0
+(2 rows)
+
+
+starting permutation: s2v s1n s2c s1c s3sel
+step s2v: UPDATE mv SET descrip = 'v' WHERE txt IN ('p2', 'p5', 'p6', 'p8');
+step s1n: UPDATE mc SET n = n + 100 WHERE descrip = 'c6'; <waiting ...>
+step s2c: COMMIT;
+step s1n: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT pid, descrip, n FROM mc ORDER BY pid, descrip;
+pid|descrip|n
+---+-------+-
+  1|c1     |0
+  2|v      |1
+  5|v      |1
+  5|v      |1
+  6|v      |1
+  8|v      |1
+(6 rows)
+

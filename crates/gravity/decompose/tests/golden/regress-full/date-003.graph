@@ -1,0 +1,9 @@
+-- regress-full-date-003
+-- SELECT EXTRACT(CENTURY FROM CURRENT_DATE)>=21 AS True;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op1757(fn6199(c25:'century', T_SQLValueFunction), c1700:'\x00\x80\x15\x00'))
+  outs 1=w1:val
+mapped: Result

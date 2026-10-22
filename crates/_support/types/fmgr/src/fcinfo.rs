@@ -673,8 +673,11 @@ pub fn function_call0_coll(flinfo: &mut FmgrInfo, collation: Oid) -> PgResult<Da
     Ok(result)
 }
 
-macro_rules! define_calls {
-    ($($fname:ident $dname:ident $fmname:ident $dmname:ident $n:literal ($($arg:ident $idx:tt),+);)*) => {$(
+// The no-context pair (C FunctionCallN / DirectFunctionCallN without a result context) exists for 2..9 arguments only: a
+// text output function takes one argument and returns a cstring fresh in the frame's result context (FMGR 09-23), so no
+// one-argument call can be made without a context — the one-argument callers name theirs (`*_call1_coll_in`).
+macro_rules! define_calls_nomcx {
+    ($($fname:ident $dname:ident $n:literal ($($arg:ident $idx:tt),+);)*) => {$(
         #[inline]
         pub fn $fname(
             flinfo: &mut FmgrInfo,
@@ -702,7 +705,11 @@ macro_rules! define_calls {
             }
             Ok(result)
         }
+    )*};
+}
 
+macro_rules! define_calls_in {
+    ($($fmname:ident $dmname:ident $n:literal ($($arg:ident $idx:tt),+);)*) => {$(
         #[inline]
         pub fn $fmname(
             flinfo: &mut FmgrInfo,
@@ -743,16 +750,27 @@ macro_rules! define_calls {
     )*};
 }
 
-define_calls! {
-    function_call1_coll direct_function_call1_coll function_call1_coll_in direct_function_call1_coll_in 1 (arg1 0);
-    function_call2_coll direct_function_call2_coll function_call2_coll_in direct_function_call2_coll_in 2 (arg1 0, arg2 1);
-    function_call3_coll direct_function_call3_coll function_call3_coll_in direct_function_call3_coll_in 3 (arg1 0, arg2 1, arg3 2);
-    function_call4_coll direct_function_call4_coll function_call4_coll_in direct_function_call4_coll_in 4 (arg1 0, arg2 1, arg3 2, arg4 3);
-    function_call5_coll direct_function_call5_coll function_call5_coll_in direct_function_call5_coll_in 5 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4);
-    function_call6_coll direct_function_call6_coll function_call6_coll_in direct_function_call6_coll_in 6 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5);
-    function_call7_coll direct_function_call7_coll function_call7_coll_in direct_function_call7_coll_in 7 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5, arg7 6);
-    function_call8_coll direct_function_call8_coll function_call8_coll_in direct_function_call8_coll_in 8 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5, arg7 6, arg8 7);
-    function_call9_coll direct_function_call9_coll function_call9_coll_in direct_function_call9_coll_in 9 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5, arg7 6, arg8 7, arg9 8);
+define_calls_nomcx! {
+    function_call2_coll direct_function_call2_coll 2 (arg1 0, arg2 1);
+    function_call3_coll direct_function_call3_coll 3 (arg1 0, arg2 1, arg3 2);
+    function_call4_coll direct_function_call4_coll 4 (arg1 0, arg2 1, arg3 2, arg4 3);
+    function_call5_coll direct_function_call5_coll 5 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4);
+    function_call6_coll direct_function_call6_coll 6 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5);
+    function_call7_coll direct_function_call7_coll 7 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5, arg7 6);
+    function_call8_coll direct_function_call8_coll 8 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5, arg7 6, arg8 7);
+    function_call9_coll direct_function_call9_coll 9 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5, arg7 6, arg8 7, arg9 8);
+}
+
+define_calls_in! {
+    function_call1_coll_in direct_function_call1_coll_in 1 (arg1 0);
+    function_call2_coll_in direct_function_call2_coll_in 2 (arg1 0, arg2 1);
+    function_call3_coll_in direct_function_call3_coll_in 3 (arg1 0, arg2 1, arg3 2);
+    function_call4_coll_in direct_function_call4_coll_in 4 (arg1 0, arg2 1, arg3 2, arg4 3);
+    function_call5_coll_in direct_function_call5_coll_in 5 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4);
+    function_call6_coll_in direct_function_call6_coll_in 6 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5);
+    function_call7_coll_in direct_function_call7_coll_in 7 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5, arg7 6);
+    function_call8_coll_in direct_function_call8_coll_in 8 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5, arg7 6, arg8 7);
+    function_call9_coll_in direct_function_call9_coll_in 9 (arg1 0, arg2 1, arg3 2, arg4 3, arg5 4, arg6 5, arg7 6, arg8 7, arg9 8);
 }
 
 // FunctionCallInvoke on a LOCAL_FCINFO frame (rowtypes.c record_cmp / record_eq /
@@ -799,6 +817,51 @@ pub struct ThinBuiltin {
     pub func: PGFunction,
     pub thin: PGFunctionThin,
 }
+
+/// A text output function's caller-supplied-destination entry (FMGR ruling 09-23): the fmgr function's exact bytes (no NUL)
+/// written straight into the caller's buffer, no allocation. `bound` is an upper bound on the bytes for `value` (a non-null
+/// datum of the function's input type), or None when the datum needs the fmgr function (a toasted varlena); `render`
+/// writes at most that many bytes at `dst` and returns the count. `chars` is every byte `render` can emit (COPY's direct
+/// path skips escaping when its delimiter is not among them); `None` = any byte.
+#[derive(Clone, Copy)]
+pub struct OutInto {
+    pub foid: Oid,
+    pub bound: fn(Datum) -> Option<usize>,
+    /// # Safety
+    /// `dst` is writable for `bound(value)` bytes, `bound(value)` returned Some.
+    pub render: unsafe fn(Datum, *mut u8) -> PgResult<usize>,
+    pub chars: Option<&'static [u8]>,
+}
+
+/// A text output function's result under PostgreSQL's contract: a fresh `cap`-byte cstring in the frame's result context,
+/// rendered in place (`render` writes at most `cap - 1` bytes and returns the count; the NUL goes after them).
+#[inline(always)]
+pub fn out_cstring(fcinfo: &FunctionCallInfoBaseData, cap: usize, render: impl FnOnce(&mut [u8]) -> usize) -> PgResult<Datum> {
+    let p = fcinfo.result_mcx().alloc_bytes(cap)?.as_ptr();
+    // SAFETY: a fresh `cap`-byte allocation, exclusively ours until returned.
+    let buf = unsafe { core::slice::from_raw_parts_mut(p, cap) };
+    let len = render(buf);
+    buf[len] = 0;
+    Ok(Datum::from_usize(p as usize))
+}
+
+/// `out_cstring` for a renderer that can raise.
+#[inline(always)]
+pub fn out_cstring_try(fcinfo: &FunctionCallInfoBaseData, cap: usize, render: impl FnOnce(&mut [u8]) -> PgResult<usize>) -> PgResult<Datum> {
+    let p = fcinfo.result_mcx().alloc_bytes(cap)?.as_ptr();
+    // SAFETY: as out_cstring.
+    let buf = unsafe { core::slice::from_raw_parts_mut(p, cap) };
+    let len = render(buf)?;
+    buf[len] = 0;
+    Ok(Datum::from_usize(p as usize))
+}
+
+/// Output alphabets for `OutInto::chars`.
+pub const OUT_CHARS_INT: &[u8] = b"-0123456789";
+pub const OUT_CHARS_FLOAT: &[u8] = b"+-.0123456789INaefinty";
+pub const OUT_CHARS_NUMERIC: &[u8] = b"-.0123456789INaefinty";
+pub const OUT_CHARS_BOOL: &[u8] = b"ft";
+pub const OUT_CHARS_DATETIME: &[u8] = b" +-./0123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 #[derive(Clone, Copy, Debug)]
 pub struct Pg_finfo_record {

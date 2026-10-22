@@ -1,0 +1,11 @@
+backend/postmaster/checkpointer/src/lib.rs	ABSORB_SCRATCH	pgport	call	scratch	AbsorbSyncRequests' request buffer (checkpointer only), cleared then refilled from the shmem queue on each call
+backend/postmaster/checkpointer/src/lib.rs	CHECK_POINT_TIMEOUT	pgport	exit	thread	a SIGHUP setting, process-wide, never carried; checkpoint_timeout's backing, read by the checkpointer only
+backend/postmaster/checkpointer/src/lib.rs	CHECK_POINT_WARNING	pgport	exit	thread	a SIGHUP setting, process-wide, never carried; checkpoint_warning's backing, read by the checkpointer only
+backend/postmaster/checkpointer/src/lib.rs	CKPT_ACTIVE	pgport	at:abort_cleanup	thread	ckpt_active: the checkpointer's checkpoint-in-progress flag, set and cleared around CreateCheckPoint, put back by the error cleanup abort_cleanup
+backend/postmaster/checkpointer/src/lib.rs	CKPT_START_TIME	pgport	exit	thread	ckpt_start_time: the checkpointer's current checkpoint start, set at each start, read by IsCheckpointOnSchedule
+backend/postmaster/checkpointer/src/lib.rs	CKPT_START_RECPTR	pgport	exit	thread	ckpt_start_recptr: the current checkpoint's start LSN, set at each start, read by IsCheckpointOnSchedule
+backend/postmaster/checkpointer/src/lib.rs	CKPT_CACHED_ELAPSED	pgport	exit	thread	ckpt_cached_elapsed: IsCheckpointOnSchedule's progress cache, zeroed at each checkpoint start, checkpointer only
+backend/postmaster/checkpointer/src/lib.rs	LAST_CHECKPOINT_TIME	pgport	exit	thread	last_checkpoint_time: the checkpointer's own last checkpoint time, read by its timed-checkpoint loop
+backend/postmaster/checkpointer/src/lib.rs	LAST_XLOG_SWITCH_TIME	pgport	exit	thread	last_xlog_switch_time: the checkpointer's last forced-switch time, read by its loop and CheckArchiveTimeout
+backend/postmaster/checkpointer/src/lib.rs	ABSORB_COUNTER	pgport	exit	thread	absorb_counter: CheckpointWriteDelay's writes-until-absorb count, checkpointer only
+backend/postmaster/checkpointer/src/lib.rs	FIRST_CALL_CKPT_DONE	pgport	exit	thread	FirstCallSinceLastCheckpoint's last-seen ckpt_done (C's function static), per calling thread; only the bgwriter cycle calls it (its thread or a runtime pool worker running the bgwriter job), pairing with that thread's smgrdestroyall

@@ -437,7 +437,7 @@ fn boot_image_oldest_clog_xid_is_zero_and_adopts_wrapped_horizon() {
 
 #[test]
 fn full_transaction_id_advance_keeps_values_below_first_normal() {
-    // transam.h:128-139 (audit regression): the early return keeps
+    // transam.h:128-139 (audit fp-transam-varsup#1): the early return keeps
     // an incremented value below FirstNormalTransactionId, including the
     // wraparound from u64::MAX to 0; only the low-word skip runs otherwise.
     let mut f = FullTransactionId::from_u64(u64::MAX);

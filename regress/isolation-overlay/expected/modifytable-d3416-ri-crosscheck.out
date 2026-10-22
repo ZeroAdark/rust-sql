@@ -1,0 +1,94 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1ic s2rr s2d2 s1c s2c s1s
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1ic: INSERT INTO rc_cas VALUES (2, 'c2');
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s2d2: DELETE FROM rc_pk WHERE a = 2; <waiting ...>
+step s1c: COMMIT;
+step s2d2: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s2c: COMMIT;
+step s1s: SELECT 'cas' AS t, a, n FROM rc_cas UNION ALL SELECT 'casp', a, n FROM rc_casp UNION ALL SELECT 'sn', a, n FROM rc_sn ORDER BY 1, 2, 3;
+t   |a|n 
+----+-+--
+cas |1|c1
+cas |2|c2
+casp|1|p1
+casp|3|p3
+sn  |1|s1
+(5 rows)
+
+
+starting permutation: s1b s1ip s2rr s2d4 s1c s2c s1s
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1ip: INSERT INTO rc_casp VALUES (4, 'p4');
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s2d4: DELETE FROM rc_pk WHERE a = 4; <waiting ...>
+step s1c: COMMIT;
+step s2d4: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s2c: COMMIT;
+step s1s: SELECT 'cas' AS t, a, n FROM rc_cas UNION ALL SELECT 'casp', a, n FROM rc_casp UNION ALL SELECT 'sn', a, n FROM rc_sn ORDER BY 1, 2, 3;
+t   |a|n 
+----+-+--
+cas |1|c1
+casp|1|p1
+casp|3|p3
+casp|4|p4
+sn  |1|s1
+(5 rows)
+
+
+starting permutation: s1b s1is s2rr s2d2 s1c s2c s1s
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1is: INSERT INTO rc_sn VALUES (2, 's2');
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s2d2: DELETE FROM rc_pk WHERE a = 2; <waiting ...>
+step s1c: COMMIT;
+step s2d2: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s2c: COMMIT;
+step s1s: SELECT 'cas' AS t, a, n FROM rc_cas UNION ALL SELECT 'casp', a, n FROM rc_casp UNION ALL SELECT 'sn', a, n FROM rc_sn ORDER BY 1, 2, 3;
+t   |a|n 
+----+-+--
+cas |1|c1
+casp|1|p1
+casp|3|p3
+sn  |1|s1
+sn  |2|s2
+(5 rows)
+
+
+starting permutation: s1b s1ic s1ip s1is s1c s2rr s2d2 s2d4 s2c s1s
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1ic: INSERT INTO rc_cas VALUES (2, 'c2');
+step s1ip: INSERT INTO rc_casp VALUES (4, 'p4');
+step s1is: INSERT INTO rc_sn VALUES (2, 's2');
+step s1c: COMMIT;
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s2d2: DELETE FROM rc_pk WHERE a = 2;
+step s2d4: DELETE FROM rc_pk WHERE a = 4;
+step s2c: COMMIT;
+step s1s: SELECT 'cas' AS t, a, n FROM rc_cas UNION ALL SELECT 'casp', a, n FROM rc_casp UNION ALL SELECT 'sn', a, n FROM rc_sn ORDER BY 1, 2, 3;
+t   |a|n 
+----+-+--
+cas |1|c1
+casp|1|p1
+casp|3|p3
+sn  |1|s1
+sn  | |s2
+(5 rows)
+
+
+starting permutation: s2rr s2d1 s2c s1s
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s2d1: DELETE FROM rc_pk WHERE a = 1;
+step s2c: COMMIT;
+step s1s: SELECT 'cas' AS t, a, n FROM rc_cas UNION ALL SELECT 'casp', a, n FROM rc_casp UNION ALL SELECT 'sn', a, n FROM rc_sn ORDER BY 1, 2, 3;
+t   |a|n 
+----+-+--
+casp|3|p3
+sn  | |s1
+(2 rows)
+

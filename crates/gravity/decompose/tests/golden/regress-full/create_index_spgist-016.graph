@@ -1,0 +1,22 @@
+-- regress-full-create_index_spgist-016
+-- EXPLAIN (COSTS OFF) SELECT count(*) FROM kd_point_tbl WHERE box '(200,200,1000,1000)' @> p;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 PlainAgg)
+  nodes n2@0 n1@0 n0@1^
+  source bitmap rel=19797 rti=1 am=heap
+    bitmap index node=2 index=19800 rows=18 iam=spgist
+      key att=1 op=511 form=amop value=c603:#32
+    recheck (op433(c603:#32, v1.1))
+    lanes Offset:byval2:w2:val
+  project ()
+  outs
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: BitmapIndexScan BitmapHeapScan Agg

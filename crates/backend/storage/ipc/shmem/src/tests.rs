@@ -28,6 +28,23 @@ fn init_struct_size_mismatch_errors() {
 }
 
 #[test]
+fn adopt_registers_external_region_without_allocating() {
+    let mut region = [0u8; 64];
+    ShmemIndexAdopt("test_adopt", 200, region.as_mut_ptr()).unwrap();
+    {
+        let index = SHMEM_INDEX.lock().unwrap();
+        let ent = index.iter().find(|e| e.name == "test_adopt").unwrap();
+        assert_eq!((ent.size, ent.allocated_size), (200, CACHELINEALIGN(200).unwrap()));
+        assert!(SHMEM_FREEOFFSET.load(Ordering::Relaxed) >= ent.off + ent.allocated_size);
+    }
+    let (p, found) = ShmemInitStruct("test_adopt", 200).unwrap();
+    assert!(found);
+    assert_eq!(p, region.as_mut_ptr(), "attach resolves to the adopted region");
+    let err = ShmemIndexAdopt("test_adopt", 200, region.as_mut_ptr()).unwrap_err();
+    assert!(err.message.contains("already exists"));
+}
+
+#[test]
 fn alloc_is_aligned_and_zeroed() {
     let p = ShmemAlloc(1).unwrap();
     assert_eq!(p as usize % PG_CACHE_LINE_SIZE, 0);
@@ -325,10 +342,30 @@ fn refused_alloc_does_not_advance_the_bump_counter() {
     let before = SHMEM_FREEOFFSET.load(Ordering::Relaxed);
     let mut allocated = 0;
     let (p, _) = ShmemAllocRaw(huge, &mut allocated);
+    // check-test is opt-level 1: an allocation whose pointer is only
+    // null-tested may be elided and assumed to succeed; keep it observable.
+    let p = std::hint::black_box(p);
     assert!(p.is_null());
     let after = SHMEM_FREEOFFSET.load(Ordering::Relaxed);
     assert!(after - before < huge, "counter advanced by a refused request");
     let err = ShmemAlloc(huge).unwrap_err();
     assert_eq!(err.message, format!("out of shared memory ({huge} bytes requested)"));
     assert!(SHMEM_FREEOFFSET.load(Ordering::Relaxed) - before < huge);
+}
+
+// shmem.c:210-215: a request that would push freeoffset past totalsize is
+// refused and leaves the counter where it was; a zero totalsize (segment not
+// yet sized) never refuses.
+#[test]
+fn carve_refuses_past_totalsize_and_leaves_freeoffset() {
+    let counter = AtomicUsize::new(128);
+    assert_eq!(carve(&counter, 1024, 512), Some(128));
+    assert_eq!(counter.load(Ordering::Relaxed), 640);
+    assert_eq!(carve(&counter, 1024, 384), Some(640));
+    assert_eq!(counter.load(Ordering::Relaxed), 1024);
+    assert_eq!(carve(&counter, 1024, 128), None);
+    assert_eq!(counter.load(Ordering::Relaxed), 1024);
+    assert_eq!(carve(&counter, 1024, usize::MAX), None);
+    assert_eq!(carve(&counter, 0, 4096), Some(1024));
+    assert_eq!(counter.load(Ordering::Relaxed), 5120);
 }

@@ -1,0 +1,12 @@
+path	crates/gravity/exec/src/ops/scan/param_key.rs
+growth	std::vec::Vec::push	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	1
+method	std::rc::Rc::new	1
+method	std::sync::Arc::new	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	1
+type	std::rc::Rc	1
+type	std::sync::Arc	1
+type	std::vec::Vec	3

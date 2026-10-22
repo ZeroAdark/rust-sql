@@ -1,0 +1,7 @@
+gravity/exec/src/admit/entry/mod.rs	DESCS	admission	at:drain_parked	leader	ExecutorStart / Run of the backend: the entry's query desc table; slots freed per desc (remove), vectors released by drain_parked at session end
+gravity/exec/src/admit/entry/mod.rs	PENDING_CPLAN	admission	at:create_query_desc	leader	ExecutorStart / Run of the backend: cached plan handed from note_cplan_for_query_desc to the next desc; create_query_desc takes it
+gravity/exec/src/admit/entry/mod.rs	DRAIN	admission	at:drain_parked	leader	ExecutorStart / Run of the backend: once-per-session State-phase cleanup registration flag; drain_parked (session end) clears it
+gravity/exec/src/admit/entry/mod.rs	RUNNING	admission	scope:Running	leader	ExecutorStart / Run of the backend: ExecutorRun / Finish calls in progress (D1369); Running guard decrements on every exit
+gravity/exec/src/admit/entry/mod.rs	READ_COUNTED	admission	scope:CountedScope	leader	ExecutorStart / Run of the backend: plan run_counted restarts as a partial reader (D2926); CountedScope restores it, counted_leak_check backstop
+gravity/exec/src/admit/entry/mod.rs	COUNTED_DECLINED	admission	scope:CountedScope	leader	ExecutorStart / Run of the backend: the counted start declined (D2926); CountedScope restores it on every exit
+gravity/exec/src/admit/entry/mod.rs	ZONE_OFF	admission	scope:ZoneScope	leader	ExecutorStart / Run of the backend: plan zone_restart starts without session-TimeZone conversion (B2-31); ZoneScope restores it

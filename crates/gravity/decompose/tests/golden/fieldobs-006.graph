@@ -1,0 +1,30 @@
+-- fieldobs-006
+-- SELECT sum(elevation_m), sum(elevation_m + 10), sum(elevation_m + 100), sum(elevation_m - 5), sum(duration_min), sum(duration_min + 1), sum(duration_min + 60), sum(photo_width + 2) FROM sightings;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=10000000 end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@1^
+  source range rel=16464 rti=1 am=pgrc
+    lanes Attr(15):byval2:w2:val Attr(17):byval2:w2:val Attr(18):byval4:w4:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24, 25=v1.25, 26=v1.26, 27=v1.27, 28=v1.28, 29=v1.29, 30=v1.30, 31=v1.31, 32=v1.32, 33=v1.33, 34=v1.34, 35=v1.35, 36=v1.36, 37=v1.37)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w4:val 5=w8:val 6=w4:val 7=w2:val 8=w8:val 9=w4:val 10=w4:val 11=w2:val 12=w2:val 13=w2:val 14=w2:val 15=w2:val 16=w2:val 17=w2:val 18=w4:val 19=w8:val 20=w1:val 21=w1:val 22=w1:val 23=vl:row 24=vl:row 25=vl:row 26=vl:row 27=vl:row 28=vl:row 29=vl:row 30=vl:row 31=vl:row 32=vl:row 33=vl:row 34=vl:row 35=vl:row 36=w4:val 37=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2109(1=outer.17), 2=case(when and(notnull(op552(agg2133(1=outer.17), c23:10)), notnull(op552(agg2117(1=outer.17), c23:10))) then op684(agg2109(1=outer.17), op686(c20:10, agg2147(1=outer.17)))) else c20:null, 3=case(when and(notnull(op552(agg2133(1=outer.17), c23:100)), notnull(op552(agg2117(1=outer.17), c23:100))) then op684(agg2109(1=outer.17), op686(c20:100, agg2147(1=outer.17)))) else c20:null, 4=case(when and(notnull(op556(agg2133(1=outer.17), c23:5)), notnull(op556(agg2117(1=outer.17), c23:5))) then op684(agg2109(1=outer.17), op686(c20:-5, agg2147(1=outer.17)))) else c20:null, 5=agg2108(1=outer.18), 6=case(when and(notnull(op551(agg2132(1=outer.18), c23:1)), notnull(op551(agg2116(1=outer.18), c23:1))) then case(when op413(agg2108(1=outer.18), op685(c20:9223372036854775807, op686(c20:1, agg2147(1=outer.18)))) then op684(op684(agg2108(1=outer.18), c20:-9223372036854775808), op684(op686(c20:1, agg2147(1=outer.18)), c20:-9223372036854775808))) else op684(agg2108(1=outer.18), op686(c20:1, agg2147(1=outer.18)))) else c20:null, 7=case(when and(notnull(op551(agg2132(1=outer.18), c23:60)), notnull(op551(agg2116(1=outer.18), c23:60))) then case(when op413(agg2108(1=outer.18), op685(c20:9223372036854775807, op686(c20:60, agg2147(1=outer.18)))) then op684(op684(agg2108(1=outer.18), c20:-9223372036854775808), op684(op686(c20:60, agg2147(1=outer.18)), c20:-9223372036854775808))) else op684(agg2108(1=outer.18), op686(c20:60, agg2147(1=outer.18)))) else c20:null, 8=case(when and(notnull(op552(agg2133(1=outer.15), c23:2)), notnull(op552(agg2117(1=outer.15), c23:2))) then op684(agg2109(1=outer.15), op686(c20:2, agg2147(1=outer.15)))) else c20:null)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(160) spill=None producer=p0 layout=[]->[SumI64@0,MinI64@8,MaxI64@16,Count@24,SumI64@32,MinI64@40,MaxI64@48,Count@56,MinI64@64,MaxI64@72,SumI64@80,Count@88]+valid 104B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[SumI64@0,MinI64@8,MaxI64@16,Count@24,SumI64@32,MinI64@40,MaxI64@48,Count@56,MinI64@64,MaxI64@72,SumI64@80,Count@88]+valid 104B
+  agg aggno=0 fn=2109 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2109(1=outer.17)
+  agg aggno=1 fn=2133 reg=MinInt slot=1 count_slot=- final=Identity class=Min(Int) trans=Abi(MinI64) mods=[] expr=agg2133(1=outer.17)
+  agg aggno=2 fn=2117 reg=MaxInt slot=2 count_slot=- final=Identity class=Max(Int) trans=Abi(MaxI64) mods=[] expr=agg2117(1=outer.17)
+  agg aggno=3 fn=2147 reg=CountAny slot=3 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.17)
+  agg aggno=4 fn=2108 reg=SumInt slot=4 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.18)
+  agg aggno=5 fn=2132 reg=MinInt slot=5 count_slot=- final=Identity class=Min(Int) trans=Abi(MinI64) mods=[] expr=agg2132(1=outer.18)
+  agg aggno=6 fn=2116 reg=MaxInt slot=6 count_slot=- final=Identity class=Max(Int) trans=Abi(MaxI64) mods=[] expr=agg2116(1=outer.18)
+  agg aggno=7 fn=2803 reg=CountStar slot=7 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2147(1=outer.18)
+  agg aggno=8 fn=2133 reg=MinInt slot=8 count_slot=- final=Identity class=Min(Int) trans=Abi(MinI64) mods=[] expr=agg2133(1=outer.15)
+  agg aggno=9 fn=2117 reg=MaxInt slot=9 count_slot=- final=Identity class=Max(Int) trans=Abi(MaxI64) mods=[] expr=agg2117(1=outer.15)
+  agg aggno=10 fn=2109 reg=SumInt slot=10 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2109(1=outer.15)
+  agg aggno=11 fn=2803 reg=CountStar slot=11 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2147(1=outer.15)
+mapped: SeqScan Agg

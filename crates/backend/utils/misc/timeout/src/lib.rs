@@ -83,11 +83,16 @@ impl TimeoutData {
 thread_local! {
     static DATA: RefCell<TimeoutData> = const { RefCell::new(TimeoutData::new()) };
     static ALL_TIMEOUTS_INITIALIZED: Cell<bool> = const { Cell::new(false) };
-    static ALARM_ENABLED: Cell<bool> = const { Cell::new(false) };
-    static SIGNAL_PENDING: Cell<bool> = const { Cell::new(false) };
+    static ALARM: Cell<Option<&'static AlarmState>> = const { Cell::new(None) };
     static SIGNAL_DUE_AT: Cell<TimestampTz> = const { Cell::new(0) };
     // This backend's slot flag, shared with the timer thread.
     static POSTED: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+    // this backend's own copy of its slot's deadline (pg_clock mono ns) while that wake is of the abort class;
+    // 0 = none. Read by fire_due at the end of a run: the backend fires an expired deadline itself instead of relying
+    // on the timer thread getting a CPU (C's SIGALRM is delivered to the backend on expiry, no third thread).
+    static DUE_NS: Cell<u64> = const { Cell::new(0) };
+    // The deadline of this backend's armed wake, until it is delivered.
+    static ARMED_DEADLINE: Cell<Option<Deadline>> = const { Cell::new(None) };
 }
 
 struct TimerSlot {
@@ -101,6 +106,44 @@ struct TimerSlot {
     // The owner's InterruptPending: raised with `posted` so a CPU-bound
     // CHECK_FOR_INTERRUPTS reaches the drain, as C's SIGALRM preempts it.
     interrupt_flag: &'static AtomicBool,
+    abort_flag: Option<&'static std::sync::atomic::AtomicU8>,
+    // the nearest abort-class timeout's deadline while a nearer timeout of another class holds `deadline`
+    // (idle_stats_update_timeout, armed at idle, ahead of statement_timeout). A served kernel checks only the abort
+    // byte, so the nearer wake's InterruptPending is never drained there and its handler never re-arms the timer for
+    // the statement timeout behind it; this second deadline raises the abort byte on time instead (C's SIGALRM
+    // handler runs at delivery and reschedules at once). The owner's AbortPending byte rides with it.
+    abort_at: Option<(Deadline, &'static std::sync::atomic::AtomicU8)>,
+    alarm: &'static AlarmState,
+}
+
+// C's alarm_enabled and signal_pending, which its handle_sig_alarm reads and resets at delivery: here the delivery is
+// the timer thread's post, so they are shared with it (D3099: a wake left armed after the last timeout went must only
+// set the latch, never raise InterruptPending). Dekker pair: the owner stores `enabled` before it loads `pending` to
+// ride a wake; the post stores `pending` before it loads `enabled`; both SeqCst.
+struct AlarmState {
+    enabled: AtomicBool,
+    pending: AtomicBool,
+}
+
+#[inline]
+fn alarm() -> &'static AlarmState {
+    ALARM.get().unwrap_or_else(claim_alarm)
+}
+
+#[cold]
+#[inline(never)]
+fn claim_alarm() -> &'static AlarmState {
+    let a: &'static AlarmState = Box::leak(Box::new(AlarmState { enabled: AtomicBool::new(false), pending: AtomicBool::new(false) }));
+    ALARM.set(Some(a));
+    a
+}
+
+fn signal_pending() -> bool {
+    alarm().pending.load(Ordering::SeqCst)
+}
+
+fn set_signal_pending(v: bool) {
+    alarm().pending.store(v, Ordering::SeqCst);
 }
 
 struct TimerShared {
@@ -124,13 +167,13 @@ fn timer() -> &'static TimerShared {
         // time and its fire-wakes are scheduled ops instead of External
         // (OS-timed) wakes. Native arm = the std re-export, byte-identical.
         // wasm32: wasm32-wasip1 has no threads, so no timer can fire
-        // asynchronously (and no SIGALRM exists either) — armed timeouts
-        // are recorded but never fire. Known limitation of the boot
-        // increment: statement_timeout/lock_timeout are inert on wasm.
+        // asynchronously (and no SIGALRM exists either): the backend polls
+        // its armed wake's deadline instead (`set_armed`), and a timed wait
+        // fires an expired abort-class one (waiteventset's wasm backend).
         #[cfg(not(target_family = "wasm"))]
         pgsync::thread::Builder::new()
             .name("pg-timeout-timer".into())
-            .spawn(move || timer_thread(shared))
+            .spawn(pagegive::pinned(move || timer_thread(shared)))
             .expect("could not spawn timeout timer thread");
         shared
     })
@@ -149,28 +192,32 @@ fn timer_thread(shared: &'static TimerShared) -> ! {
 
         let mut slots = shared.slots.lock().unwrap();
         let mut nearest: Option<Deadline> = None;
-        let mut fired: Vec<(Arc<AtomicBool>, &'static AtomicBool, Option<LatchHandle>)> =
-            Vec::new();
+        let mut fired = false;
         for slot in slots.values_mut() {
+            if let Some((dl, _)) = slot.abort_at {
+                if dl.expired() {
+                    post_abort(slot);
+                    fired = true;
+                } else if nearest.map_or(true, |n| dl < n) {
+                    nearest = Some(dl);
+                }
+            }
             if let Some(dl) = slot.deadline {
                 if dl.expired() {
-                    slot.deadline = None;
-                    fired.push((Arc::clone(&slot.posted), slot.interrupt_flag, slot.latch));
+                    // The kill(pid, SIGALRM) edge: post, then wake the
+                    // backend — under the slots lock, so a disarm_timer /
+                    // arm_timer on the owner is strictly before (no fire)
+                    // or after (a spurious wake the drain tolerates); a
+                    // disabled timeout can never raise the abort byte.
+                    let _ = post(slot);
+                    fired = true;
                 } else if nearest.map_or(true, |n| dl < n) {
                     nearest = Some(dl);
                 }
             }
         }
         drop(slots);
-        if !fired.is_empty() {
-            for (posted, interrupt_flag, latch) in fired {
-                // The kill(pid, SIGALRM) edge: post, then wake the backend.
-                posted.store(true, Ordering::SeqCst);
-                interrupt_flag.store(true, Ordering::SeqCst);
-                if let Some(latch) = latch {
-                    latch::SetLatch(latch);
-                }
-            }
+        if fired {
             continue;
         }
         match nearest {
@@ -192,9 +239,66 @@ fn timer_thread(shared: &'static TimerShared) -> ! {
     }
 }
 
+/// The fire of an expired slot (the timer thread's scan, or the owner itself in fire_due), under the slots lock. false =
+/// the owner's alarm was disabled: the latch only, as C's handler.
+fn post(slot: &mut TimerSlot) -> bool {
+    slot.deadline = None;
+    slot.alarm.pending.store(false, Ordering::SeqCst);
+    if !slot.alarm.enabled.load(Ordering::SeqCst) {
+        slot.abort_flag = None;
+        if let Some(latch) = slot.latch {
+            latch::SetLatch(latch);
+        }
+        return false;
+    }
+    slot.posted.store(true, Ordering::SeqCst);
+    slot.interrupt_flag.store(true, Ordering::SeqCst);
+    if let Some(abort) = slot.abort_flag.take() {
+        abort.fetch_or(globals::ABORT_BIT, Ordering::SeqCst);
+    }
+    if let Some(latch) = slot.latch {
+        latch::SetLatch(latch);
+    }
+    true
+}
+
+fn post_abort(slot: &mut TimerSlot) {
+    if let Some((_, abort)) = slot.abort_at.take() {
+        slot.posted.store(true, Ordering::SeqCst);
+        slot.interrupt_flag.store(true, Ordering::SeqCst);
+        abort.fetch_or(globals::ABORT_BIT, Ordering::SeqCst);
+        if let Some(latch) = slot.latch {
+            latch::SetLatch(latch);
+        }
+    }
+}
+
+pub fn fire_due() -> bool {
+    let due = DUE_NS.with(Cell::get);
+    if due == 0 || !Deadline::at_ns(due).expired() {
+        return false;
+    }
+    DUE_NS.with(|c| c.set(0));
+    let mut slots = timer().slots.lock().unwrap();
+    match slots.get_mut(&globals::MyProcPid()) {
+        Some(slot) if slot.abort_flag.is_some() && slot.deadline.is_some_and(|dl| dl.expired()) => {
+            post(slot)
+        }
+        Some(slot) if slot.abort_at.is_some_and(|(dl, _)| dl.expired()) => {
+            post_abort(slot);
+            true
+        }
+        _ => false,
+    }
+}
+
 // setitimer(ITIMER_REAL, {delay, no interval}): one relative one-shot timer
 // per backend, a new arm overwriting the previous.
-fn arm_timer(delay: Duration) {
+fn abort_class(id: TimeoutId) -> bool {
+    matches!(id, STATEMENT_TIMEOUT | LOCK_TIMEOUT | TRANSACTION_TIMEOUT | IDLE_IN_TRANSACTION_SESSION_TIMEOUT | IDLE_SESSION_TIMEOUT)
+}
+
+fn arm_timer(delay: Duration, abort: bool, abort_after: Option<Duration>) {
     let shared = timer();
     let posted = POSTED.with(|p| {
         p.borrow()
@@ -202,14 +306,21 @@ fn arm_timer(delay: Duration) {
             .map(Arc::clone)
             .expect("timeout: InitializeTimeouts has not run in this backend")
     });
+    let deadline = Deadline::after(delay);
+    let abort_at = abort_after.map(Deadline::after);
+    DUE_NS.with(|c| c.set(if abort { deadline.as_ns().max(1) } else { abort_at.map_or(0, |dl| dl.as_ns().max(1)) }));
+    set_armed(Some(deadline));
     let mut slots = shared.slots.lock().unwrap();
     slots.insert(
         globals::MyProcPid(),
         TimerSlot {
-            deadline: Some(Deadline::after(delay)),
+            deadline: Some(deadline),
             latch: globals::MyLatch(),
             posted,
             interrupt_flag: globals::interrupt_pending_flag(),
+            abort_flag: abort.then(globals::abort_pending_flag),
+            abort_at: abort_at.map(|dl| (dl, globals::abort_pending_flag())),
+            alarm: alarm(),
         },
     );
     drop(slots);
@@ -219,12 +330,62 @@ fn arm_timer(delay: Duration) {
     let _ = waiter::unpark_word(shared.timer_waker.load(Ordering::SeqCst));
 }
 
+/// The deadline of the backend's armed wake (`None`: none is). wasm32 has no timer thread to deliver it (`timer`): the
+/// backend polls it there (init_small `SetDuePoll`), and ProcessTimeoutInterrupt fires it once it passed.
+fn set_armed(deadline: Option<Deadline>) {
+    ARMED_DEADLINE.with(|c| c.set(deadline));
+    #[cfg(target_family = "wasm")]
+    globals::SetDuePoll(deadline.map(|_| armed_passed as fn() -> bool));
+}
+
+#[cfg(target_family = "wasm")]
+fn armed_passed() -> bool {
+    ARMED_DEADLINE.with(Cell::get).is_some_and(|d| d.expired())
+}
+
 fn disable_alarm() {
-    ALARM_ENABLED.with(|c| c.set(false));
+    alarm().enabled.store(false, Ordering::SeqCst);
+}
+
+// A pending wake outlives the timeout it was armed for (C's spurious
+// SIGALRM, which the drain tolerates); its abort class must not: retagged
+// whenever the nearest timeout changes or none is left (docs/gravity/driver.md §6).
+fn retag_timer(abort: bool, abort_after: Option<Duration>) {
+    let shared = timer();
+    if let Some(slot) = shared.slots.lock().unwrap().get_mut(&globals::MyProcPid()) {
+        slot.abort_flag = abort.then(globals::abort_pending_flag);
+        slot.abort_at = abort_after.map(|d| (Deadline::after(d), globals::abort_pending_flag()));
+        let due = if abort { slot.deadline } else { slot.abort_at.map(|(dl, _)| dl) };
+        DUE_NS.with(|c| c.set(due.map_or(0, |dl| dl.as_ns().max(1))));
+    }
+}
+
+// The last active timeout went: the wake is withdrawn (C leaves the itimer
+// and its handler finds nothing to do; here the wake would also raise
+// InterruptPending and possibly the abort byte, so it must not arrive).
+fn disarm_timer() {
+    set_signal_pending(false);
+    DUE_NS.with(|c| c.set(0));
+    set_armed(None);
+    let shared = timer();
+    if let Some(slot) = shared.slots.lock().unwrap().get_mut(&globals::MyProcPid()) {
+        slot.deadline = None;
+        slot.abort_flag = None;
+        slot.abort_at = None;
+    }
+}
+
+// disable_timeout(s) left nothing active: a pending wake of the non-abort class stays, as C leaves the itimer; it finds
+// the alarm disabled at its post and only sets the latch (C's handler with alarm_enabled false). An abort-class wake is
+// withdrawn.
+fn last_timeout_gone() {
+    if !(signal_pending() && DUE_NS.with(|c| c.get()) == 0) {
+        disarm_timer();
+    }
 }
 
 fn enable_alarm() {
-    ALARM_ENABLED.with(|c| c.set(true));
+    alarm().enabled.store(true, Ordering::SeqCst);
 }
 
 fn timestamptz_plus_ms(tz: TimestampTz, ms: i32) -> TimestampTz {
@@ -322,13 +483,14 @@ fn schedule_alarm(data: &TimeoutData, now: TimestampTz) {
     let mut usecs;
 
     // A pending wake more than 10ms overdue is assumed lost.
-    if SIGNAL_PENDING.with(|c| c.get()) && now > SIGNAL_DUE_AT.with(|c| c.get()) + 10 * 1000 {
-        SIGNAL_PENDING.with(|c| c.set(false));
+    if signal_pending() && now > SIGNAL_DUE_AT.with(|c| c.get()) + 10 * 1000 {
+        set_signal_pending(false);
     }
 
-    let nearest_timeout = data.all_timeouts[data.active_timeouts[0] as usize].fin_time;
+    let nearest_id = data.active_timeouts[0];
+    let nearest_timeout = data.all_timeouts[nearest_id as usize].fin_time;
     if now > nearest_timeout {
-        SIGNAL_PENDING.with(|c| c.set(false));
+        set_signal_pending(false);
         secs = 0;
         usecs = 1;
     } else {
@@ -340,17 +502,44 @@ fn schedule_alarm(data: &TimeoutData, now: TimestampTz) {
 
     enable_alarm();
 
-    // A wake already due at or before the needed time suffices (C's
-    // setitimer-avoidance strategy, kept verbatim).
-    if SIGNAL_PENDING.with(|c| c.get()) && nearest_timeout >= SIGNAL_DUE_AT.with(|c| c.get()) {
+    let abort_after = if abort_class(nearest_id) {
+        None
+    } else {
+        data.active_timeouts[1..data.num_active].iter().find(|&&id| abort_class(id)).map(|&id| {
+            let (s, us) = timestamp_difference(now, data.all_timeouts[id as usize].fin_time);
+            Duration::new(s as u64, (us.max(1) * 1000) as u32)
+        })
+    };
+
+    // C's setitimer avoidance where its early SIGALRM stays harmless: a pending wake of the non-abort class (DUE_NS 0:
+    // it raises InterruptPending alone) at or before the needed time suffices while the nearest timeout is of that
+    // class and no abort-class timeout waits behind it; its early drain fires nothing and re-arms at the real deadline.
+    // Idle passivation re-enables at every ready-for-query: without this each statement re-armed and woke the timer thread.
+    if signal_pending()
+        && DUE_NS.with(|c| c.get()) == 0
+        && !abort_class(nearest_id)
+        && abort_after.is_none()
+        && nearest_timeout >= SIGNAL_DUE_AT.with(|c| c.get())
+    {
+        return;
+    }
+
+    // A wake already due at exactly the needed time suffices (C keeps any
+    // EARLIER wake too — its early SIGALRM is harmless there; here it would
+    // raise InterruptPending and the abort byte for a timeout not yet due,
+    // so an earlier wake is re-armed at the new deadline instead).
+    if signal_pending() && nearest_timeout == SIGNAL_DUE_AT.with(|c| c.get()) {
+        // The kept wake may now serve a different nearest timeout: its
+        // abort class must follow.
+        retag_timer(abort_class(nearest_id), abort_after);
         return;
     }
 
     SIGNAL_DUE_AT.with(|c| c.set(nearest_timeout));
-    SIGNAL_PENDING.with(|c| c.set(true));
+    set_signal_pending(true);
 
     // C's setitimer FATAL branch has no analog: arming cannot fail.
-    arm_timer(Duration::new(secs as u64, (usecs * 1000) as u32));
+    arm_timer(Duration::new(secs as u64, (usecs * 1000) as u32), abort_class(nearest_id), abort_after);
 }
 
 fn handle_sig_alarm() {
@@ -358,9 +547,9 @@ fn handle_sig_alarm() {
 
     latch::SetLatch(globals::MyLatch().expect("timeout drain without MyLatch"));
 
-    SIGNAL_PENDING.with(|c| c.set(false));
+    set_signal_pending(false);
 
-    if ALARM_ENABLED.with(|c| c.get()) {
+    if alarm().enabled.load(Ordering::SeqCst) {
         disable_alarm();
 
         if DATA.with(|d| d.borrow().num_active) > 0 {
@@ -421,9 +610,34 @@ pub fn ProcessTimeoutInterrupt() {
         p.borrow().as_ref().filter(|a| a.load(Ordering::SeqCst)).map(Arc::clone)
     });
     if let Some(posted) = posted {
+        // the timer thread raises `posted`, InterruptPending and the abort byte under the slots lock; taking it
+        // once here waits out a fire still storing, so the abort byte of the wake drained below is already set when
+        // ProcessInterrupts consumes its cancel (and clears the byte with it) — never raised after, into the next
+        // statement.
+        drop(timer().slots.lock());
         if posted.swap(false, Ordering::SeqCst) {
+            set_armed(None);
             handle_sig_alarm();
+            return;
         }
+    }
+    // A kernel delivers an itimer that expired while the process was stopped
+    // before the process runs again; a waiter that wakes past its deadline
+    // must not get ahead of the timer thread's post.
+    if ARMED_DEADLINE.with(|c| c.get()).is_some_and(|d| d.expired()) {
+        take_own_expired_wake();
+        handle_sig_alarm();
+    }
+}
+
+fn take_own_expired_wake() {
+    set_armed(None);
+    let mut slots = timer().slots.lock().unwrap();
+    if let Some(slot) = slots.get_mut(&globals::MyProcPid()) {
+        if slot.deadline.is_some_and(|d| d.expired()) {
+            slot.deadline = None;
+        }
+        slot.posted.store(false, Ordering::SeqCst);
     }
 }
 
@@ -433,7 +647,6 @@ pub fn ProcessTimeoutInterrupt() {
 // re-running InitializeTimeouts on a live connection thread (the session
 // main re-init after the startup-packet/auth phase) replaces this thread's
 // timer slot with `deadline: None`, destroying a still-armed wake — while
-// the SIGNAL_PENDING/SIGNAL_DUE_AT thread-locals survive untouched. Every
 // later schedule_alarm whose nearest fin_time lands at or past the stale
 // SIGNAL_DUE_AT then takes the setitimer-avoidance skip and trusts a wake
 // that can no longer arrive: the timeout silently never fires until a
@@ -457,9 +670,11 @@ fn timeout_init_reset_enabled() -> bool {
 
 pub fn InitializeTimeouts() {
     disable_alarm();
+    DUE_NS.with(|c| c.set(0));
+    set_armed(None);
 
     if timeout_init_reset_enabled() {
-        SIGNAL_PENDING.with(|c| c.set(false));
+        set_signal_pending(false);
         SIGNAL_DUE_AT.with(|c| c.set(0));
     }
 
@@ -496,6 +711,9 @@ pub fn InitializeTimeouts() {
             latch: globals::MyLatch(),
             posted,
             interrupt_flag: globals::interrupt_pending_flag(),
+            abort_flag: None,
+            abort_at: None,
+            alarm: alarm(),
         },
     );
 }
@@ -503,6 +721,8 @@ pub fn InitializeTimeouts() {
 /// pgrust-only: C reclaims timeout state with the process; a thread-model
 /// backend releases its timer-registry slot at task end.
 pub fn forget_backend_timer_slot() {
+    set_armed(None);
+    DUE_NS.with(|c| c.set(0));
     timer().slots.lock().unwrap().remove(&globals::MyProcPid());
 }
 
@@ -610,6 +830,8 @@ pub fn disable_timeout(id: TimeoutId, keep_indicator: bool) {
     if DATA.with(|d| d.borrow().num_active) > 0 {
         let now = timestamp_seams::get_current_timestamp::call();
         DATA.with(|d| schedule_alarm(&d.borrow(), now));
+    } else {
+        last_timeout_gone();
     }
 }
 
@@ -633,11 +855,14 @@ pub fn disable_timeouts(timeouts: &[DisableTimeoutParams]) {
     if DATA.with(|d| d.borrow().num_active) > 0 {
         let now = timestamp_seams::get_current_timestamp::call();
         DATA.with(|d| schedule_alarm(&d.borrow(), now));
+    } else {
+        last_timeout_gone();
     }
 }
 
 pub fn disable_all_timeouts(keep_indicators: bool) {
     disable_alarm();
+    disarm_timer();
 
     DATA.with(|d| {
         let data = &mut *d.borrow_mut();
@@ -713,6 +938,7 @@ pub fn init_seams() {
     s::get_timeout_start_time::set(get_timeout_start_time);
     s::get_timeout_finish_time::set(get_timeout_finish_time);
     s::process_timeout_interrupt::set(ProcessTimeoutInterrupt);
+    s::fire_due::set(fire_due);
     s::forget_backend_timer_slot::set(forget_backend_timer_slot);
 }
 

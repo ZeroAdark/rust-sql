@@ -1,0 +1,1 @@
+backend/replication/walreceiver/src/pgrc_files.rs	RECV	pgrc	at:on_file_chunk	thread	WR L3: the file the walreceiver is landing from 'F' messages; each chunk takes it, puts it back while the file is incomplete and drops it at the file's end or an error; a resend at offset 0 replaces it; walreceiver thread only

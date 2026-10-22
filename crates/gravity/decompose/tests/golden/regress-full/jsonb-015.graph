@@ -1,0 +1,21 @@
+-- regress-full-jsonb-015
+-- SELECT distinct * FROM (values (jsonb '{}' || ''::text),('{}')) v(j);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n1@0 n0@1^
+  source values rti=2 rows=2
+    row (c25:'{}')
+    row (c25:'{}')
+  project (1=v2.1)
+  outs 1=vl:row
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1)
+  outs 1=vl:life/breaker
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[Fp128,Fp128]->[MinCode@16,Count@24] 32B
+group slot=0 producer=p0 node=0 form=Hashed hints=[] layout=[Fp128,Fp128]->[MinCode@16,Count@24] 32B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=25 rep=0 expr=v2.1
+mapped: ValuesScan Agg

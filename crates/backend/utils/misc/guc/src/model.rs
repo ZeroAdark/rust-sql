@@ -83,7 +83,7 @@ pub struct GucStack {
 pub struct config_generic {
     // Built-in names are static table strings; placeholder names are owned by
     // the (per-backend) registry and go with it at backend exit, C's
-    // GUCMemoryContext lifetime (regression: never Box::leak a name).
+    // GUCMemoryContext lifetime (fp-misc-guc-p1#1: never Box::leak a name).
     pub name: std::borrow::Cow<'static, str>,
     pub context: GucContext,
     pub group: config_group,

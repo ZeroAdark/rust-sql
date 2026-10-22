@@ -1,0 +1,18 @@
+-- regress-full-subselect-040
+-- insert into shipped_view (ordnum, partnum, value) values (0, 1, (select cost from parts where partnum = '1'));
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 eligible rows=6 end=sink
+  nodes n2@0
+  source range rel=25193 rti=6 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op98(v6.1, c25:'1')
+  project (1=v6.2)
+  outs 1=w8:val
+p1 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c1042:'wt', 2=c23:0, 3=c25:'1', 4=$exec0)
+  write INSERT rel=25198 rti=4 natts=4 indexes=() epq=$exec1
+  outs 1=vl:stmt/imm 2=w4:val 3=vl:stmt/imm 4=w8:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: Result ModifyTable SeqScan SubPlan

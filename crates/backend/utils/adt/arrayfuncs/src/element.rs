@@ -161,7 +161,7 @@ pub fn array_bitmap_copy(
 
 #[track_caller]
 #[cold]
-fn wrong_subscripts() -> Box<PgError> {
+pub(crate) fn wrong_subscripts() -> Box<PgError> {
     Box::new(
         PgError::error("wrong number of array subscripts")
             .with_sqlstate(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
@@ -170,7 +170,7 @@ fn wrong_subscripts() -> Box<PgError> {
 
 #[track_caller]
 #[cold]
-fn subscript_out_of_range() -> Box<PgError> {
+pub(crate) fn subscript_out_of_range() -> Box<PgError> {
     Box::new(
         PgError::error("array subscript out of range")
             .with_sqlstate(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
@@ -179,11 +179,25 @@ fn subscript_out_of_range() -> Box<PgError> {
 
 #[track_caller]
 #[cold]
-fn array_size_exceeded() -> Box<PgError> {
+pub(crate) fn array_size_exceeded() -> Box<PgError> {
     Box::new(
         PgError::error(alloc::format!(
             "array size exceeds the maximum allowed ({})",
             ::arrayutils::MAX_ARRAY_SIZE
+        ))
+        .with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+    )
+}
+
+// array_expanded.c EA_get_flat_size: the appended result is an expanded
+// array in C, whose flat-size ceiling is MaxAllocSize over the element data.
+#[track_caller]
+#[cold]
+fn flat_size_exceeded() -> Box<PgError> {
+    Box::new(
+        PgError::error(alloc::format!(
+            "array size exceeds the maximum allowed ({})",
+            ::mcx::MAX_ALLOC_SIZE
         ))
         .with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
     )
@@ -870,8 +884,8 @@ pub fn array_set_element<'mcx>(
     elmbyval: bool,
     elmalign: u8,
 ) -> PgResult<PgVec<'mcx, u8>> {
-    array_set_element_ext(
-        mcx, array, indx, data_value, isnull, arraytyplen, elmlen, elmbyval, elmalign, false,
+    array_set_element_impl(
+        mcx, array, indx, data_value, isnull, arraytyplen, elmlen, elmbyval, elmalign, false, true,
     )
 }
 
@@ -892,6 +906,27 @@ pub fn array_set_element_ext<'mcx>(
     elmbyval: bool,
     elmalign: u8,
     expanded: bool,
+) -> PgResult<PgVec<'mcx, u8>> {
+    array_set_element_impl(
+        mcx, array, indx, data_value, isnull, arraytyplen, elmlen, elmbyval, elmalign, expanded,
+        expanded,
+    )
+}
+
+// flat_ceiling: C holds the result expanded (EA_get_flat_size's limit).
+#[allow(clippy::too_many_arguments)]
+fn array_set_element_impl<'mcx>(
+    mcx: Mcx<'mcx>,
+    array: &[u8],
+    indx: &[i32],
+    data_value: Datum,
+    isnull: bool,
+    arraytyplen: i32,
+    elmlen: i32,
+    elmbyval: bool,
+    elmalign: u8,
+    expanded: bool,
+    flat_ceiling: bool,
 ) -> PgResult<PgVec<'mcx, u8>> {
     let n_subscripts = indx.len() as i32;
 
@@ -1040,6 +1075,9 @@ pub fn array_set_element_ext<'mcx>(
     };
 
     let newsize = overheadlen + lenbefore + newitemlen + lenafter;
+    if flat_ceiling && newsize - overheadlen > ::mcx::MAX_ALLOC_SIZE {
+        return Err(flat_size_exceeded());
+    }
 
     let mut out: PgVec<u8> = vec_with_capacity_in(mcx, newsize)?;
     out.resize(newsize, 0);

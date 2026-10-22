@@ -1,0 +1,172 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1q s2u s1c s2r s2c
+step s2x: EXPLAIN (COSTS OFF) UPDATE lsq j SET attempts = j.attempts + 1 WHERE j.id = 1 AND EXISTS (SELECT 1 FROM lsq k WHERE k.queue = j.queue AND k.id > j.id ORDER BY k.id LIMIT 1 FOR UPDATE) RETURNING j.id, j.queue;
+QUERY PLAN                                                  
+------------------------------------------------------------
+Update on lsq j                                             
+  ->  Index Scan using lsq_pkey on lsq j                    
+        Index Cond: (id = 1)                                
+        Filter: EXISTS(SubPlan 1)                           
+        SubPlan 1                                           
+          ->  Limit                                         
+                ->  LockRows                                
+                      ->  Index Scan using lsq_pkey on lsq k
+                            Index Cond: (id > j.id)         
+                            Filter: (queue = j.queue)       
+(10 rows)
+
+step s1q: UPDATE lsq SET queue = 'z' WHERE id = 4;
+step s2u: UPDATE lsq j SET attempts = j.attempts + 1 WHERE j.id = 1 AND EXISTS (SELECT 1 FROM lsq k WHERE k.queue = j.queue AND k.id > j.id ORDER BY k.id LIMIT 1 FOR UPDATE) RETURNING j.id, j.queue; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|queue
+--+-----
+ 1|a    
+(1 row)
+
+step s2r: SELECT id FROM lsq WHERE age(xmax) = 0 ORDER BY id;
+id
+--
+ 4
+ 7
+(2 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2u s1c s2r s2c
+step s1a: UPDATE lsq SET attempts = attempts + 100 WHERE id = 4;
+step s2u: UPDATE lsq j SET attempts = j.attempts + 1 WHERE j.id = 1 AND EXISTS (SELECT 1 FROM lsq k WHERE k.queue = j.queue AND k.id > j.id ORDER BY k.id LIMIT 1 FOR UPDATE) RETURNING j.id, j.queue; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|queue
+--+-----
+ 1|a    
+(1 row)
+
+step s2r: SELECT id FROM lsq WHERE age(xmax) = 0 ORDER BY id;
+id
+--
+ 4
+(1 row)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2u s1c s2r s2c
+step s1d: DELETE FROM lsq WHERE id = 4;
+step s2u: UPDATE lsq j SET attempts = j.attempts + 1 WHERE j.id = 1 AND EXISTS (SELECT 1 FROM lsq k WHERE k.queue = j.queue AND k.id > j.id ORDER BY k.id LIMIT 1 FOR UPDATE) RETURNING j.id, j.queue; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|queue
+--+-----
+ 1|a    
+(1 row)
+
+step s2r: SELECT id FROM lsq WHERE age(xmax) = 0 ORDER BY id;
+id
+--
+ 7
+(1 row)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s2r s1c s2c
+step s1l: SELECT id FROM lsq WHERE id = 4 FOR UPDATE;
+id
+--
+ 4
+(1 row)
+
+step s2sk: UPDATE lsq j SET attempts = j.attempts + 1 WHERE j.id = 1 AND EXISTS (SELECT 1 FROM lsq k WHERE k.queue = j.queue AND k.id > j.id ORDER BY k.id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING j.id, j.queue;
+id|queue
+--+-----
+ 1|a    
+(1 row)
+
+step s2r: SELECT id FROM lsq WHERE age(xmax) = 0 ORDER BY id;
+id
+--
+ 7
+(1 row)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2u s1c s2r s2c
+step s1j: UPDATE lsq SET queue = 'b' WHERE id = 1;
+step s2u: UPDATE lsq j SET attempts = j.attempts + 1 WHERE j.id = 1 AND EXISTS (SELECT 1 FROM lsq k WHERE k.queue = j.queue AND k.id > j.id ORDER BY k.id LIMIT 1 FOR UPDATE) RETURNING j.id, j.queue; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|queue
+--+-----
+ 1|b    
+(1 row)
+
+step s2r: SELECT id FROM lsq WHERE age(xmax) = 0 ORDER BY id;
+id
+--
+ 1
+ 2
+ 4
+(3 rows)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s2: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s3l s1c s3r s3c
+step s1q: UPDATE lsq SET queue = 'z' WHERE id = 4;
+step s3l: SELECT j.id FROM lsq j WHERE j.id <= 3 AND EXISTS (SELECT 1 FROM lsq k WHERE k.queue = j.queue AND k.id > j.id ORDER BY k.id LIMIT 1 FOR UPDATE) ORDER BY j.id; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id
+--
+ 1
+ 2
+ 3
+(3 rows)
+
+step s3r: SELECT id FROM lsq WHERE age(xmax) = 0 ORDER BY id;
+id
+--
+ 4
+ 5
+ 6
+ 7
+(4 rows)
+
+step s3c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s3: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s3l s1c s3r s3c
+step s1a: UPDATE lsq SET attempts = attempts + 100 WHERE id = 4;
+step s3l: SELECT j.id FROM lsq j WHERE j.id <= 3 AND EXISTS (SELECT 1 FROM lsq k WHERE k.queue = j.queue AND k.id > j.id ORDER BY k.id LIMIT 1 FOR UPDATE) ORDER BY j.id; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id
+--
+ 1
+ 2
+ 3
+(3 rows)
+
+step s3r: SELECT id FROM lsq WHERE age(xmax) = 0 ORDER BY id;
+id
+--
+ 4
+ 5
+ 6
+(3 rows)
+
+step s3c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+s3: WARNING:  there is no transaction in progress

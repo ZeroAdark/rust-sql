@@ -30,7 +30,7 @@ impl<'mcx> StringInfo<'mcx> {
         // release-effective ceiling, not a debug assertion.
         mcx::check_alloc_size(initsize)?;
         let mut data = PgVec::new_in(mcx);
-        data.try_reserve_exact(initsize).map_err(|_| mcx.oom(initsize))?;
+        data.try_reserve_exact(initsize).map_err(|_| mcx.oom_boxed(initsize))?;
         // SAFETY: capacity >= initsize >= 1.
         unsafe { *data.as_mut_ptr() = 0 };
         Ok(StringInfo { data, cursor: 0 })
@@ -39,7 +39,7 @@ impl<'mcx> StringInfo<'mcx> {
     pub fn from_vec(mut data: PgVec<'mcx, u8>) -> PgResult<Self> {
         if data.capacity() == data.len() {
             let mcx = *data.allocator();
-            data.try_reserve_exact(1).map_err(|_| mcx.oom(data.len() + 1))?;
+            data.try_reserve_exact(1).map_err(|_| mcx.oom_boxed(data.len() + 1))?;
         }
         // SAFETY: capacity > len after the reserve above.
         unsafe { *data.as_mut_ptr().add(data.len()) = 0 };
@@ -114,7 +114,7 @@ impl<'mcx> StringInfo<'mcx> {
         let mcx = *self.data.allocator();
         self.data
             .try_reserve_exact(newlen - len)
-            .map_err(|_| mcx.oom(newlen))?;
+            .map_err(|_| mcx.oom_boxed(newlen))?;
         // SAFETY: capacity >= newlen > len.
         unsafe { *self.data.as_mut_ptr().add(len) = 0 };
         Ok(())
@@ -243,6 +243,24 @@ impl<'mcx> StringInfo<'mcx> {
         Ok(())
     }
 
+    /// appendStringInfo(str, "%s%s...", parts...) (appendStringInfoVA + pvsnprintf).
+    pub fn append_formatted(&mut self, parts: &[&[u8]]) -> PgResult<()> {
+        let needed = parts.iter().fold(0usize, |n, p| n.saturating_add(p.len()));
+        if self.capacity() - self.len() < 16 {
+            self.enlarge(32)?;
+        }
+        if needed >= self.capacity() - self.len() {
+            if needed >= MAX_ALLOC_SIZE {
+                return Err(formatted_out_of_memory());
+            }
+            self.enlarge(needed + 1)?;
+        }
+        for p in parts {
+            self.append_bytes(p)?;
+        }
+        Ok(())
+    }
+
     pub fn append_spaces(&mut self, count: usize) -> PgResult<()> {
         if count > 0 {
             self.enlarge(count)?;
@@ -257,6 +275,18 @@ impl<'mcx> StringInfo<'mcx> {
         }
         Ok(())
     }
+}
+
+/// appendBinaryStringInfo onto a PgVec standing in for a StringInfo (capacity = maxlen).
+pub fn vec_append_binary(buf: &mut PgVec<'_, u8>, bytes: &[u8]) -> PgResult<()> {
+    let n = bytes.len();
+    if buf.capacity() - buf.len() <= n {
+        let target = enlarge_target(buf.len(), buf.capacity(), n)?;
+        let mcx = *buf.allocator();
+        buf.try_reserve_exact(target - buf.len()).map_err(|_| mcx.oom_boxed(target))?;
+    }
+    buf.extend_from_slice(bytes);
+    Ok(())
 }
 
 pub fn enlarge_target(len: usize, maxlen: usize, needed: usize) -> PgResult<usize> {
@@ -275,6 +305,12 @@ pub fn enlarge_target(len: usize, maxlen: usize, needed: usize) -> PgResult<usiz
         newlen = MAX_ALLOC_SIZE;
     }
     Ok(newlen)
+}
+
+#[cold]
+#[inline(never)]
+fn formatted_out_of_memory() -> alloc::boxed::Box<PgError> {
+    PgError::error("out of memory").with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED).into()
 }
 
 #[cold]

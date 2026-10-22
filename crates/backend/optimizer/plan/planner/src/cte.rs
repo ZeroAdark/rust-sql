@@ -32,25 +32,21 @@ pub fn ss_process_ctes<'mcx>(run: &mut PlannerRun<'mcx>, parse: &Query<'mcx>) ->
             continue;
         }
 
-        if (cte.ctematerialized == CTEMaterialize::CTEMaterializeNever
-            || (cte.ctematerialized == CTEMaterialize::CTEMaterializeDefault
-                && cte.cterefcount == 1))
-            && !cte.cterecursive
-            && cmd_type == types_nodes::CmdType::CMD_SELECT
-            && !contain_dml(ctequery_node)?
-            && (cte.cterefcount <= 1 || !contain_outer_selfref(ctequery_node)?)
-            && !clauses::contain_volatile_functions(ctequery_node)?
-        {
-            inline_cte(run, parse, ctename, ctequery_node, cte.cterefcount)?;
+        if cte_inlines(cte)? {
+            inline_cte(run, parse, ctename, ctequery_node)?;
             run.root.cte_plan_ids.push(-1);
             continue;
         }
 
         let subquery =
             mcx::leak_in(mcx::alloc_in(mcx, crate::subselect::query_cells_copy(mcx, ctequery)?)?);
+        // D3342 (pgrust.gravity_cte_pushdown): the OR of the readers' filters, when every reader filters this CTE
+        crate::cte_or::push_readers_or(mcx, parse, cte, ctequery, subquery)?;
+        let gravity_fill = crate::cte_or::fill_admits(cte, ctequery)?;
 
         debug_assert!(run.root.plan_params.is_empty());
         run.push_root()?;
+        run.root.gravity_nested = true;
         crate::subquery::subquery_planner(run, subquery, cte.cterecursive, 0.0, None)?;
         let final_rel = fetch_final_rel(run);
         let best_path = get_cheapest_fractional_path(run, final_rel, 0.0);
@@ -72,6 +68,7 @@ pub fn ss_process_ctes<'mcx>(run: &mut PlannerRun<'mcx>, parse: &Query<'mcx>) ->
             plan_id,
             pathkey_descs,
             tlist,
+            gravity_fill,
         });
         // >= not ==: ancestors' parked subroots may be in flight (build_subplan).
         debug_assert!(run.subroots.len() >= run.glob.subplans.len());
@@ -101,6 +98,23 @@ pub fn ss_process_ctes<'mcx>(run: &mut PlannerRun<'mcx>, parse: &Query<'mcx>) ->
         run.root.cte_plan_ids.push(plan_id);
     }
     Ok(())
+}
+
+pub(crate) fn cte_inlines(cte: &types_nodes::parsenodes::CommonTableExpr<'_>) -> PgResult<bool> {
+    let ctequery_node = cte.ctequery.expect("CTE has a ctequery");
+    Ok((cte.ctematerialized == CTEMaterialize::CTEMaterializeNever
+        || (cte.ctematerialized == CTEMaterialize::CTEMaterializeDefault && cte.cterefcount == 1))
+        && cte_plain_select(cte)?
+        && (cte.cterefcount <= 1 || !contain_outer_selfref(ctequery_node)?))
+}
+
+pub(crate) fn cte_plain_select(cte: &types_nodes::parsenodes::CommonTableExpr<'_>) -> PgResult<bool> {
+    let ctequery_node = cte.ctequery.expect("CTE has a ctequery");
+    let cmd_type = ctequery_node.as_query().expect("CTE ctequery is an analyzed Query").commandType;
+    Ok(!cte.cterecursive
+        && cmd_type == types_nodes::CmdType::CMD_SELECT
+        && !contain_dml(ctequery_node)?
+        && !clauses::contain_volatile_functions(ctequery_node)?)
 }
 
 fn contain_dml(node: Node<'_>) -> PgResult<bool> {
@@ -159,9 +173,6 @@ struct InlineCteWalker<'a, 'mcx> {
     ctename: &'a str,
     levelsup: i64,
     ctequery: Node<'mcx>,
-    // cterefcount == 1: source is dead after single inlining, so the tree
-    // moves; multi-reference NOT MATERIALIZED deep-copies per reference.
-    share: bool,
 }
 
 impl<'a, 'mcx> nodes_core::NodeWalker<'mcx> for InlineCteWalker<'a, 'mcx> {
@@ -174,11 +185,11 @@ impl<'a, 'mcx> nodes_core::NodeWalker<'mcx> for InlineCteWalker<'a, 'mcx> {
                 && rte.ctename == Some(self.ctename)
                 && rte.ctelevelsup as i64 == self.levelsup
             {
-                let newquery_node = if self.share {
-                    self.ctequery
-                } else {
-                    copyfuncs::copy_object(self.mcx, self.ctequery)?
-                };
+                // Always a fresh copy (C): cterefcount counts parse-time
+                // references, but the parser/rewriter can copy a SubLink
+                // holding this RTE, so a single-reference CTE may match
+                // several RTEs and each gets IncrementVarSublevelsUp.
+                let newquery_node = copyfuncs::copy_object(self.mcx, self.ctequery)?;
                 if self.levelsup > 0 {
                     rewrite_manip::IncrementVarSublevelsUp(
                         newquery_node,
@@ -227,14 +238,12 @@ fn inline_cte<'mcx>(
     parse: &Query<'mcx>,
     ctename: &str,
     ctequery: Node<'mcx>,
-    cterefcount: i32,
 ) -> PgResult<()> {
     let mut w = InlineCteWalker {
         mcx: run.mcx,
         ctename,
         levelsup: 0,
         ctequery,
-        share: cterefcount == 1,
     };
     let visit_all = |w: &mut InlineCteWalker<'_, 'mcx>,
                      list: &NodeList<'mcx>|

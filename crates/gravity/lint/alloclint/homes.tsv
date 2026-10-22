@@ -1,0 +1,34 @@
+# alloclint homes (homes.py; reports/ALLOCLINT-GRAVITY-20261014.md section 2): code that IS a memory home or runs inside one.
+# A finding / IR site here is TRACKED (an owner gets the bytes by construction), so it is neither debt nor a miss.
+# file<TAB>function (* | name | Type::name | <fn>@scope)<TAB>home<TAB>where the owner is bound
+# H1 driver region / spill: the allocation primitive books a Charge for the bytes it takes (function level, NOT the whole of
+# driver/src/mem: mem/spill.rs, grant.rs, feedback.rs ... also hold plain heap (the run fences memlead named 10-14 06:44Z)).
+crates/gravity/driver/src/mem/region.rs	RegionBuf::alloc	H1	region.rs:147 std::alloc then :151 Charge::open(context owner, Door::Heap)
+crates/gravity/driver/src/mem/region.rs	RegionBuf::map_reserved	H1	region.rs:159-175 mmap then Charge::open(Door::Mapped)
+crates/gravity/driver/src/mem/spill.rs	TempMap::shared	H1	spill.rs:266 mmap then :269 Charge::open(Kind::Spill, Door::Mapped)
+# H2 the program arena (the whole file is the allocator)
+crates/gravity/program/src/arena.rs	*	H2	arena.rs:308-324 a block per grow: mapped blocks Charge::open(Kind::Arena) :324; boxed blocks moved to ProgramCaches by Program::file_on_ledger (program/mod.rs:505-526)
+# H4 holder charges sized by the bytes the function builds. The cache SCOPES (memledger::arena::cache_scope: the global allocator
+# draws from the cache arena while the guard lives) are NOT homes until memlead's fix makes the cache arena charge at
+# allocation: the bytes sit unattributed on the account until the holder commits (cvgap GAP.tsv 10-14: 256 MiB of D4432).
+# Main 2026-10-14T18:15:24Z (1): the @scope rows below are back to debt ('#DEBT', kept to restore them after that fix).
+#DEBT crates/gravity/hosts/src/dict/text_hosts.rs	render_table@scope	H4	text_hosts.rs:1682 cache_scope() around lay_renders
+#DEBT crates/gravity/hosts/src/dict/text_hosts.rs	lay_renders	H4	called only inside render_table's scope (:1683; tests :3235/:3238): the scope's callee
+#DEBT crates/gravity/hosts/src/dict/text_hosts.rs	row_codes@scope	H4	text_hosts.rs:1830 cache_scope() to the fn end :1870 (lines 1757-1829 before it stay debt)
+#DEBT crates/gravity/hosts/src/dict/text_hosts.rs	lane_codes@scope	H4	text_hosts.rs:1895 cache_scope() to the fn end :1980
+crates/gravity/hosts/src/ops/scan/pgrc/cond_cache.rs	Entry::new	H4	cond_cache.rs:99-100 Charge::open(Cache(CondCache), base = 21 B per granule + 64): the counts / state / words it builds
+#DEBT crates/gravity/hosts/src/ops/scan/pgrc/cond_cache.rs	Entry::put@scope	H4	cond_cache.rs:160 cache_scope() to drop(cache) :166
+# H5 the accounting prototype's operator arena (malisper/wip/v5l-memlead-ledger2r; absent on trunk: skipped until it lands)
+crates/gravity/fn/src/arena.rs	*	H5	OpArena / AVec / AMap re-exports (prototype)
+crates/gravity/fn/src/arena/raw.rs	*	H5	OpArena chunks charged once to the arena's owner (prototype raw.rs:283-288 Charge::open)
+crates/backend/access/pgrcolumnar/pgrc_read/src/dicthandle.rs	ImageBuf::zeroed	H4	dicthandle.rs:885 partcache::holder_charge(bytes): Owner::Cache(PartCache), Door::Heap (D4084), the whole reservation (main 2026-10-14T19:44:14Z; cvpread 19:43:58Z)
+crates/backend/access/pgrcolumnar/pgrc_read/src/dicthandle.rs	reserve_zeroed	H4	its only caller is ImageBuf::zeroed (dicthandle.rs:881), whose holder_charge at :885 covers the block (both cfg arms :902 / :927)
+# CACHE-CHARGE guards (memledger::arena::cache_scope_for(owner, kind) .. finish()): the cache arena charges the owner AS the
+# blocks are taken, so the lexical extent is a home (main 2026-10-14T20:21:07Z (1)).
+crates/gravity/hosts/src/dict/text_hosts.rs	take_held@scope	H4	text_hosts.rs:463 cache_scope_for(FP_OWNER, Region) to scope.finish() :465 (Held::Resident)
+crates/gravity/hosts/src/dict/text_hosts.rs	lay_renders@scope	H4	text_hosts.rs:1901-1904 (off reserve + first buffer) and :1920 the per-growth Option scope to its finish() in the block
+crates/gravity/hosts/src/dict/text_hosts.rs	row_codes@scope	H4	text_hosts.rs:1985-1987 (granule starts) and :2051 to adopt(scope.finish()) :2091
+crates/gravity/hosts/src/dict/text_hosts.rs	lane_codes@scope	H4	text_hosts.rs:2121 to scope.finish() :2206 (the whole octet-length build)
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	in_cache_held@scope	H4	openpart.rs:143 cache_scope_for(partcache::OWNER, Region) around f(); the closure's own lines are outside the lexical span (runtime: the tracer's cache-scope flag)
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	charged_for@scope	H4	openpart.rs:181 cache_scope_for(reader owner, kind) around f(); same closure note
+crates/gravity/driver/src/mem/spill/chunk.rs	*	H1	chunk.rs:26 HeapClaim::of(owner, Kind::Spill, the byte list).beside(SHARED_BLOCK): the byte list and the Arc block in one door-1 claim on the file owner at construction; growth re-fit at chunk.rs:56 on the appending thread

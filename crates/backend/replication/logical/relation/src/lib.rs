@@ -1,7 +1,6 @@
 // relation.c (replication/logical): the remote-relation map — remote relid ->
 // local relation, attribute-name attrmap, replica-identity updatability, and
 // the usable local index for UPDATE/DELETE key lookup.
-//
 // Renderings vs C:
 // - The map is a thread-local HashMap (C: HTAB in a process-private context);
 //   an apply worker is one thread, so per-worker state is thread-local.
@@ -29,8 +28,8 @@ use logicalproto::{LogicalRepRelId, LogicalRepRelation};
 use mcx::Mcx;
 use types_core::{InvalidOid, InvalidXLogRecPtr, Oid, XLogRecPtr};
 use types_error::{
-    ErrorLocation, PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED,
-    ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERRCODE_WRONG_OBJECT_TYPE, ERROR,
+    ErrorLocation, PgError, PgResult, ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+    ERRCODE_WRONG_OBJECT_TYPE, ERROR,
 };
 use types_rel::{Relation, LOCKMODE};
 
@@ -65,7 +64,6 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-// logicalrep_relmap_update (relation.c:164).
 pub fn logicalrep_relmap_update(remoterel: &LogicalRepRelation) {
     REL_MAP.with(|m| {
         m.borrow_mut().insert(
@@ -95,7 +93,6 @@ fn relmap_invalidate_cb(_arg: Datum, reloid: Oid) {
     });
 }
 
-// logicalrep_rel_att_by_name (relation.c:250).
 fn rel_att_by_name(remoterel: &LogicalRepRelation, attname: &str) -> i16 {
     for (i, name) in remoterel.attnames.iter().enumerate() {
         if name == attname {
@@ -105,7 +102,6 @@ fn rel_att_by_name(remoterel: &LogicalRepRelation, attname: &str) -> i16 {
     -1
 }
 
-// logicalrep_rel_mark_updatable (relation.c:296).
 fn mark_updatable(entry: &mut LogicalRepRelMapEntry) -> PgResult<()> {
     const REPLICA_IDENTITY_FULL: u8 = b'f';
 
@@ -161,7 +157,6 @@ fn find_usable_index_for_replica_identity_full(
         let usable = is_index_usable_for_replica_identity_full(&idxrel, attrmap)?;
         indexam::index_close(idxrel, types_rel::AccessShareLock)?;
 
-        // Return the first eligible index found.
         if usable {
             return Ok(idxoid);
         }
@@ -285,10 +280,16 @@ fn find_local_index(
 // logicalrep_get_attrs_str (relation.c:227): the named remote columns,
 // double-quoted, comma-separated.
 fn get_attrs_str(remoterel: &LogicalRepRelation, atts: &[usize]) -> String {
-    atts.iter()
-        .map(|&i| format!("\"{}\"", remoterel.attnames[i]))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let mut out = String::new();
+    for (idx, &i) in atts.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push('"');
+        out.push_str(&remoterel.attnames[i]);
+        out.push('"');
+    }
+    out
 }
 
 // logicalrep_report_missing_or_gen_attrs (relation.c:255): `missing` and
@@ -314,7 +315,7 @@ fn report_missing_or_gen_attrs(
     }
     if !generated.is_empty() {
         // C collects these in a Bitmapset: ascending remote attnum order.
-        let mut generated = generated.to_vec();
+        let mut generated = ::mcx::std_vec_from_slice("replication", &generated)?;
         generated.sort_unstable();
         let column = if generated.len() == 1 { "column" } else { "columns" };
         ereport(ERROR)
@@ -343,19 +344,6 @@ pub fn check_relkind(relkind: u8, nspname: &str, relname: &str) -> PgResult<()> 
                 "cannot use relation \"{nspname}.{relname}\" as logical replication target"
             ))
             .errdetail(detail)
-            .finish(loc("logicalrep_rel_open"))?;
-    }
-    Ok(())
-}
-
-// Apply bypasses ModifyTable and never publishes columnar writers before advancing the origin.
-pub fn check_target_am(relam: Oid, nspname: &str, relname: &str) -> PgResult<()> {
-    if tableam_vocab::is_pgrcolumnar_am_oid(relam) || tableam_vocab::is_pgrcolumnar2_am_oid(relam) {
-        ereport(ERROR)
-            .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
-            .errmsg(format!(
-                "cannot use columnar relation \"{nspname}.{relname}\" as logical replication target"
-            ))
             .finish(loc("logicalrep_rel_open"))?;
     }
     Ok(())
@@ -421,15 +409,14 @@ pub fn logicalrep_rel_open<'mcx>(
         entry.localreloid = relid;
 
         check_relkind(rel.rd_rel.relkind as u8, &remoterel.nspname, &remoterel.relname)?;
-        check_target_am(rel.rd_rel.relam, &remoterel.nspname, &remoterel.relname)?;
 
         // Local-offset -> remote-column attrmap by column name; track remote
         // columns with no local counterpart and local generated columns
         // targeted by the remote side (both are errors, relation.c:207).
         let desc = &rel.rd_att;
         let natts = desc.natts as usize;
-        entry.attrmap = vec![-1i16; natts];
-        let mut missing: Vec<bool> = vec![true; remoterel.natts];
+        entry.attrmap = ::mcx::std_vec_from_elem("replication", -1i16, natts)?;
+        let mut missing: Vec<bool> = ::mcx::std_vec_from_elem("replication", true, remoterel.natts)?;
         let mut generated_hit: Vec<usize> = Vec::new();
         for i in 0..natts {
             let attr = desc.attr(i);
@@ -479,7 +466,6 @@ pub fn logicalrep_rel_open<'mcx>(
     Ok((entry, localrel.expect("logicalrep_rel_open produced a relation")))
 }
 
-// logicalrep_rel_close (relation.c:504).
 pub fn logicalrep_rel_close(rel: Relation<'_>, lockmode: LOCKMODE) -> PgResult<()> {
     table::table_close(rel, lockmode)
 }
@@ -536,26 +522,6 @@ pub fn logicalrep_relmap_init() -> PgResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn columnar_targets_refuse_typed() {
-        let v1: Oid = 910_001;
-        let v2: Oid = 910_002;
-        let heap_am: Oid = 2;
-        tableam_vocab::register_pgrcolumnar_table_am(v1);
-        tableam_vocab::register_pgrcolumnar2_table_am(v2);
-
-        assert!(check_target_am(heap_am, "public", "t").is_ok());
-        for am in [v1, v2] {
-            let err = check_target_am(am, "public", "t").expect_err("columnar target must refuse");
-            assert_eq!(err.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);
-            assert!(
-                err.message().contains("cannot use columnar relation \"public.t\""),
-                "unexpected refusal message: {}",
-                err.message()
-            );
-        }
-    }
 
     fn remoterel() -> LogicalRepRelation {
         LogicalRepRelation {

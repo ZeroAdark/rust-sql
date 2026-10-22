@@ -211,7 +211,7 @@ fn interpret_func_support(mcx: Mcx<'_>, defel: &DefElem<'_>) -> PgResult<Oid> {
     // "function k_int.xmlforest(internal) does not exist" — NOT the
     // lookup's 3F000 "schema does not exist" (missing_ok swallows the
     // schema check in FuncnameGetCandidates). pgrust used to pass false
-    // and leaked the 3F000 (regression test run b7c2944201...-59-13, seed
+    // and leaked the 3F000 (Antithesis r11 run b7c2944201...-59-13, seed
     // 2265144536387274920: `alter routine right support k_int .
     // xmlforest`).
     let proc_oid = parse_func::LookupFuncName(proc_name, 1, &arg_types, true)?;
@@ -446,9 +446,7 @@ fn resolve_type_oid<'mcx>(
         // TypeName carries its OID already.
         tn.typeOid
     } else {
-        // C DeconstructQualifiedName's default arm raises the
-        // improper-qualified-name error itself for 0 or >3 parts; collect
-        // every part so it can.
+        // DeconstructQualifiedName raises the 0 / >3 part error itself.
         let names: Vec<&str> =
             tn.names.iter().map(|n| n.as_string().expect("TypeName names").sval).collect();
         let (schemaname, typname) = catalog_namespace::DeconstructQualifiedName(&names)?;
@@ -471,22 +469,10 @@ fn resolve_type_oid<'mcx>(
                 syscache_seams::lookup_pg_type_oid_by_name::call(typname, namespace_id)
                     .map_err(at_tn)?
             }
-            None => {
-                let mut found = InvalidOid;
-                for &namespace_id in catalog_namespace::fetch_search_path(mcx, true)?.iter() {
-                    found =
-                        syscache_seams::lookup_pg_type_oid_by_name::call(typname, namespace_id)?;
-                    if found != InvalidOid {
-                        break;
-                    }
-                }
-                found
-            }
+            None => catalog_namespace::TypenameGetTypidExtended(typname, true)?,
         };
         typoid
     };
-    // LookupTypeNameExtended (parse_type.c): an array reference yields the
-    // array type of the base.
     let typoid = if typoid != InvalidOid && !tn.arrayBounds.is_nil() {
         lsyscache::get_array_type(typoid)?
     } else {
@@ -524,12 +510,13 @@ fn resolve_pct_type<'mcx>(
         4 => (Some(names[0]), Some(names[1]), names[2], names[3]),
         n => {
             let which = if n < 2 { "too few" } else { "too many" };
-            let joined = tn
-                .names
-                .iter()
-                .map(|x| x.as_string().expect("TypeName names").sval)
-                .collect::<Vec<_>>()
-                .join(".");
+            let mut joined = String::new();
+            for (i, x) in tn.names.iter().enumerate() {
+                if i > 0 {
+                    joined.push('.');
+                }
+                joined.push_str(x.as_string().expect("TypeName names").sval);
+            }
             return Err(at(
                 format!("improper %TYPE reference ({which} dotted names): {joined}"),
                 ERRCODE_SYNTAX_ERROR,
@@ -670,14 +657,14 @@ fn compute_return_type<'mcx>(
         let mut buf = [""; 4];
         let nnames = returnType.names.len();
         if !(1..=3).contains(&nnames) {
-            return Err(catalog_namespace::improper_qualified_name_joined(
-                returnType
-                    .names
-                    .iter()
-                    .map(|n| n.as_string().expect("TypeName names").sval)
-                    .collect::<Vec<_>>()
-                    .join("."),
-            ));
+            let mut joined = String::new();
+            for (i, n) in returnType.names.iter().enumerate() {
+                if i > 0 {
+                    joined.push('.');
+                }
+                joined.push_str(n.as_string().expect("TypeName names").sval);
+            }
+            return Err(catalog_namespace::improper_qualified_name_joined(joined));
         }
         for (i, n) in returnType.names.iter().enumerate() {
             buf[i] = n.as_string().expect("TypeName names").sval;
@@ -880,7 +867,7 @@ pub fn interpret_function_parameter_list<'mcx>(
                 "DEFAULT",
             )?;
             parse_collate::assign_expr_collations(mcx, pstate, def)?;
-            if !pstate.p_rtable.is_nil() || var_seams::contain_var_clause::call(def) {
+            if !pstate.p_rtable.is_nil() || var_seams::contain_var_clause::call(def)? {
                 return Err(Box::new(
                     (*err(
                         "cannot use table references in parameter default value".to_string(),
@@ -1395,7 +1382,7 @@ fn proconfig_entries(mcx: Mcx<'_>, d: datum::Datum) -> PgResult<Vec<String>> {
     };
     let image = detoast_seams::detoast_attr::call(mcx, raw)?;
     let elems = datum::array_build::deconstruct_array_image(mcx, &image, -1, false, b'i')?;
-    let mut out = Vec::with_capacity(elems.len());
+    let mut out = ::mcx::std_vec_with_capacity("commands", elems.len())?;
     for e in elems.iter() {
         let ep = e.as_usize() as *const u8;
         // SAFETY: by-ref text element datum inside the detoasted image.
@@ -1411,7 +1398,7 @@ fn entries_to_text_array<'mcx>(
     mcx: Mcx<'mcx>,
     entries: &[String],
 ) -> PgResult<mcx::PgVec<'mcx, u8>> {
-    let mut texts = Vec::with_capacity(entries.len());
+    let mut texts = ::mcx::std_vec_with_capacity("commands", entries.len())?;
     let mut elems: mcx::PgVec<'mcx, datum::Datum> = mcx::vec_with_capacity_in(mcx, entries.len())?;
     for e in entries {
         texts.push(varlena::cstring_to_text(mcx, e.as_bytes())?);
@@ -1844,9 +1831,12 @@ pub fn ExecuteDoStmt<'mcx>(
         atomic,
     };
     let mut flinfo = fmgr_core::fmgr_info(laninline)?;
-    types_fmgr::function_call1_coll(
+    // C runs the inline handler in the statement's CurrentMemoryContext; its void result needs none, the frame names one.
+    let call_cx = mcx::MemoryContext::new_bump("ExecuteDoStmt");
+    types_fmgr::function_call1_coll_in(
         &mut flinfo,
         types_core::InvalidOid,
+        call_cx.mcx(),
         datum::Datum::from_usize(&codeblock as *const _ as usize),
     )?;
     Ok(())
@@ -1944,6 +1934,9 @@ pub fn ExecuteCallStmt<'mcx>(
         n_exec: 0,
         param_callback: None,
         param_expanded: None,
+        param_rw: None,
+        param_ro_expanded: None,
+        extern_fetch: None,
     };
 
     if !atomic {
@@ -1952,6 +1945,11 @@ pub fn ExecuteCallStmt<'mcx>(
     }
 
     let mut slots = execexpr::EvalSlots::default();
+    // C functioncmds.c:2276: the argument estate outlives the procedure call.
+    let mut arg_states = Vec::new();
+    arg_states
+        .try_reserve(nargs)
+        .map_err(|_| mcx::oom_named("ExecuteCallStmt", nargs * core::mem::size_of::<execexpr::ExprState>()))?;
     for (i, arg) in fexpr.args.iter().enumerate() {
         // ExecPrepareExpr: expression_planner before ExecInitExpr.
         let arg = clauses::eval_const_expressions(mcx, arg)?;
@@ -1959,6 +1957,7 @@ pub fn ExecuteCallStmt<'mcx>(
         let mut state = execexpr::exec_init_expr(mcx, Some(arg), bind)?.expect("arg is Some");
         state.arm_result_mcx(mcx);
         fcinfo.args[i] = execexpr::exec_eval_expr(&mut state, &mut slots)?;
+        arg_states.push(state);
     }
 
     if !atomic {

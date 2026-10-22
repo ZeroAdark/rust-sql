@@ -1,0 +1,17 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT (g % 13)::text AS k, count(*), sum(g) FROM generate_series(1, 2000) g GROUP BY 1
+cols: k	count	sum
+[pg]
+2	154	153461
+9	154	154539
+4	154	153769
+11	154	154847
+12	153	153000
+10	154	154693
+7	154	154231
+3	154	153615
+6	154	154077
+0	153	153153
+5	154	153923
+1	154	153307
+8	154	154385

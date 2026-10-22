@@ -1,0 +1,10 @@
+-- regress-full-generated_virtual-007
+-- SELECT gtest1 FROM gtest1 ORDER BY a;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=32757 rti=1 am=heap index=32762
+    lanes Attr(1):byval8:w8:val
+  project (1=T_RowExpr, 2j=index.1)
+  outs 1=? 2=w4:val
+mapped: IndexOnlyScan

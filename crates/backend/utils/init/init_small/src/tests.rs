@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::sync::Once;
+use std::sync::{Mutex, MutexGuard, Once};
 
 use mcx::{Mcx, MemoryContext, PgString};
 use types_core::{
@@ -34,6 +34,12 @@ fn user_name<'mcx>(mcx: Mcx<'mcx>, roleid: Oid, _noerr: bool) -> PgResult<Option
     Ok(Some(PgString::from_str_in(&format!("role{roleid}"), mcx)?))
 }
 
+// data_directory_mode is process-wide, unlike the thread-local backend globals.
+fn data_directory_mode_lock() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn setup() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -52,8 +58,32 @@ fn setup() {
     });
 }
 
+// The log sink reads MyProcPort from inside any ereport: shared borrows must
+// nest under a shared borrow (authentication runs its whole exchange there).
+#[test]
+fn my_proc_port_shared_borrow_nests() {
+    std::thread::spawn(|| {
+        let sock = types_startup::ClientSocket { sock: -1, raddr: ip::SockAddr::zeroed() };
+        let mut port = types_startup::Port::new(&sock);
+        port.user_name = Some("alice".to_string());
+        globals::SetMyProcPort(port);
+        let seen = globals::WithMyProcPort(|outer| {
+            assert!(globals::HaveMyProcPort());
+            globals::WithMyProcPort(|inner| (outer.user_name.clone(), inner.user_name.clone()))
+        });
+        assert_eq!(seen, (Some("alice".to_string()), Some("alice".to_string())));
+        globals::WithMyProcPortMut(|p| p.database_name = Some("db".to_string()));
+        assert_eq!(globals::WithMyProcPort(|p| p.database_name.clone()).as_deref(), Some("db"));
+        globals::SessionMemTeardownPort();
+        assert!(!globals::HaveMyProcPort());
+    })
+    .join()
+    .unwrap();
+}
+
 #[test]
 fn defaults_match_c_initializers() {
+    let _mode = data_directory_mode_lock();
     assert_eq!(globals::FrontendProtocol(), 0);
     assert!(!globals::InterruptPending());
     assert!(!globals::QueryCancelPending());
@@ -369,12 +399,35 @@ mod wretain_state {
     }
 }
 
+// D334: a cancel cleared outside ProcessInterrupts takes the abort-class byte with it; a pending die keeps its byte.
+#[test]
+fn clear_query_cancel_pending_clears_the_abort_byte() {
+    std::thread::spawn(|| {
+        globals::SetQueryCancelPending(true);
+        globals::SetAbortPending(true);
+        globals::ClearQueryCancelPending();
+        assert!(!globals::QueryCancelPending());
+        assert!(!globals::AbortPending(), "the cancel's abort byte must go with it");
+
+        globals::SetProcDiePending(true);
+        globals::SetQueryCancelPending(true);
+        globals::SetAbortPending(true);
+        globals::ClearQueryCancelPending();
+        assert!(!globals::QueryCancelPending());
+        assert!(globals::AbortPending(), "a pending die keeps its byte");
+        assert!(globals::ProcDiePending());
+    })
+    .join()
+    .unwrap();
+}
+
 // data_directory_mode is PGC_INTERNAL: checkDataDir owns the global
 // (miscinit.c:428) and GUC initialization publishing the 0700 boot value
 // through the slot must not clobber a group-access (0750) cluster's mode.
 #[test]
 fn guc_slot_never_overwrites_data_directory_mode() {
     setup();
+    let _mode = data_directory_mode_lock();
     globals::set_data_directory_mode(0o750);
     guc_tables::vars::data_directory_mode.write(0o700);
     assert_eq!(guc_tables::vars::data_directory_mode.read(), 0o750);

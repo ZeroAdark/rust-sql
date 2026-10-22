@@ -130,7 +130,7 @@ pub fn CreateSchemaCommand<'mcx>(
     // it on error).
     let save_nestlevel = guc::NewGUCNestLevel();
     let mut pathbuf = String::from_utf8(
-        adt_quote::quote_identifier(mcx, schema_name.as_bytes())?.as_bytes().to_vec(),
+        ::mcx::std_vec_from_slice("schemacmds", &adt_quote::quote_identifier(mcx, schema_name.as_bytes())?.as_bytes())?,
     )
     .expect("identifier is UTF-8");
     let nsp = guc::GetConfigOption("search_path", false, false)?.unwrap_or_default();

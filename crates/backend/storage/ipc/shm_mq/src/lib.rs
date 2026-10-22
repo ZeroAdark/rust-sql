@@ -208,6 +208,13 @@ impl ShmMq {
         self.inc_bytes_written(bytes.len());
     }
 
+    // shm_mq_detach_callback's receiver leg (C parallel.c:991).
+    pub fn detach_receiver(&self) {
+        if let Some(me) = self.get_receiver() {
+            self.detach_internal(me);
+        }
+    }
+
     // `me` is the handle's attach-time identity, NOT MyProcNumber(): handles
     // are dropped during FATAL unwinds after the exit callbacks (ProcKill)
     // already released this thread's proc identity — C never hits this order
@@ -504,7 +511,13 @@ impl ShmMqHandle {
 
         if self.mqh_buffer.len() * MAXIMUM_ALIGNOF < nbytes {
             let newbuflen = usize::min(nbytes.next_power_of_two(), MAX_ALLOC_SIZE);
-            self.mqh_buffer.resize(newbuflen.div_ceil(MAXIMUM_ALIGNOF), 0);
+            // shm_mq.c: MemoryContextAlloc(mqh_context, newbuflen) — a failed
+            // reassembly-buffer allocation is ERROR 53200, never an abort.
+            let words = newbuflen.div_ceil(MAXIMUM_ALIGNOF);
+            self.mqh_buffer
+                .try_reserve_exact(words - self.mqh_buffer.len())
+                .map_err(|_| ::mcx::oom_named("shm_mq receive buffer", newbuflen))?;
+            self.mqh_buffer.resize(words, 0);
         }
 
         loop {

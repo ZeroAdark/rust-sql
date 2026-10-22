@@ -3,15 +3,22 @@
 //! per-thread buffer is authoritative and flush_ps_display is a no-op.
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-// ps_status.c non-CLOBBER_ARGV branch.
-pub const PS_BUFFER_SIZE: usize = 256;
+// ps_status.c PS_USE_CLOBBER_ARGV (Linux, macOS): ps_buffer_size is the
+// contiguous argv+environ area, measured by save_ps_display_args; 256 is the
+// non-CLOBBER size used before that. The per-thread buffer is capped.
+const PS_BUFFER_MAX: usize = 4096;
+static PS_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(256);
+
+pub fn ps_buffer_size() -> usize {
+    PS_BUFFER_SIZE.load(Ordering::Relaxed)
+}
 
 const DEFAULT_UPDATE_PROCESS_TITLE: bool = true;
 
 struct PsState {
-    buffer: [u8; PS_BUFFER_SIZE],
+    buffer: [u8; PS_BUFFER_MAX],
     cur_len: usize,
     fixed_size: usize,
     nosuffix_len: usize,
@@ -23,7 +30,7 @@ const _: () = assert!(!std::mem::needs_drop::<PsState>());
 thread_local! {
     static STATE: RefCell<PsState> = const {
         RefCell::new(PsState {
-            buffer: [0; PS_BUFFER_SIZE],
+            buffer: [0; PS_BUFFER_MAX],
             cur_len: 0,
             fixed_size: 0,
             nosuffix_len: 0,
@@ -44,6 +51,11 @@ pub fn set_update_process_title(value: bool) {
 }
 
 pub fn save_ps_display_args() {
+    // end_of_area - argv[0]: each argv and environ string plus its NUL,
+    // less the final NUL.
+    let area: usize = std::env::args_os().map(|a| a.len() + 1).sum::<usize>()
+        + std::env::vars_os().map(|(k, v)| k.len() + 1 + v.len() + 1).sum::<usize>();
+    PS_BUFFER_SIZE.store(area.saturating_sub(1).clamp(1, PS_BUFFER_MAX), Ordering::Relaxed);
     SAVED_ARGS.store(true, Ordering::Relaxed);
 }
 
@@ -61,8 +73,8 @@ fn update_ps_display_precheck(s: &PsState) -> bool {
 }
 
 // Bounded write at `at`, one byte reserved for C's NUL; returns the new end.
-fn copy_capped(buffer: &mut [u8; PS_BUFFER_SIZE], at: usize, src: &[u8]) -> usize {
-    let cap = PS_BUFFER_SIZE - 1;
+fn copy_capped(buffer: &mut [u8; PS_BUFFER_MAX], at: usize, src: &[u8]) -> usize {
+    let cap = ps_buffer_size() - 1;
     if at >= cap {
         return at;
     }
@@ -123,8 +135,9 @@ pub fn set_ps_display_suffix(suffix: &str) {
         }
 
         let len = suffix.len();
-        if s.cur_len + len + 1 >= PS_BUFFER_SIZE {
-            if s.cur_len < PS_BUFFER_SIZE - 1 {
+        let size = ps_buffer_size();
+        if s.cur_len + len + 1 >= size {
+            if s.cur_len < size - 1 {
                 s.buffer[s.cur_len] = b' ';
                 s.cur_len += 1;
                 s.cur_len = copy_capped(&mut s.buffer, s.cur_len, suffix.as_bytes());
@@ -170,7 +183,7 @@ pub fn set_ps_display_with_len(activity: &str, len: usize) {
 
         s.nosuffix_len = 0;
 
-        if s.fixed_size + len >= PS_BUFFER_SIZE {
+        if s.fixed_size + len >= ps_buffer_size() {
             s.cur_len = copy_capped(&mut s.buffer, s.fixed_size, activity.as_bytes());
         } else {
             s.buffer[s.fixed_size..s.fixed_size + len].copy_from_slice(activity.as_bytes());

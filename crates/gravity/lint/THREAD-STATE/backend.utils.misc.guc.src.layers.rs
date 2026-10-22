@@ -1,0 +1,2 @@
+backend/utils/misc/guc/src/layers.rs	SESSION_BASE	pgport	at:set_session_base	thread	the base this thread adopted (its started-with values), set at child bring-up or worker bind; only this thread's own reload pass advances it (adopt_current_base)
+backend/utils/misc/guc/src/layers.rs	QUERY_PIN	pgport	key:store mutation count	cache	the statement window's query pin, keyed on this thread's store mutation counter and dropped at set_session_base; hosts SessionCarry captures it at submit on the submitting thread

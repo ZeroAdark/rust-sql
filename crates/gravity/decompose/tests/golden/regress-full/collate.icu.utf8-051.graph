@@ -1,0 +1,11 @@
+-- regress-full-collate.icu.utf8-051
+-- SELECT relname FROM pg_class WHERE 'PG_CLASS'::text = relname COLLATE case_insensitive;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=1259 rti=1 am=heap
+    lanes Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op254(relabel19(v1.2), c25:'PG_CLASS')
+  project (1=v1.2)
+  outs 1=fx64:win/page
+mapped: SeqScan

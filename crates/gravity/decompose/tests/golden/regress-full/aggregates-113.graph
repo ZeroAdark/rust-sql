@@ -1,0 +1,9 @@
+-- regress-full-aggregates-113
+-- SELECT eatarray(rwagg(ARRAY[1.0::real])), eatarray(rwagg(ARRAY[1.0::real]));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn1193(T_SubscriptingRef, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x04\x00\x00\x00'))
+  outs 1=vl:call1193
+mapped: Result

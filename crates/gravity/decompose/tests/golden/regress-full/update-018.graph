@@ -1,0 +1,94 @@
+-- regress-full-update-018
+-- select tableoid::regclass::text COLLATE "C" partname, * from range_parted ORDER BY 1, 2, 3, 4, 5, 6;
+graph pipelines=8 breakers=7 init_plans=0 root=p7
+p0 node=2 eligible rows=600 end=breaker(slot=0 Sort)
+  nodes n2@0 n1@1 n0@3^
+  source range rel=26473 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Attr(5):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=relabel25(io25(relabel2205(v2.-6))), 2=v2.1, 3=v2.2, 4=v2.3, 5=v2.4, 6=v2.5)
+  append arm 0/7
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:Fp128@950,2+:Fp128@100,3+:I64,4+:Fp128/NumNormalized,5+:I32,6+:Fp128@100 form=runs
+  outs 1=vl:call46 2=vl:win/page 3=w8:val 4=vl:win/page 5=w8:val 6=vl:win/page
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w8:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker
+p1 node=3 eligible rows=600 end=breaker(slot=0 Sort)
+  nodes n3@0 n1@1 n0@3^
+  source range rel=26468 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Attr(5):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=relabel25(io25(relabel2205(v3.-6))), 2=v3.1, 3=v3.2, 4=v3.3, 5=v3.4, 6=v3.5)
+  append arm 1/7
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:Fp128@950,2+:Fp128@100,3+:I64,4+:Fp128/NumNormalized,5+:I32,6+:Fp128@100 form=runs
+  outs 1=vl:call46 2=vl:win/page 3=w8:val 4=vl:win/page 5=w8:val 6=vl:win/page
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w8:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker
+p2 node=4 eligible rows=600 end=breaker(slot=0 Sort)
+  nodes n4@0 n1@1 n0@3^
+  source range rel=26463 rti=4 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Attr(5):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=relabel25(io25(relabel2205(v4.-6))), 2=v4.1, 3=v4.2, 4=v4.3, 5=v4.4, 6=v4.5)
+  append arm 2/7
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:Fp128@950,2+:Fp128@100,3+:I64,4+:Fp128/NumNormalized,5+:I32,6+:Fp128@100 form=runs
+  outs 1=vl:call46 2=vl:win/page 3=w8:val 4=vl:win/page 5=w8:val 6=vl:win/page
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w8:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker
+p3 node=5 eligible rows=600 end=breaker(slot=0 Sort)
+  nodes n5@0 n1@1 n0@3^
+  source range rel=26491 rti=6 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Attr(5):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=relabel25(io25(relabel2205(v6.-6))), 2=v6.5, 3=v6.4, 4=v6.3, 5=v6.2, 6=v6.1)
+  append arm 3/7
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:Fp128@950,2+:Fp128@100,3+:I64,4+:Fp128/NumNormalized,5+:I32,6+:Fp128@100 form=runs
+  outs 1=vl:call46 2=vl:win/page 3=w8:val 4=vl:win/page 5=w8:val 6=vl:win/page
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w8:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker
+p4 node=6 eligible rows=600 end=breaker(slot=0 Sort)
+  nodes n6@0 n1@1 n0@3^
+  source range rel=26481 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val
+  project (1=relabel25(io25(relabel2205(v8.-6))), 2=v8.4, 3=v8.5, 4=v8.2, 5=v8.1, 6=v8.3)
+  append arm 4/7
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:Fp128@950,2+:Fp128@100,3+:I64,4+:Fp128/NumNormalized,5+:I32,6+:Fp128@100 form=runs
+  outs 1=vl:call46 2=vl:win/page 3=w8:val 4=vl:win/page 5=w8:val 6=vl:win/page
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w8:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker
+p5 node=7 eligible rows=600 end=breaker(slot=0 Sort)
+  nodes n7@0 n1@1 n0@3^
+  source range rel=26486 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val
+  project (1=relabel25(io25(relabel2205(v9.-6))), 2=v9.4, 3=v9.5, 4=v9.2, 5=v9.1, 6=v9.3)
+  append arm 5/7
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:Fp128@950,2+:Fp128@100,3+:I64,4+:Fp128/NumNormalized,5+:I32,6+:Fp128@100 form=runs
+  outs 1=vl:call46 2=vl:win/page 3=w8:val 4=vl:win/page 5=w8:val 6=vl:win/page
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w8:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker
+p6 node=8 eligible rows=600 end=breaker(slot=0 Sort)
+  nodes n8@0 n1@1 n0@3^
+  source range rel=26455 rti=10 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Attr(5):byval8:w8:val Offset:byval2:w2:val
+  project (1=relabel25(io25(relabel2205(v10.-6))), 2=v10.3, 3=v10.4, 4=v10.2, 5=v10.5, 6=v10.1)
+  append arm 6/7
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:Fp128@950,2+:Fp128@100,3+:I64,4+:Fp128/NumNormalized,5+:I32,6+:Fp128@100 form=runs
+  outs 1=vl:call46 2=vl:win/page 3=w8:val 4=vl:win/page 5=w8:val 6=vl:win/page
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w8:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker
+p7 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p6
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w8:val 4=vl:life/breaker 5=w4:val 6=vl:life/breaker
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128,Fp128,Fp128,I64,Fp128,Fp128,I32,Fp128,Fp128]->[Count@80] 88B order=1+,2+,3+,4+,5+,6+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128,Fp128,Fp128,I64,Fp128,Fp128,I32,Fp128,Fp128]->[Count@80] 88B order=1+,2+,3+,4+,5+,6+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128,Fp128,Fp128,I64,Fp128,Fp128,I32,Fp128,Fp128]->[Count@80] 88B order=1+,2+,3+,4+,5+,6+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p3 layout=[Fp128,Fp128,Fp128,Fp128,I64,Fp128,Fp128,I32,Fp128,Fp128]->[Count@80] 88B order=1+,2+,3+,4+,5+,6+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p4 layout=[Fp128,Fp128,Fp128,Fp128,I64,Fp128,Fp128,I32,Fp128,Fp128]->[Count@80] 88B order=1+,2+,3+,4+,5+,6+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p5 layout=[Fp128,Fp128,Fp128,Fp128,I64,Fp128,Fp128,I32,Fp128,Fp128]->[Count@80] 88B order=1+,2+,3+,4+,5+,6+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p6 layout=[Fp128,Fp128,Fp128,Fp128,I64,Fp128,Fp128,I32,Fp128,Fp128]->[Count@80] 88B order=1+,2+,3+,4+,5+,6+
+scan-lanes node=2 rti=2 rel=26473 tableoid
+scan-lanes node=3 rti=3 rel=26468 tableoid
+scan-lanes node=4 rti=4 rel=26463 tableoid
+scan-lanes node=5 rti=6 rel=26491 tableoid
+scan-lanes node=6 rti=8 rel=26481 tableoid
+scan-lanes node=7 rti=9 rel=26486 tableoid
+scan-lanes node=8 rti=10 rel=26455 tableoid
+mapped: Append SeqScan Sort

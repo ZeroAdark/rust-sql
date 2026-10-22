@@ -1,0 +1,46 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1v s1id s1del s2u s1c s2c s3sel
+step s1v: UPDATE rvs SET v = v + 1000 WHERE id = 7;
+step s1id: UPDATE rvs SET id = 2717 WHERE id = 17;
+step s1del: DELETE FROM rvs WHERE id = 27;
+step s2u: WITH w AS (UPDATE rvs t SET v = t.v + x.d FROM (VALUES (7, 1), (17, 2), (27, 3), (37, 4)) AS x(id, d) WHERE x.id = t.id RETURNING t.id, t.v) SELECT count(*), sum(v) FROM w; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+count| sum
+-----+----
+    2|1049
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, v FROM rvs WHERE id IN (7, 17, 27, 37, 2717) ORDER BY id;
+  id|   v
+----+----
+   7|1008
+  37|  41
+2717|  17
+(3 rows)
+
+
+starting permutation: s1v s1id s1del s2u s1r s2c s3sel
+step s1v: UPDATE rvs SET v = v + 1000 WHERE id = 7;
+step s1id: UPDATE rvs SET id = 2717 WHERE id = 17;
+step s1del: DELETE FROM rvs WHERE id = 27;
+step s2u: WITH w AS (UPDATE rvs t SET v = t.v + x.d FROM (VALUES (7, 1), (17, 2), (27, 3), (37, 4)) AS x(id, d) WHERE x.id = t.id RETURNING t.id, t.v) SELECT count(*), sum(v) FROM w; <waiting ...>
+step s1r: ROLLBACK;
+step s2u: <... completed>
+count|sum
+-----+---
+    4| 98
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, v FROM rvs WHERE id IN (7, 17, 27, 37, 2717) ORDER BY id;
+id| v
+--+--
+ 7| 8
+17|19
+27|30
+37|41
+(4 rows)
+

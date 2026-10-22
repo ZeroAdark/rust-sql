@@ -1,0 +1,13 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/plan.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	14
+macro	std::format	1
+method	pgrc_format::try_to_vec	1
+method	pgrc_format::try_vec	1
+method	std::clone::Clone::clone	14
+method	std::iter::Iterator::collect	5
+method	std::string::ToString::to_string	1
+method	std::vec::Vec::with_capacity	3
+type	std::string::String	4
+type	std::vec::Vec	11

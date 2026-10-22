@@ -1,0 +1,12 @@
+-- regress-full-gist-009
+-- explain (costs off) select lower(r) = repeat('7', 200)::numeric as lower_ok, upper(r) = repeat('8', 200)::numeric as upper_ok from gist_ios_tupdesc where r && numrange(null, null);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=27100 rti=1 am=heap index=27105 iam=gist
+    key att=2 op=3888 form=amop value=c3906:'B\x0f\x00\x00\x18'
+    recheck (op3888(index.2, c3906:'B\x0f\x00\x00\x18'))
+    lanes Attr(2):byref8:vl:win/page
+  project (1=op1752(fn3848(index.2), c1700:'1\x80a\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1ea\x1e'), 2=op1752(fn3849(index.2), c1700:'1\x80\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"\xb8"'))
+  outs 1=w1:val 2=w1:val
+mapped: IndexOnlyScan

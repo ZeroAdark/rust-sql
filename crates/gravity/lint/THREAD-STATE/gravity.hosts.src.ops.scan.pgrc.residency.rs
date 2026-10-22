@@ -1,0 +1,4 @@
+gravity/hosts/src/ops/scan/pgrc/residency.rs	RELEASE_REGISTERED	deps	exit	leader	once-per-thread flag: the relcache callback registered (ensure_release_registered)
+gravity/hosts/src/ops/scan/pgrc/residency.rs	ROAD_AT	deps	key:the GUC store mutation count (guc_store_mutations)	leader	the GUC store mutation count road_watch last looked at; the road-off text is re-read when it moves
+gravity/hosts/src/ops/scan/pgrc/residency.rs	ROAD_SEEN	deps	key:the GUC store mutation count (guc_store_mutations)	leader	the road-off GUC text seen at ROAD_AT; re-read when the mutation count moves; tier_salt hashes it
+gravity/hosts/src/ops/scan/pgrc/residency.rs	ROAD_SLOT	deps	exit	leader	the road-off GUC's registry slot, looked up once; each read checks it against the GUC store generation (get_config_option_at)

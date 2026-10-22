@@ -1,0 +1,22 @@
+[package]
+name = "dict_xsyn"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "dict_xsyn"
+path = "src/lib.rs"
+
+[dependencies]
+datum = { path = "../../_support/types/datum" }
+mcx = { path = "../../_support/mcx" }
+pg_qsort = { path = "../../_support/pg_qsort" }
+types_error = { path = "../../_support/types/types_error" }
+types_fmgr = { path = "../../_support/types/fmgr" }
+dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
+mbutils = { path = "../../backend/utils/mb/mbutils" }
+ts_locale = { path = "../../backend/tsearch/ts_locale" }
+pg_string = { path = "../../common/string" }
+
+[dev-dependencies]

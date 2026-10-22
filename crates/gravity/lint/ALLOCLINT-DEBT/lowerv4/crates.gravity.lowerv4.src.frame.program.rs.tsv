@@ -1,0 +1,13 @@
+path	crates/gravity/lowerv4/src/frame/program.rs
+growth	std::vec::Vec::push	4
+ir-only	<T as core::convert::Into<U>>::into	1
+macro	std::vec	1
+method	slice::sort_by_key	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	8
+method	std::iter::Iterator::partition	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	2
+type	std::rc::Rc	1
+type	std::vec::Vec	5

@@ -22,6 +22,7 @@ types_core = { path = "../../../_support/types/types_core" }
 types_dest = { path = "../../../_support/types/types_dest" }
 types_error = { path = "../../../_support/types/types_error" }
 types_storage = { path = "../../../_support/types/types_storage" }
+mcx = { path = "../../../_support/mcx" }
 
 [dev-dependencies]
 ipc_seams = { path = "../../storage/ipc/ipc_seams" }

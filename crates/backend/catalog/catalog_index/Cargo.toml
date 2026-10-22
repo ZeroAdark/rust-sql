@@ -4,6 +4,9 @@ version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+
 [dependencies]
 bloom_build = { path = "../../../contrib/bloom_build" }
 autovacuum_seams = { path = "../../postmaster/autovacuum_seams" }
@@ -29,6 +32,8 @@ inval = { path = "../../utils/cache/inval" }
 lmgr = { path = "../../storage/lmgr/lmgr" }
 guc = { path = "../../utils/misc/guc" }
 init_small = { path = "../../utils/init/init_small" }
+allpaths = { path = "../../optimizer/path/allpaths" }
+guc_tables = { path = "../../utils/misc/guc_tables" }
 lsyscache = { path = "../../utils/cache/lsyscache" }
 miscinit = { path = "../../utils/init/miscinit" }
 mcx = { path = "../../../_support/mcx" }
@@ -79,3 +84,4 @@ reloptions = { path = "../../access/common/reloptions" }
 types_fmgr = { path = "../../../_support/types/fmgr" }
 cache_syscache = { path = "../../utils/cache/cache_syscache" }
 indexam_seams = { path = "../../access/index/indexam_seams" }
+pgsync = { path = "../../../_support/pgsync" }

@@ -1,0 +1,11 @@
+-- regress-full-incremental_sort-013
+-- insert into t select mod(i,10),mod(i,10),i from generate_series(1,10000) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10000)]
+  project (1=fn941(v3.1, c23:10), 2=fn941(v3.1, c23:10), 3=v3.1)
+  write INSERT rel=31545 rti=1 natts=3 indexes=()
+  outs 1=w4:val 2=w4:val 3=w4:val
+mapped: ModifyTable FunctionScan

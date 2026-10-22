@@ -1,0 +1,10 @@
+-- regress-full-bit-003
+-- SELECT b, SUBSTRING(b FROM 2 FOR 4) AS sub_2_4, SUBSTRING(b FROM 7 FOR 13) AS sub_7_13, SUBSTRING(b FROM 6) AS sub_6 FROM BIT_TABLE;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2140 end=sink
+  nodes n0@0
+  source range rel=16560 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=fn1680(v1.1, c23:2, c23:4), 3=fn1680(v1.1, c23:7, c23:13), 4=fn1699(v1.1, c23:6))
+  outs 1=vl:win/page 2=vl:call1680 3=vl:call1680 4=vl:call1699
+mapped: SeqScan

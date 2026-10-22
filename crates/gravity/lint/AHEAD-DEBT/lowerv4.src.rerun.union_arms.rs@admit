@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/rerun/union_arms.rs	admit	licence	fn	a settled union: every arm fills its record in arm order before the emit's first row (rules A / B / arms / reads); S2k union under a nest filled once ahead of its owner [EFFECTS-ONLY; D1486,D3261,D3499,D3782]

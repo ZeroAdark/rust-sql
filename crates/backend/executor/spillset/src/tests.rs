@@ -50,7 +50,33 @@ fn setup_thread() {
     resowner_seams::set_current_resource_owner::call(owner);
 }
 
-fn scratch_datadir(tag: &str) -> (String, std::sync::MutexGuard<'static, ()>) {
+/// A test's scratch data directory: reads as its path (`Display`), and is removed with everything below it when dropped
+/// (the test's end, or a panic's unwind), so the suite leaves no pgrust_spillset_test_* in the temp dir.
+struct Scratch(String);
+
+impl std::fmt::Display for Scratch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn scratch_datadirs_leave_nothing_behind() {
+    let (dir, cwd) = scratch_datadir("gone");
+    std::fs::write(format!("{dir}/base/pgsql_tmp/f"), b"x").unwrap();
+    let path = dir.0.clone();
+    drop(dir);
+    drop(cwd);
+    assert!(!std::path::Path::new(&path).exists(), "{path} left behind");
+}
+
+fn scratch_datadir(tag: &str) -> (Scratch, std::sync::MutexGuard<'static, ()>) {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let guard = CWD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -60,7 +86,7 @@ fn scratch_datadir(tag: &str) -> (String, std::sync::MutexGuard<'static, ()>) {
     ));
     std::fs::create_dir_all(dir.join("base/pgsql_tmp")).unwrap();
     std::env::set_current_dir(&dir).unwrap();
-    (dir.to_str().unwrap().to_owned(), guard)
+    (Scratch(dir.to_str().unwrap().to_owned()), guard)
 }
 
 fn pattern(part: u32, epoch: u32, len: usize) -> Vec<u8> {
@@ -124,6 +150,38 @@ fn epoch_roundtrip_multi_part_multi_epoch() {
             }
         }
     }
+}
+
+/// gravity D3190: a part read from any byte offset is the part's bytes past it, across extents of several epochs
+/// (offsets inside an extent, at an extent's start, at the end, past it).
+#[test]
+fn read_part_at_reads_the_bytes_past_any_offset() {
+    setup_process();
+    setup_thread();
+    let (_dir, _cwd) = scratch_datadir("partat");
+    let ctx = mcx::MemoryContext::new("spillset-test");
+
+    let set = SpillSet::create().unwrap();
+    let mut f = SpillFile::new(Arc::clone(&set), SpillSet::file_name("run", 1, 0), 4);
+    let sizes = [9000usize, 100, 40000];
+    let mut whole = Vec::new();
+    for (e, size) in sizes.iter().enumerate() {
+        let mut w = f.begin_epoch(ctx.mcx()).unwrap();
+        w.write_part(1, &pattern(9, e as u32, 33)).unwrap();
+        w.write_part(2, &pattern(2, e as u32, *size)).unwrap();
+        whole.extend(pattern(2, e as u32, *size));
+        w.finish().unwrap();
+    }
+    let n = whole.len() as u64;
+    for at in [0u64, 1, 8999, 9000, 9001, 9099, 9100, 9101, 30000, n - 1] {
+        let mut r = f.read_part_at(ctx.mcx(), 2, at).unwrap().expect("bytes past the offset");
+        let got = r.read_to_end().unwrap();
+        r.close().unwrap();
+        assert_eq!(got, whole[at as usize..], "from byte {at}");
+    }
+    assert!(f.read_part_at(ctx.mcx(), 2, n).unwrap().is_none(), "nothing past the end");
+    assert!(f.read_part_at(ctx.mcx(), 2, n + 5).unwrap().is_none(), "nothing past the end");
+    assert!(f.read_part_at(ctx.mcx(), 3, 0).unwrap().is_none(), "an empty part");
 }
 
 #[test]
@@ -268,7 +326,7 @@ fn extent_claims_roundtrip() {
         }
         w.finish().unwrap();
     }
-    let xs = f.part_extents(2);
+    let xs = f.part_extents(2).unwrap();
     assert_eq!(xs.len(), 2, "one extent per contributing epoch");
     let mut got = Vec::new();
     for x in &xs {
@@ -301,4 +359,203 @@ fn never_spilled_file_is_absent() {
     for part in 0..4 {
         assert!(f.read_part(ctx.mcx(), part).unwrap().is_none());
     }
+}
+
+fn epoch(mcx: mcx::Mcx<'_>, f: &mut SpillFile, len: usize) -> types_error::PgResult<()> {
+    let mut w = f.begin_epoch(mcx)?;
+    w.write_part(0, &pattern(0, 0, len))?;
+    w.finish()
+}
+
+/// Descriptors this process holds open on a file whose path contains `name`.
+#[cfg(target_os = "linux")]
+fn open_descriptors_on(name: &str) -> usize {
+    std::fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|e| std::fs::read_link(e.ok()?.path()).ok())
+        .filter(|target| target.to_string_lossy().contains(name))
+        .count()
+}
+
+/// D2570: a spill file counts against temp_file_limit until it is deleted, not only while an epoch has it open. At W8
+/// a spill is split over the workers' files, each closed between epochs, so 53400 fired only when enough epochs
+/// overlapped (load made it miss). Made deterministic: the leader's file A sits closed while a claim thread's file B,
+/// charged to the leader's account, grows past the limit with it. A reopened for its next epoch is not charged twice;
+/// B's failed epoch closes its file (it was left open on the pool thread); the deletes credit both.
+#[test]
+fn temp_file_limit_counts_a_closed_spill_file_once() {
+    setup_process();
+    setup_thread();
+    let (_dir, _cwd) = scratch_datadir("d2570");
+    let ctx = mcx::MemoryContext::new("spillset-test");
+    let leader = fd::vfd::temp_account();
+    let base = leader.load(Ordering::Relaxed);
+    let charged = || leader.load(Ordering::Relaxed) - base;
+    let saved = guc_tables::vars::temp_file_limit.read();
+    guc_tables::vars::temp_file_limit.write(1024); // kB
+
+    let set = SpillSet::create().unwrap();
+    let mut a = SpillFile::new(Arc::clone(&set), SpillSet::file_name("d2570", 1, 0), 1);
+    let b_name = SpillSet::file_name("d2570", 1, 1);
+    let mut b = SpillFile::new(Arc::clone(&set), b_name.clone(), 1);
+    epoch(ctx.mcx(), &mut a, 300_000).unwrap();
+    epoch(ctx.mcx(), &mut a, 300_000).unwrap();
+    assert_eq!(charged(), 600_000, "closed between its epochs, A stays charged, each byte once");
+    epoch(ctx.mcx(), &mut a, 100_000).unwrap();
+    assert_eq!(charged(), 700_000, "reopened, A's first 600 kB are not charged again (they would pass 1 MB)");
+
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            setup_thread();
+            // a claim runs with the leader's temp_file_limit and charges the leader's account (hosts SessionCarry)
+            let own_limit = guc_tables::vars::temp_file_limit.read();
+            guc_tables::vars::temp_file_limit.write(1024);
+            let prev = fd::vfd::charge_temp_to(Some(Arc::clone(&leader)));
+            let claim = mcx::MemoryContext::new("spillset-claim");
+            epoch(claim.mcx(), &mut b, 200_000).unwrap();
+            let err = epoch(claim.mcx(), &mut b, 200_000).unwrap_err();
+            assert_eq!(
+                err.sqlstate(),
+                types_error::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED,
+                "closed A's 700 kB + B's 400 kB pass 1 MB"
+            );
+            #[cfg(target_os = "linux")]
+            assert_eq!(open_descriptors_on(&b_name), 0, "the failed epoch closed its file");
+            fd::vfd::charge_temp_to(prev);
+            guc_tables::vars::temp_file_limit.write(own_limit);
+        });
+    });
+    guc_tables::vars::temp_file_limit.write(saved);
+
+    let b_bytes = charged() - 700_000;
+    assert!(b_bytes >= 200_000, "B's committed epoch and the failed one's written blocks stay charged");
+    a.delete().unwrap();
+    assert_eq!(charged(), b_bytes, "A's delete credits it");
+    b.delete().unwrap();
+    assert_eq!(charged(), 0, "B's delete credits it");
+}
+
+/// spillopt #3: spans of 32 KiB and more go to the file without the 8 KB buffer (`BufFile::write_through`) and come back
+/// straight into the reader's buffer (`read_through_exact`), interleaved with small spans that take the buffer; every
+/// part reads back byte-exact whatever the reader's buffer size and start offset (small, unaligned, a buffer's
+/// leftover then a long read, a read crossing extents of two epochs).
+#[test]
+fn long_spans_bypass_the_buffer_and_read_back_exact() {
+    setup_process();
+    setup_thread();
+    let (_dir, _cwd) = scratch_datadir("through");
+    let ctx = mcx::MemoryContext::new("spillset-test");
+
+    let set = SpillSet::create().unwrap();
+    let mut f = SpillFile::new(Arc::clone(&set), SpillSet::file_name("agg", 2, 1), 4);
+    // per epoch, per part: spans written one after another (small, long, unaligned long, small)
+    // epoch 0 by `write_part`, the others by `write_parts` (epoch 3: 450 short spans, past PG_IOV_MAX per gathered write)
+    let many = [500usize; 150];
+    let spans: [&[usize]; 4] = [&[100, 40_000, 70_001, 9], &[65_536, 3, 32_768], &[8191, 8193, 200_000], &many];
+    let mut expect: Vec<Vec<u8>> = vec![Vec::new(); 4];
+    for (e, sizes) in spans.iter().enumerate() {
+        let mut w = f.begin_epoch(ctx.mcx()).unwrap();
+        let mut batch: Vec<(u32, Vec<u8>)> = Vec::new();
+        for part in [0u32, 1, 3] {
+            for (k, &n) in sizes.iter().enumerate() {
+                let b = pattern(part, (e * 1000 + k) as u32, n);
+                expect[part as usize].extend_from_slice(&b);
+                if e == 0 {
+                    w.write_part(part, &b).unwrap();
+                } else {
+                    batch.push((part, b));
+                }
+            }
+        }
+        let parts: Vec<(u32, &[u8])> = batch.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+        w.write_parts(&parts).unwrap();
+        w.finish().unwrap();
+    }
+    assert_eq!(f.epochs(), 4);
+    for part in 0..4u32 {
+        let want = &expect[part as usize];
+        assert_eq!(f.part_len(part), want.len() as u64, "part {part}");
+        if want.is_empty() {
+            assert!(f.read_part(ctx.mcx(), part).unwrap().is_none());
+            continue;
+        }
+        for bufsize in [7usize, 8192, 33_000, 100_000, 1 << 20] {
+            for start in [0u64, 1, 8191, 40_100, 110_101] {
+                let Some(mut r) = f.read_part_at(ctx.mcx(), part, start).unwrap() else { panic!("part {part} past {start}") };
+                let mut got = Vec::new();
+                let mut buf = vec![0u8; bufsize];
+                loop {
+                    let n = r.read(&mut buf).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    got.extend_from_slice(&buf[..n]);
+                }
+                r.close().unwrap();
+                assert!(got == want[start as usize..], "part {part} buffer {bufsize} from {start}");
+            }
+        }
+    }
+}
+
+/// gravity D4215: `read_each` asks before every piece past the first (one per extent), a false answer stops the read at
+/// the end of the extent it read, and a read continued after a stop gives the rest: the part's bytes, whatever the buffer.
+#[test]
+fn read_each_asks_between_extents_and_a_stop_ends_the_read_at_an_extents_end() {
+    setup_process();
+    setup_thread();
+    let (_dir, _cwd) = scratch_datadir("each");
+    let ctx = mcx::MemoryContext::new("spillset-test");
+
+    let set = SpillSet::create().unwrap();
+    let mut f = SpillFile::new(Arc::clone(&set), SpillSet::file_name("run", 1, 0), 4);
+    let sizes = [9000usize, 100, 40000];
+    let mut whole = Vec::new();
+    for (e, size) in sizes.iter().enumerate() {
+        let mut w = f.begin_epoch(ctx.mcx()).unwrap();
+        w.write_part(1, &pattern(9, e as u32, 33)).unwrap();
+        w.write_part(2, &pattern(2, e as u32, *size)).unwrap();
+        whole.extend(pattern(2, e as u32, *size));
+        w.finish().unwrap();
+    }
+    let mut buf = vec![0u8; 65536];
+
+    let mut r = f.read_part(ctx.mcx(), 2).unwrap().expect("has bytes");
+    let mut asks = 0;
+    let got = r.read_each(&mut buf, &mut || {
+        asks += 1;
+        true
+    });
+    assert_eq!(got.unwrap(), (whole.len(), false));
+    assert_eq!(asks, 2, "one ask before each extent past the first");
+    assert_eq!(buf[..whole.len()], whole[..]);
+    r.close().unwrap();
+
+    // stopped at every ask: one extent a call, the part's bytes in order
+    let mut r = f.read_part(ctx.mcx(), 2).unwrap().expect("has bytes");
+    let (mut got, mut calls) = (Vec::new(), Vec::new());
+    loop {
+        let (n, stopped) = r.read_each(&mut buf, &mut || false).unwrap();
+        if n == 0 {
+            assert!(!stopped, "the end is no stop");
+            break;
+        }
+        calls.push((n, stopped));
+        got.extend_from_slice(&buf[..n]);
+    }
+    r.close().unwrap();
+    assert_eq!(calls, vec![(9000, true), (100, true), (40000, false)]);
+    assert_eq!(got, whole);
+
+    // a buffer shorter than an extent: no ask inside an extent
+    let mut r = f.read_part(ctx.mcx(), 2).unwrap().expect("has bytes");
+    let mut asks = 0;
+    let got = r.read_each(&mut buf[..5000], &mut || {
+        asks += 1;
+        false
+    });
+    assert_eq!(got.unwrap(), (5000, false));
+    assert_eq!(asks, 0);
+    assert_eq!(buf[..5000], whole[..5000]);
+    r.close().unwrap();
 }

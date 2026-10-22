@@ -1,0 +1,15 @@
+[package]
+name = "mempolicy"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+# The memory policy: every "how much / who / when" decision about memory, as plain functions of a snapshot and one table
+# of constants (src/lib.rs). It depends on nothing in Gravity or the backend, so every layer can call it.
+[lib]
+name = "mempolicy"
+path = "src/lib.rs"
+
+[dependencies]
+memledger = { path = "../memledger" }
+pgsync = { path = "../pgsync" }

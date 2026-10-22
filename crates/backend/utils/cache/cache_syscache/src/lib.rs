@@ -78,6 +78,16 @@ pub fn InitCatalogCache() -> PgResult<()> {
         let n = a.n_supporting;
         a.n_supporting = sort_unique(&mut a.supporting_oids[..n]);
         a.initialized = true;
+        // D4682: the catalog caches InitCatCache registered go with the session's teardown; a reused thread's next
+        // session runs InitCatalogCache again, as a fresh thread does.
+        ::mcx::register_session_cleanup(Box::new(|| {
+            let _ = ARRAYS.try_with(|cell| {
+                let mut a = cell.borrow_mut();
+                a.initialized = false;
+                a.n_relation = 0;
+                a.n_supporting = 0;
+            });
+        }));
         Ok(())
     })
 }
@@ -208,6 +218,19 @@ pub fn SearchSysCacheCopy<'mcx>(
     let copy = heaptuple::heap_copytuple(mcx, &tuple.tuple())?;
     ReleaseSysCache(tuple);
     Ok(Some(copy))
+}
+
+pub fn SearchSysCacheLockedCopy1<'mcx>(
+    mcx: Mcx<'mcx>,
+    cache_id: i32,
+    key1: SysCacheKey<'_>,
+) -> PgResult<Option<heaptuple::HeapTuple<'mcx>>> {
+    let Some(tuple) = SearchSysCacheLocked1(cache_id, key1)? else {
+        return Ok(None);
+    };
+    let copy = heaptuple::heap_copytuple(mcx, &tuple.tuple());
+    ReleaseSysCache(tuple);
+    copy.map(Some)
 }
 
 pub fn SearchSysCacheExists(

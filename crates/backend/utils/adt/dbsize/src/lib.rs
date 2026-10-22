@@ -23,7 +23,8 @@ fn invalid_size_msg(s: &[u8]) -> PgError {
     match core::str::from_utf8(s) {
         Ok(s) => PgError::error(format!("invalid size: \"{s}\"")),
         Err(_) => {
-            let mut msg = b"invalid size: \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"invalid size: \"");
             msg.extend_from_slice(s);
             msg.push(b'"');
             PgError::error_raw_message(msg)
@@ -44,7 +45,8 @@ fn invalid_unit(arg: &[u8], unit: &[u8]) -> Box<PgError> {
     let e = match core::str::from_utf8(unit) {
         Ok(unit) => e.with_detail(format!("Invalid size unit: \"{unit}\".")),
         Err(_) => {
-            let mut detail = b"Invalid size unit: \"".to_vec();
+            let mut detail = Vec::new();
+            detail.extend_from_slice(b"Invalid size unit: \"");
             detail.extend_from_slice(unit);
             detail.extend_from_slice(b"\".");
             e.with_detail_raw(detail)
@@ -59,6 +61,7 @@ fn invalid_unit(arg: &[u8], unit: &[u8]) -> Box<PgError> {
 
 pub fn pg_size_bytes(arg: impl AsRef<[u8]>) -> PgResult<i64> {
     let arg = arg.as_ref();
+    let arg = &arg[..arg.iter().position(|&b| b == 0).unwrap_or(arg.len())];
     let s = arg;
     let mut p = 0;
     while p < s.len() && c_isspace(s[p]) {

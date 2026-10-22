@@ -1,0 +1,1 @@
+array_agg(g::numeric) over a hashed group (CREATE TABLE AS agg_hash_4): every need built once D798 part 1 keeps the hosted state in the keyed record; the rig catalog cannot answer the output type of the created table's column (an output type the catalog does not know); the server runner judges it

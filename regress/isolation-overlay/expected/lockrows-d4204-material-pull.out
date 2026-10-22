@@ -1,0 +1,44 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2b s2w2 s1nw s2c
+step s2b: BEGIN;
+step s2w2: SELECT id FROM lmw WHERE id = 2 FOR UPDATE;
+id
+--
+ 2
+(1 row)
+
+step s1nw: SELECT s.id, w.id, w.name FROM (SELECT id FROM lmj WHERE state = 'ready' ORDER BY id LIMIT 3) s, (SELECT id, name FROM lmw ORDER BY id LIMIT 2) w FOR UPDATE NOWAIT;
+ERROR:  character with byte sequence 0xe2 0x82 0xac in encoding "UTF8" has no equivalent in encoding "LATIN1"
+step s2c: COMMIT;
+
+starting permutation: s2b s2w2 s1w s2s1 s2c
+step s2b: BEGIN;
+step s2w2: SELECT id FROM lmw WHERE id = 2 FOR UPDATE;
+id
+--
+ 2
+(1 row)
+
+step s1w: SELECT s.id, w.id, w.name FROM (SELECT id FROM lmj WHERE state = 'ready' ORDER BY id LIMIT 3) s, (SELECT id, name FROM lmw ORDER BY id LIMIT 2) w FOR UPDATE;
+ERROR:  character with byte sequence 0xe2 0x82 0xac in encoding "UTF8" has no equivalent in encoding "LATIN1"
+step s2s1: SELECT id FROM lmj WHERE id = 4 FOR UPDATE;
+id
+--
+ 4
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s3q
+step s3q: SELECT s.id, w.id, w.name FROM (SELECT id FROM lmj WHERE state = 'ready' ORDER BY id LIMIT 3) s, (SELECT id, name FROM lmw ORDER BY id LIMIT 2) w FOR UPDATE;
+id|id|name    
+--+--+--------
+ 4| 1|a-€   
+ 4| 2|worker-2
+ 8| 1|a-€   
+ 8| 2|worker-2
+12| 1|a-€   
+12| 2|worker-2
+(6 rows)
+

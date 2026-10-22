@@ -1,0 +1,229 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2e s2c
+step s2e: EXPLAIN (COSTS OFF) WITH j AS (DELETE FROM gw_jobs WHERE id = 5 AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = NULL, locked_at = NULL, job_count = gw_job_queues.job_count - 1 FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1';
+QUERY PLAN                                                     
+---------------------------------------------------------------
+Update on gw_job_queues                                        
+  CTE j                                                        
+    ->  Delete on gw_jobs                                      
+          ->  Seq Scan on gw_jobs                              
+                Filter: ((id = 5) AND (locked_by = 'w1'::text))
+  ->  Nested Loop                                              
+        Join Filter: (gw_job_queues.queue_name = j.queue_name) 
+        ->  Seq Scan on gw_job_queues                          
+              Filter: (locked_by = 'w1'::text)                 
+        ->  CTE Scan on j                                      
+(10 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1q s2c1 s1c s2c s3sel
+s1: WARNING:  there is already a transaction in progress
+step s1q: UPDATE gw_job_queues SET job_count = job_count + 100 WHERE queue_name = 'q3';
+step s2c1: WITH j AS (DELETE FROM gw_jobs WHERE id = 5 AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = NULL, locked_at = NULL, job_count = gw_job_queues.job_count - 1 FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1' RETURNING gw_job_queues.queue_name, gw_job_queues.job_count, gw_job_queues.locked_by; <waiting ...>
+step s1c: COMMIT;
+step s2c1: <... completed>
+queue_name|job_count|locked_by
+----------+---------+---------
+q3        |      109|         
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT * FROM gw_job_queues WHERE queue_name IN ('q1', 'q3') ORDER BY 1; SELECT id, queue_name, attempts, locked_by, last_error FROM gw_jobs WHERE id IN (5, 9, 11) ORDER BY id;
+queue_name|job_count|locked_at                   |locked_by
+----------+---------+----------------------------+---------
+q1        |       10|Wed Dec 31 16:00:00 2025 PST|w9       
+q3        |      109|                            |         
+(2 rows)
+
+id|queue_name|attempts|locked_by|last_error
+--+----------+--------+---------+----------
+ 9|q1        |       0|w1       |          
+11|q3        |       2|w1       |          
+(2 rows)
+
+
+starting permutation: s1l s2c1 s1c s2c s3sel
+step s1l: UPDATE gw_job_queues SET locked_by = 'w2' WHERE queue_name = 'q3';
+step s2c1: WITH j AS (DELETE FROM gw_jobs WHERE id = 5 AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = NULL, locked_at = NULL, job_count = gw_job_queues.job_count - 1 FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1' RETURNING gw_job_queues.queue_name, gw_job_queues.job_count, gw_job_queues.locked_by; <waiting ...>
+step s1c: COMMIT;
+step s2c1: <... completed>
+queue_name|job_count|locked_by
+----------+---------+---------
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT * FROM gw_job_queues WHERE queue_name IN ('q1', 'q3') ORDER BY 1; SELECT id, queue_name, attempts, locked_by, last_error FROM gw_jobs WHERE id IN (5, 9, 11) ORDER BY id;
+queue_name|job_count|locked_at                   |locked_by
+----------+---------+----------------------------+---------
+q1        |       10|Wed Dec 31 16:00:00 2025 PST|w9       
+q3        |       10|Wed Dec 31 16:00:00 2025 PST|w2       
+(2 rows)
+
+id|queue_name|attempts|locked_by|last_error
+--+----------+--------+---------+----------
+ 9|q1        |       0|w1       |          
+11|q3        |       2|w1       |          
+(2 rows)
+
+
+starting permutation: s1d s2c1 s1c s2c s3sel
+step s1d: DELETE FROM gw_job_queues WHERE queue_name = 'q3';
+step s2c1: WITH j AS (DELETE FROM gw_jobs WHERE id = 5 AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = NULL, locked_at = NULL, job_count = gw_job_queues.job_count - 1 FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1' RETURNING gw_job_queues.queue_name, gw_job_queues.job_count, gw_job_queues.locked_by; <waiting ...>
+step s1c: COMMIT;
+step s2c1: <... completed>
+queue_name|job_count|locked_by
+----------+---------+---------
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT * FROM gw_job_queues WHERE queue_name IN ('q1', 'q3') ORDER BY 1; SELECT id, queue_name, attempts, locked_by, last_error FROM gw_jobs WHERE id IN (5, 9, 11) ORDER BY id;
+queue_name|job_count|locked_at                   |locked_by
+----------+---------+----------------------------+---------
+q1        |       10|Wed Dec 31 16:00:00 2025 PST|w9       
+(1 row)
+
+id|queue_name|attempts|locked_by|last_error
+--+----------+--------+---------+----------
+ 9|q1        |       0|w1       |          
+11|q3        |       2|w1       |          
+(2 rows)
+
+
+starting permutation: s1q s2c1 s1a s2c s3sel
+step s1q: UPDATE gw_job_queues SET job_count = job_count + 100 WHERE queue_name = 'q3';
+step s2c1: WITH j AS (DELETE FROM gw_jobs WHERE id = 5 AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = NULL, locked_at = NULL, job_count = gw_job_queues.job_count - 1 FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1' RETURNING gw_job_queues.queue_name, gw_job_queues.job_count, gw_job_queues.locked_by; <waiting ...>
+step s1a: ROLLBACK;
+step s2c1: <... completed>
+queue_name|job_count|locked_by
+----------+---------+---------
+q3        |        9|         
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT * FROM gw_job_queues WHERE queue_name IN ('q1', 'q3') ORDER BY 1; SELECT id, queue_name, attempts, locked_by, last_error FROM gw_jobs WHERE id IN (5, 9, 11) ORDER BY id;
+queue_name|job_count|locked_at                   |locked_by
+----------+---------+----------------------------+---------
+q1        |       10|Wed Dec 31 16:00:00 2025 PST|w9       
+q3        |        9|                            |         
+(2 rows)
+
+id|queue_name|attempts|locked_by|last_error
+--+----------+--------+---------+----------
+ 9|q1        |       0|w1       |          
+11|q3        |       2|w1       |          
+(2 rows)
+
+
+starting permutation: s1j s2c1 s1c s2c s3sel
+step s1j: UPDATE gw_jobs SET locked_by = 'w2' WHERE id = 5;
+step s2c1: WITH j AS (DELETE FROM gw_jobs WHERE id = 5 AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = NULL, locked_at = NULL, job_count = gw_job_queues.job_count - 1 FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1' RETURNING gw_job_queues.queue_name, gw_job_queues.job_count, gw_job_queues.locked_by; <waiting ...>
+step s1c: COMMIT;
+step s2c1: <... completed>
+queue_name|job_count|locked_by
+----------+---------+---------
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT * FROM gw_job_queues WHERE queue_name IN ('q1', 'q3') ORDER BY 1; SELECT id, queue_name, attempts, locked_by, last_error FROM gw_jobs WHERE id IN (5, 9, 11) ORDER BY id;
+queue_name|job_count|locked_at                   |locked_by
+----------+---------+----------------------------+---------
+q1        |       10|Wed Dec 31 16:00:00 2025 PST|w9       
+q3        |       10|Wed Dec 31 16:00:00 2025 PST|w1       
+(2 rows)
+
+id|queue_name|attempts|locked_by|last_error
+--+----------+--------+---------+----------
+ 5|q3        |       2|w2       |          
+ 9|q1        |       0|w1       |          
+11|q3        |       2|w1       |          
+(3 rows)
+
+
+starting permutation: s1q s2f s1c s2c s3sel
+step s1q: UPDATE gw_job_queues SET job_count = job_count + 100 WHERE queue_name = 'q3';
+step s2f: WITH j AS (UPDATE gw_jobs SET attempts = attempts + 1, last_error = 'boom', locked_by = NULL, locked_at = NULL WHERE id = 5 AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = j.task_identifier || ':' || j.attempts, locked_at = NULL FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1' RETURNING gw_job_queues.queue_name, gw_job_queues.locked_by; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+queue_name|locked_by
+----------+---------
+q3        |resize:3 
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT * FROM gw_job_queues WHERE queue_name IN ('q1', 'q3') ORDER BY 1; SELECT id, queue_name, attempts, locked_by, last_error FROM gw_jobs WHERE id IN (5, 9, 11) ORDER BY id;
+queue_name|job_count|locked_at                   |locked_by
+----------+---------+----------------------------+---------
+q1        |       10|Wed Dec 31 16:00:00 2025 PST|w9       
+q3        |      110|                            |resize:3 
+(2 rows)
+
+id|queue_name|attempts|locked_by|last_error
+--+----------+--------+---------+----------
+ 5|q3        |       3|         |boom      
+ 9|q1        |       0|w1       |          
+11|q3        |       2|w1       |          
+(3 rows)
+
+
+starting permutation: s1l s2f s1c s2c s3sel
+step s1l: UPDATE gw_job_queues SET locked_by = 'w2' WHERE queue_name = 'q3';
+step s2f: WITH j AS (UPDATE gw_jobs SET attempts = attempts + 1, last_error = 'boom', locked_by = NULL, locked_at = NULL WHERE id = 5 AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = j.task_identifier || ':' || j.attempts, locked_at = NULL FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1' RETURNING gw_job_queues.queue_name, gw_job_queues.locked_by; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+queue_name|locked_by
+----------+---------
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT * FROM gw_job_queues WHERE queue_name IN ('q1', 'q3') ORDER BY 1; SELECT id, queue_name, attempts, locked_by, last_error FROM gw_jobs WHERE id IN (5, 9, 11) ORDER BY id;
+queue_name|job_count|locked_at                   |locked_by
+----------+---------+----------------------------+---------
+q1        |       10|Wed Dec 31 16:00:00 2025 PST|w9       
+q3        |       10|Wed Dec 31 16:00:00 2025 PST|w2       
+(2 rows)
+
+id|queue_name|attempts|locked_by|last_error
+--+----------+--------+---------+----------
+ 5|q3        |       3|         |boom      
+ 9|q1        |       0|w1       |          
+11|q3        |       2|w1       |          
+(3 rows)
+
+
+starting permutation: s1q s2b s1c s2c s3sel
+step s1q: UPDATE gw_job_queues SET job_count = job_count + 100 WHERE queue_name = 'q3';
+step s2b: WITH j AS (DELETE FROM gw_jobs WHERE id = ANY (ARRAY[5, 9, 11]::bigint[]) AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = NULL, locked_at = NULL, job_count = gw_job_queues.job_count - 1 FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1'; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT * FROM gw_job_queues WHERE queue_name IN ('q1', 'q3') ORDER BY 1; SELECT id, queue_name, attempts, locked_by, last_error FROM gw_jobs WHERE id IN (5, 9, 11) ORDER BY id;
+queue_name|job_count|locked_at                   |locked_by
+----------+---------+----------------------------+---------
+q1        |       10|Wed Dec 31 16:00:00 2025 PST|w9       
+q3        |      109|                            |         
+(2 rows)
+
+id|queue_name|attempts|locked_by|last_error
+--+----------+--------+---------+----------
+(0 rows)
+
+
+starting permutation: s1l s2b s1c s2c s3sel
+step s1l: UPDATE gw_job_queues SET locked_by = 'w2' WHERE queue_name = 'q3';
+step s2b: WITH j AS (DELETE FROM gw_jobs WHERE id = ANY (ARRAY[5, 9, 11]::bigint[]) AND locked_by = 'w1' RETURNING *) UPDATE gw_job_queues SET locked_by = NULL, locked_at = NULL, job_count = gw_job_queues.job_count - 1 FROM j WHERE gw_job_queues.queue_name = j.queue_name AND gw_job_queues.locked_by = 'w1'; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT * FROM gw_job_queues WHERE queue_name IN ('q1', 'q3') ORDER BY 1; SELECT id, queue_name, attempts, locked_by, last_error FROM gw_jobs WHERE id IN (5, 9, 11) ORDER BY id;
+queue_name|job_count|locked_at                   |locked_by
+----------+---------+----------------------------+---------
+q1        |       10|Wed Dec 31 16:00:00 2025 PST|w9       
+q3        |       10|Wed Dec 31 16:00:00 2025 PST|w2       
+(2 rows)
+
+id|queue_name|attempts|locked_by|last_error
+--+----------+--------+---------+----------
+(0 rows)
+

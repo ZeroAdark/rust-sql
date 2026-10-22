@@ -22,8 +22,8 @@ pub struct MultiSort {
 }
 
 impl MultiSort {
-    pub fn init(ndims: usize) -> MultiSort {
-        MultiSort { dims: Vec::with_capacity(ndims) }
+    pub fn init(ndims: usize) -> PgResult<MultiSort> {
+        Ok(MultiSort { dims: ::mcx::std_vec_with_capacity("statistics", ndims)? })
     }
 
     pub fn add_dimension(&mut self, typid: Oid, collation: Oid) -> PgResult<()> {

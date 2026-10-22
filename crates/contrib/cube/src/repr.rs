@@ -111,25 +111,27 @@ impl<'a> CubeView<'a> {
     }
 }
 
+use types_error::PgResult;
+
 /// Build a full cube image (WITH the 4-byte varlena header) from raw slots.
 /// `coords` carries `dim` values for a point, `2*dim` otherwise.
-pub fn build_image(dim: usize, point: bool, coords: &[f64]) -> Vec<u8> {
+pub fn build_image(dim: usize, point: bool, coords: &[f64]) -> PgResult<Vec<u8>> {
     debug_assert_eq!(coords.len(), if point { dim } else { 2 * dim });
     let size = if point { point_size(dim) } else { cube_size(dim) };
-    let mut img = Vec::with_capacity(size);
+    let mut img = ::mcx::std_vec_with_capacity("cube", size)?;
     img.extend_from_slice(&datum::varlena::set_varsize_4b(size));
     let header = (dim as u32 & DIM_MASK) | if point { POINT_BIT } else { 0 };
     img.extend_from_slice(&header.to_ne_bytes());
     for &c in coords {
         img.extend_from_slice(&c.to_ne_bytes());
     }
-    img
+    Ok(img)
 }
 
 /// Shrink a full (ll+ur) coordinate set to a point image when every ur
 /// equals its ll — C's "resize the cube we constructed" paths, which just
 /// flip the flag and cut VARSIZE without rewriting coordinates.
-pub fn build_image_auto(dim: usize, coords: &[f64]) -> Vec<u8> {
+pub fn build_image_auto(dim: usize, coords: &[f64]) -> PgResult<Vec<u8>> {
     debug_assert_eq!(coords.len(), 2 * dim);
     let mut point = true;
     for i in 0..dim {
@@ -152,7 +154,7 @@ mod tests {
     #[test]
     fn point_image_layout_matches_c() {
         // 2-D point (1,2): size = 8 + 16 = 24, header = 2 | POINT_BIT.
-        let img = build_image(2, true, &[1.0, 2.0]);
+        let img = build_image(2, true, &[1.0, 2.0]).unwrap();
         assert_eq!(img.len(), 24);
         let v = CubeView::from_payload(&img[4..]);
         assert!(v.is_point());
@@ -174,7 +176,7 @@ mod tests {
 
     #[test]
     fn box_image_layout_matches_c() {
-        let img = build_image(2, false, &[0.0, 0.0, 1.0, 1.0]);
+        let img = build_image(2, false, &[0.0, 0.0, 1.0, 1.0]).unwrap();
         assert_eq!(img.len(), 40); // 8 + 2*2*8
         let v = CubeView::from_payload(&img[4..]);
         assert!(!v.is_point());
@@ -185,11 +187,11 @@ mod tests {
 
     #[test]
     fn auto_collapses_to_point() {
-        let img = build_image_auto(2, &[3.0, 4.0, 3.0, 4.0]);
+        let img = build_image_auto(2, &[3.0, 4.0, 3.0, 4.0]).unwrap();
         assert_eq!(img.len(), 24);
         assert!(CubeView::from_payload(&img[4..]).is_point());
         // NaN != NaN keeps the box form (C: point &= (x == y)).
-        let img = build_image_auto(1, &[f64::NAN, f64::NAN]);
+        let img = build_image_auto(1, &[f64::NAN, f64::NAN]).unwrap();
         assert_eq!(img.len(), 24); // 8 + 2*8
         assert!(!CubeView::from_payload(&img[4..]).is_point());
     }

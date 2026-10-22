@@ -1,0 +1,400 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s2xq s2xi s1u s2 s1c s3 s3l
+step s2x: EXPLAIN (COSTS OFF) WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND tid >= 2 THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) WHEN MATCHED AND tid < 2 THEN DELETE RETURNING merge_action() AS action, t.*, CASE merge_action() WHEN 'INSERT' THEN 'Inserted ' || t WHEN 'UPDATE' THEN 'Added ' || delta || ' to balance' WHEN 'DELETE' THEN 'Removed ' || t END AS description), m2 AS (MERGE INTO sl l USING m ON l.tid = m.tid WHEN MATCHED THEN UPDATE SET last_change = description WHEN NOT MATCHED THEN INSERT VALUES (m.tid, description) RETURNING m.*, merge_action() AS log_action, l.*) SELECT * FROM m2;
+QUERY PLAN                                 
+-------------------------------------------
+CTE Scan on m2                             
+  CTE m                                    
+    ->  Merge on st t                      
+          ->  Merge Left Join              
+                Merge Cond: (s.sid = t.tid)
+                ->  Sort                   
+                      Sort Key: s.sid      
+                      ->  Seq Scan on ss s 
+                ->  Sort                   
+                      Sort Key: t.tid      
+                      ->  Seq Scan on st t 
+  CTE m2                                   
+    ->  Merge on sl l                      
+          ->  Hash Left Join               
+                Hash Cond: (m.tid = l.tid) 
+                ->  CTE Scan on m          
+                ->  Hash                   
+                      ->  Seq Scan on sl l 
+(18 rows)
+
+step s2xq: EXPLAIN (COSTS OFF) WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND t.balance > 500 THEN DELETE WHEN MATCHED THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) RETURNING merge_action() AS act, t.*) SELECT * FROM m;
+QUERY PLAN                                 
+-------------------------------------------
+CTE Scan on m                              
+  CTE m                                    
+    ->  Merge on st t                      
+          ->  Merge Left Join              
+                Merge Cond: (s.sid = t.tid)
+                ->  Sort                   
+                      Sort Key: s.sid      
+                      ->  Seq Scan on ss s 
+                ->  Sort                   
+                      Sort Key: t.tid      
+                      ->  Seq Scan on st t 
+(11 rows)
+
+step s2xi: EXPLAIN (COSTS OFF) WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED THEN UPDATE SET balance = t.balance + delta, tid = sid RETURNING t.*) SELECT * FROM m;
+QUERY PLAN                                 
+-------------------------------------------
+CTE Scan on m                              
+  CTE m                                    
+    ->  Merge on st t                      
+          ->  Merge Join                   
+                Merge Cond: (s.sid = t.tid)
+                ->  Sort                   
+                      Sort Key: s.sid      
+                      ->  Seq Scan on ss s 
+                ->  Sort                   
+                      Sort Key: t.tid      
+                      ->  Seq Scan on st t 
+(11 rows)
+
+step s1u: UPDATE st SET balance = balance + 5 WHERE tid = 2;
+step s2: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND tid >= 2 THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) WHEN MATCHED AND tid < 2 THEN DELETE RETURNING merge_action() AS action, t.*, CASE merge_action() WHEN 'INSERT' THEN 'Inserted ' || t WHEN 'UPDATE' THEN 'Added ' || delta || ' to balance' WHEN 'DELETE' THEN 'Removed ' || t END AS description), m2 AS (MERGE INTO sl l USING m ON l.tid = m.tid WHEN MATCHED THEN UPDATE SET last_change = description WHEN NOT MATCHED THEN INSERT VALUES (m.tid, description) RETURNING m.*, merge_action() AS log_action, l.*) SELECT * FROM m2 ORDER BY 2; <waiting ...>
+step s1c: COMMIT;
+step s2: <... completed>
+action|tid|balance|description        |log_action|tid|last_change        
+------+---+-------+-------------------+----------+---+-------------------
+DELETE|  1|    100|Removed (1,100)    |UPDATE    |  1|Removed (1,100)    
+UPDATE|  2|    225|Added 20 to balance|INSERT    |  2|Added 20 to balance
+INSERT|  4|     40|Inserted (4,40)    |INSERT    |  4|Inserted (4,40)    
+(3 rows)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  2|    225
+  3|    300
+  4|     40
+(3 rows)
+
+step s3l: SELECT tid, last_change FROM sl ORDER BY tid;
+tid|last_change        
+---+-------------------
+  1|Removed (1,100)    
+  2|Added 20 to balance
+  4|Inserted (4,40)    
+(3 rows)
+
+
+starting permutation: s1k s2 s1c s3 s3l
+step s1k: UPDATE st SET tid = 102 WHERE tid = 2;
+step s2: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND tid >= 2 THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) WHEN MATCHED AND tid < 2 THEN DELETE RETURNING merge_action() AS action, t.*, CASE merge_action() WHEN 'INSERT' THEN 'Inserted ' || t WHEN 'UPDATE' THEN 'Added ' || delta || ' to balance' WHEN 'DELETE' THEN 'Removed ' || t END AS description), m2 AS (MERGE INTO sl l USING m ON l.tid = m.tid WHEN MATCHED THEN UPDATE SET last_change = description WHEN NOT MATCHED THEN INSERT VALUES (m.tid, description) RETURNING m.*, merge_action() AS log_action, l.*) SELECT * FROM m2 ORDER BY 2; <waiting ...>
+step s1c: COMMIT;
+step s2: <... completed>
+action|tid|balance|description    |log_action|tid|last_change    
+------+---+-------+---------------+----------+---+---------------
+DELETE|  1|    100|Removed (1,100)|UPDATE    |  1|Removed (1,100)
+INSERT|  2|     20|Inserted (2,20)|INSERT    |  2|Inserted (2,20)
+INSERT|  4|     40|Inserted (4,40)|INSERT    |  4|Inserted (4,40)
+(3 rows)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  2|     20
+  3|    300
+  4|     40
+102|    200
+(4 rows)
+
+step s3l: SELECT tid, last_change FROM sl ORDER BY tid;
+tid|last_change    
+---+---------------
+  1|Removed (1,100)
+  2|Inserted (2,20)
+  4|Inserted (4,40)
+(3 rows)
+
+
+starting permutation: s1d s2 s1c s3 s3l
+step s1d: DELETE FROM st WHERE tid = 1;
+step s2: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND tid >= 2 THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) WHEN MATCHED AND tid < 2 THEN DELETE RETURNING merge_action() AS action, t.*, CASE merge_action() WHEN 'INSERT' THEN 'Inserted ' || t WHEN 'UPDATE' THEN 'Added ' || delta || ' to balance' WHEN 'DELETE' THEN 'Removed ' || t END AS description), m2 AS (MERGE INTO sl l USING m ON l.tid = m.tid WHEN MATCHED THEN UPDATE SET last_change = description WHEN NOT MATCHED THEN INSERT VALUES (m.tid, description) RETURNING m.*, merge_action() AS log_action, l.*) SELECT * FROM m2 ORDER BY 2; <waiting ...>
+step s1c: COMMIT;
+step s2: <... completed>
+action|tid|balance|description        |log_action|tid|last_change        
+------+---+-------+-------------------+----------+---+-------------------
+INSERT|  1|     10|Inserted (1,10)    |UPDATE    |  1|Inserted (1,10)    
+UPDATE|  2|    220|Added 20 to balance|INSERT    |  2|Added 20 to balance
+INSERT|  4|     40|Inserted (4,40)    |INSERT    |  4|Inserted (4,40)    
+(3 rows)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  1|     10
+  2|    220
+  3|    300
+  4|     40
+(4 rows)
+
+step s3l: SELECT tid, last_change FROM sl ORDER BY tid;
+tid|last_change        
+---+-------------------
+  1|Inserted (1,10)    
+  2|Added 20 to balance
+  4|Inserted (4,40)    
+(3 rows)
+
+
+starting permutation: s1q s2q s1c s3
+step s1q: UPDATE st SET balance = 999 WHERE tid = 2;
+step s2q: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND t.balance > 500 THEN DELETE WHEN MATCHED THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) RETURNING merge_action() AS act, t.*) SELECT * FROM m ORDER BY tid; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+act   |tid|balance
+------+---+-------
+UPDATE|  1|    110
+DELETE|  2|    999
+INSERT|  4|     40
+(3 rows)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  1|    110
+  3|    300
+  4|     40
+(3 rows)
+
+
+starting permutation: s1k s2i s1c s3
+step s1k: UPDATE st SET tid = 102 WHERE tid = 2;
+step s2i: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED THEN UPDATE SET balance = t.balance + delta, tid = sid RETURNING t.*) SELECT * FROM m ORDER BY tid; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+tid|balance
+---+-------
+  1|    110
+(1 row)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  1|    110
+  3|    300
+102|    200
+(3 rows)
+
+
+starting permutation: s1u s1k s2 s1r s3 s3l
+step s1u: UPDATE st SET balance = balance + 5 WHERE tid = 2;
+step s1k: UPDATE st SET tid = 102 WHERE tid = 2;
+step s2: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND tid >= 2 THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) WHEN MATCHED AND tid < 2 THEN DELETE RETURNING merge_action() AS action, t.*, CASE merge_action() WHEN 'INSERT' THEN 'Inserted ' || t WHEN 'UPDATE' THEN 'Added ' || delta || ' to balance' WHEN 'DELETE' THEN 'Removed ' || t END AS description), m2 AS (MERGE INTO sl l USING m ON l.tid = m.tid WHEN MATCHED THEN UPDATE SET last_change = description WHEN NOT MATCHED THEN INSERT VALUES (m.tid, description) RETURNING m.*, merge_action() AS log_action, l.*) SELECT * FROM m2 ORDER BY 2; <waiting ...>
+step s1r: ROLLBACK;
+step s2: <... completed>
+action|tid|balance|description        |log_action|tid|last_change        
+------+---+-------+-------------------+----------+---+-------------------
+DELETE|  1|    100|Removed (1,100)    |UPDATE    |  1|Removed (1,100)    
+UPDATE|  2|    220|Added 20 to balance|INSERT    |  2|Added 20 to balance
+INSERT|  4|     40|Inserted (4,40)    |INSERT    |  4|Inserted (4,40)    
+(3 rows)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  2|    220
+  3|    300
+  4|     40
+(3 rows)
+
+step s3l: SELECT tid, last_change FROM sl ORDER BY tid;
+tid|last_change        
+---+-------------------
+  1|Removed (1,100)    
+  2|Added 20 to balance
+  4|Inserted (4,40)    
+(3 rows)
+
+
+starting permutation: s1lu s2 s1c s3l
+step s1lu: UPDATE sl SET last_change = 's1' WHERE tid = 1;
+step s2: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND tid >= 2 THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) WHEN MATCHED AND tid < 2 THEN DELETE RETURNING merge_action() AS action, t.*, CASE merge_action() WHEN 'INSERT' THEN 'Inserted ' || t WHEN 'UPDATE' THEN 'Added ' || delta || ' to balance' WHEN 'DELETE' THEN 'Removed ' || t END AS description), m2 AS (MERGE INTO sl l USING m ON l.tid = m.tid WHEN MATCHED THEN UPDATE SET last_change = description WHEN NOT MATCHED THEN INSERT VALUES (m.tid, description) RETURNING m.*, merge_action() AS log_action, l.*) SELECT * FROM m2 ORDER BY 2; <waiting ...>
+step s1c: COMMIT;
+step s2: <... completed>
+action|tid|balance|description        |log_action|tid|last_change        
+------+---+-------+-------------------+----------+---+-------------------
+DELETE|  1|    100|Removed (1,100)    |UPDATE    |  1|Removed (1,100)    
+UPDATE|  2|    220|Added 20 to balance|INSERT    |  2|Added 20 to balance
+INSERT|  4|     40|Inserted (4,40)    |INSERT    |  4|Inserted (4,40)    
+(3 rows)
+
+step s3l: SELECT tid, last_change FROM sl ORDER BY tid;
+tid|last_change        
+---+-------------------
+  1|Removed (1,100)    
+  2|Added 20 to balance
+  4|Inserted (4,40)    
+(3 rows)
+
+
+starting permutation: s1lk s2 s1c s3l
+step s1lk: UPDATE sl SET tid = 101 WHERE tid = 1;
+step s2: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND tid >= 2 THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) WHEN MATCHED AND tid < 2 THEN DELETE RETURNING merge_action() AS action, t.*, CASE merge_action() WHEN 'INSERT' THEN 'Inserted ' || t WHEN 'UPDATE' THEN 'Added ' || delta || ' to balance' WHEN 'DELETE' THEN 'Removed ' || t END AS description), m2 AS (MERGE INTO sl l USING m ON l.tid = m.tid WHEN MATCHED THEN UPDATE SET last_change = description WHEN NOT MATCHED THEN INSERT VALUES (m.tid, description) RETURNING m.*, merge_action() AS log_action, l.*) SELECT * FROM m2 ORDER BY 2; <waiting ...>
+step s1c: COMMIT;
+step s2: <... completed>
+action|tid|balance|description        |log_action|tid|last_change        
+------+---+-------+-------------------+----------+---+-------------------
+DELETE|  1|    100|Removed (1,100)    |INSERT    |  1|Removed (1,100)    
+UPDATE|  2|    220|Added 20 to balance|INSERT    |  2|Added 20 to balance
+INSERT|  4|     40|Inserted (4,40)    |INSERT    |  4|Inserted (4,40)    
+(3 rows)
+
+step s3l: SELECT tid, last_change FROM sl ORDER BY tid;
+tid|last_change        
+---+-------------------
+  1|Removed (1,100)    
+  2|Added 20 to balance
+  4|Inserted (4,40)    
+101|Original value     
+(4 rows)
+
+
+starting permutation: s1ld s2 s1c s3l
+step s1ld: DELETE FROM sl WHERE tid = 1;
+step s2: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED AND tid >= 2 THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) WHEN MATCHED AND tid < 2 THEN DELETE RETURNING merge_action() AS action, t.*, CASE merge_action() WHEN 'INSERT' THEN 'Inserted ' || t WHEN 'UPDATE' THEN 'Added ' || delta || ' to balance' WHEN 'DELETE' THEN 'Removed ' || t END AS description), m2 AS (MERGE INTO sl l USING m ON l.tid = m.tid WHEN MATCHED THEN UPDATE SET last_change = description WHEN NOT MATCHED THEN INSERT VALUES (m.tid, description) RETURNING m.*, merge_action() AS log_action, l.*) SELECT * FROM m2 ORDER BY 2; <waiting ...>
+step s1c: COMMIT;
+step s2: <... completed>
+action|tid|balance|description        |log_action|tid|last_change        
+------+---+-------+-------------------+----------+---+-------------------
+DELETE|  1|    100|Removed (1,100)    |INSERT    |  1|Removed (1,100)    
+UPDATE|  2|    220|Added 20 to balance|INSERT    |  2|Added 20 to balance
+INSERT|  4|     40|Inserted (4,40)    |INSERT    |  4|Inserted (4,40)    
+(3 rows)
+
+step s3l: SELECT tid, last_change FROM sl ORDER BY tid;
+tid|last_change        
+---+-------------------
+  1|Removed (1,100)    
+  2|Added 20 to balance
+  4|Inserted (4,40)    
+(3 rows)
+
+
+starting permutation: s2xj s1u s2j s1c s3
+step s2xj: EXPLAIN (COSTS OFF) WITH m AS (MERGE INTO st t USING ss s ON tid = sid AND t.balance > s.delta WHEN MATCHED THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) RETURNING merge_action() AS act, t.*) SELECT * FROM m ORDER BY tid, act;
+QUERY PLAN                                        
+--------------------------------------------------
+Sort                                              
+  Sort Key: m.tid, m.act                          
+  CTE m                                           
+    ->  Merge on st t                             
+          ->  Merge Left Join                     
+                Merge Cond: (s.sid = t.tid)       
+                Join Filter: (t.balance > s.delta)
+                ->  Sort                          
+                      Sort Key: s.sid             
+                      ->  Seq Scan on ss s        
+                ->  Sort                          
+                      Sort Key: t.tid             
+                      ->  Seq Scan on st t        
+  ->  CTE Scan on m                               
+(14 rows)
+
+step s1u: UPDATE st SET balance = balance + 5 WHERE tid = 2;
+step s2j: WITH m AS (MERGE INTO st t USING ss s ON tid = sid AND t.balance > s.delta WHEN MATCHED THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) RETURNING merge_action() AS act, t.*) SELECT * FROM m ORDER BY tid, act; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+act   |tid|balance
+------+---+-------
+UPDATE|  1|    110
+UPDATE|  2|    225
+INSERT|  4|     40
+(3 rows)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  1|    110
+  2|    225
+  3|    300
+  4|     40
+(4 rows)
+
+
+starting permutation: s1jq s2j s1c s3
+step s1jq: UPDATE st SET balance = 5 WHERE tid = 2;
+step s2j: WITH m AS (MERGE INTO st t USING ss s ON tid = sid AND t.balance > s.delta WHEN MATCHED THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) RETURNING merge_action() AS act, t.*) SELECT * FROM m ORDER BY tid, act; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+act   |tid|balance
+------+---+-------
+UPDATE|  1|    110
+INSERT|  2|     20
+INSERT|  4|     40
+(3 rows)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  1|    110
+  2|      5
+  2|     20
+  3|    300
+  4|     40
+(5 rows)
+
+
+starting permutation: s2xh s1u s2h s1c s3
+step s2xh: EXPLAIN (COSTS OFF) WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED THEN UPDATE SET balance = t.balance + delta RETURNING t.*) SELECT * FROM m ORDER BY tid;
+QUERY PLAN                                 
+-------------------------------------------
+Sort                                       
+  Sort Key: m.tid                          
+  CTE m                                    
+    ->  Merge on st t                      
+          ->  Merge Join                   
+                Merge Cond: (s.sid = t.tid)
+                ->  Sort                   
+                      Sort Key: s.sid      
+                      ->  Seq Scan on ss s 
+                ->  Sort                   
+                      Sort Key: t.tid      
+                      ->  Seq Scan on st t 
+  ->  CTE Scan on m                        
+(13 rows)
+
+step s1u: UPDATE st SET balance = balance + 5 WHERE tid = 2;
+step s2h: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED THEN UPDATE SET balance = t.balance + delta RETURNING t.*) SELECT * FROM m ORDER BY tid; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+tid|balance
+---+-------
+  1|    110
+  2|    225
+(2 rows)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  1|    110
+  2|    225
+  3|    300
+(3 rows)
+
+
+starting permutation: s1k s2h s1c s3
+step s1k: UPDATE st SET tid = 102 WHERE tid = 2;
+step s2h: WITH m AS (MERGE INTO st t USING ss s ON tid = sid WHEN MATCHED THEN UPDATE SET balance = t.balance + delta RETURNING t.*) SELECT * FROM m ORDER BY tid; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+tid|balance
+---+-------
+  1|    110
+(1 row)
+
+step s3: SELECT tid, balance FROM st ORDER BY tid;
+tid|balance
+---+-------
+  1|    110
+  3|    300
+102|    200
+(3 rows)
+

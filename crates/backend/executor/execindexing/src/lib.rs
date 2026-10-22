@@ -21,8 +21,8 @@ mod tests;
 
 mod build_scan;
 pub use build_scan::{
-    table_index_build_range_scan, table_index_build_range_scan_with_xmin, table_index_build_scan,
-    table_index_build_scan_with_snapshot,
+    pgrc_index_check, table_index_build_range_scan, table_index_build_range_scan_with_xmin, table_index_build_scan,
+    table_index_build_scan_parallel, table_index_build_scan_with_snapshot,
 };
 mod validate_scan;
 pub use validate_scan::{table_index_validate_scan, ValidateIndexState};
@@ -56,6 +56,7 @@ pub struct IndexInfo<'mcx> {
     pub ii_Summarizing: bool,
     pub ii_Concurrent: bool,
     pub ii_BrokenHotChain: bool,
+    pub ii_ParallelWorkers: i32,
     // BuildSpeculativeIndexInfo fills these (empty otherwise); ii_UniqueOps
     // is only consulted by the exclusion lane, kept for C shape.
     pub ii_UniqueOps: [Oid; INDEX_MAX_KEYS as usize],
@@ -106,6 +107,11 @@ fn with_expr_cache<R>(f: impl FnOnce(&mut IdxExprCache) -> R) -> R {
         let mut slot = cell.borrow_mut();
         let st = slot.get_or_insert_with(|| {
             let mcx = mcx::session_root("IndexExprContext").mcx();
+            // D4682: the teardown retires this root; clear the slot first, so a reused thread's next
+            // session builds a new one.
+            mcx::register_session_cleanup(Box::new(|| {
+                let _ = IDX_EXPR_CACHE.try_with(|c| drop(c.borrow_mut().take()));
+            }));
             core::mem::ManuallyDrop::new(IdxExprCache {
                 mcx,
                 exprs: mcx::PgHashMap::new_in(mcx),
@@ -204,6 +210,8 @@ pub fn RelationGetIndexPredicate<'mcx>(
     expr_cache_arm()?;
     let node = readfuncs::stringToNode(mcx, src.as_str())?;
     let folded = clauses::eval_const_expressions(mcx, node)?;
+    // relcache.c:5254-5257 canonicalize_qual: it drops redundant OR branches that would otherwise raise (1/(a-1) under
+    // `(a = 1 AND ...) OR a = 1`; D2761, pgrust main #2113)
     let canon = planner_seams::canonicalize_qual::call(mcx, folded, false)?;
     let out = clauses::make_ands_implicit(mcx, Some(canon))?;
     for e in out.iter() {
@@ -249,10 +257,11 @@ pub fn RelationGetExclusionInfo(
         procs[i] = lsyscache::operator::get_opcode(ops[i])?;
         let strat = lsyscache::amop::get_op_opfamily_strategy(ops[i], index.rd_opfamily[i])?;
         if strat == 0 {
-            panic!(
+            return Err(PgError::error(format!(
                 "could not find strategy for operator {} in family {}",
                 ops[i], index.rd_opfamily[i]
-            );
+            ))
+            .into());
         }
         strats[i] = strat as u16;
     }
@@ -330,6 +339,7 @@ pub fn BuildDummyIndexInfo<'mcx>(mcx: Mcx<'mcx>, index: &Relation<'_>) -> PgResu
         ii_WithoutOverlaps: false,
         ii_CheckedUnchanged: false,
         ii_IndexUnchanged: false,
+        ii_ParallelWorkers: 0,
     })
 }
 
@@ -378,6 +388,7 @@ pub fn BuildIndexInfo<'mcx>(mcx: Mcx<'mcx>, index: &Relation<'_>) -> PgResult<In
         ii_WithoutOverlaps: indexstruct.indisexclusion && indexstruct.indisunique,
         ii_CheckedUnchanged: false,
         ii_IndexUnchanged: false,
+        ii_ParallelWorkers: 0,
     })
 }
 
@@ -449,7 +460,6 @@ pub fn ExecOpenIndices<'mcx>(
     if indexoidlist.is_empty() {
         return Ok(state);
     }
-
     for &indexOid in indexoidlist.iter() {
         let indexDesc = indexam::index_open(mcx, indexOid, RowExclusiveLock)?;
         let mut ii = BuildIndexInfo(mcx, &indexDesc)?;
@@ -868,7 +878,7 @@ pub enum CeoucWaitMode {
 /// snapshot and (per waitMode) waits out in-progress inserters/deleters
 /// before deciding.
 #[allow(clippy::too_many_arguments)]
-fn check_exclusion_or_unique_constraint<'mcx>(
+pub fn check_exclusion_or_unique_constraint<'mcx>(
     mcx: Mcx<'mcx>,
     eval_mcx: Mcx<'_>,
     heap_relation: &Relation<'mcx>,
@@ -1076,10 +1086,10 @@ pub fn IndexCheckExclusion<'mcx>(
     if ::types_rel::reindex::ReindexIsCurrentlyProcessingIndex(index_relation.rd_id) {
         ::types_rel::reindex::reset_reindex_processing();
     }
-    // C's econtext->ecxt_per_tuple_memory: reset after every checked tuple
-    // (index.c:3297), so expression/predicate results never accumulate
-    // across a large table.
-    let mut eval_cx = ::mcx::MemoryContext::new("IndexCheckExclusion");
+    // C's econtext->ecxt_per_tuple_memory (index.c:3250), reset after every
+    // checked tuple: the by-ref datums it holds are freed by the reset alone,
+    // so wholesale like the build/validate scans' contexts, not exact-accounting.
+    let mut eval_cx = ::mcx::MemoryContext::new_wholesale("IndexCheckExclusion");
     let mut slot = exectuples::make_tuple_table_slot(
         mcx,
         ::types_slot::TupleSlotKind::BufferHeapTuple,

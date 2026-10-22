@@ -1,0 +1,15 @@
+-- regress-full-create_index-025
+-- SELECT unique1, unique2 FROM onek_with_null WHERE unique1 = 500 ORDER BY unique2 DESC, unique1 DESC LIMIT 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=19520 rti=1 am=heap index=19524
+    key att=1 op=96 value=c23:500
+    recheck (op96(index.2, c23:500))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=index.2, 2=index.1)
+  limit count=1 offset=all
+  project (1=outer.1, 2=outer.2)
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val 2=w4:val
+mapped: IndexOnlyScan Limit

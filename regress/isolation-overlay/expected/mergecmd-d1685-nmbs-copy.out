@@ -1,0 +1,179 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1upd s2mrg s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO nc_t t USING (VALUES (3, 30), (5, 50), (2500, 1)) AS s(k, w) ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1;
+QUERY PLAN                                    
+----------------------------------------------
+Merge on nc_t t                               
+  ->  Hash Left Join                          
+        Hash Cond: (t.id = "*VALUES*".column1)
+        ->  Seq Scan on nc_t t                
+        ->  Hash                              
+              ->  Values Scan on "*VALUES*"   
+(6 rows)
+
+step s1upd: UPDATE nc_t SET v = v + 1 WHERE id = 7;
+step s2mrg: MERGE INTO nc_t t USING (VALUES (3, 30), (5, 50), (2500, 1)) AS s(k, w) ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM nc_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   7|   72|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1key s2mrg s1c s2sel
+step s1key: UPDATE nc_t SET id = 2500 WHERE id = 7;
+step s2mrg: MERGE INTO nc_t t USING (VALUES (3, 30), (5, 50), (2500, 1)) AS s(k, w) ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM nc_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+2500|   70|   0
+(11 rows)
+
+
+starting permutation: s1del s2mrg s1c s2sel
+step s1del: DELETE FROM nc_t WHERE id = 7;
+step s2mrg: MERGE INTO nc_t t USING (VALUES (3, 30), (5, 50), (2500, 1)) AS s(k, w) ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM nc_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(10 rows)
+
+
+starting permutation: s1mat s2mrg s1c s2sel
+step s1mat: UPDATE nc_t SET v = v + 1 WHERE id = 5;
+step s2mrg: MERGE INTO nc_t t USING (VALUES (3, 30), (5, 50), (2500, 1)) AS s(k, w) ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM nc_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   51|  50
+   6|   61|1000
+   7|   71|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1qual s2mrg s1c s2sel
+step s1qual: UPDATE nc_t SET hits = 100 WHERE id = 7;
+step s2mrg: MERGE INTO nc_t t USING (VALUES (3, 30), (5, 50), (2500, 1)) AS s(k, w) ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM nc_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   7|   70| 100
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1upd s2mrg s1a s2sel
+step s1upd: UPDATE nc_t SET v = v + 1 WHERE id = 7;
+step s2mrg: MERGE INTO nc_t t USING (VALUES (3, 30), (5, 50), (2500, 1)) AS s(k, w) ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1a: ROLLBACK;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM nc_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   7|   71|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s2expf s1upd s2mrgf s1c s2sel
+step s2expf: EXPLAIN (COSTS OFF) MERGE INTO nc_t t USING (SELECT g * 1250 AS k FROM generate_series(2, 3) g) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 7 WHEN NOT MATCHED BY SOURCE AND t.id <= 10 THEN DELETE;
+QUERY PLAN                                          
+----------------------------------------------------
+Merge on nc_t t                                     
+  ->  Hash Left Join                                
+        Hash Cond: (t.id = (g.g * 1250))            
+        ->  Seq Scan on nc_t t                      
+        ->  Hash                                    
+              ->  Function Scan on generate_series g
+(6 rows)
+
+step s1upd: UPDATE nc_t SET v = v + 1 WHERE id = 7;
+step s2mrgf: MERGE INTO nc_t t USING (SELECT g * 1250 AS k FROM generate_series(2, 3) g) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 7 WHEN NOT MATCHED BY SOURCE AND t.id <= 10 THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2mrgf: <... completed>
+step s2sel: SELECT id, v, hits FROM nc_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+2000|20000|   0
+(1 row)
+
+
+starting permutation: s1key s2mrgf s1c s2sel
+step s1key: UPDATE nc_t SET id = 2500 WHERE id = 7;
+step s2mrgf: MERGE INTO nc_t t USING (SELECT g * 1250 AS k FROM generate_series(2, 3) g) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 7 WHEN NOT MATCHED BY SOURCE AND t.id <= 10 THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2mrgf: <... completed>
+step s2sel: SELECT id, v, hits FROM nc_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+2000|20000|   0
+2500|   70|   0
+(2 rows)
+

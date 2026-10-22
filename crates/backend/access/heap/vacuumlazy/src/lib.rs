@@ -36,7 +36,8 @@ use ::types_core::xact::{
     TransactionIdPrecedes,
 };
 use ::types_core::{
-    BlockNumber, Buffer, ForkNumber, GlobalVisStateHandle, InvalidBlockNumber, OffsetNumber, Size,
+    BlockNumber, Buffer, ForkNumber, GlobalVisStateHandle, InvalidBlockNumber, InvalidBuffer,
+    OffsetNumber, Size,
     TransactionId, BLCKSZ,
 };
 use ::types_error::{PgError, PgResult};
@@ -48,7 +49,7 @@ use ::types_storage::bufpage::{
 };
 use ::types_storage::waiteventset::{WL_EXIT_ON_PM_DEATH, WL_LATCH_SET, WL_TIMEOUT};
 use ::types_storage::ReadBufferMode;
-use ::tidstore::TidStore;
+use ::tidstore::{TidStore, TidStoreIterResult};
 use ::types_tuple::{
     FirstOffsetNumber, HeapTupleData, InvalidOffsetNumber, ItemPointerData, MaxOffsetNumber,
 };
@@ -85,7 +86,7 @@ const BYPASS_THRESHOLD_PAGES: f64 = 0.02;
 /// untruncated double instead (the pre-fix pgrust behavior) bypasses index
 /// vacuuming for the fractional band `floor(t) <= lpdead_item_pages < t`,
 /// leaving LP_DEAD stubs behind where C reaps them — a physical-layout
-/// divergence that cascades into FSM/placement differences (regression test).
+/// divergence that cascades into FSM/placement differences (Antithesis RB-3).
 #[inline]
 fn bypass_threshold_pages(rel_pages: BlockNumber) -> BlockNumber {
     (rel_pages as f64 * BYPASS_THRESHOLD_PAGES) as BlockNumber
@@ -102,6 +103,11 @@ pub(crate) struct ScanEnv<'a, 'mcx> {
     pub(crate) vistest: GlobalVisStateHandle,
     pub(crate) aggressive: bool,
     pub(crate) nindexes: usize,
+    pub(crate) mark_unused_now: bool,
+}
+
+pub(crate) fn mark_unused_now(nindexes: usize, keep_items: bool) -> bool {
+    nindexes == 0 && !keep_items
 }
 
 /// The phase-I fold block: the LVRelState counters the per-block bodies
@@ -308,6 +314,9 @@ pub struct LVRelState<'a, 'mcx> {
     indstats: ::mcx::PgVec<'mcx, Option<IndexBulkDeleteResult>>,
     nindexes: usize,
     bstrategy: BufferAccessStrategy,
+    /// A pgrc segment heap never sets a line pointer `LP_UNUSED`: a segment row's ID is its TID, and a reused TID would be
+    /// a reused ID, which anything keyed by ID (tombstones, logical, indexes, the row cache) could resolve to the wrong row.
+    keep_items: bool,
 
     aggressive: bool,
     skipwithvm: bool,
@@ -324,6 +333,9 @@ pub struct LVRelState<'a, 'mcx> {
     /// §5.2 fail-closed coverage guard (morsel arm only): a scan hole was
     /// detected — suppress relfrozenxid/relminmxid advancement.
     coverage_hole: bool,
+    /// Morsel arm: (items, pages) of LP_DEAD already in the folds but not
+    /// yet merged into dead_items, while a round's merge is in progress.
+    unmerged_lpdead: (u64, u64),
 
     rel_pages: BlockNumber,
     // VACUUM VERBOSE / autovacuum-log truncation accounting (phase IV is
@@ -354,6 +366,7 @@ pub struct LVRelState<'a, 'mcx> {
     eager_scanned_pages: BlockNumber,
     next_eager_scan_region_start: BlockNumber,
     eager_scan_remaining_successes: BlockNumber,
+    eager_scan_orig_success_limit: BlockNumber,
     eager_scan_max_fails_per_region: BlockNumber,
     eager_scan_remaining_fails: BlockNumber,
     dbname: String,
@@ -361,7 +374,7 @@ pub struct LVRelState<'a, 'mcx> {
     relname: String,
 }
 
-/// regression per-phase wall clocks (trace-gated, PGRUST_VACUUM_TRACE=1):
+/// GL-M41-2 per-phase wall clocks (trace-gated, PGRUST_VACUUM_TRACE=1):
 /// leader-thread TLS accumulators, reset per heap_vacuum_rel, emitted as ONE
 /// `vacuum-phases:` summary line at the end. Every phase also snapshots the
 /// leader's TLS WalUsage so the summary carries leader-side WAL per phase.
@@ -422,6 +435,18 @@ pub fn heap_vacuum_rel<'mcx>(
     params: &VacuumParams,
     bstrategy: BufferAccessStrategy,
 ) -> PgResult<()> {
+    heap_vacuum_rel_capped(mcx, rel, params, bstrategy, None)
+}
+
+pub type PgrcPassHook<'f> = &'f mut dyn FnMut(::types_core::TransactionId) -> PgResult<tableam_seams::PgrcPassFacts>;
+
+pub fn heap_vacuum_rel_capped<'mcx>(
+    mcx: Mcx<'mcx>,
+    rel: &RelationData<'mcx>,
+    params: &VacuumParams,
+    bstrategy: BufferAccessStrategy,
+    cap: Option<PgrcPassHook<'_>>,
+) -> PgResult<()> {
     let trace_t0 = std::time::Instant::now();
     phase_trace::reset();
     let verbose = params.options & VACOPT_VERBOSE != 0;
@@ -466,7 +491,18 @@ pub fn heap_vacuum_rel<'mcx>(
         _ => debug_assert!(params.index_cleanup == VacOptValue::Auto),
     }
 
+    // IX1 L3: a pgrcolumnar parent's indexes hold its rows' IDs, not its empty heap fork's TIDs: its own index pass
+    // ([`pgrc_index_pass`]) runs after the front maintenance, so this pass leaves them alone
+    if cap.is_some() {
+        do_index_vacuuming = false;
+        do_index_cleanup = false;
+    }
+
     let (mut aggressive, cutoffs) = vacuum_get_cutoffs(rel, params)?;
+    let pgrc = match cap {
+        Some(f) => f(cutoffs.OldestXmin)?,
+        None => tableam_seams::PgrcPassFacts::default(),
+    };
     let rel_pages =
         bufmgr_seams::relation_get_number_of_blocks_in_fork::call(rel, ForkNumber::MAIN_FORKNUM)?;
     let orig_rel_pages = rel_pages;
@@ -493,6 +529,12 @@ pub fn heap_vacuum_rel<'mcx>(
     };
     let errinfo = VacErrInfo::new(relnamespace.clone(), relname.clone());
 
+    let keep_items = pgrc_segment_heap(rel, &relnamespace);
+    if keep_items {
+        do_index_vacuuming = false;
+        do_index_cleanup = false;
+    }
+
     let mut vacrel = LVRelState {
         mcx,
         rel,
@@ -506,11 +548,13 @@ pub fn heap_vacuum_rel<'mcx>(
         consider_bypass_optimization,
         do_index_vacuuming,
         do_index_cleanup,
-        do_rel_truncate: params.truncate != VacOptValue::Disabled,
+        do_rel_truncate: truncate_allowed(params.truncate, rel, &relnamespace),
+        keep_items,
         cutoffs,
         vistest,
         skippedallvis: false,
         coverage_hole: false,
+        unmerged_lpdead: (0, 0),
         rel_pages,
         removed_pages: 0,
         folds: ScanFolds {
@@ -533,6 +577,7 @@ pub fn heap_vacuum_rel<'mcx>(
         eager_scanned_pages: 0,
         next_eager_scan_region_start: InvalidBlockNumber,
         eager_scan_remaining_successes: 0,
+        eager_scan_orig_success_limit: 0,
         eager_scan_max_fails_per_region: 0,
         eager_scan_remaining_fails: 0,
         dbname: dbname.clone(),
@@ -625,8 +670,20 @@ pub fn heap_vacuum_rel<'mcx>(
         vacrel.folds.counters.NewRelfrozenXid = InvalidTransactionId;
         vacrel.folds.counters.NewRelminMxid = 0;
     }
+    // Lane AUTOVAC FREEZE (pgrust-only): a pgrcolumnar parent's heap fork is empty, but its readers look the manifest
+    // chain's unfrozen publishers up in pg_xact; relfrozenxid must not pass the oldest of them (pgrc_am::vacuum).
+    if let Some(cap) = pgrc.relfrozenxid_cap {
+        let n = &mut vacrel.folds.counters.NewRelfrozenXid;
+        if !TransactionIdIsNormal(cap) {
+            *n = InvalidTransactionId;
+        } else if TransactionIdIsValid(*n) && TransactionIdPrecedes(cap, *n) {
+            *n = cap;
+        }
+    }
 
-    let new_rel_pages = vacrel.rel_pages;
+    // AUTOSTATS (pgrust-only): a pgrcolumnar parent's size is its parts', not its empty heap fork's (0 pages, 0
+    // tuples would reset reltuples after every ANALYZE and put autovacuum's thresholds at their base values)
+    let (new_rel_pages, new_live_tuples) = pgrc.relstats.unwrap_or((vacrel.rel_pages, vacrel.new_live_tuples));
     let (mut new_rel_allvisible, mut new_rel_allfrozen) = visibilitymap_count(rel)?;
     if new_rel_allvisible > new_rel_pages {
         new_rel_allvisible = new_rel_pages;
@@ -637,7 +694,7 @@ pub fn heap_vacuum_rel<'mcx>(
     let (frozenxid_updated, minmulti_updated) = vacuum_seams::vac_update_relstats::call(
         rel,
         new_rel_pages,
-        vacrel.new_live_tuples,
+        new_live_tuples,
         new_rel_allvisible,
         new_rel_allfrozen,
         vacrel.nindexes > 0,
@@ -649,7 +706,7 @@ pub fn heap_vacuum_rel<'mcx>(
     pgstat::pgstat_report_vacuum(
         rel.rd_id,
         rel.rd_rel.relisshared,
-        vacrel.new_live_tuples.max(0.0) as i64,
+        new_live_tuples.max(0.0) as i64,
         (vacrel.folds.counters.recently_dead_tuples + vacrel.folds.counters.missed_dead_tuples)
             as i64,
         starttime,
@@ -657,7 +714,7 @@ pub fn heap_vacuum_rel<'mcx>(
     pgstat_progress_end_command();
 
     if morsels::vtrace_enabled() {
-        // regression attribution line. scan includes the nested idxbulk/reap/
+        // GL-M41-2 attribution line. scan includes the nested idxbulk/reap/
         // idxclean/fsm windows (they run inside lazy_scan_heap); scan_only
         // subtracts them. tail = everything after truncate (relstats,
         // visibilitymap_count, pgstat report). WAL figures are the LEADER's
@@ -1013,12 +1070,25 @@ fn dead_items_alloc(vacrel: &mut LVRelState<'_, '_>, nworkers: i32) -> PgResult<
 
     vacrel.dead_items_info =
         VacDeadItemsInfo { max_bytes: vac_work_mem as usize * 1024, num_items: 0 };
-    vacrel.dead_items = Some(TidStore::create_local(
-        vacrel.mcx,
-        vacrel.dead_items_info.max_bytes,
-        true,
-    )?);
+    vacrel.dead_items = Some(new_dead_items(vacrel)?);
     Ok(())
+}
+
+// Parallel: TidStoreCreateShared's DSA-sized budget; else TidStoreCreateLocal.
+fn new_dead_items(vacrel: &LVRelState<'_, '_>) -> PgResult<TidStore> {
+    let max_bytes = vacrel.dead_items_info.max_bytes;
+    let shared = vacrel.pvs.is_some();
+    let create = |parent: Mcx<'_>| {
+        if shared {
+            TidStore::create_dsa_accounted(parent, max_bytes)
+        } else {
+            TidStore::create_local(parent, max_bytes, true)
+        }
+    };
+    match xact::with_cur_transaction_context(|ctx| create(ctx.mcx())) {
+        Some(store) => store,
+        None => create(vacrel.mcx),
+    }
 }
 
 fn dead_items_add(
@@ -1040,11 +1110,7 @@ fn dead_items_add(
 // C dead_items_reset: recreate the tidstore with the same max_bytes.
 fn dead_items_reset(vacrel: &mut LVRelState<'_, '_>) -> PgResult<()> {
     vacrel.dead_items = None;
-    vacrel.dead_items = Some(TidStore::create_local(
-        vacrel.mcx,
-        vacrel.dead_items_info.max_bytes,
-        true,
-    )?);
+    vacrel.dead_items = Some(new_dead_items(vacrel)?);
     vacrel.dead_items_info.num_items = 0;
     Ok(())
 }
@@ -1056,10 +1122,7 @@ fn dead_items_reset(vacrel: &mut LVRelState<'_, '_>) -> PgResult<()> {
 // (vacuumparallel stores an Arc clone, never a re-copy).
 fn collect_dead_tids(vacrel: &LVRelState<'_, '_>) -> PgResult<std::sync::Arc<[ItemPointerData]>> {
     let n = vacrel.dead_items_info.num_items.max(0) as usize;
-    let bytes = n.saturating_mul(core::mem::size_of::<ItemPointerData>());
-    // Sized by the round's dead-item count: admit it and allocate fallibly
-    // so exhaustion is an ERROR for this VACUUM, not a server abort.
-    ::mcx::check_alloc_size(bytes)?;
+    let bytes = dead_tids_snapshot_bytes(n)?;
     let mut tids: Vec<ItemPointerData> = Vec::new();
     tids.try_reserve_exact(n).map_err(|_| ::mcx::oom_named("VACUUM dead TIDs", bytes))?;
     let mut iter = vacrel.dead_items.as_ref().unwrap().begin_iterate();
@@ -1073,6 +1136,15 @@ fn collect_dead_tids(vacrel: &LVRelState<'_, '_>) -> PgResult<std::sync::Arc<[It
     }
     debug_assert_eq!(tids.len() as i64, vacrel.dead_items_info.num_items);
     Ok(tids.into())
+}
+
+// C hands index AMs the TidStore itself: no MaxAllocSize ceiling applies.
+fn dead_tids_snapshot_bytes(n: usize) -> PgResult<usize> {
+    let bytes = n.saturating_mul(core::mem::size_of::<ItemPointerData>());
+    if bytes > ::mcx::MAX_ALLOC_HUGE_SIZE {
+        return Err(::mcx::oom_named("VACUUM dead TIDs", bytes).into());
+    }
+    Ok(bytes)
 }
 
 fn heap_vacuum_eager_scan_setup(
@@ -1138,6 +1210,7 @@ fn lazy_scan_heap(vacrel: &mut LVRelState<'_, '_>, mcx: Mcx<'_>, nrequested: i32
     let mut next_fsm_block_to_vacuum: BlockNumber = 0;
     let mut vmbuffer = VmBuffer::new();
     let orig_eager_scan_success_limit = vacrel.eager_scan_remaining_successes;
+    vacrel.eager_scan_orig_success_limit = orig_eager_scan_success_limit;
 
     pgstat_progress_update_multi_param(
         &[
@@ -1181,10 +1254,15 @@ fn lazy_scan_heap(vacrel: &mut LVRelState<'_, '_>, mcx: Mcx<'_>, nrequested: i32
     }
     vacrel.next_unskippable_allvis = false;
     vacrel.next_unskippable_eager_scanned = false;
-    // C's read stream (vacuumlazy.c:1236, read_stream.c:1001) runs the
-    // heap_vac_scan_next_block callback for block N+1 as it hands out block
-    // N, so N+1's eager admission precedes N's accounting (:1440-1443).
-    let mut lookahead: Option<Option<(BlockNumber, bool, bool)>> = None;
+    // vacuumlazy.c:1236: first-pass stream, no batch mode. Per-buffer data
+    // is (all_visible_according_to_vm, was_eager_scanned).
+    let mut stream = read_stream::read_stream_begin_relation_data::<(bool, bool)>(
+        vacrel.mcx,
+        read_stream::READ_STREAM_MAINTENANCE,
+        vacrel.bstrategy.clone(),
+        vacrel.rel,
+        ForkNumber::MAIN_FORKNUM,
+    )?;
 
     loop {
         vacuum_delay_point(false)?;
@@ -1210,23 +1288,20 @@ fn lazy_scan_heap(vacrel: &mut LVRelState<'_, '_>, mcx: Mcx<'_>, nrequested: i32
             pgstat_progress_update_param(PROGRESS_VACUUM_PHASE, PROGRESS_VACUUM_PHASE_SCAN_HEAP);
         }
 
-        let current = match lookahead.take() {
-            Some(l) => l,
-            None => heap_vac_scan_next_block(vacrel)?,
-        };
-        let Some((next_blkno, all_visible_according_to_vm, was_eager_scanned)) = current else {
+        let (buf, (all_visible_according_to_vm, was_eager_scanned)) =
+            stream.next_buffer_with_data(&mut |info: &mut (bool, bool)| {
+                Ok(match heap_vac_scan_next_block(vacrel)? {
+                    Some((next, allvis, eager)) => {
+                        *info = (allvis, eager);
+                        next
+                    }
+                    None => InvalidBlockNumber,
+                })
+            })?;
+        if buf == InvalidBuffer {
             break;
-        };
-        blkno = next_blkno;
-        lookahead = Some(heap_vac_scan_next_block(vacrel)?);
-
-        let buf = bufmgr_seams::read_buffer_extended::call(
-            vacrel.rel,
-            ForkNumber::MAIN_FORKNUM,
-            blkno,
-            ReadBufferMode::Normal,
-            vacrel.bstrategy.clone(),
-        )?;
+        }
+        blkno = bufmgr_seams::buffer_get_block_number::call(buf);
         vacrel.folds.counters.scanned_pages += 1;
         if was_eager_scanned {
             vacrel.eager_scanned_pages += 1;
@@ -1273,6 +1348,7 @@ fn lazy_scan_heap(vacrel: &mut LVRelState<'_, '_>, mcx: Mcx<'_>, nrequested: i32
             dbname,
             relnamespace,
             relname,
+            keep_items,
             ..
         } = &mut *vacrel;
         let env = ScanEnv {
@@ -1281,6 +1357,7 @@ fn lazy_scan_heap(vacrel: &mut LVRelState<'_, '_>, mcx: Mcx<'_>, nrequested: i32
             vistest: *vistest,
             aggressive: *aggressive,
             nindexes: *nindexes,
+            mark_unused_now: mark_unused_now(*nindexes, *keep_items),
         };
         let mut sink = |blkno: BlockNumber, offsets: &[OffsetNumber]| {
             dead_items_add(dead_items.as_mut().unwrap(), dead_items_info, blkno, offsets)
@@ -1361,6 +1438,7 @@ fn lazy_scan_heap(vacrel: &mut LVRelState<'_, '_>, mcx: Mcx<'_>, nrequested: i32
             }
         }
     }
+    stream.end()?;
 
     vacrel.current_block = InvalidBlockNumber;
     // vacuumlazy.c:1511: vacrel->blkno = InvalidBlockNumber.
@@ -1708,7 +1786,7 @@ fn lazy_scan_prune(
     vm_page_frozen: &mut bool,
 ) -> PgResult<i32> {
     let mut prune_options = HEAP_PAGE_PRUNE_FREEZE;
-    if env.nindexes == 0 {
+    if env.mark_unused_now {
         prune_options |= HEAP_PAGE_PRUNE_MARK_UNUSED_NOW;
     }
 
@@ -1872,8 +1950,15 @@ fn lazy_scan_prune(
     Ok(presult.ndeleted)
 }
 
+/// The (lpdead_items, lpdead_item_pages) folds C's serial scan would hold
+/// at this point: those already merged into dead_items.
+fn merged_lpdead(vacrel: &LVRelState<'_, '_>) -> (u64, u64) {
+    let c = &vacrel.folds.counters;
+    (c.lpdead_items - vacrel.unmerged_lpdead.0, c.lpdead_item_pages - vacrel.unmerged_lpdead.1)
+}
+
 fn lazy_vacuum(vacrel: &mut LVRelState<'_, '_>) -> PgResult<()> {
-    debug_assert!(vacrel.nindexes > 0);
+    debug_assert!(vacrel.nindexes > 0 || !vacrel.do_index_vacuuming);
     debug_assert!(vacrel.folds.counters.lpdead_item_pages > 0);
 
     if !vacrel.do_index_vacuuming {
@@ -1888,8 +1973,7 @@ fn lazy_vacuum(vacrel: &mut LVRelState<'_, '_>) -> PgResult<()> {
         // coverage_hole: counter folds above a §5.2 rewind overcount page
         // visits (tolerated by design); num_items stays store-exact (#66).
         debug_assert!(
-            vacrel.coverage_hole
-                || vacrel.folds.counters.lpdead_items == vacrel.dead_items_info.num_items as u64
+            vacrel.coverage_hole || merged_lpdead(vacrel).0 == vacrel.dead_items_info.num_items as u64
         );
         let threshold = bypass_threshold_pages(vacrel.rel_pages);
         bypass = (vacrel.folds.counters.lpdead_item_pages as BlockNumber) < threshold
@@ -2023,7 +2107,7 @@ fn lazy_vacuum_all_indexes(vacrel: &mut LVRelState<'_, '_>) -> PgResult<bool> {
     debug_assert!(
         vacrel.num_index_scans > 0
             || vacrel.coverage_hole
-            || vacrel.dead_items_info.num_items as u64 == vacrel.folds.counters.lpdead_items
+            || vacrel.dead_items_info.num_items as u64 == merged_lpdead(vacrel).0
     );
     debug_assert!(allindexes || VacuumFailsafeActive());
 
@@ -2155,23 +2239,32 @@ fn lazy_vacuum_heap_rel_pages(vacrel: &mut LVRelState<'_, '_>) -> PgResult<()> {
 
     let dead_items = vacrel.dead_items.take().unwrap();
     let mut iter = dead_items.begin_iterate();
-    while let Some(iter_result) = iter.next() {
+    // vacuumlazy.c:2765: vacuum_reap_lp_read_stream_next neither waits for
+    // IO nor locks, so batch mode is safe.
+    let mut stream = read_stream::read_stream_begin_relation_data::<Option<TidStoreIterResult<'_>>>(
+        vacrel.mcx,
+        read_stream::READ_STREAM_MAINTENANCE | read_stream::READ_STREAM_USE_BATCHING,
+        vacrel.bstrategy.clone(),
+        vacrel.rel,
+        ForkNumber::MAIN_FORKNUM,
+    )?;
+    loop {
         vacuum_delay_point(false)?;
 
+        let (buf, iter_result) = stream.next_buffer_with_data(&mut |res| {
+            *res = iter.next();
+            Ok(res.as_ref().map_or(InvalidBlockNumber, |r| r.blkno))
+        })?;
+        if buf == InvalidBuffer {
+            break;
+        }
+        let iter_result = iter_result.expect("stream buffer without its TidStore entry");
         let blkno = iter_result.blkno;
         // vacuumlazy.c:2792: vacrel->blkno = blkno.
         vacrel.folds.err.blkno.set(blkno);
         let mut offsets = [InvalidOffsetNumber; MaxOffsetNumber as usize];
         let num_offsets = iter_result.block_offsets(&mut offsets);
         debug_assert!(num_offsets <= offsets.len());
-
-        let buf = bufmgr_seams::read_buffer_extended::call(
-            vacrel.rel,
-            ForkNumber::MAIN_FORKNUM,
-            blkno,
-            ReadBufferMode::Normal,
-            vacrel.bstrategy.clone(),
-        )?;
         visibilitymap_pin(vacrel.rel, blkno, &mut vmbuffer)?;
         bufmgr_seams::lock_buffer::call(buf, BUFFER_LOCK_EXCLUSIVE)?;
         lazy_vacuum_heap_page(vacrel, blkno, buf, &offsets[..num_offsets], &vmbuffer)?;
@@ -2185,6 +2278,7 @@ fn lazy_vacuum_heap_rel_pages(vacrel: &mut LVRelState<'_, '_>) -> PgResult<()> {
         vacuumed_pages += 1;
         vacuumed_items += num_offsets as u64;
     }
+    stream.end()?;
     drop(iter);
     vacrel.dead_items = Some(dead_items);
     // vacuumlazy.c:2822: vacrel->blkno = InvalidBlockNumber.
@@ -2214,8 +2308,8 @@ fn lazy_vacuum_heap_rel_pages(vacrel: &mut LVRelState<'_, '_>) -> PgResult<()> {
     debug_assert!(
         vacrel.num_index_scans > 1
             || vacrel.coverage_hole
-            || (vacrel.dead_items_info.num_items as u64 == vacrel.folds.counters.lpdead_items
-                && vacuumed_pages as u64 == vacrel.folds.counters.lpdead_item_pages)
+            || (vacrel.dead_items_info.num_items as u64, vacuumed_pages as u64)
+                == merged_lpdead(vacrel)
     );
 
     vmbuffer.release();
@@ -2661,6 +2755,20 @@ fn count_nondeletable_pages(
     Ok(vacrel.folds.counters.nonempty_pages)
 }
 
+/// `pgrc_companion::kind_of` classifies companions the same way for logical decoding and the VACUUM FULL refusal.
+pub fn pgrc_segment_heap(rel: &RelationData<'_>, nspname: &str) -> bool {
+    rel.rd_rel.relkind == ::types_rel::RELKIND_RELATION
+        && rel.name().as_bytes().starts_with(b"pgrc_seg_")
+        && (rel.rd_rel.relnamespace == ::types_core::catalog::PG_TOAST_NAMESPACE
+            || (rel.rd_rel.relpersistence == ::types_core::catalog::RELPERSISTENCE_TEMP && nspname.starts_with("pg_toast_temp_")))
+}
+
+/// Never a pgrc segment heap: its inserters hold RowExclusiveLock throughout, so a truncate polls for its
+/// AccessExclusiveLock for VACUUM_TRUNCATE_LOCK_TIMEOUT (5 s) or wins it and stalls them.
+pub(crate) fn truncate_allowed(truncate: VacOptValue, rel: &RelationData<'_>, nspname: &str) -> bool {
+    truncate != VacOptValue::Disabled && !pgrc_segment_heap(rel, nspname)
+}
+
 fn should_attempt_truncation(vacrel: &LVRelState<'_, '_>) -> bool {
     if !vacrel.do_rel_truncate || VacuumFailsafeActive() {
         return false;
@@ -2684,14 +2792,61 @@ pub fn init_seams() {
     // rd_tableam->relation_vacuum: installed here, not by tableam — heap is
     // the only AM and a tableam-side install cycles through heapam_handler.
     tableam_seams::table_relation_vacuum::set(|mcx, rel, params, bstrategy| {
-        // pgrcolumnar: immutable append-only row groups — VACUUM is a no-op
-        // (docs/design/pgrcolumnar-impl.md §7.2); autovacuum must never walk
-        // pgrcolumnar bytes as heap pages.
-        if tableam_vocab::is_pgrcolumnar_am_oid(rel.rd_rel.relam) {
-            return Ok(());
+        if tableam_vocab::is_pgrcolumnar_am_oid(rel.rd_rel.relam) && tableam_seams::pgrc_relation_vacuum::is_installed() {
+            let mut freeze = |oldest_xmin| match tableam_seams::pgrc_freeze::is_installed() {
+                true => tableam_seams::pgrc_freeze::call(mcx, rel, oldest_xmin),
+                false => Ok(tableam_seams::PgrcPassFacts::default()),
+            };
+            heap_vacuum_rel_capped(mcx, rel, params, bstrategy.clone(), Some(&mut freeze))?;
+            tableam_seams::pgrc_relation_vacuum::call(mcx, rel, params, bstrategy.clone())?;
+            return pgrc_index_pass(mcx, rel, params, bstrategy);
         }
         heap_vacuum_rel(mcx, rel, params, bstrategy)
     });
+}
+
+fn pgrc_index_pass<'mcx>(mcx: Mcx<'mcx>, rel: &RelationData<'mcx>, params: &VacuumParams, bstrategy: BufferAccessStrategy) -> PgResult<()> {
+    if params.index_cleanup == VacOptValue::Disabled {
+        return Ok(());
+    }
+    let indrels = vac_open_indexes(mcx, rel, RowExclusiveLock)?;
+    if indrels.is_empty() {
+        return vac_close_indexes(indrels, NoLock);
+    }
+    let reltuples = f64::from(rel.rd_rel.reltuples).max(0.0);
+    let info = |index| IndexVacuumInfo {
+        index,
+        heaprel: rel,
+        analyze_only: false,
+        report_progress: false,
+        estimated_count: true,
+        message_level: ::types_error::DEBUG2,
+        num_heap_tuples: reltuples,
+        strategy: bstrategy.clone(),
+    };
+    let dead = match tableam_seams::pgrc_index_dead::is_installed() {
+        true => {
+            let mut scan = |sink: &mut dyn FnMut(&ItemPointerData) -> PgResult<()>| -> PgResult<()> {
+                for index in indrels.iter() {
+                    indexam::index_bulk_delete_collect(mcx, &info(index), sink)?;
+                }
+                Ok(())
+            };
+            tableam_seams::pgrc_index_dead::call(mcx, rel, &mut scan)?
+        }
+        false => Vec::new(),
+    };
+    for index in indrels.iter() {
+        let istat = match dead.is_empty() {
+            true => None,
+            false => Some(vac_bulkdel_one_index(mcx, &info(index), None, &dead)?),
+        };
+        let Some(istat) = vac_cleanup_one_index(mcx, &info(index), istat)? else { continue };
+        if !istat.estimated_count {
+            vacuum_seams::vac_update_relstats::call(index, istat.num_pages, istat.num_index_tuples, 0, 0, false, InvalidTransactionId, 0, false)?;
+        }
+    }
+    vac_close_indexes(indrels, NoLock)
 }
 
 pub(crate) fn eager_scan_disable_ereport(

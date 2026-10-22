@@ -1,0 +1,47 @@
+{
+  "repository": "https://github.com/aengelke/fadec",
+  "revision": "3994d89500985491b1a7ccc17827a22058b3de49",
+  "files": [
+    {
+      "path": "fadec-enc2.h",
+      "sha256": "05b0a58d94c492af9c618e8db2e43269d91fbc2ca90664d1c730959fcbf92f02",
+      "git_blob": "1f76311c41fb9f9ab8a20b63095b887e1cbe4c36"
+    },
+    {
+      "path": "encode2.c",
+      "sha256": "8bbd169749773dff40ce4f88f9f0de01c38400a06d021388a84af616c5a09b08",
+      "git_blob": "aebf4e647303fedf5c3b4f09002fa09666298441"
+    },
+    {
+      "path": "parseinstrs.py",
+      "sha256": "54ed15120b62e980ab238405c98e3dc728a3524ce4cbee1f635c2dfe4b629330",
+      "git_blob": "435e277d5de60232648a772f9f4a68a5faf4d91e"
+    },
+    {
+      "path": "instrs.txt",
+      "sha256": "bd8911845e6d9900e9dbcc75bf3f36cce9ca378460a0fca4fa8bb5a45d066819",
+      "git_blob": "2433c1ec986c0b857f4daad32a0083da38652baf"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "859902e8fdb8978c08ddd9b3fd62f9b704f88fc8a696f7bfd451d54bfcd579dc",
+      "git_blob": "0f97558169968d0dd21ff6d901f4775ecd398f4a"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "sha256": "fa3461c0af4ff646a26d3d7c3f05105e536573600174e39573e37219e9e4965b",
+      "git_blob": "4f27a59902e0ae9bb21feb6e8e90efe4d729763c"
+    }
+  ],
+  "corrected": [
+    {
+      "path": "corrected/encode2.c",
+      "derived_from": "encode2.c",
+      "sha256": "259f1be543de12413da9361de53c2bcc8c1217ced64a759cc67f12b16b074b96",
+      "replaced": "(op_mem_idx(op0) << 24)",
+      "replacement": "((uint32_t) op_mem_idx(op0) << 24)",
+      "occurrences": 1,
+      "reason": "enc_rex_mem shifts the unsigned char index register (FE_NOREG = 0x80 for every memory operand without an index) after promotion to int; 128 << 24 overflows int and is undefined behavior in C11, so the pristine encode2.c aborts under -fsanitize=undefined. The unsigned shift produces identical bytes. Used only by the tpde_encodegen_target_x64 generated-consumer sanitizer build; every byte comparison keeps the pristine encode2.c."
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1key s2u s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) UPDATE uc_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uc_a UNION ALL SELECT 10, 100) s WHERE t.id = s.k;
+QUERY PLAN                              
+----------------------------------------
+Update on uc_t t                        
+  ->  Hash Join                         
+        Hash Cond: (t.id = uc_a.k)      
+        ->  Seq Scan on uc_t t          
+        ->  Hash                        
+              ->  Append                
+                    ->  Seq Scan on uc_a
+                    ->  Result          
+(8 rows)
+
+step s1key: UPDATE uc_t SET id = 10 WHERE id = 3;
+step s2u: UPDATE uc_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uc_a UNION ALL SELECT 10, 100) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, hits FROM uc_t WHERE id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 4|   0
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+10| 100
+11|   0
+12|   0
+13|   0
+14|   0
+16|   0
+(13 rows)
+
+
+starting permutation: s1key s2ur s1c s2sel
+step s1key: UPDATE uc_t SET id = 10 WHERE id = 3;
+step s2ur: UPDATE uc_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uc_a UNION ALL SELECT 10, 100) s WHERE t.id = s.k RETURNING t.id, t.hits, s.k, s.w; <waiting ...>
+step s1c: COMMIT;
+step s2ur: <... completed>
+id|hits|k|w
+--+----+-+-
+10| 100|3|1
+ 6|   2|6|2
+(2 rows)
+
+step s2sel: SELECT id, hits FROM uc_t WHERE id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 4|   0
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+10| 100
+11|   0
+12|   0
+13|   0
+14|   0
+16|   0
+(13 rows)
+
+
+starting permutation: s1key s2m s1c s2sel
+step s1key: UPDATE uc_t SET id = 10 WHERE id = 3;
+step s2m: MERGE INTO uc_t t USING (SELECT k, w FROM uc_a UNION ALL SELECT 10, 100) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, hits FROM uc_t WHERE id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 4|   0
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+10|   1
+11|   0
+12|   0
+13|   0
+14|   0
+16|   0
+(13 rows)
+
+
+starting permutation: s1v s2d s1c s2sel
+step s1v: UPDATE uc_t SET hits = 5 WHERE id = 7;
+step s2d: DELETE FROM uc_t t USING (SELECT k, w FROM uc_a UNION ALL SELECT 7, 1) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT id, hits FROM uc_t WHERE id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 4|   0
+ 8|   0
+ 9|   0
+11|   0
+12|   0
+13|   0
+14|   0
+16|   0
+(10 rows)
+
+
+starting permutation: s1off s2d s1c s2sel
+step s1off: UPDATE uc_t SET id = 15 WHERE id = 7;
+step s2d: DELETE FROM uc_t t USING (SELECT k, w FROM uc_a UNION ALL SELECT 7, 1) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT id, hits FROM uc_t WHERE id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 4|   0
+ 8|   0
+ 9|   0
+11|   0
+12|   0
+13|   0
+14|   0
+15|   0
+16|   0
+(11 rows)
+

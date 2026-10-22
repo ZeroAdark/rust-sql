@@ -9,6 +9,7 @@ name = "sinval"
 path = "src/lib.rs"
 
 [dependencies]
+catcache_seams = { path = "../../../utils/cache/catcache_seams" }
 l2cache = { path = "../../../utils/cache/l2cache" }
 types_core = { path = "../../../../_support/types/types_core" }
 types_error = { path = "../../../../_support/types/types_error" }

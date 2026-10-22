@@ -7,3 +7,6 @@ publish.workspace = true
 [lib]
 name = "types_error"
 path = "src/lib.rs"
+
+[features]
+std = []

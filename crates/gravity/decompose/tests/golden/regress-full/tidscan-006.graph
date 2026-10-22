@@ -1,0 +1,13 @@
+-- regress-full-tidscan-006
+-- SELECT ctid, * FROM tidscan WHERE (id = 3 AND ctid IN ('(0,2)', '(0,3)')) OR (ctid = '(0,1)' AND id = 1);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source tid rel=31040 rti=1 am=heap form=points
+    tid any387(v1.-1, c1010:'\x01\x00\x00\x00\x00\x00\x00\x00\x1b\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x03\x00')
+    tid op387(v1.-1, c27:#6)
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter or(and(op96(v1.1, c23:3), any387(v1.-1, c1010:'\x01\x00\x00\x00\x00\x00\x00\x00\x1b\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x03\x00')), and(op387(v1.-1, c27:#6), op96(v1.1, c23:1)))
+  project (1=v1.-1, 2=v1.1)
+  outs 1=fx6:row 2=w8:val
+mapped: TidScan

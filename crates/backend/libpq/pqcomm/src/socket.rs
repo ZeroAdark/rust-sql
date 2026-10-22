@@ -7,7 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use ip::{sockaddr_family, AddrInfoHint, PgAddrInfo};
 use types_core::{pgsocket, PGINVALID_SOCKET, STATUS_ERROR, STATUS_OK};
 use types_error::{ErrorLocation, PgResult, FATAL, LOG};
@@ -45,10 +45,13 @@ thread_local! {
     // WaitEventSet *FeBeWaitSet; never explicitly freed, as C (lives for the
     // backend). C reclaims it at process death; the thread model reclaims at
     // session-thread exit via WaitEventSetReleaseGuard (chaos F2: without it
-    // every connection leaked this set's epoll fd).
-    static FE_BE_WAIT_SET: Cell<Option<WaitEventSetHandle>> = const { Cell::new(None) };
+    // every connection leaked this set's epoll fd). Beside the handle, the
+    // socket position's mask as last set (D4484, `pq_modify_fe_be_wait_set_socket`).
+    static FE_BE_WAIT_SET: Cell<Option<(WaitEventSetHandle, u32)>> = const { Cell::new(None) };
     // static List *sock_paths (postmaster-thread state).
     static SOCK_PATHS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static INHERITED: RefCell<(Vec<pgsocket>, String, String)> =
+        const { RefCell::new((Vec::new(), String::new(), String::new())) };
     // Live (sock, noblock, ssl_in_use), the transport's runtime truth.
     // INVARIANT: the send/recv path reads these, never MyProcPort — a FATAL
     // raised under WithMyProcPort (auth) sends to the client; a RefCell
@@ -78,7 +81,7 @@ mod cfg {
         pub static UNIX_SOCKET_PERMISSIONS: Cell<i32> = const { Cell::new(0o777) };
         pub static UNIX_SOCKET_GROUP: RefCell<String> = const { RefCell::new(String::new()) };
         // client_connection_check_interval (ms, 0 = disabled): the in-query
-        // dead-client poll (regression). A killed client's parked
+        // dead-client poll (GL-DISCONNECT-WEDGE-1). A killed client's parked
         // parallel leader has no other cancel vector: it never touches the
         // socket from a blocking tuple-queue receive, and the disconnect
         // took the only session that could cancel it.
@@ -148,7 +151,7 @@ pub fn pq_init(client_sock: &ClientSocket) -> PgResult<Port> {
     {
         ereport(FATAL)
             .with_saved_errno(errno())
-            .errmsg("getsockname() failed: %m")
+            .errmsg(format!("getsockname() failed: {PCT_M}"))
             .finish(loc("pq_init"))?;
     }
 
@@ -156,13 +159,13 @@ pub fn pq_init(client_sock: &ClientSocket) -> PgResult<Port> {
         if setsockopt_int(port.sock, ip::sys::IPPROTO_TCP, ip::sys::TCP_NODELAY, 1).is_err() {
             ereport(FATAL)
                 .with_saved_errno(errno())
-                .errmsg("setsockopt(TCP_NODELAY) failed: %m")
+                .errmsg(format!("setsockopt(TCP_NODELAY) failed: {PCT_M}"))
                 .finish(loc("pq_init"))?;
         }
         if setsockopt_int(port.sock, ip::sys::SOL_SOCKET, ip::sys::SO_KEEPALIVE, 1).is_err() {
             ereport(FATAL)
                 .with_saved_errno(errno())
-                .errmsg("setsockopt(SO_KEEPALIVE) failed: %m")
+                .errmsg(format!("setsockopt(SO_KEEPALIVE) failed: {PCT_M}"))
                 .finish(loc("pq_init"))?;
         }
 
@@ -186,14 +189,14 @@ pub fn pq_init(client_sock: &ClientSocket) -> PgResult<Port> {
     if flags < 0 || unsafe { libc::fcntl(port.sock, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         ereport(FATAL)
             .with_saved_errno(errno())
-            .errmsg("could not set socket to nonblocking mode: %m")
+            .errmsg(format!("could not set socket to nonblocking mode: {PCT_M}"))
             .finish(loc("pq_init"))?;
     }
 
     if unsafe { libc::fcntl(port.sock, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
         ereport(FATAL)
             .with_saved_errno(errno())
-            .errmsg_internal("fcntl(F_SETFD) failed on socket: %m")
+            .errmsg_internal(format!("fcntl(F_SETFD) failed on socket: {PCT_M}"))
             .finish(loc("pq_init"))?;
     }
 
@@ -215,12 +218,23 @@ pub fn pq_init(client_sock: &ClientSocket) -> PgResult<Port> {
     )?;
     // C adds WL_POSTMASTER_DEATH third; the threaded waiteventset has none
     // (postmaster exit takes the whole process down).
-    FE_BE_WAIT_SET.set(Some(set));
+    FE_BE_WAIT_SET.set(Some((set, WL_SOCKET_WRITEABLE)));
 
     debug_assert_eq!(socket_pos, FeBeWaitSetSocketPos);
     debug_assert_eq!(latch_pos, FeBeWaitSetLatchPos);
 
     Ok(port)
+}
+
+/// D4682 (client backend thread reuse, launch_backend cpool): the client wire state a parked thread drops before its
+/// next connection. FE_BE_WAIT_SET's set goes (its socket is closed; the next pq_init makes a new set), as a thread exit
+/// frees it (WaitEventSetReleaseGuard), and CLIENT_STATE's socket with it. PQ's pointers and the send buffer are reset
+/// by pq_init_buffers.
+pub fn reset_for_thread_reuse() {
+    if let Some((set, _)) = FE_BE_WAIT_SET.take() {
+        waiteventset_seams::free_wait_event_set::call(set);
+    }
+    CLIENT_STATE.set(None);
 }
 
 // on_proc_exit hook: stop I/O but leave the fd open until process death.
@@ -243,7 +257,7 @@ fn set_port_noblock(noblock: bool) -> bool {
 
 pub fn pq_modify_fe_be_wait_set_latch(latch: LatchHandle) -> PgResult<()> {
     match FE_BE_WAIT_SET.get() {
-        Some(set) => waiteventset_seams::modify_wait_event::call(
+        Some((set, _)) => waiteventset_seams::modify_wait_event::call(
             set,
             FeBeWaitSetLatchPos,
             WL_LATCH_SET,
@@ -253,15 +267,32 @@ pub fn pq_modify_fe_be_wait_set_latch(latch: LatchHandle) -> PgResult<()> {
     }
 }
 
+/// `ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, events, NULL)`. D4484: every wait on the client socket asks
+/// for its mask again (a read wait after a read wait asks READABLE again), and ModifyWaitEvent's own fast path then
+/// changes nothing (a socket position holds no latch: `events == old_events` returns at once). That no-op is
+/// answered here, from the mask this function last set (or `pq_init`'s WL_SOCKET_WRITEABLE), without the seam,
+/// MyProcPid or the set's RefCell. Every modify of the socket position goes through this function (secure_read /
+/// secure_write, the GSSAPI and OpenSSL handshakes, the walsender, pq_check_connection), so the mask cannot drift
+/// from the set's; any other mask (a blocked send's WRITEABLE, pq_check_connection's CLOSED) still goes to
+/// ModifyWaitEvent. A failed modify forgets the mask (ModifyWaitEvent stores the new mask before its epoll_ctl):
+/// the next call always goes through.
 pub fn pq_modify_fe_be_wait_set_socket(events: u32) -> PgResult<()> {
-    let set = FE_BE_WAIT_SET.get().expect("FeBeWaitSet not created");
-    waiteventset_seams::modify_wait_event::call(set, FeBeWaitSetSocketPos, events, None)
+    let (set, mask) = FE_BE_WAIT_SET.get().expect("FeBeWaitSet not created");
+    if mask == events {
+        return Ok(());
+    }
+    let r = waiteventset_seams::modify_wait_event::call(set, FeBeWaitSetSocketPos, events, None);
+    FE_BE_WAIT_SET.set(Some((set, if r.is_ok() { events } else { MASK_UNKNOWN })));
+    r
 }
+
+/// No wait mask (the WL_* bits fit well below it): the socket position's mask after a failed modify.
+const MASK_UNKNOWN: u32 = u32::MAX;
 
 /// One-event `WaitEventSetWait(FeBeWaitSet, ...)`; returns the fired event's
 /// wakeup bits (0 on timeout).
 pub fn pq_wait_event_set_wait_fe_be(timeout: i64, wait_event_info: u32) -> PgResult<u32> {
-    let set = FE_BE_WAIT_SET.get().expect("FeBeWaitSet not created");
+    let (set, _) = FE_BE_WAIT_SET.get().expect("FeBeWaitSet not created");
     let event = waiteventset_seams::wait_event_set_wait_one::call(set, timeout, wait_event_info)?;
     Ok(event.map_or(0, |e| e.events))
 }
@@ -351,7 +382,7 @@ pub fn ListenServerPort(
                 .finish(loc("ListenServerPort"));
             return Ok(STATUS_ERROR);
         }
-        if Lock_AF_UNIX(dir, &unix_socket_path)? != STATUS_OK {
+        if Lock_AF_UNIX(dir, &unix_socket_path, true)? != STATUS_OK {
             return Ok(STATUS_ERROR);
         }
         service = unix_socket_path.clone();
@@ -415,7 +446,7 @@ pub fn ListenServerPort(
                 .with_saved_errno(errno())
                 .errcode_for_socket_access()
                 .errmsg(format!(
-                    "could not create {} socket for address \"{}\": %m",
+                    "could not create {} socket for address \"{}\": {PCT_M}",
                     family_desc, addr_desc
                 ))
                 .finish(loc("ListenServerPort"));
@@ -425,7 +456,7 @@ pub fn ListenServerPort(
         if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
             ereport(FATAL)
                 .with_saved_errno(errno())
-                .errmsg_internal("fcntl(F_SETFD) failed on socket: %m")
+                .errmsg_internal(format!("fcntl(F_SETFD) failed on socket: {PCT_M}"))
                 .finish(loc("ListenServerPort"))?;
         }
 
@@ -438,7 +469,7 @@ pub fn ListenServerPort(
                 .with_saved_errno(errno())
                 .errcode_for_socket_access()
                 .errmsg(format!(
-                    "setsockopt(SO_REUSEADDR) failed for {} address \"{}\": %m",
+                    "setsockopt(SO_REUSEADDR) failed for {} address \"{}\": {PCT_M}",
                     family_desc, addr_desc
                 ))
                 .finish(loc("ListenServerPort"));
@@ -453,7 +484,7 @@ pub fn ListenServerPort(
                 .with_saved_errno(errno())
                 .errcode_for_socket_access()
                 .errmsg(format!(
-                    "setsockopt(IPV6_V6ONLY) failed for {} address \"{}\": %m",
+                    "setsockopt(IPV6_V6ONLY) failed for {} address \"{}\": {PCT_M}",
                     family_desc, addr_desc
                 ))
                 .finish(loc("ListenServerPort"));
@@ -475,7 +506,7 @@ pub fn ListenServerPort(
                 .with_saved_errno(saved_errno)
                 .errcode_for_socket_access()
                 .errmsg(format!(
-                    "could not bind {} address \"{}\": %m",
+                    "could not bind {} address \"{}\": {PCT_M}",
                     family_desc, addr_desc
                 ));
             if saved_errno == libc::EADDRINUSE {
@@ -510,7 +541,7 @@ pub fn ListenServerPort(
                 .with_saved_errno(errno())
                 .errcode_for_socket_access()
                 .errmsg(format!(
-                    "could not listen on {} address \"{}\": %m",
+                    "could not listen on {} address \"{}\": {PCT_M}",
                     family_desc, addr_desc
                 ))
                 .finish(loc("ListenServerPort"));
@@ -538,7 +569,7 @@ pub fn ListenServerPort(
     Ok(STATUS_OK)
 }
 
-fn Lock_AF_UNIX(unix_socket_dir: &str, unix_socket_path: &str) -> PgResult<i32> {
+fn Lock_AF_UNIX(unix_socket_dir: &str, unix_socket_path: &str, remove_stale: bool) -> PgResult<i32> {
     // No lock file for abstract sockets.
     if unix_socket_path.starts_with('@') {
         return Ok(STATUS_OK);
@@ -546,13 +577,65 @@ fn Lock_AF_UNIX(unix_socket_dir: &str, unix_socket_path: &str) -> PgResult<i32> 
 
     miscinit_seams::create_socket_lock_file::call(unix_socket_path, true, unix_socket_dir)?;
 
-    // Interlock held: delete any pre-existing socket file before bind().
-    let c = CString::new(unix_socket_path).expect("socket path contains NUL");
-    unsafe { libc::unlink(c.as_ptr()) };
+    if remove_stale {
+        // Interlock held: delete any pre-existing socket file before bind().
+        let c = CString::new(unix_socket_path).expect("socket path contains NUL");
+        unsafe { libc::unlink(c.as_ptr()) };
+    }
 
     SOCK_PATHS.with(|p| p.borrow_mut().push(unix_socket_path.to_owned()));
 
     Ok(STATUS_OK)
+}
+
+pub fn inherit_listen_sockets(fds: &[pgsocket], listen_line: &str, socket_dir_line: &str) {
+    INHERITED.with(|v| {
+        let mut v = v.borrow_mut();
+        v.0.clear();
+        v.0.extend_from_slice(fds);
+        v.1.clear();
+        v.1.push_str(listen_line);
+        v.2.clear();
+        v.2.push_str(socket_dir_line);
+    });
+}
+
+fn local_sockaddr(fd: pgsocket) -> Option<ip::SockAddr> {
+    let mut a = ip::SockAddr::zeroed();
+    let mut len = a.addr.len() as ip::sys::socklen_t;
+    // SAFETY: getsockname(2) into a sockaddr_storage-sized buffer.
+    let rc = unsafe { ip::sys::getsockname(fd, a.addr.as_mut_ptr().cast::<ip::sys::sockaddr>(), &mut len) };
+    if rc != 0 {
+        return None;
+    }
+    a.salen = len as u32;
+    Some(a)
+}
+
+fn unix_path_of(a: &ip::SockAddr) -> Option<String> {
+    if sockaddr_family(a) != ip::sys::AF_UNIX {
+        return None;
+    }
+    let path = &a.addr[2..(a.salen as usize).clamp(2, a.addr.len())];
+    let end = path.iter().position(|&b| b == 0).unwrap_or(path.len());
+    std::str::from_utf8(&path[..end]).ok().map(str::to_owned)
+}
+
+/// C divergence: a crash-restarted generation keeps the first one's sockets.
+pub fn adopt_inherited_listen_sockets(
+    listen_sockets: &mut Vec<pgsocket>,
+) -> PgResult<(String, String)> {
+    let (rest, listen_line, socket_dir_line) = INHERITED.with(|v| std::mem::take(&mut *v.borrow_mut()));
+    for fd in rest {
+        if let Some(path) = local_sockaddr(fd).as_ref().and_then(unix_path_of).filter(|p| !p.is_empty()) {
+            let dir = path.rsplit_once('/').map_or(".", |(d, _)| d).to_owned();
+            if Lock_AF_UNIX(&dir, &path, false)? != STATUS_OK {
+                continue;
+            }
+        }
+        listen_sockets.push(fd);
+    }
+    Ok((listen_line, socket_dir_line))
 }
 
 // C strtoul(s, &endptr, 10) with the `*endptr == '\0'` full-consumption test.
@@ -622,7 +705,7 @@ fn Setup_AF_UNIX(sock_path: &str) -> PgResult<i32> {
             let _ = ereport(LOG)
                 .with_saved_errno(errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not set group of file \"{}\": %m", sock_path))
+                .errmsg(format!("could not set group of file \"{}\": {PCT_M}", sock_path))
                 .finish(loc("Setup_AF_UNIX"));
             return Ok(STATUS_ERROR);
         }
@@ -633,7 +716,7 @@ fn Setup_AF_UNIX(sock_path: &str) -> PgResult<i32> {
             .with_saved_errno(errno())
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not set permissions of file \"{}\": %m",
+                "could not set permissions of file \"{}\": {PCT_M}",
                 sock_path
             ))
             .finish(loc("Setup_AF_UNIX"));
@@ -657,7 +740,7 @@ pub fn AcceptConnection(server_fd: pgsocket, client_sock: &mut ClientSocket) -> 
         let _ = ereport(LOG)
             .with_saved_errno(errno())
             .errcode_for_socket_access()
-            .errmsg("could not accept new connection: %m")
+            .errmsg(format!("could not accept new connection: {PCT_M}"))
             .finish(loc("AcceptConnection"));
 
         // The postmaster retries immediately on read-ready; delay a bit.
@@ -702,211 +785,190 @@ pub fn RemoveSocketFiles() {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const PG_TCP_KEEPALIVE_IDLE: i32 = libc::TCP_KEEPALIVE;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-const PG_TCP_KEEPALIVE_IDLE_STR: &str = "TCP_KEEPALIVE";
+pub(crate) const PG_TCP_KEEPALIVE_IDLE_STR: &str = "TCP_KEEPALIVE";
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 const PG_TCP_KEEPALIVE_IDLE: i32 = ip::sys::TCP_KEEPIDLE;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-const PG_TCP_KEEPALIVE_IDLE_STR: &str = "TCP_KEEPIDLE";
+pub(crate) const PG_TCP_KEEPALIVE_IDLE_STR: &str = "TCP_KEEPIDLE";
 
 fn log_sockopt_failure(call: &str, optname: &str, funcname: &'static str) {
     let _ = ereport(LOG)
         .with_saved_errno(errno())
-        .errmsg(format!("{}({}) failed: %m", call, optname))
+        .errmsg(format!("{}({}) failed: {PCT_M}", call, optname))
         .finish(loc(funcname));
 }
 
-pub fn pq_getkeepalivesidle(port: Option<&mut Port>) -> i32 {
-    let Some(port) = port else { return 0 };
-    if sockaddr_family(&port.laddr) == ip::sys::AF_UNIX {
-        return 0;
-    }
+/// A Port's keepalive knobs, copied out so the syscalls and their LOG never run under a
+/// `MyProcPort` borrow: the log sink re-borrows the Port inside every ereport (the logconn
+/// hazard, `c52e793288b`), so an exclusive borrow spans a field store only — `of` under the
+/// shared borrow, the kernel calls on the copy, `store` under the exclusive one.
+#[derive(Clone, Copy)]
+struct Keepalives {
+    sock: pgsocket,
+    unix: bool,
+    default_idle: i32,
+    default_interval: i32,
+    default_count: i32,
+    default_user_timeout: i32,
+    idle: i32,
+    interval: i32,
+    count: i32,
+    user_timeout: i32,
+}
 
-    if port.keepalives_idle != 0 {
-        return port.keepalives_idle;
-    }
-
-    if port.default_keepalives_idle == 0 {
-        match getsockopt_int(port.sock, ip::sys::IPPROTO_TCP, PG_TCP_KEEPALIVE_IDLE) {
-            Ok(v) => port.default_keepalives_idle = v,
-            Err(()) => {
-                log_sockopt_failure(
-                    "getsockopt",
-                    PG_TCP_KEEPALIVE_IDLE_STR,
-                    "pq_getkeepalivesidle",
-                );
-                port.default_keepalives_idle = -1;
-            }
+impl Keepalives {
+    fn of(port: &Port) -> Keepalives {
+        Keepalives {
+            sock: port.sock,
+            unix: sockaddr_family(&port.laddr) == ip::sys::AF_UNIX,
+            default_idle: port.default_keepalives_idle,
+            default_interval: port.default_keepalives_interval,
+            default_count: port.default_keepalives_count,
+            default_user_timeout: port.default_tcp_user_timeout,
+            idle: port.keepalives_idle,
+            interval: port.keepalives_interval,
+            count: port.keepalives_count,
+            user_timeout: port.tcp_user_timeout,
         }
     }
 
-    port.default_keepalives_idle
+    fn store(&self, port: &mut Port) {
+        port.default_keepalives_idle = self.default_idle;
+        port.default_keepalives_interval = self.default_interval;
+        port.default_keepalives_count = self.default_count;
+        port.default_tcp_user_timeout = self.default_user_timeout;
+        port.keepalives_idle = self.idle;
+        port.keepalives_interval = self.interval;
+        port.keepalives_count = self.count;
+        port.tcp_user_timeout = self.user_timeout;
+    }
+}
+
+struct Knob {
+    opt: i32,
+    name: &'static str,
+    getter: &'static str,
+    setter: &'static str,
+    cur: fn(&mut Keepalives) -> &mut i32,
+    dflt: fn(&mut Keepalives) -> &mut i32,
+}
+
+const IDLE: Knob = Knob {
+    opt: PG_TCP_KEEPALIVE_IDLE,
+    name: PG_TCP_KEEPALIVE_IDLE_STR,
+    getter: "pq_getkeepalivesidle",
+    setter: "pq_setkeepalivesidle",
+    cur: |k| &mut k.idle,
+    dflt: |k| &mut k.default_idle,
+};
+const INTERVAL: Knob = Knob {
+    opt: ip::sys::TCP_KEEPINTVL,
+    name: "TCP_KEEPINTVL",
+    getter: "pq_getkeepalivesinterval",
+    setter: "pq_setkeepalivesinterval",
+    cur: |k| &mut k.interval,
+    dflt: |k| &mut k.default_interval,
+};
+const COUNT: Knob = Knob {
+    opt: ip::sys::TCP_KEEPCNT,
+    name: "TCP_KEEPCNT",
+    getter: "pq_getkeepalivescount",
+    setter: "pq_setkeepalivescount",
+    cur: |k| &mut k.count,
+    dflt: |k| &mut k.default_count,
+};
+#[cfg(target_os = "linux")]
+const USER_TIMEOUT: Knob = Knob {
+    opt: libc::TCP_USER_TIMEOUT,
+    name: "TCP_USER_TIMEOUT",
+    getter: "pq_gettcpusertimeout",
+    setter: "pq_settcpusertimeout",
+    cur: |k| &mut k.user_timeout,
+    dflt: |k| &mut k.default_user_timeout,
+};
+
+fn knob_get(k: &mut Keepalives, knob: &Knob) -> i32 {
+    if k.unix {
+        return 0;
+    }
+    if *(knob.cur)(k) != 0 {
+        return *(knob.cur)(k);
+    }
+    if *(knob.dflt)(k) == 0 {
+        match getsockopt_int(k.sock, ip::sys::IPPROTO_TCP, knob.opt) {
+            Ok(v) => *(knob.dflt)(k) = v,
+            Err(()) => {
+                log_sockopt_failure("getsockopt", knob.name, knob.getter);
+                *(knob.dflt)(k) = -1;
+            }
+        }
+    }
+    *(knob.dflt)(k)
+}
+
+// pq_set*: 0 restores the kernel default (unknown default: 0 is a no-op, anything else an error).
+fn knob_set(value: i32, k: &mut Keepalives, knob: &Knob) -> i32 {
+    if k.unix {
+        return STATUS_OK;
+    }
+    if value == *(knob.cur)(k) {
+        return STATUS_OK;
+    }
+    if *(knob.dflt)(k) <= 0 && knob_get(k, knob) < 0 {
+        if value == 0 {
+            return STATUS_OK;
+        }
+        return STATUS_ERROR;
+    }
+    let value = if value == 0 { *(knob.dflt)(k) } else { value };
+    if setsockopt_int(k.sock, ip::sys::IPPROTO_TCP, knob.opt, value).is_err() {
+        log_sockopt_failure("setsockopt", knob.name, knob.setter);
+        return STATUS_ERROR;
+    }
+    *(knob.cur)(k) = value;
+    STATUS_OK
+}
+
+fn on_port<R>(port: Option<&mut Port>, none: R, f: impl FnOnce(&mut Keepalives) -> R) -> R {
+    let Some(port) = port else { return none };
+    let mut k = Keepalives::of(port);
+    let r = f(&mut k);
+    k.store(port);
+    r
+}
+
+pub fn pq_getkeepalivesidle(port: Option<&mut Port>) -> i32 {
+    on_port(port, 0, |k| knob_get(k, &IDLE))
 }
 
 pub fn pq_setkeepalivesidle(idle: i32, port: Option<&mut Port>) -> i32 {
-    let Some(port) = port else { return STATUS_OK };
-    if sockaddr_family(&port.laddr) == ip::sys::AF_UNIX {
-        return STATUS_OK;
-    }
-
-    if idle == port.keepalives_idle {
-        return STATUS_OK;
-    }
-
-    if port.default_keepalives_idle <= 0 && pq_getkeepalivesidle(Some(port)) < 0 {
-        if idle == 0 {
-            return STATUS_OK; // default is set but unknown
-        }
-        return STATUS_ERROR;
-    }
-
-    let mut idle = idle;
-    if idle == 0 {
-        idle = port.default_keepalives_idle;
-    }
-
-    if setsockopt_int(port.sock, ip::sys::IPPROTO_TCP, PG_TCP_KEEPALIVE_IDLE, idle).is_err() {
-        log_sockopt_failure(
-            "setsockopt",
-            PG_TCP_KEEPALIVE_IDLE_STR,
-            "pq_setkeepalivesidle",
-        );
-        return STATUS_ERROR;
-    }
-
-    port.keepalives_idle = idle;
-    STATUS_OK
+    on_port(port, STATUS_OK, |k| knob_set(idle, k, &IDLE))
 }
 
 pub fn pq_getkeepalivesinterval(port: Option<&mut Port>) -> i32 {
-    let Some(port) = port else { return 0 };
-    if sockaddr_family(&port.laddr) == ip::sys::AF_UNIX {
-        return 0;
-    }
-
-    if port.keepalives_interval != 0 {
-        return port.keepalives_interval;
-    }
-
-    if port.default_keepalives_interval == 0 {
-        match getsockopt_int(port.sock, ip::sys::IPPROTO_TCP, ip::sys::TCP_KEEPINTVL) {
-            Ok(v) => port.default_keepalives_interval = v,
-            Err(()) => {
-                log_sockopt_failure("getsockopt", "TCP_KEEPINTVL", "pq_getkeepalivesinterval");
-                port.default_keepalives_interval = -1;
-            }
-        }
-    }
-
-    port.default_keepalives_interval
+    on_port(port, 0, |k| knob_get(k, &INTERVAL))
 }
 
 pub fn pq_setkeepalivesinterval(interval: i32, port: Option<&mut Port>) -> i32 {
-    let Some(port) = port else { return STATUS_OK };
-    if sockaddr_family(&port.laddr) == ip::sys::AF_UNIX {
-        return STATUS_OK;
-    }
-
-    if interval == port.keepalives_interval {
-        return STATUS_OK;
-    }
-
-    if port.default_keepalives_interval <= 0 && pq_getkeepalivesinterval(Some(port)) < 0 {
-        if interval == 0 {
-            return STATUS_OK;
-        }
-        return STATUS_ERROR;
-    }
-
-    let mut interval = interval;
-    if interval == 0 {
-        interval = port.default_keepalives_interval;
-    }
-
-    if setsockopt_int(port.sock, ip::sys::IPPROTO_TCP, ip::sys::TCP_KEEPINTVL, interval).is_err() {
-        log_sockopt_failure("setsockopt", "TCP_KEEPINTVL", "pq_setkeepalivesinterval");
-        return STATUS_ERROR;
-    }
-
-    port.keepalives_interval = interval;
-    STATUS_OK
+    on_port(port, STATUS_OK, |k| knob_set(interval, k, &INTERVAL))
 }
 
 pub fn pq_getkeepalivescount(port: Option<&mut Port>) -> i32 {
-    let Some(port) = port else { return 0 };
-    if sockaddr_family(&port.laddr) == ip::sys::AF_UNIX {
-        return 0;
-    }
-
-    if port.keepalives_count != 0 {
-        return port.keepalives_count;
-    }
-
-    if port.default_keepalives_count == 0 {
-        match getsockopt_int(port.sock, ip::sys::IPPROTO_TCP, ip::sys::TCP_KEEPCNT) {
-            Ok(v) => port.default_keepalives_count = v,
-            Err(()) => {
-                log_sockopt_failure("getsockopt", "TCP_KEEPCNT", "pq_getkeepalivescount");
-                port.default_keepalives_count = -1;
-            }
-        }
-    }
-
-    port.default_keepalives_count
+    on_port(port, 0, |k| knob_get(k, &COUNT))
 }
 
 pub fn pq_setkeepalivescount(count: i32, port: Option<&mut Port>) -> i32 {
-    let Some(port) = port else { return STATUS_OK };
-    if sockaddr_family(&port.laddr) == ip::sys::AF_UNIX {
-        return STATUS_OK;
-    }
-
-    if count == port.keepalives_count {
-        return STATUS_OK;
-    }
-
-    if port.default_keepalives_count <= 0 && pq_getkeepalivescount(Some(port)) < 0 {
-        if count == 0 {
-            return STATUS_OK;
-        }
-        return STATUS_ERROR;
-    }
-
-    let mut count = count;
-    if count == 0 {
-        count = port.default_keepalives_count;
-    }
-
-    if setsockopt_int(port.sock, ip::sys::IPPROTO_TCP, ip::sys::TCP_KEEPCNT, count).is_err() {
-        log_sockopt_failure("setsockopt", "TCP_KEEPCNT", "pq_setkeepalivescount");
-        return STATUS_ERROR;
-    }
-
-    port.keepalives_count = count;
-    STATUS_OK
+    on_port(port, STATUS_OK, |k| knob_set(count, k, &COUNT))
 }
 
 #[cfg(target_os = "linux")]
 pub fn pq_gettcpusertimeout(port: Option<&mut Port>) -> i32 {
-    let Some(port) = port else { return 0 };
-    if sockaddr_family(&port.laddr) == ip::sys::AF_UNIX {
-        return 0;
-    }
+    on_port(port, 0, |k| knob_get(k, &USER_TIMEOUT))
+}
 
-    if port.tcp_user_timeout != 0 {
-        return port.tcp_user_timeout;
-    }
-
-    if port.default_tcp_user_timeout == 0 {
-        match getsockopt_int(port.sock, ip::sys::IPPROTO_TCP, libc::TCP_USER_TIMEOUT) {
-            Ok(v) => port.default_tcp_user_timeout = v,
-            Err(()) => {
-                log_sockopt_failure("getsockopt", "TCP_USER_TIMEOUT", "pq_gettcpusertimeout");
-                port.default_tcp_user_timeout = -1;
-            }
-        }
-    }
-
-    port.default_tcp_user_timeout
+#[cfg(target_os = "linux")]
+pub fn pq_settcpusertimeout(timeout: i32, port: Option<&mut Port>) -> i32 {
+    on_port(port, STATUS_OK, |k| knob_set(timeout, k, &USER_TIMEOUT))
 }
 
 // Non-Linux: no TCP_USER_TIMEOUT (the C #else arms).
@@ -915,112 +977,81 @@ pub fn pq_gettcpusertimeout(_port: Option<&mut Port>) -> i32 {
     0
 }
 
-#[cfg(target_os = "linux")]
-pub fn pq_settcpusertimeout(timeout: i32, port: Option<&mut Port>) -> i32 {
-    let Some(port) = port else { return STATUS_OK };
-    if sockaddr_family(&port.laddr) == ip::sys::AF_UNIX {
+#[cfg(not(target_os = "linux"))]
+fn user_timeout_unsupported(timeout: i32, k: &mut Keepalives) -> i32 {
+    if k.unix || timeout == 0 {
         return STATUS_OK;
     }
-
-    if timeout == port.tcp_user_timeout {
-        return STATUS_OK;
-    }
-
-    if port.default_tcp_user_timeout <= 0 && pq_gettcpusertimeout(Some(port)) < 0 {
-        if timeout == 0 {
-            return STATUS_OK;
-        }
-        return STATUS_ERROR;
-    }
-
-    let mut timeout = timeout;
-    if timeout == 0 {
-        timeout = port.default_tcp_user_timeout;
-    }
-
-    if setsockopt_int(
-        port.sock,
-        ip::sys::IPPROTO_TCP,
-        libc::TCP_USER_TIMEOUT,
-        timeout,
-    )
-    .is_err()
-    {
-        log_sockopt_failure("setsockopt", "TCP_USER_TIMEOUT", "pq_settcpusertimeout");
-        return STATUS_ERROR;
-    }
-
-    port.tcp_user_timeout = timeout;
-    STATUS_OK
+    let _ = ereport(LOG)
+        .errmsg("setsockopt(TCP_USER_TIMEOUT) not supported")
+        .finish(loc("pq_settcpusertimeout"));
+    STATUS_ERROR
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn pq_settcpusertimeout(timeout: i32, port: Option<&mut Port>) -> i32 {
-    let Some(port) = port else { return STATUS_OK };
-    if sockaddr_family(&port.laddr) == ip::sys::AF_UNIX {
-        return STATUS_OK;
-    }
-    if timeout != 0 {
-        let _ = ereport(LOG)
-            .errmsg("setsockopt(TCP_USER_TIMEOUT) not supported")
-            .finish(loc("pq_settcpusertimeout"));
-        return STATUS_ERROR;
-    }
-    STATUS_OK
+    on_port(port, STATUS_OK, |k| user_timeout_unsupported(timeout, k))
 }
 
-fn with_my_proc_port_opt<R>(f: impl FnOnce(Option<&mut Port>) -> R) -> R {
-    if g::HaveMyProcPort() {
-        g::WithMyProcPort(|port| f(Some(port)))
-    } else {
-        f(None)
+fn on_my_port<R>(none: R, f: impl FnOnce(&mut Keepalives) -> R) -> R {
+    if !g::HaveMyProcPort() {
+        return none;
     }
+    let mut k = g::WithMyProcPort(Keepalives::of);
+    let r = f(&mut k);
+    g::WithMyProcPortMut(|port| k.store(port));
+    r
 }
 
 // The kernel API can't test a keepalive value without setting it, so GUC
 // assignment happens on demand and show reads back the kernel truth.
-fn assign_tcp_keepalives_idle(newval: i32) {
+pub(crate) fn assign_tcp_keepalives_idle(newval: i32) {
     cfg::TCP_KEEPALIVES_IDLE.set(newval);
-    with_my_proc_port_opt(|port| {
-        let _ = pq_setkeepalivesidle(newval, port);
-    });
+    let _ = on_my_port(STATUS_OK, |k| knob_set(newval, k, &IDLE));
 }
 
-fn show_tcp_keepalives_idle() -> String {
-    with_my_proc_port_opt(pq_getkeepalivesidle).to_string()
+pub(crate) fn show_tcp_keepalives_idle() -> String {
+    on_my_port(0, |k| knob_get(k, &IDLE)).to_string()
 }
 
-fn assign_tcp_keepalives_interval(newval: i32) {
+pub(crate) fn assign_tcp_keepalives_interval(newval: i32) {
     cfg::TCP_KEEPALIVES_INTERVAL.set(newval);
-    with_my_proc_port_opt(|port| {
-        let _ = pq_setkeepalivesinterval(newval, port);
-    });
+    let _ = on_my_port(STATUS_OK, |k| knob_set(newval, k, &INTERVAL));
 }
 
-fn show_tcp_keepalives_interval() -> String {
-    with_my_proc_port_opt(pq_getkeepalivesinterval).to_string()
+pub(crate) fn show_tcp_keepalives_interval() -> String {
+    on_my_port(0, |k| knob_get(k, &INTERVAL)).to_string()
 }
 
-fn assign_tcp_keepalives_count(newval: i32) {
+pub(crate) fn assign_tcp_keepalives_count(newval: i32) {
     cfg::TCP_KEEPALIVES_COUNT.set(newval);
-    with_my_proc_port_opt(|port| {
-        let _ = pq_setkeepalivescount(newval, port);
-    });
+    let _ = on_my_port(STATUS_OK, |k| knob_set(newval, k, &COUNT));
 }
 
-fn show_tcp_keepalives_count() -> String {
-    with_my_proc_port_opt(pq_getkeepalivescount).to_string()
+pub(crate) fn show_tcp_keepalives_count() -> String {
+    on_my_port(0, |k| knob_get(k, &COUNT)).to_string()
 }
 
-fn assign_tcp_user_timeout(newval: i32) {
+#[cfg(target_os = "linux")]
+pub(crate) fn assign_tcp_user_timeout(newval: i32) {
     cfg::TCP_USER_TIMEOUT.set(newval);
-    with_my_proc_port_opt(|port| {
-        let _ = pq_settcpusertimeout(newval, port);
-    });
+    let _ = on_my_port(STATUS_OK, |k| knob_set(newval, k, &USER_TIMEOUT));
 }
 
-fn show_tcp_user_timeout() -> String {
-    with_my_proc_port_opt(pq_gettcpusertimeout).to_string()
+#[cfg(target_os = "linux")]
+pub(crate) fn show_tcp_user_timeout() -> String {
+    on_my_port(0, |k| knob_get(k, &USER_TIMEOUT)).to_string()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn assign_tcp_user_timeout(newval: i32) {
+    cfg::TCP_USER_TIMEOUT.set(newval);
+    let _ = on_my_port(STATUS_OK, |k| user_timeout_unsupported(newval, k));
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn show_tcp_user_timeout() -> String {
+    "0".to_string()
 }
 
 /// Install the socket-half seams and this file's GUC slots. Kept apart from
@@ -1054,6 +1085,8 @@ pub fn init_socket_seams() {
             )))
         }
     });
+    pqcomm_seams::inherit_listen_sockets::set(inherit_listen_sockets);
+    pqcomm_seams::adopt_inherited_listen_sockets::set(adopt_inherited_listen_sockets);
     pqcomm_seams::listen_server_port::set(
         |hostname, port, unix_socket_dir, listen_sockets, max_listen| {
             let family =
@@ -1132,4 +1165,54 @@ pub fn init_socket_gucs() {
     // hook only installs with the real socket transport — other transports
     // leave the pq_check_connection seam vacant and the interval inert.
     hooks::check_client_connection_check_interval.install(|_newval, _extra, _source| Ok(true));
+}
+
+#[cfg(test)]
+mod fe_be_mask_tests {
+    //! D4484: `pq_modify_fe_be_wait_set_socket` answers only an equal mask itself; every other mask (a blocked
+    //! send's WRITEABLE, pq_check_connection's CLOSED, the switch back to READABLE) reaches ModifyWaitEvent, and a
+    //! failed modify makes the next one go through.
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::SeqCst};
+    use types_storage::waiteventset::WL_SOCKET_READABLE;
+
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    static LAST: AtomicU32 = AtomicU32::new(0);
+    static FAIL_NEXT: AtomicBool = AtomicBool::new(false);
+
+    fn modify(events: u32) -> (bool, usize) {
+        let ok = pq_modify_fe_be_wait_set_socket(events).is_ok();
+        (ok, CALLS.load(SeqCst))
+    }
+
+    #[test]
+    fn only_an_unchanged_mask_skips_modify_wait_event() {
+        waiteventset_seams::modify_wait_event::set(|_set, pos, events, latch| {
+            assert_eq!(pos, FeBeWaitSetSocketPos);
+            assert!(latch.is_none());
+            CALLS.fetch_add(1, SeqCst);
+            LAST.store(events, SeqCst);
+            if FAIL_NEXT.swap(false, SeqCst) {
+                return Err(Box::new(types_error::PgError::new(types_error::ERROR, "epoll_ctl() failed".to_string())));
+            }
+            Ok(())
+        });
+        // pq_init's state: the socket position added with WL_SOCKET_WRITEABLE
+        FE_BE_WAIT_SET.set(Some((WaitEventSetHandle::new(1), WL_SOCKET_WRITEABLE)));
+        assert_eq!(modify(WL_SOCKET_READABLE), (true, 1), "the first read wait switches WRITEABLE -> READABLE");
+        for _ in 0..3 {
+            assert_eq!(modify(WL_SOCKET_READABLE), (true, 1), "a read wait after a read wait changes nothing");
+        }
+        assert_eq!(modify(WL_SOCKET_WRITEABLE), (true, 2), "a blocked send still switches to WRITEABLE");
+        assert_eq!(modify(WL_SOCKET_WRITEABLE), (true, 2));
+        assert_eq!(modify(WL_SOCKET_READABLE), (true, 3), "and the next read switches back");
+        assert_eq!(modify(WL_SOCKET_CLOSED), (true, 4), "pq_check_connection's CLOSED reaches the set");
+        assert_eq!(modify(WL_SOCKET_READABLE), (true, 5));
+        assert_eq!(LAST.load(SeqCst), WL_SOCKET_READABLE);
+        FAIL_NEXT.store(true, SeqCst);
+        assert_eq!(modify(WL_SOCKET_WRITEABLE), (false, 6), "a failed modify is raised");
+        assert_eq!(modify(WL_SOCKET_READABLE), (true, 7), "after a failure even the old mask goes through");
+        assert_eq!(modify(WL_SOCKET_READABLE), (true, 7));
+        FE_BE_WAIT_SET.set(None);
+    }
 }

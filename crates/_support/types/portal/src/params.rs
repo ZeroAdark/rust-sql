@@ -30,14 +30,9 @@ impl ParamExecData {
         ParamExecData { value: Datum::null(), isnull: true, exec_plan: false };
 }
 
-// C ParamListInfo.paramCompile (params.h ParamCompileHook) reduced to its
-// runtime half: execExpr.c ExecInitExprRec compiles every PARAM_EXTERN
-// through the hook into an EEOP_PARAM_CALLBACK step (execExpr.c:1044-1064)
-// whose paramfunc runs only when the program reaches it
-// (execExprInterp.c:1334). One function per list owner (plpgsql's
-// plpgsql_param_eval_* family folds into its datum dispatch); `arg` is the
-// owner's per-evaluation hook data (C paramFetchArg), armed on the ExprState
-// before each evaluation (`ExprState::arm_param_callback_arg`).
+// C ParamListInfo.paramCompile's runtime half: every PARAM_EXTERN becomes an
+// EEOP_PARAM_CALLBACK step (execExpr.c:1044-1064) run only when reached; `arg`
+// is the owner's per-evaluation data (C paramFetchArg, arm_param_callback_arg).
 //
 // # Safety
 // `arg` is the pointer the list owner armed for the running evaluation.
@@ -48,6 +43,20 @@ pub type ParamCallbackFn =
 // flat images, so the list owner reports which Params hold an expanded
 // container (plpgsql array Vars, pl_exec.c exec_assign_value).
 pub type ParamExpandedFn = unsafe fn(arg: *mut (), paramid: i32) -> bool;
+
+// C ParamListInfo.paramFetch (speculative = false) as ExecEvalParamExtern
+// calls it, for a slot the list was built without.
+//
+// # Safety
+// `arg` is the pointer the list owner registered, live while the list is.
+pub type ParamFetchFn = unsafe fn(arg: *mut (), paramid: i32) -> PgResult<ParamExternData>;
+
+#[derive(Clone, Copy, Debug)]
+pub struct ParamFetchHook {
+    pub func: ParamFetchFn,
+    pub arg: *mut (),
+}
+mcx::forget_safe_nodrop!(ParamFetchHook);
 
 // Resolve-once compile binding (execexpr's AggBind precedent); both arrays are address-stable.
 #[derive(Clone, Copy, Debug, Default)]
@@ -60,6 +69,10 @@ pub struct ParamBind<'a> {
     // `extern_params` is not consulted for it.
     pub param_callback: Option<ParamCallbackFn>,
     pub param_expanded: Option<ParamExpandedFn>,
+    pub param_rw: Option<(*const (), ParamCallbackFn)>,
+    pub param_ro_expanded: Option<(&'a [*const ()], ParamCallbackFn)>,
+    // Fetch for an `extern_params` slot with no value (ptype InvalidOid).
+    pub extern_fetch: Option<ParamFetchHook>,
 }
 
 impl ParamBind<'_> {
@@ -69,6 +82,9 @@ impl ParamBind<'_> {
         n_exec: 0,
         param_callback: None,
         param_expanded: None,
+        param_rw: None,
+        param_ro_expanded: None,
+        extern_fetch: None,
     };
 }
 
@@ -77,21 +93,17 @@ struct Entry {
     ptr: *const ParamExternData,
     len: usize,
     generation: u32,
-    // C ParamListInfo.paramFetch != NULL: the list is lazily fetched by a
-    // PL (plpgsql setup_param_list). This port materializes such lists, but
-    // consumers that mirror C's paramFetch bail-outs (params.c
-    // BuildParamLogString -> auto_explain's Query Parameters line) need the
-    // provenance bit.
+    // C paramFetch != NULL (plpgsql setup_param_list): BuildParamLogString
+    // consumers (auto_explain's Query Parameters line) read this bit.
     hooked: bool,
-    // The list is a PL's variable environment rather than protocol bind
-    // values (plpgsql datums, SQL-function arguments — functions.c
-    // postquel_sub_params makes a plain list, paramFetch NULL); the sqe
-    // bind-params gate reads this, not the fetch-hook bit.
+    // A PL's variable environment (plpgsql datums, SQL-function arguments),
+    // not protocol bind values; the sqe bind-params gate reads this.
     pl_owned: bool,
     // C ParamListInfo.paramValuesStr: textual values for error reporting
     // (exec_bind_message stores BuildParamLogString's result; params.c
     // ParamsErrorCallback reads it). NULL in C = None.
     param_values_str: Option<std::rc::Rc<str>>,
+    fetch: Option<ParamFetchHook>,
 }
 
 thread_local! {
@@ -135,6 +147,58 @@ pub unsafe fn register_hooked(params: &[ParamExternData]) -> ParamListHandle {
     unsafe { register_with_hooked(params, true, true) }
 }
 
+/// [`register_hooked`] with the owner's fetch for slots left without a value.
+///
+/// # Safety
+/// As [`register`]; `fetch.arg` must stay valid while the list is registered.
+pub unsafe fn register_hooked_fetch(
+    params: &[ParamExternData],
+    fetch: Option<ParamFetchHook>,
+) -> ParamListHandle {
+    // SAFETY: forwarded caller contract.
+    let h = unsafe { register_with_hooked(params, true, true) };
+    if fetch.is_some() {
+        let (idx, _) = decode(h);
+        ENTRIES.with(|e| {
+            if let Some(Some(en)) = e.borrow_mut().get_mut(idx as usize) {
+                en.fetch = fetch;
+            }
+        });
+    }
+    h
+}
+
+/// Slot `id` (1-based, as `Param` reads it) of list `h` as it is now; `None` for a NULL handle, one no longer registered
+/// (never the stale handle's loud panic: a compiled program's host reads `None` as its internal error) or an id past the
+/// list.
+pub fn slot(h: ParamListHandle, id: i32) -> Option<ParamExternData> {
+    if h.is_null() || id < 1 {
+        return None;
+    }
+    let (idx, generation) = decode(h);
+    let e = ENTRIES.with(|e| e.borrow().get(idx as usize).cloned().flatten())?;
+    if e.generation != generation {
+        return None;
+    }
+    // SAFETY: register()'s liveness contract (the entry is registered, so its array is live).
+    let params = unsafe { core::slice::from_raw_parts(e.ptr, e.len) };
+    params.get(id as usize - 1).copied()
+}
+
+pub fn fetch_hook(h: ParamListHandle) -> Option<ParamFetchHook> {
+    if h.is_null() {
+        return None;
+    }
+    lookup(h).fetch
+}
+
+pub fn defers_to_evaluation(h: ParamListHandle) -> bool {
+    if h.is_null() || !is_fetch_hooked(h) {
+        return false;
+    }
+    lookup(h).fetch.is_some() || with(h, |ps| ps.iter().any(|p| p.pflags & PARAM_FLAG_CONST == 0))
+}
+
 unsafe fn register_with_hooked(
     params: &[ParamExternData],
     hooked: bool,
@@ -152,6 +216,7 @@ unsafe fn register_with_hooked(
         hooked,
         pl_owned,
         param_values_str: None,
+        fetch: None,
     };
     let idx = match FREE.with(|f| f.borrow_mut().pop()) {
         Some(i) => {
@@ -293,9 +358,19 @@ mod tests {
         free(h); /* idempotent */
     }
 
-    // functions.c:1490 makeParamList: a SQL function's argument list has no
-    // paramFetch hook, so BuildParamLogString consumers see it as plain
-    // while the engine still knows it is PL-owned; plpgsql's stays hooked.
+    /// `slot` reads a registered list's slot by its 1-based id and answers `None`, never a panic, past the list, for
+    /// a NULL handle and for a freed one.
+    #[test]
+    fn slot_reads_a_live_list_only() {
+        let params = [ParamExternData { value: Datum::from_i32(7), isnull: false, pflags: 0, ptype: 25 }];
+        let h = unsafe { register_hooked(&params) };
+        assert_eq!(slot(h, 1).map(|p| (p.value.as_i32(), p.ptype, p.pflags)), Some((7, 25, 0)));
+        assert!(slot(h, 0).is_none() && slot(h, 2).is_none() && slot(ParamListHandle::NULL, 1).is_none());
+        free(h);
+        assert!(slot(h, 1).is_none());
+    }
+
+    // functions.c:1490: a SQL function's list is PL-owned but not hooked.
     #[test]
     fn pl_owned_lists_split_the_fetch_hook_bit() {
         let params = [ParamExternData {

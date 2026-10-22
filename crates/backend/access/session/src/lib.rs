@@ -92,8 +92,8 @@ pub const SESSION_ENVELOPE_MANIFEST: &[EnvelopeMember] = &[
     EnvelopeMember { id: EnvelopeMemberId::ResourceOwnerCells, name: "resource-owner cells", declaration: "resowner/lib.rs: CURRENT_OWNER..AUX_PROCESS_OWNER", kind: EnvelopeBindKind::MustBeEmpty, phase0: Phase0Action::CheckEmpty, blocker: None },
     EnvelopeMember { id: EnvelopeMemberId::ResourceOwnerArena, name: "resource-owner arena", declaration: "resowner/lib.rs: ARENA", kind: EnvelopeBindKind::MustBeEmpty, phase0: Phase0Action::CheckEmpty, blocker: Some("the per-thread arena is shared-sequential, never transferred") },
     EnvelopeMember { id: EnvelopeMemberId::ErrorStack, name: "error stack", declaration: "elog/stack.rs: STACK", kind: EnvelopeBindKind::MustBeEmpty, phase0: Phase0Action::CheckEmpty, blocker: None },
-    EnvelopeMember { id: EnvelopeMemberId::ErrorCallbacks, name: "error context callbacks", declaration: "elog/stack.rs: EMIT_CONTEXT_CALLBACKS", kind: EnvelopeBindKind::MustBeEmpty, phase0: Phase0Action::CheckEmpty, blocker: None },
-    EnvelopeMember { id: EnvelopeMemberId::InterruptPending, name: "interrupt and cancellation pending flags", declaration: "init_small/globals.rs: INTERRUPT_PENDING, QUERY_CANCEL_PENDING, PROC_DIE_PENDING", kind: EnvelopeBindKind::MustBeEmpty, phase0: Phase0Action::CheckEmpty, blocker: None },
+    EnvelopeMember { id: EnvelopeMemberId::ErrorCallbacks, name: "error context callbacks", declaration: "elog/stack.rs: EMIT_CONTEXT_CALLBACKS, BORROWED_FRAMES", kind: EnvelopeBindKind::MustBeEmpty, phase0: Phase0Action::CheckEmpty, blocker: None },
+    EnvelopeMember { id: EnvelopeMemberId::InterruptPending, name: "interrupt and cancellation pending flags", declaration: "init_small/globals.rs: INTERRUPT_PENDING, QUERY_CANCEL_PENDING, PROC_DIE_PENDING, ABORT_PENDING", kind: EnvelopeBindKind::MustBeEmpty, phase0: Phase0Action::CheckEmpty, blocker: None },
     EnvelopeMember { id: EnvelopeMemberId::InterruptHoldoffs, name: "interrupt and critical-section holdoffs", declaration: "init_small/globals.rs: INTERRUPT_HOLDOFF_COUNT, QUERY_CANCEL_HOLDOFF_COUNT, CRIT_SECTION_COUNT", kind: EnvelopeBindKind::MustBeEmpty, phase0: Phase0Action::CheckEmpty, blocker: None },
     EnvelopeMember { id: EnvelopeMemberId::Catcache, name: "catcache", declaration: "catcache/lib.rs,graph.rs: STATE, INVAL_EPOCH", kind: EnvelopeBindKind::DrainSameDatabase, phase0: Phase0Action::Drain, blocker: None },
     EnvelopeMember { id: EnvelopeMemberId::Relcache, name: "relcache", declaration: "relcache/lib.rs: STATE", kind: EnvelopeBindKind::DrainSameDatabase, phase0: Phase0Action::Drain, blocker: None },
@@ -307,26 +307,13 @@ pub fn SessionEnvelopeBoundaryClean() -> bool {
     SessionEnvelopeBoundaryIssue().is_none()
 }
 
-/// C parity for a query cancel that has no statement left to cancel
-/// (postgres.c ProcessInterrupts: at DoingCommandRead a pending
-/// QueryCancelPending is cleared and IGNORED — "the client is presumably
-/// going to send a new query anyway" — and a canceled parallel worker
-/// PROCESS simply exits, its flags dying with it; C never surfaces a
-/// pending cancel as a persistent error on the NEXT statement).
-///
 /// The thread model retains session/helper threads across engagements, so a
 /// cancel delivered after a statement's last interrupt-processing point
 /// latches this thread's QueryCancelPending/InterruptPending with nothing
-/// left to consume them, and every later boundary check refused with 55000
-/// "interrupt or cancellation is pending" (round-12 sqldiff: `VACUUM ...`
-/// erroring 55000 after a pg_cancel_backend raced the statement boundary;
-/// the C oracle succeeded). Discard the stale cancel at the boundary
-/// instead — exactly C's discard. A bare InterruptPending nudge is also
-/// cleared: it carries no cause of its own, and any real still-pending
-/// cause re-latches it at the next drain point (latch waits and
-/// ProcessInterrupts drain unconditionally). ProcDiePending is NEVER
-/// discarded, and a held-off boundary is left untouched — those stay
-/// refusals, they are real boundary defects.
+/// left to consume them. Discard the stale cancel at the boundary
+/// instead — exactly C's discard. ProcDiePending is NEVER discarded, and
+/// a held-off boundary is left untouched — those stay refusals, they are
+/// real boundary defects.
 fn discard_stale_query_cancel_at_boundary() {
     use init_small::globals as g;
     if g::InterruptHoldoffCount() != 0
@@ -336,9 +323,8 @@ fn discard_stale_query_cancel_at_boundary() {
     {
         return;
     }
-    if g::QueryCancelPending() {
-        g::SetQueryCancelPending(false);
-    }
+    // D334: with the abort-class byte the cancel raised (the die case returned above)
+    g::ClearQueryCancelPending();
     if g::InterruptPending() {
         g::SetInterruptPending(false);
     }
@@ -361,18 +347,10 @@ pub fn SessionEnvelopeBoundaryIssue() -> Option<&'static str> {
     bound_state_issue()
 }
 
-/// Ceremony-v2 sticky task binding (parallel::query_task_guard): a standing
-/// runtime executor parked BETWEEN engagements of the SAME session
+/// A standing runtime executor parked BETWEEN engagements of the SAME session
 /// deliberately retains its `SessionGucBinding` (the applied query pin), so
 /// the live-binding condition above is not a leak there — it is the keyed
-/// retention itself. Every OTHER boundary condition must still hold at
-/// sticky park and sticky resume: envelope depth, pending interrupts, and
-/// the full bound-state sweep (transaction/snapshot/GUC-nesting/error-stack
-/// cleanliness). A dirty boundary demotes the park to the full unbind and
-/// refuses the resume. The retention is keyed (leader identity + GUC pin
-/// Arc) and evicted by the binder before any FOREIGN session's engagement
-/// can bind — SESSION_BOUND accounting stays exact: exactly one live
-/// binding, always the keyed session's.
+/// retention itself.
 pub fn SessionEnvelopeBoundaryIssueForRetainedBind() -> Option<&'static str> {
     discard_stale_query_cancel_at_boundary();
     if ENVELOPE_DEPTH.get() != 0 {

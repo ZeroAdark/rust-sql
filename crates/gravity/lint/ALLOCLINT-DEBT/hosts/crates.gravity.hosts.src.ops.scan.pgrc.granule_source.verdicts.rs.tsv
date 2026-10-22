@@ -1,0 +1,4 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/granule_source/verdicts.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::resize	1

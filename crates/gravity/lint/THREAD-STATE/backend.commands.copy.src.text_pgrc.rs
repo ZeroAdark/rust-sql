@@ -1,0 +1,1 @@
+backend/commands/copy/src/text_pgrc.rs	WORKER_CX	pgport	scope:WorkerCxPublished	thread	the parallel text COPY helper's parse context, published by worker_drive for this thread's morsels (morsel_body) and cleared by WorkerCxPublished's drop at the drive's end, an unwind included; this thread's own frame

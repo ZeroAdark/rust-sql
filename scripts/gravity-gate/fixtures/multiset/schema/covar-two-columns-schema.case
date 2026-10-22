@@ -1,0 +1,10 @@
+# M6-FOLD R2 (main 09-26): a two-argument covar / corr / regr_* over bare columns the file's CREATE TABLE types float
+# compares within V4R-2's tolerance (class.stats folds the rows in another order than PG's scan); FILTER included
+sql: SELECT covar_pop(y, x), corr(y, x) FILTER (WHERE x > 0), regr_count(y, x) FROM st;
+schema: CREATE TABLE st (id int, k int, y float8, x float8, i int4, n numeric);
+class: unordered
+verdict: match
+[pg]
+-24.55107644800035	-0.0021223122296747604	2931
+[got]
+-24.551076448000316	-0.002122312229674758	2931

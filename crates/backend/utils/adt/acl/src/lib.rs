@@ -7,7 +7,7 @@ use types_error::PgResult;
 pub mod builtins;
 mod io;
 mod membership;
-mod ops;
+pub mod ops;
 pub mod varlena;
 #[cfg(test)]
 mod tests;
@@ -18,7 +18,7 @@ pub use io::{aclitemin, aclitemout, aclitemout_into, aclparse, push_oid_decimal,
 pub use membership::{
     cached_db_hash, get_language_oid, get_role_oid, get_role_oid_or_public, has_privs_of_role,
     initialize_acl, is_admin_of_role, is_member_of_role, is_member_of_role_nosuper,
-    member_can_set_role, select_best_admin, RoleMembershipCacheCallback,
+    member_can_set_role, reset_for_thread_reuse, select_best_admin, RoleMembershipCacheCallback,
 };
 pub(crate) use membership::RoleRecurseType;
 pub use ops::{

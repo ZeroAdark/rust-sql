@@ -1,0 +1,11 @@
+-- regress-full-opr_sanity-019
+-- SELECT oid::regprocedure, proargmodes, provariadic FROM pg_proc WHERE (proargmodes IS NOT NULL AND 'v' = any(proargmodes)) IS DISTINCT FROM (provariadic != 0);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=3396 end=sink
+  nodes n0@0
+  source range rel=1255 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(8):byval8:w8:val Attr(22):byref8:vl:win/page Offset:byval2:w2:val
+  filter distinct91(and(notnull(v1.22), any92(c18:118, v1.22)), op608(v1.8, c26:0))
+  project (1=relabel2202(v1.1), 2=v1.22, 3=v1.8)
+  outs 1=w8:val 2=vl:win/page 3=w8:val
+mapped: SeqScan

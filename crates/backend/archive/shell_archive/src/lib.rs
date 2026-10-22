@@ -45,7 +45,7 @@ pub fn shell_archive_file(file: &str, path: Option<&str>) -> PgResult<bool> {
         .finish(loc("shell_archive_file"))?;
 
     waitevent_seams::pgstat_report_wait_start::call(WAIT_EVENT_ARCHIVE_COMMAND);
-    let rc = wait_error::system_tracked(
+    let rc = wait_error::system_tracked_sigint_ignored(
         &xlogarchcmd,
         g::register_backend_child,
         g::unregister_backend_child,

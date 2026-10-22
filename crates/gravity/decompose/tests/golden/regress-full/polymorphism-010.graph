@@ -1,0 +1,10 @@
+-- regress-full-polymorphism-010
+-- select f1, sql_if(f1 > 0, bleat(f1), bleat(f1 + 1)) from int4_tbl;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=5 end=sink
+  nodes n0@0
+  source range rel=16400 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=case(when op521(v1.1, c23:0) then fn43445(v1.1)) else fn43445(op551(v1.1, c23:1)))
+  outs 1=w8:val 2=w4:val
+mapped: SeqScan

@@ -1,0 +1,1 @@
+backend/storage/lmgr/lmgr/src/lib.rs	SPECULATIVE_INSERTION_TOKEN	pgport	exit	leader	INSERT ... ON CONFLICT's speculative-insertion token counter (lmgr.c static): writes run serially on the leader (decompose serial_after Reason::Write; hosts modifytable write.rs takes the token), so no claim takes one; a wrapping counter, never reset (each token pairs with its inserting xid)

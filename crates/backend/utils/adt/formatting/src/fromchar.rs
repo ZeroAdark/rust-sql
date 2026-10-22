@@ -49,7 +49,8 @@ fn invalid_value(value: &[u8], node_name: &str) -> PgError {
     let e = match core::str::from_utf8(value) {
         Ok(value) => PgError::error(format!("invalid value \"{value}\" for \"{node_name}\"")),
         Err(_) => {
-            let mut msg = b"invalid value \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"invalid value \"");
             msg.extend_from_slice(value);
             msg.extend_from_slice(format!("\" for \"{node_name}\"").as_bytes());
             PgError::error_raw_message(msg)
@@ -201,11 +202,7 @@ pub fn from_char_parse_int_len(
         if used > 0 && used < len {
             errsave(
                 escontext.as_deref_mut(),
-                invalid_datetime(format!(
-                    "invalid value \"{}\" for \"{}\"",
-                    String::from_utf8_lossy(&copy),
-                    node_name
-                ))
+                invalid_value(&copy, node_name)
                 .with_detail(format!(
                     "Field requires {len} characters, but only {used} could be parsed."
                 ))
@@ -372,8 +369,7 @@ fn casefold_str_cmp<'mcx>(
     Ok(&lower[..lower_len] == element)
 }
 
-pub fn seq_search_localized<'mcx>(
-    mcx: Mcx<'mcx>,
+pub fn seq_search_localized(
     name: &[u8],
     array: &[Vec<u8>],
     collid: Oid,
@@ -393,6 +389,9 @@ pub fn seq_search_localized<'mcx>(
 
     let mylocale = ::pg_locale::pg_newlocale_from_collation(collid)?;
 
+    // C pfrees the folded copies per field; a scratch context dropped on return.
+    let scratch = ::mcx::MemoryContext::new("seq_search_localized");
+    let mcx = scratch.mcx();
     let upper_name = str_toupper(mcx, name, collid)?;
     let lower_name = str_tolower(mcx, &upper_name, collid)?;
 
@@ -464,7 +463,7 @@ pub fn from_char_seq_search<'mcx>(
 ) -> PgResult<bool> {
     let (idx, len) = match localized_array {
         None => seq_search_ascii(cur.rest(), array),
-        Some(arr) => seq_search_localized(mcx, cur.rest(), arr, collid)?,
+        Some(arr) => seq_search_localized(cur.rest(), arr, collid)?,
     };
     *dest = idx;
 
@@ -506,7 +505,6 @@ mod tests {
         let months: Vec<Vec<u8>> = vec![b"Ocak".to_vec(), "Aralık".as_bytes().to_vec()];
         let search = |name: &str| {
             seq_search_localized(
-                mcx,
                 name.as_bytes(),
                 &months,
                 ::types_core::DEFAULT_COLLATION_OID,

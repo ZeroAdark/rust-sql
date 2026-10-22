@@ -569,11 +569,11 @@ pub(crate) fn _hash_freeovflpage(
         );
         let mut mod_wbuf = false;
 
-        let mut offbytes: Vec<u8> = Vec::with_capacity(itups.len() * 2);
+        let mut offbytes: Vec<u8> = ::mcx::std_vec_with_capacity("access", itups.len() * 2)?;
         for &off in &itup_offsets[..itups.len()] {
             offbytes.extend_from_slice(&off.to_ne_bytes());
         }
-        let mut wbufdata: Vec<&[u8]> = Vec::with_capacity(1 + itups.len());
+        let mut wbufdata: Vec<&[u8]> = ::mcx::std_vec_with_capacity("access", 1 + itups.len())?;
         let bitmapbit_bytes = bitmapbit.to_ne_bytes();
         let firstfree = with_meta(metabuf, |m| m.hashm_firstfree);
         let firstfree_bytes = firstfree.to_ne_bytes();
@@ -753,7 +753,7 @@ pub(crate) fn _hash_squeezebucket(
     }
 
     let mut tup_storage: Vec<u8> = Vec::with_capacity(BLCKSZ);
-    let mut itups: Vec<(usize, usize)> = Vec::with_capacity(MaxIndexTuplesPerPage);
+    let mut itups: Vec<(usize, usize)> = ::mcx::std_vec_with_capacity("access", MaxIndexTuplesPerPage)?;
     let mut itup_offsets = [0 as OffsetNumber; MaxIndexTuplesPerPage];
     let mut deletable = [0 as OffsetNumber; MaxIndexTuplesPerPage];
 
@@ -841,16 +841,16 @@ pub(crate) fn _hash_squeezebucket(
                             let xlrec =
                                 crate::wal::xl_hash_move_page_contents(itups.len() as u16, is_prim);
 
-                            let mut offbytes: Vec<u8> = Vec::with_capacity(itups.len() * 2);
+                            let mut offbytes: Vec<u8> = ::mcx::std_vec_with_capacity("access", itups.len() * 2)?;
                             for &off in &itup_offsets[..itups.len()] {
                                 offbytes.extend_from_slice(&off.to_ne_bytes());
                             }
-                            let mut wbufdata: Vec<&[u8]> = Vec::with_capacity(1 + itups.len());
+                            let mut wbufdata: Vec<&[u8]> = ::mcx::std_vec_with_capacity("access", 1 + itups.len())?;
                             wbufdata.push(&offbytes);
                             for &(start, len) in &itups {
                                 wbufdata.push(&tup_storage[start..start + len]);
                             }
-                            let mut delbytes: Vec<u8> = Vec::with_capacity(ndeletable * 2);
+                            let mut delbytes: Vec<u8> = ::mcx::std_vec_with_capacity("access", ndeletable * 2)?;
                             for &off in &deletable[..ndeletable] {
                                 delbytes.extend_from_slice(&off.to_ne_bytes());
                             }

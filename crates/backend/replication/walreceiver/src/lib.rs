@@ -6,7 +6,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use init_small::globals as g;
 use types_core::{
     pgsocket, InvalidXLogRecPtr, TimeLineID, TimestampTz, TransactionId, XLogRecPtr, XLogSegNo,
@@ -24,6 +24,7 @@ use types_storage::waiteventset::{
 use walreceiverfuncs::{with_walrcv, WalRcvState, NAMEDATALEN};
 
 pub mod client;
+mod pgrc_files;
 use client::PgConn;
 
 const WAIT_EVENT_WAL_RECEIVER_MAIN: u32 = 0x0500_0000 | 14;
@@ -501,7 +502,7 @@ fn wal_receiver_main_inner() -> PgResult<()> {
                 return ereport(PANIC)
                     .with_saved_errno(en)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not close WAL segment {xlogfname}: %m"))
+                    .errmsg(format!("could not close WAL segment {xlogfname}: {PCT_M}"))
                     .finish(loc(621, "WalReceiverMain"));
             }
 
@@ -587,17 +588,12 @@ fn WalRcvWaitForStartPosition(
     Ok(())
 }
 
-// ArchiveRecoveryRequested (xlogrecovery.c global): existsTimeLineHistory
-// (timeline.c:232-247) restores the history file from the archive when set.
-fn archive_recovery_requested() -> bool {
-    xlogrecovery_seams::archive_recovery_requested::is_installed()
-        && xlogrecovery_seams::archive_recovery_requested::call()
-}
-
 fn WalRcvFetchTimeLineHistoryFiles(first: TimeLineID, last: TimeLineID) -> PgResult<()> {
     for tli in first..=last {
         // There is no history file for timeline 1.
-        if tli != 1 && !timeline::existsTimeLineHistory(tli, archive_recovery_requested())? {
+        // ArchiveRecoveryRequested is startup-process state: always false in
+        // C's walreceiver process.
+        if tli != 1 && !timeline::existsTimeLineHistory(tli, false)? {
             let _ = ereport(LOG)
                 .errmsg(format!(
                     "fetching timeline history file for timeline {tli} from primary server"
@@ -707,6 +703,14 @@ fn XLogWalRcvProcessMsg(msg_type: u8, buf: &[u8], tli: TimeLineID) -> PgResult<(
             }
             Ok(())
         }
+        // Before a new file, flush the WAL received so far (every file it references has landed), so replay runs
+        // while the file lands: the loop above flushes only when the socket drains, which a run of files keeps it from doing.
+        b'F' => {
+            if pgrc_files::starts_file(buf) {
+                XLogWalRcvFlush(false, tli)?;
+            }
+            pgrc_files::on_file_chunk(buf)
+        }
         other => ereport(ERROR)
             .errcode(ERRCODE_PROTOCOL_VIOLATION)
             .errmsg_internal(format!("invalid replication message type {}", other as i32))
@@ -791,7 +795,7 @@ fn XLogWalRcvWrite(buf: &[u8], recptr_in: XLogRecPtr, tli: TimeLineID) -> PgResu
                 .with_saved_errno(save_errno)
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "could not write to WAL segment {xlogfname} at offset {startoff}, length {segbytes}: %m"
+                    "could not write to WAL segment {xlogfname} at offset {startoff}, length {segbytes}: {PCT_M}"
                 ))
                 .finish(loc(950, "XLogWalRcvWrite"));
         }
@@ -878,7 +882,7 @@ fn XLogWalRcvClose(recptr: XLogRecPtr, tli: TimeLineID) -> PgResult<()> {
         return ereport(PANIC)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not close WAL segment {xlogfname}: %m"))
+            .errmsg(format!("could not close WAL segment {xlogfname}: {PCT_M}"))
             .finish(loc(1063, "XLogWalRcvClose"));
     }
 
@@ -1199,22 +1203,21 @@ mod tests {
         (sqlstate, message)
     }
 
-    // WalRcvFetchTimeLineHistoryFiles (walreceiver.c:809) asks
-    // existsTimeLineHistory, which under ArchiveRecoveryRequested restores
-    // the history file from the archive (timeline.c:232-247) — the file is
-    // then present and nothing is fetched from the primary (audit-18.6 b064
-    // row 3395df78). Without the archive consult the fetch goes to the
-    // (unestablished) primary connection.
+    // walreceiver.c:809: a missing history file is fetched from the primary.
     #[test]
-    fn fetch_timeline_history_consults_the_archive_under_archive_recovery() {
+    fn fetch_timeline_history_never_consults_the_archive() {
         setup();
         let before = RESTORE_CALLS.load(Ordering::SeqCst);
-        let r = catch_unwind(AssertUnwindSafe(|| WalRcvFetchTimeLineHistoryFiles(2, 2)));
+        let (r, captured) = with_captured(|| {
+            catch_unwind(AssertUnwindSafe(|| WalRcvFetchTimeLineHistoryFiles(2, 2)))
+        });
+        assert!(r.is_err(), "the fetch must go to the primary connection: {r:?}");
+        assert_eq!(RESTORE_CALLS.load(Ordering::SeqCst), before, "RestoreArchivedFile consulted");
         assert!(
-            matches!(r, Ok(Ok(()))),
-            "history file must come from the archive, not the primary: {r:?}"
+            captured.iter().any(|(_, _, m)| m
+                == "fetching timeline history file for timeline 2 from primary server"),
+            "{captured:?}"
         );
-        assert!(RESTORE_CALLS.load(Ordering::SeqCst) > before, "RestoreArchivedFile not consulted");
     }
 
     // WalRcvDie (walreceiver.c:858) runs in a thread, not a dying process:
@@ -1222,15 +1225,24 @@ mod tests {
     #[test]
     fn die_closes_the_open_wal_segment() {
         setup();
-        // SAFETY: a descriptor this test owns.
-        let fd = unsafe { libc::open(b"/dev/null\0".as_ptr().cast(), libc::O_RDWR) };
-        assert!(fd >= 0);
-        arm_segment(fd, 0);
+        // The segment is the write end of a pipe: EOF on the read end proves
+        // it was closed, which a reused descriptor number cannot fake.
+        let mut ends = [-1i32; 2];
+        // SAFETY: pipe fills the two-element array.
+        assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+        let [rd, wr] = ends;
+        // SAFETY: rd is a descriptor this test owns.
+        unsafe { libc::fcntl(rd, libc::F_SETFL, libc::O_NONBLOCK) };
+        arm_segment(wr, 0);
         close_recv_file();
         assert_eq!(with_state(|s| s.recvFile), -1);
         close_recv_file();
-        // SAFETY: probing a descriptor number; EBADF is the expected outcome.
-        assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1, "WAL segment still open after WalRcvDie");
+        let mut b = 0u8;
+        // SAFETY: one-byte read into a local.
+        let n = unsafe { libc::read(rd, (&raw mut b).cast(), 1) };
+        // SAFETY: rd is still ours.
+        unsafe { libc::close(rd) };
+        assert_eq!(n, 0, "WAL segment still open after WalRcvDie");
     }
 
     // walreceiver.c: the process has no sigsetjmp handler, so an escaping

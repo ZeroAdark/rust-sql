@@ -1,0 +1,11 @@
+-- regress-full-int2-005
+-- SELECT i.f1, i.f1 + int2 '2' AS x FROM INT2_TBL i WHERE f1 < 32766;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2 end=sink
+  nodes n0@0
+  source range rel=16397 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op95(v1.1, c21:32766)
+  project (1=v1.1, 2=op550(v1.1, c21:2))
+  outs 1=w8:val 2=w2:val
+mapped: SeqScan

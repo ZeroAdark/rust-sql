@@ -686,6 +686,18 @@ fn fjav_query_has_join_alias_vars<'mcx>(
     }
     impl<'mcx> NodeWalker<'mcx> for W<'_, 'mcx> {
         fn visit(&mut self, node: Node<'mcx>) -> PgResult<bool> {
+            if let Some(phv) = node.as_place_holder_var() {
+                if phv.phlevelsup as i32 == self.sublevels_up
+                    && phv.phrels.iter().any(|rti| {
+                        self.rtable.nth(rti as usize - 1).as_range_tbl_entry()
+                            .expect("rtable cell").rtekind
+                            == types_nodes::parsenodes::RTEKind::RTE_JOIN
+                    })
+                {
+                    self.found = true;
+                    return Ok(true);
+                }
+            }
             if let Some(v) = node.as_var() {
                 if v.varlevelsup as i32 == self.sublevels_up {
                     let rte = self
@@ -1418,7 +1430,7 @@ fn fge_list<'mcx>(
     list: &NodeList<'mcx>,
 ) -> PgResult<Option<NodeList<'mcx>>> {
     let mut changed = false;
-    let mut out: Vec<Node<'mcx>> = Vec::with_capacity(list.len());
+    let mut out: Vec<Node<'mcx>> = ::mcx::std_vec_with_capacity("optimizer", list.len())?;
     for item in list.iter() {
         match fge_mutate(ctx, item)? {
             Some(new) => {

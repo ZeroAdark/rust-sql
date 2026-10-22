@@ -36,7 +36,7 @@ pub fn preprocess_grouping_sets<'mcx>(
     for gc_node in &parse.groupClause {
         processed.push(run.intern_expr(gc_node));
     }
-    run.root.processed_groupClause = processed;
+    run.root.processed_groupClause = ::mcx::freeze_fit(processed);
 
     let mut maxref: u32 = 0;
     let mut unhashable_refs: PgVec<'mcx, u32> = PgVec::new_in(mcx);
@@ -53,7 +53,7 @@ pub fn preprocess_grouping_sets<'mcx>(
     }
 
     let mut tleref_to_colnum_map: PgVec<'mcx, i32> = PgVec::new_in(mcx);
-    tleref_to_colnum_map.resize(maxref as usize + 1, 0);
+    ::mcx::pgvec_resize(&mut tleref_to_colnum_map, maxref as usize + 1, 0)?;
 
     let mut all_sets: PgVec<'mcx, PgVec<'mcx, i32>> = PgVec::new_in(mcx);
     for gset_node in &parse.groupingSets {
@@ -105,7 +105,11 @@ pub fn preprocess_grouping_sets<'mcx>(
         let sortclause =
             if nchains == 1 { run.parse().sortClause.clone_in(mcx)? } else { NodeList::nil() };
         let current_sets = reorder_grouping_sets(mcx, chain, &sortclause);
-        let first_set = current_sets[0].set.iter().map(|&r| r as i32).collect::<Vec<i32>>();
+        let mut first_set: Vec<i32> =
+            mcx::std_vec_with_capacity("planner", current_sets[0].set.len())?;
+        for &r in current_sets[0].set.iter() {
+            first_set.push(r as i32);
+        }
 
         rollup.groupClause = if !first_set.is_empty() {
             crate::grouping::preprocess_groupclause(run, Some(&first_set))?
@@ -131,11 +135,10 @@ pub fn preprocess_grouping_sets<'mcx>(
     if !gd.unsortable_sets.is_empty() {
         // C annotates: no groupclause pinned yet; index against the original
         // groupclause for estimation.
-        let group_clause =
-            crate::relnode::pgvec_clone_shallow(mcx, &run.root.processed_groupClause);
+        let group_clause = run.root.processed_groupClause;
         gd.hash_sets_idx = remap_to_groupclause_idx(
             run,
-            &group_clause,
+            group_clause,
             &gd.unsortable_sets,
             &mut gd.tleref_to_colnum_map,
         );
@@ -185,9 +188,9 @@ pub fn extract_rollup_sets<'mcx>(
         return Ok(result);
     }
 
-    let mut orig_sets: Vec<PgVec<'mcx, PgVec<'mcx, i32>>> = Vec::with_capacity(num_sets_raw + 1);
-    let mut set_masks: Vec<Vec<i32>> = Vec::with_capacity(num_sets_raw + 1);
-    let mut adjacency: Vec<Vec<i16>> = Vec::with_capacity(num_sets_raw + 1);
+    let mut orig_sets: Vec<PgVec<'mcx, PgVec<'mcx, i32>>> = ::mcx::std_vec_with_capacity("optimizer", num_sets_raw + 1)?;
+    let mut set_masks: Vec<Vec<i32>> = ::mcx::std_vec_with_capacity("optimizer", num_sets_raw + 1)?;
+    let mut adjacency: Vec<Vec<i16>> = ::mcx::std_vec_with_capacity("optimizer", num_sets_raw + 1)?;
     orig_sets.push(PgVec::new_in(mcx));
     set_masks.push(Vec::new());
     adjacency.push(Vec::new());
@@ -236,7 +239,7 @@ pub fn extract_rollup_sets<'mcx>(
 
     let (pair_uv, pair_vu) = bipartite_match(num_sets, num_sets, &adjacency)?;
 
-    let mut chains: Vec<usize> = vec![0; num_sets + 1];
+    let mut chains: Vec<usize> = ::mcx::std_vec_from_elem("optimizer", 0, num_sets + 1)?;
     let mut num_chains = 0usize;
     for i in 1..=num_sets {
         let u = pair_vu[i] as usize;
@@ -251,7 +254,7 @@ pub fn extract_rollup_sets<'mcx>(
         }
     }
 
-    let mut results: Vec<PgVec<'mcx, PgVec<'mcx, i32>>> = Vec::with_capacity(num_chains + 1);
+    let mut results: Vec<PgVec<'mcx, PgVec<'mcx, i32>>> = ::mcx::std_vec_with_capacity("optimizer", num_chains + 1)?;
     for _ in 0..=num_chains {
         results.push(PgVec::new_in(mcx));
     }
@@ -281,10 +284,10 @@ fn bipartite_match(
     adjacency: &[Vec<i16>],
 ) -> PgResult<(Vec<i16>, Vec<i16>)> {
     assert!(u_size < i16::MAX as usize && v_size < i16::MAX as usize);
-    let mut pair_uv: Vec<i16> = vec![0; u_size + 1];
-    let mut pair_vu: Vec<i16> = vec![0; v_size + 1];
-    let mut distance: Vec<i16> = vec![0; u_size + 1];
-    let mut queue: Vec<i16> = Vec::with_capacity(u_size + 2);
+    let mut pair_uv: Vec<i16> = ::mcx::std_vec_from_elem("optimizer", 0, u_size + 1)?;
+    let mut pair_vu: Vec<i16> = ::mcx::std_vec_from_elem("optimizer", 0, v_size + 1)?;
+    let mut distance: Vec<i16> = ::mcx::std_vec_from_elem("optimizer", 0, u_size + 1)?;
+    let mut queue: Vec<i16> = ::mcx::std_vec_with_capacity("optimizer", u_size + 2)?;
 
     loop {
         queue.clear();
@@ -404,7 +407,7 @@ fn estimate_hashagg_tablesize(
         .base()
         .pathtarget_id
         .map_or(0, |pt| run.root.pathtarget(pt).width);
-    let hashentrysize = ::nodeagg::hash_agg_entry_size(
+    let hashentrysize = ::costsize::exec_sizing::hash_agg_entry_size(
         run.root.aggtransinfos.len(),
         width.max(0) as usize,
         agg_costs.transitionSpace as usize,
@@ -414,13 +417,16 @@ fn estimate_hashagg_tablesize(
 
 // DiscreteKnapsack (lib/knapsack.c): 0/1 knapsack, all item values 1;
 // weight-0 items always included; equal-value comparisons replace (<=), as C.
-fn discrete_knapsack(max_weight: i32, item_weights: &[i32]) -> Vec<bool> {
+fn discrete_knapsack(max_weight: i32, item_weights: &[i32]) -> PgResult<Vec<bool>> {
     assert!(max_weight >= 0);
     let num_items = item_weights.len();
     assert!(num_items > 0);
     let cap = max_weight as usize;
-    let mut values: Vec<f64> = vec![0.0; cap + 1];
-    let mut sets: Vec<Vec<bool>> = vec![vec![false; num_items]; cap + 1];
+    let mut values: Vec<f64> = mcx::std_vec_from_elem("planner", 0.0, cap + 1)?;
+    let mut sets: Vec<Vec<bool>> = mcx::std_vec_with_capacity("planner", cap + 1)?;
+    for _ in 0..=cap {
+        sets.push(mcx::std_vec_from_elem("planner", false, num_items)?);
+    }
     for (i, &iw) in item_weights.iter().enumerate() {
         let iw = iw.max(0) as usize;
         if iw > cap {
@@ -438,7 +444,7 @@ fn discrete_knapsack(max_weight: i32, item_weights: &[i32]) -> Vec<bool> {
             }
         }
     }
-    sets.swap_remove(cap)
+    Ok(sets.swap_remove(cap))
 }
 
 // One single-set hashed RollupData (the burst shape both arms share).
@@ -478,7 +484,7 @@ pub fn consider_groupingsets_paths<'mcx>(
     d_num_groups: f64,
 ) -> PgResult<()> {
     let mcx = run.mcx;
-    let hash_mem_limit = ::nodehash::get_hash_memory_limit() as f64;
+    let hash_mem_limit = ::costsize::exec_sizing::get_hash_memory_limit() as f64;
     let quals = |run: &PlannerRun<'mcx>| {
         let mut v = PgVec::new_in(run.mcx);
         v.extend_from_slice(having_qual);
@@ -591,7 +597,7 @@ pub fn consider_groupingsets_paths<'mcx>(
 
             // Rollup 0 matches the input sort order and stays sorted; index
             // i counts only hashable candidates (both loops must agree).
-            let mut k_weights: Vec<i32> = Vec::with_capacity(num_rollups);
+            let mut k_weights: Vec<i32> = ::mcx::std_vec_with_capacity("optimizer", num_rollups)?;
             let hashable_sizes: Vec<f64> = gd.rollups[1..]
                 .iter()
                 .filter(|r| r.hashable)
@@ -603,7 +609,7 @@ pub fn consider_groupingsets_paths<'mcx>(
             }
 
             if !k_weights.is_empty() {
-                let hash_items = discrete_knapsack(k_capacity, &k_weights);
+                let hash_items = discrete_knapsack(k_capacity, &k_weights)?;
                 if hash_items.iter().any(|&b| b) {
                     let gd = run.gset_data.as_ref().unwrap();
                     rollups.push(gd.rollups[0].clone());

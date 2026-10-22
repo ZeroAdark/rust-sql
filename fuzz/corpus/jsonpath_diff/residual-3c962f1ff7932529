@@ -1,1 +1,0 @@
-u$.a.boolean() == true && $.b.string() == "x"

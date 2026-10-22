@@ -1,0 +1,11 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/sortrun.rs
+growth	pgrc_format::wire::put_u32	5
+growth	pgrc_format::wire::put_u64	5
+growth	pgrc_format::wire::put_u8	6
+growth	std::vec::Vec::extend_from_slice	2
+growth	std::vec::Vec::push	3
+method	pgrc_format::try_to_vec	2
+method	pgrc_format::try_vec	4
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	2
+type	std::vec::Vec	5

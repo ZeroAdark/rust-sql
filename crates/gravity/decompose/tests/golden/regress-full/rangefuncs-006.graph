@@ -1,0 +1,10 @@
+-- regress-full-rangefuncs-006
+-- SELECT f1, rngfuncr(f1) FROM int4_tbl;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=5 end=sink
+  nodes n0@0
+  source range rel=16400 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=fn40760(v1.1))
+  outs 1=w8:val 2=vl:call40760
+mapped: SeqScan

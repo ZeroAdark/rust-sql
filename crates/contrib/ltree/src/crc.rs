@@ -51,7 +51,7 @@ const UNICODE_CASEMAP_BUFSZ: usize = 3 * 4;
 fn fold_strfold(buf: &[u8]) -> ::types_error::PgResult<Vec<u8>> {
     let locale = ::pg_locale::pg_newlocale_from_collation(DEFAULT_COLLATION_OID)?;
     let m = MemoryContext::new("ltree crc fold scratch");
-    let mut out = Vec::with_capacity(buf.len());
+    let mut out = ::mcx::std_vec_with_capacity("ltree", buf.len())?;
     let mut p = buf;
     while !p.is_empty() {
         let srclen = ::mbutils::pg_mblen_range(p)? as usize;

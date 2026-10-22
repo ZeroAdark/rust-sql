@@ -14,7 +14,7 @@ use crate::drop::oid_scankey;
 
 pub fn heap_truncate<'mcx>(mcx: Mcx<'mcx>, relids: &[Oid]) -> PgResult<()> {
     // std Vec: Relation is a pin/lock guard (drop glue), banned from mcx vecs.
-    let mut relations: Vec<Relation<'mcx>> = Vec::with_capacity(relids.len());
+    let mut relations: Vec<Relation<'mcx>> = ::mcx::std_vec_with_capacity("catalog_heap", relids.len())?;
     for &rid in relids {
         relations.push(table::table_open(mcx, rid, AccessExclusiveLock)?);
     }

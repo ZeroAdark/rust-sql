@@ -144,25 +144,15 @@ fn archive_done_renames_ready() {
     });
 }
 
-// LAST_PGARCH_START_TIME is one process-wide static (C: the function-static
-// `last_pgarch_start_time`, pgarch.c:200; only the postmaster thread calls
-// PgArchCanRestart). Every test that reads or writes it holds this lock and
-// sets the stamp it starts from, so no other test's launch can land inside
-// its 10 s throttle window.
-fn with_restart_stamp(last_start: i64, f: impl FnOnce()) {
-    static LOCK: Mutex<()> = Mutex::new(());
-    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    LAST_PGARCH_START_TIME.store(last_start, Relaxed);
-    f();
-}
+static LAUNCH_STAMP: Mutex<()> = Mutex::new(());
 
 #[test]
 fn can_restart_throttles() {
-    // 0 = never launched (the postmaster's initial value).
-    with_restart_stamp(0, || {
-        assert!(PgArchCanRestart());
-        assert!(!PgArchCanRestart());
-    });
+    let _stamp = LAUNCH_STAMP.lock().unwrap_or_else(|e| e.into_inner());
+    LAST_PGARCH_START_TIME.store(0, Relaxed);
+    assert!(can_restart_at(1000));
+    assert!(!can_restart_at(1009), "inside PGARCH_RESTART_INTERVAL of the last launch");
+    assert!(can_restart_at(1010));
 }
 
 // audit-18.6 b104: the archiver's two elapsed-time tests are C
@@ -173,6 +163,7 @@ fn can_restart_throttles() {
 // catch up with the old stamp.
 #[test]
 fn restart_interval_wraps_a_backwards_clock_step() {
+    let _stamp = LAUNCH_STAMP.lock().unwrap_or_else(|e| e.into_inner());
     // Forward time: C's plain interval test.
     assert!(!restart_interval_elapsed(1000, 995));
     assert!(restart_interval_elapsed(1000, 990));
@@ -181,7 +172,8 @@ fn restart_interval_wraps_a_backwards_clock_step() {
     assert!(restart_interval_elapsed(1000, 1005));
     // The live entry point: a launch stamp from the "future" must not
     // block the relaunch (pgarch.c:207 PgArchCanRestart).
-    with_restart_stamp(time_now() + 3600, || assert!(PgArchCanRestart()));
+    LAST_PGARCH_START_TIME.store(time_now() + 3600, Relaxed);
+    assert!(PgArchCanRestart());
 }
 
 #[test]

@@ -1,4 +1,0 @@
-Å);
-
--- OR is an operator here ...
-select websearch_to_tsquery(

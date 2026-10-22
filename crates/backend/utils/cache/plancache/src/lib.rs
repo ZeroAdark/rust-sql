@@ -1,14 +1,4 @@
-// plancache.c. Sources/plans live in per-entry leaked MemoryContexts, reclaimed
-// on drop; registry handles are generation-checked (C's dangling pointer made
-// loud). CachedPlan.refcount IS C's refcount. The raw parse tree is retained on
-// the source (C's copyObject into source_context) and the invalidated-replan
-// arm re-analyzes a per-attempt copy of it: through the installed ReanalyzeFn
-// when the owner's analysis needs parse hooks (C's parserSetup), else through
-// the fixedparams default (C plancache.c:793-814). Query-side (source)
-// invalItems come from extract_query_deps (extract_query_dependencies) and
-// invalidate the source, forcing re-analysis; the generic plan's own
-// invalItems (recorded by setrefs) drive PlanCacheObjectCallback's
-// generic-plan arm. Divergence: RLS fields are constant-false.
+// Divergence: RLS fields are constant-false.
 #![allow(non_snake_case)]
 
 use core::cell::RefCell;
@@ -45,12 +35,6 @@ mod tests;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CachedPlanSourceHandle(pub u64);
 
-/// Analyze-and-rewrite `raw` (a per-attempt copy of the retained raw parse
-/// tree, allocated in `qmcx`; analysis may scribble on it) into `qmcx`;
-/// `arg` is C's parserSetupArg. Install only when analysis needs parse hooks
-/// the fixedparams default cannot carry (C's parserSetup != NULL arm).
-/// `h` is our safe spelling of the rest of C's parserSetupArg: the owner
-/// resolves its own per-source state from the handle.
 pub type ReanalyzeFn = fn(
     h: CachedPlanSourceHandle,
     qmcx: Mcx<'static>,
@@ -65,13 +49,6 @@ pub fn SetCachedPlanReanalyze(h: CachedPlanSourceHandle, f: ReanalyzeFn, arg: i3
     with_source(h, |src| src.reanalyze = Some((f, arg)));
 }
 
-/// C's PostRewriteHook (plancache.h / SetPostRewriteHook): runs on the
-/// transient rewritten query list produced by the re-analysis arm, before the
-/// source adopts it — the owner's chance to re-apply whatever it did to the
-/// list at CompleteCachedPlan time (SQL functions re-run their statement
-/// checks and re-insert the result coercions). May rewrite the list in place,
-/// exactly as C's `List *querytree_list` hook does. `arg` is C's
-/// postRewriteArg, `h` identifies the source (see [`ReanalyzeFn`]).
 pub type PostRewriteFn = fn(
     h: CachedPlanSourceHandle,
     qmcx: Mcx<'static>,
@@ -79,8 +56,7 @@ pub type PostRewriteFn = fn(
     arg: i32,
 ) -> PgResult<()>;
 
-/// C SetPostRewriteHook (plancache.c:504-512). Must be called before the
-/// source is saved: the hook is part of how the source rebuilds itself.
+/// Must be called before the source is saved: the hook is part of how the source rebuilds itself.
 pub fn SetCachedPlanPostRewrite(h: CachedPlanSourceHandle, f: PostRewriteFn, arg: i32) {
     with_source(h, |src| src.post_rewrite = Some((f, arg)));
 }
@@ -95,19 +71,14 @@ struct CachedPlanSource {
     requires_reval: bool,
     requires_snapshot: bool,
     is_xact_exit_stmt: bool,
-    // Lives in source_ctx (C: copyObject into source_context); handed out
-    // only as copies because analysis scribbles on its input.
+    // Handed out only as copies because analysis scribbles on its input.
     raw_parse_tree: Option<&'static RawStmt<'static>>,
-    // C's analyzed_parse_tree: the pre-rewrite Query a CreateCachedPlanForQuery
-    // source was built from, also copied into source_ctx. Exactly one of the
-    // two trees is retained (an empty statement retains neither).
+    // Exactly one of the two trees is retained (an empty statement retains neither).
     analyzed_parse_tree: Option<&'static Query<'static>>,
     reanalyze: Option<(ReanalyzeFn, i32)>,
     post_rewrite: Option<(PostRewriteFn, i32)>,
     query_list: &'static [Query<'static>],
     relation_oids: &'static [Oid],
-    // extract_query_dependencies' invalItems (cacheId, hashValue): a matching
-    // sinval invalidates the source, forcing re-analysis of the raw tree.
     inval_items: &'static [(i32, u32)],
     search_path: Option<SearchPathMatcher<'static>>,
     result_desc: Option<Rc<TupleDescData<'static>>>,
@@ -118,6 +89,7 @@ struct CachedPlanSource {
     is_complete: bool,
     is_saved: bool,
     is_valid: bool,
+    is_oneshot: bool,
     // Dropped source whose arenas must outlive it: custom plans share
     // query-arena subnodes (C copies; we defer the free to last plan release).
     dead: bool,
@@ -128,17 +100,11 @@ struct CachedPlanSource {
     num_custom_plans: i64,
     source_ctx: *mut MemoryContext,
     query_ctx: *mut MemoryContext,
-    // Replan-displaced query arenas a live plan may still reference (the
-    // utility arm of build_stmt_list borrows q.utilityStmt straight from the
-    // query arena; only non-utility statements pass the copy_query_in
-    // boundary). Each entry is stamped with the source generation current at
-    // displacement: a plan can reference the arena it was built from — the
-    // one displaced at the first replan AFTER its build — so an entry with
-    // barrier B is referenceable exactly by live plans of this source with
-    // generation <= B (later builds worked from a newer arena). Entries are
-    // drained by drain_pending_arenas at plan release and at replan; the
-    // whole list frees with the source.
+    // An entry with barrier B is referenceable exactly by live plans of this source with generation <= B.
     pending_query_ctxs: Vec<(i32, *mut MemoryContext)>,
+    // O(1) drop/release with many saved plans (C unlinks a dlist node).
+    live_plans: u32,
+    saved_pos: usize,
 }
 
 struct CachedPlan {
@@ -147,6 +113,7 @@ struct CachedPlan {
     stmt_list: &'static [PlannedStmt<'static>],
     plan_role_id: Oid,
     depends_on_role: bool,
+    unnest_mode: i32,
     saved_xmin: TransactionId,
     refcount: i32,
     generation: i32,
@@ -155,8 +122,6 @@ struct CachedPlan {
     plan_ctx: *mut MemoryContext,
 }
 
-// Registry vectors are bare std Vec: const-init TLS slot maps, never arena
-// data (pquery::stmt_list precedent).
 struct PlanCache {
     sources: Vec<Option<CachedPlanSource>>,
     source_free: Vec<u32>,
@@ -164,22 +129,12 @@ struct PlanCache {
     plan_free: Vec<u32>,
     saved_plan_list: Vec<CachedPlanSourceHandle>,
     handle_gen: u32,
-    // TRUE once ReleaseAllCachedPlansAtExit reclaimed the registry. C never
-    // unpins at process death — CacheMemoryContext just dies with the process
-    // and outstanding refcounts are abandoned. The thread model reclaims the
-    // estate in an on_proc_exit callback, which runs BEFORE the session
-    // teardown phases (launch_backend: run_deferred_exit_callbacks, then
-    // mcxt_stats::run_session_teardown), so late pin holders — the parked
-    // executor skeleton (execmain, State phase) and parked portal shells
-    // (portalmem, Portals phase) — still release their handles afterwards.
     // Those releases are C's abandoned refcounts: no-ops, never staleness.
     torn_down: bool,
 }
 
 thread_local! {
-    // tls-dtor: ManuallyDrop — no dtor is registered, so late ReleaseCachedPlan
-    // calls from other TLS dtors (plpgsql SimpleExpr) can never hit a destroyed
-    // key; every peer session cache (relcache, catcache, typcache) does this.
+    // ManuallyDrop — no dtor is registered, so late ReleaseCachedPlan calls from other TLS dtors can never hit a destroyed key.
     static CACHE: RefCell<core::mem::ManuallyDrop<PlanCache>> = const {
         RefCell::new(core::mem::ManuallyDrop::new(PlanCache {
             sources: Vec::new(),
@@ -201,9 +156,7 @@ fn decode(h: u64) -> (usize, u32) {
     (((h as u32) - 1) as usize, (h >> 32) as u32)
 }
 
-// Callbacks flip flags only and never call out, so one borrow per entry point
-// is safe (reference's ResetPlanCache double-borrow incident); helpers that lock,
-// plan, or probe catalogs run outside any borrow.
+// Callbacks flip flags only and never call out, so one borrow per entry point is safe.
 fn with_cache<R>(f: impl FnOnce(&mut PlanCache) -> R) -> R {
     CACHE.with(|c| f(&mut c.borrow_mut()))
 }
@@ -233,7 +186,100 @@ fn with_plan<R>(h: CachedPlanHandle, f: impl FnOnce(&mut CachedPlan) -> R) -> R 
 }
 
 fn leak_ctx(name: &'static str) -> *mut MemoryContext {
-    Box::into_raw(Box::new(MemoryContext::new(name)))
+    Box::into_raw(Box::new(MemoryContext::new_start_small(name)))
+}
+
+// C copyObjects a finished query or plan tree into a fresh context; analysis
+// here runs in the query arena, and arenas grow by doubling blocks, so a large
+// arena is recopied into a context sized to its tree.
+const COMPACT_MIN_BYTES: usize = 64 * 1024;
+
+fn compact_into<T>(
+    old: *mut MemoryContext,
+    name: &'static str,
+    copy: impl Fn(Mcx<'static>) -> PgResult<T>,
+) -> PgResult<Option<(*mut MemoryContext, T)>> {
+    let footprint = ctx_ref(old).stats().arena_footprint;
+    if footprint < COMPACT_MIN_BYTES {
+        return Ok(None);
+    }
+    let probe = leak_ctx(name);
+    let measured = copy(ctx_mcx(probe)).map(|first| {
+        let st = ctx_ref(probe).stats();
+        let used = st.arena_footprint.saturating_sub(st.free_bytes);
+        drop(first);
+        used
+    });
+    reclaim_ctx(probe);
+    let used = measured?;
+    if used.saturating_mul(5) / 4 >= footprint {
+        return Ok(None);
+    }
+    let exact = Box::into_raw(Box::new(MemoryContext::new_sized(name, used + used / 8 + 2048)));
+    match copy(ctx_mcx(exact)) {
+        Ok(v) => Ok(Some((exact, v))),
+        Err(e) => {
+            reclaim_ctx(exact);
+            Err(e)
+        }
+    }
+}
+
+struct QueryArenaCopy {
+    query_list: &'static [Query<'static>],
+    relation_oids: &'static [Oid],
+    inval_items: &'static [(i32, u32)],
+    search_path: Option<SearchPathMatcher<'static>>,
+}
+
+// At SaveCachedPlan: analysis callers are done with the arena and no plan
+// references it (live_plans == 0).
+fn compact_query_arena(h: CachedPlanSourceHandle) -> PgResult<()> {
+    let (query_ctx, live_plans, query_list, relation_oids, inval_items) = with_source(h, |src| {
+        (src.query_ctx, src.live_plans, src.query_list, src.relation_oids, src.inval_items)
+    });
+    if live_plans != 0 || query_ctx.is_null() {
+        return Ok(());
+    }
+    let matcher = with_source(h, |src| src.search_path.take());
+    let copied = compact_into(query_ctx, "CachedPlanQuery", |m| {
+        let mut v: PgVec<'static, Query<'static>> = PgVec::new_in(m);
+        v.try_reserve_exact(query_list.len()).map_err(|_| m.oom(query_list.len()))?;
+        for q in query_list {
+            v.push(copyfuncs::copy_query(m, q)?);
+        }
+        Ok(QueryArenaCopy {
+            query_list: mcx::vec_borrow_in(m, v)?,
+            relation_oids: mcx::slice_borrow_in(m, relation_oids)?,
+            inval_items: mcx::slice_borrow_in(m, inval_items)?,
+            search_path: match matcher.as_ref() {
+                Some(sp) => Some(catalog_namespace::CopySearchPathMatcher(m, sp)?),
+                None => None,
+            },
+        })
+    });
+    match copied {
+        Ok(Some((compacted, c))) => {
+            drop(matcher);
+            with_source(h, |src| {
+                src.query_ctx = compacted;
+                src.query_list = c.query_list;
+                src.relation_oids = c.relation_oids;
+                src.inval_items = c.inval_items;
+                src.search_path = c.search_path;
+            });
+            reclaim_ctx(query_ctx);
+            Ok(())
+        }
+        Ok(None) => {
+            with_source(h, |src| src.search_path = matcher);
+            Ok(())
+        }
+        Err(e) => {
+            with_source(h, |src| src.search_path = matcher);
+            Err(e)
+        }
+    }
 }
 
 fn ctx_ref<'a>(ctx: *mut MemoryContext) -> &'a MemoryContext {
@@ -248,6 +294,9 @@ fn ctx_mcx(ctx: *mut MemoryContext) -> Mcx<'static> {
 }
 
 fn reclaim_ctx(ctx: *mut MemoryContext) {
+    if ctx.is_null() {
+        return;
+    }
     // SAFETY: leak_ctx provenance; caller removed every reference first.
     drop(unsafe { Box::from_raw(ctx) });
 }
@@ -261,15 +310,14 @@ fn drain_pending_arenas(
     pc: &mut PlanCache,
     h: CachedPlanSourceHandle,
 ) -> Vec<*mut MemoryContext> {
+    let (idx, generation) = decode(h.0);
+    match pc.sources.get(idx).and_then(Option::as_ref) {
+        Some(src) if src.handle_gen == generation && !src.pending_query_ctxs.is_empty() => {}
+        _ => return Vec::new(),
+    }
     let min_gen =
         pc.plans.iter().flatten().filter(|p| p.source == h).map(|p| p.generation).min();
-    let (idx, generation) = decode(h.0);
-    let Some(src) = pc.sources.get_mut(idx).and_then(Option::as_mut) else {
-        return Vec::new();
-    };
-    if src.handle_gen != generation {
-        return Vec::new();
-    }
+    let src = pc.sources[idx].as_mut().expect("checked above");
     let mut freed = Vec::new();
     src.pending_query_ctxs.retain(|&(barrier, ctx)| match min_gen {
         Some(m) if barrier >= m => true,
@@ -286,17 +334,11 @@ pub fn init_seams() {
     plancache_portal_seams::release_cached_plan::set(ReleaseCachedPlan);
     plancache_portal_seams::incr_cached_plan::set(IncrCachedPlan);
     plancache_portal_seams::is_source_generic_plan::set(CachedPlanIsSourceGeneric);
-    // The statement-plane memo's identity supply (the lanev4 A1 #512 seam).
-    // The two engine_plan_* slots run the OTHER direction (installed by the
-    // executor's statement plane, called from DropCachedPlan/ResetPlanCache
-    // below).
     plancache_portal_seams::plan_identity::set(CachedPlanIdentity);
-    // C: plancache.c owns `int plan_cache_mode = PLAN_CACHE_MODE_AUTO`.
     thread_local! {
         static PLAN_CACHE_MODE: core::cell::Cell<i32> =
             const { core::cell::Cell::new(guc_tables::consts::PLAN_CACHE_MODE_AUTO) };
     }
-    // installed() guard: test fixtures shim this slot before init_seams.
     {
         guc_tables::vars::plan_cache_mode.install_if_absent(guc_tables::GucVarAccessors {
             get: || PLAN_CACHE_MODE.with(core::cell::Cell::get),
@@ -305,15 +347,7 @@ pub fn init_seams() {
     }
 }
 
-// Backend-exit reclaim of every surviving plancache context. C frees these by
-// process death (plancache.c allocates under CacheMemoryContext); a
-// thread-per-connection backend must free them itself or every prepared
-// statement's CachedPlanSource/CachedPlanQuery/CachedPlan contexts leak into
-// the postmaster's heap for the server's lifetime. Runs as an on_proc_exit
-// callback: portals and transactions are already torn down
-// (shutdown_postgres_cb), so the registry structs are the last owners; their
-// arena-tied fields (search_path, result_desc) drop before their arenas are
-// reclaimed.
+// C frees these by process death (plancache.c allocates under CacheMemoryContext); a thread-per-connection backend must free them itself or every prepared statement's CachedPlanSource/CachedPlanQuery/CachedPlan contexts leak into the postmaster's heap for the server's lifetime.
 fn ReleaseAllCachedPlansAtExit(_code: i32, _arg: usize) {
     let ctxs = with_cache(|pc| {
         let mut ctxs = Vec::new();
@@ -329,11 +363,6 @@ fn ReleaseAllCachedPlansAtExit(_code: i32, _arg: usize) {
                 ctxs.push(src.source_ctx);
             }
         }
-        // Registry slabs die with the backend (C: CacheMemoryContext goes
-        // with the process). `clear()` keeps the capacity — 200 PREPAREs
-        // grow `sources`/`plans` to ~80 KiB each — and the ManuallyDrop TLS
-        // never frees it, so every session's registry stayed resident in
-        // the shared process. Hand the slabs back outright.
         pc.plans = Vec::new();
         pc.plan_free = Vec::new();
         pc.sources = Vec::new();
@@ -347,10 +376,16 @@ fn ReleaseAllCachedPlansAtExit(_code: i32, _arg: usize) {
     }
 }
 
+// A warm-claimed worker thread skips InitPlanCache after its exit teardown.
+fn rearm_after_exit_teardown() {
+    let was_torn_down = with_cache(|pc| core::mem::replace(&mut pc.torn_down, false));
+    if was_torn_down && ipc_seams::on_proc_exit::is_installed() {
+        ipc_seams::on_proc_exit::call(ReleaseAllCachedPlansAtExit, 0);
+    }
+}
+
 pub fn InitPlanCache() -> PgResult<()> {
-    // A fresh session on a reused thread starts with a live registry.
     with_cache(|pc| pc.torn_down = false);
-    // installed() guard: unit-test rigs call InitPlanCache without ipc.
     if ipc_seams::on_proc_exit::is_installed() {
         ipc_seams::on_proc_exit::call(ReleaseAllCachedPlansAtExit, 0);
     }
@@ -367,7 +402,6 @@ pub fn InitPlanCache() -> PgResult<()> {
         PlanCacheSysCallback,
         zero,
     )?;
-    // upstream 0b12f56bfac1 (18.6): Invalidate plan cache after role changes.
     inval::invalidate::CacheRegisterSyscacheCallback(AUTHMEMROLEMEM, PlanCacheRoleCallback, zero)?;
     inval::invalidate::CacheRegisterSyscacheCallback(AUTHOID, PlanCacheRoleCallback, zero)?;
     inval::invalidate::CacheRegisterSyscacheCallback(DATABASEOID, PlanCacheRoleCallback, zero)?;
@@ -390,12 +424,16 @@ pub fn CreateCachedPlan(
     create_cached_plan_flags(raw_parse_tree, None, flags, query_string, commandTag)
 }
 
-// CreateCachedPlanForQuery (plancache.c:255-277): entry created from an
-// analyzed Query (SQL-function prosqlbody); revalidation/snapshot flags come
-// from query_requires_rewrite_plan, not the raw-tree probe. C copies the tree
-// into the source context (`plansource->analyzed_parse_tree =
-// copyObject(...)`) because that copy is what the re-rewrite arm of
-// RevalidateCachedQuery works from.
+pub fn CreateOneShotCachedPlan(
+    raw_parse_tree: Option<&RawStmt<'_>>,
+    query_string: &str,
+    commandTag: CommandTag,
+) -> PgResult<CachedPlanSourceHandle> {
+    let h = CreateCachedPlan(raw_parse_tree, query_string, commandTag)?;
+    with_source(h, |src| src.is_oneshot = true);
+    Ok(h)
+}
+
 pub fn CreateCachedPlanForQuery(
     analyzed: &Query<'_>,
     query_string: &str,
@@ -412,6 +450,7 @@ fn create_cached_plan_flags(
     query_string: &str,
     commandTag: CommandTag,
 ) -> PgResult<CachedPlanSourceHandle> {
+    rearm_after_exit_teardown();
     let source_ctx = leak_ctx("CachedPlanSource");
     let query_ctx = leak_ctx("CachedPlanQuery");
     let mcx = ctx_mcx(source_ctx);
@@ -468,8 +507,11 @@ fn create_cached_plan_flags(
             is_complete: false,
             is_saved: false,
             is_valid: false,
+            is_oneshot: false,
             dead: false,
             generation: 0,
+            live_plans: 0,
+            saved_pos: 0,
             generic_cost: -1.0,
             total_custom_cost: 0.0,
             num_generic_plans: 0,
@@ -492,8 +534,8 @@ fn create_cached_plan_flags(
     }))
 }
 
-/// C CompleteCachedPlan's `querytree_context`: analysis output must be
-/// allocated with this Mcx so the plansource owns it with zero copies.
+/// Analysis output must be allocated with this Mcx so the plansource owns it with zero copies.
+/// SaveCachedPlan may reclaim this arena: caller scratch in it must be dropped first.
 pub fn SourceQueryMcx(h: CachedPlanSourceHandle) -> Mcx<'static> {
     ctx_mcx(with_source(h, |src| src.query_ctx))
 }
@@ -553,29 +595,44 @@ pub fn CompleteCachedPlan(
     Ok(())
 }
 
+// plancache.c:432-440 (CompleteCachedPlan with querytree_context NULL): a
+// caller that analyzed in its own scratch context copies the tree into the
+// source's query context before completing it.
+pub fn CopyQueryListToSource(
+    h: CachedPlanSourceHandle,
+    query_list: &[Query<'_>],
+) -> PgResult<PgVec<'static, Query<'static>>> {
+    let mcx = SourceQueryMcx(h);
+    let mut v: PgVec<'static, Query<'static>> = PgVec::new_in(mcx);
+    v.try_reserve_exact(query_list.len()).map_err(|_| mcx.oom(query_list.len()))?;
+    for q in query_list {
+        v.push(copyfuncs::copy_query(mcx, q)?);
+    }
+    Ok(v)
+}
+
 pub fn SaveCachedPlan(h: CachedPlanSourceHandle) -> PgResult<()> {
     ReleaseGenericPlan(h);
+    compact_query_arena(h)?;
     with_cache(|pc| {
+        let pos = pc.saved_plan_list.len();
         let src = source_mut(pc, h);
         assert!(src.is_complete && !src.is_saved, "SaveCachedPlan: bad order");
         src.is_saved = true;
+        src.saved_pos = pos;
         pc.saved_plan_list.push(h);
     });
     Ok(())
 }
 
 pub fn DropCachedPlan(h: CachedPlanSourceHandle) {
-    // Post-exit-reclaim drops (e.g. a cache teardown running after the
-    // on_proc_exit ceremony) are C's process-death abandonment: no-ops.
+    // Post-exit-reclaim drops (e.g. a cache teardown running after the on_proc_exit ceremony) are C's process-death abandonment: no-ops.
     if with_cache(|pc| pc.torn_down) {
         return;
     }
     if plancache_portal_seams::discard_parked_portal::is_installed() {
         plancache_portal_seams::discard_parked_portal::call(types_portal::PlanSourceHandle(h.0));
     }
-    // The statement-plane memo's eager #511 drop face: release every
-    // memoized artifact of this plansource. Outside the registry borrow,
-    // like the portal discard above (callbacks-never-call-out law).
     if plancache_portal_seams::engine_plan_dropped::is_installed() {
         plancache_portal_seams::engine_plan_dropped::call(types_portal::PlanSourceHandle(h.0));
     }
@@ -583,14 +640,17 @@ pub fn DropCachedPlan(h: CachedPlanSourceHandle) {
         let src = source_mut(pc, h);
         if src.is_saved {
             src.is_saved = false;
-            pc.saved_plan_list.retain(|&s| s != h);
+            let pos = src.saved_pos;
+            pc.saved_plan_list.swap_remove(pos);
+            if let Some(&moved) = pc.saved_plan_list.get(pos) {
+                source_mut(pc, moved).saved_pos = pos;
+            }
         }
     });
     ReleaseGenericPlan(h);
     let ctxs = with_cache(|pc| {
-        // A surviving refcounted plan (pipelined portal) tombstones the
-        // source; ReleaseCachedPlan of the last survivor frees it.
-        if pc.plans.iter().flatten().any(|p| p.source == h) {
+        // A surviving refcounted plan (pipelined portal) tombstones the source; ReleaseCachedPlan of the last survivor frees it.
+        if source_mut(pc, h).live_plans > 0 {
             source_mut(pc, h).dead = true;
             return None;
         }
@@ -608,13 +668,6 @@ pub fn DropCachedPlan(h: CachedPlanSourceHandle) {
     }
 }
 
-/// D3.4 idle passivation (docs/design/connection-scaling.md): drop the
-/// generic plan of every saved source. The source itself — query text, parse
-/// trees, param types, the prepared-statement identity — survives untouched;
-/// the next execution replans, exactly as after any plancache invalidation.
-/// A plan still referenced elsewhere merely loses the source's reference and
-/// frees when its holder releases (C ReleaseGenericPlan semantics) — but at
-/// idle-not-in-transaction no plan should be in use. Returns plans dropped.
 pub fn ReleaseIdleGenericPlans() -> usize {
     let handles: Vec<CachedPlanSourceHandle> = with_cache(|pc| {
         if pc.torn_down {
@@ -641,10 +694,7 @@ fn ReleaseGenericPlan(h: CachedPlanSourceHandle) {
 
 pub fn ReleaseCachedPlan(cplan: CachedPlanHandle) {
     let freed = with_cache(|pc| {
-        // A release arriving after ReleaseAllCachedPlansAtExit reclaimed the
-        // registry (parked executor skeleton / parked portal shells, whose
-        // session-teardown cleanups run after the exit-callback ceremony) is
-        // an abandoned refcount in C's process model: drop it silently.
+        // A release arriving after ReleaseAllCachedPlansAtExit reclaimed the registry is an abandoned refcount in C's process model: drop it silently.
         if pc.torn_down {
             return Vec::new();
         }
@@ -656,15 +706,17 @@ pub fn ReleaseCachedPlan(cplan: CachedPlanHandle) {
             let plan = pc.plans[idx].take().expect("checked by plan_mut");
             pc.plan_free.push(idx as u32);
             let mut ctxs = vec![plan.plan_ctx];
-            // Last survivor of a dead source reclaims the tombstone; on a
-            // LIVE source this release may have raised the surviving minimum
-            // generation, so drain the replan-displaced pending arenas it
-            // proves unreferenced.
             let (sidx, sgen) = decode(plan.source.0);
-            let src_dead = pc.sources.get(sidx).and_then(Option::as_ref).is_some_and(|s| {
-                s.handle_gen == sgen && s.dead
-            });
-            if src_dead && !pc.plans.iter().flatten().any(|p| p.source == plan.source) {
+            let mut src_dead = false;
+            let mut src_unpinned = false;
+            if let Some(s) = pc.sources.get_mut(sidx).and_then(Option::as_mut) {
+                if s.handle_gen == sgen {
+                    s.live_plans -= 1;
+                    src_dead = s.dead;
+                    src_unpinned = s.live_plans == 0;
+                }
+            }
+            if src_dead && src_unpinned {
                 let src = pc.sources[sidx].take().expect("checked above");
                 pc.source_free.push(sidx as u32);
                 ctxs.extend(src.pending_query_ctxs.into_iter().map(|(_, c)| c));
@@ -692,9 +744,7 @@ pub fn IncrCachedPlan(cplan: CachedPlanHandle) {
     });
 }
 
-// True iff cplan is its source's current generic plan — the only plan a
-// later GetCachedPlan can return unchanged; one-shot custom plans never
-// recur. Caller must hold a refcount on cplan.
+// Caller must hold a refcount on cplan.
 pub fn CachedPlanIsSourceGeneric(cplan: CachedPlanHandle) -> bool {
     with_cache(|pc| {
         let src = plan_mut(pc, cplan).source;
@@ -710,15 +760,10 @@ pub fn CachedPlanIsValid(h: CachedPlanSourceHandle) -> bool {
     with_source(h, |src| src.is_valid)
 }
 
-// Source-validity probe for owners that can rebuild from retained SQL (the
-// plpgsql SPI-plan path): C revalidates in place from the raw tree.
 pub fn CachedPlanSourceIsValid(h: CachedPlanSourceHandle) -> bool {
     with_cache(|pc| source_mut(pc, h).is_valid)
 }
 
-// RevalidateCachedQuery's pre-lock screen (invalidation, search_path mismatch,
-// RLS environment change) as a pure probe, for owners whose analysis needs
-// parse hooks a ReanalyzeFn cannot carry (plpgsql exprs, SQL-function fcache).
 pub fn CachedPlanSourceRequiresReanalysis(h: CachedPlanSourceHandle) -> PgResult<bool> {
     let (requires_reval, is_valid, depends_on_rls, role, row_sec) = with_source(h, |src| {
         (
@@ -735,41 +780,44 @@ pub fn CachedPlanSourceRequiresReanalysis(h: CachedPlanSourceHandle) -> PgResult
     if !is_valid {
         return Ok(true);
     }
-    let mut matcher = with_source(h, |src| src.search_path.take());
-    let matches = match matcher.as_mut() {
-        Some(m) => catalog_namespace::SearchPathMatchesCurrentEnvironment(m),
-        None => panic!(
-            "CachedPlanSourceRequiresReanalysis: valid revalidatable source lost its search_path"
-        ),
-    };
-    with_source(h, |src| src.search_path = matcher);
-    if !matches? {
-        return Ok(true);
+    if !search_path_generation_matches(h)? {
+        let mut matcher = with_source(h, |src| src.search_path.take());
+        let matches = match matcher.as_mut() {
+            Some(m) => catalog_namespace::SearchPathMatchesCurrentEnvironment(m),
+            None => panic!(
+                "CachedPlanSourceRequiresReanalysis: valid revalidatable source lost its search_path"
+            ),
+        };
+        with_source(h, |src| src.search_path = matcher);
+        if !matches? {
+            return Ok(true);
+        }
     }
     Ok(depends_on_rls
         && (role != miscinit::GetUserId() || row_sec != guc_tables::backing::row_security()))
 }
 
-// C CachedPlanIsSimplyValid (plancache.c) minus the resowner arm: true only
-// while `cplan` is the source's current generic plan, both are valid, and the
-// captured search_path still matches the current environment. Caller must
-// hold a refcount on `cplan`.
+// Caller must hold a refcount on `cplan`.
 pub fn CachedPlanIsSimplyValid(
     h: CachedPlanSourceHandle,
     cplan: CachedPlanHandle,
 ) -> PgResult<bool> {
-    let ok = with_cache(|pc| {
-        let (src_valid, gplan) = {
+    let active = catalog_namespace::ActiveSearchPathGeneration()?;
+    let (ok, path_current) = with_cache(|pc| {
+        let (src_valid, gplan, path_current) = {
             let src = source_mut(pc, h);
-            (src.is_valid, src.gplan)
+            let current = src.search_path.as_ref().is_some_and(|m| m.generation == active);
+            (src.is_valid, src.gplan, current)
         };
-        src_valid && gplan == Some(cplan) && plan_mut(pc, cplan).is_valid
+        (src_valid && gplan == Some(cplan) && plan_mut(pc, cplan).is_valid, path_current)
     });
     if !ok {
         return Ok(false);
     }
-    // Matcher taken out of the registry: SearchPathMatchesCurrentEnvironment
-    // probes catalogs and must run outside the cache borrow.
+    if path_current {
+        return Ok(true);
+    }
+    // SearchPathMatchesCurrentEnvironment probes catalogs and must run outside the cache borrow.
     let mut matcher = with_source(h, |src| src.search_path.take());
     let matches = match matcher.as_mut() {
         Some(m) => catalog_namespace::SearchPathMatchesCurrentEnvironment(m),
@@ -779,10 +827,14 @@ pub fn CachedPlanIsSimplyValid(
     matches
 }
 
+// SearchPathMatchesCurrentEnvironment's generation fast path, read in place:
+// the matcher only needs to leave the source when it must be compared.
+fn search_path_generation_matches(h: CachedPlanSourceHandle) -> PgResult<bool> {
+    let active = catalog_namespace::ActiveSearchPathGeneration()?;
+    Ok(with_source(h, |src| src.search_path.as_ref().is_some_and(|m| m.generation == active)))
+}
+
 thread_local! {
-    // Monotonic count of plancache invalidation events; consumers holding
-    // uncached coercion expressions (plpgsql cast cache) rebuild on any bump
-    // (conservative stand-in for C's CachedExpression is_valid).
     static INVAL_COUNTER: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
 }
 
@@ -794,13 +846,12 @@ fn bump_inval_counter() {
     INVAL_COUNTER.with(|c| c.set(c.get().wrapping_add(1)));
 }
 
-/// Valid while the source stays saved and valid (C: plansource->query_list;
-/// callers must have just revalidated via GetCachedPlan).
+/// Valid while the source stays saved and valid (callers must have just revalidated via GetCachedPlan).
 pub fn SourceQueryList(h: CachedPlanSourceHandle) -> &'static [Query<'static>] {
     with_source(h, |src| src.query_list)
 }
 
-/// Valid while the caller holds a refcount on `cplan` (C: cplan->stmt_list).
+/// Valid while the caller holds a refcount on `cplan`.
 pub fn CachedPlanStmtList(cplan: CachedPlanHandle) -> &'static [PlannedStmt<'static>] {
     with_plan(cplan, |plan| {
         assert!(plan.refcount > 0, "CachedPlanStmtList: caller holds no refcount");
@@ -853,8 +904,7 @@ pub fn GetCachedPlan(
                 src.generic_cost = cost;
             });
             plan = Some(built);
-            // C wart: re-choose with the now-known generic cost; a losing
-            // generic plan is kept but not executed.
+            // A losing generic plan is kept but not executed.
             customplan = choose_custom_plan(h, boundParams);
         }
     }
@@ -889,7 +939,6 @@ fn RevalidateCachedQuery(
     queryEnv: QueryEnvHandle,
     release_generic: bool,
 ) -> PgResult<()> {
-    // One borrow per phase; the catalog probe and lock calls run outside.
     let (requires_reval, is_valid, mut matcher) = with_source(h, |src| {
         let take = src.requires_reval && src.is_valid;
         (
@@ -908,10 +957,7 @@ fn RevalidateCachedQuery(
             Some(m) => catalog_namespace::SearchPathMatchesCurrentEnvironment(m),
             None => panic!("RevalidateCachedQuery: valid revalidatable source lost its search_path"),
         };
-        // Restore the taken search_path unconditionally BEFORE propagating any
-        // error. The check is fallible; an Err here early-returns, and leaving
-        // a still-valid entry with search_path=None corrupts the cache (the
-        // next access hits the None arm and panics, killing the connection).
+        // Leaving a still-valid entry with search_path=None corrupts the cache (the next access hits the None arm and panics).
         with_cache(|pc| source_mut(pc, h).search_path = matcher);
         if !matches? {
             with_cache(|pc| {
@@ -923,8 +969,6 @@ fn RevalidateCachedQuery(
         }
     }
 
-    // The rewrite had an RLS dependency: redo it if the role or the
-    // row_security setting changed (C plancache.c:714).
     if with_source(h, |src| src.is_valid && src.depends_on_rls)
         && with_source(h, |src| {
             src.rewrite_role_id != miscinit::GetUserId()
@@ -946,22 +990,33 @@ fn RevalidateCachedQuery(
         (src.reanalyze, src.post_rewrite, src.raw_parse_tree, src.analyzed_parse_tree)
     });
 
-    // An analysis error below leaves the source invalid with empty lists
-    // (retried on the next fetch), exactly as C's longjmp.
     if release_generic {
         ReleaseGenericPlan(h);
     }
-    let (old_qctx, query_string, param_types, fixed_result, source_ctx) = with_cache(|pc| {
+    // plancache.c:767 frees query_context before reanalysis: a failed reanalysis leaves no obsolete arena behind.
+    let (reclaim, query_string, param_types, fixed_result, source_ctx) = with_cache(|pc| {
+        let pinned = source_mut(pc, h).live_plans > 0;
         let src = source_mut(pc, h);
         src.is_valid = false;
         src.query_list = &[];
         src.relation_oids = &[];
         src.inval_items = &[];
         src.search_path = None;
-        (src.query_ctx, src.query_string, src.param_types, src.fixed_result, src.source_ctx)
+        let old_qctx = core::mem::replace(&mut src.query_ctx, core::ptr::null_mut());
+        let mut ctxs = Vec::new();
+        if !old_qctx.is_null() {
+            if pinned {
+                src.pending_query_ctxs.push((src.generation, old_qctx));
+            } else {
+                ctxs.push(old_qctx);
+            }
+        }
+        (ctxs, src.query_string, src.param_types, src.fixed_result, src.source_ctx)
     });
+    for ctx in reclaim {
+        reclaim_ctx(ctx);
+    }
 
-    // Re-analysis probes catalogs: C pushes a transaction snapshot if none set.
     let mut snapshot_set = false;
     if !snapmgr::ActiveSnapshotSet() {
         let snap: snapmgr::Snapshot = snapmgr::GetTransactionSnapshot()?;
@@ -970,22 +1025,16 @@ fn RevalidateCachedQuery(
     }
     let new_qctx = leak_ctx("CachedPlanQuery");
     let qmcx = ctx_mcx(new_qctx);
-    // The three source shapes of C plancache.c:790-830, in C's order. Both
-    // retained-tree arms work from a per-attempt copy (C's copyObject):
-    // analysis and the rewriter both scribble on their input, and a failed
-    // attempt must not poison the retained original.
+    // Analysis and the rewriter both scribble on their input, and a failed attempt must not poison the retained original.
     let analyzed = match (raw_parse_tree, analyzed_parse_tree) {
         (Some(raw), _) => copy_raw_stmt_in(qmcx, raw).and_then(|raw| match reanalyze {
             Some((f, arg)) => f(h, qmcx, raw, query_string, param_types, queryEnv, arg),
             None => reanalyze_fixedparams(qmcx, raw, query_string, param_types, queryEnv),
         }),
         (None, Some(q)) => rewrite_analyzed(qmcx, q),
-        // Empty query: C leaves tlist NIL. Unreachable in practice, since an
-        // empty statement never requires revalidation.
+        // Unreachable in practice, since an empty statement never requires revalidation.
         (None, None) => Ok(PgVec::new_in(qmcx)),
     }
-    // C plancache.c:834-836, before the snapshot is popped: the postRewrite
-    // hook may probe catalogs (SQL functions re-run check_sql_stmt_retval).
     .and_then(|mut query_list| match post_rewrite {
         Some((f, arg)) => f(h, qmcx, &mut query_list, arg).map(|()| query_list),
         None => Ok(query_list),
@@ -1025,13 +1074,10 @@ fn RevalidateCachedQuery(
         _ => false,
     };
     if !desc_equal && fixed_result {
-        // search_path's schemas PgVec lives in new_qctx: it must be dead
-        // before the arena is reclaimed or its Drop scribbles a freed slab.
+        // search_path's schemas PgVec lives in new_qctx: it must be dead before the arena is reclaimed or its Drop scribbles a freed slab.
         drop(search_path);
         reclaim_ctx(new_qctx);
-        // routine=RevalidateCachedQuery is load-bearing: pgjdbc and
-        // postgres.js key their transparent re-prepare-after-DDL on this
-        // exact R field (C's __func__ at the equivalent report site).
+        // routine=RevalidateCachedQuery is load-bearing: pgjdbc and postgres.js key their transparent re-prepare-after-DDL on this exact R field.
         return Err(ereport(ERROR)
             .errcode(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
             .errmsg("cached plan must not change result type")
@@ -1058,37 +1104,13 @@ fn RevalidateCachedQuery(
         src.rewrite_row_security = rewrite_row_security;
         src.is_valid = true;
     });
-    // Custom plans share query-arena subnodes (see `dead`): the old arena is
-    // reclaimed only when no live plan can still reference it. That is the
-    // COMMON case here, not the rare one — parked portal shells (portalmem)
-    // and the executor's TLS skeleton pin the displaced generic plan across
-    // executions — so an arena that cannot be reclaimed now parks on the
-    // source as pending and is drained at the last plan's release (or on the
-    // next unpinned revalidation). Before the pending list, every
-    // invalidation-driven replan under a pin leaked the old arena for good.
-    let reclaim = with_cache(|pc| {
-        // Every live plan of h predates this replan's builds (BuildCachedPlan
-        // has not run for the new list yet), so any of them may reference
-        // old_qctx: park it stamped with the pre-replan generation. The drain
-        // then frees whatever older entries the same sweep proves dead.
-        let pinned = pc.plans.iter().flatten().any(|p| p.source == h);
-        if pinned {
-            let src = source_mut(pc, h);
-            src.pending_query_ctxs.push((src.generation, old_qctx));
-        }
-        let mut ctxs = drain_pending_arenas(pc, h);
-        if !pinned {
-            ctxs.push(old_qctx);
-        }
-        ctxs
-    });
+    let reclaim = with_cache(|pc| drain_pending_arenas(pc, h));
     for ctx in reclaim {
         reclaim_ctx(ctx);
     }
     Ok(())
 }
 
-// copyObject(raw_parse_tree): the RawStmt shell plus its full statement tree.
 fn copy_raw_stmt_in<'mcx>(mcx: Mcx<'mcx>, raw: &RawStmt<'_>) -> PgResult<&'mcx RawStmt<'mcx>> {
     let stmt = match raw.stmt {
         Some(s) => Some(copyfuncs::copy_object(mcx, s)?),
@@ -1100,10 +1122,7 @@ fn copy_raw_stmt_in<'mcx>(mcx: Mcx<'mcx>, raw: &RawStmt<'_>) -> PgResult<&'mcx R
     )
 }
 
-/// Copy of the source's retained raw parse tree into `mcx`; None for sources
-/// created without one (empty statements, CreateCachedPlanForQuery). Copies
-/// only — analysis scribbles on its input (C reads plansource->raw_parse_tree
-/// and copyObjects before use).
+/// Copies only — analysis scribbles on its input.
 pub fn CachedPlanRawParseTreeCopy<'mcx>(
     mcx: Mcx<'mcx>,
     h: CachedPlanSourceHandle,
@@ -1114,26 +1133,16 @@ pub fn CachedPlanRawParseTreeCopy<'mcx>(
     }
 }
 
-// The analyzed_parse_tree revalidation arm (C plancache.c:816-827): the
-// source was built from a Query that is already parse-analyzed, so only the
-// rewrite is redone — preceded by the lock acquisition the rewriter needs,
-// which is what makes this arm safe to plan from afterwards.
 fn rewrite_analyzed(
     qmcx: Mcx<'static>,
     analyzed: &Query<'static>,
 ) -> PgResult<PgVec<'static, Query<'static>>> {
-    // The rewriter scribbles on its input, so copy (C's copyObject).
+    // The rewriter scribbles on its input, so copy.
     let copied: Query<'static> = copyfuncs::copy_query(qmcx, analyzed)?;
     rewrite_handler_seams::acquire_rewrite_locks::call(qmcx, &copied, true, false)?;
     pg_rewrite_query(qmcx, copied)
 }
 
-// pg_rewrite_query (tcop/postgres.c:794-869): the rewriter leg both
-// revalidation arms share. tcop's own copy is unreachable from here (tcop
-// sits above plancache), so the C body — the utility arm (a utility Query has
-// an empty rtable, so acquire_rewrite_locks is a no-op for it), the
-// log_parser_stats usage bracket and the debug_print_rewritten dump — is
-// mirrored at this call site as C reaches it from RevalidateCachedQuery.
 fn pg_rewrite_query(
     qmcx: Mcx<'static>,
     query: Query<'static>,
@@ -1171,8 +1180,6 @@ fn pg_rewrite_query(
     Ok(querytree_list)
 }
 
-// pg_analyze_and_rewrite_fixedparams (tcop/postgres.c) via the seams, the
-// parserSetup == NULL revalidation arm (C plancache.c:807-814).
 fn reanalyze_fixedparams(
     qmcx: Mcx<'static>,
     raw: &RawStmt<'static>,
@@ -1207,6 +1214,9 @@ fn CheckCachedPlan(h: CachedPlanSourceHandle) -> PgResult<bool> {
         if plan.is_valid && plan.depends_on_role && plan.plan_role_id != user {
             plan.is_valid = false;
         }
+        if plan.is_valid && plan.unnest_mode != guc_tables::backing::pgrust_gravity_unnest() {
+            plan.is_valid = false;
+        }
         Some((gplan, plan.is_valid, plan.stmt_list))
     }) else {
         return Ok(false);
@@ -1234,10 +1244,6 @@ fn CheckCachedPlan(h: CachedPlanSourceHandle) -> PgResult<bool> {
     Ok(false)
 }
 
-/// set_ident copies; every observer clips the identifier (mcxtfuncs.c
-/// MEMORY_CONTEXT_IDENT_DISPLAY_SIZE = 1024 bytes, mcxt.c
-/// MemoryContextStatsPrint 100 bytes), so store that prefix on a character
-/// boundary rather than a second copy of a long statement.
 fn ident_prefix(query_string: &str) -> &str {
     let mut n = query_string.len().min(1024);
     while !query_string.is_char_boundary(n) {
@@ -1251,9 +1257,7 @@ fn BuildCachedPlan(
     boundParams: ParamListHandle,
     queryEnv: QueryEnvHandle,
 ) -> PgResult<CachedPlanHandle> {
-    // Invalidated since GetCachedPlan's revalidation (sinval-reset race):
-    // re-analyze, without releasing the generic plan the caller may hold (C
-    // plancache.c BuildCachedPlan's release_generic = false).
+    // Invalidated since GetCachedPlan's revalidation: re-analyze without releasing the generic plan the caller may hold.
     if !with_source(h, |src| src.is_valid) {
         RevalidateCachedQuery(h, queryEnv, false)?;
     }
@@ -1262,8 +1266,6 @@ fn BuildCachedPlan(
     });
 
     let plan_ctx = leak_ctx("CachedPlan");
-    // plancache.c:1100: MemoryContextCopyAndSetIdentifier(plan_context,
-    // plansource->query_string).
     ctx_ref(plan_ctx).set_ident(Some(ident_prefix(query_string)));
     let result = build_stmt_list(
         ctx_mcx(plan_ctx),
@@ -1275,6 +1277,26 @@ fn BuildCachedPlan(
     );
     let stmt_list = match result {
         Ok(list) => list,
+        Err(e) => {
+            reclaim_ctx(plan_ctx);
+            return Err(e);
+        }
+    };
+    let copy_stmts = |m: Mcx<'static>| -> PgResult<&'static [PlannedStmt<'static>]> {
+        let mut v: PgVec<'static, PlannedStmt<'static>> = PgVec::new_in(m);
+        v.try_reserve_exact(stmt_list.len()).map_err(|_| m.oom(stmt_list.len()))?;
+        for s in stmt_list {
+            v.push(copyfuncs::copy_planned_stmt(m, s)?);
+        }
+        mcx::vec_borrow_in(m, v)
+    };
+    let (plan_ctx, stmt_list) = match compact_into(plan_ctx, "CachedPlan", copy_stmts) {
+        Ok(Some((compacted, list))) => {
+            ctx_ref(compacted).set_ident(Some(ident_prefix(query_string)));
+            reclaim_ctx(plan_ctx);
+            (compacted, list)
+        }
+        Ok(None) => (plan_ctx, stmt_list),
         Err(e) => {
             reclaim_ctx(plan_ctx);
             return Err(e);
@@ -1296,11 +1318,13 @@ fn BuildCachedPlan(
         InvalidTransactionId
     };
     let plan_role_id = miscinit::GetUserId();
+    let unnest_mode = guc_tables::backing::pgrust_gravity_unnest();
 
     Ok(with_cache(|pc| {
         pc.handle_gen = pc.handle_gen.wrapping_add(1);
         let src = source_mut(pc, h);
         src.generation += 1;
+        src.live_plans += 1;
         let generation = src.generation;
         let plan = CachedPlan {
             handle_gen: pc.handle_gen,
@@ -1308,6 +1332,7 @@ fn BuildCachedPlan(
             stmt_list,
             plan_role_id,
             depends_on_role,
+            unnest_mode,
             saved_xmin,
             refcount: 0,
             generation,
@@ -1344,6 +1369,26 @@ fn build_stmt_list(
         snapshot_set = true;
     }
 
+    let plan_one = |pmcx: Mcx<'static>, q: &Query<'static>| -> PgResult<PlannedStmt<'static>> {
+        let input = mcx::leak_in(mcx::alloc_in(pmcx, copy_query_in(pmcx, q)?)?);
+        if guc_tables::backing::log_planner_stats() {
+            postgres_seams::reset_usage::call();
+        }
+        let plan =
+            planner_seams::planner::call(pmcx, input, query_string, cursor_options, boundParams)?;
+        if guc_tables::backing::log_planner_stats() {
+            postgres_seams::show_usage::call("PLANNER STATISTICS")?;
+        }
+        if guc_tables::backing::Debug_print_plan() {
+            nodes_core::print::debug_print_tree(
+                pmcx,
+                "plan",
+                outfuncs::plannedStmtToStringWithLocations(pmcx, &plan),
+                guc_tables::backing::Debug_pretty_print(),
+            )?;
+        }
+        Ok(plan)
+    };
     let plan = |mcx: Mcx<'static>| -> PgResult<PgVec<'static, PlannedStmt<'static>>> {
         let mut stmts: PgVec<'static, PlannedStmt<'static>> = PgVec::new_in(mcx);
         stmts
@@ -1361,33 +1406,10 @@ fn build_stmt_list(
                     ..PlannedStmt::default()
                 });
             } else {
-                let input = mcx::leak_in(mcx::alloc_in(mcx, copy_query_in(mcx, q)?)?);
-                // pg_plan_query (tcop/postgres.c:880-946) as BuildCachedPlan
-                // reaches it through pg_plan_queries: the log_planner_stats
-                // usage bracket and the debug_print_plan dump around the
-                // planner call (tcop's copy sits above plancache).
-                if guc_tables::backing::log_planner_stats() {
-                    postgres_seams::reset_usage::call();
-                }
-                let plan = planner_seams::planner::call(
-                    mcx,
-                    input,
-                    query_string,
-                    cursor_options,
-                    boundParams,
-                )?;
-                if guc_tables::backing::log_planner_stats() {
-                    postgres_seams::show_usage::call("PLANNER STATISTICS")?;
-                }
-                if guc_tables::backing::Debug_print_plan() {
-                    nodes_core::print::debug_print_tree(
-                        mcx,
-                        "plan",
-                        outfuncs::plannedStmtToStringWithLocations(mcx, &plan),
-                        guc_tables::backing::Debug_pretty_print(),
-                    )?;
-                }
-                stmts.push(plan);
+                let scratch = Box::into_raw(Box::new(MemoryContext::new("CachedPlan planning")));
+                let planned = plan_one(ctx_mcx(scratch), q).and_then(|p| copyfuncs::copy_planned_stmt(mcx, &p));
+                reclaim_ctx(scratch);
+                stmts.push(planned?);
             }
         }
         Ok(stmts)
@@ -1401,15 +1423,15 @@ fn build_stmt_list(
     mcx::vec_borrow_in(mcx, result?)
 }
 
-// BuildCachedPlan's copyObject boundary: the planner writes plan-arena
-// pointers into its input tree; a subtree shared with the cached query_list
-// dangles once that plan's arena is reclaimed, so the copy must share no
-// storage with the source.
+// The planner writes plan-arena pointers into its input tree; a subtree shared with the cached query_list dangles once that plan's arena is reclaimed, so the copy must share no storage with the source.
 fn copy_query_in(mcx: Mcx<'static>, q: &Query<'static>) -> PgResult<Query<'static>> {
     copyfuncs::copy_query(mcx, q)
 }
 
 fn choose_custom_plan(h: CachedPlanSourceHandle, boundParams: ParamListHandle) -> bool {
+    if with_source(h, |src| src.is_oneshot) {
+        return true;
+    }
     if boundParams.is_null() {
         return false;
     }
@@ -1434,7 +1456,6 @@ fn choose_custom_plan(h: CachedPlanSourceHandle, boundParams: ParamListHandle) -
             return true;
         }
         let avg_custom_cost = src.total_custom_cost / src.num_custom_plans as f64;
-        // generic_cost == -1 (not yet known) also prefers generic, as in C.
         if src.generic_cost < avg_custom_cost {
             return false;
         }
@@ -1452,10 +1473,12 @@ fn cached_plan_cost(stmt_list: &[PlannedStmt<'_>], include_planner: bool) -> f64
             result += tree.as_plan().expect("planTree is a plan node").total_cost;
         }
         if include_planner {
-            // C's crude planning-effort charge: 1000 * cpu_operator_cost per
-            // rangetable entry plus one.
             let nrelations = stmt.rtable.len() as f64;
-            result += 1000.0 * guc_tables::vars::cpu_operator_cost.read() * (nrelations + 1.0);
+            result = planner_overhead_cost(
+                result,
+                guc_tables::vars::cpu_operator_cost.read(),
+                nrelations,
+            );
         }
     }
     result
@@ -1480,7 +1503,7 @@ fn AcquirePlannerLocks(query_list: &[Query<'static>], acquire: bool) -> PgResult
 fn AcquireExecutorLocks(stmt_list: &[PlannedStmt<'static>], acquire: bool) -> PgResult<()> {
     for stmt in stmt_list {
         if stmt.commandType == CmdType::CMD_UTILITY {
-            // C: unplanned Query inside EXPLAIN/DECLARE still needs its locks.
+            // Unplanned Query inside EXPLAIN/DECLARE still needs its locks.
             let contained = stmt
                 .utilityStmt
                 .and_then(|s| utility_seams::utility_contains_query::call(s));
@@ -1536,9 +1559,6 @@ fn ScanQueryForLocks(query: &Query<'static>, acquire: bool) -> PgResult<()> {
     Ok(())
 }
 
-// The sublink leg C reaches via query_tree_walker: visit every SubLink's
-// sub-Query in the query's expression-bearing fields (rtable/CTE subqueries
-// are handled by the callers' own loops).
 fn walk_sublink_queries<F>(query: &Query<'static>, f: &mut F) -> PgResult<()>
 where
     F: FnMut(&Query<'static>) -> PgResult<()>,
@@ -1551,10 +1571,6 @@ where
     })
 }
 
-// C ScanQueryForLocks's query_tree_walker(..., QTW_IGNORE_RC_SUBQUERIES):
-// every expression-bearing Query field, including onConflict / merge /
-// withCheckOptions / setOperations / window offsets / rtable exprs.
-// rtable/CTE subqueries stay the callers' own loops.
 fn walk_query_expr_nodes<F>(query: &Query<'static>, f: &mut F) -> PgResult<()>
 where
     F: FnMut(types_nodes::Node<'static>) -> PgResult<()>,
@@ -1576,8 +1592,7 @@ where
     Ok(())
 }
 
-// FirstUnpinnedObjectId: built-ins below it are immutable, untracked
-// (record_plan_function_dependency, setrefs.c).
+// Built-ins below it are immutable, untracked.
 const FIRST_UNPINNED_OBJECT_ID: Oid = 12000;
 
 fn syscache_oid_hash(cache_id: i32, oid: Oid) -> PgResult<u32> {
@@ -1602,12 +1617,7 @@ fn push_proc_dep(items: &mut PgVec<'static, (i32, u32)>, funcid: Oid) -> PgResul
     Ok(())
 }
 
-// extract_query_dependencies_walker's per-node dependency logic (setrefs.c
-// fix_expr_common): a regclass Const is a relation dependency (ISREGCLASSCONST
-// accepts OIDOID because oideq-style folding coerces regclass Consts to it);
-// function-calling nodes are PROCOID invalItems (a retained CoerceToDomain
-// records nothing, as fix_expr_common; only folded-away ones do, via the plan);
-// a SubLink transfers attention to the contained analyzed Query.
+// OIDOID is accepted because oideq-style folding coerces regclass Consts to it.
 fn record_one_dep(
     node: types_nodes::Node<'static>,
     out: &mut PgVec<'static, Oid>,
@@ -1642,10 +1652,6 @@ fn record_one_dep(
     Ok(())
 }
 
-// Apply record_one_dep to a bare expression subtree (the node and every
-// descendant), mirroring extract_query_dependencies_walker recursing through
-// expression_tree_walker. Used for CallStmt's transformed funcexpr/outargs,
-// which are not reachable from a Query's rtable/expression fields.
 fn record_expr_tree_deps(
     node: types_nodes::Node<'static>,
     out: &mut PgVec<'static, Oid>,
@@ -1662,30 +1668,19 @@ fn record_expr_tree_deps(
         }
     }
     let mut w = W { out, items };
-    // Process `node` itself then recurse (visit = record_one_dep + expression walk).
     nodes_core::NodeWalker::visit(&mut w, node)?;
     Ok(())
 }
 
-// extract_query_dependencies (setrefs.c): relation OIDs + the fix_expr_common
-// function/type invalItems.
 fn extract_query_deps(
     query: &Query<'static>,
     out: &mut PgVec<'static, Oid>,
     items: &mut PgVec<'static, (i32, u32)>,
 ) -> PgResult<()> {
-    // extract_query_dependencies_walker's CMD_UTILITY arm (setrefs.c): the
-    // outer utility Query has an empty rtable, so its dependencies live in the
-    // utility statement. CALL contributes its transformed funcexpr/outargs;
-    // EXPLAIN/DECLARE CURSOR/CREATE TABLE AS transfer attention to their
-    // contained analyzed Query. Without this, a plancache source wrapping such
-    // a statement carries no relation/syscache keys and survives every DDL
-    // invalidation, so its retained analyzed tree is re-planned against a
-    // changed schema (stale operator/Var types -> type confusion).
+    // The outer utility Query has an empty rtable, so its dependencies live in the utility statement.
     if query.commandType == CmdType::CMD_UTILITY {
         let ustmt = query.utilityStmt.expect("CMD_UTILITY query has utilityStmt");
         if let Some(callstmt) = ustmt.as_call_stmt() {
-            // We need not examine funccall, just the transformed exprs.
             if let Some(fe) = callstmt.funcexpr {
                 push_proc_dep(items, fe.funcid)?;
                 for arg in fe.args.iter() {
@@ -1697,9 +1692,6 @@ fn extract_query_deps(
             }
             return Ok(());
         }
-        // Other utility statements: transfer attention to the contained query,
-        // if any (UtilityContainsQuery). Statements with no contained query
-        // (plain DDL) have no dependency keys of their own here.
         if let Some(contained) = utility_seams::utility_contains_query::call(ustmt) {
             extract_query_deps(
                 contained.as_query().expect("contained analyzed Query"),
@@ -1733,10 +1725,7 @@ fn extract_query_deps(
                     items,
                 )?;
             }
-            // A transition-table RTE carries the base relation's OID
-            // (addRangeTableEntryForENR: rte->relid = enrmd->reliddesc) so
-            // ALTERing that table invalidates dependent plans
-            // (setrefs.c:3720-3724).
+            // A transition-table RTE carries the base relation's OID so ALTERing that table invalidates dependent plans.
             RTEKind::RTE_NAMEDTUPLESTORE => {
                 if rte.relid != InvalidOid {
                     out.try_reserve(1).map_err(|_| mcx_oom(out))?;
@@ -1753,8 +1742,6 @@ fn mcx_oom(v: &PgVec<'static, Oid>) -> Box<types_error::PgError> {
     Box::new(v.allocator().oom(core::mem::size_of::<Oid>()))
 }
 
-// ChoosePortalStrategy (pquery.c), Query flavor, feeding
-// PlanCacheComputeResultDesc.
 fn choose_portal_strategy_queries(query_list: &[Query<'static>]) -> PortalStrategy {
     use PortalStrategy::*;
     if query_list.len() == 1 {
@@ -1819,8 +1806,6 @@ fn plan_cache_compute_result_desc(
     }
 }
 
-// IsTransactionExitStmt (postgres.c), captured at create (C recomputes from
-// the retained raw tree on each read; the answer never changes).
 fn is_transaction_exit_stmt(raw: &RawStmt<'_>) -> bool {
     use types_nodes::parsenodes::TransactionStmtKind::*;
     match raw.stmt.and_then(|node| node.as_transaction_stmt()) {
@@ -1832,8 +1817,6 @@ fn is_transaction_exit_stmt(raw: &RawStmt<'_>) -> bool {
     }
 }
 
-/// C CachedPlanGetTargetList: the primary query's targetlist, projected to the
-/// row-description fields (exec_describe_statement_message's only consumer).
 pub fn CachedPlanGetTargetList<'mcx>(
     mcx: Mcx<'mcx>,
     h: CachedPlanSourceHandle,
@@ -1852,15 +1835,8 @@ pub fn CachedPlanGetTargetList<'mcx>(
         .find(|q| q.canSetTag)
         .expect("QueryListGetPrimaryStmt: fixed-result source has a canSetTag query");
     if primary.commandType == CmdType::CMD_UTILITY {
-        // FETCH/EXECUTE recursion needs pquery's portal registry and
-        // prepare's statement registry; plancache can't depend on either
-        // without a cycle back through this function, so it's a seam.
         return pquery_seams::fetch_utility_statement_target_list::call(mcx, primary.utilityStmt);
     }
-    // FetchStatementTargetList (pquery.c:349-369): a SELECT describes its
-    // targetList; any other statement describes its RETURNING list (NIL when
-    // it has none), so the RowDescription carries the RETURNING columns'
-    // resorigtbl/resorigcol rather than the DML targetlist's zeros.
     let tlist = if primary.commandType == CmdType::CMD_SELECT {
         &primary.targetList
     } else if !primary.returningList.is_nil() {
@@ -1884,7 +1860,7 @@ pub fn CachedPlanParamTypes(h: CachedPlanSourceHandle) -> &'static [Oid] {
     with_source(h, |src| src.param_types)
 }
 
-/// Valid while the caller holds the source handle (C: plansource->query_list).
+/// Valid while the caller holds the source handle.
 pub fn CachedPlanQueryList(h: CachedPlanSourceHandle) -> &'static [Query<'static>] {
     with_source(h, |src| src.query_list)
 }
@@ -1897,7 +1873,6 @@ pub fn CachedPlanIsTransactionExitStmt(h: CachedPlanSourceHandle) -> bool {
     with_source(h, |src| src.is_xact_exit_stmt)
 }
 
-/// (num_generic_plans, num_custom_plans) — the plan-cache-hit probe.
 pub fn CachedPlanCounts(h: CachedPlanSourceHandle) -> (i64, i64) {
     with_source(h, |src| (src.num_generic_plans, src.num_custom_plans))
 }
@@ -1914,8 +1889,6 @@ pub fn CachedPlanQueryString(h: CachedPlanSourceHandle) -> &'static str {
     with_source(h, |src| src.query_string)
 }
 
-// plansource->raw_parse_tree: the retained raw statement (None for a source
-// created from an already-analyzed Query, as C's NULL).
 pub fn CachedPlanRawParseTree(h: CachedPlanSourceHandle) -> Option<&'static RawStmt<'static>> {
     with_source(h, |src| src.raw_parse_tree)
 }
@@ -1936,8 +1909,6 @@ pub struct SourceExecInfo {
     pub commandTag: CommandTag,
 }
 
-/// ExecuteQuery's per-EXECUTE field reads in one registry borrow (C reads
-/// plansource fields directly).
 pub fn CachedPlanSourceExecInfo(h: CachedPlanSourceHandle) -> SourceExecInfo {
     with_source(h, |src| SourceExecInfo {
         fixed_result: src.fixed_result,
@@ -1951,15 +1922,7 @@ pub fn CachedPlanGeneration(cplan: CachedPlanHandle) -> i32 {
     with_plan(cplan, |plan| plan.generation)
 }
 
-/// The statement-plane memo's identity supply (the lanev4 A1 #512 seam,
-/// ported for the sqe statement memo): the positional identity of a running
-/// CachedPlan in one registry borrow —
-/// `(plansource handle id, generation at build, is-current-generic-plan)`.
-/// BuildCachedPlan bumps the source generation on EVERY replan, so
-/// `(handle, generation)` is monotone per source and every meaning-changing
-/// event (relcache/PROCOID/TYPEOID callbacks, search_path, RLS — the full
-/// C-parity invalidation set) lands as a memo miss by construction.
-/// Caller must hold a refcount on `cplan` (the running portal does).
+/// Caller must hold a refcount on `cplan`.
 pub fn CachedPlanIdentity(cplan: CachedPlanHandle) -> (u64, i64, bool) {
     with_cache(|pc| {
         let (source, generation) = {
@@ -2031,7 +1994,6 @@ pub fn PlanCacheRelCallback(_arg: Datum, relid: Oid) {
             }
         }
     });
-    // cached_expression_list is provably empty: cached expressions (plancache.c GetCachedExpression) are unported.
 }
 
 pub fn PlanCacheObjectCallback(_arg: Datum, cacheid: i32, hashvalue: u32) {
@@ -2044,9 +2006,6 @@ pub fn PlanCacheObjectCallback(_arg: Datum, cacheid: i32, hashvalue: u32) {
                 if !src.is_valid || !src.requires_reval {
                     continue;
                 }
-                // Source-side invalItems (extract_query_dependencies):
-                // invalidate the querytree, forcing re-analysis of the
-                // retained raw tree (plancache.c PlanCacheObjectCallback).
                 if src.inval_items.iter().any(|&(cid, hv)| {
                     cid == cacheid && (hashvalue == 0 || hv == hashvalue)
                 }) {
@@ -2064,10 +2023,9 @@ pub fn PlanCacheObjectCallback(_arg: Datum, cacheid: i32, hashvalue: u32) {
             }
         }
     });
-    // cached_expression_list is provably empty: cached expressions (plancache.c GetCachedExpression) are unported.
 }
 
-// hashvalue == 0 matches every entry of the cache (C's cacheid-wide inval).
+// hashvalue == 0 matches every entry of the cache.
 fn stmt_list_matches_inval(stmt_list: &[PlannedStmt<'_>], cacheid: i32, hashvalue: u32) -> bool {
     stmt_list.iter().any(|stmt| {
         stmt.commandType != CmdType::CMD_UTILITY
@@ -2079,11 +2037,7 @@ fn stmt_list_matches_inval(stmt_list: &[PlannedStmt<'_>], cacheid: i32, hashvalu
     })
 }
 
-// upstream 0b12f56bfac1 (18.6): Invalidate plan cache after role changes.
-// Role membership, role attributes and database ownership change which RLS
-// policies apply; these shared-catalog invals reach every backend, so only
-// the role-dependent plans drop. cached_db_hash is read lazily: initialize_acl
-// runs after InitPlanCache, once the database is selected.
+// Shared-catalog invals reach every backend, so only the role-dependent plans drop.
 pub fn PlanCacheRoleCallback(_arg: Datum, cacheid: i32, hashvalue: u32) {
     if cacheid == DATABASEOID && hashvalue != adt_acl::cached_db_hash() && hashvalue != 0 {
         return;
@@ -2121,8 +2075,7 @@ pub fn ResetPlanCache() {
         for i in 0..pc.saved_plan_list.len() {
             let h = pc.saved_plan_list[i];
             let src = source_mut(pc, h);
-            // Never invalidate what a new parse/plan cycle can't change —
-            // particularly ROLLBACK (C bug #5269).
+            // Never invalidate what a new parse/plan cycle can't change — particularly ROLLBACK.
             if !src.is_valid || !src.requires_reval {
                 continue;
             }
@@ -2131,17 +2084,11 @@ pub fn ResetPlanCache() {
             }
         }
     });
-    // The statement-plane memo's sys-reset face (#511): drop the whole memo
-    // plane on the ResetPlanCache event class. Outside the registry borrow
-    // (callbacks-never-call-out law).
     if plancache_portal_seams::engine_plan_cache_reset::is_installed() {
         plancache_portal_seams::engine_plan_cache_reset::call();
     }
 }
 
-/// D3.0 census tooling: live plancache registry counts for this backend.
-/// (Each source/query/plan owns a root MemoryContext already visible in the
-/// context forest; this adds the entry counts the forest can't show.)
 pub fn PlanCacheCensus() -> (usize, usize, usize) {
     with_cache(|pc| {
         (
@@ -2150,4 +2097,25 @@ pub fn PlanCacheCensus() -> (usize, usize, usize) {
             pc.saved_plan_list.len(),
         )
     })
+}
+
+#[inline]
+pub(crate) fn planner_overhead_cost(result: f64, cpu_operator_cost: f64, nrelations: f64) -> f64 {
+    fp_contract::fmadd(1000.0 * cpu_operator_cost, nrelations + 1.0, result)
+}
+
+
+#[cfg(test)]
+mod d400_fma_site_tests {
+    use super::*;
+
+    fn pick(fused: u64, unfused: u64) -> u64 {
+        if cfg!(target_arch = "aarch64") { fused } else { unfused }
+    }
+
+    #[test]
+    fn d400_planner_overhead_cost_fuses() {
+        let got = planner_overhead_cost(3001.19, 0.010867, 17.0);
+        assert_eq!(got.to_bits(), pick(0x40A8F9978D4FDF3B, 0x40A8F9978D4FDF3C));
+    }
 }

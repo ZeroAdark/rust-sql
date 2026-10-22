@@ -24,9 +24,9 @@ fn get_siglen(f: &Option<&mut FmgrInfo>) -> usize {
     opclass_option_i32(f, SIGLEN_DEFAULT) as usize
 }
 
-fn gt_alloc(allistrue: bool, siglen: usize, sign: Option<&[u8]>) -> Vec<u8> {
+fn gt_alloc(allistrue: bool, siglen: usize, sign: Option<&[u8]>) -> PgResult<Vec<u8>> {
     let size = GTHDRSIZE + if allistrue { 0 } else { siglen };
-    let mut img = Vec::with_capacity(size);
+    let mut img = ::mcx::std_vec_with_capacity("intarray", size)?;
     img.extend_from_slice(&varatt::set_varsize_4b_word(size as u32).to_ne_bytes());
     img.extend_from_slice(&(if allistrue { ALLISTRUE } else { 0 }).to_ne_bytes());
     if !allistrue {
@@ -35,7 +35,7 @@ fn gt_alloc(allistrue: bool, siglen: usize, sign: Option<&[u8]>) -> Vec<u8> {
             None => img.resize(size, 0),
         }
     }
-    img
+    Ok(img)
 }
 
 fn is_alltrue(img: &[u8]) -> bool {
@@ -95,10 +95,10 @@ pub(crate) fn fc_g_intbig_compress(
     if entry.leafkey {
         // SAFETY: the armed result mcx outlives this call.
         let mcx = unsafe { fcinfo.result_mcx_detached() };
-        let input = IntArray::from_image(detoasted_image(mcx, entry.key)?);
-        let mut res = gt_alloc(false, siglen, None);
+        let input = IntArray::from_image(detoasted_image(mcx, entry.key)?)?;
+        let mut res = gt_alloc(false, siglen, None)?;
         input.check_valid()?;
-        if !input.is_empty() {
+        if !input.is_empty()? {
             gensign(&mut res[GTHDRSIZE..], input.elems(), siglen);
         }
         let key = image_result(fcinfo, &res)?;
@@ -114,7 +114,7 @@ pub(crate) fn fc_g_intbig_compress(
                 return Ok(fcinfo.arg(0));
             }
         }
-        let res = gt_alloc(true, siglen, Some(sign));
+        let res = gt_alloc(true, siglen, Some(sign))?;
         let key = image_result(fcinfo, &res)?;
         let retval = GISTENTRY::init(key, entry.offset, false, entry.page_is_leaf);
         return entry_result(fcinfo, &retval);
@@ -150,11 +150,11 @@ pub(crate) fn fc_g_intbig_union(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -
     // SAFETY: gist fmgr protocol.
     let entryvec = unsafe { &*(fcinfo.arg(0).as_usize() as *const GistEntryVector) };
     let siglen = get_siglen(&f);
-    let mut result = gt_alloc(false, siglen, None);
+    let mut result = gt_alloc(false, siglen, None)?;
     for e in &entryvec.vector[..entryvec.n as usize] {
         let add = crate::key_image(e.key);
         if is_alltrue(add) {
-            result = gt_alloc(true, siglen, None);
+            result = gt_alloc(true, siglen, None)?;
             break;
         }
         let sadd = sign_of(add);
@@ -191,15 +191,15 @@ struct SignKey {
 }
 
 impl SignKey {
-    fn from_image(img: &[u8], siglen: usize) -> SignKey {
+    fn from_image(img: &[u8], siglen: usize) -> PgResult<SignKey> {
         if is_alltrue(img) {
-            SignKey { alltrue: true, sign: vec![0u8; siglen] }
+            Ok(SignKey { alltrue: true, sign: ::mcx::std_vec_from_elem("intarray", 0u8, siglen)? })
         } else {
-            SignKey { alltrue: false, sign: sign_of(img)[..siglen].to_vec() }
+            Ok(SignKey { alltrue: false, sign: ::mcx::std_vec_from_slice("intarray", &sign_of(img)[..siglen])? })
         }
     }
 
-    fn image(&self, siglen: usize) -> Vec<u8> {
+    fn image(&self, siglen: usize) -> PgResult<Vec<u8>> {
         gt_alloc(self.alltrue, siglen, Some(&self.sign))
     }
 
@@ -253,8 +253,8 @@ pub(crate) fn fc_g_intbig_picksplit(
         seed_2 = 2;
     }
 
-    let mut datum_l = SignKey::from_image(key(seed_1), siglen);
-    let mut datum_r = SignKey::from_image(key(seed_2), siglen);
+    let mut datum_l = SignKey::from_image(key(seed_1), siglen)?;
+    let mut datum_r = SignKey::from_image(key(seed_2), siglen)?;
 
     let maxoff = (entryvec.n - 1) as usize;
     #[derive(Clone, Copy)]
@@ -262,7 +262,7 @@ pub(crate) fn fc_g_intbig_picksplit(
         pos: usize,
         cost: i32,
     }
-    let mut costvector: Vec<SplitCost> = Vec::with_capacity(maxoff);
+    let mut costvector: Vec<SplitCost> = ::mcx::std_vec_with_capacity("intarray", maxoff)?;
     for j in 1..=maxoff {
         let size_alpha = datum_l.hemdist_img(key(j), siglen);
         let size_beta = datum_r.hemdist_img(key(j), siglen);
@@ -272,8 +272,8 @@ pub(crate) fn fc_g_intbig_picksplit(
     // equal-cost order pg_qsort produces decides page membership.
     ::pg_qsort::pg_qsort(&mut costvector, |a, b| a.cost.cmp(&b.cost) as i32);
 
-    let mut spl_left: Vec<u16> = Vec::with_capacity(maxoff + 1);
-    let mut spl_right: Vec<u16> = Vec::with_capacity(maxoff + 1);
+    let mut spl_left: Vec<u16> = ::mcx::std_vec_with_capacity("intarray", maxoff + 1)?;
+    let mut spl_right: Vec<u16> = ::mcx::std_vec_with_capacity("intarray", maxoff + 1)?;
     for sc in &costvector {
         let j = sc.pos;
         if j == seed_1 {
@@ -319,8 +319,8 @@ pub(crate) fn fc_g_intbig_picksplit(
 
     v.spl_left = spl_left;
     v.spl_right = spl_right;
-    v.spl_ldatum = image_result(fcinfo, &datum_l.image(siglen))?;
-    v.spl_rdatum = image_result(fcinfo, &datum_r.image(siglen))?;
+    v.spl_ldatum = image_result(fcinfo, &datum_l.image(siglen)?)?;
+    v.spl_rdatum = image_result(fcinfo, &datum_r.image(siglen)?)?;
     Ok(fcinfo.arg(1))
 }
 
@@ -348,12 +348,12 @@ pub(crate) fn fc_g_intbig_consistent(
     let query_img = detoasted_image(mcx, fcinfo.arg(1))?;
 
     if strategy == BOOLEAN_SEARCH_STRATEGY {
-        let items = boolquery::parse_items(query_img);
+        let items = boolquery::parse_items(query_img)?;
         let retval = boolquery::signconsistent(&items, sign, siglen, false)?;
         return Ok(Datum::from_bool(retval));
     }
 
-    let query = IntArray::from_image(query_img);
+    let query = IntArray::from_image(query_img)?;
     query.check_valid()?;
 
     let overlap = |sign: &[u8]| query.elems().iter().any(|&v| getbit(sign, hashval(v, siglen)));
@@ -363,7 +363,7 @@ pub(crate) fn fc_g_intbig_consistent(
         RT_OVERLAP => overlap(sign),
         RT_SAME => {
             if entry.page_is_leaf {
-                let mut dq = vec![0u8; siglen];
+                let mut dq = ::mcx::std_vec_from_elem("intarray", 0u8, siglen)?;
                 gensign(&mut dq, query.elems(), siglen);
                 sign[..siglen] == dq[..]
             } else {
@@ -375,7 +375,7 @@ pub(crate) fn fc_g_intbig_consistent(
         // for older SQL definitions.
         RT_CONTAINED_BY | RT_OLD_CONTAINED_BY => {
             if entry.page_is_leaf {
-                let mut dq = vec![0u8; siglen];
+                let mut dq = ::mcx::std_vec_from_elem("intarray", 0u8, siglen)?;
                 gensign(&mut dq, query.elems(), siglen);
                 let mut ok = true;
                 for i in 0..siglen {

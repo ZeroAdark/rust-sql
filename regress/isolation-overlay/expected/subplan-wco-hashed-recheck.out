@@ -1,0 +1,228 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1q s2b s1c s2c s3sel
+step s1q: UPDATE wh_item SET qty = qty + 100 WHERE id = 1;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE wh_v SET cat = 'b' WHERE id = 1 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+id|cat|qty
+--+---+---
+ 1|b  |101
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cat, qty FROM wh_item WHERE id <= 4 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |101
+ 2|c  |  2
+ 3|a  |  3
+ 4|b  |  4
+(4 rows)
+
+
+starting permutation: s1z s2z s1c s2c s3sel
+step s1z: INSERT INTO wh_cat VALUES ('z'); UPDATE wh_item SET qty = 0 WHERE id = 2;
+step s2z: BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE wh_v SET cat = 'z' WHERE id = 2 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s2z: <... completed>
+ERROR:  new row violates check option for view "wh_v"
+step s2c: COMMIT;
+step s3sel: SELECT id, cat, qty FROM wh_item WHERE id <= 4 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |  1
+ 2|c  |  0
+ 3|a  |  3
+ 4|b  |  4
+(4 rows)
+
+
+starting permutation: s1out s2out s1c s2c s3sel
+step s1out: UPDATE wh_item SET cat = 'q' WHERE id = 3;
+step s2out: BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE wh_v SET qty = -1 WHERE id = 3 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s2out: <... completed>
+id|cat|qty
+--+---+---
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cat, qty FROM wh_item WHERE id <= 4 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |  1
+ 2|c  |  2
+ 3|q  |  3
+ 4|b  |  4
+(4 rows)
+
+
+starting permutation: s1q s2bad s1c s2c s3sel
+step s1q: UPDATE wh_item SET qty = qty + 100 WHERE id = 1;
+step s2bad: BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE wh_v SET cat = 'x' WHERE id = 1 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s2bad: <... completed>
+ERROR:  new row violates check option for view "wh_v"
+step s2c: COMMIT;
+step s3sel: SELECT id, cat, qty FROM wh_item WHERE id <= 4 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |101
+ 2|c  |  2
+ 3|a  |  3
+ 4|b  |  4
+(4 rows)
+
+
+starting permutation: s2b s1q s2c s1c s3sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE wh_v SET cat = 'b' WHERE id = 1 RETURNING id, cat, qty;
+id|cat|qty
+--+---+---
+ 1|b  |  1
+(1 row)
+
+step s1q: UPDATE wh_item SET qty = qty + 100 WHERE id = 1; <waiting ...>
+step s2c: COMMIT;
+step s1q: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, cat, qty FROM wh_item WHERE id <= 4 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |101
+ 2|c  |  2
+ 3|a  |  3
+ 4|b  |  4
+(4 rows)
+
+
+starting permutation: s1q s2b s1r s2c s3sel
+step s1q: UPDATE wh_item SET qty = qty + 100 WHERE id = 1;
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE wh_v SET cat = 'b' WHERE id = 1 RETURNING id, cat, qty; <waiting ...>
+step s1r: ROLLBACK;
+step s2b: <... completed>
+id|cat|qty
+--+---+---
+ 1|b  |  1
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cat, qty FROM wh_item WHERE id <= 4 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |  1
+ 2|c  |  2
+ 3|a  |  3
+ 4|b  |  4
+(4 rows)
+
+
+starting permutation: s1rq s4b s1c s4c s3rl
+step s1rq: UPDATE wh_rl SET qty = qty + 100 WHERE id = 1;
+step s4b: BEGIN ISOLATION LEVEL READ COMMITTED; SET LOCAL ROLE subplan_iso_wh_u; UPDATE wh_rl SET cat = 'b' WHERE id = 1 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s4b: <... completed>
+id|cat|qty
+--+---+---
+ 1|b  |101
+(1 row)
+
+step s4c: COMMIT;
+step s3rl: SELECT id, cat, qty FROM wh_rl WHERE id <= 3 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |101
+ 2|c  |  2
+ 3|a  |  3
+(3 rows)
+
+
+starting permutation: s1rq s4moved s1c s4c s3rl
+step s1rq: UPDATE wh_rl SET qty = qty + 100 WHERE id = 1;
+step s4moved: BEGIN ISOLATION LEVEL READ COMMITTED; SET LOCAL ROLE subplan_iso_wh_u; UPDATE wh_rl SET cat = CASE WHEN qty > 50 THEN 'x' ELSE 'b' END WHERE id = 1 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s4moved: <... completed>
+ERROR:  new row violates row-level security policy for table "wh_rl"
+step s4c: COMMIT;
+step s3rl: SELECT id, cat, qty FROM wh_rl WHERE id <= 3 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |101
+ 2|c  |  2
+ 3|a  |  3
+(3 rows)
+
+
+starting permutation: s1rz s4z s1c s4c s3rl
+step s1rz: INSERT INTO wh_cat VALUES ('z'); UPDATE wh_rl SET qty = 0 WHERE id = 2;
+step s4z: BEGIN ISOLATION LEVEL READ COMMITTED; SET LOCAL ROLE subplan_iso_wh_u; UPDATE wh_rl SET cat = CASE WHEN qty = 0 THEN 'z' ELSE 'a' END WHERE id = 2 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s4z: <... completed>
+ERROR:  new row violates row-level security policy for table "wh_rl"
+step s4c: COMMIT;
+step s3rl: SELECT id, cat, qty FROM wh_rl WHERE id <= 3 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |  1
+ 2|c  |  0
+ 3|a  |  3
+(3 rows)
+
+
+starting permutation: s1q s2cnt s1c s2c s3sel
+step s1q: UPDATE wh_item SET qty = qty + 100 WHERE id = 1;
+step s2cnt: BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE wh_vc SET cat = 'b' WHERE id = 1 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s2cnt: <... completed>
+id|cat|qty
+--+---+---
+ 1|b  |101
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cat, qty FROM wh_item WHERE id <= 4 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |101
+ 2|c  |  2
+ 3|a  |  3
+ 4|b  |  4
+(4 rows)
+
+
+starting permutation: s1z s2cntz s1c s2c s3sel
+step s1z: INSERT INTO wh_cat VALUES ('z'); UPDATE wh_item SET qty = 0 WHERE id = 2;
+step s2cntz: BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE wh_vc SET cat = 'z' WHERE id = 2 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s2cntz: <... completed>
+ERROR:  new row violates check option for view "wh_vc"
+step s2c: COMMIT;
+step s3sel: SELECT id, cat, qty FROM wh_item WHERE id <= 4 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |  1
+ 2|c  |  0
+ 3|a  |  3
+ 4|b  |  4
+(4 rows)
+
+
+starting permutation: s1out s2cntout s1c s2c s3sel
+step s1out: UPDATE wh_item SET cat = 'q' WHERE id = 3;
+step s2cntout: BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE wh_vc SET qty = -1 WHERE id = 3 RETURNING id, cat, qty; <waiting ...>
+step s1c: COMMIT;
+step s2cntout: <... completed>
+id|cat|qty
+--+---+---
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cat, qty FROM wh_item WHERE id <= 4 ORDER BY id;
+id|cat|qty
+--+---+---
+ 1|b  |  1
+ 2|c  |  2
+ 3|q  |  3
+ 4|b  |  4
+(4 rows)
+

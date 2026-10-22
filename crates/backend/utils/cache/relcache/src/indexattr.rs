@@ -20,25 +20,30 @@ fn add(v: &mut PgVec<'static, i16>, attnum: i16) {
 // cache is a relid-keyed side table (rules.rs precedent — the trimmed
 // RelationData has no rd_attrsvalid field).
 pub fn RelationGetIndexAttrBitmap(relid: Oid) -> PgResult<Rc<IndexAttrBitmaps>> {
+    // C3: a recorded lowering depends on the relation (an index change invalidates it, which drops these bitmaps); the
+    // fill's opens of its indexes are the entry's own
+    gravity_deps::note_rel(relid);
     if let Some(hit) = with_state(|st| st.indexattr_cache.get(&relid).cloned()) {
         return Ok(hit);
     }
     let cmcx = cache_mcx();
     // C's restart loop (relcache.c 5344-5510): concurrent index DDL can change
     // the set mid-build; recheck list + pk/replident stability before caching.
-    let bm = loop {
-        // No state borrow across these: they re-enter the relcache.
-        let index_oids = crate::indexlist::RelationGetIndexList(cmcx, relid)?;
-        let rel = store::RelationIdGetRelation(relid)?.ok_or_else(|| index_missing(relid))?;
-        let (pk_index, replident_index) = pk_replident(&rel);
-        let attempt = build_bitmaps(cmcx, &index_oids, pk_index, replident_index)?;
-        let new_oids = crate::indexlist::RelationGetIndexList(cmcx, relid)?;
-        let rel = store::RelationIdGetRelation(relid)?.ok_or_else(|| index_missing(relid))?;
-        let (pk2, ri2) = pk_replident(&rel);
-        if new_oids[..] == index_oids[..] && pk2 == pk_index && ri2 == replident_index {
-            break attempt;
+    let bm = gravity_deps::suppressed(|| -> PgResult<IndexAttrBitmaps> {
+        loop {
+            // No state borrow across these: they re-enter the relcache.
+            let index_oids = crate::indexlist::RelationGetIndexList(cmcx, relid)?;
+            let rel = store::RelationIdGetRelation(relid)?.ok_or_else(|| index_missing(relid))?;
+            let (pk_index, replident_index) = pk_replident(&rel);
+            let attempt = build_bitmaps(cmcx, &index_oids, pk_index, replident_index)?;
+            let new_oids = crate::indexlist::RelationGetIndexList(cmcx, relid)?;
+            let rel = store::RelationIdGetRelation(relid)?.ok_or_else(|| index_missing(relid))?;
+            let (pk2, ri2) = pk_replident(&rel);
+            if new_oids[..] == index_oids[..] && pk2 == pk_index && ri2 == replident_index {
+                return Ok(attempt);
+            }
         }
-    };
+    })?;
     let built = Rc::new(bm);
     with_state(|st| st.indexattr_cache.insert(relid, Rc::clone(&built)));
     Ok(built)

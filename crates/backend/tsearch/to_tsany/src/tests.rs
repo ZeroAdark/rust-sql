@@ -12,7 +12,7 @@ use crate::{OP_AND, OP_OR, OP_PHRASE};
 fn word<'mcx>(mcx: Mcx<'mcx>, w: &str, pos: u16, nvariant: u16) -> ParsedWord<'mcx> {
     let mut v = PgVec::new_in(mcx);
     v.extend_from_slice(w.as_bytes());
-    ParsedWord { word: v, nvariant, flags: 0, pos, apos: PgVec::new_in(mcx) }
+    ParsedWord { word: v.leak(), nvariant, flags: 0, pos, apos: &[] }
 }
 
 #[test]

@@ -1,0 +1,34 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M7-RIG m7x table-free join rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT a.x, b.y, b.z FROM (SELECT g % 6 AS x FROM generate_series(1, 30) g) a LEFT JOIN (VALUES (1, 10), (1, 20), (2, 5), (4, 40), (NULL, 1)) b(y, z) ON a.x = b.y AND b.z > 7 AND a.x + b.z <> 21
+cols: x	y	z
+[pg]
+1	1	10
+2	\N	\N
+3	\N	\N
+4	4	40
+5	\N	\N
+0	\N	\N
+1	1	10
+2	\N	\N
+3	\N	\N
+4	4	40
+5	\N	\N
+0	\N	\N
+1	1	10
+2	\N	\N
+3	\N	\N
+4	4	40
+5	\N	\N
+0	\N	\N
+1	1	10
+2	\N	\N
+3	\N	\N
+4	4	40
+5	\N	\N
+0	\N	\N
+1	1	10
+2	\N	\N
+3	\N	\N
+4	4	40
+5	\N	\N
+0	\N	\N

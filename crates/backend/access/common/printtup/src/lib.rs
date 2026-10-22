@@ -17,7 +17,7 @@ use ::types_core::{primitive::InvalidOid, FirstNormalObjectId, Oid, NAMEDATALEN}
 use ::types_dest::CommandDest;
 use ::types_error::{PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE};
 use ::types_fmgr::{
-    function_call1_coll, function_call1_coll_in, send_function_call, FmgrInfo, PackedVarlena,
+    function_call1_coll_in, send_function_call, FmgrInfo, OutInto, PackedVarlena,
 };
 use ::types_portal::Portal;
 use ::types_slot::SlotData;
@@ -40,6 +40,7 @@ pub struct PrinttupAttrInfo {
     pub typisvarlena: bool,
     pub format: i16,
     pub finfo: FmgrInfo,
+    pub into: Option<&'static OutInto>,
 }
 
 pub struct DrPrinttup<'mcx> {
@@ -81,6 +82,8 @@ fn scratch_mcx() -> Mcx<'static> {
             // (Cell<Option<StringInfo>> is a droppy TLS payload).
             ::mcx::register_session_cleanup(Box::new(|| {
                 WIRE_BUF.with(|c| drop(c.take()));
+                // D4682: and the slot, so a reused thread's next session makes a new root.
+                let _ = CTX.try_with(|c| c.set(None));
             }));
             c.set(Some(m));
             m.mcx()
@@ -99,7 +102,13 @@ pub(crate) fn take_wire_buf() -> PgResult<StringInfo<'static>> {
     }
 }
 
+// C pfrees the buffer at printtup_shutdown; only a small one stays pooled.
+const WIRE_BUF_POOL_MAX: usize = 64 * 1024;
+
 pub(crate) fn put_wire_buf(mut buf: StringInfo<'static>) {
+    if buf.capacity() > WIRE_BUF_POOL_MAX {
+        return;
+    }
     buf.reset();
     WIRE_BUF.with(|c| c.set(Some(buf)));
 }
@@ -177,41 +186,33 @@ impl<'mcx> DrPrinttup<'mcx> {
                 0 => {
                     let (typoutput, typisvarlena) =
                         lsyscache_seams::get_type_output_info::call(attr.atttypid)?;
-                    PrinttupAttrInfo {
-                        typoutput,
-                        typsend: InvalidOid,
-                        typisvarlena,
-                        format,
-                        finfo: fmgr_seams::fmgr_info::call(typoutput)?,
-                    }
+                    let finfo = fmgr_seams::fmgr_info::call(typoutput)?;
+                    let into = if fmgr_seams::fmgr_out_into::is_installed() {
+                        fmgr_seams::fmgr_out_into::call(&finfo)
+                    } else {
+                        None
+                    };
+                    PrinttupAttrInfo { typoutput, typsend: InvalidOid, typisvarlena, format, finfo, into }
                 }
                 1 => {
                     let (typsend, typisvarlena) =
                         lsyscache_seams::get_type_binary_output_info::call(attr.atttypid)?;
-                    PrinttupAttrInfo {
-                        typoutput: InvalidOid,
-                        typsend,
-                        typisvarlena,
-                        format,
-                        finfo: fmgr_seams::fmgr_info::call(typsend)?,
-                    }
+                    let finfo = fmgr_seams::fmgr_info::call(typsend)?;
+                    let into = if fmgr_seams::fmgr_send_into::is_installed() {
+                        fmgr_seams::fmgr_send_into::call(&finfo)
+                    } else {
+                        None
+                    };
+                    PrinttupAttrInfo { typoutput: InvalidOid, typsend, typisvarlena, format, finfo, into }
                 }
                 _ => return Err(unsupported_format_code(format)),
             };
             info.push(entry);
         }
-        // User-defined (non-builtin) output fns follow the result-mcx
-        // convention even for fixed-length results; builtin cstring kernels
-        // return FmgrInfo scratch and stay off the context path.
-        if info
-            .iter()
-            .any(|e| e.format == 1 || e.typisvarlena || e.finfo.fn_oid >= FirstNormalObjectId)
-        {
-            if self.send_ctx.is_none() {
-                self.send_ctx = Some(MemoryContext::new_bump("PrinttupSend"));
-            }
-        } else {
-            self.send_ctx = None;
+        // C printtup's per-row tmpcontext: every output / send function
+        // allocates its result there (fmgr's result contract), reset per row.
+        if self.send_ctx.is_none() {
+            self.send_ctx = Some(MemoryContext::new_wholesale("PrinttupSend"));
         }
         self.conv_recheck = info.iter().any(|e| e.finfo.fn_oid >= FirstNormalObjectId);
         self.myinfo = Some(info);
@@ -261,13 +262,32 @@ impl<'mcx> DrPrinttup<'mcx> {
             let attr = base.tts_values[i];
             let thisState = &mut myinfo[i];
 
-            if thisState.format == 0 {
-                let out = match send_ctx.as_deref() {
-                    Some(ctx) => {
-                        function_call1_coll_in(&mut thisState.finfo, InvalidOid, ctx.mcx(), attr)?
+            if let (Some(into), false) = (thisState.into, self.conv_needed) {
+                // FMGR ruling 09-23: the output function's bytes straight into the DataRow (be32 length, then the text).
+                if let Some(bound) = (into.bound)(attr) {
+                    let mut failed = None;
+                    buf.append_written(4 + bound, |d| {
+                        // SAFETY: append_written reserved 4 + bound bytes at d; render writes at most bound after the length.
+                        match unsafe { (into.render)(attr, d.add(4)) } {
+                            Ok(n) => {
+                                unsafe { d.cast::<[u8; 4]>().write_unaligned((n as u32).to_be_bytes()) };
+                                4 + n
+                            }
+                            Err(e) => {
+                                failed = Some(e);
+                                0
+                            }
+                        }
+                    })?;
+                    if let Some(e) = failed {
+                        return Err(e);
                     }
-                    None => output_function_call(&mut thisState.finfo, attr)?,
-                };
+                    continue;
+                }
+            }
+            if thisState.format == 0 {
+                let ctx = send_ctx.as_deref().expect("printtup: text column without send_ctx");
+                let out = function_call1_coll_in(&mut thisState.finfo, InvalidOid, ctx.mcx(), attr)?;
                 // SAFETY: text output fns return a NUL-terminated cstring
                 // datum (the contract C's DatumGetCString trusts).
                 let s =
@@ -315,12 +335,6 @@ impl<'mcx> DrPrinttup<'mcx> {
     }
 }
 
-// C: OutputFunctionCall/SendFunctionCall == FunctionCall1 over the resolved
-// carrier; one stack fcinfo, args written in place, isnull checked.
-#[inline]
-fn output_function_call(finfo: &mut FmgrInfo, val: Datum) -> PgResult<Datum> {
-    function_call1_coll(finfo, InvalidOid, val)
-}
 
 pub fn SendRowDescriptionMessage(
     buf: &mut StringInfo<'_>,

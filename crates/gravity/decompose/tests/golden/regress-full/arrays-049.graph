@@ -1,0 +1,10 @@
+-- regress-full-arrays-049
+-- insert into arr_pk_tbl(pk, f1[0:2147483647]) values (2, '{}');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:2, 2=T_SubscriptingRef)
+  write INSERT rel=26267 rti=1 natts=2 indexes=(26273[1]up)
+  outs 1=w4:val 2=vl:call0
+mapped: Result ModifyTable

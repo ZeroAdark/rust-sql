@@ -241,7 +241,11 @@ fn extension_am_handler(amoid: Oid) -> Option<Vec<u8>> {
     let handler = syscache_seams::pg_am_amhandler::call(amoid).ok()??;
     let scratch = ::mcx::MemoryContext::new("amutils handler prosrc");
     let prosrc = syscache_seams::lookup_pg_proc_prosrc::call(scratch.mcx(), handler).ok()??;
-    Some(prosrc.as_bytes().to_vec())
+    let b = prosrc.as_bytes();
+    let mut v = Vec::new();
+    let _ = v.try_reserve(b.len());
+    v.extend_from_slice(b);
+    Some(v)
 }
 
 // pg_am.amhandler -> the handler's builtin AM (C reads the IndexAmRoutine, so

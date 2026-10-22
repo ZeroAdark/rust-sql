@@ -26,6 +26,10 @@ pub fn copy_query<'d>(mcx: Mcx<'d>, src: &types_nodes::parsenodes::Query<'_>) ->
     generated::copy_Query(mcx, src)
 }
 
+pub fn copy_planned_stmt<'d>(mcx: Mcx<'d>, src: &PlannedStmt<'_>) -> PgResult<PlannedStmt<'d>> {
+    generated::copy_PlannedStmt(mcx, src)
+}
+
 pub fn copy_utility_planned_stmt<'d>(
     mcx: Mcx<'d>,
     src: &PlannedStmt<'_>,

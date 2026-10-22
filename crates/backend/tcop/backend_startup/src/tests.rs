@@ -447,3 +447,45 @@ fn unrecognized_protocol_option_name_bytes_are_echoed_verbatim() {
     body.extend_from_slice(b"_pq_.\xff\0");
     assert_eq!(&wire[5..], &body[..]);
 }
+
+// backend_startup.c:864-867: database and user names are cut at NAMEDATALEN-1
+// bytes even through a multibyte character; the cut name is what the lookup
+// sees (C: 'database "<62 a>\xc3" does not exist', never the 62-a database).
+#[test]
+fn startup_names_are_cut_at_namedatalen_bytes() {
+    setup();
+    let mut db = "a".repeat(62);
+    db.push('é');
+    let mut user = "u".repeat(63);
+    user.push_str("tail");
+    feed(packet_bytes(pg_protocol(3, 0), &[(b"user", user.as_bytes()), (b"database", db.as_bytes())]));
+    assert_eq!(run_startup_packet().unwrap(), STATUS_OK);
+    let (dbname, username) = init_small::globals::WithMyProcPort(|p| (p.database_name.clone(), p.user_name.clone()));
+    assert_eq!(dbname.as_deref(), Some(format!("{}\u{FFFD}", "a".repeat(62)).as_str()));
+    assert_eq!(username.as_deref(), Some("u".repeat(63).as_str()));
+}
+
+#[test]
+fn startup_port_cleanup_is_registered_before_authentication() {
+    mcx::set_session_cleanup_sink(|phase, cleanup| {
+        if std::thread::current().name()
+            != Some("tests::startup_port_cleanup_is_registered_before_authentication")
+        {
+            return;
+        }
+        assert_eq!(phase, mcx::SessionCleanupPhase::State);
+        assert!(init_small::globals::HaveMyProcPort());
+        cleanup();
+        assert!(!init_small::globals::HaveMyProcPort());
+    });
+    for _ in 0..32 {
+        let mut port = Port::new(&ClientSocket {
+            sock: -1,
+            raddr: SockAddr::zeroed(),
+        });
+        port.remote_host = "localhost".repeat(1024);
+        install_startup_port(port);
+        assert!(!init_small::globals::HaveMyProcPort());
+    }
+    mcx::set_session_cleanup_sink(|_, _| {});
+}

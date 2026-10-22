@@ -81,6 +81,19 @@ fn with_opr_cache<R>(f: impl for<'mcx> FnOnce(&mut PgHashMap<'mcx, OprCacheKey, 
     })
 }
 
+/// C3 (every cache reads Deps): a hit stands for the lookup its fill made, which any message of the two caches this
+/// memo follows (OPERNAMENSP, CASTSOURCETARGET: `InvalidateOprCacheCallBack`) would have flushed. A Gravity recording
+/// armed here holds both caches' lists, as the miss path's reads would. One parses inside a recording: a lowering that
+/// reads a user SQL function's body (gravity_fn keysem `sql_inlined` / `sql_fmgr_body`); its reading then retires at an
+/// operator created under a name the body resolves in any schema of the path, as the body parsed again would resolve it.
+#[inline]
+fn note_cached_lookup() {
+    if gravity_deps::armed() {
+        gravity_deps::note_cat_list(OPERNAMENSP);
+        gravity_deps::note_cat_list(CASTSOURCETARGET);
+    }
+}
+
 fn InvalidateOprCacheCallBack(_arg: Datum, _cacheid: i32, _hashvalue: u32) {
     OPR_CACHE.with(|cell| {
         if let Some(cache) = cell.borrow_mut().as_mut() {
@@ -118,7 +131,13 @@ fn name_parts<'a, 'mcx>(
     buf: &'a mut [&'mcx str; 4],
 ) -> PgResult<&'a [&'mcx str]> {
     if opname.len() > buf.len() {
-        let joined = (0..opname.len()).map(|i| name_part(opname, i)).collect::<Vec<_>>().join(".");
+        let mut joined = String::new();
+        for i in 0..opname.len() {
+            if i > 0 {
+                joined.push('.');
+            }
+            joined.push_str(name_part(opname, i));
+        }
         return Err(catalog_namespace::improper_qualified_name_joined(joined));
     }
     let n = opname.len();
@@ -292,6 +311,7 @@ pub fn oper(
         let cached = with_opr_cache(|map| map.get(&key).copied().unwrap_or(InvalidOid))?;
         if OidIsValid(cached) {
             if let Some(shape) = syscache_seams::lookup_pg_operator_shape::call(cached)? {
+                note_cached_lookup();
                 return Ok(Some(Operator { oid: cached, shape }));
             }
         }
@@ -365,6 +385,7 @@ pub fn left_oper(
         let cached = with_opr_cache(|map| map.get(&key).copied().unwrap_or(InvalidOid))?;
         if OidIsValid(cached) {
             if let Some(shape) = syscache_seams::lookup_pg_operator_shape::call(cached)? {
+                note_cached_lookup();
                 return Ok(Some(Operator { oid: cached, shape }));
             }
         }

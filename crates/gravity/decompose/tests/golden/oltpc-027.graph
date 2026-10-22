@@ -1,0 +1,14 @@
+-- oltpc-027
+-- SELECT c_id, c_first, c_middle, c_last, c_street_1, c_street_2, c_city, c_state, c_zip, c_phone, c_since, c_credit, c_credit_lim, c_discount, c_balance FROM customer WHERE c_w_id = 1 AND c_d_id = 1 AND c_id = 5 /* C34 PAY customer by id 15 cols */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=16384 rti=1 am=heap index=16410
+    key att=3 op=96 value=c23:1
+    key att=4 op=532 value=c23:1
+    key att=2 op=96 value=c23:5
+    recheck (op96(v1.3, c23:1), op532(v1.4, c23:1), op96(v1.2, c23:5))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(7):byref8:vl:win/page Attr(8):byref8:vl:win/page Attr(9):byref8:vl:win/page Attr(10):byref8:vl:win/page Attr(11):byref8:vl:win/page Attr(12):byref8:vl:win/page Attr(13):byref8:vl:win/page Attr(14):byref8:vl:win/page Attr(15):byref8:vl:win/page Attr(16):byref8:vl:win/page Attr(17):byref8:vl:win/page Attr(18):byref8:vl:win/page Attr(19):byref8:vl:win/page
+  project (1=v1.2, 2=v1.7, 3=v1.8, 4=v1.9, 5=v1.10, 6=v1.11, 7=v1.12, 8=v1.13, 9=v1.14, 10=v1.15, 11=v1.1, 12=v1.16, 13=v1.17, 14=v1.18, 15=v1.19)
+  outs 1=w8:val 2=vl:win/page 3=vl:win/page 4=vl:win/page 5=vl:win/page 6=vl:win/page 7=vl:win/page 8=vl:win/page 9=vl:win/page 10=vl:win/page 11=w8:val 12=vl:win/page 13=vl:win/page 14=vl:win/page 15=vl:win/page
+mapped: IndexScan

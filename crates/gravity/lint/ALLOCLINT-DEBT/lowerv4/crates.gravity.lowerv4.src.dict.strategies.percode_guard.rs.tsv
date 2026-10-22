@@ -1,0 +1,5 @@
+path	crates/gravity/lowerv4/src/dict/strategies/percode_guard.rs
+method	std::iter::Iterator::collect	2
+method	std::rc::Rc::new	1
+type	std::rc::Rc	1
+type	std::vec::Vec	2

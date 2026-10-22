@@ -244,6 +244,17 @@ fn btvacuumscan_blocks(
 ) -> PgResult<bool> {
     let rel = vstate.info.index;
     let mut scanned: u32 = 0;
+    // nbtree.c:1270: block_range_read_stream_cb takes no locks, so batch
+    // mode is safe. One stream per step: a step's range ends at its budget.
+    let mut stream = read_stream::read_stream_begin_relation_data::<()>(
+        scratch.mcx(),
+        read_stream::READ_STREAM_MAINTENANCE
+            | read_stream::READ_STREAM_FULL
+            | read_stream::READ_STREAM_USE_BATCHING,
+        vstate.info.strategy.clone(),
+        rel,
+        ForkNumber::MAIN_FORKNUM,
+    )?;
     loop {
         if *current >= *num_pages {
             *num_pages =
@@ -255,22 +266,22 @@ fn btvacuumscan_blocks(
                 );
             }
             if *current >= *num_pages {
+                stream.end()?;
                 return Ok(true);
             }
         }
-        while *current < *num_pages {
-            if scanned >= max_blocks {
-                return Ok(false);
-            }
+        if scanned >= max_blocks {
+            stream.end()?;
+            return Ok(false);
+        }
+        let end = (*current as u64 + (max_blocks - scanned) as u64).min(*num_pages as u64);
+        let mut p = read_stream::BlockRangeReadStreamPrivate::new(*current, end as BlockNumber);
+        loop {
             vacuum_delay_point()?;
-            let pin = BufferPin::adopt(bufmgr::read_buffer_extended::call(
-                rel,
-                ForkNumber::MAIN_FORKNUM,
-                *current,
-                ReadBufferMode::Normal,
-                vstate.info.strategy.clone(),
-            )?)
-            .expect("ReadBufferExtended returned InvalidBuffer");
+            let buf = stream.next_buffer(&mut |_: &mut ()| Ok(p.next_block()))?;
+            let Some(pin) = BufferPin::adopt(buf) else {
+                break;
+            };
             btvacuumpage(vstate, scratch, pin)?;
             if vstate.info.report_progress {
                 ::backend_progress::pgstat_progress_update_param(
@@ -281,6 +292,8 @@ fn btvacuumscan_blocks(
             *current += 1;
             scanned += 1;
         }
+        // The stream calls no callback after InvalidBuffer until reset.
+        stream.reset()?;
     }
 }
 

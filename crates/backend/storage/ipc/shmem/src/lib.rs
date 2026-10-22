@@ -14,14 +14,14 @@
 // calls, so `off` reproduces C's within-segment offsets; InitShmemAllocation
 // seeds the counter and totalsize the way PGSharedMemoryCreate +
 // InitShmemAllocation do, so the trailing free row is C's
-// totalsize - freeoffset. The bump counter has no ceiling: C's
-// out-of-shared-memory arm (shmem.c:213) needs a CalculateShmemSize that
-// sums every subsystem, which ipci does not yet (audit-18.6 b020 b1-b32a6a2c).
+// totalsize - freeoffset, and the counter refuses past totalsize the way
+// shmem.c:213 does (a zero totalsize is a segment InitShmemAllocation has
+// not sized yet: test harnesses and the pre-header blocks).
 // The NUMA builtins (4099/4100) are ported below as C's no-libnuma build.
 #![allow(non_snake_case)]
 
 use std::alloc::Layout;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use elog::ereport;
@@ -60,10 +60,10 @@ struct ShmemIndexEnt {
 static SHMEM_INDEX: Mutex<Vec<ShmemIndexEnt>> = Mutex::new(Vec::new());
 static SHMEM_LOCK: AtomicBool = AtomicBool::new(false);
 // ShmemSegHdr->freeoffset counterpart: total bytes bump-allocated so far.
-static SHMEM_FREEOFFSET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SHMEM_FREEOFFSET: AtomicUsize = AtomicUsize::new(0);
 // ShmemSegHdr->totalsize counterpart: CalculateShmemSize's segment size, set
 // by InitShmemAllocation (0 until the postmaster's bring-up runs it).
-static SHMEM_TOTALSIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SHMEM_TOTALSIZE: AtomicUsize = AtomicUsize::new(0);
 
 fn CACHELINEALIGN(len: usize) -> Option<usize> {
     len.checked_add(PG_CACHE_LINE_SIZE - 1)
@@ -113,9 +113,6 @@ fn ShmemAllocRaw(size: usize, allocated_size: &mut usize) -> (*mut u8, usize) {
         return (std::ptr::null_mut(), 0);
     };
     *allocated_size = padded;
-    // C: freeoffset + padded > totalsize -> NULL; the heap-backed segment's
-    // ceiling is the allocator's (isize::MAX), and the caller raises C's
-    // out-of-shared-memory ERROR (shmem.c:159), never a panic.
     let Ok(layout) = Layout::from_size_align(padded.max(PG_CACHE_LINE_SIZE), PG_CACHE_LINE_SIZE)
     else {
         return (std::ptr::null_mut(), 0);
@@ -126,9 +123,24 @@ fn ShmemAllocRaw(size: usize, allocated_size: &mut usize) -> (*mut u8, usize) {
     if new_space.is_null() {
         return (std::ptr::null_mut(), 0);
     }
-    // shmem.c:216: freeoffset advances only for space actually carved.
-    let off = SHMEM_FREEOFFSET.fetch_add(padded, Ordering::Relaxed);
+    let Some(off) = carve(&SHMEM_FREEOFFSET, SHMEM_TOTALSIZE.load(Ordering::Relaxed), padded)
+    else {
+        // SAFETY: new_space came from alloc_zeroed(layout) just above.
+        unsafe { std::alloc::dealloc(new_space, layout) };
+        return (std::ptr::null_mut(), 0);
+    };
     (new_space, off)
+}
+
+// shmem.c:210-216 under ShmemLock: newFree = freeoffset + size is carved
+// only while newFree <= totalsize, else NULL and freeoffset stays.
+fn carve(freeoffset: &AtomicUsize, totalsize: usize, size: usize) -> Option<usize> {
+    freeoffset
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |start| {
+            let new_free = start.checked_add(size)?;
+            (totalsize == 0 || new_free <= totalsize).then_some(new_free)
+        })
+        .ok()
 }
 
 pub fn ShmemAlloc(size: usize) -> PgResult<*mut u8> {
@@ -198,6 +210,45 @@ pub fn ShmemInitStruct(name: &str, size: usize) -> PgResult<(*mut u8, bool)> {
         off,
     });
     Ok((struct_ptr, false))
+}
+
+/// ShmemInitStruct's index row for a region the caller mapped itself (the
+/// buffer pool's address-space reservation): the row carries C's `size` and
+/// bump offset so pg_shmem_allocations and the segment accounting read as if
+/// the struct had been carved, but no memory is allocated here.
+pub fn ShmemIndexAdopt(name: &str, size: usize, location: *mut u8) -> PgResult<()> {
+    debug_assert!(name.len() < SHMEM_INDEX_KEYSIZE, "shmem index key too long");
+    let mut index = SHMEM_INDEX.lock().expect("ShmemIndex poisoned");
+    if index.iter().any(|e| e.name == name) {
+        drop(index);
+        ereport(ERROR)
+            .errmsg(format!("ShmemIndex entry for data structure \"{name}\" already exists"))
+            .finish(loc("ShmemIndexAdopt"))?;
+        unreachable!();
+    }
+    if let Err(e) = shmem_index_reserve(&mut index, 1, name) {
+        drop(index);
+        return Err(e);
+    }
+    let Some(padded) = CACHELINEALIGN(size) else {
+        drop(index);
+        not_enough_shmem(name, size)?;
+        unreachable!();
+    };
+    let Some(off) = carve(&SHMEM_FREEOFFSET, SHMEM_TOTALSIZE.load(Ordering::Relaxed), padded)
+    else {
+        drop(index);
+        not_enough_shmem(name, size)?;
+        unreachable!();
+    };
+    index.push(ShmemIndexEnt {
+        name: String::leak(name.to_owned()),
+        location: location.expose_provenance(),
+        size,
+        allocated_size: padded,
+        off,
+    });
+    Ok(())
 }
 
 /// ShmemInitHash (shmem.c:332-380): create a shared-memory dynahash table.

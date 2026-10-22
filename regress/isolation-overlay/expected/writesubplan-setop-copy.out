@@ -1,0 +1,174 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s1t s2d s1c s2sel s2c
+step s2e: EXPLAIN (COSTS OFF) DELETE FROM wsc_sink WHERE k IN (SELECT k FROM wsc_tb WHERE g = 0 EXCEPT SELECT k FROM wsc_tsm);
+QUERY PLAN                                        
+--------------------------------------------------
+Delete on wsc_sink                                
+  ->  Hash Join                                   
+        Hash Cond: ("ANY_subquery".k = wsc_sink.k)
+        ->  Subquery Scan on "ANY_subquery"       
+              ->  HashSetOp Except                
+                    ->  Seq Scan on wsc_tb        
+                          Filter: (g = 0)         
+                    ->  Seq Scan on wsc_tsm       
+        ->  Hash                                  
+              ->  Seq Scan on wsc_sink            
+(10 rows)
+
+step s1t: UPDATE wsc_sink SET t = 'x' WHERE id = 1;
+step s2d: DELETE FROM wsc_sink WHERE k IN (SELECT k FROM wsc_tb WHERE g = 0 EXCEPT SELECT k FROM wsc_tsm); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT id, k, t FROM wsc_sink WHERE id IN (1, 2, 3, 6) ORDER BY id;
+id|k|t    
+--+-+-----
+ 3|3|sink3
+ 6|6|sink6
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k s2d s1c s2sel s2c
+step s1k: UPDATE wsc_sink SET k = 9999 WHERE id = 1;
+step s2d: DELETE FROM wsc_sink WHERE k IN (SELECT k FROM wsc_tb WHERE g = 0 EXCEPT SELECT k FROM wsc_tsm); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT id, k, t FROM wsc_sink WHERE id IN (1, 2, 3, 6) ORDER BY id;
+id|   k|t    
+--+----+-----
+ 1|9999|sink1
+ 3|   3|sink3
+ 6|   6|sink6
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k2 s2d s1c s2sel s2c
+step s1k2: UPDATE wsc_sink SET k = 2 WHERE id = 1;
+step s2d: DELETE FROM wsc_sink WHERE k IN (SELECT k FROM wsc_tb WHERE g = 0 EXCEPT SELECT k FROM wsc_tsm); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT id, k, t FROM wsc_sink WHERE id IN (1, 2, 3, 6) ORDER BY id;
+id|k|t    
+--+-+-----
+ 1|2|sink1
+ 3|3|sink3
+ 6|6|sink6
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1d s2d s1c s2sel s2c
+step s1d: DELETE FROM wsc_sink WHERE id = 1;
+step s2d: DELETE FROM wsc_sink WHERE k IN (SELECT k FROM wsc_tb WHERE g = 0 EXCEPT SELECT k FROM wsc_tsm); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT id, k, t FROM wsc_sink WHERE id IN (1, 2, 3, 6) ORDER BY id;
+id|k|t    
+--+-+-----
+ 3|3|sink3
+ 6|6|sink6
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1t s2d s1a s2sel s2c
+step s1t: UPDATE wsc_sink SET t = 'x' WHERE id = 1;
+step s2d: DELETE FROM wsc_sink WHERE k IN (SELECT k FROM wsc_tb WHERE g = 0 EXCEPT SELECT k FROM wsc_tsm); <waiting ...>
+step s1a: ROLLBACK;
+step s2d: <... completed>
+step s2sel: SELECT id, k, t FROM wsc_sink WHERE id IN (1, 2, 3, 6) ORDER BY id;
+id|k|t    
+--+-+-----
+ 3|3|sink3
+ 6|6|sink6
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1t s2r s1c s2sel s2c
+step s1t: UPDATE wsc_sink SET t = 'x' WHERE id = 1;
+step s2r: DELETE FROM wsc_sink WHERE id = 1 AND k IN (SELECT k FROM wsc_tb WHERE g = 0 EXCEPT SELECT k FROM wsc_tsm) RETURNING id, k, t; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|k|t
+--+-+-
+ 1|1|x
+(1 row)
+
+step s2sel: SELECT id, k, t FROM wsc_sink WHERE id IN (1, 2, 3, 6) ORDER BY id;
+id|k|t    
+--+-+-----
+ 2|2|sink2
+ 3|3|sink3
+ 6|6|sink6
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k s2r s1c s2sel s2c
+step s1k: UPDATE wsc_sink SET k = 9999 WHERE id = 1;
+step s2r: DELETE FROM wsc_sink WHERE id = 1 AND k IN (SELECT k FROM wsc_tb WHERE g = 0 EXCEPT SELECT k FROM wsc_tsm) RETURNING id, k, t; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|k|t
+--+-+-
+(0 rows)
+
+step s2sel: SELECT id, k, t FROM wsc_sink WHERE id IN (1, 2, 3, 6) ORDER BY id;
+id|   k|t    
+--+----+-----
+ 1|9999|sink1
+ 2|   2|sink2
+ 3|   3|sink3
+ 6|   6|sink6
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2ue s1t3 s2u s1c s2sel s2c
+step s2ue: EXPLAIN (COSTS OFF) UPDATE wsc_sink SET t = t || '+both' WHERE k IN (SELECT k FROM wsc_tb INTERSECT SELECT k FROM wsc_tsm);
+QUERY PLAN                                        
+--------------------------------------------------
+Update on wsc_sink                                
+  ->  Hash Join                                   
+        Hash Cond: ("ANY_subquery".k = wsc_sink.k)
+        ->  Subquery Scan on "ANY_subquery"       
+              ->  HashSetOp Intersect             
+                    ->  Seq Scan on wsc_tsm       
+                    ->  Seq Scan on wsc_tb        
+        ->  Hash                                  
+              ->  Seq Scan on wsc_sink            
+(9 rows)
+
+step s1t3: UPDATE wsc_sink SET t = 'y' WHERE id = 3;
+step s2u: UPDATE wsc_sink SET t = t || '+both' WHERE k IN (SELECT k FROM wsc_tb INTERSECT SELECT k FROM wsc_tsm); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, k, t FROM wsc_sink WHERE id IN (1, 2, 3, 6) ORDER BY id;
+id|k|t         
+--+-+----------
+ 1|1|sink1     
+ 2|2|sink2     
+ 3|3|y+both    
+ 6|6|sink6+both
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k3 s2u s1c s2sel s2c
+step s1k3: UPDATE wsc_sink SET k = 9999 WHERE id = 3;
+step s2u: UPDATE wsc_sink SET t = t || '+both' WHERE k IN (SELECT k FROM wsc_tb INTERSECT SELECT k FROM wsc_tsm); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, k, t FROM wsc_sink WHERE id IN (1, 2, 3, 6) ORDER BY id;
+id|   k|t         
+--+----+----------
+ 1|   1|sink1     
+ 2|   2|sink2     
+ 3|9999|sink3     
+ 6|   6|sink6+both
+(4 rows)
+
+step s2c: COMMIT;

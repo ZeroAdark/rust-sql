@@ -185,3 +185,20 @@ fn soft_error_runs_error_context_callbacks() {
         Some("line 7 of configuration file \"/x/pg_hba.conf\"")
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn absolute_location_preserves_filename_bytes() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let filename = Path::new(OsStr::from_bytes(b"/etc/pg/\xff.conf"));
+    assert_eq!(absolute_config_location(filename, None), filename);
+    assert_eq!(
+        absolute_config_location(
+            Path::new(OsStr::from_bytes(b"../\xff.conf")),
+            Some(Path::new("/etc/pg/conf.d/main.conf")),
+        ),
+        filename,
+    );
+}

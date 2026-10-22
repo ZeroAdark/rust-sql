@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/optimizer/plan/planner.c: 1 stack-depth check sites
+7974	apply_scanjoin_target_to_paths	crates/backend/optimizer/plan/planner/src/grouping.rs	apply_scanjoin_target_to_paths	yes	

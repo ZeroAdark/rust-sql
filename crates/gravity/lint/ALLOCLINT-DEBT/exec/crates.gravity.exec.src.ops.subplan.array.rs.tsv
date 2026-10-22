@@ -1,0 +1,2 @@
+path	crates/gravity/exec/src/ops/subplan/array.rs
+method	std::iter::Iterator::collect	1

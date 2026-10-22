@@ -17,6 +17,7 @@ types_rel = { path = "../../../../_support/types/rel" }
 types_tuple = { path = "../../../../_support/types/types_tuple" }
 guc_tables = { path = "../../misc/guc_tables" }
 l2cache = { path = "../l2cache" }
+gravity_deps = { path = "../../../../gravity/deps" }
 init_small = { path = "../../init/init_small" }
 inval_seams = { path = "../inval_seams" }
 sinval_seams = { path = "../../../storage/ipc/sinval_seams" }

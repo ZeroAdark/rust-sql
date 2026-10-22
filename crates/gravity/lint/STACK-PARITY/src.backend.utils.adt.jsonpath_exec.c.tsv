@@ -1,0 +1,4 @@
+# PostgreSQL 18.6 src/backend/utils/adt/jsonpath_exec.c: 3 stack-depth check sites
+752	executeItemOptUnwrapTarget	crates/backend/utils/adt/jsonpath_exec/src/lib.rs	ExecCtx::execute_item_opt_unwrap_target	yes	
+1773	executeBoolItem	crates/backend/utils/adt/jsonpath_exec/src/lib.rs	ExecCtx::execute_bool_item	yes	
+1930	executeAnyItem	crates/backend/utils/adt/jsonpath_exec/src/lib.rs	ExecCtx::execute_any_item	yes	

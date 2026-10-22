@@ -1,0 +1,104 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2a s1c
+step s2x: EXPLAIN (COSTS OFF) WITH lcp0 AS (SELECT id AS progress_id, cron_id, timed_out_counter, done, remaining FROM cprog WHERE cron_id = 7 ORDER BY id DESC LIMIT 1) SELECT ccron.id, ccron.failure_count, lcp.progress_id, lcp.remaining, lcp.done FROM ccron LEFT JOIN lcp0 lcp ON lcp.cron_id = ccron.id WHERE ccron.active = true AND ccron.nextcall <= timestamp '2026-01-02' AND ccron.id = 7 ORDER BY priority FOR NO KEY UPDATE OF ccron;
+QUERY PLAN                                                                                                                 
+---------------------------------------------------------------------------------------------------------------------------
+LockRows                                                                                                                   
+  ->  Sort                                                                                                                 
+        Sort Key: ccron.priority                                                                                           
+        ->  Nested Loop Left Join                                                                                          
+              ->  Seq Scan on ccron                                                                                        
+                    Filter: (active AND (nextcall <= 'Fri Jan 02 00:00:00 2026'::timestamp without time zone) AND (id = 7))
+              ->  Subquery Scan on lcp                                                                                     
+                    Filter: (lcp.cron_id = 7)                                                                              
+                    ->  Limit                                                                                              
+                          ->  Sort                                                                                         
+                                Sort Key: cprog.id DESC                                                                    
+                                ->  Seq Scan on cprog                                                                      
+                                      Filter: (cron_id = 7)                                                                
+(13 rows)
+
+step s1u: UPDATE ccron SET failure_count = failure_count + 1 WHERE id = 7;
+step s2a: WITH lcp0 AS (SELECT id AS progress_id, cron_id, timed_out_counter, done, remaining FROM cprog WHERE cron_id = 7 ORDER BY id DESC LIMIT 1) SELECT ccron.id, ccron.failure_count, lcp.progress_id, lcp.remaining, lcp.done FROM ccron LEFT JOIN lcp0 lcp ON lcp.cron_id = ccron.id WHERE ccron.active = true AND ccron.nextcall <= timestamp '2026-01-02' AND ccron.id = 7 ORDER BY priority FOR NO KEY UPDATE OF ccron; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|failure_count|progress_id|remaining|done
+--+-------------+-----------+---------+----
+ 7|            1|         56|        0|   2
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2a s1c
+step s1p: UPDATE ccron SET failure_count = 3 WHERE id = 7; INSERT INTO cprog (cron_id, remaining, done) VALUES (7, 9, 9);
+step s2a: WITH lcp0 AS (SELECT id AS progress_id, cron_id, timed_out_counter, done, remaining FROM cprog WHERE cron_id = 7 ORDER BY id DESC LIMIT 1) SELECT ccron.id, ccron.failure_count, lcp.progress_id, lcp.remaining, lcp.done FROM ccron LEFT JOIN lcp0 lcp ON lcp.cron_id = ccron.id WHERE ccron.active = true AND ccron.nextcall <= timestamp '2026-01-02' AND ccron.id = 7 ORDER BY priority FOR NO KEY UPDATE OF ccron; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|failure_count|progress_id|remaining|done
+--+-------------+-----------+---------+----
+ 7|            3|         56|        0|   2
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2b s1c
+step s1n: UPDATE ccron SET failure_count = 3 WHERE id = 57; INSERT INTO cprog (cron_id, remaining, done) VALUES (57, 9, 9);
+step s2b: WITH lcp0 AS (SELECT id AS progress_id, cron_id, timed_out_counter, done, remaining FROM cprog WHERE cron_id = 57 ORDER BY id DESC LIMIT 1) SELECT ccron.id, ccron.failure_count, lcp.progress_id, lcp.remaining, lcp.done FROM ccron LEFT JOIN lcp0 lcp ON lcp.cron_id = ccron.id WHERE ccron.active = true AND ccron.nextcall <= timestamp '2026-01-02' AND ccron.id = 57 ORDER BY priority FOR NO KEY UPDATE OF ccron; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+id|failure_count|progress_id|remaining|done
+--+-------------+-----------+---------+----
+57|            3|           |         |    
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2a s1c
+step s1d: UPDATE ccron SET active = false WHERE id = 7;
+step s2a: WITH lcp0 AS (SELECT id AS progress_id, cron_id, timed_out_counter, done, remaining FROM cprog WHERE cron_id = 7 ORDER BY id DESC LIMIT 1) SELECT ccron.id, ccron.failure_count, lcp.progress_id, lcp.remaining, lcp.done FROM ccron LEFT JOIN lcp0 lcp ON lcp.cron_id = ccron.id WHERE ccron.active = true AND ccron.nextcall <= timestamp '2026-01-02' AND ccron.id = 7 ORDER BY priority FOR NO KEY UPDATE OF ccron; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|failure_count|progress_id|remaining|done
+--+-------------+-----------+---------+----
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2a s1c
+step s1r: UPDATE ccron SET nextcall = timestamp '2026-02-01' WHERE id = 7;
+step s2a: WITH lcp0 AS (SELECT id AS progress_id, cron_id, timed_out_counter, done, remaining FROM cprog WHERE cron_id = 7 ORDER BY id DESC LIMIT 1) SELECT ccron.id, ccron.failure_count, lcp.progress_id, lcp.remaining, lcp.done FROM ccron LEFT JOIN lcp0 lcp ON lcp.cron_id = ccron.id WHERE ccron.active = true AND ccron.nextcall <= timestamp '2026-01-02' AND ccron.id = 7 ORDER BY priority FOR NO KEY UPDATE OF ccron; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|failure_count|progress_id|remaining|done
+--+-------------+-----------+---------+----
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2i s1c
+step s1p: UPDATE ccron SET failure_count = 3 WHERE id = 7; INSERT INTO cprog (cron_id, remaining, done) VALUES (7, 9, 9);
+step s2i: WITH lcp0 AS (SELECT id AS progress_id, cron_id, timed_out_counter, done, remaining FROM cprog WHERE cron_id = 7 ORDER BY id DESC LIMIT 1) SELECT ccron.id, ccron.failure_count, lcp.progress_id, lcp.remaining FROM ccron JOIN lcp0 lcp ON lcp.cron_id = ccron.id WHERE ccron.active = true AND ccron.id = 7 ORDER BY priority FOR NO KEY UPDATE OF ccron; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+id|failure_count|progress_id|remaining
+--+-------------+-----------+---------
+ 7|            3|         56|        0
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT id FROM ccron WHERE id = 7 FOR UPDATE;
+id
+--
+ 7
+(1 row)
+
+step s2sk: WITH lcp0 AS (SELECT id AS progress_id, cron_id, timed_out_counter, done, remaining FROM cprog WHERE cron_id = 7 ORDER BY id DESC LIMIT 1) SELECT ccron.id, lcp.progress_id FROM ccron LEFT JOIN lcp0 lcp ON lcp.cron_id = ccron.id WHERE ccron.active = true AND ccron.nextcall <= timestamp '2026-01-02' AND ccron.id = 7 ORDER BY priority FOR NO KEY UPDATE OF ccron SKIP LOCKED;
+id|progress_id
+--+-----------
+(0 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

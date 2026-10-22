@@ -1,0 +1,140 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s1c
+step s2e: EXPLAIN (COSTS OFF) SELECT q.id, q.c, r.c FROM rl_q q JOIN rl_r r ON r.id = q.id WHERE q.id <= 3 AND r.c < (SELECT max(k) * 10 + 100 FROM rl_k WHERE rl_bump(k)) FOR SHARE OF r;
+QUERY PLAN                                   
+---------------------------------------------
+LockRows                                     
+  InitPlan 1                                 
+    ->  Aggregate                            
+          ->  Seq Scan on rl_k               
+                Filter: rl_bump(k)           
+  ->  Nested Loop                            
+        Join Filter: (q.id = r.id)           
+        ->  Seq Scan on rl_r r               
+              Filter: (c < (InitPlan 1).col1)
+        ->  Materialize                      
+              ->  Seq Scan on rl_q q         
+                    Filter: (id <= 3)        
+(12 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1c25 s2l s1c s2calls
+step s1c25: UPDATE rl_r SET c = 25 WHERE id = 2;
+step s2l: SELECT q.id, q.c, r.c FROM rl_q q JOIN rl_r r ON r.id = q.id WHERE q.id <= 3 AND r.c < (SELECT max(k) * 10 + 100 FROM rl_k WHERE rl_bump(k)) FOR SHARE OF r; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|c| c
+--+-+--
+ 1|1|10
+ 2|2|25
+ 3|3|30
+(3 rows)
+
+step s2calls: SELECT last_value FROM rl_seq;
+last_value
+----------
+         3
+(1 row)
+
+
+starting permutation: s1both s2l s1c s2calls
+step s1both: UPDATE rl_q SET c = 99 WHERE id = 2; UPDATE rl_r SET c = 25 WHERE id = 2;
+step s2l: SELECT q.id, q.c, r.c FROM rl_q q JOIN rl_r r ON r.id = q.id WHERE q.id <= 3 AND r.c < (SELECT max(k) * 10 + 100 FROM rl_k WHERE rl_bump(k)) FOR SHARE OF r; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|c| c
+--+-+--
+ 1|1|10
+ 2|2|25
+ 3|3|30
+(3 rows)
+
+step s2calls: SELECT last_value FROM rl_seq;
+last_value
+----------
+         3
+(1 row)
+
+
+starting permutation: s1c500 s2l s1c s2calls
+step s1c500: UPDATE rl_r SET c = 500 WHERE id = 2;
+step s2l: SELECT q.id, q.c, r.c FROM rl_q q JOIN rl_r r ON r.id = q.id WHERE q.id <= 3 AND r.c < (SELECT max(k) * 10 + 100 FROM rl_k WHERE rl_bump(k)) FOR SHARE OF r; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|c| c
+--+-+--
+ 1|1|10
+ 3|3|30
+(2 rows)
+
+step s2calls: SELECT last_value FROM rl_seq;
+last_value
+----------
+         3
+(1 row)
+
+
+starting permutation: s1key s2l s1c
+step s1key: UPDATE rl_r SET id = 12 WHERE id = 2;
+step s2l: SELECT q.id, q.c, r.c FROM rl_q q JOIN rl_r r ON r.id = q.id WHERE q.id <= 3 AND r.c < (SELECT max(k) * 10 + 100 FROM rl_k WHERE rl_bump(k)) FOR SHARE OF r; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|c| c
+--+-+--
+ 1|1|10
+ 3|3|30
+(2 rows)
+
+
+starting permutation: s1del s2l s1c
+step s1del: DELETE FROM rl_r WHERE id = 2;
+step s2l: SELECT q.id, q.c, r.c FROM rl_q q JOIN rl_r r ON r.id = q.id WHERE q.id <= 3 AND r.c < (SELECT max(k) * 10 + 100 FROM rl_k WHERE rl_bump(k)) FOR SHARE OF r; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|c| c
+--+-+--
+ 1|1|10
+ 3|3|30
+(2 rows)
+
+
+starting permutation: s1c25 s2k s1c
+step s1c25: UPDATE rl_r SET c = 25 WHERE id = 2;
+step s2k: SELECT q.id, q.c, r.c FROM rl_q q JOIN rl_r r ON r.id = q.id WHERE q.id <= 3 AND r.c < (SELECT max(k) * 10 + 100 FROM rl_k WHERE rl_bump(k)) FOR SHARE OF r SKIP LOCKED;
+id|c| c
+--+-+--
+ 1|1|10
+ 3|3|30
+(2 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1c25 s2n s1c
+step s1c25: UPDATE rl_r SET c = 25 WHERE id = 2;
+step s2n: SELECT q.id, q.c, r.c FROM rl_q q JOIN rl_r r ON r.id = q.id WHERE q.id <= 3 AND r.c < (SELECT max(k) * 10 + 100 FROM rl_k WHERE rl_bump(k)) FOR SHARE OF r NOWAIT;
+ERROR:  could not obtain lock on row in relation "rl_r"
+step s1c: COMMIT;
+
+starting permutation: s1c25 s2b s2dc s2f s1c s2cc s2calls
+step s1c25: UPDATE rl_r SET c = 25 WHERE id = 2;
+step s2b: BEGIN;
+step s2dc: DECLARE c5 CURSOR FOR SELECT q.id, q.c, r.c FROM rl_q q JOIN rl_r r ON r.id = q.id WHERE q.id <= 3 AND r.c < (SELECT max(k) * 10 + 100 FROM rl_k WHERE rl_bump(k)) FOR SHARE OF r;
+step s2f: FETCH ALL FROM c5; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id|c| c
+--+-+--
+ 1|1|10
+ 2|2|25
+ 3|3|30
+(3 rows)
+
+step s2cc: COMMIT;
+step s2calls: SELECT last_value FROM rl_seq;
+last_value
+----------
+         3
+(1 row)
+

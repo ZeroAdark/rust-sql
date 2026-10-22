@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/rep/varlena/cmp_aggnum.rs
+growth	std::vec::Vec::push	2
+method	std::rc::Rc::new	1
+type	std::rc::Rc	1

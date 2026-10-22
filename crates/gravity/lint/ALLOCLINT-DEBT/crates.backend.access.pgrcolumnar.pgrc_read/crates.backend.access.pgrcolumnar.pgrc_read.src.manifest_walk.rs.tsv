@@ -1,0 +1,2 @@
+path	crates/backend/access/pgrcolumnar/pgrc_read/src/manifest_walk.rs
+method	std::clone::Clone::clone	2

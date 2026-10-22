@@ -40,6 +40,7 @@ pub const LDAP_DECODING_ERROR: i32 = -4;
 pub const LDAP_TIMEOUT: i32 = -5;
 pub const LDAP_FILTER_ERROR: i32 = -7;
 pub const LDAP_PARAM_ERROR: i32 = -9;
+pub const LDAP_NO_MEMORY: i32 = -10;
 pub const LDAP_CONNECT_ERROR: i32 = -11;
 pub const LDAP_REFERRAL_LIMIT_EXCEEDED: i32 = -17;
 // ldap-int.h LDAP_DEFAULT_REFHOPLIMIT: ld_refhoplimit's initial value.
@@ -94,7 +95,8 @@ pub(crate) fn put_len(out: &mut Vec<u8>, len: usize) {
 }
 
 pub(crate) fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(content.len() + 6);
+    let mut out = Vec::new();
+    let _ = out.try_reserve(content.len() + 6);
     out.push(tag);
     put_len(&mut out, content.len());
     out.extend_from_slice(content);
@@ -251,7 +253,7 @@ fn encode_filter(f: &Filter) -> Vec<u8> {
 // RFC 4515 value unescape: backslash + two hex digits.
 fn unescape_value(s: &str) -> Result<Vec<u8>, ()> {
     let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
+    let mut out = ::mcx::std_vec_with_capacity("auth", b.len()).map_err(|_| ())?;
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'\\' {
@@ -284,19 +286,29 @@ impl<'a> FilterParser<'a> {
             Err(())
         }
     }
+    // libldap filter.c skips LDAP_SPACE (' ') after '(' and around the
+    // members of &, | and ! (put_filter / put_filter_list).
+    fn skip_spaces(&mut self) {
+        while self.peek() == Some(b' ') {
+            self.pos += 1;
+        }
+    }
     fn parse(&mut self) -> Result<Filter, ()> {
         self.expect(b'(')?;
+        self.skip_spaces();
         let f = match self.peek().ok_or(())? {
             b'&' | b'|' => {
                 let and = self.peek() == Some(b'&');
                 self.pos += 1;
                 let mut subs = Vec::new();
-                while self.peek() == Some(b'(') {
+                loop {
+                    self.skip_spaces();
+                    if self.peek() != Some(b'(') {
+                        break;
+                    }
                     subs.push(self.parse()?);
                 }
-                if subs.is_empty() {
-                    return Err(());
-                }
+                // An empty list is RFC 4526's absolute true/false.
                 if and {
                     Filter::And(subs)
                 } else {
@@ -305,8 +317,12 @@ impl<'a> FilterParser<'a> {
             }
             b'!' => {
                 self.pos += 1;
-                Filter::Not(Box::new(self.parse()?))
+                self.skip_spaces();
+                let sub = self.parse()?;
+                self.skip_spaces();
+                Filter::Not(Box::new(sub))
             }
+            b'(' => return Err(()),
             _ => self.parse_item()?,
         };
         self.expect(b')')?;
@@ -412,6 +428,7 @@ pub fn parse_search_filter(s: &str) -> Result<Filter, ()> {
         b: s.as_bytes(),
         pos: 0,
     };
+    p.skip_spaces();
     let f = if p.peek() == Some(b'(') {
         p.parse()?
     } else {
@@ -425,9 +442,47 @@ pub fn parse_search_filter(s: &str) -> Result<Filter, ()> {
 
 // ---------- The connection ----------
 
+#[derive(Debug)]
+struct LdapSocket {
+    tcp: TcpStream,
+    deadline: Option<u64>,
+}
+
+impl Read for LdapSocket {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(deadline) = self.deadline {
+            let remaining = deadline.saturating_sub(pg_clock::mono_ns());
+            if remaining == 0 {
+                return Err(std::io::ErrorKind::TimedOut.into());
+            }
+            self.tcp.set_read_timeout(Some(std::time::Duration::from_nanos(remaining)))?;
+        }
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for LdapSocket {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
 enum Transport {
-    Plain(TcpStream),
-    Tls(Box<SslStream<TcpStream>>),
+    Plain(LdapSocket),
+    Tls(Box<SslStream<LdapSocket>>),
+}
+
+impl Transport {
+    fn socket_mut(&mut self) -> &mut LdapSocket {
+        match self {
+            Self::Plain(s) => s,
+            Self::Tls(s) => s.get_mut(),
+        }
+    }
 }
 
 impl Read for Transport {
@@ -535,6 +590,7 @@ impl LdapConn {
         let hosts = self.hosts.clone();
         for (host, port) in hosts {
             let Ok(tcp) = self.connect_to_host(&host, port) else { continue };
+            let tcp = LdapSocket { tcp, deadline: None };
             if self.ldaps {
                 match self.tls_start(tcp, &host) {
                     Ok(tls) => {
@@ -637,7 +693,7 @@ impl LdapConn {
     // failure sets ld_error = tlsg_session_errmsg = gnutls_strerror(rc).
     // Err carries ld_errno (LDAP_CONNECT_ERROR unless check_hostname set
     // its own; LDAP_TIMEOUT when NETWORK_TIMEOUT expires).
-    fn tls_start(&mut self, tcp: TcpStream, host: &str) -> Result<SslStream<TcpStream>, i32> {
+    fn tls_start(&mut self, tcp: LdapSocket, host: &str) -> Result<SslStream<LdapSocket>, i32> {
         let host = if host.is_empty() { "localhost" } else { host };
         let ctx = self.build_tls_ctx().map_err(|()| LDAP_CONNECT_ERROR)?;
         let mut ssl = Ssl::new(&ctx).map_err(|_| LDAP_CONNECT_ERROR)?;
@@ -660,8 +716,8 @@ impl LdapConn {
             return Err(LDAP_CONNECT_ERROR);
         }
         if let Some(tmo) = self.opts.tm_net {
-            let _ = tcp.set_read_timeout(Some(tmo));
-            let _ = tcp.set_write_timeout(Some(tmo));
+            let _ = tcp.tcp.set_read_timeout(Some(tmo));
+            let _ = tcp.tcp.set_write_timeout(Some(tmo));
         }
         let stream = match ssl.connect(tcp) {
             Ok(s) => s,
@@ -680,8 +736,8 @@ impl LdapConn {
                 return Err(LDAP_CONNECT_ERROR);
             }
         };
-        let _ = stream.get_ref().set_read_timeout(self.opts.tm_api);
-        let _ = stream.get_ref().set_write_timeout(None);
+        let _ = stream.get_ref().tcp.set_read_timeout(self.opts.tm_api);
+        let _ = stream.get_ref().tcp.set_write_timeout(None);
         let rc = self.gnutls_verify(stream.ssl());
         if rc < 0 {
             self.diag = Some(gnutls_strerror(rc));
@@ -791,7 +847,8 @@ impl LdapConn {
             self.stream = None;
             return Err(LDAP_SERVER_DOWN);
         }
-        let mut msg = header.to_vec();
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&header);
         let first = header[1];
         let content_len = if first < 0x80 {
             first as usize
@@ -800,17 +857,18 @@ impl LdapConn {
             if n == 0 || n > 8 {
                 return Err(LDAP_DECODING_ERROR);
             }
-            let mut lenbuf = vec![0u8; n];
-            if let Err(e) = stream.read_exact(&mut lenbuf) {
+            let mut lenbuf = [0u8; 8];
+            let lenbuf_slice = &mut lenbuf[..n];
+            if let Err(e) = stream.read_exact(lenbuf_slice) {
                 if is_timeout(&e) {
                     return Err(LDAP_TIMEOUT);
                 }
                 self.stream = None;
                 return Err(LDAP_SERVER_DOWN);
             }
-            msg.extend_from_slice(&lenbuf);
+            msg.extend_from_slice(lenbuf_slice);
             let mut v: usize = 0;
-            for b in lenbuf {
+            for &b in &lenbuf[..n] {
                 v = v
                     .checked_mul(256)
                     .and_then(|x| x.checked_add(b as usize))
@@ -823,6 +881,7 @@ impl LdapConn {
             return Err(LDAP_DECODING_ERROR);
         }
         let at = msg.len();
+        msg.try_reserve_exact(content_len).map_err(|_| LDAP_DECODING_ERROR)?;
         msg.resize(at + content_len, 0);
         if let Err(e) = stream.read_exact(&mut msg[at..]) {
             if is_timeout(&e) {
@@ -837,6 +896,20 @@ impl LdapConn {
     // Read the next protocolOp for msgid; other message IDs are discarded
     // (nothing else is in flight on this synchronous connection).
     fn read_op_for(&mut self, msgid: i64) -> Result<(u8, Vec<u8>), i32> {
+        let deadline = self.opts.tm_api.map(|timeout| {
+            pg_clock::mono_ns().saturating_add(timeout.as_nanos().min(u64::MAX as u128) as u64)
+        });
+        self.stream.as_mut().ok_or(LDAP_SERVER_DOWN)?.socket_mut().deadline = deadline;
+        let result = self.read_op_inner(msgid);
+        if let Some(stream) = self.stream.as_mut() {
+            let socket = stream.socket_mut();
+            socket.deadline = None;
+            let _ = socket.tcp.set_read_timeout(self.opts.tm_api);
+        }
+        result
+    }
+
+    fn read_op_inner(&mut self, msgid: i64) -> Result<(u8, Vec<u8>), i32> {
         loop {
             let msg = self.read_message()?;
             let mut r = BerReader::new(&msg);
@@ -853,7 +926,8 @@ impl LdapConn {
                 continue;
             }
             let (op_tag, op) = r.read_tlv().map_err(|()| LDAP_DECODING_ERROR)?;
-            return Ok((op_tag, op.to_vec()));
+            let op_vec = ::mcx::std_vec_from_slice("auth", op).map_err(|_| LDAP_DECODING_ERROR)?;
+            return Ok((op_tag, op_vec));
         }
     }
 
@@ -947,13 +1021,18 @@ impl LdapConn {
                     if t != TAG_OCTET_STRING {
                         return Err(LDAP_DECODING_ERROR);
                     }
-                    entries.push(dn.to_vec());
+                    entries.push(::mcx::std_vec_from_slice("auth", dn).map_err(|_| LDAP_DECODING_ERROR)?);
                 }
                 TAG_SEARCH_REFERENCE => {
                     // SearchResultReference ::= SEQUENCE SIZE (1..MAX) OF uri
                     // LDAPURL. result.c try_read1msg chases each URI as it
                     // arrives (ldap_chase_v3referrals) and folds the
                     // referenced server's entries into this result.
+                    // With REFERRALS off libldap keeps the reference
+                    // unchased; ldap_count_entries skips it.
+                    if !self.opts.referrals {
+                        continue;
+                    }
                     let mut r = BerReader::new(&body);
                     while let Ok((t, url)) = r.read_tlv() {
                         if t != TAG_OCTET_STRING {
@@ -1023,7 +1102,7 @@ impl LdapConn {
             conn.unbind();
             return Err(rc);
         }
-        let base = desc.dn.as_deref().unwrap_or(base);
+        let base = desc.dn.as_deref().filter(|d| !d.is_empty()).unwrap_or(base);
         let scope = if ldap_url_has_scope(url) { desc.scope } else { scope };
         let parsed;
         let filter = match desc.filter.as_deref() {
@@ -1302,14 +1381,13 @@ fn session_chkhost(ssl: &SslRef, name_in: &str, chk_san: i32) -> Result<(), i32>
         }
     }
     // find the last CN
-    let cn = cert
-        .subject_name()
-        .entries_by_nid(Nid::COMMONNAME)
-        .last()
-        .map(|e| e.data().as_slice().to_vec());
-    let Some(cn) = cn else {
+    let Some(cn_entry) = cert.subject_name().entries_by_nid(Nid::COMMONNAME).last() else {
         return Err(LDAP_CONNECT_ERROR); // "unable to get CN from peer certificate"
     };
+    let cn_bytes = cn_entry.data().as_slice();
+    let mut cn: Vec<u8> = Vec::new();
+    cn.try_reserve(cn_bytes.len()).map_err(|_| LDAP_NO_MEMORY)?;
+    cn.extend_from_slice(cn_bytes);
     if eq_nocase(nb, &cn) {
         return Ok(());
     }
@@ -1338,7 +1416,10 @@ fn session_pinning(ssl: &SslRef, alg: Option<&str>, pin: &[u8]) -> Result<(), i3
         .and_then(|k| k.public_key_to_der())
         .map_err(|_| -1)?;
     let keyhash: Vec<u8> = match md {
-        Some(md) => openssl::hash::hash(md, &key).map_err(|_| -1)?.to_vec(),
+        Some(md) => {
+            let digest = openssl::hash::hash(md, &key).map_err(|_| -1)?;
+            ::mcx::std_vec_from_slice("auth", &digest).map_err(|_| -1)?
+        }
         None => key,
     };
     if keyhash != pin {
@@ -1378,6 +1459,30 @@ mod tls_glue_tests {
 #[cfg(test)]
 mod ber_tests {
     use super::*;
+
+    #[test]
+    fn bind_timeout_bounds_dribbled_response() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let peer = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            socket.read(&mut request).unwrap();
+            for byte in [0x30, 12, 2, 1, 1, 0x61, 7, 10, 1, 0, 4, 0, 4, 0] {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if socket.write_all(&[byte]).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut options = LdapOptions::default();
+        options.tm_api = Some(std::time::Duration::from_millis(200));
+        let mut conn = LdapConn::new(vec![("127.0.0.1".into(), port.into())], false, options);
+        let result = conn.simple_bind(b"uid=postgres", b"secret");
+        drop(conn);
+        peer.join().unwrap();
+        assert_eq!(result, LDAP_TIMEOUT);
+    }
 
     #[test]
     fn tlv_short_and_long_lengths() {
@@ -1433,8 +1538,33 @@ mod ber_tests {
             Filter::Eq("uid".into(), b"a*b".to_vec())
         );
         assert!(parse_search_filter("(uid=alice").is_err());
-        assert!(parse_search_filter("(&)").is_err());
+        assert_eq!(parse_search_filter("(&)").unwrap(), Filter::And(vec![]));
         assert!(parse_search_filter("").is_err());
+        assert!(parse_search_filter("((uid=a))").is_err());
+
+        // libldap skips spaces after '(' and between list members.
+        assert_eq!(
+            parse_search_filter("(&(objectClass=person) (uid=alice))").unwrap(),
+            Filter::And(vec![
+                Filter::Eq("objectClass".into(), b"person".to_vec()),
+                Filter::Eq("uid".into(), b"alice".to_vec()),
+            ])
+        );
+        assert_eq!(
+            parse_search_filter("( & (a=b) (c=d) )").unwrap(),
+            Filter::And(vec![
+                Filter::Eq("a".into(), b"b".to_vec()),
+                Filter::Eq("c".into(), b"d".to_vec()),
+            ])
+        );
+        assert_eq!(
+            parse_search_filter("(! (x=y))").unwrap(),
+            Filter::Not(Box::new(Filter::Eq("x".into(), b"y".to_vec())))
+        );
+        assert_eq!(
+            parse_search_filter("( uid=alice)").unwrap(),
+            Filter::Eq("uid".into(), b"alice".to_vec())
+        );
 
         // Encoded equality AVA: [3] { OCTET STRING attr, OCTET STRING val }.
         let enc = encode_filter(&Filter::Eq("uid".into(), b"a".to_vec()));

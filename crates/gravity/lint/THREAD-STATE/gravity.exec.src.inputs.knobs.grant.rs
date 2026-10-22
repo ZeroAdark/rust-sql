@@ -1,0 +1,5 @@
+gravity/exec/src/inputs/knobs/grant.rs	KNOB_SNAPSHOT	memory	key:the GUC store mutation count	leader	admission knobs and grants: grant GUC snapshot, read again only when the thread's GUC store mutation count moves
+gravity/exec/src/inputs/knobs/grant.rs	SLOTS	memory	key:the GUC registry generation (OptionSlot)	leader	admission knobs and grants: the grant options' registry slots (D2896); each re-looked up when the GUC registry generation changes
+gravity/exec/src/inputs/knobs/grant.rs	RUNNING	memory	at:set_running	leader	admission knobs and grants: running pool leases on this thread (D622); set_running(false) at a lease's park or GrantLease drop brings it back to 0
+gravity/exec/src/inputs/knobs/grant.rs	HANDED	memory	scope:Restore	leader	admission knobs and grants: per reentry level, grants hand gives a nested statement's sites (D622); Restore puts the previous back on every exit
+gravity/exec/src/inputs/knobs/grant.rs	OVERDRAW_LOGGED	memory	exit	leader	admission knobs and grants: statement start timestamp of the last D622 overdraw LOG line; a log throttle, never reset

@@ -26,29 +26,38 @@ pub fn fc_md5_bytea(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
 // bytea shares text's varlena image; only the type OID differs.
 fn sha_common(
     fcinfo: &mut Fcinfo,
-    digest: fn(&[u8]) -> Vec<u8>,
+    d: &[u8],
 ) -> PgResult<Datum> {
-    // SAFETY: catalog arg 0 is a non-null bytea varlena; strict fn.
-    let input = unsafe { fcinfo.arg_varlena_packed(0)? };
-    let d = digest(input.data());
     let mcx = fcinfo.result_mcx();
-    Ok(varlena_result(varlena::cstring_to_text(mcx, &d)?))
+    Ok(varlena_result(varlena::cstring_to_text(mcx, d)?))
 }
 
 pub fn fc_sha224_bytea(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    sha_common(fcinfo, |d| pg_sha2::sha224(d).to_vec())
+    // SAFETY: catalog arg 0 is a non-null bytea varlena; strict fn.
+    let input = unsafe { fcinfo.arg_varlena_packed(0)? };
+    let d = pg_sha2::sha224(input.data());
+    sha_common(fcinfo, &d)
 }
 
 pub fn fc_sha256_bytea(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    sha_common(fcinfo, |d| pg_sha2::sha256(d).to_vec())
+    // SAFETY: catalog arg 0 is a non-null bytea varlena; strict fn.
+    let input = unsafe { fcinfo.arg_varlena_packed(0)? };
+    let d = pg_sha2::sha256(input.data());
+    sha_common(fcinfo, &d)
 }
 
 pub fn fc_sha384_bytea(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    sha_common(fcinfo, |d| pg_sha2::sha384(d).to_vec())
+    // SAFETY: catalog arg 0 is a non-null bytea varlena; strict fn.
+    let input = unsafe { fcinfo.arg_varlena_packed(0)? };
+    let d = pg_sha2::sha384(input.data());
+    sha_common(fcinfo, &d)
 }
 
 pub fn fc_sha512_bytea(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    sha_common(fcinfo, |d| pg_sha2::sha512(d).to_vec())
+    // SAFETY: catalog arg 0 is a non-null bytea varlena; strict fn.
+    let input = unsafe { fcinfo.arg_varlena_packed(0)? };
+    let d = pg_sha2::sha512(input.data());
+    sha_common(fcinfo, &d)
 }
 
 // pg_crc.c's SQL builtins ride here (the crc32c crate owns the kernels).

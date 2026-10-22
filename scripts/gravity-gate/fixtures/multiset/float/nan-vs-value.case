@@ -1,0 +1,10 @@
+# V4R-2 (user 2026-09-24): order-dependent float aggregates within 1e-12 relative (float8) / 4 ulps (float4)
+# NaN compares exactly
+sql: SELECT sum(x) FROM r;
+tol: 1:f8
+class: unordered
+verdict: mismatch
+[pg]
+NaN
+[got]
+-643677878.4940954

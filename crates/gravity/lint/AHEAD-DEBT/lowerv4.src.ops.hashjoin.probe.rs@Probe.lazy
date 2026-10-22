@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/hashjoin/probe.rs	Probe.lazy	licence	flag	lazy=false: the hash build runs in program order before the outer's first row (PG's outer-first never builds under an empty outer); Safe sides, B5's keyed-nest build, raising builds under run_ahead / ahead_unchecked [EFFECTS-ONLY; D824,D237,D276,D3717,D3227,D3014,D3296]

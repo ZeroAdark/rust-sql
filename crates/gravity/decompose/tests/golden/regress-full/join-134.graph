@@ -1,0 +1,22 @@
+-- regress-full-join-134
+-- explain (costs off) select f1, unique2, case when unique2 is null then f1 else 0 end from int4_tbl a left join tenk1 b on f1 = unique2 where (case when unique2 is null then f1 else 0 end) = 0;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=5 end=sink
+  nodes n1@0 n0@1
+  source range rel=16400 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  nest inner=n2 JOIN_LEFT raise-free params=($exec0=outer.1)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index-only rel=16423 rti=2 am=heap index=19340
+    key att=2 op=96 value=$exec0
+    recheck (op96(index.1, $exec0))
+    lanes Attr(2):byval8:w8:val
+  project (1=index.1)
+  filter op96(case(when isnull(inner.1) then outer.1) else c23:0, c23:0)
+  project (1=outer.1, 2=inner.1, 3=case(when isnull(inner.1) then outer.1) else c23:0)
+  outs 1=w8:val
+  outs 1=w8:val 2=w4:val 3=w4:val
+param $exec0 owner=n0 type=23 rep=w8:val
+mapped: SeqScan IndexOnlyScan NestLoop NestLoopParam

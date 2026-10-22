@@ -1,0 +1,9 @@
+-- regress-full-plpgsql-007
+-- SELECT recursion_test(4,3);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=io25($2))
+  outs 1=vl:call46
+mapped: Result

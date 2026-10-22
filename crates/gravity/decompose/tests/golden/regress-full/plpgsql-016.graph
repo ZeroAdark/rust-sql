@@ -1,0 +1,15 @@
+-- regress-full-plpgsql-016
+-- SELECT nonsimple_expr_test();
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0
+  source const
+  project (1=c23:null)
+  outs 1=w4:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec0)
+  outs 1=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: Result SubPlan

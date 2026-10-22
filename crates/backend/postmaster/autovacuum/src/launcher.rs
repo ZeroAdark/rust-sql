@@ -124,10 +124,7 @@ pub fn AutoVacLauncherMain(startup_data: &StartupData) -> ! {
         // unwind-ok: stmt-boundary
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(launcher_body))
             .unwrap_or_else(|payload| {
-                Err(Box::new(crate::worker::pg_error_from_panic(
-                    payload,
-                    "autovacuum launcher panicked",
-                )))
+                Err(Box::new(crate::worker::pg_error_from_panic(payload)))
             }) {
             Ok(never) => match never {},
             Err(err) => abort_cleanup(&err),

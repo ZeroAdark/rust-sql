@@ -1,0 +1,69 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1fin s2r s1c s2show
+step s2x: EXPLAIN (COSTS OFF) UPDATE river_job SET errors = array_append(errors, updated_job.error), finalized_at = updated_job.finalized_at, scheduled_at = updated_job.scheduled_at, state = updated_job.state FROM (SELECT unnest(ARRAY[3, 11, 19]::bigint[]) AS id, unnest(ARRAY[jsonb_build_object('at', '2026-02-01', 'error', 'stuck'), jsonb_build_object('at', '2026-02-02', 'error', 'stuck'), jsonb_build_object('at', '2026-02-03', 'error', 'stuck')]::jsonb[]) AS error, nullif(unnest(ARRAY['0001-01-01 00:00:00+00', '2026-02-01', '0001-01-01 00:00:00+00']::timestamptz[]), '0001-01-01 00:00:00+00') AS finalized_at, unnest(ARRAY['2026-03-01', '2026-03-02', '2026-03-03']::timestamptz[]) AS scheduled_at, unnest(ARRAY['retryable', 'discarded', 'retryable']::text[])::river_job_state AS state) AS updated_job WHERE river_job.id = updated_job.id;
+QUERY PLAN                                              
+--------------------------------------------------------
+Update on river_job                                     
+  ->  Nested Loop                                       
+        ->  Subquery Scan on updated_job                
+              ->  Result                                
+                    ->  ProjectSet                      
+                          ->  Result                    
+        ->  Index Scan using river_job_pkey on river_job
+              Index Cond: (id = updated_job.id)         
+(8 rows)
+
+step s1fin: UPDATE river_job SET state = 'completed', finalized_at = '2026-01-30' WHERE id = 11;
+step s2r: UPDATE river_job SET errors = array_append(errors, updated_job.error), finalized_at = updated_job.finalized_at, scheduled_at = updated_job.scheduled_at, state = updated_job.state FROM (SELECT unnest(ARRAY[3, 11, 19]::bigint[]) AS id, unnest(ARRAY[jsonb_build_object('at', '2026-02-01', 'error', 'stuck'), jsonb_build_object('at', '2026-02-02', 'error', 'stuck'), jsonb_build_object('at', '2026-02-03', 'error', 'stuck')]::jsonb[]) AS error, nullif(unnest(ARRAY['0001-01-01 00:00:00+00', '2026-02-01', '0001-01-01 00:00:00+00']::timestamptz[]), '0001-01-01 00:00:00+00') AS finalized_at, unnest(ARRAY['2026-03-01', '2026-03-02', '2026-03-03']::timestamptz[]) AS scheduled_at, unnest(ARRAY['retryable', 'discarded', 'retryable']::text[])::river_job_state AS state) AS updated_job WHERE river_job.id = updated_job.id; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2show: SELECT id, state, finalized_at, scheduled_at, errors FROM river_job WHERE id IN (3, 11, 19, 99999) ORDER BY id;
+id|state    |finalized_at                |scheduled_at                |errors                                            
+--+---------+----------------------------+----------------------------+--------------------------------------------------
+ 3|retryable|                            |Sun Mar 01 00:00:00 2026 PST|{"{\"at\": \"2026-02-01\", \"error\": \"stuck\"}"}
+11|discarded|Sun Feb 01 00:00:00 2026 PST|Mon Mar 02 00:00:00 2026 PST|{"{\"at\": \"2026-02-02\", \"error\": \"stuck\"}"}
+19|retryable|                            |Tue Mar 03 00:00:00 2026 PST|{"{\"at\": \"2026-02-03\", \"error\": \"stuck\"}"}
+(3 rows)
+
+
+starting permutation: s1err s2r s1c s2show
+step s1err: UPDATE river_job SET errors = array_append(errors, jsonb_build_object('error', 's1')) WHERE id = 11;
+step s2r: UPDATE river_job SET errors = array_append(errors, updated_job.error), finalized_at = updated_job.finalized_at, scheduled_at = updated_job.scheduled_at, state = updated_job.state FROM (SELECT unnest(ARRAY[3, 11, 19]::bigint[]) AS id, unnest(ARRAY[jsonb_build_object('at', '2026-02-01', 'error', 'stuck'), jsonb_build_object('at', '2026-02-02', 'error', 'stuck'), jsonb_build_object('at', '2026-02-03', 'error', 'stuck')]::jsonb[]) AS error, nullif(unnest(ARRAY['0001-01-01 00:00:00+00', '2026-02-01', '0001-01-01 00:00:00+00']::timestamptz[]), '0001-01-01 00:00:00+00') AS finalized_at, unnest(ARRAY['2026-03-01', '2026-03-02', '2026-03-03']::timestamptz[]) AS scheduled_at, unnest(ARRAY['retryable', 'discarded', 'retryable']::text[])::river_job_state AS state) AS updated_job WHERE river_job.id = updated_job.id; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2show: SELECT id, state, finalized_at, scheduled_at, errors FROM river_job WHERE id IN (3, 11, 19, 99999) ORDER BY id;
+id|state    |finalized_at                |scheduled_at                |errors                                                                  
+--+---------+----------------------------+----------------------------+------------------------------------------------------------------------
+ 3|retryable|                            |Sun Mar 01 00:00:00 2026 PST|{"{\"at\": \"2026-02-01\", \"error\": \"stuck\"}"}                      
+11|discarded|Sun Feb 01 00:00:00 2026 PST|Mon Mar 02 00:00:00 2026 PST|{"{\"error\": \"s1\"}","{\"at\": \"2026-02-02\", \"error\": \"stuck\"}"}
+19|retryable|                            |Tue Mar 03 00:00:00 2026 PST|{"{\"at\": \"2026-02-03\", \"error\": \"stuck\"}"}                      
+(3 rows)
+
+
+starting permutation: s1del s2r s1c s2show
+step s1del: DELETE FROM river_job WHERE id = 11;
+step s2r: UPDATE river_job SET errors = array_append(errors, updated_job.error), finalized_at = updated_job.finalized_at, scheduled_at = updated_job.scheduled_at, state = updated_job.state FROM (SELECT unnest(ARRAY[3, 11, 19]::bigint[]) AS id, unnest(ARRAY[jsonb_build_object('at', '2026-02-01', 'error', 'stuck'), jsonb_build_object('at', '2026-02-02', 'error', 'stuck'), jsonb_build_object('at', '2026-02-03', 'error', 'stuck')]::jsonb[]) AS error, nullif(unnest(ARRAY['0001-01-01 00:00:00+00', '2026-02-01', '0001-01-01 00:00:00+00']::timestamptz[]), '0001-01-01 00:00:00+00') AS finalized_at, unnest(ARRAY['2026-03-01', '2026-03-02', '2026-03-03']::timestamptz[]) AS scheduled_at, unnest(ARRAY['retryable', 'discarded', 'retryable']::text[])::river_job_state AS state) AS updated_job WHERE river_job.id = updated_job.id; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2show: SELECT id, state, finalized_at, scheduled_at, errors FROM river_job WHERE id IN (3, 11, 19, 99999) ORDER BY id;
+id|state    |finalized_at|scheduled_at                |errors                                            
+--+---------+------------+----------------------------+--------------------------------------------------
+ 3|retryable|            |Sun Mar 01 00:00:00 2026 PST|{"{\"at\": \"2026-02-01\", \"error\": \"stuck\"}"}
+19|retryable|            |Tue Mar 03 00:00:00 2026 PST|{"{\"at\": \"2026-02-03\", \"error\": \"stuck\"}"}
+(2 rows)
+
+
+starting permutation: s1move s2r s1c s2show
+step s1move: UPDATE river_job SET id = 99999 WHERE id = 11;
+step s2r: UPDATE river_job SET errors = array_append(errors, updated_job.error), finalized_at = updated_job.finalized_at, scheduled_at = updated_job.scheduled_at, state = updated_job.state FROM (SELECT unnest(ARRAY[3, 11, 19]::bigint[]) AS id, unnest(ARRAY[jsonb_build_object('at', '2026-02-01', 'error', 'stuck'), jsonb_build_object('at', '2026-02-02', 'error', 'stuck'), jsonb_build_object('at', '2026-02-03', 'error', 'stuck')]::jsonb[]) AS error, nullif(unnest(ARRAY['0001-01-01 00:00:00+00', '2026-02-01', '0001-01-01 00:00:00+00']::timestamptz[]), '0001-01-01 00:00:00+00') AS finalized_at, unnest(ARRAY['2026-03-01', '2026-03-02', '2026-03-03']::timestamptz[]) AS scheduled_at, unnest(ARRAY['retryable', 'discarded', 'retryable']::text[])::river_job_state AS state) AS updated_job WHERE river_job.id = updated_job.id; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2show: SELECT id, state, finalized_at, scheduled_at, errors FROM river_job WHERE id IN (3, 11, 19, 99999) ORDER BY id;
+   id|state    |finalized_at|scheduled_at                |errors                                            
+-----+---------+------------+----------------------------+--------------------------------------------------
+    3|retryable|            |Sun Mar 01 00:00:00 2026 PST|{"{\"at\": \"2026-02-01\", \"error\": \"stuck\"}"}
+   19|retryable|            |Tue Mar 03 00:00:00 2026 PST|{"{\"at\": \"2026-02-03\", \"error\": \"stuck\"}"}
+99999|running  |            |Thu Jan 01 11:00:00 2026 PST|                                                  
+(3 rows)
+

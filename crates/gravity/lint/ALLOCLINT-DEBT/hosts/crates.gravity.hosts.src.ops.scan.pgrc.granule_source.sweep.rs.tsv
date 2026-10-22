@@ -1,0 +1,5 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/granule_source/sweep.rs
+growth	std::collections::HashMap::insert	1
+growth	std::vec::Vec::push	1
+method	std::sync::Arc::new	1
+type	std::sync::Arc	2

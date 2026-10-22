@@ -1,0 +1,298 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1b s1p s2rc s2p s1c s2c rsel rcount
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1p: UPDATE pgrc_t SET v = v + 1 WHERE id = 1 RETURNING id, v;
+id|v
+--+-
+ 1|1
+(1 row)
+
+step s2rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2p: UPDATE pgrc_t SET v = v + 10 WHERE id = 1 RETURNING id, v; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+id| v
+--+--
+ 1|11
+(1 row)
+
+step s2c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id| v
+--+--
+ 1|11
+11| 0
+(2 rows)
+
+step rcount: SELECT count(*), sum(v) FROM pgrc_t;
+count|sum
+-----+---
+   20| 11
+(1 row)
+
+
+starting permutation: s1b s1s s2rc s2s s1c s2c rsel rcount
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1s: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s2rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2s: UPDATE pgrc_t SET v = v + 10 WHERE id = 11 RETURNING id, v; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id| v
+--+--
+11|11
+(1 row)
+
+step s2c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id| v
+--+--
+ 1| 0
+11|11
+(2 rows)
+
+step rcount: SELECT count(*), sum(v) FROM pgrc_t;
+count|sum
+-----+---
+   20| 11
+(1 row)
+
+
+starting permutation: s1b s1p s2rc s2p s1a s2c rsel rcount
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1p: UPDATE pgrc_t SET v = v + 1 WHERE id = 1 RETURNING id, v;
+id|v
+--+-
+ 1|1
+(1 row)
+
+step s2rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2p: UPDATE pgrc_t SET v = v + 10 WHERE id = 1 RETURNING id, v; <waiting ...>
+step s1a: ROLLBACK;
+step s2p: <... completed>
+id| v
+--+--
+ 1|10
+(1 row)
+
+step s2c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id| v
+--+--
+ 1|10
+11| 0
+(2 rows)
+
+step rcount: SELECT count(*), sum(v) FROM pgrc_t;
+count|sum
+-----+---
+   20| 10
+(1 row)
+
+
+starting permutation: s1b s1s s2rc s2s s1a s2c rsel rcount
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1s: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s2rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2s: UPDATE pgrc_t SET v = v + 10 WHERE id = 11 RETURNING id, v; <waiting ...>
+step s1a: ROLLBACK;
+step s2s: <... completed>
+id| v
+--+--
+11|10
+(1 row)
+
+step s2c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id| v
+--+--
+ 1| 0
+11|10
+(2 rows)
+
+step rcount: SELECT count(*), sum(v) FROM pgrc_t;
+count|sum
+-----+---
+   20| 10
+(1 row)
+
+
+starting permutation: s2rr s1b s1p s2p s1c s2c rsel rcount
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM pgrc_t;
+count
+-----
+   20
+(1 row)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1p: UPDATE pgrc_t SET v = v + 1 WHERE id = 1 RETURNING id, v;
+id|v
+--+-
+ 1|1
+(1 row)
+
+step s2p: UPDATE pgrc_t SET v = v + 10 WHERE id = 1 RETURNING id, v; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s2c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|1
+11|0
+(2 rows)
+
+step rcount: SELECT count(*), sum(v) FROM pgrc_t;
+count|sum
+-----+---
+   20|  1
+(1 row)
+
+
+starting permutation: s2rr s1b s1s s2s s1c s2c rsel rcount
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM pgrc_t;
+count
+-----
+   20
+(1 row)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1s: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s2s: UPDATE pgrc_t SET v = v + 10 WHERE id = 11 RETURNING id, v; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s2c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step rcount: SELECT count(*), sum(v) FROM pgrc_t;
+count|sum
+-----+---
+   20|  1
+(1 row)
+
+
+starting permutation: s2sz s1b s1p s2p s1c s2c rsel rcount
+step s2sz: BEGIN ISOLATION LEVEL SERIALIZABLE; SELECT count(*) FROM pgrc_t;
+count
+-----
+   20
+(1 row)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1p: UPDATE pgrc_t SET v = v + 1 WHERE id = 1 RETURNING id, v;
+id|v
+--+-
+ 1|1
+(1 row)
+
+step s2p: UPDATE pgrc_t SET v = v + 10 WHERE id = 1 RETURNING id, v; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s2c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|1
+11|0
+(2 rows)
+
+step rcount: SELECT count(*), sum(v) FROM pgrc_t;
+count|sum
+-----+---
+   20|  1
+(1 row)
+
+
+starting permutation: s2sz s1b s1s s2s s1c s2c rsel rcount
+step s2sz: BEGIN ISOLATION LEVEL SERIALIZABLE; SELECT count(*) FROM pgrc_t;
+count
+-----
+   20
+(1 row)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1s: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s2s: UPDATE pgrc_t SET v = v + 10 WHERE id = 11 RETURNING id, v; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s2c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step rcount: SELECT count(*), sum(v) FROM pgrc_t;
+count|sum
+-----+---
+   20|  1
+(1 row)
+
+
+starting permutation: s2rr s1b s1s s2s s1a s2c rsel rcount
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM pgrc_t;
+count
+-----
+   20
+(1 row)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1s: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s2s: UPDATE pgrc_t SET v = v + 10 WHERE id = 11 RETURNING id, v; <waiting ...>
+step s1a: ROLLBACK;
+step s2s: <... completed>
+id| v
+--+--
+11|10
+(1 row)
+
+step s2c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id| v
+--+--
+ 1| 0
+11|10
+(2 rows)
+
+step rcount: SELECT count(*), sum(v) FROM pgrc_t;
+count|sum
+-----+---
+   20| 10
+(1 row)
+

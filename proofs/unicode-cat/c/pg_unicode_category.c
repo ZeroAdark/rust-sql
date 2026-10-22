@@ -1,6 +1,6 @@
 /*
  * Vendored verbatim from PostgreSQL REL_18_3 src/common/unicode_category.c
- * (byte-identical to pgrust-reference/vendor/postgres-src @ 62d6c7d3df62
+ * (byte-identical to pgrust-fabled/vendor/postgres-src @ 62d6c7d3df62
  * "Stamp 18.3", copied 2026-07-28): range_search, unicode_category, the
  * pg_u_prop_* family and the pg_u_is* compatibility predicates that the
  * pgrust `unicode_category` crate ports. unicode_category_string/abbrev

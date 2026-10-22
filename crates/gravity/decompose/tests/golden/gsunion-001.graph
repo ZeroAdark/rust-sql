@@ -1,0 +1,11 @@
+-- gsunion-001
+-- INSERT INTO g SELECT i % 50, i % 3, i % 5, i, 's' || i, i / 7.0, i FROM generate_series(1, 2000) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:2000)]
+  project (1=op530(v3.1, c23:50), 2=op530(v3.1, c23:3), 3=op530(v3.1, c23:5), 4=v3.1, 5=op654(c25:'s', io25(v3.1)), 6=fn1703(op1761(fn1740(v3.1), c1700:'\x80\x80\x07\x00'), c23:786438), 7=fn316(v3.1))
+  write INSERT rel=16395 rti=1 natts=7 indexes=()
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=vl:call1258 6=vl:call1703 7=w8:val
+mapped: ModifyTable FunctionScan

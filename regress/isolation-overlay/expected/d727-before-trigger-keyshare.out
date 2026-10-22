@@ -1,0 +1,57 @@
+Parsed test spec with 3 sessions
+
+starting permutation: u_plain ks_plain c1 c2 read
+step u_plain: UPDATE d727_t SET v = v + 1 WHERE k = 1;
+step ks_plain: SELECT k, v FROM d727_t WHERE k = 1 FOR KEY SHARE NOWAIT;
+k|v
+-+-
+1|1
+(1 row)
+
+step c1: COMMIT;
+step c2: COMMIT;
+step read: SELECT 't' AS rel, * FROM d727_t UNION ALL SELECT 'p', * FROM d727_p ORDER BY 1, 2;
+rel|k|v
+---+-+-
+p  |1|1
+p  |2|2
+t  |1|2
+t  |2|2
+(4 rows)
+
+
+starting permutation: u_part ks_part c1 c2 read
+step u_part: UPDATE d727_p SET v = v + 1 WHERE k = 1;
+step ks_part: SELECT k, v FROM d727_p WHERE k = 1 FOR KEY SHARE NOWAIT;
+k|v
+-+-
+1|1
+(1 row)
+
+step c1: COMMIT;
+step c2: COMMIT;
+step read: SELECT 't' AS rel, * FROM d727_t UNION ALL SELECT 'p', * FROM d727_p ORDER BY 1, 2;
+rel|k|v
+---+-+-
+p  |1|2
+p  |2|2
+t  |1|1
+t  |2|2
+(4 rows)
+
+
+starting permutation: u_key ks_plain c1 c2 read
+step u_key: UPDATE d727_t SET k = 10 WHERE k = 1;
+step ks_plain: SELECT k, v FROM d727_t WHERE k = 1 FOR KEY SHARE NOWAIT;
+ERROR:  could not obtain lock on row in relation "d727_t"
+step c1: COMMIT;
+step c2: COMMIT;
+step read: SELECT 't' AS rel, * FROM d727_t UNION ALL SELECT 'p', * FROM d727_p ORDER BY 1, 2;
+rel| k|v
+---+--+-
+p  | 1|1
+p  | 2|2
+t  | 2|2
+t  |10|1
+(4 rows)
+

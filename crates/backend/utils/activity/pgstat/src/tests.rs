@@ -84,6 +84,30 @@ fn report_stat_with_nothing_pending_is_zero() {
 }
 
 #[test]
+fn extra_pending_counts_ride_the_flush() {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    static FLUSHES: AtomicUsize = AtomicUsize::new(0);
+    fn count() {
+        FLUSHES.fetch_add(1, Ordering::Relaxed);
+    }
+    let _lock = setup();
+    pending::pgstat_install_extra_flush(count);
+    pending::pgstat_install_extra_flush(count); // a second install is a no-op
+    assert_eq!(pending::pgstat_report_stat(true), 0);
+    assert_eq!(FLUSHES.load(Ordering::Relaxed), 0, "nothing noted: no flush");
+    pending::pgstat_note_extra_pending();
+    assert_eq!(pending::pgstat_report_stat(true), 0);
+    assert_eq!(FLUSHES.load(Ordering::Relaxed), 1);
+    pending::pgstat_note_extra_pending();
+    assert_eq!(pending::pgstat_report_stat(false), PGSTAT_IDLE_INTERVAL, "within the minimum interval: deferred");
+    assert_eq!(FLUSHES.load(Ordering::Relaxed), 1);
+    NOW.with(|c| c.set(c.get() + (PGSTAT_MIN_INTERVAL + 1) * 1000));
+    assert_eq!(pending::pgstat_report_stat(true), 0);
+    assert_eq!(FLUSHES.load(Ordering::Relaxed), 2);
+    assert_eq!(pending::pgstat_report_stat(false), 0, "flushed: nothing pending");
+}
+
+#[test]
 fn eoxact_commit_folds_trans_into_counts() {
     let _lock = setup();
     relation::pgstat_count_heap_insert(1001, false, 3);
@@ -347,7 +371,7 @@ fn tempfile_and_deadlock_reports_respect_track_counts() {
 fn transactional_drops_filter_by_outcome() {
     let _lock = setup();
     relation::pgstat_create_relation(2001, false);
-    relation::pgstat_drop_relation(2002, false);
+    relation::pgstat_drop_relation(2002, false, false);
 
     let ctx = MemoryContext::new("test");
     let commit_items = xact::pgstat_get_transactional_drops(ctx.mcx(), true).unwrap();
@@ -366,7 +390,7 @@ fn transactional_drops_filter_by_outcome() {
 fn subxact_commit_passes_drops_to_parent() {
     let _lock = setup();
     NEST_LEVEL.with(|c| c.set(2));
-    relation::pgstat_drop_relation(2003, false);
+    relation::pgstat_drop_relation(2003, false, false);
     xact::AtEOSubXact_PgStat(true, 2);
     NEST_LEVEL.with(|c| c.set(1));
 
@@ -381,9 +405,9 @@ fn subxact_commit_passes_drops_to_parent() {
 fn subxact_commit_preserves_drop_order() {
     let _lock = setup();
     NEST_LEVEL.with(|c| c.set(2));
-    relation::pgstat_drop_relation(2010, false);
-    relation::pgstat_drop_relation(2011, false);
-    relation::pgstat_drop_relation(2012, false);
+    relation::pgstat_drop_relation(2010, false, false);
+    relation::pgstat_drop_relation(2011, false, false);
+    relation::pgstat_drop_relation(2012, false, false);
     xact::AtEOSubXact_PgStat(true, 2);
     NEST_LEVEL.with(|c| c.set(1));
 
@@ -425,7 +449,7 @@ fn execute_transactional_drops_removes_pending() {
 fn drop_relation_zeroes_current_level_trans() {
     let _lock = setup();
     relation::pgstat_count_heap_insert(2006, false, 9);
-    relation::pgstat_drop_relation(2006, false);
+    relation::pgstat_drop_relation(2006, false, false);
     assert_eq!(
         relation::find_tabstat_entry(2006).unwrap().tuples_inserted,
         0
@@ -442,27 +466,6 @@ fn init_relation_gates_on_relkind_and_track_counts() {
     assert!(!relation::pgstat_init_relation(1, b'v'));
     crate::set_pgstat_track_counts(false);
     assert!(!relation::pgstat_init_relation(1, b'r'));
-}
-
-#[test]
-fn drop_relation_keeps_transaction_counters_when_tracking_is_disabled() {
-    let _lock = setup();
-    let relid = 2022;
-    relation::pgstat_count_heap_insert(relid, false, 3);
-    relation::pgstat_count_heap_update(relid, false, false, false);
-    relation::pgstat_count_heap_delete(relid, false);
-    crate::set_pgstat_track_counts(false);
-
-    relation::pgstat_drop_relation(relid, false);
-
-    let counts = relation::find_tabstat_entry(relid).unwrap();
-    assert_eq!(counts.tuples_inserted, 3);
-    assert_eq!(counts.tuples_updated, 1);
-    assert_eq!(counts.tuples_deleted, 1);
-    let ctx = MemoryContext::new("test");
-    let drops = xact::pgstat_get_transactional_drops(ctx.mcx(), true).unwrap();
-    assert!(drops.iter().any(|item| item.objid == u64::from(relid)));
-    xact::AtEOXact_PgStat(false, false);
 }
 
 #[test]
@@ -1466,4 +1469,114 @@ fn statsfile_missing_replslot_name_is_an_error_not_a_panic() {
     assert_eq!(err.message, "could not find name for replication slot index 4");
     assert!(!dir.join("pg_stat/pgstat.tmp").exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// pgstat_clear_snapshot resets force_stats_snapshot_clear (pgstat.c:929): an
+// explicit clear after a fetch-consistency change must not leave a stale
+// forced clear for the next cumulative-stats access to consume.
+#[test]
+fn clear_snapshot_resets_the_forced_clear_flag() {
+    let _lock = setup();
+    crate::set_pgstat_fetch_consistency(crate::PGSTAT_FETCH_CONSISTENCY_SNAPSHOT);
+    crate::set_pgstat_fetch_consistency(crate::PGSTAT_FETCH_CONSISTENCY_CACHE);
+    assert!(crate::shmem::forced_snapshot_clear_pending());
+    pending::pgstat_clear_snapshot();
+    assert!(!crate::shmem::forced_snapshot_clear_pending());
+}
+
+#[test]
+fn scan_count_links_are_immediate_and_refresh_after_removal() {
+    let _lock = setup();
+    let relid = 1043;
+    let mut first = relation::PgStatRelationCounts::new(relid, false);
+    let mut second = relation::PgStatRelationCounts::new(relid, false);
+    first.count(1, 1, 0);
+    second.count(1, 2, 1);
+    let c = relation::find_tabstat_entry(relid).unwrap();
+    assert_eq!((c.numscans, c.tuples_returned, c.tuples_fetched), (2, 3, 1));
+    relation::pgstat_count_heap_getnext(relid, false);
+    first.count(0, 1, 1);
+    let c = relation::find_tabstat_entry(relid).unwrap();
+    assert_eq!((c.numscans, c.tuples_returned, c.tuples_fetched), (2, 5, 2));
+    let key = relation::relation_key(relid, false);
+    pending::with_state(|st| st.delete_pending_entry(key));
+    first.count(1, 3, 2);
+    second.count(0, 1, 1);
+    let c = relation::find_tabstat_entry(relid).unwrap();
+    assert_eq!((c.numscans, c.tuples_returned, c.tuples_fetched), (1, 4, 3));
+}
+
+#[test]
+fn heap_scan_link_is_immediate_and_refreshes_after_removal() {
+    let _lock = setup();
+    let relid = 1044;
+    let link = Cell::new((0, core::ptr::null_mut()));
+    relation::count_scan_link(relid, false, &link, 1, 3, 0);
+    let c = relation::find_tabstat_entry(relid).unwrap();
+    assert_eq!((c.numscans, c.tuples_returned, c.tuples_fetched), (1, 3, 0));
+    relation::pgstat_count_heap_getnext(relid, false);
+    relation::count_scan_link(relid, false, &link, 0, 0, 2);
+    let c = relation::find_tabstat_entry(relid).unwrap();
+    assert_eq!((c.numscans, c.tuples_returned, c.tuples_fetched), (1, 4, 2));
+    let key = relation::relation_key(relid, false);
+    pending::with_state(|st| st.delete_pending_entry(key));
+    relation::count_scan_link(relid, false, &link, 1, 2, 1);
+    let c = relation::find_tabstat_entry(relid).unwrap();
+    assert_eq!((c.numscans, c.tuples_returned, c.tuples_fetched), (1, 2, 1));
+}
+
+// wio P345: shared and snapshot maps hold one SharedEntry per relation, so
+// the enum must be sized by the per-object kinds, not the per-backend IO
+// matrices.
+#[test]
+fn shared_entry_is_sized_by_per_object_kinds() {
+    use crate::shmem::SharedEntry;
+    let largest_per_object = size_of::<crate::shmem::PgStat_StatTabEntry>()
+        .max(size_of::<crate::database::PgStat_StatDBEntry>())
+        .max(size_of::<crate::function::PgStat_StatFuncEntry>())
+        .max(size_of::<crate::replslot::PgStat_StatReplSlotEntry>())
+        .max(size_of::<crate::subscription::PgStat_StatSubEntry>());
+    assert!(
+        size_of::<Option<SharedEntry>>() <= largest_per_object + 16,
+        "SharedEntry is {} bytes, per-object kinds need {largest_per_object}",
+        size_of::<Option<SharedEntry>>()
+    );
+}
+
+// audit fp-activity-pgstat_relation#1: pgstat_should_count_relation associates
+// an enabled relation on DROP, creating its shared entry; ROLLBACK keeps it.
+/// C PostgreSQL 18.6: BEGIN; INSERT 3; UPDATE 1; DELETE 1; SET track_counts = off; DROP TABLE keeps
+/// pg_stat_get_xact_tuples_{inserted,updated,deleted} at 3 / 1 / 1 (the drop zeroes them only while counting).
+#[test]
+fn drop_relation_keeps_transaction_counters_when_tracking_is_disabled() {
+    let _lock = setup();
+    let relid = 2022;
+    relation::pgstat_count_heap_insert(relid, false, 3);
+    relation::pgstat_count_heap_update(relid, false, false, false);
+    relation::pgstat_count_heap_delete(relid, false);
+    crate::set_pgstat_track_counts(false);
+
+    relation::pgstat_drop_relation(relid, false, false);
+    crate::set_pgstat_track_counts(true);
+
+    let counts = relation::find_tabstat_entry(relid).unwrap();
+    assert_eq!(counts.tuples_inserted, 3);
+    assert_eq!(counts.tuples_updated, 1);
+    assert_eq!(counts.tuples_deleted, 1);
+    let ctx = MemoryContext::new("test");
+    let drops = xact::pgstat_get_transactional_drops(ctx.mcx(), true).unwrap();
+    assert!(drops.iter().any(|item| item.objid == u64::from(relid)));
+    xact::AtEOXact_PgStat(false, false);
+}
+
+#[test]
+fn drop_relation_associates_enabled_relation() {
+    let _lock = setup();
+    let key = relation::relation_key(2020, false);
+    relation::pgstat_drop_relation(2021, false, false);
+    assert!(!crate::shmem::entry_exists(relation::relation_key(2021, false)));
+    relation::pgstat_drop_relation(2020, false, true);
+    assert!(crate::shmem::entry_exists(key));
+    xact::AtEOXact_PgStat(false, false);
+    assert!(crate::shmem::entry_exists(key));
 }

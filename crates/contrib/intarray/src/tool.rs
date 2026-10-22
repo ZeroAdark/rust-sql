@@ -35,9 +35,7 @@ impl IntArray {
         let words = hdr.saturating_add(num);
         let nbytes = words.saturating_mul(4);
         ::mcx::check_alloc_size(nbytes)?;
-        let mut w: Vec<i32> = Vec::new();
-        w.try_reserve_exact(words).map_err(|_| ::mcx::oom_named("intarray", nbytes))?;
-        w.resize(words, 0);
+        let mut w = ::mcx::std_vec_from_elem("intarray", 0i32, words)?;
         w[0] = varatt::set_varsize_4b_word(nbytes as u32) as i32;
         w[1] = 1;
         w[2] = 0;
@@ -57,9 +55,9 @@ impl IntArray {
 
     /// PG_GETARG_ARRAYTYPE_P(_COPY): owned copy of a detoasted 4B-header
     /// image, dims/null-bitmap preserved.
-    pub fn from_image(image: &[u8]) -> IntArray {
+    pub fn from_image(image: &[u8]) -> PgResult<IntArray> {
         debug_assert!(image.len() % 4 == 0 && image.len() >= 16);
-        let mut w = vec![0i32; image.len() / 4];
+        let mut w = ::mcx::std_vec_from_elem("intarray", 0i32, image.len() / 4)?;
         // SAFETY: plain byte copy into the i32 backing store.
         unsafe {
             core::ptr::copy_nonoverlapping(
@@ -68,7 +66,7 @@ impl IntArray {
                 image.len(),
             );
         }
-        IntArray { w }
+        Ok(IntArray { w })
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -97,20 +95,22 @@ impl IntArray {
         }
     }
 
-    /// ARRNELEMS: ArrayGetNItems over the dims.
-    pub fn nelems(&self) -> usize {
-        let mut n: i64 = 1;
+    pub fn nelems(&self) -> PgResult<usize> {
+        Ok(arrayutils::array_get_n_items(self.ndim() as i32, self.dims())? as usize)
+    }
+
+    pub fn is_empty(&self) -> PgResult<bool> {
+        Ok(self.nelems()? == 0)
+    }
+
+    // ARRPTR permits construction of intermediates larger than MaxArraySize.
+    fn physical_nelems(&self) -> usize {
         if self.ndim() == 0 {
             return 0;
         }
-        for &d in self.dims() {
-            n *= d as i64;
-        }
-        n.max(0) as usize
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.nelems() == 0
+        self.dims()
+            .iter()
+            .fold(1usize, |n, &d| n.saturating_mul(d as usize))
     }
 
     // Both accessors clamp to the physical image: a null-bearing array
@@ -118,34 +118,34 @@ impl IntArray {
     // check_valid() first (C reads out of bounds there).
     pub fn elems(&self) -> &[i32] {
         let off = self.data_off_words().min(self.w.len());
-        let end = (off + self.nelems()).min(self.w.len());
+        let end = (off + self.physical_nelems()).min(self.w.len());
         &self.w[off..end]
     }
 
     pub fn elems_mut(&mut self) -> &mut [i32] {
         let off = self.data_off_words().min(self.w.len());
-        let end = (off + self.nelems()).min(self.w.len());
+        let end = (off + self.physical_nelems()).min(self.w.len());
         &mut self.w[off..end]
     }
 
-    fn has_null(&self) -> bool {
+    fn has_null(&self) -> PgResult<bool> {
         if self.dataoffset() == 0 {
-            return false;
+            return Ok(false);
         }
         // Null bitmap starts right after the dims/lbound words.
         let bitmap = &self.as_bytes()[16 + 8 * self.ndim()..];
-        let nitems = self.nelems();
+        let nitems = self.nelems()?;
         for i in 0..nitems {
             if bitmap[i / 8] & (1 << (i % 8)) == 0 {
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     /// CHECKARRVALID.
     pub fn check_valid(&self) -> PgResult<()> {
-        if self.has_null() {
+        if self.has_null()? {
             return Err(PgError::error("array must not contain nulls")
                 .with_sqlstate(ERRCODE_NULL_VALUE_NOT_ALLOWED)
                 .into());
@@ -154,15 +154,16 @@ impl IntArray {
     }
 
     /// resize_intArrayType, including C's quirky multi-dim dims rewrite.
-    pub fn resize(&mut self, num: usize) -> &mut Self {
+    pub fn resize(&mut self, num: usize) -> PgResult<&mut Self> {
         if num == 0 {
             *self = IntArray::empty();
-            return self;
+            return Ok(self);
         }
-        if num != self.nelems() {
+        if num != self.nelems()? {
             let off = self.data_off_words();
-            self.w.resize(off + num, 0);
-            let nbytes = (off + num) * 4;
+            let nbytes = off.saturating_add(num).saturating_mul(4);
+            ::mcx::check_alloc_size(nbytes)?;
+            ::mcx::std_vec_resize("intarray", &mut self.w, off + num, 0)?;
             self.w[0] = varatt::set_varsize_4b_word(nbytes as u32) as i32;
             let mut n = num as i32;
             for i in 0..self.ndim() {
@@ -170,30 +171,32 @@ impl IntArray {
                 n = 1;
             }
         }
-        self
+        Ok(self)
     }
 
     /// copy_intArrayType: fresh 1-D array with the flat element data.
-    pub fn copy_flat(&self) -> IntArray {
-        let mut r = IntArray::new(self.nelems());
-        if !self.is_empty() {
+    pub fn copy_flat(&self) -> PgResult<IntArray> {
+        let mut r = IntArray::try_new(self.nelems()?)?;
+        if !self.is_empty()? {
             r.elems_mut().copy_from_slice(self.elems());
         }
-        r
+        Ok(r)
     }
 
-    pub fn sort(&mut self, ascending: bool) {
+    pub fn sort(&mut self, ascending: bool) -> PgResult<()> {
+        self.nelems()?;
         if ascending {
             self.elems_mut().sort_unstable();
         } else {
             self.elems_mut().sort_unstable_by(|a, b| b.cmp(a));
         }
+        Ok(())
     }
 
     /// _int_unique: in-place adjacent dedup of a sorted array + resize.
-    pub fn unique(&mut self) {
+    pub fn unique(&mut self) -> PgResult<()> {
+        let mut num = self.nelems()?;
         let e = self.elems_mut();
-        let mut num = e.len();
         if num > 1 {
             let mut w = 0usize;
             for r in 1..num {
@@ -204,13 +207,14 @@ impl IntArray {
             }
             num = w + 1;
         }
-        self.resize(num);
+        self.resize(num)?;
+        Ok(())
     }
 
     /// PREPAREARR.
-    pub fn prepare(&mut self) {
-        self.sort(true);
-        self.unique();
+    pub fn prepare(&mut self) -> PgResult<()> {
+        self.sort(true)?;
+        self.unique()
     }
 }
 
@@ -249,15 +253,15 @@ pub fn inner_int_overlap(a: &[i32], b: &[i32]) -> bool {
 pub fn inner_int_union(a: &IntArray, b: &IntArray) -> PgResult<IntArray> {
     a.check_valid()?;
     b.check_valid()?;
-    let mut r = if a.is_empty() && b.is_empty() {
+    let mut r = if a.is_empty()? && b.is_empty()? {
         IntArray::empty()
-    } else if a.is_empty() {
-        b.copy_flat()
-    } else if b.is_empty() {
-        a.copy_flat()
+    } else if a.is_empty()? {
+        b.copy_flat()?
+    } else if b.is_empty()? {
+        a.copy_flat()?
     } else {
         let (da, db) = (a.elems(), b.elems());
-        let mut r = IntArray::new(da.len() + db.len());
+        let mut r = IntArray::try_new(da.len() + db.len())?;
         let mut k = 0usize;
         {
             let dr = r.elems_mut();
@@ -287,21 +291,21 @@ pub fn inner_int_union(a: &IntArray, b: &IntArray) -> PgResult<IntArray> {
                 k += 1;
             }
         }
-        r.resize(k);
+        r.resize(k)?;
         r
     };
-    if r.nelems() > 1 {
-        r.unique();
+    if r.nelems()? > 1 {
+        r.unique()?;
     }
     Ok(r)
 }
 
-pub fn inner_int_inter(a: &IntArray, b: &IntArray) -> IntArray {
-    if a.is_empty() || b.is_empty() {
-        return IntArray::empty();
+pub fn inner_int_inter(a: &IntArray, b: &IntArray) -> PgResult<IntArray> {
+    if a.is_empty()? || b.is_empty()? {
+        return Ok(IntArray::empty());
     }
     let (da, db) = (a.elems(), b.elems());
-    let mut r = IntArray::new(da.len().min(db.len()));
+    let mut r = IntArray::try_new(da.len().min(db.len()))?;
     let mut k = 0usize;
     {
         let dr = r.elems_mut();
@@ -322,10 +326,10 @@ pub fn inner_int_inter(a: &IntArray, b: &IntArray) -> IntArray {
         }
     }
     if k == 0 {
-        IntArray::empty()
+        Ok(IntArray::empty())
     } else {
-        r.resize(k);
-        r
+        r.resize(k)?;
+        Ok(r)
     }
 }
 

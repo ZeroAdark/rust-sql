@@ -72,7 +72,10 @@ pub(crate) unsafe fn node_to_xmltype(cur: *mut xmlNode) -> PgResult<Vec<u8>> {
 fn float8out(v: f64) -> Vec<u8> {
     let mut buf = [0u8; adt_float::MAXDOUBLEWIDTH];
     let len = adt_float::float8out(v, &mut buf);
-    buf[..len].to_vec()
+    let mut out = Vec::new();
+    let _ = out.try_reserve_exact(len);
+    out.extend_from_slice(&buf[..len]);
+    out
 }
 
 /// C `xml_xpathobjtoxmlarray` (xml.c:4243): result count plus, when wanted,
@@ -102,7 +105,11 @@ unsafe fn xpathobj_to_xmlarray(
             XPATH_BOOLEAN => {
                 if let Some(out) = collect {
                     // map_sql_value_to_xml_value(BOOLOID).
-                    out.push(if hdr.boolval != 0 { b"true".to_vec() } else { b"false".to_vec() });
+                    out.push(if hdr.boolval != 0 {
+                        Vec::from(b"true".as_slice())
+                    } else {
+                        Vec::from(b"false".as_slice())
+                    });
                 }
                 Ok(1)
             }
@@ -139,7 +146,8 @@ fn namespace_registration_failed(name: &[u8], uri: &[u8]) -> PgError {
             "could not register XML namespace with name \"{name}\" and URI \"{uri}\""
         )),
         _ => {
-            let mut msg = b"could not register XML namespace with name \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"could not register XML namespace with name \"");
             msg.extend_from_slice(name);
             msg.extend_from_slice(b"\" and URI \"");
             msg.extend_from_slice(uri);
@@ -158,6 +166,7 @@ pub fn xpath_internal(
     namespaces: Option<&[u8]>,
     collect: Option<&mut Vec<Vec<u8>>>,
 ) -> PgResult<i32> {
+    crate::require_libxml()?;
     // Namespace NULLs are only rejected at registration time (xml.c:4438),
     // after the empty-expression check and the document parse.
     let mut ns_pairs: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = Vec::new();
@@ -200,7 +209,7 @@ pub fn xpath_internal(
     // assertions); ignore decl-parse failure, letting xmlCtxtReadMemory report.
     let mut xmldecl_len: usize = 0;
     if ::mbutils::GetDatabaseEncoding() == PG_UTF8 {
-        let mut work = data.to_vec();
+        let mut work = ::mcx::std_vec_from_slice("xml", &data)?;
         work.push(0);
         let _ = parse_xml_decl(&work, Some(&mut xmldecl_len), None, None, None);
     }
@@ -313,9 +322,13 @@ fn text_datum_payload(d: ::datum::Datum) -> Vec<u8> {
     unsafe {
         let total = ::types_tuple::varatt::varsize_any(p);
         let image = core::slice::from_raw_parts(p, total);
-        match image.first() {
-            Some(&h) if h & 0x01 == 0x01 => image[1..].to_vec(),
-            _ => image[::datum::VARHDRSZ..].to_vec(),
-        }
+        let slice = match image.first() {
+            Some(&h) if h & 0x01 == 0x01 => &image[1..],
+            _ => &image[::datum::VARHDRSZ..],
+        };
+        let mut out = Vec::new();
+        let _ = out.try_reserve_exact(slice.len());
+        out.extend_from_slice(slice);
+        out
     }
 }

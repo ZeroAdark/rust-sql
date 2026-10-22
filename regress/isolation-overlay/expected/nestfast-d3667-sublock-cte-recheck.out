@@ -1,0 +1,116 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) WITH x AS (INSERT INTO d67_log VALUES (8, 'x') RETURNING id) SELECT j.id FROM d67_j j WHERE j.id <= (SELECT min(id) FROM x) AND EXISTS (SELECT 1 FROM d67_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE);
+QUERY PLAN                                                       
+-----------------------------------------------------------------
+Index Only Scan using d67_j_pkey on d67_j j                      
+  Index Cond: (id <= (InitPlan 2).col1)                          
+  Filter: EXISTS(SubPlan 3)                                      
+  CTE x                                                          
+    ->  Insert on d67_log                                        
+          ->  Result                                             
+  InitPlan 2                                                     
+    ->  Aggregate                                                
+          ->  CTE Scan on x                                      
+  SubPlan 3                                                      
+    ->  LockRows                                                 
+          ->  Seq Scan on d67_j k                                
+                Filter: ((id = j.id) AND (state = 'ready'::text))
+(13 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1n s2l s1c s2s s2c
+step s1n: UPDATE d67_j SET note = note || '+' WHERE id = 4;
+step s2l: WITH x AS (INSERT INTO d67_log VALUES (8, 'x') RETURNING id) SELECT j.id FROM d67_j j WHERE j.id <= (SELECT min(id) FROM x) AND EXISTS (SELECT 1 FROM d67_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE) ORDER BY j.id; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id
+--
+ 1
+ 2
+ 3
+ 4
+ 6
+ 7
+ 8
+(7 rows)
+
+step s2s: SELECT id, note FROM d67_log ORDER BY id;
+id|note
+--+----
+ 8|x   
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1d s2l s1c s2s s2c
+step s1d: UPDATE d67_j SET state = 'done' WHERE id = 4;
+step s2l: WITH x AS (INSERT INTO d67_log VALUES (8, 'x') RETURNING id) SELECT j.id FROM d67_j j WHERE j.id <= (SELECT min(id) FROM x) AND EXISTS (SELECT 1 FROM d67_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE) ORDER BY j.id; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id
+--
+ 1
+ 2
+ 3
+ 6
+ 7
+ 8
+(6 rows)
+
+step s2s: SELECT id, note FROM d67_log ORDER BY id;
+id|note
+--+----
+ 8|x   
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1r s2l s1c s2s s2c
+step s1r: UPDATE d67_j SET state = 'ready' WHERE id = 5;
+step s2l: WITH x AS (INSERT INTO d67_log VALUES (8, 'x') RETURNING id) SELECT j.id FROM d67_j j WHERE j.id <= (SELECT min(id) FROM x) AND EXISTS (SELECT 1 FROM d67_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE) ORDER BY j.id;
+id
+--
+ 1
+ 2
+ 3
+ 4
+ 6
+ 7
+ 8
+(7 rows)
+
+step s1c: COMMIT;
+step s2s: SELECT id, note FROM d67_log ORDER BY id;
+id|note
+--+----
+ 8|x   
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1x s2l s1c s2s s2c
+step s1x: DELETE FROM d67_j WHERE id = 4;
+step s2l: WITH x AS (INSERT INTO d67_log VALUES (8, 'x') RETURNING id) SELECT j.id FROM d67_j j WHERE j.id <= (SELECT min(id) FROM x) AND EXISTS (SELECT 1 FROM d67_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE) ORDER BY j.id; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id
+--
+ 1
+ 2
+ 3
+ 6
+ 7
+ 8
+(6 rows)
+
+step s2s: SELECT id, note FROM d67_log ORDER BY id;
+id|note
+--+----
+ 8|x   
+(1 row)
+
+step s2c: COMMIT;

@@ -121,6 +121,9 @@ pub struct PgTz {
     pub state: TzState,
 }
 
+/// C's `pg_tz *`: a shared handle to a session-cache entry (pgtz.c).
+pub type PgTzRef = std::sync::Arc<PgTz>;
+
 impl PgTz {
     pub fn new(name: &[u8], state: TzState) -> Self {
         let mut tzname = [0u8; TZ_STRLEN_MAX + 1];

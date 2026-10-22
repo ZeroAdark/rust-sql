@@ -17,7 +17,7 @@ pub fn query_planner<'mcx>(
     qp_callback: fn(&mut PlannerRun<'mcx>) -> PgResult<()>,
 ) -> PgResult<RelId> {
     let parse = run.parse();
-    setup_simple_rel_arrays(&mut run.root, parse.rtable.len());
+    setup_simple_rel_arrays(&mut run.root, parse.rtable.len())?;
 
     let jointree = parse.jointree.expect("jointree is a FromExpr");
     assert!(!jointree.fromlist.is_nil());
@@ -63,6 +63,7 @@ pub fn query_planner<'mcx>(
     }
 
     crate::initsplan::remove_useless_groupby_columns(run)?;
+    crate::groupkey_trim::remove_dependent_groupby_items(run)?;
 
     crate::initsplan::build_base_rel_tlists(run)?;
 
@@ -98,6 +99,7 @@ pub fn query_planner<'mcx>(
 
     crate::inherit::distribute_row_identity_vars(run)?;
 
+    crate::gravity_width_cost::level_setup(run)?;
     let final_rel = crate::allpaths::make_one_rel(run, &joinlist)?;
     check_final_rel(&run.root, final_rel)?;
     Ok(final_rel)

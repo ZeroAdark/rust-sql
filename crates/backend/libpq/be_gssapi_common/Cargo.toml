@@ -1,0 +1,15 @@
+[package]
+name = "be_gssapi_common"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "be_gssapi_common"
+path = "src/lib.rs"
+
+[dependencies]
+elog = { path = "../../utils/error/elog" }
+pgsync = { path = "../../../_support/pgsync" }
+types_error = { path = "../../../_support/types/types_error" }
+libc = "0.2"

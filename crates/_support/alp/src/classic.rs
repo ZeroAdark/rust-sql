@@ -265,8 +265,8 @@ pub(crate) fn encode_vector(values: &[f64], exponent: u8, factor: u8) -> AlpVect
 /// exceptions unpatched, slots past the logical length decoding placeholder
 /// garbage the caller truncates. Full-width unconditional loop over local
 /// arrays — the autovectorizable shape (scvtf + two fmuls per lane on
-/// NEON); do not reintroduce per-value branches or Vec::push here (the
-/// ClickHouse lesson, see bitpack.rs).
+/// NEON); do not reintroduce per-value branches or Vec::push here (see
+/// bitpack.rs).
 pub(crate) fn decode_packed_into(
     packed: &[u64],
     bit_width: u32,

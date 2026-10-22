@@ -23,6 +23,7 @@ nodes_core = { path = "../../../nodes/nodes_core" }
 readfuncs = { path = "../../../nodes/readfuncs" }
 types_pathnodes = { path = "../../../../_support/types/pathnodes" }
 lsyscache = { path = "../../../utils/cache/lsyscache" }
+elog = { path = "../../../utils/error/elog" }
 arrayutils = { path = "../../../utils/adt/arrayutils" }
 syscache_seams = { path = "../../../utils/cache/syscache_seams" }
 fmgr_core = { path = "../../../utils/fmgr/fmgr_core" }

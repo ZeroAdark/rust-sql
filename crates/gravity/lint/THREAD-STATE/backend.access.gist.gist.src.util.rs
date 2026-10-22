@@ -1,0 +1,2 @@
+backend/access/gist/gist/src/util.rs	FAKE_LSN_TEMP_COUNTER	pgport	exit	leader	gist writes run on the leader; gistGetFakeLSN's backend-local counter for a temp relation's fake LSNs (C's static), monotonic for the session
+backend/access/gist/gist/src/util.rs	FAKE_LSN_LASTLSN	pgport	exit	leader	gist writes run on the leader; gistGetFakeLSN's last fake LSN for a permanent relation that skips WAL (C's static lastlsn): a second call at the same insert position assigns a new one

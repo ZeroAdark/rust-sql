@@ -1,0 +1,11 @@
+-- regress-full-stats_ext-081
+-- INSERT INTO mcv_lists (a, b, c, d) SELECT NULL, -- always NULL (CASE WHEN mod(i,2) = 0 THEN NULL ELSE 'x' END), (CASE WHEN mod(i,2) = 0 THEN NULL ELSE 0 END), (CASE WHEN mod(i,2) = 0 THEN NULL ELSE 'x' END) FROM generate_series(1,5000) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:5000)]
+  project (1=c25:null, 2=c1700:null, 3=c23:null, 4=relabel1043(case(when op96(fn941(v3.1, c23:2), c23:0) then c25:null) else c25:'x'), 5=c1082:null, 6=fn1740(case(when op96(fn941(v3.1, c23:2), c23:0) then c23:null) else c23:0), 7=fn669(relabel1043(case(when op96(fn941(v3.1, c23:2), c23:0) then c25:null) else c25:'x'), c23:68, c16:0), 8=c1007:null)
+  write INSERT rel=34262 rti=1 natts=8 indexes=()
+  outs 1=vl:stmt/imm 2=vl:stmt/imm 3=w4:val 4=vl:stmt/imm 5=w4:val 6=vl:call1740 7=vl:call669 8=vl:stmt/imm
+mapped: ModifyTable FunctionScan

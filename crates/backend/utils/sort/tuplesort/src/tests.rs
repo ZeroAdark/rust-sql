@@ -1944,7 +1944,7 @@ fn cstring_sort(work_mem: i32, sortopt: i32) -> Tuplesort {
         ssup_reverse: false,
         ssup_nulls_first: false,
         ssup_attno: 1,
-        comparator: SortComparator::Shim(crate::ssup::ShimCmp { fn_addr: fc_cstrcmp, fn_oid: 0 }),
+        comparator: SortComparator::Shim(crate::ssup::ShimCmp { fn_addr: fc_cstrcmp, fn_oid: 0, slot: 0 }),
     };
     Tuplesort::begin_common(
         work_mem,
@@ -2059,6 +2059,9 @@ mod spill {
             ipc_seams::before_shmem_exit::set(|_, _| Ok(()));
             ipc_seams::on_shmem_exit::set(|_cb, _arg| {});
             resowner::init_seams();
+            if !postgres_seams::check_for_interrupts::is_installed() {
+                postgres_seams::check_for_interrupts::set(|| Ok(()));
+            }
             guc_tables::vars::wal_sync_method.install(guc_tables::GucVarAccessors {
                 get: || WAL_SYNC_METHOD.load(Ordering::Relaxed),
                 set: |v| WAL_SYNC_METHOD.store(v, Ordering::Relaxed),
@@ -2396,14 +2399,14 @@ mod spill {
             let array = memtuples_space(INITIAL_MEMTUPSIZE);
             // 65536 / 65516 * 1024 = 1024.3: no growth, attempts shut off.
             st.avail_mem = 20;
-            assert!(!st.grow_memtuples());
+            assert!(!st.grow_memtuples().unwrap());
             assert_eq!(st.memtuples.capacity(), INITIAL_MEMTUPSIZE);
             assert!(!st.grow_memtuples);
             assert_eq!(st.avail_mem, 20);
             // 65536 / 65336 * 1024 = 1027.1: grows to 1027 slots, once.
             st.grow_memtuples = true;
             st.avail_mem = 200;
-            assert!(st.grow_memtuples());
+            assert!(st.grow_memtuples().unwrap());
             assert_eq!(st.memtuples.capacity(), 1027);
             assert!(!st.grow_memtuples);
             assert_eq!(st.avail_mem, 200 + array - memtuples_space(1027));
@@ -2437,6 +2440,158 @@ mod spill {
         }
         assert!(reused.getdatum(true).unwrap().is_none());
         assert!(fresh.getdatum(true).unwrap().is_none());
+    }
+
+    fn coordinated_index_sort(
+        desc: &Rc<TupleDescData<'static>>,
+        unique: bool,
+        work_mem: i32,
+        coordinate: &crate::SortCoordinate,
+    ) -> Tuplesort {
+        let mut ts = Tuplesort::begin_index_with_keys(
+            desc.clone(),
+            &[int32_key(1, false, false)],
+            1,
+            unique,
+            false,
+            "t_a_idx",
+            None,
+            work_mem,
+            TUPLESORT_NONE,
+        );
+        ts.0.with_mut(|st| st.set_coordinate(coordinate));
+        ts
+    }
+
+    // A parallel index sort: each worker sorts its share into one run in the
+    // shared fileset (one spilling into several runs first, one empty), and
+    // the leader's sort imports those runs and merges them.
+    #[test]
+    fn parallel_index_sort_leader_merges_worker_runs() {
+        setup();
+        let (_cwd, dir) = enter_datadir("parallelidx");
+        let mcx = leaked_mcx();
+        let desc = int4_desc(mcx, 1);
+        let shared = crate::tuplesort_initialize_shared(3).unwrap();
+        let worker = || crate::SortCoordinate {
+            is_worker: true,
+            n_participants: -1,
+            sharedsort: Arc::clone(&shared),
+        };
+        let mut seed = 7u64;
+        let mut oracle: Vec<(Option<i64>, (u32, u16))> = Vec::new();
+        for (w, nrows) in [(0u32, 20_000u32), (1, 0), (2, 700)] {
+            let mut ts = coordinated_index_sort(&desc, false, 64, &worker());
+            for i in 0..nrows {
+                let key = (lcg(&mut seed) % 5_000) as i32;
+                let t = tid(w * 1_000 + i / 200, (i % 200 + 1) as u16);
+                ts.putindextuplevalues(t, &[Datum::from_i32(key)], &[false]).unwrap();
+                oracle.push((Some(i64::from(key)), (w * 1_000 + i / 200, (i % 200 + 1) as u16)));
+            }
+            ts.performsort().unwrap();
+            ts.0.with_mut(|st| assert_eq!(st.status, TupSortStatus::SortedOnTape));
+            ts.end();
+        }
+        oracle.sort_by_key(|(k, t)| (k.unwrap(), *t));
+
+        let mut leader = coordinated_index_sort(
+            &desc,
+            false,
+            1024,
+            &crate::SortCoordinate {
+                is_worker: false,
+                n_participants: 3,
+                sharedsort: Arc::clone(&shared),
+            },
+        );
+        leader.performsort().unwrap();
+        leader.0.with_mut(|st| assert_eq!(st.status, TupSortStatus::FinalMerge));
+        let got: Vec<(Option<i64>, (u32, u16))> =
+            drain_index(&mut leader, &desc, 1).into_iter().map(|(k, t)| (k[0], t)).collect();
+        assert_eq!(got, oracle);
+        leader.end();
+        drop(shared);
+        assert_eq!(temp_files(&dir), 0, "fileset directory removed with the last participant");
+    }
+
+    // Duplicates that land in different workers meet only in the leader's
+    // merge, which must still raise the unique violation.
+    #[test]
+    fn parallel_index_sort_unique_violation_across_workers() {
+        setup();
+        let (_cwd, _dir) = enter_datadir("parallelidxuniq");
+        let mcx = leaked_mcx();
+        let desc = int4_desc(mcx, 1);
+        let shared = crate::tuplesort_initialize_shared(2).unwrap();
+        for w in 0..2u16 {
+            let mut ts = coordinated_index_sort(
+                &desc,
+                true,
+                1024,
+                &crate::SortCoordinate {
+                    is_worker: true,
+                    n_participants: -1,
+                    sharedsort: Arc::clone(&shared),
+                },
+            );
+            for i in 0..5u16 {
+                let key = if w == 1 && i == 4 { 2 } else { i32::from(w * 10 + i) };
+                ts.putindextuplevalues(tid(u32::from(w), i + 1), &[Datum::from_i32(key)], &[false])
+                    .unwrap();
+            }
+            ts.performsort().unwrap();
+            ts.end();
+        }
+        let mut leader = coordinated_index_sort(
+            &desc,
+            true,
+            1024,
+            &crate::SortCoordinate { is_worker: false, n_participants: 2, sharedsort: Arc::clone(&shared) },
+        );
+        let err = match leader.performsort() {
+            Err(e) => e,
+            Ok(()) => {
+                let mut err = None;
+                loop {
+                    match leader.getindextuple(true) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => break,
+                        Err(e) => {
+                            err = Some(e);
+                            break;
+                        }
+                    }
+                }
+                err.expect("duplicate across workers must be reported")
+            }
+        };
+        assert_eq!(err.sqlstate(), ERRCODE_UNIQUE_VIOLATION);
+    }
+
+    #[test]
+    fn leader_takeover_requires_every_worker() {
+        setup();
+        let (_cwd, _dir) = enter_datadir("paralleltakeover");
+        let mcx = leaked_mcx();
+        let desc = int4_desc(mcx, 1);
+        let shared = crate::tuplesort_initialize_shared(2).unwrap();
+        let mut ts = coordinated_index_sort(
+            &desc,
+            false,
+            1024,
+            &crate::SortCoordinate { is_worker: true, n_participants: -1, sharedsort: Arc::clone(&shared) },
+        );
+        ts.putindextuplevalues(tid(0, 1), &[Datum::from_i32(1)], &[false]).unwrap();
+        ts.performsort().unwrap();
+        ts.end();
+        let mut leader = coordinated_index_sort(
+            &desc,
+            false,
+            1024,
+            &crate::SortCoordinate { is_worker: false, n_participants: 2, sharedsort: Arc::clone(&shared) },
+        );
+        let err = leader.performsort().unwrap_err();
+        assert_eq!(err.message(), "cannot take over tapes before all workers finish");
     }
 
     // cstring (typlen -2) datum spill: writetup_datum sizes the image as
@@ -2554,7 +2709,7 @@ mod gist_point_zorder {
     }
 }
 
-pub(super) mod pgrcolumnar_ingest {
+pub(super) mod values_sort {
     use super::*;
     use ::types_tuple::TYPALIGN_INT;
 
@@ -2599,7 +2754,7 @@ pub(super) mod pgrcolumnar_ingest {
         Datum::from_usize(keep.last().unwrap().as_ptr() as usize)
     }
 
-    // putvalues/getvalues (the pgrcolumnar_ingest_sort seam machinery): rows come
+    // putvalues/getvalues (value-wise heap tuplesort): rows come
     // back key-sorted (text C-order primary, i64 tiebreak) and deform exactly.
     #[test]
     fn putvalues_getvalues_sorts_rows() {
@@ -2651,9 +2806,9 @@ pub(super) mod pgrcolumnar_ingest {
     }
 }
 
-mod pgrcolumnar_ingest_large {
+mod values_sort_large {
     use super::*;
-    use super::pgrcolumnar_ingest::*;
+    use super::values_sort::*;
 
     #[test]
     fn putvalues_getvalues_sorts_67k_rows() {
@@ -2712,7 +2867,7 @@ mod pgrcolumnar_ingest_large {
 // Regression fence for the containerized top-N OOM class (a bump tuple
 // context silently held every discarded input tuple to sort end).
 mod bounded_memory_discipline {
-    use super::pgrcolumnar_ingest::{i64_text_desc, text_datum};
+    use super::values_sort::{i64_text_desc, text_datum};
     use super::*;
 
     // Far above any credible per-bound footprint, far below the ~14MB the
@@ -3043,6 +3198,7 @@ mod sortsupport_guards {
             rd_amcache_hash: Default::default(),
             rd_amcache_gin: Default::default(),
             rd_amcache_spgist: Default::default(),
+            rd_amcache_bloom: Default::default(),
             rd_support: PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
@@ -3152,7 +3308,7 @@ fn bounded_cluster_frees_complete_blobs() {
     }
 }
 
-// ---- leading-key abbreviation on index sorts (regression) ----
+// ---- leading-key abbreviation on index sorts (fp-sort-tuplesortvariants#5) ----
 
 fn text_index_key() -> SortSupport {
     SortSupport {
@@ -3269,4 +3425,78 @@ fn index_sort_abbrev_unique_violation_uses_full_comparator() {
     ts.performsort().unwrap();
     assert_eq!(drain_index_texts(&mut ts, &desc), text_oracle(vals, false));
     ts.end();
+}
+
+#[test]
+fn locale_sort_buffers_admit_large_values_independently() {
+    for len in [536_870_912, mcx::MAX_ALLOC_SIZE - 1] {
+        assert_eq!(ssup::coll_buffer_size(len).unwrap(), len + 1);
+    }
+    let err = ssup::coll_buffer_size(mcx::MAX_ALLOC_SIZE).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+}
+
+#[test]
+fn locale_sort_terminated_buffers() {
+    let locale = ["en_US.UTF-8", "en_US.utf8"]
+        .iter()
+        .find_map(|n| pg_locale::libc_locale_for_tests(n).ok())
+        .expect("en_US libc locale required");
+    for (a, b) in [(b"a".as_slice(), b"b".as_slice()), (b"a", b"ab"), (b"A", b"a")] {
+        let raw = locale.pg_strncoll(a, b).unwrap();
+        let expected = if raw == 0 { a.cmp(b) as i32 } else { raw.signum() };
+        assert_eq!(ssup::varstrfastcmp_locale(a, b, &locale, false).signum(), expected);
+        assert_eq!(ssup::varstrfastcmp_locale(b, a, &locale, false).signum(), -expected);
+    }
+    assert_eq!(ssup::varstrfastcmp_locale(b"same", b"same", &locale, false), 0);
+    assert_eq!(ssup::varstrfastcmp_locale(b"a  ", b"a", &locale, true), 0);
+    assert!(ssup::varstrfastcmp_locale(b"b  ", b"a", &locale, true) > 0);
+}
+
+#[test]
+fn index_merge_compare_uses_full_comparator_after_abbrev_sort() {
+    let mcx = leaked_mcx();
+    let desc = text_desc(mcx);
+    let vals: Vec<Option<Vec<u8>>> =
+        [b"zzzzzzzzzzzz".as_slice(), b"aaaaaaaaaaaa"].iter().map(|s| Some(s.to_vec())).collect();
+    let mut ts = Tuplesort::begin_index_with_keys(
+        desc.clone(), &[text_index_key()], 1, true, false, "t_txt_key", None, 1024, TUPLESORT_NONE,
+    );
+    let _blobs = put_text_index_tuples(&mut ts, &vals);
+    ts.performsort().unwrap();
+    ts.0.with(|st| assert!(st.abbrev.is_some(), "abbreviation must still be armed"));
+    let mut images: Vec<Vec<u8>> = Vec::new();
+    while let Some(itup) = ts.getindextuple(true).unwrap() {
+        // SAFETY: live sorted image; IndexTupleSize is the low 13 bits of t_info.
+        let size = unsafe { (u16::from_ne_bytes([*itup.add(6), *itup.add(7)]) & 0x1FFF) as usize };
+        // SAFETY: the image spans `size` bytes.
+        images.push(unsafe { std::slice::from_raw_parts(itup, size) }.to_vec());
+    }
+    assert_eq!(images.len(), 2);
+    // "zzz" at the lower address, so a pointer-order compare gets it backwards.
+    let mut buf = vec![0u64; 64];
+    let base = buf.as_mut_ptr() as *mut u8;
+    // SAFETY: both images fit in the 512-byte buffer at 8-aligned offsets.
+    let (z, a) = unsafe {
+        std::ptr::copy_nonoverlapping(images[1].as_ptr(), base, images[1].len());
+        std::ptr::copy_nonoverlapping(images[0].as_ptr(), base.add(256), images[0].len());
+        (base as nbtree::itup::ITup, base.add(256) as nbtree::itup::ITup)
+    };
+    // SAFETY: images formed under this sort's descriptor.
+    unsafe {
+        assert!(ts.compare_index_tuples(z, a) > 0);
+        assert!(ts.compare_index_tuples(a, z) < 0);
+    }
+    ts.end();
+}
+
+/// C7 clause (d): release_without_end_trace's flag goes back on an unwind out of its teardown too, so a later sort's end
+/// keeps its trace_sort lines.
+#[test]
+fn release_without_end_trace_puts_the_flag_back_on_an_unwind() {
+    assert!(!abort_release());
+    assert!(release_without_end_trace(abort_release));
+    let unwound = std::panic::catch_unwind(|| release_without_end_trace(|| panic!("teardown unwinds")));
+    assert!(unwound.is_err());
+    assert!(!abort_release(), "the flag stayed set past the unwind");
 }

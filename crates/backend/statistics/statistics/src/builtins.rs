@@ -20,17 +20,17 @@ fn no_flinfo(name: &str) -> ! {
 // through the same FmgrInfo.
 struct OutBuf(Vec<u8>);
 
-fn cstring_result(flinfo: Option<&mut FmgrInfo>, name: &'static str, s: &str) -> Datum {
+fn cstring_result(flinfo: Option<&mut FmgrInfo>, name: &'static str, s: &str) -> PgResult<Datum> {
     let Some(flinfo) = flinfo else { no_flinfo(name) };
     if !flinfo.has_fn_extra() {
         flinfo.set_fn_extra(OutBuf(Vec::new()));
     }
     let buf = &mut flinfo.fn_extra_mut::<OutBuf>().unwrap().0;
     buf.clear();
-    buf.reserve(s.len() + 1);
+    ::mcx::std_vec_reserve("statistics", buf, s.len() + 1)?;
     buf.extend_from_slice(s.as_bytes());
     buf.push(0);
-    Datum::from_usize(buf.as_ptr() as usize)
+    Ok(Datum::from_usize(buf.as_ptr() as usize))
 }
 
 fn cannot_accept(typname: &str) -> Box<PgError> {
@@ -68,7 +68,7 @@ pub fn fc_pg_ndistinct_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -
         let _ = write!(s, "\": {}", item.ndistinct as i32);
     }
     s.push('}');
-    Ok(cstring_result(flinfo, "pg_ndistinct_out", &s))
+    cstring_result(flinfo, "pg_ndistinct_out", &s)
 }
 
 pub fn fc_pg_dependencies_in(
@@ -111,7 +111,7 @@ pub fn fc_pg_dependencies_out(
         let _ = write!(s, "\": {:.6}", dep.degree);
     }
     s.push('}');
-    Ok(cstring_result(flinfo, "pg_dependencies_out", &s))
+    cstring_result(flinfo, "pg_dependencies_out", &s)
 }
 
 pub fn fc_pg_mcv_list_in(_flinfo: Option<&mut FmgrInfo>, _fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -157,9 +157,9 @@ fn fc_pg_mcv_list_items(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
     let mut srf = funcapi::InitMaterializedSRF(mcx, flinfo, fcinfo, 0)?;
     for (idx, item) in mcvlist.items.iter().enumerate() {
         let ndim = mcvlist.ndimensions;
-        let mut val_elems = Vec::with_capacity(ndim);
-        let mut val_nulls = Vec::with_capacity(ndim);
-        let mut null_elems = Vec::with_capacity(ndim);
+        let mut val_elems = ::mcx::std_vec_with_capacity("statistics", ndim)?;
+        let mut val_nulls = ::mcx::std_vec_with_capacity("statistics", ndim)?;
+        let mut null_elems = ::mcx::std_vec_with_capacity("statistics", ndim)?;
         for i in 0..ndim {
             null_elems.push(Datum::from_bool(item.isnull[i]));
             if item.isnull[i] {

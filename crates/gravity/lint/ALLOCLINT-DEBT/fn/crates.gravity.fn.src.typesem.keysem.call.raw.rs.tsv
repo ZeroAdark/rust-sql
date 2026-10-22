@@ -1,0 +1,4 @@
+path	crates/gravity/fn/src/typesem/keysem/call/raw.rs
+ir-only	alloc::boxed::Box<T>::from_raw	1
+method	std::boxed::Box::new	1
+type	std::boxed::Box	2

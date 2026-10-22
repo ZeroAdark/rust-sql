@@ -272,6 +272,21 @@ pub fn index_form_tuple_uncompressed<'mcx>(
     form_tuple(mcx, tupdesc, values, isnull, false)
 }
 
+#[inline]
+fn validate_index_tuple_size(size: usize) -> PgResult<()> {
+    ::mcx::check_alloc_size(size)?;
+    if size & INDEX_SIZE_MASK as usize != size {
+        return Err(index_row_too_large(size));
+    }
+    Ok(())
+}
+
+// heaptoast.h:68: TOAST_INDEX_TARGET = MaxHeapTupleSize / 16 (510 bytes);
+// any wider extended/main varlena is compressed in-line. (The btree 1/3
+// page limit, MaximumBytesPerTuple(4) = 2040, is a different number and
+// is enforced by _bt_check_third_page.)
+const TOAST_INDEX_TARGET: usize = ::types_storage::bufpage::MaxHeapTupleSize / 16;
+
 fn form_tuple<'mcx>(
     mcx: Mcx<'mcx>,
     tupdesc: &TupleDescData<'_>,
@@ -291,11 +306,6 @@ fn form_tuple<'mcx>(
         [Datum::from_usize(0); INDEX_MAX_KEYS as usize];
     untoasted[..natts].copy_from_slice(&values[..natts]);
 
-    // heaptoast.h:68: TOAST_INDEX_TARGET = MaxHeapTupleSize / 16 (510 bytes);
-    // any wider extended/main varlena is compressed in-line. (The btree 1/3
-    // page limit, MaximumBytesPerTuple(4) = 2040, is a different number and
-    // is enforced by _bt_check_third_page.)
-    const TOAST_INDEX_TARGET: usize = ::types_storage::bufpage::MaxHeapTupleSize / 16;
 
     // C pfrees the detoasted/compressed temporaries after heap_fill_tuple
     // (indextuple.c:184); only the returned tuple lives in `mcx`.
@@ -340,28 +350,47 @@ fn form_tuple<'mcx>(
     }
     let values = &untoasted[..natts];
 
-    let hasnull = isnull[..natts].contains(&true);
-    let mut infomask: u16 = if hasnull { INDEX_NULL_MASK } else { 0 };
-    let hoff = index_info_find_data_offset(infomask);
+    let shape = image_shape(tupdesc, values, isnull)?;
+    let mut buf = ItupBuf::with_size(mcx, shape.size)?;
+    // SAFETY: buf holds shape.size zeroed bytes.
+    unsafe { fill_image(tupdesc, values, isnull, &shape, buf.as_mut_ptr()) };
+    Ok(buf)
+}
+
+/// The image's size and layout (index_form_tuple's sizing); errors as C's (index row size).
+struct ImageShape {
+    size: usize,
+    data_size: usize,
+    hoff: usize,
+    hasnull: bool,
+}
+
+#[inline]
+fn image_shape(tupdesc: &TupleDescData<'_>, values: &[Datum], isnull: &[bool]) -> PgResult<ImageShape> {
+    let hasnull = isnull[..values.len()].contains(&true);
+    let hoff = index_info_find_data_offset(if hasnull { INDEX_NULL_MASK } else { 0 });
     let data_size = ::heaptuple::heap_compute_data_size(tupdesc, values, isnull);
     let size = maxalign(hoff + data_size);
-    if size & INDEX_SIZE_MASK as usize != size {
-        return Err(index_row_too_large(size));
-    }
+    validate_index_tuple_size(size)?;
+    Ok(ImageShape { size, data_size, hoff, hasnull })
+}
 
-    let mut buf = ItupBuf::with_size(mcx, size)?;
-    let tp = buf.as_mut_ptr();
+/// # Safety
+/// `tp` points at `shape.size` writable zeroed bytes, 8-aligned.
+#[inline]
+unsafe fn fill_image(tupdesc: &TupleDescData<'_>, values: &[Datum], isnull: &[bool], shape: &ImageShape, tp: *mut u8) {
+    let mut infomask: u16 = if shape.hasnull { INDEX_NULL_MASK } else { 0 };
     let mut tupmask: u16 = 0;
-    // SAFETY: buf holds hoff + data_size zeroed bytes; bitmap area pre-zeroed.
+    // SAFETY: tp holds hoff + data_size zeroed bytes; bitmap area pre-zeroed (caller).
     unsafe {
         ::heaptuple::heap_fill_tuple(
             tupdesc,
             values,
             isnull,
-            tp.add(hoff),
-            data_size,
+            tp.add(shape.hoff),
+            shape.data_size,
             &mut tupmask,
-            if hasnull {
+            if shape.hasnull {
                 Some(tp.add(INDEX_TUPLE_HEADER_SIZE))
             } else {
                 None
@@ -370,10 +399,54 @@ fn form_tuple<'mcx>(
         if tupmask & ::types_tuple::HEAP_HASVARWIDTH != 0 {
             infomask |= INDEX_VAR_MASK;
         }
-        infomask |= size as u16;
+        infomask |= shape.size as u16;
         set_t_info(tp, infomask);
     }
-    Ok(buf)
+}
+
+/// D4560: words of the stack image `index_form_tuple_stack` forms into (512 bytes).
+pub(crate) const ITUP_STACK_WORDS: usize = 64;
+
+/// D4560: `index_form_tuple` into the caller's stack words when no attribute needs a detoast or the in-line
+/// compression and the image fits: the same size and fill, byte for byte, with no per-row allocation and free (an
+/// insertion's tuple lives only for its btinsert). `None` = take `index_form_tuple` (it raises the same errors).
+pub(crate) fn index_form_tuple_stack(
+    tupdesc: &TupleDescData<'_>,
+    values: &[Datum],
+    isnull: &[bool],
+    stack: &mut [core::mem::MaybeUninit<u64>; ITUP_STACK_WORDS],
+) -> PgResult<Option<ITup>> {
+    use ::types_tuple::varatt::{varatt_is_1b, varatt_is_1b_e, varsize_any};
+    let natts = tupdesc.natts as usize;
+    if natts > INDEX_MAX_KEYS as usize {
+        return Ok(None);
+    }
+    for i in 0..natts {
+        if isnull[i] || tupdesc.compact_attr(i).attlen != -1 {
+            continue;
+        }
+        let p = values[i].as_usize() as *const u8;
+        // SAFETY: non-null varlena datums carry live pointers (caller contract), as form_tuple's loop.
+        unsafe {
+            if varatt_is_1b_e(p)
+                || (!varatt_is_1b(p) && !varatt_is_compressed(p) && varsize_any(p) > TOAST_INDEX_TARGET)
+            {
+                return Ok(None);
+            }
+        }
+    }
+    let values = &values[..natts];
+    let shape = image_shape(tupdesc, values, isnull)?;
+    if shape.size > ITUP_STACK_WORDS * 8 {
+        return Ok(None);
+    }
+    for w in &mut stack[..shape.size / 8] {
+        w.write(0);
+    }
+    let tp: *mut u8 = stack.as_mut_ptr().cast();
+    // SAFETY: the first shape.size bytes of `stack` were zeroed just above; u64 words are 8-aligned.
+    unsafe { fill_image(tupdesc, values, isnull, &shape, tp) };
+    Ok(Some(tp as ITup))
 }
 
 /// CopyIndexTuple.
@@ -862,5 +935,35 @@ mod column_limit_tests {
             error.message(),
             format!("number of index columns ({natts}) exceeds limit ({INDEX_MAX_KEYS})")
         );
+    }
+}
+
+#[cfg(test)]
+mod tuple_size_tests {
+    use super::*;
+
+    #[test]
+    fn allocation_limit_precedes_index_size_limit() {
+        for size in [1_200_000_080, maxalign(::mcx::MAX_ALLOC_SIZE)] {
+            let error = validate_index_tuple_size(size).unwrap_err();
+            assert_eq!(error.sqlstate(), ::types_error::ERRCODE_INTERNAL_ERROR);
+            assert_eq!(
+                error.message(),
+                format!("invalid memory alloc request size {size}")
+            );
+        }
+    }
+
+    #[test]
+    fn index_size_limit_below_allocation_limit() {
+        assert!(validate_index_tuple_size(8184).is_ok());
+        for size in [8192, ::mcx::MAX_ALLOC_SIZE & !7] {
+            let error = validate_index_tuple_size(size).unwrap_err();
+            assert_eq!(error.sqlstate(), ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+            assert_eq!(
+                error.message(),
+                format!("index row requires {size} bytes, maximum size is 8191")
+            );
+        }
     }
 }

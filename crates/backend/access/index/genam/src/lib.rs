@@ -17,7 +17,7 @@ use types_error::{
     PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_TRANSACTION_STATE,
     ERRCODE_TRANSACTION_ROLLBACK, WARNING,
 };
-use types_rel::{AccessShareLock, NoLock, Relation, RelationData};
+use types_rel::{AccessShareLock, Relation, RelationData};
 use types_scan::scankey::ScanKeyData;
 use types_scan::sdir::{ForwardScanDirection, ScanDirection};
 use types_slot::SlotData;
@@ -40,31 +40,15 @@ fn build_index_value_description(
     BuildIndexValueDescription(cx.mcx(), index_relation, values, isnull)
 }
 
-// The per-scan context stands in for C's CurrentMemoryContext palloc of the
-// sysscan machinery; direct consumers use the Mcx-taking API instead.
-fn systable_scan_catalog(
-    relation: &RelationData<'_>,
-    index_oid: Oid,
-    index_ok: bool,
-    keys: &[ScanKeyData],
-    consume: &mut dyn FnMut(&HeapTupleData<'_>) -> PgResult<bool>,
-) -> PgResult<bool> {
-    let scan_cx = MemoryContext::new("systable_scan_catalog");
-    scan_catalog(scan_cx.mcx(), relation.rd_id, index_oid, index_ok, keys, consume)
-}
-
-fn scan_catalog<'mcx>(
+fn systable_scan_catalog<'mcx>(
     mcx: Mcx<'mcx>,
-    heap_relid: Oid,
+    heap_rel: &Relation<'mcx>,
     index_oid: Oid,
     index_ok: bool,
     keys: &[ScanKeyData],
     consume: &mut dyn FnMut(&HeapTupleData<'_>) -> PgResult<bool>,
 ) -> PgResult<bool> {
-    // The seam trimmed the caller's open handle to &RelationData; NoLock
-    // re-acquires it (the analog of C aliasing the passed pointer).
-    let heap_rel = relation_seams::relation_open::call(mcx, heap_relid, NoLock)?;
-    let mut scan = systable_beginscan(mcx, &heap_rel, index_oid, index_ok, None, keys)?;
+    let mut scan = systable_beginscan(mcx, heap_rel, index_oid, index_ok, None, keys)?;
     let ordered = matches!(scan.arm, SysScanArm::Index { .. });
     loop {
         let Some(ntp) = systable_getnext(mcx, &mut scan)? else {
@@ -75,7 +59,6 @@ fn scan_catalog<'mcx>(
         }
     }
     systable_endscan(mcx, scan)?;
-    heap_rel.close(NoLock)?;
     Ok(ordered)
 }
 
@@ -122,6 +105,22 @@ pub struct SysScanDescData<'mcx> {
 pub type SysScanDesc<'mcx> = SysScanDescData<'mcx>;
 
 pub fn systable_beginscan<'mcx>(
+    mcx: Mcx<'mcx>,
+    heapRelation: &Relation<'mcx>,
+    indexId: Oid,
+    indexOK: bool,
+    snapshot: Option<Rc<SnapshotData<'mcx>>>,
+    key: &[ScanKeyData],
+) -> PgResult<SysScanDescData<'mcx>> {
+    // C3: a recorded lowering's scan of a catalog reads it whole; the index the scan opens is the scan's own
+    if gravity_deps::armed() {
+        gravity_deps::note_catalog_scan(heapRelation.rd_id);
+        return gravity_deps::suppressed(|| begin(mcx, heapRelation, indexId, indexOK, snapshot, key));
+    }
+    begin(mcx, heapRelation, indexId, indexOK, snapshot, key)
+}
+
+fn begin<'mcx>(
     mcx: Mcx<'mcx>,
     heapRelation: &Relation<'mcx>,
     indexId: Oid,
@@ -270,6 +269,7 @@ pub fn systable_beginscan_ordered<'mcx>(
     snapshot: Option<Rc<SnapshotData<'mcx>>>,
     key: &[ScanKeyData],
 ) -> PgResult<SysScanDescData<'mcx>> {
+    gravity_deps::note_catalog_scan(heapRelation.rd_id);
     if reindex_is_processing_index(indexRelation.rd_id) {
         return Err(reindex_in_progress(indexRelation));
     }

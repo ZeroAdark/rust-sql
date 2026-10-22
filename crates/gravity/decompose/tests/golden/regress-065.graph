@@ -1,0 +1,13 @@
+-- regress-065
+-- DELETE FROM u WHERE x = 100000;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16406 rti=1 am=heap index=16412
+    key att=1 op=96 value=c23:100000
+    recheck (op96(v1.1, c23:100000))
+    lanes RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write DELETE rel=16406 rti=1 natts=3 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable IndexScan

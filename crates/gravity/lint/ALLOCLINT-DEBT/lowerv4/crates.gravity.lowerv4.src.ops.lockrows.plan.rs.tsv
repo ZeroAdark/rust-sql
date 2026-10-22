@@ -1,0 +1,12 @@
+path	crates/gravity/lowerv4/src/ops/lockrows/plan.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::resize	1
+macro	std::format	2
+macro	std::vec	1
+method	slice::join	1
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	5
+method	std::string::String::into_boxed_str	1
+type	std::boxed::Box	1
+type	std::string::String	1
+type	std::vec::Vec	1

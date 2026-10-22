@@ -21,65 +21,99 @@ pub enum Transport {
     SimNet,
 }
 
+const TEST_MODULES: bool = match option_env!("PGRUST_TEST_MODULES") {
+    Some(v) => v.len() == 1 && v.as_bytes()[0] == b'1',
+    None => false,
+};
+
 // One line per crate: the full seam-install closure for the postgres binary.
 pub fn init_all() {
     init_all_with_transport(Transport::Socket)
 }
 
-// ---------------------------------------------------------------------------
-// Serial-lease v2 boot posture (regression). The wait-report seam pair is
-// the single choke point every C-parity blocking site brackets its sleep
-// with; when the lease is armed (PGRUST_RUNTIME_SERIAL_LEASE=1) the seams
-// point at these wrappers — the stock reporter plus the lease's donation
-// hook — and ProcessInterrupts' admission tap is installed. Unarmed (the
-// default): waitevent::init_seams() verbatim, no tap — the stock hot path
-// is byte-identical (seams are set-once fn pointers; no extra branch
-// exists anywhere). This selector lives HERE, not in waitevent, because it
-// needs both the reporter impls and the lease engine (execmain), and boot
-// wiring is this crate's charter. Umbra-model deletability (the regression
-// letter): task-ified serial execution deletes this block and the seams
-// revert to waitevent::init_seams() unconditionally.
-// ---------------------------------------------------------------------------
+pub static EXTRA_BUILTINS: [&[types_fmgr::FmgrBuiltin]; 13] = [
+    adt_misc::builtins::MISC_BUILTINS,
+    catalog_namespace::builtins::NAMESPACE_BUILTINS,
+    format_type::builtins::FORMAT_TYPE_BUILTINS,
+    ruleutils::builtins::RULEUTILS_BUILTINS,
+    statistics::builtins::STATISTICS_BUILTINS,
+    stats_import::STATS_IMPORT_BUILTINS,
+    // pgrust-native (reserved-range oids 9001/9002/9005): the
+    // ephemeral-db janitor's pin/unpin/seal surface — TRUE builtins
+    // whose pg_proc rows janitor::bootstrap backfills into every
+    // database on first connection (no install script).
+    janitor::JANITOR_BUILTINS,
+    // pgrust-native (reserved-range oids 9060..=9064): the plan capture's
+    // columnar-facts publish/dump faces and the part layout faces
+    // (pgrc_am::planner_facts; their pg_proc rows are created on demand
+    // by CREATE FUNCTION ... LANGUAGE internal).
+    pgrc_am::planner_facts::PLANNER_FACTS_BUILTINS,
+    bufmgr::BUFPOOL_BUILTINS,
+    // pgrust-native (reserved-range oids 9070..=9081): the memory broker's, the memory ledger's, the ladder's and the memory
+    // settings' views (created on demand by scripts/memory-broker-views.sql).
+    gravity_exec::MEMBROKER_BUILTINS,
+    pgrc_front::builtins::FRONT_BUILTINS,
+    pgrc_am::inval::CACHE_BUILTINS,
+    pgrc_colcache::builtins::COLCACHE_BUILTINS,
+];
 
-fn slease_wait_start(wait_event_info: u32) {
-    waitevent::pgstat_report_wait_start(wait_event_info);
-    execmain::serial_lease_wait_hook_start();
-}
+// The builtin tables above fmgr_core in the crate graph: the late tables (consulted where the
+// static row would otherwise be the not-ported stub) and the overlay. One function, so a test
+// that needs the server's function set without its seams (gravity_fn's differential) installs
+// exactly what the server installs.
+pub fn register_builtin_tables() {
+    fmgr_core::register_late_builtins(adt_acl::builtins::ACL_BUILTINS);
+    fmgr_core::register_late_builtins(adt_tsvector_stat::TS_STAT_BUILTINS);
+    fmgr_core::register_late_builtins(slotfuncs::builtins::SLOTFUNCS_BUILTINS);
+    fmgr_core::register_late_builtins(waitevent::funcs::WAITEVENT_BUILTINS);
+    fmgr_core::register_late_builtins(logicalfuncs::LOGICALFUNCS_BUILTINS);
+    fmgr_core::register_late_builtins(rls::RLS_BUILTINS);
+    fmgr_core::register_late_builtins(rewrite_handler::REWRITE_BUILTINS);
+    fmgr_core::register_late_builtins(opclasscmds::builtins::OPCLASS_BUILTINS);
+    fmgr_core::register_late_builtins(adt_misc::MISC_BUILTINS);
+    fmgr_core::register_late_builtins(genfile::GENFILE_BUILTINS);
+    fmgr_core::register_late_builtins(pg_upgrade_support::PG_UPGRADE_SUPPORT_BUILTINS);
+    fmgr_core::register_late_builtins(guc_funcs::GUC_FUNCS_BUILTINS);
+    fmgr_core::register_late_builtins(prepare::PREPARE_BUILTINS);
+    fmgr_core::register_late_builtins(mbutils::builtins::MBUTILS_BUILTINS);
+    fmgr_core::register_late_builtins(dbcommands::builtins::DBCOMMANDS_BUILTINS);
+    fmgr_core::register_late_builtins(collationcmds::builtins::COLLATIONCMDS_BUILTINS);
+    fmgr_core::register_late_builtins(adt_rowtypes::ROWTYPES_BUILTINS);
+    fmgr_core::register_late_builtins(xmlmap::builtins::XMLMAP_BUILTINS);
+    fmgr_core::register_late_builtins(be_fsstubs::fmgr_builtins::FSSTUBS_BUILTINS);
+    fmgr_core::register_late_builtins(partbounds::PARTBOUNDS_BUILTINS);
+    fmgr_core::register_late_builtins(adt_tsquery_rewrite::TSQUERY_REWRITE_BUILTINS);
+    fmgr_core::register_late_builtins(adt_geo::builtins::GEO_BUILTINS);
+    fmgr_core::register_late_builtins(gistproc::GISTPROC_BUILTINS);
+    fmgr_core::register_late_builtins(commands_constraint::CONSTRAINT_BUILTINS);
+    fmgr_core::register_late_builtins(spgist_text::SPGIST_TEXT_BUILTINS);
+    fmgr_core::register_late_builtins(rangetypes_gist::RANGETYPES_GIST_BUILTINS);
+    fmgr_core::register_late_builtins(rangetypes_spgist::RANGETYPES_SPGIST_BUILTINS);
+    fmgr_core::register_late_builtins(network_gist::NETWORK_GIST_BUILTINS);
+    fmgr_core::register_late_builtins(adt_tsginidx::builtins::TSGINIDX_BUILTINS);
+    fmgr_core::register_late_builtins(adt_tsgistidx::TSGISTIDX_BUILTINS);
+    fmgr_core::register_late_builtins(network_spgist::NETWORK_SPGIST_BUILTINS);
+    fmgr_core::register_late_builtins(spgist_quadtree::SPGIST_QUAD_BUILTINS);
+    fmgr_core::register_late_builtins(spgist_kdtree::SPGIST_KD_BUILTINS);
+    fmgr_core::register_late_builtins(spgist_box::SPGIST_BOX_BUILTINS);
+    fmgr_core::register_late_builtins(brin_minmax_multi::MINMAX_MULTI_BUILTINS);
+    fmgr_core::register_late_builtins(brin_bloom::BLOOM_BUILTINS);
+    fmgr_core::register_late_builtins(brin_funcs::BRIN_FUNCS_BUILTINS);
+    fmgr_core::register_late_builtins(partitionfuncs::PARTITIONFUNCS_BUILTINS);
+    fmgr_core::register_late_builtins(orderedsetaggs::ORDEREDSETAGGS_BUILTINS);
+    fmgr_core::register_late_builtins(pg_controldata::PG_CONTROLDATA_BUILTINS);
+    fmgr_core::register_late_builtins(pg_config::PG_CONFIG_BUILTINS);
+    fmgr_core::register_late_builtins(shmem::SHMEM_BUILTINS);
+    fmgr_core::register_late_builtins(aio_funcs::AIO_FUNCS_BUILTINS);
+    fmgr_core::register_late_builtins(origin::ORIGIN_BUILTINS);
+    fmgr_core::register_late_builtins(logicalrelation::LOGICALRELATION_BUILTINS);
 
-fn slease_wait_end() {
-    // Reacquire first (a try — never blocks), then clear the reported wait:
-    // the donation overhead is attributed to the wait span it serves.
-    execmain::serial_lease_wait_hook_end();
-    waitevent::pgstat_report_wait_end();
-}
-
-fn init_waitevent_seams_with_lease_posture() {
-    if execmain::serial_lease_armed() {
-        if execmain::serial_lease_donation_enabled() {
-            waitevent_seams::pgstat_report_wait_start::set(slease_wait_start);
-            waitevent_seams::pgstat_report_wait_end::set(slease_wait_end);
-            waitevent_seams::pgstat_set_wait_event_storage::set(
-                waitevent::pgstat_set_wait_event_storage,
-            );
-            waitevent_seams::pgstat_reset_wait_event_storage::set(
-                waitevent::pgstat_reset_wait_event_storage,
-            );
-        } else {
-            // regression ladder arm (PGRUST_RUNTIME_SERIAL_LEASE_DONATION=0):
-            // armed WITHOUT donation — stock wait seams, admission tap only.
-            // Admitted runs hold their permit across blocking waits (the v1
-            // semantics, deliberately): attribution arm, never a shipping
-            // posture.
-            waitevent::init_seams();
-        }
-        postgres_seams::tap_serial_lease_admission::install(execmain::serial_lease_admission_tap);
-    } else {
-        waitevent::init_seams();
-    }
+    fmgr_core::install_extra_builtins(&EXTRA_BUILTINS);
 }
 
 pub fn init_all_with_transport(transport: Transport) {
     install_panic_hook();
+    parallel::standing::register_exit_payloads();
     detoast::init_seams();
     ruleutils::init_seams();
     heaptoast::init_seams();
@@ -103,6 +137,15 @@ pub fn init_all_with_transport(transport: Transport) {
     commit_ts::init_seams();
     multixact::init_seams();
     rmgr::init_seams();
+    pgrc_wal::init_seams();
+    pgrc_companion::init_seams();
+    pgrc_colcache::init_seams();
+    heapam_xlog::set_redo_block_hook(|l, block| pgrc_marks::written((l.spcOid, l.dbOid, l.relNumber), block));
+    tableam_seams::pgrc_relation_vacuum::set(pgrc_front::builtins::vacuum);
+    tableam_seams::pgrc_freeze::set(pgrc_front::builtins::freeze);
+    tableam_seams::pgrc_index_dead::set(pgrc_front::ixclean::vacuum_dead);
+    tableam_seams::pgrc_vacuum_full::set(pgrc_front::vacfull::step);
+    tableam_seams::pgrc_vacuum_flush::set(pgrc_front::builtins::vacuum_flush_step);
     subtrans::init_seams();
     transam_xlog::init_seams();
     transam::init_seams();
@@ -146,27 +189,11 @@ pub fn init_all_with_transport(transport: Transport) {
     dbcommands::init_seams();
     executils::init_seams();
     execexpr::init_seams();
-    execjunk::init_seams();
     execmain::init_seams();
+    gravity_exec::init_seams();
+    gravity_exec::admit::entry::init_seams();
     execscan::init_seams();
-    nodeseqscan::init_seams();
-    nodesamplescan::init_seams();
     tablesample::init_seams();
-    nodeindexscan::init_seams();
-    nodetidscan::init_seams();
-    nodetidrangescan::init_seams();
-    nodeindexonlyscan::init_seams();
-    nodeagg::init_seams();
-    nodewindowagg::init_seams();
-    nodesort::init_seams();
-    nodegroup::init_seams();
-    nodeunique::init_seams();
-    nodelimit::init_seams();
-    nodelockrows::init_seams();
-    nodenestloop::init_seams();
-    nodemergejoin::init_seams();
-    nodematerial::init_seams();
-    nodememoize::init_seams();
     tuplesort::init_seams();
     auth::init_seams();
     auth_oauth::init_seams();
@@ -252,6 +279,7 @@ pub fn init_all_with_transport(transport: Transport) {
     pg_stat_statements::init_seams();
     pg_buffercache::init_seams();
     auto_explain::init_seams();
+    pg_cron::init_seams();
     passwordcheck::init_seams();
     test_oat_hooks::init_seams();
     pgvector::init_seams();
@@ -267,13 +295,23 @@ pub fn init_all_with_transport(transport: Transport) {
     contrib_seg::init_seams();
     unaccent::init_seams();
     pg_walinspect::init_seams();
-    injection_points::init_seams();
-    test_custom_types::init_seams();
+    // C releases ship no src/test/modules libraries; test builds opt in.
+    if TEST_MODULES {
+        injection_points::init_seams();
+        test_custom_types::init_seams();
+    }
     sslinfo::init_seams();
     fuzzystrmatch::init_seams();
     tablefunc::init_seams();
     contrib_lo::init_seams();
     tcn::init_seams();
+    autoinc::init_seams();
+    insert_username::init_seams();
+    moddatetime::init_seams();
+    refint::init_seams();
+    dict_int::init_seams();
+    dict_xsyn::init_seams();
+    xml2::init_seams();
     pageinspect::init_seams();
     pgstattuple::init_seams();
     pg_freespacemap::init_seams();
@@ -342,7 +380,7 @@ pub fn init_all_with_transport(transport: Transport) {
     utility::init_seams();
     backend_status::init_seams();
     backend_progress::init_seams();
-    init_waitevent_seams_with_lease_posture();
+    waitevent::init_seams();
     mcxt_stats::init_seams();
     mcxt_stats::set_slot_census(slot_census_line);
     pgstat::init_seams();
@@ -374,61 +412,17 @@ pub fn init_all_with_transport(transport: Transport) {
     pg_subscription::init_seams();
     elog::init_seams();
     fmgr_core::init_seams();
-    fmgr_core::register_late_builtins(adt_acl::builtins::ACL_BUILTINS);
-    fmgr_core::register_late_builtins(adt_tsvector_stat::TS_STAT_BUILTINS);
-    fmgr_core::register_late_builtins(slotfuncs::builtins::SLOTFUNCS_BUILTINS);
+    register_builtin_tables();
     slotfuncs::init_seams();
     slotsync::init_seams();
-    fmgr_core::register_late_builtins(waitevent::funcs::WAITEVENT_BUILTINS);
-    fmgr_core::register_late_builtins(logicalfuncs::LOGICALFUNCS_BUILTINS);
-    fmgr_core::register_late_builtins(rls::RLS_BUILTINS);
-    fmgr_core::register_late_builtins(rewrite_handler::REWRITE_BUILTINS);
-    fmgr_core::register_late_builtins(opclasscmds::builtins::OPCLASS_BUILTINS);
     operatorcmds::init_seams();
     foreigncmds::init_seams();
-    fmgr_core::register_late_builtins(adt_misc::MISC_BUILTINS);
-    fmgr_core::register_late_builtins(genfile::GENFILE_BUILTINS);
-    fmgr_core::register_late_builtins(pg_upgrade_support::PG_UPGRADE_SUPPORT_BUILTINS);
-    fmgr_core::register_late_builtins(guc_funcs::GUC_FUNCS_BUILTINS);
-    fmgr_core::register_late_builtins(prepare::PREPARE_BUILTINS);
-    fmgr_core::register_late_builtins(mbutils::builtins::MBUTILS_BUILTINS);
-    fmgr_core::register_late_builtins(dbcommands::builtins::DBCOMMANDS_BUILTINS);
-    fmgr_core::register_late_builtins(collationcmds::builtins::COLLATIONCMDS_BUILTINS);
     multixactfuncs::register_builtins();
-    fmgr_core::register_late_builtins(adt_rowtypes::ROWTYPES_BUILTINS);
-    fmgr_core::register_late_builtins(xmlmap::builtins::XMLMAP_BUILTINS);
-    fmgr_core::register_late_builtins(be_fsstubs::fmgr_builtins::FSSTUBS_BUILTINS);
-    fmgr_core::register_late_builtins(partbounds::PARTBOUNDS_BUILTINS);
-    fmgr_core::register_late_builtins(adt_tsquery_rewrite::TSQUERY_REWRITE_BUILTINS);
     sql_functions::init_seams();
     pg_proc::init_seams();
     regress_lib::init_seams();
     plpgsql::init_seams();
     dict_snowball::init_seams();
-    fmgr_core::register_late_builtins(adt_geo::builtins::GEO_BUILTINS);
-    fmgr_core::register_late_builtins(gistproc::GISTPROC_BUILTINS);
-    fmgr_core::register_late_builtins(commands_constraint::CONSTRAINT_BUILTINS);
-    fmgr_core::register_late_builtins(spgist_text::SPGIST_TEXT_BUILTINS);
-    fmgr_core::register_late_builtins(rangetypes_gist::RANGETYPES_GIST_BUILTINS);
-    fmgr_core::register_late_builtins(rangetypes_spgist::RANGETYPES_SPGIST_BUILTINS);
-    fmgr_core::register_late_builtins(network_gist::NETWORK_GIST_BUILTINS);
-    fmgr_core::register_late_builtins(adt_tsginidx::builtins::TSGINIDX_BUILTINS);
-    fmgr_core::register_late_builtins(adt_tsgistidx::TSGISTIDX_BUILTINS);
-    fmgr_core::register_late_builtins(network_spgist::NETWORK_SPGIST_BUILTINS);
-    fmgr_core::register_late_builtins(spgist_quadtree::SPGIST_QUAD_BUILTINS);
-    fmgr_core::register_late_builtins(spgist_kdtree::SPGIST_KD_BUILTINS);
-    fmgr_core::register_late_builtins(spgist_box::SPGIST_BOX_BUILTINS);
-    fmgr_core::register_late_builtins(brin_minmax_multi::MINMAX_MULTI_BUILTINS);
-    fmgr_core::register_late_builtins(brin_bloom::BLOOM_BUILTINS);
-    fmgr_core::register_late_builtins(brin_funcs::BRIN_FUNCS_BUILTINS);
-    fmgr_core::register_late_builtins(partitionfuncs::PARTITIONFUNCS_BUILTINS);
-    fmgr_core::register_late_builtins(orderedsetaggs::ORDEREDSETAGGS_BUILTINS);
-    fmgr_core::register_late_builtins(pg_controldata::PG_CONTROLDATA_BUILTINS);
-    fmgr_core::register_late_builtins(pg_config::PG_CONFIG_BUILTINS);
-    fmgr_core::register_late_builtins(shmem::SHMEM_BUILTINS);
-    fmgr_core::register_late_builtins(aio_funcs::AIO_FUNCS_BUILTINS);
-    fmgr_core::register_late_builtins(origin::ORIGIN_BUILTINS);
-    fmgr_core::register_late_builtins(logicalrelation::LOGICALRELATION_BUILTINS);
     funcapi::init_seams();
     init_small::init_seams();
     miscinit::init_seams();
@@ -456,25 +450,6 @@ pub fn init_all_with_transport(transport: Transport) {
     adt_regexp::init_seams();
     ts_cache::init_hooks();
     seclabel::init();
-
-    static EXTRA_BUILTINS: [&[types_fmgr::FmgrBuiltin]; 8] = [
-        adt_misc::builtins::MISC_BUILTINS,
-        catalog_namespace::builtins::NAMESPACE_BUILTINS,
-        format_type::builtins::FORMAT_TYPE_BUILTINS,
-        ruleutils::builtins::RULEUTILS_BUILTINS,
-        statistics::builtins::STATISTICS_BUILTINS,
-        stats_import::STATS_IMPORT_BUILTINS,
-        // pgrust-native (reserved-range oids 9010/9011): the sqe census
-        // SRFs (execmain sqeshell/stat.rs; created on demand by
-        // scripts/sqe-stat-views.sql — no catalog delta by default).
-        execmain::SQE_BUILTINS,
-        // pgrust-native (reserved-range oids 9001/9002/9005): the
-        // ephemeral-db janitor's pin/unpin/seal surface — TRUE builtins
-        // whose pg_proc rows janitor::bootstrap backfills into every
-        // database on first connection (no install script).
-        janitor::JANITOR_BUILTINS,
-    ];
-    fmgr_core::install_extra_builtins(&EXTRA_BUILTINS);
 }
 
 // A PgError-payload panic is the ereport-through-infallible-C idiom (a sort
@@ -512,14 +487,12 @@ fn install_panic_hook() {
 // the pg_log_backend_memory_contexts interrupt dump (which executes on the
 // TARGET backend thread) report the calling backend's registries.
 fn slot_census_line() -> String {
-    let (qd_len, qd_cap, qd_free) = execmain::slot_census();
     let (sl_len, sl_cap, sl_free) = pquery::stmt_list::slot_census();
     let (qe_len, qe_cap, qe_free) = queryenvironment::hold::slot_census();
     let (ts_len, ts_cap, ts_free) = tuplestore::hold::slot_census();
     let (ro_len, ro_cap, ro_free) = resowner::arena_census();
     format!(
-        "slot census: querydesc len={qd_len} cap={qd_cap} free={qd_free}; \
-stmt_list len={sl_len} cap={sl_cap} free={sl_free}; \
+        "slot census: stmt_list len={sl_len} cap={sl_cap} free={sl_free}; \
 queryenv len={qe_len} cap={qe_cap} free={qe_free}; \
 tuplestore len={ts_len} cap={ts_cap} free={ts_free}; \
 resowner len={ro_len} cap={ro_cap} free={ro_free} arena_bytes={}",

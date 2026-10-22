@@ -634,9 +634,10 @@ fn decompile_conbin(mcx: Mcx<'_>, conbin: &str, relid: Oid) -> PgResult<String> 
     // scratch; the FmgrInfo must outlive the copy-out (oid_function_call*
     // drops it before returning).
     let mut flinfo = fmgr_core::fmgr_info(F_PG_GET_EXPR)?;
-    let d = fmgr_core::function_call2_coll(
+    let d = fmgr_core::function_call2_coll_in(
         &mut flinfo,
         InvalidOid,
+        mcx,
         Datum::from_usize(t.as_bytes().as_ptr() as usize),
         Datum::from_oid(relid),
     )?;
@@ -843,7 +844,7 @@ fn AttachPartitionEnsureIndexes<'mcx>(
     // Child indexes attached to a parent index within this command; stands in
     // for C's relispartition re-read of the in-place-rebuilt relcache entry.
     let mut attached: PgVec<'mcx, bool> = PgVec::new_in(mcx);
-    attached.resize(attachrel_idx_rels.len(), false);
+    ::mcx::pgvec_resize(&mut attached, attachrel_idx_rels.len(), false)?;
 
     // A foreign table can carry no constraint indexes: refuse if any parent
     // index is unique/primary, otherwise nothing to ensure (C's goto out).

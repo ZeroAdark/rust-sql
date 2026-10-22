@@ -1,0 +1,105 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s1c s2c
+step s3pu: SET enable_hashagg = on; EXPLAIN (COSTS OFF) UPDATE ht SET st = 'paid', v = ht.v + 1 WHERE ht.id IN (SELECT hs.bid FROM hs JOIN hc ON hc.id = hs.cid WHERE hs.flag = 'x' AND hc.acct = 0);
+QUERY PLAN                                          
+----------------------------------------------------
+Update on ht                                        
+  ->  Nested Loop                                   
+        ->  HashAggregate                           
+              Group Key: hs.bid                     
+              ->  Hash Join                         
+                    Hash Cond: (hs.cid = hc.id)     
+                    ->  Seq Scan on hs              
+                          Filter: (flag = 'x'::text)
+                    ->  Hash                        
+                          ->  Seq Scan on hc        
+                                Filter: (acct = 0)  
+        ->  Index Scan using ht_pkey on ht          
+              Index Cond: (id = hs.bid)             
+(13 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1f s1g s1d s1k s2u s1c s2c s3sel
+step s1x: UPDATE ht SET v = v + 10 WHERE id IN (100, 200, 300);
+step s1f: UPDATE hs SET flag = 'y' WHERE bid = 200;
+step s1g: UPDATE hc SET acct = 5 WHERE id IN (300, 2300);
+step s1d: DELETE FROM ht WHERE id = 400;
+step s1k: UPDATE ht SET id = id + 10000 WHERE id = 600;
+step s2u: UPDATE ht SET st = 'paid', v = ht.v + 1 WHERE ht.id IN (SELECT hs.bid FROM hs JOIN hc ON hc.id = hs.cid WHERE hs.flag = 'x' AND hc.acct = 0); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, st, v FROM ht WHERE id % 100 = 0 OR id > 10000 ORDER BY id;
+   id|st  | v
+-----+----+--
+  100|paid|11
+  200|paid|11
+  300|paid|11
+  500|paid| 1
+  700|paid| 1
+  800|paid| 1
+  900|paid| 1
+ 1000|paid| 1
+ 1100|paid| 1
+ 1200|paid| 1
+ 1300|paid| 1
+ 1400|paid| 1
+ 1500|paid| 1
+ 1600|paid| 1
+ 1700|paid| 1
+ 1800|paid| 1
+ 1900|paid| 1
+ 2000|paid| 1
+10600|new | 0
+(19 rows)
+
+
+starting permutation: s2u s1x s2c s1c s3sel
+step s2u: UPDATE ht SET st = 'paid', v = ht.v + 1 WHERE ht.id IN (SELECT hs.bid FROM hs JOIN hc ON hc.id = hs.cid WHERE hs.flag = 'x' AND hc.acct = 0);
+step s1x: UPDATE ht SET v = v + 10 WHERE id IN (100, 200, 300); <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, st, v FROM ht WHERE id % 100 = 0 OR id > 10000 ORDER BY id;
+  id|st  | v
+----+----+--
+ 100|paid|11
+ 200|paid|11
+ 300|paid|11
+ 400|paid| 1
+ 500|paid| 1
+ 600|paid| 1
+ 700|paid| 1
+ 800|paid| 1
+ 900|paid| 1
+1000|paid| 1
+1100|paid| 1
+1200|paid| 1
+1300|paid| 1
+1400|paid| 1
+1500|paid| 1
+1600|paid| 1
+1700|paid| 1
+1800|paid| 1
+1900|paid| 1
+2000|paid| 1
+(20 rows)
+
+
+starting permutation: s1x s1d s1k s2d s1c s2c s3sel
+step s1x: UPDATE ht SET v = v + 10 WHERE id IN (100, 200, 300);
+step s1d: DELETE FROM ht WHERE id = 400;
+step s1k: UPDATE ht SET id = id + 10000 WHERE id = 600;
+step s2d: DELETE FROM ht WHERE ht.id IN (SELECT hs.bid FROM hs JOIN hc ON hc.id = hs.cid WHERE hs.flag = 'x' AND hc.acct = 0); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, st, v FROM ht WHERE id % 100 = 0 OR id > 10000 ORDER BY id;
+   id|st |v
+-----+---+-
+10600|new|0
+(1 row)
+

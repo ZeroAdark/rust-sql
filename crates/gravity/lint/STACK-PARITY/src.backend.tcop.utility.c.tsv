@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/tcop/utility.c: 1 stack-depth check sites
+559	standard_ProcessUtility	crates/backend/tcop/utility/src/dispatch.rs	standard_ProcessUtility	yes	

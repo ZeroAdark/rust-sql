@@ -1,0 +1,5 @@
+path	crates/gravity/exec/src/ops/modifytable/beside.rs
+growth	std::vec::Vec::push	1
+ir-only	<alloc::rc::Rc<[T],A> as core::convert::From<alloc::vec::Vec<T,A>>>::from	1
+method	std::iter::Iterator::collect	4
+type	std::vec::Vec	4

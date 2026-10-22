@@ -19,16 +19,17 @@ struct Clump {
 }
 
 // Cheapest total cost of the join tree for this tour, or DBL_MAX if no legal
-// order exists. C's per-eval temp MemoryContext is the bounded divergence in
-// the mod header; the logical save/restore is reproduced: gimme_tree appends
-// to join_rel_list (truncated back) and join_rel_hash is nulled so a fresh
-// local hash is built and any outer one is left untouched.
+// order exists. gimme_tree appends to join_rel_list (truncated back) and
+// join_rel_hash is nulled so a fresh local hash is built and any outer one is
+// left untouched; everything the tour built is then released, as C deletes
+// its per-eval context.
 pub(super) fn geqo_eval<'mcx>(
     run: &mut PlannerRun<'mcx>,
     initial_rels: &[RelId],
     tour: &[Gene],
     num_gene: i32,
 ) -> PgResult<Cost> {
+    let mark = run.root.join_search_mark();
     let savelength = run.root.join_rel_list.len();
     let savehash = core::mem::take(&mut run.root.join_rel_hash);
     debug_assert!(run.root.join_rel_level.is_empty());
@@ -50,6 +51,7 @@ pub(super) fn geqo_eval<'mcx>(
 
     run.root.join_rel_list.truncate(savelength);
     run.root.join_rel_hash = savehash;
+    run.root.release_join_search(mark);
     Ok(fitness)
 }
 

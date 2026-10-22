@@ -13,7 +13,7 @@ pub fn system(command: &str) -> i32 {
 // kill(-pid) leg of signal_child reaches the command's descendants; the hooks
 // let the caller register the child for that signal fan-out.
 #[cfg(not(target_family = "wasm"))]
-fn spawn_sh(command: &str) -> Option<std::process::Child> {
+fn spawn_sh(command: &str, ignore_sigint: bool) -> Option<std::process::Child> {
     use std::os::unix::process::CommandExt;
     // system(3): the child inherits the caller's SIGPIPE disposition (every
     // backend ignores it); std resets it to SIG_DFL before exec.
@@ -23,11 +23,16 @@ fn spawn_sh(command: &str) -> Option<std::process::Child> {
         && parent.sa_sigaction == libc::SIG_IGN;
     let mut cmd = std::process::Command::new("/bin/sh");
     cmd.arg0("sh").arg("-c").arg(command).process_group(0);
-    if ignored {
+    if ignored || ignore_sigint {
         // SAFETY: signal(2) is async-signal-safe; runs between fork and exec.
         unsafe {
-            cmd.pre_exec(|| {
-                libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+            cmd.pre_exec(move || {
+                if ignored {
+                    libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+                }
+                if ignore_sigint {
+                    libc::signal(libc::SIGINT, libc::SIG_IGN);
+                }
                 Ok(())
             })
         };
@@ -37,8 +42,28 @@ fn spawn_sh(command: &str) -> Option<std::process::Child> {
 
 #[cfg(not(target_family = "wasm"))]
 pub fn system_tracked(command: &str, spawned: impl FnOnce(u32), reaped: impl FnOnce(u32)) -> i32 {
+    system_tracked_with(command, false, spawned, reaped)
+}
+
+// system(3) with SIGINT ignored in the child (pgarch.c:230).
+#[cfg(not(target_family = "wasm"))]
+pub fn system_tracked_sigint_ignored(
+    command: &str,
+    spawned: impl FnOnce(u32),
+    reaped: impl FnOnce(u32),
+) -> i32 {
+    system_tracked_with(command, true, spawned, reaped)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn system_tracked_with(
+    command: &str,
+    ignore_sigint: bool,
+    spawned: impl FnOnce(u32),
+    reaped: impl FnOnce(u32),
+) -> i32 {
     use std::os::unix::process::ExitStatusExt;
-    let Some(mut child) = spawn_sh(command) else { return -1 };
+    let Some(mut child) = spawn_sh(command, ignore_sigint) else { return -1 };
     let pid = child.id();
     spawned(pid);
     let rc = match child.wait() {
@@ -70,7 +95,7 @@ pub fn system_tracked_ticking(
             }
         }
     }
-    let Some(mut child) = spawn_sh(command) else { return -1 };
+    let Some(mut child) = spawn_sh(command, false) else { return -1 };
     let pid = child.id();
     spawned(pid);
     let _reap = Reap(pid, Some(reaped));
@@ -85,6 +110,15 @@ pub fn system_tracked_ticking(
 
 #[cfg(target_family = "wasm")]
 pub fn system_tracked(_command: &str, _spawned: impl FnOnce(u32), _reaped: impl FnOnce(u32)) -> i32 {
+    -1
+}
+
+#[cfg(target_family = "wasm")]
+pub fn system_tracked_sigint_ignored(
+    _command: &str,
+    _spawned: impl FnOnce(u32),
+    _reaped: impl FnOnce(u32),
+) -> i32 {
     -1
 }
 
@@ -243,6 +277,16 @@ mod tests {
 
     fn exited(code: i32) -> i32 {
         code << 8
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn sigint_ignored_variant_keeps_the_child_alive() {
+        let rc = super::system_tracked_sigint_ignored("kill -INT $$; exit 7", |_| {}, |_| {});
+        assert!(super::WIFEXITED(rc), "status {rc:#x}");
+        assert_eq!(super::WEXITSTATUS(rc), 7);
+        let rc = super::system_tracked("kill -INT $$; exit 7", |_| {}, |_| {});
+        assert!(!super::WIFEXITED(rc), "status {rc:#x}");
     }
 
     // system(3) execs the shell as "sh" (argv[0]), which is what $0 shows

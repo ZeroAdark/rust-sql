@@ -1,6 +1,6 @@
 use ::mcx::{Mcx, MemoryContext, PgVec};
 
-use crate::{parse_rule_line, unaccent_lexize, UnaccentTrie};
+use crate::{parse_rule_line, unaccent_lexize, ParseRuleError, UnaccentTrie};
 
 fn leaked_mcx() -> Mcx<'static> {
     Box::leak(Box::new(MemoryContext::new("unaccent-test"))).mcx()
@@ -38,8 +38,8 @@ fn parse_line_forms() {
     let (_, trg) = parse_rule_line(b"y \"a\"\"b\"\n").unwrap().unwrap();
     assert_eq!(trg, b"a\"b");
     assert!(parse_rule_line(b"   \n").unwrap().is_none());
-    assert_eq!(parse_rule_line(b"a b c\n").unwrap_err(), -1);
-    assert_eq!(parse_rule_line(b"a \"bc\n").unwrap_err(), -2);
+    assert!(matches!(parse_rule_line(b"a b c\n").unwrap_err(), ParseRuleError::Syntax(-1)));
+    assert!(matches!(parse_rule_line(b"a \"bc\n").unwrap_err(), ParseRuleError::Syntax(-2)));
 }
 
 #[test]

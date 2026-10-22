@@ -14,13 +14,38 @@ pub const T_AGG_STATE: u32 = 429;
 /// `cur_agg` is C's curperagg/curpertrans pair erased to (Aggref ptr,
 /// aggshared); typed access lives in nodeagg (AggGetAggref/AggStateIsShared).
 /// `callbacks` is C's curaggcontext ExprContext_CB chain (AggRegisterCallback),
-/// fired LIFO at group reset and at node teardown.
+/// fired LIFO at group reset and at node teardown. `sets` are C's
+/// aggcontexts[] of sorted grouping sets; `cur_set` is select_current_set's
+/// choice (NO_SET = the base context: hashed sets and single-set nodes).
 #[repr(C)]
 pub struct AggStateNode {
     node: FmNode,
     aggcontext: MemoryContext,
     cur_agg: Cell<Option<(NonNull<()>, bool)>>,
-    callbacks: UnsafeCell<::alloc::vec::Vec<(unsafe fn(*mut ()), *mut ())>>,
+    // The owner keeps a transition function's read-write expanded result made in the aggcontext as the new
+    // transition value (C ExecAggCopyTransValue's "do nothing" arm), so array_append may grow the state in place.
+    // Set by nodeagg; other owners (WindowAgg, Gravity hosts) copy every new by-ref value and leave it false.
+    expanded_trans: Cell<bool>,
+    callbacks: UnsafeCell<Callbacks>,
+    sets: UnsafeCell<::alloc::vec::Vec<SetContext>>,
+    cur_set: Cell<u32>,
+}
+
+type Callbacks = ::alloc::vec::Vec<(unsafe fn(*mut ()), *mut ())>;
+
+struct SetContext {
+    ctx: MemoryContext,
+    callbacks: Callbacks,
+}
+
+const NO_SET: u32 = u32::MAX;
+
+fn run_callbacks(cbs: &mut Callbacks) {
+    let cbs = core::mem::take(cbs);
+    for (func, arg) in cbs.into_iter().rev() {
+        // SAFETY: registration contract (register_shutdown_callback).
+        unsafe { func(arg) };
+    }
 }
 
 impl AggStateNode {
@@ -29,8 +54,55 @@ impl AggStateNode {
             node: FmNode { tag: T_AGG_STATE },
             aggcontext,
             cur_agg: Cell::new(None),
+            expanded_trans: Cell::new(false),
             callbacks: UnsafeCell::new(::alloc::vec::Vec::new()),
+            sets: UnsafeCell::new(::alloc::vec::Vec::new()),
+            cur_set: Cell::new(NO_SET),
         }
+    }
+
+    /// One aggcontext per sorted grouping set (ExecInitAgg's aggcontexts[]), made once at init. The contexts sit inline
+    /// in the vector, so a later growth would move every one of them out from under the handles a transition function
+    /// keeps (`agg_context`, `aggcontext_ctx`): only an empty node, before any set is selected, takes them, and the
+    /// exact reservation keeps this one fill from moving the ones it already pushed.
+    pub fn add_set_contexts(&mut self, n: usize, mut make: impl FnMut() -> MemoryContext) {
+        let sets = self.sets.get_mut();
+        debug_assert!(sets.is_empty(), "add_set_contexts runs once, at init: a second fill would move the set contexts");
+        debug_assert_eq!(self.cur_set.get(), NO_SET, "add_set_contexts runs before any set is selected");
+        sets.reserve_exact(n);
+        for _ in 0..n {
+            sets.push(SetContext { ctx: make(), callbacks: ::alloc::vec::Vec::new() });
+        }
+    }
+
+    pub fn num_set_contexts(&self) -> usize {
+        // SAFETY: single-threaded backend; the vector is only resized by
+        // add_set_contexts, which holds &mut self.
+        unsafe { (&*self.sets.get()).len() }
+    }
+
+    /// C select_current_set for a sorted set; `None` selects the base context.
+    pub fn select_set(&self, setno: Option<usize>) {
+        let v = match setno {
+            Some(n) if n < self.num_set_contexts() => n as u32,
+            _ => NO_SET,
+        };
+        self.cur_set.set(v);
+    }
+
+    /// C ReScanExprContext(aggcontexts[setno]): shutdown callbacks, then reset.
+    pub fn reset_set(&self, setno: usize) {
+        // SAFETY: single-threaded backend; callbacks may re-enter
+        // register_shutdown_callback, which pushes onto a fresh vector.
+        let sets = unsafe { &mut *self.sets.get() };
+        if setno >= sets.len() {
+            return;
+        }
+        let mut cbs = core::mem::take(&mut sets[setno].callbacks);
+        run_callbacks(&mut cbs);
+        // SAFETY: as above; no Mcx borrow of this context outlives a group.
+        let sets = unsafe { &mut *self.sets.get() };
+        sets[setno].ctx.reset();
     }
 
     // Shared provenance survives writes through the node's interior-mutable slots.
@@ -39,7 +111,30 @@ impl AggStateNode {
     }
 
     pub fn aggcontext(&self) -> Mcx<'_> {
+        let cur = self.cur_set.get();
+        if cur != NO_SET {
+            // SAFETY: single-threaded backend; cur_set < len (select_set).
+            return unsafe { (&*self.sets.get())[cur as usize].ctx.mcx() };
+        }
         self.aggcontext.mcx()
+    }
+
+    /// The aggcontext itself (C `aggcontext` as a MemoryContext: a parent for expanded objects).
+    pub fn aggcontext_ctx(&self) -> &MemoryContext {
+        let cur = self.cur_set.get();
+        if cur != NO_SET {
+            // SAFETY: single-threaded backend; cur_set < len (select_set).
+            return unsafe { &(&*self.sets.get())[cur as usize].ctx };
+        }
+        &self.aggcontext
+    }
+
+    pub fn set_expanded_trans(&self, on: bool) {
+        self.expanded_trans.set(on);
+    }
+
+    pub fn expanded_trans(&self) -> bool {
+        self.expanded_trans.get()
     }
 
     pub fn set_current_agg(&self, aggref: NonNull<()>, shared: bool) {
@@ -61,22 +156,35 @@ impl AggStateNode {
     /// `arg` must stay valid until the callback fires (group reset or node
     /// teardown), and `func(arg)` must be safe to call exactly once.
     pub unsafe fn register_shutdown_callback(&self, func: unsafe fn(*mut ()), arg: *mut ()) {
+        let cur = self.cur_set.get();
         // SAFETY: single-threaded backend; no other borrow escapes this module.
-        unsafe { (*self.callbacks.get()).push((func, arg)) };
+        unsafe {
+            if cur != NO_SET {
+                (&mut *self.sets.get())[cur as usize].callbacks.push((func, arg));
+            } else {
+                (*self.callbacks.get()).push((func, arg));
+            }
+        }
     }
 
     fn run_shutdown_callbacks(&self) {
-        // SAFETY: single-threaded backend; callbacks may re-enter register
-        // only after the swap below.
-        let cbs = core::mem::take(unsafe { &mut *self.callbacks.get() });
-        for (func, arg) in cbs.into_iter().rev() {
-            // SAFETY: registration contract (register_shutdown_callback).
-            unsafe { func(arg) };
+        for setno in 0..self.num_set_contexts() {
+            // SAFETY: single-threaded backend; callbacks may re-enter register
+            // only after the take.
+            let mut cbs = core::mem::take(unsafe { &mut (&mut *self.sets.get())[setno].callbacks });
+            run_callbacks(&mut cbs);
         }
+        // SAFETY: as above.
+        let mut cbs = core::mem::take(unsafe { &mut *self.callbacks.get() });
+        run_callbacks(&mut cbs);
     }
 
     pub fn reset(&mut self) {
         self.run_shutdown_callbacks();
+        self.cur_set.set(NO_SET);
+        for set in self.sets.get_mut().iter_mut() {
+            set.ctx.reset();
+        }
         self.aggcontext.reset();
     }
 }
@@ -100,7 +208,7 @@ impl FunctionCallInfoBaseData {
     #[inline]
     pub unsafe fn agg_context<'a>(&self) -> Option<Mcx<'a>> {
         // SAFETY: caller contract; the tag check proves the concrete type.
-        unsafe { self.agg_state_node().map(|n| n.aggcontext.mcx()) }
+        unsafe { self.agg_state_node().map(|n| n.aggcontext()) }
     }
 
     /// The `AggStateNode` behind `fcinfo->context`, if any (C
@@ -156,4 +264,54 @@ mod tests {
         }
     }
 
+    static FIRED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+    unsafe fn bump(arg: *mut ()) {
+        FIRED.fetch_add(arg as usize, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The set contexts sit inline in their vector: a second fill would move them under live handles, so debug builds
+    /// refuse it.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "add_set_contexts runs once, at init")]
+    fn a_second_set_context_fill_is_refused() {
+        let parent = MemoryContext::new("query");
+        let mut node = AggStateNode::new(MemoryContext::new_bump("base"));
+        node.add_set_contexts(1, || parent.new_child_wholesale("set"));
+        node.add_set_contexts(1, || parent.new_child_wholesale("set"));
+    }
+
+    #[test]
+    fn grouping_set_contexts_reset_independently() {
+        use core::sync::atomic::Ordering::Relaxed;
+        let parent = MemoryContext::new("query");
+        let mut node = AggStateNode::new(MemoryContext::new_bump("base"));
+        node.add_set_contexts(2, || parent.new_child_wholesale("set"));
+        let fc_base = node.aggcontext().context() as *const MemoryContext;
+        node.select_set(Some(1));
+        let fc_set1 = node.aggcontext().context() as *const MemoryContext;
+        assert_ne!(fc_base, fc_set1, "selected set must own the aggcontext");
+        let layout = core::alloc::Layout::from_size_align(4096, 8).unwrap();
+        let _ = ::mcx::Allocator::allocate(&node.aggcontext(), layout).unwrap();
+        assert!(node.aggcontext().context().used() > 0);
+        // SAFETY: bump ignores its argument beyond the counter.
+        unsafe { node.register_shutdown_callback(bump, 100 as *mut ()) };
+        node.select_set(Some(0));
+        // SAFETY: as above.
+        unsafe { node.register_shutdown_callback(bump, 10 as *mut ()) };
+        node.select_set(None);
+        // SAFETY: as above.
+        unsafe { node.register_shutdown_callback(bump, 1 as *mut ()) };
+        assert_eq!(node.aggcontext().context() as *const MemoryContext, fc_base);
+
+        FIRED.store(0, Relaxed);
+        node.reset_set(1);
+        assert_eq!(FIRED.load(Relaxed), 100, "only set 1's callback fires");
+        node.select_set(Some(1));
+        assert_eq!(node.aggcontext().context().used(), 0);
+        node.select_set(None);
+        node.reset();
+        assert_eq!(FIRED.load(Relaxed), 111);
+    }
 }

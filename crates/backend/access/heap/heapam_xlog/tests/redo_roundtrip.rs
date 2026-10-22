@@ -476,7 +476,7 @@ fn test_relation<'mcx>(mcx: Mcx<'mcx>) -> RelationData<'mcx> {
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -677,7 +677,10 @@ fn heap_redo_rebuilds_pages_byte_exact() {
     let mut tmfd = TM_FailureData::default();
     let mut lockmode = LockTupleMode::LockTupleNoKeyExclusive;
     let mut update_indexes = tableam_vocab::TU_UpdateIndexes::TU_None;
-    let img = raw_tuple(0, (0, 0), &vec![0x22; WIDE - 24]);
+    let mut body = vec![2; WIDE - 24];
+    let middle = body.len() / 2;
+    body[middle] = 0x22;
+    let img = raw_tuple(0, (0, 0), &body);
     let mut newtup = make_writable_tuple(&img);
     let r = heap_update(
         &rel,
@@ -922,6 +925,11 @@ fn heap_redo_rebuilds_pages_byte_exact() {
             // The stream also carries xid-assignment periphery (clog);
             // replay it through the same rmgr dispatch.
             _ => {}
+        }
+        if rmid == RM_HEAP_ID && op == (XLOG_HEAP_HOT_UPDATE >> 4) as usize {
+            let compression = XLH_UPDATE_PREFIX_FROM_OLD | XLH_UPDATE_SUFFIX_FROM_OLD;
+            assert_eq!(reader.XLogRecGetData()[7] & compression, compression);
+            assert_eq!(reader.XLogRecGetBlockData(0).unwrap().len(), 11);
         }
         (rmgr::GetRmgr(rmid).unwrap().rm_redo)(&mut reader.v).unwrap();
     }

@@ -112,7 +112,8 @@ fn rebuild_index_list<'mcx>(
     mcx: Mcx<'mcx>,
     rel: &RelationData<'static>,
 ) -> PgResult<PgVec<'mcx, Oid>> {
-    let rows = relcache_build_seams::scan_pg_index_shapes::call(mcx, rel.rd_id)?;
+    // C3: the relation's open is the recorded dependency (its invalidation drops the list); the fill's scan is its own
+    let rows = gravity_deps::suppressed(|| relcache_build_seams::scan_pg_index_shapes::call(mcx, rel.rd_id))?;
 
     let mut result: PgVec<'mcx, Oid> = mcx::vec_with_capacity_in(mcx, rows.len())?;
     let mut pkey_index = InvalidOid;

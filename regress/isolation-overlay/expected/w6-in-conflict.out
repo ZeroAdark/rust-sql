@@ -1,0 +1,81 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1u s2i s1c s2c s3sel
+step s1u: UPDATE icq SET cnt = 4 WHERE id IN (5, 7);
+step s2i: INSERT INTO icq (id, email) VALUES (5, 'x') ON CONFLICT (id) DO UPDATE SET cnt = (SELECT sum(w) FROM ics WHERE ics.cnt = icq.cnt AND ics.id < 50) RETURNING id, cnt; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+id|cnt
+--+---
+ 5| 32
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, email, cnt, note FROM icq WHERE id IN (5, 6, 7) ORDER BY id;
+id|email|cnt|note
+--+-----+---+----
+ 5|e5   | 32|    
+ 6|e6   |  1|    
+ 7|e7   |  4|    
+(3 rows)
+
+
+starting permutation: s1u s1d s2w s1c s2c s3sel
+step s1u: UPDATE icq SET cnt = 4 WHERE id IN (5, 7);
+step s1d: DELETE FROM icq WHERE id = 6;
+step s2w: INSERT INTO icq (id, email) VALUES (6, 'y'), (7, 'z') ON CONFLICT (id) DO UPDATE SET note = 'w' || EXCLUDED.email WHERE EXISTS (SELECT 1 FROM ics WHERE ics.id BETWEEN icq.cnt + 6 AND icq.cnt + 6 AND ics.w > 9) RETURNING id, cnt, note; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+id|cnt|note
+--+---+----
+ 6|  0|    
+ 7|  4|wz  
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, email, cnt, note FROM icq WHERE id IN (5, 6, 7) ORDER BY id;
+id|email|cnt|note
+--+-----+---+----
+ 5|e5   |  4|    
+ 6|y    |  0|    
+ 7|e7   |  4|wz  
+(3 rows)
+
+
+starting permutation: s2i s1u s2c s1c s3sel
+step s2i: INSERT INTO icq (id, email) VALUES (5, 'x') ON CONFLICT (id) DO UPDATE SET cnt = (SELECT sum(w) FROM ics WHERE ics.cnt = icq.cnt AND ics.id < 50) RETURNING id, cnt;
+id|cnt
+--+---
+ 5| 42
+(1 row)
+
+step s1u: UPDATE icq SET cnt = 4 WHERE id IN (5, 7); <waiting ...>
+step s2c: COMMIT;
+step s1u: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, email, cnt, note FROM icq WHERE id IN (5, 6, 7) ORDER BY id;
+id|email|cnt|note
+--+-----+---+----
+ 5|e5   |  4|    
+ 6|e6   |  1|    
+ 7|e7   |  4|    
+(3 rows)
+
+
+starting permutation: s2w s1d s2c s1c s3sel
+step s2w: INSERT INTO icq (id, email) VALUES (6, 'y'), (7, 'z') ON CONFLICT (id) DO UPDATE SET note = 'w' || EXCLUDED.email WHERE EXISTS (SELECT 1 FROM ics WHERE ics.id BETWEEN icq.cnt + 6 AND icq.cnt + 6 AND ics.w > 9) RETURNING id, cnt, note;
+id|cnt|note
+--+---+----
+(0 rows)
+
+step s1d: DELETE FROM icq WHERE id = 6; <waiting ...>
+step s2c: COMMIT;
+step s1d: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, email, cnt, note FROM icq WHERE id IN (5, 6, 7) ORDER BY id;
+id|email|cnt|note
+--+-----+---+----
+ 5|e5   |  0|    
+ 7|e7   |  2|    
+(2 rows)
+

@@ -408,6 +408,7 @@ pub(crate) mod rig {
             rd_amcache_hash: Default::default(),
             rd_amcache_gin: Default::default(),
             rd_amcache_spgist: Default::default(),
+            rd_amcache_bloom: Default::default(),
             rd_support: PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
@@ -620,7 +621,7 @@ fn fast_insert_rows(mcx: Mcx<'_>, rel: &Relation<'_>, state: &GinState) {
         let t = pending_tuple(mcx, rel, state, k % 5, tid(1, (k / 5 + 1) as u16));
         // SAFETY: owned image.
         c.sumsize += unsafe { itup::index_tuple_size(t.as_ptr()) };
-        c.tuples.push(t);
+        c.tuples.push(core::mem::ManuallyDrop::new(t));
     }
     crate::fast::ginHeapTupleFastInsert(mcx, rel, state, &mut c).unwrap();
     let mut c2 = crate::fast::GinTupleCollector::new(mcx);
@@ -628,7 +629,7 @@ fn fast_insert_rows(mcx: Mcx<'_>, rel: &Relation<'_>, state: &GinState) {
         let t = pending_tuple(mcx, rel, state, k, tid(1, 121));
         // SAFETY: owned image.
         c2.sumsize += unsafe { itup::index_tuple_size(t.as_ptr()) };
-        c2.tuples.push(t);
+        c2.tuples.push(core::mem::ManuallyDrop::new(t));
     }
     crate::fast::ginHeapTupleFastInsert(mcx, rel, state, &mut c2).unwrap();
 }

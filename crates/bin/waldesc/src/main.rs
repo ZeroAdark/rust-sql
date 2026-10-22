@@ -147,12 +147,56 @@ fn rec_lens(reader: &XLogReaderState<'_>) -> (u32, u32) {
     (reader.XLogRecGetTotalLen() - fpi_len, fpi_len)
 }
 
+fn save_fpws(reader: &mut XLogReaderState<'_>, savepath: &str) {
+    const FORK_NAMES: [&str; 4] = ["main", "fsm", "vm", "init"];
+    for block_id in 0..=reader.XLogRecMaxBlockId().max(-1) {
+        let block_id = block_id as u8;
+        if !reader.XLogRecHasBlockRef(block_id) || !reader.XLogRecHasBlockImage(block_id) {
+            continue;
+        }
+        let mut page = [0u8; types_core::BLCKSZ];
+        if !reader.RestoreBlockImage(block_id, &mut page) {
+            eprintln!("waldesc: {}", reader.errormsg_buf_raw().unwrap_or_default());
+            std::process::exit(1);
+        }
+        let (rnode, fork, blk, _) = reader.XLogRecGetBlockTagExtended(block_id).expect("block tag");
+        let Some(forkname) = FORK_NAMES.get(fork as i32 as usize) else {
+            eprintln!("waldesc: invalid fork number: {}", fork as i32 as u32);
+            std::process::exit(1);
+        };
+        let lsn = reader.v.ReadRecPtr;
+        let filename = format!(
+            "{savepath}/{:08X}-{:08X}-{:08X}.{}.{}.{}.{}_{forkname}",
+            reader.v.seg.ws_tli,
+            (lsn >> 32) as u32,
+            lsn as u32,
+            rnode.spcOid,
+            rnode.dbOid,
+            rnode.relNumber,
+            blk,
+        );
+        if let Err(e) = std::fs::write(&filename, page) {
+            eprintln!("waldesc: could not write file \"{filename}\": {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
+    let save_fullpage = args
+        .next_if(|a| a.starts_with("--save-fullpage="))
+        .map(|a| a["--save-fullpage=".len()..].to_string());
     let dir = args.next().unwrap_or_else(|| {
-        eprintln!("usage: waldesc <pg_wal_dir> [first_segment_file]");
+        eprintln!("usage: waldesc [--save-fullpage=DIR] <pg_wal_dir> [first_segment_file]");
         std::process::exit(2);
     });
+    if let Some(path) = &save_fullpage {
+        if let Err(e) = std::fs::create_dir_all(path) {
+            eprintln!("waldesc: could not create directory \"{path}\": {e}");
+            std::process::exit(1);
+        }
+    }
 
     let first_seg = match args.next() {
         Some(s) => s,
@@ -224,10 +268,10 @@ fn main() {
         let lsn = reader.v.ReadRecPtr;
         let prev = reader.XLogRecGetPrev();
 
-        // C GetRmgrDesc: builtin table, else custom### (no ereport). Backend GetRmgr
+        // C GetRmgrDesc: builtin table (plus the compiled-in pgrc slot), else custom### (no ereport). Backend GetRmgr
         // RmgrNotFound is the redo path, not pg_waldump display.
-        let builtin = if rmgr::RmgrIdIsBuiltin(rmid as i32) {
-            Some(rmgr::GetRmgr(rmid).expect("builtin rmgr"))
+        let builtin = if rmgr::RmgrIdExists(rmid) {
+            Some(rmgr::GetRmgr(rmid).expect("registered rmgr"))
         } else {
             None
         };
@@ -270,6 +314,10 @@ fn main() {
         rmgrdesc::xlogdesc::XLogRecGetBlockRefInfo(&reader.v, true, false, &mut buf, None)
             .expect("block ref info");
         let _ = out.write_all(buf.as_bytes());
+
+        if let Some(path) = &save_fullpage {
+            save_fpws(&mut reader, path);
+        }
     }
     let _ = out.flush();
 }

@@ -66,7 +66,7 @@ fn bulkdelete_common<'mcx>(
     let state = init_bloom_state(index)?;
     let size = state.size_of_bloom_tuple;
 
-    let mut scratch = mcx::MemoryContext::new_bump("blbulkdelete xlog");
+    let mut scratch = mcx::MemoryContext::new_wholesale("blbulkdelete xlog");
 
     let mut not_full_page: Vec<BlockNumber> = Vec::new();
 

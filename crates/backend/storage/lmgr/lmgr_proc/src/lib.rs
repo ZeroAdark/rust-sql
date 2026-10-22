@@ -18,7 +18,7 @@ use types_storage::lock::{DeadLockState, DEFAULT_LOCKMETHOD, USER_LOCKMETHOD};
 use types_storage::storage::{
     pg_atomic_uint32, proclist_head, proclist_node, FreeListId, LWLockWaitList, PGPROC, PROC_HDR,
     Spinlock, SyncCell, XidCacheStatus, FP_LOCK_GROUPS_PER_BACKEND_MAX, FP_LOCK_SLOTS_PER_GROUP,
-    LWTRANCHE_LOCK_FASTPATH, NUM_AUXILIARY_PROCS, NUM_LOCK_PARTITIONS, NUM_SPECIAL_WORKER_PROCS,
+    LWTRANCHE_LOCK_FASTPATH, NUM_LOCK_PARTITIONS, NUM_SPECIAL_WORKER_PROCS,
     PROC_IS_AUTOVACUUM, PROC_WAIT_STATUS_OK,
 };
 use types_storage::waiteventset::{WL_EXIT_ON_PM_DEATH, WL_LATCH_SET};
@@ -39,6 +39,12 @@ pub struct ProcGlobalConfig {
 
 static PROC_GLOBAL: OnceLock<&'static PROC_HDR> = OnceLock::new();
 static PROC_CONFIG: OnceLock<ProcGlobalConfig> = OnceLock::new();
+mod bgw_reserve;
+pub use bgw_reserve::{
+    adopt_bgworker_reservation, release_bgworker_reservation, reserve_bgworker_proc,
+    unreserve_bgworker_proc,
+};
+
 static ProcStructLock: Spinlock = Spinlock::new();
 
 thread_local! {
@@ -284,7 +290,7 @@ const fn maxalign(len: usize) -> usize {
 fn total_procs(cfg: &ProcGlobalConfig) -> PgResult<usize> {
     shmem_seams::add_size::call(
         g::MaxBackends() as usize,
-        shmem_seams::add_size::call(NUM_AUXILIARY_PROCS as usize, cfg.max_prepared_xacts as usize)?,
+        shmem_seams::add_size::call(g::NumAuxiliaryProcs() as usize, cfg.max_prepared_xacts as usize)?,
     )
 }
 
@@ -318,7 +324,7 @@ pub fn ProcGlobalShmemSize(cfg: &ProcGlobalConfig) -> PgResult<usize> {
 }
 
 pub fn ProcGlobalSemas() -> i32 {
-    g::MaxBackends() + NUM_AUXILIARY_PROCS
+    g::MaxBackends() + g::NumAuxiliaryProcs()
 }
 
 pub fn InitProcGlobal(cfg: &ProcGlobalConfig) {
@@ -341,7 +347,7 @@ pub fn InitProcGlobal(cfg: &ProcGlobalConfig) {
     let groups = cfg.fastpath_lock_groups_per_backend;
     assert!(groups >= 1 && groups <= FP_LOCK_GROUPS_PER_BACKEND_MAX);
 
-    let total = max_backends + NUM_AUXILIARY_PROCS + cfg.max_prepared_xacts;
+    let total = max_backends + g::NumAuxiliaryProcs() + cfg.max_prepared_xacts;
     let slots_per_backend = groups * FP_LOCK_SLOTS_PER_GROUP;
 
     let fp_bits: &'static [SyncCell<u64>] = (0..total as usize * groups as usize)
@@ -374,7 +380,7 @@ pub fn InitProcGlobal(cfg: &ProcGlobalConfig) {
         };
 
         // Prepared-xact dummy PGPROCs never run: no sema/latch/fpInfoLock.
-        if i < max_backends + NUM_AUXILIARY_PROCS {
+        if i < max_backends + g::NumAuxiliaryProcs() {
             pg_sema_seams::pg_semaphore_create::call(i);
             // InitSharedLatch + LWLockInitialize(fpInfoLock, LOCK_FASTPATH).
             proc.procLatch.is_shared.store(true, Relaxed);
@@ -425,7 +431,7 @@ pub fn InitProcGlobal(cfg: &ProcGlobalConfig) {
         .collect::<Vec<_>>()
         .leak();
     // XXX (as C): allProcCount excludes prepared xacts.
-    hdr.allProcCount = (max_backends + NUM_AUXILIARY_PROCS) as u32;
+    hdr.allProcCount = (max_backends + g::NumAuxiliaryProcs()) as u32;
     hdr.fpLockGroupsPerBackend = groups as u32;
     // SAFETY: [PSL] exclusive during single-threaded InitProcGlobal.
     unsafe { hdr.spins_per_delay.set(DEFAULT_SPINS_PER_DELAY) };
@@ -454,14 +460,17 @@ pub fn ProcGlobalResetAfterCrash() {
     let hdr = ProcGlobal();
     let cfg = PROC_CONFIG.get().expect("InitProcGlobal has not run");
     let max_backends = g::MaxBackends();
-    let runnable = (max_backends + NUM_AUXILIARY_PROCS) as usize;
+    let runnable = (max_backends + g::NumAuxiliaryProcs()) as usize;
     assert_eq!(
         hdr.allProcs.len(),
-        (max_backends + NUM_AUXILIARY_PROCS + cfg.max_prepared_xacts) as usize
+        (max_backends + g::NumAuxiliaryProcs() + cfg.max_prepared_xacts) as usize
     );
 
     let groups = hdr.fpLockGroupsPerBackend as usize;
     for (i, proc) in hdr.allProcs.iter().enumerate() {
+        // C8 move 6 (D2953): a backend that died in the crash cycle never reached ProcKill's unbind; the ledger unbinds its
+        // slot now (no memory freed): a 'crashed' owner-end row, its net on UNBOUND, its pool reservations dropped
+        memledger::unbind_dead(i as u32);
         // SAFETY: [PSL]/[PART] links; exclusive during crash reset (all children dead).
         unsafe { proc.links.set(proclist_node::detached()) };
         proc.waitStatus.store(PROC_WAIT_STATUS_OK, Relaxed);
@@ -594,7 +603,7 @@ pub fn ProcGlobalResetAfterCrash() {
 }
 
 pub fn AuxiliaryProcsBase() -> ProcNumber {
-    ProcGlobal().allProcCount as ProcNumber - NUM_AUXILIARY_PROCS
+    ProcGlobal().allProcCount as ProcNumber - g::NumAuxiliaryProcs()
 }
 
 pub fn PreparedXactProcsBase() -> ProcNumber {
@@ -622,6 +631,14 @@ fn init_my_proc_common(proc: &PGPROC, vxid_procno: ProcNumber) {
     proc.statusFlags.store(0, Relaxed);
     proc.lwWaiting.store(LW_WS_NOT_WAITING, Relaxed);
     proc.lwWaitMode.store(0, Relaxed);
+    // C's FastPathLocalUseCounts (lock.c:176) is a process-local static, so
+    // a new backend starts at zero whatever the slot's last owner left.
+    // SAFETY: [FPL] fpUseCounts; proc exclusively owned by the initializing thread.
+    unsafe {
+        for count in proc.fp_use_counts(ProcGlobal().fpLockGroupsPerBackend as usize) {
+            count.set(0);
+        }
+    }
     // SAFETY: [PART] waitLock; proc exclusively owned by the initializing thread.
     unsafe { proc.waitLock.set(core::ptr::null_mut()) };
     // SAFETY: [PART] waitProcLock; proc exclusively owned by the initializing thread.
@@ -698,6 +715,9 @@ pub fn InitProcess(backend_type: BackendType) -> PgResult<()> {
         plist_pop_head(hdr, freelist(hdr, list_id), links_of)
     };
     ProcStructLock.unlock();
+    if popped.is_some() && matches!(list_id, FreeListId::Bgworker) {
+        release_bgworker_reservation();
+    }
 
     let procno = match popped {
         Some(procno) => procno,
@@ -741,6 +761,8 @@ pub fn InitProcess(backend_type: BackendType) -> PgResult<()> {
 
     MY_PROC.set(procno);
     g::SetMyProcNumber(procno);
+    // G1-A: from here the thread's memory is this backend's account
+    memledger::bind_backend(procno as u32, g::MyProcPid() as u32);
     let proc = &hdr.allProcs[procno as usize];
     // SAFETY: [PSL] procgloballist fixed at InitProcGlobal.
     debug_assert_eq!(unsafe { proc.procgloballist.get() }, Some(list_id));
@@ -876,7 +898,7 @@ pub fn InitAuxiliaryProcess() -> PgResult<()> {
     // SAFETY: [PSL] spins_per_delay read under ProcStructLock.
     s_lock_seams::set_spins_per_delay::call(unsafe { hdr.spins_per_delay.get() });
     let mut claimed = None;
-    for proctype in 0..NUM_AUXILIARY_PROCS {
+    for proctype in 0..g::NumAuxiliaryProcs() {
         let auxproc = &hdr.allProcs[(aux_base + proctype) as usize];
         if auxproc.pid.load(Relaxed) == 0 {
             auxproc.pid.store(g::MyProcPid(), Relaxed);
@@ -895,6 +917,7 @@ pub fn InitAuxiliaryProcess() -> PgResult<()> {
     let procno = aux_base + proctype;
     MY_PROC.set(procno);
     g::SetMyProcNumber(procno);
+    memledger::bind_backend(procno as u32, g::MyProcPid() as u32);
     let proc = &hdr.allProcs[procno as usize];
 
     init_my_proc_common(proc, INVALID_PROC_NUMBER);
@@ -1022,7 +1045,7 @@ pub fn ProcReleaseLocks(isCommit: bool) -> PgResult<()> {
 /// Ownership is structural (same thread, MY_PROC TLS retained); MyProcPid may
 /// already be the NEXT task's pid when a claim dies before reattach.
 ///
-/// regression §6.3: that "the park arm already ran it" precondition holds
+/// GL-GANGWEDGE-1 §6.3: that "the park arm already ran it" precondition holds
 /// for the path this was written for — a worker retiring while PARKED, having
 /// completed its engagement and left its group on the serve tail. It does NOT
 /// hold when the thread is KILLED mid-engagement: every serve tail in the
@@ -1051,7 +1074,7 @@ pub fn KillRetainedProc() {
     if proc.pid.load(Relaxed) == 0 {
         panic!("KillRetainedProc: PGPROC already released");
     }
-    // Kill-path lock-state release (finding idx 295, same regression class
+    // Kill-path lock-state release (finding idx 295, same GL-GANGWEDGE-1 class
     // as the lock-group detach below). A thread KILLED mid-engagement skips the
     // transaction-abort and ProcKill exit callbacks that normally release its
     // lock state; this callback owns that cleanup, so it must run their release
@@ -1069,7 +1092,7 @@ pub fn KillRetainedProc() {
     // LWLock the killed thread was still holding; ProcKill likewise runs
     // LWLockReleaseAll before touching any partition lock. No-op on the healthy
     // parked path: the park arm already released all of this, so nothing is held.
-    // regression: every pre-release step CONTAINED (see run_release_step)
+    // GL-CONNSLOT-1: every pre-release step CONTAINED (see run_release_step)
     // — this runs from a dying pool thread's exit drain, whose panics are
     // swallowed upstream; an unwind past the freelist push permanently
     // leaked BOTH this worker's slot AND (via the deferred-return
@@ -1141,6 +1164,10 @@ pub fn KillRetainedProc() {
 
     MY_PROC.set(INVALID_PROC_NUMBER);
     g::SetMyProcNumber(INVALID_PROC_NUMBER);
+    // D4749: the copy of the last interrupt-raised error (init_small LAST_INTERRUPT) goes while the thread still charges the
+    // session's account: kept past here, nothing freed it at the thread's exit and its bytes stayed on UNBOUND
+    g::ForgetInterruptRaised();
+    memledger::unbind_backend();
 
     // Push gate (mirrors ProcKill's tail): a proc still linked into a lock
     // group after a FAILED detach must not be freelisted — a linked slot
@@ -1181,7 +1208,7 @@ pub fn KillRetainedProc() {
     }
 }
 
-/// regression (round-10 Antithesis DL-connslot-exhaustion): the PGPROC
+/// GL-CONNSLOT-1 (round-10 Antithesis DL-connslot-exhaustion): the PGPROC
 /// freelist return must be UNCONDITIONAL. ProcKill/KillRetainedProc run as
 /// exit callbacks whose panics are swallowed by the guarded callback drain
 /// (`ipc::run_callback_guarded` degrades them to a WARNING, deliberately —
@@ -1243,7 +1270,7 @@ fn run_release_step(what: &str, f: impl FnOnce()) -> Option<ReleaseStepPanic> {
     })
 }
 
-/// The loud half of regression: when the lock-group detach could not
+/// The loud half of GL-CONNSLOT-1: when the lock-group detach could not
 /// complete, the freelist push gate may legitimately block the self-push
 /// (the proc may still be linked into a lock group — pushing a linked slot
 /// would corrupt the group list). That converts the silent leak into an
@@ -1280,7 +1307,7 @@ pub fn ProcKill(_code: i32, _arg: usize) {
         panic!("ProcKill() called in child process");
     }
 
-    // regression: every pre-release step below runs CONTAINED so that no
+    // GL-CONNSLOT-1: every pre-release step below runs CONTAINED so that no
     // cleanup failure can unwind past the freelist push at the tail (see
     // run_release_step). The first exit-committed payload is re-raised after
     // the push.
@@ -1322,7 +1349,7 @@ pub fn ProcKill(_code: i32, _arg: usize) {
 
     let leader_no = proc.lockGroupLeader.load(Relaxed);
     if leader_no != INVALID_PROC_NUMBER {
-        // regression: contained as one step. A panic mid-detach leaves
+        // GL-CONNSLOT-1: contained as one step. A panic mid-detach leaves
         // the group state (and possibly a partition LWLock) inconsistent;
         // the recovery below drops any LWLock the panic left held and lets
         // the push gate decide (a still-set lockGroupLeader legally blocks
@@ -1377,7 +1404,7 @@ pub fn ProcKill(_code: i32, _arg: usize) {
                 leader.lockGroupLeader.store(INVALID_PROC_NUMBER, Relaxed);
             }
         }
-        // regression row A2, folded into regression (letter §6.5).
+        // GL-ASSERTMASK-1 row A2, folded into GL-GANGWEDGE-1 (letter §6.5).
         // A MEMBER clears its own pointer in BOTH arms, not just the
         // non-empty one. Previously the empty-transition arm above cleared
         // only the LEADER's pointer, leaving ours set. That is harmless for a
@@ -1451,6 +1478,10 @@ pub fn ProcKill(_code: i32, _arg: usize) {
 
     MY_PROC.set(INVALID_PROC_NUMBER);
     g::SetMyProcNumber(INVALID_PROC_NUMBER);
+    // D4749: the copy of the last interrupt-raised error (init_small LAST_INTERRUPT) goes while the thread still charges the
+    // session's account: kept past here, nothing freed it at the thread's exit and its bytes stayed on UNBOUND
+    g::ForgetInterruptRaised();
+    memledger::unbind_backend();
     latch_seams::disown_latch::call(&proc.procLatch);
 
     proc.vxid.procNumber.store(INVALID_PROC_NUMBER, Relaxed);
@@ -1498,7 +1529,7 @@ pub fn ProcKill(_code: i32, _arg: usize) {
         autovacuum_seams::wake_autovacuum_launcher::call();
     }
 
-    // regression: an incomplete detach that (legally) blocked the
+    // GL-CONNSLOT-1: an incomplete detach that (legally) blocked the
     // self-push is a real slot loss — make it attributable.
     if detach_failed && !pushed {
         report_unreturned_proc("ProcKill", procno);
@@ -1587,7 +1618,7 @@ pub fn LeaveLockGroup() {
 pub fn AuxiliaryProcKill(_code: i32, arg: usize) {
     let hdr = ProcGlobal();
     let proctype = arg as ProcNumber;
-    debug_assert!(proctype >= 0 && proctype < NUM_AUXILIARY_PROCS);
+    debug_assert!(proctype >= 0 && proctype < g::NumAuxiliaryProcs());
     let procno = my_proc_required();
     let proc = GetPGProcByNumber(procno);
 
@@ -1607,6 +1638,10 @@ pub fn AuxiliaryProcKill(_code: i32, arg: usize) {
 
     MY_PROC.set(INVALID_PROC_NUMBER);
     g::SetMyProcNumber(INVALID_PROC_NUMBER);
+    // D4749: the copy of the last interrupt-raised error (init_small LAST_INTERRUPT) goes while the thread still charges the
+    // session's account: kept past here, nothing freed it at the thread's exit and its bytes stayed on UNBOUND
+    g::ForgetInterruptRaised();
+    memledger::unbind_backend();
     latch_seams::disown_latch::call(&proc.procLatch);
 
     spin_acquire(&ProcStructLock);
@@ -1629,7 +1664,7 @@ pub fn AuxiliaryPidGetProc(pid: i32) -> Option<ProcNumber> {
     }
     let hdr = ProcGlobal();
     let aux_base = AuxiliaryProcsBase();
-    (0..NUM_AUXILIARY_PROCS)
+    (0..g::NumAuxiliaryProcs())
         .map(|i| aux_base + i)
         .find(|&procno| hdr.allProcs[procno as usize].pid.load(Relaxed) == pid)
 }
@@ -1737,7 +1772,7 @@ pub fn init_seams() {
     use lmgr_proc_seams as s;
 
     s::proc_latch::set(|procno| &GetPGProcByNumber(procno).procLatch);
-    // Acquire/Release on lwWaiting (regression F-R1-5): the wake handshake
+    // Acquire/Release on lwWaiting (GL-TESTFIX-1 F-R1-5): the wake handshake
     // can complete WITHOUT a semaphore edge — a wakee may consume a STALE
     // count (the extraWaits repost machinery seeds them), observe
     // LW_WS_NOT_WAITING, and immediately re-queue, touching its non-atomic

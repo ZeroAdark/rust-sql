@@ -772,6 +772,11 @@ impl<T> OnceLock<T> {
         }
     }
 
+    /// std parity: the value through `&mut self` (no other reference can be racing an init, so no lock and no park).
+    pub fn get_mut(&mut self) -> Option<&mut T> {
+        self.value.get_mut().as_mut()
+    }
+
     #[track_caller]
     pub fn set(&self, value: T) -> Result<(), T> {
         let mut g = self.state.lock().unwrap_or_else(|e| e.into_inner());

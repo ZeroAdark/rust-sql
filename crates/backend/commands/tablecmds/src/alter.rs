@@ -9,7 +9,8 @@ use types_core::{
 };
 use types_error::{
     PgError, PgResult, ERRCODE_CHECK_VIOLATION, ERRCODE_DATATYPE_MISMATCH,
-    ERRCODE_DUPLICATE_COLUMN, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_TABLE_DEFINITION,
+    ERRCODE_DUPLICATE_COLUMN, ERRCODE_DUPLICATE_OBJECT, ERRCODE_FEATURE_NOT_SUPPORTED,
+    ERRCODE_INVALID_TABLE_DEFINITION,
     ERRCODE_NOT_NULL_VIOLATION, ERRCODE_PROGRAM_LIMIT_EXCEEDED, ERRCODE_TOO_MANY_COLUMNS,
     ERRCODE_UNDEFINED_COLUMN, ERROR, NOTICE,
 };
@@ -597,9 +598,25 @@ fn ATController<'mcx>(
         )?;
     }
     rel.close(NoLock)?;
+    // A pgrcolumnar column change or move seals the front while the catalogs still describe its rows.
+    for tab in wqueue.iter().filter(|t| t.relkind == RELKIND_RELATION || t.relkind == types_rel::RELKIND_MATVIEW) {
+        let passes = [AT_PASS_ALTER_TYPE, AT_PASS_SET_EXPRESSION];
+        if tab.new_tablespace == InvalidOid && passes.iter().all(|&p| tab.subcmds[p].is_nil()) {
+            continue;
+        }
+        let r = table::table_open(mcx, tab.relid, NoLock)?;
+        let out = pgrc_front::seal_front(mcx, &r);
+        r.close(NoLock)?;
+        out?;
+    }
 
     ATRewriteCatalogs(mcx, &mut wqueue, lockmode, query_string)?;
-    ATRewriteTables(mcx, &mut wqueue, lockmode, rewrite_tag, query_string)
+    ATRewriteTables(mcx, &mut wqueue, lockmode, rewrite_tag, query_string)?;
+    // After the rewrite: SET ACCESS METHOD and rewrites give the table its new AM and relfilenumber there.
+    for tab in wqueue.iter().filter(|t| t.relkind == RELKIND_RELATION || t.relkind == types_rel::RELKIND_MATVIEW) {
+        pgrc_front::ensure_companions(mcx, tab.relid)?;
+    }
+    Ok(())
 }
 
 // ATSimpleRecursion: prep-time recursion to all inheritors.
@@ -621,7 +638,7 @@ fn ATSimpleRecursion<'mcx>(
         if childrelid == relid {
             continue;
         }
-        let childrel = table::table_open(mcx, childrelid, NoLock)?;
+        let childrel = relation_seams::relation_open::call(mcx, childrelid, NoLock)?;
         CheckAlterTableIsSafe(&childrel)?;
         ATPrepCmd(
             mcx,
@@ -1415,7 +1432,7 @@ fn ATRewriteCatalogs<'mcx>(
                                 for nn in nnconstraints.iter() {
                                     let mut nncmd = Node::build::<AlterTableCmd>(mcx)?;
                                     nncmd.subtype = AlterTableType::AT_AddConstraint;
-                                    nncmd.recurse = true;
+                                    nncmd.recurse = cmd.recurse;
                                     nncmd.def = Some(nn);
                                     wqueue[tabidx].subcmds[AT_PASS_COL_ATTRS]
                                         .lappend(mcx, nncmd.seal())?;
@@ -1994,6 +2011,23 @@ fn ATRewriteTableOne<'mcx>(
     if !types_rel::RELKIND_HAS_STORAGE(tab.relkind) {
         return Ok(());
     }
+    // Added and dropped columns are metadata-only when PostgreSQL's heap's are: the parts keep their columns and
+    // readers fill the added ones from attmissingval. Before any verify scan, which reads the new schema.
+    if tab.relkind == RELKIND_RELATION || tab.relkind == types_rel::RELKIND_MATVIEW {
+        let rel = table::table_open(mcx, tab.relid, NoLock)?;
+        let moved = tab.new_tablespace != InvalidOid && tableam_vocab::is_pgrcolumnar_am_oid(rel.rd_rel.relam);
+        let rewrite = match tableam::pgrc_columns_verdict(&rel, &tab.old_desc) {
+            Ok(tableam::PgrcColumnsVerdict::Same) => Ok(moved),
+            Ok(tableam::PgrcColumnsVerdict::Rewrite) => Ok(true),
+            Ok(tableam::PgrcColumnsVerdict::Fast(old)) if tab.rewrite == 0 && !moved => pgrc_alter_fast(mcx, &rel, &tab.old_desc, old).map(|()| false),
+            Ok(tableam::PgrcColumnsVerdict::Fast(_)) => Ok(moved),
+            Err(e) => Err(e),
+        };
+        rel.close(NoLock)?;
+        if rewrite? {
+            tab.rewrite |= AT_REWRITE_COLUMN_REWRITE;
+        }
+    }
     if !tab.newvals.is_empty() || tab.rewrite > 0 {
         let rel = table::table_open(mcx, tab.relid, NoLock)?;
         find_composite_type_dependencies_rel(mcx, rel.rd_rel.reltype, &rel)?;
@@ -2054,6 +2088,7 @@ fn ATRewriteTableOne<'mcx>(
         } else {
             old_heap.rd_rel.relam
         };
+        let was_pgrc = tableam_vocab::is_pgrcolumnar_am_oid(old_heap.rd_rel.relam);
         old_heap.close(NoLock)?;
         // Fire the table_rewrite event trigger before rewriting; parsetree is
         // NULL (no tag) when coming from AlterTableInternal, and it fires
@@ -2084,6 +2119,9 @@ fn ATRewriteTableOne<'mcx>(
             multixact::ReadNextMultiXactId()?,
             persistence,
         )?;
+        if was_pgrc {
+            drop_companions(mcx, tab.relid)?;
+        }
         objectaccess::InvokeObjectPostAlterHook(RELATION_RELATION_ID, tab.relid, 0)?;
     } else if tab.rewrite > 0 {
         if tab.chg_persistence {
@@ -2118,6 +2156,130 @@ fn ATRewriteTableOne<'mcx>(
     Ok(())
 }
 
+/// The publish keeps every part under the schema it was written with, then every segment companion follows the
+/// parent. Tombstone heaps hold no columns.
+fn pgrc_alter_fast<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, old_desc: &TupleDescData<'_>, old: Vec<pgrc_front::ColSchema>) -> PgResult<()> {
+    pgrc_front::alter_columns(rel, old)?;
+    let (old_natts, new) = (old_desc.natts as usize, &rel.rd_att);
+    for seg in pgrc_front::segments(rel.rd_id)? {
+        for i in 0..new.natts as usize {
+            let attnum = (i + 1) as AttrNumber;
+            if i >= old_natts {
+                add_companion_column(mcx, seg, rel, attnum)?;
+            } else if new.attr(i).attisdropped && !old_desc.attr(i).attisdropped {
+                drop_companion_column(mcx, seg, attnum)?;
+            }
+        }
+    }
+    xact::CommandCounterIncrement()
+}
+
+/// A dropped one as the companion's creation makes it (an int4 placeholder, dropped). A companion that has the attnum
+/// already is left alone.
+fn add_companion_column<'mcx>(mcx: Mcx<'mcx>, seg: Oid, parent: &Relation<'mcx>, attnum: AttrNumber) -> PgResult<()> {
+    const INT4OID: Oid = 23;
+    let segrel = table::table_open(mcx, seg, AccessExclusiveLock)?;
+    let natts = segrel.rd_att.natts;
+    segrel.close(NoLock)?;
+    if natts >= attnum as i32 {
+        return Ok(());
+    }
+    if natts != attnum as i32 - 1 {
+        return Err(Box::new(PgError::error(format!("pgrcolumnar: segment {seg} has {natts} columns, not {}", attnum - 1))));
+    }
+    let i = attnum as usize - 1;
+    let att = *parent.rd_att.attr(i);
+    let dropped = att.attisdropped;
+    let name = match dropped {
+        true => format!("pgrc_dropped_{attnum}"),
+        false => String::from_utf8_lossy(att.attname.name_str()).into_owned(),
+    };
+    let mut desc = tupdesc::CreateTemplateTupleDesc(mcx, 1)?;
+    match dropped {
+        true => tupdesc::TupleDescInitEntry(&mut desc, 1, Some(&name), INT4OID, -1, 0)?,
+        false => tupdesc::TupleDescInitEntry(&mut desc, 1, Some(&name), att.atttypid, att.atttypmod, att.attndims as i32)?,
+    }
+    let mut attribute = desc.attrs[0];
+    attribute.attnum = attnum;
+    if !dropped {
+        attribute.attcollation = att.attcollation;
+    }
+    let attrdesc = table::table_open(mcx, types_core::ATTRIBUTE_RELATION_ID, RowExclusiveLock)?;
+    catalog_heap::InsertPgAttributeTuples(mcx, &attrdesc, core::slice::from_ref(&attribute), seg, None, None)?;
+    attrdesc.close(RowExclusiveLock)?;
+    set_relnatts(mcx, seg, attnum)?;
+    xact::CommandCounterIncrement()?;
+    if dropped {
+        return catalog_heap::RemoveAttributeById(mcx, seg, attnum);
+    }
+    let missing = match att.atthasmissing {
+        true => parent.rd_att.constr.as_ref().and_then(|c| c.missing.get(i)).filter(|m| m.am_present).map(|m| m.am_value),
+        false => None,
+    };
+    if let Some(value) = missing {
+        let segrel = table::table_open(mcx, seg, NoLock)?;
+        let out = catalog_heap::StoreAttrMissingVal(mcx, &segrel, attnum, value);
+        segrel.close(NoLock)?;
+        out?;
+    }
+    // D4785: AUTO, as the segment's creation records its columns' (pgrc_companion::create_segment)
+    let myself = pg_depend::ObjectAddress::sub_set(RELATION_RELATION_ID, seg, attnum as i32);
+    let referenced = pg_depend::ObjectAddress::set(TYPE_RELATION_ID, attribute.atttypid);
+    pg_depend::recordDependencyOn(mcx, &myself, &referenced, pg_depend::DependencyType::Auto)?;
+    if attribute.attcollation != InvalidOid && attribute.attcollation != DEFAULT_COLLATION_OID {
+        let referenced = pg_depend::ObjectAddress::set(CollationRelationId, attribute.attcollation);
+        pg_depend::recordDependencyOn(mcx, &myself, &referenced, pg_depend::DependencyType::Auto)?;
+    }
+    xact::CommandCounterIncrement()?;
+    catalog_toasting::AlterTableCreateToastTable(mcx, seg, None, AccessExclusiveLock)?;
+    xact::CommandCounterIncrement()
+}
+
+/// A companion without it, or with it dropped, is left alone.
+fn drop_companion_column(mcx: Mcx<'_>, seg: Oid, attnum: AttrNumber) -> PgResult<()> {
+    let segrel = table::table_open(mcx, seg, AccessExclusiveLock)?;
+    let live = segrel.rd_att.natts >= attnum as i32 && !segrel.rd_att.attr(attnum as usize - 1).attisdropped;
+    segrel.close(NoLock)?;
+    if !live {
+        return Ok(());
+    }
+    let object = pg_depend::ObjectAddress::sub_set(RELATION_RELATION_ID, seg, attnum as i32);
+    catalog_dependency::performDeletion(mcx, &object, types_nodes::parsenodes::DropBehavior::DROP_RESTRICT, catalog_dependency::PERFORM_DELETION_INTERNAL)?;
+    xact::CommandCounterIncrement()
+}
+
+fn set_relnatts(mcx: Mcx<'_>, relid: Oid, natts: AttrNumber) -> PgResult<()> {
+    let pgclass = table::table_open(mcx, RELATION_RELATION_ID, RowExclusiveLock)?;
+    let key = oid_scankey(1, relid);
+    let mut scan = genam::systable_beginscan(mcx, &pgclass, catalog::ClassOidIndexId, true, None, &[key])?;
+    let reltup = genam::systable_getnext(mcx, &mut scan)?.ok_or_else(|| crate::cache_lookup_failed("relation", relid))?;
+    let cdesc = pgclass.descr();
+    let n = cdesc.natts as usize;
+    let mut values: PgVec<'_, Datum> = mcx::vec_with_capacity_in(mcx, n)?;
+    let mut isnull: PgVec<'_, bool> = mcx::vec_with_capacity_in(mcx, n)?;
+    let mut repl: PgVec<'_, bool> = mcx::vec_with_capacity_in(mcx, n)?;
+    values.resize(n, Datum::null());
+    isnull.resize(n, false);
+    repl.resize(n, false);
+    values[Anum_pg_class_relnatts - 1] = Datum::from_i16(natts);
+    repl[Anum_pg_class_relnatts - 1] = true;
+    let mut newtup = heaptuple::heap_modify_tuple(mcx, reltup, cdesc, &values, &isnull, &repl)?;
+    let otid = reltup.t_self;
+    genam::systable_endscan(mcx, scan)?;
+    catalog_indexing::CatalogTupleUpdate(mcx, &pgclass, &otid, &mut newtup)?;
+    pgclass.close(RowExclusiveLock)
+}
+
+fn drop_companions(mcx: Mcx<'_>, parent: Oid) -> PgResult<()> {
+    for relid in pgrc_front::companions(parent)? {
+        pg_depend::deleteDependencyRecordsFor(mcx, RELATION_RELATION_ID, relid, false)?;
+        xact::CommandCounterIncrement()?;
+        let object = pg_depend::ObjectAddress::set(RELATION_RELATION_ID, relid);
+        catalog_dependency::performDeletion(mcx, &object, types_nodes::parsenodes::DropBehavior::DROP_RESTRICT, catalog_dependency::PERFORM_DELETION_INTERNAL)?;
+    }
+    xact::CommandCounterIncrement()
+}
+
 // ATRewriteTable: scan (verify) or rewrite one table.
 // C errtable/errtablecol/errtableconstraint (relerror.c): ATRewriteTable's
 // validation errors carry the table's schema+table (+column/constraint)
@@ -2134,6 +2296,9 @@ fn ATRewriteTable<'mcx>(
     tab: &mut AlteredTableInfo<'mcx>,
     oid_new_heap: Oid,
 ) -> PgResult<()> {
+    // tablecmds.c:6371/6540: expressions run in the per-tuple context, reset
+    // after every row. Declared before the states so it outlives them.
+    let mut per_tuple = mcx.context().new_child_wholesale("ATRewriteTable per-tuple");
     let oldrel = table::table_open(mcx, tab.relid, NoLock)?;
     let new_tupdesc = &oldrel.rd_att;
     let newrel = if oid_new_heap != InvalidOid {
@@ -2155,7 +2320,8 @@ fn ATRewriteTable<'mcx>(
         let planned = clauses::eval_const_expressions(mcx, qual)?;
         let mut state = execexpr::exec_init_expr(mcx, Some(planned), execexpr::ParamBind::NONE)?
             .expect("check constraint expr");
-        state.arm_result_mcx(mcx);
+        // SAFETY: per_tuple outlives every evaluation of this state.
+        unsafe { state.arm_result_mcx_raw(per_tuple.mcx()) };
         con_states.push((i, state));
     }
     let mut newval_states: PgVec<
@@ -2169,9 +2335,8 @@ fn ATRewriteTable<'mcx>(
     for nv in tab.newvals.iter() {
         let mut state = execexpr::exec_init_expr(mcx, Some(nv.expr), execexpr::ParamBind::NONE)?
             .expect("transform expr");
-        // By-ref transform results land in the statement arena (C resets a
-        // per-tuple context each row; watch memory on huge rewrites).
-        state.arm_result_mcx(mcx);
+        // SAFETY: per_tuple outlives every evaluation of this state.
+        unsafe { state.arm_result_mcx_raw(per_tuple.mcx()) };
         newval_states.push((nv.attnum, nv.is_generated, state));
     }
 
@@ -2182,9 +2347,8 @@ fn ATRewriteTable<'mcx>(
             let mut state =
                 execexpr::exec_init_expr(mcx, Some(planned), execexpr::ParamBind::NONE)?
                     .expect("partition constraint expr");
-            // Expression partition keys call by-ref-returning functions
-            // (same statement-arena caveat as the transform states above).
-            state.arm_result_mcx(mcx);
+            // SAFETY: per_tuple outlives every evaluation of this state.
+            unsafe { state.arm_result_mcx_raw(per_tuple.mcx()) };
             Some(state)
         }
         None => None,
@@ -2232,7 +2396,8 @@ fn ATRewriteTable<'mcx>(
         let planned = clauses::eval_const_expressions(mcx, nulltest)?;
         let mut state = execexpr::exec_init_expr(mcx, Some(planned), execexpr::ParamBind::NONE)?
             .expect("virtual not-null test expr");
-        state.arm_result_mcx(mcx);
+        // SAFETY: per_tuple outlives every evaluation of this state.
+        unsafe { state.arm_result_mcx_raw(per_tuple.mcx()) };
         nn_virtual_states.push((attnum, state));
     }
 
@@ -2281,10 +2446,32 @@ fn ATRewriteTable<'mcx>(
         } else {
             (0, 0)
         };
+        let mut bistate = newrel.as_ref().map(|_| heapam::GetBulkInsertState());
+        // C evaluates every per-row expression in the per-tuple context and
+        // resets it after each row (tablecmds.c ResetExprContext).
+        let mut per_tuple = mcx.context().new_child_wholesale("ATRewriteTable per-tuple");
+        // SAFETY: per_tuple is a local that never moves and outlives every
+        // evaluation below; nothing evaluated in it survives the row.
+        unsafe {
+            for (_, state) in con_states.iter_mut() {
+                state.arm_result_mcx_raw(per_tuple.mcx());
+            }
+            for (_, _, state) in newval_states.iter_mut() {
+                state.arm_result_mcx_raw(per_tuple.mcx());
+            }
+            for (_, state) in nn_virtual_states.iter_mut() {
+                state.arm_result_mcx_raw(per_tuple.mcx());
+            }
+            if let Some(state) = partqualstate.as_mut() {
+                state.arm_result_mcx_raw(per_tuple.mcx());
+            }
+        }
         let snapshot = snapmgr::GetLatestSnapshot()?;
         let snapshot = snapmgr::RegisterSnapshot(Some(&snapshot))?.expect("registered snapshot");
-        let mut scan =
-            tableam::table_beginscan(mcx, &oldrel, Some(snapshot.clone()), 0, PgVec::new_in(mcx))?;
+        let mut scan = match tab.rewrite > 0 {
+            true => tableam::table_beginscan_as(mcx, &oldrel, Some(snapshot.clone()), &tab.old_desc)?,
+            false => tableam::table_beginscan(mcx, &oldrel, Some(snapshot.clone()), 0, PgVec::new_in(mcx))?,
+        };
         while tableam::table_scan_getnextslot(
             mcx,
             &mut scan,
@@ -2464,13 +2651,17 @@ fn ATRewriteTable<'mcx>(
 
             if let Some(nr) = &newrel {
                 exectuples::exec_materialize_slot(insertslot, mcx)?;
-                // C threads a BulkInsertState; the heap AM only wires bistate
-                // through multi_insert — ring-buffer strategy only, same WAL.
-                tableam::table_tuple_insert(mcx, nr, insertslot, mycid, ti_options, None)?;
+                tableam::table_tuple_insert(mcx, nr, insertslot, mycid, ti_options, bistate.as_mut())?;
             }
+            per_tuple.reset();
+            if init_small::globals::InterruptPending() {
+                postgres_seams::check_for_interrupts::call()?;
+            }
+            per_tuple.reset();
         }
         tableam::table_endscan(scan)?;
         snapmgr::UnregisterSnapshot(Some(&snapshot));
+        drop(bistate.take());
         if let Some(nr) = &newrel {
             tableam::table_finish_bulk_insert(nr, ti_options)?;
         }
@@ -3587,9 +3778,8 @@ fn run_seq_stmts<'mcx>(mcx: Mcx<'mcx>, stmts: &NodeList<'mcx>, query_string: &st
             let relid = AlterTableLookupRelation(mcx, at, lockmode)?;
             event_trigger::EventTriggerAlterTableStart(tag);
             event_trigger::EventTriggerAlterTableRelid(relid);
-            let res = AlterTable(mcx, relid, lockmode, at, query_string, tag);
+            AlterTable(mcx, relid, lockmode, at, query_string, tag)?;
             event_trigger::EventTriggerAlterTableEnd();
-            res?;
             if let Some((t, relid)) = saved {
                 event_trigger::EventTriggerAlterTableStart(t);
                 event_trigger::EventTriggerAlterTableRelid(relid);
@@ -4456,7 +4646,22 @@ pub(crate) fn ATExecSetNotNull<'mcx>(
     }
     let name_storage;
     let con_name: &[u8] = match conname {
-        Some(n) => n.as_bytes(),
+        Some(n) => {
+            if pg_constraint::ConstraintNameIsUsed(
+                mcx,
+                pg_constraint::ConstraintCategory::Relation,
+                rel.rd_id,
+                n.as_bytes(),
+            )? {
+                return Err(Box::new(
+                    PgError::error(format!(
+                        "constraint \"{n}\" for relation \"{relname}\" already exists"
+                    ))
+                    .with_sqlstate(ERRCODE_DUPLICATE_OBJECT),
+                ));
+            }
+            n.as_bytes()
+        }
         None => {
             name_storage = pg_constraint::ChooseConstraintName(
                 mcx,
@@ -4618,6 +4823,8 @@ fn ATPrepAddPrimaryKey<'mcx>(
         newcmd.subtype = AlterTableType::AT_AddConstraint;
         newcmd.recurse = true;
         newcmd.def = Some(nn.seal());
+        // The inner ATPrepCmd(recurse=true) locks every descendant.
+        pg_inherits::find_all_inheritors(mcx, rel.rd_id, lockmode)?;
         tab.subcmds[AT_PASS_ADD_CONSTR].lappend(mcx, newcmd.seal())?;
     }
     Ok(())
@@ -4739,7 +4946,8 @@ pub(crate) fn ATAddCheckNNConstraint<'mcx>(
                 ERROR,
                 "constraint must be added to child tables too".to_string(),
             )
-            .with_sqlstate(ERRCODE_INVALID_TABLE_DEFINITION),
+            .with_sqlstate(ERRCODE_INVALID_TABLE_DEFINITION)
+            .with_location("tablecmds.c", 10033, "ATAddCheckNNConstraint"),
         ));
     }
     for &childrelid in children.iter() {
@@ -4830,9 +5038,10 @@ fn ATExecDropConstraint<'mcx>(
 ) -> PgResult<()> {
     let constr_name = cmd.name.expect("AT_DropConstraint name");
     let relname = rel.name().to_string();
+    let conrel = table::table_open(mcx, types_core::CONSTRAINT_RELATION_ID, RowExclusiveLock)?;
     match pg_constraint::findConstraintByName(mcx, rel.rd_id, constr_name)? {
         Some(con) => {
-            dropconstraint_internal(mcx, rel, &con, cmd.behavior, cmd.recurse, false, lockmode)
+            dropconstraint_internal(mcx, rel, &con, cmd.behavior, cmd.recurse, false, lockmode)?;
         }
         None => {
             if !cmd.missing_ok {
@@ -4855,9 +5064,9 @@ fn ATExecDropConstraint<'mcx>(
                 ),
                 None,
             )?;
-            Ok(())
         }
     }
+    conrel.close(RowExclusiveLock)
 }
 
 fn dropconstraint_internal<'mcx>(
@@ -5157,7 +5366,8 @@ fn ATExecSetStatistics<'mcx>(
                     ),
                 )
                 .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
-                .with_hint("Alter statistics on table column instead.".to_string()),
+                .with_hint("Alter statistics on table column instead.".to_string())
+                .with_location("tablecmds.c", 9024, "ATExecSetStatistics"),
             ));
         }
     }
@@ -6299,6 +6509,16 @@ fn depends_on_column_err(
     )
 }
 
+fn unexpected_column_dependent(mcx: Mcx<'_>, obj: &pg_depend::ObjectAddress) -> Box<PgError> {
+    match catalog_dependency::getObjectDescription(mcx, obj) {
+        Ok(desc) => Box::new(PgError::error(format!(
+            "unexpected object depending on column: {}",
+            desc.unwrap_or_default()
+        ))),
+        Err(e) => e,
+    }
+}
+
 fn RememberAllDependentForRebuilding<'mcx>(
     mcx: Mcx<'mcx>,
     tab: &mut AlteredTableInfo<'mcx>,
@@ -6348,7 +6568,7 @@ fn RememberAllDependentForRebuilding<'mcx>(
                 } else if relkind == types_rel::RELKIND_SEQUENCE {
                     // A SERIAL column's sequence; nothing to do.
                 } else {
-                    panic!("unexpected object depending on column: class {classid} oid {objid}");
+                    return Err(unexpected_column_dependent(mcx, &obj));
                 }
             }
             ConstraintRelationId => RememberConstraintForRebuilding(mcx, tab, objid)?,
@@ -6402,14 +6622,9 @@ fn RememberAllDependentForRebuilding<'mcx>(
                 if !is_alter_type {
                     continue;
                 }
-                // Only a same-table generated column can reference this column.
-                assert!(
-                    adrelid == rel.rd_id,
-                    "attrdef dependency from another relation"
-                );
-                let gen_att = rel.rd_att.attr(adnum as usize - 1);
-                let genname =
-                    core::str::from_utf8(gen_att.attname.name_str()).expect("attname UTF-8");
+                let genname = lsyscache::get_attname(mcx, adrelid, adnum, false)?
+                    .expect("missing_ok=false yields a name");
+                let genname = genname.as_str();
                 return Err(Box::new(
                     PgError::new(
                         ERROR,
@@ -6434,7 +6649,7 @@ fn RememberAllDependentForRebuilding<'mcx>(
                     ));
                 }
             }
-            _ => panic!("unexpected object depending on column: class {classid} oid {objid}"),
+            _ => return Err(unexpected_column_dependent(mcx, &obj)),
         }
     }
     Ok(())
@@ -6522,10 +6737,10 @@ fn RememberReplicaIdentityForRebuilding<'mcx>(
         return Ok(());
     }
     if tab.replica_identity_index.is_some() {
-        panic!(
+        return Err(Box::new(PgError::error(format!(
             "relation {} has multiple indexes marked as replica identity",
             tab.relid
-        );
+        ))));
     }
     let name = lsyscache::get_rel_name(mcx, indoid)?.expect("index has a name");
     tab.replica_identity_index = Some(name.to_string());
@@ -6541,7 +6756,10 @@ fn RememberClusterOnForRebuilding<'mcx>(
         return Ok(());
     }
     if tab.cluster_on_index.is_some() {
-        panic!("relation {} has multiple clustered indexes", tab.relid);
+        return Err(Box::new(PgError::error(format!(
+            "relation {} has multiple clustered indexes",
+            tab.relid
+        ))));
     }
     let name = lsyscache::get_rel_name(mcx, indoid)?.expect("index has a name");
     tab.cluster_on_index = Some(name.to_string());
@@ -7499,7 +7717,7 @@ fn ATExecReplicaIdentity<'mcx>(
             "cannot use expression index \"{index_relname}\" as replica identity"
         )));
     }
-    if index_form.has_indpred {
+    if !execindexing::RelationGetIndexPredicate(mcx, &index_rel)?.is_nil() {
         return Err(not_supported(format!(
             "cannot use partial index \"{index_relname}\" as replica identity"
         )));

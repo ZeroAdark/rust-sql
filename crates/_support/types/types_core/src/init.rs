@@ -20,6 +20,7 @@ pub enum BackendType {
     WalSummarizer,
     WalWriter,
     Logger,
+    InstanceAux, // pgrust-only, last so C's discriminants hold
 }
 
 impl BackendType {
@@ -42,10 +43,11 @@ impl BackendType {
         BackendType::WalSummarizer,
         BackendType::WalWriter,
         BackendType::Logger,
+        BackendType::InstanceAux,
     ];
 }
 
-pub const BACKEND_NUM_TYPES: usize = BackendType::Logger as usize + 1;
+pub const BACKEND_NUM_TYPES: usize = BackendType::InstanceAux as usize + 1;
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

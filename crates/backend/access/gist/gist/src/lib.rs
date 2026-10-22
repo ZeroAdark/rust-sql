@@ -15,6 +15,8 @@ pub mod state;
 mod state_tests;
 #[cfg(test)]
 mod interrupt_tests;
+#[cfg(test)]
+mod fetch_tests;
 pub mod util;
 pub mod vacuum;
 pub mod wal;
@@ -103,7 +105,7 @@ pub fn gistinsert<'mcx>(
     if amcache.is_none() {
         *amcache = Some(GistInsertAmCache {
             giststate: initGISTstate(mcx, r)?,
-            temp: MemoryContext::new_bump("GiST temporary context"),
+            temp: MemoryContext::new_wholesale("GiST temporary context"),
         });
     }
     let cache = amcache.as_mut().expect("just initialized");

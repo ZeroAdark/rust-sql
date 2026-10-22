@@ -734,6 +734,37 @@ fn release_callbacks_skipped_when_phase_action_errors() {
     ResourceOwnerDelete(parent);
 }
 
+#[test]
+fn a_parked_empty_standing_owner_passes_the_boundary() {
+    setup();
+    std::thread::spawn(|| {
+        let standing = owner("GravityWorker");
+        SetStandingResourceOwner(standing);
+        assert_eq!(ResourceOwnerStateIssue(), None);
+        for v in 0..64usize {
+            remember(standing, v, &PIN_DESC);
+        }
+        assert!(capacity(standing) > 0);
+        assert_eq!(ResourceOwnerStateIssue(), Some("resource-owner state is not empty"), "holding pins");
+        for v in 0..64usize {
+            ResourceOwnerForget(standing, Datum::from_usize(v), &PIN_DESC).unwrap();
+        }
+        assert_eq!(ResourceOwnerStateIssue(), None, "parked and empty, its grown hash included");
+        SetCurrentResourceOwner(standing);
+        assert_eq!(ResourceOwnerStateIssue(), Some("current resource owner is still live"));
+        SetCurrentResourceOwner(ResourceOwner::NULL);
+        let other = owner("other");
+        assert_eq!(ResourceOwnerStateIssue(), Some("resource-owner state is not empty"), "another owner is a live owner");
+        ResourceOwnerDelete(other);
+        SetStandingResourceOwner(ResourceOwner::NULL);
+        assert_eq!(ResourceOwnerStateIssue(), Some("resource-owner state is not empty"), "unregistered, it is a live owner");
+        ResourceOwnerDelete(standing);
+        assert_eq!(ResourceOwnerStateIssue(), None);
+    })
+    .join()
+    .unwrap();
+}
+
 // resowner.c:816-819: `next` is saved before each call and the live list is
 // followed afterwards, so a callback may unregister itself, and an entry a
 // callback unregisters further down the list is not invoked.
@@ -798,4 +829,46 @@ fn release_callback_registered_by_resource_release_runs_in_same_phase() {
     ResourceOwnerRelease(o, RESOURCE_RELEASE_AFTER_LOCKS, false, false).unwrap();
     assert_eq!(released(), vec![]);
     ResourceOwnerDelete(o);
+}
+
+// snapmgr.c snapshot_resowner_desc: DebugPrint = NULL, so a leak reports
+// "resource was not closed: snapshot reference 0x...".
+#[test]
+fn snapshot_ref_leak_uses_default_description() {
+    let desc = &crate::seams::SNAPSHOT_REF_DESC;
+    assert_eq!(desc.name, "snapshot reference");
+    assert!(desc.DebugPrint.is_none());
+}
+
+// wio P347: a deep subtransaction stack's owners must not keep their slab
+// slots for the rest of the session, and a handle to a trimmed slot must not
+// alias an owner created later in the same slot.
+#[test]
+fn trim_returns_deep_stack_slots() {
+    setup();
+    let top = owner("top");
+    let mut chain = Vec::new();
+    let mut parent = top;
+    for _ in 0..5000 {
+        parent = ResourceOwnerCreate(parent, "SubTransaction").unwrap();
+        chain.push(parent);
+    }
+    let (_, grown_cap, _) = arena_census();
+    assert!(grown_cap >= 5001);
+    for o in chain.iter().rev() {
+        release_rest_and_delete(*o);
+    }
+    trim_owner_arena();
+    let (len, cap, free) = arena_census();
+    assert!(len <= ARENA_KEEP_SLOTS && cap <= ARENA_KEEP_SLOTS.max(len), "len {len} cap {cap}");
+    assert!(free < len.max(1));
+    let again: Vec<ResourceOwner> =
+        (0..5000).map(|_| ResourceOwnerCreate(top, "SubTransaction").unwrap()).collect();
+    for stale in &chain {
+        assert!(!again.contains(stale), "stale handle {stale:?} aliases a new owner");
+    }
+    for o in again.iter().rev() {
+        release_rest_and_delete(*o);
+    }
+    release_rest_and_delete(top);
 }

@@ -106,7 +106,7 @@ pub fn CatalogTuplesMultiInsertWithInfo<'mcx>(
     }
     // std Vec: SlotData owns droppy state (no-drop arena rule).
     let mut slots: std::vec::Vec<types_slot::SlotData<'mcx>> =
-        std::vec::Vec::with_capacity(tuples.len());
+        ::mcx::std_vec_with_capacity("catalog", tuples.len())?;
     for tup in tuples {
         let mut slot = exectuples::make_tuple_table_slot(
             mcx,

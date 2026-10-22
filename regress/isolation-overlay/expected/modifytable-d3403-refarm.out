@@ -1,0 +1,324 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s1c
+step s2e: EXPLAIN (COSTS OFF) UPDATE rt SET b = b + rq.v FROM rq WHERE rt.a = rq.id AND rt.a BETWEEN 40 AND 50;
+QUERY PLAN                                           
+-----------------------------------------------------
+Update on rt                                         
+  ->  Hash Join                                      
+        Hash Cond: (rq.id = rt.a)                    
+        ->  Append                                   
+              ->  Seq Scan on rq rq_1                
+              ->  Seq Scan on rq1 rq_2               
+              ->  Seq Scan on rq2 rq_3               
+        ->  Hash                                     
+              ->  Seq Scan on rt                     
+                    Filter: ((a >= 40) AND (a <= 50))
+(10 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1b s2u s1c s2r
+step s1b: UPDATE rt SET b = b + 1000 WHERE a = 44;
+step s2u: UPDATE rt SET b = b + rq.v FROM rq WHERE rt.a = rq.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+ a|   b
+--+----
+38| 380
+39| 390
+40| 401
+41| 412
+42| 421
+43| 432
+44|1441
+45| 452
+46| 461
+47| 477
+48| 481
+49| 492
+50| 501
+51| 510
+52| 520
+(15 rows)
+
+
+starting permutation: s1a s2u s1c s2r
+step s1a: UPDATE rt SET a = 450 WHERE a = 45;
+step s2u: UPDATE rt SET b = b + rq.v FROM rq WHERE rt.a = rq.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+  a|  b
+---+---
+ 38|380
+ 39|390
+ 40|401
+ 41|412
+ 42|421
+ 43|432
+ 44|441
+ 46|461
+ 47|477
+ 48|481
+ 49|492
+ 50|501
+ 51|510
+ 52|520
+450|450
+(15 rows)
+
+
+starting permutation: s1d s2u s1c s2r
+step s1d: DELETE FROM rt WHERE a = 46;
+step s2u: UPDATE rt SET b = b + rq.v FROM rq WHERE rt.a = rq.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+ a|  b
+--+---
+38|380
+39|390
+40|401
+41|412
+42|421
+43|432
+44|441
+45|452
+47|477
+48|481
+49|492
+50|501
+51|510
+52|520
+(14 rows)
+
+
+starting permutation: s1v s2u s1c s2r
+step s1v: UPDATE rt SET b = b + 1000 WHERE a = 44; UPDATE rq1 SET v = 100 WHERE id = 44;
+step s2u: UPDATE rt SET b = b + rq.v FROM rq WHERE rt.a = rq.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+ a|   b
+--+----
+38| 380
+39| 390
+40| 401
+41| 412
+42| 421
+43| 432
+44|1441
+45| 452
+46| 461
+47| 477
+48| 481
+49| 492
+50| 501
+51| 510
+52| 520
+(15 rows)
+
+
+starting permutation: s1k s2u s1c s2r
+step s1k: UPDATE rt SET b = b + 1000 WHERE a = 47; UPDATE ONLY rq SET id = 48 WHERE id = 47;
+step s2u: UPDATE rt SET b = b + rq.v FROM rq WHERE rt.a = rq.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+ a|   b
+--+----
+38| 380
+39| 390
+40| 401
+41| 412
+42| 421
+43| 432
+44| 441
+45| 452
+46| 461
+47|1477
+48| 481
+49| 492
+50| 501
+51| 510
+52| 520
+(15 rows)
+
+
+starting permutation: s1b s2p s1c s2r
+step s1b: UPDATE rt SET b = b + 1000 WHERE a = 44;
+step s2p: UPDATE rt SET b = b + rp.v FROM rp WHERE rt.a = rp.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+ a|   b
+--+----
+38| 380
+39| 390
+40| 403
+41| 413
+42| 423
+43| 433
+44|1443
+45| 453
+46| 463
+47| 473
+48| 483
+49| 493
+50| 503
+51| 510
+52| 520
+(15 rows)
+
+
+starting permutation: s1a s2p s1c s2r
+step s1a: UPDATE rt SET a = 450 WHERE a = 45;
+step s2p: UPDATE rt SET b = b + rp.v FROM rp WHERE rt.a = rp.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+  a|  b
+---+---
+ 38|380
+ 39|390
+ 40|403
+ 41|413
+ 42|423
+ 43|433
+ 44|443
+ 46|463
+ 47|473
+ 48|483
+ 49|493
+ 50|503
+ 51|510
+ 52|520
+450|450
+(15 rows)
+
+
+starting permutation: s1b s2x s1c s2r
+step s1b: UPDATE rt SET b = b + 1000 WHERE a = 44;
+step s2x: DELETE FROM rt USING rq WHERE rt.a = rq.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+ a|  b
+--+---
+38|380
+39|390
+51|510
+52|520
+(4 rows)
+
+
+starting permutation: s1k s2x s1c s2r
+step s1k: UPDATE rt SET b = b + 1000 WHERE a = 47; UPDATE ONLY rq SET id = 48 WHERE id = 47;
+step s2x: DELETE FROM rt USING rq WHERE rt.a = rq.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+ a|  b
+--+---
+38|380
+39|390
+51|510
+52|520
+(4 rows)
+
+
+starting permutation: s1a s2x s1c s2r
+step s1a: UPDATE rt SET a = 450 WHERE a = 45;
+step s2x: DELETE FROM rt USING rq WHERE rt.a = rq.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+  a|  b
+---+---
+ 38|380
+ 39|390
+ 51|510
+ 52|520
+450|450
+(5 rows)
+
+
+starting permutation: s1b s2w s1c s2r
+step s1b: UPDATE rt SET b = b + 1000 WHERE a = 44;
+step s2w: UPDATE rt SET b = b + rq.v + rp.v FROM rq, rp WHERE rt.a = rq.id AND rq.id = rp.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+ a|   b
+--+----
+38| 380
+39| 390
+40| 404
+41| 415
+42| 424
+43| 435
+44|1444
+45| 455
+46| 464
+47| 480
+48| 484
+49| 495
+50| 504
+51| 510
+52| 520
+(15 rows)
+
+
+starting permutation: s1v s2w s1c s2r
+step s1v: UPDATE rt SET b = b + 1000 WHERE a = 44; UPDATE rq1 SET v = 100 WHERE id = 44;
+step s2w: UPDATE rt SET b = b + rq.v + rp.v FROM rq, rp WHERE rt.a = rq.id AND rq.id = rp.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+ a|   b
+--+----
+38| 380
+39| 390
+40| 404
+41| 415
+42| 424
+43| 435
+44|1444
+45| 455
+46| 464
+47| 480
+48| 484
+49| 495
+50| 504
+51| 510
+52| 520
+(15 rows)
+
+
+starting permutation: s1a s2w s1c s2r
+step s1a: UPDATE rt SET a = 450 WHERE a = 45;
+step s2w: UPDATE rt SET b = b + rq.v + rp.v FROM rq, rp WHERE rt.a = rq.id AND rq.id = rp.id AND rt.a BETWEEN 40 AND 50; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s2r: SELECT a, b FROM rt WHERE a BETWEEN 38 AND 52 OR a = 450 ORDER BY a;
+  a|  b
+---+---
+ 38|380
+ 39|390
+ 40|404
+ 41|415
+ 42|424
+ 43|435
+ 44|444
+ 46|464
+ 47|480
+ 48|484
+ 49|495
+ 50|504
+ 51|510
+ 52|520
+450|450
+(15 rows)
+

@@ -7,6 +7,7 @@ publish.workspace = true
 [dependencies]
 guc_tables = { path = "../../misc/guc_tables" }
 heaptoast = { path = "../../../access/heap/heaptoast" }
+detoast = { path = "../../../access/common/detoast" }
 mcx = { path = "../../../../_support/mcx" }
 datum = { path = "../../../../_support/types/datum" }
 array = { package = "types_array", path = "../../../../_support/types/array" }
@@ -29,6 +30,12 @@ lmgr_seams = { path = "../../../storage/lmgr/lmgr_seams" }
 miscinit_seams = { path = "../../init/miscinit_seams" }
 init_small = { path = "../../init/init_small" }
 inval = { path = "../inval" }
+inval_seams = { path = "../inval_seams" }
 l2cache = { path = "../l2cache" }
+gravity_deps = { path = "../../../../gravity/deps" }
 seam_core = { path = "../../../../_support/seam_core" }
 elog = { path = "../../error/elog" }
+
+[dev-dependencies]
+heaptuple = { path = "../../../access/common/heaptuple" }
+pglz = { path = "../../../../common/pglz" }

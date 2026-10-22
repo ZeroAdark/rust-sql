@@ -1,0 +1,30 @@
+-- regress-full-subselect-136
+-- EXPLAIN (COSTS OFF) SELECT ten FROM onek t WHERE unique1 IN (VALUES (0), ((2 IN (SELECT unique2 FROM onek c WHERE c.unique2 = t.unique1))::integer));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=1000 end=sink
+  nodes n1@0 n0@1
+  source range rel=16417 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(5):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  nest inner=n2 JOIN_SEMI raise-free params=($exec2=outer.1)
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source values rti=3 rows=2
+    row (c23:0)
+    row (fn2558(subplan1($exec2)))
+  subplan 1 nested Any params=($exec0=$exec2) ids=($exec1) site=values raise-free test=op96(c23:2, $exec1)
+  inner node=3 serial site=0 reason=IndexSource end=sink
+  nodes n3@0
+  source index-only rel=16417 rti=4 am=heap index=19336
+    key att=2 op=96 value=$exec0
+    recheck (op96(index.1, $exec0))
+    lanes Attr(2):byval8:w8:val
+  project (1=index.1)
+  filter op96($exec2, v3.1)
+  project (1=v3.1)
+  project (1=outer.5)
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w4:val 5=w8:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=fx64:row 15=fx64:row 16=fx64:row
+  outs 1=w8:val
+param $exec2 owner=n0 type=23 rep=w8:val
+param $exec0 owner=subplan1 type=23 rep=w4:val
+mapped: SeqScan IndexOnlyScan ValuesScan NestLoop NestLoopParam SubPlan

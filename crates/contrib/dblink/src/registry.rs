@@ -34,7 +34,7 @@ impl RemoteConn {
 const NUMCONN: usize = 16;
 
 struct NamedConns {
-    map: HashMap<Vec<u8>, Option<RemoteConn>, FxBuildHasher>,
+    map: HashMap<Vec<u8>, Slot, FxBuildHasher>,
     buckets: Vec<Vec<Vec<u8>>>,
     nentries: usize,
     max_bucket: u32,
@@ -116,11 +116,41 @@ impl NamedConns {
 }
 
 thread_local! {
-    static PCONN: RefCell<Option<RemoteConn>> = const { RefCell::new(None) };
+    static PCONN: RefCell<Option<Slot>> = const { RefCell::new(None) };
     static NAMED: RefCell<NamedConns> = RefCell::new(NamedConns::new());
     static WE_CONNECT: Cell<u32> = const { Cell::new(0) };
     static WE_GET_CONN: Cell<u32> = const { Cell::new(0) };
     static WE_GET_RESULT: Cell<u32> = const { Cell::new(0) };
+    // C's pconn counters survive disconnect/reconnect.
+    static PCONN_COUNTERS: Cell<(i32, bool)> = const { Cell::new((0, false)) };
+    static EXIT_CLOSE_ARMED: Cell<bool> = const { Cell::new(false) };
+}
+
+// A C backend's connections die with its process. A pooled parallel worker
+// thread outlives its task and serves other sessions, so the task's
+// proc_exit closes every connection and leaves a fresh registry.
+fn arm_exit_close() {
+    if !EXIT_CLOSE_ARMED.with(Cell::get) {
+        EXIT_CLOSE_ARMED.with(|c| c.set(true));
+        ipc::on_proc_exit(close_connections_at_exit, 0);
+    }
+}
+
+fn close_connections_at_exit(_code: i32, _arg: usize) {
+    EXIT_CLOSE_ARMED.with(|c| c.set(false));
+    let terminate = |slot: Slot| {
+        if let Slot::Ready(mut rc) = slot {
+            rc.conn.terminate();
+        }
+    };
+    if let Ok(Some(slot)) = PCONN.try_with(|c| c.try_borrow_mut().ok().and_then(|mut c| c.take())) {
+        terminate(slot);
+    }
+    let _ = PCONN_COUNTERS.try_with(|k| k.set((0, false)));
+    let named = NAMED.try_with(|m| m.try_borrow_mut().ok().map(|mut m| core::mem::replace(&mut *m, NamedConns::new())));
+    if let Ok(Some(named)) = named {
+        named.map.into_values().for_each(terminate);
+    }
 }
 
 fn we_lazy(cell: &'static std::thread::LocalKey<Cell<u32>>, name: &str) -> PgResult<u32> {
@@ -165,34 +195,96 @@ pub fn init() -> PgResult<()> {
 // partial multibyte tail, and distinct tails must stay distinct keys.
 fn conn_key(name: &str, warn: bool) -> PgResult<Vec<u8>> {
     if name.len() < NAMEDATALEN as usize {
-        return Ok(name.as_bytes().to_vec());
+        return Ok(::mcx::std_vec_from_slice("dblink", &name.as_bytes())?);
     }
     let scratch = mcx::MemoryContext::new("dblink conn key");
     let mut buf: mcx::PgVec<'_, u8> = mcx::vec_with_capacity_in(scratch.mcx(), name.len())?;
     mcx::vec_append_bytes(&mut buf, name.as_bytes())?;
     parser_small1::truncate_identifier(&mut buf, warn, mbutils::GetDatabaseEncoding())?;
-    Ok(buf.to_vec())
+    Ok(::mcx::std_vec_from_slice("dblink", &buf)?)
 }
 
 // --- unnamed connection (pconn) ---
 
-pub fn with_unnamed<R>(f: impl FnOnce(Option<&mut RemoteConn>) -> R) -> R {
-    PCONN.with(|c| f(c.borrow_mut().as_mut()))
+// A connection in use is lifted out: re-entrant callers see it busy (libpq
+// asyncStatus).
+enum Slot {
+    Ready(RemoteConn),
+    InUse(pgclient::CancelTarget),
+}
+
+pub enum Access<'a> {
+    Missing,
+    Busy(&'a pgclient::CancelTarget),
+    Ready(&'a mut RemoteConn),
+}
+
+fn lift(slot: &mut Slot) -> Option<RemoteConn> {
+    let Slot::Ready(rc) = slot else { return None };
+    let cancel = rc.conn.cancel_target();
+    match core::mem::replace(slot, Slot::InUse(cancel)) {
+        Slot::Ready(rc) => Some(rc),
+        Slot::InUse(_) => None,
+    }
+}
+
+fn run_lifted<R>(slot_cancel: Option<pgclient::CancelTarget>, taken: Option<RemoteConn>, f: impl FnOnce(Access) -> R) -> (R, Option<RemoteConn>) {
+    match (taken, slot_cancel) {
+        (Some(mut rc), _) => {
+            let r = f(Access::Ready(&mut rc));
+            (r, Some(rc))
+        }
+        (None, Some(c)) => (f(Access::Busy(&c)), None),
+        (None, None) => (f(Access::Missing), None),
+    }
+}
+
+fn put_back(slot: Option<&mut Slot>, rc: RemoteConn) {
+    match slot {
+        Some(s @ Slot::InUse(_)) => *s = Slot::Ready(rc),
+        _ => {
+            let mut rc = rc;
+            rc.conn.terminate();
+        }
+    }
+}
+
+pub fn with_unnamed<R>(f: impl FnOnce(Access) -> R) -> R {
+    let (taken, cancel) = PCONN.with(|c| match c.borrow_mut().as_mut() {
+        None => (None, None),
+        Some(Slot::InUse(t)) => (None, Some(t.clone())),
+        Some(s) => (lift(s), None),
+    });
+    let (r, taken) = run_lifted(cancel, taken, f);
+    if let Some(rc) = taken {
+        PCONN.with(|c| put_back(c.borrow_mut().as_mut(), rc));
+    }
+    r
 }
 
 pub fn set_unnamed(conn: PgConn) {
-    PCONN.with(|c| {
-        let mut b = c.borrow_mut();
-        if let Some(old) = b.take() {
-            let mut old = old;
-            old.conn.terminate();
-        }
-        *b = Some(RemoteConn::new(conn));
-    });
+    arm_exit_close();
+    let old = PCONN.with(|c| c.borrow_mut().take());
+    if let Some(Slot::Ready(mut old)) = old {
+        PCONN_COUNTERS.with(|k| k.set((old.open_cursor_count, old.new_xact_for_cursor)));
+        old.conn.terminate();
+    }
+    let (open_cursor_count, new_xact_for_cursor) = PCONN_COUNTERS.with(Cell::get);
+    let rc = RemoteConn { conn, open_cursor_count, new_xact_for_cursor };
+    PCONN.with(|c| *c.borrow_mut() = Some(Slot::Ready(rc)));
 }
 
-pub fn take_unnamed() -> Option<RemoteConn> {
-    PCONN.with(|c| c.borrow_mut().take())
+// dblink_disconnect(): false when there is no unnamed connection.
+pub fn disconnect_unnamed() -> bool {
+    match PCONN.with(|c| c.borrow_mut().take()) {
+        None => false,
+        Some(Slot::InUse(_)) => true,
+        Some(Slot::Ready(mut rc)) => {
+            PCONN_COUNTERS.with(|k| k.set((rc.open_cursor_count, rc.new_xact_for_cursor)));
+            rc.conn.terminate();
+            true
+        }
+    }
 }
 
 pub fn unnamed_present() -> bool {
@@ -206,26 +298,25 @@ pub fn named_present(name: &str) -> PgResult<bool> {
     Ok(NAMED.with(|m| m.borrow().map.contains_key(&key)))
 }
 
-// C keeps the hash readable while a connection is in use: lift the entry out.
-pub fn with_named<R>(name: &str, f: impl FnOnce(Option<&mut RemoteConn>) -> R) -> PgResult<R> {
+pub fn with_named<R>(name: &str, f: impl FnOnce(Access) -> R) -> PgResult<R> {
     let key = conn_key(name, false)?;
-    let taken = NAMED.with(|m| m.borrow_mut().map.get_mut(&key).and_then(Option::take));
-    match taken {
-        Some(mut rc) => {
-            let r = f(Some(&mut rc));
-            NAMED.with(|m| {
-                if let Some(slot) = m.borrow_mut().map.get_mut(&key) {
-                    *slot = Some(rc);
-                }
-            });
-            Ok(r)
-        }
-        None => Ok(f(None)),
+    let (taken, cancel) = NAMED.with(|m| match m.borrow_mut().map.get_mut(&key) {
+        None => (None, None),
+        Some(Slot::InUse(t)) => (None, Some(t.clone())),
+        Some(s) => (lift(s), None),
+    });
+    let (r, taken) = run_lifted(cancel, taken, f);
+    if let Some(rc) = taken {
+        NAMED.with(|m| put_back(m.borrow_mut().map.get_mut(&key), rc));
     }
+    Ok(r)
 }
 
-pub fn with_named_present<R>(name: &str, f: impl FnOnce(&mut RemoteConn) -> R) -> PgResult<R> {
-    match with_named(name, |rc| rc.map(f))? {
+pub fn with_named_present<R>(name: &str, f: impl FnOnce(Access) -> R) -> PgResult<R> {
+    match with_named(name, |a| match a {
+        Access::Missing => None,
+        a => Some(f(a)),
+    })? {
         Some(r) => Ok(r),
         None => Err(conn_not_avail(Some(name))),
     }
@@ -238,11 +329,15 @@ pub fn with_named_present<R>(name: &str, f: impl FnOnce(&mut RemoteConn) -> R) -
 // entry itself only becomes visible via `store_named` once the connection
 // is up (C's rconn->conn stays NULL until then; a failed connect
 // deleteConnection()s it — `unreserve_named`), so only the hash-order
-// shadow takes the key here.
+// shadow takes the key here. C errors only on `found && rconn.conn != NULL`
+// (dblink.c:2583): an entry left behind by an interrupted connect (no conn
+// ever stored) is reusable.
 pub fn reserve_named(name: &str) -> PgResult<()> {
     let key = conn_key(name, true)?;
+    arm_exit_close();
     NAMED.with(|m| {
-        if !m.borrow_mut().enter(&key) {
+        let mut m = m.borrow_mut();
+        if !m.enter(&key) && m.map.contains_key(&key) {
             return Err(Box::new(
                 PgError::error("duplicate connection name").with_sqlstate(ERRCODE_DUPLICATE_OBJECT),
             ));
@@ -263,7 +358,7 @@ pub fn unreserve_named(name: &str) -> PgResult<()> {
 pub fn store_named(name: &str, conn: PgConn) -> PgResult<()> {
     let key = conn_key(name, false)?;
     NAMED.with(|m| {
-        let prev = m.borrow_mut().map.insert(key, Some(RemoteConn::new(conn)));
+        let prev = m.borrow_mut().map.insert(key, Slot::Ready(RemoteConn::new(conn)));
         debug_assert!(prev.is_none(), "store_named without reserve_named");
         Ok(())
     })
@@ -527,6 +622,25 @@ pub fn escape_param_str(s: &str) -> String {
 mod tests {
     use super::*;
 
+    // createNewConnection (dblink.c:2583) rejects a name only while its
+    // conn is non-NULL: a reservation left by an interrupted connect is
+    // reusable, a stored connection is a duplicate.
+    #[test]
+    fn interrupted_connect_reservation_is_reusable() {
+        NAMED.with(|m| *m.borrow_mut() = NamedConns::new());
+        reserve_named("cx").unwrap();
+        reserve_named("cx").unwrap();
+        NAMED.with(|m| {
+            m.borrow_mut().map.insert(b"cx".to_vec(), Slot::InUse(pgclient::CancelTarget::detached()))
+        });
+        let e = reserve_named("cx").unwrap_err();
+        assert_eq!(e.sqlstate, ERRCODE_DUPLICATE_OBJECT);
+        assert_eq!(e.message(), "duplicate connection name");
+        delete_named("cx").unwrap();
+        reserve_named("cx").unwrap();
+        unreserve_named("cx").unwrap();
+    }
+
     // Scan orders captured from C 18.6 dblink_get_connections(): five names
     // within the initial 16 buckets, then 22 names across four bucket splits
     // (expand_table at the 17th..20th insert) with removals in between.
@@ -573,6 +687,31 @@ mod tests {
                 "n14", "n05", "n13", "n16", "n17", "n18", "n02", "n22"
             ]
         );
+    }
+
+    #[test]
+    fn in_use_connection_is_busy_not_missing() {
+        NAMED.with(|m| *m.borrow_mut() = NamedConns::new());
+        reserve_named("busy").unwrap();
+        NAMED.with(|m| {
+            m.borrow_mut().map.insert(b"busy".to_vec(), Slot::InUse(pgclient::CancelTarget::detached()))
+        });
+        let seen = with_named_present("busy", |a| match a {
+            Access::Busy(t) => t.cancel(0).unwrap(),
+            _ => Some("not busy".into()),
+        })
+        .unwrap();
+        assert_eq!(seen.as_deref(), Some("connection not open"));
+        assert!(named_present("busy").unwrap());
+        delete_named("busy").unwrap();
+
+        PCONN.with(|c| *c.borrow_mut() = Some(Slot::InUse(pgclient::CancelTarget::detached())));
+        assert!(with_unnamed(|a| matches!(a, Access::Busy(_))));
+        assert!(unnamed_present());
+        PCONN_COUNTERS.with(|k| k.set((3, true)));
+        assert!(disconnect_unnamed());
+        assert!(with_unnamed(|a| matches!(a, Access::Missing)));
+        assert_eq!(PCONN_COUNTERS.with(Cell::get), (3, true));
     }
 
     #[test]

@@ -315,6 +315,10 @@ pub struct ParkLot {
     /// non-registered population), maintained under `m`. wake_all counts
     /// them into `unparks`.
     legacy_parked: atomic::AtomicUsize,
+    /// Lane wakelit arm (iv): registered parkers a wake TREE still owes a
+    /// wake (set by [`ParkLot::wake_tree`], drained two at a time by every
+    /// wakee's [`ParkLot::wake_tree_continue`]).
+    tree_pending: atomic::AtomicUsize,
 }
 
 /// One pool worker's directed-wake slot (regression). Owned by the worker
@@ -382,6 +386,7 @@ impl ParkLot {
             idle: Mutex::new(IdleStack { stack: Vec::new(), wakes: 0 }),
             unparks: atomic::AtomicU64::new(0),
             legacy_parked: atomic::AtomicUsize::new(0),
+            tree_pending: atomic::AtomicUsize::new(0),
         }
     }
 
@@ -579,6 +584,37 @@ impl ParkLot {
     /// spinner elision: a live searcher covers the work by its own re-scan;
     /// otherwise wake exactly ONE idle worker (LIFO; 3-poll starvation
     /// cap).
+    /// [`ParkLot::wake_all`] bounded to `n` parkers: the epoch moves for everyone (a thread between its epoch capture and
+    /// its wait re-checks and never parks), but only `n` waiters leave the futex — a publish that `n` workers can take
+    /// (a width-capped task set) does not herd the whole pool through the lot's mutex.
+    pub fn wake_n(&self, n: usize) {
+        self.epoch.fetch_add(1, atomic::Ordering::SeqCst);
+        let g = lock(&self.m);
+        let legacy = self.legacy_parked.load(atomic::Ordering::SeqCst);
+        drop(g);
+        let from_cv = legacy.min(n);
+        if from_cv == legacy {
+            self.cv.notify_all();
+        } else {
+            for _ in 0..from_cv {
+                self.cv.notify_one();
+            }
+        }
+        let mut woken = 0usize;
+        if n > from_cv {
+            let mut idle = lock(&self.idle);
+            while woken < n - from_cv {
+                let Some(p) = idle.stack.pop() else { break };
+                p.woken.store(true, atomic::Ordering::SeqCst);
+                p.cv.notify_all();
+                woken += 1;
+            }
+        }
+        if from_cv + woken > 0 {
+            self.unparks.fetch_add((from_cv + woken) as u64, atomic::Ordering::SeqCst);
+        }
+    }
+
     pub fn wake_work(&self) {
         self.epoch.fetch_add(1, atomic::Ordering::SeqCst);
         // The publisher half of the StoreLoad hinge — pairs with
@@ -617,6 +653,74 @@ impl ParkLot {
         if legacy > 0 {
             self.cv.notify_all();
             self.unparks.fetch_add(legacy as u64, atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Lane wakelit arm (iv): the tree publish — bump the epoch (legacy
+    /// parkers keep their notify-all), then wake TWO registered parkers
+    /// and leave the rest as the tree's debt; each wakee pays two more
+    /// ([`ParkLot::wake_tree_continue`]) as its first act after waking.
+    pub fn wake_tree(&self) {
+        self.epoch.fetch_add(1, atomic::Ordering::SeqCst);
+        atomic::fence(atomic::Ordering::SeqCst);
+        let legacy = {
+            let g = lock(&self.m);
+            let n = self.legacy_parked.load(atomic::Ordering::SeqCst);
+            drop(g);
+            n
+        };
+        if legacy > 0 {
+            self.cv.notify_all();
+            self.unparks.fetch_add(legacy as u64, atomic::Ordering::SeqCst);
+        }
+        let mut g = lock(&self.idle);
+        let n = g.stack.len();
+        let k = n.min(2);
+        self.tree_pending.store(n - k, atomic::Ordering::SeqCst);
+        for _ in 0..k {
+            if let Some(p) = g.stack.pop() {
+                p.woken.store(true, atomic::Ordering::SeqCst);
+                p.cv.notify_all();
+            }
+        }
+        if k > 0 {
+            self.unparks.fetch_add(k as u64, atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Lane wakelit arm (iv): a wakee's share of the tree — claim up to two
+    /// of the outstanding wakes and perform them. Cheap when nothing is
+    /// owed (one load).
+    pub fn wake_tree_continue(&self) {
+        loop {
+            let owed = self.tree_pending.load(atomic::Ordering::SeqCst);
+            if owed == 0 {
+                return;
+            }
+            let take = owed.min(2);
+            if self
+                .tree_pending
+                .compare_exchange(owed, owed - take, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst)
+                .is_err()
+            {
+                continue;
+            }
+            let mut g = lock(&self.idle);
+            let mut woke = 0u64;
+            for _ in 0..take {
+                match g.stack.pop() {
+                    Some(p) => {
+                        p.woken.store(true, atomic::Ordering::SeqCst);
+                        p.cv.notify_all();
+                        woke += 1;
+                    }
+                    None => break,
+                }
+            }
+            if woke > 0 {
+                self.unparks.fetch_add(woke, atomic::Ordering::SeqCst);
+            }
+            return;
         }
     }
 

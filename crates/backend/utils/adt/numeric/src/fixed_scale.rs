@@ -26,6 +26,7 @@
 //! over packed chunks are sound.
 
 use crate::var::{int128_to_var, make_result, NumericImage, NumericVar};
+pub use crate::float_cast::{fixed_scale_to_f32, fixed_scale_to_f64};
 use crate::{Num, NBASE, NUMERIC_DSCALE_MAX, NUMERIC_NEG, NUMERIC_POS};
 use types_error::PgResult;
 
@@ -198,7 +199,8 @@ where
     I: IntoIterator<Item = Num<'a>>,
 {
     let mut iter = values.into_iter();
-    let mut packed = Vec::with_capacity(iter.size_hint().0);
+    let mut packed = Vec::new();
+    let _ = packed.try_reserve(iter.size_hint().0);
     let first = match iter.next() {
         Some(num) => num,
         None => return Ok(FixedScaleChunk { scale: 0, packed }),

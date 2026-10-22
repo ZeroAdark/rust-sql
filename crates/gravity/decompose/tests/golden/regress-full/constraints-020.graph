@@ -1,0 +1,12 @@
+-- regress-full-constraints-020
+-- SELECT conrelid::regclass, contype, convalidated, conislocal FROM pg_catalog.pg_constraint WHERE conrelid in ('notnull_parent_upg'::regclass, 'notnull_child_upg'::regclass) ORDER BY 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=2606 rti=1 am=heap index=2665
+    key att=9 op=607 form=any value=c1028:'\x01\x00\x00\x00\x00\x00\x00\x00\x1a\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x04S\x00\x00\x07S\x00\x00'
+    recheck (any607(v1.9, c1028:'\x01\x00\x00\x00\x00\x00\x00\x00\x1a\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x04S\x00\x00\x07S\x00\x00'))
+    lanes Attr(4):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(17):byval8:w8:val
+  project (1=relabel2205(v1.9), 2=v1.4, 3=v1.8, 4=v1.17)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val
+mapped: IndexScan

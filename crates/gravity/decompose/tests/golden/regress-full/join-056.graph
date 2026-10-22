@@ -1,0 +1,39 @@
+-- regress-full-join-056
+-- explain (costs off) select * from onek t1 left join onek t2 on true left join lateral (select * from onek t3 where t3.two = t2.two offset 0) s on t2.unique1 = 1;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=4 eligible rows=1000 end=breaker(slot=0 Materialize)
+  nodes n4@0 n3@1 n2@3^
+  source range rel=16417 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9, 10=v2.10, 11=v2.11, 12=v2.12, 13=v2.13, 14=v2.14, 15=v2.15, 16=v2.16)
+  nest inner=n5 JOIN_LEFT raise-free params=($exec0=outer.3) qual=(op96(outer.1, c23:1))
+  inner node=7 eligible rows=500 end=sink
+  nodes n7@0 n5@2
+  source range rel=16417 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op96(v6.3, $exec0)
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=v6.4, 5=v6.5, 6=v6.6, 7=v6.7, 8=v6.8, 9=v6.9, 10=v6.10, 11=v6.11, 12=v6.12, 13=v6.13, 14=v6.14, 15=v6.15, 16=v6.16)
+  memo entries=2 binary keys=($exec0)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=outer.10, 11=outer.11, 12=outer.12, 13=outer.13, 14=outer.14, 15=outer.15, 16=outer.16)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=outer.10, 11=outer.11, 12=outer.12, 13=outer.13, 14=outer.14, 15=outer.15, 16=outer.16, 17=inner.1, 18=inner.2, 19=inner.3, 20=inner.4, 21=inner.5, 22=inner.6, 23=inner.7, 24=inner.8, 25=inner.9, 26=inner.10, 27=inner.11, 28=inner.12, 29=inner.13, 30=inner.14, 31=inner.15, 32=inner.16)
+  spool
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page 17=w4:val 18=w4:val 19=w4:val 20=w4:val 21=w4:val 22=w4:val 23=w4:val 24=w4:val 25=w4:val 26=w4:val 27=w4:val 28=w4:val 29=w4:val 30=fx64:life/breaker 31=fx64:life/breaker 32=fx64:life/breaker
+p1 node=1 eligible rows=1000 end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source range rel=16417 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  nest inner=n2 JOIN_LEFT invariant raise-free params=()
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n2@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=outer.10, 11=outer.11, 12=outer.12, 13=outer.13, 14=outer.14, 15=outer.15, 16=outer.16, 17=outer.17, 18=outer.18, 19=outer.19, 20=outer.20, 21=outer.21, 22=outer.22, 23=outer.23, 24=outer.24, 25=outer.25, 26=outer.26, 27=outer.27, 28=outer.28, 29=outer.29, 30=outer.30, 31=outer.31, 32=outer.32)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=outer.10, 11=outer.11, 12=outer.12, 13=outer.13, 14=outer.14, 15=outer.15, 16=outer.16, 17=inner.1, 18=inner.2, 19=inner.3, 20=inner.4, 21=inner.5, 22=inner.6, 23=inner.7, 24=inner.8, 25=inner.9, 26=inner.10, 27=inner.11, 28=inner.12, 29=inner.13, 30=inner.14, 31=inner.15, 32=inner.16, 33=inner.17, 34=inner.18, 35=inner.19, 36=inner.20, 37=inner.21, 38=inner.22, 39=inner.23, 40=inner.24, 41=inner.25, 42=inner.26, 43=inner.27, 44=inner.28, 45=inner.29, 46=inner.30, 47=inner.31, 48=inner.32)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page 17=w4:val 18=w4:val 19=w4:val 20=w4:val 21=w4:val 22=w4:val 23=w4:val 24=w4:val 25=w4:val 26=w4:val 27=w4:val 28=w4:val 29=w4:val 30=fx64:life/breaker 31=fx64:life/breaker 32=fx64:life/breaker 33=w4:val 34=w4:val 35=w4:val 36=w4:val 37=w4:val 38=w4:val 39=w4:val 40=w4:val 41=w4:val 42=w4:val 43=w4:val 44=w4:val 45=w4:val 46=fx64:life/breaker 47=fx64:life/breaker 48=fx64:life/breaker
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+param $exec0 owner=n3 type=23 rep=w8:val
+mapped: SeqScan NestLoop NestLoopParam Material Memoize

@@ -31,7 +31,7 @@ use types_guc::GucSource;
 use types_storage::multixact::{ISUPDATE_from_mxstatus, MultiXactMember, MultiXactStatus};
 use types_storage::storage::{
     LWTRANCHE_MULTIXACTMEMBER_BUFFER, LWTRANCHE_MULTIXACTMEMBER_SLRU,
-    LWTRANCHE_MULTIXACTOFFSET_BUFFER, LWTRANCHE_MULTIXACTOFFSET_SLRU, NUM_AUXILIARY_PROCS,
+    LWTRANCHE_MULTIXACTOFFSET_BUFFER, LWTRANCHE_MULTIXACTOFFSET_SLRU,
 };
 use types_storage::storage::{DELAY_CHKPT_START, MULTI_XACT_GEN_LOCK, MULTI_XACT_TRUNCATION_LOCK};
 use types_storage::sync::{FileTag, SyncRequestHandler};
@@ -278,7 +278,7 @@ fn my_slot() -> usize {
 // their member slots come directly after the MaxBackends backend slots.
 fn prepared_xact_member_slot(procno: i32) -> usize {
     let st = MultiXactState();
-    let first_prepared = state_max_backends(st) + NUM_AUXILIARY_PROCS as usize;
+    let first_prepared = state_max_backends(st) + ::init_small::globals::NumAuxiliaryProcs() as usize;
     debug_assert!(procno >= 0 && procno as usize >= first_prepared);
     let idx = state_max_backends(st) + (procno as usize - first_prepared);
     debug_assert!(idx < st.num_member_slots);
@@ -777,7 +777,7 @@ fn write_create_wal(header: &[u8], members: &[MultiXactMember]) -> PgResult<()> 
             .with_mut(|scratch| {
                 let buf = &mut scratch.buf;
                 buf.clear();
-                buf.reserve(members.len() * SIZE_OF_MULTIXACT_MEMBER);
+                ::mcx::pgvec_reserve(buf, members.len() * SIZE_OF_MULTIXACT_MEMBER)?;
                 for m in members {
                     buf.extend_from_slice(&m.xid.to_ne_bytes());
                     buf.extend_from_slice(&(m.status as i32).to_ne_bytes());
@@ -1521,7 +1521,7 @@ pub fn MultiXactShmemInit() -> PgResult<()> {
     );
     let member_slots = num_member_slots();
     let total_slots = member_slots + num_visible_slots();
-    let mut per_backend = Vec::with_capacity(total_slots);
+    let mut per_backend = ::mcx::std_vec_with_capacity("access", total_slots)?;
     per_backend.resize_with(total_slots, || AtomicU32::new(0));
     let p = raw.cast::<MultiXactStateShared>();
     // SAFETY: a fresh, zeroed, cache-line-aligned ShmemIndex allocation of at
@@ -2482,7 +2482,9 @@ pub fn multixact_redo(record: &mut XLogReaderState) -> PgResult<()> {
 
         let cx = MemoryContext::new("multixact_redo members");
         let mut members: PgVec<'_, MultiXactMember> = PgVec::new_in(cx.mcx());
-        members.reserve(nmembers.max(0) as usize);
+        members
+            .try_reserve(nmembers.max(0) as usize)
+            .map_err(|_| cx.mcx().oom(nmembers.max(0) as usize * core::mem::size_of::<MultiXactMember>()))?;
         let mut max_xid = record_xid;
         for i in 0..nmembers as usize {
             let base = SIZE_OF_MULTIXACT_CREATE + i * SIZE_OF_MULTIXACT_MEMBER;
@@ -2617,9 +2619,7 @@ pub fn init_seams() {
     multixact_seams::startup_multixact::set(StartupMultiXact);
     multixact_seams::trim_multixact::set(TrimMultiXact);
     multixact_seams::check_point_multixact::set(CheckPointMultiXact);
-    multixact_seams::multixact_set_next_mxact::set(|next_multi, next_offset| {
-        MultiXactSetNextMXact(next_multi, next_offset).expect("MultiXactSetNextMXact failed")
-    });
+    multixact_seams::multixact_set_next_mxact::set(MultiXactSetNextMXact);
     multixact_seams::set_multixact_id_limit::set(|oldest_multi, oldest_db, is_startup| {
         SetMultiXactIdLimit(oldest_multi, oldest_db, is_startup)
             .expect("SetMultiXactIdLimit failed")

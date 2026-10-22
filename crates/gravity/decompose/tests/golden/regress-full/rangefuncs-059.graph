@@ -1,0 +1,13 @@
+-- regress-full-rangefuncs-059
+-- select t.a, t, t.a from rngfunc1(10000) t limit 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=1 [1:Other fn40787 cols=2 fn40787(c23:10000)]
+  project (1=v1.1, 2=v1.0, 3=v1.1)
+  limit count=1 offset=all
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=vl:row 2=vl:row 3=vl:row
+  outs 1=vl:row 2=vl:row 3=vl:row
+mapped: FunctionScan Limit

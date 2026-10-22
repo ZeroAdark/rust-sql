@@ -3,7 +3,7 @@ use std::os::fd::RawFd;
 
 use ::vfs::VfsFd;
 
-use ::elog::ereport;
+use ::elog::{ereport, PCT_M};
 use ::types_core::BLCKSZ;
 use ::types_error::{PgResult, ERRCODE_CONFIGURATION_LIMIT_EXCEEDED, ERROR, LOG};
 use ::types_resowner::ResourceOwner;
@@ -75,11 +75,12 @@ pub fn PathNameOpenFile(file_name: &str, file_flags: i32) -> PgResult<File> {
 
 // C contract: File(-1) with errno set on open failure, no ereport.
 pub fn PathNameOpenFilePerm(file_name: &str, file_flags: i32, file_mode: u32) -> PgResult<File> {
+    crate::orphan::drain();
     let fnamecopy = file_name.to_owned();
     let file_flags = file_flags | libc::O_CLOEXEC;
 
     with_fd(|fd| {
-        let file = vfd::AllocateVfd(fd);
+        let file = vfd::AllocateVfd(fd)?;
         vfd::ReleaseLruFiles(fd)?;
 
         let raw = vfd::BasicOpenFilePermInternal(fd, file_name, file_flags, file_mode)?;
@@ -97,13 +98,30 @@ pub fn PathNameOpenFilePerm(file_name: &str, file_flags: i32, file_mode: u32) ->
         vfd_p.file_name = Some(fnamecopy);
         vfd_p.file_flags = file_flags & !(libc::O_CREAT | libc::O_TRUNC | libc::O_EXCL);
         vfd_p.file_mode = file_mode;
-        vfd_p.file_size = 0;
+        vfd_p.temp = None;
         vfd_p.fdstate = 0x0;
         vfd_p.resowner = ResourceOwner::NULL;
 
         vfd::Insert(fd, file);
         Ok(File(file))
     })
+}
+
+pub fn FileGeneration(file: File) -> u64 {
+    if !vfd::fd_tls_alive() {
+        return 0;
+    }
+    with_fd(|fd| if vfd::FileIsValid(fd, file.0) { fd.vfd_cache[file.0 as usize].gen } else { 0 })
+}
+
+/// `FileClose(file)` only while its slot still holds the open that took generation `gen`. A slot freed since (a
+/// resource-owner release, an abort's temp-file cleanup) or allocated again to another file is left alone: closing
+/// it would free the other file's VFD, whose holder (an md segment) would then read the slot's next file.
+pub fn FileCloseGeneration(file: File, gen: u64) -> PgResult<()> {
+    if gen == 0 || FileGeneration(file) != gen {
+        return Ok(());
+    }
+    FileClose(file)
 }
 
 pub fn FileClose(file: File) -> PgResult<()> {
@@ -146,18 +164,18 @@ pub fn FileClose(file: File) -> PgResult<()> {
         let name = with_fd(|fd| fd.vfd_cache[file as usize].file_name.clone().unwrap_or_default());
         ereport(elevel)
             .with_saved_errno(en)
-            .errmsg_internal(format!("could not close file \"{name}\": %m"))
+            .errmsg_internal(format!("could not close file \"{name}\": {PCT_M}"))
             .finish(loc("FileClose"))?;
     }
 
     let (fdstate, file_name) = with_fd(|fd| {
         let vfd_p = &mut fd.vfd_cache[file as usize];
         let fdstate = vfd_p.fdstate;
-        if fdstate & FD_TEMP_FILE_LIMIT != 0 {
-            // Subtract its size from current usage (do first in case of error).
-            let sz = vfd_p.file_size as u64;
-            vfd_p.file_size = 0;
-            fd.temporary_files_size = fd.temporary_files_size.wrapping_sub(sz);
+        if let Some(charge) = vfd_p.temp.take() {
+            match vfd_p.file_name.as_deref().filter(|_| fdstate & vfd::FD_TEMP_FOR_LIFE != 0) {
+                Some(name) => crate::vfd::named_temp_closed(name, &charge),
+                None => charge.shrink_to(0),
+            }
         }
         if fdstate & FD_DELETE_AT_CLOSE != 0 {
             // Reset first so an abort-path re-entry can't loop; worst case is a
@@ -182,7 +200,7 @@ pub fn FileClose(file: File) -> PgResult<()> {
             ereport(LOG)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not delete file \"{name}\": %m"))
+                .errmsg(format!("could not delete file \"{name}\": {PCT_M}"))
                 .finish(loc("FileClose"))?;
         }
 
@@ -192,7 +210,7 @@ pub fn FileClose(file: File) -> PgResult<()> {
             ereport(LOG)
                 .with_saved_errno(stat_errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not stat file \"{name}\": %m"))
+                .errmsg(format!("could not stat file \"{name}\": {PCT_M}"))
                 .finish(loc("FileClose"))?;
         }
     }
@@ -359,8 +377,15 @@ pub fn FileWriteV(
             if rc < 0 {
                 return Ok((rc, -1, 0, 0, 0));
             }
-            let vfd_p = &fd.vfd_cache[file as usize];
-            Ok((rc, vfd_raw(fd, file), vfd_p.fdstate, vfd_p.file_size, fd.temporary_files_size))
+            let fdstate = fd.vfd_cache[file as usize].fdstate;
+            let (temp_total, file_size) = match &fd.vfd_cache[file as usize].temp {
+                Some(charge) => charge.totals(),
+                None if fdstate & FD_TEMP_FILE_LIMIT != 0 => {
+                    (fd.temp_current().load(std::sync::atomic::Ordering::Relaxed), 0)
+                }
+                None => (0, 0),
+            };
+            Ok((rc, vfd_raw(fd, file), fdstate, file_size as i64, temp_total))
         })?;
     if rc < 0 {
         return Ok(rc as isize);
@@ -395,14 +420,18 @@ pub fn FileWriteV(
             // for every successful write so short-write callers can report %m.
             set_errno(libc::ENOSPC);
 
-            if fdstate & FD_TEMP_FILE_LIMIT != 0 {
-                let past_write = offset + return_code as i64;
+            let past_write = offset + return_code as i64;
+            if fdstate & FD_TEMP_FILE_LIMIT != 0 && past_write > 0 {
                 with_fd(|fd| {
-                    let vfd_p = &mut fd.vfd_cache[file as usize];
-                    if past_write > vfd_p.file_size {
-                        fd.temporary_files_size += (past_write - vfd_p.file_size) as u64;
-                        vfd_p.file_size = past_write;
-                    }
+                    let charge = match &fd.vfd_cache[file as usize].temp {
+                        Some(charge) => charge.clone(),
+                        None => {
+                            let charge = crate::vfd::temp_charge_for(fd, file);
+                            fd.vfd_cache[file as usize].temp = Some(charge.clone());
+                            charge
+                        }
+                    };
+                    charge.grow_to(past_write as u64);
                 });
             }
             return Ok(return_code);
@@ -477,12 +506,27 @@ const _: () = assert!(
 // common/file_utils.c pg_pwrite_zeros' `static const PGIOAlignedBlock zbuffer`:
 // I/O-aligned, or FileZero-backed zero-extension EINVALs under
 // debug_io_direct=data (and mdzeroextend fails with "could not extend file").
-pub(crate) static ZBUFFER: IoAlignedBlock = IoAlignedBlock([0u8; BLCKSZ]);
+// D4510: the backend's one I/O-aligned zero block (pg_pwrite_zeros, md's segment padding, the bulk writer's gap pages).
+// Interior-mutable only so it lands in .bss: an immutable zero static stays in .rodata as BLCKSZ file bytes. Never
+// written.
+#[repr(transparent)]
+struct ZeroBlock(core::cell::UnsafeCell<IoAlignedBlock>);
+
+// SAFETY: never written (`zero_block` hands out shared references only), so shared reads from any thread are sound.
+unsafe impl Sync for ZeroBlock {}
+
+static ZBUFFER: ZeroBlock = ZeroBlock(core::cell::UnsafeCell::new(IoAlignedBlock([0u8; BLCKSZ])));
+
+/// The I/O-aligned (PG_IO_ALIGN_SIZE) block of BLCKSZ zeros.
+pub fn zero_block() -> &'static [u8; BLCKSZ] {
+    // SAFETY: nothing writes ZBUFFER (no &mut to it and no raw write exists), so a 'static shared borrow is sound.
+    unsafe { &(*ZBUFFER.0.get()).0 }
+}
 
 // common/file_utils.c pg_pwrite_zeros: fd.c's FileZero is its only backend
 // caller so far, so it lives here until the common unit lands.
 pub fn pg_pwrite_zeros(fd: RawFd, size: usize, mut offset: i64) -> isize {
-    let zbuffer = &ZBUFFER.0;
+    let zbuffer = zero_block();
     let mut remaining = size;
     let mut total_written: isize = 0;
     let mut iov: Vec<WriteChunk<'_>> = Vec::with_capacity(PG_IOV_MAX);
@@ -512,7 +556,11 @@ fn pg_pwritev_with_retry(fd: RawFd, iov: &[WriteChunk<'_>], mut offset: i64) -> 
         return -1;
     }
 
-    let mut iov_copy: Vec<WriteChunk<'_>> = iov.to_vec();
+    // C: `struct iovec iov_copy[PG_IOV_MAX]` on the stack — a constant-bounded
+    // buffer (iov.len() <= PG_IOV_MAX was checked above), exempt from the
+    // fallible-allocation ratchet as a fixed-size scratch.
+    let mut iov_copy: Vec<WriteChunk<'_>> = Vec::with_capacity(PG_IOV_MAX);
+    iov_copy.extend_from_slice(iov);
     let mut cur: &mut [WriteChunk<'_>] = &mut iov_copy;
     let mut sum: isize = 0;
 
@@ -632,11 +680,8 @@ pub fn FileTruncate(file: File, offset: i64, wait_event_info: u32) -> PgResult<i
 
     if return_code == 0 {
         with_fd(|fd| {
-            let vfd_p = &mut fd.vfd_cache[file as usize];
-            if vfd_p.file_size > offset {
-                debug_assert!(vfd_p.fdstate & FD_TEMP_FILE_LIMIT != 0);
-                fd.temporary_files_size -= (vfd_p.file_size - offset) as u64;
-                vfd_p.file_size = offset;
+            if let Some(charge) = &fd.vfd_cache[file as usize].temp {
+                charge.shrink_to(offset.max(0) as u64);
             }
         });
     }
@@ -717,4 +762,34 @@ pub fn FileRawDescForAio(file: File) -> PgResult<RawFd> {
         return Ok(-1);
     }
     Ok(raw)
+}
+
+#[cfg(test)]
+mod zero_block_tests {
+    use super::BLCKSZ;
+
+    /// D4510: the backend's I/O zero block reads zero, is PG_IO_ALIGN_SIZE-aligned, and lies in .bss (an anonymous writable
+    /// mapping: no file bytes). Born red on trunk: the immutable zero static sits in .rodata (mapped from the binary).
+    #[test]
+    fn zero_block_is_zero_aligned_and_in_bss() {
+        let p = core::ptr::addr_of!(super::ZBUFFER) as *const u8;
+        assert_eq!(p as usize % ::types_storage::bufpage::PG_IO_ALIGN_SIZE, 0);
+        // SAFETY: `p` covers the BLCKSZ bytes of a static nothing writes.
+        let b = unsafe { core::slice::from_raw_parts(p, BLCKSZ) };
+        assert!(b.iter().all(|&x| x == 0));
+        #[cfg(all(target_os = "linux", not(pgrust_sim)))]
+        {
+            let last = p as usize + BLCKSZ - 1;
+            let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+            let line = maps
+                .lines()
+                .find(|l| {
+                    let (a, z) = l.split(' ').next().unwrap().split_once('-').unwrap();
+                    (usize::from_str_radix(a, 16).unwrap()..usize::from_str_radix(z, 16).unwrap()).contains(&last)
+                })
+                .unwrap_or_else(|| panic!("no mapping holds {last:#x}"));
+            let f: Vec<&str> = line.split_whitespace().collect();
+            assert!(f[1].starts_with("rw") && (f.len() == 5 || f[5] == "[heap]"), "the zero block is mapped from the binary (.rodata / .data), not .bss: {line}");
+        }
+    }
 }

@@ -1,0 +1,2 @@
+path	crates/gravity/decompose/src/facts/record.rs
+method	std::iter::Iterator::collect	1

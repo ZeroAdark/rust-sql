@@ -1,0 +1,10 @@
+# DAY-ORDER addendum 9 (USER 2026-10-05 ~18:52Z): agg_shop-0211 (ho-tour-agg): regr_* over numeric(12,2) and smallint at W8;
+# Gravity's parallel float8 states merge in arrival order, so the last digits vary run to run (box 65 18:50Z, 3 runs: this one)
+sql: SELECT regr_slope(total, item_count) AS slope, regr_intercept(total, item_count) AS intercept, regr_r2(total, item_count) AS r2 FROM orders
+schema: CREATE TABLE orders (id bigint PRIMARY KEY, customer_id integer NOT NULL, total numeric(12,2) NOT NULL, item_count smallint NOT NULL);
+class: unordered
+verdict: match
+[pg]
+0.001999999999999973	250.97999999999996	2.4000000009599255e-10
+[got]
+0.0019999999999998942	250.98	2.4000000009597425e-10

@@ -1,0 +1,10 @@
+-- regress-full-join-159
+-- explain (costs off) select t1.* from uniquetbl as t1 left join (select *, '***'::text as d1 from uniquetbl) t2 on t1.f1 = t2.f1 left join uniquetbl t3 on t2.d1 = t3.f1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1360 end=sink
+  nodes n0@0
+  source range rel=25661 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1)
+  outs 1=vl:win/page
+mapped: SeqScan

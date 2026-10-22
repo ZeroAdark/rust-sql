@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 types_core = { path = "../../../../_support/types/types_core" }
-types_error = { path = "../../../../_support/types/types_error" }
+types_error = { path = "../../../../_support/types/types_error", features = ["std"] }
 # std: per-thread context pools for the whole server graph (init_small is the
 # bottom of the backend dep graph — every backend build inherits the feature).
 mcx = { path = "../../../../_support/mcx", features = ["std"] }
@@ -22,8 +22,22 @@ guc_seams = { path = "../../misc/guc_seams" }
 types_storage = { path = "../../../../_support/types/types_storage" }
 types_startup = { path = "../../../../_support/types/types_startup" }
 pgsync = { path = "../../../../_support/pgsync" }
+# G1-A: the allocator wrapper is door 1 of the memory ledger (oom.rs Rescue).
+memledger = { path = "../../../../_support/memledger" }
+# pphatch (`pool-global`): Rescue frees and resizes a page-pool block without the pool's allocator test (`oom::dealloc_served`).
+pagepool = { path = "../../../../_support/pagepool", features = ["global"], optional = true }
+
+[dev-dependencies]
+ip = { path = "../../../../common/ip" }
+# P6: tests/pool_cache_charge.rs and tests/pool_cap_charge.rs (feature pool-global) run under Rescue<pagepool::PoolAlloc>
+pagepool = { path = "../../../../_support/pagepool", features = ["global"] }
 
 # `pgrust_sim` (non-default cfg): P4 sim arms live behind it; empty/absent
 # in product builds (law 0.1).
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(pgrust_sim)'] }
+
+[features]
+# P6 (main_main's `pagepool-global`): door 1's rounding from the layout (`oom::charge_usable_layout`), the cache class's
+# test (`set_cache_test`) and no reserve (PoolAlloc's claims pass the pool's cap, D4718). Off: unchanged.
+pool-global = ["dep:pagepool"]

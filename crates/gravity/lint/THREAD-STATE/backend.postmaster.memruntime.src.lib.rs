@@ -1,0 +1,6 @@
+backend/postmaster/memruntime/src/lib.rs	COUNTING	memory	test	test	memory crate: test allocator's counting switch (cfg(test) mod tests)
+backend/postmaster/memruntime/src/lib.rs	ALLOCS	memory	test	test	memory crate: test allocator's allocation count (cfg(test) mod tests)
+backend/postmaster/memruntime/src/lib.rs	MINE	memory	test	test	memory crate: BYSTRIM test rungs answer this thread only (cfg(test) mod tests)
+backend/postmaster/memruntime/src/lib.rs	WANTED	memory	test	test	memory crate: BYSTRIM test rungs bytes asked of reclaim (cfg(test) mod tests)
+backend/postmaster/memruntime/src/lib.rs	WATCHDOG_THREAD	memory	exit	thread	ppres: set once on the memory watchdog thread at its start (the pool reserve sheds only on its R1 ask)
+backend/postmaster/memruntime/src/lib.rs	RESIDENT_SPLIT	memory	at:take_allocator_resident_split	thread	pppress: this thread's last allocator_resident reading as (maps, pool), taken by the memory view right after the governor's resident probe on the same thread (the mimalloc term of that same read)

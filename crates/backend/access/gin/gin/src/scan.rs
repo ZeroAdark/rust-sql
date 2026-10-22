@@ -266,13 +266,15 @@ pub(crate) fn ginNewScanKey(
 
         let kcx = work.kcx();
         let col = state.col(skey.sk_attno as OffsetNumber);
-        let extracted = crate::opclass::extract_query(
-            kcx,
-            col.extract_query,
-            col.support_collation,
-            skey.sk_argument,
-            skey.sk_strategy,
-        )?;
+        let extracted = crate::secdef::call(col.secdef_proc(GIN_EXTRACTQUERY_PROC), || {
+            crate::opclass::extract_query(
+                kcx,
+                col.extract_query,
+                col.support_collation,
+                skey.sk_argument,
+                skey.sk_strategy,
+            )
+        })?;
         let crate::opclass::ExtractedQuery {
             entries: query_values,
             mut search_mode,
@@ -391,7 +393,7 @@ pub(crate) fn ginNewScanKey(
     })?;
     so.work = Some(owner);
     // pgstat_count_index_scan is bumped by the caller (gingetbitmap) through
-    // the scan's xs_pgstat_index_scans slot, as the other AMs do.
+    // the scan's xs_pgstat link, as the other AMs do.
     Ok(())
 }
 

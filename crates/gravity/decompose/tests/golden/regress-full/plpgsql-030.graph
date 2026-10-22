@@ -1,0 +1,9 @@
+-- regress-full-plpgsql-030
+-- insert into Hub values ('base.hub1', 'Patchfield PF0_1 hub', 16);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn668(relabel1042($14), c23:24, c16:0))
+  outs 1=vl:call668
+mapped: Result

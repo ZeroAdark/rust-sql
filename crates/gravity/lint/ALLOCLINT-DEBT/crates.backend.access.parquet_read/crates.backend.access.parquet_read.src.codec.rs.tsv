@@ -1,0 +1,3 @@
+path	crates/backend/access/parquet_read/src/codec.rs
+method	std::boxed::Box::new	1
+type	std::boxed::Box	1

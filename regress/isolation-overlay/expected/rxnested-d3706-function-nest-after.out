@@ -1,0 +1,96 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1s s2u s1c s2sel s2seq
+step s2exp: EXPLAIN (COSTS OFF) UPDATE fa_t t SET g = t.g + 10 FROM fa_o o, fa_pl() f WHERE t.x = o.x AND t.g = f;
+QUERY PLAN                            
+--------------------------------------
+Update on fa_t t                      
+  ->  Nested Loop                     
+        Join Filter: (t.g = f.f)      
+        ->  Nested Loop               
+              Join Filter: (o.x = t.x)
+              ->  Seq Scan on fa_o o  
+              ->  Seq Scan on fa_t t  
+        ->  Function Scan on fa_pl f  
+(8 rows)
+
+step s1s: UPDATE fa_t SET g = g WHERE x = 2 AND g = 1;
+step s2u: UPDATE fa_t t SET g = t.g + 10 FROM fa_o o, fa_pl() f WHERE t.x = o.x AND t.g = f RETURNING t.x, t.g, f; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+x| g|f
+-+--+-
+1|11|1
+2|11|1
+2|13|3
+4|12|2
+(4 rows)
+
+step s2sel: SELECT x, g FROM fa_t ORDER BY x, g;
+x| g
+-+--
+1|11
+2|11
+2|13
+4|12
+(4 rows)
+
+step s2seq: SELECT last_value FROM fa_q;
+last_value
+----------
+         1
+(1 row)
+
+
+starting permutation: s1g s2u s1c s2sel s2seq
+step s1g: UPDATE fa_t SET g = 2 WHERE x = 2 AND g = 1;
+step s2u: UPDATE fa_t t SET g = t.g + 10 FROM fa_o o, fa_pl() f WHERE t.x = o.x AND t.g = f RETURNING t.x, t.g, f; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+x| g|f
+-+--+-
+1|11|1
+2|13|3
+4|12|2
+(3 rows)
+
+step s2sel: SELECT x, g FROM fa_t ORDER BY x, g;
+x| g
+-+--
+1|11
+2| 2
+2|13
+4|12
+(4 rows)
+
+step s2seq: SELECT last_value FROM fa_q;
+last_value
+----------
+         1
+(1 row)
+
+
+starting permutation: s1s s2d s1c s2sel s2seq
+step s1s: UPDATE fa_t SET g = g WHERE x = 2 AND g = 1;
+step s2d: DELETE FROM fa_t t USING fa_o o, fa_pl() f WHERE t.x = o.x AND t.g = f AND o.x > 1 RETURNING t.x, t.g, f; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+x|g|f
+-+-+-
+2|1|1
+2|3|3
+4|2|2
+(3 rows)
+
+step s2sel: SELECT x, g FROM fa_t ORDER BY x, g;
+x|g
+-+-
+1|1
+(1 row)
+
+step s2seq: SELECT last_value FROM fa_q;
+last_value
+----------
+         1
+(1 row)
+

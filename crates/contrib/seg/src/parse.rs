@@ -177,6 +177,7 @@ fn syntax_error(tok: &Tok<'_>) -> Box<PgError> {
         // segscan.l:90 prints yytext's bytes; C's flex/bison treat a
         // high-bit byte as end of input under SQL_ASCII (a C bug, see
         // UPSTREAM-BUGS), so pgrust names the byte instead.
+        // ALLOC-REVIEW(antigravity): error-report buffer (syntax_error returns Box<PgError> on parse error path)
         let mut d = b"syntax error at or near \"".to_vec();
         d.extend_from_slice(tok.raw);
         d.push(b'"');
@@ -349,7 +350,7 @@ mod tests {
     use crate::out::seg_out;
 
     fn roundtrip(s: &str) -> String {
-        String::from_utf8(seg_out(&parse_seg(s.as_bytes()).unwrap())).unwrap()
+        String::from_utf8(seg_out(&parse_seg(s.as_bytes()).unwrap()).unwrap()).unwrap()
     }
 
     fn err(s: &str) -> String {
@@ -386,7 +387,7 @@ mod tests {
             String::from_utf8(
                 parse_seg(b".. 2")
                     .map(|lo| crate::ops::seg_union(&lo, &parse_seg(b"1 ..").unwrap()))
-                    .map(|s| crate::out::seg_out(&s))
+                    .map(|s| crate::out::seg_out(&s).unwrap())
                     .unwrap()
             )
             .unwrap(),

@@ -1,12 +1,8 @@
-//! postinit.c — InitPostgres and the per-backend init sequence. The C call
-//! order is preserved call-for-call; landed units are direct deps, unported
-//! owners are loud seams, so a boot failure names its missing unit.
-
 #![allow(non_snake_case)]
 #![allow(clippy::result_large_err)]
 #![allow(clippy::too_many_arguments)]
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use mcx::Mcx;
 use types_core::init::BackendType;
 use types_core::primitive::{InvalidOid, Oid, OidIsValid};
@@ -50,11 +46,8 @@ pub const TEMPLATE1_DB_OID: Oid = 1;
 pub const DEFAULTTABLESPACE_OID: Oid = 1663;
 pub const DB_ROLE_SETTING_RELATION_ID: Oid = 2964;
 pub const ROLE_PG_USE_RESERVED_CONNECTIONS: Oid = 4550;
-/// ACL_CONNECT (nodes/parsenodes.h); AclMode is uint64.
 pub const ACL_CONNECT: u64 = 1 << 11;
 const ACLCHECK_OK: i32 = 0;
-/// DATCONNLIMIT_INVALID_DB (catalog/pg_database.h); database_is_invalid_form
-/// (dbcommands.c) folds to this comparison — inlined, dbcommands unported.
 const DATCONNLIMIT_INVALID_DB: i32 = -2;
 const NAMEDATALEN: usize = 64;
 
@@ -106,7 +99,7 @@ fn PerformAuthentication() -> PgResult<()> {
     if backend_startup::log_connections::get() & backend_startup::LOG_CONNECTION_AUTHORIZATION != 0
     {
         let logmsg = build_auth_logmsg();
-        ereport(LOG).errmsg_internal(logmsg).finish(loc(309, "PerformAuthentication"))?;
+        ereport(LOG).errverbatim().errmsg_internal(logmsg).finish(loc(309, "PerformAuthentication"))?;
     }
 
     ps_status_seams::set_ps_display::call("startup");
@@ -140,19 +133,17 @@ fn build_auth_logmsg() -> String {
                 be_secure::be_tls_get_cipher_bits()
             ));
         }
-        // ENABLE_GSS fragment: not this build.
         s
     })
 }
 
-// UTF-8-only server encodings (ratified carve,
-// docs/design/carve-ratifications.md §11, 2026-08-18): pgrust serves only
-// UTF8 and SQL_ASCII databases. A non-UTF8 database can still exist in the
-// cluster (C's initdb — the initdb-via-C carve — or a C-created datadir can
-// carry one); refuse it per-connection with a clean FATAL so the rest of
-// the cluster stays usable, instead of failing per-feature once connected.
+// A non-UTF8 database can still exist in the cluster (C's initdb — the initdb-via-C
+// carve — run without -E UTF8 leaves SQL_ASCII template0/template1, and a
+// C-created datadir can carry any encoding); refuse it per-connection with
+// a clean FATAL so the rest of the cluster stays usable, instead of failing
+// per-feature once connected.
 fn unsupported_database_encoding_error(name: &str, encoding: i32) -> Option<PgError> {
-    if encoding == wchar::PG_UTF8 || encoding == wchar::PG_SQL_ASCII {
+    if encoding == wchar::PG_UTF8 {
         return None;
     }
     Some(
@@ -160,7 +151,7 @@ fn unsupported_database_encoding_error(name: &str, encoding: i32) -> Option<PgEr
             FATAL,
             format!(
                 "database \"{name}\" has server encoding \"{}\", which is not supported by \
-                 pgrust; only \"UTF8\" and \"SQL_ASCII\" server encodings are accepted \
+                 pgrust; only the \"UTF8\" server encoding is accepted \
                  (UTF-8-only carve, docs/design/carve-ratifications.md)",
                 mbutils::pg_encoding_to_char(encoding)
             ),
@@ -192,13 +183,13 @@ fn CheckMyDatabase(
 
     let Some(dbform) = pg_database_seams::search_database_syscache::call(mcx, my_database_id)?
     else {
-        return ereport(ERROR)
+        return ereport(ERROR).errverbatim()
             .errmsg_internal(format!("cache lookup failed for database {my_database_id}"))
             .finish(loc(335, "CheckMyDatabase"));
     };
 
     if name != dbform.datname.as_str() {
-        return ereport(FATAL)
+        return ereport(FATAL).errverbatim()
             .errcode(ERRCODE_UNDEFINED_DATABASE)
             .errmsg(format!("database \"{name}\" has disappeared from pg_database"))
             .errdetail(format!(
@@ -211,7 +202,7 @@ fn CheckMyDatabase(
 
     if init_small::globals::IsUnderPostmaster() {
         if !dbform.datallowconn && !override_allow_connections {
-            return ereport(FATAL)
+            return ereport(FATAL).errverbatim()
                 .errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
                 .errmsg(format!(
                     "database \"{name}\" is not currently accepting connections"
@@ -228,7 +219,7 @@ fn CheckMyDatabase(
                 ACL_CONNECT,
             )? != ACLCHECK_OK
         {
-            return ereport(FATAL)
+            return ereport(FATAL).errverbatim()
                 .errcode(ERRCODE_INSUFFICIENT_PRIVILEGE)
                 .errmsg(format!("permission denied for database \"{name}\""))
                 .errdetail("User does not have CONNECT privilege.")
@@ -240,7 +231,7 @@ fn CheckMyDatabase(
             && !am_superuser
             && procarray_seams::count_db_connections::call(my_database_id)? > dbform.datconnlimit
         {
-            return ereport(FATAL)
+            return ereport(FATAL).errverbatim()
                 .errcode(ERRCODE_TOO_MANY_CONNECTIONS)
                 .errmsg(format!("too many connections for database \"{name}\""))
                 .finish(loc(396, "CheckMyDatabase"));
@@ -267,7 +258,7 @@ fn CheckMyDatabase(
     let ctype = dbform.datctype.as_str();
 
     if pg_locale_seams::pg_perm_setlocale::call(mcx, LC_COLLATE, collate)?.is_none() {
-        return ereport(FATAL)
+        return ereport(FATAL).errverbatim()
             .errmsg("database locale is incompatible with operating system")
             .errdetail(format!(
                 "The database was initialized with LC_COLLATE \"{collate}\",  which is not recognized by setlocale()."
@@ -277,7 +268,7 @@ fn CheckMyDatabase(
     }
 
     if pg_locale_seams::pg_perm_setlocale::call(mcx, LC_CTYPE, ctype)?.is_none() {
-        return ereport(FATAL)
+        return ereport(FATAL).errverbatim()
             .errmsg("database locale is incompatible with operating system")
             .errdetail(format!(
                 "The database was initialized with LC_CTYPE \"{ctype}\",  which is not recognized by setlocale()."
@@ -300,7 +291,7 @@ fn CheckMyDatabase(
             match dbform.datlocale.as_ref() {
                 Some(l) => l.as_str(),
                 None => {
-                    return ereport(ERROR)
+                    return ereport(ERROR).errverbatim()
                         .errmsg_internal("unexpected null datlocale in pg_database tuple")
                         .finish(loc(459, "CheckMyDatabase"));
                 }
@@ -313,14 +304,14 @@ fn CheckMyDatabase(
             locale,
         )? {
             None => {
-                ereport(WARNING)
+                ereport(WARNING).errverbatim()
                     .errmsg_internal(format!(
                         "database \"{name}\" has no actual collation version, but a version was recorded"
                     ))
                     .finish(loc(466, "CheckMyDatabase"))?;
             }
             Some(actual) if actual.as_str() != collversionstr => {
-                ereport(WARNING)
+                ereport(WARNING).errverbatim()
                     .errmsg(format!("database \"{name}\" has a collation version mismatch"))
                     .errdetail(format!(
                         "The database was created using collation version {collversionstr}, but the operating system provides version {}.",
@@ -339,10 +330,6 @@ fn CheckMyDatabase(
     Ok(())
 }
 
-// quote_identifier (ruleutils.c:13112-13115): the keyword-aware owner —
-// ScanKeywordLookup quotes every non-unreserved keyword (a database named
-// "user" must render as \"user\" in the REFRESH COLLATION VERSION hint) and
-// quote_all_identifiers is honoured.
 fn quote_identifier(ident: &str) -> String {
     format_type::quote_identifier(ident).into_owned()
 }
@@ -354,9 +341,6 @@ fn c_isspace(c: u8) -> bool {
 pub fn pg_split_opts(argv: &mut Vec<String>, optstr: &str) {
     let bytes = optstr.as_bytes();
     let mut i = 0usize;
-    // appendStringInfoChar (postinit.c:530) copies raw bytes: an option is
-    // split only at ASCII whitespace and unescaped backslashes, so every
-    // multi-byte UTF-8 sequence of `optstr` reaches argv intact.
     let mut s: Vec<u8> = Vec::new();
 
     while i < bytes.len() {
@@ -398,11 +382,8 @@ pub fn InitializeMaxBackends() -> PgResult<()> {
     let max_worker_processes = init_small::globals::max_worker_processes();
     let max_wal_senders = guc_tables::vars::max_wal_senders.read();
 
-    // M2 pool-binding: the standing runtime executor gang's boot-reserved
-    // PGPROCs (parallel::standing; 0 unless PGRUST_RUNTIME=1 — set by the
-    // postmaster before this runs). They widen the bgworker freelist
-    // segment in InitProcGlobal without touching the max_worker_processes
-    // GUC, so registry/parallel-class budgets are unaffected.
+    // They widen the bgworker freelist segment in InitProcGlobal without touching
+    // the max_worker_processes GUC, so registry/parallel-class budgets are unaffected.
     let runtime_gang = init_small::globals::RuntimeGangProcs();
 
     let max_backends = max_connections
@@ -414,7 +395,7 @@ pub fn InitializeMaxBackends() -> PgResult<()> {
     init_small::globals::SetMaxBackends(max_backends);
 
     if max_backends > MAX_BACKENDS {
-        return ereport(ERROR)
+        return ereport(ERROR).errverbatim()
             .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
             .errmsg("too many server processes configured")
             .errdetail(format!(
@@ -426,16 +407,13 @@ pub fn InitializeMaxBackends() -> PgResult<()> {
     Ok(())
 }
 
-/// InitializeFastPathLocks. C stores a global; here the computed group count
-/// is returned and threaded into lmgr_proc::ProcGlobalConfig at sizing time
-/// (PROC_HDR.fpLockGroupsPerBackend is its storage — repo rule: parameters,
-/// not ambient-global seams).
+/// C stores a global; here the computed group count is returned and threaded
+/// into lmgr_proc::ProcGlobalConfig at sizing time.
 pub fn InitializeFastPathLocks() -> i32 {
     fast_path_lock_groups(guc_tables::vars::max_locks_per_xact.read())
 }
 
-// postinit.c:594: pg_nextpower2_32 / FP_LOCK_SLOTS_PER_GROUP in unsigned
-// arithmetic (2^31 for max_locks_per_transaction > 2^30 must not go negative).
+// Unsigned arithmetic: 2^31 for max_locks_per_transaction > 2^30 must not go negative.
 fn fast_path_lock_groups(max_locks_per_xact: i32) -> i32 {
     let groups = ((max_locks_per_xact as u32).next_power_of_two()
         / FP_LOCK_SLOTS_PER_GROUP as u32)
@@ -473,10 +451,9 @@ pub fn BaseInit() -> PgResult<()> {
     Ok(())
 }
 
-/// Retention claim (wretain): BaseInit for a thread whose per-thread state
-/// survived a park. Exit callbacks (consumed by the park teardown) are
-/// re-armed and per-task baselines reset; once-per-thread constructions
-/// (VFD cache, sync/xloginsert scratch creation asserts) are skipped.
+// Exit callbacks (consumed by the park teardown) are re-armed and per-task
+// baselines reset; once-per-thread constructions (VFD cache, sync/xloginsert
+// scratch creation asserts) are skipped.
 fn BaseInitRetained() -> PgResult<()> {
     pgstat_seams::pgstat_reattach_retained_backend::call()?;
     aio_seams::pgaio_init_backend::call()?;
@@ -485,9 +462,6 @@ fn BaseInitRetained() -> PgResult<()> {
     Ok(())
 }
 
-/// InitPostgres. The C call order below is the deliverable — do not reorder.
-// Launch-path phase timestamp, PGRUST_GATHER_TRACE-gated (duplicated from
-// parallel::gtrace — this crate sits below parallel in the dep graph).
 fn gtrace(phase: &str) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if !*ON.get_or_init(|| std::env::var_os("PGRUST_GATHER_TRACE").is_some()) {
@@ -500,6 +474,7 @@ fn gtrace(phase: &str) {
     eprintln!("GTRACE {phase} w=? t_us={t}");
 }
 
+// The C call order below is the deliverable — do not reorder.
 pub fn InitPostgres(
     mcx: Mcx<'_>,
     in_dbname: Option<&str>,
@@ -515,8 +490,6 @@ pub fn InitPostgres(
 
     ereport(DEBUG3).errmsg_internal("InitPostgres").finish(loc(723, "InitPostgres"))?;
 
-    // Session-memory teardown (FPBUDGET-1): the fundamentals — transaction
-    // contexts, resource-owner arena, Port copy — freed at clean task end.
     // Registered before any catalog access so cache teardowns (registered
     // lazily during boot lookups) drain FIRST in the LIFO order. Once per
     // thread: a wretain standby re-enters InitPostgres per claim but parks
@@ -528,6 +501,8 @@ pub fn InitPostgres(
         }
         if !FUNDAMENTALS_REGISTERED.replace(true) {
             ::mcx::register_session_cleanup(Box::new(|| {
+                // D4682: re-armed for a reused thread's next session (the registration is spent).
+                let _ = FUNDAMENTALS_REGISTERED.try_with(|r| r.set(false));
                 xact::session_mem_teardown();
                 resowner::session_mem_teardown();
                 init_small::globals::SessionMemTeardownPort();
@@ -543,34 +518,21 @@ pub fn InitPostgres(
 
     if !bootstrap {
         backend_status_seams::pgstat_bestart_initial::call()?;
-        // INJECTION_POINT("init-pre-auth"): compiled out (non-assert build).
     }
 
     gtrace("p.beinit");
     let warm_claim = init_small::wretain::warm_claim();
     if warm_claim {
-        // Retention claim: the sinval slot survived the park. Its exit
-        // callback was already re-armed by bgworker::run_worker_body,
+        // Its exit callback was already re-armed by bgworker::run_worker_body,
         // immediately after ReattachRetainedProc — it MUST never re-arm
         // later than ProcKill's registration, or a task failure between the
         // two exits through a drain that frees the PGPROC while the sinval
-        // slot stays claimed ("sinval slot for backend N is already in use
-        // by process M" on every later claimant of the procno — the standing
-        // chaos flake). DDL committed while parked is drained (not nuked)
-        // once the startup transaction exists below.
+        // slot stays claimed.
         debug_assert!(sinval::RetainedSlotIsCurrent());
     } else {
         sinval::SharedInvalBackendInit(false)?;
     }
 
-    // Test-only fault injection (default-off, dead unless the env var is set
-    // at server start): PGRUST_TEST_CONNECT_FAIL_AFTER_SINVAL=<n> fails the
-    // first n BgWorker connects RIGHT AFTER the sinval slot claim — the
-    // half-connected geometry (slot claimed, connect failed) whose survivors
-    // used to self-poison standing gang workers ("sinval slot for backend N
-    // is already in use by process <own pid>" on every retry). The standing
-    // battery (scripts/sinval-slot-e2e.sh) pins the fix: a failed gang
-    // connect is now thread-fatal and the exit drain releases the claim.
     test_connect_fail_after_sinval()?;
 
     let cancel_key = init_small::globals::MyCancelKey();
@@ -617,6 +579,9 @@ pub fn InitPostgres(
         resowner::CreateAuxProcessResourceOwner()?;
 
         transam_xlog_seams::startup_xlog::call()?;
+        if startup_seams::columnar_after_recovery::is_installed() {
+            startup_seams::columnar_after_recovery::call()?;
+        }
         resowner::ReleaseAuxProcessResources(true)?;
         resowner::SetCurrentResourceOwner(types_resowner::ResourceOwner::NULL);
 
@@ -653,16 +618,14 @@ pub fn InitPostgres(
     gtrace("p.txn");
 
     if warm_claim {
-        // Barrier work emitted while parked (procsignal slot was released):
-        // the only barrier kind is SMGRRELEASE; apply it before touching any
+        // The only barrier kind is SMGRRELEASE; apply it before touching any
         // retained smgr state.
         if procsignal::SharedBarrierGeneration() != init_small::wretain::parked_barrier_gen() {
             smgr_seams::process_barrier_smgr_release::call()?;
         }
         // Drain the parked slot's accumulated invalidations before the first
         // catalog access below (pg_authid/pg_database reads must observe all
-        // DDL committed before this claim). A queue overflow while parked
-        // surfaces as resetState -> full InvalidateSystemCaches here.
+        // DDL committed before this claim).
         inval_seams::accept_invalidation_messages::call()?;
         gtrace("p.retained.drain");
     }
@@ -678,7 +641,7 @@ pub fn InitPostgres(
         miscinit::InitializeSessionUserIdStandalone()?;
         am_superuser = true;
         if !ThereIsAtLeastOneRole(mcx)? {
-            ereport(WARNING)
+            ereport(WARNING).errverbatim()
                 .errcode(ERRCODE_UNDEFINED_OBJECT)
                 .errmsg("no roles are defined in this database system")
                 .errhint(format!(
@@ -717,7 +680,7 @@ pub fn InitPostgres(
     }
 
     if init_small::globals::IsBinaryUpgrade() && !am_superuser {
-        return ereport(FATAL)
+        return ereport(FATAL).errverbatim()
             .errcode(ERRCODE_INSUFFICIENT_PRIVILEGE)
             .errmsg("must be superuser to connect in binary upgrade mode")
             .finish(loc(922, "InitPostgres"));
@@ -732,7 +695,7 @@ pub fn InitPostgres(
         let (have, nfree) = lmgr_proc::HaveNFreeProcs(su_reserved + reserved);
         if !have {
             if nfree < su_reserved {
-                return ereport(FATAL)
+                return ereport(FATAL).errverbatim()
                     .errcode(ERRCODE_TOO_MANY_CONNECTIONS)
                     .errmsg("remaining connection slots are reserved for roles with the SUPERUSER attribute")
                     .finish(loc(942, "InitPostgres"));
@@ -741,7 +704,7 @@ pub fn InitPostgres(
                 miscinit::GetUserId(),
                 ROLE_PG_USE_RESERVED_CONNECTIONS,
             )? {
-                return ereport(FATAL)
+                return ereport(FATAL).errverbatim()
                     .errcode(ERRCODE_TOO_MANY_CONNECTIONS)
                     .errmsg("remaining connection slots are reserved for roles with privileges of the \"pg_use_reserved_connections\" role")
                     .finish(loc(948, "InitPostgres"));
@@ -752,7 +715,7 @@ pub fn InitPostgres(
     if am_walsender() {
         debug_assert!(!bootstrap);
         if !miscinit_seams::has_rolreplication::call(miscinit::GetUserId())? {
-            return ereport(FATAL)
+            return ereport(FATAL).errverbatim()
                 .errcode(ERRCODE_INSUFFICIENT_PRIVILEGE)
                 .errmsg("permission denied to start WAL sender")
                 .errdetail("Only roles with the REPLICATION attribute may start a WAL sender process.")
@@ -776,19 +739,11 @@ pub fn InitPostgres(
         init_small::globals::SetMyDatabaseTableSpace(DEFAULTTABLESPACE_OID);
     } else if let Some(in_dbname) = in_dbname {
         let mut tuple = GetDatabaseTuple(mcx, in_dbname)?;
-        // pgrust-only mint-on-connect (docs/design/test-views.md D2).
         // Reached ONLY on the lookup miss — the hit path executes zero new
         // instructions — for authenticated client backends, when the
         // janitor crate installed the seam (uninstalled seam == stock
         // behavior). Ok(true) means the janitor completed an idempotent
-        // Ensure for this name: drain invalidations and retry the lookup
-        // ONCE (the InvalidateCatalogSnapshot precedent below at the
-        // MyDatabaseId assignment; the retry lives here, not in the seam,
-        // because the PgDatabaseForm must come from this file's
-        // GetDatabaseTuple for parity — M3 addendum). Ok(false) or a
-        // second miss falls through to the stock FATAL, byte-identical;
-        // Err (paused/absent janitor, timeout, failed CREATE) propagates
-        // as its own clean FATAL.
+        // Ensure for this name: drain invalidations and retry the lookup ONCE.
         if tuple.is_none()
             && miscinit::GetMyBackendType() == BackendType::Backend
             && janitor_seams::ephemeral_db_mint_on_connect::is_installed()
@@ -799,7 +754,7 @@ pub fn InitPostgres(
             tuple = GetDatabaseTuple(mcx, in_dbname)?;
         }
         let Some(dbform) = tuple else {
-            return ereport(FATAL)
+            return ereport(FATAL).errverbatim()
                 .errcode(ERRCODE_UNDEFINED_DATABASE)
                 .errmsg(format!("database \"{in_dbname}\" does not exist"))
                 .finish(loc(1014, "InitPostgres"));
@@ -813,9 +768,9 @@ pub fn InitPostgres(
         return Ok(());
     }
 
-    // Writer's lock on the database: serializes against DROP DATABASE; held
-    // to end of this startup transaction, and we advertise the database in
-    // the ProcArray before releasing (CountOtherDBBackends ordering).
+    // Serializes against DROP DATABASE; held to end of this startup
+    // transaction, and we advertise the database in the ProcArray before
+    // releasing (CountOtherDBBackends ordering).
     if !bootstrap {
         lmgr::LockSharedObject(
             types_core::catalog::DATABASE_RELATION_ID,
@@ -834,12 +789,12 @@ pub fn InitPostgres(
         };
         if tuple.is_none() || name_mismatch {
             return match in_dbname {
-                Some(req) => ereport(FATAL)
+                Some(req) => ereport(FATAL).errverbatim()
                     .errcode(ERRCODE_UNDEFINED_DATABASE)
                     .errmsg(format!("database \"{req}\" does not exist"))
                     .errdetail("It seems to have just been dropped or renamed.")
                     .finish(loc(1078, "InitPostgres")),
-                None => ereport(FATAL)
+                None => ereport(FATAL).errverbatim()
                     .errcode(ERRCODE_UNDEFINED_DATABASE)
                     .errmsg(format!("database {dboid} does not exist"))
                     .finish(loc(1083, "InitPostgres")),
@@ -850,7 +805,7 @@ pub fn InitPostgres(
         dbname = strlcpy_name(datform.datname.as_str());
 
         if datform.datconnlimit == DATCONNLIMIT_INVALID_DB {
-            return ereport(FATAL)
+            return ereport(FATAL).errverbatim()
                 .errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
                 .errmsg(format!("cannot connect to invalid database \"{dbname}\""))
                 .errhint("Use DROP DATABASE to drop invalid databases.")
@@ -868,8 +823,8 @@ pub fn InitPostgres(
     gtrace("p.dblookup");
     init_small::globals::SetMyDatabaseId(dboid);
 
-    // MyProc->databaseId: plain atomic store, no lock (C relies on the
-    // database lock for searchers of this database's ID).
+    // Plain atomic store, no lock (C relies on the database lock for
+    // searchers of this database's ID).
     let procno = lmgr_proc::MyProc().expect("InitPostgres before InitProcess");
     lmgr_proc::ProcGlobal().allProcs[procno as usize]
         .databaseId
@@ -889,7 +844,7 @@ pub fn InitPostgres(
         match std::fs::metadata(fullpath.as_str()) {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return ereport(FATAL)
+                return ereport(FATAL).errverbatim()
                     .errcode(ERRCODE_UNDEFINED_DATABASE)
                     .errmsg(format!("database \"{dbname}\" does not exist"))
                     .errdetail(format!(
@@ -903,7 +858,7 @@ pub fn InitPostgres(
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
                     .errmsg(format!(
-                        "could not access directory \"{}\": %m",
+                        "could not access directory \"{}\": {PCT_M}",
                         fullpath.as_str()
                     ))
                     .finish(loc(1158, "InitPostgres"));
@@ -948,11 +903,10 @@ pub fn InitPostgres(
         process_startup_options(am_superuser)?;
     }
 
-    // A thread-native parallel worker about to take a §3.4 session bind skips
+    // A thread-native parallel worker about to take a session bind skips
     // the pg_db_role_setting scan: the leader's captured GUC state already
-    // carries those effects (sources PGC_S_DATABASE/USER/DATABASE_USER/
-    // GLOBAL) and the bind applies them verbatim, so rerunning here only
-    // recomputes state the bind is about to overwrite.
+    // carries those effects and the bind applies them verbatim, so rerunning
+    // here only recomputes state the bind is about to overwrite.
     let takes_session_bind = guc::store::session_guc_bind_enabled()
         && parallel_seams::initializing_parallel_worker::is_installed()
         && parallel_seams::initializing_parallel_worker::call();
@@ -988,10 +942,6 @@ pub fn InitPostgres(
     Ok(())
 }
 
-/// See the call site in InitPostgres: fails the first n BgWorker connects
-/// just after SharedInvalBackendInit claimed the slot. Resolved once per
-/// process; a plain Err, exactly the class an organic ProcSignalInit /
-/// startup-transaction failure raises there.
 fn test_connect_fail_after_sinval() -> PgResult<()> {
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
     static BUDGET: std::sync::OnceLock<Option<AtomicUsize>> = std::sync::OnceLock::new();
@@ -1041,7 +991,8 @@ fn process_startup_options(am_superuser: bool) -> PgResult<()> {
 
     if let Some(cmdline_options) = cmdline_options {
         let maxac = 2 + (cmdline_options.len() + 1) / 2;
-        let mut av: Vec<String> = Vec::with_capacity(maxac);
+        let mut av: Vec<String> = Vec::new();
+        let _ = av.try_reserve(maxac);
         av.push("postgres".to_string());
         pg_split_opts(&mut av, &cmdline_options);
         debug_assert!(av.len() < maxac);
@@ -1111,11 +1062,9 @@ fn shutdown_postgres_cb(code: i32, arg: datum::Datum) -> PgResult<()> {
 }
 
 fn shutdown_xlog_cb(_code: i32, _arg: datum::Datum) -> PgResult<()> {
-    // ShutdownXLOG's entry arm (xlog.c:6740): the shutdown checkpoint's
-    // buffer pins need the aux-process resource owner. C reinstates it
-    // inside ShutdownXLOG; hosted at this standalone-only callback here
-    // (registered solely on the !IsUnderPostmaster path — the checkpointer's
-    // ShutdownXLOG call site already runs under its own aux owner).
+    // The shutdown checkpoint's buffer pins need the aux-process resource owner.
+    // Registered solely on the !IsUnderPostmaster path — the checkpointer's
+    // ShutdownXLOG call site already runs under its own aux owner.
     debug_assert!(!resowner::AuxProcessResourceOwner().is_null());
     debug_assert!(
         resowner::CurrentResourceOwner().is_null()
@@ -1133,9 +1082,7 @@ fn datum_null() -> datum::Datum {
     datum::Datum::from_usize(0)
 }
 
-/// C self-signals SIGINT (SIGTERM during authentication_timeout use) to enter
-/// StatementCancelHandler/die; SendThreadSignal is kill(MyProcPid, sig)'s
-/// thread rendering, routing through the same installed dispositions. The
+/// SendThreadSignal is kill(MyProcPid, sig)'s thread rendering; the
 /// kill(-MyProcPid) process-group leg has no thread analog (no children).
 pub fn StatementTimeoutHandler() {
     let sig = if elog::config::client_auth_in_progress() {
@@ -1180,7 +1127,6 @@ pub fn IdleStatsUpdateTimeoutHandler() {
     set_latch_on_my_latch();
 }
 
-// pgrust-only (docs/design/connection-scaling.md D3.4): idle passivation.
 pub fn IdlePassivateTimeoutHandler() {
     init_small::globals::SetIdlePassivateTimeoutPending(true);
     init_small::globals::SetInterruptPending(true);
@@ -1193,9 +1139,6 @@ pub fn ClientCheckTimeoutHandler() {
     set_latch_on_my_latch();
 }
 
-/// ThereIsAtLeastOneRole: table_beginscan_catalog(pg_authid) expressed as the
-/// keyless no-index systable scan (identical shape: forced heap scan, catalog
-/// snapshot, allow_sync=false).
 fn ThereIsAtLeastOneRole(mcx: Mcx<'_>) -> PgResult<bool> {
     let pg_authid_rel =
         table::table_open(mcx, types_core::catalog::AUTH_ID_RELATION_ID, AccessShareLock)?;

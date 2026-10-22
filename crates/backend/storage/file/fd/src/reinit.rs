@@ -1,7 +1,7 @@
 //! reinit.c: reset unlogged relations from before the last restart.
 #![allow(non_snake_case)]
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use types_core::ForkNumber;
 use types_error::{ErrorLocation, PgResult, DEBUG1, DEBUG2, ERROR, LOG};
 use types_storage::{PG_TBLSPC_DIR, TABLESPACE_VERSION_DIRECTORY};
@@ -24,7 +24,8 @@ fn loc(funcname: &'static str) -> ErrorLocation {
 }
 
 /// CLEANUP removes every non-init fork of any relation that has an init
-/// fork; INIT copies each init fork over the main fork.
+/// fork, and empties its pgrcolumnar table directory; INIT copies each init
+/// fork over the main fork.
 pub fn ResetUnloggedRelations(op: i32) -> PgResult<()> {
     // reinit.c:56
     elog(
@@ -63,7 +64,7 @@ fn ResetUnloggedRelationsInTablespaceDir(tsdirname: &str, op: i32) -> PgResult<(
         ereport(LOG)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open directory \"{tsdirname}\": %m"))
+            .errmsg(format!("could not open directory \"{tsdirname}\": {PCT_M}"))
             .finish(loc("ResetUnloggedRelationsInTablespaceDir"))?;
         return Ok(());
     }
@@ -89,13 +90,14 @@ fn ResetUnloggedRelationsInTablespaceDir(tsdirname: &str, op: i32) -> PgResult<(
             })?;
         }
 
-        ResetUnloggedRelationsInDbspaceDir(&dbspace_path, op)?;
+        ResetUnloggedRelationsInDbspaceDir(&dbspace_path, op, None)?;
     }
     FreeDir(ts_dir)?;
     Ok(())
 }
 
-fn ResetUnloggedRelationsInDbspaceDir(dbspacedirname: &str, op: i32) -> PgResult<()> {
+/// `only`: reset that relfilenumber alone (WALMODE's unsynced markers), else every unlogged relation.
+fn ResetUnloggedRelationsInDbspaceDir(dbspacedirname: &str, op: i32, only: Option<u32>) -> PgResult<()> {
     debug_assert!(op & (UNLOGGED_RELATION_CLEANUP | UNLOGGED_RELATION_INIT) != 0);
 
     if op & UNLOGGED_RELATION_CLEANUP != 0 {
@@ -111,7 +113,7 @@ fn ResetUnloggedRelationsInDbspaceDir(dbspacedirname: &str, op: i32) -> PgResult
             else {
                 continue;
             };
-            if fork != ForkNumber::INIT_FORKNUM {
+            if fork != ForkNumber::INIT_FORKNUM || only.is_some_and(|o| o != relnumber) {
                 continue;
             }
             init_rels.insert(relnumber);
@@ -124,6 +126,12 @@ fn ResetUnloggedRelationsInDbspaceDir(dbspacedirname: &str, op: i32) -> PgResult
 
         let dbspace_dir = AllocateDir(dbspacedirname)?;
         while let Some(de) = ReadDir(dbspace_dir, dbspacedirname)? {
+            if let Some((None, n)) = pgrc_format::dirlayout::parse_table_dir_name(&de.d_name) {
+                if u32::try_from(n).is_ok_and(|n| init_rels.contains(&n)) {
+                    empty_table_dir(&format!("{dbspacedirname}/{}", de.d_name))?;
+                }
+                continue;
+            }
             let Some((relnumber, fork, _segno)) =
                 parse_filename_for_nontemp_relation(&de.d_name)
             else {
@@ -138,7 +146,7 @@ fn ResetUnloggedRelationsInDbspaceDir(dbspacedirname: &str, op: i32) -> PgResult
                     return Err(ereport(ERROR)
                         .with_saved_errno(get_errno())
                         .errcode_for_file_access()
-                        .errmsg(format!("could not remove file \"{rm_path}\": %m"))
+                        .errmsg(format!("could not remove file \"{rm_path}\": {PCT_M}"))
                         .finish(loc("ResetUnloggedRelationsInDbspaceDir"))
                         .unwrap_err());
                 }
@@ -157,7 +165,7 @@ fn ResetUnloggedRelationsInDbspaceDir(dbspacedirname: &str, op: i32) -> PgResult
             else {
                 continue;
             };
-            if fork != ForkNumber::INIT_FORKNUM {
+            if fork != ForkNumber::INIT_FORKNUM || only.is_some_and(|o| o != relnumber) {
                 continue;
             }
             let srcpath = format!("{dbspacedirname}/{}", de.d_name);
@@ -177,7 +185,7 @@ fn ResetUnloggedRelationsInDbspaceDir(dbspacedirname: &str, op: i32) -> PgResult
             else {
                 continue;
             };
-            if fork != ForkNumber::INIT_FORKNUM {
+            if fork != ForkNumber::INIT_FORKNUM || only.is_some_and(|o| o != relnumber) {
                 continue;
             }
             fsync_fname(&main_fork_path(dbspacedirname, relnumber, segno), false)?;
@@ -187,6 +195,99 @@ fn ResetUnloggedRelationsInDbspaceDir(dbspacedirname: &str, op: i32) -> PgResult
         fsync_fname(dbspacedirname, true)?;
     }
     Ok(())
+}
+
+/// WALMODE: reset the unlogged pgrcolumnar tables written with `pgrust.pgrc_unlogged_sync=off` under another
+/// boot (their files were never fsynced, so an OS crash after a clean shutdown may have torn them), at every start,
+/// before anything reads them. A marker of this boot is kept; one whose directory is gone (a crash between the
+/// table's drop and the marker's removal) is removed. A marker of no boot id (not Linux) never matches.
+pub fn ResetUnsyncedPgrc() -> PgResult<()> {
+    use pgrc_format::spool::{parse_unsynced_name, UNSYNCED_DIR};
+    let names: Vec<String> = match vfs::read_dir(&crate::vfd::cpath(UNSYNCED_DIR)) {
+        Ok(it) => it.filter_map(|e| e.ok()).filter_map(|p| p.as_str().map(str::to_string)).filter(|n| n != "." && n != "..").collect(),
+        Err(_) => return Ok(()),
+    };
+    let first_line = |p: &str| read_small(p).map(|b| String::from_utf8_lossy(&b).lines().next().unwrap_or("").trim().to_string());
+    let boot = first_line("/proc/sys/kernel/random/boot_id").filter(|s| !s.is_empty());
+    let mut removed = false;
+    for n in names {
+        let marker = format!("{UNSYNCED_DIR}/{n}");
+        let Some(dir) = parse_unsynced_name(&n) else {
+            // a crash's half-written marker: its table was never written unsynced past it
+            let _ = vfs::unlink(&crate::vfd::cpath(&marker));
+            removed = true;
+            continue;
+        };
+        let written_under = first_line(&marker);
+        let mut st = vfs::FileInfo::default();
+        let exists = vfs::stat(&crate::vfd::cpath(&dir), &mut st) == 0;
+        if exists && boot.is_some() && written_under == boot {
+            continue;
+        }
+        if exists {
+            let (dbspace, base) = dir.rsplit_once('/').unwrap_or((".", dir.as_str()));
+            if let Some((None, rel)) = pgrc_format::dirlayout::parse_table_dir_name(base) {
+                ereport(LOG)
+                    .errmsg(format!(
+                        "pgrcolumnar: resetting unlogged table directory \"{dir}\": written without fsync under boot {}",
+                        written_under.as_deref().unwrap_or("?")
+                    ))
+                    .finish(loc("ResetUnsyncedPgrc"))?;
+                // a directory whose relation has no init fork (not unlogged any more) is left alone
+                ResetUnloggedRelationsInDbspaceDir(dbspace, UNLOGGED_RELATION_CLEANUP | UNLOGGED_RELATION_INIT, u32::try_from(rel).ok())?;
+            }
+        }
+        if vfs::unlink(&crate::vfd::cpath(&marker)) != 0 && get_errno() != libc::ENOENT {
+            return Err(ereport(ERROR)
+                .with_saved_errno(get_errno())
+                .errcode_for_file_access()
+                .errmsg(format!("could not remove file \"{marker}\": %m"))
+                .finish(loc("ResetUnsyncedPgrc"))
+                .unwrap_err());
+        }
+        removed = true;
+    }
+    if removed {
+        fsync_fname(UNSYNCED_DIR, true)?;
+    }
+    Ok(())
+}
+
+/// A small file's bytes through the vfs (`None`: absent or unreadable).
+fn read_small(path: &str) -> Option<Vec<u8>> {
+    let fd = vfs::open(&crate::vfd::cpath(path), libc::O_RDONLY | libc::O_CLOEXEC, 0);
+    if fd < 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; 4096];
+    let n = vfs::pread(fd, &mut buf, 0);
+    vfs::close(fd);
+    (n >= 0).then(|| {
+        buf.truncate(n as usize);
+        buf
+    })
+}
+
+/// An unlogged pgrcolumnar table directory reset: every file removed, the (logged) directory kept.
+fn empty_table_dir(path: &str) -> PgResult<()> {
+    let dir = AllocateDir(path)?;
+    while let Some(de) = ReadDir(dir, path)? {
+        if de.d_name == "." || de.d_name == ".." {
+            continue;
+        }
+        let rm_path = format!("{path}/{}", de.d_name);
+        if vfs::unlink(&crate::vfd::cpath(&rm_path)) != 0 {
+            return Err(ereport(ERROR)
+                .with_saved_errno(get_errno())
+                .errcode_for_file_access()
+                .errmsg(format!("could not remove file \"{rm_path}\": %m"))
+                .finish(loc("ResetUnloggedRelationsInDbspaceDir"))
+                .unwrap_err());
+        }
+        elog(DEBUG2, format!("unlinked file \"{rm_path}\""))?;
+    }
+    FreeDir(dir)?;
+    fsync_fname(path, true)
 }
 
 fn main_fork_path(dbspacedirname: &str, relnumber: u32, segno: u32) -> String {

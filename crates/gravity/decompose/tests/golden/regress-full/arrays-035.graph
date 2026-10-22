@@ -1,0 +1,9 @@
+-- regress-full-arrays-035
+-- DO $$ DECLARE o int; a int[] := ARRAY[1,2,3,2,3,1,2]; BEGIN o := array_position(a, 2); WHILE o IS NOT NULL LOOP RAISE NOTICE '%', o; o := array_position(a, 2, o + 1); END LOOP; END $$ LANGUAGE plpgsql;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3278($3, c23:2, op551($2, c23:1)))
+  outs 1=w4:val
+mapped: Result

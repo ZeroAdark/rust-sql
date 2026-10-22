@@ -1,0 +1,31 @@
+-- regress-full-subselect-024
+-- SELECT nspname, relname, relkind, pg_catalog.pg_get_viewdef(c.oid, true), pg_catalog.array_remove(pg_catalog.array_remove(c.reloptions,'check_option=local'),'check_option=cascaded') AS reloptions, CASE WHEN 'check_option=local' = ANY (c.reloptions) THEN 'LOCAL'::text WHEN 'check_option=cascaded' = ANY (c.reloptions) THEN 'CASCADED'::text ELSE NULL END AS checkoption FROM pg_catalog.pg_class c LEFT JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid WHERE c.oid = 25170
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 serial site=0 reason=IndexSource end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@1
+  source index rel=1259 rti=1 am=heap index=2662
+    key att=1 op=607 value=c26:25170
+    recheck (op607(v1.1, c26:25170))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(18):byval8:w8:val Attr(33):byref8:vl:win/page
+  project (1=v1.2, 2=v1.18, 3=v1.1, 4=v1.33, 5=v1.3)
+  build keys=(outer.5) decls=26/26:I32
+  outs 1=fx64:win/page 2=w8:val 3=w8:val 4=vl:win/page 5=w8:val
+p1 node=1 eligible rows=49 end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1^
+  source range rel=2615 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4)
+  probe slot=0 inner=n2 JOIN_RIGHT unique marks build-first keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.5))
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0 consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=0
+  drain matches=slot1 JOIN_RIGHT
+  project (1=outer.2, 2=inner.1, 3=inner.2, 4=fn2506(inner.3, c16:1), 5=fn3167(fn3167(inner.4, c25:'check_option=local'), c25:'check_option=cascaded'), 6=case(when any98(c25:'check_option=local', inner.4) then c25:'LOCAL', when any98(c25:'check_option=cascaded', inner.4) then c25:'CASCADED') else c25:null)
+  outs 1=fx64:life/breaker 2=fx64:life/breaker 3=w1:val 4=vl:call2506 5=vl:call3167 6=vl:stmt/imm
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+mapped: SeqScan IndexScan HashJoin Hash

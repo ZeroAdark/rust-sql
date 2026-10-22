@@ -393,3 +393,40 @@ fn expanded_arms_flatten() {
     }
     drop(unsafe { Box::from_raw(obj) });
 }
+
+// D4728: pageinspect's tuple_data_split(rel, '\x08000000', 0, 1, NULL, true) hands detoast a 4-byte header that declares
+// VARSIZE 2. Every 4-byte header under its own 4 bytes (plain or compressed bits) raises XX001 before any copy, on both
+// entry points; the header alone (VARSIZE 4) still copies.
+#[test]
+fn varsize_under_its_4_byte_header_is_xx001_before_any_copy() {
+    let ctx = MemoryContext::new("t");
+    for n in 0u32..VARHDRSZ as u32 {
+        for bits in [0x00u32, 0x02] {
+            let image = ((n << 2) | bits).to_ne_bytes();
+            let err = detoast_attr(ctx.mcx(), &image).unwrap_err();
+            assert_eq!(err.sqlstate(), ERRCODE_DATA_CORRUPTED, "detoast_attr VARSIZE {n} bits {bits}");
+            let err = detoast_external_attr(ctx.mcx(), &image).unwrap_err();
+            assert_eq!(err.sqlstate(), ERRCODE_DATA_CORRUPTED, "detoast_external_attr VARSIZE {n} bits {bits}");
+        }
+    }
+    let err = detoast_attr(ctx.mcx(), &[0x08, 0x00, 0x00, 0x00]).unwrap_err();
+    assert_eq!(err.message(), "invalid varlena size 2: less than its 4-byte header");
+    let empty = plain_image(b"");
+    assert_eq!(&detoast_attr(ctx.mcx(), &empty).unwrap()[..], &empty[..]);
+    assert_eq!(&detoast_external_attr(ctx.mcx(), &empty).unwrap()[..], &empty[..]);
+}
+
+// D4901 S5: an external header (first byte 0x01) whose tag is none of INDIRECT / EXPANDED_RO / EXPANDED_RW / ONDISK fell
+// through to the short-header arm, where VARSIZE_SHORT 0 - 1 underflowed (a slice panic aborts the backend, D2933). Both
+// detoast_attr and detoast_attr_slice raise XX001 for it instead.
+#[test]
+fn unknown_external_tag_is_xx001_not_a_panic() {
+    let ctx = MemoryContext::new("t");
+    for tag in [0u8, 4, 5, 17, 19, 255] {
+        let image = [0x01, tag, 0, 0, 0, 0, 0, 0, 0, 0];
+        let err = detoast_attr(ctx.mcx(), &image).unwrap_err();
+        assert_eq!(err.sqlstate(), ERRCODE_DATA_CORRUPTED, "detoast_attr tag {tag}");
+        let err = detoast_attr_slice(ctx.mcx(), &image, 0, -1).unwrap_err();
+        assert_eq!(err.sqlstate(), ERRCODE_DATA_CORRUPTED, "detoast_attr_slice tag {tag}");
+    }
+}

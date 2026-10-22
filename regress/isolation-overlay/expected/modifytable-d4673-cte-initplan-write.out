@@ -1,0 +1,105 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2pl
+step s2pl: EXPLAIN (COSTS OFF) WITH d AS (UPDATE d4673i_t SET v = v + 1 WHERE id % 40 = 1 RETURNING id) UPDATE d4673i_c SET n = n + (SELECT count(*) FROM d) WHERE k = 1;
+QUERY PLAN                             
+---------------------------------------
+Update on d4673i_c                     
+  CTE d                                
+    ->  Update on d4673i_t             
+          ->  Seq Scan on d4673i_t     
+                Filter: ((id % 40) = 1)
+  InitPlan 2                           
+    ->  Aggregate                      
+          ->  CTE Scan on d            
+  ->  Seq Scan on d4673i_c             
+        Filter: (k = 1)                
+(10 rows)
+
+
+starting permutation: s1t s2upd s1com s3show
+step s1t: BEGIN; UPDATE d4673i_t SET v = 999 WHERE id = 41;
+step s2upd: WITH d AS (UPDATE d4673i_t SET v = v + 1 WHERE id % 40 = 1 RETURNING id) UPDATE d4673i_c SET n = n + (SELECT count(*) FROM d) WHERE k = 1; <waiting ...>
+step s1com: COMMIT;
+step s2upd: <... completed>
+step s3show: SELECT k, n FROM d4673i_c ORDER BY k; SELECT id, v FROM d4673i_t WHERE id % 40 = 1 OR id > 200 ORDER BY id;
+k|n
+-+-
+1|5
+2|0
+(2 rows)
+
+ id|   v
+---+----
+  1|  11
+ 41|1000
+ 81| 811
+121|1211
+161|1611
+(5 rows)
+
+
+starting permutation: s1tmv s2upd s1com s3show
+step s1tmv: BEGIN; UPDATE d4673i_t SET id = 1042 WHERE id = 41;
+step s2upd: WITH d AS (UPDATE d4673i_t SET v = v + 1 WHERE id % 40 = 1 RETURNING id) UPDATE d4673i_c SET n = n + (SELECT count(*) FROM d) WHERE k = 1; <waiting ...>
+step s1com: COMMIT;
+step s2upd: <... completed>
+step s3show: SELECT k, n FROM d4673i_c ORDER BY k; SELECT id, v FROM d4673i_t WHERE id % 40 = 1 OR id > 200 ORDER BY id;
+k|n
+-+-
+1|4
+2|0
+(2 rows)
+
+  id|   v
+----+----
+   1|  11
+  81| 811
+ 121|1211
+ 161|1611
+1042| 410
+(5 rows)
+
+
+starting permutation: s1c s2upd s1com s3show
+step s1c: BEGIN; UPDATE d4673i_c SET n = n + 100 WHERE k = 1;
+step s2upd: WITH d AS (UPDATE d4673i_t SET v = v + 1 WHERE id % 40 = 1 RETURNING id) UPDATE d4673i_c SET n = n + (SELECT count(*) FROM d) WHERE k = 1; <waiting ...>
+step s1com: COMMIT;
+step s2upd: <... completed>
+step s3show: SELECT k, n FROM d4673i_c ORDER BY k; SELECT id, v FROM d4673i_t WHERE id % 40 = 1 OR id > 200 ORDER BY id;
+k|  n
+-+---
+1|105
+2|  0
+(2 rows)
+
+ id|   v
+---+----
+  1|  11
+ 41| 411
+ 81| 811
+121|1211
+161|1611
+(5 rows)
+
+
+starting permutation: s1cdel s2upd s1com s3show
+step s1cdel: BEGIN; DELETE FROM d4673i_c WHERE k = 1;
+step s2upd: WITH d AS (UPDATE d4673i_t SET v = v + 1 WHERE id % 40 = 1 RETURNING id) UPDATE d4673i_c SET n = n + (SELECT count(*) FROM d) WHERE k = 1; <waiting ...>
+step s1com: COMMIT;
+step s2upd: <... completed>
+step s3show: SELECT k, n FROM d4673i_c ORDER BY k; SELECT id, v FROM d4673i_t WHERE id % 40 = 1 OR id > 200 ORDER BY id;
+k|n
+-+-
+2|0
+(1 row)
+
+ id|   v
+---+----
+  1|  11
+ 41| 411
+ 81| 811
+121|1211
+161|1611
+(5 rows)
+

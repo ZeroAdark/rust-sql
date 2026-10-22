@@ -1,0 +1,2 @@
+gravity/exec/src/runner/point/skip.rs	MEMO	deps	at:drop_at_teardown	leader	point path S5 (D4550): the session's memo of point plans by shape and role, each slot valid while its gravity_deps Held stands and no setting moved; made at the first filing, dropped at session teardown
+gravity/exec/src/runner/point/skip.rs	HIT	lifetime	statement:plan_skip@gravity/exec/src/runner/point/mod.rs	leader	point path S3b (D4572): the memo slot hook A served or filed this statement's plan in, for hook B; cleared at every hook A (plan_skip), taken by hook B

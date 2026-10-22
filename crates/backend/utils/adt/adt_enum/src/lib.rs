@@ -88,6 +88,14 @@ pub fn enum_out(enumval: Oid) -> PgResult<PgEnumShape> {
 // builds one), so a None flinfo skips memoization — the odd-OID fallback then
 // pays an ENUMOID probe per comparison (cold; C Assert(flinfo) covered by the
 // fmgr surface always passing one).
+// D4986: C's memo is never checked because each C call site (each sort key's
+// SortShimExtra) owns its FmgrInfo. A Gravity comparator binding is shared by
+// every key and statement that orders by enum_cmp (keysem::call binds one per
+// function and collation), so the memo may name another enum type. A memoized
+// type whose cache does not hold the values (its lookup raises) is resolved
+// again from arg1 and the memo replaced; enum OIDs are unique across enum
+// types, so the wrong type's cache never holds either value and never answers
+// for them (its sorted-OID bitmap marks only its own values).
 fn enum_cmp_internal(
     arg1: Oid,
     arg2: Oid,
@@ -100,19 +108,33 @@ fn enum_cmp_internal(
         return Ok(if arg1 < arg2 { -1 } else { 1 });
     }
 
-    let typeoid = match flinfo.as_ref().and_then(|f| f.fn_extra_ref::<Oid>().copied()) {
-        Some(t) => t,
-        None => {
-            let Some(en) = syscache_seams::lookup_pg_enum_by_oid::call(arg1)? else {
-                return Err(invalid_internal(arg1));
-            };
-            if let Some(f) = flinfo {
-                f.set_fn_extra(en.enumtypid);
+    let memo = flinfo.as_ref().and_then(|f| f.fn_extra_ref::<Oid>().copied());
+    if let Some(t) = memo {
+        match typcache_seams::compare_values_of_enum::call(t, arg1, arg2) {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                if enum_type_of(arg1)? == t {
+                    return Err(e);
+                }
             }
-            en.enumtypid
         }
-    };
-    typcache_seams::compare_values_of_enum::call(typeoid, arg1, arg2)
+    }
+    let t = enum_type_of(arg1)?;
+    if let Some(f) = flinfo {
+        f.set_fn_extra(t);
+    }
+    typcache_seams::compare_values_of_enum::call(t, arg1, arg2)
+}
+
+/// The enum type of value `arg` (the armed type cache's, else pg_enum's row).
+fn enum_type_of(arg: Oid) -> PgResult<Oid> {
+    match typcache_seams::armed_enum_type_of::call(arg) {
+        Some(t) => Ok(t),
+        None => match syscache_seams::lookup_pg_enum_by_oid::call(arg)? {
+            Some(en) => Ok(en.enumtypid),
+            None => Err(invalid_internal(arg)),
+        },
+    }
 }
 
 // btree_gist's CallerFInfoFunctionCall2(enum_cmp, ...) surface: same
@@ -125,7 +147,7 @@ pub fn enum_cmp_with_flinfo(
     enum_cmp_internal(arg1, arg2, flinfo)
 }
 
-pub(crate) fn cmp_via(
+pub fn cmp_via(
     fcinfo: &types_fmgr::FunctionCallInfoBaseData,
     flinfo: Option<&mut FmgrInfo>,
 ) -> PgResult<i32> {

@@ -1,0 +1,284 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2b s2xu s1v s2u s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xu: EXPLAIN (COSTS OFF) WITH c AS (UPDATE rr SET v = v * 2 WHERE grp = 0 RETURNING id, old.ctid AS oc, new.ctid AS nc) SELECT * FROM c ORDER BY id;
+QUERY PLAN                       
+---------------------------------
+Sort                             
+  Sort Key: c.id                 
+  CTE c                          
+    ->  Update on rr             
+          ->  Seq Scan on rr     
+                Filter: (grp = 0)
+  ->  CTE Scan on c              
+(7 rows)
+
+step s1v: UPDATE rr SET v = v + 1 WHERE id = 2;
+step s2u: WITH c AS (UPDATE rr SET v = v * 2 WHERE grp = 0 RETURNING id, old.ctid AS oc, new.ctid AS nc, ctid = new.ctid AS ctid_new, old.v AS ov, new.v AS nv, old.xmin <> (SELECT x0 FROM rr0) AS old_by_s1, old.xmin = new.xmin AS same_xmin, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine, new.xmin = pg_current_xact_id()::xid AS new_xmin_mine, old.cmax AS ocmax, new.cmin AS ncmin, old.tableoid = new.tableoid AS same_rel) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|oc   |nc    |ctid_new|ov| nv|old_by_s1|same_xmin|old_xmax_mine|new_xmin_mine|ocmax|ncmin|same_rel
+--+-----+------+--------+--+---+---------+---------+-------------+-------------+-----+-----+--------
+ 2|(0,9)|(0,10)|t       |21| 42|t        |f        |t            |t            |    1|    1|t       
+ 4|(0,4)|(0,11)|t       |40| 80|f        |f        |t            |t            |    1|    1|t       
+ 6|(0,6)|(0,12)|t       |60|120|f        |f        |t            |t            |    1|    1|t       
+ 8|(0,8)|(0,13)|t       |80|160|f        |f        |t            |t            |    1|    1|t       
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT ctid, id, grp, v FROM rr ORDER BY id;
+ctid  |id|grp|  v
+------+--+---+---
+(0,1) | 1|  1| 10
+(0,10)| 2|  0| 42
+(0,3) | 3|  1| 30
+(0,11)| 4|  0| 80
+(0,5) | 5|  1| 50
+(0,12)| 6|  0|120
+(0,7) | 7|  1| 70
+(0,13)| 8|  0|160
+(8 rows)
+
+
+starting permutation: s2b s2xu s1v s3x s2u s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xu: EXPLAIN (COSTS OFF) WITH c AS (UPDATE rr SET v = v * 2 WHERE grp = 0 RETURNING id, old.ctid AS oc, new.ctid AS nc) SELECT * FROM c ORDER BY id;
+QUERY PLAN                       
+---------------------------------
+Sort                             
+  Sort Key: c.id                 
+  CTE c                          
+    ->  Update on rr             
+          ->  Seq Scan on rr     
+                Filter: (grp = 0)
+  ->  CTE Scan on c              
+(7 rows)
+
+step s1v: UPDATE rr SET v = v + 1 WHERE id = 2;
+step s3x: SELECT pg_current_xact_id() IS NOT NULL AS xid_taken;
+xid_taken
+---------
+t        
+(1 row)
+
+step s2u: WITH c AS (UPDATE rr SET v = v * 2 WHERE grp = 0 RETURNING id, old.ctid AS oc, new.ctid AS nc, ctid = new.ctid AS ctid_new, old.v AS ov, new.v AS nv, old.xmin <> (SELECT x0 FROM rr0) AS old_by_s1, old.xmin = new.xmin AS same_xmin, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine, new.xmin = pg_current_xact_id()::xid AS new_xmin_mine, old.cmax AS ocmax, new.cmin AS ncmin, old.tableoid = new.tableoid AS same_rel) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|oc   |nc    |ctid_new|ov| nv|old_by_s1|same_xmin|old_xmax_mine|new_xmin_mine|ocmax|ncmin|same_rel
+--+-----+------+--------+--+---+---------+---------+-------------+-------------+-----+-----+--------
+ 2|(0,9)|(0,10)|t       |21| 42|t        |f        |t            |t            |    1|    1|t       
+ 4|(0,4)|(0,11)|t       |40| 80|f        |f        |t            |t            |    1|    1|t       
+ 6|(0,6)|(0,12)|t       |60|120|f        |f        |t            |t            |    1|    1|t       
+ 8|(0,8)|(0,13)|t       |80|160|f        |f        |t            |t            |    1|    1|t       
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT ctid, id, grp, v FROM rr ORDER BY id;
+ctid  |id|grp|  v
+------+--+---+---
+(0,1) | 1|  1| 10
+(0,10)| 2|  0| 42
+(0,3) | 3|  1| 30
+(0,11)| 4|  0| 80
+(0,5) | 5|  1| 50
+(0,12)| 6|  0|120
+(0,7) | 7|  1| 70
+(0,13)| 8|  0|160
+(8 rows)
+
+
+starting permutation: s2b s1g s2u s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1g: UPDATE rr SET grp = 1 WHERE id = 4;
+step s2u: WITH c AS (UPDATE rr SET v = v * 2 WHERE grp = 0 RETURNING id, old.ctid AS oc, new.ctid AS nc, ctid = new.ctid AS ctid_new, old.v AS ov, new.v AS nv, old.xmin <> (SELECT x0 FROM rr0) AS old_by_s1, old.xmin = new.xmin AS same_xmin, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine, new.xmin = pg_current_xact_id()::xid AS new_xmin_mine, old.cmax AS ocmax, new.cmin AS ncmin, old.tableoid = new.tableoid AS same_rel) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|oc   |nc    |ctid_new|ov| nv|old_by_s1|same_xmin|old_xmax_mine|new_xmin_mine|ocmax|ncmin|same_rel
+--+-----+------+--------+--+---+---------+---------+-------------+-------------+-----+-----+--------
+ 2|(0,2)|(0,10)|t       |20| 40|f        |f        |t            |t            |    0|    0|t       
+ 6|(0,6)|(0,11)|t       |60|120|f        |f        |t            |t            |    0|    0|t       
+ 8|(0,8)|(0,12)|t       |80|160|f        |f        |t            |t            |    0|    0|t       
+(3 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT ctid, id, grp, v FROM rr ORDER BY id;
+ctid  |id|grp|  v
+------+--+---+---
+(0,1) | 1|  1| 10
+(0,10)| 2|  0| 40
+(0,3) | 3|  1| 30
+(0,9) | 4|  1| 40
+(0,5) | 5|  1| 50
+(0,11)| 6|  0|120
+(0,7) | 7|  1| 70
+(0,12)| 8|  0|160
+(8 rows)
+
+
+starting permutation: s2b s1d s2u s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1d: DELETE FROM rr WHERE id = 6;
+step s2u: WITH c AS (UPDATE rr SET v = v * 2 WHERE grp = 0 RETURNING id, old.ctid AS oc, new.ctid AS nc, ctid = new.ctid AS ctid_new, old.v AS ov, new.v AS nv, old.xmin <> (SELECT x0 FROM rr0) AS old_by_s1, old.xmin = new.xmin AS same_xmin, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine, new.xmin = pg_current_xact_id()::xid AS new_xmin_mine, old.cmax AS ocmax, new.cmin AS ncmin, old.tableoid = new.tableoid AS same_rel) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|oc   |nc    |ctid_new|ov| nv|old_by_s1|same_xmin|old_xmax_mine|new_xmin_mine|ocmax|ncmin|same_rel
+--+-----+------+--------+--+---+---------+---------+-------------+-------------+-----+-----+--------
+ 2|(0,2)|(0,9) |t       |20| 40|f        |f        |t            |t            |    0|    0|t       
+ 4|(0,4)|(0,10)|t       |40| 80|f        |f        |t            |t            |    0|    0|t       
+ 8|(0,8)|(0,11)|t       |80|160|f        |f        |t            |t            |    0|    0|t       
+(3 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT ctid, id, grp, v FROM rr ORDER BY id;
+ctid  |id|grp|  v
+------+--+---+---
+(0,1) | 1|  1| 10
+(0,9) | 2|  0| 40
+(0,3) | 3|  1| 30
+(0,10)| 4|  0| 80
+(0,5) | 5|  1| 50
+(0,7) | 7|  1| 70
+(0,11)| 8|  0|160
+(7 rows)
+
+
+starting permutation: s2b s1v s2u s1a s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rr SET v = v + 1 WHERE id = 2;
+step s2u: WITH c AS (UPDATE rr SET v = v * 2 WHERE grp = 0 RETURNING id, old.ctid AS oc, new.ctid AS nc, ctid = new.ctid AS ctid_new, old.v AS ov, new.v AS nv, old.xmin <> (SELECT x0 FROM rr0) AS old_by_s1, old.xmin = new.xmin AS same_xmin, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine, new.xmin = pg_current_xact_id()::xid AS new_xmin_mine, old.cmax AS ocmax, new.cmin AS ncmin, old.tableoid = new.tableoid AS same_rel) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1a: ROLLBACK;
+step s2u: <... completed>
+id|oc   |nc    |ctid_new|ov| nv|old_by_s1|same_xmin|old_xmax_mine|new_xmin_mine|ocmax|ncmin|same_rel
+--+-----+------+--------+--+---+---------+---------+-------------+-------------+-----+-----+--------
+ 2|(0,2)|(0,10)|t       |20| 40|f        |f        |t            |t            |    0|    0|t       
+ 4|(0,4)|(0,11)|t       |40| 80|f        |f        |t            |t            |    0|    0|t       
+ 6|(0,6)|(0,12)|t       |60|120|f        |f        |t            |t            |    0|    0|t       
+ 8|(0,8)|(0,13)|t       |80|160|f        |f        |t            |t            |    0|    0|t       
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT ctid, id, grp, v FROM rr ORDER BY id;
+ctid  |id|grp|  v
+------+--+---+---
+(0,1) | 1|  1| 10
+(0,10)| 2|  0| 40
+(0,3) | 3|  1| 30
+(0,11)| 4|  0| 80
+(0,5) | 5|  1| 50
+(0,12)| 6|  0|120
+(0,7) | 7|  1| 70
+(0,13)| 8|  0|160
+(8 rows)
+
+
+starting permutation: s2b s1v s2d s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rr SET v = v + 1 WHERE id = 2;
+step s2d: WITH c AS (DELETE FROM rr WHERE grp = 0 RETURNING id, old.ctid AS oc, ctid = old.ctid AS ctid_old, old.v AS ov, new.v IS NULL AS new_null, new.ctid IS NULL AS new_ctid_null, old.xmin <> (SELECT x0 FROM rr0) AS old_by_s1, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine, old.tableoid::regclass AS orel) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|oc   |ctid_old|ov|new_null|new_ctid_null|old_by_s1|old_xmax_mine|orel
+--+-----+--------+--+--------+-------------+---------+-------------+----
+ 2|(0,9)|t       |21|t       |t            |t        |t            |rr  
+ 4|(0,4)|t       |40|t       |t            |f        |t            |rr  
+ 6|(0,6)|t       |60|t       |t            |f        |t            |rr  
+ 8|(0,8)|t       |80|t       |t            |f        |t            |rr  
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT ctid, id, grp, v FROM rr ORDER BY id;
+ctid |id|grp| v
+-----+--+---+--
+(0,1)| 1|  1|10
+(0,3)| 3|  1|30
+(0,5)| 5|  1|50
+(0,7)| 7|  1|70
+(4 rows)
+
+
+starting permutation: s2b s1g s1d s2d s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1g: UPDATE rr SET grp = 1 WHERE id = 4;
+step s1d: DELETE FROM rr WHERE id = 6;
+step s2d: WITH c AS (DELETE FROM rr WHERE grp = 0 RETURNING id, old.ctid AS oc, ctid = old.ctid AS ctid_old, old.v AS ov, new.v IS NULL AS new_null, new.ctid IS NULL AS new_ctid_null, old.xmin <> (SELECT x0 FROM rr0) AS old_by_s1, old.xmax = pg_current_xact_id()::xid AS old_xmax_mine, old.tableoid::regclass AS orel) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|oc   |ctid_old|ov|new_null|new_ctid_null|old_by_s1|old_xmax_mine|orel
+--+-----+--------+--+--------+-------------+---------+-------------+----
+ 2|(0,2)|t       |20|t       |t            |f        |t            |rr  
+ 8|(0,8)|t       |80|t       |t            |f        |t            |rr  
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT ctid, id, grp, v FROM rr ORDER BY id;
+ctid |id|grp| v
+-----+--+---+--
+(0,1)| 1|  1|10
+(0,3)| 3|  1|30
+(0,9)| 4|  1|40
+(0,5)| 5|  1|50
+(0,7)| 7|  1|70
+(5 rows)
+
+
+starting permutation: s2b s2xi s1v s2i s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xi: SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; EXPLAIN (COSTS OFF) WITH c AS (UPDATE rr SET v = v * 2 WHERE id IN (2, 4) RETURNING id, old.ctid AS oc, new.ctid AS nc) SELECT * FROM c ORDER BY id;
+QUERY PLAN                                                 
+-----------------------------------------------------------
+Sort                                                       
+  Sort Key: c.id                                           
+  CTE c                                                    
+    ->  Update on rr                                       
+          ->  Index Scan using rr_pkey on rr               
+                Index Cond: (id = ANY ('{2,4}'::integer[]))
+  ->  CTE Scan on c                                        
+(7 rows)
+
+step s1v: UPDATE rr SET v = v + 1 WHERE id = 2;
+step s2i: SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; WITH c AS (UPDATE rr SET v = v * 2 WHERE id IN (2, 4) RETURNING id, old.ctid AS oc, new.ctid AS nc, old.v AS ov, new.v AS nv, old.xmin <> (SELECT x0 FROM rr0) AS old_by_s1, old.xmax = new.xmin AS xmax_is_new) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+id|oc   |nc    |ov|nv|old_by_s1|xmax_is_new
+--+-----+------+--+--+---------+-----------
+ 2|(0,9)|(0,10)|21|42|t        |t          
+ 4|(0,4)|(0,11)|40|80|f        |t          
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT ctid, id, grp, v FROM rr ORDER BY id;
+ctid  |id|grp| v
+------+--+---+--
+(0,1) | 1|  1|10
+(0,10)| 2|  0|42
+(0,3) | 3|  1|30
+(0,11)| 4|  0|80
+(0,5) | 5|  1|50
+(0,6) | 6|  0|60
+(0,7) | 7|  1|70
+(0,8) | 8|  0|80
+(8 rows)
+
+
+starting permutation: s2b s1p s2p s1c s2c s4p
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1p: UPDATE rrp SET v = v + 100 WHERE id = 2;
+step s2p: WITH c AS (UPDATE rrp1 SET v = v * 2 WHERE id <= 2 RETURNING id, old.tableoid::regclass AS orel, new.tableoid::regclass AS nrel, old.ctid AS oc, new.ctid AS nc, old.v AS ov, new.v AS nv, old.xmin <> (SELECT x0 FROM rrp0) AS old_by_s1, old.xmax = new.xmin AS xmax_is_new) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+id|orel|nrel|oc   |nc   | ov| nv|old_by_s1|xmax_is_new
+--+----+----+-----+-----+---+---+---------+-----------
+ 1|rrp1|rrp1|(0,1)|(0,4)|  1|  2|f        |t          
+ 2|rrp1|rrp1|(0,3)|(0,5)|102|204|t        |t          
+(2 rows)
+
+step s2c: COMMIT;
+step s4p: SELECT tableoid::regclass, ctid, id, k, v FROM rrp ORDER BY id;
+tableoid|ctid |id| k|  v
+--------+-----+--+--+---
+rrp1    |(0,4)| 1| 1|  2
+rrp1    |(0,5)| 2| 2|204
+rrp2    |(0,1)| 3|13|  3
+(3 rows)
+

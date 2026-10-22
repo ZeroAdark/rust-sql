@@ -1,0 +1,1 @@
+backend/executor/execindexing/src/lib.rs	IDX_EXPR_CACHE	pgport	key:index relid (relcache inval)	cache	C's rd_indexprs / rd_indpred / rd_excl*: processed trees per index relid, deep-copied out per call and dropped by a relcache invalidation of the index

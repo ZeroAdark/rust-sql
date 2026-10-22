@@ -1,0 +1,568 @@
+{
+  "repository": "https://github.com/tpde2/tpde",
+  "revision": "116b2b83eb8491fd63c017285c91b007b8a26a67",
+  "dependencies": [
+    {
+      "path": "deps/spdlog",
+      "repository": "https://github.com/gabime/spdlog",
+      "revision": "27cb4c76708608465c413f6d0e6b8d99a4d84302"
+    }
+  ],
+  "files": [
+    {
+      "path": "LICENSES/Apache-2.0.txt",
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "git_blob": "137069b823873b8bcf42979bcf8e9371052d26a2"
+    },
+    {
+      "path": "LICENSES/LLVM-exception.txt",
+      "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+      "git_blob": "fa4b725a0ee50ef723ce5292865e54de7b0bfca4"
+    },
+    {
+      "path": "tpde/include/tpde/base.hpp",
+      "sha256": "c13348df72171026eff9bc6bd284c6abdfac5d1cd170fdecf47c6fd9fe744d31",
+      "git_blob": "9d30b7b6231d544fefe99e5ba2b380ddfb9cd935"
+    },
+    {
+      "path": "tpde/src/base.cpp",
+      "sha256": "aecb547f6f0636b593207eb756fa489d27c5276670810ec25ec033569d3cef63",
+      "git_blob": "8d55c298dd5508cd2a795c31c210daad8fde9626"
+    },
+    {
+      "path": "deps/spdlog/LICENSE",
+      "sha256": "4ccecab18d1ff0b61174fe3d6c430541625d3ddb865b0d5887db296f883c76e7",
+      "git_blob": "3e696a7c81cd70221cfdc929dba0b38b99bb8498"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/async.h",
+      "sha256": "4f845bb594b36c5b6a512e38b553aec1ae0d212738ca387cadb0d7ca36dba063",
+      "git_blob": "e96abd199b4978f8265b0a30c5b4e05111918bff"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/async_logger-inl.h",
+      "sha256": "31b4b15051c19bf44105e40bc2d417c2b4a7e4f3728934109779d950d9690789",
+      "git_blob": "499800d88063ca2c105d1b7c8ea9691e60ee86e2"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/async_logger.h",
+      "sha256": "6bb8528c33020e62b380ec1e3054491daecc6e13972d3f9b34b64ccbfd40cb53",
+      "git_blob": "846c4c6f080290f3022fecede2c85dfedaafa618"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/cfg/argv.h",
+      "sha256": "6f9aa40647fda08e2ad776598a7b5de1d1596ec9a73512c90c69504f6e347a2d",
+      "git_blob": "7de2f83e7d2a5fa9dec8a90e8e0d4ec79c9620ed"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/cfg/env.h",
+      "sha256": "91f03726533a6993a17866d046c602931baf018dd8264c82b28513490503b77e",
+      "git_blob": "6e554145445ae42b71d5fb8bf33ddc89ce8e46fb"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/cfg/helpers-inl.h",
+      "sha256": "46b9768f4521a81e6423825bc131d4056ff1845e63502a4a866e0daac555899e",
+      "git_blob": "93650a2e843f2e118a9e458218f9ec1183c7e541"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/cfg/helpers.h",
+      "sha256": "359b4175a464ae487c2e48c55be9abfcfe9f10599b99410d5d55df6ade7d588e",
+      "git_blob": "c02381891c3dc3812701c2433ba35756bce968de"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/common-inl.h",
+      "sha256": "c8c7db736c3fb61ccd84b1f5d5f9c748a1e3dbfe77a986bb820fcfe20da32751",
+      "git_blob": "a8a0453c14d72550d29f23122d01fd638e7828ac"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/common.h",
+      "sha256": "6b8f6167ee30860cab811209bd3be976fe648de3673deae43051145d314667ab",
+      "git_blob": "aca483c2077b2c2c828e69b07d1b675a56de3a26"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/backtracer-inl.h",
+      "sha256": "30891d3c75154cf278ac30dbce584bfa28dae17c0f93418c363483c7e9dc9431",
+      "git_blob": "43d1002478c8407e3d1ba2bf18fadf76a9241b5e"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/backtracer.h",
+      "sha256": "e0d6f5f72d5936f0fddf681b590e87ee880a2ea40ed44551b8fdf59e0868a1e5",
+      "git_blob": "541339cdc32caba890fc0a2a4e8728085099de76"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/circular_q.h",
+      "sha256": "0bc4025c81425023f4d58711d6aa6231a55ee606bb1fc88f4fb3e655e807e265",
+      "git_blob": "29e9d255f4f4c5ffba08f3ccb234688698035be7"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/console_globals.h",
+      "sha256": "3dced73dc2bc5eacc678eec34af6458f910740c8949fd1bc8449808d1345467a",
+      "git_blob": "9c552106a4e3c3cdfab1cddb857969c126f5a024"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/file_helper-inl.h",
+      "sha256": "494dffcc83033e2ec7ff703778e5edf14910267dfa03ab1d4efe99e10f97ad94",
+      "git_blob": "37d1d46fd173821afb03ff4e18b29b2ba2820e13"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/file_helper.h",
+      "sha256": "b09a9a6543cc5703d0cdb054e15373a1d6619138f5e076a453f5830a1e2258ed",
+      "git_blob": "f0e5d180e331a4e0477469100495a1ea0ffa4e87"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/fmt_helper.h",
+      "sha256": "d66b3ec0617a439ca7a4fd661046d5be54beed89c6fae2849d4d46c3f28ef8a9",
+      "git_blob": "61306003b2107e9e61e7aaaf212afc64e7ede39f"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/log_msg-inl.h",
+      "sha256": "83e6c837a4f3094671d6745a835c718c5c0b922288be371a19429093ab856272",
+      "git_blob": "aa3a957682e5dfecd132a3e2e7667b239bfb06ed"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/log_msg.h",
+      "sha256": "13a78b8cc0a8b71fd6a49633792f98453aeb8844d525d10bc55b22089a120281",
+      "git_blob": "87df1e833277a74eac4729fd4c4d2ce9ebf75ab9"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/log_msg_buffer-inl.h",
+      "sha256": "c4ca45a0401b17de9f57ea65462b44ea159d152d83bdd086ff675ef9e035456f",
+      "git_blob": "2eb242859ea2ca76ba8239b6c410bce42726e7f2"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/log_msg_buffer.h",
+      "sha256": "0d4b89aa2d47490f3d89d04fbba49cab751e696657f2857899f432a5919b9d26",
+      "git_blob": "1143b3ba45062f38721923323a8d321360d7fbad"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/mpmc_blocking_q.h",
+      "sha256": "02dd3c983fb46ade993dba0f66c5171d9493fd5f33d1ebbd98d1ad3faeacad6b",
+      "git_blob": "5a474bf33a4073a5554ba2a0de517f42ddc54c45"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/null_mutex.h",
+      "sha256": "1377fde4b54417dca1b3d162d0f18c35f9418e1db91a333949952f1c877127b1",
+      "git_blob": "e3b32204158df4b4a6c5d40953cb22cd497f6212"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/os-inl.h",
+      "sha256": "6dff9ecc1e71a1962f8f2f0fcdb8d23b5a81255d4ce310ba65fa2842fd3b9e01",
+      "git_blob": "e3c80b9215d95f6ad3b848150210c9fdb955386b"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/os.h",
+      "sha256": "87b7d26dd83e17a978bed8ea686a2dad7a40f47194e4d2cf03a7091cf2373c29",
+      "git_blob": "b1069edce0355ca1fc33c5205de127e4c212c900"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/periodic_worker-inl.h",
+      "sha256": "298c84f55ac417e43974d044f5055364b4aa59fec9d2c8d24a001b73f79ae113",
+      "git_blob": "18f11fbec8cce92f47f145f1fa74cc22fca29464"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/periodic_worker.h",
+      "sha256": "5e514551070364a20f35b076b83820a7e577b3b23f66aa254d8bd9ea0b8c7b17",
+      "git_blob": "d647b66ee174ab7b706ae3c984b7cf37ff5221c5"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/registry-inl.h",
+      "sha256": "dc04b045314a2d998f9436fe626e19adedcc762493728dd0789f011f6b2aa2d5",
+      "git_blob": "f447848ee036af03fe80bc8f52f917742140422c"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/registry.h",
+      "sha256": "ed45ed0bae8c7c907bb6279ce0ca1ead4a010e57e1d9b0a969372c2b18bb9edc",
+      "git_blob": "8afcbd6f59d1efd86e8bdf972f11114d67c89cd6"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/synchronous_factory.h",
+      "sha256": "3fcfcc28aa4edc2998e9e00d218362600605b89e0c58ebf2c7267950412e1cdc",
+      "git_blob": "4bd5a51c86831e1808407c8cd5a34db36e95038c"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/tcp_client-windows.h",
+      "sha256": "c434fe70e201e1a8666b516f10c6fc9fbc0c194916623bf12eeb313f6bee16c8",
+      "git_blob": "bf8f7b8791b273d542ab10af348ff3b830ae93c0"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/tcp_client.h",
+      "sha256": "931f7aa6acc1a3a9c5929380e7fcd3ec9d170e99da4a179844eb87d1f83b501c",
+      "git_blob": "9d3c40d525e26d52204115d5dcea52559664edd8"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/thread_pool-inl.h",
+      "sha256": "322b86d4c7002fb89923c990701cce91ea346a2fa17a064a4f2fb83dec0123a9",
+      "git_blob": "ccc1dc971e2604fa33fa77b58b86629ba9339439"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/thread_pool.h",
+      "sha256": "a0e76eb7f2ca8cc311c967d31cd23b2a354befbf21a4db04f475bcb127a6efb9",
+      "git_blob": "0d56a091ccbe18a837e0d98bf255af36d5ec99fa"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/udp_client-windows.h",
+      "sha256": "4b3589ef5cd882bd322c9ecb10587ec7c1dc8ba497a12c874e12472a8ccfcf1f",
+      "git_blob": "8b7c22324e074322a0e7ba307c358fa78e8e2fb5"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/udp_client.h",
+      "sha256": "c418b615351912eea40e041fd3e88b89a4520adf12ebf43fb1af105a4d7bbd79",
+      "git_blob": "95826f5d91d5792173af512c1f5220a6bd4e42c1"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/details/windows_include.h",
+      "sha256": "aaedb3b90bd662563d82887fedaf338167c951254f45f9ebfef27adade2bd186",
+      "git_blob": "bbab59b1c7645fdcc2a2c89b7b95e930df932fea"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bin_to_hex.h",
+      "sha256": "417f9361e0e0cbd1ea7c67913e5eafae96987c39125ac8392d157176c3489670",
+      "git_blob": "c2998d57ae6165ce4e5eaacb6ab3e328bdbb2dfc"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/args.h",
+      "sha256": "418b645e9022277a5858841c07a3c65237053d45311a8c099573ac517b43d1c2",
+      "git_blob": "ad1654bbb60064e0aee447376ddf0fa556c28f3c"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/chrono.h",
+      "sha256": "a38d6c02f64e2af3684369ad4df6ab88be203a0d4bdfbf51fde542f83546eac9",
+      "git_blob": "9d54574e1682ce662718b31d6e3d660c6781c779"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/color.h",
+      "sha256": "014c9dacc521f9c3768468f46a71545d10da1f3c4a8b826b8596b8a03588a77a",
+      "git_blob": "367849a86a7c06b72deb786a3de1bb85a11da8a5"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/compile.h",
+      "sha256": "69aa4297b42f273bbfacf5c9eebe4b6a26b552d06fb74cd151c47260c37b6850",
+      "git_blob": "3b3f166e0cd0cb156e1c2cc5061c4a5f6b893d0f"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/core.h",
+      "sha256": "143d591df63db5b20786eb8ca756012e0b7e2c6dab7f002488e2c701e897a91f",
+      "git_blob": "b51c1406a9907d6d612099c0c123d0df77930239"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/fmt.license.rst",
+      "sha256": "825c9324e70f8c839c8ba910543dd4a7daee243b86ef960594c11381a19980b8",
+      "git_blob": "f0ec3db4d2a03368a9f1357b38e79486bdf41076"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/format-inl.h",
+      "sha256": "c390df52884480b131dffd17842af3dde8eae6cd7f1aafda30b63efa369d6e61",
+      "git_blob": "efac5d1f88fef3f9f074ccb46e13bc78caaa762c"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/format.h",
+      "sha256": "63bd5a34d139bfca1727bfbaf941afbb5751c871adaaa91b77dce58a70723073",
+      "git_blob": "7637c8a0d0687ae3b77a145c2e1ceadf7fe5f67d"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/locale.h",
+      "sha256": "db88ca5e9b9a24abd92179241926af533b0bb71cf7b56e8677b3617e4015f2af",
+      "git_blob": "7571b5261ba78c62d0e45c7ba71567ae512ea6bb"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/os.h",
+      "sha256": "89b7a98365b90127e11d5e84c2fa58443088164ec9c99ce262ed303a7c197eed",
+      "git_blob": "3c7b3ccb481eced0fc2903765752508c255ca534"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/ostream.h",
+      "sha256": "f839f36281b36ac9e514e4c6d944f6f6699a2101bb36e9d4809aade4bd25ff61",
+      "git_blob": "26fb3b5ac071aa950edad9bf5069e35e358e6a16"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/printf.h",
+      "sha256": "d121c2b5b48f68de396ca3ac5fa32b7c7dd77dd8d8e9684e8604a88756e680e5",
+      "git_blob": "07e81577cf3209bb09b1dc35ef1ef4233a2356fc"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/ranges.h",
+      "sha256": "87a9911af535273e9f9bed00d6da3083b71eec3491c9a54013258a882342b6f3",
+      "git_blob": "3638fffb83bce6035c13659f26fe13749c8b19ea"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/std.h",
+      "sha256": "06467b405f40291f40f26c6e46c15d756254581c397413a77c02b2b7d62dcb41",
+      "git_blob": "7cff1159201d2d821df89f5276d85d78b6d2e603"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/bundled/xchar.h",
+      "sha256": "e7b39f998679214676059671b9085d2ab2549634ac0e49f8ff94028a1a3e69dc",
+      "git_blob": "f609c5c41a22925c46a44953b22857a17a8dda5d"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/chrono.h",
+      "sha256": "c423556694f9fba3cf43c2043dafe7b0a2c261341cbc2a78c456a44d6b5d4f38",
+      "git_blob": "a72a5bd64100c1fd73e345455263ec7d45e3a041"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/compile.h",
+      "sha256": "70a226919802f35566bc75535153007434ecef55b064840059149ca0d29c4d0f",
+      "git_blob": "3c9c25d8b192812acdb30f78d47fc6419b22847c"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/fmt.h",
+      "sha256": "dc488c1dc67d55c7b0618018f57e51c2bc84644f9da1412f5dd39506ddbcb0f1",
+      "git_blob": "7fa6b09336064f91eda11519023cab3b68bc2cc6"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/ostr.h",
+      "sha256": "64bcc67495d2d66a6feec40d1c14aebd86d99b8b064c32f034abe1b674aab5a4",
+      "git_blob": "2b901055f3c0f7b3e8b538c5425f41ad71220de1"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/ranges.h",
+      "sha256": "a1a416fc4f5e6096df0bf89390f79f6251c97a4b034a195dedb4d28c496fbba6",
+      "git_blob": "5bb91e9acb7fdf679cb2231a401ae86792f1a0a0"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/std.h",
+      "sha256": "801a8f4d3246b3488f51972213d72052b54ec7e4e67e9dd100060feec7e8c28b",
+      "git_blob": "dabe6f69d8b94169f70456652c3f4a4dc79cb46c"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fmt/xchar.h",
+      "sha256": "f29873210b20733d85c59cd43e18563f9b48aec6bd453b4d53c2dd5ee558438d",
+      "git_blob": "2525f058648d7a7bf65f5218efb747caa20a2ee4"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/formatter.h",
+      "sha256": "213631628274dc6c26fcc9a3bed36a3a9a83edea5e6b9f027baea58ca9c5eff3",
+      "git_blob": "4d482f827e671c7acec2b4aaa9fa2dd0bc8f2dbb"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/fwd.h",
+      "sha256": "246d2754fb77dcdcb7ed4be2328944659fd154599ee09df865db5cdb33cbe349",
+      "git_blob": "647b16bf0fa41f9f5806f38b94eaa136d4d6befc"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/logger-inl.h",
+      "sha256": "2b6d6c11dce4bd4cceb4e724c6ffe6a508f3ae9cff8b44438ae92438c3c35470",
+      "git_blob": "5218fe4c440d48ed0191aa691f094d3afd8ce3bf"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/logger.h",
+      "sha256": "b298ef3f9daea67f946781a6b73eec267b889191d06392b38bc602298f86e8a0",
+      "git_blob": "f49bdc009a3e1dc8ccd021d98925406332f08ea5"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/mdc.h",
+      "sha256": "a47ad60462005c57d550ec476d5b6009f13eb73fe5bf0c0a40769d14c84ec8ee",
+      "git_blob": "41f0c1f3fc5cb8bb49449bdb8f02a436141290b6"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/pattern_formatter-inl.h",
+      "sha256": "267afdd70b6142eb46bebbed818d332dbea6fa0e918c4810634db540238d21c6",
+      "git_blob": "756e594155b97097b74f750ba36cffdd35de1010"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/pattern_formatter.h",
+      "sha256": "33c08b3918f7182df15d6f1bab3f9f93fc271c178c2cb2baba69a30e0ad6ea23",
+      "git_blob": "ececd67322fe0a0046745ece8c463bcb9fae53a8"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/android_sink.h",
+      "sha256": "73031cdd8669c9f687fd9122bcb1da5dd741e9008b01f873ee392b27c9db565d",
+      "git_blob": "4435a560a00de6d13c21d386e1bfad67c869c825"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/ansicolor_sink-inl.h",
+      "sha256": "31d0d258c9f77a2c57c1d1141ba19be72975b588218439baf8d5a89b2df89ba8",
+      "git_blob": "2194f67b94e1988e0237317fcbd92a92b637f5f7"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/ansicolor_sink.h",
+      "sha256": "918bd727ca89bc4e1ec3e46e94646c5a9863c750f7a93f336a73b63be0c21f4b",
+      "git_blob": "ff53730c0d936d2e916fdb932c2ba8ec84e1731f"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/base_sink-inl.h",
+      "sha256": "b42fc2851ad76919aecea27cabb9487b6c6acd1522fe94751a138da55862d4f3",
+      "git_blob": "ada161bcc1d8f590f7a130ffdef71ad58f3ae10d"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/base_sink.h",
+      "sha256": "756bccd4992695da9726f3cecea26bb7f4119fd9db10793a2721316aee9c496c",
+      "git_blob": "1ca772a652087c43e6bce712aee15da1def330ba"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/basic_file_sink-inl.h",
+      "sha256": "247044a3e2fb35963dd44092f75b0311fec58dc10a8689798f18dfbbced1ce96",
+      "git_blob": "f7c1abf7c947339d5e0d2f7e189db59ef044a5e7"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/basic_file_sink.h",
+      "sha256": "cbc7ab268d20213055228cba9764a1c206660fba5ce4731dc3f132bc8e8ed47b",
+      "git_blob": "699caa147de16c72dcdee01ec299f56a736b7c3c"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/callback_sink.h",
+      "sha256": "0d32dd82dfc3cf2e9349ec04038a7f0efadc092ce40b784fdbad01439cfbf8bf",
+      "git_blob": "71668ef28e5e5ad57bcb3bc094f0c27f41d7a7bb"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/daily_file_sink.h",
+      "sha256": "e2b68fa34fef6c0e19c35f9d8bb5c30b97248ec4ec7064c827a78f38d8d5d7e9",
+      "git_blob": "1b1dc44a872739fa2f209918d0ce9bf7e953c5fa"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/dist_sink.h",
+      "sha256": "fa6b8b53368b3cc9490046f1a207c3852835f0a00f6f677005c9e52799e86247",
+      "git_blob": "69c4971c95344bfef79befecfa26e89f6b9df571"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/dup_filter_sink.h",
+      "sha256": "7a547f8efc1d1a564aa4f4602f9068efdf577422b6ca8e3cec45b232840f7950",
+      "git_blob": "1498142c47eac52b45b9db1d3121c4e4d66c08df"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/hourly_file_sink.h",
+      "sha256": "7c294c36c1f1fe8b0db3269f13afd60b3bfaf5f07bf1be19422292a3cf71e3b8",
+      "git_blob": "1f138925fcacb722ddfaa7ea4ec30174b08a4fe9"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/kafka_sink.h",
+      "sha256": "9bb10a5ea347f2400baadf0d794d5045169fae77388132bc0cf3dcf30ec00c08",
+      "git_blob": "91e987865a229d717db41b220e1ffcd86a06b307"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/mongo_sink.h",
+      "sha256": "df9a5c34bef34a9a55f4bec51f98c3f0527fdc61bc8ee247a9b4f4149e8ff0f0",
+      "git_blob": "c5b38ab958453fd1ae2d33f5997f7d5656b02e4b"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/msvc_sink.h",
+      "sha256": "e2f1649c151cb6ea79d780076969c3a36ef815632456d304e601f9d62cce69fd",
+      "git_blob": "2e5f6875eafe5dc4caf32237920f55775eb75097"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/null_sink.h",
+      "sha256": "eb98307308a4d936daa8ba5a1c53154b416c8f5f7437f34867887ac03da13ad9",
+      "git_blob": "c51247fe66b77cfb24d0aa69141000a1a1a035cb"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/ostream_sink.h",
+      "sha256": "8a444e2537b82d6fe4a87c1162d4eb53f94ceb01acbc8d646828f2b24f869085",
+      "git_blob": "6af9dd091e1cc3df8c530f2a9546c775d04c6eeb"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/qt_sinks.h",
+      "sha256": "04193b21cff77cd78d484dd1f79c1720abda08b10bf87af8737a05956d486143",
+      "git_blob": "d319e84734c0c3fc488ce41882b962fdc0ac2c43"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/ringbuffer_sink.h",
+      "sha256": "47446677a2d1239dea0248fbecf77be8c74b7f1b0c7d0b3d11d8aafde9eac412",
+      "git_blob": "6156c6a516bef3098c4e6df4772d5c7c4044948f"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/rotating_file_sink-inl.h",
+      "sha256": "d3faa53feabe4a3627a3621962b49f39839d6142faedcfc9ff95ac86d224fcd1",
+      "git_blob": "6f10256fc6556d1ba336e27e574c2b3a27e657fd"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/rotating_file_sink.h",
+      "sha256": "e12f44944c8f8da5142ad199340dbaec93248485497ffe696056864cdcc0488e",
+      "git_blob": "cd43d349d08031abbd81a985193c91adfa277ac8"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/sink-inl.h",
+      "sha256": "e3efbe6fc7b15fccc046b740b061f0ab5867f8bd7d6cf30ed2180a3cdb04aefb",
+      "git_blob": "e4b271404fd1e46c33af63eb791a5ac4da2032dd"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/sink.h",
+      "sha256": "7fa4a5c69c42f9eee9d6cd5cc4d525be4beb77299cc88b09b4a01f155f3cc215",
+      "git_blob": "58506853640561a68a7eb68c69518a44bdd1e42c"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/stdout_color_sinks-inl.h",
+      "sha256": "187e6472676773eb592cc4dfa9441c3aea64333be395dfc6f2741549e1da9141",
+      "git_blob": "166e386145f9d83ee393bf65d6124cb98057e4f9"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/stdout_color_sinks.h",
+      "sha256": "ba7831fa21239e6b52cda2b8d18c457ff1ee5e2afd730988e0b95b874939e21c",
+      "git_blob": "72991fe0ed49174b1d687250668398722f39f085"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/stdout_sinks-inl.h",
+      "sha256": "79fa58d6911c47eb74e7933067075939765c3ab879470017a23368b02aac2485",
+      "git_blob": "f98244db29265915b736801e58adf16b15acb299"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/stdout_sinks.h",
+      "sha256": "eae56abfb446f3d17025e20a56861cf27cfe49139069f265715679b603ca709e",
+      "git_blob": "6ef09968a456d83c45266376a9165739736fd81a"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/syslog_sink.h",
+      "sha256": "a9625971b787f38d6aa1c2f043180ee3123b1e52db90134834b310f78b5d7aa0",
+      "git_blob": "a2df3b44ded94c2c39dca7a528f3ff0968e2aa64"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/systemd_sink.h",
+      "sha256": "3c9afc1eae8f317d341c05af01c9ccba687219ff36c536dfdf37fdaeade650f8",
+      "git_blob": "d2cd55f2e910ec8357564df62b98a666098466ed"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/tcp_sink.h",
+      "sha256": "5ee85948885be7001f50356c8c4415b83007e3ea24c124fd772a2d7e9125e40b",
+      "git_blob": "2534964549a7f847a7914ccd7cb907c24aa3f2ce"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/udp_sink.h",
+      "sha256": "cb5628c8daad4588e5bd3ba5ea0e6cb595cd1a5211deda1ec507f343c7b431f6",
+      "git_blob": "4bff0fd2c00ff4370344279ef087a562238df72f"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/win_eventlog_sink.h",
+      "sha256": "4783a96f7b89b19d48c14eea3f82f3ffd659e8faf34a4446659cd0c2d822e39c",
+      "git_blob": "2c9b582d30ae061908ba975fba7e2ce0d0ec8afc"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/wincolor_sink-inl.h",
+      "sha256": "5b0ba78fb74834d566e5e879e981f04d3c2e298f7ed27dbfd65decf25f612f98",
+      "git_blob": "10b8a74a25d8a5f67c8e4bc230f10e25cdd76adc"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/sinks/wincolor_sink.h",
+      "sha256": "cbbdabbc9f7613b6c092ef1d3f279f65f0faa7a896f0a4ebb00350f477b7a72e",
+      "git_blob": "8ba594cc2b93443579d4e5954d5fe928fe70b2e3"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/spdlog-inl.h",
+      "sha256": "1b9a282607e3dedf806f3e2b9285b6a89e3e6c06284c59f5936ea023f23a19da",
+      "git_blob": "97c362222edcc63032c33081609bfe801db8ca7e"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/spdlog.h",
+      "sha256": "54e35376e5b504df65f219e961c8c94f7cec6d664e0533c50bbf2c60e391e12a",
+      "git_blob": "a8afbcec4a94dfa95e92bc70a9407619679f87e9"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/stopwatch.h",
+      "sha256": "60f3aaed933185261ae603cc589cd39ebf93ef78321548871d469fb566903c44",
+      "git_blob": "54ab3d3b846651a904f2fe41be77b6828742744e"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/tweakme.h",
+      "sha256": "31b76a0d5c814879a269c810b792f0100aabfddd281550c3930d05140d0fb757",
+      "git_blob": "a47a90764a59567e030829a3ae5abff2b81916ba"
+    },
+    {
+      "path": "deps/spdlog/include/spdlog/version.h",
+      "sha256": "ca70b1e2ac706beda79753f6df8ec5794e57aa14d072335cf7b68522922a77eb",
+      "git_blob": "4fa94cb68cc3fe17521b891f2cb90bbea55475e2"
+    },
+    {
+      "path": "tpde/include/tpde/ValLocalIdx.hpp",
+      "sha256": "d736ab9c83e1670f1ab2af852c4b0af9919be287fee76e00cc2409cc8309110c",
+      "git_blob": "411edd575d737c968be10a674b2cb76e23222e08"
+    }
+  ]
+}

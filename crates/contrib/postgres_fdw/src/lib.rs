@@ -6,8 +6,7 @@
 //! TRUNCATE (postgresExecForeignTruncate).
 //! Unported: sort/LIMIT (ORDERED/FINAL) pushdown, pathkey paths
 //! (add_paths_with_pathkeys_for_rel), EPQ-capable pushed join paths under
-//! UPDATE/DELETE/row locks, row triggers on foreign tables, COPY into
-//! foreign tables (BeginForeignInsert).
+//! UPDATE/DELETE/row locks, row triggers on foreign tables.
 #![allow(non_snake_case)]
 
 pub mod analyze;

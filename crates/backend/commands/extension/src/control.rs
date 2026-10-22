@@ -2,7 +2,7 @@
 // path: owned std strings per the guc_file/pgtz precedent.
 use std::cell::RefCell;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_error::{
     PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_NAME,
     ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_PROGRAM_LIMIT_EXCEEDED, ERRCODE_SYNTAX_ERROR,
@@ -164,7 +164,7 @@ fn pg_file_exists(full: &std::path::Path) -> PgResult<bool> {
                 b = b.with_saved_errno(errno).errcode_for_file_access();
             }
             Err(b
-                .errmsg(format!("could not access file \"{}\": %m", full.display()))
+                .errmsg(format!("could not access file \"{}\": {PCT_M}", full.display()))
                 .into_error()
                 .into())
         }
@@ -190,11 +190,14 @@ fn exists_in_paths(basename: &[u8], paths: &[String]) -> PgResult<bool> {
 #[inline(never)]
 // extension.c:668-674 on the name bytes: C's exact bytes go on the wire.
 fn extension_not_available(name: &[u8]) -> Box<PgError> {
-    let mut msg = b"extension \"".to_vec();
+    let mut msg = Vec::new();
+    let _ = msg.try_reserve(b"extension \"".len() + name.len() + b"\" is not available".len());
+    msg.extend_from_slice(b"extension \"");
     msg.extend_from_slice(name);
     msg.extend_from_slice(b"\" is not available");
     Box::new(
         PgError::error_raw_message(msg)
+            .with_location("extension.c", 673, "parse_extension_control_file")
             .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
             .with_hint(
                 "The extension must first be installed on the system where PostgreSQL is running.",
@@ -271,7 +274,7 @@ fn parse_extension_control_file(
                 b = b.with_saved_errno(errno).errcode_for_file_access();
             }
             return Err(b
-                .errmsg(format!("could not open extension control file \"{filename}\": %m"))
+                .errmsg(format!("could not open extension control file \"{filename}\": {PCT_M}"))
                 .into_error()
                 .into());
         }
@@ -401,6 +404,17 @@ pub(crate) fn read_extension_control_file_bytes(extname: &[u8]) -> PgResult<Exte
 mod name_bytes_tests {
     use super::*;
 
+    #[test]
+    fn unavailable_test_modules_report_c_error_metadata() {
+        for name in [b"injection_points".as_slice(), b"test_custom_types".as_slice()] {
+            let e = extension_not_available(name);
+            let location = e.location().unwrap();
+            assert_eq!(location.filename.as_deref(), Some("extension.c"));
+            assert_eq!(location.lineno, 673);
+            assert_eq!(location.funcname.as_deref(), Some("parse_extension_control_file"));
+        }
+    }
+
     // pg_extension_update_paths('caf\xe9') in SQL_ASCII (extension.c:668-674).
     #[test]
     fn non_utf8_extension_name_is_c_not_available_or_the_carve() {
@@ -467,7 +481,7 @@ pub(crate) fn read_whole_file(filename: &str) -> PgResult<Vec<u8>> {
         if let Some(errno) = e.raw_os_error() {
             b = b.with_saved_errno(errno).errcode_for_file_access();
         }
-        b.errmsg(format!("could not stat file \"{filename}\": %m")).into_error()
+        b.errmsg(format!("could not stat file \"{filename}\": {PCT_M}")).into_error()
     })?;
     if meta.len() > MAX_ALLOC_SIZE - 1 {
         return Err(ereport(ERROR)
@@ -483,20 +497,20 @@ pub(crate) fn read_whole_file(filename: &str) -> PgResult<Vec<u8>> {
         if let Some(errno) = e.raw_os_error() {
             b = b.with_saved_errno(errno).errcode_for_file_access();
         }
-        b.errmsg(format!("could not open file \"{filename}\" for reading: %m"))
+        b.errmsg(format!("could not open file \"{filename}\" for reading: {PCT_M}"))
             .into_error()
     })?;
 
     // fread(buf, 1, bytes_to_read, file): a read-side failure (ferror) is
     // "could not read file", distinct from the open failure above.
     use std::io::Read;
-    let mut buf = Vec::with_capacity(bytes_to_read as usize + 1);
+    let mut buf = ::mcx::std_vec_with_capacity("commands", bytes_to_read as usize + 1)?;
     file.take(bytes_to_read).read_to_end(&mut buf).map_err(|e| {
         let mut b = ereport(ERROR);
         if let Some(errno) = e.raw_os_error() {
             b = b.with_saved_errno(errno).errcode_for_file_access();
         }
-        b.errmsg(format!("could not read file \"{filename}\": %m")).into_error()
+        b.errmsg(format!("could not read file \"{filename}\": {PCT_M}")).into_error()
     })?;
     Ok(buf)
 }
@@ -519,7 +533,7 @@ pub(crate) fn for_each_primary_control_name(
                     b = b.with_saved_errno(errno).errcode_for_file_access();
                 }
                 return Err(b
-                    .errmsg(format!("could not open directory \"{location}\": %m"))
+                    .errmsg(format!("could not open directory \"{location}\": {PCT_M}"))
                     .into_error()
                     .into());
             }
@@ -530,7 +544,7 @@ pub(crate) fn for_each_primary_control_name(
                 if let Some(errno) = e.raw_os_error() {
                     b = b.with_saved_errno(errno).errcode_for_file_access();
                 }
-                b.errmsg(format!("could not read directory \"{location}\": %m")).into_error()
+                b.errmsg(format!("could not read directory \"{location}\": {PCT_M}")).into_error()
             })?;
             let fname = de.file_name();
             let Some(fname) = fname.to_str() else { continue };

@@ -34,7 +34,6 @@ pub enum DestReceiver<'mcx> {
     TransientRel(matview_seams::TransientRelState<'mcx>), // CreateTransientRelDestReceiver (matview.c)
     SqlFunction(sql_functions_seams::SqlFunctionDestState<'mcx>), // CreateSQLFunctionDestReceiver (functions.c)
     ExplainSerialize(explain_dr::SerializeDestReceiver<'mcx>), // CreateExplainSerializeDestReceiver (explain_dr.c)
-    TupleQueue(tqueue::DrTqueue),          // CreateTupleQueueDestReceiver (tqueue.c)
 }
 
 impl<'mcx> DestReceiver<'mcx> {
@@ -57,7 +56,6 @@ impl<'mcx> DestReceiver<'mcx> {
                 sql_functions_seams::sqlfunction_receive::call(state, slot)
             }
             DestReceiver::ExplainSerialize(dr) => dr.receive_slot(slot),
-            DestReceiver::TupleQueue(dr) => dr.receive_slot(slot),
         }
     }
 
@@ -78,10 +76,6 @@ impl<'mcx> DestReceiver<'mcx> {
             }
             DestReceiver::SqlFunction(_) => Ok(()),
             DestReceiver::ExplainSerialize(dr) => dr.startup(operation, typeinfo),
-            DestReceiver::TupleQueue(dr) => {
-                dr.startup(operation, typeinfo);
-                Ok(())
-            }
         }
     }
 
@@ -113,7 +107,6 @@ impl<'mcx> DestReceiver<'mcx> {
                 dr.shutdown();
                 Ok(())
             }
-            DestReceiver::TupleQueue(dr) => dr.shutdown(),
         }
     }
 
@@ -133,7 +126,6 @@ impl<'mcx> DestReceiver<'mcx> {
             DestReceiver::TransientRel(_) => CommandDest::TransientRel,
             DestReceiver::SqlFunction(_) => CommandDest::SqlFunction,
             DestReceiver::ExplainSerialize(_) => CommandDest::ExplainSerialize,
-            DestReceiver::TupleQueue(_) => CommandDest::TupleQueue,
         }
     }
 
@@ -190,6 +182,13 @@ impl DestReceiver<'_> {
             _ => None,
         }
     }
+
+    pub fn plain_tuplestore(&self) -> Option<types_portal::TuplestoreHandle> {
+        match self {
+            DestReceiver::Tuplestore(dr) => tstore_receiver::plain_store(dr),
+            _ => None,
+        }
+    }
 }
 
 // DestReceiver *None_Receiver: C's shared static donothingDR.
@@ -215,7 +214,6 @@ pub fn CreateDestReceiver<'mcx>(dest: CommandDest) -> DestReceiver<'mcx> {
         // owner (DestSqlFunction by sql_functions — junkfilter params;
         // DestExplainSerialize by explain — C's case here passes es=NULL,
         // which any real use would deref-crash on, so it stays loud;
-        // DestTupleQueue by tqueue_create_DR — it needs the queue handle).
         CommandDest::IntoRel
         | CommandDest::CopyOut
         | CommandDest::SqlFunction
@@ -284,12 +282,15 @@ pub fn NullCommand(dest: CommandDest) -> PgResult<()> {
     Ok(())
 }
 
-pub fn ReadyForQuery(mcx: Mcx<'_>, dest: CommandDest) -> PgResult<()> {
+pub fn ReadyForQuery(_mcx: Mcx<'_>, dest: CommandDest) -> PgResult<()> {
     match dest {
         CommandDest::Remote | CommandDest::RemoteExecute | CommandDest::RemoteSimple => {
-            let mut buf = pqformat::pq_beginmessage(mcx, PQMSG_READY_FOR_QUERY)?;
-            pqformat::pq_sendbyte(&mut buf, xact_seams::transaction_block_status_code::call())?;
-            pqformat::pq_endmessage(buf)?;
+            // C builds the one-byte body in a StringInfo (pq_beginmessage / pq_sendbyte / pq_endmessage). Put it as
+            // EndCommand puts its tag: the same message ('Z', length 5, the status byte) through the same
+            // pq_putmessage, then the same flush, without the 1 KB palloc + pfree per statement (pglfast D4484). Like
+            // pq_endmessage, the EOF result is dropped ("pqcomm.c already complained").
+            let status = [xact_seams::transaction_block_status_code::call()];
+            let _eof = pqcomm_seams::pq_putmessage::call(PQMSG_READY_FOR_QUERY, &status)?;
             pqcomm_seams::pq_flush::call()?;
         }
 

@@ -5,6 +5,7 @@
 //! `SMgrRelation` handle cache keyed by `RelFileLocatorBackend`.
 
 use core::cell::{Cell, RefCell};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use ::elog::ereport;
 use ::mcx::{MemoryContext, Mcx, PgHashMap, PgVec};
@@ -68,6 +69,7 @@ struct SmgrCache {
     free: Vec<u32>,
     // |unpinned_relns|: AtEOXact_SMgr skips the walk when all are pinned.
     unpinned: Cell<usize>,
+    seen_release: u64,
 }
 
 impl SmgrCache {
@@ -89,6 +91,12 @@ impl SmgrCache {
 thread_local! {
     static CACHE: RefCell<Option<SmgrCache>> = const { RefCell::new(None) };
 }
+
+// A thread that ends no transaction (a Gravity pool thread) has no
+// AtEOXact_SMgr: smgr_unit_start drops its unpinned entries when any thread
+// released files since it last looked, or when it holds over UNIT_CAP.
+static RELEASES: AtomicU64 = AtomicU64::new(0);
+const UNIT_CAP: usize = 1024;
 
 #[track_caller]
 #[cold]
@@ -114,7 +122,8 @@ fn with_cache<R>(f: impl FnOnce(&mut SmgrCache) -> R) -> R {
             }));
             let mut relns = PgHashMap::new_in(cx.mcx());
             let _ = relns.try_reserve(400);
-            SmgrCache { cx, relns, slab: Vec::new(), free: Vec::new(), unpinned: Cell::new(0) }
+            let seen_release = RELEASES.load(Ordering::Relaxed);
+            SmgrCache { cx, relns, slab: Vec::new(), free: Vec::new(), unpinned: Cell::new(0), seen_release }
         });
         f(cache)
     })
@@ -337,6 +346,7 @@ pub fn smgrdestroyall() -> PgResult<()> {
 }
 
 pub fn smgrreleaseall() {
+    RELEASES.fetch_add(1, Ordering::Relaxed);
     let keys = with_cache(|c| {
         let mut keys: PgVec<'static, RelFileLocatorBackend> = PgVec::new_in(c.cx.mcx());
         if keys.try_reserve(c.relns.len()).is_err() {
@@ -354,6 +364,7 @@ pub fn smgrreleaseall() {
 }
 
 pub fn smgrreleaserellocator(key: RelFileLocatorBackend) -> PgResult<()> {
+    RELEASES.fetch_add(1, Ordering::Relaxed);
     if with_cache(|c| c.relns.contains_key(&key)) {
         smgrrelease(key)?;
     }
@@ -367,6 +378,22 @@ pub fn ProcessBarrierSmgrRelease() -> PgResult<bool> {
 
 pub fn AtEOXact_SMgr() -> PgResult<()> {
     smgrdestroyall()
+}
+
+pub fn smgr_unit_start() -> PgResult<()> {
+    let releases = RELEASES.load(Ordering::Relaxed);
+    let stale = CACHE.with(|c| {
+        c.borrow_mut().as_mut().is_some_and(|c| {
+            let stale = c.seen_release != releases || c.relns.len() > UNIT_CAP;
+            c.seen_release = releases;
+            stale
+        })
+    });
+    if stale {
+        smgrdestroyall()
+    } else {
+        Ok(())
+    }
 }
 
 pub fn smgrsettargblock(key: RelFileLocatorBackend, targblock: BlockNumber) {
@@ -1169,7 +1196,7 @@ mod tests {
             pgstat_enabled: Cell::new(false),
             pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
             rd_amcache: Default::default(),
-            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
             rd_support: PgVec::new_in(cx.mcx()),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),

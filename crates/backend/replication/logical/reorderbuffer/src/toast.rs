@@ -100,8 +100,8 @@ impl ReorderBuffer {
         cid: ChangeId,
     ) -> PgResult<()> {
         let natts = desc.natts as usize;
-        let mut values = vec![Datum::from_usize(0); natts];
-        let mut isnull = vec![false; natts];
+        let mut values = ::mcx::std_vec_from_elem("replication", Datum::from_usize(0), natts)?;
+        let mut isnull = ::mcx::std_vec_from_elem("replication", false, natts)?;
         {
             let change = self.change(cid);
             let ReorderBufferChangeData::Tp { newtuple: Some(newtup), .. } = &change.data else {
@@ -212,8 +212,8 @@ impl ReorderBuffer {
         let natts = desc.natts as usize;
         let toast_natts = toast_desc.natts as usize;
 
-        let mut values = vec![Datum::from_usize(0); natts];
-        let mut isnull = vec![false; natts];
+        let mut values = ::mcx::std_vec_from_elem("replication", Datum::from_usize(0), natts)?;
+        let mut isnull = ::mcx::std_vec_from_elem("replication", false, natts)?;
         let (t_self, t_table_oid) = {
             let change = self.change(cid);
             let ReorderBufferChangeData::Tp { newtuple: Some(newtup), .. } = &change.data else {
@@ -230,7 +230,7 @@ impl ReorderBuffer {
         // in rb->context; heap_form_tuple copies the image into the rebuilt
         // tuple, so they only need to outlive that call. Reserved up front so
         // the values[] pointers into it never move.
-        let mut indirect_images: Vec<[u8; VARHDRSZ_EXTERNAL + 8]> = Vec::with_capacity(natts);
+        let mut indirect_images: Vec<[u8; VARHDRSZ_EXTERNAL + 8]> = ::mcx::std_vec_with_capacity("replication", natts)?;
 
         for natt in 0..natts {
             let attr = desc.attr(natt);
@@ -261,8 +261,8 @@ impl ReorderBuffer {
 
                 let mut data_done = 0usize;
                 for chunk_cid in dl_iter(&self.changes, ent.chunks, |c| c.node) {
-                    let mut cvalues = vec![Datum::from_usize(0); toast_natts];
-                    let mut cisnull = vec![false; toast_natts];
+                    let mut cvalues = ::mcx::std_vec_from_elem("replication", Datum::from_usize(0), toast_natts)?;
+                    let mut cisnull = ::mcx::std_vec_from_elem("replication", false, toast_natts)?;
                     let cchange = self.change(chunk_cid);
                     let ReorderBufferChangeData::Tp { newtuple: Some(ctup), .. } = &cchange.data
                     else {

@@ -179,7 +179,7 @@ fn to_uchars(
     }
     uchar_buf_admission(ulen)?;
     buf.clear();
-    buf.resize(ulen as usize + 1, 0);
+    ::mcx::std_vec_resize("pg_locale", buf, ulen as usize + 1, 0)?;
     let mut status = ffi::U_ZERO_ERROR;
     // SAFETY: buf holds ulen+1 UChars.
     let ulen = unsafe {
@@ -245,7 +245,7 @@ fn make_icu_collator(iculocstr: &str, icurules: Option<&str>) -> PgResult<*mut f
     // SAFETY: live collator; getRules returns a collator-owned buffer.
     let std_rules = unsafe { (api.ucol_getRules)(collator_std_rules, &mut std_len) };
     let mut all_rules: Vec<UChar> =
-        Vec::with_capacity(std_len as usize + my_len as usize + 1);
+        ::mcx::std_vec_with_capacity("pg_locale", std_len as usize + my_len as usize + 1)?;
     // SAFETY: std_rules points at std_len UChars.
     all_rules
         .extend_from_slice(unsafe { core::slice::from_raw_parts(std_rules, std_len as usize) });
@@ -282,8 +282,10 @@ pub(crate) fn create_icu_locale(
     iculocstr: &str,
     icurules: Option<&str>,
 ) -> PgResult<IcuLocale> {
+    ffi::require_icu()?;
     let collator = make_icu_collator(iculocstr, icurules)?;
-    let mut owned = iculocstr.as_bytes().to_vec();
+    let mut owned = ::mcx::std_vec_with_capacity::<u8>("pg_locale", iculocstr.len() + 1)?;
+    owned.extend_from_slice(iculocstr.as_bytes());
     owned.push(0);
     let loc = mcx::slice_borrow_in(cache_mcx, &owned)?;
     Ok(IcuLocale {
@@ -462,12 +464,15 @@ fn convert_case(
     };
     let mut len_dest = src.len() as i32;
     dest.clear();
-    dest.resize(len_dest as usize, 0);
+    ::mcx::check_alloc_size(len_dest as usize * core::mem::size_of::<UChar>())?;
+    ::mcx::std_vec_resize("pg_locale", dest, len_dest as usize, 0)?;
     let mut status = ffi::U_ZERO_ERROR;
     len_dest = call(dest, len_dest, &mut status);
     if status == ffi::U_BUFFER_OVERFLOW_ERROR {
         dest.clear();
-        dest.resize(len_dest as usize, 0);
+        // pg_locale_icu.c palloc_array(UChar, len_dest).
+        ::mcx::check_alloc_size(len_dest as usize * core::mem::size_of::<UChar>())?;
+        ::mcx::std_vec_resize("pg_locale", dest, len_dest as usize, 0)?;
         status = ffi::U_ZERO_ERROR;
         len_dest = call(dest, len_dest, &mut status);
     }
@@ -568,13 +573,13 @@ pub(crate) fn get_collation_actual_version_icu(collcollate: &str) -> PgResult<St
 /// icu_language_tag (pg_locale.c): BCP47 canonicalization; Ok(None) on
 /// conversion failure at sub-ERROR elevels (reported at elevel per C).
 pub fn icu_language_tag(loc_str: &str, elevel: ErrorLevel) -> PgResult<Option<String>> {
-    let api = ffi::icu();
+    let api = ffi::require_icu()?;
     let cloc = format!("{loc_str}\0");
     let mut buflen: usize = 32;
     let mut langtag: Vec<u8>;
     let mut status;
     loop {
-        langtag = vec![0; buflen];
+        langtag = ::mcx::std_vec_from_elem("pg_locale", 0, buflen)?;
         status = ffi::U_ZERO_ERROR;
         // SAFETY: cloc NUL-terminated; langtag holds buflen bytes.
         unsafe {
@@ -613,7 +618,7 @@ pub fn icu_language_tag(loc_str: &str, elevel: ErrorLevel) -> PgResult<Option<St
 
 /// icu_validate_locale (pg_locale.c); elevel = icu_validation_level GUC.
 pub fn icu_validate_locale(loc_str: &str) -> PgResult<()> {
-    let api = ffi::icu();
+    let api = ffi::require_icu()?;
     let elevel = ErrorLevel(guc_tables::vars::icu_validation_level.read());
     if elevel.0 < 0 {
         return Ok(());
@@ -695,7 +700,7 @@ pub fn icu_validate_locale(loc_str: &str) -> PgResult<()> {
                 "ICU locale \"{loc_str}\" has unknown language \"{lang_str}\""
             ))
             .errhint(hint())
-            .finish(crate::loc(1660, "icu_validate_locale"))?;
+            .finish(crate::loc(1731, "icu_validate_locale"))?;
     }
     let collator = pg_ucol_open(loc_str)?;
     // SAFETY: closing the validation-probe collator, as C does.
@@ -833,5 +838,50 @@ mod collation_failed_tests {
             format!("collation failed: {}", errname(api, U_ILLEGAL_ARGUMENT_ERROR))
         );
         assert_eq!(err.message(), "collation failed: U_ILLEGAL_ARGUMENT_ERROR");
+    }
+}
+
+#[cfg(test)]
+mod icu_absent_tests {
+    use super::*;
+
+    #[test]
+    fn absent_libicu_is_the_c_non_icu_error() {
+        let Err(err) = ffi::require(None) else { panic!("require(None) returned Ok") };
+        assert_eq!(err.message(), "ICU is not supported in this build");
+        assert_eq!(err.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);
+        if let Some(api) = ffi::try_icu() {
+            assert!(matches!(ffi::require(Some(api)), Ok(got) if core::ptr::eq(got, api)));
+        }
+    }
+
+    // The loader is a process-wide OnceLock, so the absent arms run in a
+    // child test process with PGRUST_TEST_NO_ICU set.
+    #[test]
+    fn public_icu_entry_points_follow_c_without_icu() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "icu::icu_absent_tests::no_icu_child", "--ignored", "--test-threads=1"])
+            .env("PGRUST_TEST_NO_ICU", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    #[test]
+    #[ignore = "run by public_icu_entry_points_follow_c_without_icu"]
+    fn no_icu_child() {
+        assert!(ffi::try_icu().is_none());
+        for err in [
+            icu_language_tag("en-US", types_error::ERROR).unwrap_err(),
+            icu_validate_locale("en-US").unwrap_err(),
+        ] {
+            assert_eq!(err.message(), "ICU is not supported in this build");
+            assert_eq!(err.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);
+        }
+        assert_eq!(crate::get_collation_actual_version(crate::COLLPROVIDER_ICU, "und").unwrap(), None);
+        assert!(icu_available_locale_ids().is_none());
+        assert!(icu_locale_display_name_ascii("en").is_none());
+        assert!(crate::icu_unicode_version_str().is_none());
     }
 }

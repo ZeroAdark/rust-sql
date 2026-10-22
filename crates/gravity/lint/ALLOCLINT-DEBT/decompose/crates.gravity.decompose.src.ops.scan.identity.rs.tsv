@@ -1,0 +1,3 @@
+path	crates/gravity/decompose/src/ops/scan/identity.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	3

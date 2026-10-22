@@ -1,0 +1,1 @@
+ORDER BY t COLLATE "en_US": the comparator form (TailForm::Collated) calls pg_locale_seams::varstr_cmp_locale, the locale compare the crate rig never installs; the server runner judges it (e2e v4/m6_text_order, PG 18.6 golden)

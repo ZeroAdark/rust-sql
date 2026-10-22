@@ -1,0 +1,11 @@
+M6 seed corpus: one file per fixture, `<fixture>.tsv` holding its row `fixture<TAB>source<TAB>expect`
+(tests/agg_m6.rs m6_seed_verdicts_and_pins reads every *.tsv here; column 1 must be the file's name).
+- fixture: a decompose plan fixture id (plans/<id>.plan; regress-full-<stem> = plans/regress-full/<stem>.plan), or a
+  fixtures/m6/<id>.plan (m6x-<n>: fixtures/m6/m6x.sql, captured by scripts/gravity-capture-plans.sh m6x).
+- source: the census family (census/serve.tsv), or m6x/<why> (coll-c / coll-default / coll-libc / coll-icu / coll-ci:
+  the collation matrix, M6-plan §8; rows: a table-free statement with a PostgreSQL 18.6 golden, fixtures/m6/<id>.pg;
+  pgrc: a pgrc numeric(9, 2) or text lane, the packed and code shapes no census fixture carries).
+- expect: the crate's lowering verdict: `served` (with its IR pin, LOWERV4_PIN=write after review), `refused <text>`,
+  or `server-only`: a fixture the crate rig cannot judge (the rig catalog has no user aggregate / type / function,
+  D537); the server rig (rig.py) judges it.
+Re-keyed by fixture name (v5 core-face landing 8); the rows were first seeded per M6 kind / road (M6-RIG, 2026-09-26).

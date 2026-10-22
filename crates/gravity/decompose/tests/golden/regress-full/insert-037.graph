@@ -1,0 +1,11 @@
+-- regress-full-insert-037
+-- select tableoid::regclass, a from list_parted;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=2550 end=sink
+  nodes n1@0
+  source range rel=17937 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=relabel2205(v2.-6), 2=v2.1)
+  outs 1=w4:val 2=w8:val
+scan-lanes node=1 rti=2 rel=17937 tableoid
+mapped: SeqScan

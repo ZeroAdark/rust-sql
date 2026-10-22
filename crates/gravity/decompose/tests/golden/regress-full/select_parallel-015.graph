@@ -1,0 +1,33 @@
+-- regress-full-select_parallel-015
+-- select * from (select count(*) from tenk1 where thousand > 99) ss right join (values (1),(2),(3)) v(x) on true;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=4 serial site=0 reason=IndexSource end=breaker(slot=0 PlainAgg)
+  nodes n4@0 n3@1^
+  source index-only rel=16423 rti=5 am=heap index=19342
+    key att=8 op=521 value=c23:99
+    recheck (op521(index.1, c23:99))
+    lanes
+  project (1=index.1, 2=index.2)
+  outs 1=w4:val 2=w4:val
+p1 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source values rti=4 rows=3
+    row (c23:1)
+    row (c23:2)
+    row (c23:3)
+  project (1=v4.1)
+  nest inner=n3 JOIN_LEFT invariant raise-free params=()
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n3@0
+  source breaker slot=0
+  project (1=agg2803*())
+  project (1=inner.1, 2=outer.1)
+  outs 1=w4:val
+  outs 1=w8:val 2=w4:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+group slot=0 producer=p0 node=3 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+rerun node=0 pipelines=p0 slots=0
+mapped: IndexOnlyScan ValuesScan NestLoop Agg

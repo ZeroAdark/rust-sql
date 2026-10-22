@@ -1,0 +1,10 @@
+-- srf-028
+-- SELECT * FROM now() n;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn1299 fn1299()]
+  project (1=v1.1)
+  outs 1=w8:val
+mapped: FunctionScan

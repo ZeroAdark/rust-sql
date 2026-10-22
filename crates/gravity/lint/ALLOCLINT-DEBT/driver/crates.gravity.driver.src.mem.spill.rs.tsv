@@ -1,0 +1,13 @@
+path	crates/gravity/driver/src/mem/spill.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	15
+growth	std::vec::Vec::resize	7
+growth	std::vec::Vec::resize_with	12
+growth	std::vec::Vec::try_reserve_exact	1
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::with_capacity	2
+type	std::boxed::Box	3
+type	std::vec::Vec	9

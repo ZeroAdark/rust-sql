@@ -20,6 +20,7 @@ pub mod io;
 pub mod pending;
 pub mod relation;
 pub mod replslot;
+pub mod section;
 pub mod shmem;
 pub mod slru;
 pub mod subscription;
@@ -147,6 +148,30 @@ pub fn set_pgstat_fetch_consistency(v: i32) {
 
 thread_local! {
     static IS_INITIALIZED: Cell<bool> = const { Cell::new(false) };
+    /// D4809 (F4): this session's pgstat_shutdown_hook ran (its pending flushed, its STATE retired at the teardown); a
+    /// count after it would build a PgStatState nothing retires. pgstat_initialize and a retained backend's reattach clear it.
+    static SHUT_DOWN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// D4809: the pgstat states built after their session's shutdown hook ran (pending.rs `with_state`), since start.
+static STATES_AFTER_SHUTDOWN: pgsync::atomic::AtomicU64 = pgsync::atomic::AtomicU64::new(0);
+
+/// D4809 (F4): whether this thread's session takes counts: pgstat initialized here and its shutdown hook not yet run (a
+/// thread with no session, or a scan dropped in a session's teardown, counts nothing).
+pub fn pgstat_counting_open() -> bool {
+    IS_INITIALIZED.with(|c| c.get()) && !SHUT_DOWN.with(|c| c.get())
+}
+
+/// D4809: the pgstat states built after their session's shutdown hook, since start (`pgrust_memory_reconcile` reads it).
+pub fn pgstat_states_after_shutdown() -> u64 {
+    STATES_AFTER_SHUTDOWN.load(pgsync::atomic::Ordering::Relaxed)
+}
+
+/// D4809: `with_state` builds a state; counted when its session's shutdown hook already ran.
+pub(crate) fn note_state_built() {
+    if SHUT_DOWN.with(|c| c.get()) {
+        STATES_AFTER_SHUTDOWN.fetch_add(1, pgsync::atomic::Ordering::Relaxed);
+    }
 }
 
 pub fn pgstat_initialize() -> types_error::PgResult<()> {
@@ -154,7 +179,15 @@ pub fn pgstat_initialize() -> types_error::PgResult<()> {
     wal::pgstat_wal_init_backend_cb();
     ipc_seams::before_shmem_exit::call(pgstat_shutdown_hook, datum::Datum::from_usize(0))?;
     IS_INITIALIZED.with(|c| c.set(true));
+    SHUT_DOWN.with(|c| c.set(false));
     Ok(())
+}
+
+/// D4682 (client backend thread reuse, launch_backend cpool): the session's pgstat_shutdown_hook ran at its exit; the
+/// next session on the parked thread runs pgstat_initialize as a fresh thread does.
+pub fn reset_for_thread_reuse() {
+    IS_INITIALIZED.with(|c| c.set(false));
+    SHUT_DOWN.with(|c| c.set(false));
 }
 
 /// Retention claim (wretain): pgstat TLS survived the park (the shutdown
@@ -163,6 +196,7 @@ pub fn pgstat_initialize() -> types_error::PgResult<()> {
 pub fn pgstat_reattach_retained_backend() -> types_error::PgResult<()> {
     debug_assert!(IS_INITIALIZED.with(|c| c.get()));
     wal::pgstat_wal_init_backend_cb();
+    SHUT_DOWN.with(|c| c.set(false));
     ipc_seams::before_shmem_exit::call(pgstat_shutdown_hook, datum::Datum::from_usize(0))
 }
 
@@ -173,6 +207,7 @@ fn pgstat_shutdown_hook(_code: i32, _arg: datum::Datum) -> types_error::PgResult
     }
     pending::pgstat_report_stat(true);
     backend::pgstat_backend_shutdown();
+    SHUT_DOWN.with(|c| c.set(true));
     Ok(())
 }
 

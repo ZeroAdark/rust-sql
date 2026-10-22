@@ -1,0 +1,2 @@
+path	crates/gravity/lowerv4/src/ops/hashjoin/spill/raw/load.rs
+growth	std::vec::Vec::resize	1

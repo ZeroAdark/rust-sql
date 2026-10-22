@@ -38,8 +38,9 @@
 //! docs/design/m5-planner.md §3): STRIDE / FAIR-SHARE at equal shares. The
 //! pick is the lowest-`pass` active slot; each executed task advances its
 //! slot's pass by `stride × cpu_ns` (stride = STRIDE1/priority; every RG
-//! holds p_0 in M5-4, so shares are equal — decaying priorities + p_min are
-//! M5-5). Equal-pass ties prefer the slot whose RG's leader session the
+//! starts at p_0 and M5-5 (LIVE, default ON) decays it with consumed CPU
+//! toward the p_min floor — `decay_default` below and the decay site on the
+//! task path). Equal-pass ties prefer the slot whose RG's leader session the
 //! picking worker is sticky-bound to (§5.2 session-affine tiebreak,
 //! equal-pass-only per the design's §10 default), then lowest index. The
 //! M4 Maintenance preference is evaluated BEFORE the stride pick (§3.2
@@ -262,6 +263,27 @@ impl Drop for LedgerLeaveGuard<'_> {
     }
 }
 
+/// D611: gives the pool loop's step permit back when a task unwinds out of
+/// `worker_step` (forgotten on return). Only if the thread holds it: the
+/// RAII blocking sections retake theirs on the unwind, but an unwind out of
+/// an aio wait (io_permit_release without its reacquire) already gave it up.
+struct PermitOnUnwind<'a> {
+    sched: &'a Scheduler,
+}
+
+impl Drop for PermitOnUnwind<'_> {
+    fn drop(&mut self) {
+        #[cfg(not(loom))]
+        {
+            if !crate::io::permit_held() {
+                return;
+            }
+            crate::io::note_permit(false);
+        }
+        self.sched.permits.release();
+    }
+}
+
 /// Blocking-section entry (§2.8 composition): donate the current task's
 /// width grant along with the execution permit — the standby absorbing the
 /// freed core must be joinable or a width-saturated slot deadlocks the
@@ -294,6 +316,13 @@ pub(crate) fn ledger_restore_current() {
 /// M5-4 kill switch: `PGRUST_RUNTIME_STRIDE=0` restores the M0 FIFO
 /// lowest-index pick (byte-identical to the pre-M5-4 scheduler). Default ON.
 /// Read once; tests toggle per-instance via [`crate::Runtime::set_stride`].
+/// V4R-70 kill switch: `PGRUST_RUNTIME_WIDTH_CAP=0` lets every woken pool worker join a task set whatever its
+/// width (the pre-cap shape: publish wakes the whole pool and the section's own slots queue the surplus). Default ON.
+pub(crate) fn width_cap_enabled() -> bool {
+    static ON: crate::sync::OnceLock<bool> = crate::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PGRUST_RUNTIME_WIDTH_CAP").map_or(true, |v| v.trim() != "0"))
+}
+
 fn stride_default() -> bool {
     static ON: crate::sync::OnceLock<bool> = crate::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("PGRUST_RUNTIME_STRIDE").map_or(true, |v| v.trim() != "0"))
@@ -365,7 +394,7 @@ pub(crate) fn pool_qos_enabled() -> bool {
 // BOOT-DERIVED MEMORY MODEL bar (the bar-derivation law, regression
 // amendment): memory.max − page_cache_reserve − kernel_slack, on this
 // governor's ANON basis; unbounded hosts stay disarmed (never pay a
-// read). The model terms mirror memwatchdog::derived_memory_bar (the dep
+// read). The model terms mirror memruntime::derived_memory_bar (the dep
 // direction keeps this crate postmaster-free — keep the constants in
 // lockstep; derivation + death-ledger table live there). The verdict is
 // cached and refreshed at most every GOVERNOR_REFRESH_MS — the yield gate
@@ -373,11 +402,11 @@ pub(crate) fn pool_qos_enabled() -> bool {
 // ---------------------------------------------------------------------------
 
 const GOVERNOR_REFRESH_MS: u64 = 64;
-/// Model term (lockstep with memwatchdog::MEM_MODEL_PAGE_CACHE_RESERVE_PCT):
+/// Model term (lockstep with memruntime::MEM_MODEL_PAGE_CACHE_RESERVE_PCT):
 /// the reclaim-resistant file-backed share of memory.max at the kill
 /// profile of record.
 const MEM_MODEL_PAGE_CACHE_RESERVE_PCT: u64 = 31;
-/// Model term (lockstep with memwatchdog::MEM_MODEL_KERNEL_SLACK_PCT):
+/// Model term (lockstep with memruntime::MEM_MODEL_KERNEL_SLACK_PCT):
 /// kernel slab/sock overhead + the shed/error defense margin.
 const MEM_MODEL_KERNEL_SLACK_PCT: u64 = 4;
 
@@ -821,6 +850,21 @@ pub(crate) fn wake_spinner_enabled() -> bool {
     *ON.get_or_init(|| {
         matches!(
             std::env::var("PGRUST_POOL_WAKE_SPINNER").ok().as_deref().map(str::trim),
+            Some("1") | Some("on")
+        ) && step_v2()
+    })
+}
+
+/// Lane wakelit arm (iv): `PGRUST_POOL_WAKE_TREE=1` — the new-work publish
+/// wakes TWO parked workers and each wakee wakes two more before it
+/// searches (log-depth fan-out; each waker is RUNNING when it wakes its
+/// children, unlike the one-shot burst the kernel places all at once).
+/// DEFAULT OFF; requires the step-v2 loop (directed parks).
+pub(crate) fn wake_tree_enabled() -> bool {
+    static ON: crate::sync::OnceLock<bool> = crate::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        matches!(
+            std::env::var("PGRUST_POOL_WAKE_TREE").ok().as_deref().map(str::trim),
             Some("1") | Some("on")
         ) && step_v2()
     })
@@ -1448,6 +1492,9 @@ impl Scheduler {
         slot: usize,
         width: Option<WidthRequest>,
     ) {
+        if let Some(w) = width.filter(|_| width_cap_enabled() && !rg.pinned) {
+            rg.width_cap.store(w.ceiling.max(1), Ordering::Relaxed);
+        }
         // WS-B ledger admission (knob-gated; lock order membership →
         // ledger.inner, this caller holds membership). Entries are
         // slot-keyed: under DAG dispatch only the RG's FIRST slot is
@@ -1564,6 +1611,8 @@ impl Scheduler {
         // (the M2 sink plumbing) is armed before the first claim can land.
         rg.tasksets[index].work.bind_generation(rg.generation());
         let whole_claims = rg.tasksets[index].source.whole_boundary_claims();
+        let whole_until = if whole_claims { rg.tasksets[index].source.whole_until() } else { u64::MAX };
+        let endgame = rg.tasksets[index].source.endgame_split();
         let coalesce = whole_claims && rg.tasksets[index].source.coalesce_claims();
         let ts = Arc::new(TaskSetRt {
             rg,
@@ -1577,7 +1626,11 @@ impl Scheduler {
             finalized: AtomicBool::new(false),
             c0,
             whole_claims,
+            whole_until,
+            endgame,
             coalesce,
+            home: memledger::Home::here(),
+            home_exit: memledger::HomeExit::for_block(memledger::arc_bytes::<TaskSetRt>()),
         });
         if self.trace {
             self.trace(&format!(
@@ -1625,6 +1678,7 @@ impl Scheduler {
                 }
             }
         }
+        let cap = ts.rg.width_cap.load(Ordering::Relaxed) as usize;
         m.owned[slot] = Some(SlotEntry { seq, ts });
         self.slots[slot].word.store((seq << 1) | 1, Ordering::SeqCst);
         // WS-B JOIN_THRESHOLD (knob-gated; OFF ⇒ advert is true and the
@@ -1656,8 +1710,13 @@ impl Scheduler {
         // legacy parkers keep their own publish/completion/abort wake_all
         // sites; this is the NEW-WORK inbox wake only.
         if advert {
-            if wake_spinner_enabled() {
+            if wake_tree_enabled() {
+                self.park.wake_tree();
+            } else if wake_spinner_enabled() {
                 self.park.wake_work();
+            } else if cap != 0 {
+                // V4R-70: a capped set takes at most `cap` workers; waking the rest only has them refuse and re-park
+                self.park.wake_n(cap);
             } else {
                 self.park.wake_all();
             }
@@ -1713,7 +1772,16 @@ impl Scheduler {
         self.active[slot / 64].fetch_and(!(1u64 << (slot % 64)), Ordering::SeqCst);
     }
 
-    fn pick_slot(&self, local: &WorkerLocal) -> Option<usize> {
+    /// `starve_mask` (STARVED-SHADOW fix, 2026-08-10, ported 2026-09-15):
+    /// slots this STEP already probed and found starved (an OPEN stream
+    /// with every published granule claimed). A starved slot's pass is
+    /// frozen while a runnable sibling's keeps climbing, so the stride pick
+    /// would return the starved slot FOREVER once its pass is the minimum
+    /// and every worker would funnel into pick→starve→park with the
+    /// sibling's claimable work stranded (the two-taskset parquet COPY
+    /// deadlock). The mask is step-local: no shared state, no protocol
+    /// change; single-active-slot paths only see a pre-masked word.
+    fn pick_slot(&self, local: &WorkerLocal, starve_mask: &[u64; 2]) -> Option<usize> {
         // WS-B ledger filter switch: one cached-bool branch when OFF (the
         // byte-identity contract). ON composes wants_workers into the
         // active-slot scans; the maintenance preference and the FIFO kill-
@@ -1728,7 +1796,7 @@ impl Scheduler {
         // charge normally below, so the preference cannot starve foreground.
         // A stale hit revalidates through the slot word into Retry.
         for (i, word) in self.maint.iter().enumerate() {
-            let mask = word.load(Ordering::SeqCst);
+            let mask = word.load(Ordering::SeqCst) & !starve_mask[i];
             if mask != 0 {
                 let slot = i * 64 + mask.trailing_zeros() as usize;
                 if slot < self.slots.len() {
@@ -1736,8 +1804,8 @@ impl Scheduler {
                 }
             }
         }
-        let m0 = self.active[0].load(Ordering::SeqCst);
-        let m1 = self.active[1].load(Ordering::SeqCst);
+        let m0 = self.active[0].load(Ordering::SeqCst) & !starve_mask[0];
+        let m1 = self.active[1].load(Ordering::SeqCst) & !starve_mask[1];
         if m0 | m1 == 0 {
             return None;
         }
@@ -1869,19 +1937,43 @@ impl Scheduler {
     }
 
     pub(crate) fn worker_step(&self, local: &mut WorkerLocal) -> Step {
+        // STARVED-SHADOW fix: a Starved end on one slot re-picks with that
+        // slot masked; the step may Idle only after EVERY pickable slot
+        // starved or refused. The caller's park epoch was captured before
+        // the whole step, so the Idle that finally escapes is
+        // lost-wakeup-free against every publish since the step began.
+        let mut starve_mask = [0u64; 2];
+        loop {
+            match self.worker_step_masked(local, &starve_mask) {
+                (Step::Idle, Some(slot)) => {
+                    starve_mask[slot / 64] |= 1u64 << (slot % 64);
+                }
+                (step, _) => return step,
+            }
+        }
+    }
+
+    /// One pick + at most one task execution under `starve_mask`. Returns
+    /// the step and, for a Starved end (`Step::Idle` with work still
+    /// possible elsewhere), WHICH slot starved so the caller can mask it.
+    fn worker_step_masked(
+        &self,
+        local: &mut WorkerLocal,
+        starve_mask: &[u64; 2],
+    ) -> (Step, Option<usize>) {
         if self.stop.load(Ordering::SeqCst) {
             // Stop = a flush boundary (StatAcc contract): the loop exits.
             self.stat_flush_all(local);
             self.note_spin_claimed(local);
-            return Step::Stop;
+            return (Step::Stop, None);
         }
-        let Some(slot) = self.pick_slot(local) else {
+        let Some(slot) = self.pick_slot(local, starve_mask) else {
             // Idle transition: nothing is runnable — any WFIN/stats
             // accumulation still held is this worker's final word on those
             // sets.
             self.stat_flush_all(local);
             local.wfin_flush_all();
-            return Step::Idle;
+            return (Step::Idle, None);
         };
 
         // Protocol step 1: publish-target-before-claim.
@@ -1893,7 +1985,7 @@ impl Scheduler {
             PinSettleGuard { sched: self, worker: local.worker, armed: true };
 
         match self.resolve(local, slot) {
-            None => Step::Retry,
+            None => (Step::Retry, None),
             // M2 inc-2 bindability gate: a bound-descriptor RG is never
             // task-claimed by a pool worker — one ENGAGEMENT is served
             // through the descriptor instead (bind → external-lane drive →
@@ -1909,7 +2001,7 @@ impl Scheduler {
                 // inner drive (settle-exactly-once): disarm our guard.
                 pin_guard.disarm();
                 self.note_spin_claimed(local);
-                self.serve_bound(local, &ts)
+                (self.serve_bound(local, &ts), None)
             }
             Some(ts) => {
                 self.note_spin_claimed(local);
@@ -1925,8 +2017,18 @@ impl Scheduler {
                     crate::evict_session_residue_for_unbound_work();
                 }
                 // pin_guard settles on scope exit (Drop), incl. an unwind
-                // out of run_task_admitted.
-                self.run_task_admitted(local, &ts)
+                // out of run_task_admitted. D611: an unwind out of it is
+                // exit-committed and the pool loop's unwind path releases
+                // nothing, so the step's permit goes back here (serve_bound's
+                // discipline); a permit leaked per retiring thread starved the
+                // respawned pool after a crash.
+                let permit = PermitOnUnwind { sched: self };
+                let step = self.run_task_admitted(local, &ts);
+                std::mem::forget(permit);
+                // Idle here ⇔ TaskEnd::Starved on THIS slot (the only Idle
+                // producer in run_task_admitted): report the slot so the
+                // caller's starve mask can exclude it and probe siblings.
+                (step, if step == Step::Idle { Some(slot) } else { None })
             }
         }
     }
@@ -2034,9 +2136,28 @@ impl Scheduler {
     /// settle pays any marker debt exactly as on the invalidated-slot
     /// Retry.
     fn run_task_admitted(&self, local: &mut WorkerLocal, ts: &Arc<TaskSetRt>) -> Step {
+        // D611: the work's pre-claim duty, before any join or claim: an unwind
+        // from it (a thread retiring RAW) leaves no range claimed and no
+        // ledger / cap / active-worker charge behind.
+        ts.work().before_claims();
         let ledger_on = self.ledger_on.load(Ordering::Relaxed);
         if ledger_on && !self.ledger.try_join(ts.slot) {
             return Step::Retry;
+        }
+        // V4R-70: a full task set refuses the join before any claim, so a refused worker holds no range; Idle masks the
+        // slot (worker_step probes the other slots, then parks). A CAS, so participants never exceed the cap.
+        let cap = ts.rg.width_cap.load(Ordering::Relaxed) as u64;
+        if cap != 0
+            && ts
+                .active_workers
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < cap).then_some(n + 1))
+                .is_err()
+        {
+            if ledger_on {
+                self.ledger.leave(ts.slot);
+            }
+            RuntimeStats::tick(&self.stats.cap_refusals);
+            return Step::Idle;
         }
         // Publish the grant for the declared-blocking-section entry points
         // (§2.8 composition): a task body that donates its execution permit
@@ -2050,7 +2171,7 @@ impl Scheduler {
         } else {
             None
         };
-        let end = self.run_task(local, ts);
+        let end = self.run_task(local, ts, cap != 0);
         if let Some(g) = leave_guard.as_mut() {
             g.disarm();
         }
@@ -2325,7 +2446,7 @@ impl Scheduler {
     /// exhausted (or its generation is dead) and finalization should be
     /// driven; [`TaskEnd::Starved`] ⇔ an open stream source has nothing
     /// claimable (park, producer wakes).
-    fn run_task(&self, local: &mut WorkerLocal, ts: &Arc<TaskSetRt>) -> TaskEnd {
+    fn run_task(&self, local: &mut WorkerLocal, ts: &Arc<TaskSetRt>, joined: bool) -> TaskEnd {
         // Batched (StatAcc): first claim of the participation synchronous,
         // the rest thread-local until a flush boundary.
         self.stat_task_claimed(local, ts);
@@ -2343,7 +2464,11 @@ impl Scheduler {
         // Live width AFTER this worker joins: the claim-duration DOP scaling
         // input (tails192 #4) — identity at ≤32 by construction, so 16-core
         // pods and the mt16 vectors size exactly as before.
-        let task_width = ts.active_workers.fetch_add(1, Ordering::SeqCst) + 1;
+        let task_width = if joined {
+            ts.active_workers.load(Ordering::SeqCst)
+        } else {
+            ts.active_workers.fetch_add(1, Ordering::SeqCst) + 1
+        };
         // RAII: the matching decrement is a finalization-protocol obligation.
         // Discharge it from Drop so it is paid on EVERY exit path, including
         // an unwind through the morsel body below (H-74). Nothing between here
@@ -2612,7 +2737,26 @@ impl Scheduler {
         loop {
             let cur = ts.cursor.load(Ordering::SeqCst);
             if cur >= total {
-                return if closed { Claim::Exhausted } else { Claim::Starved };
+                if !closed {
+                    return Claim::Starved;
+                }
+                // A claim another worker gave up (the source's split of a
+                // running claim, `MorselSource::steal`): run like any
+                // photo-finish claim, inside this pinned task.
+                return match ts.source().steal() {
+                    Some(r) if r.start < r.end => {
+                        sizing_acc[2] += 1;
+                        Claim::Range(r)
+                    }
+                    _ => Claim::Exhausted,
+                };
+            }
+            // Dead granules (a zone census that pruned whole parts) are never
+            // claimed: the cursor skips to the first live one and retries.
+            let live = ts.source().first_live_at(cur).min(total);
+            if live > cur {
+                let _ = ts.cursor.compare_exchange(cur, live, Ordering::SeqCst, Ordering::SeqCst);
+                continue;
             }
             let workers = ts.active_workers.load(Ordering::SeqCst).max(1);
             let (want, decision) = sizer.next_size(&ts.sizer, total - cur, workers);
@@ -2632,12 +2776,17 @@ impl Scheduler {
             // dict duplication bounded to the last < W claims). The Ramp
             // gate keeps first claims whole (no cold-start splitting);
             // width > 32 keeps 16-core byte behavior unchanged.
-            let terminal_split = ts.whole_claims
+            // A source's whole claims stop at `whole_until` (its tail is
+            // sizer-cut inside each boundary), and a source that needs one
+            // writer per boundary opts out of the split (`endgame`).
+            let whole = ts.whole_claims && cur < ts.whole_until;
+            let terminal_split = whole
+                && ts.endgame
                 && workers > crate::sizing::DOPSCALE_W0
                 && decision != SizingDecision::Ramp
                 && endgame_split_enabled()
                 && (total - cur) < workers.saturating_mul(bound - cur);
-            let end = if ts.whole_claims && !terminal_split {
+            let end = if whole && !terminal_split {
                 // Claim coalescing (dop1-tax fix 1): at LOW live width the
                 // per-claim drive re-entry (scan reposition + drain prologue
                 // + partial export, ~30-45µs each on dict-memo-heavy shapes) is
@@ -2665,7 +2814,7 @@ impl Scheduler {
                         // out, preserving the ≤1-task finish-spread posture.
                         let fair_end = cur + ((total - cur) / workers).max(1);
                         for _ in 1..factor {
-                            if end >= total || end >= fair_end {
+                            if end >= total || end >= fair_end || end >= ts.whole_until {
                                 break;
                             }
                             end = ts.source().next_boundary_after(end).min(total);
@@ -2690,7 +2839,7 @@ impl Scheduler {
                         && crate::sizing::dopscale_enabled()
                     {
                         let fair_end = cur + ((total - cur) / workers).max(1);
-                        while end < total && end < fair_end && end - cur < want {
+                        while end < total && end < fair_end && end < ts.whole_until && end - cur < want {
                             end = ts.source().next_boundary_after(end).min(total);
                         }
                     }
@@ -2932,9 +3081,16 @@ impl Scheduler {
         // The RG leaves the scheduler: drain (a no-op — every participant
         // is provably gone, see retire_lifecycle) and retire its generation
         // before the leader wakes.
+        // D4552 (a): inside the group's home: the lifecycle's abort error and the leader's waker words free on the
+        // submitter's account, wherever the group completes
+        let home = rg.enter_home();
         rg.retire_lifecycle();
+        // D4552 (a): what the retirement freed lands on the home's account now, while its leader still waits: the
+        // completion below wakes it, and a woken leader may end its session (and its account) before this thread leaves
+        memledger::fold();
         rg.done_ns.store(self.clock.now_ns().max(1), Ordering::Relaxed);
         rg.completion.complete(if aborted { RgOutcome::Aborted } else { RgOutcome::Completed });
+        drop(home);
         RuntimeStats::tick(&self.stats.rgs_completed);
         if aborted {
             RuntimeStats::tick(&self.stats.rgs_aborted);
@@ -3085,8 +3241,14 @@ impl Scheduler {
                 edges.push_str(&format!("{d}->{i}"));
             }
         }
-        let depths =
-            rg.depth.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+        let mut depths = String::new();
+        for (i, d) in rg.depth.iter().enumerate() {
+            if i > 0 {
+                depths.push(',');
+            }
+            use core::fmt::Write as _;
+            let _ = write!(depths, "{d}");
+        }
         eprintln!(
             "MORSEL|DAG|qid={}|rg={}|mode={}|pipes={}|edges={}|depths={}",
             rg.query_id,

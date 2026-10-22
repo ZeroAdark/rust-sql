@@ -1,0 +1,13 @@
+path	crates/gravity/exec/src/runner/drive.rs
+growth	std::vec::Vec::push	2
+growth	std::vec::Vec::resize	1
+macro	std::vec	1
+method	slice::to_vec	4
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	4
+method	std::iter::Iterator::collect	5
+method	std::sync::Arc::new	1
+method	std::vec::Vec::into_boxed_slice	1
+type	std::boxed::Box	4
+type	std::sync::Arc	1
+type	std::vec::Vec	2

@@ -41,7 +41,7 @@ pub(crate) fn invalidate_lc_time() {
     CURRENT_LC_TIME_VALID.with(|v| v.set(false));
 }
 
-fn strftime_one(fmt: &[u8], tm: &libc::tm, loc: locale_t) -> Option<Vec<u8>> {
+fn strftime_one(fmt: &[u8], tm: &libc::tm, loc: locale_t) -> PgResult<Option<Vec<u8>>> {
     debug_assert_eq!(*fmt.last().unwrap(), 0);
     let mut buf = [0u8; MAX_L10N_DATA];
     // SAFETY: fmt is NUL-terminated; at most MAX_L10N_DATA bytes written.
@@ -55,15 +55,15 @@ fn strftime_one(fmt: &[u8], tm: &libc::tm, loc: locale_t) -> Option<Vec<u8>> {
         )
     };
     if n == 0 {
-        return None;
+        return Ok(None);
     }
-    Some(buf[..n].to_vec())
+    Ok(Some(::mcx::std_vec_from_slice("pg_locale", &buf[..n])?))
 }
 
 fn to_server(mcx: Mcx<'_>, src: Vec<u8>, encoding: i32) -> PgResult<Vec<u8>> {
     // cache_single_string: convert to the database encoding, or validate.
     match mbutils::pg_any_to_server(mcx, &src, encoding)? {
-        Some(converted) => Ok(converted.to_vec()),
+        Some(converted) => ::mcx::std_vec_from_slice("pg_locale", &converted),
         None => Ok(src),
     }
 }
@@ -89,11 +89,21 @@ pub fn cache_locale_time(mcx: Mcx<'_>) -> PgResult<Rc<LocalizedTimeNames>> {
     }
 
     let mut strftimefail = false;
+    // An allocation failure (ERROR 53200) is parked here and raised after
+    // the locale object is freed, like the strftime failure flag.
+    let mut oom: Option<Box<PgError>> = None;
     let mut render = |fmt: &[u8], tm: &libc::tm| -> Vec<u8> {
-        strftime_one(fmt, tm, loc).unwrap_or_else(|| {
-            strftimefail = true;
-            Vec::new()
-        })
+        match strftime_one(fmt, tm, loc) {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                strftimefail = true;
+                Vec::new()
+            }
+            Err(e) => {
+                oom.get_or_insert(e);
+                Vec::new()
+            }
+        }
     };
 
     let mut raw_abbrev_days: Vec<Vec<u8>> = Vec::with_capacity(7);
@@ -116,6 +126,9 @@ pub fn cache_locale_time(mcx: Mcx<'_>) -> PgResult<Rc<LocalizedTimeNames>> {
     // SAFETY: loc came from newlocale and is not used past this point.
     unsafe { libc::freelocale(loc) };
 
+    if let Some(e) = oom {
+        return Err(e);
+    }
     if strftimefail {
         return Err(PgError::error("strftime_l() failed").into());
     }

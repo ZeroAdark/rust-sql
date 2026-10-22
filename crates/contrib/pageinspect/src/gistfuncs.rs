@@ -7,7 +7,7 @@ use types_error::{ERRCODE_DATA_CORRUPTED, ERRCODE_WRONG_OBJECT_TYPE};
 use types_gist::{GistPageIsDeleted, GIST_PAGE_ID, F_DELETED, F_FOLLOW_RIGHT, F_HAS_GARBAGE, F_LEAF, F_TUPLES_DELETED};
 use types_rel::pg_class::{RELKIND_INDEX, RELKIND_PARTITIONED_INDEX};
 use types_tuple::tupmacs::{att_isnull, att_nominal_alignby, att_pointer_alignby};
-use types_tuple::varatt::{varatt_is_1b_e, varsize_any};
+use types_tuple::varatt::{varatt_is_1b, varatt_is_1b_e, varsize_any, VARHDRSZ};
 
 const GIST_OPAQUE_SIZE: usize = 16;
 
@@ -144,7 +144,7 @@ fn output_fn_text(finfo: &mut FmgrInfo, mcx: Mcx<'_>, val: Datum) -> PgResult<Ve
     let d = types_fmgr::function_call1_coll_in(finfo, InvalidOid, mcx, val)?;
     // SAFETY: type output functions return a NUL-terminated cstring datum.
     let cs = unsafe { core::ffi::CStr::from_ptr(d.as_usize() as *const core::ffi::c_char) };
-    Ok(cs.to_bytes().to_vec())
+    Ok(::mcx::std_vec_from_slice("contrib", &cs.to_bytes())?)
 }
 
 fn record_out_needs_quotes(ch: u8) -> bool {
@@ -213,6 +213,11 @@ fn verify_index_tuple_attrs(tuple: &[u8], tupdesc: &TupleDescData<'_>) -> PgResu
             }
             // SAFETY: varlena header confirmed in-bounds by header_fits.
             len = unsafe { varsize_any(p.as_ptr()) };
+            // D4901 S2: a 4-byte header under its own 4 bytes would give the key's output function a negative body (C
+            // has no check: its textout pallocs -1 and raises XX000 by accident). XX001 here, before index_getattr.
+            if len < VARHDRSZ && !unsafe { varatt_is_1b(p.as_ptr()) } {
+                return Err(corrupt());
+            }
         } else if att.attlen == -2 {
             // cstring: length is the NUL-terminated span, bounded by the tuple.
             off = att_nominal_alignby(off, att.attalignby);
@@ -298,11 +303,6 @@ pub(crate) fn fc_gist_page_items(
     )?;
 
     let natts = tupdesc.natts as usize;
-    let mut out_fns: Vec<Option<FmgrInfo>> = Vec::with_capacity(natts);
-    for i in 0..natts {
-        let (foutoid, _isvarlena) = lsyscache::getTypeOutputInfo(tupdesc.attr(i).atttypid)?;
-        out_fns.push(Some(fmgr_core::fmgr_info(foutoid)?));
-    }
 
     let maxoff = if GistPageIsDeleted(&page.page_ref()) {
         notice("page is deleted")?;
@@ -349,9 +349,13 @@ pub(crate) fn fc_gist_page_items(
                 let val_datum =
                     unsafe { nbtree::itup::index_getattr(itup, (i + 1) as i16, &tupdesc, &mut isnull) };
                 let value = if isnull {
-                    b"null".to_vec()
+                    vec![b'n', b'u', b'l', b'l']
                 } else {
-                    output_fn_text(out_fns[i].as_mut().expect("resolved"), mcx, val_datum)?
+                    // gistfuncs.c:309: resolved per printed value, never for
+                    // an attribute the page has no value of.
+                    let (foutoid, _isvarlena) =
+                        lsyscache::getTypeOutputInfo(tupdesc.attr(i).atttypid)?;
+                    output_fn_text(&mut fmgr_core::fmgr_info(foutoid)?, mcx, val_datum)?
                 };
 
                 if i == nkeyatts as usize {
@@ -389,7 +393,41 @@ pub(crate) fn fc_gist_page_items(
 
 #[cfg(test)]
 mod tests {
-    use super::record_out_needs_quotes;
+    use super::{record_out_needs_quotes, verify_index_tuple_attrs};
+    use mcx::{MemoryContext, PgVec};
+    use types_tuple::tupdesc::{CompactAttribute, FormData_pg_attribute, TupleDescData};
+
+    // D4901 S2: gist_page_items deforms a key from the caller's page; a key whose 4-byte varlena header declares 0 to 3
+    // bytes passed the bounds check and reached the key type's output function with a body of VARSIZE - 4 < 0 bytes
+    // (a Rust slice panic there aborts the backend). The check refuses it (XX001) before index_getattr; a 1-byte header
+    // and the bare 4-byte header still pass.
+    #[test]
+    fn varlena_key_under_its_4_byte_header_is_refused() {
+        let ctx = MemoryContext::new("gist-key");
+        let mcx = ctx.mcx();
+        let a = FormData_pg_attribute { attnum: 1, atttypid: 25, attlen: -1, attbyval: false, attalign: b'i' as i8,
+            attstorage: b'x' as i8, ..Default::default() };
+        let mut compact = PgVec::new_in(mcx);
+        compact.push(CompactAttribute::populate_from(&a));
+        let mut attrs = PgVec::new_in(mcx);
+        attrs.push(a);
+        let desc = TupleDescData {
+            natts: 1, tdtypeid: 0, tdtypmod: -1, tdrefcount: -1, constr: None, compact_attrs: compact, attrs,
+        };
+        // IndexTupleData: 6-byte t_tid, then t_info = the tuple size (no nulls, no varwidth flag needed here).
+        let tuple = |key: &[u8]| {
+            let mut t = vec![0u8; 6];
+            t.extend_from_slice(&((8 + key.len()) as u16).to_ne_bytes());
+            t.extend_from_slice(key);
+            t
+        };
+        for n in 0u32..4 {
+            let err = verify_index_tuple_attrs(&tuple(&(n << 2).to_ne_bytes()), &desc).unwrap_err();
+            assert_eq!(err.sqlstate(), types_error::ERRCODE_DATA_CORRUPTED, "VARSIZE {n}");
+        }
+        assert!(verify_index_tuple_attrs(&tuple(&(4u32 << 2).to_ne_bytes()), &desc).is_ok());
+        assert!(verify_index_tuple_attrs(&tuple(&[0x05, b'a', 0, 0]), &desc).is_ok());
+    }
 
     #[test]
     fn record_out_quotes_only_c_delimiters() {

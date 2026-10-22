@@ -130,3 +130,18 @@ fn traverse_lacons_stack_guard_raises_54001() {
         .unwrap();
     h.join().expect("walk thread must not die");
 }
+
+// The re_fns hook must report the real stack check, as C's does.
+#[test]
+fn rstacktoodeep_reports_stack_is_too_deep() {
+    std::thread::spawn(|| {
+        // No stack base recorded: stack_is_too_deep() is false.
+        assert_eq!(regex_core::regex_compile::rstacktoodeep(), 0);
+        // A base far from the current sp puts the depth over any budget.
+        ::stack_depth::restore_stack_base(1);
+        assert!(::stack_depth::stack_is_too_deep());
+        assert_eq!(regex_core::regex_compile::rstacktoodeep(), 1);
+    })
+    .join()
+    .unwrap();
+}

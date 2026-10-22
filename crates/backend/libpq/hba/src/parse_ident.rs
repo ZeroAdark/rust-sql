@@ -1,5 +1,5 @@
 use types_error::{ErrorLevel, PgResult};
-use types_startup::AuthToken;
+use types_startup::{AuthToken, IdentLine};
 
 use crate::check::check_role;
 use crate::token::make_auth_token;
@@ -7,14 +7,6 @@ use crate::token::{copy_auth_token, regcomp_auth_token, regexec_auth_token};
 use crate::{
     report_config, token_has_regexp, token_matches, token_matches_insensitive, TokenizedAuthLine,
 };
-
-#[derive(Clone, Debug)]
-pub struct IdentLine {
-    pub linenumber: i32,
-    pub usermap: String,
-    pub system_user: AuthToken,
-    pub pg_user: AuthToken,
-}
 
 pub fn parse_ident_line(
     tok_line: &mut TokenizedAuthLine,
@@ -181,11 +173,11 @@ fn check_ident_usermap_regexp(
         // Substitute the first "\\1" in pg_user with the captured bytes,
         // mirroring C's memcpy-based expansion at the byte level.
         let ofs = backref.expect("checked above");
-        let mut expanded_bytes = Vec::with_capacity(hay.len() - 2 + cap.len());
+        let mut expanded_bytes = ::mcx::std_vec_with_capacity("hba", hay.len() - 2 + cap.len())?;
         expanded_bytes.extend_from_slice(&hay[..ofs]);
         expanded_bytes.extend_from_slice(cap);
         expanded_bytes.extend_from_slice(&hay[ofs + 2..]);
-        expanded = make_auth_token(&expanded_bytes, true);
+        expanded = make_auth_token(&expanded_bytes, true)?;
         &expanded
     } else {
         pg_tok

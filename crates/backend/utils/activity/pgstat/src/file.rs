@@ -9,7 +9,7 @@
 
 use core::mem::size_of;
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use types_error::{ErrorLocation, PgResult, DEBUG2, ERROR, LOG, WARNING};
 
 use crate::pending::{
@@ -87,7 +87,7 @@ fn entry_len(kind: PgStat_Kind) -> usize {
         PGSTAT_KIND_ARCHIVER => size_of::<crate::archiver::PgStat_ArchiverStats>(),
         PGSTAT_KIND_BGWRITER => size_of::<crate::bgwriter::PgStat_BgWriterStats>(),
         PGSTAT_KIND_CHECKPOINTER => size_of::<crate::checkpointer::PgStat_CheckpointerStats>(),
-        PGSTAT_KIND_IO => size_of::<crate::io::PgStat_IO>(),
+        PGSTAT_KIND_IO => size_of::<crate::io::PgStat_IO_File>(),
         PGSTAT_KIND_SLRU => {
             size_of::<[crate::slru::PgStat_SLRUStats; crate::slru::SLRU_NUM_ELEMENTS]>()
         }
@@ -160,7 +160,7 @@ pub(crate) fn pgstat_write_statsfile() -> PgResult<()> {
         PGSTAT_KIND_CHECKPOINTER,
         &crate::checkpointer::export_checkpointer_stats(),
     );
-    push_fixed(&mut out, PGSTAT_KIND_IO, &crate::io::export_io_stats());
+    push_fixed(&mut out, PGSTAT_KIND_IO, &crate::io::export_io_file());
     push_fixed(&mut out, PGSTAT_KIND_SLRU, &crate::slru::export_slru_stats());
     push_fixed(&mut out, PGSTAT_KIND_WAL, &crate::wal::export_wal_stats());
     let mut nameless_slot: Option<u64> = None;
@@ -210,7 +210,7 @@ pub(crate) fn pgstat_write_statsfile() -> PgResult<()> {
         log_file_error(
             fd::get_errno(),
             format!(
-                "could not open temporary statistics file \"{PGSTAT_STAT_PERMANENT_TMPFILE}\": %m"
+                "could not open temporary statistics file \"{PGSTAT_STAT_PERMANENT_TMPFILE}\": {PCT_M}"
             ),
             "pgstat_write_statsfile",
         );
@@ -235,7 +235,7 @@ pub(crate) fn pgstat_write_statsfile() -> PgResult<()> {
         log_file_error(
             en,
             format!(
-                "could not write temporary statistics file \"{PGSTAT_STAT_PERMANENT_TMPFILE}\": %m"
+                "could not write temporary statistics file \"{PGSTAT_STAT_PERMANENT_TMPFILE}\": {PCT_M}"
             ),
             "pgstat_write_statsfile",
         );
@@ -248,7 +248,7 @@ pub(crate) fn pgstat_write_statsfile() -> PgResult<()> {
         log_file_error(
             fd::get_errno(),
             format!(
-                "could not close temporary statistics file \"{PGSTAT_STAT_PERMANENT_TMPFILE}\": %m"
+                "could not close temporary statistics file \"{PGSTAT_STAT_PERMANENT_TMPFILE}\": {PCT_M}"
             ),
             "pgstat_write_statsfile",
         );
@@ -367,7 +367,7 @@ pub(crate) fn read_statsfile_body(buf: &[u8]) -> Option<()> {
                     PGSTAT_KIND_CHECKPOINTER => {
                         take_payload(&mut c).map(crate::checkpointer::import_checkpointer_stats)
                     }
-                    PGSTAT_KIND_IO => take_payload(&mut c).map(crate::io::import_io_stats),
+                    PGSTAT_KIND_IO => take_payload(&mut c).map(crate::io::import_io_file),
                     PGSTAT_KIND_SLRU => take_payload(&mut c).map(crate::slru::import_slru_stats),
                     PGSTAT_KIND_WAL => take_payload(&mut c).map(crate::wal::import_wal_stats),
                     _ => unreachable!("is_fixed_kind covers every fixed kind"),
@@ -467,7 +467,9 @@ pub(crate) fn read_statsfile_body(buf: &[u8]) -> Option<()> {
                     PGSTAT_KIND_SUBSCRIPTION => {
                         take_payload(&mut c).map(SharedEntry::Subscription)
                     }
-                    PGSTAT_KIND_BACKEND => take_payload(&mut c).map(SharedEntry::Backend),
+                    PGSTAT_KIND_BACKEND => {
+                        take_payload(&mut c).map(|b| SharedEntry::Backend(Box::new(b)))
+                    }
                     PGSTAT_KIND_REPLSLOT => take_payload(&mut c).map(SharedEntry::ReplSlot),
                     // C stores a fixed kind's 'S' record as an inert hash
                     // entry nothing ever fetches by that key; consume its
@@ -508,7 +510,7 @@ pub(crate) fn pgstat_read_statsfile() {
                 log_file_error(
                     en,
                     format!(
-                        "could not open statistics file \"{PGSTAT_STAT_PERMANENT_FILENAME}\": %m"
+                        "could not open statistics file \"{PGSTAT_STAT_PERMANENT_FILENAME}\": {PCT_M}"
                     ),
                     "pgstat_read_statsfile",
                 );
@@ -551,7 +553,7 @@ pub fn pgstat_discard_stats() -> PgResult<()> {
             log_file_error(
                 fd::get_errno(),
                 format!(
-                    "could not unlink permanent statistics file \"{PGSTAT_STAT_PERMANENT_FILENAME}\": %m"
+                    "could not unlink permanent statistics file \"{PGSTAT_STAT_PERMANENT_FILENAME}\": {PCT_M}"
                 ),
                 "pgstat_discard_stats",
             );

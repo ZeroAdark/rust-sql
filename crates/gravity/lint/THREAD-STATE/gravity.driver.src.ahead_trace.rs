@@ -1,0 +1,2 @@
+gravity/driver/src/ahead_trace.rs	ORIGIN	licence	scope:Scope	thread	the origin of the pipeline runs on this thread and the gate regions its demand opened (the run-ahead tracer, off by default): set by scope() / demand(), put back by their Scope guard
+gravity/driver/src/ahead_trace.rs	SENT	licence	scope:Statement	thread	R3: whether a row of the running statement on this thread left for its receiver (the run-ahead tracer, off by default): set by sent(), opened and put back by the Statement guard of statement()

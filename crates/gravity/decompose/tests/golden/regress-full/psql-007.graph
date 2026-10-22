@@ -1,0 +1,9 @@
+-- regress-full-psql-007
+-- SELECT name AS "Column", pg_catalog.format_type(tp, tpm) AS "Type" FROM (VALUES ('QUERY PLAN', '25'::pg_catalog.oid, -1)) s(name, tp, tpm)
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=c25:'QUERY PLAN', 2=fn1081(c26:25, c23:-1))
+  outs 1=vl:stmt/imm 2=vl:call1081
+mapped: Result

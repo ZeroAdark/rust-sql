@@ -2624,11 +2624,11 @@ mod tests {
     #[test]
     fn path_canonicalization_keeps_file_name_and_dlsuffix() {
         let mut opts = CompareOpts::default();
-        opts.ctx_a.libdir = Some("/home/dev/dev/pg186-install/lib/postgresql".into());
+        opts.ctx_a.libdir = Some("/usr/local/pg186/lib/postgresql".into());
         opts.ctx_a.dlsuffix = ".dylib".into();
         opts.ctx_b.libdir = Some("/opt/pgrust/lib".into());
         opts.ctx_b.dlsuffix = ".dylib".into();
-        let a = vec![e(&[('S', "ERROR"), ('C', "42883"), ('M', "could not find function \"no_such_symbol\" in file \"/home/dev/dev/pg186-install/lib/postgresql/pg_trgm.dylib\"")])];
+        let a = vec![e(&[('S', "ERROR"), ('C', "42883"), ('M', "could not find function \"no_such_symbol\" in file \"/usr/local/pg186/lib/postgresql/pg_trgm.dylib\"")])];
         let b = vec![e(&[('S', "ERROR"), ('C', "42883"), ('M', "could not find function \"no_such_symbol\" in file \"$libdir/pg_trgm\"")])];
         let st = step("CREATE FUNCTION f() RETURNS int AS '$libdir/pg_trgm', 'no_such_symbol' LANGUAGE C;", Ordered::None);
         let divs = compare_planes_with(&obs(CSide::A, a), &obs(CSide::B, b), &st, embedded_ledger(), &opts);
@@ -2636,7 +2636,7 @@ mod tests {
         assert_eq!((divs[0].class, divs[0].field.as_str()), (Class::WrongMessage, "M"));
         assert_eq!(divs[0].a.as_deref(), Some("could not find function \"no_such_symbol\" in file \"<LIBDIR>/pg_trgm.dylib\""));
         // Same file under each side's own libdir: no divergence.
-        let a = vec![e(&[('S', "ERROR"), ('C', "42883"), ('M', "could not find function \"x\" in file \"/home/dev/dev/pg186-install/lib/postgresql/pg_trgm.dylib\"")])];
+        let a = vec![e(&[('S', "ERROR"), ('C', "42883"), ('M', "could not find function \"x\" in file \"/usr/local/pg186/lib/postgresql/pg_trgm.dylib\"")])];
         let b = vec![e(&[('S', "ERROR"), ('C', "42883"), ('M', "could not find function \"x\" in file \"/opt/pgrust/lib/pg_trgm.dylib\"")])];
         assert!(compare_planes_with(&obs(CSide::A, a), &obs(CSide::B, b), &st, embedded_ledger(), &opts).is_empty());
         // dfmgr-9: file_name pg_trgm.dylib vs pg_trgm.so stays a wrong-result.
@@ -3060,7 +3060,7 @@ mod tests {
         let lz4 = err("0A000", "compression method lz4 not supported");
         assert_eq!(classify_sql("ALTER TABLE t ALTER c SET COMPRESSION lz4;", &lz4, &ok1()).class, ruled("lz4-config"));
         assert_eq!(classify_sql("x;", &lz4, &err("XX000", "boom")).class, DiffClass::ErrorDiff);
-        let carve = err("0A000", "server encoding \"EUC_CN\" is not supported by pgrust; only \"UTF8\" and \"SQL_ASCII\" server encodings are accepted (UTF-8-only carve, docs/design/carve-ratifications.md)");
+        let carve = err("0A000", "server encoding \"EUC_CN\" is not supported by pgrust; only the \"UTF8\" server encoding is accepted (UTF-8-only carve, docs/design/carve-ratifications.md)");
         assert_eq!(classify_sql("CREATE DATABASE d ENCODING 'EUC_CN';", &ok1(), &carve).class, ruled("encoding-carve"));
         assert_eq!(classify_sql("CREATE DATABASE d ENCODING 'EUC_CN';", &err("22023", "mismatch"), &carve).class, ruled("encoding-carve"));
         assert_eq!(classify_sql("x;", &err("XX000", "boom"), &carve).class, DiffClass::ErrorDiff);

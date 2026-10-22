@@ -1,0 +1,13 @@
+-- regress-full-create_view-019
+-- select pg_get_ruledef(oid, true) from pg_rewrite where ev_class = 'tt23v'::regclass and ev_type = '1';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=2618 rti=1 am=heap index=2693
+    key att=3 op=607 value=c26:20312
+    recheck (op607(v1.3, c26:20312))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  filter op92(v1.4, c18:49)
+  project (1=fn2504(v1.1, c16:1))
+  outs 1=vl:call2504
+mapped: IndexScan

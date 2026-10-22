@@ -1,0 +1,10 @@
+-- regress-full-collate.icu.utf8-028
+-- SELECT strpos(b COLLATE ctest_det, 'bc') FROM test6;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1270 end=sink
+  nodes n0@0
+  source range rel=31194 rti=1 am=heap
+    lanes Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn868(relabel25(v1.2), c25:'bc'))
+  outs 1=w4:val
+mapped: SeqScan

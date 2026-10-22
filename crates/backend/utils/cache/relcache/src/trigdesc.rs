@@ -32,7 +32,8 @@ pub fn RelationGetTriggerDesc(relid: Oid) -> PgResult<Option<Rc<TriggerDesc<'sta
     // The scan re-enters the relcache; no borrow held across it.
     // RelationGetRelationName(relation) for the trigger.c:1936/1950 messages.
     let relname = String::from_utf8_lossy(rel.rd_rel.relname.name_str()).into_owned();
-    let built = relcache_build_seams::build_trigger_desc::call(cache_mcx(), relid, &relname)?
+    // C3: the relation's open above is the recorded dependency (its invalidation drops this); the fill's scan is its own
+    let built = gravity_deps::suppressed(|| relcache_build_seams::build_trigger_desc::call(cache_mcx(), relid, &relname))?
         .map(Rc::new);
     *rel.rd_trigdesc.borrow_mut() = Some(built.clone());
     Ok(built)

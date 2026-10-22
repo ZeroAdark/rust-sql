@@ -74,7 +74,7 @@ pub fn spginsert<'mcx>(
 
     // spginsert.c:215-241: the context lives for one call (created and
     // deleted per row, so a row trigger never observes it).
-    let mut temp = MemoryContext::new_bump("SP-GiST insert temporary context");
+    let mut temp = MemoryContext::new_wholesale("SP-GiST insert temporary context");
     loop {
         let done = {
             let mcx = temp.mcx();

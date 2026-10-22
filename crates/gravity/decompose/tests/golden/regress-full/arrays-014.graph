@@ -1,0 +1,11 @@
+-- regress-full-arrays-014
+-- SELECT a FROM arrtest WHERE a[2] IS NULL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2 end=sink
+  nodes n0@0
+  source range rel=26218 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  filter isnull(T_SubscriptingRef)
+  project (1=v1.1)
+  outs 1=vl:win/page
+mapped: SeqScan

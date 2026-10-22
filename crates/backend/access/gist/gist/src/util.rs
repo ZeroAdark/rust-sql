@@ -249,7 +249,7 @@ pub fn gistextractpage<'mcx>(
     page: &PageRef<'_>,
 ) -> PgResult<Vec<ItupBuf<'mcx>>> {
     let maxoff = page.max_offset_number();
-    let mut itvec = Vec::with_capacity(maxoff as usize);
+    let mut itvec = ::mcx::std_vec_with_capacity("access", maxoff as usize)?;
     for i in FirstOffsetNumber..=maxoff {
         itvec.push(copy_page_item(mcx, page, i)?);
     }
@@ -382,7 +382,7 @@ pub fn gistMakeUnionItVec(
         // union's evec is DENSE 0-based (unlike picksplit's 1-based vector).
         let mut evec = GistEntryVector {
             n: 0,
-            vector: Vec::with_capacity(itvec.len() + 2),
+            vector: ::mcx::std_vec_with_capacity("access", itvec.len() + 2)?,
         };
         for &it in itvec {
             let (datum, is_null) = gist_index_getattr(it, i + 1, giststate);

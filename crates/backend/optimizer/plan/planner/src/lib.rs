@@ -13,12 +13,19 @@ pub mod equivclass;
 pub mod fdwplan;
 pub mod geqo;
 pub mod flatten_group;
+pub mod agg_algebra;
+pub mod groupkey_trim;
 pub mod grouping;
+pub mod decorrelate;
+pub(crate) mod unnest;
+pub mod groupingsets_union;
+pub mod gravity_paths;
+pub(crate) mod gravity_width_cost;
 pub mod groupingsets;
 pub mod indxpath;
 mod tidpath;
 mod inherit;
-pub use inherit::get_rel_all_updated_cols;
+pub use inherit::{get_rel_all_updated_cols, get_translated_update_targetlist};
 pub mod initsplan;
 pub mod joinpath;
 pub mod joinrels;
@@ -27,6 +34,7 @@ pub mod placeholder;
 pub mod planagg;
 pub mod orclauses;
 pub mod pathnode;
+pub(crate) mod fma_sites;
 pub mod plancat;
 pub mod partprune;
 pub mod like_support;
@@ -37,6 +45,7 @@ pub mod intarray_selfuncs;
 pub mod rangetypes_selfuncs;
 pub mod selfuncs;
 pub mod selfuncs_builtins;
+pub(crate) mod jsonb_stats;
 pub(crate) mod syscache_memo;
 pub mod ts_selfuncs;
 pub mod planmain;
@@ -48,10 +57,12 @@ pub mod prepjointree;
 mod pushdown;
 pub mod prepagg;
 pub mod relnode;
+pub mod restriction_rows;
 pub mod run;
 pub mod setrefs;
 pub mod srf;
 pub mod cte;
+pub(crate) mod cte_or;
 pub mod subquery;
 pub mod window;
 pub mod subselect;
@@ -59,6 +70,8 @@ pub mod paramassign;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod d400_fma_tests;
 
 use mcx::Mcx;
 use types_error::PgResult;
@@ -127,6 +140,7 @@ pub mod gucs {
         (enable_self_join_elimination_cell, bool, enable_self_join_elimination, set_enable_self_join_elimination, true),
         (jit_expressions_cell, bool, jit_expressions, set_jit_expressions, true),
         (jit_tuple_deforming_cell, bool, jit_tuple_deforming, set_jit_tuple_deforming, true),
+        (gravity_groupingsets_rewrite_cell, i32, gravity_groupingsets_rewrite, set_gravity_groupingsets_rewrite, guc_tables::consts::GRAVITY_GS_REWRITE_ON),
     );
 
     pub use ::costsize::gucs::*;
@@ -150,6 +164,7 @@ pub fn init_seams() {
     planner_seams::planner::set(|mcx, parse, query_string, cursor_options, bound_params| {
         planner(mcx, parse, query_string, cursor_options, bound_params)
     });
+    planner_seams::planning_tapped::set(|| tap_planner_enter::is_installed() || tap_planner_leave::is_installed());
     // find_simplified_clause's gate (rangetypes.c): volatile / subplan /
     // >10*cpu_operator_cost elemExprs must not be evaluated twice. Deliberate
     // divergence from rangetypes.c:2910 cost_qual_eval_node(root): with the
@@ -165,6 +180,7 @@ pub fn init_seams() {
     });
     planner_seams::clauselist_selectivity::set(crate::clausesel::clauselist_selectivity);
     planner_seams::clause_selectivity::set(crate::clausesel::clause_selectivity);
+    planner_seams::scan_restriction_rows::set(crate::restriction_rows::scan_restriction_rows);
     planner_seams::make_restrictinfo::set(crate::initsplan::make_restrictinfo);
     planner_seams::amcostestimate::set(crate::selfuncs::amcostestimate);
     planner_seams::estimate_num_groups::set(crate::selfuncs::estimate_num_groups);
@@ -230,6 +246,10 @@ pub fn init_seams() {
         get: gucs::cursor_tuple_fraction,
         set: gucs::set_cursor_tuple_fraction,
     });
+    guc_tables::vars::pgrust_gravity_groupingsets_rewrite.install(GucVarAccessors {
+        get: gucs::gravity_groupingsets_rewrite,
+        set: gucs::set_gravity_groupingsets_rewrite,
+    });
     guc_tables::vars::debug_parallel_query.install(GucVarAccessors {
         get: gucs::debug_parallel_query,
         set: gucs::set_debug_parallel_query,
@@ -290,7 +310,7 @@ seam_core::tap!(
         stmt_location: i32,
         stmt_len: i32,
         query_string: &'a str,
-    )
+    ) -> PgResult<()>
 );
 
 pub fn planner<'mcx>(
@@ -302,13 +322,48 @@ pub fn planner<'mcx>(
 ) -> PgResult<PlannedStmt<'mcx>> {
     let (query_id, stmt_location, stmt_len) = (parse.queryId, parse.stmt_location, parse.stmt_len);
     tap_planner_enter::call_if(|f| f(query_id));
-    let result = standard_planner(mcx, parse, query_string, cursor_options, bound_params);
-    tap_planner_leave::call_if(|f| {
+    let result = if tap_planner_leave::is_installed() {
+        // unwind-ok: stmt-boundary — PG_FINALLY: the leave tap runs, then the unwind resumes
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let parse = parse;
+            standard_planner(mcx, parse, query_string, cursor_options, bound_params)
+        }))
+        .unwrap_or_else(|p| {
+            let _ = tap_planner_leave::call_if_or(Ok(()), |f| {
+                f(false, query_id, stmt_location, stmt_len, query_string)
+            });
+            std::panic::resume_unwind(p)
+        })
+    } else {
+        standard_planner(mcx, parse, query_string, cursor_options, bound_params)
+    };
+    let leave = tap_planner_leave::call_if_or(Ok(()), |f| {
         f(result.is_ok(), query_id, stmt_location, stmt_len, query_string)
     });
     let result = result?;
+    leave?;
     backend_status_seams::pgstat_report_plan_id::call(result.planId, false);
     Ok(result)
+}
+
+fn plan_query<'mcx>(
+    run_owner: &mut mcx::ArenaForget<PlannerRun<'mcx>>,
+    partition_directory: &mut Option<partdesc::PartitionDirectory<'mcx>>,
+    parse: &'mcx mut Query<'mcx>,
+    bound_params: ParamListHandle,
+    tuple_fraction: f64,
+) -> PgResult<types_pathnodes::PathId> {
+    let mut run = &mut **run_owner;
+    plancat::install_partition_directory_slot(run, partition_directory);
+    run.glob.bound_params = bound_params;
+    run.glob.max_parallel_hazard = PROPARALLEL_UNSAFE;
+    // Gravity (docs/gravity/milestone-1b.md §1.1 decision 6): the planner
+    // never builds Gather or parallel paths; max_parallel_workers_per_gather
+    // stays readable as the width ceiling of a Gravity section.
+    run.assess_parallel = false;
+    subquery_planner(&mut run, parse, false, tuple_fraction, None)?;
+    let final_rel = fetch_final_rel(&mut run);
+    Ok(get_cheapest_fractional_path(&run, final_rel, tuple_fraction))
 }
 
 pub fn standard_planner<'mcx>(
@@ -325,21 +380,21 @@ pub fn standard_planner<'mcx>(
     // forgotten run: its relation pins (partdesc.c:472) are released on the
     // success exit (planner.c:624-625) and, by the local's drop, on every
     // `?` exit (C: the resource owner's relcache release).
+    let alternative = decorrelate::alternative(mcx, parse)?;
+    let (unnested, restricted) = unnest::alternatives(mcx, parse)?;
+    let union = groupingsets_union::alternative(mcx, parse)?;
+    let force_union = union.is_some() && gucs::gravity_groupingsets_rewrite() == guc_tables::consts::GRAVITY_GS_REWRITE_FORCE;
     let mut partition_directory: Option<partdesc::PartitionDirectory<'mcx>> = None;
     let mut run_owner = mcx::ArenaForget::new(PlannerRun::new(mcx));
-    let mut run = &mut *run_owner;
-    plancat::install_partition_directory_slot(run, &mut partition_directory);
-    run.glob.bound_params = bound_params;
-
-    // The raw-tree hazard scan (planner.c:349-353) runs at subquery_planner
-    // entry, before any sublink subquery is planned.
-    run.glob.max_parallel_hazard = PROPARALLEL_UNSAFE;
-    run.assess_parallel = (cursor_options & CURSOR_OPT_PARALLEL_OK) != 0
-        && init_small::globals::IsUnderPostmaster()
-        && parse.commandType == CmdType::CMD_SELECT
-        && !parse.hasModifyingCTE
-        && gucs::max_parallel_workers_per_gather() > 0
-        && !is_parallel_worker();
+    let mut alt_directory: Option<partdesc::PartitionDirectory<'mcx>> = None;
+    let mut alt_owner: Option<mcx::ArenaForget<PlannerRun<'mcx>>> = None;
+    let mut unnest_directory: Option<partdesc::PartitionDirectory<'mcx>> = None;
+    let mut unnest_owner: Option<mcx::ArenaForget<PlannerRun<'mcx>>> = None;
+    let mut restricted_directory: Option<partdesc::PartitionDirectory<'mcx>> = None;
+    let mut restricted_owner: Option<mcx::ArenaForget<PlannerRun<'mcx>>> = None;
+    let mut union_directory: Option<partdesc::PartitionDirectory<'mcx>> = None;
+    let mut union_owner: Option<mcx::ArenaForget<PlannerRun<'mcx>>> = None;
+    let _ = (cursor_options & CURSOR_OPT_PARALLEL_OK, parse.hasModifyingCTE);
 
     let tuple_fraction = if (cursor_options & CURSOR_OPT_FAST_PLAN) != 0 {
         let f = gucs::cursor_tuple_fraction();
@@ -354,10 +409,89 @@ pub fn standard_planner<'mcx>(
         0.0
     };
 
-    subquery_planner(&mut run, parse, false, tuple_fraction, None)?;
-
-    let final_rel = fetch_final_rel(&mut run);
-    let best_path = get_cheapest_fractional_path(&run, final_rel, tuple_fraction);
+    let best_path = plan_query(&mut run_owner, &mut partition_directory, parse, bound_params, tuple_fraction)?;
+    let (mut run, best_path) = match alternative {
+        Some(alt) => {
+            let alt_owner = alt_owner.insert(mcx::ArenaForget::new(PlannerRun::new(mcx)));
+            let alt_path = plan_query(alt_owner, &mut alt_directory, alt, bound_params, tuple_fraction)?;
+            if crate::gravity_width_cost::cheaper(alt_owner, alt_path, &run_owner, best_path, tuple_fraction) {
+                (&mut **alt_owner, alt_path)
+            } else {
+                (&mut *run_owner, best_path)
+            }
+        }
+        None => (&mut *run_owner, best_path),
+    };
+    let (mut run, best_path) = match unnested {
+        Some(u) => match plan_query(
+            unnest_owner.insert(mcx::ArenaForget::new(PlannerRun::new(mcx))),
+            &mut unnest_directory,
+            u,
+            bound_params,
+            tuple_fraction,
+        ) {
+            Err(e) if types_error::errcode_to_category(e.sqlstate()) == types_error::ERRCODE_DATA_EXCEPTION => (run, best_path),
+            Err(e) => return Err(e),
+            Ok(unnest_path) => {
+                let unnest_run = unnest_owner.as_deref_mut().expect("the unnested form's run was built above");
+                if crate::gravity_width_cost::cheaper(unnest_run, unnest_path, run, best_path, tuple_fraction) {
+                    (unnest_run, unnest_path)
+                } else {
+                    (run, best_path)
+                }
+            }
+        },
+        None => (run, best_path),
+    };
+    // the unnested form with a binding's group restricted to the outer level's keys (unnest.rs restriction), costed against
+    // the full grouped pass above
+    let (mut run, best_path) = match restricted {
+        Some(u) => match plan_query(
+            restricted_owner.insert(mcx::ArenaForget::new(PlannerRun::new(mcx))),
+            &mut restricted_directory,
+            u,
+            bound_params,
+            tuple_fraction,
+        ) {
+            Err(e) if types_error::errcode_to_category(e.sqlstate()) == types_error::ERRCODE_DATA_EXCEPTION => (run, best_path),
+            Err(e) => return Err(e),
+            Ok(restricted_path) => {
+                let restricted_run = restricted_owner.as_deref_mut().expect("the restricted form's run was built above");
+                if crate::gravity_width_cost::cheaper(restricted_run, restricted_path, run, best_path, tuple_fraction) {
+                    (restricted_run, restricted_path)
+                } else {
+                    (run, best_path)
+                }
+            }
+        },
+        None => (run, best_path),
+    };
+    let (mut run, best_path) = match union {
+        Some(u) => match plan_query(
+            union_owner.insert(mcx::ArenaForget::new(PlannerRun::new(mcx))),
+            &mut union_directory,
+            u,
+            bound_params,
+            tuple_fraction,
+        ) {
+            // an arm holds a NULL constant for each grouped column outside its set, which constant folding
+            // evaluates (`10 / (coalesce(b, 4) - 4)` with b NULL raises 22012 while planning), where PostgreSQL nulls the
+            // column at run time and the expression raises only on a row it reads. A data exception while planning the
+            // union is the rewrite's own: the standard plan, planned above, stands.
+            Err(e) if types_error::errcode_to_category(e.sqlstate()) == types_error::ERRCODE_DATA_EXCEPTION => (run, best_path),
+            Err(e) => return Err(e),
+            Ok(union_path) => {
+                let union_run = union_owner.as_deref_mut().expect("the union's run was built above");
+                if force_union || crate::gravity_width_cost::cheaper(union_run, union_path, run, best_path, tuple_fraction) {
+                    (union_run, union_path)
+                } else {
+                    (run, best_path)
+                }
+            }
+        },
+        None => (run, best_path),
+    };
+    crate::gravity_width_cost::trace(run, best_path)?;
     let mut top_plan = create_plan(&mut run, best_path)?;
 
     // C planner.c:444-451 wraps a SCROLL cursor's plan in Material when
@@ -518,10 +652,6 @@ pub fn standard_planner<'mcx>(
         partdesc::DestroyPartitionDirectory(pdir);
     }
     Ok(stmt)
-}
-
-fn is_parallel_worker() -> bool {
-    parallel_seams::is_parallel_worker::call()
 }
 
 pub(crate) use clauses::{is_parallel_safe_exprs, is_parallel_safe_opt};

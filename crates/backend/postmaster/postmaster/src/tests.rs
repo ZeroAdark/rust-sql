@@ -3,13 +3,13 @@ use types_core::init::BackendType;
 
 #[test]
 fn btmask_shapes_match_c() {
-    assert_eq!(BTYPE_MASK_ALL, (1 << 18) - 1);
+    assert_eq!(BTYPE_MASK_ALL, (1 << 19) - 1);
     assert_eq!(btmask(BackendType::Invalid), 1);
     assert_eq!(btmask(BackendType::Backend), 2);
     let m = btmask_all_except(&[BackendType::Logger]);
     assert!(!btmask_contains(m, BackendType::Logger));
     assert!(btmask_contains(m, BackendType::Backend));
-    assert_eq!(m.count_ones(), 17);
+    assert_eq!(m.count_ones(), 18);
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn shutdown_request_reaches_named_pmchild_seam() {
 }
 
 // ---------------------------------------------------------------------------
-// regression: the shutdown-stall watchdog predicate.
+// GL-GANGWEDGE-1: the shutdown-stall watchdog predicate.
 // ---------------------------------------------------------------------------
 
 /// Every shutdown state the watchdog is responsible for, i.e. every state a
@@ -287,7 +287,7 @@ fn wedge_marker_is_greppable_and_stable() {
 
 mod b032 {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::sync::atomic::{AtomicUsize, Ordering as AtOrd};
     use std::sync::Once;
     use types_core::pid_t;
@@ -307,6 +307,12 @@ mod b032 {
         f();
         elog::set_emit_log_hook(prev);
         CAPTURED.with(|c| c.borrow_mut().drain(..).collect())
+    }
+    /// The pmchild signal_children seam as a broadcast that signals nothing, installed once per process (a second
+    /// install panics: 'seam installed twice').
+    fn quiet_signal_children() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| pmchild_seams::signal_children::set(|_, _| false));
     }
     fn messages(logs: &[PgError]) -> Vec<String> {
         logs.iter().map(|e| e.message.clone()).collect()
@@ -601,6 +607,106 @@ mod b032 {
     const IO_WORKER_PID: pid_t = 515_151;
 
     #[test]
+    fn untracked_child_exit_logging_matches_c() {
+        install_seams();
+        pmsignal::PMSignalShmemInit(8).unwrap();
+        quiet_signal_children();
+        guc_tables::vars::send_abort_for_crash.install_if_absent(guc_tables::GucVarAccessors {
+            get: || false,
+            set: |_| {},
+        });
+        for (fatal, shutdown) in [(false, NoShutdown), (true, NoShutdown), (false, ImmediateShutdown)] {
+            for status in [0, 1 << 8, 2 << 8, libc::SIGKILL] {
+                fresh_pm();
+                with_pm(|pm| {
+                    pm.pm_state = PMState::PM_WAIT_BACKENDS;
+                    pm.fatal_error = fatal;
+                    pm.shutdown = shutdown;
+                });
+                let logs = captured(|| reap_untracked_child(515_151, status).unwrap());
+                let normal = matches!(status, 0 | 256);
+                let expected = usize::from(normal || (!fatal && shutdown != ImmediateShutdown));
+                let deaths = logs.iter().filter(|e| e.message.starts_with("untracked child process (PID")).count();
+                assert_eq!(deaths, expected, "status={status}, fatal={fatal}, shutdown={shutdown}: {:?}", messages(&logs));
+                assert_eq!(logs.iter().filter(|e| e.message == "terminating any other active server processes").count(), usize::from(!normal && expected == 1));
+            }
+        }
+        fresh_pm();
+    }
+
+    thread_local! {
+        static AT_SINK: RefCell<Vec<(String, bool)>> = const { RefCell::new(Vec::new()) };
+        static ACTED: Cell<fn() -> bool> = const { Cell::new(not_yet as fn() -> bool) };
+    }
+    fn not_yet() -> bool {
+        false
+    }
+    /// D4816's blocked log sink: the emit hook is the sink, entered on the postmaster's own thread before the write,
+    /// so whatever the postmaster had not done by its entry waits for as long as the sink blocks (0.7-3 s on the ext4
+    /// journal, D4812). It records each line with ACTED, whether the act had run by then.
+    fn acted_at_sink_hook(e: &PgError, _output_to_server: &mut bool) {
+        AT_SINK.with(|v| v.borrow_mut().push((e.message.clone(), ACTED.with(Cell::get)())));
+    }
+    fn at_sink(acted: fn() -> bool, f: impl FnOnce()) -> Vec<(String, bool)> {
+        ACTED.with(|c| c.set(acted));
+        AT_SINK.with(|v| v.borrow_mut().clear());
+        let prev = elog::set_emit_log_hook(Some(acted_at_sink_hook));
+        f();
+        elog::set_emit_log_hook(prev);
+        AT_SINK.with(|v| v.borrow_mut().drain(..).collect())
+    }
+    fn acted_before(lines: &[(String, bool)], line: &str) {
+        let (_, acted) = lines.iter().find(|(m, _)| m.starts_with(line)).unwrap_or_else(|| panic!("no {line:?}: {lines:?}"));
+        assert!(*acted, "{line:?} reached the log sink before the act (D4816): {lines:?}");
+    }
+
+    /// D4816 (born red: C's order logged LogChildExit and "terminating any other active server processes" first): a
+    /// crashed child's peers get the quit broadcast before either line is written, so a blocked log sink cannot hold
+    /// them running (HandleFatalError sets fatal_error right after TerminateChildren).
+    #[test]
+    fn a_crash_quits_its_peers_before_the_log_sink() {
+        install_seams();
+        pmsignal::PMSignalShmemInit(8).unwrap();
+        quiet_signal_children();
+        guc_tables::vars::send_abort_for_crash.install_if_absent(guc_tables::GucVarAccessors {
+            get: || false,
+            set: |_| {},
+        });
+        fresh_pm();
+        with_pm(|pm| pm.pm_state = PMState::PM_WAIT_BACKENDS);
+        let lines = at_sink(|| with_pm(|pm| pm.fatal_error), || reap_untracked_child(515_151, libc::SIGKILL).unwrap());
+        acted_before(&lines, "untracked child process (PID 515151) was terminated by signal 9");
+        acted_before(&lines, "terminating any other active server processes");
+        fresh_pm();
+    }
+
+    /// D4816 (born red: C's order wrote "received immediate shutdown request" and postmaster.pid's status first): an
+    /// immediate shutdown (the stall watchdog's escalation too) sends its SIGQUIT broadcast before its log line and
+    /// lock-file write (TerminateChildren, then PM_WAIT_BACKENDS). Without a data directory the lock-file write only
+    /// logs (as C's), and the state machine after it stops at the uninstalled pmchild count_children seam.
+    #[test]
+    fn an_immediate_shutdown_quits_before_the_log_sink() {
+        let _g = SHUTDOWN_FLAGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        install_seams();
+        pmsignal::PMSignalShmemInit(8).unwrap();
+        quiet_signal_children();
+        fresh_pm();
+        with_pm(|pm| {
+            pm.pm_state = PMState::PM_RUN;
+            pm.shutdown = NoShutdown;
+        });
+        handle_pm_shutdown_request_signal(libc::SIGQUIT);
+        let lines = at_sink(
+            || with_pm(|pm| pm.pm_state == PMState::PM_WAIT_BACKENDS),
+            || drop(std::panic::catch_unwind(statemachine::process_pm_shutdown_request)),
+        );
+        acted_before(&lines, "received immediate shutdown request");
+        crate::PENDING_PM_IMMEDIATE_SHUTDOWN_REQUEST.store(false, AtOrd::Release);
+        crate::PENDING_PM_SHUTDOWN_REQUEST.store(false, AtOrd::Release);
+        fresh_pm();
+    }
+
+    #[test]
     fn io_worker_normal_exit_is_not_logged() {
         // postmaster.c:2505-2512 maybe_reap_io_worker: exit status 0/1 frees
         // the slot and re-levels the pool without a LogChildExit line.
@@ -847,6 +953,15 @@ fn postmaster_getopt_keeps_tokens_ahead_of_a_lexical_failure() {
     );
     assert_eq!(getopt_tokens_partial(&argv("-sD")), (vec![('s', None)], Some(GetoptError::RequiresArgument('D'))));
     assert_eq!(getopt_tokens_partial(&argv("-Fs")), (vec![('F', None), ('s', None)], None));
+    assert_eq!(getopt_tokens_partial(&argv("-:")), (vec![], Some(GetoptError::UnknownOption(':'))));
+    // glibc permutes: options after a stray argument still apply.
+    let (tokens, err) = getopt_tokens_partial(&argv("-D d extra -c nosuch=1"));
+    assert_eq!(err, Some(GetoptError::NonOption("extra".to_string())));
+    if cfg!(target_os = "linux") {
+        assert_eq!(tokens.len(), 2);
+    } else {
+        assert_eq!(tokens.len(), 1);
+    }
 }
 
 /// postmaster.c:662: -d goes through atoi(), so a numeric prefix counts.
@@ -868,13 +983,17 @@ fn postmaster_d_option_parses_like_atoi() {
 fn postmaster_getopt_failure_messages_match_c() {
     use main_entry::{getopt_failure_message, GetoptError};
     let argv0 = "/usr/local/pgsql/bin/pgx";
+    #[cfg(not(target_os = "linux"))]
+    let (unknown, needs_arg) = ("illegal option -- q", "option requires an argument -- D");
+    #[cfg(target_os = "linux")]
+    let (unknown, needs_arg) = ("invalid option -- 'q'", "option requires an argument -- 'D'");
     assert_eq!(
         getopt_failure_message(argv0, "pgx", &GetoptError::UnknownOption('q')),
-        "/usr/local/pgsql/bin/pgx: illegal option -- q\nTry \"pgx --help\" for more information.\n"
+        format!("/usr/local/pgsql/bin/pgx: {unknown}\nTry \"pgx --help\" for more information.\n")
     );
     assert_eq!(
         getopt_failure_message(argv0, "pgx", &GetoptError::RequiresArgument('D')),
-        "/usr/local/pgsql/bin/pgx: option requires an argument -- D\nTry \"pgx --help\" for more information.\n"
+        format!("/usr/local/pgsql/bin/pgx: {needs_arg}\nTry \"pgx --help\" for more information.\n")
     );
     assert_eq!(
         getopt_failure_message(argv0, "pgx", &GetoptError::NonOption("x".to_string())),
@@ -893,4 +1012,17 @@ fn environment_dump_tolerates_non_utf8_entries() {
     std::env::remove_var(key);
     assert!(dump.starts_with("initial environment dump:\n"), "{dump:?}");
     assert!(dump.contains(&format!("\n{key}=a\u{fffd}\u{fffd}b")), "{dump:?}");
+}
+
+#[test]
+fn bgworker_restart_wait_rounds_a_fractional_millisecond_up() {
+    use crate::serverloop::bgworker_restart_wait_ms;
+    // 500us left: C waits 1 ms (a 0 ms wait spins until the deadline).
+    assert_eq!(bgworker_restart_wait_ms(1_000_500, 1_000_000), 1);
+    assert_eq!(bgworker_restart_wait_ms(1_000_001, 1_000_000), 1);
+    assert_eq!(bgworker_restart_wait_ms(1_001_000, 1_000_000), 1);
+    assert_eq!(bgworker_restart_wait_ms(1_001_001, 1_000_000), 2);
+    assert_eq!(bgworker_restart_wait_ms(1_000_000, 1_000_000), 0);
+    assert_eq!(bgworker_restart_wait_ms(999_000, 1_000_000), 0);
+    assert_eq!(bgworker_restart_wait_ms(1_000_000 + 61_000_000, 1_000_000), 60_000);
 }

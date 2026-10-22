@@ -2,6 +2,8 @@
 
 pub mod dispatch;
 pub mod globals;
+pub mod oom;
+pub mod instaux;
 pub mod usercontext;
 pub mod wretain;
 

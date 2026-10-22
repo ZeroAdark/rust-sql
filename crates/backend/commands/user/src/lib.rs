@@ -2155,7 +2155,9 @@ pub fn check_createrole_self_grant(
             options |= GRANT_ROLE_SPECIFIED_INHERIT;
         } else {
             // user.c:2547 "%s": the (byte-truncated) key word verbatim.
-            let mut detail = b"Unrecognized key word: \"".to_vec();
+            let mut detail = Vec::new();
+            let _ = detail.try_reserve(b"Unrecognized key word: \"".len() + tok.len() + b"\".".len());
+            detail.extend_from_slice(b"Unrecognized key word: \"");
             detail.extend_from_slice(tok);
             detail.extend_from_slice(b"\".");
             guc::GUC_check_errdetail_raw(detail);

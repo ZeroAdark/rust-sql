@@ -1,0 +1,71 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s1lb s2sk s1na s1c s2c
+step s2b: BEGIN;
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 40 FOR UPDATE SKIP LOCKED;
+QUERY PLAN                          
+------------------------------------
+LockRows                            
+  ->  Hash Join                     
+        Hash Cond: (a.id = b.a_id)  
+        ->  Seq Scan on ma a        
+        ->  Hash                    
+              ->  Seq Scan on mb b  
+                    Filter: (w < 40)
+(7 rows)
+
+step s1lb: SELECT id FROM mb WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2sk: SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 40 FOR UPDATE SKIP LOCKED;
+id|id
+--+--
+ 2| 2
+ 3| 3
+(2 rows)
+
+step s1na: SELECT id FROM ma WHERE id = 1 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "ma"
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s1la s2mx s1c s2c
+step s2b: BEGIN;
+step s1la: SELECT id FROM ma WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2mx: SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 40 FOR UPDATE OF a SKIP LOCKED FOR UPDATE OF b;
+id|id
+--+--
+ 2| 2
+ 3| 3
+(2 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s1lb s2mx s1c s2c
+step s2b: BEGIN;
+step s1lb: SELECT id FROM mb WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2mx: SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 40 FOR UPDATE OF a SKIP LOCKED FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2mx: <... completed>
+id|id
+--+--
+ 1| 1
+ 2| 2
+ 3| 3
+(3 rows)
+
+step s2c: COMMIT;

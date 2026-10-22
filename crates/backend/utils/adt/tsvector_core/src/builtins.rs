@@ -113,7 +113,7 @@ pub fn fc_tsvector_strip(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
 
 pub fn fc_tsvector_length(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let v = arg_tsvector(fcinfo, 0)?;
-    Ok(Datum::from_i32(v.size() as i32))
+    Ok(Datum::from_i32(v.size_field()))
 }
 
 pub fn fc_tsvector_setweight(
@@ -394,7 +394,7 @@ fn unnest_collect(fcinfo: &mut Fcinfo) -> PgResult<Vec<Vec<u8>>> {
     // resolve tuples that escape into the targetlist.
     ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
 
-    let mut rows: Vec<Vec<u8>> = Vec::with_capacity(v.size());
+    let mut rows: Vec<Vec<u8>> = ::mcx::std_vec_with_capacity("adt", v.size())?;
     for i in 0..v.size() {
         let e = v.entry(i);
         let lex = varlena_result(::varlena::cstring_to_text(mcx, v.lexeme(e))?);
@@ -430,7 +430,7 @@ fn unnest_collect(fcinfo: &mut Fcinfo) -> PgResult<Vec<Vec<u8>>> {
             nulls[2] = false;
         }
         let tuple = ::heaptuple::heap_form_tuple(mcx, &desc, &values, &nulls)?;
-        rows.push(tuple.image().to_vec());
+        rows.push(::mcx::std_vec_from_slice("adt", &tuple.image())?);
     }
     Ok(rows)
 }

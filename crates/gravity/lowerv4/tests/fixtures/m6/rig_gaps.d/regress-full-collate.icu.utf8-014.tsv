@@ -1,0 +1,1 @@
+a nondeterministic ICU key's sort key (key.coll, D823) reads pg_collation's locale through syscache_seams::lookup_pg_collation_locale_row, a seam the rig never installs; the server runner judges it

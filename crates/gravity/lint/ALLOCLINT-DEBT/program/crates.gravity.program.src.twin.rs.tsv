@@ -1,0 +1,4 @@
+path	crates/gravity/program/src/twin.rs
+growth	std::vec::Vec::push	4
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

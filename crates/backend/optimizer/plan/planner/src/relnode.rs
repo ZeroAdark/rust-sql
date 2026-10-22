@@ -1,4 +1,5 @@
 use mcx::{Mcx, PgVec};
+use types_error::PgResult;
 use types_nodes::parsenodes::RTEKind;
 use types_pathnodes::{
     PlannerInfo, RangeTblEntryId, RelId, RelOptInfo, Relids, RELOPT_BASEREL,
@@ -6,13 +7,17 @@ use types_pathnodes::{
 
 pub use types_pathnodes::relids::*;
 
-pub fn setup_simple_rel_arrays<'mcx>(root: &mut PlannerInfo<'mcx>, nrtable: usize) {
+pub fn setup_simple_rel_arrays<'mcx>(root: &mut PlannerInfo<'mcx>, nrtable: usize) -> PgResult<()> {
     let size = nrtable + 1;
     root.simple_rel_array_size = size as i32;
     root.simple_rel_array.clear();
     root.simple_rte_array.clear();
-    root.simple_rel_array.reserve(size);
-    root.simple_rte_array.reserve(size);
+    ::mcx::pgvec_reserve(&mut root.simple_rel_array, size)?;
+    ::mcx::pgvec_reserve(&mut root.simple_rte_array, size)?;
+    // room for the base rels up front, and for the final upper rel every query level fetches (grouping_planner's
+    // UPPERREL_FINAL): a RelOptInfo is large, and growing the arena one doubling at a time copies them all (the final rel's
+    // push grew it on every statement: a realloc copy of ~0.5k instructions)
+    ::mcx::pgvec_reserve(&mut root.rel_arena, nrtable + 1)?;
     root.simple_rel_array.extend(core::iter::repeat(None).take(size));
     root.simple_rte_array.push(RangeTblEntryId::Invalid);
     for i in 0..nrtable {
@@ -33,6 +38,7 @@ pub fn setup_simple_rel_arrays<'mcx>(root: &mut PlannerInfo<'mcx>, nrtable: usiz
             root.append_rel_array[child] = Some(a);
         }
     }
+    Ok(())
 }
 
 // find_base_rel_noerr (relnode.c).

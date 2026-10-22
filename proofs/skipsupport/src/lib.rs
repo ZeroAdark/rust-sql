@@ -27,7 +27,7 @@
 //!    level: C's own word padding for char is platform-char-signedness-
 //!    dependent (see the C file header) — the low byte is the only
 //!    C-defined surface.  Rust zero-extends (matches unsigned-char
-//!    platforms, e.g. the ARM64 Linux CI cluster target).
+//!    platforms, e.g. the ARM64 Linux fleet target).
 //!  - Sentinels: each C btXXXskipsupport / date_skipsupport /
 //!    timestamp_skipsupport setter runs against a real SkipSupportData
 //!    frame and its low_elem/high_elem are asserted equal to the LITERAL
@@ -161,7 +161,7 @@ mod proofs {
     /// padding for char is platform-char-signedness-dependent (signed x86
     /// sign-extends values > 127; the vendored C pins unsigned char, and
     /// the shipped Rust from_u8 zero-extends, matching the unsigned-char
-    /// CI cluster target).  The low byte is the only C-defined surface.
+    /// fleet target).  The low byte is the only C-defined surface.
     macro_rules! char_kernel {
         ($($h:ident: $cfn:ident / $rfn:path;)*) => {$(
             #[kani::proof]

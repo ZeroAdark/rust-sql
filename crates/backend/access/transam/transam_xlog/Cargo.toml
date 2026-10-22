@@ -17,8 +17,11 @@ smgr_seams = { path = "../../../storage/smgr/smgr_seams" }
 types_core = { path = "../../../../_support/types/types_core" }
 types_error = { path = "../../../../_support/types/types_error" }
 types_storage = { path = "../../../../_support/types/types_storage" }
+types_tuple = { path = "../../../../_support/types/types_tuple" }
 elog = { path = "../../../utils/error/elog" }
+pgrc_spool = { path = "../../pgrcolumnar/pgrc_spool" }
 crc32c = { path = "../../../../port/crc32c" }
+pg_strong_random = { path = "../../../../port/pg_strong_random" }
 controldata_utils = { path = "../../../../common/controldata_utils" }
 fd = { path = "../../../storage/file/fd" }
 vfs = { path = "../../../storage/file/vfs" }
@@ -59,6 +62,7 @@ varsup_seams = { path = "../varsup_seams" }
 xact_seams = { path = "../xact_seams" }
 sync_seams = { path = "../../../storage/sync/sync_seams" }
 timestamp_seams = { path = "../../../utils/adt/timestamp_seams" }
+adt_timestamp = { path = "../../../utils/adt/adt_timestamp" }
 predicate_seams = { path = "../../../storage/lmgr/predicate_seams" }
 bufmgr_seams = { path = "../../../storage/buffer/bufmgr_seams" }
 origin_seams = { path = "../../../replication/origin_seams" }
@@ -84,6 +88,9 @@ libc = "0.2"
 [dev-dependencies]
 shmem = { path = "../../../storage/ipc/shmem" }
 aio_seams = { path = "../../../storage/aio/aio_seams" }
+# tests/p9_concurrent_segment_init.rs: per-thread PGPROCs for concurrent
+# XLogFileInit (a dev-dependency cycle; integration tests link one copy).
+test_boot = { path = "../../../../_support/test_boot" }
 
 [lints.rust]
 # `pgrust_sim` (non-default cfg): the regression mutation seam in

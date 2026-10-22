@@ -232,7 +232,7 @@ impl<'mcx> HashScanOpaqueData<'mcx> {
     pub fn alloc_in(mcx: Mcx<'mcx>) -> ::types_error::PgResult<::mcx::PgBox<'mcx, Self>> {
         use ::mcx::Allocator;
         let layout = core::alloc::Layout::new::<Self>();
-        let ptr = Allocator::allocate(&mcx, layout).map_err(|_| mcx.oom(layout.size()))?;
+        let ptr = Allocator::allocate(&mcx, layout).map_err(|_| mcx.oom_boxed(layout.size()))?;
         let p = ptr.as_ptr() as *mut Self;
         // SAFETY: fresh allocation of `layout`; every field except
         // currPos.items (MaybeUninit by type) is written exactly once.

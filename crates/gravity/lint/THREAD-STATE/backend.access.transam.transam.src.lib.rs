@@ -1,0 +1,3 @@
+backend/access/transam/transam/src/lib.rs	cachedFetchXid	pgport	key:the xid (only a final status is kept)	cache	C TransactionLogFetch's single-item cache: the xid whose committed / aborted status is held; an in-progress or sub-committed status is never cached, so the entry holds for any thread
+backend/access/transam/transam/src/lib.rs	cachedFetchXidStatus	pgport	key:the xid in cachedFetchXid (only a final status is kept)	cache	C cachedFetchXidStatus: the final status of cachedFetchXid
+backend/access/transam/transam/src/lib.rs	cachedCommitLSN	pgport	key:the xid in cachedFetchXid (only a final status is kept)	cache	C cachedCommitLSN: the commit LSN of cachedFetchXid, read by TransactionIdGetCommitLSN

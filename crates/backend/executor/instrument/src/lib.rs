@@ -114,6 +114,11 @@ pub fn instr_accum_parallel_query(bufusage: &BufferUsage, walusage: &WalUsage) {
         buffer_usage_add(&mut cur, bufusage);
         c.set(cur);
     });
+    // The live pgWalUsage when xlog is up; the overlay otherwise.
+    if transam_xlog_seams::wal_usage_add::is_installed() {
+        transam_xlog_seams::wal_usage_add::call(walusage);
+        return;
+    }
     WORKER_WAL_CONTRIB.with(|c| {
         let mut cur = c.get();
         wal_usage_add(&mut cur, walusage);
@@ -140,7 +145,7 @@ pub fn instr_init(instr: &mut Instrumentation, instrument_options: i32) {
 /// `InstrStartNode`.
 pub fn instr_start_node(instr: &mut Instrumentation) {
     if instr.need_timer {
-        if !instr.starttime.is_zero() {
+        if !instr.starttime.is_zero() && !std::thread::panicking() {
             panic!("InstrStartNode called twice in a row");
         }
         instr.starttime = instr_time_current();
@@ -160,11 +165,14 @@ pub fn instr_stop_node(instr: &mut Instrumentation, n_tuples: f64) {
 
     if instr.need_timer {
         if instr.starttime.is_zero() {
-            panic!("InstrStopNode called without start");
+            if !std::thread::panicking() {
+                panic!("InstrStopNode called without start");
+            }
+        } else {
+            let endtime = instr_time_current();
+            instr.counter.accum_diff(endtime, instr.starttime);
+            instr.starttime.set_zero();
         }
-        let endtime = instr_time_current();
-        instr.counter.accum_diff(endtime, instr.starttime);
-        instr.starttime.set_zero();
     }
 
     if instr.need_bufusage {
@@ -194,7 +202,7 @@ pub fn instr_end_loop(instr: &mut Instrumentation) {
     if !instr.running {
         return;
     }
-    if !instr.starttime.is_zero() {
+    if !instr.starttime.is_zero() && !std::thread::panicking() {
         panic!("InstrEndLoop called on running node");
     }
     let totaltime = instr.counter.get_double();

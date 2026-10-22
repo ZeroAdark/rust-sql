@@ -1,0 +1,15 @@
+# (SELECT .. ORDER BY .. LIMIT) UNION ALL (..): no top-level ORDER BY
+sql: (SELECT x FROM t ORDER BY x LIMIT 2) UNION ALL (SELECT x FROM u ORDER BY x LIMIT 2);
+cols: x
+class: unordered
+verdict: match
+[pg]
+1
+2
+5
+6
+[got]
+5
+6
+1
+2

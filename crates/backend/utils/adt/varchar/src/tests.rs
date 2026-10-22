@@ -556,3 +556,46 @@ fn typmod_non_utf8_element_is_invalid_integer() {
     let err = bpchartypmodin(mcx, &arr).unwrap_err();
     assert_eq!(err.sqlstate(), types_error::ERRCODE_INVALID_TEXT_REPRESENTATION);
 }
+
+// PG_GETARG_ARRAYTYPE_P detoasts: a typmod array that passed through a formed
+// tuple arrives with a 1-byte header.
+mod typmodin_short_header {
+    use ::datum::Datum;
+    use ::mcx::MemoryContext;
+    use ::types_fmgr::LocalFcinfo;
+
+    fn install_short_expand() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            if !::detoast_seams::detoast_attr::is_installed() {
+                ::detoast_seams::detoast_attr::set(|mcx, image| {
+                    assert_eq!(image[0] & 0x01, 0x01, "1B short header");
+                    let total = image.len() + 3;
+                    let mut v = ::mcx::vec_with_capacity_in(mcx, total)?;
+                    ::mcx::vec_append_bytes(&mut v, &((total as u32) << 2).to_ne_bytes())?;
+                    ::mcx::vec_append_bytes(&mut v, &image[1..])?;
+                    Ok(v)
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn bpchartypmodin_detoasts_short_header_array() {
+        install_short_expand();
+        let mut body = Vec::new();
+        for w in [1i32, 0, 2275, 1, 1] {
+            body.extend_from_slice(&w.to_ne_bytes());
+        }
+        body.extend_from_slice(b"5\0" as &[u8]);
+        let mut img = vec![(((body.len() + 1) as u8) << 1) | 0x01];
+        img.extend_from_slice(&body);
+        let ctx = MemoryContext::new_bump("t");
+        let mut fci = LocalFcinfo::<1>::fresh(0);
+        // SAFETY: ctx outlives the call.
+        unsafe { fci.set_result_mcx(ctx.mcx()) };
+        fci.set_arg(0, Datum::from_usize(img.as_ptr() as usize));
+        let d = crate::builtins::fc_bpchartypmodin(None, &mut fci).unwrap();
+        assert_eq!(d.as_i32(), 9);
+    }
+}

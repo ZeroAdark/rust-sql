@@ -12,7 +12,7 @@ use ::types_error::{
 };
 use ::types_fmgr::{byref_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, LocalFcinfo};
 
-use crate::builtins::arg_array_bytes;
+use crate::builtins::{arg_array_bytes, arg_array_dims};
 use crate::construct::{array_contains_nulls, construct_empty_array, construct_md_array, deconstruct_array};
 use crate::foundation::{
     arr_data_offset, arr_elemtype, arr_ndim, arr_nullbitmap_off, arr_overhead_nonulls,
@@ -687,11 +687,7 @@ pub fn fc_array_replace(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
 }
 
 pub fn fc_array_ndims(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let ndim = {
-        let mcx = fcinfo.result_mcx();
-        let array = arg_array_bytes(fcinfo, 0, mcx)?;
-        arr_ndim(&array)
-    };
+    let (ndim, _, _) = arg_array_dims(fcinfo, 0)?;
     if ndim <= 0 || ndim > MAXDIM as i32 {
         return Ok(fcinfo.return_null());
     }
@@ -708,11 +704,7 @@ pub(crate) fn dims_text(ndim: i32, dims: &[i32], lbs: &[i32]) -> alloc::string::
 }
 
 pub fn fc_array_dims(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let (ndim, dims, lbs) = {
-        let mcx = fcinfo.result_mcx();
-        let array = arg_array_bytes(fcinfo, 0, mcx)?;
-        read_dims_lbounds(&array)
-    };
+    let (ndim, dims, lbs) = arg_array_dims(fcinfo, 0)?;
     if ndim <= 0 || ndim > MAXDIM as i32 {
         return Ok(fcinfo.return_null());
     }
@@ -720,11 +712,7 @@ pub fn fc_array_dims(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
 }
 
 pub fn fc_array_lower(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let (ndim, _dims, lbs) = {
-        let mcx = fcinfo.result_mcx();
-        let array = arg_array_bytes(fcinfo, 0, mcx)?;
-        read_dims_lbounds(&array)
-    };
+    let (ndim, _dims, lbs) = arg_array_dims(fcinfo, 0)?;
     let reqdim = fcinfo.arg(1).as_i32();
     if ndim <= 0 || ndim > MAXDIM as i32 || reqdim <= 0 || reqdim > ndim {
         return Ok(fcinfo.return_null());
@@ -733,11 +721,7 @@ pub fn fc_array_lower(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
 }
 
 pub fn fc_array_upper(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let (ndim, dims, lbs) = {
-        let mcx = fcinfo.result_mcx();
-        let array = arg_array_bytes(fcinfo, 0, mcx)?;
-        read_dims_lbounds(&array)
-    };
+    let (ndim, dims, lbs) = arg_array_dims(fcinfo, 0)?;
     let reqdim = fcinfo.arg(1).as_i32();
     if ndim <= 0 || ndim > MAXDIM as i32 || reqdim <= 0 || reqdim > ndim {
         return Ok(fcinfo.return_null());
@@ -750,9 +734,7 @@ pub fn fc_array_cardinality(
     _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    let mcx = fcinfo.result_mcx();
-    let array = arg_array_bytes(fcinfo, 0, mcx)?;
-    let (ndim, dims, _lbs) = read_dims_lbounds(&array);
+    let (ndim, dims, _lbs) = arg_array_dims(fcinfo, 0)?;
     // C array_cardinality is the one member of this family with NO sanity
     // check: the raw ndim goes straight to ArrayGetNItems. ndim <= 0 yields 0
     // -- C's own answer, NOT the siblings' null verdict, so do not "fix" it
@@ -784,11 +766,7 @@ pub fn fc_generate_subscripts(
 ) -> PgResult<Datum> {
     let flinfo = flinfo.expect("generate_subscripts: NULL flinfo");
     if !flinfo.has_fn_extra() {
-        let (ndim, dims, lbs) = {
-            let mcx = fcinfo.result_mcx();
-            let array = arg_array_bytes(fcinfo, 0, mcx)?;
-            read_dims_lbounds(&array)
-        };
+        let (ndim, dims, lbs) = arg_array_dims(fcinfo, 0)?;
         let reqdim = fcinfo.arg(1).as_i32();
         let state = if ndim <= 0 || ndim > MAXDIM as i32 || reqdim <= 0 || reqdim > ndim {
             GenerateSubscriptsFctx { lower: 1, upper: 0, reverse: false }
@@ -1142,28 +1120,35 @@ pub(crate) fn width_bucket_array_variable(
 pub fn fc_width_bucket_array(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mcx = fcinfo.result_mcx();
     let operand = fcinfo.arg(0);
-    let thresholds = arg_array_bytes(fcinfo, 1, mcx)?;
+    let owned;
+    let thresholds: &[u8] = match crate::builtins::arg_array_plain(fcinfo, 1) {
+        Some(img) => img,
+        None => {
+            owned = arg_array_bytes(fcinfo, 1, mcx)?;
+            &owned
+        }
+    };
     let collation = fcinfo.get_collation();
-    let element_type = arr_elemtype(&thresholds);
+    let element_type = arr_elemtype(thresholds);
 
-    if arr_ndim(&thresholds) > 1 {
+    if arr_ndim(thresholds) > 1 {
         return Err(Box::new(
             PgError::error("thresholds must be one-dimensional array")
                 .with_sqlstate(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
         ));
     }
-    if array_contains_nulls(&thresholds)? {
+    if array_contains_nulls(thresholds)? {
         return Err(Box::new(
             PgError::error("thresholds array must not contain NULLs")
                 .with_sqlstate(ERRCODE_NULL_VALUE_NOT_ALLOWED),
         ));
     }
 
-    let (ndim, dims, _lbs) = read_dims_lbounds(&thresholds);
+    let (ndim, dims, _lbs) = read_dims_lbounds(thresholds);
     let nitems = ::arrayutils::array_get_n_items(ndim, &dims)?;
 
     let result = if element_type == FLOAT8OID {
-        width_bucket_array_float8(operand, &thresholds, nitems)
+        width_bucket_array_float8(operand, thresholds, nitems)
     } else {
         let flinfo = flinfo.expect("width_bucket_array: NULL flinfo");
         let memo = cached_typentry(flinfo, element_type, TcWant::Cmp)?;
@@ -1171,9 +1156,9 @@ pub fn fc_width_bucket_array(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo)
         let mut cmpfn = memo.entry.cmp_proc_finfo().clone();
 
         if meta.typlen > 0 {
-            width_bucket_array_fixed(mcx, operand, &thresholds, collation, meta, &mut cmpfn, nitems)?
+            width_bucket_array_fixed(mcx, operand, thresholds, collation, meta, &mut cmpfn, nitems)?
         } else {
-            width_bucket_array_variable(mcx, operand, &thresholds, collation, meta, &mut cmpfn, nitems)?
+            width_bucket_array_variable(mcx, operand, thresholds, collation, meta, &mut cmpfn, nitems)?
         }
     };
 

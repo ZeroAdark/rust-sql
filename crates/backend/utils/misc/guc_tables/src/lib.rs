@@ -18,6 +18,25 @@ pub mod vars;
 pub use slots::*;
 pub use tables::*;
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[repr(i32)]
+pub enum ConditionCacheMode {
+    Off = 0,
+    Granule = 1,
+    Rows = 2,
+    Full = 3,
+}
+
+pub fn condition_cache_mode() -> ConditionCacheMode {
+    match backing::pgrust_condition_cache() {
+        0 => ConditionCacheMode::Off,
+        1 => ConditionCacheMode::Granule,
+        2 => ConditionCacheMode::Rows,
+        3 => ConditionCacheMode::Full,
+        value => panic!("invalid condition cache mode: {value}"),
+    }
+}
+
 pub static GucContext_Names: &[&str] = &[
     "internal",
     "postmaster",
@@ -113,6 +132,26 @@ pub fn init_seams() {
     install_guc_tables_owned_vars();
     option_sets::wal_level_options.install(WAL_LEVEL_OPTIONS);
     option_sets::recovery_target_action_options.install(RECOVERY_TARGET_ACTION_OPTIONS);
+    hooks::show_pgrust_condition_cache_size.install(show_pgrust_condition_cache_size);
+}
+
+/// `pgrust.condition_cache_size` in bytes: a set value (kB) as set; the default -1 the budget derived from the machine
+/// (`hooks::derive_pgrust_condition_cache_size`, Gravity's), 0 (nothing kept) where nothing installed the derivation.
+pub fn pgrust_condition_cache_bytes() -> u64 {
+    match backing::pgrust_condition_cache_size() {
+        kb if kb >= 0 => kb as u64 * 1024,
+        _ if hooks::derive_pgrust_condition_cache_size.installed() => (hooks::derive_pgrust_condition_cache_size.get())(),
+        _ => 0,
+    }
+}
+
+/// `pgrust.condition_cache_size`'s SHOW: the budget in effect (the derived one at -1), a bare number of kB, the GUC's
+/// unit. A show hook's string is both SHOW's and pg_settings.setting's (ShowGUCOption ignores `use_units` for a hooked
+/// GUC), and PostgreSQL keeps `setting` a bare number with the unit in pg_settings.unit; its own hooked unit GUCs
+/// (tcp_keepalives_idle and the like) print one too. D3791: printed with a unit ("503738kB"), the setting broke every
+/// monitor that casts `setting` to a number (pgwatch's settings_num: `setting::float8` over all integer and real rows).
+pub fn show_pgrust_condition_cache_size() -> String {
+    (pgrust_condition_cache_bytes() >> 10).to_string()
 }
 
 // wal_level_options[] (xlogdesc.c); archive/hot_standby are hidden aliases of
@@ -193,41 +232,93 @@ fn install_guc_tables_owned_vars() {
         get: backing::row_security,
         set: backing::set_row_security,
     });
-    vars::pgrust_lane_executor.install(GucVarAccessors {
-        get: backing::pgrust_lane_executor,
-        set: backing::set_pgrust_lane_executor,
-    });
     vars::pgrust_condition_cache.install(GucVarAccessors {
         get: backing::pgrust_condition_cache,
         set: backing::set_pgrust_condition_cache,
     });
-    vars::pgrust_explain_runtime_verdicts.install(GucVarAccessors {
-        get: backing::pgrust_explain_runtime_verdicts,
-        set: backing::set_pgrust_explain_runtime_verdicts,
+    vars::pgrust_zone_store.install(GucVarAccessors {
+        get: backing::pgrust_zone_store,
+        set: backing::set_pgrust_zone_store,
+    });
+    vars::pgrust_dict_filter_cache.install(GucVarAccessors {
+        get: backing::pgrust_dict_filter_cache,
+        set: backing::set_pgrust_dict_filter_cache,
+    });
+    vars::pgrust_gravity_prewarm.install(GucVarAccessors {
+        get: backing::pgrust_gravity_prewarm,
+        set: backing::set_pgrust_gravity_prewarm,
+    });
+    vars::pgrust_condition_cache_unlogged.install(GucVarAccessors {
+        get: backing::pgrust_condition_cache_unlogged,
+        set: backing::set_pgrust_condition_cache_unlogged,
+    });
+    vars::pgrust_pgrc_merge_scan.install(GucVarAccessors {
+        get: backing::pgrust_pgrc_merge_scan,
+        set: backing::set_pgrust_pgrc_merge_scan,
+    });
+    vars::pgrust_pgrc_merge_skip_hash_group.install(GucVarAccessors {
+        get: backing::pgrust_pgrc_merge_skip_hash_group,
+        set: backing::set_pgrust_pgrc_merge_skip_hash_group,
+    });
+    vars::pgrust_jsonb_path_stats.install(GucVarAccessors {
+        get: backing::pgrust_jsonb_path_stats,
+        set: backing::set_pgrust_jsonb_path_stats,
+    });
+    vars::pgrust_gravity_admit.install(GucVarAccessors {
+        get: backing::pgrust_gravity_admit,
+        set: backing::set_pgrust_gravity_admit,
+    });
+        vars::pgrust_gravity_lowerer.install(GucVarAccessors {
+        get: backing::pgrust_gravity_lowerer,
+        set: backing::set_pgrust_gravity_lowerer,
+    });
+    vars::pgrust_point_path.install(GucVarAccessors {
+        get: backing::pgrust_point_path,
+        set: backing::set_pgrust_point_path,
+    });
+    vars::pgrust_point_noplan.install(GucVarAccessors {
+        get: backing::pgrust_point_noplan,
+        set: backing::set_pgrust_point_noplan,
+    });
+    vars::pgrust_point_write.install(GucVarAccessors {
+        get: backing::pgrust_point_write,
+        set: backing::set_pgrust_point_write,
+    });
+    vars::pgrust_point_keep.install(GucVarAccessors {
+        get: backing::pgrust_point_keep,
+        set: backing::set_pgrust_point_keep,
+    });
+    vars::pgrust_point_portal_keep.install(GucVarAccessors {
+        get: backing::pgrust_point_portal_keep,
+        set: backing::set_pgrust_point_portal_keep,
+    });
+    vars::pgrust_gravity_unnest.install(GucVarAccessors {
+        get: backing::pgrust_gravity_unnest,
+        set: backing::set_pgrust_gravity_unnest,
+    });
+    vars::pgrust_gravity_cte_pushdown.install(GucVarAccessors {
+        get: backing::pgrust_gravity_cte_pushdown,
+        set: backing::set_pgrust_gravity_cte_pushdown,
+    });
+    vars::pgrust_gravity_exact_size.install(GucVarAccessors {
+        get: backing::pgrust_gravity_exact_size,
+        set: backing::set_pgrust_gravity_exact_size,
+    });
+    vars::pgrust_gravity_jit_perfmap.install(GucVarAccessors {
+        get: backing::pgrust_gravity_jit_perfmap,
+        set: backing::set_pgrust_gravity_jit_perfmap,
+    });
+    vars::pgrust_gravity_dump_dir.install(GucVarAccessors {
+        get: backing::pgrust_gravity_dump_dir,
+        set: backing::set_pgrust_gravity_dump_dir,
     });
     vars::pgrust_condition_cache_size.install(GucVarAccessors {
         get: backing::pgrust_condition_cache_size,
         set: backing::set_pgrust_condition_cache_size,
     });
-    vars::pgrust_parallel_engine.install(GucVarAccessors {
-        get: backing::pgrust_parallel_engine,
-        set: backing::set_pgrust_parallel_engine,
-    });
     vars::pgrust_version_string_style.install(GucVarAccessors {
         get: backing::pgrust_version_string_style,
         set: backing::set_pgrust_version_string_style,
-    });
-    vars::pgrust_runtime_dop.install(GucVarAccessors {
-        get: backing::pgrust_runtime_dop,
-        set: backing::set_pgrust_runtime_dop,
-    });
-    vars::pgrust_sqe_heap.install(GucVarAccessors {
-        get: backing::pgrust_sqe_heap,
-        set: backing::set_pgrust_sqe_heap,
-    });
-    vars::pgrust_sqe_threads.install(GucVarAccessors {
-        get: backing::pgrust_sqe_threads,
-        set: backing::set_pgrust_sqe_threads,
     });
     vars::pgrust_runtime.install(GucVarAccessors {
         get: backing::pgrust_runtime,
@@ -245,6 +336,14 @@ fn install_guc_tables_owned_vars() {
         get: backing::pgrust_memory_watchdog,
         set: backing::set_pgrust_memory_watchdog,
     });
+    vars::pgrust_memory_revoke.install(GucVarAccessors {
+        get: backing::pgrust_memory_revoke,
+        set: backing::set_pgrust_memory_revoke,
+    });
+    vars::pgrust_memory_ledger_v2.install(GucVarAccessors {
+        get: backing::pgrust_memory_ledger_v2,
+        set: backing::set_pgrust_memory_ledger_v2,
+    });
     vars::pgrust_memory_watchdog_dump.install(GucVarAccessors {
         get: backing::pgrust_memory_watchdog_dump,
         set: backing::set_pgrust_memory_watchdog_dump,
@@ -257,13 +356,153 @@ fn install_guc_tables_owned_vars() {
         get: backing::pgrust_memory_watchdog_threshold,
         set: backing::set_pgrust_memory_watchdog_threshold,
     });
+    vars::pgrust_buffer_pool_max.install(GucVarAccessors {
+        get: backing::pgrust_buffer_pool_max,
+        set: backing::set_pgrust_buffer_pool_max,
+    });
+    vars::pgrust_buffer_pool_thp.install(GucVarAccessors {
+        get: backing::pgrust_buffer_pool_thp,
+        set: backing::set_pgrust_buffer_pool_thp,
+    });
+    vars::pgrust_buffer_pool_relocate.install(GucVarAccessors {
+        get: backing::pgrust_buffer_pool_relocate,
+        set: backing::set_pgrust_buffer_pool_relocate,
+    });
+    vars::pgrust_buffer_pool_drain_rate.install(GucVarAccessors {
+        get: backing::pgrust_buffer_pool_drain_rate,
+        set: backing::set_pgrust_buffer_pool_drain_rate,
+    });
+    vars::pgrust_memory_governor_threshold.install(GucVarAccessors {
+        get: backing::pgrust_memory_governor_threshold,
+        set: backing::set_pgrust_memory_governor_threshold,
+    });
+    vars::pgrust_statement_mem_limit.install(GucVarAccessors {
+        get: backing::pgrust_statement_mem_limit,
+        set: backing::set_pgrust_statement_mem_limit,
+    });
+    vars::pgrust_memory_cancel_threshold.install(GucVarAccessors {
+        get: backing::pgrust_memory_cancel_threshold,
+        set: backing::set_pgrust_memory_cancel_threshold,
+    });
+    vars::pgrust_memory_cancel_rule.install(GucVarAccessors {
+        get: backing::pgrust_memory_cancel_rule,
+        set: backing::set_pgrust_memory_cancel_rule,
+    });
+    vars::pgrust_memory_ladder.install(GucVarAccessors {
+        get: backing::pgrust_memory_ladder,
+        set: backing::set_pgrust_memory_ladder,
+    });
     vars::pgrust_memory_watchdog_limit.install(GucVarAccessors {
         get: backing::pgrust_memory_watchdog_limit,
         set: backing::set_pgrust_memory_watchdog_limit,
     });
+    vars::pgrust_memory_target.install(GucVarAccessors {
+        get: backing::pgrust_memory_target,
+        set: backing::set_pgrust_memory_target,
+    });
+    vars::pgrust_memory_broker.install(GucVarAccessors {
+        get: backing::pgrust_memory_broker,
+        set: backing::set_pgrust_memory_broker,
+    });
+    vars::pgrust_memory_broker_actuators.install(GucVarAccessors {
+        get: backing::pgrust_memory_broker_actuators,
+        set: backing::set_pgrust_memory_broker_actuators,
+    });
+    vars::pgrust_memory_broker_interval.install(GucVarAccessors {
+        get: backing::pgrust_memory_broker_interval,
+        set: backing::set_pgrust_memory_broker_interval,
+    });
+    vars::pgrust_memory_page_cache_floor_mb.install(GucVarAccessors {
+        get: backing::pgrust_memory_page_cache_floor_mb,
+        set: backing::set_pgrust_memory_page_cache_floor_mb,
+    });
+    vars::pgrust_memory_reserve_mb.install(GucVarAccessors {
+        get: backing::pgrust_memory_reserve_mb,
+        set: backing::set_pgrust_memory_reserve_mb,
+    });
+    vars::pgrust_pgrc_part_cache_mb.install(GucVarAccessors {
+        get: backing::pgrust_pgrc_part_cache_mb,
+        set: backing::set_pgrust_pgrc_part_cache_mb,
+    });
+    vars::pgrust_memory_release_threshold.install(GucVarAccessors {
+        get: backing::pgrust_memory_release_threshold,
+        set: backing::set_pgrust_memory_release_threshold,
+    });
+    vars::pgrust_memory_release_idle.install(GucVarAccessors {
+        get: backing::pgrust_memory_release_idle,
+        set: backing::set_pgrust_memory_release_idle,
+    });
     vars::pgrust_memory_watchdog_test_hog.install(GucVarAccessors {
         get: backing::pgrust_memory_watchdog_test_hog,
         set: backing::set_pgrust_memory_watchdog_test_hog,
+    });
+    vars::pgrust_instance_aux.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux,
+        set: backing::set_pgrust_instance_aux,
+    });
+    vars::pgrust_instance_aux_ready_commit_age.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_ready_commit_age,
+        set: backing::set_pgrust_instance_aux_ready_commit_age,
+    });
+    vars::pgrust_instance_aux_ready_lag.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_ready_lag,
+        set: backing::set_pgrust_instance_aux_ready_lag,
+    });
+    vars::pgrust_instance_aux_startup_stall.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_startup_stall,
+        set: backing::set_pgrust_instance_aux_startup_stall,
+    });
+    vars::pgrust_instance_aux_liveness_interval.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_liveness_interval,
+        set: backing::set_pgrust_instance_aux_liveness_interval,
+    });
+    vars::pgrust_instance_aux_wedge_timeout.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_wedge_timeout,
+        set: backing::set_pgrust_instance_aux_wedge_timeout,
+    });
+    vars::pgrust_instance_aux_listen.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_listen,
+        set: backing::set_pgrust_instance_aux_listen,
+    });
+    vars::pgrust_instance_aux_socket.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_socket,
+        set: backing::set_pgrust_instance_aux_socket,
+    });
+    vars::pgrust_instance_aux_cert_file.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_cert_file,
+        set: backing::set_pgrust_instance_aux_cert_file,
+    });
+    vars::pgrust_instance_aux_key_file.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_key_file,
+        set: backing::set_pgrust_instance_aux_key_file,
+    });
+    vars::pgrust_instance_aux_ca_file.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_ca_file,
+        set: backing::set_pgrust_instance_aux_ca_file,
+    });
+    vars::pgrust_instance_aux_admin_identities.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_admin_identities,
+        set: backing::set_pgrust_instance_aux_admin_identities,
+    });
+    vars::pgrust_instance_aux_cluster.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_cluster,
+        set: backing::set_pgrust_instance_aux_cluster,
+    });
+    vars::pgrust_instance_aux_instance.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_instance,
+        set: backing::set_pgrust_instance_aux_instance,
+    });
+    vars::pgrust_instance_aux_incarnation.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_incarnation,
+        set: backing::set_pgrust_instance_aux_incarnation,
+    });
+    vars::pgrust_instance_aux_managed_conf.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_managed_conf,
+        set: backing::set_pgrust_instance_aux_managed_conf,
+    });
+    vars::pgrust_instance_aux_state_file.install(GucVarAccessors {
+        get: backing::pgrust_instance_aux_state_file,
+        set: backing::set_pgrust_instance_aux_state_file,
     });
     vars::pgrust_ephemeral_db_prefix.install(GucVarAccessors {
         get: backing::pgrust_ephemeral_db_prefix,
@@ -332,34 +571,6 @@ fn install_guc_tables_owned_vars() {
     vars::pgrust_ephemeral_db_prewarm.install(GucVarAccessors {
         get: backing::pgrust_ephemeral_db_prewarm,
         set: backing::set_pgrust_ephemeral_db_prewarm,
-    });
-    vars::pgrust_runtime_scan_pool.install(GucVarAccessors {
-        get: backing::pgrust_runtime_scan_pool,
-        set: backing::set_pgrust_runtime_scan_pool,
-    });
-    vars::pgrust_runtime_agg_pool.install(GucVarAccessors {
-        get: backing::pgrust_runtime_agg_pool,
-        set: backing::set_pgrust_runtime_agg_pool,
-    });
-    vars::pgrust_runtime_distinct_pool.install(GucVarAccessors {
-        get: backing::pgrust_runtime_distinct_pool,
-        set: backing::set_pgrust_runtime_distinct_pool,
-    });
-    vars::pgrust_runtime_hashjoin_pool.install(GucVarAccessors {
-        get: backing::pgrust_runtime_hashjoin_pool,
-        set: backing::set_pgrust_runtime_hashjoin_pool,
-    });
-    vars::pgrust_runtime_sort_pool.install(GucVarAccessors {
-        get: backing::pgrust_runtime_sort_pool,
-        set: backing::set_pgrust_runtime_sort_pool,
-    });
-    vars::pgrust_runtime_bitmap_pool.install(GucVarAccessors {
-        get: backing::pgrust_runtime_bitmap_pool,
-        set: backing::set_pgrust_runtime_bitmap_pool,
-    });
-    vars::pgrust_lane_parallel_pool.install(GucVarAccessors {
-        get: backing::pgrust_lane_parallel_pool,
-        set: backing::set_pgrust_lane_parallel_pool,
     });
     vars::pgrust_gather_fair_stride.install(GucVarAccessors {
         get: backing::pgrust_gather_fair_stride,
@@ -683,6 +894,10 @@ fn install_guc_tables_owned_vars() {
     vars::huge_pages_status.install(GucVarAccessors {
         get: backing::huge_pages_status,
         set: backing::set_huge_pages_status,
+    });
+    vars::pgrust_allocator.install(GucVarAccessors {
+        get: backing::pgrust_allocator,
+        set: backing::set_pgrust_allocator,
     });
 
     vars::phony_random_seed.install(GucVarAccessors {

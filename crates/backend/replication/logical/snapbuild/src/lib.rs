@@ -8,7 +8,7 @@ mod tests;
 
 use std::cell::Cell;
 
-use elog::{elog, ereport, errno};
+use elog::{elog, ereport, errno, PCT_M};
 use mcx::{Mcx, MemoryContext, PgVec};
 use reorderbuffer::ReorderBuffer;
 use snapmgr::Snapshot;
@@ -39,6 +39,9 @@ thread_local! {
     static SB_CTX: &'static MemoryContext =
         ::mcx::session_root("snapshot builder context");
     static EXPORT_IN_PROGRESS: Cell<bool> = const { Cell::new(false) };
+    // SavedResourceOwnerDuringExport (snapbuild.c:150).
+    static SAVED_RESOURCE_OWNER_DURING_EXPORT: Cell<types_resowner::ResourceOwner> =
+        const { Cell::new(types_resowner::ResourceOwner::NULL) };
 }
 
 pub(crate) fn sb_mcx() -> Mcx<'static> {
@@ -355,9 +358,10 @@ impl SnapBuild {
         if EXPORT_IN_PROGRESS.get() {
             elog(ERROR, "can only export one snapshot at a time")?;
         }
-        // C additionally saves CurrentResourceOwner across the export
-        // transaction; the port's transaction machinery owns that save and
-        // restore internally.
+        // CleanupTransaction leaves CurrentResourceOwner NULL, so the
+        // walsender's owner is saved here and restored after the abort
+        // (snapbuild.c:550/620).
+        SAVED_RESOURCE_OWNER_DURING_EXPORT.set(resowner::CurrentResourceOwner());
         EXPORT_IN_PROGRESS.set(true);
 
         xact::StartTransactionCommand()?;
@@ -459,7 +463,7 @@ impl SnapBuild {
     ) -> PgResult<()> {
         // C fetches the committing xid's invalidations per iteration; the list
         // is loop-invariant, so it is hoisted (and copied out of rb's borrow).
-        let msgs = rb.get_invalidations(xid).to_vec();
+        let msgs = ::mcx::std_vec_from_slice("replication", &rb.get_invalidations(xid))?;
         let txns: Vec<reorderbuffer::TxnId> = rb.toplevel_txns().collect();
 
         for id in txns {
@@ -507,7 +511,7 @@ impl SnapBuild {
                 ),
             )?;
             let additional = self.committed_xcnt_space - self.committed_xip.len();
-            self.committed_xip.reserve(additional);
+            ::mcx::pgvec_reserve(&mut self.committed_xip, additional)?;
         }
 
         self.committed_xip.push(xid);
@@ -916,7 +920,7 @@ impl SnapBuild {
                 return ereport(ERROR)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not stat file \"{path}\": %m"))
+                    .errmsg(format!("could not stat file \"{path}\": {PCT_M}"))
                     .finish(loc("SnapBuildSerialize"));
             }
         }
@@ -935,19 +939,19 @@ impl SnapBuild {
             return ereport(ERROR)
                 .with_saved_errno(errno::current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove file \"{tmppath}\": %m"))
+                .errmsg(format!("could not remove file \"{tmppath}\": {PCT_M}"))
                 .finish(loc("SnapBuildSerialize"));
         }
 
         let catchange_xip = rb.get_catalog_changes_xacts();
-        let image = ondisk::build_image(self, &catchange_xip);
+        let image = ondisk::build_image(self, &catchange_xip)?;
 
         let fd_ = fd::OpenTransientFile(&tmppath, libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY)?;
         if fd_ < 0 {
             return ereport(ERROR)
                 .with_saved_errno(errno::current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{tmppath}\": %m"))
+                .errmsg(format!("could not open file \"{tmppath}\": {PCT_M}"))
                 .finish(loc("SnapBuildSerialize"));
         }
 
@@ -957,7 +961,7 @@ impl SnapBuild {
             return ereport(ERROR)
                 .with_saved_errno(save_errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not write to file \"{tmppath}\": %m"))
+                .errmsg(format!("could not write to file \"{tmppath}\": {PCT_M}"))
                 .finish(loc("SnapBuildSerialize"));
         }
         waitevent_seams::pgstat_report_wait_end::call();
@@ -972,7 +976,7 @@ impl SnapBuild {
             return ereport(ERROR)
                 .with_saved_errno(save_errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not fsync file \"{tmppath}\": %m"))
+                .errmsg(format!("could not fsync file \"{tmppath}\": {PCT_M}"))
                 .finish(loc("SnapBuildSerialize"));
         }
 
@@ -980,7 +984,7 @@ impl SnapBuild {
             return ereport(ERROR)
                 .with_saved_errno(errno::current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not close file \"{tmppath}\": %m"))
+                .errmsg(format!("could not close file \"{tmppath}\": {PCT_M}"))
                 .finish(loc("SnapBuildSerialize"));
         }
 
@@ -991,7 +995,7 @@ impl SnapBuild {
                 .with_saved_errno(errno::current_errno())
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "could not rename file \"{tmppath}\" to \"{path}\": %m"
+                    "could not rename file \"{tmppath}\" to \"{path}\": {PCT_M}"
                 ))
                 .finish(loc("SnapBuildSerialize"));
         }
@@ -1085,15 +1089,17 @@ pub fn snap_build_clear_exported_snapshot() -> PgResult<()> {
     if !xact::IsTransactionState() {
         elog(ERROR, "clearing exported snapshot in wrong transaction state")?;
     }
-    // AbortCurrentTransaction takes care of resetting the snapshot state
-    // (and, in this port, the resource owner C restores by hand).
+    // AbortCurrentTransaction takes care of resetting the snapshot state.
+    let saved = SAVED_RESOURCE_OWNER_DURING_EXPORT.take();
     xact::AbortCurrentTransaction()?;
+    resowner::SetCurrentResourceOwner(saved);
     EXPORT_IN_PROGRESS.set(false);
     Ok(())
 }
 
 pub fn snap_build_reset_exported_snapshot_state() {
     EXPORT_IN_PROGRESS.set(false);
+    SAVED_RESOURCE_OWNER_DURING_EXPORT.set(types_resowner::ResourceOwner::NULL);
 }
 
 pub fn check_point_snap_build() -> PgResult<()> {
@@ -1115,7 +1121,7 @@ pub fn check_point_snap_build() -> PgResult<()> {
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "could not open directory \"{PG_LOGICAL_SNAPSHOTS_DIR}\": %m"
+                    "could not open directory \"{PG_LOGICAL_SNAPSHOTS_DIR}\": {PCT_M}"
                 ))
                 .finish(loc("CheckPointSnapBuild"));
         }
@@ -1129,7 +1135,7 @@ pub fn check_point_snap_build() -> PgResult<()> {
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
                     .errmsg(format!(
-                        "could not read directory \"{PG_LOGICAL_SNAPSHOTS_DIR}\": %m"
+                        "could not read directory \"{PG_LOGICAL_SNAPSHOTS_DIR}\": {PCT_M}"
                     ))
                     .finish(loc("CheckPointSnapBuild"));
             }
@@ -1161,7 +1167,7 @@ pub fn check_point_snap_build() -> PgResult<()> {
                 ereport(LOG)
                     .with_saved_errno(errno::current_errno())
                     .errcode_for_file_access()
-                    .errmsg(format!("could not remove file \"{path}\": %m"))
+                    .errmsg(format!("could not remove file \"{path}\": {PCT_M}"))
                     .finish(loc("CheckPointSnapBuild"))?;
                 continue;
             }
@@ -1178,7 +1184,7 @@ pub fn snap_build_snapshot_exists(lsn: XLogRecPtr) -> PgResult<bool> {
         Err(e) => ereport(ERROR)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg(format!("could not stat file \"{path}\": %m"))
+            .errmsg(format!("could not stat file \"{path}\": {PCT_M}"))
             .finish(loc("SnapBuildSnapshotExists"))
             .map(|_| false),
     }

@@ -189,7 +189,8 @@ fn check_publication_add_relation(targetrel: &Relation<'_>) -> PgResult<()> {
             pg_class_seams::errdetail_relkind_not_supported::call(relkind)?,
         ));
     }
-    if catalog::IsCatalogRelation(targetrel) {
+    // pgrcolumnar's companions are relkind 'r' in pg_toast; their rows publish as the parent's.
+    if catalog::IsCatalogRelation(targetrel) || catalog::IsToastNamespace(targetrel.rd_rel.relnamespace) {
         return Err(cannot_add_relation(
             targetrel.name(),
             "This operation is not supported for system tables.".into(),
@@ -237,15 +238,23 @@ fn check_publication_add_schema(mcx: Mcx<'_>, schemaid: Oid) -> PgResult<()> {
     Ok(())
 }
 
-pub fn is_publishable_class(relid: Oid, relkind: u8, relpersistence: u8) -> bool {
+fn publishable_kind(relid: Oid, relkind: u8, relpersistence: u8) -> bool {
     (relkind == RELKIND_RELATION || relkind == RELKIND_PARTITIONED_TABLE)
         && !catalog::IsCatalogRelationOid(relid)
         && relpersistence == RELPERSISTENCE_PERMANENT
         && relid >= FirstNormalObjectId
 }
 
+// pgrcolumnar's companions are relkind 'r' in pg_toast; their rows publish as the parent's.
+pub fn is_publishable_class(relid: Oid, relkind: u8, relpersistence: u8) -> bool {
+    publishable_kind(relid, relkind, relpersistence)
+        && lsyscache::get_rel_namespace(relid).map_or(true, |n| n != types_core::PG_TOAST_NAMESPACE)
+}
+
+/// pgoutput asks per change: the open relation's namespace, no syscache lookup.
 pub fn is_publishable_relation(rel: &Relation<'_>) -> bool {
-    is_publishable_class(rel.rd_id, rel.rd_rel.relkind as u8, rel.rd_rel.relpersistence)
+    publishable_kind(rel.rd_id, rel.rd_rel.relkind as u8, rel.rd_rel.relpersistence)
+        && rel.rd_rel.relnamespace != types_core::PG_TOAST_NAMESPACE
 }
 
 pub fn is_schema_publication<'mcx>(mcx: Mcx<'mcx>, pubid: Oid) -> PgResult<bool> {
@@ -983,7 +992,7 @@ fn collect_publication_tables(fcinfo: &Fcinfo) -> PgResult<PubTablesRows> {
     for &elem in elems.iter() {
         let name_img = detoast_datum(mcx, elem)?;
         let Ok(pubname) = core::str::from_utf8(varlena_payload(&name_img)) else {
-            let mut m = b"publication \"".to_vec();
+            let mut m = ::mcx::std_vec_from_slice("pg_publication", b"publication \"")?;
             m.extend_from_slice(varlena_payload(&name_img));
             m.extend_from_slice(b"\" does not exist");
             return Err(Box::new(
@@ -1122,7 +1131,7 @@ fn publication_table_row<'mcx>(
             None => nulls[3] = true,
         }
         let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &nulls)?;
-        Ok(Some(tuple.image().to_vec()))
+        Ok(Some(::mcx::std_vec_from_slice("catalog", &tuple.image())?))
     }
 }
 

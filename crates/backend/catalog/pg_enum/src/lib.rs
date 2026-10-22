@@ -55,7 +55,12 @@ thread_local! {
 }
 
 fn clear_uncommitted() {
-    let old = UNCOMMITTED.with(|cell| cell.borrow_mut().owner.take());
+    // D4682: re-armed for a reused thread's next session (the registration is spent).
+    let old = UNCOMMITTED.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        slot.cleanup_registered = false;
+        slot.owner.take()
+    });
     if let Some(owner) = old {
         drop(core::mem::ManuallyDrop::into_inner(owner));
     }
@@ -156,22 +161,21 @@ fn invalid_label(lab: &str) -> Box<PgError> {
     )
 }
 
-fn form_and_insert<'mcx>(
+fn form_enum_tuple<'mcx>(
     mcx: Mcx<'mcx>,
     pg_enum: &Relation<'mcx>,
     oid: Oid,
     enumtypid: Oid,
     sortorder: f32,
     label: &NameData,
-) -> PgResult<()> {
+) -> PgResult<heaptuple::HeapTuple<'mcx>> {
     let mut values = [Datum::null(); Natts_pg_enum];
     let nulls = [false; Natts_pg_enum];
     values[0] = Datum::from_oid(oid);
     values[1] = Datum::from_oid(enumtypid);
     values[2] = Datum::from_f32(sortorder);
     values[3] = Datum::from_usize(label.data.as_ptr() as usize);
-    let mut tup = heaptuple::heap_form_tuple(mcx, pg_enum.descr(), &values, &nulls)?;
-    catalog_indexing::CatalogTupleInsert(mcx, pg_enum, &mut tup)
+    heaptuple::heap_form_tuple(mcx, pg_enum.descr(), &values, &nulls)
 }
 
 pub fn EnumValuesCreate<'mcx>(mcx: Mcx<'mcx>, enumTypeOid: Oid, vals: &[&str]) -> PgResult<()> {
@@ -202,28 +206,30 @@ pub fn EnumValuesCreate<'mcx>(mcx: Mcx<'mcx>, enumTypeOid: Oid, vals: &[&str]) -
     }
     oids.sort_unstable();
 
-    // C divergence: C batches through CatalogTuplesMultiInsertWithInfo;
-    // per-row CatalogTupleInsert yields identical rows (only the WAL record
-    // shape differs). The batch grain is kept (pg_enum.c:156-198): every
-    // label of a batch is validated before any of it reaches the catalog.
+    // pg_enum.c:156-198: every label of a batch is validated before the
+    // batch goes through one multi-insert.
     let nslots = num_elems.min(catalog_indexing::MAX_CATALOG_MULTI_INSERT_BYTES / FORMDATA_PG_ENUM_SIZE);
-    let mut batch: Vec<(Oid, f32, NameData)> = Vec::with_capacity(nslots);
+    let mut indstate = catalog_indexing::CatalogOpenIndexes(mcx, &pg_enum)?;
+    let mut batch = ::mcx::std_vec_with_capacity("catalog", nslots)?;
     for (elemno, lab) in vals.iter().enumerate() {
         if lab.len() > NAMEDATALEN as usize - 1 {
             return Err(invalid_label(lab));
         }
         let mut label = NameData::default();
         label.namestrcpy(lab);
-        batch.push((oids[elemno], (elemno + 1) as f32, label));
+        let order = (elemno + 1) as f32;
+        batch.push(form_enum_tuple(mcx, &pg_enum, oids[elemno], enumTypeOid, order, &label)?);
         if batch.len() == nslots {
-            for (oid, order, label) in batch.drain(..) {
-                form_and_insert(mcx, &pg_enum, oid, enumTypeOid, order, &label)?;
-            }
+            catalog_indexing::CatalogTuplesMultiInsertWithInfo(
+                mcx,
+                &pg_enum,
+                core::mem::take(&mut batch),
+                &mut indstate,
+            )?;
         }
     }
-    for (oid, order, label) in batch.drain(..) {
-        form_and_insert(mcx, &pg_enum, oid, enumTypeOid, order, &label)?;
-    }
+    catalog_indexing::CatalogTuplesMultiInsertWithInfo(mcx, &pg_enum, batch, &mut indstate)?;
+    catalog_indexing::CatalogCloseIndexes(indstate)?;
 
     pg_enum.close(RowExclusiveLock)
 }
@@ -406,7 +412,8 @@ pub fn AddEnumLabel<'mcx>(
 
     let mut label = NameData::default();
     label.namestrcpy(newVal);
-    form_and_insert(mcx, &pg_enum, newOid, enumTypeOid, newelemorder, &label)?;
+    let mut tup = form_enum_tuple(mcx, &pg_enum, newOid, enumTypeOid, newelemorder, &label)?;
+    catalog_indexing::CatalogTupleInsert(mcx, &pg_enum, &mut tup)?;
 
     pg_enum.close(RowExclusiveLock)?;
 
@@ -730,7 +737,7 @@ mod tests {
         }
     }
 
-    // pg_enum.c:459-477: a rejected BEFORE/AFTER (regression) must
+    // pg_enum.c:459-477: a rejected BEFORE/AFTER (fp-catalog-pg_enum#2) must
     // leave the preset OID for the next plain ADD VALUE; it is consumed once.
     #[test]
     fn next_pg_enum_oid_survives_rejected_neighbor_and_is_taken_once() {

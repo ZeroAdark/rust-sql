@@ -1,0 +1,9 @@
+-- regress-full-horology-004
+-- SELECT CAST(cast(date 'today' + time with time zone '03:30' + interval '1 month 04:01' as timestamp without time zone) AS time) AS "07:31:00";
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn1316(fn2027(op1327(c1184:842956200000000, c1186:#16))))
+  outs 1=w8:val
+mapped: Result

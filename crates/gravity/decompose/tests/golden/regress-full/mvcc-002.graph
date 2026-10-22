@@ -1,0 +1,11 @@
+-- regress-full-mvcc-002
+-- DO $$ BEGIN -- iterate often enough to see index growth even on larger-than-default page sizes FOR i IN 1..100 LOOP BEGIN -- perform index scan over all the inserted keys to get them to be seen as dead IF EXISTS(SELECT * FROM clean_aborted_self WHERE key > 0 AND key < 100) THEN RAISE data_corrupted USING MESSAGE = 'these rows should not exist'; END IF; INSERT INTO clean_aborted_self SELECT g.i, 'rolling back in a sec' FROM generate_series(1, 100) g(i); -- just some error that's not normally thrown RAISE reading_sql_data_not_permitted USING MESSAGE = 'round and round again'; EXCEPTION WHEN reading_sql_data_not_permitted THEN END; END LOOP; END;$$;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:100)]
+  project (1=v3.1, 2=c25:'rolling back in a sec')
+  write INSERT rel=17427 rti=1 natts=2 indexes=(17432[1])
+  outs 1=w4:val 2=vl:stmt/imm
+mapped: ModifyTable FunctionScan

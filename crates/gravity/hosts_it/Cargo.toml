@@ -1,0 +1,164 @@
+# gravity_hosts's integration tests that need the whole server's startup registration (seams_init, which depends on
+# gravity_exec, the backend and so on: above gravity_hosts). As hosts' own tests they made seams_init a dev-dependency of
+# gravity_hosts, and cargo gives every dev-dependency to every test target of the package: hosts' lib unit tests and all
+# 51 integration-test binaries recompiled on every edit to gravity_exec or anything else seams_init depends on (BD-11).
+[package]
+name = "gravity_hosts_it"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[dev-dependencies]
+gravity_hosts = { path = "../hosts" }
+fires = { path = "../../_support/fires" }
+elog = { path = "../../backend/utils/error/elog" }
+pruneheap = { path = "../../backend/access/heap/pruneheap" }
+pruneheap_seams = { path = "../../backend/access/heap/pruneheap_seams" }
+types_fmgr = { path = "../../_support/types/fmgr" }
+gravity_abi = { path = "../abi" }
+gravity_dict = { path = "../dict" }
+guc = { path = "../../backend/utils/misc/guc" }
+guc_seams = { path = "../../backend/utils/misc/guc_seams" }
+gravity_fn = { path = "../fn" }
+gravity_kernels = { path = "../kernels" }
+gravity_driver = { path = "../driver" }
+gravity_program = { path = "../program" }
+gravity_decompose = { path = "../decompose" }
+readfuncs = { path = "../../backend/nodes/readfuncs" }
+relcache_seams = { path = "../../backend/utils/cache/relcache_seams" }
+mcx = { path = "../../_support/mcx" }
+datum = { path = "../../_support/types/datum" }
+types_core = { path = "../../_support/types/types_core" }
+types_error = { path = "../../_support/types/types_error" }
+types_nodes = { path = "../../_support/types/nodes" }
+types_rel = { path = "../../_support/types/rel" }
+types_scan = { path = "../../_support/types/types_scan" }
+types_slot = { path = "../../_support/types/types_slot" }
+types_snapshot = { path = "../../_support/types/snapshot" }
+types_storage = { path = "../../_support/types/types_storage" }
+types_tuple = { path = "../../_support/types/types_tuple" }
+types_nbtree = { path = "../../_support/types/types_nbtree" }
+types_relscan = { path = "../../backend/access/index/relscan" }
+indexam = { path = "../../backend/access/index/indexam" }
+tableam = { path = "../../backend/access/table/tableam" }
+tableam_vocab = { path = "../../backend/access/table/tableam_vocab" }
+table = { path = "../../backend/access/table/table" }
+heapam = { path = "../../backend/access/heap/heapam" }
+tidbitmap = { path = "../../backend/nodes/tidbitmap" }
+tablesample = { path = "../../backend/access/tablesample/tablesample" }
+adt_float = { path = "../../backend/utils/adt/float" }
+pg_prng = { path = "../../common/pg_prng" }
+execmain_seams = { path = "../../backend/executor/execmain_seams" }
+matview_seams = { path = "../../backend/commands/matview_seams" }
+init_small = { path = "../../backend/utils/init/init_small" }
+heaptuple = { path = "../../backend/access/common/heaptuple" }
+trigger = { path = "../../backend/commands/trigger" }
+tupdesc = { path = "../../backend/access/common/tupdesc" }
+types_trigger = { path = "../../_support/types/types_trigger" }
+types_trigger_call = { path = "../../_support/types/types_trigger_call" }
+exectuples = { path = "../../backend/executor/exectuples" }
+executils = { path = "../../backend/executor/executils" }
+execscan = { path = "../../backend/executor/execscan" }
+nodefunctionscan = { path = "../../backend/executor/nodefunctionscan" }
+nodetablefuncscan = { path = "../../backend/executor/nodetablefuncscan" }
+nodenamedtuplestorescan = { path = "../../backend/executor/nodenamedtuplestorescan" }
+queryenvironment = { path = "../../backend/utils/misc/queryenvironment" }
+types_portal = { path = "../../_support/types/portal" }
+nodemodifytable = { path = "../../backend/executor/nodemodifytable" }
+rewrite_manip = { path = "../../backend/rewrite/rewrite_manip" }
+execpartition = { path = "../../backend/executor/execpartition" }
+partdesc = { path = "../../backend/partitioning/partdesc" }
+pg_inherits = { path = "../../backend/catalog/pg_inherits" }
+catalog_heap = { path = "../../backend/catalog/catalog_heap" }
+execexpr = { path = "../../backend/executor/execexpr" }
+execindexing = { path = "../../backend/executor/execindexing" }
+lmgr = { path = "../../backend/storage/lmgr/lmgr" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+lsyscache = { path = "../../backend/utils/cache/lsyscache" }
+typcache = { path = "../../backend/utils/cache/typcache" }
+funcapi = { path = "../../backend/utils/fmgr/funcapi" }
+arrayfuncs = { path = "../../backend/utils/adt/arrayfuncs" }
+detoast_seams = { path = "../../backend/access/common/detoast_seams" }
+syscache_seams = { path = "../../backend/utils/cache/syscache_seams" }
+fmgr_core = { path = "../../backend/utils/fmgr/fmgr_core" }
+tuplesort = { path = "../../backend/utils/sort/tuplesort" }
+tuplestore = { path = "../../backend/utils/sort/tuplestore" }
+pairingheap = { path = "../../backend/lib/pairingheap" }
+adt_scalar = { path = "../../backend/utils/adt/scalar" }
+lmgr_seams = { path = "../../backend/storage/lmgr/lmgr_seams" }
+pgstat = { path = "../../backend/utils/activity/pgstat" }
+pgstat_seams = { path = "../../backend/utils/activity/pgstat_seams" }
+xact_seams = { path = "../../backend/access/transam/xact_seams" }
+aclchk_seams = { path = "../../backend/catalog/aclchk_seams" }
+objectaccess = { path = "../../backend/catalog/objectaccess" }
+miscinit_seams = { path = "../../backend/utils/init/miscinit_seams" }
+bufmgr = { path = "../../backend/storage/buffer/bufmgr" }
+bufmgr_seams = { path = "../../backend/storage/buffer/bufmgr_seams" }
+aio_seams = { path = "../../backend/storage/aio/aio_seams" }
+heapam_visibility_seams = { path = "../../backend/access/heap/heapam_visibility_seams" }
+visibilitymap = { path = "../../backend/access/heap/visibilitymap" }
+nbtree = { path = "../../backend/access/nbtree/nbtree" }
+predicate_seams = { path = "../../backend/storage/lmgr/predicate_seams" }
+snapmgr = { path = "../../backend/utils/time/snapmgr" }
+resowner = { path = "../../backend/utils/resowner/resowner" }
+types_resowner = { path = "../../_support/types/types_resowner" }
+fd = { path = "../../backend/storage/file/fd" }
+vfs = { path = "../../backend/storage/file/vfs" }
+waiter = { path = "../../backend/storage/ipc/waiter" }
+pgrc_read = { path = "../../backend/access/pgrcolumnar/pgrc_read" }
+pgrc_write = { path = "../../backend/access/pgrcolumnar/pgrc_write" }
+pgrc_format = { path = "../../backend/access/pgrcolumnar/pgrc_format" }
+pgrc_meta = { path = "../../backend/access/pgrcolumnar/pgrc_meta" }
+pgrc_scan = { path = "../../backend/access/pgrcolumnar/pgrc_scan" }
+pgrc_codec = { path = "../../backend/access/pgrcolumnar/pgrc_codec" }
+pgrc_am = { path = "../../backend/access/pgrcolumnar/pgrc_am" }
+pgsync = { path = "../../_support/pgsync" }
+pagegive = { path = "../../_support/pagegive" }
+pg_clock = { path = "../../port/pg_clock" }
+pg_strong_random = { path = "../../port/pg_strong_random" }
+inval = { path = "../../backend/utils/cache/inval" }
+l2cache = { path = "../../backend/utils/cache/l2cache" }
+execreplication_seams = { path = "../../backend/executor/execreplication_seams" }
+guc_tables = { path = "../../backend/utils/misc/guc_tables" }
+coerce = { path = "../../backend/parser/coerce" }
+adt_regproc = { path = "../../backend/utils/adt/regproc" }
+regexp_alt = { path = "../../backend/utils/adt/regexp_alt" }
+regex_spencer = { path = "../../_support/types/regex", package = "regex" }
+procarray_seams = { path = "../../backend/storage/ipc/procarray_seams" }
+seams_init = { path = "../../_support/seams_init" }
+adt_timestamp = { path = "../../backend/utils/adt/adt_timestamp" }
+detoast = { path = "../../backend/access/common/detoast" }
+pgrc_qa = { path = "../../backend/access/pgrcolumnar/pgrc_qa" }
+adt_numeric = { path = "../../backend/utils/adt/numeric" }
+adt_like = { path = "../../backend/utils/adt/like" }
+adt_datetime = { path = "../../backend/utils/adt/adt_datetime" }
+pgtz = { path = "../../backend/timezone/pgtz" }
+regex_core = { path = "../../backend/regex/regex_core" }
+pg_locale = { path = "../../backend/utils/adt/pg_locale" }
+mbutils = { path = "../../backend/utils/mb/mbutils" }
+indexcmds_seams = { path = "../../backend/commands/indexcmds_seams" }
+adt_jsonb = { path = "../../backend/utils/adt/jsonb" }
+wchar = { path = "../../common/wchar" }
+memchr = "2"
+zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off
+gravity_parallel = { path = "../parallel" }
+test_boot = { path = "../../_support/test_boot" }
+seam_core = { path = "../../_support/seam_core" }
+rls_seams = { path = "../../backend/utils/misc/rls_seams" }
+genam_seams = { path = "../../backend/access/index/genam_seams" }
+smgr_seams = { path = "../../backend/storage/smgr/smgr_seams" }
+xloginsert_seams = { path = "../../backend/access/transam/xloginsert_seams" }
+freespace_seams = { path = "../../backend/storage/freespace/freespace_seams" }
+catalog_seams = { path = "../../backend/catalog/catalog_seams" }
+relation_seams = { path = "../../backend/access/common/relation_seams" }
+fmgr_seams = { path = "../../backend/utils/fmgr/fmgr_seams" }
+multixact_seams = { path = "../../backend/access/transam/multixact_seams" }
+combocid_seams = { path = "../../backend/utils/time/combocid_seams" }
+lock_seams = { path = "../../backend/storage/lmgr/lock_seams" }
+snapmgr_seams = { path = "../../backend/utils/time/snapmgr_seams" }
+transam_seams = { path = "../../backend/access/transam/transam_seams" }

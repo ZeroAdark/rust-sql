@@ -1,0 +1,170 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2uexp s1v s2u s1c s2sel
+step s2uexp: EXPLAIN (COSTS OFF) UPDATE up t SET hits = t.hits + 100 WHERE EXISTS (SELECT 1 FROM us s WHERE s.k = t.k);
+QUERY PLAN                                 
+-------------------------------------------
+Update on up t                             
+  Update on up1 t_1                        
+  Update on up2 t_2                        
+  Update on up3 t_3                        
+  ->  Hash Right Semi Join                 
+        Hash Cond: (s.k = t.k)             
+        ->  Seq Scan on us s               
+        ->  Hash                           
+              ->  Append                   
+                    ->  Seq Scan on up1 t_1
+                    ->  Seq Scan on up2 t_2
+                    ->  Seq Scan on up3 t_3
+(12 rows)
+
+step s1v: UPDATE up SET hits = 7 WHERE k = 12;
+step s2u: UPDATE up t SET hits = t.hits + 100 WHERE EXISTS (SELECT 1 FROM us s WHERE s.k = t.k); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM up ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+up1     | 1|   0|n1  
+up1     | 2| 100|n2  
+up1     | 3|   0|n3  
+up2     |11|   0|n11 
+up2     |12| 107|n12 
+up2     |13|   0|n13 
+up3     |21|   0|n21 
+up3     |22| 100|n22 
+up3     |23|   0|n23 
+(9 rows)
+
+
+starting permutation: s1key s2u s1c s2sel
+step s1key: UPDATE up SET k = 14 WHERE k = 12;
+step s2u: UPDATE up t SET hits = t.hits + 100 WHERE EXISTS (SELECT 1 FROM us s WHERE s.k = t.k); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM up ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+up1     | 1|   0|n1  
+up1     | 2| 100|n2  
+up1     | 3|   0|n3  
+up2     |11|   0|n11 
+up2     |13|   0|n13 
+up2     |14|   0|n12 
+up3     |21|   0|n21 
+up3     |22| 100|n22 
+up3     |23|   0|n23 
+(9 rows)
+
+
+starting permutation: s1del s2u s1c s2sel
+step s1del: DELETE FROM up WHERE k = 12;
+step s2u: UPDATE up t SET hits = t.hits + 100 WHERE EXISTS (SELECT 1 FROM us s WHERE s.k = t.k); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM up ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+up1     | 1|   0|n1  
+up1     | 2| 100|n2  
+up1     | 3|   0|n3  
+up2     |11|   0|n11 
+up2     |13|   0|n13 
+up3     |21|   0|n21 
+up3     |22| 100|n22 
+up3     |23|   0|n23 
+(8 rows)
+
+
+starting permutation: s1mv s2u s1c s2sel
+step s1mv: UPDATE up SET k = 15 WHERE k = 2;
+step s2u: UPDATE up t SET hits = t.hits + 100 WHERE EXISTS (SELECT 1 FROM us s WHERE s.k = t.k); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM up ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+up1     | 1|   0|n1  
+up1     | 3|   0|n3  
+up2     |11|   0|n11 
+up2     |12|   0|n12 
+up2     |13|   0|n13 
+up2     |15|   0|n2  
+up3     |21|   0|n21 
+up3     |22|   0|n22 
+up3     |23|   0|n23 
+(9 rows)
+
+
+starting permutation: s2dexp s1nv s2d s1c s2sel
+step s2dexp: EXPLAIN (COSTS OFF) DELETE FROM up t WHERE NOT EXISTS (SELECT 1 FROM us s WHERE s.k = t.k);
+QUERY PLAN                                 
+-------------------------------------------
+Delete on up t                             
+  Delete on up1 t_1                        
+  Delete on up2 t_2                        
+  Delete on up3 t_3                        
+  ->  Hash Right Anti Join                 
+        Hash Cond: (s.k = t.k)             
+        ->  Seq Scan on us s               
+        ->  Hash                           
+              ->  Append                   
+                    ->  Seq Scan on up1 t_1
+                    ->  Seq Scan on up2 t_2
+                    ->  Seq Scan on up3 t_3
+(12 rows)
+
+step s1nv: UPDATE up SET hits = 8 WHERE k = 13;
+step s2d: DELETE FROM up t WHERE NOT EXISTS (SELECT 1 FROM us s WHERE s.k = t.k); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM up ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+up1     | 2|   0|n2  
+up2     |12|   0|n12 
+up3     |22|   0|n22 
+(3 rows)
+
+
+starting permutation: s1nkey s2d s1c s2sel
+step s1nkey: UPDATE up SET k = 12 WHERE k = 13;
+step s2d: DELETE FROM up t WHERE NOT EXISTS (SELECT 1 FROM us s WHERE s.k = t.k); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM up ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+up1     | 2|   0|n2  
+up2     |12|   0|n12 
+up3     |22|   0|n22 
+(3 rows)
+
+
+starting permutation: s1v s2in s1c s2sel
+step s1v: UPDATE up SET hits = 7 WHERE k = 12;
+step s2in: UPDATE up t SET note = 'in' || t.hits WHERE t.k IN (SELECT s.k FROM us s WHERE s.w > 0) RETURNING t.k, t.hits, t.note; <waiting ...>
+step s1c: COMMIT;
+step s2in: <... completed>
+ k|hits|note
+--+----+----
+ 2|   0|in0 
+12|   7|in7 
+22|   0|in0 
+(3 rows)
+
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM up ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+up1     | 1|   0|n1  
+up1     | 2|   0|in0 
+up1     | 3|   0|n3  
+up2     |11|   0|n11 
+up2     |12|   7|in7 
+up2     |13|   0|n13 
+up3     |21|   0|n21 
+up3     |22|   0|in0 
+up3     |23|   0|n23 
+(9 rows)
+

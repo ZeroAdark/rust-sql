@@ -86,6 +86,35 @@ pub fn arg_array_bytes<'mcx>(
     ::detoast_seams::detoast_attr::call(mcx, raw)
 }
 
+pub(crate) fn arg_array_plain(fcinfo: &Fcinfo, i: usize) -> Option<&[u8]> {
+    // SAFETY: arg i is a non-null array (varlena) datum (strict function).
+    let p = unsafe { fcinfo.arg_ptr(i) };
+    // SAFETY: p addresses a live varlena header.
+    if unsafe { *p } & 0x03 != 0 {
+        return None;
+    }
+    // SAFETY: a live 4-byte-header varlena of varsize_any(p) bytes, valid for the call.
+    Some(unsafe { core::slice::from_raw_parts(p, varsize_any(p)) })
+}
+
+// PG_GETARG_ANY_ARRAY_P for the dimension readers: no copy of a plain image.
+pub(crate) fn arg_array_dims(
+    fcinfo: &Fcinfo,
+    i: usize,
+) -> PgResult<(i32, [i32; crate::foundation::MAXDIM], [i32; crate::foundation::MAXDIM])> {
+    // SAFETY: arg i is a non-null array (varlena) datum (strict function).
+    if let Some(eah) = unsafe { crate::expanded::expanded_array(fcinfo.arg(i)) } {
+        // SAFETY: a live expanded array; only its dimension fields are read.
+        let eah = unsafe { &*eah };
+        return Ok((eah.ndims, eah.dims, eah.lbound));
+    }
+    if let Some(img) = arg_array_plain(fcinfo, i) {
+        return Ok(crate::foundation::read_dims_lbounds(img));
+    }
+    let img = arg_array_bytes(fcinfo, i, fcinfo.result_mcx())?;
+    Ok(crate::foundation::read_dims_lbounds(&img))
+}
+
 pub fn fc_array_in(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // arrayfuncs.c array_in works on the raw cstring bytes in whatever the
     // database encoding is; no UTF-8 requirement.
@@ -186,7 +215,7 @@ pub fn fc_array_unnest(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
         let numelems = ::arrayutils::array_get_n_items(ndim, &dims)?;
         let pos = crate::foundation::arr_data_offset(&array);
         let state = ArrayUnnestFctx {
-            image: array.as_slice().to_vec(),
+            image: ::mcx::std_vec_from_slice("adt", &array.as_slice())?,
             nextelem: 0,
             numelems,
             pos,
@@ -237,10 +266,26 @@ pub fn fc_array_unnest_support(
             0.0
         } else {
             let ap = c.constvalue.as_usize() as *const u8;
-            // SAFETY: non-null array Const addresses a live flat varlena image.
-            let arr = unsafe { core::slice::from_raw_parts(ap, varsize_any(ap)) };
-            let (ndim, dims) = crate::foundation::read_dims(arr);
-            ::arrayutils::array_get_n_items(ndim, &dims)? as f64
+            // SAFETY: non-null array Const addresses a live varlena image.
+            let b0 = unsafe { *ap };
+            if b0 == 0x01 || b0 & 0x03 == 0x02 {
+                // No context to detoast an external image into: C's default guess.
+                10.0
+            } else {
+                // A folded bound-param Const may carry a 1B-header image.
+                let hdr = if b0 & 0x01 == 0x01 { 1 } else { 4 };
+                // SAFETY: inline varlena of varsize_any bytes, header included.
+                let body = unsafe { core::slice::from_raw_parts(ap.add(hdr), varsize_any(ap) - hdr) };
+                let rd = |off: usize| i32::from_ne_bytes(body[off..off + 4].try_into().unwrap());
+                let ndim = rd(0);
+                let mut dims = [0i32; crate::foundation::MAXDIM];
+                if (ndim as u32) <= crate::foundation::MAXDIM as u32 {
+                    for (i, d) in dims.iter_mut().enumerate().take(ndim as usize) {
+                        *d = rd(12 + 4 * i);
+                    }
+                }
+                ::arrayutils::array_get_n_items(ndim, &dims)? as f64
+            }
         }
     } else if let Some(a) = arg1.as_array_expr() {
         if a.multidims {
@@ -420,12 +465,7 @@ pub fn fc_array_agg_deserialize(
 
 // C array_length (arrayfuncs.c).
 pub fn fc_array_length(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let (ndim, dims) = {
-        let mcx = fcinfo.result_mcx();
-        let array = arg_array_bytes(fcinfo, 0, mcx)?;
-        let (ndim, dims, _lb) = crate::foundation::read_dims_lbounds(&array);
-        (ndim, dims)
-    };
+    let (ndim, dims, _lb) = arg_array_dims(fcinfo, 0)?;
     let reqdim = fcinfo.arg(1).as_i32();
     if ndim <= 0 || ndim > crate::foundation::MAXDIM as i32 || reqdim <= 0 || reqdim > ndim {
         return Ok(fcinfo.return_null());
@@ -445,14 +485,14 @@ fn array_to_text_common(
     let sep: alloc::vec::Vec<u8> = {
         // SAFETY: arg 1 is a live text varlena (callers checked for NULL).
         let v = unsafe { fcinfo.arg_varlena_packed(1) }?;
-        v.data().to_vec()
+        ::mcx::std_vec_from_slice("adt", cstring_prefix(v.data()))?
     };
     let element_type = crate::foundation::arr_elemtype(&array);
     let (ndim, dims, _lb) = crate::foundation::read_dims_lbounds(&array);
     let nitems = ::arrayutils::array_get_n_items(ndim, &dims)?;
-    // varlena.c array_to_text_internal: a StringInfo, so every append is
-    // admitted under MaxAllocSize and fails as an ERROR.
-    let mut out: ::mcx::PgVec<'_, u8> = ::mcx::PgVec::new_in(mcx);
+    // varlena.c array_to_text_internal: a StringInfo; later elements go
+    // through appendStringInfo(&buf, "%s%s", fldsep, value).
+    let mut out = ::stringinfo::StringInfo::new_in(mcx)?;
     if nitems > 0 {
         let flinfo = flinfo.expect("array_to_text: NULL flinfo");
         let ams = cached_meta(flinfo, element_type, IOFuncSelector::IOFunc_output, false)?;
@@ -469,9 +509,10 @@ fn array_to_text_common(
             if nulls[i] {
                 if let Some(ns) = &null_string {
                     if printed {
-                        ::mcx::vec_append_bytes(&mut out, &sep)?;
+                        out.append_formatted(&[&sep, ns])?;
+                    } else {
+                        out.append_bytes(ns)?;
                     }
-                    ::mcx::vec_append_bytes(&mut out, ns)?;
                     printed = true;
                 }
                 continue;
@@ -482,17 +523,23 @@ fn array_to_text_common(
                 core::ffi::CStr::from_ptr(v.as_usize() as *const core::ffi::c_char)
             };
             if printed {
-                ::mcx::vec_append_bytes(&mut out, &sep)?;
+                out.append_formatted(&[&sep, cs.to_bytes()])?;
+            } else {
+                out.append_bytes(cs.to_bytes())?;
             }
-            ::mcx::vec_append_bytes(&mut out, cs.to_bytes())?;
             printed = true;
         }
     }
     let total = 4 + out.len();
     let mut img: ::mcx::PgVec<'_, u8> = vec_with_capacity_in(mcx, total)?;
     ::mcx::vec_append_bytes(&mut img, &(((total as u32) << 2)).to_ne_bytes())?;
-    ::mcx::vec_append_bytes(&mut img, &out)?;
+    ::mcx::vec_append_bytes(&mut img, out.as_bytes())?;
     byref_result(mcx, &img)
+}
+
+// varlena.c:5032/5038 text_to_cstring: separator and null string end at NUL.
+fn cstring_prefix(b: &[u8]) -> &[u8] {
+    &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())]
 }
 
 pub fn fc_array_to_text(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -508,7 +555,10 @@ pub fn fc_array_to_text_null(
     }
     let null_string = if !fcinfo.argisnull(2) {
         // SAFETY: arg 2 checked non-null; a live text varlena.
-        Some(unsafe { fcinfo.arg_varlena_packed(2) }?.data().to_vec())
+        Some(::mcx::std_vec_from_slice(
+            "adt",
+            cstring_prefix(unsafe { fcinfo.arg_varlena_packed(2) }?.data()),
+        )?)
     } else {
         None
     };
@@ -744,7 +794,7 @@ fn array_eq_internal(
 ) -> PgResult<bool> {
     // By-val result; detoast/deconstruct scratch dies with the call (C's
     // AARR_FREE_IF_COPY), so no armed result frame is required.
-    let scratch = ::mcx::MemoryContext::new_bump("array_eq scratch");
+    let scratch = ::mcx::MemoryContext::new_wholesale("array_eq scratch");
     let mcx = scratch.mcx();
     let a1 = arg_array_bytes(fcinfo, 0, mcx)?;
     let a2 = arg_array_bytes(fcinfo, 1, mcx)?;
@@ -795,7 +845,7 @@ fn array_cmp_internal(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<i32> {
-    let scratch = ::mcx::MemoryContext::new_bump("array_cmp scratch");
+    let scratch = ::mcx::MemoryContext::new_wholesale("array_cmp scratch");
     let mcx = scratch.mcx();
     let a1 = arg_array_bytes(fcinfo, 0, mcx)?;
     let a2 = arg_array_bytes(fcinfo, 1, mcx)?;
@@ -961,6 +1011,39 @@ const fn nb(foid: Oid, name: &'static str, nargs: i16, func: PGFunction) -> Fmgr
     FmgrBuiltin { foid, name, nargs, strict: false, retset: false, func }
 }
 
+/// SupportRequestModifyInPlace: the target Param at `argno`, if any.
+pub fn modify_in_place_support(fcinfo: &Fcinfo, argno: usize, need_second: bool) -> Datum {
+    use ::types_nodes::primnodes::{Param, ParamKind};
+    // SAFETY: prosupport contract — arg 0 points at a live tag-first node.
+    let Some(req) = (unsafe {
+        ::types_nodes::supportnodes::support_request_modify_in_place(
+            fcinfo.arg(0).as_usize() as *const (),
+        )
+    }) else {
+        return Datum::from_usize(0);
+    };
+    let Some(node) = req.args.get(argno).copied().flatten() else {
+        return Datum::from_usize(0);
+    };
+    if need_second && req.args.get(1).copied().flatten().is_none() {
+        return Datum::from_usize(0);
+    }
+    match node.as_variant::<Param>() {
+        Some(p) if p.paramkind == ParamKind::PARAM_EXTERN && p.paramid == req.paramid => {
+            Datum::from_usize(node.as_raw().as_ptr() as usize)
+        }
+        _ => Datum::from_usize(0),
+    }
+}
+
+// arraysubs.c array_subscript_handler_support.
+pub fn fc_array_subscript_handler_support(
+    _flinfo: Option<&mut FmgrInfo>,
+    fcinfo: &mut Fcinfo,
+) -> PgResult<Datum> {
+    Ok(modify_in_place_support(fcinfo, 0, true))
+}
+
 // pg_proc.dat rows for the generic array functions.
 pub const ARRAYFUNCS_BUILTINS: &[FmgrBuiltin] = &[
     // array_typanalyze.c hook + arraysubs.c subscript handlers (no crate of
@@ -968,7 +1051,7 @@ pub const ARRAYFUNCS_BUILTINS: &[FmgrBuiltin] = &[
     b(3816, "array_typanalyze", 1, ::types_fmgr::fc_internal_dispatch_only),
     b(6179, "array_subscript_handler", 1, ::types_fmgr::fc_internal_dispatch_only),
     b(6180, "raw_array_subscript_handler", 1, ::types_fmgr::fc_internal_dispatch_only),
-    b(6380, "array_subscript_handler_support", 1, ::types_fmgr::fc_internal_dispatch_only),
+    b(6380, "array_subscript_handler_support", 1, fc_array_subscript_handler_support),
     b(382, "btarraycmp", 2, fc_btarraycmp),
     b(390, "array_ne", 2, fc_array_ne),
     b(391, "array_lt", 2, fc_array_lt),

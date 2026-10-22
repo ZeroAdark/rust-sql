@@ -1,0 +1,1 @@
+backend/access/rmgrdesc/src/lib.rs	TIMESTAMPTZ_TO_STR	pgport	exit	thread	a process fact: the WAL description's timestamptz formatter, the backend's by default, waldesc's frontend one installed at its start (install_timestamptz_to_str)

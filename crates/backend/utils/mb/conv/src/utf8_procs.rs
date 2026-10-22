@@ -1,5 +1,6 @@
 // The thirteen table-driven utf8_and_*.c modules (big5, cyrillic, euc_cn,
 // euc_jp, euc_kr, euc_tw, gb18030, gbk, johab, sjis, uhc, euc2004, sjis2004).
+// All but cyrillic are East-Asian: compiled only with the `cjk-encodings` feature.
 
 use crate::maps;
 use crate::{ConvArgs, LocalToUtf, UtfToLocal};
@@ -7,9 +8,11 @@ use datum::Datum;
 use mbutils::check_encoding_conversion_args;
 use types_error::PgResult;
 use types_fmgr::{FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
+use wchar::{PG_KOI8R, PG_KOI8U, PG_UTF8};
+#[cfg(feature = "cjk-encodings")]
 use wchar::{
     PG_BIG5, PG_EUC_CN, PG_EUC_JIS_2004, PG_EUC_JP, PG_EUC_KR, PG_EUC_TW, PG_GB18030, PG_GBK,
-    PG_JOHAB, PG_KOI8R, PG_KOI8U, PG_SHIFT_JIS_2004, PG_SJIS, PG_UHC, PG_UTF8,
+    PG_JOHAB, PG_SHIFT_JIS_2004, PG_SJIS, PG_UHC,
 };
 
 macro_rules! conv_pair {
@@ -39,6 +42,7 @@ macro_rules! conv_pair {
     };
 }
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_big5_to_utf8,
     fc_utf8_to_big5,
@@ -63,6 +67,7 @@ conv_pair!(
     &maps::cyrillic::KOI8U_FROM_UNICODE_TREE
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_euc_cn_to_utf8,
     fc_utf8_to_euc_cn,
@@ -71,6 +76,7 @@ conv_pair!(
     &maps::euc_cn::EUC_CN_FROM_UNICODE_TREE
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_euc_jp_to_utf8,
     fc_utf8_to_euc_jp,
@@ -79,6 +85,7 @@ conv_pair!(
     &maps::euc_jp::EUC_JP_FROM_UNICODE_TREE
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_euc_kr_to_utf8,
     fc_utf8_to_euc_kr,
@@ -87,6 +94,7 @@ conv_pair!(
     &maps::euc_kr::EUC_KR_FROM_UNICODE_TREE
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_euc_tw_to_utf8,
     fc_utf8_to_euc_tw,
@@ -95,6 +103,7 @@ conv_pair!(
     &maps::euc_tw::EUC_TW_FROM_UNICODE_TREE
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_gbk_to_utf8,
     fc_utf8_to_gbk,
@@ -103,6 +112,7 @@ conv_pair!(
     &maps::gbk::GBK_FROM_UNICODE_TREE
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_johab_to_utf8,
     fc_utf8_to_johab,
@@ -111,6 +121,7 @@ conv_pair!(
     &maps::johab::JOHAB_FROM_UNICODE_TREE
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_sjis_to_utf8,
     fc_utf8_to_sjis,
@@ -119,6 +130,7 @@ conv_pair!(
     &maps::sjis::SJIS_FROM_UNICODE_TREE
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_uhc_to_utf8,
     fc_utf8_to_uhc,
@@ -127,6 +139,7 @@ conv_pair!(
     &maps::uhc::UHC_FROM_UNICODE_TREE
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_euc_jis_2004_to_utf8,
     fc_utf8_to_euc_jis_2004,
@@ -139,6 +152,7 @@ conv_pair!(
     ul_conv: None
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_shift_jis_2004_to_utf8,
     fc_utf8_to_shift_jis_2004,
@@ -151,6 +165,7 @@ conv_pair!(
     ul_conv: None
 );
 
+#[cfg(feature = "cjk-encodings")]
 conv_pair!(
     fc_gb18030_to_utf8,
     fc_utf8_to_gb18030,
@@ -164,6 +179,7 @@ conv_pair!(
 );
 
 // GB18030 4-byte codes: first/third bytes 0x81..=0xfe, second/fourth 0x30..=0x39.
+#[cfg(feature = "cjk-encodings")]
 fn gb_linear(gb: u32) -> u32 {
     let b0 = (gb & 0xff00_0000) >> 24;
     let b1 = (gb & 0x00ff_0000) >> 16;
@@ -173,6 +189,7 @@ fn gb_linear(gb: u32) -> u32 {
         .wrapping_sub(0x81 * 12600 + 0x30 * 1260 + 0x81 * 10 + 0x30)
 }
 
+#[cfg(feature = "cjk-encodings")]
 fn gb_unlinear(lin: u32) -> u32 {
     let r0 = 0x81 + lin / 12600;
     let r1 = 0x30 + (lin / 1260) % 10;
@@ -181,6 +198,7 @@ fn gb_unlinear(lin: u32) -> u32 {
     (r0 << 24) | (r1 << 16) | (r2 << 8) | r3
 }
 
+#[cfg(feature = "cjk-encodings")]
 fn unicode_to_utf8word(c: u32) -> u32 {
     if c <= 0x7f {
         c
@@ -196,6 +214,7 @@ fn unicode_to_utf8word(c: u32) -> u32 {
     }
 }
 
+#[cfg(feature = "cjk-encodings")]
 fn utf8word_to_unicode(c: u32) -> u32 {
     if c <= 0x7f {
         c
@@ -208,6 +227,7 @@ fn utf8word_to_unicode(c: u32) -> u32 {
     }
 }
 
+#[cfg(feature = "cjk-encodings")]
 const GB18030_RANGES: [(u32, u32, u32, u32); 13] = [
     // (min_unicode, max_unicode, min_gb, max_gb) per gb-18030-2000.xml
     (0x0452, 0x200f, 0x8130_d330, 0x8136_a531),
@@ -225,6 +245,7 @@ const GB18030_RANGES: [(u32, u32, u32, u32); 13] = [
     (0x10000, 0x10ffff, 0x9030_8130, 0xe332_9a35),
 ];
 
+#[cfg(feature = "cjk-encodings")]
 fn conv_18030_to_utf8(code: u32) -> u32 {
     for &(minunicode, _, mincode, maxcode) in &GB18030_RANGES {
         if code >= mincode && code <= maxcode {
@@ -234,6 +255,7 @@ fn conv_18030_to_utf8(code: u32) -> u32 {
     0
 }
 
+#[cfg(feature = "cjk-encodings")]
 fn conv_utf8_to_18030(code: u32) -> u32 {
     let ucs = utf8word_to_unicode(code);
     for &(minunicode, maxunicode, mincode, _) in &GB18030_RANGES {

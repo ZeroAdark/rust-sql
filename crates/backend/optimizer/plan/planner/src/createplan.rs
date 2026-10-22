@@ -603,7 +603,7 @@ fn order_qual_clauses<'mcx>(
     clauses: &[RinfoId],
 ) -> PgResult<mcx::PgVec<'mcx, RinfoId>> {
     let mut items: mcx::PgVec<'_, (RinfoId, f64, u32)> = mcx::PgVec::new_in(run.mcx);
-    items.reserve(clauses.len());
+    ::mcx::pgvec_reserve(&mut items, clauses.len())?;
     for &rid in clauses {
         // C costs the RestrictInfo node itself (cost_qual_eval_walker's
         // rinfo branch): the eval_cost cache applies, and a pseudoconstant
@@ -620,10 +620,233 @@ fn order_qual_clauses<'mcx>(
             };
         items.push((rid, cost.per_tuple, security_level));
     }
-    order_qual_items(&mut items, |x| (x.2, x.1));
+    if items.len() > 1 {
+        // order_qual_clauses' C insertion sort (stable; NaN-safe, never a panic).
+        let out_of_order = |a: &(RinfoId, f64, u32), b: &(RinfoId, f64, u32)| a.2 > b.2 || (a.2 == b.2 && a.1 > b.1);
+        let mut scaled = items.clone();
+        order_qual_items(&mut scaled, |x| (x.2, x.1));
+        // gravity §3 #7's pgrc class multipliers may run a qual ahead of one PostgreSQL runs first. PostgreSQL
+        // raises where the skipped qual raises (WHERE s LIKE '\' AND x > 1e9: 22025 at the first row), so the scaled
+        // order stands only when every qual raises nothing; else the order is PostgreSQL's, over its unscaled costs.
+        if scaled.iter().zip(items.iter()).any(|(a, b)| a.0 != b.0) || items.windows(2).any(|w| out_of_order(&w[0], &w[1])) {
+            let mut quiet = true;
+            let r: &PlannerRun<'_> = run;
+            for &(rid, ..) in items.iter() {
+                quiet &= quiet_qual(*r.root.expr_node(r.root.rinfo(rid).clause), &|id| !initplan_loud(r, id, 0))?;
+            }
+            if !quiet {
+                for it in items.iter_mut() {
+                    let r = run.root.rinfo(it.0);
+                    let clause = *run.root.expr_node(r.clause);
+                    it.1 = if r.pseudoconstant { 0.0 } else { crate::costsize::cost_qual_eval_node_pg(&mut *run, clause)?.per_tuple };
+                }
+                order_qual_items(&mut items, |x| (x.2, x.1));
+                scaled = items;
+            }
+        }
+        items = scaled;
+    }
     let mut out = mcx::PgVec::new_in(run.mcx);
     out.extend(items.iter().map(|x| x.0));
     Ok(out)
+}
+
+/// a call a raise-free reading admits by its function (leakproof, `types_core::quiet`) raises nothing only
+/// under a determinate input collation: set, or no argument of a collatable type. Arguments of conflicting implicit
+/// collations (`a = b` over a `COLLATE "C"` and a `COLLATE "POSIX"` column) leave `inputcollid` 0, and a collation-aware
+/// builtin (texteq, text_lt, bttextcmp, hashtext ..: leakproof, as the error shows no data) then raises 42P22 "could not
+/// determine which collation to use" at its first non-null input (varlena.c check_collation_set), a raise PostgreSQL
+/// meets only on the rows it reaches. The effects home's `collation_set` (gravity_decompose effects/read.rs) reads the
+/// same bound by the arguments' collations; this one reads their types too, so an argument whose own collation is
+/// indeterminate (`COALESCE(a, b)` over the two columns: collation 0, type text) counts as collatable. `call` is a
+/// FuncExpr, OpExpr, DistinctExpr, NullIfExpr, ScalarArrayOpExpr or MinMaxExpr; any other node reads false.
+pub(crate) fn collation_determinate(call: Node<'_>) -> PgResult<bool> {
+    if nodes_core::expr_input_collation(call) != 0 {
+        return Ok(true);
+    }
+    let args = match call.node_tag() {
+        NodeTag::T_FuncExpr => &call.as_func_expr().unwrap().args,
+        NodeTag::T_OpExpr => &call.as_op_expr().unwrap().args,
+        NodeTag::T_DistinctExpr => &call.as_distinct_expr().unwrap().args,
+        NodeTag::T_NullIfExpr => &call.as_null_if_expr().unwrap().args,
+        NodeTag::T_ScalarArrayOpExpr => &call.as_scalar_array_op_expr().unwrap().args,
+        NodeTag::T_MinMaxExpr => &call.as_min_max_expr().unwrap().args,
+        _ => return Ok(false),
+    };
+    for a in args.iter() {
+        if nodes_core::expr_collation(a) != 0 || lsyscache::type_is_collatable(nodes_core::expr_type(a))? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn initplan_loud(run: &PlannerRun<'_>, id: i32, depth: u32) -> bool {
+    initplan_of(run, id).is_some_and(|sp| !initplan_quiet(run, sp, depth))
+}
+
+fn initplan_of<'mcx>(run: &PlannerRun<'mcx>, id: i32) -> Option<&'mcx types_nodes::primnodes::SubPlan<'mcx>> {
+    let sets = |root: &types_pathnodes::PlannerInfo<'mcx>| root.init_plans.iter().find_map(|&ip| root.expr_node(ip).as_sub_plan().filter(|sp| sp.setParam.iter().any(|p| p == id)));
+    let parked = run.suspended_roots.iter().chain(run.subroots.iter()).chain(run.rel_subroots.iter()).chain(run.minmax_subroots.iter().flatten());
+    sets(&run.root).or_else(|| parked.map(|s| &s.root).find_map(sets))
+}
+
+/// InitPlan `sp` runs unseen ahead of the row PostgreSQL first reads its parameter on: an EXPR or EXISTS sublink
+/// whose plan `initplan_plan_quiet` reads raise-free and non-volatile, an EXPR one's plan returning at most one row (a
+/// second is 21000). A nested InitPlan's parameter is read the same way. Any error reading the catalog reads loud.
+fn initplan_quiet(run: &PlannerRun<'_>, sp: &types_nodes::primnodes::SubPlan<'_>, depth: u32) -> bool {
+    use types_nodes::primnodes::SubLinkType;
+    let one_row = match sp.subLinkType {
+        SubLinkType::EXPR_SUBLINK => true,
+        SubLinkType::EXISTS_SUBLINK => false,
+        _ => return false,
+    };
+    let plan = usize::try_from(sp.plan_id).ok().filter(|&i| (1..=run.glob.subplans.len()).contains(&i)).and_then(|i| run.glob.subplans.nth(i - 1));
+    let (Some(plan), true) = (plan, depth < 4 && sp.testexpr.is_none() && sp.args.is_nil() && sp.parParam.is_nil()) else { return false };
+    matches!(initplan_plan_quiet(plan, one_row, &|id| !initplan_loud(run, id, depth + 1)), Ok(true))
+}
+
+/// plan `plan` (an InitPlan's) raises nothing and calls nothing volatile, and under `one_row` returns at most one
+/// row. Conservative: a Result, a plain Agg (no GROUP BY, no grouping sets: one row), a LIMIT 1 (at most one), and
+/// sequential, index and index-only scans; every target, qual, index qual and limit `quiet_qual` (PARAM_EXEC by
+/// `exec_quiet`) and `contain_volatile_functions` pass; an aggregate on `types_core::quiet::agg_quiet` with no ORDER BY or
+/// direct argument, and no DISTINCT but `count(DISTINCT x)` over a type `types_core::quiet::distinct_count_quiet` reads.
+pub(crate) fn initplan_plan_quiet(plan: Node<'_>, one_row: bool, exec_quiet: &dyn Fn(i32) -> bool) -> PgResult<bool> {
+    fn expr(n: Node<'_>, exec_quiet: &dyn Fn(i32) -> bool) -> PgResult<bool> {
+        if let Some(te) = n.as_target_entry() {
+            return expr(te.expr, exec_quiet);
+        }
+        let quiet = match n.as_aggref() {
+            Some(a) => {
+                let distinct = a.aggdistinct.is_nil()
+                    || a.args.iter().next().and_then(|t| t.as_target_entry()).is_some_and(|t| types_core::quiet::distinct_count_quiet(a.aggfnoid, nodes_core::expr_type(t.expr)));
+                let simple = a.aggkind == types_nodes::primnodes::AGGKIND_NORMAL && a.aggdirectargs.is_nil() && a.aggorder.is_nil() && distinct;
+                simple && types_core::quiet::agg_quiet(a.aggfnoid, a.inputcollid) && a.aggfilter.map_or(Ok(true), |f| expr(f, exec_quiet))? && exprs(&a.args, exec_quiet)?
+            }
+            None => quiet_qual(n, exec_quiet)?,
+        };
+        Ok(quiet && !clauses::contain_volatile_functions(n)?)
+    }
+    fn exprs(l: &NodeList<'_>, exec_quiet: &dyn Fn(i32) -> bool) -> PgResult<bool> {
+        for n in l.iter() {
+            if !expr(n, exec_quiet)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    // Some(at most one row), None: a node or expression that may raise or act
+    fn walk(n: Node<'_>, exec_quiet: &dyn Fn(i32) -> bool) -> PgResult<Option<bool>> {
+        let Some(p) = n.as_plan() else { return Ok(None) };
+        if p.righttree.is_some() || !exprs(&p.targetlist, exec_quiet)? || !exprs(&p.qual, exec_quiet)? {
+            return Ok(None);
+        }
+        let nil = NodeList::nil();
+        let (own, lists): (Option<bool>, [&NodeList<'_>; 3]) = match n.node_tag() {
+            NodeTag::T_Result => {
+                let r = n.as_result().unwrap();
+                if !r.resconstantqual.map_or(Ok(true), |q| expr(q, exec_quiet))? {
+                    return Ok(None);
+                }
+                (None, [&nil; 3])
+            }
+            NodeTag::T_Agg => {
+                let a = n.as_agg().unwrap();
+                let plain = a.aggstrategy == types_pathnodes::AGG_PLAIN && a.aggsplit == types_pathnodes::AGGSPLIT_SIMPLE && a.numCols == 0;
+                if !plain || !a.groupingSets.is_nil() || !a.chain.is_nil() {
+                    return Ok(None);
+                }
+                (Some(true), [&nil; 3])
+            }
+            NodeTag::T_Limit => {
+                let l = n.as_limit().unwrap();
+                let konst = |c: Option<Node<'_>>| c.and_then(|c| c.as_const()).filter(|c| c.consttype == 20 && !c.constisnull).map(|c| c.constvalue.as_i64());
+                if l.limitOption != types_nodes::nodes_enums::LimitOption::LIMIT_OPTION_COUNT || l.limitOffset.is_some() && konst(l.limitOffset).is_none() {
+                    return Ok(None);
+                }
+                (konst(l.limitCount).is_some_and(|c| c <= 1).then_some(true), [&nil; 3])
+            }
+            NodeTag::T_SeqScan => (Some(false), [&nil; 3]),
+            NodeTag::T_IndexScan => {
+                let s = n.as_index_scan().unwrap();
+                (Some(false), [&s.indexqual, &s.indexqualorig, &s.indexorderby])
+            }
+            NodeTag::T_IndexOnlyScan => {
+                let s = n.as_index_only_scan().unwrap();
+                (Some(false), [&s.indexqual, &s.recheckqual, &s.indexorderby])
+            }
+            _ => return Ok(None),
+        };
+        for l in lists {
+            if !exprs(l, exec_quiet)? {
+                return Ok(None);
+            }
+        }
+        let input = match p.lefttree {
+            Some(l) => match walk(l, exec_quiet)? {
+                Some(one) => one,
+                None => return Ok(None),
+            },
+            None => true,
+        };
+        Ok(Some(own.unwrap_or(input)))
+    }
+    Ok(walk(plan, exec_quiet)?.is_some_and(|one| one || !one_row))
+}
+
+/// whether qual `node` raises on no row (the gate on §3 #7's reorder): Vars, Consts, extern Params and the
+/// PARAM_EXEC ones `exec_quiet` passes (D2875: never an InitPlan's), relabels, AND / OR / NOT, IS [NOT] NULL / TRUE,
+/// builtin leakproof functions and operators (and `op ANY (array)` over one) of quiet arguments, types_core::quiet's
+/// raise-free builtins, and a LIKE / ILIKE / regex against a constant pattern `quiet::pattern_quiet` passes; every call
+/// under a determinate input collation (`collation_determinate`).
+pub(crate) fn quiet_qual(node: Node<'_>, exec_quiet: &dyn Fn(i32) -> bool) -> PgResult<bool> {
+    use types_core::quiet;
+    let all = |l: &NodeList<'_>| -> PgResult<bool> {
+        for a in l.iter() {
+            if !quiet_qual(a, exec_quiet)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    };
+    let func = |f: u32| -> PgResult<bool> { Ok(f < 16384 && (quiet::numeric_cmp(f) || lsyscache::get_func_leakproof(f)?)) };
+    match node.node_tag() {
+        NodeTag::T_Var | NodeTag::T_Const => Ok(true),
+        NodeTag::T_Param => {
+            let p = node.as_param().unwrap();
+            Ok(p.paramkind != types_nodes::primnodes::ParamKind::PARAM_EXEC || exec_quiet(p.paramid))
+        }
+        NodeTag::T_RelabelType => quiet_qual(node.as_relabel_type().unwrap().arg, exec_quiet),
+        NodeTag::T_BoolExpr => all(&node.as_bool_expr().unwrap().args),
+        NodeTag::T_NullTest => node.as_null_test().unwrap().arg.map_or(Ok(true), |a| quiet_qual(a, exec_quiet)),
+        NodeTag::T_BooleanTest => node.as_boolean_test().unwrap().arg.map_or(Ok(true), |a| quiet_qual(a, exec_quiet)),
+        NodeTag::T_FuncExpr => {
+            let f = node.as_func_expr().unwrap();
+            Ok(func(f.funcid)? && collation_determinate(node)? && all(&f.args)?)
+        }
+        NodeTag::T_ScalarArrayOpExpr => {
+            let o = node.as_scalar_array_op_expr().unwrap();
+            let f = if o.opfuncid != 0 { o.opfuncid } else { lsyscache::get_opcode(o.opno)? };
+            Ok(func(f)? && collation_determinate(node)? && all(&o.args)?)
+        }
+        NodeTag::T_OpExpr => {
+            let o = node.as_op_expr().unwrap();
+            let f = if o.opfuncid != 0 { o.opfuncid } else { lsyscache::get_opcode(o.opno)? };
+            if !all(&o.args)? || !collation_determinate(node)? {
+                return Ok(false);
+            }
+            let Some(c) = o.args.iter().nth(1).and_then(|a| a.as_const()).filter(|c| !c.constisnull && !c.constbyval && c.constlen == -1) else { return func(f) };
+            // SAFETY: a by-reference varlena Const's image; only a plain inline one (short or 4-byte header) is read.
+            let b0 = unsafe { *(c.constvalue.as_usize() as *const u8) };
+            let plain = b0 != 0x01 && (b0 & 0x01 == 0x01 || b0 & 0x03 == 0);
+            match plain.then(|| quiet::pattern_quiet(f, crate::selfuncs::varlena_datum_payload(c.constvalue), o.inputcollid)) {
+                Some(Some(q)) => Ok(q),
+                Some(None) => func(f),
+                None => Ok(quiet::pattern_quiet(f, &[], 0).is_none() && func(f)?),
+            }
+        }
+        _ => Ok(false),
+    }
 }
 pub fn extract_actual_clauses<'mcx>(
     run: &PlannerRun<'mcx>,
@@ -718,12 +941,47 @@ fn create_seqscan_plan<'mcx>(
     }
 
     let mut plan = Node::build::<SeqScan<'mcx>>(mcx)?;
-    plan.cb_scan_cols = seqscan_consumed_cols(run, best_path, &qpqual)?;
+    (plan.cb_target_cols, plan.cb_scan_cols) = seqscan_consumed_cols(run, best_path, &qpqual)?;
+    plan.pgrc_merge = pgrc_merge_mark(run, best_path, scan_relid)?;
     plan.scan.plan.targetlist = tlist;
     plan.scan.plan.qual = qpqual;
     plan.scan.scanrelid = scan_relid;
     copy_generic_path_info(run, &mut plan.scan.plan, best_path);
     Ok(plan.seal())
+}
+
+// pgrust-only (SeqScan::pgrc_merge, D4469 road 2): a pgrcolumnar scan whose
+// path carries pathkeys (allpaths::create_pgrcolumnar_sorted_paths) is relied
+// on for its sorted_by order, which holds only inside each part: the mark is
+// the declared key's prefix through the last column a pathkey names (a
+// redundant pathkey drops a column, never the order the parts were sorted
+// in), and the scan merges the parts' sorted streams on it. Empty otherwise.
+fn pgrc_merge_mark<'mcx>(
+    run: &PlannerRun<'mcx>,
+    best_path: PathId,
+    scan_relid: u32,
+) -> PgResult<&'mcx [i16]> {
+    let base = run.root.path(best_path).base();
+    let rel = run.root.rel(base.parent);
+    let keys = &rel.pgrcolumnar_sorted_attnos;
+    if base.pathkeys.is_empty() || keys.is_empty() || rel.amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR == 0 {
+        return Ok(&[]);
+    }
+    let mut n = 0;
+    for pk in base.pathkeys.iter() {
+        let Some(ec) = pk.pk_eclass else { continue };
+        // a partition's (an appendrel child's) Var is a child member, kept under its relid
+        let at = equivclass::ec_members_iter(run, ec, &rel.relids).find_map(|em| {
+            let v = run.root.expr_node(run.root.em(em).em_expr).as_var()?;
+            (v.varno == scan_relid as i32 && v.varlevelsup == 0).then(|| keys.iter().position(|&a| a == v.varattno)).flatten()
+        });
+        match at {
+            Some(i) => n = n.max(i + 1),
+            // a pathkey over no key column of this scan: the path claims no order the merge keeps
+            None => return Ok(&[]),
+        }
+    }
+    mcx::slice_borrow_in(run.mcx, &keys[..n])
 }
 
 // pgrust-only (SeqScan::cb_scan_cols): the exact 1-based attno set this scan
@@ -737,7 +995,7 @@ fn seqscan_consumed_cols<'mcx>(
     run: &mut PlannerRun<'mcx>,
     best_path: PathId,
     qpqual: &NodeList<'mcx>,
-) -> PgResult<Option<types_nodes::bitmapset::Bitmapset<'mcx>>> {
+) -> PgResult<(Option<types_nodes::bitmapset::Bitmapset<'mcx>>, Option<types_nodes::bitmapset::Bitmapset<'mcx>>)> {
     use nodes_core::NodeWalker as _;
 
     let base = run.root.path(best_path).base();
@@ -779,10 +1037,11 @@ fn seqscan_consumed_cols<'mcx>(
             cx.visit(node)?;
         }
     }
+    let target = if cx.opaque { None } else { Some(cx.cols.clone_in(run.mcx)?) };
     for n in qpqual.iter() {
         cx.visit(n)?;
     }
-    Ok(if cx.opaque { None } else { Some(cx.cols) })
+    Ok((target, if cx.opaque { None } else { Some(cx.cols) }))
 }
 
 // create_samplescan_plan (createplan.c): parameterized paths get
@@ -1297,15 +1556,19 @@ fn create_worktablescan_plan<'mcx>(
         .iter()
         .find(|&&(rti, _)| rti == scan_relid as u32)
         .map_or(-1, |&(_, p)| p);
-    assert!(
-        wt_param >= 0,
-        "could not find param ID for CTE \"{}\"",
-        rte.ctename.unwrap_or("?")
-    );
+    if wt_param < 0 {
+        return Err(Box::new(types_error::PgError::error(format!(
+            "could not find param ID for CTE \"{}\"",
+            rte.ctename.unwrap_or("?")
+        ))));
+    }
     debug_assert!(run.root.path(best_path).base().param_info.is_none());
 
     let ordered = order_qual_clauses(run, &scan_clauses)?;
-    let qpqual = extract_actual_clauses(run, &ordered);
+    let mut qpqual = extract_actual_clauses(run, &ordered);
+    if run.root.path(best_path).base().param_info.is_some() {
+        qpqual = replace_nestloop_params_list(run, &qpqual)?;
+    }
 
     let mut plan = Node::build::<types_nodes::plannodes::WorkTableScan<'mcx>>(mcx)?;
     plan.scan.plan.targetlist = tlist;
@@ -1343,6 +1606,7 @@ fn create_ctescan_plan<'mcx>(
     plan.scan.scanrelid = scan_relid;
     plan.ctePlanId = plan_id;
     plan.cteParam = cte_param_id;
+    plan.gravity_fill = run.cte_subpath_infos.iter().any(|i| i.plan_id == plan_id && i.gravity_fill);
     copy_generic_path_info(run, &mut plan.scan.plan, best_path);
     Ok(plan.seal())
 }
@@ -1485,12 +1749,13 @@ fn create_indexscan_plan<'mcx>(
                 exprtype,
                 pathkey.pk_cmptype,
             )?;
-            assert!(
-                sortop != 0,
-                "missing operator {}({exprtype},{exprtype}) in opfamily {}",
-                pathkey.pk_cmptype,
-                pathkey.pk_opfamily
-            );
+            if sortop == 0 {
+                // createplan.c create_indexscan_plan: elog(ERROR), never a panic
+                return Err(Box::new(types_error::PgError::error(format!(
+                    "missing operator {}({exprtype},{exprtype}) in opfamily {}",
+                    pathkey.pk_cmptype, pathkey.pk_opfamily
+                ))));
+            }
             indexorderbyops.lappend(mcx, sortop)?;
         }
     }
@@ -1751,7 +2016,7 @@ fn create_bitmap_subplan<'mcx>(
                 ip.indexselectivity,
                 ip.path.parent,
                 ip.path.parallel_safe,
-                ip.indexinfo.as_ref().expect("indexinfo set").indpred.clone(),
+                ip.indexinfo.as_ref().expect("indexinfo set").indpred,
             ),
             other => panic!(
                 "create_bitmap_subplan (createplan.c): pathtype {}",
@@ -2397,7 +2662,7 @@ fn create_group_result_plan<'mcx>(
     // order_qual_clauses over bare clauses: stable sort by per-tuple cost
     // (security_level is 0 for bare quals).
     let mut items: mcx::PgVec<'_, (types_pathnodes::NodeId, f64)> = mcx::PgVec::new_in(run.mcx);
-    items.reserve(quals.len());
+    ::mcx::pgvec_reserve(&mut items, quals.len())?;
     for &id in quals.iter() {
         let node = *run.root.expr_node(id);
         let cost = crate::costsize::cost_qual_eval_node(Some(&mut *run), node)?;
@@ -2478,7 +2743,7 @@ fn create_group_plan<'mcx>(run: &mut PlannerRun<'mcx>, path_id: PathId) -> PgRes
 }
 
 fn create_agg_plan<'mcx>(run: &mut PlannerRun<'mcx>, path_id: PathId) -> PgResult<Node<'mcx>> {
-    let (subpath_id, target_id, aggstrategy, aggsplit, num_groups, transition_space, qual_ids) =
+    let (subpath_id, target_id, aggstrategy, aggsplit, num_groups, transition_space, qual_ids, distinct_hashed, gravity_rewrite) =
         match run.root.path(path_id) {
             PathNode::AggPath(ap) => (
                 ap.subpath.expect("AggPath has a subpath"),
@@ -2488,6 +2753,8 @@ fn create_agg_plan<'mcx>(run: &mut PlannerRun<'mcx>, path_id: PathId) -> PgResul
                 ap.numGroups,
                 ap.transitionSpace,
                 crate::relnode::pgvec_clone_shallow(run.mcx, &ap.qual),
+                ap.distinctHashed,
+                ap.gravity_rewrite,
             ),
             _ => unreachable!(),
         };
@@ -2541,8 +2808,39 @@ fn create_agg_plan<'mcx>(run: &mut PlannerRun<'mcx>, path_id: PathId) -> PgResul
     plan.grpCollations = mcx::vec_borrow_in(run.mcx, grp_collations)?;
     plan.numGroups = clamp_cardinality_to_long(num_groups);
     plan.transitionSpace = transition_space;
+    plan.distinctHashed = distinct_hashed;
+    plan.gravity_rewrite = gravity_rewrite;
+    plan.gravity_finals = crate::agg_algebra::finals_of(run, &plan.plan.targetlist)?; // gravity §3 #8: finals.cse's mark
+    plan.gravity_groups_default = run.root.rel(run.root.path(path_id).base().parent).gravity_groups_default; // DR-7
+    if distinct_hashed {
+        clear_aggpresorted(&plan.plan.targetlist)?;
+        clear_aggpresorted(&plan.plan.qual)?;
+    }
     copy_generic_path_info(run, &mut plan.plan, path_id);
     Ok(plan.seal())
+}
+
+fn clear_aggpresorted(list: &NodeList<'_>) -> PgResult<()> {
+    struct Clear;
+    impl<'mcx> nodes_core::NodeWalker<'mcx> for Clear {
+        fn visit(&mut self, n: Node<'mcx>) -> PgResult<bool> {
+            if n.node_tag() == NodeTag::T_Aggref {
+                // SAFETY: the planner exclusively owns the parse tree during
+                // planning (C scribbles aggpresorted through shared pointers);
+                // no reference derived from this node is live here.
+                unsafe {
+                    n.with_mut::<types_nodes::primnodes::Aggref, _>(|a| a.aggpresorted = false)
+                }
+                .expect("Aggref");
+            }
+            nodes_core::expression_tree_walker(n, self)
+        }
+    }
+    use nodes_core::NodeWalker as _;
+    for n in list {
+        Clear.visit(n)?;
+    }
+    Ok(())
 }
 
 
@@ -2778,7 +3076,7 @@ fn create_minmaxagg_plan<'mcx>(
         let sub_tlist = core::mem::replace(&mut run.processed_tlist, saved_tlist);
         crate::subselect::ss_make_initplan_from_plan(
             run,
-            crate::run::SubrootState { root: sub_root, processed_tlist: sub_tlist, gset_data: None },
+            crate::run::SubrootState { root: sub_root, processed_tlist: sub_tlist, gset_data: None, swapped_up: None },
             limit_plan,
             mminfo.param,
         )?;
@@ -2892,6 +3190,7 @@ fn create_groupingsets_plan<'mcx>(
             _ => unreachable!(),
         };
     debug_assert!(!rollups.is_empty());
+    let groups_default = run.root.rel(run.root.path(path_id).base().parent).gravity_groups_default;
 
     let subplan = create_plan_recurse(run, subpath_id, CP_LABEL_TLIST)?;
     let subplan_tlist =
@@ -2902,8 +3201,8 @@ fn create_groupingsets_plan<'mcx>(
         let gc = run.root.expr_node(gc_id).as_sort_group_clause().expect("group clause cell");
         maxref = maxref.max(gc.tleSortGroupRef);
     }
-    let mut grouping_map: mcx::PgVec<'mcx, i16> = mcx::PgVec::new_in(mcx);
-    grouping_map.resize(maxref as usize + 1, 0);
+    let mut grouping_map: mcx::PgVec<'mcx, i16> = ::mcx::pgvec_exact_in(mcx, maxref as usize + 1)?;
+    ::mcx::pgvec_resize(&mut grouping_map, maxref as usize + 1, 0)?;
     for i in 0..run.root.processed_groupClause.len() {
         let gc_id = run.root.processed_groupClause[i];
         let sgref = run
@@ -2915,7 +3214,7 @@ fn create_groupingsets_plan<'mcx>(
         grouping_map[sgref as usize] = sortgroupref_tle(sgref, &subplan_tlist).resno;
     }
     debug_assert!(run.root.grouping_map.is_empty());
-    run.root.grouping_map = grouping_map;
+    run.root.grouping_map = ::mcx::freeze(grouping_map);
 
     let gsets_node_list = |gsets: &[mcx::PgVec<'mcx, i32>]| -> PgResult<NodeList<'mcx>> {
         let mut out = NodeList::nil();
@@ -2981,6 +3280,7 @@ fn create_groupingsets_plan<'mcx>(
             agg.groupingSets = gsets_node_list(&rollup.gsets)?;
             agg.numGroups = clamp_cardinality_to_long(rollup.numGroups);
             agg.transitionSpace = transition_space;
+            agg.gravity_groups_default = groups_default;
             // C strips the vestigial Sort after make_agg.
             // SAFETY: sort_plan was freshly built above; no other handle.
             if let Some(sp) = sort_plan {
@@ -3018,6 +3318,7 @@ fn create_groupingsets_plan<'mcx>(
     plan.chain = chain;
     plan.numGroups = clamp_cardinality_to_long(rollup.numGroups);
     plan.transitionSpace = transition_space;
+    plan.gravity_groups_default = groups_default;
     copy_generic_path_info(run, &mut plan.plan, path_id);
     Ok(plan.seal())
 }
@@ -3171,12 +3472,16 @@ fn create_upper_unique_plan<'mcx>(
             // A volatile EC came from an ORDER BY clause: match that same
             // targetlist entry via its sortref (get_sortgroupref_tle).
             let sortref = run.root.ec(ec).ec_sortref;
-            assert!(sortref != 0, "volatile EquivalenceClass has no sortref");
-            let tle = tlist
-                .iter()
-                .map(|n| n.as_target_entry().expect("TargetEntry"))
-                .find(|tle| tle.ressortgroupref == sortref)
-                .unwrap_or_else(|| panic!("ORDER/GROUP BY expression not found in targetlist"));
+            if sortref == 0 {
+                return Err(Box::new(types_error::PgError::error("volatile EquivalenceClass has no sortref")));
+            }
+            let tle = unique_plan_lookup(
+                tlist
+                    .iter()
+                    .map(|n| n.as_target_entry().expect("TargetEntry"))
+                    .find(|tle| tle.ressortgroupref == sortref),
+                || "ORDER/GROUP BY expression not found in targetlist".into(),
+            )?;
             debug_assert_eq!(run.root.ec(ec).ec_members.len(), 1);
             let em_id = run.root.ec(ec).ec_members[0];
             found = Some((tle.resno, run.root.em(em_id).em_datatype));
@@ -3190,7 +3495,7 @@ fn create_upper_unique_plan<'mcx>(
             }
         }
         let Some((resno, pk_datatype)) = found else {
-            panic!("could not find pathkey item to sort");
+            return Err(Box::new(types_error::PgError::error("could not find pathkey item to sort")));
         };
         let eqop = lsyscache::amop::get_opfamily_member_for_cmptype(
             pathkey.pk_opfamily,
@@ -3198,14 +3503,15 @@ fn create_upper_unique_plan<'mcx>(
             pk_datatype,
             types_pathnodes::COMPARE_EQ,
         )?;
-        assert!(
-            eqop != 0,
-            "missing operator {}({},{}) in opfamily {}",
-            types_pathnodes::COMPARE_EQ,
-            pk_datatype,
-            pk_datatype,
-            pathkey.pk_opfamily
-        );
+        if eqop == 0 {
+            return Err(Box::new(types_error::PgError::error(format!(
+                "missing operator {}({},{}) in opfamily {}",
+                types_pathnodes::COMPARE_EQ,
+                pk_datatype,
+                pk_datatype,
+                pathkey.pk_opfamily
+            ))));
+        }
         uniq_col_idx.push(resno);
         uniq_operators.push(eqop);
         uniq_collations.push(run.root.ec(ec).ec_collation);
@@ -3334,11 +3640,12 @@ fn create_sort_plan<'mcx>(
     path_id: PathId,
     flags: i32,
 ) -> PgResult<Node<'mcx>> {
-    let (subpath_id, pathkeys) = {
+    let (subpath_id, pathkeys, gravity_rewrite) = {
         let PathNode::SortPath(sp) = run.root.path(path_id) else { unreachable!() };
         (
             sp.subpath.expect("SortPath has a subpath"),
             crate::relnode::pgvec_clone_shallow(run.mcx, &sp.path.pathkeys),
+            sp.gravity_rewrite,
         )
     };
     // Sort can't project: request a tlist without excess columns.
@@ -3348,6 +3655,11 @@ fn create_sort_plan<'mcx>(
     // top_parent_relids, which upper rels never set).
     let relids = sort_relids_for_child_ec(run, path_id, subpath_id);
     let plan = make_sort_from_pathkeys(run, subplan, &pathkeys, &relids)?;
+    if gravity_rewrite.is_some() {
+        // SAFETY: the node was built above and no other reference is live.
+        unsafe { plan.with_mut::<types_nodes::plannodes::Sort, _>(|s| s.gravity_rewrite = gravity_rewrite) }
+            .expect("make_sort_from_pathkeys builds a Sort");
+    }
     copy_generic_path_info_node(run, plan, path_id);
     Ok(plan)
 }
@@ -3595,14 +3907,16 @@ fn prepare_sort_from_pathkeys<'mcx>(
             // A volatile EC came from an ORDER BY clause: match that same
             // targetlist entry via its sortref (get_sortgroupref_tle).
             let sortref = run.root.ec(ec).ec_sortref;
-            assert!(sortref != 0, "volatile EquivalenceClass has no sortref");
-            let tle = tlist
-                .iter()
-                .map(|n| n.as_target_entry().expect("TargetEntry"))
-                .find(|tle| tle.ressortgroupref == sortref)
-                .unwrap_or_else(|| {
-                    panic!("ORDER/GROUP BY expression not found in targetlist")
-                });
+            if sortref == 0 {
+                return Err(Box::new(types_error::PgError::error("volatile EquivalenceClass has no sortref")));
+            }
+            let tle = unique_plan_lookup(
+                tlist
+                    .iter()
+                    .map(|n| n.as_target_entry().expect("TargetEntry"))
+                    .find(|tle| tle.ressortgroupref == sortref),
+                || "ORDER/GROUP BY expression not found in targetlist".into(),
+            )?;
             debug_assert_eq!(run.root.ec(ec).ec_members.len(), 1);
             let em_id = run.root.ec(ec).ec_members[0];
             found = Some((tle.resno, run.root.em(em_id).em_datatype));
@@ -3630,8 +3944,10 @@ fn prepare_sort_from_pathkeys<'mcx>(
         let (resno, pk_datatype) = match found {
             Some(f) => f,
             None => {
-                let em_id = find_computable_ec_member_tlist(run, ec, &tlist, relids)?
-                    .unwrap_or_else(|| panic!("could not find pathkey item to sort"));
+                let em_id = unique_plan_lookup(
+                    find_computable_ec_member_tlist(run, ec, &tlist, relids)?,
+                    || "could not find pathkey item to sort".into(),
+                )?;
                 let pk_datatype = run.root.em(em_id).em_datatype;
                 let em_expr = *run.root.expr_node(run.root.em(em_id).em_expr);
                 if !adjust_tlist_in_place {
@@ -3656,14 +3972,14 @@ fn prepare_sort_from_pathkeys<'mcx>(
             pk_datatype,
             pathkey.pk_cmptype,
         )?;
-        assert!(
-            sortop != 0,
-            "missing operator {}({},{}) in opfamily {}",
-            pathkey.pk_cmptype,
-            pk_datatype,
-            pk_datatype,
-            pathkey.pk_opfamily
-        );
+        if sortop == 0 {
+            // createplan.c prepare_sort_from_pathkeys: elog(ERROR) (D2169: a btree opfamily whose cross-type
+            // equality the merge join used has no "<" for this type), never a panic
+            return Err(Box::new(types_error::PgError::error(format!(
+                "missing operator {}({},{}) in opfamily {}",
+                pathkey.pk_cmptype, pk_datatype, pk_datatype, pathkey.pk_opfamily
+            ))));
+        }
         sort_col_idx.push(resno);
         sort_operators.push(sortop);
         collations.push(run.root.ec(ec).ec_collation);
@@ -4640,8 +4956,11 @@ fn create_mergejoin_plan<'mcx>(
             let inner = inner_plan.as_plan().expect("inner plan");
             mat.plan.disabled_nodes = inner.disabled_nodes;
             mat.plan.startup_cost = inner.startup_cost;
-            mat.plan.total_cost =
-                inner.total_cost + crate::gucs::cpu_operator_cost() * inner.plan_rows;
+            mat.plan.total_cost = crate::fma_sites::mat_total(
+                inner.total_cost,
+                crate::gucs::cpu_operator_cost(),
+                inner.plan_rows,
+            );
             mat.plan.plan_rows = inner.plan_rows;
             mat.plan.plan_width = inner.plan_width;
             mat.plan.parallel_aware = false;
@@ -4920,6 +5239,10 @@ fn create_append_plan<'mcx>(
 
     let tlist_was_changed =
         node_cols.as_ref().is_some_and(|c| c.tlist.len() != orig_tlist_len);
+    let mark = match &node_cols {
+        Some(c) => Some((mcx::slice_borrow_in(mcx, &c.sort_col_idx)?, mcx::slice_borrow_in(mcx, &c.sort_operators)?, mcx::slice_borrow_in(mcx, &c.nulls_first)?)),
+        None => None,
+    };
     let node_tlist = match node_cols {
         Some(c) => c.tlist,
         None => tlist,
@@ -4932,6 +5255,11 @@ fn create_append_plan<'mcx>(
     plan.nasyncplans = nasyncplans;
     plan.first_partial_plan = first_partial;
     plan.part_prune_index = part_prune_index;
+    if let Some((idx, ops, nf)) = mark {
+        plan.gravity_sort_col_idx = idx;
+        plan.gravity_sort_operators = ops;
+        plan.gravity_nulls_first = nf;
+    }
     copy_generic_path_info(run, &mut plan.plan, path_id);
     let plan = plan.seal();
     // Strip prepare_sort_from_pathkeys' added sort columns when the caller

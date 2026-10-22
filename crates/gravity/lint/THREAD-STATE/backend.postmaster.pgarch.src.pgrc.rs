@@ -1,0 +1,1 @@
+backend/postmaster/pgarch/src/pgrc.rs	ARCHIVED	pgrc	key:the WAL segment being archived (archive_segment_files_in starts a new list when it changes)	thread	WR L4: the archiver's current segment and the spool entry names already archived for it, so a retried segment skips them; bounded by one segment's spool entries; archiver thread only

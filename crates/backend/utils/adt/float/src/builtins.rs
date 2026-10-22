@@ -11,7 +11,7 @@ use ::types_core::Oid;
 use ::types_error::PgResult;
 use ::types_fmgr::{
     byref_result, varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
-    PGFunction,
+    OutInto, PGFunction, OUT_CHARS_FLOAT,
 };
 
 // C float{4,8}recv/send bodies: pq_getmsgfloat{4,8} (advances the buffer
@@ -42,6 +42,7 @@ pub fn fc_float8send(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     pqformat::pq_sendfloat8(&mut b, a.value.as_f64())?;
     Ok(varlena_result(pqformat::pq_endtypsend(b)))
 }
+
 
 fn in_arg<'a>(fcinfo: &'a Fcinfo) -> Cow<'a, str> {
     // SAFETY: catalog arg 0 of the in-functions is cstring (typlen -2).
@@ -75,20 +76,14 @@ pub fn fc_float8in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     )?))
 }
 
-pub fn fc_float4out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let [a] = fcinfo.args_n::<1>();
-    let v = a.value.as_f32();
-    let mut buf = [0u8; crate::MAXDOUBLEWIDTH];
-    let len = crate::float4out(v, &mut buf);
-    Ok(::types_fmgr::cstring_scratch(flinfo, "float4out", &buf[..len]))
+pub fn fc_float4out(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let v = fcinfo.args_n::<1>()[0].value.as_f32();
+    ::types_fmgr::out_cstring(fcinfo, crate::MAXDOUBLEWIDTH + 1, |buf| crate::float4out(v, buf))
 }
 
-pub fn fc_float8out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let [a] = fcinfo.args_n::<1>();
-    let v = a.value.as_f64();
-    let mut buf = [0u8; crate::MAXDOUBLEWIDTH];
-    let len = crate::float8out(v, &mut buf);
-    Ok(::types_fmgr::cstring_scratch(flinfo, "float8out", &buf[..len]))
+pub fn fc_float8out(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let v = fcinfo.args_n::<1>()[0].value.as_f64();
+    ::types_fmgr::out_cstring(fcinfo, crate::MAXDOUBLEWIDTH + 1, |buf| crate::float8out(v, buf))
 }
 
 pub fn fc_dpi(_flinfo: Option<&mut FmgrInfo>, _fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -629,4 +624,21 @@ pub const FLOAT_BUILTINS: &[FmgrBuiltin] = &[
     b(6220, "derfc", 1, fc_derfc),
     b(6383, "dgamma", 1, fc_dgamma),
     b(6384, "dlgamma", 1, fc_dlgamma),
+];
+
+fn float_bound(_: Datum) -> Option<usize> {
+    Some(crate::MAXDOUBLEWIDTH)
+}
+unsafe fn float4_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: the caller's MAXDOUBLEWIDTH writable bytes (float_bound).
+    Ok(crate::float4out(v.as_f32(), unsafe { core::slice::from_raw_parts_mut(dst, crate::MAXDOUBLEWIDTH) }))
+}
+unsafe fn float8_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: as float4_render.
+    Ok(crate::float8out(v.as_f64(), unsafe { core::slice::from_raw_parts_mut(dst, crate::MAXDOUBLEWIDTH) }))
+}
+
+pub static FLOAT_OUT_INTO: &[OutInto] = &[
+    OutInto { foid: 201, bound: float_bound, render: float4_render, chars: Some(OUT_CHARS_FLOAT) },
+    OutInto { foid: 215, bound: float_bound, render: float8_render, chars: Some(OUT_CHARS_FLOAT) },
 ];

@@ -1,0 +1,10 @@
+-- regress-full-rangefuncs-032
+-- SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN rngfunc_sql(11,13) ON (r+i)<100;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:11, c23:13)]
+  project (1=v1.1, 2=fn1574(c2205:40752))
+  outs 1=w4:val 2=w8:val
+mapped: FunctionScan

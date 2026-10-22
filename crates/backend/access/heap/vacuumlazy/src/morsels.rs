@@ -46,6 +46,7 @@
 //! zero-launch) resume the serial cursor machine at `resume_block`.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -101,7 +102,7 @@ fn flag_enabled() -> bool {
 }
 
 /// M4.1 driver-swap switch (scratchpad/night/all-morsels-plan.md Track 3
-/// item 1), FLIPPED-KILL since the train-40 flip (regression: wall 1.009
+/// item 1), FLIPPED-KILL since the train-40 flip (GL-M41-3: wall 1.009
 /// parity 2-idx / 0.906 WIN 4-idx, OLTP flat, reclaim 15ms): the POOL
 /// channel — PGPROC-leasing runtime pool workers engaged through the M2
 /// inc-2 bound-descriptor gate at QoS class Utility — is the driver of
@@ -323,6 +324,12 @@ pub(crate) fn scan_rounds(vacrel: &mut LVRelState<'_, '_>, k: i32) -> PgResult<S
     let mut clock = ScanPhaseClock::new();
     let floor = min_granules().max(2 * k.max(1) as u64);
 
+    update_vacuum_error_info(
+        &vacrel.folds.err,
+        VacErrPhase::ScanHeap,
+        resume_block,
+        ::types_tuple::InvalidOffsetNumber,
+    );
     loop {
         // Failsafe between rounds (C cadence; §5.5). The precheck in
         // heap_vacuum_rel already ran; a fire here (or in a previous round)
@@ -466,11 +473,21 @@ pub(crate) fn scan_rounds(vacrel: &mut LVRelState<'_, '_>, k: i32) -> PgResult<S
         let (dead_runs, deferred) = round_drain_plan(&locals, resume_block);
 
         // Merge the per-worker dead-TID runs into the round authority store
-        // (the ONE serial O(dead TIDs) step per round — doc §3.2).
+        // (the ONE serial O(dead TIDs) step per round — doc §3.2), in block
+        // order with the deferred blocking-cleanup pages (§5.3), replaying
+        // C's per-block memory check so index passes fall where C's do.
         let t_merge = std::time::Instant::now();
-        {
-            let super::LVRelState { dead_items, dead_items_info, .. } = &mut *vacrel;
-            for run in dead_runs {
+        let mut deferred = deferred.into_iter().peekable();
+        vacrel.unmerged_lpdead = dead_runs
+            .iter()
+            .fold((0, 0), |(i, p), r| (i + r.offsets.len() as u64, p + 1));
+        for run in dead_runs {
+            while let Some(blk) = deferred.next_if(|&b| b < run.block) {
+                leader_deferred_block(vacrel, &source, blk)?;
+                vacuum_if_over_budget(vacrel, blk, &mut next_fsm)?;
+            }
+            {
+                let super::LVRelState { dead_items, dead_items_info, .. } = &mut *vacrel;
                 dead_items_add(
                     dead_items.as_mut().expect("dead_items live during scan"),
                     dead_items_info,
@@ -478,6 +495,13 @@ pub(crate) fn scan_rounds(vacrel: &mut LVRelState<'_, '_>, k: i32) -> PgResult<S
                     &run.offsets,
                 )?;
             }
+            vacrel.unmerged_lpdead.0 -= run.offsets.len() as u64;
+            vacrel.unmerged_lpdead.1 -= 1;
+            vacuum_if_over_budget(vacrel, run.block, &mut next_fsm)?;
+        }
+        for blk in deferred {
+            leader_deferred_block(vacrel, &source, blk)?;
+            vacuum_if_over_budget(vacrel, blk, &mut next_fsm)?;
         }
         clock.merge_ns += t_merge.elapsed().as_nanos() as u64;
 
@@ -527,15 +551,6 @@ pub(crate) fn scan_rounds(vacrel: &mut LVRelState<'_, '_>, k: i32) -> PgResult<S
             ));
         }
 
-        // Deferred blocking-cleanup pages (§5.3): leader-serial, BEFORE the
-        // round's INDEX phase, so the round's dead set is complete. Already
-        // clamped below resume_block by round_drain_plan: a deferred page at
-        // or above a coverage-trip rewind stays deferred to the serial
-        // re-scan (which takes the blocking cleanup wait itself — #66).
-        for blk in deferred {
-            leader_deferred_block(vacrel, &source, blk)?;
-        }
-
         // Exact round frontier (progress rule: min contiguous, final exact).
         if resume_g > 0 {
             pgstat_progress_update_param(
@@ -580,15 +595,36 @@ pub(crate) fn scan_rounds(vacrel: &mut LVRelState<'_, '_>, k: i32) -> PgResult<S
             return Ok(ScanHandoff::Resume { block: vacrel.rel_pages, next_fsm });
         }
 
-        // Quiesce trip: C's suspension body (vacuumlazy.c:1269-1308).
-        vacrel.consider_bypass_optimization = false;
-        if vacrel.dead_items_info.num_items > 0 {
-            lazy_vacuum(vacrel)?;
-            freespace::FreeSpaceMapVacuumRange(vacrel.rel, next_fsm, resume_block)?;
-            next_fsm = resume_block;
-            pgstat_progress_update_param(PROGRESS_VACUUM_PHASE, PROGRESS_VACUUM_PHASE_SCAN_HEAP);
-        }
+        // Quiesce trip: the helpers' run buffers hit their bound. The dead
+        // items stay: index passes happen only where the merge found C's
+        // memory check true.
     }
+}
+
+/// vacuumlazy.c:1278-1308, evaluated after processed block `blkno` (C's
+/// check at the top of the next iteration, even past the last block).
+fn vacuum_if_over_budget(
+    vacrel: &mut LVRelState<'_, '_>,
+    blkno: BlockNumber,
+    next_fsm: &mut BlockNumber,
+) -> PgResult<()> {
+    if vacrel.dead_items_info.num_items > 0
+        && vacrel.dead_items.as_ref().expect("dead_items live during scan").memory_usage()
+            > vacrel.dead_items_info.max_bytes
+    {
+        vacrel.consider_bypass_optimization = false;
+        lazy_vacuum(vacrel)?;
+        freespace::FreeSpaceMapVacuumRange(vacrel.rel, *next_fsm, blkno + 1)?;
+        *next_fsm = blkno;
+        pgstat_progress_update_param(PROGRESS_VACUUM_PHASE, PROGRESS_VACUUM_PHASE_SCAN_HEAP);
+        update_vacuum_error_info(
+            &vacrel.folds.err,
+            VacErrPhase::ScanHeap,
+            blkno,
+            ::types_tuple::InvalidOffsetNumber,
+        );
+    }
+    Ok(())
 }
 
 /// The leader's round drain plan (§3.2 merge + §5.3 deferred), clamped
@@ -673,6 +709,7 @@ fn leader_deferred_block(
         folds,
         dead_items,
         dead_items_info,
+        keep_items,
         ..
     } = &mut *vacrel;
     let env = ScanEnv {
@@ -681,6 +718,7 @@ fn leader_deferred_block(
         vistest: *vistest,
         aggressive: *aggressive,
         nindexes: *nindexes,
+        mark_unused_now: super::mark_unused_now(*nindexes, *keep_items),
     };
     let mut sink = |blkno: BlockNumber, offsets: &[OffsetNumber]| {
         dead_items_add(dead_items.as_mut().unwrap(), dead_items_info, blkno, offsets)
@@ -782,10 +820,13 @@ pub(crate) struct VacScanShared {
     cutoffs: ::tableam_vocab::VacuumCutoffs,
     aggressive: bool,
     nindexes: usize,
+    keep_items: bool,
     do_index_vacuuming: bool,
     ring_nbuffers: i32,
     /// C's shared cost-balance discipline, verbatim (decision 2 / doc §7).
     cost: Arc<VacuumSharedCost>,
+    delay_ns: Arc<AtomicI64>,
+    notices: parallel::PoolNoticeRelay,
     /// §3.3 round quiesce (claim-boundary trip; byte accounting per block).
     quiesce: QuiesceState,
     /// §5.5 failsafe latch: set by the parked leader on C's cadence;
@@ -806,6 +847,7 @@ pub(crate) struct VacScanShared {
     error: Mutex<Option<Box<PgError>>>,
     failed: AtomicBool,
     locals: Vec<Mutex<Option<VacScanLocal>>>,
+    usage: ScanUsage,
     eager: EagerScanShared,
     eager_verbose: bool,
     eager_dbname: String,
@@ -834,12 +876,15 @@ impl VacScanShared {
             cutoffs: vacrel.cutoffs,
             aggressive: vacrel.aggressive,
             nindexes: vacrel.nindexes,
+            keep_items: vacrel.keep_items,
             do_index_vacuuming: vacrel.do_index_vacuuming,
             ring_nbuffers: bufmgr_seams::get_access_strategy_buffer_count::call(&vacrel.bstrategy),
             cost: Arc::new(VacuumSharedCost {
                 cost_balance: std::sync::atomic::AtomicU32::new(0),
                 active_nworkers: std::sync::atomic::AtomicU32::new(0),
             }),
+            delay_ns: Arc::new(AtomicI64::new(0)),
+            notices: parallel::PoolNoticeRelay::default(),
             quiesce: QuiesceState::new(vacrel.dead_items_info.max_bytes as u64),
             failsafe: AtomicBool::new(false),
             scanned_pages: AtomicU64::new(vacrel.folds.counters.scanned_pages),
@@ -851,8 +896,10 @@ impl VacScanShared {
             error: Mutex::new(None),
             failed: AtomicBool::new(false),
             locals: (0..runtime::MAX_EXTERNAL_LANES).map(|_| Mutex::new(None)).collect(),
+            usage: ScanUsage::default(),
             eager: EagerScanShared::new(
                 vacrel.eager_scan_remaining_successes,
+                vacrel.eager_scan_orig_success_limit,
                 vacrel.eager_scan_remaining_fails,
                 vacrel.eager_scan_max_fails_per_region,
                 vacrel.next_eager_scan_region_start,
@@ -930,7 +977,9 @@ impl runtime::TaskSetWork for VacScanShared {
             return;
         }
         // unwind-ok: worker-containment
-        let r = catch_unwind(AssertUnwindSafe(|| self.morsel_body(worker, range)));
+        let r = self
+            .notices
+            .capture(|| catch_unwind(AssertUnwindSafe(|| self.morsel_body(worker, range))));
         match r {
             Ok(Ok(())) => {}
             Ok(Err(e)) => self.fail(e),
@@ -941,8 +990,8 @@ impl runtime::TaskSetWork for VacScanShared {
                 // thread must not claim the next morsel, and WAL runs
                 // beneath this body (the fsync law: a demoted PANIC is
                 // "retry and trust").
-                if parallel::standing::is_exit_unwind(&*unwind) {
-                    std::panic::resume_unwind(unwind);
+                if !parallel::standing::is_structured_error(&*unwind) {
+                    parallel::standing::resume_exit_or_abort(unwind);
                 }
             }
         }
@@ -956,6 +1005,17 @@ impl runtime::TaskSetWork for VacScanShared {
 }
 
 impl VacScanShared {
+    fn flush_helper_reports(&self) {
+        self.notices.emit_as_leader_reports();
+        let ns = self.delay_ns.swap(0, Ordering::Relaxed);
+        if ns > 0 {
+            ::backend_progress::pgstat_progress_incr_param(
+                ::backend_progress::progress::PROGRESS_VACUUM_DELAY_TIME,
+                ns,
+            );
+        }
+    }
+
     fn morsel_body(&self, worker: usize, range: runtime::MorselRange) -> PgResult<()> {
         let p = WORKER_CX.with(|c| c.get());
         if p.is_null() {
@@ -1142,6 +1202,7 @@ impl VacScanShared {
                 vistest: wcx.vistest,
                 aggressive: self.aggressive,
                 nindexes: self.nindexes,
+                mark_unused_now: super::mark_unused_now(self.nindexes, self.keep_items),
             };
             let quiesce = &self.quiesce;
             let num_dead = &self.num_dead_items;
@@ -1262,11 +1323,11 @@ fn vacuum_scan_worker_main(pshared: &parallel::ParallelShared) -> PgResult<()> {
         Ok(o) => o,
         Err(unwind) => {
             shared.fail(PgError::new(ERROR, "vacuum scan helper panicked").into());
-            if parallel::standing::is_exit_unwind(&*unwind) {
+            if !parallel::standing::is_structured_error(&*unwind) {
                 latch::SetLatch(::types_storage::latch::LatchHandle::proc(
                     pshared.parallel_leader_proc_number,
                 ));
-                std::panic::resume_unwind(unwind);
+                parallel::standing::resume_exit_or_abort(unwind);
             }
             Err(Box::new(PgError::new(ERROR, "vacuum scan worker failed (see leader error)")))
         }
@@ -1278,7 +1339,31 @@ fn vacuum_scan_worker_main(pshared: &parallel::ParallelShared) -> PgResult<()> {
     outcome
 }
 
+#[derive(Default)]
+struct ScanUsage(pgsync::Mutex<(types_core::instrument::BufferUsage, types_core::instrument::WalUsage)>);
+
+impl ScanUsage {
+    fn capture<T>(&self, work: impl FnOnce() -> T) -> T {
+        let save = instrument::instr_start_parallel_query();
+        let result = work();
+        let (buf, wal) = instrument::instr_end_parallel_query(&save);
+        let mut usage = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        instrument::buffer_usage_add(&mut usage.0, &buf);
+        instrument::wal_usage_add(&mut usage.1, &wal);
+        result
+    }
+
+    fn accumulate(&self) {
+        let (buf, wal) = core::mem::take(&mut *self.0.lock().unwrap_or_else(|p| p.into_inner()));
+        instrument::instr_accum_parallel_query(&buf, &wal);
+    }
+}
+
 fn worker_drive(shared: &Arc<VacScanShared>) -> PgResult<()> {
+    shared.usage.capture(|| worker_drive_inner(shared))
+}
+
+fn worker_drive_inner(shared: &Arc<VacScanShared>) -> PgResult<()> {
     let Some(rg) = shared.rg.get().and_then(|w| w.upgrade()) else {
         shared.refused.fetch_add(1, Ordering::SeqCst);
         return Ok(());
@@ -1323,6 +1408,7 @@ fn worker_drive(shared: &Arc<VacScanShared>) -> PgResult<()> {
     g::SetVacuumCostBalance(0);
     set_vacuum_cost_balance_local(0);
     set_vacuum_shared_cost(Some(Arc::clone(&shared.cost)));
+    let _delay_sink = ::commands_vacuum::WorkerDelaySink::install(Arc::clone(&shared.delay_ns));
     shared.cost.active_nworkers.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     let bstrategy = bufmgr_seams::get_access_strategy_with_size::call(
@@ -1472,8 +1558,8 @@ fn vacuum_scan_pool_driver(shared: &parallel::ParallelShared) {
             latch::SetLatch(::types_storage::latch::LatchHandle::proc(
                 shared.parallel_leader_proc_number,
             ));
-            if parallel::standing::is_exit_unwind(&*unwind) {
-                std::panic::resume_unwind(unwind);
+            if !parallel::standing::is_structured_error(&*unwind) {
+                parallel::standing::resume_exit_or_abort(unwind);
             }
             return;
         }
@@ -1630,6 +1716,14 @@ struct LeaderCadence {
     last_failsafe_page: u64,
     progress_base_items: i64,
     progress_base_bytes: u64,
+    err: Rc<VacErrInfo>,
+}
+
+// A helper's error already carries its own "while scanning block" line; the
+// leader's frame must not add a second one (C scans in one process).
+pub(crate) fn leader_rethrow(err: &VacErrInfo, e: Box<PgError>) -> Box<PgError> {
+    err.phase.set(VacErrPhase::Unknown);
+    e
 }
 
 impl LeaderCadence {
@@ -1642,16 +1736,18 @@ impl LeaderCadence {
                 .as_ref()
                 .map(|d| d.memory_usage())
                 .unwrap_or(0) as u64,
+            err: Rc::clone(&vacrel.folds.err),
         }
     }
 
     fn tick(&mut self, shared: &VacScanShared) -> PgResult<()> {
+        shared.flush_helper_reports();
         let f = shared.frontier.prefix.load(Ordering::Relaxed);
         if f > 0 {
-            pgstat_progress_update_param(
-                PROGRESS_VACUUM_HEAP_BLKS_SCANNED,
-                shared.source.block_of(f - 1).block as i64,
-            );
+            let block = shared.source.block_of(f - 1).block;
+            pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, block as i64);
+            // vacuumlazy.c:1341: the leader's context names the scan position.
+            self.err.blkno.set(block);
         }
         ::backend_progress::pgstat_progress_update_multi_param(
             &[PROGRESS_VACUUM_NUM_DEAD_ITEM_IDS, PROGRESS_VACUUM_DEAD_TUPLE_BYTES],
@@ -1756,19 +1852,8 @@ fn pool_wait(
             close("");
             return Err(e);
         }
-        // Read order: detaches, then starts, then claims. Every detach
-        // follows its claim, so a claim landing between the reads can only
-        // show as LIVE (claimed > detached), never as exited. The reverse
-        // order (claimed first) let a ticket-holder's bind refusal plus a
-        // fresh claim that bound and started in between read as "every
-        // participant detached" while the new claimant was driving: the
-        // leader aborted the RG under it and reported "executors exited
-        // before completing the round" (~1 in 100 VACUUMs on a pool whose
-        // threads carry resource-owner residue, so every serve on them
-        // refuses at bind and is re-served).
-        let detached = entry.detached();
-        let started = shared.started.load(Ordering::SeqCst);
-        let claimed = entry.claimed();
+        let p = entry.participation(&shared.started);
+        let (claimed, started) = (p.claimed, p.started);
         if !traced && claimed > 0 {
             vtrace(&format!("engaged pooldb dop={claimed} granules={granules}"));
             traced = true;
@@ -1785,7 +1870,7 @@ fn pool_wait(
         // the launched gang takes over. A straggler that claims right as we
         // close simply drives the same RG (morsel claims are atomic).
         if started == 0
-            && detached >= claimed
+            && p.none_live()
             && std::time::Duration::from_nanos(t0.elapsed_ns()) > pool_claim_deadline()
         {
             close("pooldb claim deadline — launched fallback");
@@ -1793,12 +1878,12 @@ fn pool_wait(
         }
         // Participants all detached yet the RG is incomplete and no error
         // was recorded: a worker died outside every catch layer.
-        if claimed > 0 && started > 0 && detached >= claimed {
+        if p.all_exited_after_start() {
             if let Some(o) = waiter.try_wait() {
                 close("");
                 return Ok(PoolWait::Done(o));
             }
-            if let Some(e) = shared.take_error() {
+            if let Some(e) = shared.take_error().map(|e| leader_rethrow(&vacrel.folds.err, e)) {
                 rg.abort();
                 drain_rg(rt, rg);
                 close("");
@@ -1833,6 +1918,7 @@ fn run_round(
     xact::EnterParallelMode();
     let r = round_ceremony(vacrel, rt, k, shared, clock);
     xact::ExitParallelMode();
+    shared.flush_helper_reports();
     r
 }
 
@@ -1916,7 +2002,7 @@ fn round_ceremony(
                 Some(Arc::clone(entry));
             match pool_wait(vacrel, rt, shared, entry, &rg, &waiter)? {
                 PoolWait::Done(outcome) => {
-                    if let Some(e) = shared.take_error() {
+                    if let Some(e) = shared.take_error().map(|e| leader_rethrow(&vacrel.folds.err, e)) {
                         return Err(e);
                     }
                     if outcome == runtime::RgOutcome::Aborted {
@@ -1980,7 +2066,7 @@ fn round_ceremony(
                 if claimed == 0 && drained {
                     return Ok(RoundOutcome::Refused);
                 }
-                if let Some(e) = shared.take_error() {
+                if let Some(e) = shared.take_error().map(|e| leader_rethrow(&vacrel.folds.err, e)) {
                     return Err(e);
                 }
                 return Err(Box::new(PgError::new(
@@ -2003,7 +2089,7 @@ fn round_ceremony(
             }
         };
 
-        if let Some(e) = shared.take_error() {
+        if let Some(e) = shared.take_error().map(|e| leader_rethrow(&vacrel.folds.err, e)) {
             return Err(e);
         }
         if outcome == runtime::RgOutcome::Aborted {
@@ -2028,6 +2114,7 @@ fn round_ceremony(
         }
     }
     let destroy = parallel::DestroyParallelContext(pcxt);
+    shared.usage.accumulate();
     // C's cost-balance carry-back (workers' unspent balance returns to the
     // leader's serial accounting; on refused paths this is the carry-in).
     if submitted.is_some() {
@@ -2039,4 +2126,41 @@ fn round_ceremony(
     let out = body?;
     destroy?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::ScanUsage;
+    use types_core::instrument::{BufferUsage, WalUsage};
+
+    #[test]
+    fn scan_helpers_report_only_each_round_usage_once() {
+        transam_xlog_seams::wal_usage::set(WalUsage::default);
+        let usage = ScanUsage::default();
+        let save = instrument::instr_start_parallel_query();
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                let usage = &usage;
+                scope.spawn(move || {
+                    let buf = BufferUsage {
+                        shared_blks_hit: 7,
+                        shared_blks_dirtied: 3,
+                        ..Default::default()
+                    };
+                    let wal = WalUsage { wal_records: 5, wal_bytes: 101, ..Default::default() };
+                    instrument::instr_accum_parallel_query(&buf, &wal);
+                    for _ in 0..2 {
+                        usage.capture(|| instrument::instr_accum_parallel_query(&buf, &wal));
+                    }
+                });
+            }
+        });
+        usage.accumulate();
+        usage.accumulate();
+        let (buf, wal) = instrument::instr_end_parallel_query(&save);
+        assert_eq!(buf.shared_blks_hit, 28);
+        assert_eq!(buf.shared_blks_dirtied, 12);
+        assert_eq!(wal.wal_records, 20);
+        assert_eq!(wal.wal_bytes, 404);
+    }
 }

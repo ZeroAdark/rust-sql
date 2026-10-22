@@ -284,7 +284,7 @@ mod wave5 {
     }
 
     /// Per-dlen cells for the recv core. The symbolic-dlen harness above
-    /// walls in the CNF phase (CI cluster 2026-07-30: symex completes, 21123
+    /// walls in the CNF phase (fleet 2026-07-30: symex completes, 21123
     /// VCCs, rss-kill at 40GB in Convert SSA/propositional reduction, jobs
     /// -32917 and -42528) — same width-wall class as uuid/pg_lsn symbolic
     /// recv. Literal dlen prunes (literal-cells law); cells d0..d4

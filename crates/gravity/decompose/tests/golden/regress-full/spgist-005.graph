@@ -1,0 +1,11 @@
+-- regress-full-spgist-005
+-- insert into spgist_text_tbl (id, t) select -g, 'f' || repeat('o', 100-g) || 'surprise' from generate_series(1, 100) g;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:100)]
+  project (1=op558(v3.1), 2=op654(op654(c25:'f', fn1622(c25:'o', op555(c23:100, v3.1))), c25:'surprise'))
+  write INSERT rel=27122 rti=1 natts=2 indexes=(27127[2]:spgist)
+  outs 1=w4:val 2=vl:call1258
+mapped: ModifyTable FunctionScan

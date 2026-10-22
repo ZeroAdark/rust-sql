@@ -1,0 +1,11 @@
+-- regress-full-json-018
+-- select (test_json->3) is null as expect_false from test_json where json_type = 'array';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=4 end=sink
+  nodes n0@0
+  source range rel=39163 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op98(v1.1, c25:'array')
+  project (1=isnull(op3964(v1.2, c23:3)))
+  outs 1=w1:val
+mapped: SeqScan

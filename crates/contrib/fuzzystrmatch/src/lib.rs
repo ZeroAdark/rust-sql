@@ -19,30 +19,14 @@ const MAX_METAPHONE_STRLEN: usize = 255;
 //                                     ABCDEFGHIJKLMNOPQRSTUVWXYZ
 const SOUNDEX_TABLE: &[u8; 26] = b"01230120022455012623010202";
 
-// C's toupper()/isalpha() under the backend's LC_CTYPE (pg_perm_setlocale).
-// C's toupper()/isalpha() run under the backend's LC_CTYPE (postinit's
-// pg_perm_setlocale); here that is the default locale's libc ctype.
-fn ctype_locale() -> Option<&'static pg_locale::PgLocale> {
-    if !pg_locale::default_locale_installed() {
-        return None;
-    }
-    pg_locale::pg_newlocale_from_collation(types_core::DEFAULT_COLLATION_OID)
-        .ok()
-        .filter(|l| l.provider == pg_locale::COLLPROVIDER_LIBC && !l.ctype_is_c)
-}
-
+// C's toupper()/isalpha() run under the backend's LC_CTYPE, the database's
+// datctype whatever its collation provider.
 fn c_toupper(c: u8) -> u8 {
-    match ctype_locale() {
-        Some(l) => l.toupper_l(c),
-        None => c.to_ascii_uppercase(),
-    }
+    pg_locale::backend_toupper(c)
 }
 
 fn c_isalpha(c: u8) -> bool {
-    match ctype_locale() {
-        Some(l) => l.isalpha_l(c),
-        None => c.is_ascii_alphabetic(),
-    }
+    pg_locale::backend_isalpha(c)
 }
 
 fn soundex_code(letter: u8) -> u8 {
@@ -405,7 +389,7 @@ fn fc_metaphone(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult
     let reqlen = fcinfo.arg_i32(1);
     metaphone_check_limits(word.len(), reqlen)?;
 
-    let mut out = Vec::with_capacity(reqlen as usize + 1);
+    let mut out = ::mcx::std_vec_with_capacity("fuzzystrmatch", reqlen as usize + 1)?;
     metaphone(word, reqlen as usize, &mut out);
     Ok(varlena_result(varlena::cstring_to_text(mcx, &out)?))
 }
@@ -445,7 +429,7 @@ fn fc_dmetaphone(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     // SAFETY: catalog arg is a non-null text varlena (strict fn).
     let src = unsafe { fcinfo.arg_varlena_packed(0)? };
     dmetaphone_alloc_guard(src.data().len())?;
-    let (primary, _alt) = dmetaphone::double_metaphone(src.data());
+    let (primary, _alt) = dmetaphone::double_metaphone(src.data())?;
     Ok(varlena_result(varlena::cstring_to_text(
         fcinfo.result_mcx(),
         &primary,
@@ -456,7 +440,7 @@ fn fc_dmetaphone_alt(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     // SAFETY: catalog arg is a non-null text varlena (strict fn).
     let src = unsafe { fcinfo.arg_varlena_packed(0)? };
     dmetaphone_alloc_guard(src.data().len())?;
-    let (_primary, alt) = dmetaphone::double_metaphone(src.data());
+    let (_primary, alt) = dmetaphone::double_metaphone(src.data())?;
     Ok(varlena_result(varlena::cstring_to_text(
         fcinfo.result_mcx(),
         &alt,

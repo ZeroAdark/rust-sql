@@ -1,0 +1,163 @@
+# gravity_lowerv4's integration tests (crates/gravity/lowerv4/tests/*.rs, run in place)
+# as a test-only package (BD-3). cargo gives every dev-dependency to a lib's unit-test harness as well, and the rig
+# (tests/common) drives programs through gravity_exec, so while these tests were lowerv4's own every edit to gravity_exec or
+# to a crate under it that lowerv4 does not use (gravity_hosts ..) recompiled lowerv4's 537 src unit tests too.
+# The files build as ONE test binary, lowerv4_suite (tests/lowerv4_suite.rs: one module t_<stem> per file, BD-21). ct runs
+# it once per module and keys the results as the former targets <stem>. A NEW lowerv4 test file needs its two lines there
+# (`#[path = "../../lowerv4/tests/<stem>.rs"]` and `mod t_<stem>;`). It gets a [[test]] entry here instead only when it
+# cannot share a process with the others: a #[global_allocator]; a test that re-runs its own binary by exact test name
+# (current_exe); a direct set of a process-wide seam or state (a `_seams::<seam>::set(`, pgtz::init_seams /
+# set_session_timezone, install_spill_factory, fp::install); IR pins (ir_pins); or a count of the process-wide refusal
+# intern set (interned()); or a switch of lowerv4's gate stamps (set_gate_stamps). The rules are in tests/lowerv4_suite.rs.
+# lowerv4 has autotests = false, and tests/registered.rs fails until the file is in exactly one of the two places. The
+# tests read lowerv4's files at run time: their manifest_dir() swaps this package's dir name for "lowerv4".
+[package]
+name = "gravity_lowerv4_it"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+# The lib IS the rig (lowerv4/tests/common): compiled once, linked by every test binary (each test file used to compile
+# its own copy: 2,541 lines against ~110 of its own, 91 times per rebuild). The files say `use gravity_lowerv4_it as common;`.
+[lib]
+path = "../lowerv4/tests/common/mod.rs"
+test = false
+doctest = false
+
+[dependencies]
+gravity_lowerv4 = { path = "../lowerv4" }
+gravity_abi = { path = "../abi" }
+gravity_decompose = { path = "../decompose" }
+gravity_dict = { path = "../dict" }
+gravity_driver = { path = "../driver" }
+gravity_expr = { path = "../expr" }
+gravity_fn = { path = "../fn" }
+gravity_ir = { path = "../ir" }
+gravity_kernels = { path = "../kernels" }
+gravity_lower = { path = "../lower" }
+# the rig (driver/tests/common, reached through lowerv4/tests) edits a built program's descriptors (`V4Descs::thaw`, D4533:
+# tests and rigs only); built alone (`-p gravity_lowerv4_it`) nothing else in the build turns the feature on
+gravity_program = { path = "../program", features = ["rig"] }
+guc_seams = { path = "../../backend/utils/misc/guc_seams" }
+mcx = { path = "../../_support/mcx" }
+pg_locale = { path = "../../backend/utils/adt/pg_locale" } # D3606: the rig arms the database default locale
+pgsync = { path = "../../_support/pgsync" }
+# pagepool P3: the rig arms the page pool when PGRUST_POOL_GRAVITY=1 (`arm_pool`)
+pagepool = { path = "../../_support/pagepool" }
+fmgr_core = { path = "../../backend/utils/fmgr/fmgr_core" }
+fires = { path = "../../_support/fires" }
+types_core = { path = "../../_support/types/types_core" }
+types_error = { path = "../../_support/types/types_error" }
+types_nodes = { path = "../../_support/types/nodes" }
+types_portal = { path = "../../_support/types/portal" }
+gravity_exec = { path = "../exec" }
+gravity_interp = { path = "../backend/interp" }
+init_small = { path = "../../backend/utils/init/init_small" }
+pgtz = { path = "../../backend/timezone/pgtz" }
+xact_seams = { path = "../../backend/access/transam/xact_seams" }
+mbutils_seams = { path = "../../backend/utils/mb/mbutils_seams" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+datum = { path = "../../_support/types/datum" }
+syscache_seams = { path = "../../backend/utils/cache/syscache_seams" }
+types_tuple = { path = "../../_support/types/types_tuple" }
+adt_numeric = { path = "../../backend/utils/adt/numeric" }
+
+[[test]]
+name = "registered"
+path = "tests/registered.rs"
+
+# every lowerv4 test file that can be a module (BD-21)
+[[test]]
+name = "lowerv4_suite"
+path = "tests/lowerv4_suite.rs"
+
+# standalone: a test re-runs this binary by exact test name (std::env::current_exe())
+[[test]]
+name = "core_d627_process"
+path = "../lowerv4/tests/core_d627_process.rs"
+
+# standalone: #[global_allocator]
+[[test]]
+name = "core_d848_region"
+path = "../lowerv4/tests/core_d848_region.rs"
+
+# standalone: sets the pgtz / xact / mbutils seams and gravity_dict's fp
+[[test]]
+name = "agg_m6"
+path = "../lowerv4/tests/agg_m6.rs"
+
+# standalone: sets the pgtz / xact seams
+[[test]]
+name = "core_d1272_home_open_raise"
+path = "../lowerv4/tests/core_d1272_home_open_raise.rs"
+
+# standalone: counts the process-wide refusal intern set (interned())
+[[test]]
+name = "core_intern"
+path = "../lowerv4/tests/core_intern.rs"
+
+# standalone: sets the interrupts_pending seam (its D231 cancel test raises InterruptPending; C6 (d))
+[[test]]
+name = "core_px"
+path = "../lowerv4/tests/core_px.rs"
+
+# standalone: ir_pins: its pinned IR depends on which seams the process has installed
+[[test]]
+name = "core_m1"
+path = "../lowerv4/tests/core_m1.rs"
+
+# standalone: installs gravity_driver's spill factory
+[[test]]
+name = "hashjoin_d393_arms"
+path = "../lowerv4/tests/hashjoin_d393_arms.rs"
+
+# standalone: installs gravity_driver's spill factory and arms the process-wide grant pool
+[[test]]
+name = "sort_d4291_own_spill"
+path = "../lowerv4/tests/sort_d4291_own_spill.rs"
+
+# standalone: installs gravity_driver's spill factory, arms the process-wide grant pool and registers a governor slot
+[[test]]
+name = "sort_giveback_revoke"
+path = "../lowerv4/tests/sort_giveback_revoke.rs"
+
+# standalone: sets the pgtz / xact seams
+[[test]]
+name = "hashjoin_m7"
+path = "../lowerv4/tests/hashjoin_m7.rs"
+
+# standalone: sets the pgtz / xact seams
+[[test]]
+name = "nestloop_m8"
+path = "../lowerv4/tests/nestloop_m8.rs"
+
+# standalone: sets the pgtz / xact seams; ir_pins
+[[test]]
+name = "scan_m2"
+path = "../lowerv4/tests/scan_m2.rs"
+
+# standalone: sets the pgtz / xact seams; ir_pins
+[[test]]
+name = "sort_m3"
+path = "../lowerv4/tests/sort_m3.rs"
+
+# standalone: sets the pgtz / xact seams
+[[test]]
+name = "srf_m5"
+path = "../lowerv4/tests/srf_m5.rs"
+
+# standalone: sets syscache seams
+[[test]]
+name = "srf_m5_pset"
+path = "../lowerv4/tests/srf_m5_pset.rs"
+
+# standalone: switches lowerv4's process-wide gate stamps (set_gate_stamps)
+[[test]]
+name = "effects_c2_quiet_sort"
+path = "../lowerv4/tests/effects_c2_quiet_sort.rs"
+
+# standalone: switches lowerv4's process-wide gate stamps (set_gate_stamps)
+[[test]]
+name = "effects_c2_feeder_gate"
+path = "../lowerv4/tests/effects_c2_feeder_gate.rs"

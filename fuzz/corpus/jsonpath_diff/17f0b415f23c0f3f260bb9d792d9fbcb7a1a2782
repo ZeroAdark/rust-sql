@@ -1,1 +1,0 @@
-$ <=(@ like_regex "\|patt@r\\\\lastteger()\^^^^^t@r\\{5 to last}^\\Y\\\ [*]"\n" flag "isim")\u0067

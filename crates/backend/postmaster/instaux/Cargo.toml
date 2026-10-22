@@ -1,0 +1,63 @@
+[package]
+name = "instaux"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "instaux"
+path = "src/lib.rs"
+
+[dependencies]
+pagegive = { path = "../../../_support/pagegive" }
+auth_scram = { path = "../../libpq/auth_scram" }
+auxprocess = { path = "../auxprocess" }
+bgworker = { path = "../bgworker" }
+cache_syscache = { path = "../../utils/cache/cache_syscache" }
+catcache = { path = "../../utils/cache/catcache" }
+datum = { path = "../../../_support/types/datum" }
+elog = { path = "../../utils/error/elog" }
+fd = { path = "../../storage/file/fd" }
+guc = { path = "../../utils/misc/guc" }
+guc_tables = { path = "../../utils/misc/guc_tables" }
+hba = { path = "../../libpq/hba" }
+init_small = { path = "../../utils/init/init_small" }
+instaux_seams = { path = "../instaux_seams" }
+interrupt = { path = "../interrupt" }
+ipc = { path = "../../storage/ipc/ipc" }
+latch = { path = "../../storage/ipc/latch" }
+libpq_pqsignal = { path = "../../libpq/libpq_pqsignal" }
+lwlock = { path = "../../storage/lmgr/lwlock" }
+mcx = { path = "../../../_support/mcx" }
+miscinit = { path = "../../utils/init/miscinit" }
+pg_clock = { path = "../../../port/pg_clock" }
+pgsync = { path = "../../../_support/pgsync" }
+pmchild_seams = { path = "../pmchild_seams" }
+postmaster_seams = { path = "../postmaster_seams" }
+procarray = { path = "../../storage/ipc/procarray" }
+procsignal = { path = "../../storage/ipc/procsignal" }
+resowner = { path = "../../utils/resowner/resowner" }
+syscache_seams = { path = "../../utils/cache/syscache_seams" }
+transam_xlog = { path = "../../access/transam/transam_xlog" }
+types_core = { path = "../../../_support/types/types_core" }
+types_error = { path = "../../../_support/types/types_error" }
+types_guc = { path = "../../../_support/types/types_guc" }
+types_nodes = { path = "../../../_support/types/nodes" }
+types_startup = { path = "../../../_support/types/types_startup" }
+types_storage = { path = "../../../_support/types/types_storage" }
+types_tuple = { path = "../../../_support/types/types_tuple" }
+user = { path = "../../commands/user" }
+vfs = { path = "../../storage/file/vfs" }
+walreceiverfuncs = { path = "../../replication/walreceiverfuncs" }
+xact = { path = "../../access/transam/xact" }
+xloginsert = { path = "../../access/transam/xloginsert" }
+xlogrecovery = { path = "../../access/transam/xlogrecovery" }
+libc = "0.2"
+serde_json = "1"
+
+# The aux's TLS: vendored OpenSSL does not build for wasm32, where the aux is not built (src/wasm.rs).
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
+[dev-dependencies]
+guc_file = { path = "../../utils/misc/guc_file" }

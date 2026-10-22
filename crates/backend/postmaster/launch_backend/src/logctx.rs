@@ -19,8 +19,8 @@ struct LiveBackendLogContext;
 
 static LIVE: LiveBackendLogContext = LiveBackendLogContext;
 
-fn with_port<R>(f: impl FnOnce(&types_startup::Port) -> R) -> Option<R> {
-    g::TryWithMyProcPort(f)
+fn with_port<R>(f: impl FnOnce(&types_startup::PortLogView) -> R) -> Option<R> {
+    g::TryWithPortLogView(f)
 }
 
 impl BackendLogContext for LiveBackendLogContext {

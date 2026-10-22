@@ -1,0 +1,388 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1v s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.w, t.note, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 3 FOR UPDATE OF t;
+QUERY PLAN                                               
+---------------------------------------------------------
+Limit                                                    
+  InitPlan 1                                             
+    ->  Seq Scan on rjc                                  
+          Filter: (name = 'q'::text)                     
+  ->  LockRows                                           
+        ->  Hash Join                                    
+              Hash Cond: (a.id = t.id)                   
+              ->  Seq Scan on rja a                      
+              ->  Hash                                   
+                    ->  Seq Scan on rjt t                
+                          Filter: (w = (InitPlan 1).col1)
+(11 rows)
+
+step s1v: UPDATE rjt SET note = note || '+' WHERE id IN (7, 57);
+step s2l: SELECT t.id, t.w, t.note, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|w|note|bal
+--+-+----+---
+ 2|2|n2  | 74
+ 7|2|n7+ | 57
+12|2|n12 | 40
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1w s2l s1c
+step s1w: UPDATE rjt SET w = 3, note = note || 'w' WHERE id IN (7, 57);
+step s2l: SELECT t.id, t.w, t.note, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|w|note|bal
+--+-+----+---
+ 2|2|n2  | 74
+12|2|n12 | 40
+17|2|n17 | 23
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2l s1c
+step s1k: UPDATE rjt SET id = 1007 WHERE id = 7;
+step s2l: SELECT t.id, t.w, t.note, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|w|note|bal
+--+-+----+---
+ 2|2|n2  | 74
+12|2|n12 | 40
+17|2|n17 | 23
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1v s2l s1c
+step s1q: UPDATE rjc SET w = 3, min_bal = 80 WHERE name = 'q';
+step s1v: UPDATE rjt SET note = note || '+' WHERE id IN (7, 57);
+step s2l: SELECT t.id, t.w, t.note, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|w|note|bal
+--+-+----+---
+ 2|2|n2  | 74
+ 7|2|n7+ | 57
+12|2|n12 | 40
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2px s1a s1v s2p s1c
+step s2px: EXPLAIN (COSTS OFF) SELECT t.id, t.note, a.owner, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = 2 AND a.bal >= (SELECT min_bal FROM rjc WHERE name = 'q') LIMIT 3 FOR UPDATE OF t;
+QUERY PLAN                                            
+------------------------------------------------------
+Limit                                                 
+  InitPlan 1                                          
+    ->  Seq Scan on rjc                               
+          Filter: (name = 'q'::text)                  
+  ->  LockRows                                        
+        ->  Hash Join                                 
+              Hash Cond: (a.id = t.id)                
+              ->  Seq Scan on rja a                   
+                    Filter: (bal >= (InitPlan 1).col1)
+              ->  Hash                                
+                    ->  Seq Scan on rjt t             
+                          Filter: (w = 2)             
+(12 rows)
+
+step s1a: UPDATE rja SET bal = 0, owner = owner || '+' WHERE id IN (7, 12);
+step s1v: UPDATE rjt SET note = note || '+' WHERE id IN (7, 57);
+step s2p: SELECT t.id, t.note, a.owner, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = 2 AND a.bal >= (SELECT min_bal FROM rjc WHERE name = 'q') LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+id|note|owner|bal
+--+----+-----+---
+ 2|n2  |o2   | 74
+ 7|n7+ |o0   | 57
+12|n12 |o5   | 40
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2sx s1v s2s s1c
+step s2sx: EXPLAIN (COSTS OFF) SELECT t.id, t.w, t.note, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') ORDER BY t.id DESC LIMIT 2 FOR UPDATE OF t;
+QUERY PLAN                                                     
+---------------------------------------------------------------
+Limit                                                          
+  InitPlan 1                                                   
+    ->  Seq Scan on rjc                                        
+          Filter: (name = 'q'::text)                           
+  ->  LockRows                                                 
+        ->  Sort                                               
+              Sort Key: t.id DESC                              
+              ->  Hash Join                                    
+                    Hash Cond: (a.id = t.id)                   
+                    ->  Seq Scan on rja a                      
+                    ->  Hash                                   
+                          ->  Seq Scan on rjt t                
+                                Filter: (w = (InitPlan 1).col1)
+(13 rows)
+
+step s1v: UPDATE rjt SET note = note || '+' WHERE id IN (7, 57);
+step s2s: SELECT t.id, t.w, t.note, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') ORDER BY t.id DESC LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|w|note|bal
+--+-+----+---
+57|2|n57+| 89
+52|2|n52 |  5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1w s2s s1c
+step s1w: UPDATE rjt SET w = 3, note = note || 'w' WHERE id IN (7, 57);
+step s2s: SELECT t.id, t.w, t.note, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') ORDER BY t.id DESC LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|w|note|bal
+--+-+----+---
+52|2|n52 |  5
+47|2|n47 | 22
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1w s2o s1c
+step s1w: UPDATE rjt SET w = 3, note = note || 'w' WHERE id IN (7, 57);
+step s2o: SELECT t.id, t.w, t.note FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 2 OFFSET 1 FOR NO KEY UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|w|note
+--+-+----
+12|2|n12 
+17|2|n17 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM rjt WHERE id = 2 FOR UPDATE;
+id
+--
+ 2
+(1 row)
+
+step s2sk: SELECT t.id, t.note FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 1 FOR UPDATE OF t SKIP LOCKED;
+id|note
+--+----
+ 7|n7  
+(1 row)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM rjt WHERE id = 2 FOR UPDATE;
+id
+--
+ 2
+(1 row)
+
+step s2nw: SELECT t.id, t.note FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 1 FOR UPDATE OF t NOWAIT;
+ERROR:  could not obtain lock on row in relation "rjt"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2n s1c s2seq
+step s1v: UPDATE rjt SET note = note || '+' WHERE id IN (7, 57);
+step s2n: SELECT t.id, t.w, t.note FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT nextval('rjsq'))::int + 1 LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+id|w|note
+--+-+----
+ 2|2|n2  
+ 7|2|n7+ 
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM rjsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2case s1c s2seq
+step s1v: UPDATE rjt SET note = note || '+' WHERE id IN (7, 57);
+step s2case: SELECT t.id, t.w, t.note FROM rjt t JOIN rja a ON a.id = t.id WHERE CASE WHEN t.id > 0 THEN t.w = 2 ELSE t.w = (SELECT nextval('rjsq'))::int END LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2case: <... completed>
+id|w|note
+--+-+----
+ 2|2|n2  
+ 7|2|n7+ 
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM rjsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2fx s1pv s2f s1c
+step s2fx: EXPLAIN (COSTS OFF) SELECT p.id, p.v, p.note, a.bal FROM rjp p JOIN rja a ON a.id = p.id WHERE p.v = 2 AND a.bal > (SELECT w FROM rjc WHERE name = 'q') FOR UPDATE OF p;
+QUERY PLAN                                     
+-----------------------------------------------
+LockRows                                       
+  InitPlan 1                                   
+    ->  Seq Scan on rjc                        
+          Filter: (name = 'q'::text)           
+  ->  Hash Join                                
+        Hash Cond: (a.id = p.id)               
+        ->  Seq Scan on rja a                  
+              Filter: (bal > (InitPlan 1).col1)
+        ->  Hash                               
+              ->  Append                       
+                    ->  Seq Scan on rjp_a p_1  
+                          Filter: (v = 2)      
+                    ->  Seq Scan on rjp_d p_2  
+                          Filter: (v = 2)      
+(14 rows)
+
+step s1pv: UPDATE rjp SET note = note || '+' WHERE id IN (12, 42);
+step s2f: SELECT p.id, p.v, p.note, a.bal FROM rjp p JOIN rja a ON a.id = p.id WHERE p.v = 2 AND a.bal > (SELECT w FROM rjc WHERE name = 'q') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id|v|note|bal
+--+-+----+---
+ 2|2|p2  | 74
+12|2|p12+| 40
+22|2|p22 |  6
+32|2|p32 | 73
+42|2|p42+| 39
+52|2|p52 |  5
+(6 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1pw s2f s1c
+step s1pw: UPDATE rjp SET v = 3, note = note || 'w' WHERE id = 42;
+step s2f: SELECT p.id, p.v, p.note, a.bal FROM rjp p JOIN rja a ON a.id = p.id WHERE p.v = 2 AND a.bal > (SELECT w FROM rjc WHERE name = 'q') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id|v|note|bal
+--+-+----+---
+ 2|2|p2  | 74
+12|2|p12 | 40
+22|2|p22 |  6
+32|2|p32 | 73
+52|2|p52 |  5
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1pv s2fl s1c
+step s1pv: UPDATE rjp SET note = note || '+' WHERE id IN (12, 42);
+step s2fl: SELECT p.id, p.v, p.note, a.bal FROM rjp p JOIN rja a ON a.id = p.id WHERE p.v = (SELECT w FROM rjc WHERE name = 'q') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2fl: <... completed>
+id|v|note|bal
+--+-+----+---
+ 2|2|p2  | 74
+12|2|p12+| 40
+22|2|p22 |  6
+32|2|p32 | 73
+42|2|p42+| 39
+52|2|p52 |  5
+(6 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s1pv s2fp s1c
+step s1a: UPDATE rja SET bal = 0, owner = owner || '+' WHERE id IN (7, 12);
+step s1pv: UPDATE rjp SET note = note || '+' WHERE id IN (12, 42);
+step s2fp: SELECT p.id, p.note, a.owner, a.bal FROM rjp p JOIN rja a ON a.id = p.id WHERE p.v = 2 AND a.bal >= (SELECT min_bal FROM rjc WHERE name = 'q') FOR SHARE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2fp: <... completed>
+id|note|owner|bal
+--+----+-----+---
+ 2|p2  |o2   | 74
+12|p12+|o5   | 40
+32|p32 |o4   | 73
+42|p42+|o0   | 39
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2l s1n17 s1a7 s1n12 s2c s1c
+step s2b: BEGIN;
+step s2l: SELECT t.id, t.w, t.note, a.bal FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 3 FOR UPDATE OF t;
+id|w|note|bal
+--+-+----+---
+ 2|2|n2  | 74
+ 7|2|n7  | 57
+12|2|n12 | 40
+(3 rows)
+
+step s1n17: SELECT id FROM rjt WHERE id = 17 FOR UPDATE NOWAIT;
+id
+--
+17
+(1 row)
+
+step s1a7: SELECT id FROM rja WHERE id = 7 FOR UPDATE NOWAIT;
+id
+--
+ 7
+(1 row)
+
+step s1n12: SELECT id FROM rjt WHERE id = 12 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "rjt"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2o s1n17 s1n2 s2c s1c
+step s2b: BEGIN;
+step s2o: SELECT t.id, t.w, t.note FROM rjt t JOIN rja a ON a.id = t.id WHERE t.w = (SELECT w FROM rjc WHERE name = 'q') LIMIT 2 OFFSET 1 FOR NO KEY UPDATE OF t;
+id|w|note
+--+-+----
+ 7|2|n7  
+12|2|n12 
+(2 rows)
+
+step s1n17: SELECT id FROM rjt WHERE id = 17 FOR UPDATE NOWAIT;
+id
+--
+17
+(1 row)
+
+step s1n2: SELECT id FROM rjt WHERE id = 2 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "rjt"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2f s1p43 s1p42 s2c s1c
+step s2b: BEGIN;
+step s2f: SELECT p.id, p.v, p.note, a.bal FROM rjp p JOIN rja a ON a.id = p.id WHERE p.v = 2 AND a.bal > (SELECT w FROM rjc WHERE name = 'q') FOR UPDATE OF p;
+id|v|note|bal
+--+-+----+---
+ 2|2|p2  | 74
+12|2|p12 | 40
+22|2|p22 |  6
+32|2|p32 | 73
+42|2|p42 | 39
+52|2|p52 |  5
+(6 rows)
+
+step s1p43: SELECT id FROM rjp WHERE id = 43 FOR UPDATE NOWAIT;
+id
+--
+43
+(1 row)
+
+step s1p42: SELECT id FROM rjp WHERE id = 42 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "rjp_d"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

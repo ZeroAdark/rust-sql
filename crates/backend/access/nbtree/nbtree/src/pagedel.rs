@@ -175,11 +175,16 @@ pub(crate) fn bt_vacuum_needs_cleanup(rel: &Relation<'_>) -> PgResult<bool> {
     let prev_num_delpages = metad.btm_last_cleanup_num_delpages;
     bt_relbuf(rel, metapin)?;
 
+    // C's && short-circuit: the relation size (an smgr open + lseek) is only
+    // read when some deleted pages were recorded.
+    if prev_num_delpages == 0 {
+        return Ok(false);
+    }
     let nblocks = bufmgr::relation_get_number_of_blocks_in_fork::call(
         rel,
         ::types_core::ForkNumber::MAIN_FORKNUM,
     )?;
-    Ok(prev_num_delpages > 0 && prev_num_delpages > nblocks / 20)
+    Ok(prev_num_delpages > nblocks / 20)
 }
 
 /// _bt_set_cleanup_info.

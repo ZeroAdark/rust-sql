@@ -101,8 +101,8 @@ pub(crate) fn request_seal(datname: &str, expected_oid: Oid, caller_role: Oid) -
                  running"
             ))
             .errhint(
-                "The janitor may still be starting up, or it has been disabled after an \
-                 unrecoverable error (see the server log); retrying shortly is safe."
+                "The janitor may still be starting up, or it is restarting after an exit \
+                 (see the server log); retrying shortly is safe."
                     .to_string(),
             )
             .into_error()
@@ -113,7 +113,7 @@ pub(crate) fn request_seal(datname: &str, expected_oid: Oid, caller_role: Oid) -
                 "cannot seal database \"{datname}\": the seal request table is full ({} entries)",
                 registry::MAX_SEALS
             ))
-            .errhint("Wait for an in-flight pgrust_seal_template() call to finish.".to_string())
+            .errhint("Wait for an in-flight pg_pgrust.seal_template() call to finish.".to_string())
             .into_error()
             .into()),
         PostSeal::Posted(gen) | PostSeal::Joined(gen) => {
@@ -301,11 +301,11 @@ pub(crate) fn seal_identity_changed_error(name: &str) -> Box<PgError> {
         .errcode(ERRCODE_UNDEFINED_DATABASE)
         .errmsg(format!(
             "database \"{name}\" no longer refers to the database whose ownership was checked \
-             when pgrust_seal_template() was called"
+             when pg_pgrust.seal_template() was called"
         ))
         .errhint(
             "The database was renamed or re-created after the call; call \
-             pgrust_seal_template() again for the intended database."
+             pg_pgrust.seal_template() again for the intended database."
                 .to_string(),
         )
         .into_error()
@@ -317,7 +317,7 @@ pub(crate) fn already_template_error(name: &str) -> Box<PgError> {
         .errcode(ERRCODE_WRONG_OBJECT_TYPE)
         .errmsg(format!("database \"{name}\" is already a template"))
         .errhint(
-            "pgrust_seal_template() seals a WRITABLE database; a sealed template needs no \
+            "pg_pgrust.seal_template() seals a WRITABLE database; a sealed template needs no \
              re-seal."
                 .to_string(),
         )
@@ -438,7 +438,7 @@ fn flip_one(name: &str, oid: Oid) -> PgResult<()> {
             .errmsg(format!(
                 "database \"{name}\" was dropped and re-created while being sealed"
             ))
-            .errhint("Call pgrust_seal_template() again.".to_string())
+            .errhint("Call pg_pgrust.seal_template() again.".to_string())
             .into_error()
             .into());
     }

@@ -1,0 +1,13 @@
+-- regress-full-stats_import-001
+-- SELECT mode FROM pg_locks WHERE relation = 'stats_import.test'::regclass AND pid = pg_backend_pid() AND granted;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=2 [1:Other fn1371 cols=16 fn1371()]
+  filter v2.14
+  filter op607(v2.3, c26:17441)
+  filter op96(v2.12, fn2026())
+  project (1=v2.13)
+  outs 1=vl:row
+mapped: FunctionScan

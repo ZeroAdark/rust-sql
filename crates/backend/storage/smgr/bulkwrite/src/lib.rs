@@ -140,9 +140,8 @@ fn smgr_bulk_flush(state: &mut BulkWriteState) -> PgResult<()> {
         let mut page = w.buf;
         bufmgr::PageSetChecksumInplace(&mut page.0, w.blkno);
         if w.blkno >= state.relsize {
-            static ZERO_BUFFER: AlignedPage = AlignedPage([0u8; BLCKSZ]);
             while w.blkno > state.relsize {
-                smgr::smgrextend(state.smgr, state.forknum, state.relsize, &ZERO_BUFFER.0, true)?;
+                smgr::smgrextend(state.smgr, state.forknum, state.relsize, fd::zero_block(), true)?;
                 state.relsize += 1;
             }
             smgr::smgrextend(state.smgr, state.forknum, w.blkno, &page.0[..], true)?;

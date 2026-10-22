@@ -1,0 +1,144 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1key s2m s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO um_t t USING (SELECT k, w FROM um_a UNION ALL SELECT k, w FROM um_b) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 12 THEN UPDATE SET v = -1;
+QUERY PLAN                              
+----------------------------------------
+Merge on um_t t                         
+  ->  Hash Left Join                    
+        Hash Cond: (t.id = um_a.k)      
+        ->  Seq Scan on um_t t          
+        ->  Hash                        
+              ->  Append                
+                    ->  Seq Scan on um_a
+                    ->  Seq Scan on um_b
+(8 rows)
+
+step s1key: UPDATE um_t SET id = 10 WHERE id = 3;
+step s2m: MERGE INTO um_t t USING (SELECT k, w FROM um_a UNION ALL SELECT k, w FROM um_b) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 12 THEN UPDATE SET v = -1; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, hits, v FROM um_t WHERE id <= 16 ORDER BY id;
+id|hits| v
+--+----+--
+ 1|   0|-1
+ 2|   0|-1
+ 4| 101| 0
+ 6|   2| 0
+ 7|   0|-1
+ 8|   0|-1
+ 9|   0|-1
+10|   0|-1
+11|   0|-1
+12|   0|-1
+13|   0| 0
+14|   0| 0
+16|   0| 0
+(13 rows)
+
+
+starting permutation: s1v s2m s1c s2sel
+step s1v: UPDATE um_t SET v = 7 WHERE id = 3;
+step s2m: MERGE INTO um_t t USING (SELECT k, w FROM um_a UNION ALL SELECT k, w FROM um_b) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 12 THEN UPDATE SET v = -1; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, hits, v FROM um_t WHERE id <= 16 ORDER BY id;
+id|hits| v
+--+----+--
+ 1|   0|-1
+ 2|   0|-1
+ 3|   1| 7
+ 4| 101| 0
+ 6|   2| 0
+ 7|   0|-1
+ 8|   0|-1
+ 9|   0|-1
+11|   0|-1
+12|   0|-1
+13|   0| 0
+14|   0| 0
+16|   0| 0
+(13 rows)
+
+
+starting permutation: s1nv s2m s1c s2sel
+step s1nv: UPDATE um_t SET v = 8 WHERE id = 2;
+step s2m: MERGE INTO um_t t USING (SELECT k, w FROM um_a UNION ALL SELECT k, w FROM um_b) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 12 THEN UPDATE SET v = -1; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, hits, v FROM um_t WHERE id <= 16 ORDER BY id;
+id|hits| v
+--+----+--
+ 1|   0|-1
+ 2|   0|-1
+ 3|   1| 0
+ 4| 101| 0
+ 6|   2| 0
+ 7|   0|-1
+ 8|   0|-1
+ 9|   0|-1
+11|   0|-1
+12|   0|-1
+13|   0| 0
+14|   0| 0
+16|   0| 0
+(13 rows)
+
+
+starting permutation: s1nkey s2m s1c s2sel
+step s1nkey: UPDATE um_t SET id = 15 WHERE id = 2;
+step s2m: MERGE INTO um_t t USING (SELECT k, w FROM um_a UNION ALL SELECT k, w FROM um_b) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 12 THEN UPDATE SET v = -1; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, hits, v FROM um_t WHERE id <= 16 ORDER BY id;
+id|hits| v
+--+----+--
+ 1|   0|-1
+ 3|   1| 0
+ 4| 101| 0
+ 6|   2| 0
+ 7|   0|-1
+ 8|   0|-1
+ 9|   0|-1
+11|   0|-1
+12|   0|-1
+13|   0| 0
+14|   0| 0
+15|   0| 0
+16|   0| 0
+(13 rows)
+
+
+starting permutation: s1nkey s2d s1c s2sel
+step s1nkey: UPDATE um_t SET id = 15 WHERE id = 2;
+step s2d: MERGE INTO um_t t USING (SELECT k, w FROM um_a UNION ALL SELECT k, w FROM um_b) s ON t.id = s.k WHEN NOT MATCHED BY SOURCE AND t.id <= 12 THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT id, hits, v FROM um_t WHERE id <= 16 ORDER BY id;
+id|hits|v
+--+----+-
+ 3|   0|0
+ 4|   0|0
+ 6|   0|0
+13|   0|0
+14|   0|0
+15|   0|0
+16|   0|0
+(7 rows)
+
+
+starting permutation: s1key s2d s1c s2sel
+step s1key: UPDATE um_t SET id = 10 WHERE id = 3;
+step s2d: MERGE INTO um_t t USING (SELECT k, w FROM um_a UNION ALL SELECT k, w FROM um_b) s ON t.id = s.k WHEN NOT MATCHED BY SOURCE AND t.id <= 12 THEN DELETE;
+step s1c: COMMIT;
+step s2sel: SELECT id, hits, v FROM um_t WHERE id <= 16 ORDER BY id;
+id|hits|v
+--+----+-
+ 4|   0|0
+ 6|   0|0
+10|   0|0
+13|   0|0
+14|   0|0
+16|   0|0
+(6 rows)
+

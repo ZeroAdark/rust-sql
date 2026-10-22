@@ -146,7 +146,7 @@ fn decode_key(image: &[u8], siglen: usize) -> PgResult<LtgKey> {
         if data.len() < siglen {
             return Err(PgError::error("corrupt ltree_gist GiST key (short signature)").into());
         }
-        (data[..siglen].to_vec(), siglen)
+        (::mcx::std_vec_from_slice("ltree", &data[..siglen])?, siglen)
     };
 
     if off >= data.len() {
@@ -184,7 +184,7 @@ fn read_node(data: &[u8], off: usize) -> PgResult<Vec<u8>> {
     if off + sz > data.len() {
         return Err(PgError::error("corrupt ltree_gist GiST key (node overruns key)").into());
     }
-    Ok(data[off..off + sz].to_vec())
+    Ok(::mcx::std_vec_from_slice("ltree", &data[off..off + sz])?)
 }
 
 fn ltree_gist_alloc(
@@ -193,7 +193,7 @@ fn ltree_gist_alloc(
     siglen: usize,
     left: Option<&[u8]>,
     right: Option<&[u8]>,
-) -> Vec<u8> {
+) -> PgResult<Vec<u8>> {
     let left_sz = left.map_or(0, varsize);
     let right_sz = right.map_or(0, varsize);
     // size = LTG_HDRSIZE + (isalltrue ? 0 : siglen)
@@ -205,7 +205,7 @@ fn ltree_gist_alloc(
         } else {
             0
         };
-    let mut img = vec![0u8; size];
+    let mut img = ::mcx::std_vec_from_elem("ltree", 0u8, size)?;
     set_varsize(&mut img, size);
 
     if siglen != 0 {
@@ -244,7 +244,7 @@ fn ltree_gist_alloc(
         let l = left.expect("ltree_gist_alloc(siglen=0) requires a node");
         img[LTG_HDRSIZE..LTG_HDRSIZE + left_sz].copy_from_slice(&l[..left_sz]);
     }
-    img
+    Ok(img)
 }
 
 /// `ISEQ(a, b)` — `a->numlevel == b->numlevel && ltree_compare(a, b) == 0`.
@@ -266,8 +266,8 @@ pub fn ltree_compress(leafkey: bool, key_image: &[u8], key_is_null: bool) -> PgR
             return Err(PgError::error("ltree_compress: NULL leaf key").into());
         }
         // val = DatumGetLtreeP(entry->key); key = ltree_gist_alloc(false,NULL,0,val,0)
-        let val = canonical_varlena(key_image);
-        let key = ltree_gist_alloc(false, None, 0, Some(&val), None);
+        let val = canonical_varlena(key_image)?;
+        let key = ltree_gist_alloc(false, None, 0, Some(&val), None)?;
         return Ok(Some(key));
     }
     // inner: pass through.
@@ -300,7 +300,7 @@ pub fn ltree_same(a_image: &[u8], b_image: &[u8], siglen: usize) -> PgResult<boo
 }
 
 pub fn ltree_union(entries: &[(Vec<u8>, bool)], siglen: usize) -> PgResult<Vec<u8>> {
-    let mut base = vec![0u8; siglen];
+    let mut base = ::mcx::std_vec_from_elem("ltree", 0u8, siglen)?;
     let mut left: Option<Vec<u8>> = None;
     let mut right: Option<Vec<u8>> = None;
     let mut isalltrue = false;
@@ -329,11 +329,11 @@ pub fn ltree_union(entries: &[(Vec<u8>, bool)], siglen: usize) -> PgResult<Vec<u
             }
             let lt = cur.get_lnode();
             if left.as_ref().map_or(true, |l| op::ltree_compare(l, lt) > 0) {
-                left = Some(lt.to_vec());
+                left = Some(::mcx::std_vec_from_slice("ltree", &lt)?);
             }
             let rt = cur.get_rnode();
             if right.as_ref().map_or(true, |r| op::ltree_compare(r, rt) < 0) {
-                right = Some(rt.to_vec());
+                right = Some(::mcx::std_vec_from_slice("ltree", &rt)?);
             }
         }
     }
@@ -342,13 +342,13 @@ pub fn ltree_union(entries: &[(Vec<u8>, bool)], siglen: usize) -> PgResult<Vec<u
         isalltrue = base.iter().all(|&b| b == 0xff);
     }
 
-    Ok(ltree_gist_alloc(
+    ltree_gist_alloc(
         isalltrue,
         Some(&base),
         siglen,
         left.as_deref(),
         right.as_deref(),
-    ))
+    )
 }
 
 pub fn ltree_penalty(orig_image: &[u8], new_image: &[u8], siglen: usize) -> PgResult<f32> {
@@ -394,8 +394,8 @@ pub fn ltree_picksplit(
     let mut spl_left: Vec<u16> = Vec::new();
     let mut spl_right: Vec<u16> = Vec::new();
 
-    let mut ls = vec![0u8; siglen];
-    let mut rs = vec![0u8; siglen];
+    let mut ls = ::mcx::std_vec_from_elem("ltree", 0u8, siglen)?;
+    let mut rs = ::mcx::std_vec_from_elem("ltree", 0u8, siglen)?;
     let mut lisat = false;
     let mut risat = false;
     let mut lu_r: Option<Vec<u8>> = None;
@@ -411,7 +411,7 @@ pub fn ltree_picksplit(
             spl_left.push(*index as u16);
             let rt = lu.get_rnode();
             if lu_r.as_ref().map_or(true, |x| op::ltree_compare(rt, x) > 0) {
-                lu_r = Some(rt.to_vec());
+                lu_r = Some(::mcx::std_vec_from_slice("ltree", &rt)?);
             }
             if lu.is_onenode() {
                 hashing(&mut ls, &lu.lnode, siglen);
@@ -426,7 +426,7 @@ pub fn ltree_picksplit(
             spl_right.push(*index as u16);
             let rt = lu.get_rnode();
             if ru_r.as_ref().map_or(true, |x| op::ltree_compare(rt, x) > 0) {
-                ru_r = Some(rt.to_vec());
+                ru_r = Some(::mcx::std_vec_from_slice("ltree", &rt)?);
             }
             if lu.is_onenode() {
                 hashing(&mut rs, &lu.lnode, siglen);
@@ -448,53 +448,66 @@ pub fn ltree_picksplit(
     }
 
     // lu_l = LTG_GETLNODE(entry array[FirstOffsetNumber].index)
-    let lu_l = lnodes[array[0]].to_vec();
-    let lu = ltree_gist_alloc(lisat, Some(&ls), siglen, Some(&lu_l), lu_r.as_deref());
+    let lu_l = ::mcx::std_vec_from_slice("ltree", &lnodes[array[0]])?;
+    let lu = ltree_gist_alloc(lisat, Some(&ls), siglen, Some(&lu_l), lu_r.as_deref())?;
 
     // ru_l = LTG_GETLNODE(entry array[1 + half].index)
     let ru_l_index = array[(1 + half) as usize - 1];
-    let ru_l = keys[ru_l_index].as_ref().unwrap().get_lnode().to_vec();
-    let ru = ltree_gist_alloc(risat, Some(&rs), siglen, Some(&ru_l), ru_r.as_deref());
+    let ru_l = ::mcx::std_vec_from_slice("ltree", &keys[ru_l_index].as_ref().unwrap().get_lnode())?;
+    let ru = ltree_gist_alloc(risat, Some(&rs), siglen, Some(&ru_l), ru_r.as_deref())?;
 
     Ok((spl_left, spl_right, lu, ru))
 }
 
 // --- consistent helpers (ltree_gist.c) ------------------------------------
 
-fn gist_isparent(key: &LtgKey, query: &[u8]) -> bool {
+fn gist_isparent(key: &LtgKey, query: &[u8]) -> PgResult<bool> {
     let numlevel = Ltree::new(query).numlevel() as i32;
     let lnode = key.get_lnode();
     let rnode = key.get_rnode();
     for i in (0..=numlevel).rev() {
         // query->numlevel = i — truncate the query to i levels.
-        let q = truncate_ltree(query, i as usize);
+        let q = truncate_ltree(query, i as usize)?;
         if op::ltree_compare(&q, lnode) >= 0 && op::ltree_compare(&q, rnode) <= 0 {
-            return true;
+            return Ok(true);
         }
     }
-    false
+    Ok(false)
 }
 
-fn gist_ischild(key: &LtgKey, query: &[u8]) -> bool {
+fn gist_ischild(key: &LtgKey, query: &[u8]) -> PgResult<bool> {
     let qn = Ltree::new(query).numlevel();
-    let mut left = key.get_lnode().to_vec();
-    let mut right = key.get_rnode().to_vec();
-    if Ltree::new(&left).numlevel() > qn {
-        left = truncate_ltree(&left, qn);
+    let left_node = key.get_lnode();
+    let left_trunc;
+    let left = if Ltree::new(left_node).numlevel() > qn {
+        left_trunc = truncate_ltree(left_node, qn)?;
+        &left_trunc[..]
+    } else {
+        left_node
+    };
+    let mut res = op::ltree_compare(query, left) >= 0;
+    if res {
+        let right_node = key.get_rnode();
+        let right_trunc;
+        let right = if Ltree::new(right_node).numlevel() > qn {
+            right_trunc = truncate_ltree(right_node, qn)?;
+            &right_trunc[..]
+        } else {
+            right_node
+        };
+        if op::ltree_compare(query, right) > 0 {
+            res = false;
+        }
     }
-    let mut res = op::ltree_compare(query, &left) >= 0;
-    if Ltree::new(&right).numlevel() > qn {
-        right = truncate_ltree(&right, qn);
-    }
-    if res && op::ltree_compare(query, &right) > 0 {
-        res = false;
-    }
-    res
+    Ok(res)
 }
 
-fn truncate_ltree(t: &[u8], n: usize) -> Vec<u8> {
+fn truncate_ltree(t: &[u8], n: usize) -> PgResult<Vec<u8>> {
     let tt = Ltree::new(t);
-    let labels: Vec<&[u8]> = tt.levels().take(n).map(|l| l.name).collect();
+    let mut labels: Vec<&[u8]> = ::mcx::std_vec_with_capacity("ltree", n.min(tt.numlevel()))?;
+    for l in tt.levels().take(n) {
+        labels.push(l.name);
+    }
     crate::repr::build_ltree(&labels)
 }
 
@@ -604,7 +617,7 @@ pub fn ltree_consistent(
     // The by-ref query image may carry a short/long varlena header from the
     // boundary; canonicalize to a plain 4-byte-header image the repr walkers
     // (which assume `VARSIZE = word >> 2`) read.
-    let query = canonical_varlena(query_image);
+    let query = canonical_varlena(query_image)?;
 
     let res = match strategy {
         // BTLessStrategyNumber = 1
@@ -641,7 +654,7 @@ pub fn ltree_consistent(
             if is_leaf {
                 op::inner_isparent(&query, key.get_lnode())
             } else {
-                gist_isparent(&key, &query)
+                gist_isparent(&key, &query)?
             }
         }
         // 11: ltree <@ query (ischild)
@@ -649,7 +662,7 @@ pub fn ltree_consistent(
             if is_leaf {
                 op::inner_isparent(key.get_lnode(), &query)
             } else {
-                gist_ischild(&key, &query)
+                gist_ischild(&key, &query)?
             }
         }
         // 12, 13: ltree ~ lquery (ltq_regex / gist_qe & gist_between)
@@ -736,11 +749,11 @@ pub fn array_compress(
                 .with_sqlstate(ERRCODE_NULL_VALUE_NOT_ALLOWED).into());
         }
         // key = ltree_gist_alloc(false, NULL, siglen, NULL, NULL); hash each item.
-        let mut sign = vec![0u8; siglen];
+        let mut sign = ::mcx::std_vec_from_elem("ltree", 0u8, siglen)?;
         for item in arr.elements() {
             ahashing(&mut sign, item, siglen);
         }
-        return Ok(Some(ltree_gist_alloc(false, Some(&sign), siglen, None, None)));
+        return Ok(Some(ltree_gist_alloc(false, Some(&sign), siglen, None, None)?));
     }
     // inner, !ALLTRUE: rewrite to ALLTRUE iff every signature byte is 0xff.
     let key = decode_key(key_image, siglen)?;
@@ -748,7 +761,7 @@ pub fn array_compress(
         return Ok(None);
     }
     if key.sign.iter().all(|&b| b == 0xff) {
-        return Ok(Some(ltree_gist_alloc(true, Some(&key.sign), siglen, None, None)));
+        return Ok(Some(ltree_gist_alloc(true, Some(&key.sign), siglen, None, None)?));
     }
     Ok(None)
 }
@@ -767,7 +780,7 @@ pub fn array_same(a_image: &[u8], b_image: &[u8], siglen: usize) -> PgResult<boo
 }
 
 pub fn array_union(entries: &[(Vec<u8>, bool)], siglen: usize) -> PgResult<Vec<u8>> {
-    let mut base = vec![0u8; siglen];
+    let mut base = ::mcx::std_vec_from_elem("ltree", 0u8, siglen)?;
     let mut isalltrue = false;
     for (img, is_null) in entries {
         if *is_null {
@@ -783,9 +796,9 @@ pub fn array_union(entries: &[(Vec<u8>, bool)], siglen: usize) -> PgResult<Vec<u
         }
     }
     if isalltrue {
-        Ok(ltree_gist_alloc(true, Some(&base), siglen, None, None))
+        ltree_gist_alloc(true, Some(&base), siglen, None, None)
     } else {
-        Ok(ltree_gist_alloc(false, Some(&base), siglen, None, None))
+        ltree_gist_alloc(false, Some(&base), siglen, None, None)
     }
 }
 
@@ -857,13 +870,13 @@ pub fn array_picksplit(
     // initial datum_l/datum_r from the seeds (signature-only keys).
     let datum_l_allistrue = keys[seed_1].as_ref().unwrap().is_alltrue();
     let mut union_l = if datum_l_allistrue {
-        vec![0u8; siglen]
+        ::mcx::std_vec_from_elem("ltree", 0u8, siglen)?
     } else {
         keys[seed_1].as_ref().unwrap().sign.clone()
     };
     let datum_r_allistrue = keys[seed_2].as_ref().unwrap().is_alltrue();
     let mut union_r = if datum_r_allistrue {
-        vec![0u8; siglen]
+        ::mcx::std_vec_from_elem("ltree", 0u8, siglen)?
     } else {
         keys[seed_2].as_ref().unwrap().sign.clone()
     };
@@ -872,9 +885,9 @@ pub fn array_picksplit(
     let maxoff = maxoff_seed + 1;
 
     // cost vector over [1, maxoff], sorted ascending by abs(alpha-beta).
-    let seed_l = make_seed_key(datum_l_allistrue, &union_l);
-    let seed_r = make_seed_key(datum_r_allistrue, &union_r);
-    let mut costvector: Vec<(usize, i32)> = Vec::with_capacity(maxoff);
+    let seed_l = make_seed_key(datum_l_allistrue, &union_l)?;
+    let seed_r = make_seed_key(datum_r_allistrue, &union_r)?;
+    let mut costvector: Vec<(usize, i32)> = ::mcx::std_vec_with_capacity("ltree", maxoff)?;
     for j in 1..=maxoff {
         let kj = keys[j].as_ref().unwrap();
         let alpha = ahemdist(&seed_l, kj, siglen);
@@ -899,8 +912,8 @@ pub fn array_picksplit(
             continue;
         }
         let kj = keys[j].as_ref().unwrap();
-        let cur_l = make_seed_key(l_allistrue, &union_l);
-        let cur_r = make_seed_key(r_allistrue, &union_r);
+        let cur_l = make_seed_key(l_allistrue, &union_l)?;
+        let cur_r = make_seed_key(r_allistrue, &union_r)?;
         let alpha = ahemdist(&cur_l, kj, siglen);
         let beta = ahemdist(&cur_r, kj, siglen);
 
@@ -937,18 +950,18 @@ pub fn array_picksplit(
         }
     }
 
-    let ldatum = ltree_gist_alloc(datum_l_allistrue, Some(&union_l), siglen, None, None);
-    let rdatum = ltree_gist_alloc(datum_r_allistrue, Some(&union_r), siglen, None, None);
+    let ldatum = ltree_gist_alloc(datum_l_allistrue, Some(&union_l), siglen, None, None)?;
+    let rdatum = ltree_gist_alloc(datum_r_allistrue, Some(&union_r), siglen, None, None)?;
     Ok((spl_left, spl_right, ldatum, rdatum))
 }
 
-fn make_seed_key(allistrue: bool, sign: &[u8]) -> LtgKey {
-    LtgKey {
+fn make_seed_key(allistrue: bool, sign: &[u8]) -> PgResult<LtgKey> {
+    Ok(LtgKey {
         flag: if allistrue { LTG_ALLTRUE } else { 0 },
         lnode: Vec::new(),
         rnode: Vec::new(),
-        sign: sign.to_vec(),
-    }
+        sign: ::mcx::std_vec_from_slice("ltree", sign)?,
+    })
 }
 
 // --- array consistent helpers (_ltree_gist.c) -----------------------------
@@ -989,7 +1002,7 @@ pub fn array_consistent(
         return Err(PgError::error("_ltree_consistent: NULL key").into());
     }
     let key = decode_key(key_image, siglen)?;
-    let query = canonical_varlena(query_image);
+    let query = canonical_varlena(query_image)?;
 
     let res = match strategy {
         10 | 11 => gist_te(&key, &query, siglen),
@@ -1009,18 +1022,18 @@ pub const SIZEOF_GIST_OPTIONS: usize = SIZEOF_LTREE_GIST_OPTIONS;
 
 
 
-fn canonical_varlena(image: &[u8]) -> Vec<u8> {
+fn canonical_varlena(image: &[u8]) -> PgResult<Vec<u8>> {
     match image.first() {
         // 1-byte short header (VARATT_IS_1B): byte 0 has low bit set, byte 0 != 0x01.
         Some(&h) if h != 0x01 && (h & 0x01) == 0x01 => {
             let len = (h >> 1) as usize; // VARSIZE_1B
             let payload = &image[1..len.max(1)];
             let total = payload.len() + VARHDRSZ;
-            let mut out = vec![0u8; total];
+            let mut out = ::mcx::std_vec_from_elem("ltree", 0u8, total)?;
             set_varsize(&mut out, total);
             out[VARHDRSZ..].copy_from_slice(payload);
-            out
+            Ok(out)
         }
-        _ => image.to_vec(),
+        _ => ::mcx::std_vec_from_slice("ltree", image),
     }
 }

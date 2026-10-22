@@ -1,0 +1,77 @@
+[package]
+name = "gravity_program"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "gravity_program"
+path = "src/lib.rs"
+
+[dependencies]
+# C7 runtime half: its leader-class thread-locals are declared through leader_tls!
+leader_tls = { path = "../../_support/leader_tls" }
+pgsync = { path = "../../_support/pgsync" }
+memledger = { path = "../../_support/memledger" }
+mempolicy = { path = "../../_support/mempolicy" }
+pagegive = { path = "../../_support/pagegive" }
+# pagepool P3 (PGRUST_POOL_GRAVITY=1): an arena's block from the page pool
+pagepool = { path = "../../_support/pagepool" }
+types_error = { path = "../../_support/types/types_error" }
+gravity_abi = { path = "../abi" }
+cost_profile = { path = "../../_support/cost_profile" }
+gravity_kernels = { path = "../kernels", optional = true }
+allocator-api2 = { version = "0.2", default-features = false, features = ["alloc"] }
+libc = "0.2"
+
+[dev-dependencies]
+# tests/pool_arena_bit.rs: PoolAlloc as the global allocator (the server's pagepool-global build)
+pagepool = { path = "../../_support/pagepool", features = ["global"] }
+
+[features]
+# The hand programs of the shape table (`hand.rs`); the kernel bodies come with them.
+hand = ["dep:gravity_kernels", "gravity_kernels/hand-kernels"]
+# The heap copies of a program's v4 descriptors (`V4Descs::thaw`, the heap forms' `Clone`): the tests' and rigs' road
+# to edit a built program's descriptors (D4533). The server never copies them: its one copy is the frozen one, in the
+# program's own arena (`V4Descs::freeze`).
+rig = []
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# gravity_program_suite (tests/gravity_program_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs
+# it once per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot
+# share a process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text
+# naming process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state
+# call): then it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the
+# file is in exactly one of the two places.
+[[test]]
+name = "gravity_program_suite"
+path = "tests/gravity_program_suite.rs"
+
+[[test]]
+name = "arena_refused_block"
+path = "tests/arena_refused_block.rs"
+
+[[test]]
+name = "cache"
+path = "tests/cache.rs"
+
+[[test]]
+name = "cache_alloc"
+path = "tests/cache_alloc.rs"
+
+[[test]]
+name = "cache_shared"
+path = "tests/cache_shared.rs"
+
+[[test]]
+name = "later_descs_ledger"
+path = "tests/later_descs_ledger.rs"
+
+[[test]]
+name = "pool_arena"
+path = "tests/pool_arena.rs"
+
+[[test]]
+name = "pool_arena_bit"
+path = "tests/pool_arena_bit.rs"

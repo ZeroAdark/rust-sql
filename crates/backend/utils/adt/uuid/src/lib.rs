@@ -177,7 +177,8 @@ fn invalid_syntax_err(input: &[u8]) -> PgError {
     let err = match core::str::from_utf8(input) {
         Ok(s) => PgError::error(format!("invalid input syntax for type uuid: \"{s}\"")),
         Err(_) => {
-            let mut msg = b"invalid input syntax for type uuid: \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"invalid input syntax for type uuid: \"");
             msg.extend_from_slice(input);
             msg.push(b'"');
             PgError::error_raw_message(msg)

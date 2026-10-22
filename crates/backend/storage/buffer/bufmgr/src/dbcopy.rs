@@ -13,8 +13,6 @@ use crate::ops::{
 use crate::read::ReadBufferWithoutRelcache;
 use crate::{FreeAccessStrategy, GetAccessStrategy};
 
-// C 18.3 drives the source reads through a read stream; the stream unit is
-// unported, so this is the same block loop with direct reads.
 fn RelationCopyStorageUsingBuffer(
     srclocator: RelFileLocator,
     dstlocator: RelFileLocator,
@@ -36,17 +34,23 @@ fn RelationCopyStorageUsingBuffer(
     let bstrategy_src = GetAccessStrategy(BufferAccessStrategyType::BasBulkread);
     let bstrategy_dst = GetAccessStrategy(BufferAccessStrategyType::BasBulkwrite);
 
-    for blkno in 0..nblocks {
+    // bufmgr.c:5203: block_range_read_stream_cb takes no locks, so batch
+    // mode is safe.
+    let mut p = read_stream::BlockRangeReadStreamPrivate::new(0, nblocks);
+    let stream_cxt = mcx::MemoryContext::new("RelationCopyStorageUsingBuffer");
+    let mut src_stream = read_stream::read_stream_begin_smgr_relation::<()>(
+        stream_cxt.mcx(),
+        read_stream::READ_STREAM_FULL | read_stream::READ_STREAM_USE_BATCHING,
+        bstrategy_src.clone(),
+        src_key,
+        if permanent { RELPERSISTENCE_PERMANENT } else { RELPERSISTENCE_UNLOGGED },
+        fork_num,
+    )?;
+
+    for _ in 0..nblocks {
         postgres_seams::check_for_interrupts::call()?;
 
-        let src_buf = ReadBufferWithoutRelcache(
-            srclocator,
-            fork_num,
-            blkno,
-            ReadBufferMode::Normal,
-            bstrategy_src.clone(),
-            permanent,
-        )?;
+        let src_buf = src_stream.next_buffer(&mut |_: &mut ()| Ok(p.next_block()))?;
         LockBuffer(src_buf, BUFFER_LOCK_SHARE)?;
 
         let dst_buf = ReadBufferWithoutRelcache(
@@ -89,6 +93,11 @@ fn RelationCopyStorageUsingBuffer(
         UnlockReleaseBuffer(dst_buf)?;
         UnlockReleaseBuffer(src_buf)?;
     }
+    debug_assert_eq!(
+        src_stream.next_buffer(&mut |_: &mut ()| Ok(p.next_block()))?,
+        types_core::InvalidBuffer
+    );
+    src_stream.end()?;
 
     FreeAccessStrategy(bstrategy_src);
     FreeAccessStrategy(bstrategy_dst);

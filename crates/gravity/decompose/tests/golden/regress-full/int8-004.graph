@@ -1,0 +1,11 @@
+-- regress-full-int8-004
+-- SELECT CAST(q1 AS int2) FROM int8_tbl WHERE q2 = 456;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=16403 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op410(v1.2, c20:456)
+  project (1=fn714(v1.1))
+  outs 1=w2:val
+mapped: SeqScan

@@ -1,3 +1,6 @@
+use std::sync::Mutex;
+
+use localtime::PgTzRef;
 use super::*;
 
 // PGRUST_TZDIR is read once (pg_tzdir's OnceLock), so the whole process
@@ -39,9 +42,9 @@ fn gmt_needs_no_filesystem_and_caches() {
     setup();
     let gmt = pg_tzset(b"GMT").unwrap().expect("GMT always parses");
     assert_eq!(gmt.name(), b"GMT");
-    assert_eq!(localtime::pg_get_timezone_offset(gmt), Some(0));
+    assert_eq!(localtime::pg_get_timezone_offset(&gmt), Some(0));
     let again = pg_tzset(b"gmt").unwrap().expect("case-insensitive cache hit");
-    assert!(core::ptr::eq(gmt, again), "same leaked entry");
+    assert!(PgTzRef::ptr_eq(&gmt, &again), "same leaked entry");
 }
 
 #[test]
@@ -52,7 +55,7 @@ fn timezone_initialize_sets_globals() {
     let s = session_timezone().unwrap();
     let l = log_timezone().unwrap();
     assert_eq!(s.name(), b"GMT");
-    assert!(core::ptr::eq(s, l));
+    assert!(PgTzRef::ptr_eq(&s, &l));
 }
 
 #[test]
@@ -61,12 +64,12 @@ fn tzset_loads_real_zone_case_insensitively() {
     let ny = pg_tzset(b"america/new_york").unwrap().expect("scan_directory_ci resolves case");
     assert_eq!(ny.name(), b"America/New_York");
 
-    let tm = localtime::pg_localtime(1_710_054_000, ny).unwrap();
+    let tm = localtime::pg_localtime(1_710_054_000, &ny).unwrap();
     assert_eq!((tm.tm_hour, tm.tm_isdst, tm.tm_gmtoff), (3, 1, -14_400));
     assert_eq!(tm.tm_zone, Some("EDT"));
 
     let again = pg_tzset(b"AMERICA/NEW_YORK").unwrap().unwrap();
-    assert!(core::ptr::eq(ny, again));
+    assert!(PgTzRef::ptr_eq(&ny, &again));
 
     assert!(pg_tzset(b"Not/A/Zone").unwrap().is_none());
     let too_long = [b'a'; TZ_STRLEN_MAX + 1];
@@ -78,7 +81,7 @@ fn tzset_posix_spec_upcases_canonical() {
     setup();
     let est = pg_tzset(b"est5edt").unwrap().expect("POSIX spec parses");
     assert_eq!(est.name(), b"EST5EDT");
-    let summer = localtime::pg_localtime(1_719_806_400, est).unwrap();
+    let summer = localtime::pg_localtime(1_719_806_400, &est).unwrap();
     assert_eq!((summer.tm_isdst, summer.tm_gmtoff), (1, -14_400));
 }
 
@@ -88,41 +91,72 @@ fn tzset_offset_builds_iso_abbreviation() {
     // Positive = west of Greenwich (POSIX), ISO sign in the abbreviation.
     let west = pg_tzset_offset(5 * 3600).unwrap().unwrap();
     assert_eq!(west.name(), b"<-05>+05");
-    assert_eq!(localtime::pg_get_timezone_offset(west), Some(-5 * 3600));
+    assert_eq!(localtime::pg_get_timezone_offset(&west), Some(-5 * 3600));
 
     let east = pg_tzset_offset(-(4 * 3600 + 30 * 60)).unwrap().unwrap();
     assert_eq!(east.name(), b"<+04:30>-04:30");
-    assert_eq!(localtime::pg_get_timezone_offset(east), Some(4 * 3600 + 30 * 60));
+    assert_eq!(localtime::pg_get_timezone_offset(&east), Some(4 * 3600 + 30 * 60));
 
     let odd = pg_tzset_offset(-(3600 + 61)).unwrap().unwrap();
     assert_eq!(odd.name(), b"<+01:01:01>-01:01:01");
 }
 
-// Regression: the pg_timezone_abbrevs clock.rs:32 panic (CI cluster job
-// pgrust-tests-18ae4c1cf2-1784615648-0f06). DynamicZoneAbbrev caches
-// `&'static PgTz` in the PROCESS-shared zone-abbreviation table, so pg_tzset
-// pointers must be process-permanent — one entry per zone for every thread,
-// still valid after the resolving session/thread is gone. The old
-// session-arena cache handed out a different, session-lifetime pointer per
-// thread; the first resolver's death left the shared cache dangling and
-// localsub read garbage `defaulttype`.
+// Regression: the pg_timezone_abbrevs clock.rs:32 panic (CI job
+// pgrust-fast-tests-18ae4c1cf2-1784615648-0f06): a handle cached in the
+// process-shared DynamicZoneAbbrev table must outlive the resolving
+// session/thread even though the cache is per session.
 #[test]
-fn tzset_pointers_are_process_permanent_across_threads() {
+fn tz_handles_outlive_the_resolving_thread_and_the_session_cache() {
     setup();
     let from_thread = std::thread::spawn(|| {
-        pg_tzset(b"America/Montevideo").unwrap().expect("zone loads") as *const PgTz as usize
+        let tz = pg_tzset(b"America/Montevideo").unwrap().expect("zone loads");
+        assert_eq!(super::session_cache_len(), 1);
+        tz
     })
     .join()
     .unwrap();
-    let here = pg_tzset(b"America/Montevideo").unwrap().expect("zone loads");
-    assert_eq!(
-        from_thread, here as *const PgTz as usize,
-        "one permanent cache entry per zone, process-wide"
-    );
-    // The panic path: localsub -> ttis[defaulttype]. Prove the shared pointee
-    // is alive and coherent after the resolving thread exited.
-    let tm = localtime::pg_localtime(1_710_054_000, here).unwrap();
+    let tm = localtime::pg_localtime(1_710_054_000, &from_thread).unwrap();
     assert_eq!(tm.tm_zone, Some("-03"));
+
+    // A handle taken before the release stays coherent; the cache empties.
+    let here = pg_tzset(b"America/Montevideo").unwrap().expect("zone loads");
+    assert!(super::session_cache_len() >= 1);
+    super::release_session_cache();
+    assert_eq!(super::session_cache_len(), 0);
+    let tm = localtime::pg_localtime(1_710_054_000, &here).unwrap();
+    assert_eq!(tm.tm_zone, Some("-03"));
+    let again = pg_tzset(b"America/Montevideo").unwrap().expect("zone loads");
+    assert!(!PgTzRef::ptr_eq(&here, &again));
+    assert_eq!(again.name(), here.name());
+}
+
+// fp-timezone-pgtz#1: no cap on POSIX zones (pgtz.c hash_create, no max);
+// 5000 resolve, and the session-exit release frees all but held handles.
+#[test]
+fn posix_zones_are_uncapped_and_released_with_the_session() {
+    setup();
+    super::release_session_cache();
+    let mut keep = Vec::new();
+    for i in 1..=5000 {
+        let name = format!("<Z{i}>0");
+        let tz = pg_tzset(name.as_bytes()).unwrap().unwrap_or_else(|| panic!("{name} parses"));
+        assert_eq!(tz.name(), name.to_ascii_uppercase().as_bytes());
+        if i % 1000 == 0 {
+            keep.push(tz);
+        }
+    }
+    assert_eq!(super::session_cache_len(), 5000);
+    let weak: Vec<std::sync::Weak<PgTz>> = keep.iter().map(PgTzRef::downgrade).collect();
+    for tz in &keep {
+        assert_eq!(PgTzRef::strong_count(tz), 2, "cache + our handle");
+    }
+    super::release_session_cache();
+    assert_eq!(super::session_cache_len(), 0);
+    for tz in &keep {
+        assert_eq!(PgTzRef::strong_count(tz), 1, "only our handle survives the session");
+    }
+    drop(keep);
+    assert!(weak.iter().all(|w| w.upgrade().is_none()), "released with the last holder");
 }
 
 #[test]
@@ -230,4 +264,71 @@ fn enumerate_reports_stat_failure_with_strerror_text() {
         format!("could not stat file \"{link}\": No such file or directory")
     );
     assert_eq!(err.sqlstate(), ::types_error::ERRCODE_UNDEFINED_FILE);
+}
+
+fn walk_all() -> PgResult<usize> {
+    let mut e = pg_tzenumerate_start()?;
+    let mut count = 0usize;
+    let outcome = loop {
+        match pg_tzenumerate_next(&mut e) {
+            Ok(Some(_)) => count += 1,
+            Ok(None) => break Ok(count),
+            Err(err) => break Err(err),
+        }
+    };
+    pg_tzenumerate_end(e)?;
+    outcome
+}
+
+// pgtz.c:447 keeps the dirent's raw name bytes: a non-UTF-8 entry is stat'ed
+// as the kernel spelled it and then skipped by pg_open_tzfile's name check,
+// never reported as a missing (U+FFFD-spelled) file.
+#[test]
+fn enumerate_skips_a_non_utf8_entry_name() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = setup();
+    let _walk = ENUM_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut raw = format!("{dir}/zz-b248-").into_bytes();
+    raw.push(0xff);
+    let path = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&raw));
+    let _ = std::fs::remove_file(&path);
+    if let Err(e) = std::fs::write(&path, b"not a zone") {
+        eprintln!("skipping: filesystem refuses a non-UTF-8 name ({e})");
+        return;
+    }
+    let walked = walk_all();
+    std::fs::remove_file(&path).unwrap();
+    assert!(walked.expect("a non-UTF-8 entry is skipped, not an ERROR") > 100);
+}
+
+// pgtz.c:450 get_dirent_type(fullname, direntry, true, ERROR): DT_REG from
+// readdir is final (file_utils.c:560-580), so an entry the walker cannot
+// stat is handed to tzload (whose open failure ignores the zone) instead of
+// raising "could not stat file".
+#[test]
+fn enumerate_classifies_by_readdir_type_before_stat() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = setup();
+    let _walk = ENUM_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let sub = format!("{dir}/zz-b248-unsearchable");
+    let _ = std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755));
+    let _ = std::fs::remove_dir_all(&sub);
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(format!("{sub}/Zone"), std::fs::read("/usr/share/zoneinfo/UTC").unwrap()).unwrap();
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let walked = walk_all();
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_dir_all(&sub).unwrap();
+    assert!(walked.expect("an unstat-able regular entry is skipped, not an ERROR") > 100);
+}
+
+#[test]
+fn tzdir_is_the_share_tree_never_the_host_zoneinfo() {
+    assert_eq!(resolve_tzdir(Some("/sys/tz"), Some("/staged/tz".into())), "/sys/tz");
+    assert_eq!(resolve_tzdir(None, Some("/staged/tz".into())), "/staged/tz");
+    let dir = resolve_tzdir(None, None);
+    assert!(dir.ends_with("/timezone"), "{dir}");
+    for sys in ["/usr/share/zoneinfo", "/usr/lib/zoneinfo", "/usr/share/lib/zoneinfo"] {
+        assert_ne!(dir, sys);
+    }
 }

@@ -1244,3 +1244,33 @@ fn ungrouped_column_reports_user_alias_name() {
         err.message()
     );
 }
+
+#[test]
+fn invalid_grouping_argument_error_location() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let pstate = make_parsestate(mcx, None);
+    let qry = query_with_rtable(mcx, NodeList::nil());
+    let gf = Node::mk(
+        mcx,
+        GroupingFunc {
+            args: NodeList::make1(mcx, var_arg(mcx, 2, 16)).unwrap(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let err =
+        crate::finalize_grouping_exprs(mcx, &pstate, &qry, &[], false, false, 0, gf).unwrap_err();
+    assert_eq!(err.sqlstate(), ERRCODE_GROUPING_ERROR);
+    assert_eq!(
+        err.message(),
+        "arguments to GROUPING must be grouping expressions of the associated query level"
+    );
+    let location = err.location().unwrap();
+    assert_eq!(
+        location.funcname.as_deref(),
+        Some("finalize_grouping_exprs_walker")
+    );
+    assert_eq!(location.filename.as_deref(), Some("parse_agg.c"));
+    assert_eq!(location.lineno, 1729);
+}

@@ -1,0 +1,95 @@
+-- regress-full-psql-040
+-- SELECT am.amname AS "AM", CASE WHEN pg_catalog.pg_opfamily_is_visible(f.oid) THEN pg_catalog.format('%I', f.opfname) ELSE pg_catalog.format('%I.%I', n.nspname, f.opfname) END AS "Operator family", (SELECT pg_catalog.string_agg(pg_catalog.format_type(oc.opcintype, NULL), ', ') FROM pg_catalog.pg_opclass oc WHERE oc.opcfamily = f.oid) "Applicable types" FROM pg_catalog.pg_opfamily f LEFT JOIN pg_catalog.pg_am am on am.oid = f.opfmethod LEFT JOIN pg_catalog.pg_namespace n ON n.oid = f.opfnamespace WHERE am.amname OPERATOR(pg_catalog.~) '^(btree)$' COLLATE pg_catalog.default AND EXISTS ( SELECT 1 FROM pg_catalog.pg_type t JOIN pg_catalog.pg_opclass oc ON oc.opcintype = t.oid LEFT JOIN pg_catalog.pg_namespace tn ON tn.oid = t.typnamespace WHERE oc.opcfamily = f.oid AND (t.typname OPERATOR(pg_catalog.~) '^(int4)$' COLLATE pg_catalog.default OR pg_catalog.format_type(t.oid, NULL) OPERATOR(pg_catalog.~) '^(int4)$' COLLATE pg_catalog.default) AND pg_catalog.pg_type_is_visible(t.oid) ) ORDER BY 1, 2;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=6 eligible rows=179 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n6@0 n5@1 n4@3^
+  source range rel=2616 rti=7 am=heap
+    lanes Attr(6):byval8:w8:val Attr(7):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.1, 2=v7.2, 3=v7.3, 4=v7.4, 5=v7.5, 6=v7.6, 7=v7.7, 8=v7.8, 9=v7.9)
+  nest inner=n7 JOIN_INNER unique vol=s params=($exec1=outer.7)
+  inner node=8 serial site=0 reason=IndexSource end=sink
+  nodes n8@0 n7@3
+  source index rel=1247 rti=6 am=heap index=2703
+    key att=1 op=607 value=$exec1
+    recheck (op607(v6.1, $exec1))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val
+  filter or(op639(v6.2, c25:'^(int4)$'), op641(fn1081(v6.1, c23:null), c25:'^(int4)$'))
+  filter fn2080(v6.1)
+  project (1=v6.1, 2=v6.3)
+  memo entries=46 singlerow keys=($exec1)
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.6)
+  outs 1=w4:val 2=w4:val 3=fx64:row 4=w4:val 5=w4:val 6=w8:val 7=w8:val 8=w1:val 9=w4:val
+  outs 1=w8:val
+p1 node=13 eligible rows=1 end=breaker(slot=1 PlainAgg)
+  nodes n13@0 n12@2^
+  source range rel=2616 rti=11 am=heap
+    lanes Attr(6):byval8:w8:val Attr(7):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v11.6, $exec0)
+  project (1=v11.1, 2=v11.2, 3=v11.3, 4=v11.4, 5=v11.5, 6=v11.6, 7=v11.7, 8=v11.8, 9=v11.9)
+  outs 1=w4:val 2=w4:val 3=fx64:row 4=w4:val 5=w4:val 6=w8:val 7=w8:val 8=w1:val 9=w4:val
+p2 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 Sort)
+  desc consumes=slot0@p0 consumes=slot1@p1
+  nodes n4@0 n3@1 n2@3 n1@5 n0@8^
+  source breaker slot=0
+  project (1=outer.1)
+  nest inner=n9 JOIN_INNER unique raise-free params=($exec2=outer.1)
+  inner node=9 serial site=0 reason=IndexSource end=sink
+  nodes n9@0
+  source index rel=2753 rti=1 am=heap index=2755
+    key att=1 op=607 value=$exec2
+    recheck (op607(v1.1, $exec2))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:fx64:win/page Attr(4):byval8:w8:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5)
+  project (1=inner.1, 2=inner.3, 3=inner.2, 4=inner.4)
+  nest inner=n10 JOIN_INNER unique params=($exec3=outer.3)
+  inner node=10 serial site=0 reason=IndexSource end=sink
+  nodes n10@0
+  source index rel=2601 rti=2 am=heap index=2652
+    key att=1 op=607 value=$exec3
+    recheck (op607(v2.1, $exec3))
+    lanes Attr(2):byref8:fx64:win/page
+  filter op639(v2.2, c25:'^(btree)$')
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4)
+  project (1=outer.1, 2=outer.2, 3=outer.4, 4=inner.2)
+  nest inner=n11 JOIN_LEFT unique raise-free params=($exec4=outer.3)
+  inner node=11 serial site=0 reason=IndexSource end=sink
+  nodes n11@0
+  source index rel=2615 rti=4 am=heap index=2685
+    key att=1 op=607 value=$exec4
+    recheck (op607(v4.1, $exec4))
+    lanes Attr(2):byref8:fx64:win/page
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4)
+  subplan 1 nested Expr params=($exec0=outer.1) vol=s
+  inner node=12 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n12@0
+  source breaker slot=1
+  project (1=agg3538(1=fn1081(outer.7, c23:null), 2=c25:', '))
+  project (1=outer.4, 2=case(when fn3829(outer.1) then fn3539(c25:'%I', outer.2)) else fn3539(c25:'%I.%I', inner.2, outer.2), 3=subplan1(outer.1))
+  sort keys=1+:Fp128@950#19,2+:Fp128@950 form=runs
+  outs 1=w4:val
+  outs 1=w4:val 2=fx64:life/breaker 3=w4:val 4=w4:val
+  outs 1=w4:val 2=fx64:life/breaker 3=w4:val 4=fx64:life/breaker
+  outs 1=fx64:life/breaker 2=vl:call3539 3=vl:call0
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p2
+  nodes n0@0
+  source breaker slot=2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=fx64:life/breaker 2=vl:call3539 3=vl:call0
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=PlainAgg budget=Fixed(72) spill=None producer=p1 layout=[]->[Count@0]+valid 16B
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128,Fp128,Fp128]->[Count@32] 40B order=1+,2+
+group slot=0 producer=p0 node=4 form=Hashed hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=26 expr=outer.6
+group slot=1 producer=p1 node=12 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=3538 reg=Collect slot=- count_slot=- final=Collect class=Collect(String) trans=Var mods=[] expr=agg3538(1=fn1081(outer.7, c23:null), 2=c25:', ')
+rerun node=1 subplan=1 pipelines=p1 slots=1
+param $exec1 owner=n5 type=26 rep=w8:val
+param $exec2 owner=n3 type=26 rep=w4:val
+param $exec3 owner=n2 type=26 rep=w4:val
+param $exec4 owner=n1 type=26 rep=w4:val
+param $exec0 owner=subplan1 type=26 rep=w4:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam Memoize Sort Agg SubPlan

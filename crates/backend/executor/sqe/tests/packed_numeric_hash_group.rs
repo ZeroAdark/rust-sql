@@ -3,13 +3,13 @@
 //! row is a pointer to its image, so the fold must read the mantissa
 //! through the face, never the raw word.
 
-use pgrc2_format::class::{CollationClass, ColSchema, StorageClass, TypeSemantics};
-use pgrc2_write::elect::{CodecCandidates, ColumnPosture};
-use pgrc2_write::ingest::RawDatum;
-use pgrc2_write::publish::TxnVerdict;
-use pgrc2_write::testkit::{Kit, Probe};
-use pgrc2_write::writer::{PartCutPolicy, SealEnv, TableWriter, TxnStamp};
-use pgrc2_write::wvfs::RealVfs;
+use pgrc_format::class::{CollationClass, ColSchema, StorageClass, TypeSemantics};
+use pgrc_write::elect::{CodecCandidates, ColumnPosture};
+use pgrc_write::ingest::RawDatum;
+use pgrc_write::publish::TxnVerdict;
+use pgrc_write::testkit::{Kit, Probe};
+use pgrc_write::writer::{PartCutPolicy, SealEnv, TableWriter, TxnStamp};
+use pgrc_write::wvfs::RealVfs;
 use sqe::bank::{Bank, ColMeta, Face, OpenOpts};
 use sqe::engine::{Engine, SqeConfig};
 use sqe::planner::{plan_from_ap, AAgg, AFamily, AKeyExpr, APlan, AValExpr};
@@ -68,7 +68,7 @@ fn seal_bank(dir: &str) {
         0,
         ColumnPosture { numeric: true, ..ColumnPosture::default() },
     );
-    let resolver = pgrc2_write::seal::CodecResolver;
+    let resolver = pgrc_write::seal::CodecResolver;
     let mut w = TableWriter::open(
         dir.to_string(),
         schema,
@@ -83,7 +83,7 @@ fn seal_bank(dir: &str) {
     for i in 0..ROWS {
         let img = numeric_img(&dec2(mant(i)));
         let datums = [RawDatum::Word(key(i) as u64), RawDatum::Bytes(&img)];
-        let sources: [&dyn pgrc2_write::elect::CandidateSource; 1] = [&cands];
+        let sources: [&dyn pgrc_write::elect::CandidateSource; 1] = [&cands];
         let mut env = SealEnv {
             vfs: &mut vfs,
             sources: &sources,
@@ -94,7 +94,7 @@ fn seal_bank(dir: &str) {
         w.append_row(&datums, &mut kit.ext, &mut env).expect("append");
     }
     {
-        let sources: [&dyn pgrc2_write::elect::CandidateSource; 1] = [&cands];
+        let sources: [&dyn pgrc_write::elect::CandidateSource; 1] = [&cands];
         let mut env = SealEnv {
             vfs: &mut vfs,
             sources: &sources,

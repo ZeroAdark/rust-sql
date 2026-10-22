@@ -766,7 +766,7 @@ fn hash_xlog_move_page_contents(record: &mut XLogReaderState) -> PgResult<()> {
     if action == BLK_NEEDS_REDO {
         let ptr = block_data(record, 2);
         if !ptr.is_empty() {
-            let mut unused: Vec<OffsetNumber> = Vec::with_capacity(ptr.len() / 2);
+            let mut unused: Vec<OffsetNumber> = ::mcx::std_vec_with_capacity("access", ptr.len() / 2)?;
             for ch in ptr.chunks_exact(2) {
                 unused.push(u16::from_ne_bytes([ch[0], ch[1]]));
             }
@@ -972,7 +972,7 @@ fn hash_xlog_delete(record: &mut XLogReaderState) -> PgResult<()> {
     if action == BLK_NEEDS_REDO {
         let ptr = block_data(record, 1);
         if !ptr.is_empty() {
-            let mut unused: Vec<OffsetNumber> = Vec::with_capacity(ptr.len() / 2);
+            let mut unused: Vec<OffsetNumber> = ::mcx::std_vec_with_capacity("access", ptr.len() / 2)?;
             for ch in ptr.chunks_exact(2) {
                 unused.push(u16::from_ne_bytes([ch[0], ch[1]]));
             }
@@ -1054,7 +1054,7 @@ fn hash_xlog_vacuum_one_page(record: &mut XLogReaderState) -> PgResult<()> {
     if action == BLK_NEEDS_REDO {
         require_len(xldata, 8 + ntuples as usize * 2, "VACUUM_ONE_PAGE offsets")?;
         let to_delete = &xldata[8..8 + ntuples as usize * 2];
-        let mut unused: Vec<OffsetNumber> = Vec::with_capacity(ntuples as usize);
+        let mut unused: Vec<OffsetNumber> = ::mcx::std_vec_with_capacity("access", ntuples as usize)?;
         for ch in to_delete.chunks_exact(2) {
             unused.push(u16::from_ne_bytes([ch[0], ch[1]]));
         }

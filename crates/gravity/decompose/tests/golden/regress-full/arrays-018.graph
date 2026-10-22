@@ -1,0 +1,10 @@
+-- regress-full-arrays-018
+-- SELECT f1[0:] FROM POINT_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1850 end=sink
+  nodes n0@0
+  source range rel=26237 rti=1 am=heap
+    lanes Attr(1):byref8:fx16:win/page Offset:byval2:w2:val
+  project (1=T_SubscriptingRef)
+  outs 1=fx16:call0
+mapped: SeqScan

@@ -332,30 +332,50 @@ pub static parallel_leader_participation: GucBoolVar = GucSlot::new("parallel_le
 pub static parallel_setup_cost: GucRealVar = GucSlot::new("parallel_setup_cost");
 pub static parallel_tuple_cost: GucRealVar = GucSlot::new("parallel_tuple_cost");
 pub static pg_gss_accept_delegation: GucBoolVar = GucSlot::new("pg_gss_accept_delegation");
-// pgrust-only: pgrust.lane_executor (no C symbol; the lane-v2 master gate).
-pub static pgrust_lane_executor: GucBoolVar = GucSlot::new("pgrust_lane_executor");
-// pgrust-only: pgrust.condition_cache (+_size) — the pgrcolumnar per-granule
-// qual-verdict cache (ClickHouse QueryConditionCache counterpart), default
-// OFF, LRU-bounded by the size GUC (KB).
-pub static pgrust_condition_cache: GucBoolVar = GucSlot::new("pgrust_condition_cache");
+pub static pgrust_condition_cache: GucEnumVar = GucSlot::new("pgrust_condition_cache");
+pub static pgrust_gravity_prewarm: GucBoolVar = GucSlot::new("pgrust_gravity_prewarm");
+pub static pgrust_zone_store: GucBoolVar = GucSlot::new("pgrust_zone_store");
+pub static pgrust_dict_filter_cache: GucBoolVar = GucSlot::new("pgrust_dict_filter_cache");
+// pgrust-only: pgrust.condition_cache_unlogged - unlogged pgrcolumnar relations enter the condition cache (default on).
+pub static pgrust_condition_cache_unlogged: GucBoolVar = GucSlot::new("pgrust_condition_cache_unlogged");
+// pgrust-only: pgrust.pgrc_merge_scan - the planner's merged sorted path over a pgrcolumnar sorted_by table.
+pub static pgrust_pgrc_merge_scan: GucBoolVar = GucSlot::new("pgrust_pgrc_merge_scan");
+// pgrust-only: pgrust.pgrc_merge_skip_hash_group (D4568 part 2) - no sorted path whose order only presorts a hashable GROUP BY.
+pub static pgrust_pgrc_merge_skip_hash_group: GucBoolVar = GucSlot::new("pgrust_pgrc_merge_skip_hash_group");
+// pgrust-only: pgrust.jsonb_path_stats (no C symbol) - per-path jsonb statistics.
+pub static pgrust_jsonb_path_stats: GucBoolVar = GucSlot::new("pgrust_jsonb_path_stats");
+// pgrust-only: pgrust.gravity_admit (no C symbol) - `graph` (the default)
+// admits from the plan's graph, `shape` turns that off.
+pub static pgrust_gravity_admit: GucEnumVar = GucSlot::new("pgrust_gravity_admit");
+pub static pgrust_gravity_lowerer: GucEnumVar = GucSlot::new("pgrust_gravity_lowerer");
+// pgrust-only: pgrust.point_path (no C symbol) - off, on, strict.
+pub static pgrust_point_path: GucEnumVar = GucSlot::new("pgrust_point_path");
+// pgrust-only: pgrust.point_noplan (no C symbol) - off, on, strict.
+pub static pgrust_point_noplan: GucEnumVar = GucSlot::new("pgrust_point_noplan");
+// pgrust-only: pgrust.point_write (no C symbol) - pglpoint S3, on by default (D4572).
+pub static pgrust_point_write: GucBoolVar = GucSlot::new("pgrust_point_write");
+// pgrust-only: pgrust.point_keep (no C symbol) - pglpoint S3 option (a), on by default (D4572).
+pub static pgrust_point_keep: GucBoolVar = GucSlot::new("pgrust_point_keep");
+// pgrust-only: pgrust.point_portal_keep (no C symbol) - an S1x portal's probe kept per generic plan, on by default.
+pub static pgrust_point_portal_keep: GucBoolVar = GucSlot::new("pgrust_point_portal_keep");
+// pgrust-only: pgrust.gravity_dump_dir (no C symbol) - superuser only; non-empty: every Gravity program compiled
+// (a program-cache miss) is written there as IR + machine code + meta (gravity_backend::dump). Env seed PGRUST_GRAVITY_DUMP_IR.
+pub static pgrust_gravity_dump_dir: GucStringVar = GucSlot::new("pgrust_gravity_dump_dir");
+// pgrust-only: pgrust.gravity_groupingsets_rewrite (no C symbol) - the planner's
+// union-of-groupings alternative for GROUPING SETS: off, on (costed, the default), force.
+pub static pgrust_gravity_groupingsets_rewrite: GucEnumVar = GucSlot::new("pgrust_gravity_groupingsets_rewrite");
+// pgrust-only: pgrust.gravity_unnest (no C symbol) - the planner's unnesting alternative for correlated
+// scalar aggregates: off (the default), strict, contained.
+pub static pgrust_gravity_unnest: GucEnumVar = GucSlot::new("pgrust_gravity_unnest");
+// pgrust-only: pgrust.gravity_cte_pushdown (no C symbol, D3342) - the OR of a multiply-read CTE's readers' filters pushed
+// into its body: off (the default), strict, contained, fill (the readers' filters inside Gravity's CTE fill, D4779).
+pub static pgrust_gravity_cte_pushdown: GucEnumVar = GucSlot::new("pgrust_gravity_cte_pushdown");
+// pgrust-only: pgrust.gravity_exact_size (no C symbol) - a developer switch: Gravity sizes a structure from its count once
+// the count is known (none, the default; build; final; all).
+pub static pgrust_gravity_exact_size: GucEnumVar = GucSlot::new("pgrust_gravity_exact_size");
+// pgrust-only: pgrust.gravity_jit_perfmap (no C symbol) - superuser only; the JIT perf map /tmp/perf-<pid>.map (off, func, tags).
+pub static pgrust_gravity_jit_perfmap: GucEnumVar = GucSlot::new("pgrust_gravity_jit_perfmap");
 pub static pgrust_condition_cache_size: GucIntVar = GucSlot::new("pgrust_condition_cache_size");
-// pgrust-only: pgrust.explain_runtime_verdicts (no C symbol) — shows the
-// runtime admission walk's refusal verdicts in EXPLAIN ANALYZE. Default OFF:
-// C prints nothing there, and default EXPLAIN output is C-parity
-// (covdiff-fuzzer E1-A).
-pub static pgrust_explain_runtime_verdicts: GucBoolVar =
-    GucSlot::new("pgrust_explain_runtime_verdicts");
-// pgrust-only: pgrust.parallel_engine + pgrust.runtime_dop (M5-0,
-// docs/design/m5-planner.md §2.2; no C symbol). The engine selector routes
-// covered serial shapes to the morsel runtime under `runtime`; the DOP knob
-// is consulted ONLY under engine=runtime (never by the per-arm bench GUCs).
-pub static pgrust_parallel_engine: GucEnumVar = GucSlot::new("pgrust_parallel_engine");
-pub static pgrust_runtime_dop: GucIntVar = GucSlot::new("pgrust_runtime_dop");
-// pgrust-only: pgrust.sqe_heap (no C symbol) — heap-on-sqe v1 gate.
-pub static pgrust_sqe_heap: GucBoolVar = GucSlot::new("pgrust_sqe_heap");
-// pgrust-only: pgrust.sqe_threads (no C symbol) — the sqe server engine's
-// worker width (SqeConfig.threads). 0 = auto (available cores).
-pub static pgrust_sqe_threads: GucIntVar = GucSlot::new("pgrust_sqe_threads");
 // pgrust-only: pgrust.version_string_style (dl-verstring ruling 2026-08-06,
 // no C symbol) — selects which identity leads in version()'s banner
 // (consts::VERSION_STRING_*). Default postgres_first so first-number parsers
@@ -373,10 +393,38 @@ pub static pgrust_runtime_vacuum_pool: GucBoolVar = GucSlot::new("pgrust_runtime
 // and the developer per-query context hog for the standing e2e.
 pub static pgrust_memory_watchdog: GucBoolVar = GucSlot::new("pgrust_memory_watchdog");
 pub static pgrust_memory_watchdog_dump: GucBoolVar = GucSlot::new("pgrust_memory_watchdog_dump");
+pub static pgrust_memory_revoke: GucBoolVar = GucSlot::new("pgrust_memory_revoke");
+pub static pgrust_memory_ledger_v2: GucBoolVar = GucSlot::new("pgrust_memory_ledger_v2");
 pub static pgrust_memory_watchdog_interval: GucIntVar = GucSlot::new("pgrust_memory_watchdog_interval");
 pub static pgrust_memory_watchdog_threshold: GucIntVar = GucSlot::new("pgrust_memory_watchdog_threshold");
 pub static pgrust_memory_watchdog_limit: GucIntVar = GucSlot::new("pgrust_memory_watchdog_limit");
+// pgrust-only (no C symbol): the online-resizable buffer pool.
+pub static pgrust_buffer_pool_max: GucIntVar = GucSlot::new("pgrust_buffer_pool_max");
+pub static pgrust_buffer_pool_thp: GucBoolVar = GucSlot::new("pgrust_buffer_pool_thp");
+pub static pgrust_buffer_pool_relocate: GucBoolVar = GucSlot::new("pgrust_buffer_pool_relocate");
+pub static pgrust_buffer_pool_drain_rate: GucIntVar = GucSlot::new("pgrust_buffer_pool_drain_rate");
+pub static pgrust_memory_governor_threshold: GucIntVar = GucSlot::new("pgrust_memory_governor_threshold");
+pub static pgrust_statement_mem_limit: GucIntVar = GucSlot::new("pgrust_statement_mem_limit");
+pub static pgrust_memory_cancel_threshold: GucIntVar = GucSlot::new("pgrust_memory_cancel_threshold");
+// pgrust-only: pgrust.memory_cancel_rule (no C symbol) - threshold (the default) | projection (mempolicy::decide).
+pub static pgrust_memory_cancel_rule: GucEnumVar = GucSlot::new("pgrust_memory_cancel_rule");
+// pgrust-only: pgrust.memory_ladder (no C symbol) - off (the default) | shadow | on (mempolicy::ladder, mcx::ladder, LADDER-DESIGN).
+pub static pgrust_memory_ladder: GucEnumVar = GucSlot::new("pgrust_memory_ladder");
+// pgrust-only (no C symbol): idle time (ms) after which a session hands freed
+// allocator memory back to the OS.
+pub static pgrust_memory_release_idle: GucIntVar = GucSlot::new("pgrust_memory_release_idle");
 pub static pgrust_memory_watchdog_test_hog: GucIntVar = GucSlot::new("pgrust_memory_watchdog_test_hog");
+// pgrust-only (no C symbol): context-byte growth (kB) past which a finished
+// statement hands freed allocator memory back to the OS.
+pub static pgrust_memory_release_threshold: GucIntVar = GucSlot::new("pgrust_memory_release_threshold");
+// pgrust-only (no C symbol; lane membroker, memory step 5): Gravity's one memory budget and its broker.
+pub static pgrust_memory_target: GucIntVar = GucSlot::new("pgrust_memory_target");
+pub static pgrust_memory_broker: GucEnumVar = GucSlot::new("pgrust_memory_broker");
+pub static pgrust_memory_broker_actuators: GucStringVar = GucSlot::new("pgrust_memory_broker_actuators");
+pub static pgrust_memory_broker_interval: GucIntVar = GucSlot::new("pgrust_memory_broker_interval");
+pub static pgrust_memory_page_cache_floor_mb: GucIntVar = GucSlot::new("pgrust_memory_page_cache_floor_mb");
+pub static pgrust_memory_reserve_mb: GucIntVar = GucSlot::new("pgrust_memory_reserve_mb");
+pub static pgrust_pgrc_part_cache_mb: GucIntVar = GucSlot::new("pgrust_pgrc_part_cache_mb");
 // pgrust-only (docs/design/test-views.md D1, no C symbol): the ephemeral-
 // database janitor. prefix (PGC_POSTMASTER, '' = feature off) arms janitor
 // registration; grace (PGC_SIGHUP, seconds) is the reap idle threshold the
@@ -403,29 +451,12 @@ pub static pgrust_ephemeral_db_wal_log_threshold: GucIntVar = GucSlot::new("pgru
 // mints (relcache init file + warm catalog pages), off the waiter critical
 // path. PGC_SIGHUP, read at each enqueue/dispatch site.
 pub static pgrust_ephemeral_db_prewarm: GucBoolVar = GucSlot::new("pgrust_ephemeral_db_prewarm");
-// pgrust-only (env-to-guc train, no C symbol): the per-arm runtime pool DOP
-// force-overrides + the Gather read-fairness stride. Registered from the
-// deferred pool-GUC recipe (docs/design/jit-parallel-defaults.md §3). Each is
-// the registered face of a previously-unregistered `pgrust.*` placeholder
-// option; the arm readers resolve them through the get_config_option seam.
-pub static pgrust_runtime_scan_pool: GucIntVar = GucSlot::new("pgrust_runtime_scan_pool");
-pub static pgrust_runtime_agg_pool: GucIntVar = GucSlot::new("pgrust_runtime_agg_pool");
-pub static pgrust_runtime_distinct_pool: GucIntVar = GucSlot::new("pgrust_runtime_distinct_pool");
-pub static pgrust_runtime_hashjoin_pool: GucIntVar = GucSlot::new("pgrust_runtime_hashjoin_pool");
-pub static pgrust_runtime_sort_pool: GucIntVar = GucSlot::new("pgrust_runtime_sort_pool");
-pub static pgrust_runtime_bitmap_pool: GucIntVar = GucSlot::new("pgrust_runtime_bitmap_pool");
-pub static pgrust_lane_parallel_pool: GucIntVar = GucSlot::new("pgrust_lane_parallel_pool");
+// pgrust-only (env-to-guc train, no C symbol): the Gather read-fairness stride.
 pub static pgrust_gather_fair_stride: GucIntVar = GucSlot::new("pgrust_gather_fair_stride");
-// pgrust-only: pgrust.regex_pattern_program (no C symbol; the anchored
-// pattern-program fast tier under the auto RE2 dispatch — regexp_alt owns
-// the backing and installs the accessors).
-pub static pgrust_regex_pattern_program: GucBoolVar = GucSlot::new("pgrust_regex_pattern_program");
 // pgrust-only: pgrust.regex_re2_linked (preset, read-only) — whether the RE2
 // engine was linked into this build. regexp_alt installs the accessor (a
 // build-cfg constant); the table row's boot_val is never what SHOW reports.
 pub static pgrust_regex_re2_linked: GucBoolVar = GucSlot::new("pgrust_regex_re2_linked");
-// auto_explain custom GUCs (auto_explain.c _PG_init), statically defined:
-// this port has no DefineCustomXxxVariable machinery.
 pub static aex_log_min_duration: GucIntVar = GucSlot::new("auto_explain_log_min_duration");
 pub static aex_log_parameter_max_length: GucIntVar =
     GucSlot::new("auto_explain_log_parameter_max_length");
@@ -441,9 +472,18 @@ pub static aex_log_nested_statements: GucBoolVar =
 pub static aex_log_format: GucEnumVar = GucSlot::new("auto_explain_log_format");
 pub static aex_log_level: GucEnumVar = GucSlot::new("auto_explain_log_level");
 pub static aex_sample_rate: GucRealVar = GucSlot::new("auto_explain_sample_rate");
-// pg_prewarm custom GUC (contrib/pg_prewarm/autoprewarm.c:120 static int
-// autoprewarm_interval; :128 _PG_init DefineCustomIntVariable), statically
-// defined like auto_explain.*; the cell lives in crates/contrib/pg_prewarm.
+
+pub static cron_database_name: GucStringVar = GucSlot::new("CronTableDatabaseName");
+pub static cron_log_statement: GucBoolVar = GucSlot::new("CronLogStatement");
+pub static cron_log_run: GucBoolVar = GucSlot::new("CronLogRun");
+pub static cron_enable_superuser_jobs: GucBoolVar = GucSlot::new("EnableSuperuserJobs");
+pub static cron_host: GucStringVar = GucSlot::new("CronHost");
+pub static cron_use_background_workers: GucBoolVar = GucSlot::new("UseBackgroundWorkers");
+pub static cron_launch_active_jobs: GucBoolVar = GucSlot::new("LaunchActiveJobs");
+pub static cron_max_running_jobs: GucIntVar = GucSlot::new("MaxRunningTasks");
+pub static cron_log_min_messages: GucEnumVar = GucSlot::new("CronLogMinMessages");
+pub static cron_timezone: GucStringVar = GucSlot::new("cron_timezone");
+pub static cron_match_dom_and_dow: GucBoolVar = GucSlot::new("CronDomDowAndLogic");
 pub static autoprewarm_interval: GucIntVar = GucSlot::new("autoprewarm_interval");
 // autoprewarm.c:119 static bool autoprewarm (:144 _PG_init
 // DefineCustomBoolVariable, PGC_POSTMASTER, preload-only in C); the cell
@@ -455,18 +495,11 @@ pub static passwordcheck_min_password_length: GucIntVar = GucSlot::new("password
 // isn.c:939 _PG_init DefineCustomBoolVariable over the isn.c g_weak static;
 // the cell lives in crates/contrib/isn.
 pub static isn_weak: GucBoolVar = GucSlot::new("g_weak");
-// pg_trgm custom GUCs (contrib/pg_trgm/trgm_op.c:145 _PG_init, three
-// DefineCustomRealVariable over the trgm_op.c:24-26 double statics),
-// statically defined like auto_explain.*; the cells live in
-// crates/contrib/pg_trgm.
 pub static pg_trgm_similarity_threshold: GucRealVar = GucSlot::new("similarity_threshold");
 pub static pg_trgm_word_similarity_threshold: GucRealVar =
     GucSlot::new("word_similarity_threshold");
 pub static pg_trgm_strict_word_similarity_threshold: GucRealVar =
     GucSlot::new("strict_word_similarity_threshold");
-// plpgsql.* custom GUCs (pl_handler.c _PG_init:158-203), statically defined
-// like auto_explain's: this port has no DefineCustomXxxVariable machinery.
-// The plpgsql crate installs the accessors (and the extra-checks check hook).
 pub static plpgsql_variable_conflict: GucEnumVar = GucSlot::new("plpgsql_variable_conflict");
 pub static plpgsql_print_strict_params: GucBoolVar = GucSlot::new("plpgsql_print_strict_params");
 pub static plpgsql_check_asserts: GucBoolVar = GucSlot::new("plpgsql_check_asserts");
@@ -477,16 +510,13 @@ pub static plpgsql_extra_errors_string: GucStringVar = GucSlot::new("plpgsql_ext
 // value computed by hooks::show_resource_counters — the simharness F8
 // resource-baseline hook channel; the fd crate owns backing + hook).
 pub static pgrust_resource_counters: GucStringVar = GucSlot::new("pgrust_resource_counters");
-// pg_stat_statements custom GUCs (pg_stat_statements.c _PG_init), statically
-// defined: this port has no DefineCustomXxxVariable machinery.
+pub static pgrust_allocator: GucStringVar = GucSlot::new("pgrust_allocator");
 pub static pgss_max: GucIntVar = GucSlot::new("pgss_max");
 pub static pgss_track: GucEnumVar = GucSlot::new("pgss_track");
 pub static pgss_track_utility: GucBoolVar = GucSlot::new("pgss_track_utility");
 pub static pgss_track_planning: GucBoolVar = GucSlot::new("pgss_track_planning");
 pub static pgss_save: GucBoolVar = GucSlot::new("pgss_save");
-// pgcrypto.builtin_crypto_enabled (pgcrypto.c _PG_init), statically defined too.
 pub static pgcrypto_builtin_crypto_enabled: GucEnumVar = GucSlot::new("builtin_crypto_enabled");
-// pgvector hnsw.* (contrib GUCs, defined statically; C defines them at module load).
 pub static hnsw_ef_search: GucIntVar = GucSlot::new("hnsw_ef_search");
 pub static hnsw_iterative_scan: GucEnumVar = GucSlot::new("hnsw_iterative_scan");
 pub static hnsw_max_scan_tuples: GucIntVar = GucSlot::new("hnsw_max_scan_tuples");
@@ -605,3 +635,22 @@ pub static work_mem: GucIntVar = GucSlot::new("work_mem");
 pub static xmlbinary: GucEnumVar = GucSlot::new("xmlbinary");
 pub static xmloption: GucEnumVar = GucSlot::new("xmloption");
 pub static zero_damaged_pages: GucBoolVar = GucSlot::new("zero_damaged_pages");
+
+// pgrust-only (no C symbol): the instance aux process (crates/backend/postmaster/instaux).
+pub static pgrust_instance_aux: GucBoolVar = GucSlot::new("pgrust_instance_aux");
+pub static pgrust_instance_aux_ready_commit_age: GucIntVar = GucSlot::new("pgrust_instance_aux_ready_commit_age");
+pub static pgrust_instance_aux_ready_lag: GucIntVar = GucSlot::new("pgrust_instance_aux_ready_lag");
+pub static pgrust_instance_aux_startup_stall: GucIntVar = GucSlot::new("pgrust_instance_aux_startup_stall");
+pub static pgrust_instance_aux_liveness_interval: GucIntVar = GucSlot::new("pgrust_instance_aux_liveness_interval");
+pub static pgrust_instance_aux_wedge_timeout: GucIntVar = GucSlot::new("pgrust_instance_aux_wedge_timeout");
+pub static pgrust_instance_aux_listen: GucStringVar = GucSlot::new("pgrust_instance_aux_listen");
+pub static pgrust_instance_aux_socket: GucStringVar = GucSlot::new("pgrust_instance_aux_socket");
+pub static pgrust_instance_aux_cert_file: GucStringVar = GucSlot::new("pgrust_instance_aux_cert_file");
+pub static pgrust_instance_aux_key_file: GucStringVar = GucSlot::new("pgrust_instance_aux_key_file");
+pub static pgrust_instance_aux_ca_file: GucStringVar = GucSlot::new("pgrust_instance_aux_ca_file");
+pub static pgrust_instance_aux_admin_identities: GucStringVar = GucSlot::new("pgrust_instance_aux_admin_identities");
+pub static pgrust_instance_aux_cluster: GucStringVar = GucSlot::new("pgrust_instance_aux_cluster");
+pub static pgrust_instance_aux_instance: GucStringVar = GucSlot::new("pgrust_instance_aux_instance");
+pub static pgrust_instance_aux_incarnation: GucStringVar = GucSlot::new("pgrust_instance_aux_incarnation");
+pub static pgrust_instance_aux_managed_conf: GucStringVar = GucSlot::new("pgrust_instance_aux_managed_conf");
+pub static pgrust_instance_aux_state_file: GucStringVar = GucSlot::new("pgrust_instance_aux_state_file");

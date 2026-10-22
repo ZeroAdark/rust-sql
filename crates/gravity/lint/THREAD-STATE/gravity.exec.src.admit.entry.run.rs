@@ -1,0 +1,2 @@
+gravity/exec/src/admit/entry/run.rs	DESC_CTX	admission	at:retire_descs	leader	ExecutorStart / Run of the backend: result descriptors' leaked session context (D1506); retire_descs frees it at the session's Roots phase
+gravity/exec/src/admit/entry/run.rs	DESC_GONE	admission	exit	leader	ExecutorStart / Run of the backend: the descs context was retired (retire_descs sets it); never cleared, so later descs on the thread error

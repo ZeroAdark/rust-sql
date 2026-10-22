@@ -43,6 +43,10 @@ pub fn subscript_handler_for(container_type: Oid) -> PgResult<Option<(SubscriptH
                 .map(|n| n.as_str().to_string());
             match name.as_deref() {
                 Some("hstore_subscript_handler") => Ok(Some((SubscriptHandler::Hstore, typelem))),
+                Some("array_subscript_handler" | "raw_array_subscript_handler") => {
+                    Ok(Some((SubscriptHandler::Array, typelem)))
+                }
+                Some("jsonb_subscript_handler") => Ok(Some((SubscriptHandler::Jsonb, typelem))),
                 // User-reachable: CREATE TYPE ... (SUBSCRIPT = fn) accepts
                 // any (internal)->internal function (typecmds
                 // findTypeSubscriptingFunction), so a superuser can pin an

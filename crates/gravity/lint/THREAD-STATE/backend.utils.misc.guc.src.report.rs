@@ -1,0 +1,1 @@
+backend/utils/misc/guc/src/report.rs	REPORTING_ENABLED	pgport	at:begin_reporting_guc_options	leader	C's reporting_enabled: this backend's ParameterStatus reporting switch, set once its client session starts

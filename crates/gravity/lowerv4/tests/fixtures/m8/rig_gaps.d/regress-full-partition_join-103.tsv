@@ -1,0 +1,1 @@
+a partitionwise hash-join arm under a settled union (D1486 row 1, V4R-553) whose hash clause's support the rig catalog cannot answer (GUARD-G1 support(), KeyUse::Hash: the rig catalog has no hash support face), so the crate rig refuses it by USER_FN (D2113); the server rig serves it

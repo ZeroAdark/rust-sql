@@ -1,0 +1,4 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/reloptions.rs
+growth	std::vec::Vec::push	1
+method	std::iter::Iterator::collect	5
+type	std::string::String	1

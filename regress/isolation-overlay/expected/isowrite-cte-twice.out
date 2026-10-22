@@ -1,0 +1,257 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1u s2w s1c s3sel s3tp s3seq
+step s1u: UPDATE tc SET val = val * 100 WHERE id IN (1, 4);
+step s2w: WITH u AS (UPDATE tp SET w = w + 1 WHERE grp = 1 RETURNING id, nextval('tsq') AS n) UPDATE tc SET val = val + u1.n * 1000 + u2.n FROM u u1, u u2 WHERE tc.pid = u1.id AND u2.id = u1.id; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s3sel: SELECT * FROM tc ORDER BY id;
+id|pid| val
+--+---+----
+ 1|  1|1101
+ 2|  2|   2
+ 3|  3|   3
+ 4|  4|2402
+ 5|  5|   5
+ 6|  6|   6
+ 7|  7|3010
+ 8|  8|   8
+ 9|  9|   9
+10|  1|1011
+11|  2|  11
+12|  3|  12
+13|  4|2015
+14|  5|  14
+15|  6|  15
+16|  7|3019
+17|  8|  17
+18|  9|  18
+(18 rows)
+
+step s3tp: SELECT id, w FROM tp ORDER BY id;
+id|w
+--+-
+ 1|1
+ 2|0
+ 3|0
+ 4|1
+ 5|0
+ 6|0
+ 7|1
+ 8|0
+ 9|0
+(9 rows)
+
+step s3seq: SELECT last_value FROM tsq;
+last_value
+----------
+         3
+(1 row)
+
+
+starting permutation: s1u s2w s1a s3sel s3seq
+step s1u: UPDATE tc SET val = val * 100 WHERE id IN (1, 4);
+step s2w: WITH u AS (UPDATE tp SET w = w + 1 WHERE grp = 1 RETURNING id, nextval('tsq') AS n) UPDATE tc SET val = val + u1.n * 1000 + u2.n FROM u u1, u u2 WHERE tc.pid = u1.id AND u2.id = u1.id; <waiting ...>
+step s1a: ROLLBACK;
+step s2w: <... completed>
+step s3sel: SELECT * FROM tc ORDER BY id;
+id|pid| val
+--+---+----
+ 1|  1|1002
+ 2|  2|   2
+ 3|  3|   3
+ 4|  4|2006
+ 5|  5|   5
+ 6|  6|   6
+ 7|  7|3010
+ 8|  8|   8
+ 9|  9|   9
+10|  1|1011
+11|  2|  11
+12|  3|  12
+13|  4|2015
+14|  5|  14
+15|  6|  15
+16|  7|3019
+17|  8|  17
+18|  9|  18
+(18 rows)
+
+step s3seq: SELECT last_value FROM tsq;
+last_value
+----------
+         3
+(1 row)
+
+
+starting permutation: s1k s2w s1c s3sel s3seq
+step s1k: UPDATE tc SET pid = 2 WHERE id = 1;
+step s2w: WITH u AS (UPDATE tp SET w = w + 1 WHERE grp = 1 RETURNING id, nextval('tsq') AS n) UPDATE tc SET val = val + u1.n * 1000 + u2.n FROM u u1, u u2 WHERE tc.pid = u1.id AND u2.id = u1.id; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s3sel: SELECT * FROM tc ORDER BY id;
+id|pid| val
+--+---+----
+ 1|  2|   1
+ 2|  2|   2
+ 3|  3|   3
+ 4|  4|2006
+ 5|  5|   5
+ 6|  6|   6
+ 7|  7|3010
+ 8|  8|   8
+ 9|  9|   9
+10|  1|1011
+11|  2|  11
+12|  3|  12
+13|  4|2015
+14|  5|  14
+15|  6|  15
+16|  7|3019
+17|  8|  17
+18|  9|  18
+(18 rows)
+
+step s3seq: SELECT last_value FROM tsq;
+last_value
+----------
+         3
+(1 row)
+
+
+starting permutation: s1d s2w s1c s3sel s3seq
+step s1d: DELETE FROM tc WHERE id = 4;
+step s2w: WITH u AS (UPDATE tp SET w = w + 1 WHERE grp = 1 RETURNING id, nextval('tsq') AS n) UPDATE tc SET val = val + u1.n * 1000 + u2.n FROM u u1, u u2 WHERE tc.pid = u1.id AND u2.id = u1.id; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s3sel: SELECT * FROM tc ORDER BY id;
+id|pid| val
+--+---+----
+ 1|  1|1002
+ 2|  2|   2
+ 3|  3|   3
+ 5|  5|   5
+ 6|  6|   6
+ 7|  7|3010
+ 8|  8|   8
+ 9|  9|   9
+10|  1|1011
+11|  2|  11
+12|  3|  12
+13|  4|2015
+14|  5|  14
+15|  6|  15
+16|  7|3019
+17|  8|  17
+18|  9|  18
+(17 rows)
+
+step s3seq: SELECT last_value FROM tsq;
+last_value
+----------
+         3
+(1 row)
+
+
+starting permutation: s1u s2d s1c s3sel s3tp s3seq
+step s1u: UPDATE tc SET val = val * 100 WHERE id IN (1, 4);
+step s2d: WITH u AS (UPDATE tp SET w = w + 1 WHERE grp = 1 RETURNING id, nextval('tsq') AS n) DELETE FROM tc USING u u1, u u2 WHERE tc.pid = u1.id AND u2.id = u1.id AND tc.val < 50; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s3sel: SELECT * FROM tc ORDER BY id;
+id|pid|val
+--+---+---
+ 1|  1|100
+ 2|  2|  2
+ 3|  3|  3
+ 4|  4|400
+ 5|  5|  5
+ 6|  6|  6
+ 8|  8|  8
+ 9|  9|  9
+11|  2| 11
+12|  3| 12
+14|  5| 14
+15|  6| 15
+17|  8| 17
+18|  9| 18
+(14 rows)
+
+step s3tp: SELECT id, w FROM tp ORDER BY id;
+id|w
+--+-
+ 1|1
+ 2|0
+ 3|0
+ 4|1
+ 5|0
+ 6|0
+ 7|1
+ 8|0
+ 9|0
+(9 rows)
+
+step s3seq: SELECT last_value FROM tsq;
+last_value
+----------
+         3
+(1 row)
+
+
+starting permutation: s1u s2m s1c s3sel
+step s1u: UPDATE tc SET val = val * 100 WHERE id IN (1, 4);
+step s2m: WITH u AS MATERIALIZED (SELECT id, grp FROM tp WHERE grp = 1) MERGE INTO tc t USING (SELECT a.id, b.grp FROM u a JOIN u b ON b.id = a.id) s ON t.pid = s.id WHEN MATCHED THEN UPDATE SET val = t.val + 1000 + s.grp; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM tc ORDER BY id;
+id|pid| val
+--+---+----
+ 1|  1|1101
+ 2|  2|   2
+ 3|  3|   3
+ 4|  4|1401
+ 5|  5|   5
+ 6|  6|   6
+ 7|  7|1008
+ 8|  8|   8
+ 9|  9|   9
+10|  1|1011
+11|  2|  11
+12|  3|  12
+13|  4|1014
+14|  5|  14
+15|  6|  15
+16|  7|1017
+17|  8|  17
+18|  9|  18
+(18 rows)
+
+
+starting permutation: s1k s2m s1c s3sel
+step s1k: UPDATE tc SET pid = 2 WHERE id = 1;
+step s2m: WITH u AS MATERIALIZED (SELECT id, grp FROM tp WHERE grp = 1) MERGE INTO tc t USING (SELECT a.id, b.grp FROM u a JOIN u b ON b.id = a.id) s ON t.pid = s.id WHEN MATCHED THEN UPDATE SET val = t.val + 1000 + s.grp; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM tc ORDER BY id;
+id|pid| val
+--+---+----
+ 1|  2|   1
+ 2|  2|   2
+ 3|  3|   3
+ 4|  4|1005
+ 5|  5|   5
+ 6|  6|   6
+ 7|  7|1008
+ 8|  8|   8
+ 9|  9|   9
+10|  1|1011
+11|  2|  11
+12|  3|  12
+13|  4|1014
+14|  5|  14
+15|  6|  15
+16|  7|1017
+17|  8|  17
+18|  9|  18
+(18 rows)
+

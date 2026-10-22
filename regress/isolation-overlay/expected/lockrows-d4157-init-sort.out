@@ -1,0 +1,81 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1k s2a s1c
+step s1k: UPDATE isx SET rank = 99 WHERE id = 3;
+step s2a: SELECT x.id, x.rank FROM isx x WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM isr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) ORDER BY x.rank FOR UPDATE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|rank
+--+----
+ 5|  10
+ 3|  99
+ 2|  40
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1x s2a s1c
+step s1x: UPDATE isx SET room = 9 WHERE id = 3;
+step s2a: SELECT x.id, x.rank FROM isx x WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM isr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) ORDER BY x.rank FOR UPDATE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|rank
+--+----
+ 5|  10
+ 2|  40
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2a s1c
+step s1d: DELETE FROM isx WHERE id = 5;
+step s2a: SELECT x.id, x.rank FROM isx x WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM isr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) ORDER BY x.rank FOR UPDATE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|rank
+--+----
+ 3|  30
+ 2|  40
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2s s1c
+step s1r: UPDATE isr SET valid = int4range(0, 70) WHERE id = 1;
+step s2s: SELECT x.id, x.rank FROM isx x WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM isr y WHERE y.id <= 3 FOR SHARE OF y) y2), false) ORDER BY x.rank FOR UPDATE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|rank
+--+----
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2n s1c
+step s1l: SELECT id FROM isx WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2n: SELECT x.id, x.rank FROM isx x WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM isr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) ORDER BY x.rank FOR UPDATE OF x NOWAIT;
+ERROR:  could not obtain lock on row in relation "isx"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2k s1c
+step s1l: SELECT id FROM isx WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2k: SELECT x.id, x.rank FROM isx x WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM isr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) ORDER BY x.rank FOR UPDATE OF x SKIP LOCKED;
+id|rank
+--+----
+ 5|  10
+ 2|  40
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

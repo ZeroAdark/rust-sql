@@ -1,0 +1,211 @@
+Parsed test spec with 4 sessions
+
+starting permutation: pa pai
+step pa: EXPLAIN (COSTS OFF) UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7;
+QUERY PLAN                                                                   
+-----------------------------------------------------------------------------
+Update on order_line                                                         
+  ->  Bitmap Heap Scan on order_line                                         
+        Recheck Cond: ((ol_w_id = 1) AND (ol_d_id = 3) AND (ol_o_id = 7))    
+        ->  Bitmap Index Scan on order_line_i1                               
+              Index Cond: ((ol_w_id = 1) AND (ol_d_id = 3) AND (ol_o_id = 7))
+(5 rows)
+
+step pai: EXPLAIN (COSTS OFF) UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7;
+QUERY PLAN                                                             
+-----------------------------------------------------------------------
+Update on order_line                                                   
+  ->  Index Scan using order_line_i1 on order_line                     
+        Index Cond: ((ol_w_id = 1) AND (ol_d_id = 3) AND (ol_o_id = 7))
+(3 rows)
+
+
+starting permutation: b2 a bc read
+b: WARNING:  there is already a transaction in progress
+step b2: UPDATE order_line SET ol_quantity = ol_quantity + 100 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7 AND ol_number = 2;
+step a: UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7; <waiting ...>
+step bc: COMMIT;
+step a: <... completed>
+step read: SELECT ol_o_id, ol_number, ol_quantity FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id IN (7, 31) ORDER BY ol_o_id, ol_number;
+ol_o_id|ol_number|ol_quantity
+-------+---------+-----------
+      7|        1|          6
+      7|        2|        106
+      7|        3|          6
+      7|        4|          6
+      7|        5|          6
+      7|        6|          6
+      7|        7|          6
+      7|        8|          6
+      7|        9|          6
+      7|       10|          6
+(10 rows)
+
+
+starting permutation: b2 a br read
+step b2: UPDATE order_line SET ol_quantity = ol_quantity + 100 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7 AND ol_number = 2;
+step a: UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7; <waiting ...>
+step br: ROLLBACK;
+step a: <... completed>
+step read: SELECT ol_o_id, ol_number, ol_quantity FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id IN (7, 31) ORDER BY ol_o_id, ol_number;
+ol_o_id|ol_number|ol_quantity
+-------+---------+-----------
+      7|        1|          6
+      7|        2|          6
+      7|        3|          6
+      7|        4|          6
+      7|        5|          6
+      7|        6|          6
+      7|        7|          6
+      7|        8|          6
+      7|        9|          6
+      7|       10|          6
+(10 rows)
+
+
+starting permutation: b1 a bc read
+step b1: UPDATE order_line SET ol_quantity = ol_quantity + 100 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7 AND ol_number = 1;
+step a: UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7; <waiting ...>
+step bc: COMMIT;
+step a: <... completed>
+step read: SELECT ol_o_id, ol_number, ol_quantity FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id IN (7, 31) ORDER BY ol_o_id, ol_number;
+ol_o_id|ol_number|ol_quantity
+-------+---------+-----------
+      7|        1|        106
+      7|        2|          6
+      7|        3|          6
+      7|        4|          6
+      7|        5|          6
+      7|        6|          6
+      7|        7|          6
+      7|        8|          6
+      7|        9|          6
+      7|       10|          6
+(10 rows)
+
+
+starting permutation: b10 a bc read
+step b10: UPDATE order_line SET ol_quantity = ol_quantity + 100 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7 AND ol_number = 10;
+step a: UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7; <waiting ...>
+step bc: COMMIT;
+step a: <... completed>
+step read: SELECT ol_o_id, ol_number, ol_quantity FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id IN (7, 31) ORDER BY ol_o_id, ol_number;
+ol_o_id|ol_number|ol_quantity
+-------+---------+-----------
+      7|        1|          6
+      7|        2|          6
+      7|        3|          6
+      7|        4|          6
+      7|        5|          6
+      7|        6|          6
+      7|        7|          6
+      7|        8|          6
+      7|        9|          6
+      7|       10|        106
+(10 rows)
+
+
+starting permutation: bx a bc read
+step bx: UPDATE order_line SET ol_o_id = 31 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7 AND ol_number = 2;
+step a: UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7; <waiting ...>
+step bc: COMMIT;
+step a: <... completed>
+step read: SELECT ol_o_id, ol_number, ol_quantity FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id IN (7, 31) ORDER BY ol_o_id, ol_number;
+ol_o_id|ol_number|ol_quantity
+-------+---------+-----------
+      7|        1|          6
+      7|        3|          6
+      7|        4|          6
+      7|        5|          6
+      7|        6|          6
+      7|        7|          6
+      7|        8|          6
+      7|        9|          6
+      7|       10|          6
+     31|        2|          5
+(10 rows)
+
+
+starting permutation: b2 ai bc read
+step b2: UPDATE order_line SET ol_quantity = ol_quantity + 100 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7 AND ol_number = 2;
+step ai: UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7; <waiting ...>
+step bc: COMMIT;
+step ai: <... completed>
+step read: SELECT ol_o_id, ol_number, ol_quantity FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id IN (7, 31) ORDER BY ol_o_id, ol_number;
+ol_o_id|ol_number|ol_quantity
+-------+---------+-----------
+      7|        1|          6
+      7|        2|        106
+      7|        3|          6
+      7|        4|          6
+      7|        5|          6
+      7|        6|          6
+      7|        7|          6
+      7|        8|          6
+      7|        9|          6
+      7|       10|          6
+(10 rows)
+
+
+starting permutation: b1 ai bc read
+step b1: UPDATE order_line SET ol_quantity = ol_quantity + 100 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7 AND ol_number = 1;
+step ai: UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7; <waiting ...>
+step bc: COMMIT;
+step ai: <... completed>
+step read: SELECT ol_o_id, ol_number, ol_quantity FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id IN (7, 31) ORDER BY ol_o_id, ol_number;
+ol_o_id|ol_number|ol_quantity
+-------+---------+-----------
+      7|        1|        106
+      7|        2|          6
+      7|        3|          6
+      7|        4|          6
+      7|        5|          6
+      7|        6|          6
+      7|        7|          6
+      7|        8|          6
+      7|        9|          6
+      7|       10|          6
+(10 rows)
+
+
+starting permutation: b10 ai bc read
+step b10: UPDATE order_line SET ol_quantity = ol_quantity + 100 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7 AND ol_number = 10;
+step ai: UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7; <waiting ...>
+step bc: COMMIT;
+step ai: <... completed>
+step read: SELECT ol_o_id, ol_number, ol_quantity FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id IN (7, 31) ORDER BY ol_o_id, ol_number;
+ol_o_id|ol_number|ol_quantity
+-------+---------+-----------
+      7|        1|          6
+      7|        2|          6
+      7|        3|          6
+      7|        4|          6
+      7|        5|          6
+      7|        6|          6
+      7|        7|          6
+      7|        8|          6
+      7|        9|          6
+      7|       10|        106
+(10 rows)
+
+
+starting permutation: bx ai bc read
+step bx: UPDATE order_line SET ol_o_id = 31 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7 AND ol_number = 2;
+step ai: UPDATE order_line SET ol_quantity = ol_quantity + 1 WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id = 7; <waiting ...>
+step bc: COMMIT;
+step ai: <... completed>
+step read: SELECT ol_o_id, ol_number, ol_quantity FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 3 AND ol_o_id IN (7, 31) ORDER BY ol_o_id, ol_number;
+ol_o_id|ol_number|ol_quantity
+-------+---------+-----------
+      7|        1|          6
+      7|        3|          6
+      7|        4|          6
+      7|        5|          6
+      7|        6|          6
+      7|        7|          6
+      7|        8|          6
+      7|        9|          6
+      7|       10|          6
+     31|        2|          5
+(10 rows)
+

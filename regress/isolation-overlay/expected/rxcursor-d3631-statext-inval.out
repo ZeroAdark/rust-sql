@@ -1,0 +1,69 @@
+Parsed test spec with 3 sessions
+
+starting permutation: c_est b_est a_create b_est c_est a_drop b_est c_est
+step c_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS c_rows;
+c_rows
+------
+     1
+(1 row)
+
+step b_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS b_rows;
+b_rows
+------
+     1
+(1 row)
+
+step a_create: CREATE STATISTICS d3631s_dep (dependencies) ON a, b FROM d3631s; ANALYZE d3631s;
+step b_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS b_rows;
+b_rows
+------
+   100
+(1 row)
+
+step c_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS c_rows;
+c_rows
+------
+   100
+(1 row)
+
+step a_drop: DROP STATISTICS d3631s_dep;
+step b_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS b_rows;
+b_rows
+------
+     1
+(1 row)
+
+step c_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS c_rows;
+c_rows
+------
+     1
+(1 row)
+
+
+starting permutation: c_est b_est a_create a_drop c_est b_est
+step c_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS c_rows;
+c_rows
+------
+     1
+(1 row)
+
+step b_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS b_rows;
+b_rows
+------
+     1
+(1 row)
+
+step a_create: CREATE STATISTICS d3631s_dep (dependencies) ON a, b FROM d3631s; ANALYZE d3631s;
+step a_drop: DROP STATISTICS d3631s_dep;
+step c_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS c_rows;
+c_rows
+------
+     1
+(1 row)
+
+step b_est: SELECT d3631_est('SELECT * FROM d3631s WHERE a = 1 AND b = 1') AS b_rows;
+b_rows
+------
+     1
+(1 row)
+

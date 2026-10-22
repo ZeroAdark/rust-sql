@@ -1,7 +1,6 @@
-// prepare.c. prepared_queries is a real dynahash HTAB (HASH_STRINGS,
+// prepared_queries is a real dynahash HTAB (HASH_STRINGS,
 // NAMEDATALEN keys) because pg_prepared_statements emits rows in hash_seq
-// order — byte parity with C requires C's iteration order. Loud arm:
-// $n parameters inside EXECUTE parameter expressions (no EState binding).
+// order — byte parity with C requires C's iteration order.
 #![allow(non_snake_case)]
 
 use core::cell::Cell;
@@ -86,7 +85,7 @@ fn query_hash_table() -> PgResult<*mut HTAB> {
     Ok(hashp)
 }
 
-/// Backend-exit teardown of prepared_queries (regression): the
+/// Backend-exit teardown of prepared_queries (fp-hash-dynahash#1): the
 /// plancache entries go with ReleaseAllCachedPlansAtExit (registered earlier
 /// in the session, so it runs after this LIFO callback); here only the HTAB
 /// and its memory context are released, and the thread-local pointer is
@@ -139,8 +138,6 @@ pub fn PrepareQuery(
         plancache::DropCachedPlan(plansource);
         return Err(e);
     }
-    // Revalidation is plancache's fixedparams default on the retained inner
-    // query tree, with the resolved param types (C's parserSetup == NULL arm).
     Ok(())
 }
 
@@ -229,8 +226,6 @@ pub fn ExecuteQuery<'mcx>(
             cplan,
         )?;
 
-        // CREATE TABLE AS EXECUTE: C insists the prepared statement is a plain
-        // SELECT (INSERT ... RETURNING etc. stay unsupported upstream too).
         let (eflags, count) = match into_clause {
             Some(into) => {
                 let is_select = stmt_slice.len() == 1
@@ -260,11 +255,10 @@ pub fn ExecuteQuery<'mcx>(
     res
 }
 
-// EvaluateParams (prepare.c). Expression evaluation rides
-// execexpr::evaluate_expr (no EState): C binds the caller's params into an
-// EState here, but a $n inside a parameter expression is already a 42P02 at
-// transformExpr (this ParseState has no paramref hook, exactly as C's), so
-// that binding is never consulted on either engine.
+// Expression evaluation rides execexpr::evaluate_expr (no EState): C binds the
+// caller's params into an EState here, but a $n inside a parameter expression
+// is already a 42P02 at transformExpr (this ParseState has no paramref hook,
+// exactly as C's), so that binding is never consulted on either engine.
 fn EvaluateParams<'mcx>(
     mcx: Mcx<'mcx>,
     entry: &PreparedStatement,
@@ -293,17 +287,16 @@ fn EvaluateParams<'mcx>(
     let mut pstate = parser_small1::make_parsestate(mcx, None);
     pstate.p_sourcetext = Some(source_text.as_bytes());
 
-    // Pass 1 (prepare.c:311-342): parse-analyze and coerce EVERY parameter
-    // before any of them is evaluated, so a coercion failure of $j (42804) is
-    // reported ahead of a runtime error or a side effect of evaluating $i.
+    // Parse-analyze and coerce every parameter before any of them is evaluated,
+    // so a coercion failure of $j (42804) is reported ahead of a runtime error
+    // or a side effect of evaluating $i.
     let mut coerced_exprs: mcx::PgVec<'mcx, types_nodes::Node<'mcx>> =
         mcx::vec_with_capacity_in(mcx, num_params)?;
     for (i, raw) in params_list.iter().enumerate() {
         let expected_type_id = param_types[i];
-        // C (prepare.c:335) points the 42804 cursor at the RAW parser node:
-        // exprLocation(lfirst(l)), not the transformed expression (a TypeCast
-        // is leftmost at its type name / CAST keyword, the Const it becomes
-        // is not).
+        // The 42804 cursor points at the raw parser node, not the transformed
+        // expression (a TypeCast is leftmost at its type name / CAST keyword,
+        // the Const it becomes is not).
         let raw_location = parse_expr::expr_location(raw);
         let expr = parse_expr::transformExpr(
             mcx,
@@ -345,21 +338,29 @@ fn EvaluateParams<'mcx>(
         coerced_exprs.push(coerced);
     }
 
-    // Pass 2 (prepare.c:345): ExecPrepareExprList runs expression_planner
-    // over every parameter before any is evaluated.
+    // ExecPrepareExprList: plan and initialize every parameter (ExecInitExpr's
+    // EXECUTE checks included) before evaluating any of them.
+    let tmp = mcx.context().new_child("EvaluateParams");
+    let tmcx = tmp.mcx();
+    // Dropped (not arena-reset) before `tmp`: ExprState owns drop glue.
+    let mut states = mcx::PgVec::new_in(tmcx);
     for coerced in coerced_exprs.iter_mut() {
         *coerced = clauses::eval_const_expressions(mcx, *coerced)?;
         nodes_core::fix_opfuncids(*coerced)?;
+        states.push(
+            execexpr::exec_init_expr(tmcx, Some(*coerced), execexpr::ParamBind::NONE)?
+                .expect("parameter expression is Some"),
+        );
     }
 
-    // Pass 3 (prepare.c:347-363): evaluate the finished expressions.
     let mut out: mcx::PgVec<'mcx, types_portal::params::ParamExternData> =
         mcx::vec_with_capacity_in(mcx, num_params)?;
-    for (i, &coerced) in coerced_exprs.iter().enumerate() {
+    for (i, (&coerced, state)) in coerced_exprs.iter().zip(states.into_iter()).enumerate() {
         let expected_type_id = param_types[i];
-        let evaluated = execexpr::evaluate_expr(
+        let evaluated = execexpr::evaluate_prepared_expr(
             mcx,
-            coerced,
+            tmcx,
+            state,
             parse_expr::expr_type(coerced),
             parse_expr::expr_typmod(coerced),
             parse_expr::expr_collation(coerced),
@@ -438,8 +439,6 @@ pub fn FetchPreparedStatement(
     Ok(entry)
 }
 
-// Fixed-result plans never change their tupdesc, so no revalidation (C).
-// upstream 37b8f3b0e05e (18.6): Cross-check the type of a portal running EXECUTE or FETCH.
 // A copy, as in C: the plansource's own descriptor dies with it at DEALLOCATE.
 pub fn FetchPreparedStatementResultDesc<'mcx>(
     mcx: Mcx<'mcx>,
@@ -497,10 +496,6 @@ pub fn DropAllPreparedStatements() -> PgResult<()> {
     Ok(())
 }
 
-// The plan renderer is injected by the explain crate (a direct dep here would
-// cycle: explain deps prepare for this entry point). Called once per cached
-// PlannedStmt with (pstmt, prepared query string, evaluated params,
-// planduration, is_last).
 pub fn ExplainExecuteQuery<'mcx>(
     mcx: Mcx<'mcx>,
     stmt: &ExecuteStmt<'mcx>,

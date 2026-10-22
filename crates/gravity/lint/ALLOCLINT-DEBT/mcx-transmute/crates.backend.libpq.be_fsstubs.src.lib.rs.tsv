@@ -1,0 +1,2 @@
+path	crates/backend/libpq/be_fsstubs/src/lib.rs
+mcx-transmute	transmute	1

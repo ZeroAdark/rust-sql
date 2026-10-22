@@ -1,0 +1,12 @@
+-- regress-full-plpgsql-072
+-- select error2('public.stuffs');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1259 rti=1 am=heap index=2662
+    key att=1 op=607 value=relabel26(fn1079(c25:'public.stuffs'))
+    recheck (op607(v1.1, relabel26(fn1079(c25:'public.stuffs'))))
+    lanes Attr(2):byref8:fx64:win/page
+  project (1=fn406(v1.2))
+  outs 1=vl:call406
+mapped: IndexScan

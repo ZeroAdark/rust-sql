@@ -1,0 +1,1 @@
+backend/access/pgrcolumnar/pgrc_am/src/ingest.rs	SCHEMA_PUBLISH	pgrc	scope:SchemaPublish	thread	D2189: set while publish_schema's own publish_ext runs and read by publish_serialized in that extent on the same thread (a schema publish describes its own base: no dropped-stamp catch-up); a publish on any other thread (ingest, seal, compaction, VACUUM) reads its own false

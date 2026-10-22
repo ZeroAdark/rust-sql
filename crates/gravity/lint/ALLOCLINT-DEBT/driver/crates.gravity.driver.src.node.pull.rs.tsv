@@ -1,0 +1,6 @@
+path	crates/gravity/driver/src/node/pull.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::insert	1
+growth	std::vec::Vec::push	5
+method	std::iter::Iterator::collect	3
+type	std::vec::Vec	4

@@ -1,0 +1,17 @@
+-- regress-full-collate.icu.utf8-026
+-- do $$ BEGIN EXECUTE 'CREATE COLLATION test0 (provider = icu, locale = ' || quote_literal((SELECT CASE WHEN datlocprovider='i' THEN datlocale ELSE datcollate END FROM pg_database WHERE datname = current_database())) || ');'; END $$;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0
+  source range rel=1262 rti=2 am=heap
+    lanes Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val Attr(13):byref8:vl:win/page Attr(15):byref8:vl:win/page Offset:byval2:w2:val
+  filter op93(v2.2, fn861())
+  project (1=case(when op92(v2.5, c18:105) then v2.15) else v2.13)
+  outs 1=vl:win/page
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op654(op654(c25:'CREATE COLLATION test0 (provider = icu, locale = ', fn1283($exec0)), c25:');'))
+  outs 1=vl:call1258
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 vol=s
+mapped: Result SeqScan SubPlan

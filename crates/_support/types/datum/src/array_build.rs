@@ -3,6 +3,25 @@ use ::types_core::Oid;
 use alloc::boxed::Box;
 use mcx::{check_alloc_size, slice_borrow_in, vec_with_capacity_in, Mcx, PgVec};
 use types_error::{PgError, PgResult, ERRCODE_DATA_CORRUPTED};
+use crate::varlena::VARHDRSZ;
+
+// varatt.h VARATT_IS_1B on the header's first byte.
+#[inline]
+fn varlena_1b(b: u8) -> bool {
+    #[cfg(target_endian = "little")]
+    return b & 0x01 == 0x01;
+    #[cfg(target_endian = "big")]
+    return b & 0x80 == 0x80;
+}
+
+#[cold]
+#[inline(never)]
+fn varsize_under_header(n: usize) -> Box<PgError> {
+    Box::new(
+        PgError::error(alloc::format!("invalid varlena size {n}: less than its {VARHDRSZ}-byte header"))
+            .with_sqlstate(ERRCODE_DATA_CORRUPTED),
+    )
+}
 
 pub const MAXDIM: usize = 6;
 const INIT_ELEMS: usize = 64;
@@ -57,16 +76,20 @@ impl<'mcx> ArrayBuildState<'mcx> {
         check_alloc_size(bytes)?;
         self.dvalues
             .try_reserve_exact(slots.saturating_sub(self.dvalues.len()))
-            .map_err(|_| self.mcx.oom(bytes))?;
+            .map_err(|_| self.mcx.oom_boxed(bytes))?;
         self.dnulls
             .try_reserve_exact(slots.saturating_sub(self.dnulls.len()))
-            .map_err(|_| self.mcx.oom(slots))?;
+            .map_err(|_| self.mcx.oom_boxed(slots))?;
         self.alen = alen;
         Ok(())
     }
 
-    // C: datumCopy into astate->mcontext; stable chunk addresses outlive the call.
+    // C: datumCopy into astate->mcontext; stable chunk addresses outlive the call. A varlena element under its own
+    // 4-byte header is refused (D4728's class: the short copy's next reader took the header word past its end).
     pub fn copy_byref(&self, bytes: &[u8]) -> PgResult<Datum> {
+        if self.typlen == -1 && bytes.len() < VARHDRSZ && !bytes.first().is_some_and(|&b| varlena_1b(b)) {
+            return Err(varsize_under_header(bytes.len()));
+        }
         let copy = slice_borrow_in(self.mcx, bytes)?;
         Ok(Datum::from_usize(copy.as_ptr() as usize))
     }
@@ -103,7 +126,7 @@ impl ArrayBuildStateArr<'_> {
         check_alloc_size(abytes)?;
         self.data
             .try_reserve_exact(abytes.saturating_sub(self.data.len()))
-            .map_err(|_| self.mcx.oom(abytes))?;
+            .map_err(|_| self.mcx.oom_boxed(abytes))?;
         Ok(())
     }
 }
@@ -320,9 +343,9 @@ fn array_fetch_inline_enabled() -> bool {
 
 // C fetch_att's inline width switch (postgres.h): fixed-width loads instead
 // of the runtime-length copy_from_slice, which rustc lowers to a libc memcpy
-// CALL per element. Both arms produce byte-identical Datum values (the copy
-// arm zero-pads w to 8 bytes; the load arm zero-extends the same low-address
-// bytes) — result parity by construction on little-endian targets.
+// CALL per element. 2- and 4-byte elements are sign-extended in both arms
+// (C's Int16GetDatum / Int32GetDatum): a zero-extended negative int4 MCV
+// reached a served SQL function body as a word past int4 (D2720).
 #[inline(always)]
 fn fetch_byval_datum(image: &[u8], off: usize, elmlen: i16, inline_fetch: bool) -> Datum {
     if inline_fetch {
@@ -331,12 +354,8 @@ fn fetch_byval_datum(image: &[u8], off: usize, elmlen: i16, inline_fetch: bool) 
         // read_unaligned tolerates any alignment.
         match elmlen {
             1 => Datum::from_u64(b[0] as u64),
-            2 => Datum::from_u64(
-                unsafe { core::ptr::read_unaligned(b.as_ptr() as *const u16) } as u64,
-            ),
-            4 => Datum::from_u64(
-                unsafe { core::ptr::read_unaligned(b.as_ptr() as *const u32) } as u64,
-            ),
+            2 => Datum::from_i16(unsafe { core::ptr::read_unaligned(b.as_ptr() as *const i16) }),
+            4 => Datum::from_i32(unsafe { core::ptr::read_unaligned(b.as_ptr() as *const i32) }),
             8 => Datum::from_u64(unsafe { core::ptr::read_unaligned(b.as_ptr() as *const u64) }),
             _ => panic!("deconstruct_array_image: unsupported byval typlen {elmlen}"),
         }
@@ -344,7 +363,12 @@ fn fetch_byval_datum(image: &[u8], off: usize, elmlen: i16, inline_fetch: bool) 
         // Incumbent arm (kill-knob restore): runtime-length copy.
         let mut w = [0u8; 8];
         w[..elmlen as usize].copy_from_slice(&image[off..off + elmlen as usize]);
-        Datum::from_u64(u64::from_ne_bytes(w))
+        let v = u64::from_ne_bytes(w);
+        match elmlen {
+            2 => Datum::from_i16(v as u16 as i16),
+            4 => Datum::from_i32(v as u32 as i32),
+            _ => Datum::from_u64(v),
+        }
     }
 }
 
@@ -545,6 +569,32 @@ mod tests {
         let out = deconstruct_array_image(mcx, &img, 4, true, b'i').unwrap();
         let got: [i32; 3] = [out[0].as_i32(), out[1].as_i32(), out[2].as_i32()];
         assert_eq!(got, [1, -7, 500]);
+        assert_eq!(out[1].as_u64(), Datum::from_i32(-7).as_u64());
+        let out2 = deconstruct_array_image(mcx, &construct_array_image(mcx, &[Datum::from_i16(-3)], 21, 2, true, b's').unwrap(), 2, true, b's').unwrap();
+        assert_eq!(out2[0].as_u64(), Datum::from_i16(-3).as_u64());
+    }
+
+    // D2720: a 2- or 4-byte by-value element comes back sign-extended into the whole Datum word, as C fetch_att's
+    // Int16GetDatum / Int32GetDatum produce it, through both fetch arms. A zero-extended word reaches any reader of
+    // the full word as a value past int4 (get_attstatsslot decodes MCVs through deconstruct_array_image).
+    #[test]
+    fn deconstruct_sign_extends_short_byval_elements() {
+        let ctx = MemoryContext::new_bump("arr-sign");
+        let mcx = ctx.mcx();
+        let img4 = construct_array_image(mcx, &[Datum::from_i32(-7), Datum::from_i32(3)], 23, 4, true, b'i').unwrap();
+        let out4 = deconstruct_array_image(mcx, &img4, 4, true, b'i').unwrap();
+        assert_eq!(out4[0].as_u64(), Datum::from_i32(-7).as_u64());
+        assert_eq!(out4[1].as_u64(), Datum::from_i32(3).as_u64());
+        let img2 = construct_array_image(mcx, &[Datum::from_i16(-3), Datum::from_i16(5)], 21, 2, true, b's').unwrap();
+        let out2 = deconstruct_array_image(mcx, &img2, 2, true, b's').unwrap();
+        assert_eq!(out2[0].as_u64(), Datum::from_i16(-3).as_u64());
+        assert_eq!(out2[1].as_u64(), Datum::from_i16(5).as_u64());
+        for inline_fetch in [true, false] {
+            let w4 = fetch_byval_datum(&(-7i32).to_ne_bytes(), 0, 4, inline_fetch);
+            assert_eq!(w4.as_u64(), Datum::from_i32(-7).as_u64(), "4-byte, inline_fetch {inline_fetch}");
+            let w2 = fetch_byval_datum(&(-3i16).to_ne_bytes(), 0, 2, inline_fetch);
+            assert_eq!(w2.as_u64(), Datum::from_i16(-3).as_u64(), "2-byte, inline_fetch {inline_fetch}");
+        }
     }
 
     // deconstruct_array walks a multi-dimensional image linearly
@@ -811,6 +861,24 @@ mod tests {
         let (vals, nulls) = deconstruct_array_image_nulls(mcx, &plain, 4, true, b'i').unwrap();
         assert!(nulls.is_none());
         assert_eq!(vals[0].as_i32(), 9);
+    }
+
+    // D4728's class: a varlena element whose 4-byte header declares under its own 4 bytes is refused (XX001) instead
+    // of copied short (the copy's next reader took its header word past its end: D4728's SIGSEGV in copy_byref).
+    #[test]
+    fn copy_byref_refuses_a_4_byte_header_under_its_size() {
+        let ctx = MemoryContext::new_bump("array-build-short");
+        let mut st = ArrayBuildState::new(ctx.mcx(), 17, true).unwrap();
+        st.typlen = -1;
+        for n in 0u32..4 {
+            let img = (n << 2).to_ne_bytes();
+            let err = st.copy_byref(&img[..n as usize]).unwrap_err();
+            assert_eq!(err.sqlstate(), ERRCODE_DATA_CORRUPTED, "VARSIZE {n}");
+        }
+        assert!(st.copy_byref(&[0x03, b'x']).is_ok());
+        assert!(st.copy_byref(&(4u32 << 2).to_ne_bytes()).is_ok());
+        st.typlen = -2;
+        assert!(st.copy_byref(b"\0").is_ok());
     }
 
     #[test]

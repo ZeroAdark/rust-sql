@@ -1,0 +1,100 @@
+[package]
+name = "gravity_parallel"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "gravity_parallel"
+path = "src/lib.rs"
+
+[dependencies]
+# C7 runtime half: its leader-class thread-locals are declared through leader_tls!
+leader_tls = { path = "../../_support/leader_tls" }
+pgsync = { path = "../../_support/pgsync" }
+stack_depth_core = { path = "../../backend/utils/misc/stack_depth_core" }
+gravity_abi = { path = "../abi" }
+gravity_program = { path = "../program" }
+gravity_driver = { path = "../driver" }
+memledger = { path = "../../_support/memledger" }
+fires = { path = "../../_support/fires" }
+cancelpoll = { path = "../../_support/cancelpoll" }
+
+[dev-dependencies]
+# The crate's own tests and examples drive the fixture pool.
+gravity_parallel = { path = ".", features = ["fixture-pool"] }
+gravity_program = { path = "../program", features = ["hand"] }
+gravity_kernels = { path = "../kernels" }
+
+[features]
+# FixturePool (src/test/fixture_pool.rs): a thread pool for crate tests and examples, never a server pool. Only
+# dev-dependencies enable it; gravity_lint's fixture_pool test fails if a normal dependency edge does.
+fixture-pool = []
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# gravity_parallel_suite (tests/gravity_parallel_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct
+# runs it once per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it
+# cannot share a process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator];
+# text naming process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state
+# call): then it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the
+# file is in exactly one of the two places.
+[[test]]
+name = "gravity_parallel_suite"
+path = "tests/gravity_parallel_suite.rs"
+
+[[test]]
+name = "cancel"
+path = "tests/cancel.rs"
+
+[[test]]
+name = "claim_charge"
+path = "tests/claim_charge.rs"
+
+[[test]]
+name = "d1702_nested_frames"
+path = "tests/d1702_nested_frames.rs"
+
+[[test]]
+name = "d4054_build_run_spilled"
+path = "tests/d4054_build_run_spilled.rs"
+
+[[test]]
+name = "d4280_past_grant_zero_cancel"
+path = "tests/d4280_past_grant_zero_cancel.rs"
+
+[[test]]
+name = "distinct"
+path = "tests/distinct.rs"
+
+[[test]]
+name = "hashagg"
+path = "tests/hashagg.rs"
+
+[[test]]
+name = "hashjoin"
+path = "tests/hashjoin.rs"
+
+[[test]]
+name = "merge"
+path = "tests/merge.rs"
+
+[[test]]
+name = "placed"
+path = "tests/placed.rs"
+
+[[test]]
+name = "pulled_w8"
+path = "tests/pulled_w8.rs"
+
+[[test]]
+name = "rcf_cursor_charge_first"
+path = "tests/rcf_cursor_charge_first.rs"
+
+[[test]]
+name = "sort"
+path = "tests/sort.rs"
+
+[[test]]
+name = "zero_alloc"
+path = "tests/zero_alloc.rs"

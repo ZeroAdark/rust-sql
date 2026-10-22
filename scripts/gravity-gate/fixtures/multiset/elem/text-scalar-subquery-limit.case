@@ -1,0 +1,10 @@
+# D3732: a LIMIT in the scalar subquery (which group it returns follows an order): exact
+sql: SELECT g, (SELECT array_agg(c.v) FROM c GROUP BY c.g LIMIT 1) FROM t;
+cols: g	array_agg
+tables: t c
+class: unordered
+verdict: mismatch
+[pg]
+1	{a,b}
+[got]
+1	{b,a}

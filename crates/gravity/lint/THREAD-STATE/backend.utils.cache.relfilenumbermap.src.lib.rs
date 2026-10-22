@@ -1,0 +1,1 @@
+backend/utils/cache/relfilenumbermap/src/lib.rs	MAP	pgport	at:RelfilenumberMapInvalidateCallback	leader	relcache; (tablespace, relfilenumber) -> relid map, entries dropped by RelfilenumberMapInvalidateCallback on a relcache invalidation

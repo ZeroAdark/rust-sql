@@ -1,0 +1,1 @@
+EXTRACT(CENTURY FROM CURRENT_DATE): the crate has no transaction start

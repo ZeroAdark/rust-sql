@@ -1,0 +1,10 @@
+-- regress-full-conversion-008
+-- select description, inbytes, (test_conv(inbytes::text::bytea, 'gb18030', 'gb18030')).* from gb18030_inputs;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=880 end=sink
+  nodes n0@0
+  source range rel=40860 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.2, 2=v1.1, 3=T_FieldSelect, 4=T_FieldSelect, 5=T_FieldSelect)
+  outs 1=vl:win/page 2=vl:win/page 3=vl:call0 4=vl:call0 5=vl:call0
+mapped: SeqScan

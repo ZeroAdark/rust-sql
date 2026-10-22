@@ -1,0 +1,13 @@
+f(%a,%b) {
+entry:
+condbr %a, ^left, ^right
+left:
+%x = add %a, %b
+br ^merge
+right:
+%y = sub %a, %b
+br ^merge
+merge:
+%z! = phi [^left, %x], [^right, %y]
+ret %z
+}

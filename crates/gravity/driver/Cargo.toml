@@ -1,0 +1,545 @@
+[package]
+name = "gravity_driver"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "gravity_driver"
+path = "src/lib.rs"
+
+[dependencies]
+gravity_abi = { path = "../abi" }
+stack_depth_core = { path = "../../backend/utils/misc/stack_depth_core" }
+gravity_program = { path = "../program" }
+mcx = { path = "../../_support/mcx" }
+# D3887: the abort poll of host loops and the poll-gap probe.
+cancelpoll = { path = "../../_support/cancelpoll" }
+fires = { path = "../../_support/fires" }
+pgsync = { path = "../../_support/pgsync" }
+memledger = { path = "../../_support/memledger" }
+# pagepool P3 (PGRUST_POOL_GRAVITY=1): regions and arena chunks from the page pool
+pagepool = { path = "../../_support/pagepool" }
+# D4692: the reaper's landing credit counts the cache runs waiting for the page releaser (allocarena::own)
+allocarena = { path = "../../_support/allocarena" }
+mempolicy = { path = "../../_support/mempolicy" }
+pagegive = { path = "../../_support/pagegive" }
+pg_clock = { path = "../../port/pg_clock" }
+waiter = { path = "../../backend/storage/ipc/waiter" }
+guc_seams = { path = "../../backend/utils/misc/guc_seams" }
+allocator-api2 = { version = "0.2", default-features = false, features = ["alloc"] }
+lz4_flex = "0.11"
+
+[dev-dependencies]
+# the integration-test rig, compiled once (BD-12)
+gravity_driver_rig = { path = "../driver_rig" }
+# a built program's descriptors edited and set back (tests/common `V4Descs::thaw`; D4533: tests and rigs only)
+gravity_program = { path = "../program", features = ["rig"] }
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# gravity_driver_suite (tests/gravity_driver_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs it
+# once per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot share
+# a process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text naming
+# process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state call): then
+# it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the file is in
+# exactly one of the two places.
+[[test]]
+name = "gravity_driver_suite"
+path = "tests/gravity_driver_suite.rs"
+
+[[test]]
+name = "arena_reserve"
+path = "tests/arena_reserve.rs"
+
+[[test]]
+name = "arms_feeders"
+path = "tests/arms_feeders.rs"
+
+[[test]]
+name = "arms_owner_pin"
+path = "tests/arms_owner_pin.rs"
+
+[[test]]
+name = "b0_pool_follows_free_room"
+path = "tests/b0_pool_follows_free_room.rs"
+
+[[test]]
+name = "budget"
+path = "tests/budget.rs"
+
+[[test]]
+name = "c11_pool_release"
+path = "tests/c11_pool_release.rs"
+
+[[test]]
+name = "c11_ladder_thread"
+path = "tests/c11_ladder_thread.rs"
+
+[[test]]
+name = "c13_region_exact_charge"
+path = "tests/c13_region_exact_charge.rs"
+
+[[test]]
+name = "c1_cache_floor"
+path = "tests/c1_cache_floor.rs"
+
+[[test]]
+name = "c1_floor_hold"
+path = "tests/c1_floor_hold.rs"
+
+[[test]]
+name = "c8_3c_drawn_byte_counts_once"
+path = "tests/c8_3c_drawn_byte_counts_once.rs"
+
+[[test]]
+name = "c8_3c_victim_reads_committed"
+path = "tests/c8_3c_victim_reads_committed.rs"
+
+[[test]]
+name = "c8_parked_set_arenas"
+path = "tests/c8_parked_set_arenas.rs"
+
+[[test]]
+name = "c9_stopped_call_host"
+path = "tests/c9_stopped_call_host.rs"
+
+[[test]]
+name = "concurrent_grants"
+path = "tests/concurrent_grants.rs"
+
+[[test]]
+name = "d1431_rerun_consumed"
+path = "tests/d1431_rerun_consumed.rs"
+
+[[test]]
+name = "d1493_run_chain"
+path = "tests/d1493_run_chain.rs"
+
+[[test]]
+name = "d1507_released"
+path = "tests/d1507_released.rs"
+
+[[test]]
+name = "d4768_removed_sets"
+path = "tests/d4768_removed_sets.rs"
+
+[[test]]
+name = "d4920_in_list_sets"
+path = "tests/d4920_in_list_sets.rs"
+
+[[test]]
+name = "d1699_depot_evict"
+path = "tests/d1699_depot_evict.rs"
+
+[[test]]
+name = "d1700_lazy_member"
+path = "tests/d1700_lazy_member.rs"
+
+[[test]]
+name = "d1704_region_align"
+path = "tests/d1704_region_align.rs"
+
+[[test]]
+name = "d1711_kernel_sites"
+path = "tests/d1711_kernel_sites.rs"
+
+[[test]]
+name = "d1719_stored_io"
+path = "tests/d1719_stored_io.rs"
+
+[[test]]
+name = "d275_past_g"
+path = "tests/d275_past_g.rs"
+
+[[test]]
+name = "d285_slot_past_g"
+path = "tests/d285_slot_past_g.rs"
+
+[[test]]
+name = "d2869_depot_cap_lru"
+path = "tests/d2869_depot_cap_lru.rs"
+
+[[test]]
+name = "d2894_floor_grow"
+path = "tests/d2894_floor_grow.rs"
+
+[[test]]
+name = "d3074_depot_room"
+path = "tests/d3074_depot_room.rs"
+
+[[test]]
+name = "d3074_fit_charge"
+path = "tests/d3074_fit_charge.rs"
+
+[[test]]
+name = "d3127_governor_settle"
+path = "tests/d3127_governor_settle.rs"
+
+[[test]]
+name = "d3147_fair_share"
+path = "tests/d3147_fair_share.rs"
+
+[[test]]
+name = "d3213_depot_keys"
+path = "tests/d3213_depot_keys.rs"
+
+[[test]]
+name = "d3225_seen_arena_peak"
+path = "tests/d3225_seen_arena_peak.rs"
+
+[[test]]
+name = "d3239_lone_draw_no_wait"
+path = "tests/d3239_lone_draw_no_wait.rs"
+
+[[test]]
+name = "d3242_nested_alone"
+path = "tests/d3242_nested_alone.rs"
+
+[[test]]
+name = "d3254_slot_sets_past_pool"
+path = "tests/d3254_slot_sets_past_pool.rs"
+
+[[test]]
+name = "d3254_trim_need"
+path = "tests/d3254_trim_need.rs"
+
+[[test]]
+name = "d3258_unwind_w"
+path = "tests/d3258_unwind_w.rs"
+
+[[test]]
+name = "d3412_owner_raise"
+path = "tests/d3412_owner_raise.rs"
+
+[[test]]
+name = "d369_depot_fit"
+path = "tests/d369_depot_fit.rs"
+
+[[test]]
+name = "d3910_idle_cursor_no_wait"
+path = "tests/d3910_idle_cursor_no_wait.rs"
+
+[[test]]
+name = "d3910_suspend_lend"
+path = "tests/d3910_suspend_lend.rs"
+
+[[test]]
+name = "d3974_run_fences"
+path = "tests/d3974_run_fences.rs"
+
+[[test]]
+name = "d3982_worker_pool_fraction"
+path = "tests/d3982_worker_pool_fraction.rs"
+
+[[test]]
+name = "d3991_small_start"
+path = "tests/d3991_small_start.rs"
+
+[[test]]
+name = "d3992_backstop_reclaims"
+path = "tests/d3992_backstop_reclaims.rs"
+
+[[test]]
+name = "d3999_kept_cursors"
+path = "tests/d3999_kept_cursors.rs"
+
+[[test]]
+name = "d4043_trim_no_raise"
+path = "tests/d4043_trim_no_raise.rs"
+
+[[test]]
+name = "d4043_worker_purse"
+path = "tests/d4043_worker_purse.rs"
+
+[[test]]
+name = "d405_depot_lru"
+path = "tests/d405_depot_lru.rs"
+
+[[test]]
+name = "d4168_spool_past_grant"
+path = "tests/d4168_spool_past_grant.rs"
+
+[[test]]
+name = "d4170_no_owner_phase"
+path = "tests/d4170_no_owner_phase.rs"
+
+[[test]]
+name = "d4235_take_wait_cancel"
+path = "tests/d4235_take_wait_cancel.rs"
+
+[[test]]
+name = "d4298_ladder_tail"
+path = "tests/d4298_ladder_tail.rs"
+
+[[test]]
+name = "d4305_temp_file_error"
+path = "tests/d4305_temp_file_error.rs"
+
+[[test]]
+name = "d4306_cancel_scratch"
+path = "tests/d4306_cancel_scratch.rs"
+
+[[test]]
+name = "d4324_ladder_gate"
+path = "tests/d4324_ladder_gate.rs"
+
+[[test]]
+name = "d4353_protected_floor"
+path = "tests/d4353_protected_floor.rs"
+
+[[test]]
+name = "d4373_worker_grown_charged"
+path = "tests/d4373_worker_grown_charged.rs"
+
+[[test]]
+name = "d4398_ladder_pass_skips_a_held_cache"
+path = "tests/d4398_ladder_pass_skips_a_held_cache.rs"
+
+[[test]]
+name = "d4403_small_buffer"
+path = "tests/d4403_small_buffer.rs"
+
+[[test]]
+name = "d4403_tiny_draws"
+path = "tests/d4403_tiny_draws.rs"
+
+[[test]]
+name = "d4425_reload_no_wait"
+path = "tests/d4425_reload_no_wait.rs"
+
+[[test]]
+name = "d4439_draw_wait_cap"
+path = "tests/d4439_draw_wait_cap.rs"
+
+[[test]]
+name = "d4439_temp_map_resident"
+path = "tests/d4439_temp_map_resident.rs"
+
+[[test]]
+name = "d4518_boxed_set_arenas"
+path = "tests/d4518_boxed_set_arenas.rs"
+
+[[test]]
+name = "d4554_keep_warm_depot"
+path = "tests/d4554_keep_warm_depot.rs"
+
+[[test]]
+name = "d4587_depot_count_clear_race"
+path = "tests/d4587_depot_count_clear_race.rs"
+
+[[test]]
+name = "d4587_depot_count_put_take_trim"
+path = "tests/d4587_depot_count_put_take_trim.rs"
+
+[[test]]
+name = "d4630_bind_at_claim"
+path = "tests/d4630_bind_at_claim.rs"
+
+[[test]]
+name = "d4725_serial_skip"
+path = "tests/d4725_serial_skip.rs"
+
+[[test]]
+name = "d4631_parked_lists"
+path = "tests/d4631_parked_lists.rs"
+
+[[test]]
+name = "d4709_parked_set_regions"
+path = "tests/d4709_parked_set_regions.rs"
+
+[[test]]
+name = "d4795_past_g_given_back"
+path = "tests/d4795_past_g_given_back.rs"
+
+[[test]]
+name = "d559_arms_slot_reuse"
+path = "tests/d559_arms_slot_reuse.rs"
+
+[[test]]
+name = "d601_park_slot"
+path = "tests/d601_park_slot.rs"
+
+[[test]]
+name = "d622_overdraw"
+path = "tests/d622_overdraw.rs"
+
+[[test]]
+name = "debt_refused"
+path = "tests/debt_refused.rs"
+
+[[test]]
+name = "exact_draw_statement_cap"
+path = "tests/exact_draw_statement_cap.rs"
+
+[[test]]
+name = "free_schedule"
+path = "tests/free_schedule.rs"
+
+[[test]]
+name = "grant_pool"
+path = "tests/grant_pool.rs"
+
+[[test]]
+name = "grow_mode"
+path = "tests/grow_mode.rs"
+
+[[test]]
+name = "h3s4_spill_give_service"
+path = "tests/h3s4_spill_give_service.rs"
+
+[[test]]
+name = "h3s4c_park_give_service"
+path = "tests/h3s4c_park_give_service.rs"
+
+[[test]]
+name = "lcred_landing_credit_at_start"
+path = "tests/lcred_landing_credit_at_start.rs"
+
+[[test]]
+name = "tb1_spill_take_back"
+path = "tests/tb1_spill_take_back.rs"
+
+[[test]]
+name = "tb4_spill_overdraft"
+path = "tests/tb4_spill_overdraft.rs"
+
+[[test]]
+name = "held_error"
+path = "tests/held_error.rs"
+
+[[test]]
+name = "ladderview_stats"
+path = "tests/ladderview_stats.rs"
+
+[[test]]
+name = "ledger2_arena_chunk"
+path = "tests/ledger2_arena_chunk.rs"
+
+[[test]]
+name = "ledger2_slot_owner"
+path = "tests/ledger2_slot_owner.rs"
+
+[[test]]
+name = "ledger_default"
+path = "tests/ledger_default.rs"
+
+[[test]]
+name = "ledger_s0"
+path = "tests/ledger_s0.rs"
+
+[[test]]
+name = "narrow_section_shares"
+path = "tests/narrow_section_shares.rs"
+
+[[test]]
+name = "new53_hand_off"
+path = "tests/new53_hand_off.rs"
+
+[[test]]
+name = "nr3_pin_named"
+path = "tests/nr3_pin_named.rs"
+
+[[test]]
+name = "nr3_pin_raised"
+path = "tests/nr3_pin_raised.rs"
+
+[[test]]
+name = "one_divisor"
+path = "tests/one_divisor.rs"
+
+[[test]]
+name = "park_index"
+path = "tests/park_index.rs"
+
+[[test]]
+name = "pulled"
+path = "tests/pulled.rs"
+
+[[test]]
+name = "rearm_d3196_warm_sections"
+path = "tests/rearm_d3196_warm_sections.rs"
+
+[[test]]
+name = "reclaim_order_over_setting"
+path = "tests/reclaim_order_over_setting.rs"
+
+[[test]]
+name = "region_grow"
+path = "tests/region_grow.rs"
+
+[[test]]
+name = "rerun"
+path = "tests/rerun.rs"
+
+[[test]]
+name = "rerun_kept_footprint"
+path = "tests/rerun_kept_footprint.rs"
+
+[[test]]
+name = "residue_slot_depot"
+path = "tests/residue_slot_depot.rs"
+
+[[test]]
+name = "revoke_debt_homes"
+path = "tests/revoke_debt_homes.rs"
+
+[[test]]
+name = "section"
+path = "tests/section.rs"
+
+[[test]]
+name = "sort_runs"
+path = "tests/sort_runs.rs"
+
+[[test]]
+name = "spill"
+path = "tests/spill.rs"
+
+[[test]]
+name = "spill_race"
+path = "tests/spill_race.rs"
+
+[[test]]
+name = "step11_gate_now"
+path = "tests/step11_gate_now.rs"
+
+[[test]]
+name = "step11_wake"
+path = "tests/step11_wake.rs"
+
+[[test]]
+name = "timeout_d3214_stall_progress"
+path = "tests/timeout_d3214_stall_progress.rs"
+
+[[test]]
+name = "unadmitted_draws"
+path = "tests/unadmitted_draws.rs"
+
+[[test]]
+name = "unadmitted_strict"
+path = "tests/unadmitted_strict.rs"
+
+[[test]]
+name = "wave2_own_owner"
+path = "tests/wave2_own_owner.rs"
+
+[[test]]
+name = "wave2_owner_handles"
+path = "tests/wave2_owner_handles.rs"
+
+[[test]]
+name = "work_mem_ceiling"
+path = "tests/work_mem_ceiling.rs"
+
+[[test]]
+name = "worker_arena"
+path = "tests/worker_arena.rs"
+
+[[test]]
+name = "worker_images"
+path = "tests/worker_images.rs"
+
+[[test]]
+name = "zero_alloc"
+path = "tests/zero_alloc.rs"

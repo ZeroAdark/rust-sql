@@ -9,7 +9,6 @@ use types_core::instrument::{
 };
 use types_error::{ErrorLevel, ErrorLocation, PgResult};
 use types_portal::{ParamListHandle, QueryDescHandle};
-use types_slot::EXEC_FLAG_EXPLAIN_ONLY;
 
 use crate::gucs;
 
@@ -43,6 +42,13 @@ fn loc(funcname: &'static str) -> ErrorLocation {
     ErrorLocation::new(site.file(), site.line() as i32, funcname)
 }
 
+/// exec_hooks' `active` for this module: loaded in this backend with a
+/// duration threshold set, so a statement must reach the executor hooks (the
+/// Gravity runner leaves it to the executor seams).
+pub(crate) fn explain_active() -> bool {
+    crate::session_loaded() && gucs::log_min_duration() >= 0
+}
+
 /// `explain_ExecutorStart`.
 pub(crate) fn explain_executor_start(h: QueryDescHandle) {
     // C: the hook exists only in a backend that loaded the library.
@@ -64,19 +70,23 @@ pub(crate) fn explain_executor_start(h: QueryDescHandle) {
         return;
     }
 
-    execmain::with_qd(h, |qd| {
+    execmain::with_hook_qd(h, |qd| {
         // Enable per-node instrumentation iff log_analyze is required.
-        if gucs::log_analyze() && qd.start_eflags & EXEC_FLAG_EXPLAIN_ONLY == 0 {
+        // C skips this under EXEC_FLAG_EXPLAIN_ONLY; eflags are not visible
+        // pre-start here, so an EXPLAIN(-only) statement allocates unused
+        // node instrumentation — output parity is restored at log time by the
+        // es_top_eflags check in explain_executor_end.
+        if gucs::log_analyze() {
             if gucs::log_timing() {
-                qd.instrument_options |= INSTRUMENT_TIMER;
+                *qd.instrument_options |= INSTRUMENT_TIMER;
             } else {
-                qd.instrument_options |= INSTRUMENT_ROWS;
+                *qd.instrument_options |= INSTRUMENT_ROWS;
             }
             if gucs::log_buffers() {
-                qd.instrument_options |= INSTRUMENT_BUFFERS;
+                *qd.instrument_options |= INSTRUMENT_BUFFERS;
             }
             if gucs::log_wal() {
-                qd.instrument_options |= INSTRUMENT_WAL;
+                *qd.instrument_options |= INSTRUMENT_WAL;
             }
         }
 
@@ -89,7 +99,7 @@ pub(crate) fn explain_executor_start(h: QueryDescHandle) {
         // C's if-NULL alloc, fresh either way.
         let mut instr = Box::new(Instrumentation::default());
         instrument::instr_init(&mut instr, INSTRUMENT_ALL);
-        qd.totaltime = Some(instr);
+        *qd.totaltime = Some(instr);
     });
 }
 
@@ -134,11 +144,12 @@ struct LogJob {
     msec: f64,
     source_text: &'static str,
     instrument_options: i32,
+    explain_only: bool,
     params: ParamListHandle,
 }
 
 /// `explain_ExecutorEnd`: log the plan if the duration threshold was crossed.
-/// Split in two phases: the decision + snapshot runs inside `with_qd`, the
+/// Split in two phases: the decision + snapshot runs inside `with_hook_qd`, the
 /// EXPLAIN walk runs outside it (ExplainPrintPlan re-enters the QueryDesc
 /// registry through `es.qd`, which would double-borrow). An error while
 /// rendering (auto_explain.c:394-424 has no PG_TRY) aborts the statement:
@@ -148,7 +159,7 @@ pub(crate) fn explain_executor_end(h: QueryDescHandle) -> PgResult<()> {
     if !crate::session_loaded() {
         return Ok(());
     }
-    let job = execmain::with_qd(h, |qd| -> Option<LogJob> {
+    let job = execmain::with_hook_qd(h, |qd| -> Option<LogJob> {
         if qd.totaltime.is_none() || !auto_explain_enabled() {
             return None;
         }
@@ -164,8 +175,9 @@ pub(crate) fn explain_executor_end(h: QueryDescHandle) -> PgResult<()> {
 
         Some(LogJob {
             msec,
-            source_text: qd.source_text(),
-            instrument_options: qd.instrument_options,
+            source_text: qd.source_text,
+            instrument_options: *qd.instrument_options,
+            explain_only: qd.explain_only,
             params: qd.params,
         })
     });
@@ -186,7 +198,9 @@ fn log_plan(h: QueryDescHandle, job: &LogJob) -> PgResult<()> {
 
     let mut es = explain::NewExplainState(mcx)?;
     // C: es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze).
-    es.analyze = job.instrument_options != 0 && gucs::log_analyze();
+    // The explain_only leg reproduces C's EXEC_FLAG_EXPLAIN_ONLY guard at
+    // ExecutorStart (see explain_executor_start).
+    es.analyze = job.instrument_options != 0 && gucs::log_analyze() && !job.explain_only;
     es.verbose = gucs::log_verbose();
     es.buffers = es.analyze && gucs::log_buffers();
     es.wal = es.analyze && gucs::log_wal();
@@ -200,10 +214,10 @@ fn log_plan(h: QueryDescHandle, job: &LogJob) -> PgResult<()> {
     };
     es.settings = gucs::log_settings();
 
-    ExplainBeginOutput(&mut es);
+    ExplainBeginOutput(&mut es)?;
 
     // ExplainQueryText (explain.c): the source text property.
-    ExplainPropertyText("Query Text", job.source_text, &mut es);
+    ExplainPropertyText("Query Text", job.source_text, &mut es)?;
 
     // ExplainQueryParameters (explain.c). The fetch-hooked bail-out is C's
     // params.c BuildParamLogString: "No work if the param fetch hook is in
@@ -219,7 +233,7 @@ fn log_plan(h: QueryDescHandle, job: &LogJob) -> PgResult<()> {
             nodes_params::build_param_log_string(mcx, p, None, maxlen)
         })?;
         if let Some(s) = s {
-            ExplainPropertyText("Query Parameters", &s, &mut es);
+            ExplainPropertyText("Query Parameters", &s, &mut es)?;
         }
     }
 
@@ -229,7 +243,7 @@ fn log_plan(h: QueryDescHandle, job: &LogJob) -> PgResult<()> {
     // (interior Cells), so the shrink to this frame's 'mcx needs an explicit
     // transmute (execmain's unify_call_lifetime precedent).
     let pstmt: &types_nodes::plannodes::PlannedStmt<'_> =
-        unsafe { core::mem::transmute(execmain::with_qd(h, |qd| qd.plannedstmt())) };
+        unsafe { core::mem::transmute(execmain::with_hook_qd(h, |qd| qd.plannedstmt)) };
     es.qd = h;
     let r = explain::ExplainPrintPlan(mcx, &mut es, pstmt);
     es.qd = QueryDescHandle::NULL;
@@ -246,7 +260,7 @@ fn log_plan(h: QueryDescHandle, job: &LogJob) -> PgResult<()> {
     // (no LLVM provider; ExplainPrintJIT bails with zero created functions),
     // matching C run without the llvmjit package.
 
-    ExplainEndOutput(&mut es);
+    ExplainEndOutput(&mut es)?;
 
     let mut text = String::from_utf8_lossy(es.str.as_bytes()).into_owned();
     // Remove last line break (C: es->str->data[--len] = '\0').

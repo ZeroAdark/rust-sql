@@ -1,0 +1,1 @@
+backend/optimizer/plan/planner/src/jsonb_stats.rs	INDEX_CACHE	pgport	key:relation, attribute, inh and stats blob generation	cache	the parsed offset index of a jsonb stats blob; cleared when it reaches INDEX_CACHE_CAP (256) entries

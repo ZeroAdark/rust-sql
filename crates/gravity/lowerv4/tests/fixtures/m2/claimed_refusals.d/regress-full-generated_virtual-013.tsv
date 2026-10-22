@@ -1,0 +1,1 @@
+D2046	mergecmd	a MERGE over a nested loop comparing under an indeterminate collation (PostgreSQL raises 42P22: D2046; reached once mergecmd 9 COPYROW stored its VALUES row for the recheck)

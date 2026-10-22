@@ -1,0 +1,195 @@
+[package]
+name = "gravity_fn"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "gravity_fn"
+path = "src/lib.rs"
+
+[dependencies]
+# C7 runtime half: its leader-class thread-locals are declared through leader_tls!
+leader_tls = { path = "../../_support/leader_tls" }
+gravity_abi = { path = "../abi" }
+gravity_deps = { path = "../deps" }
+fmgr_core = { path = "../../backend/utils/fmgr/fmgr_core" }
+catcache = { path = "../../backend/utils/cache/catcache" }
+pgstat = { path = "../../backend/utils/activity/pgstat" }
+fmgr = { package = "types_fmgr", path = "../../_support/types/fmgr" }
+datum = { path = "../../_support/types/datum" }
+mcx = { path = "../../_support/mcx" }
+memledger = { path = "../../_support/memledger" }
+# pagepool P3 (PGRUST_POOL_GRAVITY=1): an operator arena's chunks from the page pool
+pagepool = { path = "../../_support/pagepool" }
+hashbrown = { version = "0.14", default-features = false, features = ["allocator-api2", "ahash", "inline-more"] }
+allocator-api2 = { version = "0.2", default-features = false, features = ["alloc"] }
+pg_qsort = { path = "../../_support/pg_qsort" }
+types_core = { path = "../../_support/types/types_core" }
+types_error = { path = "../../_support/types/types_error" }
+types_tuple = { path = "../../_support/types/types_tuple" }
+adt_datetime = { path = "../../backend/utils/adt/adt_datetime" }
+pg_locale = { path = "../../backend/utils/adt/pg_locale" }
+syscache_seams = { path = "../../backend/utils/cache/syscache_seams" }
+clauses_seams = { path = "../../backend/optimizer/util/clauses_seams" }
+namespace_seams = { path = "../../backend/catalog/namespace_seams" }
+miscinit_seams = { path = "../../backend/utils/init/miscinit_seams" }
+aclchk_seams = { path = "../../backend/catalog/aclchk_seams" }
+execmain_seams = { path = "../../backend/executor/execmain_seams" }
+pgsync = { path = "../../_support/pgsync" }
+typcache_seams = { path = "../../backend/utils/cache/typcache_seams" }
+typcache = { path = "../../backend/utils/cache/typcache" }
+inval = { path = "../../backend/utils/cache/inval" }
+hashfn = { path = "../../common/hashfn" }
+adt_bool = { path = "../../backend/utils/adt/bool" }
+adt_cash = { path = "../../backend/utils/adt/cash" }
+adt_char = { path = "../../backend/utils/adt/char" }
+adt_date = { path = "../../backend/utils/adt/adt_date" }
+adt_float = { path = "../../backend/utils/adt/float" }
+adt_int = { path = "../../backend/utils/adt/int" }
+adt_int8 = { path = "../../backend/utils/adt/int8" }
+adt_like = { path = "../../backend/utils/adt/like" }
+adt_numeric = { path = "../../backend/utils/adt/numeric" }
+adt_oracle_compat = { path = "../../backend/utils/adt/oracle_compat" }
+adt_pg_lsn = { path = "../../backend/utils/adt/pg_lsn" }
+adt_scalar = { path = "../../backend/utils/adt/scalar" }
+adt_timestamp = { path = "../../backend/utils/adt/adt_timestamp" }
+adt_varchar = { path = "../../backend/utils/adt/varchar" }
+name = { path = "../../backend/utils/adt/name" }
+nbt_compare = { path = "../../backend/access/nbtree/compare" }
+varlena = { path = "../../backend/utils/adt/varlena" }
+pqformat = { path = "../../backend/libpq/pqformat" }
+adt_network = { path = "../../backend/utils/adt/network" }
+adt_jsonb = { path = "../../backend/utils/adt/jsonb" }
+adt_mac8 = { path = "../../backend/utils/adt/mac8" }
+adt_mac = { path = "../../backend/utils/adt/mac" }
+adt_varbit = { path = "../../backend/utils/adt/varbit" }
+adt_pseudotypes = { path = "../../backend/utils/adt/pseudotypes" }
+adt_uuid = { path = "../../backend/utils/adt/uuid" }
+adt_tsvector_core = { path = "../../backend/utils/adt/tsvector_core" }
+adt_tsquery_core = { path = "../../backend/utils/adt/tsquery_core" }
+adt_tsrank = { path = "../../backend/utils/adt/tsrank" }
+adt_xml = { path = "../../backend/utils/adt/xml" }
+adt_formatting = { path = "../../backend/utils/adt/formatting" }
+adt_json = { path = "../../backend/utils/adt/json" }
+adt_jsonpath = { path = "../../backend/utils/adt/jsonpath" }
+adt_jsonpath_exec = { path = "../../backend/utils/adt/jsonpath_exec" }
+cryptohashfuncs = { path = "../../backend/utils/adt/cryptohashfuncs" }
+arrayfuncs = { path = "../../backend/utils/adt/arrayfuncs" }
+array_userfuncs = { path = "../../backend/utils/adt/array_userfuncs" }
+adt_rangetypes = { path = "../../backend/utils/adt/rangetypes" }
+adt_multirangetypes = { path = "../../backend/utils/adt/multirangetypes" }
+adt_regexp = { path = "../../backend/utils/adt/regexp" }
+adt_geo = { path = "../../backend/utils/adt/geo" }
+xid8funcs = { path = "../../backend/utils/adt/xid8funcs" }
+adt_encode = { path = "../../backend/utils/adt/encode" }
+adt_quote = { path = "../../backend/utils/adt/quote" }
+adt_ascii = { path = "../../backend/utils/adt/adt_ascii" }
+adt_amutils = { path = "../../backend/utils/adt/adt_amutils" }
+detoast_seams = { path = "../../backend/access/common/detoast_seams" }
+mbutils = { path = "../../backend/utils/mb/mbutils" }
+to_tsany = { path = "../../backend/tsearch/to_tsany" }
+pg_sha2 = { path = "../../common/sha2" }
+crc32c = { path = "../../port/crc32c" }
+pg_md5 = { path = "../../common/md5" }
+numutils = { path = "../../backend/utils/adt/numutils" }
+types_array = { path = "../../_support/types/array" }
+pg_locale_seams = { path = "../../backend/utils/adt/pg_locale_seams" }
+wchar = { path = "../../common/wchar" }
+stringinfo = { path = "../../_support/types/stringinfo" }
+arrayutils = { path = "../../backend/utils/adt/arrayutils" }
+dbsize = { path = "../../backend/utils/adt/dbsize" }
+pseudorandomfuncs = { path = "../../backend/utils/adt/pseudorandomfuncs" }
+adt_acl = { path = "../../backend/utils/adt/acl" }
+adt_tsginidx = { path = "../../backend/utils/adt/tsginidx" }
+adt_tsgistidx = { path = "../../backend/utils/adt/tsgistidx" }
+detoast = { path = "../../backend/access/common/detoast" }
+types_nodes = { path = "../../_support/types/nodes" }
+types_slot = { path = "../../_support/types/types_slot" }
+exectuples = { path = "../../backend/executor/exectuples" }
+tuplestore = { path = "../../backend/utils/sort/tuplestore" }
+tupdesc = { path = "../../backend/access/common/tupdesc" }
+funcapi = { path = "../../backend/utils/fmgr/funcapi" }
+coerce = { path = "../../backend/parser/coerce" }
+format_type = { path = "../../backend/utils/adt/format_type" }
+lsyscache = { path = "../../backend/utils/cache/lsyscache" }
+init_small = { path = "../../backend/utils/init/init_small" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+xact = { path = "../../backend/access/transam/xact" }
+
+[dev-dependencies]
+seams_init = { path = "../../_support/seams_init" }
+regex_core = { path = "../../backend/regex/regex_core" }
+fmgr_seams = { path = "../../backend/utils/fmgr/fmgr_seams" }
+gravity_lint = { path = "../lint" }
+pgtz = { path = "../../backend/timezone/pgtz" }
+guc_tables = { path = "../../backend/utils/misc/guc_tables" }
+elog = { path = "../../backend/utils/error/elog" }
+fd = { path = "../../backend/storage/file/fd" }
+xact_seams = { path = "../../backend/access/transam/xact_seams" }
+# tests/pool_op_arena_global.rs: PoolAlloc as the global allocator
+pagepool = { path = "../../_support/pagepool", features = ["global"] }
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# gravity_fn_suite (tests/gravity_fn_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs it once
+# per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot share a
+# process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text naming
+# process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state call): then
+# it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the file is in
+# exactly one of the two places.
+[[test]]
+name = "gravity_fn_suite"
+path = "tests/gravity_fn_suite.rs"
+
+[[test]]
+name = "differential"
+path = "tests/differential.rs"
+
+[[test]]
+name = "fresh_vs_scratch"
+path = "tests/fresh_vs_scratch.rs"
+
+[[test]]
+name = "hostcall"
+path = "tests/hostcall.rs"
+
+[[test]]
+name = "ledger2_op_arena"
+path = "tests/ledger2_op_arena.rs"
+
+[[test]]
+name = "m5_e1_slot_bank"
+path = "tests/m5_e1_slot_bank.rs"
+
+[[test]]
+name = "pool_op_arena"
+path = "tests/pool_op_arena.rs"
+
+[[test]]
+name = "pool_op_arena_global"
+path = "tests/pool_op_arena_global.rs"
+
+[[test]]
+name = "result_life"
+path = "tests/result_life.rs"
+
+[[test]]
+name = "result_life_scribble"
+path = "tests/result_life_scribble.rs"
+
+[[test]]
+name = "srf_differential"
+path = "tests/srf_differential.rs"
+
+[[test]]
+name = "statement_arm"
+path = "tests/statement_arm.rs"
+
+[[test]]
+name = "tiers"
+path = "tests/tiers.rs"
+
+[[test]]
+name = "window_alloc"
+path = "tests/window_alloc.rs"

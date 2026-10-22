@@ -1,6 +1,7 @@
 //! selfuncs.c slice: eqsel/scalarineqsel over Var-op-Const with pg_statistic
 //! consumption (MCV + histogram), plus btcostestimate/genericcostestimate.
 
+use fp_contract::fmadd;
 use datum::Datum;
 use syscache_seams::{PgStatisticBundle, PgStatisticSlotData};
 use types_core::Oid;
@@ -76,11 +77,7 @@ pub(crate) fn get_att_stats<'mcx>(
         };
     }
     let key = (relid, attnum, inh);
-    let hit = run
-        .att_stats_memo
-        .borrow()
-        .iter()
-        .find_map(|(k, v)| (*k == key).then_some(*v));
+    let hit = run.att_stats_memo.borrow().get(&key).copied();
     if let Some(v) = hit {
         // SAFETY: the pointer was created below from &'mcx PgStatisticBundle
         // <'mcx> leaked into run.mcx (this function is the only writer); the
@@ -95,7 +92,7 @@ pub(crate) fn get_att_stats<'mcx>(
     };
     run.att_stats_memo
         .borrow_mut()
-        .push((key, fetched.map(|r| core::ptr::NonNull::from(r).cast())));
+        .insert(key, fetched.map(|r| core::ptr::NonNull::from(r).cast()));
     Ok(fetched)
 }
 
@@ -894,7 +891,7 @@ pub(crate) fn ineq_histogram_selectivity<'mcx>(
             let mut frac = (i - 1) as f64 + binfrac;
             frac /= (nvalues - 1) as f64;
             if i == 1 {
-                frac += eq_selec * (1.0 - binfrac);
+                frac = crate::fma_sites::ineq_first_bin(frac, eq_selec, binfrac);
             }
             if isgt == iseq {
                 frac -= eq_selec;
@@ -1041,8 +1038,12 @@ fn convert_timevalue_to_scalar(value: Datum, typid: Oid) -> Option<f64> {
                     p.add(12).cast::<i32>().read_unaligned(),
                 )
             };
-            Some(time as f64 + day as f64 * USECS_PER_DAY
-                + month as f64 * ((365.25 / 12.0) * USECS_PER_DAY))
+            // selfuncs.c:5141, two fmadds on aarch64.
+            Some(fmadd(
+                month as f64,
+                (365.25 / 12.0) * USECS_PER_DAY,
+                fmadd(day as f64, USECS_PER_DAY, time as f64),
+            ))
         }
         TIMETZOID => {
             let p = value.as_usize() as *const u8;
@@ -1146,7 +1147,7 @@ fn convert_string_datum<'mcx>(
         // so the slice ends at the reported length.
         let xfrmlen = locale.pg_strnxfrm(&mut [], bytes)?;
         let mut xfrm = mcx::PgVec::<u8>::new_in(mcx);
-        xfrm.resize(xfrmlen + 1, 0);
+        ::mcx::pgvec_resize(&mut xfrm, xfrmlen + 1, 0)?;
         let xfrmlen2 = locale.pg_strnxfrm(&mut xfrm, bytes)?;
         debug_assert!(xfrmlen2 <= xfrmlen);
         return Ok(Some(&xfrm.leak()[..xfrmlen2]));
@@ -1443,16 +1444,9 @@ pub fn examine_variable<'mcx>(
             vardata.var = Some(node_id);
             vardata.rel = Some(rel);
             vardata.isunique = crate::plancat::has_unique_index(run, rel, var.varattno);
-            // A swapped-in rel subroot keeps its parent level visible (C:
+            // A swapped-in rel subroot keeps its parent levels visible (C:
             // the child root's parent_root link).
-            let suspended = RootAncestors::Suspended(&run.suspended_roots);
-            let up = match run.swapped_parent_subroot {
-                Some(i) => RootAncestors::Link {
-                    parent: &run.rel_subroots[i].root,
-                    up: &suspended,
-                },
-                None => suspended,
-            };
+            let up = RootAncestors::swapped(run, run.swapped_parent_subroot);
             let simple = examine_simple_variable(run, up, &run.root, var.varno, var.varattno)?;
             vardata.stats = simple.stats;
             vardata.isunique |= simple.force_unique;
@@ -1512,6 +1506,11 @@ pub fn examine_variable<'mcx>(
                         relid,
                         matchnode,
                     )?;
+                    if vardata.stats.is_none() && crate::jsonb_stats::enabled() {
+                        crate::jsonb_stats::examine_jsonb_path_stats(
+                            run, &mut vardata, relid, matchnode,
+                        )?;
+                    }
                 }
                 // else treat it as a constant
             } else if varrelid == 0 {
@@ -1532,11 +1531,12 @@ struct SimpleVarStats<'mcx> {
 
 impl SimpleVarStats<'_> {
     fn none() -> Self {
-        SimpleVarStats { stats: None, acl_ok: true, force_unique: false }
+        // C leaves acl_ok false on every non-relation exit.
+        SimpleVarStats { stats: None, acl_ok: false, force_unique: false }
     }
 }
 
-fn rte_at<'mcx>(
+pub(crate) fn rte_at<'mcx>(
     run: &PlannerRun<'mcx>,
     root: &types_pathnodes::PlannerInfo<'mcx>,
     varno: usize,
@@ -1656,11 +1656,17 @@ fn examine_expression_index_stats<'mcx>(
 }
 
 // C's parent_root chain for a root under examination: the live planning
-// chain is suspended_roots; drilled subroots hang off the root that owns
-// their RTE (rel_subroots) or the resolved cteroot (glob subroots).
+// chain is the swapped-out parents of a swapped-in rel subroot (rel_subroots
+// slots linked by swapped_up), then suspended_roots; drilled subroots hang off
+// the root that owns their RTE (rel_subroots) or the resolved cteroot (glob
+// subroots).
 #[derive(Clone, Copy)]
 enum RootAncestors<'a, 'mcx> {
     Suspended(&'a [crate::run::SubrootState<'mcx>]),
+    Swapped {
+        at: usize,
+        run: &'a PlannerRun<'mcx>,
+    },
     Link {
         parent: &'a types_pathnodes::PlannerInfo<'mcx>,
         up: &'a RootAncestors<'a, 'mcx>,
@@ -1668,12 +1674,24 @@ enum RootAncestors<'a, 'mcx> {
 }
 
 impl<'a, 'mcx> RootAncestors<'a, 'mcx> {
+    fn swapped(run: &'a PlannerRun<'mcx>, at: Option<usize>) -> Self {
+        match at {
+            Some(at) => RootAncestors::Swapped { at, run },
+            None => RootAncestors::Suspended(&run.suspended_roots),
+        }
+    }
+
     fn ancestor(
         &self,
         lvl: usize,
     ) -> Option<(&'a types_pathnodes::PlannerInfo<'mcx>, RootAncestors<'a, 'mcx>)> {
         debug_assert!(lvl >= 1);
         match *self {
+            RootAncestors::Swapped { at, run } => {
+                let slot = &run.rel_subroots[at];
+                let up = RootAncestors::swapped(run, slot.swapped_up);
+                if lvl == 1 { Some((&slot.root, up)) } else { up.ancestor(lvl - 1) }
+            }
             RootAncestors::Suspended(s) => {
                 if lvl <= s.len() {
                     let i = s.len() - lvl;
@@ -1812,12 +1830,12 @@ fn examine_subroot_output<'mcx>(
     if !subquery.distinctClause.is_nil() {
         let force_unique = subquery.distinctClause.len() == 1
             && tle_in_sortlist(ste, &subquery.distinctClause);
-        return Ok(SimpleVarStats { stats: None, acl_ok: true, force_unique });
+        return Ok(SimpleVarStats { stats: None, acl_ok: false, force_unique });
     }
     if !subquery.groupClause.is_nil() {
         let force_unique =
             subquery.groupClause.len() == 1 && tle_in_sortlist(ste, &subquery.groupClause);
-        return Ok(SimpleVarStats { stats: None, acl_ok: true, force_unique });
+        return Ok(SimpleVarStats { stats: None, acl_ok: false, force_unique });
     }
     if rte.security_barrier {
         return Ok(SimpleVarStats::none());
@@ -2129,6 +2147,8 @@ pub fn amcostestimate(
 
 // blcostestimate (contrib/bloom blcost.c): every index tuple is visited, so
 // numIndexTuples = index->tuples; the rest is the generic estimate.
+// D4562: out of line, so amcostestimate (every index path) does not carry it inlined.
+#[inline(never)]
 fn blcostestimate(
     run: &mut PlannerRun<'_>,
     path_id: types_pathnodes::PathId,
@@ -2160,6 +2180,8 @@ fn blcostestimate(
 }
 
 // hnswcostestimate (pgvector hnsw.c).
+// D4562: out of line, so amcostestimate (every index path) does not carry it inlined.
+#[inline(never)]
 fn hnswcostestimate(
     run: &mut PlannerRun<'_>,
     path_id: types_pathnodes::PathId,
@@ -2249,6 +2271,8 @@ fn hnswcostestimate(
 }
 
 // gistcostestimate (selfuncs.c): genericcostestimate + log-fanout-100 descent.
+// D4562: out of line, so amcostestimate (every index path) does not carry it inlined.
+#[inline(never)]
 fn gistcostestimate(
     run: &mut PlannerRun<'_>,
     path_id: types_pathnodes::PathId,
@@ -2286,12 +2310,14 @@ fn gistcostestimate(
     if index_tuples > 1.0 {
         let descent_cost = index_tuples.ln().ceil() * cpu_operator_cost;
         costs.index_startup_cost += descent_cost;
-        costs.index_total_cost = costs.num_sa_scans.mul_add(descent_cost, costs.index_total_cost);
+        costs.index_total_cost =
+            crate::fma_sites::sa_descent_total(costs.index_total_cost, costs.num_sa_scans, descent_cost);
     }
     let descent_cost =
         (tree_height as f64 + 1.0) * DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost;
     costs.index_startup_cost += descent_cost;
-    costs.index_total_cost = costs.num_sa_scans.mul_add(descent_cost, costs.index_total_cost);
+    costs.index_total_cost =
+            crate::fma_sites::sa_descent_total(costs.index_total_cost, costs.num_sa_scans, descent_cost);
 
     Ok(AmCostEstimate {
         index_startup_cost: costs.index_startup_cost,
@@ -2303,6 +2329,8 @@ fn gistcostestimate(
 }
 
 // spgcostestimate (selfuncs.c): identical structure to gistcostestimate.
+// D4562: out of line, so amcostestimate (every index path) does not carry it inlined.
+#[inline(never)]
 fn spgcostestimate(
     run: &mut PlannerRun<'_>,
     path_id: types_pathnodes::PathId,
@@ -2340,12 +2368,14 @@ fn spgcostestimate(
     if index_tuples > 1.0 {
         let descent_cost = index_tuples.ln().ceil() * cpu_operator_cost;
         costs.index_startup_cost += descent_cost;
-        costs.index_total_cost = costs.num_sa_scans.mul_add(descent_cost, costs.index_total_cost);
+        costs.index_total_cost =
+            crate::fma_sites::sa_descent_total(costs.index_total_cost, costs.num_sa_scans, descent_cost);
     }
     let descent_cost =
         (tree_height as f64 + 1.0) * DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost;
     costs.index_startup_cost += descent_cost;
-    costs.index_total_cost = costs.num_sa_scans.mul_add(descent_cost, costs.index_total_cost);
+    costs.index_total_cost =
+            crate::fma_sites::sa_descent_total(costs.index_total_cost, costs.num_sa_scans, descent_cost);
 
     Ok(AmCostEstimate {
         index_startup_cost: costs.index_startup_cost,
@@ -2377,7 +2407,7 @@ fn add_predicate_to_index_quals<'mcx>(
     let mcx = run.mcx;
     let indpred = {
         let PathNode::IndexPath(ip) = run.root.path(path_id) else { unreachable!() };
-        ip.indexinfo.as_ref().expect("indexinfo set").indpred.clone()
+        ip.indexinfo.as_ref().expect("indexinfo set").indpred
     };
     let mut result: mcx::PgVec<'mcx, RinfoId> = mcx::PgVec::new_in(mcx);
     if !indpred.is_empty() {
@@ -2468,16 +2498,18 @@ fn genericcostestimate(
 
     let qual_arg_cost = index_other_operands_eval_cost(run, &index_quals)?
         + index_orderby_operands_eval_cost(run, &index_orderbys)?;
-    let qual_op_cost =
-        gucs::cpu_operator_cost() * (index_quals.len() + index_orderbys.len()) as f64;
+    let n_ops = (index_quals.len() + index_orderbys.len()) as f64;
 
     let index_startup_cost = qual_arg_cost;
     index_total_cost += qual_arg_cost;
-    // mul_add mirrors the C referee's fmadd (GCC fp-contract on aarch64
-    // fuses `cost += expr * tuples`); odd numIndexTuples puts the total on a
-    // half-cent display boundary, exposing the one-ulp difference.
-    index_total_cost = (num_index_tuples * num_sa_scans)
-        .mul_add(gucs::cpu_index_tuple_cost() + qual_op_cost, index_total_cost);
+    index_total_cost = crate::fma_sites::generic_index_tuple_cost(
+        index_total_cost,
+        num_index_tuples,
+        num_sa_scans,
+        gucs::cpu_index_tuple_cost(),
+        gucs::cpu_operator_cost(),
+        n_ops,
+    );
 
     costs.index_startup_cost = index_startup_cost;
     costs.index_total_cost = index_total_cost;
@@ -2559,6 +2591,8 @@ fn index_orderby_operands_eval_cost(
 
 // hashcostestimate (selfuncs.c): pure genericcostestimate; no descent costs
 // (bucket lookup is O(1); the deliberate C choice is kept verbatim).
+// D4562: out of line, so amcostestimate (every index path) does not carry it inlined.
+#[inline(never)]
 fn hashcostestimate(
     run: &mut PlannerRun<'_>,
     path_id: types_pathnodes::PathId,
@@ -2585,6 +2619,8 @@ fn hashcostestimate(
 
 // brincostestimate (selfuncs.c): search behavior completely different from
 // other index types.
+// D4562: out of line, so amcostestimate (every index path) does not carry it inlined.
+#[inline(never)]
 fn brincostestimate(
     run: &mut PlannerRun<'_>,
     path_id: types_pathnodes::PathId,
@@ -2675,18 +2711,20 @@ fn brincostestimate(
 
     let qual_arg_cost = index_other_operands_eval_cost(run, &index_quals)?;
 
-    // Startup: read the whole revmap sequentially, plus the qual setup.
-    let mut index_startup_cost = spc_seq_page_cost * revmap_num_pages * loop_count;
-    index_startup_cost += qual_arg_cost;
-
-    // Total: the rest of the index in random order.
-    let mut index_total_cost = index_startup_cost
-        + spc_random_page_cost * (num_pages - revmap_num_pages) * loop_count;
-
-    // Small per-matched-range charge, scaled by pages per range (bitmap
-    // manipulation cost).
-    index_total_cost +=
-        0.1 * gucs::cpu_operator_cost() * estimated_ranges * pages_per_range;
+    // Startup reads the whole revmap sequentially plus the qual setup; total
+    // adds the rest of the index in random order and a per-matched-range
+    // bitmap charge.
+    let (index_startup_cost, index_total_cost) = crate::fma_sites::brin_costs(
+        spc_seq_page_cost,
+        revmap_num_pages,
+        loop_count,
+        qual_arg_cost,
+        spc_random_page_cost,
+        num_pages,
+        gucs::cpu_operator_cost(),
+        estimated_ranges,
+        pages_per_range,
+    );
 
     Ok(AmCostEstimate {
         index_startup_cost,
@@ -2698,26 +2736,32 @@ fn brincostestimate(
 }
 
 // btcostestimate (selfuncs.c).
+// D4562: btcostestimate's IndexPath, read in place. `run` is borrowed only for each read, so the &mut run calls between
+// reads (stats, ndistinct, operator strategies) borrow-check without copying the path's clause list and the index's
+// opfamily / indexkeys / opcintype arrays (four allocations + copies per index path, and their inlined clone and drop code).
+macro_rules! bt_ip {
+    ($run:expr, $path_id:expr) => {{
+        let PathNode::IndexPath(ip) = $run.root.path($path_id) else { unreachable!() };
+        ip
+    }};
+}
+
 fn btcostestimate(
     run: &mut PlannerRun<'_>,
     path_id: types_pathnodes::PathId,
     loop_count: f64,
 ) -> PgResult<AmCostEstimate> {
-    let (indexclauses, index_unique, index_nkeycolumns, index_tuples, index_tree_height, index_rel, opfamilies, index_indexoid) = {
+    let (index_unique, index_nkeycolumns, index_tuples, index_tree_height, index_rel, index_indexoid) = {
         let PathNode::IndexPath(ip) = run.root.path(path_id) else {
             panic!("btcostestimate: not an IndexPath")
         };
         let index = ip.indexinfo.as_ref().expect("indexinfo set");
-        let mut fams = mcx::PgVec::new_in(run.mcx);
-        fams.extend(index.opfamily.iter().copied());
         (
-            ip.indexclauses.clone(),
             index.unique,
             index.nkeycolumns,
             index.tuples,
             index.tree_height.get(),
             index.rel.expect("index rel set"),
-            fams,
             index.indexoid,
         )
     };
@@ -2726,15 +2770,6 @@ fn btcostestimate(
     let index_pages = {
         let PathNode::IndexPath(ip) = run.root.path(path_id) else { unreachable!() };
         ip.indexinfo.as_ref().unwrap().pages
-    };
-
-    let index_indexkeys = {
-        let PathNode::IndexPath(ip) = run.root.path(path_id) else { unreachable!() };
-        ip.indexinfo.as_ref().unwrap().indexkeys.clone()
-    };
-    let index_opcintype = {
-        let PathNode::IndexPath(ip) = run.root.path(path_id) else { unreachable!() };
-        ip.indexinfo.as_ref().unwrap().opcintype.clone()
     };
 
     let mut index_bound_quals: mcx::PgVec<'_, RinfoId> = mcx::PgVec::new_in(run.mcx);
@@ -2746,8 +2781,10 @@ fn btcostestimate(
     let mut found_row_compare = false;
     let mut num_sa_scans = 1.0f64;
 
-    'buildquals: for iclause in indexclauses.iter() {
-        if indexcol < iclause.indexcol as i32 {
+    let nclauses = bt_ip!(run, path_id).indexclauses.len();
+    'buildquals: for ci in 0..nclauses {
+        let iclause_indexcol = bt_ip!(run, path_id).indexclauses[ci].indexcol as i32;
+        if indexcol < iclause_indexcol {
             // Skip arrays can't be added after a RowCompare input qual
             // (nbtree limitation; selfuncs.c).
             if found_row_compare {
@@ -2761,9 +2798,9 @@ fn btcostestimate(
                 index_skip_quals.clear();
             }
             eq_qual_here = false;
-            while indexcol < iclause.indexcol as i32 {
+            while indexcol < iclause_indexcol {
                 found_array = true;
-                let attno = index_indexkeys[indexcol as usize];
+                let attno = bt_ip!(run, path_id).indexinfo.as_ref().unwrap().indexkeys[indexcol as usize];
                 // examine_indexcol_variable (selfuncs.c): simple columns read
                 // the table's stats; expression columns read the index's own
                 // pg_statistic row (colnum = indexcol+1, inh false).
@@ -2779,7 +2816,7 @@ fn btcostestimate(
                 let vardata = VariableStatData {
                     var: None,
                     rel: Some(index_rel),
-                    vartype: index_opcintype[indexcol as usize],
+                    vartype: bt_ip!(run, path_id).indexinfo.as_ref().unwrap().opcintype[indexcol as usize],
                     isunique: false,
                     stats,
                     acl_ok: false,
@@ -2819,9 +2856,11 @@ fn btcostestimate(
                 index_skip_quals.clear();
             }
         }
-        debug_assert!(indexcol == iclause.indexcol as i32);
+        debug_assert!(indexcol == iclause_indexcol);
 
-        for &rid in iclause.indexquals.iter() {
+        let nquals = bt_ip!(run, path_id).indexclauses[ci].indexquals.len();
+        for qi in 0..nquals {
+            let rid = bt_ip!(run, path_id).indexclauses[ci].indexquals[qi];
             let clause = *run.root.expr_node(run.root.rinfo(rid).clause);
             let clause_op = match clause.node_tag() {
                 NodeTag::T_OpExpr => clause.as_op_expr().unwrap().opno,
@@ -2851,11 +2890,8 @@ fn btcostestimate(
                 other => panic!("btcostestimate (selfuncs.c): indexqual {other:?}; M2 lane"),
             };
             if clause_op != 0 {
-                let op_strategy = crate::syscache_memo::get_op_opfamily_strategy(
-                    run,
-                    clause_op,
-                    opfamilies[indexcol as usize],
-                )?;
+                let opfamily = bt_ip!(run, path_id).indexinfo.as_ref().unwrap().opfamily[indexcol as usize];
+                let op_strategy = crate::syscache_memo::get_op_opfamily_strategy(run, clause_op, opfamily)?;
                 debug_assert!(op_strategy != 0);
                 if op_strategy == lsyscache::BTEqualStrategyNumber as i32 {
                     eq_qual_here = true;
@@ -2904,12 +2940,14 @@ fn btcostestimate(
     if index_tuples > 1.0 {
         let descent_cost = (index_tuples.ln() / 2.0f64.ln()).ceil() * cpu_operator_cost;
         costs.index_startup_cost += descent_cost;
-        costs.index_total_cost = costs.num_sa_scans.mul_add(descent_cost, costs.index_total_cost);
+        costs.index_total_cost =
+            crate::fma_sites::sa_descent_total(costs.index_total_cost, costs.num_sa_scans, descent_cost);
     }
     let descent_cost =
         (index_tree_height as f64 + 1.0) * DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost;
     costs.index_startup_cost += descent_cost;
-    costs.index_total_cost = costs.num_sa_scans.mul_add(descent_cost, costs.index_total_cost);
+    costs.index_total_cost =
+            crate::fma_sites::sa_descent_total(costs.index_total_cost, costs.num_sa_scans, descent_cost);
 
     // btcost_correlation over the leading column; expression columns read the
     // index's own pg_statistic row (colnum 1, inh false), as C.
@@ -2949,7 +2987,7 @@ fn btcostestimate(
                 // correlation value — a degenerate/torn stats slot with an
                 // empty numbers array is tolerated, not asserted (the
                 // unguarded [0] panicked backends under high auto-analyze
-                // churn; found by the regression win-table rig, where
+                // churn; found by the GL-ELR-XIDWAIT win-table rig, where
                 // the armed arm's ~10x update throughput made analyze
                 // rewrites of the stats row constant).
                 if let Some(&corr0) = slot.numbers()?.first() {
@@ -2994,6 +3032,19 @@ pub fn estimate_num_groups_estinfo<'mcx>(
     Ok((n, used_default))
 }
 
+/// `estimate_num_groups_pgset` with C's non-NULL `estinfo`: also reports SELFLAG_USED_DEFAULT (some key's ndistinct came
+/// from DEFAULT_NUM_DISTINCT). DR-7: the grouping's rel carries it to its Agg (`Agg::gravity_groups_default`).
+pub fn estimate_num_groups_pgset_estinfo<'mcx>(
+    run: &mut PlannerRun<'mcx>,
+    group_exprs: &[(NodeId, Node<'mcx>)],
+    input_rows: f64,
+    pgset: Option<&[i32]>,
+) -> PgResult<(f64, bool)> {
+    let mut used_default = false;
+    let n = estimate_num_groups_core(run, group_exprs, input_rows, pgset, Some(&mut used_default))?;
+    Ok((n, used_default))
+}
+
 /// C's `pgset` form: a grouping set given as 0-based indexes into
 /// `group_exprs`; exprs outside the set are skipped.
 pub fn estimate_num_groups_pgset<'mcx>(
@@ -3012,6 +3063,610 @@ struct GroupVarInfo<'mcx> {
     isdefault: bool,
 }
 
+
+// The functions by their built-in names (pg_proc.dat `prosrc`, resolved through fmgr_core's generated table), not
+// OID literals: `extract` / `date_part` over date, timestamp and timestamptz; `date_trunc(unit, ts[tz])`; `length` /
+// `char_length` of text and bpchar. Any other expression of one Var (regexp_replace(x, ..) included) takes PostgreSQL's
+// own reading: the Var's ndistinct, and nothing more beside the Var itself (PL-11: no unbounded name list).
+const EXTRACT_FUNCS: [&str; 5] =
+    ["extract_date", "extract_timestamp", "extract_timestamptz", "timestamptz_part", "timestamp_part"];
+const DATE_TRUNC_FUNCS: [&str; 2] = ["timestamp_trunc", "timestamptz_trunc"];
+const LENGTH_FUNCS: [&str; 2] = ["textlen", "bpcharlen"];
+const USECS_PER_DAY_F: f64 = 86_400_000_000.0;
+
+pub fn extract_field_domain(field: &str) -> Option<f64> {
+    Some(match field.to_ascii_lowercase().as_str() {
+        "minute" => 60.0,
+        "hour" => 24.0,
+        "day" => 31.0,
+        "dow" | "isodow" => 7.0,
+        "doy" => 366.0,
+        "week" => 53.0,
+        "month" => 12.0,
+        "quarter" => 4.0,
+        _ => return None,
+    })
+}
+
+pub fn date_trunc_unit_usecs(unit: &str) -> Option<f64> {
+    Some(match unit.to_ascii_lowercase().as_str() {
+        "microseconds" => 1.0,
+        "milliseconds" => 1e3,
+        "second" => 1e6,
+        "minute" => 60e6,
+        "hour" => 3600e6,
+        "day" => USECS_PER_DAY_F,
+        "week" => 7.0 * USECS_PER_DAY_F,
+        "month" => 30.4375 * USECS_PER_DAY_F,
+        "quarter" => 91.3125 * USECS_PER_DAY_F,
+        "year" => 365.25 * USECS_PER_DAY_F,
+        "decade" => 3652.5 * USECS_PER_DAY_F,
+        "century" => 36525.0 * USECS_PER_DAY_F,
+        "millennium" => 365250.0 * USECS_PER_DAY_F,
+        _ => return None,
+    })
+}
+
+pub fn date_trunc_groups(unit: &str, range: Option<(f64, f64)>) -> Option<f64> {
+    let u = date_trunc_unit_usecs(unit)?;
+    let (lo, hi) = range?;
+    if !(lo.is_finite() && hi.is_finite()) || hi < lo {
+        return None;
+    }
+    Some(((hi - lo) / u).floor() + 1.0)
+}
+
+/// Groups of `length(col)`: the footer's max character length, else the
+/// type's length typmod (varchar(n)/char(n)), else unbounded.
+pub fn length_groups(typmod: i32, footer_max_len: i32) -> Option<f64> {
+    if footer_max_len > 0 {
+        Some(footer_max_len as f64 + 1.0)
+    } else if typmod >= VARHDRSZ_I32 {
+        Some((typmod - VARHDRSZ_I32) as f64 + 1.0)
+    } else {
+        None
+    }
+}
+const VARHDRSZ_I32: i32 = 4;
+
+fn time_type_ops(typid: Oid) -> Option<[Oid; 5]> {
+    Some(match typid {
+        DATEOID => [1095, 1096, 1097, 1098, 1093],
+        TIMESTAMPOID => [2062, 2063, 2064, 2065, 2060],
+        TIMESTAMPTZOID => [1322, 1323, 1324, 1325, 1320],
+        _ => return None,
+    })
+}
+
+fn strip_relabel(mut n: Node<'_>) -> Node<'_> {
+    while let Some(r) = n.as_relabel_type() {
+        n = r.arg;
+    }
+    n
+}
+
+fn const_text(n: Node<'_>) -> Option<String> {
+    let c = strip_relabel(n).as_const()?;
+    if c.constisnull || c.consttype != TEXTOID {
+        return None;
+    }
+    Some(String::from_utf8_lossy(varlena_datum_payload(c.constvalue)).into_owned())
+}
+
+fn time_column_range<'mcx>(
+    run: &mut PlannerRun<'mcx>,
+    var: Node<'mcx>,
+) -> PgResult<Option<(f64, f64)>> {
+    let v = var.as_var().expect("Var");
+    let Some(ops) = time_type_ops(v.vartype) else {
+        return Ok(None);
+    };
+    let vid = run.intern_expr(var);
+    let vardata = examine_variable(run, vid, var, 0)?;
+    let mut range = match get_variable_range(run, &vardata, ops[0], 0)? {
+        Some((lo, hi)) => (
+            convert_timevalue_to_scalar(lo, v.vartype),
+            convert_timevalue_to_scalar(hi, v.vartype),
+        ),
+        None => (None, None),
+    };
+    if let Some(rel) = vardata.rel {
+        let rinfos = crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.rel(rel).baserestrictinfo);
+        for rid in rinfos.iter() {
+            let clause = *run.root.expr_node(run.root.rinfo(*rid).clause);
+            let Some(op) = clause.as_op_expr() else { continue };
+            if op.args.len() != 2 {
+                continue;
+            }
+            let (l, r) = (strip_relabel(op.args.nth(0)), strip_relabel(op.args.nth(1)));
+            let (bound, opno) = match (l.as_var(), r.as_const(), l.as_const(), r.as_var()) {
+                (Some(lv), Some(c), _, _) if lv.varno == v.varno && lv.varattno == v.varattno => {
+                    (c, op.opno)
+                }
+                (_, _, Some(c), Some(rv)) if rv.varno == v.varno && rv.varattno == v.varattno => {
+                    let commuted = match op.opno {
+                        o if o == ops[0] => ops[2],
+                        o if o == ops[1] => ops[3],
+                        o if o == ops[2] => ops[0],
+                        o if o == ops[3] => ops[1],
+                        o => o,
+                    };
+                    (c, commuted)
+                }
+                _ => continue,
+            };
+            if bound.constisnull || bound.consttype != v.vartype {
+                continue;
+            }
+            let Some(x) = convert_timevalue_to_scalar(bound.constvalue, bound.consttype) else { continue };
+            if opno == ops[0] || opno == ops[1] || opno == ops[4] {
+                range.1 = Some(range.1.map_or(x, |h| h.min(x)));
+            }
+            if opno == ops[2] || opno == ops[3] || opno == ops[4] {
+                range.0 = Some(range.0.map_or(x, |l| l.max(x)));
+            }
+        }
+    }
+    Ok(match range {
+        (Some(lo), Some(hi)) => Some((lo, hi)),
+        _ => None,
+    })
+}
+
+/// PL-11 (census first, the user's 10-06 ruling): `pgrust.gravity_expr_group_image = on` reads an expression key's group
+/// count from the function itself instead of the bounded name lists (`expression_group_bound`). Off (the default) keeps
+/// today's reading.
+fn expr_group_image_on() -> bool {
+    if !guc_seams::get_config_option_missing_ok::is_installed() {
+        return false;
+    }
+    guc_seams::get_config_option_missing_ok::call("pgrust.gravity_expr_group_image")
+        .ok()
+        .flatten()
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "on" | "true" | "1"))
+}
+
+/// the group count of an IMMUTABLE expression `f` of one Var `x` (and constants), from the function itself, not a
+/// name list: `f` is evaluated (eval_const_expressions, `x` replaced by each value) over the values ANALYZE kept for `x`
+/// (its MCV list and histogram bounds: a sample of `x`'s distinct values), and the images' distinct count is read with
+/// Duj1 (analyze.c's estimator), the sample's values standing for `x`'s `nd(x)` distinct ones:
+/// `D = n d / (n - f1 + f1 n / nd(x))`, within `[d, nd(x)]`. `None` (PostgreSQL's reading: `nd(x)`) when `f` maps the
+/// sample one to one, when `x` has no statistics or under 10 sampled values, or when an evaluation raises or folds to no
+/// constant. Returns `(D, x)`.
+fn expression_group_image<'mcx>(run: &mut PlannerRun<'mcx>, node: Node<'mcx>) -> PgResult<Option<(f64, Node<'mcx>)>> {
+    const MIN_SAMPLE: usize = 10;
+    let mcx = run.mcx;
+    if node.as_var().is_some() || node.as_relabel_type().is_some() || clauses::contain_mutable_functions(node)? {
+        return Ok(None);
+    }
+    let vars_here = vars::pull_var_clause(mcx, node, vars::PVC_RECURSE_AGGREGATES | vars::PVC_RECURSE_WINDOWFUNCS | vars::PVC_RECURSE_PLACEHOLDERS)?;
+    if vars_here.len() != 1 {
+        return Ok(None);
+    }
+    let var = vars_here.nth(0);
+    let Some(v) = var.as_var().filter(|v| v.varlevelsup == 0 && v.varattno > 0) else { return Ok(None) };
+    let vid = run.intern_expr(var);
+    let vardata = examine_variable(run, vid, var, 0)?;
+    if vardata.stats.is_none() {
+        return Ok(None);
+    }
+    let mut sample = Vec::new();
+    for kind in [STATISTIC_KIND_MCV, STATISTIC_KIND_HISTOGRAM] {
+        if let Some(sslot) = vardata.slot(kind, 0) {
+            sample.extend(sslot.values()?.iter().copied());
+        }
+    }
+    if sample.len() < MIN_SAMPLE {
+        return Ok(None);
+    }
+    let (nd, _) = get_variable_numdistinct(run, &vardata);
+    let (typlen, byval) = lsyscache::get_typlenbyval(v.vartype)?;
+    let (vno, vatt, vtype, vtypmod, vcoll) = (v.varno, v.varattno, v.vartype, v.vartypmod, v.varcollid);
+    let mut images: Vec<Option<Vec<u8>>> = ::mcx::stdvec::try_vec(sample.len(), "selfuncs")?;
+    for &d in &sample {
+        let c = Node::mk(
+            mcx,
+            types_nodes::primnodes::Const { consttype: vtype, consttypmod: vtypmod, constcollid: vcoll, constlen: i32::from(typlen), constvalue: d, constisnull: false, constbyval: byval, location: -1 },
+        )?;
+        let bound = replace_var(mcx, node, vno, vatt, c)?;
+        let Ok(folded) = clauses::eval_const_expressions(mcx, bound) else { return Ok(None) };
+        let Some(k) = folded.as_const() else { return Ok(None) };
+        images.push(const_image(k));
+    }
+    let n = images.len() as f64;
+    let mut counts: std::collections::HashMap<Option<Vec<u8>>, u32> = std::collections::HashMap::new();
+    for i in images {
+        *counts.entry(i).or_insert(0) += 1;
+    }
+    let d = counts.len() as f64;
+    if d >= n {
+        return Ok(None);
+    }
+    let f1 = counts.values().filter(|&&c| c == 1).count() as f64;
+    let big_n = nd.max(n);
+    let est = n * d / (n - f1 + f1 * n / big_n);
+    Ok(Some((est.clamp(d, big_n), var)))
+}
+
+fn replace_var<'mcx>(mcx: mcx::Mcx<'mcx>, node: Node<'mcx>, varno: i32, varattno: i16, c: Node<'mcx>) -> PgResult<Node<'mcx>> {
+    fn mutate<'mcx>(mcx: mcx::Mcx<'mcx>, n: Node<'mcx>, at: (i32, i16), c: Node<'mcx>) -> PgResult<Option<Node<'mcx>>> {
+        if let Some(v) = n.as_var() {
+            return Ok((v.varlevelsup == 0 && v.varno == at.0 && v.varattno == at.1).then_some(c));
+        }
+        clauses::expression_tree_mutator(mcx, n, &mut |k| mutate(mcx, k, at, c))
+    }
+    Ok(mutate(mcx, node, (varno, varattno), c)?.unwrap_or(node))
+}
+
+fn const_image(k: &types_nodes::primnodes::Const) -> Option<Vec<u8>> {
+    if k.constisnull {
+        return None;
+    }
+    if k.constbyval {
+        return ::mcx::stdvec::try_to_vec(&k.constvalue.as_u64().to_le_bytes(), "selfuncs").ok();
+    }
+    let p = k.constvalue.as_usize() as *const u8;
+    // SAFETY: a non-null by-reference constant points at its image: `constlen` bytes, a varlena's own size, or a cstring.
+    let len = unsafe {
+        match k.constlen {
+            n if n > 0 => n as usize,
+            -1 => types_tuple::varatt::varsize_any(p),
+            _ => std::ffi::CStr::from_ptr(p as *const std::ffi::c_char).to_bytes().len(),
+        }
+    };
+    // SAFETY: as above, `len` bytes from `p`.
+    ::mcx::stdvec::try_to_vec(unsafe { core::slice::from_raw_parts(p, len) }, "selfuncs").ok()
+}
+
+fn expression_group_bound<'mcx>(
+    run: &mut PlannerRun<'mcx>,
+    node: Node<'mcx>,
+) -> PgResult<Option<(f64, Node<'mcx>)>> {
+    let Some(f) = node.as_func_expr() else {
+        return Ok(None);
+    };
+    let args: Vec<Node<'mcx>> = f.args.iter().map(strip_relabel).collect();
+    let var_at = |i: usize| args.get(i).copied().filter(|n| n.as_var().is_some_and(|v| v.varlevelsup == 0 && v.varattno > 0));
+    let Some(src) = crate::groupkey_trim::builtin_src(f.funcid) else {
+        return Ok(None);
+    };
+    if EXTRACT_FUNCS.contains(&src) {
+        let (Some(field), Some(var)) = (args.first().copied().and_then(const_text), var_at(1)) else {
+            return Ok(None);
+        };
+        return Ok(extract_field_domain(&field).map(|b| (b, var)));
+    }
+    if DATE_TRUNC_FUNCS.contains(&src) {
+        let (Some(unit), Some(var)) = (args.first().copied().and_then(const_text), var_at(1)) else {
+            return Ok(None);
+        };
+        let range = time_column_range(run, var)?;
+        return Ok(date_trunc_groups(&unit, range).map(|b| (b, var)));
+    }
+    if LENGTH_FUNCS.contains(&src) {
+        let Some(var) = var_at(0) else { return Ok(None) };
+        let v = var.as_var().expect("Var");
+        let footer_max_len = crate::relnode::find_base_rel_noerr(&run.root, v.varno)
+            .and_then(|rel| run.root.rel(rel).pgrcolumnar_col_max_len.get(v.varattno as usize - 1).copied())
+            .unwrap_or(0);
+        return Ok(length_groups(v.vartypmod, footer_max_len).map(|b| (b, var)));
+    }
+    Ok(None)
+}
+
+/// D3142-B: `pgrust.gravity_expr_group_bound` (on unless `off`): group keys take `expr_distinct_bound`'s provable bound;
+/// off keeps the bare-Var EXTRACT / DATE_TRUNC / LENGTH rules of `expression_group_bound` alone.
+fn expr_group_bound_on() -> bool {
+    #[cfg(test)]
+    if EXPR_GROUP_BOUND_OFF_FOR_TESTS.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    if !guc_seams::get_config_option_missing_ok::is_installed() {
+        return true;
+    }
+    !guc_seams::get_config_option_missing_ok::call("pgrust.gravity_expr_group_bound")
+        .ok()
+        .flatten()
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "false" | "0"))
+}
+
+#[cfg(test)]
+pub(crate) static EXPR_GROUP_BOUND_OFF_FOR_TESTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+const FIRST_NORMAL_OBJECT_ID: Oid = 16384;
+const EXTRACT_TIME_FUNCS: [&str; 4] = ["extract_time", "time_part", "extract_timetz", "timetz_part"];
+const INT_MOD_FUNCS: [&str; 3] = ["int2mod", "int4mod", "int8mod"];
+const WIDTH_BUCKET_FUNCS: [&str; 2] = ["width_bucket_float8", "width_bucket_numeric"];
+
+pub fn extract_time_field_domain(field: &str) -> Option<f64> {
+    Some(match field.to_ascii_lowercase().as_str() {
+        "hour" => 25.0,
+        "minute" => 60.0,
+        _ => return None,
+    })
+}
+
+/// `x % n` for a nonzero integer constant `n`: |n| values when `x` is provably non-negative, else 2|n| - 1 (the sign
+/// follows `x`).
+pub fn int_mod_domain(n: i64, nonneg: bool) -> Option<f64> {
+    let m = (n as f64).abs();
+    (n != 0).then(|| if nonneg { m } else { 2.0 * m - 1.0 })
+}
+
+pub fn width_bucket_domain(count: i64) -> Option<f64> {
+    (count > 0).then(|| count as f64 + 2.0)
+}
+
+fn bound_mul(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    Some(a? * b?).filter(|x| x.is_finite())
+}
+
+fn bound_min(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (x, None) => x,
+        (None, y) => y,
+    }
+}
+
+fn const_int(n: Node<'_>) -> Option<i64> {
+    const INT2OID: Oid = 21;
+    const INT4OID: Oid = 23;
+    const INT8OID: Oid = 20;
+    let c = strip_relabel(n).as_const()?;
+    if c.constisnull {
+        return None;
+    }
+    Some(match c.consttype {
+        INT2OID => c.constvalue.as_i16().into(),
+        INT4OID => c.constvalue.as_i32().into(),
+        INT8OID => c.constvalue.as_i64(),
+        _ => return None,
+    })
+}
+
+/// Whether `node` never yields NULL: a non-null Const, a level-0 Var of a NOT NULL column (and no outer join nulls it),
+/// a NULL / boolean test, a COALESCE with such an argument, a relabeling of such an expression.
+fn provably_non_null(run: &PlannerRun<'_>, node: Node<'_>) -> bool {
+    let node = strip_relabel(node);
+    if let Some(c) = node.as_const() {
+        return !c.constisnull;
+    }
+    if let Some(v) = node.as_var() {
+        return v.varlevelsup == 0
+            && v.varattno > 0
+            && v.varnullingrels.is_empty()
+            && crate::relnode::find_base_rel_noerr(&run.root, v.varno)
+                .is_some_and(|r| crate::relnode::relids_is_member(i32::from(v.varattno), &run.root.rel(r).notnullattnums));
+    }
+    if node.as_null_test().is_some() || node.as_boolean_test().is_some() {
+        return true;
+    }
+    if let Some(c) = node.as_coalesce_expr() {
+        return c.args.iter().any(|a| provably_non_null(run, a));
+    }
+    false
+}
+
+fn provably_nonneg(node: Node<'_>) -> bool {
+    let node = strip_relabel(node);
+    if let Some(k) = const_int(node) {
+        return k >= 0;
+    }
+    let f = match (node.as_func_expr(), node.as_op_expr()) {
+        (Some(f), _) => f.funcid,
+        (_, Some(o)) => o.opfuncid,
+        _ => return false,
+    };
+    crate::groupkey_trim::builtin_src(f).is_some_and(|s| {
+        matches!(s, "int2abs" | "int4abs" | "int8abs" | "textlen" | "bpcharlen" | "textoctetlen" | "byteaoctetlen" | "bpcharoctetlen")
+    })
+}
+
+/// A level-0 Var's distinct values: PostgreSQL's ndistinct (a never-ANALYZEd pgrcolumnar column: the part facts' count,
+/// as `add_unique_group_var` reads it), plus 1 for NULL when the column may be NULL; `None` on PostgreSQL's default.
+fn var_distinct_bound<'mcx>(run: &mut PlannerRun<'mcx>, var: Node<'mcx>) -> PgResult<Option<f64>> {
+    let (varno, varattno) = var.as_var().map(|v| (v.varno, v.varattno)).expect("Var");
+    let vid = run.intern_expr(var);
+    let vardata = examine_variable(run, vid, var, 0)?;
+    let (mut nd, isdefault) = get_variable_numdistinct(run, &vardata);
+    if isdefault {
+        let facts = vardata.rel.and_then(|rel| {
+            let r = run.root.rel(rel);
+            (r.amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR != 0 && varno == r.relid as i32 && varattno >= 1)
+                .then(|| r.pgrcolumnar_col_ndv.get(varattno as usize - 1).copied())
+                .flatten()
+                .and_then(|d| columnar_group_ndistinct(Some(d), r.tuples))
+        });
+        match facts {
+            Some(d) => nd = d,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(nd + if provably_non_null(run, var) { 0.0 } else { 1.0 }))
+}
+
+/// D3142-B: a provable UPPER BOUND on the distinct values `node` takes in one statement (NULL counted as a value), or
+/// `None` (unbounded). A volatile or set-returning expression, a SubLink / SubPlan, an exec Param: unbounded. A Const,
+/// an extern Param, an outer Var: 1. A level-0 Var: `var_distinct_bound`. Any IMMUTABLE / STABLE function, operator or
+/// coercion: at most the product of its arguments' bounds (deterministic within the statement), and a rule node takes the
+/// min of that and its rule: EXTRACT / date_part's bounded field (+1: an infinite timestamp extracts NULL), boolean 2,
+/// integer `%` by a constant, width_bucket's buckets, an enum's labels (+1 each for NULL unless provably non-null). CASE,
+/// COALESCE, GREATEST / LEAST: the sum of their results' bounds (a missing ELSE adds its NULL); NULLIF: its first
+/// argument's + 1.
+pub(crate) fn expr_distinct_bound<'mcx>(run: &mut PlannerRun<'mcx>, node: Node<'mcx>) -> PgResult<Option<f64>> {
+    if clauses::contain_volatile_functions(node)? || crate::costsize::expression_returns_set_rows(run, node)? > 1.0 {
+        return Ok(None);
+    }
+    bound_walk(run, node)
+}
+
+fn bound_walk<'mcx>(run: &mut PlannerRun<'mcx>, node: Node<'mcx>) -> PgResult<Option<f64>> {
+    use types_nodes::primnodes::ParamKind;
+    if node.as_const().is_some() || node.as_sql_value_function().is_some() {
+        return Ok(Some(1.0));
+    }
+    if let Some(p) = node.as_param() {
+        return Ok(matches!(p.paramkind, ParamKind::PARAM_EXTERN).then_some(1.0));
+    }
+    if let Some(v) = node.as_var() {
+        if v.varlevelsup > 0 {
+            return Ok(Some(1.0));
+        }
+        return var_distinct_bound(run, node);
+    }
+    let null = if provably_non_null(run, node) { 0.0 } else { 1.0 };
+    let ty = crate::costsize::expr_type_typmod(node).0;
+    if ty == BOOLOID {
+        return Ok(Some(2.0 + null));
+    }
+    let typed = if ty >= FIRST_NORMAL_OBJECT_ID && lsyscache::type_is_enum(ty)? {
+        typcache::enum_label_count(ty)?.map(|n| n as f64 + null)
+    } else {
+        None
+    };
+    let walked = if let Some(r) = node.as_relabel_type() {
+        bound_walk(run, r.arg)?
+    } else if let Some(c) = node.as_collate_expr() {
+        bound_walk(run, c.arg)?
+    } else if let Some(c) = node.as_coerce_via_io() {
+        bound_walk(run, c.arg)?
+    } else if let Some(c) = node.as_array_coerce_expr() {
+        bound_walk(run, c.arg)?
+    } else if let Some(c) = node.as_coerce_to_domain() {
+        bound_walk(run, c.arg)?
+    } else if let Some(f) = node.as_field_select() {
+        bound_walk(run, f.arg)?
+    } else if let Some(p) = node.as_place_holder_var() {
+        bound_walk(run, p.phexpr)?.map(|b| b + 1.0)
+    } else if let Some(f) = node.as_func_expr() {
+        if f.funcretset {
+            return Ok(None);
+        }
+        let args: Vec<Node<'mcx>> = f.args.iter().collect();
+        call_bound(run, f.funcid, &args, null)?
+    } else if let Some(o) = node.as_op_expr() {
+        if o.opretset {
+            return Ok(None);
+        }
+        let args: Vec<Node<'mcx>> = o.args.iter().collect();
+        call_bound(run, o.opfuncid, &args, null)?
+    } else if let Some(c) = node.as_case_expr() {
+        let mut sum = Some(0.0);
+        for w in c.args.iter() {
+            let r = w.as_case_when().and_then(|w| w.result);
+            sum = match (sum, r) {
+                (Some(s), Some(r)) => bound_walk(run, r)?.map(|b| s + b),
+                _ => None,
+            };
+        }
+        match (sum, c.defresult) {
+            (Some(s), Some(d)) => bound_walk(run, d)?.map(|b| s + b),
+            (Some(s), None) => Some(s + 1.0),
+            _ => None,
+        }
+    } else if let Some(c) = node.as_coalesce_expr() {
+        sum_bound(run, c.args.iter().collect())?
+    } else if let Some(m) = node.as_min_max_expr() {
+        sum_bound(run, m.args.iter().collect())?
+    } else if let Some(n) = node.as_null_if_expr() {
+        match n.args.iter().next() {
+            Some(a) => bound_walk(run, a)?.map(|b| b + 1.0),
+            None => None,
+        }
+    } else if let Some(r) = node.as_row_expr() {
+        product_bound(run, r.args.iter().collect())?
+    } else if let Some(a) = node.as_array_expr() {
+        product_bound(run, a.elements.iter().collect())?
+    } else if let Some(s) = node.as_subscripting_ref() {
+        if s.refassgnexpr.is_some() {
+            return Ok(None);
+        }
+        let mut parts: Vec<Node<'mcx>> = s.refexpr.into_iter().collect();
+        for l in [&s.refupperindexpr, &s.reflowerindexpr] {
+            parts.extend(l.iter().flatten());
+        }
+        product_bound(run, parts)?
+    } else {
+        None
+    };
+    Ok(bound_min(typed, walked))
+}
+
+fn sum_bound<'mcx>(run: &mut PlannerRun<'mcx>, args: Vec<Node<'mcx>>) -> PgResult<Option<f64>> {
+    let mut sum = 0.0;
+    for a in args {
+        let Some(b) = bound_walk(run, a)? else { return Ok(None) };
+        sum += b;
+    }
+    Ok(Some(sum))
+}
+
+fn product_bound<'mcx>(run: &mut PlannerRun<'mcx>, args: Vec<Node<'mcx>>) -> PgResult<Option<f64>> {
+    let mut prod = Some(1.0);
+    for a in args {
+        prod = bound_mul(prod, bound_walk(run, a)?);
+        if prod.is_none() {
+            return Ok(None);
+        }
+    }
+    Ok(prod)
+}
+
+fn call_bound<'mcx>(run: &mut PlannerRun<'mcx>, funcid: Oid, args: &[Node<'mcx>], null: f64) -> PgResult<Option<f64>> {
+    let src = crate::groupkey_trim::builtin_src(funcid);
+    let rule = match src {
+        Some(s) if EXTRACT_FUNCS.contains(&s) => args.first().copied().and_then(const_text).and_then(|f| extract_field_domain(&f)).map(|d| d + 1.0),
+        Some(s) if EXTRACT_TIME_FUNCS.contains(&s) => {
+            args.first().copied().and_then(const_text).and_then(|f| extract_time_field_domain(&f)).map(|d| d + 1.0)
+        }
+        Some(s) if INT_MOD_FUNCS.contains(&s) && args.len() == 2 => {
+            const_int(args[1]).and_then(|n| int_mod_domain(n, provably_nonneg(args[0]))).map(|d| d + null)
+        }
+        Some(s) if WIDTH_BUCKET_FUNCS.contains(&s) && args.len() == 4 => {
+            const_int(args[3]).and_then(width_bucket_domain).map(|d| d + null)
+        }
+        _ => None,
+    };
+    let composed = product_bound(run, ::mcx::stdvec::try_to_vec(args, "selfuncs")?)?;
+    Ok(bound_min(rule, composed))
+}
+
+/// D3142-B's key reading: a group key that is a function of exactly one level-0 Var, with its bound when that is below
+/// the Var's own distinct count (else PostgreSQL's reading stands: the Var).
+fn one_var_expr_bound<'mcx>(run: &mut PlannerRun<'mcx>, node: Node<'mcx>) -> PgResult<Option<(f64, Node<'mcx>)>> {
+    if strip_relabel(node).as_var().is_some() {
+        return Ok(None);
+    }
+    let vars_here = vars::pull_var_clause(run.mcx, node, vars::PVC_RECURSE_AGGREGATES | vars::PVC_RECURSE_WINDOWFUNCS | vars::PVC_RECURSE_PLACEHOLDERS)?;
+    let mut var: Option<(Node<'mcx>, (i32, i16))> = None;
+    for v in vars_here.iter() {
+        let Some(at) = v.as_var().filter(|x| x.varlevelsup == 0 && x.varattno > 0).map(|x| (x.varno, x.varattno)) else { return Ok(None) };
+        match var {
+            Some((_, w)) if w != at => return Ok(None),
+            Some(_) => {}
+            None => var = Some((v, at)),
+        }
+    }
+    let Some((var, _)) = var else { return Ok(None) };
+    let Some(bound) = expr_distinct_bound(run, node)? else { return Ok(None) };
+    let vid = run.intern_expr(var);
+    let vardata = examine_variable(run, vid, var, 0)?;
+    let (nd, isdefault) = get_variable_numdistinct(run, &vardata);
+    Ok((isdefault || bound < nd).then_some((bound, var)))
+}
+
+/// A never-ANALYZEd pgrcolumnar / pgrcolumnar column's group-key ndistinct (PL-10 / PL-11, gap-optoverfit
+/// GROUP-NDV-EST): the part facts' whole-table count `footer_ndv` (the cross-part NdvRegisters HLL union, the count a
+/// footer-backed ANALYZE harvests into `stadistinct`), clamped to the rel's `tuples`. A column the facts carry no count
+/// for (0 or none: a type the pgrc meta profile keeps no sketch for, as bpchar; a pre-v8 part) gets `None`, keeps
+/// PostgreSQL's own unknown (`DEFAULT_NUM_DISTINCT`, flagged default): no flat share of the table stands in for a
+/// statistic. The rule-bounded expression keys (`expression_group_bound`) take the smaller of their bound and this.
+pub(crate) fn columnar_group_ndistinct(footer_ndv: Option<u64>, tuples: f64) -> Option<f64> {
+    let d = footer_ndv.filter(|&d| d > 0)?;
+    (tuples > 0.0).then(|| crate::costsize::clamp_row_est((d as f64).min(tuples)))
+}
+
 // add_unique_group_var (selfuncs.c): drop exact duplicates; among known-equal
 // vars of different rels keep the one with the smaller ndistinct.
 fn add_unique_group_var<'mcx>(
@@ -3021,41 +3676,24 @@ fn add_unique_group_var<'mcx>(
     vardata: &VariableStatData<'mcx>,
 ) -> PgResult<()> {
     let (mut ndistinct, isdefault) = get_variable_numdistinct(run, vardata);
-    // pgrcolumnar no-stats group-key ndistinct (pgrust-only divergence, scoped to
-    // grouping/DISTINCT estimation -- consts::DEFAULT_PGRCOLUMNAR_GROUP_NDISTINCT_RATIO
-    // provenance): pgrcolumnar cannot ANALYZE, so a defaulted 200 here starves
-    // hash-finalize parallel agg at 100M scale. isdefault is preserved so
-    // SELFLAG_USED_DEFAULT consumers still see the truth.
+    // A never-ANALYZEd pgrcolumnar table's defaulted 200 here starves hash-finalize parallel agg at 100M scale.
+    // isdefault is preserved so SELFLAG_USED_DEFAULT consumers still see the truth.
     if isdefault {
         if let Some(rel) = vardata.rel {
             let r = run.root.rel(rel);
-            // M5a: pgrcolumnar2 rels feed the same footer-NDV face
-            // (plancat's S-2 consult fills pgrcolumnar_col_ndv from the
-            // cross-part NdvRegisters HLL union — the same whole-stream
-            // sketch class as the v1 footer count).
-            let columnar =
-                types_pathnodes::AMFLAG_PGRCOLUMNAR | types_pathnodes::AMFLAG_PGRCOLUMNAR2;
-            if r.amflags & columnar != 0 && r.tuples > 0.0 {
-                // Prefer the footer's ingest-time per-column NDV (whole-stream
-                // HLL — the same count a footer-backed ANALYZE harvests into
-                // stadistinct; plancat stashes it on the rel). Only a plain
-                // Var of this rel maps to a footer column; anything else (or
-                // a footer-less part / unknown column) keeps the flat-ratio
-                // fallback below.
+            // M5a: plancat's S-2 consult fills pgrcolumnar_col_ndv from the
+            // cross-part NdvRegisters HLL union.
+            if r.amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR != 0 && r.tuples > 0.0 {
+                // Only a plain Var of this rel maps to a footer column; anything else (or a footer-less part /
+                // unknown column) keeps the flat-ratio fallback below.
                 let footer_ndv = node.as_var().and_then(|v| {
                     (v.varno == r.relid as i32 && v.varlevelsup == 0 && v.varattno >= 1)
                         .then(|| r.pgrcolumnar_col_ndv.get(v.varattno as usize - 1))
                         .flatten()
                         .copied()
-                        .filter(|&d| d > 0)
                 });
-                if let Some(d) = footer_ndv {
-                    ndistinct = crate::costsize::clamp_row_est((d as f64).min(r.tuples));
-                } else {
-                    let ratio = crate::costsize::gucs::pgrcolumnar_group_ndistinct_ratio();
-                    if ratio > 0.0 {
-                        ndistinct = crate::costsize::clamp_row_est(r.tuples * ratio);
-                    }
+                if let Some(d) = columnar_group_ndistinct(footer_ndv, r.tuples) {
+                    ndistinct = d;
                 }
             }
         }
@@ -3112,9 +3750,16 @@ fn estimate_num_groups_core<'mcx>(
     let mut varinfos: mcx::PgVec<'_, GroupVarInfo<'mcx>> = mcx::PgVec::new_in(mcx);
     let mut numdistinct = 1.0f64;
     let mut srf_multiplier = 1.0f64;
+    // D3142-B: the product of every key's provable bound caps the estimate (none when a key is unbounded). Keys that are
+    // all bare Vars skip it: their bounds' product (each Var's ndistinct, + 1 for NULL) is never below the estimate.
+    let mut cap: Option<f64> =
+        (expr_group_bound_on() && group_exprs.iter().any(|&(_, n)| strip_relabel(n).as_var().is_none())).then_some(1.0);
     for (listidx, &(id, node)) in group_exprs.iter().enumerate() {
         if pgset.is_some_and(|s| !s.contains(&(listidx as i32))) {
             continue;
+        }
+        if cap.is_some() {
+            cap = bound_mul(cap, expr_distinct_bound(run, node)?);
         }
         // SRFs are estimated as scalars here; the end result is scaled up by
         // the largest SRF rowcount instead.
@@ -3131,6 +3776,30 @@ fn estimate_num_groups_core<'mcx>(
         let vardata = examine_variable(run, id, node, 0)?;
         if vardata.stats.is_some() || vardata.isunique {
             add_unique_group_var(run, &mut varinfos, node, &vardata)?;
+            continue;
+        }
+        let mut bounded = if expr_group_image_on() { expression_group_image(run, node)? } else { expression_group_bound(run, node)? };
+        if expr_group_bound_on() {
+            if let Some((b, var)) = one_var_expr_bound(run, node)? {
+                bounded = Some(match bounded {
+                    Some((b0, v0)) => (b0.min(b), v0),
+                    None => (b, var),
+                });
+            }
+        }
+        if let Some((bound, var)) = bounded {
+            let vid = run.intern_expr(var);
+            let vardata = examine_variable(run, vid, var, 0)?;
+            let before = varinfos.len();
+            add_unique_group_var(run, &mut varinfos, var, &vardata)?;
+            if varinfos.len() > before {
+                let last = varinfos.last_mut().expect("pushed");
+                last.node = node;
+                if bound < last.ndistinct {
+                    last.ndistinct = bound.max(1.0);
+                    last.isdefault = false;
+                }
+            }
             continue;
         }
         let vars_here = vars::pull_var_clause(
@@ -3153,7 +3822,7 @@ fn estimate_num_groups_core<'mcx>(
         }
     }
     if varinfos.is_empty() {
-        let numdistinct = (numdistinct * srf_multiplier).ceil();
+        let numdistinct = (cap.map_or(numdistinct, |c| numdistinct.min(c)) * srf_multiplier).ceil();
         return Ok(numdistinct.clamp(1.0, input_rows));
     }
 
@@ -3233,7 +3902,7 @@ fn estimate_num_groups_core<'mcx>(
         remaining = rest;
     }
 
-    let numdistinct = (numdistinct * srf_multiplier).ceil();
+    let numdistinct = (cap.map_or(numdistinct, |c| numdistinct.min(c)) * srf_multiplier).ceil();
     Ok(numdistinct.clamp(1.0, input_rows))
 }
 
@@ -3345,8 +4014,8 @@ fn eqjoinsel_inner(
 
         // Armed frame: by-ref equality procs (jsonb, text, arrays) detoast
         // and allocate their result. C leaks these into the planner context;
-        // a bump scratch keeps the O(n*m) MCV cross-product bounded.
-        let scratch = ::mcx::MemoryContext::new_bump("eqjoinsel_inner");
+        // a scratch AllocSet keeps the O(n*m) MCV cross-product bounded.
+        let scratch = ::mcx::MemoryContext::new_wholesale("eqjoinsel_inner");
         let smcx = scratch.mcx();
 
         let mut matchprodfreq = 0.0f64;
@@ -3521,7 +4190,7 @@ fn eqjoinsel_semi(
         hasmatch2.extend(core::iter::repeat_n(false, clamped_nvalues2));
 
         // Armed frame: see eqjoinsel_inner.
-        let scratch = ::mcx::MemoryContext::new_bump("eqjoinsel_semi");
+        let scratch = ::mcx::MemoryContext::new_wholesale("eqjoinsel_semi");
         let smcx = scratch.mcx();
 
         let mut nmatches = 0i32;
@@ -4383,7 +5052,7 @@ fn get_stats_slot_range(
     let opproc = opproc.as_mut().unwrap();
     // Armed frame: by-ref comparison procs detoast their args (see op_test).
     // Only the incoming Datums are stored, so nothing outlives the scratch.
-    let scratch = ::mcx::MemoryContext::new_bump("get_stats_slot_range");
+    let scratch = ::mcx::MemoryContext::new_wholesale("get_stats_slot_range");
     let smcx = scratch.mcx();
     for &v in values {
         match range {
@@ -4496,8 +5165,8 @@ pub(crate) fn generic_restriction_selectivity<'mcx>(
         let opcode = lsyscache::get_opcode(oproid)?;
         let mut opproc = fmgr_core::fmgr_info(opcode)?;
         // Matching operators (jsonb @> …) detoast/allocate: arm the frames
-        // with a bump scratch (C leaks into the planner context).
-        let scratch = ::mcx::MemoryContext::new_bump("generic_restriction_selectivity");
+        // with a scratch AllocSet (C leaks into the planner context).
+        let scratch = ::mcx::MemoryContext::new_wholesale("generic_restriction_selectivity");
         let smcx = scratch.mcx();
         // C evaluates via raw fcinfo: a NULL result counts as no-match
         // (jsonb @@ can return NULL), never an error.
@@ -4556,7 +5225,7 @@ pub(crate) fn generic_restriction_selectivity<'mcx>(
             default_selectivity
         } else if hist_size < 100 {
             let hist_weight = hist_size as f64 / 100.0;
-            hist_selec * hist_weight + default_selectivity * (1.0 - hist_weight)
+            crate::fma_sites::hist_blend(hist_selec, hist_weight, default_selectivity)
         } else {
             hist_selec
         };
@@ -4564,8 +5233,7 @@ pub(crate) fn generic_restriction_selectivity<'mcx>(
         selec = selec.clamp(0.0001, 0.9999);
 
         let nullfrac = vardata.nullfrac();
-        selec *= 1.0 - nullfrac - mcvsum;
-        selec += mcvsel;
+        selec = crate::fma_sites::mcv_merge(selec, nullfrac, mcvsum, mcvsel);
     } else {
         selec = default_selectivity;
     }
@@ -4718,12 +5386,14 @@ fn gincost_scalararrayopexpr<'mcx>(
 }
 
 // gincostestimate (selfuncs.c).
+// D4562: out of line, so amcostestimate (every index path) does not carry it inlined.
+#[inline(never)]
 fn gincostestimate(
     run: &mut PlannerRun<'_>,
     path_id: types_pathnodes::PathId,
     loop_count: f64,
 ) -> PgResult<AmCostEstimate> {
-    let (index_quals, index_pages, index_tuples, index_rel, reltablespace, gin_stats, opfamilies, opcintypes, indexcollations, nkeycolumns, index_oid) = {
+    let (index_quals, index_pages, index_tuples, index_rel, reltablespace, hypothetical, opfamilies, opcintypes, indexcollations, nkeycolumns, index_oid) = {
         let PathNode::IndexPath(ip) = run.root.path(path_id) else { unreachable!() };
         let index = ip.indexinfo.as_ref().expect("indexinfo set");
         (
@@ -4732,15 +5402,31 @@ fn gincostestimate(
             index.tuples,
             index.rel.expect("index rel set"),
             index.reltablespace,
-            index.gin_stats.expect("gin stats captured at plancat"),
-            index.opfamily.clone(),
-            index.opcintype.clone(),
-            index.indexcollations.clone(),
+            index.hypothetical,
+            index.opfamily,
+            index.opcintype,
+            index.indexcollations,
             index.nkeycolumns,
             index.indexoid,
         )
     };
     let index_rel_relid = run.root.rel(index_rel).relid as i32;
+    let gin_stats = if hypothetical {
+        types_pathnodes::GinIndexStats::default()
+    } else {
+        let rel = indexam::index_open(run.mcx, index_oid, types_rel::NoLock)?;
+        let stats = gin::ginGetStats(&rel);
+        indexam::index_close(rel, types_rel::NoLock)?;
+        let gs = stats?;
+        types_pathnodes::GinIndexStats {
+            pending_pages: gs.nPendingPages,
+            total_pages: gs.nTotalPages,
+            entry_pages: gs.nEntryPages,
+            data_pages: gs.nDataPages,
+            entries: gs.nEntries,
+            version: gs.ginVersion,
+        }
+    };
 
     let mut num_pages = index_pages as f64;
     let num_tuples = index_tuples;
@@ -4922,19 +5608,23 @@ fn gincostestimate(
 
     if num_entries > 1.0 {
         let descent_cost = (num_entries.ln() / 2f64.ln()).ceil() * cpu_operator_cost;
-        index_startup_cost += descent_cost * counts.search_entries;
-        index_total_cost += counts.array_scans * descent_cost * counts.search_entries;
+        (index_startup_cost, index_total_cost) = crate::fma_sites::gin_descent(
+            index_startup_cost,
+            index_total_cost,
+            descent_cost,
+            counts.search_entries,
+            counts.array_scans,
+        );
     }
 
-    index_startup_cost += entry_pages_fetched * DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost;
-    index_total_cost +=
-        entry_pages_fetched * counts.array_scans * DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost;
-
-    index_startup_cost += DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost * data_pages_fetched;
-    index_total_cost += data_pages_fetched
-        * (counts.array_scans - 1.0)
-        * DEFAULT_PAGE_CPU_MULTIPLIER
-        * cpu_operator_cost;
+    (index_startup_cost, index_total_cost) = crate::fma_sites::gin_entry_pages(
+        index_startup_cost,
+        index_total_cost,
+        entry_pages_fetched,
+        counts.array_scans,
+        data_pages_fetched,
+        cpu_operator_cost,
+    );
 
     if outer_scans > 1.0 || counts.array_scans > 1.0 {
         entry_pages_fetched *= outer_scans * counts.array_scans;
@@ -4955,7 +5645,12 @@ fn gincostestimate(
         data_pages_fetched /= outer_scans;
     }
 
-    index_startup_cost += (entry_pages_fetched + data_pages_fetched) * spc_random_page_cost;
+    index_startup_cost = crate::fma_sites::gin_page_io(
+        index_startup_cost,
+        entry_pages_fetched,
+        data_pages_fetched,
+        spc_random_page_cost,
+    );
 
     let mut data_pages_fetched =
         (num_data_pages * counts.exact_entries / num_entries).ceil();
@@ -4965,9 +5660,14 @@ fn gincostestimate(
         data_pages_fetched = data_pages_fetched_by_sel;
     }
 
-    index_startup_cost += DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost * counts.search_entries;
-    index_total_cost +=
-        data_pages_fetched * counts.array_scans * DEFAULT_PAGE_CPU_MULTIPLIER * cpu_operator_cost;
+    (index_startup_cost, index_total_cost) = crate::fma_sites::gin_search_pages(
+        index_startup_cost,
+        index_total_cost,
+        counts.search_entries,
+        data_pages_fetched,
+        counts.array_scans,
+        cpu_operator_cost,
+    );
 
     if outer_scans > 1.0 || counts.array_scans > 1.0 {
         data_pages_fetched *= outer_scans * counts.array_scans;
@@ -4980,15 +5680,27 @@ fn gincostestimate(
         data_pages_fetched /= outer_scans;
     }
 
-    index_total_cost += index_startup_cost + data_pages_fetched * spc_random_page_cost;
+    index_total_cost = crate::fma_sites::gin_total_io(
+        index_total_cost,
+        index_startup_cost,
+        data_pages_fetched,
+        spc_random_page_cost,
+    );
 
     let qual_arg_cost = index_other_operands_eval_cost(run, &index_quals)?;
     let qual_op_cost = cpu_operator_cost * index_quals.len() as f64;
 
     index_startup_cost += qual_arg_cost;
     index_total_cost += qual_arg_cost;
-    index_total_cost += counts.search_entries * counts.array_scans * qual_op_cost;
-    index_total_cost += num_tuples * index_selectivity * gucs::cpu_index_tuple_cost();
+    index_total_cost = crate::fma_sites::gin_qual_costs(
+        index_total_cost,
+        counts.search_entries,
+        counts.array_scans,
+        qual_op_cost,
+        num_tuples,
+        index_selectivity,
+        gucs::cpu_index_tuple_cost(),
+    );
 
     Ok(AmCostEstimate {
         index_startup_cost,
@@ -5045,4 +5757,41 @@ pub(crate) fn eqjoinsel_unrecognized_jointype(
     Err(Box::new(types_error::PgError::error(format!(
         "unrecognized join type: {jointype}"
     ))))
+}
+
+#[cfg(test)]
+mod d400_fma_tests {
+    // D400: selfuncs.c:5141 fuses both interval products on aarch64. The
+    // expected bits come from the exact C expression built with GCC 13.3
+    // -O2: 0x1.75ad0226e515fp+63 fused, 0x1.75ad0226e5170p+63 with
+    // -ffp-contract=off. Each fmadd alone moves the result.
+    #[test]
+    fn d400_interval_scalar_fuses() {
+        let mut buf = [0u8; 16];
+        buf[..8].copy_from_slice(&(-1_049_685_926_603_242_112i64).to_ne_bytes());
+        buf[8..12].copy_from_slice(&(-2_112_901_687i32).to_ne_bytes());
+        buf[12..].copy_from_slice(&74_936_300i32.to_ne_bytes());
+        let d = datum::Datum::from_usize(buf.as_ptr() as usize);
+        let got = super::convert_timevalue_to_scalar(d, super::INTERVALOID).unwrap();
+        let want: u64 =
+            if cfg!(target_arch = "aarch64") { 0x43E7_5AD0_226E_515F } else { 0x43E7_5AD0_226E_5170 };
+        assert_eq!(got.to_bits(), want);
+    }
+}
+
+#[cfg(test)]
+mod group_bound_name_tests {
+    /// The expression-key bound tables resolve to exactly the built-ins they stood for as OID lists (pg_proc.dat):
+    /// a renamed or shared `prosrc` in the generated table fails here, not in an estimate.
+    #[test]
+    fn group_bound_names_are_the_builtin_functions() {
+        let oids = |names: &[&str]| -> Vec<u32> {
+            let mut v: Vec<u32> = fmgr_core::CANONICAL.iter().filter(|e| names.contains(&e.1)).map(|e| e.0).collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(oids(&super::EXTRACT_FUNCS), vec![1171, 2021, 6199, 6202, 6203]);
+        assert_eq!(oids(&super::DATE_TRUNC_FUNCS), vec![1217, 2020]);
+        assert_eq!(oids(&super::LENGTH_FUNCS), vec![1257, 1317, 1318, 1367, 1369, 1372, 1381]);
+    }
 }

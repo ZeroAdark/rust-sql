@@ -1,0 +1,92 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT id, at, v FROM mj WHERE acct = (SELECT b FROM mcfg WHERE name = 's') ORDER BY at LIMIT 3 FOR UPDATE;
+QUERY PLAN                                                    
+--------------------------------------------------------------
+Limit                                                         
+  InitPlan 1                                                  
+    ->  Index Scan using mcfg_pkey on mcfg                    
+          Index Cond: (name = 's'::text)                      
+  ->  LockRows                                                
+        ->  Merge Append                                      
+              Sort Key: mj.at                                 
+              ->  Index Scan using mj1_acct_at_idx on mj1 mj_1
+                    Index Cond: (acct = (InitPlan 1).col1)    
+              ->  Index Scan using mj2_acct_at_idx on mj2 mj_2
+                    Index Cond: (acct = (InitPlan 1).col1)    
+              ->  Index Scan using mjd_acct_at_idx on mjd mj_3
+                    Index Cond: (acct = (InitPlan 1).col1)    
+(13 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2l s1c
+step s1v: UPDATE mj SET v = v || '+' WHERE id = 1027;
+step s2l: SELECT tableoid::regclass, id, at, v FROM mj WHERE acct = (SELECT b FROM mcfg WHERE name = 's') ORDER BY at LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+tableoid|  id|at|v     
+--------+----+--+------
+mj1     |1567| 8|v1567 
+mj1     |1027|18|v1027+
+mj2     | 487|28|v487  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2l s1c
+step s1a: UPDATE mj SET acct = 8 WHERE id = 1027;
+step s2l: SELECT tableoid::regclass, id, at, v FROM mj WHERE acct = (SELECT b FROM mcfg WHERE name = 's') ORDER BY at LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+tableoid|  id|at|v    
+--------+----+--+-----
+mj1     |1567| 8|v1567
+mj2     | 487|28|v487 
+mj2     |1947|75|v1947
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c
+step s1m: UPDATE mj SET at = 150 WHERE id = 1027;
+step s2l: SELECT tableoid::regclass, id, at, v FROM mj WHERE acct = (SELECT b FROM mcfg WHERE name = 's') ORDER BY at LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1v s2l s1c
+step s1q: UPDATE mcfg SET b = 8 WHERE name = 's';
+step s1v: UPDATE mj SET v = v || '+' WHERE id = 1027;
+step s2l: SELECT tableoid::regclass, id, at, v FROM mj WHERE acct = (SELECT b FROM mcfg WHERE name = 's') ORDER BY at LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+tableoid|  id|at|v     
+--------+----+--+------
+mj1     |1567| 8|v1567 
+mj1     |1027|18|v1027+
+mj2     | 487|28|v487  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM mj WHERE id = 1027 FOR UPDATE;
+  id
+----
+1027
+(1 row)
+
+step s2sk: SELECT tableoid::regclass, id, at, v FROM mj WHERE acct = (SELECT b FROM mcfg WHERE name = 's') ORDER BY at LIMIT 3 FOR UPDATE SKIP LOCKED;
+tableoid|  id|at|v    
+--------+----+--+-----
+mj1     |1567| 8|v1567
+mj2     | 487|28|v487 
+mj2     |1947|75|v1947
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

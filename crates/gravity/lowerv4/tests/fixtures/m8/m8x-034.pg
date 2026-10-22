@@ -1,0 +1,8 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M8-RIG): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT x, (SELECT string_agg(y::text, ',' ORDER BY y) FROM (SELECT y FROM generate_series(1, x) y ORDER BY y DESC LIMIT 2) s) AS two FROM generate_series(1, 4) x
+cols: x	two
+[pg]
+1	1
+2	1,2
+3	2,3
+4	3,4

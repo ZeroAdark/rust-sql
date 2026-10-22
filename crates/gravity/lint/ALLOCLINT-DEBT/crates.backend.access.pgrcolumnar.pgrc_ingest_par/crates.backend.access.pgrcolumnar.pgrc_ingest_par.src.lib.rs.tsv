@@ -1,0 +1,9 @@
+path	crates/backend/access/pgrcolumnar/pgrc_ingest_par/src/lib.rs
+growth	std::vec::Vec::push	2
+macro	std::vec	3
+method	std::clone::Clone::clone	4
+method	std::iter::Iterator::collect	1
+method	std::sync::Arc::new	8
+method	std::vec::Vec::with_capacity	2
+type	std::sync::Arc	15
+type	std::vec::Vec	2

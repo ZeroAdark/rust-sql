@@ -3,7 +3,7 @@
 //! One divergence: the receive wait uses poll(2) instead of select(2) — same
 //! EINTR/timeout arms, no FD_SETSIZE ceiling.
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use timingsafe_bcmp::timingsafe_bcmp;
 use types_error::{PgResult, LOG, WARNING};
 use types_startup::Port;
@@ -84,7 +84,7 @@ fn radius_add_attribute(packet: &mut RadiusPacket, typ: u8, data: &[u8]) -> PgRe
     Ok(())
 }
 
-pub(crate) fn CheckRADIUSAuth(port: &mut Port) -> PgResult<i32> {
+pub(crate) fn CheckRADIUSAuth(port: &Port) -> PgResult<i32> {
     let hba = port
         .hba
         .as_ref()
@@ -235,7 +235,7 @@ fn PerformRadiusTransaction(
     let mut md5trailer = vector;
     let mut i = 0;
     while i < encryptedpasswordlen {
-        let mut cryptvector = Vec::with_capacity(secret.len() + RADIUS_VECTOR_LENGTH);
+        let mut cryptvector = ::mcx::std_vec_with_capacity("libpq", secret.len() + RADIUS_VECTOR_LENGTH)?;
         cryptvector.extend_from_slice(secret.as_bytes());
         cryptvector.extend_from_slice(&md5trailer);
         let digest = pg_md5::pg_md5_binary(&cryptvector);
@@ -261,7 +261,7 @@ fn PerformRadiusTransaction(
         let errnum = elog::errno::current_errno();
         ereport(LOG)
             .with_saved_errno(errnum)
-            .errmsg("could not create RADIUS socket: %m")
+            .errmsg(format!("could not create RADIUS socket: {PCT_M}"))
             .finish(loc(3060, "PerformRadiusTransaction"))?;
         return Ok(STATUS_ERROR);
     }
@@ -301,7 +301,7 @@ fn PerformRadiusTransaction(
         let errnum = elog::errno::current_errno();
         ereport(LOG)
             .with_saved_errno(errnum)
-            .errmsg("could not bind local RADIUS socket: %m")
+            .errmsg(format!("could not bind local RADIUS socket: {PCT_M}"))
             .finish(loc(3077, "PerformRadiusTransaction"))?;
         return Ok(STATUS_ERROR);
     }
@@ -322,7 +322,7 @@ fn PerformRadiusTransaction(
         let errnum = elog::errno::current_errno();
         ereport(LOG)
             .with_saved_errno(errnum)
-            .errmsg("could not send RADIUS packet: %m")
+            .errmsg(format!("could not send RADIUS packet: {PCT_M}"))
             .finish(loc(3086, "PerformRadiusTransaction"))?;
         return Ok(STATUS_ERROR);
     }
@@ -355,14 +355,14 @@ fn PerformRadiusTransaction(
             }
             ereport(LOG)
                 .with_saved_errno(errnum)
-                .errmsg("could not check status on RADIUS socket: %m")
+                .errmsg(format!("could not check status on RADIUS socket: {PCT_M}"))
                 .finish(loc(3144, "PerformRadiusTransaction"))?;
             return Ok(STATUS_ERROR);
         }
         if r == 0 {
             ereport(LOG)
                 .errmsg(format!("timeout waiting for RADIUS response from {server}"))
-                .finish(loc(3151, "PerformRadiusTransaction"))?;
+                .finish(loc(3146, "PerformRadiusTransaction"))?;
             return Ok(STATUS_ERROR);
         }
 
@@ -384,7 +384,7 @@ fn PerformRadiusTransaction(
             let errnum = elog::errno::current_errno();
             ereport(LOG)
                 .with_saved_errno(errnum)
-                .errmsg("could not read RADIUS response: %m")
+                .errmsg(format!("could not read RADIUS response: {PCT_M}"))
                 .finish(loc(3173, "PerformRadiusTransaction"))?;
             return Ok(STATUS_ERROR);
         }
@@ -432,7 +432,7 @@ fn PerformRadiusTransaction(
             continue;
         }
 
-        let mut cryptvector = Vec::with_capacity(packetlength + secret.len());
+        let mut cryptvector = ::mcx::std_vec_with_capacity("libpq", packetlength + secret.len())?;
         cryptvector.extend_from_slice(&receive.buf[..4]); // code+id+length
         cryptvector.extend_from_slice(packet.vector()); // request authenticator
         if packetlength > RADIUS_HEADER_LENGTH {
@@ -470,6 +470,39 @@ fn PerformRadiusTransaction(
 #[cfg(all(test, not(target_family = "wasm")))]
 mod radius_tests {
     use super::*;
+
+    #[test]
+    fn timeout_report_location() {
+        static SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        fn capture(error: &types_error::PgError, _: &mut bool) {
+            assert_eq!(
+                error.message(),
+                "timeout waiting for RADIUS response from 127.0.0.1"
+            );
+            let location = error.location().unwrap();
+            assert_eq!(location.filename.as_deref(), Some("auth.c"));
+            assert_eq!(location.lineno, 3146);
+            assert_eq!(location.funcname.as_deref(), Some("PerformRadiusTransaction"));
+            SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = socket.local_addr().unwrap().port().to_string();
+        let previous = elog::set_emit_log_hook(Some(capture));
+        let result = PerformRadiusTransaction(
+            "127.0.0.1",
+            "secret",
+            Some(&port),
+            None,
+            "postgres",
+            b"test",
+        );
+        elog::set_emit_log_hook(previous);
+        assert_eq!(result.unwrap(), STATUS_ERROR);
+        assert!(SEEN.load(std::sync::atomic::Ordering::Relaxed));
+        let mut request = [0; RADIUS_BUFFER_SIZE];
+        socket.set_nonblocking(true).unwrap();
+        assert!(socket.recv(&mut request).unwrap() >= RADIUS_HEADER_LENGTH);
+    }
 
     #[test]
     fn attribute_layout_matches_rfc2865() {

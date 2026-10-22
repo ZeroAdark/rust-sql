@@ -1,0 +1,7 @@
+path	crates/gravity/hosts/src/ops/scan/bitmap_window.rs
+macro	std::vec	10
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	7
+method	std::iter::Iterator::collect	6
+type	std::boxed::Box	1
+type	std::vec::Vec	8

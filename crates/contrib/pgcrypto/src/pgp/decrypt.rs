@@ -1,8 +1,17 @@
+//! pgp-decrypt.c: the message is read through a chain of pull filters
+//! (packet reader -> decrypt -> [mdc] -> prefix -> packet reader or mdcbuf
+//! -> [decompress -> packet reader]) that each fetch bytes only when the
+//! parser above asks for them.
 
 use super::cfb::PgpCfb;
+use super::compress::{Inflater, Z_OK, Z_STREAM_END};
 use super::consts::*;
 use super::context::PgpContext;
-use super::packet::{read_fixed, Body, HdrErr, PktHdr, PktReader, EOF_DBG};
+use super::packet::HdrErr;
+use super::pull::{
+    getbyte, parse_pkt_hdr, read_max, skip_packet, Dcx, PRes, PktHdr, PktPull, PktType, Pull,
+    SliceReader,
+};
 use super::s2k::S2k;
 
 pub struct SessKey {
@@ -10,99 +19,79 @@ pub struct SessKey {
     pub key: Vec<u8>,
 }
 
-type PubencParser<'a> = dyn FnMut(&mut PgpContext, &[u8]) -> Result<SessKey, String> + 'a;
+type PubencParser<'a> = dyn FnMut(&mut Dcx, &mut dyn Pull) -> PRes<SessKey> + 'a;
 
-pub fn decrypt_symmetric(
-    ctx: &mut PgpContext,
-    data: &[u8],
-    passphrase: &[u8],
-) -> Result<Vec<u8>, String> {
+pub fn decrypt_symmetric(ctx: &mut PgpContext, data: &[u8], passphrase: &[u8]) -> PRes<Vec<u8>> {
     decrypt_message(ctx, data, passphrase, None)
 }
 
-pub fn decrypt_pubkey(
-    ctx: &mut PgpContext,
-    data: &[u8],
-    pubenc: &mut PubencParser,
-) -> Result<Vec<u8>, String> {
+pub fn decrypt_pubkey(ctx: &mut PgpContext, data: &[u8], pubenc: &mut PubencParser) -> PRes<Vec<u8>> {
     decrypt_message(ctx, data, &[], Some(pubenc))
 }
 
-fn hdr_failure(ctx: &mut PgpContext, why: HdrErr) -> String {
+pub(crate) fn hdr_failure(ctx: &mut PgpContext, why: HdrErr) -> String {
     if let Some(why) = why {
         ctx.dbg(why);
     }
     CORRUPT_DATA.to_string()
 }
 
-/// pgp-decrypt.c:1096 pgp_decrypt: the session-key parser follows the
-/// packet tag (a public-key packet without a key is PXE_BUG, a symmetric
-/// one in pgp_pub_decrypt runs S2K over an empty key), every packet after
-/// the first key/data one is diagnosed, and the walk goes on past the data
-/// packet so trailing bytes are seen.
+/// pgp-decrypt.c:1096 pgp_decrypt.
 fn decrypt_message(
     ctx: &mut PgpContext,
     data: &[u8],
     passphrase: &[u8],
     mut pubenc: Option<&mut PubencParser>,
-) -> Result<Vec<u8>, String> {
-    let mut rdr = PktReader::new(data);
+) -> PRes<Vec<u8>> {
+    let mut cx = Dcx::new(ctx);
+    let cx = &mut cx;
+    let mut src = SliceReader::new(data);
     let mut sess: Option<SessKey> = None;
     let mut got_data = false;
     let mut out = Vec::new();
 
-    loop {
-        let hdr = match rdr.read_hdr() {
-            Ok(None) => break,
-            Ok(Some(h)) => h,
-            Err(why) => return Err(hdr_failure(ctx, why)),
-        };
+    while let Some(hdr) = parse_pkt_hdr(&mut src, cx, false)? {
+        let mut pkt = PktPull::new(&mut src, &hdr);
         match hdr.tag {
-            t if t == PGP_PKT_MARKER => {
-                rdr.read_body_avail(&hdr).map_err(|w| hdr_failure(ctx, w))?;
-            }
-            t if t == PGP_PKT_PUBENC_SESSKEY => {
-                let body = rdr.read_body_avail(&hdr).map_err(|w| hdr_failure(ctx, w))?;
+            PGP_PKT_MARKER => skip_packet(&mut pkt, cx)?,
+            PGP_PKT_PUBENC_SESSKEY => {
                 let Some(parse) = pubenc.as_mut() else {
-                    ctx.dbg("no pubkey?");
+                    cx.dbg("no pubkey?");
                     return Err(PGCRYPTO_BUG.to_string());
                 };
-                sess = Some(parse(ctx, &body.data)?);
+                sess = Some(parse(cx, &mut pkt)?);
             }
-            t if t == PGP_PKT_SYMENC_SESSKEY => {
+            PGP_PKT_SYMENC_SESSKEY => {
                 if sess.is_some() {
-                    ctx.dbg("pgp_decrypt: using first of several keys");
-                    return Err(CORRUPT_DATA.to_string());
+                    return Err(cx.corrupt("pgp_decrypt: using first of several keys"));
                 }
-                let body = rdr.read_body_avail(&hdr).map_err(|w| hdr_failure(ctx, w))?;
-                sess = Some(parse_symenc_sesskey(ctx, &body.data, passphrase)?);
+                sess = Some(parse_symenc_sesskey(cx, &mut pkt, passphrase)?);
             }
-            t if t == PGP_PKT_SYMENC_DATA || t == PGP_PKT_SYMENC_DATA_MDC => {
-                let mdc = t == PGP_PKT_SYMENC_DATA_MDC;
+            PGP_PKT_SYMENC_DATA | PGP_PKT_SYMENC_DATA_MDC => {
+                let mdc = hdr.tag == PGP_PKT_SYMENC_DATA_MDC;
                 let Some(sk) = sess.as_ref() else {
-                    ctx.dbg("pgp_decrypt: have data but no key");
-                    return Err(CORRUPT_DATA.to_string());
+                    return Err(cx.corrupt("pgp_decrypt: have data but no key"));
                 };
                 if got_data {
-                    ctx.dbg(if mdc {
+                    return Err(cx.corrupt(if mdc {
                         "pgp_decrypt: several data pkts not supported"
                     } else {
                         "pgp_decrypt: got second data packet"
-                    });
-                    return Err(CORRUPT_DATA.to_string());
+                    }));
                 }
                 got_data = true;
-                ctx.disable_mdc = if mdc { 0 } else { 1 };
-                let body = rdr.read_body_avail(&hdr).map_err(|w| hdr_failure(ctx, w))?;
-                decrypt_data_packet(ctx, sk, &body, mdc, &mut out)?;
+                cx.ctx.disable_mdc = if mdc { 0 } else { 1 };
+                if mdc {
+                    parse_symenc_mdc_data(cx, &mut pkt, sk, &mut out)?;
+                } else {
+                    parse_symenc_data(cx, &mut pkt, sk, &mut out)?;
+                }
             }
-            t => {
-                ctx.dbg(&format!("pgp_decrypt: unknown tag: 0x{t:02x}"));
-                return Err(CORRUPT_DATA.to_string());
-            }
+            t => return Err(cx.corrupt(&format!("pgp_decrypt: unknown tag: 0x{t:02x}"))),
         }
     }
 
+    let ctx = &mut *cx.ctx;
     if !got_data || ctx.corrupt_prefix {
         return Err(CORRUPT_DATA.to_string());
     }
@@ -115,393 +104,426 @@ fn decrypt_message(
     Ok(out)
 }
 
-fn parse_symenc_sesskey(
-    ctx: &mut PgpContext,
-    body: &[u8],
-    passphrase: &[u8],
-) -> Result<SessKey, String> {
-    // pgp-decrypt.c:634: both bytes are read before the version check.
-    let ver = read_fixed(body, 0, 1, ctx)?[0];
-    let s2k_cipher = read_fixed(body, 1, 1, ctx)?[0] as i32;
+/// pgp-decrypt.c:626 parse_symenc_sesskey.
+fn parse_symenc_sesskey(cx: &mut Dcx, pkt: &mut dyn Pull, passphrase: &[u8]) -> PRes<SessKey> {
+    let ver = getbyte(pkt, cx)?;
+    let s2k_cipher = getbyte(pkt, cx)? as i32;
+    cx.ctx.s2k_cipher_algo = s2k_cipher;
     if ver != 4 {
-        ctx.dbg("bad key pkt ver");
-        return Err(CORRUPT_DATA.to_string());
+        return Err(cx.corrupt("bad key pkt ver"));
     }
-    let (mut s2k, consumed) = S2k::read(&body[2..], ctx).map_err(|e| e.to_string())?;
-    s2k.process(s2k_cipher, passphrase).map_err(|e| e.to_string())?;
-
+    let mut s2k = S2k::read_pull(pkt, cx)?;
+    let ctx = &mut *cx.ctx;
     ctx.s2k_mode = s2k.mode;
-    // pgp-decrypt.c:647: decoded unconditionally — iter is 0 for the simple
-    // and salted modes, so expect-s2k-count sees 1024 there, as in C.
     ctx.s2k_count = s2k_decode_count(s2k.iter as i32);
     ctx.s2k_digest_algo = s2k.digest_algo;
-    ctx.s2k_cipher_algo = s2k_cipher;
+    s2k.process(s2k_cipher, passphrase).map_err(|e| e.to_string())?;
 
-    let rest = &body[2 + consumed..];
+    let rest = read_max(pkt, cx, PGP_MAX_KEY + 2)?;
+    let ctx = &mut *cx.ctx;
     if rest.is_empty() {
         ctx.use_sess_key = 0;
         ctx.cipher_algo = s2k_cipher;
-        Ok(SessKey {
-            cipher: s2k_cipher,
-            key: s2k.key,
-        })
-    } else {
-        // pgp-decrypt.c:681: 17 <= len <= PGP_MAX_KEY + 1, else corrupt.
-        if rest.len() < 17 || rest.len() > PGP_MAX_KEY + 1 {
-            ctx.dbg("expect key, but bad data");
-            return Err(CORRUPT_DATA.to_string());
-        }
-        ctx.use_sess_key = 1;
-        // upstream 4c5128ca0b30 (18.6): pgcrypto: Add option to revert to prior decryption behavior
-        let ignore = ctx.ignore_cipher_failure != 0;
-        let mut cfb = PgpCfb::create(s2k_cipher, &s2k.key, false, None, ignore)
-            .map_err(|e| e.to_string())?;
-        let dec = cfb.decrypt(rest);
-        let cipher = dec[0] as i32;
-        ctx.cipher_algo = cipher;
-        // pgp-decrypt.c:612 decrypt_key: the key length must be EXACTLY the
-        // cipher's key size (trailing bytes are not padding).
-        let klen = dec.len() - 1;
-        if cipher_key_size(cipher) != klen {
-            ctx.dbg(&format!(
-                "sesskey bad len: algo={cipher}, expected={}, got={klen}",
-                cipher_key_size(cipher)
-            ));
-            return Err(CORRUPT_DATA.to_string());
-        }
-        Ok(SessKey {
-            cipher,
-            key: dec[1..].to_vec(),
-        })
+        return Ok(SessKey { cipher: s2k_cipher, key: s2k.key });
     }
+    if rest.len() < 17 || rest.len() > PGP_MAX_KEY + 1 {
+        return Err(cx.corrupt("expect key, but bad data"));
+    }
+    ctx.use_sess_key = 1;
+    decrypt_key(ctx, &s2k, s2k_cipher, &rest)
 }
 
-/// pgp-decrypt.c:1015 parse_symenc_mdc_data / :971 parse_symenc_data: the
-/// filter stack is pkt -> decrypt -> [mdc] -> prefix -> process_data_packets.
-fn decrypt_data_packet(
-    ctx: &mut PgpContext,
-    sk: &SessKey,
-    body: &Body,
-    mdc: bool,
-    dst: &mut Vec<u8>,
-) -> Result<(), String> {
-    let mut ct: &[u8] = &body.data;
-    let mut ct_off = 0usize;
-    if mdc {
-        let Some(&ver) = ct.first() else {
-            ctx.dbg(EOF_DBG);
-            return Err(CORRUPT_DATA.to_string());
-        };
-        if ver != 1 {
-            ctx.dbg("parse_symenc_mdc_data: pkt ver != 1");
-            return Err(CORRUPT_DATA.to_string());
-        }
-        ct = &ct[1..];
-        ct_off = 1;
-    }
-
-    // upstream 4c5128ca0b30 (18.6): pgcrypto: Add option to revert to prior decryption behavior
+/// pgp-decrypt.c:593 decrypt_key.
+fn decrypt_key(ctx: &mut PgpContext, s2k: &S2k, s2k_cipher: i32, src: &[u8]) -> PRes<SessKey> {
     let ignore = ctx.ignore_cipher_failure != 0;
-    let mut cfb = PgpCfb::create(sk.cipher, &sk.key, !mdc, None, ignore)
-        .map_err(|e| e.to_string())?;
-    let plain = cfb.decrypt(ct);
-    let bs = cipher_block_size(sk.cipher);
-
-    // prefix_init (pgp-decrypt.c:258); under the MDC filter the short read
-    // is its EOF (pgp-decrypt.c:409 mdc_read).
-    if plain.len() < bs + 2 {
-        ctx.dbg(if mdc { MDC_EOF } else { "prefix_init: short read" });
+    let mut cfb = PgpCfb::create(s2k_cipher, &s2k.key, false, None, ignore).map_err(|e| e.to_string())?;
+    let dec = cfb.decrypt(src);
+    let cipher = dec[0] as i32;
+    ctx.cipher_algo = cipher;
+    let klen = dec.len() - 1;
+    if cipher_key_size(cipher) != klen {
+        ctx.dbg(&format!(
+            "sesskey bad len: algo={cipher}, expected={}, got={klen}",
+            cipher_key_size(cipher)
+        ));
         return Err(CORRUPT_DATA.to_string());
     }
-    if plain[bs - 2] != plain[bs] || plain[bs - 1] != plain[bs + 1] {
-        ctx.dbg("prefix_init: corrupt prefix");
-        ctx.corrupt_prefix = true;
-    }
-    let mut md = None;
-    if mdc {
-        let mut d = Digest::new(PGP_DIGEST_SHA1).ok_or(UNSUPPORTED_HASH.to_string())?;
-        d.update(&plain[..bs + 2]);
-        md = Some(d);
-    }
-    // Chunk ends of the encrypted packet, in decrypted-stream coordinates:
-    // the outer packet reader never hands out bytes across one.
-    let skip = ct_off + bs + 2;
-    let mut outer_ends = Vec::new();
-    let mut end = 0usize;
-    for &(_, len) in &body.chunks {
-        end += len;
-        if end > skip {
-            outer_ends.push(end - skip);
-        }
-    }
-    process_data_packets(ctx, &plain[bs + 2..], &outer_ends, true, md.as_mut(), dst)
+    Ok(SessKey { cipher, key: dec[1..].to_vec() })
 }
 
-const MDC_EOF: &str = "mdc_read: unexpected eof";
-const MDC_TAIL: usize = 2 + MDC_DIGEST_LEN;
-
-/// A GETBYTE at end of input below an open MDC filter is that filter's EOF.
-fn eof_error(ctx: &mut PgpContext, why: HdrErr, mdc_open: bool) -> String {
-    if why == Some(EOF_DBG) && mdc_open {
-        return hdr_failure(ctx, Some(MDC_EOF));
+/// pgp-decrypt.c:223 prefix_init: the random prefix and its two-byte
+/// quick check; a mismatch is reported only at the end (pgp_decrypt).
+fn prefix_init(src: &mut dyn Pull, cx: &mut Dcx, cipher: i32) -> PRes<()> {
+    let len = cipher_block_size(cipher);
+    if len > PGP_MAX_BLOCK {
+        return Err(PGCRYPTO_BUG.to_string());
     }
-    hdr_failure(ctx, why)
-}
-
-/// pgp-decrypt.c:873 process_data_packets: every literal packet appends to
-/// `dst`; a compressed packet must be the only data packet and is legal only
-/// at the top level. With `md` (NEED_MDC) every byte read is hashed and the
-/// MDC packet closes the stream (pgp-decrypt.c:341 mdc_finish); an
-/// indeterminate-length packet inside it takes the mdcbuf filter
-/// (pgp-decrypt.c:432), whose trailer is the last 22 bytes.
-fn process_data_packets(
-    ctx: &mut PgpContext,
-    data: &[u8],
-    outer_ends: &[usize],
-    allow_compr: bool,
-    mut md: Option<&mut Digest>,
-    dst: &mut Vec<u8>,
-) -> Result<(), String> {
-    let need_mdc = md.is_some();
-    let mut rdr = PktReader::new_allow_ctx(data);
-    let mut got_data = false;
-    let mut got_mdc = false;
-    let mut mdcbuf = false;
-
-    loop {
-        let hdr_start = rdr.pos;
-        let hdr = match rdr.read_hdr() {
-            Ok(Some(h)) => h,
-            Ok(None) => {
-                if need_mdc && !got_mdc && !mdcbuf {
-                    ctx.dbg(MDC_EOF);
-                    return Err(CORRUPT_DATA.to_string());
-                }
-                break;
-            }
-            Err(why) => return Err(eof_error(ctx, why, need_mdc && !got_mdc && !mdcbuf)),
-        };
-        if got_mdc {
-            ctx.dbg("process_data_packets: data after mdc");
-            return Err(CORRUPT_DATA.to_string());
-        }
-        let hdr_end = rdr.pos;
-
-        if need_mdc && hdr.len.is_none() {
-            mdcbuf = true;
-            let d = md.as_deref_mut().expect("need_mdc");
-            d.update(&data[hdr_start..hdr_end]);
-            let rest = &data[hdr_end..];
-            rdr.pos = data.len();
-            let (payload, tail) = rest.split_at(rest.len().saturating_sub(MDC_TAIL));
-            let mut mdc_buf = [0u8; MDC_TAIL];
-            mdc_buf[..tail.len()].copy_from_slice(tail);
-            d.update(payload);
-            let body = Body { data: payload.to_vec(), chunks: vec![(hdr_end, payload.len())], truncated: false };
-            if hdr.tag == PGP_PKT_MDC {
-                return Err(PGCRYPTO_BUG.to_string());
-            }
-            data_packet(ctx, &hdr, &body, &[], allow_compr, false, &mut got_data, dst)?;
-            if mdc_buf[0] != 0xD3 || mdc_buf[1] != MDC_DIGEST_LEN as u8 {
-                ctx.dbg("mdcbuf_finish: bad MDC pkt hdr");
-                return Err(CORRUPT_DATA.to_string());
-            }
-            d.update(&mdc_buf[..2]);
-            if d.finish() != mdc_buf[2..] {
-                ctx.dbg("mdcbuf_finish: MDC does not match");
-                return Err(CORRUPT_DATA.to_string());
-            }
-            continue;
-        }
-
-        let body = match rdr.read_body_avail(&hdr) {
-            Ok(b) => b,
-            Err(why) => return Err(eof_error(ctx, why, need_mdc && !got_mdc && !mdcbuf)),
-        };
-        if let Some(d) = md.as_deref_mut() {
-            let hashed_end = if hdr.tag == PGP_PKT_MDC { hdr_end } else { rdr.pos };
-            d.update(&data[hdr_start..hashed_end]);
-        }
-        if hdr.tag == PGP_PKT_MDC {
-            if !need_mdc {
-                ctx.dbg("process_data_packets: unexpected MDC");
-                return Err(CORRUPT_DATA.to_string());
-            }
-            if hdr.len != Some(MDC_DIGEST_LEN) {
-                return Err(CORRUPT_DATA.to_string());
-            }
-            if body.data.is_empty() {
-                ctx.dbg("no mdc");
-                return Err(CORRUPT_DATA.to_string());
-            }
-            if body.data.len() != MDC_DIGEST_LEN {
-                ctx.dbg(&format!("mdc_finish: read failed, res={}", body.data.len()));
-                return Err(CORRUPT_DATA.to_string());
-            }
-            if md.as_deref_mut().expect("need_mdc").finish() != body.data {
-                ctx.dbg("mdc_finish: mdc failed");
-                return Err(CORRUPT_DATA.to_string());
-            }
-            got_mdc = true;
-            continue;
-        }
-        data_packet(ctx, &hdr, &body, outer_ends, allow_compr, need_mdc, &mut got_data, dst)?;
+    let buf = read_max(src, cx, len + 2)?;
+    if buf.len() != len + 2 {
+        return Err(cx.corrupt("prefix_init: short read"));
     }
-
-    if !got_data {
-        ctx.dbg("process_data_packets: no data");
-        return Err(CORRUPT_DATA.to_string());
-    }
-    if need_mdc && !got_mdc && !mdcbuf {
-        ctx.dbg("process_data_packets: got no mdc");
-        return Err(CORRUPT_DATA.to_string());
+    if buf[len - 2] != buf[len] || buf[len - 1] != buf[len + 1] {
+        cx.dbg("prefix_init: corrupt prefix");
+        cx.ctx.corrupt_prefix = true;
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn data_packet(
-    ctx: &mut PgpContext,
-    hdr: &PktHdr,
-    body: &Body,
-    outer_ends: &[usize],
-    allow_compr: bool,
-    need_mdc: bool,
-    got_data: &mut bool,
-    dst: &mut Vec<u8>,
-) -> Result<(), String> {
-    // A read past a truncated body reaches the source's EOF, which the MDC
-    // filter refuses (pgp-decrypt.c:409); an exhausted declared length is
-    // the packet reader's own short read.
-    let src_eof = need_mdc && body.truncated;
-    match hdr.tag {
-        t if t == PGP_PKT_LITERAL_DATA => {
-            *got_data = true;
-            parse_literal_data(ctx, body, src_eof, dst)
+/// pgp-decrypt.c:283 decrypt filter; its 4096-byte buffer caps each read.
+struct DecryptPull<'a> {
+    src: &'a mut dyn Pull,
+    cfb: PgpCfb,
+    buf: Vec<u8>,
+}
+
+const DECRYPT_BUF: usize = 4096;
+
+impl Pull for DecryptPull<'_> {
+    fn pull(&mut self, cx: &mut Dcx, len: usize) -> PRes<&[u8]> {
+        let d = self.src.pull(cx, len.min(DECRYPT_BUF))?;
+        let n = d.len();
+        self.cfb.decrypt_into(d, &mut self.buf[..n]);
+        Ok(&self.buf[..n])
+    }
+}
+
+/// pgp-decrypt.c:403 mdc_read: hashes everything it passes up; EOF before
+/// the MDC packet is corrupt data.
+struct MdcPull<'a> {
+    src: &'a mut dyn Pull,
+}
+
+impl Pull for MdcPull<'_> {
+    fn pull(&mut self, cx: &mut Dcx, len: usize) -> PRes<&[u8]> {
+        if cx.use_mdcbuf || cx.in_mdc_pkt {
+            return self.src.pull(cx, len);
         }
-        t if t == PGP_PKT_COMPRESSED_DATA => {
-            if !allow_compr {
-                ctx.dbg("process_data_packets: unexpected compression");
-                return Err(CORRUPT_DATA.to_string());
-            }
-            if *got_data {
-                ctx.dbg("process_data_packets: only one cmpr pkt allowed");
-                return Err(CORRUPT_DATA.to_string());
-            }
-            *got_data = true;
-            parse_compressed_data(ctx, body, outer_ends, src_eof, dst)
+        let d = self.src.pull(cx, len)?;
+        if d.is_empty() {
+            return Err(cx.corrupt("mdc_read: unexpected eof"));
         }
-        t => {
-            ctx.dbg(&format!("process_data_packets: unexpected pkt tag={t}"));
-            Err(CORRUPT_DATA.to_string())
+        if let Some(md) = cx.mdc.as_mut() {
+            md.update(d);
+        }
+        Ok(d)
+    }
+}
+
+/// pgp-decrypt.c:432 mdcbuf filter: a context-length packet under MDC ends
+/// 22 bytes before its source does, so the last 22 bytes read are held
+/// back as the MDC packet.
+struct MdcBuf<'a> {
+    src: &'a mut dyn Pull,
+    eof: bool,
+    buf: Vec<u8>,
+    pos: usize,
+    avail: usize,
+    mdc_buf: [u8; MDC_TAIL],
+    mdc_avail: usize,
+}
+
+const MDCBUF_LEN: usize = 8192;
+const MDC_TAIL: usize = 2 + MDC_DIGEST_LEN;
+
+impl<'a> MdcBuf<'a> {
+    fn new(src: &'a mut dyn Pull, cx: &mut Dcx) -> MdcBuf<'a> {
+        cx.use_mdcbuf = true;
+        MdcBuf {
+            src,
+            eof: false,
+            buf: vec![0u8; MDCBUF_LEN + MDC_TAIL],
+            pos: 0,
+            avail: 0,
+            mdc_buf: [0; MDC_TAIL],
+            mdc_avail: 0,
         }
     }
+
+    /// pgp-decrypt.c:463 mdcbuf_finish.
+    fn finish(&mut self, cx: &mut Dcx) -> PRes<()> {
+        self.eof = true;
+        if self.mdc_buf[0] != 0xD3 || self.mdc_buf[1] != MDC_DIGEST_LEN as u8 {
+            return Err(cx.corrupt("mdcbuf_finish: bad MDC pkt hdr"));
+        }
+        let md = cx.mdc.as_mut().ok_or_else(|| PGCRYPTO_BUG.to_string())?;
+        md.update(&self.mdc_buf[..2]);
+        if md.finish() != self.mdc_buf[2..] {
+            return Err(cx.corrupt("mdcbuf_finish: MDC does not match"));
+        }
+        Ok(())
+    }
+
+    /// pgp-decrypt.c:505 mdcbuf_refill.
+    fn refill(&mut self, cx: &mut Dcx) -> PRes<()> {
+        if self.avail > 0 && self.pos != 0 {
+            self.buf.copy_within(self.pos..self.pos + self.avail, 0);
+        }
+        self.pos = 0;
+        let need = MDCBUF_LEN + MDC_TAIL - self.avail - self.mdc_avail;
+        let data = self.src.pull(cx, need)?;
+        let res = data.len();
+        if res == 0 {
+            return self.finish(cx);
+        }
+        let md = cx.mdc.as_mut().ok_or_else(|| PGCRYPTO_BUG.to_string())?;
+        let mut load = |buf: &mut Vec<u8>, at: &mut usize, bytes: &[u8]| {
+            buf[*at..*at + bytes.len()].copy_from_slice(bytes);
+            md.update(bytes);
+            *at += bytes.len();
+        };
+        if res >= MDC_TAIL {
+            load(&mut self.buf, &mut self.avail, &self.mdc_buf[..self.mdc_avail]);
+            load(&mut self.buf, &mut self.avail, &data[..res - MDC_TAIL]);
+            self.mdc_buf.copy_from_slice(&data[res - MDC_TAIL..]);
+            self.mdc_avail = MDC_TAIL;
+        } else {
+            let canmove = (self.mdc_avail + res).saturating_sub(MDC_TAIL);
+            if canmove > 0 {
+                load(&mut self.buf, &mut self.avail, &self.mdc_buf[..canmove]);
+                self.mdc_buf.copy_within(canmove..self.mdc_avail, 0);
+                self.mdc_avail -= canmove;
+            }
+            self.mdc_buf[self.mdc_avail..self.mdc_avail + res].copy_from_slice(data);
+            self.mdc_avail += res;
+        }
+        Ok(())
+    }
+}
+
+impl Pull for MdcBuf<'_> {
+    fn pull(&mut self, cx: &mut Dcx, len: usize) -> PRes<&[u8]> {
+        if !self.eof && len > self.avail {
+            self.refill(cx)?;
+        }
+        let n = len.min(self.avail);
+        let out = &self.buf[self.pos..self.pos + n];
+        self.pos += n;
+        self.avail -= n;
+        Ok(out)
+    }
+}
+
+/// pgp-decrypt.c:971 parse_symenc_data.
+fn parse_symenc_data(cx: &mut Dcx, pkt: &mut dyn Pull, sk: &SessKey, dst: &mut Vec<u8>) -> PRes<()> {
+    let ignore = cx.ctx.ignore_cipher_failure != 0;
+    let cfb = PgpCfb::create(sk.cipher, &sk.key, true, None, ignore).map_err(|e| e.to_string())?;
+    let mut dec = DecryptPull { src: pkt, cfb, buf: vec![0u8; DECRYPT_BUF] };
+    prefix_init(&mut dec, cx, sk.cipher)?;
+    process_data_packets(cx, dst, &mut dec, true, false)
+}
+
+/// pgp-decrypt.c:1015 parse_symenc_mdc_data.
+fn parse_symenc_mdc_data(cx: &mut Dcx, pkt: &mut dyn Pull, sk: &SessKey, dst: &mut Vec<u8>) -> PRes<()> {
+    let ver = getbyte(pkt, cx)?;
+    if ver != 1 {
+        return Err(cx.corrupt("parse_symenc_mdc_data: pkt ver != 1"));
+    }
+    let ignore = cx.ctx.ignore_cipher_failure != 0;
+    let cfb = PgpCfb::create(sk.cipher, &sk.key, false, None, ignore).map_err(|e| e.to_string())?;
+    let mut dec = DecryptPull { src: pkt, cfb, buf: vec![0u8; DECRYPT_BUF] };
+    cx.mdc = Some(Digest::load(PGP_DIGEST_SHA1)?);
+    let mut mdc = MdcPull { src: &mut dec };
+    prefix_init(&mut mdc, cx, sk.cipher)?;
+    process_data_packets(cx, dst, &mut mdc, true, true)
+}
+
+enum DataPkt<'a> {
+    Pkt(PktPull<'a>),
+    MdcBuf(MdcBuf<'a>),
+}
+
+impl Pull for DataPkt<'_> {
+    fn pull(&mut self, cx: &mut Dcx, len: usize) -> PRes<&[u8]> {
+        match self {
+            DataPkt::Pkt(p) => p.pull(cx, len),
+            DataPkt::MdcBuf(m) => m.pull(cx, len),
+        }
+    }
+}
+
+/// pgp-decrypt.c:873 process_data_packets.
+fn process_data_packets(
+    cx: &mut Dcx,
+    dst: &mut Vec<u8>,
+    src: &mut dyn Pull,
+    allow_compr: bool,
+    need_mdc: bool,
+) -> PRes<()> {
+    let mut got_data = false;
+    let mut got_mdc = false;
+    while let Some(hdr) = parse_pkt_hdr(src, cx, true)? {
+        if got_mdc {
+            return Err(cx.corrupt("process_data_packets: data after mdc"));
+        }
+        let mut pkt = if need_mdc && hdr.ty == PktType::Context {
+            DataPkt::MdcBuf(MdcBuf::new(src, cx))
+        } else {
+            DataPkt::Pkt(PktPull::new(src, &hdr))
+        };
+        match hdr.tag {
+            PGP_PKT_LITERAL_DATA => {
+                got_data = true;
+                parse_literal_data(cx, dst, &mut pkt)?;
+            }
+            PGP_PKT_COMPRESSED_DATA => {
+                if !allow_compr {
+                    return Err(cx.corrupt("process_data_packets: unexpected compression"));
+                }
+                if got_data {
+                    return Err(cx.corrupt("process_data_packets: only one cmpr pkt allowed"));
+                }
+                got_data = true;
+                parse_compressed_data(cx, dst, &mut pkt)?;
+            }
+            PGP_PKT_MDC => {
+                if !need_mdc {
+                    return Err(cx.corrupt("process_data_packets: unexpected MDC"));
+                }
+                mdc_finish(cx, &mut pkt, &hdr)?;
+                got_mdc = true;
+            }
+            t => return Err(cx.corrupt(&format!("process_data_packets: unexpected pkt tag={t}"))),
+        }
+    }
+    if !got_data {
+        return Err(cx.corrupt("process_data_packets: no data"));
+    }
+    if need_mdc && !got_mdc && !cx.use_mdcbuf {
+        return Err(cx.corrupt("process_data_packets: got no mdc"));
+    }
+    Ok(())
+}
+
+/// pgp-decrypt.c:341 mdc_finish.
+fn mdc_finish(cx: &mut Dcx, pkt: &mut dyn Pull, hdr: &PktHdr) -> PRes<()> {
+    if cx.use_mdcbuf {
+        return Err(PGCRYPTO_BUG.to_string());
+    }
+    if hdr.len != MDC_DIGEST_LEN {
+        return Err(CORRUPT_DATA.to_string());
+    }
+    cx.in_mdc_pkt = true;
+    let data = read_max(pkt, cx, MDC_DIGEST_LEN)?;
+    if data.is_empty() {
+        return Err(cx.corrupt("no mdc"));
+    }
+    if data.len() != MDC_DIGEST_LEN {
+        return Err(cx.corrupt(&format!("mdc_finish: read failed, res={}", data.len())));
+    }
+    let hash = cx.mdc.as_mut().ok_or_else(|| PGCRYPTO_BUG.to_string())?.finish();
+    if hash != data {
+        return Err(cx.corrupt("mdc_finish: mdc failed"));
+    }
+    Ok(())
 }
 
 /// pgp-decrypt.c:816 parse_compressed_data.
-fn parse_compressed_data(
-    ctx: &mut PgpContext,
-    body: &Body,
-    outer_ends: &[usize],
-    src_eof: bool,
-    dst: &mut Vec<u8>,
-) -> Result<(), String> {
-    let Some(&algo) = body.data.first() else {
-        ctx.dbg(if src_eof { MDC_EOF } else { EOF_DBG });
-        return Err(CORRUPT_DATA.to_string());
-    };
-    let algo = algo as i32;
-    ctx.compress_algo = algo;
-    let inner = &body.data[1..];
-    let decompressed = match algo {
-        PGP_COMPR_NONE => inner.to_vec(),
+fn parse_compressed_data(cx: &mut Dcx, dst: &mut Vec<u8>, pkt: &mut dyn Pull) -> PRes<()> {
+    let algo = getbyte(pkt, cx)? as i32;
+    cx.ctx.compress_algo = algo;
+    match algo {
+        PGP_COMPR_NONE => process_data_packets(cx, dst, pkt, false, false),
         PGP_COMPR_ZIP | PGP_COMPR_ZLIB => {
-            let res = if algo == PGP_COMPR_ZIP {
-                super::compress::inflate_raw(inner)
-            } else {
-                super::compress::inflate_zlib(inner)
-            };
-            let (out, consumed) = match res {
-                Ok(r) => r,
-                Err(None) => {
-                    mbuf_room(ctx, usize::MAX)?;
-                    return Err(CORRUPT_DATA.to_string());
-                }
-                Err(e) => return Err(inflate_error(ctx, e)),
-            };
-            if src_eof {
-                ctx.dbg(MDC_EOF);
-                return Err(CORRUPT_DATA.to_string());
-            }
-            // pgp-compress.c:298: after Z_STREAM_END one more read of the
-            // source must return nothing. The decompressor pulls its input
-            // in reads of at most 8192 (ZIP_IN_BLOCK) that the decrypt
-            // filter's 4096-byte buffer, the compressed packet's chunks and
-            // the encrypted packet's chunks all cut short, so bytes are
-            // "extra" only past the read in which the stream ended.
-            let mut ends: Vec<usize> = Vec::new();
-            let mut flat = 0usize;
-            for &(start, len) in &body.chunks {
-                for &e in outer_ends {
-                    if e > start && e < start + len {
-                        ends.push(flat + (e - start));
-                    }
-                }
-                flat += len;
-                ends.push(flat);
-            }
-            ends.sort_unstable();
-            let mut pos = 1usize;
-            let mut read_end = 1usize;
-            while pos < body.data.len() {
-                let next = ends.iter().copied().find(|&e| e > pos).unwrap_or(body.data.len());
-                read_end = next.min(pos + 4096);
-                if read_end >= 1 + consumed {
-                    break;
-                }
-                pos = read_end;
-            }
-            if read_end < body.data.len() {
-                ctx.dbg("decompress_read: extra bytes after end of stream");
-                return Err(CORRUPT_DATA.to_string());
-            }
-            out
+            let mut dec = DecompressPull::new(pkt, algo == PGP_COMPR_ZLIB);
+            process_data_packets(cx, dst, &mut dec, false, false)
         }
         PGP_COMPR_BZIP2 => {
-            ctx.dbg("parse_compressed_data: bzip2 unsupported");
-            // report error in pgp_decrypt()
-            ctx.unsupported_compr = true;
-            return Ok(());
+            cx.dbg("parse_compressed_data: bzip2 unsupported");
+            cx.ctx.unsupported_compr = true;
+            // Drained so the bytes still reach the MDC digest.
+            while !pkt.pull(cx, 32 * 1024)?.is_empty() {}
+            Ok(())
         }
-        _ => {
-            ctx.dbg("parse_compressed_data: unknown compr type");
-            return Err(CORRUPT_DATA.to_string());
-        }
-    };
-    process_data_packets(ctx, &decompressed, &[], false, None, dst)
+        _ => Err(cx.corrupt("parse_compressed_data: unknown compr type")),
+    }
 }
 
-// pgp-compress.c:281 decompress_read: zlib's return code goes to px_debug.
-fn inflate_error(ctx: &mut PgpContext, e: Option<i32>) -> String {
-    if let Some(code) = e {
-        ctx.dbg(&format!("decompress_read: inflate error: {code}"));
-    }
-    CORRUPT_DATA.to_string()
+/// pgp-compress.c:236 decompress_read: 8192-byte source reads, an
+/// 8192-byte output buffer, and after Z_STREAM_END one more source read
+/// that must find nothing.
+struct DecompressPull<'a> {
+    src: &'a mut dyn Pull,
+    inf: Inflater,
+    input: Vec<u8>,
+    in_pos: usize,
+    buf: Vec<u8>,
+    pos: usize,
+    buf_data: usize,
+    eof: bool,
 }
 
-/// mbuf.c:79 prepare_room: the output MBuf grows by 2*STEP per short
-/// append until it holds `need` bytes; the growth that would pass
-/// MaxAllocSize is mcxt.c:1180's error, carried as its message text.
-pub(crate) fn mbuf_room(ctx: &mut PgpContext, need: usize) -> Result<(), String> {
-    const STEP: usize = 16 * 1024;
-    let mut cap = ctx.mbuf_cap;
-    while cap < need {
-        cap = cap.saturating_add(2 * STEP);
-        if cap > ::mcx::MAX_ALLOC_SIZE {
-            return Err(format!("{ALLOC_SIZE_ERROR} {cap}"));
+const ZIP_IN_BLOCK: usize = 8192;
+const ZIP_OUT_BUF: usize = 8192;
+
+impl<'a> DecompressPull<'a> {
+    fn new(src: &'a mut dyn Pull, zlib: bool) -> DecompressPull<'a> {
+        DecompressPull {
+            src,
+            inf: Inflater::new(zlib),
+            input: Vec::with_capacity(ZIP_IN_BLOCK),
+            in_pos: 0,
+            buf: vec![0u8; ZIP_OUT_BUF],
+            pos: 0,
+            buf_data: 0,
+            eof: false,
         }
     }
-    ctx.mbuf_cap = cap;
+
+    fn refill(&mut self, cx: &mut Dcx) -> PRes<()> {
+        if self.in_pos == self.input.len() {
+            let d = self.src.pull(cx, ZIP_IN_BLOCK)?;
+            self.input.clear();
+            self.input.extend_from_slice(d);
+            self.in_pos = 0;
+        }
+        let finish = self.in_pos == self.input.len();
+        let (code, used, written) = self.inf.inflate(&self.input[self.in_pos..], &mut self.buf, finish);
+        self.in_pos += used;
+        if code != Z_OK && code != Z_STREAM_END {
+            return Err(cx.corrupt(&format!("decompress_read: inflate error: {code}")));
+        }
+        self.buf_data = written;
+        self.pos = 0;
+        if code == Z_STREAM_END {
+            if !self.src.pull(cx, 1)?.is_empty() {
+                return Err(cx.corrupt("decompress_read: extra bytes after end of stream"));
+            }
+            self.eof = true;
+        }
+        Ok(())
+    }
+}
+
+impl Pull for DecompressPull<'_> {
+    fn pull(&mut self, cx: &mut Dcx, len: usize) -> PRes<&[u8]> {
+        while self.buf_data == 0 && !self.eof {
+            self.refill(cx)?;
+        }
+        let n = len.min(self.buf_data);
+        let out = &self.buf[self.pos..self.pos + n];
+        self.pos += n;
+        self.buf_data -= n;
+        Ok(out)
+    }
+}
+
+/// mbuf.c:37 STEP.
+const MBUF_STEP: usize = 16 * 1024;
+
+/// mbuf.c:94 mbuf_append over :79 prepare_room. The output MBuf also holds
+/// the VARHDRSZ bytes pgp-pgsql.c:484 reserved for the result header, and
+/// a growth past MaxAllocSize is mcxt.c:1180's error.
+pub(crate) fn mbuf_append(ctx: &mut PgpContext, dst: &mut Vec<u8>, data: &[u8]) -> PRes<()> {
+    let end = 4 + dst.len() + data.len();
+    if end > ctx.mbuf_cap {
+        let grow = (data.len() + 2 * MBUF_STEP - 1) & !(MBUF_STEP - 1);
+        let newlen = ctx.mbuf_cap.saturating_add(grow);
+        if newlen > ::mcx::MAX_ALLOC_SIZE {
+            return Err(format!("{ALLOC_SIZE_ERROR} {newlen}"));
+        }
+        ctx.mbuf_cap = newlen;
+    }
+    dst.extend_from_slice(data);
     Ok(())
 }
 
@@ -509,103 +531,162 @@ pub(crate) fn mbuf_room(ctx: &mut PgpContext, need: usize) -> Result<(), String>
 /// wrapper (lib.rs px_msg).
 pub const ALLOC_SIZE_ERROR: &str = "invalid memory alloc request size";
 
+/// pgp-decrypt.c:694 copy_crlf: "\r\n" becomes "\n"; a '\r' ending one read
+/// waits for the next one's first byte.
+fn copy_crlf(ctx: &mut PgpContext, dst: &mut Vec<u8>, data: &[u8], got_cr: &mut bool) -> PRes<()> {
+    let mut tmp = [0u8; 1024];
+    let mut p = 0usize;
+    if *got_cr {
+        if data[0] != b'\n' {
+            tmp[p] = b'\r';
+            p += 1;
+        }
+        *got_cr = false;
+    }
+    let mut i = 0usize;
+    while i < data.len() {
+        if data[i] == b'\r' {
+            if i + 1 < data.len() {
+                if data[i + 1] == b'\n' {
+                    i += 1;
+                }
+            } else {
+                *got_cr = true;
+                break;
+            }
+        }
+        tmp[p] = data[i];
+        p += 1;
+        i += 1;
+        if p == tmp.len() {
+            mbuf_append(ctx, dst, &tmp)?;
+            p = 0;
+        }
+    }
+    if p > 0 {
+        mbuf_append(ctx, dst, &tmp[..p])?;
+    }
+    Ok(())
+}
+
 /// pgp-decrypt.c:745 parse_literal_data. CRLF conversion follows the SQL
 /// caller's text mode and convert-crlf, not the literal packet's own type.
-fn parse_literal_data(
-    ctx: &mut PgpContext,
-    body: &Body,
-    src_eof: bool,
-    dst: &mut Vec<u8>,
-) -> Result<(), String> {
-    let data = &body.data;
-    let short = |ctx: &mut PgpContext, why: &str| {
-        ctx.dbg(if src_eof { MDC_EOF } else { why });
-        CORRUPT_DATA.to_string()
-    };
-    if data.len() < 2 {
-        return Err(short(ctx, EOF_DBG));
+fn parse_literal_data(cx: &mut Dcx, dst: &mut Vec<u8>, pkt: &mut dyn Pull) -> PRes<()> {
+    let ty = getbyte(pkt, cx)?;
+    let mut name_len = getbyte(pkt, cx)? as usize;
+    while name_len > 0 {
+        let n = pkt.pull(cx, name_len)?.len();
+        if n == 0 {
+            break;
+        }
+        name_len -= n;
     }
-    let ty = data[0];
-    let namelen = data[1] as usize;
-    let off = 2 + namelen + 4;
-    if data.len() < off {
-        return Err(short(ctx, "parse_literal_data: unexpected eof"));
+    if name_len > 0 {
+        return Err(cx.corrupt("parse_literal_data: unexpected eof"));
     }
+    if !matches!(read_max(pkt, cx, 4), Ok(d) if d.len() == 4) {
+        return Err(cx.corrupt("parse_literal_data: unexpected eof"));
+    }
+    let ctx = &mut *cx.ctx;
     if ctx.text_mode != 0 && ty != b't' && ty != b'u' {
         ctx.dbg(&format!("parse_literal_data: data type={}", ty as char));
         ctx.unexpected_binary = true;
     }
     ctx.unicode_mode = if ty == b'u' { 1 } else { 0 };
-    let payload = &data[off..];
-    let payload = if ctx.text_mode != 0 && ctx.convert_crlf != 0 {
-        un_convert_crlf(payload)
-    } else {
-        payload.to_vec()
-    };
-    mbuf_room(ctx, literal_room(dst.len(), payload.len()))?;
-    dst.extend_from_slice(&payload);
-    if src_eof {
-        ctx.dbg(MDC_EOF);
-        return Err(CORRUPT_DATA.to_string());
+    let crlf = ctx.text_mode != 0 && ctx.convert_crlf != 0;
+    let mut got_cr = false;
+    loop {
+        let buf = pkt.pull(cx, 32 * 1024)?;
+        if buf.is_empty() {
+            break;
+        }
+        if crlf {
+            copy_crlf(cx.ctx, dst, buf, &mut got_cr)?;
+        } else {
+            mbuf_append(cx.ctx, dst, buf)?;
+        }
+    }
+    if got_cr {
+        mbuf_append(cx.ctx, dst, b"\r")?;
     }
     Ok(())
 }
-
-/// pgp-pgsql.c:484: the output MBuf already holds the VARHDRSZ bytes
-/// reserved for the result header when the literal payload is appended.
-fn literal_room(dst_len: usize, payload_len: usize) -> usize {
-    4 + dst_len + payload_len
-}
-
-fn un_convert_crlf(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len());
-    let mut i = 0;
-    while i < data.len() {
-        if data[i] == b'\r' && i + 1 < data.len() && data[i + 1] == b'\n' {
-            out.push(b'\n');
-            i += 2;
-        } else {
-            out.push(data[i]);
-            i += 1;
-        }
-    }
-    out
-}
-
-use super::consts::Digest;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn dcx_run<T>(f: impl FnOnce(&mut Dcx) -> T) -> (T, Vec<String>) {
+        let mut ctx = PgpContext::default();
+        ctx.debug = 1;
+        let r = f(&mut Dcx::new(&mut ctx));
+        (r, ctx.debug_notices)
+    }
+
+    // pgp-decrypt.c:403/:765/:775: an MDC stream ending inside the literal's
+    // name reports only mdc_read's EOF; ending inside the date also reports
+    // the date read's shortfall.
     #[test]
-    fn literal_room_counts_the_reserved_varlena_header() {
+    fn literal_eof_under_mdc_reports_like_c() {
+        let run = |data: &[u8]| {
+            dcx_run(|cx| {
+                let mut src = SliceReader::new(data);
+                let mut mdc = MdcPull { src: &mut src };
+                parse_literal_data(cx, &mut Vec::new(), &mut mdc).unwrap_err()
+            })
+            .1
+        };
+        assert_eq!(run(b"b\x02a"), ["dbg: mdc_read: unexpected eof"]);
+        assert_eq!(run(b"b\x01a\x00\x00"), [
+            "dbg: mdc_read: unexpected eof",
+            "dbg: parse_literal_data: unexpected eof",
+        ]);
+    }
+
+    #[test]
+    fn mbuf_growth_counts_the_reserved_varlena_header() {
         let mut ctx = PgpContext::default();
         ctx.mbuf_cap = 1073741823;
-        mbuf_room(&mut ctx, literal_room(1073741809, 10)).unwrap();
+        let mut dst = vec![0u8; 1073741809];
+        mbuf_append(&mut ctx, &mut dst, &[0; 10]).unwrap();
         assert_eq!(
-            mbuf_room(&mut ctx, literal_room(1073741813, 10)).unwrap_err(),
+            mbuf_append(&mut ctx, &mut dst, &[0; 10]).unwrap_err(),
             "invalid memory alloc request size 1073774591"
         );
+    }
+
+    // The literal is appended as it streams in; CRLF pairs split across
+    // reads still collapse, and a lone trailing '\r' survives.
+    #[test]
+    fn copy_crlf_across_reads() {
+        let mut ctx = PgpContext::default();
+        let mut dst = Vec::new();
+        let mut cr = false;
+        for part in [&b"a\r"[..], b"\nb\r", b"c\r\r", b"\n", b"\r"] {
+            copy_crlf(&mut ctx, &mut dst, part, &mut cr).unwrap();
+        }
+        assert!(cr);
+        assert_eq!(dst, b"a\nb\rc\r\n");
     }
 
     // pgp-compress.c:281: the zlib code is px_debug'd before
     // PXE_PGP_CORRUPT_DATA.
     #[test]
     fn inflate_failure_is_debugged_with_zlib_code() {
-        let mut ctx = PgpContext::default();
-        ctx.debug = 1;
-        let mut out = Vec::new();
-        let pkt = |data: &[u8]| Body { data: data.to_vec(), chunks: vec![(0, data.len())], truncated: false };
-        let err = parse_compressed_data(&mut ctx, &pkt(&[PGP_COMPR_ZIP as u8, 0xff, 0xff, 0xff]), &[], false, &mut out)
-            .unwrap_err();
+        let run = |body: &[u8]| {
+            dcx_run(|cx| {
+                let mut src = SliceReader::new(body);
+                parse_compressed_data(cx, &mut Vec::new(), &mut src).unwrap_err()
+            })
+        };
+        let (err, notices) = run(&[PGP_COMPR_ZIP as u8, 0xff, 0xff, 0xff]);
         assert_eq!(err, CORRUPT_DATA);
-        assert_eq!(ctx.debug_notices, ["dbg: decompress_read: inflate error: -3"]);
-        let comp = super::super::compress::deflate_zlib(b"truncated compressed literal", 6);
+        assert_eq!(notices, ["dbg: decompress_read: inflate error: -3"]);
+        let mut lit = vec![0xCB, 0xFF, 0, 0, 0x03, 0xE8, b'b', 0, 0, 0, 0, 0];
+        lit.extend((0..994u32).map(|i| (i * 7919 % 251) as u8));
+        let comp = super::super::compress::deflate_zlib(&lit, 6);
         let mut body = vec![PGP_COMPR_ZLIB as u8];
         body.extend_from_slice(&comp[..comp.len() / 2]);
-        ctx.debug_notices.clear();
-        parse_compressed_data(&mut ctx, &pkt(&body), &[], false, &mut out).unwrap_err();
-        assert_eq!(ctx.debug_notices, ["dbg: decompress_read: inflate error: -5"]);
+        assert_eq!(run(&body).1, ["dbg: decompress_read: inflate error: -5"]);
     }
 }

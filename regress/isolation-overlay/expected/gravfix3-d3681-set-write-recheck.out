@@ -1,0 +1,254 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1u s2u s3l s1c s2c s3r
+step s1u: UPDATE d3681e SET v = v + 100 WHERE id = 13;
+step s2u: UPDATE d3681e SET w = w + 1 WHERE v > 10; <waiting ...>
+step s3l: SELECT c.relname, l.mode, l.granted FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE l.locktype = 'relation' AND l.pid = (SELECT pid FROM pg_stat_activity WHERE application_name = 'd3681s2') ORDER BY c.relname COLLATE "C", l.mode;
+relname      |mode            |granted
+-------------+----------------+-------
+d3681e       |AccessShareLock |t      
+d3681e       |RowExclusiveLock|t      
+d3681e0      |RowExclusiveLock|t      
+d3681e0_v_idx|RowExclusiveLock|t      
+d3681e1      |RowExclusiveLock|t      
+d3681e1_v_idx|RowExclusiveLock|t      
+d3681e2      |RowExclusiveLock|t      
+d3681e2_v_idx|RowExclusiveLock|t      
+d3681e3      |RowExclusiveLock|t      
+d3681e3_v_idx|RowExclusiveLock|t      
+d3681e4      |RowExclusiveLock|t      
+d3681e4_v_idx|RowExclusiveLock|t      
+d3681e5      |RowExclusiveLock|t      
+d3681e5_v_idx|RowExclusiveLock|t      
+d3681e6      |RowExclusiveLock|t      
+d3681e6_v_idx|RowExclusiveLock|t      
+d3681e7      |RowExclusiveLock|t      
+d3681e7_v_idx|RowExclusiveLock|t      
+d3681e_v     |RowExclusiveLock|t      
+(19 rows)
+
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, count(*), sum(v), sum(w) FROM d3681e GROUP BY 1 ORDER BY 1;
+tableoid|count| sum|sum
+--------+-----+----+---
+d3681e0 |   50|1200| 38
+d3681e1 |   50|1250| 40
+d3681e2 |   50|1200| 38
+d3681e3 |   50|1250| 40
+d3681e4 |   50|1200| 38
+d3681e5 |   50|1350| 40
+d3681e6 |   50|1200| 38
+d3681e7 |   50|1250| 40
+(8 rows)
+
+
+starting permutation: s1z s2u s1c s2c s3r
+step s1z: UPDATE d3681e SET v = 0 WHERE id = 13;
+step s2u: UPDATE d3681e SET w = w + 1 WHERE v > 10; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, count(*), sum(v), sum(w) FROM d3681e GROUP BY 1 ORDER BY 1;
+tableoid|count| sum|sum
+--------+-----+----+---
+d3681e0 |   50|1200| 38
+d3681e1 |   50|1250| 40
+d3681e2 |   50|1200| 38
+d3681e3 |   50|1250| 40
+d3681e4 |   50|1200| 38
+d3681e5 |   50|1237| 39
+d3681e6 |   50|1200| 38
+d3681e7 |   50|1250| 40
+(8 rows)
+
+
+starting permutation: s1d s2u s1c s2c s3r
+step s1d: DELETE FROM d3681e WHERE id = 13;
+step s2u: UPDATE d3681e SET w = w + 1 WHERE v > 10; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, count(*), sum(v), sum(w) FROM d3681e GROUP BY 1 ORDER BY 1;
+tableoid|count| sum|sum
+--------+-----+----+---
+d3681e0 |   50|1200| 38
+d3681e1 |   50|1250| 40
+d3681e2 |   50|1200| 38
+d3681e3 |   50|1250| 40
+d3681e4 |   50|1200| 38
+d3681e5 |   49|1237| 39
+d3681e6 |   50|1200| 38
+d3681e7 |   50|1250| 40
+(8 rows)
+
+
+starting permutation: s1u s2u s1a s2c s3r
+step s1u: UPDATE d3681e SET v = v + 100 WHERE id = 13;
+step s2u: UPDATE d3681e SET w = w + 1 WHERE v > 10; <waiting ...>
+step s1a: ROLLBACK;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, count(*), sum(v), sum(w) FROM d3681e GROUP BY 1 ORDER BY 1;
+tableoid|count| sum|sum
+--------+-----+----+---
+d3681e0 |   50|1200| 38
+d3681e1 |   50|1250| 40
+d3681e2 |   50|1200| 38
+d3681e3 |   50|1250| 40
+d3681e4 |   50|1200| 38
+d3681e5 |   50|1250| 40
+d3681e6 |   50|1200| 38
+d3681e7 |   50|1250| 40
+(8 rows)
+
+
+starting permutation: s1u s2d s1c s2c s3r
+step s1u: UPDATE d3681e SET v = v + 100 WHERE id = 13;
+step s2d: DELETE FROM d3681e WHERE v > 10; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, count(*), sum(v), sum(w) FROM d3681e GROUP BY 1 ORDER BY 1;
+tableoid|count|sum|sum
+--------+-----+---+---
+d3681e0 |   12| 60|  0
+d3681e1 |   10| 50|  0
+d3681e2 |   12| 60|  0
+d3681e3 |   10| 50|  0
+d3681e4 |   12| 60|  0
+d3681e5 |   10| 50|  0
+d3681e6 |   12| 60|  0
+d3681e7 |   10| 50|  0
+(8 rows)
+
+
+starting permutation: s1z s2d s1c s2c s3r
+step s1z: UPDATE d3681e SET v = 0 WHERE id = 13;
+step s2d: DELETE FROM d3681e WHERE v > 10; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, count(*), sum(v), sum(w) FROM d3681e GROUP BY 1 ORDER BY 1;
+tableoid|count|sum|sum
+--------+-----+---+---
+d3681e0 |   12| 60|  0
+d3681e1 |   10| 50|  0
+d3681e2 |   12| 60|  0
+d3681e3 |   10| 50|  0
+d3681e4 |   12| 60|  0
+d3681e5 |   11| 50|  0
+d3681e6 |   12| 60|  0
+d3681e7 |   10| 50|  0
+(8 rows)
+
+
+starting permutation: s1d s2d s1c s2c s3r
+step s1d: DELETE FROM d3681e WHERE id = 13;
+step s2d: DELETE FROM d3681e WHERE v > 10; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, count(*), sum(v), sum(w) FROM d3681e GROUP BY 1 ORDER BY 1;
+tableoid|count|sum|sum
+--------+-----+---+---
+d3681e0 |   12| 60|  0
+d3681e1 |   10| 50|  0
+d3681e2 |   12| 60|  0
+d3681e3 |   10| 50|  0
+d3681e4 |   12| 60|  0
+d3681e5 |   10| 50|  0
+d3681e6 |   12| 60|  0
+d3681e7 |   10| 50|  0
+(8 rows)
+
+
+starting permutation: s4u s1x s4u s3m s1c s3r
+step s4u: UPDATE d3681e SET w = w + 1 WHERE v > 10;
+step s1x: LOCK TABLE d3681e3 IN EXCLUSIVE MODE;
+step s4u: UPDATE d3681e SET w = w + 1 WHERE v > 10; <waiting ...>
+step s3m: SELECT c.relname, l.mode, l.granted FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE l.locktype = 'relation' AND l.pid = (SELECT pid FROM pg_stat_activity WHERE application_name = 'd3681s4') ORDER BY c.relname COLLATE "C", l.mode;
+relname      |mode            |granted
+-------------+----------------+-------
+d3681e       |RowExclusiveLock|t      
+d3681e0      |RowExclusiveLock|t      
+d3681e0_v_idx|RowExclusiveLock|t      
+d3681e1      |RowExclusiveLock|t      
+d3681e1_v_idx|RowExclusiveLock|t      
+d3681e2      |RowExclusiveLock|t      
+d3681e2_v_idx|RowExclusiveLock|t      
+d3681e3      |RowExclusiveLock|f      
+d3681e_v     |RowExclusiveLock|t      
+(9 rows)
+
+step s1c: COMMIT;
+step s4u: <... completed>
+step s3r: SELECT tableoid::regclass, count(*), sum(v), sum(w) FROM d3681e GROUP BY 1 ORDER BY 1;
+tableoid|count| sum|sum
+--------+-----+----+---
+d3681e0 |   50|1200| 76
+d3681e1 |   50|1250| 80
+d3681e2 |   50|1200| 76
+d3681e3 |   50|1250| 80
+d3681e4 |   50|1200| 76
+d3681e5 |   50|1250| 80
+d3681e6 |   50|1200| 76
+d3681e7 |   50|1250| 80
+(8 rows)
+
+
+starting permutation: s1u s2u s1c s2c s1f s2f s3s
+s2: WARNING:  there is already a transaction in progress
+step s1u: UPDATE d3681e SET v = v + 100 WHERE id = 13;
+step s2u: UPDATE d3681e SET w = w + 1 WHERE v > 10; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s1f: SELECT pg_stat_force_next_flush();
+pg_stat_force_next_flush
+------------------------
+                        
+(1 row)
+
+step s2f: SELECT pg_stat_force_next_flush();
+pg_stat_force_next_flush
+------------------------
+                        
+(1 row)
+
+step s3s: SELECT relname, n_tup_upd, n_tup_hot_upd, n_tup_del FROM pg_stat_user_tables WHERE relname LIKE 'd3681e%' ORDER BY relname COLLATE "C";
+relname|n_tup_upd|n_tup_hot_upd|n_tup_del
+-------+---------+-------------+---------
+d3681e |        0|            0|        0
+d3681e0|       38|           38|        0
+d3681e1|       40|           40|        0
+d3681e2|       38|           38|        0
+d3681e3|       40|           40|        0
+d3681e4|       38|           38|        0
+d3681e5|       41|           40|        0
+d3681e6|       38|           38|        0
+d3681e7|       40|           40|        0
+(9 rows)
+
+
+starting permutation: s2o s1u s2u s1c s2c s3r
+step s2o: SET pgrust.gravity_relset = off;
+step s1u: UPDATE d3681e SET v = v + 100 WHERE id = 13;
+step s2u: UPDATE d3681e SET w = w + 1 WHERE v > 10; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, count(*), sum(v), sum(w) FROM d3681e GROUP BY 1 ORDER BY 1;
+tableoid|count| sum|sum
+--------+-----+----+---
+d3681e0 |   50|1200| 38
+d3681e1 |   50|1250| 40
+d3681e2 |   50|1200| 38
+d3681e3 |   50|1250| 40
+d3681e4 |   50|1200| 38
+d3681e5 |   50|1350| 40
+d3681e6 |   50|1200| 38
+d3681e7 |   50|1250| 40
+(8 rows)
+

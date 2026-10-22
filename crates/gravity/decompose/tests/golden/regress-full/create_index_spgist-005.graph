@@ -1,0 +1,10 @@
+-- regress-full-create_index_spgist-005
+-- CREATE TABLE quad_point_tbl AS SELECT point(unique1,unique2) AS p FROM tenk1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=10000 end=sink
+  nodes n0@0
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=fn1440(fn316(v1.1), fn316(v1.2)))
+  outs 1=fx16:call1440
+mapped: SeqScan

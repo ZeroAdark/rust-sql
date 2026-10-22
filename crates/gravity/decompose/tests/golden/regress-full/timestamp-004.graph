@@ -1,0 +1,10 @@
+-- regress-full-timestamp-004
+-- SELECT d1 as "timestamp", extract(microseconds from d1) AS microseconds, extract(milliseconds from d1) AS milliseconds, extract(seconds from d1) AS seconds, round(extract(julian from d1)) AS julian, extract(epoch from d1) AS epoch FROM TIMESTAMP_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2260 end=sink
+  nodes n0@0
+  source range rel=17154 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=fn6202(c25:'microseconds', v1.1), 3=fn6202(c25:'milliseconds', v1.1), 4=fn6202(c25:'seconds', v1.1), 5=fn1707(fn6202(c25:'julian', v1.1), c23:0), 6=fn6202(c25:'epoch', v1.1))
+  outs 1=w8:val 2=vl:call6202 3=vl:call6202 4=vl:call6202 5=vl:call1707 6=vl:call6202
+mapped: SeqScan

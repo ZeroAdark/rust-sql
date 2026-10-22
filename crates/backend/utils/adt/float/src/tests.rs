@@ -358,9 +358,9 @@ fn math_domains_and_live_pg_values() {
     // lane, 2026-07-17: PGDG 18.4 x86_64 SELECT lgamma(10.5) =
     // 13.940625219403762 verified in-pod; every other literal in this
     // block matched cross-arch).
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(target_os = "macos")))]
     assert_eq!(out8(dlgamma(10.5).unwrap()), "13.940625219403762");
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(any(not(target_arch = "x86_64"), target_os = "macos"))]
     assert_eq!(out8(dlgamma(10.5).unwrap()), "13.940625219403763");
 
     assert_eq!(dpow(f64::NAN, 0.0).unwrap(), 1.0);
@@ -422,6 +422,12 @@ fn width_bucket_and_in_range() {
     assert!(in_range_float4_float8(1.0, 1.0, f64::INFINITY, false, true).unwrap());
 }
 
+/// PostgreSQL's float results differ per platform (GCC fuses on
+/// aarch64, x86-64 cannot). Pick the pin for the platform under test.
+fn arm<T>(aarch64: T, x86_64: T) -> T {
+    if cfg!(target_arch = "aarch64") { aarch64 } else { x86_64 }
+}
+
 #[test]
 #[cfg_attr(miri, ignore)] // Miri approximates libm; exact-value KATs
 fn aggregates_match_live_pg() {
@@ -442,14 +448,16 @@ fn aggregates_match_live_pg() {
     for (y, x) in [(1.0, 2.0), (2.5, 4.1), (4.25, 7.9), (-3.5, -6.0)] {
         r = float8_regr_accum(r, y, x).unwrap();
     }
-    // Pinned to x86-64 (SSE2, unfused) PostgreSQL 18 — the C-parity
-    // reference. An FMA-contracted build (e.g. Homebrew arm64) is 1 ulp off
-    // on several of these; see RB-6.
-    assert_eq!(out8(float8_corr(r).unwrap()), "0.9986369273154669");
-    assert_eq!(out8(float8_regr_slope(r).unwrap()), "0.5650552218562295");
-    assert_eq!(out8(float8_regr_intercept(r).unwrap()), "-0.06761044371245895");
-    assert_eq!(out8(float8_regr_r2(r).unwrap()), "0.9972757125980773");
-    assert_eq!(out8(float8_covar_pop(r).unwrap()), "14.58125");
+    // Pinned per platform: x86-64 PostgreSQL 18 (SSE2, unfused) and
+    // PG 18.6 pgdg aarch64 (GCC fuses float.c:3369-3374).
+    assert_eq!(out8(float8_corr(r).unwrap()), arm("0.9986369273154668", "0.9986369273154669"));
+    assert_eq!(out8(float8_regr_slope(r).unwrap()), arm("0.5650552218562294", "0.5650552218562295"));
+    assert_eq!(
+        out8(float8_regr_intercept(r).unwrap()),
+        arm("-0.06761044371245872", "-0.06761044371245895")
+    );
+    assert_eq!(out8(float8_regr_r2(r).unwrap()), arm("0.997275712598077", "0.9972757125980773"));
+    assert_eq!(out8(float8_covar_pop(r).unwrap()), arm("14.581249999999999", "14.58125"));
     assert_eq!(out8(float8_covar_samp(r).unwrap()), "19.441666666666666");
     assert_eq!(float8_corr([0.0; 6]), None);
 
@@ -496,22 +504,22 @@ fn rb6_regr_family_c_bit_parity() {
         0x4024000000000000, // Sx  = 10
         0x4014000000000000, // Sxx = 5
         0x4038000000000000, // Sy  = 24
-        0x4046FFFFFFFFFFFF, // Syy = 45.99999999999999
+        arm(0x4047000000000000, 0x4046FFFFFFFFFFFF), // Syy (aarch64 fuses: 46)
         0x402E000000000000, // Sxy = 15
     ];
     assert_eq!(r.map(f64::to_bits), expect_bits);
 
     // Finals, pinned to C bit patterns / float8out text.
     let corr = float8_corr(r).unwrap();
-    assert_eq!(corr.to_bits(), 0x3FEFA6779E291558); // 0.9890707100936806
-    assert_eq!(out8(corr), "0.9890707100936806");
-    assert_eq!(out8(float8_regr_r2(r).unwrap()), "0.9782608695652175");
+    assert_eq!(corr.to_bits(), arm(0x3FEFA6779E291557, 0x3FEFA6779E291558));
+    assert_eq!(out8(corr), arm("0.9890707100936805", "0.9890707100936806"));
+    assert_eq!(out8(float8_regr_r2(r).unwrap()), arm("0.9782608695652174", "0.9782608695652175"));
     assert_eq!(out8(float8_regr_slope(r).unwrap()), "3");
     assert_eq!(out8(float8_regr_intercept(r).unwrap()), "-1.5");
     assert_eq!(out8(float8_covar_pop(r).unwrap()), "3.75");
     assert_eq!(out8(float8_covar_samp(r).unwrap()), "5");
     assert_eq!(out8(float8_regr_sxx(r).unwrap()), "5");
-    assert_eq!(out8(float8_regr_syy(r).unwrap()), "45.99999999999999");
+    assert_eq!(out8(float8_regr_syy(r).unwrap()), arm("46", "45.99999999999999"));
     assert_eq!(out8(float8_regr_sxy(r).unwrap()), "15");
 
     // Moving/parallel path: float8_regr_combine over the two halves must use
@@ -555,7 +563,9 @@ fn rb6_regr_family_c_bit_parity() {
 
 // Round-12 (Antithesis sqldiff, fz_fma fixture, seeds 3446924009097215843 /
 // 2383620390565615383 / 1345841888102124772): var/stddev/corr/covar/regr_*
-// rowset diffs vs the C oracle. The parity reference is x86-64 SSE2 (no FMA)
+// rowset diffs vs the C oracle. x86-64 pins: SSE2 (no FMA); aarch64 pins
+// (arm(), D400): PG 18.6 pgdg aarch64 via SQL-callable accum/combine/finals.
+// The x86 reference is x86-64 SSE2 (no FMA)
 // PostgreSQL 18. Expected bits below were produced TWO independent ways on
 // linux/amd64 postgres:18 (Debian, docker --platform linux/amd64):
 //   1. live SQL over the exact fuzzgen fixture (float8send output), and
@@ -637,28 +647,28 @@ fn round12_fz_fma_aggregate_amd64_bit_parity() {
             0x40c240bd70a3d708,
         ]),
         (350, [
-            0x3fdff3922a5cb88d,
+            arm(0x3fdff3922a5cb88c, 0x3fdff3922a5cb88d),
             0x4045175075075076,
-            0x404526c8fc5516bf,
-            0x3fe0000000000002,
+            arm(0x404526c8fc5516be, 0x404526c8fc5516bf),
+            arm(0x3fe0000000000001, 0x3fe0000000000002),
             0x402ea0ea0ea0ea0f,
-            0x3fcfe7292892a88b,
+            arm(0x3fcfe7292892a888, 0x3fcfe7292892a88b),
             0xbfe0000000000000,
             0x402e20ea0ea0ea0f,
             0x40dcd5dfffffffff,
             0x40dcec536db6db72,
-            0x40ccd5e000000002,
+            arm(0x40ccd5e000000001, 0x40ccd5e000000002),
         ]),
         (499, [
-            0x3fde9528f7f34c28,
+            arm(0x3fde9528f7f34c29, 0x3fde9528f7f34c28),
             0x4043f57be7088e0d,
             0x4043ffbe76eb4557,
-            0x3fde5262df69f303,
+            arm(0x3fde5262df69f305, 0x3fde5262df69f303),
             0x402f9c2ee3ab9d88,
-            0x3fcd3a6416a1abe0,
+            arm(0x3fcd3a6416a1abe3, 0x3fcd3a6416a1abe0),
             0xbfe6b38f225f6c40,
             0x402ef018a0106ab6,
-            0x40e4875bb412780d,
+            arm(0x40e4875bb412780c, 0x40e4875bb412780d),
             0x40e42e1897db0fe9,
             0x40d373c041aad672,
         ]),
@@ -701,11 +711,11 @@ fn round12_fz_fma_aggregate_amd64_bit_parity() {
         (350, 175, [
             0x40553740dd509537,
             0x402265de19ec1ab3,
-            0x3fdff3922a5cb886,
+            arm(0x3fdff3922a5cb889, 0x3fdff3922a5cb886),
             0x402ea0ea0ea0ea0f,
-            0x40dcd5e000000005,
-            0x40dcec536db6db6c,
-            0x40ccd5dffffffffc,
+            arm(0x40dcd5e000000003, 0x40dcd5e000000005),
+            arm(0x40dcec536db6db6d, 0x40dcec536db6db6c),
+            arm(0x40ccd5dffffffffd, 0x40ccd5dffffffffc),
         ]),
         (499, 168, [
             0x4054bf53e3108382,
@@ -787,6 +797,9 @@ fn fmgr_wrappers_and_table() {
 
     let mut flinfo = FmgrInfo::new(fc_float8out, 215, 1, true, false);
     let mut fci = LocalFcinfo::<1>::new(0);
+    let out_cx = ::mcx::MemoryContext::new_bump("out test");
+    // SAFETY: out_cx outlives every call through this frame.
+    unsafe { fci.set_result_mcx(out_cx.mcx()) };
     for v in [0.1f64, -0.0, 1e300, f64::NAN, 3.141592653589793] {
         fci.set_arg(0, Datum::from_f64(v));
         let d = flinfo.invoke(&mut fci).unwrap();
@@ -933,8 +946,8 @@ fn float_agg_fmgr_frames() {
         fci.set_arg(0, Datum::from_usize(rp));
         out8(f(None, &mut fci).unwrap().as_f64())
     };
-    assert_eq!(final6(fc_float8_regr_slope), "0.5650552218562295");
-    assert_eq!(final6(fc_float8_corr), "0.9986369273154669");
+    assert_eq!(final6(fc_float8_regr_slope), arm("0.5650552218562294", "0.5650552218562295"));
+    assert_eq!(final6(fc_float8_corr), arm("0.9986369273154668", "0.9986369273154669"));
     assert_eq!(final6(fc_float8_covar_samp), "19.441666666666666");
 
     // Wrong-shape transarray: C's elog text.
@@ -1025,7 +1038,11 @@ fn strtod_c_glibc_erange_model() {
 fn float4out_results_do_not_alias_across_carriers() {
     let mut f1 = types_fmgr::FmgrInfo::new(fc_float4out, 201, 1, true, false);
     let mut f2 = types_fmgr::FmgrInfo::new(fc_float4out, 201, 1, true, false);
-    let mut fci = types_fmgr::LocalFcinfo::<1>::new(0);
+    // trunk's out_cstring allocates in the frame's result context: arm one.
+    let ctx = ::mcx::MemoryContext::new_bump("float4out alias test");
+    let mut fci = types_fmgr::LocalFcinfo::<1>::fresh(0);
+    // SAFETY: ctx outlives both calls.
+    unsafe { fci.set_result_mcx(ctx.mcx()) };
     fci.set_arg(0, Datum::from_f32(12.0));
     let d1 = f1.invoke(&mut fci).unwrap();
     fci.set_arg(0, Datum::from_f32(34.0));
@@ -1056,4 +1073,45 @@ mod dblmin_tests {
         assert!(!token_true_value_below_dblmin(format!("{threes}e-5307").as_bytes(), false));
         assert!(!token_true_value_below_dblmin(b"0.000", false));
     }
+}
+
+#[test]
+fn gamma_range_checks_read_errno() {
+    // float.c dgamma: errno != 0 with a nonzero (subnormal) result is the
+    // overflow arm (glibc tgamma(-172.5) sets ERANGE and returns -1.1e-312).
+    let err = crate::funcs::gamma_range_check(-1.1e-312, 34).unwrap_err();
+    assert_eq!(err.message(), "value out of range: overflow");
+    let err = crate::funcs::gamma_range_check(0.0, 34).unwrap_err();
+    assert_eq!(err.message(), "value out of range: underflow");
+    assert_eq!(crate::funcs::gamma_range_check(24.0, 0).unwrap(), 24.0);
+    assert!(crate::funcs::gamma_range_check(f64::INFINITY, 0).is_err());
+    let err = crate::funcs::lgamma_range_check(1.0, 1.0, 34).unwrap_err();
+    assert_eq!(err.message(), "value out of range: overflow");
+    assert_eq!(crate::funcs::lgamma_range_check(1.0, 0.0, 0).unwrap(), 0.0);
+    assert!(crate::funcs::lgamma_range_check(0.0, f64::INFINITY, 0).is_err());
+    assert_eq!(
+        crate::funcs::lgamma_range_check(f64::INFINITY, f64::INFINITY, 0).unwrap(),
+        f64::INFINITY
+    );
+}
+
+#[test]
+fn d400_accum_tmp_fnmsub() {
+    // float.c:3066 `tmp = newval * N - Sx` (fnmsub on aarch64):
+    // SELECT var_samp(v), var_pop(v), stddev_samp(v) FROM (VALUES (5.4),(9.4),(3.8)).
+    let mut t = [0.0f64; 3];
+    for v in [5.4, 9.4, 3.8] {
+        t = float8_accum(t, v).unwrap();
+    }
+    assert_eq!(out8(float8_var_samp(t).unwrap()), arm("8.320000000000002", "8.320000000000004"));
+    assert_eq!(out8(float8_var_pop(t).unwrap()), arm("5.546666666666668", "5.5466666666666695"));
+    assert_eq!(out8(float8_stddev_samp(t).unwrap()), arm("2.8844410203711917", "2.884441020371192"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn d400_asind_acosd_fmsub() {
+    assert_eq!(out8(dasind(0.91).unwrap()), arm("65.50535152858033", "65.50535152858032"));
+    assert_eq!(out8(dacosd(0.13).unwrap()), arm("82.53040768358308", "82.53040768358306"));
+    assert_eq!(out8(dacosd(0.45).unwrap()), arm("63.256316049597", "63.25631604959699"));
 }

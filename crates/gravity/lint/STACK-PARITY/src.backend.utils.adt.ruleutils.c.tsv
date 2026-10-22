@@ -1,0 +1,5 @@
+# PostgreSQL 18.6 src/backend/utils/adt/ruleutils.c: 4 stack-depth check sites
+5636	get_query_def	crates/backend/utils/adt/ruleutils/src/query.rs	get_query_def	yes	
+6423	get_setop_query	crates/backend/utils/adt/ruleutils/src/query.rs	get_setop_query	yes	
+7918	resolve_special_varno	crates/backend/utils/adt/ruleutils/src/plan.rs	resolve_special_varno	yes	
+9264	get_rule_expr	crates/backend/utils/adt/ruleutils/src/deparse.rs	get_rule_expr	yes	

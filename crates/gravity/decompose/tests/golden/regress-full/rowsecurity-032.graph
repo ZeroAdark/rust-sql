@@ -1,0 +1,46 @@
+-- regress-full-rowsecurity-032
+-- EXPLAIN (COSTS OFF) SELECT * FROM t1 FOR SHARE;
+graph pipelines=3 breakers=0 init_plans=0 root=p2
+p0 node=2 serial site=1 reason=Lock end=sink
+  nodes n2@0 n1@2 n0@4
+  source range rel=28353 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(4):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(op530(v2.2, c23:2), c23:0)
+  project (1=v2.1, 2=v2.2, 3=v2.4, 4=v2.-1, 5=v2.-6)
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4j=outer.4, 5j=outer.5)
+  lock rel=28353 Share Block marks=(rti1:ROW_MARK_SHARE parent, rti2:ROW_MARK_SHARE, rti3:ROW_MARK_SHARE, rti4:ROW_MARK_SHARE)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4j=outer.4, 5j=outer.5)
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=fx6:row 5=w4:val
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=fx6:life/breaker 5=w4:val
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=fx6:life/breaker 5=w4:val
+p1 node=3 serial site=1 reason=Lock end=sink
+  nodes n3@0 n1@2 n0@4
+  source range rel=28361 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(op530(v3.2, c23:2), c23:0)
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.-1, 5=v3.-6)
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4j=outer.4, 5j=outer.5)
+  lock rel=28353 Share Block marks=(rti1:ROW_MARK_SHARE parent, rti2:ROW_MARK_SHARE, rti3:ROW_MARK_SHARE, rti4:ROW_MARK_SHARE)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4j=outer.4, 5j=outer.5)
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=fx6:row 5=w4:val
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=fx6:life/breaker 5=w4:val
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=fx6:life/breaker 5=w4:val
+p2 node=4 serial site=1 reason=Lock end=sink
+  nodes n4@0 n1@2 n0@4
+  source range rel=28367 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(op530(v4.4, c23:2), c23:0)
+  project (1=v4.1, 2=v4.4, 3=v4.3, 4=v4.-1, 5=v4.-6)
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4j=outer.4, 5j=outer.5)
+  lock rel=28353 Share Block marks=(rti1:ROW_MARK_SHARE parent, rti2:ROW_MARK_SHARE, rti3:ROW_MARK_SHARE, rti4:ROW_MARK_SHARE)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4j=outer.4, 5j=outer.5)
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=fx6:row 5=w4:val
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=fx6:life/breaker 5=w4:val
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=fx6:life/breaker 5=w4:val
+scan-lanes node=2 rti=2 rel=28353 tableoid
+scan-lanes node=3 rti=3 rel=28361 tableoid
+scan-lanes node=4 rti=4 rel=28367 tableoid
+mapped: Append SeqScan LockRows PlanRowMark

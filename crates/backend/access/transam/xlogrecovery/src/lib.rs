@@ -13,7 +13,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use stringinfo::StringInfo;
 use types_core::{
     ForkNumber, TimeLineID, TimestampTz, TransactionId, XLogRecPtr, XLogSegNo, BLCKSZ,
@@ -156,6 +156,16 @@ pub fn XLogRecoveryResetAfterCrash() {
     ] {
         f.store(false, std::sync::atomic::Ordering::SeqCst);
     }
+    // xlogrecovery.c:473-476: the whole XLogRecoveryCtl image is zeroed and
+    // the wakeup latch re-inited, so the replacement startup can OwnLatch it.
+    RECOVERY_TARGET_TLI.store(0, Relaxed);
+    LAST_REPLAYED_READ_REC_PTR.store(0, Relaxed);
+    LAST_REPLAYED_END_REC_PTR.store(0, Relaxed);
+    LAST_REPLAYED_TLI.store(0, Relaxed);
+    REPLAY_END_REC_PTR.store(0, Relaxed);
+    REPLAY_END_TLI.store(0, Relaxed);
+    targets::reset_shared_after_crash();
+    latch::InitSharedLatch(targets::recovery_wakeup_latch());
 }
 
 thread_local! {
@@ -472,7 +482,7 @@ impl PageSource {
             ereport(PANIC)
                 .with_saved_errno(errno.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{XLOGDIR}/{fname}\": %m"))
+                .errmsg(format!("could not open file \"{XLOGDIR}/{fname}\": {PCT_M}"))
                 .finish(loc("XLogFileRead"))?;
         }
         Ok(-1)
@@ -526,7 +536,7 @@ impl PageSource {
             ereport(DEBUG2)
                 .with_saved_errno(libc::ENOENT)
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m"))
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                 .finish(loc("XLogFileReadAnyTLI"))?;
         }
         Ok(found)
@@ -965,7 +975,7 @@ impl XLogReaderRoutine for PageSource {
                 let (msg, code) = if r < 0 {
                     (
                         format!(
-                            "could not read from WAL segment {fname}, LSN {}, offset {}: %m",
+                            "could not read from WAL segment {fname}, LSN {}, offset {}: {PCT_M}",
                             lsn_fmt(target_page_ptr),
                             self.read_off
                         ),
@@ -1257,11 +1267,10 @@ fn validate_recovery_parameters() -> PgResult<()> {
         unreachable!()
     }
 
-    if targets::recovery_target_action() == targets::RECOVERY_TARGET_ACTION_PAUSE
-        && !guc_tables::vars::EnableHotStandby.read()
-    {
-        targets::set_recovery_target_action_shutdown();
-    }
+    targets::set_recovery_target_action_shutdown(
+        guc_tables::vars::recoveryTargetAction.read() == targets::RECOVERY_TARGET_ACTION_PAUSE
+            && !guc_tables::vars::EnableHotStandby.read(),
+    );
 
     if targets::recovery_target() == RecoveryTargetType::Time {
         let s = targets::recovery_target_time_string();
@@ -1461,7 +1470,7 @@ pub fn InitWalRecovery() -> PgResult<InitWalRecoveryResult> {
                         .with_saved_errno(e.raw_os_error().unwrap_or(0))
                         .errcode_for_file_access()
                         .errmsg(format!(
-                            "could not create symbolic link \"{linkloc_rel}\": %m"
+                            "could not create symbolic link \"{linkloc_rel}\": {PCT_M}"
                         ))
                         .finish(loc("InitWalRecovery"))?; unreachable!() }
                 }
@@ -1495,7 +1504,7 @@ pub fn InitWalRecovery() -> PgResult<InitWalRecoveryResult> {
                         "ignoring file \"{TABLESPACE_MAP}\" because no file \"{BACKUP_LABEL_FILE}\" exists"
                     ))
                     .errdetail(format!(
-                        "Could not rename file \"{TABLESPACE_MAP}\" to \"{TABLESPACE_MAP_OLD}\": %m."
+                        "Could not rename file \"{TABLESPACE_MAP}\" to \"{TABLESPACE_MAP_OLD}\": {PCT_M}."
                     ))
                     .finish(loc("InitWalRecovery")),
             };
@@ -1798,7 +1807,7 @@ fn check_tablespace_directory() -> PgResult<()> {
             return Err(ereport(ERROR)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not open directory \"{PG_TBLSPC_DIR}\": %m"))
+                .errmsg(format!("could not open directory \"{PG_TBLSPC_DIR}\": {PCT_M}"))
                 .into_error()
                 .into());
         }
@@ -1810,7 +1819,7 @@ fn check_tablespace_directory() -> PgResult<()> {
                 return Err(ereport(ERROR)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not read directory \"{PG_TBLSPC_DIR}\": %m"))
+                    .errmsg(format!("could not read directory \"{PG_TBLSPC_DIR}\": {PCT_M}"))
                     .into_error()
                     .into());
             }
@@ -1830,7 +1839,7 @@ fn check_tablespace_directory() -> PgResult<()> {
                 return Err(ereport(ERROR)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not stat file \"{PG_TBLSPC_DIR}/{name}\": %m"))
+                    .errmsg(format!("could not stat file \"{PG_TBLSPC_DIR}/{name}\": {PCT_M}"))
                     .into_error()
                     .into());
             }
@@ -2094,11 +2103,7 @@ fn verify_backup_page_consistency(rec: &mut Recovery, rmid: u8) -> PgResult<()> 
 
         // Restore the record's backup image into primary_image.
         if !rec.reader.RestoreBlockImage(block_id, primary_image) {
-            let msg = rec
-                .reader
-                .errormsg()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "could not restore block image".to_string());
+            let msg = rec.reader.errormsg_buf_raw().unwrap_or_default().to_string();
             ereport(ERROR)
                 .errcode(types_error::ERRCODE_INTERNAL_ERROR)
                 .errmsg_internal(msg)
@@ -2360,9 +2365,9 @@ impl Drop for RmRedoErrorContextFrame {
 // rm_redo_error_callback (xlogrecovery.c:2306-2323): error context callback
 // for errors occurring during rm_redo(). C builds the description under
 // ErrorContext (errfinish switched to it before walking the callbacks); the
-// scratch arena here is released with the call.
+// scratch context here is released with the call.
 fn rm_redo_error_callback(arg: &RmRedoErrorArg, e: &mut PgError) {
-    let scratch = mcx::MemoryContext::new_bump("rm_redo_error_callback");
+    let scratch = mcx::MemoryContext::new_wholesale("rm_redo_error_callback");
     let Ok(mut buf) = StringInfo::new_in(scratch.mcx()) else {
         return;
     };
@@ -2636,6 +2641,8 @@ fn perform_wal_recovery_guts(rec: &mut Recovery) -> PgResult<()> {
         IN_REDO.with(|c| c.set(false));
     } else {
         let _ = elog(LOG, "redo is not required".to_string());
+        // pgrcolumnar: an uncommitted writer's files can predate the checkpoint; rm_cleanup runs after redo.
+        pgrc_wal::pgrc_cleanup();
     }
 
     if ARCHIVE_RECOVERY_REQUESTED.load(Relaxed)

@@ -1,0 +1,9 @@
+# D432: a column the file declares numeric (or declares float in one table and numeric in another) stays exact
+sql: SELECT sum(n), sum(f) FROM t;
+schema: CREATE TABLE t (n numeric(12,3), f float8); CREATE TABLE u (f numeric);
+class: unordered
+verdict: mismatch
+[pg]
+1.000	2150
+[got]
+1.000	2150.0000000000005

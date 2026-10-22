@@ -1,0 +1,78 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1b s1ks s2u s3d s1c rsel
+step s1b: BEGIN;
+step s1ks: SELECT id, v FROM pgrc_t WHERE id = 1 FOR KEY SHARE;
+id|v
+--+-
+ 1|0
+(1 row)
+
+step s2u: UPDATE pgrc_t SET v = v + 1 WHERE id = 1;
+step s3d: DELETE FROM pgrc_t WHERE id = 1;
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id;
+id|v
+--+-
+11|0
+(1 row)
+
+
+starting permutation: s1b s1kss s2us s3ds s1c rsel
+step s1b: BEGIN;
+step s1kss: SELECT id, v FROM pgrc_t WHERE id = 11 FOR KEY SHARE;
+id|v
+--+-
+11|0
+(1 row)
+
+step s2us: UPDATE pgrc_t SET v = v + 1 WHERE id = 11;
+step s3ds: DELETE FROM pgrc_t WHERE id = 11;
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id;
+id|v
+--+-
+ 1|0
+(1 row)
+
+
+starting permutation: s2b s2u s1b s1ks s2c s3dn s1c rsel
+step s2b: BEGIN;
+step s2u: UPDATE pgrc_t SET v = v + 1 WHERE id = 1;
+step s1b: BEGIN;
+step s1ks: SELECT id, v FROM pgrc_t WHERE id = 1 FOR KEY SHARE;
+id|v
+--+-
+ 1|0
+(1 row)
+
+step s2c: COMMIT;
+step s3dn: DELETE FROM pgrc_t WHERE v = 1; <waiting ...>
+step s1c: COMMIT;
+step s3dn: <... completed>
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id;
+id|v
+--+-
+11|0
+(1 row)
+
+
+starting permutation: s2b s2u s1b s1ks s2a s1c rsel
+step s2b: BEGIN;
+step s2u: UPDATE pgrc_t SET v = v + 1 WHERE id = 1;
+step s1b: BEGIN;
+step s1ks: SELECT id, v FROM pgrc_t WHERE id = 1 FOR KEY SHARE;
+id|v
+--+-
+ 1|0
+(1 row)
+
+step s2a: ROLLBACK;
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id;
+id|v
+--+-
+ 1|0
+11|0
+(2 rows)
+

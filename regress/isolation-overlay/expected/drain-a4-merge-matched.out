@@ -1,0 +1,188 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2plan s2bsplan
+step s2plan: EXPLAIN (costs off) MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w);
+QUERY PLAN                        
+----------------------------------
+Merge on dt t                     
+  ->  Hash Right Join             
+        Hash Cond: (t.k = s.k)    
+        ->  Seq Scan on dt t      
+        ->  Hash                  
+              ->  Seq Scan on ds s
+(6 rows)
+
+step s2bsplan: EXPLAIN (costs off) MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED BY SOURCE AND t.k <= 3 THEN UPDATE SET note = 'bs' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w);
+QUERY PLAN                        
+----------------------------------
+Merge on dt t                     
+  ->  Hash Full Join              
+        Hash Cond: (t.k = s.k)    
+        ->  Seq Scan on dt t      
+        ->  Hash                  
+              ->  Seq Scan on ds s
+(6 rows)
+
+
+starting permutation: s1del s2merge s1c s2chk
+s1: WARNING:  there is already a transaction in progress
+step s1del: DELETE FROM dt WHERE k = 1;
+step s2merge: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k|  v|note
+----+---+----
+   1|100|dflt
+   2|220|dflt
+   3| 30|dflt
+   4| 40|dflt
+4000|400|dflt
+(5 rows)
+
+
+starting permutation: s1key s2merge s1c s2chk
+step s1key: UPDATE dt SET k = 5001 WHERE k = 1;
+step s2merge: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k|  v|note
+----+---+----
+   1|100|dflt
+   2|220|dflt
+   3| 30|dflt
+   4| 40|dflt
+4000|400|dflt
+5001| 10|dflt
+(6 rows)
+
+
+starting permutation: s1v s2merge s1c s2chk
+step s1v: UPDATE dt SET v = v + 1000 WHERE k = 1;
+step s2merge: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k|   v|note
+----+----+----
+   1|1110|dflt
+   2| 220|dflt
+   3|  30|dflt
+   4|  40|dflt
+4000| 400|dflt
+(5 rows)
+
+
+starting permutation: s1ins s2merge s1c s2chk
+step s1ins: INSERT INTO dt VALUES (4000, 44, 's1');
+step s2merge: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+ERROR:  duplicate key value violates unique constraint "dt_pkey"
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k| v|note
+----+--+----
+   1|10|dflt
+   2|20|dflt
+   3|30|dflt
+   4|40|dflt
+4000|44|s1  
+(5 rows)
+
+
+starting permutation: s1src s2merge s1c s2chk
+step s1src: UPDATE dt SET v = v + 7 WHERE k = 2; UPDATE ds SET w = w + 5 WHERE k = 2;
+step s2merge: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k|  v|note
+----+---+----
+   1|110|dflt
+   2|227|dflt
+   3| 30|dflt
+   4| 40|dflt
+4000|400|dflt
+(5 rows)
+
+
+starting permutation: s1del s2del s1c s2chk
+step s1del: DELETE FROM dt WHERE k = 1;
+step s2del: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED AND s.w < 150 THEN DELETE WHEN MATCHED THEN UPDATE SET note = 'm' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w, 'ins'); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k|  v|note
+----+---+----
+   1|100|ins 
+   2| 20|m   
+   3| 30|dflt
+   4| 40|dflt
+4000|400|ins 
+(5 rows)
+
+
+starting permutation: s1v s2del s1c s2chk
+step s1v: UPDATE dt SET v = v + 1000 WHERE k = 1;
+step s2del: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED AND s.w < 150 THEN DELETE WHEN MATCHED THEN UPDATE SET note = 'm' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w, 'ins'); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k|  v|note
+----+---+----
+   2| 20|m   
+   3| 30|dflt
+   4| 40|dflt
+4000|400|ins 
+(4 rows)
+
+
+starting permutation: s1del s2bs s1c s2chk
+step s1del: DELETE FROM dt WHERE k = 1;
+step s2bs: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED BY SOURCE AND t.k <= 3 THEN UPDATE SET note = 'bs' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2bs: <... completed>
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k|  v|note
+----+---+----
+   1|100|dflt
+   2|220|dflt
+   3| 30|bs  
+   4| 40|dflt
+4000|400|dflt
+(5 rows)
+
+
+starting permutation: s1key s2bs s1c s2chk
+step s1key: UPDATE dt SET k = 5001 WHERE k = 1;
+step s2bs: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED BY SOURCE AND t.k <= 3 THEN UPDATE SET note = 'bs' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2bs: <... completed>
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k|  v|note
+----+---+----
+   1|100|dflt
+   2|220|dflt
+   3| 30|bs  
+   4| 40|dflt
+4000|400|dflt
+5001| 10|dflt
+(6 rows)
+
+
+starting permutation: s1v s2bs s1c s2chk
+step s1v: UPDATE dt SET v = v + 1000 WHERE k = 1;
+step s2bs: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.w WHEN NOT MATCHED BY SOURCE AND t.k <= 3 THEN UPDATE SET note = 'bs' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.w); <waiting ...>
+step s1c: COMMIT;
+step s2bs: <... completed>
+step s2chk: SELECT * FROM dt WHERE k <= 4 OR k >= 4000 ORDER BY k;
+   k|   v|note
+----+----+----
+   1|1110|dflt
+   2| 220|dflt
+   3|  30|bs  
+   4|  40|dflt
+4000| 400|dflt
+(5 rows)
+

@@ -1,6 +1,7 @@
-// logtape.c, serial arm; block trailer = trailing (prev, next) i64 pair,
-// next < 0 on the last block encodes -nbytes. Parallel (SharedFileSet
-// import) and sharedtuplestore.c are unreached in serial sorts.
+// logtape.c; block trailer = trailing (prev, next) i64 pair, next < 0 on the
+// last block encodes -nbytes. Parallel sorts: each worker writes its tape set
+// into a FileSet file named by its worker number; the leader imports them all
+// as one concatenated BufFile (LogicalTapeImport).
 #![allow(non_snake_case)]
 
 use ::mcx::{Mcx, PgVec};
@@ -18,6 +19,12 @@ const MAX_ALLOC_SIZE: usize = 0x3fff_ffff;
 
 const TAPE_WRITE_PREALLOC_MIN: usize = 8;
 const TAPE_WRITE_PREALLOC_MAX: usize = 128;
+
+/// `TapeShare`: what a worker publishes about its frozen result tape.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TapeShare {
+    pub firstblocknumber: i64,
+}
 
 /// The C `LogicalTape *`: a slot index into the owning set.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,6 +73,9 @@ struct LogicalTape<'m> {
     first_block_number: i64,
     cur_block_number: i64,
     next_block_number: i64,
+    // Leader tapesets: where this tape's worker file starts in the
+    // concatenated BufFile.
+    offset_block_number: i64,
     // Lazily sized; empty until the first write/read touches the tape.
     buffer: PgVec<'m, u8>,
     buffer_size: usize,
@@ -81,6 +91,7 @@ struct TapeSetCore<'m> {
     pfile: BufFile<'m>,
     n_blocks_allocated: i64,
     n_blocks_written: i64,
+    n_hole_blocks: i64,
     forget_free_space: bool,
     // Min-heap; len() is C's nFreeBlocks.
     free_blocks: PgVec<'m, i64>,
@@ -192,14 +203,74 @@ impl<'m> LogicalTapeSet<'m> {
     /// `LogicalTapeSetCreate`, serial arm (`fileset = NULL`, `worker = -1`).
     pub fn create(mcx: Mcx<'m>, preallocate: bool) -> PgResult<LogicalTapeSet<'m>> {
         let pfile = fd::BufFileCreateTemp(mcx, false)?;
+        Self::with_file(mcx, pfile, preallocate)
+    }
+
+    /// `LogicalTapeSetCreate`, worker arm: the tapes live in the shared
+    /// fileset's file named by the worker number.
+    pub fn create_worker(
+        mcx: Mcx<'m>,
+        preallocate: bool,
+        fileset: &fd::fileset::FileSet,
+        worker: i32,
+    ) -> PgResult<LogicalTapeSet<'m>> {
+        debug_assert!(worker >= 0);
+        let pfile = fd::BufFileCreateFileSet(mcx, fileset, &worker.to_string())?;
+        Self::with_file(mcx, pfile, preallocate)
+    }
+
+    /// `LogicalTapeSetCreate` leader arm plus one `LogicalTapeImport` per
+    /// worker: worker j's result tape becomes tape j. The first worker file
+    /// is the set's BufFile and the others are appended to it.
+    pub fn create_leader(
+        mcx: Mcx<'m>,
+        fileset: &fd::fileset::FileSet,
+        shares: &[TapeShare],
+    ) -> PgResult<(LogicalTapeSet<'m>, PgVec<'m, TapeIdx>)> {
+        debug_assert!(!shares.is_empty());
+        let mut set: Option<LogicalTapeSet<'m>> = None;
+        let mut imported = PgVec::new_in(mcx);
+        ::mcx::pgvec_reserve(&mut imported, shares.len())?;
+        for (worker, share) in shares.iter().enumerate() {
+            let file = fd::BufFileOpenFileSet(mcx, fileset, &worker.to_string(), true)?;
+            let filesize = file.size()?;
+            let offset = match set.as_mut() {
+                None => {
+                    set = Some(Self::with_file(mcx, file, false)?);
+                    0
+                }
+                Some(lts) => lts.core.pfile.append(file)?,
+            };
+            let lts = set.as_mut().expect("leader tapeset created by the first import");
+            let tape = lts.create_tape();
+            imported.push(tape);
+            let lt = lts.tapes[tape.0 as usize].as_mut().expect("tape just created");
+            lt.first_block_number = share.firstblocknumber;
+            lt.offset_block_number = offset;
+            lt.max_size = MAX_ALLOC_SIZE.min(filesize as usize);
+            let tapeblocks = filesize / BLCKSZ as i64;
+            let core = &mut lts.core;
+            core.n_hole_blocks += offset - core.n_blocks_allocated;
+            core.n_blocks_allocated = offset + tapeblocks;
+            core.n_blocks_written = core.n_blocks_allocated;
+        }
+        Ok((set.expect("at least one worker tape"), imported))
+    }
+
+    fn with_file(
+        mcx: Mcx<'m>,
+        pfile: BufFile<'m>,
+        preallocate: bool,
+    ) -> PgResult<LogicalTapeSet<'m>> {
         let mut free_blocks: PgVec<'m, i64> = PgVec::new_in(mcx);
-        free_blocks.reserve(32);
+        ::mcx::pgvec_reserve(&mut free_blocks, 32)?;
         Ok(LogicalTapeSet {
             core: TapeSetCore {
                 mcx,
                 pfile,
                 n_blocks_allocated: 0,
                 n_blocks_written: 0,
+                n_hole_blocks: 0,
                 forget_free_space: false,
                 free_blocks,
                 enable_prealloc: preallocate,
@@ -214,8 +285,10 @@ impl<'m> LogicalTapeSet<'m> {
         self.core.pfile.close()
     }
 
+    /// `LogicalTapeSetBlocks`: blocks written, not counting the holes
+    /// between concatenated worker files.
     pub fn blocks(&self) -> i64 {
-        self.core.n_blocks_written
+        self.core.n_blocks_written - self.core.n_hole_blocks
     }
 
     pub fn forget_free_space(&mut self) {
@@ -232,6 +305,7 @@ impl<'m> LogicalTapeSet<'m> {
             first_block_number: -1,
             cur_block_number: -1,
             next_block_number: -1,
+            offset_block_number: 0,
             buffer: PgVec::new_in(mcx),
             buffer_size: 0,
             max_size: MAX_ALLOC_SIZE,
@@ -356,9 +430,19 @@ impl<'m> LogicalTapeSet<'m> {
         Ok(nread)
     }
 
+    /// `LogicalTapeFreeze` with a `share` argument: a worker's result tape,
+    /// published for the leader to import.
+    pub fn freeze_shared(&mut self, tape: TapeIdx) -> PgResult<TapeShare> {
+        self.freeze(tape)?;
+        self.core.pfile.export_fileset()?;
+        let (_, lt) = self.parts(tape);
+        Ok(TapeShare { firstblocknumber: lt.first_block_number })
+    }
+
     pub fn freeze(&mut self, tape: TapeIdx) -> PgResult<()> {
         let (core, lt) = self.parts(tape);
         debug_assert!(lt.writing);
+        debug_assert!(lt.offset_block_number == 0);
 
         if lt.dirty {
             set_trailer_next(&mut lt.buffer, -(lt.nbytes as i64));
@@ -486,7 +570,7 @@ fn get_prealloc_block(core: &mut TapeSetCore<'_>, lt: &mut LogicalTape<'_>) -> i
     } else {
         (lt.prealloc.capacity() * 2).min(TAPE_WRITE_PREALLOC_MAX)
     };
-    lt.prealloc.reserve(size);
+    let _ = lt.prealloc.try_reserve(size);
     lt.prealloc.resize(size, 0);
     for i in (0..size).rev() {
         lt.prealloc[i] = core.get_free_block();
@@ -498,8 +582,8 @@ fn get_prealloc_block(core: &mut TapeSetCore<'_>, lt: &mut LogicalTape<'_>) -> i
 /// `ltsInitReadBuffer`: lazily size the buffer and pull the first block(s).
 fn init_read_buffer(core: &mut TapeSetCore<'_>, lt: &mut LogicalTape<'_>) -> PgResult<()> {
     debug_assert!(lt.buffer_size > 0);
-    lt.buffer.reserve(lt.buffer_size);
-    lt.buffer.resize(lt.buffer_size, 0);
+    ::mcx::pgvec_reserve(&mut lt.buffer, lt.buffer_size)?;
+    ::mcx::pgvec_resize(&mut lt.buffer, lt.buffer_size, 0)?;
     lt.next_block_number = lt.first_block_number;
     lt.pos = 0;
     lt.nbytes = 0;
@@ -512,10 +596,11 @@ fn read_fill_buffer(core: &mut TapeSetCore<'_>, lt: &mut LogicalTape<'_>) -> PgR
     lt.pos = 0;
     lt.nbytes = 0;
     loop {
-        let datablocknum = lt.next_block_number;
+        let mut datablocknum = lt.next_block_number;
         if datablocknum == -1 {
             break;
         }
+        datablocknum += lt.offset_block_number;
         let start = lt.nbytes;
         core.read_block(datablocknum, &mut lt.buffer[start..start + BLCKSZ])?;
         if !lt.frozen {

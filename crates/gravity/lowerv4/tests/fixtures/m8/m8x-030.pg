@@ -1,0 +1,9 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M8-RIG): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT x, CASE WHEN x > 2 THEN (SELECT count(*) FROM generate_series(1, x) y) ELSE 0 END AS c FROM generate_series(1, 5) x
+cols: x	c
+[pg]
+1	0
+2	0
+3	3
+4	4
+5	5

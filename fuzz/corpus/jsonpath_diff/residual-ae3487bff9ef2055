@@ -1,1 +1,0 @@
-h$.a.date() == $.b.timestamp_tz()

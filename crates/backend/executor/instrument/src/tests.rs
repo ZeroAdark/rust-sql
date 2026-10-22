@@ -137,3 +137,63 @@ fn current_time_is_monotonic_nonzero() {
     assert!(!a.is_zero());
     assert!(b.ticks >= a.ticks);
 }
+
+#[test]
+fn restart_while_unwinding_does_not_double_panic() {
+    struct Cleanup(Instrumentation);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            instr_start_node(&mut self.0);
+            instr_stop_node(&mut self.0, 0.0);
+            instr_stop_node(&mut self.0, 0.0);
+            instr_end_loop(&mut self.0);
+        }
+    }
+    let r = std::panic::catch_unwind(|| {
+        let mut i = timed();
+        instr_start_node(&mut i);
+        let _cleanup = Cleanup(i);
+        panic!("runtime error mid-node");
+    });
+    assert!(r.is_err());
+}
+
+#[test]
+#[should_panic(expected = "InstrStartNode called twice in a row")]
+fn restart_outside_an_unwind_still_panics() {
+    let mut i = timed();
+    instr_start_node(&mut i);
+    instr_start_node(&mut i);
+}
+
+#[test]
+fn accum_parallel_query_folds_wal_into_the_live_counter() {
+    use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
+    static RECORDS: AtomicI64 = AtomicI64::new(0);
+    static FPI: AtomicI64 = AtomicI64::new(0);
+    if !transam_xlog_seams::wal_usage_add::is_installed() {
+        transam_xlog_seams::wal_usage_add::set(|w| {
+            RECORDS.fetch_add(w.wal_records, Relaxed);
+            FPI.fetch_add(w.wal_fpi, Relaxed);
+        });
+    }
+    if !transam_xlog_seams::wal_usage::is_installed() {
+        transam_xlog_seams::wal_usage::set(|| WalUsage {
+            wal_records: RECORDS.load(Relaxed),
+            wal_fpi: FPI.load(Relaxed),
+            wal_bytes: 0,
+            wal_buffers_full: 0,
+        });
+    }
+    let live_before = transam_xlog_seams::wal_usage::call();
+    let before = pg_wal_usage();
+    instr_accum_parallel_query(
+        &BufferUsage::default(),
+        &WalUsage { wal_records: 3, wal_fpi: 2, wal_bytes: 0, wal_buffers_full: 0 },
+    );
+    let live_after = transam_xlog_seams::wal_usage::call();
+    assert_eq!(live_after.wal_records - live_before.wal_records, 3);
+    assert_eq!(live_after.wal_fpi - live_before.wal_fpi, 2);
+    let after = pg_wal_usage();
+    assert_eq!(after.wal_records - before.wal_records, 3, "no double fold through the overlay");
+}

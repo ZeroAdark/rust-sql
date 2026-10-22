@@ -1,0 +1,4 @@
+backend/utils/adt/ri_triggers/src/lib.rs	CTX	pgport	exit	leader	RI triggers run on the leader; the RI cache session root, set once per thread and never reset
+backend/utils/adt/ri_triggers/src/lib.rs	RI_CONSTRAINT_CACHE	pgport	at:InvalidateConstraintCacheCallBack	leader	RI triggers run on the leader; constraint info, entries dropped by the CONSTROID inval callback (all at the session cleanup cache_mcx registers)
+backend/utils/adt/ri_triggers/src/lib.rs	RI_QUERY_CACHE	pgport	at:ri_FetchPreparedPlan	leader	RI triggers run on the leader; saved SPI plans, an invalid one dropped on fetch (all at session cleanup)
+backend/utils/adt/ri_triggers/src/lib.rs	RI_HASHTABLES_BUILT	pgport	at:cache_mcx	leader	RI triggers run on the leader; callback-registered flag, cleared by the session cleanup cache_mcx registers

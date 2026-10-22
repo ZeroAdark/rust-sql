@@ -457,6 +457,16 @@ pub fn parse_conninfo(s: &str) -> Result<Vec<(String, String)>, String> {
             }
         }
         let val = String::from_utf8_lossy(&val).into_owned();
+        // conninfo_storeval (uri_decode=false, ignoreMissing=false).
+        let (key, val) = if key == "requiressl" {
+            let v = if val.starts_with('1') { "require" } else { "prefer" };
+            ("sslmode".to_string(), v.to_string())
+        } else {
+            (key, val)
+        };
+        if lookup_option(&key).is_none() {
+            return Err(format!("invalid connection option \"{key}\""));
+        }
         opts.retain(|(k, _)| *k != key);
         opts.push((key, val));
     }
@@ -495,7 +505,9 @@ pub fn resolve_conninfo(conninfo: &str) -> Result<Vec<(String, String)>, String>
 // conninfo_add_defaults (fe-connect.c:6640): environment, then the compiled
 // default; the deprecated PGREQUIRESSL (a value starting with '1') stands in
 // for an unset PGSSLMODE as sslmode=require.
+// sslrootcert=system strengthens a COMPILED-DEFAULT sslmode to verify-full.
 fn add_defaults(opts: &mut Vec<(String, String)>, getenv: &dyn Fn(&str) -> Option<String>) {
+    let mut sslmode_default = false;
     for o in CONNINFO_OPTIONS {
         if opt(opts, o.keyword).is_some() {
             continue;
@@ -512,6 +524,16 @@ fn add_defaults(opts: &mut Vec<(String, String)>, getenv: &dyn Fn(&str) -> Optio
         }
         if let Some(def) = o.compiled {
             opts.push((o.keyword.to_string(), def.to_string()));
+            sslmode_default |= o.keyword == "sslmode";
+            continue;
+        }
+        if o.keyword == "user" {
+            opts.push((o.keyword.to_string(), super::os_user_name()));
+        }
+    }
+    if sslmode_default && opt(opts, "sslrootcert") == Some("system") {
+        if let Some(m) = opts.iter_mut().find(|(k, _)| k == "sslmode") {
+            m.1 = "verify-full".to_string();
         }
     }
 }
@@ -636,12 +658,29 @@ mod ws_tests {
         assert_eq!(o, vec![("port".to_string(), "5432".to_string())]);
         // Non-ASCII Unicode space is NOT conninfo whitespace: it becomes
         // part of the keyword.
-        let o = parse_conninfo("\u{a0}dbname=x").unwrap();
-        assert_eq!(o[0].0, "\u{a0}dbname");
+        let e = parse_conninfo("\u{a0}dbname=x").unwrap_err();
+        assert_eq!(e, "invalid connection option \"\u{a0}dbname\"");
+    }
+
+    #[test]
+    fn keyword_value_stores_like_conninfo_storeval() {
+        let o = parse_conninfo("dbname=x requiressl=0").unwrap();
+        assert_eq!(o[1], ("sslmode".to_string(), "prefer".to_string()));
+        let o = parse_conninfo("requiressl=1").unwrap();
+        assert_eq!(o[0], ("sslmode".to_string(), "require".to_string()));
+        // The first unknown keyword wins over a later syntax error.
+        let e = parse_conninfo("foo=1 dbname").unwrap_err();
+        assert_eq!(e, "invalid connection option \"foo\"");
     }
 }
 
-pub(crate) const DEFAULT_PGSOCKET_DIR: &str = "/tmp";
+// pg_config_manual.h DEFAULT_PGSOCKET_DIR. Distributions patch it (Debian:
+// /var/run/postgresql); the PGRUST_DEFAULT_PGSOCKET_DIR build env is that
+// patch, read alike by the server, initdb and every client.
+pub const DEFAULT_PGSOCKET_DIR: &str = match option_env!("PGRUST_DEFAULT_PGSOCKET_DIR") {
+    Some(d) => d,
+    None => "/tmp",
+};
 
 // pqConnectOptions2 (fe-connect.c:1440): the passfile option, else
 // ~/PGPASSFILE; None when no home directory can be found.
@@ -654,7 +693,7 @@ pub fn passfile_path(opts: &[(String, String)]) -> Option<String> {
 
 // pqGetHomeDirectory (fe-connect.c:8155): $HOME, else the effective uid's
 // passwd entry.
-fn home_directory() -> Option<String> {
+pub(crate) fn home_directory() -> Option<String> {
     if let Ok(home) = std::env::var("HOME") {
         if !home.is_empty() {
             return Some(home);
@@ -838,6 +877,19 @@ mod passfile_tests {
         assert_eq!(password_from_file("h1", "5432", "db", "bob", "/nonexistent/pgpass"), None);
     }
 
+    #[test]
+    fn keyword_value_requiressl_and_unknown_keyword() {
+        let o = super::parse_conninfo("dbname=x requiressl=0").unwrap();
+        assert_eq!(super::opt(&o, "sslmode"), Some("prefer"));
+        assert_eq!(super::opt(&o, "requiressl"), None);
+        let o = super::parse_conninfo("requiressl=1 password=p").unwrap();
+        assert_eq!(super::opt(&o, "sslmode"), Some("require"));
+        assert_eq!(
+            super::parse_conninfo("dbname=x bogus=1 port").unwrap_err(),
+            "invalid connection option \"bogus\""
+        );
+    }
+
     // conninfo_add_defaults (fe-connect.c:6670): PGREQUIRESSL=1 stands in
     // for an unset PGSSLMODE; PGSSLMODE and an explicit sslmode win; other
     // values are ignored.
@@ -859,8 +911,26 @@ mod passfile_tests {
         assert_eq!(resolved(&[], &[("PGREQUIRESSL", "true")]), "prefer");
         assert_eq!(resolved(&[], &[("PGREQUIRESSL", "1"), ("PGSSLMODE", "disable")]), "disable");
         assert_eq!(resolved(&[("sslmode", "allow")], &[("PGREQUIRESSL", "1")]), "allow");
+        // conninfo_add_defaults (fe-connect.c:6730): sslrootcert=system
+        // lifts only the compiled default to verify-full.
+        assert_eq!(resolved(&[("sslrootcert", "system")], &[]), "verify-full");
+        assert_eq!(resolved(&[], &[("PGSSLROOTCERT", "system")]), "verify-full");
+        assert_eq!(resolved(&[("sslrootcert", "system")], &[("PGSSLMODE", "require")]), "require");
+        assert_eq!(resolved(&[("sslrootcert", "system"), ("sslmode", "prefer")], &[]), "prefer");
         let mut opts = vec![];
         super::add_defaults(&mut opts, &env(&[("PGREQUIRESSL", "1"), ("PGPORT", "5999")]));
         assert_eq!(super::opt(&opts, "port"), Some("5999"));
+    }
+
+    // conninfo_add_defaults (fe-connect.c:6716): an unset user defaults to
+    // the OS user name, so PQconninfo always shows user=.
+    #[test]
+    fn user_defaults_to_the_os_user() {
+        let mut opts = vec![];
+        super::add_defaults(&mut opts, &|_| None);
+        assert_eq!(super::opt(&opts, "user"), Some(crate::os_user_name().as_str()));
+        let mut opts = vec![("user".to_string(), "rep".to_string())];
+        super::add_defaults(&mut opts, &|_| None);
+        assert_eq!(super::opt(&opts, "user"), Some("rep"));
     }
 }

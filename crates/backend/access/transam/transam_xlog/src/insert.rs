@@ -80,13 +80,17 @@ pub fn XLogInsertAllowed() -> bool {
     true
 }
 
+// D4156: a setter takes the current generation first, so a later refresh (RecoveryInProgress on this thread) keeps the
+// value it set instead of clearing it as a stale copy (StartupXLOG's force on a thread born before a crash reinit).
 pub(crate) fn LocalSetXLogInsertAllowed() -> i8 {
+    refresh_recovery_local_generation();
     let old = LOCAL_XLOG_INSERT_ALLOWED.get();
     LOCAL_XLOG_INSERT_ALLOWED.set(1);
     old
 }
 
 pub(crate) fn set_local_xlog_insert_allowed(v: i8) {
+    refresh_recovery_local_generation();
     LOCAL_XLOG_INSERT_ALLOWED.set(v);
 }
 
@@ -295,24 +299,37 @@ pub(crate) fn WaitXLogInsertionsToFinish(upto: XLogRecPtr) -> XLogRecPtr {
         }
     }
 
-    // pg_atomic_monotonic_advance_u64(logInsertResult, finishedUpto).
-    let mut cur = ctl.logInsertResult.load(Relaxed);
+    // xlog.c:1612: pg_atomic_monotonic_advance_u64(logInsertResult, finishedUpto).
+    advance_log_insert_result(&ctl.logInsertResult, finished_upto)
+}
+
+/// `pg_atomic_monotonic_advance_u64` (atomics.h:585-607) on
+/// `XLogCtl->logInsertResult`: advance to at least `target`, return the
+/// freshest value seen. Full barrier semantics even when unchanged: callers
+/// write WAL buffer bytes up to a value another backend published, so reading
+/// it must synchronize with that backend's CAS.
+pub(crate) fn advance_log_insert_result(
+    result: &std::sync::atomic::AtomicU64,
+    target: XLogRecPtr,
+) -> XLogRecPtr {
+    let mut cur = result.load(Relaxed);
     loop {
-        if cur >= finished_upto {
-            finished_upto = cur;
-            break;
+        if cur >= target {
+            // atomics.h:596: pg_memory_barrier() on the no-change path. A
+            // failed CAS loops back here, so it is covered too.
+            std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+            return cur;
         }
-        match ctl.logInsertResult.compare_exchange(
+        match result.compare_exchange(
             cur,
-            finished_upto,
+            target,
             std::sync::atomic::Ordering::SeqCst,
             Relaxed,
         ) {
-            Ok(_) => break,
+            Ok(_) => return target,
             Err(v) => cur = v,
         }
     }
-    finished_upto
 }
 
 pub(crate) fn GetXLogBuffer(ptr: XLogRecPtr, tli: TimeLineID) -> *mut u8 {
@@ -867,11 +884,16 @@ mod elog_helpers {
 }
 
 #[cfg(test)]
-mod recovery_generation_tests {
+pub(crate) mod recovery_generation_tests {
     use super::*;
+
+    // The generation is process-wide: the tests that bump it (tests.rs insert_flush_smoke's crash reset too) run one at
+    // a time.
+    pub(crate) static GENERATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn shmem_reset_generation_resets_the_local_copies() {
+        let _one = GENERATION.lock().unwrap_or_else(|e| e.into_inner());
         refresh_recovery_local_generation();
         LOCAL_RECOVERY_IN_PROGRESS.set(false);
         LOCAL_XLOG_INSERT_ALLOWED.set(1);
@@ -884,5 +906,58 @@ mod recovery_generation_tests {
         assert!(LOCAL_RECOVERY_IN_PROGRESS.get(), "recovery flag must start true again");
         assert_eq!(LOCAL_XLOG_INSERT_ALLOWED.get(), -1, "insert-allowed cache must be cleared");
         assert!(!refresh_recovery_local_generation(), "one reset per generation");
+    }
+
+    // D4156: StartupXLOG forces inserts on a thread whose copy predates the crash reinit's bump; the next
+    // RecoveryInProgress on that thread (CreateOverwriteContrecordRecord) must not clear the force.
+    #[test]
+    fn a_forced_insert_survives_the_next_refresh_after_a_reinit() {
+        let _one = GENERATION.lock().unwrap_or_else(|e| e.into_inner());
+        refresh_recovery_local_generation();
+        bump_recovery_local_generation();
+        LocalSetXLogInsertAllowed();
+        refresh_recovery_local_generation();
+        assert_eq!(LOCAL_XLOG_INSERT_ALLOWED.get(), 1, "the force was cleared as a stale copy");
+        bump_recovery_local_generation();
+        set_local_xlog_insert_allowed(0);
+        refresh_recovery_local_generation();
+        assert_eq!(LOCAL_XLOG_INSERT_ALLOWED.get(), 0, "the restored value was cleared as a stale copy");
+    }
+}
+
+#[cfg(test)]
+mod advance_log_insert_result_tests {
+    use super::advance_log_insert_result;
+    use std::sync::atomic::AtomicU64;
+
+    // Value semantics of pg_atomic_monotonic_advance_u64 (atomics.h:585-607).
+    // The ordering half (the atomics.h:596 fence) is argued from the memory
+    // model; a unit test cannot observe it.
+    #[test]
+    fn advances_never_regresses_and_returns_the_max() {
+        let v = AtomicU64::new(0x100);
+        assert_eq!(advance_log_insert_result(&v, 0x200), 0x200, "advance returns target");
+        assert_eq!(v.load(std::sync::atomic::Ordering::Relaxed), 0x200);
+        assert_eq!(advance_log_insert_result(&v, 0x180), 0x200, "smaller target returns current");
+        assert_eq!(v.load(std::sync::atomic::Ordering::Relaxed), 0x200, "no regress");
+        assert_eq!(advance_log_insert_result(&v, 0x200), 0x200, "equal target is a no-op");
+    }
+
+    #[test]
+    fn concurrent_advances_settle_on_the_max() {
+        let v = AtomicU64::new(0);
+        std::thread::scope(|s| {
+            for t in 0..4u64 {
+                let v = &v;
+                s.spawn(move || {
+                    for i in 0..1000u64 {
+                        let target = i * 4 + t;
+                        let got = advance_log_insert_result(v, target);
+                        assert!(got >= target, "returned {got} below target {target}");
+                    }
+                });
+            }
+        });
+        assert_eq!(v.load(std::sync::atomic::Ordering::Relaxed), 999 * 4 + 3);
     }
 }

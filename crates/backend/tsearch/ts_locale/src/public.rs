@@ -18,7 +18,10 @@ pub struct TsLexeme<'mcx> {
 }
 
 // stdio's BUFSIZ: the size of spell.c's per-field affix buffers.
+#[cfg(not(target_family = "wasm"))]
 pub const BUFSIZ: usize = libc::BUFSIZ as usize;
+#[cfg(target_family = "wasm")]
+pub const BUFSIZ: usize = 1024;
 
 pub const TSL_ADDPOS: u16 = 0x01;
 pub const TSL_PREFIX: u16 = 0x02;
@@ -37,7 +40,7 @@ pub struct LexDescr {
 }
 
 pub struct StopList<'mcx> {
-    pub stop: PgVec<'mcx, PgVec<'mcx, u8>>,
+    pub stop: PgVec<'mcx, &'mcx &'mcx [u8]>,
 }
 
 extern "C" {
@@ -62,13 +65,15 @@ fn classify(
     let clen = ::mbutils::pg_mblen_range(s).unwrap_or(1) as usize;
     if clen == 1 || ::pg_locale::database_ctype_is_c() {
         // SAFETY: pure ctype call on an unsigned-char-range value.
-        return Ok(unsafe { byte_class(s[0] as c_int) } != 0);
+        return Ok(::pg_locale::with_backend_ctype(|| unsafe { byte_class(s[0] as c_int) }) != 0);
     }
     let mut mb = [0u8; 8];
     mb[..clen].copy_from_slice(&s[..clen]);
     let mut wc: [libc::wchar_t; WC_BUF_LEN] = [0; WC_BUF_LEN];
     // SAFETY: mb is NUL-terminated; at most WC_BUF_LEN wchars written.
-    let n = unsafe { mbstowcs(wc.as_mut_ptr(), mb.as_ptr() as *const c_char, WC_BUF_LEN) };
+    let n = ::pg_locale::with_backend_ctype(|| unsafe {
+        mbstowcs(wc.as_mut_ptr(), mb.as_ptr() as *const c_char, WC_BUF_LEN)
+    });
     if n == usize::MAX {
         // char2wchar (pg_locale_libc.c): pg_verifymbstr might not return.
         ::mbutils::pg_verifymbstr(&s[..clen], false)?;
@@ -81,7 +86,7 @@ fn classify(
         ));
     }
     // SAFETY: pure wctype call.
-    Ok(unsafe { wide_class(wc[0] as u32) != 0 })
+    Ok(::pg_locale::with_backend_ctype(|| unsafe { wide_class(wc[0] as u32) }) != 0)
 }
 
 pub fn t_isalpha(s: &[u8]) -> PgResult<bool> {
@@ -158,7 +163,7 @@ pub fn get_tsearch_config_filename<'mcx>(
         }
     }
     // snprintf(result, MAXPGPATH, ...): the pathname is cut at MAXPGPATH-1 bytes.
-    let mut full = Vec::with_capacity(dir.len() + basename.len() + extension.len() + 2);
+    let mut full = ::mcx::std_vec_with_capacity("tsearch", dir.len() + basename.len() + extension.len() + 2)?;
     full.extend_from_slice(dir.as_bytes());
     full.push(b'/');
     full.extend_from_slice(basename);
@@ -354,7 +359,7 @@ pub fn readstoplist<'mcx>(
     fname: Option<&[u8]>,
     lower: bool,
 ) -> PgResult<StopList<'mcx>> {
-    let mut stop: PgVec<'mcx, PgVec<'mcx, u8>> = PgVec::new_in(mcx);
+    let mut stop: PgVec<'mcx, &'mcx &'mcx [u8]> = PgVec::new_in(mcx);
     if let Some(fname) = fname.filter(|f| !f.is_empty()) {
         let filename = get_tsearch_config_filename(mcx, fname, "stop")?;
         // ts_utils.c:84 — `could not open stop-word file "%s": %m`.
@@ -384,10 +389,11 @@ pub fn readstoplist<'mcx>(
                 w.extend_from_slice(&line[..end]);
                 w
             };
-            stop.push(word);
+            let word = rd.with_context(::mcx::vec_borrow_in(mcx, word))?;
+            stop.push(rd.with_context(::mcx::alloc_leak_in(mcx, word))?);
         }
     }
-    stop.sort_unstable_by(|a, b| a.as_slice().cmp(b.as_slice()));
+    stop.sort_unstable();
     Ok(StopList { stop })
 }
 
@@ -398,7 +404,7 @@ pub fn byte_isspace(b: u8) -> bool {
 
 pub fn searchstoplist(s: &StopList<'_>, key: &[u8]) -> bool {
     s.stop
-        .binary_search_by(|w| w.as_slice().cmp(key))
+        .binary_search_by(|w| (**w).cmp(key))
         .is_ok()
 }
 
@@ -437,6 +443,52 @@ mod classify_tests {
 }
 
 #[cfg(test)]
+mod byte_ctype_tests {
+    use core::ffi::{c_char, c_int};
+
+    extern "C" {
+        fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
+        fn isspace(c: c_int) -> c_int;
+        fn isprint(c: c_int) -> c_int;
+        fn isdigit(c: c_int) -> c_int;
+    }
+
+    // spell.c classifies affix/dictionary bytes with plain
+    // isspace/isprint/isdigit((unsigned char) c) — never t_isspace — under
+    // the backend's LC_CTYPE; pgrust's spell uses fixed ASCII tables
+    // (byte_isspace here is the same table readstoplist trims with). Under
+    // the UTF-8-only ruling (2026-09-16) LC_CTYPE is C/POSIX or *.UTF-8; in
+    // glibc every UTF-8 locale classifies bytes 0x80-0xFF as nothing, so the
+    // ASCII tables are libc-exact over all 256 bytes. macOS's UTF-8 rune
+    // table extends Latin-1 (0x85/0xA0 space, 0x80-0xFF printable), a libc
+    // quirk that is pinned here on the ASCII range only.
+    #[test]
+    fn byte_classifiers_match_libc_under_utf8_ctype() {
+        let mut set = false;
+        for name in [c"C.UTF-8", c"en_US.UTF-8", c"en_US.utf8"] {
+            // SAFETY: process-global setlocale; the sibling test sets the same.
+            if !unsafe { setlocale(libc::LC_CTYPE, name.as_ptr()) }.is_null() {
+                set = true;
+                break;
+            }
+        }
+        if !set {
+            return;
+        }
+        let range = if cfg!(target_os = "linux") { 0u32..256 } else { 0u32..128 };
+        for b in range {
+            // SAFETY: pure ctype calls on unsigned-char-range values.
+            let (sp, pr, dg) = unsafe {
+                (isspace(b as c_int) != 0, isprint(b as c_int) != 0, isdigit(b as c_int) != 0)
+            };
+            assert_eq!(sp, super::byte_isspace(b as u8), "isspace({b:#04x})");
+            assert_eq!(pr, (0x20..=0x7e).contains(&b), "isprint({b:#04x})");
+            assert_eq!(dg, (b as u8).is_ascii_digit(), "isdigit({b:#04x})");
+        }
+    }
+}
+
+#[cfg(test)]
 mod filename_tests {
     // ts_utils.c get_tsearch_config_filename: snprintf(result, MAXPGPATH, ...)
     // cuts an over-long pathname at MAXPGPATH-1 bytes.
@@ -452,5 +504,20 @@ mod filename_tests {
         assert!(path[dir.len() + 1..].iter().all(|&b| b == b'a'));
         let short = super::get_tsearch_config_filename(mcx, b"abc", "syn").unwrap();
         assert_eq!(&short[dir.len()..], b"/abc.syn");
+    }
+}
+
+#[cfg(test)]
+mod stoplist_tests {
+    use super::*;
+
+    #[test]
+    fn stoplist_index_grows_with_pointer_sized_entries() {
+        let ctx = ::mcx::MemoryContext::new("stoplist-index").with_limit(1024);
+        let mut list = StopList { stop: PgVec::new_in(ctx.mcx()) };
+        list.stop.try_reserve_exact(64).unwrap();
+        list.stop.try_reserve_exact(128).unwrap();
+        assert_eq!(ctx.used(), 128 * core::mem::size_of::<*const u8>());
+        assert!(list.stop.try_reserve_exact(129).is_err());
     }
 }

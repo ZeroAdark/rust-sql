@@ -297,39 +297,27 @@ pub fn read_key(
     let mut got_main_key = false;
 
     loop {
-        let hdr = match rdr.read_hdr().map_err(|_| CORRUPT_DATA.to_string())? {
+        let hdr = match rdr.read_hdr().map_err(|e| super::decrypt::hdr_failure(ctx, e))? {
             None => break,
             Some(h) => h,
         };
-        // pgp-decrypt.c:201 pktreader_pull: a truncated body reads as EOF.
-        let body = rdr.read_body_avail(&hdr).map_err(|_| CORRUPT_DATA.to_string())?;
-
-        let mut found: Option<PubKey> = None;
+        // pgp-pubkey.c:492: the tag decides before any body byte (or a
+        // partial-length continuation header) is read.
         match hdr.tag {
-            t if t == PGP_PKT_PUBLIC_KEY || t == PGP_PKT_SECRET_KEY => {
-                if got_main_key {
-                    return Err(MULTIPLE_KEYS.to_string());
-                }
-                got_main_key = true;
+            t if (t == PGP_PKT_PUBLIC_KEY || t == PGP_PKT_SECRET_KEY) && got_main_key => {
+                return Err(MULTIPLE_KEYS.to_string());
             }
-            t if t == PGP_PKT_PUBLIC_SUBKEY => {
-                if pubtype != 0 {
-                    return Err("Cannot decrypt with public key".to_string());
-                }
-                let mut pos = 0;
-                let (pk, last) = read_public_key_last(&body.data, &mut pos, ctx)?;
-                found = Some(pk);
-                // pgp-pubkey.c:529: the reader is freed without draining, so
-                // whatever follows the public fields is parsed as a header.
-                rdr.pos = body.pos_after_read(pos, last);
+            t if t == PGP_PKT_PUBLIC_SUBKEY && pubtype != 0 => {
+                return Err("Cannot decrypt with public key".to_string());
             }
-            t if t == PGP_PKT_SECRET_SUBKEY => {
-                if pubtype != 1 {
-                    return Err("Refusing to encrypt with secret key".to_string());
-                }
-                found = Some(process_secret_key(&body.data, psw, ctx)?);
+            t if t == PGP_PKT_SECRET_SUBKEY && pubtype != 1 => {
+                return Err("Refusing to encrypt with secret key".to_string());
             }
-            t if t == PGP_PKT_SIGNATURE
+            t if t == PGP_PKT_PUBLIC_KEY
+                || t == PGP_PKT_SECRET_KEY
+                || t == PGP_PKT_PUBLIC_SUBKEY
+                || t == PGP_PKT_SECRET_SUBKEY
+                || t == PGP_PKT_SIGNATURE
                 || t == PGP_PKT_MARKER
                 || t == PGP_PKT_TRUST
                 || t == PGP_PKT_USER_ID
@@ -339,6 +327,27 @@ pub fn read_key(
                 ctx.dbg(&format!("unknown/unexpected packet: {t}"));
                 return Err("Unexpected packet in key data".to_string());
             }
+        }
+        // pgp-decrypt.c:201 pktreader_pull: a truncated body reads as EOF.
+        let body = rdr.read_body_avail(&hdr).map_err(|e| super::decrypt::hdr_failure(ctx, e))?;
+
+        let mut found: Option<PubKey> = None;
+        match hdr.tag {
+            t if t == PGP_PKT_PUBLIC_KEY || t == PGP_PKT_SECRET_KEY => {
+                got_main_key = true;
+            }
+            t if t == PGP_PKT_PUBLIC_SUBKEY => {
+                let mut pos = 0;
+                let (pk, last) = read_public_key_last(&body.data, &mut pos, ctx)?;
+                found = Some(pk);
+                // pgp-pubkey.c:529: the reader is freed without draining, so
+                // whatever follows the public fields is parsed as a header.
+                rdr.pos = body.pos_after_read(pos, last);
+            }
+            t if t == PGP_PKT_SECRET_SUBKEY => {
+                found = Some(process_secret_key(&body.data, psw, ctx)?);
+            }
+            _ => {}
         }
 
         if let Some(pk) = found {

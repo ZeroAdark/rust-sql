@@ -1,0 +1,13 @@
+-- regress-full-misc_functions-005
+-- select * from pg_ls_waldir() limit 0;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=1 [1:Other fn3354 cols=3 fn3354()]
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  limit count=0 offset=all
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=vl:row 2=w8:val 3=w8:val
+  outs 1=vl:row 2=w8:val 3=w8:val
+mapped: FunctionScan Limit

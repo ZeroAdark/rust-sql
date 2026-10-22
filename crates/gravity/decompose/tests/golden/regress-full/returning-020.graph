@@ -1,0 +1,12 @@
+-- regress-full-returning-020
+-- INSERT INTO foo AS bar DEFAULT VALUES RETURNING bar.f3;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=fn480(fn1574(c2205:43612)), 2=c25:null, 3=c23:42, 4=c20:99)
+  write INSERT rel=43613 rti=1 natts=4 indexes=() returning
+  project (1=v1.3)
+  outs 1=w4:val 2=vl:stmt/imm 3=w4:val 4=w8:val
+  outs 1=w4:val
+mapped: Result ModifyTable

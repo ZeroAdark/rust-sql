@@ -1,0 +1,10 @@
+-- regress-full-join-244
+-- explain (verbose, costs off) select 1 from (select * from int8_tbl where q1 <> (select 42) offset 0) ss where false;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  gate T_List
+  project (1=c23:1)
+  outs 1=w4:val
+mapped: Result

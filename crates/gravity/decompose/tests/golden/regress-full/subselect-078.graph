@@ -1,0 +1,101 @@
+-- regress-full-subselect-078
+-- select count(*) from onek o cross join lateral ( select * from onek i1 where i1.unique1 = o.unique1 except select * from onek i2 where i2.unique1 = o.unique2 ) ss where o.ten = 1;
+graph pipelines=6 breakers=5 init_plans=0 root=p5
+p0 node=7 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n7@0 n5@1^
+  source index rel=16417 rti=6 am=heap index=19335
+    key att=1 op=96 value=$exec0
+    recheck (op96(v6.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=v6.4, 5=v6.5, 6=v6.6, 7=v6.7, 8=v6.8, 9=v6.9, 10=v6.10, 11=v6.11, 12=v6.12, 13=v6.13, 14=v6.14, 15=v6.15, 16=v6.16)
+  sort keys=1+:I32,2+:I32,3+:I32,4+:I32,5+:I32,6+:I32,7+:I32,8+:I32,9+:I32,10+:I32,11+:I32,12+:I32,13+:I32,14+:Fp128@950#19,15+:Fp128@950#19,16+:Fp128@950#19 form=runs
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page
+p1 node=5 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashAgg)
+  desc consumes=slot0@p0 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n5@0 n4@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=outer.10, 11=outer.11, 12=outer.12, 13=outer.13, 14=outer.14, 15=outer.15, 16=outer.16)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page
+p2 node=10 serial site=0 reason=IndexSource end=breaker(slot=2 Sort)
+  nodes n10@0 n8@1^
+  source index rel=16417 rti=7 am=heap index=19335
+    key att=1 op=96 value=$exec1
+    recheck (op96(v7.1, $exec1))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page
+  project (1=v7.1, 2=v7.2, 3=v7.3, 4=v7.4, 5=v7.5, 6=v7.6, 7=v7.7, 8=v7.8, 9=v7.9, 10=v7.10, 11=v7.11, 12=v7.12, 13=v7.13, 14=v7.14, 15=v7.15, 16=v7.16)
+  sort keys=1+:I32,2+:I32,3+:I32,4+:I32,5+:I32,6+:I32,7+:I32,8+:I32,9+:I32,10+:I32,11+:I32,12+:I32,13+:I32,14+:Fp128@950#19,15+:Fp128@950#19,16+:Fp128@950#19 form=runs
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page
+p3 node=8 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 HashAgg)
+  desc consumes=slot2@p2 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n8@0 n4@1^
+  source breaker slot=2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=outer.10, 11=outer.11, 12=outer.12, 13=outer.13, 14=outer.14, 15=outer.15, 16=outer.16)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page
+p4 node=2 eligible rows=100 end=breaker(slot=4 PlainAgg)
+  desc consumes=slot1@p1 consumes=slot3@p3
+  nodes n2@0 n1@2 n0@4^
+  source range rel=16417 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(5):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v1.5, c23:1)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  nest inner=n4 JOIN_INNER raise-free params=($exec0=outer.1, $exec1=outer.2)
+  inner node=4 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1 consumes=slot3@p3
+  nodes n4@0
+  source breaker slot=1
+  setop Except sorted left=slot1 right=slot3 groups=1 keys=1=97:I32,2=97:I32,3=97:I32,4=97:I32,5=97:I32,6=97:I32,7=97:I32,8=97:I32,9=97:I32,10=97:I32,11=97:I32,12=97:I32,13=97:I32,14=660:Fp128,15=660:Fp128,16=660:Fp128
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=outer.10, 11=outer.11, 12=outer.12, 13=outer.13, 14=outer.14, 15=outer.15, 16=outer.16)
+  project ()
+  outs 1=w8:val 2=w8:val 3=w4:val 4=w4:val 5=w8:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=fx64:row 15=fx64:row 16=fx64:row
+  outs
+p5 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot4@p4
+  nodes n0@0
+  source breaker slot=4
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[Count@152] 160B order=1+,2+,3+,4+,5+,6+,7+,8+
+breaker slot=1 kind=HashAgg budget=Pool spill=None producer=p1 layout=[I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[Count@152,Count@160,MinCode@168,MinCode@176,MinCode@184] 192B order=1+,2+,3+,4+,5+,6+,7+,8+
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p2 layout=[I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[Count@152] 160B order=1+,2+,3+,4+,5+,6+,7+,8+
+breaker slot=3 kind=HashAgg budget=Pool spill=None producer=p3 layout=[I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[Count@152,MinCode@160,MinCode@168,MinCode@176] 184B
+breaker slot=4 kind=PlainAgg budget=Fixed(64) spill=None producer=p4 layout=[]->[Count@0] 8B
+group slot=1 producer=p1 node=4 form=Sorted hints=[] layout=[I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[Count@152,Count@160,MinCode@168,MinCode@176,MinCode@184] 192B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  key 1 word=1 resno=2 kind=I32 attno=0 type=23 expr=outer.2
+  key 2 word=2 resno=3 kind=I32 attno=0 type=23 expr=outer.3
+  key 3 word=3 resno=4 kind=I32 attno=0 type=23 expr=outer.4
+  key 4 word=4 resno=5 kind=I32 attno=0 type=23 expr=outer.5
+  key 5 word=5 resno=6 kind=I32 attno=0 type=23 expr=outer.6
+  key 6 word=6 resno=7 kind=I32 attno=0 type=23 expr=outer.7
+  key 7 word=7 resno=8 kind=I32 attno=0 type=23 expr=outer.8
+  key 8 word=8 resno=9 kind=I32 attno=0 type=23 expr=outer.9
+  key 9 word=9 resno=10 kind=I32 attno=0 type=23 expr=outer.10
+  key 10 word=10 resno=11 kind=I32 attno=0 type=23 expr=outer.11
+  key 11 word=11 resno=12 kind=I32 attno=0 type=23 expr=outer.12
+  key 12 word=12 resno=13 kind=I32 attno=0 type=23 expr=outer.13
+  key 13 word=13 resno=14 kind=Fp128 attno=0 type=19 rep=2 expr=outer.14
+  key 14 word=15 resno=15 kind=Fp128 attno=0 type=19 rep=3 expr=outer.15
+  key 15 word=17 resno=16 kind=Fp128 attno=0 type=19 rep=4 expr=outer.16
+group slot=3 producer=p3 node=4 form=Hashed hints=[] layout=[I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,I32,Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[Count@152,MinCode@160,MinCode@168,MinCode@176] 184B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  key 1 word=1 resno=2 kind=I32 attno=0 type=23 expr=outer.2
+  key 2 word=2 resno=3 kind=I32 attno=0 type=23 expr=outer.3
+  key 3 word=3 resno=4 kind=I32 attno=0 type=23 expr=outer.4
+  key 4 word=4 resno=5 kind=I32 attno=0 type=23 expr=outer.5
+  key 5 word=5 resno=6 kind=I32 attno=0 type=23 expr=outer.6
+  key 6 word=6 resno=7 kind=I32 attno=0 type=23 expr=outer.7
+  key 7 word=7 resno=8 kind=I32 attno=0 type=23 expr=outer.8
+  key 8 word=8 resno=9 kind=I32 attno=0 type=23 expr=outer.9
+  key 9 word=9 resno=10 kind=I32 attno=0 type=23 expr=outer.10
+  key 10 word=10 resno=11 kind=I32 attno=0 type=23 expr=outer.11
+  key 11 word=11 resno=12 kind=I32 attno=0 type=23 expr=outer.12
+  key 12 word=12 resno=13 kind=I32 attno=0 type=23 expr=outer.13
+  key 13 word=13 resno=14 kind=Fp128 attno=0 type=19 rep=1 expr=outer.14
+  key 14 word=15 resno=15 kind=Fp128 attno=0 type=19 rep=2 expr=outer.15
+  key 15 word=17 resno=16 kind=Fp128 attno=0 type=19 rep=3 expr=outer.16
+group slot=4 producer=p4 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+rerun node=1 pipelines=p0,p1,p2,p3 slots=0,1,2,3
+param $exec0 owner=n1 type=23 rep=w8:val
+param $exec1 owner=n1 type=23 rep=w8:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam Sort Agg SetOp

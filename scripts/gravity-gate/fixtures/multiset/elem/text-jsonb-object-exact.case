@@ -1,0 +1,10 @@
+# jsonb_object_agg stays exact
+sql: SELECT jsonb_object_agg(k, v) FROM t;
+cols: jsonb_object_agg
+tables: t
+class: unordered
+verdict: mismatch
+[pg]
+{"a": 1, "b": 2}
+[got]
+{"b": 2, "a": 1}

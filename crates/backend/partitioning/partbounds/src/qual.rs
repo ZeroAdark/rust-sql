@@ -209,6 +209,27 @@ enum OpArg<'mcx> {
     List(NodeList<'mcx>),
 }
 
+// partbounds.c:4424: C builds `lower = upper` from the opfamily's btree `=`
+// (get_partition_operator errors when it is missing) and evaluates it; a NULL
+// result reads as false.
+fn range_bound_values_equal(
+    mcx: Mcx<'_>,
+    key: &PartitionKeyData,
+    col: usize,
+    lower: &Const,
+    upper: &Const,
+) -> PgResult<bool> {
+    let (eqop, _) = get_partition_operator(key, col, BTEqualStrategyNumber)?;
+    let mut finfo = fmgr_seams::fmgr_info::call(lsyscache::get_opcode(eqop)?)?;
+    let mut fcinfo = LocalFcinfo::<2>::new(key.partcollation[col]);
+    // SAFETY: `mcx` outlives this stack frame's single call.
+    unsafe { fcinfo.set_result_mcx(mcx) };
+    fcinfo.set_arg(0, lower.constvalue);
+    fcinfo.set_arg(1, upper.constvalue);
+    let r = finfo.invoke(&mut fcinfo)?;
+    Ok(!fcinfo.isnull && r.as_bool())
+}
+
 fn make_partition_op_expr<'mcx>(
     mcx: Mcx<'mcx>,
     key: &PartitionKeyData,
@@ -666,9 +687,7 @@ fn get_qual_for_range<'mcx>(
         let (Some(lv), Some(_uv)) = (lower_val, upper_val) else { break };
         let lc = lv.as_variant::<Const>().expect("Const");
         let uc = upper_val.unwrap().as_variant::<Const>().expect("Const");
-        // C evaluates the btree = operator via the executor here; the
-        // partsupfunc comparator == 0 is equivalent for btree opfamilies.
-        if key.cmp(i, lc.constvalue, uc.constvalue)? != 0 {
+        if !range_bound_values_equal(mcx, key, i, lc, uc)? {
             break;
         }
         if i == partnatts - 1 {
@@ -1077,7 +1096,7 @@ pub fn check_default_partition_contents<'mcx>(
         // for every row (partbounds.c:3378-3395): by-ref call results and
         // detoasted copies land here and are freed before the next tuple,
         // so memory does not grow with the partition.
-        let mut per_tuple = mcx::MemoryContext::new_bump("DefaultPartitionCheckPerTuple");
+        let mut per_tuple = mcx::MemoryContext::new_wholesale("DefaultPartitionCheckPerTuple");
         // SAFETY: per_tuple is a stack local of this iteration that outlives
         // every evaluation of `state` below and is never moved.
         unsafe { state.arm_result_mcx_raw(per_tuple.mcx()) };

@@ -74,6 +74,10 @@ impl PgpCfb {
         dst
     }
 
+    pub fn decrypt_into(&mut self, data: &[u8], dst: &mut [u8]) {
+        self.process(data, dst, false);
+    }
+
     fn process(&mut self, data: &[u8], dst: &mut [u8], enc: bool) {
         let bs = self.block_size;
         let mut di = 0usize; // index into data/dst

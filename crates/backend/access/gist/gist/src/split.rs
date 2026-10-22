@@ -50,7 +50,7 @@ fn gistunionsubkeyvec(
     attr: &mut [Datum],
     isnull: &mut [bool],
 ) -> PgResult<()> {
-    let mut cleaned: Vec<ITup> = Vec::with_capacity(entries.len());
+    let mut cleaned: Vec<ITup> = ::mcx::std_vec_with_capacity("access", entries.len())?;
     for &e in entries {
         if let Some(dc) = dontcare {
             if dc[e as usize] {
@@ -261,8 +261,8 @@ fn genericPickSplit(
 ) -> PgResult<()> {
     let maxoff = (entryvec.n - 1) as OffsetNumber;
 
-    v.spl_left = Vec::with_capacity(maxoff as usize + 2);
-    v.spl_right = Vec::with_capacity(maxoff as usize + 2);
+    v.spl_left = ::mcx::std_vec_with_capacity("access", maxoff as usize + 2)?;
+    v.spl_right = ::mcx::std_vec_with_capacity("access", maxoff as usize + 2)?;
 
     for i in FirstOffsetNumber..=maxoff {
         if i <= (maxoff - FirstOffsetNumber + 1) / 2 {
@@ -277,7 +277,7 @@ fn genericPickSplit(
     {
         let evec = GistEntryVector {
             n: nleft as i32,
-            vector: entryvec.vector[1..1 + nleft].to_vec(),
+            vector: ::mcx::std_vec_from_slice("access", &entryvec.vector[1..1 + nleft])?,
         };
         v.spl_ldatum = giststate.call_union(mcx, attno, &evec)?;
     }
@@ -285,7 +285,7 @@ fn genericPickSplit(
         let nright = v.spl_right.len();
         let evec = GistEntryVector {
             n: nright as i32,
-            vector: entryvec.vector[1 + nleft..1 + nleft + nright].to_vec(),
+            vector: ::mcx::std_vec_from_slice("access", &entryvec.vector[1 + nleft..1 + nleft + nright])?,
         };
         v.spl_rdatum = giststate.call_union(mcx, attno, &evec)?;
     }
@@ -388,7 +388,7 @@ fn gistUserPicksplit(
             return Ok(true);
         }
 
-        v.spl_dontcare = Some(vec![false; entryvec.n as usize + 1]);
+        v.spl_dontcare = Some(::mcx::std_vec_from_elem("access", false, entryvec.n as usize + 1)?);
 
         let valvec = &entryvec.vector;
         let num_dont_care = {
@@ -439,9 +439,9 @@ fn gistUserPicksplit(
 }
 
 // gistSplitHalf.
-fn gistSplitHalf(v: &mut GistSplitVec, len: usize) {
-    v.spl_left = Vec::with_capacity(len);
-    v.spl_right = Vec::with_capacity(len);
+fn gistSplitHalf(v: &mut GistSplitVec, len: usize) -> PgResult<()> {
+    v.spl_left = ::mcx::std_vec_with_capacity("access", len)?;
+    v.spl_right = ::mcx::std_vec_with_capacity("access", len)?;
     for i in 1..=len {
         if i < len / 2 {
             v.spl_right.push(i as OffsetNumber);
@@ -449,6 +449,7 @@ fn gistSplitHalf(v: &mut GistSplitVec, len: usize) {
             v.spl_left.push(i as OffsetNumber);
         }
     }
+    Ok(())
 }
 
 /// gistSplitByKey: outside caller passes attno == 0 and all-true
@@ -464,9 +465,9 @@ pub fn gistSplitByKey(
     let len = itup.len();
     let mut entryvec = GistEntryVector {
         n: len as i32 + 1,
-        vector: vec![GISTENTRY::default(); len + 1],
+        vector: ::mcx::std_vec_from_elem("access", GISTENTRY::default(), len + 1)?,
     };
-    let mut off_null_tuples: Vec<OffsetNumber> = Vec::with_capacity(len);
+    let mut off_null_tuples: Vec<OffsetNumber> = ::mcx::std_vec_with_capacity("access", len)?;
 
     for i in 1..=len {
         let (datum, is_null) = gist_index_getattr(itup[i - 1], attno + 1, giststate);
@@ -493,14 +494,14 @@ pub fn gistSplitByKey(
         if attno + 1 < giststate.nonLeafTupdesc.natts as usize {
             gistSplitByKey(mcx, r, itup, giststate, v, attno + 1)?;
         } else {
-            gistSplitHalf(&mut v.splitVector, len);
+            gistSplitHalf(&mut v.splitVector, len)?;
         }
     } else if n_off_null_tuples > 0 {
         // split nulls to the right page, not-nulls to the left
         v.splitVector.spl_right = off_null_tuples;
         v.spl_risnull[attno] = true;
 
-        v.splitVector.spl_left = Vec::with_capacity(len);
+        v.splitVector.spl_left = ::mcx::std_vec_with_capacity("access", len)?;
         let mut j = 0usize;
         for i in 1..=len as OffsetNumber {
             if j < v.splitVector.spl_right.len() && v.splitVector.spl_right[j] == i {
@@ -523,8 +524,8 @@ pub fn gistSplitByKey(
                 gistSplitByKey(mcx, r, itup, giststate, v, attno + 1)?;
             } else {
                 let dc = v.spl_dontcare.take().expect("dontcare set");
-                let mut newitup: Vec<ITup> = Vec::with_capacity(len);
-                let mut map: Vec<OffsetNumber> = Vec::with_capacity(len);
+                let mut newitup: Vec<ITup> = ::mcx::std_vec_with_capacity("access", len)?;
+                let mut map: Vec<OffsetNumber> = ::mcx::std_vec_with_capacity("access", len)?;
                 for i in 0..len {
                     if dc[i + 1] {
                         newitup.push(itup[i]);

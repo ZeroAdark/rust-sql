@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/lib/bipartite_match.c: 1 stack-depth check sites
+161	hk_depth_search	crates/backend/optimizer/plan/planner/src/groupingsets.rs	hk_depth_search	yes	

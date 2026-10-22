@@ -1,0 +1,14 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/walmodel.rs
+growth	std::collections::BTreeMap::entry	2
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	6
+macro	std::format	8
+macro	std::vec	7
+method	pgrc_format::try_to_vec	2
+method	std::clone::Clone::clone	42
+method	std::iter::Iterator::collect	3
+method	std::string::ToString::to_string	12
+method	std::sync::Arc::new	1
+type	std::string::String	9
+type	std::sync::Arc	2
+type	std::vec::Vec	1

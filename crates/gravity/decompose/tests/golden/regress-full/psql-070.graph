@@ -1,0 +1,32 @@
+-- regress-full-psql-070
+-- SELECT s.srvname AS "Name", pg_catalog.pg_get_userbyid(s.srvowner) AS "Owner", f.fdwname AS "Foreign-data wrapper" FROM pg_catalog.pg_foreign_server s JOIN pg_catalog.pg_foreign_data_wrapper f ON f.oid=s.srvfdw WHERE s.srvname OPERATOR(pg_catalog.~) E'^(no\\.such\\.foreign\\.server)$' COLLATE pg_catalog.default ORDER BY 1;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=4 eligible rows=1 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n4@0 n3@2
+  source range rel=1417 rti=1 am=heap
+    lanes Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  filter op639(v1.2, c25:'^(no\.such\.foreign\.server)$')
+  project (1=v1.2, 2=v1.3, 3=v1.4)
+  build keys=(outer.3) decls=26/26:I32
+  outs 1=fx64:win/page 2=w8:val 3=w8:val
+p1 node=2 eligible rows=47 end=breaker(slot=1 Sort)
+  desc consumes=slot0@p0 finishing
+  nodes n2@0 n1@1 n0@3^
+  source range rel=2328 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7)
+  probe slot=0 inner=n3 JOIN_INNER keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.3))
+  project (1=inner.1, 2=fn1642(inner.2), 3=outer.2)
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=w4:val 5=w4:val 6=vl:row 7=vl:row
+  outs 1=fx64:life/breaker 2=fx64:call1642 3=fx64:win/page
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=fx64:life/breaker 2=fx64:call1642 3=fx64:win/page
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+mapped: SeqScan HashJoin Sort Hash

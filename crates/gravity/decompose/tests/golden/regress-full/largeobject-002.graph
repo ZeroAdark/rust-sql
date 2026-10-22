@@ -1,0 +1,10 @@
+-- regress-full-largeobject-002
+-- DO 'DECLARE loid oid; BEGIN SELECT tbl.loid INTO loid FROM lotest_stash_values tbl; PERFORM lo_export(loid, ''<outputdir>/results/invalid/path''); EXCEPTION WHEN UNDEFINED_FILE THEN RAISE NOTICE ''could not open file, as expected''; END';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2260 end=sink
+  nodes n0@0
+  source range rel=43700 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  outs 1=w8:val
+mapped: SeqScan

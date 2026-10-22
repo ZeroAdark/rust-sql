@@ -526,6 +526,8 @@ mod tests {
     // Traditional/xdes DES known vectors (crypt-des.c), incl. adversarial salt.
     #[test]
     fn des_known_vectors() {
+        // DES rounds call CHECK_FOR_INTERRUPTS: install the seam here (unlimited budget), never rely on a sibling.
+        arm_cfi(u64::MAX);
         assert_eq!(ok(crypt(b"foob", b"rl")), "rlK6kmJqyMjZM");
         assert_eq!(ok(crypt(b"password", b"_/!!!!!!!")), "_/!!!!!!!zqM49hRzxko");
     }

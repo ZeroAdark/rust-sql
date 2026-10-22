@@ -1,0 +1,3 @@
+path	crates/gravity/hosts/src/ops/scan/index_window/raw.rs
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::resize	1

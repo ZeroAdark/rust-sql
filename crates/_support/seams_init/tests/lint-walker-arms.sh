@@ -13,13 +13,16 @@
 #
 # Standalone:   crates/_support/seams_init/tests/lint-walker-arms.sh   (exit 0 = clean)
 # Unit-shaped:  cargo test -p seams_init --test lint_walker_arms
-# Full report:  python3 tools/walker-arms/walker_arms.py audit --tsv out.tsv --md out.md
+# Full report:  python3 internal/tools/walker-arms/walker_arms.py audit --tsv out.tsv --md out.md
 set -u
 
-REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-TOOL="$REPO/tools/walker-arms/walker_arms.py"
+# REPO is the public workspace root; the tool lives in the sibling internal/
+# tree (PGRUST_INTERNAL_TOOLS overrides), which the public release tree lacks.
+REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
+TOOL="${PGRUST_INTERNAL_TOOLS:-$REPO/../internal/tools}/walker-arms/walker_arms.py"
 ALLOWLIST="${LINT_WALKER_ARMS_ALLOWLIST:-$REPO/crates/_support/seams_init/tests/lint-walker-arms.allow}"
-[ -f "$TOOL" ] || { echo "lint-walker-arms: $TOOL not found"; exit 2; }
+[ -f "$TOOL" ] || { echo "lint-walker-arms: $TOOL not present (public tree) — skipping"; exit 0; }
+"$REPO/scripts/pg-reference.sh" >/dev/null || true
 [ -d "$REPO/crates/postgres-18.6-reference/src/backend" ] || {
     echo "lint-walker-arms: reference tree missing (sparse checkout?) — skipping"; exit 0; }
 

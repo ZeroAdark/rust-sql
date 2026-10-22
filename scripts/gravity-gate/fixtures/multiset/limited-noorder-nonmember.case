@@ -1,0 +1,15 @@
+# LIMIT without ORDER BY: a row PG's unlimited result does not have
+sql: SELECT x FROM t LIMIT 2;
+cols: x
+class: limited
+verdict: mismatch
+[pg]
+1
+2
+[pg_full]
+1
+2
+3
+[got]
+4
+1

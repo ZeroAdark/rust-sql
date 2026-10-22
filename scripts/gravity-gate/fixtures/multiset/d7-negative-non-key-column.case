@@ -1,0 +1,11 @@
+# V4R-270 (D7, main 09-26): an equal-not-identical group / DISTINCT key outputs any member of its group; eqk maps the key
+# column's texts to their class under PG's `=` (the rig asks PG); everything else stays exact
+# a numeric aggregate beside the key is no key: sum 1.50 against 1.5 stays a mismatch
+sql: SELECT g, sum(n) FROM t GROUP BY g;
+eqk: 1	1	1
+class: unordered
+verdict: mismatch
+[pg]
+1	1.50
+[got]
+1	1.5

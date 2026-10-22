@@ -1,0 +1,10 @@
+-- sortmerge-004
+-- SELECT a, b FROM fs ORDER BY a, b; -- the scan marked on text column t (sortmerge: a text key is a datum lane)
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=SortedSource end=sink
+  nodes n0@0
+  source range rel=16463 rti=1 am=pgrc merge=3
+    lanes Attr(1):byval4:w4:val Attr(2):byval4:w4:val Attr(3):byref8:vl:win/arena Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=w4:val
+mapped: SeqScan

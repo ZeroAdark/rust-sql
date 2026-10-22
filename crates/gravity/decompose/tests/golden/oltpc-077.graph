@@ -1,0 +1,10 @@
+-- oltpc-077
+-- INSERT INTO orders (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local) VALUES (999999, $1, $2, $3, now(), 5, 1) /* C22 NO insert orders */
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=fn1299(), 2=c23:999999, 3=$2, 4=$3, 5=$1, 6=c21:null, 7=c21:5, 8=c21:1)
+  write INSERT rel=16492 rti=1 natts=8 indexes=(16502[3, 5, 2]up, 16518[3, 5, 4, 2]u)
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w4:val 5=w2:val 6=w2:val 7=w2:val 8=w2:val
+mapped: Result ModifyTable

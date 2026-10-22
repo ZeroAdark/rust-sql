@@ -1,0 +1,298 @@
+Parsed test spec with 5 sessions
+
+starting permutation: s2b s2xa s1v s2agg s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xa: EXPLAIN (COSTS OFF) SELECT count(*), sum(v) FROM (SELECT v FROM ep WHERE grp = 0 FOR UPDATE) s;
+QUERY PLAN                           
+-------------------------------------
+Aggregate                            
+  ->  Subquery Scan on s             
+        ->  LockRows                 
+              ->  Seq Scan on ep     
+                    Filter: (grp = 0)
+(5 rows)
+
+step s1v: UPDATE ep SET v = v + 1000 WHERE id = 3;
+step s2agg: SELECT count(*), sum(v) FROM (SELECT v FROM ep WHERE grp = 0 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2agg: <... completed>
+count| sum
+-----+----
+   10|1165
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v FROM ep WHERE grp = 0 OR id IN (6, 9) ORDER BY id;
+id|grp|   v
+--+---+----
+ 3|  0|1003
+ 6|  0|   6
+ 9|  0|   9
+12|  0|  12
+15|  0|  15
+18|  0|  18
+21|  0|  21
+24|  0|  24
+27|  0|  27
+30|  0|  30
+(10 rows)
+
+
+starting permutation: s2b s1g s2agg s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1g: UPDATE ep SET grp = 1 WHERE id = 6;
+step s2agg: SELECT count(*), sum(v) FROM (SELECT v FROM ep WHERE grp = 0 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2agg: <... completed>
+count|sum
+-----+---
+    9|159
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v FROM ep WHERE grp = 0 OR id IN (6, 9) ORDER BY id;
+id|grp| v
+--+---+--
+ 3|  0| 3
+ 6|  1| 6
+ 9|  0| 9
+12|  0|12
+15|  0|15
+18|  0|18
+21|  0|21
+24|  0|24
+27|  0|27
+30|  0|30
+(10 rows)
+
+
+starting permutation: s2b s1d s2agg s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1d: DELETE FROM ep WHERE id = 9;
+step s2agg: SELECT count(*), sum(v) FROM (SELECT v FROM ep WHERE grp = 0 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2agg: <... completed>
+count|sum
+-----+---
+    9|156
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v FROM ep WHERE grp = 0 OR id IN (6, 9) ORDER BY id;
+id|grp| v
+--+---+--
+ 3|  0| 3
+ 6|  0| 6
+12|  0|12
+15|  0|15
+18|  0|18
+21|  0|21
+24|  0|24
+27|  0|27
+30|  0|30
+(9 rows)
+
+
+starting permutation: s2b s2xc s1v s2cte s1c s1nw9 s1nw6 s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xc: EXPLAIN (COSTS OFF) WITH c AS MATERIALIZED (SELECT id, v FROM ep WHERE grp = 0 FOR UPDATE) SELECT id, v FROM c LIMIT 2;
+QUERY PLAN                       
+---------------------------------
+Limit                            
+  CTE c                          
+    ->  LockRows                 
+          ->  Seq Scan on ep     
+                Filter: (grp = 0)
+  ->  CTE Scan on c              
+(6 rows)
+
+step s1v: UPDATE ep SET v = v + 1000 WHERE id = 3;
+step s2cte: WITH c AS MATERIALIZED (SELECT id, v FROM ep WHERE grp = 0 FOR UPDATE) SELECT id, v FROM c LIMIT 2; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+id|   v
+--+----
+ 3|1003
+ 6|   6
+(2 rows)
+
+step s1nw9: SELECT id FROM ep WHERE id = 9 FOR UPDATE NOWAIT;
+id
+--
+ 9
+(1 row)
+
+step s1nw6: SELECT id FROM ep WHERE id = 6 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "ep"
+step s2c: COMMIT;
+
+starting permutation: s2b s1r s2fk s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1r: UPDATE eprng SET valid_at = '[2021-01-01,2021-06-01)' WHERE id = '[1,2)' AND valid_at = '[2021-01-01,2022-01-01)';
+step s2fk: INSERT INTO epref VALUES ('[1,2)', '[2020-06-01,2021-09-01)', '[1,2)'); <waiting ...>
+step s1c: COMMIT;
+step s2fk: <... completed>
+ERROR:  insert or update on table "epref" violates foreign key constraint "epref_parent_id_valid_at_fkey"
+step s2c: COMMIT;
+
+starting permutation: s2b s1r s2fkok s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1r: UPDATE eprng SET valid_at = '[2021-01-01,2021-06-01)' WHERE id = '[1,2)' AND valid_at = '[2021-01-01,2022-01-01)';
+step s2fkok: INSERT INTO epref VALUES ('[2,3)', '[2020-06-01,2021-03-01)', '[1,2)'); <waiting ...>
+step s1c: COMMIT;
+step s2fkok: <... completed>
+step s2c: COMMIT;
+
+starting permutation: s2b s2xl s1v s2lim s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xl: EXPLAIN (COSTS OFF) SELECT count(*), sum(v) FROM (SELECT v FROM ep WHERE grp = 0 FOR UPDATE LIMIT 20) s WHERE v > 100;
+QUERY PLAN                                 
+-------------------------------------------
+Aggregate                                  
+  ->  Subquery Scan on s                   
+        Filter: (s.v > 100)                
+        ->  Limit                          
+              ->  LockRows                 
+                    ->  Seq Scan on ep     
+                          Filter: (grp = 0)
+(7 rows)
+
+step s1v: UPDATE ep SET v = v + 1000 WHERE id = 3;
+step s2lim: SELECT count(*), sum(v) FROM (SELECT v FROM ep WHERE grp = 0 FOR UPDATE LIMIT 20) s WHERE v > 100; <waiting ...>
+step s1c: COMMIT;
+step s2lim: <... completed>
+count| sum
+-----+----
+    1|1003
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s5b s5x s1v s5hj s1c s5c
+step s5b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s5x: EXPLAIN (COSTS OFF) SELECT count(*), sum(s.v) FROM ep a JOIN (SELECT id, v FROM ep WHERE grp = 0 FOR UPDATE) s ON s.id = a.id;
+QUERY PLAN                                       
+-------------------------------------------------
+Aggregate                                        
+  ->  Hash Join                                  
+        Hash Cond: (a.id = s.id)                 
+        ->  Seq Scan on ep a                     
+        ->  Hash                                 
+              ->  Subquery Scan on s             
+                    ->  LockRows                 
+                          ->  Seq Scan on ep     
+                                Filter: (grp = 0)
+(9 rows)
+
+step s1v: UPDATE ep SET v = v + 1000 WHERE id = 3;
+step s5hj: SELECT count(*), sum(s.v) FROM ep a JOIN (SELECT id, v FROM ep WHERE grp = 0 FOR UPDATE) s ON s.id = a.id; <waiting ...>
+step s1c: COMMIT;
+step s5hj: <... completed>
+count| sum
+-----+----
+   10|1165
+(1 row)
+
+step s5c: COMMIT;
+
+starting permutation: s5b s5xe s1q3 s5e s1qn6 s1c s5c
+step s5b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s5xe: EXPLAIN (COSTS OFF) SELECT count(*), sum(s.v) FROM epe a JOIN (SELECT id, v FROM eq WHERE grp = 0 FOR UPDATE) s ON s.id = a.id;
+QUERY PLAN                                       
+-------------------------------------------------
+Aggregate                                        
+  ->  Hash Join                                  
+        Hash Cond: (a.id = s.id)                 
+        ->  Seq Scan on epe a                    
+        ->  Hash                                 
+              ->  Subquery Scan on s             
+                    ->  LockRows                 
+                          ->  Seq Scan on eq     
+                                Filter: (grp = 0)
+(9 rows)
+
+step s1q3: SELECT id FROM eq WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s5e: SELECT count(*), sum(s.v) FROM epe a JOIN (SELECT id, v FROM eq WHERE grp = 0 FOR UPDATE) s ON s.id = a.id;
+count|sum
+-----+---
+    0|   
+(1 row)
+
+step s1qn6: SELECT id FROM eq WHERE id = 6 FOR UPDATE NOWAIT;
+id
+--
+ 6
+(1 row)
+
+step s1c: COMMIT;
+step s5c: COMMIT;
+
+starting permutation: s5b s5xo s5o s1qn6 s1qn3 s1c s5c
+step s5b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s5xo: EXPLAIN (COSTS OFF) WITH c AS MATERIALIZED (SELECT id, v FROM eq WHERE grp = 0 FOR UPDATE) SELECT count(*) FROM c JOIN eq b ON b.id = c.id + 1 WHERE b.id < 0;
+QUERY PLAN                            
+--------------------------------------
+Aggregate                             
+  CTE c                               
+    ->  LockRows                      
+          ->  Seq Scan on eq          
+                Filter: (grp = 0)     
+  ->  Hash Join                       
+        Hash Cond: ((c.id + 1) = b.id)
+        ->  CTE Scan on c             
+        ->  Hash                      
+              ->  Seq Scan on eq b    
+                    Filter: (id < 0)  
+(11 rows)
+
+step s5o: WITH c AS MATERIALIZED (SELECT id, v FROM eq WHERE grp = 0 FOR UPDATE) SELECT count(*) FROM c JOIN eq b ON b.id = c.id + 1 WHERE b.id < 0;
+count
+-----
+    0
+(1 row)
+
+step s1qn6: SELECT id FROM eq WHERE id = 6 FOR UPDATE NOWAIT;
+id
+--
+ 6
+(1 row)
+
+step s1qn3: SELECT id FROM eq WHERE id = 3 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "eq"
+step s1c: COMMIT;
+step s5c: COMMIT;
+
+starting permutation: s3b s3snap s1v s3agg s1c s3c
+step s3b: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s3snap: SELECT count(*) FROM ep;
+count
+-----
+   30
+(1 row)
+
+step s1v: UPDATE ep SET v = v + 1000 WHERE id = 3;
+step s3agg: SELECT count(*), sum(v) FROM (SELECT v FROM ep WHERE grp = 0 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s3agg: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s3c: COMMIT;
+
+starting permutation: s3b s3snap s1d s3agg s1c s3c
+step s3b: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s3snap: SELECT count(*) FROM ep;
+count
+-----
+   30
+(1 row)
+
+step s1d: DELETE FROM ep WHERE id = 9;
+step s3agg: SELECT count(*), sum(v) FROM (SELECT v FROM ep WHERE grp = 0 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s3agg: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s3c: COMMIT;

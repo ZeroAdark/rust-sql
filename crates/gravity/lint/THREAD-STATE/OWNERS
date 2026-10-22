@@ -1,0 +1,14 @@
+claim	the claim registry (hosts worker_arm.rs CLAIM_REGISTRY) and the statics its members carry	isojoin
+memory	the memory crates (mcx, memledger, mempolicy, memruntime), gravity driver/src/mem and exec inputs/knobs/grant.rs: rows only, their code is the memory lanes'	memlead
+deps	recorded dependencies and the invalidation epochs, stamps and catalog-keyed memos (gravity/deps, keysem epoch, pgrc residency, hosts facts)	rxcursor
+admission	a statement's admission and start: exec admit entry / regen / front, exec inputs knobs, exec runner admission, decompose admit / bake, the backend's row estimate	rxcursor
+lifetime	reentry levels, kept executions and portals (exec admit reentry / kept, exec runner portal / execute)	lifetime
+effects	the effects home (decompose effects and facts, lowerv4 effects)	effects
+licence	run-ahead licences (decompose effects/licence.rs)	licence
+keys	key and type semantics (fn typesem, keysem, kernels typesem)	keyrep
+lowering	lowering scopes (lowerv4, lower, expr, fn resolved, program externs, decompose normalize)	- (main assigns)
+runtime	the run-time machinery of a thread (driver, parallel, abi, dict, fn, hosts runtime, kernels, backend interp)	- (main assigns)
+writes	writes on the leader (hosts modifytable)	- (main assigns)
+pgport	the PostgreSQL port's own statics in the backend crates a claim runs (utils adt / fmgr / cache / mb, access common / heaptoast, storage fd / ipc procsignal, timezone)	isojoin
+unittest	the statics of unit-test modules (a module file its parent declares under #[cfg(test)]; carry test)	isojoin
+pgrc	the pgrc columnar AM's own statics: the pgrcolumnar crates (pgrc_am / pgrc_front / pgrc_read / pgrc_write / pgrc_wal / pgrc_format / pgrc_marks / pgrc_codec / pgrc_meta) and the hooks the pgrc line added to backend crates	delta

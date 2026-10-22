@@ -111,7 +111,7 @@ pub fn with_acl_datum<R>(d: Datum, f: impl FnOnce(&[AclItem]) -> PgResult<R>) ->
     ACL_SCRATCH.with(|s| {
         let mut v = s.borrow_mut();
         v.clear();
-        v.reserve(n);
+        v.try_reserve(n).map_err(|_| ::mcx::oom_named("aclchk", n * std::mem::size_of::<adt_acl::AclItem>()))?;
         for i in 0..n {
             v.push(adt_acl::varlena::read_acl_item(payload, i));
         }

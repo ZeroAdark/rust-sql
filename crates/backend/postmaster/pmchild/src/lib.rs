@@ -71,6 +71,7 @@ pub fn InitPostmasterChildSlots() {
         guc_tables::vars::autovacuum_worker_slots.read();
     pool_sizes[BackendType::BgWorker as usize] = init_small::globals::max_worker_processes();
     pool_sizes[BackendType::IoWorker as usize] = MAX_IO_WORKERS;
+    pool_sizes[BackendType::InstanceAux as usize] = init_small::instaux::instance_aux_count();
     for t in [
         BackendType::AutovacLauncher,
         BackendType::SlotsyncWorker,

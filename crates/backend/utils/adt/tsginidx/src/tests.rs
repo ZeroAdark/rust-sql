@@ -110,6 +110,8 @@ fn consistent_matrix() {
 
 #[test]
 fn triconsistent_matrix() {
+    // TS_execute calls CHECK_FOR_INTERRUPTS: install the no-op leg here, never rely on a sibling (D2490).
+    cfi_installed();
     let ctx = MemoryContext::new("t");
     let mcx = ctx.mcx();
     let q = tsq(mcx, "a & b");

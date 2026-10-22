@@ -1,168 +1,28 @@
-//! auth.c GSSAPI arm (pg_GSS_recvauth / pg_GSS_checkauth) plus
-//! be-gssapi-common.c (pg_GSS_error, pg_store_delegated_credential) over the
-//! dlopened system GSSAPI library (gss_ffi). Authentication only: GSSAPI
-//! encryption (be-secure-gssapi.c) is not implemented — GSSENCRequest is
-//! answered 'N' in backend_startup, so the exchange always runs over the
-//! AUTH_REQ_GSS / PqMsg_GSSResponse ('p') lane.
+//! auth.c GSSAPI arm (pg_GSS_recvauth / pg_GSS_checkauth) over the dlopened
+//! system GSSAPI library. When the connection negotiated GSSAPI
+//! encryption (be_secure::gssapi) the context already exists and only the
+//! principal check runs.
 
 use core::ffi::c_void;
 use std::ffi::CString;
 
-use pgsync::Mutex;
-
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use mcx::MemoryContext;
-use types_error::{ErrorLocation, PgResult, COMMERROR, DEBUG2, DEBUG4, DEBUG5, FATAL};
+use types_error::{PgResult, COMMERROR, DEBUG2, DEBUG4, DEBUG5, FATAL};
 use types_startup::Port;
 
-use crate::gss_ffi::{
-    self, gss_buffer_desc, gss_cred_id_t, gss_ctx_id_t, gss_key_value_element_desc,
-    gss_key_value_set_desc, gss_name_t, GssApi, GSS_C_ACCEPT, GSS_C_DELEG_FLAG, GSS_C_GSS_CODE,
-    GSS_C_INITIATE, GSS_C_MECH_CODE, GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED,
+use be_gssapi_common::gss_ffi::{
+    self, gss_buffer_desc, gss_cred_id_t, gss_ctx_id_t, gss_name_t, GssApi, GSS_C_DELEG_FLAG,
+    GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED,
+};
+use be_gssapi_common::{
+    acquire_keytab_cred, gss_setenv, pg_GSS_error, pg_store_delegated_credential,
 };
 use crate::{
     loc, sendAuthRequest, set_authn_id, AUTH_REQ_GSS_CONT, PG_MAX_AUTH_TOKEN_LENGTH,
     PqMsg_GSSResponse, STATUS_ERROR,
 };
 
-fn gloc(line: i32, func: &'static str) -> ErrorLocation {
-    ErrorLocation::new("src/backend/libpq/be-gssapi-common.c", line, func)
-}
-
-// be-gssapi-common.c pg_GSS_error_int: fetch all messages for one status
-// code, space-separated (C caps each half at 128 bytes; unbounded here —
-// String growth replaces the fixed stack buffers).
-fn pg_gss_error_int(api: &GssApi, stat: u32, status_type: i32) -> String {
-    let mut s = String::new();
-    let mut msg_ctx: u32 = 0;
-    loop {
-        let mut lmin_s: u32 = 0;
-        let mut gmsg = gss_buffer_desc::empty();
-        // SAFETY: out-params are valid; gmsg is released after copying.
-        let maj = unsafe {
-            (api.gss_display_status)(
-                &mut lmin_s,
-                stat,
-                status_type,
-                core::ptr::null_mut(),
-                &mut msg_ctx,
-                &mut gmsg,
-            )
-        };
-        if maj != GSS_S_COMPLETE {
-            break;
-        }
-        if !s.is_empty() {
-            s.push(' ');
-        }
-        if !gmsg.value.is_null() {
-            // SAFETY: gss_display_status returned length valid bytes.
-            let bytes = unsafe {
-                core::slice::from_raw_parts(gmsg.value as *const u8, gmsg.length)
-            };
-            s.push_str(&String::from_utf8_lossy(bytes));
-        }
-        // SAFETY: gmsg came from gss_display_status.
-        unsafe { (api.gss_release_buffer)(&mut lmin_s, &mut gmsg) };
-        if msg_ctx == 0 {
-            break;
-        }
-    }
-    s
-}
-
-// be-gssapi-common.c pg_GSS_error: always COMMERROR — never sent to the
-// client (infinite recursion risk in elog).
-pub(crate) fn pg_GSS_error(errmsg: &str, maj_stat: u32, min_stat: u32) -> PgResult<()> {
-    let api = match gss_ffi::try_gss() {
-        Ok(api) => api,
-        Err(_) => {
-            return ereport(COMMERROR)
-                .errmsg_internal(errmsg.to_string())
-                .finish(gloc(91, "pg_GSS_error"));
-        }
-    };
-    let msg_major = pg_gss_error_int(api, maj_stat, GSS_C_GSS_CODE);
-    let msg_minor = pg_gss_error_int(api, min_stat, GSS_C_MECH_CODE);
-    ereport(COMMERROR)
-        .errmsg_internal(errmsg.to_string())
-        .errdetail_internal(format!("{msg_major}: {msg_minor}"))
-        .finish(gloc(91, "pg_GSS_error"))
-}
-
-const GSS_MEMORY_CACHE: &str = "MEMORY:";
-
-// C PostgreSQL forks a private process per backend, so pointing libkrb5 at the
-// keytab/ccache with setenv is process-local and safe. pgrust runs every
-// backend as a thread in ONE process (launch_backend), where libc::setenv
-// mutates the shared environ array and races concurrent getenv traversals
-// (locale/getaddrinfo/libkrb5) — undefined behaviour / heap corruption. The
-// keytab is now selected through the thread-safe MIT credential-store API
-// (gss_acquire_cred_from), so no per-connection setenv runs on MIT builds. The
-// remaining env writes exist only on the Heimdal fallback / delegated-ccache
-// paths; this lock serializes them so two GSS backends never race the
-// environment against each other.
-static GSS_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-// Thread-safety wrapper around libc::setenv for the GSS auth path. Returns the
-// setenv return value (0 == success). Held only for the duration of the write.
-fn gss_setenv(key: &std::ffi::CStr, val: &std::ffi::CStr) -> i32 {
-    let _guard = GSS_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // SAFETY: NUL-terminated strings; serialized against other GSS env writes.
-    unsafe { libc::setenv(key.as_ptr(), val.as_ptr(), 1) }
-}
-
-// be-gssapi-common.c pg_store_delegated_credential. Heimdal (macOS
-// GSS.framework) lacks gss_store_cred_into: that arm reports through
-// pg_GSS_error and the delegated credential is dropped.
-fn pg_store_delegated_credential(api: &GssApi, mut cred: gss_cred_id_t) -> PgResult<()> {
-    let key = c"ccache";
-    let value = CString::new(GSS_MEMORY_CACHE).expect("no interior NUL");
-    let mut cc = gss_key_value_element_desc { key: key.as_ptr(), value: value.as_ptr() };
-    let ccset = gss_key_value_set_desc { count: 1, elements: &mut cc };
-
-    let Some(store_cred_into) = api.gss_store_cred_into else {
-        pg_GSS_error("gss_store_cred", GSS_S_COMPLETE, 0)?;
-        return Ok(());
-    };
-
-    let mut minor: u32 = 0;
-    let mut mech: gss_ffi::gss_OID_set = core::ptr::null_mut();
-    let mut usage: gss_ffi::gss_cred_usage_t = 0;
-    // SAFETY: cred is a live delegated credential; ccset points at live data.
-    let major = unsafe {
-        store_cred_into(
-            &mut minor,
-            cred,
-            GSS_C_INITIATE,
-            core::ptr::null_mut(),
-            1,
-            1,
-            &ccset,
-            &mut mech,
-            &mut usage,
-        )
-    };
-    if major != GSS_S_COMPLETE {
-        pg_GSS_error("gss_store_cred", major, minor)?;
-    }
-
-    // SAFETY: cred is live; released exactly once.
-    let major = unsafe { (api.gss_release_cred)(&mut minor, &mut cred) };
-    if major != GSS_S_COMPLETE {
-        pg_GSS_error("gss_release_cred", major, minor)?;
-    }
-
-    // The delegated credential was stored into the in-memory ccache above via
-    // the credential-store extension; point libkrb5's default ccache at it.
-    // Serialized under GSS_ENV_LOCK so it never races another GSS backend's
-    // environment write (see GSS_ENV_LOCK).
-    gss_setenv(c"KRB5CCNAME", value.as_c_str());
-    Ok(())
-}
-
-// Auth-scoped rendering of C's port->gss (pg_gssinfo): the exchange state
-// lives for pg_GSS_recvauth only — no encryption state survives it.
 struct GssState<'a> {
     api: &'static GssApi,
     ctx: gss_ctx_id_t,
@@ -172,7 +32,7 @@ struct GssState<'a> {
     // selected via the environment fallback instead). Released on drop.
     acceptor_cred: gss_cred_id_t,
     outbuf: gss_buffer_desc,
-    port: &'a Port,
+    port: &'a mut Port,
 }
 
 impl Drop for GssState<'_> {
@@ -200,49 +60,8 @@ impl Drop for GssState<'_> {
     }
 }
 
-// Acquire the acceptor credential for the configured keytab through the
-// thread-safe MIT credential-store extension ({"keytab": keyfile}), avoiding
-// the process-global KRB5_KTNAME environment variable. The caller has checked
-// that the extension is present. Err carries the (major, minor) status: the
-// caller reports it the way C's gss_accept_sec_context failure is reported.
-fn acquire_keytab_cred(
-    api: &GssApi,
-    keyfile: &std::ffi::CStr,
-) -> Result<gss_cred_id_t, (u32, u32)> {
-    let acquire_cred_from = api
-        .gss_acquire_cred_from
-        .expect("acquire_keytab_cred: caller checked gss_acquire_cred_from");
-
-    let key = c"keytab";
-    let mut kt = gss_key_value_element_desc { key: key.as_ptr(), value: keyfile.as_ptr() };
-    let ktset = gss_key_value_set_desc { count: 1, elements: &mut kt };
-
-    let mut minor: u32 = 0;
-    let mut cred: gss_cred_id_t = core::ptr::null_mut();
-    let mut actual_mechs: gss_ffi::gss_OID_set = core::ptr::null_mut();
-    // SAFETY: null desired_name/desired_mechs request the default acceptor
-    // identity for all mechs; ktset points at live data for the call.
-    let major = unsafe {
-        acquire_cred_from(
-            &mut minor,
-            core::ptr::null_mut(),
-            0,
-            core::ptr::null_mut(),
-            GSS_C_ACCEPT,
-            &ktset,
-            &mut cred,
-            &mut actual_mechs,
-            core::ptr::null_mut(),
-        )
-    };
-    if major != GSS_S_COMPLETE {
-        return Err((major, minor));
-    }
-    Ok(cred)
-}
-
 // auth.c pg_GSS_recvauth (auth.c:921).
-pub(crate) fn pg_GSS_recvauth(port: &Port) -> PgResult<i32> {
+pub(crate) fn pg_GSS_recvauth(port: &mut Port) -> PgResult<i32> {
     let api = match gss_ffi::try_gss() {
         Ok(api) => api,
         Err(e) => {
@@ -285,7 +104,7 @@ pub(crate) fn pg_GSS_recvauth(port: &Port) -> PgResult<i32> {
                     return ereport(FATAL)
                         .with_saved_errno(errnum)
                         .errcode(types_error::ERRCODE_OUT_OF_MEMORY)
-                        .errmsg("could not set environment: %m")
+                        .errmsg(format!("could not set environment: {PCT_M}"))
                         .finish(loc(944, "pg_GSS_recvauth"))
                         .map(|()| STATUS_ERROR);
                 }
@@ -380,6 +199,7 @@ pub(crate) fn pg_GSS_recvauth(port: &Port) -> PgResult<i32> {
 
         if !delegated_creds.is_null() && gflags & GSS_C_DELEG_FLAG != 0 {
             pg_store_delegated_credential(api, delegated_creds)?;
+            state.port.gss.as_mut().unwrap().delegated = true;
             delegated_creds = core::ptr::null_mut();
         }
 
@@ -390,7 +210,7 @@ pub(crate) fn pg_GSS_recvauth(port: &Port) -> PgResult<i32> {
             let out = unsafe {
                 core::slice::from_raw_parts(state.outbuf.value as *const u8, state.outbuf.length)
             };
-            let send_result = sendAuthRequest(port, AUTH_REQ_GSS_CONT, out);
+            let send_result = sendAuthRequest(state.port, AUTH_REQ_GSS_CONT, out);
 
             let mut lmin_s: u32 = 0;
             // SAFETY: outbuf came from gss_accept_sec_context.
@@ -412,21 +232,26 @@ pub(crate) fn pg_GSS_recvauth(port: &Port) -> PgResult<i32> {
         break;
     }
 
-    // (cred stayed GSS_C_NO_CREDENTIAL: nothing to release.)
-    pg_GSS_checkauth(&mut state)
+    let (api, name) = (state.api, state.name);
+    pg_GSS_checkauth(api, name, &mut *state.port)
+}
+
+// auth.c uaGSS arm with port->gss->enc: the encryption handshake already
+// established the context; only the principal check runs.
+pub(crate) fn pg_GSS_checkauth_encrypted(port: &mut Port) -> PgResult<i32> {
+    let api = gss_ffi::try_gss().expect("encrypted connection without a GSSAPI library");
+    pg_GSS_checkauth(api, be_secure::gssapi::be_gssapi_context_name(), port)
 }
 
 // auth.c pg_GSS_checkauth (auth.c:1074): map the authenticated principal to
 // the claimed username.
-fn pg_GSS_checkauth(state: &mut GssState<'_>) -> PgResult<i32> {
-    let api = state.api;
-    let port = state.port;
+fn pg_GSS_checkauth(api: &GssApi, name: gss_name_t, port: &mut Port) -> PgResult<i32> {
 
     let mut min_stat: u32 = 0;
     let mut gbuf = gss_buffer_desc::empty();
-    // SAFETY: state.name is the live src_name from the completed context.
+    // SAFETY: name is the live src_name from the completed context.
     let maj_stat =
-        unsafe { (api.gss_display_name)(&mut min_stat, state.name, &mut gbuf, core::ptr::null_mut()) };
+        unsafe { (api.gss_display_name)(&mut min_stat, name, &mut gbuf, core::ptr::null_mut()) };
     if maj_stat != GSS_S_COMPLETE {
         pg_GSS_error("retrieving GSS user name failed", maj_stat, min_stat)?;
         return Ok(STATUS_ERROR);
@@ -458,6 +283,7 @@ fn pg_GSS_checkauth(state: &mut GssState<'_>) -> PgResult<i32> {
     // The principal is our authenticated identity: set it before the usermap
     // check, because authentication has already succeeded.
     set_authn_id(port, &princ)?;
+    port.gss.as_mut().unwrap().principal = Some(princ.clone());
 
     let hba = port.hba.as_ref().expect("pg_GSS_checkauth: port->hba is NULL");
     let caseins = guc_tables::vars::pg_krb_caseins_users.read();
@@ -537,7 +363,7 @@ mod tests {
         use core::ffi::{c_int, c_void};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        use crate::gss_ffi::*;
+        use be_gssapi_common::gss_ffi::*;
 
         static RELEASED: AtomicUsize = AtomicUsize::new(0);
         unsafe extern "C" fn accept(
@@ -600,10 +426,13 @@ mod tests {
             gss_release_cred: release_ptr,
             gss_release_name: release_ptr,
             gss_delete_sec_context: delete_ctx,
+            gss_wrap: None,
+            gss_unwrap: None,
+            gss_wrap_size_limit: None,
             gss_acquire_cred_from: None,
             gss_store_cred_into: None,
         }));
-        let port = crate::tests::unix_port("alice", "db");
+        let mut port = crate::tests::unix_port("alice", "db");
         let mut token = *b"token";
         let state = super::GssState {
             api,
@@ -611,7 +440,7 @@ mod tests {
             name: core::ptr::null_mut(),
             acceptor_cred: core::ptr::null_mut(),
             outbuf: gss_buffer_desc { length: token.len(), value: token.as_mut_ptr().cast() },
-            port: &port,
+            port: &mut port,
         };
         drop(state);
         assert_eq!(RELEASED.load(Ordering::SeqCst), 1);
@@ -622,7 +451,7 @@ mod tests {
             name: core::ptr::null_mut(),
             acceptor_cred: core::ptr::null_mut(),
             outbuf: gss_buffer_desc::empty(),
-            port: &port,
+            port: &mut port,
         };
         drop(state);
         assert_eq!(RELEASED.load(Ordering::SeqCst), 1, "an empty buffer is not released");

@@ -1,0 +1,18 @@
+f() {
+entry:
+jump ^fallback, ^first, ^second, ^third, ^fourth, ^fifth, ^sixth
+fallback:
+terminate
+first:
+terminate
+second:
+terminate
+third:
+terminate
+fourth:
+terminate
+fifth:
+terminate
+sixth:
+terminate
+}

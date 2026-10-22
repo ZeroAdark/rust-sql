@@ -47,3 +47,7 @@ seam_core::seam!(
     // PostRestoreCommand() (postmaster/startup.c).
     pub fn post_restore_command()
 );
+
+seam_core::seam!(
+    pub fn columnar_after_recovery() -> types_error::PgResult<()>
+);

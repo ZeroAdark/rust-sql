@@ -1,7 +1,10 @@
 //! deparse_namespace + get_query_def spine for SELECT (ruleutils.c). Query
 //! shapes outside the stored-view SELECT set are loud named panics.
 
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+
+use rustc_hash::FxBuildHasher;
 
 use mcx::Mcx;
 use types_error::{PgError, PgResult};
@@ -43,6 +46,7 @@ pub(crate) struct DeparseColumns {
     pub rightattnos: Vec<i32>,
     pub using_names: Vec<String>,
     pub parent_using: Vec<String>,
+    pub names_hash: Option<HashSet<String, FxBuildHasher>>,
 }
 
 pub(crate) struct DeparseNamespace<'mcx> {
@@ -109,12 +113,12 @@ pub(crate) fn set_rtable_names<'mcx>(
     parents: &[Rc<DeparseNamespace<'mcx>>],
     rels_used: Option<&types_nodes::bitmapset::Bitmapset<'mcx>>,
 ) -> PgResult<()> {
-    let mut entries: Vec<(String, u32)> = Vec::new();
+    let mut names: HashMap<String, u32, FxBuildHasher> = HashMap::with_hasher(FxBuildHasher);
+    let n = dpns.rtable.len();
+    names.try_reserve(n).map_err(|_| mcx.oom(n * core::mem::size_of::<(String, u32)>()))?;
     for p in parents {
         for name in p.rtable_names.iter().flatten() {
-            if !entries.iter().any(|(n, _)| n == name) {
-                entries.push((name.clone(), 0));
-            }
+            names.insert(name.clone(), 0);
         }
     }
     for (i, rte) in dpns.rtable.iter().enumerate() {
@@ -133,32 +137,33 @@ pub(crate) fn set_rtable_names<'mcx>(
         };
         let refname = match refname {
             None => None,
-            Some(name) => match entries.iter().position(|(n, _)| *n == name) {
-                None => {
-                    entries.push((name.clone(), 0));
-                    Some(name)
-                }
-                Some(idx) => {
-                    let mut base = name.clone();
-                    loop {
-                        entries[idx].1 += 1;
-                        let counter = entries[idx].1;
-                        let mut modname = format!("{base}_{counter}");
-                        while modname.len() >= NAMEDATALEN {
-                            let mut cut = base.len() - 1;
-                            while !base.is_char_boundary(cut) {
-                                cut -= 1;
-                            }
-                            base.truncate(cut);
-                            modname = format!("{base}_{counter}");
+            Some(name) if !names.contains_key(&name) => {
+                names.insert(name.clone(), 0);
+                Some(name)
+            }
+            Some(name) => {
+                let mut base = name.clone();
+                loop {
+                    let counter = {
+                        let c = names.get_mut(&name).expect("present");
+                        *c += 1;
+                        *c
+                    };
+                    let mut modname = format!("{base}_{counter}");
+                    while modname.len() >= NAMEDATALEN {
+                        let mut cut = base.len() - 1;
+                        while !base.is_char_boundary(cut) {
+                            cut -= 1;
                         }
-                        if !entries.iter().any(|(n, _)| *n == modname) {
-                            entries.push((modname.clone(), 0));
-                            break Some(modname);
-                        }
+                        base.truncate(cut);
+                        modname = format!("{base}_{counter}");
+                    }
+                    if !names.contains_key(&modname) {
+                        names.insert(modname.clone(), 0);
+                        break Some(modname);
                     }
                 }
-            },
+            }
         };
         dpns.rtable_names.push(refname);
     }
@@ -290,8 +295,12 @@ fn identify_join_columns(
         jrte.eref.map(|e| e.colnames.len()).unwrap_or(0),
         "identify_join_columns: broken join RTE"
     );
-    colinfo.leftattnos = vec![0; numjoincols];
-    colinfo.rightattnos = vec![0; numjoincols];
+    colinfo.leftattnos = Vec::new();
+    let _ = colinfo.leftattnos.try_reserve_exact(numjoincols);
+    colinfo.leftattnos.resize(numjoincols, 0);
+    colinfo.rightattnos = Vec::new();
+    let _ = colinfo.rightattnos.try_reserve_exact(numjoincols);
+    colinfo.rightattnos.resize(numjoincols, 0);
     let mut jcolno = 0usize;
     for leftattno in jrte.joinleftcols.iter() {
         colinfo.leftattnos[jcolno] = leftattno;
@@ -311,7 +320,26 @@ fn identify_join_columns(
 
 fn expand_colnames_array_to(colinfo: &mut DeparseColumns, n: usize) {
     if n > colinfo.colnames.len() {
+        let _ = colinfo.colnames.try_reserve_exact(n - colinfo.colnames.len());
         colinfo.colnames.resize(n, None);
+    }
+}
+
+fn build_colinfo_names_hash(colinfo: &mut DeparseColumns) {
+    if colinfo.colnames.len() < 32 {
+        return;
+    }
+    let mut h = HashSet::with_hasher(FxBuildHasher);
+    let _ = h.try_reserve(colinfo.colnames.len() + colinfo.new_colnames.len());
+    h.extend(colinfo.colnames.iter().flatten().cloned());
+    h.extend(colinfo.new_colnames.iter().cloned());
+    h.extend(colinfo.parent_using.iter().cloned());
+    colinfo.names_hash = Some(h);
+}
+
+fn add_to_names_hash(colinfo: &mut DeparseColumns, name: &str) {
+    if let Some(h) = colinfo.names_hash.as_mut() {
+        h.insert(name.to_owned());
     }
 }
 
@@ -320,14 +348,20 @@ fn colname_is_unique(
     dpns_using_names: &[String],
     colinfo: &DeparseColumns,
 ) -> bool {
-    if colinfo.colnames.iter().flatten().any(|n| n == colname) {
-        return false;
-    }
-    if colinfo.new_colnames.iter().any(|n| n == colname) {
-        return false;
-    }
-    if colinfo.parent_using.iter().any(|n| n == colname) {
-        return false;
+    if let Some(h) = &colinfo.names_hash {
+        if h.contains(colname) {
+            return false;
+        }
+    } else {
+        if colinfo.colnames.iter().flatten().any(|n| n == colname) {
+            return false;
+        }
+        if colinfo.new_colnames.iter().any(|n| n == colname) {
+            return false;
+        }
+        if colinfo.parent_using.iter().any(|n| n == colname) {
+            return false;
+        }
     }
     if dpns_using_names.iter().any(|n| n == colname) {
         return false;
@@ -400,7 +434,7 @@ fn set_using_names(
                 }
             }
 
-            let mut child_using: Vec<String> = parent_using.to_vec();
+            let mut child_using: Vec<String> = ::mcx::std_vec_from_slice("ruleutils", &parent_using)?;
             if !j.usingClause.is_nil() {
                 expand_colnames_array_to(&mut colinfo, j.usingClause.len());
                 for (i, uc) in j.usingClause.iter().enumerate() {
@@ -455,18 +489,16 @@ fn set_using_names(
     }
 }
 
-fn relation_real_colnames(relid: types_core::Oid) -> PgResult<Vec<Option<String>>> {
-    let natts = lsyscache::get_relnatts(relid)?;
-    let mut out = Vec::with_capacity(natts.max(0) as usize);
-    // ruleutils.c set_relation_column_names: attisdropped -> real_colname
-    // NULL; attno <= relnatts always has a row.
-    for attno in 1..=natts {
-        out.push(
-            syscache_seams::lookup_pg_attribute_shape::call(relid, attno as i16)?
-                .filter(|att| !att.attisdropped)
-                .map(|att| String::from_utf8_lossy(att.attname.name_str()).into_owned()),
-        );
+fn relation_real_colnames(mcx: Mcx<'_>, relid: types_core::Oid) -> PgResult<Vec<Option<String>>> {
+    let rel = relation_seams::relation_open::call(mcx, relid, types_rel::AccessShareLock)?;
+    let desc = rel.descr();
+    let mut out = ::mcx::std_vec_with_capacity("ruleutils", desc.natts as usize)?;
+    for i in 0..desc.natts as usize {
+        let att = desc.attr(i);
+        out.push((!att.attisdropped)
+            .then(|| String::from_utf8_lossy(att.attname.name_str()).into_owned()));
     }
+    rel.close(types_rel::AccessShareLock)?;
     Ok(out)
 }
 
@@ -479,7 +511,7 @@ fn set_relation_column_names<'mcx>(
     let mut colinfo = std::mem::take(&mut dpns.rtable_columns[idx]);
 
     let real_colnames: Vec<Option<String>> = match rte.rtekind {
-        RTEKind::RTE_RELATION => relation_real_colnames(rte.relid)?,
+        RTEKind::RTE_RELATION => relation_real_colnames(mcx, rte.relid)?,
         RTEKind::RTE_FUNCTION if !rte.functions.is_nil() => {
             let (colnames, _) = parse_relation::expandRTE(
                 mcx,
@@ -514,8 +546,9 @@ fn set_relation_column_names<'mcx>(
 
     let ncolumns = real_colnames.len();
     expand_colnames_array_to(&mut colinfo, ncolumns);
-    colinfo.new_colnames = Vec::with_capacity(ncolumns);
-    colinfo.is_new_col = Vec::with_capacity(ncolumns);
+    colinfo.new_colnames = ::mcx::std_vec_with_capacity("ruleutils", ncolumns)?;
+    colinfo.is_new_col = ::mcx::std_vec_with_capacity("ruleutils", ncolumns)?;
+    build_colinfo_names_hash(&mut colinfo);
 
     let noldcolumns = rte.eref.map(|e| e.colnames.len()).unwrap_or(0);
     let mut changed_any = false;
@@ -532,6 +565,7 @@ fn set_relation_column_names<'mcx>(
                 _ => real_colname,
             };
             let unique = make_colname_unique(preferred, &dpns.using_names, &colinfo);
+            add_to_names_hash(&mut colinfo, &unique);
             colinfo.colnames[i] = Some(unique);
         }
         let colname = colinfo.colnames[i].clone().expect("assigned above");
@@ -541,6 +575,7 @@ fn set_relation_column_names<'mcx>(
             changed_any = true;
         }
     }
+    colinfo.names_hash = None;
 
     colinfo.printaliases = match rte.rtekind {
         RTEKind::RTE_RELATION => changed_any,
@@ -566,6 +601,7 @@ fn set_join_column_names(dpns: &mut DeparseNamespace<'_>, idx: usize) -> PgResul
 
     let noldcolumns = rte.eref.map(|e| e.colnames.len()).unwrap_or(0);
     expand_colnames_array_to(&mut colinfo, noldcolumns);
+    build_colinfo_names_hash(&mut colinfo);
 
     let mut changed_any = false;
     for i in colinfo.using_names.len()..noldcolumns {
@@ -584,6 +620,7 @@ fn set_join_column_names(dpns: &mut DeparseNamespace<'_>, idx: usize) -> PgResul
             continue;
         };
         if rte.alias.is_none() {
+            add_to_names_hash(&mut colinfo, &real_colname);
             colinfo.colnames[i] = Some(real_colname);
             continue;
         }
@@ -595,6 +632,7 @@ fn set_join_column_names(dpns: &mut DeparseNamespace<'_>, idx: usize) -> PgResul
                 _ => &real_colname,
             };
             let unique = make_colname_unique(preferred, &dpns.using_names, &colinfo);
+            add_to_names_hash(&mut colinfo, &unique);
             colinfo.colnames[i] = Some(unique);
         }
         if !changed_any && colinfo.colnames[i].as_deref() != Some(real_colname.as_str()) {
@@ -606,11 +644,11 @@ fn set_join_column_names(dpns: &mut DeparseNamespace<'_>, idx: usize) -> PgResul
     let right = &dpns.rtable_columns[rightidx];
     let nnewcolumns =
         left.new_colnames.len() + right.new_colnames.len() - colinfo.using_names.len();
-    colinfo.new_colnames = Vec::with_capacity(nnewcolumns);
-    colinfo.is_new_col = Vec::with_capacity(nnewcolumns);
+    colinfo.new_colnames = ::mcx::std_vec_with_capacity("ruleutils", nnewcolumns)?;
+    colinfo.is_new_col = ::mcx::std_vec_with_capacity("ruleutils", nnewcolumns)?;
 
-    let mut leftmerged = vec![false; left.colnames.len() + 1];
-    let mut rightmerged = vec![false; right.colnames.len() + 1];
+    let mut leftmerged = ::mcx::std_vec_from_elem("ruleutils", false, left.colnames.len() + 1)?;
+    let mut rightmerged = ::mcx::std_vec_from_elem("ruleutils", false, right.colnames.len() + 1)?;
     let mut i = 0usize;
     while i < noldcolumns && colinfo.leftattnos[i] != 0 && colinfo.rightattnos[i] != 0 {
         colinfo
@@ -664,12 +702,14 @@ fn set_join_column_names(dpns: &mut DeparseNamespace<'_>, idx: usize) -> PgResul
                 } else {
                     child_colname.clone()
                 };
+                add_to_names_hash(&mut colinfo, &assigned);
                 colinfo.new_colnames.push(assigned);
                 colinfo.is_new_col.push(child.is_new_col[jc]);
             }
         }
     }
     debug_assert_eq!(colinfo.new_colnames.len(), nnewcolumns);
+    colinfo.names_hash = None;
 
     colinfo.printaliases = if rte.alias.is_some() { changed_any } else { false };
     dpns.rtable_columns[idx] = colinfo;

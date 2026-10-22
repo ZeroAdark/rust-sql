@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 contrib/ltree/ltxtquery_op.c: 1 stack-depth check sites
+23	ltree_execute	crates/contrib/ltree/src/op.rs	ltree_execute	yes	

@@ -1,0 +1,6 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/l0.rs
+growth	std::collections::BTreeMap::entry	1
+growth	std::vec::Vec::push	2
+method	slice::sort_by_key	1
+method	std::clone::Clone::clone	1
+type	std::vec::Vec	1

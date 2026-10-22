@@ -1,0 +1,11 @@
+# (SELECT ..) UNION (SELECT ..) ORDER BY 1: the ORDER BY is top-level
+sql: (SELECT x FROM t) UNION (SELECT x FROM u) ORDER BY 1;
+cols: x
+class: ordered 1
+verdict: mismatch-order
+[pg]
+1
+2
+[got]
+2
+1

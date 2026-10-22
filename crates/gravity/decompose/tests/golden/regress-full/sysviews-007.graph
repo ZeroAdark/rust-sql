@@ -1,0 +1,20 @@
+-- regress-full-sysviews-007
+-- select count(*) >= 0 as ok, count(*) FILTER (WHERE error IS NOT NULL) = 0 AS no_err from pg_ident_file_mappings;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@2^
+  source const
+  srf from rti=2 [1:Other fn6250 cols=7 fn6250()]
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7)
+  outs 1=w4:val 2=vl:row 3=w4:val 4=vl:row 5=vl:row 6=vl:row 7=vl:row
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=op430(agg2803*(), c23:0), 2=op416(agg2803*() filter notnull(outer.7), c23:0))
+  outs 1=w1:val 2=w1:val
+breaker slot=0 kind=PlainAgg budget=Fixed(80) spill=None producer=p0 layout=[]->[Count@0,Count@8]+valid 24B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0,Count@8]+valid 24B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+  agg aggno=1 fn=2803 reg=CountStar slot=1 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[filter star] expr=agg2803*() filter notnull(outer.7) filter=notnull(outer.7)
+mapped: FunctionScan Agg

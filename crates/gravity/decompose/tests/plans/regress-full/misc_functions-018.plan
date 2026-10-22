@@ -1,0 +1,23 @@
+-- name: regress-full-misc_functions-018
+-- sql: SELECT setting::int8 AS segment_size FROM pg_settings WHERE name = 'wal_segment_size'
+-- test: misc_functions
+-- shape: 5571667b2fdcb40f seen=1
+-- rel 12104 pg_settings am=none kind=v natts=17
+-- att 12104 1 name typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 2 setting typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 3 unit typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 4 category typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 5 short_desc typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 6 extra_desc typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 7 context typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 8 vartype typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 9 source typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 10 min_val typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 11 max_val typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 12 enumvals typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 13 boot_val typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 14 reset_val typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 15 sourcefile typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12104 16 sourceline typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 12104 17 pending_restart typid=16 typmod=-1 len=1 byval=t notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {FUNCTIONSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0.0025 :scan.plan.total_cost 12.5275 :scan.plan.plan_rows 5 :scan.plan.plan_width 8 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {COERCEVIAIO :arg {VAR :varno 2 :varattno 2 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 2 :location -1} :resulttype 20 :resultcollid 0 :coerceformat 1 :location 14} :resno 1 :resname segment_size :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 98 :opfuncid 67 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 100 :args ({VAR :varno 2 :varattno 1 :vartype 25 :vartypmod -1 :varcollid 100 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 1 :location -1} {CONST :consttype 25 :consttypmod -1 :constcollid 100 :constlen -1 :constbyval false :constisnull false :location 67 :constvalue 20 [ 80 0 0 0 119 97 108 95 115 101 103 109 101 110 116 95 115 105 122 101 ]}) :location 65}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 2 :functions ({RANGETBLFUNCTION :funcexpr {FUNCEXPR :funcid 2084 :funcresulttype 2249 :funcretset true :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 0 :args <> :location -1} :funccolcount 17 :funccolnames <> :funccoltypes <> :funccoltypmods <> :funccolcollations <> :funcparams (b)}) :funcordinality false} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_settings :colnames ("name" "setting" "unit" "category" "short_desc" "extra_desc" "context" "vartype" "source" "min_val" "max_val" "enumvals" "boot_val" "reset_val" "sourcefile" "sourceline" "pending_restart")} :rtekind 1 :subquery <> :security_barrier false :relid 12104 :inh false :relkind v :rellockmode 1 :perminfoindex 1 :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname a :colnames <>} :eref {ALIAS :aliasname a :colnames ("name" "setting" "unit" "category" "short_desc" "extra_desc" "context" "vartype" "source" "min_val" "max_val" "enumvals" "boot_val" "reset_val" "sourcefile" "sourceline" "pending_restart")} :rtekind 3 :functions <> :funcordinality false :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 12104 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 12104) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 0}

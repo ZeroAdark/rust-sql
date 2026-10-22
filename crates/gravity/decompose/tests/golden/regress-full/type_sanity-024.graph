@@ -1,0 +1,12 @@
+-- regress-full-type_sanity-024
+-- SELECT t1.oid, t1.typname, t1.typelem, t1.typlen, t1.typbyval FROM pg_type AS t1 WHERE t1.typsubscript = 'raw_array_subscript_handler'::regproc AND NOT (t1.typelem != 0 AND t1.typlen > 0 AND NOT t1.typbyval);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=6 end=sink
+  nodes n0@0
+  source range rel=1247 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Offset:byval2:w2:val
+  filter op607(relabel26(v1.13), c26:6180)
+  filter or(op607(v1.14, c26:0), op522(v1.5, c21:0), v1.6)
+  project (1=v1.1, 2=v1.2, 3=v1.14, 4=v1.5, 5=v1.6)
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w8:val
+mapped: SeqScan

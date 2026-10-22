@@ -1,0 +1,1 @@
+a row comparison (RowCompareExpr): the rig catalog refuses the expression; the server serves it (T2 9a5850cfe4a rowtypes#64/#67 served); D505 re-map: the crate plan with the census row's SQL

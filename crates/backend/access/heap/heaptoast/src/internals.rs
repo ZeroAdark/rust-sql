@@ -152,14 +152,19 @@ fn pglz_compress_datum<'mcx>(mcx: Mcx<'mcx>, data: &[u8]) -> PgResult<Option<PgV
     Ok(Some(tmp))
 }
 
-// toast_compression.c lz4_compress_datum: LZ4 block format (lz4_flex block
+// toast_compression.c lz4_compress_datum: LZ4 block format (lz4_block, the
 // mode = LZ4_compress_default); C treats `len > valsize` as incompressible.
 fn lz4_compress_datum<'mcx>(mcx: Mcx<'mcx>, data: &[u8]) -> PgResult<Option<PgVec<'mcx, u8>>> {
-    let max_size = lz4_flex::block::get_maximum_output_size(data.len());
+    // LZ4_compressBound + LZ4_compress_default (toast_compression.c:156-165)
+    // through the verbatim liblz4 encoder port: pg_column_size parity needs
+    // C's exact byte stream, and a 0 return is C's "lz4 compression failed".
+    let max_size = lz4_block::compress_bound(data.len());
     let mut tmp = ::mcx::vec_with_capacity_in(mcx, VARHDRSZ_COMPRESSED + max_size)?;
     tmp.resize(VARHDRSZ_COMPRESSED + max_size, 0);
-    let len = lz4_flex::block::compress_into(data, &mut tmp[VARHDRSZ_COMPRESSED..])
-        .map_err(|_| lz4_compression_failed())?;
+    let len = lz4_block::compress_default(data, &mut tmp[VARHDRSZ_COMPRESSED..]);
+    if len == 0 {
+        return Err(lz4_compression_failed());
+    }
     if len > data.len() {
         return Ok(None);
     }

@@ -28,6 +28,10 @@ thread_local! {
     static BUF: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
 }
 
+pub(crate) fn reset() {
+    BUF.with(|b| b.borrow_mut().clear());
+}
+
 fn now_ns() -> u64 {
     static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
@@ -78,7 +82,8 @@ fn flush_slow() {
         if b.is_empty() {
             return;
         }
-        let mut line = String::with_capacity(32 + b.len() * 24);
+        let mut line = String::new();
+        let _ = line.try_reserve(32 + b.len() * 24);
         line.push_str("STMTTRACE");
         for (p, t) in b.iter() {
             line.push(' ');

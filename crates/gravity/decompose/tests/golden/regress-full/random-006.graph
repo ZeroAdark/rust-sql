@@ -1,0 +1,22 @@
+-- regress-full-random-006
+-- SELECT r, count(*) FROM (SELECT random_normal() r FROM generate_series(1, 1000)) ss GROUP BY r HAVING count(*) > 1;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n0@2^
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:1000)]
+  project (1=fn6212(c701:0, c701:4607182418800017408))
+  outs 1=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  filter op413(agg2803*(), c20:1)
+  project (1=outer.1, 2=agg2803*())
+  outs 1=w8:val 2=w8:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[F64]->[Count@8,MinCode@16] 24B
+group slot=0 producer=p0 node=0 form=Hashed hints=[] layout=[F64]->[Count@8,MinCode@16] 24B
+  key 0 word=0 resno=1 kind=F64 attno=0 type=701 rep=1 image=F64 expr=fn6212(c701:0, c701:4607182418800017408)
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: FunctionScan Agg

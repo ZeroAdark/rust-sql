@@ -28,18 +28,35 @@ struct CachedRe {
     cre_pat: PgVec<'static, u8>,
     cre_flags: i32,
     cre_collation: Oid,
+    // D3532: the encoding and the default locale's classes the entry was compiled under (`regex_env`)
+    cre_env: RegexEnv,
     re: RegexCompiled,
     cre_context: mcx::PinnedContext,
 }
 
+/// D3532: what a compiled regex depends on beyond its pattern, flags and collation OID: the database encoding (the
+/// pattern's characters) and, under the database default collation, the default locale's character classes. A pool
+/// worker's thread-local cache outlives its claims and serves the statements of every database (each claim arms its
+/// leader's encoding and default locale), where one OID (the default's) names another locale in each database: an entry
+/// a claim of an ICU database compiled for `[[:lower:]]` matched non-ASCII letters in a C-locale database's claim.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RegexEnv {
+    encoding: i32,
+    default: Option<(u8, bool, bool, usize)>,
+}
+
+fn regex_env(collation: Oid) -> RegexEnv {
+    RegexEnv { encoding: mbutils::GetDatabaseEncoding(), default: regex_core::regex_locale::default_ctype(collation) }
+}
+
 impl CachedRe {
-    fn new(parent: Mcx<'_>, pattern: &[u8], cflags: i32, collation: Oid, re: RegexCompiled) -> PgResult<Self> {
+    fn new(parent: Mcx<'_>, pattern: &[u8], cflags: i32, collation: Oid, env: RegexEnv, re: RegexCompiled) -> PgResult<Self> {
         let cre_context = mcx::PinnedContext::new(parent.context().new_child("RegexpMemoryContext"));
         // SAFETY: cre_pat is the only borrower and is declared before (drops
         // before) cre_context.
         let cre_pat = slice_in(unsafe { cre_context.handle() }, pattern)?;
         cre_context.set_ident(Some(&String::from_utf8_lossy(pattern)));
-        Ok(CachedRe { cre_pat, cre_flags: cflags, cre_collation: collation, re, cre_context })
+        Ok(CachedRe { cre_pat, cre_flags: cflags, cre_collation: collation, cre_env: env, re, cre_context })
     }
 }
 
@@ -96,11 +113,13 @@ pub fn RE_compile_and_cache(
     cflags: i32,
     collation: Oid,
 ) -> PgResult<RegexCompiled> {
+    let env = regex_env(collation);
     let hit = with_cache(|cache| {
         let Some(i) = cache.entries.iter().position(|e| {
             e.cre_pat.len() == pattern.len()
                 && e.cre_flags == cflags
                 && e.cre_collation == collation
+                && e.cre_env == env
                 && e.cre_pat.as_slice() == pattern
         }) else { return Ok(None) };
         if i > 0 {
@@ -121,7 +140,7 @@ pub fn RE_compile_and_cache(
     drop(wide_pattern);
 
     let inserted: PgResult<()> = with_cache(|cache| {
-        let entry = CachedRe::new(cache.mcx, pattern, cflags, collation, compiled.clone())?;
+        let entry = CachedRe::new(cache.mcx, pattern, cflags, collation, env, compiled.clone())?;
         cache
             .entries
             .try_reserve(1)
@@ -275,7 +294,8 @@ fn invalid_re_option(opt: &[u8]) -> PgError {
     let err = match core::str::from_utf8(&opt[..mblen]) {
         Ok(s) => PgError::error(format!("invalid regular expression option: \"{s}\"")),
         Err(_) => {
-            let mut msg = b"invalid regular expression option: \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"invalid regular expression option: \"");
             msg.extend_from_slice(&opt[..mblen]);
             msg.push(b'"');
             PgError::error_raw_message(msg)

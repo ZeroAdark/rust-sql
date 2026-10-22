@@ -12,6 +12,7 @@ use types_fmgr::{
     byref_result, cstring_result, varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
     PGFunction,
 };
+use elog::PCT_M;
 
 // text_to_cstring: the text payload up to its first NUL byte.
 fn cstring_prefix(b: &[u8]) -> &[u8] {
@@ -32,7 +33,8 @@ fn is_ident_cont(c: u8) -> bool {
 fn invalid_ident_err(qualname: &[u8], detail: Option<&str>) -> Box<PgError> {
     // misc.c:895-983: text_to_cstring(qualname) verbatim in the message --
     // raw server-encoding bytes, not re-encoded (NUL truncates, as in C).
-    let mut msg = b"string is not a valid identifier: \"".to_vec();
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"string is not a valid identifier: \"");
     msg.extend_from_slice(qualname);
     msg.push(b'"');
     let e = PgError::error_raw_message(msg).with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE);
@@ -45,7 +47,7 @@ fn invalid_ident_err(qualname: &[u8], detail: Option<&str>) -> Box<PgError> {
 pub fn fc_parse_ident(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mcx = fcinfo.result_mcx();
     // SAFETY: arg 0 is a non-null text datum (strict function).
-    let qualname: Vec<u8> = cstring_prefix(unsafe { fcinfo.arg_varlena_packed(0)? }.data()).to_vec();
+    let qualname: Vec<u8> = ::mcx::std_vec_from_slice("adt", &cstring_prefix(unsafe { fcinfo.arg_varlena_packed(0)? }.data()))?;
     let strict = fcinfo.arg_bool(1);
     let encoding = mbutils::GetDatabaseEncoding();
 
@@ -178,63 +180,6 @@ pub fn fc_pg_postmaster_start_time(
     Ok(Datum::from_i64(postmaster_seams::pg_start_time::call()))
 }
 
-fn description_result(
-    fcinfo: &mut Fcinfo,
-    objoid: Oid,
-    classoid: Oid,
-    objsubid: i32,
-) -> PgResult<Datum> {
-    let found = crate::introspect::get_description(fcinfo.result_mcx(), objoid, classoid, objsubid)?
-        .map(varlena_result);
-    match found {
-        Some(d) => Ok(d),
-        None => Ok(fcinfo.return_null()),
-    }
-}
-
-// Unknown catalog name yields NULL, not an error (the SQL body's subquery).
-pub fn fc_obj_description(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let objoid = fcinfo.arg_oid(0);
-    // SAFETY: catalog arg 1 of obj_description is a non-null name (strict fn).
-    let catalogname = unsafe { fcinfo.arg_name(1) };
-    let len = catalogname.iter().position(|&b| b == 0).unwrap_or(catalogname.len());
-    let catalogname = core::str::from_utf8(&catalogname[..len])
-        .expect("catalog names are valid UTF-8");
-    let classoid = lsyscache::get_relname_relid(catalogname, PG_CATALOG_NAMESPACE)?;
-    if classoid == InvalidOid {
-        return Ok(fcinfo.return_null());
-    }
-    description_result(fcinfo, objoid, classoid, 0)
-}
-
-pub fn fc_col_description(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let objoid = fcinfo.arg_oid(0);
-    let attnum = fcinfo.arg_i32(1);
-    description_result(fcinfo, objoid, RELATION_RELATION_ID, attnum)
-}
-
-pub fn fc_shobj_description(
-    _flinfo: Option<&mut FmgrInfo>,
-    fcinfo: &mut Fcinfo,
-) -> PgResult<Datum> {
-    let objoid = fcinfo.arg_oid(0);
-    // SAFETY: catalog arg 1 of shobj_description is a non-null name (strict fn).
-    let catalogname = unsafe { fcinfo.arg_name(1) };
-    let len = catalogname.iter().position(|&b| b == 0).unwrap_or(catalogname.len());
-    let catalogname = core::str::from_utf8(&catalogname[..len])
-        .expect("catalog names are valid UTF-8");
-    let classoid = lsyscache::get_relname_relid(catalogname, PG_CATALOG_NAMESPACE)?;
-    if classoid == InvalidOid {
-        return Ok(fcinfo.return_null());
-    }
-    let found = crate::introspect::get_shared_description(fcinfo.result_mcx(), objoid, classoid)?
-        .map(varlena_result);
-    match found {
-        Some(d) => Ok(d),
-        None => Ok(fcinfo.return_null()),
-    }
-}
-
 // xlogfuncs.c WAL-name trio (2850/2851/6213): pure segment math over
 // XLogSegNo (xlog_internal.h macros) + the live insert timeline.
 
@@ -350,7 +295,8 @@ pub(crate) fn invalid_walfile_name(name: &[u8]) -> types_error::PgError {
     match core::str::from_utf8(name) {
         Ok(s) => types_error::PgError::error(format!("invalid WAL file name \"{s}\"")),
         Err(_) => {
-            let mut msg = b"invalid WAL file name \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"invalid WAL file name \"");
             msg.extend_from_slice(name);
             msg.push(b'"');
             types_error::PgError::error_raw_message(msg)
@@ -360,7 +306,8 @@ pub(crate) fn invalid_walfile_name(name: &[u8]) -> types_error::PgError {
 
 // xlog.c:8138 LOG line; the name bytes verbatim.
 pub(crate) fn restore_point_log(name: &[u8], recptr: u64) -> Vec<u8> {
-    let mut msg = b"restore point \"".to_vec();
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"restore point \"");
     msg.extend_from_slice(name);
     msg.extend_from_slice(
         format!("\" created at {:X}/{:X}", (recptr >> 32) as u32, recptr as u32).as_bytes(),
@@ -661,7 +608,7 @@ pub fn fc_pg_promote(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         return Err(elog::ereport(types_error::ERROR)
             .with_saved_errno(saved_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{PROMOTE_SIGNAL_FILE}\": %m"))
+            .errmsg(format!("could not create file \"{PROMOTE_SIGNAL_FILE}\": {PCT_M}"))
             .into_error()
             .into());
     }
@@ -669,7 +616,7 @@ pub fn fc_pg_promote(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         return Err(elog::ereport(types_error::ERROR)
             .with_saved_errno(saved_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not write file \"{PROMOTE_SIGNAL_FILE}\": %m"))
+            .errmsg(format!("could not write file \"{PROMOTE_SIGNAL_FILE}\": {PCT_M}"))
             .into_error()
             .into());
     }
@@ -723,7 +670,7 @@ pub fn fc_pg_backup_start(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -
     let backupid = unsafe { fcinfo.arg_varlena_packed(0)? };
     let raw = backupid.data();
     let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
-    let backupidstr = raw[..end].to_vec();
+    let backupidstr = ::mcx::std_vec_from_slice("adt", &raw[..end])?;
     let fast = fcinfo.arg_bool(1);
 
     if transam_xlog::get_backup_status() == transam_xlog::SessionBackupState::Running {
@@ -737,6 +684,8 @@ pub fn fc_pg_backup_start(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -
 
     let mut state = xlogbackup::BackupState::default();
     let mut tablespace_map: Vec<u8> = Vec::new();
+    // WALMODE: a low-level backup; pgrc writers log bytes while it runs.
+    transam_xlog::want_lowlevel_backup();
     transam_xlog::do_pg_backup_start(&backupidstr, fast, None, &mut state, &mut tablespace_map)?;
 
     let startpoint = state.startpoint;
@@ -795,7 +744,7 @@ pub fn fc_pg_nextoid(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     // SAFETY: catalog arg type name — 64-byte NameData (strict function).
     let attname_bytes = unsafe { fcinfo.arg_name(1) };
     let len = attname_bytes.iter().position(|&b| b == 0).unwrap_or(attname_bytes.len());
-    let attname_raw = attname_bytes[..len].to_vec();
+    let attname_raw = ::mcx::std_vec_from_slice("adt", &attname_bytes[..len])?;
     // Catalog names are UTF-8, so a non-UTF-8 name matches no column.
     let attname = core::str::from_utf8(&attname_raw).ok().map(str::to_owned);
     let idxoid = fcinfo.arg(2).as_oid();
@@ -836,7 +785,8 @@ pub fn fc_pg_nextoid(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         None => InvalidAttrNumber,
     };
     if attno == InvalidAttrNumber {
-        let mut raw = b"column \"".to_vec();
+        let mut raw = Vec::new();
+        raw.extend_from_slice(b"column \"");
         raw.extend_from_slice(&attname_raw);
         raw.extend_from_slice(b"\" of relation \"");
         raw.extend_from_slice(rel.data_rc().name().as_bytes());
@@ -886,10 +836,8 @@ pub fn fc_pg_stop_making_pinned_objects(
     Ok(Datum::from_usize(0))
 }
 
-// system_user (oid 6311) is registered CANONICALLY by the name crate
-// (name::builtins::NAME_BUILTINS via fmgr_core ported.rs; C home miscinit.c)
-// — the sqlsmith-sweep stopgap here had to go: an extra row colliding with a
-// live canonical row is a boot-time panic (install_extra_builtins).
+// system_user (6311) is a canonical row of the name crate; an extra row
+// colliding with a live canonical row is a boot-time panic.
 
 pub fn fc_pg_client_encoding(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mut n = types_tuple::NameData::default();
@@ -956,7 +904,8 @@ fn current_logfile(fcinfo: &mut Fcinfo, logfmt: Option<&[u8]>) -> PgResult<Datum
             return Err(Box::new(
                 // misc.c:1016: the log format bytes verbatim in the message.
                 PgError::error_raw_message({
-                    let mut msg = b"log format \"".to_vec();
+                    let mut msg = Vec::new();
+                    msg.extend_from_slice(b"log format \"");
                     msg.extend_from_slice(f);
                     msg.extend_from_slice(b"\" is not supported");
                     msg
@@ -975,7 +924,7 @@ fn current_logfile(fcinfo: &mut Fcinfo, logfmt: Option<&[u8]>) -> PgResult<Datum
             return Err(elog::ereport(types_error::ERROR)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{LOG_METAINFO_DATAFILE}\": %m"))
+                .errmsg(format!("could not read file \"{LOG_METAINFO_DATAFILE}\": {PCT_M}"))
                 .into_error()
                 .into())
         }
@@ -1041,7 +990,7 @@ pub fn fc_pg_current_logfile_1arg(
     }
     // SAFETY: null-checked text arg of a non-strict fn.
     let fmt = unsafe { fcinfo.arg_varlena_packed(0)? };
-    let fmt: Vec<u8> = cstring_prefix(fmt.data()).to_vec();
+    let fmt: Vec<u8> = ::mcx::std_vec_from_slice("adt", &cstring_prefix(fmt.data()))?;
     current_logfile(fcinfo, Some(&fmt))
 }
 
@@ -1161,8 +1110,6 @@ const fn b(foid: Oid, name: &'static str, nargs: i16, func: PGFunction) -> FmgrB
     }
 }
 
-// 1215/1216 are absent from the canonical table (SQL-language in C, STRICT).
-
 // varchar.c typmodout slice hosted here until the varchar unit lands.
 fn typmod_paren(fcinfo: &mut Fcinfo, s: String) -> PgResult<Datum> {
     let mcx = fcinfo.result_mcx();
@@ -1261,7 +1208,7 @@ fn collect_keyword_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo) -> PgResult<Keyw
     let mut attinmeta = funcapi::AttInMetadata::new(&desc)?;
 
     let n = keywords::ScanKeywords.num_keywords as usize;
-    let mut tuples = Vec::with_capacity(n);
+    let mut tuples = ::mcx::std_vec_with_capacity("adt", n)?;
     for i in 0..n {
         let word = keywords::GetScanKeyword(i, &keywords::ScanKeywords).expect("index < n");
         let (catcode, catdesc): (&[u8], &[u8]) = match keywords::ScanKeywordCategories[i] {
@@ -1282,7 +1229,7 @@ fn collect_keyword_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo) -> PgResult<Keyw
         let cstrings = [Some(word), Some(catcode), Some(barelabel), Some(catdesc), Some(baredesc)];
         let (values, isnull) = attinmeta.build(mcx, &cstrings[..natts])?;
         let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &isnull)?;
-        tuples.push(tuple.image().to_vec());
+        tuples.push(::mcx::std_vec_from_slice("adt", &tuple.image())?);
     }
     Ok(KeywordRows { tuples })
 }
@@ -1371,7 +1318,7 @@ fn collect_catalog_fk_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo) -> PgResult<C
     }
 
     let rows = crate::catalog_fk::SYS_FK_RELATIONSHIPS;
-    let mut tuples = Vec::with_capacity(rows.len());
+    let mut tuples = ::mcx::std_vec_with_capacity("adt", rows.len())?;
     for (fk_table, pk_table, fk_columns, pk_columns, is_array, is_opt) in rows {
         let values = [
             Datum::from_oid(*fk_table),
@@ -1383,7 +1330,7 @@ fn collect_catalog_fk_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo) -> PgResult<C
         ];
         let tuple =
             heaptuple::heap_form_tuple(mcx, &desc, &values[..natts], &[false; 6][..natts])?;
-        tuples.push(tuple.image().to_vec());
+        tuples.push(::mcx::std_vec_from_slice("adt", &tuple.image())?);
     }
     Ok(CatalogFkRows { tuples })
 }
@@ -1435,7 +1382,7 @@ fn open_dir_err(e: &std::io::Error, location: &str) -> Box<PgError> {
     elog::ereport(types_error::ERROR)
         .with_saved_errno(e.raw_os_error().unwrap_or(0))
         .errcode_for_file_access()
-        .errmsg(format!("could not open directory \"{location}\": %m"))
+        .errmsg(format!("could not open directory \"{location}\": {PCT_M}"))
         .into_error()
         .into()
 }
@@ -1447,7 +1394,7 @@ fn read_dir_err(e: &std::io::Error, location: &str) -> Box<PgError> {
     elog::ereport(types_error::ERROR)
         .with_saved_errno(e.raw_os_error().unwrap_or(0))
         .errcode_for_file_access()
-        .errmsg(format!("could not read directory \"{location}\": %m"))
+        .errmsg(format!("could not read directory \"{location}\": {PCT_M}"))
         .into_error()
         .into()
 }
@@ -1547,7 +1494,7 @@ pub fn fc_pg_tablespace_location(
     _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    use elog::ereport;
+    use elog::{ereport, PCT_M};
     use types_error::ERROR;
 
     let mut tablespace_oid = fcinfo.arg_oid(0);
@@ -1563,7 +1510,7 @@ pub fn fc_pg_tablespace_location(
         ereport(ERROR)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg(format!("could not stat file \"{sourcepath}\": %m"))
+            .errmsg(format!("could not stat file \"{sourcepath}\": {PCT_M}"))
             .into_error()
             .into()
     })?;
@@ -1574,7 +1521,7 @@ pub fn fc_pg_tablespace_location(
         ereport(ERROR)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg(format!("could not read symbolic link \"{sourcepath}\": %m"))
+            .errmsg(format!("could not read symbolic link \"{sourcepath}\": {PCT_M}"))
             .into_error()
             .into()
     })?;
@@ -1604,10 +1551,8 @@ pub const MISC_BUILTINS: &[FmgrBuiltin] = &[
     b(3778, "pg_tablespace_location", 1, fc_pg_tablespace_location),
     b(2918, "numerictypmodout", 1, fc_numerictypmodout),
     b(861, "current_database", 0, fc_current_database),
-    b(1215, "obj_description", 2, fc_obj_description),
     b(1264, "PG_char_to_encoding", 1, fc_pg_char_to_encoding),
     b(1597, "PG_encoding_to_char", 1, fc_pg_encoding_to_char),
-    b(1216, "col_description", 2, fc_col_description),
     b(2848, "pg_switch_wal", 0, fc_pg_switch_wal),
     b(2850, "pg_walfile_name_offset", 1, fc_pg_walfile_name_offset),
     b(2851, "pg_walfile_name", 1, fc_pg_walfile_name),
@@ -1675,7 +1620,6 @@ pub const MISC_BUILTINS: &[FmgrBuiltin] = &[
         retset: true,
         func: fc_pg_get_keywords,
     },
-    b(1993, "shobj_description", 2, fc_shobj_description),
     b(1268, "parse_ident", 2, fc_parse_ident),
     FmgrBuiltin {
         foid: 2556,

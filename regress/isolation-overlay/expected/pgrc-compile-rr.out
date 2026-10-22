@@ -1,0 +1,410 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1rr s1sel s1agg mflush m0 s1sel s1agg s1c rsel
+setup_delete
+------------
+done        
+(1 row)
+
+setup_update
+------------
+done        
+(1 row)
+
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1sel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|0
+ 2|0
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|0
+12|0
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(18 rows)
+
+step s1agg: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   18| 10|  1| 20
+(1 row)
+
+step mflush: CALL pgrc_seal('pgrc_t');
+step m0: SELECT pgrc_tombs_in('pgrc_t', 0, 0) AS all_folded;
+all_folded
+----------
+t         
+(1 row)
+
+step s1sel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|0
+ 2|0
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|0
+12|0
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(18 rows)
+
+step s1agg: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   18| 10|  1| 20
+(1 row)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|0
+ 2|0
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|0
+12|0
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(18 rows)
+
+
+starting permutation: s1rr s1sel wu wd mflush m8 s1sel s1agg mflush s1sel s1c mflush m0 rsel
+setup_delete
+------------
+done        
+(1 row)
+
+setup_update
+------------
+done        
+(1 row)
+
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1sel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|0
+ 2|0
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|0
+12|0
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(18 rows)
+
+step wu: UPDATE pgrc_t SET v = v + 1 WHERE id IN (1, 11);
+step wd: DELETE FROM pgrc_t WHERE id IN (2, 12);
+step mflush: CALL pgrc_seal('pgrc_t');
+step m8: SELECT pgrc_tombs_in('pgrc_t', 8, 8) AS eight_kept;
+eight_kept
+----------
+t         
+(1 row)
+
+step s1sel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|0
+ 2|0
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|0
+12|0
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(18 rows)
+
+step s1agg: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   18| 10|  1| 20
+(1 row)
+
+step mflush: CALL pgrc_seal('pgrc_t');
+step s1sel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|0
+ 2|0
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|0
+12|0
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(18 rows)
+
+step s1c: COMMIT;
+step mflush: CALL pgrc_seal('pgrc_t');
+step m0: SELECT pgrc_tombs_in('pgrc_t', 0, 0) AS all_folded;
+all_folded
+----------
+t         
+(1 row)
+
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|1
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|1
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(16 rows)
+
+
+starting permutation: wu wd s1rr s1agg mflush m0 s1sel s1agg s1c rsel
+setup_delete
+------------
+done        
+(1 row)
+
+setup_update
+------------
+done        
+(1 row)
+
+step wu: UPDATE pgrc_t SET v = v + 1 WHERE id IN (1, 11);
+step wd: DELETE FROM pgrc_t WHERE id IN (2, 12);
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1agg: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   16| 12|  1| 20
+(1 row)
+
+step mflush: CALL pgrc_seal('pgrc_t');
+step m0: SELECT pgrc_tombs_in('pgrc_t', 0, 0) AS all_folded;
+all_folded
+----------
+t         
+(1 row)
+
+step s1sel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|1
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|1
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(16 rows)
+
+step s1agg: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   16| 12|  1| 20
+(1 row)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|1
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|1
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(16 rows)
+
+
+starting permutation: s1sz s1sel wu wd mflush m8 s1sel s1agg s1c mflush m0 rsel
+setup_delete
+------------
+done        
+(1 row)
+
+setup_update
+------------
+done        
+(1 row)
+
+step s1sz: BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY;
+step s1sel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|0
+ 2|0
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|0
+12|0
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(18 rows)
+
+step wu: UPDATE pgrc_t SET v = v + 1 WHERE id IN (1, 11);
+step wd: DELETE FROM pgrc_t WHERE id IN (2, 12);
+step mflush: CALL pgrc_seal('pgrc_t');
+step m8: SELECT pgrc_tombs_in('pgrc_t', 8, 8) AS eight_kept;
+eight_kept
+----------
+t         
+(1 row)
+
+step s1sel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|0
+ 2|0
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|0
+12|0
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(18 rows)
+
+step s1agg: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   18| 10|  1| 20
+(1 row)
+
+step s1c: COMMIT;
+step mflush: CALL pgrc_seal('pgrc_t');
+step m0: SELECT pgrc_tombs_in('pgrc_t', 0, 0) AS all_folded;
+all_folded
+----------
+t         
+(1 row)
+
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|1
+ 4|5
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|1
+14|5
+15|0
+16|0
+17|0
+18|0
+19|0
+20|0
+(16 rows)
+

@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/nodes/outfuncs.c: 1 stack-depth check sites
+733	outNode	crates/backend/nodes/outfuncs/src/lib.rs	out_node	yes	

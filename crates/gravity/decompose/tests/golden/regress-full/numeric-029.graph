@@ -1,0 +1,19 @@
+-- regress-full-numeric-029
+-- WITH rows AS (SELECT i, to_char(i, 'RN') AS roman FROM generate_series(1, 3999) AS i) SELECT bool_and(to_number(roman, 'RN') = i) as valid FROM rows;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@2^
+  source const
+  srf from rti=2 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:3999)]
+  project (1=v2.1)
+  outs 1=w4:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2517(1=op1752(fn1777(fn1773(outer.1, c25:'RN'), c25:'RN'), fn1740(outer.1))))
+  outs 1=w1:val
+breaker slot=0 kind=PlainAgg budget=Fixed(80) spill=None producer=p0 layout=[]->[MinI64@0,Count@8]+valid 24B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[MinI64@0,Count@8]+valid 24B
+  agg aggno=0 fn=2517 reg=BoolAnd slot=0 count_slot=- final=Bool class=BoolAnd trans=Abi(MinI64) mods=[] expr=agg2517(1=op1752(fn1777(fn1773(outer.1, c25:'RN'), c25:'RN'), fn1740(outer.1)))
+mapped: FunctionScan Agg

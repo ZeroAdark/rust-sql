@@ -15,8 +15,7 @@
 // equivalent.
 //
 // Deliberate divergences (recorded in notes/contrib-pgfdw-p2.md):
-// - parallel_commit / parallel_abort server options are parsed but the
-//   commit/abort paths always run C's serial arms.
+// - parallel_abort is parsed but the abort paths always run C's serial arms.
 // - GSSAPI delegation is dormant (same as dblink).
 // - postgres_fdw.application_name rides the placeholder custom-GUC store
 //   (SET works; no DefineCustomStringVariable metadata).
@@ -54,12 +53,12 @@ const CONNECTION_CLEANUP_TIMEOUT_MS: i64 = 30_000;
 const RETRY_CANCEL_TIMEOUT_MS: i64 = 1_000;
 
 // C PgFdwConnState.pendingAreq, by value: the in-flight async FETCH's cursor
-// plus its requestor Append's plan_node_id (C reaches the AsyncRequest by
+// plus its requestor Append's identity (C reaches the AsyncRequest by
 // pointer; we cannot reach another node's state, so ownership is by id).
 #[derive(Clone)]
 pub(crate) struct PendingFetch {
     pub(crate) cursor_number: u32,
-    pub(crate) requestor_plan_id: i32,
+    pub(crate) requestor_id: u64,
     /// The owning scan's remote SELECT (C fsstate->query): a failed FETCH
     /// drained on another scan's behalf is reported against it.
     pub(crate) query: String,
@@ -166,18 +165,18 @@ pub(crate) fn remote_error(res: &QueryResult, sql: Option<&str>) -> Box<PgError>
         PgError::error("could not obtain message string for remote error")
     };
     e = e.with_sqlstate(sqlstate);
-    if !diag.detail.is_empty() {
+    if diag.has_detail {
         e = e.with_detail(diag.detail.clone());
     }
-    if !diag.hint.is_empty() {
+    if diag.has_hint {
         e = e.with_hint(diag.hint.clone());
     }
     let mut ctx = String::new();
-    if !diag.context.is_empty() {
+    if diag.has_context {
         ctx.push_str(&diag.context);
     }
     if let Some(sql) = sql {
-        if !ctx.is_empty() {
+        if diag.has_context {
             ctx.push('\n');
         }
         ctx.push_str(&format!("remote SQL command: {sql}"));
@@ -310,7 +309,7 @@ pub(crate) fn begin_async_fetch(
     key: Oid,
     sql: &str,
     cursor_number: u32,
-    requestor_plan_id: i32,
+    requestor_id: u64,
     query: &str,
 ) -> PgResult<()> {
     with_entry(key, |e| -> PgResult<()> {
@@ -324,7 +323,7 @@ pub(crate) fn begin_async_fetch(
             ));
         }
         e.pending_fetch =
-            Some(PendingFetch { cursor_number, requestor_plan_id, query: query.to_string() });
+            Some(PendingFetch { cursor_number, requestor_id, query: query.to_string() });
         Ok(())
     })?
 }
@@ -596,15 +595,7 @@ fn connect_pg_server<'mcx>(
 
     check_conn_params(&opts, server, user)?;
 
-    // Build a conninfo string; pgclient's resolver applies libpq's defaults
-    // ladder exactly as PQconnectdbParams would.
-    let mut conninfo = String::new();
-    for (k, v) in &opts {
-        conninfo.push_str(k);
-        conninfo.push_str("='");
-        conninfo.push_str(&escape_param_str(v));
-        conninfo.push_str("' ");
-    }
+    let conninfo = params_conninfo(&opts)?;
 
     we_lazy(&WE_CONNECT, "PostgresFdwConnect")?;
     let conn = match pgclient::connect_db(
@@ -637,6 +628,20 @@ fn connect_pg_server<'mcx>(
         return Err(e);
     }
     Ok(conn)
+}
+
+// C passes keyword/value arrays (PQconnectdbParams); as a conninfo string for
+// pgclient's resolver, which then applies libpq's defaults ladder. An empty
+// value is skipped as conninfo_array_parse skips it, leaving the default.
+fn params_conninfo(opts: &[(String, String)]) -> PgResult<String> {
+    let mut conninfo = String::new();
+    for (k, v) in opts.iter().filter(|(_, v)| !v.is_empty()) {
+        conninfo.push_str(k);
+        conninfo.push_str("='");
+        conninfo.push_str(&escape_param_str(v)?);
+        conninfo.push_str("' ");
+    }
+    Ok(conninfo)
 }
 
 // connection.c:522-560: search backwards for the last non-empty
@@ -686,7 +691,7 @@ fn add_scram_passthrough_options(
 
 fn b64_scram_key(key: &[u8]) -> PgResult<String> {
     let len = pg_b64::pg_b64_enc_len(key.len() as i32);
-    let mut out = vec![0u8; len as usize];
+    let mut out = ::mcx::std_vec_from_elem("postgres_fdw", 0u8, len as usize)?;
     let encoded_len = pg_b64::pg_b64_encode(key, key.len() as i32, &mut out, len);
     if encoded_len < 0 {
         return Err(Box::new(PgError::error("could not encode SCRAM client key")));
@@ -728,15 +733,17 @@ fn session_has_scram_keys() -> bool {
         && init_small::globals::TryWithMyProcPort(|p| p.has_scram_keys).unwrap_or(false)
 }
 
-fn escape_param_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+fn escape_param_str(s: &str) -> PgResult<String> {
+    let mut out = String::new();
+    out.try_reserve(s.len())
+        .map_err(|_| mcx::oom_named("postgres_fdw", s.len()))?;
     for c in s.chars() {
         if c == '\\' || c == '\'' {
             out.push('\\');
         }
         out.push(c);
     }
-    out
+    Ok(out)
 }
 
 fn user_mapping_password_required(user: &UserMapping<'_>) -> PgResult<bool> {
@@ -840,6 +847,68 @@ pub(crate) fn do_sql_command(conn: &mut PgConn, sql: &str) -> PgResult<()> {
     Ok(())
 }
 
+// do_sql_command_begin: send without waiting (parallel commit).
+fn do_sql_command_begin(conn: &mut PgConn, sql: &str) -> PgResult<()> {
+    if !conn.send_query(sql) {
+        return Err(remote_error(&QueryResult::conn_error(conn.error_message()), Some(sql)));
+    }
+    Ok(())
+}
+
+// do_sql_command_end: collect the command's last result (pgfdw_get_result).
+fn do_sql_command_end(conn: &mut PgConn, sql: &str, consume_input: bool) -> PgResult<()> {
+    if consume_input && !conn.consume_input() {
+        return Err(remote_error(&QueryResult::conn_error(conn.error_message()), Some(sql)));
+    }
+    let mut last = None;
+    while let Some(r) = conn.get_result()? {
+        last = Some(r);
+    }
+    let res = last.unwrap_or_else(|| QueryResult::conn_error(conn.error_message()));
+    if res.status != pgclient::ExecStatus::CommandOk {
+        return Err(remote_error(&res, Some(sql)));
+    }
+    Ok(())
+}
+
+// pgfdw_finish_pre_commit_cleanup: collect each COMMIT sent in parallel,
+// then any DEALLOCATE ALL, also sent in parallel (errors ignored).
+fn pgfdw_finish_pre_commit_cleanup(
+    map: &mut ConnMap,
+    pending: &[Oid],
+) -> PgResult<()> {
+    let mut pending_deallocs = Vec::new();
+    for key in pending {
+        let entry = map.get_mut(key).expect("pending entry");
+        debug_assert!(entry.changing_xact_state);
+        do_sql_command_end(entry.conn.as_mut().expect("live connection"), "COMMIT TRANSACTION", true)?;
+        entry.changing_xact_state = false;
+        if entry.have_prep_stmt
+            && entry.have_error
+            && entry.conn.as_mut().expect("live connection").send_query("DEALLOCATE ALL")
+        {
+            pending_deallocs.push(*key);
+            continue;
+        }
+        entry.have_prep_stmt = false;
+        entry.have_error = false;
+        pgfdw_reset_xact_state(entry, true);
+    }
+    for key in &pending_deallocs {
+        let entry = map.get_mut(key).expect("pending entry");
+        let conn = entry.conn.as_mut().expect("live connection");
+        while let Ok(Some(_)) = conn.get_result() {
+            if conn.connection_bad() {
+                break;
+            }
+        }
+        entry.have_prep_stmt = false;
+        entry.have_error = false;
+        pgfdw_reset_xact_state(entry, true);
+    }
+    Ok(())
+}
+
 // begin_remote_xact: open the remote main transaction (>= REPEATABLE READ;
 // SERIALIZABLE mirrors the local level) and stack savepoints lazily up to the
 // current local nesting level.
@@ -912,16 +981,16 @@ fn debug3(msg: String) {
 
 // ---------- transaction callbacks ----------
 
-// pgfdw_xact_callback. The serial paths only (parallel_commit/parallel_abort
-// recorded divergence).
+// pgfdw_xact_callback (parallel_abort runs the serial arm, recorded divergence).
 fn pgfdw_xact_callback(event: XactEvent, _arg: Datum) -> PgResult<()> {
     if !XACT_GOT_CONNECTION.with(Cell::get) {
         return Ok(());
     }
     // Take the whole map for the scan; reinstall in every path.
     let mut map = CONNECTIONS.with(|c| std::mem::take(&mut *c.borrow_mut()));
+    let mut pending: Vec<Oid> = Vec::new();
     let r = (|| -> PgResult<()> {
-        for entry in map.values_mut() {
+        for (key, entry) in map.iter_mut() {
             if entry.conn.is_none() {
                 continue;
             }
@@ -939,6 +1008,14 @@ fn pgfdw_xact_callback(event: XactEvent, _arg: Datum) -> PgResult<()> {
                             return Err(abort_cleanup_failure_error(entry.serverid));
                         }
                         entry.changing_xact_state = true;
+                        if entry.parallel_commit {
+                            do_sql_command_begin(
+                                entry.conn.as_mut().expect("live connection"),
+                                "COMMIT TRANSACTION",
+                            )?;
+                            pending.push(*key);
+                            continue;
+                        }
                         do_sql_command(
                             entry.conn.as_mut().expect("live connection"),
                             "COMMIT TRANSACTION",
@@ -979,6 +1056,13 @@ fn pgfdw_xact_callback(event: XactEvent, _arg: Datum) -> PgResult<()> {
         }
         Ok(())
     })();
+    let r = r.and_then(|()| {
+        if pending.is_empty() {
+            Ok(())
+        } else {
+            pgfdw_finish_pre_commit_cleanup(&mut map, &pending)
+        }
+    });
     CONNECTIONS.with(|c| *c.borrow_mut() = map);
     // Out of the transaction only once the scan completed: C's resets sit past
     // every ereport(ERROR) in the scan, so a pre-commit rejection (or a failed
@@ -1023,8 +1107,9 @@ fn pgfdw_subxact_callback(
     }
     let curlevel = xact::GetCurrentTransactionNestLevel();
     let mut map = CONNECTIONS.with(|c| std::mem::take(&mut *c.borrow_mut()));
+    let mut pending: Vec<Oid> = Vec::new();
     let r = (|| -> PgResult<()> {
-        for entry in map.values_mut() {
+        for (key, entry) in map.iter_mut() {
             if entry.conn.is_none() || entry.xact_depth < curlevel {
                 continue;
             }
@@ -1042,6 +1127,11 @@ fn pgfdw_subxact_callback(
                 }
                 let sql = format!("RELEASE SAVEPOINT s{curlevel}");
                 entry.changing_xact_state = true;
+                if entry.parallel_commit {
+                    do_sql_command_begin(entry.conn.as_mut().expect("live connection"), &sql)?;
+                    pending.push(*key);
+                    continue;
+                }
                 do_sql_command(entry.conn.as_mut().expect("live connection"), &sql)?;
                 entry.changing_xact_state = false;
             } else {
@@ -1051,6 +1141,17 @@ fn pgfdw_subxact_callback(
         }
         Ok(())
     })();
+    // pgfdw_finish_pre_subcommit_cleanup.
+    let r = r.and_then(|()| {
+        let sql = format!("RELEASE SAVEPOINT s{curlevel}");
+        for key in &pending {
+            let entry = map.get_mut(key).expect("pending entry");
+            do_sql_command_end(entry.conn.as_mut().expect("live connection"), &sql, true)?;
+            entry.changing_xact_state = false;
+            pgfdw_reset_xact_state(entry, false);
+        }
+        Ok(())
+    });
     CONNECTIONS.with(|c| *c.borrow_mut() = map);
     r
 }
@@ -1389,8 +1490,8 @@ fn get_connections_internal(
     });
     for row in rows {
         let server_name = server_name_missing_ok(row.serverid)?;
-        let mut values = vec![Datum::null(); expected as usize];
-        let mut nulls = vec![true; expected as usize];
+        let mut values = ::mcx::std_vec_from_elem("postgres_fdw", Datum::null(), expected as usize)?;
+        let mut nulls = ::mcx::std_vec_from_elem("postgres_fdw", true, expected as usize)?;
         if let Some(n) = &server_name {
             values[0] = types_fmgr::varlena_result(varlena::cstring_to_text(mcx, n.as_bytes())?);
             nulls[0] = false;
@@ -1561,6 +1662,20 @@ fn pgfdw_get_cleanup_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_option_values_are_left_to_libpq_defaults() {
+        let opts = vec![
+            ("dbname".to_string(), "db".to_string()),
+            ("sslmode".to_string(), "".to_string()),
+            ("application_name".to_string(), "".to_string()),
+            ("fallback_application_name".to_string(), "postgres_fdw".to_string()),
+        ];
+        assert_eq!(
+            params_conninfo(&opts).unwrap(),
+            "dbname='db' fallback_application_name='postgres_fdw' "
+        );
+    }
 
     // connection.c:522-560: "postgres_fdw" is a fallback_application_name,
     // never an explicit application_name (libpq lets a service-file or

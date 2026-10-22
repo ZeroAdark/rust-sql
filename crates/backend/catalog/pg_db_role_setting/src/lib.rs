@@ -38,7 +38,7 @@ fn setconfig_entries(mcx: Mcx<'_>, d: Datum) -> PgResult<Vec<String>> {
     };
     let image = detoast::detoast_attr(mcx, raw)?;
     let (elems, nulls) = arrayfuncs::deconstruct_array_builtin(mcx, &image, TEXTOID, true)?;
-    let mut out = Vec::with_capacity(elems.len());
+    let mut out = ::mcx::std_vec_with_capacity("catalog", elems.len())?;
     for (e, isnull) in elems.iter().zip(nulls.iter()) {
         if *isnull {
             continue;
@@ -58,8 +58,8 @@ fn entries_to_text_array<'mcx>(
     mcx: Mcx<'mcx>,
     entries: &[String],
 ) -> PgResult<mcx::PgVec<'mcx, u8>> {
-    let mut datums = Vec::with_capacity(entries.len());
-    let mut _keep_alive = Vec::with_capacity(entries.len());
+    let mut datums = ::mcx::std_vec_with_capacity("catalog", entries.len())?;
+    let mut _keep_alive = ::mcx::std_vec_with_capacity("catalog", entries.len())?;
     for entry in entries {
         let t = varlena::cstring_to_text(mcx, entry.as_bytes())?;
         datums.push(Datum::from_usize(t.as_bytes().as_ptr() as usize));

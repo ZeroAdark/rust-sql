@@ -1,0 +1,3 @@
+path	crates/backend/access/pgrcolumnar/pgrc_batch/src/arena.rs
+growth	std::vec::Vec::push	1
+ir-only	alloc::alloc::alloc	1

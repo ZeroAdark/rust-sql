@@ -209,14 +209,15 @@ pub fn fc_jsonb_array_element_text(
 
 // Text-array argument deconstructed like C (jsonb_op.c:55 deconstruct_array:
 // 8-byte datums + null flags); payload slices are produced lazily so no
-// per-element slice vector is charged against MaxAllocSize.
-struct TextArrayElems<'mcx> {
-    elems: PgVec<'mcx, Datum>,
-    nulls: PgVec<'mcx, bool>,
+// per-element slice vector is charged against MaxAllocSize. Public so the
+// Gravity shim generator can translate the wrappers that read one.
+pub struct TextArrayElems<'mcx> {
+    pub elems: PgVec<'mcx, Datum>,
+    pub nulls: PgVec<'mcx, bool>,
 }
 
 impl<'mcx> TextArrayElems<'mcx> {
-    fn iter(&self) -> impl Iterator<Item = &'mcx [u8]> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = &'mcx [u8]> + '_ {
         self.elems.iter().zip(self.nulls.iter()).filter(|(_, n)| !**n).map(|(d, _)| {
             // SAFETY: non-null text element datums point into the flat image.
             unsafe { PackedVarlena::from_ptr(d.as_usize() as *const u8) }.data()

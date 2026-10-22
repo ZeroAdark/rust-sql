@@ -341,6 +341,9 @@ fn a_expr_distinct_set_returning_op_errors() {
 
 #[test]
 fn a_expr_nullif_non_boolean_op_errors() {
+    // Installs the operator seams itself (get_user_id first): without it the
+    // test passed only when a sibling test had already run the fixture.
+    install_oper_fixture();
     let ctx = MemoryContext::new("t");
     let mcx = ctx.mcx();
     let mut pstate = make_parsestate(mcx, None);
@@ -834,6 +837,8 @@ fn multi_assign_ref<'mcx>(
 
 #[test]
 fn multi_assign_ref_row_expr_source_yields_columns_in_order() {
+    // transformExpressionList is the oper fixture's seam: install it here, never rely on a sibling.
+    install_oper_fixture();
     let ctx = MemoryContext::new("t");
     let mcx = ctx.mcx();
     let mut pstate = make_parsestate(mcx, None);
@@ -871,6 +876,8 @@ fn multi_assign_ref_row_expr_source_yields_columns_in_order() {
 
 #[test]
 fn multi_assign_ref_row_keeps_set_to_default_untransformed() {
+    // transformExpressionList is the oper fixture's seam: install it here, never rely on a sibling.
+    install_oper_fixture();
     let ctx = MemoryContext::new("t");
     let mcx = ctx.mcx();
     let mut pstate = make_parsestate(mcx, None);
@@ -892,6 +899,8 @@ fn multi_assign_ref_row_keeps_set_to_default_untransformed() {
 
 #[test]
 fn multi_assign_ref_column_count_mismatch_is_42601() {
+    // transformExpressionList is the oper fixture's seam: install it here, never rely on a sibling.
+    install_oper_fixture();
     let ctx = MemoryContext::new("t");
     let mcx = ctx.mcx();
     let mut pstate = make_parsestate(mcx, None);
@@ -1225,4 +1234,43 @@ fn jsonb_subscript_errors_carry_jsonbsubs_c_lines() {
     let err = crate::subscripts::jsonb_bad_subscript_type_named(&pstate, "integer", "h", 12);
     assert_eq!(err.message(), "subscript type integer is not supported");
     assert_eq!(err.location().map(|l| l.lineno), Some(116));
+}
+
+/// audit main-0915 fp-parser-parse_expr-p2#1: the COLLATE lookup's error
+/// position mirrors pcb_error_callback (parse_node.c:174) — a query cancel
+/// raised during the lookup gets no cursor, any other error does.
+#[test]
+fn collation_lookup_position_skips_query_cancel() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut pstate = make_parsestate(mcx, None);
+    pstate.p_sourcetext = Some(b"SELECT 'x' COLLATE \"nope\"");
+    let cancel = Box::new(
+        types_error::PgError::error("canceling statement due to user request")
+            .with_sqlstate(types_error::ERRCODE_QUERY_CANCELED),
+    );
+    assert_eq!(crate::collation_lookup_position(&pstate, cancel, 11).cursor_position(), None);
+    let missing = Box::new(types_error::PgError::error("collation \"nope\" does not exist"));
+    assert_eq!(crate::collation_lookup_position(&pstate, missing, 11).cursor_position(), Some(12));
+}
+
+#[test]
+fn coalesce_srf_error_has_c_source_location() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut pstate = make_parsestate(mcx, None);
+    pstate.p_sourcetext = Some(b"SELECT COALESCE(generate_series(1, 2), 0);");
+    pstate.p_last_srf = Some(int_const(mcx, 1, 16));
+
+    let err = crate::check_srf_in_construct(&pstate, None, "COALESCE").unwrap_err();
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
+    assert_eq!(err.message, "set-returning functions are not allowed in COALESCE");
+    assert_eq!(err.hint.as_deref(), Some(
+        "You might be able to move the set-returning function into a LATERAL FROM item."
+    ));
+    assert_eq!(err.cursor_position(), Some(17));
+    let location = err.location.as_ref().unwrap();
+    assert_eq!(location.funcname.as_deref(), Some("transformCoalesceExpr"));
+    assert_eq!(location.filename.as_deref(), Some("parse_expr.c"));
+    assert_eq!(location.lineno, 2267);
 }

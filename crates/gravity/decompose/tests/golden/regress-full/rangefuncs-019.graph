@@ -1,0 +1,31 @@
+-- regress-full-rangefuncs-019
+-- select * from rngfunc2 where f2 in (select f2 from rngfunct(rngfunc2.rngfuncid) z where z.rngfuncid = 1) ORDER BY 1,2;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=2 eligible rows=2260 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n2@0 n1@1 n0@3^
+  source range rel=40632 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2)
+  nest inner=n3 JOIN_SEMI vol=v params=($exec0=outer.2, $exec1=outer.1)
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0
+  source const
+  srf from rti=3 [1:Other fn40635 cols=2 fn40635($exec1)]
+  filter op96(v3.1, c23:1)
+  filter op96($exec0, v3.2)
+  project (1=v3.1, 2=v3.2)
+  project (1=outer.1, 2=outer.2)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w8:val 2=w8:val
+  outs 1=w8:val 2=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=w8:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+param $exec0 owner=n1 type=23 rep=w8:val
+param $exec1 owner=n1 type=23 rep=w8:val
+mapped: SeqScan FunctionScan NestLoop NestLoopParam Sort

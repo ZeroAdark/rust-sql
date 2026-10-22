@@ -1,0 +1,85 @@
+-- regress-full-partition_join-021
+-- SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_e t1, prt2_e t2 WHERE (t1.a + t1.b)/2 = (t2.b + t2.a)/2 AND t1.c = 0 ORDER BY t1.a, t2.b;
+graph pipelines=7 breakers=6 init_plans=0 root=p6
+p0 node=5 eligible rows=5 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n5@0 n4@2
+  source range rel=43988 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v3.3, c23:0)
+  project (1=v3.1, 2=v3.3, 3=v3.2)
+  build keys=(op528(op551(outer.1, outer.3), c23:2)) decls=23/23:I32
+  outs 1=w8:val 2=w8:val 3=w8:val
+p1 node=9 eligible rows=5 end=breaker(slot=1 HashBuild)
+  desc words=bits@6/7
+  nodes n9@0 n8@2
+  source range rel=43991 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v4.3, c23:0)
+  project (1=v4.1, 2=v4.3, 3=v4.2)
+  build keys=(op528(op551(outer.1, outer.3), c23:2)) decls=23/23:I32
+  outs 1=w8:val 2=w8:val 3=w8:val
+p2 node=13 eligible rows=2 end=breaker(slot=2 HashBuild)
+  desc words=bits@7/8
+  nodes n13@0 n12@2
+  source range rel=43994 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v5.3, c23:0)
+  project (1=v5.1, 2=v5.3, 3=v5.2)
+  build keys=(op528(op551(outer.1, outer.3), c23:2)) decls=23/23:I32
+  outs 1=w8:val 2=w8:val 3=w8:val
+p3 node=3 eligible rows=84 end=breaker(slot=3 Sort)
+  desc consumes=slot0@p0
+  nodes n3@0 n2@1 n1@3 n0@5^
+  source range rel=44003 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v6.2, 2=v6.3, 3=v6.1)
+  probe slot=0 inner=n4 JOIN_INNER keys=(op528(op551(outer.1, outer.3), c23:2)) decls=23/23:I32 clauses=(op96(op528(op551(outer.1, outer.3), c23:2), op528(op551(inner.1, inner.3), c23:2)))
+  project (1=inner.1, 2=inner.2, 3=outer.1, 4=outer.2)
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  sort keys=1+:I32,3+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val 4=w8:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+p4 node=7 eligible rows=83 end=breaker(slot=3 Sort)
+  desc consumes=slot1@p1
+  nodes n7@0 n6@1 n1@3 n0@5^
+  source range rel=44006 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.2, 2=v7.3, 3=v7.1)
+  probe slot=1 inner=n8 JOIN_INNER keys=(op528(op551(outer.1, outer.3), c23:2)) decls=23/23:I32 clauses=(op96(op528(op551(outer.1, outer.3), c23:2), op528(op551(inner.1, inner.3), c23:2)))
+  project (1=inner.1, 2=inner.2, 3=outer.1, 4=outer.2)
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  sort keys=1+:I32,3+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val 4=w8:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+p5 node=11 eligible rows=33 end=breaker(slot=3 Sort)
+  desc consumes=slot2@p2
+  nodes n11@0 n10@1 n1@3 n0@5^
+  source range rel=44009 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v8.2, 2=v8.3, 3=v8.1)
+  probe slot=2 inner=n12 JOIN_INNER keys=(op528(op551(outer.1, outer.3), c23:2)) decls=23/23:I32 clauses=(op96(op528(op551(outer.1, outer.3), c23:2), op528(op551(inner.1, inner.3), c23:2)))
+  project (1=inner.1, 2=inner.2, 3=outer.1, 4=outer.2)
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  sort keys=1+:I32,3+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val 4=w8:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot3@p5
+  nodes n0@0
+  source breaker slot=3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=Sort budget=Share spill=Runs producer=p3 layout=[I32,I32]->[Count@16] 24B order=1+,3+
+breaker slot=3 kind=Sort budget=Share spill=Runs producer=p4 layout=[I32,I32]->[Count@16] 24B order=1+,3+
+breaker slot=3 kind=Sort budget=Share spill=Runs producer=p5 layout=[I32,I32]->[Count@16] 24B order=1+,3+
+mapped: Append SeqScan HashJoin Sort Hash

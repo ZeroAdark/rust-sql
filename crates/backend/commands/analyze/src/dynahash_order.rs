@@ -103,6 +103,55 @@ impl<'m> DynaHash<'m> {
     }
 }
 
+// dynahash's entry freelist: HASH_REMOVE returns the entry and the next
+// HASH_ENTER reuses it, so storage is bounded by the live entry count
+// (array_typanalyze.c:694, ts_typanalyze.c:466), not by the insert count.
+pub(crate) struct EntrySlab<'m, T> {
+    items: PgVec<'m, T>,
+    free: PgVec<'m, u32>,
+}
+
+impl<'m, T> EntrySlab<'m, T> {
+    pub(crate) fn new(mcx: Mcx<'m>) -> Self {
+        EntrySlab { items: PgVec::new_in(mcx), free: PgVec::new_in(mcx) }
+    }
+
+    pub(crate) fn alloc(&mut self, item: T) -> u32 {
+        match self.free.pop() {
+            Some(id) => {
+                self.items[id as usize] = item;
+                id
+            }
+            None => {
+                self.items.push(item);
+                (self.items.len() - 1) as u32
+            }
+        }
+    }
+
+    pub(crate) fn release(&mut self, id: u32) {
+        self.free.push(id);
+    }
+
+    #[cfg(test)]
+    fn slots(&self) -> usize {
+        self.items.len()
+    }
+}
+
+impl<T> core::ops::Index<u32> for EntrySlab<'_, T> {
+    type Output = T;
+    fn index(&self, id: u32) -> &T {
+        &self.items[id as usize]
+    }
+}
+
+impl<T> core::ops::IndexMut<u32> for EntrySlab<'_, T> {
+    fn index_mut(&mut self, id: u32) -> &mut T {
+        &mut self.items[id as usize]
+    }
+}
+
 fn next_pow2_int(num: i64) -> u32 {
     let num = num.min(i32::MAX as i64 / 2);
     let mut limit = 1u32;
@@ -181,5 +230,36 @@ mod tests {
         assert_eq!((t.max_bucket, t.low_mask, t.high_mask), (2, 1, 3));
         t.insert(2, 2);
         assert_eq!(order(&t), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn pruned_entries_are_reused_so_storage_tracks_live_entries() {
+        let cx = MemoryContext::new("dynahash");
+        let mut t = DynaHash::new(cx.mcx(), 8).unwrap();
+        let mut slab: EntrySlab<'_, u32> = EntrySlab::new(cx.mcx());
+        // Lossy Counting shape: every element distinct, prune all but the
+        // newest after each bucket of 8 insertions.
+        for round in 0..1000u32 {
+            for k in 0..8u32 {
+                let key = round * 8 + k;
+                t.enter(key).unwrap();
+                let id = slab.alloc(key);
+                t.insert(key, id);
+            }
+            let newest = round * 8 + 7;
+            let mut dead = Vec::new();
+            t.prune(|id| {
+                let keep = slab[id] == newest;
+                if !keep {
+                    dead.push(id);
+                }
+                keep
+            });
+            for id in dead {
+                slab.release(id);
+            }
+        }
+        assert_eq!(t.len(), 1);
+        assert!(slab.slots() <= 9, "slab grew to {} slots", slab.slots());
     }
 }

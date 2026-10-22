@@ -1,0 +1,9 @@
+-- regress-full-event_trigger-006
+-- ALTER TABLE evttrig.two DROP COLUMN col_c;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=and(not($5), not($6)))
+  outs 1=w1:val
+mapped: Result

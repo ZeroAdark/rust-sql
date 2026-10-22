@@ -1,0 +1,9 @@
+backend/catalog/catalog_namespace/src/tests.rs	NS_BY_NAME	unittest	test	test	#[cfg(test)] mod of backend/catalog/catalog_namespace/src/lib.rs
+backend/catalog/catalog_namespace/src/tests.rs	RELS	unittest	test	test	#[cfg(test)] mod of backend/catalog/catalog_namespace/src/lib.rs
+backend/catalog/catalog_namespace/src/tests.rs	ROLNAME	unittest	test	test	#[cfg(test)] mod of backend/catalog/catalog_namespace/src/lib.rs
+backend/catalog/catalog_namespace/src/tests.rs	BOOTSTRAP	unittest	test	test	#[cfg(test)] mod of backend/catalog/catalog_namespace/src/lib.rs
+backend/catalog/catalog_namespace/src/tests.rs	USER	unittest	test	test	#[cfg(test)] mod of backend/catalog/catalog_namespace/src/lib.rs
+backend/catalog/catalog_namespace/src/tests.rs	ACL_DENIED	unittest	test	test	#[cfg(test)] mod of backend/catalog/catalog_namespace/src/lib.rs
+backend/catalog/catalog_namespace/src/tests.rs	IN_RECOVERY	unittest	test	test	#[cfg(test)] mod of backend/catalog/catalog_namespace/src/lib.rs
+backend/catalog/catalog_namespace/src/tests.rs	PARALLEL_WORKER	unittest	test	test	#[cfg(test)] mod of backend/catalog/catalog_namespace/src/lib.rs
+backend/catalog/catalog_namespace/src/tests.rs	CLEANUPS	unittest	test	test	#[cfg(test)] mod of backend/catalog/catalog_namespace/src/lib.rs

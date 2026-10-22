@@ -1,0 +1,1 @@
+backend/regex/regex_core/src/regex_error.rs	PENDING_CANCEL	pgport	call	scratch	the error a cancel or an alloc refusal raised inside the engine, set by check_interrupt / check_alloc_request and taken by take_cancel_error at the same regex call's error return

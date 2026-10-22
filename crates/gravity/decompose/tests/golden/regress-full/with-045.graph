@@ -1,0 +1,59 @@
+-- regress-full-with-045
+-- with recursive graph(f, t, label) as ( values (1, 2, 'arc 1 -> 2'), (1, 3, 'arc 1 -> 3'), (2, 3, 'arc 2 -> 3'), (1, 4, 'arc 1 -> 4'), (4, 5, 'arc 4 -> 5'), (5, 1, 'arc 5 -> 1') ), search_graph(f, t, label) as ( select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t ) cycle f, t set is_cycle to true default false using path select f, t, label from search_graph;
+graph pipelines=6 breakers=5 init_plans=2 root=p5
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  nodes n1@0
+  source values rti=2 rows=6
+    row (c23:1, c23:2, c25:'arc 1 -> 2')
+    row (c23:1, c23:3, c25:'arc 1 -> 3')
+    row (c23:2, c23:3, c25:'arc 2 -> 3')
+    row (c23:1, c23:4, c25:'arc 1 -> 4')
+    row (c23:4, c23:5, c25:'arc 4 -> 5')
+    row (c23:5, c23:1, c25:'arc 5 -> 1')
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  outs 1=w4:val 2=w4:val 3=vl:row
+p1 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n4@0 n2@1^
+  source breaker slot=0
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=c16:0, 5=array(T_RowExpr))
+  outs 1=w4:val 2=w4:val 3=vl:row 4=w1:val 5=?
+p2 node=9 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 HashBuild)
+  desc consumes=slot0@p0 words=bits@5/6
+  nodes n9@0 n8@1
+  source breaker slot=0
+  project (1=v8.1, 2=v8.2, 3=v8.3)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val 2=w4:val 3=vl:row
+p3 node=7 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Materialize)
+  desc consumes=slot1@p1 consumes=slot2@p2
+  nodes n7@0 n6@2 n2@4^
+  source breaker slot=1
+  filter not(v9.4)
+  project (1=v9.1, 2=v9.2, 3=v9.3, 4=v9.4, 5=v9.5)
+  probe slot=2 inner=n8 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=case(when any2988(T_RowExpr, outer.5) then c16:1) else c16:0, 5=fn383(outer.5, array(T_RowExpr)))
+  outs 1=w4:val 2=w4:val 3=vl:row 4=w1:val 5=?
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w1:val 5=?
+p4 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=4 Materialize)
+  desc consumes=slot1@p1 consumes=slot3@p3
+  nodes n2@0
+  source breaker slot=1
+  iterate body=p3 work=slot1 next=slot3 until=Empty wtparam=1 hash-loud
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5)
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w1:val 5=?
+p5 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot4@p4
+  nodes n0@0
+  source breaker slot=4
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  outs 1=w4:val 2=w4:val 3=vl:row
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B
+breaker slot=4 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B
+init_plan id=1 pipeline=p0 link=Cte param=$exec0 slot=0 raise-free
+init_plan id=2 pipeline=p4 link=Cte param=$exec2 slot=4
+rerun node=2 subplan=-1 pipelines=p3 slots=1,2,3
+mapped: RecursiveUnion ValuesScan CteScan WorkTableScan HashJoin Hash SubPlan

@@ -117,7 +117,7 @@ impl<'mcx> NodeWalker<'mcx> for ContainMutable {
                 if cnst.constisnull {
                     return Ok(false);
                 }
-                let mut vars: Vec<(&[u8], Oid)> = Vec::with_capacity(je.passing_names.len());
+                let mut vars: Vec<(&[u8], Oid)> = ::mcx::std_vec_with_capacity("optimizer", je.passing_names.len())?;
                 for (name, value) in je.passing_names.iter().zip(je.passing_values.iter()) {
                     vars.push((
                         name.as_string().expect("passing name is a String node").sval.as_bytes(),
@@ -535,14 +535,20 @@ impl<'mcx> NodeWalker<'mcx> for ContainLeakedVars {
             | NodeTag::T_CoerceViaIO
             | NodeTag::T_ArrayCoerceExpr => {
                 if check_functions_in_node(node, &mut |f| Ok(!get_func_leakproof(f)?))?
-                    && var_seams::contain_var_clause::call(node)
+                    && var_seams::contain_var_clause::call(node)?
                 {
                     return Ok(true);
                 }
             }
-            // C: SubscriptingRef fetch is leakproof for the array handler;
-            // assignment (store) is not, but stores never reach quals.
-            NodeTag::T_SubscriptingRef => {}
+            // clauses.c:1355-1365: both core handlers are fetch-leakproof
+            // and store-leaky; rule rewriting can put an assignment in a qual.
+            NodeTag::T_SubscriptingRef => {
+                if node.as_subscripting_ref().unwrap().refassgnexpr.is_some()
+                    && var_seams::contain_var_clause::call(node)?
+                {
+                    return Ok(true);
+                }
+            }
             // C special case: a leaky per-column comparison only matters if
             // that column pair contains Vars.
             NodeTag::T_RowCompareExpr => {
@@ -550,8 +556,8 @@ impl<'mcx> NodeWalker<'mcx> for ContainLeakedVars {
                 for (i, opno) in rc.opnos.iter().enumerate() {
                     let funcid = lsyscache::operator::get_opcode(opno)?;
                     if !get_func_leakproof(funcid)?
-                        && (var_seams::contain_var_clause::call(rc.largs.nth(i))
-                            || var_seams::contain_var_clause::call(rc.rargs.nth(i)))
+                        && (var_seams::contain_var_clause::call(rc.largs.nth(i))?
+                            || var_seams::contain_var_clause::call(rc.rargs.nth(i))?)
                     {
                         return Ok(true);
                     }
@@ -561,7 +567,7 @@ impl<'mcx> NodeWalker<'mcx> for ContainLeakedVars {
                 let mm = node.as_min_max_expr().unwrap();
                 let cmp = typcache_seams::type_cache_cmp_proc::call(mm.minmaxtype)?;
                 let leakproof = OidIsValid(cmp) && get_func_leakproof(cmp)?;
-                if !leakproof && var_seams::contain_var_clause::call(node) {
+                if !leakproof && var_seams::contain_var_clause::call(node)? {
                     return Ok(true);
                 }
             }
@@ -578,7 +584,7 @@ pub fn contain_leaked_vars(clause: Node<'_>) -> PgResult<bool> {
 }
 
 pub fn is_pseudo_constant_clause(clause: Node<'_>) -> PgResult<bool> {
-    Ok(!var_seams::contain_var_clause::call(clause) && !contain_volatile_functions(clause)?)
+    Ok(!var_seams::contain_var_clause::call(clause)? && !contain_volatile_functions(clause)?)
 }
 
 pub fn is_pseudo_constant_clause_relids(
@@ -874,7 +880,7 @@ fn saop_const_array_nitems(value: datum::Datum) -> PgResult<i64> {
             img
         }
     };
-    let scratch = mcx::MemoryContext::new_bump("saop_const_array_nitems");
+    let scratch = mcx::MemoryContext::new_wholesale("saop_const_array_nitems");
     let plain = detoast_seams::detoast_attr::call(scratch.mcx(), image)?;
     let n = nitems(&plain.as_slice()[4..]);
     drop(plain);
@@ -899,7 +905,7 @@ fn jsonpath_const_is_mutable(value: datum::Datum, vars: &[(&[u8], Oid)]) -> PgRe
         }
         if b0 & 0x01 == 0x01 && b0 != 0x01 {
             let total = ((b0 >> 1) & 0x7F) as usize;
-            let mut plain = Vec::with_capacity(total + 3);
+            let mut plain = ::mcx::std_vec_with_capacity("optimizer", total + 3)?;
             plain.extend_from_slice(&(((total + 3) as u32) << 2).to_ne_bytes());
             plain.extend_from_slice(core::slice::from_raw_parts(p.add(1), total - 1));
             return adt_jsonpath::mutability::jsp_is_mutable(&plain, vars);
@@ -915,7 +921,7 @@ fn jsonpath_const_is_mutable(value: datum::Datum, vars: &[(&[u8], Oid)]) -> PgRe
             core::slice::from_raw_parts(p, datum::VarlenaRef::from_ptr(p).varsize())
         }
     };
-    let scratch = mcx::MemoryContext::new_bump("jsonpath_const_is_mutable");
+    let scratch = mcx::MemoryContext::new_wholesale("jsonpath_const_is_mutable");
     let plain = detoast_seams::detoast_attr::call(scratch.mcx(), image)?;
     let r = adt_jsonpath::mutability::jsp_is_mutable(plain.as_slice(), vars)?;
     drop(plain);

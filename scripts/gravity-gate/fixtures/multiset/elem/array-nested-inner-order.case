@@ -1,0 +1,10 @@
+# the inner array's order stays exact
+sql: SELECT array_agg(a) FROM t;
+cols: array_agg
+elem: 1	array
+class: unordered
+verdict: mismatch
+[pg]
+{{1,2},{3,4}}
+[got]
+{{4,3},{1,2}}

@@ -1,1 +1,0 @@
-$ ? (@ ? (@ like_regex "$.time(6)ag "is" li7ke_regex "pattern" flag "-s")

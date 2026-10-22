@@ -29,6 +29,8 @@ thread_local! {
     static HAS_SYSCACHE: RefCell<Vec<Oid>> = const { RefCell::new(Vec::new()) };
     static PG_INDEX_ROWS: RefCell<Vec<(Oid, FakeIndexRow)>> = const { RefCell::new(Vec::new()) };
     static INDEX_SCANS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static CAP_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    static DRAIN_INVALS: RefCell<Vec<Oid>> = const { RefCell::new(Vec::new()) };
 }
 
 #[derive(Clone, Copy)]
@@ -114,7 +116,7 @@ fn bump_tupdesc_version(oid: Oid) {
     ROWS.with(|r| r.borrow_mut().get_mut(&oid).unwrap().tupdesc_version += 1);
 }
 
-fn fake_scan(target: Oid, _index_ok: bool, _fnh: bool) -> PgResult<Option<relcache_build_seams::ScannedPgClass>> {
+fn fake_scan(_scratch: Mcx<'_>, target: Oid, _index_ok: bool, _fnh: bool) -> PgResult<Option<relcache_build_seams::ScannedPgClass>> {
     SCAN_LOG.with(|l| l.borrow_mut().push(target));
     if let Some((oid, n)) = INVALIDATE_DURING_BUILD.with(|c| c.get()) {
         if oid == target && n > 0 {
@@ -139,6 +141,7 @@ fn fake_scan(target: Oid, _index_ok: bool, _fnh: bool) -> PgResult<Option<relcac
 
 fn fake_tupdesc(
     mcx: Mcx<'static>,
+    _scratch: Mcx<'_>,
     relid: Oid,
     _form: &FormData_pg_class,
     _relnatts: i16,
@@ -215,6 +218,7 @@ fn install() {
         xact_seams::is_transaction_state::set(|| IN_XACT.with(|c| c.get()));
         xact_seams::get_current_sub_transaction_id::set(|| CUR_SUBID.with(|c| c.get()));
         relmapper_seams::relation_map_invalidate_all::set(|| Ok(()));
+        inval_seams::accept_invalidation_messages::set(fake_accept_invalidation_messages);
         relmapper_seams::relation_map_initialize::set(|| ());
         relmapper_seams::relation_map_initialize_phase2::set(|| Ok(()));
         relmapper_seams::relation_map_initialize_phase3::set(|| Ok(()));
@@ -1020,6 +1024,7 @@ fn codec_rel(
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: support,
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -1081,6 +1086,28 @@ fn init_file_codec_roundtrip() {
     assert_eq!(i.rd_indoption.as_slice(), &[0i16]);
     assert_eq!(i.rd_supportinfo.borrow().len(), 1);
     assert!(i.rd_supportinfo.borrow()[0].is_none());
+}
+
+/// D3888: on the miss path a shell over a shared index core takes the opclass material (rd_opcintype, rd_opfamily,
+/// rd_support, rd_supportinfo) of this backend's own build (C: RelationInitIndexAccessInfo reads the backend's
+/// OpClassCache), never the publisher's copy; the init file's load takes the core's, as C's init file carries it.
+#[test]
+fn a_miss_path_shell_takes_this_backends_own_opclass_material() {
+    install();
+    let mcx = crate::cache_mcx();
+    // GIN relam: the core's supportinfo preload resolves lazily (no fmgr seam in tests).
+    let idx = codec_rel(mcx, 2662, RELKIND_INDEX, 2742, 1);
+    let core = std::sync::Arc::new(crate::l2core::RelCoreShared::from_built(&idx).unwrap());
+    let init = crate::l2core::shell_from_core(&core, false).unwrap();
+    assert_eq!(init.rd_support.as_slice(), &[0, 0, 2743, 0, 0, 0, 0]);
+    assert_eq!(init.rd_opfamily.as_slice(), &[3659]);
+    assert_eq!(init.rd_opcintype.as_slice(), &[3659]);
+    // fake_index_info stands for this backend's build: no opclass material at all
+    let own = crate::l2core::shell_from_core(&core, true).unwrap();
+    assert!(own.rd_support.is_empty() && own.rd_opfamily.is_empty() && own.rd_opcintype.is_empty());
+    assert!(own.rd_supportinfo.borrow().is_empty());
+    assert_eq!(own.rd_index.as_ref().unwrap().indkey.as_slice(), &[1i16]);
+    assert_eq!(own.rd_indoption.as_slice(), &[0i16]);
 }
 
 #[test]
@@ -1179,6 +1206,24 @@ fn cap_evicts_lru_unreferenced_only() {
 }
 
 #[test]
+fn cap_overflow_evicts_to_low_water_mark() {
+    // P358: one miss over the cap evicts a batch, down to cap - cap/16.
+    install();
+    with_state(|st| st.critical_relcaches_built = true);
+    for i in 0..48u32 {
+        seed(17100 + i, &format!("lw{i}"), RELKIND_RELATION);
+        drop(get(17100 + i));
+    }
+    let n = with_state(|st| st.id_cache.len());
+    let cap = n - 1;
+    store::enforce_cap_for(cap).unwrap();
+    assert_eq!(with_state(|st| st.id_cache.len()), cap - cap / 16);
+    let m = with_state(|st| st.id_cache.len());
+    store::enforce_cap_for(m).unwrap();
+    assert_eq!(with_state(|st| st.id_cache.len()), m);
+}
+
+#[test]
 fn cap_exempts_new_in_transaction_and_dropped_entries() {
     install();
     with_state(|st| st.critical_relcaches_built = true);
@@ -1208,6 +1253,72 @@ fn cap_exempts_new_in_transaction_and_dropped_entries() {
             e.rel.rd_droppedSubid.set(types_core::InvalidSubTransactionId);
         }
     });
+}
+
+// wio P288: an open inside a transaction never evicts, even far past the cap;
+// transaction end trims to the low-water mark in one pass.
+#[test]
+fn cap_is_enforced_at_transaction_end_not_on_open() {
+    install();
+    with_state(|st| st.critical_relcaches_built = true);
+    const CAP: usize = 64;
+    let low = CAP - CAP / 16;
+    CAP_OVERRIDE.with(|c| c.set(Some(CAP)));
+    let base = with_state(|st| st.id_cache.len());
+    assert!(base < low);
+    let oids: Vec<Oid> = (17200..17300).collect();
+    for &oid in &oids {
+        seed(oid, "w", RELKIND_RELATION);
+        drop(get(oid));
+    }
+    SCAN_LOG.with(|l| l.borrow_mut().clear());
+    for &oid in &oids {
+        drop(get(oid));
+    }
+    assert!(SCAN_LOG.with(|l| l.borrow().is_empty()), "an open in the transaction rebuilt an entry");
+    assert_eq!(with_state(|st| st.id_cache.len()), base + oids.len());
+
+    invalidate::AtEOXact_RelationCache(true).unwrap();
+    assert_eq!(with_state(|st| st.id_cache.len()), low);
+    for &oid in &oids[oids.len() - (low - base)..] {
+        assert!(with_state(|st| st.id_cache.contains_key(&oid)), "{oid} evicted");
+    }
+    invalidate::AtEOXact_RelationCache(true).unwrap();
+    assert_eq!(with_state(|st| st.id_cache.len()), low);
+    CAP_OVERRIDE.with(|c| c.set(None));
+}
+
+#[test]
+fn cap_moves_to_the_idle_point_when_trim_at_idle_is_set() {
+    install();
+    with_state(|st| st.critical_relcaches_built = true);
+    const CAP: usize = 64;
+    let low = CAP - CAP / 16;
+    CAP_OVERRIDE.with(|c| c.set(Some(CAP)));
+    crate::SetRelationCacheTrimAtIdle(true);
+    let base = with_state(|st| st.id_cache.len());
+    assert!(base < low);
+    let oids: Vec<Oid> = (17400..17500).collect();
+    for &oid in &oids {
+        seed(oid, "i", RELKIND_RELATION);
+        drop(get(oid));
+    }
+    let held = get(oids[0]);
+    invalidate::AtEOXact_RelationCache(true).unwrap();
+    assert_eq!(with_state(|st| st.id_cache.len()), base + oids.len(), "transaction end trimmed with trim-at-idle set");
+    crate::TrimRelationCacheAtIdle().unwrap();
+    assert_eq!(with_state(|st| st.id_cache.len()), low, "the idle trim did not reach the low-water mark");
+    assert!(with_state(|st| st.id_cache.contains_key(&oids[0])), "held relation evicted at the idle point");
+    drop(held);
+    crate::TrimRelationCacheAtIdle().unwrap();
+    assert_eq!(with_state(|st| st.id_cache.len()), low, "an idle trim under the cap evicted");
+    crate::SetRelationCacheTrimAtIdle(false);
+    for &oid in &oids {
+        drop(get(oid));
+    }
+    invalidate::AtEOXact_RelationCache(true).unwrap();
+    assert_eq!(with_state(|st| st.id_cache.len()), low, "transaction-end trim not back with the flag off");
+    CAP_OVERRIDE.with(|c| c.set(None));
 }
 
 #[test]
@@ -1338,4 +1449,152 @@ fn delete_of_missing_entry_warns_like_c() {
         logs,
         vec![(types_error::WARNING, "trying to delete a reldesc that does not exist".to_string())]
     );
+}
+
+// D442 (VACUUM (FREEZE, ANALYZE) hang, box 44 2026-09-25): write_relcache_init_file drains SI under RelCacheInitLock.
+// C walks RelationIdCache without bumping rd_refcnt (relcache.c write_relcache_init_file), so a relcache inval in
+// that drain CLEARS an unused entry (or defers an unused nailed one) and never reads a catalog. A catalog read there
+// deadlocks against an inplace update, which holds the pg_class buffer EXCLUSIVE while PreInplace_Inval waits for
+// RelCacheInitLock. The port's entry snapshot outlived the encode loop, so the drain saw every entry as open and
+// rebuilt it (a pg_class scan under the lock).
+fn fake_accept_invalidation_messages() -> PgResult<()> {
+    for relid in DRAIN_INVALS.with(|v| std::mem::take(&mut *v.borrow_mut())) {
+        invalidate::RelationCacheInvalidateEntry(relid)?;
+    }
+    Ok(())
+}
+
+fn init_file_write_env() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        shmem_seams::add_size::set(|a, b| Ok(a.checked_add(b).expect("shmem size overflow")));
+        shmem_seams::mul_size::set(|a, b| Ok(a.checked_mul(b).expect("shmem size overflow")));
+        shmem_seams::shmem_alloc::set(|size| {
+            let layout = std::alloc::Layout::from_size_align(size, 128).unwrap();
+            // Test-lifetime "shared memory", deliberately leaked (C: the shmem segment).
+            let p = unsafe { std::alloc::alloc_zeroed(layout) };
+            assert!(!p.is_null());
+            Ok(p)
+        });
+        lwlock::CreateLWLocks(false).unwrap();
+    });
+}
+
+#[test]
+fn init_file_write_drain_reads_no_catalog() {
+    install();
+    init_file_write_env();
+    let dir = std::env::temp_dir().join(format!("relcache-d442-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    init_small::globals::SetDatabasePath(dir.to_str().unwrap());
+    let (unused, nailed) = (16442, 16443);
+    for (oid, name) in [(unused, "d442_unused"), (nailed, "d442_nailed")] {
+        seed(oid, name, RELKIND_RELATION);
+        HAS_SYSCACHE.with(|v| v.borrow_mut().push(oid));
+        drop(get(oid));
+    }
+    with_state(|st| st.id_cache.get_mut(&nailed).unwrap().nailed = true);
+    SCAN_LOG.with(|l| l.borrow_mut().clear());
+    DRAIN_INVALS.with(|v| *v.borrow_mut() = vec![unused, nailed]);
+
+    initfile::write_relcache_init_file(false).unwrap();
+
+    assert!(DRAIN_INVALS.with(|v| v.borrow().is_empty()), "the write drains SI under RelCacheInitLock");
+    assert_eq!(SCAN_LOG.with(|l| l.borrow().clone()), Vec::<Oid>::new(), "no catalog read under RelCacheInitLock");
+    assert!(!with_state(|st| st.id_cache.contains_key(&unused)), "an unused entry is cleared (C: rd_refcnt 0)");
+    let (rel, is_nailed) = store::lookup_ent(nailed).unwrap();
+    assert!(is_nailed && !rel.rd_isvalid.get(), "an unused nailed entry is only marked invalid (C: rd_refcnt 1)");
+    drop(rel);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// D4737: a shared core frees on the account it was built on
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// While set, this thread's allocations and frees are door 1's (`memledger::door_heap`), as the server's allocator
+    /// counts them; other threads' go to the system allocator uncounted.
+    static DOOR1: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The system allocator, with door 1 on the threads that set `DOOR1`.
+struct Door1;
+
+// SAFETY: forwards to the system allocator; `door_heap` is a const thread-local add (no allocation, no destructor) and
+// the gate a const thread-local read (`try_with`: a thread past its locals' teardown counts nothing).
+unsafe impl std::alloc::GlobalAlloc for Door1 {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        // SAFETY: the caller's layout, forwarded.
+        let p = unsafe { std::alloc::System.alloc(l) };
+        if !p.is_null() && DOOR1.try_with(Cell::get).unwrap_or(false) {
+            memledger::door_heap(l.size() as isize);
+        }
+        p
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        // SAFETY: `p` came from `alloc` with `l`.
+        unsafe { std::alloc::System.dealloc(p, l) };
+        if DOOR1.try_with(Cell::get).unwrap_or(false) {
+            memledger::door_heap(-(l.size() as isize));
+        }
+    }
+}
+
+#[global_allocator]
+static DOOR1_ALLOC: Door1 = Door1;
+
+fn door1<R>(f: impl FnOnce() -> R) -> R {
+    DOOR1.with(|d| d.set(true));
+    let r = f();
+    DOOR1.with(|d| d.set(false));
+    r
+}
+
+fn account(a: memledger::Acct) -> i64 {
+    memledger::fold();
+    memledger::account_row(a).account_bytes
+}
+
+/// D4737: a shared core whose last `Arc` another session drops (its tupdesc mirror, a DROP's own open of the relation)
+/// frees its fields and block on the account it was built on, and the dropping session's account stays where it was.
+/// Before this the blocks left the dropper's account and their bytes stayed on the builder's: one core's worth moved
+/// across for every relation one session built and another let go of last.
+#[test]
+fn a_shared_core_dropped_on_another_session_frees_on_its_builders_account() {
+    // what a channel move or a fold costs either thread: far below the core's blocks
+    const SLACK: i64 = 4 << 10;
+    memledger::set_home(true);
+    let (give, take) = std::sync::mpsc::channel::<std::sync::Arc<crate::l2core::RelCoreShared>>();
+    let (done, wait_done) = std::sync::mpsc::channel::<()>();
+    let builder = std::thread::spawn(move || {
+        install();
+        memledger::bind_backend(3996, 9996);
+        let me = memledger::Acct::backend(3996);
+        let rel = codec_rel(crate::cache_mcx(), 1_000_500, RELKIND_RELATION, 2, 1600);
+        let b0 = account(me);
+        let core = door1(|| std::sync::Arc::new(crate::l2core::RelCoreShared::from_built(&rel).unwrap()));
+        let built = account(me) - b0;
+        give.send(core).unwrap();
+        wait_done.recv().unwrap();
+        let back = account(me) - b0;
+        memledger::unbind_backend();
+        (built, back)
+    });
+    let dropper = std::thread::spawn(move || {
+        memledger::bind_backend(3997, 9997);
+        let me = memledger::Acct::backend(3997);
+        let core = take.recv().unwrap();
+        let d0 = account(me);
+        door1(|| drop(core));
+        let moved = account(me) - d0;
+        done.send(()).unwrap();
+        memledger::unbind_backend();
+        moved
+    });
+    let moved = dropper.join().unwrap();
+    let (built, back) = builder.join().unwrap();
+    assert!(built > 64 << 10, "the core's blocks are on its builder: {built} B");
+    assert!(moved.abs() < SLACK, "the dropping session's account moved {moved} B (the core's blocks are {built} B)");
+    assert!(back.abs() < SLACK, "the builder's account is back at its start: {back} B left of {built} B");
 }

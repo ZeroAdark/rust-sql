@@ -8,6 +8,7 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+fp_contract = { path = "../../../../_support/fp_contract" }
 mcx = { path = "../../../../_support/mcx" }
 types_error = { path = "../../../../_support/types/types_error" }
 types_nodes = { path = "../../../../_support/types/nodes" }
@@ -16,8 +17,12 @@ types_tuple = { path = "../../../../_support/types/types_tuple" }
 costsize = { path = "../../path/costsize" }
 planner_seams = { path = "../../plan/planner_seams" }
 clauses = { path = "../clauses" }
+fires = { path = "../../../../_support/fires" }
+gravity_program = { path = "../../../../gravity/program" }
+cost_profile = { path = "../../../../_support/cost_profile" }
+pgsync = { path = "../../../../_support/pgsync" }
 lsyscache = { path = "../../../utils/cache/lsyscache" }
+types_core = { path = "../../../../_support/types/types_core" }
 nodes_core = { path = "../../../nodes/nodes_core" }
 init_small = { path = "../../../utils/init/init_small" }
 postgres_seams = { path = "../../../tcop/postgres_seams" }
-nodehash = { path = "../../../executor/nodehash" }

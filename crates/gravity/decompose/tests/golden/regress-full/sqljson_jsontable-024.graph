@@ -1,0 +1,9 @@
+-- regress-full-sqljson_jsontable-024
+-- SELECT * FROM JSON_TABLE( jsonb '[]', '$' AS a COLUMNS ( b int, NESTED PATH '$' AS n_a COLUMNS ( c int ) ) ) jt;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=Host end=sink
+  nodes n0@0
+  source tablefunc rti=1 kind=json_table cols=2 ordinality=-1 doc=T_JsonExpr
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=w4:val
+mapped: TableFuncScan

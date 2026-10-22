@@ -202,7 +202,7 @@ pub fn ExecuteTruncateGuts<'mcx>(
             trigger::TriggerFmgrCache,
             trigger::TriggerWhenCache<'mcx>,
         )>,
-    > = Vec::with_capacity(rels.len());
+    > = ::mcx::std_vec_with_capacity("commands", rels.len())?;
     let mut any_triggers = false;
     for rel in rels.iter() {
         let entry = if rel.rd_hastriggers {
@@ -285,6 +285,27 @@ pub fn ExecuteTruncateGuts<'mcx>(
                 &mut |_index_id| {},
             )?;
         }
+        // A new directory numbers parts from 0 again: stale tombstones would delete new rows (F2 choice 8); every
+        // tombstone heap (TOMB), and the new directory's state starts at its default.
+        if tableam_vocab::is_pgrcolumnar_am_oid(rel.rd_rel.relam) {
+            for t in pgrc_front_seams::tomb_relids::call(rel.rd_id)? {
+                let trel = table::table_open(mcx, t, AccessExclusiveLock)?;
+                let same = trel.rd_createSubid.get() == my_subid || trel.rd_newRelfilelocatorSubid.get() == my_subid;
+                let out = if same { catalog_heap::heap_truncate_one_rel(mcx, &trel) } else { Ok(()) };
+                if same {
+                    let l = trel.rd_locator.get();
+                    pgrc_marks::truncated((l.spcOid, l.dbOid, l.relNumber));
+                }
+                trel.close(NoLock)?;
+                out?;
+                if !same {
+                    pgrc_front_seams::reset_segment::call(mcx, t)?;
+                }
+            }
+            // Activated under this command's AccessExclusiveLock, as CREATE TABLE does: the first small insert after the
+            // TRUNCATE then publishes nothing and takes no ShareUpdateExclusiveLock.
+            pgrc_front::ensure_companions(mcx, rel.rd_id)?;
+        }
         if rel.pgstat_enabled.get() {
             pgstat::relation::pgstat_count_truncate(rel.rd_id, rel.rd_rel.relisshared);
         }
@@ -313,7 +334,7 @@ pub fn ExecuteTruncateGuts<'mcx>(
             flags |= XLH_TRUNCATE_RESTART_SEQS;
         }
         xlrec[8] = flags;
-        let mut logrelids: Vec<u8> = Vec::with_capacity(relids_logged.len() * 4);
+        let mut logrelids: Vec<u8> = ::mcx::std_vec_with_capacity("commands", relids_logged.len() * 4)?;
         for &relid in relids_logged.iter() {
             logrelids.extend_from_slice(&relid.to_ne_bytes());
         }
@@ -342,7 +363,12 @@ pub fn ExecuteTruncateGuts<'mcx>(
                 r?;
             }
         }
-        trigger::AfterTriggerEndQuery(None)?;
+        let mut result_rels: Vec<trigger::TrigTargetDesc> =
+            ::mcx::std_vec_with_capacity("commands", rels.len())?;
+        for (rel, e) in rels.iter().zip(trig_state.iter()) {
+            result_rels.push((rel.rd_id, e.as_ref().map(|(td, _, _)| td.clone())));
+        }
+        trigger::AfterTriggerEndQuery(None, &result_rels)?;
     }
 
     for rel in rels.drain(n_explicit..) {

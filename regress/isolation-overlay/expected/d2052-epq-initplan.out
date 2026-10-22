@@ -1,0 +1,54 @@
+Parsed test spec with 3 sessions
+
+starting permutation: u1 raise c1 c2 read
+step u1: UPDATE ip_t SET v = 5 WHERE id = 1;
+step raise: UPDATE ip_t SET v = CASE WHEN v > 100 THEN (SELECT 1 / (count(*) - count(*))::int FROM pg_class) ELSE v + 1 END WHERE id = 1 RETURNING v; <waiting ...>
+step c1: COMMIT;
+step raise: <... completed>
+ERROR:  division by zero
+step c2: COMMIT;
+step read: SELECT * FROM ip_t ORDER BY id;
+id|v
+--+-
+ 1|5
+ 2|2
+(2 rows)
+
+
+starting permutation: u1 ok c1 c2 read
+step u1: UPDATE ip_t SET v = 5 WHERE id = 1;
+step ok: UPDATE ip_t SET v = CASE WHEN v > 100 THEN (SELECT count(*)::int FROM pg_class WHERE false) ELSE v + 1 END WHERE id = 1 RETURNING v; <waiting ...>
+step c1: COMMIT;
+step ok: <... completed>
+v
+-
+6
+(1 row)
+
+step c2: COMMIT;
+step read: SELECT * FROM ip_t ORDER BY id;
+id|v
+--+-
+ 1|6
+ 2|2
+(2 rows)
+
+
+starting permutation: raise u1 c2 c1 read
+step raise: UPDATE ip_t SET v = CASE WHEN v > 100 THEN (SELECT 1 / (count(*) - count(*))::int FROM pg_class) ELSE v + 1 END WHERE id = 1 RETURNING v;
+v
+-
+2
+(1 row)
+
+step u1: UPDATE ip_t SET v = 5 WHERE id = 1; <waiting ...>
+step c2: COMMIT;
+step u1: <... completed>
+step c1: COMMIT;
+step read: SELECT * FROM ip_t ORDER BY id;
+id|v
+--+-
+ 1|5
+ 2|2
+(2 rows)
+

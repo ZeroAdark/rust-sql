@@ -1,0 +1,15 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/stats.rs
+growth	std::collections::BinaryHeap::push	1
+growth	std::iter::Extend::extend	6
+growth	std::vec::Vec::push	21
+macro	std::format	2
+macro	std::vec	1
+method	pgrc_format::try_filled	1
+method	pgrc_format::try_to_vec	6
+method	pgrc_format::try_vec	10
+method	std::clone::Clone::clone	21
+method	std::iter::Iterator::collect	38
+type	std::collections::BTreeSet	4
+type	std::collections::BinaryHeap	1
+type	std::sync::Arc	7
+type	std::vec::Vec	41

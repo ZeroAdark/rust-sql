@@ -1,0 +1,2 @@
+path	crates/gravity/lowerv4/src/ops/append/merge_pull.rs
+growth	std::vec::Vec::push	1

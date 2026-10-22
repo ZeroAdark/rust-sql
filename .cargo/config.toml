@@ -1,0 +1,8 @@
+# Workspace cargo config.
+#
+# openssl-src (openssl-sys `vendored`) runs "$OPENSSL_SRC_PERL ./Configure ..."; this wrapper appends the
+# OpenSSL modules a PostgreSQL server never uses (QUIC, SM2/SM4, ML-DSA/SLH-DSA/LMS, ARIA/BF/CAST/RC2/RC4, engines;
+# the list and what is kept on purpose are in the script). A caller that exports its own OPENSSL_SRC_PERL wins over
+# this and gets no trim; the tripwire is be_secure_openssl's src/openssl_trim.rs.
+[env]
+OPENSSL_SRC_PERL = { value = "scripts/openssl-src-perl.sh", relative = true }

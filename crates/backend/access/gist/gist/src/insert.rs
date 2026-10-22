@@ -56,6 +56,18 @@ fn gist_internal_error<T>(msg: String) -> PgResult<T> {
             .with_sqlstate(::types_error::ERRCODE_INTERNAL_ERROR),
     ))
 }
+#[cold]
+#[inline(never)]
+fn split_page_add_error(rel_name: &str) -> PgResult<()> {
+    Err(Box::new(
+        ::types_error::PgError::error(format!(
+            "failed to add item to index page in \"{rel_name}\""
+        ))
+        .with_sqlstate(::types_error::ERRCODE_INTERNAL_ERROR)
+        .with_location("gist.c", 434, "gistplacetopage"),
+    ))
+}
+
 const GIST_SHARE: i32 = bufmgr::BUFFER_LOCK_SHARE;
 const GIST_EXCLUSIVE: i32 = bufmgr::BUFFER_LOCK_EXCLUSIVE;
 
@@ -216,7 +228,7 @@ pub fn gistplacetopage<'mcx>(
 
         // form the tuple vector, dropping the old version when replacing
         let extracted = gistextractpage(mcx, &buffer.page())?;
-        let mut itvec: Vec<ITup> = Vec::with_capacity(extracted.len() + itup.len());
+        let mut itvec: Vec<ITup> = ::mcx::std_vec_with_capacity("access", extracted.len() + itup.len())?;
         for (i, t) in extracted.iter().enumerate() {
             if oldoffnum != InvalidOffsetNumber && (i as OffsetNumber) + 1 == oldoffnum {
                 continue;
@@ -328,7 +340,7 @@ pub fn gistplacetopage<'mcx>(
             let d = &mut dist[i];
 
             let tuples: Vec<&[u8]> = {
-                let mut v = Vec::with_capacity(d.block_num as usize);
+                let mut v = ::mcx::std_vec_with_capacity("access", d.block_num as usize)?;
                 let mut off = 0usize;
                 for _ in 0..d.block_num {
                     let p = d.list[off..].as_ptr();
@@ -349,7 +361,11 @@ pub fn gistplacetopage<'mcx>(
             }
 
             let fill = |pm: &mut PageMut<'_>| -> PgResult<()> {
-                gistfillbuffer(rel.name(), pm, &tuples, FirstOffsetNumber)?;
+                for (i, tuple) in tuples.iter().enumerate() {
+                    if pm.add_item(tuple, i as OffsetNumber + FirstOffsetNumber, 0).is_none() {
+                        return split_page_add_error(rel.name());
+                    }
+                }
                 page_opaque_update(pm, |op| {
                     op.rightlink = if has_next && d.blkno != GIST_ROOT_BLKNO {
                         next_blkno
@@ -375,7 +391,9 @@ pub fn gistplacetopage<'mcx>(
             }
         }
 
-        ensure_split_record_space(npage)?;
+        if !is_build && relation_needs_wal(rel) {
+            ensure_split_record_space(npage)?;
+        }
 
         // No ereport(ERROR) until the changes are logged (gist.c:466): an Err
         // below escapes with CritSectionCount raised, so the recovery frame
@@ -998,6 +1016,20 @@ fn gistformdownlink<'mcx>(
     Ok(downlink)
 }
 
+#[cold]
+fn log_incomplete_split(index_name: &str, block: BlockNumber) -> PgResult<()> {
+    ::elog::ereport(::types_error::LOG)
+        .errmsg(format!(
+            "fixing incomplete split in index \"{}\", block {}",
+            index_name, block
+        ))
+        .finish(::types_error::ErrorLocation::new(
+            "gist.c",
+            1207,
+            "gistfixsplit",
+        ))
+}
+
 // gistfixsplit: complete the incomplete split of the current frame's page.
 fn gistfixsplit<'mcx>(
     mcx: Mcx<'mcx>,
@@ -1006,18 +1038,7 @@ fn gistfixsplit<'mcx>(
 ) -> PgResult<()> {
     let stack = state.current;
 
-    // gist.c:1207 ereport(LOG): announce the incomplete-split repair.
-    ::elog::ereport(::types_error::LOG)
-        .errmsg(format!(
-            "fixing incomplete split in index \"{}\", block {}",
-            state.r.name(),
-            state.frames[stack].blkno
-        ))
-        .finish(::types_error::ErrorLocation::new(
-            "gist.c",
-            0,
-            "gistfixsplit",
-        ))?;
+    log_incomplete_split(state.r.name(), state.frames[stack].blkno)?;
 
     debug_assert!(state.frames[stack].downlinkoffnum != InvalidOffsetNumber);
 
@@ -1399,7 +1420,7 @@ fn gistprunepage(
         // sits above the AM crates via indexam).
         let snapshot_conflict_horizon: ::types_core::TransactionId =
             if transam_xlog_seams::xlog_standby_info_active::call() && relation_needs_wal(rel) {
-                let cx = ::mcx::MemoryContext::new_bump("gistprunepage");
+                let cx = ::mcx::MemoryContext::new_wholesale("gistprunepage");
                 ::genam_seams::index_compute_xid_horizon_for_tuples::call(
                     cx.mcx(),
                     rel,
@@ -1474,3 +1495,33 @@ mod insert_loop_bounds_tests {
     }
 }
 
+#[cfg(test)]
+mod split_repair_log_tests {
+    #[test]
+    fn incomplete_split_log_has_c_source_location() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static SEEN: AtomicBool = AtomicBool::new(false);
+        fn hook(error: &::types_error::PgError, output_to_server: &mut bool) {
+            *output_to_server = false;
+            assert_eq!(error.level, ::types_error::LOG);
+            assert_eq!(
+                error.message(),
+                "fixing incomplete split in index \"split_probe_idx\", block 7"
+            );
+            let location = error.location().unwrap();
+            assert_eq!(location.filename.as_deref(), Some("gist.c"));
+            assert_eq!(location.lineno, 1207);
+            assert_eq!(location.funcname.as_deref(), Some("gistfixsplit"));
+            SEEN.store(true, Ordering::Relaxed);
+        }
+        let previous_level = ::elog::config::log_min_messages();
+        ::elog::config::set_log_min_messages(::types_error::LOG);
+        let previous_hook = ::elog::set_emit_log_hook(Some(hook));
+        let result = std::panic::catch_unwind(|| super::log_incomplete_split("split_probe_idx", 7));
+        ::elog::set_emit_log_hook(previous_hook);
+        ::elog::config::set_log_min_messages(previous_level);
+        ::elog::FlushErrorState();
+        result.unwrap().unwrap();
+        assert!(SEEN.load(Ordering::Relaxed), "logging hook must run");
+    }
+}

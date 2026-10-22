@@ -77,3 +77,22 @@ fn charout_results_do_not_alias_across_carriers() {
     assert_eq!(cstr(d1), b"a");
     assert_eq!(cstr(d2), b"b");
 }
+
+#[test]
+fn hashchar_sign_extends_high_bit_like_c() {
+    // PostgreSQL 18.6: hashchar('\377') = 385747274 = hashint4(-1),
+    // hashchar('\200') = 1361043915, hashcharextended('\377', 0) = -1888257769727981238.
+    let mut fci = types_fmgr::LocalFcinfo::<1>::new(0);
+    let mut h = |c: i8| {
+        fci.set_arg(0, ::datum::Datum::from_char(c));
+        crate::builtins::fc_hashchar(None, &mut fci).unwrap().as_u32() as i32
+    };
+    assert_eq!(h(-1), 385747274);
+    assert_eq!(h(-128), 1361043915);
+    assert_eq!(h(b'a' as i8), 463612535);
+    let mut fx = types_fmgr::LocalFcinfo::<2>::new(0);
+    fx.set_arg(0, ::datum::Datum::from_char(-1));
+    fx.set_arg(1, ::datum::Datum::from_i64(0));
+    let x = crate::builtins::fc_hashcharextended(None, &mut fx).unwrap().as_u64() as i64;
+    assert_eq!(x, -1888257769727981238);
+}

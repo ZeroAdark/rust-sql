@@ -1,0 +1,10 @@
+-- regress-full-timestamp-002
+-- SELECT d1 as "timestamp", date_part( 'quarter', d1) AS quarter, date_part( 'msec', d1) AS msec, date_part( 'usec', d1) AS usec FROM TIMESTAMP_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2260 end=sink
+  nodes n0@0
+  source range rel=17154 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=fn2021(c25:'quarter', v1.1), 3=fn2021(c25:'msec', v1.1), 4=fn2021(c25:'usec', v1.1))
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val
+mapped: SeqScan

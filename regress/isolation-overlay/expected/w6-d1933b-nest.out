@@ -1,0 +1,169 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pr s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE nk t SET val = t.val + v.x FROM (VALUES (5, 1), (7, 2), (9, 3), (11, 4), (13, 5)) v(k, x) WHERE t.id = v.k AND t.flag;
+QUERY PLAN                                         
+---------------------------------------------------
+Update on nk t                                     
+  ->  Nested Loop                                  
+        ->  Values Scan on "*VALUES*"              
+        ->  Index Scan using nk_pkey on nk t       
+              Index Cond: (id = "*VALUES*".column1)
+              Filter: flag                         
+(6 rows)
+
+step s3pr: EXPLAIN (COSTS OFF) UPDATE nk t SET val = t.val + e.val FROM ne e WHERE e.id = t.id AND t.flag;
+QUERY PLAN                                  
+--------------------------------------------
+Update on nk t                              
+  ->  Nested Loop                           
+        ->  Seq Scan on ne e                
+        ->  Index Scan using nk_pkey on nk t
+              Index Cond: (id = e.id)       
+              Filter: flag                  
+(6 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1v s1f s1k s1d s2u s1c s2c s3sel
+step s1v: UPDATE nk SET val = val + 1000 WHERE id = 5;
+step s1f: UPDATE nk SET flag = false WHERE id = 7;
+step s1k: UPDATE nk SET id = 30009 WHERE id = 9;
+step s1d: DELETE FROM nk WHERE id = 11;
+step s2u: UPDATE nk t SET val = t.val + v.x FROM (VALUES (5, 1), (7, 2), (9, 3), (11, 4), (13, 5)) v(k, x) WHERE t.id = v.k AND t.flag RETURNING t.id, t.val; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id| val
+--+----
+ 5|1051
+13| 135
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, flag, val FROM nk WHERE id IN (5, 7, 9, 11, 13, 30009) ORDER BY id;
+   id|flag| val
+-----+----+----
+    5|t   |1051
+    7|f   |  70
+   13|t   | 135
+30009|t   |  90
+(4 rows)
+
+
+starting permutation: s1v s1f s1k s1d s2d s1c s2c s3sel
+step s1v: UPDATE nk SET val = val + 1000 WHERE id = 5;
+step s1f: UPDATE nk SET flag = false WHERE id = 7;
+step s1k: UPDATE nk SET id = 30009 WHERE id = 9;
+step s1d: DELETE FROM nk WHERE id = 11;
+step s2d: DELETE FROM nk t USING (VALUES (5), (7), (9), (11), (13)) v(k) WHERE t.id = v.k AND t.flag RETURNING t.id, t.val; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| val
+--+----
+ 5|1050
+13| 130
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, flag, val FROM nk WHERE id IN (5, 7, 9, 11, 13, 30009) ORDER BY id;
+   id|flag|val
+-----+----+---
+    7|f   | 70
+30009|t   | 90
+(2 rows)
+
+
+starting permutation: s2u s1v s2c s1c s3sel
+step s2u: UPDATE nk t SET val = t.val + v.x FROM (VALUES (5, 1), (7, 2), (9, 3), (11, 4), (13, 5)) v(k, x) WHERE t.id = v.k AND t.flag RETURNING t.id, t.val;
+id|val
+--+---
+ 5| 51
+ 7| 72
+ 9| 93
+11|114
+13|135
+(5 rows)
+
+step s1v: UPDATE nk SET val = val + 1000 WHERE id = 5; <waiting ...>
+step s2c: COMMIT;
+step s1v: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, flag, val FROM nk WHERE id IN (5, 7, 9, 11, 13, 30009) ORDER BY id;
+id|flag| val
+--+----+----
+ 5|t   |1051
+ 7|t   |  72
+ 9|t   |  93
+11|t   | 114
+13|t   | 135
+(5 rows)
+
+
+starting permutation: s1v s1f s1k s1d s1e s2r s1c s2c s3sel s3e
+step s1v: UPDATE nk SET val = val + 1000 WHERE id = 5;
+step s1f: UPDATE nk SET flag = false WHERE id = 7;
+step s1k: UPDATE nk SET id = 30009 WHERE id = 9;
+step s1d: DELETE FROM nk WHERE id = 11;
+step s1e: UPDATE ne SET val = val + 5000 WHERE id IN (5, 13);
+step s2r: UPDATE nk t SET val = t.val + e.val FROM ne e WHERE e.id = t.id AND t.flag RETURNING t.id, t.val; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id| val
+--+----
+ 5|1100
+13| 260
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, flag, val FROM nk WHERE id IN (5, 7, 9, 11, 13, 30009) ORDER BY id;
+   id|flag| val
+-----+----+----
+    5|t   |1100
+    7|f   |  70
+   13|t   | 260
+30009|t   |  90
+(4 rows)
+
+step s3e: SELECT id, val FROM ne ORDER BY id;
+id| val
+--+----
+ 5|5050
+ 7|  70
+ 9|  90
+11| 110
+13|5130
+(5 rows)
+
+
+starting permutation: s1v s1e s2q s1c s2c s3sel s3e
+step s1v: UPDATE nk SET val = val + 1000 WHERE id = 5;
+step s1e: UPDATE ne SET val = val + 5000 WHERE id IN (5, 13);
+step s2q: DELETE FROM nk t USING ne e WHERE e.id = t.id AND t.flag AND e.val < 1000 RETURNING t.id; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+id
+--
+ 5
+ 7
+ 9
+11
+13
+(5 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, flag, val FROM nk WHERE id IN (5, 7, 9, 11, 13, 30009) ORDER BY id;
+id|flag|val
+--+----+---
+(0 rows)
+
+step s3e: SELECT id, val FROM ne ORDER BY id;
+id| val
+--+----
+ 5|5050
+ 7|  70
+ 9|  90
+11| 110
+13|5130
+(5 rows)
+

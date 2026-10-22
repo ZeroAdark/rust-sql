@@ -1,0 +1,10 @@
+-- regress-full-insert-004
+-- insert into inserttest (f2[1], f2[2]) values (1,2);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:null, 2=T_SubscriptingRef, 3=c17699:null, 4=c17698:null)
+  write INSERT rel=17700 rti=1 natts=4 indexes=()
+  outs 1=w4:val 2=vl:call0 3=? 4=?
+mapped: Result ModifyTable

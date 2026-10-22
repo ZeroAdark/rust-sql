@@ -1,0 +1,74 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s1u s2d s1c s2last s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x: EXPLAIN (COSTS OFF) DELETE FROM tt USING tb b WHERE tt.id = b.id AND tt.f = 1 AND ptick(b.n);
+QUERY PLAN                         
+-----------------------------------
+Delete on tt                       
+  ->  Hash Join                    
+        Hash Cond: (b.id = tt.id)  
+        ->  Seq Scan on tb b       
+              Filter: ptick(n)     
+        ->  Hash                   
+              ->  Seq Scan on tt   
+                    Filter: (f = 1)
+(8 rows)
+
+step s1u: UPDATE tt SET f = 1 WHERE id = 1; UPDATE tt SET f = 0 WHERE id = 2;
+step s2d: DELETE FROM tt USING tb b WHERE tt.id = b.id AND tt.f = 1 AND ptick(b.n); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2last: SELECT last_value, is_called FROM pcnt; SELECT * FROM tt ORDER BY id;
+last_value|is_called
+----------+---------
+       101|t        
+(1 row)
+
+id|f
+--+-
+ 2|0
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1u s2u s1c s2last s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE tt SET f = 1 WHERE id = 1; UPDATE tt SET f = 0 WHERE id = 2;
+step s2u: UPDATE tt SET f = tt.f + 10 FROM tb b WHERE tt.id = b.id AND tt.f = 1 AND ptick(b.n); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2last: SELECT last_value, is_called FROM pcnt; SELECT * FROM tt ORDER BY id;
+last_value|is_called
+----------+---------
+       101|t        
+(1 row)
+
+id| f
+--+--
+ 1|11
+ 2| 0
+ 3|11
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1u3 s2f s1c s2last s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u3: UPDATE tt SET f = 1 WHERE id = 1; UPDATE tt SET f = 1 WHERE id = 2; UPDATE tt SET f = 0 WHERE id = 3;
+step s2f: DELETE FROM tt USING tb b WHERE tt.id = b.id AND tt.f = 1 AND pflip(b.n); <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+step s2last: SELECT last_value, is_called FROM pcnt; SELECT * FROM tt ORDER BY id;
+last_value|is_called
+----------+---------
+       103|t        
+(1 row)
+
+id|f
+--+-
+ 2|1
+ 3|0
+(2 rows)
+
+step s2c: COMMIT;

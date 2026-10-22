@@ -62,6 +62,22 @@ pub(crate) fn user_refcount_zero(relid: Oid, held: usize) -> bool {
 }
 
 pub fn RelationIdGetRelation(relationId: Oid) -> PgResult<Option<Rc<RelationData<'static>>>> {
+    if gravity_deps::armed() {
+        return noted_get(relationId);
+    }
+    get(relationId)
+}
+
+/// C3: a recorded lowering's open. D3888: an index's support material and a partitioned table's key are its entry's too
+/// (a change to their operator family's rows sends the entry's own relcache message: inval `PreCommit_Inval`).
+#[cold]
+#[inline(never)]
+fn noted_get(relationId: Oid) -> PgResult<Option<Rc<RelationData<'static>>>> {
+    gravity_deps::note_rel(relationId);
+    gravity_deps::suppressed(|| get(relationId))
+}
+
+fn get(relationId: Oid) -> PgResult<Option<Rc<RelationData<'static>>>> {
     debug_assert!(
         !xact_seams::is_transaction_state::is_installed()
             || xact_seams::is_transaction_state::call()
@@ -83,22 +99,22 @@ pub fn RelationIdGetRelation(relationId: Oid) -> PgResult<Option<Rc<RelationData
         Probe::Miss => {
             // D3.2: the shared-core L2 sits under the miss; the hit paths
             // above are untouched.
-            let built = if crate::l2core::l2_active() {
-                crate::l2core::miss_via_l2(relationId)?
+            // No cap check here: nothing the transaction opened is evicted
+            // before it ends (enforce_cap, run from AtEOXact_RelationCache).
+            if crate::l2core::l2_active() {
+                crate::l2core::miss_via_l2(relationId)
             } else {
-                crate::build::RelationBuildDesc(relationId, true)?
-            };
-            // D3.1: the miss path is the only place user queries grow the
-            // cache; enforce the entry cap here, never mid-build (nested
-            // opens see a non-empty in_progress list and skip).
-            enforce_cap()?;
-            Ok(built)
+                crate::build::RelationBuildDesc(relationId, true)
+            }
         }
     }
 }
 
-/// D3.1 cap enforcement: when `id_cache` exceeds the cap, clear the
-/// least-recently-used eligible entries. Eligibility mirrors exactly the
+/// `id_cache` exceeds the cap, clear the least-recently-used eligible entries
+/// in one pass down to the low-water mark. Every relation the transaction
+/// opened stays cached until then, as in C (whose relcache has no cap), so a
+/// statement touching more relations than the cap never misses on its own
+/// working set. Eligibility mirrors exactly the
 /// conditions under which RelationFlushRelation would CLEAR (not rebuild) an
 /// entry on an incoming invalidation: not nailed, refcount zero on the
 /// current lineage, and no in-transaction subid state (new-in-transaction /
@@ -106,7 +122,14 @@ pub fn RelationIdGetRelation(relationId: Oid) -> PgResult<Option<Rc<RelationData
 /// so an eviction is indistinguishable from an invalidation that arrived
 /// while the entry was unpinned, minus the rebuild the next open performs.
 pub(crate) fn enforce_cap() -> PgResult<()> {
-    enforce_cap_at(crate::relcache_cap())
+    enforce_cap_for(crate::relcache_cap())
+}
+
+pub(crate) fn enforce_cap_for(cap: usize) -> PgResult<()> {
+    if cap == 0 || with_state(|st| st.id_cache.len()) <= cap {
+        return Ok(());
+    }
+    enforce_cap_at(cap - cap / 16)
 }
 
 pub(crate) fn enforce_cap_at(cap: usize) -> PgResult<()> {
@@ -137,8 +160,10 @@ pub(crate) fn enforce_cap_at(cap: usize) -> PgResult<()> {
                     .then(|| (ent.last_used.get(), *oid))
             })
             .collect();
-        eligible.sort_unstable();
-        eligible.truncate(excess);
+        if excess < eligible.len() {
+            eligible.select_nth_unstable(excess);
+            eligible.truncate(excess);
+        }
         eligible.into_iter().map(|(_, oid)| oid).collect()
     });
     for oid in victims {

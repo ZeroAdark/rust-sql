@@ -1,0 +1,28 @@
+-- regress-full-select_views-003
+-- SELECT * FROM toyemp WHERE name = 'sharon';
+graph pipelines=2 breakers=0 init_plans=0 root=p1
+p0 node=2 eligible rows=1 end=sink
+  nodes n2@0 n1@2 n0@4
+  source range rel=16434 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx16:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val
+  filter op98(v3.1, c25:'sharon')
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=op514(c23:12, outer.4))
+  outs 1=vl:win/page 2=w8:val 3=fx16:win/page 4=w8:val
+  outs 1=vl:life/breaker 2=w4:val 3=fx16:life/breaker 4=w4:val
+  outs 1=vl:life/breaker 2=w4:val 3=fx16:life/breaker 4=w4:val
+p1 node=3 eligible rows=1 end=sink
+  nodes n3@0 n1@2 n0@4
+  source range rel=16444 rti=4 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx16:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val
+  filter op98(v4.1, c25:'sharon')
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4)
+  append arm 1/2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=op514(c23:12, outer.4))
+  outs 1=vl:win/page 2=w8:val 3=fx16:win/page 4=w8:val
+  outs 1=vl:life/breaker 2=w4:val 3=fx16:life/breaker 4=w4:val
+  outs 1=vl:life/breaker 2=w4:val 3=fx16:life/breaker 4=w4:val
+mapped: Result Append SeqScan

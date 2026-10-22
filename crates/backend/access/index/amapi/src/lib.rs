@@ -252,8 +252,8 @@ fn gisttranslatecmptype(cmptype: CompareType, opfamily: Oid) -> PgResult<Strateg
     if funcid == InvalidOid {
         return Ok(InvalidStrategy);
     }
-    let result =
-        fmgr_core::oid_function_call1_coll(funcid, InvalidOid, Datum::from_i32(cmptype))?;
+    let call_cx = ::mcx::MemoryContext::new_bump("gisttranslatecmptype");
+    let result = fmgr_core::oid_function_call1_coll_in(funcid, InvalidOid, call_cx.mcx(), Datum::from_i32(cmptype))?;
     Ok(result.as_u16())
 }
 

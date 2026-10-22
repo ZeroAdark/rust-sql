@@ -1,0 +1,12 @@
+-- regress-014
+-- SELECT b FROM t WHERE b = 3;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=16395 rti=1 am=heap index=16404
+    key att=2 op=96 value=c23:3
+    recheck (op96(index.1, c23:3))
+    lanes Attr(2):byval8:w8:val
+  project (1=index.1)
+  outs 1=w4:val
+mapped: IndexOnlyScan

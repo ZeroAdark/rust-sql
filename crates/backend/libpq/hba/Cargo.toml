@@ -16,6 +16,7 @@ elog = { path = "../../utils/error/elog" }
 guc_tables = { path = "../../utils/misc/guc_tables" }
 hba_seams = { path = "../hba_seams" }
 ifaddr = { path = "../ifaddr" }
+init_small = { path = "../../utils/init/init_small" }
 ip = { path = "../../../common/ip" }
 libc = "0.2"
 pg_path = { path = "../../../port/pg_path" }

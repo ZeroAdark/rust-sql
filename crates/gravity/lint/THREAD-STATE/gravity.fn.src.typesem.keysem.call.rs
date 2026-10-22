@@ -1,0 +1,2 @@
+gravity/fn/src/typesem/keysem/call.rs	BOUND	keys	key:what each binding's bind and first call read (gravity_deps Held, C3 S6a), per (resolution id, collation, use)	cache	run-time bound support calls; a call finds its binding only while those reads stand; sweep empties it at session teardown
+gravity/fn/src/typesem/keysem/call.rs	SWEPT	keys	at:sweep	thread	this thread's once-per-session flag: BOUND's teardown sweep is registered; cleared by sweep (census class cache was the block's)

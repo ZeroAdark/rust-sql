@@ -1,0 +1,1 @@
+JoinTypeOutside	crates/gravity/lowerv4/src/ops/hashjoin/spill/build.rs	alone	lifetime	-	a join type outside the spilled forms keeps its build resident	unreachable	No query reaches this: every join type PostgreSQL runs as a hash join is one Gravity spills.

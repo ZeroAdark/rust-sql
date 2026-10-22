@@ -43,7 +43,9 @@
 # Unit-shaped:  cargo test -p seams_init --test lint_seam_installs
 set -u
 
-REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+# REPO is the public workspace root (this file is public/crates/_support/seams_init/tests/*.sh);
+# git rev-parse --show-toplevel would return the monorepo root, one level up.
+REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
 ALLOWLIST="${LINT_SEAM_ALLOWLIST:-$REPO/crates/_support/seams_init/tests/lint-seam-installs.allow}"
 SEAMS_INIT="$REPO/crates/_support/seams_init/src/lib.rs"
 [ -f "$SEAMS_INIT" ] || { echo "lint-seam-installs: $SEAMS_INIT not found"; exit 2; }
@@ -146,7 +148,9 @@ cat > "$TMP/scan.awk" <<'AWK'
         }
     }
 AWK
-tr '\n' '\0' < "$TMP/files" | xargs -0 awk -f "$TMP/scan.awk" > "$TMP/records"
+# LC_ALL=C: the scan reads bytes, not UTF-8 characters (the sources are UTF-8, every pattern is ASCII, so the records
+# are the same; box 16, 4095 files: 64 s -> 38 s; buildprof BD-15)
+tr '\n' '\0' < "$TMP/files" | LC_ALL=C xargs -0 awk -f "$TMP/scan.awk" > "$TMP/records"
 
 awk '$1=="DECL"{print $2}' "$TMP/records" | sort -u > "$TMP/decl"
 awk '$1=="TAP"{print $2}'  "$TMP/records" | sort -u > "$TMP/tap"

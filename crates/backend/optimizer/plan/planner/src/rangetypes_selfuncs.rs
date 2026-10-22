@@ -223,7 +223,7 @@ fn calc_rangesel<'mcx>(
             hist_selec = default_range_selectivity(operator);
         }
         if operator == OID_RANGE_CONTAINED_OP {
-            selec = (1.0 - empty_frac as f64) * hist_selec + empty_frac as f64;
+            selec = crate::fma_sites::empty_frac_merge(empty_frac as f64, hist_selec);
         } else {
             selec = (1.0 - empty_frac as f64) * hist_selec;
         }
@@ -569,7 +569,9 @@ fn calc_length_hist_frac(
         b = bin_upper;
         pb = i as f64 / (length_hist_nvalues - 1) as f64;
         if pa > 0.0 || pb > 0.0 {
-            area += 0.5 * (pb + pa) * (b - a);
+            // multirangetypes_selfuncs.c:1081 fmadd (LTO folds the range copy
+            // into the multirange one; both are fused).
+            area = fp_contract::fmadd(0.5 * (pb + pa), b - a, area);
         }
         i += 1;
     }
@@ -592,7 +594,8 @@ fn calc_length_hist_frac(
     }
     pb = (i as f64 + pos) / (length_hist_nvalues - 1) as f64;
     if pa > 0.0 || pb > 0.0 {
-        area += 0.5 * (pb + pa) * (b - a);
+        // multirangetypes_selfuncs.c:1103 fmadd.
+        area = fp_contract::fmadd(0.5 * (pb + pa), b - a, area);
     }
 
     if area.is_infinite() && length2.is_infinite() {
@@ -733,5 +736,27 @@ mod tests {
         // Length histogram: only float8 is accepted.
         assert!(hist_elemtype_matches(FLOAT8, FLOAT8));
         assert!(!hist_elemtype_matches(INT4RANGE, FLOAT8));
+    }
+}
+
+#[cfg(test)]
+mod d400_fma_tests {
+    // D400: multirangetypes_selfuncs.c:1081 (loop) and :1103 (last bin) are
+    // fused on aarch64. LTO folds the identical range copy into the
+    // multirange copy, so both callers get the fused code. The histogram
+    // and bounds are chosen so that unfusing either site alone changes the
+    // result. Expected bits: fused 0x1.0517639c41241p-2, unfused
+    // 0x1.0517639c41240p-2 (same C expression, GCC 13.3 -O2, with and
+    // without -ffp-contract=off).
+    #[test]
+    fn d400_length_hist_frac_fuses() {
+        let vals: Vec<datum::Datum> = [6.459, 10.554, 12.24, 25.016, 75.925, 79.804]
+            .iter()
+            .map(|&v| datum::Datum::from_f64(v))
+            .collect();
+        let got = super::calc_length_hist_frac(&vals, 0.0, 34.061, false);
+        let want: u64 =
+            if cfg!(target_arch = "aarch64") { 0x3FD0_5176_39C4_1241 } else { 0x3FD0_5176_39C4_1240 };
+        assert_eq!(got.to_bits(), want);
     }
 }

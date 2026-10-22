@@ -34,6 +34,7 @@ const NO_BEFORE: Option<BeforeOnExit> = None;
 const NO_ON: Option<OnExit> = None;
 
 thread_local! {
+    static FINAL_EXIT_HOOK: Cell<Option<fn()>> = const { Cell::new(None) };
     static ON_PROC_EXIT_LIST: Cell<[Option<OnExit>; MAX_ON_EXITS]> = const { Cell::new([NO_ON; MAX_ON_EXITS]) };
     static ON_SHMEM_EXIT_LIST: Cell<[Option<OnExit>; MAX_ON_EXITS]> = const { Cell::new([NO_ON; MAX_ON_EXITS]) };
     static BEFORE_SHMEM_EXIT_LIST: Cell<[Option<BeforeOnExit>; MAX_ON_EXITS]> = const { Cell::new([NO_BEFORE; MAX_ON_EXITS]) };
@@ -104,9 +105,21 @@ pub fn proc_exit(code: i32, my_pid: i32) -> ! {
     } else {
         drain_exit_callbacks(code);
         log_exit(code);
+        run_final_exit_hook();
     }
 
     std::panic::resume_unwind(Box::new(ProcExitThread { code }));
+}
+
+// Runs after the last on_proc_exit callback, where C's exit closes pipes.
+pub fn set_final_exit_hook(hook: fn()) {
+    FINAL_EXIT_HOOK.with(|h| h.set(Some(hook)));
+}
+
+fn run_final_exit_hook() {
+    if let Some(hook) = FINAL_EXIT_HOOK.with(|h| h.take()) {
+        hook();
+    }
 }
 
 // elog(DEBUG3, "exit(%d)", code) (ipc.c:155): the last line before exit().
@@ -171,6 +184,13 @@ pub fn exit_thread_raw(code: i32) -> ! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KilledBySignal {
     pub signo: i32,
+}
+
+pub static EXIT_PAYLOADS: types_error::ExitPayloadTest =
+    types_error::ExitPayloadTest(|p| p.is::<ProcExitThread>() || p.is::<KilledBySignal>());
+
+pub fn register_exit_payloads() {
+    types_error::register_exit_payload_test(&EXIT_PAYLOADS);
 }
 
 // kill -9's thread rendering: no exit callbacks, no client message; the

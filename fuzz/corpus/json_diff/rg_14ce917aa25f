@@ -1,5 +1,0 @@
-];
-
--- array_elements
-
-select json_array_elements(

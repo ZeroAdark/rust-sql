@@ -1,0 +1,23 @@
+-- regress-full-with-059
+-- select ( with cte(foo) as ( values(f1) ) select (select foo from cte) ) from int4_tbl;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0
+  source const
+  project (1=$exec0)
+  outs 1=w4:val
+p1 node=0 eligible rows=5 end=sink
+  nodes n0@0
+  source range rel=16400 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  subplan 2 nested Expr params=($exec0=v1.1) raise-free
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  project (1=$exec1)
+  project (1=subplan2(v1.1))
+  outs 1=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec1 raise-free
+rerun node=0 subplan=2 pipelines=p0 slots=
+param $exec0 owner=subplan2 type=23 rep=w8:val
+mapped: Result SeqScan SubPlan

@@ -2,6 +2,8 @@
 //! split out so nbtree takes the descriptor without a cycle through indexam.
 #![allow(non_snake_case)]
 
+pub use pgstat::relation::PgStatRelationCounts;
+
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -512,32 +514,9 @@ pub struct IndexScanDescData<'mcx> {
     pub xs_recheckorderby: bool,
     pub xs_prefetch: IndexPrefetchState,
 
-    pub xs_pgstat_index_tuples: u64,
-    pub xs_pgstat_heap_fetches: u64,
-    pub xs_pgstat_index_scans: u64,
+    pub xs_pgstat: PgStatRelationCounts,
     // C IndexScanInstrumentation.nsearches (pgstat-independent; EXPLAIN reads it).
     pub xs_nsearches: u64,
-}
-
-impl Drop for IndexScanDescData<'_> {
-    fn drop(&mut self) {
-        // The per-scan batched pgstat counters (C's pgstat_count_index_scan /
-        // pgstat_count_index_tuples / pgstat_count_heap_fetch macros bump
-        // rel->pgstat_info immediately and survive an abort). index_endscan
-        // and index_parkscan drain them first (and clear the alias); this is
-        // the abort path — an erroring statement never reaches ExecutorEnd.
-        if std::thread::panicking() {
-            return;
-        }
-        let Some(index_rel) = self.indexRelation.as_ref() else { return };
-        ::pgstat::relation::pgstat_count_index_scan_batched(
-            index_rel.rd_id,
-            index_rel.rd_rel.relisshared,
-            core::mem::take(&mut self.xs_pgstat_index_scans),
-            core::mem::take(&mut self.xs_pgstat_index_tuples),
-            core::mem::take(&mut self.xs_pgstat_heap_fetches),
-        );
-    }
 }
 
 impl<'mcx> IndexScanDescData<'mcx> {
@@ -565,9 +544,27 @@ pub fn relation_get_index_scan<'mcx>(
     opaque: IndexScanOpaque<'mcx>,
     xactStartedInRecovery: bool,
 ) -> PgResult<IndexScanDescData<'mcx>> {
+    let mut scan =
+        index_scan_without_relation(mcx, nkeys, norderbys, opaque, xactStartedInRecovery)?;
+    scan.indexRelation = Some(indexRelation.alias());
+    scan.xs_pgstat = PgStatRelationCounts::new(indexRelation.rd_id, indexRelation.rd_rel.relisshared);
+    Ok(scan)
+}
+
+/// RelationGetIndexScan's descriptor with no index relation attached: for an
+/// access method that runs over a relation stand-in its caller holds (the
+/// AM's own entry points that take that stand-in explicitly). The
+/// descriptor's drop then has no relation to drain counters into.
+pub fn index_scan_without_relation<'mcx>(
+    mcx: Mcx<'mcx>,
+    nkeys: i32,
+    norderbys: i32,
+    opaque: IndexScanOpaque<'mcx>,
+    xactStartedInRecovery: bool,
+) -> PgResult<IndexScanDescData<'mcx>> {
     Ok(IndexScanDescData {
         heapRelation: None,
-        indexRelation: Some(indexRelation.alias()),
+        indexRelation: None,
         xs_snapshot: None,
         numberOfKeys: nkeys,
         numberOfOrderBys: norderbys,
@@ -592,19 +589,17 @@ pub fn relation_get_index_scan<'mcx>(
         xs_recheck: false,
         xs_orderbyvals: {
             let mut v = PgVec::new_in(mcx);
-            v.resize(norderbys.max(0) as usize, datum::Datum::null());
+            ::mcx::pgvec_resize(&mut v, norderbys.max(0) as usize, datum::Datum::null())?;
             v
         },
         xs_orderbynulls: {
             let mut v = PgVec::new_in(mcx);
-            v.resize(norderbys.max(0) as usize, true);
+            ::mcx::pgvec_resize(&mut v, norderbys.max(0) as usize, true)?;
             v
         },
         xs_recheckorderby: false,
         xs_prefetch: IndexPrefetchState::reset(),
-        xs_pgstat_index_tuples: 0,
-        xs_pgstat_heap_fetches: 0,
-        xs_pgstat_index_scans: 0,
+        xs_pgstat: PgStatRelationCounts::detached(),
         xs_nsearches: 0,
     })
 }

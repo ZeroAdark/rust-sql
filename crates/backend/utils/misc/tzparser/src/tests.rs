@@ -88,7 +88,7 @@ fn dynamic_abbrev_resolves_through_pgtz() {
     let tz = FetchDynamicTimeZone(tbl, foo, &mut extra).unwrap().expect("America/New_York loads");
     assert!(FetchDynamicTimeZone(tbl, foo, &mut extra).unwrap().is_some());
     assert_eq!(
-        adt_datetime::tz::pg_get_timezone_name(tz),
+        adt_datetime::tz::pg_get_timezone_name(&tz),
         Some("America/New_York")
     );
 

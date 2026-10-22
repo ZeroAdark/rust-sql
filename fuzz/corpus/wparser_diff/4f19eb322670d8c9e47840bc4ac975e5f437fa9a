@@ -1,2 +1,0 @@
-‚, txtkeyword);
-ALTER TABLE test#_tsquery ADD COLUMN sample tsqueÿy;UPDtest_tyseuqr SET sample = to_tsquery(

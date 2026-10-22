@@ -33,6 +33,7 @@ fn bound_cursor(comp: &mut crate::comp::CompState, argrow: Dno) {
             ns: 0,
             expr_id: 0,
             target_param: -1,
+            target_is_local: false,
         });
         v.cursor_explicit_argrow = argrow;
     }

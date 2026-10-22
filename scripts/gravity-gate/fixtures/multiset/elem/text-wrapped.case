@@ -1,0 +1,10 @@
+# a wrapped call (cast, array_length): exact
+sql: SELECT array_agg(x)::text FROM t;
+cols: array_agg
+tables: t
+class: unordered
+verdict: mismatch
+[pg]
+{1,2}
+[got]
+{2,1}

@@ -1262,3 +1262,46 @@ pub fn init_seams() {
 
 #[cfg(test)]
 mod tests;
+
+/// A LOCK row deletes nothing, so it may be visible to all before its inserter commits: other transactions lock it as any heap row.
+pub fn heap_freeze_own_insert(
+    relation: &RelationData<'_>,
+    tid: &ItemPointerData,
+    xmax: TransactionId,
+    lock_infomask: u16,
+    lock_infomask2: u16,
+) -> PgResult<()> {
+    use ::types_tuple::{HEAP_KEYS_UPDATED, HEAP_XMAX_BITS, HEAP_XMIN_FROZEN};
+    // heap_lock_tuple's bookkeeping before a lock xmax: a later locker may fold this one into a multixact.
+    multixact_seams::multi_xact_id_set_oldest_member::call()?;
+    let offnum = ItemPointerGetOffsetNumber(tid);
+    let buffer = bufmgr_seams::read_buffer::call(relation, ItemPointerGetBlockNumber(tid))?;
+    bufmgr_seams::lock_buffer::call(buffer, bufmgr_seams::BUFFER_LOCK_EXCLUSIVE)?;
+    // SAFETY: pin + exclusive content lock held.
+    let page = unsafe { PageRef::from_raw(bufmgr_seams::buffer_get_page::call(buffer)) };
+    if offnum > page.max_offset_number() || !page.item_id(offnum).is_normal() {
+        bufmgr_seams::lock_buffer::call(buffer, bufmgr_seams::BUFFER_LOCK_UNLOCK)?;
+        bufmgr_seams::release_buffer::call(buffer)?;
+        return Err(Box::new(::types_error::PgError::new(::types_error::ERROR, "heap_freeze_own_insert: invalid lp")));
+    }
+    let itemid = page.item_id(offnum);
+    // SAFETY: an LP_NORMAL item of the exclusively locked page.
+    let htup = unsafe { header_at(page, itemid) };
+    let mut frz = [HeapTupleFreeze {
+        xmax,
+        t_infomask: (htup.t_infomask & !HEAP_XMAX_BITS) | HEAP_XMIN_FROZEN | lock_infomask,
+        t_infomask2: (htup.t_infomask2 & !HEAP_KEYS_UPDATED) | lock_infomask2,
+        frzflags: 0,
+        checkflags: 0,
+        offset: offnum,
+    }];
+    init_small::globals::StartCriticalSection();
+    heap_freeze_prepared_tuples(buffer, &frz);
+    bufmgr_seams::mark_buffer_dirty::call(buffer)?;
+    if relation_needs_wal(relation) {
+        log_heap_prune_and_freeze(relation, buffer, InvalidTransactionId, false, PruneReason::PruneOnAccess, &mut frz, &[], &[], &[])?;
+    }
+    init_small::globals::EndCriticalSection();
+    bufmgr_seams::lock_buffer::call(buffer, bufmgr_seams::BUFFER_LOCK_UNLOCK)?;
+    bufmgr_seams::release_buffer::call(buffer)
+}

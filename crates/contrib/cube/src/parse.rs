@@ -177,6 +177,9 @@ impl<'a> Lexer<'a> {
             b'(' => Kind::OParen,
             b')' => Kind::CParen,
             b',' => Kind::Comma,
+            // cubescan.l:63 returns yytext[0]; a high-bit byte goes negative
+            // on signed-char builds and bison reads it as EOF, so C 18.6
+            // accepts "(1,2)é". Deliberate divergence: it stays garbage.
             _ => Kind::Garbage,
         };
         Tok {
@@ -205,6 +208,7 @@ fn syntax_error(tok: &Tok<'_>) -> Box<PgError> {
         // cubescan.l:93 prints yytext's bytes; C's flex/bison treat a
         // high-bit byte as end of input under SQL_ASCII (a C bug, see
         // UPSTREAM-BUGS), so pgrust names the byte instead.
+        // ALLOC-REVIEW(antigravity): error-report buffer (syntax_error returns Box<PgError> on parse error path)
         let mut d = b"syntax error at or near \"".to_vec();
         d.extend_from_slice(tok.raw);
         d.push(b'"');
@@ -297,24 +301,24 @@ fn write_box(l1: &[&str], l2: &[&str]) -> PgResult<Vec<u8>> {
     let dim = l1.len();
     let s1 = joined(l1);
     let s2 = joined(l2);
-    let mut coords = Vec::with_capacity(2 * dim);
+    let mut coords = ::mcx::std_vec_with_capacity("cube", 2 * dim)?;
     for e in l1 {
         coords.push(parse_element(e, &s1)?);
     }
     for e in l2 {
         coords.push(parse_element(e, &s2)?);
     }
-    Ok(build_image_auto(dim, &coords))
+    Ok(build_image_auto(dim, &coords)?)
 }
 
 /// `write_point_as_box(dim, str, ...)`.
 fn write_point_as_box(l: &[&str]) -> PgResult<Vec<u8>> {
     let s = joined(l);
-    let mut coords = Vec::with_capacity(l.len());
+    let mut coords = ::mcx::std_vec_with_capacity("cube", l.len())?;
     for e in l {
         coords.push(parse_element(e, &s)?);
     }
-    Ok(build_image(l.len(), true, &coords))
+    Ok(build_image(l.len(), true, &coords)?)
 }
 
 fn check_dim(n: usize) -> PgResult<()> {
@@ -407,6 +411,16 @@ mod tests {
         );
         assert_eq!(err_detail("(1,2"), "invalid input syntax for cube|syntax error at end of input");
         assert_eq!(err_detail("1,2)"), "invalid input syntax for cube|syntax error at or near \")\"");
+    }
+
+    // C 18.6 (cubescan.l:63, signed char) accepts a complete cube followed
+    // by a high-bit byte as if the input had ended; that is garbage here.
+    #[test]
+    fn trailing_high_bit_byte_is_garbage_not_eof() {
+        for s in [&b"(1,2)\xc3\xa9"[..], b"(1,2)\xff", b"1,2 \xc3\xa9", b"[(1),(2)]\xff"] {
+            let e = parse_cube(s).unwrap_err();
+            assert_eq!(e.sqlstate, types_error::ERRCODE_INVALID_TEXT_REPRESENTATION);
+        }
     }
 
     #[test]

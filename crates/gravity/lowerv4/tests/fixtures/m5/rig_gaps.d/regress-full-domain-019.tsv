@@ -1,0 +1,1 @@
+the row type of a composite-domain FROM call (makedcomp) read whole: the rig catalog has no pg_type / pg_attribute row for it (Facts::row_att answers none, the call's result type an expression the catalog refused); served on the server since D693 (hosts row_att via lookup_rowtype_tupdesc), judged by e2e/gravity/v4/m5_d693_record_rows.sql

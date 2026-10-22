@@ -1,0 +1,145 @@
+-- regress-full-generated_stored-007
+-- SELECT pubname , NULL , NULL FROM pg_catalog.pg_publication p JOIN pg_catalog.pg_publication_namespace pn ON p.oid = pn.pnpubid JOIN pg_catalog.pg_class pc ON pc.relnamespace = pn.pnnspid WHERE pc.oid ='29440' and pg_catalog.pg_relation_is_publishable('29440') UNION SELECT pubname , pg_get_expr(pr.prqual, c.oid) , (CASE WHEN pr.prattrs IS NOT NULL THEN (SELECT string_agg(attname, ', ') FROM pg_catalog.generate_series(0, pg_catalog.array_upper(pr.prattrs::pg_catalog.int2[], 1)) s, pg_catalog.pg_attribute WHERE attrelid = pr.prrelid AND attnum = prattrs[s]) ELSE NULL END) FROM pg_catalog.pg_publication p JOIN pg_catalog.pg_publication_rel pr ON p.oid = pr.prpubid JOIN pg_catalog.pg_class c ON c.oid = pr.prrelid WHERE pr.prrelid = '29440' UNION SELECT pubname , NULL , NULL FROM pg_catalog.pg_publication p WHERE p.puballtables AND pg_catalog.pg_relation_is_publishable('29440') ORDER BY 1;
+graph pipelines=8 breakers=7 init_plans=0 root=p7
+p0 node=9 serial site=0 reason=IndexSource end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n9@0 n8@1
+  source index rel=1259 rti=7 am=heap index=2662
+    key att=1 op=607 value=c26:29440
+    recheck (op607(v7.1, c26:29440))
+    lanes Attr(3):byval8:w8:val
+  project (1=v7.3)
+  build keys=(outer.1) decls=26/26:I32
+  outs 1=w8:val
+p1 node=16 eligible rows=1 end=breaker(slot=1 HashBuild)
+  desc words=bits@6/7
+  nodes n16@0 n15@2
+  source range rel=6106 rti=10 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byref8:vl:win/page Attr(5):byref8:vl:win/page Offset:byval2:w2:val
+  filter op607(v10.3, c26:29440)
+  project (1=v10.4, 2=v10.5, 3=v10.3, 4=v10.2)
+  build keys=(outer.4) decls=26/26:I32
+  outs 1=vl:win/page 2=vl:win/page 3=w8:val 4=w8:val
+p2 node=25 serial site=0 reason=IndexSource end=breaker(slot=2 HashBuild)
+  desc words=bits@7/8
+  nodes n25@0 n24@1
+  source index rel=1249 rti=16 am=heap index=2659
+    key att=1 op=607 value=$exec0
+    recheck (op607(v16.1, $exec0))
+    lanes Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val
+  project (1=v16.2, 2=v16.5)
+  build keys=(outer.2) decls=21/21:I32
+  outs 1=fx64:win/page 2=w8:val
+p3 node=23 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 PlainAgg)
+  desc consumes=slot2@p2
+  nodes n23@0 n22@2 n21@4^
+  source const
+  srf from rti=15 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, fn2092(T_ArrayCoerceExpr, c23:1))]
+  project (1=v15.1)
+  probe slot=2 inner=n24 JOIN_INNER unique keys=(T_SubscriptingRef) decls=21/21:I32 clauses=(op94(T_SubscriptingRef, inner.2))
+  project (1=inner.1)
+  outs 1=w4:val
+  outs 1=fx64:life/breaker
+p4 node=7 eligible rows=204 end=breaker(slot=4 Distinct)
+  desc consumes=slot0@p0 owner=key/0 words=bits@3/5
+  nodes n7@0 n6@1 n5@3 n4@5 n3@7 n2@8 n1@10 n0@11^
+  source range rel=6237 rti=5 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v5.1, 2=v5.2, 3=v5.3)
+  probe slot=0 inner=n8 JOIN_INNER unique keys=(outer.3) decls=26/26:I32 clauses=(op607(outer.3, inner.1))
+  project (1=outer.2)
+  nest inner=n10 JOIN_INNER unique raise-free params=($exec2=outer.1)
+  inner node=10 serial site=0 reason=IndexSource end=sink
+  nodes n10@0
+  source index rel=6104 rti=4 am=heap index=6110
+    key att=1 op=607 value=$exec2
+    recheck (op607(v4.1, $exec2))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9, 10=v4.10)
+  project (1=inner.2)
+  gate T_List
+  project (1=outer.1, 2=c25:null, 3=c25:null)
+  project (1=v1.1, 2=c25:null, 3=c25:null)
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w8:val 3=w8:val
+  outs 1=w8:val
+  outs 1=fx64:life/breaker
+  outs 1=fx64:life/breaker 2=vl:stmt/imm 3=vl:stmt/imm
+  outs 1=fx64:row 2=vl:stmt/imm 3=vl:stmt/imm
+  outs 1=fx64:life/breaker 2=vl:life/breaker 3=vl:life/breaker
+  outs 1=fx64:life/breaker 2=vl:life/breaker 3=vl:life/breaker
+p5 node=14 eligible rows=76 end=breaker(slot=4 Distinct)
+  desc consumes=slot1@p1 consumes=slot3@p3 owner=key/0 words=bits@3/5
+  nodes n14@0 n13@1 n12@3 n2@6 n1@8 n0@9^
+  source range rel=6104 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v9.1, 2=v9.2, 3=v9.3, 4=v9.4, 5=v9.5, 6=v9.6, 7=v9.7, 8=v9.8, 9=v9.9, 10=v9.10)
+  probe slot=1 inner=n15 JOIN_INNER unique keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.4))
+  project (1=outer.2, 2=inner.1, 3=inner.2, 4=inner.3)
+  nest inner=n17 JOIN_INNER invariant raise-free params=()
+  inner node=17 serial site=0 reason=IndexSource end=sink
+  nodes n17@0
+  source index-only rel=1259 rti=12 am=heap index=2662
+    key att=1 op=607 value=c26:29440
+    recheck (op607(index.1, c26:29440))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  subplan 1 nested Expr params=($exec0=outer.4, $exec1=outer.3) conditional
+  inner node=21 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot3@p3
+  nodes n21@0
+  source breaker slot=3
+  project (1=agg3538(1=fn406(outer.1), 2=c25:', '))
+  project (1=outer.1, 2=fn1716(outer.2, inner.1), 3=case(when notnull(outer.3) then subplan1(outer.4, outer.3)) else c25:null)
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=w1:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w1:val
+  outs 1=fx64:win/page 2=vl:life/breaker 3=vl:life/breaker 4=w4:val
+  outs 1=fx64:win/page 2=vl:call1716 3=vl:call0
+  outs 1=fx64:life/breaker 2=vl:life/breaker 3=vl:life/breaker
+  outs 1=fx64:life/breaker 2=vl:life/breaker 3=vl:life/breaker
+p6 node=20 eligible rows=38 end=breaker(slot=4 Distinct)
+  desc owner=key/0 words=bits@3/5
+  nodes n20@0 n19@2 n18@4 n2@5 n1@7 n0@8^
+  source range rel=6104 rti=14 am=heap
+    lanes Attr(2):byref8:fx64:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val
+  filter v14.4
+  project (1=v14.1, 2=v14.2, 3=v14.3, 4=v14.4, 5=v14.5, 6=v14.6, 7=v14.7, 8=v14.8, 9=v14.9, 10=v14.10)
+  gate T_List
+  project (1=outer.2, 2=c25:null, 3=c25:null)
+  project (1=v3.1, 2=c25:null, 3=c25:null)
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=fx64:win/page 3=w4:val 4=w8:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w1:val
+  outs 1=fx64:win/page 2=vl:stmt/imm 3=vl:stmt/imm
+  outs 1=fx64:row 2=vl:stmt/imm 3=vl:stmt/imm
+  outs 1=fx64:life/breaker 2=vl:life/breaker 3=vl:life/breaker
+  outs 1=fx64:life/breaker 2=vl:life/breaker 3=vl:life/breaker
+p7 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot4@p6
+  nodes n0@0
+  source breaker slot=4
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=fx64:life/breaker 2=vl:life/breaker 3=vl:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=PlainAgg budget=Fixed(72) spill=None producer=p3 layout=[]->[Count@0]+valid 16B
+breaker slot=4 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[MinCode@48,MinCode@56,MinCode@64,Count@72] 80B order=1+,2+,3+
+breaker slot=4 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[MinCode@48,MinCode@56,MinCode@64,Count@72] 80B order=1+,2+,3+
+breaker slot=4 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p6 layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[MinCode@48,MinCode@56,MinCode@64,Count@72] 80B order=1+,2+,3+
+group slot=3 producer=p3 node=21 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=3538 reg=Collect slot=- count_slot=- final=Collect class=Collect(String) trans=Var mods=[] expr=agg3538(1=fn406(outer.1), 2=c25:', ')
+group slot=4 producer=p6 node=0 form=Unique hints=[] layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[MinCode@48,MinCode@56,MinCode@64,Count@72] 80B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=19 rep=0 expr=outer.1
+  key 1 word=2 resno=2 kind=Fp128 attno=0 type=25 rep=1 expr=outer.2
+  key 2 word=4 resno=3 kind=Fp128 attno=0 type=25 rep=2 expr=outer.3
+rerun node=12 subplan=1 pipelines=p2,p3 slots=2,3
+param $exec2 owner=n5 type=26 rep=w8:val
+param $exec0 owner=subplan1 type=26 rep=w4:val
+param $exec1 owner=subplan1 type=22 rep=vl:life/breaker
+mapped: Result Append SeqScan IndexScan IndexOnlyScan SubqueryScan FunctionScan NestLoop NestLoopParam HashJoin Agg Unique Hash SubPlan

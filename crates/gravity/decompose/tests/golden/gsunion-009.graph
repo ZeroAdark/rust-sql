@@ -1,0 +1,78 @@
+-- gsunion-009
+-- SELECT a, b, sum(c) FROM g GROUP BY ROLLUP (a, b) HAVING sum(c) > 100 ORDER BY 1, 2;
+graph pipelines=7 breakers=6 init_plans=0 root=p6
+p0 node=4 eligible rows=2000 end=breaker(slot=0 PlainAgg)
+  nodes n4@0 n3@1^
+  source range rel=16395 rti=5 am=heap
+    lanes Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w8:val 5=vl:row 6=vl:row 7=w8:val
+p1 node=7 eligible rows=2000 end=breaker(slot=1 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n7@0 n6@1^
+  source range rel=16395 rti=7 am=heap
+    lanes Attr(2):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.1, 2=v7.2, 3=v7.3, 4=v7.4, 5=v7.5, 6=v7.6, 7=v7.7)
+  outs 1=w4:val 2=w8:val 3=w4:val 4=w8:val 5=vl:row 6=vl:row 7=w8:val
+p2 node=10 eligible rows=2000 end=breaker(slot=2 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n10@0 n9@1^
+  source range rel=16395 rti=9 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v9.1, 2=v9.2, 3=v9.3, 4=v9.4, 5=v9.5, 6=v9.6, 7=v9.7)
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w8:val 5=vl:row 6=vl:row 7=w8:val
+p3 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Sort)
+  desc consumes=slot0@p0
+  nodes n3@0 n1@2 n0@4^
+  source breaker slot=0
+  filter op413(agg2108(1=outer.4), c20:100)
+  project (1=c23:null, 2=c23:null, 3=agg2108(1=outer.4))
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w4:val 2=w4:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val
+p4 node=6 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Sort)
+  desc consumes=slot1@p1
+  nodes n6@0 n1@2 n0@4^
+  source breaker slot=1
+  filter op413(agg2108(1=outer.4), c20:100)
+  project (1=outer.2, 2=c23:null, 3=agg2108(1=outer.4))
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w4:val 2=w4:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val
+p5 node=9 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Sort)
+  desc consumes=slot2@p2
+  nodes n9@0 n1@2 n0@4^
+  source breaker slot=2
+  filter op413(agg2108(1=outer.4), c20:100)
+  project (1=outer.2, 2=outer.3, 3=agg2108(1=outer.4))
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w4:val 2=w4:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot3@p5
+  nodes n0@0
+  source breaker slot=3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(80) spill=None producer=p0 layout=[]->[SumI64@0,Count@8]+valid 24B
+breaker slot=1 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[SumI64@8,Count@16]+valid 32B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32,I32]->[SumI64@16,Count@24]+valid 40B
+breaker slot=3 kind=Sort budget=Share spill=Runs producer=p3 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+breaker slot=3 kind=Sort budget=Share spill=Runs producer=p4 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+breaker slot=3 kind=Sort budget=Share spill=Runs producer=p5 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+group slot=0 producer=p0 node=3 form=Plain hints=[] layout=[]->[SumI64@0,Count@8]+valid 24B
+  agg aggno=0 fn=2108 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.4)
+group slot=1 producer=p1 node=6 form=Hashed hints=[] layout=[I32]->[SumI64@8,Count@16]+valid 32B
+  key 0 word=0 resno=2 kind=I32 attno=2 type=23 expr=v7.2
+  agg aggno=0 fn=2108 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.4)
+group slot=2 producer=p2 node=9 form=Hashed hints=[] layout=[I32,I32]->[SumI64@16,Count@24]+valid 40B
+  key 0 word=0 resno=2 kind=I32 attno=2 type=23 expr=v9.2
+  key 1 word=1 resno=3 kind=I32 attno=3 type=23 expr=v9.3
+  agg aggno=0 fn=2108 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.4)
+mapped: Append SeqScan Sort Agg

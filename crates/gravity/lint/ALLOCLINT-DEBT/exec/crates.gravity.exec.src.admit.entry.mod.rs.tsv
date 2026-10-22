@@ -1,0 +1,7 @@
+path	crates/gravity/exec/src/admit/entry/mod.rs
+growth	std::vec::Vec::push	2
+method	std::boxed::Box::new	8
+method	std::rc::Rc::new	3
+method	std::vec::Vec::into_boxed_slice	1
+type	std::boxed::Box	8
+type	std::rc::Rc	3

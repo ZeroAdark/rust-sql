@@ -1,0 +1,42 @@
+{
+  "repository": "https://github.com/aengelke/disarm",
+  "revision": "2d13d3f410a52daff1c5d8ef07d623332f372560",
+  "license": "BSD-3-Clause",
+  "files": [
+    {
+      "path": "CMakeLists.txt",
+      "sha256": "f582743381f6607ce31112a6d135aa7f9bd6d92bbd429e629d490150080600fc",
+      "git_blob": "50230847c65dcbc3dfbd6ab9df37901b0ad7502b"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "4f576036de0aef8e65f1909c2b08411902cd6de1f3b9d35e0cfe9c223aac2155",
+      "git_blob": "ae40aec38f55c119c2b1edcc4d8845a162614a87"
+    },
+    {
+      "path": "desc.txt",
+      "sha256": "4cffd099abe53ba217b5cc7ab4943cd8e4a59dc565f890bed20a1d2653a08904",
+      "git_blob": "c3432af90d9698ad9004b814ee75827737410a0b"
+    },
+    {
+      "path": "disarm64.h",
+      "sha256": "588d01bb56551784b3181992fe0abdc285c4923e98d1f25e5c5474d0ebd0ff54",
+      "git_blob": "b70dfe94fbaa0042039397d6e863b4018ccc4425"
+    },
+    {
+      "path": "encode.c",
+      "sha256": "a93ae46fe245f50c9d6cfc6ad688f102a39f310239742ca53c424f3af72ed1d4",
+      "git_blob": "af9505cbeceaf16fc66d069ef89a4f9be02ed3ee"
+    },
+    {
+      "path": "feat.txt",
+      "sha256": "8857d522e8d2025ce1fcffa1609d8fd0e73c2a7d2f30f74bc562bf5cf47ab216",
+      "git_blob": "6b1dd222fc741071f2a4c6d12f7d1b3ee1fc1cb6"
+    },
+    {
+      "path": "parse.py",
+      "sha256": "769b63aec9c9359a96be27b24ffac28e14feabdbdfc99f8f2aa0050b82f07ac8",
+      "git_blob": "7b8c0ec48dcbf9eab74576272f20429493ca601e"
+    }
+  ]
+}

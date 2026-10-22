@@ -15,7 +15,7 @@ use backend_progress::{
     pgstat_progress_update_param, PROGRESS_COMMAND_COPY,
 };
 use datum::Datum;
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use mcx::{Mcx, MemoryContext, PgVec};
 use stringinfo::StringInfo;
 use types_core::primitive::InvalidOid;
@@ -24,7 +24,7 @@ use types_error::{
     ErrorLocation, PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_NAME,
     ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERRCODE_WRONG_OBJECT_TYPE, ERROR,
 };
-use types_fmgr::{function_call1_coll_in, send_function_call, FmgrInfo, PackedVarlena};
+use types_fmgr::{function_call1_coll_in, send_function_call, FmgrInfo, OutInto, PackedVarlena};
 use types_nodes::nodes_enums::CmdType;
 use types_nodes::rawnodes::{CreateTableAsStmt, RawStmt};
 use types_nodes::{NodeList, QuerySource};
@@ -38,9 +38,9 @@ use crate::{
     force_flags, CopyFormatOptions, CopyGetAttnums, ProcessCopyOptions, RELKIND_RELATION,
 };
 
-// C buffers per-row fwrite in libc's FILE; the File destination mirrors that
-// in file_buf, while Program/Stdout retain rows in fe_msgbuf until this
-// watermark, so the write cadence (not per-row syscalls) matches C.
+// C buffers per-row fwrite in libc's FILE; the File destination's stream
+// (fd::StdioWrite) buffers likewise, while Program/Stdout retain rows in
+// fe_msgbuf until this watermark, so the write cadence matches C.
 const FILE_FLUSH_THRESHOLD: usize = 65536;
 
 // Final mode of a COPY TO server file. C's BeginCopyTo opens under a temporary
@@ -89,14 +89,6 @@ impl Drop for OwnedQueryDesc {
 pub struct CopyToState<'mcx, 's> {
     fe_msgbuf: StringInfo<'mcx>,
     dest: CopyDest<'s>,
-    // C's copy_file is a stdio FILE: rows accumulate in its st_blksize buffer
-    // and reach the fd only when that fills (fwrite) or at fclose (EndCopy),
-    // which is where a write error on a short COPY surfaces ("could not
-    // close file", copyto.c:596) rather than per row. `file_buf` mirrors that
-    // buffer for the File destination; `file_bufsize` is the stream's
-    // st_blksize (BUFSIZ when unknown, as __smakebuf).
-    file_buf: Vec<u8>,
-    file_bufsize: usize,
     pub opts: CopyFormatOptions<'s>,
     attnumlist: PgVec<'mcx, i16>,
     force_quote_flags: PgVec<'mcx, bool>,
@@ -116,6 +108,12 @@ pub struct CopyToState<'mcx, 's> {
     rowcx: MemoryContext,
     query_desc: Option<OwnedQueryDesc>,
     tupdesc: Option<Rc<TupleDescData<'static>>>,
+    // Per column (attnumlist order), text format: the output function's caller-supplied-destination entry
+    // (`fmgr_out_into`, FMGR ruling 09-23) and whether its bytes go straight into fe_msgbuf (no escape can apply: text
+    // mode, no transcoding, the delimiter outside the entry's alphabet); else they are rendered into `into_scratch` and
+    // take the escape / quote path as the fmgr function's cstring would.
+    out_into: PgVec<'mcx, Option<(&'static OutInto, bool)>>,
+    into_scratch: StringInfo<'mcx>,
 }
 
 #[track_caller]
@@ -183,8 +181,6 @@ pub fn BeginCopyTo<'mcx: 's, 's>(
         || file_encoding == wchar::PG_SQL_ASCII);
     let encoding_embeds_ascii = wchar::pg_encoding_is_client_only(file_encoding);
 
-    // stdio buffer size of the File destination (see CopyToState).
-    let mut file_bufsize = stdio_bufsize(0);
     let dest = match filename {
         Some(filename) if is_program => {
             // copyto.c is_program arm: popen the command, write its stdin.
@@ -193,7 +189,7 @@ pub fn BeginCopyTo<'mcx: 's, 's>(
                 ereport(ERROR)
                     .with_saved_errno(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not execute command \"{filename}\": %m"))
+                    .errmsg(format!("could not execute command \"{filename}\": {PCT_M}"))
                     .finish(loc("BeginCopyTo"))?;
             }
             CopyDest::Program { fd: copy_file, filename }
@@ -228,7 +224,7 @@ pub fn BeginCopyTo<'mcx: 's, 's>(
                 let mut e = ereport(ERROR)
                     .with_saved_errno(save_errno)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not open file \"{filename}\" for writing: %m"));
+                    .errmsg(format!("could not open file \"{filename}\" for writing: {PCT_M}"));
                 if crate::open_failure_hint_applies(save_errno) {
                     e = e.errhint(
                         "COPY TO instructs the PostgreSQL server process to write a file. You \
@@ -241,40 +237,43 @@ pub fn BeginCopyTo<'mcx: 's, 's>(
             // process-global umask; a pre-existing file keeps its mode (C's
             // fopen truncates it and nothing else — a 0600 file stays 0600,
             // and a group-writable file owned by another user, where fchmod
-            // would fail with EPERM, is written as C writes it).
+            // would fail with EPERM, is written as C writes it). Under a
+            // Linux default ACL the open itself already produced C's mode
+            // (see parent_has_default_acl), and the fchmod would clobber the
+            // inherited ACL mask C keeps.
             // wasm32/WASI carries no mode bits, so this is a no-op there.
             #[cfg(not(target_family = "wasm"))]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let set = if preexisting {
+                let set = if preexisting || parent_has_default_acl(filename) {
                     None
                 } else {
                     fd::with_allocated_stdio(copy_file, |f| {
                         f.set_permissions(std::fs::Permissions::from_mode(COPY_TO_FILE_MODE))
                     })
                 };
-                if let Some(Err(e)) = set {
-                    ereport(ERROR)
-                        .with_saved_errno(e.raw_os_error().unwrap_or(0))
-                        .errcode_for_file_access()
-                        .errmsg(format!("could not set mode of file \"{filename}\": %m"))
-                        .finish(loc("BeginCopyTo"))?;
-                }
+                // C never chmods: a filesystem refusing mode changes (vfat,
+                // some network mounts) still takes the COPY.
+                let _ = set;
             }
             // fstat (copyto.c:976): a failure is an error, never a silent
             // "not a directory, default buffer".
             let (is_dir, blksize) = match fd::with_allocated_stdio(copy_file, |f| f.metadata()) {
+                #[cfg(not(target_family = "wasm"))]
                 Some(Ok(m)) => {
                     #[cfg(not(target_family = "wasm"))]
                     let blksize = {
                         use std::os::unix::fs::MetadataExt;
                         m.blksize() as usize
                     };
-                    // wasi stat carries no st_blksize: stdio_bufsize's default.
                     #[cfg(target_family = "wasm")]
                     let blksize = 0usize;
                     (m.is_dir(), blksize)
                 }
+                // wasm32-wasip1: WASI filestat has no st_blksize; unknown (0)
+                // takes stdio_bufsize's BUFSIZ arm.
+                #[cfg(target_family = "wasm")]
+                Some(Ok(m)) => (m.is_dir(), 0),
                 Some(Err(e)) => return Err(crate::could_not_stat_file(filename, &e)),
                 None => panic!("COPY TO: AllocateFile index {copy_file} vanished"),
             };
@@ -284,7 +283,8 @@ pub fn BeginCopyTo<'mcx: 's, 's>(
                         .with_sqlstate(ERRCODE_WRONG_OBJECT_TYPE),
                 ));
             }
-            file_bufsize = stdio_bufsize(blksize);
+            // The stdio buffer C's copy_file FILE gets: st_blksize (__smakebuf).
+            let _ = fd::StdioSetBuf(copy_file, blksize);
             CopyDest::File { fd: copy_file, filename }
         }
         None => {
@@ -315,8 +315,6 @@ pub fn BeginCopyTo<'mcx: 's, 's>(
 
     Ok(CopyToState {
         fe_msgbuf: StringInfo::new_in(mcx)?,
-        file_buf: Vec::new(),
-        file_bufsize,
         dest,
         opts,
         attnumlist,
@@ -327,9 +325,11 @@ pub fn BeginCopyTo<'mcx: 's, 's>(
         need_transcoding,
         bytes_processed: 0,
         fe_msgbuf_accounted: 0,
-        rowcx: MemoryContext::new_bump("COPY TO"),
+        rowcx: MemoryContext::new_wholesale("COPY TO"),
         query_desc,
         tupdesc,
+        out_into: PgVec::new_in(mcx),
+        into_scratch: StringInfo::new_in(mcx)?,
     })
 }
 
@@ -448,8 +448,22 @@ pub fn DoCopyTo<'mcx>(
     if r.is_err() {
         // C's error path: AtEOXact_Files fcloses copy_file, which flushes the
         // stdio buffer (rows before the error land; a failure there is silent).
-        if let CopyDest::File { fd, .. } = cstate.dest {
-            let _ = stdio_final_flush(cstate, fd);
+        // A program's or stdout's rows sit in fe_msgbuf (our stand-in for
+        // that stdio buffer); only complete rows (the accounted prefix) are
+        // in C's buffer.
+        let rows = &cstate.fe_msgbuf.as_bytes()[..cstate.fe_msgbuf_accounted];
+        match cstate.dest {
+            CopyDest::File { fd, .. } => {
+                let _ = fd::StdioFlush(fd);
+            }
+            CopyDest::Program { fd, .. } if !rows.is_empty() => {
+                let _ = fd::PipeStreamWrite(fd, rows);
+            }
+            CopyDest::Stdout if !rows.is_empty() => {
+                use std::io::Write;
+                let _ = std::io::stdout().write_all(rows);
+            }
+            _ => {}
         }
     }
     r
@@ -466,12 +480,6 @@ fn do_copy_to<'mcx>(
         None => query_tupdesc.as_deref().expect("query COPY carries the executor tupDesc"),
     };
 
-    // copyto.c:1035: CopyOutResponse goes out BEFORE the per-column output
-    // function lookup, so a type without a binary send function fails inside
-    // the copy (CopyOutResponse, then ErrorResponse). libpq-side readers
-    // depend on that order: the logical tablesync worker sees COPY_OUT, starts
-    // its own BeginCopyFrom, and reports "no binary input function" (its
-    // side) first — src/test/subscription 014_binary waits for that line.
     if matches!(cstate.dest, CopyDest::Frontend) {
         send_copy_begin(mcx, cstate.attnumlist.len(), cstate.opts.binary)?;
     }
@@ -489,7 +497,15 @@ fn do_copy_to<'mcx>(
         } else {
             lsyscache::typ::getTypeOutputInfo(attr.atttypid)?
         };
-        out_functions.push(fmgr_core::fmgr_info(func_oid)?);
+        let finfo = fmgr_core::fmgr_info(func_oid)?;
+        let into = if cstate.opts.binary { None } else { fmgr_core::fmgr_out_into(&finfo) };
+        let direct = |e: &OutInto| {
+            !cstate.opts.csv_mode && !cstate.need_transcoding && e.chars.is_some_and(|c| !c.contains(&cstate.opts.delim))
+        };
+        let slot = into.map(|e| (e, direct(e)));
+        cstate.out_into.try_reserve(1).map_err(|_| mcx.oom(core::mem::size_of_val(&slot)))?;
+        cstate.out_into.push(slot);
+        out_functions.push(finfo);
     }
 
     if cstate.opts.binary {
@@ -652,6 +668,26 @@ fn send_copy_begin(mcx: Mcx<'_>, natts: usize, binary: bool) -> PgResult<()> {
 
 const BINARY_SIGNATURE: [u8; 11] = *b"PGCOPY\n\xff\r\n\0";
 
+/// An output function's text appended through its into-entry (`bound` from `e.bound(value)`).
+#[inline]
+fn append_rendered(buf: &mut StringInfo<'_>, e: &OutInto, value: Datum, bound: usize) -> PgResult<()> {
+    let mut failed = None;
+    buf.append_written(bound, |d| {
+        // SAFETY: append_written reserved `bound` bytes at d; bound came from e.bound(value).
+        match unsafe { (e.render)(value, d) } {
+            Ok(n) => n,
+            Err(err) => {
+                failed = Some(err);
+                0
+            }
+        }
+    })?;
+    match failed {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
 /// `CopyOneRowTo` + `CopyToTextLikeOneRow` (copyto.c).
 fn CopyOneRowTo<'mcx>(
     cstate: &mut CopyToState<'mcx, '_>,
@@ -668,6 +704,8 @@ fn CopyOneRowTo<'mcx>(
         file_encoding,
         encoding_embeds_ascii,
         null_print_client,
+        out_into,
+        into_scratch,
         ..
     } = cstate;
     rowcx.reset();
@@ -712,10 +750,25 @@ fn CopyOneRowTo<'mcx>(
             continue;
         }
         let value: Datum = base.tts_values[m];
-        let out = function_call1_coll_in(&mut out_functions[i], InvalidOid, rmcx, value)?;
-        // SAFETY: text output fns return a NUL-terminated cstring datum
-        // (printtup precedent).
-        let s = unsafe { CStr::from_ptr(out.as_usize() as *const core::ffi::c_char) }.to_bytes();
+        let into = out_into.get(i).copied().flatten().and_then(|(e, direct)| Some((e, direct, (e.bound)(value)?)));
+        let s: &[u8] = match into {
+            Some((e, true, bound)) => {
+                // no escape can apply: the output function's bytes straight into the row
+                append_rendered(fe_msgbuf, e, value, bound)?;
+                continue;
+            }
+            Some((e, false, bound)) => {
+                into_scratch.reset();
+                append_rendered(into_scratch, e, value, bound)?;
+                into_scratch.as_bytes()
+            }
+            None => {
+                let out = function_call1_coll_in(&mut out_functions[i], InvalidOid, rmcx, value)?;
+                // SAFETY: text output fns return a NUL-terminated cstring datum
+                // (printtup precedent).
+                unsafe { CStr::from_ptr(out.as_usize() as *const core::ffi::c_char) }.to_bytes()
+            }
+        };
         // C compares against null_print before conversion (copyto.c:1311).
         let matches_null = opts.csv_mode && s == opts.null_print.as_bytes();
         // Outer binding: rmcx is an AllocSet, so a dropped PgVec is freed.
@@ -873,53 +926,6 @@ fn send_end_of_row(cstate: &mut CopyToState<'_, '_>) -> PgResult<()> {
     Ok(())
 }
 
-// The stdio buffer size C's copy_file FILE gets: st_blksize when the stream
-// reports one, else BUFSIZ (__smakebuf / _IO_file_doallocate).
-fn stdio_bufsize(st_blksize: usize) -> usize {
-    if st_blksize > 0 { st_blksize } else { 1024 }
-}
-
-// stdio fwrite over `file_buf`: the row is appended, and every time the
-// buffer fills to `file_bufsize` that chunk goes to the fd (__sfvwrite
-// flushes on a full buffer). Returns the write error, if any.
-fn stdio_buffered_write(
-    file_buf: &mut Vec<u8>,
-    bufsize: usize,
-    fd: i32,
-    bytes: &[u8],
-) -> std::io::Result<()> {
-    file_buf.extend_from_slice(bytes);
-    while file_buf.len() >= bufsize {
-        let chunk = bufsize;
-        let r = fd::with_allocated_stdio(fd, |f| {
-            use std::io::Write;
-            f.write_all(&file_buf[..chunk])
-        });
-        match r {
-            Some(Ok(())) => file_buf.drain(..chunk),
-            Some(Err(e)) => return Err(e),
-            None => panic!("COPY TO: AllocateFile index {fd} vanished"),
-        };
-    }
-    Ok(())
-}
-
-// fflush at fclose: whatever the buffer still holds.
-fn stdio_final_flush(cstate: &mut CopyToState<'_, '_>, fd: i32) -> std::io::Result<()> {
-    if cstate.file_buf.is_empty() {
-        return Ok(());
-    }
-    let r = fd::with_allocated_stdio(fd, |f| {
-        use std::io::Write;
-        f.write_all(&cstate.file_buf)
-    });
-    cstate.file_buf.clear();
-    match r {
-        Some(r) => r,
-        None => panic!("COPY TO: AllocateFile index {fd} vanished"),
-    }
-}
-
 fn flush_to_file(cstate: &mut CopyToState<'_, '_>) -> PgResult<()> {
     let CopyDest::File { fd, .. } = cstate.dest else {
         panic!("COPY TO: flush_to_file on non-file destination")
@@ -927,12 +933,11 @@ fn flush_to_file(cstate: &mut CopyToState<'_, '_>) -> PgResult<()> {
     if cstate.fe_msgbuf.is_empty() {
         return Ok(());
     }
-    let CopyToState { file_buf, file_bufsize, fe_msgbuf, .. } = &mut *cstate;
-    if let Err(e) = stdio_buffered_write(file_buf, *file_bufsize, fd, fe_msgbuf.as_bytes()) {
+    if let Err(en) = fd::StdioWrite(fd, cstate.fe_msgbuf.as_bytes()) {
         ereport(ERROR)
-            .with_saved_errno(e.raw_os_error().unwrap_or(0))
+            .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg("could not write to COPY file: %m")
+            .errmsg(format!("could not write to COPY file: {PCT_M}"))
             .finish(loc("CopySendEndOfRow"))?;
     }
     account_fe_msgbuf(cstate);
@@ -963,7 +968,7 @@ fn flush_to_program(cstate: &mut CopyToState<'_, '_>) -> PgResult<()> {
             ereport(ERROR)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg("could not write to COPY program: %m")
+                .errmsg(format!("could not write to COPY program: {PCT_M}"))
                 .finish(loc("CopySendEndOfRow"))?;
         }
     }
@@ -980,7 +985,7 @@ fn close_pipe_to_program(fd: i32, filename: &str) -> PgResult<()> {
         ereport(ERROR)
             .with_saved_errno(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg("could not close pipe to external command: %m")
+            .errmsg(format!("could not close pipe to external command: {PCT_M}"))
             .finish(loc("ClosePipeToProgram"))?;
     } else if pclose_rc != 0 {
         return Err(Box::new(
@@ -1007,7 +1012,7 @@ fn flush_to_stdout(cstate: &mut CopyToState<'_, '_>) -> PgResult<()> {
         ereport(ERROR)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg("could not write to COPY file: %m")
+            .errmsg(format!("could not write to COPY file: {PCT_M}"))
             .finish(loc("CopySendEndOfRow"))?;
     }
     account_fe_msgbuf(cstate);
@@ -1037,9 +1042,9 @@ pub fn EndCopyTo(mut cstate: CopyToState<'_, '_>) -> PgResult<()> {
         flush_to_file(&mut cstate)?;
         // fclose flushes the stdio buffer first; a write failure there is
         // fclose's failure, reported as "could not close file" (copyto.c:596).
-        let flushed = stdio_final_flush(&mut cstate, fd);
-        let close_errno = match (&flushed, fd::FreeFile(fd)?) {
-            (Err(e), _) => Some(e.raw_os_error().unwrap_or(0)),
+        let flushed = fd::StdioFlush(fd);
+        let close_errno = match (flushed, fd::FreeFile(fd)?) {
+            (Err(en), _) => Some(en),
             (Ok(()), rc) if rc != 0 => {
                 Some(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
             }
@@ -1049,7 +1054,7 @@ pub fn EndCopyTo(mut cstate: CopyToState<'_, '_>) -> PgResult<()> {
             ereport(ERROR)
                 .with_saved_errno(errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not close file \"{filename}\": %m"))
+                .errmsg(format!("could not close file \"{filename}\": {PCT_M}"))
                 .finish(loc("EndCopy"))?;
         }
     }
@@ -1216,10 +1221,50 @@ fn cannot_copy_from_relkind(rel: &Relation<'_>) -> Box<PgError> {
     Box::new(e)
 }
 
+// Whether a POSIX default ACL governs files created in `filename`'s
+// directory (Linux: the directory's system.posix_acl_default attribute).
+// With one in force the kernel derives a created file's bits from the ACL
+// and ignores umask, so C's umask(022)-wrapped fopen (mode 0666,
+// copyto.c:952-961) and the 0666 open above land on the same mode — the
+// ACL-inherited bits — and an fchmod to 0644 would replace the ACL mask C
+// leaves in place. No other platform folds default ACLs into the mode bits,
+// so elsewhere the fchmod alone reproduces C's 0666 & ~022.
+#[cfg(target_os = "linux")]
+fn parent_has_default_acl(filename: &str) -> bool {
+    let dir = match filename.rfind('/') {
+        Some(0) | None => "/",
+        Some(i) => &filename[..i],
+    };
+    let Ok(cdir) = std::ffi::CString::new(dir) else {
+        return false;
+    };
+    let name = b"system.posix_acl_default\0";
+    // SAFETY: both pointers are NUL-terminated; a NULL/0 value buffer only
+    // sizes the attribute (-1/ENODATA when absent, > 0 when present).
+    let n = unsafe {
+        libc::lgetxattr(
+            cdir.as_ptr(),
+            name.as_ptr() as *const core::ffi::c_char,
+            core::ptr::null_mut(),
+            0,
+        )
+    };
+    n > 0
+}
+
+#[cfg(all(not(target_os = "linux"), not(target_family = "wasm")))]
+fn parent_has_default_acl(_filename: &str) -> bool {
+    false
+}
+
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
-    use super::COPY_TO_FILE_MODE;
+    use super::{parent_has_default_acl, COPY_TO_FILE_MODE};
     use std::os::unix::fs::PermissionsExt;
+
+    /// The process umask is global: the tests that set it hold this lock for the whole set / restore (D4658, a second
+    /// test restoring while the first still held its mask made the first's "untouched" assertion read 0o002).
+    static UMASK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     // The fix replaces C's process-global umask swap with an explicit fchmod on
     // the created file (see BeginCopyTo). This asserts the mechanism: setting
@@ -1230,6 +1275,7 @@ mod tests {
     fn explicit_mode_matches_c_and_leaves_umask_untouched() {
         assert_eq!(COPY_TO_FILE_MODE, 0o644, "must match C's 0666 & ~0o022");
 
+        let _umask = UMASK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Force a restrictive umask (the server's PG_MODE_MASK_OWNER = 0o077),
         // as would be in effect when a backend runs COPY TO.
         let saved = unsafe { libc::umask(0o077) };
@@ -1250,5 +1296,35 @@ mod tests {
         assert_eq!(mode, 0o644, "explicit fchmod must reach C's mode");
         // Our code path never calls umask(2): the process mask is unchanged.
         assert_eq!(after, 0o077, "process umask must be untouched by the fix");
+    }
+
+    // The fchmod arm is skipped only under a default ACL; a fresh temp
+    // directory carries none, so a file created there takes the fchmod and
+    // ends at C's 0644 (the ACL arm itself is Linux-only and code-level:
+    // the kernel's ACL inheritance is what C relies on there too).
+    #[test]
+    fn no_default_acl_means_fchmod_to_c_mode() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("pgrust_copyto_acl_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("out.csv");
+        let filename = path.to_str().expect("utf-8 temp path");
+        assert!(!parent_has_default_acl(filename));
+        assert!(!parent_has_default_acl("/no-parent-file"));
+
+        let _umask = UMASK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = unsafe { libc::umask(0o077) };
+        let file = std::fs::File::create(&path).expect("create temp file");
+        let created = file.metadata().unwrap().permissions().mode() & 0o777;
+        if !parent_has_default_acl(filename) {
+            file.set_permissions(std::fs::Permissions::from_mode(COPY_TO_FILE_MODE))
+                .expect("set_permissions");
+        }
+        let mode = file.metadata().unwrap().permissions().mode() & 0o777;
+        unsafe { libc::umask(saved) };
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(created, 0o600, "server umask 077 masks the 0666 open");
+        assert_eq!(mode, 0o644, "no default ACL: fchmod reaches C's 0666 & ~022");
     }
 }

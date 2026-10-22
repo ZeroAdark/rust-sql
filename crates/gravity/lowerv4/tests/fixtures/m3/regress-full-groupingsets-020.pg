@@ -1,0 +1,6 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2, box 17, M3-L1 09-25): COPY (<sql>) TO STDOUT over a fresh initdb
+sql: select (x+y)*1, sum(z) from (select 1 as x, 2 as y, 3 as z) s group by grouping sets (x+y, x);
+cols: ?column?	sum
+[pg]
+3	3
+\N	3

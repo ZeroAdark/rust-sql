@@ -456,7 +456,7 @@ pub fn brin_evacuate_page(
     revmap: &BrinRevmap,
     buf: Buffer,
 ) -> PgResult<()> {
-    let scratch = ::mcx::MemoryContext::new_bump("brin evacuate");
+    let scratch = ::mcx::MemoryContext::new_wholesale("brin evacuate");
     let mut btup: PgVec<'_, u8> = PgVec::new_in(scratch.mcx());
 
     // SAFETY: pinned; the lock dance below follows C.

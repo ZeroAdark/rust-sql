@@ -1,0 +1,10 @@
+-- regress-full-with-080
+-- CREATE TABLE m AS SELECT i AS k, (i || ' v')::text v FROM generate_series(1, 16, 3) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: true } fn1066 fn1066(c23:1, c23:16, c23:3)]
+  project (1=v1.1, 2=op654(io25(v1.1), c25:' v'))
+  outs 1=w4:val 2=vl:call1258
+mapped: FunctionScan

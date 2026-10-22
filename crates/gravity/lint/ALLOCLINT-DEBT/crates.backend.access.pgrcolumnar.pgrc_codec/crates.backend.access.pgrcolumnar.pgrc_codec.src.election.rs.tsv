@@ -1,0 +1,8 @@
+path	crates/backend/access/pgrcolumnar/pgrc_codec/src/election.rs
+growth	pgrc_format::verbatim::encode_validity_bitmap	1
+growth	std::vec::Vec::push	10
+macro	std::vec	4
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	2
+method	std::vec::Vec::with_capacity	7
+type	std::vec::Vec	17

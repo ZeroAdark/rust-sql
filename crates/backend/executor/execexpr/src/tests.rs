@@ -1247,6 +1247,7 @@ fn agg_trans_and_aggref_eval_steps() {
             nulls: NonNull::new(aggnulls.as_mut_ptr()).unwrap(),
             naggs: 2,
             grouping: None,
+            win: None,
         };
         let mut agg0 = Node::build::<Aggref>(mcx).unwrap();
         agg0.aggfnoid = 2803;
@@ -1584,6 +1585,48 @@ fn param_extern_missing_value_errors_42704() {
     });
 }
 
+// ExecEvalParamExtern's paramFetch arm: a slot the owner built without a
+// value is fetched through the hook only when evaluation reaches it, and the
+// fetched type is checked against the Param's.
+#[test]
+fn param_extern_missing_slot_fetches_through_the_hook_when_reached() {
+    use ::types_nodes::primnodes::BoolExprType::AND_EXPR;
+    use ::types_nodes::primnodes::{BoolExpr, ParamKind};
+    use ::types_portal::params::{ParamExternData, ParamFetchHook};
+    unsafe fn fetch(arg: *mut (), paramid: i32) -> ::types_error::PgResult<ParamExternData> {
+        // SAFETY: the test registers a live (calls, ptype) pair.
+        let (calls, ptype) = unsafe { &mut *arg.cast::<(u32, ::types_core::Oid)>() };
+        *calls += 1;
+        assert_eq!(paramid, 1);
+        Ok(ParamExternData { value: Datum::from_bool(true), isnull: false, pflags: 0, ptype: *ptype })
+    }
+    with_mcx(|mcx| {
+        let list = [ParamExternData { value: Datum::null(), isnull: true, pflags: 0, ptype: 0 }];
+        let mut cell = (0u32, 16);
+        let bind = ParamBind {
+            extern_params: Some(&list),
+            extern_fetch: Some(ParamFetchHook { func: fetch, arg: (&mut cell as *mut (u32, u32)).cast() }),
+            ..ParamBind::NONE
+        };
+        let and = |first: bool| {
+            let mut args = NodeList::nil();
+            args.lappend(mcx, mk_bool_const(mcx, Some(first))).unwrap();
+            args.lappend(mcx, mk_param(mcx, ParamKind::PARAM_EXTERN, 1, 16)).unwrap();
+            Node::mk(mcx, BoolExpr { boolop: AND_EXPR, args, location: -1 }).unwrap()
+        };
+        let mut slots = EvalSlots::default();
+        let mut skipped = exec_init_expr(mcx, Some(and(false)), bind).unwrap().unwrap();
+        let r = exec_eval_expr(&mut skipped, &mut slots).unwrap();
+        assert_eq!((r.isnull, r.value.as_bool(), cell.0), (false, false, 0));
+        let mut reached = exec_init_expr(mcx, Some(and(true)), bind).unwrap().unwrap();
+        let r = exec_eval_expr(&mut reached, &mut slots).unwrap();
+        assert_eq!((r.isnull, r.value.as_bool(), cell.0), (false, true, 1));
+        cell.1 = INT4OID;
+        let err = exec_eval_expr(&mut reached, &mut slots).err().unwrap();
+        assert_eq!(err.sqlstate, ::types_error::ERRCODE_DATATYPE_MISMATCH);
+    });
+}
+
 #[test]
 fn param_exec_step_reads_estate_slot() {
     use ::types_nodes::primnodes::ParamKind;
@@ -1605,6 +1648,9 @@ fn param_exec_step_reads_estate_slot() {
             n_exec: 2,
             param_callback: None,
             param_expanded: None,
+            param_rw: None,
+            param_ro_expanded: None,
+            extern_fetch: None,
         };
         let node = mk_param(mcx, ParamKind::PARAM_EXEC, 1, INT4OID);
         let mut state = exec_init_expr(mcx, Some(node), bind).unwrap().unwrap();
@@ -2130,13 +2176,31 @@ fn domain_check_input_engine_matches() {
 fn domain_check_input_releases_check_leftovers_between_calls() {
     install_seams();
     for _ in 0..3 {
-        assert!(crate::domain::domain_check_input(Datum::from_i32(1), false, INLIST_DOMAIN_OID, None)
-            .is_ok());
-        let e = crate::domain::domain_check_input(Datum::from_i32(7), false, INLIST_DOMAIN_OID, None)
-            .err()
-            .unwrap();
+        assert!(crate::domain::domain_check_input(
+            Datum::from_i32(1),
+            false,
+            INLIST_DOMAIN_OID,
+            None
+        )
+        .is_ok());
+        crate::domain::assert_scratch_released();
+        let e =
+            crate::domain::domain_check_input(Datum::from_i32(7), false, INLIST_DOMAIN_OID, None)
+                .err()
+                .unwrap();
         assert_eq!(e.sqlstate(), ::types_error::ERRCODE_CHECK_VIOLATION);
         assert_eq!(e.constraint_name(), Some("inlist_check"));
+        crate::domain::assert_scratch_released();
+        let mut soft = ::types_error::SoftErrorContext::default();
+        crate::domain::domain_check_input(
+            Datum::from_i32(7),
+            false,
+            INLIST_DOMAIN_OID,
+            Some(&mut soft),
+        )
+        .unwrap();
+        assert!(soft.error_occurred());
+        crate::domain::assert_scratch_released();
     }
 }
 
@@ -3475,523 +3539,6 @@ mod json {
         });
     }
 }
-// jit-qual cross-check: drives an unfused program through
-// interp::exec_one_step, emulating the emitter's stenciled opcodes (the
-// helper refuses those by contract) and following StepFlow for the rest.
-fn run_stepwise<'mcx>(
-    state: &mut ExprState<'mcx>,
-    slots: &mut EvalSlots<'_, 'mcx>,
-    mut result_slot: Option<&mut SlotData<'mcx>>,
-) -> ::types_error::PgResult<::datum::NullableDatum> {
-    use crate::interp::StepFlow;
-    use ::datum::NullableDatum;
-    let res = state.resnd;
-    let mut ix: u32 = 0;
-    loop {
-        let step = state.steps.as_slice()[ix as usize];
-        match step {
-            Step::DoneReturn => return Ok(unsafe { res.read() }),
-            Step::DoneNoReturn => return Ok(NullableDatum::null()),
-            Step::Const { value, isnull, out } => unsafe {
-                out.0.write(NullableDatum { value, isnull });
-            },
-            Step::ScanVar { attnum, out, .. } => {
-                let base = slots.scan.as_deref_mut().unwrap().base();
-                let nd = NullableDatum {
-                    value: base.tts_values[attnum as usize],
-                    isnull: base.tts_isnull[attnum as usize],
-                };
-                unsafe { out.0.write(nd) };
-            }
-            Step::CaseTestVal { slot, out } => unsafe { out.0.write(slot.read()) },
-            Step::FuncExprStrict2 { call, out } => {
-                let (a0, a1) = unsafe {
-                    (
-                        crate::steps::arg_slot_of(call.fcinfo, 0).read(),
-                        crate::steps::arg_slot_of(call.fcinfo, 1).read(),
-                    )
-                };
-                let nd = if a0.isnull || a1.isnull {
-                    NullableDatum::null()
-                } else {
-                    let (v, isnull) = crate::interp::invoke(&call)?;
-                    NullableDatum { value: v, isnull }
-                };
-                unsafe { out.0.write(nd) };
-            }
-            Step::Qual { jumpdone } => {
-                let r = unsafe { res.read() };
-                if r.isnull || !r.value.as_bool() {
-                    unsafe {
-                        res.write(NullableDatum {
-                            value: Datum::from_bool(false),
-                            isnull: false,
-                        })
-                    };
-                    ix = jumpdone;
-                    continue;
-                }
-            }
-            Step::Jump { jumpdone } => {
-                ix = jumpdone;
-                continue;
-            }
-            Step::JumpIfNull { jumpdone, out } => {
-                if unsafe { out.0.read() }.isnull {
-                    ix = jumpdone;
-                    continue;
-                }
-            }
-            Step::JumpIfNotNull { jumpdone, out } => {
-                if !unsafe { out.0.read() }.isnull {
-                    ix = jumpdone;
-                    continue;
-                }
-            }
-            Step::JumpIfNotTrue { jumpdone, out } => {
-                let r = unsafe { out.0.read() };
-                if r.isnull || !r.value.as_bool() {
-                    ix = jumpdone;
-                    continue;
-                }
-            }
-            other => {
-                assert!(
-                    crate::interp::step_has_helper(&other),
-                    "stencil {other:?} not emulated by the test driver"
-                );
-                let mut ret = crate::interp::RetSlots::none();
-                match crate::interp::exec_one_step(
-                    state,
-                    slots,
-                    &mut ret,
-                    result_slot.as_deref_mut(),
-                    ix,
-                )? {
-                    StepFlow::Next => {}
-                    StepFlow::Jump(t) => {
-                        ix = t;
-                        continue;
-                    }
-                    StepFlow::Suspend(_) => panic!("unexpected SubPlan suspension"),
-                }
-            }
-        }
-        ix += 1;
-    }
-}
-
-#[test]
-fn jit_single_step_matches_run_program() {
-    with_mcx(|mcx| {
-        crate::compile::SKIP_FUSE_FOR_TESTS.with(|c| c.set(true));
-
-        // Qual: ScanFetchSome via the helper, var/cmp/qual as stencils.
-        for vals in [Some(7), Some(8), Some(-7), None] {
-            let mk_state = || {
-                let args = NodeList::make2(
-                    mcx,
-                    mk_scan_var(mcx, 1, INT4OID),
-                    mk_int4_const(mcx, Some(7)),
-                )
-                .unwrap();
-                let mut s = qual_state(mcx, mk_opexpr(mcx, 147, BOOLOID, args));
-                s.force_program_kernel();
-                s
-            };
-            let expected = run_qual(mcx, &mut mk_state(), &[vals]);
-            let mut slot = virtual_slot(mcx, &[vals]);
-            let mut slots = EvalSlots {
-                scan: Some(&mut slot),
-                inner: None,
-                outer: None,
-            };
-            let r = run_stepwise(&mut mk_state(), &mut slots, None).unwrap();
-            assert!(!r.isnull);
-            assert_eq!(r.value.as_bool(), expected, "qual {vals:?}");
-        }
-
-        // MinMax helper arm.
-        for (least, vals, want) in [
-            (true, &[Some(3), Some(1), Some(2)][..], Some(1)),
-            (false, &[None, Some(-5), None, Some(4)][..], Some(4)),
-            (true, &[None, None][..], None),
-        ] {
-            let mk_state = || {
-                let mut s = exec_init_expr(mcx, Some(mk_minmax(mcx, least, vals)), ParamBind::NONE)
-                    .unwrap()
-                    .unwrap();
-                s.arm_result_mcx(mcx);
-                s.force_program_kernel();
-                s
-            };
-            let expected = exec_eval_expr(&mut mk_state(), &mut EvalSlots::default()).unwrap();
-            let r = run_stepwise(&mut mk_state(), &mut EvalSlots::default(), None).unwrap();
-            assert_eq!(r.isnull, expected.isnull, "minmax {least} {vals:?}");
-            assert_eq!(r.isnull, want.is_none());
-            if let Some(w) = want {
-                assert_eq!(expected.value.as_i32(), w);
-                assert_eq!(r.value.as_i32(), w);
-            }
-        }
-
-        // ScalarArrayOp helper arm (found / not found / null element).
-        for (scalar, elems) in [
-            (Some(2), &[Some(1), Some(2)][..]),
-            (Some(5), &[Some(1), Some(2)][..]),
-            (Some(2), &[Some(1), None][..]),
-            (None, &[Some(1)][..]),
-        ] {
-            let mk_state = || {
-                let node = mk_saop(
-                    mcx,
-                    true,
-                    mk_int4_const(mcx, scalar),
-                    mk_int4_array_const(mcx, elems),
-                );
-                let mut s = exec_init_expr(mcx, Some(node), ParamBind::NONE)
-                    .unwrap()
-                    .unwrap();
-                s.arm_result_mcx(mcx);
-                s.force_program_kernel();
-                s
-            };
-            let expected = exec_eval_expr(&mut mk_state(), &mut EvalSlots::default()).unwrap();
-            let r = run_stepwise(&mut mk_state(), &mut EvalSlots::default(), None).unwrap();
-            assert_eq!(r.isnull, expected.isnull, "saop {scalar:?} {elems:?}");
-            if !r.isnull {
-                assert_eq!(r.value.as_bool(), expected.value.as_bool());
-            }
-        }
-
-        // Domain family: DomainTestval/DomainNotNull/DomainCheck incl errors.
-        for v in [Some(5), Some(0), None] {
-            let mk_state = || {
-                let mut s = exec_init_expr(mcx, Some(mk_domain_coercion(mcx, v)), ParamBind::NONE)
-                    .unwrap()
-                    .unwrap();
-                s.arm_result_mcx(mcx);
-                s.force_program_kernel();
-                s
-            };
-            let expected = exec_eval_expr(&mut mk_state(), &mut EvalSlots::default());
-            let got = run_stepwise(&mut mk_state(), &mut EvalSlots::default(), None);
-            match (expected, got) {
-                (Ok(e), Ok(g)) => {
-                    assert_eq!(e.isnull, g.isnull, "domain {v:?}");
-                    if !e.isnull {
-                        assert_eq!(e.value.as_i32(), g.value.as_i32());
-                    }
-                }
-                (Err(e), Err(g)) => assert_eq!(e.sqlstate(), g.sqlstate(), "domain {v:?}"),
-                (e, g) => panic!(
-                    "domain {v:?} outcome mismatch: {:?} vs {:?}",
-                    e.map(|n| n.isnull),
-                    g.map(|n| n.isnull)
-                ),
-            }
-        }
-
-        // Projection: FetchSome + AssignScanVar helpers + DoneNoReturn.
-        {
-            let desc = desc_int4(mcx, 2);
-            let mk_state = || {
-                let tle1 = Node::mk_target_entry(mcx, mk_scan_var(mcx, 2, INT4OID), 1, None, false)
-                    .unwrap();
-                let tle2 = Node::mk_target_entry(mcx, mk_scan_var(mcx, 1, INT4OID), 2, None, false)
-                    .unwrap();
-                let mut tlist = NodeList::make1(mcx, tle1).unwrap();
-                tlist.lappend(mcx, tle2).unwrap();
-                let mut s =
-                    exec_build_projection_info(mcx, &tlist, Some(&desc), ParamBind::NONE).unwrap();
-                s.force_program_kernel();
-                s
-            };
-            let mut scan = heap_slot(mcx, &[Some(3), Some(4)]);
-            let mut result_a = exectuples::make_tuple_table_slot(
-                mcx,
-                TupleSlotKind::Virtual,
-                Some(desc_int4(mcx, 2)),
-            );
-            {
-                let mut slots = EvalSlots {
-                    scan: Some(&mut scan),
-                    inner: None,
-                    outer: None,
-                };
-                exec_project(&mut mk_state(), &mut slots, &mut result_a, mcx).unwrap();
-            }
-            let mut scan2 = heap_slot(mcx, &[Some(3), Some(4)]);
-            let mut result_b = exectuples::make_tuple_table_slot(
-                mcx,
-                TupleSlotKind::Virtual,
-                Some(desc_int4(mcx, 2)),
-            );
-            {
-                let mut slots = EvalSlots {
-                    scan: Some(&mut scan2),
-                    inner: None,
-                    outer: None,
-                };
-                let r = run_stepwise(&mut mk_state(), &mut slots, Some(&mut result_b)).unwrap();
-                assert!(r.isnull);
-            }
-            for i in 0..2 {
-                assert_eq!(
-                    result_a.base().tts_values[i].as_i32(),
-                    result_b.base().tts_values[i].as_i32(),
-                    "projection col {i}"
-                );
-                assert!(!result_b.base().tts_isnull[i]);
-            }
-        }
-
-        crate::compile::SKIP_FUSE_FOR_TESTS.with(|c| c.set(false));
-    });
-}
-
-// ---- Copy-and-patch JIT parity fuzz (jit.rs) ----
-//
-// Random expression programs from the census distribution (bool trees, int
-// cmp/arith with overflow, NULL mixes, CASE/COALESCE jumps, null/bool
-// tests), JIT vs interpreter byte-compared on (value, isnull) and on error
-// (message + sqlstate). Off-aarch64 the JIT never engages and the test
-// degrades to interpreter self-comparison.
-
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        self.0 >> 11
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-}
-
-const FUZZ_COLS: usize = 3;
-
-fn fuzz_i32(rng: &mut Lcg) -> i32 {
-    match rng.below(8) {
-        0 => i32::MAX,
-        1 => i32::MIN,
-        2 => 0,
-        3 => 7,
-        4 => -500_000,
-        5 => 500_000,
-        6 => 0x4000_0000,
-        _ => rng.next() as i32,
-    }
-}
-
-fn fuzz_int_expr<'mcx>(mcx: Mcx<'mcx>, rng: &mut Lcg, depth: u32) -> Node<'mcx> {
-    match if depth == 0 {
-        rng.below(2)
-    } else {
-        rng.below(6)
-    } {
-        0 => mk_scan_var(mcx, (rng.below(FUZZ_COLS as u64) + 1) as i16, INT4OID),
-        1 => mk_int4_const(mcx, (rng.below(5) != 0).then(|| fuzz_i32(rng))),
-        // int4pl/int4mi/int4mul: the emitter's inline-arith stencils with
-        // overflow falling into the real fmgr call.
-        2 | 3 => {
-            let f = [177u32, 181, 141][rng.below(3) as usize];
-            let mut args = NodeList::nil();
-            args.lappend(mcx, fuzz_int_expr(mcx, rng, depth - 1))
-                .unwrap();
-            args.lappend(mcx, fuzz_int_expr(mcx, rng, depth - 1))
-                .unwrap();
-            mk_opexpr(mcx, f, INT4OID, args)
-        }
-        // CASE WHEN b THEN x ELSE y (JumpIfNotTrue/Jump skeleton).
-        4 => {
-            let when = ::types_nodes::primnodes::CaseWhen {
-                expr: Some(fuzz_bool_expr(mcx, rng, depth - 1)),
-                result: Some(fuzz_int_expr(mcx, rng, depth - 1)),
-                location: -1,
-            };
-            let mut args = NodeList::nil();
-            args.lappend(mcx, Node::mk(mcx, when).unwrap()).unwrap();
-            Node::mk(
-                mcx,
-                ::types_nodes::primnodes::CaseExpr {
-                    casetype: INT4OID,
-                    casecollid: 0,
-                    arg: None,
-                    args,
-                    defresult: Some(fuzz_int_expr(mcx, rng, depth - 1)),
-                    location: -1,
-                },
-            )
-            .unwrap()
-        }
-        // COALESCE(x, y) (JumpIfNotNull skeleton).
-        _ => {
-            let mut args = NodeList::nil();
-            args.lappend(mcx, fuzz_int_expr(mcx, rng, depth - 1))
-                .unwrap();
-            args.lappend(mcx, fuzz_int_expr(mcx, rng, depth - 1))
-                .unwrap();
-            Node::mk(
-                mcx,
-                ::types_nodes::primnodes::CoalesceExpr {
-                    coalescetype: INT4OID,
-                    coalescecollid: 0,
-                    args,
-                    location: -1,
-                },
-            )
-            .unwrap()
-        }
-    }
-}
-
-fn fuzz_bool_expr<'mcx>(mcx: Mcx<'mcx>, rng: &mut Lcg, depth: u32) -> Node<'mcx> {
-    use ::types_nodes::primnodes::BoolExprType::{AND_EXPR, NOT_EXPR, OR_EXPR};
-    match if depth == 0 {
-        rng.below(2)
-    } else {
-        rng.below(6)
-    } {
-        // int4 cmp over int subtrees (CmpOp inline stencils).
-        0 | 1 => {
-            let f = [65u32, 144, 66, 149, 147, 150][rng.below(6) as usize];
-            let mut args = NodeList::nil();
-            args.lappend(mcx, fuzz_int_expr(mcx, rng, depth.saturating_sub(1)))
-                .unwrap();
-            args.lappend(mcx, fuzz_int_expr(mcx, rng, depth.saturating_sub(1)))
-                .unwrap();
-            mk_opexpr(mcx, f, BOOLOID, args)
-        }
-        2 => {
-            let op = [AND_EXPR, OR_EXPR][rng.below(2) as usize];
-            let mut args = NodeList::nil();
-            for _ in 0..2 + rng.below(2) {
-                args.lappend(mcx, fuzz_bool_expr(mcx, rng, depth - 1))
-                    .unwrap();
-            }
-            Node::mk(
-                mcx,
-                ::types_nodes::primnodes::BoolExpr {
-                    boolop: op,
-                    args,
-                    location: -1,
-                },
-            )
-            .unwrap()
-        }
-        3 => {
-            let mut args = NodeList::nil();
-            args.lappend(mcx, fuzz_bool_expr(mcx, rng, depth - 1))
-                .unwrap();
-            Node::mk(
-                mcx,
-                ::types_nodes::primnodes::BoolExpr {
-                    boolop: NOT_EXPR,
-                    args,
-                    location: -1,
-                },
-            )
-            .unwrap()
-        }
-        4 => Node::mk(
-            mcx,
-            ::types_nodes::primnodes::NullTest {
-                arg: Some(fuzz_int_expr(mcx, rng, depth - 1)),
-                nulltesttype: if rng.below(2) == 0 {
-                    ::types_nodes::primnodes::NullTestType::IS_NULL
-                } else {
-                    ::types_nodes::primnodes::NullTestType::IS_NOT_NULL
-                },
-                argisrow: false,
-                location: -1,
-            },
-        )
-        .unwrap(),
-        _ => Node::mk(
-            mcx,
-            ::types_nodes::primnodes::BooleanTest {
-                arg: Some(fuzz_bool_expr(mcx, rng, depth - 1)),
-                booltesttype: match rng.below(4) {
-                    0 => ::types_nodes::primnodes::BoolTestType::IS_TRUE,
-                    1 => ::types_nodes::primnodes::BoolTestType::IS_NOT_TRUE,
-                    2 => ::types_nodes::primnodes::BoolTestType::IS_FALSE,
-                    _ => ::types_nodes::primnodes::BoolTestType::IS_NOT_FALSE,
-                },
-                location: -1,
-            },
-        )
-        .unwrap(),
-    }
-}
-
-type FuzzOutcome = Result<(bool, usize), (String, String)>;
-
-fn fuzz_eval<'mcx>(
-    mcx: Mcx<'mcx>,
-    state: &mut ExprState<'mcx>,
-    row: &[Option<i32>],
-) -> FuzzOutcome {
-    let mut slot = virtual_slot(mcx, row);
-    let mut slots = EvalSlots {
-        scan: Some(&mut slot),
-        inner: None,
-        outer: None,
-    };
-    match exec_eval_expr(state, &mut slots) {
-        Ok(nd) => Ok((nd.isnull, if nd.isnull { 0 } else { nd.value.as_usize() })),
-        Err(e) => Err((e.message.clone(), format!("{:?}", e.sqlstate))),
-    }
-}
-
-#[test]
-fn jit_parity_fuzz() {
-    with_mcx(|mcx| {
-        let mut rng = Lcg(0x9E37_79B9_7F4A_7C15);
-        let mut jitted = 0usize;
-        for tree in 0..300u32 {
-            let expr = fuzz_bool_expr(mcx, &mut rng, 3);
-            let mut interp = exec_init_expr(mcx, Some(expr), ParamBind::NONE)
-                .unwrap()
-                .unwrap();
-            interp.arm_result_mcx(mcx);
-            crate::jit::session_begin(crate::jit::PGJIT_PERFORM | crate::jit::PGJIT_EXPR, 0);
-            let mut jit = exec_init_expr(mcx, Some(expr), ParamBind::NONE)
-                .unwrap()
-                .unwrap();
-            jit.arm_result_mcx(mcx);
-            // Kernels stay alive for the eval loop (estate-collector analog).
-            let col = crate::jit::session_end();
-            #[cfg(target_arch = "aarch64")]
-            if matches!(jit.kernel(), Kernel::Program) {
-                assert!(
-                    jit.jit.is_some(),
-                    "tree {tree}: Program shape refused by the emitter"
-                );
-            }
-            if jit.jit.is_some() {
-                jitted += 1;
-            }
-            for _row in 0..64u32 {
-                let row: alloc::vec::Vec<Option<i32>> = (0..FUZZ_COLS)
-                    .map(|_| (rng.below(5) != 0).then(|| fuzz_i32(&mut rng)))
-                    .collect();
-                let want = fuzz_eval(mcx, &mut interp, &row);
-                let got = fuzz_eval(mcx, &mut jit, &row);
-                assert_eq!(want, got, "tree {tree} row {row:?}");
-            }
-            drop(col);
-        }
-        #[cfg(target_arch = "aarch64")]
-        assert!(jitted > 0, "no jitted programs in the whole fuzz corpus");
-        let _ = jitted;
-    });
-}
 
 #[test]
 fn old_new_var_projection_reads_ret_slots() {
@@ -4044,60 +3591,6 @@ fn old_new_var_projection_reads_ret_slots() {
         exec_project_returning(&mut state, &mut slots, &mut ret, &mut result, mcx).unwrap();
         assert_eq!(result.base().tts_values[0].as_i32(), 5);
         assert_eq!(result.base().tts_values[1].as_i32(), 10);
-    });
-}
-
-#[test]
-fn jit_parity_qual_lists() {
-    // Multi-clause qual programs: the Qual stencil's jumpdone legs, false-on-
-    // NULL semantics, and the heap-slot FETCHSOME helper path.
-    with_mcx(|mcx| {
-        let mut rng = Lcg(0xC0FF_EE00_D15E_A5E5);
-        for tree in 0..150u32 {
-            let mut qual = NodeList::nil();
-            for _ in 0..1 + rng.below(3) {
-                qual.lappend(mcx, fuzz_bool_expr(mcx, &mut rng, 2)).unwrap();
-            }
-            let mut interp = exec_init_qual(mcx, &qual, ParamBind::NONE)
-                .unwrap()
-                .unwrap();
-            crate::jit::session_begin(crate::jit::PGJIT_PERFORM | crate::jit::PGJIT_EXPR, 0);
-            let mut jit = exec_init_qual(mcx, &qual, ParamBind::NONE)
-                .unwrap()
-                .unwrap();
-            let col = crate::jit::session_end();
-            for _row in 0..32u32 {
-                let row: alloc::vec::Vec<Option<i32>> = (0..FUZZ_COLS)
-                    .map(|_| (rng.below(5) != 0).then(|| fuzz_i32(&mut rng)))
-                    .collect();
-                let heap = rng.below(2) == 0;
-                fn run_one<'mcx>(
-                    mcx: Mcx<'mcx>,
-                    heap: bool,
-                    row: &[Option<i32>],
-                    state: &mut ExprState<'mcx>,
-                ) -> Result<bool, (String, String)> {
-                    let mut slot = if heap {
-                        heap_slot(mcx, row)
-                    } else {
-                        virtual_slot(mcx, row)
-                    };
-                    let mut slots = EvalSlots {
-                        scan: Some(&mut slot),
-                        inner: None,
-                        outer: None,
-                    };
-                    match exec_qual(Some(state), &mut slots) {
-                        Ok(b) => Ok(b),
-                        Err(e) => Err((e.message.clone(), format!("{:?}", e.sqlstate))),
-                    }
-                }
-                let want = run_one(mcx, heap, &row, &mut interp);
-                let got = run_one(mcx, heap, &row, &mut jit);
-                assert_eq!(want, got, "tree {tree} row {row:?} heap={heap}");
-            }
-            drop(col);
-        }
     });
 }
 
@@ -4264,6 +3757,7 @@ fn multiexpr_subplan_compiles_to_setup_steps_and_dummy_const() {
         _estate: NonNull<()>,
         _node: Node<'_>,
         _agg: Option<crate::compile::AggBind>,
+        _merge: Option<crate::compile::MergeActionCell>,
     ) -> ::types_error::PgResult<NonNull<()>> {
         Ok(NonNull::<u8>::dangling().cast())
     }
@@ -4277,6 +3771,9 @@ fn multiexpr_subplan_compiles_to_setup_steps_and_dummy_const() {
             n_exec: 2,
             param_callback: None,
             param_expanded: None,
+            param_rw: None,
+            param_ro_expanded: None,
+            extern_fetch: None,
         };
         let env = crate::compile::SubplanCompileEnv {
             estate: NonNull::<u8>::dangling().cast(),
@@ -4471,7 +3968,7 @@ fn jit_inline_arith_matches_golden_set() {
         177, 181, 141, 463, 464, 465, 178, 179, 182, 183, 170, 171, 172,
     ];
     for oid in 0u32..=3000 {
-        let admitted = ::lanereg::jit_arith(oid).is_some();
+        let admitted = crate::batchreg::jit_arith(oid).is_some();
         assert_eq!(
             admitted,
             golden.contains(&oid),
@@ -5043,177 +4540,6 @@ fn fused_qual_kernel_int24_and_int42() {
     });
 }
 
-// --- censusgaps JIT parity: the new inline stencils vs the interpreter -------
-// Mixed int2/int4 comparators + oid unsigned comparators + the int24/int42
-// arithmetic family (incl. int24div's division-by-zero and the overflow
-// replay paths), byte-compared JIT vs interpreter on (value, isnull) and on
-// error (message + sqlstate). Off-aarch64 the JIT never engages and this
-// degrades to interpreter self-comparison (same as jit_parity_fuzz).
-#[test]
-fn jit_parity_censusgaps_inline_ops() {
-    const INT2OID: u32 = 21;
-    const OIDOID: u32 = 26;
-    with_mcx(|mcx| {
-        // CASE WHEN <bool expr> THEN 1 ELSE 0 END: forces the Program kernel
-        // (jump skeleton) so the copy-and-patch emitter owns the FuncExpr.
-        fn wrap_bool<'mcx>(mcx: Mcx<'mcx>, cond: Node<'mcx>) -> Node<'mcx> {
-            let when = ::types_nodes::primnodes::CaseWhen {
-                expr: Some(cond),
-                result: Some(mk_int4_const(mcx, Some(1))),
-                location: -1,
-            };
-            let mut args = NodeList::nil();
-            args.lappend(mcx, Node::mk(mcx, when).unwrap()).unwrap();
-            Node::mk(
-                mcx,
-                ::types_nodes::primnodes::CaseExpr {
-                    casetype: INT4OID,
-                    casecollid: 0,
-                    arg: None,
-                    args,
-                    defresult: Some(mk_int4_const(mcx, Some(0))),
-                    location: -1,
-                },
-            )
-            .unwrap()
-        }
-        // (cmp fn oid, lhs var type, rhs var type)
-        let cmp_cases: &[(u32, u32, u32)] = &[
-            (158, INT2OID, INT4OID),
-            (164, INT2OID, INT4OID),
-            (160, INT2OID, INT4OID),
-            (166, INT2OID, INT4OID),
-            (162, INT2OID, INT4OID),
-            (168, INT2OID, INT4OID),
-            (159, INT4OID, INT2OID),
-            (165, INT4OID, INT2OID),
-            (161, INT4OID, INT2OID),
-            (167, INT4OID, INT2OID),
-            (163, INT4OID, INT2OID),
-            (169, INT4OID, INT2OID),
-            (184, OIDOID, OIDOID),
-            (185, OIDOID, OIDOID),
-            (716, OIDOID, OIDOID),
-            (717, OIDOID, OIDOID),
-            (1638, OIDOID, OIDOID),
-            (1639, OIDOID, OIDOID),
-        ];
-        // (arith fn oid, lhs var type, rhs var type); result compared against
-        // a constant so the arith output feeds an inline cmp (still Program
-        // under the CASE wrapper).
-        let arith_cases: &[(u32, u32, u32)] = &[
-            (178, INT2OID, INT4OID),
-            (179, INT4OID, INT2OID),
-            (182, INT2OID, INT4OID),
-            (183, INT4OID, INT2OID),
-            (170, INT2OID, INT4OID),
-            (171, INT4OID, INT2OID),
-            (172, INT2OID, INT4OID),
-        ];
-        // Row pool: int2-ranged values where the column is int2 (canonical
-        // datum invariant), full-range where int4/oid; 0 divisors and
-        // overflow-provoking pairs included. As u32 bit patterns, -1 is
-        // u32::MAX and i32::MIN is 0x80000000 — the unsigned boundary.
-        let a_pool: &[Option<i32>] = &[
-            None,
-            Some(0),
-            Some(1),
-            Some(-1),
-            Some(7),
-            Some(-7),
-            Some(i16::MAX as i32),
-            Some(i16::MIN as i32),
-        ];
-        let b_pool: &[Option<i32>] = &[
-            None,
-            Some(0),
-            Some(1),
-            Some(-1),
-            Some(7),
-            Some(-32768),
-            Some(32767),
-            Some(i32::MAX),
-            Some(i32::MIN),
-            Some(65537),
-        ];
-        // Canonical datum for a pool value at the column's declared type.
-        fn typed_datum(typ: u32, v: i32) -> Datum {
-            match typ {
-                21 => Datum::from_i16(v as i16),
-                26 => Datum::from_u32(v as u32),
-                _ => Datum::from_i32(v),
-            }
-        }
-        fn typed_eval<'mcx>(
-            mcx: Mcx<'mcx>,
-            state: &mut ExprState<'mcx>,
-            cols: &[(u32, i16, Option<Datum>)],
-        ) -> FuzzOutcome {
-            let mut slot = virtual_slot_typed(mcx, cols);
-            let mut slots = EvalSlots {
-                scan: Some(&mut slot),
-                inner: None,
-                outer: None,
-            };
-            match exec_eval_expr(state, &mut slots) {
-                Ok(nd) => Ok((nd.isnull, if nd.isnull { 0 } else { nd.value.as_usize() })),
-                Err(e) => Err((e.message.clone(), format!("{:?}", e.sqlstate))),
-            }
-        }
-        let len_of = |typ: u32| if typ == 21 { 2i16 } else { 4 };
-        let mut exercised = 0usize;
-        let mut run_case = |expr: Node<'_>, lt: u32, rt: u32| {
-            let mut interp = exec_init_expr(mcx, Some(expr), ParamBind::NONE)
-                .unwrap()
-                .unwrap();
-            interp.arm_result_mcx(mcx);
-            crate::jit::session_begin(crate::jit::PGJIT_PERFORM | crate::jit::PGJIT_EXPR, 0);
-            let mut jit = exec_init_expr(mcx, Some(expr), ParamBind::NONE)
-                .unwrap()
-                .unwrap();
-            jit.arm_result_mcx(mcx);
-            let _ = crate::jit::session_end();
-            if jit.jit.is_some() {
-                exercised += 1;
-            }
-            for &a in a_pool {
-                for &b in b_pool {
-                    let cols = [
-                        (lt, len_of(lt), a.map(|v| typed_datum(lt, v))),
-                        (rt, len_of(rt), b.map(|v| typed_datum(rt, v))),
-                    ];
-                    let want = typed_eval(mcx, &mut interp, &cols);
-                    let got = typed_eval(mcx, &mut jit, &cols);
-                    assert_eq!(got, want, "row ({a:?}, {b:?})");
-                }
-            }
-        };
-        for &(f, lt, rt) in cmp_cases {
-            let args =
-                NodeList::make2(mcx, mk_scan_var(mcx, 1, lt), mk_scan_var(mcx, 2, rt)).unwrap();
-            run_case(wrap_bool(mcx, mk_opexpr(mcx, f, BOOLOID, args)), lt, rt);
-        }
-        for &(f, lt, rt) in arith_cases {
-            let args =
-                NodeList::make2(mcx, mk_scan_var(mcx, 1, lt), mk_scan_var(mcx, 2, rt)).unwrap();
-            let arith = mk_opexpr(mcx, f, INT4OID, args);
-            let cmp_args = NodeList::make2(mcx, arith, mk_int4_const(mcx, Some(6))).unwrap();
-            run_case(
-                wrap_bool(mcx, mk_opexpr(mcx, 66, BOOLOID, cmp_args)),
-                lt,
-                rt,
-            );
-        }
-        #[cfg(target_arch = "aarch64")]
-        assert_eq!(
-            exercised,
-            cmp_cases.len() + arith_cases.len(),
-            "every censusgaps case must engage the JIT emitter on aarch64"
-        );
-        let _ = exercised;
-    });
-}
-
 // --- strsearch contains-LIKE qual census + kernel (lane-v2) -----------------
 
 fn text_datum_4b(bytes: &[u8]) -> Datum {
@@ -5316,7 +4642,7 @@ fn qual_bitmap_contains_matches_perrow_like_oracle() {
             .wrapping_add(1442695040888963407);
         s
     };
-    let alphabet: Vec<char> = "abcdefgxyz0123456789 /:.?=&причалЯндексбßé中文"
+    let alphabet: Vec<char> = "abcdefgxyz0123456789 /:.?=&причалЯдекнсбßé中文"
         .chars()
         .collect();
     for round in 0..200 {
@@ -6439,4 +5765,101 @@ fn evaluate_expr_leaves_only_the_const_in_the_caller_context() {
             "caller context grew by {grown} for a {result_len}-byte result"
         );
     });
+}
+
+// Pair fusion shortens the program; a strict hash step's jumpdone must be
+// renumbered with it, or a NULL key jumps past the last step.
+#[test]
+fn hash32_strict_jump_remapped_after_fusion() {
+    with_mcx(|mcx| {
+        let desc = desc_int4(mcx, 2);
+        let mut e1 = Node::mk_var(mcx, crate::compile::OUTER_VAR, 1, INT4OID, -1, 0, 0).unwrap();
+        for k in 1..=3 {
+            let args = NodeList::make2(mcx, e1, mk_int4_const(mcx, Some(k))).unwrap();
+            e1 = mk_opexpr(mcx, 177, INT4OID, args);
+        }
+        let mut e2 = Node::mk_var(mcx, crate::compile::OUTER_VAR, 2, INT4OID, -1, 0, 0).unwrap();
+        for k in 1..=3 {
+            let args = NodeList::make2(mcx, e2, mk_int4_const(mcx, Some(k))).unwrap();
+            e2 = mk_opexpr(mcx, 177, INT4OID, args);
+        }
+        let keys = NodeList::make2(mcx, e1, e2).unwrap();
+        let mut state = crate::compile::exec_build_hash32_from_exprs(
+            mcx,
+            &desc,
+            &keys,
+            &[450, 450],
+            &[0, 0],
+            &[true, true],
+            false,
+            0,
+            ParamBind::NONE,
+            None,
+        )
+        .unwrap();
+        let n = state.steps().len() as u32;
+        let mut strict_steps = 0;
+        for s in state.steps() {
+            if let Step::HashDatumFirstStrict { jumpdone, .. }
+            | Step::HashDatumNext32Strict { jumpdone, .. } = s
+            {
+                strict_steps += 1;
+                assert!(*jumpdone < n, "jumpdone {jumpdone} past program end {n}");
+                assert!(matches!(
+                    state.steps()[*jumpdone as usize],
+                    Step::DoneReturn
+                ));
+            }
+        }
+        assert_eq!(strict_steps, 2);
+        for (a, b) in [(None, Some(1)), (Some(1), None), (Some(1), Some(2))] {
+            let mut slot = virtual_slot(mcx, &[a, b]);
+            let mut slots = EvalSlots {
+                scan: None,
+                inner: Some(&mut slot),
+                outer: None,
+            };
+            let r = exec_eval_expr(&mut state, &mut slots).unwrap();
+            assert_eq!(r.isnull, a.is_none() || b.is_none());
+        }
+    });
+}
+
+// wio P362: ExecAggCopyTransValue keeps a read/write expanded transvalue that
+// already lives under the aggcontext (array_append appended in place) and
+// copies anything else (execExprInterp.c ExecAggCopyTransValue).
+mod agg_copy_expanded_trans_value {
+    use super::*;
+    use ::datum::expandeddatum::datum_is_external_expanded;
+
+    #[test]
+    fn own_expanded_kept_foreign_flattened() {
+        let agg = MemoryContext::new("aggcontext");
+        let other = MemoryContext::new("other");
+        let img = ::arrayfuncs::construct_empty_array(agg.mcx(), 23).unwrap();
+        let flat = Datum::from_usize(img.as_ptr() as usize);
+        let meta = || ::arrayfuncs::ArrayMetaState {
+            element_type: 23,
+            typlen: 4,
+            typbyval: true,
+            typalign: b'i',
+        };
+        let own = ::arrayfuncs::expand_array(flat, &agg, Some(&mut meta())).unwrap();
+        let foreign = ::arrayfuncs::expand_array(flat, &other, Some(&mut meta())).unwrap();
+        unsafe {
+            let kept =
+                crate::interp::agg_copy_trans_value(agg.mcx(), own, false, flat, false, -1, false)
+                    .unwrap();
+            assert_eq!(kept.as_usize(), own.as_usize());
+            let copied =
+                crate::interp::agg_copy_trans_value(agg.mcx(), foreign, false, own, false, -1, true)
+                    .unwrap();
+            assert_ne!(copied.as_usize(), foreign.as_usize());
+            assert!(!datum_is_external_expanded(copied));
+            assert_eq!(
+                core::slice::from_raw_parts(copied.as_usize() as *const u8, img.len()),
+                img.as_slice()
+            );
+        }
+    }
 }

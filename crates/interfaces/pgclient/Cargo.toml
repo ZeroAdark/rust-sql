@@ -31,3 +31,15 @@ types_core = { path = "../../_support/types/types_core" }
 types_error = { path = "../../_support/types/types_error" }
 types_storage = { path = "../../_support/types/types_storage" }
 wchar = { path = "../../common/wchar" }
+
+# Vendored OpenSSL does not build for wasm32; the wasm arm keeps the
+# no-USE_SSL refusals (docs/design/wasm-crate-ledger.md).
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+openssl-sys = "0.9"
+foreign-types = "0.3"
+
+[dev-dependencies]
+fd = { path = "../../backend/storage/file/fd" }
+waitevent_seams = { path = "../../backend/utils/activity/waitevent_seams" }
+waiteventset = { path = "../../backend/storage/ipc/waiteventset" }

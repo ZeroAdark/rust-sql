@@ -101,7 +101,7 @@ impl StreamFd {
         name: &'static str,
         open: impl FnOnce(Mcx<'static>) -> PgResult<BufFile<'static>>,
     ) -> PgResult<StreamFd> {
-        let cx = Box::new(MemoryContext::new_bump(name));
+        let cx = Box::new(MemoryContext::new_wholesale(name));
         // SAFETY: the file is allocated from the boxed `cx` (a stable address)
         // and stored beside it; it is closed and dropped before `cx`
         // (StreamFd's field order), and nothing else keeps the handle.
@@ -279,7 +279,9 @@ pub(crate) fn handle_streamed_transaction(
                 return Ok(forwarded(()));
             }
             // Queue full: switch to serialize mode.
-            pa_switch_to_partial_serialize(mcx, &winfo, false)?;
+            if !pa_switch_to_partial_serialize(mcx, &winfo, false)? {
+                return Ok(StreamedHandling::Consumed);
+            }
             stream_write_change(action, &buf[1..])?;
             Ok(forwarded(()))
         }
@@ -300,18 +302,22 @@ pub(crate) fn handle_streamed_transaction(
 
 // stream_start_internal (worker.c:1445): open the spool file (create on the
 // first segment) inside a transaction that lasts until stream stop, and load
-// the subxact info for continued segments.
+// the subxact info for continued segments. Ok(false): the worker must exit
+// (C proc_exit(0)s in begin_replication_step) and no file was opened.
 pub(crate) fn stream_start_internal(
     mcx: Mcx<'static>,
     xid: TransactionId,
     first_segment: bool,
-) -> PgResult<()> {
-    begin_replication_step(mcx)?;
+) -> PgResult<bool> {
+    if !begin_replication_step(mcx)? {
+        return Ok(false);
+    }
     stream_open_file(mcx, subid(), xid, first_segment)?;
     if !first_segment {
         subxact_info_read(mcx, subid(), xid)?;
     }
-    end_replication_step()
+    end_replication_step()?;
+    Ok(true)
 }
 
 // apply_handle_stream_start (worker.c:1484). `buf` is the full message
@@ -347,7 +353,11 @@ pub(crate) fn apply_handle_stream_start(mcx: Mcx<'static>, buf: &[u8]) -> PgResu
 
     let (apply_action, winfo) = get_transaction_apply_action(xid);
     match apply_action {
-        LeaderSerialize => stream_start_internal(mcx, xid, first_segment)?,
+        LeaderSerialize => {
+            if !stream_start_internal(mcx, xid, first_segment)? {
+                return Ok(());
+            }
+        }
 
         LeaderSendToParallel => {
             let winfo = winfo.expect("winfo");
@@ -360,7 +370,9 @@ pub(crate) fn apply_handle_stream_start(mcx: Mcx<'static>, buf: &[u8]) -> PgResu
                 pa_incr_pending_stream_count(&winfo);
                 pa_set_stream_apply_worker(Some(winfo));
             } else {
-                pa_switch_to_partial_serialize(mcx, &winfo, !first_segment)?;
+                if !pa_switch_to_partial_serialize(mcx, &winfo, !first_segment)? {
+                    return Ok(());
+                }
                 // The switch opened the spool file already.
                 stream_write_change(logicalproto::LOGICAL_REP_MSG_STREAM_START, &buf[1..])?;
                 pa_set_stream_apply_worker(Some(winfo));
@@ -369,7 +381,9 @@ pub(crate) fn apply_handle_stream_start(mcx: Mcx<'static>, buf: &[u8]) -> PgResu
 
         LeaderPartialSerialize => {
             let winfo = winfo.expect("winfo");
-            stream_start_internal(mcx, xid, first_segment)?;
+            if !stream_start_internal(mcx, xid, first_segment)? {
+                return Ok(());
+            }
             stream_write_change(logicalproto::LOGICAL_REP_MSG_STREAM_START, &buf[1..])?;
             pa_set_stream_apply_worker(Some(winfo));
         }
@@ -429,7 +443,9 @@ pub(crate) fn apply_handle_stream_stop(mcx: Mcx<'static>, buf: &[u8]) -> PgResul
             if pa_send_data(&winfo, buf)? {
                 pa_set_stream_apply_worker(None);
             } else {
-                pa_switch_to_partial_serialize(mcx, &winfo, true)?;
+                if !pa_switch_to_partial_serialize(mcx, &winfo, true)? {
+                    return Ok(());
+                }
                 stream_write_change(logicalproto::LOGICAL_REP_MSG_STREAM_STOP, &buf[1..])?;
                 stream_stop_internal(mcx, xid)?;
                 pa_set_stream_apply_worker(None);
@@ -486,7 +502,9 @@ fn stream_abort_internal(
         return Ok(());
     }
 
-    begin_replication_step(mcx)?;
+    if !begin_replication_step(mcx)? {
+        return Ok(());
+    }
     subxact_info_read(mcx, subid(), xid)?;
 
     // Scan from the tail: we're likely aborting the most recent subxact.
@@ -596,13 +614,17 @@ pub(crate) fn apply_handle_stream_abort(mcx: Mcx<'static>, buf: &[u8]) -> PgResu
                     pa_xact_finish(&winfo, InvalidXLogRecPtr)?;
                 }
             } else {
-                pa_switch_to_partial_serialize(mcx, &winfo, true)?;
-                stream_open_and_write_change(
+                if !pa_switch_to_partial_serialize(mcx, &winfo, true)? {
+                    return Ok(());
+                }
+                if !stream_open_and_write_change(
                     mcx,
                     xid,
                     logicalproto::LOGICAL_REP_MSG_STREAM_ABORT,
                     &buf[1..],
-                )?;
+                )? {
+                    return Ok(());
+                }
                 if toplevel_xact {
                     pa_set_fileset_state(&winfo.borrow().shared, PartialFileSetState::SerializeDone);
                     pa_xact_finish(&winfo, InvalidXLogRecPtr)?;
@@ -614,12 +636,14 @@ pub(crate) fn apply_handle_stream_abort(mcx: Mcx<'static>, buf: &[u8]) -> PgResu
             let winfo = winfo.expect("winfo");
             // The parallel apply worker might have applied some changes, so
             // spool the STREAM_ABORT so it can roll back if needed.
-            stream_open_and_write_change(
+            if !stream_open_and_write_change(
                 mcx,
                 xid,
                 logicalproto::LOGICAL_REP_MSG_STREAM_ABORT,
                 &buf[1..],
-            )?;
+            )? {
+                return Ok(());
+            }
             if toplevel_xact {
                 pa_set_fileset_state(&winfo.borrow().shared, PartialFileSetState::SerializeDone);
                 pa_xact_finish(&winfo, InvalidXLogRecPtr)?;
@@ -663,7 +687,9 @@ fn ensure_last_message(
     offset: i64,
 ) -> PgResult<()> {
     debug_assert!(!xact::IsTransactionState());
-    begin_replication_step(mcx)?;
+    if !begin_replication_step(mcx)? {
+        return Ok(());
+    }
     let name = changes_filename(subid(), xid);
     let mut file = BufFileOpenFileSet(mcx, fileset, &name, true)?;
     file.seek(0, 0, fd::buffile::SEEK_END)?;
@@ -690,12 +716,14 @@ pub(crate) fn apply_spooled_messages(
     fileset: &FileSet,
     xid: TransactionId,
     lsn: XLogRecPtr,
-) -> PgResult<()> {
+) -> PgResult<bool> {
     if !parallel::am_parallel_apply_worker() {
         crate::maybe_start_skipping_changes(lsn);
     }
 
-    begin_replication_step(mcx)?;
+    if !begin_replication_step(mcx)? {
+        return Ok(false);
+    }
 
     // The file handle must survive every per-message reset below
     // (C: TopTransactionContext, worker.c:2043): it gets a context of its own.
@@ -733,7 +761,7 @@ pub(crate) fn apply_spooled_messages(
     // ApplyMessageContext and that context is reset after it
     // (worker.c:2119-2123): the caller's own message context holds nothing
     // this replay needs, so a fresh context stands in for C's switch.
-    let mut msgcx = MemoryContext::new_bump("ApplyMessageContext");
+    let mut msgcx = MemoryContext::new_wholesale("ApplyMessageContext");
     let mut buf: Vec<u8> = Vec::new();
     let mut nchanges = 0u32;
     loop {
@@ -813,7 +841,7 @@ pub(crate) fn apply_spooled_messages(
         DEBUG1,
         format!("replayed {nchanges} (all) changes from file \"{name}\""),
     );
-    Ok(())
+    Ok(true)
 }
 
 // apply_handle_stream_commit (worker.c:2147).
@@ -840,13 +868,15 @@ pub(crate) fn apply_handle_stream_commit(
         LeaderApply => {
             // Serialized to file: replay all the spooled operations.
             let fileset = stream_fileset_arc()?;
-            apply_spooled_messages(
+            if !apply_spooled_messages(
                 mcx,
                 conn.as_deref_mut(),
                 &fileset,
                 xid,
                 commit_data.commit_lsn,
-            )?;
+            )? {
+                return Ok(());
+            }
             crate::apply::apply_handle_commit_internal(mcx, &commit_data)?;
             stream_cleanup_files(subid(), xid)?;
             let _ = elog::elog(
@@ -860,13 +890,17 @@ pub(crate) fn apply_handle_stream_commit(
             if pa_send_data(&winfo, buf)? {
                 pa_xact_finish(&winfo, commit_data.end_lsn)?;
             } else {
-                pa_switch_to_partial_serialize(mcx, &winfo, true)?;
-                stream_open_and_write_change(
+                if !pa_switch_to_partial_serialize(mcx, &winfo, true)? {
+                    return Ok(());
+                }
+                if !stream_open_and_write_change(
                     mcx,
                     xid,
                     logicalproto::LOGICAL_REP_MSG_STREAM_COMMIT,
                     &buf[1..],
-                )?;
+                )? {
+                    return Ok(());
+                }
                 pa_set_fileset_state(&winfo.borrow().shared, PartialFileSetState::SerializeDone);
                 pa_xact_finish(&winfo, commit_data.end_lsn)?;
             }
@@ -874,12 +908,14 @@ pub(crate) fn apply_handle_stream_commit(
 
         LeaderPartialSerialize => {
             let winfo = winfo.expect("winfo");
-            stream_open_and_write_change(
+            if !stream_open_and_write_change(
                 mcx,
                 xid,
                 logicalproto::LOGICAL_REP_MSG_STREAM_COMMIT,
                 &buf[1..],
-            )?;
+            )? {
+                return Ok(());
+            }
             pa_set_fileset_state(&winfo.borrow().shared, PartialFileSetState::SerializeDone);
             pa_xact_finish(&winfo, commit_data.end_lsn)?;
         }
@@ -951,13 +987,15 @@ pub(crate) fn apply_handle_stream_prepare(
             // Replay the spool; the last change's transaction stays open for
             // the prepare.
             let fileset = stream_fileset_arc()?;
-            apply_spooled_messages(
+            if !apply_spooled_messages(
                 mcx,
                 conn.as_deref_mut(),
                 &fileset,
                 prepare_data.xid,
                 prepare_data.prepare_lsn,
-            )?;
+            )? {
+                return Ok(());
+            }
             crate::apply::apply_handle_prepare_internal(&prepare_data)?;
             xact::CommitTransactionCommand()?;
 
@@ -976,13 +1014,17 @@ pub(crate) fn apply_handle_stream_prepare(
             if pa_send_data(&winfo, buf)? {
                 pa_xact_finish(&winfo, prepare_data.end_lsn)?;
             } else {
-                pa_switch_to_partial_serialize(mcx, &winfo, true)?;
-                stream_open_and_write_change(
+                if !pa_switch_to_partial_serialize(mcx, &winfo, true)? {
+                    return Ok(());
+                }
+                if !stream_open_and_write_change(
                     mcx,
                     prepare_data.xid,
                     logicalproto::LOGICAL_REP_MSG_STREAM_PREPARE,
                     &buf[1..],
-                )?;
+                )? {
+                    return Ok(());
+                }
                 pa_set_fileset_state(&winfo.borrow().shared, PartialFileSetState::SerializeDone);
                 pa_xact_finish(&winfo, prepare_data.end_lsn)?;
             }
@@ -990,12 +1032,14 @@ pub(crate) fn apply_handle_stream_prepare(
 
         LeaderPartialSerialize => {
             let winfo = winfo.expect("winfo");
-            stream_open_and_write_change(
+            if !stream_open_and_write_change(
                 mcx,
                 prepare_data.xid,
                 logicalproto::LOGICAL_REP_MSG_STREAM_PREPARE,
                 &buf[1..],
-            )?;
+            )? {
+                return Ok(());
+            }
             pa_set_fileset_state(&winfo.borrow().shared, PartialFileSetState::SerializeDone);
             pa_xact_finish(&winfo, prepare_data.end_lsn)?;
         }
@@ -1005,7 +1049,9 @@ pub(crate) fn apply_handle_stream_prepare(
             if STREAM_FD.with(|f| f.borrow().is_some()) {
                 stream_close_file()?;
             }
-            begin_replication_step(mcx)?;
+            if !begin_replication_step(mcx)? {
+                return Ok(());
+            }
             crate::apply::apply_handle_prepare_internal(&prepare_data)?;
             end_replication_step()?;
             xact::CommitTransactionCommand()?;
@@ -1115,13 +1161,14 @@ fn stream_open_and_write_change(
     xid: TransactionId,
     action: u8,
     payload: &[u8],
-) -> PgResult<()> {
+) -> PgResult<bool> {
     debug_assert!(!in_streamed_transaction());
-    if STREAM_FD.with(|f| f.borrow().is_none()) {
-        stream_start_internal(mcx, xid, false)?;
+    if STREAM_FD.with(|f| f.borrow().is_none()) && !stream_start_internal(mcx, xid, false)? {
+        return Ok(false);
     }
     stream_write_change(action, payload)?;
-    stream_stop_internal(mcx, xid)
+    stream_stop_internal(mcx, xid)?;
+    Ok(true)
 }
 
 // ---- subxact info -----------------------------------------------------------

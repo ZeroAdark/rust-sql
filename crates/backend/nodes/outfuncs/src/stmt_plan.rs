@@ -17,12 +17,14 @@ use types_nodes::parsenodes::{
     WithClause,
 };
 use types_nodes::plannodes::{
-    Agg, Append, BitmapAnd, BitmapHeapScan, BitmapIndexScan, BitmapOr, CteScan, FunctionScan,
-    Gather, GatherMerge, Group, Hash, HashJoin, IncrementalSort, IndexOnlyScan, IndexScan, Join,
-    Limit, LockRows, Material, Memoize, MergeAppend, MergeJoin, ModifyTable, NestLoop,
-    NestLoopParam, Plan, PlanInvalItem, PlanRowMark, PlannedStmt, ProjectSet, RecursiveUnion,
-    Result as ResultPlan, Scan, SeqScan, SetOp, Sort, SubqueryScan, TidRangeScan, TidScan, Unique,
-    ValuesScan, WindowAgg, WorkTableScan,
+    Agg, Append, AppendRelInfo, BitmapAnd, BitmapHeapScan, BitmapIndexScan, BitmapOr, CteScan,
+    ForeignScan, FunctionScan, Gather, GatherMerge, Group, Hash, HashJoin, IncrementalSort,
+    IndexOnlyScan, IndexScan, Join, Limit, LockRows, Material, Memoize, MergeAppend, MergeJoin,
+    ModifyTable, NamedTuplestoreScan, NestLoop, NestLoopParam, PartitionPruneInfo,
+    PartitionPruneStepCombine, PartitionPruneStepOp, PartitionedRelPruneInfo, Plan, PlanInvalItem,
+    PlanRowMark, PlannedStmt, ProjectSet, RecursiveUnion, Result as ResultPlan, SampleScan, Scan,
+    SeqScan, SetOp, Sort, SubqueryScan, TableFuncScan, TidRangeScan, TidScan, Unique, ValuesScan,
+    WindowAgg, WorkTableScan,
 };
 use types_nodes::rawnodes::{
     A_ArrayExpr, A_Indices, A_Indirection, A_Star, ColumnRef, DeleteStmt, DistinctClause, FuncCall,
@@ -167,6 +169,20 @@ pub(super) fn try_out_node(out: &mut PgString<'_>, node: Node<'_>) -> Option<PgR
                 let s = node.as_variant::<SeqScan>().expect("SeqScan");
                 w!(out, "{{SEQSCAN");
                 out_scan_base(out, &s.scan)?;
+                // pgrust-only field (plannodes.rs): the exact consumed-column set,
+                // "<>" when unknown; the Gravity decomposer's fixtures read it.
+                w!(out, " :cb_scan_cols ");
+                match &s.cb_scan_cols {
+                    Some(cols) => out_bitmapset(out, cols),
+                    None => w!(out, "<>"),
+                }
+                w!(out, " :cb_target_cols ");
+                match &s.cb_target_cols {
+                    Some(cols) => out_bitmapset(out, cols),
+                    None => w!(out, "<>"),
+                }
+                w!(out, " :pgrc_merge ");
+                out_attrnumber_array(out, s.pgrc_merge);
                 w!(out, "}}");
                 Ok(())
             }
@@ -233,12 +249,12 @@ pub(super) fn try_out_node(out: &mut PgString<'_>, node: Node<'_>) -> Option<PgR
                 let s = node.as_variant::<CteScan>().expect("CteScan");
                 w!(out, "{{CTESCAN");
                 out_scan_base(out, &s.scan)?;
-                w!(
-                    out,
-                    " :ctePlanId {} :cteParam {}}}",
-                    s.ctePlanId,
-                    s.cteParam
-                );
+                w!(out, " :ctePlanId {} :cteParam {}", s.ctePlanId, s.cteParam);
+                // pgrust-only (D4779): written only when set, so every unmarked plan's text is as before
+                if s.gravity_fill {
+                    w!(out, " :gravity_fill true");
+                }
+                w!(out, "}}");
                 Ok(())
             }
             NodeTag::T_WorkTableScan => {
@@ -418,6 +434,15 @@ pub(super) fn try_out_node(out: &mut PgString<'_>, node: Node<'_>) -> Option<PgR
                 );
                 Ok(())
             }
+            NodeTag::T_SampleScan => arm!(SampleScan, out_sample_scan),
+            NodeTag::T_TableFuncScan => arm!(TableFuncScan, out_table_func_scan),
+            NodeTag::T_NamedTuplestoreScan => arm!(NamedTuplestoreScan, out_named_tuplestore_scan),
+            NodeTag::T_ForeignScan => arm!(ForeignScan, out_foreign_scan),
+            NodeTag::T_PartitionPruneInfo => arm!(PartitionPruneInfo, out_partition_prune_info),
+            NodeTag::T_PartitionedRelPruneInfo => arm!(PartitionedRelPruneInfo, out_partitioned_rel_prune_info),
+            NodeTag::T_PartitionPruneStepOp => arm!(PartitionPruneStepOp, out_partition_prune_step_op),
+            NodeTag::T_PartitionPruneStepCombine => arm!(PartitionPruneStepCombine, out_partition_prune_step_combine),
+            NodeTag::T_AppendRelInfo => arm!(AppendRelInfo, out_append_rel_info),
             _ => {
                 handled = false;
                 Ok(())
@@ -427,7 +452,7 @@ pub(super) fn try_out_node(out: &mut PgString<'_>, node: Node<'_>) -> Option<PgR
     if handled {
         Some(r)
     } else {
-        None
+        super::stmt_utility::try_out_node(out, node)
     }
 }
 
@@ -436,6 +461,18 @@ pub(super) fn try_out_node(out: &mut PgString<'_>, node: Node<'_>) -> Option<PgR
 // WRITE_SCALAR_ARRAY (outfuncs.c:233-246): "(" + " item"... + ")" for a
 // non-NULL pointer, "<>" for NULL. A zero-length slice here stands for C's
 // NULL pointer (the planner leaves numCols == 0 arrays unallocated).
+pub(super) fn out_int_array(out: &mut PgString<'_>, a: &[i32]) {
+    if a.is_empty() {
+        w!(out, "<>");
+        return;
+    }
+    w!(out, "(");
+    for v in a {
+        w!(out, " {v}");
+    }
+    w!(out, ")");
+}
+
 fn out_attrnumber_array(out: &mut PgString<'_>, a: &[i16]) {
     if a.is_empty() {
         w!(out, "<>");
@@ -531,6 +568,9 @@ fn out_sort_fields(out: &mut PgString<'_>, s: &Sort<'_>, pfx: &str) {
     out_oid_array(out, s.collations);
     w!(out, " :{pfx}nullsFirst ");
     out_bool_array(out, s.nullsFirst);
+    if let Some(r) = s.gravity_rewrite {
+        w!(out, " :{pfx}gravity_rewrite {r:?}");
+    }
 }
 
 // ------------------------------------------------------------ plan nodes
@@ -664,11 +704,20 @@ fn out_append(out: &mut PgString<'_>, a: &Append<'_>) -> PgResult<()> {
     out_list(out, &a.appendplans)?;
     w!(
         out,
-        " :nasyncplans {} :first_partial_plan {} :part_prune_index {}}}",
+        " :nasyncplans {} :first_partial_plan {} :part_prune_index {}",
         a.nasyncplans,
         a.first_partial_plan,
         a.part_prune_index
     );
+    if !a.gravity_sort_col_idx.is_empty() {
+        w!(out, " :gravity_sort_col_idx ");
+        out_attrnumber_array(out, a.gravity_sort_col_idx);
+        w!(out, " :gravity_sort_operators ");
+        out_oid_array(out, a.gravity_sort_operators);
+        w!(out, " :gravity_nulls_first ");
+        out_bool_array(out, a.gravity_nulls_first);
+    }
+    w!(out, "}}");
     Ok(())
 }
 
@@ -839,6 +888,20 @@ fn out_agg(out: &mut PgString<'_>, a: &Agg<'_>) -> PgResult<()> {
     out_list(out, &a.groupingSets)?;
     w!(out, " :chain ");
     out_list(out, &a.chain)?;
+    if a.distinctHashed {
+        w!(out, " :distinctHashed true");
+    }
+    if let Some(r) = a.gravity_rewrite {
+        w!(out, " :gravity_rewrite {r:?}");
+    }
+    if !a.gravity_finals.is_empty() {
+        // pgrust (gravity §3 #8): (resno min max sum count) per final, flat
+        w!(out, " :gravity_finals (");
+        for f in a.gravity_finals {
+            w!(out, " {} {} {} {} {}", f.resno, f.min, f.max, f.sum, f.count);
+        }
+        w!(out, ")");
+    }
     w!(out, "}}");
     Ok(())
 }
@@ -1047,7 +1110,7 @@ fn out_sort_by(out: &mut PgString<'_>, s: &SortBy<'_>) -> PgResult<()> {
     Ok(())
 }
 
-fn out_func_call(out: &mut PgString<'_>, f: &FuncCall<'_>) -> PgResult<()> {
+pub(super) fn out_func_call(out: &mut PgString<'_>, f: &FuncCall<'_>) -> PgResult<()> {
     w!(out, "{{FUNCCALL :funcname ");
     out_list(out, &f.funcname)?;
     w!(out, " :args ");
@@ -1228,7 +1291,7 @@ fn out_transaction_stmt(out: &mut PgString<'_>, t: &TransactionStmt<'_>) -> PgRe
     Ok(())
 }
 
-fn out_variable_set_stmt(out: &mut PgString<'_>, v: &VariableSetStmt<'_>) -> PgResult<()> {
+pub(super) fn out_variable_set_stmt(out: &mut PgString<'_>, v: &VariableSetStmt<'_>) -> PgResult<()> {
     w!(out, "{{VARIABLESETSTMT :kind {} :name ", v.kind as u32);
     out_str(out, v.name);
     w!(out, " :args ");
@@ -1296,6 +1359,134 @@ fn out_returning_clause(out: &mut PgString<'_>, r: &ReturningClause<'_>) -> PgRe
     out_list(out, &r.options)?;
     w!(out, " :exprs ");
     out_list(out, &r.exprs)?;
+    w!(out, "}}");
+    Ok(())
+}
+
+
+pub(super) fn out_append_rel_info(out: &mut PgString<'_>, node: &AppendRelInfo<'_>) -> PgResult<()> {
+    w!(out, "{{APPENDRELINFO");
+    w!(out, " :parent_relid {}", node.parent_relid);
+    w!(out, " :child_relid {}", node.child_relid);
+    w!(out, " :parent_reltype {}", node.parent_reltype);
+    w!(out, " :child_reltype {}", node.child_reltype);
+    w!(out, " :translated_vars <>");
+    w!(out, " :num_child_cols {}", node.num_child_cols);
+    w!(out, " :parent_colnos ");
+    out_attrnumber_array(out, node.parent_colnos);
+    w!(out, " :parent_reloid {}", node.parent_reloid);
+    w!(out, "}}");
+    Ok(())
+}
+
+pub(super) fn out_sample_scan(out: &mut PgString<'_>, node: &SampleScan<'_>) -> PgResult<()> {
+    w!(out, "{{SAMPLESCAN");
+    out_scan_base(out, &node.scan)?;
+    w!(out, " :tablesample ");
+    out_opt_node(out, node.tablesample)?;
+    w!(out, "}}");
+    Ok(())
+}
+
+pub(super) fn out_table_func_scan(out: &mut PgString<'_>, node: &TableFuncScan<'_>) -> PgResult<()> {
+    w!(out, "{{TABLEFUNCSCAN");
+    out_scan_base(out, &node.scan)?;
+    w!(out, " :tablefunc ");
+    out_opt_node(out, node.tablefunc)?;
+    w!(out, "}}");
+    Ok(())
+}
+
+pub(super) fn out_named_tuplestore_scan(out: &mut PgString<'_>, node: &NamedTuplestoreScan<'_>) -> PgResult<()> {
+    w!(out, "{{NAMEDTUPLESTORESCAN");
+    out_scan_base(out, &node.scan)?;
+    w!(out, " :enrname ");
+    out_str(out, node.enrname);
+    w!(out, "}}");
+    Ok(())
+}
+
+pub(super) fn out_foreign_scan(out: &mut PgString<'_>, node: &ForeignScan<'_>) -> PgResult<()> {
+    w!(out, "{{FOREIGNSCAN");
+    out_scan_base(out, &node.scan)?;
+    w!(out, " :operation {}", node.operation as i32);
+    w!(out, " :resultRelation {}", node.resultRelation);
+    w!(out, " :checkAsUser {}", node.checkAsUser);
+    w!(out, " :fs_server {}", node.fs_server);
+    w!(out, " :fdw_exprs ");
+    out_list(out, &node.fdw_exprs)?;
+    w!(out, " :fdw_private ");
+    out_list(out, &node.fdw_private)?;
+    w!(out, " :fdw_scan_tlist ");
+    out_list(out, &node.fdw_scan_tlist)?;
+    w!(out, " :fdw_recheck_quals ");
+    out_list(out, &node.fdw_recheck_quals)?;
+    w!(out, " :fs_relids ");
+    out_bitmapset(out, &node.fs_relids);
+    w!(out, " :fs_base_relids ");
+    out_bitmapset(out, &node.fs_base_relids);
+    w!(out, " :fsSystemCol ");
+    out_bool(out, node.fsSystemCol);
+    w!(out, "}}");
+    Ok(())
+}
+
+pub(super) fn out_partition_prune_info(out: &mut PgString<'_>, node: &PartitionPruneInfo<'_>) -> PgResult<()> {
+    w!(out, "{{PARTITIONPRUNEINFO");
+    w!(out, " :relids ");
+    out_bitmapset(out, &node.relids);
+    w!(out, " :prune_infos ");
+    out_list(out, &node.prune_infos)?;
+    w!(out, " :other_subplans ");
+    out_bitmapset(out, &node.other_subplans);
+    w!(out, "}}");
+    Ok(())
+}
+
+pub(super) fn out_partitioned_rel_prune_info(out: &mut PgString<'_>, node: &PartitionedRelPruneInfo<'_>) -> PgResult<()> {
+    w!(out, "{{PARTITIONEDRELPRUNEINFO");
+    w!(out, " :rtindex {}", node.rtindex);
+    w!(out, " :present_parts ");
+    out_bitmapset(out, &node.present_parts);
+    w!(out, " :nparts {}", node.nparts);
+    w!(out, " :subplan_map ");
+    out_int_array(out, node.subplan_map);
+    w!(out, " :subpart_map ");
+    out_int_array(out, node.subpart_map);
+    w!(out, " :leafpart_rti_map ");
+    out_int_array(out, node.leafpart_rti_map);
+    w!(out, " :relid_map ");
+    out_oid_array(out, node.relid_map);
+    w!(out, " :initial_pruning_steps ");
+    out_list(out, &node.initial_pruning_steps)?;
+    w!(out, " :exec_pruning_steps ");
+    out_list(out, &node.exec_pruning_steps)?;
+    w!(out, " :execparamids ");
+    out_bitmapset(out, &node.execparamids);
+    w!(out, "}}");
+    Ok(())
+}
+
+pub(super) fn out_partition_prune_step_op(out: &mut PgString<'_>, node: &PartitionPruneStepOp<'_>) -> PgResult<()> {
+    w!(out, "{{PARTITIONPRUNESTEPOP");
+    w!(out, " :step.step_id {}", node.step_id);
+    w!(out, " :opstrategy {}", node.opstrategy);
+    w!(out, " :exprs ");
+    out_list(out, &node.exprs)?;
+    w!(out, " :cmpfns ");
+    out_oid_list(out, &node.cmpfns);
+    w!(out, " :nullkeys ");
+    out_bitmapset(out, &node.nullkeys);
+    w!(out, "}}");
+    Ok(())
+}
+
+pub(super) fn out_partition_prune_step_combine(out: &mut PgString<'_>, node: &PartitionPruneStepCombine<'_>) -> PgResult<()> {
+    w!(out, "{{PARTITIONPRUNESTEPCOMBINE");
+    w!(out, " :step.step_id {}", node.step_id);
+    w!(out, " :combineOp {}", node.combineOp as i32);
+    w!(out, " :source_stepids ");
+    out_int_list(out, &node.source_stepids);
     w!(out, "}}");
     Ok(())
 }

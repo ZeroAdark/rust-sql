@@ -1,0 +1,12 @@
+-- regress-full-triggers-008
+-- SELECT pg_get_triggerdef(oid, false) FROM pg_trigger WHERE tgrelid = 'main_table'::regclass AND tgname = 'modified_a';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=2620 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(4):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op607(v1.2, c26:21345)
+  filter op93(v1.4, c19:#64)
+  project (1=fn2730(v1.1, c16:0))
+  outs 1=vl:call2730
+mapped: SeqScan

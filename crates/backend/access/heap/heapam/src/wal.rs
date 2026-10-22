@@ -73,3 +73,12 @@ pub(crate) fn insert_record(
 
 #[cfg(test)]
 pub(crate) use crate::tests::wal_insert_record_hook as insert_record;
+
+#[cfg(not(test))]
+#[inline(always)]
+pub(crate) fn buffer_needs_backup(page_lsn: ::types_core::XLogRecPtr) -> bool {
+    ::xloginsert::XLogCheckPageNeedsBackup(page_lsn)
+}
+
+#[cfg(test)]
+pub(crate) use crate::tests::wal_buffer_needs_backup_hook as buffer_needs_backup;

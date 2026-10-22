@@ -285,23 +285,7 @@ fn mcelem_array_selec<'mcx>(
 }
 
 fn sort_datums(cmp: &mut ElemCmp<'_>, v: &mut [Datum]) -> PgResult<()> {
-    let mut err = None;
-    v.sort_unstable_by(|&a, &b| {
-        if err.is_some() {
-            return core::cmp::Ordering::Equal;
-        }
-        match cmp.cmp(a, b) {
-            Ok(c) => c.cmp(&0),
-            Err(e) => {
-                err = Some(e);
-                core::cmp::Ordering::Equal
-            }
-        }
-    });
-    match err {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
+    pg_qsort::pg_qsort_arg(v, |&a, &b| cmp.cmp(a, b))
 }
 
 // "column @> const" / "column && const" via MCELEM, assuming independent
@@ -410,7 +394,7 @@ fn mcelem_array_contained_selec(
     // not occur.
     let mut mult: f32 = 1.0;
 
-    let mut elem_selec: Vec<f32> = Vec::with_capacity(array_data.len());
+    let mut elem_selec: Vec<f32> = ::mcx::std_vec_with_capacity("optimizer", array_data.len())?;
 
     let mut mcelem_index = 0usize;
     for i in 0..array_data.len() {
@@ -473,11 +457,11 @@ fn mcelem_array_contained_selec(
 
     // Distinct-count probabilities assuming independent occurrence, for the
     // constant's elements and for the MCELEMs.
-    let dist = calc_distr(elem_selec, unique_nitems, unique_nitems, 0.0);
-    let mcelem_dist = calc_distr(&numbers[..nmcelem], nmcelem, unique_nitems, rest);
+    let dist = calc_distr(elem_selec, unique_nitems, unique_nitems, 0.0)?;
+    let mcelem_dist = calc_distr(&numbers[..nmcelem], nmcelem, unique_nitems, rest)?;
 
     // hist[nhist-1] is the average, not a histogram member.
-    let hist_part = calc_hist(&hist[..nhist - 1], unique_nitems);
+    let hist_part = calc_hist(&hist[..nhist - 1], unique_nitems)?;
 
     let mut selec: f32 = 0.0;
     for i in 0..=unique_nitems {
@@ -497,9 +481,9 @@ fn mcelem_array_contained_selec(
 // First n distinct-element-count probabilities from the count histogram;
 // returns n+1 entries. A box (a,b) spreads 1/((b-a+1)*(nhist-1)) to interior
 // values and half that to each bound.
-fn calc_hist(hist: &[f32], n: usize) -> Vec<f32> {
+fn calc_hist(hist: &[f32], n: usize) -> PgResult<Vec<f32>> {
     let nhist = hist.len();
-    let mut hist_part: Vec<f32> = vec![0.0; n + 1];
+    let mut hist_part: Vec<f32> = mcx::std_vec_from_elem("planner", 0.0f32, n + 1)?;
     let mut i = 0usize;
     let mut prev_interval: f32 = 0.0;
     let mut next_interval: f32;
@@ -535,14 +519,14 @@ fn calc_hist(hist: &[f32], n: usize) -> Vec<f32> {
         }
     }
 
-    hist_part
+    Ok(hist_part)
 }
 
 // Probabilities of exactly k of n independent events for k in [0..m], with
 // "rest" the summed probability of unlisted rare events (Poisson-convolved).
-fn calc_distr(p: &[f32], n: usize, m: usize, rest: f32) -> Vec<f32> {
-    let mut row: Vec<f32> = vec![0.0; m + 1];
-    let mut prev_row: Vec<f32> = vec![0.0; m + 1];
+fn calc_distr(p: &[f32], n: usize, m: usize, rest: f32) -> PgResult<Vec<f32>> {
+    let mut row: Vec<f32> = mcx::std_vec_from_elem("planner", 0.0f32, m + 1)?;
+    let mut prev_row: Vec<f32> = mcx::std_vec_from_elem("planner", 0.0f32, m + 1)?;
 
     // M[0,0] = 1; M[i,j] = M[i-1,j]*(1-p[i]) + M[i-1,j-1]*p[i].
     row[0] = 1.0;
@@ -551,11 +535,13 @@ fn calc_distr(p: &[f32], n: usize, m: usize, rest: f32) -> Vec<f32> {
         core::mem::swap(&mut row, &mut prev_row);
         for j in 0..=usize::min(i, m) {
             let mut val: f32 = 0.0;
+            // array_selfuncs.c:1042 is fused too, but onto val == 0.0, which
+            // rounds identically; 1044 below is the live float4 fmadd.
             if j < i {
                 val += prev_row[j] * (1.0 - t);
             }
             if j > 0 {
-                val += prev_row[j - 1] * t;
+                val = fp_contract::fmaddf(prev_row[j - 1], t, val);
             }
             row[j] = val;
         }
@@ -570,13 +556,14 @@ fn calc_distr(p: &[f32], n: usize, m: usize, rest: f32) -> Vec<f32> {
         let mut t: f32 = (-rest as f64).exp() as f32;
         for i in 0..=m {
             for j in 0..=(m - i) {
-                row[j + i] += prev_row[j] * t;
+                // array_selfuncs.c:1076 float4 fmadd.
+                row[j + i] = fp_contract::fmaddf(prev_row[j], t, row[j + i]);
             }
             t *= rest / (i as f32 + 1.0);
         }
     }
 
-    row
+    Ok(row)
 }
 
 fn floor_log2(n: u32) -> i32 {
@@ -651,14 +638,14 @@ mod tests {
     #[test]
     fn calc_distr_binomial() {
         // Two independent p=0.5 events: [1/4, 1/2, 1/4].
-        let d = calc_distr(&[0.5, 0.5], 2, 2, 0.0);
+        let d = calc_distr(&[0.5, 0.5], 2, 2, 0.0).unwrap();
         assert_eq!(d, vec![0.25, 0.5, 0.25]);
     }
 
     #[test]
     fn calc_distr_poisson_rest() {
         // No listed events; rest=1.0 Poisson: P(0)=P(1)=e^-1.
-        let d = calc_distr(&[], 0, 1, 1.0);
+        let d = calc_distr(&[], 0, 1, 1.0).unwrap();
         let e1 = ((-1.0f64).exp()) as f32;
         assert!((d[0] - e1).abs() < 1e-7);
         assert!((d[1] - e1).abs() < 1e-7);
@@ -668,7 +655,27 @@ mod tests {
     fn calc_hist_unit_boxes() {
         // Bounds {1,2,3}: each of the 2 boxes spreads frac=0.5, half to each
         // exact bound.
-        let h = calc_hist(&[1.0, 2.0, 3.0], 3);
+        let h = calc_hist(&[1.0, 2.0, 3.0], 3).unwrap();
         assert_eq!(h, vec![0.0, 0.25, 0.5, 0.25]);
+    }
+}
+
+#[cfg(test)]
+mod d400_fma_tests {
+    // D400: array_selfuncs.c:1044 and :1076 are float4 fmadds on aarch64.
+    // Expected f32 bits come from the C loops built with GCC 13.3 -O2,
+    // with and without -ffp-contract=off. Each fused site alone moves at
+    // least one element.
+    #[test]
+    fn d400_calc_distr_fuses() {
+        let p = [0.586f32, 0.69, 0.864, 0.243];
+        let got: Vec<u32> =
+            super::calc_distr(&p, 4, 3, 0.724).unwrap().iter().map(|x| x.to_bits()).collect();
+        let want: [u32; 4] = if cfg!(target_arch = "aarch64") {
+            [1003611910, 1032901253, 1047799684, 1051486963]
+        } else {
+            [1003611910, 1032901252, 1047799682, 1051486963]
+        };
+        assert_eq!(got, want);
     }
 }

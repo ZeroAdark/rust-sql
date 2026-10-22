@@ -1,0 +1,85 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2a s1c
+step s2x: EXPLAIN (COSTS OFF) WITH lcp0 AS (SELECT id AS progress_id, cron_id, done, remaining FROM oprog WHERE cron_id = 21 ORDER BY id DESC LIMIT 1) SELECT ocron.id, ocron.nextcall, ocron.failure_count, lcp.progress_id, lcp.remaining FROM ocron LEFT JOIN lcp0 lcp ON lcp.cron_id = ocron.id WHERE ocron.active = true AND (ocron.nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM otrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = ocron.id)) AND ocron.id = 21 ORDER BY priority FOR NO KEY UPDATE OF ocron;
+QUERY PLAN                                                                                                                                              
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+LockRows                                                                                                                                                
+  ->  Sort                                                                                                                                              
+        Sort Key: ocron.priority                                                                                                                        
+        ->  Nested Loop Left Join                                                                                                                       
+              ->  Index Scan using ocron_pkey on ocron                                                                                                  
+                    Index Cond: (id = 21)                                                                                                               
+                    Filter: (active AND ((nextcall <= 'Thu Jan 01 03:00:00 2026'::timestamp without time zone) OR (ANY (id = (hashed SubPlan 2).col1))))
+                    SubPlan 2                                                                                                                           
+                      ->  Seq Scan on otrig                                                                                                             
+                            Filter: (call_at <= 'Thu Jan 01 03:00:00 2026'::timestamp without time zone)                                                
+              ->  Subquery Scan on lcp                                                                                                                  
+                    Filter: (lcp.cron_id = 21)                                                                                                          
+                    ->  Limit                                                                                                                           
+                          ->  Sort                                                                                                                      
+                                Sort Key: oprog.id DESC                                                                                                 
+                                ->  Seq Scan on oprog                                                                                                   
+                                      Filter: (cron_id = 21)                                                                                            
+(17 rows)
+
+step s1u: UPDATE ocron SET failure_count = 2 WHERE id = 21; INSERT INTO oprog (cron_id, remaining, done) VALUES (21, 9, 9);
+step s2a: WITH lcp0 AS (SELECT id AS progress_id, cron_id, done, remaining FROM oprog WHERE cron_id = 21 ORDER BY id DESC LIMIT 1) SELECT ocron.id, ocron.nextcall, ocron.failure_count, lcp.progress_id, lcp.remaining FROM ocron LEFT JOIN lcp0 lcp ON lcp.cron_id = ocron.id WHERE ocron.active = true AND (ocron.nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM otrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = ocron.id)) AND ocron.id = 21 ORDER BY priority FOR NO KEY UPDATE OF ocron; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|nextcall                |failure_count|progress_id|remaining
+--+------------------------+-------------+-----------+---------
+21|Thu Jan 01 03:30:00 2026|            2|         70|        2
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1t s2a s1c
+step s1t: UPDATE ocron SET nextcall = timestamp '2026-03-01' WHERE id = 21; DELETE FROM otrig WHERE cron_id = 21; INSERT INTO oprog (cron_id, remaining, done) VALUES (21, 9, 9);
+step s2a: WITH lcp0 AS (SELECT id AS progress_id, cron_id, done, remaining FROM oprog WHERE cron_id = 21 ORDER BY id DESC LIMIT 1) SELECT ocron.id, ocron.nextcall, ocron.failure_count, lcp.progress_id, lcp.remaining FROM ocron LEFT JOIN lcp0 lcp ON lcp.cron_id = ocron.id WHERE ocron.active = true AND (ocron.nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM otrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = ocron.id)) AND ocron.id = 21 ORDER BY priority FOR NO KEY UPDATE OF ocron; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|nextcall                |failure_count|progress_id|remaining
+--+------------------------+-------------+-----------+---------
+21|Sun Mar 01 00:00:00 2026|            0|         70|        2
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2a s1c
+step s1d: UPDATE ocron SET active = false WHERE id = 21;
+step s2a: WITH lcp0 AS (SELECT id AS progress_id, cron_id, done, remaining FROM oprog WHERE cron_id = 21 ORDER BY id DESC LIMIT 1) SELECT ocron.id, ocron.nextcall, ocron.failure_count, lcp.progress_id, lcp.remaining FROM ocron LEFT JOIN lcp0 lcp ON lcp.cron_id = ocron.id WHERE ocron.active = true AND (ocron.nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM otrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = ocron.id)) AND ocron.id = 21 ORDER BY priority FOR NO KEY UPDATE OF ocron; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|nextcall|failure_count|progress_id|remaining
+--+--------+-------------+-----------+---------
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2b s1c
+step s1n: UPDATE ocron SET failure_count = 2 WHERE id = 12; INSERT INTO oprog (cron_id, remaining, done) VALUES (12, 9, 9);
+step s2b: WITH lcp0 AS (SELECT id AS progress_id, cron_id, done, remaining FROM oprog WHERE cron_id = 12 ORDER BY id DESC LIMIT 1) SELECT ocron.id, ocron.failure_count, lcp.progress_id, lcp.remaining FROM ocron LEFT JOIN lcp0 lcp ON lcp.cron_id = ocron.id WHERE ocron.active = true AND (ocron.nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM otrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = ocron.id)) AND ocron.id = 12 ORDER BY priority FOR NO KEY UPDATE OF ocron; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+id|failure_count|progress_id|remaining
+--+-------------+-----------+---------
+12|            2|           |         
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT id FROM ocron WHERE id = 21 FOR UPDATE;
+id
+--
+21
+(1 row)
+
+step s2sk: WITH lcp0 AS (SELECT id AS progress_id, cron_id, done, remaining FROM oprog WHERE cron_id = 21 ORDER BY id DESC LIMIT 1) SELECT ocron.id, lcp.progress_id FROM ocron LEFT JOIN lcp0 lcp ON lcp.cron_id = ocron.id WHERE ocron.active = true AND (ocron.nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM otrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = ocron.id)) AND ocron.id = 21 ORDER BY priority FOR NO KEY UPDATE OF ocron SKIP LOCKED;
+id|progress_id
+--+-----------
+(0 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

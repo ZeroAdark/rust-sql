@@ -879,7 +879,7 @@ fn exec_grant_relation<'mcx>(mcx: Mcx<'mcx>, istmt: &mut InternalGrant<'_, '_>) 
         let num_col_privileges = (relnatts as i32 - FIRST_LOW_INVALID_HEAP_ATTNUM + 1) as usize;
         let mut col_privileges: PgVec<'mcx, u64> =
             mcx::vec_with_capacity_in(mcx, num_col_privileges)?;
-        col_privileges.resize(num_col_privileges, ACL_NO_RIGHTS);
+        ::mcx::pgvec_resize(&mut col_privileges, num_col_privileges, ACL_NO_RIGHTS)?;
         let mut have_col_privileges = false;
 
         // Revoking relation privileges that double as column privileges must

@@ -752,7 +752,6 @@ pub fn CreateSubscription<'mcx>(
                     &nspname,
                     &relname,
                 )?;
-                CheckSubscriptionRelam(mcx, relid, &nspname, &relname)?;
                 pg_subscription::AddSubscriptionRelState(
                     mcx,
                     subid,
@@ -1688,25 +1687,6 @@ fn CheckSubscriptionRelkind(relkind: u8, nspname: &str, relname: &str) -> PgResu
         ))
         .with_detail(detail)
         .into());
-    }
-    Ok(())
-}
-
-// Columnar apply cannot publish buffered rows; refuse before creating subscription state.
-pub(crate) fn CheckSubscriptionRelam(
-    mcx: Mcx<'_>, relid: Oid, nspname: &str, relname: &str,
-) -> PgResult<()> {
-    // Opening the relation populates this backend's columnar AM registry.
-    let rel = table::table_open(mcx, relid, types_rel::NoLock)?;
-    let relam = rel.rd_rel.relam;
-    table::table_close(rel, types_rel::NoLock)?;
-    if tableam_vocab::is_pgrcolumnar_am_oid(relam) || tableam_vocab::is_pgrcolumnar2_am_oid(relam) {
-        return Err(err(
-            format!(
-                "cannot use columnar relation \"{nspname}.{relname}\" as logical replication target"
-            ),
-            types_error::ERRCODE_FEATURE_NOT_SUPPORTED,
-        ));
     }
     Ok(())
 }

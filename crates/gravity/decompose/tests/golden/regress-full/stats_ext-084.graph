@@ -1,0 +1,11 @@
+-- regress-full-stats_ext-084
+-- INSERT INTO mcv_lists_uuid (a, b, c) SELECT fipshash(mod(i,100)::text)::uuid, fipshash(mod(i,50)::text)::uuid, fipshash(mod(i,25)::text)::uuid FROM generate_series(1,5000) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:5000)]
+  project (1=io2950(fn877(fn1946(fn3420(io17(io25(fn941(v3.1, c23:100)))), c25:'hex'), c23:1, c23:32)), 2=io2950(fn877(fn1946(fn3420(io17(io25(fn941(v3.1, c23:50)))), c25:'hex'), c23:1, c23:32)), 3=io2950(fn877(fn1946(fn3420(io17(io25(fn941(v3.1, c23:25)))), c25:'hex'), c23:1, c23:32)))
+  write INSERT rel=34305 rti=1 natts=3 indexes=()
+  outs 1=fx16:call2952 2=fx16:call2952 3=fx16:call2952
+mapped: ModifyTable FunctionScan

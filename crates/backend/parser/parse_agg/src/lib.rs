@@ -107,11 +107,11 @@ pub fn transformAggregateCall<'mcx>(
     } else {
         agg.aggorder = NodeList::nil();
         agg.aggdistinct = NodeList::nil();
-        // Divergence: aggargtypes from caller-computed exprType values
-        // (nodeFuncs slice lives in parse_expr; parse_oper::make_op
-        // precedent).
-        for &t in arg_types {
-            argtypes.lappend(mcx, t)?;
+        for tle_node in &tlist {
+            let tle = tle_node.as_target_entry().expect("tlist cell");
+            if !tle.resjunk {
+                argtypes.lappend(mcx, nodes_core::expr_type(tle.expr))?;
+            }
         }
     }
     agg.args = tlist;
@@ -1239,14 +1239,20 @@ fn finalize_grouping_exprs<'mcx>(
                         None
                     };
                     let Some(r#ref) = r#ref else {
-                        return Err(grouping_error(
+                        let mut error = grouping_error(
                             pstate,
                             "arguments to GROUPING must be grouping expressions of the \
                              associated query level"
                                 .into(),
                             nodes_core::expr_location(expr),
-                            "finalize_grouping_exprs",
+                            "finalize_grouping_exprs_walker",
+                        );
+                        error.location = Some(ErrorLocation::new(
+                            "parse_agg.c",
+                            1729,
+                            "finalize_grouping_exprs_walker",
                         ));
+                        return Err(error);
                     };
                     ref_list.lappend(mcx, r#ref as i32)?;
                 }
@@ -1405,7 +1411,7 @@ fn sgc_list<'mcx>(
     list: &NodeList<'mcx>,
 ) -> PgResult<Option<NodeList<'mcx>>> {
     let mut changed = false;
-    let mut out: Vec<Node<'mcx>> = Vec::with_capacity(list.len());
+    let mut out: Vec<Node<'mcx>> = ::mcx::std_vec_with_capacity("parser", list.len())?;
     for item in list.iter() {
         match sgc_mutate(ctx, item)? {
             Some(new) => {

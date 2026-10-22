@@ -1,0 +1,14 @@
+-- regress-full-inet-011
+-- SELECT * FROM inet_tbl WHERE '192.168.1.0/24'::cidr >> i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@0
+  source bitmap rel=17193 rti=1 am=heap
+    bitmap index node=1 index=17198 rows=4
+      key att=2 op=1205 value=c869:'\x02\x18\xc0\xa8\x01\x00'
+      key att=2 op=1204 value=c869:'\x02 \xc0\xa8\x01\xff'
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op931(v1.2, c869:'\x02\x18\xc0\xa8\x01\x00')
+  project (1=v1.1, 2=v1.2)
+  outs 1=vl:win/page 2=vl:win/page
+mapped: BitmapIndexScan BitmapHeapScan

@@ -170,10 +170,8 @@ pub fn mint_on_connect(dbname: &str) -> PgResult<bool> {
         // The hint must cover BOTH absent states: the boot window (clients
         // can authenticate before the janitor bgworker's
         // BackgroundWorkerInitializeConnection reaches set_janitor_proc —
-        // nothing is wrong, retry succeeds) and disabled-after-error
-        // (BGW_NEVER_RESTART). 57P03 is the retryable class either way;
-        // claiming "disabled until restart" during normal startup would
-        // tell a retry-capable harness to abort.
+        // nothing is wrong, retry succeeds) and the restart window after a
+        // janitor exit. 57P03 is the retryable class either way.
         PostEnsure::JanitorAbsent => Err(ereport(FATAL)
             .errcode(ERRCODE_CANNOT_CONNECT_NOW)
             .errmsg(format!(
@@ -181,8 +179,8 @@ pub fn mint_on_connect(dbname: &str) -> PgResult<bool> {
                  is not running"
             ))
             .errhint(
-                "The janitor may still be starting up, or it has been disabled after an \
-                 unrecoverable error (see the server log); retrying shortly is safe."
+                "The janitor may still be starting up, or it is restarting after an exit \
+                 (see the server log); retrying shortly is safe."
                     .to_string(),
             )
             .into_error()
@@ -1321,14 +1319,29 @@ fn run_deferred_copies(deferred: &[dbcommands::DeferredFileCopy]) -> PgResult<()
     let workers = members.min(MINT_COPY_WORKERS_MAX);
     let knobs = crate::parcopy::snapshot_knobs();
     let stats = crate::parcopy::copy_dirs_parallel(jobs, workers, knobs)?;
+    // the pgrcolumnar table directories the file copy skips (copydir's population), on this thread
+    for d in deferred {
+        for dir in &d.dirs {
+            pgrc_am::dircopy::copy_table_dirs(&dir.srcpath, &dir.dstpath, dir.dst_tablespace, d.db_oid)?;
+        }
+    }
 
     // Destination-directory fsyncs (copydir's tail), on THIS thread:
     // per-file fsyncs already ran on the workers' own fds.
     if init_small::globals::enableFsync() {
         for d in deferred {
             for dir in &d.dirs {
+                for (name, _) in dbcommands::table_dir_names(&dir.dstpath)? {
+                    fd::fsync_fname(&format!("{}/{name}", dir.dstpath), true)?;
+                }
                 fd::fsync_fname(&dir.dstpath, true)?;
             }
+        }
+    }
+    // the pgrcolumnar table directories the file copy skips (D2388), on this thread
+    for d in deferred {
+        for dir in &d.dirs {
+            dbcommands::copy_columnar_table_dirs(&dir.srcpath, &dir.dstpath, dir.dst_tablespace, d.db_oid)?;
         }
     }
     for d in deferred {

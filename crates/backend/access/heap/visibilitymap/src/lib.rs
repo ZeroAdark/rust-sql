@@ -157,6 +157,50 @@ pub fn vm_all_visible(
     Ok(visibilitymap_get_status(rel, heapBlk, vmbuf)? & VISIBILITYMAP_ALL_VISIBLE != 0)
 }
 
+pub fn vm_nblocks(rel: &RelationData<'_>) -> PgResult<BlockNumber> {
+    let rlocator = bufmgr_seams::relation_smgr_locator::call(rel);
+    let fork = ForkNumber::VISIBILITYMAP_FORKNUM;
+    let n = smgr_seams::smgr_cached_nblocks::call(rlocator, fork);
+    if n != InvalidBlockNumber {
+        return Ok(n);
+    }
+    if smgr_seams::smgr_exists::call(rlocator, fork)? {
+        smgr_seams::smgr_nblocks::call(rlocator, fork)
+    } else {
+        Ok(0)
+    }
+}
+
+pub fn vm_all_visible_by_locator(
+    rlocator: ::types_storage::RelFileLocator,
+    permanent: bool,
+    vm_nblocks: BlockNumber,
+    heapBlk: BlockNumber,
+    vmbuf: &mut VmBuffer,
+) -> PgResult<bool> {
+    let mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
+    if mapBlock >= vm_nblocks {
+        return Ok(false);
+    }
+    if !matches!(&vmbuf.pin, Some(_) if vmbuf.map_block == mapBlock) {
+        if let Some(pin) = vmbuf.pin.take() {
+            pin.release();
+        }
+        let buf = bufmgr_seams::read_buffer_without_relcache::call(
+            rlocator,
+            ForkNumber::VISIBILITYMAP_FORKNUM,
+            mapBlock,
+            ReadBufferMode::ZeroOnError,
+            None,
+            permanent,
+        )?;
+        vmbuf.pin = Some(BufferPin::adopt(buf).expect("vm_all_visible_by_locator: invalid buffer"));
+        vmbuf.map_block = mapBlock;
+    }
+    let page = vmbuf.pin.as_ref().expect("pinned").page();
+    Ok(!page.is_new() && status_from_page(page, heapBlk) & VISIBILITYMAP_ALL_VISIBLE != 0)
+}
+
 /// `VM_ALL_FROZEN` (visibilitymap.h).
 #[inline(always)]
 pub fn vm_all_frozen(

@@ -1,0 +1,41 @@
+-- tpch-012
+-- SELECT l_shipmode, sum( CASE WHEN o_orderpriority = '1-URGENT' OR o_orderpriority = '2-HIGH' THEN 1 ELSE 0 END) AS high_line_count, sum( CASE WHEN o_orderpriority <> '1-URGENT' AND o_orderpriority <> '2-HIGH' THEN 1 ELSE 0 END) AS low_line_count FROM orders, lineitem WHERE o_orderkey = l_orderkey AND l_shipmode IN ('MAIL', 'SHIP') AND l_commitdate < l_receiptdate AND l_shipdate < l_commitdate AND l_receiptdate >= CAST('1994-01-01' AS date) AND l_receiptdate < CAST('1995-01-01' AS date) GROUP BY l_shipmode ORDER BY l_shipmode /* TH12 */;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=5 eligible rows=15000 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n5@0 n4@1
+  source range rel=16449 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(6):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.6, 2=v1.1)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=vl:win/page 2=w8:val
+p1 node=3 eligible rows=295 end=breaker(slot=1 HashAgg)
+  desc consumes=slot0@p0 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n2@6 n1@8 n0@9^
+  source range rel=16461 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(15):byref8:vl:win/page Offset:byval2:w2:val
+  filter any1054(v2.15, c1014:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x04\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00 \x00\x00\x00MAIL \x00\x00\x00SHIP')
+  filter op1095(v2.12, v2.13)
+  filter op1095(v2.11, v2.12)
+  filter op1098(v2.13, c1082:-2191)
+  filter op1095(v2.13, c1082:-1826)
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9, 10=v2.10, 11=v2.11, 12=v2.12, 13=v2.13, 14=v2.14, 15=v2.15, 16=v2.16)
+  probe slot=0 inner=n4 JOIN_INNER unique keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.2))
+  project (1=outer.15, 2=inner.1)
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w4:val 5=vl:row 6=vl:row 7=vl:row 8=vl:row 9=vl:row 10=vl:row 11=w8:val 12=w8:val 13=w8:val 14=vl:row 15=vl:win/page 16=vl:row
+  outs 1=vl:win/page 2=vl:life/breaker
+  outs 1=vl:win/page 2=vl:life/breaker
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=agg2108(1=case(when or(op1054(outer.2, c1042:'1-URGENT'), op1054(outer.2, c1042:'2-HIGH')) then c23:1) else c23:0), 3=agg2108(1=case(when and(op1057(outer.2, c1042:'1-URGENT'), op1057(outer.2, c1042:'2-HIGH')) then c23:1) else c23:0))
+  outs 1=vl:life/breaker 2=w8:val 3=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[Fp128,Fp128]->[SumI64@16,SumI64@24,MinCode@32,Count@40]+valid 56B order=1+
+group slot=1 producer=p1 node=0 form=Sorted hints=[] layout=[Fp128,Fp128]->[SumI64@16,SumI64@24,MinCode@32,Count@40]+valid 56B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=1042 rep=2 image=Bpchar expr=outer.1
+  agg aggno=0 fn=2108 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=case(when or(op1054(outer.2, c1042:'1-URGENT'), op1054(outer.2, c1042:'2-HIGH')) then c23:1) else c23:0)
+  agg aggno=1 fn=2108 reg=SumInt slot=1 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=case(when and(op1057(outer.2, c1042:'1-URGENT'), op1057(outer.2, c1042:'2-HIGH')) then c23:1) else c23:0)
+mapped: SeqScan HashJoin Agg Hash

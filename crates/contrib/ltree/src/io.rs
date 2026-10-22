@@ -194,7 +194,7 @@ pub fn parse_ltree(buf: &[u8]) -> Result<Vec<u8>, PgError> {
         .iter()
         .map(|it| &buf[it.start..it.start + it.len])
         .collect();
-    Ok(build_ltree(&labels))
+    build_ltree(&labels).map_err(|e| *e)
 }
 
 pub fn deparse_ltree(image: &[u8]) -> Vec<u8> {
@@ -294,7 +294,7 @@ pub fn parse_lquery(buf: &[u8]) -> Result<Vec<u8>, PgError> {
         )));
     }
 
-    let mut levels: Vec<PLevel> = Vec::with_capacity(num as usize);
+    let mut levels: Vec<PLevel> = ::mcx::std_vec_with_capacity("ltree", num as usize)?;
     levels.push(PLevel {
         flag: 0,
         low: 0,
@@ -530,7 +530,7 @@ fn serialize_lquery(
         }
     }
 
-    let mut out = vec![0u8; totallen];
+    let mut out = ::mcx::std_vec_from_elem("ltree", 0u8, totallen)?;
     set_varsize(&mut out, totallen);
     write_u16(&mut out, 4, num); // numlevel
     write_u16(&mut out, 6, 0); // firstgood (filled below)
@@ -623,7 +623,7 @@ pub fn deparse_lquery(image: &[u8]) -> Result<Vec<u8>, PgError> {
     // the buffer at the checked estimate so an over-emitting image becomes a
     // catchable per-query invalid-alloc error instead — no reallocation past the
     // reserved capacity can ever occur, so no infallible growth, so no abort.
-    let mut out = CappedOut::with_cap(totallen);
+    let mut out = CappedOut::with_cap(totallen)?;
     for (i, lvl) in q.levels().enumerate() {
         if i != 0 {
             out.push(b'.')?;
@@ -689,8 +689,8 @@ struct CappedOut {
 }
 
 impl CappedOut {
-    fn with_cap(cap: usize) -> Self {
-        CappedOut { buf: Vec::with_capacity(cap), cap }
+    fn with_cap(cap: usize) -> ::types_error::PgResult<Self> {
+        Ok(CappedOut { buf: ::mcx::std_vec_with_capacity("ltree", cap)?, cap })
     }
 
     #[inline]
@@ -1030,7 +1030,7 @@ pub fn parse_ltxtquery(buf: &[u8]) -> Result<Vec<u8>, PgError> {
         return Err(prog_limit("ltxtquery is too large"));
     }
     let commonlen = computesize(size, sumlen);
-    let mut out = vec![0u8; commonlen];
+    let mut out = ::mcx::std_vec_from_elem("ltree", 0u8, commonlen)?;
     set_varsize(&mut out, commonlen);
     write_i32(&mut out, 4, size as i32);
 
@@ -1038,7 +1038,7 @@ pub fn parse_ltxtquery(buf: &[u8]) -> Result<Vec<u8>, PgError> {
     // `state.str` (head) into ptr[0..num] in order, consuming the list from the
     // head. Since we pushed in arrival order to a Vec, the C "head" corresponds
     // to our LAST element. So iterate the Vec in reverse.
-    let mut items: Vec<Item> = Vec::with_capacity(size);
+    let mut items: Vec<Item> = ::mcx::std_vec_with_capacity("ltree", size)?;
     for node in st.str.iter().rev() {
         items.push(Item {
             typ: node.typ as i16,
@@ -1198,7 +1198,7 @@ mod deparse_lquery_alloc_tests {
     /// `handle_alloc_error` and abort the whole process.
     #[test]
     fn capped_output_raises_catchable_error_instead_of_growing() {
-        let mut out = CappedOut::with_cap(4);
+        let mut out = CappedOut::with_cap(4).unwrap();
         out.extend_from_slice(b"abc").expect("within cap");
         out.push(b'd').expect("fills cap exactly");
         let e = out.push(b'e').err().unwrap();
@@ -1207,7 +1207,7 @@ mod deparse_lquery_alloc_tests {
             format!("invalid memory alloc request size {}", ::mcx::MAX_ALLOC_SIZE + 1)
         );
         // A large single append past the remaining space is caught too.
-        let mut out = CappedOut::with_cap(4);
+        let mut out = CappedOut::with_cap(4).unwrap();
         assert!(out.extend_from_slice(&[0u8; 5]).is_err());
     }
 }

@@ -66,7 +66,7 @@ fn mode_name(status: MultiXactStatus) -> &'static str {
 // a dropped column has none.
 fn att_in_metadata(tupdesc: &TupleDescData<'_>) -> PgResult<Vec<Option<(FmgrInfo, Oid, i32)>>> {
     let natts = tupdesc.natts as usize;
-    let mut atts = Vec::with_capacity(natts);
+    let mut atts = ::mcx::std_vec_with_capacity("pgrowlocks", natts)?;
     for i in 0..natts {
         let att = tupdesc.attr(i);
         atts.push(if att.attisdropped {
@@ -87,8 +87,8 @@ fn build_tuple_from_cstrings(
     values: &[String],
 ) -> PgResult<(Vec<Datum>, Vec<bool>)> {
     let n = attinmeta.len();
-    let mut datums = vec![Datum::null(); n];
-    let mut nulls = vec![false; n];
+    let mut datums = ::mcx::std_vec_from_elem("pgrowlocks", Datum::null(), n)?;
+    let mut nulls = ::mcx::std_vec_from_elem("pgrowlocks", false, n)?;
     for (i, att) in attinmeta.iter_mut().enumerate() {
         match (att, values.get(i)) {
             (Some((flinfo, typioparam, typmod)), Some(s)) => {

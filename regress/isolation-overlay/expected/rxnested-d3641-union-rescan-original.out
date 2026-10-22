@@ -1,0 +1,174 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1x s2b s2k s1b s1m s2c s1c s1r
+step s1x: EXPLAIN (COSTS OFF) MERGE INTO ur_t t USING (SELECT k, w FROM ur_a UNION ALL SELECT k, w FROM ur_b) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w;
+QUERY PLAN                              
+----------------------------------------
+Merge on ur_t t                         
+  ->  Hash Join                         
+        Hash Cond: (t.id = ur_a.k)      
+        ->  Seq Scan on ur_t t          
+        ->  Hash                        
+              ->  Append                
+                    ->  Seq Scan on ur_a
+                    ->  Seq Scan on ur_b
+(8 rows)
+
+step s2b: BEGIN;
+step s2k: UPDATE ur_t SET id = 10 WHERE id = 3;
+step s1b: BEGIN;
+step s1m: MERGE INTO ur_t t USING (SELECT k, w FROM ur_a UNION ALL SELECT k, w FROM ur_b) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s2c: COMMIT;
+step s1m: <... completed>
+step s1c: COMMIT;
+step s1r: SELECT id, hits FROM ur_t WHERE hits <> 0 OR id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 4| 101
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+10|   1
+11|   0
+12|   0
+13|   0
+14|   0
+16|   0
+(13 rows)
+
+
+starting permutation: s2b s2k s1b s1a s2c s1c s1r
+step s2b: BEGIN;
+step s2k: UPDATE ur_t SET id = 10 WHERE id = 3;
+step s1b: BEGIN;
+step s1a: MERGE INTO ur_t t USING (SELECT k, w FROM ur_a UNION ALL SELECT k, w FROM ur_b) s ON t.id = s.k WHEN MATCHED AND s.w < 50 THEN UPDATE SET hits = t.hits + s.w WHEN MATCHED THEN DELETE; <waiting ...>
+step s2c: COMMIT;
+step s1a: <... completed>
+step s1c: COMMIT;
+step s1r: SELECT id, hits FROM ur_t WHERE hits <> 0 OR id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+10|   1
+11|   0
+12|   0
+13|   0
+14|   0
+16|   0
+(12 rows)
+
+
+starting permutation: s2b s2g s1b s1m s2c s1c s1r
+step s2b: BEGIN;
+step s2g: UPDATE ur_t SET id = 15 WHERE id = 3;
+step s1b: BEGIN;
+step s1m: MERGE INTO ur_t t USING (SELECT k, w FROM ur_a UNION ALL SELECT k, w FROM ur_b) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s2c: COMMIT;
+step s1m: <... completed>
+step s1c: COMMIT;
+step s1r: SELECT id, hits FROM ur_t WHERE hits <> 0 OR id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 4| 101
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+11|   0
+12|   0
+13|   0
+14|   0
+15|   0
+16|   0
+(13 rows)
+
+
+starting permutation: s2b s2h s1b s1m s2c s1c s1r
+step s2b: BEGIN;
+step s2h: UPDATE ur_t SET hits = 7 WHERE id = 3;
+step s1b: BEGIN;
+step s1m: MERGE INTO ur_t t USING (SELECT k, w FROM ur_a UNION ALL SELECT k, w FROM ur_b) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s2c: COMMIT;
+step s1m: <... completed>
+step s1c: COMMIT;
+step s1r: SELECT id, hits FROM ur_t WHERE hits <> 0 OR id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 3|   8
+ 4| 101
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+11|   0
+12|   0
+13|   0
+14|   0
+16|   0
+(13 rows)
+
+
+starting permutation: s2b s2h s1b s1a s2c s1c s1r
+step s2b: BEGIN;
+step s2h: UPDATE ur_t SET hits = 7 WHERE id = 3;
+step s1b: BEGIN;
+step s1a: MERGE INTO ur_t t USING (SELECT k, w FROM ur_a UNION ALL SELECT k, w FROM ur_b) s ON t.id = s.k WHEN MATCHED AND s.w < 50 THEN UPDATE SET hits = t.hits + s.w WHEN MATCHED THEN DELETE; <waiting ...>
+step s2c: COMMIT;
+step s1a: <... completed>
+step s1c: COMMIT;
+step s1r: SELECT id, hits FROM ur_t WHERE hits <> 0 OR id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 3|   8
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+11|   0
+12|   0
+13|   0
+14|   0
+16|   0
+(12 rows)
+
+
+starting permutation: s2b s2k s1b s1u s2c s1c s1r
+step s2b: BEGIN;
+step s2k: UPDATE ur_t SET id = 10 WHERE id = 3;
+step s1b: BEGIN;
+step s1u: UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_a UNION ALL SELECT k, w FROM ur_b) s WHERE t.id = s.k; <waiting ...>
+step s2c: COMMIT;
+step s1u: <... completed>
+step s1c: COMMIT;
+step s1r: SELECT id, hits FROM ur_t WHERE hits <> 0 OR id <= 16 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 4| 101
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+10| 103
+11|   0
+12|   0
+13|   0
+14|   0
+16|   0
+(13 rows)
+

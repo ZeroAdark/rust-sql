@@ -1,0 +1,75 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2exp s1keep s1near s1fail s1del s1key s2dup s1c s2c s3sel
+step s2exp: EXPLAIN (COSTS OFF) WITH u AS (UPDATE sqb SET amt = amt + 1 WHERE grp = 4 RETURNING id % 50 AS k, amt), d AS (DELETE FROM sqs t WHERE EXISTS (SELECT 1 FROM u WHERE u.k = t.id AND u.amt > t.v) RETURNING t.id, t.v) SELECT id, v FROM d ORDER BY id;
+QUERY PLAN                                
+------------------------------------------
+Sort                                      
+  Sort Key: d.id                          
+  CTE u                                   
+    ->  Update on sqb                     
+          ->  Seq Scan on sqb             
+                Filter: (grp = 4)         
+  CTE d                                   
+    ->  Delete on sqs t                   
+          ->  Hash Semi Join              
+                Hash Cond: (t.id = u.k)   
+                Join Filter: (u.amt > t.v)
+                ->  Seq Scan on sqs t     
+                ->  Hash                  
+                      ->  CTE Scan on u   
+  ->  CTE Scan on d                       
+(15 rows)
+
+step s1keep: UPDATE sqs SET v = 1 WHERE id = 4;
+step s1near: UPDATE sqs SET v = 190 WHERE id = 14;
+step s1fail: UPDATE sqs SET v = 1000 WHERE id = 24;
+step s1del: DELETE FROM sqs WHERE id = 34;
+step s1key: UPDATE sqs SET id = 3044 WHERE id = 44;
+step s2dup: WITH u AS (UPDATE sqb SET amt = amt + 1 WHERE grp = 4 RETURNING id % 50 AS k, amt), d AS (DELETE FROM sqs t WHERE EXISTS (SELECT 1 FROM u WHERE u.k = t.id AND u.amt > t.v) RETURNING t.id, t.v) SELECT id, v FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2dup: <... completed>
+id|  v
+--+---
+ 4|  1
+14|190
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, v FROM sqs WHERE id IN (4, 7, 14, 17, 24, 27, 34, 44, 57, 3044, 3057) ORDER BY id;
+  id|   v
+----+----
+   7|   0
+  17|   0
+  24|1000
+  27|   0
+  57|   0
+3044|   0
+(6 rows)
+
+
+starting permutation: s1u s1ufail s1ukey s2uniq s1c s2c s3sel
+step s1u: UPDATE sqs SET v = 3 WHERE id IN (7, 17);
+step s1ufail: UPDATE sqs SET v = 900 WHERE id = 27;
+step s1ukey: UPDATE sqs SET id = 3057 WHERE id = 57;
+step s2uniq: WITH u AS (UPDATE sqb SET amt = amt + 1 WHERE grp = 7 RETURNING id, amt), d AS (DELETE FROM sqs t WHERE EXISTS (SELECT 1 FROM u WHERE u.id = t.id AND u.amt > t.v) RETURNING t.id, t.v) SELECT count(*), sum(id), sum(v) FROM d; <waiting ...>
+step s1c: COMMIT;
+step s2uniq: <... completed>
+count|  sum|sum
+-----+-----+---
+   48|12516|  6
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, v FROM sqs WHERE id IN (4, 7, 14, 17, 24, 27, 34, 44, 57, 3044, 3057) ORDER BY id;
+  id|  v
+----+---
+   4|  0
+  14|200
+  24|  0
+  27|900
+  34|  0
+  44|  0
+3057|  0
+(7 rows)
+

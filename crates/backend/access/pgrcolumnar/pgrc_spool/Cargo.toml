@@ -1,0 +1,23 @@
+# pgrc_spool — parts by reference (WR, delta v2 design §7): the spool of hard links that keeps each referenced file
+# readable while the WAL holding its reference is kept, and the in-flight registry WAL readers settle on. A low
+# crate: transam_xlog (segment removal), the walsender, the walreceiver, the archiver and base backup call it, so it
+# depends on nothing above the vfs.
+
+[package]
+name = "pgrc_spool"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pgrc_spool"
+path = "src/lib.rs"
+
+[dependencies]
+pgrc_format = { path = "../pgrc_format" }
+pgsync = { path = "../../../../_support/pgsync" }
+vfs = { path = "../../../storage/file/vfs" }
+libc = "0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(pgrust_sim)"] }

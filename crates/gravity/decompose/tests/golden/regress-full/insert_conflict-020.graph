@@ -1,0 +1,10 @@
+-- regress-full-insert_conflict-020
+-- select * from parted_conflict_test order by a;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=18333 rti=2 am=heap index=18336
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page
+  project (1=v2.1, 2=v2.2)
+  outs 1=w8:val 2=vl:win/page
+mapped: IndexScan

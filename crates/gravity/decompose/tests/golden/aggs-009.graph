@@ -1,0 +1,27 @@
+-- aggs-009
+-- SELECT k, min(t), max(bc), min(by), max(iv), min(ip), bool_and(b), bool_or(b) FROM g GROUP BY k;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=2000 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n1@0 n0@1^
+  source range rel=16396 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(10):byref8:vl:win/page Attr(12):byref8:vl:win/page Attr(13):byref8:vl:win/page Attr(15):byval8:w8:val Attr(19):byref8:fx16:win/page Attr(21):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24)
+  outs 1=w8:val 2=w2:val 3=w4:val 4=w8:val 5=w4:val 6=w8:val 7=vl:row 8=vl:row 9=w8:val 10=vl:win/page 11=vl:row 12=vl:win/page 13=vl:win/page 14=vl:row 15=w8:val 16=w4:val 17=w8:val 18=fx12:row 19=fx16:win/page 20=fx16:row 21=vl:win/page 22=w8:val 23=w8:val 24=vl:row
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=agg2145(1=outer.10), 3=agg2244(1=outer.12), 4=agg6396(1=outer.13), 5=agg2128(1=outer.19), 6=agg3565(1=outer.21), 7=agg2517(1=outer.15), 8=agg2518(1=outer.15))
+  outs 1=w4:val 2=vl:call2145 3=vl:call2244 4=vl:call6396 5=fx16:call2128 6=vl:call3565 7=w1:val 8=w1:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[IntervalMax@8,MinI64@24,MaxI64@32,Count@40]+valid 56B
+group slot=0 producer=p0 node=0 form=Hashed hints=[] layout=[I32]->[IntervalMax@8,MinI64@24,MaxI64@32,Count@40]+valid 56B
+  key 0 word=0 resno=1 kind=I32 attno=1 type=23 expr=v1.1
+  agg aggno=0 fn=2145 reg=MinVar slot=- count_slot=- final=Rendered class=Min(Text) trans=Var mods=[] expr=agg2145(1=outer.10)
+  agg aggno=1 fn=2244 reg=MaxVar slot=- count_slot=- final=Rendered class=Max(Text) trans=Var mods=[] expr=agg2244(1=outer.12)
+  agg aggno=2 fn=6396 reg=MinVar slot=- count_slot=- final=Rendered class=Min(Bytes) trans=Var mods=[] expr=agg6396(1=outer.13)
+  agg aggno=3 fn=2128 reg=MaxInterval slot=0 count_slot=- final=Interval class=Max(Opaque) trans=Abi(IntervalMax) mods=[] expr=agg2128(1=outer.19)
+  agg aggno=4 fn=3565 reg=MinVar slot=- count_slot=- final=Rendered class=Min(Opaque) trans=Var mods=[] expr=agg3565(1=outer.21)
+  agg aggno=5 fn=2517 reg=BoolAnd slot=1 count_slot=- final=Bool class=BoolAnd trans=Abi(MinI64) mods=[] expr=agg2517(1=outer.15)
+  agg aggno=6 fn=2518 reg=BoolOr slot=2 count_slot=- final=Bool class=BoolOr trans=Abi(MaxI64) mods=[] expr=agg2518(1=outer.15)
+mapped: SeqScan Agg

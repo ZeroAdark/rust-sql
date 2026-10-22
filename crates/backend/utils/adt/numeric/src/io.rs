@@ -223,8 +223,8 @@ fn recv_error(msg: &'static str) -> Box<PgError> {
 fn set_var_from_str(s: &[u8], mut cp: usize, dest: &mut NumericVar) -> Result<usize, NumErr> {
     let mut have_dp = false;
     let mut sign = NUMERIC_POS;
-    let mut dweight: i32 = -1;
-    let mut dscale: i32 = 0;
+    let dweight: i32 = -1;
+    let dscale: i32 = 0;
 
     match s.get(cp) {
         Some(b'+') => {
@@ -248,10 +248,13 @@ fn set_var_from_str(s: &[u8], mut cp: usize, dest: &mut NumericVar) -> Result<us
     }
 
     DECDIGITS.with(|dd| {
+        // the scan's state as the closure's own locals: captured by reference, every digit's cp / dweight / dscale
+        // update went through memory (the digit store below may alias them), half the parse's time
+        let (mut cp, mut have_dp, mut dweight, mut dscale) = (cp, have_dp, dweight, dscale);
         let mut decdigits = dd.borrow_mut();
         let cap = s.len() - cp + DEC_DIGITS as usize * 2;
         decdigits.clear();
-        decdigits.reserve(cap);
+        let _ = decdigits.try_reserve(cap);
         // SAFETY: cap bounds every write below (<= digits remaining + padding);
         // the final set_len exposes only written bytes.
         let dd_ptr = decdigits.as_mut_ptr();
@@ -475,22 +478,54 @@ pub fn numeric_out_into(num: Num<'_>, out: &mut Vec<u8>) {
     get_str_from_var(num.view(), out);
 }
 
-pub fn get_str_from_var(var: VarView<'_>, out: &mut Vec<u8>) {
-    let dscale = var.dscale;
+/// C get_str_from_var's palloc size: every byte `get_str_raw` may write (no NUL).
+#[inline]
+pub fn str_bound(var: VarView<'_>) -> usize {
+    let i = ((var.weight + 1) * DEC_DIGITS).max(1);
+    i as usize + var.dscale as usize + DEC_DIGITS as usize + 2
+}
 
-    let mut i = (var.weight + 1) * DEC_DIGITS;
-    if i <= 0 {
-        i = 1;
+/// The longest text `numeric_out_raw` writes for `num` (no NUL).
+#[inline]
+pub fn numeric_out_bound(num: Num<'_>) -> usize {
+    if num.is_special() { 9 } else { str_bound(num.view()) }
+}
+
+/// numeric_out rendered at `dst` (no NUL): the length written. # Safety: `dst` is writable for `numeric_out_bound(num)` bytes.
+#[inline]
+pub unsafe fn numeric_out_raw(num: Num<'_>, dst: *mut u8) -> usize {
+    if num.is_special() {
+        let t: &[u8] = if num.is_pinf() { b"Infinity" } else if num.is_ninf() { b"-Infinity" } else { b"NaN" };
+        // SAFETY: at most 9 bytes, within the bound.
+        unsafe { core::ptr::copy_nonoverlapping(t.as_ptr(), dst, t.len()) };
+        return t.len();
     }
-    // C pallocs i + dscale + DEC_DIGITS + 2 and writes with a raw cursor; the
-    // reserve below bounds every write, set_len exposes only written bytes.
+    // SAFETY: forwarded.
+    unsafe { get_str_raw(num.view(), dst) }
+}
+
+pub fn get_str_from_var(var: VarView<'_>, out: &mut Vec<u8>) {
+    // C pallocs str_bound and writes with a raw cursor; the reserve bounds every write, set_len exposes only written bytes.
     let base = out.len();
-    out.reserve(i as usize + dscale as usize + DEC_DIGITS as usize + 2);
-    let start = out.as_mut_ptr();
-    let mut cp = base;
+    let bound = str_bound(var);
+    if out.try_reserve(bound).is_err() {
+        // No error channel here: mcx::raise_oom_named is the governor's own ERROR 53200 unwind.
+        ::mcx::raise_oom_named("numeric out", bound);
+    }
+    // SAFETY: the reserve covers str_bound bytes past base.
+    unsafe {
+        let n = get_str_raw(var, out.as_mut_ptr().add(base));
+        out.set_len(base + n);
+    }
+}
+
+/// get_str_from_var's body writing at `start`; the length written. # Safety: `start` is writable for `str_bound(var)` bytes.
+pub unsafe fn get_str_raw(var: VarView<'_>, start: *mut u8) -> usize {
+    let dscale = var.dscale;
+    let mut cp = 0usize;
     let digits = var.digits.as_ptr();
 
-    // SAFETY: writes stay below base + reserve (same arithmetic as C's palloc
+    // SAFETY: writes stay below str_bound (same arithmetic as C's palloc
     // size); digit reads are index-guarded to [0, ndigits).
     unsafe {
         if var.sign == NUMERIC_NEG {
@@ -566,7 +601,6 @@ pub fn get_str_from_var(var: VarView<'_>, out: &mut Vec<u8>) {
             }
             cp = end;
         }
-
-        out.set_len(cp);
     }
+    cp
 }

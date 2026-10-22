@@ -1,0 +1,37 @@
+-- tpch-sf10-014
+-- SELECT 100.00 * sum( CASE WHEN p_type LIKE 'PROMO%' THEN l_extendedprice * (1 - l_discount) ELSE 0 END) / sum(l_extendedprice * (1 - l_discount)) AS promo_revenue FROM lineitem, part WHERE l_partkey = p_partkey AND l_shipdate >= date '1995-09-01' AND l_shipdate < CAST('1995-10-01' AS date) /* TH14 */;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=4 eligible rows=2000000 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n4@0 n3@1
+  source range rel=16396 rti=2 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(5):codes4:code:part/dict Offset:byval2:w2:val
+  project (1=v2.5, 2=v2.1)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=code:part/dict 2=w4:val
+p1 node=2 eligible rows=344645 end=breaker(slot=1 PlainAgg)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@3 n0@5^
+  source range rel=16449 rti=1 am=pgrc
+    lanes Attr(2):byval4:w4:val Attr(6):fixed8:pn15.2:win/arena Attr(7):fixed8:pn15.2:win/arena Attr(11):byval4:w4:val Offset:byval2:w2:val
+    zone lane3 >= word0/4
+    zone lane3 < word0/4
+  filter op1098(v1.11, c1082:-1583)
+  filter op1095(v1.11, c1082:-1553)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  probe slot=0 inner=n3 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.2))
+  project (1=inner.1, 2=outer.6, 3=outer.7)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=vl:row 6=pn15.2:win/arena 7=pn15.2:win/arena 8=vl:row 9=vl:row 10=vl:row 11=w4:val 12=w4:val 13=w4:val 14=vl:row 15=vl:row 16=vl:row
+  outs 1=vl:life/breaker 2=pn15.2:win/arena 3=pn15.2:win/arena
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=op1761(op1760(c1700:'\x00\x81d\x00', agg2114(1=case(when op1209(relabel25(outer.1), c25:'PROMO%') then op1760(outer.2, op1759(c1700:'\x00\x80\x01\x00', outer.3))) else c1700:'\x00\x80')), agg2114(1=op1760(outer.2, op1759(c1700:'\x00\x80\x01\x00', outer.3)))))
+  outs 1=vl:call1727
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 6 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=PlainAgg budget=Fixed(144) spill=None producer=p1 layout=[]->[SumNumWide@0,MaxI64@32,SumNumWide@40,Count@72]+valid 88B
+group slot=1 producer=p1 node=0 form=Plain hints=[] layout=[]->[SumNumWide@0,MaxI64@32,SumNumWide@40,Count@72]+valid 88B
+  agg aggno=0 fn=2114 reg=SumNum slot=0 count_slot=- final=Numeric scale=4 dscale_slot=1 dscales=4,0 class=SumNum trans=Abi(SumNumWide) mods=[] expr=agg2114(1=case(when op1209(relabel25(outer.1), c25:'PROMO%') then op1760(outer.2, op1759(c1700:'\x00\x80\x01\x00', outer.3))) else c1700:'\x00\x80')
+  agg aggno=1 fn=2114 reg=SumNum slot=2 count_slot=- final=Numeric scale=4 class=SumNum trans=Abi(SumNumWide) mods=[] expr=agg2114(1=op1760(outer.2, op1759(c1700:'\x00\x80\x01\x00', outer.3)))
+mapped: SeqScan HashJoin Agg Hash

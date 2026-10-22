@@ -1,9 +1,9 @@
 use std::fs::File as StdFile;
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 
-use ::elog::ereport;
+use ::elog::{ereport, PCT_M};
 use ::types_core::SubTransactionId;
-use ::types_error::{ErrorLevel, PgResult, ERRCODE_INSUFFICIENT_RESOURCES, ERROR, LOG, WARNING};
+use ::types_error::{ErrorLevel, PgError, PgResult, ERRCODE_INSUFFICIENT_RESOURCES, ERROR, LOG, WARNING};
 use ::types_storage::{Dir, DirEnt, FD_MINFREE};
 
 use crate::vfd::{self, get_errno, loc, set_errno, with_fd, FdState};
@@ -11,13 +11,66 @@ use crate::vfd::{self, get_errno, loc, set_errno, with_fd, FdState};
 pub(crate) enum AllocatedHandle {
     // DST P1 carve-out: buffered stdio streams (AllocateFile fopen) and pipes
     // (OpenPipeStream popen) stay posix-only in P1 — out of Vfs scope.
-    File(StdFile),
+    File(StdioStream),
     Dir(Option<vfs::VfsDirIter>),
     // vfs-minted, so the holder must be the vfs-close guard (finding F1b):
     // an unwind/thread-exit drop releases into the active vfs namespace,
     // never posix-side.
     RawFd(vfs::VfsFd),
     Pipe(PipeHandle),
+}
+
+// fopen's FILE: the fwrite buffer lives with the stream, so fflush(NULL)
+// (OpenPipeStream) and fclose (FreeDesc) reach it. bufsize starts at BUFSIZ;
+// StdioSetBuf is the caller's st_blksize choice (__smakebuf).
+pub(crate) struct StdioStream {
+    pub file: StdFile,
+    wbuf: Vec<u8>,
+    bufsize: usize,
+}
+
+impl StdioStream {
+    fn new(file: StdFile) -> Self {
+        StdioStream { file, wbuf: Vec::new(), bufsize: 1024 }
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<(), i32> {
+        use std::io::Write;
+
+        let mut rest = bytes;
+        if !self.wbuf.is_empty() {
+            let take = rest.len().min(self.bufsize.saturating_sub(self.wbuf.len()));
+            self.wbuf.extend_from_slice(&rest[..take]);
+            rest = &rest[take..];
+            if self.wbuf.len() < self.bufsize {
+                return Ok(());
+            }
+            let r = self.file.write_all(&self.wbuf);
+            self.wbuf.clear();
+            if let Err(e) = r {
+                return Err(e.raw_os_error().unwrap_or(0));
+            }
+        }
+        let whole = rest.len() - rest.len() % self.bufsize;
+        if whole > 0 {
+            if let Err(e) = self.file.write_all(&rest[..whole]) {
+                return Err(e.raw_os_error().unwrap_or(0));
+            }
+        }
+        self.wbuf.extend_from_slice(&rest[whole..]);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), i32> {
+        use std::io::Write;
+
+        if self.wbuf.is_empty() {
+            return Ok(());
+        }
+        let r = self.file.write_all(&self.wbuf);
+        self.wbuf.clear();
+        r.map_err(|e| e.raw_os_error().unwrap_or(0))
+    }
 }
 
 pub(crate) struct PipeHandle {
@@ -37,31 +90,42 @@ pub(crate) struct AllocateDesc {
     pub desc: AllocatedHandle,
 }
 
-pub(crate) fn reserveAllocatedDesc(fd: &mut FdState) -> bool {
+pub(crate) fn reserveAllocatedDesc(fd: &mut FdState) -> PgResult<bool> {
     let num = vfd::occupied_descs(fd);
 
     if num < fd.max_allocated_descs {
-        return true;
+        return Ok(true);
     }
 
     // First allocation: FD_MINFREE / 3 slots (set_max_safe_fds may not have
-    // run yet). C's malloc-failure ERROR collapses: Vec growth aborts on OOM.
+    // run yet). C's malloc failure is ereport(ERROR, ERRCODE_OUT_OF_MEMORY).
     if fd.max_allocated_descs == 0 {
         let new_max = FD_MINFREE / 3;
-        fd.allocated_descs.reserve_exact(new_max as usize);
+        fd.allocated_descs
+            .try_reserve_exact(new_max as usize)
+            .map_err(|_| oom_descs(new_max as usize))?;
         fd.max_allocated_descs = new_max;
-        return true;
+        return Ok(true);
     }
 
     // Cap at max_safe_fds / 3 so allocated descriptors can't hog all the FDs.
-    let new_max = vfd::max_safe_fds() / 3;
+    let new_max = vfd::effective_max_safe_fds() / 3;
     if new_max > fd.max_allocated_descs {
-        fd.allocated_descs.reserve_exact((new_max - num) as usize);
+        fd.allocated_descs
+            .try_reserve_exact((new_max - num) as usize)
+            .map_err(|_| oom_descs(new_max as usize))?;
         fd.max_allocated_descs = new_max;
-        return true;
+        return Ok(true);
     }
 
-    false
+    Ok(false)
+}
+
+/// fd.c reserveAllocatedDesc: `ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY),
+/// errmsg("out of memory")))` on a failed realloc of the descriptor array.
+#[cold]
+fn oom_descs(slots: usize) -> PgError {
+    ::mcx::oom_named("AllocateDesc", slots * core::mem::size_of::<AllocateDesc>())
 }
 
 fn exceeded_max_descs(what: &str, name: &str, func: &'static str) -> PgResult<()> {
@@ -79,7 +143,7 @@ fn out_of_fds_log() -> PgResult<()> {
     ereport(LOG)
         .with_saved_errno(en)
         .errcode(ERRCODE_INSUFFICIENT_RESOURCES)
-        .errmsg("out of file descriptors: %m; release and retry")
+        .errmsg(format!("out of file descriptors: {PCT_M}; release and retry"))
         .finish(loc("AllocateFile"))
 }
 
@@ -99,7 +163,8 @@ pub(crate) fn FreeDesc(index: i32) -> i32 {
         desc
     });
     match desc.desc {
-        AllocatedHandle::File(file) => {
+        AllocatedHandle::File(mut stream) => {
+            let flushed = stream.flush();
             // DST P1 carve-out boundary (contract §1.1, Ruling 3 Class C):
             // this fd was minted posix-side by open_stdio (the fopen plane,
             // permanently out of Vfs scope), so it must close posix-side too
@@ -108,9 +173,16 @@ pub(crate) fn FreeDesc(index: i32) -> i32 {
             // caught the original misroute; the fd then leaked). Allowlist
             // row retained under the P0 fencing lint with the fopen sites.
             // Live descriptor released from its guard; closed once here.
-            let raw = file.into_raw_fd();
+            let raw = stream.file.into_raw_fd();
             // SAFETY: into_raw_fd transferred ownership; closed exactly once.
-            unsafe { libc::close(raw) }
+            let rc = unsafe { libc::close(raw) };
+            match flushed {
+                Err(en) => {
+                    set_errno(en);
+                    -1
+                }
+                Ok(()) => rc,
+            }
         }
         AllocatedHandle::Pipe(pipe) => pclose(pipe),
         AllocatedHandle::Dir(dir) => {
@@ -144,20 +216,28 @@ fn install_desc(fd: &mut FdState, desc: AllocateDesc) -> i32 {
 
 // C contract: table index >= 0, or -1 with errno set on fopen failure.
 pub fn AllocateFile(name: &str, mode: &str) -> PgResult<i32> {
-    if !with_fd(reserveAllocatedDesc) {
-        exceeded_max_descs("open file", name, "AllocateFile")?;
+    AllocateFilePath(&vfs::PgPath::from(name), mode)
+}
+
+/// AllocateFile over a byte path.
+pub fn AllocateFilePath(name: &vfs::PgPath, mode: &str) -> PgResult<i32> {
+    if !with_fd(reserveAllocatedDesc)? {
+        exceeded_max_descs("open file", &name.to_string_lossy(), "AllocateFile")?;
     }
 
     with_fd(vfd::ReleaseLruFiles)?;
 
     loop {
-        match open_stdio(name, mode) {
+        match open_stdio(name.as_os_str(), mode) {
             Ok(file) => {
                 let create_subid = current_subid();
                 return with_fd(|fd| {
                     Ok(install_desc(
                         fd,
-                        AllocateDesc { create_subid, desc: AllocatedHandle::File(file) },
+                        AllocateDesc {
+                            create_subid,
+                            desc: AllocatedHandle::File(StdioStream::new(file)),
+                        },
                     ))
                 });
             }
@@ -199,14 +279,28 @@ pub fn OpenTransientFile(file_name: &str, file_flags: i32) -> PgResult<i32> {
 
 // C contract: the raw kernel fd, or -1 with errno set on open failure.
 pub fn OpenTransientFilePerm(file_name: &str, file_flags: i32, file_mode: u32) -> PgResult<i32> {
-    if !with_fd(reserveAllocatedDesc) {
-        exceeded_max_descs("open file", file_name, "OpenTransientFilePerm")?;
+    OpenTransientFilePermPath(&vfs::PgPath::from(file_name), file_flags, file_mode)
+}
+
+/// OpenTransientFile over a byte path (basebackup opens each dirent by the
+/// name the kernel returned).
+pub fn OpenTransientFilePath(file_name: &vfs::PgPath, file_flags: i32) -> PgResult<i32> {
+    OpenTransientFilePermPath(file_name, file_flags, vfd::pg_file_create_mode())
+}
+
+pub fn OpenTransientFilePermPath(
+    file_name: &vfs::PgPath,
+    file_flags: i32,
+    file_mode: u32,
+) -> PgResult<i32> {
+    if !with_fd(reserveAllocatedDesc)? {
+        exceeded_max_descs("open file", &file_name.to_string_lossy(), "OpenTransientFilePerm")?;
     }
 
     with_fd(|fd| {
         vfd::ReleaseLruFiles(fd)?;
 
-        let raw = vfd::BasicOpenFilePermInternal(fd, file_name, file_flags, file_mode)?;
+        let raw = vfd::BasicOpenFilePermInternalBytes(fd, file_name, file_flags, file_mode)?;
         if raw >= 0 {
             install_desc(
                 fd,
@@ -251,15 +345,16 @@ pub fn CloseTransientFile(fd_to_close: i32) -> i32 {
 
 // C contract: table index >= 0, or -1 with errno set on popen failure.
 pub fn OpenPipeStream(command: &str, mode: &str) -> PgResult<i32> {
-    if !with_fd(reserveAllocatedDesc) {
+    if !with_fd(reserveAllocatedDesc)? {
         exceeded_max_descs("execute command", command, "OpenPipeStream")?;
     }
 
     with_fd(vfd::ReleaseLruFiles)?;
 
-    // C flushes stdio and flips SIGPIPE to SIG_DFL around popen; the child's
-    // signal state is restored in popen's pre_exec instead.
+    // C flips SIGPIPE to SIG_DFL around popen; the child's signal state is
+    // restored in popen's pre_exec instead.
     loop {
+        with_fd(flush_all_stdio);
         match popen(command, mode) {
             Ok(pipe) => {
                 let create_subid = current_subid();
@@ -454,13 +549,18 @@ pub fn ClosePipeStream(index: i32) -> PgResult<i32> {
 // C contract: Ok(None) mirrors a NULL DIR* with errno set; the following
 // ReadDir reports the failure.
 pub fn AllocateDir(dirname: &str) -> PgResult<Option<Dir>> {
-    if !with_fd(reserveAllocatedDesc) {
-        exceeded_max_descs("open directory", dirname, "AllocateDir")?;
+    AllocateDirPath(&vfs::PgPath::from(dirname))
+}
+
+/// AllocateDir over a byte path.
+pub fn AllocateDirPath(dirname: &vfs::PgPath) -> PgResult<Option<Dir>> {
+    if !with_fd(reserveAllocatedDesc)? {
+        exceeded_max_descs("open directory", &dirname.to_string_lossy(), "AllocateDir")?;
     }
 
     with_fd(vfd::ReleaseLruFiles)?;
 
-    let cdir = vfd::cpath(dirname);
+    let cdir = dirname.to_c_string();
     loop {
         match vfs::read_dir(&cdir) {
             Ok(iter) => {
@@ -496,25 +596,48 @@ pub fn ReadDirExtended(
     dirname: &str,
     elevel: ErrorLevel,
 ) -> PgResult<Option<DirEnt>> {
+    // The historical String view: a name the kernel returned that is not
+    // UTF-8 renders with U+FFFD here. Byte-faithful walkers (basebackup)
+    // use ReadDirPath / with_allocated_dir_path instead.
+    Ok(ReadDirPath(dir, &vfs::PgPath::from(dirname), elevel)?
+        .map(|d_name| DirEnt { d_name: d_name.to_string_lossy() }))
+}
+
+/// ReadDirExtended yielding the raw `d_name` bytes (C's `struct dirent`).
+pub fn ReadDirPath(
+    dir: Option<Dir>,
+    dirname: &vfs::PgPath,
+    elevel: ErrorLevel,
+) -> PgResult<Option<vfs::PgPath>> {
+    Ok(ReadDirEntry(dir, dirname, elevel)?.map(|de| de.d_name))
+}
+
+/// ReadDirExtended yielding the whole `struct dirent` (`d_name` bytes and
+/// `d_type`), for walkers that classify entries through get_dirent_type.
+pub fn ReadDirEntry(
+    dir: Option<Dir>,
+    dirname: &vfs::PgPath,
+    elevel: ErrorLevel,
+) -> PgResult<Option<vfs::VfsDirEnt>> {
     let index = match dir {
         None => {
             ereport(elevel)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not open directory \"{dirname}\": %m"))
+                .errmsg(format!("could not open directory \"{dirname}\": {PCT_M}"))
                 .finish(loc("ReadDirExtended"))?;
             return Ok(None);
         }
         Some(index) => index,
     };
 
-    match next_dirent(index) {
-        Some(Ok(d_name)) => Ok(Some(DirEnt { d_name })),
+    match next_dirent_entry(index) {
+        Some(Ok(de)) => Ok(Some(de)),
         Some(Err(en)) => {
             ereport(elevel)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not read directory \"{dirname}\": %m"))
+                .errmsg(format!("could not read directory \"{dirname}\": {PCT_M}"))
                 .finish(loc("ReadDirExtended"))?;
             Ok(None)
         }
@@ -524,10 +647,14 @@ pub fn ReadDirExtended(
 
 // One readdir(3) step: None at end of directory, Err(errno) on a read
 // failure (C's errno != 0 after a NULL readdir).
-pub(crate) fn next_dirent(index: Dir) -> Option<Result<String, i32>> {
+pub(crate) fn next_dirent(index: Dir) -> Option<Result<vfs::PgPath, i32>> {
+    next_dirent_entry(index).map(|r| r.map(|de| de.d_name))
+}
+
+pub(crate) fn next_dirent_entry(index: Dir) -> Option<Result<vfs::VfsDirEnt, i32>> {
     with_fd(|fd| match fd.allocated_descs[index as usize].as_mut() {
         Some(AllocateDesc { desc: AllocatedHandle::Dir(iter), .. }) => {
-            iter.as_mut().and_then(Iterator::next)
+            iter.as_mut().and_then(vfs::VfsDirIter::next_entry)
         }
         _ => None,
     })
@@ -576,11 +703,20 @@ pub fn with_allocated_dir(
     dirname: &str,
     f: &mut dyn FnMut(&str) -> PgResult<bool>,
 ) -> PgResult<bool> {
-    let dir = AllocateDir(dirname)?;
+    with_allocated_dir_path(&vfs::PgPath::from(dirname), &mut |name| f(&name.to_string_lossy()))
+}
+
+/// `with_allocated_dir` over byte paths: the callback sees each `d_name`
+/// exactly as the kernel returned it.
+pub fn with_allocated_dir_path(
+    dirname: &vfs::PgPath,
+    f: &mut dyn FnMut(&vfs::PgPath) -> PgResult<bool>,
+) -> PgResult<bool> {
+    let dir = AllocateDirPath(dirname)?;
 
     let mut last = false;
     loop {
-        let ent = match ReadDir(dir, dirname) {
+        let ent = match ReadDirPath(dir, dirname, ERROR) {
             Ok(Some(ent)) => ent,
             Ok(None) => break,
             Err(e) => {
@@ -589,7 +725,7 @@ pub fn with_allocated_dir(
             }
         };
 
-        match f(&ent.d_name) {
+        match f(&ent) {
             Ok(stop) => {
                 last = stop;
                 if stop {
@@ -610,7 +746,7 @@ pub fn with_allocated_dir(
 // DST P1 carve-out: the buffered-stream (fopen) plane stays posix-only in P1;
 // stdio is permanently out of Vfs scope (contract §1.1). Allowlist row
 // retained under the P0 fencing lint.
-fn open_stdio(name: &str, mode: &str) -> Result<StdFile, i32> {
+fn open_stdio(name: &std::ffi::OsStr, mode: &str) -> Result<StdFile, i32> {
     use std::fs::OpenOptions;
 
     // fopen mode map for the modes the backend passes (optional trailing 'b').
@@ -718,11 +854,54 @@ fn pclose(mut pipe: PipeHandle) -> i32 {
 pub fn with_allocated_stdio<R>(index: i32, f: impl FnOnce(&mut StdFile) -> R) -> Option<R> {
     with_fd(|fd| match fd.allocated_descs.get_mut(index as usize) {
         Some(Some(AllocateDesc {
-            desc: AllocatedHandle::File(file),
+            desc: AllocatedHandle::File(stream),
             ..
-        })) => Some(f(file)),
+        })) => Some(f(&mut stream.file)),
         _ => None,
     })
+}
+
+fn with_stdio_stream<R>(index: i32, f: impl FnOnce(&mut StdioStream) -> Result<R, i32>) -> Result<R, i32> {
+    with_fd(|fd| match fd.allocated_descs.get_mut(index as usize) {
+        Some(Some(AllocateDesc {
+            desc: AllocatedHandle::File(stream),
+            ..
+        })) => f(stream),
+        _ => Err(libc::EBADF),
+    })
+}
+
+// fwrite over an AllocateFile stream; Err is the errno of a failed write.
+pub fn StdioWrite(index: i32, bytes: &[u8]) -> Result<(), i32> {
+    with_stdio_stream(index, |s| s.write(bytes))
+}
+
+// fflush of one AllocateFile stream; Err is the errno of a failed write.
+pub fn StdioFlush(index: i32) -> Result<(), i32> {
+    with_stdio_stream(index, StdioStream::flush)
+}
+
+// setvbuf-style buffer size (0 keeps BUFSIZ) for an AllocateFile stream.
+pub fn StdioSetBuf(index: i32, bufsize: usize) -> Result<(), i32> {
+    with_stdio_stream(index, |s| {
+        if bufsize > 0 {
+            s.bufsize = bufsize;
+        }
+        Ok(())
+    })
+}
+
+// fflush(NULL) before fork: every open stream's pending output, this
+// backend's stdout included, reaches the kernel before the child starts.
+fn flush_all_stdio(fd: &mut FdState) {
+    use std::io::Write;
+
+    for desc in fd.allocated_descs.iter_mut().flatten() {
+        if let AllocatedHandle::File(stream) = &mut desc.desc {
+            let _ = stream.flush();
+        }
+    }
+    let _ = std::io::stdout().flush();
 }
 
 // Raw kernel fd behind a transient-file value (fstat-style callers).
@@ -735,4 +914,56 @@ pub fn TransientFileRawFd(fd_value: i32) -> Option<RawFd> {
             _ => None,
         })
     })
+}
+
+#[cfg(test)]
+mod stdio_stream_tests {
+    use super::StdioStream;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("fd-stdio-{}-{}", name, std::process::id()))
+    }
+
+    #[test]
+    fn write_preserves_bytes_across_chunk_boundaries() {
+        let path = scratch("bytes");
+        let mut s = StdioStream::new(std::fs::File::create(&path).unwrap());
+        let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        let mut off = 0;
+        for step in [1usize, 7, 1023, 1024, 1025, 4096, 3, 50_000].iter().cycle() {
+            if off >= data.len() {
+                break;
+            }
+            let end = (off + step).min(data.len());
+            s.write(&data[off..end]).unwrap();
+            assert!(s.wbuf.len() < s.bufsize);
+            off = end;
+        }
+        s.flush().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), data);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // This thread's CPU time: a quadratic copy of a large write burns seconds of it, while a loaded box's writeback can
+    // hold the write itself for minutes of wall clock (D3459: 271 s on a box at 90 % io-full).
+    fn thread_cpu() -> std::time::Duration {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: clock_gettime only writes the timespec it is given.
+        assert_eq!(unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) }, 0);
+        std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+    }
+
+    #[test]
+    fn large_single_write_is_linear() {
+        let path = scratch("large");
+        let mut s = StdioStream::new(std::fs::File::create(&path).unwrap());
+        let data = vec![b'D'; 32 << 20];
+        let start = thread_cpu();
+        s.write(&data).unwrap();
+        s.flush().unwrap();
+        let spent = thread_cpu() - start;
+        assert!(spent < std::time::Duration::from_secs(5), "{spent:?} of CPU");
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), data.len() as u64);
+        let _ = std::fs::remove_file(&path);
+    }
 }

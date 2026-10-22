@@ -1,0 +1,29 @@
+-- regress-full-float8-003
+-- with testdata(bits) as (values -- small subnormals (x'0000000000000001'), (x'0000000000000002'), (x'0000000000000003'), (x'0000000000001000'), (x'0000000100000000'), (x'0000010000000000'), (x'0000010100000000'), (x'0000400000000000'), (x'0000400100000000'), (x'0000800000000000'), (x'0000800000000001'), -- these values taken from upstream testsuite (x'00000000000f4240'), (x'00000000016e3600'), (x'0000008cdcdea440'), -- borderline between subnormal and normal (x'000ffffffffffff0'), (x'000ffffffffffff1'), (x'000ffffffffffffe'), (x'000fffffffffffff')) select float8send(flt) as ibits, flt from (select bits::bigint::xfloat8::float8 as flt from testdata offset 0) s;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source values rti=3 rows=18
+    row (c1560:'@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01')
+    row (c1560:'@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02')
+    row (c1560:'@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03')
+    row (c1560:'@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00')
+    row (c1560:'@\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00')
+    row (c1560:'@\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00')
+    row (c1560:'@\x00\x00\x00\x00\x00\x01\x01\x00\x00\x00\x00')
+    row (c1560:'@\x00\x00\x00\x00\x00@\x00\x00\x00\x00\x00')
+    row (c1560:'@\x00\x00\x00\x00\x00@\x01\x00\x00\x00\x00')
+    row (c1560:'@\x00\x00\x00\x00\x00\x80\x00\x00\x00\x00\x00')
+    row (c1560:'@\x00\x00\x00\x00\x00\x80\x00\x00\x00\x00\x01')
+    row (c1560:'@\x00\x00\x00\x00\x00\x00\x00\x00\x0fB@')
+    row (c1560:'@\x00\x00\x00\x00\x00\x00\x00\x01n6\x00')
+    row (c1560:'@\x00\x00\x00\x00\x00\x00\x8c\xdc\xde\xa4@')
+    row (c1560:'@\x00\x00\x00\x00\x0f\xff\xff\xff\xff\xff\xf0')
+    row (c1560:'@\x00\x00\x00\x00\x0f\xff\xff\xff\xff\xff\xf1')
+    row (c1560:'@\x00\x00\x00\x00\x0f\xff\xff\xff\xff\xff\xfe')
+    row (c1560:'@\x00\x00\x00\x00\x0f\xff\xff\xff\xff\xff\xff')
+  project (1=relabel701(fn2076(v3.1)))
+  project (1=fn2427(v1.1), 2=v1.1)
+  outs 1=w8:val
+  outs 1=vl:call2427 2=w8:val
+mapped: SubqueryScan ValuesScan

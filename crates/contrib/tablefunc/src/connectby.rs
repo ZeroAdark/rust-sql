@@ -60,9 +60,9 @@ pub(crate) fn fc_connectby_text(
 ) -> PgResult<Datum> {
     let show_branch = fcinfo.nargs() == 6;
     let branch_delim = if show_branch {
-        arg_bytes(fcinfo, 5)?.to_vec()
+        ::mcx::std_vec_from_slice("tablefunc", &arg_bytes(fcinfo, 5)?)?
     } else {
-        b"~".to_vec()
+        vec![b'~']
     };
     let params = ConnectbyParams {
         relname: arg_str(fcinfo, 0)?.to_string(),
@@ -84,9 +84,9 @@ pub(crate) fn fc_connectby_text_serial(
 ) -> PgResult<Datum> {
     let show_branch = fcinfo.nargs() == 7;
     let branch_delim = if show_branch {
-        arg_bytes(fcinfo, 6)?.to_vec()
+        ::mcx::std_vec_from_slice("tablefunc", &arg_bytes(fcinfo, 6)?)?
     } else {
-        b"~".to_vec()
+        vec![b'~']
     };
     let params = ConnectbyParams {
         relname: arg_str(fcinfo, 0)?.to_string(),
@@ -288,7 +288,7 @@ fn build_tuplestore_recursively(
             level,
             Some(start_with.as_bytes()),
             serial,
-        );
+        )?;
         let val_refs: Vec<Option<&[u8]>> = values.iter().map(|v| v.as_deref()).collect();
         let (d, n) = attinmeta.build(mcx, &val_refs)?;
         srf.putvalues(&d, &n)?;
@@ -312,12 +312,16 @@ fn build_tuplestore_recursively(
     }
     let rows = spi::tuptable_with(h, |t| -> PgResult<Vec<Row>> {
         compat_connectby_tupdescs(&srf.tupdesc, &t.tupdesc)?;
-        let mut rows = Vec::with_capacity(proc as usize);
+        let mut rows = ::mcx::std_vec_with_capacity("tablefunc", proc as usize)?;
         for i in 0..proc as usize {
-            let current_key =
-                spi::SPI_getvalue(mcx, &t.vals[i], &t.tupdesc, 1)?.map(|s| s.to_vec());
-            let parent_key =
-                spi::SPI_getvalue(mcx, &t.vals[i], &t.tupdesc, 2)?.map(|s| s.to_vec());
+            let current_key = match spi::SPI_getvalue(mcx, &t.vals[i], &t.tupdesc, 1)? {
+                Some(s) => Some(::mcx::std_vec_from_slice("tablefunc", s)?),
+                None => None,
+            };
+            let parent_key = match spi::SPI_getvalue(mcx, &t.vals[i], &t.tupdesc, 2)? {
+                Some(s) => Some(::mcx::std_vec_from_slice("tablefunc", s)?),
+                None => None,
+            };
             rows.push(Row { current_key, parent_key });
         }
         Ok(rows)
@@ -339,7 +343,7 @@ fn build_tuplestore_recursively(
         // Extend the branch with the current key (tablefunc.c:1345-1346).
         let current_branch: Vec<u8> = match row.current_key.as_deref() {
             Some(ck) => [branch, params.branch_delim.as_slice(), ck].concat(),
-            None => branch.to_vec(),
+            None => ::mcx::std_vec_from_slice("tablefunc", &branch)?,
         };
 
         let values = build_values(
@@ -349,7 +353,7 @@ fn build_tuplestore_recursively(
             level,
             Some(current_branch.as_slice()),
             serial,
-        );
+        )?;
         let val_refs: Vec<Option<&[u8]>> = values.iter().map(|v| v.as_deref()).collect();
         let (d, n) = attinmeta.build(mcx, &val_refs)?;
         srf.putvalues(&d, &n)?;
@@ -383,18 +387,28 @@ fn build_values(
     level: i32,
     current_branch: Option<&[u8]>,
     serial: &mut i32,
-) -> Vec<Option<Vec<u8>>> {
+) -> PgResult<Vec<Option<Vec<u8>>>> {
     let ncols = if params.show_branch {
         CONNECTBY_NCOLS
     } else {
         CONNECTBY_NCOLS_NOBRANCH
     } + params.show_serial as usize;
-    let mut values: Vec<Option<Vec<u8>>> = vec![None; ncols];
-    values[0] = current_key.map(|s| s.to_vec());
-    values[1] = parent_key.map(|s| s.to_vec());
+    let mut values: Vec<Option<Vec<u8>>> =
+        ::mcx::std_vec_from_elem("tablefunc", None, ncols)?;
+    values[0] = match current_key {
+        Some(s) => Some(::mcx::std_vec_from_slice("tablefunc", s)?),
+        None => None,
+    };
+    values[1] = match parent_key {
+        Some(s) => Some(::mcx::std_vec_from_slice("tablefunc", s)?),
+        None => None,
+    };
     values[2] = Some(level.to_string().into_bytes());
     if params.show_branch {
-        values[3] = current_branch.map(|s| s.to_vec());
+        values[3] = match current_branch {
+            Some(s) => Some(::mcx::std_vec_from_slice("tablefunc", s)?),
+            None => None,
+        };
     }
     if params.show_serial {
         let s = *serial;
@@ -402,7 +416,7 @@ fn build_values(
         let idx = if params.show_branch { 4 } else { 3 };
         values[idx] = Some(s.to_string().into_bytes());
     }
-    values
+    Ok(values)
 }
 
 // strstr(chk_branchstr.data, chk_current_key.data) != NULL (tablefunc.c:1337).
@@ -414,5 +428,5 @@ fn quote_literal_cstr(mcx: Mcx<'_>, s: &str) -> PgResult<String> {
     let v = adt_quote::quote_literal(mcx, s.as_bytes())?;
     // quote_literal only adds ASCII (quotes, E, doubled backslashes) to a
     // valid-UTF-8 input; the map_err keeps the path panic-free regardless.
-    String::from_utf8(v.data().to_vec()).map_err(|_| crate::non_utf8_query_error())
+    String::from_utf8(::mcx::std_vec_from_slice("tablefunc", &v.data())?).map_err(|_| crate::non_utf8_query_error())
 }

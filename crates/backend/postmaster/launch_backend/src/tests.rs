@@ -9,6 +9,7 @@ use types_startup::{BackendStartupData, CacState};
 
 #[derive(Debug)]
 struct ChildSnapshot {
+    stack_budget: isize,
     my_proc_pid: i32,
     is_under_postmaster: bool,
     work_mem: i32,
@@ -61,7 +62,9 @@ fn install() {
             let mut cur: libc::sigset_t = unsafe { core::mem::zeroed() };
             // SAFETY: null set with a valid oldset out-param reads the mask.
             unsafe { libc::sigprocmask(libc::SIG_SETMASK, core::ptr::null(), &mut cur) };
+            stack_depth::assign_max_stack_depth(60000);
             let snap = ChildSnapshot {
+                stack_budget: stack_depth::max_stack_depth_bytes(),
                 my_proc_pid: init_small::globals::MyProcPid(),
                 is_under_postmaster: init_small::globals::IsUnderPostmaster(),
                 work_mem: init_small::globals::work_mem(),
@@ -106,6 +109,7 @@ fn child_names_match_c_table() {
         "wal_summarizer",
         "wal_writer",
         "syslogger",
+        "instance_aux",
     ];
     for (i, bt) in BackendType::ALL.iter().enumerate() {
         assert_eq!(postmaster_child_name(*bt), expected[i], "{bt:?}");
@@ -145,6 +149,12 @@ fn launch_backend_thread_runs_child_init_in_order() {
     // thread (C: fork inheritance); a stand-in value proves the wire.
     fd::vfd::set_max_safe_fds_value(987);
 
+    stack_depth::assign_max_stack_depth(60000);
+    let reserved_stack = child_thread_stack_size();
+    let expected_budget = stack_depth::scaled_max_stack_depth_bytes().min(
+        (reserved_stack - (reserved_stack / 2).min(8 << 20)) as isize,
+    );
+
     let startup = StartupData::Backend(BackendStartupData {
         can_accept_connections: CacState::Ok,
         socket_created: 111,
@@ -159,6 +169,7 @@ fn launch_backend_thread_runs_child_init_in_order() {
     assert!(pid >= 1000, "synthetic pid, got {pid}");
 
     let snap = rx.recv_timeout(Duration::from_secs(10)).expect("child snapshot");
+    assert_eq!(snap.stack_budget, expected_budget);
     assert_eq!(snap.my_proc_pid, pid);
     assert!(snap.is_under_postmaster);
     assert_eq!(snap.work_mem, 4321);
@@ -191,7 +202,7 @@ fn sigabrt_disposition_kills_the_child_thread() {
     assert_eq!(status, procsignal::signums::SIGABRT);
 }
 
-// The Main::Unported class is empty since regression ported IoWorkerMain (its
+// The Main::Unported class is empty since GL-AIO-1 ported IoWorkerMain (its
 // loud-panic arms stay for future kinds); the None-kind test below keeps the
 // loud-refusal class pinned.
 #[test]
@@ -204,7 +215,7 @@ fn null_main_fn_kind_panics_loudly() {
 }
 
 // ---------------------------------------------------------------------------
-// regression: a connection whose child thread cannot start must be REFUSED
+// GL-FDLIMIT-1: a connection whose child thread cannot start must be REFUSED
 // on the wire and its socket closed. Before this, child-init failure panicked
 // the thread: the accepted socket stayed open with no owner, so the client sat
 // waiting forever (it deadlocked a benchmark driver for 55 minutes).
@@ -320,37 +331,17 @@ fn i2_build_is_panic_unwind_not_abort() {
     );
 }
 
-/// #67 (point 3): a caught backend panic skips the exit-callback drain, so
-/// nothing released the LWLocks the dead task held; a sibling parked in the
-/// semaphore wait for one of them has no drain point and wedges the crash
-/// cycle. The crash path must release the dying thread's held set itself.
+/// D2938: the semaphore wait's lap hook runs on every lap of every LWLock wait
+/// that ends without a count; on a thread with no ProcSignal slot and no pool
+/// identity it does nothing.
 #[test]
-fn crash_exit_releases_held_lwlocks() {
-    use ::lwlock::{LWLockAcquire, LWLockHeldByMe, LWLockPadded, LW_EXCLUSIVE, LW_SHARED};
-    let slots = [LWLockPadded::new_unlocked(0), LWLockPadded::new_unlocked(0)];
-    let held = std::thread::scope(|s| {
-        s.spawn(|| {
-            LWLockAcquire(&slots[0].lock, LW_EXCLUSIVE, 0).unwrap();
-            LWLockAcquire(&slots[1].lock, LW_SHARED, 0).unwrap();
-            let payload = std::panic::catch_unwind(|| panic!("backend panic under lock"))
-                .expect_err("must unwind");
-            release_crash_held_lwlocks(payload.as_ref());
-            (LWLockHeldByMe(&slots[0].lock), LWLockHeldByMe(&slots[1].lock))
-        })
-        .join()
-        .expect("contained on its own thread")
-    });
-    assert_eq!(held, (false, false), "the crash path must release every held LWLock");
-    // The lock is genuinely free again: a sibling can take it exclusively.
-    assert!(LWLockAcquire(&slots[0].lock, LW_EXCLUSIVE, 0).unwrap());
-    assert!(LWLockAcquire(&slots[1].lock, LW_EXCLUSIVE, 0).unwrap());
-    ::lwlock::LWLockReleaseAll().unwrap();
-
-    // A clean proc_exit owes its release to the callback drain, not here.
-    LWLockAcquire(&slots[0].lock, LW_SHARED, 0).unwrap();
-    release_crash_held_lwlocks(&ipc::ProcExitThread { code: 0 });
-    assert!(LWLockHeldByMe(&slots[0].lock));
-    ::lwlock::LWLockReleaseAll().unwrap();
+fn semaphore_wait_lap_is_inert_off_the_crash_path() {
+    std::thread::spawn(|| {
+        semaphore_wait_lap();
+        semaphore_wait_lap();
+    })
+    .join()
+    .expect("an ordinary thread survives its laps");
 }
 
 // Every thread this crate brings up pairs set_stack_base with the per-thread

@@ -280,7 +280,8 @@ pub fn quote_identifier_bytes(ident: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     if safe {
         return std::borrow::Cow::Borrowed(ident);
     }
-    let mut quoted = Vec::with_capacity(ident.len() + nquotes + 2);
+    let mut quoted = Vec::new();
+    let _ = quoted.try_reserve(ident.len() + nquotes + 2);
     quoted.push(b'"');
     for &b in ident {
         if b == b'"' {

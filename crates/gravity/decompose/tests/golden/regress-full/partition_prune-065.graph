@@ -1,0 +1,12 @@
+-- regress-full-partition_prune-065
+-- select explain_parallel_append('execute ab_q4 (2, 2)');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project ()
+  srf tlist [1:RegexpMatches fn2763 fn2763($3, c25:'Index Searches: \d+')]
+  project (1=fn2763($3, c25:'Index Searches: \d+'))
+  outs
+  outs 1=vl:call2763
+mapped: Result ProjectSet

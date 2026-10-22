@@ -35,7 +35,7 @@ pub fn gistXLogUpdate(
     let todelete_bytes = unsafe {
         core::slice::from_raw_parts(todelete.as_ptr().cast::<u8>(), todelete.len() * 2)
     };
-    let mut bufdata: Vec<&[u8]> = Vec::with_capacity(1 + itup.len());
+    let mut bufdata: Vec<&[u8]> = ::mcx::std_vec_with_capacity("access", 1 + itup.len())?;
     bufdata.push(todelete_bytes);
     for it in itup {
         bufdata.push(it);
@@ -119,13 +119,16 @@ pub fn gistXLogSplit(
     }
     .encode();
 
-    let nums: Vec<[u8; 4]> = dist.iter().map(|d| d.block_num.to_ne_bytes()).collect();
-    let mut bufdatas: Vec<[&[u8]; 2]> = Vec::with_capacity(npage);
+    let mut nums: Vec<[u8; 4]> = ::mcx::std_vec_with_capacity("gist", dist.len())?;
+    for d in dist {
+        nums.push(d.block_num.to_ne_bytes());
+    }
+    let mut bufdatas: Vec<[&[u8]; 2]> = ::mcx::std_vec_with_capacity("gist", npage)?;
     for (i, d) in dist.iter().enumerate() {
         bufdatas.push([&nums[i], &d.list]);
     }
 
-    let mut bufs: Vec<XLogRegBuf<'_>> = Vec::with_capacity(npage + 1);
+    let mut bufs: Vec<XLogRegBuf<'_>> = ::mcx::std_vec_with_capacity("gist", npage + 1)?;
     if let Some(lc) = leftchildbuf {
         bufs.push(XLogRegBuf {
             block_id: 0,

@@ -25,6 +25,7 @@ pub mod heapdesc;
 pub mod logicalmsgdesc;
 pub mod mxactdesc;
 pub mod nbtdesc;
+pub mod pgrcdesc;
 pub mod relmapdesc;
 pub mod replorigindesc;
 pub mod seqdesc;

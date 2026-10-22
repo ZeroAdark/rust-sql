@@ -1,0 +1,115 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1upd s2upd s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO dn_t t USING (SELECT DISTINCT ON (grp) id, val FROM dn_s ORDER BY grp, val DESC, n) s ON t.id = s.id WHEN MATCHED AND t.hits < 50 THEN UPDATE SET flag = true, hits = t.hits + 1, val = s.val;
+QUERY PLAN                                                         
+-------------------------------------------------------------------
+Merge on dn_t t                                                    
+  ->  Nested Loop                                                  
+        ->  Subquery Scan on s                                     
+              ->  Unique                                           
+                    ->  Sort                                       
+                          Sort Key: dn_s.grp, dn_s.val DESC, dn_s.n
+                          ->  Seq Scan on dn_s                     
+        ->  Index Scan using dn_t_pkey on dn_t t                   
+              Index Cond: (id = s.id)                              
+(9 rows)
+
+step s1upd: UPDATE dn_t SET hits = hits + 10, val = val + 1 WHERE id = 1849;
+step s2upd: MERGE INTO dn_t t USING (SELECT DISTINCT ON (grp) id, val FROM dn_s ORDER BY grp, val DESC, n) s ON t.id = s.id WHEN MATCHED AND t.hits < 50 THEN UPDATE SET flag = true, hits = t.hits + 1, val = s.val; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT id, n, val, flag, hits FROM dn_t WHERE id IN (1811, 1830, 1849, 1943, 1962, 1981, 1849000) ORDER BY id;
+  id|   n|val|flag|hits
+----+----+---+----+----
+1811|1811|983|t   |   1
+1830|1830|990|t   |   1
+1849|1849|997|t   |  11
+1943|1943|979|t   |   1
+1962|1962|986|t   |   1
+1981|1981|993|t   |   1
+(6 rows)
+
+
+starting permutation: s1key s2upd s1c s2sel
+step s1key: UPDATE dn_t SET id = 1849000 WHERE id = 1849;
+step s2upd: MERGE INTO dn_t t USING (SELECT DISTINCT ON (grp) id, val FROM dn_s ORDER BY grp, val DESC, n) s ON t.id = s.id WHEN MATCHED AND t.hits < 50 THEN UPDATE SET flag = true, hits = t.hits + 1, val = s.val; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT id, n, val, flag, hits FROM dn_t WHERE id IN (1811, 1830, 1849, 1943, 1962, 1981, 1849000) ORDER BY id;
+     id|   n|val|flag|hits
+-------+----+---+----+----
+   1811|1811|983|t   |   1
+   1830|1830|990|t   |   1
+   1943|1943|979|t   |   1
+   1962|1962|986|t   |   1
+   1981|1981|993|t   |   1
+1849000|1849|413|f   |   0
+(6 rows)
+
+
+starting permutation: s1del s2upd s1c s2sel
+step s1del: DELETE FROM dn_t WHERE id = 1849;
+step s2upd: MERGE INTO dn_t t USING (SELECT DISTINCT ON (grp) id, val FROM dn_s ORDER BY grp, val DESC, n) s ON t.id = s.id WHEN MATCHED AND t.hits < 50 THEN UPDATE SET flag = true, hits = t.hits + 1, val = s.val; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT id, n, val, flag, hits FROM dn_t WHERE id IN (1811, 1830, 1849, 1943, 1962, 1981, 1849000) ORDER BY id;
+  id|   n|val|flag|hits
+----+----+---+----+----
+1811|1811|983|t   |   1
+1830|1830|990|t   |   1
+1943|1943|979|t   |   1
+1962|1962|986|t   |   1
+1981|1981|993|t   |   1
+(5 rows)
+
+
+starting permutation: s1qual s2upd s1c s2sel
+step s1qual: UPDATE dn_t SET hits = 100 WHERE id = 1849;
+step s2upd: MERGE INTO dn_t t USING (SELECT DISTINCT ON (grp) id, val FROM dn_s ORDER BY grp, val DESC, n) s ON t.id = s.id WHEN MATCHED AND t.hits < 50 THEN UPDATE SET flag = true, hits = t.hits + 1, val = s.val; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT id, n, val, flag, hits FROM dn_t WHERE id IN (1811, 1830, 1849, 1943, 1962, 1981, 1849000) ORDER BY id;
+  id|   n|val|flag|hits
+----+----+---+----+----
+1811|1811|983|t   |   1
+1830|1830|990|t   |   1
+1849|1849|413|f   | 100
+1943|1943|979|t   |   1
+1962|1962|986|t   |   1
+1981|1981|993|t   |   1
+(6 rows)
+
+
+starting permutation: s1upd s2del s1c s2sel
+step s1upd: UPDATE dn_t SET hits = hits + 10, val = val + 1 WHERE id = 1849;
+step s2del: MERGE INTO dn_t t USING (SELECT DISTINCT ON (grp) id, val FROM dn_s ORDER BY grp, val DESC, n) s ON t.id = s.id WHEN MATCHED AND t.hits >= 10 THEN DELETE WHEN MATCHED THEN UPDATE SET flag = true; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2sel: SELECT id, n, val, flag, hits FROM dn_t WHERE id IN (1811, 1830, 1849, 1943, 1962, 1981, 1849000) ORDER BY id;
+  id|   n|val|flag|hits
+----+----+---+----+----
+1811|1811|  7|t   |   0
+1830|1830|710|t   |   0
+1943|1943|891|t   |   0
+1962|1962|594|t   |   0
+1981|1981|297|t   |   0
+(5 rows)
+
+
+starting permutation: s1upd s2upd s1a s2sel
+step s1upd: UPDATE dn_t SET hits = hits + 10, val = val + 1 WHERE id = 1849;
+step s2upd: MERGE INTO dn_t t USING (SELECT DISTINCT ON (grp) id, val FROM dn_s ORDER BY grp, val DESC, n) s ON t.id = s.id WHEN MATCHED AND t.hits < 50 THEN UPDATE SET flag = true, hits = t.hits + 1, val = s.val; <waiting ...>
+step s1a: ROLLBACK;
+step s2upd: <... completed>
+step s2sel: SELECT id, n, val, flag, hits FROM dn_t WHERE id IN (1811, 1830, 1849, 1943, 1962, 1981, 1849000) ORDER BY id;
+  id|   n|val|flag|hits
+----+----+---+----+----
+1811|1811|983|t   |   1
+1830|1830|990|t   |   1
+1849|1849|997|t   |   1
+1943|1943|979|t   |   1
+1962|1962|986|t   |   1
+1981|1981|993|t   |   1
+(6 rows)
+

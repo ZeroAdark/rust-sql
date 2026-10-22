@@ -1,0 +1,5 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT string_agg(t, ',' ORDER BY t), array_agg(t ORDER BY t) FROM (VALUES ('b'), ('a'), ('c')) v(t)
+cols: string_agg	array_agg
+[pg]
+a,b,c	{a,b,c}

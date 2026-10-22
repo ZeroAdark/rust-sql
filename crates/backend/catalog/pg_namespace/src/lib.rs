@@ -84,13 +84,11 @@ pub fn NamespaceCreate<'mcx>(
 // The schema-deletion probe's miss: C runs it through DropObjectById
 // (dependency.c:1206), `elog(ERROR, "cache lookup failed for %s %u",
 // get_object_class_descr(NamespaceRelationId), oid)` -- catchable, SQLSTATE
-// XX000 (elog's default for ERROR), never a backend abort.  DIVERGENCE: C's
-// class_descr for pg_namespace is "schema" (objectaddress.c ObjectProperty),
-// this keeps pgrust's existing "namespace" wording.
+// XX000 (elog's default for ERROR); class_descr for pg_namespace is "schema".
 #[cold]
 #[inline(never)]
 fn namespace_lookup_failed(schemaOid: Oid) -> Box<PgError> {
-    Box::new(PgError::error(format!("cache lookup failed for namespace {schemaOid}")))
+    Box::new(PgError::error(format!("cache lookup failed for schema {schemaOid}")))
 }
 
 // RemoveSchemaById (schemacmds.c), hosted here: schemacmds reaches
@@ -119,4 +117,14 @@ pub fn RemoveSchemaById<'mcx>(mcx: Mcx<'mcx>, schemaOid: Oid) -> PgResult<()> {
     catalog_indexing::CatalogTupleDelete(&rel, &tid)?;
     genam::systable_endscan(mcx, scan)?;
     rel.close(RowExclusiveLock)
+}
+
+#[cfg(test)]
+mod lookup_failed_tests {
+    #[test]
+    fn schema_miss_uses_class_descr() {
+        let e = super::namespace_lookup_failed(16384);
+        assert_eq!(e.message(), "cache lookup failed for schema 16384");
+        assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    }
 }

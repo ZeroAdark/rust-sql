@@ -1,0 +1,9 @@
+-- srf-039.3
+-- SELECT sum(a.c * o.id), sum(a.s) FROM sro o, LATERAL (SELECT count(*) AS c, sum(x) AS s FROM sr_f(o.k) x) a;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn1574(c2205:16409))
+  outs 1=w8:val
+mapped: Result

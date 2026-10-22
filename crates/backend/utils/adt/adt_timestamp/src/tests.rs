@@ -20,10 +20,10 @@ fn gmt_session() {
     tz::pg_timezone_initialize().unwrap();
 }
 
-fn zone_session(name: &[u8]) -> &'static tz::PgTz {
+fn zone_session(name: &[u8]) -> tz::PgTzRef {
     gmt_session();
     let z = tz::pg_tzset(name).unwrap().expect("zone loads from PGRUST_TZDIR");
-    tz::set_session_timezone(Some(z));
+    tz::set_session_timezone(Some(z.clone()));
     z
 }
 
@@ -511,14 +511,14 @@ fn get_current_time_usec_memoizes_per_ts_and_zone() {
     assert_eq!((tm.tm_year, tm.tm_mon, tm.tm_mday), (2000, 1, 1));
     assert_eq!((tm.tm_hour, tm.tm_min, tm.tm_sec, fsec, tzv), (0, 0, 0, 0, 0));
 
-    let cached = CURRENT_TM_CACHE.with(core::cell::Cell::get).expect("memo populated");
+    let cached = CURRENT_TM_CACHE.with(|c| c.borrow().clone()).expect("memo populated");
     assert_eq!(cached.ts, 0);
 
     let mut tm2 = pg_tm::default();
     GetCurrentDateTime(&mut tm2).unwrap();
     assert_eq!(tm2, tm);
-    let still = CURRENT_TM_CACHE.with(core::cell::Cell::get).unwrap();
-    assert!(core::ptr::eq(still.zone, cached.zone), "second call reused the memo entry");
+    let still = CURRENT_TM_CACHE.with(|c| c.borrow().clone()).unwrap();
+    assert!(tz::PgTzRef::ptr_eq(&still.zone, &cached.zone), "second call reused the memo entry");
 
     // timezone change invalidates the memo
     let kolkata = zone_session(b"Asia/Kolkata");
@@ -526,9 +526,9 @@ fn get_current_time_usec_memoizes_per_ts_and_zone() {
     GetCurrentTimeUsec(&mut tm, &mut fsec, Some(&mut tzv2)).unwrap();
     assert_eq!(tzv2, -19800);
     assert_eq!((tm.tm_hour, tm.tm_min), (5, 30));
-    assert!(core::ptr::eq(
-        CURRENT_TM_CACHE.with(core::cell::Cell::get).unwrap().zone,
-        kolkata
+    assert!(tz::PgTzRef::ptr_eq(
+        &CURRENT_TM_CACHE.with(|c| c.borrow().clone()).unwrap().zone,
+        &kolkata
     ));
 
     // seam side stays in sync
@@ -546,7 +546,7 @@ fn conversions_round_trip_under_session_zone() {
     let tstz = tstz_in("2025-06-01 12:00:00+00");
     assert_eq!(ts_out(timestamptz2timestamp(tstz).unwrap()), "2025-06-01 08:00:00");
     assert_eq!(timestamp2timestamptz(DT_NOBEGIN).unwrap(), DT_NOBEGIN);
-    assert_eq!(timestamp_cmp_timestamptz_internal(ts, timestamp2timestamptz(ts).unwrap()), 0);
+    assert_eq!(timestamp_cmp_timestamptz_internal(ts, timestamp2timestamptz(ts).unwrap()).unwrap(), 0);
 
     let local = GetSQLLocalTimestamp(-1).unwrap();
     assert_eq!(local, timestamptz2timestamp(xact::GetCurrentTransactionStartTimestamp()).unwrap());
@@ -1014,6 +1014,30 @@ fn interval_avg_serialize_outside_aggregate_is_error() {
 }
 
 #[test]
+fn d400_interval_mul_div_fma_sites() {
+    let arm = cfg!(target_arch = "aarch64");
+    let t = |a: i64, x: i64| if arm { a } else { x };
+    for (site, (month, day, time), factor, want) in [
+        ("3731", (19, 9, 10_622_038_250i64), 7.294, (138, 83, t(97_003_546_995, 97_003_546_996))),
+        ("3707", (43, 712, 329_625), 8.19829895, (352, 5852, t(85_927_277_724, 85_927_364_124))),
+        ("3709", (525, 957, 319_698), 9.722127502, (5104, 9307, t(50_475_863_915, 50_475_863_914))),
+    ] {
+        let span = Interval { month, day, time };
+        let (m, d, us) = want;
+        assert_eq!(
+            crate::interval::interval_mul(&span, factor).unwrap(),
+            Interval { month: m, day: d, time: us },
+            "timestamp.c:{site}"
+        );
+    }
+    let span = Interval { month: 18, day: 13, time: 46_388_082_699 };
+    assert_eq!(
+        crate::interval::interval_div(&span, 2.8).unwrap(),
+        Interval { month: 6, day: 17, time: t(59_767_184_736, 59_767_184_735) }
+    );
+}
+
+#[test]
 fn out_functions_do_not_alias_across_fmgrinfos() {
     use ::datum::Datum;
     use ::types_fmgr::{FmgrInfo, LocalFcinfo, PGFunction};
@@ -1060,7 +1084,10 @@ fn out_functions_do_not_alias_across_fmgrinfos() {
     ] {
         let mut f1 = FmgrInfo::new(f, oid, 1, true, false);
         let mut f2 = FmgrInfo::new(f, oid, 1, true, false);
-        let mut fcinfo = LocalFcinfo::<1>::new(0);
+        let ctx = ::mcx::MemoryContext::new_bump("t");
+        let mut fcinfo = LocalFcinfo::<1>::fresh(0);
+        // SAFETY: ctx outlives both calls.
+        unsafe { fcinfo.set_result_mcx(ctx.mcx()) };
         fcinfo.set_arg(0, a);
         let d1 = f1.invoke(&mut fcinfo).unwrap();
         fcinfo.set_arg(0, b);
@@ -1108,7 +1135,7 @@ fn cstring_array_image(elems: &[&[u8]], bitmap: Option<u8>) -> Vec<u8> {
     img
 }
 
-// audit-18.6 regression: arrayutils.c:249 array_contains_nulls inspects
+// audit-18.6 fp-adt-b1#2: arrayutils.c:249 array_contains_nulls inspects
 // the bitmap bits, so ('{NULL,6}'::cstring[])[2:2] (bitmap present, no
 // null) is the typmod 6, not "must not contain nulls".
 #[test]
@@ -1126,7 +1153,7 @@ fn typmod_array_bitmap_without_nulls_is_accepted() {
     assert_eq!(err.message(), "typmod array must not contain nulls");
 }
 
-// audit-18.6 regression / regression: C parses every element
+// audit-18.6 fp-adt-b1#3 / fp-adt-date-p1#2: C parses every element
 // (pg_strtoint32) before the caller counts them, so nine elements with a
 // bad integer are 22P02, and nine good ones are the caller's 22023.
 #[test]
@@ -1154,7 +1181,7 @@ fn typmod_array_parses_elements_before_count_cap() {
     assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INVALID_PARAMETER_VALUE);
 }
 
-// audit-18.6 regression: a non-UTF-8 element (SQL_ASCII) is pg_strtoint32's
+// audit-18.6 fp-adt-b1#4: a non-UTF-8 element (SQL_ASCII) is pg_strtoint32's
 // 22P02 quoting the raw bytes, not a UTF-8 decoding failure.
 #[test]
 fn typmod_array_non_utf8_element_is_invalid_integer() {
@@ -1201,4 +1228,85 @@ fn unit_messages_keep_non_utf8_bytes() {
     assert_eq!(err.message_raw.as_deref(), Some(&b"unit \"\xff\" not recognized for type interval"[..]));
     let err = timestamp_trunc(b"gibberish", 0).unwrap_err();
     assert!(err.message_raw.is_none());
+}
+
+#[test]
+fn timestamp_in_quotes_the_raw_input_bytes() {
+    gmt_session();
+    let err = timestamp_in(b"\xff", -1, None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type timestamp: \"\xff\"".as_slice())
+    );
+    let err = timestamptz_in(b"\xff", -1, None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type timestamp with time zone: \"\xff\"".as_slice())
+    );
+    let err = timestamp_in("nope", -1, None).unwrap_err();
+    assert!(err.message_raw.is_none());
+    assert_eq!(err.message(), "invalid input syntax for type timestamp: \"nope\"");
+}
+
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn interval_mul_fractional_remainders_match_c() {
+    for (month, day, factor, expected_month, expected_day, expected_time) in [
+        (0, 999, 80.751, 0, 80670, 21_513_600_000),
+        (0, 999, 100.001, 0, 99900, 86_313_600_000),
+        (0, 999, 1234.5678, 0, 1233333, 20_062_080_003),
+        (0, 999, 12345.6789, 0, 12333333, 19_103_040_069),
+        (0, 100, 12345.6789, 0, 1234567, 76_896_000_007),
+        (-15, 0, 3.66990133, -55, -1, -39_363_753_600),
+    ] {
+        let span = Interval { month, day, time: 0 };
+        assert_eq!(
+            crate::interval::interval_mul(&span, factor).unwrap(),
+            Interval { month: expected_month, day: expected_day, time: expected_time },
+            "{span:?} * {factor}",
+        );
+    }
+}
+
+// PG_GETARG_ARRAYTYPE_P detoasts: a typmod array that passed through a formed
+// tuple arrives with a 1-byte header.
+mod typmodin_short_header {
+    use ::datum::Datum;
+    use ::mcx::MemoryContext;
+    use ::types_fmgr::LocalFcinfo;
+
+    fn install_short_expand() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            if !::detoast_seams::detoast_attr::is_installed() {
+                ::detoast_seams::detoast_attr::set(|mcx, image| {
+                    assert_eq!(image[0] & 0x01, 0x01, "1B short header");
+                    let total = image.len() + 3;
+                    let mut v = ::mcx::vec_with_capacity_in(mcx, total)?;
+                    ::mcx::vec_append_bytes(&mut v, &((total as u32) << 2).to_ne_bytes())?;
+                    ::mcx::vec_append_bytes(&mut v, &image[1..])?;
+                    Ok(v)
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn timestamptypmodin_detoasts_short_header_array() {
+        install_short_expand();
+        let mut body = Vec::new();
+        for w in [1i32, 0, 2275, 1, 1] {
+            body.extend_from_slice(&w.to_ne_bytes());
+        }
+        body.extend_from_slice(b"3\0" as &[u8]);
+        let mut img = vec![(((body.len() + 1) as u8) << 1) | 0x01];
+        img.extend_from_slice(&body);
+        let ctx = MemoryContext::new_bump("t");
+        let mut fci = LocalFcinfo::<1>::fresh(0);
+        // SAFETY: ctx outlives the call.
+        unsafe { fci.set_result_mcx(ctx.mcx()) };
+        fci.set_arg(0, Datum::from_usize(img.as_ptr() as usize));
+        let d = crate::builtins::fc_timestamptypmodin(None, &mut fci).unwrap();
+        assert_eq!(d.as_i32(), 3);
+    }
 }

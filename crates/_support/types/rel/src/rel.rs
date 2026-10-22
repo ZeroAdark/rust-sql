@@ -48,9 +48,9 @@ pub struct RelationData<'mcx> {
     pub rd_indoption: PgVec<'mcx, i16>,
     pub rd_indcollation: PgVec<'mcx, Oid>,
     // Boxed (D3.2 shell diet): RdOptions is a Copy enum whose largest variant
-    // (PgrcolumnarOptions' inline key/codec buffers) is ~2.5KB — carried
-    // inline it dominated sizeof(RelationData) (3.9KB) for every relation,
-    // options or not. Most relations have None and pay nothing.
+    // carries inline string buffers — carried inline it dominated
+    // sizeof(RelationData) for every relation, options or not. Most relations
+    // have None and pay nothing.
     pub rd_options: Option<std::boxed::Box<RdOptions>>,
     pub pgstat_enabled: Cell<bool>,
     // C rd->pgstat_info: (gen, counts) raw link into pgstat's pending relation
@@ -70,6 +70,7 @@ pub struct RelationData<'mcx> {
     // C rd_amcache, spgist arm (SpGistCache POD: opclass config + lastUsedPages).
     // Boxed for the same reason as the gin arm (128B inline, spgist-only use).
     pub rd_amcache_spgist: RefCell<Option<std::boxed::Box<types_spgist::SpGistCache>>>,
+    pub rd_amcache_bloom: RefCell<Option<std::boxed::Box<types_bloom::BloomOptions>>>,
     // C rd_support: nkey x amsupport support-proc OIDs, row-major.
     pub rd_support: PgVec<'mcx, Oid>,
     // C rd_support/rd_supportinfo (rule-5 cache), resolved once per column;
@@ -127,6 +128,7 @@ pub struct RdAmCacheGinCol {
     pub key_byval: bool,
     pub key_len: i16,
     pub key_storage: i8,
+    pub secdef: [Oid; 6],
 }
 
 /// GIN's resolved opclass state (gin's GinState mirror; INDEX_MAX_KEYS slots).
@@ -244,11 +246,11 @@ impl<'mcx> RelationData<'mcx> {
     #[inline]
     pub fn get_parallel_workers(&self, defaultpw: i32) -> i32 {
         // C's RelationGetParallelWorkers reads StdRdOptions; pgrcolumnar carries
-        // the same option in its own parse struct (same -1 = unset contract).
+        // the heap vocabulary verbatim (same -1 = unset contract).
         match self.rd_options.as_ref() {
             Some(o) => match &**o {
                 crate::reloptions::RdOptions::Std(opts) => opts.parallel_workers,
-                crate::reloptions::RdOptions::Pgrcolumnar(opts) => opts.parallel_workers,
+                crate::reloptions::RdOptions::Pgrcolumnar(opts) => opts.std.parallel_workers,
                 _ => defaultpw,
             },
             None => defaultpw,
@@ -433,6 +435,7 @@ pub(crate) mod tests {
             rd_amcache_hash: Default::default(),
             rd_amcache_gin: Default::default(),
             rd_amcache_spgist: Default::default(),
+            rd_amcache_bloom: Default::default(),
             rd_support: PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),

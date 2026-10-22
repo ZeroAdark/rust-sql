@@ -215,10 +215,16 @@ pub fn shred_chunk<'mcx, 'r>(
                     .lookup_borrowed(segs)
                     .is_some_and(|id| elected_of_path.contains_key(&id))
             };
+            let to_vec_segs = |segs: &[&'r [u8]]| {
+                let mut out = Vec::new();
+                let _ = out.try_reserve_exact(segs.len());
+                out.extend_from_slice(segs);
+                out
+            };
             let mut collect = |segs: &[&'r [u8]], v: PathValue<'r>| {
                 positions.push(match v {
-                    PathValue::Scalar(item) => RowPos::Scalar(segs.to_vec(), item),
-                    PathValue::Subtree(c) => RowPos::Subtree(segs.to_vec(), c),
+                    PathValue::Scalar(item) => RowPos::Scalar(to_vec_segs(segs), item),
+                    PathValue::Subtree(c) => RowPos::Subtree(to_vec_segs(segs), c),
                     PathValue::Root => RowPos::Root,
                 });
             };
@@ -244,7 +250,7 @@ pub fn shred_chunk<'mcx, 'r>(
                     staged.push((
                         manifest.path(id).bucket(manifest.nbuckets),
                         id,
-                        image[..].to_vec(),
+                        ::mcx::std_vec_from_slice("adt", &image[..])?,
                     ));
                 }
                 RowPos::Subtree(segs, c) => {
@@ -256,7 +262,7 @@ pub fn shred_chunk<'mcx, 'r>(
                     staged.push((
                         manifest.path(id).bucket(manifest.nbuckets),
                         id,
-                        image[..].to_vec(),
+                        ::mcx::std_vec_from_slice("adt", &image[..])?,
                     ));
                 }
                 RowPos::Root => {
@@ -264,7 +270,7 @@ pub fn shred_chunk<'mcx, 'r>(
                     // it back untouched).
                     let root = JsonPath::root();
                     let id = manifest.intern(root.clone());
-                    let mut img = Vec::with_capacity(4 + payload.len());
+                    let mut img = ::mcx::std_vec_with_capacity("adt", 4 + payload.len())?;
                     img.extend_from_slice(&(((4 + payload.len()) as u32) << 2).to_ne_bytes());
                     img.extend_from_slice(payload);
                     staged.push((root.bucket(manifest.nbuckets), id, img));

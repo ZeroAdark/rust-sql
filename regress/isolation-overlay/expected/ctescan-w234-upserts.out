@@ -1,0 +1,159 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1u s2w s1c s2c s3sel
+step s1u: UPDATE wz SET v = 's1' WHERE k = 2;
+step s2w: 
+ WITH simpletup AS (SELECT 2 k, 'Green' v),
+ upsert_cte AS (
+   INSERT INTO wz VALUES (2, 'Blue') ON CONFLICT (k) DO
+     UPDATE SET (k, v) = (SELECT k, v FROM simpletup WHERE simpletup.k = wz.k)
+     RETURNING k, v)
+ INSERT INTO wz VALUES (2, 'Red') ON CONFLICT (k) DO
+ UPDATE SET (k, v) = (SELECT k, v FROM upsert_cte WHERE upsert_cte.k = wz.k)
+ RETURNING k, v;
+ <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+k|v
+-+-
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v FROM wz WHERE k BETWEEN 1 AND 3 ORDER BY k;
+k|v     
+-+------
+1|insert
+2|Green 
+3|insert
+(3 rows)
+
+
+starting permutation: s1u s2w s1r s2c s3sel
+step s1u: UPDATE wz SET v = 's1' WHERE k = 2;
+step s2w: 
+ WITH simpletup AS (SELECT 2 k, 'Green' v),
+ upsert_cte AS (
+   INSERT INTO wz VALUES (2, 'Blue') ON CONFLICT (k) DO
+     UPDATE SET (k, v) = (SELECT k, v FROM simpletup WHERE simpletup.k = wz.k)
+     RETURNING k, v)
+ INSERT INTO wz VALUES (2, 'Red') ON CONFLICT (k) DO
+ UPDATE SET (k, v) = (SELECT k, v FROM upsert_cte WHERE upsert_cte.k = wz.k)
+ RETURNING k, v;
+ <waiting ...>
+step s1r: ROLLBACK;
+step s2w: <... completed>
+k|v
+-+-
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v FROM wz WHERE k BETWEEN 1 AND 3 ORDER BY k;
+k|v     
+-+------
+1|insert
+2|Green 
+3|insert
+(3 rows)
+
+
+starting permutation: s1d s2w s1c s2c s3sel
+step s1d: DELETE FROM wz WHERE k = 2;
+step s2w: 
+ WITH simpletup AS (SELECT 2 k, 'Green' v),
+ upsert_cte AS (
+   INSERT INTO wz VALUES (2, 'Blue') ON CONFLICT (k) DO
+     UPDATE SET (k, v) = (SELECT k, v FROM simpletup WHERE simpletup.k = wz.k)
+     RETURNING k, v)
+ INSERT INTO wz VALUES (2, 'Red') ON CONFLICT (k) DO
+ UPDATE SET (k, v) = (SELECT k, v FROM upsert_cte WHERE upsert_cte.k = wz.k)
+ RETURNING k, v;
+ <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+ERROR:  ON CONFLICT DO UPDATE command cannot affect row a second time
+step s2c: COMMIT;
+step s3sel: SELECT k, v FROM wz WHERE k BETWEEN 1 AND 3 ORDER BY k;
+k|v     
+-+------
+1|insert
+3|insert
+(2 rows)
+
+
+starting permutation: s1u s2x s1c s2c s3sel s3y
+step s1u: UPDATE wz SET v = 's1' WHERE k = 2;
+step s2x: WITH u AS (INSERT INTO wy VALUES (2, 0, 0) ON CONFLICT (k) DO UPDATE SET n = wy.n + 1 RETURNING k, n) INSERT INTO wz VALUES (2, 'main') ON CONFLICT (k) DO UPDATE SET v = wz.v || '+main' RETURNING k, v; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+k|v      
+-+-------
+2|s1+main
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v FROM wz WHERE k BETWEEN 1 AND 3 ORDER BY k;
+k|v      
+-+-------
+1|insert 
+2|s1+main
+3|insert 
+(3 rows)
+
+step s3y: SELECT k, g, n FROM wy WHERE k = 2;
+k|g| n
+-+-+--
+2|2|15
+(1 row)
+
+
+starting permutation: s1y s2x s1c s2c s3sel s3y
+step s1y: UPDATE wy SET n = 100 WHERE k = 2;
+step s2x: WITH u AS (INSERT INTO wy VALUES (2, 0, 0) ON CONFLICT (k) DO UPDATE SET n = wy.n + 1 RETURNING k, n) INSERT INTO wz VALUES (2, 'main') ON CONFLICT (k) DO UPDATE SET v = wz.v || '+main' RETURNING k, v; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+k|v          
+-+-----------
+2|insert+main
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v FROM wz WHERE k BETWEEN 1 AND 3 ORDER BY k;
+k|v          
+-+-----------
+1|insert     
+2|insert+main
+3|insert     
+(3 rows)
+
+step s3y: SELECT k, g, n FROM wy WHERE k = 2;
+k|g|  n
+-+-+---
+2|2|101
+(1 row)
+
+
+starting permutation: s1d s2x s1c s2c s3sel s3y
+step s1d: DELETE FROM wz WHERE k = 2;
+step s2x: WITH u AS (INSERT INTO wy VALUES (2, 0, 0) ON CONFLICT (k) DO UPDATE SET n = wy.n + 1 RETURNING k, n) INSERT INTO wz VALUES (2, 'main') ON CONFLICT (k) DO UPDATE SET v = wz.v || '+main' RETURNING k, v; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+k|v   
+-+----
+2|main
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v FROM wz WHERE k BETWEEN 1 AND 3 ORDER BY k;
+k|v     
+-+------
+1|insert
+2|main  
+3|insert
+(3 rows)
+
+step s3y: SELECT k, g, n FROM wy WHERE k = 2;
+k|g| n
+-+-+--
+2|2|15
+(1 row)
+

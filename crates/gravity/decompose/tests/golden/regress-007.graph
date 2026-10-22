@@ -1,0 +1,14 @@
+-- regress-007
+-- SELECT a FROM t WHERE a > 10 LIMIT 3;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=4990 end=sink
+  nodes n1@0 n0@2
+  source range rel=16395 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op521(v1.1, c23:10)
+  project (1=v1.1)
+  limit count=3 offset=all
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val
+mapped: SeqScan Limit

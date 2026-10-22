@@ -40,7 +40,7 @@ fn cases() -> Vec<Vec<i32>> {
 
 #[test]
 fn tie_order_matches_verbatim_c() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cref");
+    let dir = manifest_dir().join("cref");
     let exe = std::env::temp_dir().join(format!("pg_qsort_cref_{}", std::process::id()));
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let status = Command::new(&cc)
@@ -90,4 +90,9 @@ fn tie_order_matches_verbatim_c() {
         );
     }
     let _ = std::fs::remove_file(&exe);
+}
+
+fn manifest_dir() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| std::env::var_os("CARGO_MANIFEST_DIR").map(Into::into).expect("CARGO_MANIFEST_DIR unset: run under cargo test (D793-b)"))
 }

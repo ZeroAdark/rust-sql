@@ -1,0 +1,26 @@
+-- name: regress-full-stats-019
+-- sql: SELECT shobj_description(d.oid, 'pg_database') as description_before FROM pg_database d WHERE datname = current_database()
+-- test: stats
+-- shape: 34a39c89ce39873e seen=1
+-- rel 1262 pg_database am=heap kind=r natts=18
+-- att 1262 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 2 datname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1262 3 datdba typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 4 encoding typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 5 datlocprovider typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 6 datistemplate typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 7 datallowconn typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 8 dathasloginevt typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1262 9 datconnlimit typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 10 datfrozenxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 11 datminmxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 12 dattablespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1262 13 datcollate typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 1262 14 datctype typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 1262 15 datlocale typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1262 16 daticurules typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1262 17 datcollversion typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1262 18 datacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2671 rel=1262 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2672 rel=1262 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 1.31 :scan.plan.plan_rows 1 :scan.plan.plan_width 32 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {FUNCEXPR :funcid 1993 :funcresulttype 25 :funcretset false :funcvariadic false :funcformat 0 :funccollid 950 :inputcollid 950 :args ({VAR :varno 1 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 25} {CONST :consttype 19 :consttypmod -1 :constcollid 950 :constlen 64 :constbyval false :constisnull false :location 32 :constvalue 64 [ 112 103 95 100 97 116 97 98 97 115 101 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]}) :location 7} :resno 1 :resname description_before :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 93 :opfuncid 62 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 950 :args ({VAR :varno 1 :varattno 2 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location 96} {FUNCEXPR :funcid 861 :funcresulttype 19 :funcretset false :funcvariadic false :funcformat 0 :funccollid 950 :inputcollid 0 :args <> :location 106}) :location 104}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 1 2)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias {ALIAS :aliasname d :colnames <>} :eref {ALIAS :aliasname d :colnames ("oid" "datname" "datdba" "encoding" "datlocprovider" "datistemplate" "datallowconn" "dathasloginevt" "datconnlimit" "datfrozenxid" "datminmxid" "dattablespace" "datcollate" "datctype" "datlocale" "daticurules" "datcollversion" "datacl")} :rtekind 0 :relid 1262 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 1262 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 1262) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 0}

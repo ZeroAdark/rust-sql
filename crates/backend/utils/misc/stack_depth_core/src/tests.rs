@@ -60,7 +60,7 @@ fn guard_probe_reads_the_machine_stack() {
 // function of the build's opt-level ONLY. Opt-level 0 is the only profile
 // with the pathological frames the 32x budget covers; every optimized build
 // — including opt-level >= 1 with debug-assertions on, the debug-server
-// profile shape — must enforce the optimized 4x budget. Pre-fix,
+// profile shape — must enforce the optimized budget. Pre-fix,
 // `cfg!(debug_assertions)` put that shape on the 32x arm and the json/jsonb
 // regress deep-nesting inputs at max_stack_depth = 100kB stopped tripping
 // 54001 there (22P02 "input string ended unexpectedly" instead).
@@ -73,14 +73,14 @@ fn guard_probe_reads_the_machine_stack() {
 //
 // (opt-level 1, debug-assertions still on). There a debug_assertions-keyed
 // constant reads 32 and `scale_is_keyed_on_opt_level_not_debug_assertions`
-// fails; the opt-level-keyed constant reads 4 and it passes. The two
+// fails; the opt-level-keyed constant reads the optimized value and it passes. The two
 // shape-specific tests below compile ONLY on such disagreeing builds and
 // state the required value outright.
 // ---------------------------------------------------------------------------
 
 /// What `STACK_DEPTH_SCALE` must be for the opt-level build.rs reported.
 fn expected_scale_for_opt_level() -> isize {
-    if cfg!(pgrust_opt_level = "0") { 32 } else { 4 }
+    if cfg!(pgrust_opt_level = "0") { 32 } else { 6 }
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn scale_is_keyed_on_opt_level_not_debug_assertions() {
 #[test]
 fn optimized_with_assertions_build_enforces_the_optimized_budget() {
     assert_eq!(
-        STACK_DEPTH_SCALE, 4,
+        STACK_DEPTH_SCALE, 6,
         "opt-level {BUILD_OPT_LEVEL} with debug-assertions on took the 32x opt-level-0 arm: \
          deep json/jsonb at max_stack_depth=100kB would parse to end of input (22P02) \
          where C raises 54001 (PR1613-1)"
@@ -135,7 +135,79 @@ fn optimized_with_assertions_build_enforces_the_optimized_budget() {
 fn unoptimized_without_assertions_build_enforces_the_unoptimized_budget() {
     assert_eq!(
         STACK_DEPTH_SCALE, 32,
-        "opt-level 0 with debug-assertions off took the optimized 4x arm: stock \
+        "opt-level 0 with debug-assertions off took the optimized 6x arm: stock \
          max_stack_depth would trip 54001 on ordinary queries C answers (#1485)"
     );
+}
+
+// D3103: the weighted check is the plain one off wasm32 (weight 1), and the engine-to-shadow conversion is the
+// calibrated 3/5 (0.6 engine bytes per shadow byte): V8's 984 KB stands for 1640 KB of shadow.
+#[test]
+fn weighted_check_is_plain_off_wasm_and_engine_ratio_is_calibrated() {
+    assert_eq!(WASM_NATIVE_HEAVY_WEIGHT, 1);
+    assert_eq!(wasm_shadow_equivalent(DEFAULT_WASM_ENGINE_STACK), 984 * 1024 / 3 * 5);
+    let old = set_stack_base();
+    set_enforced_stack_budget_for_tests(1);
+    assert!(check_stack_depth_weighted().is_err() == check_stack_depth().is_err());
+    set_enforced_stack_budget_for_tests(isize::MAX);
+    assert!(check_stack_depth_weighted().is_ok() && check_stack_depth().is_ok());
+    set_enforced_stack_budget_for_tests(100 * 1024 * STACK_DEPTH_SCALE);
+    restore_stack_base(old);
+}
+
+// D3833: a lowering nest level charges its own amount on wasm32 only, beside a statement level's, and it comes off with it.
+#[test]
+fn nest_level_charge_is_wasm_only_and_scoped() {
+    assert_eq!(WASM_NEST_LEVEL_CHARGE == 0, !cfg!(target_family = "wasm"));
+    let before = guarded_depth(0);
+    {
+        let _a = EngineLevel::charging(WASM_NEST_LEVEL_CHARGE);
+        let _b = EngineLevel::enter();
+        assert_eq!(guarded_depth(0), before + WASM_NEST_LEVEL_CHARGE + WASM_ENGINE_LEVEL_CHARGE);
+    }
+    assert_eq!(guarded_depth(0), before);
+}
+
+// D3763: a nested statement level charges the guard for its engine frames on wasm32 only (8 KB a level; 0 elsewhere,
+// where a held level changes no reading), and the charge comes off when the level ends, by an error's unwind too.
+#[test]
+fn engine_level_charge_is_wasm_only_and_scoped() {
+    assert_eq!(WASM_ENGINE_LEVEL_CHARGE, if cfg!(target_family = "wasm") { 8 * 1024 } else { 0 });
+    let old = set_stack_base();
+    set_enforced_stack_budget_for_tests(1 << 20);
+    let before = guarded_depth(0);
+    {
+        let _a = EngineLevel::enter();
+        let _b = EngineLevel::enter();
+        assert_eq!(guarded_depth(0), before + 2 * WASM_ENGINE_LEVEL_CHARGE);
+        assert!(!stack_is_too_deep());
+    }
+    assert_eq!(guarded_depth(0), before);
+    let unwound = std::panic::catch_unwind(|| {
+        let _c = EngineLevel::enter();
+        panic!("a level's error unwinds through it");
+    });
+    assert!(unwound.is_err());
+    assert_eq!(guarded_depth(0), before);
+    set_enforced_stack_budget_for_tests(100 * 1024 * STACK_DEPTH_SCALE);
+    restore_stack_base(old);
+}
+
+// D3812: the shadow-heavy check (decompose's walk) is check_stack_depth_or_panic on every target but wasm32: nothing below
+// the budget, the same 54001 payload past it.
+#[test]
+fn shadow_heavy_check_is_the_plain_check_off_wasm() {
+    assert_eq!(WASM_SHADOW_HEAVY_PART.0, WASM_SHADOW_HEAVY_PART.1);
+    let budget: isize = 1 << 20;
+    let margin: usize = 64 * 1024;
+    let sp = machine_sp_here();
+    set_enforced_stack_budget_for_tests(budget);
+    restore_stack_base(sp + budget as usize - margin);
+    check_stack_depth_shadow_heavy_or_panic();
+    restore_stack_base(sp + budget as usize + margin);
+    let payload = std::panic::catch_unwind(check_stack_depth_shadow_heavy_or_panic).expect_err("past the budget it raises");
+    let e = payload.downcast::<Box<types_error::PgError>>().expect("the payload is the guard's PgError");
+    assert_eq!(e.sqlstate(), ERRCODE_STATEMENT_TOO_COMPLEX);
+    set_enforced_stack_budget_for_tests(100 * 1024 * STACK_DEPTH_SCALE);
+    restore_stack_base(0);
 }

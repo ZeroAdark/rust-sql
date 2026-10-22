@@ -512,9 +512,12 @@ pub fn GetNewObjectId() -> PgResult<Oid> {
         if globals::IsPostmasterEnvironment() {
             tv.nextOid.store(FirstNormalObjectId, Relaxed);
             tv.oidCount.store(0, Relaxed);
+            // D3866: from here an OID a removed object had may name a new one (the program stamps mix this)
+            l2cache::note_oid_wrap();
         } else if tv.nextOid.load(Relaxed) < FirstGenbkiObjectId {
             tv.nextOid.store(FirstNormalObjectId, Relaxed);
             tv.oidCount.store(0, Relaxed);
+            l2cache::note_oid_wrap();
         }
     }
 

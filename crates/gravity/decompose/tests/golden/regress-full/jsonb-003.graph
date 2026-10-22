@@ -1,0 +1,10 @@
+-- regress-full-jsonb-003
+-- SELECT * FROM jsonb_populate_recordset(null::record, '[]') AS (x int, y int);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Other fn3475 cols=2 fn3475(c2249:null, c3802:'\x00\x00\x00@')]
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=w4:val
+mapped: FunctionScan

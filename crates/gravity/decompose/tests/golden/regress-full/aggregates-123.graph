@@ -1,0 +1,39 @@
+-- regress-full-aggregates-123
+-- create table agg_group_2 as select * from (values (100), (300), (500)) as r(a), lateral ( select (g/2)::numeric as c1, array_agg(g::numeric) as c2, count(*) as c3 from agg_data_2k where g < r.a group by g/2) as s;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=5 eligible rows=667 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n5@0 n4@2^
+  source range rel=26053 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op97(v4.1, $exec0)
+  project (1=op528(v4.1, c23:2), 2=v4.1)
+  sort keys=1+:I32 form=runs
+  outs 1=w4:val 2=w8:val
+p1 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source values rti=3 rows=3
+    row (c23:100)
+    row (c23:300)
+    row (c23:500)
+  project (1=v3.1)
+  nest inner=n3 JOIN_INNER params=($exec0=outer.1)
+  inner node=4 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n4@0 n3@1
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2)
+  group-run stream=0
+  project (1=fn1740(outer.1), 2=agg2335(1=fn1740(outer.2)), 3=agg2803*(), 4j=outer.1)
+  project (1=outer.1, 2=inner.1, 3=inner.2, 4=inner.3)
+  outs 1=w4:val
+  outs 1=w4:val 2=vl:life/breaker 3=? 4=w8:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=1+
+stream 0: group slot=255 producer=p65535 node=3 form=Sorted hints=[] layout=[I32]->[Count@8]+valid 24B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  agg aggno=0 fn=2335 reg=Collect slot=- count_slot=- final=Collect class=Collect(Array) trans=Var mods=[] expr=agg2335(1=fn1740(outer.2))
+  agg aggno=1 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+rerun node=0 pipelines=p0 slots=0
+param $exec0 owner=n0 type=23 rep=w4:val
+mapped: SeqScan ValuesScan NestLoop NestLoopParam Sort Agg

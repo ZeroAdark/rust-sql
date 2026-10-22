@@ -1,0 +1,7 @@
+Fresh Rust rewrite of Disarm at 2d13d3f410a52daff1c5d8ef07d623332f372560.
+Copyright (c) 2024, Alexis Engelke.
+Upstream reference sources are retained unchanged under reference/. See reference/LICENSE
+for the complete BSD 3-Clause license and reference/manifest.json for source hashes.
+Production generation uses the fresh tpde_disarm_gen Rust implementation.
+Tests invoke the pinned Python generator and compile the actual C runtime only as oracles.
+The pinned CMakeLists.txt records default all features and inline encoding.

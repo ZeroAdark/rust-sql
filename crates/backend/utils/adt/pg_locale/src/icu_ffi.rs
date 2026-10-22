@@ -211,10 +211,33 @@ pub fn try_icu() -> Option<&'static IcuApi> {
     ICU.get_or_init(load).as_ref().ok().copied()
 }
 
+/// The ICU entry points C compiles to `ereport(ERROR, "ICU is not supported
+/// in this build")` without USE_ICU (icu_language_tag, icu_validate_locale,
+/// create_pg_locale_icu) raise that error here when libicu is not loadable.
+pub fn require_icu() -> types_error::PgResult<&'static IcuApi> {
+    require(try_icu())
+}
+
+pub(crate) fn require(api: Option<&'static IcuApi>) -> types_error::PgResult<&'static IcuApi> {
+    api.ok_or_else(icu_not_supported)
+}
+
+#[cold]
+#[inline(never)]
+fn icu_not_supported() -> Box<types_error::PgError> {
+    types_error::PgError::error("ICU is not supported in this build")
+        .with_sqlstate(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
+        .into()
+}
+
 const MAJOR_MAX: i32 = 90;
 const MAJOR_MIN: i32 = 50;
 
 fn load() -> Result<&'static IcuApi, String> {
+    // Test hook: exercise the no-ICU arms on a host that has libicu.
+    if std::env::var_os("PGRUST_TEST_NO_ICU").is_some() {
+        return Err("libicu disabled by PGRUST_TEST_NO_ICU".to_string());
+    }
     let (handle, major_hint) = open_lib()?;
     let suffix = find_suffix(handle, major_hint)
         .ok_or_else(|| "libicui18n loaded but no ucol_open symbol found (probed bare and _50.._90 suffixes)".to_string())?;

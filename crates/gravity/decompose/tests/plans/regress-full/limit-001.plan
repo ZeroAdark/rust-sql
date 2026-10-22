@@ -1,0 +1,27 @@
+-- name: regress-full-limit-001
+-- sql: SELECT thousand FROM onek WHERE thousand < 5 ORDER BY thousand FETCH FIRST 2 ROW ONLY;
+-- test: limit
+-- shape: b525fd37f9529c21 seen=4
+-- op 97 family=1976 strat=1
+-- rel 16417 onek am=heap kind=r natts=16
+-- att 16417 1 unique1 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 2 unique2 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 3 two typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 4 four typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 5 ten typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 6 twenty typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 7 hundred typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 8 thousand typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 9 twothousand typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 10 fivethous typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 11 tenthous typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 12 odd typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 13 even typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 14 stringu1 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 16417 15 stringu2 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 16417 16 string4 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- idx 19335 rel=16417 keys=1 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19336 rel=16417 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19337 rel=16417 keys=7 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19338 rel=16417 keys=14 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {LIMIT :plan.disabled_nodes 0 :plan.startup_cost 141.2575 :plan.total_cost 141.2625 :plan.plan_rows 2 :plan.plan_width 4 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {VAR :varno -2 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 8 :location -1} :resno 1 :resname thousand :ressortgroupref 1 :resorigtbl 16417 :resorigcol 8 :resjunk false}) :plan.qual <> :plan.lefttree {SORT :plan.disabled_nodes 0 :plan.startup_cost 141.2575 :plan.total_cost 141.625 :plan.plan_rows 147 :plan.plan_width 4 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 1 :plan.targetlist ({TARGETENTRY :expr {VAR :varno -2 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 8 :location -1} :resno 1 :resname thousand :ressortgroupref 1 :resorigtbl 16417 :resorigcol 8 :resjunk false}) :plan.qual <> :plan.lefttree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 139.7875 :scan.plan.plan_rows 147 :scan.plan.plan_width 4 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 2 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 8 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 8 :location 8} :resno 1 :resname thousand :ressortgroupref 1 :resorigtbl 16417 :resorigcol 8 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 97 :opfuncid 66 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 8 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 8 :location 35} {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 46 :constvalue 4 [ 5 0 0 0 0 0 0 0 ]}) :location 44}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 8)} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :numCols 1 :sortColIdx ( 1) :sortOperators ( 97) :collations ( 0) :nullsFirst ( false)} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :limitOffset <> :limitCount {CONST :consttype 20 :consttypmod -1 :constcollid 0 :constlen 8 :constbyval true :constisnull false :location -1 :constvalue 8 [ 2 0 0 0 0 0 0 0 ]} :limitOption 0 :uniqNumCols 0 :uniqColIdx <> :uniqOperators <> :uniqCollations <>} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname onek :colnames ("unique1" "unique2" "two" "four" "ten" "twenty" "hundred" "thousand" "twothousand" "fivethous" "tenthous" "odd" "even" "stringu1" "stringu2" "string4")} :rtekind 0 :relid 16417 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 16417 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 15) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16417) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 90}

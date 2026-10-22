@@ -1,0 +1,10 @@
+ERROR:  division by zero
+CONTEXT:  SQL statement "select 1/0"
+PL/pgSQL function inline_code_block line 1 at EXECUTE
+ERROR:  division by zero
+CONTEXT:  SQL statement "select
+1/0"
+PL/pgSQL function inline_code_block line 1 at EXECUTE
+NOTICE:  SQL statement "select
+1/0"
+PL/pgSQL function inline_code_block line 1 at EXECUTE

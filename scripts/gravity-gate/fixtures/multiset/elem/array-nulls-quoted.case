@@ -1,0 +1,10 @@
+# NULL and quoted elements (a comma inside quotes) are whole elements
+sql: SELECT array_agg(x) FROM t;
+cols: array_agg
+elem: 1	array
+class: unordered
+verdict: match
+[pg]
+{NULL,"a,b",c,"q\\"x"}
+[got]
+{c,"q\\"x",NULL,"a,b"}

@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/tpde2/tpde",
+  "revision": "116b2b83eb8491fd63c017285c91b007b8a26a67",
+  "files": [
+    {
+      "path": "tpde/include/tpde/arm64/CompilerA64.hpp",
+      "sha256": "a58a5d8031372cb7f12a0f25a333a88a1b0c124b806cba1065bcc4906dc4ac91",
+      "git_blob": "4de1bc9b11f31c25b977467ca916290fbff3e2a0"
+    }
+  ]
+}

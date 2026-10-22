@@ -1,0 +1,66 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1p s1u s1m s1d s1n s2d s1c s2c s3sel s3cnt
+step s1p: INSERT INTO ipp VALUES (999, 4);
+step s1u: UPDATE ipc SET val = -val WHERE id IN (498, 1003);
+step s1m: UPDATE ipc SET pid = 1 WHERE id = 1508;
+step s1d: DELETE FROM ipc WHERE id = 2013;
+step s1n: UPDATE ipc SET pid = 499 WHERE id = 1;
+step s2d: DELETE FROM ipc WHERE pid = (SELECT max(id) FROM ipp WHERE grp = 4); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, pid, val FROM ipc WHERE id IN (1, 498, 1003, 1508, 2013, 2518, 4538) ORDER BY id;
+  id|pid| val
+----+---+----
+   1|499|   1
+1508|  1|1508
+(2 rows)
+
+step s3cnt: SELECT count(*), sum(id) FROM ipc WHERE pid IN (499, 999);
+count|sum
+-----+---
+    1|  1
+(1 row)
+
+
+starting permutation: s2d s1u s2c s1m s1c s3sel s3cnt
+step s2d: DELETE FROM ipc WHERE pid = (SELECT max(id) FROM ipp WHERE grp = 4);
+step s1u: UPDATE ipc SET val = -val WHERE id IN (498, 1003); <waiting ...>
+step s2c: COMMIT;
+step s1u: <... completed>
+step s1m: UPDATE ipc SET pid = 1 WHERE id = 1508;
+step s1c: COMMIT;
+step s3sel: SELECT id, pid, val FROM ipc WHERE id IN (1, 498, 1003, 1508, 2013, 2518, 4538) ORDER BY id;
+id|pid|val
+--+---+---
+ 1|  2|  1
+(1 row)
+
+step s3cnt: SELECT count(*), sum(id) FROM ipc WHERE pid IN (499, 999);
+count|sum
+-----+---
+    0|   
+(1 row)
+
+
+starting permutation: s1p s1u s1d s2d s1r s2c s3sel s3cnt
+step s1p: INSERT INTO ipp VALUES (999, 4);
+step s1u: UPDATE ipc SET val = -val WHERE id IN (498, 1003);
+step s1d: DELETE FROM ipc WHERE id = 2013;
+step s2d: DELETE FROM ipc WHERE pid = (SELECT max(id) FROM ipp WHERE grp = 4); <waiting ...>
+step s1r: ROLLBACK;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, pid, val FROM ipc WHERE id IN (1, 498, 1003, 1508, 2013, 2518, 4538) ORDER BY id;
+id|pid|val
+--+---+---
+ 1|  2|  1
+(1 row)
+
+step s3cnt: SELECT count(*), sum(id) FROM ipc WHERE pid IN (499, 999);
+count|sum
+-----+---
+    0|   
+(1 row)
+

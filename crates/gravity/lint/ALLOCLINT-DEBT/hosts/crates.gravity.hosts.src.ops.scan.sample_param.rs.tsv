@@ -1,0 +1,5 @@
+path	crates/gravity/hosts/src/ops/scan/sample_param.rs
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	2
+type	std::boxed::Box	1
+type	std::vec::Vec	1

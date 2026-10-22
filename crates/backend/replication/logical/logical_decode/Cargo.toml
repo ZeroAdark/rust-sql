@@ -17,6 +17,7 @@ types_tuple = { path = "../../../../_support/types/types_tuple" }
 elog = { path = "../../../utils/error/elog" }
 heaptuple = { path = "../../../access/common/heaptuple" }
 heapam_xlog = { path = "../../../access/heap/heapam_xlog" }
+pgrc_format = { path = "../../../access/pgrcolumnar/pgrc_format" }
 xact = { path = "../../../access/transam/xact" }
 transam_xlog = { path = "../../../access/transam/transam_xlog" }
 xlogreader = { path = "../../../access/transam/xlogreader" }

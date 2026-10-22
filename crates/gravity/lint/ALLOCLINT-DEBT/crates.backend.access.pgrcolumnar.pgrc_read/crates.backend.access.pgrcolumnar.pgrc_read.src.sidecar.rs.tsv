@@ -1,0 +1,2 @@
+path	crates/backend/access/pgrcolumnar/pgrc_read/src/sidecar.rs
+method	slice::to_vec	1

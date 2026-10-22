@@ -1,0 +1,15 @@
+# a hash join with its build side swapped: same multiset, other order
+sql: SELECT a.k, b.v FROM a JOIN b ON a.k = b.k;
+cols: k	v
+class: unordered
+verdict: match
+[pg]
+1	x
+2	y
+2	z
+3	w
+[got]
+3	w
+2	z
+1	x
+2	y

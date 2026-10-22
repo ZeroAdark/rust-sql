@@ -1,0 +1,11 @@
+-- regress-full-rowsecurity-137
+-- INSERT INTO rls_tbl SELECT 10, 20, 30;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:10, 2=c23:20, 3=c23:30)
+  write INSERT rel=28769 rti=1 natts=3 indexes=()
+    check rls insert rel=rls_tbl (op2993(v1.0, c2249:'\x03\x00\x00\x00\xc9\x08\x00\x00\xff\xff\xff\xff\x00\x00\x03\x00\x00\x00\x18\x00\x01\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00'))
+  outs 1=w4:val 2=w4:val 3=w4:val
+mapped: Result ModifyTable

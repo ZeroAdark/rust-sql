@@ -1,0 +1,12 @@
+-- regress-full-constraints-006
+-- DELETE FROM INSERT_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n0@1
+  source range rel=20675 rti=2 am=heap
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1j=v2.-6, 2j=v2.-1)
+  write DELETE rel=20675 rti=2 natts=3 indexes=() route=rti1:20675 natts=3
+  outs 1=w4:val 2=fx6:row
+scan-lanes node=2 rti=2 rel=20675 tableoid
+mapped: ModifyTable SeqScan

@@ -58,6 +58,14 @@ pub fn table_index_validate_scan<'mcx>(
     snapshot: &snapmgr::Snapshot,
     state: &mut ValidateIndexState,
 ) -> PgResult<()> {
+    // This scan reads heap blocks; a pgrcolumnar table has none, so a concurrent build over one would validate nothing.
+    if tableam_vocab::TableAm::of(heap_relation) != Some(tableam_vocab::TableAm::Heap) {
+        let am = if tableam_vocab::is_pgrcolumnar_am_oid(heap_relation.rd_rel.relam) { "pgrcolumnar" } else { "this table access method" };
+        return Err(Box::new(
+            types_error::PgError::error(format!("{am} does not support CREATE INDEX CONCURRENTLY"))
+                .with_sqlstate(types_error::ERRCODE_FEATURE_NOT_SUPPORTED),
+        ));
+    }
     let mut slot = exectuples::make_tuple_table_slot(
         mcx,
         types_slot::TupleSlotKind::BufferHeapTuple,
@@ -97,7 +105,7 @@ pub fn table_index_validate_scan<'mcx>(
         i64::from(scan.rs_nblocks),
     );
 
-    let mut per_tuple = mcx::MemoryContext::new_bump("IndexValidatePerTuple");
+    let mut per_tuple = mcx::MemoryContext::new_wholesale("IndexValidatePerTuple");
 
     loop {
         use types_scan::ScanDirection;

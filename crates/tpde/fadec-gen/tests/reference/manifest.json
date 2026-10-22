@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/aengelke/fadec",
+  "revision": "3994d89500985491b1a7ccc17827a22058b3de49",
+  "files": [
+    {
+      "path": "parseinstrs.py",
+      "sha256": "54ed15120b62e980ab238405c98e3dc728a3524ce4cbee1f635c2dfe4b629330"
+    },
+    {
+      "path": "../../data/instrs.txt",
+      "sha256": "bd8911845e6d9900e9dbcc75bf3f36cce9ca378460a0fca4fa8bb5a45d066819"
+    },
+    {
+      "path": "../../NOTICE",
+      "sha256": "859902e8fdb8978c08ddd9b3fd62f9b704f88fc8a696f7bfd451d54bfcd579dc"
+    }
+  ]
+}

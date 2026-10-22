@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+pub mod armed;
 pub mod domain;
 mod enum_cmp;
 mod invalidate;
@@ -26,7 +27,7 @@ pub use domain::{
     DomConstraintType, DomainConstraintCache, DomainConstraintRef, DomainConstraintState,
     DomainHasConstraints,
 };
-pub use enum_cmp::compare_values_of_enum;
+pub use enum_cmp::{compare_values_of_enum, enum_label_count};
 pub use invalidate::{AtEOSubXact_TypeCache, AtEOXact_TypeCache};
 
 // typcache.h
@@ -380,6 +381,8 @@ pub(crate) struct TypCacheState {
     // handle here in place of its own (typcache_seams::install_record_registry).
     pub(crate) record_registry: typcache_seams::RecordRegistryHandle,
     pub(crate) tupledesc_id_counter: u64,
+    /// The relcache invalidations `TypeCacheRelCallback` took (`rel_inval_count`).
+    pub(crate) rel_invals: u64,
 }
 
 thread_local! {
@@ -391,33 +394,45 @@ thread_local! {
 pub(crate) fn with_state<R>(f: impl FnOnce(&mut TypCacheState) -> R) -> R {
     STATE.with(|cell| {
         let mut slot = cell.borrow_mut();
-        let st = slot.get_or_insert_with(|| {
-            let mcx = ::mcx::session_root("TypCacheContext").mcx();
-            // LIFO: drop the state PROPERLY before the context free — cache
-            // entries are Rc's on the GLOBAL heap (the relcache-entry class);
-            // a context-only free skips the refcount decrements.
-            ::mcx::register_session_cleanup(Box::new(|| {
-                STATE.with(|cell| {
-                    if let Some(st) = cell.borrow_mut().take() {
-                        drop(ManuallyDrop::into_inner(st));
-                    }
-                });
-            }));
-            ManuallyDrop::new(TypCacheState {
-                mcx,
-                type_cache: PgHashMap::with_capacity_in(64, mcx),
-                rel_id_to_type_id: PgHashMap::with_capacity_in(64, mcx),
-                first_domain_type_entry: InvalidOid,
-                in_progress: PgVec::new_in(mcx),
-                callbacks_registered: false,
-                record_registry: Default::default(),
-                // typcache.c:313: starts at INVALID_TUPLEDESC_IDENTIFIER so
-                // ++counter never yields 0 or 1.
-                tupledesc_id_counter: INVALID_TUPLEDESC_IDENTIFIER,
-            })
-        });
-        f(st)
+        // the session's first use builds the state out of line (every call site instantiates this function)
+        if slot.is_none() {
+            *slot = Some(new_state());
+        }
+        f(slot.as_mut().expect("typcache state built above"))
     })
+}
+
+#[cold]
+#[inline(never)]
+fn new_state() -> ManuallyDrop<TypCacheState> {
+    let mcx = ::mcx::session_root("TypCacheContext").mcx();
+    // LIFO: drop the state PROPERLY before the context free — cache
+    // entries are Rc's on the GLOBAL heap (the relcache-entry class);
+    // a context-only free skips the refcount decrements.
+    ::mcx::register_session_cleanup(Box::new(|| {
+        STATE.with(|cell| {
+            if let Some(st) = cell.borrow_mut().take() {
+                drop(ManuallyDrop::into_inner(st));
+            }
+        });
+    }));
+    ManuallyDrop::new(TypCacheState {
+        mcx,
+        type_cache: PgHashMap::with_capacity_in(64, mcx),
+        rel_id_to_type_id: PgHashMap::with_capacity_in(64, mcx),
+        first_domain_type_entry: InvalidOid,
+        in_progress: PgVec::new_in(mcx),
+        callbacks_registered: false,
+        record_registry: Default::default(),
+        // typcache.c:313: starts at INVALID_TUPLEDESC_IDENTIFIER so
+        // ++counter never yields 0 or 1.
+        tupledesc_id_counter: INVALID_TUPLEDESC_IDENTIFIER,
+        rel_invals: 0,
+    })
+}
+
+pub fn rel_inval_count() -> u64 {
+    with_state(|st| st.rel_invals)
 }
 
 /// lookup_type_cache (typcache.c). The pin is C's returned `TypeCacheEntry *`.
@@ -429,6 +444,47 @@ pub(crate) fn with_state<R>(f: impl FnOnce(&mut TypCacheState) -> R) -> R {
 /// the slow path is a faithful transcription of C's fill.
 #[inline]
 pub fn lookup_type_cache(type_id: Oid, flags: i32) -> PgResult<Rc<TypeCacheEntry>> {
+    if gravity_deps::armed() {
+        return noted_lookup(type_id, flags);
+    }
+    lookup_entry(type_id, flags)
+}
+
+/// C3: a recorded lowering's lookup. Its entry is the type's pg_type row, a composite's relation, every domain of a
+/// domain's chain with its constraints, and for any flag past those the `SUPPORT_LISTS` rows its operators and procs
+/// come from (TypeCacheOpcCallback's pg_opclass, and the members no callback here follows).
+#[cold]
+#[inline(never)]
+fn noted_lookup(type_id: Oid, flags: i32) -> PgResult<Rc<TypeCacheEntry>> {
+    let e = gravity_deps::suppressed(|| lookup_entry(type_id, flags))?;
+    note_type_row(type_id);
+    if flags & !(TYPECACHE_TUPDESC | TYPECACHE_DOMAIN_BASE_INFO | TYPECACHE_DOMAIN_CONSTR_INFO) != 0 {
+        gravity_deps::note_support();
+    }
+    gravity_deps::note_rel(e.typrelid.get());
+    if e.typtype.get() == TYPTYPE_DOMAIN {
+        gravity_deps::note_cat_list(CONSTROID);
+        let mut t = type_id;
+        while let Ok(Some(d)) = syscache_seams::pg_type_domain_shape::call(t) {
+            note_type_row(t);
+            if d.typtype != TYPTYPE_DOMAIN {
+                break;
+            }
+            t = d.typbasetype;
+        }
+    }
+    Ok(e)
+}
+
+fn note_type_row(type_id: Oid) {
+    match syscache_seams::syscache_hash_value_typeoid::is_installed().then(|| syscache_seams::syscache_hash_value_typeoid::call(type_id)) {
+        Some(Ok(h)) => gravity_deps::note_cat(TYPEOID, h),
+        _ => gravity_deps::note_cat_list(TYPEOID),
+    }
+}
+
+#[inline]
+fn lookup_entry(type_id: Oid, flags: i32) -> PgResult<Rc<TypeCacheEntry>> {
     let hit = with_state(|st| {
         st.type_cache.get(&type_id).and_then(|e| {
             (((flags | READY_PG_TYPE_DATA) & !e.ready.get()) == 0).then(|| Rc::clone(e))
@@ -436,7 +492,10 @@ pub fn lookup_type_cache(type_id: Oid, flags: i32) -> PgResult<Rc<TypeCacheEntry
     });
     match hit {
         Some(e) => Ok(e),
-        None => lookup_type_cache_slow(type_id, flags),
+        None => match armed::lookup(type_id, flags)? {
+            Some(e) => Ok(e), // V4R-453: a gravity pool claim's entry, from the leader's image
+            None => lookup_type_cache_slow(type_id, flags),
+        },
     }
 }
 

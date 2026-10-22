@@ -1,0 +1,14 @@
+-- oltpc-001
+-- SELECT c_first, c_last, c_balance FROM customer WHERE c_w_id = 1 AND c_d_id = 1 AND c_id = 5 /* C01 OL1 pk lookup */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=16384 rti=1 am=heap index=16410
+    key att=3 op=96 value=c23:1
+    key att=4 op=532 value=c23:1
+    key att=2 op=96 value=c23:5
+    recheck (op96(v1.3, c23:1), op532(v1.4, c23:1), op96(v1.2, c23:5))
+    lanes Attr(7):byref8:vl:win/page Attr(9):byref8:vl:win/page Attr(19):byref8:vl:win/page
+  project (1=v1.7, 2=v1.9, 3=v1.19)
+  outs 1=vl:win/page 2=vl:win/page 3=vl:win/page
+mapped: IndexScan

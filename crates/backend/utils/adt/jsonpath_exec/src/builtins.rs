@@ -54,14 +54,10 @@ struct PathArgs<'a, 'mcx> {
     silent: bool,
 }
 
-fn path_args<'a, 'mcx>(
-    fcinfo: &'a Fcinfo,
-    mcx: Mcx<'mcx>,
-    four_args: bool,
-) -> PgResult<PathArgs<'a, 'mcx>> {
+fn path_args<'a, 'mcx>(fcinfo: &'a Fcinfo, mcx: Mcx<'mcx>) -> PgResult<PathArgs<'a, 'mcx>> {
     let jb = arg_varlena(fcinfo, 0, mcx)?;
     let jp = arg_varlena(fcinfo, 1, mcx)?;
-    let (vars, silent) = if four_args {
+    let (vars, silent) = if fcinfo.nargs() == 4 {
         (Some(arg_varlena(fcinfo, 2, mcx)?), fcinfo.arg_bool(3))
     } else {
         (None, true)
@@ -76,10 +72,10 @@ fn vars_of<'v, 'a, 'mcx>(vars: &'v Option<VarPayload<'a, 'mcx>>) -> JsonPathVars
     }
 }
 
-fn exists_common(fcinfo: &mut Fcinfo, four_args: bool, tz: bool) -> PgResult<Datum> {
+fn exists_common(fcinfo: &mut Fcinfo, tz: bool) -> PgResult<Datum> {
     let res = {
         let mcx = fcinfo.result_mcx();
-        let args = path_args(fcinfo, mcx, four_args)?;
+        let args = path_args(fcinfo, mcx)?;
         crate::jsonb_path_exists_core(
             mcx,
             args.jb.as_bytes(),
@@ -96,24 +92,24 @@ fn exists_common(fcinfo: &mut Fcinfo, four_args: bool, tz: bool) -> PgResult<Dat
 }
 
 pub fn fc_jsonb_path_exists(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    exists_common(fcinfo, true, false)
+    exists_common(fcinfo, false)
 }
 
 pub fn fc_jsonb_path_exists_tz(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    exists_common(fcinfo, true, true)
+    exists_common(fcinfo, true)
 }
 
 pub fn fc_jsonb_path_exists_opr(
     _f: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    exists_common(fcinfo, false, false)
+    exists_common(fcinfo, false)
 }
 
-fn match_common(fcinfo: &mut Fcinfo, four_args: bool, tz: bool) -> PgResult<Datum> {
+fn match_common(fcinfo: &mut Fcinfo, tz: bool) -> PgResult<Datum> {
     let res = {
         let mcx = fcinfo.result_mcx();
-        let args = path_args(fcinfo, mcx, four_args)?;
+        let args = path_args(fcinfo, mcx)?;
         crate::jsonb_path_match_core(
             mcx,
             args.jb.as_bytes(),
@@ -130,15 +126,15 @@ fn match_common(fcinfo: &mut Fcinfo, four_args: bool, tz: bool) -> PgResult<Datu
 }
 
 pub fn fc_jsonb_path_match(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    match_common(fcinfo, true, false)
+    match_common(fcinfo, false)
 }
 
 pub fn fc_jsonb_path_match_tz(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    match_common(fcinfo, true, true)
+    match_common(fcinfo, true)
 }
 
 pub fn fc_jsonb_path_match_opr(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    match_common(fcinfo, false, false)
+    match_common(fcinfo, false)
 }
 
 fn query_common(
@@ -150,7 +146,7 @@ fn query_common(
     if !flinfo.has_fn_extra() {
         let rows = {
             let mcx = fcinfo.result_mcx();
-            let args = path_args(fcinfo, mcx, true)?;
+            let args = path_args(fcinfo, mcx)?;
             crate::jsonb_path_query_core(
                 mcx,
                 args.jb.as_bytes(),
@@ -169,14 +165,17 @@ fn query_common(
         .user_fctx
         .as_ref()
         .expect("SRF rows set at first call")
-        .downcast_ref::<Vec<Vec<u8>>>()
+        .downcast_ref::<crate::PathQueryRows>()
         .expect("user_fctx is the row set");
-    let mcx = fcinfo.result_mcx();
-    match rows.get(idx) {
-        Some(img) => {
-            let d = byref_result(mcx, img)?;
-            Ok(funcapi::srf_return_next(flinfo, fcinfo, d))
+    let d = {
+        let mcx = fcinfo.result_mcx();
+        match rows.image(mcx, idx)? {
+            Some(img) => Some(byref_result(mcx, &img)?),
+            None => None,
         }
+    };
+    match d {
+        Some(d) => Ok(funcapi::srf_return_next(flinfo, fcinfo, d)),
         None => Ok(funcapi::srf_return_done(flinfo, fcinfo)),
     }
 }
@@ -194,7 +193,7 @@ pub fn fc_jsonb_path_query_tz(
 
 fn query_array_common(fcinfo: &mut Fcinfo, tz: bool) -> PgResult<Datum> {
     let mcx = fcinfo.result_mcx();
-    let args = path_args(fcinfo, mcx, true)?;
+    let args = path_args(fcinfo, mcx)?;
     let img = crate::jsonb_path_query_array_core(
         mcx,
         args.jb.as_bytes(),
@@ -223,7 +222,7 @@ pub fn fc_jsonb_path_query_array_tz(
 fn query_first_common(fcinfo: &mut Fcinfo, tz: bool) -> PgResult<Datum> {
     let img = {
         let mcx = fcinfo.result_mcx();
-        let args = path_args(fcinfo, mcx, true)?;
+        let args = path_args(fcinfo, mcx)?;
         crate::jsonb_path_query_first_core(
             mcx,
             args.jb.as_bytes(),

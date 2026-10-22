@@ -1,0 +1,92 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1u s1f s1d s2d s1c s2c s3k s3l
+s1: NOTICE:  pok_bru UPDATE old (2,2,r2) new (2,2,r2*)
+s1: NOTICE:  pok_bru UPDATE old (3,3,r3) new (3,3,r3*)
+step s1u: UPDATE pok SET note = note || '*' WHERE v IN (2, 3);
+s1: NOTICE:  pok_bru UPDATE old (4,4,r4) new (4,54,r4)
+step s1f: UPDATE pok SET v = v + 50 WHERE v = 4;
+s1: NOTICE:  pok_brd DELETE old (1,1,r1)
+step s1d: DELETE FROM pok WHERE v = 1;
+step s2d: WITH c AS (INSERT INTO pol VALUES (1)) DELETE FROM pok WHERE v < 5; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  pok_brd DELETE old (2,2,r2*)
+s2: NOTICE:  pok_brd DELETE old (3,3,r3*)
+s2: NOTICE:  pol_bs BEFORE INSERT
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3k: SELECT k, v, note FROM pok ORDER BY k;
+k| v|note
+-+--+----
+4|54|r4  
+5| 5|r5  
+6| 6|r6  
+7| 7|r7  
+8| 8|r8  
+(5 rows)
+
+step s3l: SELECT count(*), sum(a) FROM pol;
+count|sum
+-----+---
+    1|  1
+(1 row)
+
+
+starting permutation: s1u s1f s1d s2u s1c s2c s3k s3l
+s1: NOTICE:  pok_bru UPDATE old (2,2,r2) new (2,2,r2*)
+s1: NOTICE:  pok_bru UPDATE old (3,3,r3) new (3,3,r3*)
+step s1u: UPDATE pok SET note = note || '*' WHERE v IN (2, 3);
+s1: NOTICE:  pok_bru UPDATE old (4,4,r4) new (4,54,r4)
+step s1f: UPDATE pok SET v = v + 50 WHERE v = 4;
+s1: NOTICE:  pok_brd DELETE old (1,1,r1)
+step s1d: DELETE FROM pok WHERE v = 1;
+step s2u: WITH c AS (INSERT INTO pol VALUES (2)) UPDATE pok SET note = 'own' WHERE v < 5; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  pok_bru UPDATE old (2,2,r2*) new (2,2,own)
+s2: NOTICE:  pok_bru UPDATE old (3,3,r3*) new (3,3,own)
+s2: NOTICE:  pol_bs BEFORE INSERT
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3k: SELECT k, v, note FROM pok ORDER BY k;
+k| v|note
+-+--+----
+2| 2|own 
+3| 3|own 
+4|54|r4  
+5| 5|r5  
+6| 6|r6  
+7| 7|r7  
+8| 8|r8  
+(7 rows)
+
+step s3l: SELECT count(*), sum(a) FROM pol;
+count|sum
+-----+---
+    1|  2
+(1 row)
+
+
+starting permutation: s1p s2t s1c s2c s3p
+s1: NOTICE:  pou1_bru UPDATE old (1,2,r2) new (1,2,r2*)
+step s1p: UPDATE pou SET note = note || '*' WHERE v IN (2, 3);
+step s2t: WITH c AS (UPDATE poq SET a = a) UPDATE pou SET note = 'own' WHERE v < 5; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  pou1_bru UPDATE old (1,2,r2*) new (1,2,own)
+s2: NOTICE:  pou1_bru UPDATE old (1,4,r4) new (1,4,own)
+s2: NOTICE:  poq_bs BEFORE UPDATE
+s2: NOTICE:  poq_as AFTER UPDATE
+step s2t: <... completed>
+step s2c: COMMIT;
+step s3p: SELECT tableoid::regclass AS leaf, k, v, note FROM pou ORDER BY v, k;
+leaf|k|v|note
+----+-+-+----
+pou2|2|1|own 
+pou1|1|2|own 
+pou2|2|3|own 
+pou1|1|4|own 
+pou2|2|5|r5  
+pou1|1|6|r6  
+pou2|2|7|r7  
+pou1|1|8|r8  
+(8 rows)
+

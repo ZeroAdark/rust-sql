@@ -1,0 +1,14 @@
+path	crates/gravity/hosts/src/ops/modifytable/write_route.rs
+growth	std::vec::Vec::push	7
+growth	std::vec::Vec::resize	2
+growth	std::vec::Vec::resize_with	3
+ir-only	<T as core::convert::Into<U>>::into	3
+macro	std::vec	1
+method	slice::to_vec	2
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	6
+method	std::iter::Iterator::collect	5
+method	std::vec::Vec::with_capacity	5
+type	std::boxed::Box	1
+type	std::rc::Rc	3
+type	std::vec::Vec	17

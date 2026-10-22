@@ -1,0 +1,12 @@
+-- regress-full-triggers-058
+-- delete from refd_table where length(b) = 3;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=22231 rti=1 am=heap
+    lanes Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(fn1317(v1.2), c23:3)
+  project (1j=v1.-1)
+  write DELETE rel=22231 rti=1 natts=2 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable SeqScan

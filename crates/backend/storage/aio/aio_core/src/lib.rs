@@ -1,6 +1,6 @@
 //! storage/aio: PgAioHandle engine, shmem model, io_method dispatch.
 //!
-//! Thread-model divergence (the one structural note, see the regression
+//! Thread-model divergence (the one structural note, see the GL-AIO-1
 //! letter): C's IO worker PROCESSES are postmaster-child THREADS of kind
 //! BackendType::IoWorker — pmchild-tracked, PGPROC-owning, covered by the
 //! postmaster state machine (PM_WAIT_IO_WORKERS). Everything cross-process
@@ -50,7 +50,7 @@ pub use io::{
     pgaio_io_current, pgaio_io_op_name, pgaio_io_set_iovec_pages, pgaio_io_start_readv_current,
 };
 pub use method_worker::{
-    pgaio_worker_cycle, pgaio_worker_executed_count, pgaio_worker_register,
+    pgaio_worker_cycle, pgaio_worker_register,
     pgaio_workers_enabled,
 };
 pub use target::{pgaio_io_get_target_data, pgaio_io_set_target_smgr, pgaio_io_target_name};
@@ -593,6 +593,8 @@ fn check_io_max_concurrency(
 
 pub fn init_seams() {
     aio_seams::pgaio_init_backend::set(pgaio_init_backend);
+    aio_seams::pgaio_enter_batchmode::set(pgaio_enter_batchmode);
+    aio_seams::pgaio_exit_batchmode::set(pgaio_exit_batchmode);
     aio_seams::at_eoxact_aio::set(AtEOXact_Aio);
     aio_seams::pgaio_error_cleanup::set(pgaio_error_cleanup);
     aio_seams::pgaio_closing_fd::set(pgaio_closing_fd);

@@ -1,0 +1,29 @@
+-- name: regress-full-opr_sanity-061
+-- sql: SELECT ctid, aggfnoid::oid FROM pg_aggregate as a WHERE aggmtranstype != 0 AND (aggmtransfn = 0 OR aggminvtransfn = 0);
+-- test: opr_sanity
+-- shape: 468207634a90cbf6 seen=1
+-- rel 2600 pg_aggregate am=heap kind=r natts=22
+-- att 2600 1 aggfnoid typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 2 aggkind typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2600 3 aggnumdirectargs typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 2600 4 aggtransfn typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 5 aggfinalfn typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 6 aggcombinefn typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 7 aggserialfn typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 8 aggdeserialfn typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 9 aggmtransfn typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 10 aggminvtransfn typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 11 aggmfinalfn typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 12 aggfinalextra typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2600 13 aggmfinalextra typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 2600 14 aggfinalmodify typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2600 15 aggmfinalmodify typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 2600 16 aggsortop typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 17 aggtranstype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 18 aggtransspace typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 19 aggmtranstype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 20 aggmtransspace typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 2600 21 agginitval typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 2600 22 aggminitval typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2650 rel=2600 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 5.817500000000001 :scan.plan.plan_rows 38 :scan.plan.plan_width 10 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno -1 :vartype 27 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn -1 :location 7} :resno 1 :resname ctid :ressortgroupref 0 :resorigtbl 2600 :resorigcol -1 :resjunk false} {TARGETENTRY :expr {RELABELTYPE :arg {VAR :varno 1 :varattno 1 :vartype 24 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 13} :resulttype 26 :resulttypmod -1 :resultcollid 0 :relabelformat 1 :location 21} :resno 2 :resname aggfnoid :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 608 :opfuncid 185 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 19 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 19 :location 56} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 73 :constvalue 4 [ 0 0 0 0 0 0 0 0 ]}) :location 70} {BOOLEXPR :boolop or :args ({OPEXPR :opno 607 :opfuncid 184 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({RELABELTYPE :arg {VAR :varno 1 :varattno 9 :vartype 24 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 9 :location 84} :resulttype 26 :resulttypmod -1 :resultcollid 0 :relabelformat 2 :location -1} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 98 :constvalue 4 [ 0 0 0 0 0 0 0 0 ]}) :location 96} {OPEXPR :opno 607 :opfuncid 184 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({RELABELTYPE :arg {VAR :varno 1 :varattno 10 :vartype 24 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 10 :location 103} :resulttype 26 :resulttypmod -1 :resultcollid 0 :relabelformat 2 :location -1} {CONST :consttype 26 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 120 :constvalue 4 [ 0 0 0 0 0 0 0 0 ]}) :location 118}) :location -1}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols <>} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias {ALIAS :aliasname a :colnames <>} :eref {ALIAS :aliasname a :colnames ("aggfnoid" "aggkind" "aggnumdirectargs" "aggtransfn" "aggfinalfn" "aggcombinefn" "aggserialfn" "aggdeserialfn" "aggmtransfn" "aggminvtransfn" "aggmfinalfn" "aggfinalextra" "aggmfinalextra" "aggfinalmodify" "aggmfinalmodify" "aggsortop" "aggtranstype" "aggtransspace" "aggmtranstype" "aggmtransspace" "agginitval" "aggminitval")} :rtekind 0 :relid 2600 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 2600 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 6 8 16 17 26) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 2600 0 0 0) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 122}

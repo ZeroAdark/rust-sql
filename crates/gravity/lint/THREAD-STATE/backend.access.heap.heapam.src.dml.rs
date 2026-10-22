@@ -1,0 +1,1 @@
+backend/access/heap/heapam/src/dml.rs	PARALLEL_WRITE_PERMITS	pgport	scope:ParallelWriteGuard	thread	the W2a block-run write sink's permit for heap inserts on a parallel-worker thread: ParallelWriteGuard arms it around the sink's own write calls and its drop takes it back (an unwind included); the thread's own, never ambient

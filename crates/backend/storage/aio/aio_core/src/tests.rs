@@ -9,6 +9,51 @@ use types_storage::aio::{
 };
 
 #[test]
+fn staged_debug_report_matches_c() {
+    static SEEN: AtomicU32 = AtomicU32::new(0);
+    fn hook(error: &types_error::PgError, output: &mut bool) {
+        let n = SEEN.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(error.level, types_error::DEBUG3);
+        assert_eq!(error.message, format!(
+            "io 7         |op readv|target smgr|state STAGED          : staged (synchronous: {}, in_batch: {})",
+            n / 2, n % 2,
+        ));
+        assert!(error.hide_statement);
+        assert!(error.hide_context);
+        assert_eq!(
+            error.location,
+            Some(types_error::ErrorLocation::new("aio.c", 459, "pgaio_io_stage")),
+        );
+        *output = false;
+    }
+
+    let h = new_handle(0, 0);
+    // SAFETY: this handle is private to this test.
+    unsafe {
+        let d = h.data();
+        d.op = PGAIO_OP_READV;
+        d.target = PGAIO_TID_SMGR;
+    }
+    h.set_state(PGAIO_HS_STAGED);
+    let old_level = elog::config::log_min_messages();
+    let old_client = elog::config::client_min_messages();
+    let old_hook = elog::set_emit_log_hook(Some(hook));
+    elog::config::set_client_min_messages(types_error::ERROR);
+    elog::config::set_log_min_messages(types_error::DEBUG3);
+    for synchronous in [false, true] {
+        for in_batch in [false, true] {
+            handle::report_staged(7, &h, synchronous, in_batch).unwrap();
+        }
+    }
+    elog::config::set_log_min_messages(types_error::DEBUG2);
+    handle::report_staged(7, &h, true, true).unwrap();
+    elog::set_emit_log_hook(old_hook);
+    elog::config::set_log_min_messages(old_level);
+    elog::config::set_client_min_messages(old_client);
+    assert_eq!(SEEN.load(Ordering::Relaxed), 4);
+}
+
+#[test]
 fn check_io_method_accepts_sync_and_worker_refuses_others() {
     let mut extra = None;
     for v in [guc_tables::consts::IOMETHOD_SYNC, guc_tables::consts::IOMETHOD_WORKER] {
@@ -60,7 +105,7 @@ const TEST_IMC: usize = 8;
 const TEST_COMBINE: usize = 4;
 static TEST_COMBINE_LIMIT: AtomicI32 = AtomicI32::new(TEST_COMBINE as i32);
 
-fn test_ctl() {
+pub(super) fn test_ctl() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         guc_tables::vars::io_max_combine_limit.install_if_absent(GucVarAccessors {
@@ -307,4 +352,122 @@ fn init_backend_without_a_pgproc_is_a_catchable_error() {
     let err = pgaio_init_backend().expect_err("no PGPROC");
     assert_eq!(err.message, "aio requires a normal PGPROC");
     assert!(MY_BACKEND.get().is_none());
+}
+
+#[test]
+fn callback_debug_messages_match_c() {
+    static SEEN: std::sync::Mutex<Vec<types_error::PgError>> = std::sync::Mutex::new(Vec::new());
+    test_ctl();
+    let index = 22;
+    let h = ioh(index);
+    h.set_state(PGAIO_HS_HANDED_OUT);
+    let previous_level = elog::config::log_min_messages();
+    elog::config::set_log_min_messages(types_error::DEBUG4);
+    let previous_hook = elog::set_emit_log_hook(Some(|error, output| {
+        SEEN.lock().unwrap().push(error.clone());
+        *output = false;
+    }));
+    bufmgr_seams::aio_buffer_readv_stage::set(|_, _, _| {});
+    smgr_seams::aio_md_readv_complete::set(|_, mut result, _| {
+        result.result /= 8192;
+        result
+    });
+    bufmgr_seams::aio_shared_buffer_readv_complete::set(|_, result, _| result);
+    bufmgr_seams::aio_shared_buffer_readv_complete_local::set(|_, result, _| result);
+    pgaio_io_register_callbacks(index, types_storage::aio::PGAIO_HCB_SHARED_BUFFER_READV, 7);
+    pgaio_io_set_target_smgr(
+        index,
+        types_storage::RelFileLocator::default(),
+        types_core::ForkNumber::MAIN_FORKNUM,
+        0,
+        1,
+        false,
+        false,
+    );
+    pgaio_io_register_callbacks(index, types_storage::aio::PGAIO_HCB_MD_READV, 0);
+    // SAFETY: this test exclusively owns handle 23.
+    unsafe { h.data() }.op = PGAIO_OP_READV;
+    h.set_state(PGAIO_HS_DEFINED);
+    callback::pgaio_io_call_stage(index);
+    h.result.store(8192, Ordering::Relaxed);
+    h.set_state(PGAIO_HS_COMPLETED_IO);
+    init_small::globals::StartCriticalSection();
+    callback::pgaio_io_call_complete_shared(index);
+    init_small::globals::EndCriticalSection();
+    h.set_state(PGAIO_HS_COMPLETED_SHARED);
+    callback::pgaio_io_call_complete_local(index);
+    elog::set_emit_log_hook(previous_hook);
+    elog::config::set_log_min_messages(previous_level);
+    h.set_state(PGAIO_HS_IDLE);
+
+    let seen = SEEN.lock().unwrap();
+    let expected = [
+        (types_error::DEBUG3, 106, "pgaio_io_register_callbacks", "invalid", "invalid", "HANDED_OUT", "adding cb #1, id 2/aio_shared_buffer_readv_cb"),
+        (types_error::DEBUG3, 106, "pgaio_io_register_callbacks", "invalid", "smgr", "HANDED_OUT", "adding cb #2, id 1/aio_md_readv_cb"),
+        (types_error::DEBUG3, 215, "pgaio_io_call_stage", "readv", "smgr", "DEFINED", "calling cb #1 2/aio_shared_buffer_readv_cb->stage(7)"),
+        (types_error::DEBUG4, 257, "pgaio_io_call_complete_shared", "readv", "smgr", "COMPLETED_IO", "calling cb #2, id 1/aio_md_readv_cb->complete_shared(0) with distilled result: (status OK, id 0, error_data 0, result 8192)"),
+        (types_error::DEBUG4, 257, "pgaio_io_call_complete_shared", "readv", "smgr", "COMPLETED_IO", "calling cb #1, id 2/aio_shared_buffer_readv_cb->complete_shared(7) with distilled result: (status OK, id 0, error_data 0, result 1)"),
+        (types_error::DEBUG3, 270, "pgaio_io_call_complete_shared", "readv", "smgr", "COMPLETED_IO", "after shared completion: distilled result: (status OK, id 0, error_data: 0, result 1), raw_result: 8192"),
+        (types_error::DEBUG4, 311, "pgaio_io_call_complete_local", "readv", "smgr", "COMPLETED_SHARED", "calling cb #1, id 2/aio_shared_buffer_readv_cb->complete_local(7) with distilled result: status OK, id 0, error_data 0, result 1"),
+        (types_error::DEBUG3, 328, "pgaio_io_call_complete_local", "readv", "smgr", "COMPLETED_SHARED", "after local completion: result: (status OK, id 0, error_data 0, result 1), raw_result: 8192"),
+    ];
+    assert_eq!(seen.len(), expected.len());
+    for (error, (level, line, function, op, target, state, message)) in seen.iter().zip(expected) {
+        assert_eq!(error.level(), level);
+        assert_eq!(
+            error.message(),
+            format!("io 22        |op {op:<5}|target {target:<4}|state {state:<16}: {message}")
+        );
+        assert!(error.hide_statement());
+        assert!(error.hide_context());
+        assert_eq!(
+            error.location,
+            Some(types_error::ErrorLocation::new(
+                "aio_callback.c",
+                line,
+                function
+            ))
+        );
+    }
+}
+
+#[test]
+fn update_state_debug_report_matches_c() {
+    static SEEN: std::sync::Mutex<Vec<types_error::PgError>> = std::sync::Mutex::new(Vec::new());
+    test_ctl();
+    let index: u32 = 20;
+    let h = ioh(index);
+    h.set_state(PGAIO_HS_IDLE);
+    let previous_level = elog::config::log_min_messages();
+    let previous_client = elog::config::client_min_messages();
+    elog::config::set_client_min_messages(types_error::ERROR);
+    elog::config::set_log_min_messages(types_error::DEBUG5);
+    let previous_hook = elog::set_emit_log_hook(Some(|error, output| {
+        SEEN.lock().unwrap().push(error.clone());
+        *output = false;
+    }));
+    handle::update_state(index, PGAIO_HS_HANDED_OUT);
+    handle::aio_debug(types_error::DEBUG4, 1145, "pgaio_submit_staged", || {
+        "aio: submitted 1 IOs".to_string()
+    });
+    elog::config::set_log_min_messages(types_error::DEBUG1);
+    handle::update_state(index, PGAIO_HS_IDLE);
+    elog::set_emit_log_hook(previous_hook);
+    elog::config::set_log_min_messages(previous_level);
+    elog::config::set_client_min_messages(previous_client);
+
+    let seen = SEEN.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].level(), types_error::DEBUG5);
+    assert_eq!(
+        seen[0].message(),
+        "io 20        |op invalid|target invalid|state IDLE            : updating state to HANDED_OUT"
+    );
+    assert!(seen[0].hide_statement() && seen[0].hide_context());
+    assert_eq!(
+        seen[0].location,
+        Some(types_error::ErrorLocation::new("aio.c", 395, "pgaio_io_update_state"))
+    );
+    assert_eq!(seen[1].message(), "aio: submitted 1 IOs");
+    assert_eq!(h.state(), PGAIO_HS_IDLE);
 }

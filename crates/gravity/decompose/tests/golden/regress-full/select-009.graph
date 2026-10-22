@@ -1,0 +1,10 @@
+-- regress-full-select-009
+-- SELECT * FROM nocols n, LATERAL (VALUES(n.*)) v;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2910 end=sink
+  nodes n0@0
+  source range rel=22460 rti=1 am=heap
+    lanes Offset:byval2:w2:val
+  project ()
+  outs
+mapped: SeqScan

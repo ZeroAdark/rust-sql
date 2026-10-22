@@ -245,7 +245,7 @@ pub fn init_seams() {
     extension_seams::pg_extension_config_dump::set(funcs::fc_pg_extension_config_dump);
     extension_seams::pg_get_loaded_modules::set(funcs::fc_pg_get_loaded_modules);
     extension_seams::get_extension_name::set(|ext_oid| {
-        let cx = mcx::MemoryContext::new_bump("get_extension_name");
+        let cx = mcx::MemoryContext::new_wholesale("get_extension_name");
         let out = match get_extension_name(cx.mcx(), ext_oid) {
             Ok(name) => Ok(name.map(|s| s.as_str().to_owned())),
             Err(e) => Err(e),

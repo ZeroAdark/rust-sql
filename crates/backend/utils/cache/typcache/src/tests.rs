@@ -153,6 +153,7 @@ fn fake_relation_open(
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: mcx::PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -912,4 +913,73 @@ fn tupledesc_identifiers_skip_the_invalid_sentinel() {
         assert_ne!(id, INVALID_TUPLEDESC_IDENTIFIER);
         assert!(id >= 2, "identifier {id} collides with the reserved values");
     }
+}
+
+// V4R-453: the leader's images serve a claim thread (a pool worker) without its catalog, never through its
+// persistent type cache, and a claim's entries end with the claim.
+const FLAGS_ARMED: i32 = TYPECACHE_EQ_OPR | TYPECACHE_LT_OPR | TYPECACHE_GT_OPR | TYPECACHE_CMP_PROC | TYPECACHE_EQ_OPR_FINFO | TYPECACHE_CMP_PROC_FINFO;
+
+fn leak_images(types: &[(Oid, i32)]) -> &'static [armed::TypcacheImage] {
+    let mut out = Vec::new();
+    for &(t, f) in types {
+        armed::image_closure(t, f, &mut out).unwrap();
+    }
+    Box::leak(out.into_boxed_slice())
+}
+
+#[test]
+fn an_armed_claim_serves_the_leaders_entries_without_its_catalog() {
+    install();
+    ENUM_MEMBERS.with(|m| *m.borrow_mut() = vec![(90100, 1.0), (90102, 2.0), (90101, 1.5)]);
+    let images = leak_images(&[(INT4_ARRAY, FLAGS_ARMED), (ENUM_OID, 0), (RANGE_OID, TYPECACHE_RANGE_INFO)]);
+    assert!(images.iter().any(|i| i.type_id() == INT4OID), "an array's element is in its closure");
+    std::thread::spawn(move || {
+        // this thread's ENUM_MEMBERS is empty: a reload here would not find 90101
+        armed::arm(images);
+        assert!(armed::armed_with(images));
+        let a = lookup_type_cache(INT4_ARRAY, TYPECACHE_CMP_PROC_FINFO).unwrap();
+        assert_eq!(a.cmp_proc_finfo().fn_oid, F_BTARRAYCMP);
+        let e = lookup_type_cache(INT4OID, TYPECACHE_CMP_PROC_FINFO).unwrap();
+        assert_eq!(e.cmp_proc_finfo().fn_oid, F_BTINT4CMP);
+        let en = lookup_type_cache(ENUM_OID, 0).unwrap();
+        assert_eq!(compare_values_of_enum(&en, 90101, 90102).unwrap(), -1);
+        assert_eq!(compare_values_of_enum(&en, 90101, 90100).unwrap(), 1);
+        let r = lookup_type_cache(RANGE_OID, TYPECACHE_RANGE_INFO).unwrap();
+        assert_eq!(r.rng_cmp_proc_finfo().fn_oid, F_BTINT4CMP);
+        assert_eq!(r.rngelemtype().expect("the subtype armed").type_id, INT4OID);
+        // armed, not cached: the thread's persistent type cache stays empty
+        assert_eq!(with_state(|st| st.type_cache.len()), 0);
+        armed::disarm();
+        assert!(!armed::armed_with(images));
+    })
+    .join()
+    .unwrap();
+}
+
+/// main's condition (1): two consecutive claims for different statements on one thread; the second sees none of the
+/// first's entries, and no armed Rc stays in the thread past its claim.
+#[test]
+fn a_second_claim_sees_none_of_the_first_claims_entries() {
+    install();
+    ENUM_MEMBERS.with(|m| *m.borrow_mut() = vec![(90100, 1.0), (90102, 2.0)]);
+    let first = leak_images(&[(INT4_ARRAY, FLAGS_ARMED)]);
+    let second = leak_images(&[(ENUM_OID, 0)]);
+    std::thread::spawn(move || {
+        armed::arm(first);
+        let a = lookup_type_cache(INT4_ARRAY, TYPECACHE_CMP_PROC_FINFO).unwrap();
+        let held = Rc::downgrade(&a);
+        drop(a);
+        assert!(held.upgrade().is_some(), "the claim's map holds its entry");
+        armed::disarm();
+        assert!(held.upgrade().is_none(), "the claim's end drops every armed entry");
+        armed::arm(second);
+        assert!(armed::lookup(INT4_ARRAY, 0).unwrap().is_none());
+        assert!(armed::lookup(INT4OID, 0).unwrap().is_none());
+        assert!(armed::lookup(ENUM_OID, 0).unwrap().is_some());
+        armed::disarm();
+        assert!(armed::lookup(ENUM_OID, 0).unwrap().is_none());
+        assert_eq!(with_state(|st| st.type_cache.len()), 0);
+    })
+    .join()
+    .unwrap();
 }

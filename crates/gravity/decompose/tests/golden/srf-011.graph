@@ -1,0 +1,12 @@
+-- srf-011
+-- SELECT jsonb_array_elements('[1, 2]'::jsonb);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project ()
+  srf tlist [1:JsonbArrayElements { text: false } fn3219 fn3219(c3802:'\x02\x00\x00@\x08\x00\x00\x90\x08\x00\x00\x10 \x00\x00\x00\x00\x80\x01\x00 \x00\x00\x00\x00\x80\x02\x00')]
+  project (1=fn3219(c3802:'\x02\x00\x00@\x08\x00\x00\x90\x08\x00\x00\x10 \x00\x00\x00\x00\x80\x01\x00 \x00\x00\x00\x00\x80\x02\x00'))
+  outs
+  outs 1=vl:call3219
+mapped: Result ProjectSet

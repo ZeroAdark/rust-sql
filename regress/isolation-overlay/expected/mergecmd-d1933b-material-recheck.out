@@ -1,0 +1,136 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2expb s1upd s2b s1c s2sel
+step s2expb: EXPLAIN (COSTS OFF) MERGE INTO dr_t t USING dr_s s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (s.sid, s.delta, 'new');
+QUERY PLAN                                               
+---------------------------------------------------------
+Merge on dr_t t                                          
+  ->  Nested Loop Left Join                              
+        Join Filter: (NOT (t.tid IS DISTINCT FROM s.sid))
+        ->  Seq Scan on dr_s s                           
+        ->  Materialize                                  
+              ->  Seq Scan on dr_t t                     
+(6 rows)
+
+step s1upd: UPDATE dr_t SET bal = bal + 1 WHERE tid = 2;
+step s2b: MERGE INTO dr_t t USING dr_s s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (s.sid, s.delta, 'new'); <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+step s2sel: SELECT * FROM dr_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+  2|221|b  
+  3|330|c  
+(3 rows)
+
+
+starting permutation: s1del s2b s1c s2sel
+step s1del: DELETE FROM dr_t WHERE tid = 2;
+step s2b: MERGE INTO dr_t t USING dr_s s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (s.sid, s.delta, 'new'); <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+step s2sel: SELECT * FROM dr_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+  2| 20|new
+  3|330|c  
+(3 rows)
+
+
+starting permutation: s1key s2b s1c s2sel
+step s1key: UPDATE dr_t SET tid = 50 WHERE tid = 2;
+step s2b: MERGE INTO dr_t t USING dr_s s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (s.sid, s.delta, 'new'); <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+step s2sel: SELECT * FROM dr_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+  2| 20|new
+  3|330|c  
+ 50|200|b  
+(4 rows)
+
+
+starting permutation: s1upd s2b s1a s2sel
+step s1upd: UPDATE dr_t SET bal = bal + 1 WHERE tid = 2;
+step s2b: MERGE INTO dr_t t USING dr_s s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED THEN UPDATE SET bal = t.bal + s.delta WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (s.sid, s.delta, 'new'); <waiting ...>
+step s1a: ROLLBACK;
+step s2b: <... completed>
+step s2sel: SELECT * FROM dr_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+  2|220|b  
+  3|330|c  
+(3 rows)
+
+
+starting permutation: s2expa s1bupd s2a s1c s2bsel
+step s2expa: EXPLAIN (COSTS OFF) MERGE INTO dr_big t USING dr_s3 s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE;
+QUERY PLAN                                               
+---------------------------------------------------------
+Merge on dr_big t                                        
+  ->  Nested Loop                                        
+        Join Filter: (NOT (t.tid IS DISTINCT FROM s.sid))
+        ->  Seq Scan on dr_big t                         
+        ->  Materialize                                  
+              ->  Seq Scan on dr_s3 s                    
+(6 rows)
+
+step s1bupd: UPDATE dr_big SET bal = bal + 1 WHERE tid = 3;
+step s2a: MERGE INTO dr_big t USING dr_s3 s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+step s2bsel: SELECT * FROM dr_big WHERE tid < 5 OR tid > 60 ORDER BY tid;
+tid|bal
+---+---
+  1|100
+  3|331
+  4|400
+(3 rows)
+
+
+starting permutation: s1supd s2a s1c s2bsel
+step s1supd: UPDATE dr_s3 SET delta = 99 WHERE sid = 3;
+step s2a: MERGE INTO dr_big t USING dr_s3 s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE;
+step s1c: COMMIT;
+step s2bsel: SELECT * FROM dr_big WHERE tid < 5 OR tid > 60 ORDER BY tid;
+tid|bal
+---+---
+  1|100
+  3|330
+  4|400
+(3 rows)
+
+
+starting permutation: s1bkey s2a s1c s2bsel
+step s1bkey: UPDATE dr_big SET tid = 90 WHERE tid = 3;
+step s2a: MERGE INTO dr_big t USING dr_s3 s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+step s2bsel: SELECT * FROM dr_big WHERE tid < 5 OR tid > 60 ORDER BY tid;
+tid|bal
+---+---
+  1|100
+  4|400
+ 90|300
+(3 rows)
+
+
+starting permutation: s1b1 s2bs s1c s2bsel
+step s1b1: UPDATE dr_big SET bal = bal + 5 WHERE tid = 1;
+step s2bs: MERGE INTO dr_big t USING dr_s3 s ON t.tid IS NOT DISTINCT FROM s.sid WHEN MATCHED THEN UPDATE SET bal = s.delta WHEN NOT MATCHED BY SOURCE AND t.tid < 2 THEN UPDATE SET bal = t.bal * 2; <waiting ...>
+step s1c: COMMIT;
+step s2bs: <... completed>
+step s2bsel: SELECT * FROM dr_big WHERE tid < 5 OR tid > 60 ORDER BY tid;
+tid|bal
+---+---
+  1|210
+  2| 20
+  3| 30
+  4|400
+(4 rows)
+

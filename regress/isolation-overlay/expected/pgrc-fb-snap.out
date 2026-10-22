@@ -1,0 +1,57 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1wait s1agg s2del s2wake ragg
+step s1wait: DO $$ BEGIN PERFORM injection_points_attach('gravity-simple-before-snapshot', 'wait'); END $$;
+step s1agg: SELECT count(*), sum(v) FROM pgrc_fbs; <waiting ...>
+step s2del: DO $$ BEGIN DELETE FROM pgrc_fbs WHERE id = 7; END $$;
+step s2wake: DO $$ BEGIN PERFORM injection_points_detach('gravity-simple-before-snapshot'); PERFORM injection_points_wakeup('gravity-simple-before-snapshot'); END $$;
+step s1agg: <... completed>
+count| sum
+-----+----
+   99|5043
+(1 row)
+
+step ragg: SELECT count(*), sum(v) FROM pgrc_fbs;
+count| sum
+-----+----
+   99|5043
+(1 row)
+
+
+starting permutation: s1wait s1agg s2row s2wake ragg
+step s1wait: DO $$ BEGIN PERFORM injection_points_attach('gravity-simple-before-snapshot', 'wait'); END $$;
+step s1agg: SELECT count(*), sum(v) FROM pgrc_fbs; <waiting ...>
+step s2row: DO $$ BEGIN COPY pgrc_fbs FROM PROGRAM 'echo 101,101' WITH (FORMAT csv) WHERE random() >= 0; END $$;
+step s2wake: DO $$ BEGIN PERFORM injection_points_detach('gravity-simple-before-snapshot'); PERFORM injection_points_wakeup('gravity-simple-before-snapshot'); END $$;
+step s1agg: <... completed>
+count| sum
+-----+----
+  101|5151
+(1 row)
+
+step ragg: SELECT count(*), sum(v) FROM pgrc_fbs;
+count| sum
+-----+----
+  101|5151
+(1 row)
+
+
+starting permutation: s1wait s1rr s1agg s2del s2wake s1c ragg
+step s1wait: DO $$ BEGIN PERFORM injection_points_attach('gravity-simple-before-snapshot', 'wait'); END $$;
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1agg: SELECT count(*), sum(v) FROM pgrc_fbs; <waiting ...>
+step s2del: DO $$ BEGIN DELETE FROM pgrc_fbs WHERE id = 7; END $$;
+step s2wake: DO $$ BEGIN PERFORM injection_points_detach('gravity-simple-before-snapshot'); PERFORM injection_points_wakeup('gravity-simple-before-snapshot'); END $$;
+step s1agg: <... completed>
+count| sum
+-----+----
+  100|5050
+(1 row)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(v) FROM pgrc_fbs;
+count| sum
+-----+----
+   99|5043
+(1 row)
+

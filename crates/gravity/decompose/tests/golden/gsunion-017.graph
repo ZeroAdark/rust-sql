@@ -1,0 +1,115 @@
+-- gsunion-017
+-- SELECT g.a, h.a, sum(v) FROM g JOIN h ON h.a = g.a WHERE g.c > 10 GROUP BY ROLLUP (g.a, h.a) ORDER BY 1, 2;
+graph pipelines=10 breakers=9 init_plans=0 root=p9
+p0 node=7 eligible rows=300 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n7@0 n6@1
+  source range rel=16401 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v6.2, 2=v6.1)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=w8:val 2=w8:val
+p1 node=5 eligible rows=1990 end=breaker(slot=1 PlainAgg)
+  desc consumes=slot0@p0
+  nodes n5@0 n4@2 n3@4^
+  source range rel=16395 rti=5 am=heap
+    lanes Attr(2):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  filter op521(v5.4, c23:10)
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7)
+  probe slot=0 inner=n6 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.2))
+  project (1=inner.1)
+  outs 1=w4:val 2=w8:val 3=w4:val 4=w8:val 5=vl:row 6=vl:row 7=w8:val
+  outs 1=w4:val
+p2 node=13 eligible rows=300 end=breaker(slot=0 HashBuild)
+  desc words=bits@6/7
+  nodes n13@0 n12@1
+  source range rel=16401 rti=10 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v10.2, 2=v10.1)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=w8:val 2=w8:val
+p3 node=11 eligible rows=1990 end=breaker(slot=2 HashAgg)
+  desc consumes=slot0@p2 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n11@0 n10@2 n9@4^
+  source range rel=16395 rti=9 am=heap
+    lanes Attr(2):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  filter op521(v9.4, c23:10)
+  project (1=v9.1, 2=v9.2, 3=v9.3, 4=v9.4, 5=v9.5, 6=v9.6, 7=v9.7)
+  probe slot=0 inner=n12 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.2))
+  project (1=outer.2, 2=inner.1)
+  outs 1=w4:val 2=w8:val 3=w4:val 4=w8:val 5=vl:row 6=vl:row 7=w8:val
+  outs 1=w8:val 2=w4:val
+p4 node=19 eligible rows=300 end=breaker(slot=0 HashBuild)
+  desc words=bits@7/8
+  nodes n19@0 n18@1
+  source range rel=16401 rti=14 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v14.1, 2=v14.2)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=w8:val
+p5 node=17 eligible rows=1990 end=breaker(slot=3 HashAgg)
+  desc consumes=slot0@p4 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n17@0 n16@2 n15@4^
+  source range rel=16395 rti=13 am=heap
+    lanes Attr(2):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  filter op521(v13.4, c23:10)
+  project (1=v13.1, 2=v13.2, 3=v13.3, 4=v13.4, 5=v13.5, 6=v13.6, 7=v13.7)
+  probe slot=0 inner=n18 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  project (1=outer.2, 2=inner.1, 3=inner.2)
+  outs 1=w4:val 2=w8:val 3=w4:val 4=w8:val 5=vl:row 6=vl:row 7=w8:val
+  outs 1=w8:val 2=w4:val 3=w4:val
+p6 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot1@p1
+  nodes n3@0 n1@1 n0@3^
+  source breaker slot=1
+  project (1=c23:null, 2=c23:null, 3=agg2108(1=outer.1))
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w4:val 2=w4:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val
+p7 node=9 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot2@p3
+  nodes n9@0 n1@1 n0@3^
+  source breaker slot=2
+  project (1=outer.1, 2=c23:null, 3=agg2108(1=outer.2))
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w4:val 2=w4:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val
+p8 node=15 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot3@p5
+  nodes n15@0 n1@1 n0@3^
+  source breaker slot=3
+  project (1=outer.1, 2=outer.2, 3=agg2108(1=outer.3))
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w4:val 2=w4:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val
+p9 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p8
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=PlainAgg budget=Fixed(80) spill=None producer=p1 layout=[]->[SumI64@0,Count@8]+valid 24B
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[SumI64@8,Count@16]+valid 32B
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[I32,I32]->[SumI64@16,Count@24]+valid 40B
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p6 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p7 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p8 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+group slot=1 producer=p1 node=3 form=Plain hints=[] layout=[]->[SumI64@0,Count@8]+valid 24B
+  agg aggno=0 fn=2108 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.1)
+group slot=2 producer=p3 node=9 form=Hashed hints=[] layout=[I32]->[SumI64@8,Count@16]+valid 32B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.2
+  agg aggno=0 fn=2108 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.2)
+group slot=3 producer=p5 node=15 form=Hashed hints=[] layout=[I32,I32]->[SumI64@16,Count@24]+valid 40B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.2
+  key 1 word=1 resno=2 kind=I32 attno=0 type=23 expr=inner.1
+  agg aggno=0 fn=2108 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.3)
+mapped: Append SeqScan HashJoin Sort Agg Hash

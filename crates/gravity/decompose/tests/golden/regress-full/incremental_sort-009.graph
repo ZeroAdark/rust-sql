@@ -1,0 +1,9 @@
+-- regress-full-incremental_sort-009
+-- select explain_analyze_inc_sort_nodes_verify_invariants('select * from (select * from t order by a) s order by a, b limit 55');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op412(fn3452(op3211(op3211($4, $6), c25:'Peak Sort Space Used')), fn3452(op3211(op3211($4, $6), c25:'Peak Sort Space Used'))))
+  outs 1=w1:val
+mapped: Result

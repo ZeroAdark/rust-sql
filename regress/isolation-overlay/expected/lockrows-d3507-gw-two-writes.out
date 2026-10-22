@@ -1,0 +1,280 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1get s2get s1c s2show
+step s1get: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w1', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w1', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload;
+id|job_queue_id|payload
+--+------------+-------
+ 1|           1|p0     
+(1 row)
+
+step s2get: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload;
+id|job_queue_id|payload
+--+------------+-------
+ 2|            |p0     
+(1 row)
+
+step s1c: COMMIT;
+step s2show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t    |id|locked_by|n|x 
+-----+--+---------+-+--
+job  | 1|w1       |1|p0
+job  | 2|w2       |1|p0
+queue| 1|w1       |0|qa
+(3 rows)
+
+
+starting permutation: s1upd s2wait s1c s2show
+step s1upd: UPDATE gj SET payload = 'p1' WHERE id = 1;
+step s2wait: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s2wait: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 1|           1|p1     
+(1 row)
+
+step s2show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t    |id|locked_by|n|x 
+-----+--+---------+-+--
+job  | 1|w2       |1|p1
+queue| 1|w2       |0|qa
+(2 rows)
+
+
+starting permutation: s1off s2wait s1c s2show
+step s1off: UPDATE gj SET is_available = false WHERE id = 1;
+step s2wait: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s2wait: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 2|            |p0     
+(1 row)
+
+step s2show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t  |id|locked_by|n|x 
+---+--+---------+-+--
+job| 2|w2       |1|p0
+(1 row)
+
+
+starting permutation: s1del s2wait s1c s2show
+step s1del: DELETE FROM gj WHERE id = 1;
+step s2wait: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s2wait: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 2|            |p0     
+(1 row)
+
+step s2show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t  |id|locked_by|n|x 
+---+--+---------+-+--
+job| 2|w2       |1|p0
+(1 row)
+
+
+starting permutation: s1q s2get s1c s2show
+step s1q: UPDATE gq SET job_count = job_count + 10 WHERE id = 1;
+step s2get: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w2', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s2get: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 1|           1|p0     
+(1 row)
+
+step s2show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t    |id|locked_by| n|x 
+-----+--+---------+--+--
+job  | 1|w2       | 1|p0
+queue| 1|w2       |10|qa
+(2 rows)
+
+
+starting permutation: s1get s3get s1c s3show
+step s1get: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w1', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w1', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload;
+id|job_queue_id|payload
+--+------------+-------
+ 1|           1|p0     
+(1 row)
+
+step s3get: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload;
+id|job_queue_id|payload
+--+------------+-------
+ 2|            |p0     
+(1 row)
+
+step s1c: COMMIT;
+step s3show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t    |id|locked_by|n|x 
+-----+--+---------+-+--
+job  | 1|w1       |1|p0
+job  | 2|w3       |1|p0
+queue| 1|w1       |0|qa
+(3 rows)
+
+
+starting permutation: s1upd s3wait s1c s3show
+step s1upd: UPDATE gj SET payload = 'p1' WHERE id = 1;
+step s3wait: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s3wait: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 1|           1|p1     
+(1 row)
+
+step s3show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t    |id|locked_by|n|x 
+-----+--+---------+-+--
+job  | 1|w3       |1|p1
+queue| 1|w3       |0|qa
+(2 rows)
+
+
+starting permutation: s1off s3wait s1c s3show
+step s1off: UPDATE gj SET is_available = false WHERE id = 1;
+step s3wait: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s3wait: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 2|            |p0     
+(1 row)
+
+step s3show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t  |id|locked_by|n|x 
+---+--+---------+-+--
+job| 2|w3       |1|p0
+(1 row)
+
+
+starting permutation: s1del s3wait s1c s3show
+step s1del: DELETE FROM gj WHERE id = 1;
+step s3wait: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s3wait: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 2|            |p0     
+(1 row)
+
+step s3show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t  |id|locked_by|n|x 
+---+--+---------+-+--
+job| 2|w3       |1|p0
+(1 row)
+
+
+starting permutation: s1q s3get s1c s3show
+step s1q: UPDATE gq SET job_count = job_count + 10 WHERE id = 1;
+step s3get: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w3', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s3get: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 1|           1|p0     
+(1 row)
+
+step s3show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t    |id|locked_by| n|x 
+-----+--+---------+--+--
+job  | 1|w3       | 1|p0
+queue| 1|w3       |10|qa
+(2 rows)
+
+
+starting permutation: s1get s4get s1c s4show
+step s1get: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w1', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w1', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload;
+id|job_queue_id|payload
+--+------------+-------
+ 1|           1|p0     
+(1 row)
+
+step s4get: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload;
+id|job_queue_id|payload
+--+------------+-------
+ 2|            |p0     
+(1 row)
+
+step s1c: COMMIT;
+step s4show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t    |id|locked_by|n|x 
+-----+--+---------+-+--
+job  | 1|w1       |1|p0
+job  | 2|w4       |1|p0
+queue| 1|w1       |0|qa
+(3 rows)
+
+
+starting permutation: s1upd s4wait s1c s4show
+step s1upd: UPDATE gj SET payload = 'p1' WHERE id = 1;
+step s4wait: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s4wait: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 1|           1|p1     
+(1 row)
+
+step s4show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t    |id|locked_by|n|x 
+-----+--+---------+-+--
+job  | 1|w4       |1|p1
+queue| 1|w4       |0|qa
+(2 rows)
+
+
+starting permutation: s1off s4wait s1c s4show
+step s1off: UPDATE gj SET is_available = false WHERE id = 1;
+step s4wait: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s4wait: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 2|            |p0     
+(1 row)
+
+step s4show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t  |id|locked_by|n|x 
+---+--+---------+-+--
+job| 2|w4       |1|p0
+(1 row)
+
+
+starting permutation: s1del s4wait s1c s4show
+step s1del: DELETE FROM gj WHERE id = 1;
+step s4wait: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s4wait: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 2|            |p0     
+(1 row)
+
+step s4show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t  |id|locked_by|n|x 
+---+--+---------+-+--
+job| 2|w4       |1|p0
+(1 row)
+
+
+starting permutation: s1q s4get s1c s4show
+step s1q: UPDATE gq SET job_count = job_count + 10 WHERE id = 1;
+step s4get: WITH j AS (SELECT gj.job_queue_id, gj.id FROM gj WHERE gj.is_available AND run_at <= '2026-01-02' ORDER BY priority, run_at LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w4', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.payload; <waiting ...>
+step s1c: COMMIT;
+step s4get: <... completed>
+id|job_queue_id|payload
+--+------------+-------
+ 1|           1|p0     
+(1 row)
+
+step s4show: SELECT 'job' AS t, id, locked_by, attempts::text AS n, payload AS x FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, locked_by, job_count::text, queue_name FROM gq WHERE locked_by IS NOT NULL OR job_count > 0 ORDER BY 1, 2;
+t    |id|locked_by| n|x 
+-----+--+---------+--+--
+job  | 1|w4       | 1|p0
+queue| 1|w4       |10|qa
+(2 rows)
+

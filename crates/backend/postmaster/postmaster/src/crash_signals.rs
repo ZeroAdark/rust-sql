@@ -17,6 +17,9 @@
 //   walk_frames         guarded loads along the frame-pointer chain, no libc
 //   CrashRegs::from_ucontext  plain loads from the kernel-supplied ucontext
 //   current_fp          one inline `mov`
+//   core_trim::at_crash open(2) / read(2) / pread(2) / close(2) of
+//                       /proc/self/{maps,pagemap} and madvise(2), static
+//                       buffers (D3666, Linux; see core_trim.rs)
 // No allocation, no locks, no backtrace(3), no dladdr(3), no formatting
 // machinery — the Writer is a fixed stack buffer. glibc's backtrace(3)
 // dlopen()s libgcc_s on first use (loader lock) and backtrace_symbols_fd(3)
@@ -43,6 +46,8 @@ pub fn install_crash_signal_reporter() {
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return;
     }
+    #[cfg(target_os = "linux")]
+    crate::core_trim::install();
     for (idx, (sig, _)) in CRASH_SIGS.iter().enumerate() {
         // SAFETY: standard sigaction install at single-threaded boot; the
         // handler is async-signal-safe (see the module comment).
@@ -69,6 +74,15 @@ extern "C" fn crash_handler(sig: i32, info: *mut libc::siginfo_t, uctx: *mut lib
             }
         }
     }
+
+    let mut activity = [0u8; 1023];
+    let activity_len = backend_status::own_activity_for_crash_report(&mut activity);
+    crate::supervisor::notify_doomed(
+        crash_owner_desc(),
+        init_small::globals::MyProcPid(),
+        sig,
+        &activity[..activity_len],
+    );
 
     let mut buf = [0u8; 256];
     let mut w = Writer { buf: &mut buf, at: 0, fd: 2 };
@@ -146,6 +160,27 @@ extern "C" fn crash_handler(sig: i32, info: *mut libc::siginfo_t, uctx: *mut lib
     w.put(b")\n");
     w.flush();
 
+    // D3666: leave the address space nobody wrote out of the core, and put
+    // back the buffer pool blocks this thread was touching (core_trim.rs).
+    #[cfg(target_os = "linux")]
+    {
+        let mut addrs = [0usize; 1 + GREGS];
+        addrs[0] = addr;
+        // SAFETY: uctx is kernel-provided and valid for SA_SIGINFO.
+        let k = unsafe { general_regs(uctx, &mut addrs[1..]) };
+        let t = crate::core_trim::at_crash(&addrs[..1 + k]);
+        w.put(b"pgrust: core trim: ");
+        w.dec(t.bytes as u64);
+        w.put(b" bytes of untouched memory left out of the core (");
+        w.dec(t.runs as u64);
+        w.put(b" runs in ");
+        w.dec(t.vmas as u64);
+        w.put(b" mappings), ");
+        w.dec(t.kept as u64);
+        w.put(b" bytes of buffer pool kept\n");
+        w.flush();
+    }
+
     // C3-F3: deliver the re-raise NOW (the signal is blocked while this
     // handler runs, so unblock it first; raise(2) + sigprocmask(2) are
     // async-signal-safe). A kill(2)-delivered crash signal has no faulting
@@ -171,6 +206,15 @@ extern "C" fn crash_handler(sig: i32, info: *mut libc::siginfo_t, uctx: *mut lib
         libc::sigfillset(&mut dfl.sa_mask);
         libc::sigaction(sig, &dfl, core::ptr::null_mut());
         libc::raise(sig);
+    }
+}
+
+/// C's LogChildExit procname for the faulting thread; the postmaster thread
+/// itself (and anything unregistered) is "server process".
+fn crash_owner_desc() -> &'static str {
+    match miscinit::GetMyBackendType() {
+        types_core::init::BackendType::Invalid => "server process",
+        t => miscinit::GetBackendTypeDesc(t),
     }
 }
 
@@ -333,6 +377,54 @@ impl CrashRegs {
         }
         None
     }
+}
+
+/// D3666: how many general registers `general_regs` returns at most.
+#[cfg(target_os = "linux")]
+const GREGS: usize = 34;
+
+/// D3666: the faulting thread's general registers and stack pointer, the
+/// addresses its last instructions may have been reading (the buffer pool
+/// blocks they point into stay in the core). Returns how many it wrote.
+///
+/// # Safety
+/// `uctx` is null or the kernel-supplied `ucontext_t*` of a SA_SIGINFO
+/// handler on this platform.
+#[cfg(target_os = "linux")]
+#[allow(unused_variables, unreachable_code)]
+unsafe fn general_regs(uctx: *mut libc::c_void, out: &mut [usize]) -> usize {
+    if uctx.is_null() {
+        return 0;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: per the contract; libc models this layout.
+        let mc = unsafe { &(*(uctx as *const libc::ucontext_t)).uc_mcontext };
+        let mut n = 0;
+        for &r in mc.regs.iter().chain(core::iter::once(&mc.sp)) {
+            if n == out.len() {
+                break;
+            }
+            out[n] = r as usize;
+            n += 1;
+        }
+        return n;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: per the contract; libc models this layout.
+        let mc = unsafe { &(*(uctx as *const libc::ucontext_t)).uc_mcontext };
+        let mut n = 0;
+        for &r in mc.gregs.iter() {
+            if n == out.len() {
+                break;
+            }
+            out[n] = r as usize;
+            n += 1;
+        }
+        return n;
+    }
+    0
 }
 
 struct Writer<'a> {

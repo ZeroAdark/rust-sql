@@ -49,8 +49,10 @@ pub fn GetRunningTransactionData<R>(
     RUNNING_XACTS_SCRATCH.with(|cell| {
         let mut xids = cell.borrow_mut();
         if xids.capacity() == 0 {
-            // TOTAL_MAX_CACHED_SUBXIDS, sized before taking the locks as C.
-            xids.reserve_exact(GetMaxSnapshotSubxidCount());
+            // TOTAL_MAX_CACHED_SUBXIDS, malloc'd before taking the locks as C
+            // (NULL is ERROR 53200 there too).
+            xids.try_reserve_exact(GetMaxSnapshotSubxidCount())
+                .map_err(|_| ::mcx::oom_malloc())?;
         }
         xids.clear();
 
@@ -100,7 +102,7 @@ pub fn GetRunningTransactionData<R>(
                     let pgprocno = unsafe { arrayP.pgprocnos[index].get() };
                     let proc = &hdr.allProcs[pgprocno as usize];
                     fence(Ordering::Acquire); // pairs with GetNewTransactionId
-                    xids.reserve(nsubxids);
+                    xids.try_reserve(nsubxids).map_err(|_| ::mcx::oom_malloc())?;
                     // SAFETY: the owner only appends under XidGenLock and the
                     // count was fetched once; capacity reserved above;
                     // mirrors GetSnapshotData's locked memcpy.

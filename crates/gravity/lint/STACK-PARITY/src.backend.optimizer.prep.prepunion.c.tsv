@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/optimizer/prep/prepunion.c: 1 stack-depth check sites
+221	recurse_set_operations	crates/backend/optimizer/plan/planner/src/prepunion.rs	recurse_set_operations	yes	

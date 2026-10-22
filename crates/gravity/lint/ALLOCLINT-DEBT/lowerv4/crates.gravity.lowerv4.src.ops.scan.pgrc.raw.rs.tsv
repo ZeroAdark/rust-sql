@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/ops/scan/pgrc/raw.rs
+growth	std::vec::Vec::push	1
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

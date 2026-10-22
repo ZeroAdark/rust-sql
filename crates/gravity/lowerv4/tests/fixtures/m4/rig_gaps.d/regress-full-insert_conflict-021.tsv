@@ -1,0 +1,1 @@
+the rig catalog cannot answer a routed INSERT's partition leaves (the corpus fixtures carry none: "Shape: a routed INSERT whose partition leaves the facts source does not know"); every need built once write.onconflict serves a routed ON CONFLICT DO UPDATE (M4-LOCK D661-b); the server runner serves it (GRAPH, 0 WRONG)

@@ -1,0 +1,5 @@
+path	crates/backend/access/pgrcolumnar/pgrc_batch/src/selection.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	2
+method	std::clone::Clone::clone	1
+type	std::vec::Vec	1

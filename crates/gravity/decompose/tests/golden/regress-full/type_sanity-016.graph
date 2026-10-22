@@ -1,0 +1,24 @@
+-- regress-full-type_sanity-016
+-- SELECT t1.oid, t1.typname, p1.oid, p1.proname FROM pg_type AS t1, pg_proc AS p1 WHERE t1.typsend = p1.oid AND NOT (p1.prorettype = 'bytea'::regtype AND NOT p1.proretset);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=787 end=sink
+  nodes n1@0 n0@1
+  source range rel=1247 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(19):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24, 25=v1.25, 26=v1.26, 27=v1.27, 28=v1.28, 29=v1.29, 30=v1.30, 31=v1.31, 32=v1.32)
+  nest inner=n2 JOIN_INNER unique raise-free params=($exec0=outer.19)
+  inner node=3 serial site=0 reason=IndexSource end=sink
+  nodes n3@0 n2@2
+  source index rel=1255 rti=2 am=heap index=2690
+    key att=1 op=607 value=relabel26($exec0)
+    recheck (op607(v2.1, relabel26($exec0)))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(14):byval8:w8:val Attr(19):byval8:w8:val
+  filter or(op608(v2.19, c26:17), v2.14)
+  project (1=v2.1, 2=v2.2)
+  memo entries=99 singlerow keys=(relabel26($exec0))
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=w4:val 5=w2:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w1:val 11=w1:val 12=w4:val 13=w4:val 14=w4:val 15=w4:val 16=w4:val 17=w4:val 18=w4:val 19=w8:val 20=w4:val 21=w4:val 22=w4:val 23=w1:val 24=w1:val 25=w1:val 26=w4:val 27=w4:val 28=w4:val 29=w4:val 30=vl:row 31=vl:row 32=vl:row
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=fx64:life/breaker
+param $exec0 owner=n0 type=24 rep=w8:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam Memoize

@@ -1,0 +1,11 @@
+path	crates/gravity/exec/src/admit/entry/run.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	5
+macro	std::vec	2
+method	slice::to_vec	2
+method	std::boxed::Box::new	4
+method	std::iter::Iterator::collect	2
+method	std::rc::Rc::new	3
+type	std::boxed::Box	5
+type	std::rc::Rc	3
+type	std::vec::Vec	8

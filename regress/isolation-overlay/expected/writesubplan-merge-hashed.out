@@ -1,0 +1,95 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1v s2m s1c s3sel
+step s1v: UPDATE wmh_t SET val = 99 WHERE id = 4;
+step s2m: 
+  MERGE INTO wmh_t t USING wmh_s s ON t.id = s.id
+  WHEN MATCHED THEN UPDATE SET val = t.val + 1 WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = -t.val;
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM wmh_t ORDER BY id, val;
+id|val
+--+---
+ 1|-10
+ 2|-20
+ 3| 31
+ 4|100
+ 5| 51
+(5 rows)
+
+
+starting permutation: s1k s2m s1c s3sel
+step s1k: UPDATE wmh_t SET id = 2000 WHERE id = 4;
+step s2m: 
+  MERGE INTO wmh_t t USING wmh_s s ON t.id = s.id
+  WHEN MATCHED THEN UPDATE SET val = t.val + 1 WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = -t.val;
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM wmh_t ORDER BY id, val;
+  id|val
+----+---
+   1|-10
+   2|-20
+   3| 31
+   5| 51
+2000|-40
+(5 rows)
+
+
+starting permutation: s1b s2m s1c s3sel
+step s1b: UPDATE wmh_t SET val = 77 WHERE id = 1;
+step s2m: 
+  MERGE INTO wmh_t t USING wmh_s s ON t.id = s.id
+  WHEN MATCHED THEN UPDATE SET val = t.val + 1 WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = -t.val;
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM wmh_t ORDER BY id, val;
+id|val
+--+---
+ 1|-77
+ 2|-20
+ 3| 31
+ 4| 41
+ 5| 51
+(5 rows)
+
+
+starting permutation: s1del s2m s1c s3sel
+step s1del: DELETE FROM wmh_t WHERE id = 4;
+step s2m: 
+  MERGE INTO wmh_t t USING wmh_s s ON t.id = s.id
+  WHEN MATCHED THEN UPDATE SET val = t.val + 1 WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = -t.val;
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM wmh_t ORDER BY id, val;
+id|val
+--+---
+ 1|-10
+ 2|-20
+ 3| 31
+ 5| 51
+(4 rows)
+
+
+starting permutation: s1kb s2m s1c s3sel
+step s1kb: UPDATE wmh_t SET id = 3 WHERE id = 1;
+step s2m: 
+  MERGE INTO wmh_t t USING wmh_s s ON t.id = s.id
+  WHEN MATCHED THEN UPDATE SET val = t.val + 1 WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = -t.val;
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM wmh_t ORDER BY id, val;
+id|val
+--+---
+ 2|-20
+ 3|-10
+ 3| 31
+ 4| 41
+ 5| 51
+(5 rows)
+

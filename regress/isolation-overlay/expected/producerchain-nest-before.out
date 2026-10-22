@@ -1,0 +1,165 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pd s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE bc SET n = bc.n + 1 FROM bp LEFT JOIN bq USING (pid) WHERE bc.pid = bp.pid AND bp.txt IN ('p2', 'p5', 'p6', 'p8');
+QUERY PLAN                                                             
+-----------------------------------------------------------------------
+Update on bc                                                           
+  ->  Nested Loop Left Join                                            
+        Join Filter: (bp.pid = bq.pid)                                 
+        ->  Nested Loop                                                
+              Join Filter: (bc.pid = bp.pid)                           
+              ->  Seq Scan on bc                                       
+              ->  Materialize                                          
+                    ->  Seq Scan on bp                                 
+                          Filter: (txt = ANY ('{p2,p5,p6,p8}'::text[]))
+        ->  Materialize                                                
+              ->  Seq Scan on bq                                       
+(11 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM bc USING bp LEFT JOIN bq USING (pid) WHERE bc.pid = bp.pid AND bp.txt IN ('p2', 'p5', 'p6', 'p8');
+QUERY PLAN                                                             
+-----------------------------------------------------------------------
+Delete on bc                                                           
+  ->  Nested Loop Left Join                                            
+        Join Filter: (bp.pid = bq.pid)                                 
+        ->  Nested Loop                                                
+              Join Filter: (bc.pid = bp.pid)                           
+              ->  Seq Scan on bc                                       
+              ->  Materialize                                          
+                    ->  Seq Scan on bp                                 
+                          Filter: (txt = ANY ('{p2,p5,p6,p8}'::text[]))
+        ->  Materialize                                                
+              ->  Seq Scan on bq                                       
+(11 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1n s1k s1d s2u s1c s2c s3sel
+s1: NOTICE:  before UPDATE c6 old pid=6 n=0 ver=0 new n=100
+step s1n: UPDATE bc SET n = n + 100 WHERE descrip = 'c6';
+s1: NOTICE:  before UPDATE c5 old pid=5 n=0 ver=0 new n=0
+step s1k: UPDATE bc SET pid = 7 WHERE descrip = 'c5';
+s1: NOTICE:  before DELETE c2 old pid=2 n=0 ver=0
+step s1d: DELETE FROM bc WHERE descrip = 'c2';
+step s2u: UPDATE bc SET n = bc.n + 1 FROM bp LEFT JOIN bq USING (pid) WHERE bc.pid = bp.pid AND bp.txt IN ('p2', 'p5', 'p6', 'p8') RETURNING bc.pid, bc.descrip, bc.n, bc.ver, bq.tag; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  before UPDATE c5b old pid=5 n=0 ver=0 new n=1
+s2: NOTICE:  before UPDATE c6 old pid=6 n=100 ver=1 new n=101
+s2: NOTICE:  before UPDATE c8 old pid=8 n=0 ver=0 new n=1
+step s2u: <... completed>
+pid|descrip|  n|ver|tag
+---+-------+---+---+---
+  5|c5b    |  1|  1|q5 
+  6|c6     |101|  2|q6 
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT pid, descrip, n, ver FROM bc ORDER BY pid, descrip;
+pid|descrip|  n|ver
+---+-------+---+---
+  1|c1     |  0|  0
+  5|c5b    |  1|  1
+  6|c6     |101|  2
+  7|c5     |  0|  0
+  8|c8     |  0|  0
+(5 rows)
+
+
+starting permutation: s1n s1k s1d s2d s1c s2c s3sel
+s1: NOTICE:  before UPDATE c6 old pid=6 n=0 ver=0 new n=100
+step s1n: UPDATE bc SET n = n + 100 WHERE descrip = 'c6';
+s1: NOTICE:  before UPDATE c5 old pid=5 n=0 ver=0 new n=0
+step s1k: UPDATE bc SET pid = 7 WHERE descrip = 'c5';
+s1: NOTICE:  before DELETE c2 old pid=2 n=0 ver=0
+step s1d: DELETE FROM bc WHERE descrip = 'c2';
+step s2d: DELETE FROM bc USING bp LEFT JOIN bq USING (pid) WHERE bc.pid = bp.pid AND bp.txt IN ('p2', 'p5', 'p6', 'p8') RETURNING bc.pid, bc.descrip, bq.tag; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  before DELETE c5b old pid=5 n=0 ver=0
+s2: NOTICE:  before DELETE c6 old pid=6 n=100 ver=1
+s2: NOTICE:  before DELETE c8 old pid=8 n=0 ver=0
+step s2d: <... completed>
+pid|descrip|tag
+---+-------+---
+  5|c5b    |q5 
+  6|c6     |q6 
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT pid, descrip, n, ver FROM bc ORDER BY pid, descrip;
+pid|descrip|n|ver
+---+-------+-+---
+  1|c1     |0|  0
+  7|c5     |0|  0
+  8|c8     |0|  0
+(3 rows)
+
+
+starting permutation: s1n s1k s1d s2u s1a s2c s3sel
+s1: NOTICE:  before UPDATE c6 old pid=6 n=0 ver=0 new n=100
+step s1n: UPDATE bc SET n = n + 100 WHERE descrip = 'c6';
+s1: NOTICE:  before UPDATE c5 old pid=5 n=0 ver=0 new n=0
+step s1k: UPDATE bc SET pid = 7 WHERE descrip = 'c5';
+s1: NOTICE:  before DELETE c2 old pid=2 n=0 ver=0
+step s1d: DELETE FROM bc WHERE descrip = 'c2';
+step s2u: UPDATE bc SET n = bc.n + 1 FROM bp LEFT JOIN bq USING (pid) WHERE bc.pid = bp.pid AND bp.txt IN ('p2', 'p5', 'p6', 'p8') RETURNING bc.pid, bc.descrip, bc.n, bc.ver, bq.tag; <waiting ...>
+step s1a: ROLLBACK;
+s2: NOTICE:  before UPDATE c2 old pid=2 n=0 ver=0 new n=1
+s2: NOTICE:  before UPDATE c5 old pid=5 n=0 ver=0 new n=1
+s2: NOTICE:  before UPDATE c5b old pid=5 n=0 ver=0 new n=1
+s2: NOTICE:  before UPDATE c6 old pid=6 n=0 ver=0 new n=1
+s2: NOTICE:  before UPDATE c8 old pid=8 n=0 ver=0 new n=1
+step s2u: <... completed>
+pid|descrip|n|ver|tag
+---+-------+-+---+---
+  2|c2     |1|  1|   
+  5|c5     |1|  1|q5 
+  5|c5b    |1|  1|q5 
+  6|c6     |1|  1|q6 
+(4 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT pid, descrip, n, ver FROM bc ORDER BY pid, descrip;
+pid|descrip|n|ver
+---+-------+-+---
+  1|c1     |0|  0
+  2|c2     |1|  1
+  5|c5     |1|  1
+  5|c5b    |1|  1
+  6|c6     |1|  1
+  8|c8     |0|  0
+(6 rows)
+
+
+starting permutation: s2u s1n s2c s1c s3sel
+s2: NOTICE:  before UPDATE c2 old pid=2 n=0 ver=0 new n=1
+s2: NOTICE:  before UPDATE c5 old pid=5 n=0 ver=0 new n=1
+s2: NOTICE:  before UPDATE c5b old pid=5 n=0 ver=0 new n=1
+s2: NOTICE:  before UPDATE c6 old pid=6 n=0 ver=0 new n=1
+s2: NOTICE:  before UPDATE c8 old pid=8 n=0 ver=0 new n=1
+step s2u: UPDATE bc SET n = bc.n + 1 FROM bp LEFT JOIN bq USING (pid) WHERE bc.pid = bp.pid AND bp.txt IN ('p2', 'p5', 'p6', 'p8') RETURNING bc.pid, bc.descrip, bc.n, bc.ver, bq.tag;
+pid|descrip|n|ver|tag
+---+-------+-+---+---
+  2|c2     |1|  1|   
+  5|c5     |1|  1|q5 
+  5|c5b    |1|  1|q5 
+  6|c6     |1|  1|q6 
+(4 rows)
+
+step s1n: UPDATE bc SET n = n + 100 WHERE descrip = 'c6'; <waiting ...>
+step s2c: COMMIT;
+s1: NOTICE:  before UPDATE c6 old pid=6 n=1 ver=1 new n=101
+step s1n: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT pid, descrip, n, ver FROM bc ORDER BY pid, descrip;
+pid|descrip|  n|ver
+---+-------+---+---
+  1|c1     |  0|  0
+  2|c2     |  1|  1
+  5|c5     |  1|  1
+  5|c5b    |  1|  1
+  6|c6     |101|  2
+  8|c8     |  0|  0
+(6 rows)
+

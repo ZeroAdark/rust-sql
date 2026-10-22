@@ -1,0 +1,11 @@
+RT's runtime-half debt (crates/gravity/lint/rules/rt_thread_state.py, main 2026-10-12T00:17:07Z): the leader-class
+statics of crates/gravity (registry carry `leader`, ../THREAD-STATE) still declared with a plain thread_local!. Declared
+through leader_tls! (crates/_support/leader_tls) instead, a debug build raises ERROR XX000 "leader_tls: <path> <static>
+touched in a pool claim" at any access inside a Gravity pool claim; a release build expands to the same plain
+thread_local!. One file per source file, one row per static: <path> <static> <owner> <note> (owner: a tag of
+../THREAD-STATE/OWNERS). A row goes when its static is declared through leader_tls! (or stops being leader-class). A row
+whose static was removed (source and registry row) is spent: RT counts it in its note, not as a failure, so a lane
+deleting a static need not edit this list; the next edit of the list drops it. The list only shrinks: on a landing a row
+the parent lacks fails, so a new leader-class static of crates/gravity is checked from its first commit. A touch the
+first debug runs find is a CARRY bug: booked (tools/book-line.sh), its static stays a row here until the bug's fix
+lands. The backend's leader-class statics are a later step.

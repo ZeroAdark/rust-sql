@@ -1,0 +1,9 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M7-RIG m7x table-free join rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT a.x, b.y FROM (SELECT g AS x FROM generate_series(1, 5) g) a LEFT JOIN (SELECT g AS y FROM generate_series(1, 0) g) b ON a.x = b.y
+cols: x	y
+[pg]
+1	\N
+2	\N
+3	\N
+4	\N
+5	\N

@@ -1,0 +1,39 @@
+-- regress-full-aggregates-106
+-- EXPLAIN (COSTS OFF) SELECT count(*) FROM btg GROUP BY w, x, y, z ORDER BY x*x, z;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=3 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n3@0 n2@1^
+  source index rel=26030 rti=1 am=heap index=26035
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val
+  project (1=v1.3, 2=v1.4, 3=v1.1, 4=v1.2)
+  sort keys=3+:I32,4+:I32,2+:I32,1+:Fp128@100 presorted=2 form=runs
+  outs 1=vl:win/page 2=w8:val 3=w8:val 4=w8:val
+p1 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashAgg)
+  desc consumes=slot0@p0 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n1@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=vl:win/page 2=w8:val 3=w8:val 4=w8:val
+p2 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot1@p1
+  nodes n1@0 n0@1^
+  source breaker slot=1
+  project (1=agg2803*(), 2j=op514(outer.3, outer.3), 3j=outer.1, 4j=outer.2, 5j=outer.3, 6j=outer.4)
+  sort keys=2+:I32,3+:Fp128@100 form=runs
+  outs 1=w8:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=w4:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2j=outer.2, 3j=outer.3, 4j=outer.4, 5j=outer.5, 6j=outer.6)
+  outs 1=w8:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32,I32,I32,Fp128,Fp128]->[Count@40] 48B order=3+,4+,2+,1+
+breaker slot=1 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32,I32,I32,Fp128,Fp128]->[Count@40,MinCode@48] 56B
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[I32,Fp128,Fp128]->[Count@24] 32B order=2+,3+
+group slot=1 producer=p1 node=1 form=Sorted hints=[] layout=[I32,I32,I32,Fp128,Fp128]->[Count@40,MinCode@48] 56B
+  key 0 word=0 resno=3 kind=I32 attno=0 type=23 expr=outer.3
+  key 1 word=1 resno=4 kind=I32 attno=0 type=23 expr=outer.4
+  key 2 word=2 resno=2 kind=I32 attno=0 type=23 expr=outer.2
+  key 3 word=3 resno=1 kind=Fp128 attno=0 type=25 rep=1 expr=outer.1
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: IndexScan Sort IncrementalSort Agg

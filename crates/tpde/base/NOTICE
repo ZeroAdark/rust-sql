@@ -1,0 +1,8 @@
+Rust translation of TPDE base.hpp, base.cpp, and ValLocalIdx.hpp at revision
+116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception. Original sources and licenses
+are retained under tests/upstream. Rust changes include nominal index types,
+borrow-enforced ownership, backend-local logging, and Rust failure handling.
+Vendored spdlog headers are test references only; their upstream license and
+source hashes are retained under tests/upstream/deps/spdlog and manifest.json.

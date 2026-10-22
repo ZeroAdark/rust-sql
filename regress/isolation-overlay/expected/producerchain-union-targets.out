@@ -1,0 +1,144 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3e s1f s1k s1d s2i s1c s2c s3p
+step s3e: EXPLAIN (COSTS OFF) UPDATE ut_par i SET (f1, f2) = (SELECT i.f1 + k, i.f2 || k FROM ut_one LIMIT 1) WHERE i.f1 < 5;
+QUERY PLAN                              
+----------------------------------------
+Update on ut_par i                      
+  Update on ut_par i_1                  
+  Update on ut_cld i_2                  
+  ->  Result                            
+        ->  Append                      
+              ->  Seq Scan on ut_par i_1
+                    Filter: (f1 < 5)    
+              ->  Seq Scan on ut_cld i_2
+                    Filter: (f1 < 5)    
+        SubPlan 1                       
+          ->  Limit                     
+                ->  Seq Scan on ut_one  
+(12 rows)
+
+step s1f: UPDATE ut_cld SET f2 = 'C3' WHERE f1 = 3;
+step s1k: UPDATE ut_cld SET f1 = 8 WHERE f1 = 4;
+step s1d: DELETE FROM ut_par WHERE f1 = 2;
+step s2i: UPDATE ut_par i SET (f1, f2) = (SELECT i.f1 + k, i.f2 || k FROM ut_one LIMIT 1) WHERE i.f1 < 5; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2c: COMMIT;
+step s3p: SELECT tableoid::regclass, f1, f2 FROM ut_par ORDER BY 1, 2, 3;
+tableoid|f1|f2 
+--------+--+---
+ut_par  | 6|p6 
+ut_par  | 8|p17
+ut_cld  | 8|c17
+ut_cld  | 8|c4 
+ut_cld  | 9|c9 
+ut_cld  |10|C37
+(6 rows)
+
+
+starting permutation: s1r s2r s1c s2c s3r
+step s1r: UPDATE ut_rp SET d = d + 10 WHERE b = 12;
+step s2r: UPDATE ut_rp r SET (c) = (SELECT r.c - 100 FROM ut_one LIMIT 1) WHERE a = 'a' AND c >= 150; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, a, b, c, d FROM ut_rp ORDER BY a, b;
+tableoid|a| b|  c| d
+--------+-+--+---+--
+ut_rp_a1|a| 1|100| 1
+ut_rp_a1|a| 5| 50| 2
+ut_rp_a2|a|12|100|13
+ut_rp_a2|a|15| 90| 4
+ut_rp_b1|b| 3|200| 5
+(5 rows)
+
+
+starting permutation: s1x s1y s2r s1c s2c s3r
+step s1x: UPDATE ut_rp SET c = 201 WHERE b = 1;
+step s1y: UPDATE ut_rp SET c = 160 WHERE b = 12;
+step s2r: UPDATE ut_rp r SET (c) = (SELECT r.c - 100 FROM ut_one LIMIT 1) WHERE a = 'a' AND c >= 150; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, a, b, c, d FROM ut_rp ORDER BY a, b;
+tableoid|a| b|  c|d
+--------+-+--+---+-
+ut_rp_a1|a| 1|101|1
+ut_rp_a1|a| 5| 50|2
+ut_rp_a2|a|12| 60|3
+ut_rp_a2|a|15| 90|4
+ut_rp_b1|b| 3|200|5
+(5 rows)
+
+
+starting permutation: s1x s2m s1c s2c s3r
+step s1x: UPDATE ut_rp SET c = 201 WHERE b = 1;
+step s2m: UPDATE ut_rp r SET (a, c) = (SELECT 'b', r.c - 90 FROM ut_one LIMIT 1) WHERE a = 'a' AND c = 200; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, a, b, c, d FROM ut_rp ORDER BY a, b;
+tableoid|a| b|  c|d
+--------+-+--+---+-
+ut_rp_a1|a| 1|201|1
+ut_rp_a1|a| 5|150|2
+ut_rp_a2|a|15| 90|4
+ut_rp_b1|b| 3|200|5
+ut_rp_b1|b|12|110|3
+(5 rows)
+
+
+starting permutation: s1r s2m s1c s2c s3r
+step s1r: UPDATE ut_rp SET d = d + 10 WHERE b = 12;
+step s2m: UPDATE ut_rp r SET (a, c) = (SELECT 'b', r.c - 90 FROM ut_one LIMIT 1) WHERE a = 'a' AND c = 200; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, a, b, c, d FROM ut_rp ORDER BY a, b;
+tableoid|a| b|  c| d
+--------+-+--+---+--
+ut_rp_a1|a| 5|150| 2
+ut_rp_a2|a|15| 90| 4
+ut_rp_b1|b| 1|110| 1
+ut_rp_b1|b| 3|200| 5
+ut_rp_b1|b|12|110|13
+(5 rows)
+
+
+starting permutation: s1m s2r s1c s2c s3r
+step s1m: UPDATE ut_rp SET b = 13 WHERE b = 5;
+step s2r: UPDATE ut_rp r SET (c) = (SELECT r.c - 100 FROM ut_one LIMIT 1) WHERE a = 'a' AND c >= 150; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, a, b, c, d FROM ut_rp ORDER BY a, b;
+tableoid|a| b|  c|d
+--------+-+--+---+-
+ut_rp_a1|a| 1|200|1
+ut_rp_a2|a|12|200|3
+ut_rp_a2|a|13|150|2
+ut_rp_a2|a|15| 90|4
+ut_rp_b1|b| 3|200|5
+(5 rows)
+
+
+starting permutation: s2i s1f s2c s1c s3p
+step s2i: UPDATE ut_par i SET (f1, f2) = (SELECT i.f1 + k, i.f2 || k FROM ut_one LIMIT 1) WHERE i.f1 < 5;
+step s1f: UPDATE ut_cld SET f2 = 'C3' WHERE f1 = 3; <waiting ...>
+step s2c: COMMIT;
+step s1f: <... completed>
+step s1c: COMMIT;
+step s3p: SELECT tableoid::regclass, f1, f2 FROM ut_par ORDER BY 1, 2, 3;
+tableoid|f1|f2 
+--------+--+---
+ut_par  | 6|p6 
+ut_par  | 8|p17
+ut_par  | 9|p27
+ut_cld  | 8|c17
+ut_cld  | 9|c9 
+ut_cld  |10|c37
+ut_cld  |11|c47
+(7 rows)
+

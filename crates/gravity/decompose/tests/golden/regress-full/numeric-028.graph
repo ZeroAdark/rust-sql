@@ -1,0 +1,31 @@
+-- regress-full-numeric-028
+-- WITH v(exp) AS (VALUES(-16379),(-16378),(-1234),(-789),(-45),(-5),(-4),(-3),(-2),(-1),(0), (1),(2),(3),(4),(5),(38),(275),(2345),(45678),(131070),(131071)) SELECT exp, to_char(('1.2345e'||exp)::numeric, '9.999EEEE') as numeric FROM v;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=22
+    row (c23:-16379)
+    row (c23:-16378)
+    row (c23:-1234)
+    row (c23:-789)
+    row (c23:-45)
+    row (c23:-5)
+    row (c23:-4)
+    row (c23:-3)
+    row (c23:-2)
+    row (c23:-1)
+    row (c23:0)
+    row (c23:1)
+    row (c23:2)
+    row (c23:3)
+    row (c23:4)
+    row (c23:5)
+    row (c23:38)
+    row (c23:275)
+    row (c23:2345)
+    row (c23:45678)
+    row (c23:131070)
+    row (c23:131071)
+  project (1=v2.1, 2=fn1772(io1700(op654(c25:'1.2345e', io25(v2.1))), c25:'9.999EEEE'))
+  outs 1=w4:val 2=vl:call1772
+mapped: ValuesScan

@@ -1,0 +1,100 @@
+-- regress-full-partition_aggregate-015
+-- EXPLAIN (COSTS OFF) SELECT t1.x, sum(t1.y), count(t1) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2.y GROUP BY t1.x ORDER BY 1, 2, 3;
+graph pipelines=9 breakers=8 init_plans=0 root=p8
+p0 node=9 eligible rows=40 end=breaker(slot=0 Materialize)
+  nodes n9@0 n8@1^
+  source range rel=46775 rti=7 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.2)
+  feed slot=0
+  outs 1=w8:val
+p1 node=10 eligible rows=30 end=breaker(slot=0 Materialize)
+  nodes n10@0 n8@1^
+  source range rel=46778 rti=8 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v8.2)
+  feed slot=0
+  outs 1=w8:val
+p2 node=11 eligible rows=30 end=breaker(slot=0 Materialize)
+  nodes n11@0 n8@1^
+  source range rel=46781 rti=9 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v9.2)
+  feed slot=0
+  outs 1=w8:val
+p3 node=8 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p2 words=bits@5/6
+  nodes n8@0 n7@2
+  source breaker slot=0
+  append union slot=0 children=3
+  project (1=outer.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val
+p4 node=4 eligible rows=50 end=breaker(slot=0 HashAgg)
+  desc consumes=slot1@p3 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n3@1 n2@3 n1@5^
+  source range rel=46763 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v4.1, 2=v4.2, 3=T_ConvertRowtypeExpr)
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  probe slot=1 inner=n7 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=w8:val 3=?
+  outs 1=w4:val 2=w4:val 3=?
+  outs 1=w4:val 2=w4:val 3=?
+p5 node=5 eligible rows=50 end=breaker(slot=0 HashAgg)
+  desc consumes=slot1@p3 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n5@0 n3@1 n2@3 n1@5^
+  source range rel=46766 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v5.1, 2=v5.2, 3=T_ConvertRowtypeExpr)
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  probe slot=1 inner=n7 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=w8:val 3=?
+  outs 1=w4:val 2=w4:val 3=?
+  outs 1=w4:val 2=w4:val 3=?
+p6 node=6 eligible rows=50 end=breaker(slot=0 HashAgg)
+  desc consumes=slot1@p3 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n6@0 n3@1 n2@3 n1@5^
+  source range rel=46769 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v6.1, 2=v6.2, 3=T_ConvertRowtypeExpr)
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  probe slot=1 inner=n7 JOIN_INNER keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=w8:val 3=?
+  outs 1=w4:val 2=w4:val 3=?
+  outs 1=w4:val 2=w4:val 3=?
+p7 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot0@p6
+  nodes n1@0 n0@1^
+  source breaker slot=0
+  project (1=outer.1, 2=agg2108(1=outer.2), 3=agg2147(1=outer.3))
+  sort keys=1+:I32,2+:I64,3+:I64 form=runs
+  outs 1=w4:val 2=w8:val 3=w8:val
+p8 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p7
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w8:val 3=w8:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p2 layout=[]->[Count@0] 8B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[Count@8] 16B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[I32]->[SumI64@8,Count@16,Count@24]+valid 40B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[I32]->[SumI64@8,Count@16,Count@24]+valid 40B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p6 layout=[I32]->[SumI64@8,Count@16,Count@24]+valid 40B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p7 layout=[I32,I64,I64]->[Count@24] 32B order=1+,2+,3+
+group slot=0 producer=p6 node=1 form=Hashed hints=[] layout=[I32]->[SumI64@8,Count@16,Count@24]+valid 40B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  agg aggno=0 fn=2108 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.2)
+  agg aggno=1 fn=2147 reg=CountAny slot=1 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.3)
+scan-lanes node=4 rti=4 rel=46763 wholerow
+scan-lanes node=5 rti=5 rel=46766 wholerow
+scan-lanes node=6 rti=6 rel=46769 wholerow
+mapped: Append SeqScan HashJoin Sort Agg Hash

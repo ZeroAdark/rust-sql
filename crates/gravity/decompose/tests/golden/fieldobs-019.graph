@@ -1,0 +1,14 @@
+-- fieldobs-019
+-- SELECT 1 FROM sightings WHERE taxon_label LIKE '%Heron%' LIMIT 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=SortedSource end=sink
+  nodes n1@0 n0@2
+  source range rel=16464 rti=1 am=pgrc
+    lanes Attr(27):codes4:code:part/dict Offset:byval2:w2:val
+  filter op1209(v1.27, c25:'%Heron%')
+  project (1=c23:1)
+  limit count=1 offset=all
+  project (1=c23:1)
+  outs 1=w4:val
+  outs 1=w4:val
+mapped: SeqScan Limit

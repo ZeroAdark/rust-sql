@@ -38,6 +38,23 @@ fn clamp_probability(p: f64) -> f64 {
     p.clamp(0.0, 1.0)
 }
 
+/// extended_stats.c:1945: `sel + stat_sel - sel * stat_sel`; on aarch64 the
+/// product is fused into the subtraction (`fmsub`), the sum rounds first.
+fn combine_or_selectivity(sel: f64, stat_sel: f64) -> f64 {
+    fp_contract::fmsub(sel, stat_sel, sel + stat_sel)
+}
+
+/// dependencies.c:1136-1139: P(b|a) for a functional dependency of degree
+/// `f`. On aarch64 `(1 - f) * s2` is fused into the add in both arms; the
+/// `f * s2 / s1` term rounds before it.
+fn dependency_conditional_sel(f: f64, s1: f64, s2: f64) -> f64 {
+    if s1 <= s2 {
+        fp_contract::fmadd(1.0 - f, s2, f)
+    } else {
+        fp_contract::fmadd(1.0 - f, s2, f * s2 / s1)
+    }
+}
+
 fn attnums_from_members<'mcx>(run: &PlannerRun<'mcx>, members: &[i16]) -> Relids<'mcx> {
     let mut r: Relids<'mcx> = crate::relnode::relids_empty();
     for &m in members {
@@ -554,7 +571,7 @@ fn statext_mcv_clauselist_selectivity<'mcx>(
     let inh = run.rte(relid as usize).inh;
 
     let mut clause_data: Vec<Option<(Relids<'mcx>, Vec<Node<'mcx>>)>> =
-        Vec::with_capacity(clauses.len());
+        ::mcx::std_vec_with_capacity("optimizer", clauses.len())?;
     for (i, &rid) in clauses.iter().enumerate() {
         if estimated[i] {
             clause_data.push(None);
@@ -624,7 +641,7 @@ fn statext_mcv_clauselist_selectivity_or_nodes<'mcx>(
     let inh = run.rte(relid as usize).inh;
 
     let mut clause_data: Vec<Option<(Relids<'mcx>, Vec<Node<'mcx>>)>> =
-        Vec::with_capacity(clauses.len());
+        ::mcx::std_vec_with_capacity("optimizer", clauses.len())?;
     for (i, &clause) in clauses.iter().enumerate() {
         if estimated[i] {
             clause_data.push(None);
@@ -664,7 +681,7 @@ fn statext_mcv_clauselist_selectivity_or_nodes<'mcx>(
         }
 
         let mcv = load_mcv(run, stat_oid, inh)?;
-        let mut or_matches: Vec<bool> = vec![false; mcv.items.len()];
+        let mut or_matches: Vec<bool> = ::mcx::std_vec_from_elem("optimizer", false, mcv.items.len())?;
         let mut simple_or_sel = 0.0f64;
         let mut stat_sel = 0.0f64;
         for (listidx, &clause) in stat_clauses.iter().enumerate() {
@@ -707,7 +724,7 @@ fn statext_mcv_clauselist_selectivity_or_nodes<'mcx>(
             );
             stat_sel = clamp_probability(stat_sel + clause_sel - overlap_sel);
         }
-        sel = sel + stat_sel - sel * stat_sel;
+        sel = combine_or_selectivity(sel, stat_sel);
     }
     Ok(sel)
 }
@@ -752,7 +769,7 @@ fn mcv_clauselist_selectivity<'mcx>(
     Ok((s, basesel, totalsel))
 }
 
-fn bms_member_index(keys: &Relids<'_>, attnum: i16) -> usize {
+pub(crate) fn bms_member_index(keys: &Relids<'_>, attnum: i16) -> PgResult<usize> {
     // Unset (not merely all-zero) keys are the caller bug this guards.
     assert!(!crate::relnode::relids_is_unset(keys), "mcv_match_expression: empty keys");
     let mut idx = 0usize;
@@ -761,13 +778,13 @@ fn bms_member_index(keys: &Relids<'_>, attnum: i16) -> usize {
         while w != 0 {
             let m = (i * 64) as i32 + w.trailing_zeros() as i32;
             if m == attnum as i32 {
-                return idx;
+                return Ok(idx);
             }
             idx += 1;
             w &= w - 1;
         }
     }
-    panic!("variable not found in statistics object")
+    Err(Box::new(types_error::PgError::error("variable not found in statistics object")))
 }
 
 // mcv_match_expression (mcv.c): zero-based statistics dimension of the
@@ -776,16 +793,16 @@ fn mcv_match_expression(
     expr: Node<'_>,
     keys: &Relids<'_>,
     sexprs: &[Node<'_>],
-) -> (usize, types_core::Oid) {
+) -> PgResult<(usize, types_core::Oid)> {
     if let Some(var) = expr.as_var() {
-        return (bms_member_index(keys, var.varattno), var.varcollid);
+        return Ok((bms_member_index(keys, var.varattno)?, var.varcollid));
     }
     let base = relids_num_members(keys) as usize;
     let idx = sexprs
         .iter()
         .position(|&se| types_nodes::equal(expr, se))
-        .unwrap_or_else(|| panic!("expression not found in statistics object"));
-    (base + idx, crate::pathkeys::expr_collation(expr))
+        .ok_or_else(|| Box::new(types_error::PgError::error("expression not found in statistics object")))?;
+    Ok((base + idx, crate::pathkeys::expr_collation(expr)))
 }
 
 // mcv_get_match_bitmap (mcv.c).
@@ -797,16 +814,16 @@ fn mcv_get_match_bitmap<'mcx>(
     mcvlist: &statistics::mcv::MCVList<'_>,
     is_or: bool,
 ) -> PgResult<Vec<bool>> {
-    let mut matches: Vec<bool> = vec![!is_or; mcvlist.items.len()];
+    let mut matches: Vec<bool> = ::mcx::std_vec_from_elem("optimizer", !is_or, mcvlist.items.len())?;
 
     for &clause in clauses {
         if let Some(op) = clause.as_op_expr().filter(|o| o.args.len() == 2) {
             let Some((clause_expr, cst, expronleft)) =
                 examine_opclause_args(op.args.nth(0), op.args.nth(1))
             else {
-                panic!("incompatible clause")
+                return Err(Box::new(types_error::PgError::error("incompatible clause")));
             };
-            let (idx, collid) = mcv_match_expression(clause_expr, keys, sexprs);
+            let (idx, collid) = mcv_match_expression(clause_expr, keys, sexprs)?;
             let opcode = lsyscache::get_opcode(op.opno)?;
             let mut opproc = fmgr_seams::fmgr_info::call(opcode)?;
             for (i, item) in mcvlist.items.iter().enumerate() {
@@ -842,10 +859,10 @@ fn mcv_get_match_bitmap<'mcx>(
             let Some((clause_expr, cst, expronleft)) =
                 examine_opclause_args(saop.args.nth(0), saop.args.nth(1))
             else {
-                panic!("incompatible clause")
+                return Err(Box::new(types_error::PgError::error("incompatible clause")));
             };
             if !expronleft {
-                panic!("incompatible clause");
+                return Err(Box::new(types_error::PgError::error("incompatible clause")));
             }
             let elems = if !cst.constisnull {
                 let img = crate::selfuncs::varlena_image_any(run.mcx, cst.constvalue)?;
@@ -857,7 +874,7 @@ fn mcv_get_match_bitmap<'mcx>(
             } else {
                 None
             };
-            let (idx, collid) = mcv_match_expression(clause_expr, keys, sexprs);
+            let (idx, collid) = mcv_match_expression(clause_expr, keys, sexprs)?;
             for (i, item) in mcvlist.items.iter().enumerate() {
                 let mut m = !saop.useOr;
                 if item.isnull[idx] || cst.constisnull {
@@ -889,7 +906,7 @@ fn mcv_get_match_bitmap<'mcx>(
             }
         } else if let Some(nt) = clause.as_null_test() {
             let arg = nt.arg.expect("NullTest arg");
-            let (idx, _) = mcv_match_expression(arg, keys, sexprs);
+            let (idx, _) = mcv_match_expression(arg, keys, sexprs)?;
             use types_nodes::primnodes::NullTestType;
             for (i, item) in mcvlist.items.iter().enumerate() {
                 let m = match nt.nulltesttype {
@@ -926,7 +943,7 @@ fn mcv_get_match_bitmap<'mcx>(
             }
         } else {
             // Bare boolean Var or boolean-returning expression.
-            let (idx, _) = mcv_match_expression(clause, keys, sexprs);
+            let (idx, _) = mcv_match_expression(clause, keys, sexprs)?;
             for (i, item) in mcvlist.items.iter().enumerate() {
                 let m = !item.isnull[idx] && item.values[idx].as_bool();
                 matches[i] = result_merge(matches[i], is_or, m);
@@ -1189,7 +1206,7 @@ fn dependencies_clauselist_selectivity<'mcx>(
         dep_stat_exprs.extend(stat_exprs(run, id));
     }
 
-    let mut list_attnums: Vec<Option<i16>> = Vec::with_capacity(clauses.len());
+    let mut list_attnums: Vec<Option<i16>> = ::mcx::std_vec_with_capacity("optimizer", clauses.len())?;
     let mut unique_exprs: Vec<Node<'mcx>> = Vec::new();
     for (i, &rid) in clauses.iter().enumerate() {
         let a = if estimated[i] {
@@ -1268,7 +1285,7 @@ fn dependencies_clauselist_selectivity<'mcx>(
             statext_data_load(run, stat_oid, inh, Anum_data_stxddependencies, STATS_EXT_DEPENDENCIES)?;
         let loaded = statistics::dependencies::statext_dependencies_deserialize(run.mcx, &img[4..])?;
         'dep: for d in loaded.deps.iter() {
-            let mut attrs: Vec<i16> = Vec::with_capacity(d.attributes.len());
+            let mut attrs: Vec<i16> = mcx::std_vec_with_capacity("planner", d.attributes.len())?;
             for &a in d.attributes.iter() {
                 if a > 0 {
                     let shifted = a + attnum_offset;
@@ -1316,7 +1333,7 @@ fn dependencies_clauselist_selectivity<'mcx>(
     }
     attnums.sort_unstable();
 
-    let mut attr_sel: Vec<f64> = Vec::with_capacity(attnums.len());
+    let mut attr_sel: Vec<f64> = ::mcx::std_vec_with_capacity("optimizer", attnums.len())?;
     for &a in &attnums {
         let mut attr_clauses: Vec<RinfoId> = Vec::new();
         for (i, &rid) in clauses.iter().enumerate() {
@@ -1347,7 +1364,7 @@ fn dependencies_clauselist_selectivity<'mcx>(
         let idx = attnums.binary_search(&implied).expect("implied attnum");
         let s2 = attr_sel[idx];
         let f = dep.degree;
-        attr_sel[idx] = if s1 <= s2 { f + (1.0 - f) * s2 } else { f * s2 / s1 + (1.0 - f) * s2 };
+        attr_sel[idx] = dependency_conditional_sel(f, s1, s2);
     }
 
     let mut s1 = 1.0f64;
@@ -1491,7 +1508,7 @@ pub fn estimate_multivariate_ndistinct<'mcx>(
         )));
     };
 
-    let mut consumed: Vec<bool> = Vec::with_capacity(nodes.len());
+    let mut consumed: Vec<bool> = ::mcx::std_vec_with_capacity("optimizer", nodes.len())?;
     for &node in nodes {
         if let Some(v) = node.as_var() {
             if v.varattno <= 0 {
@@ -1504,4 +1521,35 @@ pub fn estimate_multivariate_ndistinct<'mcx>(
         consumed.push(matched_exprs.iter().any(|&se| types_nodes::equal(node, se)));
     }
     Ok(Some((ndistinct, consumed)))
+}
+
+// D400: extended_stats.c:1945 (fmsub) and dependencies.c:1137/1139 (fmadd)
+// as fused by aarch64 PostgreSQL 18.6 (pgdg gcc 13.3, disassembly of the
+// oracle binary); x86-64 arm separately rounded.
+#[cfg(test)]
+mod fma_parity_tests {
+    use super::*;
+
+    const AARCH64: bool = cfg!(target_arch = "aarch64");
+
+    #[test]
+    fn or_combine_fused() {
+        let got = combine_or_selectivity(0.21472797002060062, 0.36190120815644633);
+        let want = if AARCH64 { 0x3FDF_EE49_65A3_590Bu64 } else { 0x3FDF_EE49_65A3_590C };
+        assert_eq!(got.to_bits(), want);
+    }
+
+    #[test]
+    fn dependency_s1_le_s2_fused() {
+        let got = dependency_conditional_sel(0.52483957943423221, 0.2728543017032905, 0.78859946834030481);
+        let want = if AARCH64 { 0.89955083446875228 } else { 0.89955083446875239 };
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn dependency_s1_gt_s2_fused() {
+        let got = dependency_conditional_sel(0.85098779696340898, 0.97186185258196289, 0.45181270990494937);
+        let want = if AARCH64 { 0.46294469820733458 } else { 0.46294469820733453 };
+        assert_eq!(got, want);
+    }
 }

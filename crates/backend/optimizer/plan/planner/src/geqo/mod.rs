@@ -2,11 +2,10 @@
 //! make_rel_from_joinlist. gimme_tree reuses the exact make_join_rel/
 //! set_cheapest/gather machinery standard_join_search uses.
 //!
-//! DIVERGENCE: C deletes a private temp MemoryContext per geqo_eval to reclaim
-//! candidate joinrels; pgrust's run-global handle arenas have no mid-run
-//! reclamation, so candidate joinrels accumulate until the planner boundary
-//! (logical state stays C-correct via geqo_eval's list truncate + hash null).
-//! Growth is bounded and reclaimed at run end; footprint math in the letter.
+//! C deletes a private temp MemoryContext per geqo_eval; here geqo_eval rolls
+//! the rel/path/target/expression arenas back to their pre-tour lengths
+//! (PlannerInfo::release_join_search), keeping what C allocates in
+//! planner_cxt.
 //! DETERMINISM: pg_prng seeded from geqo_seed (C's pg_prng_fseed) — same seed,
 //! same plan; a seeded PRNG, not OS entropy, so the ratchet does not flag it.
 
@@ -109,6 +108,10 @@ pub fn geqo<'mcx>(
     number_of_rels: usize,
     initial_rels: &[RelId],
 ) -> PgResult<RelId> {
+    // C sets join_search_private for the whole search; innerrel_is_unique
+    // keys its negative cache off it.
+    run.root.join_search_private =
+        Some(mcx::PgBox::new_in(types_pathnodes::JoinSearchPrivate {}, run.mcx));
     let mut state = GeqoState { rng: pg_prng::PgPrng::default() };
     random::geqo_set_seed(&mut state, geqo_seed());
 
@@ -120,9 +123,9 @@ pub fn geqo<'mcx>(
     // Sort once; kids thereafter displace the worst via spread_chromo.
     pool::sort_pool(&mut pool);
 
-    let mut momma = pool::alloc_chromo(pool.string_length);
-    let mut daddy = pool::alloc_chromo(pool.string_length);
-    let mut edge_table = erx::alloc_edge_table(pool.string_length);
+    let mut momma = pool::alloc_chromo(pool.string_length)?;
+    let mut daddy = pool::alloc_chromo(pool.string_length)?;
+    let mut edge_table = erx::alloc_edge_table(pool.string_length)?;
 
     for _generation in 0..number_generations {
         selection::geqo_selection(&mut state, &mut momma, &mut daddy, &pool, geqo_selection_bias());
@@ -137,7 +140,9 @@ pub fn geqo<'mcx>(
     }
 
     // Best query tree = first pool element.
-    match eval::gimme_tree(run, initial_rels, &pool.data[0].string, pool.string_length)? {
+    let best = eval::gimme_tree(run, initial_rels, &pool.data[0].string, pool.string_length)?;
+    run.root.join_search_private = None;
+    match best {
         Some(rel) => Ok(rel),
         None => Err(Box::new(types_error::PgError::error(
             "geqo failed to make a valid plan".to_string(),

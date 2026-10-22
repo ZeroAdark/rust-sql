@@ -20,3 +20,14 @@ wchar = { path = "../wchar" }
 
 [dev-dependencies]
 pgtz_seams = { path = "../../backend/timezone/pgtz_seams" }
+elog = { path = "../../backend/utils/error/elog" }
+fd = { path = "../../backend/storage/file/fd" }
+guc_tables = { path = "../../backend/utils/misc/guc_tables" }
+xact_seams = { path = "../../backend/access/transam/xact_seams" }
+aio_seams = { path = "../../backend/storage/aio/aio_seams" }
+waitevent_seams = { path = "../../backend/utils/activity/waitevent_seams" }
+pgstat_seams = { path = "../../backend/utils/activity/pgstat_seams" }
+ipc_seams = { path = "../../backend/storage/ipc/ipc_seams" }
+resowner = { path = "../../backend/utils/resowner/resowner" }
+resowner_seams = { path = "../../backend/utils/resowner/resowner_seams" }
+types_resowner = { path = "../../_support/types/types_resowner" }

@@ -29,6 +29,10 @@ pub(crate) fn type_lookup_failed(typid: Oid) -> Box<PgError> {
 }
 
 fn type_shape(typid: Oid) -> PgResult<Option<PgTypeShape>> {
+    if let Some(r) = syscache_seams::armed_type_row(typid) {
+        // V4R-453 (D1409): a gravity pool claim's row, resolved on the leader (a pool thread has no catcache)
+        return Ok(Some(PgTypeShape { typlen: r.typlen, typbyval: r.typbyval, typalign: r.typalign, typstorage: r.typstorage, typcollation: r.typcollation }));
+    }
     syscache_seams::lookup_pg_type_shape::call(typid)
 }
 
@@ -85,7 +89,23 @@ pub struct TypeIoData {
 
 pub fn get_type_io_data(typid: Oid, which_func: IOFuncSelector) -> PgResult<TypeIoData> {
     if miscinit_seams::is_bootstrap_processing_mode::call() {
-        panic!("get_type_io_data({typid}) in bootstrap mode: boot_get_type_io_data unported (bootstrap.c)");
+        // lsyscache.c:2648: pg_type may not be readable yet — the bootstrap
+        // interpreter answers from its TypInfo table / Typ list.
+        let b = bootstrap_seams::boot_get_type_io_data::call(typid)?;
+        return Ok(TypeIoData {
+            typlen: b.typlen,
+            typbyval: b.typbyval,
+            typalign: b.typalign,
+            typdelim: b.typdelim,
+            typioparam: b.typioparam,
+            func: match which_func {
+                IOFuncSelector::IOFunc_input => b.typinput,
+                IOFuncSelector::IOFunc_output => b.typoutput,
+                // Binary I/O is not reachable in bootstrap (C returns the
+                // same two fields only).
+                IOFuncSelector::IOFunc_receive | IOFuncSelector::IOFunc_send => InvalidOid,
+            },
+        });
     }
     let ts = syscache_seams::pg_type_io_shape::call(typid)?.ok_or_else(|| type_lookup_failed(typid))?;
     Ok(TypeIoData {
@@ -167,8 +187,11 @@ pub fn getBaseType(typid: Oid) -> PgResult<Oid> {
 
 pub fn getBaseTypeAndTypmod(mut typid: Oid, typmod: &mut i32) -> PgResult<Oid> {
     loop {
-        let typtup = syscache_seams::pg_type_base_shape::call(typid)?
-            .ok_or_else(|| type_lookup_failed(typid))?;
+        let typtup = match syscache_seams::armed_type_row(typid) {
+            // V4R-453: a gravity pool claim's row
+            Some(r) => syscache_seams::PgTypeBaseShape { typtype: r.typtype, typbasetype: r.typbasetype, typtypmod: r.typtypmod, typelem: r.typelem, typsubscript: r.typsubscript },
+            None => syscache_seams::pg_type_base_shape::call(typid)?.ok_or_else(|| type_lookup_failed(typid))?,
+        };
         if typtup.typtype != TYPTYPE_DOMAIN {
             return Ok(typid);
         }
@@ -201,6 +224,9 @@ pub fn get_typavgwidth(typid: Oid, typmod: i32) -> PgResult<i32> {
 }
 
 pub fn get_typtype(typid: Oid) -> PgResult<i8> {
+    if let Some(r) = syscache_seams::armed_type_row(typid) {
+        return Ok(r.typtype); // V4R-453
+    }
     Ok(syscache_seams::pg_type_typtype::call(typid)?.unwrap_or(0))
 }
 
@@ -241,6 +267,9 @@ pub fn is_true_array_type(typelem: Oid, typsubscript: Oid) -> bool {
 }
 
 pub fn get_element_type(typid: Oid) -> PgResult<Oid> {
+    if let Some(r) = syscache_seams::armed_type_row(typid) {
+        return Ok(if is_true_array_type(r.typelem, r.typsubscript) { r.typelem } else { InvalidOid }); // V4R-453
+    }
     Ok(match syscache_seams::pg_type_element_shape::call(typid)? {
         Some(typtup) if is_true_array_type(typtup.typelem, typtup.typsubscript) => typtup.typelem,
         _ => InvalidOid,
@@ -248,6 +277,9 @@ pub fn get_element_type(typid: Oid) -> PgResult<Oid> {
 }
 
 pub fn get_array_type(typid: Oid) -> PgResult<Oid> {
+    if let Some(r) = syscache_seams::armed_type_row(typid) {
+        return Ok(r.typarray); // V4R-453
+    }
     Ok(syscache_seams::pg_type_typarray::call(typid)?.unwrap_or(InvalidOid))
 }
 

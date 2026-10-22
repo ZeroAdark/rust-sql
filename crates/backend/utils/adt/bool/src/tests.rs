@@ -140,6 +140,9 @@ fn fc_wrappers_and_registry() {
     );
 
     let mut fcinfo = LocalFcinfo::<1>::new(0);
+    let out_cx = ::mcx::MemoryContext::new_bump("out test");
+    // SAFETY: out_cx outlives every call through this frame.
+    unsafe { fcinfo.set_result_mcx(out_cx.mcx()) };
     fcinfo.set_arg(0, Datum::from_bool(true));
     let mut out_fn = types_fmgr::FmgrInfo::new(fc_boolout, 1243, 1, true, false);
     let out = out_fn.invoke(&mut fcinfo).unwrap();
@@ -192,6 +195,9 @@ fn boolout_results_do_not_alias_across_carriers() {
     let mut f1 = types_fmgr::FmgrInfo::new(fc_boolout, 1243, 1, true, false);
     let mut f2 = types_fmgr::FmgrInfo::new(fc_boolout, 1243, 1, true, false);
     let mut fci = types_fmgr::LocalFcinfo::<1>::new(0);
+    let cx = ::mcx::MemoryContext::new_bump("boolout alias test");
+    // SAFETY: cx outlives every call through fci and every read of its results.
+    unsafe { fci.set_result_mcx(cx.mcx()) };
     fci.set_arg(0, Datum::from_bool(true));
     let d1 = f1.invoke(&mut fci).unwrap();
     fci.set_arg(0, Datum::from_bool(false));

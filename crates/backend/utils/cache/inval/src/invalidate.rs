@@ -3,7 +3,8 @@ use std::cell::RefCell;
 use datum::Datum;
 use mcx::{Mcx, MemoryContext, PgVec};
 use types_core::catalog::{
-    ATTRIBUTE_RELATION_ID, CONSTRAINT_RELATION_ID, INDEX_RELATION_ID, RELATION_RELATION_ID,
+    ACCESS_METHOD_OPERATOR_RELATION_ID, ACCESS_METHOD_PROCEDURE_RELATION_ID, ATTRIBUTE_RELATION_ID, CONSTRAINT_RELATION_ID,
+    INDEX_RELATION_ID, OPERATOR_CLASS_RELATION_ID, OPERATOR_FAMILY_RELATION_ID, RELATION_RELATION_ID,
 };
 use types_core::{InvalidOid, Oid};
 use types_error::{PgError, PgResult, ERROR, FATAL};
@@ -91,6 +92,14 @@ fn cache_invalidate_heap_tuple_common(
                 scratch, relation, tuple, newtuple,
             )?
         };
+        // D3866: the row-stamped caches whose program stamps this transaction's commit moves
+        let touched = if reqs.iter().any(|r| l2cache::row_stamped(r.cache_id))
+            && changes_committed_row(tuple, newtuple, use_inplace)
+        {
+            reqs.iter().fold(0u128, |m, r| m | crate::eoxact::stamp_bit(r.cache_id))
+        } else {
+            0
+        };
 
         let rel_target: Option<(Oid, Oid)> = if tuple_rel_id == RELATION_RELATION_ID {
             let classtup = syscache_seams::pg_class_shape::call(tuple);
@@ -108,7 +117,13 @@ fn cache_invalidate_heap_tuple_common(
             None
         };
 
-        with_state(|state| {
+        // C3 S5 (D3889): a pg_class row update that changed only the relation's storage and size statistics registers
+        // its messages under the storage scope (`REL_SCOPE_STORAGE`)
+        let storage_only = tuple_rel_id == RELATION_RELATION_ID
+            && !use_inplace
+            && newtuple.is_some_and(|n| pg_class_storage_only(relation, tuple, n));
+        let scope = if storage_only { crate::relcache_scope() | crate::REL_SCOPE_STORAGE } else { crate::relcache_scope() };
+        crate::with_relcache_scope(scope, || with_state(|state| {
             let mcx = state.mcx;
             let info = if use_inplace {
                 prepare_inplace_invalidation_state(state)
@@ -131,6 +146,13 @@ fn cache_invalidate_heap_tuple_common(
                         mcx, state, info, req.cache_id, req.hash_value, req.db_id,
                     )?;
                 }
+                state.stamp_touched |= touched;
+                // D3888: the family a support catalog row names, both images (`PreCommit_Inval` names its relations)
+                for t in core::iter::once(tuple).chain(newtuple) {
+                    if let Some(f) = support_family(relation, t).filter(|f| !state.support_families.contains(f)) {
+                        state.support_families.push(f);
+                    }
+                }
             }
 
             match rel_target {
@@ -139,8 +161,111 @@ fn cache_invalidate_heap_tuple_common(
                 ),
                 None => Ok(()),
             }
-        })
+        }))
     })
+}
+
+/// D3888: the operator family support catalog row `t` of `relation` names: pg_amop's and pg_amproc's family, pg_opclass's,
+/// pg_opfamily's own OID. An index's relcache entry (rd_opfamily, rd_support) and a partition key are built from the
+/// family's rows, and no relcache message of theirs covers those rows.
+fn support_family(relation: &RelationData<'_>, t: &HeapTupleData<'_>) -> Option<Oid> {
+    let attnum = match relation.rd_id {
+        ACCESS_METHOD_OPERATOR_RELATION_ID | ACCESS_METHOD_PROCEDURE_RELATION_ID => 2,
+        OPERATOR_CLASS_RELATION_ID => 6,
+        OPERATOR_FAMILY_RELATION_ID => 1,
+        _ => return None,
+    };
+    let mut null = false;
+    // SAFETY: `t` is a row of `relation`, read under its descriptor (the relation the tuple invalidation names).
+    let d = unsafe { types_tuple::heap_getattr(t, attnum, relation.descr(), &mut null) };
+    (!null).then(|| d.as_oid())
+}
+
+/// pg_class's columns (PostgreSQL 18 `pg_class.h`) a relation's storage and its size statistics alone change: a new
+/// relfilenode (TRUNCATE, REINDEX, CLUSTER / VACUUM FULL's swap), the pages, tuples and all-visible / all-frozen counts,
+/// the freeze horizons.
+const PG_CLASS_STORAGE_ATTS: [i32; 7] = [8, 10, 11, 12, 13, 30, 31];
+const ANUM_PG_CLASS_RELAM: i32 = 7;
+const ANUM_PG_CLASS_RELKIND: i32 = 18;
+const HEAP_TABLE_AM_OID: Oid = 2;
+const BTREE_AM_OID: Oid = 403;
+
+/// C3 S5 (D3889): update `old` -> `new` of a pg_class row changes no column but the storage ones
+/// (`PG_CLASS_STORAGE_ATTS`), of a heap relation, a btree index or a sequence (another access method's catalog-held
+/// state is not audited: its updates stay whole). Every other column compares by image (a toasted or otherwise
+/// re-encoded equal value compares unequal: whole, never a missed change).
+fn pg_class_storage_only(relation: &RelationData<'_>, old: &HeapTupleData<'_>, new: &HeapTupleData<'_>) -> bool {
+    let desc = relation.descr();
+    let get = |t: &HeapTupleData<'_>, attnum: i32| {
+        let mut null = false;
+        // SAFETY: `t` is a pg_class row and `desc` pg_class's descriptor (the relation the tuple invalidation names).
+        let d = unsafe { types_tuple::heap_getattr(t, attnum, desc, &mut null) };
+        (!null).then_some(d)
+    };
+    let am = get(new, ANUM_PG_CLASS_RELAM).map_or(InvalidOid, |d| d.as_oid());
+    let sequence = get(new, ANUM_PG_CLASS_RELKIND).is_some_and(|d| d.as_i8() == types_rel::RELKIND_SEQUENCE as i8);
+    if !(am == HEAP_TABLE_AM_OID || am == BTREE_AM_OID || sequence) {
+        return false;
+    }
+    (1..=desc.natts).filter(|a| !PG_CLASS_STORAGE_ATTS.contains(a)).all(|a| {
+        let att = desc.attr(a as usize - 1);
+        match (get(old, a), get(new, a)) {
+            (None, None) => true,
+            (Some(x), Some(y)) => image_eq(x, y, att.attbyval, att.attlen),
+            _ => false,
+        }
+    })
+}
+
+/// `datumIsEqual`: the two images compare byte for byte (no detoasting).
+fn image_eq(x: Datum, y: Datum, byval: bool, len: i16) -> bool {
+    if byval {
+        return x == y;
+    }
+    let size = |d: Datum| match len {
+        n if n > 0 => Some(n as usize),
+        // SAFETY: a non-null by-reference varlena column of a live tuple.
+        -1 => Some(unsafe { types_tuple::varatt::varsize_any(d.as_usize() as *const u8) }),
+        _ => None,
+    };
+    match (size(x), size(y)) {
+        (Some(a), Some(b)) if a == b => {
+            // SAFETY: both images live in their tuples for `a` bytes.
+            unsafe { core::slice::from_raw_parts(x.as_usize() as *const u8, a) == core::slice::from_raw_parts(y.as_usize() as *const u8, a) }
+        }
+        _ => false,
+    }
+}
+
+/// D3866: whether this tuple invalidation changes a catalog row committed before this transaction, so that its commit
+/// moves a row-stamped cache's program stamp (l2cache `ROW_STAMPED_CAT_IDS`): an update of such a row, an in-place
+/// update, or an invalidation a command forces on an unchanged row (ALTER DOMAIN's of the domain's pg_type row). A row
+/// this transaction created (an insert, either version of an update of it) changes nothing another backend read, and
+/// one it deleted names an object no statement can name again (until the OID counter wraps, which the stamp mixes:
+/// l2cache `oid_wraps`). Without the transaction seam (a unit build): every row counts as changed.
+fn changes_committed_row(
+    tuple: &HeapTupleData<'_>,
+    newtuple: Option<&HeapTupleData<'_>>,
+    use_inplace: bool,
+) -> bool {
+    use types_tuple::htup::{HEAP_XMAX_INVALID, HEAP_XMAX_IS_LOCKED_ONLY, HEAP_XMAX_IS_MULTI};
+    let current = xact_seams::transaction_id_is_current_transaction_id::call;
+    if use_inplace || !xact_seams::transaction_id_is_current_transaction_id::is_installed() {
+        return true;
+    }
+    let h = tuple.t_data();
+    if current(h.xmin()) {
+        return false;
+    }
+    if newtuple.is_some() {
+        return true;
+    }
+    let xmax = h.xmax_raw();
+    let deleted_here = xmax != types_core::xact::InvalidTransactionId
+        && h.t_infomask & (HEAP_XMAX_INVALID | HEAP_XMAX_IS_MULTI) == 0
+        && !HEAP_XMAX_IS_LOCKED_ONLY(h.t_infomask)
+        && current(xmax);
+    !deleted_here
 }
 
 pub fn CacheInvalidateHeapTuple(
@@ -269,6 +394,15 @@ pub fn CacheRegisterSyscacheCallback(
     }
     CALLBACKS.with(|cell| {
         let t = &mut *cell.borrow_mut();
+        // D4682: a registration already in the table is not added again. The table lives as long as the thread and is
+        // never unregistered, while a cache that registers when it is first built is built again by each session a
+        // reused client thread runs (launch_backend cpool); a duplicate would run the same callback twice per message
+        // and, session after session, run the table out of slots.
+        if t.syscache_list[..t.syscache_count].iter().flatten().any(|c| {
+            c.id == cacheid as i16 && core::ptr::fn_addr_eq(c.function, func) && c.arg == arg
+        }) {
+            return Ok(());
+        }
         if t.syscache_count >= MAX_SYSCACHE_CALLBACKS {
             return Err(err_out_of_slots("syscache_callback_list"));
         }
@@ -299,6 +433,14 @@ pub fn CacheRegisterSyscacheCallback(
 pub fn CacheRegisterRelcacheCallback(func: RelcacheCallbackFunction, arg: Datum) -> PgResult<()> {
     CALLBACKS.with(|cell| {
         let t = &mut *cell.borrow_mut();
+        // D4682: as CacheRegisterSyscacheCallback, a registration already in the table is not added again.
+        if t.relcache_list[..t.relcache_count]
+            .iter()
+            .flatten()
+            .any(|c| core::ptr::fn_addr_eq(c.function, func) && c.arg == arg)
+        {
+            return Ok(());
+        }
         if t.relcache_count >= MAX_RELCACHE_CALLBACKS {
             return Err(err_out_of_slots("relcache_callback_list"));
         }
@@ -311,6 +453,14 @@ pub fn CacheRegisterRelcacheCallback(func: RelcacheCallbackFunction, arg: Datum)
 pub fn CacheRegisterRelSyncCallback(func: RelSyncCallbackFunction, arg: Datum) -> PgResult<()> {
     CALLBACKS.with(|cell| {
         let t = &mut *cell.borrow_mut();
+        // D4682: as CacheRegisterSyscacheCallback, a registration already in the table is not added again.
+        if t.relsync_list[..t.relsync_count]
+            .iter()
+            .flatten()
+            .any(|c| core::ptr::fn_addr_eq(c.function, func) && c.arg == arg)
+        {
+            return Ok(());
+        }
         if t.relsync_count >= MAX_RELSYNC_CALLBACKS {
             return Err(err_out_of_slots("relsync_callback_list"));
         }

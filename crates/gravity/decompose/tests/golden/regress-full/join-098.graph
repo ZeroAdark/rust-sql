@@ -1,0 +1,62 @@
+-- regress-full-join-098
+-- select ss1.d1 from tenk1 as t1 inner join tenk1 as t2 on t1.tenthous = t2.ten inner join int8_tbl as i8 left join int4_tbl as i4 inner join (select 64::information_schema.cardinal_number as d1 from tenk1 t3, lateral (select abs(t3.unique1) + random()) ss0(x) where t3.fivethous < 0) as ss1 on i4.f1 = ss1.d1 on i8.q1 = i4.f1 on t1.tenthous = ss1.d1 where t1.unique1 < i4.f1;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=9 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n9@0 n8@1 n7@2 n6@4
+  source const
+  project (1=op591(fn316(fn1397($exec0)), fn1598()))
+  project (1=v11.1, 2j=T_CoerceToDomain)
+  nest inner=n10 JOIN_INNER raise-free params=($exec1=outer.2)
+  inner node=10 serial site=0 reason=IndexSource end=sink
+  nodes n10@0
+  source index rel=16423 rti=1 am=heap index=19342
+    key att=11 op=96 value=relabel23($exec1)
+    recheck (op96(v1.11, relabel23($exec1)))
+    lanes Attr(1):byval8:w8:val Attr(11):byval8:w8:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  project (1=inner.11, 2=inner.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val
+  outs 1=w8:val 2=?
+  outs 1=w4:val 2=w4:val
+p1 node=1 eligible rows=1 end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@2
+  source range rel=16423 rti=10 am=heap
+    lanes Attr(1):byval8:w8:val Attr(10):byval8:w8:val Offset:byval2:w2:val
+  filter op97(v10.10, c23:0)
+  project (1=v10.1, 2=v10.2, 3=v10.3, 4=v10.4, 5=v10.5, 6=v10.6, 7=v10.7, 8=v10.8, 9=v10.9, 10=v10.10, 11=v10.11, 12=v10.12, 13=v10.13, 14=v10.14, 15=v10.15, 16=v10.16)
+  nest inner=n2 JOIN_INNER vol=v params=($exec0=outer.1) qual=(op96(inner.1, relabel23(T_CoerceToDomain)))
+  inner node=5 eligible rows=10000 end=sink
+  desc consumes=slot0@p0
+  nodes n5@0 n4@1 n3@3 n2@5
+  source range rel=16423 rti=2 am=heap
+    lanes Attr(5):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9, 10=v2.10, 11=v2.11, 12=v2.12, 13=v2.13, 14=v2.14, 15=v2.15, 16=v2.16)
+  probe slot=0 inner=n6 JOIN_INNER keys=(outer.5) decls=23/23:I32 clauses=(op96(outer.5, inner.1))
+  project (1=inner.1, 2=inner.2, 3=outer.5)
+  nest inner=n11 JOIN_INNER vol=v params=() qual=(op97(outer.2, inner.1))
+  inner node=11 eligible rows=1 end=sink
+  nodes n11@0
+  source range rel=16400 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v5.1, relabel23(T_CoerceToDomain))
+  project (1=v5.1)
+  project (1=outer.1, 2=outer.3, 3=inner.1)
+  nest inner=n12 JOIN_INNER vol=v params=()
+  inner node=12 eligible rows=1 end=sink
+  nodes n12@0
+  source range rel=16403 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op416(v4.1, relabel23(T_CoerceToDomain))
+  project (1=v4.1, 2=v4.2)
+  project (1=outer.1, 2=outer.2)
+  project (1=T_CoerceToDomain)
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w8:val 11=w4:val 12=w4:val 13=w4:val 14=fx64:row 15=fx64:row 16=fx64:row
+  outs 1=?
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+rerun node=0 pipelines=p0 slots=0
+param $exec1 owner=n7 type=13713 rep=?
+param $exec0 owner=n0 type=23 rep=w8:val
+mapped: Result SeqScan IndexScan SubqueryScan NestLoop NestLoopParam HashJoin Hash

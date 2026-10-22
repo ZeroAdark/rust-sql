@@ -1,0 +1,10 @@
+# D3732: a scalar subquery's array_agg (an alias, a correlated WHERE): its elements are a multiset, NULL elements included
+sql: SELECT g, (SELECT array_agg(c.v) FROM c WHERE c.g = t.g) a FROM t;
+cols: g	a
+tables: t c
+class: unordered
+verdict: match
+[pg]
+1	{x,NULL,y}
+[got]
+1	{NULL,y,x}

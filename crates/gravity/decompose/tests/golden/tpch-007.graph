@@ -1,0 +1,94 @@
+-- tpch-007
+-- SELECT supp_nation, cust_nation, l_year, sum(volume) AS revenue FROM ( SELECT n1.n_name AS supp_nation, n2.n_name AS cust_nation, extract(year FROM l_shipdate) AS l_year, l_extendedprice * (1 - l_discount) AS volume FROM supplier, lineitem, orders, customer, nation n1, nation n2 WHERE s_suppkey = l_suppkey AND o_orderkey = l_orderkey AND c_custkey = o_custkey AND s_nationkey = n1.n_nationkey AND c_nationkey = n2.n_nationkey AND ((n1.n_name = 'FRANCE' AND n2.n_name = 'GERMANY') OR (n1.n_name = 'GERMANY' AND n2.n_name = 'FRANCE')) AND l_shipdate BETWEEN CAST('1995-01-01' AS date) AND CAST('1996-12-31' AS date)) AS shipping GROUP BY supp_nation, cust_nation, l_year ORDER BY supp_nation, cust_nation, l_year /* TH7 */;
+graph pipelines=7 breakers=6 init_plans=0 root=p6
+p0 node=16 eligible rows=2 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n16@0 n15@2
+  source range rel=16402 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter or(op1054(v7.2, c1042:'FRANCE'), op1054(v7.2, c1042:'GERMANY'))
+  project (1=v7.2, 2=v7.1)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=vl:win/page 2=w8:val
+p1 node=14 eligible rows=100 end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p0 words=bits@6/7
+  nodes n14@0 n13@1 n12@3
+  source range rel=16420 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4, 5=v3.5, 6=v3.6, 7=v3.7)
+  probe slot=0 inner=n15 JOIN_INNER unique keys=(outer.4) decls=23/23:I32 clauses=(op96(outer.4, inner.2))
+  project (1=outer.1, 2=inner.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=vl:row 3=vl:row 4=w8:val 5=vl:row 6=vl:row 7=vl:row
+  outs 1=w8:val 2=vl:life/breaker
+p2 node=10 eligible rows=2 end=breaker(slot=0 HashBuild)
+  desc words=bits@7/8
+  nodes n10@0 n9@2
+  source range rel=16402 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter or(op1054(v8.2, c1042:'GERMANY'), op1054(v8.2, c1042:'FRANCE'))
+  project (1=v8.2, 2=v8.1)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=vl:win/page 2=w8:val
+p3 node=8 eligible rows=1500 end=breaker(slot=2 HashBuild)
+  desc consumes=slot0@p2 words=bits@8/9
+  nodes n8@0 n7@1 n6@3
+  source range rel=16438 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=v6.4, 5=v6.5, 6=v6.6, 7=v6.7, 8=v6.8)
+  probe slot=0 inner=n9 JOIN_INNER unique keys=(outer.4) decls=23/23:I32 clauses=(op96(outer.4, inner.2))
+  project (1=outer.1, 2=inner.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=vl:row 3=vl:row 4=w8:val 5=vl:row 6=vl:row 7=vl:row 8=vl:row
+  outs 1=w8:val 2=vl:life/breaker
+p4 node=5 eligible rows=15000 end=breaker(slot=0 Sort)
+  desc consumes=slot2@p3 consumes=slot1@p1 finishing
+  nodes n5@0 n4@1 n3@3 n2@5 n1@7^
+  source range rel=16449 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7, 8=v5.8, 9=v5.9)
+  probe slot=2 inner=n6 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  project (1=outer.1, 2=inner.2)
+  nest inner=n11 JOIN_INNER raise-free params=($exec0=outer.1)
+  inner node=11 serial site=0 reason=IndexSource end=sink
+  nodes n11@0
+  source index rel=16461 rti=4 am=heap index=16494
+    key att=1 op=96 value=$exec0
+    recheck (op96(v4.1, $exec0))
+    lanes Attr(3):byval8:w8:val Attr(6):byref8:vl:win/page Attr(7):byref8:vl:win/page Attr(11):byval8:w8:val
+  filter op1098(v4.11, c1082:-1826)
+  filter op1096(v4.11, c1082:-1096)
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9, 10=v4.10, 11=v4.11, 12=v4.12, 13=v4.13, 14=v4.14, 15=v4.15, 16=v4.16)
+  project (1=inner.11, 2=inner.6, 3=inner.7, 4=inner.3, 5=outer.2)
+  probe slot=1 inner=n12 JOIN_INNER build-first keys=(outer.4) decls=23/23:I32 clauses=(op96(outer.4, inner.1)) qual=(or(and(op1054(inner.2, c1042:'FRANCE'), op1054(outer.5, c1042:'GERMANY')), and(op1054(inner.2, c1042:'GERMANY'), op1054(outer.5, c1042:'FRANCE'))))
+  project (1=inner.2, 2=outer.5, 3=fn6199(c25:'year', outer.1), 4=outer.2, 5=outer.3)
+  sort keys=1+:Fp128/Bpchar@950,2+:Fp128/Bpchar@950,3+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:row 4=vl:row 5=w4:val 6=vl:row 7=vl:row 8=w4:val 9=vl:row
+  outs 1=w8:val 2=vl:life/breaker
+  outs 1=w4:val 2=vl:life/breaker 3=vl:life/breaker 4=w4:val 5=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=vl:call6199 4=vl:life/breaker 5=vl:life/breaker
+p5 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashAgg)
+  desc consumes=slot0@p4 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n1@0 n0@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5)
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=vl:call6199 4=vl:life/breaker 5=vl:life/breaker
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p5
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=agg2114(1=op1760(outer.4, op1759(c1700:'\x00\x80\x01\x00', outer.5))))
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=vl:life/breaker 4=vl:call2114
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[Count@8] 16B
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p4 layout=[Fp128,Fp128,Fp128,Fp128,I32]->[Count@40] 48B order=1+,2+,3+
+breaker slot=1 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[SumNumWide@48,MinCode@80,MinCode@88,MinCode@96,Count@104]+valid 120B order=1+,2+,3+
+group slot=1 producer=p5 node=0 form=Sorted hints=[] layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[SumNumWide@48,MinCode@80,MinCode@88,MinCode@96,Count@104]+valid 120B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=1042 rep=1 image=Bpchar expr=outer.1
+  key 1 word=2 resno=2 kind=Fp128 attno=0 type=1042 rep=2 image=Bpchar expr=outer.2
+  key 2 word=4 resno=3 kind=Fp128 attno=0 type=1700 rep=3 image=NumNormalized expr=outer.3
+  agg aggno=0 fn=2114 reg=SumNum slot=0 count_slot=- final=Numeric scale=4 class=SumNum trans=Abi(SumNumWide) mods=[] expr=agg2114(1=op1760(outer.4, op1759(c1700:'\x00\x80\x01\x00', outer.5)))
+param $exec0 owner=n3 type=23 rep=w8:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam HashJoin Sort Agg Hash

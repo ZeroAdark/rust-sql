@@ -1,0 +1,28 @@
+# pgrc_batch — the frozen lanev4 execution batch/lane vocabulary
+# (`docs/design/lanev4-batch-abi.md`, XC-6..XC-11), copy-first from
+# origin/lanev3 lx_vec @ dc3c67c56214 per the M3 plan's copy law.
+#
+# Dependency cone is deliberately tiny (the pgrc_read discipline): the
+# frozen format crate + the pure datum/type support crates. Nothing
+# pgstat/catcache-reaching may enter this cone.
+
+[package]
+name = "pgrc_batch"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pgrc_batch"
+path = "src/lib.rs"
+
+[dependencies]
+datum = { path = "../../../../_support/types/datum" }
+# StrView hash/order primitives (O-M4-5: the shared family, never forked).
+order_key = { path = "../../../../_support/order_key" }
+types_core = { path = "../../../../_support/types/types_core" }
+types_tuple = { path = "../../../../_support/types/types_tuple" }
+pgrc_format = { path = "../pgrc_format" }
+# pagepool P3 (PGRUST_POOL_GRAVITY=1): the claim arena's chunks from the page pool, posted as the allocator's
+pagepool = { path = "../../../../_support/pagepool" }
+memledger = { path = "../../../../_support/memledger" }

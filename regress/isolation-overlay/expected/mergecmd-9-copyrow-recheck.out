@@ -1,0 +1,173 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1upd s2sub s1c s2sel
+step s1upd: UPDATE ct SET v = v + 1000 WHERE k = 5;
+step s2sub: MERGE INTO ct t USING (SELECT 5 AS k, 50 AS v OFFSET 0) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'u' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2sub: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+k|   v|note
+-+----+----
+4|   4|i   
+5|1055|u   
+6|   6|i   
+(3 rows)
+
+
+starting permutation: s1key s2sub s1c s2sel
+step s1key: UPDATE ct SET k = 5000 WHERE k = 5;
+step s2sub: MERGE INTO ct t USING (SELECT 5 AS k, 50 AS v OFFSET 0) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'u' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2sub: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+   k| v|note
+----+--+----
+   4| 4|i   
+   5|50|nm  
+   6| 6|i   
+5000| 5|i   
+(4 rows)
+
+
+starting permutation: s1upd s2vals s1c s2sel
+step s1upd: UPDATE ct SET v = v + 1000 WHERE k = 5;
+step s2vals: MERGE INTO ct t USING (VALUES (4, 40), (5, 60), (6, 70)) s(k, v) ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'u' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2vals: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+k|   v|note
+-+----+----
+4|  44|u   
+5|1065|u   
+6|  76|u   
+(3 rows)
+
+
+starting permutation: s1key s2vals s1c s2sel
+step s1key: UPDATE ct SET k = 5000 WHERE k = 5;
+step s2vals: MERGE INTO ct t USING (VALUES (4, 40), (5, 60), (6, 70)) s(k, v) ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'u' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2vals: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+   k| v|note
+----+--+----
+   4|44|u   
+   5|60|nm  
+   6|76|u   
+5000| 5|i   
+(4 rows)
+
+
+starting permutation: s1del s2vals s1c s2sel
+step s1del: DELETE FROM ct WHERE k = 5;
+step s2vals: MERGE INTO ct t USING (VALUES (4, 40), (5, 60), (6, 70)) s(k, v) ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'u' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2vals: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+k| v|note
+-+--+----
+4|44|u   
+5|60|nm  
+6|76|u   
+(3 rows)
+
+
+starting permutation: s1upd s2vals s1a s2sel
+step s1upd: UPDATE ct SET v = v + 1000 WHERE k = 5;
+step s2vals: MERGE INTO ct t USING (VALUES (4, 40), (5, 60), (6, 70)) s(k, v) ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'u' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1a: ROLLBACK;
+step s2vals: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+k| v|note
+-+--+----
+4|44|u   
+5|65|u   
+6|76|u   
+(3 rows)
+
+
+starting permutation: s1upd s2valm s1c s2sel
+step s1upd: UPDATE ct SET v = v + 1000 WHERE k = 5;
+step s2valm: MERGE INTO ct t USING (VALUES (4, 40), (5, 60), (6, 70)) s(k, v) ON t.k = s.k WHEN MATCHED AND s.v = 60 THEN DELETE WHEN MATCHED THEN UPDATE SET note = 'm'; <waiting ...>
+step s1c: COMMIT;
+step s2valm: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+k|v|note
+-+-+----
+4|4|m   
+6|6|m   
+(2 rows)
+
+
+starting permutation: s1upd s2tab s1c s2sel
+step s1upd: UPDATE ct SET v = v + 1000 WHERE k = 5;
+step s2tab: MERGE INTO ct t USING (SELECT k, v FROM src OFFSET 0) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'tab' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2tab: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+k|   v|note
+-+----+----
+4| 404|tab 
+5|1505|tab 
+6| 606|tab 
+(3 rows)
+
+
+starting permutation: s1key s2tab s1c s2sel
+step s1key: UPDATE ct SET k = 5000 WHERE k = 5;
+step s2tab: MERGE INTO ct t USING (SELECT k, v FROM src OFFSET 0) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'tab' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2tab: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+   k|  v|note
+----+---+----
+   4|404|tab 
+   5|500|nm  
+   6|606|tab 
+5000|  5|i   
+(4 rows)
+
+
+starting permutation: s1upd s2vol s1c s2sel
+step s1upd: UPDATE ct SET v = v + 1000 WHERE k = 5;
+step s2vol: MERGE INTO ct t USING (SELECT 5 AS k, 50 + (random() * 0)::int AS v OFFSET 0) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'vol' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2vol: <... completed>
+step s2sel: SELECT * FROM ct WHERE k IN (4, 5, 6, 5000) ORDER BY k;
+k|   v|note
+-+----+----
+4|   4|i   
+5|1055|vol 
+6|   6|i   
+(3 rows)
+
+
+starting permutation: s1upd3 s3sub s1c s3sel
+step s1upd3: UPDATE ct3 SET v = v + 1000 WHERE k = 5;
+step s3sub: MERGE INTO ct3 t USING (SELECT g AS k, g * 10 AS v FROM generate_series(1, 50) g OFFSET 0) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'h' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s3sub: <... completed>
+step s3sel: SELECT * FROM ct3 WHERE k IN (4, 5, 6, 7) ORDER BY k;
+k|   v|note
+-+----+----
+4|  44|h   
+5|1055|h   
+6|  66|h   
+7|  70|nm  
+(4 rows)
+
+
+starting permutation: s1del3 s3val s1c s3sel
+step s1del3: DELETE FROM ct3 WHERE k = 5;
+step s3val: MERGE INTO ct3 t USING (VALUES (4, 40), (5, 50), (6, 60), (7, 70), (8, 80), (9, 90), (10, 100), (11, 110)) s(k, v) ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = t.v + s.v, note = 'h' WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s3val: <... completed>
+step s3sel: SELECT * FROM ct3 WHERE k IN (4, 5, 6, 7) ORDER BY k;
+k| v|note
+-+--+----
+4|44|h   
+5|50|nm  
+6|66|h   
+7|70|nm  
+(4 rows)
+

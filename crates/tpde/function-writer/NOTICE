@@ -1,0 +1,9 @@
+Fresh Rust translation of TPDE FunctionWriter.hpp and FunctionWriter.cpp,
+revision 116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception; original reference sources,
+license texts, SHA256 checksums and Git blob identities are retained under
+ tests/upstream/.
+Rust modifications introduce borrowed module ownership, mcx allocation,
+checked inputs and explicit initialization guards. No previous Rust TPDE
+implementation is reused. See docs/tpde-rewrite/coverage/function-writer.md.

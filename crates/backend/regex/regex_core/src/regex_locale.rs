@@ -2,7 +2,7 @@
 use core::cell::Cell;
 
 use ::mcx::Mcx;
-use ::types_core::{Oid, PgWChar, C_COLLATION_OID, OidIsValid};
+use ::types_core::{Oid, PgWChar, C_COLLATION_OID, DEFAULT_COLLATION_OID, OidIsValid};
 use ::types_error::{PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED,
     ERRCODE_INDETERMINATE_COLLATION};
 
@@ -29,7 +29,7 @@ fn regex_wc_isclass_builtin(class: WcClass, c: PgWChar, posix: bool) -> bool {
 use crate::regex_consts::{NUM_CCLASSES, REG_ECOLLATE, REG_ECTYPE, REG_ERANGE, REG_ESPACE,
     REG_ETOOBIG, REG_FAKE, REG_ULOCALE};
 use crate::regex_error::{check_interrupt, RegError, RegResult};
-use crate::regex_foundation::{addchr, addrange, getcvec};
+use crate::regex_foundation::{addchr, addrange, getcvec, transient_getcvec};
 use crate::regguts::{char_classes, chr, ColorMap, Cvec, CvecRange, MAX_SIMPLE_CHR};
 
 
@@ -64,6 +64,7 @@ thread_local! {
             locale: None,
         })
     };
+    pub(crate) static TRANSIENT_CVEC: Cell<(i32, i32)> = const { Cell::new((100, 20)) };
 }
 
 #[inline]
@@ -152,6 +153,10 @@ fn pg_ascii_tolower(ch: u8) -> u8 {
     }
 }
 
+
+pub fn default_ctype(collation: Oid) -> Option<(u8, bool, bool, usize)> {
+    if collation == DEFAULT_COLLATION_OID { ::pg_locale::default_locale().map(PgLocale::ctype_identity) } else { None }
+}
 
 pub fn pg_set_regex_collation<'mcx>(mcx: Mcx<'mcx>, collation: Oid) -> PgResult<()> {
     let strategy;
@@ -558,7 +563,7 @@ pub fn range<'mcx>(mcx: Mcx<'mcx>, a: chr, b: chr, cases: i32) -> RegResult<Cvec
     }
 
     if cases == 0 {
-        let mut cv = getcvec(mcx, None, 0, 1)?;
+        let (mut cv, _) = transient_getcvec(mcx, 0, 1)?;
         addrange(&mut cv, a, b);
         return Ok(cv);
     }
@@ -570,10 +575,7 @@ pub fn range<'mcx>(mcx: Mcx<'mcx>, a: chr, b: chr, cases: i32) -> RegResult<Cvec
         nchrs_i as i32
     };
 
-    // C's transient cvec (regcomp.c:449 newcvec(100, 20)) never has fewer
-    // than 100 chr slots, so getcvec hands range() at least that many.
-    let chrspace = nchrs.max(100) as usize;
-    let mut cv = getcvec(mcx, None, chrspace as i32, 1)?;
+    let (mut cv, chrspace) = transient_getcvec(mcx, nchrs, 1)?;
     addrange(&mut cv, a, b);
 
     let mut c = a;
@@ -606,7 +608,7 @@ pub fn range<'mcx>(mcx: Mcx<'mcx>, a: chr, b: chr, cases: i32) -> RegResult<Cvec
 
 pub fn eclass<'mcx>(mcx: Mcx<'mcx>, cflags: i32, c: chr, cases: i32) -> RegResult<Cvec> {
     if (cflags & REG_FAKE) != 0 && c == chr_lit('x') {
-        let mut cv = getcvec(mcx, None, 4, 0)?;
+        let (mut cv, _) = transient_getcvec(mcx, 4, 0)?;
         addchr(&mut cv, chr_lit('x'));
         addchr(&mut cv, chr_lit('y'));
         if cases != 0 {
@@ -619,7 +621,7 @@ pub fn eclass<'mcx>(mcx: Mcx<'mcx>, cflags: i32, c: chr, cases: i32) -> RegResul
     if cases != 0 {
         return allcases(mcx, c);
     }
-    let mut cv = getcvec(mcx, None, 1, 0)?;
+    let (mut cv, _) = transient_getcvec(mcx, 1, 0)?;
     addchr(&mut cv, c);
     Ok(cv)
 }
@@ -664,18 +666,18 @@ pub fn cclasscvec<'mcx>(mcx: Mcx<'mcx>, cclasscode: i32, cases: i32) -> RegResul
         CC_ALPHA => pg_ctype_get_cache(mcx, pg_wc_isalpha, cclasscode)?,
         CC_WORD => pg_ctype_get_cache(mcx, pg_wc_isword, cclasscode)?,
         CC_ASCII => {
-            let mut cv = getcvec(mcx, None, 0, 1)?;
+            let (mut cv, _) = transient_getcvec(mcx, 0, 1)?;
             addrange(&mut cv, 0, 0x7f);
             cv
         }
         CC_BLANK => {
-            let mut cv = getcvec(mcx, None, 2, 0)?;
+            let (mut cv, _) = transient_getcvec(mcx, 2, 0)?;
             addchr(&mut cv, chr_lit('\t'));
             addchr(&mut cv, chr_lit(' '));
             cv
         }
         CC_CNTRL => {
-            let mut cv = getcvec(mcx, None, 0, 2)?;
+            let (mut cv, _) = transient_getcvec(mcx, 0, 2)?;
             addrange(&mut cv, 0x0, 0x1f);
             addrange(&mut cv, 0x7f, 0x9f);
             cv
@@ -683,7 +685,7 @@ pub fn cclasscvec<'mcx>(mcx: Mcx<'mcx>, cclasscode: i32, cases: i32) -> RegResul
         CC_DIGIT => pg_ctype_get_cache(mcx, pg_wc_isdigit, cclasscode)?,
         CC_PUNCT => pg_ctype_get_cache(mcx, pg_wc_ispunct, cclasscode)?,
         CC_XDIGIT => {
-            let mut cv = getcvec(mcx, None, 0, 3)?;
+            let (mut cv, _) = transient_getcvec(mcx, 0, 3)?;
             addrange(&mut cv, chr_lit('0'), chr_lit('9'));
             addrange(&mut cv, chr_lit('a'), chr_lit('f'));
             addrange(&mut cv, chr_lit('A'), chr_lit('F'));
@@ -751,7 +753,7 @@ pub fn allcases<'mcx>(mcx: Mcx<'mcx>, c: chr) -> RegResult<Cvec> {
     let lc = pg_wc_tolower(c);
     let uc = pg_wc_toupper(c);
 
-    let mut cv = getcvec(mcx, None, 2, 0)?;
+    let (mut cv, _) = transient_getcvec(mcx, 2, 0)?;
     addchr(&mut cv, lc);
     if lc != uc {
         addchr(&mut cv, uc);

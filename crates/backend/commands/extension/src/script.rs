@@ -68,9 +68,10 @@ fn clean_querytext(query: &str, location: &mut i32, len: &mut i32) -> (usize, us
     (begin, end)
 }
 
-// script_error_callback (extension.c:904-1030): on the emit-context stack for
-// reports raised inside the script (WARNING/NOTICE decorated at emit time)
-// and applied on the propagation path for an ERROR leaving execute_sql_string.
+// script_error_callback (extension.c:904-1030): a context frame for reports
+// raised inside the script (WARNING/NOTICE decorated at emit time, and
+// GetErrorContextStack) and applied on the propagation path for an ERROR
+// leaving execute_sql_string.
 fn apply_script_error_context(
     mut e: Box<PgError>,
     sql: &str,
@@ -172,10 +173,13 @@ impl ScriptErrorContext {
             let bounds = std::rc::Rc::clone(&bounds);
             let sql = sql.to_owned();
             let filename = filename.to_owned();
-            elog::push_emit_context_callback(Box::new(move |e: &mut PgError| {
-                let (stmt_location, stmt_len) = bounds.get();
-                script_error_callback(e, &sql, &filename, stmt_location, stmt_len);
-            }))
+            elog::push_context_frame(
+                Box::new(move |e: &mut PgError| {
+                    let (stmt_location, stmt_len) = bounds.get();
+                    script_error_callback(e, &sql, &filename, stmt_location, stmt_len);
+                }),
+                true,
+            )
         };
         ScriptErrorContext { bounds, callback }
     }
@@ -201,11 +205,8 @@ pub(crate) fn execute_sql_string(sql: &str, filename: &str) -> PgResult<()> {
     let errctx = ScriptErrorContext::push(sql, filename);
 
     let result = (|| -> PgResult<()> {
-        let raw_parsetree_list = parser_seams::raw_parser::call(
-            mcx,
-            sql_ref,
-            parser_seams::RawParseMode::RAW_PARSE_DEFAULT,
-        )?;
+        // extension.c:1071 pg_parse_query (log_parser_stats bracket).
+        let raw_parsetree_list = postgres::simple_query::pg_parse_query(mcx, sql_ref)?;
 
         let mut dest = tcop_dest::CreateDestReceiver(types_dest::CommandDest::None);
 
@@ -591,7 +592,8 @@ fn strip_echo_lines(sql: &str) -> String {
     if !sql.contains("\\echo") {
         return sql.to_string();
     }
-    let mut out = String::with_capacity(sql.len());
+    let mut out = String::new();
+    let _ = out.try_reserve(sql.len());
     for line in sql.split_inclusive('\n') {
         let content_end = line.len()
             - if line.ends_with("\r\n") {

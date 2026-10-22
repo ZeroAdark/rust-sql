@@ -42,6 +42,8 @@ fn register_exit_hook() -> PgResult<()> {
 }
 
 fn at_proc_exit_twophase(_code: i32, _arg: datum::Datum) -> PgResult<()> {
+    // D4682: the registration is spent; a reused thread's next session registers again.
+    TWOPHASE_EXIT_REGISTERED.set(false);
     AtAbort_Twophase();
     Ok(())
 }
@@ -49,6 +51,7 @@ fn at_proc_exit_twophase(_code: i32, _arg: datum::Datum) -> PgResult<()> {
 /// `AtAbort_Twophase`: release the gxact entry we were working on, removing it
 /// entirely when it never became valid.
 pub fn AtAbort_Twophase() {
+    PREPARE_BUILDER.with(|c| c.borrow_mut().take());
     let slot = MY_LOCKED_GXACT.get();
     if slot == NO_GXACT {
         return;
@@ -411,18 +414,32 @@ impl SaveState {
     }
 
     /// `save_state_data`: append, padded to MAXALIGN.
-    fn save(&mut self, data: &[u8]) {
+    fn save(&mut self, data: &[u8]) -> PgResult<()> {
         let padlen = maxalign(data.len());
-        self.buf.reserve(padlen);
+        // twophase.c save_state_data: repalloc of the records buffer;
+        // failure is ERROR 53200, never an abort.
+        ::mcx::std_vec_reserve("TwoPhase", &mut self.buf, padlen)?;
         self.buf.extend_from_slice(data);
         self.buf.resize(self.buf.len() + (padlen - data.len()), 0);
         self.total_len += padlen as u32;
+        Ok(())
     }
 }
 
 thread_local! {
     static PREPARE_BUILDER: std::cell::RefCell<Option<SaveState>> =
         const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_builder_for_tests(live: bool) -> bool {
+    PREPARE_BUILDER.with(|c| {
+        let was = c.borrow().is_some();
+        if live {
+            *c.borrow_mut() = Some(SaveState::new());
+        }
+        was
+    })
 }
 
 /// `StartPrepare(gxact)` over the caller-gathered inputs
@@ -454,34 +471,34 @@ pub(crate) fn start_prepare(args: &twophase_seams::StartPrepareArgs) -> PgResult
     };
 
     let mut b = SaveState::new();
-    b.save(&hdr.to_bytes());
-    let mut gidbuf = Vec::with_capacity(args.gid.len() + 1);
+    b.save(&hdr.to_bytes())?;
+    let mut gidbuf = ::mcx::std_vec_with_capacity("TwoPhase", args.gid.len() + 1)?;
     gidbuf.extend_from_slice(args.gid.as_bytes());
     gidbuf.push(0);
-    b.save(&gidbuf);
+    b.save(&gidbuf)?;
 
     if !args.children.is_empty() {
-        let mut sub = Vec::with_capacity(args.children.len() * 4);
+        let mut sub = ::mcx::std_vec_with_capacity("TwoPhase", args.children.len() * 4)?;
         for c in &args.children {
             sub.extend_from_slice(&c.to_ne_bytes());
         }
-        b.save(&sub);
+        b.save(&sub)?;
         gxact_load_subxact_data(idx, &args.children);
     }
     if args.ncommitrels > 0 {
-        b.save(&args.commitrels);
+        b.save(&args.commitrels)?;
     }
     if args.nabortrels > 0 {
-        b.save(&args.abortrels);
+        b.save(&args.abortrels)?;
     }
     if args.ncommitstats > 0 {
-        b.save(&args.commitstats);
+        b.save(&args.commitstats)?;
     }
     if args.nabortstats > 0 {
-        b.save(&args.abortstats);
+        b.save(&args.abortstats)?;
     }
     if args.ninvalmsgs > 0 {
-        b.save(&args.invalmsgs);
+        b.save(&args.invalmsgs)?;
     }
 
     PREPARE_BUILDER.with(|c| *c.borrow_mut() = Some(b));
@@ -500,12 +517,12 @@ pub fn RegisterTwoPhaseRecord(rmid: u8, info: u16, data: &[u8]) -> PgResult<()> 
             info,
             len: data.len() as u32,
         };
-        b.save(&record.to_bytes());
+        b.save(&record.to_bytes())?;
         if !data.is_empty() {
-            b.save(data);
+            b.save(data)?;
         }
-    });
-    Ok(())
+        Ok(())
+    })
 }
 
 fn replorigin_session() -> (types_core::RepOriginId, XLogRecPtr, TimestampTz) {
@@ -655,7 +672,7 @@ fn xlog_read_twophase_record(
             .unwrap_err());
     }
 
-    Ok(reader.XLogRecGetData().to_vec())
+    ::mcx::std_vec_from_slice("TwoPhase", reader.XLogRecGetData())
 }
 
 /// `StandbyTransactionIdIsPrepared`.

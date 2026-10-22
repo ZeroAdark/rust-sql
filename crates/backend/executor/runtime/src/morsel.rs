@@ -29,6 +29,14 @@ pub trait MorselSource: Send + Sync {
         self.total_granules()
     }
 
+    /// The first granule at or after `start` a claim may cover: a source whose
+    /// census pruned whole parts returns the next live granule (the cutter moves
+    /// the cursor there instead of handing out dead claims). Must satisfy
+    /// `start <= result <= total_granules()`. Default: every granule is live.
+    fn first_live_at(&self, start: u64) -> u64 {
+        start
+    }
+
     /// Startup-ramp seed C0 in granules (Umbra: 16). Sources whose granules
     /// are large (pgrcolumnar: 8,192 rows each) may override downward in M1.
     fn startup_c0(&self) -> u64 {
@@ -50,6 +58,35 @@ pub trait MorselSource: Send + Sync {
     /// the whole pipeline).
     fn whole_boundary_claims(&self) -> bool {
         false
+    }
+
+    /// The first granule at which whole-boundary claims stop: a claim that
+    /// starts at or past it is sized by the duration-adaptive sizer inside its
+    /// boundary (never across one), and a coalesced claim never extends past
+    /// it. Read once at publish. Default `u64::MAX`: every claim of a
+    /// whole-boundary source is whole. Ignored unless
+    /// `whole_boundary_claims()` is also true.
+    fn whole_until(&self) -> u64 {
+        u64::MAX
+    }
+
+    /// Whether the end-game terminal split may cut this source's whole
+    /// claims inside a boundary (width > 32, sched.rs claim_morsel). Read
+    /// once at publish. A source whose work needs one writer per boundary
+    /// (a per-part directory each claim fills alone) returns false.
+    fn endgame_split(&self) -> bool {
+        true
+    }
+
+    /// A claim for a worker that finds the cursor exhausted (a fixed-total
+    /// source only, never a stream): the upper part of a claim another
+    /// worker is still running, which that worker gave up (the source's
+    /// own split protocol; the runtime only asks). Called inside the
+    /// asking worker's task, pinned like any claim, so the finalization
+    /// protocol waits for the range like any other. `None` (the default):
+    /// nothing to take, the worker sees exhaustion as before.
+    fn steal(&self) -> Option<MorselRange> {
+        None
     }
 
     /// Claim coalescing (dop1-tax fix 1), on top of whole-boundary claims:

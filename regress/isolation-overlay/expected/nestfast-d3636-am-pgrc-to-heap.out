@@ -1,0 +1,42 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1b s1am s2i s1c s3s
+step s1b: BEGIN;
+step s1am: ALTER TABLE rq1 SET ACCESS METHOD heap;
+step s2i: INSERT INTO rq VALUES (1, 'x'); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s3s: SELECT tableoid::regclass, * FROM rq ORDER BY a, b;
+tableoid|a|b
+--------+-+-
+rq1     |1|x
+(1 row)
+
+
+starting permutation: s1b s1am s2j s1c s3s
+step s1b: BEGIN;
+step s1am: ALTER TABLE rq1 SET ACCESS METHOD heap;
+step s2j: INSERT INTO rq SELECT g % 2 + 1, 'y' || g FROM generate_series(1, 4) g; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+step s3s: SELECT tableoid::regclass, * FROM rq ORDER BY a, b;
+tableoid|a|b 
+--------+-+--
+rq1     |1|y2
+rq1     |1|y4
+rq2     |2|y1
+rq2     |2|y3
+(4 rows)
+
+
+starting permutation: s2j s3s
+step s2j: INSERT INTO rq SELECT g % 2 + 1, 'y' || g FROM generate_series(1, 4) g;
+step s3s: SELECT tableoid::regclass, * FROM rq ORDER BY a, b;
+tableoid|a|b 
+--------+-+--
+rq1     |1|y2
+rq1     |1|y4
+rq2     |2|y1
+rq2     |2|y3
+(4 rows)
+

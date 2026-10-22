@@ -1,0 +1,10 @@
+-- regress-full-geometry-001
+-- SELECT s, s::point FROM LSEG_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1360 end=sink
+  nodes n0@0
+  source range rel=17083 rti=1 am=heap
+    lanes Attr(1):byref8:fx32:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=fn1532(v1.1))
+  outs 1=fx32:win/page 2=fx16:call1532
+mapped: SeqScan

@@ -180,11 +180,9 @@ fn get_relkind_objtype(relkind: u8) -> types_nodes::parsenodes::ObjectType {
     }
 }
 
-// RangeVarCallbackForRenameTrigger's relkind check (trigger.c:1425-1445),
-// run inside RangeVarGetRelidExtended before the relation is opened: an
-// index or composite type is refused as "relation cannot have triggers", not
-// with table_open's "cannot open relation". The owner and system-catalog
-// checks follow on the opened rel (same order as C, which runs them next).
+// RangeVarCallbackForRenameTrigger (trigger.c:1425-1460), run inside
+// RangeVarGetRelidExtended before the lock is taken: a non-owner fails
+// without queueing behind other sessions' locks.
 fn rename_trigger_relkind_callback(rv: &rel_vocab::RangeVar<'_>, relid: Oid) -> PgResult<()> {
     if relid == InvalidOid {
         return Ok(()); // concurrently dropped
@@ -194,20 +192,33 @@ fn rename_trigger_relkind_callback(rv: &rel_vocab::RangeVar<'_>, relid: Oid) -> 
         return Ok(()); // concurrently dropped (C: !HeapTupleIsValid)
     }
     match relkind {
-        RELKIND_RELATION | b'v' | RELKIND_FOREIGN_TABLE | RELKIND_PARTITIONED_TABLE => Ok(()),
-        other => Err(Box::new(
-            (*err(
-                format!("relation \"{}\" cannot have triggers", rv.relname),
-                ERRCODE_WRONG_OBJECT_TYPE,
+        RELKIND_RELATION | b'v' | RELKIND_FOREIGN_TABLE | RELKIND_PARTITIONED_TABLE => {}
+        other => {
+            return Err(Box::new(
+                (*err(
+                    format!("relation \"{}\" cannot have triggers", rv.relname),
+                    ERRCODE_WRONG_OBJECT_TYPE,
+                ))
+                .with_detail(relkind_not_supported_detail(other)?),
             ))
-            .with_detail(relkind_not_supported_detail(other)?),
-        )),
+        }
     }
+    // You must own the table to rename one of its triggers.
+    if !aclchk::object_ownercheck(types_core::RELATION_RELATION_ID, relid, miscinit::GetUserId())? {
+        aclchk::aclcheck_error(aclchk::ACLCHECK_NOT_OWNER, get_relkind_objtype(relkind), rv.relname)?;
+    }
+    if !init_small::globals::allowSystemTableMods()
+        && (::catalog::IsCatalogRelationOid(relid)
+            || ::catalog::IsToastNamespace(lsyscache::get_rel_namespace(relid)?))
+    {
+        return Err(err(
+            format!("permission denied: \"{}\" is a system catalog", rv.relname),
+            ERRCODE_INSUFFICIENT_PRIVILEGE,
+        ));
+    }
+    Ok(())
 }
 
-// renametrig (trigger.c): RangeVarGetRelidExtended with the relkind callback,
-// then table_open(relid, NoLock); the owner/system-catalog checks of
-// RangeVarCallbackForRenameTrigger are applied to the opened rel.
 // renametrig (trigger.c): returns the trigger's address for the event-trigger
 // collection tail.
 pub fn renametrig<'mcx>(mcx: Mcx<'mcx>, stmt: &RenameStmt<'mcx>) -> PgResult<ObjectAddress> {
@@ -233,25 +244,6 @@ pub fn renametrig<'mcx>(mcx: Mcx<'mcx>, stmt: &RenameStmt<'mcx>) -> PgResult<Obj
         Some(&mut callback),
     )?;
     let targetrel = table::table_open(mcx, relid, NoLock)?;
-    // RangeVarCallbackForRenameTrigger: you must own the table to rename one
-    // of its triggers.
-    if !aclchk::object_ownercheck(
-        types_core::RELATION_RELATION_ID,
-        targetrel.rd_id,
-        miscinit::GetUserId(),
-    )? {
-        aclchk::aclcheck_error(
-            aclchk::ACLCHECK_NOT_OWNER,
-            get_relkind_objtype(targetrel.rd_rel.relkind),
-            rv.relname,
-        )?;
-    }
-    if !init_small::globals::allowSystemTableMods() && catalog::IsSystemRelation(&targetrel) {
-        return Err(err(
-            format!("permission denied: \"{}\" is a system catalog", rv.relname),
-            ERRCODE_INSUFFICIENT_PRIVILEGE,
-        ));
-    }
     if targetrel.rd_rel.relkind == RELKIND_PARTITIONED_TABLE {
         pg_inherits::find_all_inheritors(mcx, targetrel.rd_id, AccessExclusiveLock)?;
     }
@@ -611,7 +603,9 @@ pub fn EnableDisableTrigger<'mcx>(
         ));
     }
     if changed {
-        inval::invalidate::CacheInvalidateRelcacheByRelid(rel.rd_id)?;
+        // C3 S5 (D3890): the triggers' enabled states are all this changed (pg_trigger has no syscache), so the message
+        // is scoped to them: a program that never read the relation's triggers stays filed
+        inval::with_relcache_scope(inval::REL_SCOPE_TRIGGERS, || inval::invalidate::CacheInvalidateRelcacheByRelid(rel.rd_id))?;
     }
     Ok(())
 }

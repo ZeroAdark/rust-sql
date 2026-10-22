@@ -1,0 +1,13 @@
+-- regress-full-create_index-049
+-- explain (costs off) SELECT unique1 FROM tenk1 WHERE unique1 IN (1, 42, 7) and unique1 = 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=16423 rti=1 am=heap index=19339
+    key att=1 op=96 form=any value=c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00*\x00\x00\x00\x07\x00\x00\x00'
+    key att=1 op=96 value=c23:1
+    recheck (any96(index.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00*\x00\x00\x00\x07\x00\x00\x00'), op96(index.1, c23:1))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  outs 1=w4:val
+mapped: IndexOnlyScan

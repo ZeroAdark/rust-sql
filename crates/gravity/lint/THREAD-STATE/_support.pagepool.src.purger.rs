@@ -1,0 +1,2 @@
+_support/pagepool/src/purger.rs	OWED	memory	call	scratch	pppress card 6 (PGRUST_POOL_GROW_GUARD): the pool charge this thread claimed while the ladder pressed, owed back; settle (the take's settle point) takes it to 0 at each use
+_support/pagepool/src/purger.rs	FRESH	memory	call	scratch	pppress card 6: the superpage this thread's last pressed Cold claim took (its free runs never touched, skipped by the release it owes); settle takes it back to none at each use

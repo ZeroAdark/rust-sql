@@ -135,20 +135,20 @@ fn LogCurrentRunningXacts(running: &procarray::RunningTransactions<'_>) -> PgRes
     Ok(recptr)
 }
 
-fn standby_locks_body(locks: &[xl_standby_lock]) -> Vec<u8> {
-    let mut body = Vec::with_capacity(locks.len() * SIZE_OF_XL_STANDBY_LOCK);
+fn standby_locks_body(locks: &[xl_standby_lock]) -> PgResult<Vec<u8>> {
+    let mut body = ::mcx::std_vec_with_capacity("LogAccessExclusiveLocks", locks.len() * SIZE_OF_XL_STANDBY_LOCK)?;
     for l in locks {
         body.extend_from_slice(&l.xid.to_ne_bytes());
         body.extend_from_slice(&l.dbOid.to_ne_bytes());
         body.extend_from_slice(&l.relOid.to_ne_bytes());
     }
-    body
+    Ok(body)
 }
 
 // Only AccessExclusiveLocks are ever logged (lmgr/README).
 fn LogAccessExclusiveLocks(locks: &[xl_standby_lock]) -> PgResult<()> {
     let hdr: [u8; OFFSET_OF_XL_STANDBY_LOCKS_LOCKS] = (locks.len() as i32).to_ne_bytes();
-    let body = standby_locks_body(locks);
+    let body = standby_locks_body(locks)?;
 
     xloginsert::insert_record(
         RM_STANDBY_ID,
@@ -193,7 +193,7 @@ pub fn LogStandbyInvalidations(
     relcache_init_file_inval: bool,
 ) -> PgResult<()> {
     let xlrec = invalidations_header(relcache_init_file_inval, msgs.len());
-    let mut body = Vec::with_capacity(msgs.len() * SHARED_INVALIDATION_MESSAGE_SIZE);
+    let mut body = ::mcx::std_vec_with_capacity("LogStandbyInvalidations", msgs.len() * SHARED_INVALIDATION_MESSAGE_SIZE)?;
     for msg in msgs {
         body.extend_from_slice(&msg.to_wire_bytes());
     }
@@ -357,7 +357,7 @@ pub fn standby_redo(record: &mut xlogreader_seams::XLogReaderState) -> PgResult<
                 SHARED_INVALIDATION_MESSAGE_SIZE,
                 "xl_invalidations",
             )?;
-            let mut msgs = Vec::with_capacity(nmsgs);
+            let mut msgs = ::mcx::std_vec_with_capacity("standby_redo", nmsgs)?;
             for i in 0..nmsgs {
                 let base = MIN_SIZE_OF_INVALIDATIONS + i * SHARED_INVALIDATION_MESSAGE_SIZE;
                 msgs.push(

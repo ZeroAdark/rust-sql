@@ -1,7 +1,7 @@
 //! On-disk JsonPath varlena: flatten (parse tree -> binary), the JsonPathItem
 //! reader, the canonical text printer, and the in/out/recv/send cores.
 
-use ::mcx::{vec_append_bytes, vec_with_capacity_in, Mcx, PgVec};
+use ::mcx::{vec_with_capacity_in, Mcx, PgVec};
 use ::stack_depth::check_stack_depth;
 use ::stringinfo::StringInfo;
 use ::types_error::{ereturn, PgError, PgResult, SoftErrorContext};
@@ -157,7 +157,7 @@ fn buf_zeros(buf: &mut PgVec<'_, u8>, count: usize) -> PgResult<()> {
     let mut left = count;
     while left > 0 {
         let n = left.min(ZEROS.len());
-        vec_append_bytes(buf, &ZEROS[..n])?;
+        ::stringinfo::vec_append_binary(buf, &ZEROS[..n])?;
         left -= n;
     }
     Ok(())
@@ -175,7 +175,7 @@ fn align_int(buf: &mut PgVec<'_, u8>) -> PgResult<()> {
 
 fn reserve_item_pointer(buf: &mut PgVec<'_, u8>) -> PgResult<usize> {
     let pos = buf.len();
-    vec_append_bytes(buf, &0i32.to_ne_bytes())?;
+    ::stringinfo::vec_append_binary(buf, &0i32.to_ne_bytes())?;
     Ok(pos)
 }
 
@@ -187,6 +187,20 @@ fn unrecognized_item_type(typ: ItemType) -> Box<PgError> {
         "unrecognized jsonpath item type: {}",
         typ as i32
     )))
+}
+
+// Out of line so the error temporaries stay out of the recursive frame.
+#[cold]
+#[inline(never)]
+fn flatten_syntax_error(
+    escontext: &mut Option<&mut SoftErrorContext>,
+    msg: &'static str,
+) -> PgResult<Option<i32>> {
+    ereturn(
+        escontext.as_deref_mut(),
+        None,
+        PgError::error(msg).with_sqlstate(ERRCODE_SYNTAX_ERROR),
+    )
 }
 
 /// C: flattenJsonPathParseItem. Ok(Some(pos)) on success; Ok(None) after a
@@ -206,7 +220,7 @@ fn flatten_item(
     let mut chld: i32 = 0;
     let mut arg_nesting_level = 0i32;
 
-    vec_append_bytes(buf, &[item.typ as u8])?;
+    ::stringinfo::vec_append_binary(buf, &[item.typ as u8])?;
     align_int(buf)?;
     let next = reserve_item_pointer(buf)?;
 
@@ -215,21 +229,21 @@ fn flatten_item(
             let ParseValue::String(s) = item.value else {
                 unreachable!("String/Variable/Key carries String value");
             };
-            vec_append_bytes(buf, &(s.len() as i32).to_ne_bytes())?;
-            vec_append_bytes(buf, s)?;
-            vec_append_bytes(buf, &[0])?;
+            ::stringinfo::vec_append_binary(buf, &(s.len() as i32).to_ne_bytes())?;
+            ::stringinfo::vec_append_binary(buf, s)?;
+            ::stringinfo::vec_append_binary(buf, &[0])?;
         }
         ItemType::Numeric => {
             let ParseValue::Numeric(num) = item.value else {
                 unreachable!("Numeric carries Numeric value");
             };
-            vec_append_bytes(buf, num)?;
+            ::stringinfo::vec_append_binary(buf, num)?;
         }
         ItemType::Bool => {
             let ParseValue::Boolean(b) = item.value else {
                 unreachable!("Bool carries Boolean value");
             };
-            vec_append_bytes(buf, &[b as u8])?;
+            ::stringinfo::vec_append_binary(buf, &[b as u8])?;
         }
         ItemType::And
         | ItemType::Or
@@ -294,11 +308,11 @@ fn flatten_item(
                 _ => unreachable!("LikeRegex carries LikeRegex value"),
             };
 
-            vec_append_bytes(buf, &flags.to_ne_bytes())?;
+            ::stringinfo::vec_append_binary(buf, &flags.to_ne_bytes())?;
             let offs = reserve_item_pointer(buf)?;
-            vec_append_bytes(buf, &(pattern.len() as i32).to_ne_bytes())?;
-            vec_append_bytes(buf, pattern)?;
-            vec_append_bytes(buf, &[0])?;
+            ::stringinfo::vec_append_binary(buf, &(pattern.len() as i32).to_ne_bytes())?;
+            ::stringinfo::vec_append_binary(buf, pattern)?;
+            ::stringinfo::vec_append_binary(buf, &[0])?;
 
             let expr = expr.expect("LikeRegex expr is non-null");
             match flatten_item(buf, escontext, expr, nesting_level, inside_array_subscript)? {
@@ -350,22 +364,12 @@ fn flatten_item(
         ItemType::Null | ItemType::Root | ItemType::AnyArray | ItemType::AnyKey => {}
         ItemType::Current => {
             if nesting_level <= 0 {
-                return ereturn(
-                    escontext.as_deref_mut(),
-                    None,
-                    PgError::error("@ is not allowed in root expressions")
-                        .with_sqlstate(ERRCODE_SYNTAX_ERROR),
-                );
+                return flatten_syntax_error(escontext, "@ is not allowed in root expressions");
             }
         }
         ItemType::Last => {
             if !inside_array_subscript {
-                return ereturn(
-                    escontext.as_deref_mut(),
-                    None,
-                    PgError::error("LAST is allowed only in array subscripts")
-                        .with_sqlstate(ERRCODE_SYNTAX_ERROR),
-                );
+                return flatten_syntax_error(escontext, "LAST is allowed only in array subscripts");
             }
         }
         ItemType::IndexArray => {
@@ -374,7 +378,7 @@ fn flatten_item(
                 _ => unreachable!("IndexArray carries Array value"),
             };
 
-            vec_append_bytes(buf, &(elems.len() as i32).to_ne_bytes())?;
+            ::stringinfo::vec_append_binary(buf, &(elems.len() as i32).to_ne_bytes())?;
             let offset = buf.len();
             buf_zeros(buf, 4 * 2 * elems.len())?;
 
@@ -405,8 +409,8 @@ fn flatten_item(
                 ParseValue::AnyBounds { first, last } => (first, last),
                 _ => unreachable!("Any carries AnyBounds value"),
             };
-            vec_append_bytes(buf, &first.to_ne_bytes())?;
-            vec_append_bytes(buf, &last.to_ne_bytes())?;
+            ::stringinfo::vec_append_binary(buf, &first.to_ne_bytes())?;
+            ::stringinfo::vec_append_binary(buf, &last.to_ne_bytes())?;
         }
         ItemType::Type
         | ItemType::Size

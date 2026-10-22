@@ -1,0 +1,12 @@
+-- regress-full-type_sanity-029
+-- SELECT c1.oid, c1.relname FROM pg_class as c1 WHERE c1.relkind IN ('S', 'v', 'f', 'c', 'p') and c1.relam != 0;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=94 end=sink
+  nodes n0@0
+  source range rel=1259 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(7):byval8:w8:val Attr(18):byval8:w8:val Offset:byval2:w2:val
+  filter op608(v1.7, c26:0)
+  filter any92(v1.18, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x05\x00\x00\x00\x01\x00\x00\x00Svfcp')
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

@@ -1,0 +1,299 @@
+Parsed test spec with 5 sessions
+
+starting permutation: s2x s1a s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t;
+QUERY PLAN                                                
+----------------------------------------------------------
+Limit                                                     
+  ->  LockRows                                            
+        ->  Nested Loop Left Join                         
+              ->  Index Scan using rlt_claim on rlt t     
+                    Index Cond: (status = 'ready'::text)  
+              ->  Memoize                                 
+                    Cache Key: t.queue_id                 
+                    Cache Mode: logical                   
+                    ->  Index Scan using rlq_pkey on rlq q
+                          Index Cond: (id = t.queue_id)   
+(10 rows)
+
+step s1a: UPDATE rlt SET attempts = attempts + 10 WHERE id = 3;
+step s2l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|       4|      10|q4  
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2l s1c
+step s1s: UPDATE rlt SET status = 'done' WHERE id = 3;
+step s2l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+31|       2|       1|q2  
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1z s2l s1c
+step s1z: UPDATE rlt SET queue_id = NULL WHERE id = 3;
+step s2l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|        |       0|    
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c
+step s1m: UPDATE rlt SET queue_id = 2 WHERE id = 3;
+step s2l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|       2|       0|    
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2l s1c
+step s1n: UPDATE rlt SET attempts = attempts + 10 WHERE id = 27;
+step s2l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|       4|       0|q4  
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |      10|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2l s1c
+step s1r: UPDATE rlq SET name = 'renamed' WHERE id = 4; UPDATE rlt SET attempts = attempts + 10 WHERE id = 3;
+step s2l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|       4|      10|q4  
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM rlt WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2sk: SELECT t.id, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t SKIP LOCKED;
+id|name
+--+----
+ 7|q3  
+11|q2  
+15|q1  
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM rlt WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2nw: SELECT t.id, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t NOWAIT;
+ERROR:  could not obtain lock on row in relation "rlt"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1a s3l s1c
+step s3x: EXPLAIN (COSTS OFF) SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t;
+QUERY PLAN                                              
+--------------------------------------------------------
+Limit                                                   
+  ->  LockRows                                          
+        ->  Nested Loop Left Join                       
+              Join Filter: (q.id = t.queue_id)          
+              ->  Index Scan using rlt_claim on rlt t   
+                    Index Cond: (status = 'ready'::text)
+              ->  Materialize                           
+                    ->  Seq Scan on rlq q               
+(8 rows)
+
+step s1a: UPDATE rlt SET attempts = attempts + 10 WHERE id = 3;
+step s3l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|       4|      10|q4  
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s3l s1c
+step s1m: UPDATE rlt SET queue_id = 2 WHERE id = 3;
+step s3l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|       2|       0|    
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1z s3l s1c
+step s1z: UPDATE rlt SET queue_id = NULL WHERE id = 3;
+step s3l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|        |       0|    
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s4x s1a s4l s1c
+step s4x: EXPLAIN (COSTS OFF) SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t;
+QUERY PLAN                                              
+--------------------------------------------------------
+Limit                                                   
+  ->  LockRows                                          
+        ->  Nested Loop Left Join                       
+              ->  Index Scan using rlt_claim on rlt t   
+                    Index Cond: (status = 'ready'::text)
+              ->  Index Scan using rlq_pkey on rlq q    
+                    Index Cond: (id = t.queue_id)       
+(7 rows)
+
+step s1a: UPDATE rlt SET attempts = attempts + 10 WHERE id = 3;
+step s4l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|       4|      10|q4  
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s4l s1c
+step s1m: UPDATE rlt SET queue_id = 2 WHERE id = 3;
+step s4l: SELECT t.id, t.queue_id, t.attempts, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 7 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+id|queue_id|attempts|name
+--+--------+--------+----
+ 3|       2|       0|    
+ 7|       3|       1|q3  
+11|       2|       2|q2  
+15|       1|       0|q1  
+19|       5|       1|q5  
+23|       4|       2|q4  
+27|        |       0|    
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s5l s1c
+step s1p: UPDATE rlt SET queue_id = 3 WHERE id = 3;
+step s5l: SELECT t.id, t.queue_id, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id AND NOT q.paused WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 4 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s5l: <... completed>
+id|queue_id|name
+--+--------+----
+ 3|       3|    
+ 7|       3|    
+11|       2|q2  
+15|       1|q1  
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s5l s1c
+step s1a: UPDATE rlt SET attempts = attempts + 10 WHERE id = 3;
+step s5l: SELECT t.id, t.queue_id, q.name FROM rlt t LEFT JOIN rlq q ON q.id = t.queue_id AND NOT q.paused WHERE t.status = 'ready' ORDER BY t.priority DESC, t.run_at LIMIT 4 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s5l: <... completed>
+id|queue_id|name
+--+--------+----
+ 3|       4|q4  
+ 7|       3|    
+11|       2|q2  
+15|       1|q1  
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress

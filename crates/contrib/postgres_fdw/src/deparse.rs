@@ -1820,7 +1820,7 @@ fn deparse_select_stmt_inner<'mcx>(
     let where_conds: Vec<types_pathnodes::RinfoId> = if is_upper {
         fpinfo(run.root.rel(ctx.scanrel)).borrow().remote_conds.iter().copied().collect()
     } else {
-        remote_conds.to_vec()
+        ::mcx::std_vec_from_slice("postgres_fdw", &remote_conds)?
     };
 
     // FROM + WHERE.
@@ -1889,7 +1889,7 @@ fn deparse_locking_clause<'mcx>(ctx: &mut DeparseCtx<'_, 'mcx>) -> PgResult<()> 
             if is_join {
                 let _ = write!(ctx.buf, " OF {REL_ALIAS_PREFIX}{relid}");
             }
-        } else if let Some(rc) = run.rowmarks.iter().find(|rc| rc.rti as i32 == relid) {
+        } else if let Some(rc) = get_plan_rowmark(&run.root.rowMarks, &run.rowmarks, relid) {
             let strength = rc.strength;
             match strength {
                 LockClauseStrength::LCS_NONE => {}
@@ -1907,6 +1907,15 @@ fn deparse_locking_clause<'mcx>(ctx: &mut DeparseCtx<'_, 'mcx>) -> PgResult<()> 
         }
     }
     Ok(())
+}
+
+// get_plan_rowmark over this level's root->rowMarks, not the run-wide store.
+fn get_plan_rowmark<'a>(
+    level_marks: &[types_pathnodes::PlanRowMarkId],
+    store: &'a [types_nodes::plannodes::PlanRowMark],
+    rti: i32,
+) -> Option<&'a types_nodes::plannodes::PlanRowMark> {
+    level_marks.iter().map(|id| &store[id.0 as usize]).find(|rc| rc.rti as i32 == rti)
 }
 
 // appendGroupByClause: ship the whole groupClause, by column number.
@@ -2099,18 +2108,30 @@ fn deparse_subquery_target_list<'mcx>(ctx: &mut DeparseCtx<'_, 'mcx>) -> PgResul
 
 // deparseFromExprForRel: base rel → "schema.table [rN]"; join rel →
 // "(outer <type> JOIN inner ON (conds))"; SEMI joins become EXISTS strings
-// pushed into additional_conds. The UPDATE/DELETE ignore_rel lane is not
-// wired here (direct modify is a later phase).
+// pushed into additional_conds. A direct UPDATE/DELETE passes its target as
+// ignore_rel: the target is left out and inner-join clauses above it move
+// to ignore_conds for the WHERE clause.
 fn deparse_from_expr_for_rel<'mcx>(
     ctx: &mut DeparseCtx<'_, 'mcx>,
     foreignrel: RelId,
     use_alias: bool,
     additional_conds: &mut Vec<String>,
 ) -> PgResult<()> {
+    deparse_from_expr_for_rel_ignoring(ctx, foreignrel, use_alias, 0, &mut Vec::new(), additional_conds)
+}
+
+fn deparse_from_expr_for_rel_ignoring<'mcx>(
+    ctx: &mut DeparseCtx<'_, 'mcx>,
+    foreignrel: RelId,
+    use_alias: bool,
+    ignore_rel: i32,
+    ignore_conds: &mut Vec<types_pathnodes::RinfoId>,
+    additional_conds: &mut Vec<String>,
+) -> PgResult<()> {
     let run = ctx.run;
     let mcx = ctx.mcx;
     if is_join_rel(run, foreignrel) {
-        let (outerrel, innerrel, jointype, make_o_sub, make_i_sub, joinclauses): (
+        let (outerrel, innerrel, jointype, make_o_sub, make_i_sub, mut joinclauses): (
             RelId,
             RelId,
             types_pathnodes::JoinType,
@@ -2128,38 +2149,65 @@ fn deparse_from_expr_for_rel<'mcx>(
                 fp.joinclauses.iter().copied().collect(),
             )
         };
+        let mut outerrel_is_target = false;
+        let mut innerrel_is_target = false;
+        if ignore_rel > 0
+            && types_pathnodes::relids::relids_is_member(ignore_rel, &run.root.rel(foreignrel).relids)
+        {
+            if jointype == types_pathnodes::JOIN_INNER {
+                ignore_conds.append(&mut joinclauses);
+            }
+            if run.root.rel(outerrel).relid as i32 == ignore_rel {
+                outerrel_is_target = true;
+            } else if run.root.rel(innerrel).relid as i32 == ignore_rel {
+                innerrel_is_target = true;
+            }
+        }
         let mut conds_o: Vec<String> = Vec::new();
         let mut conds_i: Vec<String> = Vec::new();
 
-        let mut join_sql_o = {
+        let mut join_sql_o = PgString::new_in(mcx);
+        if !outerrel_is_target {
             let saved = core::mem::replace(&mut ctx.buf, PgString::new_in(mcx));
-            deparse_range_tbl_ref(ctx, outerrel, make_o_sub, &mut conds_o)?;
-            core::mem::replace(&mut ctx.buf, saved)
-        };
-        let join_sql_i = {
+            deparse_range_tbl_ref(ctx, outerrel, make_o_sub, ignore_rel, ignore_conds, &mut conds_o)?;
+            join_sql_o = core::mem::replace(&mut ctx.buf, saved);
+            if innerrel_is_target {
+                ctx.buf.push_str(join_sql_o.as_str());
+                additional_conds.append(&mut conds_o);
+                return Ok(());
+            }
+        }
+        let mut join_sql_i = PgString::new_in(mcx);
+        if !innerrel_is_target {
             let saved = core::mem::replace(&mut ctx.buf, PgString::new_in(mcx));
-            deparse_range_tbl_ref(ctx, innerrel, make_i_sub, &mut conds_i)?;
-            core::mem::replace(&mut ctx.buf, saved)
-        };
+            deparse_range_tbl_ref(ctx, innerrel, make_i_sub, ignore_rel, ignore_conds, &mut conds_i)?;
+            join_sql_i = core::mem::replace(&mut ctx.buf, saved);
+            if jointype == types_pathnodes::JOIN_SEMI {
+                // EXISTS (SELECT NULL FROM <inner> WHERE <joinclauses AND lower conds>)
+                let (save_f, save_s) = (ctx.foreignrel, ctx.scanrel);
+                ctx.foreignrel = foreignrel;
+                ctx.scanrel = foreignrel;
+                let saved = core::mem::replace(&mut ctx.buf, PgString::new_in(mcx));
+                ctx.buf.push_str("EXISTS (SELECT NULL FROM ");
+                ctx.buf.push_str(join_sql_i.as_str());
+                append_where_clause(ctx, &joinclauses, &conds_i)?;
+                conds_i.clear();
+                ctx.buf.push(')');
+                let exists = core::mem::replace(&mut ctx.buf, saved);
+                ctx.foreignrel = save_f;
+                ctx.scanrel = save_s;
+                additional_conds.push(exists.as_str().to_string());
+            }
+            if outerrel_is_target {
+                ctx.buf.push_str(join_sql_i.as_str());
+                additional_conds.append(&mut conds_i);
+                return Ok(());
+            }
+        }
 
         if jointype == types_pathnodes::JOIN_SEMI {
-            // EXISTS (SELECT NULL FROM <inner> WHERE <joinclauses AND lower conds>)
-            let (save_f, save_s) = (ctx.foreignrel, ctx.scanrel);
-            ctx.foreignrel = foreignrel;
-            ctx.scanrel = foreignrel;
-            let saved = core::mem::replace(&mut ctx.buf, PgString::new_in(mcx));
-            ctx.buf.push_str("EXISTS (SELECT NULL FROM ");
-            ctx.buf.push_str(join_sql_i.as_str());
-            append_where_clause(ctx, &joinclauses, &conds_i)?;
-            conds_i.clear();
-            ctx.buf.push(')');
-            let exists = core::mem::replace(&mut ctx.buf, saved);
-            ctx.foreignrel = save_f;
-            ctx.scanrel = save_s;
-            additional_conds.push(exists.as_str().to_string());
             // FROM clause is just the outer relation.
             ctx.buf.push_str(join_sql_o.as_str());
-            let _ = &mut join_sql_o;
         } else {
             ctx.buf.push('(');
             ctx.buf.push_str(join_sql_o.as_str());
@@ -2204,6 +2252,8 @@ fn deparse_range_tbl_ref<'mcx>(
     ctx: &mut DeparseCtx<'_, 'mcx>,
     foreignrel: RelId,
     make_subquery: bool,
+    ignore_rel: i32,
+    ignore_conds: &mut Vec<types_pathnodes::RinfoId>,
     additional_conds: &mut Vec<String>,
 ) -> PgResult<()> {
     let run = ctx.run;
@@ -2245,7 +2295,7 @@ fn deparse_range_tbl_ref<'mcx>(
         }
         Ok(())
     } else {
-        deparse_from_expr_for_rel(ctx, foreignrel, true, additional_conds)
+        deparse_from_expr_for_rel_ignoring(ctx, foreignrel, true, ignore_rel, ignore_conds, additional_conds)
     }
 }
 
@@ -2290,17 +2340,6 @@ fn append_conditions_nodes<'mcx>(
     }
     crate::transmission::reset_transmission_modes(nestlevel);
     Ok(())
-}
-
-fn append_where_clause_nodes<'mcx>(
-    ctx: &mut DeparseCtx<'_, 'mcx>,
-    exprs: &[types_pathnodes::NodeId],
-) -> PgResult<()> {
-    if exprs.is_empty() {
-        return Ok(());
-    }
-    ctx.buf.push_str(" WHERE ");
-    append_conditions_nodes(ctx, exprs)
 }
 
 fn append_conditions<'mcx>(
@@ -2439,14 +2478,12 @@ pub fn deparse_insert_sql<'mcx>(
 /// insert. `num_params` = params already emitted for the first row. Exec-time.
 pub fn rebuild_insert_sql<'mcx>(
     buf: &mut PgString<'mcx>,
-    rel: &types_rel::Relation<'mcx>,
     orig_query: &str,
-    target_attrs: &[i32],
+    attgenerated: &[bool],
     values_end_len: i32,
     num_params: i32,
     num_rows: i32,
 ) {
-    let tupdesc = &rel.rd_att;
     let end = values_end_len as usize;
     debug_assert!(end > 0 && end <= orig_query.len());
     // Copy up to the end of the first record from the original query.
@@ -2457,13 +2494,12 @@ pub fn rebuild_insert_sql<'mcx>(
     for _ in 0..num_rows {
         buf.push_str(", (");
         let mut first = true;
-        for &attnum in target_attrs {
-            let attr = tupdesc.attr(attnum as usize - 1);
+        for &generated in attgenerated {
             if !first {
                 buf.push_str(", ");
             }
             first = false;
-            if attr.attgenerated != 0 {
+            if generated {
                 buf.push_str("DEFAULT");
             } else {
                 let _ = write!(buf, "${pindex}");
@@ -2543,10 +2579,9 @@ pub fn deparse_delete_sql<'mcx>(
     )
 }
 
-/// deparseDirectUpdateSql, base-relation case only. The join case
-/// (foreignrel is a RELOPT_JOINREL, needing deparseFromExprForRel + the
-/// FROM/alias machinery) is phase-4 join pushdown; reaching it raises a loud
-/// FEATURE_NOT_SUPPORTED.
+/// deparseDirectUpdateSql. `foreignrel` is the target or, for UPDATE ... FROM
+/// pushed down with its join, the join rel (FROM clause without the target,
+/// RETURNING over the join's explicit target list).
 #[allow(clippy::too_many_arguments)]
 pub fn deparse_direct_update_sql<'mcx>(
     ctx: &mut DeparseCtx<'_, 'mcx>,
@@ -2556,17 +2591,16 @@ pub fn deparse_direct_update_sql<'mcx>(
     targetlist: &[Node<'mcx>],
     target_attrs: &[i32],
     remote_conds: &[types_pathnodes::NodeId],
-    returning_list: &[Node<'mcx>],
+    returning_list: &NodeList<'mcx>,
     retrieved_attrs: &mut PgVec<'mcx, i32>,
 ) -> PgResult<()> {
-    // Direct modify over a pushed-down join (UPDATE ... FROM ft2) needs the
-    // EPQ-capable join paths that are not generated yet.
-    if ctx.run.root.rel(ctx.foreignrel).reloptkind == types_pathnodes::RELOPT_JOINREL {
-        return Err(direct_modify_join_unported());
-    }
+    let is_join = ctx.run.root.rel(ctx.foreignrel).reloptkind == types_pathnodes::RELOPT_JOINREL;
     let mcx = ctx.mcx;
     ctx.buf.push_str("UPDATE ");
     deparse_relation(&mut ctx.buf, mcx, rel)?;
+    if is_join {
+        let _ = write!(ctx.buf, " {REL_ALIAS_PREFIX}{rtindex}");
+    }
     ctx.buf.push_str(" SET ");
 
     // Make sure any constants in the exprs are printed portably.
@@ -2586,16 +2620,10 @@ pub fn deparse_direct_update_sql<'mcx>(
     }
     crate::transmission::reset_transmission_modes(nestlevel);
 
-    // base-rel: no FROM clause, additional_conds is NIL.
-    append_where_clause_nodes(ctx, remote_conds)?;
-
-    deparse_returning_list(
-        &mut ctx.buf, mcx, Some(ctx.run), rte, rtindex, rel, false, &[], returning_list,
-        retrieved_attrs,
-    )
+    deparse_direct_modify_tail(ctx, " FROM ", rtindex, rel, rte, remote_conds, returning_list, retrieved_attrs)
 }
 
-/// deparseDirectDeleteSql, base-relation case only (join case is phase-4).
+/// deparseDirectDeleteSql; a join `foreignrel` becomes the USING clause.
 #[allow(clippy::too_many_arguments)]
 pub fn deparse_direct_delete_sql<'mcx>(
     ctx: &mut DeparseCtx<'_, 'mcx>,
@@ -2603,40 +2631,99 @@ pub fn deparse_direct_delete_sql<'mcx>(
     rel: &types_rel::Relation<'mcx>,
     rte: &types_nodes::parsenodes::RangeTblEntry<'mcx>,
     remote_conds: &[types_pathnodes::NodeId],
-    returning_list: &[Node<'mcx>],
+    returning_list: &NodeList<'mcx>,
     retrieved_attrs: &mut PgVec<'mcx, i32>,
 ) -> PgResult<()> {
-    // Direct modify over a pushed-down join needs EPQ-capable join paths.
-    if ctx.run.root.rel(ctx.foreignrel).reloptkind == types_pathnodes::RELOPT_JOINREL {
-        return Err(direct_modify_join_unported());
-    }
+    let is_join = ctx.run.root.rel(ctx.foreignrel).reloptkind == types_pathnodes::RELOPT_JOINREL;
     let mcx = ctx.mcx;
     ctx.buf.push_str("DELETE FROM ");
     deparse_relation(&mut ctx.buf, mcx, rel)?;
-
-    // base-rel: no USING clause, additional_conds is NIL.
-    append_where_clause_nodes(ctx, remote_conds)?;
-
-    deparse_returning_list(
-        &mut ctx.buf, mcx, Some(ctx.run), rte, rtindex, rel, false, &[], returning_list,
-        retrieved_attrs,
-    )
+    if is_join {
+        let _ = write!(ctx.buf, " {REL_ALIAS_PREFIX}{rtindex}");
+    }
+    deparse_direct_modify_tail(ctx, " USING ", rtindex, rel, rte, remote_conds, returning_list, retrieved_attrs)
 }
 
-#[track_caller]
-#[cold]
-fn direct_modify_join_unported() -> Box<PgError> {
-    Box::new(
-        PgError::error(
-            "postgres_fdw: direct modify over a foreign join is phase-4 join pushdown",
+// The FROM/USING, WHERE and RETURNING shared by deparseDirectUpdateSql and
+// deparseDirectDeleteSql (deparse.c:2336-2357, 2412-2432).
+#[allow(clippy::too_many_arguments)]
+fn deparse_direct_modify_tail<'mcx>(
+    ctx: &mut DeparseCtx<'_, 'mcx>,
+    from_keyword: &str,
+    rtindex: i32,
+    rel: &types_rel::Relation<'mcx>,
+    rte: &types_nodes::parsenodes::RangeTblEntry<'mcx>,
+    remote_conds: &[types_pathnodes::NodeId],
+    returning_list: &NodeList<'mcx>,
+    retrieved_attrs: &mut PgVec<'mcx, i32>,
+) -> PgResult<()> {
+    let mcx = ctx.mcx;
+    let foreignrel = ctx.foreignrel;
+    let is_join = ctx.run.root.rel(foreignrel).reloptkind == types_pathnodes::RELOPT_JOINREL;
+    let mut ignore_conds: Vec<types_pathnodes::RinfoId> = Vec::new();
+    let mut additional_conds: Vec<String> = Vec::new();
+    if is_join {
+        ctx.buf.push_str(from_keyword);
+        deparse_from_expr_for_rel_ignoring(
+            ctx,
+            foreignrel,
+            true,
+            rtindex,
+            &mut ignore_conds,
+            &mut additional_conds,
+        )?;
+    }
+    // appendWhereClause over remote_conds ++ ignore_conds.
+    if !remote_conds.is_empty() || !ignore_conds.is_empty() || !additional_conds.is_empty() {
+        ctx.buf.push_str(" WHERE ");
+        let mut need_and = false;
+        if !remote_conds.is_empty() {
+            append_conditions_nodes(ctx, remote_conds)?;
+            need_and = true;
+        }
+        if !ignore_conds.is_empty() {
+            if need_and {
+                ctx.buf.push_str(" AND ");
+            }
+            append_conditions(ctx, &ignore_conds)?;
+            need_and = true;
+        }
+        for c in &additional_conds {
+            if need_and {
+                ctx.buf.push_str(" AND ");
+            }
+            ctx.buf.push_str(c);
+            need_and = true;
+        }
+    }
+    if is_join {
+        deparse_explicit_target_list(ctx, returning_list, true, retrieved_attrs)
+    } else {
+        let returning: Vec<Node<'mcx>> = returning_list.iter().collect();
+        deparse_returning_list(
+            &mut ctx.buf, mcx, Some(ctx.run), rte, rtindex, rel, false, &[], &returning,
+            retrieved_attrs,
         )
-        .with_sqlstate(types_error::ERRCODE_FEATURE_NOT_SUPPORTED),
-    )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locking_clause_reads_only_this_levels_rowmarks() {
+        let store = [types_nodes::plannodes::PlanRowMark {
+            rti: 1,
+            prti: 1,
+            strength: types_nodes::nodes_enums::LockClauseStrength::LCS_FORUPDATE,
+            ..Default::default()
+        }];
+        assert!(get_plan_rowmark(&[], &store, 1).is_none());
+        let outer = [types_pathnodes::PlanRowMarkId(0)];
+        assert_eq!(get_plan_rowmark(&outer, &store, 1).map(|rc| rc.rti), Some(1));
+        assert!(get_plan_rowmark(&outer, &store, 2).is_none());
+    }
 
     #[test]
     fn string_literal_escaping() {

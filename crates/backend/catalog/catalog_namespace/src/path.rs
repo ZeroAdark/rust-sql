@@ -37,6 +37,9 @@ struct SpEntry {
     roleid: Oid,
     oidlist: Span,
     final_path: Span,
+    // Capacity behind final_path: a recompute (namespace.c:4278 list_free +
+    // finalNamespacePath) reuses it instead of growing the pool.
+    final_cap: u32,
     first_ns: Oid,
     temp_missing: bool,
     force_recompute: bool,
@@ -182,6 +185,7 @@ fn spcache_insert(searchPath: &str, roleid: Oid) -> PgResult<u32> {
             roleid,
             oidlist: NIL,
             final_path: NIL,
+            final_cap: 0,
             first_ns: InvalidOid,
             temp_missing: false,
             force_recompute: false,
@@ -259,7 +263,7 @@ fn preprocessNamespacePath(searchPath: &str, roleid: Oid) -> PgResult<(Vec<Oid>,
 }
 
 fn finalNamespacePath(oidlist: &[Oid]) -> PgResult<(Vec<Oid>, Oid)> {
-    let mut finalPath: Vec<Oid> = Vec::with_capacity(oidlist.len() + 2);
+    let mut finalPath: Vec<Oid> = ::mcx::std_vec_with_capacity("catalog", oidlist.len() + 2)?;
 
     for &namespaceId in oidlist {
         if !finalPath.contains(&namespaceId)
@@ -312,11 +316,21 @@ fn cachedNamespacePath<R>(
         c.entries[idx].final_path.len == 0 || hook_set || c.entries[idx].force_recompute
     });
     if need_final {
-        // Computed outside the spcache borrow: the hook may reenter.
-        let oidlist: Vec<Oid> = with_spcache(|c| c.oid_span(c.entries[idx].oidlist).to_vec());
+        let oidlist: Vec<Oid> =
+            with_spcache(|c| ::mcx::std_vec_from_slice("catalog_namespace", c.oid_span(c.entries[idx].oidlist)))?;
         let (final_path, first_ns) = finalNamespacePath(&oidlist)?;
         with_spcache_mcx(|m, c| {
-            let span = append_oids(m, &mut c.oids, &final_path)?;
+            let n = final_path.len() as u32;
+            let cap = c.entries[idx].final_cap;
+            let span = if cap >= n && cap > 0 {
+                let off = c.entries[idx].final_path.off as usize;
+                c.oids[off..off + n as usize].copy_from_slice(&final_path);
+                Span { off: off as u32, len: n }
+            } else {
+                let span = append_oids(m, &mut c.oids, &final_path)?;
+                c.entries[idx].final_cap = n;
+                span
+            };
             let e = &mut c.entries[idx];
             e.final_path = span;
             e.first_ns = first_ns;
@@ -331,7 +345,32 @@ fn cachedNamespacePath<R>(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn spcache_oid_pool_len() -> usize {
+    with_spcache(|c| c.oids.len())
+}
+
 pub(crate) fn recomputeNamespacePath() -> PgResult<()> {
+    recompute_path()?;
+    // D4010: what a lookup resolves depends on the path it walks (a Gravity lowering's reads hold under this one only)
+    if gravity_deps::armed() {
+        gravity_deps::note_setting(gravity_deps::SETTING_SEARCH_PATH, path_fingerprint());
+    }
+    Ok(())
+}
+
+/// D4010: the resolved path's fingerprint, its namespace OIDs in order (a few words: hashed at each ask, so no cache can
+/// outlive a session swap of the path).
+fn path_fingerprint() -> u64 {
+    with_path(|p| p.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &o| (h ^ u64::from(o)).wrapping_mul(0x0000_0100_0000_01b3)))
+}
+
+/// D4010: gravity_deps' reader of the search path a lookup would walk now; `None` when it cannot be resolved.
+pub(crate) fn search_path_probe(key: u32) -> Option<u64> {
+    (key == gravity_deps::SETTING_SEARCH_PATH && recompute_path().is_ok()).then(path_fingerprint)
+}
+
+fn recompute_path() -> PgResult<()> {
     let roleid = miscinit_seams::get_user_id::call();
 
     if BASE_SEARCH_PATH_VALID.with(Cell::get) && NAMESPACE_USER.with(Cell::get) == roleid {
@@ -551,6 +590,18 @@ pub fn CopySearchPathMatcher<'mcx>(
         addTemp: path.addTemp,
         generation: path.generation,
     })
+}
+
+pub fn active_path_generation() -> PgResult<u64> {
+    recomputeNamespacePath()?;
+    Ok(ACTIVE_PATH_GENERATION.with(Cell::get))
+}
+
+/// The active path's generation after recomputing it: a matcher carrying
+/// this generation matches without the full comparison.
+pub fn ActiveSearchPathGeneration() -> PgResult<u64> {
+    recomputeNamespacePath()?;
+    Ok(ACTIVE_PATH_GENERATION.with(Cell::get))
 }
 
 pub fn SearchPathMatchesCurrentEnvironment(path: &mut SearchPathMatcher<'_>) -> PgResult<bool> {

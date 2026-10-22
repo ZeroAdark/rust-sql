@@ -1,0 +1,9 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/dml.rs
+growth	std::collections::BTreeMap::entry	2
+growth	std::vec::Vec::push	1
+method	pgrc_format::try_vec	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	5
+method	std::iter::Iterator::collect	2
+type	std::boxed::Box	1
+type	std::vec::Vec	4

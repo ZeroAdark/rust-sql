@@ -1,0 +1,558 @@
+Parsed test spec with 7 sessions
+
+starting permutation: s1upd s2m s1c s2sel s2c
+step s1upd: UPDATE mr_t SET val = 'a1' WHERE k = 1;
+step s2m: MERGE INTO mr_t t USING mr_s s ON t.k = s.k WHEN MATCHED AND t.n < 50 THEN UPDATE SET k = 4, val = t.val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val     | n
+--------+-+--------+--
+mr_t2   |2|b       |20
+mr_t1   |3|c       |30
+mr_t2   |4|a1 moved|10
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s2m s1c s2sel s2c
+step s1n: UPDATE mr_t SET n = 99 WHERE k = 1;
+step s2m: MERGE INTO mr_t t USING mr_s s ON t.k = s.k WHEN MATCHED AND t.n < 50 THEN UPDATE SET k = 4, val = t.val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val| n
+--------+-+---+--
+mr_t2   |2|b  |20
+mr_t1   |3|c  |30
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2m s1c s2sel s2c
+step s1del: DELETE FROM mr_t WHERE k = 1;
+step s2m: MERGE INTO mr_t t USING mr_s s ON t.k = s.k WHEN MATCHED AND t.n < 50 THEN UPDATE SET k = 4, val = t.val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val| n
+--------+-+---+--
+mr_t2   |2|b  |20
+mr_t1   |3|c  |30
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1mv s2m s1c s2sel s2c
+step s1mv: UPDATE mr_t SET k = 2 WHERE k = 1;
+step s2m: MERGE INTO mr_t t USING mr_s s ON t.k = s.k WHEN MATCHED AND t.n < 50 THEN UPDATE SET k = 4, val = t.val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2c: COMMIT;
+
+starting permutation: s1upd s2m s1a s2sel s2c
+step s1upd: UPDATE mr_t SET val = 'a1' WHERE k = 1;
+step s2m: MERGE INTO mr_t t USING mr_s s ON t.k = s.k WHEN MATCHED AND t.n < 50 THEN UPDATE SET k = 4, val = t.val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1a: ROLLBACK;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val    | n
+--------+-+-------+--
+mr_t2   |2|b      |20
+mr_t1   |3|c      |30
+mr_t2   |4|a moved|10
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1upd2 s2m2 s1c s2sel s2c
+step s1upd2: UPDATE mr_t SET val = val || '!' WHERE k IN (1, 2);
+step s2m2: MERGE INTO mr_t t USING mr_s2 s ON t.k = s.k WHEN MATCHED THEN UPDATE SET k = t.k + 4, val = t.val || ' moved'; <waiting ...>
+step s1c: COMMIT;
+step s2m2: <... completed>
+step s2sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val     | n
+--------+-+--------+--
+mr_t1   |3|c       |30
+mr_td   |5|a! moved|10
+mr_td   |6|b! moved|20
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1upd s3p s1c s3sel s2c
+step s1upd: UPDATE mr_t SET val = 'a1' WHERE k = 1;
+step s3p: MERGE INTO mr_t t USING mr_s s ON t.k = s.k AND t.k = 1 WHEN MATCHED AND t.n < 50 THEN UPDATE SET k = 4, val = t.val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s3p: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val     | n
+--------+-+--------+--
+mr_t2   |2|b       |20
+mr_t1   |3|c       |30
+mr_t2   |4|a1 moved|10
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s3p s1c s3sel s2c
+step s1n: UPDATE mr_t SET n = 99 WHERE k = 1;
+step s3p: MERGE INTO mr_t t USING mr_s s ON t.k = s.k AND t.k = 1 WHEN MATCHED AND t.n < 50 THEN UPDATE SET k = 4, val = t.val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s3p: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val| n
+--------+-+---+--
+mr_t2   |2|b  |20
+mr_t1   |3|c  |30
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s3p s1c s3sel s2c
+step s1del: DELETE FROM mr_t WHERE k = 1;
+step s3p: MERGE INTO mr_t t USING mr_s s ON t.k = s.k AND t.k = 1 WHEN MATCHED AND t.n < 50 THEN UPDATE SET k = 4, val = t.val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s3p: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val| n
+--------+-+---+--
+mr_t2   |2|b  |20
+mr_t1   |3|c  |30
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1mv s3pv s1c s3sel s2c
+step s1mv: UPDATE mr_t SET k = 2 WHERE k = 1;
+step s3pv: MERGE INTO mr_t t USING mr_s s ON t.k = s.k AND t.k = 1 WHEN MATCHED THEN UPDATE SET val = t.val || ' kept'; <waiting ...>
+step s1c: COMMIT;
+step s3pv: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s3sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val| n
+--------+-+---+--
+mr_t2   |2|a  |10
+mr_t2   |2|b  |20
+mr_t1   |3|c  |30
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1both s3pv s1c s3sel s2c
+step s1both: UPDATE mr_t SET val = 'a1' WHERE k = 1; UPDATE mr_s SET k = 3 WHERE k = 1;
+step s3pv: MERGE INTO mr_t t USING mr_s s ON t.k = s.k AND t.k = 1 WHEN MATCHED THEN UPDATE SET val = t.val || ' kept'; <waiting ...>
+step s1c: COMMIT;
+step s3pv: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val    | n
+--------+-+-------+--
+mr_t1   |1|a1 kept|10
+mr_t2   |2|b      |20
+mr_t1   |3|c      |30
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1uu s4m s1c s4sel s2c
+step s1uu: UPDATE mu_t SET val = 'changed' WHERE tid = 1;
+step s4m: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid AND t.tid = 1 WHEN MATCHED AND t.balance < 500 THEN UPDATE SET tid = tid + 1, balance = balance + delta, val = val || ' updated by merge' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s4m: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val                     
+--------+---+-------+------------------------
+mu_t2   |  2|    110|changed updated by merge
+mu_t3   |  3|    300|initial                 
+mu_t2   |  5|    500|initial                 
+mu_t3   |  7|    700|initial                 
+mu_t3   |  9|    900|initial                 
+mu_t3   | 11|   1100|initial                 
+mu_t3   | 13|   1300|initial                 
+mu_t3   | 15|   1500|initial                 
+(8 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1ub s4m s1c s4sel s2c
+step s1ub: UPDATE mu_t SET balance = 999 WHERE tid = 1;
+step s4m: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid AND t.tid = 1 WHEN MATCHED AND t.balance < 500 THEN UPDATE SET tid = tid + 1, balance = balance + delta, val = val || ' updated by merge' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s4m: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val    
+--------+---+-------+-------
+mu_t3   |  3|    300|initial
+mu_t2   |  5|    500|initial
+mu_t3   |  7|    700|initial
+mu_t3   |  9|    900|initial
+mu_t3   | 11|   1100|initial
+mu_t3   | 13|   1300|initial
+mu_t3   | 15|   1500|initial
+(7 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1ud s4m s1c s4sel s2c
+step s1ud: DELETE FROM mu_t WHERE tid = 1;
+step s4m: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid AND t.tid = 1 WHEN MATCHED AND t.balance < 500 THEN UPDATE SET tid = tid + 1, balance = balance + delta, val = val || ' updated by merge' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s4m: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val    
+--------+---+-------+-------
+mu_t3   |  3|    300|initial
+mu_t2   |  5|    500|initial
+mu_t3   |  7|    700|initial
+mu_t3   |  9|    900|initial
+mu_t3   | 11|   1100|initial
+mu_t3   | 13|   1300|initial
+mu_t3   | 15|   1500|initial
+(7 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1um s4m s1c s4sel s2c
+step s1um: UPDATE mu_t SET tid = 2 WHERE tid = 1;
+step s4m: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid AND t.tid = 1 WHEN MATCHED AND t.balance < 500 THEN UPDATE SET tid = tid + 1, balance = balance + delta, val = val || ' updated by merge' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s4m: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val    
+--------+---+-------+-------
+mu_t2   |  2|    100|initial
+mu_t3   |  3|    300|initial
+mu_t2   |  5|    500|initial
+mu_t3   |  7|    700|initial
+mu_t3   |  9|    900|initial
+mu_t3   | 11|   1100|initial
+mu_t3   | 13|   1300|initial
+mu_t3   | 15|   1500|initial
+(8 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1uu s5h s1c s4sel s2c
+step s1uu: UPDATE mu_t SET val = 'changed' WHERE tid = 1;
+step s5h: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid AND t.tid IN (1, 2, 4, 5) WHEN MATCHED AND t.balance < 500 THEN UPDATE SET tid = tid + 1, val = val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s5h: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val          
+--------+---+-------+-------------
+mu_t2   |  2|    100|changed moved
+mu_t3   |  3|    300|initial      
+mu_t3   |  7|    700|initial      
+mu_t3   |  9|    900|initial      
+mu_t3   | 11|   1100|initial      
+mu_t3   | 13|   1300|initial      
+mu_t3   | 15|   1500|initial      
+(7 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1ub s5h s1c s4sel s2c
+step s1ub: UPDATE mu_t SET balance = 999 WHERE tid = 1;
+step s5h: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid AND t.tid IN (1, 2, 4, 5) WHEN MATCHED AND t.balance < 500 THEN UPDATE SET tid = tid + 1, val = val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s5h: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val    
+--------+---+-------+-------
+mu_t3   |  3|    300|initial
+mu_t3   |  7|    700|initial
+mu_t3   |  9|    900|initial
+mu_t3   | 11|   1100|initial
+mu_t3   | 13|   1300|initial
+mu_t3   | 15|   1500|initial
+(6 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1ud s5h s1c s4sel s2c
+step s1ud: DELETE FROM mu_t WHERE tid = 1;
+step s5h: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid AND t.tid IN (1, 2, 4, 5) WHEN MATCHED AND t.balance < 500 THEN UPDATE SET tid = tid + 1, val = val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s5h: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val    
+--------+---+-------+-------
+mu_t3   |  3|    300|initial
+mu_t3   |  7|    700|initial
+mu_t3   |  9|    900|initial
+mu_t3   | 11|   1100|initial
+mu_t3   | 13|   1300|initial
+mu_t3   | 15|   1500|initial
+(6 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1um s5h s1c s4sel s2c
+step s1um: UPDATE mu_t SET tid = 2 WHERE tid = 1;
+step s5h: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid AND t.tid IN (1, 2, 4, 5) WHEN MATCHED AND t.balance < 500 THEN UPDATE SET tid = tid + 1, val = val || ' moved' WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s5h: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val    
+--------+---+-------+-------
+mu_t2   |  2|    100|initial
+mu_t3   |  3|    300|initial
+mu_t2   |  5|    500|initial
+mu_t3   |  7|    700|initial
+mu_t3   |  9|    900|initial
+mu_t3   | 11|   1100|initial
+mu_t3   | 13|   1300|initial
+mu_t3   | 15|   1500|initial
+(8 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1uu s6u s1c s4sel s2c
+step s1uu: UPDATE mu_t SET val = 'changed' WHERE tid = 1;
+step s6u: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid WHEN MATCHED AND t.balance < 500 THEN UPDATE SET val = val || ' updated' WHEN MATCHED THEN DELETE WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (sid, delta, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s6u: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val            
+--------+---+-------+---------------
+mu_t1   |  1|    100|changed updated
+mu_t2   |  2|     20|inserted       
+mu_t3   |  3|    300|initial updated
+mu_t3   | 15|   1500|initial        
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1ub s6u s1c s4sel s2c
+step s1ub: UPDATE mu_t SET balance = 999 WHERE tid = 1;
+step s6u: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid WHEN MATCHED AND t.balance < 500 THEN UPDATE SET val = val || ' updated' WHEN MATCHED THEN DELETE WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (sid, delta, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s6u: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val            
+--------+---+-------+---------------
+mu_t2   |  2|     20|inserted       
+mu_t3   |  3|    300|initial updated
+mu_t3   | 15|   1500|initial        
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1ud s6u s1c s4sel s2c
+step s1ud: DELETE FROM mu_t WHERE tid = 1;
+step s6u: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid WHEN MATCHED AND t.balance < 500 THEN UPDATE SET val = val || ' updated' WHEN MATCHED THEN DELETE WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (sid, delta, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s6u: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val            
+--------+---+-------+---------------
+mu_t1   |  1|     10|inserted       
+mu_t2   |  2|     20|inserted       
+mu_t3   |  3|    300|initial updated
+mu_t3   | 15|   1500|initial        
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1um s6u s1c s4sel s2c
+step s1um: UPDATE mu_t SET tid = 2 WHERE tid = 1;
+step s6u: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid WHEN MATCHED AND t.balance < 500 THEN UPDATE SET val = val || ' updated' WHEN MATCHED THEN DELETE WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (sid, delta, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s6u: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val    
+--------+---+-------+-------
+mu_t2   |  2|    100|initial
+mu_t3   |  3|    300|initial
+mu_t2   |  5|    500|initial
+mu_t3   |  7|    700|initial
+mu_t3   |  9|    900|initial
+mu_t3   | 11|   1100|initial
+mu_t3   | 13|   1300|initial
+mu_t3   | 15|   1500|initial
+(8 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1uu s7f s1c s4sel s2c
+step s1uu: UPDATE mu_t SET val = 'changed' WHERE tid = 1;
+step s7f: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET val = val || ' updated' WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source'; <waiting ...>
+step s1c: COMMIT;
+step s7f: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val              
+--------+---+-------+-----------------
+mu_t1   |  1|    100|changed updated  
+mu_t2   |  2|     20|inserted         
+mu_t3   |  3|    300|initial updated  
+mu_t2   |  5|    500|initial updated  
+mu_t3   |  7|    700|initial updated  
+mu_t3   |  9|    900|initial updated  
+mu_t3   | 11|   1100|initial updated  
+mu_t3   | 13|   1300|initial updated  
+mu_t3   | 15|   1500|initial by source
+(9 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1ud s7f s1c s4sel s2c
+step s1ud: DELETE FROM mu_t WHERE tid = 1;
+step s7f: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET val = val || ' updated' WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source'; <waiting ...>
+step s1c: COMMIT;
+step s7f: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val              
+--------+---+-------+-----------------
+mu_t1   |  1|     10|inserted         
+mu_t2   |  2|     20|inserted         
+mu_t3   |  3|    300|initial updated  
+mu_t2   |  5|    500|initial updated  
+mu_t3   |  7|    700|initial updated  
+mu_t3   |  9|    900|initial updated  
+mu_t3   | 11|   1100|initial updated  
+mu_t3   | 13|   1300|initial updated  
+mu_t3   | 15|   1500|initial by source
+(9 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1u15 s7f s1c s4sel s2c
+step s1u15: UPDATE mu_t SET val = 'changed' WHERE tid = 15;
+step s7f: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET val = val || ' updated' WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source'; <waiting ...>
+step s1c: COMMIT;
+step s7f: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val              
+--------+---+-------+-----------------
+mu_t1   |  1|    100|initial updated  
+mu_t2   |  2|     20|inserted         
+mu_t3   |  3|    300|initial updated  
+mu_t2   |  5|    500|initial updated  
+mu_t3   |  7|    700|initial updated  
+mu_t3   |  9|    900|initial updated  
+mu_t3   | 11|   1100|initial updated  
+mu_t3   | 13|   1300|initial updated  
+mu_t3   | 15|   1500|changed by source
+(9 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1d15 s7f s1c s4sel s2c
+step s1d15: DELETE FROM mu_t WHERE tid = 15;
+step s7f: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET val = val || ' updated' WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source'; <waiting ...>
+step s1c: COMMIT;
+step s7f: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val            
+--------+---+-------+---------------
+mu_t1   |  1|    100|initial updated
+mu_t2   |  2|     20|inserted       
+mu_t3   |  3|    300|initial updated
+mu_t2   |  5|    500|initial updated
+mu_t3   |  7|    700|initial updated
+mu_t3   |  9|    900|initial updated
+mu_t3   | 11|   1100|initial updated
+mu_t3   | 13|   1300|initial updated
+(8 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k s7f s1c s4sel s2c
+step s1k: UPDATE mu_t SET tid = 4 WHERE tid = 1;
+step s7f: MERGE INTO mu_t t USING mu_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET val = val || ' updated' WHEN NOT MATCHED AND s.sid < 4 THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source'; <waiting ...>
+step s1c: COMMIT;
+step s7f: <... completed>
+step s4sel: SELECT tableoid::regclass, * FROM mu_t ORDER BY tid, val;
+tableoid|tid|balance|val              
+--------+---+-------+-----------------
+mu_t1   |  1|     10|inserted         
+mu_t2   |  2|     20|inserted         
+mu_t3   |  3|    300|initial updated  
+mu_t1   |  4|    100|initial by source
+mu_t2   |  5|    500|initial updated  
+mu_t3   |  7|    700|initial updated  
+mu_t3   |  9|    900|initial updated  
+mu_t3   | 11|   1100|initial updated  
+mu_t3   | 13|   1300|initial updated  
+mu_t3   | 15|   1500|initial by source
+(10 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s3ve s1upd s3vm s1c s3sel s2c
+step s3ve: EXPLAIN (COSTS OFF) MERGE INTO mr_t t USING (VALUES (1, 'v')) s(k, val) ON t.k = s.k WHEN MATCHED THEN UPDATE SET val = t.val || ' ' || s.val WHEN NOT MATCHED THEN INSERT VALUES (s.k + 1, 'ins', 0);
+QUERY PLAN                       
+---------------------------------
+Merge on mr_t t                  
+  Merge on mr_t1 t_1             
+  ->  Nested Loop Left Join      
+        ->  Result               
+        ->  Seq Scan on mr_t1 t_1
+              Filter: (k = 1)    
+(6 rows)
+
+step s1upd: UPDATE mr_t SET val = 'a1' WHERE k = 1;
+step s3vm: MERGE INTO mr_t t USING (VALUES (1, 'v')) s(k, val) ON t.k = s.k WHEN MATCHED THEN UPDATE SET val = t.val || ' ' || s.val WHEN NOT MATCHED THEN INSERT VALUES (s.k + 1, 'ins', 0); <waiting ...>
+step s1c: COMMIT;
+step s3vm: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val | n
+--------+-+----+--
+mr_t1   |1|a1 v|10
+mr_t2   |2|b   |20
+mr_t1   |3|c   |30
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s3vm s1c s3sel s2c
+step s1del: DELETE FROM mr_t WHERE k = 1;
+step s3vm: MERGE INTO mr_t t USING (VALUES (1, 'v')) s(k, val) ON t.k = s.k WHEN MATCHED THEN UPDATE SET val = t.val || ' ' || s.val WHEN NOT MATCHED THEN INSERT VALUES (s.k + 1, 'ins', 0); <waiting ...>
+step s1c: COMMIT;
+step s3vm: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val| n
+--------+-+---+--
+mr_t2   |2|b  |20
+mr_t2   |2|ins| 0
+mr_t1   |3|c  |30
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1mv s3vm s1c s3sel s2c
+step s1mv: UPDATE mr_t SET k = 2 WHERE k = 1;
+step s3vm: MERGE INTO mr_t t USING (VALUES (1, 'v')) s(k, val) ON t.k = s.k WHEN MATCHED THEN UPDATE SET val = t.val || ' ' || s.val WHEN NOT MATCHED THEN INSERT VALUES (s.k + 1, 'ins', 0); <waiting ...>
+step s1c: COMMIT;
+step s3vm: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s3sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val| n
+--------+-+---+--
+mr_t2   |2|a  |10
+mr_t2   |2|b  |20
+mr_t1   |3|c  |30
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1upd s3vm s1a s3sel s2c
+step s1upd: UPDATE mr_t SET val = 'a1' WHERE k = 1;
+step s3vm: MERGE INTO mr_t t USING (VALUES (1, 'v')) s(k, val) ON t.k = s.k WHEN MATCHED THEN UPDATE SET val = t.val || ' ' || s.val WHEN NOT MATCHED THEN INSERT VALUES (s.k + 1, 'ins', 0); <waiting ...>
+step s1a: ROLLBACK;
+step s3vm: <... completed>
+step s3sel: SELECT tableoid::regclass, k, val, n FROM mr_t WHERE k < 100 ORDER BY k, val;
+tableoid|k|val| n
+--------+-+---+--
+mr_t1   |1|a v|10
+mr_t2   |2|b  |20
+mr_t1   |3|c  |30
+(3 rows)
+
+step s2c: COMMIT;

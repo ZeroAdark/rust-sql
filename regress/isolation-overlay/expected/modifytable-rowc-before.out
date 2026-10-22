@@ -1,0 +1,158 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1mv s1v s1b s1d s2u s1c s2c s3sel
+s1: NOTICE:  before UPDATE k=11 old v=11 grp=1 bal=111 ver=0 new v=11 bal=111
+step s1mv: UPDATE rb SET grp = 9 WHERE k = 11;
+s1: NOTICE:  before UPDATE k=21 old v=21 grp=1 bal=121 ver=0 new v=1000 bal=121
+step s1v: UPDATE rb SET v = 1000 WHERE k = 21;
+s1: NOTICE:  before UPDATE k=26 old v=26 grp=1 bal=126 ver=0 new v=26 bal=131
+step s1b: UPDATE rb SET bal = bal + 5 WHERE k = 26;
+s1: NOTICE:  before DELETE k=31 old v=31 grp=1 bal=131 ver=0
+step s1d: DELETE FROM rb WHERE k = 31;
+step s2u: WITH u AS (UPDATE rb SET v = v + 1 WHERE grp = 1 RETURNING k, v, ver) SELECT count(*), sum(v), sum(ver) FROM u; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  before UPDATE k=21 old v=1000 grp=1 bal=121 ver=0 new v=1001 bal=121
+s2: NOTICE:  before UPDATE k=26 old v=26 grp=1 bal=131 ver=1 new v=27 bal=131
+s2: NOTICE:  before UPDATE k=41 old v=41 grp=1 bal=141 ver=0 new v=42 bal=141
+step s2u: <... completed>
+count| sum|sum
+-----+----+---
+    7|1138|  1
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v, grp, bal, ver FROM rb WHERE k IN (1, 11, 21, 26, 31, 41) ORDER BY k;
+ k|   v|grp|bal|ver
+--+----+---+---+---
+ 1|   2|  1|101|  0
+11|  11|  9|111|  0
+21|1001|  1|121|  0
+26|  27|  1|131|  1
+41|  41|  1|141|  0
+(5 rows)
+
+
+starting permutation: s1mv s1v s1b s1d s2b s1c s2c s3sel
+s1: NOTICE:  before UPDATE k=11 old v=11 grp=1 bal=111 ver=0 new v=11 bal=111
+step s1mv: UPDATE rb SET grp = 9 WHERE k = 11;
+s1: NOTICE:  before UPDATE k=21 old v=21 grp=1 bal=121 ver=0 new v=1000 bal=121
+step s1v: UPDATE rb SET v = 1000 WHERE k = 21;
+s1: NOTICE:  before UPDATE k=26 old v=26 grp=1 bal=126 ver=0 new v=26 bal=131
+step s1b: UPDATE rb SET bal = bal + 5 WHERE k = 26;
+s1: NOTICE:  before DELETE k=31 old v=31 grp=1 bal=131 ver=0
+step s1d: DELETE FROM rb WHERE k = 31;
+step s2b: WITH u AS (UPDATE rb SET bal = bal + 1 WHERE grp = 1 RETURNING k, bal, ver) SELECT count(*), sum(bal), sum(ver) FROM u; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  before UPDATE k=21 old v=1000 grp=1 bal=121 ver=0 new v=1000 bal=122
+s2: NOTICE:  before UPDATE k=26 old v=26 grp=1 bal=131 ver=1 new v=26 bal=132
+s2: NOTICE:  before UPDATE k=41 old v=41 grp=1 bal=141 ver=0 new v=41 bal=142
+step s2b: <... completed>
+count|sum|sum
+-----+---+---
+    7|864|  8
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v, grp, bal, ver FROM rb WHERE k IN (1, 11, 21, 26, 31, 41) ORDER BY k;
+ k|   v|grp|bal|ver
+--+----+---+---+---
+ 1|   1|  1|102|  1
+11|  11|  9|111|  0
+21|1000|  1|122|  1
+26|  26|  1|132|  2
+41|  41|  1|141|  0
+(5 rows)
+
+
+starting permutation: s1mv s1v s1b s1d s2d s1c s2c s3sel
+s1: NOTICE:  before UPDATE k=11 old v=11 grp=1 bal=111 ver=0 new v=11 bal=111
+step s1mv: UPDATE rb SET grp = 9 WHERE k = 11;
+s1: NOTICE:  before UPDATE k=21 old v=21 grp=1 bal=121 ver=0 new v=1000 bal=121
+step s1v: UPDATE rb SET v = 1000 WHERE k = 21;
+s1: NOTICE:  before UPDATE k=26 old v=26 grp=1 bal=126 ver=0 new v=26 bal=131
+step s1b: UPDATE rb SET bal = bal + 5 WHERE k = 26;
+s1: NOTICE:  before DELETE k=31 old v=31 grp=1 bal=131 ver=0
+step s1d: DELETE FROM rb WHERE k = 31;
+step s2d: WITH d AS (DELETE FROM rb WHERE grp = 1 RETURNING k, v) SELECT count(*), sum(k), sum(v) FROM d; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  before DELETE k=21 old v=1000 grp=1 bal=121 ver=0
+s2: NOTICE:  before DELETE k=26 old v=26 grp=1 bal=131 ver=1
+s2: NOTICE:  before DELETE k=41 old v=41 grp=1 bal=141 ver=0
+step s2d: <... completed>
+count|sum| sum
+-----+---+----
+    7|152|1131
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v, grp, bal, ver FROM rb WHERE k IN (1, 11, 21, 26, 31, 41) ORDER BY k;
+ k| v|grp|bal|ver
+--+--+---+---+---
+11|11|  9|111|  0
+41|41|  1|141|  0
+(2 rows)
+
+
+starting permutation: s1v s1b s2x s1c s2c s3sel s3log
+s1: NOTICE:  before UPDATE k=21 old v=21 grp=1 bal=121 ver=0 new v=1000 bal=121
+step s1v: UPDATE rb SET v = 1000 WHERE k = 21;
+s1: NOTICE:  before UPDATE k=26 old v=26 grp=1 bal=126 ver=0 new v=26 bal=131
+step s1b: UPDATE rb SET bal = bal + 5 WHERE k = 26;
+step s2x: WITH a AS (UPDATE rb SET v = v + 1 WHERE k = 21 RETURNING k), b AS (INSERT INTO rlog (k) SELECT k FROM a RETURNING k) SELECT (SELECT count(*) FROM a), (SELECT count(*) FROM b); <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  before UPDATE k=21 old v=1000 grp=1 bal=121 ver=0 new v=1001 bal=121
+step s2x: <... completed>
+count|count
+-----+-----
+    1|    1
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v, grp, bal, ver FROM rb WHERE k IN (1, 11, 21, 26, 31, 41) ORDER BY k;
+ k|   v|grp|bal|ver
+--+----+---+---+---
+ 1|   1|  1|101|  0
+11|  11|  1|111|  0
+21|1001|  1|121|  0
+26|  26|  1|131|  1
+31|  31|  1|131|  0
+41|  41|  1|141|  0
+(6 rows)
+
+step s3log: SELECT k FROM rlog ORDER BY k;
+ k
+--
+21
+(1 row)
+
+
+starting permutation: s1mv s1v s2b s1r s2c s3sel
+s1: NOTICE:  before UPDATE k=11 old v=11 grp=1 bal=111 ver=0 new v=11 bal=111
+step s1mv: UPDATE rb SET grp = 9 WHERE k = 11;
+s1: NOTICE:  before UPDATE k=21 old v=21 grp=1 bal=121 ver=0 new v=1000 bal=121
+step s1v: UPDATE rb SET v = 1000 WHERE k = 21;
+step s2b: WITH u AS (UPDATE rb SET bal = bal + 1 WHERE grp = 1 RETURNING k, bal, ver) SELECT count(*), sum(bal), sum(ver) FROM u; <waiting ...>
+step s1r: ROLLBACK;
+s2: NOTICE:  before UPDATE k=11 old v=11 grp=1 bal=111 ver=0 new v=11 bal=112
+s2: NOTICE:  before UPDATE k=21 old v=21 grp=1 bal=121 ver=0 new v=21 bal=122
+s2: NOTICE:  before UPDATE k=26 old v=26 grp=1 bal=126 ver=0 new v=26 bal=127
+s2: NOTICE:  before UPDATE k=31 old v=31 grp=1 bal=131 ver=0 new v=31 bal=132
+s2: NOTICE:  before UPDATE k=41 old v=41 grp=1 bal=141 ver=0 new v=41 bal=142
+step s2b: <... completed>
+count| sum|sum
+-----+----+---
+    9|1103|  9
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v, grp, bal, ver FROM rb WHERE k IN (1, 11, 21, 26, 31, 41) ORDER BY k;
+ k| v|grp|bal|ver
+--+--+---+---+---
+ 1| 1|  1|102|  1
+11|11|  1|112|  1
+21|21|  1|122|  1
+26|26|  1|127|  1
+31|31|  1|132|  1
+41|41|  1|141|  0
+(6 rows)
+

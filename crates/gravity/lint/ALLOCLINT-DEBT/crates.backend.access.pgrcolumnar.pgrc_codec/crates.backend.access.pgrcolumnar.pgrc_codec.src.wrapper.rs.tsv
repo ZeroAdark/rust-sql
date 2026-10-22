@@ -1,0 +1,13 @@
+path	crates/backend/access/pgrcolumnar/pgrc_codec/src/wrapper.rs
+growth	pgrc_format::dict::front_code_frame	1
+growth	pgrc_format::dict::pack_dict_index	1
+growth	pgrc_format::try_reserve_more	2
+growth	std::vec::Vec::extend_from_slice	5
+growth	std::vec::Vec::push	4
+growth	std::vec::Vec::resize	4
+growth	std::vec::Vec::try_reserve_exact	2
+macro	std::vec	2
+method	pgrc_format::try_filled	1
+method	std::iter::Iterator::collect	2
+method	std::vec::Vec::with_capacity	3
+type	std::vec::Vec	5

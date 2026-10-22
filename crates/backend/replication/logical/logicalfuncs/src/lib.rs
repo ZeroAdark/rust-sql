@@ -11,7 +11,7 @@ use logical::{
 use logical_decode::LogicalDecodingProcessRecord;
 use mcx::Mcx;
 use slot::{
-    CheckSlotPermissions, MyReplicationSlot, ReplicationSlotAcquire, ReplicationSlotMarkDirty,
+    CheckSlotPermissions, ReplicationSlotAcquire, ReplicationSlotMarkDirty,
     ReplicationSlotRelease, WaitForStandbyConfirmation,
 };
 use types_core::{Oid, TransactionId, XLogRecPtr, TEXTOID};
@@ -53,6 +53,7 @@ fn check_for_interrupts() -> PgResult<()> {
 struct DecodingOutputState {
     srf: *mut MaterializedSRF<'static>,
     mcx: Mcx<'static>,
+    write_context: mcx::MemoryContext,
     // C-parity DecodingOutputState field; read when binary output-plugin options wire.
     #[allow(dead_code)]
     binary_output: bool,
@@ -88,16 +89,23 @@ fn LogicalOutputWrite(
 
     let p = output_state(opc);
 
-    let mut values = [Datum::from_usize(0); 3];
-    let nulls = [false; 3];
-    values[0] = Datum::from_u64(lsn);
-    values[1] = Datum::from_transaction_id(xid);
-    values[2] = varlena_result(varlena::cstring_to_text(p.mcx, opc.out.as_bytes())?);
+    p.write_row(opc.out.as_bytes(), lsn, xid)
+}
 
-    // SAFETY: srf points to the live MaterializedSRF owned by the guts frame.
-    unsafe { (*p.srf).putvalues(&values, &nulls)? };
-    p.returned_rows += 1;
-    Ok(())
+impl DecodingOutputState {
+    fn write_row(&mut self, output: &[u8], lsn: XLogRecPtr, xid: TransactionId) -> PgResult<()> {
+        let values = [
+            Datum::from_u64(lsn),
+            Datum::from_transaction_id(xid),
+            varlena_result(varlena::cstring_to_text(self.write_context.mcx(), output)?),
+        ];
+        // SAFETY: srf points to the live MaterializedSRF owned by the guts frame.
+        let result = unsafe { (*self.srf).putvalues(&values, &[false; 3]) };
+        self.write_context.reset();
+        result?;
+        self.returned_rows += 1;
+        Ok(())
+    }
 }
 
 fn detoast_datum<'mcx>(mcx: Mcx<'mcx>, d: Datum) -> PgResult<mcx::PgVec<'mcx, u8>> {
@@ -220,6 +228,7 @@ fn pg_logical_slot_get_changes_guts(
     let mut p = DecodingOutputState {
         srf: &mut srf as *mut MaterializedSRF<'_> as *mut MaterializedSRF<'static>,
         mcx,
+        write_context: mcx::MemoryContext::new_wholesale("LogicalOutputWrite"),
         binary_output: binary,
         returned_rows: 0,
     };
@@ -242,11 +251,10 @@ fn pg_logical_slot_get_changes_guts(
             Ok(srf.finish(fcinfo))
         }
         Err(e) => {
-            // C releases the slot via resource-owner abort; do it directly.
+            // logicalfuncs.c:315 PG_CATCH: the slot stays acquired; only the
+            // top-level error path releases it (a caught error leaves it
+            // active until the next acquire or error).
             let _ = inval::local::InvalidateSystemCaches();
-            if MyReplicationSlot().is_some() {
-                let _ = ReplicationSlotRelease();
-            }
             Err(e)
         }
     }
@@ -455,6 +463,53 @@ pub const LOGICALFUNCS_BUILTINS: &[FmgrBuiltin] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_rows_release_temporary_datums() {
+        let ctx = mcx::MemoryContext::new("output test");
+        let mut desc = tupdesc::CreateTemplateTupleDesc(ctx.mcx(), 3).unwrap();
+        for (i, oid) in [types_core::INT8OID, types_core::INT4OID, TEXTOID]
+            .into_iter()
+            .enumerate()
+        {
+            tupdesc::TupleDescInitBuiltinEntry(&mut desc, (i + 1) as i16, "v", oid, -1, 0).unwrap();
+        }
+        let mut rsinfo = types_fmgr::ReturnSetInfo::new(types_fmgr::SFRM_Materialize);
+        rsinfo.expectedDesc = Some(core::ptr::NonNull::from(&desc).cast());
+        let mut fcinfo = types_fmgr::LocalFcinfo::<0>::new(0);
+        fcinfo.resultinfo = rsinfo.as_fmnode_ptr();
+        let mut flinfo = FmgrInfo::unresolved();
+        let mut srf = InitMaterializedSRF(
+            ctx.mcx(),
+            &mut flinfo,
+            &mut fcinfo,
+            funcapi::MAT_SRF_USE_EXPECTED_DESC,
+        )
+        .unwrap();
+        let mut state = DecodingOutputState {
+            srf: &mut srf as *mut MaterializedSRF<'_> as *mut MaterializedSRF<'static>,
+            // SAFETY: state is used only while ctx is alive.
+            mcx: unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'static>>(ctx.mcx()) },
+            write_context: mcx::MemoryContext::new_wholesale("LogicalOutputWrite"),
+            binary_output: false,
+            returned_rows: 0,
+        };
+        let baseline = ctx.stats().used;
+        for _ in 0..256 {
+            state.write_row(&[b'x'; 8192], 42, 7).unwrap();
+        }
+        assert_eq!(state.returned_rows, 256);
+        assert_eq!(ctx.stats().used, baseline);
+        assert_eq!(state.write_context.stats().used, 0);
+        srf.finish(&mut fcinfo);
+        let store = rsinfo
+            .setResult
+            .take()
+            .unwrap()
+            .downcast::<tuplestore::Tuplestore>()
+            .unwrap();
+        assert_eq!(store.tuple_count(), 256);
+    }
 
     // The option-array elements arrive as full varlenas; the payload must
     // exclude the header (006_logical_decoding: 'option "@\0\0\0include-xids"

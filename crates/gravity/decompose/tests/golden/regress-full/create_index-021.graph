@@ -1,0 +1,23 @@
+-- regress-full-create_index-021
+-- SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), CASE WHEN a.attnum <= (SELECT i.indnkeyatts FROM pg_catalog.pg_index i WHERE i.indexrelid = '19391') THEN 'yes' ELSE 'no' END AS is_key, pg_catalog.pg_get_indexdef(a.attrelid, a.attnum, TRUE) AS indexdef, a.attstorage, CASE WHEN a.attstattarget=-1 THEN NULL ELSE a.attstattarget END AS attstattarget FROM pg_catalog.pg_attribute a WHERE a.attrelid = '19391' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=2610 rti=2 am=heap index=2679
+    key att=1 op=607 value=c26:19391
+    recheck (op607(v2.1, c26:19391))
+    lanes Attr(4):byval8:w8:val
+  project (1=v2.4)
+  outs 1=w8:val
+p1 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1249 rti=1 am=heap index=2659
+    key att=1 op=607 value=c26:19391
+    key att=5 op=536 value=c23:0
+    recheck (op607(v1.1, c26:19391), op536(v1.5, c23:0))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(10):byval8:w8:val Attr(17):byval8:w8:val Attr(21):byval8:w8:val
+  filter not(v1.17)
+  project (1=v1.2, 2=fn1081(v1.3, v1.6), 3=case(when op522(v1.5, $exec0) then c25:'yes') else c25:'no', 4=fn2507(v1.1, fn313(v1.5), c16:1), 5=v1.10, 6=case(when op532(v1.21, c23:-1) then c21:null) else v1.21, 7j=v1.5)
+  outs 1=fx64:win/page 2=vl:call1081 3=vl:stmt/imm 4=vl:call2507 5=w8:val 6=w2:val 7=w8:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: IndexScan SubPlan

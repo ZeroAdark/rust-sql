@@ -1,0 +1,1 @@
+backend/utils/fmgr/fmgr_core/src/lib.rs	CFUNC_HASH	pgport	key:pg_proc OID checked against the tuple's xmin and TID	cache	key: library and symbol; CFuncHash resolved C fn per pg_proc OID, validated by xmin/TID on each read; dropped at session cleanup

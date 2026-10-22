@@ -51,48 +51,12 @@ session_guc_cluster!(CostsizeGucs, COSTSIZE_GUCS:
 // live with their original definitions on the old branch
 // (guc_tables::consts @ inter-query-scheduling).
 
-// pgrcolumnar-path Gather setup/transfer pricing — GUC-ANCHORED (runtime
-// cost-model step 0a, scratchpad/night/runtime-cost-model-design.md §5).
-//
-// These shipped as flat compile-time constants (32000.0 / 0.005) that ignored
-// parallel_setup_cost/parallel_tuple_cost entirely, which made pgrcolumnar
-// Gather pricing un-sweepable: the high-card grouped-agg regression
-// probe's parallel_setup_cost 100:1000
-// and parallel_tuple_cost 0.01:0.1 A/Bs were byte-identical no-ops
-// (scratchpad/night/q33-regression-probe.md, probes A/B). They are now
-// MULTIPLIERS of the GUCs, derived so that at the shipped t34 defaults
-// (parallel_setup_cost=100, parallel_tuple_cost=0.01 — guc_tables::consts)
-// the computed prices reproduce the previous flat values EXACTLY
-// (320 * 100 = 32000; 0.5 * 0.01 = 0.005; both products are exact in f64,
-// pinned by pgrcolumnar_gather_pricing_anchored_at_defaults below), so
-// default-config plans and EXPLAIN costs are byte-identical to the flat era.
-//
-// Provenance of the anchored values (unchanged from the flat constants):
-// setup 32000 = measured one-time LEGACY cold-spawn thread startup (~11ms)
-// vs the C fork ~1-2ms that the old parallel_setup_cost=1000 priced.
-// PROVISIONAL and known stale for warm-pool sessions (the same measurement
-// chain that re-set parallel_setup_cost to 100 at t34 —
-// docs/design/jit-parallel-defaults.md); honest re-derivation is step-1
-// calibration work — step 0 by design preserves default-equivalent pricing.
-// tuple 0.005 = measured chunked transport ~27ns/tuple.
-pub const PGRCOLUMNAR_PARALLEL_SETUP_MULTIPLIER: f64 = 320.0;
-pub const PGRCOLUMNAR_PARALLEL_TUPLE_MULTIPLIER: f64 = 0.5;
-// Default-equivalent values (multiplier * default GUC), kept as the anchoring
-// contract for the drift test and external references.
-pub const DEFAULT_PGRCOLUMNAR_PARALLEL_SETUP_COST: f64 =
-    PGRCOLUMNAR_PARALLEL_SETUP_MULTIPLIER * guc_tables::consts::DEFAULT_PARALLEL_SETUP_COST;
-pub const DEFAULT_PGRCOLUMNAR_PARALLEL_TUPLE_COST: f64 =
-    PGRCOLUMNAR_PARALLEL_TUPLE_MULTIPLIER * guc_tables::consts::DEFAULT_PARALLEL_TUPLE_COST;
 // pgrcolumnar no-stats group-key ndistinct ratio (0 disables = C behavior);
-// superseded per column once a footer-NDV-backed ANALYZE has run.
+// superseded per column by the parts' NDV facts or an ANALYZE.
 pub const DEFAULT_PGRCOLUMNAR_GROUP_NDISTINCT_RATIO: f64 = 0.05;
-// Per-tuple surcharge for a Sort directly over a Gather on pgrcolumnar-fed
-// plans (denies workers the fused bounded-sort feed).
-pub const DEFAULT_PGRCOLUMNAR_GATHER_SORT_TUPLE_COST: f64 = 30.0;
-
 // regression: the Gather-Merge LEADER-CONSUMPTION floor (per-tuple).
-// pgrust's cheap-exchange defaults (parallel_tuple_cost 0.01, pgrcolumnar
-// 0.005 — thread workers, shared-memory queues) are legitimate for the
+// pgrust's cheap-exchange defaults (parallel_tuple_cost 0.01 — thread
+// workers, shared-memory queues) are legitimate for the
 // TRANSPORT, but C's 0.1 empirically also covered the LEADER-SERIAL
 // consumption of a Gather Merge stream (the binary-heap merge + a serial
 // parent ingesting every row) — work whose throughput does not improve
@@ -112,7 +76,7 @@ pub const DEFAULT_GM_LEADER_MIN_TUPLE_COST: f64 =
     guc_tables::consts::DEFAULT_PARALLEL_TUPLE_COST * 10.0; // == C's 0.1 default
 
 pub fn gm_leader_min_tuple_cost() -> f64 {
-    static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    static V: pgsync::OnceLock<f64> = pgsync::OnceLock::new();
     *V.get_or_init(|| {
         std::env::var("PGRUST_GM_LEADER_MIN_TUPLE_COST")
             .ok()
@@ -122,20 +86,17 @@ pub fn gm_leader_min_tuple_cost() -> f64 {
     })
 }
 
-// regression: the PLAIN-Gather leader-consumption floor (per-tuple),
-// the regression floor's raw-row-Gather sibling — DEFAULT ON since the
-// regexp-keyed-grouping-class flip (Michael, 2026-07-22: "the flip for
-// the clickhouse query q29 sounds good to me"; staged 0.0 before that).
+// The PLAIN-Gather leader-consumption floor (per-tuple), the
+// regression floor's raw-row-Gather sibling — DEFAULT ON since
+// 2026-07-22 (staged 0.0 before that).
 // Derivation: identical to the GM floor — 10x the shipped
 // parallel_tuple_cost default == C's 0.1, the rate whose economics C's
 // elections empirically rely on for leader-serial consumers. The GM floor
 // displaced the raw-row-GM-into-serial-leader catastrophe; at fresh-stats
 // estimate regimes the election slides into the PLAIN-Gather variant of
 // the same class — ship-every-raw-row-to-the-leader into a serial leader
-// aggregation that also evaluates the grouping expression per row (an
-// armed-pool carve in gather_tuple_cost once dodged this for
-// `pgrust.lane_parallel_pool` sessions — tombstoned P7-2 D-8; this floor
-// is the stock-defaults guard). Scope: raw-row Gathers only. Same
+// aggregation that also evaluates the grouping expression per row (this
+// floor is the stock-defaults guard). Scope: raw-row Gathers only. Same
 // self-scoping as the GM
 // floor: the delta vanishes at SET parallel_tuple_cost >= the floor
 // (C-parity sessions) and at explicitly zeroed transport (forced-plan
@@ -146,7 +107,7 @@ pub const DEFAULT_GATHER_LEADER_MIN_TUPLE_COST: f64 =
     guc_tables::consts::DEFAULT_PARALLEL_TUPLE_COST * 10.0; // == C's 0.1 default
 
 pub fn gather_leader_min_tuple_cost() -> f64 {
-    static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    static V: pgsync::OnceLock<f64> = pgsync::OnceLock::new();
     *V.get_or_init(|| {
         std::env::var("PGRUST_GATHER_LEADER_MIN_TUPLE_COST")
             .ok()
@@ -156,20 +117,8 @@ pub fn gather_leader_min_tuple_cost() -> f64 {
     })
 }
 
-pub fn pgrcolumnar_parallel_setup_cost() -> f64 {
-    PGRCOLUMNAR_PARALLEL_SETUP_MULTIPLIER * parallel_setup_cost()
-}
-
-pub fn pgrcolumnar_parallel_tuple_cost() -> f64 {
-    PGRCOLUMNAR_PARALLEL_TUPLE_MULTIPLIER * parallel_tuple_cost()
-}
-
 pub fn pgrcolumnar_group_ndistinct_ratio() -> f64 {
     DEFAULT_PGRCOLUMNAR_GROUP_NDISTINCT_RATIO
-}
-
-pub fn pgrcolumnar_gather_sort_tuple_cost() -> f64 {
-    DEFAULT_PGRCOLUMNAR_GATHER_SORT_TUPLE_COST
 }
 
 /// Column-fraction seqscan disk costing on pgrcolumnar (pgrust-only, the
@@ -177,12 +126,12 @@ pub fn pgrcolumnar_gather_sort_tuple_cost() -> f64 {
 /// by the referenced columns' share of the part's on-disk bytes — C's
 /// pages*seq_page_cost structure kept, with an honest page count for a
 /// columnar AM whose scan open takes a plan-derived column need-set.
-/// `PGRUST_CBSTORE_COLFRAC_COST=0`/`off` disables for A/B.
+/// `PGRUST_PGRC_COLFRAC_COST=0`/`off` disables for A/B.
 pub fn pgrcolumnar_colfrac_cost() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    static ON: pgsync::OnceLock<bool> = pgsync::OnceLock::new();
     *ON.get_or_init(|| {
         !matches!(
-            std::env::var("PGRUST_CBSTORE_COLFRAC_COST").as_deref(),
+            std::env::var("PGRUST_PGRC_COLFRAC_COST").as_deref(),
             Ok("0") | Ok("off")
         )
     })
@@ -191,80 +140,140 @@ pub fn pgrcolumnar_colfrac_cost() -> bool {
 /// Footer-NDV group-key estimation on pgrcolumnar (pgrust-only): a never-
 /// ANALYZEd pgrcolumnar rel estimates group-key ndistinct from the part
 /// footer's ingest-time per-column NDV (the exact numbers a footer-backed
-/// ANALYZE would put in pg_statistic) instead of the flat
-/// DEFAULT_PGRCOLUMNAR_GROUP_NDISTINCT_RATIO guess. The ratio starves nothing
-/// serially, but at high DOP it prices partial aggregation as useless
-/// (per-worker groups ~= 5% of the table) and flips grouped parallel plans
-/// serial. `PGRUST_CBSTORE_FOOTER_NDV_EST=0`/`off` disables for A/B.
+/// ANALYZE would put in pg_statistic); a column without that count keeps
+/// PostgreSQL's DEFAULT_NUM_DISTINCT (planner selfuncs
+/// `columnar_group_ndistinct`; the flat 5 %-of-the-table share that stood in
+/// before priced partial aggregation as useless at high DOP and is gone, PL-10).
+/// `PGRUST_PGRC_FOOTER_NDV_EST=0`/`off` disables for A/B.
 pub fn pgrcolumnar_footer_ndv_est() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    static ON: pgsync::OnceLock<bool> = pgsync::OnceLock::new();
     *ON.get_or_init(|| {
         !matches!(
-            std::env::var("PGRUST_CBSTORE_FOOTER_NDV_EST").as_deref(),
+            std::env::var("PGRUST_PGRC_FOOTER_NDV_EST").as_deref(),
             Ok("0") | Ok("off")
         )
     })
 }
 
-// --- Step-0b: leader-hashagg spill honesty over Gather ----------------------
+// --- the pgrcolumnar scan cost model's per-unit costs (pgrc_cost.rs)
 //
-// Executor-honest per-group footprint multiplier for a leader-side hashed
-// Agg fed by a Gather/GatherMerge on a pgrcolumnar-fed plan. C's
-// hash_agg_entry_size counts only the tuple + pergroup + transition
-// chunks — for the REAL high-cardinality two-int-key grouped shape (with
-// count(*) + SUM(IsRefresh) + AVG(ResolutionWidth): Gather width 16,
-// THREE transinfos, transitionSpace 48 = MAXALIGN(get_typavgwidth(_int8)
-// = 32) + 16 for AVG's by-ref int8-array transvalue — prepagg.rs) that is
-// 16 + MAXALIGN(MAXALIGN(15)+16) + 3*16 + (8 + pow2(48)) = 168 B/group,
-// pricing a 10M-group leader table at 1.68GB. The leader's REAL working
-// set (TupleHash bucket array + palloc chunk rounding + firstTuple
-// copies) measured ~3.03GB peak TreeRssAnon in-memory and crossed a 2GB
-// budget into spill (scratchpad/night/q33-regression-probe.md, probe E2:
-// work_mem 512MB*4 = 2.15GB -> 9.6s spilling; 1GB*4 = 4.29GB -> 0.93s
-// in-memory; same plan). 3.03e9 / (1e7 * 168) = 1.80. Both CI cluster anchors
-// are reproduced at 1.8: predicted working set 3.024GB > 2.15GB budget
-// (spill priced, margin 1.41x) and < 4.29GB budget (no spill term,
-// margin 0.70x); the admissible band from the two anchors alone is
-// (1.28, 2.56). Pinned by leader_hashagg_entry_scale_reproduces_q33_
-// ci_anchors at the REAL entry composition.
-// CALIBRATION HISTORY (both catches by the regression-step0 byte-identical-
-// at-1GB CI cluster bar, before any merge): first shipped 4.7 against a
-// width-12/one-transinfo mis-model (entry 64B -> predicted 7.9GB, flipped
-// both arms — job -0557); then 3.2 against a transitionSpace-0 mis-model
-// (entry 96B -> predicted 5.4GB, still flipped the 1GB arm — job -07cf).
-// The lesson is now a red test: derive against hash_agg_entry_size's REAL
-// output for the anchor shape, never a hand model of it.
-// Applied ONLY to the honest-Gather spill delta
-// (costsize::cost_agg_leader_spill_adjust); C's cost_agg spill block
-// keeps the unscaled entry size everywhere, so heap plans and serial
-// hashaggs are untouched bit-for-bit.
-pub const DEFAULT_PGRCOLUMNAR_LEADER_HASHAGG_ENTRY_SCALE: f64 = 1.8;
+// Three knobs in cpu_operator_cost units (costsize::pgrc_cost::Knobs):
+// per survived granule, per row of a word lane (ints, dates, dictionary
+// codes), per row of a by-reference lane (text, fixed-length byref). Same
+// posture as the pgrcolumnar knobs above: no new pg_settings row; the
+// defaults are the least-squares fit of scripts/pgrc-cost-calibrate.sh
+// on the measured heap scale, `PGRUST_PGRC_<KNOB>` env
+// overrides for calibration sweeps (read once per process).
+pub const DEFAULT_PGRC_GRANULE_COST: f64 = 20.0;
+pub const DEFAULT_PGRC_DECODE_WORD_COST: f64 = 0.1;
+pub const DEFAULT_PGRC_DECODE_BYREF_COST: f64 = 1.0;
 
-/// Entry-scale for the leader-hashagg-over-Gather spill delta.
-/// `PGRUST_CBSTORE_LEADER_SPILL_COST=0`/`off` disables (None); a positive
-/// numeric value overrides the scale for calibration sweeps.
-pub fn pgrcolumnar_leader_hashagg_entry_scale() -> Option<f64> {
-    static V: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    *V.get_or_init(|| match std::env::var("PGRUST_CBSTORE_LEADER_SPILL_COST").as_deref() {
-        Ok("0") | Ok("off") => None,
-        Ok(s) => match s.parse::<f64>() {
-            Ok(v) if v > 0.0 => Some(v),
-            _ => Some(DEFAULT_PGRCOLUMNAR_LEADER_HASHAGG_ENTRY_SCALE),
-        },
-        Err(_) => Some(DEFAULT_PGRCOLUMNAR_LEADER_HASHAGG_ENTRY_SCALE),
+fn env_cost(var: &str, default: f64) -> f64 {
+    std::env::var(var).ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| *v >= 0.0).unwrap_or(default)
+}
+
+pub fn pgrc_granule_cost() -> f64 {
+    static V: pgsync::OnceLock<f64> = pgsync::OnceLock::new();
+    *V.get_or_init(|| env_cost("PGRUST_PGRC_GRANULE_COST", DEFAULT_PGRC_GRANULE_COST))
+}
+
+pub fn pgrc_decode_word_cost() -> f64 {
+    static V: pgsync::OnceLock<f64> = pgsync::OnceLock::new();
+    *V.get_or_init(|| env_cost("PGRUST_PGRC_DECODE_WORD_COST", DEFAULT_PGRC_DECODE_WORD_COST))
+}
+
+pub fn pgrc_decode_byref_cost() -> f64 {
+    static V: pgsync::OnceLock<f64> = pgsync::OnceLock::new();
+    *V.get_or_init(|| env_cost("PGRUST_PGRC_DECODE_BYREF_COST", DEFAULT_PGRC_DECODE_BYREF_COST))
+}
+
+// IXPLAN-1: the measured pgrcolumnar fetch and front terms (IXPLAN-M2, box 23, row executor; pgrc-plans IX1-L1.done
+// 2026-10-07T23:57:49Z), in PostgreSQL cost units through one anchor, A_ns = 1,187.6 ns per unit (the row
+// executor's heap seq scan + 1 qual: 12,836 us / EXPLAIN 10,809.08). Seq: each front (heap segment) row a scan
+// reads, 83.7 ns. Index: a front row's fetch (segment fetch over the btree descent), 32.5 us; a sealed row's
+// fetch with one lane, 38.7 us, plus 6.35 us per further needed lane (word and text alike). They replace only
+// cost_index's heap-fetch IO term for a pgrcolumnar heap; `PGRUST_PGRC_*_COST` override them for A/B.
+pub const DEFAULT_PGRC_FRONT_ROW_COST: f64 = 0.0704;
+pub const DEFAULT_PGRC_FETCH_FRONT_COST: f64 = 27.35;
+pub const DEFAULT_PGRC_FETCH_SEALED_COST: f64 = 32.58;
+pub const DEFAULT_PGRC_FETCH_LANE_COST: f64 = 5.35;
+
+fn ixplan_costs() -> &'static [f64; 4] {
+    static V: pgsync::OnceLock<[f64; 4]> = pgsync::OnceLock::new();
+    V.get_or_init(|| {
+        [
+            env_cost("PGRUST_PGRC_FRONT_ROW_COST", DEFAULT_PGRC_FRONT_ROW_COST),
+            env_cost("PGRUST_PGRC_FETCH_FRONT_COST", DEFAULT_PGRC_FETCH_FRONT_COST),
+            env_cost("PGRUST_PGRC_FETCH_SEALED_COST", DEFAULT_PGRC_FETCH_SEALED_COST),
+            env_cost("PGRUST_PGRC_FETCH_LANE_COST", DEFAULT_PGRC_FETCH_LANE_COST),
+        ]
     })
 }
 
-/// Footer sorted-column scan pathkeys (was GUC `pgrcolumnar_scan_pathkeys`,
-/// default on). `PGRUST_CBSTORE_SCAN_PATHKEYS=0`/`off` disables for A/B.
-pub fn pgrcolumnar_scan_pathkeys() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        !matches!(
-            std::env::var("PGRUST_CBSTORE_SCAN_PATHKEYS").as_deref(),
-            Ok("0") | Ok("off")
-        )
-    })
+pub fn pgrc_front_row_cost() -> f64 {
+    ixplan_costs()[0]
+}
+
+pub fn pgrc_fetch_front_cost() -> f64 {
+    ixplan_costs()[1]
+}
+
+pub fn pgrc_fetch_sealed_cost() -> f64 {
+    ixplan_costs()[2]
+}
+
+pub fn pgrc_fetch_lane_cost() -> f64 {
+    ixplan_costs()[3]
+}
+
+// Item 11b: the pgrc arm's per-access-method fractions of the two fixed
+// per-row terms the model inherits from PostgreSQL — `cpu_tuple_cost` per
+// output row and the per-row `cpu_operator_cost` charge of a qual evaluated
+// per row (not the per-code charge of a dictionary-grain qual, not a
+// zone-decided qual). The heap arm never reads them. The
+// defaults are the calibration fit of scripts/pgrc-cost-calibrate.sh on
+// the measured heap scale;
+// `PGRUST_PGRC_TUPLE_COST_FRACTION` / `PGRUST_PGRC_QUAL_COST_FRACTION`
+// override for calibration sweeps. A fraction must be > 0 (a per-row qual on
+// a pgrc scan is never free): 0 or negative falls back to the default.
+// 11b calibration 2026-09-12 (§3.0.3): the W = 1 fit of the two fractions
+// with the knobs held at their defaults, rounded to two significant figures
+// (0.0337 / 0.5899; the joint five-coefficient fit is degenerate on `tc`).
+pub const DEFAULT_PGRC_TUPLE_COST_FRACTION: f64 = 0.034;
+pub const DEFAULT_PGRC_QUAL_COST_FRACTION: f64 = 0.59;
+
+fn env_fraction(var: &str, default: f64) -> f64 {
+    std::env::var(var).ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| *v > 0.0).unwrap_or(default)
+}
+
+pub fn pgrc_tuple_cost_fraction() -> f64 {
+    static V: pgsync::OnceLock<f64> = pgsync::OnceLock::new();
+    *V.get_or_init(|| env_fraction("PGRUST_PGRC_TUPLE_COST_FRACTION", DEFAULT_PGRC_TUPLE_COST_FRACTION))
+}
+
+pub fn pgrc_qual_cost_fraction() -> f64 {
+    static V: pgsync::OnceLock<f64> = pgsync::OnceLock::new();
+    *V.get_or_init(|| env_fraction("PGRUST_PGRC_QUAL_COST_FRACTION", DEFAULT_PGRC_QUAL_COST_FRACTION))
+}
+
+fn env_flag(var: &str) -> bool {
+    std::env::var(var).is_ok_and(|v| v.trim() == "1")
+}
+
+/// `PGRUST_PGRC_CENSUS_TRACE=1`: plancat copies every zone column's exact
+/// ranges too and the scan model prints each zone qual's census, summary
+/// beside exact, to stderr (the item 2 proof; never on by default).
+pub fn pgrc_census_trace() -> bool {
+    static V: pgsync::OnceLock<bool> = pgsync::OnceLock::new();
+    *V.get_or_init(|| env_flag("PGRUST_PGRC_CENSUS_TRACE"))
+}
+
+/// `PGRUST_PGRC_ZONE_COPY=1`: plancat copies the zone facts into the planning
+/// context instead of borrowing the footer cache's pinned column (the off
+/// switch of the borrow).
+pub fn pgrc_zone_copy() -> bool {
+    static V: pgsync::OnceLock<bool> = pgsync::OnceLock::new();
+    *V.get_or_init(|| env_flag("PGRUST_PGRC_ZONE_COPY"))
 }
 
 // Read through the slot: execmain install_if_absent's a stand-in accessor,

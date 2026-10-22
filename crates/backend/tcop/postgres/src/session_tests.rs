@@ -50,6 +50,11 @@ pub(crate) static TIMER_POSTED: std::sync::atomic::AtomicBool =
 // session thread.
 pub(crate) static TIMER_ARMED_THREAD: std::sync::Mutex<Option<std::thread::ThreadId>> =
     std::sync::Mutex::new(None);
+// D380: the thread whose next drain delivers a late fire (cancel + the abort
+// byte raised after ProcessInterrupts' top clear); the same set-once seam, so
+// one stub serves both tests.
+pub(crate) static LATE_FIRE: std::sync::Mutex<Option<std::thread::ThreadId>> =
+    std::sync::Mutex::new(None);
 
 pub(crate) fn install_timeout_drain_stub() {
     static ONCE: Once = Once::new();
@@ -58,6 +63,16 @@ pub(crate) fn install_timeout_drain_stub() {
 
 fn timeout_drain_stub() {
     use std::sync::atomic::Ordering::SeqCst;
+    {
+        let mut late = LATE_FIRE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *late == Some(std::thread::current().id()) {
+            *late = None;
+            // the fire as the drain sees it: its handler's cancel, and the byte raised after the top clear
+            init_small::globals::SetQueryCancelPending(true);
+            init_small::globals::SetAbortPending(true);
+            return;
+        }
+    }
     if *TIMER_ARMED_THREAD.lock().unwrap() != Some(std::thread::current().id()) {
         return;
     }
@@ -94,7 +109,11 @@ pub(crate) fn install_shared_stubs() {
         waitevent_seams::pgstat_report_wait_end::set(|| {});
         waitevent_seams::pgstat_reset_wait_event_storage::set(|| {});
         ipc_seams::on_shmem_exit::set(|_, _| {});
-        ipc_seams::proc_exit::set(|code, _pid| panic!("proc_exit({code})"));
+        // D2933: the stub exits as the real proc_exit does (an exit unwind);
+        // a plain panic here would be C's abort() at the statement boundary
+        ipc_seams::proc_exit::set(|code, _pid| {
+            std::panic::panic_any(ipc::ProcExitThread { code })
+        });
         deadlock_seams::init_dead_lock_checking::set(|| Ok(()));
         pmsignal_seams::register_postmaster_child_active::set(|| {});
         syncrep_seams::sync_rep_cleanup_at_proc_exit::set(|| {});
@@ -149,6 +168,10 @@ pub(crate) fn install_shared_stubs() {
         pgstat_seams::pgstat_set_session_end_cause_fatal::set(|| {});
         miscinit::init_seams();
         init_small::init_seams();
+        // tcop's Bind / Describe / Execute / simple-query paths call the four gravity entry seams unguarded
+        // (gravity_entry_seams): installed here as the server's startup installs them (seams_init ->
+        // gravity_exec::init_seams), not stubbed, so these sessions run the entry the server runs.
+        gravity_exec::init_seams();
     });
 }
 
@@ -515,6 +538,27 @@ fn install_catalog_fixture() {
             aggtransspace: 0,
         }))
     });
+    // Gravity binds every call it lowers, aggregates included (fmgr_info on aggfnoid): the
+    // pg_proc rows of count(*) / sum(int4), prosrc aggregate_dummy (pg_proc.dat 2803 / 2108).
+    syscache_seams::lookup_pg_proc_fmgr::set(|funcid| {
+        Ok(matches!(funcid, 2803 | 2108).then_some(syscache_seams::PgProcFmgrShape {
+            prolang: 12,
+            prorettype: INT8OID,
+            pronargs: if funcid == 2108 { 1 } else { 0 },
+            proisstrict: false,
+            proretset: false,
+            prosecdef: false,
+            proconfig_isnull: true,
+            xmin: 0,
+            tid: Default::default(),
+        }))
+    });
+    syscache_seams::lookup_pg_proc_prosrc::set(|cx, funcid| {
+        Ok(match funcid {
+            2803 | 2108 => Some(mcx::PgString::from_str_in("aggregate_dummy", cx)?),
+            _ => None,
+        })
+    });
     mbutils_seams::server_to_client_conversion_needed::set(|| false);
     mbutils_seams::pg_server_to_client::set(|_, _| Ok(None));
 }
@@ -551,6 +595,9 @@ pub(crate) fn install_fixtures() {
         // generate_series row estimates ride clauses_seams::estimate_expression_value
         clauses::init_seams();
         execmain::init_seams();
+        // The row executor is deleted: the query descs are the Gravity entry's (seams_init's order: execmain's support
+        // answers first, then the entry, which keeps them as its Prev).
+        gravity_exec::admit::entry::init_seams();
         xact::init_seams();
         elog::init_seams();
         utility::init_seams();
@@ -677,6 +724,7 @@ fn run_session(input: Vec<u8>) -> Vec<u8> {
     INPUT.with(|q| *q.borrow_mut() = input);
     INPUT_POS.with(|c| c.set(0));
     PEAK_MESSAGE_USED.with(|c| c.set(0));
+    elog::config::set_where_to_send_output(CommandDest::Remote);
 
     let mut message_context = MemoryContext::new_bump("MessageContext-test");
     let mut state = LoopState {
@@ -684,13 +732,31 @@ fn run_session(input: Vec<u8>) -> Vec<u8> {
         idle_in_transaction_timeout_enabled: false,
         idle_session_timeout_enabled: false,
         idle_passivate_timeout_enabled: false,
+        log_defer_before: None,
     };
 
     for _ in 0..200 {
         PEAK_MESSAGE_USED.with(|c| c.set(c.get().max(message_context.used())));
         message_context.reset();
         let mcx = message_context.mcx();
-        match run_one_iteration(mcx, &mut state) {
+        let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_one_iteration(mcx, &mut state)
+        }));
+        let step = match step {
+            Ok(step) => step,
+            // D2933: the EOF proc_exit(0) leaves the statement boundary as
+            // its exit unwind; anything else goes on
+            Err(payload) => {
+                if payload
+                    .downcast_ref::<ipc::ProcExitThread>()
+                    .is_some_and(|e| e.code == 0)
+                {
+                    break;
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+        match step {
             Ok(()) => {}
             Err(err) => {
                 if err.message.contains("proc_exit(0)") {
@@ -1027,7 +1093,11 @@ fn param_text_is_kept_when_the_input_function_enables_logging() {
     PARAM_LOG_PROBE.set(true);
     guc_tables::backing::set_log_parameter_max_length_on_error(0);
 
+    // The error this test reads is the fixture int4out's, which only an fmgr call of int4out reaches. pgrust.point_path's
+    // portal (S0b) writes an int4 column's text with no fmgr call (gravity_wire's fast kinds: int4out's bytes), so the
+    // session runs with the path off, the road the test was written on.
     let input: Vec<u8> = [
+        simple_query_msg("SET pgrust.point_path = off"),
         parse_msg("k1", "SELECT $1", &[INT4OID]),
         bind_msg("", "k1", &[b"007"]),
         execute_msg("", 0),
@@ -1183,6 +1253,13 @@ fn simple_query_debug_print_gucs_emit_log_detail_pairs() {
             SEEN.lock().unwrap().push((e.message.clone(), e.detail.clone()));
         }
     }
+    // The capture opens after this thread served a Gravity statement once: the
+    // process's first serve arms the grant pool and logs it on the serving
+    // thread (exec's arm_grant_pool, once per process), so when this test is
+    // the first of the parallel session tests to serve, that line would land
+    // inside the capture.
+    let warm = "SELECT count(*) FROM generate_series(1, 1000)";
+    run_session([simple_query_msg(warm), msg(b'X', &[])].concat());
     SEEN.lock().unwrap().clear();
     let prev_hook = elog::sink::set_emit_log_hook(Some(capture));
     let sql = "SET debug_print_parse = on; \
@@ -1346,6 +1423,33 @@ fn execute_commit_with_bound_param_logs_context_and_survives_commit() {
     );
 }
 
+// D3639: at the default log_parameter_max_length_on_error = 0 bind stores no
+// paramValuesStr, so ParamsErrorCallback adds nothing (params.c:407's early
+// return) and the frame is not registered at all: the same 25P01 WARNING
+// carries no portal context.
+#[test]
+fn execute_without_param_logging_adds_no_portal_context() {
+    install_generate_series_fixture();
+    guc_tables::backing::set_log_parameter_max_length_on_error(0);
+
+    let input: Vec<u8> = [
+        parse_msg("", "COMMIT", &[INT4OID]),
+        bind_msg("", "", &[b"42"]),
+        execute_msg("", 0),
+        sync_msg(),
+        msg(b'X', &[]),
+    ]
+    .concat();
+    let wire = run_session(input);
+    let all = frames(&wire);
+
+    let types: Vec<u8> = all.iter().map(|f| f.0).collect();
+    assert_eq!(types, vec![b'Z', b'1', b'2', b'N', b'C', b'Z'], "frame types: {types:?}");
+    let notice = &all[3].1;
+    assert_eq!(error_field(notice, b'C').as_deref(), Some("25P01"));
+    assert_eq!(error_field(notice, b'W'), None, "no parameters were logged at bind");
+}
+
 // postgres.c:1804: the Bind context callback names the portal by its stored
 // (63-byte) name, not the wire name.
 #[test]
@@ -1371,6 +1475,34 @@ fn bind_context_uses_stored_portal_name() {
     assert_eq!(
         error_field(errs[0], b'W').as_deref(),
         Some(format!("portal \"{stored}\" parameter $1 = 'abc'").as_str())
+    );
+}
+
+// exec_execute_message's params_errcxt (postgres.c) names the portal by its stored
+// (63-byte) name too, not the wire name GetPortalByName was given.
+#[test]
+fn execute_context_uses_stored_portal_name() {
+    install_fixtures();
+    PARAM_LOG_PROBE.set(true);
+    guc_tables::backing::set_log_parameter_max_length_on_error(0);
+    let long = "q".repeat(70);
+    let input: Vec<u8> = [
+        parse_msg("k2", "SELECT $1", &[INT4OID]),
+        bind_msg(&long, "k2", &[b"7"]),
+        execute_msg(&long, 0),
+        sync_msg(),
+    ]
+    .concat();
+    let wire = run_session(input);
+    PARAM_LOG_PROBE.set(false);
+    guc_tables::backing::set_log_parameter_max_length_on_error(0);
+    let all = frames(&wire);
+    let err = all.iter().find(|(t, _)| *t == b'E').expect("int4out fixture error");
+    assert_eq!(error_field(&err.1, b'M').as_deref(), Some("int4out fixture refuses"));
+    let stored = "q".repeat(63);
+    assert_eq!(
+        error_field(&err.1, b'W').as_deref(),
+        Some(format!("portal \"{stored}\" with parameters: $1 = '7'").as_str())
     );
 }
 
@@ -1416,7 +1548,7 @@ fn explain_generate_series_matches_live_pg_shape() {
     );
 }
 
-// regression test rowsfrom-cdate (recorded run,
+// Antithesis r20 rowsfrom-cdate (run 267fff0cefb579e92d1c6a7736b1e55d-59-13,
 // seed 3900666266787178552; reduced repro `explain ( select from lateral rows
 // from ( current_date , current_date ) for update ) ;`): cost_qual_eval_walker
 // charged nothing for SQLValueFunction, so a ROWS FROM (current_date,

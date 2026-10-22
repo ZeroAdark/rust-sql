@@ -1,0 +1,12 @@
+path	crates/gravity/hosts/src/ops/window/aggs.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	1
+macro	std::vec	1
+method	slice::to_vec	1
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	2
+method	std::ffi::CString::new	1
+method	std::iter::Iterator::collect	1
+type	std::boxed::Box	2
+type	std::ffi::CString	1
+type	std::vec::Vec	1

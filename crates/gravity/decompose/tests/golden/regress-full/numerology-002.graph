@@ -1,0 +1,13 @@
+-- regress-full-numerology-002
+-- INSERT INTO TEMP_INT2 (f1) SELECT int2(f1) FROM INT4_TBL WHERE (f1 >= -32767) AND (f1 <= 32767);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@3
+  source range rel=16400 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v3.1, c23:-32767)
+  filter op523(v3.1, c23:32767)
+  project (1=fn314(v3.1))
+  write INSERT rel=17071 rti=1 natts=1 indexes=()
+  outs 1=w2:val
+mapped: ModifyTable SeqScan

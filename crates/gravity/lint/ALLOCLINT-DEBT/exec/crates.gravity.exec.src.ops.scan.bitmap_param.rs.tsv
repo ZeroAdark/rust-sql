@@ -1,0 +1,10 @@
+path	crates/gravity/exec/src/ops/scan/bitmap_param.rs
+growth	std::vec::Vec::push	1
+ir-only	<T as core::convert::Into<U>>::into	4
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	1
+method	std::rc::Rc::new	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	2
+type	std::rc::Rc	1
+type	std::vec::Vec	1

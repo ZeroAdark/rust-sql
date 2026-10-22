@@ -232,3 +232,22 @@ fn nil_list_cell_jumbles_as_a_pending_null() {
         "an empty list cell must not add a T_List tag"
     );
 }
+
+#[test]
+fn const_location_growth_does_not_report_oom() {
+    mcx::set_oom_observer(|name, _| {
+        assert_ne!(name, "const-location-growth");
+    });
+    let ctx = MemoryContext::new_bump("const-location-growth");
+    let mut state = crate::JumbleState::new(ctx.mcx()).unwrap();
+    for location in 0..129 {
+        state.record_const_location(false, location, -1).unwrap();
+    }
+    assert_eq!(state.clocations.len(), 129);
+    for (location, entry) in state.clocations.iter().enumerate() {
+        assert_eq!(entry.location, location as i32);
+        assert_eq!(entry.length, -1);
+        assert!(!entry.squashed);
+        assert!(!entry.extern_param);
+    }
+}

@@ -1,0 +1,10 @@
+-- regress-full-inet-010
+-- SELECT set_masklen(cidr(text(c)), 33) FROM INET_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=880 end=sink
+  nodes n0@0
+  source range rel=17193 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn635(io650(fn730(relabel869(v1.1))), c23:33))
+  outs 1=vl:call635
+mapped: SeqScan

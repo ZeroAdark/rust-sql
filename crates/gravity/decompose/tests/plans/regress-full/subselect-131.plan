@@ -1,0 +1,26 @@
+-- name: regress-full-subselect-131
+-- sql: EXPLAIN (COSTS OFF) SELECT ten FROM onek WHERE sin(two ) +four IN (VALUES (sin(0.5)), (2));
+-- test: subselect
+-- shape: a5b522a3fdbe8b0e seen=2
+-- rel 16417 onek am=heap kind=r natts=16
+-- att 16417 1 unique1 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 2 unique2 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 3 two typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 4 four typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 5 ten typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 6 twenty typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 7 hundred typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 8 thousand typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 9 twothousand typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 10 fivethous typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 11 tenthous typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 12 odd typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 13 even typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16417 14 stringu1 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 16417 15 stringu2 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 16417 16 string4 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- idx 19335 rel=16417 keys=1 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19336 rel=16417 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19337 rel=16417 keys=7 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19338 rel=16417 keys=14 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 57.5 :scan.plan.plan_rows 10 :scan.plan.plan_width 4 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 5 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 5 :location 27} :resno 1 :resname ten :ressortgroupref 0 :resorigtbl 16417 :resorigcol 5 :resjunk false}) :scan.plan.qual ({SCALARARRAYOPEXPR :opno 670 :opfuncid 293 :hashfuncid 0 :negfuncid 0 :useOr true :inputcollid 0 :args ({OPEXPR :opno 591 :opfuncid 218 :opresulttype 701 :opretset false :opcollid 0 :inputcollid 0 :args ({FUNCEXPR :funcid 1604 :funcresulttype 701 :funcretset false :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 0 :args ({FUNCEXPR :funcid 316 :funcresulttype 701 :funcretset false :funcvariadic false :funcformat 2 :funccollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 3 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 3 :location 51}) :location -1}) :location 47} {FUNCEXPR :funcid 316 :funcresulttype 701 :funcretset false :funcvariadic false :funcformat 2 :funccollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 4 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 4 :location 58}) :location -1}) :location 57} {CONST :consttype 1022 :consttypmod -1 :constcollid 0 :constlen -1 :constbyval false :constisnull false :location -1 :constvalue 40 [ 160 0 0 0 1 0 0 0 0 0 0 0 189 2 0 0 2 0 0 0 1 0 0 0 240 5 75 116 232 174 222 63 0 0 0 0 0 0 0 64 ]}) :location -1}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 3 4 5)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname onek :colnames ("unique1" "unique2" "two" "four" "ten" "twenty" "hundred" "thousand" "twothousand" "fivethous" "tenthous" "odd" "even" "stringu1" "stringu2" "string4")} :rtekind 0 :relid 16417 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 16417 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 10 11 12) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16417) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 0}

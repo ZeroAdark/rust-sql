@@ -1,0 +1,102 @@
+Parsed test spec with 5 sessions
+
+starting permutation: wd aattach aup mdetach mflush bup m4 mwake m57 rsel mflush mflush m0 rsel
+step wd: DELETE FROM pgrc_t WHERE id IN (2, 12);
+step aattach: DO $$ BEGIN PERFORM injection_points_attach('pgrc-tomb-before-insert', 'wait'); END $$;
+step aup: UPDATE pgrc_t SET v = v + 1 WHERE id IN (1, 11); <waiting ...>
+step mdetach: DO $$ BEGIN PERFORM injection_points_detach('pgrc-tomb-before-insert'); END $$;
+step mflush: CALL pgrc_seal('pgrc_t');
+step bup: UPDATE pgrc_t SET v = v + 1 WHERE id IN (1, 11);
+step m4: SELECT pgrc_tombs_in('pgrc_t', 4, 4) AS four_unfolded;
+four_unfolded
+-------------
+t            
+(1 row)
+
+step mwake: DO $$ BEGIN PERFORM injection_points_wakeup('pgrc-tomb-before-insert'); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+step aup: <... completed>
+step m57: SELECT pgrc_tombs_in('pgrc_t', 5, 7) AS five_to_seven_unfolded;
+five_to_seven_unfolded
+----------------------
+t                     
+(1 row)
+
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|2
+ 3|0
+ 4|0
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|2
+13|0
+14|0
+15|0
+16|0
+17|0
+18|0
+19|0
+(17 rows)
+
+step mflush: CALL pgrc_seal('pgrc_t');
+step mflush: CALL pgrc_seal('pgrc_t');
+step m0: SELECT pgrc_tombs_in('pgrc_t', 0, 0) AS none_unfolded;
+none_unfolded
+-------------
+t            
+(1 row)
+
+step rsel: SELECT id, v FROM pgrc_t ORDER BY id, v;
+id|v
+--+-
+ 1|2
+ 3|0
+ 4|0
+ 5|0
+ 6|0
+ 7|0
+ 8|0
+ 9|0
+10|0
+11|2
+13|0
+14|0
+15|0
+16|0
+17|0
+18|0
+19|0
+(17 rows)
+
+
+starting permutation: aattach an mwake mdetach mflushn mwake mn13 rseln
+step aattach: DO $$ BEGIN PERFORM injection_points_attach('pgrc-tomb-before-insert', 'wait'); END $$;
+step an: DELETE FROM pgrc_n WHERE id IN (2, 3); <waiting ...>
+step mwake: DO $$ BEGIN PERFORM injection_points_wakeup('pgrc-tomb-before-insert'); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+step mdetach: DO $$ BEGIN PERFORM injection_points_detach('pgrc-tomb-before-insert'); END $$;
+step mflushn: CALL pgrc_seal('pgrc_n');
+step mwake: DO $$ BEGIN PERFORM injection_points_wakeup('pgrc-tomb-before-insert'); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+step an: <... completed>
+step mn13: SELECT pgrc_tombs_in('pgrc_n', 1, 3) AS one_to_three_unfolded;
+one_to_three_unfolded
+---------------------
+t                    
+(1 row)
+
+step rseln: SELECT id FROM pgrc_n ORDER BY id;
+id
+--
+ 1
+ 4
+ 5
+ 6
+ 7
+ 8
+ 9
+(7 rows)
+

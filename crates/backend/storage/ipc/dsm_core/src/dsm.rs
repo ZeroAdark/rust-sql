@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use init_small::globals;
 use lwlock::{main_lock, LWLock, LWLockAcquire, LWLockRelease, LW_EXCLUSIVE};
 use mcx::{bind, Mcx, McxOwned, MemoryContext, PgVec};
@@ -315,7 +315,7 @@ pub(crate) fn cleanup_mmap_dir(dirname: &str) -> PgResult<()> {
             ereport(ERROR)
                 .with_saved_errno(elog::errno::current_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove file \"{buf}\": %m"))
+                .errmsg(format!("could not remove file \"{buf}\": {PCT_M}"))
                 .finish(loc("dsm_cleanup_for_mmap"))?;
         }
     }

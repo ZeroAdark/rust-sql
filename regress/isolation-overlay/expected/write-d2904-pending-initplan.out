@@ -1,0 +1,142 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x
+step s2x: EXPLAIN (COSTS OFF) UPDATE wjob j SET attempts = j.attempts + 1 WHERE j.id <= 8 AND CASE WHEN j.prio > 100 THEN j.attempts > (SELECT 1 / (lim - lim) FROM wcfg WHERE name = 'q') ELSE true END AND j.prio = (SELECT k.prio FROM wjob k WHERE k.id = j.id) RETURNING j.id, j.attempts;
+QUERY PLAN                                                                                                         
+-------------------------------------------------------------------------------------------------------------------
+Update on wjob j                                                                                                   
+  InitPlan 1                                                                                                       
+    ->  Index Scan using wcfg_pkey on wcfg                                                                         
+          Index Cond: (name = 'q'::text)                                                                           
+  ->  Index Scan using wjob_pkey on wjob j                                                                         
+        Index Cond: (id <= 8)                                                                                      
+        Filter: (CASE WHEN (prio > 100) THEN (attempts > (InitPlan 1).col1) ELSE true END AND (prio = (SubPlan 2)))
+        SubPlan 2                                                                                                  
+          ->  Index Scan using wjob_pkey on wjob k                                                                 
+                Index Cond: (id = j.id)                                                                            
+(10 rows)
+
+
+starting permutation: s1a s2u s1c
+step s1a: UPDATE wjob SET attempts = attempts + 100 WHERE id = 5;
+step s2u: UPDATE wjob j SET attempts = j.attempts + 1 WHERE j.id <= 8 AND CASE WHEN j.prio > 100 THEN j.attempts > (SELECT 1 / (lim - lim) FROM wcfg WHERE name = 'q') ELSE true END AND j.prio = (SELECT k.prio FROM wjob k WHERE k.id = j.id) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ERROR:  division by zero
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2d s1c
+step s1a: UPDATE wjob SET attempts = attempts + 100 WHERE id = 5;
+step s2d: DELETE FROM wjob j WHERE j.id <= 8 AND CASE WHEN j.prio > 100 THEN j.attempts > (SELECT 1 / (lim - lim) FROM wcfg WHERE name = 'q') ELSE true END AND j.prio = (SELECT k.prio FROM wjob k WHERE k.id = j.id) RETURNING j.id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+ERROR:  division by zero
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2t s1c
+step s1a: UPDATE wjob SET attempts = attempts + 100 WHERE id = 5;
+step s2t: UPDATE wjob j SET attempts = j.attempts + 1 WHERE j.id <= 8 AND CASE WHEN j.prio > 0 THEN j.attempts >= (SELECT 0 * lim FROM wcfg WHERE name = 'q') ELSE j.attempts > (SELECT 1 / (lim - lim) FROM wcfg WHERE name = 'q') END AND j.prio = (SELECT k.prio FROM wjob k WHERE k.id = j.id) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2t: <... completed>
+ERROR:  division by zero
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2v s1c s2seq
+step s1a: UPDATE wjob SET attempts = attempts + 100 WHERE id = 5;
+step s2v: UPDATE wjob j SET attempts = j.attempts + 1 WHERE j.id <= 8 AND CASE WHEN j.prio > 100 THEN j.attempts > (SELECT nextval('wsq') * 0) ELSE true END AND j.prio = (SELECT k.prio FROM wjob k WHERE k.id = j.id) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+id|attempts
+--+--------
+ 1|       1
+ 2|       1
+ 3|       1
+ 4|       1
+ 5|     101
+ 6|       1
+ 7|       1
+ 8|       1
+(8 rows)
+
+step s2seq: SELECT last_value, is_called FROM wsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2p s1c
+step s1a: UPDATE wjob SET attempts = attempts + 100 WHERE id = 5;
+step s2p: UPDATE wjob j SET attempts = j.attempts + 1 WHERE j.id <= 8 AND CASE WHEN j.prio > 100 THEN j.attempts > (SELECT 1 / (lim - lim) FROM wcfg WHERE name = 'q') ELSE true END RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+ERROR:  division by zero
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1a s2r s1c
+step s1q: UPDATE wcfg SET lim = 0 WHERE name = 'q';
+step s1a: UPDATE wjob SET attempts = attempts + 100 WHERE id = 5;
+step s2r: UPDATE wjob j SET attempts = j.attempts + 1 WHERE j.attempts >= (SELECT 0 * lim FROM wcfg WHERE name = 'q') AND j.id <= (SELECT lim FROM wcfg WHERE name = 'q') AND j.prio = (SELECT k.prio FROM wjob k WHERE k.id = j.id) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|attempts
+--+--------
+ 1|       1
+ 2|       1
+ 3|       1
+ 4|       1
+ 5|     101
+ 6|       1
+ 7|       1
+ 8|       1
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2s s1c
+step s1a: UPDATE wjob SET attempts = attempts + 100 WHERE id = 5;
+step s2s: UPDATE wjob j SET attempts = j.attempts + 1 + (SELECT 0 * lim FROM wcfg WHERE name = 'q') WHERE j.id <= 8 AND j.prio = (SELECT k.prio FROM wjob k WHERE k.id = j.id) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|attempts
+--+--------
+ 1|       1
+ 2|       1
+ 3|       1
+ 4|       1
+ 5|     101
+ 6|       1
+ 7|       1
+ 8|       1
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1a s2s s1c
+step s1q: UPDATE wcfg SET lim = 0 WHERE name = 'q';
+step s1a: UPDATE wjob SET attempts = attempts + 100 WHERE id = 5;
+step s2s: UPDATE wjob j SET attempts = j.attempts + 1 + (SELECT 0 * lim FROM wcfg WHERE name = 'q') WHERE j.id <= 8 AND j.prio = (SELECT k.prio FROM wjob k WHERE k.id = j.id) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|attempts
+--+--------
+ 1|       1
+ 2|       1
+ 3|       1
+ 4|       1
+ 5|     101
+ 6|       1
+ 7|       1
+ 8|       1
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2c s1c
+step s1a: UPDATE wjob SET attempts = attempts + 100 WHERE id = 5;
+step s2c: UPDATE wjob j SET attempts = CASE WHEN j.prio > 100 THEN (SELECT 1 / (lim - lim) FROM wcfg WHERE name = 'q') ELSE j.attempts + 1 END WHERE j.id <= 8 AND j.prio = (SELECT k.prio FROM wjob k WHERE k.id = j.id) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+ERROR:  division by zero
+s1: WARNING:  there is no transaction in progress

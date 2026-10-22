@@ -1,0 +1,10 @@
+-- regress-full-numeric-032
+-- select (i / (10::numeric ^ 131071))::numeric(1,0) from generate_series(6 * (10::numeric ^ 131071), 9 * (10::numeric ^ 131071), 10::numeric ^ 131071) as a(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesNumeric { step: true } fn3259 fn3259(c1700:'\x00\x00\xff\x7fp\x17', c1700:'\x00\x00\xff\x7f(#', c1700:'\x00\x00\xff\x7f\xe8\x03')]
+  project (1=fn1703(op1761(v1.1, c1700:'\x00\x00\xff\x7f\xe8\x03'), c23:65540))
+  outs 1=vl:call1703
+mapped: FunctionScan

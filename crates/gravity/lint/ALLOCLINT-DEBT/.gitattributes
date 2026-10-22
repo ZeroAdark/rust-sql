@@ -1,0 +1,13 @@
+# TD-203 (main 2026-10-15T04:08:23Z, alloclint's review 04:08:09Z): alloclint's ledger merges per (kind, item) by delta, count =
+# ours + theirs - base (scripts/gravity-gate/ledger-delta-merge.py: header must match, rows sorted, <= 0 dropped, an unparseable
+# line is a conflict; the S1/S2 alloclint leg is exact, so a wrong sum is a red, never debt let through). Modify/delete stays a
+# re-cut. README / .columns / .empty are never judged: the side merged into keeps its copy (mq replay: trunk's).
+# The drivers: `python3 scripts/gravity-gate/ledger-delta-merge.py --install` once per clone (--check says what is missing);
+# a clone without them merges these files line by line, as before.
+# These routes live here, in the ledger directory, not in the root .gitattributes: TD-200's ledger-reader guard
+# (alloclintcheck.sh) keys any tracked file outside lint/alloclint and this directory that names the directory, and a merge
+# route reads no ledger content at build or test time. Patterns are relative to this directory; ratchet.py skips dotfiles.
+*/*.tsv merge=alloclint-ledger
+/README merge=gravity-keep-ours
+*/.columns merge=gravity-keep-ours
+*/.empty merge=gravity-keep-ours

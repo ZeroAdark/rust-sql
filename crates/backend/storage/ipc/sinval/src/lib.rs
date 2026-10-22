@@ -27,7 +27,7 @@ use types_error::{PgError, PgResult, DEBUG4, PANIC};
 use types_storage::sinval::{SharedInvalCatcacheMsg, SHARED_INVALIDATION_MESSAGE_SIZE};
 use types_storage::storage::Spinlock;
 use types_storage::{
-    ProcSignalReason, SharedInvalidationMessage, NUM_AUXILIARY_PROCS, SINVAL_READ_LOCK,
+    ProcSignalReason, SharedInvalidationMessage, SINVAL_READ_LOCK,
     SINVAL_WRITE_LOCK,
 };
 
@@ -213,7 +213,7 @@ fn spin_acquire(lock: &Spinlock, func: &'static str) {
 }
 
 fn num_proc_state_slots() -> usize {
-    (MaxBackends() + NUM_AUXILIARY_PROCS) as usize
+    (MaxBackends() + ::init_small::globals::NumAuxiliaryProcs()) as usize
 }
 
 pub fn SharedInvalShmemSize() -> PgResult<usize> {
@@ -552,7 +552,7 @@ pub fn ReceiveSharedInvalidMessages(
         if st.nextmsg.get() >= st.nummsgs.get() && !st.catchup_pending.get() {
             let procno = st.my_procno.get();
             if procno >= 0 && !sinval_no_fastpath() {
-                let seg = st.seg.get().expect("shared invalidation memory is not attached");
+                let seg = st.seg.get().ok_or_else(not_attached)?;
                 if !seg.proc_states()[procno as usize].hasMessages.load(SeqCst) {
                     return Ok(());
                 }
@@ -560,6 +560,13 @@ pub fn ReceiveSharedInvalidMessages(
         }
         receive_impl(st, inval_function, reset_function)
     })
+}
+
+#[cold]
+#[inline(never)]
+fn not_attached() -> Box<PgError> {
+    catcache_seams::note_pool_miss(-1); // B2: a pool thread reaching for the catalog: counted with the catcache misses
+    Box::new(PgError::error("shared invalidation memory is not attached to this thread"))
 }
 
 #[inline(never)]
@@ -584,7 +591,7 @@ fn receive_impl(
         st.nummsgs.set(0);
 
         let get_result = {
-            let seg = st.seg.get().expect("shared invalidation memory is not attached");
+            let seg = st.seg.get().ok_or_else(not_attached)?;
             let mut buf = st.messages.borrow_mut();
             SIGetDataEntries(seg, &mut buf[..])?
         };
@@ -743,6 +750,7 @@ pub fn init_seams() {
     sinval_seams::send_shared_invalid_messages::set(SendSharedInvalidMessages);
     sinval_seams::receive_shared_invalid_messages::set(ReceiveSharedInvalidMessages);
     sinval_seams::handle_catchup_interrupt::set(HandleCatchupInterrupt);
+    sinval_seams::shared_invalid_message_counter::set(SharedInvalidMessageCounter);
 }
 
 #[cfg(test)]

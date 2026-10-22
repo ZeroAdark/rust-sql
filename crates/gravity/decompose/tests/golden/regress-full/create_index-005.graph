@@ -1,0 +1,11 @@
+-- regress-full-create_index-005
+-- SELECT * FROM point_tbl WHERE f1 IS NULL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=9 end=sink
+  nodes n0@0
+  source range rel=19361 rti=1 am=heap
+    lanes Attr(1):byref8:fx16:win/page Offset:byval2:w2:val
+  filter isnull(v1.1)
+  project (1=v1.1)
+  outs 1=fx16:win/page
+mapped: SeqScan

@@ -1,0 +1,65 @@
+-- regress-full-join-150
+-- select ss2.* from int4_tbl i41 left join int8_tbl i8 join (select i42.f1 as c1, i43.f1 as c2, 42 as c3 from int4_tbl i42, int4_tbl i43) ss1 on i8.q1 = ss1.c2 on i41.f1 = ss1.c1, lateral (select i41.*, i8.*, ss1.* from text_tbl limit 1) ss2 where ss1.c2 = 0;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=8 eligible rows=5 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n8@0 n7@1
+  source range rel=16400 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val
+p1 node=6 eligible rows=5 end=breaker(slot=1 Materialize)
+  nodes n6@0
+  source range rel=16400 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  spool
+  outs 1=w8:val
+p2 node=4 eligible rows=1 end=sink
+  desc consumes=slot1@p1 consumes=slot0@p0
+  nodes n4@0 n3@2 n2@4 n1@6 n0@8
+  source range rel=16403 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op410(v2.1, c20:0)
+  project (1=v2.1, 2=v2.2)
+  nest inner=n5 JOIN_INNER invariant raise-free params=()
+  inner node=5 eligible rows=1 end=sink
+  nodes n5@0
+  source range rel=16400 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v8.1, c23:0)
+  project (1=v8.1)
+  project (1=outer.1, 2=outer.2, 3=inner.1)
+  nest inner=n6 JOIN_INNER invariant raise-free params=()
+  inner node=6 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n6@0
+  source breaker slot=1
+  project (1=outer.1)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1)
+  probe slot=0 inner=n7 JOIN_INNER keys=(outer.4) decls=23/23:I32 clauses=(op96(outer.4, inner.1))
+  project (1=outer.4, 2=inner.1, 3=outer.1, 4=outer.2, 5=outer.3, 6=c23:42)
+  nest inner=n10 JOIN_INNER raise-free params=($exec0=outer.1, $exec1=outer.3, $exec2=outer.4, $exec3=outer.2, $exec4=outer.5, $exec5=outer.6)
+  inner node=11 eligible rows=2 end=sink
+  nodes n11@0 n10@1
+  source range rel=16409 rti=9 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=$exec0, 2=$exec1, 3=$exec2, 4=$exec3, 5=$exec4, 6=$exec5)
+  limit count=1 offset=all
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=inner.5, 6=inner.6)
+  outs 1=w8:val 2=w8:val
+  outs 1=w8:val 2=w8:val 3=w4:val
+  outs 1=w8:val 2=w8:val 3=w4:val 4=w4:val
+  outs 1=w4:val 2=w4:val 3=w8:val 4=w8:val 5=w4:val 6=w4:val
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w4:val 5=w4:val 6=w4:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+param $exec0 owner=n0 type=23 rep=w4:val
+param $exec1 owner=n0 type=20 rep=w8:val
+param $exec2 owner=n0 type=20 rep=w8:val
+param $exec3 owner=n0 type=23 rep=w4:val
+param $exec4 owner=n0 type=23 rep=w4:val
+param $exec5 owner=n0 type=23 rep=w4:val
+mapped: SeqScan NestLoop NestLoopParam HashJoin Hash Limit

@@ -1,0 +1,9 @@
+-- regress-full-expressions-008
+-- explain (verbose, costs off) select random() IN (1, 4, 8.0);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=any670(fn1598(), c1022:'\x01\x00\x00\x00\x00\x00\x00\x00\xbd\x02\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\xf0?\x00\x00\x00\x00\x00\x00\x10@\x00\x00\x00\x00\x00\x00 @'))
+  outs 1=w1:val
+mapped: Result

@@ -1,0 +1,9 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT a FROM (VALUES (ARRAY[1, 2]), (ARRAY[2]), ('{}'::int[]), (ARRAY[1, NULL]), (NULL)) v(a) ORDER BY a DESC
+cols: a
+[pg]
+\N
+{2}
+{1,NULL}
+{1,2}
+{}

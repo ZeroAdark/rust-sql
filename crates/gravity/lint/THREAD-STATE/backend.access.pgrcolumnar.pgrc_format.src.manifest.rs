@@ -1,0 +1,2 @@
+backend/access/pgrcolumnar/pgrc_format/src/manifest.rs	APPEND_KNOB	pgrc	test	test	#[cfg(test)] born-red knob (IXCOPYPATH_BREAK_APPEND): copypath_tests set it to break the appending rebuild's floor or order; read only by the cfg(test) append_floor
+backend/access/pgrcolumnar/pgrc_format/src/manifest.rs	APPENDS	pgrc	test	test	#[cfg(test)] count of the cfg(test) append_floor calls; copypath_tests' model check reads it to see a tail install append

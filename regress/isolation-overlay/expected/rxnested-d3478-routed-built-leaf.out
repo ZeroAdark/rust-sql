@@ -1,0 +1,108 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1bal s2mrg s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO hb_t t USING hb_s s ON t.tid = s.sid AND t.tid IN (2, 6) WHEN MATCHED THEN UPDATE SET tid = tid + 1, bal = bal + delta, val = val || ' moved';
+QUERY PLAN                                                  
+------------------------------------------------------------
+Merge on hb_t t                                             
+  Merge on hb_t2 t_1                                        
+  ->  Hash Join                                             
+        Hash Cond: (s.sid = t_1.tid)                        
+        ->  Seq Scan on hb_s s                              
+        ->  Hash                                            
+              ->  Seq Scan on hb_t2 t_1                     
+                    Filter: (tid = ANY ('{2,6}'::integer[]))
+(8 rows)
+
+step s1bal: UPDATE hb_t SET bal = bal + 1 WHERE tid = 2;
+step s2mrg: MERGE INTO hb_t t USING hb_s s ON t.tid = s.sid AND t.tid IN (2, 6) WHEN MATCHED THEN UPDATE SET tid = tid + 1, bal = bal + delta, val = val || ' moved'; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT tableoid::regclass, * FROM hb_t ORDER BY tid, val;
+tableoid|tid|bal|val     
+--------+---+---+--------
+hb_t1   |  1|100|v1      
+hb_t3   |  3|221|v2 moved
+hb_t3   |  3|300|v3      
+hb_t1   |  4|400|v4      
+hb_t2   |  5|500|v5      
+hb_t3   |  7|660|v6 moved
+hb_t3   |  7|700|v7      
+hb_t3   |  8|800|v8      
+(8 rows)
+
+
+starting permutation: s1key s2mrg s1c s2sel
+step s1key: UPDATE hb_t SET tid = 5 WHERE tid = 2;
+step s2mrg: MERGE INTO hb_t t USING hb_s s ON t.tid = s.sid AND t.tid IN (2, 6) WHEN MATCHED THEN UPDATE SET tid = tid + 1, bal = bal + delta, val = val || ' moved'; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT tableoid::regclass, * FROM hb_t ORDER BY tid, val;
+tableoid|tid|bal|val     
+--------+---+---+--------
+hb_t1   |  1|100|v1      
+hb_t3   |  3|300|v3      
+hb_t1   |  4|400|v4      
+hb_t2   |  5|200|v2      
+hb_t2   |  5|500|v5      
+hb_t3   |  7|660|v6 moved
+hb_t3   |  7|700|v7      
+hb_t3   |  8|800|v8      
+(8 rows)
+
+
+starting permutation: s1del s2mrg s1c s2sel
+step s1del: DELETE FROM hb_t WHERE tid = 2;
+step s2mrg: MERGE INTO hb_t t USING hb_s s ON t.tid = s.sid AND t.tid IN (2, 6) WHEN MATCHED THEN UPDATE SET tid = tid + 1, bal = bal + delta, val = val || ' moved'; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT tableoid::regclass, * FROM hb_t ORDER BY tid, val;
+tableoid|tid|bal|val     
+--------+---+---+--------
+hb_t1   |  1|100|v1      
+hb_t3   |  3|300|v3      
+hb_t1   |  4|400|v4      
+hb_t2   |  5|500|v5      
+hb_t3   |  7|660|v6 moved
+hb_t3   |  7|700|v7      
+hb_t3   |  8|800|v8      
+(7 rows)
+
+
+starting permutation: s1move s2mrg s1c s2sel
+step s1move: UPDATE hb_t SET tid = 4 WHERE tid = 2;
+step s2mrg: MERGE INTO hb_t t USING hb_s s ON t.tid = s.sid AND t.tid IN (2, 6) WHEN MATCHED THEN UPDATE SET tid = tid + 1, bal = bal + delta, val = val || ' moved'; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2sel: SELECT tableoid::regclass, * FROM hb_t ORDER BY tid, val;
+tableoid|tid|bal|val
+--------+---+---+---
+hb_t1   |  1|100|v1 
+hb_t3   |  3|300|v3 
+hb_t1   |  4|200|v2 
+hb_t1   |  4|400|v4 
+hb_t2   |  5|500|v5 
+hb_t2   |  6|600|v6 
+hb_t3   |  7|700|v7 
+hb_t3   |  8|800|v8 
+(8 rows)
+
+
+starting permutation: s1src s2mrg s1c s2sel
+step s1src: UPDATE hb_s SET delta = 999 WHERE sid = 2;
+step s2mrg: MERGE INTO hb_t t USING hb_s s ON t.tid = s.sid AND t.tid IN (2, 6) WHEN MATCHED THEN UPDATE SET tid = tid + 1, bal = bal + delta, val = val || ' moved';
+step s1c: COMMIT;
+step s2sel: SELECT tableoid::regclass, * FROM hb_t ORDER BY tid, val;
+tableoid|tid|bal|val     
+--------+---+---+--------
+hb_t1   |  1|100|v1      
+hb_t3   |  3|220|v2 moved
+hb_t3   |  3|300|v3      
+hb_t1   |  4|400|v4      
+hb_t2   |  5|500|v5      
+hb_t3   |  7|660|v6 moved
+hb_t3   |  7|700|v7      
+hb_t3   |  8|800|v8      
+(8 rows)
+

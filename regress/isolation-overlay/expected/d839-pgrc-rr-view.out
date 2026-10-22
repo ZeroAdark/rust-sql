@@ -1,0 +1,98 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1rr s1agg s2copy s1copy s1agg s1c ragg
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|   sum|min| max|sum
+-----+------+---+----+---
+ 1000|500500|  1|1000|  0
+(1 row)
+
+step s2copy: COPY d839_t FROM PROGRAM 'seq 5001 6000 | sed s/$/,2/' WITH (DELIMITER ',');
+step s1copy: COPY d839_t FROM PROGRAM 'seq 1001 2000 | sed s/$/,1/' WITH (DELIMITER ',');
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|    sum|min| max| sum
+-----+-------+---+----+----
+ 2000|2001000|  1|2000|1000
+(1 row)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|    sum|min| max| sum
+-----+-------+---+----+----
+ 3000|7501500|  1|6000|3000
+(1 row)
+
+
+starting permutation: s1rr s1agg s2copy s1copy s1copy s1agg s1c ragg
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|   sum|min| max|sum
+-----+------+---+----+---
+ 1000|500500|  1|1000|  0
+(1 row)
+
+step s2copy: COPY d839_t FROM PROGRAM 'seq 5001 6000 | sed s/$/,2/' WITH (DELIMITER ',');
+step s1copy: COPY d839_t FROM PROGRAM 'seq 1001 2000 | sed s/$/,1/' WITH (DELIMITER ',');
+step s1copy: COPY d839_t FROM PROGRAM 'seq 1001 2000 | sed s/$/,1/' WITH (DELIMITER ',');
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|    sum|min| max| sum
+-----+-------+---+----+----
+ 3000|3501500|  1|2000|2000
+(1 row)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|    sum|min| max| sum
+-----+-------+---+----+----
+ 4000|9002000|  1|6000|4000
+(1 row)
+
+
+starting permutation: s1ser s1agg s2copy s1copy s1agg s1c ragg
+step s1ser: BEGIN ISOLATION LEVEL SERIALIZABLE;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|   sum|min| max|sum
+-----+------+---+----+---
+ 1000|500500|  1|1000|  0
+(1 row)
+
+step s2copy: COPY d839_t FROM PROGRAM 'seq 5001 6000 | sed s/$/,2/' WITH (DELIMITER ',');
+step s1copy: COPY d839_t FROM PROGRAM 'seq 1001 2000 | sed s/$/,1/' WITH (DELIMITER ',');
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|    sum|min| max| sum
+-----+-------+---+----+----
+ 2000|2001000|  1|2000|1000
+(1 row)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|    sum|min| max| sum
+-----+-------+---+----+----
+ 3000|7501500|  1|6000|3000
+(1 row)
+
+
+starting permutation: s1rc s1agg s2copy s1copy s1agg s1c ragg
+step s1rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|   sum|min| max|sum
+-----+------+---+----+---
+ 1000|500500|  1|1000|  0
+(1 row)
+
+step s2copy: COPY d839_t FROM PROGRAM 'seq 5001 6000 | sed s/$/,2/' WITH (DELIMITER ',');
+step s1copy: COPY d839_t FROM PROGRAM 'seq 1001 2000 | sed s/$/,1/' WITH (DELIMITER ',');
+step s1agg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|    sum|min| max| sum
+-----+-------+---+----+----
+ 3000|7501500|  1|6000|3000
+(1 row)
+
+step s1c: COMMIT;
+step ragg: SELECT count(*), sum(id), min(id), max(id), sum(v) FROM d839_t;
+count|    sum|min| max| sum
+-----+-------+---+----+----
+ 3000|7501500|  1|6000|3000
+(1 row)
+

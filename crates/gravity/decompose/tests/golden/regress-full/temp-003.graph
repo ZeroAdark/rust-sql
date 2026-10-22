@@ -1,0 +1,9 @@
+-- regress-full-temp-003
+-- SELECT pg_relation_size('test_temp') / current_setting('block_size')::int8 > 200;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op419(op687(fn2332(c2205:40287, c25:'main'), io20(fn2077(c25:'block_size'))), c23:200))
+  outs 1=w1:val
+mapped: Result

@@ -1,0 +1,4 @@
+path	crates/backend/access/pgrcolumnar/pgrc_codec/src/bytefor.rs
+method	std::clone::Clone::clone	2
+type	std::sync::Arc	1
+type	std::vec::Vec	1

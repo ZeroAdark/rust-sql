@@ -7,129 +7,62 @@ fn find(name: &str) -> GucSetting {
         .unwrap_or_else(|| panic!("no built-in GUC named {name}"))
 }
 
+/// PostgreSQL's side of each table: PG 18.6's own GUCs (less its debug-build ones) and the extension GUCs this build
+/// defines statically (pg_cron's cron.*, pgvector's, the oauth test module's). auto_explain, pg_stat_statements,
+/// pg_prewarm, PL/pgSQL, pg_trgm and pgcrypto register theirs when their library loads, as PostgreSQL does, so they are
+/// not in the tables. Only a change to that side edits these.
+const PG_BOOL: usize = 121;
+const PG_INT: usize = 150;
+const PG_REAL: usize = 27;
+const PG_STRING: usize = 79;
+const PG_ENUM: usize = 43;
+
+/// pgrust-only GUCs outside the `pgrust.` and `jwt_validator.` namespaces.
+const PGRUST_UNPREFIXED: &[&str] = &[
+    "regex_engine",
+    "preload_contrib",
+    "max_active_queries",
+    "connection_queue_size",
+    "connection_queue_timeout",
+    "idle_passivate_timeout",
+    "idle_passivate_stack",
+    "catcache_size_limit",
+    "relcache_size_limit",
+    "shared_catalog_cache",
+];
+
+fn pgrust_only(name: &str) -> bool {
+    name.starts_with("pgrust.") || name.starts_with("jwt_validator.") || PGRUST_UNPREFIXED.contains(&name)
+}
+
+fn postgres_side<'a>(names: impl Iterator<Item = &'a str>) -> usize {
+    names.filter(|name| !pgrust_only(name)).count()
+}
+
 #[test]
 fn table_counts_match_compiled_backend_shape() {
-    // 41 + 1: regex_engine (re2 product dispatch, hidden).
-    // Bool: +3 over the compiled C backend for pgrust.lane_executor
-    // (pgrust-only, the lane-v2 master gate),
-    // pgrust.regex_pattern_program (pgrust-only, the anchored
-    // pattern-program regex fast tier, hidden), and
-    // pgrust.condition_cache (pgrust-only, the pgrcolumnar condition cache
-    // gate; +1 Int for its size), +3 pg_stat_statements.*
-    // (statically defined custom GUCs; no DefineCustomXxxVariable here).
-    // Int/Enum: +1 each for pg_stat_statements.max / .track;
-    // Int +1 pgrust.condition_cache_size.
-    // pgvector hnsw.*: Int +2 / Real +1 / Enum +1 (contrib GUCs defined
-    // statically here).
-    // M5-0 (pgrust-only, docs/design/m5-planner.md §2.2): Enum +1
-    // pgrust.parallel_engine, Int +1 pgrust.runtime_dop.
-    // auto_explain.* (statically defined custom GUCs, like pg_stat_statements):
-    // Bool +8, Int +2, Real +1, Enum +2.
-    // H7 (pgrust-only): String +1 pgrust.resource_counters (PGC_INTERNAL
-    // computed channel for the simharness F8 resource-baseline hook).
-    // env-to-guc train (pgrust-only; INTENTIONAL C byte-identity divergence of
-    // pg_settings / SHOW ALL — these are new pgrust.* rows for the public
-    // release, migrating former PGRUST_* env vars to registered GUCs):
-    //   Bool +2: pgrust.runtime (the runtime-pool master switch, was
-    //     PGRUST_RUNTIME) and pgrust.mem_autotune (boot memory auto-tune gate,
-    //     was PGRUST_MEM_AUTOTUNE) -> 129 + 2 = 131.
-    //   Int +8: the deferred per-arm pool-GUC recipe
-    //     (docs/design/jit-parallel-defaults.md §3): pgrust.runtime_scan_pool /
-    //     runtime_agg_pool / runtime_distinct_pool / runtime_hashjoin_pool /
-    //     runtime_sort_pool / runtime_bitmap_pool / lane_parallel_pool /
-    //     gather_fair_stride -> 154 + 8 = 162.
-    //   Total 435 + 10 = 445.
-    //   regression flip: + pgrust.runtime_vacuum_pool (Bool 131 -> 132) = 446.
-    // regression: + pgrust.regex_re2_linked (pgrust-only preset, the
-    //   RE2-linkage runtime witness; Bool 132 -> 133) = 447.
-    // regression (pgrust-only, composed at t43): the memory-watchdog
-    //   family — Bool +2 (pgrust.memory_watchdog, pgrust.memory_watchdog_dump
-    //   -> 135), Int +4 (pgrust.memory_watchdog_interval / _threshold /
-    //   _limit, plus the hidden developer hog pgrust.memory_watchdog_test_hog
-    //   -> 166) = 453.
-    // testmode M1 (pgrust-only, docs/design/test-views.md D1): the
-    //   ephemeral-database janitor — String +1 pgrust.ephemeral_db_prefix
-    //   (-> 78), Int +1 pgrust.ephemeral_db_grace (-> 167) = 455.
-    // testmode M3 (pgrust-only, docs/design/test-views.md D2): the
-    //   mint-on-connect security posture — String +1
-    //   pgrust.ephemeral_db_mint_roles (-> 79), Int +1
-    //   pgrust.ephemeral_db_max_per_role (-> 168) = 457. (The former
-    //   pgrust.ephemeral_db_default_template was DELETED with the bare
-    //   mint form, ruling 2026-08-05.)
-    // testmode D3 warm pool (pgrust-only, test-views.md warm-pool addendum):
-    //   Int +1 pgrust.ephemeral_db_pool_size (-> 169) = 458.
-    // testmode mint-strategy addendum (pgrust-only): Int +1
-    //   pgrust.ephemeral_db_wal_log_threshold (-> 170) = 459.
-    // testmode prewarm addendum (pgrust-only): Bool +1
-    //   pgrust.ephemeral_db_prewarm (-> 136) = 460.
-    // dl-verstring (pgrust-only, version-string ruling 2026-08-06): Enum +1
-    //   pgrust.version_string_style (-> 48) = 461.
-    // covdiff E1-A (pgrust-only): Bool +1 pgrust.explain_runtime_verdicts
-    //   (-> 137) = 462 — EXPLAIN display gate for runtime refusal verdicts,
-    //   default off (C-parity default output).
-    // connection-scaling D1+D6 (pgrust-only, docs/design/
-    //   connection-scaling.md): Int +3 max_active_queries,
-    //   connection_queue_size, connection_queue_timeout (-> 173) = 465.
-    // connection-scaling D3.4 (pgrust-only, same doc): Int +1
-    //   idle_passivate_timeout (-> 174) = 466.
-    // connection-scaling GUC-ification pass (pgrust-only, same doc):
-    //   Int +2 catcache_size_limit, relcache_size_limit (-> 176),
-    //   Bool +1 shared_catalog_cache (-> 138) = 469.
-    // connection-scaling wave 4 (floor work, same doc):
-    //   Bool +1 idle_passivate_stack (-> 139) = 470.
-    // heap-on-sqe v1 (pgrust-only, heap-face.md): Bool +1
-    //   pgrust.sqe_heap (-> 140) = 471 — the heap-face safety switch,
-    //   default off.
-    // sqe→main merge (pgrust-only, the sqe campaign lands): Int +1
-    //   pgrust.sqe_threads (-> 177) = 472 — the engine worker width
-    //   (0 = auto), formerly the PGRUST_SQE_THREADS env spelling.
-    // upstream 2a29b607dbbb (18.6, CVE-2026-6471): String +1
-    //   output_plugin_libraries (-> 80) = 473 — the C 18.6 GUC.
-    // audit-remediation b090 (contrib/pg_prewarm/autoprewarm.c:128 _PG_init
-    //   DefineCustomIntVariable): Int +1 pg_prewarm.autoprewarm_interval
-    //   (-> 178) = 474 — the C 18.6 custom GUC, statically defined like
-    //   auto_explain.*.
-    // audit-remediation b150 (contrib/pg_trgm/trgm_op.c:145 _PG_init, three
-    //   DefineCustomRealVariable): Real +3 pg_trgm.similarity_threshold /
-    //   word_similarity_threshold / strict_word_similarity_threshold
-    //   (-> 31) = 477 — the C 18.6 custom GUCs, statically defined like
-    //   auto_explain.*.
-    // audit-remediation b033 (contrib/pgcrypto/pgcrypto.c:70 _PG_init): Enum +1
-    //   pgcrypto.builtin_crypto_enabled (-> 49) = 478 — the C 18.6 custom GUC,
-    //   statically defined like pg_stat_statements.* / auto_explain.*.
-    // audit b013 (pl_handler.c _PG_init:158-203, statically defined like
-    //   auto_explain's): Bool +2 plpgsql.print_strict_params /
-    //   plpgsql.check_asserts (-> 142), String +2 plpgsql.extra_warnings /
-    //   plpgsql.extra_errors (-> 82), Enum +1 plpgsql.variable_conflict
-    //   (-> 50) = 483.
-    // audit-remediation w2-038 (contrib/pg_prewarm/autoprewarm.c:144 _PG_init
-    //   DefineCustomBoolVariable, PGC_POSTMASTER): Bool +1
-    //   pg_prewarm.autoprewarm (-> 143) = 484 — the autoprewarm leader gate,
-    //   statically defined like pg_prewarm.autoprewarm_interval.
-    // oauth-validator lane (pgrust-only, notes/oauth-validator-lane.md): the
-    //   in-tree jwt_validator configuration — String +7 jwt_validator.jwks_uri
-    //   / audience / identity_claim / introspection_uri /
-    //   introspection_client_id / introspection_client_secret / ca_file
-    //   (-> 89), Bool +2 jwt_validator.require_scopes / allow_insecure_http
-    //   (-> 145), Int +3 jwt_validator.clock_skew / jwks_cache_ttl /
-    //   http_timeout (-> 181) = 496. Under the oauth-test-validator feature
-    //   only: String +1 oauth_validator.authn_id, Bool +1
-    //   oauth_validator.authorize_tokens (the C test module's custom GUCs).
-    // bug-inventory 2026-09-13 batch-11 (contrib/passwordcheck/passwordcheck.c:152
-    //   _PG_init DefineCustomIntVariable, GUC_UNIT_BYTE): Int +1
-    //   passwordcheck.min_password_length (-> 182) = 497.
-    // bug-inventory 2026-09-13 batch-46 (contrib/isn/isn.c:939 _PG_init
-    //   DefineCustomBoolVariable): Bool +1 isn.weak (-> 146) = 498.
-    // connection-scaling D6 admission bypass (pgrust-only, same doc, ruling
-    //   2026-09-14): Bool +1 pgrust.admission_bypass (-> 147), String +1
-    //   pgrust.admission_bypass_applications (-> 90) = 500.
     let test_validator = usize::from(cfg!(feature = "oauth-test-validator"));
-    assert_eq!(ConfigureNamesBool.len(), 147 + test_validator);
-    assert_eq!(ConfigureNamesInt.len(), 182);
-    assert_eq!(ConfigureNamesReal.len(), 31);
-    assert_eq!(ConfigureNamesString.len(), 90 + test_validator);
-    assert_eq!(ConfigureNamesEnum.len(), 50);
-    assert_eq!(all_settings().count(), 500 + 2 * test_validator);
+    let pg_side = [
+        ("bool", postgres_side(ConfigureNamesBool.iter().map(|s| s.name)), PG_BOOL + test_validator),
+        ("int", postgres_side(ConfigureNamesInt.iter().map(|s| s.name)), PG_INT),
+        ("real", postgres_side(ConfigureNamesReal.iter().map(|s| s.name)), PG_REAL),
+        ("string", postgres_side(ConfigureNamesString.iter().map(|s| s.name)), PG_STRING + test_validator),
+        ("enum", postgres_side(ConfigureNamesEnum.iter().map(|s| s.name)), PG_ENUM),
+    ];
+    for (kind, got, want) in pg_side {
+        assert_eq!(got, want, "{kind}: PostgreSQL's side changed (a pgrust-only GUC is named pgrust.*)");
+    }
+    for name in PGRUST_UNPREFIXED {
+        assert!(all_settings().any(|s| s.name() == *name), "{name} is gone: drop it from PGRUST_UNPREFIXED");
+    }
+    assert_eq!(
+        all_settings().count(),
+        ConfigureNamesBool.len()
+            + ConfigureNamesInt.len()
+            + ConfigureNamesReal.len()
+            + ConfigureNamesString.len()
+            + ConfigureNamesEnum.len()
+    );
     assert_eq!(GucContext_Names.len(), PGC_USERSET as usize + 1);
     assert_eq!(GucSource_Names.len(), PGC_S_SESSION as usize + 1);
     assert_eq!(config_group_names.len(), DEVELOPER_OPTIONS as usize + 1);
@@ -191,6 +124,15 @@ fn common_options_are_present_with_postgres_defaults() {
         find("server_version").default_value(),
         GucDefaultValue::String(Some("18.6"))
     );
+}
+
+#[test]
+fn build_id_is_installed_once_and_named_in_the_identity() {
+    // The only test in this binary that installs a build id.
+    consts::set_pgrust_build_id(" 1a2b3c4\n");
+    consts::set_pgrust_build_id("ignored");
+    assert_eq!(consts::pgrust_build_suffix(), ", build 1a2b3c4");
+    assert_eq!(consts::pgrust_identity(), "pgrust 0.4-beta, build 1a2b3c4");
 }
 
 #[test]
@@ -387,12 +329,51 @@ fn file_copy_method_options_match_platform_clone_support() {
 }
 
 #[test]
-fn lz4_build_config_is_reflected_in_option_sets() {
-    // TOAST lz4 is implemented (lz4_flex); WAL lz4/zstd compression is not.
+fn file_extend_method_values_match_storage_layer() {
+    let opts = find("file_extend_method").options().unwrap().entries();
+    let wz = opts.iter().find(|o| o.name == "write_zeros").unwrap();
+    assert_eq!(wz.val, types_storage::FILE_EXTEND_METHOD_WRITE_ZEROS);
+    #[cfg(target_os = "linux")]
+    {
+        let pf = opts.iter().find(|o| o.name == "posix_fallocate").unwrap();
+        assert_eq!(pf.val, types_storage::FILE_EXTEND_METHOD_POSIX_FALLOCATE);
+        assert_eq!(opts[0].name, "posix_fallocate");
+    }
+    #[cfg(not(target_os = "linux"))]
+    assert!(!opts.iter().any(|o| o.name == "posix_fallocate"));
+    assert_eq!(
+        find("file_extend_method").default_value(),
+        GucDefaultValue::Enum(types_storage::DEFAULT_FILE_EXTEND_METHOD)
+    );
+}
+
+#[test]
+fn recovery_init_sync_method_offers_syncfs_where_available() {
+    let opts = find("recovery_init_sync_method").options().unwrap().entries();
+    let syncfs = opts.iter().find(|o| o.name == "syncfs");
+    #[cfg(target_os = "linux")]
+    assert_eq!(syncfs.unwrap().val, types_storage::DATA_DIR_SYNC_METHOD_SYNCFS);
+    #[cfg(not(target_os = "linux"))]
+    assert!(syncfs.is_none());
+}
+
+#[test]
+fn lz4_zstd_build_config_is_reflected_in_option_sets() {
     let opts = find("default_toast_compression").options().unwrap().entries();
     assert!(opts.iter().any(|o| o.name == "lz4" && o.val == consts::TOAST_LZ4_COMPRESSION));
+    // guc_tables.c wal_compression_options with USE_LZ4 and USE_ZSTD.
     let wal = find("wal_compression").options().unwrap().entries();
-    assert!(!wal.iter().any(|o| o.name == "lz4" || o.name == "zstd"));
+    let visible: Vec<_> = wal.iter().filter(|o| !o.hidden).map(|o| (o.name, o.val)).collect();
+    assert_eq!(
+        visible,
+        [
+            ("pglz", consts::WAL_COMPRESSION_PGLZ),
+            ("lz4", consts::WAL_COMPRESSION_LZ4),
+            ("zstd", consts::WAL_COMPRESSION_ZSTD),
+            ("on", consts::WAL_COMPRESSION_PGLZ),
+            ("off", consts::WAL_COMPRESSION_NONE),
+        ]
+    );
     let GucSetting::Enum(style) = find("IntervalStyle") else {
         panic!("IntervalStyle should be an enum GUC");
     };
@@ -403,139 +384,67 @@ fn lz4_build_config_is_reflected_in_option_sets() {
     assert_eq!(stack.boot_val, GucDefaultValue::Int(100));
 }
 
-// contrib/pg_prewarm/autoprewarm.c:128-138 (_PG_init): DefineCustomIntVariable
-// "pg_prewarm.autoprewarm_interval" — default 300, range 0..INT_MAX/1000,
-// PGC_SIGHUP, GUC_UNIT_S, no hooks. Defined before the
-// process_shared_preload_libraries_in_progress check, so every backend that
-// loads the library has it (SHOW -> "5min"; SET -> 55P02 "cannot be changed
-// now"). Regression for audit-18.6 b090
-// (a186-candidate-fp-contrib-pg_prewarm-autoprewarm-0ff933858b20be8ef07c-1):
-// pgrust knew no such GUC (42704 on SHOW, a bare placeholder on SET).
-#[test]
-fn pg_prewarm_autoprewarm_interval_matches_autoprewarm_c() {
-    let GucSetting::Int(interval) = find("pg_prewarm.autoprewarm_interval") else {
-        panic!("pg_prewarm.autoprewarm_interval should be an int GUC");
-    };
-    assert_eq!(interval.context, PGC_SIGHUP);
-    assert_eq!(interval.group, CUSTOM_OPTIONS);
-    assert_eq!(interval.flags, GUC_UNIT_S);
-    assert_eq!(interval.boot_val, GucDefaultValue::Int(300));
-    assert_eq!(interval.min, 0);
-    assert_eq!(interval.max, i32::MAX / 1000);
-    assert_eq!(
-        interval.short_desc,
-        Some("Sets the interval between dumps of shared buffers")
-    );
-    assert_eq!(
-        interval.long_desc,
-        Some("If set to zero, time-based dumping is disabled.")
-    );
-    assert!(interval.check_hook.is_none());
-    assert!(interval.assign_hook.is_none());
-    assert!(interval.show_hook.is_none());
-    assert_eq!(interval.variable.c_symbol(), "autoprewarm_interval");
-}
+
 
 // "pg_prewarm.autoprewarm" — autoprewarm.c:144-153 (_PG_init, preload arm):
 // DefineCustomBoolVariable, default true, PGC_POSTMASTER, flags 0, no hooks,
 // "Starts the autoprewarm worker." Regression for audit-18.6 w2-038
 // (a186-candidate-fp-contrib-pg_prewarm-autoprewarm-95c06274c0f082d7efcc-1):
 // pgrust knew no such GUC (42704 on SHOW under shared_preload_libraries).
-// contrib/isn/isn.c:939 _PG_init DefineCustomBoolVariable "isn.weak" —
-// PGC_USERSET, default false, no hooks. bug-inventory 2026-09-13 batch-46
-// (regression): pgrust kept it as an unchecked string placeholder,
-// so SET isn.weak = 'garbage' succeeded instead of raising 22023.
 #[test]
-fn isn_weak_matches_isn_c() {
-    let GucSetting::Bool(weak) = find("isn.weak") else {
-        panic!("isn.weak should be a bool GUC");
-    };
-    assert_eq!(weak.context, PGC_USERSET);
-    assert_eq!(weak.group, CUSTOM_OPTIONS);
-    assert_eq!(weak.flags, 0);
-    assert_eq!(weak.boot_val, GucDefaultValue::Bool(false));
-    assert_eq!(weak.short_desc, Some("Accept input with invalid ISN check digits."));
-    assert!(weak.long_desc.is_none());
-    assert!(weak.check_hook.is_none());
-    assert!(weak.assign_hook.is_none());
-    assert!(weak.show_hook.is_none());
-    assert_eq!(weak.variable.c_symbol(), "g_weak");
+fn extension_settings_are_not_builtins() {
+    for prefix in ["plpgsql.", "pg_stat_statements.", "pg_trgm.", "pgcrypto.", "auto_explain.", "pg_prewarm.", "isn.", "passwordcheck.", "jwt_validator."] {
+        assert!(all_settings().all(|setting| !setting.name().starts_with(prefix)));
+    }
 }
 
+// wio P180: the retired lane-v2 settings are not built-ins, so SET/SHOW treat
+// them as C treats any unknown custom setting (placeholders).
 #[test]
-fn pg_prewarm_autoprewarm_matches_autoprewarm_c() {
-    let GucSetting::Bool(apw) = find("pg_prewarm.autoprewarm") else {
-        panic!("pg_prewarm.autoprewarm should be a bool GUC");
-    };
-    assert_eq!(apw.context, PGC_POSTMASTER);
-    assert_eq!(apw.group, CUSTOM_OPTIONS);
-    assert_eq!(apw.flags, 0);
-    assert_eq!(apw.boot_val, GucDefaultValue::Bool(true));
-    assert_eq!(apw.short_desc, Some("Starts the autoprewarm worker."));
-    assert!(apw.long_desc.is_none());
-    assert!(apw.check_hook.is_none());
-    assert!(apw.assign_hook.is_none());
-    assert!(apw.show_hook.is_none());
-    assert_eq!(apw.variable.c_symbol(), "autoprewarm");
-}
-
-// contrib/pg_trgm/trgm_op.c:145-190 (_PG_init): three DefineCustomRealVariable
-// GUCs — pg_trgm.similarity_threshold (0.3f), word_similarity_threshold
-// (0.6f), strict_word_similarity_threshold (0.5f); each 0.0 .. 1.0,
-// PGC_USERSET, flags 0, no hooks, the C bootValue being the float literal
-// widened to double. Regression for audit-18.6 b150
-// (a186-candidate-fp-contrib-pg_trgm-trgm_op-d92afd7477a9c4dfd11d-1):
-// pgrust rode the placeholder store, so SET accepted any value.
-#[test]
-fn pg_trgm_thresholds_match_trgm_op_c() {
-    for (name, boot, desc, symbol) in [
-        (
-            "pg_trgm.similarity_threshold",
-            0.3f32 as f64,
-            "Sets the threshold used by the % operator.",
-            "similarity_threshold",
-        ),
-        (
-            "pg_trgm.word_similarity_threshold",
-            0.6f32 as f64,
-            "Sets the threshold used by the <% operator.",
-            "word_similarity_threshold",
-        ),
-        (
-            "pg_trgm.strict_word_similarity_threshold",
-            0.5f32 as f64,
-            "Sets the threshold used by the <<% operator.",
-            "strict_word_similarity_threshold",
-        ),
+fn retired_lanev2_settings_are_not_builtins() {
+    for name in [
+        "pgrust.lane_executor",
+        "pgrust.explain_runtime_verdicts",
+        "pgrust.parallel_engine",
+        "pgrust.runtime_dop",
+        "pgrust.runtime_scan_pool",
+        "pgrust.runtime_agg_pool",
+        "pgrust.runtime_distinct_pool",
+        "pgrust.runtime_hashjoin_pool",
+        "pgrust.runtime_sort_pool",
+        "pgrust.runtime_bitmap_pool",
+        "pgrust.lane_parallel_pool",
     ] {
-        let GucSetting::Real(t) = find(name) else {
-            panic!("{name} should be a real GUC");
-        };
-        assert_eq!(t.context, PGC_USERSET, "{name}");
-        assert_eq!(t.group, CUSTOM_OPTIONS, "{name}");
-        assert_eq!(t.flags, 0, "{name}");
-        assert_eq!(t.boot_val, GucDefaultValue::Real(boot), "{name}");
-        assert_eq!(t.min, 0.0, "{name}");
-        assert_eq!(t.max, 1.0, "{name}");
-        assert_eq!(t.short_desc, Some(desc), "{name}");
-        assert_eq!(t.long_desc, Some("Valid range is 0.0 .. 1.0."), "{name}");
-        assert!(t.check_hook.is_none(), "{name}");
-        assert!(t.assign_hook.is_none(), "{name}");
-        assert!(t.show_hook.is_none(), "{name}");
-        assert_eq!(t.variable.c_symbol(), symbol, "{name}");
+        assert!(all_settings().all(|setting| setting.name() != name), "{name}");
     }
 }
 
 #[test]
-fn passwordcheck_min_password_length_matches_passwordcheck_c() {
-    let GucSetting::Int(len) = find("passwordcheck.min_password_length") else {
-        panic!("passwordcheck.min_password_length should be an int GUC");
+fn buffer_pool_resize_settings() {
+    let GucSetting::Int(max) = find("pgrust.buffer_pool_max") else {
+        panic!("pgrust.buffer_pool_max should be an int GUC");
     };
-    assert_eq!(len.context, PGC_SUSET);
-    assert_eq!(len.flags, GUC_UNIT_BYTE);
-    assert_eq!(len.boot_val, GucDefaultValue::Int(8));
-    assert_eq!(len.min, 0);
-    assert_eq!(len.max, i32::MAX);
+    assert_eq!(max.context, PGC_POSTMASTER);
+    assert_eq!(max.boot_val, GucDefaultValue::Int(0));
+    assert_eq!(max.flags & GUC_UNIT_BLOCKS, GUC_UNIT_BLOCKS);
+    assert_eq!(max.group, CUSTOM_OPTIONS);
+    let GucSetting::Int(rate) = find("pgrust.buffer_pool_drain_rate") else {
+        panic!("pgrust.buffer_pool_drain_rate should be an int GUC");
+    };
+    assert_eq!(rate.context, PGC_SIGHUP);
+    assert_eq!(rate.boot_val, GucDefaultValue::Int(50000));
+    let thp = find("pgrust.buffer_pool_thp");
+    assert_eq!(thp.default_value(), GucDefaultValue::Bool(false));
+    assert_eq!(thp.context(), PGC_POSTMASTER);
+    let relocate = find("pgrust.buffer_pool_relocate");
+    assert_eq!(relocate.default_value(), GucDefaultValue::Bool(true));
+    assert_eq!(relocate.context(), PGC_SIGHUP);
+}
+
+// wio P181: regex_engine is listed in pg_settings / SHOW ALL.
+#[test]
+fn regex_engine_is_shown_in_pg_settings() {
+    assert_eq!(find("regex_engine").flags() & GUC_NO_SHOW_ALL, 0);
 }
 
 #[test]
@@ -546,4 +455,99 @@ fn writeback_flush_after_defaults_follow_sync_file_range() {
         assert_eq!(g.boot_val, GucDefaultValue::Int(if linux { on_linux } else { 0 }), "{name}");
         assert_eq!(g.max, consts::WRITEBACK_MAX_PENDING_FLUSHES, "{name}");
     }
+}
+
+#[test]
+fn condition_cache_modes_and_boolean_aliases() {
+    use ConditionCacheMode::{Full, Granule, Off, Rows};
+    let GucSetting::Enum(setting) = find("pgrust.condition_cache") else {
+        panic!("pgrust.condition_cache should be an enum GUC");
+    };
+    assert_eq!(setting.boot_val, GucDefaultValue::Enum(Full as i32));
+    assert_eq!(setting.context, PGC_USERSET);
+    let GucEnumOptions::Inline(options) = setting.options else {
+        panic!("condition cache modes should be inline");
+    };
+    assert_eq!(options.iter().filter(|o| !o.hidden).map(|o| o.name).collect::<Vec<_>>(), ["off", "granule", "rows", "full"]);
+    assert!(!options.iter().any(|o| o.name == "o"));
+    for (names, mode) in [
+        (&["off", "false", "no", "0", "f", "fa", "fal", "fals", "n", "of"][..], Off),
+        (&["granule"][..], Granule),
+        (&["rows"][..], Rows),
+        (&["full", "on", "true", "yes", "1", "t", "tr", "tru", "y", "ye"][..], Full),
+    ] {
+        for name in names {
+            let option = options.iter().find(|o| o.name == *name).unwrap();
+            assert_eq!(option.val, mode as i32, "{name}");
+            backing::set_pgrust_condition_cache(option.val);
+            assert_eq!(condition_cache_mode(), mode, "{name}");
+        }
+    }
+    backing::set_pgrust_condition_cache(Full as i32);
+}
+
+#[test]
+fn startup_prewarm_is_independent_of_condition_cache_mode() {
+    let setting = find("pgrust.gravity_prewarm");
+    assert_eq!(setting.default_value(), GucDefaultValue::Bool(true));
+    assert_eq!(setting.context(), PGC_POSTMASTER);
+    let saved = backing::pgrust_gravity_prewarm();
+    for on in [false, true] {
+        backing::set_pgrust_gravity_prewarm(on);
+        for mode in [ConditionCacheMode::Off, ConditionCacheMode::Granule, ConditionCacheMode::Rows, ConditionCacheMode::Full] {
+            backing::set_pgrust_condition_cache(mode as i32);
+            assert_eq!(backing::pgrust_gravity_prewarm(), on);
+        }
+    }
+    backing::set_pgrust_gravity_prewarm(saved);
+    backing::set_pgrust_condition_cache(ConditionCacheMode::Full as i32);
+}
+
+#[test]
+fn condition_cache_unlogged_boots_on_for_every_session() {
+    // an UNLOGGED pgrcolumnar relation enters the condition cache by default; a session may still SET it off (a
+    // temporary relation never enters: hosts GranuleRecipe::cond_unlogged)
+    let g = find("pgrust.condition_cache_unlogged");
+    assert_eq!(g.default_value(), GucDefaultValue::Bool(true));
+    assert_eq!(g.context(), PGC_USERSET);
+    assert!(backing::pgrust_condition_cache_unlogged());
+}
+
+#[test]
+fn condition_cache_size_defaults_to_the_derived_budget_and_shows_the_budget_in_effect() {
+    let GucSetting::Int(t) = find("pgrust.condition_cache_size") else {
+        panic!("pgrust.condition_cache_size should be an int GUC");
+    };
+    assert!(matches!(t.boot_val, GucDefaultValue::Int(-1)));
+    assert_eq!((t.min, t.flags & GUC_UNIT_KB), (-1, GUC_UNIT_KB));
+    assert_eq!(backing::pgrust_condition_cache_size(), -1);
+    // nothing installed the derivation: the default keeps nothing
+    assert_eq!((pgrust_condition_cache_bytes(), show_pgrust_condition_cache_size().as_str()), (0, "0"));
+    hooks::derive_pgrust_condition_cache_size.install_if_absent(|| 3 << 30);
+    assert_eq!((pgrust_condition_cache_bytes(), show_pgrust_condition_cache_size().as_str()), (3 << 30, "3145728"));
+    // a set value as set, a bare number of kB (D3791: pg_settings.setting carries no unit)
+    for (kb, shown) in [(102400, "102400"), (1536, "1536"), (1 << 30, "1073741824"), (0, "0")] {
+        backing::set_pgrust_condition_cache_size(kb);
+        assert_eq!((pgrust_condition_cache_bytes(), show_pgrust_condition_cache_size().as_str()), (kb as u64 * 1024, shown));
+    }
+    backing::set_pgrust_condition_cache_size(-1);
+    assert_eq!(pgrust_condition_cache_bytes(), 3 << 30);
+}
+
+#[test]
+fn zone_store_and_dict_filter_cache_boot_on_and_are_independent_of_the_mode() {
+    for name in ["pgrust.zone_store", "pgrust.dict_filter_cache"] {
+        let setting = find(name);
+        assert_eq!(setting.default_value(), GucDefaultValue::Bool(true), "{name}");
+        assert_eq!(setting.context(), PGC_USERSET, "{name}");
+    }
+    backing::set_pgrust_zone_store(false);
+    backing::set_pgrust_dict_filter_cache(false);
+    for mode in [ConditionCacheMode::Off, ConditionCacheMode::Granule, ConditionCacheMode::Rows, ConditionCacheMode::Full] {
+        backing::set_pgrust_condition_cache(mode as i32);
+        assert!(!backing::pgrust_zone_store() && !backing::pgrust_dict_filter_cache());
+    }
+    backing::set_pgrust_zone_store(true);
+    backing::set_pgrust_dict_filter_cache(true);
+    backing::set_pgrust_condition_cache(ConditionCacheMode::Full as i32);
 }

@@ -1,0 +1,10 @@
+# DAY-ORDER addendum 9 (USER 2026-10-05, replaces M6-FOLD R2's "every column float" for these): a two-argument covar_* / corr /
+# regr_* accumulates float8 whatever its argument types, so one over an int column compares within V4R-2's tolerance too
+sql: SELECT covar_pop(y, i) FROM st;
+schema: CREATE TABLE st (id int, k int, y float8, x float8, i int4, n numeric);
+class: unordered
+verdict: match
+[pg]
+-24.55107644800035
+[got]
+-24.551076448000316

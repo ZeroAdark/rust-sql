@@ -1,0 +1,120 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2u s3sel
+step s2u: UPDATE dws_tgt t SET d = s.cnt FROM (SELECT *, (SELECT count(*) FROM dws_ref r WHERE r.ab = s.a AND r.cd = s.c) cnt FROM dws_src s) s WHERE t.a = s.a;
+step s3sel: SELECT a, b, c, d FROM dws_tgt ORDER BY a;
+ a|b|  c|d
+--+-+---+-
+ 1|1| 10|1
+ 2|2| 20|0
+ 3|3| 30|3
+ 4|0| 40|3
+ 5|1| 50|3
+ 6|2| 60|3
+ 7|3| 70|3
+ 8|0| 80|3
+ 9|1| 90|3
+10|2|100|3
+11|3|110|3
+12|0|120|3
+(12 rows)
+
+
+starting permutation: s2d s3sel
+step s2d: DELETE FROM dws_tgt t USING (SELECT *, (SELECT count(*) FROM dws_ref r WHERE r.ab = s.a AND r.cd = s.c) cnt FROM dws_src s) s WHERE t.a = s.a AND t.b < s.cnt;
+step s3sel: SELECT a, b, c, d FROM dws_tgt ORDER BY a;
+ a|b|  c|d
+--+-+---+-
+ 1|1| 10|1
+ 2|2| 20|2
+ 3|3| 30|0
+ 7|3| 70|1
+11|3|110|2
+(5 rows)
+
+
+starting permutation: s1b s1c s1k s1d s2u s1m s3sel
+step s1b: BEGIN;
+step s1c: UPDATE dws_tgt SET c = c + 1 WHERE a IN (2, 5);
+step s1k: UPDATE dws_tgt SET a = 50 WHERE a = 6;
+step s1d: DELETE FROM dws_tgt WHERE a = 7;
+step s2u: UPDATE dws_tgt t SET d = s.cnt FROM (SELECT *, (SELECT count(*) FROM dws_ref r WHERE r.ab = s.a AND r.cd = s.c) cnt FROM dws_src s) s WHERE t.a = s.a; <waiting ...>
+step s1m: COMMIT;
+step s2u: <... completed>
+step s3sel: SELECT a, b, c, d FROM dws_tgt ORDER BY a;
+ a|b|  c|d
+--+-+---+-
+ 1|1| 10|1
+ 2|2| 21|0
+ 3|3| 30|3
+ 4|0| 40|3
+ 5|1| 51|3
+ 8|0| 80|3
+ 9|1| 90|3
+10|2|100|3
+11|3|110|3
+12|0|120|3
+50|2| 60|0
+(11 rows)
+
+
+starting permutation: s1b s1c s1k s1d s2u s1a s3sel
+step s1b: BEGIN;
+step s1c: UPDATE dws_tgt SET c = c + 1 WHERE a IN (2, 5);
+step s1k: UPDATE dws_tgt SET a = 50 WHERE a = 6;
+step s1d: DELETE FROM dws_tgt WHERE a = 7;
+step s2u: UPDATE dws_tgt t SET d = s.cnt FROM (SELECT *, (SELECT count(*) FROM dws_ref r WHERE r.ab = s.a AND r.cd = s.c) cnt FROM dws_src s) s WHERE t.a = s.a; <waiting ...>
+step s1a: ROLLBACK;
+step s2u: <... completed>
+step s3sel: SELECT a, b, c, d FROM dws_tgt ORDER BY a;
+ a|b|  c|d
+--+-+---+-
+ 1|1| 10|1
+ 2|2| 20|0
+ 3|3| 30|3
+ 4|0| 40|3
+ 5|1| 50|3
+ 6|2| 60|3
+ 7|3| 70|3
+ 8|0| 80|3
+ 9|1| 90|3
+10|2|100|3
+11|3|110|3
+12|0|120|3
+(12 rows)
+
+
+starting permutation: s1b s1f s1d s2d s1m s3sel
+step s1b: BEGIN;
+step s1f: UPDATE dws_tgt SET b = 9 WHERE a = 5;
+step s1d: DELETE FROM dws_tgt WHERE a = 7;
+step s2d: DELETE FROM dws_tgt t USING (SELECT *, (SELECT count(*) FROM dws_ref r WHERE r.ab = s.a AND r.cd = s.c) cnt FROM dws_src s) s WHERE t.a = s.a AND t.b < s.cnt; <waiting ...>
+step s1m: COMMIT;
+step s2d: <... completed>
+step s3sel: SELECT a, b, c, d FROM dws_tgt ORDER BY a;
+ a|b|  c|d
+--+-+---+-
+ 1|1| 10|1
+ 2|2| 20|2
+ 3|3| 30|0
+ 5|9| 50|2
+11|3|110|2
+(5 rows)
+
+
+starting permutation: s1b s1c s2d s1m s3sel
+step s1b: BEGIN;
+step s1c: UPDATE dws_tgt SET c = c + 1 WHERE a IN (2, 5);
+step s2d: DELETE FROM dws_tgt t USING (SELECT *, (SELECT count(*) FROM dws_ref r WHERE r.ab = s.a AND r.cd = s.c) cnt FROM dws_src s) s WHERE t.a = s.a AND t.b < s.cnt; <waiting ...>
+step s1m: COMMIT;
+step s2d: <... completed>
+step s3sel: SELECT a, b, c, d FROM dws_tgt ORDER BY a;
+ a|b|  c|d
+--+-+---+-
+ 1|1| 10|1
+ 2|2| 21|2
+ 3|3| 30|0
+ 7|3| 70|1
+11|3|110|2
+(5 rows)
+

@@ -2,9 +2,6 @@
 #![allow(non_upper_case_globals)]
 #![allow(clippy::result_large_err)]
 
-//! xid8funcs.c: pg_snapshot I/O + pg_current_xact_id / pg_current_snapshot /
-//! pg_visible_in_snapshot / pg_xact_status and the legacy txid_* aliases.
-
 use ::mcx::{Mcx, PgVec};
 use ::types_core::xact::{TransactionIdIsNormal, TransactionIdIsValid};
 use ::types_core::TransactionId;
@@ -21,8 +18,6 @@ pub const USE_BSEARCH_IF_NXIP_GREATER: u32 = 30;
 
 const MAX_ALLOC_SIZE: usize = 0x3fff_ffff;
 
-// Payload offsets inside VARDATA: nxip u32 at 0, xmin u64 at 4, xmax u64 at
-// 12, xip[] u64s from 20 (C's struct offsets minus the 4-byte length word).
 const SNAP_DATA_HDR: usize = 4 + 8 + 8;
 
 pub const PG_SNAPSHOT_MAX_NXIP: usize = (MAX_ALLOC_SIZE - (4 + SNAP_DATA_HDR)) / 8;
@@ -32,7 +27,6 @@ const _: () = assert!(
     "possible overflow in pg_current_snapshot()"
 );
 
-// Borrowed decode of a detoasted pg_snapshot payload (VARDATA bytes).
 #[derive(Clone, Copy)]
 pub struct SnapView<'a> {
     data: &'a [u8],
@@ -76,7 +70,6 @@ const fn fxid_is_valid(fxid: u64) -> bool {
     TransactionIdIsValid(fxid as TransactionId)
 }
 
-// access/transam.h FullTransactionIdFromAllowableAt over a pre-read nextXid.
 #[inline]
 pub fn full_xid_from_allowable_at(next_full_xid: u64, xid: TransactionId) -> u64 {
     if !TransactionIdIsNormal(xid) {
@@ -120,12 +113,7 @@ pub fn is_visible_fxid(value: u64, snap: &SnapView<'_>) -> bool {
     }
 }
 
-// libc strtou64(str, &endp, 10): skip isspace, optional sign (a '-' negates
-// mod 2^64), digits; end == 0 if no digits. On overflow libc returns
-// ULLONG_MAX WITHOUT applying the minus sign (glibc strtol_l.c returns on
-// the overflow branch before its negation; POSIX ERANGE clamp) — negating
-// the clamped value gave 1 for ">=2^64-magnitude" negative inputs, a real
-// divergence found by snapio_diff (fuzz/DIVERGENCE-snapio.md, 2026-07-30).
+// On overflow libc returns ULLONG_MAX WITHOUT applying the minus sign.
 pub fn strtou64(s: &[u8]) -> (u64, usize) {
     let mut i = 0usize;
     while i < s.len() && matches!(s[i], b' ' | b'\t' | b'\n' | b'\x0b' | b'\x0c' | b'\r') {
@@ -179,11 +167,17 @@ pub fn snapshot_image<'mcx>(
 #[cold]
 #[inline(never)]
 fn bad_format_err(input: &[u8]) -> PgError {
-    // xid8funcs.c:323 "%s": the input bytes verbatim (SQL_ASCII high bytes).
     let err = match core::str::from_utf8(input) {
         Ok(s) => PgError::error(format!("invalid input syntax for type pg_snapshot: \"{s}\"")),
         Err(_) => {
-            let mut msg = b"invalid input syntax for type pg_snapshot: \"".to_vec();
+            const PREFIX: &[u8] = b"invalid input syntax for type pg_snapshot: \"";
+            let mut msg: Vec<u8> = Vec::new();
+            // The message is built while reporting: an allocation failure
+            // here is the out-of-memory ERROR itself.
+            if msg.try_reserve_exact(PREFIX.len() + input.len() + 1).is_err() {
+                return ::mcx::oom_named("ErrorContext", PREFIX.len() + input.len() + 1);
+            }
+            msg.extend_from_slice(PREFIX);
             msg.extend_from_slice(input);
             msg.push(b'"');
             PgError::error_raw_message(msg)
@@ -192,7 +186,7 @@ fn bad_format_err(input: &[u8]) -> PgError {
     err.with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
-// parse_snapshot: "xmin:xmax:xip,xip,..."; Ok(None) = soft-reported failure.
+// Ok(None) = soft-reported failure.
 pub fn parse_snapshot<'mcx>(
     mcx: Mcx<'mcx>,
     input: &[u8],
@@ -243,9 +237,8 @@ pub fn parse_snapshot<'mcx>(
     Ok(Some(snapshot_image(mcx, xmin, xmax, &xips)?))
 }
 
-// xid8funcs.c:442 appends through a StringInfo: the buffer grows with the
-// decimal text actually written, so only the output itself is held to
-// MaxAllocSize, never a 21-bytes-per-xip estimate.
+// The buffer grows with the decimal text actually written, so only the output
+// itself is held to MaxAllocSize, never a 21-bytes-per-xip estimate.
 pub fn snapshot_out_bytes<'mcx>(mcx: Mcx<'mcx>, snap: &SnapView<'_>) -> PgResult<PgVec<'mcx, u8>> {
     let nxip = snap.nxip() as usize;
     let mut out: PgVec<'mcx, u8> = ::mcx::vec_with_capacity_in(mcx, out_reservation(nxip))?;
@@ -362,8 +355,7 @@ pub fn pg_current_snapshot<'mcx>(mcx: Mcx<'mcx>) -> PgResult<::datum::Varlena<'m
         xips.push(full_xid_from_allowable_at(next_fxid, cur.xip[i]));
     }
 
-    // sort_snapshot: ascending + dedup (2PC prepare can transiently duplicate
-    // an XID between a backend and its dummy PGPROC).
+    // 2PC prepare can transiently duplicate an XID between a backend and its dummy PGPROC.
     xips.sort_unstable();
     let mut w = 0usize;
     for r in 0..xips.len() {

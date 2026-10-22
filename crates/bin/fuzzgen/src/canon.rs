@@ -775,7 +775,7 @@ mod tests {
 
     fn ctx() -> CanonCtx {
         CanonCtx {
-            libdir: Some("/home/dev/dev/pg186-install/lib/postgresql".to_string()),
+            libdir: Some("/usr/local/pg186/lib/postgresql".to_string()),
             pgdata: Some("/tmp/u186-audit/dfmgr-verify/data/".to_string()),
             dlsuffix: ".dylib".to_string(),
             type_names: BTreeMap::from([(28290, "fz_udt".to_string())]),
@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn paths_keep_file_name_and_suffix() {
-        let m = "could not find function \"no_such_symbol\" in file \"/home/dev/dev/pg186-install/lib/postgresql/pg_trgm.dylib\"";
+        let m = "could not find function \"no_such_symbol\" in file \"/usr/local/pg186/lib/postgresql/pg_trgm.dylib\"";
         assert_eq!(
             mask_text(m, &ctx()),
             "could not find function \"no_such_symbol\" in file \"<LIBDIR>/pg_trgm.dylib\""
@@ -861,7 +861,7 @@ mod tests {
         let mut f = ErrFields::new();
         f.insert('S', b("ERROR"));
         f.insert('C', b("42883"));
-        f.insert('M', b("could not find function \"x\" in file \"/home/dev/dev/pg186-install/lib/postgresql/pg_trgm.dylib\""));
+        f.insert('M', b("could not find function \"x\" in file \"/usr/local/pg186/lib/postgresql/pg_trgm.dylib\""));
         f.insert('F', b("dfmgr.c"));
         f.insert('L', b("131"));
         f.insert('R', b("lookup_external_function"));

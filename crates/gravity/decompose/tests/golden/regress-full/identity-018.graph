@@ -1,0 +1,11 @@
+-- regress-full-identity-018
+-- SELECT tableoid::regclass, f1, f2, f3, pg_typeof(f3) FROM pitest1_p2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1130 end=sink
+  nodes n0@0
+  source range rel=29200 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=relabel2205(v1.-6), 2=v1.3, 3=v1.2, 4=v1.1, 5=fn1619(v1.1))
+  outs 1=w4:val 2=w8:val 3=vl:win/page 4=w8:val 5=w4:val
+scan-lanes node=0 rti=1 rel=29200 tableoid
+mapped: SeqScan

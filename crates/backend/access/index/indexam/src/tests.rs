@@ -87,7 +87,7 @@ fn make<'mcx>(mcx: Mcx<'mcx>, oid: Oid, name: &str, relkind: u8, relam: Oid) -> 
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -249,18 +249,30 @@ fn getnext_tid_sequence_kill_reset_and_exhaustion() {
 }
 
 #[test]
-fn pgstat_probe_counts_only_when_enabled() {
+fn pgstat_counts_are_visible_before_close_only_when_enabled() {
     install();
     let ctx = MemoryContext::new("t");
     let (_heap, idx, mut scan) = scan_pair(ctx.mcx());
     mock(&mut scan).tids = vec![tid(0, 1), tid(0, 2)];
 
+    let before = pgstat::relation::find_tabstat_entry(IDX).unwrap_or_default();
     index_getnext_tid(&mut scan, ForwardScanDirection).unwrap();
-    assert_eq!(scan.xs_pgstat_index_tuples, 0);
+    assert_eq!(pgstat::relation::find_tabstat_entry(IDX).unwrap_or_default(), before);
 
     idx.pgstat_enabled.set(true);
     index_getnext_tid(&mut scan, ForwardScanDirection).unwrap();
-    assert_eq!(scan.xs_pgstat_index_tuples, 1);
+    let counts = pgstat::relation::find_tabstat_entry(IDX).unwrap();
+    assert_eq!(counts.tuples_returned, before.tuples_returned + 1);
+    pgstat_count_heap_fetch(&mut scan);
+    assert_eq!(
+        pgstat::relation::find_tabstat_entry(IDX).unwrap().tuples_fetched,
+        before.tuples_fetched + 1,
+    );
+    index_endscan(scan).unwrap();
+    assert_eq!(
+        pgstat::relation::find_tabstat_entry(IDX).unwrap().tuples_returned,
+        before.tuples_returned + 1,
+    );
 }
 
 #[test]
@@ -444,4 +456,16 @@ fn gin_getnext_tid_returns_missing_procedure_without_advancing_scan() {
     );
     assert!(scan.kill_prior_tuple);
     assert!(scan.xs_heap_continue);
+}
+
+#[test]
+fn rearm_recomputes_recovery_flags() {
+    install();
+    let ctx = MemoryContext::new("t");
+    let (heap, idx, mut scan) = scan_pair(ctx.mcx());
+    scan.xactStartedInRecovery = true;
+    scan.ignore_killed_tuples = false;
+    index_rearmscan(&mut scan, &heap, &idx, snapshot(ctx.mcx())).unwrap();
+    assert!(!scan.xactStartedInRecovery);
+    assert!(scan.ignore_killed_tuples);
 }

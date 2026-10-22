@@ -70,7 +70,6 @@ fn setup() {
         xact_seams::get_current_command_id::set(|_| Ok(CURCID.get()));
         xact_seams::get_current_transaction_nest_level::set(|| 1);
         xact_seams::is_in_parallel_mode::set(|| false);
-        // Export/Import surface (the inc-5 fd-reroute tests).
         xact_seams::get_top_transaction_id_if_any::set(|| InvalidTransactionId);
         xact_seams::is_sub_transaction::set(|| false);
         xact_seams::get_current_sub_transaction_id::set(|| 1);
@@ -135,14 +134,11 @@ fn statement_flow_hits_reuse_fastpath() {
     let hits0 = procarray::snapshot_reuse_hits();
     let repl0 = static_snapshot_replacements();
 
-    // Statement 1: acquire, push active (copies), drop the returned handle.
     let snap = GetTransactionSnapshot().unwrap();
     PushActiveSnapshot(&snap).unwrap();
     drop(snap);
     PopActiveSnapshot().unwrap();
 
-    // Statement 2 in the same transaction: same static struct, no xact
-    // completed => procarray's GetSnapshotDataReuse must be CALLED and hit.
     let snap = GetTransactionSnapshot().unwrap();
     drop(snap);
 
@@ -190,7 +186,6 @@ fn active_stack_copies_static_and_tracks_counts() {
     assert!(ActiveSnapshotSet());
 
     let active = GetActiveSnapshot();
-    // The static must have been copied on push.
     assert!(!Rc::ptr_eq(&active, &snap));
     assert!(active.copied);
     assert_eq!(active.active_count.get(), 1);
@@ -223,7 +218,6 @@ fn register_unregister_lifecycle() {
     assert!(HaveRegisteredOrActiveSnapshot());
     drop(snap);
 
-    // The registration pins MyProc->xmin while it lives.
     let pinned = lmgr_proc::GetPGProcByNumber(me).xmin.read();
     assert_ne!(pinned, InvalidTransactionId);
 
@@ -246,7 +240,6 @@ fn catalog_snapshot_registers_and_invalidates() {
     let cat = GetCatalogSnapshot(1259).unwrap();
     assert!(with_state(|s| s.catalog_valid));
     assert!(with_state(|s| s.registered.len() == 1));
-    // Catalog-only registration doesn't count for HaveRegisteredOrActive.
     assert!(!HaveRegisteredOrActiveSnapshot());
     drop(cat);
 
@@ -332,7 +325,6 @@ fn xid_in_mvcc_snapshot_matches_c_shape() {
     assert!(XidInMVCCSnapshot(16, &snap).unwrap()); // in subxip
     assert!(!XidInMVCCSnapshot(13, &snap).unwrap());
 
-    // Overflowed: subxip is ignored; xid maps to itself via subtrans stub.
     snap.suboverflowed = true;
     assert!(!XidInMVCCSnapshot(16, &snap).unwrap());
     assert!(XidInMVCCSnapshot(15, &snap).unwrap());
@@ -438,10 +430,9 @@ fn panic_inside_with_state_does_not_poison_the_session() {
     let _g = test_lock();
     my_backend();
 
-    // Wedge regression (d1a86f62f): a converted-panic ERROR raised inside the
-    // with_state closure (the GetSafeSnapshot loud shape) unwinds to the
-    // main-loop catch; every later snapmgr call must still work, or the
-    // session errors "with_state re-entered" forever.
+    // A panic raised inside the with_state closure unwinds to the main-loop
+    // catch; every later snapmgr call must still work, or the session errors
+    // "with_state re-entered" forever.
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         with_state(|_| -> () { panic!("injected loud inside with_state") })
     }));
@@ -456,15 +447,6 @@ fn panic_inside_with_state_does_not_poison_the_session() {
     assert!(with_state(|s| s.active.is_empty() && s.registered.is_empty()));
     assert!(!with_state(|s| s.first_snapshot_set));
 }
-
-// ---------------------------------------------------------------------------
-// pg_snapshots fs surface (the P4 inc-5 fd-reroute, closing the inc-4
-// ledger's "ImportSnapshot read surface" allowlist rows): the export/import
-// files are DATADIR-RELATIVE and must resolve through the fd -> vfs choke
-// (the relmapper/initfile dataplane precedent) — PosixVfs in the entered
-// real cwd under the default cfg, the SimVfs namespace (which has no cwd:
-// relative paths resolve at the sim root) under --cfg pgrust_sim.
-// ---------------------------------------------------------------------------
 
 fn cpath(path: &str) -> std::ffi::CString {
     std::ffi::CString::new(path).unwrap()
@@ -518,9 +500,6 @@ fn export_snapshot_and_eoxact_unlink_are_fd_routed() {
     my_backend();
     let root = scratch_dir("snapexport");
     let _cwd = enter_dir(&root);
-    // The vfs domain's mirror of the relative export dir (EEXIST no-op in
-    // the entered real cwd under the default cfg; minted at the sim root
-    // under --cfg pgrust_sim).
     vfs_mkdir("pg_snapshots");
 
     let snap = GetTransactionSnapshot().unwrap();
@@ -532,13 +511,11 @@ fn export_snapshot_and_eoxact_unlink_are_fd_routed() {
         content.starts_with(b"vxid:"),
         "export file must exist in the vfs domain with the C layout"
     );
-    // The tmp staging file was renamed away (fd::pg_rename, not std::fs).
     assert!(
         vfs::open(&cpath(&format!("{path}.tmp")), libc::O_RDONLY, 0) < 0,
         "the .tmp staging file must not survive the rename"
     );
 
-    // AtEOXact_Snapshot(commit): the export file unlinks through fd::pg_unlink.
     end_xact();
     assert!(
         vfs::open(&cpath(&path), libc::O_RDONLY, 0) < 0,
@@ -558,17 +535,12 @@ fn import_snapshot_missing_file_is_fd_routed() {
     ISO_USES_XACT_SNAPSHOT.set(true);
     let err = ImportSnapshot("00000000-00000000-1").unwrap_err();
     ISO_USES_XACT_SNAPSHOT.set(false);
-    // The fd-routed open reported ENOENT: C's "snapshot does not exist" arm.
     assert!(
         err.message.contains("does not exist"),
         "unexpected ImportSnapshot error: {}",
         err.message
     );
 }
-
-// ---------------------------------------------------------------------------
-// audit-18.6 remediation b212 (fp-time-snapmgr): C-exact error channels.
-// ---------------------------------------------------------------------------
 
 static EMITTED: Mutex<Vec<(types_error::ErrorLevel, types_error::SqlState, String)>> =
     Mutex::new(Vec::new());
@@ -588,10 +560,6 @@ fn captured(f: impl FnOnce()) -> Vec<(types_error::ErrorLevel, types_error::SqlS
     std::mem::take(&mut *EMITTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
 }
 
-// snapmgr.c:1459: a read failure on an existing snapshot file is
-// elog(ERROR, "could not read file \"%s\": %m", path) — SQLSTATE XX000, not
-// errcode_for_file_access(). A directory named like a snapshot id opens
-// O_RDONLY and fails the read with EISDIR on every platform.
 #[test]
 fn import_snapshot_read_failure_is_internal_error_sqlstate() {
     let _g = test_lock();
@@ -618,9 +586,6 @@ fn import_snapshot_read_failure_is_internal_error_sqlstate() {
     );
 }
 
-// snapmgr.c:1078-1079: every ActiveSnapshotElt left on the stack at commit is
-// elog(WARNING, "snapshot %p still active", active) — the element address in
-// the message.
 #[test]
 fn eoxact_commit_warns_with_the_leftover_active_snapshot_address() {
     let _g = test_lock();
@@ -652,10 +617,6 @@ fn eoxact_commit_warns_with_the_leftover_active_snapshot_address() {
     assert!(!ActiveSnapshotSet());
 }
 
-// snapmgr.c:1606-1609: an entry of pg_snapshots/ that cannot be unlinked at
-// crash-recovery cleanup is ereport(LOG, (errcode_for_file_access(),
-// errmsg("could not remove file \"%s\": %m", buf))). A non-empty directory
-// is never unlinkable (EISDIR on Linux, EPERM on macOS).
 #[test]
 fn delete_all_exported_snapshot_files_logs_could_not_remove() {
     let _g = test_lock();
@@ -679,6 +640,57 @@ fn delete_all_exported_snapshot_files_logs_could_not_remove() {
             || *sqlstate == types_error::ERRCODE_INSUFFICIENT_PRIVILEGE,
         "errcode_for_file_access() of EISDIR/EPERM, got {sqlstate:?}"
     );
-    // The entry survives (nothing else was touched).
     assert!(vfs::open(&cpath("pg_snapshots/AAAA-junkdir/keep"), libc::O_RDONLY, 0) >= 0);
+}
+
+#[test]
+fn invalid_snapshot_identifier_error_location_matches_postgres() {
+    let _g = test_lock();
+    my_backend();
+    end_xact();
+    ISO_USES_XACT_SNAPSHOT.set(true);
+    let err = ImportSnapshot("invalid").unwrap_err();
+    ISO_USES_XACT_SNAPSHOT.set(false);
+    assert_eq!(err.sqlstate, types_error::ERRCODE_INVALID_PARAMETER_VALUE);
+    assert_eq!(err.message, "invalid snapshot identifier: \"invalid\"");
+    let location = err.location.as_ref().unwrap();
+    assert_eq!(location.filename.as_deref(), Some("snapmgr.c"));
+    assert_eq!(location.funcname.as_deref(), Some("ImportSnapshot"));
+    assert_eq!(location.lineno, 1429);
+}
+
+// wio P334: the registered-snapshot set keeps the oldest xmin at hand (C's
+// pairing heap) through arbitrary removals, including across xid wraparound.
+#[test]
+fn registered_heap_tracks_min_xmin_under_removal() {
+    let mcx: Mcx<'static> = ::mcx::session_root("regheap test").mcx();
+    let base: TransactionId = u32::MAX - 500;
+    let snaps: Vec<Snapshot> = (0..2000u32)
+        .map(|i| {
+            let mut d = SnapshotData::sentinel(mcx, types_snapshot::SnapshotType::SNAPSHOT_MVCC);
+            let x = base.wrapping_add((i * 7919) % 1000);
+            d.xmin = if x < 3 { x + 3 } else { x };
+            Rc::new(d)
+        })
+        .collect();
+    let mut heap = regheap::RegHeap::new();
+    for s in &snaps {
+        heap.push(s.clone());
+    }
+    let mut live: Vec<&Snapshot> = snaps.iter().collect();
+    let mut k = 0usize;
+    while !live.is_empty() {
+        let expect = live
+            .iter()
+            .map(|s| s.xmin)
+            .reduce(|a, b| if TransactionIdPrecedes(b, a) { b } else { a })
+            .unwrap();
+        assert_eq!(heap.min_xmin(), Some(expect));
+        k = (k + 613) % live.len();
+        let gone = live.swap_remove(k);
+        heap.remove(gone);
+        assert_eq!(gone.regd_pos.get(), types_snapshot::REGD_POS_NONE);
+        assert_eq!(heap.len(), live.len());
+    }
+    assert!(heap.is_empty());
 }

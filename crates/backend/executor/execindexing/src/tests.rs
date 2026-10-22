@@ -20,7 +20,6 @@ use ::types_nbtree::{
     XLOG_BTREE_NEWROOT, XLOG_BTREE_SPLIT_L, XLOG_BTREE_SPLIT_R,
 };
 use ::types_nodes::node_tree::Node;
-use ::types_nodes::plannodes::{IndexScan, Plan, Scan};
 use ::types_nodes::primnodes::OpExpr;
 use ::types_nodes::NodeList;
 use ::types_rel::{
@@ -32,8 +31,6 @@ use ::types_snapshot::{SnapshotData, SnapshotType};
 use ::types_storage::bufpage::SizeOfPageHeaderData;
 use ::types_tuple::tupdesc::CompactAttribute;
 use ::types_tuple::{NameData, TupleDescData};
-use executils::EStateData;
-use nodeindexscan::{exec_end_index_scan, exec_index_scan, exec_init_index_scan_rel};
 
 const HEAP_OID: Oid = 61000;
 const IDX_OID: Oid = 61001;
@@ -45,7 +42,6 @@ const F_INT4EQ: Oid = 65;
 const OP_INT4GT: Oid = 521;
 const F_INT4GT: Oid = 147;
 const F_BTINT4CMP: Oid = 351;
-const INDEX_VAR: i32 = -3;
 
 #[repr(align(8))]
 struct TestPage([u8; BLCKSZ]);
@@ -143,10 +139,6 @@ macro_rules! seam_default {
 }
 
 fn install() {
-    // YBGC: the b139 witnesses' cancel-aware CHECK_FOR_INTERRUPTS and progress recorder go in FIRST, for every
-    // test: test_boot::boot_wal below stubs check_for_interrupts with a no-op when none is installed, so when a
-    // plain test took SERIAL first the no-op stuck for the process and the cancel witness saw Ok (36 % under load).
-    // Harmless elsewhere: the seam errors only while CANCEL_PENDING is armed (the cancel witness, under SERIAL).
     static PRE: Once = Once::new();
     PRE.call_once(|| {
         seam_default!(postgres_seams::check_for_interrupts, || {
@@ -462,7 +454,7 @@ fn heap_relation_data(mcx: Mcx<'_>) -> RelationData<'_> {
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -525,7 +517,7 @@ fn index_relation_data(mcx: Mcx<'_>, unique: bool) -> RelationData<'_> {
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -567,65 +559,33 @@ fn static_mvcc_snapshot() -> Rc<SnapshotData<'static>> {
     Rc::new(SnapshotData::sentinel(ctx.mcx(), SnapshotType::SNAPSHOT_MVCC))
 }
 
-fn matching_tlist<'mcx>(mcx: Mcx<'mcx>) -> NodeList<'mcx> {
-    let var = Node::mk_var(mcx, 1, 1, INT4OID, -1, 0, 0).unwrap();
-    let tle = Node::mk_target_entry(mcx, var, 1, None, false).unwrap();
-    NodeList::make1(mcx, tle).unwrap()
-}
-
-fn indexqual<'mcx>(mcx: Mcx<'mcx>, varno: i32, opno: Oid, opfuncid: Oid, k: i32) -> NodeList<'mcx> {
-    let var = Node::mk_var(mcx, varno, 1, INT4OID, -1, 0, 0).unwrap();
-    let c = Node::mk_const(mcx, INT4OID, -1, 0, 4, Datum::from_i32(k), false, true).unwrap();
-    let args = NodeList::make2(mcx, var, c).unwrap();
-    let op = Node::mk(
-        mcx,
-        OpExpr {
-            opno,
-            opfuncid,
-            opresulttype: 16,
-            opretset: false,
-            opcollid: 0,
-            inputcollid: 0,
-            args,
-            location: -1,
-        },
-    )
-    .unwrap();
-    NodeList::make1(mcx, op).unwrap()
-}
-
-fn mk_index_scan<'mcx>(mcx: Mcx<'mcx>, opno: Oid, opfuncid: Oid, k: i32) -> IndexScan<'mcx> {
-    IndexScan {
-        scan: Scan {
-            plan: Plan { targetlist: matching_tlist(mcx), ..Default::default() },
-            scanrelid: 1,
-        },
-        indexid: IDX_OID,
-        indexqual: indexqual(mcx, INDEX_VAR, opno, opfuncid, k),
-        indexqualorig: indexqual(mcx, 1, opno, opfuncid, k),
-        indexorderby: NodeList::nil(),
-        indexorderbyorig: NodeList::nil(),
-        indexorderbyops: Default::default(),
-        indexorderdir: 1,
-    }
-}
-
 fn scan_values<'mcx>(mcx: Mcx<'mcx>, opno: Oid, opfuncid: Oid, k: i32) -> Vec<i32> {
-    let node = mk_index_scan(mcx, opno, opfuncid, k);
-    let rel = Relation::open(heap_relation_data(mcx), None);
+    let strategy: u16 = match opno {
+        OP_INT4EQ => 3,
+        OP_INT4GT => 5,
+        _ => panic!("scan_values: operator {opno}"),
+    };
+    let heap = Relation::open(heap_relation_data(mcx), None);
     let index_rel = Relation::open(index_relation_data(mcx, UNIQUE_IDX.with(Cell::get)), None);
-    let mut estate = EStateData::new_in(mcx);
-    estate.es_snapshot = Some(static_mvcc_snapshot());
-    let mut state = exec_init_index_scan_rel(mcx, &node, &mut estate, rel, index_rel).unwrap();
+    let mut key = ::types_scan::scankey::ScanKeyData::empty();
+    key.sk_attno = 1;
+    key.sk_strategy = strategy;
+    key.sk_subtype = INT4OID;
+    fmgr_core::fmgr_info_into(opfuncid, &mut key.sk_func).unwrap();
+    key.sk_argument = Datum::from_i32(k);
+    let keys = [key];
+    let mut scan = indexam::index_beginscan(mcx, &heap, &index_rel, static_mvcc_snapshot(), 1, 0).unwrap();
+    indexam::index_rescan(&mut scan, Some(&keys), None).unwrap();
+    let mut slot = exectuples::make_tuple_table_slot(mcx, TupleSlotKind::BufferHeapTuple, Some(heap.rd_att.clone()));
     let mut out = Vec::new();
-    while let Some(id) = exec_index_scan(&mut state, &mut estate).unwrap() {
+    while indexam::index_getnext_slot(mcx, &mut scan, ::types_scan::sdir::ForwardScanDirection, &mut slot).unwrap() {
         let mut isnull = false;
-        let v = exectuples::slot_getattr(estate.slot_mut(id), 1, &mut isnull);
+        let v = exectuples::slot_getattr(&mut slot, 1, &mut isnull);
         assert!(!isnull);
         out.push(v.as_i32());
     }
-    exec_end_index_scan(&mut state).unwrap();
-    estate.exec_reset_tuple_table(false);
+    exectuples::exec_clear_tuple(&mut slot, mcx);
+    indexam::index_endscan(scan).unwrap();
     out
 }
 
@@ -748,7 +708,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A pending query cancel for the harness's check_for_interrupts seam
 /// (installed first in `install()`, BEFORE test_boot, so the boot stub
-/// stays out whatever test runs first: YBGC). Deliberately NOT InterruptPending: the heapam/nbtree wrappers
+/// stays out whatever test runs first: D834). Deliberately NOT InterruptPending: the heapam/nbtree wrappers
 /// gate their seam call on that global, so only a direct per-tuple
 /// CHECK_FOR_INTERRUPTS() (index.c:3272) reaches the seam here.
 static CANCEL_PENDING: AtomicBool = AtomicBool::new(false);
@@ -1187,6 +1147,7 @@ mod rem_w2_011_index_unchanged {
             ii_WithoutOverlaps: false,
             ii_CheckedUnchanged: false,
             ii_IndexUnchanged: false,
+            ii_ParallelWorkers: 0,
         }
     }
 

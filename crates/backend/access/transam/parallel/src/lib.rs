@@ -240,6 +240,8 @@ pub struct ParallelContext {
     nknown_attached_workers: i32,
     shared: Option<Arc<ParallelShared>>,
     shared_key: Option<u64>,
+    // parallel.c:195 pcxt->error_context_stack.
+    error_context_mark: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,7 +267,7 @@ thread_local! {
     static NEXT_PCXT_ID: Cell<u64> = const { Cell::new(1) };
     static MY_WORKER_SHARED: RefCell<Option<Arc<ParallelShared>>> =
         const { RefCell::new(None) };
-    // regression: the leader park loop's stall clock, kept across quanta
+    // GL-SYNCWEDGE-1: the leader park loop's stall clock, kept across quanta
     // (see wait_on_my_latch). NON-SESSION TLS, and declared inside this block
     // rather than as its own so the TLS census gains no new row — the
     // eoxact_parts.rs/lanetable precedent recorded in session/src/tests.rs.
@@ -292,7 +294,6 @@ pgsync::process_global! {
 
 const UNPORTED_INTERNAL_WORKERS: &[&str] = &[
     "ParallelQueryMain",
-    "_bt_parallel_build_main",
     "_brin_parallel_build_main",
     "_gin_parallel_build_main",
 ];
@@ -356,9 +357,10 @@ fn LookupParallelWorkerFunction(library_name: &str, function_name: &str) -> PgRe
     if UNPORTED_INTERNAL_WORKERS.contains(&function_name) {
         // parallel.c:1660 finds these in InternalParallelWorkers[] and runs
         // them; the ported gangs register their own entrypoints (nbtsort
-        // pool main, ParallelQueryMain) and brin/gin builds run serial, so a
-        // request for the C name is an unported feature: a typed refusal
-        // with the C-shaped error surface, never a panic.
+        // pool main), brin/gin builds run serial and ParallelQueryMain left
+        // with the row executor, so a request for the C name is an unported
+        // feature: a typed refusal with the C-shaped error surface, never a
+        // panic.
         return Err(ereport(ERROR)
             .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
             .errmsg(format!("parallel worker function \"{function_name}\" is not supported"))
@@ -413,6 +415,7 @@ pub fn CreateParallelContext(
             nknown_attached_workers: 0,
             shared: None,
             shared_key: None,
+            error_context_mark: elog::context_stack_mark(),
         })
     });
     PCXT_COUNT.with(|c| c.set(c.get() + 1));
@@ -445,13 +448,13 @@ pub fn InitializeParallelDSM(id: ParallelContextId) -> PgResult<()> {
     let (temp_ns, temp_toast_ns) = catalog_namespace::GetTempNamespaceState();
 
     let tstate = {
-        let mut buf = vec![0u8; xact::EstimateTransactionStateSpace()];
+        let mut buf = ::mcx::std_vec_from_elem("ParallelContext", 0u8, xact::EstimateTransactionStateSpace())?;
         let n = xact::SerializeTransactionState(&mut buf)?;
         buf.truncate(n);
         buf
     };
     let clientconninfo = {
-        let mut buf = vec![0u8; miscinit::EstimateClientConnectionInfoSpace()];
+        let mut buf = ::mcx::std_vec_from_elem("ParallelContext", 0u8, miscinit::EstimateClientConnectionInfoSpace())?;
         miscinit::SerializeClientConnectionInfo(&mut buf);
         buf
     };
@@ -462,9 +465,9 @@ pub fn InitializeParallelDSM(id: ParallelContextId) -> PgResult<()> {
         None
     };
 
-    let mut error_senders = Vec::with_capacity(nworkers.max(0) as usize);
-    let mut receivers = Vec::with_capacity(nworkers.max(0) as usize);
-    let mut worker_attached = Vec::with_capacity(nworkers.max(0) as usize);
+    let mut error_senders = ::mcx::std_vec_with_capacity("ParallelContext", nworkers.max(0) as usize)?;
+    let mut receivers = ::mcx::std_vec_with_capacity("ParallelContext", nworkers.max(0) as usize)?;
+    let mut worker_attached = ::mcx::std_vec_with_capacity("ParallelContext", nworkers.max(0) as usize)?;
     for _ in 0..nworkers {
         let (tx, rx) = pgsync::mailbox(Some(PARALLEL_ERROR_QUEUE_MSGS));
         error_senders.push(Mutex::new(Some(tx)));
@@ -550,7 +553,7 @@ pub fn shared_for(id: ParallelContextId) -> Arc<ParallelShared> {
     with_pcxt(id, |p| p.shared.clone().expect("InitializeParallelDSM not run"))
 }
 
-/// regression change 2 (pointer-passing, not DSM ritual): build the
+/// GL-STMTTASK-2 change 2 (pointer-passing, not DSM ritual): build the
 /// query-task binder target for ONE dop-1 statement task WITHOUT the
 /// parallel-context ceremony — no pcxt-list entry, no error mailboxes, no
 /// worker bookkeeping, no SHARED_REGISTRY key, no DestroyParallelContext
@@ -593,13 +596,13 @@ pub fn statement_task_shared(
     let (temp_ns, temp_toast_ns) = catalog_namespace::GetTempNamespaceState();
 
     let tstate = {
-        let mut buf = vec![0u8; xact::EstimateTransactionStateSpace()];
+        let mut buf = ::mcx::std_vec_from_elem("ParallelContext", 0u8, xact::EstimateTransactionStateSpace())?;
         let n = xact::SerializeTransactionState(&mut buf)?;
         buf.truncate(n);
         buf
     };
     let clientconninfo = {
-        let mut buf = vec![0u8; miscinit::EstimateClientConnectionInfoSpace()];
+        let mut buf = ::mcx::std_vec_from_elem("ParallelContext", 0u8, miscinit::EstimateClientConnectionInfoSpace())?;
         miscinit::SerializeClientConnectionInfo(&mut buf);
         buf
     };
@@ -682,7 +685,7 @@ pub fn set_private_shared(shared: &Arc<ParallelShared>, private: Arc<dyn Any + S
     *shared.private.lock().unwrap_or_else(|e| e.into_inner()) = Some(private);
 }
 
-/// regression: sever the engagement's back-edges at teardown. The
+/// GL-SIMPLEWEDGE-1: sever the engagement's back-edges at teardown. The
 /// arm payload (`set_private*`) holds the shared by Arc and the shared's
 /// `private` holds the payload back — a strong cycle that outlives the
 /// engagement (C has no analog: the DSM segment dies at
@@ -784,7 +787,7 @@ pub fn wait_parallel_finish_quantum() -> PgResult<()> {
 /// source (an absent or fully-mismatched worker set may never touch the
 /// board), so the leader's park must not outlive the claim deadline its
 /// loop enforces — an unbounded quantum turned the deadline into "one full
-/// MQ-recheck period" (regression). Same Err propagation contract as the
+/// MQ-recheck period" (GL-ZSTALL-1). Same Err propagation contract as the
 /// unbounded quantum (a raised cancel disposition surfaces from the latch
 /// sleep and must abort the ceremony).
 pub fn wait_parallel_finish_quantum_bounded(max_ms: i64) -> PgResult<()> {
@@ -927,11 +930,16 @@ pub fn LaunchParallelWorkers(id: ParallelContextId) -> PgResult<i32> {
             }
         }
     }
-    with_pcxt(id, |p| {
+    with_pcxt(id, |p| -> PgResult<()> {
         p.nworkers_launched = launched;
-        p.known_attached_workers = vec![false; p.nworkers_to_launch as usize];
+        p.known_attached_workers = ::mcx::std_vec_from_elem(
+            "ParallelContext",
+            false,
+            p.nworkers_to_launch as usize,
+        )?;
         p.nknown_attached_workers = 0;
-    });
+        Ok(())
+    })?;
     gtrace("l.launch.end");
     Ok(launched)
 }
@@ -1001,12 +1009,12 @@ const WAIT_EVENT_BGWORKER_STARTUP: u32 = PG_WAIT_IPC + 6;
 // PARALLEL_FINISH's index in wait_event_names.txt's IPC section. It is 40:
 // index 32 is LOGICAL_SYNC_STATE_CHANGE, and every leader parked here used to
 // publish itself in pg_stat_activity as a logical-replication sync wait
-// (regression). scripts/lint-waitevent-tags.sh pins the whole family.
+// (GL-SYNCWEDGE-1). scripts/lint-waitevent-tags.sh pins the whole family.
 pub const WAIT_EVENT_PARALLEL_FINISH: u32 = PG_WAIT_IPC + 40;
 
 /// One LOG line describing why this leader is still parked: the same evidence
 /// the Gather leader's report carries, for the parallel-finish/attach loops.
-/// The 12m53s production wedge (regression) produced none of this.
+/// The 12m53s production wedge (GL-SYNCWEDGE-1) produced none of this.
 fn report_park_stall(wait_event: u32, waited_ms: i64) {
     let mut msg = format!(
         "parallel leader park stall self-report: wait_event={} waited_ms={waited_ms} \
@@ -1063,7 +1071,7 @@ fn wait_on_my_latch(wait_event: u32) -> PgResult<()> {
     // raise aborts the ceremony, and a leftover set latch only costs one
     // spurious wake on the next wait.
     //
-    // regression: the clock is kept ACROSS quanta and the report closure
+    // GL-SYNCWEDGE-1: the clock is kept ACROSS quanta and the report closure
     // actually says something. Building a fresh StallDetector here re-armed
     // its 60 s deadline once per 1000 ms recheck, so the deadline could never
     // mature; the closure was `|_| {}`, so nothing would have been printed if
@@ -1215,7 +1223,7 @@ pub fn DestroyParallelContext(id: ParallelContextId) -> PgResult<()> {
     g::HoldInterrupts();
     let result = wait_for_workers_to_exit(handles);
     g::ResumeInterrupts();
-    // regression: the arm payload stored by set_private holds this
+    // GL-SIMPLEWEDGE-1: the arm payload stored by set_private holds this
     // shared by Arc while `private` holds the payload back — sever the
     // cycle now that every worker has exited (C-exact lifetime: the DSM
     // segment dies at DestroyParallelContext).
@@ -1310,10 +1318,18 @@ fn process_parallel_messages_guts() -> PgResult<()> {
                                     // justification for suicide (C 1167).
                                     e.level = ERROR;
                                 }
-                                append_parallel_worker_context(&mut e);
+                                prepare_relayed_worker_report(&mut e);
+                                elog::apply_emit_context_callbacks_below(
+                                    &mut e,
+                                    with_pcxt(id, |p| p.error_context_mark),
+                                );
+                                e.context_abandoned = true;
                                 return Err(e);
                             }
-                            WorkerMessage::Notice(e) => emit_relayed_worker_notice(e),
+                            WorkerMessage::Notice(e) => emit_relayed_worker_notice(
+                                e,
+                                with_pcxt(id, |p| p.error_context_mark),
+                            ),
                             WorkerMessage::Progress { index, incr } => {
                                 backend_progress::pgstat_progress_incr_param(
                                     index as usize,
@@ -1348,13 +1364,90 @@ fn relayed_notice_level(level: ErrorLevel) -> ErrorLevel {
     if level <= DEBUG1 { DEBUG1 } else { level }
 }
 
-pub fn emit_relayed_worker_notice(mut e: Box<PgError>) {
+/// parallel.c:1180-1200: re-thrown under the context stack saved when the
+/// parallel context was created (`context_mark`).
+pub fn emit_relayed_worker_notice(mut e: Box<PgError>, context_mark: u64) {
     e.level = relayed_notice_level(e.level);
-    append_parallel_worker_context(&mut e);
+    prepare_relayed_worker_report(&mut e);
+    elog::apply_emit_context_callbacks_below(&mut e, context_mark);
     elog::emit_error_report_for(&e);
 }
 
-fn append_parallel_worker_context(e: &mut PgError) {
+/// A pool helper thread's client-bound reports below ERROR, captured as C's
+/// pq_redirect_to_shm_mq captures a worker's, for the parked leader to
+/// re-emit: helpers have no leader message queue of their own.
+pub struct PoolNoticeRelay(Arc<Mutex<Vec<Box<PgError>>>>, u64);
+
+impl Default for PoolNoticeRelay {
+    fn default() -> Self {
+        PoolNoticeRelay(Arc::default(), elog::context_stack_mark())
+    }
+}
+
+struct RelayScope {
+    prev_dest: types_dest::CommandDest,
+    prev_redirect: Option<elog::FrontendRedirect>,
+}
+
+impl Drop for RelayScope {
+    fn drop(&mut self) {
+        elog::set_frontend_redirect(self.prev_redirect.take());
+        elog::config::set_where_to_send_output(self.prev_dest);
+    }
+}
+
+impl PoolNoticeRelay {
+    pub fn capture<T>(&self, f: impl FnOnce() -> T) -> T {
+        let q = Arc::clone(&self.0);
+        let prev_dest = elog::config::where_to_send_output();
+        elog::config::set_where_to_send_output(types_dest::CommandDest::Remote);
+        let prev_redirect = elog::set_frontend_redirect(Some(Box::new(move |e: &PgError| {
+            if e.level < ERROR {
+                q.lock().unwrap_or_else(|p| p.into_inner()).push(Box::new(e.clone()));
+            }
+        })));
+        let _scope = RelayScope { prev_dest, prev_redirect };
+        f()
+    }
+
+    fn take(&self) -> Vec<Box<PgError>> {
+        core::mem::take(&mut *self.0.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+
+    /// HandleParallelMessage's relay of a launched worker's notices.
+    pub fn emit_as_worker_reports(&self) {
+        for e in self.take() {
+            emit_relayed_worker_notice(e, self.1);
+        }
+    }
+
+    /// The helper did work C's leader does itself (the morselized heap
+    /// scan): the report is the leader's own, at its own level; the helper
+    /// already wrote the server log.
+    pub fn emit_as_leader_reports(&self) {
+        for mut e in self.take() {
+            e.output_to_server = Some(false);
+            e.output_to_client = Some(elog::should_output_to_client(e.level));
+            elog::emit_error_report_for(&e);
+        }
+    }
+}
+
+/// HandleParallelMessage's shaping of a worker ERROR (level clamp and the
+/// "parallel worker" context line) for one that reaches the leader through
+/// a pool pass's error slot instead of the error queue.
+pub fn mark_pool_worker_error(e: &mut PgError) {
+    if e.level > ERROR {
+        e.level = ERROR;
+    }
+    if guc_tables::vars::debug_parallel_query.read() != DEBUG_PARALLEL_REGRESS {
+        e.add_context_line("parallel worker");
+    }
+}
+
+fn prepare_relayed_worker_report(e: &mut PgError) {
+    e.output_to_server = Some(elog::should_output_to_server(e.level));
+    e.output_to_client = Some(elog::should_output_to_client(e.level));
     if guc_tables::vars::debug_parallel_query.read() != DEBUG_PARALLEL_REGRESS {
         e.add_context_line("parallel worker");
     }
@@ -1539,12 +1632,10 @@ pub fn ParallelWorkerMain(main_arg: u64) -> PgResult<()> {
         // ERROR would resurrect the exit this thread is committed to (the
         // deferred callback drain runs at the thread top). The FATAL report
         // already reached the leader through the redirect above; tell the
-        // leader we are gone and keep unwinding.
-        Err(payload)
-            if payload.is::<ipc::ProcExitThread>()
-                || payload.is::<types_error::PanicExitThread>()
-                || payload.is::<ipc::KilledBySignal>() =>
-        {
+        // leader we are gone and keep unwinding. D2933: a plain panic is C's
+        // abort() in the worker, the same road as a PANIC (the leader hears
+        // we are gone; the thread dies as crashed, the crash restart follows).
+        Err(payload) if !crate::standing::is_structured_error(&*payload) => {
             MY_PROGRESS_SENDER.with(|c| *c.borrow_mut() = None);
             drop(sender);
             procsignal::SendProcSignal(
@@ -1554,18 +1645,11 @@ pub fn ParallelWorkerMain(main_arg: u64) -> PgResult<()> {
             );
             MY_WORKER_SHARED.with(|s| *s.borrow_mut() = None);
             identity_reset.armed = false;
-            std::panic::resume_unwind(payload);
+            crate::standing::resume_exit_or_abort(payload);
         }
         Err(payload) => match types_error::pg_error_from_panic(payload) {
             Ok(e) => Err(Box::new(e)),
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<&str>()
-                    .map(|s| s.to_string())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "parallel worker panicked".to_string());
-                Err(Box::new(PgError::error(msg)))
-            }
+            Err(payload) => crate::standing::resume_exit_or_abort(payload),
         },
     };
 
@@ -1601,12 +1685,10 @@ pub fn ParallelWorkerMain(main_arg: u64) -> PgResult<()> {
             })) {
                 // Exit-committed unwinds (proc_exit / PANIC / crash-
                 // injected SIGKILL) keep unwinding — a park hook must not
-                // leave a dying thread alive in the pool.
-                if payload.is::<ipc::ProcExitThread>()
-                    || payload.is::<types_error::PanicExitThread>()
-                    || payload.is::<ipc::KilledBySignal>()
-                {
-                    std::panic::resume_unwind(payload);
+                // leave a dying thread alive in the pool. D2933: a plain
+                // panic is C's abort() (crash restart), never swallowed.
+                if !crate::standing::is_structured_error(&*payload) {
+                    crate::standing::resume_exit_or_abort(payload);
                 }
             }
         }
@@ -1663,6 +1745,9 @@ fn parallel_worker_body(shared: &Arc<ParallelShared>, _worker_number: i32) -> Pg
     }
 
     xact::SetParallelStartTimestamps(shared.xact_ts, shared.stmt_ts);
+    // G1-A: a launched worker's memory is its leader's statement's
+    let leader = memledger::charge::context_of(query_task_guard::leader_account(shared)).0;
+    let _account = memledger::charge::enter_as(leader);
 
     let entrypt = LookupParallelWorkerFunction(&shared.library_name, &shared.function_name)?;
 
@@ -1674,6 +1759,10 @@ fn parallel_worker_body(shared: &Arc<ParallelShared>, _worker_number: i32) -> Pg
     // InitPostgres for a database-less worker; our InitPostgres has no such
     // arm yet, so InvalidOid (the substrate e2e) skips the connect step.
     if shared.database_id != InvalidOid {
+        if init_small::wretain::warm_claim() && init_small::wretain::caches_tainted() {
+            inval::local::InvalidateSystemCaches()?;
+            init_small::wretain::clear_caches_taint();
+        }
         gtrace("w.conn.begin");
         bgworker::BackgroundWorkerInitializeConnectionByOid(
             shared.database_id,
@@ -1774,6 +1863,7 @@ fn parallel_worker_body(shared: &Arc<ParallelShared>, _worker_number: i32) -> Pg
     // before applying the new leader's pin.
     if init_small::wretain::warm_claim() {
         guc::store::reset_store_to_process_base();
+        pseudorandomfuncs::reset_seed_for_new_backend();
     }
     let _guc_binding = if let Some(pin) = shared.guc_pin.as_ref() {
         // Pin bind: leader-validated values + extras, assign hooks fire,
@@ -1781,7 +1871,7 @@ fn parallel_worker_body(shared: &Arc<ParallelShared>, _worker_number: i32) -> Pg
         // parity across the whole parallel query).
         Some(guc::layers::bind_query_pin(pin)?)
     } else {
-        guc::store::restore_nondefault_variables(&shared.guc_state)?;
+        guc::store::restore_guc_state(&shared.guc_state)?;
         None
     };
     gtrace("w.guc.done");
@@ -1835,5 +1925,8 @@ pub fn init_seams() {
     parallel_seams::parallel_worker_report_last_rec_end::set(ParallelWorkerReportLastRecEnd);
     parallel_seams::handle_parallel_message_interrupt::set(HandleParallelMessageInterrupt);
     parallel_seams::parallel_worker_report_progress::set(parallel_worker_report_progress);
+    parallel_seams::parallel_worker_has_leader_channel::set(|| {
+        MY_PROGRESS_SENDER.with(|c| c.borrow().is_some())
+    });
     parallel_seams::process_parallel_messages::set(ProcessParallelMessages);
 }

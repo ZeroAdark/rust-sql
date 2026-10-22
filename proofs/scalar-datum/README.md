@@ -19,10 +19,10 @@ full shim census in that file's header.
 - **datum_estimate_space** — `proved(null/by-val/fixed-len spot cells +
   varlena sym header; expanded arm fenced)`.
 - **datum_copy** — `proved(fixed-len 5 image, 56.4s DEFAULT solver; by-val
-  + varlena-1B cells CI-bound; modulo static-buffer allocator model
+  + varlena-1B cells fleet-bound; modulo static-buffer allocator model
   both sides; expanded-object arm out of scope, trap-guarded)`.
 - **datum_transfer / datum_serialize / datum_restore / roundtrip** —
-  harnesses WRITTEN AND COMPILE, CI-bound (local multi-lane load walls
+  harnesses WRITTEN AND COMPILE, fleet-bound (local multi-lane load walls
   them; see SUITE.tsv notes). Do not record as local verdicts.
 
 ## Fences / documented deviations (NOT divergences)
@@ -64,7 +64,7 @@ cd proofs/scalar-datum
 timeout 30 cargo kani -Z c-ffi -Z stubbing --c-lib c/pg_datum.c \
     --solver kissat --harness proofs::<h> --exact
 # ctx-creating harnesses (copy/serialize/restore): DEFAULT solver, 150s+,
-# or the CI cluster kani-suite runner (preferred — see SUITE.tsv tiers).
+# or the fleet kani-suite runner (preferred — see SUITE.tsv tiers).
 ```
 
 Negative control: `control_dgs_fixedlen_skew_must_fail` — confirmed FAILED

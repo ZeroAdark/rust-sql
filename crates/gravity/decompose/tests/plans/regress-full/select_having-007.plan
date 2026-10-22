@@ -1,0 +1,10 @@
+-- name: regress-full-select_having-007
+-- sql: SELECT 1 AS one FROM test_having HAVING 1 < 2;
+-- test: select_having
+-- shape: 1ad4e663c18e3cfa seen=3
+-- rel 25164 test_having am=heap kind=r natts=4
+-- att 25164 1 a typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 25164 2 b typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 25164 3 c typid=1042 typmod=12 len=-1 byval=f notnull=f
+-- att 25164 4 d typid=1042 typmod=5 len=-1 byval=f notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {RESULT :plan.disabled_nodes 0 :plan.startup_cost 0 :plan.total_cost 0.01 :plan.plan_rows 1 :plan.plan_width 4 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 7 :constvalue 4 [ 1 0 0 0 0 0 0 0 ]} :resno 1 :resname one :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :plan.qual <> :plan.lefttree <> :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :resconstantqual <>} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname test_having :colnames ("a" "b" "c" "d")} :rtekind 0 :relid 25164 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 25164 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 25164) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 45}

@@ -45,6 +45,32 @@ pub trait NodeEqual {
     fn node_equal(&self, other: &Self) -> bool;
 }
 
+std::thread_local! {
+    /// `equal_as`'s pair of range-table indexes: a `Var` of the first in the left tree equals one of the second in the
+    /// right tree; `(0, 0)` (no range-table index is 0) outside it.
+    static VARNO_AS: core::cell::Cell<(i32, i32)> = const { core::cell::Cell::new((0, 0)) };
+}
+
+/// `equal(a, b)` with every `Var` of range-table entry `va` in `a` standing for the same `Var` of entry `vb` in `b`: two
+/// scans' clauses translated from one parent's (an Append's partition scans, each over its own entry).
+pub fn equal_as(a: Node<'_>, b: Node<'_>, va: i32, vb: i32) -> bool {
+    struct Restore((i32, i32));
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            VARNO_AS.with(|c| c.set(self.0));
+        }
+    }
+    let _r = Restore(VARNO_AS.with(|c| c.replace((va, vb))));
+    equal(a, b)
+}
+
+/// Whether `a` and `b` name one relation under `equal_as` (read only when the indexes differ).
+#[cold]
+fn varno_as(a: i32, b: i32) -> bool {
+    let (va, vb) = VARNO_AS.with(|c| c.get());
+    va != 0 && a == va && b == vb
+}
+
 pub fn equal(a: Node<'_>, b: Node<'_>) -> bool {
     if a.ptr_eq(b) {
         return true;
@@ -425,7 +451,7 @@ impl NodeEqual for RangeVar<'_> {
 
 impl NodeEqual for Var<'_> {
     fn node_equal(&self, b: &Self) -> bool {
-        self.varno == b.varno
+        (self.varno == b.varno || varno_as(self.varno, b.varno))
             && self.varattno == b.varattno
             && self.vartype == b.vartype
             && self.vartypmod == b.vartypmod

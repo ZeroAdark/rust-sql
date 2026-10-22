@@ -1,0 +1,2 @@
+backend/access/session/src/lib.rs	CURRENT_SESSION	pgport	exit	thread	C's CurrentSession != NULL: InitializeSession sets it for the thread's session; an envelope binding swaps it and SessionEnvelopeBinding's drop puts it back; read by CurrentSessionExists on the same thread
+backend/access/session/src/lib.rs	ENVELOPE_DEPTH	pgport	scope:SessionEnvelopeBinding	thread	this thread's session-envelope nesting depth: bind_session_envelope_with raises it, SessionEnvelopeBinding's drop (restore) lowers it; read by the parallel task guard's boundary check on the same thread

@@ -1,5 +1,5 @@
 use datum::Datum;
-use mcx::PgVec;
+use mcx::{Mcx, PgVec};
 use types_core::Oid;
 use types_error::{PgError, PgResult, ERRCODE_DATATYPE_MISMATCH};
 use types_tuple::varatt;
@@ -42,8 +42,6 @@ impl<'mcx> CatCache<'mcx> {
         }
     }
 
-    /// Hit-path `dlist_move_head`, inline and unchecked like C's.
-    ///
     /// # Safety
     /// `bucket` is the masked index of the bucket `slot` was walked from.
     #[inline(always)]
@@ -171,9 +169,12 @@ pub fn InitCatCache(
         cc_keyno[i] = key[i];
     }
 
-    with_state(|st| {
+    with_state(|st| -> PgResult<()> {
         let mcx = st.mcx;
         let mut bucket = PgVec::new_in(mcx);
+        bucket
+            .try_reserve_exact(nbuckets as usize)
+            .map_err(|_| mcx.oom(nbuckets as usize * core::mem::size_of::<u32>()))?;
         bucket.resize(nbuckets as usize, NONE);
         let cache = CatCache {
             id,
@@ -200,16 +201,17 @@ pub fn InitCatCache(
         };
         let idx = id as usize;
         if st.caches.len() <= idx {
+            let _ = st.caches.try_reserve(idx + 1 - st.caches.len());
             st.caches.resize_with(idx + 1, || None);
         }
         assert!(st.caches[idx].is_none(), "catcache: cache id {id} registered twice");
         st.caches[idx] = Some(cache);
-    });
-    Ok(())
+        catcache_seams::note_catalog_registered();
+        Ok(())
+    })
 }
 
 pub(crate) fn rehash_cat_cache<'mcx>(mcx: mcx::Mcx<'mcx>, cache: &mut CatCache<'mcx>) {
-    // catcache.c:1002 elog(DEBUG1, ...): DEBUG-level reports cannot fail.
     let _ = elog::elog(
         types_error::DEBUG1,
         format!(
@@ -222,6 +224,7 @@ pub(crate) fn rehash_cat_cache<'mcx>(mcx: mcx::Mcx<'mcx>, cache: &mut CatCache<'
     );
     let newn = cache.cc_nbuckets * 2;
     let mut newbucket: PgVec<'mcx, u32> = PgVec::new_in(mcx);
+    let _ = newbucket.try_reserve(newn as usize);
     newbucket.resize(newn as usize, NONE);
     let old = core::mem::replace(&mut cache.cc_bucket, newbucket);
     cache.cc_nbuckets = newn;
@@ -240,7 +243,6 @@ pub(crate) fn rehash_cat_cache<'mcx>(mcx: mcx::Mcx<'mcx>, cache: &mut CatCache<'
 }
 
 pub(crate) fn rehash_cat_cache_lists<'mcx>(mcx: mcx::Mcx<'mcx>, cache: &mut CatCache<'mcx>) {
-    // catcache.c:1040 elog(DEBUG1, ...): DEBUG-level reports cannot fail.
     let _ = elog::elog(
         types_error::DEBUG1,
         format!(
@@ -253,6 +255,7 @@ pub(crate) fn rehash_cat_cache_lists<'mcx>(mcx: mcx::Mcx<'mcx>, cache: &mut CatC
     );
     let newn = cache.cc_nlbuckets * 2;
     let mut newbucket: PgVec<'mcx, u32> = PgVec::new_in(mcx);
+    let _ = newbucket.try_reserve(newn as usize);
     newbucket.resize(newn as usize, NONE);
     let old = core::mem::replace(&mut cache.cc_lbucket, newbucket);
     cache.cc_nlbuckets = newn;
@@ -270,7 +273,6 @@ pub(crate) fn rehash_cat_cache_lists<'mcx>(mcx: mcx::Mcx<'mcx>, cache: &mut CatC
     }
 }
 
-/// `CatCacheRemoveCTup`.
 pub(crate) fn remove_ct(st: &mut CatCacheState<'_>, cache_id: i32, slot: u32) {
     let (c_list, hv, payload, payload_len, is_shared) = {
         let cache = st.cache(cache_id);
@@ -297,7 +299,6 @@ pub(crate) fn remove_ct(st: &mut CatCacheState<'_>, cache_id: i32, slot: u32) {
     st.ch_ntup -= 1;
 }
 
-/// `CatCacheRemoveCList`.
 pub(crate) fn remove_cl(st: &mut CatCacheState<'_>, cache_id: i32, slot: u32) {
     let (n, hv, payload, payload_len) = {
         let cl = &st.cache(cache_id).lists[slot as usize];
@@ -312,6 +313,7 @@ pub(crate) fn remove_cl(st: &mut CatCacheState<'_>, cache_id: i32, slot: u32) {
             ct.c_list = NONE;
             (ct.dead, ct.refcount)
         };
+        st.ch_nlisted -= 1;
         if dead && refcount == 0 {
             remove_ct(st, cache_id, m);
         }
@@ -325,7 +327,6 @@ pub(crate) fn remove_cl(st: &mut CatCacheState<'_>, cache_id: i32, slot: u32) {
     cache.cc_nlist -= 1;
 }
 
-// `CatCacheInvalidate(SysCache[cacheId], hashValue)`.
 // Bumped on every path that can change what a syscache probe returns;
 // downstream decode-once memos (cache_syscache shape carriers) key on it.
 thread_local! {
@@ -338,6 +339,8 @@ pub fn inval_epoch() -> u64 {
 
 fn bump_inval_epoch() {
     INVAL_EPOCH.set(INVAL_EPOCH.get() + 1);
+    // C3 S6: every such path moves this thread's view count too (gravity_deps `Opaque`)
+    l2cache::note_local_inval();
 }
 
 pub fn CatCacheInvalidate(cache_id: i32, hash_value: u32) {
@@ -359,7 +362,6 @@ fn list_refcount(cache: &CatCache<'_>, cl: u32) -> i32 {
 }
 
 pub(crate) fn invalidate_one(st: &mut CatCacheState<'_>, cache_id: i32, hash_value: u32) {
-    /* Invalidate *all* CatCLists in this cache */
     let nlbuckets = st.cache(cache_id).cc_nlbuckets;
     for bi in 0..nlbuckets as usize {
         let mut cur = st.cache(cache_id).cc_lbucket[bi];
@@ -390,7 +392,6 @@ pub(crate) fn invalidate_one(st: &mut CatCacheState<'_>, cache_id: i32, hash_val
             } else {
                 remove_ct(st, cache_id, cur);
             }
-            /* could be multiple matches, so keep looking! */
         }
         cur = next;
     }
@@ -462,7 +463,6 @@ pub fn ResetCatalogCachesExt(debug_discard: bool) -> PgResult<()> {
 
 pub(crate) const MAX_CACHES: usize = 96;
 
-/// `CatalogCacheFlushCatalog(catId)`.
 pub fn CatalogCacheFlushCatalog(cat_id: Oid) -> PgResult<()> {
     bump_inval_epoch();
     let mut targets = [0i32; MAX_CACHES];
@@ -513,9 +513,6 @@ pub(crate) unsafe fn varlena_payload(p: *const u8) -> (*const u8, usize) {
 /// adt/nbtree oidvector paths do, and surface the same
 /// "array is not a valid oidvector" error instead of walking out of bounds.
 pub(crate) unsafe fn oidvector_elements(p: *const u8) -> PgResult<(*const u8, usize)> {
-    // check_valid_oidvector (oid.c:126): ndim == 1, dataoffset == 0 (no nulls
-    // bitmap), elemtype == OIDOID -- otherwise the layout is not what the
-    // hash/eq walk below assumes.
     let (ndim, dataoffset, elemtype) = unsafe {
         (
             core::ptr::read_unaligned(p.add(4).cast::<i32>()),
@@ -555,12 +552,36 @@ pub(crate) unsafe fn name_payload(p: *const u8) -> (*const u8, usize) {
     (p, len)
 }
 
-/// One key column of `tuple` as a borrowed probe key.
+/// # Safety
+/// `p` points at a live varlena image readable for `varsize_any(p)` bytes.
+unsafe fn text_key_bytes<'a>(p: *const u8, scratch: Option<Mcx<'a>>) -> PgResult<&'a [u8]> {
+    let plain = unsafe {
+        varatt::varatt_is_4b_u(p) || (varatt::varatt_is_1b(p) && !varatt::varatt_is_1b_e(p))
+    };
+    if plain {
+        let (q, len) = unsafe { varlena_payload(p) };
+        return Ok(unsafe { core::slice::from_raw_parts(q, len) });
+    }
+    // C hashes/compares text keys via hashtext/texteq, which detoast
+    // (PG_GETARG_TEXT_PP): compressed or external keys match by plain bytes.
+    let mcx = scratch.expect("catcache: text key detoast without a scratch context");
+    let image = unsafe { core::slice::from_raw_parts(p, varatt::varsize_any(p)) };
+    let flat: &'a [u8] = detoast::detoast_attr(mcx, image)?.leak();
+    Ok(&flat[varatt::VARHDRSZ..])
+}
+
+pub(crate) fn key_scratch(kinds: &[CCFastKind; 4], nkeys: i32) -> Option<mcx::MemoryContext> {
+    kinds[..nkeys as usize]
+        .contains(&CCFastKind::Text)
+        .then(|| mcx::MemoryContext::new("catcache key detoast"))
+}
+
 pub(crate) fn tuple_key<'a>(
     kind: CCFastKind,
     tuple: &HeapTupleData<'a>,
     attnum: i32,
     tupdesc: &TupleDescData<'_>,
+    scratch: Option<Mcx<'a>>,
 ) -> PgResult<CatCKey<'a>> {
     let mut isnull = false;
     // SAFETY: catcache key columns are user columns of the cache's own
@@ -574,11 +595,8 @@ pub(crate) fn tuple_key<'a>(
             let (p, len) = unsafe { name_payload(d.as_usize() as *const u8) };
             CatCKey::Bytes(unsafe { core::slice::from_raw_parts(p, len) })
         }
-        CCFastKind::Text => {
-            // SAFETY: as above; catalog text keys are inline post-flatten.
-            let (p, len) = unsafe { varlena_payload(d.as_usize() as *const u8) };
-            CatCKey::Bytes(unsafe { core::slice::from_raw_parts(p, len) })
-        }
+        // SAFETY: as above.
+        CCFastKind::Text => CatCKey::Bytes(unsafe { text_key_bytes(d.as_usize() as *const u8, scratch) }?),
         CCFastKind::OidVector => {
             // SAFETY: as above; oidvector is plain storage (4-byte header).
             // `oidvector_elements` validates dim1 against VARSIZE before the
@@ -589,7 +607,6 @@ pub(crate) fn tuple_key<'a>(
     })
 }
 
-/// `CatalogCacheComputeTupleHashValue`.
 pub(crate) fn compute_tuple_hash_value(
     kinds: &[CCFastKind; 4],
     nkeys: i32,
@@ -597,15 +614,72 @@ pub(crate) fn compute_tuple_hash_value(
     tupdesc: &TupleDescData<'_>,
     tuple: &HeapTupleData<'_>,
 ) -> PgResult<u32> {
+    let scratch = key_scratch(kinds, nkeys);
     let mut keys = [CatCKey::UNUSED; 4];
     for i in 0..nkeys as usize {
-        keys[i] = tuple_key(kinds[i], tuple, keyno[i], tupdesc)?;
+        keys[i] = tuple_key(kinds[i], tuple, keyno[i], tupdesc, scratch.as_ref().map(|c| c.mcx()))?;
     }
     Ok(compute_hash_value(kinds, nkeys, &keys))
 }
 
-/// `CatalogCacheCreateEntry` (positive): the entry slot is linked at its
-/// bucket head with refcount 0; keys point into the copied image.
+/// Image copy + key datums (payload-relative); detoasted text keys follow the image.
+pub(crate) fn build_positive_payload<B>(
+    kinds: &[CCFastKind; 4],
+    nkeys: i32,
+    keyno: &[i32; 4],
+    tupdesc: &TupleDescData<'_>,
+    ntp: &HeapTupleData<'_>,
+    alloc: impl FnOnce(usize) -> PgResult<B>,
+    base: impl Fn(&B) -> *mut u8,
+) -> PgResult<(B, [Datum; CATCACHE_MAXKEYS], usize)> {
+    let scratch = key_scratch(kinds, nkeys);
+    let t_len = ntp.t_len as usize;
+    let src = ntp.header_ptr() as usize;
+    let mut probes = [CatCKey::UNUSED; 4];
+    let mut extra = 0usize;
+    for i in 0..nkeys as usize {
+        probes[i] = tuple_key(kinds[i], ntp, keyno[i], tupdesc, scratch.as_ref().map(|c| c.mcx()))?;
+        if let CatCKey::Bytes(b) = probes[i] {
+            let at = b.as_ptr() as usize;
+            if at < src || at > src + t_len {
+                extra += b.len();
+            }
+        }
+    }
+    let payload_len = crate::IMG_PREFIX + t_len + extra;
+    let buf = alloc(payload_len)?;
+    let p = base(&buf);
+    // SAFETY: fresh payload_len bytes; source image live for t_len.
+    unsafe {
+        core::ptr::write_bytes(p, 0, crate::IMG_PREFIX);
+        core::ptr::write(p.cast::<types_tuple::ItemPointerData>(), ntp.t_self);
+        core::ptr::write(p.add(8).cast::<Oid>(), ntp.t_tableOid);
+        core::ptr::write(p.add(12).cast::<u32>(), ntp.t_len);
+        core::ptr::copy_nonoverlapping(ntp.header_ptr(), p.add(crate::IMG_PREFIX), t_len);
+    }
+    let mut tail = crate::IMG_PREFIX + t_len;
+    let mut keys = [Datum::null(); CATCACHE_MAXKEYS];
+    for i in 0..nkeys as usize {
+        keys[i] = match probes[i] {
+            CatCKey::Value(d) => d,
+            CatCKey::Bytes(b) => {
+                let at = b.as_ptr() as usize;
+                if at >= src && at <= src + t_len {
+                    pack_ref((crate::IMG_PREFIX + (at - src)) as u32, b.len() as u32)
+                } else {
+                    // SAFETY: within the `extra` bytes summed above.
+                    unsafe { core::ptr::copy_nonoverlapping(b.as_ptr(), p.add(tail), b.len()) };
+                    let k = pack_ref(tail as u32, b.len() as u32);
+                    tail += b.len();
+                    k
+                }
+            }
+            CatCKey::Str(_) => unreachable!(),
+        };
+    }
+    Ok((buf, keys, payload_len))
+}
+
 pub(crate) fn create_entry_positive(
     st: &mut CatCacheState<'_>,
     cache_id: i32,
@@ -615,40 +689,18 @@ pub(crate) fn create_entry_positive(
     debug_assert!(!ntp.has_external(), "caller flattens via create_entry_from_scan");
     let mcx = st.mcx;
     let t_len = ntp.t_len;
-    let payload_len = crate::IMG_PREFIX + t_len as usize;
-    let buf = payload_alloc(mcx, payload_len)?;
-    // SAFETY: fresh IMG_PREFIX + t_len bytes; source image live for t_len.
-    let image = unsafe {
-        let p = buf.as_ptr();
-        core::ptr::write_bytes(p, 0, crate::IMG_PREFIX);
-        core::ptr::write(p.cast::<types_tuple::ItemPointerData>(), ntp.t_self);
-        core::ptr::write(p.add(8).cast::<Oid>(), ntp.t_tableOid);
-        core::ptr::write(p.add(12).cast::<u32>(), t_len);
-        let image = p.add(crate::IMG_PREFIX);
-        core::ptr::copy_nonoverlapping(ntp.header_ptr(), image, t_len as usize);
-        image
-    };
-    // SAFETY: `image` now holds a valid tuple image (verbatim copy).
-    let cached_view: HeapTupleData<'_> = unsafe {
-        HeapTupleData::from_raw_parts(image, t_len, ntp.t_self, ntp.t_tableOid)
-    };
-
     let cache = st.cache(cache_id);
     let tupdesc = cache.cc_tupdesc.expect("catcache: entry created before phase-2 init");
     let (nkeys, kinds, keyno) = (cache.cc_nkeys, cache.cc_kind, cache.cc_keyno);
-    let mut keys = [Datum::null(); CATCACHE_MAXKEYS];
-    for i in 0..nkeys as usize {
-        keys[i] = match tuple_key(kinds[i], &cached_view, keyno[i], tupdesc)? {
-            CatCKey::Value(d) => d,
-            CatCKey::Bytes(b) => {
-                // Offsets are payload-relative (stored_bytes contract).
-                let off = b.as_ptr() as usize - buf.as_ptr() as usize;
-                pack_ref(off as u32, b.len() as u32)
-            }
-            CatCKey::Str(_) => unreachable!(),
-        };
-    }
-
+    let (buf, keys, payload_len) = build_positive_payload(
+        &kinds,
+        nkeys,
+        &keyno,
+        tupdesc,
+        ntp,
+        |len| payload_alloc(mcx, len),
+        |b| b.as_ptr(),
+    )?;
     let ct = CatCTup {
         hash_value,
         refcount: 0,
@@ -677,9 +729,8 @@ pub(crate) fn create_entry_positive(
     Ok(slot)
 }
 
-/// The `HeapTupleHasExternal` arm of `CatalogCacheCreateEntry`; toast access
-/// runs outside the state borrow (detoast re-enters the caches). `None` is
-/// C's NULL return: the entry went stale mid-flatten and the caller rescans.
+// Toast access runs outside the state borrow (detoast re-enters the caches).
+// `None` is C's NULL return: the entry went stale mid-flatten and the caller rescans.
 pub(crate) fn create_entry_from_scan(
     cache_id: i32,
     ntp: &HeapTupleData<'_>,
@@ -701,9 +752,6 @@ pub(crate) fn create_entry_from_scan(
     with_state(|st| create_entry_positive(st, cache_id, flat.as_tuple(), hash_value)).map(Some)
 }
 
-/// D3.2: the `HeapTupleHasExternal` arm for L2-shaped builds; same
-/// in-progress/stale contract as `create_entry_from_scan`, but the result is
-/// a shareable Arc, not an L1 slot.
 pub(crate) fn l2_entry_from_scan(
     cache_id: i32,
     ntp: &HeapTupleData<'_>,
@@ -725,9 +773,6 @@ pub(crate) fn l2_entry_from_scan(
     crate::l2::build_positive(cache_id, flat.as_tuple()).map(Some)
 }
 
-/// D3.2: install an L1 entry whose payload aliases a shared L2 body. The slot
-/// is linked at its bucket head with refcount 0, exactly like
-/// `CatalogCacheCreateEntry`; only the payload ownership differs.
 pub(crate) fn install_from_l2(
     st: &mut CatCacheState<'_>,
     cache_id: i32,
@@ -762,7 +807,6 @@ pub(crate) fn install_from_l2(
     slot
 }
 
-/// `CatalogCacheCreateEntry` (negative): `CatCacheCopyKeys` into `payload`.
 pub(crate) fn create_entry_negative(
     st: &mut CatCacheState<'_>,
     cache_id: i32,
@@ -825,19 +869,35 @@ pub(crate) fn create_entry_negative(
     Ok(slot)
 }
 
-/// D3.1 cap enforcement: evict-on-insert-above-cap with a clock sweep over
-/// the slot arenas of every cache (SLRU-style; the reference bit is
-/// `CatCTup::hot`, set by every hit). Eviction of an unpinned entry is
-/// exactly what `CatCacheInvalidate` does to a refcount==0 entry — remove it
-/// and let the next probe rescan the catalog — so no new semantics exist
-/// here; the cap only changes WHEN that removal happens.
-///
-/// Exemptions (never evicted): pinned entries (refcount > 0), members of a
-/// live CatCList (c_list != NONE — the list's lifetime pins its members,
-/// mirroring C's list-member protection in CatCacheRemoveCTup), dead entries
-/// awaiting their last unpin, and the just-created `protect` slot (its
-/// caller's refcount++ happens after creation returns).
+thread_local! {
+    /// D3652 P8: set on a thread that trims at its idle point (PostgresMain): an insertion then never evicts, and
+    /// TrimCatCacheAtIdle trims to the cap once the statement is done. Background workers keep the insert-time trim.
+    static TRIM_AT_IDLE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+pub fn SetCatCacheTrimAtIdle(on: bool) {
+    TRIM_AT_IDLE.with(|c| c.set(on));
+}
+
+pub(crate) fn trim_at_idle() -> bool {
+    TRIM_AT_IDLE.try_with(core::cell::Cell::get).unwrap_or(false)
+}
+
+pub fn TrimCatCacheAtIdle() {
+    trim_at_idle_to(crate::catcache_cap());
+}
+
+pub(crate) fn trim_at_idle_to(cap: i32) {
+    with_state(|st| {
+        st.cap_retry_at = 0;
+        enforce_cap_at(st, cap, -1, NONE);
+    });
+}
+
 pub(crate) fn enforce_cap(st: &mut CatCacheState<'_>, protect_cache: i32, protect_slot: u32) {
+    if trim_at_idle() {
+        return;
+    }
     enforce_cap_at(st, crate::catcache_cap(), protect_cache, protect_slot)
 }
 
@@ -847,15 +907,21 @@ pub(crate) fn enforce_cap_at(
     protect_cache: i32,
     protect_slot: u32,
 ) {
-    if cap <= 0 || st.ch_ntup <= cap {
+    let evictable = st.ch_ntup - st.ch_nlisted;
+    if cap <= 0 || evictable <= cap {
+        st.cap_retry_at = 0;
+        return;
+    }
+    if evictable < st.cap_retry_at {
         return;
     }
     // Two full revolutions max: pass 1 may only clear hot bits; if pass 2
     // finds nothing evictable everything live is pinned/hot — give up rather
-    // than spin (the cache runs above cap until entries unpin).
+    // than spin (the cache runs above cap until entries unpin), and hold off
+    // the next sweep until the evictable count grows by a quarter.
     let total_slots: usize = st.caches.iter().flatten().map(|c| c.tuples.len()).sum();
     let mut budget = 2 * (total_slots + st.caches.len() + 1);
-    while st.ch_ntup > cap && budget > 0 {
+    while st.ch_ntup - st.ch_nlisted > cap && budget > 0 {
         budget -= 1;
         if st.clock_cache >= st.caches.len() {
             st.clock_cache = 0;
@@ -893,6 +959,8 @@ pub(crate) fn enforce_cap_at(
             remove_ct(st, cache_id, slot);
         }
     }
+    let left = st.ch_ntup - st.ch_nlisted;
+    st.cap_retry_at = if left > cap { left + (left / 4).max(1) } else { 0 };
 }
 
 pub(crate) fn maybe_rehash(st: &mut CatCacheState<'_>, cache_id: i32) {
@@ -915,13 +983,9 @@ pub(crate) fn pop_in_progress(st: &mut CatCacheState<'_>) -> bool {
 mod oidvector_key_tests {
     use super::oidvector_elements;
 
-    /// Build a plain-storage (4B-U header) oidvector image with the given
-    /// declared VARSIZE and on-image dim1. The header word is `varsize << 2`
-    /// (little-endian 4B-U form that `VarlenaRef::varsize` decodes).
     fn image(varsize: u32, dim1: i32, buf_len: usize) -> Vec<u8> {
         let mut b = vec![0u8; buf_len];
         b[0..4].copy_from_slice(&(varsize << 2).to_le_bytes());
-        // A well-formed header: ndim 1, dataoffset 0, elemtype OIDOID.
         b[4..8].copy_from_slice(&1i32.to_le_bytes());
         b[12..16].copy_from_slice(&26u32.to_le_bytes());
         b[16..20].copy_from_slice(&dim1.to_le_bytes());
@@ -930,7 +994,6 @@ mod oidvector_key_tests {
 
     #[test]
     fn valid_oidvector_reports_dim1_times_four() {
-        // 3 Oids: header(24) + 3*4 = 36 bytes.
         let img = image(36, 3, 36);
         // SAFETY: `img` is a live 4B-U oidvector image for its full VARSIZE.
         let (_p, len) = unsafe { oidvector_elements(img.as_ptr()) }.unwrap();
@@ -947,14 +1010,12 @@ mod oidvector_key_tests {
 
     #[test]
     fn inflated_dim1_is_rejected_not_walked() {
-        // dim1 claims 1000 Oids but the image is only header-sized: OOB if trusted.
         let img = image(24, 1000, 24);
         // SAFETY: as above; the crafted dim1 must be rejected before any walk.
         let err = unsafe { oidvector_elements(img.as_ptr()) }.err().unwrap();
         assert!(err.message().contains("not a valid oidvector"));
     }
 
-    /// A 4B-U oidvector image with every header field spelled out.
     fn image_hdr(varsize: u32, ndim: i32, dataoffset: i32, elemtype: u32, dim1: i32) -> Vec<u8> {
         let mut b = vec![0u8; varsize as usize];
         b[0..4].copy_from_slice(&(varsize << 2).to_le_bytes());
@@ -965,10 +1026,6 @@ mod oidvector_key_tests {
         b
     }
 
-    // check_valid_oidvector (oid.c:126): C's oidvectorhashfast/oidvectoreqfast
-    // refuse ndim != 1, dataoffset != 0 (a nulls bitmap) and elemtype != OIDOID
-    // with ERRCODE_DATATYPE_MISMATCH "array is not a valid oidvector"; the
-    // dim1-fit bound alone lets such an image be hashed/compared as if valid.
     #[test]
     fn oidvector_header_fields_are_validated() {
         let ok = image_hdr(28, 1, 0, 26, 1);
@@ -989,8 +1046,6 @@ mod oidvector_key_tests {
 
     #[test]
     fn negative_dim1_does_not_wrap() {
-        // A negative dim1 must not sign-extend into a huge `* 4` length; it is
-        // treated as an empty vector (same as the adt `dim1.max(0)` slicing).
         let img = image(24, -1, 24);
         // SAFETY: as above.
         let (_p, len) = unsafe { oidvector_elements(img.as_ptr()) }.unwrap();

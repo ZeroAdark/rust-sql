@@ -14,7 +14,7 @@ use types_pathnodes::{
 };
 
 use types_pathnodes::relids::{
-    find_base_rel, find_childrel_parents, pgvec_clone_shallow, relids_add_member, relids_copy, relids_empty,
+    find_base_rel, find_childrel_parents, relids_add_member, relids_copy, relids_empty,
     relids_equal, relids_is_empty, relids_is_member, relids_is_subset, relids_members,
     relids_num_members, relids_overlap, relids_union,
 };
@@ -112,7 +112,7 @@ pub fn process_equivalence<'mcx>(
     }
 
     let (item1_type, item2_type) = lsyscache::op_input_types(opno)?;
-    let opfamilies = pgvec_clone_shallow(mcx, &run.root.rinfo(rinfo).mergeopfamilies);
+    let opfamilies = run.root.rinfo(rinfo).mergeopfamilies;
 
     let mut ec1: Option<EcId> = None;
     let mut em1: Option<EmId> = None;
@@ -128,7 +128,7 @@ pub fn process_equivalence<'mcx>(
             if collation != ec.ec_collation {
                 continue;
             }
-            if ec.ec_opfamilies.as_slice() != opfamilies.as_slice() {
+            if ec.ec_opfamilies != opfamilies {
                 continue;
             }
         }
@@ -333,6 +333,15 @@ pub fn ec_members_for_relids<'mcx>(
         }
     }
     out
+}
+
+/// `ec_members_for_relids`'s members in the same order, read in place (C's eclass_member_iterator): no list is built.
+pub fn ec_members_iter<'a>(run: &'a PlannerRun<'_>, ec: EcId, relids: &'a Relids<'_>) -> impl Iterator<Item = EmId> + 'a {
+    let e = run.root.ec(ec);
+    let kids = (!e.ec_childmembers.is_empty()).then(|| {
+        relids_members(relids).filter_map(|r| e.ec_childmembers.get(r as usize)).flat_map(|l| l.iter().copied())
+    });
+    e.ec_members.iter().copied().chain(kids.into_iter().flatten())
 }
 
 // add_child_eq_member (equivclass.c): child members live in ec_childmembers
@@ -585,7 +594,7 @@ pub fn add_setop_child_rel_equivalences<'mcx>(
 pub fn get_eclass_for_sort_expr<'mcx>(
     run: &mut PlannerRun<'mcx>,
     expr: Node<'mcx>,
-    opfamilies: &PgVec<'mcx, u32>,
+    opfamilies: &'mcx [u32],
     opcintype: u32,
     collation: u32,
     sortref: u32,
@@ -609,7 +618,7 @@ pub fn get_eclass_for_sort_expr<'mcx>(
             if collation != ec.ec_collation {
                 continue;
             }
-            if ec.ec_opfamilies.as_slice() != opfamilies.as_slice() {
+            if ec.ec_opfamilies != opfamilies {
                 continue;
             }
         }
@@ -659,7 +668,7 @@ pub fn get_eclass_for_sort_expr<'mcx>(
     assert!(!(has_volatile && sortref == 0), "volatile EquivalenceClass has no sortref");
 
     let mut ec = EquivalenceClass::new(mcx);
-    ec.ec_opfamilies = pgvec_clone_shallow(mcx, opfamilies);
+    ec.ec_opfamilies = opfamilies;
     ec.ec_collation = collation;
     ec.ec_has_volatile = has_volatile;
     ec.ec_sortref = sortref;
@@ -1119,16 +1128,16 @@ fn generate_join_implied_equalities_normal<'mcx>(
 
     // Child members need no explicit check: a child EM subset of join_relids
     // is exactly one belonging to a child rel of this join (C comment).
-    let candidates = ec_members_for_relids(run, ec, join_relids);
-    for m in 0..candidates.len() {
-        let cur_em = candidates[m];
-        let em_relids = relids_copy(mcx, &run.root.em(cur_em).em_relids);
-        if !relids_is_subset(&em_relids, join_relids) {
+    // Each member's relids are read in place, as C reads cur_em->em_relids (D3925: a copy per member per join rel was a
+    // quarter of a long join chain's planning, its one equivalence class holding a member per relation).
+    for cur_em in ec_members_iter(run, ec, join_relids) {
+        let em_relids = &run.root.em(cur_em).em_relids;
+        if !relids_is_subset(em_relids, join_relids) {
             continue;
         }
-        if relids_is_subset(&em_relids, outer_relids) {
+        if relids_is_subset(em_relids, outer_relids) {
             outer_members.push(cur_em);
-        } else if relids_is_subset(&em_relids, inner_relids) {
+        } else if relids_is_subset(em_relids, inner_relids) {
             inner_members.push(cur_em);
         } else {
             new_members.push(cur_em);
@@ -1231,10 +1240,10 @@ fn generate_join_implied_equalities_broken<'mcx>(
     let mut result: PgVec<'mcx, RinfoId> = PgVec::new_in(mcx);
     for s in 0..run.root.ec(ec).ec_sources.len() {
         let rinfo = run.root.ec(ec).ec_sources[s];
-        let clause_relids = relids_copy(mcx, &run.root.rinfo(rinfo).required_relids);
-        if relids_is_subset(&clause_relids, nominal_join_relids)
-            && !relids_is_subset(&clause_relids, outer_relids)
-            && !relids_is_subset(&clause_relids, nominal_inner_relids)
+        let clause_relids = &run.root.rinfo(rinfo).required_relids;
+        if relids_is_subset(clause_relids, nominal_join_relids)
+            && !relids_is_subset(clause_relids, outer_relids)
+            && !relids_is_subset(clause_relids, nominal_inner_relids)
         {
             result.push(rinfo);
         }
@@ -1460,7 +1469,7 @@ fn reconsider_outer_join_clause<'mcx>(
             relids_copy(mcx, &run.root.rinfo(rinfo).left_relids),
         )
     };
-    let mergeopfamilies = pgvec_clone_shallow(mcx, &run.root.rinfo(rinfo).mergeopfamilies);
+    let mergeopfamilies = run.root.rinfo(rinfo).mergeopfamilies;
 
     for i in 0..run.root.eq_classes.len() {
         let cur_ec = EcId(i as u32);
@@ -1472,7 +1481,7 @@ fn reconsider_outer_join_clause<'mcx>(
             if collation != ec.ec_collation {
                 continue;
             }
-            if mergeopfamilies.as_slice() != ec.ec_opfamilies.as_slice() {
+            if mergeopfamilies != ec.ec_opfamilies {
                 continue;
             }
         }
@@ -1542,7 +1551,7 @@ fn reconsider_full_join_clause<'mcx>(
     let rightvar = op.args.nth(1);
     let left_relids = relids_copy(mcx, &run.root.rinfo(rinfo).left_relids);
     let right_relids = relids_copy(mcx, &run.root.rinfo(rinfo).right_relids);
-    let mergeopfamilies = pgvec_clone_shallow(mcx, &run.root.rinfo(rinfo).mergeopfamilies);
+    let mergeopfamilies = run.root.rinfo(rinfo).mergeopfamilies;
 
     for i in 0..run.root.eq_classes.len() {
         let cur_ec = EcId(i as u32);
@@ -1554,7 +1563,7 @@ fn reconsider_full_join_clause<'mcx>(
             if collation != ec.ec_collation {
                 continue;
             }
-            if mergeopfamilies.as_slice() != ec.ec_opfamilies.as_slice() {
+            if mergeopfamilies != ec.ec_opfamilies {
                 continue;
             }
         }
@@ -1974,12 +1983,7 @@ where
 }
 
 pub fn have_relevant_eclass_joinclause(run: &PlannerRun<'_>, rel1: RelId, rel2: RelId) -> bool {
-    let mcx = run.mcx;
-    let matching_ecs = get_common_eclass_indexes(
-        run,
-        &relids_copy(mcx, &run.root.rel(rel1).relids),
-        &relids_copy(mcx, &run.root.rel(rel2).relids),
-    );
+    let matching_ecs = get_common_eclass_indexes(run, &run.root.rel(rel1).relids, &run.root.rel(rel2).relids);
     for i in relids_members(&matching_ecs) {
         let ec = EcId(i as u32);
         debug_assert!(relids_overlap(&run.root.rel(rel1).relids, &run.root.ec(ec).ec_relids));
@@ -1992,9 +1996,7 @@ pub fn have_relevant_eclass_joinclause(run: &PlannerRun<'_>, rel1: RelId, rel2: 
 }
 
 pub fn has_relevant_eclass_joinclause(run: &PlannerRun<'_>, rel1: RelId) -> bool {
-    let mcx = run.mcx;
-    let matched_ecs =
-        get_eclass_indexes_for_relids(run, &relids_copy(mcx, &run.root.rel(rel1).relids));
+    let matched_ecs = get_eclass_indexes_for_relids(run, &run.root.rel(rel1).relids);
     for i in relids_members(&matched_ecs) {
         let ec = EcId(i as u32);
         if run.root.ec(ec).ec_members.len() <= 1 {

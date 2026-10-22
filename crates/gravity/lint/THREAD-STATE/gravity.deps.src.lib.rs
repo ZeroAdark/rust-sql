@@ -1,0 +1,6 @@
+gravity/deps/src/lib.rs	ARMED	deps	scope:Suppress	thread	a lowering's dependency recording armed; recomputed by rearm at every Recording / Suppress / Free boundary, its end in each guard's drop (an unwind too: Recording's through pop; suppressed clears it under Suppress); every catalog lookup reads it, a pool claim's too, where its own copy is false: a claim's catalog reads are no lowering's
+gravity/deps/src/lib.rs	SUPPRESS	deps	scope:Suppress	leader	recording suppressed while a cache fills; nesting count put back by the Suppress guard's Drop
+gravity/deps/src/lib.rs	STACK	deps	scope:Recording	leader	the recordings in progress; Recording::start pushes, pop (finish or Recording's Drop, an unwind too) pops
+gravity/deps/src/lib.rs	FREE	deps	scope:Free	leader	inside a catalog-free region (code generator); nesting count put back by the Free guard's Drop
+gravity/deps/src/lib.rs	CHECKING	deps	scope:Checking	thread	the Held check mode (C3 S6c) for one admission under the front check; set by the Checking guard, whose drop puts the previous value back (an unwind too). Held memo lookups read it (keysem, hosts facts), which a pool claim may make: there it reads its own thread's false, so a claim never runs the recursive check
+gravity/deps/src/lib.rs	MISS	deps	statement:take_miss	leader	the first Held check failure of the admission (C3 S6c), taken at its end

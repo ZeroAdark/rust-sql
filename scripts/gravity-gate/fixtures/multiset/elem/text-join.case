@@ -1,0 +1,10 @@
+# a join of the file's tables
+sql: SELECT array_agg(u.y) FROM t JOIN u USING (id);
+cols: array_agg
+tables: t u
+class: unordered
+verdict: match
+[pg]
+{1,2}
+[got]
+{2,1}

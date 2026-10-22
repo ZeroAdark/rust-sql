@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use init_small::globals;
 use types_core::{InvalidOid, InvalidRelFileNumber, Oid, RelFileNumber};
 use types_error::{
@@ -588,14 +588,14 @@ fn read_relmap_file(
             return ereport(elevel)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{mapfilename}\": %m"))
+                .errmsg(format!("could not open file \"{mapfilename}\": {PCT_M}"))
                 .finish(loc("read_relmap_file"))
         }
         Err(IoFail::Read(en)) => {
             return ereport(elevel)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{mapfilename}\": %m"))
+                .errmsg(format!("could not read file \"{mapfilename}\": {PCT_M}"))
                 .finish(loc("read_relmap_file"))
         }
         Err(IoFail::ShortRead(r)) => {
@@ -610,7 +610,7 @@ fn read_relmap_file(
             return ereport(elevel)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not close file \"{mapfilename}\": %m"))
+                .errmsg(format!("could not close file \"{mapfilename}\": {PCT_M}"))
                 .finish(loc("read_relmap_file"))
         }
     }
@@ -668,7 +668,7 @@ fn write_relmap_file(
         return ereport(ERROR)
             .with_saved_errno(errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{maptempfilename}\": %m"))
+            .errmsg(format!("could not open file \"{maptempfilename}\": {PCT_M}"))
             .finish(loc("write_relmap_file"));
     }
 
@@ -696,7 +696,7 @@ fn write_relmap_file(
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not write file \"{maptempfilename}\": %m"))
+            .errmsg(format!("could not write file \"{maptempfilename}\": {PCT_M}"))
             .finish(loc("write_relmap_file"));
     }
 
@@ -704,7 +704,7 @@ fn write_relmap_file(
         return ereport(ERROR)
             .with_saved_errno(errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{maptempfilename}\": %m"))
+            .errmsg(format!("could not close file \"{maptempfilename}\": {PCT_M}"))
             .finish(loc("write_relmap_file"));
     }
 

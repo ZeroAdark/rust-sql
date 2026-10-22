@@ -1,0 +1,75 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT j.id, j.state FROM tj j WHERE j.ctid = (SELECT ctid FROM tj WHERE id = 5) FOR UPDATE;
+QUERY PLAN                                  
+--------------------------------------------
+LockRows                                    
+  InitPlan 1                                
+    ->  Index Scan using tj_pkey on tj      
+          Index Cond: (id = 5)              
+  ->  Tid Scan on tj j                      
+        TID Cond: (ctid = (InitPlan 1).col1)
+(6 rows)
+
+step s1u: UPDATE tj SET state = 'taken' WHERE id = 5;
+step s2l: SELECT j.id, j.state FROM tj j WHERE j.ctid = (SELECT ctid FROM tj WHERE id = 5) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|state
+--+-----
+(0 rows)
+
+
+starting permutation: s1d s2l s1c
+step s1d: DELETE FROM tj WHERE id = 5;
+step s2l: SELECT j.id, j.state FROM tj j WHERE j.ctid = (SELECT ctid FROM tj WHERE id = 5) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|state
+--+-----
+(0 rows)
+
+
+starting permutation: s1k s2l s1c
+step s1k: SELECT id FROM tj WHERE id = 5 FOR KEY SHARE;
+id
+--
+ 5
+(1 row)
+
+step s2l: SELECT j.id, j.state FROM tj j WHERE j.ctid = (SELECT ctid FROM tj WHERE id = 5) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|state
+--+-----
+ 5|ready
+(1 row)
+
+
+starting permutation: s1u s2s s1c
+step s1u: UPDATE tj SET state = 'taken' WHERE id = 5;
+step s2s: SELECT j.id, j.state FROM tj j WHERE j.ctid = (SELECT ctid FROM tj WHERE id = 5) FOR UPDATE SKIP LOCKED;
+id|state
+--+-----
+(0 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1u s2n s1c
+step s1u: UPDATE tj SET state = 'taken' WHERE id = 5;
+step s2n: SELECT j.id, j.state FROM tj j WHERE j.ctid = (SELECT ctid FROM tj WHERE id = 5) FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "tj"
+step s1c: COMMIT;
+
+starting permutation: s1u s2a s1c
+step s1u: UPDATE tj SET state = 'taken' WHERE id = 5;
+step s2a: SELECT j.id, j.state FROM tj j WHERE j.ctid = ANY (ARRAY(SELECT ctid FROM tj WHERE id IN (4, 5, 6))) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|state
+--+-----
+ 4|ready
+ 6|ready
+(2 rows)
+

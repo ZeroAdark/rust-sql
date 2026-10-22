@@ -58,21 +58,31 @@ pub struct PartitionKeyData {
     pub parttypbyval: PgVec<'static, bool>,
     pub parttypalign: PgVec<'static, i8>,
     pub parttypcoll: PgVec<'static, Oid>,
+    pub cmp_scratch: RefCell<Option<MemoryContext>>,
     // C's rd_partkeycxt: every allocation of the build (node tree, list
     // cells, datum copies, detoast buffer) dies with the key. Declared last so
     // the arena outlives the PgVec fields' deallocation.
-    // None only for test-built keys.
     pub _ctx: Option<std::boxed::Box<MemoryContext>>,
 }
 
 impl PartitionKeyData {
     // FunctionCall2Coll(&partsupfunc[col], partcollation[col], a, b) -> int32.
     pub fn cmp(&self, col: usize, a: Datum, b: Datum) -> PgResult<i32> {
+        let Ok(mut held) = self.cmp_scratch.try_borrow_mut() else {
+            let scratch = ::mcx::MemoryContext::new("partsupfunc cmp");
+            return self.cmp_in(&scratch, col, a, b);
+        };
+        let scratch = held.get_or_insert_with(|| ::mcx::MemoryContext::new("partsupfunc cmp"));
+        let r = self.cmp_in(scratch, col, a, b);
+        scratch.reset();
+        r
+    }
+
+    fn cmp_in(&self, scratch: &MemoryContext, col: usize, a: Datum, b: Datum) -> PgResult<i32> {
         // range_cmp (range-typed partition keys) detoasts through the result
         // mcx; arm the frame with call-lifetime scratch.
-        let scratch = ::mcx::MemoryContext::new("partsupfunc cmp");
         let mut fcinfo = LocalFcinfo::<2>::new(self.partcollation[col]);
-        // SAFETY: scratch outlives this call.
+        // SAFETY: scratch outlives this call (the caller resets it only after).
         unsafe { fcinfo.set_result_mcx(scratch.mcx()) };
         fcinfo.set_arg(0, a);
         fcinfo.set_arg(1, b);
@@ -222,6 +232,8 @@ fn RelationBuildPartitionKey(rel: &Relation<'_>) -> PgResult<Rc<PartitionKeyData
     // partcache.c:275 AllocSetContextCreate(CurTransactionContext, "partition
     // key") reparented under CacheMemoryContext once the key is complete.
     let ctx = std::boxed::Box::new(with_state(|st| st.root).new_child("partition key"));
+    // partcache.c:104 MemoryContextCopyAndSetIdentifier(partkeycxt, relname).
+    ctx.set_ident(Some(rel.name()));
     // SAFETY: 'static stands for "as long as the Box in _ctx lives"; the box
     // pins the context address across the move into the key.
     let mcx: Mcx<'static> = unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'static>>(ctx.mcx()) };
@@ -283,8 +295,12 @@ fn RelationBuildPartitionKey(rel: &Relation<'_>) -> PgResult<Rc<PartitionKeyData
         )?;
         let (ncoll, colp) = vector_values(coll_d, 4);
         assert_eq!(ncoll, n);
-        partclass.reserve(n);
-        partcollation.reserve(n);
+        partclass
+            .try_reserve(n)
+            .map_err(|_| mcx.oom(n * core::mem::size_of::<Oid>()))?;
+        partcollation
+            .try_reserve(n)
+            .map_err(|_| mcx.oom(n * core::mem::size_of::<Oid>()))?;
         for i in 0..n {
             // SAFETY: oidvector carries n aligned u32 values at data start.
             unsafe {
@@ -327,7 +343,7 @@ fn RelationBuildPartitionKey(rel: &Relation<'_>) -> PgResult<Rc<PartitionKeyData
         partexprs: types_nodes::NodeList::nil(),
         partopfamily: mcx::vec_with_capacity_in(mcx, n)?,
         partopcintype: mcx::vec_with_capacity_in(mcx, n)?,
-        partsupfunc: Vec::with_capacity(n),
+        partsupfunc: ::mcx::std_vec_with_capacity("partition key", n)?,
         partcollation,
         parttypid: mcx::vec_with_capacity_in(mcx, n)?,
         parttypmod: mcx::vec_with_capacity_in(mcx, n)?,
@@ -335,7 +351,8 @@ fn RelationBuildPartitionKey(rel: &Relation<'_>) -> PgResult<Rc<PartitionKeyData
         parttypbyval: mcx::vec_with_capacity_in(mcx, n)?,
         parttypalign: mcx::vec_with_capacity_in(mcx, n)?,
         parttypcoll: mcx::vec_with_capacity_in(mcx, n)?,
-        _ctx: Some(ctx),
+        cmp_scratch: RefCell::new(None),
+        _ctx: None,
     };
 
     let mut partexprs_item = partexprs.iter();
@@ -390,6 +407,8 @@ fn RelationBuildPartitionKey(rel: &Relation<'_>) -> PgResult<Rc<PartitionKeyData
         key.parttypalign.push(typalign);
     }
     key.partexprs = partexprs;
+    // Installed last so an error return drops ctx's vectors before ctx.
+    key._ctx = Some(ctx);
 
     let key = Rc::new(key);
     with_state(|st| st.keys.insert(relid, Rc::clone(&key)));

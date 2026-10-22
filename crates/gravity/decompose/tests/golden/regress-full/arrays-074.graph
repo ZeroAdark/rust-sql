@@ -1,0 +1,10 @@
+-- regress-full-arrays-074
+-- select length(fipshash((f1[1]).c2)) from dest;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1360 end=sink
+  nodes n0@0
+  source range rel=26307 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn1317(fn877(fn1946(fn3420(io17(T_FieldSelect)), c25:'hex'), c23:1, c23:32)))
+  outs 1=w4:val
+mapped: SeqScan

@@ -157,7 +157,7 @@ fn build_def_item<'mcx>(
         if let Ok(v) = sval.parse::<i32>() {
             return Ok(DefItem { name, value: Some(DefValue::Int(v)) });
         }
-        if sval.parse::<f64>().is_ok() {
+        if matches!(::adt_float::io::strtod_c(val), Some((_, n, false)) if n == val.len()) {
             return Ok(DefItem { name, value: Some(DefValue::Float(alloc_str(mcx, sval)?)) });
         }
         if sval == "true" {

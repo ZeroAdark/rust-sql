@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+fp_contract = { path = "../../../../_support/fp_contract" }
 datum = { path = "../../../../_support/types/datum" }
 mcx = { path = "../../../../_support/mcx" }
 types_core = { path = "../../../../_support/types/types_core" }
@@ -23,7 +24,6 @@ adt_float = { path = "../float" }
 adt_timestamp = { path = "../adt_timestamp" }
 adt_datetime = { path = "../adt_datetime" }
 init_small = { path = "../../init/init_small" }
-nodeagg = { path = "../../../executor/nodeagg" }
 execexpr = { path = "../../../executor/execexpr" }
 exectuples = { path = "../../../executor/exectuples" }
 nodes_core = { path = "../../../nodes/nodes_core" }

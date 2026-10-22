@@ -1,0 +1,13 @@
+-- name: regress-full-arrays-014
+-- sql: SELECT a FROM arrtest WHERE a[2] IS NULL;
+-- test: arrays
+-- shape: fd7624c45250074b seen=1
+-- rel 26218 arrtest am=heap kind=r natts=7
+-- att 26218 1 a typid=1005 typmod=-1 len=-1 byval=f notnull=f
+-- att 26218 2 b typid=1007 typmod=-1 len=-1 byval=f notnull=f
+-- att 26218 3 c typid=1003 typmod=-1 len=-1 byval=f notnull=f
+-- att 26218 4 d typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- att 26218 5 e typid=1022 typmod=-1 len=-1 byval=f notnull=f
+-- att 26218 6 f typid=1014 typmod=9 len=-1 byval=f notnull=f
+-- att 26218 7 g typid=1015 typmod=9 len=-1 byval=f notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 13.2 :scan.plan.plan_rows 2 :scan.plan.plan_width 32 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 1 :vartype 1005 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 7} :resno 1 :resname a :ressortgroupref 0 :resorigtbl 26218 :resorigcol 1 :resjunk false}) :scan.plan.qual ({NULLTEST :arg {SUBSCRIPTINGREF :refcontainertype 1005 :refelemtype 21 :refrestype 21 :reftypmod -1 :refcollid 0 :refupperindexpr ({CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 30 :constvalue 4 [ 2 0 0 0 0 0 0 0 ]}) :reflowerindexpr <> :refexpr {VAR :varno 1 :varattno 1 :vartype 1005 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 28} :refassgnexpr <>} :nulltesttype 0 :argisrow false :location 33}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 1)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname arrtest :colnames ("a" "b" "c" "d" "e" "f" "g")} :rtekind 0 :relid 26218 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 26218 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 26218) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 40}

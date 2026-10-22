@@ -1,0 +1,155 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1v s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT b.id, p.id AS pid, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM dp p RIGHT JOIN db b ON p.k = b.k FOR UPDATE OF b;
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Hash Right Join             
+        Hash Cond: (p.k = b.k)    
+        ->  Seq Scan on dp p      
+        ->  Hash                  
+              ->  Seq Scan on db b
+        SubPlan 1                 
+          ->  Seq Scan on dc c    
+                Filter: (id = b.v)
+(9 rows)
+
+step s1v: UPDATE db SET v = 4 WHERE id = 1;
+step s2l: SELECT b.id, p.id AS pid, b.k, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM dp p RIGHT JOIN db b ON p.k = b.k FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|pid| k|w 
+--+---+--+--
+ 1|  1|10|c4
+ 1|  2|10|c4
+ 2|  3|20|c2
+ 3|   |99|c3
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2l s1c
+step s1k: UPDATE db SET k = 20 WHERE id = 1;
+step s2l: SELECT b.id, p.id AS pid, b.k, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM dp p RIGHT JOIN db b ON p.k = b.k FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|pid| k|w 
+--+---+--+--
+ 1|   |20|c1
+ 1|   |20|c1
+ 2|  3|20|c2
+ 3|   |99|c3
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1miss s2l s1c
+step s1miss: UPDATE db SET k = 10 WHERE id = 3;
+step s2l: SELECT b.id, p.id AS pid, b.k, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM dp p RIGHT JOIN db b ON p.k = b.k FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|pid| k|w 
+--+---+--+--
+ 1|  1|10|c1
+ 1|  2|10|c1
+ 2|  3|20|c2
+ 3|   |10|c3
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1del s2l s1c
+step s1del: DELETE FROM db WHERE id = 2;
+step s2l: SELECT b.id, p.id AS pid, b.k, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM dp p RIGHT JOIN db b ON p.k = b.k FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|pid| k|w 
+--+---+--+--
+ 1|  1|10|c1
+ 1|  2|10|c1
+ 3|   |99|c3
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1sub s2l s1c
+step s1sub: UPDATE dc SET w = 'c1-new' WHERE id = 1; UPDATE db SET v = v WHERE id = 1;
+step s2l: SELECT b.id, p.id AS pid, b.k, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM dp p RIGHT JOIN db b ON p.k = b.k FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|pid| k|w 
+--+---+--+--
+ 1|  1|10|c1
+ 1|  2|10|c1
+ 2|  3|20|c2
+ 3|   |99|c3
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2s s1c
+step s1v: UPDATE db SET v = 4 WHERE id = 1;
+step s2s: SELECT b.id, p.id AS pid, b.k, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM dp p RIGHT JOIN db b ON p.k = b.k FOR SHARE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|pid| k|w 
+--+---+--+--
+ 1|  1|10|c4
+ 1|  2|10|c4
+ 2|  3|20|c2
+ 3|   |99|c3
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1v s3l s1c
+step s3x: EXPLAIN (COSTS OFF) SELECT b.id, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM db b WHERE EXISTS (SELECT 1 FROM dp p WHERE p.k = b.k) FOR UPDATE OF b;
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Hash Right Semi Join        
+        Hash Cond: (p.k = b.k)    
+        ->  Seq Scan on dp p      
+        ->  Hash                  
+              ->  Seq Scan on db b
+        SubPlan 1                 
+          ->  Seq Scan on dc c    
+                Filter: (id = b.v)
+(9 rows)
+
+step s1v: UPDATE db SET v = 4 WHERE id = 1;
+step s3l: SELECT b.id, b.k, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM db b WHERE EXISTS (SELECT 1 FROM dp p WHERE p.k = b.k) FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id| k|w 
+--+--+--
+ 1|10|c4
+ 2|20|c2
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s3l s1c
+step s1k: UPDATE db SET k = 20 WHERE id = 1;
+step s3l: SELECT b.id, b.k, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM db b WHERE EXISTS (SELECT 1 FROM dp p WHERE p.k = b.k) FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id| k|w 
+--+--+--
+ 2|20|c2
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1del s3l s1c
+step s1del: DELETE FROM db WHERE id = 2;
+step s3l: SELECT b.id, b.k, (SELECT c.w FROM dc c WHERE c.id = b.v) AS w FROM db b WHERE EXISTS (SELECT 1 FROM dp p WHERE p.k = b.k) FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id| k|w 
+--+--+--
+ 1|10|c1
+(1 row)
+
+s1: WARNING:  there is no transaction in progress

@@ -1,0 +1,150 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1get s5get s5rows s4locks s4free s1c s5c s4show
+step s1get: WITH j AS (SELECT gj.job_queue_id, gj.priority, gj.run_at, gj.id FROM gj WHERE gj.is_available = true AND run_at <= '2026-01-02' AND (gj.job_queue_id IS NULL OR gj.job_queue_id IN (SELECT id FROM gq WHERE gq.is_available = true FOR UPDATE SKIP LOCKED)) ORDER BY priority ASC, run_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w1', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w1', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.attempts;
+id|job_queue_id|attempts
+--+------------+--------
+ 1|           1|       1
+(1 row)
+
+step s5get: BEGIN; WITH j AS (SELECT gj.job_queue_id, gj.priority, gj.run_at, gj.id FROM gj WHERE gj.is_available = true AND run_at <= '2026-01-02' AND (gj.job_queue_id IS NULL OR gj.job_queue_id IN (SELECT id FROM gq WHERE gq.is_available = true FOR UPDATE SKIP LOCKED)) ORDER BY priority ASC, run_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.attempts;
+id|job_queue_id|attempts
+--+------------+--------
+ 2|            |       1
+(1 row)
+
+step s5rows: SELECT id, locked_by, xmax::text::bigint = txid_current() AS mine FROM gq ORDER BY id;
+id|locked_by|mine
+--+---------+----
+ 1|         |f   
+(1 row)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('gq') ORDER BY locked_row;
+locked_row|multi|modes   
+----------+-----+--------
+(0,1)     |f    |{Update}
+(1 row)
+
+step s4free: SELECT id FROM gq ORDER BY id FOR UPDATE SKIP LOCKED;
+id
+--
+(0 rows)
+
+step s1c: COMMIT;
+step s5c: COMMIT;
+step s4show: SELECT 'job' AS t, id, job_queue_id AS q, locked_by, attempts, payload FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, NULL, locked_by, NULL, queue_name FROM gq WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t    |id|q|locked_by|attempts|payload
+-----+--+-+---------+--------+-------
+job  | 1|1|w1       |       1|p0     
+job  | 2| |w5       |       1|p0     
+queue| 1| |w1       |        |qa     
+(3 rows)
+
+
+starting permutation: s1holdA s5get s1c s5more s5rows s4locks s5c s4show
+step s1holdA: SELECT id FROM gq WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s5get: BEGIN; WITH j AS (SELECT gj.job_queue_id, gj.priority, gj.run_at, gj.id FROM gj WHERE gj.is_available = true AND run_at <= '2026-01-02' AND (gj.job_queue_id IS NULL OR gj.job_queue_id IN (SELECT id FROM gq WHERE gq.is_available = true FOR UPDATE SKIP LOCKED)) ORDER BY priority ASC, run_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.attempts;
+id|job_queue_id|attempts
+--+------------+--------
+ 2|            |       1
+(1 row)
+
+step s1c: COMMIT;
+step s5more: WITH j AS (SELECT gj.job_queue_id, gj.priority, gj.run_at, gj.id FROM gj WHERE gj.is_available = true AND run_at <= '2026-01-02' AND (gj.job_queue_id IS NULL OR gj.job_queue_id IN (SELECT id FROM gq WHERE gq.is_available = true FOR UPDATE SKIP LOCKED)) ORDER BY priority ASC, run_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED), q AS (UPDATE gq SET locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.attempts;
+id|job_queue_id|attempts
+--+------------+--------
+ 1|           1|       1
+(1 row)
+
+step s5rows: SELECT id, locked_by, xmax::text::bigint = txid_current() AS mine FROM gq ORDER BY id;
+id|locked_by|mine
+--+---------+----
+ 1|w5       |t   
+(1 row)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('gq') ORDER BY locked_row;
+locked_row|multi|modes   
+----------+-----+--------
+(0,1)     |f    |{Update}
+(1 row)
+
+step s5c: COMMIT;
+step s4show: SELECT 'job' AS t, id, job_queue_id AS q, locked_by, attempts, payload FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, NULL, locked_by, NULL, queue_name FROM gq WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t    |id|q|locked_by|attempts|payload
+-----+--+-+---------+--------+-------
+job  | 1|1|w5       |       1|p0     
+job  | 2| |w5       |       1|p0     
+queue| 1| |w5       |        |qa     
+(3 rows)
+
+
+starting permutation: s1del s5wait s1c s5rows s4locks s5c s4show
+step s1del: DELETE FROM gj WHERE id = 1;
+step s5wait: BEGIN; WITH j AS (SELECT gj.job_queue_id, gj.priority, gj.run_at, gj.id FROM gj WHERE gj.is_available = true AND run_at <= '2026-01-02' AND (gj.job_queue_id IS NULL OR gj.job_queue_id IN (SELECT id FROM gq WHERE gq.is_available = true FOR UPDATE SKIP LOCKED)) ORDER BY priority ASC, run_at ASC LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.attempts; <waiting ...>
+step s1c: COMMIT;
+step s5wait: <... completed>
+id|job_queue_id|attempts
+--+------------+--------
+ 2|            |       1
+(1 row)
+
+step s5rows: SELECT id, locked_by, xmax::text::bigint = txid_current() AS mine FROM gq ORDER BY id;
+id|locked_by|mine
+--+---------+----
+ 1|         |t   
+(1 row)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('gq') ORDER BY locked_row;
+locked_row|multi|modes         
+----------+-----+--------------
+(0,1)     |f    |{"For Update"}
+(1 row)
+
+step s5c: COMMIT;
+step s4show: SELECT 'job' AS t, id, job_queue_id AS q, locked_by, attempts, payload FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, NULL, locked_by, NULL, queue_name FROM gq WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t  |id|q|locked_by|attempts|payload
+---+--+-+---------+--------+-------
+job| 2| |w5       |       1|p0     
+(1 row)
+
+
+starting permutation: s1upd s5wait s1c s5rows s4locks s4free s5c s4show
+step s1upd: UPDATE gj SET payload = 'p1' WHERE id = 1;
+step s5wait: BEGIN; WITH j AS (SELECT gj.job_queue_id, gj.priority, gj.run_at, gj.id FROM gj WHERE gj.is_available = true AND run_at <= '2026-01-02' AND (gj.job_queue_id IS NULL OR gj.job_queue_id IN (SELECT id FROM gq WHERE gq.is_available = true FOR UPDATE SKIP LOCKED)) ORDER BY priority ASC, run_at ASC LIMIT 1 FOR UPDATE), q AS (UPDATE gq SET locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gq.id = j.job_queue_id) UPDATE gj SET attempts = gj.attempts + 1, locked_by = 'w5', locked_at = '2026-01-02' FROM j WHERE gj.id = j.id RETURNING gj.id, gj.job_queue_id, gj.attempts; <waiting ...>
+step s1c: COMMIT;
+step s5wait: <... completed>
+id|job_queue_id|attempts
+--+------------+--------
+ 1|           1|       1
+(1 row)
+
+step s5rows: SELECT id, locked_by, xmax::text::bigint = txid_current() AS mine FROM gq ORDER BY id;
+id|locked_by|mine
+--+---------+----
+ 1|w5       |t   
+(1 row)
+
+step s4locks: SELECT locked_row, multi, modes FROM pgrowlocks('gq') ORDER BY locked_row;
+locked_row|multi|modes   
+----------+-----+--------
+(0,1)     |f    |{Update}
+(1 row)
+
+step s4free: SELECT id FROM gq ORDER BY id FOR UPDATE SKIP LOCKED;
+id
+--
+(0 rows)
+
+step s5c: COMMIT;
+step s4show: SELECT 'job' AS t, id, job_queue_id AS q, locked_by, attempts, payload FROM gj WHERE locked_by IS NOT NULL UNION ALL SELECT 'queue', id, NULL, locked_by, NULL, queue_name FROM gq WHERE locked_by IS NOT NULL ORDER BY 1, 2;
+t    |id|q|locked_by|attempts|payload
+-----+--+-+---------+--------+-------
+job  | 1|1|w5       |       1|p1     
+queue| 1| |w5       |        |qa     
+(2 rows)
+

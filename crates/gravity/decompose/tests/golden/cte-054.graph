@@ -1,0 +1,11 @@
+-- cte-054
+-- INSERT INTO z SELECT FROM generate_series(1, 3);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:3)]
+  project ()
+  write INSERT rel=16428 rti=1 natts=0 indexes=()
+  outs
+mapped: ModifyTable FunctionScan

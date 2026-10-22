@@ -1,0 +1,273 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2b s1l s2u s2_blocker1 s2_unlock s2c rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2b: BEGIN;
+step s1l: SELECT * FROM foo WHERE pg_advisory_xact_lock(0) IS NOT NULL AND key = 1 FOR KEY SHARE;
+ERROR:  sqe: statement over columnar relation "foo" is not served (cause: node/lock-rows)
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_blocker1: DELETE FROM foo;
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s2c: COMMIT;
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+(0 rows)
+
+
+starting permutation: s2b s1l s2u s2_blocker3 s2_unlock s2c rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2b: BEGIN;
+step s1l: SELECT * FROM foo WHERE pg_advisory_xact_lock(0) IS NOT NULL AND key = 1 FOR KEY SHARE;
+ERROR:  sqe: statement over columnar relation "foo" is not served (cause: node/lock-rows)
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_blocker3: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s2c: COMMIT;
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+  1|    2
+(1 row)
+
+
+starting permutation: s2b s1l s2u s2_blocker1 s2_unlock s2r rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2b: BEGIN;
+step s1l: SELECT * FROM foo WHERE pg_advisory_xact_lock(0) IS NOT NULL AND key = 1 FOR KEY SHARE;
+ERROR:  sqe: statement over columnar relation "foo" is not served (cause: node/lock-rows)
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_blocker1: DELETE FROM foo;
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s2r: ROLLBACK;
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+  1|    1
+(1 row)
+
+
+starting permutation: s2b s1l s2u s2_blocker3 s2_unlock s2r rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2b: BEGIN;
+step s1l: SELECT * FROM foo WHERE pg_advisory_xact_lock(0) IS NOT NULL AND key = 1 FOR KEY SHARE;
+ERROR:  sqe: statement over columnar relation "foo" is not served (cause: node/lock-rows)
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_blocker3: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s2r: ROLLBACK;
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+  1|    1
+(1 row)
+
+
+starting permutation: s2b s1l s2u s2_blocker1 s2c s2_unlock rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2b: BEGIN;
+step s1l: SELECT * FROM foo WHERE pg_advisory_xact_lock(0) IS NOT NULL AND key = 1 FOR KEY SHARE;
+ERROR:  sqe: statement over columnar relation "foo" is not served (cause: node/lock-rows)
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_blocker1: DELETE FROM foo;
+step s2c: COMMIT;
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+(0 rows)
+
+
+starting permutation: s2b s1l s2u s2_blocker3 s2c s2_unlock rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2b: BEGIN;
+step s1l: SELECT * FROM foo WHERE pg_advisory_xact_lock(0) IS NOT NULL AND key = 1 FOR KEY SHARE;
+ERROR:  sqe: statement over columnar relation "foo" is not served (cause: node/lock-rows)
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_blocker3: UPDATE foo SET value = 2 WHERE key = 1;
+step s2c: COMMIT;
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+  1|    2
+(1 row)
+
+
+starting permutation: s2b s1l s2u s2_blocker1 s2r s2_unlock rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2b: BEGIN;
+step s1l: SELECT * FROM foo WHERE pg_advisory_xact_lock(0) IS NOT NULL AND key = 1 FOR KEY SHARE;
+ERROR:  sqe: statement over columnar relation "foo" is not served (cause: node/lock-rows)
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_blocker1: DELETE FROM foo;
+step s2r: ROLLBACK;
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+  1|    1
+(1 row)
+
+
+starting permutation: s2b s1l s2u s2_blocker3 s2r s2_unlock rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2b: BEGIN;
+step s1l: SELECT * FROM foo WHERE pg_advisory_xact_lock(0) IS NOT NULL AND key = 1 FOR KEY SHARE;
+ERROR:  sqe: statement over columnar relation "foo" is not served (cause: node/lock-rows)
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s2_blocker3: UPDATE foo SET value = 2 WHERE key = 1;
+step s2r: ROLLBACK;
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+  1|    1
+(1 row)
+
+
+starting permutation: s2_unlock s1b s2b s1s s2u s1ks s2c s2d1 s1c rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s2b: BEGIN;
+step s1s: SELECT * FROM foo;
+key|value
+---+-----
+  1|    1
+(1 row)
+
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s1ks: SELECT * FROM foo FOR KEY SHARE;
+key|value
+---+-----
+  1|    1
+(1 row)
+
+step s2c: COMMIT;
+step s2d1: DELETE FROM foo WHERE key = 1; <waiting ...>
+step s1c: COMMIT;
+step s2d1: <... completed>
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+(0 rows)
+
+
+starting permutation: s2_unlock s1b s2b s1s s2u s1ks s2c s2d3 s1c rsel
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2_unlock: SELECT pg_advisory_unlock(0);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s2b: BEGIN;
+step s1s: SELECT * FROM foo;
+key|value
+---+-----
+  1|    1
+(1 row)
+
+step s2u: UPDATE foo SET value = 2 WHERE key = 1;
+step s1ks: SELECT * FROM foo FOR KEY SHARE;
+key|value
+---+-----
+  1|    1
+(1 row)
+
+step s2c: COMMIT;
+step s2d3: UPDATE foo SET value = 3 WHERE key = 1;
+step s1c: COMMIT;
+step rsel: SELECT * FROM foo ORDER BY key;
+key|value
+---+-----
+  1|    3
+(1 row)
+

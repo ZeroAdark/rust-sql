@@ -1,0 +1,4 @@
+path	crates/gravity/fn/src/typesem/keysem/call/alias.rs
+growth	std::vec::Vec::push	1
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

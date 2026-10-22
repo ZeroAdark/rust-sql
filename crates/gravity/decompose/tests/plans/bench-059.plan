@@ -1,0 +1,22 @@
+-- name: bench-059
+-- sql: SELECT c3, c7 FROM gw WHERE c1 > 699 /* W1 */;
+-- rel 16431 gw am=heap kind=r natts=17
+-- att 16431 1 id typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 2 c1 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 3 c2 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 4 c3 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 5 c4 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 6 c5 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 7 c6 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 8 c7 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 9 c8 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 10 c9 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 11 c10 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 12 c11 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 13 c12 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16431 14 d1 typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 16431 15 d2 typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 16431 16 t1 typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 16431 17 t2 typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- trigext 16431 before=- after=- instead=- stmt=- trans=- internal=- defer=- rules=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 53572 :scan.plan.plan_rows 606186 :scan.plan.plan_width 8 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 4 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 4 :location 27} :resno 1 :resname c3 :ressortgroupref 0 :resorigtbl 16431 :resorigcol 4 :resjunk false} {TARGETENTRY :expr {VAR :varno 1 :varattno 8 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 8 :location 31} :resno 2 :resname c7 :ressortgroupref 0 :resorigtbl 16431 :resorigcol 8 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 521 :opfuncid 147 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno 1 :varattno 2 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 2 :location 48} {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 53 :constvalue 4 [ 187 2 0 0 0 0 0 0 ]}) :location 51}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 2 4 8)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname gw :colnames ("id" "c1" "c2" "c3" "c4" "c5" "c6" "c7" "c8" "c9" "c10" "c11" "c12" "d1" "d2" "t1" "t2")} :rtekind 0 :relid 16431 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 16431 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 9 11 15) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16431) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 0}

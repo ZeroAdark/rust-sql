@@ -1,0 +1,5 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/octet.rs
+growth	std::vec::Vec::push	1
+method	pgrc_format::try_vec	1
+method	std::iter::Iterator::collect	1
+method	std::string::ToString::to_string	1

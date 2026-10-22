@@ -110,6 +110,9 @@ pub enum Step {
     // not at init — EXPLAIN (GENERIC_PLAN) inits but never evaluates.
     ParamExternMissing {
         paramid: i32,
+        paramtype: Oid,
+        fetch: Option<::types_portal::params::ParamFetchHook>,
+        out: OutRef,
     },
     // PARAM_EXTERN bound as a type other than the planned one: C raises
     // ERRCODE_DATATYPE_MISMATCH at evaluation (ExecEvalParamExtern), not at
@@ -377,6 +380,12 @@ pub enum Step {
         agg: NonNull<::types_fmgr::AggStateNode>,
         aggref: NonNull<()>,
         shared: bool,
+    },
+    // C select_current_set before a sorted grouping set's transition
+    // (u32::MAX = the base context, for hashed sets).
+    AggSelectSet {
+        agg: NonNull<::types_fmgr::AggStateNode>,
+        setno: u32,
     },
     AggStrictInputCheck1 {
         arg: NonNull<NullableDatum>,
@@ -897,12 +906,12 @@ pub struct FieldStoreState {
     pub tupdesc_id: u64,
 }
 
-// Tupdescs + by-name map compile-resolved (C: first eval; plan invalidation
-// covers DDL between). map[out_i] = 1-based in attno, 0 = NULL; None = relabel.
 pub struct ConvertRowtypeState {
-    pub indesc: NonNull<::types_tuple::TupleDescData<'static>>,
-    pub outdesc: NonNull<::types_tuple::TupleDescData<'static>>,
+    pub inputtype: Oid,
+    pub outputtype: Oid,
+    pub descriptor_ids: Option<(u64, u64)>,
     pub map: Option<NonNull<[i16]>>,
+    pub mcx: Mcx<'static>,
 }
 
 // C JsonConstructorExprState: resolved-once metadata for the
@@ -986,6 +995,8 @@ pub struct AggPerGroup {
     pub trans_value_is_null: bool,
     pub no_trans_value: bool,
 }
+
+const _: () = assert!(core::mem::size_of::<AggPerGroup>() == 16);
 
 /// C's NULL `hash_pergroup[setno]`: the cell value the nullcheck step skips on
 /// (also the cells' initial, never-dereferenced value).
@@ -1287,6 +1298,7 @@ pub struct IoCoerceCalls {
     pub outcall: FuncCall,
     pub incall: FuncCall,
     pub in_strict: bool,
+    pub text_into: Option<&'static ::types_fmgr::OutInto>,
 }
 
 // FuncCall minus frame/nargs (a constant 2): keeps fused steps inside 64B.
@@ -1560,11 +1572,11 @@ impl CmpOp {
     // The conformance test in tests.rs pins this to the exact 90-OID golden
     // mapping.
     pub fn for_fn_oid(oid: Oid) -> Option<CmpOp> {
-        Some(CmpOp::from_lanereg_shape(::lanereg::aot_qual_cmp(oid)?))
+        Some(CmpOp::from_lanereg_shape(crate::batchreg::aot_qual_cmp(oid)?))
     }
 
-    fn from_lanereg_shape(s: ::lanereg::CmpShape) -> CmpOp {
-        use ::lanereg::{CmpPred as P, CmpWidth as W};
+    fn from_lanereg_shape(s: crate::batchreg::CmpShape) -> CmpOp {
+        use crate::batchreg::{CmpPred as P, CmpWidth as W};
         match (s.width, s.pred) {
             (W::I4, P::Eq) => CmpOp::Int4Eq,
             (W::I4, P::Ne) => CmpOp::Int4Ne,
@@ -2102,9 +2114,6 @@ pub struct ExprState<'mcx> {
     // C EEOP_DOMAIN_TESTVAL_EXT: econtext domainValue, same one-cell shape,
     // written via set_domain_test.
     pub(crate) ext_domain_test: Option<NonNull<NullableDatum>>,
-    // Copy-and-patch kernel entry (jit.rs); the code block itself is owned by
-    // the executor session collector, which outlives this state.
-    pub(crate) jit: Option<crate::jit::JitHandle>,
     // C mtstate->mt_merge_action stand-in: MERGE_SUPPORT_FUNC steps read this
     // compile-allocated cell; only MERGE RETURNING projections may compile it.
     pub(crate) merge_action_cell: Option<NonNull<Option<::types_nodes::nodes_enums::CmdType>>>,
@@ -2159,7 +2168,6 @@ impl<'mcx> ExprState<'mcx> {
                 escontext: None,
                 ext_case_test: None,
                 ext_domain_test: None,
-                jit: None,
                 merge_action_cell: None,
                 allow_merge_support: false,
                 cparam_arg: core::ptr::null_mut(),

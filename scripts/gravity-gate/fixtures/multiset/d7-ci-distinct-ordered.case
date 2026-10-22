@@ -1,0 +1,17 @@
+# V4R-270 (D7, main 09-26): an equal-not-identical group / DISTINCT key outputs any member of its group; eqk maps the key
+# column's texts to their class under PG's `=` (the rig asks PG); everything else stays exact
+# DISTINCT under a nondeterministic collation, ORDER BY the key: runs compare by class
+sql: SELECT DISTINCT s FROM cn ORDER BY s;
+eqk: 1	apple	APPLE
+eqk: 1	APPLE	APPLE
+eqk: 1	Apple	APPLE
+eqk: 1	banana	BANANA
+eqk: 1	BANANA	BANANA
+class: ordered 1
+verdict: match
+[pg]
+apple
+banana
+[got]
+APPLE
+BANANA

@@ -1,0 +1,11 @@
+-- regress-full-opr_sanity-032
+-- SELECT c.oid, c.conname FROM pg_conversion as c WHERE c.conproc = 0 OR pg_encoding_to_char(conforencoding) = '' OR pg_encoding_to_char(contoencoding) = '';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=3 end=sink
+  nodes n0@0
+  source range rel=2607 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Offset:byval2:w2:val
+  filter or(op607(relabel26(v1.7), c26:0), op93(fn1597(v1.5), c19:#64), op93(fn1597(v1.6), c19:#64))
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

@@ -1,0 +1,15 @@
+-- oltp-085
+-- DELETE FROM order_line WHERE ol_w_id = 1 AND ol_d_id = 2 AND ol_o_id = 5 /* multirow: row executor, lower.md §8.12 */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16504 rti=1 am=heap index=16514
+    key att=3 op=96 value=c23:1
+    key att=6 op=532 value=c23:2
+    key att=2 op=96 value=c23:5
+    recheck (op96(v1.3, c23:1), op532(v1.6, c23:2), op96(v1.2, c23:5))
+    lanes RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write DELETE rel=16504 rti=1 natts=10 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable IndexScan

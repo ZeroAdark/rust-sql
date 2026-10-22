@@ -1744,7 +1744,7 @@ fn get_func_expr<'mcx>(
     }
 
     check_deparse_nargs(expr.args.len())?;
-    let mut argtypes = Vec::with_capacity(expr.args.len());
+    let mut argtypes = ::mcx::std_vec_with_capacity("ruleutils", expr.args.len())?;
     let mut argnames = Vec::new();
     for arg in expr.args.iter() {
         if let Some(na) = arg.as_named_arg_expr() {
@@ -2082,7 +2082,7 @@ fn get_windowfunc_expr_helper<'mcx>(
     if let Some((_, funcname, _)) = json {
         ctx.buf.push_str(funcname);
     } else {
-        let mut argtypes = Vec::with_capacity(wfunc.args.len());
+        let mut argtypes = ::mcx::std_vec_with_capacity("ruleutils", wfunc.args.len())?;
         let mut argnames = Vec::new();
         for arg in wfunc.args.iter() {
             if let Some(na) = arg.as_named_arg_expr() {
@@ -3019,7 +3019,7 @@ pub(crate) fn get_name_for_var_field<'mcx>(
                 expr = ste.expr;
                 if expr.node_tag() == NodeTag::T_Var {
                     let parents: Vec<Rc<DeparseNamespace<'mcx>>> =
-                        ctx.namespaces[netlevelsup..].to_vec();
+                        ::mcx::std_vec_from_slice("adt", &ctx.namespaces[netlevelsup..])?;
                     let mydpns =
                         Rc::new(query::set_deparse_for_query(ctx.mcx, subquery, &parents)?);
                     let save_ns = std::mem::replace(
@@ -3097,7 +3097,7 @@ pub(crate) fn get_name_for_var_field<'mcx>(
                 expr = ste.expr;
                 if expr.node_tag() == NodeTag::T_Var {
                     let parents: Vec<Rc<DeparseNamespace<'mcx>>> =
-                        ctx.namespaces[ctelevelsup..].to_vec();
+                        ::mcx::std_vec_from_slice("adt", &ctx.namespaces[ctelevelsup..])?;
                     let mydpns =
                         Rc::new(query::set_deparse_for_query(ctx.mcx, ctequery, &parents)?);
                     let save_ns = std::mem::replace(

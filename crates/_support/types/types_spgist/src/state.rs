@@ -15,6 +15,15 @@ use ::types_tuple::TupleDescData;
 
 use crate::{spgConfigOut, SpGistTypeDesc};
 
+#[cold]
+#[inline(never)]
+fn missing_support_function(procnum: u16, index: Option<&str>) -> Box<PgError> {
+    Box::new(PgError::error(format!(
+        "missing support function {procnum} for attribute 1 of index \"{}\"",
+        index.unwrap_or_default()
+    )))
+}
+
 // fmgr.c FunctionCallNColl: elog(ERROR, "function %u returned NULL").
 #[cold]
 #[inline(never)]
@@ -36,6 +45,7 @@ pub struct SpGistState<'mcx> {
     pub chooseFn: FmgrInfo,
     pub picksplitFn: FmgrInfo,
     pub compressFn: FmgrInfo,
+    pub missingProcIndex: Option<String>,
     // The key column's parsed opclass options image (C: the Const that
     // index_getprocinfo hangs on every support proc's fn_expr, allocated in
     // rd_indexcxt); boxed so the FmgrInfos' fn_expr stays valid as the
@@ -71,6 +81,14 @@ impl SpGistState<'_> {
         }
     }
 
+    /// spgdoinsert.c:1934: choose is looked up lazily, before a non-null key.
+    pub fn require_choose(&self) -> PgResult<()> {
+        if self.missingProcIndex.is_some() && self.chooseFn.fn_oid == 0 {
+            return Err(missing_support_function(crate::SPGIST_CHOOSE_PROC, self.missingProcIndex.as_deref()));
+        }
+        Ok(())
+    }
+
     pub fn call_compress(&mut self, mcx: Mcx<'_>, datum: Datum) -> PgResult<Datum> {
         self.frame1.rearm(self.indexCollation);
         // SAFETY: the caller's temp context outlives consumption of the result.
@@ -89,6 +107,7 @@ impl SpGistState<'_> {
         input: &spgChooseIn,
         out: &mut spgChooseOut,
     ) -> PgResult<()> {
+        self.require_choose()?;
         self.frame2.rearm(self.indexCollation);
         // SAFETY: as call_compress.
         unsafe { self.frame2.set_result_mcx(mcx) };
@@ -109,6 +128,9 @@ impl SpGistState<'_> {
         input: &spgPickSplitIn,
         out: &mut spgPickSplitOut,
     ) -> PgResult<()> {
+        if self.missingProcIndex.is_some() && self.picksplitFn.fn_oid == 0 {
+            return Err(missing_support_function(crate::SPGIST_PICKSPLIT_PROC, self.missingProcIndex.as_deref()));
+        }
         self.frame2.rearm(self.indexCollation);
         // SAFETY: as call_compress.
         unsafe { self.frame2.set_result_mcx(mcx) };

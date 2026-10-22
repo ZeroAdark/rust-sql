@@ -86,7 +86,7 @@ pub fn recordMultipleDependencies<'mcx>(
         .len()
         .min(catalog_indexing::MAX_CATALOG_MULTI_INSERT_BYTES / 28);
     let mut indstate = None;
-    let mut tuples = std::vec::Vec::with_capacity(max_slots);
+    let mut tuples = ::mcx::std_vec_with_capacity("catalog", max_slots)?;
     for r in referenced {
         if isObjectPinned(r) {
             continue;

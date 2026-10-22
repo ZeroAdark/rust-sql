@@ -1,0 +1,11 @@
+-- aggs-002
+-- INSERT INTO pg SELECT i % 200, i % 5, i FROM generate_series(1, 20000) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:20000)]
+  project (1=op530(v3.1, c23:200), 2=op530(v3.1, c23:5), 3=fn316(v3.1))
+  write INSERT rel=16402 rti=1 natts=3 indexes=() route=rti1:16402 natts=3
+  outs 1=w4:val 2=w4:val 3=w8:val
+mapped: ModifyTable FunctionScan

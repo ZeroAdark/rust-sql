@@ -148,7 +148,7 @@ pub(crate) fn clauselist_selectivity_or_nodes<'mcx>(
         }
         let s2 =
             clause_selectivity_node_ext(run, clause, varrelid, jointype, sjinfo, use_extended_stats)?;
-        s1 = s1 + s2 - s1 * s2;
+        s1 = crate::fma_sites::or_sel(s1, s2);
     }
     Ok(s1)
 }
@@ -516,7 +516,7 @@ pub(crate) fn clause_selectivity_node_ext<'mcx>(
         // them is an open-ended list whose misses are planner panics on
         // ordinary SQL rather than estimate differences.
         //
-        // NullIfExpr lands here (regression / regression F-R3-1): its C
+        // NullIfExpr lands here (GL-TESTFIX-1 / GL-TESTRIGS-1 F-R3-1): its C
         // node REPRESENTATION is OpExpr, but its tag is T_NullIfExpr, so C's
         // `is_opclause(clause) || IsA(clause, DistinctExpr)` arm rejects it and
         // this final else takes it — a boolean NULLIF qual estimates via

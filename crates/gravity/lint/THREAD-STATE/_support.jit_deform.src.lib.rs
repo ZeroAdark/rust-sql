@@ -1,0 +1,1 @@
+_support/jit_deform/src/lib.rs	ARENA	pgport	exit	thread	this thread's executable chunks for deform kernels, at most MAX_CHUNKS (the cap); alloc_code refuses past it and the caller falls back to its interpreter

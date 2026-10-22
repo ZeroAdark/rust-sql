@@ -1,0 +1,9 @@
+-- regress-full-xml-017
+-- DO $$ DECLARE xml_declaration text := '<?xml version="1.0" encoding="ISO-8859-1"?>'; degree_symbol text; res xml[]; BEGIN -- Per the documentation, except when the server encoding is UTF8, xpath() -- may not work on non-ASCII data. The untranslatable_character and -- undefined_function traps below, currently dead code, will become relevant -- if we remove this limitation. IF current_setting('server_encoding') <> 'UTF8' THEN RAISE LOG 'skip: encoding % unsupported for xpath', current_setting('server_encoding'); RETURN; END IF; degree_symbol := convert_from('\xc2b0', 'UTF8'); res := xpath('text()', (xml_declaration || '<x>' || degree_symbol || '</x>')::xml); IF degree_symbol <> res[1]::text THEN RAISE 'expected % (%), got % (%)', degree_symbol, convert_to(degree_symbol, 'UTF8'), res[1], convert_to(res[1]::text, 'UTF8'); END IF; EXCEPTION -- character with byte sequence 0xc2 0xb0 in encoding "UTF8" has no equivalent in encoding "LATIN8" WHEN untranslatable_character -- default conversion function for encoding "UTF8" to "MULE_INTERNAL" does not exist OR undefined_function -- unsupported XML feature OR feature_not_supported THEN RAISE LOG 'skip: %', SQLERRM; END $$;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn2931(c25:'text()', fn2896(op654(op654(op654($2, c25:'<x>'), $3), c25:'</x>')), c1009:'\x00\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00'))
+  outs 1=?
+mapped: Result

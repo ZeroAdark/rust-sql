@@ -1,0 +1,87 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT tableoid::regclass, k, at, v FROM pe WHERE acct = 5 ORDER BY at LIMIT 3 FOR UPDATE;
+QUERY PLAN                                                    
+--------------------------------------------------------------
+Limit                                                         
+  ->  LockRows                                                
+        ->  Merge Append                                      
+              Sort Key: pe.at                                 
+              ->  Index Scan using pe1_acct_at_idx on pe1 pe_1
+                    Index Cond: (acct = 5)                    
+              ->  Index Scan using pe2_acct_at_idx on pe2 pe_2
+                    Index Cond: (acct = 5)                    
+              ->  Index Scan using pe3_acct_at_idx on pe3 pe_3
+                    Index Cond: (acct = 5)                    
+(10 rows)
+
+step s1u: UPDATE pe SET v = 'y' WHERE k = 45;
+step s2l: SELECT tableoid::regclass, k, at, v FROM pe WHERE acct = 5 ORDER BY at LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+tableoid|  k|at|v
+--------+---+--+-
+pe3     |215| 5|x
+pe1     | 45|15|y
+pe2     |175|25|x
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c
+step s1m: UPDATE pe SET acct = 6 WHERE k = 45;
+step s2l: SELECT tableoid::regclass, k, at, v FROM pe WHERE acct = 5 ORDER BY at LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+tableoid|  k|at|v
+--------+---+--+-
+pe3     |215| 5|x
+pe2     |175|25|x
+pe1     |  5|35|x
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2o s1c
+step s1m: UPDATE pe SET acct = 6 WHERE k = 45;
+step s2o: SELECT tableoid::regclass, k, at, v FROM pe WHERE acct = 5 ORDER BY at LIMIT 2 OFFSET 1 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+tableoid|  k|at|v
+--------+---+--+-
+pe2     |175|25|x
+pe1     |  5|35|x
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2s s1c
+step s1l: SELECT k FROM pe WHERE k = 215 FOR UPDATE;
+  k
+---
+215
+(1 row)
+
+step s2s: SELECT tableoid::regclass, k, at, v FROM pe WHERE acct = 5 ORDER BY at LIMIT 3 FOR UPDATE SKIP LOCKED;
+tableoid|  k|at|v
+--------+---+--+-
+pe1     | 45|15|x
+pe2     |175|25|x
+pe1     |  5|35|x
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2n s1c
+step s1l: SELECT k FROM pe WHERE k = 215 FOR UPDATE;
+  k
+---
+215
+(1 row)
+
+step s2n: SELECT tableoid::regclass, k, at, v FROM pe WHERE acct = 5 ORDER BY at LIMIT 3 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "pe3"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

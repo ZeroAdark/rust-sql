@@ -1,4 +1,6 @@
 use super::*;
+use std::rc::Rc;
+use types_tuple::TupleDescData;
 use std::cell::Cell;
 use types_core::INVALID_PROC_NUMBER;
 use types_rel::{FormData_pg_class, LockInfoData, LockRelId, RelationData};
@@ -213,6 +215,7 @@ fn relation<'m>(mcx: ::mcx::Mcx<'m>, desc: Rc<TupleDescData<'m>>) -> Relation<'m
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: ::mcx::PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -247,10 +250,27 @@ fn operator<'m>(
     .unwrap()
 }
 
+// Seams are set-once per process; the expression tests share one install.
+fn install_expr_seams() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        miscinit_seams::get_user_id::set(|| 10);
+        aclchk_seams::object_aclcheck::set(|_, _, _, _| Ok(0));
+        syscache_seams::lookup_pg_type_shape::set(|_| {
+            Ok(Some(types_tuple::PgTypeShape {
+                typlen: -1,
+                typbyval: false,
+                typalign: b'i' as i8,
+                typstorage: b'x' as i8,
+                typcollation: 100,
+            }))
+        });
+    });
+}
+
 #[test]
 fn check_allocating_expression_reuses_cache_after_short_row_drop() {
-    miscinit_seams::get_user_id::set(|| 10);
-    aclchk_seams::object_aclcheck::set(|_, _, _, _| Ok(0));
+    install_expr_seams();
     let cx = mcx::MemoryContext::new_bump("check-statement");
     let mcx = cx.mcx();
     let image = text_image(32);

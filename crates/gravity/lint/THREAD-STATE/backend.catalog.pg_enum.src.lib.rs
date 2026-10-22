@@ -1,0 +1,2 @@
+backend/catalog/pg_enum/src/lib.rs	UNCOMMITTED	pgport	xact:AtEOXact_Enum	leader	C's uncommitted_enum_types / uncommitted_enum_values: the enum types and values this transaction made, read by check_safe_enum_use (enum_in and its kin are tier C, never pool-hosted)
+backend/catalog/pg_enum/src/lib.rs	NEXT_PG_ENUM_OID	pgport	at:binary_upgrade_enum_oid	leader	C's binary_upgrade_next_* override: set by pg_upgrade's binary_upgrade_set_next_* support function, consumed (reset) by the next ALTER TYPE .. ADD VALUE on this backend's DDL path

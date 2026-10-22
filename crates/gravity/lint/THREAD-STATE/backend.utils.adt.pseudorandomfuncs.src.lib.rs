@@ -1,0 +1,2 @@
+backend/utils/adt/pseudorandomfuncs/src/lib.rs	PRNG	pgport	at:reset_seed_for_new_backend	leader	random() / setseed() are PARALLEL RESTRICTED, kept on the leader; reseeded after reset_seed_for_new_backend clears SEED_SET
+backend/utils/adt/pseudorandomfuncs/src/lib.rs	SEED_SET	pgport	at:reset_seed_for_new_backend	leader	random() / setseed() are PARALLEL RESTRICTED, kept on the leader; cleared for a new backend by reset_seed_for_new_backend

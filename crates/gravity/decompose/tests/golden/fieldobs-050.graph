@@ -1,0 +1,34 @@
+-- fieldobs-050
+-- SELECT cell_code, cell_code / 1024 AS block, cell_code % 7 AS lane, count(*) AS n FROM sightings GROUP BY cell_code, cell_code / 1024, cell_code % 7 ORDER BY n DESC LIMIT 10;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 eligible rows=10000000 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n2@1^
+  source range rel=16464 rti=1 am=pgrc
+    lanes Attr(10):byval4:w4:val Offset:byval2:w2:val
+  project (1=v1.10, 2=op528(v1.10, c23:1024), 3=op530(v1.10, c23:7))
+  outs 1=w4:val 2=w4:val 3=w4:val
+p1 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 TopK)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=agg2803*())
+  sort keys=4-n:I64 form=topk count=10 offset=all
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w8:val
+p2 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n1@0 n0@1
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  limit count=10 offset=all
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w8:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w8:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 4 } producer=p0 layout=[I32,I32,I32]->[Count@24] 32B
+breaker slot=1 kind=TopK budget=Fixed(624) spill=None producer=p1 layout=[I64]->[Count@8] 16B order=4-n
+group slot=0 producer=p0 node=2 form=Hashed hints=[] layout=[I32,I32,I32]->[Count@24] 32B
+  key 0 word=0 resno=1 kind=I32 attno=10 type=23 expr=v1.10
+  key 1 word=1 resno=2 kind=I32 attno=0 type=23 expr=op528(v1.10, c23:1024)
+  key 2 word=2 resno=3 kind=I32 attno=0 type=23 expr=op530(v1.10, c23:7)
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan Sort Agg Limit

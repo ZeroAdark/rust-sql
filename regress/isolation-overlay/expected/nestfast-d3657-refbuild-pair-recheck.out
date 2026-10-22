@@ -1,0 +1,93 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.w, t.note FROM d57_t t JOIN d57_a a ON a.id = t.id WHERE t.w = (SELECT w FROM d57_c WHERE name = 'q' FOR UPDATE) LIMIT 3 FOR UPDATE OF t;
+QUERY PLAN                                               
+---------------------------------------------------------
+Limit                                                    
+  InitPlan 1                                             
+    ->  LockRows                                         
+          ->  Seq Scan on d57_c                          
+                Filter: (name = 'q'::text)               
+  ->  LockRows                                           
+        ->  Hash Join                                    
+              Hash Cond: (a.id = t.id)                   
+              ->  Seq Scan on d57_a a                    
+              ->  Hash                                   
+                    ->  Seq Scan on d57_t t              
+                          Filter: (w = (InitPlan 1).col1)
+(12 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1v s2l s1c s2c
+step s1v: UPDATE d57_t SET note = note || '+' WHERE id IN (7, 12);
+step s2l: SELECT t.id, t.w, t.note FROM d57_t t JOIN d57_a a ON a.id = t.id WHERE t.w = (SELECT w FROM d57_c WHERE name = 'q' FOR UPDATE) LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|w|note
+--+-+----
+ 2|2|n2  
+ 7|2|n7+ 
+12|2|n12+
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1w s2l s1c s2c
+step s1w: UPDATE d57_t SET w = 3 WHERE id = 7;
+step s2l: SELECT t.id, t.w, t.note FROM d57_t t JOIN d57_a a ON a.id = t.id WHERE t.w = (SELECT w FROM d57_c WHERE name = 'q' FOR UPDATE) LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|w|note
+--+-+----
+ 2|2|n2  
+12|2|n12 
+17|2|n17 
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k s2l s1c s2c
+step s1k: UPDATE d57_t SET id = 1007 WHERE id = 7;
+step s2l: SELECT t.id, t.w, t.note FROM d57_t t JOIN d57_a a ON a.id = t.id WHERE t.w = (SELECT w FROM d57_c WHERE name = 'q' FOR UPDATE) LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|w|note
+--+-+----
+ 2|2|n2  
+12|2|n12 
+17|2|n17 
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1q s2l s1c s2c
+step s1q: UPDATE d57_c SET w = 3 WHERE name = 'q';
+step s2l: SELECT t.id, t.w, t.note FROM d57_t t JOIN d57_a a ON a.id = t.id WHERE t.w = (SELECT w FROM d57_c WHERE name = 'q' FOR UPDATE) LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|w|note
+--+-+----
+ 3|3|n3  
+ 8|3|n8  
+13|3|n13 
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1v s1q s2l s1c s2c
+step s1v: UPDATE d57_t SET note = note || '+' WHERE id IN (7, 12);
+step s1q: UPDATE d57_c SET w = 3 WHERE name = 'q';
+step s2l: SELECT t.id, t.w, t.note FROM d57_t t JOIN d57_a a ON a.id = t.id WHERE t.w = (SELECT w FROM d57_c WHERE name = 'q' FOR UPDATE) LIMIT 3 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|w|note
+--+-+----
+ 3|3|n3  
+ 8|3|n8  
+13|3|n13 
+(3 rows)
+
+step s2c: COMMIT;

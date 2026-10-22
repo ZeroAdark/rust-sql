@@ -1,0 +1,1 @@
+gravity/lowerv4/src/effects/visible/drain.rs	SEEN	effects	at:spool_refusal_as@gravity/lowerv4/src/ops/hashjoin/drain/spool_admit.rs	leader	lowering scope: graph pipelines one spool_refusal walk visited; zeroed at each walk's start (spool_admit.rs)

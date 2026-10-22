@@ -1880,7 +1880,7 @@ mod proofs {
     /// balloons.  The finite-arm fc_numeric wrapper shape itself is the wall
     /// (the 2-byte special passthroughs prove at ~90s through the same
     /// wrapper).  Ladder exhausted at the 6GiB laptop cap; these cells are
-    /// CI 40GB RETRY candidates (memory walls are cap-relative).  1703's
+    /// FLEET 40GB RETRY candidates (memory walls are cap-relative).  1703's
     /// finite arms (valid AND invalid typmod) are the recorded gap; the
     /// codec theorem (full i32) + special planes stand.
     macro_rules! numeric_typmod_invalid_spot {

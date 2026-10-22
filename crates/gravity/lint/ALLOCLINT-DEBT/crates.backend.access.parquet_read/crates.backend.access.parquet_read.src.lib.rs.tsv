@@ -1,0 +1,9 @@
+path	crates/backend/access/parquet_read/src/lib.rs
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::try_reserve	1
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	1
+method	std::string::ToString::to_string	1
+method	std::sync::Arc::new	2
+type	std::boxed::Box	2
+type	std::sync::Arc	2

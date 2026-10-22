@@ -227,7 +227,7 @@ pub fn brinbuildempty(index: &Relation<'_>) -> PgResult<()> {
 fn form_and_insert_tuple(state: &mut BrinBuildState<'_, '_>) -> PgResult<()> {
     // Minmax-multi serialization leaves scratch-dead datums in bs_dtuple
     // bv_values[0]: reinitialize before any read (C brin_memtuple_initialize).
-    let scratch = MemoryContext::new_bump("brin form tuple");
+    let scratch = MemoryContext::new_wholesale("brin form tuple");
     let tup = brin_form_tuple(
         scratch.mcx(),
         &state.bs_bdesc,
@@ -306,7 +306,7 @@ fn summarize_range<'mcx>(
     heapBlk: BlockNumber,
     heapNumBlks: BlockNumber,
 ) -> PgResult<()> {
-    let scratch = MemoryContext::new_bump("brin summarize");
+    let scratch = MemoryContext::new_wholesale("brin summarize");
 
     let mut phbuf: Buffer = InvalidBuffer;
     let mut phtup = brin_form_placeholder_tuple(scratch.mcx(), &state.bs_bdesc, heapBlk)?;
@@ -356,7 +356,7 @@ fn summarize_range<'mcx>(
     loop {
         postgres_seams::check_for_interrupts::call()?;
 
-        let form = MemoryContext::new_bump("brin summarize newtup");
+        let form = MemoryContext::new_wholesale("brin summarize newtup");
         let newtup =
             brin_form_tuple(form.mcx(), &state.bs_bdesc, heapBlk, &mut state.bs_dtuple)?;
         let samepage = brin_can_do_samepage_update(phbuf, phtup.len(), newtup.len());
@@ -431,7 +431,7 @@ pub fn brinsummarize<'mcx>(
     let mut state: Option<BrinBuildState<'_, 'mcx>> = None;
     let mut indexInfo: Option<execindexing::IndexInfo<'mcx>> = None;
     let mut buf: Buffer = InvalidBuffer;
-    let tupcxt = MemoryContext::new_bump("brinsummarize tup");
+    let tupcxt = MemoryContext::new_wholesale("brinsummarize tup");
     let mut tup: PgVec<'_, u8> = PgVec::new_in(tupcxt.mcx());
 
     while startBlk < heapNumBlocks {

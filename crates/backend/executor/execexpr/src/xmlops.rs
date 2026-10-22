@@ -115,7 +115,7 @@ pub fn eval_xml_expr(st: &XmlExprState) -> PgResult<(Datum, bool)> {
             Ok((xml_datum(mcx, &buf)?, false))
         }
         XmlExprOp::IS_XMLELEMENT => {
-            let mut named_strs: Vec<(String, Option<Vec<u8>>)> = Vec::with_capacity(named.len());
+            let mut named_strs: Vec<(String, Option<Vec<u8>>)> = ::mcx::std_vec_with_capacity("ExecutorState", named.len())?;
             for (i, nd) in named.iter().enumerate() {
                 let argname = x
                     .arg_names
@@ -134,7 +134,7 @@ pub fn eval_xml_expr(st: &XmlExprState) -> PgResult<(Datum, bool)> {
                 };
                 named_strs.push((argname, v));
             }
-            let mut content: Vec<Vec<u8>> = Vec::with_capacity(args.len());
+            let mut content: Vec<Vec<u8>> = ::mcx::std_vec_with_capacity("ExecutorState", args.len())?;
             for (i, nd) in args.iter().enumerate() {
                 if nd.isnull {
                     continue;
@@ -250,13 +250,19 @@ pub fn map_sql_value_to_xml_value(
             true,
         )?;
         let mut buf: Vec<u8> = Vec::new();
+        let mut growth = ::adt_xml::stringinfo::StringInfoGrowth::default();
+        let mut append = |buf: &mut Vec<u8>, bytes: &[u8]| -> PgResult<()> {
+            growth.before_append(buf.len(), bytes.len())?;
+            buf.extend_from_slice(bytes);
+            Ok(())
+        };
         for (elem, isnull) in elems.iter().zip(nulls.iter()) {
             if *isnull {
                 continue;
             }
-            buf.extend_from_slice(b"<element>");
-            buf.extend_from_slice(&map_sql_value_to_xml_value(*elem, elmtype, true, resmcx)?);
-            buf.extend_from_slice(b"</element>");
+            append(&mut buf, b"<element>")?;
+            append(&mut buf, &map_sql_value_to_xml_value(*elem, elmtype, true, resmcx)?)?;
+            append(&mut buf, b"</element>")?;
         }
         return Ok(buf);
     }
@@ -266,9 +272,9 @@ pub fn map_sql_value_to_xml_value(
     match type_ {
         BOOLOID => {
             return Ok(if value.as_bool() {
-                b"true".to_vec()
+                ::mcx::std_vec_from_slice("ExecutorState", b"true")?
             } else {
-                b"false".to_vec()
+                ::mcx::std_vec_from_slice("ExecutorState", b"false")?
             })
         }
         DATEOID => {
@@ -289,7 +295,7 @@ pub fn map_sql_value_to_xml_value(
                 ::adt_datetime::consts::USE_XSD_DATES,
                 &mut buf,
             );
-            return Ok(buf[..n].to_vec());
+            return Ok(::mcx::std_vec_from_slice("execexpr", &buf[..n])?);
         }
         TIMESTAMPOID => {
             let ts = value.as_i64();
@@ -311,7 +317,7 @@ pub fn map_sql_value_to_xml_value(
                 ::adt_datetime::consts::USE_XSD_DATES,
                 &mut buf,
             );
-            return Ok(buf[..n].to_vec());
+            return Ok(::mcx::std_vec_from_slice("execexpr", &buf[..n])?);
         }
         TIMESTAMPTZOID => {
             let ts = value.as_i64();
@@ -344,7 +350,7 @@ pub fn map_sql_value_to_xml_value(
                 ::adt_datetime::consts::USE_XSD_DATES,
                 &mut buf,
             );
-            return Ok(buf[..n].to_vec());
+            return Ok(::mcx::std_vec_from_slice("execexpr", &buf[..n])?);
         }
         BYTEAOID => {
             let payload = varlena_payload(value, resmcx)?;
@@ -368,7 +374,7 @@ pub fn map_sql_value_to_xml_value(
     let bytes = cstr.to_bytes();
 
     if type_ == XMLOID || !xml_escape_strings {
-        Ok(bytes.to_vec())
+        Ok(::mcx::std_vec_from_slice("execexpr", &bytes)?)
     } else {
         Ok(adt_xml::escape_xml(bytes))
     }

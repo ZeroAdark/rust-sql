@@ -77,9 +77,9 @@ pub fn compare_expanded_ranges(
     Ok(0)
 }
 
-pub fn minmax_multi_init(maxvalues: i32) -> MinMaxMultiRanges {
+pub fn minmax_multi_init(maxvalues: i32) -> PgResult<MinMaxMultiRanges> {
     debug_assert!(maxvalues > 0);
-    MinMaxMultiRanges {
+    Ok(MinMaxMultiRanges {
         typid: 0,
         colloid: 0,
         attno: 0,
@@ -89,8 +89,8 @@ pub fn minmax_multi_init(maxvalues: i32) -> MinMaxMultiRanges {
         nvalues: 0,
         maxvalues,
         target_maxvalues: 0,
-        values: vec![Datum::null(); maxvalues as usize],
-    }
+        values: ::mcx::std_vec_from_elem("brin", Datum::null(), maxvalues as usize)?,
+    })
 }
 
 pub fn range_deduplicate_values(mcx: Mcx<'_>, range: &mut MinMaxMultiRanges) -> PgResult<()> {
@@ -333,7 +333,7 @@ pub fn brin_range_deserialize<'mcx>(
     }
     let nvalues = total as usize;
 
-    let mut range = minmax_multi_init(maxvalues);
+    let mut range = minmax_multi_init(maxvalues)?;
     range.nranges = hdr.nranges;
     range.nvalues = hdr.nvalues;
     range.nsorted = hdr.nvalues;
@@ -645,10 +645,11 @@ pub fn build_expanded_ranges<'mcx>(
 ) -> PgResult<(PgVec<'mcx, ExpandedRange>, usize)> {
     let neranges = (ranges.nranges + ranges.nvalues) as usize;
     let mut eranges: PgVec<'mcx, ExpandedRange> = vec_with_capacity_in(mcx, neranges)?;
-    eranges.resize(
+    ::mcx::pgvec_resize(
+        &mut eranges,
         neranges,
         ExpandedRange { minval: Datum::null(), maxval: Datum::null(), collapsed: false },
-    );
+    )?;
     fill_expanded_ranges(&mut eranges, neranges, ranges);
     let n = sort_expanded_ranges(mcx, cmp, colloid, &mut eranges)?;
     Ok((eranges, n))
@@ -764,7 +765,7 @@ pub fn ensure_free_space_in_buffer(
     // Scratch context per compaction (C's local AllocSet): distance/comparator
     // calls may allocate heavily and this can run many times per page range.
     {
-        let ctx = ::mcx::MemoryContext::new_bump("minmax-multi context");
+        let ctx = ::mcx::MemoryContext::new_wholesale("minmax-multi context");
         let cmcx = ctx.mcx();
 
         let (mut eranges, mut neranges) = build_expanded_ranges(cmcx, &mut cmp, colloid, range)?;
@@ -854,7 +855,7 @@ pub fn compactify_ranges(
     let mut distance_fn = minmax_multi_get_procinfo(bdesc, ranges.attno, PROCNUM_DISTANCE)?;
 
     {
-        let ctx = ::mcx::MemoryContext::new_bump("minmax-multi context");
+        let ctx = ::mcx::MemoryContext::new_wholesale("minmax-multi context");
         let cmcx = ctx.mcx();
 
         let (mut eranges, mut neranges) = build_expanded_ranges(cmcx, &mut cmp, colloid, ranges)?;

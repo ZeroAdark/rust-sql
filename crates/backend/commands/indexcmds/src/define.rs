@@ -1,7 +1,3 @@
-// DefineIndex (partitioned recursion included) + ComputeIndexAttrs +
-// CheckPredicate + ChooseIndex*Name* + IndexSetParentIndex (indexcmds.c).
-// Loud: CONCURRENTLY, named opclasses, WITH options,
-// exclusion/WITHOUT OVERLAPS, index detach.
 use backend_progress::progress::{
     PROGRESS_CREATEIDX_ACCESS_METHOD_OID, PROGRESS_CREATEIDX_COMMAND,
     PROGRESS_CREATEIDX_COMMAND_CREATE, PROGRESS_CREATEIDX_COMMAND_CREATE_CONCURRENTLY,
@@ -91,8 +87,8 @@ pub(crate) fn define_index_for_alter<'mcx>(
         skip_build,
         is_rebuild,
     )?;
-    // C ATExecAddIndex tail: a TryReuseIndex relfilenumber means the new
-    // index adopted the dropped edition's storage — cancel its pending unlink.
+    // A TryReuseIndex relfilenumber means the new index adopted the dropped
+    // edition's storage — cancel its pending unlink.
     if stmt.oldNumber != types_core::InvalidRelFileNumber {
         let irel = indexam::index_open(mcx, index_oid, types_rel::NoLock)?;
         irel.rd_createSubid.set(stmt.oldCreateSubid);
@@ -116,8 +112,6 @@ const Anum_pg_index_indclass: i32 = 18;
 const Anum_pg_index_indexprs: i32 = 20;
 const Anum_pg_index_indpred: i32 = 21;
 
-// CheckIndexCompatible (indexcmds.c:180-354). Expressions, predicates and
-// invalid indexes are assumed incompatible, as in C.
 pub fn CheckIndexCompatible<'mcx>(
     mcx: Mcx<'mcx>,
     old_id: Oid,
@@ -158,6 +152,7 @@ pub fn CheckIndexCompatible<'mcx>(
         ii_WithoutOverlaps: false,
         ii_CheckedUnchanged: false,
         ii_IndexUnchanged: false,
+        ii_ParallelWorkers: 0,
     };
     let mut typeIds = [InvalidOid; INDEX_MAX_KEYS as usize];
     let mut collationIds = [InvalidOid; INDEX_MAX_KEYS as usize];
@@ -223,10 +218,9 @@ pub fn CheckIndexCompatible<'mcx>(
             break;
         }
     }
-    // CompareOpclassOptions (indexcmds.c:307-318, 341-396). Both sides are
-    // transformRelOptions-built text[] images, so the byte comparison of the
-    // 4-byte-header normalized images coincides with C's array_eq under C
-    // collation.
+    // Both sides are transformRelOptions-built text[] images, so the byte
+    // comparison of the 4-byte-header normalized images coincides with C's
+    // array_eq under C collation.
     if ret {
         for i in 0..old_natts {
             let old = lsyscache::get_attoptions(mcx, old_id, (i + 1) as i16)?;
@@ -248,11 +242,6 @@ pub fn CheckIndexCompatible<'mcx>(
             }
         }
     }
-    // Any change in exclusion operator selections breaks compatibility
-    // (indexcmds.c:324-352). C tests `indexInfo->ii_ExclusionOps != NULL`,
-    // which makeIndexInfo allocates exactly when the caller asked for an
-    // exclusion constraint or WITHOUT OVERLAPS — the same condition here,
-    // since ComputeIndexAttrs fills ii_ExclusionOps only on those paths.
     if ret && (!exclusion_op_names.is_nil() || is_without_overlaps) {
         let mut old_ops = [InvalidOid; INDEX_MAX_KEYS as usize];
         let mut old_procs = [InvalidOid; INDEX_MAX_KEYS as usize];
@@ -265,7 +254,6 @@ pub fn CheckIndexCompatible<'mcx>(
             &mut old_strats,
         )?;
         ret = old_ops[..old_natts] == indexInfo.ii_ExclusionOps[..old_natts];
-        // Require an exact input type match for polymorphic operators.
         if ret {
             for i in 0..old_natts {
                 let (left, right) = lsyscache::op_input_types(indexInfo.ii_ExclusionOps[i])?;
@@ -292,14 +280,8 @@ struct IndexAmInfo {
     amcaninclude: bool,
 }
 
-// DefineIndex's AM lookup (indexcmds.c:840-901): pg_am AMNAME probe with the
-// rtree->gist substitution hack; capability flags per each builtin handler's
-// IndexAmRoutine (nbtree.c:122, hash.c:65, ginutil.c:45, gist.c:66,
-// spgutils.c:51, brin.c:257).
 fn resolve_index_am(name: Option<&str>) -> PgResult<IndexAmInfo> {
     let Some(mut name) = name else {
-        // C never sees a NULL accessMethod (gram.y and parse_utilcmd fill in
-        // DEFAULT_INDEX_TYPE); a None here is an unported producer lane.
         return Err(err(
             "index definitions without an access method are not supported yet".to_string(),
             types_error::ERRCODE_FEATURE_NOT_SUPPORTED,
@@ -334,7 +316,6 @@ fn resolve_index_am(name: Option<&str>) -> PgResult<IndexAmInfo> {
     })
 }
 
-// (amcanorder, amcanunique, amcanmulticol, amcaninclude) per builtin handler.
 fn index_am_flags(kind: types_relscan::IndexAmKind) -> (bool, bool, bool, bool) {
     use types_relscan::IndexAmKind::*;
     match kind {
@@ -344,14 +325,12 @@ fn index_am_flags(kind: types_relscan::IndexAmKind) -> (bool, bool, bool, bool) 
         Gist => (false, false, true, true),
         Spgist => (false, false, false, true),
         Brin => (false, false, true, false),
-        // contrib/bloom blhandler: multicolumn only.
         Bloom => (false, false, true, false),
         #[allow(unreachable_patterns)]
         _ => (false, false, false, false),
     }
 }
 
-// pg_am AMNAME probe: (oid, amhandler); None if no such access method.
 fn index_am_probe(amname: &str) -> PgResult<Option<(Oid, Oid)>> {
     const Anum_pg_am_oid: i32 = 1;
     const Anum_pg_am_amhandler: i32 = 3;
@@ -368,15 +347,11 @@ fn index_am_probe(amname: &str) -> PgResult<Option<(Oid, Oid)>> {
     Ok(Some((oid, amhandler)))
 }
 
-// get_am_name (amcmds.c:192-206) for error details; a missing AM renders the
-// way errdetail's %s renders C's NULL (src/port/snprintf.c:691).
 pub(crate) fn get_am_name(amid: Oid) -> PgResult<String> {
     Ok(commands_amcmds::get_am_name(amid)?.unwrap_or_else(|| "(null)".to_string()))
 }
 
-// GetOperatorFromCompareType (indexcmds.c): equality/overlaps/contained-by
-// operator lookup for temporal constraints via the index AM's stratnum
-// translation. rhstype = InvalidOid means the opclass input type.
+// rhstype = InvalidOid means the opclass input type.
 pub fn GetOperatorFromCompareType<'mcx>(
     mcx: Mcx<'mcx>,
     opclass: Oid,
@@ -465,10 +440,9 @@ pub fn DefineIndex<'mcx>(
     let mut root_save_nestlevel = guc::NewGUCNestLevel();
     guc::RestrictSearchPath()?;
 
-    // C (indexcmds.c:594-606) opens the nest level BEFORE the GUC_ACTION_SAVE
-    // override, so AtEOXact_GUC(false, root_save_nestlevel) below reverts the
-    // empty default_tablespace; issued outside the level it survived every
-    // pop and leaked '' into the session until transaction end.
+    // AtEOXact_GUC(false, root_save_nestlevel) below reverts the empty
+    // default_tablespace; issued outside the level it survived every pop and
+    // leaked '' into the session until transaction end.
     if stmt.reset_default_tblspc {
         guc::set_config_option(
             "default_tablespace",
@@ -484,8 +458,6 @@ pub fn DefineIndex<'mcx>(
     let concurrent = stmt.concurrent
         && lsyscache::get_rel_persistence(tableId)? != RELPERSISTENCE_TEMP;
 
-    // Start progress report. If we're building a partition, this was already
-    // done (indexcmds.c:622-637).
     if parentIndexId == InvalidOid {
         backend_progress::pgstat_progress_start_command(
             backend_progress::PROGRESS_COMMAND_CREATE_INDEX,
@@ -501,14 +473,11 @@ pub fn DefineIndex<'mcx>(
         );
     }
 
-    // No index OID to report yet
     backend_progress::pgstat_progress_update_param(PROGRESS_CREATEIDX_INDEX_OID, InvalidOid as i64);
 
     let exclusion = !stmt.excludeOpNames.is_nil() || stmt.iswithoutoverlaps;
 
     let numberOfKeyAttributes = stmt.indexParams.len();
-    // C: allIndexParams = list_concat_copy(indexParams, indexIncludingParams);
-    // key columns are list positions < numberOfKeyAttributes (indexcmds.c:652).
     let mut allIndexParams = stmt.indexParams.clone_in(mcx)?;
     allIndexParams.concat(mcx, &stmt.indexIncludingParams)?;
     let numberOfAttributes = allIndexParams.len();
@@ -618,8 +587,6 @@ pub fn DefineIndex<'mcx>(
             )?;
         }
     }
-    // Force shared indexes into the pg_global tablespace; if it's not
-    // shared, don't allow it to be placed there.
     let tablespaceId = if rel.rd_rel.relisshared {
         commands_tablespace::GLOBALTABLESPACE_OID
     } else if tablespaceId == commands_tablespace::GLOBALTABLESPACE_OID {
@@ -632,9 +599,9 @@ pub fn DefineIndex<'mcx>(
     };
 
     let indexColNames = ChooseIndexColumnNames(mcx, &allIndexParams)?;
-    // Bytes, as C's char*: a generated name is byte-clipped at NAMEDATALEN
-    // (makeObjectName) and, in a SQL_ASCII database, may end inside a
-    // multibyte character; the catalog stores it verbatim.
+    // A generated name is byte-clipped at NAMEDATALEN and, in a SQL_ASCII
+    // database, may end inside a multibyte character; the catalog stores it
+    // verbatim.
     let name_storage;
     let indexRelationName: &[u8] = match stmt.idxname {
         Some(n) => n.as_bytes(),
@@ -643,8 +610,6 @@ pub fn DefineIndex<'mcx>(
                 ChooseRelationName(mcx, rel.name(), None, "pkey", namespaceId, true)?
             } else if stmt.isconstraint {
                 let addition = ChooseIndexNameAddition(mcx, &indexColNames)?;
-                // C ChooseIndexName (indexcmds.c:2709-2720): "excl" only for
-                // an EXCLUDE list; UNIQUE ... WITHOUT OVERLAPS is "key".
                 let suffix = if !stmt.excludeOpNames.is_nil() { "excl" } else { "key" };
                 ChooseRelationName(mcx, rel.name(), Some(&addition[..]), suffix, namespaceId, true)?
             } else {
@@ -654,12 +619,7 @@ pub fn DefineIndex<'mcx>(
         }
     };
 
-    // Look up the access method and verify it can handle the requested
-    // features — at C's position (indexcmds.c:840-901): AFTER the relkind /
-    // partitioned / temp / acl / tablespace checks, so e.g. "cannot create
-    // index on relation" outranks "access method ... does not exist".
     let am = resolve_index_am(stmt.accessMethod)?;
-    // indexcmds.c:866
     backend_progress::pgstat_progress_update_param(
         PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
         am.oid as i64,
@@ -672,6 +632,14 @@ pub fn DefineIndex<'mcx>(
         am.amcanmulticol,
         am.amcaninclude,
     );
+    // IX1 L1: the indexes a pgrcolumnar leaf takes (execindexing::pgrc_index_check: btree, hash, GiST, SP-GiST, GIN
+    // from IX1 L4; no UNIQUE / PRIMARY KEY / EXCLUDE before IX2, no BRIN, no CONCURRENTLY), refused before any
+    // catalog work: CREATE INDEX, ALTER TABLE ADD PRIMARY KEY / UNIQUE / EXCLUDE, CREATE TABLE's constraints and the
+    // per-leaf recursion from a partitioned parent (whose relam is only its partitions' default: the check is on the
+    // leaves). The build scan asks again for the rebuild paths.
+    if rel.rd_rel.relkind != RELKIND_PARTITIONED_TABLE && tableam_vocab::is_pgrcolumnar_am_oid(rel.rd_rel.relam) {
+        execindexing::pgrc_index_check(am.kind, amname, stmt.unique || stmt.primary, exclusion, concurrent)?;
+    }
     if stmt.unique && !stmt.iswithoutoverlaps && !amcanunique {
         return Err(err(
             format!("access method \"{amname}\" does not support unique indexes"),
@@ -690,7 +658,7 @@ pub fn DefineIndex<'mcx>(
             types_error::ERRCODE_FEATURE_NOT_SUPPORTED,
         ));
     }
-    // C: exclusion requires amRoutine->amgettuple (gin and brin lack it).
+    // Exclusion requires amRoutine->amgettuple (gin and brin lack it).
     if exclusion
         && matches!(
             am.kind,
@@ -711,15 +679,12 @@ pub fn DefineIndex<'mcx>(
         ));
     }
 
-    // Must run as the table owner (indexcmds.c:906, after the :689-690
-    // switch): contain_mutable_functions_after_planning pre-evaluates
-    // constant immutable calls.
+    // Must run as the table owner: contain_mutable_functions_after_planning
+    // pre-evaluates constant immutable calls.
     if let Some(wc) = stmt.whereClause {
         CheckPredicate(mcx, wc)?;
     }
 
-    // Parse AM-specific options, convert to text array form, validate
-    // (indexcmds.c:908-913, after CheckPredicate).
     let reloptions =
         reloptions::transformRelOptions(mcx, None, &stmt.options, None, &[], false, false)?;
     reloptions::index_reloptions(mcx, accessMethodId, reloptions.as_deref(), true)?;
@@ -749,6 +714,7 @@ pub fn DefineIndex<'mcx>(
         ii_WithoutOverlaps: stmt.iswithoutoverlaps,
         ii_CheckedUnchanged: false,
         ii_IndexUnchanged: false,
+        ii_ParallelWorkers: 0,
     };
 
     let mut typeIds = [InvalidOid; INDEX_MAX_KEYS as usize];
@@ -779,7 +745,6 @@ pub fn DefineIndex<'mcx>(
         }),
     )?;
 
-    // upstream 2780538433fc (18.5): Check for USAGE privilege on types used by stored expressions.
     // The below call to index_create() creates the dependencies on types. We
     // are responsible for checking USAGE.
     if check_rights {
@@ -809,8 +774,7 @@ pub fn DefineIndex<'mcx>(
             "EXCLUDE"
         };
         for i in 0..key.partnatts as usize {
-            // List/range partkeys use btree opclasses, hash partkeys hash
-            // ones (indexcmds.c:997-1001, in sync with ComputePartitionAttrs).
+            // List/range partkeys use btree opclasses, hash partkeys hash ones.
             let eq_strategy: i16 = if key.strategy == partcache::PARTITION_STRATEGY_HASH {
                 lsyscache::HTEqualStrategyNumber
             } else {
@@ -823,9 +787,9 @@ pub fn DefineIndex<'mcx>(
                 eq_strategy,
             )?;
             if ptkey_eqop == InvalidOid {
-                // C elog(ERROR) (indexcmds.c:1024): a catchable XX000, never
-                // a backend panic (reachable by a superuser's opclass with
-                // FUNCTION 1 alone, since DefineOpClass never runs amvalidate).
+                // A catchable XX000, never a backend panic (reachable by a
+                // superuser's opclass with FUNCTION 1 alone, since
+                // DefineOpClass never runs amvalidate).
                 return Err(Box::new(
                     PgError::error(format!(
                         "missing operator {}({},{}) in partition opfamily {}",
@@ -897,7 +861,6 @@ pub fn DefineIndex<'mcx>(
                         found = true;
                         break;
                     } else if exclusion {
-                        // C prints get_opname here (indexcmds.c:1079), not format_operator.
                         let opname_pg = lsyscache::get_opname(mcx, idx_eqop)?.expect("opname");
                         let opname = opname_pg.as_str();
                         let att = rel.rd_att.attr(key.partattrs[i] as usize - 1);
@@ -999,8 +962,6 @@ pub fn DefineIndex<'mcx>(
     let safe_index =
         indexInfo.ii_Expressions.is_nil() && indexInfo.ii_Predicate.is_nil();
 
-    // C indexcmds.c:1177-1198: report index creation if appropriate (delayed
-    // till after most of the error checks). errmsg_internal: not translated.
     if stmt.isconstraint && !quiet {
         let constraint_type = if stmt.primary {
             "PRIMARY KEY"
@@ -1078,8 +1039,7 @@ pub fn DefineIndex<'mcx>(
         } else {
             0
         }),
-            // indexcmds.c:1271 passes the allowSystemTableMods GUC through,
-            // lifting index_create's system-relation refusal (index.c:802).
+            // Passes the allowSystemTableMods GUC through, lifting index_create's system-relation refusal.
             allow_system_table_mods: init_small::globals::allowSystemTableMods(),
             is_internal: !check_rights,
             parent_index_relid: parentIndexId,
@@ -1096,7 +1056,6 @@ pub fn DefineIndex<'mcx>(
         guc::AtEOXact_GUC(false, root_save_nestlevel);
         guard.restore();
         rel.close(types_rel::NoLock)?;
-        // If this is the top-level index, we're done (indexcmds.c:1290)
         if parentIndexId == InvalidOid {
             backend_progress::pgstat_progress_end_command();
         }
@@ -1128,11 +1087,6 @@ pub fn DefineIndex<'mcx>(
             }
             let mut invalidate_parent = false;
 
-            // Report the total number of partitions at the start of the
-            // command; don't update it when being called recursively
-            // (indexcmds.c:1330-1358). C's callers pass the count in as an
-            // optimization (-1 = "count it here"); every caller here counts
-            // the same way, one less than find_all_inheritors reports.
             if parentIndexId == InvalidOid {
                 let children = pg_inherits::find_all_inheritors(mcx, tableId, types_rel::NoLock)?;
                 let total_parts = children.len() as i64 - 1;
@@ -1157,8 +1111,6 @@ pub fn DefineIndex<'mcx>(
                 let child_save_nestlevel = guc::NewGUCNestLevel();
                 guc::RestrictSearchPath()?;
 
-                // Foreign-table partitions get no index: skip for a plain
-                // index, fail for a constraint index (indexcmds.c:1390-1409).
                 if childrel.rd_rel.relkind == types_rel::RELKIND_FOREIGN_TABLE {
                     if stmt.unique || stmt.primary {
                         return Err(Box::new(
@@ -1223,7 +1175,6 @@ pub fn DefineIndex<'mcx>(
                         }
                         found = true;
 
-                        // Report this partition as processed (indexcmds.c:1496).
                         backend_progress::pgstat_progress_incr_param(
                             PROGRESS_CREATEIDX_PARTITIONS_DONE,
                             1,
@@ -1285,8 +1236,6 @@ pub fn DefineIndex<'mcx>(
         if parentIndexId == InvalidOid {
             backend_progress::pgstat_progress_end_command();
         } else {
-            // Update progress for an intermediate partitioned index itself
-            // (indexcmds.c:1608).
             backend_progress::pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
         }
         return Ok(indexRelationId);
@@ -1297,9 +1246,6 @@ pub fn DefineIndex<'mcx>(
 
     if !concurrent {
         rel.close(types_rel::NoLock)?;
-        // If this is the top-level index, the command is done overall;
-        // otherwise, increment progress to report one child index is done
-        // (indexcmds.c:1626-1629).
         if parentIndexId == InvalidOid {
             backend_progress::pgstat_progress_end_command();
         } else {
@@ -1308,8 +1254,7 @@ pub fn DefineIndex<'mcx>(
         return Ok(indexRelationId);
     }
 
-    // Concurrent build: phases per validate_index()'s protocol; session lock
-    // on the table pins it across the mid-command commits.
+    // Session lock on the table pins it across the mid-command commits.
     let heaprelid = rel.rd_lockInfo.lockRelId;
     let heaplocktag = [types_storage::lock::LOCKTAG::relation(heaprelid.dbId, heaprelid.relId)];
     rel.close(types_rel::NoLock)?;
@@ -1323,8 +1268,6 @@ pub fn DefineIndex<'mcx>(
         procarray::SetIndexsafeProcflags()?;
     }
 
-    // Report the new index OID and the beginning of phase 2 together
-    // (indexcmds.c:1672-1685).
     backend_progress::pgstat_progress_update_multi_param(
         &[PROGRESS_CREATEIDX_INDEX_OID, PROGRESS_CREATEIDX_PHASE],
         &[indexRelationId as i64, PROGRESS_CREATEIDX_PHASE_WAIT_1],
@@ -1343,7 +1286,6 @@ pub fn DefineIndex<'mcx>(
         procarray::SetIndexsafeProcflags()?;
     }
 
-    // Phase 3 of concurrent index build (indexcmds.c:1748).
     backend_progress::pgstat_progress_update_param(
         PROGRESS_CREATEIDX_PHASE,
         PROGRESS_CREATEIDX_PHASE_WAIT_2,
@@ -1366,7 +1308,6 @@ pub fn DefineIndex<'mcx>(
         procarray::SetIndexsafeProcflags()?;
     }
 
-    // indexcmds.c:1811
     backend_progress::pgstat_progress_update_param(
         PROGRESS_CREATEIDX_PHASE,
         PROGRESS_CREATEIDX_PHASE_WAIT_3,
@@ -1386,7 +1327,6 @@ pub fn DefineIndex<'mcx>(
 
     lmgr::UnlockRelationIdForSession(&heaprelid, types_rel::ShareUpdateExclusiveLock)?;
 
-    // indexcmds.c:1843
     backend_progress::pgstat_progress_end_command();
 
     Ok(indexRelationId)
@@ -1398,8 +1338,7 @@ pub(crate) fn ResolveOpClass(
     accessMethodName: &str,
     accessMethodId: Oid,
 ) -> PgResult<Oid> {
-    // C DeconstructQualifiedName's default arm raises the improper-qualified-name
-    // error itself for 0 or >3 parts; collect every part so it can.
+    // DeconstructQualifiedName's default arm raises the improper-qualified-name error itself for 0 or >3 parts; collect every part so it can.
     let names: Vec<&str> =
         opclass.iter().map(|n| n.as_string().expect("opclass holds Strings").sval).collect();
     let (schemaname, opcname) = catalog_namespace::DeconstructQualifiedName(&names)?;
@@ -1486,7 +1425,6 @@ pub fn IndexSetParentIndex<'mcx>(
             }
             .as_oid();
             if inhparent != parentOid {
-                // C elog(ERROR) (indexcmds.c:4530): corrupt catalog, XX000.
                 return Err(Box::new(
                     PgError::error(format!(
                         "bogus pg_inherit row: inhrelid {partRelid} inhparent {inhparent}"
@@ -1567,8 +1505,6 @@ fn update_relispartition<'mcx>(mcx: Mcx<'mcx>, relationId: Oid, newval: bool) ->
     )?;
     let tup = genam::systable_getnext(mcx, &mut scan)?
         .ok_or_else(|| cache_lookup_failed("relation", relationId))?;
-    // C: SearchSysCacheLockedCopy1 (indexcmds.c:4582) / UnlockTuple (:4589).
-    // Ahead of the relispartition read below, which is C's Assert input.
     let otid = tup.t_self;
     lmgr::LockTuple(&class_rel, &otid, InplaceUpdateTupleLock)?;
     {
@@ -1578,8 +1514,6 @@ fn update_relispartition<'mcx>(mcx: Mcx<'mcx>, relationId: Oid, newval: bool) ->
             types_tuple::heap_getattr(tup, Anum_pg_class_relispartition as i32, class_rel.descr(), &mut isnull)
         }
         .as_bool();
-        // C Assert (indexcmds.c:4606): debug-only; a release build writes
-        // the (unchanged) value rather than aborting.
         debug_assert!(cur != newval, "update_relispartition: no-op write for relation {relationId}");
     }
     let desc = class_rel.descr();
@@ -1599,7 +1533,6 @@ fn update_relispartition<'mcx>(mcx: Mcx<'mcx>, relationId: Oid, newval: bool) ->
     class_rel.close(types_rel::RowExclusiveLock)
 }
 
-// DefineIndex's invalidate_parent arm: flip pg_index.indisvalid off in place.
 fn set_pg_index_invalid<'mcx>(mcx: Mcx<'mcx>, indexRelationId: Oid) -> PgResult<()> {
     const IndexRelationId: Oid = 2610;
     const IndexRelidIndexId: Oid = 2679;
@@ -1673,7 +1606,9 @@ fn ComputeIndexAttrs<'mcx>(
 ) -> PgResult<()> {
     let nkeycols = indexInfo.ii_NumIndexKeyAttrs as usize;
     debug_assert!(exclusionOpNames.is_nil() || exclusionOpNames.len() == nkeycols);
-    let mut excl_iter = exclusionOpNames.iter();
+    // indexcmds.c:1939: WITHOUT OVERLAPS ignores exclusionOpNames (cloned
+    // index statements carry both) and derives its operators instead.
+    let mut excl_iter = exclusionOpNames.iter().take(if iswithoutoverlaps { 0 } else { nkeycols });
     for (attn, node) in attList.iter().enumerate() {
         let attribute = node
             .as_variant::<IndexElem>()
@@ -1688,8 +1623,7 @@ fn ComputeIndexAttrs<'mcx>(
                     break;
                 }
             }
-            // C SearchSysCacheAttName resolves system columns to negative
-            // attnums; DefineIndex then rejects them with 0A000.
+            // Resolves system columns to negative attnums; DefineIndex then rejects them with 0A000.
             if found.is_none() {
                 if let Some(sysatt) = catalog_heap::SystemAttributeByName(name) {
                     found = Some(*sysatt);
@@ -1850,7 +1784,6 @@ fn ComputeIndexAttrs<'mcx>(
             indexInfo.ii_ExclusionProcs[attn] = lsyscache::get_opcode(opid)?;
             indexInfo.ii_ExclusionStrats[attn] = strat as u16;
         } else if iswithoutoverlaps {
-            // Last key column takes the overlaps operator; the rest equality.
             let cmptype = if attn == indexInfo.ii_NumIndexKeyAttrs as usize - 1 {
                 lsyscache::COMPARE_OVERLAP
             } else {
@@ -1930,7 +1863,6 @@ fn push_index_expression<'mcx>(
     Ok(())
 }
 
-// CheckPredicate (indexcmds.c).
 fn CheckPredicate<'mcx>(mcx: Mcx<'mcx>, predicate: types_nodes::Node<'mcx>) -> PgResult<()> {
     if clauses::contain_mutable_functions_after_planning(mcx, predicate)? {
         return Err(err(
@@ -1941,8 +1873,6 @@ fn CheckPredicate<'mcx>(mcx: Mcx<'mcx>, predicate: types_nodes::Node<'mcx>) -> P
     Ok(())
 }
 
-// ChooseIndexName, non-constraint arm (pkey/key/excl labels ride the
-// constraint lane).
 fn ChooseIndexName<'mcx>(
     mcx: Mcx<'mcx>,
     tabname: &str,
@@ -1953,11 +1883,6 @@ fn ChooseIndexName<'mcx>(
     ChooseRelationName(mcx, tabname, Some(&addition[..]), "idx", namespaceId, false)
 }
 
-// ChooseIndexNameAddition (indexcmds.c:2745): joins the column names with
-// '_', each strlcpy'd at NAMEDATALEN-1 BYTES (paranoia: the inputs are
-// already shorter), and stops once the addition reaches NAMEDATALEN;
-// make_object_name truncates the final name. Bytes throughout: a column
-// name from ChooseIndexColumnNames may already be byte-clipped.
 fn ChooseIndexNameAddition<'mcx>(
     mcx: Mcx<'mcx>,
     colnames: &[PgVec<'mcx, u8>],
@@ -1976,9 +1901,6 @@ fn ChooseIndexNameAddition<'mcx>(
     Ok(buf)
 }
 
-// ChooseIndexColumnNames (indexcmds.c:2778): duplicate column names get a
-// numeric suffix; the original is pg_mbcliplen'd (BYTES under SQL_ASCII,
-// possibly mid-character) so name+numeral stays under NAMEDATALEN.
 fn ChooseIndexColumnNames<'mcx>(
     mcx: Mcx<'mcx>,
     indexElems: &types_nodes::NodeList<'mcx>,
@@ -1995,8 +1917,6 @@ fn ChooseIndexColumnNames<'mcx>(
         let mut i = 1;
         while result.iter().any(|n| n[..] == curname[..]) {
             let nbuf = i.to_string();
-            // Ensure generated names are shorter than NAMEDATALEN
-            // (pg_mbcliplen over the original name, then the numeral).
             let nlen = mbutils_seams::pg_mbcliplen::call(
                 origname.as_bytes(),
                 origname.len() as i32,
@@ -2012,16 +1932,11 @@ fn ChooseIndexColumnNames<'mcx>(
     Ok(result)
 }
 
-// ChooseRelationName (indexcmds.c:2578). The pg_class probe runs under a DIRTY
-// snapshot (indexcmds.c:2613/2617/2643), deliberately, so it can see another
-// backend's *uncommitted* claim on the generated name and skip to the next
-// suffix. Under an MVCC snapshot the collision is invisible and the loser of the
-// race aborts on pg_class_relname_nsp_index instead of taking `foo_i_idx1`.
-// C's header comment (indexcmds.c:2593-2601) is explicit that this only narrows
-// the window rather than closing it, and that a command choosing several names
-// must CommandCounterIncrement between them.
-// Note ConstraintNameExists stays MVCC: C passes a NULL snapshot there too
-// (pg_constraint.c), so that half is already correct.
+// The pg_class probe runs under a DIRTY snapshot deliberately, so it can see
+// another backend's uncommitted claim on the generated name and skip to the
+// next suffix. Under an MVCC snapshot the collision is invisible and the loser
+// of the race aborts on pg_class_relname_nsp_index instead of taking
+// foo_i_idx1.
 pub(crate) fn ChooseRelationName<'mcx>(
     mcx: Mcx<'mcx>,
     name1: &str,
@@ -2031,8 +1946,6 @@ pub(crate) fn ChooseRelationName<'mcx>(
     isconstraint: bool,
 ) -> PgResult<PgVec<'mcx, u8>> {
     let pgclassrel = table::table_open(mcx, RELATION_RELATION_ID, types_rel::AccessShareLock)?;
-    // indexcmds.c:2617 InitDirtySnapshot, held across the whole retry loop as
-    // C's stack SnapshotDirty is.
     let dirty = std::rc::Rc::new(::types_snapshot::SnapshotData::sentinel(
         mcx,
         ::types_snapshot::SnapshotType::SNAPSHOT_DIRTY,
@@ -2072,7 +1985,6 @@ pub(crate) fn ChooseRelationName<'mcx>(
     Ok(relname)
 }
 
-// ConstraintNameExists (pg_constraint.c).
 fn constraint_name_exists(mcx: Mcx<'_>, name: &[u8], namespaceid: Oid) -> PgResult<bool> {
     let conrel = table::table_open(
         mcx,
@@ -2112,6 +2024,32 @@ mod tests {
     use types_relscan::IndexAmKind::*;
 
     #[test]
+    fn pgrc_index_check_serves_five_ams_and_refuses_the_rest() {
+        let check = |am, name: &str, unique, exclusion, concurrent| execindexing::pgrc_index_check(am, name, unique, exclusion, concurrent);
+        // IX1 L4: GIN joins once pgrc serves bitmap scans (its only scan)
+        for am in [Btree, Hash, Gist, Spgist, Gin] {
+            assert!(check(am, "x", false, false, false).is_ok(), "{am:?} is served");
+        }
+        let refused = |r: types_error::PgResult<()>| {
+            let e = r.expect_err("refused");
+            assert_eq!(e.sqlstate(), types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
+            (e.message().to_string(), e.hint().map(str::to_string))
+        };
+        assert_eq!(
+            refused(check(Brin, "brin", false, false, false)),
+            ("pgrcolumnar does not support BRIN indexes".into(), Some("Zone maps already prune block ranges of pgrcolumnar tables.".into()))
+        );
+        assert_eq!(refused(check(Bloom, "bloom", false, false, false)).0, "pgrcolumnar does not support index access method \"bloom\"");
+        assert_eq!(refused(check(Btree, "btree", true, false, false)).0, "pgrcolumnar does not support unique indexes yet");
+        // a PRIMARY KEY ... WITHOUT OVERLAPS is unique and an exclusion: the unique refusal names it
+        assert_eq!(refused(check(Gist, "gist", true, true, false)).0, "pgrcolumnar does not support unique indexes yet");
+        assert_eq!(refused(check(Gist, "gist", false, true, false)).0, "pgrcolumnar does not support exclusion constraints yet");
+        assert_eq!(refused(check(Btree, "btree", false, false, true)).0, "pgrcolumnar does not support CREATE INDEX CONCURRENTLY");
+        // the AM's refusal outranks the statement's: BRIN is never served, whatever else the statement asks
+        assert_eq!(refused(check(Brin, "brin", true, false, true)).0, "pgrcolumnar does not support BRIN indexes");
+    }
+
+    #[test]
     fn ddl_lookups_run_as_the_ddl_issuer() {
         use miscinit::{GetUserIdAndSecContext, SecContextGuard, SetUserIdAndSecContext};
         use types_core::{ProcessingMode, SECURITY_RESTRICTED_OPERATION};
@@ -2143,8 +2081,6 @@ mod tests {
         assert_eq!(seen, (issuer, 0));
     }
 
-    // pg_mbcliplen is a seam and unit tests install no seams; the stub is
-    // the same UTF-8 boundary clip pg_constraint's truncation_tests uses.
     fn setup_mbcliplen() {
         static SETUP: std::sync::Once = std::sync::Once::new();
         SETUP.call_once(|| {
@@ -2158,9 +2094,6 @@ mod tests {
         });
     }
 
-    // ChooseIndexNameAddition (indexcmds.c): joins with '_', stops appending
-    // once the addition reaches NAMEDATALEN; the final name truncation is
-    // make_object_name's job. Long-name CREATE INDEX no longer panics.
     #[test]
     fn choose_index_name_addition_stops_at_namedatalen() {
         let cx = Box::leak(Box::new(::mcx::MemoryContext::new("indexcmds-addition-test")));
@@ -2178,13 +2111,9 @@ mod tests {
         let long3 = "z".repeat(40);
         let cols = [bytes(&long1), bytes(&long2), bytes(&long3)];
         let addition = super::ChooseIndexNameAddition(mcx, &cols).unwrap();
-        // C appends x*40, then '_' + y*40 (buflen 81 >= NAMEDATALEN) and breaks.
         assert_eq!(&addition[..], format!("{long1}_{long2}").as_bytes());
     }
 
-    // ChooseIndexColumnNames (indexcmds.c): duplicate columns get numeric
-    // suffixes; a long original is pg_mbcliplen'd so name+numeral stays
-    // under NAMEDATALEN.
     #[test]
     fn choose_index_column_names_truncates_like_c() {
         setup_mbcliplen();
@@ -2200,16 +2129,10 @@ mod tests {
         let names = super::ChooseIndexColumnNames(mcx, &elems).unwrap();
         assert_eq!(names.len(), 2);
         assert_eq!(&names[0][..], long.as_bytes());
-        // Second: original clipped to NAMEDATALEN-1-1 = 62 bytes, then "1".
         assert_eq!(&names[1][..], format!("{}1", "c".repeat(62)).as_bytes());
         assert!(names[1].len() < ::types_core::NAMEDATALEN as usize);
     }
 
-    // regression: under the UTF-8 boundary stub the clip
-    // backs off to the character boundary (a UTF8 database); the SQL_ASCII
-    // byte-clip arm (62 bytes = 61 c's + 0xC3, then "1", as the C oracle
-    // stores it) is pinned in pg_constraint's make_object_name tests and
-    // by scripts/lane-bytes-names-e2e.sh against the running server.
     #[test]
     fn choose_index_column_names_backs_off_to_char_boundary_under_utf8() {
         setup_mbcliplen();
@@ -2228,8 +2151,6 @@ mod tests {
         assert_eq!(&names[1][..], format!("{}1", "c".repeat(61)).as_bytes());
     }
 
-    // Each AM handler's IndexAmRoutine flags (PG18): amcaninclude true for
-    // btree/gist/spgist; amcanmulticol false for hash/spgist.
     #[test]
     fn index_am_flags_match_handlers() {
         for (kind, caninclude) in [
@@ -2254,9 +2175,6 @@ mod tests {
         }
     }
 
-    // Panic-hygiene pin (2026-08-18): an IndexStmt with no access method
-    // (never produced by the grammar, which defaults to btree) raises a
-    // clean 0A000 instead of panicking.
     #[test]
     fn resolve_index_am_none_errors_instead_of_panicking() {
         let Err(e) = super::resolve_index_am(None) else {

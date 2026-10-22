@@ -1,0 +1,13 @@
+# a partial ORDER BY: rows trade places inside a tie group
+sql: SELECT g, x FROM t ORDER BY g;
+cols: g	x
+class: ordered 1
+verdict: match
+[pg]
+1	a
+1	b
+2	c
+[got]
+1	b
+1	a
+2	c

@@ -606,29 +606,19 @@ fn engine_snapshot(m: Mcx<'_>, s: &[u8], p: &[u8]) -> String {
 }
 
 fn assert_engine_parity(m: Mcx<'_>, s: &[u8], p: &[u8]) {
-    // Three arms through every entry point: forced Spencer, auto with the
-    // pattern-program tier disabled (pure RE2 dispatch), and auto with the
-    // tier on (the default). Together with the forced-re2 crate tests this
-    // is the four-engine differential — spencer / re2 / auto-RE2 /
-    // pattern-program — over results AND errors.
+    // Two arms through every entry point: forced Spencer and auto (RE2
+    // where the classifier admits the pattern, its pattern program first
+    // where that compiles; regexp_alt's own tests hold the program to the
+    // RE2 automaton). With the forced-re2 crate tests this is the engine
+    // differential — spencer / re2 / auto — over results AND errors.
     regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_SPENCER);
     let spencer = engine_snapshot(m, s, p);
     regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_AUTO);
-    regexp_alt::set_regex_pattern_program(false);
-    let auto_re2 = engine_snapshot(m, s, p);
-    regexp_alt::set_regex_pattern_program(true);
-    let auto_prog = engine_snapshot(m, s, p);
+    let auto = engine_snapshot(m, s, p);
     assert_eq!(
         spencer,
-        auto_re2,
-        "auto (program off) diverges from spencer: pattern {:?} input {:?}",
-        String::from_utf8_lossy(p),
-        String::from_utf8_lossy(s)
-    );
-    assert_eq!(
-        spencer,
-        auto_prog,
-        "auto (pattern program) diverges from spencer: pattern {:?} input {:?}",
+        auto,
+        "auto diverges from spencer: pattern {:?} input {:?}",
         String::from_utf8_lossy(p),
         String::from_utf8_lossy(s)
     );
@@ -644,12 +634,12 @@ fn auto_vs_spencer_differential() {
     let m = cx.mcx();
 
     let corpus: &[&str] = &[
-        "http://www.example.com/path/x?y=1",
+        "http://m.example.com/path/x?y=1",
         "https://sub.host.ru/",
         "http://hostonly.com",
         "not-a-url",
         "",
-        "https://www.xn--80ak6aa92e.com/страница/1",
+        "https://m.xn--80ak6aa92e.com/страница/1",
         "a1b2c3 déf gh",
         "aaa bbb aaa",
         "line one\nline two\n",
@@ -660,7 +650,7 @@ fn auto_vs_spencer_differential() {
     // Compatible class (must actually dispatch) plus known-incompatible
     // patterns (must fail closed and agree trivially).
     let compatible: &[&str] = &[
-        r"^https?://(?:www\.)?([^/]+)/.*$",
+        r"^https?://(?:m\.)?([^/]+)/.*$",
         "",
         "a",
         "a+",
@@ -688,7 +678,7 @@ fn auto_vs_spencer_differential() {
         // Pattern-program subset shapes (the anchored fast tier): the
         // three-arm parity harness runs these program-on AND program-off.
         "^https?://",
-        r"^(?:www\.)?([^/]+)$",
+        r"^(?:m\.)?([^/]+)$",
         "^([a-z0-9]+) ",
         "^[^,]*,",
         "^a.+$",
@@ -708,6 +698,12 @@ fn auto_vs_spencer_differential() {
         "(é|.[^a])",
         r"(.?|é|(?:0{2,}|é[^a][^/,]+ ?|\*)+é(?:c?0|\n{2})+)+|[a-c0-9]?|[ab]0+",
         r"\*{0,2}(.|\n*,*)|(é|[ab]?/+(?:0x,\.?|é|é,? *\n{1,3}){2}|.(?:0éé*|é)*[^a]).*",
+
+        // Two unforced quantifiers before a capture (audit fp-adt-regexp#1),
+        // unpinned (RE2 longest mode) and pinned (Perl mode, program tier).
+        "a?(?:ab)?(b?)",
+        "^a?(?:ab)?(b?)$",
+        "(a?(?:ab)?)b?",
     ];
 
     for p in compatible {
@@ -747,7 +743,150 @@ fn auto_vs_spencer_differential() {
     let toobig = "x*y*z*".repeat(1000);
     regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_AUTO);
     assert!(regexp_alt::dispatch(toobig.as_bytes(), REG_ADVANCED, b"x").unwrap().is_none());
-    assert_engine_parity(m, b"x", toobig.as_bytes());
+    let mut errs = Vec::new();
+    for engine in [regexp_alt::REGEX_ENGINE_SPENCER, regexp_alt::REGEX_ENGINE_AUTO] {
+        regexp_alt::set_regex_engine(engine);
+        errs.push(sqlstate(&textregexeq(m, b"x", toobig.as_bytes(), C).unwrap_err()));
+    }
+    assert_eq!(errs[0], errs[1]);
+}
+
+// Every entry point on the Spencer-ETOOBIG pattern (~3 min in a debug build:
+// each probe recompiles until Spencer's complexity limit trips). Run with
+// `cargo test -p adt_regexp --lib toobig_pattern_full_parity -- --ignored`.
+#[test]
+#[ignore]
+fn toobig_pattern_full_parity() {
+    full_setup();
+    if !regexp_alt::re2_available() {
+        return;
+    }
+    let cx = MemoryContext::new("test");
+    assert_engine_parity(cx.mcx(), b"x", "x*y*z*".repeat(1000).as_bytes());
+}
+
+// Seeded generator over the constructs the auto classifier reasons about
+// (captures, non-capturing groups, optional atoms, quantifiers and bounds
+// incl. leading zeros, alternation, anchors, brackets, multibyte): a reduced
+// deterministic copy of the lane's SQL differential harness. Any auto/spencer
+// disagreement is a routing-filter bug.
+fn pick<'a>(rng: &mut Lcg, items: &[&'a str]) -> &'a str {
+    items[rng.next(items.len())]
+}
+
+fn seg_seq(rng: &mut Lcg, depth: u32, out: &mut String) {
+    const LITS: &[&str] =
+        &["a", "b", "c", "a", "b", "x", "é", r"\.", ".", "[ab]", "[^a]", "[a-c]", "ab", ":"];
+    const QUANTS: &[&str] = &[
+        "", "", "", "", "", "", "?", "?", "*", "*", "+", "{0,1}", "{1,2}", "{2}", "{0,}", "{01}",
+        "{0,01}",
+    ];
+    for _ in 0..1 + rng.next(4) {
+        let r = rng.next(100);
+        if depth < 2 && r < 18 {
+            out.push('(');
+            seg_alt(rng, depth + 1, out);
+            out.push(')');
+        } else if depth < 2 && r < 33 {
+            out.push_str("(?:");
+            seg_alt(rng, depth + 1, out);
+            out.push(')');
+        } else {
+            let lit = pick(rng, LITS);
+            let q = pick(rng, QUANTS);
+            if lit == "ab" && !q.is_empty() {
+                out.push_str("(?:ab)");
+            } else {
+                out.push_str(lit);
+            }
+            out.push_str(q);
+            continue;
+        }
+        out.push_str(pick(rng, QUANTS));
+    }
+}
+
+fn seg_alt(rng: &mut Lcg, depth: u32, out: &mut String) {
+    seg_seq(rng, depth, out);
+    if rng.next(100) < 15 {
+        out.push('|');
+        seg_seq(rng, depth, out);
+    }
+}
+
+#[test]
+fn auto_vs_spencer_generated_corpus() {
+    full_setup();
+    if !regexp_alt::re2_available() {
+        return;
+    }
+    let cx = MemoryContext::new("test");
+    let m = cx.mcx();
+    const SUBJ: &[&str] = &["a", "a", "b", "b", "c", "x", ":", "\n", "é", "."];
+    let mut rng = Lcg(0x5eed_2026_0924);
+    for _ in 0..400 {
+        let mut p = String::new();
+        if rng.next(4) == 0 {
+            p.push('^');
+        }
+        seg_alt(&mut rng, 0, &mut p);
+        if rng.next(5) == 0 {
+            p.push('$');
+        }
+        for _ in 0..5 {
+            let mut s = String::new();
+            for _ in 0..rng.next(7) {
+                s.push_str(pick(&mut rng, SUBJ));
+            }
+            assert_engine_parity(m, s.as_bytes(), p.as_bytes());
+        }
+    }
+}
+
+// Capture resolution: Spencer gives each segment between capture
+// boundaries its longest extent (regexec.c ccondissect); RE2 and the
+// program tier follow Perl priority. Shapes where the two differ must not
+// take capture positions from RE2 (wio P097, audit fp-adt-regexp#1); P105's
+// leading-zero bounds are Spencer-parsed bounds.
+#[test]
+fn capture_segment_resolution_matches_spencer() {
+    full_setup();
+    let cx = MemoryContext::new("test");
+    let m = cx.mcx();
+    let cases: &[(&str, &str, &[Option<&str>])] = &[
+        ("ab", "a?(?:ab)?(b?)", &[Some("")]),
+        ("ab", "^a?(?:ab)?(b?)$", &[Some("")]),
+        ("aab", "a*(?:ab)?(b?)", &[Some("")]),
+        ("ab", "(a?(?:ab)?)b?", &[Some("ab")]),
+        ("ab", "(?:(a*)(?:ab)?)(b?)", &[Some(""), Some("")]),
+        ("http://m.x.org/p", r"^https?://(?:m\.)?([^/]+)/.*$", &[Some("x.org")]),
+    ];
+    for &(s, p, want) in cases {
+        for engine in [regexp_alt::REGEX_ENGINE_SPENCER, regexp_alt::REGEX_ENGINE_AUTO] {
+            regexp_alt::set_regex_engine(engine);
+            let ctx = crate::matches::regexp_match(m, s.as_bytes(), p.as_bytes(), None, C)
+                .unwrap()
+                .expect("pattern matches");
+            let mut got: Vec<Option<Vec<u8>>> = Vec::new();
+            crate::matches::build_regexp_match_result(&ctx, |e| {
+                got.push(e.map(|v| v.as_slice().to_vec()));
+                Ok(())
+            })
+            .unwrap();
+            let want: Vec<Option<Vec<u8>>> =
+                want.iter().map(|g| g.map(|g| g.as_bytes().to_vec())).collect();
+            assert_eq!(got, want, "regexp_match({s:?}, {p:?}) engine {engine}");
+        }
+    }
+    regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_AUTO);
+    for (s, p, want) in [("a", "a{01}", true), ("aa", "^a{0,02}$", true), ("a{01}", "^a{01}$", false)] {
+        assert_eq!(textregexeq(m, s.as_bytes(), p.as_bytes(), C).unwrap(), want, "{s:?} ~ {p:?}");
+    }
+    for p in ["a?(?:ab)?(b?)", "(a?(?:ab)?)b?", "(?:(a*)(?:ab)?)(b?)"] {
+        for s in ["ab", "xaby", "aab", "abab", ""] {
+            assert_engine_parity(m, s.as_bytes(), p.as_bytes());
+        }
+    }
 }
 
 // DATA-adversarial differential corpus: subjects on which the Spencer view
@@ -774,8 +913,8 @@ fn data_adversarial_differential() {
         b"a1\x00b2c3",
         b"aaa\x00aaa",
         b"caf\x00",
-        b"http://www.ex\x00ample.com/path/x?y=1",
-        b"http://www.example.com/path\x00",
+        b"http://m.ex\x00ample.com/path/x?y=1",
+        b"http://m.example.com/path\x00",
         // The two encoding-suite shapes that routed the lift back.
         b"caf\xc3\xa9\x00dcba",
         b"caf\xc3\x00dcba",
@@ -801,7 +940,7 @@ fn data_adversarial_differential() {
         b"^caf",
         b"b[^b]+",
         b"(a)(b)?",
-        br"^https?://(?:www\.)?([^/]+)/.*$",
+        br"^https?://(?:m\.)?([^/]+)/.*$",
     ];
     for p in patterns {
         regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_AUTO);
@@ -846,7 +985,7 @@ fn long_haystack_differential() {
     nul_deep[48 * 1024] = 0;
     let mut invalid_deep = clean.clone().into_bytes();
     invalid_deep[48 * 1024] = 0xff;
-    let mut long_url = String::from("http://www.example.com/");
+    let mut long_url = String::from("http://m.example.com/");
     long_url.push_str(&"p/".repeat(16 * 1024));
     long_url.push_str("end");
 
@@ -854,7 +993,7 @@ fn long_haystack_differential() {
         &b"needle$"[..],
         b"(needle)$",
         b"^ab|needle$",
-        br"^https?://(?:www\.)?([^/]+)/.*$",
+        br"^https?://(?:m\.)?([^/]+)/.*$",
         b"e.d",
     ] {
         for s in [clean.as_bytes(), &nul_deep, &invalid_deep, long_url.as_bytes()] {
@@ -936,6 +1075,71 @@ fn gen_pattern(rng: &mut Lcg) -> String {
 fn gen_haystack(rng: &mut Lcg) -> String {
     const CHARS: &[char] = &['a', 'b', 'c', '0', '1', '/', ',', ' ', '\n', 'é', 'x'];
     (0..rng.next(13)).map(|_| CHARS[rng.next(CHARS.len())]).collect()
+}
+
+// D3121: \s, \m and \M dispatch to RE2 as exact translations over ASCII
+// subjects; a subject with a non-ASCII character or FS..US stays on Spencer.
+// Parity over both, every entry point.
+#[test]
+fn translated_escapes_parity() {
+    full_setup();
+    if !regexp_alt::re2_available() {
+        return;
+    }
+    let cx = MemoryContext::new("test");
+    let m = cx.mcx();
+    let patterns: &[&str] = &[
+        r"\s+",
+        r"\s",
+        r"a\s*b",
+        r"\m(inc|llc|l l c|ltd|co|corp|corporation)\M",
+        r"\minc\M",
+        r"\m[a-z]+",
+        r"[0-9]+\M",
+        r"\m(?:ab|c_)+\M",
+        r"^\s*\mco\M\s*$",
+        r"(\mco)(rp\M)?",
+    ];
+    let corpus: &[&str] = &[
+        "acme trading corp usa",
+        "Blue Sea Co, Ltd.",
+        "l l c holdings inc",
+        "corporation of co",
+        "co-op inc_ x",
+        "coco corp2 9co co9",
+        "tab\tnew\nline\x0bvt\x0cff\rcr  sp",
+        "a\x1cb c\x1dd",
+        "",
+        " ",
+        "_co_ co_ _co",
+        "abab c_c_ ab ab",
+        "naïve co",
+        "café corp",
+        "écorp coé",
+        "nbsp\u{a0}co\u{a0}inc",
+        "x\u{2003}y",
+    ];
+    for p in patterns {
+        regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_AUTO);
+        let re = regexp_alt::dispatch(p.as_bytes(), REG_ADVANCED, b"ascii co").unwrap();
+        assert!(re.is_some(), "expected {p:?} to dispatch to re2");
+        for bad in ["café co", "a\x1cb", "nbsp\u{a0}"] {
+            assert!(
+                regexp_alt::dispatch(p.as_bytes(), REG_ADVANCED, bad.as_bytes()).unwrap().is_none(),
+                "{p:?} over {bad:?} must run Spencer"
+            );
+        }
+        for s in corpus {
+            assert_engine_parity(m, s.as_bytes(), p.as_bytes());
+        }
+    }
+    for p in [r"\m.co", r"\ma?", r"(a|b )\M", r"\m(a|)"] {
+        regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_AUTO);
+        assert!(regexp_alt::dispatch(p.as_bytes(), REG_ADVANCED, b"x").unwrap().is_none(), "{p:?} stays on spencer");
+        for s in corpus {
+            assert_engine_parity(m, s.as_bytes(), p.as_bytes());
+        }
+    }
 }
 
 #[test]
@@ -1028,6 +1232,9 @@ fn dispatch_overhead_microbench() {
 #[test]
 fn indeterminate_collation_guard_fires_on_re2_fast_path() {
     full_setup();
+    if !regexp_alt::re2_available() {
+        return;
+    }
     regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_AUTO);
     let cx = MemoryContext::new("test");
     let m = cx.mcx();
@@ -1112,7 +1319,7 @@ fn session_cache_reclaims_complete_context() {
 // regexp.c:204-231: every cached regexp owns a "RegexpMemoryContext" child of
 // RegexpCacheMemoryContext identified by its pattern, which
 // pg_backend_memory_contexts lists; the pre-fix port kept only the cache root.
-// Audit regression.
+// Audit fp-regex-regc_nfa-p2#1.
 #[test]
 fn cached_regexps_own_an_identified_memory_context() {
     utf8();
@@ -1158,4 +1365,98 @@ fn invalid_option_message_keeps_non_utf8_bytes() {
     let err = invalid_re_option(b"zq");
     assert_eq!(err.message(), "invalid regular expression option: \"z\"");
     assert!(err.message_raw.is_none());
+}
+
+/// The pattern program (`regexp_alt::program`) against PostgreSQL's own engine, for every pattern the dictionary path
+/// runs per entry (compiled and `longest_is_first`): the first match's span and every group equal Spencer's, read through
+/// one replacement that writes them all. Anchored and unanchored, up to nine groups, `.` and negated classes under every
+/// quantifier, over ASCII, multi-byte, newline and empty subjects.
+#[test]
+fn the_pattern_program_matches_as_spencer() {
+    use regexp_alt::program::{Outcome, Program};
+    full_setup();
+    let cx = MemoryContext::new("test");
+    let m = cx.mcx();
+    regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_SPENCER);
+    let patterns = [
+        r"^https?://(?:m\.)?([^/]+)/.*$",
+        r"https?://(?:m\.)?([^/]+)/.*$",
+        r"^https?://(?:m\.)?([^/.]+)\.([^/]+)/.*$",
+        r"^https?://(?:m\.)?([^/]+)/.*\?.*$",
+        "://([^/]+)/",
+        "^/([^/]+)/.*$",
+        "/([^/]+)/[0-9]+",
+        "^/([^/]+)/([^/]+)/.*$",
+        "^/(.+)/[0-9]+/.*$",
+        "^([A-Za-z]+)/.*$",
+        "([A-Za-z]+)/v?[0-9.]+",
+        r"^([A-Za-z]+)/v?([0-9]+)\..*$",
+        "^(.*)/(.*)$",
+        "^(.)(.)(.)(.)(.)(.)(.)(.)(.)",
+        "a.b",
+        "^.{2,3}x",
+        "([^/]{2,3})x",
+        "é(.)",
+        "^(.?)é",
+        "[0-9]+",
+        "b*",
+        "x*$",
+        "^$",
+        "",
+        "^([a-z.]+)\\.com.*$",
+        r"([a-z]+)@([a-z]+)\.",
+    ];
+    let subjects = [
+        "",
+        "http://m.example.com/path/x?y=1",
+        "https://sub.host.ru/",
+        "https://пример.рф/страница?a=б",
+        "x http://a.b/c",
+        "http://hostonly.com",
+        "/news/2024/item",
+        "/a/b/12/c",
+        "/日本/語/3/",
+        "Mozilla/5.0 (X11) Chrome/118.0",
+        "Opera/v12.1",
+        "a/b/c",
+        "abcdefghijk",
+        "a\nb",
+        "aéb",
+        "ééx",
+        "abx",
+        "abcx",
+        "bbb",
+        "xx",
+        "mail.example.com/x",
+        "x ab@cd.ef",
+        "line one\nline two",
+    ];
+    let rep = br"<\&|\1|\2|\3|\4|\5|\6|\7|\8|\9>";
+    for p in patterns {
+        let prog = Program::compile(p.as_bytes()).filter(Program::longest_is_first).unwrap_or_else(|| panic!("{p:?} compiles for the dictionary path"));
+        for s in subjects {
+            let s = s.as_bytes();
+            let want = textregexreplace_noopt(m, s, p.as_bytes(), rep, C).unwrap().as_slice().to_vec();
+            let got = match prog.find(s, 0) {
+                Outcome::Match(f) => {
+                    let mut out = s[..f.start].to_vec();
+                    out.push(b'<');
+                    out.extend_from_slice(&s[f.start..f.end]);
+                    for g in 1..=9 {
+                        out.push(b'|');
+                        if let Some((a, b)) = f.group(g) {
+                            out.extend_from_slice(&s[a..b]);
+                        }
+                    }
+                    out.push(b'>');
+                    out.extend_from_slice(&s[f.end..]);
+                    out
+                }
+                Outcome::NoMatch => s.to_vec(),
+                Outcome::Refused => panic!("{p:?} refused {:?}", String::from_utf8_lossy(s)),
+            };
+            assert_eq!(String::from_utf8_lossy(&got), String::from_utf8_lossy(&want), "{p:?} on {:?}", String::from_utf8_lossy(s));
+        }
+    }
+    regexp_alt::set_regex_engine(regexp_alt::REGEX_ENGINE_AUTO);
 }

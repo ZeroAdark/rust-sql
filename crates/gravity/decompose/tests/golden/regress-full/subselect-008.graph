@@ -1,0 +1,15 @@
+-- regress-full-subselect-008
+-- SELECT (SELECT ARRAY[1,2,3])[1];
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0
+  source const
+  project (1=c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00')
+  outs 1=vl:stmt/imm
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=T_SubscriptingRef)
+  outs 1=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: Result SubPlan

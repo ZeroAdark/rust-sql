@@ -1,0 +1,10 @@
+-- regress-full-join-121
+-- explain (verbose, costs off) select * from mki4(42);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Expr fn0 c16402:'\xff\xff\xff\xff\x12@\x00\x00\xff\xff\xff\xff\x00\x00\x01\x00\x00\x00\x18\x00*\x00\x00\x00']
+  project (1=v1.1)
+  outs 1=w4:val
+mapped: FunctionScan

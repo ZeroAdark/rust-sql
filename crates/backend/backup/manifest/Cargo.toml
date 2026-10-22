@@ -10,6 +10,8 @@ path = "src/lib.rs"
 
 [dependencies]
 mcx = { path = "../../../_support/mcx" }
+elog = { path = "../../utils/error/elog" }
+fd = { path = "../../storage/file/fd" }
 seam_core = { path = "../../../_support/seam_core" }
 types_core = { path = "../../../_support/types/types_core" }
 types_error = { path = "../../../_support/types/types_error" }
@@ -22,3 +24,12 @@ timeline = { path = "../../access/transam/timeline" }
 
 [dev-dependencies]
 pgtz_seams = { path = "../../timezone/pgtz_seams" }
+guc_tables = { path = "../../utils/misc/guc_tables" }
+xact_seams = { path = "../../access/transam/xact_seams" }
+aio_seams = { path = "../../storage/aio/aio_seams" }
+waitevent_seams = { path = "../../utils/activity/waitevent_seams" }
+pgstat_seams = { path = "../../utils/activity/pgstat_seams" }
+ipc_seams = { path = "../../storage/ipc/ipc_seams" }
+resowner = { path = "../../utils/resowner/resowner" }
+resowner_seams = { path = "../../utils/resowner/resowner_seams" }
+types_resowner = { path = "../../../_support/types/types_resowner" }

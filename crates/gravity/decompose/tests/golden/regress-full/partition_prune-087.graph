@@ -1,0 +1,32 @@
+-- regress-full-partition_prune-087
+-- explain (analyze, costs off, summary off, timing off, buffers off) select * from boolp where a = (select value from boolvalues where value);
+graph pipelines=3 breakers=0 init_plans=1 root=p2
+p0 node=3 eligible rows=1405 end=sink
+  nodes n3@0
+  source range rel=45336 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter v4.1
+  project (1=v4.1)
+  outs 1=w8:val
+p1 node=1 eligible rows=1405 end=sink
+  nodes n1@0 n0@2
+  source range rel=45346 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op91(v2.1, $exec0)
+  project (1=v2.1)
+  append arm 0/2 prune=exec [rti=1 parts=2 present=(0,1) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w1:val
+p2 node=2 eligible rows=1405 end=sink
+  nodes n2@0 n0@2
+  source range rel=45343 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op91(v3.1, $exec0)
+  project (1=v3.1)
+  append arm 1/2 prune=exec [rti=1 parts=2 present=(0,1) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w1:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: Append SeqScan PartitionPruneInfo SubPlan

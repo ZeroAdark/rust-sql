@@ -12,8 +12,8 @@ pub(super) struct Edge {
 }
 
 // num_gene + 1 rows so nodes 1..n index directly (0 unused).
-pub(super) fn alloc_edge_table(num_gene: i32) -> Vec<Edge> {
-    vec![Edge::default(); (num_gene + 1) as usize]
+pub(super) fn alloc_edge_table(num_gene: i32) -> types_error::PgResult<Vec<Edge>> {
+    mcx::std_vec_from_elem("geqo", Edge::default(), (num_gene + 1) as usize)
 }
 
 // Fill the table with both parents' (circular, bidirectional) edges; shared

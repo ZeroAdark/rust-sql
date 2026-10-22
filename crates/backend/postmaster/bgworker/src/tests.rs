@@ -3,6 +3,7 @@ use std::sync::{Mutex, MutexGuard, Once};
 use super::*;
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
+static POOL_PID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 /// Server-log capture: (sqlstate, message, detail) of every report that
 /// reaches the emit-log hook on this thread.
@@ -28,6 +29,9 @@ fn bringup() -> MutexGuard<'static, ()> {
     ONCE.call_once(|| {
         postmaster_seams::signal_postmaster_sigusr1::set(|| {});
         ps_status_seams::init_ps_display::set(capture_ps_title);
+        postmaster_seams::parallel_pool_dispatch::set(|_, _, _| {
+            POOL_PID.load(std::sync::atomic::Ordering::Relaxed)
+        });
     });
     let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     g::set_max_worker_processes(4);
@@ -136,6 +140,23 @@ fn parallel_class_capped_by_max_parallel_workers() {
         assert_eq!(reg.parallel_terminate_count, 1);
     });
     assert!(register("p3", flags).is_some());
+}
+
+#[test]
+fn parallel_admit_shares_the_max_parallel_workers_counter() {
+    let _g = bringup();
+    let flags = BGWORKER_SHMEM_ACCESS | BGWORKER_CLASS_PARALLEL;
+    let _p0 = register("p0", flags).expect("under cap");
+    assert_eq!(parallel_admit(2), 1);
+    assert_eq!(parallel_admit(1), 0);
+    assert!(register("p1", flags).is_none());
+    parallel_release(1);
+    assert!(register("p1", flags).is_some());
+    assert_eq!(parallel_admit(3), 0);
+    with_registry(|reg| {
+        assert_eq!(reg.parallel_register_count, 3);
+        assert_eq!(reg.parallel_terminate_count, 1);
+    });
 }
 
 #[test]
@@ -478,4 +499,56 @@ fn static_sanity_failure_logs_with_invalid_parameter_value() {
         .unwrap_or_else(|| panic!("no sanity LOG in {logs:?}"));
     assert_eq!(hit.0, types_error::ERRCODE_INVALID_PARAMETER_VALUE);
     assert!(pending_names().is_empty());
+}
+
+#[test]
+fn pooled_worker_startup_logs_use_postmaster_scope() {
+    let _g = bringup();
+    let prior_level = elog::config::log_min_messages();
+    elog::config::set_log_min_messages(DEBUG1);
+    POOL_PID.store(4242, std::sync::atomic::Ordering::Relaxed);
+    let (handle, logs) = with_log_capture(|| {
+        register("pooled startup", BGWORKER_SHMEM_ACCESS | BGWORKER_CLASS_PARALLEL).unwrap()
+    });
+    POOL_PID.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert!(logs.is_empty(), "leader must not log postmaster diagnostics: {logs:?}");
+    elog::config::set_log_min_messages(types_error::WARNING);
+    let (_, logs) = with_log_capture(|| BackgroundWorkerStateChange(true));
+    assert!(logs.is_empty(), "postmaster threshold must suppress DEBUG1: {logs:?}");
+    elog::config::set_log_min_messages(DEBUG1);
+    let (_, logs) = with_log_capture(|| BackgroundWorkerStateChange(true));
+    assert!(logs.is_empty(), "suppressed reports must not be replayed");
+    ForgetBackgroundWorker(registered_idx_for(&handle));
+
+    POOL_PID.store(4242, std::sync::atomic::Ordering::Relaxed);
+    let handle = register("pooled startup", BGWORKER_SHMEM_ACCESS | BGWORKER_CLASS_PARALLEL).unwrap();
+    POOL_PID.store(0, std::sync::atomic::Ordering::Relaxed);
+    let idx = registered_idx_for(&handle);
+    let (_, logs) = with_log_capture(|| {
+        ReportPendingBackgroundWorkerStartup(idx);
+        BackgroundWorkerStateChange(true);
+        ReportPendingBackgroundWorkerStartup(idx);
+    });
+    assert_eq!(logs.iter().map(|l| l.1.as_str()).collect::<Vec<_>>(), vec![
+        "registering background worker \"pooled startup\"",
+        "starting background worker process \"pooled startup\"",
+    ]);
+    ForgetBackgroundWorker(idx);
+    elog::config::set_log_min_messages(prior_level);
+}
+
+#[test]
+fn parallel_admit_holds_worker_slots() {
+    let _g = bringup();
+    g::set_max_parallel_workers(8);
+    let plain = BGWORKER_SHMEM_ACCESS;
+    let _a = register("a", plain).expect("slot");
+    let _b = register("b", plain).expect("slot");
+    assert_eq!(parallel_admit(10), 2);
+    assert!(register("c", plain).is_none());
+    parallel_release(1);
+    assert!(register("c", plain).is_some());
+    assert_eq!(parallel_admit(1), 0);
+    parallel_release(1);
+    assert_eq!(parallel_admit(3), 1);
 }

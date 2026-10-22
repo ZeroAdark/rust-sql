@@ -1,0 +1,68 @@
+-- regress-full-partition_prune-098
+-- select explain_parallel_append( 'select * from listp where a = (select 1) union all select * from listp where a = (select 2);');
+graph pipelines=6 breakers=0 init_plans=2 root=p5
+p0 node=9 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n9@0
+  source const
+  project (1=c23:1)
+  outs 1=w4:val
+p1 node=10 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n10@0
+  source const
+  project (1=c23:2)
+  outs 1=w4:val
+p2 node=3 eligible rows=13 end=sink
+  nodes n3@0 n2@2 n0@4
+  source range rel=45514 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v6.1, $exec0)
+  project (1=v6.1)
+  append arm 0/2 prune=exec [rti=4 parts=1 present=(0) steps=0 exec_steps=1 params=($exec0)] [rti=5 parts=2 present=(0,1) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  append arm 0/2
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+  outs 1=w4:val
+p3 node=4 eligible rows=13 end=sink
+  nodes n4@0 n2@2 n0@4
+  source range rel=45517 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v7.1, $exec0)
+  project (1=v7.1)
+  append arm 1/2 prune=exec [rti=4 parts=1 present=(0) steps=0 exec_steps=1 params=($exec0)] [rti=5 parts=2 present=(0,1) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  append arm 0/2
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+  outs 1=w4:val
+p4 node=7 eligible rows=13 end=sink
+  nodes n7@0 n6@2 n0@4
+  source range rel=45514 rti=10 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v10.1, $exec1)
+  project (1=v10.1)
+  append arm 0/2 prune=exec [rti=8 parts=1 present=(0) steps=0 exec_steps=1 params=($exec1)] [rti=9 parts=2 present=(0,1) steps=0 exec_steps=1 params=($exec1)]
+  project (1=outer.1)
+  append arm 1/2
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+  outs 1=w4:val
+p5 node=8 eligible rows=13 end=sink
+  nodes n8@0 n6@2 n0@4
+  source range rel=45517 rti=11 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v11.1, $exec1)
+  project (1=v11.1)
+  append arm 1/2 prune=exec [rti=8 parts=1 present=(0) steps=0 exec_steps=1 params=($exec1)] [rti=9 parts=2 present=(0,1) steps=0 exec_steps=1 params=($exec1)]
+  project (1=outer.1)
+  append arm 1/2
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+  outs 1=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+init_plan id=2 pipeline=p1 link=Expr param=$exec1 raise-free
+mapped: Result Append SeqScan PartitionPruneInfo SubPlan

@@ -1,0 +1,19 @@
+-- regress-full-compression-003
+-- INSERT INTO cmdata2 SELECT large_val() || repeat('a', 4000);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@2^
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:256)]
+  project (1=v1.1)
+  outs 1=w4:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=io25(agg2335(1=fn877(fn1946(fn3420(io17(io25(outer.1))), c25:'hex'), c23:1, c23:32))))
+  outs 1=vl:call46
+breaker slot=0 kind=PlainAgg budget=Fixed(72) spill=None producer=p0 layout=[]->[Count@0]+valid 16B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=2335 reg=Collect slot=- count_slot=- final=Collect class=Collect(Array) trans=Var mods=[] expr=agg2335(1=fn877(fn1946(fn3420(io17(io25(outer.1))), c25:'hex'), c23:1, c23:32))
+mapped: FunctionScan Agg

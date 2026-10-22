@@ -3,7 +3,7 @@
  * CBMC-tractable subset of the p1-lanec string-family batch (the string/
  * snprintf/longjmp members are fuzz-routed; see fuzz/core/csrc/pg_strfam.c).
  *
- * Provenance, from ../pgrust-reference/vendor/postgres-src @
+ * Provenance, from ../pgrust-fabled/vendor/postgres-src @
  * 62d6c7d3df6287f1bd83199c1a746e50d31571a0 (REL_18 "Stamp 18.3"):
  *   - src/common/wait_error.c: wait_result_is_signal,
  *     wait_result_is_any_signal, wait_result_to_exit_code — VERBATIM.

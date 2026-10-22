@@ -6,7 +6,7 @@ use dynahash::{get_hash_value, hash_search_with_hash_value};
 use types_core::{ProcNumber, Size};
 use types_error::PgResult;
 use types_hash::hsearch::{
-    HASHCTL, HASH_BLOBS, HASH_ELEM, HASH_ENTER_NULL, HASH_FIND, HASH_FIXED_SIZE, HASH_FUNCTION,
+    HASHCTL, HASH_BLOBS, HASH_ELEM, HASH_ENTER_NULL, HASH_FIND, HASH_FUNCTION,
     HASH_PARTITION, HASH_REMOVE, HASH_SEQ_STATUS, HTAB,
 };
 use types_storage::ilist::{dlist_head, dlist_node};
@@ -33,9 +33,9 @@ pub(crate) struct SharedTables {
     pub fast_path_strong: &'static crate::fastpath::FastPathStrongRelationLockData,
 }
 
-// SAFETY: post-arming, both tables are fully preallocated and fixed: bucket
-// chains are mutated only under the owning partition LWLock (C's discipline)
-// and entry free/alloc goes through dynahash's per-freelist spinlocks.
+// SAFETY: post-arming, both tables live for the cluster: bucket chains are
+// mutated only under the owning partition LWLock (C's discipline) and entry
+// free/alloc goes through dynahash's per-freelist spinlocks.
 unsafe impl Send for SharedTables {}
 unsafe impl Sync for SharedTables {}
 
@@ -49,24 +49,16 @@ pub(crate) fn shared() -> &'static SharedTables {
 
 // lock.c:465/484: ShmemInitHash(name, init_table_size, max_table_size, &info,
 // flags | HASH_PARTITION) registers the table in the ShmemIndex under its C
-// name. Divergences vs C stand: preallocation is max-size under
-// HASH_FIXED_SIZE (dynahash's growable shared tables are unported, so
-// init_size = max_size here; C: init_size then grow within shmem) and the
-// bound is entry-count, not shmem bytes; HASH_ENTER_NULL plays C's
-// bounded-shmem exhaustion.
+// name; past init_table_size the table grows into the segment's slack until
+// ShmemAllocNoError refuses (HASH_ENTER_NULL then yields C's 53200).
 fn shmem_init_hash(
     name: &str,
+    init_size: i64,
     max_size: i64,
     info: &mut HASHCTL,
     hash_flags: i32,
 ) -> PgResult<*mut HTAB> {
-    shmem::ShmemInitHash(
-        name,
-        max_size,
-        max_size,
-        info,
-        hash_flags | HASH_PARTITION | HASH_FIXED_SIZE,
-    )
+    shmem::ShmemInitHash(name, init_size, max_size, info, hash_flags | HASH_PARTITION)
 }
 
 fn proclock_hash(key: &[u8], _keysize: Size) -> u32 {
@@ -105,12 +97,12 @@ pub(crate) fn LockHashPartitionLockByIndex(i: usize) -> &'static lwlock::LWLock 
     lwlock::main_lock(types_storage::storage::LOCK_MANAGER_LWLOCK_OFFSET as usize + i)
 }
 
-pub fn LockManagerShmemSize(max_prepared_xacts: i32) -> Size {
+pub fn LockManagerShmemSize(max_prepared_xacts: i32) -> PgResult<Size> {
     let mut max_table_size = NLOCKENTS(max_prepared_xacts);
-    let mut size = dynahash::hash_estimate_size(max_table_size, size_of::<LOCK>());
+    let mut size = dynahash::hash_estimate_size(max_table_size, size_of::<LOCK>())?;
     max_table_size *= 2;
-    size += dynahash::hash_estimate_size(max_table_size, size_of::<PROCLOCK>());
-    size + size / 10
+    size += dynahash::hash_estimate_size(max_table_size, size_of::<PROCLOCK>())?;
+    Ok(size + size / 10)
 }
 
 pub fn LockManagerShmemInit(max_prepared_xacts: i32) -> PgResult<()> {
@@ -118,15 +110,22 @@ pub fn LockManagerShmemInit(max_prepared_xacts: i32) -> PgResult<()> {
         return Ok(());
     }
     let max_table_size = NLOCKENTS(max_prepared_xacts);
+    let init_table_size = max_table_size / 2;
 
     let mut info = HASHCTL::new();
     info.keysize = size_of::<LOCKTAG>();
     info.entrysize = size_of::<LOCK>();
     info.num_partitions = NUM_LOCK_PARTITIONS as i64;
-    let lock_hash =
-        shmem_init_hash("LOCK hash", max_table_size, &mut info, HASH_ELEM | HASH_BLOBS)?;
+    let lock_hash = shmem_init_hash(
+        "LOCK hash",
+        init_table_size,
+        max_table_size,
+        &mut info,
+        HASH_ELEM | HASH_BLOBS,
+    )?;
 
     let max_table_size = max_table_size * 2;
+    let init_table_size = init_table_size * 2;
     let mut info = HASHCTL::new();
     info.keysize = size_of::<PROCLOCKTAG>();
     info.entrysize = size_of::<PROCLOCK>();
@@ -134,6 +133,7 @@ pub fn LockManagerShmemInit(max_prepared_xacts: i32) -> PgResult<()> {
     info.num_partitions = NUM_LOCK_PARTITIONS as i64;
     let proclock_hash_table = shmem_init_hash(
         "PROCLOCK hash",
+        init_table_size,
         max_table_size,
         &mut info,
         HASH_ELEM | HASH_FUNCTION,
@@ -154,7 +154,7 @@ pub fn LockManagerShmemInit(max_prepared_xacts: i32) -> PgResult<()> {
 pub fn LockManagerShmemResetAfterCrash() {
     let tables = shared();
     // SAFETY: crash choreography drained every child before reset; the
-    // postmaster thread has exclusive access to both preallocated tables.
+    // postmaster thread has exclusive access to both tables.
     unsafe {
         dynahash::hash_reset_after_crash(tables.lock_hash);
         dynahash::hash_reset_after_crash(tables.proclock_hash);
@@ -593,7 +593,8 @@ pub fn GetRunningTransactionLocks() -> PgResult<Vec<xl_standby_lock>> {
     }
 
     let els = dynahash::hash_get_num_entries(shared().proclock_hash);
-    let mut accessExclusiveLocks = Vec::with_capacity(els as usize);
+    // lock.c: palloc(els * sizeof(xl_standby_lock)); failure is ERROR 53200.
+    let mut accessExclusiveLocks = ::mcx::std_vec_with_capacity("GetRunningTransactionLocks", els as usize)?;
 
     let mut seqstat = HASH_SEQ_STATUS::new();
     dynahash::hash_seq_init(&mut seqstat, shared().proclock_hash)?;

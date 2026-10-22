@@ -178,6 +178,8 @@ pub(crate) fn release_if_txn_over() {
 /// admin) returns its slot regardless of transaction state — locks are
 /// torn down by the same exit walk, so nothing can wait on us afterwards.
 fn release_on_proc_exit(_code: i32, _arg: usize) {
+    // D4682: the registration is spent; a reused thread's next session registers again.
+    EXIT_HOOK_ARMED.with(|h| h.set(false));
     if SLOT_HELD.with(|s| s.get()) {
         release_slot();
     }

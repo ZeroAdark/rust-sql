@@ -1,0 +1,22 @@
+-- cte-038
+-- UPDATE u SET (y, z) = (SELECT b, c FROM t WHERE t.a = u.x) WHERE x = 5;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source index rel=16405 rti=1 am=heap index=16411
+    key att=1 op=96 value=c23:5
+    recheck (op96(v1.1, c23:5))
+    lanes Attr(1):byval8:w8:val RowId:byval8:w8:val
+  subplan 1 nested MultiExpr params=($exec0=v1.1) sets=($exec1,$exec2)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=16395 rti=2 am=heap index=16402
+    key att=1 op=96 value=$exec0
+    recheck (op96(v2.1, $exec0))
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page
+  project (1=v2.2, 2=v2.3)
+  project (1=$exec1, 2=$exec2, 3j=subplan1(v1.1), 4j=v1.-1, 5j=v1.1)
+  write UPDATE rel=16405 rti=1 natts=3 indexes=(16411[1]up, 16413[2]) set=(2,3) epq=$exec3
+  outs 1=w4:val 2=vl:row 3=vl:call0 4=fx6:row 5=w8:val
+param $exec0 owner=subplan1 type=23 rep=w8:val
+mapped: ModifyTable IndexScan SubPlan

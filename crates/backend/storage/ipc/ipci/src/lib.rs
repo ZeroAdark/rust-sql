@@ -80,13 +80,13 @@ pub fn CalculateShmemSize(cfg: &ProcGlobalConfig) -> PgResult<(usize, i32)> {
     size = shmem::add_size(size, pg_sema::PGSemaphoreShmemSize(num_semas)?)?;
     size = shmem::add_size(
         size,
-        dynahash::hash_estimate_size(C_SHMEM_INDEX_SIZE, C_SIZEOF_SHMEM_INDEX_ENT),
+        dynahash::hash_estimate_size(C_SHMEM_INDEX_SIZE, C_SIZEOF_SHMEM_INDEX_ENT)?,
     )?;
     size = shmem::add_size(size, dsm_core::dsm::dsm_estimate_size())?;
     size = shmem::add_size(size, dsm_registry::DSMRegistryShmemSize())?;
     size = shmem::add_size(size, bufmgr::BufferManagerShmemSize()?)?;
-    size = shmem::add_size(size, lock::LockManagerShmemSize(cfg.max_prepared_xacts))?;
-    size = shmem::add_size(size, predicate::PredicateLockShmemSize(cfg.max_prepared_xacts))?;
+    size = shmem::add_size(size, lock::LockManagerShmemSize(cfg.max_prepared_xacts)?)?;
+    size = shmem::add_size(size, predicate::PredicateLockShmemSize(cfg.max_prepared_xacts)?)?;
     size = shmem::add_size(size, lmgr_proc::ProcGlobalShmemSize(cfg)?)?;
     size = shmem::add_size(size, xlogprefetcher::XLogPrefetchShmemSize())?;
     size = shmem::add_size(size, varsup::VarsupShmemSize())?;
@@ -123,7 +123,7 @@ pub fn CalculateShmemSize(cfg: &ProcGlobalConfig) -> PgResult<(usize, i32)> {
     size = shmem::add_size(size, syncscan::SyncScanShmemSize())?;
     size = shmem::add_size(size, commands_async::AsyncShmemSize())?;
     size = shmem::add_size(size, pgstat::shmem::StatsShmemSize()?)?;
-    size = shmem::add_size(size, waitevent::custom::WaitEventCustomShmemSize())?;
+    size = shmem::add_size(size, waitevent::custom::WaitEventCustomShmemSize()?)?;
     size = shmem::add_size(size, slotsync::SlotSyncShmemSize())?;
     size = shmem::add_size(size, aio_core::AioShmemSize()?)?;
 
@@ -219,6 +219,8 @@ pub fn CreateOrAttachShmemStructs(cfg: &ProcGlobalConfig) -> PgResult<()> {
     // live postmaster child plus the postmaster; the thread model's local
     // latch slab is provisioned here for that count.
     latch::LocalLatchSlabInit(max_live_children as usize + 1);
+    // The waiter slab behind C's per-process latch wait set is provisioned for the same count.
+    waiter::WaiterSlabInit(max_live_children as usize + 1);
     procsignal::ProcSignalShmemInit();
     checkpointer::CheckpointerShmemInit(g::NBuffers())?;
     autovacuum::AutoVacuumShmemInit()?;

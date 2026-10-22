@@ -1,5 +1,5 @@
 //! pg_xml_init/xml_errorHandler/xml_ereport: libxml diagnostics buffer into
-//! a thread-local PgXmlErrorContext analog (String scratch: the handler runs
+//! a thread-local PgXmlErrorContext analog (byte scratch: the handler runs
 //! inside a libxml callback, no mcx exists there).
 
 use core::ffi::{c_uchar, c_void};
@@ -42,7 +42,7 @@ const XML_NS_ERR_EMPTY: i32 = 204;
 struct XmlErrCtx {
     strictness: i32,
     err_occurred: bool,
-    err_buf: String,
+    err_buf: Vec<u8>,
     // xml.c:2253-2262 ereports WARNINGs/NOTICEs from inside the handler;
     // deferred here (level, message) in arrival order.
     pending_reports: Vec<(ErrorLevel, String)>,
@@ -53,7 +53,7 @@ std::thread_local! {
         std::cell::RefCell::new(XmlErrCtx {
             strictness: 0,
             err_occurred: false,
-            err_buf: String::new(),
+            err_buf: Vec::new(),
             pending_reports: Vec::new(),
         })
     };
@@ -97,17 +97,17 @@ pub(crate) fn take_pending_reports() -> Vec<(ErrorLevel, String)> {
     XML_ERR_CTX.with(|c| std::mem::take(&mut c.borrow_mut().pending_reports))
 }
 
-fn append_line_separator(buf: &mut String) {
-    while buf.ends_with('\n') {
+fn append_line_separator(buf: &mut Vec<u8>) {
+    while buf.ends_with(b"\n") {
         buf.pop();
     }
     if !buf.is_empty() {
-        buf.push('\n');
+        buf.push(b'\n');
     }
 }
 
 // libxml2 xmlParserPrintFileContextInternal: offending line + caret line.
-unsafe fn parser_print_file_context(input: *const xmlParserInputHdr) -> Option<String> {
+unsafe fn parser_print_file_context(input: *const xmlParserInputHdr) -> Option<Vec<u8>> {
     // SAFETY (fn body): input is the live parser-input header of the parser
     // context libxml handed the structured error handler.
     unsafe {
@@ -147,18 +147,17 @@ unsafe fn parser_print_file_context(input: *const xmlParserInputHdr) -> Option<S
             cur = cur.add(1);
         }
 
-        let mut out = String::new();
-        out.push_str(&String::from_utf8_lossy(&content));
-        out.push('\n');
-
-        let mut caret: Vec<u8> = Vec::with_capacity(col + 1);
+        let mut caret: Vec<u8> = Vec::new();
+        let _ = caret.try_reserve_exact(col + 1);
         let mut i = 0usize;
         while i < col && i < 79 && i < content.len() {
             caret.push(if content[i] == b'\t' { b'\t' } else { b' ' });
             i += 1;
         }
         caret.push(b'^');
-        out.push_str(&String::from_utf8_lossy(&caret));
+        let mut out = content;
+        out.push(b'\n');
+        out.extend_from_slice(&caret);
         Some(out)
     }
 }
@@ -217,24 +216,26 @@ pub unsafe extern "C" fn xml_error_handler(_user_data: *mut c_void, error: *mut 
             }
         }
 
-        let mut msg = String::new();
+        let mut msg = Vec::new();
         let line = (*err).line;
         if line > 0 {
-            msg.push_str(&format!("line {line}: "));
+            msg.extend_from_slice(format!("line {line}: ").as_bytes());
         }
         let node = (*err).node;
         if !node.is_null() && libxml::node_type(node as *mut xmlNode) == XML_ELEMENT_NODE {
             let name = (*(node as *const xmlNodeHdr)).name;
             if !name.is_null() {
                 let nm = libxml::xmlchar_to_vec(name);
-                msg.push_str(&format!("element {}: ", String::from_utf8_lossy(&nm)));
+                msg.extend_from_slice(b"element ");
+                msg.extend_from_slice(&nm);
+                msg.extend_from_slice(b": ");
             }
         }
         if !(*err).message.is_null() {
             let m = libxml::xmlchar_to_vec((*err).message as *const c_uchar);
-            msg.push_str(&String::from_utf8_lossy(&m));
+            msg.extend_from_slice(&m);
         } else {
-            msg.push_str("(no message provided)");
+            msg.extend_from_slice(b"(no message provided)");
         }
 
         let ctxt = (*err).ctxt;
@@ -243,12 +244,12 @@ pub unsafe extern "C" fn xml_error_handler(_user_data: *mut c_void, error: *mut 
             if !input.is_null() {
                 if let Some(ctx) = parser_print_file_context(input) {
                     append_line_separator(&mut msg);
-                    msg.push_str(&ctx);
+                    msg.extend_from_slice(&ctx);
                 }
             }
         }
 
-        while msg.ends_with('\n') {
+        while msg.ends_with(b"\n") {
             msg.pop();
         }
 
@@ -256,7 +257,7 @@ pub unsafe extern "C" fn xml_error_handler(_user_data: *mut c_void, error: *mut 
             XML_ERR_CTX.with(|c| {
                 let mut c = c.borrow_mut();
                 append_line_separator(&mut c.err_buf);
-                c.err_buf.push_str(&msg);
+                c.err_buf.extend_from_slice(&msg);
             });
             return;
         }
@@ -265,14 +266,22 @@ pub unsafe extern "C" fn xml_error_handler(_user_data: *mut c_void, error: *mut 
             XML_ERR_CTX.with(|c| {
                 let mut c = c.borrow_mut();
                 append_line_separator(&mut c.err_buf);
-                c.err_buf.push_str(&msg);
+                c.err_buf.extend_from_slice(&msg);
                 c.err_occurred = true;
             });
         } else if level >= XML_ERR_WARNING {
-            XML_ERR_CTX.with(|c| c.borrow_mut().pending_reports.push((WARNING, msg)));
+            XML_ERR_CTX.with(|c| {
+                c.borrow_mut()
+                    .pending_reports
+                    .push((WARNING, String::from_utf8_lossy(&msg).into_owned()));
+            });
         } else {
             // xml.c:2258: ereport(NOTICE, errmsg_internal("%s", ...)).
-            XML_ERR_CTX.with(|c| c.borrow_mut().pending_reports.push((NOTICE, msg)));
+            XML_ERR_CTX.with(|c| {
+                c.borrow_mut()
+                    .pending_reports
+                    .push((NOTICE, String::from_utf8_lossy(&msg).into_owned()));
+            });
         }
     }
 }
@@ -308,7 +317,7 @@ pub fn xml_err_occurred() -> bool {
     XML_ERR_CTX.with(|c| c.borrow().err_occurred)
 }
 
-pub fn xml_err_detail() -> String {
+pub fn xml_err_detail() -> Vec<u8> {
     XML_ERR_CTX.with(|c| c.borrow().err_buf.clone())
 }
 
@@ -317,7 +326,7 @@ pub fn xml_ereport(msg: &str, sqlstate: SqlState) -> PgError {
     let detail = xml_err_detail();
     let mut e = PgError::error(msg.to_string()).with_sqlstate(sqlstate);
     if !detail.is_empty() {
-        e = e.with_detail(detail);
+        e = e.with_detail_raw(detail);
     }
     e
 }

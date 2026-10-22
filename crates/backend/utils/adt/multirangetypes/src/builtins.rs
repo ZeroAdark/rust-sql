@@ -860,7 +860,7 @@ pub fn fc_multirange_unnest(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) 
             let mcx = fcinfo.result_mcx();
             let mr = arg_multirange(fcinfo, 0, mcx)?;
             let mi = MultirangeInfo::lookup(multirange_type_oid(&mr))?;
-            UnnestState { mr: mr.to_vec(), rng: mi.rng, index: 0 }
+            UnnestState { mr: ::mcx::std_vec_from_slice("adt", &mr)?, rng: mi.rng, index: 0 }
         };
         let fctx = ::funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
         fctx.user_fctx = Some(Box::new(state));

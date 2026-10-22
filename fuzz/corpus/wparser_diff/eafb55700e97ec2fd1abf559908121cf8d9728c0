@@ -1,3 +1,0 @@
-), to_tsquery('));
-
-SELE keyword FROM test_tsquery WHERE keyrord @> 

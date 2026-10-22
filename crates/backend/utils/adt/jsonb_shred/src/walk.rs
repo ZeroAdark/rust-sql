@@ -36,6 +36,10 @@ pub enum PathValue<'a> {
 ///
 /// Every emitted path has depth in 1..=max_depth ([`PathValue::Root`] is the
 /// depth-0 exception), and per row each path is emitted at most once.
+pub fn object_root(payload: &[u8]) -> bool {
+    payload.len() >= 4 && container_is_object(payload) && !container_is_scalar(payload)
+}
+
 pub fn walk_row<'a>(
     payload: &'a [u8],
     max_depth: u8,
@@ -48,7 +52,8 @@ pub fn walk_row<'a>(
         emit(&[], PathValue::Root);
         return;
     }
-    let mut prefix: Vec<&'a [u8]> = Vec::with_capacity(max_depth as usize);
+    let mut prefix: Vec<&'a [u8]> = Vec::new();
+    let _ = prefix.try_reserve_exact(max_depth as usize);
     walk_object(payload, max_depth, &mut prefix, stop_at, emit);
 }
 

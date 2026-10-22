@@ -1,0 +1,1 @@
+tableoid::regclass::name over copy.sql's parted_copytest: a regclass output of a relation the test creates, which the rig catalog (the reference .dat files) cannot answer; the server runner judges it

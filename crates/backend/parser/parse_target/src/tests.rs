@@ -420,3 +420,54 @@ fn figure_colname_through_typecast_keeps_strong_names() {
     .unwrap();
     assert_eq!(FigureColname(cast(xs)), "xmlserialize");
 }
+
+/// audit main-0915 fp-parser-parse_target#1: the cast's type name still
+/// names a wrapped ANY/ALL sublink (parse_target.c:1872-1876) when the
+/// transformed sublink stands in for the raw one; a strength-2 sublink
+/// name wins over the cast, and the outermost cast wins over inner ones.
+#[test]
+fn figure_colname_cast_around_any_sublink_names_the_type() {
+    use types_nodes::rawnodes::{TypeCast, TypeName};
+    use types_nodes::{CollateClause, SubLink, SubLinkType};
+
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let s = |v| Node::mk(mcx, PgStr { sval: v }).unwrap();
+    let cast = |arg, ty| {
+        let mut tn = Node::build::<TypeName>(mcx).unwrap();
+        tn.names = NodeList::make1(mcx, s(ty)).unwrap();
+        tn.typemod = -1;
+        Node::mk(mcx, TypeCast { arg: Some(arg), typeName: Some(tn.seal()), location: 0 }).unwrap()
+    };
+    let sublink = |ty| {
+        Node::mk(
+            mcx,
+            SubLink {
+                subLinkType: ty,
+                subLinkId: 0,
+                testexpr: None,
+                operName: NodeList::nil(),
+                subselect: int_const(mcx, 1, 0),
+                location: 0,
+            },
+        )
+        .unwrap()
+    };
+    let any = sublink(SubLinkType::ANY_SUBLINK);
+    let exists = sublink(SubLinkType::EXISTS_SUBLINK);
+
+    assert_eq!(crate::figure_wrapped_sublink_colname(cast(any, "text"), any), "text");
+    assert_eq!(crate::figure_wrapped_sublink_colname(cast(cast(any, "int4"), "text"), any), "text");
+    let collated = Node::mk(
+        mcx,
+        CollateClause {
+            arg: Some(cast(any, "text")),
+            collname: NodeList::make1(mcx, s("C")).unwrap(),
+            location: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(crate::figure_wrapped_sublink_colname(collated, any), "text");
+    assert_eq!(crate::figure_wrapped_sublink_colname(any, any), "?column?");
+    assert_eq!(crate::figure_wrapped_sublink_colname(cast(exists, "text"), exists), "exists");
+}

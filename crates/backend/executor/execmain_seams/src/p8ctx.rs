@@ -1,8 +1,3 @@
-//! P8 census statement-context plane (p8-readiness-map Phase 0(i)),
-//! split below the executor so the portal layer can mark cursor/SPI
-//! scopes without linking execmain (EX-CB-1: production pquery links
-//! execmain_seams only). The per-tag tick counters and the report
-//! function live above, in `execmain::p8census`.
 
 use core::cell::Cell;
 use core::sync::atomic::{AtomicU8, Ordering::Relaxed};
@@ -34,7 +29,6 @@ fn armed_resolve() -> bool {
     on
 }
 
-/// Tests only (cross-crate, so not cfg(test)-gated here).
 pub fn arm_for_tests(on: bool) {
     ARMED.store(if on { 2 } else { 1 }, Relaxed);
 }
@@ -43,14 +37,11 @@ thread_local! {
     static CTX: Cell<u8> = const { Cell::new(0) };
 }
 
-/// The current context bits (EPQ is layered on by the tick side).
 #[inline]
 pub fn ctx_bits() -> u8 {
     CTX.with(|c| c.get())
 }
 
-/// RAII context marker, inert while disarmed (trigger-fired SQL
-/// re-enters through SPI, so it censuses as `+spi`).
 pub struct CtxGuard {
     prev: u8,
     active: bool,
@@ -77,7 +68,6 @@ fn ctx_scope(bit: u8) -> CtxGuard {
 }
 
 impl CtxGuard {
-    /// Whether this guard actually marked context (tests/probes).
     pub fn is_active(&self) -> bool {
         self.active
     }

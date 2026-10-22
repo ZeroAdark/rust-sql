@@ -16,6 +16,7 @@ fn setup() {
     ONCE.call_once(|| {
         mbutils::init_seams();
     });
+    ::pg_locale::set_default_locale_c_for_tests();
 }
 
 fn out_text(image: &[u8]) -> String {
@@ -181,42 +182,22 @@ fn send_recv_round_trip() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Parser recursion guard (gram.rs check_depth) — regression for the
-// p1-laneaa process-abort bug: the recursive-descent parser used to have NO
-// depth guard, so a deep-enough nesting overflowed the native backend stack
-// and SIGABRT'd the whole thread-per-backend process. With the guard, deep
-// nesting is a clean ERRCODE_STATEMENT_TOO_COMPLEX (54001), soft-errorable
-// like the parser's other errors. (C 18.3 errors 42601 "memory exhausted" at
-// bison's YYMAXDEPTH instead — measured paren flip at N=9996 on docker
-// postgres:18.3; the errcode/threshold residual is documented on
-// gram.rs::check_depth and in fuzz/README-TODO-jsonpath_diff.md.)
-// ---------------------------------------------------------------------------
+// Bison's heap stacks bound nesting at YYMAXDEPTH states; the parser keeps
+// no native recursion. Cutoffs and yytext measured on C 18.6 at 2MB.
+const CUTOFFS: &[(&str, &str, &str, &str, &str, usize, &str)] = &[
+    ("", "(", "1", ")", "", 9995, ")"),
+    ("", "(", "$", ")", "", 9995, ")"),
+    ("", "-", "1", "", "", 9996, "1"),
+    ("", "+", "1", "", "", 9996, "1"),
+    ("", "-(", "1", ")", "", 4997, ")"),
+    ("$ ? (", "!(", "@ == 1", ")", ")", 4995, "1"),
+    ("$", "[$", "", "]", "", 4997, "]"),
+    ("", "1 + (", "1", ")", "", 3331, ")"),
+    ("$ ? (", "(", "@ == 1", ")", ")", 9991, "1"),
+];
 
-/// Run `f` on a spawned thread with an explicit SMALL stack (1 MiB) and the
-/// stack-depth guard armed exactly as a real backend thread arms it
-/// (set_stack_base at thread top; max_stack_depth keeps its thread-local
-/// 100kB boot default). Deterministic and cheap: the guard must fire at
-/// ~100kB of native stack, far below the 1 MiB the thread actually has —
-/// while the pre-fix code overflowed any stack on these inputs.
-fn on_guarded_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(1 << 20)
-        .spawn(move || {
-            let _ = stack_depth::set_stack_base();
-            // Production pairing: the ceiling clamps the scaled budget to
-            // this thread's real 1 MiB so the guard fires before overflow.
-            stack_depth::set_thread_stack_ceiling(1 << 20);
-            setup();
-            f()
-        })
-        .expect("spawn guarded thread")
-        .join()
-        .expect("guarded parse must return, not abort or panic")
-}
-
-fn deep_input(prefix: &str, open: &str, core: &str, close: &str, n: usize) -> Vec<u8> {
-    let mut s = Vec::with_capacity(prefix.len() + n * (open.len() + close.len()) + core.len());
+fn nested(prefix: &str, open: &str, core: &str, close: &str, suffix: &str, n: usize) -> Vec<u8> {
+    let mut s = Vec::with_capacity(prefix.len() + n * (open.len() + close.len()) + 64);
     s.extend_from_slice(prefix.as_bytes());
     for _ in 0..n {
         s.extend_from_slice(open.as_bytes());
@@ -225,92 +206,80 @@ fn deep_input(prefix: &str, open: &str, core: &str, close: &str, n: usize) -> Ve
     for _ in 0..n {
         s.extend_from_slice(close.as_bytes());
     }
+    s.extend_from_slice(suffix.as_bytes());
     s
 }
 
-/// (i)+(iv) Every recursion cycle of the parser is bounded: each shape drives
-/// a different cycle (parens; !(...) chains, which bypass parse_unary; unary
-/// +/- chains, which bypass parse_delimited_predicate; nested array
-/// subscripts; nested filters via exists). Pre-fix each of these aborted the
-/// process on a small stack; now each returns a clean hard 54001.
+fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(256 << 10)
+        .spawn(move || {
+            setup();
+            f()
+        })
+        .expect("spawn")
+        .join()
+        .expect("parse must not overflow the native stack")
+}
+
 #[test]
-fn parser_depth_guard_bounds_every_recursion_cycle() {
-    const N: usize = 50_000;
-    let shapes: Vec<(&str, Vec<u8>)> = vec![
-        ("paren", deep_input("", "(", "1", ")", N)),
-        ("not-chain", deep_input("$ ? (", "!(", "@ == 1", ")", N).into_iter().chain(*b")").collect()),
-        ("unary-chain", deep_input("", "-", "1", "", N)),
-        ("subscript", deep_input("", "$[", "0", "]", N)),
-        ("filter-exists", deep_input("$", "?(exists(@", "", "))", N)),
-    ];
-    for (name, input) in shapes {
-        let err = on_guarded_thread(move || {
-            let cx = MemoryContext::new("depth guard hard");
-            let e = match jsonpath_in(cx.mcx(), &input, None) {
-                Err(e) => e,
-                Ok(v) => panic!("{:?}: expected depth error, got {:?}", &input[..20], v.is_some()),
+fn parser_stack_overflows_exactly_at_bison_yymaxdepth() {
+    for &(prefix, open, core, close, suffix, last_ok, near) in CUTOFFS {
+        let ok = nested(prefix, open, core, close, suffix, last_ok);
+        let bad = nested(prefix, open, core, close, suffix, last_ok + 1);
+        let (parsed, err) = on_small_stack(move || {
+            let cx = MemoryContext::new("jsonpath depth");
+            let parsed = crate::gram::parsejsonpath(cx.mcx(), &ok, None)
+                .map(|r| r.is_some())
+                .map_err(|e| e.message().to_string());
+            let err = match crate::gram::parsejsonpath(cx.mcx(), &bad, None) {
+                Err(e) => {
+                    let loc = e.location().expect("jsonpath_yyerror location");
+                    assert_eq!(loc.filename.as_deref(), Some("jsonpath_scan.l"));
+                    assert_eq!(loc.funcname.as_deref(), Some("jsonpath_yyerror"));
+                    (e.sqlstate(), e.message().to_string())
+                }
+                Ok(_) => panic!("{open:?} x{}: parsed past YYMAXDEPTH", last_ok + 1),
             };
-            e
+            (parsed, err)
         });
+        assert_eq!(parsed, Ok(true), "{open:?} x{last_ok} parses");
+        assert_eq!(err.0, types_error::ERRCODE_SYNTAX_ERROR, "{open:?}");
         assert_eq!(
-            err.sqlstate(),
-            types_error::ERRCODE_STATEMENT_TOO_COMPLEX,
-            "sqlstate for deep {name} shape"
+            err.1,
+            format!("memory exhausted at or near \"{near}\" of jsonpath input"),
+            "{open:?} x{}",
+            last_ok + 1
         );
-        assert_eq!(err.message(), "stack depth limit exceeded", "message for {name}");
     }
 }
 
-/// (ii) SOFT-error mode: the depth error is recorded through the armed
-/// escontext (like every other parser error) instead of raising, and is not
-/// overwritten by a generic syntax error.
 #[test]
-fn parser_depth_guard_is_soft_errorable() {
-    let input = deep_input("", "(", "$.a", ")", 50_000);
-    let (res_is_none, occurred, sqlstate) = on_guarded_thread(move || {
-        let cx = MemoryContext::new("depth guard soft");
+fn parser_stack_overflow_is_soft_errorable() {
+    let input = nested("$ ? (", "(", "@ > 1", ")", ")", 100_000);
+    let (none, msg) = on_small_stack(move || {
+        let cx = MemoryContext::new("jsonpath depth soft");
         let mut esc = SoftErrorContext::new(true);
         let res = jsonpath_in(cx.mcx(), &input, Some(&mut esc))
-            .unwrap_or_else(|e| panic!("soft depth error raised hard: {}", e.message()));
-        (
-            res.is_none(),
-            esc.error_occurred(),
-            esc.error().map(|e| e.sqlstate()),
-        )
+            .unwrap_or_else(|e| panic!("soft overflow raised hard: {}", e.message()));
+        (res.is_none(), esc.error().map(|e| (e.sqlstate(), e.message().to_string())))
     });
-    assert!(res_is_none, "soft depth error yields Ok(None)");
-    assert!(occurred, "escontext records the depth error");
+    assert!(none);
     assert_eq!(
-        sqlstate,
-        Some(types_error::ERRCODE_STATEMENT_TOO_COMPLEX),
-        "recorded sqlstate"
+        msg,
+        Some((
+            types_error::ERRCODE_SYNTAX_ERROR,
+            "memory exhausted at or near \"(\" of jsonpath input".to_string()
+        ))
     );
 }
 
-/// (iii) Just below the guard, nesting still parses and canonicalizes exactly
-/// as real PG does on the SAME guarded thread — the guard must not perturb
-/// the accepted region. (docker postgres:18.3:
-/// `select ('((((1))))')::jsonpath` -> `1`;
-/// `select ('(($.a))')::jsonpath` -> `$."a"`.)
 #[test]
-fn parser_depth_guard_below_threshold_round_trips() {
-    for (input, expected) in [
-        (deep_input("", "(", "1", ")", 8), "1"),
-        (deep_input("", "(", "$.a", ")", 8), "$.\"a\""),
-        (deep_input("$ ? (", "!(", "@ == 1", ")", 4).into_iter().chain(*b")").collect::<Vec<u8>>(),
-         "$?(!(!(!(!(@ == 1)))))"),
-    ] {
-        let out = on_guarded_thread(move || {
-            let cx = MemoryContext::new("depth guard shallow");
-            let image = jsonpath_in(cx.mcx(), &input, None)
-                .unwrap_or_else(|e| {
-                    panic!("below-guard input must parse, got: {}", e.message())
-                })
-                .expect("hard path returns Some");
-            out_text(&image)
-        });
-        assert_eq!(out, expected);
-    }
+fn deep_unary_chain_round_trips() {
+    let cx = MemoryContext::new("jsonpath deep");
+    let input = nested("", "-(", "$", ")", "", 50);
+    let image = jsonpath_in(cx.mcx(), &input, None).unwrap().unwrap();
+    assert_eq!(out_text(&image), format!("({}-${}", "-(".repeat(49), ")".repeat(50)));
 }
 
 

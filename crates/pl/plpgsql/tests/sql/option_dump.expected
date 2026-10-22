@@ -1,0 +1,19 @@
+CREATE FUNCTION
+ p158_dump 
+-----------
+         1
+(1 row)
+
+CREATE FUNCTION
+ p158_loop 
+-----------
+        10
+(1 row)
+
+DO
+CREATE FUNCTION
+ p158_control 
+--------------
+            2
+(1 row)
+

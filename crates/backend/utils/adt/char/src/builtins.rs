@@ -98,6 +98,8 @@ pub const CHAR_BUILTINS: &[FmgrBuiltin] = &[
     b(74, "charge", 2, fc_charge),
     b(77, "chartoi4", 1, fc_chartoi4),
     b(78, "i4tochar", 1, fc_i4tochar),
+    b(446, "hashcharextended", 2, fc_hashcharextended),
+    b(454, "hashchar", 1, fc_hashchar),
     b(944, "text_char", 1, fc_text_char),
     b(946, "char_text", 1, fc_char_text),
     b(1245, "charin", 1, fc_charin),

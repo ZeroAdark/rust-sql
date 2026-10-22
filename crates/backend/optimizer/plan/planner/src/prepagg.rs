@@ -402,6 +402,9 @@ fn preprocess_aggref<'mcx>(run: &mut PlannerRun<'mcx>, node: Node<'mcx>) -> PgRe
         if !aggref.aggorder.is_nil() || !aggref.aggdistinct.is_nil() {
             run.root.numOrderedAggs += 1;
             run.root.hasNonPartialAggs = true;
+            if !aggref.aggorder.is_nil() {
+                run.root.numOrderByAggs += 1;
+            }
         }
 
         let (transtype_len, transtype_byval) = lsyscache::get_typlenbyval(aggtranstype)?;

@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/mmgr/freepage.c: 1 stack-depth check sites
+1258	FreePageManagerDumpBtree	-	-	unported	catalog: skipped (freepage.c)

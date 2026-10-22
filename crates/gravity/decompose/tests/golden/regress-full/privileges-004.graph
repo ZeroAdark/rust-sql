@@ -1,0 +1,9 @@
+-- regress-full-privileges-004
+-- SELECT session_user, current_role, current_user, current_setting('role') as role;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=T_SQLValueFunction, 2=T_SQLValueFunction, 3=T_SQLValueFunction, 4=fn2077(c25:'role'))
+  outs 1=fx64:call0 2=fx64:call0 3=fx64:call0 4=vl:call2077
+mapped: Result

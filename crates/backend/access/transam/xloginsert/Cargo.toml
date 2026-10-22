@@ -17,6 +17,7 @@ postgres_seams = { path = "../../../tcop/postgres_seams" }
 elog = { path = "../../../utils/error/elog" }
 crc32c = { path = "../../../../port/crc32c" }
 pglz = { path = "../../../../common/pglz" }
+lz4_block = { path = "../../../../common/lz4_block" }
 init_small = { path = "../../../utils/init/init_small" }
 miscinit = { path = "../../../utils/init/miscinit" }
 guc_tables = { path = "../../../utils/misc/guc_tables" }
@@ -28,7 +29,13 @@ xloginsert_seams = { path = "../xloginsert_seams" }
 xlogreader_seams = { path = "../xlogreader_seams" }
 mcx = { path = "../../../../_support/mcx" }
 
+
+# zstd links C (zstd-sys); on wasm the zstd arm is C's !USE_ZSTD branch.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off
+
 [dev-dependencies]
+lz4_flex = "0.11"
 fd = { path = "../../../storage/file/fd" }
 lwlock = { path = "../../../storage/lmgr/lwlock" }
 shmem = { path = "../../../storage/ipc/shmem" }

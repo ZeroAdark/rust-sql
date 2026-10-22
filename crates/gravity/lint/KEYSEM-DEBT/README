@@ -1,0 +1,11 @@
+# RK's registry (lint/rules/rk_keysem.py; PLAN-v5-keysem §5, the user's go 2026-10-04 18:49Z: one construct for key
+# semantics): the functions outside the key-semantics home (gravity_fn::typesem, becoming typesem/keysem/) that still
+# decide a key's equality or image eligibility, hash, order (family, direction, comparator), call site or support epoch,
+# or call a key support function past the bound-call table, by repository path, name and owner lane. Seeded in KeySem
+# slice 0 from the trunk scan; a row goes when its owner's slice moves the decision onto KeySem (resolve / keysem::call);
+# a landing never adds a row (a certified move rewrites one); slice 7 ends at 0 and RK becomes a plain error.
+# kind: eq, hash, order, site, epoch, error (several joined by '+').
+# path	fn	owner	kind	what it decides
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<fn> (the row's path with
+# crates/gravity/ dropped and '/' as '.'), holding the row line; this README is not a row. Deleting a row deletes
+# its file, so lanes that delete different rows never touch the same file.

@@ -1,0 +1,3 @@
+backend/utils/misc/queryenvironment/src/hold.rs	ENTRIES	pgport	at:unregister	leader	the registered QueryEnvironments behind C's bare p_queryEnv / es_queryEnv pointers; a handle resolves only on the thread that registered it (elsewhere: a stale-handle panic), and Gravity reads a NamedTuplestoreScan on the leader (hosts srf store.rs); bounded by the live environments, unregister frees each slot for reuse
+backend/utils/misc/queryenvironment/src/hold.rs	FREE	pgport	at:unregister	leader	the free slots of ENTRIES, reused by register; bounded by ENTRIES' length
+backend/utils/misc/queryenvironment/src/hold.rs	GENERATION	pgport	exit	leader	the generation counter stamped into each handle register makes

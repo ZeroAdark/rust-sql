@@ -1,0 +1,11 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (box 11, M5-RIG 09-26): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT g, n FROM generate_series(10, 20) WITH ORDINALITY g(g, n) WHERE g > 13
+cols: g	n
+[pg]
+14	5
+15	6
+16	7
+17	8
+18	9
+19	10
+20	11

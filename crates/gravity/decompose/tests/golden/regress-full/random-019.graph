@@ -1,0 +1,10 @@
+-- regress-full-random-019
+-- SELECT n, random(0, trim_scale(abs(1 - 10.0^(-n)))) FROM generate_series(-20, 20) n;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:-20, c23:20)]
+  project (1=v1.1, 2=fn6341(c1700:'\x00\x80', fn5043(fn1705(op1759(c1700:'\x00\x80\x01\x00', op1038(c1700:'\x80\x80\x0a\x00', fn1740(op558(v1.1))))))))
+  outs 1=w4:val 2=vl:call6341
+mapped: FunctionScan

@@ -15,7 +15,9 @@
 #                  (default: target/wasm32-wasip1/wasm-release/postgres.wasm,
 #                   falling back to the debug build)
 #   PGRUST_DATADIR an initdb'd datadir to bundle at /pgdata; when unset, one is
-#                  minted here with the C PostgreSQL 18 initdb (set PGINSTALL
+#                  minted here with pgrust's own initdb (target/release/initdb,
+#                  or PGRUST_INITDB) and, failing that, the C PostgreSQL 18
+#                  initdb (set PGINSTALL
 #                  to its bin dir; /opt/homebrew/bin is probed)
 #   PGRUST_SHARE   a share dir carrying timezone/timezonesets, bundled at
 #                  /share; when unset it is derived from the initdb install.
@@ -40,26 +42,45 @@ fi
 [[ -n "$WASM" && -f "$WASM" ]] || { echo "wasm not found (build it first — see header)"; exit 1; }
 
 VFSROOT="$(mktemp -d)"
-trap 'rm -rf "$VFSROOT" "$VFSROOT-datadir"' EXIT
+trap 'rm -rf "$VFSROOT" "$VFSROOT-datadir" "$VFSROOT-nolocale"' EXIT
 
 DATADIR="${PGRUST_DATADIR:-}"
 SHARE="${PGRUST_SHARE:-}"
 if [[ -z "$DATADIR" ]]; then
-  PGBIN=""
-  for cand in "${PGINSTALL:-}" /tmp/pgrust_pginstall/bin /opt/homebrew/bin; do
-    [[ -n "$cand" && -x "$cand/initdb" ]] && PGBIN="$cand" && break
+  INITDB=""
+  for cand in "${PGRUST_INITDB:-}" "$ROOT/target/release/initdb" "$ROOT/target/dist/initdb" "$ROOT/target/debug/initdb"; do
+    [[ -n "$cand" && -x "$cand" && -x "$(dirname "$cand")/postgres" ]] && INITDB="$cand" && break
   done
-  [[ -n "$PGBIN" ]] || { echo "no PostgreSQL 18 initdb found (set PGINSTALL or PGRUST_DATADIR)"; exit 1; }
-  echo "[build] minting datadir with $PGBIN/initdb..."
-  DATADIR="$VFSROOT-datadir"
-  "$PGBIN/initdb" -D "$DATADIR" --no-locale --encoding=UTF8 -U postgres -A trust > "$VFSROOT/initdb.log" 2>&1 \
-    || { tail -20 "$VFSROOT/initdb.log"; exit 1; }
-  rm -f "$VFSROOT/initdb.log"
-  if [[ -z "$SHARE" ]]; then
-    for tz in "$PGBIN/../share/postgresql/timezone" "$PGBIN/../share/postgresql@18/timezone"; do
-      [[ -d "$tz" ]] && SHARE="$(dirname "$tz")" && break
+  if [[ -z "$INITDB" ]]; then
+    PGBIN=""
+    for cand in "${PGINSTALL:-}" /tmp/pgrust_pginstall/bin /opt/homebrew/bin; do
+      [[ -n "$cand" && -x "$cand/initdb" ]] && PGBIN="$cand" && break
     done
+    [[ -n "$PGBIN" ]] || { echo "no initdb found: build pgrust's (cargo build --release -p initdb) or set PGINSTALL / PGRUST_DATADIR"; exit 1; }
+    INITDB="$PGBIN/initdb"
+    if [[ -z "$SHARE" ]]; then
+      for tz in "$PGBIN/../share/postgresql/timezone" "$PGBIN/../share/postgresql@18/timezone"; do
+        [[ -d "$tz" ]] && SHARE="$(dirname "$tz")" && break
+      done
+    fi
+  elif [[ -z "$SHARE" ]]; then
+    # The staged share tree beside the binary carries timezonesets but no
+    # zoneinfo; assemble a bundle share with the system tz database.
+    SHARE="$VFSROOT-share"
+    cp -RL "$(dirname "$INITDB")/share" "$SHARE"
+    [[ -d "$SHARE/timezone" ]] || cp -RL /usr/share/zoneinfo "$SHARE/timezone"
+    trap 'rm -rf "$VFSROOT" "$VFSROOT-datadir" "$VFSROOT-share"' EXIT
   fi
+  echo "[build] minting datadir with $INITDB..."
+  DATADIR="$VFSROOT-datadir"
+  # locale-less: no `locale` program on initdb's PATH, so it records no libc collation (none of which the wasm server's
+  # wasi-libc, C / POSIX only, can open; a glibc host also stamps its version on each). Main 2026-10-08 ~12:3xZ.
+  mkdir -p "$VFSROOT-nolocale"
+  PATH="$VFSROOT-nolocale" "$INITDB" -D "$DATADIR" --no-locale --encoding=UTF8 -U postgres -A trust \
+    > "$VFSROOT/initdb.log" 2>&1 || { tail -20 "$VFSROOT/initdb.log"; exit 1; }
+  grep -q 'no usable system locales were found' "$VFSROOT/initdb.log" \
+    || { echo "initdb imported system locales (see below)"; tail -20 "$VFSROOT/initdb.log"; exit 1; }
+  rm -f "$VFSROOT/initdb.log"
 fi
 [[ -d "$DATADIR" ]] || { echo "datadir not found: $DATADIR"; exit 1; }
 [[ -n "$SHARE" && -d "$SHARE/timezone" ]] || { echo "share dir with timezone/ not found (set PGRUST_SHARE)"; exit 1; }

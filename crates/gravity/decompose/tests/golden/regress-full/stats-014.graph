@@ -1,0 +1,10 @@
+-- regress-full-stats-014
+-- SELECT pr.snap_ts < pg_stat_get_snapshot_timestamp() as snapshot_newer FROM prevstats AS pr;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=970 end=sink
+  nodes n0@0
+  source range rel=46996 rti=1 am=heap
+    lanes Attr(7):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1322(v1.7, fn3788()))
+  outs 1=w1:val
+mapped: SeqScan

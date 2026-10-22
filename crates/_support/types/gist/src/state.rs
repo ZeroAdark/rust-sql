@@ -277,7 +277,10 @@ pub struct IndexOrderByDistance {
 // deform requires MAXALIGN), living as long as its queue item + one
 // getNextNearest return.
 #[derive(Clone, Debug)]
-pub struct ReconTup(Box<[u64]>);
+pub struct ReconTup {
+    buf: Box<[u64]>,
+    len: u32,
+}
 
 impl ReconTup {
     pub fn from_bytes(b: &[u8]) -> Self {
@@ -286,10 +289,16 @@ impl ReconTup {
         unsafe {
             core::ptr::copy_nonoverlapping(b.as_ptr(), v.as_mut_ptr().cast::<u8>(), b.len());
         }
-        ReconTup(v.into_boxed_slice())
+        ReconTup { buf: v.into_boxed_slice(), len: b.len() as u32 }
     }
     pub fn as_ptr(&self) -> *const u8 {
-        self.0.as_ptr().cast()
+        self.buf.as_ptr().cast()
+    }
+    pub fn len(&self) -> u32 {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
 

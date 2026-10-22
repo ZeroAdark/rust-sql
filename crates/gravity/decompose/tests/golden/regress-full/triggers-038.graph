@@ -1,0 +1,9 @@
+-- regress-full-triggers-038
+-- insert into upsert values(1, 'black') on conflict (key) do update set color = 'updated ' || upsert.color;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op96(op530($14, c23:2), c23:0))
+  outs 1=w1:val
+mapped: Result

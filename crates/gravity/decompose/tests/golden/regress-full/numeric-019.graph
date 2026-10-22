@@ -1,0 +1,13 @@
+-- regress-full-numeric-019
+-- WITH v(x) AS (VALUES('1'::numeric),('4.2'),('inf'),('nan')) SELECT x, log(x), log10(x), ln(x) FROM v;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=4
+    row (c1700:'\x00\x80\x01\x00')
+    row (c1700:'\x80\x80\x04\x00\xd0\x07')
+    row (c1700:'\x00\xd0')
+    row (c1700:'\x00\xc0')
+  project (1=v2.1, 2=fn1736(c1700:'\x00\x80\x0a\x00', v2.1), 3=fn1736(c1700:'\x00\x80\x0a\x00', v2.1), 4=fn1734(v2.1))
+  outs 1=vl:row 2=vl:call1736 3=vl:call1736 4=vl:call1734
+mapped: ValuesScan

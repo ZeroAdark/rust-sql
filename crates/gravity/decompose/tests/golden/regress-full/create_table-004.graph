@@ -1,0 +1,12 @@
+-- regress-full-create_table-004
+-- SELECT relpersistence, pg_filenode_relation (reltablespace, pg_relation_filenode(oid)) FROM pg_class WHERE relname = 'relation_filenode_check';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1259 rti=1 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v1.2, c19:#64))
+    lanes Attr(1):byval8:w8:val Attr(9):byval8:w8:val Attr(17):byval8:w8:val
+  project (1=v1.17, 2=fn3454(v1.9, fn2999(relabel2205(v1.1))))
+  outs 1=w8:val 2=w4:val
+mapped: IndexScan

@@ -1,0 +1,13 @@
+-- regress-full-update-037
+-- UPDATE list_parted set b = c + a WHERE a = 2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n0@2
+  source range rel=26895 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(3):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op1752(v2.1, c1700:'\x00\x80\x02\x00')
+  project (1=fn1744(op1758(fn1781(v2.3), v2.1)), 2j=v2.-6, 3j=v2.-1, 4j=v2.1, 5j=v2.3)
+  write UPDATE rel=26895 rti=2 natts=3 indexes=() set=(2) route=rti1:26879 natts=3
+  outs 1=w4:val 2=w4:val 3=fx6:row 4=vl:win/page 5=w8:val
+scan-lanes node=2 rti=2 rel=26895 tableoid
+mapped: ModifyTable SeqScan

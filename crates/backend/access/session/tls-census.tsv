@@ -1,0 +1,1705 @@
+# The thread-local census (session tests.rs tls_source_census_and_session_surface_are_pinned): one line per static a
+# thread_local! declares under crates/, any order (merge=union): <path under crates/>\t<static>\t<session | non-session>[\t<note>].
+# session = session envelope state (SESSION_ENVELOPE_MANIFEST), only in the test's session sources.
+_support/cancelpoll/src/lib.rs	BYTE	non-session	D3887: the abort byte a running kernel call lent its thread's host code
+_support/cancelpoll/src/lib.rs	PROBE	non-session	D3887: the poll-gap probe's per-thread marks
+_support/cancelpoll/src/lib.rs	SEEN	non-session	D3887: a host loop of the running kernel call stopped for the abort bit
+_support/cancelpoll/src/step.rs	LENT	non-session	C9: the (byte, mask) a Step of the running kernel call reads (set by cancelpoll::scoped)
+_support/cancelpoll/src/step.rs	LAST	non-session	C9 checker 2 (debug builds only): the monotonic ns of this thread's last abort poll, for the step-gap line
+_support/leader_tls/src/lib.rs	DEPTH	non-session	C7 runtime half: the leader_tls! self-test's const-initialized leader static
+_support/leader_tls/src/lib.rs	SEEN	non-session	C7 runtime half: the leader_tls! self-test's lazy leader static
+_support/fires/src/lib.rs	NAMES	non-session
+_support/fires/src/lib.rs	ON	non-session
+_support/fires/src/lib.rs	SEEN	non-session
+_support/jit_deform/src/lib.rs	ARENA	non-session
+_support/mcx/src/aset.rs	KEEPER_TLS	non-session
+_support/mcx/src/aset.rs	SMALL_KEEPER_TLS	non-session
+_support/mcx/src/governor.rs	ARMED	non-session
+_support/mcx/src/governor.rs	LEDGER	non-session
+_support/mcx/src/governor.rs	OWN	non-session
+_support/mcx/src/governor.rs	PENDING	non-session
+_support/mcx/src/governor.rs	SLOT	non-session
+_support/mcx/src/ladder_stats.rs	RAN	non-session
+_support/mcx/src/lib.rs	ACCT	non-session
+_support/mcx/src/lib.rs	CHILD_VECS	non-session
+_support/mcx/src/lib.rs	RETIRED_ROOTS	non-session
+_support/mcx/src/lib.rs	SESSION_ROOT_RETIRING	non-session
+_support/mcx/src/lib.rs	THREAD	non-session
+_support/mcx/tests/oom_reserve.rs	FAIL	non-session
+_support/memledger/src/lib.rs	DOOR	non-session
+_support/memledger/src/charge.rs	EXITING	non-session	C8 checker 1 (B2): the session this thread unbound and no teardown drained yet
+_support/memledger/tests/d3998_exit_fold.rs	LATE	non-session	D3998 test: a thread-local whose drop frees after the thread's other exit work
+_support/memledger/tests/c8_charge_allocates_nothing.rs	ALLOCS	non-session	C8 E1 test: the counting allocator's per-thread count
+_support/memledger/src/value.rs	LOCAL	non-session	the caches' held-back hits and miss timers (memledger::value)
+_support/memledger/src/value.rs	RINGS	non-session	cache_track: this thread's sampled cache-door lookups, handed to the drain a batch at a time (memledger::value)
+_support/pgrust/trace/src/lib.rs	DEPTH	non-session
+_support/pgsync/src/sim/sched.rs	CURRENT	non-session
+_support/test_boot/src/lib.rs	ARMED	non-session
+_support/types/nodes/src/equal.rs	VARNO_AS	non-session
+_support/types/portal/src/params.rs	ENTRIES	non-session
+_support/types/portal/src/params.rs	FREE	non-session
+_support/types/portal/src/params.rs	GENERATION	non-session
+_support/types/rel/src/reindex.rs	CURRENTLY_REINDEXED_HEAP	non-session
+_support/types/rel/src/reindex.rs	CURRENTLY_REINDEXED_INDEX	non-session
+_support/types/rel/src/reindex.rs	PENDING	non-session
+_support/types/rel/src/reindex.rs	REINDEXING_NEST_LEVEL	non-session
+_support/types/types_error/src/severity.rs	EXIT_ON_ANY_ERROR	non-session
+backend/access/brin/brin_pageops/src/tests.rs	NBLOCKS	non-session
+backend/access/brin/brin_pageops/src/tests.rs	PAGES	non-session
+backend/access/brin/brin_pageops/src/tests.rs	XLOG_CRIT	non-session
+backend/access/brin/brin_pageops/src/tests.rs	XLOG_FAIL	non-session
+backend/access/common/printtup/src/lib.rs	CTX	non-session
+backend/access/common/printtup/src/lib.rs	WIRE_BUF	non-session
+backend/access/common/printtup/src/tests.rs	CONVERT	non-session
+backend/access/common/printtup/src/tests.rs	CONVERT_CALLS	non-session
+backend/access/common/printtup/src/tests.rs	FMGR_INFO_CALLS	non-session
+backend/access/common/printtup/src/tests.rs	SENT	non-session
+backend/access/common/printtup/src/tests.rs	TLIST	non-session
+backend/access/common/relation/src/tests.rs	EVENTS	non-session
+backend/access/common/relation/src/tests.rs	PGSTAT_RET	non-session
+backend/access/common/relation/src/tests.rs	REGISTRY	non-session
+backend/access/gin/gin/src/insert.rs	GIN_INSERT_SCRATCH	non-session
+backend/access/gin/gin/src/lib.rs	GIN_FUZZY_SEARCH_LIMIT	non-session
+backend/access/gin/gin/src/lib.rs	GIN_PENDING_LIST_LIMIT	non-session
+backend/access/gin/gin/src/rem_b006_tests.rs	DIRTY	non-session
+backend/access/gin/gin/src/rem_b006_tests.rs	EXTENDED	non-session
+backend/access/gin/gin/src/rem_b006_tests.rs	NALLOC	non-session
+backend/access/gin/gin/src/rem_b006_tests.rs	NBLOCKS	non-session
+backend/access/gin/gin/src/rem_b006_tests.rs	WAL	non-session
+backend/access/gin/gin/src/rem_b006_tests.rs	WAL_FAIL	non-session
+backend/access/gin/gin/src/scanver_tests.rs	META_PAGE	non-session
+backend/access/gin/gin/src/tests.rs	DELAY_POINTS	non-session
+backend/access/gin/gin/src/tests.rs	PAGES	non-session
+backend/access/gin/gin/src/tests.rs	PINS	non-session
+backend/access/gist/gist/src/util.rs	FAKE_LSN_LASTLSN	non-session
+backend/access/gist/gist/src/util.rs	FAKE_LSN_TEMP_COUNTER	non-session
+backend/access/hash/hash/src/tests.rs	IS_CATALOG	non-session
+backend/access/hash/hash/src/tests.rs	LOGICAL_DECODING	non-session
+backend/access/hash/hash/src/tests.rs	NBLOCKS_OVERRIDE	non-session
+backend/access/hash/hash/src/tests.rs	NEXT_LSN	non-session
+backend/access/hash/hash/src/tests.rs	PAGES	non-session
+backend/access/hash/hash/src/tests.rs	WAL	non-session
+backend/access/hash/hash/src/tests.rs	WAL_FAIL	non-session
+backend/access/hash/hash/src/util.rs	HASH_PROC_SCRATCH	non-session
+backend/access/hash/hash_xlog/src/lib.rs	PAGE	non-session
+backend/access/heap/heapam/src/dml.rs	PARALLEL_WRITE_PERMITS	non-session
+backend/access/heap/heapam/src/freeze.rs	FREEZE_MEMBER_SCRATCH	non-session
+backend/access/heap/heapam/src/lib.rs	KEY_TEST_SCRATCH	non-session
+backend/access/heap/heapam_visibility/src/lib.rs	DIRTY_SCRATCH	non-session
+backend/access/heap/heapam_visibility/src/lib.rs	TEST_HISTORIC_RLOCATOR	non-session
+backend/access/heap/heapam_visibility/src/tests.rs	COMMIT_LSN	non-session
+backend/access/heap/heapam_visibility/src/tests.rs	DID_COMMIT	non-session
+backend/access/heap/heapam_visibility/src/tests.rs	DIRTY_CALLS	non-session
+backend/access/heap/heapam_visibility/src/tests.rs	NEEDS_FLUSH	non-session
+backend/access/heap/heapam_visibility/src/tests.rs	PAGE_LSN	non-session
+backend/access/heap/heapam_visibility/src/tests.rs	PERMANENT	non-session
+backend/access/heap/heapam_visibility/src/tests.rs	REMOVABLE	non-session
+backend/access/heap/heapam_visibility/src/tests.rs	THREAD_PROC	non-session
+backend/access/heap/heaptoast/src/tests.rs	ARMED	non-session
+backend/access/heap/heaptoast/src/worker.rs	ENTERED	non-session
+backend/access/heap/heaptoast/src/worker.rs	PUBLISHED	non-session
+backend/access/heap/vacuumlazy/src/lib.rs	ACC	non-session
+backend/access/heap/vacuumlazy/src/morsels.rs	WORKER_CX	non-session
+backend/access/heap/visibilitymap/src/tests.rs	IS_CATALOG_REL	non-session
+backend/access/heap/visibilitymap/src/tests.rs	LOGICAL_ACTIVE	non-session
+backend/access/index/genam/src/tests.rs	HEAP_PAGE	non-session
+backend/access/index/genam/src/tests.rs	HORIZON_PINS	non-session
+backend/access/index/genam/src/tests.rs	INDEX_PAGE	non-session
+backend/access/index/genam/src/tests.rs	REGISTERED	non-session
+backend/access/index/genam/src/tests.rs	SNAP_CX	non-session
+backend/access/index/genam/src/tests.rs	UNREGISTERED	non-session
+backend/access/index/genam/src/tests.rs	XID_COMMITTED	non-session
+backend/access/index/genam/src/tests.rs	XID_IN_PROGRESS	non-session
+backend/access/index/indexam/src/tests.rs	LAST_CLOSED	non-session
+backend/access/index/relscan/src/lib.rs	REGISTERED_INDEX_AMS	non-session
+backend/access/nbtree/nbtree/src/fcframe.rs	PROC_SCRATCH	non-session
+backend/access/nbtree/nbtree/src/parallel.rs	RESTORE_ARRAYS_FAULT	non-session
+backend/access/nbtree/nbtree/src/tests.rs	DIRTY_HINTS	non-session
+backend/access/nbtree/nbtree/src/tests.rs	HEAP_PAGES	non-session
+backend/access/nbtree/nbtree/src/tests.rs	INSERT_ON_PRED_LOCK	non-session
+backend/access/nbtree/nbtree/src/tests.rs	NBLOCKS_CALLS	non-session
+backend/access/nbtree/nbtree/src/tests.rs	NEXT_LSN	non-session
+backend/access/nbtree/nbtree/src/tests.rs	PAGES	non-session
+backend/access/nbtree/nbtree/src/tests.rs	PINS	non-session
+backend/access/nbtree/nbtree/src/tests.rs	PRED_LOCK_RELATION_CALLS	non-session
+backend/access/nbtree/nbtree/src/tests.rs	READS	non-session
+backend/access/nbtree/nbtree/src/tests.rs	WAL	non-session
+backend/access/nbtree/nbtree/src/tests.rs	WAL_CRIT	non-session
+backend/access/nbtree/nbtsort/src/pool.rs	BT_CX	non-session
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	CANDIDATES	non-session
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	CIDS_CHARGE	non-session	D4537: the Session charge on PUBLISH_CIDS' bytes
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	PENDING_CHARGE	non-session	D4537 T18b: the Session charge on FRONT_PENDING's bytes
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	PLACED_CHARGE	non-session	D4537 T18b: the Session charge on PLACED's bytes
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	SEEN_CHARGE	non-session	D4537 T18b: the Session charge on FRONT_SEEN's bytes
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	CANDS_CHARGE	non-session	D4537 T18c: the Session charge on CANDIDATES' bytes
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	FACTS_CHARGE	non-session	D4537 T18c: the Session charge on FOOTER_FACTS' bytes
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	WRITERS_CHARGE	non-session	D4537 T18c: the Session charge on WRITERS' shell bytes
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	HOOKS_REGISTERED	non-session
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	INVAL_REGISTERED	non-session
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	PUBLISH_CIDS	non-session
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	WRITERS	non-session
+backend/access/pgrcolumnar/pgrc_codec/src/intpre.rs	FORCE	non-session	the integer pre-pass switch's per-thread test override (intpre::force; 0 = the environment)
+backend/access/pgrcolumnar/pgrc_meta/src/batch.rs	SKIP_LAST_HLL	non-session
+backend/access/pgrcolumnar/pgrc_read/src/io.rs	THREAD_READS	non-session
+backend/access/rmgrdesc/src/lib.rs	TIMESTAMPTZ_TO_STR	non-session
+backend/access/session/src/lib.rs	CURRENT_SESSION	session
+backend/access/session/src/lib.rs	ENVELOPE_DEPTH	session
+backend/access/table/table/src/tests.rs	LAST_CLOSED	non-session
+backend/access/table/table/src/tests.rs	LAST_OPEN_LOCKMODE	non-session
+backend/access/table/tableam/src/lib.rs	DEFAULT_TABLE_ACCESS_METHOD_GUC	non-session
+backend/access/table/tableam_vocab/src/lib.rs	HEAP_HANDLER_AMS	non-session
+backend/access/table/tableam_vocab/src/lib.rs	PGRCOLUMNAR_AMS	non-session
+backend/access/table/tableam_vocab/src/lib.rs	SYNCHRONIZE_SEQSCANS_GUC	non-session
+backend/access/transam/commit_ts/src/lib.rs	TRACK_COMMIT_TIMESTAMP	non-session
+backend/access/transam/multixact/src/lib.rs	CACHE_ID_HITS	non-session
+backend/access/transam/multixact/src/lib.rs	CACHE_SET_HITS	non-session
+backend/access/transam/multixact/src/lib.rs	LAST_INITIALIZED_OFFSETS_PAGE	non-session
+backend/access/transam/multixact/src/lib.rs	MEMBER_SCRATCH	non-session
+backend/access/transam/multixact/src/lib.rs	MEMBER_SCRATCH_GENERATION	non-session
+backend/access/transam/multixact/src/lib.rs	MEMBER_SCRATCH_INIT	non-session
+backend/access/transam/multixact/src/lib.rs	MXACT_CACHE	non-session
+backend/access/transam/multixact/src/lib.rs	PRE_INITIALIZED_OFFSETS_PAGE	non-session
+backend/access/transam/multixact/src/lib.rs	WAL_SCRATCH	non-session
+backend/access/transam/multixact/src/tests.rs	INJECT_WAL_ERROR	non-session
+backend/access/transam/multixact/src/tests.rs	OWNER_CLEANUPS	non-session
+backend/access/transam/parallel/src/lib.rs	INITIALIZING_PARALLEL_WORKER	non-session
+backend/access/transam/parallel/src/lib.rs	MY_PROGRESS_SENDER	non-session
+backend/access/transam/parallel/src/lib.rs	MY_WORKER_SHARED	non-session
+backend/access/transam/parallel/src/lib.rs	NEXT_PCXT_ID	non-session
+backend/access/transam/parallel/src/lib.rs	PARALLEL_WORKER_NUMBER	non-session
+backend/access/transam/parallel/src/lib.rs	PARK_STALL	non-session
+backend/access/transam/parallel/src/lib.rs	PCXT_COUNT	non-session
+backend/access/transam/parallel/src/lib.rs	PCXT_LIST	non-session
+backend/access/transam/parallel/src/query_task_guard.rs	ACTIVE_DEFERRED	non-session
+backend/access/transam/parallel/src/query_task_guard.rs	QUERY_TASK_FAULT	non-session
+backend/access/transam/parallel/src/query_task_guard.rs	STICKY	non-session
+backend/access/transam/parallel/src/standing.rs	CURRENT_SERVE_BOARD	non-session
+backend/access/transam/parallel/src/standing.rs	CURRENT_TICKET_ENTRY	non-session
+backend/access/transam/parallel/src/standing.rs	DEFERRED_VIS	non-session
+backend/access/transam/parallel/src/standing.rs	ON_POOL_SERVE	non-session
+backend/access/transam/parallel/src/standing.rs	YIELD_DETACHED	non-session
+backend/access/transam/parallel/src/standing.rs	YIELD_PENDING	non-session
+backend/access/transam/parallel/src/tests.rs	ARMED	non-session
+backend/access/transam/parallel/tests/substrate_e2e.rs	ARMED	non-session
+backend/access/transam/timeline/src/tests.rs	CAPTURED	non-session
+backend/access/transam/transam/src/lib.rs	cachedCommitLSN	non-session
+backend/access/transam/transam/src/lib.rs	cachedFetchXid	non-session
+backend/access/transam/transam/src/lib.rs	cachedFetchXidStatus	non-session
+backend/access/transam/transam_xlog/src/backup.rs	ABORT_HANDLER_REGISTERED	non-session
+backend/access/transam/transam_xlog/src/backup.rs	SESSION_BACKUP_STATE	non-session
+backend/access/transam/transam_xlog/src/guc_vars.rs	$cell	non-session
+backend/access/transam/transam_xlog/src/guc_vars.rs	CHECKPOINT_COMPLETION_TARGET	non-session
+backend/access/transam/transam_xlog/src/guc_vars.rs	WAL_CONSISTENCY_CHECKING_STRING	non-session
+backend/access/transam/transam_xlog/src/guc_vars.rs	XLOG_ARCHIVE_COMMAND	non-session
+backend/access/transam/transam_xlog/src/insert.rs	CACHED_PAGE	non-session
+backend/access/transam/transam_xlog/src/insert.rs	CACHED_POS	non-session
+backend/access/transam/transam_xlog/src/insert.rs	DO_PAGE_WRITES	non-session
+backend/access/transam/transam_xlog/src/insert.rs	HOLDING_ALL_LOCKS	non-session
+backend/access/transam/transam_xlog/src/insert.rs	LOCAL_RECOVERY_GENERATION	non-session
+backend/access/transam/transam_xlog/src/insert.rs	LOCAL_RECOVERY_IN_PROGRESS	non-session
+backend/access/transam/transam_xlog/src/insert.rs	LOCAL_XLOG_INSERT_ALLOWED	non-session
+backend/access/transam/transam_xlog/src/insert.rs	LOCK_TO_TRY	non-session
+backend/access/transam/transam_xlog/src/insert.rs	MY_LOCK_NO	non-session
+backend/access/transam/transam_xlog/src/insert.rs	REDO_REC_PTR	non-session
+backend/access/transam/transam_xlog/src/lib.rs	PROC_LAST_REC_PTR	non-session
+backend/access/transam/transam_xlog/src/lib.rs	WAL_USAGE	non-session
+backend/access/transam/transam_xlog/src/lib.rs	WCC_ANY	non-session
+backend/access/transam/transam_xlog/src/lib.rs	WCC_FLAGS	non-session
+backend/access/transam/transam_xlog/src/lib.rs	XACT_LAST_COMMIT_END	non-session
+backend/access/transam/transam_xlog/src/lib.rs	XACT_LAST_REC_END	non-session
+backend/access/transam/transam_xlog/src/removal.rs	CHECK_POINT_DISTANCE_ESTIMATE	non-session
+backend/access/transam/transam_xlog/src/removal.rs	PREV_CHECK_POINT_DISTANCE	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_AGG_SYNC_TIME	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_BUFS_WRITTEN	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_END_T	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_LONGEST_SYNC	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_SEGS_ADDED	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_SEGS_RECYCLED	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_SEGS_REMOVED	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_SLRU_WRITTEN	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_START_T	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_SYNC_END_T	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_SYNC_RELS	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_SYNC_T	non-session
+backend/access/transam/transam_xlog/src/startup.rs	CKPT_WRITE_T	non-session
+backend/access/transam/transam_xlog/src/startup.rs	LAST_FULL_PAGE_WRITES	non-session
+backend/access/transam/transam_xlog/src/write.rs	LOCAL_MIN_RECOVERY_POINT	non-session
+backend/access/transam/transam_xlog/src/write.rs	LOCAL_MIN_RECOVERY_POINT_TLI	non-session
+backend/access/transam/transam_xlog/src/write.rs	LOGWRT_RESULT	non-session
+backend/access/transam/transam_xlog/src/write.rs	OPEN_LOG_FILE	non-session
+backend/access/transam/transam_xlog/src/write.rs	OPEN_LOG_SEG_NO	non-session
+backend/access/transam/transam_xlog/src/write.rs	OPEN_LOG_TLI	non-session
+backend/access/transam/transam_xlog/src/write.rs	REPORTED	non-session
+backend/access/transam/transam_xlog/src/write.rs	UPDATE_MIN_RECOVERY_POINT	non-session
+backend/access/transam/transam_xlog/src/write.rs	WAKE_WAL_SENDERS	non-session
+backend/access/transam/twophase/src/core.rs	PREPARE_BUILDER	non-session
+backend/access/transam/twophase/src/state.rs	CACHED_GXACT	non-session
+backend/access/transam/twophase/src/state.rs	MY_LOCKED_GXACT	non-session
+backend/access/transam/twophase/src/state.rs	TWOPHASE_EXIT_REGISTERED	non-session
+backend/access/transam/xact/src/engine.rs	RECORD_ABORT_SCRATCH	session
+backend/access/transam/xact/src/engine.rs	RECORD_COMMIT_SCRATCH	session
+backend/access/transam/xact/src/lib.rs	POOLED_TOP_OWNER	session
+backend/access/transam/xact/src/state.rs	CUR_BLOCK_STATE	session
+backend/access/transam/xact/src/state.rs	CUR_COMMAND_ID	session
+backend/access/transam/xact/src/state.rs	CUR_COMMAND_ID_USED	session
+backend/access/transam/xact/src/state.rs	CUR_FULL_XID	session
+backend/access/transam/xact/src/state.rs	CUR_NEST_LEVEL	session
+backend/access/transam/xact/src/state.rs	CUR_TRANS_STATE	session
+backend/access/transam/xact/src/state.rs	STATE	session
+backend/access/transam/xact/src/state.rs	TOP_FULL_XID	session
+backend/access/transam/xact/src/state.rs	XS_BUSY	session
+backend/access/transam/xact/src/tests.rs	ARMED	non-session	D4780: a test registrant's per-thread once-flag
+backend/access/transam/xact/src/tests.rs	CAPTURED	non-session
+backend/access/transam/xact/src/tests.rs	LOG	non-session
+backend/access/transam/xlogarchive/src/tests.rs	TEST_ARCHIVE_MODE	non-session
+backend/access/transam/xlogarchive/src/tests.rs	TEST_WAL_SYNC_METHOD	non-session
+backend/access/transam/xloginsert/src/lib.rs	SCRATCH	non-session
+backend/access/transam/xlogprefetcher/src/lib.rs	RECONFIGURE_COUNT	non-session
+backend/access/transam/xlogprefetcher/src/lib.rs	RECOVERY_PREFETCH	non-session
+backend/access/transam/xlogprefetcher/src/tests.rs	FD_INIT	non-session
+backend/access/transam/xlogreader/src/tests.rs	COUNTED	non-session
+backend/access/transam/xlogrecovery/src/lib.rs	CURRENT_SOURCE	non-session
+backend/access/transam/xlogrecovery/src/lib.rs	DO_REQUEST_WALRCV_REPLY	non-session
+backend/access/transam/xlogrecovery/src/lib.rs	IN_REDO	non-session
+backend/access/transam/xlogrecovery/src/lib.rs	PENDING_WALRCV_RESTART	non-session
+backend/access/transam/xlogrecovery/src/lib.rs	RECEIPT_SOURCE	non-session
+backend/access/transam/xlogrecovery/src/lib.rs	RECEIPT_TIME	non-session
+backend/access/transam/xlogrecovery/src/lib.rs	RECOVERY	non-session
+backend/access/transam/xlogrecovery/src/lib.rs	WALRCV_STARTED_WITH	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	LOCAL_HOT_STANDBY_ACTIVE	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	LOCAL_PROMOTE_IS_TRIGGERED	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	RECOVERY_TARGET	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	RECOVERY_TARGET_ACTION_OVERRIDE	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	RECOVERY_TARGET_LSN	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	RECOVERY_TARGET_NAME	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	RECOVERY_TARGET_TIME	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	RECOVERY_TARGET_XID_PARSED	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	TIMELINE_GOAL	non-session
+backend/access/transam/xlogrecovery/src/targets.rs	TLI_REQUESTED	non-session
+backend/access/transam/xlogrecovery/tests/sim_crash_sweep.rs	REUSE_BLOCKS	non-session
+backend/access/transam/xlogrecovery/tests/sim_flushsim.rs	CURRENT_COMMIT	non-session
+backend/access/transam/xlogutils/src/lib.rs	FAKE_REL_CX	non-session
+backend/access/transam/xlogutils/src/lib.rs	IGNORE_INVALID_PAGES	non-session
+backend/access/transam/xlogutils/src/lib.rs	INVALID_PAGE_TAB	non-session
+backend/access/transam/xlogutils/src/lib.rs	IN_RECOVERY	non-session
+backend/access/transam/xlogutils/src/lib.rs	STANDBY_STATE	non-session
+backend/archive/shell_archive/src/tests.rs	TEST_ARCHIVE_COMMAND	non-session
+backend/backup/backup_copy/src/tests.rs	EVENTS	non-session
+backend/backup/backup_copy/src/tests.rs	NOW	non-session
+backend/backup/basebackup/src/lib.rs	BACKUP_MCX	non-session
+backend/backup/basebackup/src/lib.rs	BACKUP_STARTED_IN_RECOVERY	non-session
+backend/backup/basebackup/src/lib.rs	NEXT_ID	non-session
+backend/backup/basebackup/src/lib.rs	NOVERIFY_CHECKSUMS	non-session
+backend/backup/basebackup/src/lib.rs	REGISTRY	non-session
+backend/backup/basebackup/src/lib.rs	TOTAL_CHECKSUM_FAILURES	non-session
+backend/backup/basebackup_target/src/lib.rs	BASE_BACKUP_TARGET_TYPE_LIST	non-session
+backend/catalog/aclchk/src/grant.rs	BINARY_UPGRADE_RECORD_INIT_PRIVS	non-session
+backend/catalog/aclchk/src/lib.rs	ACL_SCRATCH	non-session
+backend/catalog/catalog_heap/src/create.rs	$cell	non-session
+backend/catalog/catalog_index/src/lib.rs	$cell	non-session
+backend/catalog/catalog_namespace/src/lib.rs	ACTIVE_PATH_GENERATION	session
+backend/catalog/catalog_namespace/src/lib.rs	BASE_CREATION_NAMESPACE	session
+backend/catalog/catalog_namespace/src/lib.rs	BASE_SEARCH_PATH_VALID	session
+backend/catalog/catalog_namespace/src/lib.rs	BASE_TEMP_CREATION_PENDING	session
+backend/catalog/catalog_namespace/src/lib.rs	MY_TEMP_NAMESPACE	session
+backend/catalog/catalog_namespace/src/lib.rs	MY_TEMP_NAMESPACE_SUB_ID	session
+backend/catalog/catalog_namespace/src/lib.rs	MY_TEMP_TOAST_NAMESPACE	session
+backend/catalog/catalog_namespace/src/lib.rs	NAMESPACE_SEARCH_PATH	session
+backend/catalog/catalog_namespace/src/lib.rs	NAMESPACE_USER	session
+backend/catalog/catalog_namespace/src/lib.rs	PATH	session
+backend/catalog/catalog_namespace/src/lib.rs	TEMP_NAMESPACE_DEFERRED	session
+backend/catalog/catalog_namespace/src/path.rs	CALLBACKS_REGISTERED	session
+backend/catalog/catalog_namespace/src/path.rs	SEARCH_PATH_CACHE_VALID	session
+backend/catalog/catalog_namespace/src/path.rs	SPCACHE	session
+backend/catalog/catalog_namespace/src/tests.rs	ACL_DENIED	non-session
+backend/catalog/catalog_namespace/src/tests.rs	BOOTSTRAP	non-session
+backend/catalog/catalog_namespace/src/tests.rs	CLEANUPS	non-session
+backend/catalog/catalog_namespace/src/tests.rs	IN_RECOVERY	non-session
+backend/catalog/catalog_namespace/src/tests.rs	NS_BY_NAME	non-session
+backend/catalog/catalog_namespace/src/tests.rs	PARALLEL_WORKER	non-session
+backend/catalog/catalog_namespace/src/tests.rs	RELS	non-session
+backend/catalog/catalog_namespace/src/tests.rs	ROLNAME	non-session
+backend/catalog/catalog_namespace/src/tests.rs	USER	non-session
+backend/catalog/catalog_storage/src/lib.rs	PENDING	non-session
+backend/catalog/catalog_storage/src/lib.rs	PENDING_SYNCS	non-session
+backend/catalog/catalog_storage/src/lib.rs	WAL_SKIP_THRESHOLD	non-session
+backend/catalog/objectaccess/src/lib.rs	OBJECT_ACCESS_HOOK	non-session
+backend/catalog/objectaccess/src/lib.rs	OBJECT_ACCESS_HOOK_STR	non-session
+backend/catalog/objectaccess/src/tests.rs	CALLS	non-session
+backend/catalog/objectaccess/src/tests.rs	STR_CALLS	non-session
+backend/catalog/pg_depend/src/lib.rs	CREATING_EXTENSION	non-session
+backend/catalog/pg_depend/src/lib.rs	CURRENT_EXTENSION_OBJECT	non-session
+backend/catalog/pg_enum/src/lib.rs	NEXT_PG_ENUM_OID	non-session
+backend/catalog/pg_enum/src/lib.rs	UNCOMMITTED	non-session
+backend/catalog/pg_type/src/lib.rs	$cell	non-session
+backend/commands/analyze/src/lib.rs	CANCEL_PENDING	non-session
+backend/commands/commands_async/src/lib.rs	LOCAL	non-session
+backend/commands/commands_async/src/lib.rs	MAX_NOTIFY_QUEUE_PAGES	non-session
+backend/commands/commands_async/src/lib.rs	TRACE_NOTIFY	non-session
+backend/commands/copy/src/tests.rs	CTX	non-session
+backend/commands/copy/src/tests.rs	FD_READY	non-session
+backend/commands/copy/src/text_pgrc.rs	WORKER_CX	non-session
+backend/commands/dbcommands/src/builtins.rs	NAME_SCRATCH	non-session
+backend/commands/event_trigger/src/lib.rs	CURRENT_STATE	non-session
+backend/commands/event_trigger/src/lib.rs	EVENT_TRIGGERS_GUC	non-session
+backend/commands/event_trigger/src/lib.rs	SESSION_REPLICATION_ROLE	non-session
+backend/commands/explain/src/state.rs	EXTENSION_NAMES	non-session
+backend/commands/explain/src/state.rs	EXTENSION_OPTIONS	non-session
+backend/commands/explain/src/state.rs	PER_NODE_HOOK	non-session
+backend/commands/explain/src/state.rs	PER_PLAN_HOOK	non-session
+backend/commands/explain/src/tests.rs	SENT	non-session
+backend/commands/explain/src/tests.rs	THREAD_PROC	non-session
+backend/commands/explain_dr/src/tests.rs	FMGR_INFO_CALLS	non-session
+backend/commands/extension/src/control.rs	EXTENSION_CONTROL_PATH	non-session
+backend/commands/matview/src/lib.rs	MATVIEW_MAINTENANCE_DEPTH	non-session
+backend/commands/portalcmds/src/tests.rs	FAIL_EXECUTOR_END	non-session
+backend/commands/portalcmds/src/tests.rs	SENT	non-session
+backend/commands/portalcmds/src/tests.rs	THREAD_UP	non-session
+backend/commands/prepare/src/lib.rs	PREPARED_QUERIES	non-session
+backend/commands/prepare/tests/round_trip.rs	PLANNER_CALLS	non-session
+backend/commands/prepare/tests/round_trip.rs	PLAN_CACHE_MODE_VAR	non-session
+backend/commands/prepare/tests/round_trip.rs	PORTALS_ENABLED	non-session
+backend/commands/prepare/tests/round_trip.rs	QD_CREATES	non-session
+backend/commands/prepare/tests/round_trip.rs	QD_RUNS	non-session
+backend/commands/prepare/tests/round_trip.rs	QD_SNAPSHOT	non-session
+backend/commands/sequence/src/lib.rs	CLEANUPS	non-session
+backend/commands/sequence/src/lib.rs	FMGR_CONTEXT	non-session
+backend/commands/sequence/src/lib.rs	STATE	non-session
+backend/commands/tablecmds/src/inheritance.rs	CTX	non-session
+backend/commands/tablecmds/src/oncommit.rs	ON_COMMITS	non-session
+backend/commands/tablespace/src/lib.rs	ALLOW_IN_PLACE_TABLESPACES	non-session
+backend/commands/tablespace/src/lib.rs	DEFAULT_TABLESPACE	non-session
+backend/commands/tablespace/src/lib.rs	NEXT_PG_TABLESPACE_OID	non-session
+backend/commands/trigger/src/exec.rs	TRIGGER_DEPTH	non-session
+backend/commands/trigger/src/queue.rs	CON_STATE	non-session
+backend/commands/trigger/src/queue.rs	FDW_LAST	non-session
+backend/commands/trigger/src/queue.rs	FDW_TUPLES	non-session
+backend/commands/trigger/src/queue.rs	FIRING_COUNTER	non-session
+backend/commands/trigger/src/queue.rs	QUERY_DEPTH	non-session
+backend/commands/trigger/src/queue.rs	QUERY_STACK	non-session
+backend/commands/trigger/src/queue.rs	STMT_LEVELS	non-session
+backend/commands/trigger/src/queue.rs	STMT_LEVEL_TOKEN	non-session
+backend/commands/trigger/src/queue.rs	TRANS_STACK	non-session
+backend/commands/trigger/src/queue.rs	TRANS_TABLES	non-session
+backend/commands/trigger/src/queue.rs	XACT_EVENTS	non-session
+backend/commands/user/src/lib.rs	CHECK_PASSWORD_HOOKS	non-session
+backend/commands/user/src/lib.rs	CREATEROLE_SELF_GRANT_ENABLED	non-session
+backend/commands/user/src/lib.rs	CREATEROLE_SELF_GRANT_OPTIONS	non-session
+backend/commands/user/src/lib.rs	NEXT_PG_AUTHID_OID	non-session
+backend/commands/user/src/lib.rs	PASSWORD_ENCRYPTION	non-session
+backend/commands/vacuum/src/lib.rs	CAPTURED	non-session
+backend/commands/vacuum/src/lib.rs	IN_VACUUM	non-session
+backend/commands/vacuum/src/lib.rs	LAST_DELAY_REPORT	non-session
+backend/commands/vacuum/src/lib.rs	PARALLEL_VACUUM_WORKER_DELAY_NS	non-session
+backend/commands/vacuum/src/lib.rs	RULE_SCANS	non-session
+backend/commands/vacuum/src/lib.rs	VACUUM_COST_BALANCE_LOCAL	non-session
+backend/commands/vacuum/src/lib.rs	VACUUM_COST_DELAY	non-session
+backend/commands/vacuum/src/lib.rs	VACUUM_COST_LIMIT	non-session
+backend/commands/vacuum/src/lib.rs	VACUUM_FAILSAFE_ACTIVE	non-session
+backend/commands/vacuum/src/lib.rs	VACUUM_SHARED_COST	non-session
+backend/commands/vacuum/src/lib.rs	WORKER_DELAY_SINK	non-session
+backend/commands/vacuumparallel/src/lib.rs	POOL_CX	non-session
+backend/commands/variable/src/lib.rs	IO_COMBINE_LIMIT	non-session
+backend/commands/variable/src/lib.rs	IO_COMBINE_LIMIT_GUC	non-session
+backend/commands/variable/src/lib.rs	IO_MAX_COMBINE_LIMIT	non-session
+backend/commands/variable/src/lib.rs	MAINTENANCE_IO_CONCURRENCY	non-session
+backend/executor/execexpr/src/compile.rs	COMPILE_ECONOMY	non-session
+backend/executor/execexpr/src/compile.rs	EXECUTE_ACL_SESSION	non-session
+backend/executor/execexpr/src/compile.rs	SUBPLAN_PARENT_WIN	non-session
+backend/executor/execexpr/src/domain.rs	STATE	non-session
+backend/executor/execexpr/src/tests.rs	ACL_DENY	non-session
+backend/executor/execindexing/src/lib.rs	IDX_EXPR_CACHE	non-session
+backend/executor/execindexing/src/tests.rs	UNIQUE_IDX	non-session
+backend/executor/execmain/src/lib.rs	CTX	non-session
+backend/executor/execmain_seams/src/p8ctx.rs	CTX	non-session
+backend/executor/execpartition/src/lib.rs	DEPTH	non-session
+backend/executor/execreplication/src/lib.rs	CALLBACK_REGISTERED	non-session
+backend/executor/execreplication/src/lib.rs	STATE	non-session
+backend/executor/exectuples_output/src/tests.rs	SENT	non-session
+backend/executor/executils/src/tests.rs	FIRED	non-session
+backend/executor/instrument/src/lib.rs	WORKER_CONTRIB	non-session
+backend/executor/instrument/src/lib.rs	WORKER_WAL_CONTRIB	non-session
+backend/executor/nodefunctionscan/src/tests.rs	SRF_CALLS	non-session
+backend/executor/runtime/src/blocking.rs	PERMIT_SEM	non-session
+backend/executor/runtime/src/io.rs	IN_IO_SECTION	non-session
+backend/executor/runtime/src/io.rs	PERMIT_HELD	non-session
+backend/executor/runtime/src/io.rs	WORKER_RT	non-session
+backend/executor/runtime/src/lib.rs	SESSION_RESIDUE	non-session
+backend/executor/runtime/src/sched.rs	CALLER_DUTY	non-session
+backend/executor/runtime/src/sched.rs	LEDGER_GRANT	non-session
+backend/executor/spi/src/lib.rs	SPI_CONNECTED	non-session
+backend/executor/spi/src/lib.rs	SPI_PROCESSED	non-session
+backend/executor/spi/src/lib.rs	SPI_RESULT	non-session
+backend/executor/spi/src/lib.rs	SPI_STACK	non-session
+backend/executor/spi/src/lib.rs	SPI_TUPTABLE	non-session
+backend/executor/spi/src/plan.rs	PLANS	non-session
+backend/executor/spi/src/tuptable.rs	NEXT_TUPTAB_ID	non-session
+backend/executor/sql_functions/src/cache.rs	SQLFN_SOURCE_OWNER	non-session
+backend/executor/sql_functions/src/cache.rs	SQL_FN_CACHE	non-session
+backend/libpq/auth/src/pam.rs	PAM_STATE	non-session
+backend/libpq/auth/src/tests.rs	CAPTURED	non-session
+backend/libpq/auth/src/tests.rs	MOCK_AUTH_RESULT	non-session
+backend/libpq/auth/src/tests.rs	MOCK_CONV	non-session
+backend/libpq/auth/src/tests.rs	MOCK_SEEN_PASSWORD	non-session
+backend/libpq/auth_scram/src/lib.rs	SCRAM_SHA_256_ITERATIONS	non-session
+backend/libpq/be_fsstubs/src/lib.rs	STATE	non-session
+backend/libpq/be_secure/src/gssapi.rs	GSS	non-session
+backend/libpq/be_secure_openssl/src/lib.rs	CERT_ERRDETAIL	non-session
+backend/libpq/be_secure_openssl/src/lib.rs	CONN	non-session
+backend/libpq/be_secure_openssl/src/lib.rs	DEFERRED_INFO	non-session
+backend/libpq/be_secure_openssl/src/lib.rs	PASSPHRASE_ERR	non-session
+backend/libpq/be_secure_openssl/src/lib.rs	PASSPHRASE_PANIC	non-session
+backend/libpq/be_secure_openssl/src/lib.rs	SSL_CONFIG	non-session
+backend/libpq/crypt/src/lib.rs	MD5_PASSWORD_WARNINGS	non-session
+backend/libpq/hba/src/tokenize.rs	LAST_OPEN_ERRNO	non-session
+backend/libpq/libpq_pqsignal/src/lib.rs	MASKS	non-session
+backend/libpq/pqcomm/src/lib.rs	PQ	non-session
+backend/libpq/pqcomm/src/lib.rs	PQ_COMM_METHODS	non-session
+backend/libpq/pqcomm/src/lib.rs	REGISTERED	non-session
+backend/libpq/pqcomm/src/lib.rs	SEND	non-session
+backend/libpq/pqcomm/src/lib.rs	SEND_ACTIVE	non-session
+backend/libpq/pqcomm/src/tests.rs	CLEANUPS	non-session	D4245: the test session-cleanup collector (#[cfg(test)])
+backend/libpq/pqcomm/src/socket.rs	CLIENT_CONNECTION_CHECK_INTERVAL	non-session
+backend/libpq/pqcomm/src/socket.rs	CLIENT_STATE	non-session
+backend/libpq/pqcomm/src/socket.rs	FE_BE_WAIT_SET	non-session
+backend/libpq/pqcomm/src/socket.rs	INHERITED	non-session
+backend/libpq/pqcomm/src/socket.rs	SOCK_PATHS	non-session
+backend/libpq/pqcomm/src/socket.rs	TCP_KEEPALIVES_COUNT	non-session
+backend/libpq/pqcomm/src/socket.rs	TCP_KEEPALIVES_IDLE	non-session
+backend/libpq/pqcomm/src/socket.rs	TCP_KEEPALIVES_INTERVAL	non-session
+backend/libpq/pqcomm/src/socket.rs	TCP_USER_TIMEOUT	non-session
+backend/libpq/pqcomm/src/socket.rs	UNIX_SOCKET_GROUP	non-session
+backend/libpq/pqcomm/src/socket.rs	UNIX_SOCKET_PERMISSIONS	non-session
+backend/libpq/pqcomm/src/tests.rs	HAVE_PORT	non-session
+backend/libpq/pqcomm/src/tests.rs	INPUT	non-session
+backend/libpq/pqcomm/src/tests.rs	NOBLOCK	non-session
+backend/libpq/pqcomm/src/tests.rs	READ_ERRNOS	non-session
+backend/libpq/pqcomm/src/tests.rs	SEEN	non-session
+backend/libpq/pqcomm/src/tests.rs	WIRE	non-session
+backend/libpq/pqcomm/src/tests.rs	WRITE_CHUNK	non-session
+backend/libpq/pqcomm/src/tests.rs	WRITE_ERRNO	non-session
+backend/libpq/pqcomm/src/tests.rs	WRITE_ERRNOS	non-session
+backend/libpq/pqcomm/src/tests.rs	WRITE_FATAL	non-session
+backend/libpq/pqcomm/src/tests.rs	TEST_SEND_GROW	non-session	stmtoh F3: the test thread's send-grow size (#[cfg(test)])
+backend/libpq/pqcomm_simnet/src/imp.rs	SIM	non-session
+backend/libpq/pqcomm_stdio/src/lib.rs	STATE	non-session
+backend/libpq/pqformat/src/tests.rs	CONVERT	non-session
+backend/libpq/pqformat/src/tests.rs	PUT_FAIL	non-session
+backend/libpq/pqformat/src/tests.rs	SENT	non-session
+backend/libpq/pqmq/src/lib.rs	PQ_MQ_BUSY	non-session
+backend/libpq/pqmq/src/lib.rs	PQ_MQ_HANDLE	non-session
+backend/libpq/pqmq/src/lib.rs	PQ_MQ_PARALLEL_LEADER_PID	non-session
+backend/libpq/pqmq/src/lib.rs	PQ_MQ_PARALLEL_LEADER_PROC_NUMBER	non-session
+backend/main/main_main/src/bin/postgres.rs	IN_HOOK	non-session
+backend/main/main_main/src/bin/postgres.rs	TRACKED	non-session
+backend/nodes/outfuncs/src/lib.rs	WRITE_LOCATION_FIELDS	non-session
+backend/nodes/params/src/tests.rs	OUT	non-session
+backend/optimizer/plan/planner/src/agg_algebra.rs	FORCED_IN_TEST	non-session
+backend/optimizer/plan/planner/src/jsonb_stats.rs	INDEX_CACHE	non-session
+backend/optimizer/plan/planner/src/predtest.rs	OPR_PROOF_CACHE	non-session
+backend/parser/gram_core/src/tests.rs	CTX	non-session
+backend/parser/gram_core/src/tests_dump.rs	CTX	non-session
+backend/parser/parse_expr/src/lib.rs	TRANSFORM_NULL_EQUALS	non-session
+backend/parser/parse_oper/src/lib.rs	OPR_CACHE	non-session
+backend/parser/scan_fgram/src/lib.rs	BACKSLASH_QUOTE	non-session
+backend/parser/scan_fgram/src/lib.rs	ESCAPE_STRING_WARNING	non-session
+backend/parser/scan_fgram/src/lib.rs	STANDARD_CONFORMING_STRINGS	non-session
+backend/parser/scan_fgram/src/tests.rs	CTX	non-session
+backend/partitioning/partbounds/src/qual.rs	SEEN	non-session
+backend/partitioning/partdesc/src/lib.rs	STATE	non-session
+backend/postmaster/autovacuum/src/launcher.rs	DATABASE_LIST	non-session
+backend/postmaster/autovacuum/src/launcher.rs	GOT_SIGUSR2	non-session
+backend/postmaster/autovacuum/src/shmem.rs	AUTOVACUUM_LAUNCHER_PID	non-session
+backend/postmaster/autovacuum/src/shmem.rs	AV_STORAGE_PARAM_COST_DELAY	non-session
+backend/postmaster/autovacuum/src/shmem.rs	AV_STORAGE_PARAM_COST_LIMIT	non-session
+backend/postmaster/autovacuum/src/shmem.rs	MY_WORKER_INFO	non-session
+backend/postmaster/autovacuum/src/worker.rs	DEFAULT_FREEZE_MIN_AGE	non-session
+backend/postmaster/autovacuum/src/worker.rs	DEFAULT_FREEZE_TABLE_AGE	non-session
+backend/postmaster/autovacuum/src/worker.rs	DEFAULT_MULTIXACT_FREEZE_MIN_AGE	non-session
+backend/postmaster/autovacuum/src/worker.rs	DEFAULT_MULTIXACT_FREEZE_TABLE_AGE	non-session
+backend/postmaster/autovacuum/src/worker.rs	RECENT_MULTI	non-session
+backend/postmaster/autovacuum/src/worker.rs	RECENT_XID	non-session
+backend/postmaster/auxjob/src/lib.rs	THREAD_CHILD_INITED	non-session
+backend/postmaster/auxjob/src/lib.rs	WORKER_BASE_INITED	non-session
+backend/postmaster/bgworker/src/lib.rs	MY_BGWORKER_ENTRY	non-session
+backend/postmaster/bgwriter/src/lib.rs	BG_WRITER_DELAY	non-session
+backend/postmaster/checkpointer/src/lib.rs	ABSORB_COUNTER	non-session
+backend/postmaster/checkpointer/src/lib.rs	ABSORB_SCRATCH	non-session
+backend/postmaster/checkpointer/src/lib.rs	CHECK_POINT_TIMEOUT	non-session
+backend/postmaster/checkpointer/src/lib.rs	CHECK_POINT_WARNING	non-session
+backend/postmaster/checkpointer/src/lib.rs	CKPT_ACTIVE	non-session
+backend/postmaster/checkpointer/src/lib.rs	CKPT_CACHED_ELAPSED	non-session
+backend/postmaster/checkpointer/src/lib.rs	CKPT_START_RECPTR	non-session
+backend/postmaster/checkpointer/src/lib.rs	CKPT_START_TIME	non-session
+backend/postmaster/checkpointer/src/lib.rs	FIRST_CALL_CKPT_DONE	non-session
+backend/postmaster/checkpointer/src/lib.rs	LAST_CHECKPOINT_TIME	non-session
+backend/postmaster/checkpointer/src/lib.rs	LAST_XLOG_SWITCH_TIME	non-session
+backend/postmaster/interrupt/src/lib.rs	CONFIG_RELOAD_PENDING	non-session
+backend/postmaster/interrupt/src/lib.rs	SHUTDOWN_REQUEST_PENDING	non-session
+backend/postmaster/launch_backend/src/lib.rs	POOL_IDENT	non-session
+backend/postmaster/launch_backend/src/tests.rs	WES_POS	non-session
+backend/postmaster/pgarch/src/lib.rs	LAST_SIGTERM_TIME	non-session
+backend/postmaster/pgarch/src/lib.rs	XLOG_ARCHIVE_LIBRARY	non-session
+backend/postmaster/postmaster/src/lib.rs	PM	non-session
+backend/postmaster/postmaster/src/tests.rs	ACTED	non-session
+backend/postmaster/postmaster/src/tests.rs	AT_SINK	non-session
+backend/postmaster/postmaster/src/tests.rs	CAPTURED	non-session
+backend/postmaster/startup/src/lib.rs	LOG_STARTUP_PROGRESS_INTERVAL	non-session
+backend/postmaster/startup/src/lib.rs	STARTUP_PROGRESS_PHASE_START_TIME	non-session
+backend/postmaster/syslogger/src/errlog.rs	CSV_LOG_LINE_NUMBER	non-session
+backend/postmaster/syslogger/src/errlog.rs	JSON_LOG_LINE_NUMBER	non-session
+backend/postmaster/walsummarizer/src/lib.rs	PAGES_READ_SINCE_LAST_SLEEP	non-session
+backend/postmaster/walsummarizer/src/lib.rs	REDO_POINTER_AT_LAST_SUMMARY_REMOVAL	non-session
+backend/postmaster/walsummarizer/src/lib.rs	SLEEP_QUANTA	non-session
+backend/postmaster/walwriter/src/lib.rs	WAL_WRITER_DELAY	non-session
+backend/postmaster/walwriter/src/lib.rs	WAL_WRITER_FLUSH_AFTER	non-session
+backend/regex/regex_core/src/regex_error.rs	PENDING_CANCEL	non-session
+backend/regex/regex_core/src/regex_exec.rs	EXEC_SCRATCH	non-session
+backend/regex/regex_core/src/regex_exec.rs	SUBDFA_POOL	non-session
+backend/regex/regex_core/src/regex_locale.rs	REGEX_LOCALE_STATE	non-session
+backend/regex/regex_core/src/regex_locale.rs	TRANSIENT_CVEC	non-session
+backend/replication/launcher/src/lib.rs	INITIALIZING_APPLY_WORKER	non-session
+backend/replication/launcher/src/lib.rs	MY_WORKER_SLOT	non-session
+backend/replication/launcher/src/lib.rs	ON_COMMIT_LAUNCHER_WAKEUP	non-session
+backend/replication/launcher/src/lib.rs	ON_COMMIT_WAKEUP_WORKERS_SUBIDS	non-session
+backend/replication/logical/logical_decode/src/lib.rs	DECODE_CTX	non-session
+backend/replication/logical/relation/src/lib.rs	REL_MAP	non-session
+backend/replication/logical/reorderbuffer/src/lib.rs	RB_CTX	non-session
+backend/replication/logical/reorderbuffer/src/startup.rs	DEBUG_LOGICAL_REPLICATION_STREAMING	non-session
+backend/replication/logical/reorderbuffer/src/startup.rs	LOGICAL_DECODING_WORK_MEM	non-session
+backend/replication/logical/reorderbuffer/src/tests.rs	DELIVERED	non-session
+backend/replication/logical/reorderbuffer/src/tests.rs	DID_COMMIT_ANSWER	non-session
+backend/replication/logical/reorderbuffer/src/tests.rs	STATS_FLUSHES	non-session
+backend/replication/logical/reorderbuffer/src/tests.rs	TWOPC_EVENTS	non-session
+backend/replication/logical/snapbuild/src/lib.rs	EXPORT_IN_PROGRESS	non-session
+backend/replication/logical/snapbuild/src/lib.rs	SAVED_RESOURCE_OWNER_DURING_EXPORT	non-session
+backend/replication/logical/snapbuild/src/lib.rs	SB_CTX	non-session
+backend/replication/logical/snapbuild/src/tests.rs	RESTART_CALLS	non-session
+backend/replication/logical/snapbuild/src/tests.rs	XMIN_CALLS	non-session
+backend/replication/logical/worker/src/lib.rs	APPLY_ERROR_CALLBACK_ARG	non-session
+backend/replication/logical/worker/src/lib.rs	APPLY_WORKER_EXIT	non-session
+backend/replication/logical/worker/src/lib.rs	FEEDBACK_SEND_TIME	non-session
+backend/replication/logical/worker/src/lib.rs	IN_REMOTE_TRANSACTION	non-session
+backend/replication/logical/worker/src/lib.rs	LAST_FLUSHPOS	non-session
+backend/replication/logical/worker/src/lib.rs	LAST_RECVPOS	non-session
+backend/replication/logical/worker/src/lib.rs	LAST_WRITEPOS	non-session
+backend/replication/logical/worker/src/lib.rs	LSN_MAPPING	non-session
+backend/replication/logical/worker/src/lib.rs	MY_SUBSCRIPTION	non-session
+backend/replication/logical/worker/src/lib.rs	REMOTE_FINAL_LSN	non-session
+backend/replication/logical/worker/src/lib.rs	SKIP_XACT_FINISH_LSN	non-session
+backend/replication/logical/worker/src/lib.rs	SUBSCRIPTION_CHANGED	non-session
+backend/replication/logical/worker/src/parallel.rs	MY_PARALLEL_SHARED	non-session
+backend/replication/logical/worker/src/parallel.rs	PARALLEL_STREAM_NCHANGES	non-session
+backend/replication/logical/worker/src/parallel.rs	STREAM_APPLY_WORKER	non-session
+backend/replication/logical/worker/src/parallel.rs	SUBXACTLIST	non-session
+backend/replication/logical/worker/src/parallel.rs	TXN_HASH	non-session
+backend/replication/logical/worker/src/parallel.rs	WORKER_POOL	non-session
+backend/replication/logical/worker/src/stream_apply.rs	IN_STREAMED_TRANSACTION	non-session
+backend/replication/logical/worker/src/stream_apply.rs	STREAM_FD	non-session
+backend/replication/logical/worker/src/stream_apply.rs	STREAM_FILESET	non-session
+backend/replication/logical/worker/src/stream_apply.rs	STREAM_XID	non-session
+backend/replication/logical/worker/src/stream_apply.rs	SUBXACTS	non-session
+backend/replication/logical/worker/src/stream_apply.rs	SUBXACT_LAST	non-session
+backend/replication/logical/worker/src/tablesync.rs	AM_TABLESYNC_WORKER	non-session
+backend/replication/logical/worker/src/tablesync.rs	TABLE_STATES_VALID	non-session
+backend/replication/logical_worker_seams/src/lib.rs	PENDING	non-session
+backend/replication/origin/src/lib.rs	REGISTERED_CLEANUP	non-session
+backend/replication/origin/src/lib.rs	SESSION_ORIGIN	non-session
+backend/replication/origin/src/lib.rs	SESSION_ORIGIN_LSN	non-session
+backend/replication/origin/src/lib.rs	SESSION_ORIGIN_TIMESTAMP	non-session
+backend/replication/origin/src/lib.rs	SESSION_REPLICATION_STATE	non-session
+backend/replication/slot/src/lib.rs	IDLE_REPLICATION_SLOT_TIMEOUT_SECS	non-session
+backend/replication/slot/src/lib.rs	MY_REPLICATION_SLOT	non-session
+backend/replication/slot/src/lib.rs	SS_OLDEST_FLUSH_LSN	non-session
+backend/replication/slot/src/lib.rs	SYNCHRONIZED_STANDBY_SLOTS_CONFIG	non-session
+backend/replication/slot/src/lib.rs	SYNCHRONIZED_STANDBY_SLOTS_RAW	non-session
+backend/replication/slot/src/lib.rs	SYNCING_REPLICATION_SLOTS	non-session
+backend/replication/slotsync/src/lib.rs	SLEEP_MS	non-session
+backend/replication/slotsync/src/lib.rs	STARTED_WITH	non-session
+backend/replication/syncrep/src/lib.rs	ANNOUNCE_NEXT_TAKEOVER	non-session
+backend/replication/walreceiver/src/lib.rs	CONN	non-session
+backend/replication/walreceiver/src/lib.rs	STARTPOINT_TLI	non-session
+backend/replication/walreceiver/src/lib.rs	STATE	non-session
+backend/replication/walsender/src/lag.rs	LAG_TRACKER	non-session
+backend/replication/walsender/src/lib.rs	AM_CASCADING_WALSENDER	non-session
+backend/replication/walsender/src/lib.rs	GOT_SIGUSR2	non-session
+backend/replication/walsender/src/lib.rs	GOT_STOPPING	non-session
+backend/replication/walsender/src/lib.rs	INPUT	non-session
+backend/replication/walsender/src/lib.rs	LAST_PROCESSING	non-session
+backend/replication/walsender/src/lib.rs	LAST_REPLY_TIMESTAMP	non-session
+backend/replication/walsender/src/lib.rs	LOG_REPLICATION_COMMANDS	non-session
+backend/replication/walsender/src/lib.rs	MY_WAL_SND	non-session
+backend/replication/walsender/src/lib.rs	OUTPUT_MESSAGE	non-session
+backend/replication/walsender/src/lib.rs	PREV_APPLY_PTR	non-session
+backend/replication/walsender/src/lib.rs	PREV_FLUSH_PTR	non-session
+backend/replication/walsender/src/lib.rs	PREV_WRITE_PTR	non-session
+backend/replication/walsender/src/lib.rs	REPLICATION_ACTIVE	non-session
+backend/replication/walsender/src/lib.rs	SEND_TIME_LINE	non-session
+backend/replication/walsender/src/lib.rs	SEND_TIME_LINE_IS_HISTORIC	non-session
+backend/replication/walsender/src/lib.rs	SEND_TIME_LINE_NEXT_TLI	non-session
+backend/replication/walsender/src/lib.rs	SEND_TIME_LINE_VALID_UPTO	non-session
+backend/replication/walsender/src/lib.rs	SENT_PTR	non-session
+backend/replication/walsender/src/lib.rs	STREAMING_DONE_RECEIVING	non-session
+backend/replication/walsender/src/lib.rs	STREAMING_DONE_SENDING	non-session
+backend/replication/walsender/src/lib.rs	WAITING_FOR_PING_RESPONSE	non-session
+backend/replication/walsender/src/lib.rs	WAL_SENDER_TIMEOUT	non-session
+backend/replication/walsender/src/lib.rs	WAL_SND_CAUGHT_UP	non-session
+backend/replication/walsender/src/lib.rs	WIRE	non-session
+backend/replication/walsender/src/logical_stream.rs	LAG_TRACK_SEND_TIME	non-session
+backend/replication/walsender/src/logical_stream.rs	LOGICAL_FLUSH_PTR	non-session
+backend/replication/walsender/src/logical_stream.rs	PENDING_WRITE_LSN	non-session
+backend/replication/walsender/src/logical_stream.rs	RECENT_FLUSH_PTR	non-session
+backend/replication/walsender_seams/src/lib.rs	AM_DB_WALSENDER	non-session
+backend/replication/walsender_seams/src/lib.rs	AM_WALSENDER	non-session
+backend/rewrite/rewrite_handler/src/tests.rs	OPENS	non-session
+backend/storage/aio/aio_core/src/lib.rs	MY_BACKEND	non-session
+backend/storage/aio/aio_core/src/method_worker.rs	MY_IO_WORKER_ID	non-session
+backend/storage/aio/aio_uring/src/lib.rs	RING_ID	non-session
+backend/storage/buffer/bufmgr/src/counters.rs	LOCAL_BLKS_DIRTIED	non-session
+backend/storage/buffer/bufmgr/src/counters.rs	LOCAL_BLKS_HIT	non-session
+backend/storage/buffer/bufmgr/src/counters.rs	LOCAL_BLKS_READ	non-session
+backend/storage/buffer/bufmgr/src/counters.rs	LOCAL_BLKS_WRITTEN	non-session
+backend/storage/buffer/bufmgr/src/counters.rs	SHARED_BLKS_DIRTIED	non-session
+backend/storage/buffer/bufmgr/src/counters.rs	SHARED_BLKS_EVICTED	non-session
+backend/storage/buffer/bufmgr/src/counters.rs	SHARED_BLKS_HIT	non-session
+backend/storage/buffer/bufmgr/src/counters.rs	SHARED_BLKS_READ	non-session
+backend/storage/buffer/bufmgr/src/counters.rs	SHARED_BLKS_WRITTEN	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	BACKEND_FLUSH_AFTER	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	BGWRITER_FLUSH_AFTER	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	BGWRITER_LRU_MAXPAGES	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	BGWRITER_LRU_MULTIPLIER	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	CHECKPOINT_FLUSH_AFTER	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	EFFECTIVE_IO_CONCURRENCY	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	IGNORE_CHECKSUM_FAILURE	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	IO_COMBINE_LIMIT_GUC	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	TRACK_IO_TIMING	non-session
+backend/storage/buffer/bufmgr/src/gucs.rs	ZERO_DAMAGED_PAGES	non-session
+backend/storage/buffer/bufmgr/src/localbuf.rs	LOCAL	non-session
+backend/storage/buffer/bufmgr/src/pin.rs	PIN_COUNT_WAIT_BUF	non-session
+backend/storage/buffer/bufmgr/src/privref.rs	PRIV	non-session
+backend/storage/buffer/bufmgr/src/tests.rs	B039_CAPTURED	non-session
+backend/storage/buffer/bufmgr/src/write.rs	BACKEND_WB	non-session
+backend/storage/buffer/bufmgr/src/write.rs	CKPT_SCRATCH	non-session
+backend/storage/buffer/bufmgr/src/write.rs	PAGE_COPY	non-session
+backend/storage/file/fd/src/buffile.rs	TEMP_BLKS_READ	non-session
+backend/storage/file/fd/src/buffile.rs	TEMP_BLKS_WRITTEN	non-session
+backend/storage/file/fd/src/buffile.rs	TEMP_BLK_READ_TIME	non-session
+backend/storage/file/fd/src/buffile.rs	TEMP_BLK_WRITE_TIME	non-session
+backend/storage/file/fd/src/sync.rs	NOT_IMPLEMENTED_BY_KERNEL	non-session
+backend/storage/file/fd/src/sync.rs	PAGESIZE	non-session
+backend/storage/file/fd/src/tests.rs	GUC_DETAILS	non-session
+backend/storage/file/fd/src/tests.rs	INTERRUPT_ARMED	non-session
+backend/storage/file/fd/src/tests.rs	INTERRUPT_CHECKS	non-session
+backend/storage/file/fd/src/tests.rs	LOG_LINES	non-session
+backend/storage/file/fd/src/tests.rs	STARTUP_PROGRESS_ARMED	non-session
+backend/storage/file/fd/src/tests.rs	WAIT_EVENTS	non-session
+backend/storage/file/fd/src/vfd.rs	$cell	non-session
+backend/storage/file/fd/src/vfd.rs	FD	non-session
+backend/storage/file/fd/src/vfd.rs	SEEN_SHED_GEN	non-session
+backend/storage/file/fd/src/vfd.rs	TEMP_TABLESPACES_GUC	non-session
+backend/storage/file/vfs/src/sim.rs	BOUND	non-session
+backend/storage/file/vfs/src/sim.rs	SIM	non-session
+backend/storage/ipc/dsm_core/src/dsm.rs	DSM_INIT_DONE	non-session
+backend/storage/ipc/dsm_core/src/dsm.rs	STATE	non-session
+backend/storage/ipc/dsm_core/src/dsm_impl.rs	DYNAMIC_SHARED_MEMORY_TYPE	non-session
+backend/storage/ipc/dsm_core/src/dsm_impl.rs	MIN_DYNAMIC_SHARED_MEMORY	non-session
+backend/storage/ipc/ipc/src/lib.rs	BEFORE_SHMEM_EXIT_INDEX	non-session
+backend/storage/ipc/ipc/src/lib.rs	BEFORE_SHMEM_EXIT_LIST	non-session
+backend/storage/ipc/ipc/src/lib.rs	EXIT_CALLBACKS_DEFERRED	non-session
+backend/storage/ipc/ipc/src/lib.rs	FINAL_EXIT_HOOK	non-session
+backend/storage/ipc/ipc/src/lib.rs	ON_PROC_EXIT_INDEX	non-session
+backend/storage/ipc/ipc/src/lib.rs	ON_PROC_EXIT_LIST	non-session
+backend/storage/ipc/ipc/src/lib.rs	ON_SHMEM_EXIT_INDEX	non-session
+backend/storage/ipc/ipc/src/lib.rs	ON_SHMEM_EXIT_LIST	non-session
+backend/storage/ipc/ipc/src/lib.rs	PROC_EXIT_INPROGRESS	non-session
+backend/storage/ipc/ipc/src/lib.rs	SHMEM_EXIT_INPROGRESS	non-session
+backend/storage/ipc/ipc/src/tests.rs	LOG	non-session
+backend/storage/ipc/ipci/src/lib.rs	TOTAL_ADDIN_REQUEST	non-session
+backend/storage/ipc/latch/src/lib.rs	LATCH_WAIT_SET	non-session
+backend/storage/ipc/pmsignal/src/lib.rs	NUM_CHILD_FLAGS	non-session
+backend/storage/ipc/procarray/src/known_assigned.rs	LAST_COMPRESS_TS	non-session
+backend/storage/ipc/procarray/src/known_assigned.rs	LATEST_OBSERVED_XID	non-session
+backend/storage/ipc/procarray/src/known_assigned.rs	STANDBY_SNAPSHOT_PENDING_XMIN	non-session
+backend/storage/ipc/procarray/src/known_assigned.rs	TRANSACTION_ENDS_COUNTER	non-session
+backend/storage/ipc/procarray/src/lib.rs	CACHED_XID_NOT_IN_PROGRESS	non-session
+backend/storage/ipc/procarray/src/lib.rs	COMPUTE_XID_HORIZONS_RESULT_LAST_XMIN	non-session
+backend/storage/ipc/procarray/src/lib.rs	GLOBAL_VIS_CATALOG_RELS	non-session
+backend/storage/ipc/procarray/src/lib.rs	GLOBAL_VIS_DATA_RELS	non-session
+backend/storage/ipc/procarray/src/lib.rs	GLOBAL_VIS_SHARED_RELS	non-session
+backend/storage/ipc/procarray/src/lib.rs	GLOBAL_VIS_TEMP_RELS	non-session
+backend/storage/ipc/procarray/src/lib.rs	IN_PROGRESS_XIDS	non-session
+backend/storage/ipc/procarray/src/lib.rs	ON	non-session
+backend/storage/ipc/procarray/src/lib.rs	RECENT_XMIN	non-session
+backend/storage/ipc/procarray/src/lib.rs	SNAPSHOT_FULL_BUILDS	non-session
+backend/storage/ipc/procarray/src/lib.rs	SNAPSHOT_REUSE_HITS	non-session
+backend/storage/ipc/procarray/src/lib.rs	SNAPSHOT_REUSE_SPECULATIVE_PUBLISHES	non-session
+backend/storage/ipc/procarray/src/lib.rs	SNAP_DEMAND_CUR	non-session
+backend/storage/ipc/procarray/src/lib.rs	SNAP_DEMAND_PREV	non-session
+backend/storage/ipc/procarray/src/lib.rs	SNAP_DEMAND_XACTS	non-session
+backend/storage/ipc/procarray/src/lib.rs	TRANSACTION_XMIN	non-session
+backend/storage/ipc/procarray/src/running.rs	RUNNING_XACTS_SCRATCH	non-session
+backend/storage/ipc/procarray/src/tests.rs	THREAD_PROC	non-session
+backend/storage/ipc/procsignal/src/lib.rs	MY_PRE_IDENTITY	non-session
+backend/storage/ipc/procsignal/src/lib.rs	MY_PROC_SIGNAL_SLOT	non-session
+backend/storage/ipc/procsignal/src/lib.rs	THREAD_SIGNAL_HANDLERS	non-session
+backend/storage/ipc/sinval/src/lib.rs	LOCAL	non-session
+backend/storage/ipc/standby/src/recovery.rs	MAX_STANDBY_ARCHIVE_DELAY	non-session
+backend/storage/ipc/standby/src/recovery.rs	MAX_STANDBY_STREAMING_DELAY	non-session
+backend/storage/ipc/standby/src/recovery.rs	RECOVERY_LOCKS	non-session
+backend/storage/ipc/standby/src/recovery.rs	STANDBY_WAIT_US	non-session
+backend/storage/ipc/waiter/src/lib.rs	CURRENT	non-session
+backend/storage/ipc/waiteventset/src/lib.rs	SETS	non-session
+backend/storage/ipc/waiteventset/src/lib.rs	WES_INITIALIZED	non-session
+backend/storage/large_object/src/lib.rs	LO_COMPAT_PRIVILEGES	non-session
+backend/storage/large_object/src/lib.rs	LO_RELS	non-session
+backend/storage/lmgr/condition_variable/src/lib.rs	CV_SLEEP_TARGET	non-session
+backend/storage/lmgr/deadlock/src/lib.rs	BLOCKING_AUTOVACUUM	non-session
+backend/storage/lmgr/deadlock/src/lib.rs	WORKSPACE	non-session
+backend/storage/lmgr/lmgr/src/lib.rs	SPECULATIVE_INSERTION_TOKEN	non-session
+backend/storage/lmgr/lmgr/src/tests.rs	ACQUIRE_RESULTS	non-session
+backend/storage/lmgr/lmgr/src/tests.rs	CFI_RESULTS	non-session
+backend/storage/lmgr/lmgr/src/tests.rs	EVENTS	non-session
+backend/storage/lmgr/lmgr/src/tests.rs	HELD	non-session
+backend/storage/lmgr/lmgr/src/tests.rs	IN_PROGRESS	non-session
+backend/storage/lmgr/lmgr/src/tests.rs	LOG_ON_ACQUIRE	non-session
+backend/storage/lmgr/lmgr/src/tests.rs	TOPMOST	non-session
+backend/storage/lmgr/lmgr_proc/src/bgw_reserve.rs	BGW_HOLDS_RESERVATION	non-session
+backend/storage/lmgr/lmgr_proc/src/globals.rs	$cell	non-session
+backend/storage/lmgr/lmgr_proc/src/lib.rs	DEADLOCK_STATE	session
+backend/storage/lmgr/lmgr_proc/src/lib.rs	GOT_DEADLOCK_TIMEOUT	session
+backend/storage/lmgr/lmgr_proc/src/lib.rs	MY_PROC	session
+backend/storage/lmgr/lmgr_proc/src/tests.rs	CANCEL_PENDING	non-session
+backend/storage/lmgr/lock/src/lib.rs	LOG_LOCK_FAILURES	non-session
+backend/storage/lmgr/lock/src/lib.rs	MAX_LOCKS_PER_XACT	non-session
+backend/storage/lmgr/lock/src/locallock.rs	AWAITED_LOCK	non-session
+backend/storage/lmgr/lock/src/locallock.rs	AWAITED_OWNER	non-session
+backend/storage/lmgr/lock/src/locallock.rs	LAST_GRANT	non-session	D3652 P9: pointer into LOCAL, generation-checked
+backend/storage/lmgr/lock/src/locallock.rs	LOCAL	non-session
+backend/storage/lmgr/lock/src/locallock.rs	LOCAL_BUSY	non-session
+backend/storage/lmgr/lock/src/locallock.rs	RELATION_EXTENSION_LOCK_HELD	non-session
+backend/storage/lmgr/lock/src/locallock.rs	STRONG_LOCK_IN_PROGRESS	non-session
+backend/storage/lmgr/lwlock/src/lib.rs	HELD_LWLOCKS	non-session
+backend/storage/lmgr/lwlock/src/lib.rs	LWLOCK_TRANCHE_NAMES	non-session
+backend/storage/lmgr/lwlock/src/lib.rs	NAMED_LWLOCK_TRANCHE_REQUESTS	non-session
+backend/storage/lmgr/predicate/src/engine.rs	LOCAL_PREDICATE_LOCK_HASH	non-session
+backend/storage/lmgr/predicate/src/engine.rs	MAX_PREDICATE_LOCKS_PER_PAGE	non-session
+backend/storage/lmgr/predicate/src/engine.rs	MAX_PREDICATE_LOCKS_PER_RELATION	non-session
+backend/storage/lmgr/predicate/src/engine.rs	MAX_PREDICATE_LOCKS_PER_XACT	non-session
+backend/storage/lmgr/predicate/src/engine.rs	MY_SERIALIZABLE_XACT	non-session
+backend/storage/lmgr/predicate/src/engine.rs	MY_XACT_DID_WRITE	non-session
+backend/storage/lmgr/predicate/src/engine.rs	SAVED_SERIALIZABLE_XACT	non-session
+backend/storage/lmgr/s_lock/src/lib.rs	SPINS_PER_DELAY	non-session
+backend/storage/smgr/smgr/src/lib.rs	CACHE	non-session
+backend/storage/sync/sync/src/lib.rs	CHECKPOINT_CYCLE_CTR	non-session
+backend/storage/sync/sync/src/lib.rs	PENDING	non-session
+backend/storage/sync/sync/src/lib.rs	SYNC_CYCLE_CTR	non-session
+backend/storage/sync/sync/src/lib.rs	SYNC_IN_PROGRESS	non-session
+backend/tcop/backend_startup/src/globals.rs	CONN_TIMING	non-session
+backend/tcop/backend_startup/src/globals.rs	LOG_CONNECTIONS	non-session
+backend/tcop/backend_startup/src/globals.rs	LOG_CONNECTIONS_STRING	non-session
+backend/tcop/backend_startup/src/globals.rs	TRACE_CONNECTION_NEGOTIATION	non-session
+backend/tcop/backend_startup/src/tests.rs	INPUT	non-session
+backend/tcop/backend_startup/src/tests.rs	WIRE	non-session
+backend/tcop/dest/src/tests.rs	FLUSHES	non-session
+backend/tcop/dest/src/tests.rs	SENT	non-session
+backend/tcop/postgres/src/admission.rs	DEPTH	non-session
+backend/tcop/postgres/src/admission.rs	EXIT_HOOK_ARMED	non-session
+backend/tcop/postgres/src/admission.rs	SLOT_HELD	non-session
+backend/tcop/postgres/src/extended_query.rs	UNNAMED_STMT_PSRC	non-session
+backend/tcop/postgres/src/lib.rs	DOING_COMMAND_READ	non-session
+backend/tcop/postgres/src/lib.rs	DOING_EXTENDED_QUERY_MESSAGE	non-session
+backend/tcop/postgres/src/lib.rs	ECHO_QUERY	non-session
+backend/tcop/postgres/src/lib.rs	IGNORE_TILL_SYNC	non-session
+backend/tcop/postgres/src/lib.rs	RECOVERY_CONFLICT_PENDING_REASONS	non-session
+backend/tcop/postgres/src/lib.rs	SAVE_RUSAGE	non-session
+backend/tcop/postgres/src/lib.rs	USE_SEMI_NEWLINE_NEWLINE	non-session
+backend/tcop/postgres/src/lib.rs	XACT_STARTED	non-session
+backend/tcop/postgres/src/passivate.rs	RELEASE_STAGE	non-session
+backend/tcop/postgres/src/passivate.rs	TAIL_REST	non-session
+backend/tcop/postgres/src/session_tests.rs	CURRENT_RESOWNER	non-session
+backend/tcop/postgres/src/session_tests.rs	INPUT	non-session
+backend/tcop/postgres/src/session_tests.rs	INPUT_POS	non-session
+backend/tcop/postgres/src/session_tests.rs	PARAM_LOG_PROBE	non-session
+backend/tcop/postgres/src/session_tests.rs	PEAK_MESSAGE_USED	non-session
+backend/tcop/postgres/src/session_tests.rs	PLAN_CACHE_MODE	non-session
+backend/tcop/postgres/src/session_tests.rs	SNAPSHOT_REFS	non-session
+backend/tcop/postgres/src/session_tests.rs	THREAD_UP	non-session
+backend/tcop/postgres/src/session_tests.rs	WIRE	non-session
+backend/tcop/postgres/src/sim_net.rs	SENT_LOG	non-session
+backend/tcop/postgres/src/simple_query.rs	HOG_CTX	non-session
+backend/tcop/postgres/src/stack_mem.rs	RELEASED	non-session
+backend/tcop/postgres/src/stmt_trace.rs	BUF	non-session
+backend/tcop/postgres/src/switches.rs	USER_D_OPTION	non-session
+backend/tcop/postgres_seams/src/lib.rs	ARMED	non-session
+backend/tcop/pquery/src/lib.rs	ACTIVE_PORTAL	non-session
+backend/tcop/pquery/src/stmt_list.rs	ENTRIES	non-session
+backend/tcop/pquery/src/stmt_list.rs	FREE	non-session
+backend/tcop/pquery/src/stmt_list.rs	GENERATION	non-session
+backend/tcop/pquery/src/tests.rs	CANCEL_PENDING	non-session
+backend/tcop/pquery/src/tests.rs	FLIP_EXECUTOR_STATS_ON_SEND	non-session
+backend/tcop/pquery/src/tests.rs	SENT	non-session
+backend/tcop/pquery/src/tests.rs	SHOW_USAGE_CALLS	non-session
+backend/tcop/pquery/src/tests.rs	THREAD_UP	non-session
+backend/tcop/pquery/tests/c8_portal_end_after_its_contexts.rs	PORTAL_CTX	non-session
+backend/tcop/pquery/tests/c8_portal_end_after_its_contexts.rs	QD_SNAPSHOT	non-session
+backend/tcop/pquery/tests/c8_portal_end_after_its_contexts.rs	USES	non-session
+backend/tcop/pquery/tests/c8_portal_memory_owner.rs	QD_SNAPSHOT	non-session
+backend/tcop/pquery/tests/c8_portal_memory_owner.rs	USES	non-session
+backend/tcop/utility/src/returns.rs	CTX	non-session
+backend/test_regress/src/lib.rs	TCX	non-session
+backend/timezone/localtime/src/globals.rs	LOG_TIMEZONE	non-session
+backend/timezone/localtime/src/globals.rs	SESSION_TIMEZONE	non-session
+backend/timezone/pgtz/src/lib.rs	TIMEZONE_CACHE	non-session
+backend/utils/activity/backend_status/src/lib.rs	LOCAL_BACKEND_STATUS_TABLE	non-session
+backend/utils/activity/backend_status/src/lib.rs	MY_BE_ENTRY	non-session
+backend/utils/activity/pgstat/src/archiver.rs	SNAPSHOT_ARCHIVER	non-session
+backend/utils/activity/pgstat/src/backend.rs	PREV_BACKEND_WAL_USAGE	non-session
+backend/utils/activity/pgstat/src/bgwriter.rs	PENDING_BGWRITER_STATS	non-session
+backend/utils/activity/pgstat/src/bgwriter.rs	SNAPSHOT_BGWRITER	non-session
+backend/utils/activity/pgstat/src/checkpointer.rs	PENDING_CHECKPOINTER_STATS	non-session
+backend/utils/activity/pgstat/src/checkpointer.rs	SNAPSHOT_CHECKPOINTER	non-session
+backend/utils/activity/pgstat/src/database.rs	ACTIVE_TIME	non-session
+backend/utils/activity/pgstat/src/database.rs	BLOCK_READ_TIME	non-session
+backend/utils/activity/pgstat/src/database.rs	BLOCK_WRITE_TIME	non-session
+backend/utils/activity/pgstat/src/database.rs	LAST_SESSION_REPORT_TIME	non-session
+backend/utils/activity/pgstat/src/database.rs	SESSION_END_CAUSE	non-session
+backend/utils/activity/pgstat/src/database.rs	TRANSACTION_IDLE_TIME	non-session
+backend/utils/activity/pgstat/src/database.rs	XACT_COMMIT	non-session
+backend/utils/activity/pgstat/src/database.rs	XACT_ROLLBACK	non-session
+backend/utils/activity/pgstat/src/function.rs	TOTAL_FUNC_TIME	non-session
+backend/utils/activity/pgstat/src/function.rs	TRACK_FUNCTIONS	non-session
+backend/utils/activity/pgstat/src/io.rs	LOCAL_BLK_READ_TIME	non-session
+backend/utils/activity/pgstat/src/io.rs	LOCAL_BLK_WRITE_TIME	non-session
+backend/utils/activity/pgstat/src/io.rs	PENDING_IO_BLOCK	non-session
+backend/utils/activity/pgstat/src/io.rs	SHARED_BLK_READ_TIME	non-session
+backend/utils/activity/pgstat/src/io.rs	SHARED_BLK_WRITE_TIME	non-session
+backend/utils/activity/pgstat/src/io.rs	SNAPSHOT_IO	non-session
+backend/utils/activity/pgstat/src/lib.rs	FETCH_CONSISTENCY	non-session
+backend/utils/activity/pgstat/src/lib.rs	IS_INITIALIZED	non-session
+backend/utils/activity/pgstat/src/lib.rs	SHUT_DOWN	non-session	D4809 (F4): set by pgstat_shutdown_hook; cleared at every session attach (pgstat_initialize, reset_for_thread_reuse, pgstat_reattach_retained_backend), as IS_INITIALIZED
+backend/utils/activity/pgstat/src/lib.rs	TRACK_COUNTS	non-session
+backend/utils/activity/pgstat/src/pending.rs	FORCE_NEXT_FLUSH	non-session
+backend/utils/activity/pgstat/src/pending.rs	HAVE_PENDING	non-session
+backend/utils/activity/pgstat/src/pending.rs	LAST_FLUSH	non-session
+backend/utils/activity/pgstat/src/pending.rs	PENDING_SINCE	non-session
+backend/utils/activity/pgstat/src/pending.rs	RELATION_PENDING_GEN	non-session
+backend/utils/activity/pgstat/src/pending.rs	STATE	non-session
+backend/utils/activity/pgstat/src/shmem.rs	FORCE_SNAPSHOT_CLEAR	non-session
+backend/utils/activity/pgstat/src/shmem.rs	SNAPSHOT	non-session
+backend/utils/activity/pgstat/src/slru.rs	HAVE_SLRUSTATS	non-session
+backend/utils/activity/pgstat/src/slru.rs	PENDING_SLRU_STATS	non-session
+backend/utils/activity/pgstat/src/slru.rs	SNAPSHOT_SLRU	non-session
+backend/utils/activity/pgstat/src/tests.rs	NEST_LEVEL	non-session
+backend/utils/activity/pgstat/src/tests.rs	NOW	non-session
+backend/utils/activity/pgstat/src/wal.rs	PREV_WAL_USAGE	non-session
+backend/utils/activity/pgstat/src/wal.rs	SNAPSHOT_WAL	non-session
+backend/utils/activity/waitevent/src/lib.rs	MY_WAIT_EVENT_INFO	non-session
+backend/utils/adt/acl/src/membership.rs	CACHE	non-session
+backend/utils/adt/acl/src/membership.rs	CACHED_DB_HASH	non-session
+backend/utils/adt/acl/src/membership.rs	CALLBACKS_REGISTERED	non-session
+backend/utils/adt/adt_date/src/lib.rs	SQL_CURRENT_DATE_CACHE	non-session
+backend/utils/adt/adt_date/src/tests.rs	TYPE_LOOKUPS	non-session
+backend/utils/adt/adt_datetime/src/decode.rs	DATECACHE	non-session
+backend/utils/adt/adt_datetime/src/decode.rs	DELTACACHE	non-session
+backend/utils/adt/adt_datetime/src/decode.rs	TZABBREVCACHE	non-session
+backend/utils/adt/adt_datetime/src/settings.rs	DATE_ORDER	non-session
+backend/utils/adt/adt_datetime/src/settings.rs	DATE_STYLE	non-session
+backend/utils/adt/adt_datetime/src/tz.rs	ZONEABBREVTBL	non-session
+backend/utils/adt/adt_misc/src/builtins.rs	BACKUP_SESSION	non-session
+backend/utils/adt/adt_misc/src/builtins.rs	JIT_PROVIDER_FAILED_LOADING	non-session
+backend/utils/adt/adt_timestamp/src/lib.rs	CURRENT_TM_CACHE	non-session
+backend/utils/adt/arrayfuncs/src/lib.rs	ARRAY_NULLS	non-session
+backend/utils/adt/arrayfuncs/src/lib.rs	TRANSFERRED	non-session
+backend/utils/adt/arrayfuncs/src/lib.rs	TRANSFER_GEN	non-session
+backend/utils/adt/arrayfuncs/src/tests.rs	TEXT_SCRATCH	non-session
+backend/utils/adt/float/src/lib.rs	EXTRA_FLOAT_DIGITS	non-session
+backend/utils/adt/formatting/src/cache.rs	DCH	non-session
+backend/utils/adt/formatting/src/cache.rs	NUM	non-session
+backend/utils/adt/formatting/src/num_entry.rs	TOCHAR_SCRATCH	non-session
+backend/utils/adt/multirangetypes/src/builtins.rs	SHIM_MI	non-session
+backend/utils/adt/numeric/src/arith.rs	DIV_SCRATCH	non-session
+backend/utils/adt/numeric/src/arith.rs	MUL_SCRATCH	non-session
+backend/utils/adt/numeric/src/io.rs	DECDIGITS	non-session
+backend/utils/adt/numeric/src/math.rs	F64_TEXT	non-session
+backend/utils/adt/numeric/src/var.rs	DIGIT_POOL	non-session
+backend/utils/adt/numeric/src/var.rs	WORD_POOL	non-session
+backend/utils/adt/pg_locale/src/icu.rs	ICU_CONVERTER	non-session
+backend/utils/adt/pg_locale/src/icu.rs	UBUF1	non-session
+backend/utils/adt/pg_locale/src/icu.rs	UBUF2	non-session
+backend/utils/adt/pg_locale/src/lib.rs	ARMED_COLLATIONS	non-session
+backend/utils/adt/pg_locale/src/lib.rs	COLLATION_CACHE	non-session
+backend/utils/adt/pg_locale/src/lib.rs	DEFAULT_LOCALE	non-session
+backend/utils/adt/pg_locale/src/lib.rs	DEFAULT_LOCALE_DB	non-session
+backend/utils/adt/pg_locale/src/lib.rs	LAST_COLLATION_CACHE	non-session
+backend/utils/adt/pg_locale/src/lib.rs	RESOLVED	non-session
+backend/utils/adt/pg_locale/src/lib.rs	XFRM_SCRATCH	non-session
+backend/utils/adt/pg_locale/src/libc_locale.rs	BACKEND_CTYPE	non-session
+backend/utils/adt/pg_locale/src/libc_locale.rs	COLL_SCRATCH	non-session
+backend/utils/adt/pg_locale/src/locale_time.rs	CURRENT_LC_TIME_VALID	non-session
+backend/utils/adt/pg_locale/src/locale_time.rs	LC_TIME_CACHE	non-session
+backend/utils/adt/pg_locale/src/setup.rs	CURRENT_LOCALE_CONV	non-session
+backend/utils/adt/pg_locale/src/setup.rs	DATABASE_CTYPE_IS_C	non-session
+backend/utils/adt/pg_locale/src/setup.rs	ICU_VALIDATION_LEVEL	non-session
+backend/utils/adt/pg_locale/src/setup.rs	LOCALE_MESSAGES	non-session
+backend/utils/adt/pg_locale/src/setup.rs	LOCALE_MONETARY	non-session
+backend/utils/adt/pg_locale/src/setup.rs	LOCALE_NUMERIC	non-session
+backend/utils/adt/pg_locale/src/setup.rs	LOCALE_TIME	non-session
+backend/utils/adt/pg_locale/src/setup.rs	THREAD_LOCALES	non-session
+backend/utils/adt/pg_locale/src/tests.rs	TEST_COLL_ROW	non-session
+backend/utils/adt/pg_locale/src/tests.rs	TEST_DB_ROW	non-session
+backend/utils/adt/pseudorandomfuncs/src/lib.rs	PRNG	non-session
+backend/utils/adt/pseudorandomfuncs/src/lib.rs	SEED_SET	non-session
+backend/utils/adt/rangetypes/src/builtins.rs	SHIM_RI	non-session
+backend/utils/adt/regexp/src/builtins.rs	EXEC_SCRATCH	non-session
+backend/utils/adt/regexp/src/lib.rs	RE_CACHE	non-session
+backend/utils/adt/regexp_alt/src/lib.rs	DISPATCH_CACHE	non-session
+backend/utils/adt/regproc/src/builtins.rs	OUT_CTX	non-session
+backend/utils/adt/regproc/src/tests.rs	NS_BY_NAME	non-session
+backend/utils/adt/regproc/src/tests.rs	PATH	non-session
+backend/utils/adt/regproc/src/tests.rs	PROCS	non-session
+backend/utils/adt/regproc/src/tests.rs	RELS	non-session
+backend/utils/adt/regproc/src/tests.rs	TEMP_NS	non-session
+backend/utils/adt/ri_triggers/src/lib.rs	CTX	non-session
+backend/utils/adt/ri_triggers/src/lib.rs	RI_CONSTRAINT_CACHE	non-session
+backend/utils/adt/ri_triggers/src/lib.rs	RI_HASHTABLES_BUILT	non-session
+backend/utils/adt/ri_triggers/src/lib.rs	RI_QUERY_CACHE	non-session
+backend/utils/adt/ri_triggers/src/tests.rs	CTX	non-session
+backend/utils/adt/rowtypes/src/tests_ws.rs	OUT_SCRATCH	non-session
+backend/utils/adt/ruleutils/src/tests.rs	OUT	non-session
+backend/utils/adt/ruleutils/src/tests.rs	REWRITE_LOCK_CALLS	non-session
+backend/utils/adt/uuid/src/lib.rs	PREVIOUS_NS	non-session
+backend/utils/adt/varlena/src/lib.rs	BYTEA_OUTPUT	non-session
+backend/utils/adt/xml/src/errhandler.rs	XML_ERR_CTX	non-session
+backend/utils/adt/xml/src/lib.rs	XMLBINARY	non-session
+backend/utils/adt/xml/src/lib.rs	XMLOPTION	non-session
+backend/utils/cache/attoptcache/src/lib.rs	ATTOPT_CACHE	non-session
+backend/utils/cache/attoptcache/src/lib.rs	CALLBACK_REGISTERED	non-session
+backend/utils/cache/cache_evtcache/src/lib.rs	CACHE	session
+backend/utils/cache/cache_evtcache/src/lib.rs	CALLBACK_REGISTERED	session
+backend/utils/cache/cache_evtcache/src/lib.rs	STATE	session
+backend/utils/cache/cache_syscache/src/lib.rs	ARRAYS	session
+backend/utils/cache/cache_syscache/src/projections.rs	MEMO	non-session
+backend/utils/cache/cache_syscache/src/projections.rs	MEMOS	non-session
+backend/utils/cache/cache_syscache/src/projections.rs	TDS	non-session
+backend/utils/cache/catcache/src/graph.rs	INVAL_EPOCH	session
+backend/utils/cache/catcache/src/lib.rs	BORROW_DEPTH	session
+backend/utils/cache/catcache/src/lib.rs	POOL_STRICT	session
+backend/utils/cache/catcache/src/lib.rs	STATE	session
+backend/utils/cache/catcache_seams/src/lib.rs	CATALOG_HERE	non-session
+backend/utils/cache/inval/src/invalidate.rs	TUPLE_INVAL_SCRATCH	non-session
+backend/utils/cache/inval/src/lib.rs	ACCEPT_RECURSION_DEPTH	session
+backend/utils/cache/inval/src/lib.rs	CALLBACKS	session
+backend/utils/cache/inval/src/lib.rs	DEBUG_DISCARD_CACHES	session
+backend/utils/cache/inval/src/lib.rs	STATE	session
+backend/utils/cache/inval/src/lib.rs	SYSCACHE_LINKS	session
+backend/utils/cache/inval/src/tests.rs	EVENTS	non-session
+backend/utils/cache/inval/src/tests.rs	NEST_LEVEL	non-session
+backend/utils/cache/inval/src/tests.rs	PENDING	non-session
+backend/utils/cache/inval/src/tests.rs	REENTERED	non-session
+backend/utils/cache/inval/src/tests.rs	SENT	non-session
+backend/utils/cache/l2cache/src/lib.rs	CAT_VIEW	non-session
+backend/utils/cache/l2cache/src/lib.rs	REL_VIEW	non-session
+backend/utils/cache/l2cache/src/lib.rs	VIEW_INIT	non-session
+backend/utils/cache/l2cache/src/lib.rs	VIEW_MOVES	non-session
+backend/utils/cache/l2cache/src/lib.rs	OWN_SEQ	non-session	C3 S4b: the thread's own-invalidation count, as its views
+backend/utils/cache/lsyscache/src/scratch.rs	LSYS_SCRATCH	non-session
+backend/utils/cache/lsyscache/src/statistics.rs	GET_ATTAVGWIDTH_HOOK	non-session
+backend/utils/cache/partcache/src/lib.rs	STATE	session
+backend/utils/cache/plancache/src/lib.rs	CACHE	session
+backend/utils/cache/plancache/src/lib.rs	INVAL_COUNTER	session
+backend/utils/cache/plancache/src/lib.rs	PLAN_CACHE_MODE	session
+backend/utils/cache/plancache/src/tests.rs	DEFAULT_ANALYZE_CALLS	non-session
+backend/utils/cache/plancache/src/tests.rs	LOCKS_TAKEN	non-session
+backend/utils/cache/plancache/src/tests.rs	PLANNER_CALLS	non-session
+backend/utils/cache/plancache/src/tests.rs	PLANNER_COST	non-session
+backend/utils/cache/plancache/src/tests.rs	PLANNER_DEPENDS_ON_ROLE	non-session
+backend/utils/cache/plancache/src/tests.rs	PLAN_CACHE_MODE_VAR	non-session
+backend/utils/cache/plancache/src/tests.rs	POST_REWRITE_CALLS	non-session
+backend/utils/cache/plancache/src/tests.rs	REANALYZE_CALLS	non-session
+backend/utils/cache/plancache/src/tests.rs	REWRITE_LOCK_CALLS	non-session
+backend/utils/cache/plancache/src/tests.rs	USAGE_TITLES	non-session
+backend/utils/cache/relcache/src/l2core.rs	TD_CLEANUP_ARMED	non-session
+backend/utils/cache/relcache/src/l2core.rs	TD_MIRRORS	non-session
+backend/utils/cache/relcache/src/l2core.rs	TD_NEXT_PRUNE	non-session
+backend/utils/cache/relcache/src/lib.rs	STATE	session
+backend/utils/cache/relcache/src/rules.rs	SCANS	non-session
+backend/utils/cache/relcache/src/tests.rs	CAP_OVERRIDE	non-session
+backend/utils/cache/relcache/src/tests.rs	CUR_SUBID	non-session
+backend/utils/cache/relcache/src/tests.rs	DOOR1	non-session
+backend/utils/cache/relcache/src/tests.rs	DRAIN_INVALS	non-session
+backend/utils/cache/relcache/src/tests.rs	FKEY_SCANS	non-session
+backend/utils/cache/relcache/src/tests.rs	HAS_SYSCACHE	non-session
+backend/utils/cache/relcache/src/tests.rs	INDEX_SCANS	non-session
+backend/utils/cache/relcache/src/tests.rs	INVALIDATE_DURING_BUILD	non-session
+backend/utils/cache/relcache/src/tests.rs	INVALIDATE_OTHER_DURING_BUILD	non-session
+backend/utils/cache/relcache/src/tests.rs	IN_XACT	non-session
+backend/utils/cache/relcache/src/tests.rs	IS_BOOTSTRAP	non-session
+backend/utils/cache/relcache/src/tests.rs	PG_INDEX_ROWS	non-session
+backend/utils/cache/relcache/src/tests.rs	ROWS	non-session
+backend/utils/cache/relcache/src/tests.rs	SCAN_LOG	non-session
+backend/utils/cache/relcache_build/src/index.rs	OPCLASS_CACHE	non-session
+backend/utils/cache/relfilenumbermap/src/lib.rs	MAP	non-session
+backend/utils/cache/relmapper/src/lib.rs	STATE	session
+backend/utils/cache/relmapper/src/tests.rs	NEST_LEVEL	non-session
+backend/utils/cache/syscache_seams/src/lib.rs	ARMED_TYPE_ROWS	non-session
+backend/utils/cache/syscache_seams/src/lib.rs	STATEMENT_TYPE_ROWS	non-session
+backend/utils/cache/ts_cache/src/lib.rs	GUC_VALUE	session
+backend/utils/cache/ts_cache/src/lib.rs	STATE	session
+backend/utils/cache/typcache/src/armed.rs	ARMED	non-session
+backend/utils/cache/typcache/src/armed.rs	STATEMENT	non-session
+backend/utils/cache/typcache/src/lib.rs	STATE	session
+backend/utils/cache/typcache/src/tests.rs	ENUM_MEMBERS	non-session
+backend/utils/cache/typcache/src/tests.rs	REL_OPEN_COUNT	non-session
+backend/utils/error/elog/src/config.rs	AM_SYSLOGGER	non-session
+backend/utils/error/elog/src/config.rs	BACKTRACE_FUNCTION_LIST	non-session
+backend/utils/error/elog/src/config.rs	CLIENT_AUTH_IN_PROGRESS	non-session
+backend/utils/error/elog/src/config.rs	CLIENT_MIN_MESSAGES	non-session
+backend/utils/error/elog/src/config.rs	LOG_DESTINATION	non-session
+backend/utils/error/elog/src/config.rs	LOG_DESTINATION_STRING	non-session
+backend/utils/error/elog/src/config.rs	LOG_ERROR_VERBOSITY	non-session
+backend/utils/error/elog/src/config.rs	LOG_LINE_PREFIX	non-session
+backend/utils/error/elog/src/config.rs	LOG_MIN_ERROR_STATEMENT	non-session
+backend/utils/error/elog/src/config.rs	LOG_MIN_MESSAGES	non-session
+backend/utils/error/elog/src/config.rs	OUTPUT_FILE_NAME	non-session
+backend/utils/error/elog/src/config.rs	POSTMASTER_CONTEXT	non-session
+backend/utils/error/elog/src/config.rs	PROC_EXIT_INPROGRESS	non-session
+backend/utils/error/elog/src/config.rs	SYSLOG_SEQUENCE_NUMBERS	non-session
+backend/utils/error/elog/src/config.rs	SYSLOG_SPLIT_MESSAGES	non-session
+backend/utils/error/elog/src/config.rs	WHERE_TO_SEND_OUTPUT	non-session
+backend/utils/error/elog/src/errposition.rs	PARSER_ERRPOSITION	non-session
+backend/utils/error/elog/src/report.rs	ERR_CONVERT_CX	non-session
+backend/utils/error/elog/src/report.rs	LOG_STATE	non-session
+backend/utils/error/elog/src/sink.rs	BACKEND_LOG_CONTEXT	non-session
+backend/utils/error/elog/src/sink.rs	DEBUG_QUERY_NEXT_ID	non-session
+backend/utils/error/elog/src/sink.rs	DEBUG_QUERY_STACK	non-session
+backend/utils/error/elog/src/sink.rs	EMIT_LOG_HOOK	non-session
+backend/utils/error/elog/src/sink.rs	FRONTEND_REDIRECT	non-session
+backend/utils/error/elog/src/sink.rs	RETIRED_QUERY	non-session
+backend/utils/error/elog/src/sink.rs	SERVER_LOG_DEFER	non-session	D4812: a memory safety thread's server-log writer (memruntime memlog::defer_here on pg:memwatchdog), never set on a session's thread
+backend/utils/error/elog/src/stack.rs	BORROWED_FRAMES	session
+backend/utils/error/elog/src/stack.rs	EMIT_CONTEXT_CALLBACKS	session
+backend/utils/error/elog/src/stack.rs	EMIT_CONTEXT_NEXT_ID	session
+backend/utils/error/elog/src/stack.rs	STACK	session
+backend/utils/error/elog/src/stack.rs	STATEMENT_SUPPRESSED	session
+backend/utils/fmgr/dfmgr/src/lib.rs	FILE_LIST	non-session
+backend/utils/fmgr/fmgr_core/src/lib.rs	CFUNC_HASH	non-session
+backend/utils/hash/dynahash/src/lib.rs	SEQ_SCANS	non-session
+backend/utils/init/init_small/src/globals.rs	$cell	session
+backend/utils/init/init_small/src/globals.rs	ABORT_PENDING	session
+backend/utils/init/init_small/src/globals.rs	CTX	non-session	TopMemoryContext stays with the backend, outside session binding
+backend/utils/init/init_small/src/globals.rs	DATABASE_PATH	session
+backend/utils/init/init_small/src/globals.rs	DATA_DIR	session
+backend/utils/init/init_small/src/globals.rs	DUE_POLL	non-session	wasm32 only: the timeout crate's poll of its armed wake (ARMED_DEADLINE's mirror)
+backend/utils/init/init_small/src/globals.rs	DUE_SKIP	non-session	wasm32 only: DUE_POLL's clock-read countdown
+backend/utils/init/init_small/src/globals.rs	HOST_CANCEL	non-session	wasm32 only: the embedder's cancel word is polled (SetHostCancel)
+backend/utils/init/init_small/src/globals.rs	HOST_CANCEL_SEEN	non-session	wasm32 only: a cancel read from the embedder, for ProcessInterrupts
+backend/utils/init/init_small/src/globals.rs	INTERRUPT_PENDING	session
+backend/utils/init/init_small/src/globals.rs	INTERRUPTS_RAISED	non-session	D4024: a count of the interrupt errors ProcessInterrupts raised (a Gravity admission's mark)
+backend/utils/init/init_small/src/globals.rs	LAST_INTERRUPT	non-session	D4024: the last one, forgotten at each statement start and (sub)transaction abort: never outlives a statement
+backend/utils/init/init_small/src/globals.rs	REDELIVER	non-session	D4024: Gravity admissions in progress (reset at each statement start and transaction abort)
+backend/utils/init/init_small/src/globals.rs	MY_CLIENT_SOCKET	session
+backend/utils/init/init_small/src/globals.rs	MY_PROC_PORT	session
+backend/utils/init/init_small/src/globals.rs	PARSED_AUTH_LINES	session
+backend/utils/init/init_small/src/globals.rs	PORT_LOG_VIEW	session
+backend/utils/init/init_small/src/oom.rs	OOM_PENDING	non-session
+backend/utils/init/init_small/src/oom.rs	SHARD	non-session
+backend/utils/init/init_small/src/oom.rs	LAST_ALLOCATED	non-session
+backend/utils/init/init_small/src/tests.rs	CAN_SET_FORWARD	non-session
+backend/utils/init/init_small/src/tests.rs	CAN_SET_REVERSE	non-session
+backend/utils/init/init_small/src/tests.rs	CURRENT_USER	non-session
+backend/utils/init/init_small/src/tests.rs	LAST_EOXACT	non-session
+backend/utils/init/init_small/src/wretain.rs	CACHES_TAINTED	non-session
+backend/utils/init/init_small/src/wretain.rs	CANDIDATE	non-session
+backend/utils/init/init_small/src/wretain.rs	IDENTITY_HELD	non-session
+backend/utils/init/init_small/src/wretain.rs	PARKED_BARRIER_GEN	non-session
+backend/utils/init/init_small/src/wretain.rs	PARKING	non-session
+backend/utils/init/init_small/src/wretain.rs	RETAINED_DB	non-session
+backend/utils/init/init_small/src/wretain.rs	RETAINED_PROC	non-session
+backend/utils/init/init_small/src/wretain.rs	RETAINED_SINVAL	non-session
+backend/utils/init/init_small/src/wretain.rs	WARM_CLAIM	non-session
+backend/utils/init/miscinit/src/lib.rs	CLIENT_AUTHN_ID	non-session
+backend/utils/init/miscinit/src/lib.rs	CLIENT_AUTH_METHOD	non-session
+backend/utils/init/miscinit/src/lib.rs	IGNORE_SYSTEM_INDEXES	non-session
+backend/utils/init/miscinit/src/lib.rs	MODE	non-session
+backend/utils/init/miscinit/src/lib.rs	MY_BACKEND_TYPE	non-session
+backend/utils/init/miscinit/src/lockfile.rs	LOCK_FILES	non-session
+backend/utils/init/miscinit/src/lockfile.rs	UNLINK_HOOK_REGISTERED	non-session
+backend/utils/init/miscinit/src/preload.rs	DONE	non-session
+backend/utils/init/miscinit/src/preload.rs	IN_PROGRESS	non-session
+backend/utils/init/miscinit/src/preload.rs	SHMEM_REQUESTS_IN_PROGRESS	non-session
+backend/utils/init/miscinit/src/process.rs	LOCAL_LATCH	non-session
+backend/utils/init/miscinit/src/tests.rs	EMITTED	non-session
+backend/utils/init/miscinit/src/tests.rs	GUC_SETS	non-session
+backend/utils/init/miscinit/src/userid.rs	AUTHENTICATED_USER_ID	session
+backend/utils/init/miscinit/src/userid.rs	CURRENT_USER_ID	session
+backend/utils/init/miscinit/src/userid.rs	OUTER_USER_ID	session
+backend/utils/init/miscinit/src/userid.rs	SECURITY_RESTRICTION_CONTEXT	session
+backend/utils/init/miscinit/src/userid.rs	SESSION_USER_ID	session
+backend/utils/init/miscinit/src/userid.rs	SESSION_USER_IS_SUPERUSER	session
+backend/utils/init/miscinit/src/userid.rs	SET_ROLE_IS_ACTIVE	session
+backend/utils/init/miscinit/src/userid.rs	SYSTEM_USER	session
+backend/utils/init/postinit/src/lib.rs	FUNDAMENTALS_REGISTERED	non-session
+backend/utils/mb/mbutils/src/lib.rs	BACKEND_STARTUP_COMPLETE	non-session
+backend/utils/mb/mbutils/src/lib.rs	CLIENT_ENCODING	non-session
+backend/utils/mb/mbutils/src/lib.rs	CONV_PROC_LIST	non-session
+backend/utils/mb/mbutils/src/lib.rs	DATABASE_ENCODING	non-session
+backend/utils/mb/mbutils/src/lib.rs	MESSAGE_ENCODING	non-session
+backend/utils/mb/mbutils/src/lib.rs	PENDING_CLIENT_ENCODING	non-session
+backend/utils/mb/mbutils/src/lib.rs	STATEMENT_CONVERSIONS	non-session
+backend/utils/mb/mbutils/src/lib.rs	TO_CLIENT_CONV_PROC	non-session
+backend/utils/mb/mbutils/src/lib.rs	TO_SERVER_CONV_PROC	non-session
+backend/utils/mb/mbutils/src/lib.rs	UTF8_TO_SERVER_CONV_PROC	non-session
+backend/utils/misc/guc/src/carry.rs	APPLIED	non-session	claim-scoped: what the armed claims applied, empty off a claim
+backend/utils/misc/guc/src/carry.rs	PLAN	non-session	the claim thread's plan of the last pin it claimed, keyed on the pin
+backend/utils/misc/guc/src/knob.rs	KNOB_READS	non-session	the hot placeholder knobs' readings, keyed on this thread's store mutation count (an envelope swap replaces the store through with_store_mut, which moves the count)
+backend/utils/misc/guc/src/layers.rs	QUERY_PIN	non-session
+backend/utils/misc/guc/src/layers.rs	SESSION_BASE	non-session
+backend/utils/misc/guc/src/lib.rs	GUC_CHECK_ERROR	session
+backend/utils/misc/guc/src/lib.rs	GUC_NEST_LEVEL	session
+backend/utils/misc/guc/src/lib.rs	RESERVED_CLASS_PREFIX	session
+backend/utils/misc/guc/src/report.rs	REPORTING_ENABLED	non-session
+backend/utils/misc/guc/src/store.rs	GUC_STORE	session
+backend/utils/misc/guc/src/store.rs	HAS_STACKED_HINT	session
+backend/utils/misc/guc/src/store.rs	PG_RELOAD_TIME	session
+backend/utils/misc/guc/src/store.rs	REPORT_PENDING_HINT	session
+backend/utils/misc/guc/src/store.rs	SESSION_BOUND	session
+backend/utils/misc/guc/src/store.rs	STORE_GEN	session
+backend/utils/misc/guc/src/store.rs	STORE_MUTATIONS	session
+backend/utils/misc/guc/src/tests.rs	HAS_PRIVS	non-session
+backend/utils/misc/guc/src/tests.rs	SENT	non-session
+backend/utils/misc/guc_file/src/tests.rs	INTERNAL_CALLS	non-session
+backend/utils/misc/guc_tables/src/session.rs	$cell	session
+backend/utils/misc/guc_tables/src/session.rs	$tls	session
+backend/utils/misc/guc_tables/src/tests.rs	STORAGE	non-session
+backend/utils/misc/injection_point/src/lib.rs	CACHE	non-session
+backend/utils/misc/ps_status/src/lib.rs	STATE	non-session
+backend/utils/misc/queryenvironment/src/hold.rs	ENTRIES	non-session
+backend/utils/misc/queryenvironment/src/hold.rs	FREE	non-session
+backend/utils/misc/queryenvironment/src/hold.rs	GENERATION	non-session
+backend/utils/misc/queryenvironment/src/tests.rs	LAST_CLOSED	non-session
+backend/utils/misc/queryenvironment/src/tests.rs	LAST_OPEN_LOCKMODE	non-session
+backend/utils/misc/stack_depth_core/src/lib.rs	ENGINE_CHARGE	non-session	wasm32 only: the nested statement levels' engine charge (EngineLevel)
+backend/utils/misc/stack_depth_core/src/lib.rs	EXCEEDED	non-session
+backend/utils/misc/stack_depth_core/src/lib.rs	MAX_STACK_DEPTH	non-session
+backend/utils/misc/stack_depth_core/src/lib.rs	MAX_STACK_DEPTH_BYTES	non-session
+backend/utils/misc/stack_depth_core/src/lib.rs	SCALED_STACK_BUDGET	non-session
+backend/utils/misc/stack_depth_core/src/lib.rs	STACK_BASE_PTR	non-session
+backend/utils/misc/stack_depth_core/src/lib.rs	STACK_DEPTH_RLIMIT_CACHE	non-session
+backend/utils/misc/stack_depth_core/src/lib.rs	THREAD_STACK_CEILING	non-session
+backend/utils/misc/stack_depth_core/src/lib.rs	WASM_ENGINE_CEILING	non-session	wasm32 only: the engine-derived half of THREAD_STACK_CEILING (D3812)
+backend/utils/misc/stack_depth_core/src/lib.rs	WASM_SHADOW_CEILING	non-session	wasm32 only: the shadow-room half of THREAD_STACK_CEILING (D3812)
+backend/utils/misc/superuser/src/lib.rs	LAST_ROLEID	non-session
+backend/utils/misc/superuser/src/lib.rs	LAST_ROLEID_IS_SUPER	non-session
+backend/utils/misc/superuser/src/lib.rs	ROLEID_CALLBACK_REGISTERED	non-session
+backend/utils/misc/timeout/src/lib.rs	ALARM	non-session
+backend/utils/misc/timeout/src/lib.rs	ALL_TIMEOUTS_INITIALIZED	non-session
+backend/utils/misc/timeout/src/lib.rs	ARMED_DEADLINE	non-session
+backend/utils/misc/timeout/src/lib.rs	DATA	non-session
+backend/utils/misc/timeout/src/lib.rs	DUE_NS	non-session
+backend/utils/misc/timeout/src/lib.rs	POSTED	non-session
+backend/utils/misc/timeout/src/lib.rs	SIGNAL_DUE_AT	non-session
+backend/utils/misc/timeout/src/tests.rs	FIRED	non-session
+backend/utils/mmgr/mcxt_stats/src/lib.rs	IN_OOM_DUMP	non-session
+backend/utils/mmgr/mcxt_stats/src/lib.rs	ROOTS	non-session
+backend/utils/mmgr/mcxt_stats/src/lib.rs	SESSION_CLEANUPS	non-session
+backend/utils/mmgr/portalmem/src/lib.rs	PORTAL_MGR	non-session
+backend/utils/mmgr/portalmem/src/tests.rs	ACTIVE_SNAPS	non-session
+backend/utils/mmgr/portalmem/src/tests.rs	CLEANUP_FAILS	non-session
+backend/utils/mmgr/portalmem/src/tests.rs	CUR_SUBID	non-session
+backend/utils/mmgr/portalmem/src/tests.rs	EVENTS	non-session
+backend/utils/mmgr/portalmem/src/tests.rs	NEST_LEVEL	non-session
+backend/utils/mmgr/portalmem/src/tests.rs	NEXT_OWNER	non-session
+backend/utils/mmgr/portalmem/src/tests.rs	PERSIST_SPAWN	non-session
+backend/utils/mmgr/portalmem/src/tests.rs	SHMEM_EXIT	non-session
+backend/utils/mmgr/portalmem/src/tests.rs	STMT_TS	non-session
+backend/utils/resowner/resowner/src/lib.rs	ARENA	session
+backend/utils/resowner/resowner/src/lib.rs	ARENA_ENTERED	session
+backend/utils/resowner/resowner/src/lib.rs	AUX_PROCESS_OWNER	session
+backend/utils/resowner/resowner/src/lib.rs	CURRENT_OWNER	session
+backend/utils/resowner/resowner/src/lib.rs	CUR_TRANSACTION_OWNER	session
+backend/utils/resowner/resowner/src/lib.rs	STANDING_OWNER	non-session	D3401: a pool thread's standing owner, current only while a claim runs; not in the resource-owner cells member (CURRENT_OWNER..AUX_PROCESS_OWNER)
+backend/utils/resowner/resowner/src/lib.rs	TOP_TRANSACTION_OWNER	session
+backend/utils/resowner/resowner/src/tests.rs	PRINTED	non-session
+backend/utils/resowner/resowner/src/tests.rs	RELEASED	non-session
+backend/utils/sort/tuplesort/src/lib.rs	ABORT_RELEASE	non-session
+backend/utils/sort/tuplesort/src/lib.rs	MKSORT_DISABLE	non-session
+backend/utils/sort/tuplesort/src/lib.rs	RADIX_ATTEMPTS	non-session
+backend/utils/sort/tuplesort/src/lib.rs	RADIX_COMPLETED	non-session
+backend/utils/sort/tuplesort/src/lib.rs	RADIX_DISABLE	non-session
+backend/utils/sort/tuplesort/src/ssup.rs	COLL_BUFFERS	non-session
+backend/utils/sort/tuplesort/src/ssup.rs	SHIM_FLINFO	non-session
+backend/utils/sort/tuplesort/src/ssup.rs	SHIM_NEXT_SLOT	non-session
+backend/utils/sort/tuplestore/src/hold.rs	ENTRIES	non-session
+backend/utils/sort/tuplestore/src/hold.rs	FREE	non-session
+backend/utils/sort/tuplestore/src/hold.rs	GENERATION	non-session
+backend/utils/sort/tuplestore/src/lib.rs	CLEANUP_ARMED	non-session
+backend/utils/sort/tuplestore/src/lib.rs	SLOT	non-session
+backend/utils/time/combocid/src/lib.rs	STATE	non-session
+backend/utils/time/snapmgr/src/lib.rs	STATE	session
+backend/utils/time/snapmgr/src/lib.rs	STATE_BUSY	session
+backend/utils/time/snapmgr/src/lib.rs	STATIC_REPLACED	session
+backend/utils/time/snapmgr/src/tests.rs	CURCID	non-session
+backend/utils/time/snapmgr/src/tests.rs	FORGOTTEN	non-session
+backend/utils/time/snapmgr/src/tests.rs	ISO_USES_XACT_SNAPSHOT	non-session
+backend/utils/time/snapmgr/src/tests.rs	REMEMBERED	non-session
+backend/utils/time/snapmgr/src/tests.rs	THREAD_PROC	non-session
+bin/pg_combinebackup/src/app/flog.rs	CLEANUP_DIRS	non-session
+common/pg_prng/src/lib.rs	GLOBAL_PRNG	non-session
+common/pglz/src/lib.rs	HIST	non-session
+contrib/auto_explain/src/hooks.rs	CURRENT_QUERY_SAMPLED	non-session
+contrib/auto_explain/src/hooks.rs	NESTING_LEVEL	non-session
+contrib/citext/src/lib.rs	DB_ROW	non-session
+contrib/dblink/src/registry.rs	EXIT_CLOSE_ARMED	non-session
+contrib/dblink/src/registry.rs	NAMED	non-session
+contrib/dblink/src/registry.rs	PCONN	non-session
+contrib/dblink/src/registry.rs	PCONN_COUNTERS	non-session
+contrib/dblink/src/registry.rs	WE_CONNECT	non-session
+contrib/dblink/src/registry.rs	WE_GET_CONN	non-session
+contrib/dblink/src/registry.rs	WE_GET_RESULT	non-session
+contrib/pg_overexplain/src/lib.rs	ES_EXTENSION_ID	non-session
+contrib/pg_overexplain/src/lib.rs	PREV_PER_NODE_HOOK	non-session
+contrib/pg_overexplain/src/lib.rs	PREV_PER_PLAN_HOOK	non-session
+contrib/pg_stat_statements/src/hooks.rs	PLAN_FRAMES	non-session
+contrib/pg_stat_statements/src/hooks.rs	UTIL_FRAMES	non-session
+contrib/pg_stat_statements/src/lib.rs	NESTING_LEVEL	non-session
+contrib/pgcrypto/src/crypt.rs	CFI_BUDGET	non-session
+contrib/pgcrypto/src/crypt.rs	CFI_CALLS	non-session
+contrib/pgcrypto/src/lib.rs	FORCE_FIPS_MODE	non-session
+contrib/pgcrypto/src/pgp/consts.rs	FORCE_RANDOM_FAILURE	non-session
+contrib/pgoutput/src/lib.rs	PUBLICATIONS_VALID	non-session
+contrib/pgoutput/src/lib.rs	PUBLICATION_CALLBACK_REGISTERED	non-session
+contrib/pgoutput/src/lib.rs	RELATION_CALLBACKS_REGISTERED	non-session
+contrib/pgoutput/src/lib.rs	REL_SYNC_CACHE	non-session
+contrib/pgvector_hnsw/src/lib.rs	EF_SEARCH	non-session
+contrib/pgvector_hnsw/src/lib.rs	ITERATIVE_SCAN	non-session
+contrib/pgvector_hnsw/src/lib.rs	MAX_SCAN_TUPLES	non-session
+contrib/pgvector_hnsw/src/lib.rs	SCAN_MEM_MULTIPLIER	non-session
+contrib/postgres_fdw/src/connection.rs	CALLBACKS_REGISTERED	non-session
+contrib/postgres_fdw/src/connection.rs	CONNECTIONS	non-session
+contrib/postgres_fdw/src/connection.rs	CURSOR_NUMBER	non-session
+contrib/postgres_fdw/src/connection.rs	EXIT_CLOSE_ARMED	non-session
+contrib/postgres_fdw/src/connection.rs	PREP_STMT_NUMBER	non-session
+contrib/postgres_fdw/src/connection.rs	WE_CLEANUP_RESULT	non-session
+contrib/postgres_fdw/src/connection.rs	WE_CONNECT	non-session
+contrib/postgres_fdw/src/connection.rs	WE_GET_RESULT	non-session
+contrib/postgres_fdw/src/connection.rs	XACT_GOT_CONNECTION	non-session
+contrib/postgres_fdw/src/shippable.rs	SHIPPABLE_CACHE	non-session
+contrib/uuid_ossp/src/lib.rs	V1_STATE	non-session
+gravity/abi/src/status.rs	PARKED	non-session
+gravity/backend/interp/src/lib.rs	STACK	non-session
+gravity/backend/src/raw.rs	ROW_ESTIMATE	non-session
+gravity/decompose/src/admit.rs	PARTIAL	non-session
+gravity/decompose/src/admit.rs	RELSETS	non-session
+gravity/decompose/src/admit.rs	UNION_NESTS	non-session
+gravity/decompose/src/admit.rs	ROWS	non-session
+gravity/decompose/src/bake.rs	DERIVED	non-session
+gravity/decompose/src/bake.rs	SCOPES	non-session
+gravity/decompose/src/effects/licence.rs	ACTED	non-session
+gravity/decompose/src/effects/licence.rs	DENY	non-session
+gravity/decompose/src/effects/licence.rs	GRANTS	non-session
+gravity/decompose/src/effects/licence.rs	STMT	non-session
+gravity/decompose/src/facts/order.rs	IN_ORDER	non-session
+gravity/decompose/src/normalize/mod.rs	ZONE_READS	non-session
+gravity/decompose/tests/core_census.rs	CAPTURING	non-session
+gravity/decompose/tests/core_regress_histogram.rs	CAPTURING	non-session
+gravity/decompose/tests/core_zero_alloc.rs	ALLOCS	non-session
+gravity/decompose/tests/core_zero_alloc.rs	ON	non-session
+gravity/deps/src/lib.rs	ARMED	non-session
+gravity/deps/src/lib.rs	FREE	non-session
+gravity/deps/src/lib.rs	STACK	non-session
+gravity/deps/src/lib.rs	SUPPRESS	non-session
+gravity/dict/src/once.rs	TOKEN	non-session
+gravity/driver/src/ahead_trace.rs	ORIGIN	non-session	construct C2 (b): the run-ahead tracer's origin of the thread's pipeline runs
+gravity/driver/src/ahead_trace.rs	SENT	non-session	construct C2 R3: whether a row of the running statement left for its receiver
+gravity/driver/src/claimcut.rs	CLAIM	non-session	D3320: this thread's pool-claim cuts (offered, entered) and the range handed to it, each scoped to a claim
+gravity/driver/src/lib.rs	UNSUPPORTED_AT	non-session
+gravity/driver/src/lib.rs	AHEAD_AT	non-session
+gravity/driver/src/lib.rs	PIN_DEBT	non-session
+gravity/driver/src/mem/feedback.rs	LIVE	non-session
+gravity/driver/src/mem/feedback.rs	REFUSALS	non-session
+gravity/driver/src/mem/grant.rs	CLAIM_PURSE	non-session	D4043: the purse of the claim this thread runs (its statement's reserved-but-unused bytes)
+gravity/driver/src/mem/grant.rs	ENDS	non-session
+gravity/driver/src/mem/grant.rs	HELD_HERE	non-session
+gravity/driver/src/mem/grant.rs	HOLDERS_HERE	non-session
+gravity/driver/src/mem/grant.rs	IDLE_HERE	non-session	D3910 (a): this thread's grant holders whose portal is suspended
+gravity/driver/src/mem/grant.rs	MEM_WAITING	non-session
+gravity/driver/src/mem/grant.rs	SLOTS_HERE	non-session
+gravity/driver/src/mem/grant.rs	STARTS	non-session
+gravity/driver/src/node/image.rs	RUNNING	non-session
+gravity/driver/src/section.rs	KEPT_PROBE_BUF	non-session
+gravity/driver/src/section.rs	OWN_BUFS	non-session
+gravity/driver/tests/claim_order.rs	LEADING	non-session
+gravity/driver/tests/common/mod.rs	LEASES	non-session
+gravity/driver/tests/common/mod.rs	TIER0_CALLS	non-session
+gravity/driver/tests/section.rs	TOKEN	non-session
+gravity/driver/tests/spill.rs	TOKEN	non-session
+gravity/driver/tests/zero_alloc.rs	TOKEN	non-session
+gravity/exec/src/admit/entry/mod.rs	COUNTED_DECLINED	non-session
+gravity/exec/src/admit/entry/mod.rs	DESCS	non-session
+gravity/exec/src/admit/entry/mod.rs	DRAIN	non-session
+gravity/exec/src/admit/entry/mod.rs	PENDING_CPLAN	non-session
+gravity/exec/src/admit/entry/mod.rs	READ_COUNTED	non-session
+gravity/exec/src/admit/entry/mod.rs	RUNNING	non-session
+gravity/exec/src/admit/entry/mod.rs	ZONE_OFF	non-session
+gravity/exec/src/admit/entry/run.rs	DESC_CTX	non-session
+gravity/exec/src/admit/entry/run.rs	DESC_GONE	non-session
+gravity/exec/src/admit/entry/shelf.rs	DRAIN	non-session
+gravity/exec/src/admit/kept.rs	ABORTED	non-session
+gravity/exec/src/admit/kept.rs	GEN	non-session
+gravity/exec/src/admit/kept.rs	HELD	non-session
+gravity/exec/src/admit/kept.rs	KEPT	non-session
+gravity/exec/src/admit/kept.rs	SHELLS	non-session
+gravity/exec/src/admit/kept.rs	PEAK	non-session
+gravity/exec/src/admit/kept.rs	PUTS	non-session
+gravity/exec/src/admit/kept.rs	TAKES	non-session
+gravity/exec/src/admit/kept.rs	XACT	non-session
+gravity/exec/src/admit/mod.rs	LEVEL_TIER	non-session
+gravity/exec/src/admit/entry/shelf.rs	SHELF	non-session
+gravity/exec/src/admit/entry/shelf.rs	XACT	non-session
+gravity/exec/src/admit/reentry.rs	CURRENT	non-session
+gravity/exec/src/admit/reentry.rs	DEEP	non-session
+gravity/exec/src/admit/reentry.rs	DEEPEST	non-session
+gravity/exec/src/admit/reentry.rs	DEEP_FROM	non-session
+gravity/exec/src/admit/reentry.rs	DEEP_PROBES	non-session
+gravity/exec/src/admit/reentry.rs	FLUSH_GEN	non-session
+gravity/exec/src/admit/reentry.rs	FLUSH_SEEN	non-session
+gravity/exec/src/admit/reentry.rs	LINGER	non-session
+gravity/exec/src/admit/reentry.rs	LEVELS	non-session
+gravity/exec/src/admit/reentry.rs	PENDING	non-session
+gravity/exec/src/admit/reentry.rs	RETIRED	non-session
+gravity/exec/src/admit/regen.rs	TABLE	non-session
+gravity/exec/src/inputs/front.rs	CHECK	non-session
+gravity/exec/src/inputs/front.rs	CHECK_SLOT	non-session
+gravity/exec/src/inputs/front.rs	MEMO	non-session
+gravity/exec/src/inputs/knobs/grant.rs	HANDED	non-session
+gravity/exec/src/inputs/knobs/grant.rs	KNOB_SNAPSHOT	non-session
+gravity/exec/src/inputs/knobs/grant.rs	OVERDRAW_LOGGED	non-session
+gravity/exec/src/inputs/knobs/grant.rs	RUNNING	non-session
+gravity/exec/src/inputs/knobs/grant.rs	SLOTS	non-session
+gravity/exec/src/inputs/knobs/lowerer.rs	EXPLAIN	non-session
+gravity/exec/src/inputs/knobs/lowerer.rs	INSTRUMENT	non-session
+gravity/exec/src/inputs/knobs/lowerer.rs	NESTED	non-session
+gravity/exec/src/inputs/knobs/lowerer.rs	PUBLISH	non-session
+gravity/exec/src/inputs/knobs/lowerer.rs	RELSET	non-session
+gravity/exec/src/inputs/knobs/lowerer.rs	RELSET_AT	non-session
+gravity/exec/src/inputs/knobs/lowerer.rs	RELSET_SLOT	non-session
+gravity/exec/src/lib.rs	ARENA_EXIT	non-session
+gravity/exec/src/lib.rs	DEEP_KNOBS	non-session
+gravity/exec/src/lib.rs	LAST_MISSES	non-session
+gravity/exec/src/lib.rs	SESSION_END	non-session
+gravity/exec/src/phases.rs	MARKS	non-session
+gravity/exec/src/phases.rs	N	non-session
+gravity/exec/src/phases.rs	T0	non-session
+gravity/exec/src/runner/admission.rs	REFUSAL	non-session
+gravity/exec/src/runner/execute.rs	KEPT	non-session
+gravity/exec/src/runner/portal.rs	MEM_WAIT_EVENT	non-session
+gravity/exec/src/runner/portal.rs	MEM_WAIT_SERVES	non-session
+gravity/exec/src/runner/portal.rs	AWAY	non-session
+gravity/exec/src/runner/portal.rs	STEPPING	non-session
+gravity/exec/tests/admit_memo_alloc.rs	ALLOCS	non-session
+gravity/expr/src/bake.rs	SCOPES	non-session
+gravity/expr/src/catalog.rs	PINNED	non-session
+gravity/expr/src/emit/scalar.rs	CASE_SELECT	non-session
+gravity/expr/src/nodes/array.rs	SCRATCH	non-session
+gravity/expr/src/nodes/func.rs	ACL_DEFERRED	non-session
+gravity/expr/src/nodes/func.rs	SUBSTR_ASCII	non-session
+gravity/expr/src/nodes/tuple.rs	CURRENT	non-session
+gravity/expr/src/views.rs	SCRATCH	non-session
+gravity/expr/tests/agg.rs	CX	non-session	test: memsig E-prog: the compiled programs' lists context, one per test thread
+gravity/expr/tests/alloc.rs	ALLOCS	non-session
+gravity/expr/tests/alloc.rs	CX	non-session	test: memsig E-prog: the compiled programs' lists context, one per test thread
+gravity/expr/tests/differential.rs	ACL_DENY	non-session
+gravity/expr/tests/differential.rs	NEXTVAL_CALLS	non-session
+gravity/expr/tests/differential.rs	CX	non-session	test: the emit's scratch context, one per test thread
+gravity/expr/tests/emit.rs	CX	non-session	test: the emit's scratch context, one per test thread
+gravity/expr/tests/tail.rs	CX	non-session	test: memsig E-prog: the compiled programs' lists context, one per test thread
+gravity/fn/src/lib.rs	PENDING_ERROR	non-session
+gravity/fn/src/lib.rs	SCRATCH	non-session
+gravity/fn/src/resolved.rs	SERIAL	non-session
+gravity/fn/src/result_life.rs	LIVE	non-session
+gravity/fn/src/shims/byref_ref.rs	EXTRA__	non-session
+gravity/fn/src/shims/numeric.rs	OUT	non-session
+gravity/fn/src/shims/text.rs	IC	non-session
+gravity/fn/src/shims/val_view.rs	EXTRA__	non-session
+gravity/fn/src/srf.rs	HELD	non-session
+gravity/fn/src/srf.rs	LEVEL	non-session
+gravity/fn/src/srf.rs	SLOTS	non-session
+gravity/fn/src/typesem/collation.rs	CLAIM	non-session
+gravity/fn/src/typesem/collation.rs	CLAIM_GEN	non-session
+gravity/fn/src/typesem/collation.rs	LEADER_CATALOG	non-session
+gravity/fn/src/typesem/keysem.rs	BODIES	non-session
+gravity/fn/src/typesem/keysem/call.rs	BOUND	non-session
+gravity/fn/src/typesem/keysem/call.rs	SWEPT	non-session
+gravity/fn/src/typesem/mod.rs	LAST	non-session
+gravity/fn/tests/differential.rs	CUR_TYPES	non-session
+gravity/fn/tests/differential.rs	QUIET	non-session
+gravity/fn/tests/fresh_vs_scratch.rs	NUM_SCRATCH	non-session
+gravity/fn/tests/fresh_vs_scratch.rs	OUT_SCRATCH	non-session
+gravity/fn/tests/fresh_vs_scratch.rs	OUT_SCRATCH8	non-session
+gravity/fn/tests/hostcall.rs	ALLOCS	non-session
+gravity/fn/tests/result_life_scribble.rs	KEPT	non-session
+gravity/fn/tests/window_alloc.rs	ALLOCS	non-session
+gravity/hosts/src/facts.rs	FUNCS	non-session
+gravity/hosts/src/facts.rs	LEAD	non-session
+gravity/hosts/src/facts.rs	WLEAD	non-session
+gravity/hosts/src/lib.rs	PENDING	non-session
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	AM_WRITTEN	non-session
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	CROSSCHECK	non-session
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	EARLY	non-session
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	EOXACT_ARMED	non-session
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	PENDING	non-session
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	TARGETS	non-session
+gravity/hosts/src/ops/scan/am_rows.rs	FORCED	non-session	PGRCSERVE G4: the rows-road lever value cached on the GUC store mutation count (class of residency.rs ROAD_AT / ROAD_SEEN)
+gravity/hosts/src/ops/scan/am_rows.rs	ROADS	non-session	PGRCSERVE G5: the road answers of the admission running now (RoadScope, restored on drop): admission-scoped
+gravity/hosts/src/ops/scan/am_rows.rs	ROWS_SLOT	non-session	PGRCSERVE G4: the rows-road lever registry slot
+gravity/hosts/src/ops/scan/heap_source.rs	ME	non-session
+gravity/hosts/src/ops/scan/pgrc/residency.rs	RELEASE_REGISTERED	non-session
+gravity/hosts/src/ops/scan/pgrc/residency.rs	ROAD_AT	non-session
+gravity/hosts/src/ops/scan/pgrc/residency.rs	ROAD_SEEN	non-session
+gravity/hosts/src/ops/scan/pgrc/residency.rs	ROAD_SLOT	non-session
+gravity/hosts/src/worker_arm.rs	ARMED	non-session
+gravity/hosts/src/worker_arm.rs	DISPLACED	non-session
+gravity/hosts/src/worker_arm.rs	OWNER	non-session
+gravity/hosts/src/worker_arm.rs	IN_CLAIM	non-session	C7 runtime half (debug builds): the pool claims in progress on this thread, the leader_tls! probe
+gravity/hosts/tests/common/mod.rs	CHECK_NN	non-session
+gravity/hosts/tests/common/mod.rs	CURRENT_CID	non-session
+gravity/hosts/tests/common/mod.rs	DEFERRABLE_IDX	non-session
+gravity/hosts/tests/common/mod.rs	GENERATED	non-session
+gravity/hosts/tests/common/mod.rs	HAS_TRIGGERS	non-session
+gravity/hosts/tests/common/mod.rs	NOT_NULL	non-session
+gravity/hosts/tests/common/mod.rs	RELCACHE	non-session
+gravity/hosts/tests/common/mod.rs	RELCACHE_CTX	non-session
+gravity/hosts/tests/common/mod.rs	TRIG_DESC	non-session
+gravity/hosts/tests/common/mod.rs	UNIQUE_IDX	non-session
+gravity/hosts/tests/common/mod.rs	UNREADY_IDX	non-session
+gravity/hosts/tests/core_perms.rs	CALLS	non-session
+gravity/hosts/tests/core_perms.rs	CLASS_MASK	non-session
+gravity/hosts/tests/core_perms.rs	COL_OK	non-session
+gravity/hosts/tests/core_zero_alloc.rs	TOKEN	non-session
+gravity/hosts/tests/dict_derived_fingerprint.rs	CANCEL_AT	non-session
+gravity/hosts/tests/membroker_tail_refresh_allocates_nothing.rs	ALLOCS	non-session
+gravity/hosts/tests/membroker_tail_refresh_allocates_nothing.rs	COUNTING	non-session
+gravity/hosts/tests/modifytable_trigger.rs	DESC	non-session
+gravity/hosts/tests/scan_index_source.rs	TOKEN	non-session
+gravity/hosts/tests/scan_pgrc_granule_source.rs	TOKEN	non-session
+gravity/hosts/tests/scan_pgrc_residency.rs	TOKEN	non-session
+gravity/kernels/src/dict/strategies/percode.rs	PINS	non-session
+gravity/kernels/src/ops/agg/trans/entries/raw.rs	CANON	non-session
+gravity/kernels/src/ops/sort/rowsort.rs	BIG	non-session
+gravity/kernels/src/ops/sort/rowsort.rs	CMP_ERR	non-session
+gravity/kernels/src/ops/sort/rowsort.rs	HEAPS	non-session
+gravity/kernels/src/ops/sort/rowsort.rs	HEAPS_SWEPT	non-session
+gravity/kernels/src/ops/sort/rowsort.rs	SAVED	non-session
+gravity/kernels/src/ops/sort/rowsort.rs	STASH	non-session
+gravity/kernels/src/ops/sort/rowsort.rs	WANT	non-session
+gravity/kernels/src/ops/sort/rowsort.rs	WANT_GEN	non-session
+gravity/kernels/src/typesem/userfp.rs	HERE	non-session
+gravity/kernels/tests/agg_v4_m1.rs	HELD	non-session
+gravity/kernels/tests/lab_leader.rs	BASES	non-session
+gravity/kernels/tests/lab_leader.rs	CALLS	non-session
+gravity/kernels/tests/lab_leader.rs	CFG	non-session
+gravity/lower/src/inputs/key.rs	GUARDS	non-session
+gravity/lower/tests/common/mod.rs	NOTNULL	non-session
+gravity/lower/tests/common/mod.rs	ROWS	non-session
+gravity/lower/tests/common/mod.rs	CX	non-session	test: memsig E-prog: the compiled programs' lists context, one per test thread
+gravity/lowerv4/src/effects/visible/drain.rs	SEEN	non-session
+gravity/lowerv4/src/face/strategy.rs	OFF	non-session
+gravity/lowerv4/src/frame/env.rs	PIPE_SITES	non-session
+gravity/lowerv4/src/frame/env.rs	SITE_RELS	non-session	PGRCSERVE M0 (D2): each numbered site's relation while a program's functions are made (with_pipe_sites)
+gravity/lowerv4/src/frame/env.rs	USER_KEYS	non-session
+gravity/lowerv4/src/frame/instr.rs	AHEAD	non-session
+gravity/lowerv4/src/frame/instr.rs	BASE	non-session
+gravity/lowerv4/src/frame/instr.rs	BASES	non-session
+gravity/lowerv4/src/frame/instr.rs	CELLS	non-session
+gravity/lowerv4/src/frame/instr.rs	CURRENT	non-session
+gravity/lowerv4/src/frame/instr.rs	HOT	non-session
+gravity/lowerv4/src/frame/instr.rs	ON	non-session
+gravity/lowerv4/src/frame/instr.rs	PLAN	non-session
+gravity/lowerv4/src/frame/program.rs	VERIFY_RUNS	non-session
+gravity/lowerv4/src/mechs_used.rs	ON	non-session
+gravity/lowerv4/src/mechs_used.rs	USED	non-session
+gravity/lowerv4/src/memo.rs	MEMO	non-session
+gravity/lowerv4/src/ops/agg/trans/code_copy.rs	PINS	non-session
+gravity/lowerv4/src/road_off.rs	GUC	non-session
+gravity/lowerv4/src/road_off.rs	LOGGED_OFF	non-session
+gravity/lowerv4/src/road_off.rs	NAMED_OFF	non-session
+gravity/lowerv4/src/table/face.rs	OWNER_STUB	non-session
+gravity/lowerv4/tests/common/drive.rs	ABORT	non-session	sort give-back: the abort byte the rig binds for a test's registered revoke byte (a test thread's own)
+gravity/lowerv4/tests/common/drive.rs	BETWEEN	non-session	D4291: the rig's hook between pipelines (a test thread's own)
+gravity/lowerv4/tests/common/drive.rs	LEASE	non-session	D4291: the admitted reservation the rig runs a fixture under (a test thread's own)
+gravity/lowerv4/tests/common/mod.rs	ROADS_ON	non-session	D4620: the default-off roads a test names on for the fixtures it decomposes (a test thread's own)
+gravity/lowerv4/tests/core_px.rs	OPENS	non-session
+gravity/lowerv4/tests/sort_m3_l0.rs	SEEN	non-session
+gravity/parallel/src/lib.rs	CURRENT	non-session
+gravity/parallel/tests/common/mod.rs	LEASES	non-session
+gravity/pool/tests/d314_worker_raise.rs	LEADER	non-session
+gravity/program/src/externs.rs	DEFERRED	non-session
+gravity/program/src/externs.rs	EXTERNS	non-session
+gravity/program/tests/cache_alloc.rs	TOKEN	non-session
+gravity/program/tests/arena_refused_block.rs	ARMED	non-session	D3957: the test allocator's one armed refusal
+gravity/wire/tests/datarow.rs	CONVERT	non-session
+gravity/wire/tests/datarow.rs	FMGR_INFO_CALLS	non-session
+gravity/wire/tests/datarow.rs	NUMERIC_OUT_CALLS	non-session
+gravity/wire/tests/datarow.rs	OUTBUF	non-session
+gravity/wire/tests/datarow.rs	SENT	non-session
+gravity/wire/tests/datarow.rs	TEXT_VARLENA	non-session
+gravity/wire/tests/datarow.rs	TLIST	non-session
+gravity/wire/tests/datarow.rs	TOKEN	non-session
+pl/plpgsql/src/comp.rs	EXPR_IDS	non-session
+pl/plpgsql/src/exec.rs	ACCEPT_ARRAY_RESULT	non-session
+pl/plpgsql/src/exec.rs	CALL_TARGETS	non-session
+pl/plpgsql/src/exec.rs	COMP_BY_NAME	non-session
+pl/plpgsql/src/exec.rs	EXIT_RELEASE_REGISTERED	non-session
+pl/plpgsql/src/exec.rs	EXPR_PLANS	non-session
+pl/plpgsql/src/exec.rs	LIVE_SPI_EXPR	non-session
+pl/plpgsql/src/exec.rs	SESSION_CASTS	non-session
+pl/plpgsql/src/exec.rs	SESSION_CASTS_RESET	non-session
+pl/plpgsql/src/exec.rs	SESSION_CAST_CALLBACKS	non-session
+pl/plpgsql/src/exec.rs	SESSION_CAST_GEN	non-session
+pl/plpgsql/src/exec.rs	SIMPLE_CARRY	non-session
+pl/plpgsql/src/handler.rs	CHECKED	non-session
+pl/plpgsql/src/handler.rs	FUNC_CACHE	non-session
+pl/plpgsql/src/handler.rs	FUNC_CACHE_EPOCH	non-session
+pl/plpgsql/src/handler.rs	LOADED	non-session
+pl/plpgsql/src/handler.rs	PL_EXTRA_CHECKS	non-session
+port/pg_clock/src/lib.rs	PIN	non-session
+tpde/base/src/lib.rs	LOG_CONFIG	non-session
+tpde/base/tests/behavior.rs	MESSAGES	non-session
+tpde/core/tests/analyzer_unit.rs	TRACE	non-session
+tpde/fadec-gen/tests/generated-execution/runtime.rs	RECORDING	non-session
+tpde/util/tests/bump_allocator.rs	DESTROYED	non-session
+tpde/util/tests/small_vector/tracked.rs	ACTIVE	non-session
+gravity/exec/src/runner/execute.rs	KEPT_CLEANUP_ARMED	non-session
+backend/utils/cache/catcache/src/graph.rs	TRIM_AT_IDLE	non-session	D3652 P8: thread role (PostgresMain trims at its idle point), not session state
+backend/utils/cache/catcache/src/lib.rs	CAP_OVERRIDE	non-session	test-only cap override
+backend/utils/cache/relcache/src/lib.rs	TRIM_AT_IDLE	non-session	D3652 P8: thread role (PostgresMain trims at its idle point), not session state
+_support/mcx/tests/d4029d_backstop_pick_allocates_nothing.rs	ALLOCS	non-session	D4029 (d) test: the allocations counted on a thread
+_support/mcx/tests/d4029d_backstop_pick_allocates_nothing.rs	COUNTING	non-session	D4029 (d) test: whether a thread's allocations are counted
+backend/access/pgrcolumnar/pgrc_read/src/tests/mod.rs	ALLOCS	non-session	D4029 (d) test: the allocations counted on a thread
+backend/access/pgrcolumnar/pgrc_read/src/tests/mod.rs	COUNTING	non-session	D4029 (d) test: whether a thread's allocations are counted
+backend/access/pgrcolumnar/pgrc_read/src/tests/mod.rs	REFUSE_FROM	non-session	D4322 test: the size from which a thread's 8-aligned allocations are refused
+backend/access/pgrcolumnar/pgrc_read/src/tests/mod.rs	DOOR1	non-session	D4595 test: whether a thread's allocations and frees are door 1's
+backend/access/pgrcolumnar/pgrc_read/src/tests/mod.rs	DOOR1_LOW	non-session	D4595 test: the lowest a door-1 thread's account read after a free
+backend/access/pgrcolumnar/pgrc_write/tests/d4400_seal_working_set.rs	LIVE	non-session	D4400 test: the counting allocator's per-thread live bytes
+backend/access/pgrcolumnar/pgrc_write/tests/d4400_seal_working_set.rs	PEAK	non-session	D4400 test: the counting allocator's per-thread peak
+backend/access/pgrcolumnar/pgrc_write/tests/r15_seal_owned_blocks.rs	LIVE	non-session	R15-SEAL-IMAGE-CHARGE test: the counting allocator's per-thread live bytes
+backend/access/pgrcolumnar/pgrc_write/tests/r15_seal_owned_blocks.rs	WATCH	non-session	R15-SEAL-IMAGE-CHARGE test: the statement owner whose seal the allocator watches
+backend/access/pgrcolumnar/pgrc_write/tests/r15_seal_owned_blocks.rs	BASE	non-session	R15-SEAL-IMAGE-CHARGE test: the unowned bytes when the watch began
+backend/postmaster/memruntime/src/lib.rs	ALLOCS	non-session	D4029 (d) test: the allocations counted on a thread
+backend/postmaster/memruntime/src/lib.rs	COUNTING	non-session	D4029 (d) test: whether a thread's allocations are counted
+backend/postmaster/memruntime/src/lib.rs	MINE	non-session	BYSTRIM test: the reclaim rungs answer this thread only
+backend/postmaster/memruntime/src/lib.rs	WANTED	non-session	BYSTRIM test: the bytes the reclaim rung was asked on this thread
+gravity/driver/tests/b0_pool_follows_free_room.rs	ALLOCS	non-session	B0 test: the allocations counted on a thread
+gravity/driver/tests/b0_pool_follows_free_room.rs	COUNTING	non-session	B0 test: whether a thread's allocations are counted
+gravity/exec/src/admit/mod.rs	UNFILED	non-session
+gravity/deps/src/lib.rs	CHECKING	non-session
+gravity/deps/src/lib.rs	MISS	non-session
+gravity/exec/src/admit/mod.rs	STALE	non-session
+backend/utils/cache/inval/src/lib.rs	REL_SCOPE	non-session
+_support/mcx/tests/d4092_dump_top_holders.rs	ALLOCS	non-session	D4092 test: the allocations counted on a thread
+_support/mcx/tests/d4092_dump_top_holders.rs	COUNTING	non-session	D4092 test: whether a thread's allocations are counted
+gravity/driver/tests/c9_stopped_call.rs	CANCEL	non-session	C9 test: the cancel arrives during the call on this thread
+gravity/driver/tests/c9_stopped_call.rs	CLAIM_FAILS	non-session	C9 test: whether this thread's worker claim fails
+gravity/exec/src/glue.rs	ABORT_PENDING	non-session	C9 test: the backend's abort-class interrupt pending, per test thread
+gravity/driver/tests/c9_stopped_call_host.rs	CANCEL	non-session	C9 test: the cancel arrives during the call on this thread
+gravity/driver/tests/c9_stopped_call_host.rs	RAISED	non-session	C9 test: the host's answer that the owner raised the stop already
+gravity/driver/tests/c9_stopped_call_host.rs	ASKED	non-session	C9 test: the host's answers asked on this thread
+gravity/driver/tests/d4306_cancel_scratch.rs	CANCEL	non-session	D4306 test: the cancel arrives during the call on this thread
+_support/memledger/src/ladder_pass.rs	DEPTH	non-session	D4398: the ladder passes open on this thread (lock_or_skip tries inside one)
+_support/memledger/src/ladder_pass.rs	SKIPPED	non-session	D4398: a lock_or_skip skipped since the walk last asked
+backend/access/pgrcolumnar/pgrc_am/src/catalog.rs	SHARED_CALLS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/ingest.rs	SCHEMA_PUBLISH	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/reloptions.rs	LEAD	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/rowcache.rs	CACHE	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/rowcache.rs	COLS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/scanstats.rs	GRAVITY	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/scanstats.rs	PENDING	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/scanstats.rs	PUB_US	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	FOOTER_FACTS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	FRONT_EXIT_REGISTERED	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	FRONT_PENDING	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	FRONT_SEEN	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_am/src/session.rs	PLACED	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_format/src/manifest.rs	APPENDS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_format/src/manifest.rs	APPEND_KNOB	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_format/tests/ixcopypath_allocs.rs	ALLOCS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/compact.rs	TRIGGER	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/ixfetch.rs	PROBE	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/ixfetch.rs	SCHEMAS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/ixfetch.rs	STATS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/logical.rs	BATCHES	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/logical.rs	SCRATCH	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/maint.rs	CAP	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/maint.rs	HELD	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/maint.rs	LAST	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/maint.rs	LAST_TOMB	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/maint.rs	PENDING	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/maint.rs	SEAL_BUDGET	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/maint.rs	STALL_MIN	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/maint.rs	TARGET	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/pathcache.rs	CACHE	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/route.rs	BULK	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/route.rs	L0CAP	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/route.rs	L0_EVENT	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/route.rs	WAITED	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/tombs.rs	RELIDS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/tombs.rs	RELIDS_EPOCH	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/tombs.rs	RELIDS_HOOKED	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/xact.rs	INDEXED	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_front/src/xact.rs	STMTS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_marks/src/lib.rs	WRITER	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_wal/src/insert.rs	INSERT_ERROR	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_write/src/walsink.rs	ON	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/pgrcolumnar/pgrc_write/src/walsink.rs	PACER	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/table/tableam/src/lib.rs	CB2_BUFFER_HOOKS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/table/tableam/src/lib.rs	SCRATCH	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/transam/transam_xlog/src/backup.rs	LOWLEVEL_ACTIVE	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/transam/transam_xlog/src/backup.rs	LOWLEVEL_WANTED	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/transam/transam_xlog/src/lib.rs	CHECK_POINT_SEGMENTS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/access/transam/transam_xlog/src/removal.rs	SPOOL_KEEP	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/commands/trigger/src/queue.rs	IDENTS	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/postmaster/pgarch/src/pgrc.rs	ARCHIVED	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/replication/logical/logical_decode/src/lib.rs	UNDECODED_SPEC	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/replication/walreceiver/src/pgrc_files.rs	RECV	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/replication/walsender/src/pgrc_files.rs	FILES	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+backend/utils/activity/pgstat/src/pending.rs	EXTRA_PENDING	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+gravity/prewarm/src/lib.rs	OWED	non-session	r14 merge: a line (pgrc delta) source; was in the line's count census
+_support/memledger/src/ladder_pass.rs	LADDER_THREAD	non-session	pagepool P3 (C.11): the memory runtime's loop thread mark (mark_ladder_thread at idle_loop's start; on_ladder_thread reads it)
+_support/memledger/src/arena.rs	HOLDER	non-session	CACHE-CHARGE: this thread's innermost open holder cache scope (the global allocator reads it)
+_support/allocarena/src/own.rs	INLINE_OK	non-session	D4692: this thread gives its cache runs back itself (the page releaser, the idle loop; a free reads it)
+_support/allocarena/src/own.rs	GIVES	non-session	D4692: the runs this thread gave back (the witness count)
+_support/allocarena/src/lib.rs	DECOMMITS_HERE	non-session	H3 step (2): this thread's decommits through the arenas' commit callback and their bytes (the born-red tests' count; the give-back service publishes its own)
+gravity/exec/src/runner/point/mod.rs	BUILT	non-session
+gravity/exec/src/runner/point/mod.rs	RUNNING	non-session
+gravity/exec/src/runner/point/mod.rs	REPORT	non-session
+gravity/exec/src/runner/point/mod.rs	PLANCHECK	non-session
+gravity/exec/src/runner/point/mod.rs	STATE	non-session
+gravity/exec/src/runner/point/pkeep.rs	KEEP	non-session	pgrust.point_portal_keep: the kept S1x probes, one slot per generic plan (dropped at the session's teardown)
+gravity/exec/src/runner/point/pkeep.rs	BYTES	non-session	pgrust.point_portal_keep: the kept probes' bytes, counted in the point memo's cap
+gravity/exec/src/runner/point/portal.rs	LIVE	non-session	D4524: the live point portal (at most one: the unnamed portal is dropped before the next Bind)
+gravity/exec/src/runner/point/portal.rs	SEQ	non-session	D4524: the point portals' token sequence
+gravity/exec/src/runner/point/skip.rs	MEMO	non-session	D4550: pgrust.point_noplan's memo of point plans (one per session, dropped at its teardown)
+gravity/fn/src/typesem/mod.rs	TMPS	non-session	per-row temporaries pool, 4 fixed slots x <=16 KiB; holder beside CANON (memhold)
+_support/pagepool/src/shelf.rs	SHELF	non-session	the page pool's per-thread shelf of free blocks (const init, Cell payload, no drop; drained by a pthread key destructor at thread exit)
+_support/pagepool/src/global.rs	STARTING	non-session	the pool start guard, true only inside the starting thread's start()
+_support/pagepool/src/global.rs	UNCAPPED	non-session	D4718: PoolAlloc's claim scope, nonzero only inside its own slow-path claims (they pass the pool's claim cap)
+_support/pagepool/src/global.rs	BASE_ASK	non-session	C.23: true only inside base_pages's closure (its zeroed blocks of a superpage and up are base spans)
+_support/pagepool/src/purger.rs	OWED	non-session	pppress card 6: the pool charge this thread claimed while the ladder pressed, owed back at its next settle point
+_support/pagepool/src/purger.rs	FRESH	non-session	pppress card 6: the superpage this thread's last pressed Cold claim took, cleared at each settle
+_support/pagepool/src/small.rs	HEAP	non-session	the small tier's per-thread heap (const init, Cell payload, no drop; abandoned by a pthread key destructor at thread exit)
+_support/pagepool/tests/global_alloc.rs	DEPTH	non-session	the test's re-entry counter around the global allocator
+backend/postmaster/launch_backend/src/cpool.rs	REUSED	non-session	D4682: the running session is on a reused client backend thread (the launcher's own lifecycle)
+backend/postmaster/launch_backend/src/cpool.rs	WILL_PARK	non-session	D4682: this client backend thread's park decision (the launcher's own lifecycle)
+backend/utils/cache/cache_syscache/src/projections.rs	TDS_ARMED	non-session	D4682: TDS's session cleanup is registered
+gravity/exec/src/runner/point/skip.rs	HIT	non-session	D4572: the memo slot of this statement for hook B (cleared at every hook A)
+gravity/hosts/src/scratch.rs	SMALL	non-session	D4572: small-first scratch roots while a small_roots guard lives (scoped)
+_support/mcx/src/aset.rs	SHELF	non-session	D4679: the growth shelf (a dropped context's growth blocks, <= 64 KiB; emptied at the session's unbind and a thread-reuse park)
+backend/postmaster/memruntime/src/memlog.rs	GATE_BEFORE	non-session	D4812 (2): the server-log writer a thread had while mcx's block gate defers its lines (scoped: gate_defer_begin sets it, gate_defer_end takes it back inside one gated allocation)
+_support/mcx/tests/d4812_block_gate.rs	ASKER	non-session	D4812 (2) test: this thread is the block gate's asker
+_support/mcx/tests/d4812_block_gate.rs	HELD	non-session	D4812 (2) test: this thread holds interrupts off
+backend/postmaster/memruntime/src/lib.rs	WATCHDOG_THREAD	non-session	ppres: marks the memory watchdog thread (the pool reserve sheds only on its R1 ask)
+backend/postmaster/memruntime/src/lib.rs	RESIDENT_SPLIT	non-session	pppress: the last allocator_resident reading's two terms, taken by the memory view on the same thread
+gravity/exec/src/runner/execute.rs	ADMISSION_REFUSED	non-session	re-plan and retry: one simple-protocol statement's admission refusal state, cleared per statement
+gravity/exec/src/runner/execute.rs	REPLAN_ARMED	non-session	re-plan and retry: one simple-protocol statement's admission refusal state, cleared per statement
+gravity/exec/src/runner/execute.rs	DEFER_REFUSAL_LINE	non-session	re-plan and retry: one simple-protocol statement's admission refusal state, cleared per statement
+gravity/exec/src/runner/execute.rs	PENDING_REFUSAL_LINE	non-session	re-plan and retry: one simple-protocol statement's admission refusal state, cleared per statement

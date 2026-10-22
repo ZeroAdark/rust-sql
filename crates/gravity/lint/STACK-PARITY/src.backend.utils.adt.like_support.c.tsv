@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/adt/like_support.c: 1 stack-depth check sites
+1372	regex_selectivity_sub	crates/backend/optimizer/plan/planner/src/like_support.rs	regex_selectivity_sub	yes	

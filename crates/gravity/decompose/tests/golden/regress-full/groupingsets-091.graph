@@ -1,0 +1,36 @@
+-- regress-full-groupingsets-091
+-- explain (costs off) select (select grouping(v1)) from (values ((select 1))) v(v1) group by v1;
+graph pipelines=4 breakers=1 init_plans=2 root=p3
+p0 node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  project (1=c23:1)
+  outs 1=w4:val
+p1 node=4 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n4@0
+  source const
+  project (1=c23:1)
+  outs 1=w4:val
+p2 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@1^
+  source const
+  project ()
+  outs
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  subplan 2 nested Expr params=($exec0=c23:0) raise-free
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0
+  source const
+  project (1=$exec0)
+  project (1=subplan2(c23:0), 2j=$exec2)
+  outs 1=w4:val 2=w4:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p2 layout=[]->[Count@0] 8B
+group slot=0 producer=p2 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  empty_no_row pinned=()
+init_plan id=1 pipeline=p0 link=Expr param=$exec1 raise-free
+init_plan id=3 pipeline=p1 link=Expr param=$exec2 raise-free
+param $exec0 owner=subplan2 type=23 rep=w4:val
+mapped: Result Agg SubPlan

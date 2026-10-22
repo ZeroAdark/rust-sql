@@ -35,10 +35,17 @@ pub const SO_ALLOW_STRAT: u32 = 1 << 6;
 pub const SO_ALLOW_SYNC: u32 = 1 << 7;
 pub const SO_ALLOW_PAGEMODE: u32 = 1 << 8;
 pub const SO_TEMP_SNAPSHOT: u32 = 1 << 9;
+/// pgrcolumnar only: an index build scan, which reads segment heaps under SnapshotNonVacuumable.
+pub const SO_PGRC_INDEX_BUILD: u32 = 1 << 10;
 
 pub const TABLE_INSERT_SKIP_FSM: i32 = 0x0002;
 pub const TABLE_INSERT_FROZEN: i32 = 0x0004;
 pub const TABLE_INSERT_NO_LOGICAL: i32 = 0x0008;
+pub const TABLE_INSERT_SINGLE_PAGE_EXTEND: i32 = 0x4000;
+/// pgrust (no C flag): the caller is a ModifyTable statement that ends with `table_finish_bulk_insert` and then
+/// takes the rows placed late through `table_take_placed`, so the AM may hold an inserted row until then (the slot's
+/// `tts_tid` stays invalid). Heap places every row at once and ignores it.
+pub const TABLE_INSERT_DEFER: i32 = 0x8000;
 
 pub const TUPLE_LOCK_FLAG_LOCK_UPDATE_IN_PROGRESS: u8 = 1 << 0;
 pub const TUPLE_LOCK_FLAG_FIND_LAST_VERSION: u8 = 1 << 1;
@@ -78,6 +85,15 @@ pub enum LockWaitPolicy {
     LockWaitBlock = 0,
     LockWaitSkip,
     LockWaitError,
+}
+
+/// How a reader that begins no tableam scan may read a relation for one execution. `Native`: the AM's own storage
+/// holds every row the snapshot can see. `Rows`: some of those rows only the tableam slot scan returns
+/// (`table_scan_getnextslot`), so the reader takes the relation's rows through it. Heap is always `Native`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScanRoad {
+    Native,
+    Rows,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -212,7 +228,7 @@ impl Default for WriteMultiInsertBuffer<'_> {
 // read it off the SampleScanState they are handed (tsm_system_rows does).
 pub trait SampleScanDriver {
     fn has_next_sample_block(&self) -> bool;
-    fn next_sample_block(&mut self, nblocks: BlockNumber, donetuples: i64) -> BlockNumber;
+    fn next_sample_block(&mut self, nblocks: BlockNumber, donetuples: i64) -> PgResult<BlockNumber>;
     fn next_sample_tuple(
         &mut self,
         blockno: BlockNumber,
@@ -223,14 +239,14 @@ pub trait SampleScanDriver {
 
 pub const HEAP_TABLE_AM_OID: Oid = 2;
 
+pub const FOREIGN_CLOSED_TABLE_AMS: &[&str] = &["pgrcolumnar2"];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TableAm {
     Heap,
+    /// The pgrcolumnar columnar AM (identified by pg_am.amname = "pgrcolumnar" at relcache build: a closed-AM
+    /// engine, its handler is never invoked).
     Pgrcolumnar,
-    /// The pgrcolumnar2 sibling AM (lanev3 M3; O-M3-2 ruling: sibling name,
-    /// no format-routing knob; identified by pg_am.amname = "pgrcolumnar2"
-    /// at relcache build, same closed-AM mechanism as Pgrcolumnar).
-    Pgrcolumnar2,
 }
 
 impl TableAm {
@@ -246,12 +262,20 @@ impl TableAm {
                     Some(TableAm::Heap)
                 } else if relam != 0 && is_registered_pgrcolumnar_am(relam) {
                     Some(TableAm::Pgrcolumnar)
-                } else if relam != 0 && is_registered_pgrcolumnar2_am(relam) {
-                    Some(TableAm::Pgrcolumnar2)
                 } else {
                     None
                 }
             }
+        }
+    }
+
+    pub fn of_relam(relam: Oid) -> Option<TableAm> {
+        match relam {
+            HEAP_TABLE_AM_OID => Some(TableAm::Heap),
+            0 => None,
+            _ if is_registered_heap_am(relam) => Some(TableAm::Heap),
+            _ if is_registered_pgrcolumnar_am(relam) => Some(TableAm::Pgrcolumnar),
+            _ => None,
         }
     }
 }
@@ -310,11 +334,10 @@ pub fn register_heap_table_am(relam: Oid) {
 }
 
 thread_local! {
-    // pg_am oids whose amname is "pgrcolumnar" (the SQL-surface AM name for
-    // the pgrcolumnar engine; the pre-2026-08 name has NO alias — only this
-    // exact amname binds the engine. Closed-AM engine: handlers are
-    // never invoked, so pgrcolumnar is identified by name at relcache build —
-    // docs/design/pgrcolumnar-impl.md §7.1).
+    // pg_am oids whose amname is "pgrcolumnar" (one DDL-minted pg_am row;
+    // closed-AM name-probe registration at relcache build — handlers are
+    // never invoked). Cold second arm: the heap fast arm of TableAm::of is
+    // untouched.
     static PGRCOLUMNAR_AMS: std::cell::RefCell<Vec<Oid>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -324,45 +347,14 @@ fn is_registered_pgrcolumnar_am(relam: Oid) -> bool {
     PGRCOLUMNAR_AMS.with(|v| v.borrow().contains(&relam))
 }
 
-/// Registry probe by relam oid (vacuum/planner gates that hold a
-/// RelationData, not a Relation).
+/// Registry probe by relam oid (vacuum/DDL gates that hold a RelationData,
+/// not a Relation).
 pub fn is_pgrcolumnar_am_oid(relam: Oid) -> bool {
     relam != 0 && is_registered_pgrcolumnar_am(relam)
 }
 
 pub fn register_pgrcolumnar_table_am(relam: Oid) {
     PGRCOLUMNAR_AMS.with(|v| {
-        let mut v = v.borrow_mut();
-        if !v.contains(&relam) {
-            v.push(relam);
-        }
-    });
-}
-
-thread_local! {
-    // pg_am oids whose amname is "pgrcolumnar2" (lanev3 M3-H; O-M3-2 ruling:
-    // sibling AM name for the pgrcolumnar2 engine during coexistence, one
-    // DDL-minted pg_am row, count-ledger pinned; same closed-AM name-probe
-    // registration as PGRCOLUMNAR_AMS above — handlers are never invoked).
-    // Same cold/second-arm shape as the pgrcolumnar registry: the heap fast
-    // arm of TableAm::of is untouched (se-entrycost pairs unmoved).
-    static PGRCOLUMNAR2_AMS: std::cell::RefCell<Vec<Oid>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-#[cold]
-fn is_registered_pgrcolumnar2_am(relam: Oid) -> bool {
-    PGRCOLUMNAR2_AMS.with(|v| v.borrow().contains(&relam))
-}
-
-/// Registry probe by relam oid (vacuum/DDL gates that hold a RelationData,
-/// not a Relation) — the pgrcolumnar2 sibling of `is_pgrcolumnar_am_oid`.
-pub fn is_pgrcolumnar2_am_oid(relam: Oid) -> bool {
-    relam != 0 && is_registered_pgrcolumnar2_am(relam)
-}
-
-pub fn register_pgrcolumnar2_table_am(relam: Oid) {
-    PGRCOLUMNAR2_AMS.with(|v| {
         let mut v = v.borrow_mut();
         if !v.contains(&relam) {
             v.push(relam);
@@ -529,6 +521,8 @@ pub const VACOPT_PROCESS_TOAST: u32 = 0x80;
 pub const VACOPT_DISABLE_PAGE_SKIPPING: u32 = 0x100;
 pub const VACOPT_SKIP_DATABASE_STATS: u32 = 0x200;
 pub const VACOPT_ONLY_DATABASE_STATS: u32 = 0x400;
+/// `VACUUM (FULL, RENUMBER)`: a pgrcolumnar table's VACUUM FULL renumbers its row IDs whatever is left of them.
+pub const VACOPT_RENUMBER: u32 = 0x800;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(u32)]

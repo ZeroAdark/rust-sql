@@ -232,3 +232,91 @@ fn errposition_paths() {
     });
     free_executor_state(estate);
 }
+
+#[test]
+fn pending_foreign_inserts_flush_across_modify_states_in_enqueue_order() {
+    let _serial = serial();
+    fn flush(state: &mut dyn core::any::Any, estate: &mut EStateData<'_>) -> PgResult<()> {
+        let value = state.downcast_mut::<u64>().unwrap();
+        estate.es_processed = estate.es_processed * 10 + *value;
+        *value += 1;
+        Ok(())
+    }
+    let parent = root();
+    let mut estate = create_executor_state(&parent).unwrap();
+    estate.with_mut(|es| {
+        let a = es.register_foreign_modify(Box::new(1u64), Some(flush));
+        let b = es.register_foreign_modify(Box::new(4u64), Some(flush));
+        es.register_pending_foreign_insert(b);
+        es.register_pending_foreign_insert(a);
+        es.register_pending_foreign_insert(b);
+        es.flush_pending_foreign_inserts().unwrap();
+        assert_eq!(es.es_processed, 41);
+        es.flush_pending_foreign_inserts().unwrap();
+        assert_eq!(es.es_processed, 41);
+        es.register_pending_foreign_insert(a);
+        es.flush_pending_foreign_inserts().unwrap();
+        assert_eq!(es.es_processed, 412);
+        assert!(es.es_insert_pending_result_relations.is_empty());
+    });
+    free_executor_state(estate);
+}
+
+#[test]
+fn deferred_foreign_insert_error_follows_the_batch_flush() {
+    let _serial = serial();
+    fn flush(_state: &mut dyn core::any::Any, estate: &mut EStateData<'_>) -> PgResult<()> {
+        estate.es_processed += 2;
+        Ok(())
+    }
+    let parent = root();
+    let mut estate = create_executor_state(&parent).unwrap();
+    estate.with_mut(|es| {
+        let a = es.register_foreign_modify(Box::new(()), Some(flush));
+        es.register_pending_foreign_insert(a);
+        es.defer_foreign_insert_error(a, Box::new(PgError::error("first")));
+        es.defer_foreign_insert_error(a, Box::new(PgError::error("second")));
+        let err = es.flush_pending_foreign_inserts().unwrap_err();
+        assert_eq!(es.es_processed, 2, "the batch reaches the remote before the error");
+        assert_eq!(err.message(), "first");
+        es.es_insert_pending_result_relations.clear();
+        es.register_pending_foreign_insert(a);
+        es.flush_pending_foreign_inserts().unwrap();
+    });
+    free_executor_state(estate);
+}
+
+#[test]
+fn aux_context_delete_reuses_slot() {
+    let _serial = serial();
+    let parent = root();
+    let mut estate = create_executor_state(&parent).unwrap();
+    estate.with_mut(|es| {
+        let first = es.create_aux_context("HashBatchContext");
+        for _ in 0..1000 {
+            es.delete_aux_context(first);
+            assert_eq!(es.create_aux_context("HashBatchContext"), first);
+        }
+        assert_eq!(es.es_aux_contexts.len(), 1);
+        let second = es.create_aux_context("HashBatchContext");
+        assert_ne!(second, first);
+        es.delete_aux_context(first);
+        es.delete_aux_context(second);
+    });
+    free_executor_state(estate);
+}
+
+#[test]
+fn teardown_frees_global_heap_owner_buffers() {
+    let _serial = serial();
+    let parent = root();
+    let mut estate = create_executor_state(&parent).unwrap();
+    estate.with_mut(|es| {
+        es.es_execute_acl_funcs.push(1300);
+        es.teardown();
+        assert_eq!(es.es_execute_acl_funcs.capacity(), 0);
+        assert_eq!(es.es_jit_blocks.capacity(), 0);
+        assert!(es.owners_released());
+    });
+    free_executor_state(estate);
+}

@@ -29,7 +29,8 @@ fn get_mincount_for_mcv_list(samplerows: usize, totalrows: f64) -> f64 {
     let n = samplerows as f64;
     let nn = totalrows;
     let numer = n * (nn - n);
-    let denom = nn - n + 0.04 * n * (nn - 1.0);
+    // mcv.c:156 (D400)
+    let denom = fp_contract::fmadd(0.04 * n, nn - 1.0, nn - n);
     if denom == 0.0 {
         return 0.0;
     }
@@ -245,10 +246,10 @@ pub fn statext_mcv_serialize<'mcx>(
 
     let mut values: PgVec<'_, PgVec<'_, Datum>> = PgVec::new_in(mcx);
     let mut info: PgVec<'_, DimensionInfo> = mcx::vec_with_capacity_in(mcx, ndims)?;
-    let mut cmps: Vec<MultiSort> = Vec::with_capacity(ndims);
+    let mut cmps: Vec<MultiSort> = ::mcx::std_vec_with_capacity("statistics", ndims)?;
 
     for dim in 0..ndims {
-        let mut mss = MultiSort::init(1);
+        let mut mss = MultiSort::init(1)?;
         mss.add_dimension(stats[dim].attrtypid, stats[dim].attrcollid)?;
 
         let typlen = stats[dim].typlen;
@@ -775,4 +776,16 @@ fn alloc_aligned<'mcx>(mcx: Mcx<'mcx>, len: usize) -> PgResult<&'mcx mut [u8]> {
     core::mem::forget(v);
     // SAFETY: freshly zeroed arena words, len <= words*8, lives until reset.
     Ok(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
+}
+
+#[cfg(test)]
+mod fma_parity_tests {
+    use super::*;
+
+    #[test]
+    fn mincount_denominator_fused() {
+        let got = get_mincount_for_mcv_list(17559, 97706421.0);
+        let want = if cfg!(target_arch = "aarch64") { 0x4038_F5C1_05E7_8524u64 } else { 0x4038_F5C1_05E7_8522 };
+        assert_eq!(got.to_bits(), want);
+    }
 }

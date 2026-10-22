@@ -33,11 +33,13 @@ postgres_seams = { path = "../../../tcop/postgres_seams" }
 # Plain cargo dep on the DST P1 VFS leaf crate — no cycle, hence no registry
 # seam (AGENTS.md seam doctrine; DST P1 contract §1.1).
 vfs = { path = "../vfs" }
+pgrc_format = { path = "../../../access/pgrcolumnar/pgrc_format" }
 pg_string = { path = "../../../../common/string" }
 # hash_any (fileset.c ChooseTablespace) and INSTR_TIME_SET_CURRENT
 # (buffile.c track_io_timing).
 hashfn = { path = "../../../../common/hashfn" }
 pg_clock = { path = "../../../../port/pg_clock" }
+pgsync = { path = "../../../../_support/pgsync" }
 timeout = { path = "../../../utils/misc/timeout" }
 libc = "0.2"
 

@@ -35,12 +35,14 @@ pub use icu::{
 pub use chklocale::pg_get_encoding_from_locale;
 pub use lconv::{pglc_localeconv, PgLconv, CHAR_MAX};
 pub use locale_time::{cache_locale_time, LocalizedTimeNames};
-pub use libc_locale::{pg_tolower, pg_toupper, WcClass};
+pub use libc_locale::{
+    backend_isalpha, backend_toupper, pg_tolower, pg_toupper, with_backend_ctype, WcClass,
+};
 pub use setup::{
     assign_locale_messages, assign_locale_monetary, assign_locale_numeric, assign_locale_time,
     check_locale, check_locale_messages, check_locale_monetary, check_locale_numeric,
     check_locale_time, database_ctype_is_c, freeze_global_locale, pg_perm_setlocale,
-    set_database_ctype_is_c,
+    set_database_ctype_is_c, arm_database_ctype, capture_database_ctype, restore_database_ctype, DatabaseCtype,
 };
 
 pub use pg_database_seams::{COLLPROVIDER_BUILTIN, COLLPROVIDER_ICU, COLLPROVIDER_LIBC};
@@ -80,13 +82,17 @@ pub static C_LOCALE: PgLocale = PgLocale {
 };
 
 impl PgLocale {
+    pub fn ctype_identity(&self) -> (u8, bool, bool, usize) {
+        (self.provider, self.ctype_is_c, self.builtin_casemap_full, self.lt.id())
+    }
+
     // pg_strncoll (pg_locale.c): the ICU arm's failures are ereport(ERROR)s
     // (pg_locale_icu.c:489, :838-848), propagated as PgErrors.
     pub fn pg_strncoll(&self, arg1: &[u8], arg2: &[u8]) -> PgResult<i32> {
         debug_assert!(!self.collate_is_c, "pg_strncoll on a collate_is_c locale");
         if self.provider == COLLPROVIDER_LIBC {
             libc_locale::strncoll_buf_admission(arg1.len(), arg2.len())?;
-            Ok(libc_locale::strncoll_libc(arg1, arg2, self.lt))
+            libc_locale::strncoll_libc(arg1, arg2, self.lt)
         } else if self.provider == COLLPROVIDER_ICU {
             icu::strncoll(arg1, arg2, self.icu)
         } else {
@@ -94,6 +100,19 @@ impl PgLocale {
                 "pg_locale: pg_strncoll provider {} has no arm",
                 self.provider as char
             );
+        }
+    }
+
+    pub fn pg_strcoll(&self, arg1: &[u8], arg2: &[u8]) -> PgResult<i32> {
+        assert_eq!(arg1.last(), Some(&0));
+        assert_eq!(arg2.last(), Some(&0));
+        debug_assert!(!self.collate_is_c);
+        if self.provider == COLLPROVIDER_LIBC {
+            Ok(libc_locale::strcoll_libc(arg1, arg2, self.lt))
+        } else {
+            let arg1 = &arg1[..arg1.iter().position(|&b| b == 0).unwrap()];
+            let arg2 = &arg2[..arg2.iter().position(|&b| b == 0).unwrap()];
+            self.pg_strncoll(arg1, arg2)
         }
     }
 
@@ -106,7 +125,7 @@ impl PgLocale {
     pub fn pg_strnxfrm(&self, dest: &mut [u8], src: &[u8]) -> PgResult<usize> {
         debug_assert!(!self.collate_is_c, "pg_strnxfrm on a collate_is_c locale");
         if self.provider == COLLPROVIDER_LIBC {
-            Ok(libc_locale::strnxfrm_libc(dest, src, self.lt))
+            libc_locale::strnxfrm_libc(dest, src, self.lt)
         } else if self.provider == COLLPROVIDER_ICU {
             icu::strnxfrm(dest, src, self.icu)
         } else {
@@ -309,6 +328,8 @@ thread_local! {
     static DEFAULT_LOCALE_DB: Cell<Oid> = const { Cell::new(0) };
     static COLLATION_CACHE: RefCell<Option<CollationCache>> = const { RefCell::new(None) };
     static LAST_COLLATION_CACHE: Cell<Option<(Oid, &'static PgLocale)>> = const { Cell::new(None) };
+    static RESOLVED: Cell<&'static [(Oid, &'static PgLocale)]> = const { Cell::new(&[]) };
+    static ARMED_COLLATIONS: Cell<&'static [(Oid, &'static PgLocale)]> = const { Cell::new(&[]) };
 }
 
 // Test-only: regress-shaped C-locale default without a catalog.
@@ -347,6 +368,38 @@ pub fn default_locale_installed() -> bool {
     DEFAULT_LOCALE.with(Cell::get).is_some()
 }
 
+pub fn default_locale() -> Option<&'static PgLocale> {
+    DEFAULT_LOCALE.with(Cell::get)
+}
+
+pub fn arm_default_locale(locale: Option<&'static PgLocale>) {
+    DEFAULT_LOCALE.with(|d| d.set(locale));
+    DEFAULT_LOCALE_DB.set(init_small::globals::MyDatabaseId());
+}
+
+pub fn resolved_collations() -> PgResult<&'static [(Oid, &'static PgLocale)]> {
+    COLLATION_CACHE.with(|cell| {
+        let slot = cell.borrow();
+        let Some(cache) = slot.as_ref() else { return Ok(&[][..]) };
+        let have = RESOLVED.with(Cell::get);
+        if have.len() == cache.map.len() {
+            return Ok(have);
+        }
+        let v: Vec<(Oid, &'static PgLocale)> = cache.map.iter().map(|(o, l)| (*o, *l)).collect(); // alloc: Cold
+        let snap = mcx::slice_borrow_in(cache.mcx, &v)?;
+        RESOLVED.with(|r| r.set(snap));
+        Ok(snap)
+    })
+}
+
+/// Arm this thread with a leader's resolved collations (`resolved_collations`): a pool worker resolves them with no
+/// catalog access (its catcache is not registered). An empty slice disarms. A plain thread-local store: it neither
+/// allocates nor panics (`try_with`: a const-initialized cell without a destructor is never torn down, and a store after
+/// teardown would be moot), so a guard's drop may call it during an unwind.
+pub fn arm_collations(armed: &'static [(Oid, &'static PgLocale)]) {
+    let _ = ARMED_COLLATIONS.try_with(|a| a.set(armed));
+}
+
 #[track_caller]
 #[cold]
 fn cache_lookup_failed(collid: Oid) -> Box<PgError> {
@@ -381,6 +434,9 @@ pub fn pg_newlocale_from_collation(collid: Oid) -> PgResult<&'static PgLocale> {
             return Ok(entry);
         }
     }
+    if let Some(&(_, entry)) = ARMED_COLLATIONS.with(Cell::get).iter().find(|(o, _)| *o == collid) {
+        return Ok(entry);
+    }
 
     let entry = COLLATION_CACHE.with(|cell| {
         let mut slot = cell.borrow_mut();
@@ -390,6 +446,12 @@ pub fn pg_newlocale_from_collation(collid: Oid) -> PgResult<&'static PgLocale> {
             // LIFO: empty the droppy TLS cache before its context is freed.
             ::mcx::register_session_cleanup(Box::new(|| {
                 COLLATION_CACHE.with(|c| drop(c.borrow_mut().take()));
+                // D4682: the memos point into the cache's root, which the teardown frees (the default locale is
+                // interned there too, init_database_collation), so a reused thread's next session rebuilds them.
+                let _ = LAST_COLLATION_CACHE.try_with(|c| c.set(None));
+                let _ = RESOLVED.try_with(|c| c.set(&[]));
+                let _ = DEFAULT_LOCALE.try_with(|c| c.set(None));
+                let _ = DEFAULT_LOCALE_DB.try_with(|c| c.set(0));
             }));
             CollationCache {
                 mcx,
@@ -619,6 +681,12 @@ fn default_locale_mcx() -> Mcx<'static> {
             // LIFO: empty the droppy TLS cache before its context is freed.
             ::mcx::register_session_cleanup(Box::new(|| {
                 COLLATION_CACHE.with(|c| drop(c.borrow_mut().take()));
+                // D4682: the memos point into the cache's root, which the teardown frees (the default locale is
+                // interned there too, init_database_collation), so a reused thread's next session rebuilds them.
+                let _ = LAST_COLLATION_CACHE.try_with(|c| c.set(None));
+                let _ = RESOLVED.try_with(|c| c.set(&[]));
+                let _ = DEFAULT_LOCALE.try_with(|c| c.set(None));
+                let _ = DEFAULT_LOCALE_DB.try_with(|c| c.set(0));
             }));
             CollationCache {
                 mcx,
@@ -639,6 +707,10 @@ fn collation_actual_version(collprovider: u8, locale: &str) -> PgResult<Option<S
     } else if collprovider == COLLPROVIDER_LIBC {
         Ok(get_collation_actual_version_libc(locale))
     } else if collprovider == COLLPROVIDER_ICU {
+        // Without USE_ICU, C has no ICU arm here and returns NULL.
+        if icu_ffi::try_icu().is_none() {
+            return Ok(None);
+        }
         icu::get_collation_actual_version_icu(locale).map(Some)
     } else {
         Ok(None)
@@ -780,8 +852,9 @@ fn varstr_nondeterministic_hash(
     XFRM_SCRATCH.with(|cell| {
         let mut buf = cell.borrow_mut();
         let bsize = locale.pg_strnxfrm(&mut [], data)?;
+        nondeterministic_hash_buf_admission(bsize)?;
         buf.clear();
-        buf.resize(bsize + 1, 0);
+        ::mcx::std_vec_resize("pg_locale", &mut buf, bsize + 1, 0)?;
         let rsize = locale.pg_strnxfrm(&mut buf[..], data)?;
         if rsize > bsize {
             return Err(PgError::error("pg_strnxfrm() returned unexpected result").into());
@@ -792,6 +865,10 @@ fn varstr_nondeterministic_hash(
             Some(seed) => hashfn::hash_bytes_extended(&buf[..bsize + 1], seed),
         }))
     })
+}
+
+fn nondeterministic_hash_buf_admission(bsize: usize) -> PgResult<()> {
+    ::mcx::check_alloc_size(bsize + 1)
 }
 
 thread_local! {

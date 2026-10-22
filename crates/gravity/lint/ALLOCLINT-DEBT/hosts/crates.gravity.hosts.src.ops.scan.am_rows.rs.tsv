@@ -1,0 +1,12 @@
+path	crates/gravity/hosts/src/ops/scan/am_rows.rs
+growth	std::iter::Extend::extend	2
+growth	std::vec::Vec::push	5
+macro	std::vec	6
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	4
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::with_capacity	1
+method	str::to_ascii_lowercase	1
+type	std::boxed::Box	1
+type	std::sync::Arc	1
+type	std::vec::Vec	3

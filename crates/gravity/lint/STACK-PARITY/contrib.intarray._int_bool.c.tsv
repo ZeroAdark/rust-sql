@@ -1,0 +1,6 @@
+# PostgreSQL 18.6 contrib/intarray/_int_bool.c: 5 stack-depth check sites
+161	makepol	crates/contrib/intarray/src/boolquery.rs	WorkState::makepol	yes	
+268	execute	crates/contrib/intarray/src/boolquery.rs	execute	yes	
+365	contains_required_value	crates/contrib/intarray/src/boolquery.rs	contains_required_value	yes	
+457	findoprnd	crates/contrib/intarray/src/boolquery.rs	findoprnd	yes	
+614	infix	crates/contrib/intarray/src/boolquery.rs	infix	yes	

@@ -1525,9 +1525,7 @@ fn has_partition_attrs<'mcx>(
     Ok(false)
 }
 
-// get_translated_update_targetlist (appendinfo.c); FDW deparse consumer, kept
-// for the executor lane's contract.
-#[allow(dead_code)]
+// get_translated_update_targetlist (appendinfo.c).
 pub fn get_translated_update_targetlist<'mcx>(
     run: &mut PlannerRun<'mcx>,
     relid: u32,
@@ -1552,9 +1550,8 @@ pub fn get_translated_update_targetlist<'mcx>(
     for tle in &src {
         tl.lappend(mcx, adjust_appendrel_attrs_multilevel(run, tle, childrel, toprel)?)?;
     }
-    let colnos_src = crate::relnode::pgvec_clone_shallow(mcx, &run.root.update_colnos);
     let colnos =
-        adjust_inherited_attnums_multilevel(run, colnos_src.as_slice(), relid, result_relation)?;
+        adjust_inherited_attnums_multilevel(run, run.root.update_colnos, relid, result_relation)?;
     Ok((tl, colnos))
 }
 

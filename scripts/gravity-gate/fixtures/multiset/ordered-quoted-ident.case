@@ -1,0 +1,13 @@
+# ORDER BY a quoted output name
+sql: SELECT x AS "Val", y FROM t ORDER BY "Val";
+cols: Val	y
+class: ordered 1
+verdict: match
+[pg]
+1	a
+1	b
+2	c
+[got]
+1	b
+1	a
+2	c

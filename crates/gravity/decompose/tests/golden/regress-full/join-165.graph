@@ -1,0 +1,27 @@
+-- regress-full-join-165
+-- explain (costs off) select * from (select 1::int as id) as lhs full join (select dummy_source.id from (select null::int as id) as dummy_source left join (select a.id from a where a.id = 42) as sub on sub.id = dummy_source.id ) as rhs on lhs.id = rhs.id;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@1
+  source const
+  project (1=c23:null)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val
+p1 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1^
+  source const
+  project (1=c23:1)
+  probe slot=0 inner=n2 JOIN_FULL marks build-first keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.1))
+  outs 1=w4:val
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0 consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=0
+  drain matches=slot1 JOIN_FULL
+  project (1=outer.1, 2=inner.1)
+  outs 1=w4:val 2=w4:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+mapped: Result HashJoin Hash

@@ -1,0 +1,1 @@
+backend/access/heap/heapam/src/freeze.rs	FREEZE_MEMBER_SCRATCH	pgport	call	scratch	FreezeMultiXactId's member arrays: a wholesale context reset at each acquisition (C pallocs them in the caller's context)

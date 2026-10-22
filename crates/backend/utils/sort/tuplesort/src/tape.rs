@@ -1,6 +1,8 @@
 // tuplesort.c external-sort half: inittapes/dumptuples/mergeruns (balanced
 // k-way merge) + tape readtup/writetup per variant (tuplesortvariants.c).
-// Parallel (worker/leader) arms are unreachable: begin_* is serial-only.
+// Parallel sorts: a worker's tape set lives in the Sharedsort fileset and it
+// always freezes exactly one result run; the leader imports every worker's run
+// (leader_takeover_tapes) and merges them.
 use core::mem;
 
 use ::datum::Datum;
@@ -16,7 +18,7 @@ use sort_storage::{LogicalTapeSet, TapeIdx};
 use crate::SortComparator;
 use crate::{
     aset_chunk_space, cfi, trace_log, trace_sort, CmpCtx, ClusterTupleHeader, SortTuple, SortVariant,
-    TupSortStatus, TuplesortData, TRACE_WORKER, TUPLESORT_RANDOMACCESS,
+    TupSortStatus, TuplesortData, TUPLESORT_RANDOMACCESS,
 };
 
 pub(crate) const BLCKSZ: usize = 8192;
@@ -74,10 +76,17 @@ fn merge_read_buffer_size(
 }
 
 impl<'m> TuplesortData<'m> {
-    /// `inittapes` + `inittapestate`, serial arm (`mergeruns = true`).
-    pub(crate) fn inittapes(&mut self) -> PgResult<()> {
+    /// `inittapes` + `inittapestate`.
+    pub(crate) fn inittapes(&mut self, mergeruns: bool) -> PgResult<()> {
         debug_assert!(self.status == TupSortStatus::Initial);
-        let max_tapes = tuplesort_merge_order(self.allowed_mem);
+        debug_assert!(!self.is_leader());
+        let max_tapes = if mergeruns {
+            tuplesort_merge_order(self.allowed_mem)
+        } else {
+            // Workers can sometimes produce single run, output without merge.
+            debug_assert!(self.is_worker());
+            MINORDER
+        };
 
         let tape_space = max_tapes * TAPE_BUFFER_OVERHEAD;
         let memtuples_space =
@@ -89,15 +98,22 @@ impl<'m> TuplesortData<'m> {
 
         if trace_sort() {
             trace_log(format!(
-                "worker {TRACE_WORKER} switching to external sort with {max_tapes} tapes: {}",
+                "worker {} switching to external sort with {max_tapes} tapes: {}",
+                self.worker,
                 pg_rusage_show(&self.ru_start).as_str()
             ));
         }
 
-        let mut tapeset = LogicalTapeSet::create(self.mcx, false)?;
+        fd::PrepareTempTablespaces()?;
+        let mut tapeset = match &self.shared {
+            Some(shared) => {
+                LogicalTapeSet::create_worker(self.mcx, false, &shared.fileset, self.worker)?
+            }
+            None => LogicalTapeSet::create(self.mcx, false)?,
+        };
         let dest_tape = tapeset.create_tape();
         let mut output_tapes = PgVec::new_in(self.mcx);
-        output_tapes.reserve(max_tapes as usize);
+        ::mcx::pgvec_reserve(&mut output_tapes, max_tapes as usize)?;
         output_tapes.push(dest_tape);
 
         self.tapes = Some(Box::new(TapeState {
@@ -145,7 +161,8 @@ impl<'m> TuplesortData<'m> {
 
         if trace_sort() {
             trace_log(format!(
-                "worker {TRACE_WORKER} starting quicksort of run {current_run}: {}",
+                "worker {} starting quicksort of run {current_run}: {}",
+                self.worker,
                 pg_rusage_show(&self.ru_start).as_str()
             ));
         }
@@ -154,7 +171,8 @@ impl<'m> TuplesortData<'m> {
 
         if trace_sort() {
             trace_log(format!(
-                "worker {TRACE_WORKER} finished quicksort of run {current_run}: {}",
+                "worker {} finished quicksort of run {current_run}: {}",
+                self.worker,
                 pg_rusage_show(&self.ru_start).as_str()
             ));
         }
@@ -182,7 +200,8 @@ impl<'m> TuplesortData<'m> {
             // C: (currentRun - 1) % nOutputTapes + 1.
             let tape = (current_run - 1) % ts.output_tapes.len() as i32 + 1;
             trace_log(format!(
-                "worker {TRACE_WORKER} finished writing run {current_run} to tape {tape}: {}",
+                "worker {} finished writing run {current_run} to tape {tape}: {}",
+                self.worker,
                 pg_rusage_show(&self.ru_start).as_str()
             ));
         }
@@ -214,7 +233,7 @@ impl<'m> TuplesortData<'m> {
         ts.init_slab(slab_slots);
         self.avail_mem -= (slab_slots * SLAB_SLOT_SIZE) as i64;
 
-        ts.merge_heap.reserve(n_output_tapes);
+        ::mcx::pgvec_reserve(&mut ts.merge_heap, n_output_tapes)?;
         self.avail_mem -=
             aset_chunk_space(n_output_tapes * mem::size_of::<SortTuple>()) as i64;
 
@@ -222,11 +241,13 @@ impl<'m> TuplesortData<'m> {
         self.avail_mem = 0;
         if trace_sort() {
             trace_log(format!(
-                "worker {TRACE_WORKER} using {} KB of memory for tape buffers",
+                "worker {} using {} KB of memory for tape buffers",
+                self.worker,
                 ts.tape_buffer_mem / 1024
             ));
         }
         let ru_start = self.ru_start;
+        let is_worker = self.is_worker();
 
         loop {
             let (ts, ctx, sortopt, mcx) = self.tape_cmp_parts();
@@ -238,7 +259,7 @@ impl<'m> TuplesortData<'m> {
                 }
                 ts.input_tapes = mem::replace(&mut ts.output_tapes, PgVec::new_in(mcx));
                 ts.n_input_runs = ts.n_output_runs;
-                ts.output_tapes.reserve(ts.input_tapes.len());
+                ::mcx::pgvec_reserve(&mut ts.output_tapes, ts.input_tapes.len())?;
                 ts.n_output_runs = 0;
 
                 let input_buffer_size = merge_read_buffer_size(
@@ -264,6 +285,7 @@ impl<'m> TuplesortData<'m> {
 
                 if (sortopt & TUPLESORT_RANDOMACCESS) == 0
                     && ts.n_input_runs <= ts.input_tapes.len() as i64
+                    && !is_worker
                 {
                     ts.tapeset.forget_free_space();
                     dispatch_cmp!(ctx, |cmp| beginmerge(ts, &ctx, sortopt, mcx, cmp))?;
@@ -286,14 +308,100 @@ impl<'m> TuplesortData<'m> {
         let ts = self.tapes.as_mut().expect("mergeruns without tapes");
         let result_tape = ts.output_tapes[0];
         ts.result_tape = Some(result_tape);
-        ts.tapeset.freeze(result_tape)?;
+        if !is_worker {
+            ts.tapeset.freeze(result_tape)?;
+        } else {
+            self.worker_freeze_result_tape()?;
+        }
         self.status = TupSortStatus::SortedOnTape;
+        let ts = self.tapes.as_mut().expect("mergeruns without tapes");
 
         for i in 0..ts.input_tapes.len() {
             let t = ts.input_tapes[i];
             ts.tapeset.close_tape(t);
         }
         ts.input_tapes.clear();
+        Ok(())
+    }
+
+    /// `worker_freeze_result_tape`: freeze this worker's single result run
+    /// and publish it for the leader.
+    pub(crate) fn worker_freeze_result_tape(&mut self) -> PgResult<()> {
+        debug_assert!(self.is_worker());
+        debug_assert!(self.memtuples.is_empty());
+        self.memtuples = PgVec::new_in(self.mcx);
+        let ts = self.tapes.as_mut().expect("worker result without tapes");
+        let tape = ts.result_tape.expect("worker result tape chosen");
+        let output = ts.tapeset.freeze_shared(tape)?;
+        let shared = self.shared.as_ref().expect("worker sort without Sharedsort");
+        let mut st = shared.lock();
+        st.tapes[self.worker as usize] = output;
+        st.workers_finished += 1;
+        Ok(())
+    }
+
+    /// `worker_nomergeruns`: the alternative to mergeruns when the worker's
+    /// input already forms one run.
+    pub(crate) fn worker_nomergeruns(&mut self) -> PgResult<()> {
+        debug_assert!(self.is_worker());
+        let ts = self.tapes.as_mut().expect("worker result without tapes");
+        debug_assert!(ts.result_tape.is_none());
+        debug_assert!(ts.n_output_runs == 1);
+        ts.result_tape = Some(ts.dest_tape);
+        self.worker_freeze_result_tape()
+    }
+
+    /// `leader_takeover_tapes`: import every worker's result run, leaving the
+    /// leader as if it had built those runs itself.
+    pub(crate) fn leader_takeover_tapes(&mut self) -> PgResult<()> {
+        debug_assert!(self.is_leader());
+        let n_participants = self.n_participants;
+        debug_assert!(n_participants >= 1);
+        let shared = self.shared.clone().expect("leader sort without Sharedsort");
+        let mut shares = PgVec::new_in(self.mcx);
+        {
+            let st = shared.lock();
+            if st.workers_finished != n_participants {
+                return Err(Box::new(PgError::error(
+                    "cannot take over tapes before all workers finish",
+                )));
+            }
+            ::mcx::pgvec_reserve(&mut shares, n_participants as usize)?;
+            shares.extend_from_slice(&st.tapes[..n_participants as usize]);
+        }
+
+        let tape_space = i64::from(n_participants) * TAPE_BUFFER_OVERHEAD;
+        let memtuples_space =
+            aset_chunk_space(self.memtuples.capacity() * mem::size_of::<SortTuple>()) as i64;
+        if tape_space + memtuples_space < self.allowed_mem {
+            self.avail_mem -= tape_space;
+        }
+        fd::PrepareTempTablespaces()?;
+        let (tapeset, imported) = LogicalTapeSet::create_leader(self.mcx, &shared.fileset, &shares)?;
+        let mut output_tapes = PgVec::new_in(self.mcx);
+        ::mcx::pgvec_reserve(&mut output_tapes, imported.len())?;
+        output_tapes.extend_from_slice(&imported);
+        let dest_tape = output_tapes[0];
+
+        self.tapes = Some(Box::new(TapeState {
+            tapeset,
+            max_tapes: i64::from(n_participants),
+            current_run: n_participants,
+            input_tapes: PgVec::new_in(self.mcx),
+            n_input_runs: 0,
+            output_tapes,
+            n_output_runs: i64::from(n_participants),
+            dest_tape,
+            result_tape: None,
+            tape_buffer_mem: 0,
+            slab_arena: PgVec::new_in(self.mcx),
+            slab_free_head: core::ptr::null_mut(),
+            merge_heap: PgVec::new_in(self.mcx),
+            last_returned: core::ptr::null_mut(),
+            markpos_block: 0,
+        }));
+        self.memtuples.clear();
+        self.status = TupSortStatus::BuildRuns;
         Ok(())
     }
 
@@ -459,7 +567,7 @@ impl<'m> TapeState<'m> {
             return;
         }
         let words = num_slots * SLAB_SLOT_SIZE / 8;
-        self.slab_arena.reserve(words);
+        let _ = self.slab_arena.try_reserve(words);
         self.slab_arena.resize(words, 0);
         let base = self.slab_arena.as_mut_ptr().cast::<u8>();
         // SAFETY: writes at slot boundaries within the num_slots*1024 arena.

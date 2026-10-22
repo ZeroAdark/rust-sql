@@ -1,0 +1,255 @@
+Parsed test spec with 3 sessions
+
+starting permutation: wt uf c2 c1 read
+step wt: UPDATE t669 SET v = v + 1000, note = 'a2' WHERE id = 1;
+step uf: UPDATE t669 t SET v = t.v + s.delta FROM s669 s WHERE t.id = s.id AND s.id IN (1, 2) RETURNING t.id, t.v, s.delta, s.tag, t.note; <waiting ...>
+step c2: COMMIT;
+step uf: <... completed>
+id|   v|delta|tag|note
+--+----+-----+---+----
+ 1|1110|   10|s1 |a2  
+ 2| 220|   20|s2 |b   
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|   v|note
+--+----+----
+ 1|1110|a2  
+ 2| 220|b   
+ 3| 300|c   
+ 4| 400|d   
+(4 rows)
+
+
+starting permutation: wts uf c2 c1 read
+step wts: UPDATE t669 SET v = v + 1000 WHERE id = 1; UPDATE s669 SET delta = delta + 7, tag = 's1new' WHERE id = 1;
+step uf: UPDATE t669 t SET v = t.v + s.delta FROM s669 s WHERE t.id = s.id AND s.id IN (1, 2) RETURNING t.id, t.v, s.delta, s.tag, t.note; <waiting ...>
+step c2: COMMIT;
+step uf: <... completed>
+id|   v|delta|tag|note
+--+----+-----+---+----
+ 1|1110|   10|s1 |a   
+ 2| 220|   20|s2 |b   
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|   v|note
+--+----+----
+ 1|1110|a   
+ 2| 220|b   
+ 3| 300|c   
+ 4| 400|d   
+(4 rows)
+
+
+starting permutation: wtm uf c2 c1 read
+step wtm: UPDATE t669 SET id = 11 WHERE id = 1;
+step uf: UPDATE t669 t SET v = t.v + s.delta FROM s669 s WHERE t.id = s.id AND s.id IN (1, 2) RETURNING t.id, t.v, s.delta, s.tag, t.note; <waiting ...>
+step c2: COMMIT;
+step uf: <... completed>
+id|  v|delta|tag|note
+--+---+-----+---+----
+ 2|220|   20|s2 |b   
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|  v|note
+--+---+----
+ 2|220|b   
+ 3|300|c   
+ 4|400|d   
+11|100|a   
+(4 rows)
+
+
+starting permutation: wt uv c2 c1 read
+step wt: UPDATE t669 SET v = v + 1000, note = 'a2' WHERE id = 1;
+step uv: UPDATE t669 t SET v = t.v + x.d FROM (VALUES (1, 5, 'x1'), (2, 6, 'x2')) x(id, d, tag) WHERE t.id = x.id RETURNING t.id, t.v, x.d, x.tag; <waiting ...>
+step c2: COMMIT;
+step uv: <... completed>
+id|   v|d|tag
+--+----+-+---
+ 1|1105|5|x1 
+ 2| 206|6|x2 
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|   v|note
+--+----+----
+ 1|1105|a2  
+ 2| 206|b   
+ 3| 300|c   
+ 4| 400|d   
+(4 rows)
+
+
+starting permutation: wts uv c2 c1 read
+step wts: UPDATE t669 SET v = v + 1000 WHERE id = 1; UPDATE s669 SET delta = delta + 7, tag = 's1new' WHERE id = 1;
+step uv: UPDATE t669 t SET v = t.v + x.d FROM (VALUES (1, 5, 'x1'), (2, 6, 'x2')) x(id, d, tag) WHERE t.id = x.id RETURNING t.id, t.v, x.d, x.tag; <waiting ...>
+step c2: COMMIT;
+step uv: <... completed>
+id|   v|d|tag
+--+----+-+---
+ 1|1105|5|x1 
+ 2| 206|6|x2 
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|   v|note
+--+----+----
+ 1|1105|a   
+ 2| 206|b   
+ 3| 300|c   
+ 4| 400|d   
+(4 rows)
+
+
+starting permutation: wt du c2 c1 read
+step wt: UPDATE t669 SET v = v + 1000, note = 'a2' WHERE id = 1;
+step du: DELETE FROM t669 t USING s669 s WHERE t.id = s.id AND s.id IN (1, 2) RETURNING t.id, t.v, s.delta, s.tag; <waiting ...>
+step c2: COMMIT;
+step du: <... completed>
+id|   v|delta|tag
+--+----+-----+---
+ 1|1100|   10|s1 
+ 2| 200|   20|s2 
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|  v|note
+--+---+----
+ 3|300|c   
+ 4|400|d   
+(2 rows)
+
+
+starting permutation: wts du c2 c1 read
+step wts: UPDATE t669 SET v = v + 1000 WHERE id = 1; UPDATE s669 SET delta = delta + 7, tag = 's1new' WHERE id = 1;
+step du: DELETE FROM t669 t USING s669 s WHERE t.id = s.id AND s.id IN (1, 2) RETURNING t.id, t.v, s.delta, s.tag; <waiting ...>
+step c2: COMMIT;
+step du: <... completed>
+id|   v|delta|tag
+--+----+-----+---
+ 1|1100|   10|s1 
+ 2| 200|   20|s2 
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|  v|note
+--+---+----
+ 3|300|c   
+ 4|400|d   
+(2 rows)
+
+
+starting permutation: wtm du c2 c1 read
+step wtm: UPDATE t669 SET id = 11 WHERE id = 1;
+step du: DELETE FROM t669 t USING s669 s WHERE t.id = s.id AND s.id IN (1, 2) RETURNING t.id, t.v, s.delta, s.tag; <waiting ...>
+step c2: COMMIT;
+step du: <... completed>
+id|  v|delta|tag
+--+---+-----+---
+ 2|200|   20|s2 
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|  v|note
+--+---+----
+ 3|300|c   
+ 4|400|d   
+11|100|a   
+(3 rows)
+
+
+starting permutation: wt mu c2 c1 read
+step wt: UPDATE t669 SET v = v + 1000, note = 'a2' WHERE id = 1;
+step mu: MERGE INTO t669 t USING s669 s ON t.id = s.id WHEN MATCHED AND t.id IN (1, 2) THEN UPDATE SET v = t.v + s.delta RETURNING merge_action(), t.id, t.v, s.delta, s.tag; <waiting ...>
+step c2: COMMIT;
+step mu: <... completed>
+merge_action|id|   v|delta|tag
+------------+--+----+-----+---
+UPDATE      | 1|1110|   10|s1 
+UPDATE      | 2| 220|   20|s2 
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|   v|note
+--+----+----
+ 1|1110|a2  
+ 2| 220|b   
+ 3| 300|c   
+ 4| 400|d   
+(4 rows)
+
+
+starting permutation: wts mu c2 c1 read
+step wts: UPDATE t669 SET v = v + 1000 WHERE id = 1; UPDATE s669 SET delta = delta + 7, tag = 's1new' WHERE id = 1;
+step mu: MERGE INTO t669 t USING s669 s ON t.id = s.id WHEN MATCHED AND t.id IN (1, 2) THEN UPDATE SET v = t.v + s.delta RETURNING merge_action(), t.id, t.v, s.delta, s.tag; <waiting ...>
+step c2: COMMIT;
+step mu: <... completed>
+merge_action|id|   v|delta|tag
+------------+--+----+-----+---
+UPDATE      | 1|1110|   10|s1 
+UPDATE      | 2| 220|   20|s2 
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|   v|note
+--+----+----
+ 1|1110|a   
+ 2| 220|b   
+ 3| 300|c   
+ 4| 400|d   
+(4 rows)
+
+
+starting permutation: wtm mu c2 c1 read
+step wtm: UPDATE t669 SET id = 11 WHERE id = 1;
+step mu: MERGE INTO t669 t USING s669 s ON t.id = s.id WHEN MATCHED AND t.id IN (1, 2) THEN UPDATE SET v = t.v + s.delta RETURNING merge_action(), t.id, t.v, s.delta, s.tag; <waiting ...>
+step c2: COMMIT;
+step mu: <... completed>
+merge_action|id|  v|delta|tag
+------------+--+---+-----+---
+UPDATE      | 2|220|   20|s2 
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|  v|note
+--+---+----
+ 2|220|b   
+ 3|300|c   
+ 4|400|d   
+11|100|a   
+(4 rows)
+
+
+starting permutation: wts md c2 c1 read
+step wts: UPDATE t669 SET v = v + 1000 WHERE id = 1; UPDATE s669 SET delta = delta + 7, tag = 's1new' WHERE id = 1;
+step md: MERGE INTO t669 t USING s669 s ON t.id = s.id WHEN MATCHED AND t.id IN (1, 2) THEN DELETE RETURNING merge_action(), t.id, t.v, s.tag; <waiting ...>
+step c2: COMMIT;
+step md: <... completed>
+merge_action|id|   v|tag
+------------+--+----+---
+DELETE      | 1|1100|s1 
+DELETE      | 2| 200|s2 
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM t669 ORDER BY id;
+id|  v|note
+--+---+----
+ 3|300|c   
+ 4|400|d   
+(2 rows)
+

@@ -1,0 +1,11 @@
+pl/plpgsql/src/exec.rs	EXPR_PLANS	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	SIMPLE_CARRY	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	CALL_TARGETS	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	EXIT_RELEASE_REGISTERED	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	ACCEPT_ARRAY_RESULT	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	SESSION_CASTS	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	SESSION_CAST_GEN	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	SESSION_CASTS_RESET	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	SESSION_CAST_CALLBACKS	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	LIVE_SPI_EXPR	isojoin	owner, reset, carry
+pl/plpgsql/src/exec.rs	COMP_BY_NAME	isojoin	owner, reset, carry

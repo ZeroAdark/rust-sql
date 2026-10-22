@@ -96,16 +96,16 @@ fn guc_accessors_route_to_thread_state() {
 fn activity_truncates_at_buffer_bound() {
     setup();
     init_ps_display(Some("trunc backend"));
-    let long = "x".repeat(PS_BUFFER_SIZE * 2);
+    let long = "x".repeat(ps_buffer_size() * 2);
     set_ps_display(&long);
     let a = activity();
-    assert_eq!(a.len(), PS_BUFFER_SIZE - 1 - "postgres: trunc backend ".len());
+    assert_eq!(a.len(), ps_buffer_size() - 1 - "postgres: trunc backend ".len());
     assert!(a.bytes().all(|b| b == b'x'));
 
     set_ps_display("SELECT");
-    let suffix = "y".repeat(PS_BUFFER_SIZE * 2);
+    let suffix = "y".repeat(ps_buffer_size() * 2);
     set_ps_display_suffix(&suffix);
-    assert_eq!(full_title().len(), PS_BUFFER_SIZE - 1);
+    assert_eq!(full_title().len(), ps_buffer_size() - 1);
     set_ps_display_remove_suffix();
     assert_eq!(activity(), "SELECT");
 }
@@ -120,4 +120,14 @@ fn seams_route_to_crate() {
     assert_eq!(activity(), "startup waiting");
     ps_status_seams::set_ps_display_remove_suffix::call();
     assert_eq!(activity(), "startup");
+}
+
+// PS_USE_CLOBBER_ARGV: the buffer spans the argv+environ area, so a long
+// cluster_name prefix still leaves room for the activity (%i).
+#[test]
+fn buffer_spans_argv_and_environ_area() {
+    setup();
+    let area: usize = std::env::args_os().map(|a| a.len() + 1).sum::<usize>()
+        + std::env::vars_os().map(|(k, v)| k.len() + v.len() + 2).sum::<usize>();
+    assert_eq!(ps_buffer_size(), (area - 1).min(PS_BUFFER_MAX));
 }

@@ -1,0 +1,10 @@
+-- regress-full-arrays-077
+-- SELECT op, width_bucket(op, ARRAY[1, 3, 5, 10]) AS wb_1 FROM generate_series(0,11) as op;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, c23:11)]
+  project (1=v1.1, 2=fn3218(v1.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x03\x00\x00\x00\x05\x00\x00\x00\x0a\x00\x00\x00'))
+  outs 1=w4:val 2=w4:val
+mapped: FunctionScan

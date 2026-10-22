@@ -1,0 +1,10 @@
+-- srf-024
+-- SELECT * FROM generate_series(timestamp '2024-01-01', timestamp '2024-01-03', interval '1 day') d;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesTime { tz: false } fn938 fn938(c1114:757382400000000, c1114:757555200000000, c1186:#16)]
+  project (1=v1.1)
+  outs 1=w8:val
+mapped: FunctionScan

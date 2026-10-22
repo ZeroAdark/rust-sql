@@ -1,0 +1,10 @@
+-- regress-full-numeric-025
+-- SELECT x, width_bucket(x::float8, 10, 100, 9) as flt, width_bucket(x::numeric, 10, 100, 9) as num FROM generate_series(0, 110, 10) x;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: true } fn1066 fn1066(c23:0, c23:110, c23:10)]
+  project (1=v1.1, 2=fn320(fn316(v1.1), c701:4621819117588971520, c701:4636737291354636288, c23:9), 3=fn2170(fn1740(v1.1), c1700:'\x00\x80\x0a\x00', c1700:'\x00\x80d\x00', c23:9))
+  outs 1=w4:val 2=w4:val 3=w4:val
+mapped: FunctionScan

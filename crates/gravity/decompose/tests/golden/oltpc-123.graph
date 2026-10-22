@@ -1,0 +1,15 @@
+-- oltpc-123
+-- UPDATE customer SET c_delivery_cnt = c_delivery_cnt + 1 WHERE c_w_id = $1 AND c_d_id = $2 AND c_id = $3 /* C96 update int2 col on a 2-index table */
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16384 rti=1 am=heap index=16410
+    key att=3 op=96 value=$1
+    key att=4 op=94 value=$2
+    key att=2 op=96 value=$3
+    recheck (op96(v1.3, $1), op94(v1.4, $2), op96(v1.2, $3))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byref8:vl:win/page Attr(8):byref8:vl:win/page Attr(9):byref8:vl:win/page Attr(10):byref8:vl:win/page Attr(11):byref8:vl:win/page Attr(12):byref8:vl:win/page Attr(13):byref8:vl:win/page Attr(14):byref8:vl:win/page Attr(15):byref8:vl:win/page Attr(16):byref8:vl:win/page Attr(17):byref8:vl:win/page Attr(18):byref8:vl:win/page Attr(19):byref8:vl:win/page Attr(20):byref8:vl:win/page Attr(21):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=fn314(op552(v1.6, c23:1)), 2j=v1.-1, 3j=v1.1, 4j=v1.2, 5j=v1.3, 6j=v1.4, 7j=v1.5, 8j=v1.7, 9j=v1.8, 10j=v1.9, 11j=v1.10, 12j=v1.11, 13j=v1.12, 14j=v1.13, 15j=v1.14, 16j=v1.15, 17j=v1.16, 18j=v1.17, 19j=v1.18, 20j=v1.19, 21j=v1.20, 22j=v1.21)
+  write UPDATE rel=16384 rti=1 natts=21 indexes=(16410[3, 4, 2]up, 16517[3, 4, 9, 7, 2]u) set=(6)
+  outs 1=w2:val 2=fx6:row 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=vl:win/page 9=vl:win/page 10=vl:win/page 11=vl:win/page 12=vl:win/page 13=vl:win/page 14=vl:win/page 15=vl:win/page 16=vl:win/page 17=vl:win/page 18=vl:win/page 19=vl:win/page 20=vl:win/page 21=vl:win/page 22=vl:win/page
+mapped: ModifyTable IndexScan

@@ -1,0 +1,11 @@
+# LIMIT without ORDER BY and no unlimited result: strict multiset against PG
+sql: SELECT x FROM t LIMIT 2;
+cols: x
+class: limited
+verdict: mismatch
+[pg]
+1
+2
+[got]
+3
+1

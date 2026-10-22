@@ -320,8 +320,8 @@ fn bt_page_print_tuple(
     // C fills fixed nine-slot arrays and heap_form_tuple consumes as many as
     // the declared result type has (btreefuncs.c:487).
     let natts = tupdesc.natts as usize;
-    let mut values = vec![Datum::null(); natts.max(9)];
-    let mut nulls = vec![false; natts.max(9)];
+    let mut values = ::mcx::std_vec_from_elem("contrib", Datum::null(), natts.max(9))?;
+    let mut nulls = ::mcx::std_vec_from_elem("contrib", false, natts.max(9))?;
     let mut j = 0usize;
 
     let t_info = unsafe { nbtree::itup::t_info(itup) };
@@ -389,7 +389,8 @@ fn bt_page_print_tuple(
             "invalid tuple length {dlen} for tuple at offset number {offnum}"
         ))));
     }
-    let mut dump = String::with_capacity(dlen * 3);
+    let mut dump = String::new();
+    dump.try_reserve(dlen * 3).map_err(|_| ::mcx::oom_named("pageinspect", dlen * 3))?;
     for (k, byte) in b[pos + data_off..pos + data_off + dlen].iter().enumerate() {
         if k > 0 {
             dump.push(' ');
@@ -426,7 +427,7 @@ fn bt_page_print_tuple(
 
     if is_posting {
         let nposting = unsafe { nbtree::itup::bt_tuple_get_nposting(itup) };
-        let mut tids = Vec::with_capacity(nposting);
+        let mut tids = ::mcx::std_vec_with_capacity("contrib", nposting)?;
         for n in 0..nposting {
             let ip = unsafe { nbtree::itup::bt_tuple_get_posting_n(itup, n) };
             tids.push(tid_datum(mcx, &tid_bytes(ip))?);
@@ -616,7 +617,6 @@ pub(crate) fn fc_bt_metap(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
     }
 
     let page = read_rel_page(&rel, 0)?;
-    rel.close(types_rel::AccessShareLock)?;
     let b = page.bytes();
 
     // BTMetaPageData at PageGetContents.
@@ -665,5 +665,8 @@ pub(crate) fn fc_bt_metap(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
         values.push(Some("f".into()));
     }
 
-    cstrings_composite_result(mcx, &tupdesc, &values)
+    // btreefuncs.c:934: the index stays locked through the conversion.
+    let result = cstrings_composite_result(mcx, &tupdesc, &values);
+    rel.close(types_rel::AccessShareLock)?;
+    result
 }

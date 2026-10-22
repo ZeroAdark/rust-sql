@@ -2,8 +2,7 @@
 //! owners are the resowner unit's RAII owner values called directly
 //! (`has_resource_owner` keeps the C control flow); the
 //! `MemoryContextSwitchTo`/`priorContext` choreography dissolves (no ambient
-//! context); `AtEOXact_HashTables` dissolves (no dynahash seq-scan tracking
-//! over PgHashMap); transaction-lifetime collections are std `Vec`/`String`
+//! context); transaction-lifetime collections are std `Vec`/`String`
 //! with fallible reserves (see state.rs).
 
 #![allow(non_snake_case)]
@@ -16,7 +15,7 @@ use mcx::MemoryContext;
 use types_core::xact::*;
 use types_core::{TimestampTz, TransactionId, XLogRecPtr};
 use types_resowner::{
-    RESOURCE_RELEASE_AFTER_LOCKS, RESOURCE_RELEASE_BEFORE_LOCKS, RESOURCE_RELEASE_LOCKS,
+    ResourceOwner, RESOURCE_RELEASE_AFTER_LOCKS, RESOURCE_RELEASE_BEFORE_LOCKS, RESOURCE_RELEASE_LOCKS,
 };
 use types_error::{
     ErrorLocation, PgError, PgResult, DEBUG5, ERRCODE_ACTIVE_SQL_TRANSACTION,
@@ -35,7 +34,7 @@ mod wal;
 mod tests;
 
 pub(crate) use state::{xs, xs_ptr, TransactionNode, XsPtr};
-pub use state::session_mem_teardown;
+pub use state::{session_mem_teardown, thread_exit_teardown, with_cur_transaction_context};
 
 pub use engine::{
     AbortCurrentTransaction, AbortOutOfAnyTransaction, BeginImplicitTransactionBlock,
@@ -293,8 +292,6 @@ pub fn AssignTransactionId() -> PgResult<()> {
 
 /// `AssignTransactionId` core, on stack index `idx` (the C argument `s`).
 fn assign_transaction_id_at(idx: usize) -> PgResult<()> {
-    let is_subxact = idx > 0;
-
     debug_assert!(!xs(|s| s.node(idx).full_transaction_id.is_valid()));
     debug_assert!(xs(|s| s.node(idx).state == TRANS_INPROGRESS));
 
@@ -305,20 +302,54 @@ fn assign_transaction_id_at(idx: usize) -> PgResult<()> {
             .finish(xact_location("AssignTransactionId"));
     }
 
-    if is_subxact && !xs(|s| s.node(idx - 1).full_transaction_id.is_valid()) {
-        let mut parents = Vec::new();
-        let mut p = idx;
-        while p > 0 && !xs(|s| s.node(p - 1).full_transaction_id.is_valid()) {
-            parents
-                .try_reserve(1)
-                .map_err(|_| PgError::error("out of memory assigning transaction IDs"))?;
-            parents.push(p - 1);
-            p -= 1;
-        }
-        while let Some(parent_idx) = parents.pop() {
-            assign_transaction_id_at(parent_idx)?;
-        }
+    // Ancestors without an XID are assigned first, top-down (xact.c:667-692).
+    let mut lowest = idx;
+    while lowest > 0 && !xs(|s| s.node(lowest - 1).full_transaction_id.is_valid()) {
+        lowest -= 1;
     }
+
+    // The XID lock must land on each level's own curTransactionOwner (not
+    // whatever CurrentResourceOwner happens to be), else it is released by
+    // the wrong owner on (sub)abort and double-released at subcommit. The
+    // owner tree mirrors the stack, so level k's owner is the
+    // (top - k)-th ancestor of the live CurTransactionResourceOwner; one walk
+    // up the tree yields every owner in [lowest, idx], as C's O(1)
+    // s->curTransactionOwner does per level.
+    let mut owners: Vec<ResourceOwner> = Vec::new();
+    owners
+        .try_reserve(idx - lowest + 1)
+        .map_err(|_| PgError::error("out of memory assigning transaction IDs"))?;
+    let base = resowner::CurTransactionResourceOwner();
+    if !base.is_null() {
+        let top = xs(|s| s.stack_len() - 1);
+        let mut owner = base;
+        let mut overshoot = false;
+        for level in (lowest..=top).rev() {
+            if level <= idx {
+                owners.push(if overshoot { base } else { owner });
+            }
+            if level > lowest && !overshoot {
+                let parent = resowner::ResourceOwnerGetParent(owner);
+                if parent.is_null() {
+                    // Keep the deepest owner rather than installing NULL.
+                    overshoot = true;
+                } else {
+                    owner = parent;
+                }
+            }
+        }
+        owners.reverse();
+    }
+
+    for level in lowest..=idx {
+        let owner = owners.get(level - lowest).copied();
+        assign_one_transaction_id(level, owner)?;
+    }
+    Ok(())
+}
+
+fn assign_one_transaction_id(idx: usize, owner: Option<ResourceOwner>) -> PgResult<()> {
+    let is_subxact = idx > 0;
 
     let log_unknown_top = is_subxact
         && xlog_seams::xlog_logical_info_active::call()
@@ -341,27 +372,8 @@ fn assign_transaction_id_at(idx: usize) -> PgResult<()> {
         predicate_seams::register_predicate_locking_xid::call(full.xid())?;
     }
 
-    // The XID lock must land on transaction idx's own curTransactionOwner
-    // (not whatever CurrentResourceOwner happens to be), else it is released
-    // by the wrong owner on (sub)abort and double-released at subcommit.
-    // When ancestors were just assigned above, each got its own owner: the
-    // owner tree mirrors the stack, so idx's owner is the (deepest-idx)-th
-    // ancestor of the live CurTransactionResourceOwner.
-    let levels_up = xs(|s| (s.stack_len() - 1 - idx) as u32);
     let prev_owner = resowner::CurrentResourceOwner();
-    let base = resowner::CurTransactionResourceOwner();
-    if !base.is_null() {
-        let mut owner = base;
-        for _ in 0..levels_up {
-            let parent = resowner::ResourceOwnerGetParent(owner);
-            if parent.is_null() {
-                // The owner tree mirrors the transaction stack; keep the
-                // deepest owner rather than installing NULL on overshoot.
-                owner = base;
-                break;
-            }
-            owner = parent;
-        }
+    if let Some(owner) = owner {
         resowner::SetCurrentResourceOwner(owner);
     }
     let insert_result = lmgr::XactLockTableInsert(full.xid());
@@ -450,6 +462,15 @@ pub fn SetParallelStartTimestamps(xact_ts: TimestampTz, stmt_ts: TimestampTz) {
     });
 }
 
+pub fn ArmClaimStartTimestamps(xact_ts: TimestampTz, stmt_ts: TimestampTz) -> (TimestampTz, TimestampTz) {
+    xs(|s| {
+        let prev = (s.xact_start_timestamp, s.stmt_start_timestamp);
+        s.xact_start_timestamp = xact_ts;
+        s.stmt_start_timestamp = stmt_ts;
+        prev
+    })
+}
+
 pub fn GetCurrentTransactionStartTimestamp() -> TimestampTz {
     xs(|s| s.xact_start_timestamp)
 }
@@ -479,6 +500,18 @@ pub fn GetCurrentTransactionNestLevel() -> i32 {
     let v = state::mirror_nest_level();
     debug_assert_eq!(v, xs(|s| s.current().nesting_level));
     v
+}
+
+pub fn enter_section_xids(xids: &[TransactionId]) {
+    xs(|s| {
+        s.parallel_current_xids.clear();
+        s.parallel_current_xids.extend_from_slice(xids);
+        s.parallel_current_xids.sort_unstable();
+    })
+}
+
+pub fn leave_section_xids() {
+    xs(|s| s.parallel_current_xids.clear())
 }
 
 pub fn TransactionIdIsCurrentTransactionId(xid: TransactionId) -> bool {
@@ -600,10 +633,14 @@ pub(crate) fn AtStart_Cache() -> PgResult<()> {
 pub(crate) fn AtStart_Memory(xp: XsPtr) {
     xp.with(|s| {
         if s.transaction_abort_context.is_none() {
-            s.transaction_abort_context = Some(MemoryContext::new("TransactionAbortContext"));
+            let c = MemoryContext::new("TransactionAbortContext");
+            c.set_owner_session();
+            s.transaction_abort_context = Some(c);
         }
         if s.top_transaction_context.is_none() {
-            s.top_transaction_context = Some(MemoryContext::new("TopTransactionContext"));
+            let c = MemoryContext::new("TopTransactionContext");
+            c.set_owner_session();
+            s.top_transaction_context = Some(c);
         }
     });
 }
@@ -614,6 +651,12 @@ pub(crate) fn AtStart_Memory(xp: XsPtr) {
 thread_local! {
     static POOLED_TOP_OWNER: core::cell::Cell<types_resowner::ResourceOwner> =
         const { core::cell::Cell::new(types_resowner::ResourceOwner::NULL) };
+}
+
+/// D4682: the pooled owner is a handle into the owner arena the session teardown drops (resowner::session_mem_teardown);
+/// a reused backend thread's next session must not start transactions under it.
+pub(crate) fn forget_pooled_top_owner() {
+    POOLED_TOP_OWNER.set(types_resowner::ResourceOwner::NULL);
 }
 
 pub fn ResourceOwnerBoundaryIssue() -> Option<&'static str> {
@@ -649,7 +692,7 @@ pub(crate) fn AtSubStart_Memory() {
                 .as_ref()
                 .or(s.top_transaction_context.as_ref())
                 .expect("CurTransactionContext exists for the parent");
-            parent_ctx.new_child("CurTransactionContext")
+            parent_ctx.new_child_lazy("CurTransactionContext")
         };
         s.node_mut(idx).cur_transaction_context = Some(child);
     });
@@ -712,6 +755,7 @@ pub(crate) fn delete_transaction_owner() -> PgResult<()> {
     }
     resowner::SetCurTransactionResourceOwner(types_resowner::ResourceOwner::NULL);
     resowner::SetTopTransactionResourceOwner(types_resowner::ResourceOwner::NULL);
+    resowner::trim_owner_arena();
     Ok(())
 }
 
@@ -733,6 +777,7 @@ fn AtCCI_LocalCache() -> PgResult<()> {
 
 pub(crate) fn AtCommit_Memory(xp: XsPtr) {
     xp.with(|s| {
+        s.release_sub_stack();
         s.node_mut(0).retained_child_contexts.clear();
         if let Some(ctx) = s.top_transaction_context.as_mut() {
             ctx.reset();
@@ -746,7 +791,7 @@ pub(crate) fn AtSubCommit_Memory() -> PgResult<()> {
         debug_assert!(idx > 0);
         let taken = s.node_mut(idx).cur_transaction_context.take();
         if let Some(ctx) = taken {
-            if ctx.subtree_used() == 0 {
+            if ctx.is_empty_like_c() {
                 drop(ctx);
             } else {
                 let mut parent = s.node_mut(idx - 1);
@@ -827,6 +872,7 @@ pub(crate) fn AtSubAbort_childXids() {
 pub(crate) fn AtCleanup_Memory(xp: XsPtr) {
     xp.with(|s| {
         debug_assert_eq!(s.stack_len(), 1);
+        s.release_sub_stack();
         if let Some(ctx) = s.transaction_abort_context.as_mut() {
             ctx.reset();
         }
@@ -856,6 +902,7 @@ pub fn RegisterXactCallback(callback: XactCallback, arg: Datum) {
             .try_reserve(1)
             .expect("out of memory registering transaction callback");
         s.xact_callbacks.insert(0, XactCallbackItem { callback, arg });
+        s.callbacks_gen = s.callbacks_gen.wrapping_add(1);
     });
 }
 
@@ -868,6 +915,19 @@ pub fn UnregisterXactCallback(callback: XactCallback, arg: Datum) {
         {
             s.xact_callbacks.remove(pos);
         }
+        s.callbacks_gen = s.callbacks_gen.wrapping_add(1);
+    });
+}
+
+/// D4772: the thread's callback lists freed as it exits (launch_backend `run_child_task`: a client backend thread that does
+/// not park for the next connection). The transaction state is a ManuallyDrop thread-local with no destructor, so each
+/// exited thread left its lists' blocks (a COPY session's pgrc hooks: 2 x 64 B) allocated, on UNBOUND where its unbind
+/// moved them. A thread that parks keeps them: its registrants' once-per-thread flags still say registered.
+pub fn release_thread_callbacks() {
+    xs(|s| {
+        s.xact_callbacks = Vec::new();
+        s.subxact_callbacks = Vec::new();
+        s.callbacks_gen = s.callbacks_gen.wrapping_add(1);
     });
 }
 
@@ -877,6 +937,7 @@ pub fn RegisterSubXactCallback(callback: SubXactCallback, arg: Datum) {
             .try_reserve(1)
             .expect("out of memory registering subtransaction callback");
         s.subxact_callbacks.insert(0, SubXactCallbackItem { callback, arg });
+        s.callbacks_gen = s.callbacks_gen.wrapping_add(1);
     });
 }
 
@@ -889,22 +950,57 @@ pub fn UnregisterSubXactCallback(callback: SubXactCallback, arg: Datum) {
         {
             s.subxact_callbacks.remove(pos);
         }
+        s.callbacks_gen = s.callbacks_gen.wrapping_add(1);
     });
 }
 
+/// How many transaction callbacks CallXactCallbacks copies onto its stack; a longer list goes to the heap.
+const INLINE_XACT_CALLBACKS: usize = 8;
+
 pub(crate) fn CallXactCallbacks(xp: XsPtr, event: XactEvent) -> PgResult<()> {
-    let items: Vec<XactCallbackItem> = xp.with(|s| {
-        let mut v = Vec::new();
-        v.try_reserve(s.xact_callbacks.len())
-            .map_err(|_| PgError::error("out of memory calling transaction callbacks"))?;
-        v.extend(s.xact_callbacks.iter().copied());
-        Ok::<_, PgError>(v)
+    // The walk reads a copy (a callback may unregister itself or another; each is checked live before its call). A commit
+    // calls this twice, and a heap copy each time was ~0.3k instructions a statement, so a short list (the server
+    // registers 3-4) is copied onto the stack; a longer one goes to `spill` as before.
+    let mut inline = [None::<XactCallbackItem>; INLINE_XACT_CALLBACKS];
+    let mut spill: Vec<XactCallbackItem> = Vec::new();
+    let copied_gen = xp.with(|s| {
+        if s.xact_callbacks.is_empty() {
+            return Ok(None);
+        }
+        if s.xact_callbacks.len() <= INLINE_XACT_CALLBACKS {
+            for (slot, item) in inline.iter_mut().zip(s.xact_callbacks.iter()) {
+                *slot = Some(*item);
+            }
+        } else {
+            spill
+                .try_reserve(s.xact_callbacks.len())
+                .map_err(|_| PgError::error("out of memory calling transaction callbacks"))?;
+            spill.extend(s.xact_callbacks.iter().copied());
+        }
+        Ok::<_, PgError>(Some(s.callbacks_gen))
     })?;
-    for item in items {
+    // D4485: xact.c:3838's walk (xact.c:3843) over an empty Xact_callbacks calls nothing: no copy, no walk.
+    let Some(copied_gen) = copied_gen else {
+        return Ok(());
+    };
+    for item in inline.iter().flatten().copied().chain(spill.iter().copied()) {
+        // D4485: no Register / Unregister since the copy (the generation unchanged) = every copied item is still
+        // registered; only a moved generation searches the list (a callback that unregistered itself or another).
+        // A debug build searches anyway and asserts the two agree.
         let live = xp.with(|s| {
-            s.xact_callbacks
+            let unchanged = s.callbacks_gen == copied_gen;
+            if unchanged && !cfg!(debug_assertions) {
+                return true;
+            }
+            let found = s
+                .xact_callbacks
                 .iter()
-                .any(|it| std::ptr::fn_addr_eq(it.callback, item.callback) && it.arg == item.arg)
+                .any(|it| std::ptr::fn_addr_eq(it.callback, item.callback) && it.arg == item.arg);
+            debug_assert!(
+                !unchanged || found,
+                "D4485: callbacks_gen unchanged but the callback is gone"
+            );
+            found
         });
         if live {
             (item.callback)(event, item.arg)?;
@@ -987,37 +1083,33 @@ pub(crate) fn ShowTransactionState(str: &str) {
 }
 
 fn ShowTransactionStateRec(str: &str) {
-    let lines = xs(|s| {
-        s.nodes()
-            .map(|node| {
-                let mut buf = String::new();
-                if !node.child_xids.is_empty() {
-                    buf.push_str(&format!(", children: {}", node.child_xids[0]));
-                    for xid in &node.child_xids[1..] {
-                        buf.push_str(&format!(" {xid}"));
-                    }
+    xs(|s| {
+        for node in s.nodes() {
+            let mut buf = String::new();
+            if !node.child_xids.is_empty() {
+                buf.push_str(&format!(", children: {}", node.child_xids[0]));
+                for xid in &node.child_xids[1..] {
+                    buf.push_str(&format!(" {xid}"));
                 }
-                format!(
-                    "{}({}) name: {}; blockState: {}; state: {}, xid/subid/cid: {}/{}/{}{}{}",
-                    str,
-                    node.nesting_level,
-                    node.name.as_deref().unwrap_or("unnamed"),
-                    BlockStateAsString(node.block_state),
-                    TransStateAsString(node.state),
-                    node.full_transaction_id.xid(),
-                    node.sub_transaction_id,
-                    s.command_id(),
-                    if s.command_id_used() { " (used)" } else { "" },
-                    buf,
-                )
-            })
-            .collect::<Vec<_>>()
+            }
+            let line = format!(
+                "{}({}) name: {}; blockState: {}; state: {}, xid/subid/cid: {}/{}/{}{}{}",
+                str,
+                node.nesting_level,
+                node.name.as_deref().unwrap_or("unnamed"),
+                BlockStateAsString(node.block_state),
+                TransStateAsString(node.state),
+                node.full_transaction_id.xid(),
+                node.sub_transaction_id,
+                s.command_id(),
+                if s.command_id_used() { " (used)" } else { "" },
+                buf,
+            );
+            let _ = ereport(DEBUG5)
+                .errmsg_internal(line)
+                .finish(xact_location("ShowTransactionStateRec"));
+        }
     });
-    for line in lines {
-        let _ = ereport(DEBUG5)
-            .errmsg_internal(line)
-            .finish(xact_location("ShowTransactionStateRec"));
-    }
 }
 
 pub fn BlockStateAsString(state: TBlockState) -> &'static str {
@@ -1214,6 +1306,8 @@ pub fn init_seams() {
     xact_seams::get_current_transaction_nest_level::set(GetCurrentTransactionNestLevel);
     xact_seams::get_current_transaction_stop_timestamp::set(GetCurrentTransactionStopTimestamp);
     xact_seams::get_current_transaction_start_timestamp::set(GetCurrentTransactionStartTimestamp);
+    xact_seams::get_current_statement_start_timestamp::set(GetCurrentStatementStartTimestamp);
+    xact_seams::arm_claim_start_timestamps::set(ArmClaimStartTimestamps);
     xact_seams::get_top_transaction_id_if_any::set(GetTopTransactionIdIfAny);
     xact_seams::get_stable_latest_transaction_id::set(GetStableLatestTransactionId);
     xact_seams::xact_read_only::set(XactReadOnly);

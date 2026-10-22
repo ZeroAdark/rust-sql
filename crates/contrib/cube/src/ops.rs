@@ -126,15 +126,17 @@ pub fn cube_overlap_v0(a: &CubeView<'_>, b: &CubeView<'_>) -> bool {
     true
 }
 
+use types_error::PgResult;
+
 /// `cube_union_v0` — the non-trivial path (the C `a == b` pointer shortcut
 /// is handled by callers, who return the input unchanged). Result collapses
 /// to a point image when applicable, exactly like the C SET_VARSIZE shrink.
-pub fn cube_union_v0(a: &CubeView<'_>, b: &CubeView<'_>) -> Vec<u8> {
+pub fn cube_union_v0(a: &CubeView<'_>, b: &CubeView<'_>) -> PgResult<Vec<u8>> {
     // swap so that 'a' is always the larger-dimensional one
     let (a, b) = if a.dim() < b.dim() { (b, a) } else { (a, b) };
     let dim = a.dim();
 
-    let mut coords = vec![0f64; 2 * dim];
+    let mut coords = ::mcx::std_vec_from_elem("cube", 0f64, 2 * dim)?;
     for i in 0..b.dim() {
         coords[i] = c_min(c_min(a.ll(i), a.ur(i)), c_min(b.ll(i), b.ur(i)));
         coords[i + dim] = c_max(c_max(a.ll(i), a.ur(i)), c_max(b.ll(i), b.ur(i)));
@@ -148,11 +150,11 @@ pub fn cube_union_v0(a: &CubeView<'_>, b: &CubeView<'_>) -> Vec<u8> {
 }
 
 /// `cube_inter`'s core (argument swap and point collapse included).
-pub fn cube_inter_v0(a: &CubeView<'_>, b: &CubeView<'_>) -> Vec<u8> {
+pub fn cube_inter_v0(a: &CubeView<'_>, b: &CubeView<'_>) -> PgResult<Vec<u8>> {
     let (a, b) = if a.dim() < b.dim() { (b, a) } else { (a, b) };
     let dim = a.dim();
 
-    let mut coords = vec![0f64; 2 * dim];
+    let mut coords = ::mcx::std_vec_from_elem("cube", 0f64, 2 * dim)?;
     for i in 0..b.dim() {
         coords[i] = c_max(c_min(a.ll(i), a.ur(i)), c_min(b.ll(i), b.ur(i)));
         coords[i + dim] = c_min(c_max(a.ll(i), a.ur(i)), c_max(b.ll(i), b.ur(i)));
@@ -199,11 +201,12 @@ pub fn cube_distance(a: &CubeView<'_>, b: &CubeView<'_>) -> f64 {
     let mut distance = 0.0;
     for i in 0..b.dim() {
         let d = distance_1d(a.ll(i), a.ur(i), b.ll(i), b.ur(i));
-        distance += d * d;
+        // cube.c:1281 (D400)
+        distance = ::fp_contract::fmadd(d, d, distance);
     }
     for i in b.dim()..a.dim() {
         let d = distance_1d(a.ll(i), a.ur(i), 0.0, 0.0);
-        distance += d * d;
+        distance = ::fp_contract::fmadd(d, d, distance);
     }
     distance.sqrt()
 }
@@ -282,13 +285,26 @@ mod tests {
 
     fn cube(coords: &[f64]) -> Vec<u8> {
         let dim = coords.len() / 2;
-        build_image_auto(dim, coords)
+        build_image_auto(dim, coords).unwrap()
     }
     fn point(coords: &[f64]) -> Vec<u8> {
-        build_image(coords.len(), true, coords)
+        build_image(coords.len(), true, coords).unwrap()
     }
     fn v(img: &[u8]) -> CubeView<'_> {
         CubeView::from_payload(&img[4..])
+    }
+
+    #[test]
+    fn d400_distance_fmadd() {
+        let a = point(&[2.0, -1.4, -6.8]);
+        let b = point(&[-3.9, 6.3, -9.1]);
+        let want = if cfg!(target_arch = "aarch64") { 9.969453345093703 } else { 9.9694533450937 };
+        assert_eq!(cube_distance(&v(&a), &v(&b)), want);
+        let a = point(&[-2.0, 2.8, -8.1]);
+        let o = point(&[0.0]);
+        let want = if cfg!(target_arch = "aarch64") { 8.800568163476719 } else { 8.80056816347672 };
+        assert_eq!(cube_distance(&v(&a), &v(&o)), want);
+        assert_eq!(cube_distance(&v(&o), &v(&a)), want);
     }
 
     #[test]
@@ -329,18 +345,18 @@ mod tests {
     fn union_inter_normalize_and_collapse() {
         let a = cube(&[2.0, 0.0]); // 1-D box (2)..(0), unnormalized
         let b = cube(&[1.0, 3.0]);
-        let u = cube_union_v0(&v(&a), &v(&b));
+        let u = cube_union_v0(&v(&a), &v(&b)).unwrap();
         assert_eq!((v(&u).ll(0), v(&u).ur(0)), (0.0, 3.0));
-        let i = cube_inter_v0(&v(&a), &v(&b));
+        let i = cube_inter_v0(&v(&a), &v(&b)).unwrap();
         assert_eq!((v(&i).ll(0), v(&i).ur(0)), (1.0, 2.0));
         // union of a point with itself collapses back to the point image
         let p = point(&[4.0]);
-        let up = cube_union_v0(&v(&p), &v(&p));
+        let up = cube_union_v0(&v(&p), &v(&p)).unwrap();
         assert_eq!(up, p);
         // mixed dimensionality unions against implicit zero
         let p2 = point(&[1.0, 1.0]);
         let p1 = point(&[2.0]);
-        let u2 = cube_union_v0(&v(&p2), &v(&p1));
+        let u2 = cube_union_v0(&v(&p2), &v(&p1)).unwrap();
         assert_eq!(v(&u2).dim(), 2);
         assert_eq!((v(&u2).ll(0), v(&u2).ur(0)), (1.0, 2.0));
         assert_eq!((v(&u2).ll(1), v(&u2).ur(1)), (0.0, 1.0));

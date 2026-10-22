@@ -20,6 +20,7 @@ loom = "0.7"
 # Both are leaf port crates — no cycle risk. Only the cfg(pgrust_sim) arm
 # references them; native/loom builds compile them away.
 [dependencies]
+pagegive = { path = "../pagegive" }
 pg_clock = { path = "../../port/pg_clock" }
 pg_strong_random = { path = "../../port/pg_strong_random" }
 antithesis_sdk = { version = "0.2.9", optional = true }

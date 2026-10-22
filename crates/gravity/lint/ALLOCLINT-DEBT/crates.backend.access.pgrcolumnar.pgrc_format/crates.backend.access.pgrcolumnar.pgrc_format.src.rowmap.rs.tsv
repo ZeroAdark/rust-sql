@@ -1,0 +1,16 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/rowmap.rs
+growth	pgrc_format::wire::put_u32	15
+growth	pgrc_format::wire::put_u64	11
+growth	std::iter::Extend::extend	7
+growth	std::vec::Vec::extend_from_slice	7
+growth	std::vec::Vec::push	44
+growth	std::vec::Vec::try_reserve	1
+macro	std::vec	3
+method	pgrc_format::try_filled	6
+method	pgrc_format::try_to_vec	1
+method	pgrc_format::try_vec	22
+method	std::boxed::Box::new	7
+method	std::iter::Iterator::collect	14
+method	std::vec::Vec::with_capacity	2
+type	std::boxed::Box	7
+type	std::vec::Vec	16

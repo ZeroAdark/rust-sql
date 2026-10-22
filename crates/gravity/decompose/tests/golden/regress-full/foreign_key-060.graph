@@ -1,0 +1,16 @@
+-- regress-full-foreign_key-060
+-- UPDATE pk SET a = 90 WHERE a = 30 RETURNING *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n0@1
+  source index rel=37518 rti=3 am=heap index=37521
+    key att=1 op=96 value=c23:30
+    recheck (op96(v3.1, c23:30))
+    lanes RowId:byval8:w8:val
+  project (1=c23:90, 2j=v3.-6, 3j=v3.-1)
+  write UPDATE rel=37518 rti=3 natts=1 indexes=(37521[1]up) set=(1) returning route=rti1:37506 natts=1 cross-partition
+  project (1=v3.1)
+  outs 1=w4:val 2=w4:val 3=fx6:row
+  outs 1=w4:val
+scan-lanes node=2 rti=3 rel=37518 tableoid
+mapped: ModifyTable IndexScan

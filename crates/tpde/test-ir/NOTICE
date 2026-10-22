@@ -1,0 +1,5 @@
+Fresh Rust rewrite of TPDE TestIR.hpp, TestIR.cpp, and TestIRAdaptor.hpp.
+Upstream TPDE revision: 116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+Pinned original source and license texts are isolated under reference/ for tests.

@@ -109,8 +109,13 @@ fn fmgr_info_non_builtin_reads_pg_proc() {
     let _ = fmgr_info(16384);
 }
 
+// The tests that pick the first unported canonical row run one at a time: one of them installs the process's extra
+// builtin table, which ports that very row (D2452: picked as a stub, then resolved as the extra port).
+static FIRST_STUB: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn unported_builtin_invocation_is_clean_feature_error() {
+    let _first_stub = FIRST_STUB.lock().unwrap_or_else(|e| e.into_inner());
     // Any still-unported canonical entry; a pinned oid goes stale the moment
     // some lane ports it (1294 did).
     let b = FMGR_BUILTINS
@@ -590,6 +595,7 @@ fn fmgr_cache_lookup_failures_are_catchable_xx000() {
 
 #[test]
 fn internal_prosrc_resolves_through_the_extra_tables() {
+    let _first_stub = FIRST_STUB.lock().unwrap_or_else(|e| e.into_inner());
     fn probe(_f: Option<&mut FmgrInfo>, _fci: &mut FunctionCallInfoBaseData) -> PgResult<Datum> {
         Ok(Datum::from_i32(1))
     }
@@ -634,6 +640,7 @@ fn stub_bit_is_ported_membership() {
 
 #[test]
 fn identity_is_the_resolution_record_not_the_address() {
+    let _first_stub = FIRST_STUB.lock().unwrap_or_else(|e| e.into_inner());
     fn trampoline(fl: Option<&mut FmgrInfo>, fc: &mut FunctionCallInfoBaseData) -> PgResult<Datum> {
         ::adt_int::builtins::fc_int4pl(fl, fc)
     }
@@ -683,4 +690,24 @@ fn registered_pl_handlers_retain_callable_provenance() {
         args.set_arg(1, Datum::from_i32(2));
         assert_eq!(handler(None, &mut args).unwrap().as_i32(), 42);
     }
+}
+
+#[test]
+fn send_into_renders_the_text_sends_payload() {
+    for oid in [2415, 2431, 2433] {
+        let f = fmgr_info(oid).unwrap();
+        let into = fmgr_send_into(&f).unwrap_or_else(|| panic!("send function {oid} has an into entry"));
+        assert_eq!(into.foid, oid);
+        let mut img = ::datum::varlena::set_varsize_4b(4 + 6).to_vec();
+        img.extend_from_slice(b"ab c  ");
+        let d = Datum::from_usize(img.as_ptr() as usize);
+        let n = (into.bound)(d).expect("an inline image");
+        assert_eq!(n, 6);
+        let mut out = alloc::vec![0u8; n];
+        // SAFETY: `out` holds `bound` bytes.
+        let w = unsafe { (into.render)(d, out.as_mut_ptr()) }.unwrap();
+        assert_eq!(&out[..w], b"ab c  ");
+    }
+    assert!(fmgr_send_into(&fmgr_info(47).unwrap()).is_none());
+    assert!(fmgr_send_into(&fmgr_info(177).unwrap()).is_none());
 }

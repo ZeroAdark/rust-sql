@@ -1,0 +1,12 @@
+backend/replication/logical/worker/src/lib.rs	MY_SUBSCRIPTION	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	SUBSCRIPTION_CHANGED	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	IN_REMOTE_TRANSACTION	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	REMOTE_FINAL_LSN	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	LAST_RECVPOS	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	LAST_WRITEPOS	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	LAST_FLUSHPOS	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	FEEDBACK_SEND_TIME	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	LSN_MAPPING	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	APPLY_WORKER_EXIT	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	SKIP_XACT_FINISH_LSN	isojoin	owner, reset, carry
+backend/replication/logical/worker/src/lib.rs	APPLY_ERROR_CALLBACK_ARG	isojoin	owner, reset, carry

@@ -1,0 +1,28 @@
+-- regress-full-namespace-002
+-- SELECT COUNT(*) FROM pg_class WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'test_ns_schema_1');
+graph pipelines=3 breakers=1 init_plans=1 root=p2
+p0 node=2 eligible rows=1 end=sink
+  nodes n2@0
+  source range rel=2615 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v2.2, c19:#64)
+  project (1=v2.1)
+  outs 1=w8:val
+p1 node=1 eligible rows=339 end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@2^
+  source range rel=1259 rti=1 am=heap
+    lanes Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v1.3, $exec0)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24, 25=v1.25, 26=v1.26, 27=v1.27, 28=v1.28, 29=v1.29, 30=v1.30, 31=v1.31, 32=v1.32, 33=v1.33, 34=v1.34)
+  outs 1=w4:val 2=fx64:row 3=w8:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=w4:val 15=w1:val 16=w1:val 17=w1:val 18=w1:val 19=w2:val 20=w2:val 21=w1:val 22=w1:val 23=w1:val 24=w1:val 25=w1:val 26=w1:val 27=w1:val 28=w1:val 29=w4:val 30=w4:val 31=w4:val 32=vl:row 33=vl:row 34=vl:row
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p1 layout=[]->[Count@0] 8B
+group slot=0 producer=p1 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: SeqScan Agg SubPlan

@@ -3,7 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use mcx::{vec_from_elem_in, PgVec};
+use mcx::{slice_borrow_in, slice_in, vec_from_elem_in, Mcx, PgVec};
 use types_core::xact::TransactionIdPrecedes;
 use types_core::{BlockNumber, Oid};
 use types_error::PgResult;
@@ -182,13 +182,16 @@ pub fn get_relation_info<'mcx>(
                 return Err(err);
             }
             // canreturn spans all columns (plancat.c index_can_return loop);
-            // opfamily/opcintype are key-column-only.
-            for i in 0..ncolumns as usize {
-                info.indexkeys.push(ind.indkey[i] as i32);
-                info.indexcollations.push(
-                    index_rel.rd_indcollation.get(i).copied().unwrap_or(0),
-                );
-                info.canreturn.push(match am_kind {
+            // opfamily/opcintype are key-column-only. Each array is built at its
+            // exact length and frozen into the context (D4561 step 2).
+            let (ncols, nkeys) = (ncolumns as usize, nkeycolumns as usize);
+            let mut indexkeys = mcx::pgvec_exact_in(mcx, ncols)?;
+            let mut indexcollations = mcx::pgvec_exact_in(mcx, ncols)?;
+            let mut canreturn = mcx::pgvec_exact_in(mcx, ncols)?;
+            for i in 0..ncols {
+                indexkeys.push(ind.indkey[i] as i32);
+                indexcollations.push(index_rel.rd_indcollation.get(i).copied().unwrap_or(0));
+                canreturn.push(match am_kind {
                     types_relscan::IndexAmKind::Btree => btcanreturn(),
                     types_relscan::IndexAmKind::Gist => {
                         gist::gistcanreturn(&index_rel, i as i32 + 1)
@@ -199,10 +202,17 @@ pub fn get_relation_info<'mcx>(
                     _ => false,
                 });
             }
-            for i in 0..nkeycolumns as usize {
-                info.opfamily.push(index_rel.rd_opfamily[i]);
-                info.opcintype.push(index_rel.rd_opcintype[i]);
+            info.indexkeys = mcx::freeze(indexkeys);
+            info.indexcollations = mcx::freeze(indexcollations);
+            info.canreturn = mcx::freeze(canreturn);
+            let mut opfamily = mcx::pgvec_exact_in(mcx, nkeys)?;
+            let mut opcintype = mcx::pgvec_exact_in(mcx, nkeys)?;
+            for i in 0..nkeys {
+                opfamily.push(index_rel.rd_opfamily[i]);
+                opcintype.push(index_rel.rd_opcintype[i]);
             }
+            info.opfamily = mcx::freeze(opfamily);
+            info.opcintype = mcx::freeze(opcintype);
             info.relam = relam;
             // Per-AM IndexAmRoutine flags (bt/hash/gin/gist/brin handlers);
             // a partitioned index has no AM (C NULLifies these fields).
@@ -225,45 +235,45 @@ pub fn get_relation_info<'mcx>(
                 // amcanorder arm: a non-ordering AM leaves the sort vectors
                 // empty (C's NULL sortopfamily).
                 if am_is_btree {
-                    for i in 0..nkeycolumns as usize {
+                    let mut sortopfamily = mcx::pgvec_exact_in(mcx, nkeys)?;
+                    let mut reverse_sort = mcx::pgvec_exact_in(mcx, nkeys)?;
+                    let mut nulls_first = mcx::pgvec_exact_in(mcx, nkeys)?;
+                    for i in 0..nkeys {
                         let opt = index_rel.rd_indoption[i];
-                        info.sortopfamily.push(info.opfamily[i]);
-                        info.reverse_sort.push(opt & INDOPTION_DESC != 0);
-                        info.nulls_first.push(opt & INDOPTION_NULLS_FIRST != 0);
+                        sortopfamily.push(info.opfamily[i]);
+                        reverse_sort.push(opt & INDOPTION_DESC != 0);
+                        nulls_first.push(opt & INDOPTION_NULLS_FIRST != 0);
                     }
+                    info.sortopfamily = mcx::freeze(sortopfamily);
+                    info.reverse_sort = mcx::freeze(reverse_sort);
+                    info.nulls_first = mcx::freeze(nulls_first);
                 }
             }
 
-            // RelationGetIndexExpressions/Predicate + ChangeVarNodes(1, varno):
-            // parsed from the Form's nodeToString sources (pg_index.rs note).
-            if let Some(src) = ind.indexprs_src.as_ref() {
-                let node = readfuncs::stringToNode(mcx, src.as_str())?;
-                let list = node.as_list().expect("indexprs is a List");
-                for e in list.iter() {
-                    let e = crate::setrefs::fold_with_deps(run, e)?;
-                    if varno != 1 {
-                        change_var_nodes(e, varno as i32)?;
-                    }
-                    info.indexprs.push(run.intern_expr(e));
+            let exprs = execindexing::RelationGetIndexExpressions(mcx, &index_rel)?;
+            let mut indexprs = mcx::pgvec_exact_in(mcx, exprs.len())?;
+            for e in exprs.iter() {
+                if varno != 1 {
+                    change_var_nodes(e, varno as i32)?;
                 }
+                indexprs.push(run.intern_expr(e));
             }
-            if let Some(src) = ind.indpred_src.as_ref() {
-                let node = readfuncs::stringToNode(mcx, src.as_str())?;
-                let folded = crate::setrefs::fold_with_deps(run, node)?;
-                let canon = crate::prepqual::canonicalize_qual(mcx, folded, false)?;
-                let implicit = clauses::make_ands_implicit(mcx, Some(canon))?;
-                for e in implicit.iter() {
-                    if varno != 1 {
-                        change_var_nodes(e, varno as i32)?;
-                    }
-                    info.indpred.push(run.intern_expr(e));
+            info.indexprs = mcx::freeze(indexprs);
+            let preds = execindexing::RelationGetIndexPredicate(mcx, &index_rel)?;
+            let mut indpred = mcx::pgvec_exact_in(mcx, preds.len())?;
+            for e in preds.iter() {
+                if varno != 1 {
+                    change_var_nodes(e, varno as i32)?;
                 }
+                indpred.push(run.intern_expr(e));
             }
+            info.indpred = mcx::freeze(indpred);
 
             // build_index_tlist (plancat.c); system attrs are unreachable in
             // an index key.
             let mut indexpr_next = 0usize;
-            for i in 0..ncolumns as usize {
+            let mut indextlist = mcx::pgvec_exact_in(mcx, ncols)?;
+            for i in 0..ncols {
                 let indexkey = info.indexkeys[i];
                 let expr = if indexkey != 0 {
                     assert!(indexkey > 0, "build_index_tlist: system-attribute index key");
@@ -278,13 +288,14 @@ pub fn get_relation_info<'mcx>(
                         0,
                     )?
                 } else {
-                    let id = next_index_expression(info.indexprs.as_slice(), &mut indexpr_next)?;
+                    let id = next_index_expression(info.indexprs, &mut indexpr_next)?;
                     *run.root.expr_node(id)
                 };
                 let tle =
                     types_nodes::Node::mk_target_entry(mcx, expr, (i + 1) as i16, None, false)?;
-                info.indextlist.push(run.intern_expr(tle));
+                indextlist.push(run.intern_expr(tle));
             }
+            info.indextlist = mcx::freeze(indextlist);
             check_index_expressions_consumed(indexpr_next, info.indexprs.len())?;
 
             info.indrestrictinfo = RefCell::new(PgVec::new_in(mcx));
@@ -316,18 +327,6 @@ pub fn get_relation_info<'mcx>(
                     -1
                 });
             }
-            if am_is_gin && !is_partitioned_index {
-                let gs = gin::ginGetStats(&index_rel)?;
-                info.gin_stats = Some(types_pathnodes::GinIndexStats {
-                    pending_pages: gs.nPendingPages,
-                    total_pages: gs.nTotalPages,
-                    entry_pages: gs.nEntryPages,
-                    data_pages: gs.nDataPages,
-                    entries: gs.nEntries,
-                    version: gs.ginVersion,
-                });
-            }
-
             indexam::index_close(index_rel, NoLock)?;
             indexinfos.insert(0, &*mcx::forget_box_in(mcx, info)?);
         }
@@ -357,100 +356,40 @@ pub fn get_relation_info<'mcx>(
         r.serverid = serverid;
         r.fdwroutine = Some(routine);
     } else {
-        let is_pgrcolumnar = tableam_vocab::is_pgrcolumnar_am_oid(relation.rd_rel.relam);
-        let sorted_attnos = if is_pgrcolumnar && ::costsize::gucs::pgrcolumnar_scan_pathkeys() {
-            pgrcolumnar_sorted_pathkey_attnos(run, &relation)?
-        } else {
-            PgVec::new_in(run.mcx)
-        };
-        // Per-column on-disk bytes for column-fraction seqscan disk costing
-        // (costsize::pgrcolumnar_scan_col_fraction); footer-less parts leave it
-        // empty (fraction 1.0 = C behavior).
-        let col_bytes = if is_pgrcolumnar && ::costsize::gucs::pgrcolumnar_colfrac_cost() {
-            match ::tableam::pgrcolumnar_footer_col_bytes(&relation)? {
-                Some(v) => {
-                    let mut pv: PgVec<'_, u64> = PgVec::new_in(run.mcx);
-                    for b in v {
-                        pv.push(b);
-                    }
-                    pv
-                }
-                None => PgVec::new_in(run.mcx),
+        let is_pgrc = tableam_vocab::is_pgrcolumnar_am_oid(relation.rd_rel.relam);
+        let qual_cols = if is_pgrc { qual_attnos(run, rel)? } else { (Vec::new(), Vec::new()) };
+        // D4469 road 2: the declared key (a merged scan keeps it at any part count), unless the switch is off or the
+        // estimate puts more streams in the merge than K_PLAN (the plan sorts; correctness never reads the estimate)
+        let parts = if is_pgrc { ::tableam::pgrc_footer_part_count(&relation)?.unwrap_or(0) } else { 0 };
+        let sorted2_attnos = if is_pgrc && guc_tables::backing::pgrust_pgrc_merge_scan() && parts <= costsize::pgrc_merge::K_PLAN {
+            let mut pv: PgVec<'_, i16> = PgVec::new_in(run.mcx);
+            for a in ::tableam::pgrc_planner_sorted_attnos(&relation)? {
+                pv.push(a);
             }
+            pv
         } else {
             PgVec::new_in(run.mcx)
         };
-        // Ingest-time per-column NDV for no-pg_statistic group-key
-        // estimation (selfuncs::add_unique_group_var); footer-less parts
-        // leave it empty (ratio fallback = prior behavior).
-        let col_ndv = if is_pgrcolumnar && ::costsize::gucs::pgrcolumnar_footer_ndv_est() {
-            match ::tableam::pgrcolumnar_footer_ndv(&relation)? {
-                Some(v) => {
-                    let mut pv: PgVec<'_, u64> = PgVec::new_in(run.mcx);
-                    for b in v {
-                        pv.push(b);
-                    }
-                    pv
-                }
-                None => PgVec::new_in(run.mcx),
-            }
-        } else {
-            PgVec::new_in(run.mcx)
-        };
-        // SE-TOPNNI text sort-key answerability: v7 per-column stitch dict
-        // sizes (0 = no stitch) for the m5_suppress DictCode top-N key
-        // probe. Knob-gated (default ON since the regression flip; the
-        // kill spelling stands the walk down with the probe — knob
-        // coherence). Served from the session part cache like its
-        // siblings (one cached-Part vec clone per pgrcolumnar plancat).
-        let stitch_gndv = if is_pgrcolumnar && topn_nonint_enabled() {
-            match ::tableam::pgrcolumnar_footer_stitch_gndv(&relation)? {
-                Some(v) => {
-                    let mut pv: PgVec<'_, u64> = PgVec::new_in(run.mcx);
-                    for b in v {
-                        pv.push(b);
-                    }
-                    pv
-                }
-                None => PgVec::new_in(run.mcx),
-            }
-        } else {
-            PgVec::new_in(run.mcx)
-        };
-        // Meta zero-count answerability (q2box lane): every committed RG
-        // carries v7 zero/empty counts. Consumed by m5_suppress's
-        // CbPlainAggFold keying — a qualed count-only shape may only be
-        // suppressed to serial when the footer META answer can actually
-        // serve it (v<=6-lineage banks measured 5x serial-instead-of-
-        // Gather otherwise). Served from the session part cache (one flag
-        // walk per cached Part lookup; the footer serves above already
-        // pay the cache probe).
-        let zerocnt_all = is_pgrcolumnar
-            && ::tableam::pgrcolumnar_footer_zerocnt_all(&relation)?.unwrap_or(false);
+        let front_rows = if is_pgrc { pgrc_front_rows(mcx, &relation)? } else { 0.0 };
+        if is_pgrc && ::costsize::gucs::pgrc_census_trace() {
+            eprintln!("pgrc front: rel={} front_rows={}", relation.rd_id, front_rows);
+        }
         let r = run.root.rel_mut(rel);
         r.serverid = 0;
         r.fdwroutine = None;
-        if is_pgrcolumnar {
-            // pgrcolumnar refuses TID/TID-range and bitmap scans; the flag also
-            // routes Gather costing to pgrcolumnar_parallel_setup_cost.
-            r.amflags |= types_pathnodes::AMFLAG_PGRCOLUMNAR;
-            if zerocnt_all {
-                r.amflags |= types_pathnodes::AMFLAG_PGRCOLUMNAR_ZEROCNT;
-            }
-            r.pgrcolumnar_sorted_attnos = sorted_attnos;
-            r.pgrcolumnar_col_bytes = col_bytes;
-            r.pgrcolumnar_col_ndv = col_ndv;
-            r.pgrcolumnar_stitch_gndv = stitch_gndv;
-        } else if tableam_vocab::is_pgrcolumnar2_am_oid(relation.rd_rel.relam) {
+        if is_pgrc {
+            r.pgrcolumnar_front_rows = front_rows;
             // M4-S4 (the origin/lanev3 dc3c67c56214 sibling-bit arm, v4
             // half): mark the lanev4 engine's rels so allpaths suppresses
             // planner partial paths — the sqe engine pool owns parallelism over
             // the claim plane (v2-76/PC-2.2; ES-4.4 DOP election), never
             // PG Gather. AMFLAG_HAS_TID_RANGE is kept exactly as before
-            // this branch existed (pgrc2 rels always took the else arm):
+            // this branch existed (pgrc rels always took the else arm):
             // dropping it would move TID-range plan shapes, which is not
             // this wiring's to change (the v3 arm's recorded posture).
-            r.amflags |= types_pathnodes::AMFLAG_PGRCOLUMNAR2;
+            r.amflags |= types_pathnodes::AMFLAG_PGRCOLUMNAR;
+            r.pgrcolumnar_sorted_attnos = sorted2_attnos;
+            r.pgrcolumnar_parts = parts;
             r.amflags |= AMFLAG_HAS_TID_RANGE;
             // M5a (the S-2 planner wiring RE-LANDED — v2-10/v2-11/v3-21;
             // the M4-S5 revert's re-home): the v4 AM's exact-at-seal
@@ -462,13 +401,13 @@ pub fn get_relation_info<'mcx>(
             // this consult at +3ms/plan (1m) and +22ms/plan (10m) — the
             // per-CONNECTION cold deep fold (zstd meta-section walks ×
             // 105 columns × parts) — and reverted it. The fold now lives
-            // in `pgrc2_am::factcache` at PROCESS grain, keyed by
+            // in `pgrc_am::factcache` at PROCESS grain, keyed by
             // (gen, publisher_fxid, schema fingerprint): a cold session's
             // consult is one manifest resolve + a nanosecond cache probe,
             // and the meta band's 1ms cells hold (the M5a no-regression
             // cell re-runs the S5 taxed-take measurement expecting ~0).
             if ::costsize::gucs::pgrcolumnar_colfrac_cost() {
-                if let Some(v) = ::tableam::pgrc2_footer_col_bytes(&relation)? {
+                if let Some(v) = ::tableam::pgrc_footer_col_bytes(&relation)? {
                     let mut pv: PgVec<'_, u64> = PgVec::new_in(run.mcx);
                     for b in v {
                         pv.push(b);
@@ -477,12 +416,51 @@ pub fn get_relation_info<'mcx>(
                 }
             }
             if ::costsize::gucs::pgrcolumnar_footer_ndv_est() {
-                if let Some(v) = ::tableam::pgrc2_footer_ndv(&relation)? {
+                if let Some(v) = ::tableam::pgrc_footer_ndv(&relation)? {
                     let mut pv: PgVec<'_, u64> = PgVec::new_in(run.mcx);
                     for b in v {
                         pv.push(b);
                     }
                     r.pgrcolumnar_col_ndv = pv;
+                }
+            }
+            if let Some(v) = ::tableam::pgrc_footer_qual_classes(&relation)? {
+                let mut pv: PgVec<'_, u8> = PgVec::new_in(run.mcx);
+                for b in v {
+                    pv.push(b);
+                }
+                r.pgrcolumnar_col_qual_class = pv;
+            }
+            if let Some(v) = ::tableam::pgrc_footer_max_len(&relation)? {
+                let mut pv: PgVec<'_, i32> = PgVec::new_in(run.mcx);
+                for b in v {
+                    pv.push(b);
+                }
+                r.pgrcolumnar_col_max_len = pv;
+            }
+            if let Some((rows, nonnull)) = ::tableam::pgrc_footer_nonnull(&relation)? {
+                let mut pv: PgVec<'_, Option<f64>> = PgVec::new_in(run.mcx);
+                pv.extend(nonnull.iter().map(|n| n.filter(|&n| rows > 0 && n <= rows).map(|n| (rows - n) as f64 / rows as f64)));
+                r.pgrcolumnar_col_null_frac = pv;
+            }
+            // The scan cost model's facts. The zone columns the query
+            // references get their summary (the census never walks granules); the exact ranges are
+            // copied for the zone-walk columns only — the leading GROUP BY /
+            // ORDER BY key — and under the census trace.
+            if let Some(c) = ::tableam::pgrc_footer_codecs(&relation)? {
+                r.pgrcolumnar_col_codec = slice_in(run.mcx, &c.codec)?;
+                r.pgrcolumnar_col_ncodes = slice_in(run.mcx, &c.ncodes)?;
+                r.pgrcolumnar_granules = c.granules;
+            }
+            let natts = relation.rd_att.attrs.len() as i32;
+            let trace = ::costsize::gucs::pgrc_census_trace();
+            let copy = ::costsize::gucs::pgrc_zone_copy();
+            let (qual_cols, walk_cols) = &qual_cols;
+            for &attno in qual_cols.iter().chain(walk_cols.iter().filter(|a| !qual_cols.contains(a))).filter(|&&a| a >= 1 && a <= natts) {
+                if let Some(z) = ::tableam::pgrc_footer_zone_column(&relation, attno as u32)? {
+                    let walk = trace || walk_cols.contains(&attno);
+                    let zc = if copy { zone_col_copy(run.mcx, attno as i16, &z, walk)? } else { zone_col_pinned(run.mcx, attno as i16, z, walk) };
+                    r.pgrcolumnar_zones.push(zc);
                 }
             }
         } else {
@@ -571,6 +549,72 @@ pub(crate) fn install_partition_directory_slot<'mcx>(
     run.partition_directory = Some(core::ptr::NonNull::from(slot).cast());
 }
 
+fn zone_col_copy<'mcx>(
+    mcx: Mcx<'mcx>,
+    attno: i16,
+    z: &::tableam::PgrcZoneColumn,
+    walk: bool,
+) -> PgResult<types_pathnodes::PgrcZoneCol<'mcx>> {
+    let sm = z.summary();
+    Ok(types_pathnodes::PgrcZoneCol {
+        attno,
+        granules: sm.granules,
+        keyed: sm.keyed,
+        lo: sm.lo,
+        hi: sm.hi,
+        keys: slice_borrow_in(mcx, &sm.keys)?,
+        min_lt: slice_borrow_in(mcx, &sm.min_lt)?,
+        min_le: slice_borrow_in(mcx, &sm.min_le)?,
+        max_lt: slice_borrow_in(mcx, &sm.max_lt)?,
+        max_le: slice_borrow_in(mcx, &sm.max_le)?,
+        eq_whole: slice_borrow_in(mcx, &sm.eq_whole)?,
+        ranges: if walk { slice_borrow_in(mcx, &z.ranges()[..])? } else { &[] },
+    })
+}
+
+/// C's reset-callback ref (typcache.c dccref_deletion_callback): the footer
+/// cache's column stays pinned until the planning context resets, and the
+/// planner reads it in place. The pin is scoped to the context, not to the
+/// planner frame, because the slices are `&'mcx` (PgrcZoneCol is Clone and
+/// gravity_paths' zone_ranges hands out `Cow::Borrowed` into them), so safe
+/// code may keep them as long as the context lives. Every reader computes
+/// during planning (costsize's scan model and census, gravity_paths' zone
+/// costing) and no Plan node stores a slice; a cached plan that keeps its
+/// planning context keeps the pin until relcache invalidation drops the plan.
+/// The column is the catalog generation's footer facts (not a part-list
+/// face) and carries no Charge, so the borrow only removes the context's
+/// charged copies.
+fn zone_col_pinned<'mcx>(
+    mcx: Mcx<'mcx>,
+    attno: i16,
+    z: std::sync::Arc<::tableam::PgrcZoneColumn>,
+    walk: bool,
+) -> types_pathnodes::PgrcZoneCol<'mcx> {
+    let p = std::sync::Arc::as_ptr(&z);
+    mcx.context().register_reset_callback(move || drop(z));
+    // SAFETY: the Arc moved into the context's reset callback keeps the column
+    // alive until the context resets or is deleted, i.e. for as long as any
+    // `&'mcx` borrow of the context can exist (the slices, their clones and
+    // zone_ranges' Cow::Borrowed included), and the column is immutable
+    // behind the Arc.
+    let z: &'mcx ::tableam::PgrcZoneColumn = unsafe { &*p };
+    let sm = z.summary();
+    types_pathnodes::PgrcZoneCol {
+        attno,
+        granules: sm.granules,
+        keyed: sm.keyed,
+        lo: sm.lo,
+        hi: sm.hi,
+        keys: &sm.keys,
+        min_lt: &sm.min_lt,
+        min_le: &sm.min_le,
+        max_lt: &sm.max_lt,
+        max_le: &sm.max_le,
+        eq_whole: &sm.eq_whole,
+        ranges: if walk { &z.ranges()[..] } else { &[] },
+    }
+}
+
 /// C root->glob->partition_directory, created on first use with
 /// omit_detached = true (plancat.c:2461-2467: the planner omits
 /// detach-pending partitions).
@@ -637,12 +681,12 @@ fn find_partition_scheme<'mcx>(
         let mut ps = types_pathnodes::PartitionSchemeData::new(mcx);
         ps.strategy = key.strategy;
         ps.partnatts = key.partnatts;
-        ps.partopfamily.reserve(n);
-        ps.partopcintype.reserve(n);
-        ps.partcollation.reserve(n);
-        ps.parttyplen.reserve(n);
-        ps.parttypbyval.reserve(n);
-        ps.partsupfunc.reserve(n);
+        ::mcx::pgvec_reserve(&mut ps.partopfamily, n)?;
+        ::mcx::pgvec_reserve(&mut ps.partopcintype, n)?;
+        ::mcx::pgvec_reserve(&mut ps.partcollation, n)?;
+        ::mcx::pgvec_reserve(&mut ps.parttyplen, n)?;
+        ::mcx::pgvec_reserve(&mut ps.parttypbyval, n)?;
+        ::mcx::pgvec_reserve(&mut ps.partsupfunc, n)?;
         for i in 0..n {
             ps.partopfamily.push(key.partopfamily[i]);
             ps.partopcintype.push(key.partopcintype[i]);
@@ -685,17 +729,17 @@ fn copy_boundinfo_for_planner<'mcx>(
     out.nindexes = bi.indexes.len() as i32;
     out.null_index = bi.null_index;
     out.default_index = bi.default_index;
-    out.indexes.reserve(bi.indexes.len());
+    ::mcx::pgvec_reserve(&mut out.indexes, bi.indexes.len())?;
     for &ix in bi.indexes.iter() {
         out.indexes.push(ix);
     }
     let width = bi.width;
     let has_kind = !bi.kind.is_empty();
     let mut kinds: PgVec<'mcx, PgVec<'mcx, i8>> = PgVec::new_in(mcx);
-    out.datums.reserve(bi.ndatums);
+    ::mcx::pgvec_reserve(&mut out.datums, bi.ndatums)?;
     for i in 0..bi.ndatums {
         let mut row: PgVec<'mcx, DatumImage<'mcx>> = PgVec::new_in(mcx);
-        row.reserve(width);
+        ::mcx::pgvec_reserve(&mut row, width)?;
         let mut krow: PgVec<'mcx, i8> = PgVec::new_in(mcx);
         for j in 0..width {
             let kind = if has_kind { bi.kind_at(i, j) } else { partbounds::KIND_VALUE };
@@ -853,8 +897,8 @@ fn set_baserel_partition_key_exprs<'mcx>(
     }
     let mut partexprs: PgVec<'mcx, PgVec<'mcx, NodeId>> = PgVec::new_in(mcx);
     let mut nullable: PgVec<'mcx, PgVec<'mcx, NodeId>> = PgVec::new_in(mcx);
-    partexprs.reserve(n);
-    nullable.reserve(n);
+    ::mcx::pgvec_reserve(&mut partexprs, n)?;
+    ::mcx::pgvec_reserve(&mut nullable, n)?;
     for &id in ids.iter() {
         let mut col: PgVec<'mcx, NodeId> = PgVec::new_in(mcx);
         col.reserve(1);
@@ -960,6 +1004,30 @@ pub(crate) fn change_var_nodes(node: types_nodes::Node<'_>, new_varno: i32) -> P
 
 const HEAP_OVERHEAD_BYTES_PER_TUPLE: usize = 24 + 4;
 const HEAP_USABLE_BYTES_PER_PAGE: usize = 8192 - 24;
+
+// Without estimate_rel_size's never-vacuumed 10-page floor: an empty segment is 0 rows, so a sealed-only table
+// prices no front. No segment row is read.
+fn pgrc_front_rows<'mcx>(mcx: mcx::Mcx<'mcx>, relation: &Relation<'mcx>) -> PgResult<f64> {
+    let mut rows = 0.0;
+    let mut width_density: Option<f64> = None;
+    for (blocks, relpages, reltuples) in ::tableam::pgrc_front_shapes(mcx, relation)? {
+        if blocks == 0 {
+            continue;
+        }
+        let density = if reltuples >= 0.0 && relpages > 0 {
+            reltuples / relpages as f64
+        } else if let Some(d) = width_density {
+            d
+        } else {
+            let tuple_width = get_rel_data_width(relation, None, 1)? as usize + HEAP_OVERHEAD_BYTES_PER_TUPLE;
+            let d = ((HEAP_USABLE_BYTES_PER_PAGE / tuple_width) as f64).max(1.0);
+            width_density = Some(d);
+            d
+        };
+        rows += (density * blocks as f64).round_ties_even();
+    }
+    Ok(rows)
+}
 
 // estimate_rel_size (plancat.c), table-AM arm -> (pages, tuples, allvisfrac).
 pub fn estimate_rel_size(
@@ -1147,7 +1215,21 @@ fn restriction_estimator<'mcx>(
         F_CONTSEL => 0.001,
         F_EQSEL => crate::selfuncs::eqsel(run, operatorid, args, varrelid, inputcollid)?,
         F_MATCHINGSEL => {
-            crate::selfuncs::matchingsel(run, operatorid, args, varrelid, inputcollid)?
+            // pgrust-only (pgrust.jsonb_path_stats): ? / ?| / ?& from the
+            // column's per-path statistics; anything that leg declines, and
+            // everything with the GUC off, is C's matchingsel unchanged.
+            let jsonb = if crate::jsonb_stats::enabled() {
+                let opcode = crate::syscache_memo::get_opcode(run, operatorid)?;
+                crate::jsonb_stats::try_jsonb_matching_sel(run, opcode, args, varrelid)?
+            } else {
+                None
+            };
+            match jsonb {
+                Some(s) => s,
+                None => {
+                    crate::selfuncs::matchingsel(run, operatorid, args, varrelid, inputcollid)?
+                }
+            }
         }
         F_NEQSEL => crate::selfuncs::neqsel(run, operatorid, args, varrelid, inputcollid)?,
         F_SCALARLTSEL | F_SCALARGTSEL | F_SCALARLESEL | F_SCALARGESEL => {
@@ -1346,6 +1428,7 @@ pub fn function_selectivity<'mcx>(
         1024 => PatternType::RegexIc,
         6242 => PatternType::Prefix,
         prosupport => {
+            let call_mcx = run.mcx;
             let mut estimate = |operatorid: Oid| -> PgResult<f64> {
                 if is_join {
                     join_selectivity(run, operatorid, args, inputcollid, jointype, sjinfo)
@@ -1359,9 +1442,10 @@ pub fn function_selectivity<'mcx>(
                 &mut estimate,
             );
             let addr = core::ptr::from_mut(&mut req) as usize;
-            let result = fmgr_core::oid_function_call1_coll(
+            let result = fmgr_core::oid_function_call1_coll_in(
                 prosupport,
                 0,
+                call_mcx,
                 datum::Datum::from_usize(addr),
             )?;
             if result.as_usize() == addr {
@@ -1393,15 +1477,19 @@ pub fn add_function_cost(funcid: Oid, cost: &mut types_pathnodes::QualCost) -> P
     if shape.prosupport != 0 {
         let mut req = types_nodes::supportnodes::SupportRequestCost::new(funcid, None);
         let addr = core::ptr::from_mut(&mut req) as usize;
-        let result =
-            fmgr_core::oid_function_call1_coll(shape.prosupport, 0, datum::Datum::from_usize(addr))?;
+        let call_cx = mcx::MemoryContext::new_bump("prosupport");
+        let result = fmgr_core::oid_function_call1_coll_in(shape.prosupport, 0, call_cx.mcx(), datum::Datum::from_usize(addr))?;
         if result.as_usize() == addr {
             cost.startup += req.startup;
             cost.per_tuple += req.per_tuple;
             return Ok(());
         }
     }
-    cost.per_tuple += shape.procost as f64 * crate::gucs::cpu_operator_cost();
+    cost.per_tuple = crate::fma_sites::function_cost(
+        cost.per_tuple,
+        shape.procost as f64,
+        crate::gucs::cpu_operator_cost(),
+    );
     Ok(())
 }
 
@@ -1422,8 +1510,8 @@ pub fn get_function_rows(
         let mut req = types_nodes::supportnodes::SupportRequestRows::new(funcid, node)
             .with_bound_params_raw(bound_params.0);
         let addr = core::ptr::from_mut(&mut req) as usize;
-        let result =
-            fmgr_core::oid_function_call1_coll(shape.prosupport, 0, datum::Datum::from_usize(addr))?;
+        let call_cx = mcx::MemoryContext::new_bump("prosupport");
+        let result = fmgr_core::oid_function_call1_coll_in(shape.prosupport, 0, call_cx.mcx(), datum::Datum::from_usize(addr))?;
         if result.as_usize() == addr {
             return Ok(req.rows);
         }
@@ -1526,19 +1614,12 @@ pub fn infer_arbiter_indexes<'mcx>(
             if !indexed_attrs.equal(&infer_attrs) {
                 break 'matched false;
             }
-            // RelationGetIndexExpressions: stringToNode + eval_const_expressions
-            // — necessary, not just optimization, since arbiterElems went
-            // through the same folding via preprocess_expression (relcache.c).
             let mut idx_exprs: Vec<types_nodes::Node<'mcx>> = Vec::new();
-            if let Some(src) = ind.indexprs_src.as_ref() {
-                let node = readfuncs::stringToNode(mcx, src.as_str())?;
-                for e in node.as_list().expect("indexprs is a List").iter() {
-                    let e = clauses::eval_const_expressions(mcx, e)?;
-                    if varno != 1 {
-                        change_var_nodes(e, varno)?;
-                    }
-                    idx_exprs.push(e);
+            for e in execindexing::RelationGetIndexExpressions(mcx, &idx_rel)?.iter() {
+                if varno != 1 {
+                    change_var_nodes(e, varno)?;
                 }
+                idx_exprs.push(e);
             }
             for elem_node in &oc.arbiterElems {
                 let elem = elem_node.as_inference_elem().expect("arbiterElems cell");
@@ -1563,20 +1644,12 @@ pub fn infer_arbiter_indexes<'mcx>(
             {
                 break 'matched false;
             }
-            // RelationGetIndexPredicate shape: const-fold + canonicalize +
-            // implicit-AND, as relcache does.
             let mut pred_exprs: Vec<types_nodes::Node<'mcx>> = Vec::new();
-            if let Some(src) = ind.indpred_src.as_ref() {
-                let node = readfuncs::stringToNode(mcx, src.as_str())?;
-                let folded = clauses::eval_const_expressions(mcx, node)?;
-                let canon = crate::prepqual::canonicalize_qual(mcx, folded, false)?;
-                let implicit = clauses::make_ands_implicit(mcx, Some(canon))?;
-                for e in implicit.iter() {
-                    if varno != 1 {
-                        change_var_nodes(e, varno)?;
-                    }
-                    pred_exprs.push(e);
+            for e in execindexing::RelationGetIndexPredicate(mcx, &idx_rel)?.iter() {
+                if varno != 1 {
+                    change_var_nodes(e, varno)?;
                 }
+                pred_exprs.push(e);
             }
             let mut arbiter_where: Vec<types_nodes::Node<'mcx>> = Vec::new();
             if let Some(w) = oc.arbiterWhere {
@@ -1847,96 +1920,48 @@ pub fn get_dependent_generated_columns<'mcx>(
     Ok(dependent_cols)
 }
 
-// pgrcolumnar v5 footer sorted columns admissible as ascending scan pathkeys.
-// int/date/timestamp default btree order IS the footer tracker's signed
-// order; text requires a memcmp-ordered collation (collate_is_c); bpchar's
-// space-padded comparison never matches byte order and pgrcolumnar admits no
-// other types.
-fn pgrcolumnar_sorted_pathkey_attnos<'mcx>(
-    run: &PlannerRun<'mcx>,
-    relation: &Relation<'_>,
-) -> PgResult<PgVec<'mcx, i16>> {
-    let mut out: PgVec<'mcx, i16> = PgVec::new_in(run.mcx);
-    let Some(sorted) = ::tableam::pgrcolumnar_footer_sorted(relation)? else {
-        return Ok(out);
-    };
-    use types_core::catalog::{DATEOID, INT2OID, INT4OID, INT8OID, TEXTOID, TIMESTAMPOID,
-        VARCHAROID};
-    for (i, a) in relation.rd_att.attrs.iter().enumerate() {
-        if !sorted.get(i).copied().unwrap_or(false) || a.attisdropped {
-            continue;
-        }
-        let ok = match a.atttypid {
-            INT2OID | INT4OID | INT8OID | DATEOID | TIMESTAMPOID => true,
-            TEXTOID | VARCHAROID => collate_sorts_bytewise(a.attcollation),
-            _ => false,
-        };
-        if ok {
-            out.push(i as i16 + 1);
+fn qual_attnos(run: &mut PlannerRun<'_>, rel: RelId) -> PgResult<(Vec<i32>, Vec<i32>)> {
+    fn collect<'m>(node: types_nodes::Node<'m>, out: &mut Vec<types_nodes::Node<'m>>) {
+        if let Some(f) = node.as_from_expr() {
+            for n in &f.fromlist {
+                collect(n, out);
+            }
+            out.extend(f.quals);
+        } else if let Some(j) = node.as_join_expr() {
+            collect(j.larg, out);
+            collect(j.rarg, out);
+            out.extend(j.quals);
         }
     }
-    Ok(out)
-}
-
-fn collate_sorts_bytewise(coll: Oid) -> bool {
-    use types_core::catalog::{C_COLLATION_OID, DEFAULT_COLLATION_OID};
-    if !types_core::OidIsValid(coll) {
-        return false;
+    let mcx = run.mcx;
+    let varno = run.root.rel(rel).relid as i32;
+    let mut quals = Vec::new();
+    if let Some(jt) = run.parse().jointree {
+        for n in &jt.fromlist {
+            collect(n, &mut quals);
+        }
+        quals.extend(jt.quals);
     }
-    if coll == DEFAULT_COLLATION_OID && !::pg_locale::default_locale_installed() {
-        return false;
+    let mut attrs = types_nodes::Bitmapset::empty();
+    for q in quals {
+        vars::pull_varattnos(mcx, q, varno, &mut attrs)?;
     }
-    if coll != C_COLLATION_OID
-        && coll != DEFAULT_COLLATION_OID
-        && !syscache_seams::lookup_pg_collation_locale_row::is_installed()
-    {
-        return false;
+    let parse = run.parse();
+    let mut walk: Vec<i32> = Vec::new();
+    for clause in [parse.groupClause.iter().next(), parse.sortClause.iter().next()].into_iter().flatten() {
+        let Some(sgc) = clause.as_sort_group_clause() else { continue };
+        for n in &parse.targetList {
+            let Some(t) = n.as_target_entry() else { continue };
+            if t.ressortgroupref == sgc.tleSortGroupRef {
+                if let Some(v) = t.expr.as_var() {
+                    if v.varno == varno && v.varlevelsup == 0 && v.varattno >= 1 && !walk.contains(&(v.varattno as i32)) {
+                        walk.push(v.varattno as i32);
+                    }
+                }
+            }
+        }
     }
-    matches!(::pg_locale::pg_newlocale_from_collation(coll), Ok(l) if l.collate_is_c)
-}
-
-/// SE-TOPNNI (gap:topn-nonint-keys car, tier 2): bounded top-N whose ORDER
-/// BY keys are NON-integer — date/timestamp Vars (the sink's
-/// I4/I8 CmpOp aliases: plain int compares per date.c/timestamp.c) and/or
-/// stitched deterministic-default-collation text/varchar Vars (the DictCode
-/// key class, docs/design/dict-code-flow.md) — the census's bounded-top-N
-/// over datetime/text sort keys with wide (star-tlist) payloads, qualed
-/// and unqualed. The runtime sort SINK already owns every piece (KeyWidth
-/// I4/I8 widening for the datetime family, v7 part-global byte-rank codes
-/// for text, multi-key wide heaps, winner-only late materialization for
-/// the star tlist, COLSTAGE staged accept + GCUT band predicate); only
-/// this probe refuses the shapes. Smoke (2M rows, dop4, 2026-07-21):
-/// qualed star-tlist / narrow-tlist / text-key / mixed-key analogs of the
-/// census shapes engage and win 2.3–6.7x vs forced legacy, byte parity OK.
-///
-/// DEFAULT ON since the regression flip (scratchpad/night/
-/// regression-letter.md, dist witnessed ladder 2026-07-21 @ 8cf38a8c7:
-/// 10M dop{4,8,16} all six keyed shapes suppressed-and-winning vs
-/// best(serial, forced legacy), worst cell exact parity; 100M dop{4,16}
-/// census-family wins everywhere). `PGRUST_LANE_V2_TOPN_NONINT=0|off` is
-/// the kill, restoring the keep-Gather posture byte-for-byte (the
-/// flipped-kill idiom — only the exact kill spellings disarm). Named
-/// residual carried from the letter: the UNQUALED star-tlist shape at
-/// 100M-class scale forgoes a <=1.23x serial-walk win while beating the
-/// legacy Gather it displaces 10-30x — cost-route step-2 arbitration /
-/// band-predicate early-exit term owns it. Suppresses via the knob-path
-/// finish — NOT a BOOTSTRAP_MATRIX class (probe_key stays "-"; drift
-/// guards untouched).
-/// (RELOCATED here from m5_suppress.rs at p72 R-1: this module's gndv
-/// stitch arm is the surviving consumer; m5_suppress deletes at D-4. The
-/// kill-spelling helper is an OWN COPY — m5_suppress's dies with it.)
-pub(crate) fn topn_nonint_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        topn_nonint_kill_spelling_on(std::env::var("PGRUST_LANE_V2_TOPN_NONINT").as_deref().ok())
-    })
-}
-
-/// The flipped default-ON kill spelling (t36 flips2, the flipped-kill
-/// idiom): OFF iff exactly `0` or `off`; unset and every other spelling
-/// stay ON. (Own copy of m5_suppress's `tier2_car_kill_spelling_on`.)
-fn topn_nonint_kill_spelling_on(v: Option<&str>) -> bool {
-    !matches!(v, Some("0") | Some("off"))
+    Ok((attrs.iter().map(|m| m + FirstLowInvalidHeapAttributeNumber).collect(), walk))
 }
 
 // plancat.c:143-151: a relation without a table AM can be planned only if it
@@ -1963,7 +1988,8 @@ pub(crate) fn check_relation_has_table_am(relkind: u8, relname: &str) -> PgResul
 // "invalid <restriction|join> selectivity: %f" -- a catchable XX000, never a
 // panic.
 pub(crate) fn check_selectivity_range(result: f64, kind: &str) -> PgResult<f64> {
-    if (0.0..=1.0).contains(&result) {
+    // C tests `result < 0.0 || result > 1.0`, so a NaN estimate passes.
+    if !(result < 0.0 || result > 1.0) {
         return Ok(result);
     }
     Err(Box::new(types_error::PgError::error(format!(

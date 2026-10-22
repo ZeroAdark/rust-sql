@@ -1,0 +1,11 @@
+-- regress-full-updatable_views-065
+-- INSERT INTO base_tbl_child SELECT * FROM generate_series(1, 8);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:8)]
+  project (1=v3.1)
+  write INSERT rel=24469 rti=1 natts=1 indexes=()
+  outs 1=w4:val
+mapped: ModifyTable FunctionScan

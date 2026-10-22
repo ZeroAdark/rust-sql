@@ -20,9 +20,60 @@ pub(crate) struct EnumData {
     bitmap_base: Oid,
     // Bit k set => OID bitmap_base+k is in the known-sorted subset (the C
     // Bitmapset; offsets are < 8192 by construction).
-    sorted_words: PgVec<'static, u64>,
+    sorted_words: Store<u64>,
     // Sorted by enum_oid for binary search.
-    items: PgVec<'static, EnumItem>,
+    items: Store<EnumItem>,
+}
+
+pub(crate) enum Store<T: 'static> {
+    Owned(PgVec<'static, T>),
+    Armed(&'static [T]),
+}
+
+impl<T> core::ops::Deref for Store<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        match self {
+            Store::Owned(v) => v,
+            Store::Armed(s) => s,
+        }
+    }
+}
+
+impl EnumData {
+    pub(crate) fn parts(&self) -> PgResult<(Oid, Box<[u64]>, Box<[EnumItem]>)> {
+        Ok((
+            self.bitmap_base,
+            ::mcx::stdvec::try_to_vec(&self.sorted_words, "enum_cmp")?.into_boxed_slice(),
+            ::mcx::stdvec::try_to_vec(&self.items, "enum_cmp")?.into_boxed_slice(),
+        ))
+    }
+
+    pub(crate) fn armed(bitmap_base: Oid, sorted_words: &'static [u64], items: &'static [EnumItem]) -> EnumData {
+        EnumData { bitmap_base, sorted_words: Store::Armed(sorted_words), items: Store::Armed(items) }
+    }
+}
+
+pub fn enum_label_count(type_id: Oid) -> PgResult<Option<usize>> {
+    let tcache = lookup_type_cache(type_id, 0)?;
+    if tcache.typtype() != TYPTYPE_ENUM {
+        return Ok(None);
+    }
+    if tcache.enum_data.borrow().is_none() {
+        load_enum_cache_data(&tcache)?;
+    }
+    let n = tcache.enum_data.borrow().as_ref().map(|d| d.items.len());
+    Ok(n)
+}
+
+/// the enum's members read afresh (an image for a pool claim: the leader's cached members may predate
+/// an ALTER TYPE .. ADD VALUE, which C picks up lazily on a miss, a catalog read a pool thread cannot make).
+pub(crate) fn reload(tcache: &TypeCacheEntry) -> PgResult<()> {
+    load_enum_cache_data(tcache)
+}
+
+pub(crate) fn holds(items: &[EnumItem], arg: Oid) -> bool {
+    items.binary_search_by(|it| it.enum_oid.cmp(&arg)).is_ok()
 }
 
 impl EnumData {
@@ -107,7 +158,7 @@ fn load_enum_cache_data(tcache: &TypeCacheEntry) -> PgResult<()> {
     let mut start_pos = 0usize;
     while numitems > 0 && start_pos < numitems - 1 {
         let mut this_bitmap: PgVec<'static, u64> = PgVec::new_in(mcx);
-        set_bit(&mut this_bitmap, 0);
+        set_bit(&mut this_bitmap, 0)?;
         let mut this_bm_size = 1usize;
         let start_oid = items[start_pos].enum_oid;
         let mut prev_order = items[start_pos].sort_order;
@@ -119,7 +170,7 @@ fn load_enum_cache_data(tcache: &TypeCacheEntry) -> PgResult<()> {
             }
             if items[i].sort_order > prev_order {
                 prev_order = items[i].sort_order;
-                set_bit(&mut this_bitmap, offset as usize);
+                set_bit(&mut this_bitmap, offset as usize)?;
                 this_bm_size += 1;
             }
         }
@@ -137,16 +188,21 @@ fn load_enum_cache_data(tcache: &TypeCacheEntry) -> PgResult<()> {
     }
 
     *tcache.enum_data.borrow_mut() =
-        Some(EnumData { bitmap_base, sorted_words: bitmap, items });
+        Some(EnumData { bitmap_base, sorted_words: Store::Owned(bitmap), items: Store::Owned(items) });
     Ok(())
 }
 
-fn set_bit(words: &mut PgVec<'static, u64>, bit: usize) {
+fn set_bit(words: &mut PgVec<'static, u64>, bit: usize) -> PgResult<()> {
     let word = bit / 64;
     if words.len() <= word {
+        let mcx = *words.allocator();
+        words
+            .try_reserve(word + 1 - words.len())
+            .map_err(|_| mcx.oom((word + 1) * core::mem::size_of::<u64>()))?;
         words.resize(word + 1, 0);
     }
     words[word] |= 1u64 << (bit % 64);
+    Ok(())
 }
 
 fn compare_values_of_enum_by_oid(type_id: Oid, arg1: Oid, arg2: Oid) -> PgResult<i32> {
@@ -156,6 +212,7 @@ fn compare_values_of_enum_by_oid(type_id: Oid, arg1: Oid, arg2: Oid) -> PgResult
 
 pub(crate) fn install_seam() {
     typcache_seams::compare_values_of_enum::set(compare_values_of_enum_by_oid);
+    typcache_seams::armed_enum_type_of::set(crate::armed::enum_type_of);
 }
 
 #[cold]

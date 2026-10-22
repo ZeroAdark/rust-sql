@@ -1,0 +1,5 @@
+path	crates/gravity/fn/src/agg_final.rs
+growth	std::string::String::push	3
+growth	std::vec::Vec::push	1
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

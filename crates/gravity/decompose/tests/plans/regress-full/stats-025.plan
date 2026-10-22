@@ -1,0 +1,10 @@
+-- name: regress-full-stats-025
+-- sql: SELECT stats_reset AS bgwriter_reset_ts FROM pg_stat_bgwriter
+-- test: stats
+-- shape: 0e97243ad1ec12c4 seen=3
+-- rel 12293 pg_stat_bgwriter am=none kind=v natts=4
+-- att 12293 1 buffers_clean typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 12293 2 maxwritten_clean typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 12293 3 buffers_alloc typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 12293 4 stats_reset typid=1184 typmod=-1 len=8 byval=t notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {RESULT :plan.disabled_nodes 0 :plan.startup_cost 0 :plan.total_cost 0.0125 :plan.plan_rows 1 :plan.plan_width 8 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {FUNCEXPR :funcid 3075 :funcresulttype 1184 :funcretset false :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 0 :args <> :location -1} :resno 1 :resname bgwriter_reset_ts :ressortgroupref 0 :resorigtbl 12293 :resorigcol 4 :resjunk false}) :plan.qual <> :plan.lefttree <> :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :resconstantqual <>} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_stat_bgwriter :colnames ("buffers_clean" "maxwritten_clean" "buffers_alloc" "stats_reset")} :rtekind 1 :subquery <> :security_barrier false :relid 12293 :inh false :relkind v :rellockmode 1 :perminfoindex 1 :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname *RESULT* :colnames <>} :rtekind 8 :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 12293 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 11) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 12293) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 0}

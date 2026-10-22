@@ -1,0 +1,15 @@
+-- srf-009
+-- SELECT three(), a FROM t WHERE a < 3;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=16395 rti=1 am=heap index=16402
+    key att=1 op=97 value=c23:3
+    recheck (op97(index.1, c23:3))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  srf tlist [1:Other fn16404 fn16404()]
+  project (1=fn16404(), 2=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val 2=w4:val
+mapped: ProjectSet IndexOnlyScan

@@ -1,3 +1,0 @@
-;
-
-Slain (&costs off) SELECT count(*) FROM test1.2.3ctor WHERE a @@ 

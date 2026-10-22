@@ -1,0 +1,13 @@
+-- regress-full-partition_prune-038
+-- explain (costs off) select * from boolrangep where not a and not b and c = 25;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=3 end=sink
+  nodes n1@0
+  source range rel=44965 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter not(v2.1)
+  filter not(v2.2)
+  filter op96(v2.3, c23:25)
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  outs 1=w8:val 2=w8:val 3=w8:val
+mapped: SeqScan

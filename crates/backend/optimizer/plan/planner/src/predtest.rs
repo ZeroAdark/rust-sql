@@ -957,6 +957,39 @@ fn invalidate_opr_proof_cache_callback(_arg: datum::Datum, _cacheid: i32, _hashv
     });
 }
 
+// Merges one half into the entry as it is now: the catalog lookups can run
+// the invalidation callback mid-lookup, and C (which holds the entry
+// pointer) leaves the other half invalidated.
+fn store_proof_half(
+    key: (Oid, Oid),
+    refute_it: bool,
+    test_op: Oid,
+    same_subexprs: bool,
+) -> OprProofCacheEntry {
+    let set_half = |entry: &mut OprProofCacheEntry| {
+        if refute_it {
+            entry.refute_test_op = test_op;
+            entry.same_subexprs_refutes = same_subexprs;
+            entry.have_refute = true;
+        } else {
+            entry.implic_test_op = test_op;
+            entry.same_subexprs_implies = same_subexprs;
+            entry.have_implic = true;
+        }
+    };
+    let mut result = OprProofCacheEntry::default();
+    set_half(&mut result);
+    OPR_PROOF_CACHE.with(|cell| {
+        if let Some(map) = cell.borrow_mut().as_mut() {
+            let mut entry = map.get(&key).copied().unwrap_or_default();
+            set_half(&mut entry);
+            map.insert(key, entry);
+            result = entry;
+        }
+    });
+    result
+}
+
 fn lookup_proof_cache<'mcx>(
     mcx: Mcx<'mcx>,
     pred_op: Oid,
@@ -971,6 +1004,11 @@ fn lookup_proof_cache<'mcx>(
             // wholesale on pg_amop changes.
             let cache_mcx =
                 ::mcx::session_root("Btree proof lookup cache").mcx();
+            // D4682: the teardown retires this root; clear the slot first, so a reused thread's next
+            // session builds a new one.
+            ::mcx::register_session_cleanup(Box::new(|| {
+                let _ = OPR_PROOF_CACHE.try_with(|c| drop(c.borrow_mut().take()));
+            }));
             inval::invalidate::CacheRegisterSyscacheCallback(
                 cache_syscache::cacheinfo::AMOPOPID,
                 invalidate_opr_proof_cache_callback,
@@ -981,15 +1019,11 @@ fn lookup_proof_cache<'mcx>(
         Ok(slot.as_ref().unwrap().get(&key).copied())
     })?;
 
-    let mut entry = match existing {
-        Some(e) => {
-            if if refute_it { e.have_refute } else { e.have_implic } {
-                return Ok(e);
-            }
-            e
+    if let Some(e) = existing {
+        if if refute_it { e.have_refute } else { e.have_implic } {
+            return Ok(e);
         }
-        None => OprProofCacheEntry::default(),
-    };
+    }
 
     let mut same_subexprs = false;
     let mut test_op = InvalidOid;
@@ -1063,23 +1097,7 @@ fn lookup_proof_cache<'mcx>(
         same_subexprs = false;
     }
 
-    if refute_it {
-        entry.refute_test_op = test_op;
-        entry.same_subexprs_refutes = same_subexprs;
-        entry.have_refute = true;
-    } else {
-        entry.implic_test_op = test_op;
-        entry.same_subexprs_implies = same_subexprs;
-        entry.have_implic = true;
-    }
-
-    OPR_PROOF_CACHE.with(|cell| {
-        if let Some(map) = cell.borrow_mut().as_mut() {
-            map.insert(key, entry);
-        }
-    });
-
-    Ok(entry)
+    Ok(store_proof_half(key, refute_it, test_op, same_subexprs))
 }
 
 #[cfg(test)]
@@ -1493,5 +1511,24 @@ mod tests {
         .unwrap();
         assert!(clause_is_strict_for(mcx, converted, a2, false).unwrap());
         assert!(!clause_is_strict_for(mcx, converted, other, false).unwrap());
+    }
+
+    #[test]
+    fn proof_cache_store_keeps_mid_lookup_invalidation() {
+        OPR_PROOF_CACHE.with(|cell| {
+            let cache_mcx = ::mcx::session_root("Btree proof lookup cache").mcx();
+            *cell.borrow_mut() =
+                Some(ManuallyDrop::new(PgHashMap::with_capacity_in(8, cache_mcx)));
+        });
+        let key = (901, 902);
+        store_proof_half(key, false, 903, true);
+        // The pg_amop callback fires during the refute half's lookups.
+        invalidate_opr_proof_cache_callback(datum::Datum::null(), 0, 0);
+        let e = store_proof_half(key, true, 904, false);
+        assert!(e.have_refute && e.refute_test_op == 904);
+        assert!(!e.have_implic, "invalidated implication half resurrected");
+        let cached = OPR_PROOF_CACHE
+            .with(|cell| cell.borrow().as_ref().unwrap().get(&key).copied().unwrap());
+        assert!(!cached.have_implic && cached.have_refute);
     }
 }

@@ -1,0 +1,6 @@
+path	crates/gravity/driver/src/park.rs
+growth	std::collections::VecDeque::push_back	1
+growth	std::vec::Vec::push	3
+method	slice::sort_by_key	1
+method	std::iter::Iterator::collect	1
+type	std::vec::Vec	1

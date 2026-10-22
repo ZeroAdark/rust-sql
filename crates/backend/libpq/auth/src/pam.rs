@@ -110,13 +110,37 @@ unsafe fn conv_body(
     // known during authentication.
     let mut passwd: Vec<u8> = if appdata_ptr.is_null() {
         // Solaris 2.6 workaround twin: fall back to the thread-local.
-        PAM_STATE.with(|s| {
-            s.borrow().passwd.as_ref().map(|p| p.to_bytes().to_vec()).unwrap_or_default()
-        })
+        let opt_vec = PAM_STATE.with(|s| {
+            s.borrow()
+                .passwd
+                .as_ref()
+                .map(|p| ::mcx::std_vec_from_slice("auth", p.to_bytes()))
+        });
+        match opt_vec {
+            Some(Ok(v)) => v,
+            Some(Err(_)) => {
+                let _ = ereport(LOG)
+                    .errcode(types_error::ERRCODE_OUT_OF_MEMORY)
+                    .errmsg("out of memory")
+                    .finish(loc(1959, "pam_passwd_conv_proc"));
+                return PAM_CONV_ERR;
+            }
+            None => Vec::new(),
+        }
     } else {
-        std::ffi::CStr::from_ptr(appdata_ptr as *const c_char)
-            .to_bytes()
-            .to_vec()
+        match ::mcx::std_vec_from_slice(
+            "auth",
+            std::ffi::CStr::from_ptr(appdata_ptr as *const c_char).to_bytes(),
+        ) {
+            Ok(v) => v,
+            Err(_) => {
+                let _ = ereport(LOG)
+                    .errcode(types_error::ERRCODE_OUT_OF_MEMORY)
+                    .errmsg("out of memory")
+                    .finish(loc(1959, "pam_passwd_conv_proc"));
+                return PAM_CONV_ERR;
+            }
+        }
     };
 
     *resp = core::ptr::null_mut(); // in case of error exit

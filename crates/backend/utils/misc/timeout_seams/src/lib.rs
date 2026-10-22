@@ -85,6 +85,10 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    pub fn fire_due() -> bool
+);
+
+seam_core::seam!(
     // pgrust-only: a thread-model backend releases its timer-registry slot
     // at task end (C's process exit reclaims it).
     pub fn forget_backend_timer_slot()

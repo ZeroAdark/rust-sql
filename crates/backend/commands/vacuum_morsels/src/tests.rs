@@ -238,7 +238,7 @@ fn skipmap_eager_does_not_consume_fail_budget() {
 
 #[test]
 fn eager_admit_charges_fails_after_prune_miss() {
-    let caps = EagerScanShared::new(10, 3, 3, 0, 100);
+    let caps = EagerScanShared::new(10, 10, 3, 3, 0, 100);
     assert_eq!(caps.fails_at(0), 3);
     assert_eq!(caps.remaining_successes(), 10);
     assert_eq!(caps.try_admit(0), EagerAdmit::Admit);
@@ -257,7 +257,7 @@ fn eager_admit_charges_fails_after_prune_miss() {
 fn eager_region_failure_budget_denies_then_next_region_reopens() {
     // Blocks 0..9 are the partial first region (C :595-599 — its budget is
     // the ratio of the region width remaining), block 10 starts a full one.
-    let caps = EagerScanShared::new(10, 1, 2, 10, 3 * EAGER_SCAN_REGION_SIZE);
+    let caps = EagerScanShared::new(10, 10, 1, 2, 10, 3 * EAGER_SCAN_REGION_SIZE);
     assert_eq!(caps.try_admit(5), EagerAdmit::Admit);
     caps.account(5, false);
     assert_eq!(caps.fails_at(5), 0);
@@ -277,7 +277,7 @@ fn eager_region_failure_budget_denies_then_next_region_reopens() {
 /// accounting), and the (S+1)th admission is the one that closes the cap.
 #[test]
 fn eager_success_cap_admits_s_plus_one_then_closes() {
-    let caps = EagerScanShared::new(2, 5, 5, 0, 100);
+    let caps = EagerScanShared::new(2, 2, 5, 5, 0, 100);
     assert_eq!(caps.try_admit(0), EagerAdmit::Admit);
     caps.account(0, true);
     assert_eq!(caps.try_admit(1), EagerAdmit::Admit);
@@ -295,9 +295,19 @@ fn eager_success_cap_admits_s_plus_one_then_closes() {
     assert_eq!(caps.snapshot(4), (0, 0, 0, InvalidBlockNumber));
 }
 
+// A later morsel round rebuilds the caps from the remaining successes; the
+// close report still names the cap captured when the scan began.
+#[test]
+fn eager_close_reports_the_original_cap_in_a_later_round() {
+    let caps = EagerScanShared::new(1, 4, 5, 5, 0, 100);
+    assert_eq!(caps.try_admit(0), EagerAdmit::Admit);
+    caps.account(0, true);
+    assert_eq!(caps.try_admit(1), EagerAdmit::AdmitAndClose(4));
+}
+
 #[test]
 fn eager_snapshot_hands_the_serial_arm_c_fields() {
-    let caps = EagerScanShared::new(3, 4, 4, 100, 3 * EAGER_SCAN_REGION_SIZE);
+    let caps = EagerScanShared::new(3, 3, 4, 4, 100, 3 * EAGER_SCAN_REGION_SIZE);
     assert_eq!(caps.snapshot(50), (3, 4, 4, 100));
     assert_eq!(caps.try_admit(100), EagerAdmit::Admit);
     caps.account(100, true);
@@ -305,7 +315,7 @@ fn eager_snapshot_hands_the_serial_arm_c_fields() {
     assert_eq!((succ, fails, max), (2, 4, 4));
     assert_eq!(next, 100 + EAGER_SCAN_REGION_SIZE);
     // Disabled at construction (max_fails == 0) never admits.
-    let off = EagerScanShared::new(0, 0, 0, InvalidBlockNumber, 100);
+    let off = EagerScanShared::new(0, 0, 0, 0, InvalidBlockNumber, 100);
     assert_eq!(off.try_admit(0), EagerAdmit::Deny);
     assert!(!off.would_admit(0));
 }

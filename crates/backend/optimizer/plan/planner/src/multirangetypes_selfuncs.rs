@@ -268,7 +268,7 @@ fn calc_multirangesel<'mcx>(
         if operator == OID_RANGE_MULTIRANGE_CONTAINED_OP
             || operator == OID_MULTIRANGE_MULTIRANGE_CONTAINED_OP
         {
-            selec = (1.0 - empty_frac as f64) * hist_selec + empty_frac as f64;
+            selec = crate::fma_sites::empty_frac_merge(empty_frac as f64, hist_selec);
         } else {
             selec = (1.0 - empty_frac as f64) * hist_selec;
         }

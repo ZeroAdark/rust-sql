@@ -1,0 +1,638 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3eu s1c s1d s2u s1x s2c s3l s3s
+step s3eu: EXPLAIN (COSTS OFF) UPDATE un_lp t1 SET c = t1.c + t2.v FROM un_np t2 WHERE t1.a = t2.id AND a = 1;
+QUERY PLAN                                          
+----------------------------------------------------
+Update on un_lp t1                                  
+  Update on un_sp1 t1_1                             
+  Update on un_sp2 t1_2                             
+  ->  Nested Loop                                   
+        ->  Seq Scan on un_np t2                    
+              Filter: ((id)::numeric = '1'::numeric)
+        ->  Append                                  
+              ->  Seq Scan on un_sp1 t1_1           
+                    Filter: (a = '1'::numeric)      
+              ->  Seq Scan on un_sp2 t1_2           
+                    Filter: (a = '1'::numeric)      
+(11 rows)
+
+step s1c: UPDATE un_sp1 SET c = c + 1 WHERE c = 60;
+step s1d: DELETE FROM un_sp1 WHERE c = 11;
+step s2u: UPDATE un_lp t1 SET c = t1.c + t2.v FROM un_np t2 WHERE t1.a = t2.id AND a = 1; <waiting ...>
+step s1x: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3l: SELECT tableoid::regclass, a, b, c FROM un_lp WHERE c < 1000 OR c > 1500 ORDER BY 1, a, b, c;
+tableoid|a|b|  c
+--------+-+-+---
+un_sp1  |1|1|161
+un_sp2  |1|2|110
+un_sp2  |1|2|112
+un_lp1  |2|5| 50
+un_lp1  |3|6| 60
+(5 rows)
+
+step s3s: SELECT tableoid::regclass, count(*), sum(c) FROM un_lp WHERE c BETWEEN 1000 AND 1500 GROUP BY 1 ORDER BY 1;
+tableoid|count|   sum
+--------+-----+------
+un_sp1  |  200|260200
+un_sp2  |  200|260000
+(2 rows)
+
+
+starting permutation: s1c s1n s2u s1x s2c s3l
+step s1c: UPDATE un_sp1 SET c = c + 1 WHERE c = 60;
+step s1n: UPDATE un_np SET v = v + 1 WHERE id = 1;
+step s2u: UPDATE un_lp t1 SET c = t1.c + t2.v FROM un_np t2 WHERE t1.a = t2.id AND a = 1; <waiting ...>
+step s1x: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3l: SELECT tableoid::regclass, a, b, c FROM un_lp WHERE c < 1000 OR c > 1500 ORDER BY 1, a, b, c;
+tableoid|a|b|  c
+--------+-+-+---
+un_sp1  |1|1|111
+un_sp1  |1|1|161
+un_sp2  |1|2|110
+un_sp2  |1|2|112
+un_lp1  |2|5| 50
+un_lp1  |3|6| 60
+(6 rows)
+
+
+starting permutation: s1k s2u s1x s2c s3l
+step s1k: UPDATE un_lp SET a = 3 WHERE c = 12;
+step s2u: UPDATE un_lp t1 SET c = t1.c + t2.v FROM un_np t2 WHERE t1.a = t2.id AND a = 1; <waiting ...>
+step s1x: COMMIT;
+step s2u: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3l: SELECT tableoid::regclass, a, b, c FROM un_lp WHERE c < 1000 OR c > 1500 ORDER BY 1, a, b, c;
+tableoid|a|b| c
+--------+-+-+--
+un_sp1  |1|1|11
+un_sp1  |1|1|60
+un_sp2  |1|2|10
+un_lp1  |2|5|50
+un_lp1  |3|2|12
+un_lp1  |3|6|60
+(6 rows)
+
+
+starting permutation: s1c s2m s1x s2c s3l s3s
+step s1c: UPDATE un_sp1 SET c = c + 1 WHERE c = 60;
+step s2m: UPDATE un_lp t1 SET a = 2 FROM un_np t2 WHERE t1.a = t2.id AND a = 1; <waiting ...>
+step s1x: COMMIT;
+step s2m: <... completed>
+step s2c: COMMIT;
+step s3l: SELECT tableoid::regclass, a, b, c FROM un_lp WHERE c < 1000 OR c > 1500 ORDER BY 1, a, b, c;
+tableoid|a|b| c
+--------+-+-+--
+un_lp1  |2|1|11
+un_lp1  |2|1|61
+un_lp1  |2|2|10
+un_lp1  |2|2|12
+un_lp1  |2|5|50
+un_lp1  |3|6|60
+(6 rows)
+
+step s3s: SELECT tableoid::regclass, count(*), sum(c) FROM un_lp WHERE c BETWEEN 1000 AND 1500 GROUP BY 1 ORDER BY 1;
+tableoid|count|   sum
+--------+-----+------
+un_lp1  |  400|480200
+(1 row)
+
+
+starting permutation: s3eq s1c s1d s2q s1x s2c s3l s3s
+step s3eq: EXPLAIN (COSTS OFF) UPDATE un_lp t1 SET c = t1.c + t2.v FROM un_nq t2 WHERE t1.a = t2.id AND a = 1;
+QUERY PLAN                                          
+----------------------------------------------------
+Update on un_lp t1                                  
+  Update on un_sp1 t1_1                             
+  Update on un_sp2 t1_2                             
+  ->  Nested Loop                                   
+        ->  Seq Scan on un_nq t2                    
+              Filter: ((id)::numeric = '1'::numeric)
+        ->  Append                                  
+              ->  Seq Scan on un_sp1 t1_1           
+                    Filter: (a = '1'::numeric)      
+              ->  Seq Scan on un_sp2 t1_2           
+                    Filter: (a = '1'::numeric)      
+(11 rows)
+
+step s1c: UPDATE un_sp1 SET c = c + 1 WHERE c = 60;
+step s1d: DELETE FROM un_sp1 WHERE c = 11;
+step s2q: UPDATE un_lp t1 SET c = t1.c + t2.v FROM un_nq t2 WHERE t1.a = t2.id AND a = 1; <waiting ...>
+step s1x: COMMIT;
+step s2q: <... completed>
+step s2c: COMMIT;
+step s3l: SELECT tableoid::regclass, a, b, c FROM un_lp WHERE c < 1000 OR c > 1500 ORDER BY 1, a, b, c;
+tableoid|a|b|  c
+--------+-+-+---
+un_sp1  |1|1|161
+un_sp2  |1|2|110
+un_sp2  |1|2|112
+un_lp1  |2|5| 50
+un_lp1  |3|6| 60
+(5 rows)
+
+step s3s: SELECT tableoid::regclass, count(*), sum(c) FROM un_lp WHERE c BETWEEN 1000 AND 1500 GROUP BY 1 ORDER BY 1;
+tableoid|count|   sum
+--------+-----+------
+un_sp1  |  200|260200
+un_sp2  |  200|260000
+(2 rows)
+
+
+starting permutation: s3er s1r s1q s2r s1x s2c s3r
+step s3er: EXPLAIN (COSTS OFF) UPDATE ur1 SET b = ur1.b || '+' || ur2.id FROM ur2 WHERE ur1.a = 3 AND ur2.a = 3;
+QUERY PLAN                             
+---------------------------------------
+Update on ur1                          
+  Update on ur1 ur1_1                  
+  Update on ur2 ur1_2                  
+  Update on ur3 ur1_3                  
+  ->  Nested Loop                      
+        ->  Seq Scan on ur2            
+              Filter: (a = 3)          
+        ->  Append                     
+              ->  Seq Scan on ur1 ur1_1
+                    Filter: (a = 3)    
+              ->  Seq Scan on ur2 ur1_2
+                    Filter: (a = 3)    
+              ->  Seq Scan on ur3 ur1_3
+                    Filter: (a = 3)    
+(14 rows)
+
+step s1r: UPDATE ur3 SET b = 'Y' WHERE id = 21;
+step s1q: DELETE FROM ur1 WHERE id = 3;
+step s2r: UPDATE ur1 SET b = ur1.b || '+' || ur2.id FROM ur2 WHERE ur1.a = 3 AND ur2.a = 3; <waiting ...>
+step s1x: COMMIT;
+step s2r: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, id, a, b FROM ur1 ORDER BY 1, 2;
+tableoid| id|  a|b     
+--------+---+---+------
+ur1     |  1|  3|aaa+11
+ur1     |  2|  4|bbb   
+ur1     |100|200|f     
+ur1     |101|201|f     
+ur1     |102|202|f     
+ur1     |103|203|f     
+ur1     |104|204|f     
+ur1     |105|205|f     
+ur1     |106|206|f     
+ur1     |107|207|f     
+ur1     |108|208|f     
+ur1     |109|209|f     
+ur1     |110|210|f     
+ur1     |111|211|f     
+ur1     |112|212|f     
+ur1     |113|213|f     
+ur1     |114|214|f     
+ur1     |115|215|f     
+ur1     |116|216|f     
+ur1     |117|217|f     
+ur1     |118|218|f     
+ur1     |119|219|f     
+ur1     |120|220|f     
+ur1     |121|221|f     
+ur1     |122|222|f     
+ur1     |123|223|f     
+ur1     |124|224|f     
+ur1     |125|225|f     
+ur1     |126|226|f     
+ur1     |127|227|f     
+ur1     |128|228|f     
+ur1     |129|229|f     
+ur1     |130|230|f     
+ur1     |131|231|f     
+ur1     |132|232|f     
+ur1     |133|233|f     
+ur1     |134|234|f     
+ur1     |135|235|f     
+ur1     |136|236|f     
+ur1     |137|237|f     
+ur1     |138|238|f     
+ur1     |139|239|f     
+ur1     |140|240|f     
+ur1     |141|241|f     
+ur1     |142|242|f     
+ur1     |143|243|f     
+ur1     |144|244|f     
+ur1     |145|245|f     
+ur1     |146|246|f     
+ur1     |147|247|f     
+ur1     |148|248|f     
+ur1     |149|249|f     
+ur1     |150|250|f     
+ur1     |151|251|f     
+ur1     |152|252|f     
+ur1     |153|253|f     
+ur1     |154|254|f     
+ur1     |155|255|f     
+ur1     |156|256|f     
+ur1     |157|257|f     
+ur1     |158|258|f     
+ur1     |159|259|f     
+ur1     |160|260|f     
+ur1     |161|261|f     
+ur1     |162|262|f     
+ur1     |163|263|f     
+ur1     |164|264|f     
+ur1     |165|265|f     
+ur1     |166|266|f     
+ur1     |167|267|f     
+ur1     |168|268|f     
+ur1     |169|269|f     
+ur1     |170|270|f     
+ur1     |171|271|f     
+ur1     |172|272|f     
+ur1     |173|273|f     
+ur1     |174|274|f     
+ur1     |175|275|f     
+ur1     |176|276|f     
+ur1     |177|277|f     
+ur1     |178|278|f     
+ur1     |179|279|f     
+ur1     |180|280|f     
+ur1     |181|281|f     
+ur1     |182|282|f     
+ur1     |183|283|f     
+ur1     |184|284|f     
+ur1     |185|285|f     
+ur1     |186|286|f     
+ur1     |187|287|f     
+ur1     |188|288|f     
+ur1     |189|289|f     
+ur1     |190|290|f     
+ur1     |191|291|f     
+ur1     |192|292|f     
+ur1     |193|293|f     
+ur1     |194|294|f     
+ur1     |195|295|f     
+ur1     |196|296|f     
+ur1     |197|297|f     
+ur1     |198|298|f     
+ur1     |199|299|f     
+ur1     |200|300|f     
+ur1     |201|301|f     
+ur1     |202|302|f     
+ur1     |203|303|f     
+ur1     |204|304|f     
+ur1     |205|305|f     
+ur1     |206|306|f     
+ur1     |207|307|f     
+ur1     |208|308|f     
+ur1     |209|309|f     
+ur1     |210|310|f     
+ur1     |211|311|f     
+ur1     |212|312|f     
+ur1     |213|313|f     
+ur1     |214|314|f     
+ur1     |215|315|f     
+ur1     |216|316|f     
+ur1     |217|317|f     
+ur1     |218|318|f     
+ur1     |219|319|f     
+ur1     |220|320|f     
+ur1     |221|321|f     
+ur1     |222|322|f     
+ur1     |223|323|f     
+ur1     |224|324|f     
+ur1     |225|325|f     
+ur1     |226|326|f     
+ur1     |227|327|f     
+ur1     |228|328|f     
+ur1     |229|329|f     
+ur1     |230|330|f     
+ur1     |231|331|f     
+ur1     |232|332|f     
+ur1     |233|333|f     
+ur1     |234|334|f     
+ur1     |235|335|f     
+ur1     |236|336|f     
+ur1     |237|337|f     
+ur1     |238|338|f     
+ur1     |239|339|f     
+ur1     |240|340|f     
+ur1     |241|341|f     
+ur1     |242|342|f     
+ur1     |243|343|f     
+ur1     |244|344|f     
+ur1     |245|345|f     
+ur1     |246|346|f     
+ur1     |247|347|f     
+ur1     |248|348|f     
+ur1     |249|349|f     
+ur1     |250|350|f     
+ur1     |251|351|f     
+ur1     |252|352|f     
+ur1     |253|353|f     
+ur1     |254|354|f     
+ur1     |255|355|f     
+ur1     |256|356|f     
+ur1     |257|357|f     
+ur1     |258|358|f     
+ur1     |259|359|f     
+ur1     |260|360|f     
+ur1     |261|361|f     
+ur1     |262|362|f     
+ur1     |263|363|f     
+ur1     |264|364|f     
+ur1     |265|365|f     
+ur1     |266|366|f     
+ur1     |267|367|f     
+ur1     |268|368|f     
+ur1     |269|369|f     
+ur1     |270|370|f     
+ur1     |271|371|f     
+ur1     |272|372|f     
+ur1     |273|373|f     
+ur1     |274|374|f     
+ur1     |275|375|f     
+ur1     |276|376|f     
+ur1     |277|377|f     
+ur1     |278|378|f     
+ur1     |279|379|f     
+ur1     |280|380|f     
+ur1     |281|381|f     
+ur1     |282|382|f     
+ur1     |283|383|f     
+ur1     |284|384|f     
+ur1     |285|385|f     
+ur1     |286|386|f     
+ur1     |287|387|f     
+ur1     |288|388|f     
+ur1     |289|389|f     
+ur1     |290|390|f     
+ur1     |291|391|f     
+ur1     |292|392|f     
+ur1     |293|393|f     
+ur1     |294|394|f     
+ur1     |295|395|f     
+ur1     |296|396|f     
+ur1     |297|397|f     
+ur1     |298|398|f     
+ur1     |299|399|f     
+ur1     |300|400|f     
+ur2     | 11|  3|abc+11
+ur2     | 12|  4|bcd   
+ur2     |400|500|g     
+ur2     |401|501|g     
+ur2     |402|502|g     
+ur2     |403|503|g     
+ur2     |404|504|g     
+ur2     |405|505|g     
+ur2     |406|506|g     
+ur2     |407|507|g     
+ur2     |408|508|g     
+ur2     |409|509|g     
+ur2     |410|510|g     
+ur2     |411|511|g     
+ur2     |412|512|g     
+ur2     |413|513|g     
+ur2     |414|514|g     
+ur2     |415|515|g     
+ur2     |416|516|g     
+ur2     |417|517|g     
+ur2     |418|518|g     
+ur2     |419|519|g     
+ur2     |420|520|g     
+ur2     |421|521|g     
+ur2     |422|522|g     
+ur2     |423|523|g     
+ur2     |424|524|g     
+ur2     |425|525|g     
+ur2     |426|526|g     
+ur2     |427|527|g     
+ur2     |428|528|g     
+ur2     |429|529|g     
+ur2     |430|530|g     
+ur2     |431|531|g     
+ur2     |432|532|g     
+ur2     |433|533|g     
+ur2     |434|534|g     
+ur2     |435|535|g     
+ur2     |436|536|g     
+ur2     |437|537|g     
+ur2     |438|538|g     
+ur2     |439|539|g     
+ur2     |440|540|g     
+ur2     |441|541|g     
+ur2     |442|542|g     
+ur2     |443|543|g     
+ur2     |444|544|g     
+ur2     |445|545|g     
+ur2     |446|546|g     
+ur2     |447|547|g     
+ur2     |448|548|g     
+ur2     |449|549|g     
+ur2     |450|550|g     
+ur2     |451|551|g     
+ur2     |452|552|g     
+ur2     |453|553|g     
+ur2     |454|554|g     
+ur2     |455|555|g     
+ur2     |456|556|g     
+ur2     |457|557|g     
+ur2     |458|558|g     
+ur2     |459|559|g     
+ur2     |460|560|g     
+ur2     |461|561|g     
+ur2     |462|562|g     
+ur2     |463|563|g     
+ur2     |464|564|g     
+ur2     |465|565|g     
+ur2     |466|566|g     
+ur2     |467|567|g     
+ur2     |468|568|g     
+ur2     |469|569|g     
+ur2     |470|570|g     
+ur2     |471|571|g     
+ur2     |472|572|g     
+ur2     |473|573|g     
+ur2     |474|574|g     
+ur2     |475|575|g     
+ur2     |476|576|g     
+ur2     |477|577|g     
+ur2     |478|578|g     
+ur2     |479|579|g     
+ur2     |480|580|g     
+ur2     |481|581|g     
+ur2     |482|582|g     
+ur2     |483|583|g     
+ur2     |484|584|g     
+ur2     |485|585|g     
+ur2     |486|586|g     
+ur2     |487|587|g     
+ur2     |488|588|g     
+ur2     |489|589|g     
+ur2     |490|590|g     
+ur2     |491|591|g     
+ur2     |492|592|g     
+ur2     |493|593|g     
+ur2     |494|594|g     
+ur2     |495|595|g     
+ur2     |496|596|g     
+ur2     |497|597|g     
+ur2     |498|598|g     
+ur2     |499|599|g     
+ur2     |500|600|g     
+ur2     |501|601|g     
+ur2     |502|602|g     
+ur2     |503|603|g     
+ur2     |504|604|g     
+ur2     |505|605|g     
+ur2     |506|606|g     
+ur2     |507|607|g     
+ur2     |508|608|g     
+ur2     |509|609|g     
+ur2     |510|610|g     
+ur2     |511|611|g     
+ur2     |512|612|g     
+ur2     |513|613|g     
+ur2     |514|614|g     
+ur2     |515|615|g     
+ur2     |516|616|g     
+ur2     |517|617|g     
+ur2     |518|618|g     
+ur2     |519|619|g     
+ur2     |520|620|g     
+ur2     |521|621|g     
+ur2     |522|622|g     
+ur2     |523|623|g     
+ur2     |524|624|g     
+ur2     |525|625|g     
+ur2     |526|626|g     
+ur2     |527|627|g     
+ur2     |528|628|g     
+ur2     |529|629|g     
+ur2     |530|630|g     
+ur2     |531|631|g     
+ur2     |532|632|g     
+ur2     |533|633|g     
+ur2     |534|634|g     
+ur2     |535|635|g     
+ur2     |536|636|g     
+ur2     |537|637|g     
+ur2     |538|638|g     
+ur2     |539|639|g     
+ur2     |540|640|g     
+ur2     |541|641|g     
+ur2     |542|642|g     
+ur2     |543|643|g     
+ur2     |544|644|g     
+ur2     |545|645|g     
+ur2     |546|646|g     
+ur2     |547|647|g     
+ur2     |548|648|g     
+ur2     |549|649|g     
+ur2     |550|650|g     
+ur2     |551|651|g     
+ur2     |552|652|g     
+ur2     |553|653|g     
+ur2     |554|654|g     
+ur2     |555|655|g     
+ur2     |556|656|g     
+ur2     |557|657|g     
+ur2     |558|658|g     
+ur2     |559|659|g     
+ur2     |560|660|g     
+ur2     |561|661|g     
+ur2     |562|662|g     
+ur2     |563|663|g     
+ur2     |564|664|g     
+ur2     |565|665|g     
+ur2     |566|666|g     
+ur2     |567|667|g     
+ur2     |568|668|g     
+ur2     |569|669|g     
+ur2     |570|670|g     
+ur2     |571|671|g     
+ur2     |572|672|g     
+ur2     |573|673|g     
+ur2     |574|674|g     
+ur2     |575|675|g     
+ur2     |576|676|g     
+ur2     |577|677|g     
+ur2     |578|678|g     
+ur2     |579|679|g     
+ur2     |580|680|g     
+ur2     |581|681|g     
+ur2     |582|682|g     
+ur2     |583|683|g     
+ur2     |584|684|g     
+ur2     |585|685|g     
+ur2     |586|686|g     
+ur2     |587|687|g     
+ur2     |588|688|g     
+ur2     |589|689|g     
+ur2     |590|690|g     
+ur2     |591|691|g     
+ur2     |592|692|g     
+ur2     |593|693|g     
+ur2     |594|694|g     
+ur2     |595|695|g     
+ur2     |596|696|g     
+ur2     |597|697|g     
+ur2     |598|698|g     
+ur2     |599|699|g     
+ur2     |600|700|g     
+ur3     | 21|  3|Y+11  
+ur3     | 22|  4|zzz   
+(408 rows)
+
+
+starting permutation: s2u s1c s2c s1x s3l
+step s2u: UPDATE un_lp t1 SET c = t1.c + t2.v FROM un_np t2 WHERE t1.a = t2.id AND a = 1;
+step s1c: UPDATE un_sp1 SET c = c + 1 WHERE c = 60; <waiting ...>
+step s2c: COMMIT;
+step s1c: <... completed>
+step s1x: COMMIT;
+step s3l: SELECT tableoid::regclass, a, b, c FROM un_lp WHERE c < 1000 OR c > 1500 ORDER BY 1, a, b, c;
+tableoid|a|b|  c
+--------+-+-+---
+un_sp1  |1|1|111
+un_sp1  |1|1|160
+un_sp2  |1|2|110
+un_sp2  |1|2|112
+un_lp1  |2|5| 50
+un_lp1  |3|6| 60
+(6 rows)
+
+
+starting permutation: s3em s1m s1e s2v s1x s2c s3m
+step s3em: EXPLAIN (COSTS OFF) UPDATE um_lp t1 SET c = t1.c + 1 FROM um_nq t2 WHERE t1.a = t2.id AND a = 1;
+QUERY PLAN                                          
+----------------------------------------------------
+Update on um_lp t1                                  
+  Update on um_sp1 t1_1                             
+  Update on um_sp2 t1_2                             
+  ->  Nested Loop                                   
+        ->  Seq Scan on um_nq t2                    
+              Filter: ((id)::numeric = '1'::numeric)
+        ->  Materialize                             
+              ->  Append                            
+                    ->  Seq Scan on um_sp1 t1_1     
+                          Filter: (a = '1'::numeric)
+                    ->  Seq Scan on um_sp2 t1_2     
+                          Filter: (a = '1'::numeric)
+(12 rows)
+
+step s1m: UPDATE um_sp1 SET c = c + 1 WHERE c = 60;
+step s1e: DELETE FROM um_sp2 WHERE c = 10;
+step s2v: UPDATE um_lp t1 SET c = t1.c + 1 FROM um_nq t2 WHERE t1.a = t2.id AND a = 1; <waiting ...>
+step s1x: COMMIT;
+step s2v: <... completed>
+step s2c: COMMIT;
+step s3m: SELECT tableoid::regclass, a, b, c FROM um_lp ORDER BY 1, a, b, c;
+tableoid|a|b| c
+--------+-+-+--
+um_sp1  |1|1|12
+um_sp1  |1|1|62
+um_sp2  |1|2|13
+um_lp1  |2|5|50
+um_lp1  |3|6|60
+(5 rows)
+

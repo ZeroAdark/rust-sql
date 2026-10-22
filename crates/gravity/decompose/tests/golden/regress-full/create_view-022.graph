@@ -1,0 +1,13 @@
+-- regress-full-create_view-022
+-- select viewname from pg_views where viewname = 'tt27v';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1259 rti=2 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v2.2, c19:#64))
+    lanes Attr(2):byref8:fx64:win/page Attr(18):byval8:w8:val
+  filter op92(v2.18, c18:118)
+  project (1=v2.2)
+  outs 1=fx64:win/page
+mapped: IndexScan

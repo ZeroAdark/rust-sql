@@ -1,0 +1,7 @@
+path	crates/gravity/lowerv4/src/ops/lockrows/lower.rs
+growth	std::iter::Extend::extend	3
+growth	std::vec::Vec::push	1
+ir-only	<alloc::rc::Rc<T> as core::default::Default>::default	1
+macro	std::vec	3
+method	std::rc::Rc::new	1
+type	std::rc::Rc	1

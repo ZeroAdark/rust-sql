@@ -1,0 +1,3 @@
+path	crates/gravity/ir/src/lib.rs
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	1

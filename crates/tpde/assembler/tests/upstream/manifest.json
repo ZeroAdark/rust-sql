@@ -1,0 +1,81 @@
+{
+  "repository": "https://github.com/tpde2/tpde",
+  "revision": "116b2b83eb8491fd63c017285c91b007b8a26a67",
+  "files": [
+    {
+      "path": "LICENSES/Apache-2.0.txt",
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "git_blob": "137069b823873b8bcf42979bcf8e9371052d26a2"
+    },
+    {
+      "path": "LICENSES/LLVM-exception.txt",
+      "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+      "git_blob": "fa4b725a0ee50ef723ce5292865e54de7b0bfca4"
+    },
+    {
+      "path": "tpde/include/tpde/Assembler.hpp",
+      "sha256": "3338a43e4c9cbb9391aea9f626a78c4d1e45e8243100ac1768e3d605a04bf82a",
+      "git_blob": "28a775e846d5b2d399f85b7d8c010b50c781b686"
+    },
+    {
+      "path": "tpde/include/tpde/AssemblerElf.hpp",
+      "sha256": "db56d5e27b348cdc1d2ff9ca30edfbd5eee6a439ba2295f05bcf117aff9067fb",
+      "git_blob": "d4393aa3f39be9e1e2aabc27a2af21a87a1fb05d"
+    },
+    {
+      "path": "tpde/include/tpde/ELF.hpp",
+      "sha256": "f504166c81831ec07b8c7333a5a8f4833b1e2de48e58541626800c826ccfae6b",
+      "git_blob": "d330bd6dce354a3bd2396f46d3950178322e5156"
+    },
+    {
+      "path": "tpde/include/tpde/StringTable.hpp",
+      "sha256": "8963598bf8091026e3da6b070080ab75eb90939e914c0f752749893112db9a56",
+      "git_blob": "f01926147003634cc0031dc0f733c570fb1b6289"
+    },
+    {
+      "path": "tpde/include/tpde/base.hpp",
+      "sha256": "c13348df72171026eff9bc6bd284c6abdfac5d1cd170fdecf47c6fd9fe744d31",
+      "git_blob": "9d30b7b6231d544fefe99e5ba2b380ddfb9cd935"
+    },
+    {
+      "path": "tpde/include/tpde/util/AddressSanitizer.hpp",
+      "sha256": "dcf7daca345337a6e0e6c9e404fde9ff46db82f965f60064ef2398ef032d0cfa",
+      "git_blob": "01230c28409568eb2498267997b588a76a825a9d"
+    },
+    {
+      "path": "tpde/include/tpde/util/BumpAllocator.hpp",
+      "sha256": "b3a86498d97eaf23d0aa07ac40042a2459bea303f83908bfac363ba461fef3d5",
+      "git_blob": "b63195b7ed9614de59786cf4ca2d90ad25c0cb07"
+    },
+    {
+      "path": "tpde/include/tpde/util/SmallVector.hpp",
+      "sha256": "e9dbbb6f5e064e7692b75bf291515d63668679d89baeb5a707357205b017c835",
+      "git_blob": "6976ba96d104c7bc75b1ba0bc44604f4beacd000"
+    },
+    {
+      "path": "tpde/include/tpde/util/misc.hpp",
+      "sha256": "12ebd71ec005fb31546f6f2c16bcc6af90e4560189973e06e949ca74febcefe3",
+      "git_blob": "5b7ae6a88ae61adb0513bb609b2ebdb537a20856"
+    },
+    {
+      "path": "tpde/src/Assembler.cpp",
+      "sha256": "becc41cd3546ceb2b5fc11f334085aff43b58f78a5863b863ac9ab66ae385e6b",
+      "git_blob": "a7fb7054194178ddb9f4736f1c1bf7b9116fd6b5"
+    },
+    {
+      "path": "tpde/src/AssemblerElf.cpp",
+      "sha256": "b8493429d7239541a8e894363058da33ed91cb70cc44dfd790a20e1d76c5e907",
+      "git_blob": "87fc041e32d2522d761e2998056a72454d428efa"
+    },
+    {
+      "path": "tpde/src/StringTable.cpp",
+      "sha256": "ef14bd9e749b576c5aa8a58dc1bfaeb0f3cd662b7e5aca89dcdefa357e9eb154",
+      "git_blob": "cd9a85fb6cdd3c43e1ced1831fa98852c1f97e09"
+    },
+    {
+      "path": "tpde/src/util/SmallVector.cpp",
+      "sha256": "6f10c6746166f81ed6b6d3b9d17c683743d3baecd4da3522b9536c3dde9dd28c",
+      "git_blob": "43796d2aa2a6991b7da3a25fbecf1cb535a8ccef"
+    }
+  ]
+}

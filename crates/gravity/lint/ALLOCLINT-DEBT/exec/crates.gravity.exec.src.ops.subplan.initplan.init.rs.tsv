@@ -1,0 +1,6 @@
+path	crates/gravity/exec/src/ops/subplan/initplan/init.rs
+growth	std::vec::Vec::push	1
+macro	std::vec	1
+method	std::boxed::Box::new	2
+method	std::vec::Vec::into_boxed_slice	2
+type	std::boxed::Box	2

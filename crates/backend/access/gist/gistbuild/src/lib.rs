@@ -8,7 +8,7 @@ pub mod buffers;
 use ::datum::Datum;
 use ::mcx::{Mcx, MemoryContext};
 use ::types_core::{BlockNumber, ForkNumber, BLCKSZ, RELPERSISTENCE_UNLOGGED};
-use ::types_error::{PgError, PgResult};
+use ::types_error::{ErrorLocation, PgError, PgResult};
 use ::types_gist::{GistBuildLSN, F_LEAF, GIST_DEFAULT_FILLFACTOR, GIST_ROOT_BLKNO, GIST_SORTSUPPORT_PROC};
 use ::types_rel::Relation;
 use ::types_storage::bufpage::{PageMut, PageRef};
@@ -37,10 +37,14 @@ pub(crate) fn elog_error(msg: String) -> Box<PgError> {
 }
 
 /// elog(DEBUGn, ...) — the build-progress messages C emits (gistbuild.c).
-pub(crate) fn debug_msg(level: ::types_error::ErrorLevel, msg: impl Into<String>) -> PgResult<()> {
+pub(crate) fn debug_msg(
+    level: ::types_error::ErrorLevel,
+    msg: impl Into<String>,
+    location: ErrorLocation,
+) -> PgResult<()> {
     ::elog::ereport(level)
         .errmsg_internal(msg)
-        .finish(::types_error::ErrorLocation::new("gistbuild.c", 0, "gistbuild"))
+        .finish(location)
 }
 
 /// GistBuildMode, minus GIST_SORTED_BUILD (dispatched up front).
@@ -79,7 +83,7 @@ pub fn gistbuild<'mcx>(
     let freespace = BLCKSZ * (100 - fillfactor as usize) / 100;
 
     let mut giststate = initGISTstate(mcx, index)?;
-    let mut temp = MemoryContext::new_bump("GiST temporary context");
+    let mut temp = MemoryContext::new_wholesale("GiST temporary context");
 
     // Unless buffering mode was forced, use sorting when possible.
     if build_mode != GistBuildMode::Stats {
@@ -107,7 +111,8 @@ pub fn gistbuild<'mcx>(
 
     let mut indtuples: u64 = 0;
     let mut indtuples_size: u64 = 0;
-    let mut bufstate: Option<buffered::BufBuild<'mcx>> = None;
+    let parent_context = std::cell::OnceCell::new();
+    let mut bufstate: Option<buffered::BufBuild<'_>> = None;
 
     let reltuples = execindexing::table_index_build_scan(
         mcx,
@@ -205,6 +210,7 @@ pub fn gistbuild<'mcx>(
             if switch {
                 match buffered::gist_init_buffering(
                     mcx,
+                    &parent_context,
                     index_rel,
                     freespace,
                     indtuples,
@@ -222,8 +228,11 @@ pub fn gistbuild<'mcx>(
     )?;
 
     if build_mode == GistBuildMode::Active {
-        // gistbuild.c:323 elog(DEBUG1).
-        debug_msg(::types_error::DEBUG1, "all tuples processed, emptying buffers")?;
+        debug_msg(
+            ::types_error::DEBUG1,
+            "all tuples processed, emptying buffers",
+            ErrorLocation::new("gistbuild.c", 323, "gistbuild"),
+        )?;
         let bb = bufstate.as_mut().expect("buffering active");
         buffered::gist_empty_all_buffers(&mut temp, index, heap, freespace, &mut giststate, bb)?;
         bufstate.take().expect("buffering active").gfbb.free()?;
@@ -476,7 +485,7 @@ fn levelstate_flush(
             let mut target = page_mut_of_bulk(&mut buf);
             gistinitpage(&mut target, if isleaf { F_LEAF } else { 0 });
             let tuples: Vec<&[u8]> = {
-                let mut v = Vec::with_capacity(d.block_num as usize);
+                let mut v = ::mcx::std_vec_with_capacity("access", d.block_num as usize)?;
                 let mut off = 0usize;
                 for _ in 0..d.block_num {
                     let p = d.list[off..].as_ptr();
@@ -551,6 +560,40 @@ pub fn gistbuildempty(index: &Relation<'_>) -> PgResult<()> {
 mod tests {
     use super::elog_error;
     use types_error::ERRCODE_INTERNAL_ERROR;
+
+    #[test]
+    fn build_diagnostics_preserve_c_locations() {
+        fn hook(error: &types_error::PgError, output: &mut bool) {
+            let (line, routine) = match error.message.as_str() {
+                "all tuples processed, emptying buffers" => (323, "gistbuild"),
+                "failed to switch to buffered GiST build" => (757, "gistInitBuffering"),
+                "switched to buffered GiST build; level step = 1, pagesPerBuffer = 2" =>
+                    (777, "gistInitBuffering"),
+                "splitting GiST root page, now 2 levels deep" =>
+                    (1090, "gistbufferinginserttuples"),
+                "emptied all buffers at level 1" => (1418, "gistEmptyAllBuffers"),
+                _ => panic!("unexpected diagnostic"),
+            };
+            assert_eq!(error.sqlstate(), types_error::ERRCODE_SUCCESSFUL_COMPLETION);
+            assert_eq!(error.location.as_ref().unwrap(),
+                &super::ErrorLocation::new("gistbuild.c", line, routine));
+            *output = false;
+        }
+        let old_level = elog::config::log_min_messages();
+        elog::config::set_log_min_messages(types_error::DEBUG2);
+        let old_hook = elog::set_emit_log_hook(Some(hook));
+        for (level, message, line, routine) in [
+            (types_error::DEBUG1, "all tuples processed, emptying buffers", 323, "gistbuild"),
+            (types_error::DEBUG1, "failed to switch to buffered GiST build", 757, "gistInitBuffering"),
+            (types_error::DEBUG1, "switched to buffered GiST build; level step = 1, pagesPerBuffer = 2", 777, "gistInitBuffering"),
+            (types_error::DEBUG2, "splitting GiST root page, now 2 levels deep", 1090, "gistbufferinginserttuples"),
+            (types_error::DEBUG2, "emptied all buffers at level 1", 1418, "gistEmptyAllBuffers"),
+        ] {
+            super::debug_msg(level, message, super::ErrorLocation::new("gistbuild.c", line, routine)).unwrap();
+        }
+        elog::set_emit_log_hook(old_hook);
+        elog::config::set_log_min_messages(old_level);
+    }
 
     #[test]
     fn gistbuild_elogs_are_xx000() {

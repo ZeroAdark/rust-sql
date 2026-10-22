@@ -792,7 +792,7 @@ mod arith_proofs {
             #[kani::proof]
             // unwind 18 (NOT the family's v4 default 9): the result-image
             // memcmp runs over the full 16-byte addr buffer even for v4
-            // images — CI cluster batchB failed "unwinding assertion memcmp.0
+            // images — fleet batchB failed "unwinding assertion memcmp.0
             // iteration 9" at unwind(9); image compares need
             // unwind > image bytes + 1.
             #[kani::unwind(18)]
@@ -1433,7 +1433,7 @@ mod recvsend_proofs {
 
     // unwind floor is 18 in EVERY cell regardless of message length: the
     // ipaddr struct compare is a memcmp over the full 16-byte arrays
-    // (CI-decode 2026-07-30 lesson — unwind(<18) truncates memcmp and
+    // (fleet-decode 2026-07-30 lesson — unwind(<18) truncates memcmp and
     // FABRICATES counterexamples; reproduced here at len8/unwind10).
     /// Wall-witness probe (NOT a suite gate): the one-symbolic-length
     /// total harness the literal grid replaced. Kept to re-validate the

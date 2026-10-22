@@ -1,8 +1,9 @@
-// tidbitmap.c. Pagetable is a hashbrown map (C: simplehash + murmurhash32)
-// whose bucket array is allocated through the huge (MCXT_ALLOC_HUGE) entry
-// point, as C's pagetable_allocate does (tidbitmap.c:1503). The
-// shared iteration lane is thread-native: the frozen arrays + cursor C parks
-// in DSA live in an Arc (std containers: cross-thread memory, outside mcx
+// tidbitmap.c. Pagetable is simplehash (murmurhash32, robin-hood insert,
+// backward-shift delete, backward iteration) bucket for bucket, because
+// tbm_lossify's page choice depends on bucket order. Bucket arrays are
+// allocated through the huge (MCXT_ALLOC_HUGE) entry point. The shared
+// iteration lane is thread-native: the frozen arrays + cursor C parks in DSA
+// live in an Arc (std containers: cross-thread memory, outside mcx
 // accounting like ParallelTableScanDescShared).
 
 extern crate alloc;
@@ -25,7 +26,7 @@ pub const PAGES_PER_CHUNK: usize = BLCKSZ / 32;
 
 const WORDS_PER_PAGE: usize = (TBM_MAX_TUPLES_PER_PAGE - 1) / BITS_PER_BITMAPWORD + 1;
 const WORDS_PER_CHUNK: usize = (PAGES_PER_CHUNK - 1) / BITS_PER_BITMAPWORD + 1;
-const TBM_WORDS: usize = if WORDS_PER_PAGE > WORDS_PER_CHUNK {
+pub const TBM_WORDS: usize = if WORDS_PER_PAGE > WORDS_PER_CHUNK {
     WORDS_PER_PAGE
 } else {
     WORDS_PER_CHUNK
@@ -92,6 +93,12 @@ impl TbmSharedIterState {
     pub fn entry_counts(&self) -> (u64, u64) {
         (self.npages.max(0) as u64, self.nchunks.max(0) as u64)
     }
+
+    /// The heap pages the entries expand to (an exact page one, a lossy chunk its set bits).
+    pub fn expanded_pages(&self) -> u64 {
+        let lossy: u64 = self.ptchunks.iter().map(|&i| self.ptbase[i as usize].words[..WORDS_PER_CHUNK].iter().map(|w| w.count_ones() as u64).sum::<u64>()).sum();
+        self.npages.max(0) as u64 + lossy
+    }
 }
 
 struct TbmSharedCursor {
@@ -100,13 +107,6 @@ struct TbmSharedCursor {
     schunkbit: i32,
 }
 
-/// C `pagetable_allocate` (tidbitmap.c:1497-1504): the pagetable's element
-/// array is allocated with `MCXT_ALLOC_HUGE`, so it may exceed MaxAllocSize
-/// when work_mem is large. This allocator routes hashbrown's bucket-array
-/// allocations through [`Mcx::alloc_uninit_bytes_huge`] (admitted against
-/// MaxAllocHugeSize) instead of the 1GB-ceilinged `Allocator::allocate`.
-/// hashbrown only ever allocates fresh arrays and frees old ones (as
-/// simplehash's SH_GROW), so allocate + deallocate are the whole surface.
 #[derive(Clone, Copy)]
 struct McxHuge<'mcx>(Mcx<'mcx>);
 
@@ -128,33 +128,315 @@ unsafe impl Allocator for McxHuge<'_> {
     }
 }
 
-/// C `pagetable_hash` (simplehash keyed by BlockNumber). A newtype over the
-/// huge-allocated hashbrown map (local type for the `ForgetSafe` impl);
-/// derefs to the map.
-struct Pagetable<'mcx>(
-    hashbrown::HashMap<BlockNumber, PagetableEntry, rustc_hash::FxBuildHasher, McxHuge<'mcx>>,
-);
+const SH_MAX_SIZE: u64 = u32::MAX as u64 + 1;
+/// `tbm_create_pagetable`'s initial element count.
+const PAGETABLE_INITIAL: u32 = 128;
+const SH_FILLFACTOR: f64 = 0.9;
+const SH_MAX_FILLFACTOR: f64 = 0.98;
+const SH_GROW_MAX_DIB: u32 = 25;
+const SH_GROW_MAX_MOVE: u32 = 150;
+const SH_GROW_MIN_FILLFACTOR: f64 = 0.1;
 
-impl<'mcx> core::ops::Deref for Pagetable<'mcx> {
-    type Target =
-        hashbrown::HashMap<BlockNumber, PagetableEntry, rustc_hash::FxBuildHasher, McxHuge<'mcx>>;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.0
+type Slots<'mcx, T> = allocator_api2::vec::Vec<T, McxHuge<'mcx>>;
+
+#[inline(always)]
+fn pagetable_hash(blockno: BlockNumber) -> u32 {
+    hashfn::murmurhash32(blockno)
+}
+
+#[cold]
+fn sh_error(msg: &str) -> alloc::boxed::Box<PgError> {
+    PgError::error(alloc::string::String::from(msg)).into()
+}
+
+fn sh_compute_size(newsize: u64) -> PgResult<u64> {
+    let size = newsize.max(2).next_power_of_two();
+    debug_assert!(size <= SH_MAX_SIZE);
+    if (core::mem::size_of::<PagetableEntry>() as u64).saturating_mul(size) >= usize::MAX as u64 / 2
+    {
+        return Err(sh_error("hash table too large"));
+    }
+    Ok(size)
+}
+
+/// C `pagetable_hash`. `data[i]` is initialized iff `used[i]` (C's
+/// `status == SH_STATUS_IN_USE`).
+struct Pagetable<'mcx> {
+    used: Slots<'mcx, bool>,
+    data: Slots<'mcx, core::mem::MaybeUninit<PagetableEntry>>,
+    size: u64,
+    sizemask: u32,
+    members: u32,
+    grow_threshold: u32,
+}
+
+struct PagetableIter {
+    cur: u32,
+    end: u32,
+    done: bool,
+}
+
+impl<'mcx> Pagetable<'mcx> {
+    fn alloc_slots(
+        mcx: Mcx<'mcx>,
+        size: u64,
+    ) -> PgResult<(Slots<'mcx, bool>, Slots<'mcx, core::mem::MaybeUninit<PagetableEntry>>)> {
+        let n = size as usize;
+        let oom = || mcx.oom(n.saturating_mul(core::mem::size_of::<PagetableEntry>() + 1));
+        let mut used = Slots::new_in(McxHuge(mcx));
+        used.try_reserve_exact(n).map_err(|_| oom())?;
+        used.resize(n, false);
+        let mut data = Slots::new_in(McxHuge(mcx));
+        data.try_reserve_exact(n).map_err(|_| oom())?;
+        // SAFETY: capacity >= n was reserved above, and MaybeUninit elements
+        // need no initialization.
+        unsafe { data.set_len(n) };
+        Ok((used, data))
+    }
+
+    fn create(mcx: Mcx<'mcx>, nelements: u32) -> PgResult<Self> {
+        let size = (nelements as f64 / SH_FILLFACTOR).min(SH_MAX_SIZE as f64) as u64;
+        let size = sh_compute_size(size)?;
+        let (used, data) = Self::alloc_slots(mcx, size)?;
+        let mut tb = Pagetable { used, data, size: 0, sizemask: 0, members: 0, grow_threshold: 0 };
+        tb.update_parameters(size)?;
+        Ok(tb)
+    }
+
+    /// Empties the table in place (every bucket unused), keeping its size.
+    fn clear(&mut self) {
+        self.used.iter_mut().for_each(|u| *u = false);
+        self.members = 0;
+    }
+
+    fn update_parameters(&mut self, newsize: u64) -> PgResult<()> {
+        let size = sh_compute_size(newsize)?;
+        self.size = size;
+        self.sizemask = (size - 1) as u32;
+        let fill = if size == SH_MAX_SIZE { SH_MAX_FILLFACTOR } else { SH_FILLFACTOR };
+        self.grow_threshold = (size as f64 * fill) as u32;
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn entry(&self, i: u32) -> &PagetableEntry {
+        debug_assert!(self.used[i as usize]);
+        // SAFETY: callers pass only in-use buckets, whose data is initialized.
+        unsafe { self.data[i as usize].assume_init_ref() }
+    }
+
+    #[inline(always)]
+    fn entry_mut(&mut self, i: u32) -> &mut PagetableEntry {
+        debug_assert!(self.used[i as usize]);
+        // SAFETY: callers pass only in-use buckets, whose data is initialized.
+        unsafe { self.data[i as usize].assume_init_mut() }
+    }
+
+    #[inline(always)]
+    fn distance_from_optimal(&self, optimal: u32, bucket: u32) -> u32 {
+        if optimal <= bucket {
+            bucket - optimal
+        } else {
+            (self.size + bucket as u64 - optimal as u64) as u32
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self, mcx: Mcx<'mcx>, newsize: u64) -> PgResult<()> {
+        let oldsize = self.size as usize;
+        debug_assert!((oldsize as u64) < newsize);
+        let newsize = sh_compute_size(newsize)?;
+        let (newused, newdata) = Self::alloc_slots(mcx, newsize)?;
+        self.update_parameters(newsize)?;
+        let oldused = core::mem::replace(&mut self.used, newused);
+        let olddata = core::mem::replace(&mut self.data, newdata);
+
+        // The optimal-bucket probe uses the NEW sizemask, as C's does.
+        let mut startelem = 0usize;
+        for i in 0..oldsize {
+            if !oldused[i] {
+                startelem = i;
+                break;
+            }
+            // SAFETY: oldused[i] marks an initialized bucket.
+            let blockno = unsafe { olddata[i].assume_init_ref() }.blockno;
+            if (pagetable_hash(blockno) & self.sizemask) as usize == i {
+                startelem = i;
+                break;
+            }
+        }
+
+        let mut copyelem = startelem;
+        for _ in 0..oldsize {
+            if oldused[copyelem] {
+                // SAFETY: oldused[copyelem] marks an initialized bucket.
+                let blockno = unsafe { olddata[copyelem].assume_init_ref() }.blockno;
+                let mut curelem = pagetable_hash(blockno) & self.sizemask;
+                while self.used[curelem as usize] {
+                    curelem = curelem.wrapping_add(1) & self.sizemask;
+                }
+                self.used[curelem as usize] = true;
+                self.data[curelem as usize] = olddata[copyelem];
+            }
+            copyelem += 1;
+            if copyelem >= oldsize {
+                copyelem = 0;
+            }
+        }
+        Ok(())
+    }
+
+    /// C `pagetable_insert`; a new entry comes back zeroed with its key set.
+    /// The grow check runs even when the key is present, as C's does.
+    fn insert(&mut self, mcx: Mcx<'mcx>, key: BlockNumber) -> PgResult<(u32, bool)> {
+        let hash = pagetable_hash(key);
+        'restart: loop {
+            let mut insertdist = 0u32;
+            if self.members >= self.grow_threshold {
+                if self.size == SH_MAX_SIZE {
+                    return Err(sh_error("hash table size exceeded"));
+                }
+                self.grow(mcx, self.size * 2)?;
+            }
+            let startelem = hash & self.sizemask;
+            let mut curelem = startelem;
+            loop {
+                if !self.used[curelem as usize] {
+                    self.members += 1;
+                    self.used[curelem as usize] = true;
+                    self.data[curelem as usize] =
+                        core::mem::MaybeUninit::new(PagetableEntry::zeroed(key));
+                    return Ok((curelem, false));
+                }
+                let curblock = self.entry(curelem).blockno;
+                if curblock == key {
+                    return Ok((curelem, true));
+                }
+                let curoptimal = pagetable_hash(curblock) & self.sizemask;
+                let curdist = self.distance_from_optimal(curoptimal, curelem);
+
+                if insertdist > curdist {
+                    let mut emptyelem = curelem;
+                    let mut emptydist = 0u32;
+                    loop {
+                        emptyelem = emptyelem.wrapping_add(1) & self.sizemask;
+                        if !self.used[emptyelem as usize] {
+                            break;
+                        }
+                        emptydist += 1;
+                        if emptydist > SH_GROW_MAX_MOVE
+                            && self.members as f64 / self.size as f64 >= SH_GROW_MIN_FILLFACTOR
+                        {
+                            self.grow_threshold = 0;
+                            continue 'restart;
+                        }
+                    }
+                    let mut lastelem = emptyelem;
+                    let mut moveelem = emptyelem;
+                    while moveelem != curelem {
+                        moveelem = moveelem.wrapping_sub(1) & self.sizemask;
+                        self.data[lastelem as usize] = self.data[moveelem as usize];
+                        lastelem = moveelem;
+                    }
+                    self.used[emptyelem as usize] = true;
+                    self.members += 1;
+                    self.data[curelem as usize] =
+                        core::mem::MaybeUninit::new(PagetableEntry::zeroed(key));
+                    return Ok((curelem, false));
+                }
+
+                curelem = curelem.wrapping_add(1) & self.sizemask;
+                insertdist += 1;
+                if insertdist > SH_GROW_MAX_DIB
+                    && self.members as f64 / self.size as f64 >= SH_GROW_MIN_FILLFACTOR
+                {
+                    self.grow_threshold = 0;
+                    continue 'restart;
+                }
+            }
+        }
+    }
+
+    fn lookup(&self, key: BlockNumber) -> Option<&PagetableEntry> {
+        let mut curelem = pagetable_hash(key) & self.sizemask;
+        loop {
+            if !self.used[curelem as usize] {
+                return None;
+            }
+            let entry = self.entry(curelem);
+            if entry.blockno == key {
+                return Some(entry);
+            }
+            curelem = curelem.wrapping_add(1) & self.sizemask;
+        }
+    }
+
+    fn delete(&mut self, key: BlockNumber) -> bool {
+        let mut curelem = pagetable_hash(key) & self.sizemask;
+        loop {
+            if !self.used[curelem as usize] {
+                return false;
+            }
+            if self.entry(curelem).blockno == key {
+                let mut lastelem = curelem;
+                self.members -= 1;
+                loop {
+                    curelem = curelem.wrapping_add(1) & self.sizemask;
+                    if !self.used[curelem as usize] {
+                        break;
+                    }
+                    let curoptimal = pagetable_hash(self.entry(curelem).blockno) & self.sizemask;
+                    if curoptimal == curelem {
+                        break;
+                    }
+                    self.data[lastelem as usize] = self.data[curelem as usize];
+                    lastelem = curelem;
+                }
+                self.used[lastelem as usize] = false;
+                return true;
+            }
+            curelem = curelem.wrapping_add(1) & self.sizemask;
+        }
+    }
+
+    fn start_iterate(&self) -> PagetableIter {
+        let startelem = self.used.iter().position(|&u| !u).expect("pagetable has no empty bucket");
+        PagetableIter { cur: startelem as u32, end: startelem as u32, done: false }
+    }
+
+    fn start_iterate_at(&self, at: u32) -> PagetableIter {
+        let cur = at & self.sizemask;
+        PagetableIter { cur, end: cur, done: false }
+    }
+
+    /// C `pagetable_iterate`: backwards, over the live sizemask (the table
+    /// may grow under a lossify walk).
+    fn iterate(&self, iter: &mut PagetableIter) -> Option<u32> {
+        while !iter.done {
+            let elem = iter.cur;
+            iter.cur = iter.cur.wrapping_sub(1) & self.sizemask;
+            if (iter.cur & self.sizemask) == (iter.end & self.sizemask) {
+                iter.done = true;
+            }
+            if self.used[elem as usize] {
+                return Some(elem);
+            }
+        }
+        None
+    }
+
+    fn for_each(&self, mut f: impl FnMut(&PagetableEntry)) {
+        let mut it = self.start_iterate();
+        while let Some(i) = self.iterate(&mut it) {
+            f(self.entry(i));
+        }
     }
 }
 
-impl core::ops::DerefMut for Pagetable<'_> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-// SAFETY: as mcx's impl for `Mcx`-allocated maps — the bucket array is
-// arena bytes of the owning context (huge entry point of the same `Mcx`),
-// and BlockNumber/PagetableEntry have no drop glue; forgetting the map at
-// reset leaks nothing outside the arena.
+// SAFETY: the slot arrays are arena bytes of the owning context (huge entry
+// point of the same `Mcx`), and bool/PagetableEntry have no drop glue;
+// forgetting the table at reset leaks nothing outside the arena.
 unsafe impl mcx::ForgetSafe for Pagetable<'_> {}
 
 pub struct TIDBitmap<'mcx> {
@@ -166,12 +448,12 @@ pub struct TIDBitmap<'mcx> {
     npages: i32,
     nchunks: i32,
     iterating: TbmIterating,
-    lossify_start: usize,
+    lossify_start: u32,
     entry1: PagetableEntry,
-    // Sorted readout arrays of raw pagetable bucket indices (C keeps
+    // Sorted readout arrays of pagetable bucket indices (C keeps
     // PagetableEntry pointers, tidbitmap.c:713; the bitmap is read-only once
-    // iterating, so a bucket index is as stable as C's pointer and the
-    // arrays stay pointer-sized rather than entry-sized).
+    // iterating, so a bucket index is as stable as C's pointer, and the arrays
+    // stay pointer-sized rather than entry-sized).
     spages: Option<PgVec<'mcx, usize>>,
     schunks: Option<PgVec<'mcx, usize>>,
 }
@@ -190,29 +472,61 @@ pub struct TbmIterateResult<'a> {
 }
 
 impl TbmIterateResult<'_> {
+    /// An exact page's tuple bits (bit `off - 1` per offset), copied out of the frozen entry; `None` lossy.
+    pub fn tuple_bits(&self) -> Option<[bitmapword; TBM_WORDS]> {
+        self.page.filter(|_| !self.lossy).map(|p| p.words)
+    }
+
     /// `tbm_extract_page_tuple`: fills as many offsets as fit, returns the
     /// total number of offsets present on the page.
     pub fn extract_page_tuples(&self, offsets: &mut [OffsetNumber]) -> usize {
         let page = self.page.expect("extract_page_tuples on a lossy page");
-        let mut ntuples = 0usize;
-        for wn in 0..WORDS_PER_PAGE {
-            let mut w = page.words[wn];
-            if w != 0 {
-                let mut off = wn * BITS_PER_BITMAPWORD + 1;
-                while w != 0 {
-                    if w & 1 != 0 {
-                        if ntuples < offsets.len() {
-                            offsets[ntuples] = off as OffsetNumber;
-                        }
-                        ntuples += 1;
-                    }
-                    off += 1;
-                    w >>= 1;
-                }
-            }
-        }
-        ntuples
+        extract_words(&page.words[..WORDS_PER_PAGE], offsets)
     }
+
+    /// Owned copy for a read stream's per-buffer data (C keeps the
+    /// TBMIterateResult itself there; its page pointer outlives the call).
+    pub fn to_page_result(&self) -> TbmPageResult {
+        let mut words = [0; WORDS_PER_PAGE];
+        if let Some(page) = self.page {
+            words.copy_from_slice(&page.words[..WORDS_PER_PAGE]);
+        }
+        TbmPageResult { blockno: self.blockno, lossy: self.lossy, recheck: self.recheck, words }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct TbmPageResult {
+    pub blockno: BlockNumber,
+    pub lossy: bool,
+    pub recheck: bool,
+    words: [bitmapword; WORDS_PER_PAGE],
+}
+
+impl TbmPageResult {
+    pub fn extract_page_tuples(&self, offsets: &mut [OffsetNumber]) -> usize {
+        debug_assert!(!self.lossy);
+        extract_words(&self.words, offsets)
+    }
+}
+
+fn extract_words(words: &[bitmapword], offsets: &mut [OffsetNumber]) -> usize {
+    let mut ntuples = 0usize;
+    for (wn, &word) in words.iter().enumerate() {
+        let mut w = word;
+        let mut off = wn * BITS_PER_BITMAPWORD + 1;
+        while w != 0 {
+            if w & 1 != 0 {
+                if ntuples < offsets.len() {
+                    offsets[ntuples] = off as OffsetNumber;
+                }
+                ntuples += 1;
+            }
+            off += 1;
+            w >>= 1;
+        }
+    }
+    ntuples
 }
 
 /// C `tbm_calculate_entries` (tidbitmap.c:1545-1561): estimate the number
@@ -255,13 +569,52 @@ impl<'mcx> TIDBitmap<'mcx> {
         self.nentries == 0
     }
 
+    /// Empties the bitmap for reuse by the next build of the same scan node
+    /// (`tbm_free` + `tbm_create` with the same `maxbytes`), keeping its
+    /// storage: the executor's query context does not reuse freed memory, so
+    /// a bitmap built per rescan would otherwise grow the query's memory by
+    /// a pagetable per rescan (D2181). A pagetable that grew past its initial
+    /// size is dropped, so the reused bitmap's bucket layout — and with it
+    /// the iteration and lossify order — is a fresh bitmap's.
+    pub fn recycle(&mut self, maxbytes: usize) {
+        let keep = self
+            .pagetable
+            .as_ref()
+            .is_some_and(|t| sh_compute_size((PAGETABLE_INITIAL as f64 / SH_FILLFACTOR) as u64).is_ok_and(|s| s == t.size));
+        if keep {
+            self.pagetable.as_mut().expect("just checked").clear();
+        } else {
+            self.pagetable = None;
+        }
+        self.status = TbmStatus::Empty;
+        self.nentries = 0;
+        // tbm_lossify may have raised it; a new bitmap starts from maxbytes.
+        self.maxentries = tbm_calculate_entries(maxbytes);
+        self.npages = 0;
+        self.nchunks = 0;
+        self.iterating = TbmIterating::Not;
+        self.lossify_start = 0;
+        self.entry1 = PagetableEntry::zeroed(0);
+        if let Some(v) = self.spages.as_mut() {
+            v.clear();
+        }
+        if let Some(v) = self.schunks.as_mut() {
+            v.clear();
+        }
+    }
+
     fn create_pagetable(&mut self) -> PgResult<()> {
-        debug_assert!(self.status != TbmStatus::Hash && self.pagetable.is_none());
-        let mut table =
-            Pagetable(hashbrown::HashMap::with_hasher_in(Default::default(), McxHuge(self.mcx)));
-        table.try_reserve(128).map_err(|_| self.mcx.oom(128))?;
+        debug_assert!(self.status != TbmStatus::Hash);
+        // A recycled bitmap keeps its cleared initial-size pagetable.
+        let mut table = match self.pagetable.take() {
+            Some(t) => t,
+            None => Pagetable::create(self.mcx, PAGETABLE_INITIAL)?,
+        };
+        debug_assert!(table.members == 0);
         if self.status == TbmStatus::OnePage {
-            table.insert(self.entry1.blockno, self.entry1);
+            let (idx, found) = table.insert(self.mcx, self.entry1.blockno)?;
+            debug_assert!(!found);
+            *table.entry_mut(idx) = self.entry1;
         }
         self.pagetable = Some(table);
         self.status = TbmStatus::Hash;
@@ -326,8 +679,10 @@ impl<'mcx> TIDBitmap<'mcx> {
             self.union_page(&b.entry1)?;
         } else {
             debug_assert!(b.status == TbmStatus::Hash);
-            for bpage in b.pagetable.as_ref().expect("TBM_HASH without pagetable").values() {
-                self.union_page(bpage)?;
+            let btable = b.pagetable.as_ref().expect("TBM_HASH without pagetable");
+            let mut it = btable.start_iterate();
+            while let Some(i) = btable.iterate(&mut it) {
+                self.union_page(btable.entry(i))?;
             }
         }
         Ok(())
@@ -402,7 +757,9 @@ impl<'mcx> TIDBitmap<'mcx> {
             let table = self.pagetable.as_mut().expect("TBM_HASH without pagetable");
             let (mut npages, mut nchunks, mut nentries) =
                 (self.npages, self.nchunks, self.nentries);
-            table.retain(|_, apage| {
+            let mut it = table.start_iterate();
+            while let Some(i) = table.iterate(&mut it) {
+                let apage = table.entry_mut(i);
                 if intersect_page(apage, b) {
                     if apage.ischunk {
                         nchunks -= 1;
@@ -410,11 +767,10 @@ impl<'mcx> TIDBitmap<'mcx> {
                         npages -= 1;
                     }
                     nentries -= 1;
-                    false
-                } else {
-                    true
+                    let blockno = apage.blockno;
+                    assert!(table.delete(blockno), "hash table corrupted");
                 }
-            });
+            }
             self.npages = npages;
             self.nchunks = nchunks;
             self.nentries = nentries;
@@ -432,7 +788,7 @@ impl<'mcx> TIDBitmap<'mcx> {
             debug_assert!(!self.entry1.ischunk);
             return Some(&self.entry1);
         }
-        let page = self.pagetable.as_ref().expect("TBM_HASH without pagetable").get(&pageno)?;
+        let page = self.pagetable.as_ref().expect("TBM_HASH without pagetable").lookup(pageno)?;
         if page.ischunk {
             return None;
         }
@@ -460,18 +816,13 @@ impl<'mcx> TIDBitmap<'mcx> {
         }
         let mcx = self.mcx;
         let table = self.pagetable.as_mut().expect("TBM_HASH without pagetable");
-        table.try_reserve(1).map_err(|_| mcx.oom(core::mem::size_of::<PagetableEntry>()))?;
-        let mut found = true;
-        let page = table.entry(pageno).or_insert_with(|| {
-            found = false;
-            PagetableEntry::zeroed(pageno)
-        });
+        let (idx, found) = table.insert(mcx, pageno)?;
         if !found {
             self.nentries += 1;
             self.npages += 1;
             *new_entry = true;
         }
-        Ok(page)
+        Ok(table.entry_mut(idx))
     }
 
     fn page_is_lossy(&self, pageno: BlockNumber) -> bool {
@@ -481,7 +832,7 @@ impl<'mcx> TIDBitmap<'mcx> {
         debug_assert!(self.status == TbmStatus::Hash);
         let bitno = pageno as usize % PAGES_PER_CHUNK;
         let chunk_pageno = pageno - bitno as BlockNumber;
-        match self.pagetable.as_ref().expect("TBM_HASH without pagetable").get(&chunk_pageno) {
+        match self.pagetable.as_ref().expect("TBM_HASH without pagetable").lookup(chunk_pageno) {
             Some(page) if page.ischunk => {
                 page.words[wordnum(bitno)] & ((1 as bitmapword) << bitnum(bitno)) != 0
             }
@@ -497,34 +848,26 @@ impl<'mcx> TIDBitmap<'mcx> {
         let chunk_pageno = pageno - bitno as BlockNumber;
         let mcx = self.mcx;
         let table = self.pagetable.as_mut().expect("TBM_HASH without pagetable");
-        if bitno != 0 && table.remove(&pageno).is_some() {
+        if bitno != 0 && table.delete(pageno) {
             self.nentries -= 1;
             self.npages -= 1;
         }
-        table.try_reserve(1).map_err(|_| mcx.oom(core::mem::size_of::<PagetableEntry>()))?;
-        match table.entry(chunk_pageno) {
-            hashbrown::hash_map::Entry::Vacant(v) => {
-                let mut entry = PagetableEntry::zeroed(chunk_pageno);
-                entry.ischunk = true;
-                entry.words[wordnum(bitno)] |= (1 as bitmapword) << bitnum(bitno);
-                v.insert(entry);
-                self.nentries += 1;
-                self.nchunks += 1;
-            }
-            hashbrown::hash_map::Entry::Occupied(mut o) => {
-                let page = o.get_mut();
-                if !page.ischunk {
-                    // Chunk-header page was exact: it had tuple bits, so its
-                    // own page-bit is set lossy.
-                    *page = PagetableEntry::zeroed(chunk_pageno);
-                    page.ischunk = true;
-                    page.words[0] = 1 as bitmapword;
-                    self.nchunks += 1;
-                    self.npages -= 1;
-                }
-                page.words[wordnum(bitno)] |= (1 as bitmapword) << bitnum(bitno);
-            }
+        let (idx, found) = table.insert(mcx, chunk_pageno)?;
+        let page = table.entry_mut(idx);
+        if !found {
+            page.ischunk = true;
+            self.nentries += 1;
+            self.nchunks += 1;
+        } else if !page.ischunk {
+            // Chunk-header page was exact: it had tuple bits, so its own
+            // page-bit is set lossy.
+            *page = PagetableEntry::zeroed(chunk_pageno);
+            page.ischunk = true;
+            page.words[0] = 1 as bitmapword;
+            self.nchunks += 1;
+            self.npages -= 1;
         }
+        page.words[wordnum(bitno)] |= (1 as bitmapword) << bitnum(bitno);
         Ok(())
     }
 
@@ -533,37 +876,25 @@ impl<'mcx> TIDBitmap<'mcx> {
     fn lossify(&mut self) -> PgResult<()> {
         debug_assert!(self.iterating == TbmIterating::Not);
         debug_assert!(self.status == TbmStatus::Hash);
-        // C's resumable simplehash walk (tbm_lossify + start_iterate_at):
-        // scan raw buckets from lossify_start, wrapping once over the bucket
-        // count captured at entry. mark_page_lossy inserts/deletes (and may
-        // grow the table) mid-walk; skipping a moved entry or visiting a new
-        // one is tolerated — C's walk has the identical race and tolerates it
-        // the same way. Growth never shrinks the table, so a stale index
-        // stays in bounds.
-        let nbuckets =
-            self.pagetable.as_ref().expect("TBM_HASH without pagetable").raw_table().buckets();
-        let mask = nbuckets - 1;
-        let start = self.lossify_start & mask;
-        for k in 0..nbuckets {
-            let idx = (start + k) & mask;
-            let table =
-                self.pagetable.as_ref().expect("TBM_HASH without pagetable").raw_table();
-            // SAFETY: idx < nbuckets <= table.buckets() (grow-only), and the
-            // bucket reference is copied out before any table mutation.
-            let (blockno, ischunk) = unsafe {
-                if !table.is_bucket_full(idx) {
-                    continue;
-                }
-                let (blockno, page) = table.bucket(idx).as_ref();
-                (*blockno, page.ischunk)
-            };
-            if ischunk || blockno as usize % PAGES_PER_CHUNK == 0 {
+        // mark_page_lossy inserts/deletes (and may grow the table) under the
+        // walk; C's walk has the identical race and tolerates it the same way.
+        let mut it = self
+            .pagetable
+            .as_ref()
+            .expect("TBM_HASH without pagetable")
+            .start_iterate_at(self.lossify_start);
+        loop {
+            let table = self.pagetable.as_ref().expect("TBM_HASH without pagetable");
+            let Some(i) = table.iterate(&mut it) else { break };
+            let page = table.entry(i);
+            if page.ischunk || page.blockno as usize % PAGES_PER_CHUNK == 0 {
                 continue;
             }
+            let blockno = page.blockno;
             self.mark_page_lossy(blockno)?;
             if self.nentries <= self.maxentries / 2 {
-                self.lossify_start = idx + 1;
-                return Ok(());
+                self.lossify_start = it.cur;
+                break;
             }
         }
         if self.nentries > self.maxentries / 2 {
@@ -585,42 +916,37 @@ impl<'mcx> TIDBitmap<'mcx> {
     /// The entry behind a readout bucket index (spages/schunks).
     #[inline]
     fn readout_entry(&self, idx: usize) -> &PagetableEntry {
-        let table = self.pagetable.as_ref().expect("TBM_HASH without pagetable").raw_table();
-        // SAFETY: idx was recorded by begin_private_iterate from a full bucket
-        // of this table, and the table is read-only while iterating.
-        unsafe { &table.bucket(idx).as_ref().1 }
+        self.pagetable.as_ref().expect("TBM_HASH without pagetable").entry(idx as u32)
     }
 
     /// `tbm_begin_private_iterate`; the bitmap is read-only afterwards.
     pub fn begin_private_iterate(&mut self) -> PgResult<TbmPrivateIterator> {
         if self.status == TbmStatus::Hash && self.iterating == TbmIterating::Not {
-            let table =
-                self.pagetable.as_ref().expect("TBM_HASH without pagetable").raw_table();
-            let mut spages: PgVec<'mcx, usize> =
-                mcx::vec_with_capacity_in(self.mcx, self.npages as usize)?;
-            let mut schunks: PgVec<'mcx, usize> =
-                mcx::vec_with_capacity_in(self.mcx, self.nchunks as usize)?;
-            for idx in 0..table.buckets() {
-                // SAFETY: idx < buckets(); a full bucket holds a live entry.
-                let ischunk = unsafe {
-                    if !table.is_bucket_full(idx) {
-                        continue;
-                    }
-                    table.bucket(idx).as_ref().1.ischunk
-                };
-                if ischunk {
-                    schunks.push(idx);
+            let table = self.pagetable.as_ref().expect("TBM_HASH without pagetable");
+            // A recycled bitmap's emptied readout vectors are reused when
+            // they hold enough (no reallocation in the query context).
+            let mut spages: PgVec<'mcx, usize> = match self.spages.take() {
+                Some(v) if v.is_empty() && v.capacity() >= self.npages as usize => v,
+                _ => mcx::vec_with_capacity_in(self.mcx, self.npages as usize)?,
+            };
+            let mut schunks: PgVec<'mcx, usize> = match self.schunks.take() {
+                Some(v) if v.is_empty() && v.capacity() >= self.nchunks as usize => v,
+                _ => mcx::vec_with_capacity_in(self.mcx, self.nchunks as usize)?,
+            };
+            // tidbitmap.c:713-731 pushes PagetableEntry pointers; a bucket
+            // index is this table's pointer.
+            let mut it = table.start_iterate();
+            while let Some(i) = table.iterate(&mut it) {
+                if table.entry(i).ischunk {
+                    schunks.push(i as usize);
                 } else {
-                    spages.push(idx);
+                    spages.push(i as usize);
                 }
             }
             debug_assert!(spages.len() == self.npages as usize);
             debug_assert!(schunks.len() == self.nchunks as usize);
-            // SAFETY: every index was just taken from a full bucket of this
-            // table, which is not mutated here.
-            let blockno_at = |&idx: &usize| unsafe { table.bucket(idx).as_ref().1.blockno };
-            spages.sort_unstable_by_key(blockno_at);
-            schunks.sort_unstable_by_key(blockno_at);
+            spages.sort_unstable_by_key(|&i| table.entry(i as u32).blockno);
+            schunks.sort_unstable_by_key(|&i| table.entry(i as u32).blockno);
             self.spages = Some(spages);
             self.schunks = Some(schunks);
         }
@@ -643,7 +969,7 @@ impl<'mcx> TIDBitmap<'mcx> {
         match self.status {
             TbmStatus::Hash => {
                 let table = self.pagetable.as_ref().expect("TBM_HASH without pagetable");
-                for page in table.values() {
+                table.for_each(|page| {
                     let idx = ptbase.len() as i32;
                     ptbase.push(*page);
                     if page.ischunk {
@@ -651,7 +977,7 @@ impl<'mcx> TIDBitmap<'mcx> {
                     } else {
                         ptpages.push(idx);
                     }
-                }
+                });
             }
             TbmStatus::OnePage => {
                 ptbase.push(self.entry1);
@@ -777,9 +1103,7 @@ impl TbmPrivateIterator {
             let page = if tbm.status == TbmStatus::OnePage {
                 &tbm.entry1
             } else {
-                tbm.readout_entry(
-                    tbm.spages.as_deref().expect("iterating without spages")[self.spageptr],
-                )
+                tbm.readout_entry(tbm.spages.as_deref().expect("iterating without spages")[self.spageptr])
             };
             self.spageptr += 1;
             return Some(TbmIterateResult {

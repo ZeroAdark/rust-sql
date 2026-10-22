@@ -152,7 +152,7 @@ pub struct OutputPluginCallbacks {
 const MaxAllocSize: usize = 0x3fffffff;
 
 fn enlarge_refused(len: usize, needed: usize) -> bool {
-    needed >= MaxAllocSize - len
+    needed >= MaxAllocSize.saturating_sub(len)
 }
 
 #[derive(Default)]
@@ -177,8 +177,11 @@ impl OutBuf {
         self.buf.extend_from_slice(bytes);
     }
     pub fn check_limit(&self) -> PgResult<()> {
-        let Some((len, needed)) = self.overflow else {
-            return Ok(());
+        // as_mut_vec bypasses append()'s flag; catch an over-limit buffer here too.
+        let (len, needed) = match self.overflow {
+            Some(pair) => pair,
+            None if self.buf.len() > MaxAllocSize => (MaxAllocSize, self.buf.len() - MaxAllocSize),
+            None => return Ok(()),
         };
         ereport(ERROR)
             .errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED)
@@ -204,6 +207,12 @@ impl OutBuf {
     }
     pub fn push_str(&mut self, s: &str) {
         self.append(s.as_bytes());
+    }
+    pub fn push_bytes(&mut self, bytes: &[u8]) {
+        self.append(bytes);
+    }
+    pub fn push_byte(&mut self, b: u8) {
+        self.append(&[b]);
     }
     pub fn push(&mut self, c: char) {
         let mut b = [0u8; 4];
@@ -1405,6 +1414,8 @@ pub fn LogicalIncreaseRestartDecodingForSlot(
     debug_assert!(current_lsn != InvalidXLogRecPtr);
 
     let mut updated_lsn = false;
+    let mut got_new = false;
+    let mut failed: Option<(XLogRecPtr, XLogRecPtr, XLogRecPtr)> = None;
     slot.with_mutex(|| {
         if restart_lsn <= unsafe { slot.data.get() }.restart_lsn {
         } else if current_lsn <= unsafe { slot.data.get() }.confirmed_flush {
@@ -1414,8 +1425,38 @@ pub fn LogicalIncreaseRestartDecodingForSlot(
         } else if unsafe { slot.candidate_restart_valid.get() } == InvalidXLogRecPtr {
             unsafe { slot.candidate_restart_valid.set(current_lsn) };
             unsafe { slot.candidate_restart_lsn.set(restart_lsn) };
+            got_new = true;
+        } else {
+            failed = Some(unsafe {
+                (
+                    slot.candidate_restart_lsn.get(),
+                    slot.candidate_restart_valid.get(),
+                    slot.data.get().confirmed_flush,
+                )
+            });
         }
     });
+
+    let f = |l: XLogRecPtr| format!("{:X}/{:X}", (l >> 32) as u32, l as u32);
+    if got_new {
+        let _ = elog(
+            DEBUG1,
+            format!("got new restart lsn {} at {}", f(restart_lsn), f(current_lsn)),
+        );
+    }
+    if let Some((cand_lsn, cand_valid, flushed)) = failed {
+        let _ = elog(
+            DEBUG1,
+            format!(
+                "failed to increase restart lsn: proposed {}, after {}, current candidate {}, current after {}, flushed up to {}",
+                f(restart_lsn),
+                f(current_lsn),
+                f(cand_lsn),
+                f(cand_valid),
+                f(flushed)
+            ),
+        );
+    }
 
     if updated_lsn {
         LogicalConfirmReceivedLocation(unsafe { slot.data.get() }.confirmed_flush)?;
@@ -1486,6 +1527,13 @@ pub fn LogicalConfirmReceivedLocation(lsn: XLogRecPtr) -> PgResult<()> {
             }
             ReplicationSlotMarkDirty();
             ReplicationSlotSave()?;
+            let _ = elog(
+                DEBUG1,
+                format!(
+                    "updated xmin: {} restart: {}",
+                    updated_xmin as i32, updated_restart as i32
+                ),
+            );
         }
 
         if updated_xmin {

@@ -26,7 +26,8 @@ types_rel = { path = "../../../../_support/types/rel" }
 catalog = { path = "../../../catalog/catalog" }
 indexam = { path = "../../../access/index/indexam" }
 types_scan = { path = "../../../../_support/types/types_scan" }
-genam_seams = { path = "../../../access/index/genam_seams" }
+genam = { path = "../../../access/index/genam" }
+snapmgr = { path = "../../time/snapmgr" }
 table = { path = "../../../access/table/table" }
 dbcommands = { path = "../../../commands/dbcommands" }
 trigger_seams = { path = "../../../commands/trigger_seams" }

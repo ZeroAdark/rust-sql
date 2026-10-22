@@ -5,7 +5,8 @@ use std::sync::atomic::Ordering::Relaxed;
 use datum::Datum;
 use mcx::{Mcx, PgVec};
 use types_core::{
-    Buffer, ForkNumber, MultiXactId, Oid, OffsetNumber, TransactionId, BLCKSZ,
+    BlockNumber, Buffer, ForkNumber, InvalidBlockNumber, InvalidBuffer, MultiXactId, Oid,
+    OffsetNumber, TransactionId, BLCKSZ,
     C_COLLATION_OID,
 };
 use types_core::xact::{
@@ -26,7 +27,6 @@ use types_scan::scankey::{BTEqualStrategyNumber, ScanKeyData};
 use types_scan::sdir::ForwardScanDirection;
 use types_storage::buf::{BufferAccessStrategy, BufferAccessStrategyType, BUFFER_LOCK_SHARE};
 use types_storage::bufpage::{MaxOffsetNumber, PageRef};
-use types_storage::storage::ReadBufferMode;
 use types_tuple::htup::{
     BITMAPLEN, HEAP_HASEXTERNAL, HEAP_HASNULL, HEAP_HOT_UPDATED, HEAP_MOVED_IN, HEAP_MOVED_OFF,
     HEAP_UPDATED, HEAP_XMAX_COMMITTED, HEAP_XMAX_INVALID, HEAP_XMAX_IS_MULTI,
@@ -971,7 +971,7 @@ fn param_err(msg: impl Into<String>) -> Box<PgError> {
     Box::new(PgError::error(msg.into()).with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE))
 }
 
-// DIVERGENCE from verify_heapam.c: C's read_stream is replaced by a per-block ReadBufferExtended loop; skippability is checked per block against the visibility map.
+
 pub(crate) fn verify_heapam(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let flinfo = flinfo.expect("verify_heapam: resolved FmgrInfo required");
 
@@ -1152,29 +1152,45 @@ pub(crate) fn verify_heapam(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) 
     let mut pending: PgVec<ToastedAttribute> = PgVec::new_in(mcx);
     let mut vmbuf = VmBuffer::new();
 
-    let mut blkno = first_block;
-    'block: while blkno <= last_block {
-        if skip_option != SKIP_PAGES_NONE {
-            let mapbits = visibilitymap_get_status(&rel, blkno, &mut vmbuf)?;
-            if skip_option == SKIP_PAGES_ALL_FROZEN && (mapbits & VISIBILITYMAP_ALL_FROZEN) != 0 {
-                blkno += 1;
-                continue;
-            }
-            if skip_option == SKIP_PAGES_ALL_VISIBLE && (mapbits & VISIBILITYMAP_ALL_VISIBLE) != 0 {
-                blkno += 1;
-                continue;
+    let skippable = |blkno: BlockNumber, vmbuf: &mut VmBuffer| -> PgResult<bool> {
+        let mapbits = visibilitymap_get_status(&rel, blkno, vmbuf)?;
+        Ok((skip_option == SKIP_PAGES_ALL_FROZEN && (mapbits & VISIBILITYMAP_ALL_FROZEN) != 0)
+            || (skip_option == SKIP_PAGES_ALL_VISIBLE && (mapbits & VISIBILITYMAP_ALL_VISIBLE) != 0))
+    };
+    // verify_heapam.c:446-478: without a skip option the range streams in
+    // batch mode; the VM-filtering callback may lock, so it does not batch.
+    let stream_flags = if skip_option == SKIP_PAGES_NONE {
+        read_stream::READ_STREAM_SEQUENTIAL
+            | read_stream::READ_STREAM_FULL
+            | read_stream::READ_STREAM_USE_BATCHING
+    } else {
+        read_stream::READ_STREAM_DEFAULT
+    };
+    let mut stream = read_stream::read_stream_begin_relation::<()>(
+        mcx,
+        stream_flags,
+        bstrategy.clone(),
+        &rel,
+        ForkNumber::MAIN_FORKNUM,
+    )?;
+    let mut range = read_stream::BlockRangeReadStreamPrivate::new(first_block, last_block + 1);
+    // heapcheck_read_stream_next_unskippable (:182) for a skip option.
+    let mut next_block = |_: &mut ()| -> PgResult<BlockNumber> {
+        loop {
+            let i = range.next_block();
+            if i == InvalidBlockNumber || skip_option == SKIP_PAGES_NONE || !skippable(i, &mut vmbuf)? {
+                return Ok(i);
             }
         }
+    };
 
+    'block: loop {
+        let buffer: Buffer = stream.next_buffer(&mut next_block)?;
+        if buffer == InvalidBuffer {
+            break;
+        }
         postgres_seams::check_for_interrupts::call()?;
 
-        let buffer: Buffer = bufmgr::ReadBufferExtended(
-            &rel,
-            ForkNumber::MAIN_FORKNUM,
-            blkno,
-            ReadBufferMode::Normal,
-            bstrategy.clone(),
-        )?;
         bufmgr::LockBuffer(buffer, BUFFER_LOCK_SHARE)?;
         ctx.blkno = bufmgr::BufferGetBlockNumber(buffer);
         let page = bufmgr::buffer_page_ref(buffer);
@@ -1426,9 +1442,9 @@ pub(crate) fn verify_heapam(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) 
         if on_error_stop && ctx.is_corrupt {
             break 'block;
         }
-
-        blkno += 1;
     }
+    stream.end()?;
+    drop(next_block);
 
     vmbuf.release();
 

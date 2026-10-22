@@ -1,0 +1,39 @@
+[package]
+name = "gravity_ir"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "gravity_ir"
+path = "src/lib.rs"
+
+[dependencies]
+# P3 (plan-time memory): a program's vectors live in its own root context (mcx SendRoot), owned by the memory ledger's
+# owner named at its birth (memledger Owner).
+allocator-api2 = { version = "0.2", default-features = false, features = ["alloc"] }
+mcx = { path = "../../_support/mcx", features = ["std"] }
+memledger = { path = "../../_support/memledger" }
+
+[features]
+# The text loader (text.rs: read_sexp, parse_program): test input only, out of the product build.
+text-loader = []
+
+# The test files that load IR text need the loader. No self dev-dependency (R5: ir -> ir is not in the frozen layering): the
+# gate's crate tests build with the workspace's feature set, where backend / interp / tpde / wasm dev-depend on gravity_ir with
+# text-loader, so these run there; alone: cargo test -p gravity_ir --features text-loader.
+[[test]]
+name = "dominance"
+required-features = ["text-loader"]
+
+[[test]]
+name = "promote"
+required-features = ["text-loader"]
+
+[[test]]
+name = "roundtrip"
+required-features = ["text-loader"]
+
+[[test]]
+name = "verify_labels"
+required-features = ["text-loader"]

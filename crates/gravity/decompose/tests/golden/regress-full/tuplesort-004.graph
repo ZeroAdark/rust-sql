@@ -1,0 +1,47 @@
+-- regress-full-tuplesort-004
+-- SELECT (array_agg(id ORDER BY id DESC NULLS FIRST))[0:5], (array_agg(abort_increasing ORDER BY abort_increasing DESC NULLS LAST))[0:5], (array_agg(id::text ORDER BY id::text DESC NULLS LAST))[0:5], percentile_disc(0.99) WITHIN GROUP (ORDER BY id), percentile_disc(0.01) WITHIN GROUP (ORDER BY id), percentile_disc(0.8) WITHIN GROUP (ORDER BY abort_increasing), percentile_disc(0.2) WITHIN GROUP (ORDER BY id::text), rank('00000000-0000-0000-0000-000000000000', '2', '2') WITHIN GROUP (ORDER BY noabort_increasing, id, id::text) FROM ( SELECT * FROM abbrev_abort_uuids UNION ALL SELECT NULL, NULL, NULL, NULL, NULL) s;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=3 eligible rows=21080 end=breaker(slot=0 Sort)
+  nodes n3@0 n2@1 n1@3^
+  source range rel=46891 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx16:win/page Attr(4):byref8:fx16:win/page Offset:byval2:w2:val
+  project (1=v4.1, 2=v4.2, 3=v4.4)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1-n:I32 form=runs
+  outs 1=w8:val 2=fx16:win/page 3=fx16:win/page
+  outs 1=w4:val 2=fx16:life/breaker 3=fx16:life/breaker
+p1 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  nodes n4@0 n2@1 n1@3^
+  source const
+  project (1=c23:null, 2=c2950:null, 3=c2950:null)
+  append arm 1/2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1-n:I32 form=runs
+  outs 1=w4:val 2=fx16:stmt/imm 3=fx16:stmt/imm
+  outs 1=w4:val 2=fx16:life/breaker 3=fx16:life/breaker
+p2 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 PlainAgg)
+  desc consumes=slot0@p1
+  nodes n1@0 n0@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=fx16:life/breaker 3=fx16:life/breaker
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p2
+  nodes n0@0
+  source breaker slot=1
+  project (1=T_SubscriptingRef, 2=T_SubscriptingRef, 3=T_SubscriptingRef, 4=agg3972(1=outer.1), 5=agg3972(1=outer.1), 6=agg3972(1=outer.2), 7=agg3972(1=io25(outer.1)), 8=agg3986(1=outer.3, 2=outer.1, 3=io25(outer.1)))
+  outs 1=vl:call0 2=? 3=vl:call0 4=w4:val 5=w4:val 6=fx16:call3972 7=vl:call3972 8=w8:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=1-n
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32]->[Count@8] 16B order=1-n
+breaker slot=1 kind=PlainAgg budget=Fixed(72) spill=None producer=p2 layout=[]->[Count@0]+valid 16B
+group slot=1 producer=p2 node=0 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=2335 reg=Collect slot=- count_slot=- final=OrderedFold class=Collect(Array) trans=Var mods=[order=1] expr=agg2335(1=outer.1)
+  agg aggno=1 fn=2335 reg=Collect slot=- count_slot=- final=OrderedFold class=Collect(Array) trans=Var mods=[order=1] expr=agg2335(1=outer.2)
+  agg aggno=2 fn=2335 reg=Collect slot=- count_slot=- final=OrderedFold class=Collect(Array) trans=Var mods=[order=1] expr=agg2335(1=io25(outer.1))
+  agg aggno=3 fn=3972 reg=OrderedSet slot=- count_slot=- final=Ordered class=OrderedSet(PercentileDisc) trans=Var mods=[order=1 direct=1] expr=agg3972(1=outer.1)
+  agg aggno=4 fn=3972 reg=OrderedSet slot=- count_slot=- final=Ordered class=OrderedSet(PercentileDisc) trans=Var mods=[order=1 direct=1] expr=agg3972(1=outer.1)
+  agg aggno=5 fn=3972 reg=OrderedSet slot=- count_slot=- final=Ordered class=OrderedSet(PercentileDisc) trans=Var mods=[order=1 direct=1] expr=agg3972(1=outer.2)
+  agg aggno=6 fn=3972 reg=OrderedSet slot=- count_slot=- final=Ordered class=OrderedSet(PercentileDisc) trans=Var mods=[order=1 direct=1] expr=agg3972(1=io25(outer.1))
+  agg aggno=7 fn=3986 reg=Hypothetical slot=- count_slot=- final=Hypo class=Hypothetical(Rank) trans=Var mods=[order=3 direct=3] expr=agg3986(1=outer.3, 2=outer.1, 3=io25(outer.1))
+mapped: Result Append SeqScan Sort Agg

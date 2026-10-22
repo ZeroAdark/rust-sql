@@ -1,0 +1,1 @@
+backend/utils/init/postinit/src/lib.rs	FUNDAMENTALS_REGISTERED	pgport	exit	thread	the session-memory teardown (xact, resowner, init_small) is registered once per thread: a retained standby re-enters InitPostgres per task and must not stack duplicates

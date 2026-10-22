@@ -1,0 +1,92 @@
+-- regress-full-join-242
+-- EXPLAIN (COSTS OFF) SELECT * FROM sj_t1 JOIN ( SELECT sj_t2.id AS id FROM sj_t2 WHERE EXISTS ( SELECT TRUE FROM sj_t3,sj_t4 WHERE sj_t3.a = 1 AND sj_t3.id = sj_t2.id ) ) t2t3t4 ON sj_t1.id = t2t3t4.id JOIN ( SELECT sj_t2.id AS id FROM sj_t2 WHERE EXISTS ( SELECT TRUE FROM sj_t3,sj_t4 WHERE sj_t3.a = 1 AND sj_t3.id = sj_t2.id ) ) _t2t3t4 ON sj_t1.id = _t2t3t4.id;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=8 serial site=0 reason=IndexSource end=breaker(slot=0 Materialize)
+  nodes n9@0 n8@0 n7@1^
+  source bitmap rel=25765 rti=7 am=heap
+    bitmap index node=9 index=25776 rows=11
+      key att=2 op=96 value=c23:1
+    recheck (op96(v7.2, c23:1))
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.1)
+  spool
+  outs 1=w8:val
+p1 node=6 eligible rows=2260 end=breaker(slot=1 HashAgg)
+  desc consumes=slot0@p0 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n6@0 n5@1 n4@3^
+  source range rel=25771 rti=8 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=v8.1, 2=v8.2)
+  nest inner=n7 JOIN_INNER invariant raise-free params=()
+  inner node=7 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n7@0
+  source breaker slot=0
+  project (1=outer.1)
+  project (1=inner.1)
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val
+p2 node=15 serial site=0 reason=SortedSource end=breaker(slot=2 HashBuild)
+  desc words=bits@5/6
+  nodes n15@0 n0@1^
+  source range rel=25753 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=w8:val
+p3 node=4 serial site=0 reason=SortedSource end=sink
+  desc consumes=slot1@p1 consumes=slot2@p2
+  nodes n4@0 n3@1 n2@3 n1@5 n0@7
+  source breaker slot=1
+  project (1=outer.1)
+  nest inner=n10 JOIN_INNER unique raise-free params=($exec0=outer.1)
+  inner node=10 serial site=0 reason=IndexSource end=sink
+  nodes n10@0
+  source index-only rel=25759 rti=9 am=heap index=25777
+    key att=1 op=96 value=$exec0
+    recheck (op96(index.1, $exec0))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  project (1=inner.1, 2=outer.1)
+  nest inner=n11 JOIN_SEMI raise-free params=($exec1=outer.2)
+  inner node=12 serial site=0 reason=IndexSource end=sink
+  nodes n12@0 n11@1
+  source index-only rel=25765 rti=10 am=heap index=25776
+    key att=2 op=96 value=c23:1
+    key att=1 op=96 value=$exec1
+    recheck (op96(index.1, c23:1), op96(index.2, $exec1))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1, 2=index.2)
+  nest inner=n13 JOIN_INNER invariant raise-free params=()
+  inner node=13 eligible rows=2260 end=sink
+  nodes n13@0
+  source range rel=25771 rti=11 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=v11.1, 2=v11.2)
+  project (1=outer.2)
+  project (1=outer.1, 2=inner.1, 3=outer.2)
+  nest inner=n14 JOIN_INNER unique raise-free eq=#0:op96:fam1977:23/23:R params=($exec2=outer.1) qual=(op96(inner.1, outer.3))
+  inner node=14 serial site=0 reason=IndexSource end=sink
+  nodes n14@0
+  source index-only rel=25759 rti=6 am=heap index=25777
+    key att=1 op=96 value=$exec2
+    recheck (op96(index.1, $exec2))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  project (1=inner.1, 2=outer.2, 3=outer.3, 4=outer.1)
+  probe slot=2 inner=n15 JOIN_INNER catalog keys=(outer.3) decls=23/23:I32 clauses=(op96(outer.3, inner.1))
+  project (1=inner.1, 2=inner.2, 3=outer.1, 4=outer.4)
+  outs 1=w4:val
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=1 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+group slot=1 producer=p1 node=4 form=Hashed hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=inner.1
+param $exec0 owner=n3 type=23 rep=w4:val
+param $exec1 owner=n2 type=23 rep=w4:val
+param $exec2 owner=n1 type=23 rep=w4:val
+mapped: SeqScan IndexOnlyScan BitmapIndexScan BitmapHeapScan NestLoop NestLoopParam Material Agg

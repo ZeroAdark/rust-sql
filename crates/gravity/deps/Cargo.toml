@@ -1,0 +1,18 @@
+[package]
+name = "gravity_deps"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "gravity_deps"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+# C7 runtime half: its leader-class thread-locals are declared through leader_tls!
+leader_tls = { path = "../../_support/leader_tls" }
+types_core = { path = "../../_support/types/types_core" }
+l2cache = { path = "../../backend/utils/cache/l2cache" }
+pgsync = { path = "../../_support/pgsync" } # C3 D4010: the setting probe's one-time install
+init_small = { path = "../../backend/utils/init/init_small" } # C3: a dependency's generation is this database's (MyDatabaseId)

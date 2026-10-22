@@ -1,0 +1,11 @@
+path	crates/gravity/exec/src/runner/plan.rs
+growth	std::vec::Vec::push	5
+method	slice::to_vec	3
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	4
+method	std::iter::Iterator::collect	2
+method	std::iter::Iterator::unzip	4
+method	std::sync::Arc::new	5
+type	std::boxed::Box	1
+type	std::sync::Arc	5
+type	std::vec::Vec	11

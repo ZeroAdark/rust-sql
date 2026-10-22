@@ -1,0 +1,10 @@
+-- regress-full-namespace-001
+-- INSERT INTO test_ns_schema_1.abc DEFAULT VALUES;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=fn480(fn1574(c2205:26937)), 2=c23:null)
+  write INSERT rel=26938 rti=1 natts=2 indexes=(26943[2]u, 26949[1]u)
+  outs 1=w4:val 2=w4:val
+mapped: Result ModifyTable

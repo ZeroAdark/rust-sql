@@ -1,0 +1,3 @@
+path	crates/gravity/hosts/src/facts.rs
+method	std::borrow::ToOwned::to_owned	3
+method	std::iter::Iterator::collect	5

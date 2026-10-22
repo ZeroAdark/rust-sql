@@ -786,3 +786,25 @@ fn object_at_elected_path_is_one_exception() {
     let total_row1: u32 = chunk.buckets.iter().map(|b| b.sizes[1]).sum();
     assert_eq!(total_row1, 1);
 }
+
+#[test]
+fn auto_forced_paths_elect_their_observed_lane() {
+    setup();
+    let docs: Vec<String> = (0..200)
+        .map(|i| if i == 0 { format!("{{\"t\": {i}, \"k\": \"a{i}\", \"rare\": 1}}") } else { format!("{{\"t\": {i}, \"k\": \"a{i}\"}}") })
+        .collect();
+    let ctx = MemoryContext::new("elect");
+    let images = payload_vecs(ctx.mcx(), &docs);
+    let payloads: Vec<&[u8]> = images.iter().map(|i| &i[4..]).collect();
+    let budgets = ShredBudgets { min_presence_div: 2, ..ShredBudgets::default() };
+    let auto = [JsonPath::from_dotted("t"), JsonPath::from_dotted("k"), JsonPath::from_dotted("rare"), JsonPath::from_dotted("absent")];
+    let m = crate::elect::elect_manifest_auto(&payloads, &[], &auto, &budgets);
+    let lane_of = |p: &str| m.elected.iter().find(|e| *m.path(e.path_id) == JsonPath::from_dotted(p)).map(|e| e.lane);
+    assert_eq!(lane_of("t"), Some(Lane::NumericFs));
+    assert_eq!(lane_of("k"), Some(Lane::Text));
+    assert_eq!(lane_of("rare"), Some(Lane::NumericFs), "below the presence floor, still forced");
+    assert_eq!(lane_of("absent"), Some(Lane::Text));
+    let hints = vec![PathHint { path: JsonPath::from_dotted("t"), lane: Lane::Text }];
+    let m = crate::elect::elect_manifest_auto(&payloads, &hints, &auto, &budgets);
+    assert_eq!(m.elected.iter().filter(|e| *m.path(e.path_id) == JsonPath::from_dotted("t")).map(|e| e.lane).collect::<Vec<_>>(), vec![Lane::Text]);
+}

@@ -1,0 +1,15 @@
+-- oltp-071
+-- UPDATE orders SET o_carrier_id = o_carrier_id + 1 WHERE o_w_id = 1 AND o_d_id = 1 AND o_id = 3 /* served */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16492 rti=1 am=heap index=16502
+    key att=3 op=96 value=c23:1
+    key att=5 op=532 value=c23:1
+    key att=2 op=96 value=c23:3
+    recheck (op96(v1.3, c23:1), op532(v1.5, c23:1), op96(v1.2, c23:3))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val RowId:byval8:w8:val
+  project (1=fn314(op552(v1.6, c23:1)), 2j=v1.-1, 3j=v1.1, 4j=v1.2, 5j=v1.3, 6j=v1.4, 7j=v1.5, 8j=v1.7, 9j=v1.8)
+  write UPDATE rel=16492 rti=1 natts=8 indexes=(16502[3, 5, 2]up, 16518[3, 5, 4, 2]u) set=(6)
+  outs 1=w2:val 2=fx6:row 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val
+mapped: ModifyTable IndexScan

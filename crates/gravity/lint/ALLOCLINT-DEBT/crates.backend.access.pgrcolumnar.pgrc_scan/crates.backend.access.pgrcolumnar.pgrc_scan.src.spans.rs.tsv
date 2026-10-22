@@ -1,0 +1,5 @@
+path	crates/backend/access/pgrcolumnar/pgrc_scan/src/spans.rs
+growth	std::vec::Vec::push	1
+macro	std::vec	1
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

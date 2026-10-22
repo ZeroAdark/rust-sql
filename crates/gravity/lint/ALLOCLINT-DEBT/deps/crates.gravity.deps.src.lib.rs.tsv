@@ -1,0 +1,6 @@
+path	crates/gravity/deps/src/lib.rs
+growth	std::vec::Vec::insert	4
+growth	std::vec::Vec::push	4
+method	std::clone::Clone::clone	3
+method	std::iter::Iterator::collect	2
+type	std::vec::Vec	3

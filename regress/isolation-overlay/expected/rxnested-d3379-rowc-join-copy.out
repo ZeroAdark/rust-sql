@@ -1,0 +1,179 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1v s2d s1c s2sel s2c
+step s2exp: EXPLAIN (COSTS OFF) WITH u AS (UPDATE rj_base SET amt = amt + 1 WHERE grp = 1 RETURNING id), d AS (DELETE FROM rj_side t USING (SELECT b.id FROM rj_base b JOIN u ON u.id = b.id WHERE b.amt > 5) x WHERE x.id = t.id RETURNING t.id, t.v) SELECT id, v FROM d ORDER BY id;
+QUERY PLAN                                           
+-----------------------------------------------------
+Sort                                                 
+  Sort Key: d.id                                     
+  CTE u                                              
+    ->  Update on rj_base                            
+          ->  Seq Scan on rj_base                    
+                Filter: (grp = 1)                    
+  CTE d                                              
+    ->  Delete on rj_side t                          
+          ->  Hash Join                              
+                Hash Cond: (t.id = u.id)             
+                ->  Seq Scan on rj_side t            
+                ->  Hash                             
+                      ->  Hash Join                  
+                            Hash Cond: (b.id = u.id) 
+                            ->  Seq Scan on rj_base b
+                                  Filter: (amt > 5)  
+                            ->  Hash                 
+                                  ->  CTE Scan on u  
+  ->  CTE Scan on d                                  
+(19 rows)
+
+step s1v: UPDATE rj_side SET v = v + 10000 WHERE id IN (1, 401);
+step s2d: WITH u AS (UPDATE rj_base SET amt = amt + 1 WHERE grp = 1 RETURNING id), d AS (DELETE FROM rj_side t USING (SELECT b.id FROM rj_base b JOIN u ON u.id = b.id WHERE b.amt > 5) x WHERE x.id = t.id RETURNING t.id, t.v) SELECT id, v FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+  id|    v
+----+-----
+   1|10001
+ 401|10031
+ 801|   24
+1201|   17
+1601|   10
+(5 rows)
+
+step s2sel: SELECT id, v, tag FROM rj_side WHERE id % 400 = 1 ORDER BY id;
+  id| v|tag
+----+--+---
+2001| 3|odd
+2401|33|odd
+2801|26|odd
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2d s1c s2sel s2c
+step s1del: DELETE FROM rj_side WHERE id = 401;
+step s2d: WITH u AS (UPDATE rj_base SET amt = amt + 1 WHERE grp = 1 RETURNING id), d AS (DELETE FROM rj_side t USING (SELECT b.id FROM rj_base b JOIN u ON u.id = b.id WHERE b.amt > 5) x WHERE x.id = t.id RETURNING t.id, t.v) SELECT id, v FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+  id| v
+----+--
+   1| 1
+ 801|24
+1201|17
+1601|10
+(4 rows)
+
+step s2sel: SELECT id, v, tag FROM rj_side WHERE id % 400 = 1 ORDER BY id;
+  id| v|tag
+----+--+---
+2001| 3|odd
+2401|33|odd
+2801|26|odd
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1v s2u s1c s2sel s2c
+step s1v: UPDATE rj_side SET v = v + 10000 WHERE id IN (1, 401);
+step s2u: WITH u AS (UPDATE rj_base SET amt = amt + 1 WHERE grp = 1 RETURNING id, amt), w AS (UPDATE rj_side t SET v = t.v + x.amt FROM (SELECT b.id, u.amt FROM rj_base b JOIN u ON u.id = b.id) x WHERE x.id = t.id AND t.tag = 'odd' AND x.amt > t.v RETURNING t.id, t.v) SELECT id, v FROM w ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+  id|    v
+----+-----
+ 801| 8035
+1201|12028
+1601|16021
+(3 rows)
+
+step s2sel: SELECT id, v, tag FROM rj_side WHERE id % 400 = 1 ORDER BY id;
+  id|    v|tag
+----+-----+---
+   1|10001|odd
+ 401|10031|odd
+ 801| 8035|odd
+1201|12028|odd
+1601|16021|odd
+2001|    3|odd
+2401|   33|odd
+2801|   26|odd
+(8 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2exu s1tag s2u s1c s2sel s2c
+step s2exu: EXPLAIN (COSTS OFF) WITH u AS (UPDATE rj_base SET amt = amt + 1 WHERE grp = 1 RETURNING id, amt), w AS (UPDATE rj_side t SET v = t.v + x.amt FROM (SELECT b.id, u.amt FROM rj_base b JOIN u ON u.id = b.id) x WHERE x.id = t.id AND t.tag = 'odd' AND x.amt > t.v RETURNING t.id, t.v) SELECT id, v FROM w ORDER BY id;
+QUERY PLAN                                           
+-----------------------------------------------------
+Sort                                                 
+  Sort Key: w.id                                     
+  CTE u                                              
+    ->  Update on rj_base                            
+          ->  Seq Scan on rj_base                    
+                Filter: (grp = 1)                    
+  CTE w                                              
+    ->  Update on rj_side t                          
+          ->  Hash Join                              
+                Hash Cond: (t.id = u.id)             
+                Join Filter: (u.amt > t.v)           
+                ->  Seq Scan on rj_side t            
+                      Filter: (tag = 'odd'::text)    
+                ->  Hash                             
+                      ->  Hash Join                  
+                            Hash Cond: (b.id = u.id) 
+                            ->  Seq Scan on rj_base b
+                            ->  Hash                 
+                                  ->  CTE Scan on u  
+  ->  CTE Scan on w                                  
+(20 rows)
+
+step s1tag: UPDATE rj_side SET tag = 'even' WHERE id = 801;
+step s2u: WITH u AS (UPDATE rj_base SET amt = amt + 1 WHERE grp = 1 RETURNING id, amt), w AS (UPDATE rj_side t SET v = t.v + x.amt FROM (SELECT b.id, u.amt FROM rj_base b JOIN u ON u.id = b.id) x WHERE x.id = t.id AND t.tag = 'odd' AND x.amt > t.v RETURNING t.id, t.v) SELECT id, v FROM w ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+  id|    v
+----+-----
+   1|   12
+ 401| 4042
+1201|12028
+1601|16021
+(4 rows)
+
+step s2sel: SELECT id, v, tag FROM rj_side WHERE id % 400 = 1 ORDER BY id;
+  id|    v|tag 
+----+-----+----
+   1|   12|odd 
+ 401| 4042|odd 
+ 801|   24|even
+1201|12028|odd 
+1601|16021|odd 
+2001|    3|odd 
+2401|   33|odd 
+2801|   26|odd 
+(8 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2u s1c s2sel s2c
+step s1del: DELETE FROM rj_side WHERE id = 401;
+step s2u: WITH u AS (UPDATE rj_base SET amt = amt + 1 WHERE grp = 1 RETURNING id, amt), w AS (UPDATE rj_side t SET v = t.v + x.amt FROM (SELECT b.id, u.amt FROM rj_base b JOIN u ON u.id = b.id) x WHERE x.id = t.id AND t.tag = 'odd' AND x.amt > t.v RETURNING t.id, t.v) SELECT id, v FROM w ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+  id|    v
+----+-----
+   1|   12
+ 801| 8035
+1201|12028
+1601|16021
+(4 rows)
+
+step s2sel: SELECT id, v, tag FROM rj_side WHERE id % 400 = 1 ORDER BY id;
+  id|    v|tag
+----+-----+---
+   1|   12|odd
+ 801| 8035|odd
+1201|12028|odd
+1601|16021|odd
+2001|    3|odd
+2401|   33|odd
+2801|   26|odd
+(7 rows)
+
+step s2c: COMMIT;

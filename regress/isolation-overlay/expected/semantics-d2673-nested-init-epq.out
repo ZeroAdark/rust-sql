@@ -1,0 +1,187 @@
+Parsed test spec with 2 sessions
+
+starting permutation: b3 u1 bc chk seq
+step b3: UPDATE w7q SET c = c + 10 WHERE id = 3;
+step u1: UPDATE w7q SET c = c + 1 WHERE id <= 3 AND c < (SELECT w7q.id + 100 + (SELECT 0 WHERE w7_bump(1))); <waiting ...>
+step bc: COMMIT;
+step u1: <... completed>
+step chk: SELECT id, c FROM w7q ORDER BY id;
+id| c
+--+--
+ 1| 2
+ 2| 3
+ 3|14
+ 4| 4
+ 5| 5
+ 6| 6
+ 7| 7
+ 8| 8
+(8 rows)
+
+step seq: SELECT last_value, is_called FROM w7_seq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+
+starting permutation: b3 s1 bc chk seq
+step b3: UPDATE w7q SET c = c + 10 WHERE id = 3;
+step s1: UPDATE w7q SET c = c + 1 WHERE id <= 3 AND EXISTS (SELECT 1 FROM w7k WHERE k = w7q.id AND k < (SELECT 9 WHERE w7_bump(1))); <waiting ...>
+step bc: COMMIT;
+step s1: <... completed>
+step chk: SELECT id, c FROM w7q ORDER BY id;
+id| c
+--+--
+ 1| 2
+ 2| 3
+ 3|14
+ 4| 4
+ 5| 5
+ 6| 6
+ 7| 7
+ 8| 8
+(8 rows)
+
+step seq: SELECT last_value, is_called FROM w7_seq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+
+starting permutation: b3 d1 bc chk seq
+step b3: UPDATE w7q SET c = c + 10 WHERE id = 3;
+step d1: DELETE FROM w7q WHERE id <= 3 AND EXISTS (SELECT 1 FROM w7k WHERE k = w7q.id AND k < (SELECT 9 WHERE w7_bump(1))) RETURNING id; <waiting ...>
+step bc: COMMIT;
+step d1: <... completed>
+id
+--
+ 1
+ 2
+ 3
+(3 rows)
+
+step chk: SELECT id, c FROM w7q ORDER BY id;
+id|c
+--+-
+ 4|4
+ 5|5
+ 6|6
+ 7|7
+ 8|8
+(5 rows)
+
+step seq: SELECT last_value, is_called FROM w7_seq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+
+starting permutation: b3 j1 bc chk seq
+step b3: UPDATE w7q SET c = c + 10 WHERE id = 3;
+step j1: UPDATE w7q SET c = c + 1 FROM w7j WHERE w7q.id = w7j.id AND w7q.id <= 3 AND w7q.c < (SELECT w7q.id + 100 + (SELECT 0 WHERE w7_bump(1))); <waiting ...>
+step bc: COMMIT;
+step j1: <... completed>
+step chk: SELECT id, c FROM w7q ORDER BY id;
+id| c
+--+--
+ 1| 2
+ 2| 3
+ 3|14
+ 4| 4
+ 5| 5
+ 6| 6
+ 7| 7
+ 8| 8
+(8 rows)
+
+step seq: SELECT last_value, is_called FROM w7_seq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+
+starting permutation: b23 t1 bc chk seq
+step b23: UPDATE w7q SET c = c + 10 WHERE id IN (2, 3);
+step t1: UPDATE w7q SET c = c + 1 WHERE id <= 3 AND c < (SELECT w7q.id + 100 + (SELECT 0 WHERE w7_bump(1))) RETURNING id, c; <waiting ...>
+step bc: COMMIT;
+step t1: <... completed>
+id| c
+--+--
+ 1| 2
+ 2|13
+ 3|14
+(3 rows)
+
+step chk: SELECT id, c FROM w7q ORDER BY id;
+id| c
+--+--
+ 1| 2
+ 2|13
+ 3|14
+ 4| 4
+ 5| 5
+ 6| 6
+ 7| 7
+ 8| 8
+(8 rows)
+
+step seq: SELECT last_value, is_called FROM w7_seq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+
+starting permutation: b23 t2 bc chk seq
+step b23: UPDATE w7q SET c = c + 10 WHERE id IN (2, 3);
+step t2: UPDATE w7q SET c = c + (SELECT w7q.id * 0 + (SELECT w7_next())) WHERE id <= 3; <waiting ...>
+step bc: COMMIT;
+step t2: <... completed>
+step chk: SELECT id, c FROM w7q ORDER BY id;
+id| c
+--+--
+ 1| 2
+ 2|14
+ 3|14
+ 4| 4
+ 5| 5
+ 6| 6
+ 7| 7
+ 8| 8
+(8 rows)
+
+step seq: SELECT last_value, is_called FROM w7_seq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+
+starting permutation: b3 c1 bc chk seq
+step b3: UPDATE w7q SET c = c + 10 WHERE id = 3;
+step c1: UPDATE w7q SET c = c + 1 WHERE id <= 3 AND c < (SELECT (SELECT w7q.id + 100 WHERE w7_bump(w7q.id))); <waiting ...>
+step bc: COMMIT;
+step c1: <... completed>
+step chk: SELECT id, c FROM w7q ORDER BY id;
+id| c
+--+--
+ 1| 2
+ 2| 3
+ 3|14
+ 4| 4
+ 5| 5
+ 6| 6
+ 7| 7
+ 8| 8
+(8 rows)
+
+step seq: SELECT last_value, is_called FROM w7_seq;
+last_value|is_called
+----------+---------
+         4|t        
+(1 row)
+

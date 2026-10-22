@@ -97,7 +97,8 @@ fn scan_opaque_alloc_and_pos() {
     assert!(so.currTuples.is_none());
     assert!(!BTScanPosIsPinned(&so.currPos));
     assert!(!BTScanPosIsValid(&so.currPos));
-    assert!(!BTScanPosIsValid(&so.markPos));
+    // the mark position is made at the first mark saved off its page
+    assert!(so.markPos.is_none());
 
     so.currPos.buf = 3;
     so.currPos.currPage = 42;

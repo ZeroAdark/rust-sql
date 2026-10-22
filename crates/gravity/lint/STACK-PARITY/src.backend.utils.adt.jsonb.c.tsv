@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/adt/jsonb.c: 1 stack-depth check sites
+647	datum_to_jsonb_internal	crates/backend/utils/adt/jsonb/src/tojsonb.rs	datum_to_jsonb_internal	yes	

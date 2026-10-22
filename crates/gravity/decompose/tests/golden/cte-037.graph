@@ -1,0 +1,23 @@
+-- cte-037
+-- SELECT (SELECT a FROM t WHERE b = 1 ORDER BY a LIMIT 1) AS first, x FROM u WHERE x < 3;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@2
+  source index rel=16395 rti=2 am=heap index=16402
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  filter op96(v2.2, c23:1)
+  project (1=v2.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val
+p1 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=16405 rti=1 am=heap index=16411
+    key att=1 op=97 value=c23:3
+    recheck (op97(index.1, c23:3))
+    lanes Attr(1):byval8:w8:val
+  project (1=$exec0, 2=index.1)
+  outs 1=w4:val 2=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: IndexScan IndexOnlyScan Limit SubPlan

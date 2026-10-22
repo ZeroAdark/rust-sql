@@ -1,0 +1,8 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/testruns.rs
+growth	std::vec::Vec::push	3
+macro	std::vec	2
+method	pgrc_format::try_filled	1
+method	pgrc_format::try_vec	1
+method	std::clone::Clone::clone	4
+method	std::iter::Iterator::collect	4
+type	std::vec::Vec	8

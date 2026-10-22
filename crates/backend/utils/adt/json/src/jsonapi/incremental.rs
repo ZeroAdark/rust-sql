@@ -215,22 +215,49 @@ pub struct JsonLexIncremental {
 /// C: JS_STACK_CHUNK_SIZE — the initial stack depth (jsonapi.c:430).
 const JS_STACK_CHUNK_SIZE: usize = 64;
 
+#[cold]
+#[inline(never)]
+fn enlarge_error(len: usize, more: usize) -> Box<types_error::PgError> {
+    types_error::PgError::error(format!(
+        "string buffer exceeds maximum allowed length ({} bytes)",
+        mcx::MAX_ALLOC_SIZE
+    ))
+    .with_sqlstate(types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED)
+    .with_detail(format!(
+        "Cannot enlarge string buffer containing {len} bytes by {more} more bytes."
+    ))
+    .into()
+}
+
+// C appends the partial token one byte at a time (appendStringInfoCharMacro,
+// jsonapi.c:1653/1689/1702...): the MaxAllocSize ceiling is met only by the
+// bytes actually taken, never by the whole next chunk.
+// enlargeStringInfo (stringinfo.c:357): the reserved NUL makes len + needed == MaxAllocSize too big.
+#[inline]
+fn partial_admit(len: usize, more: usize) -> PgResult<()> {
+    if more >= mcx::MAX_ALLOC_SIZE.saturating_sub(len) {
+        return Err(enlarge_error(len, more));
+    }
+    Ok(())
+}
+
+#[inline]
+fn partial_room(len: usize) -> PgResult<()> {
+    partial_admit(len, 1)
+}
+
+#[inline]
+fn push_partial(ptok: &mut Vec<u8>, c: u8) -> PgResult<()> {
+    partial_room(ptok.len())?;
+    ptok.push(c);
+    Ok(())
+}
+
 impl JsonLexIncremental {
     // C keeps partial_token in a StringInfo: enlargeStringInfo's MaxAllocSize
     // ceiling and its ERROR apply, never an infallible growth.
     fn admit(&mut self, more: usize) -> PgResult<()> {
-        let len = self.partial_token.len();
-        if len.saturating_add(more) > mcx::MAX_ALLOC_SIZE {
-            return Err(types_error::PgError::error(format!(
-                "string buffer exceeds maximum allowed length ({} bytes)",
-                mcx::MAX_ALLOC_SIZE
-            ))
-            .with_sqlstate(types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED)
-            .with_detail(format!(
-                "Cannot enlarge string buffer containing {len} bytes by {more} more bytes."
-            ))
-            .into());
-        }
+        partial_admit(self.partial_token.len(), more)?;
         self.partial_token
             .try_reserve(more)
             .map_err(|_| mcx::oom_named("JSON incremental lexer", more).into())
@@ -308,7 +335,9 @@ impl JsonLexIncremental {
         self.lex_level += 1;
         let level = self.lex_level as usize;
         if self.fnames.len() <= level {
+            let _ = self.fnames.try_reserve(level + 1 - self.fnames.len());
             self.fnames.resize_with(level + 1, Vec::new);
+            let _ = self.fnull.try_reserve(level + 1 - self.fnull.len());
             self.fnull.resize(level + 1, false);
         }
         // Ensure freeJsonLexContext() remains safe even if no fname is
@@ -576,7 +605,10 @@ impl<'src, 'mcx> JsonIncrementalChunk<'_, 'src, 'mcx> {
         let input_length = input.len();
         let is_last = self.st.is_last_chunk;
         // Every push below adds at most one byte per input byte.
-        self.st.admit(input_length)?;
+        self.st
+            .partial_token
+            .try_reserve(input_length)
+            .map_err(|_| mcx::oom_named("JSON incremental lexer", input_length))?;
         let ptok = &mut self.st.partial_token;
         let mut added: usize = 0;
         let mut tok_done = false;
@@ -600,7 +632,7 @@ impl<'src, 'mcx> JsonIncrementalChunk<'_, 'src, 'mcx> {
             }
 
             for &c in input.iter() {
-                ptok.push(c);
+                push_partial(ptok, c)?;
                 added += 1;
                 if c == b'"' && escapes % 2 == 0 {
                     tok_done = true;
@@ -649,7 +681,7 @@ impl<'src, 'mcx> JsonIncrementalChunk<'_, 'src, 'mcx> {
                             if prev != b'e' && prev != b'E' {
                                 numend = true;
                             } else {
-                                ptok.push(cc);
+                                push_partial(ptok, cc)?;
                                 added += 1;
                             }
                         }
@@ -658,7 +690,7 @@ impl<'src, 'mcx> JsonIncrementalChunk<'_, 'src, 'mcx> {
                                 numend = true;
                             } else {
                                 seen_dot = true;
-                                ptok.push(cc);
+                                push_partial(ptok, cc)?;
                                 added += 1;
                             }
                         }
@@ -667,12 +699,12 @@ impl<'src, 'mcx> JsonIncrementalChunk<'_, 'src, 'mcx> {
                                 numend = true;
                             } else {
                                 seen_exp = true;
-                                ptok.push(cc);
+                                push_partial(ptok, cc)?;
                                 added += 1;
                             }
                         }
                         b'0'..=b'9' => {
-                            ptok.push(cc);
+                            push_partial(ptok, cc)?;
                             added += 1;
                         }
                         _ => numend = true,
@@ -694,7 +726,7 @@ impl<'src, 'mcx> JsonIncrementalChunk<'_, 'src, 'mcx> {
                 let cc = input[i];
 
                 if is_alnum(cc) {
-                    ptok.push(cc);
+                    push_partial(ptok, cc)?;
                     added += 1;
                 } else {
                     tok_done = true;

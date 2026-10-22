@@ -1,0 +1,6 @@
+# PostgreSQL 18.6 src/backend/utils/adt/tsquery_cleanup.c: 5 stack-depth check sites
+38	maketree	crates/backend/utils/adt/tsquery_core/src/cleanup.rs	maketree	yes	
+65	plainnode	crates/backend/utils/adt/tsquery_core/src/cleanup.rs	plainnode	yes	
+118	freetree	Drop of Box<Node> (tsquery_core cleanup.rs)	-	n/a	no explicit free; drop depth = a tree maketree built under its own check
+139	clean_NOT_intree	crates/backend/utils/adt/tsquery_core/src/cleanup.rs	clean_not_intree	yes	
+241	clean_stopword_intree	crates/backend/utils/adt/tsquery_core/src/cleanup.rs	clean_stopword_intree	yes	

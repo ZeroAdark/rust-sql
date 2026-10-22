@@ -168,7 +168,7 @@ fn bad_digit_err(tail: &[u8], binary: bool) -> PgResult<PgError> {
     let err = match core::str::from_utf8(ch) {
         Ok(ch) => PgError::error(format!("\"{ch}\" is not a valid {kind} digit")),
         Err(_) => {
-            let mut raw = alloc::vec::Vec::with_capacity(n + 40);
+            let mut raw = ::mcx::std_vec_with_capacity("adt", n + 40)?;
             raw.push(b'"');
             raw.extend_from_slice(ch);
             raw.extend_from_slice(format!("\" is not a valid {kind} digit").as_bytes());
@@ -250,18 +250,10 @@ pub fn anybit_typmodin(tl: &[i32], typename: &str) -> PgResult<i32> {
     Ok(tl[0])
 }
 
-fn arg_typmod_array(fcinfo: &Fcinfo) -> &[u8] {
-    // SAFETY: strict fn; arg 0 is a non-null cstring[] varlena image.
-    unsafe {
-        let p = fcinfo.arg_ptr(0);
-        core::slice::from_raw_parts(p, ::types_tuple::varatt::varsize_any(p))
-    }
-}
-
 fn fc_bit_typmodin(fcinfo: &mut Fcinfo, typename: &str) -> PgResult<Datum> {
-    let arr = arg_typmod_array(fcinfo);
     let mcx = fcinfo.result_mcx();
-    let tl = ::arrayfuncs::construct::array_get_integer_typmods(mcx, arr)?;
+    let arr = ::arrayfuncs::builtins::arg_array_bytes(fcinfo, 0, mcx)?;
+    let tl = ::arrayfuncs::construct::array_get_integer_typmods(mcx, &arr)?;
     Ok(Datum::from_i32(anybit_typmodin(&tl, typename)?))
 }
 
@@ -475,6 +467,19 @@ pub fn pad_last(body: &mut [u8], bitlen: usize) {
 
 fn image_datum(img: PgVec<'_, u8>) -> Datum {
     Datum::from_usize(img.leak().as_ptr() as usize)
+}
+
+// PG_GETARG_VARBIT_P detoasts (varbit.c:393/744): the no-op arm returns the 4B image.
+fn detoasted_arg<'mcx>(mcx: Mcx<'mcx>, v: ::types_fmgr::PackedVarlena<'_>) -> PgResult<Datum> {
+    if !v.is_short() {
+        return Ok(Datum::from_usize(v.as_ptr() as usize));
+    }
+    let data = v.data();
+    let len = VARHDRSZ + data.len();
+    let mut out: PgVec<'mcx, u8> = vec_with_capacity_in(mcx, len)?;
+    out.extend_from_slice(&::datum::varlena::set_varsize_4b(len));
+    out.extend_from_slice(data);
+    Ok(image_datum(out))
 }
 
 // Pub for proofs/varbit-rows (Kani stubs the format! message plumbing).
@@ -1007,7 +1012,7 @@ pub fn fc_bit_coerce(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     let mcx = fcinfo.result_mcx();
     match bit_coerce(mcx, v.data(), len, is_explicit)? {
         Some(img) => Ok(image_datum(img)),
-        None => Ok(fcinfo.arg(0)),
+        None => detoasted_arg(mcx, v),
     }
 }
 
@@ -1042,7 +1047,7 @@ pub fn fc_varbit_coerce(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
     let mcx = fcinfo.result_mcx();
     match varbit_coerce(mcx, v.data(), len, is_explicit)? {
         Some(img) => Ok(image_datum(img)),
-        None => Ok(fcinfo.arg(0)),
+        None => detoasted_arg(mcx, v),
     }
 }
 

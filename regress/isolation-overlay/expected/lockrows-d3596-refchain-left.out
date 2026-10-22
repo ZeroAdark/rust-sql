@@ -1,0 +1,121 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2a s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.note, q.name, l.owner FROM ht t JOIN hq q ON q.id = t.queue_id LEFT JOIN hl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.run_at LIMIT 2 FOR UPDATE OF t;
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Limit                                                           
+  ->  LockRows                                                  
+        ->  Sort                                                
+              Sort Key: t.run_at                                
+              ->  Hash Left Join                                
+                    Hash Cond: (t.id = l.task_id)               
+                    ->  Hash Join                               
+                          Hash Cond: (t.queue_id = q.id)        
+                          ->  Seq Scan on ht t                  
+                                Filter: (status = 'ready'::text)
+                          ->  Hash                              
+                                ->  Seq Scan on hq q            
+                                      Filter: (NOT paused)      
+                    ->  Hash                                    
+                          ->  Seq Scan on hl l                  
+(15 rows)
+
+step s1u: UPDATE ht SET note = 'changed' WHERE id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM ht t JOIN hq q ON q.id = t.queue_id LEFT JOIN hl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.run_at LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note   |name  |owner
+--+-------+------+-----
+ 1|changed|queue2|w1   
+ 4|n4     |queue1|     
+(2 rows)
+
+
+starting permutation: s1q s2a s1c
+step s1q: UPDATE ht SET note = 'moved', queue_id = 3 WHERE id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM ht t JOIN hq q ON q.id = t.queue_id LEFT JOIN hl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.run_at LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note|name  |owner
+--+----+------+-----
+ 4|n4  |queue1|     
+ 3|n3  |queue4|w3   
+(2 rows)
+
+
+starting permutation: s1s s2a s1c
+step s1s: UPDATE ht SET status = 'done' WHERE id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM ht t JOIN hq q ON q.id = t.queue_id LEFT JOIN hl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.run_at LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note|name  |owner
+--+----+------+-----
+ 4|n4  |queue1|     
+ 3|n3  |queue4|w3   
+(2 rows)
+
+
+starting permutation: s1n s2a s1c
+step s1n: UPDATE ht SET note = 'held' WHERE id = 4; INSERT INTO hl (task_id, owner) VALUES (4, 'late');
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM ht t JOIN hq q ON q.id = t.queue_id LEFT JOIN hl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.run_at LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note|name  |owner
+--+----+------+-----
+ 1|n1  |queue2|w1   
+ 4|held|queue1|     
+(2 rows)
+
+
+starting permutation: s1l s2a s1c
+step s1l: UPDATE ht SET note = 'relocked' WHERE id = 1; UPDATE hl SET owner = 'other' WHERE task_id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM ht t JOIN hq q ON q.id = t.queue_id LEFT JOIN hl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.run_at LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note    |name  |owner
+--+--------+------+-----
+ 1|relocked|queue2|w1   
+ 4|n4      |queue1|     
+(2 rows)
+
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT id FROM ht WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2sk: SELECT t.id, t.note, q.name, l.owner FROM ht t JOIN hq q ON q.id = t.queue_id LEFT JOIN hl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.run_at LIMIT 2 FOR UPDATE OF t SKIP LOCKED;
+id|note|name  |owner
+--+----+------+-----
+ 4|n4  |queue1|     
+ 3|n3  |queue4|w3   
+(2 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1n s2o s1c
+step s1n: UPDATE ht SET note = 'held' WHERE id = 4; INSERT INTO hl (task_id, owner) VALUES (4, 'late');
+step s2o: SELECT t.id, t.note, l.owner FROM ht t LEFT JOIN hl l ON l.task_id = t.id WHERE t.status = 'ready' ORDER BY t.run_at LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|note|owner
+--+----+-----
+ 1|n1  |w1   
+ 4|held|     
+(2 rows)
+
+
+starting permutation: s1l s2o s1c
+step s1l: UPDATE ht SET note = 'relocked' WHERE id = 1; UPDATE hl SET owner = 'other' WHERE task_id = 1;
+step s2o: SELECT t.id, t.note, l.owner FROM ht t LEFT JOIN hl l ON l.task_id = t.id WHERE t.status = 'ready' ORDER BY t.run_at LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|note    |owner
+--+--------+-----
+ 1|relocked|w1   
+ 4|n4      |     
+(2 rows)
+

@@ -1,0 +1,31 @@
+-- regress-full-create_table_like-006
+-- SELECT s.srvname, pg_catalog.array_to_string(ARRAY( SELECT pg_catalog.quote_ident(option_name) || ' ' || pg_catalog.quote_literal(option_value) FROM pg_catalog.pg_options_to_table(ftoptions)), ', ') FROM pg_catalog.pg_foreign_table f, pg_catalog.pg_foreign_server s WHERE f.ftrelid = '30494' AND s.oid = f.ftserver;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=3 eligible rows=1 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@2
+  source range rel=3118 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op607(v1.1, c26:30494)
+  project (1=v1.3, 2=v1.2)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=vl:win/page 2=w8:val
+p1 node=1 eligible rows=35 end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source range rel=1417 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8)
+  probe slot=0 inner=n2 JOIN_INNER unique keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.2))
+  subplan 1 nested Array params=($exec0=inner.1) vol=s
+  inner node=4 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n4@0
+  source const
+  srf from rti=3 [1:Other fn2289 cols=2 fn2289($exec0)]
+  project (1=op654(op654(fn1282(v3.1), c25:' '), fn1283(v3.2)))
+  project (1=outer.2, 2=fn395(subplan1(inner.1), c25:', '))
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=w4:val 5=vl:row 6=vl:row 7=vl:row 8=vl:row
+  outs 1=fx64:win/page 2=vl:call395
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+param $exec0 owner=subplan1 type=1009@950 rep=vl:life/breaker
+mapped: SeqScan FunctionScan HashJoin Hash SubPlan

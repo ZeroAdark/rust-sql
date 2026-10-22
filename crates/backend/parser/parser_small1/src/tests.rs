@@ -210,6 +210,11 @@ fn free_parsestate_checks_resno_limit() {
     pstate.p_next_resno = MaxTupleAttributeNumber + 2;
     let err = free_parsestate(pstate).unwrap_err();
     assert_eq!(err.sqlstate(), ERRCODE_TOO_MANY_COLUMNS);
+    assert_eq!(err.message, "target lists can have at most 1664 entries");
+    let location = err.location().unwrap();
+    assert_eq!(location.filename.as_deref(), Some("parse_node.c"));
+    assert_eq!(location.lineno, 83);
+    assert_eq!(location.funcname.as_deref(), Some("free_parsestate"));
 }
 
 #[test]
@@ -648,4 +653,85 @@ fn attach_parser_errposition_source_skips_query_canceled() {
     );
     let e = crate::attach_parser_errposition_source(src, 23, PG_UTF8, positioned);
     assert_eq!(e.cursor_position(), Some(3));
+}
+
+#[test]
+fn missing_record_field_reports_declared_name_through_alias() {
+    use crate::parse_param::{PlpgsqlHookState, PlpgsqlResolveOption, plpgsql_resolve_column_ref};
+    let ctx = MemoryContext::new("record alias");
+    let pstate = crate::parse_node::make_parsestate(ctx.mcx(), None);
+    let used = core::cell::RefCell::new(alloc::vec::Vec::new());
+    let hooks = PlpgsqlHookState {
+        names: &[],
+        params_by_dno: &[],
+        arg_dnos: &[],
+        recs: &[("alternate", "original"), ("blk\0alternate", "original")],
+        valueless_recs: &[],
+        recfields: &["alternate\0missing", "blk\0alternate\0missing"],
+        resolve_option: PlpgsqlResolveOption::Error,
+        used: &used,
+    };
+    for fields in [&["alternate", "missing"][..], &["blk", "alternate", "missing"][..]] {
+        let err = plpgsql_resolve_column_ref(
+            ctx.mcx(), &pstate, &hooks, fields, 0, true, PG_UTF8,
+        ).unwrap_err();
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_UNDEFINED_COLUMN);
+        assert_eq!(err.message(), "record \"original\" has no field \"missing\"");
+    }
+}
+
+// instantiate_empty_record_variable (pl_exec.c:7818) names rec->refname: an
+// unassigned record reached through an ALIAS reports the declared name.
+#[test]
+fn unassigned_record_reports_declared_name_through_alias() {
+    use crate::parse_param::{PlpgsqlHookState, PlpgsqlResolveOption, plpgsql_resolve_column_ref};
+    let ctx = MemoryContext::new("record alias unassigned");
+    let pstate = crate::parse_node::make_parsestate(ctx.mcx(), None);
+    let used = core::cell::RefCell::new(alloc::vec::Vec::new());
+    let hooks = PlpgsqlHookState {
+        names: &[],
+        params_by_dno: &[],
+        arg_dnos: &[],
+        recs: &[("a", "r")],
+        valueless_recs: &[(0, "a")],
+        recfields: &["a\0x"],
+        resolve_option: PlpgsqlResolveOption::Error,
+        used: &used,
+    };
+    let err = plpgsql_resolve_column_ref(ctx.mcx(), &pstate, &hooks, &["a", "x"], 0, true, PG_UTF8)
+        .unwrap_err();
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE);
+    assert_eq!(err.message(), "record \"r\" is not assigned yet");
+}
+
+// pl_comp.c resolve_column_ref: with no RECFIELD datum (the scanner builds
+// none for `r.end`), a field reference yields to the core parser unless it
+// found nothing, and then fails with the name as written and a cursor.
+#[test]
+fn record_field_without_recfield_datum_yields_or_errors_with_position() {
+    use crate::parse_param::{PlpgsqlHookState, PlpgsqlResolveOption, plpgsql_resolve_column_ref};
+    let ctx = MemoryContext::new("record keyword field");
+    let mut pstate = crate::parse_node::make_parsestate(ctx.mcx(), None);
+    pstate.p_sourcetext = Some(b"x + r.end".as_slice());
+    let used = core::cell::RefCell::new(alloc::vec::Vec::new());
+    for valueless in [&[][..], &[(0, "r")][..]] {
+        let hooks = PlpgsqlHookState {
+            names: &[],
+            params_by_dno: &[],
+            arg_dnos: &[],
+            recs: &[("r", "orig")],
+            valueless_recs: valueless,
+            recfields: &["r\0start"],
+            resolve_option: PlpgsqlResolveOption::Error,
+            used: &used,
+        };
+        let got = plpgsql_resolve_column_ref(ctx.mcx(), &pstate, &hooks, &["r", "end"], 4, false, PG_UTF8)
+            .unwrap();
+        assert!(got.is_none());
+        let err = plpgsql_resolve_column_ref(ctx.mcx(), &pstate, &hooks, &["r", "end"], 4, true, PG_UTF8)
+            .unwrap_err();
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_UNDEFINED_COLUMN);
+        assert_eq!(err.message(), "record \"r\" has no field \"end\"");
+        assert_eq!(err.cursor_position(), Some(5));
+    }
 }

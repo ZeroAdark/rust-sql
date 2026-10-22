@@ -874,7 +874,7 @@ mod from_where {
             pgstat_enabled: std::cell::Cell::new(false),
             pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
             rd_amcache: Default::default(),
-            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
             rd_support: PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
@@ -3519,4 +3519,69 @@ fn parse_analyze_does_not_copy_the_source_text_into_the_arena() {
     assert_eq!(q.commandType, CmdType::CMD_SELECT);
     let grew = ctx.used() - before;
     assert!(grew < padding / 4, "analysis of an 8-byte statement charged {grew} bytes to the arena");
+}
+
+// Stack bytes per analyzer recursion level, measured through the guard.
+// C 18.6 (clang -O2): 608 B per nested sub-select (transformSubLink ->
+// parse_sub_analyze -> transformStmt -> ... -> transformExprRecurse) and
+// 64 B per `+` (transformAExprOp). Measured 2026-09-22, opt3/opt0:
+// sub-select 4,987/24,672 B, `+` 128/660 B.
+fn analyzer_bytes_per_level(chain: fn(Mcx<'_>, usize) -> Node<'_>) -> usize {
+    stack_depth::measured_bytes_per_level(4 << 20, 1 << 20, move |n| {
+        let ctx = MemoryContext::new("t");
+        let mcx = ctx.mcx();
+        let target = Node::mk_res_target(mcx, None, NodeList::nil(), Some(chain(mcx, n)), 7)?;
+        let raw_stmt = raw(select_stmt(mcx, &[target]), 8);
+        parse_analyze_fixedparams(mcx, &raw_stmt, "SELECT", &[], Default::default()).map(|_| ())
+    })
+}
+
+fn nested_sublinks(mcx: Mcx<'_>, depth: usize) -> Node<'_> {
+    let mut expr = int_const(mcx, 1, 7);
+    for _ in 0..depth {
+        let target = Node::mk_res_target(mcx, None, NodeList::nil(), Some(expr), 7).unwrap();
+        expr = Node::mk(
+            mcx,
+            types_nodes::SubLink {
+                subLinkType: types_nodes::SubLinkType::EXPR_SUBLINK,
+                subLinkId: 0,
+                testexpr: None,
+                operName: NodeList::nil(),
+                subselect: select_stmt(mcx, &[target]),
+                location: 7,
+            },
+        )
+        .unwrap();
+    }
+    expr
+}
+
+fn plus_chain(mcx: Mcx<'_>, depth: usize) -> Node<'_> {
+    let mut expr = int_const(mcx, 1, 7);
+    for _ in 0..depth {
+        let name = NodeList::make1(mcx, Node::mk(mcx, PgStr { sval: "+" }).unwrap()).unwrap();
+        expr = Node::mk_a_expr(
+            mcx,
+            types_nodes::rawnodes::A_Expr_Kind::AEXPR_OP,
+            name,
+            Some(expr),
+            Some(int_const(mcx, 1, 7)),
+            7,
+        )
+        .unwrap();
+    }
+    expr
+}
+
+#[test]
+fn analyzer_recursion_stack_per_level_is_capped() {
+    install_type_fixture();
+    init_seams_once();
+    let sublink = analyzer_bytes_per_level(nested_sublinks);
+    let plus = analyzer_bytes_per_level(plus_chain);
+    eprintln!("analyzer stack per level: sub-select {sublink} B, `+` {plus} B");
+    let cap = stack_depth::per_level_cap(7_000, 32_000);
+    assert!(sublink <= cap, "nested sub-select analysis costs {sublink} B/level (cap {cap})");
+    let cap = stack_depth::per_level_cap(256, 1_000);
+    assert!(plus <= cap, "`+` chain analysis costs {plus} B/level (cap {cap})");
 }

@@ -1,0 +1,19 @@
+-- regress-full-json-006
+-- SELECT array_to_json(array_agg(x),false) from generate_series(5,10) x;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@2^
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:5, c23:10)]
+  project (1=v1.1)
+  outs 1=w4:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=fn3154(agg2335(1=outer.1), c16:0))
+  outs 1=vl:call3154
+breaker slot=0 kind=PlainAgg budget=Fixed(72) spill=None producer=p0 layout=[]->[Count@0]+valid 16B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=2335 reg=Collect slot=- count_slot=- final=Collect class=Collect(Array) trans=Var mods=[] expr=agg2335(1=outer.1)
+mapped: FunctionScan Agg

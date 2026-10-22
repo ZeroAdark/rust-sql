@@ -72,7 +72,7 @@ pub(crate) fn make_viewdef<'mcx>(
 // get_target_list consults.
 pub(crate) fn view_attnames(relid: Oid) -> PgResult<Vec<String>> {
     let natts = lsyscache::get_relnatts(relid)?;
-    let mut out = Vec::with_capacity(natts.max(0) as usize);
+    let mut out = ::mcx::std_vec_with_capacity("ruleutils", natts.max(0) as usize)?;
     for attno in 1..=natts {
         let Some(att) = syscache_seams::lookup_pg_attribute_shape::call(relid, attno as i16)?
         else {

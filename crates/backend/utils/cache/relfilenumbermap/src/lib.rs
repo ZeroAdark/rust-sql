@@ -39,7 +39,8 @@ thread_local! {
 fn RelfilenumberMapInvalidateCallback(_arg: Datum, relid: Oid) {
     MAP.with(|cell| {
         let mut slot = cell.borrow_mut();
-        let map = slot.as_mut().expect("RelfilenumberMapHash != NULL");
+        // D4682: no map after a session teardown cleared it (the next lookup builds one).
+        let Some(map) = slot.as_mut() else { return };
         map.hash.retain(|_, entry_relid| {
             !(relid == InvalidOid
                 || *entry_relid == InvalidOid
@@ -62,6 +63,10 @@ fn InitializeRelfilenumberMap() -> PgResult<()> {
     // Installed only after skey resolution: an fmgr error must not leave a
     // partially initialized map.
     let mcx = ::mcx::session_root("RelfilenumberMap cache").mcx();
+    // D4682: the teardown retires this root; clear the slot first, so a reused thread's next session builds a new one.
+    ::mcx::register_session_cleanup(Box::new(|| {
+        let _ = MAP.try_with(|c| drop(c.borrow_mut().take()));
+    }));
     let map = RelfilenumberMap {
         skey,
         hash: PgFxHashMap::with_hasher_in(Default::default(), mcx),

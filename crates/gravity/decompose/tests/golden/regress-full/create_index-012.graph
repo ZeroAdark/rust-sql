@@ -1,0 +1,11 @@
+-- regress-full-create_index-012
+-- EXPLAIN (COSTS OFF) SELECT * FROM point_tbl ORDER BY f1 <-> '0,1';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=19361 rti=1 am=heap index=19364 iam=gist
+    key att=1 op=517 form=orderby value=c600:#16
+    lanes Attr(1):byref8:fx16:win/page
+  project (1=index.1, 2j=op517(index.1, c600:#16))
+  outs 1=fx16:win/page 2=w8:val
+mapped: IndexOnlyScan

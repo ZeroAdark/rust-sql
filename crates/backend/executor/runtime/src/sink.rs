@@ -2,7 +2,7 @@
 //!
 //! Design authority: docs/design/m2-sinks.md (this lane's companion doc;
 //! donor mapping = nodeagg::merge / Stage-4 radix exchange + paremit,
-//! nodeagg::pardistinct, the stringhash tables, refsort + rule-2 rowref).
+//! nodeagg::pardistinct, refsort + rule-2 rowref).
 //! Parent plan: docs/design/parallelism-redesign-2026-07.md §2.2 / §5-M2.
 //!
 //! STATUS (m2-integration): TWO production sinks ride this module —

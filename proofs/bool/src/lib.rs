@@ -57,7 +57,7 @@ mod harnesses {
     fn eq_boolout() {
         let b: bool = kani::any();
         // c_char is i8 on macOS but u8 on aarch64-Linux — buffer must be
-        // spelled in c_char or the crate fails E0308 on the CI cluster runners.
+        // spelled in c_char or the crate fails E0308 on the fleet runners.
         let mut buf: [c_char; 2] = [0x7f as c_char; 2];
         unsafe { ffi::pg_boolout(b as c_int, buf.as_mut_ptr()) };
         assert_eq!(buf[0] as u8, adt_bool::boolout(b));
@@ -489,7 +489,7 @@ mod wave_sendtext {
     }
 
     /// Per-branch literal cells for booltext. The symbolic-bool harness
-    /// above walls in the CNF phase (CI cluster 2026-07-30: symex completes,
+    /// above walls in the CNF phase (fleet 2026-07-30: symex completes,
     /// 31226 VCCs, rss-kill at 40GB in propositional reduction, jobs
     /// -32917 and -42528) — the 2-valued image length makes every image
     /// byte a mux; a literal bool prunes (literal-cells law). Union of

@@ -24,7 +24,9 @@ enum DsState {
 #[track_caller]
 #[cold]
 fn bad_format(input: &[u8]) -> Box<PgError> {
-    let mut msg = b"invalid parameter list format: \"".to_vec();
+    let mut msg = Vec::new();
+    let _ = msg.try_reserve(32 + input.len() + 1);
+    msg.extend_from_slice(b"invalid parameter list format: \"");
     msg.extend_from_slice(input);
     msg.push(b'"');
     PgError::error_raw_message(msg).with_sqlstate(ERRCODE_SYNTAX_ERROR).into()

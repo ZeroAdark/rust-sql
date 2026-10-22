@@ -1,0 +1,19 @@
+-- fieldobs-016
+-- SELECT media_url, taxon_label FROM sightings WHERE site_id = 3 AND observed_on BETWEEN '2024-04-01' AND '2024-04-30' LIMIT 5;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=SortedSource end=sink
+  nodes n1@0 n0@4
+  source range rel=16464 rti=1 am=pgrc
+    lanes !Attr(4):byval4:w4:val !Attr(6):byval4:w4:val Attr(27):codes4:code:part/dict Attr(29):codes4:code:part/dict Offset:byval2:w2:val
+    zone lane1 = word0/4
+    zone lane0 >= word0/4
+    zone lane0 <= word0/4
+  filter op96(v1.6, c23:3)
+  filter op1098(v1.4, c1082:8857)
+  filter op1096(v1.4, c1082:8886)
+  project (1=v1.29, 2=v1.27)
+  limit count=5 offset=all
+  project (1=outer.1, 2=outer.2)
+  outs 1=code:part/dict 2=code:part/dict
+  outs 1=code:part/dict 2=code:part/dict
+mapped: SeqScan Limit

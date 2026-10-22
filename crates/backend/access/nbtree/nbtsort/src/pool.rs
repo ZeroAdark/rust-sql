@@ -9,13 +9,9 @@
 //! Q1 capped ledger tier), kill switch PGRUST_RUNTIME_INDEXBUILD_POOL
 //! default OFF, fail-closed to the serial build on every refusal.
 //!
-//! CENSUS OF RECORD (2026-07-21): pgrust has NO bgworker-gang parallel
-//! btree build — index_build (catalog_index) is "btree only, serial only";
-//! nbtsort.c's _bt_begin_parallel/_bt_parallel_scan_and_sort family was
-//! never ported. The M4.1 fail-closed layering "pool → launched gang →
-//! serial" therefore degenerates here to "pool → serial": the middle tier
-//! is vacuous by census, not by choice. The serial path is byte-identical
-//! when the pool arm is off or refuses.
+//! LAYERING: armed, this channel replaces the C launched-gang build
+//! (parallel.rs) for every btree build; a refusal falls back to the serial
+//! scan, byte-identically.
 //!
 //! SORT-PHASE ADJUDICATION (charter #2): per-worker tuplesorts with a
 //! leader K-way merge (C's shape) are NOT buildable today — `Tuplesort` is
@@ -71,9 +67,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use ::mcx::{Mcx, MemoryContext};
+use ::types_core::instrument::{BufferUsage, WalUsage};
 use ::types_core::{BlockNumber, ForkNumber, Oid, TransactionId};
 use ::types_error::{PgError, PgResult, ERROR};
-use ::types_rel::lock::{RowExclusiveLock, ShareLock};
+use ::types_rel::lock::{AccessExclusiveLock, ShareLock};
 use ::types_rel::Relation;
 use ::types_tuple::itemptr::ItemPointerData;
 
@@ -83,7 +80,7 @@ use execindexing::IndexInfo;
 /// channel for non-concurrent btree builds. DEFAULT OFF. Layered under the
 /// runtime master switch and the standing module's own gates
 /// (POOLBIND/POOLDB inside try_engage_pool) — the M4.1 chain shape.
-fn pool_build_enabled() -> bool {
+pub(crate) fn pool_build_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
         std::env::var("PGRUST_RUNTIME_INDEXBUILD_POOL").is_ok_and(|v| v.trim() == "1")
@@ -191,6 +188,7 @@ struct BtBuildPool {
     /// Workers' sub-ERROR reports, relayed by the leader's drain (C: the
     /// worker error queue's 'N' messages).
     notices: Arc<Mutex<Vec<Box<PgError>>>>,
+    notice_context_mark: u64,
     failed: AtomicBool,
     /// Leader teardown in progress: shippers must drain out (a worker
     /// parked on a full queue would otherwise stall the abort drain).
@@ -198,6 +196,7 @@ struct BtBuildPool {
     broken_hot_chain: AtomicBool,
     /// Workers' per-range sums, accumulated under a cold-path lock.
     reltuples: Mutex<f64>,
+    usage: BuildUsage,
 }
 
 impl BtBuildPool {
@@ -300,6 +299,16 @@ thread_local! {
         const { std::cell::Cell::new(std::ptr::null_mut()) };
 }
 
+/// Clears BT_CX when the drive frame ends, an unwinding drive included (C7 clause (d)): the published pointer never
+/// outlives the frame's `BtWorkerCx`.
+struct BtCxPublished;
+
+impl Drop for BtCxPublished {
+    fn drop(&mut self) {
+        BT_CX.with(|c| c.set(std::ptr::null_mut()));
+    }
+}
+
 impl runtime::TaskSetWork for BtBuildPool {
     fn run_morsel(&self, _worker: usize, range: runtime::MorselRange) {
         if self.failed.load(SeqCst) {
@@ -333,8 +342,9 @@ impl runtime::TaskSetWork for BtBuildPool {
                 // Exit-committed unwinds rethrow to the driver (a dying
                 // thread must not claim the next morsel; index build syncs
                 // beneath — the fsync law).
-                if parallel::standing::is_exit_unwind(&*unwind) {
-                    std::panic::resume_unwind(unwind);
+                // D2933: an exit payload or a plain panic (C's abort()) goes on
+                if !parallel::standing::is_structured_error(&*unwind) {
+                    parallel::standing::resume_exit_or_abort(unwind);
                 }
             }
         }
@@ -345,6 +355,23 @@ impl runtime::TaskSetWork for BtBuildPool {
 
     fn finalize(&self) {
         // Completion is the leader's verdict (waiter + final queue drain).
+    }
+}
+
+#[derive(Default)]
+struct BuildUsage(Mutex<(BufferUsage, WalUsage)>);
+
+impl BuildUsage {
+    fn record(&self, save: &(BufferUsage, WalUsage)) {
+        let (buf, wal) = instrument::instr_end_parallel_query(save);
+        let mut usage = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        instrument::buffer_usage_add(&mut usage.0, &buf);
+        instrument::wal_usage_add(&mut usage.1, &wal);
+    }
+
+    fn accumulate(&self) {
+        let usage = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        instrument::instr_accum_parallel_query(&usage.0, &usage.1);
     }
 }
 
@@ -365,7 +392,7 @@ impl BtBuildPool {
         let start = range.start as BlockNumber;
         let len = (range.end - range.start) as BlockNumber;
 
-        let mut batch: Vec<u8> = Vec::with_capacity(batch_bytes() + 512);
+        let mut batch: Vec<u8> = ::mcx::std_vec_with_capacity("access", batch_bytes() + 512)?;
         let mut err: Option<Box<PgError>> = None;
         let (mcx, heap, index, index_info, scratch) =
             (cx.mcx, cx.heap, cx.index, &mut cx.index_info, &mut cx.scratch);
@@ -395,7 +422,7 @@ impl BtBuildPool {
                 if batch.len() >= batch_bytes() {
                     if let Err(e) = self.ship(std::mem::replace(
                         &mut batch,
-                        Vec::with_capacity(batch_bytes() + 512),
+                        ::mcx::std_vec_with_capacity("access", batch_bytes() + 512)?,
                     )) {
                         err = Some(e);
                         return Err(Box::new(PgError::new(
@@ -507,8 +534,9 @@ fn btbuild_pool_driver(shared: &parallel::ParallelShared) {
             latch::SetLatch(::types_storage::latch::LatchHandle::proc(
                 shared.parallel_leader_proc_number,
             ));
-            if parallel::standing::is_exit_unwind(&*unwind) {
-                std::panic::resume_unwind(unwind);
+            // D2933: an exit payload or a plain panic (C's abort()) goes on
+            if !parallel::standing::is_structured_error(&*unwind) {
+                parallel::standing::resume_exit_or_abort(unwind);
             }
             return;
         }
@@ -521,7 +549,7 @@ fn btbuild_pool_driver(shared: &parallel::ParallelShared) {
 
 /// The drive body (the _bt_parallel_build_main analog, pool form): open
 /// this participant's relations under the group locks C's worker takes
-/// (heap ShareLock, index RowExclusiveLock), build its own IndexInfo, then
+/// (heap ShareLock, index AccessExclusiveLock), build its own IndexInfo, then
 /// an external-lane pinned drive claiming block-range morsels. Errors
 /// record into the pass (first-wins) and return Err so the binder aborts
 /// the worker transaction (resowner releases the residue).
@@ -563,7 +591,7 @@ fn pool_build_drive(bp: &Arc<BtBuildPool>) -> PgResult<()> {
             return Ok(());
         }
     };
-    let index = match indexam::index_open(mcx, bp.index_oid, RowExclusiveLock) {
+    let index = match indexam::index_open(mcx, bp.index_oid, AccessExclusiveLock) {
         Ok(rel) => rel,
         Err(e) => {
             reap(e, rt, &mut lane_local, &rg);
@@ -575,7 +603,7 @@ fn pool_build_drive(bp: &Arc<BtBuildPool>) -> PgResult<()> {
         Ok(ii) => ii,
         Err(e) => {
             reap(e, rt, &mut lane_local, &rg);
-            let _ = indexam::index_close(index, RowExclusiveLock);
+            let _ = indexam::index_close(index, AccessExclusiveLock);
             let _ = table::table_close(heap, ShareLock);
             return Ok(());
         }
@@ -583,6 +611,7 @@ fn pool_build_drive(bp: &Arc<BtBuildPool>) -> PgResult<()> {
     // The pool arm serves non-concurrent builds only (gated at engage).
     index_info.ii_Concurrent = false;
 
+    let usage_save = instrument::instr_start_parallel_query();
     bp.started.fetch_add(1, SeqCst);
 
     let mut cx = BtWorkerCx {
@@ -590,11 +619,12 @@ fn pool_build_drive(bp: &Arc<BtBuildPool>) -> PgResult<()> {
         heap: &heap,
         index: &index,
         index_info,
-        scratch: MemoryContext::new_bump("btbuild pool form scratch"),
+        scratch: MemoryContext::new_wholesale("btbuild pool form scratch"),
     };
     // Publish the worker cx for run_morsel (this thread only), drive, clear.
     // SAFETY (lifetime erasure): cx outlives the drive on this frame; the
-    // pointer is cleared before cx drops.
+    // pointer is cleared (BtCxPublished's drop, declared after cx, so first
+    // on an unwind too) before cx drops.
     BT_CX.with(|c| {
         c.set(unsafe {
             core::mem::transmute::<*mut BtWorkerCx<'_, '_>, *mut BtWorkerCx<'static, 'static>>(
@@ -602,11 +632,13 @@ fn pool_build_drive(bp: &Arc<BtBuildPool>) -> PgResult<()> {
             )
         })
     });
+    let published = BtCxPublished;
     let _outcome = rt.drive_pinned(&mut lane_local, &rg);
-    BT_CX.with(|c| c.set(std::ptr::null_mut()));
+    drop(published);
     drop(cx);
+    bp.usage.record(&usage_save);
 
-    indexam::index_close(index, RowExclusiveLock)?;
+    indexam::index_close(index, AccessExclusiveLock)?;
     table::table_close(heap, ShareLock)?;
 
     if bp.failed.load(SeqCst) {
@@ -860,10 +892,12 @@ pub(crate) fn pool_feed_spools<'mcx>(
             refused: AtomicUsize::new(0),
             error: Mutex::new(None),
             notices: Arc::new(Mutex::new(Vec::new())),
+            notice_context_mark: elog::context_stack_mark(),
             failed: AtomicBool::new(false),
             closing: AtomicBool::new(false),
             broken_hot_chain: AtomicBool::new(false),
             reltuples: Mutex::new(0.0),
+            usage: BuildUsage::default(),
         });
         parallel::set_private(pcxt, Arc::clone(&bp) as Arc<dyn std::any::Any + Send + Sync>);
         Ok(Some((bp, entry)))
@@ -924,6 +958,7 @@ pub(crate) fn pool_feed_spools<'mcx>(
 
     match verdict {
         PoolJoin::Done => {
+            bp.usage.accumulate();
             if bp.broken_hot_chain.load(SeqCst) {
                 index_info.ii_BrokenHotChain = true;
             }
@@ -969,7 +1004,7 @@ fn pool_leader_join(
     // Drain everything currently queued into the caller's spools.
     let mut drain = |bp: &Arc<BtBuildPool>, consumed: &mut u64| -> PgResult<bool> {
         for e in bp.take_notices() {
-            parallel::emit_relayed_worker_notice(e);
+            parallel::emit_relayed_worker_notice(e, bp.notice_context_mark);
         }
         let mut any = false;
         loop {
@@ -1051,12 +1086,16 @@ fn pool_leader_join(
             cleanup(bp);
             return Err(e);
         }
-        let claimed = entry.claimed();
+        // One Participation read (detaches, then starts, then claims; see
+        // its doc): claims read first made a bind refusal's detach plus the
+        // re-claims churning behind it read a still-driving build as "every
+        // participant detached" (D3369).
+        let p = entry.participation(&bp.started);
+        let (claimed, started) = (p.claimed, p.started);
         if !traced && claimed > 0 {
             btrace(&format!("engaged pooldb dop={claimed}"));
             traced = true;
         }
-        let started = bp.started.load(SeqCst);
         let refused = entry.refused() + bp.refused.load(SeqCst);
         if started == 0 && refused >= entry.tickets() {
             pool_drain_rg(rt, rg);
@@ -1066,7 +1105,7 @@ fn pool_leader_join(
             return Ok(PoolJoin::Fallback);
         }
         if started == 0
-            && entry.detached() >= claimed
+            && p.none_live()
             && std::time::Duration::from_nanos(t0.elapsed_ns()) > pool_claim_deadline()
         {
             pool_drain_rg(rt, rg);
@@ -1075,7 +1114,7 @@ fn pool_leader_join(
             debug_assert_eq!(consumed, 0, "fallback with consumed tuples");
             return Ok(PoolJoin::Fallback);
         }
-        if claimed > 0 && started > 0 && entry.detached() >= claimed {
+        if p.all_exited_after_start() {
             if let Some(_o) = waiter.try_wait() {
                 continue;
             }
@@ -1108,6 +1147,60 @@ fn pool_leader_join(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_usage_excludes_prior_tasks_and_folds_all_participants() {
+        use types_core::instrument::instr_time;
+
+        transam_xlog_seams::wal_usage::set(WalUsage::default);
+        let buf = BufferUsage {
+            shared_blks_hit: 7,
+            shared_blks_read: 11,
+            shared_blks_dirtied: 3,
+            shared_blks_written: 2,
+            local_blks_hit: 5,
+            local_blks_read: 13,
+            local_blks_dirtied: 17,
+            local_blks_written: 19,
+            temp_blks_read: 23,
+            temp_blks_written: 29,
+            shared_blk_read_time: instr_time { ticks: 31 },
+            shared_blk_write_time: instr_time { ticks: 37 },
+            local_blk_read_time: instr_time { ticks: 41 },
+            local_blk_write_time: instr_time { ticks: 43 },
+            temp_blk_read_time: instr_time { ticks: 47 },
+            temp_blk_write_time: instr_time { ticks: 53 },
+        };
+        let wal = WalUsage {
+            wal_records: 59,
+            wal_fpi: 61,
+            wal_bytes: 67,
+            wal_buffers_full: 71,
+        };
+        let usage = BuildUsage::default();
+        let leader_save = instrument::instr_start_parallel_query();
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                let usage = &usage;
+                scope.spawn(move || {
+                    instrument::instr_accum_parallel_query(&buf, &wal);
+                    for _ in 0..2 {
+                        let save = instrument::instr_start_parallel_query();
+                        instrument::instr_accum_parallel_query(&buf, &wal);
+                        usage.record(&save);
+                    }
+                });
+            }
+        });
+        assert_eq!(instrument::instr_end_parallel_query(&leader_save), Default::default());
+        usage.accumulate();
+        let mut expected = (BufferUsage::default(), WalUsage::default());
+        for _ in 0..4 {
+            instrument::buffer_usage_add(&mut expected.0, &buf);
+            instrument::wal_usage_add(&mut expected.1, &wal);
+        }
+        assert_eq!(instrument::instr_end_parallel_query(&leader_save), expected);
+    }
 
     /// Record encode/decode roundtrip: the leader's parse must recover
     /// exactly what form_record's encoder appended (u32 len | u8 alive |

@@ -71,7 +71,7 @@ fn erx_tour_is_a_permutation() {
     let mut t2 = vec![0; (num_gene + 1) as usize];
     init_tour(&mut st, &mut t1, num_gene);
     init_tour(&mut st, &mut t2, num_gene);
-    let mut et = alloc_edge_table(num_gene);
+    let mut et = alloc_edge_table(num_gene).unwrap();
     gimme_edge_table(&t1, &t2, num_gene, &mut et);
     let mut kid = vec![0; (num_gene + 1) as usize];
     gimme_tour(&mut st, &mut et, &mut kid, num_gene);
@@ -89,7 +89,7 @@ fn same_seed_reproduces_the_rng_stream() {
         let mut t2 = vec![0; (num_gene + 1) as usize];
         init_tour(&mut st, &mut t1, num_gene);
         init_tour(&mut st, &mut t2, num_gene);
-        let mut et = alloc_edge_table(num_gene);
+        let mut et = alloc_edge_table(num_gene).unwrap();
         gimme_edge_table(&t1, &t2, num_gene, &mut et);
         let mut kid = vec![0; (num_gene + 1) as usize];
         gimme_tour(&mut st, &mut et, &mut kid, num_gene);
@@ -148,4 +148,11 @@ fn pool_admission_checks_each_tour_not_their_sum() {
     assert!(super::pool::pool_requests_ok(10_000_000, 30));
     // pool_size * sizeof(Chromosome) itself over MaxAllocSize is refused.
     assert!(!super::pool::pool_requests_ok(i32::MAX, 30));
+}
+
+#[test]
+fn pool_admission_uses_c_chromosome_size() {
+    // 40M * 16 bytes (C sizeof(Chromosome)) is under MaxAllocSize.
+    assert!(super::pool::pool_requests_ok(40_000_000, 30));
+    assert!(!super::pool::pool_requests_ok(67_108_864, 30));
 }

@@ -1,0 +1,10 @@
+# jsonb_agg: an object element is one element
+sql: SELECT jsonb_agg(r) FROM t;
+cols: jsonb_agg
+elem: 1	json_array
+class: unordered
+verdict: match
+[pg]
+[{"a": 1, "b": [1, 2]}, {"a": 2}]
+[got]
+[{"a": 2}, {"a": 1, "b": [1, 2]}]

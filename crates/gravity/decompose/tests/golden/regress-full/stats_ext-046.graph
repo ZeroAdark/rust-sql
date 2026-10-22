@@ -1,0 +1,15 @@
+-- regress-full-stats_ext-046
+-- SELECT * FROM check_estimated_rows('SELECT * FROM functional_dependencies WHERE a IN (1, 26, 51, 76) AND b IN (''1'', ''26'') AND c = 1');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@0
+  source bitmap rel=34227 rti=1 am=heap
+    bitmap index node=1 index=34232 rows=200
+      key att=3 op=96 form=any value=c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x1a\x00\x00\x003\x00\x00\x00L\x00\x00\x00'
+      key att=4 op=98 form=any value=c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x14\x00\x00\x001\x00\x00\x00\x18\x00\x00\x0026\x00\x00'
+    recheck (any96(v1.3, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x1a\x00\x00\x003\x00\x00\x00L\x00\x00\x00'), any98(v1.4, c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x14\x00\x00\x001\x00\x00\x00\x18\x00\x00\x0026\x00\x00'))
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Attr(3):byval8:w8:val Attr(4):byref8:vl:win/page Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(v1.6, c23:1)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7)
+  outs 1=vl:win/page 2=vl:win/page 3=w8:val 4=vl:win/page 5=w8:val 6=w8:val 7=vl:win/page
+mapped: BitmapIndexScan BitmapHeapScan

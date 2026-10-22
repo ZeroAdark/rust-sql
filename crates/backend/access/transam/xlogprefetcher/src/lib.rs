@@ -322,6 +322,7 @@ fn XLogPrefetchIncrement(counter: &AtomicU64) {
 
 impl<'mcx> XLogPrefetcher<'mcx> {
     pub fn XLogPrefetcherAllocate(mcx: Mcx<'mcx>) -> XLogPrefetcher<'mcx> {
+        PAGE_READ_NEXT_STATS_LSN.store(0, Relaxed);
         let s = shared_stats();
         s.wal_distance.store(0, Relaxed);
         s.block_distance.store(0, Relaxed);

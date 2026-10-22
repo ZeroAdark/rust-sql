@@ -1,0 +1,12 @@
+# RCF (lint/rules/rcf_charge_first.py; memlead 2026-10-15T21:30:28Z via memacct, D4627): a struct holding a memledger Charge
+# (or Held) DIRECTLY declares that field FIRST, before every heap-owning field. Rust drops
+# fields in declaration order: a Charge dropped after the bytes it counts leaves the dropping thread's pending below its
+# charges for the span between, and a lone thread near zero (DROP TABLE / DATABASE invalidation, a backend's exit) floors
+# the dip under ledger_floor, hiding the gap. Each row is a struct not reordered yet:
+# path	struct	owner lane	why it stays
+# Only a DIRECT Charge / Held field counts: a self-charged field type (ChargedVec, RegionBuf, OpenPart) frees and uncharges
+# its own contents in its own drop, so its place moves no byte.
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<struct> (the row's path with
+# crates/gravity/ dropped and '/' as '.'), holding the row line; this README is not a row. Deleting a row deletes its file.
+# The list only shrinks: a landing never adds a row (declare the Charge first instead). A row whose struct is in order
+# (or gone) is a note: delete it.

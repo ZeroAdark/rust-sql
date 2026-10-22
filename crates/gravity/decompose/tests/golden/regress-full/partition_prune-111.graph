@@ -1,0 +1,71 @@
+-- regress-full-partition_prune-111
+-- explain (costs off) with t as ( merge into part_abc_view pt using (select stable_one() + 1 as pid) as q join part_abc_2 pt2 on (q.pid = pt2.a) on pt.a = stable_one() + 2 when not matched then insert values (1, 'd', false) returning merge_action(), pt.* ) insert into part_abc_log select * from t returning *;
+graph pipelines=5 breakers=4 init_plans=1 root=p4
+p0 node=7 eligible rows=6 end=breaker(slot=0 Materialize)
+  nodes n7@0 n6@3^
+  source range rel=45619 rti=11 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op531(v11.1, c25:'a')
+  filter op96(v11.2, op551(fn45633(), c23:2))
+  project (1=v11.-6, 2=v11.-1, 3j=v11.2, 4j=v11.1, 5j=v11.3)
+  feed slot=0
+  outs 1=w4:val 2=fx6:row 3=w8:val 4=vl:win/page 5=w8:val
+p1 node=8 eligible rows=6 end=breaker(slot=0 Materialize)
+  nodes n8@0 n6@3^
+  source range rel=45624 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op531(v12.3, c25:'a')
+  filter op96(v12.1, op551(fn45633(), c23:2))
+  project (1=v12.-6, 2=v12.-1, 3j=v12.1, 4j=v12.3, 5j=v12.2)
+  feed slot=0
+  outs 1=w4:val 2=fx6:row 3=w8:val 4=vl:win/page 5=w8:val
+p2 node=6 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p1
+  nodes n6@0 n5@2^
+  source breaker slot=0
+  append union slot=0 children=2 prune=initial [rti=8 parts=2 present=(0,1) steps=1]
+  project (1=outer.1, 2=outer.2, 3j=outer.3, 4j=outer.4, 5j=outer.5)
+  spool
+  outs 1=w4:val 2=fx6:life/breaker 3=w4:val 4=vl:life/breaker 5=w1:val
+p3 node=4 serial site=1 reason=Write end=breaker(slot=2 Materialize)
+  desc consumes=slot1@p2
+  nodes n4@0 n3@2 n2@4
+  source range rel=45624 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(op551(fn45633(), c23:1), v6.1)
+  project (1=v6.-1)
+  nest inner=n5 JOIN_LEFT vol=v params=()
+  inner node=5 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p2
+  nodes n5@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3j=outer.3, 4j=outer.4, 5j=outer.5)
+  project (1j=outer.1, 2j=inner.1, 3j=inner.2, 4j=inner.3, 5j=inner.4, 6j=inner.5)
+  write MERGE rel=45619 rti=11 natts=3 indexes=() returning marks=1 (rti6:ROW_MARK_REFERENCE) tableoid=outer.2 route=rti8:45616 natts=3 map=(2,1,3)
+    target rti=12 rel=45624 natts=3 indexes=() returning map=(1,3,2)
+      when not matched then insert (1=c23:1, 2=c25:'d', 3=c16:0)
+    check view target=0 rel=part_abc_view cascaded (op531(v11.1, c25:'a'))
+    check view target=1 rel=part_abc_view cascaded (op531(v12.3, c25:'a'))
+    merge rowid=outer.3 target_cols=(1@4,2@5,3@6) returning merge_action()
+    when not matched then insert (1=c23:1, 2=c25:'d', 3=c16:0)
+  project (1=T_MergeSupportFunc, 2=v11.2, 3=v11.1, 4=v11.3)
+  outs 1=fx6:row
+  outs 1=fx6:row 2=w4:val 3=fx6:life/breaker 4=w4:val 5=vl:life/breaker 6=w1:val
+  outs 1=vl:call0 2=w4:val 3=vl:row 4=w1:val
+p4 node=1 serial site=0 reason=Write end=sink
+  desc consumes=slot2@p3
+  nodes n1@0 n0@1
+  source breaker slot=2
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4)
+  write INSERT rel=45634 rti=1 natts=4 indexes=() returning epq=$exec2
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4)
+  outs 1=vl:row 2=w4:val 3=vl:row 4=w1:val
+  outs 1=vl:row 2=w4:val 3=vl:row 4=w1:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p2 layout=[]->[Count@0] 8B
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B
+init_plan id=1 pipeline=p3 link=Cte param=$exec1 slot=2 vol=v
+scan-lanes node=7 rti=11 rel=45619 tableoid
+scan-lanes node=8 rti=12 rel=45624 tableoid
+mapped: ModifyTable Append SeqScan CteScan NestLoop Material PlanRowMark PartitionPruneInfo SubPlan

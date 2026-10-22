@@ -1,0 +1,51 @@
+-- regress-full-window-082
+-- EXPLAIN (COSTS OFF) SELECT 1 FROM (SELECT ntile(e2.salary) OVER (PARTITION BY e1.depname) AS c FROM empsalary e1 LEFT JOIN empsalary e2 ON TRUE WHERE e1.empno = e2.empno) s WHERE s.c = 1;
+graph pipelines=5 breakers=4 init_plans=0 root=p4
+p0 node=7 eligible rows=1070 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n7@0 n6@1
+  source range rel=38921 rti=3 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v3.3, 2=v3.2)
+  sort keys=2+:I64 form=runs
+  outs 1=w8:val 2=w8:val
+p1 node=5 eligible rows=1070 end=breaker(slot=1 Sort)
+  desc finishing
+  nodes n5@0 n4@1^
+  source range rel=38921 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2)
+  sort keys=2+:I64 form=runs
+  outs 1=vl:win/page 2=w8:val
+p2 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 Sort)
+  desc consumes=slot1@p1 consumes=slot0@p0
+  nodes n4@0 n3@1 n2@3^
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2)
+  merge slot=0 inner=n6 JOIN_INNER clauses=(op410(outer.2, inner.2)) reversals=[false] nulls_first=[false]
+  project (1=outer.1, 2=inner.1)
+  sort keys=1+:Fp128@100 form=runs
+  outs 1=vl:win/page 2=w8:val
+  outs 1=vl:win/page 2=w4:val
+p3 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  desc consumes=slot2@p2
+  nodes n2@0 n1@1^
+  source breaker slot=2
+  project (1=outer.1, 2=outer.2)
+  outs 1=vl:win/page 2=w4:val
+p4 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p3
+  nodes n1@0 n0@2
+  source breaker slot=0
+  window ref=1 top partition=1=98:Fp128 order= frame=Rows unbounded-preceding..current-row run_condition=(op523(outer.3, c23:1))
+    fn resno=1 Ntile cursor=row,partition, win3105(outer.2)
+  project (1=outer.3, 2j=outer.1)
+  filter op96(v1.1, c23:1)
+  project (1=c23:1)
+  outs 1=w4:val 2=vl:life/breaker
+  outs 1=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I64]->[Count@8] 16B order=2+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[I64]->[Count@8] 16B order=2+
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p3 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+mapped: SeqScan SubqueryScan MergeJoin Sort WindowAgg

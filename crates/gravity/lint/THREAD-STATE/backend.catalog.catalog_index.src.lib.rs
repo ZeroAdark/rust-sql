@@ -1,0 +1,2 @@
+backend/catalog/catalog_index/src/lib.rs	NEXT_INDEX_PG_CLASS_OID	pgport	at:index_create	leader	C's binary_upgrade_next_* override: set by pg_upgrade's binary_upgrade_set_next_* support function, consumed (reset) by the next index_create on this backend's DDL path
+backend/catalog/catalog_index/src/lib.rs	NEXT_INDEX_PG_CLASS_RELFILENUMBER	pgport	at:index_create	leader	C's binary_upgrade_next_* override: set by pg_upgrade's binary_upgrade_set_next_* support function, consumed (reset) by the next index_create on this backend's DDL path

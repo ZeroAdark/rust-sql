@@ -77,8 +77,8 @@ pub fn blgetbitmap(
             (&scan.keyData, &mut **so)
         };
         if so.sign.is_none() {
-            let scratch = mcx::MemoryContext::new_bump("Bloom scan key context");
-            let mut sign = vec![0 as BloomSignatureWord; so.state.opts.bloom_length as usize];
+            let scratch = mcx::MemoryContext::new_wholesale("Bloom scan key context");
+            let mut sign = ::mcx::std_vec_from_elem("bloom", 0 as BloomSignatureWord, so.state.opts.bloom_length as usize)?;
             for skey in keys.iter().take(nkeys) {
                 // Bloom-indexable operators are assumed strict: NULL matches nothing.
                 if skey.sk_flags & SK_ISNULL != 0 {
@@ -100,7 +100,7 @@ pub fn blgetbitmap(
     let bas = GetAccessStrategy(BufferAccessStrategyType::BasBulkread);
     let npages = bufmgr::RelationGetNumberOfBlocksInFork(&index, ForkNumber::MAIN_FORKNUM)?;
     if index.pgstat_enabled.get() {
-        scan.xs_pgstat_index_scans += 1;
+        scan.xs_pgstat.count(1, 0, 0);
     }
     scan.xs_nsearches += 1;
 

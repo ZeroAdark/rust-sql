@@ -106,7 +106,7 @@ pub fn hnswendscan(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
 }
 
 // GetScanValue: detoast, then normalize for cosine-family opclasses.
-// Scratch goes in a local bump (C allocates in tmpCtx); the returned image
+// Scratch goes in a local AllocSet (C allocates in tmpCtx); the returned image
 // is owned so it frees at the next rescan.
 fn get_scan_value(
     support: &mut HnswSupport,
@@ -115,7 +115,7 @@ fn get_scan_value(
     if orderby.sk_flags & SK_ISNULL != 0 {
         return Ok(None);
     }
-    let tmp = mcx::MemoryContext::new_bump("hnsw scan value");
+    let tmp = mcx::MemoryContext::new_wholesale("hnsw scan value");
     let tmcx = tmp.mcx();
     let d = orderby.sk_argument;
     let p = d.as_usize() as *const u8;
@@ -127,9 +127,9 @@ fn get_scan_value(
 
     if support.normprocinfo.is_some() {
         let normed = norm_value(tmcx, &flat)?;
-        return Ok(Some(normed.to_vec()));
+        return Ok(Some(::mcx::std_vec_from_slice("pgvector_hnsw", &normed)?));
     }
-    Ok(Some(flat.to_vec()))
+    Ok(Some(::mcx::std_vec_from_slice("pgvector_hnsw", &flat)?))
 }
 
 // HnswNormValue for the vector opclasses: l2_normalize applied in place.
@@ -233,7 +233,7 @@ fn get_scan_items(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
         return Ok(());
     };
 
-    let tmp = mcx::MemoryContext::new_bump("hnsw scan search");
+    let tmp = mcx::MemoryContext::new_wholesale("hnsw scan search");
     let tmcx = tmp.mcx();
     let mut pool = ElementPool::new(tmcx);
     let mut support = so.support.clone();
@@ -291,7 +291,7 @@ fn get_scan_items(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
     so.tuples = tuples;
     so.support = support;
 
-    so.w = Vec::with_capacity(w.len());
+    so.w = ::mcx::std_vec_with_capacity("pgvector_hnsw", w.len())?;
     for sc in w.iter() {
         so.w.push(pool_elem_to_scan(&pool, sc));
     }
@@ -326,7 +326,7 @@ fn resume_scan_items(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
         return Ok(());
     }
 
-    let tmp = mcx::MemoryContext::new_bump("hnsw scan resume");
+    let tmp = mcx::MemoryContext::new_wholesale("hnsw scan resume");
     let tmcx = tmp.mcx();
     let mut pool = ElementPool::new(tmcx);
     let mut support = so.support.clone();
@@ -384,7 +384,7 @@ fn resume_scan_items(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
     so.tuples = tuples;
     so.support = support;
 
-    so.w = Vec::with_capacity(w.len());
+    so.w = ::mcx::std_vec_with_capacity("pgvector_hnsw", w.len())?;
     for sc in w.iter() {
         so.w.push(pool_elem_to_scan(&pool, sc));
     }
@@ -404,7 +404,7 @@ pub fn hnswgettuple(
     _direction: types_scan::ScanDirection,
 ) -> PgResult<bool> {
     if opaque(scan).first {
-        scan.xs_pgstat_index_scans += 1;
+        scan.xs_pgstat.count(1, 0, 0);
         scan.xs_nsearches += 1;
 
         if scan.numberOfOrderBys == 0 || scan.orderByData.is_empty() {

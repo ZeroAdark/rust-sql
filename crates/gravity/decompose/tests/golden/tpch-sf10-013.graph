@@ -1,0 +1,58 @@
+-- tpch-sf10-013
+-- SELECT c_count, count(*) AS custdist FROM ( SELECT c_custkey, count(o_orderkey) FROM customer LEFT OUTER JOIN orders ON c_custkey = o_custkey AND o_comment NOT LIKE '%special%requests%' GROUP BY c_custkey) AS c_orders (c_custkey, c_count) GROUP BY c_count ORDER BY custdist DESC, c_count DESC /* TH13 */;
+graph pipelines=6 breakers=5 init_plans=0 root=p5
+p0 node=7 eligible rows=1500000 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n7@0 n6@1
+  source range rel=16426 rti=3 am=pgrc
+    lanes Attr(1):byval4:w4:val Offset:byval2:w2:val
+  project (1=v3.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val
+p1 node=5 eligible rows=14998500 end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n5@0 n4@2^
+  source range rel=16437 rti=4 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(2):byval4:w4:val Attr(9):codes4:code:part/dict Offset:byval2:w2:val
+  filter op1210(relabel25(v4.9), c25:'%special%requests%')
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9)
+  probe slot=0 inner=n6 JOIN_RIGHT marks build-first keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  outs 1=w4:val 2=w4:val 3=vl:row 4=vl:row 5=w4:val 6=vl:row 7=vl:row 8=w4:val 9=code:part/dict
+p2 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 HashAgg)
+  desc consumes=slot0@p0 consumes=slot1@p1 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n3@2^
+  source breaker slot=0
+  drain matches=slot1 JOIN_RIGHT
+  project (1=inner.1, 2=outer.1)
+  outs 1=w4:val 2=w4:val
+p3 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashAgg)
+  desc consumes=slot2@p2 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n1@1^
+  source breaker slot=2
+  project (1=outer.1, 2=agg2147(1=outer.2))
+  outs 1=w4:val 2=w8:val
+p4 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot0@p3
+  nodes n1@0 n0@1^
+  source breaker slot=0
+  project (1=outer.2, 2=agg2803*())
+  sort keys=2-n:I64,1-n:I64 form=runs
+  outs 1=w8:val 2=w8:val
+p5 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p4
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 6 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 7 } producer=p2 layout=[I32]->[Count@8,Count@16] 24B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I64]->[Count@8] 16B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p4 layout=[I64,I64]->[Count@16] 24B order=2-n,1-n
+group slot=2 producer=p2 node=3 form=Hashed hints=[] layout=[I32]->[Count@8,Count@16] 24B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=inner.1
+  agg aggno=0 fn=2147 reg=CountAny slot=0 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.2)
+group slot=0 producer=p3 node=1 form=Hashed hints=[] layout=[I64]->[Count@8] 16B
+  key 0 word=0 resno=2 kind=I64 attno=0 type=20 expr=agg2147(1=outer.2)
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan HashJoin Sort Agg Hash

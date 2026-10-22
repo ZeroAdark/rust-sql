@@ -1,0 +1,16 @@
+-- regress-full-rowsecurity-145
+-- execute t;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 eligible rows=1360 end=sink
+  nodes n1@0
+  source range rel=28773 rti=3 am=heap
+    lanes Offset:byval2:w2:val
+  project ()
+  outs
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=T_SQLValueFunction, 2=fn2971($exec0))
+  outs 1=fx64:call0 2=vl:call2971
+init_plan id=1 pipeline=p0 link=Exists param=$exec0 raise-free
+mapped: Result SeqScan SubPlan

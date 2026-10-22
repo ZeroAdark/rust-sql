@@ -1,0 +1,64 @@
+-- regress-full-multirangetypes-015
+-- SELECT n.nspname as "Schema", pg_catalog.format_type(t.oid, NULL) AS "Name", t.typname AS "Internal name", CASE WHEN t.typrelid != 0 THEN CAST('tuple' AS pg_catalog.text) WHEN t.typlen < 0 THEN CAST('var' AS pg_catalog.text) ELSE CAST(t.typlen AS pg_catalog.text) END AS "Size", pg_catalog.array_to_string( ARRAY( SELECT e.enumlabel FROM pg_catalog.pg_enum e WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder ), E'\n' ) AS "Elements", pg_catalog.pg_get_userbyid(t.typowner) AS "Owner", CASE WHEN pg_catalog.array_length(t.typacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(t.typacl, E'\n') END AS "Access privileges", pg_catalog.obj_description(t.oid, 'pg_type') as "Description" FROM pg_catalog.pg_type t LEFT JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace WHERE (t.typrelid = 0 OR (SELECT c.relkind = 'c' FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid)) AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_type el WHERE el.oid = t.typelem AND el.typarray = t.oid) AND (t.typname OPERATOR(pg_catalog.~) '^(.*textrange1.*)$' COLLATE pg_catalog.default OR pg_catalog.format_type(t.oid, NULL) OPERATOR(pg_catalog.~) '^(.*textrange1.*)$' COLLATE pg_catalog.default) AND pg_catalog.pg_type_is_visible(t.oid) ORDER BY 1, 2;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=3 eligible rows=1 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n3@0 n2@5 n1@7 n0@10^
+  source range rel=1247 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(12):byval8:w8:val Attr(14):byval8:w8:val Attr(32):byref8:vl:win/page Offset:byval2:w2:val
+  filter or(op639(v1.2, c25:'^(.*textrange1.*)$'), op641(fn1081(v1.1, c23:null), c25:'^(.*textrange1.*)$'))
+  filter fn2080(v1.1)
+  subplan 2 nested Expr unknown-eq-false params=($exec1=v1.12) conditional
+  inner node=7 serial site=0 reason=IndexSource end=sink
+  nodes n7@0
+  source index rel=1259 rti=6 am=heap index=2662
+    key att=1 op=607 value=$exec1
+    recheck (op607(v6.1, $exec1))
+    lanes Attr(18):byval8:w8:val
+  project (1=op92(v6.18, c18:99))
+  filter or(op607(v1.12, c26:0), subplan2(v1.12))
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24, 25=v1.25, 26=v1.26, 27=v1.27, 28=v1.28, 29=v1.29, 30=v1.30, 31=v1.31, 32=v1.32)
+  nest inner=n4 JOIN_LEFT unique raise-free params=($exec2=outer.3)
+  inner node=4 serial site=0 reason=IndexSource end=sink
+  nodes n4@0
+  source index rel=2615 rti=2 am=heap index=2685
+    key att=1 op=607 value=$exec2
+    recheck (op607(v2.1, $exec2))
+    lanes Attr(2):byref8:fx64:win/page
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4)
+  project (1=outer.1, 2=outer.2, 3=outer.12, 4=outer.5, 5=outer.4, 6=outer.32, 7=outer.14, 8=inner.2)
+  nest inner=n5 JOIN_ANTI raise-free params=($exec3=outer.7, $exec4=outer.1)
+  inner node=5 serial site=0 reason=IndexSource end=sink
+  nodes n5@0
+  source index rel=1247 rti=4 am=heap index=2703
+    key att=1 op=607 value=$exec3
+    recheck (op607(v4.1, $exec3))
+    lanes Attr(15):byval8:w8:val
+  filter op607(v4.15, $exec4)
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9, 10=v4.10, 11=v4.11, 12=v4.12, 13=v4.13, 14=v4.14, 15=v4.15, 16=v4.16, 17=v4.17, 18=v4.18, 19=v4.19, 20=v4.20, 21=v4.21, 22=v4.22, 23=v4.23, 24=v4.24, 25=v4.25, 26=v4.26, 27=v4.27, 28=v4.28, 29=v4.29, 30=v4.30, 31=v4.31, 32=v4.32)
+  subplan 1 nested Array params=($exec0=outer.1) raise-free
+  inner node=6 serial site=0 reason=IndexSource end=sink
+  nodes n6@0
+  source index rel=3501 rti=5 am=heap index=3534
+    key att=2 op=607 value=$exec0
+    recheck (op607(v5.2, $exec0))
+    lanes Attr(3):byval8:w8:val Attr(4):byref8:fx64:win/page
+  project (1=v5.4, 2j=v5.3)
+  project (1=outer.8, 2=fn1081(outer.1, c23:null), 3=outer.2, 4=case(when op608(outer.3, c26:0) then c25:'tuple', when op534(outer.4, c23:0) then c25:'var') else io25(outer.4), 5=fn395(subplan1(outer.1), c25:'\x0a'), 6=fn1642(outer.5), 7=case(when op96(fn2176(outer.6, c23:1), c23:0) then c25:'(none)') else fn395(outer.6, c25:'\x0a'), 8=fn1215(outer.1, c19:#64))
+  sort keys=1+:Fp128@950#19,2+:Fp128@100 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w8:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w1:val 11=w1:val 12=w8:val 13=w4:val 14=w8:val 15=w4:val 16=w4:val 17=w4:val 18=w4:val 19=w4:val 20=w4:val 21=w4:val 22=w4:val 23=w1:val 24=w1:val 25=w1:val 26=w4:val 27=w4:val 28=w4:val 29=w4:val 30=vl:row 31=vl:row 32=vl:win/page
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w8:val 6=vl:win/page 7=w8:val 8=fx64:life/breaker
+  outs 1=fx64:life/breaker 2=vl:call1081 3=fx64:win/page 4=vl:call46 5=vl:call395 6=fx64:call1642 7=vl:call395 8=vl:call1215
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8)
+  outs 1=fx64:life/breaker 2=vl:call1081 3=fx64:win/page 4=vl:call46 5=vl:call395 6=fx64:call1642 7=vl:call395 8=vl:call1215
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128,Fp128,Fp128]->[Count@32] 40B order=1+,2+
+param $exec1 owner=subplan2 type=26 rep=w8:val
+param $exec2 owner=n2 type=26 rep=w8:val
+param $exec3 owner=n1 type=26 rep=w8:val
+param $exec4 owner=n1 type=26 rep=w8:val
+param $exec0 owner=subplan1 type=26 rep=w8:val
+mapped: IndexScan NestLoop NestLoopParam Sort SubPlan

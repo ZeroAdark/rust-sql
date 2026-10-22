@@ -1,0 +1,4 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/answers.rs
+growth	pgrc_format::wire::put_u64	2
+growth	std::vec::Vec::extend_from_slice	2
+method	pgrc_format::try_vec	1

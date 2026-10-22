@@ -1,0 +1,31 @@
+-- regress-full-join-226
+-- EXPLAIN (COSTS OFF) SELECT c1.code FROM emp1 c1 LEFT JOIN emp1 c2 ON c1.id = c2.id WHERE c2.id IS NOT NULL EXCEPT ALL SELECT c3.code FROM emp1 c3;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=2 eligible rows=2260 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n0@1^
+  source range rel=25729 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v4.2)
+  outs 1=w8:val
+p1 node=4 eligible rows=2260 end=breaker(slot=1 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n0@1^
+  source range rel=25729 rti=6 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v6.2)
+  outs 1=w8:val
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0 consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=0
+  setop ExceptAll hashed left=slot0 right=slot1 groups=200 keys=1=96:I32
+  project (1=outer.1)
+  outs 1=w4:val
+breaker slot=0 kind=HashAgg budget=Pool spill=None producer=p0 layout=[I32]->[Count@8,Count@16] 24B
+breaker slot=1 kind=HashAgg budget=Pool spill=None producer=p1 layout=[I32]->[Count@8] 16B
+group slot=0 producer=p0 node=0 form=Hashed hints=[] layout=[I32]->[Count@8,Count@16] 24B
+  key 0 word=0 resno=1 kind=I32 attno=2 type=23 expr=v4.2
+group slot=1 producer=p1 node=0 form=Hashed hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=2 type=23 expr=v6.2
+mapped: SeqScan SetOp

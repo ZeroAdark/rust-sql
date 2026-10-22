@@ -23,8 +23,47 @@ const TYPSTORAGE_PLAIN: i8 = b'p' as i8;
 const TYPTYPE_DOMAIN: i8 = b'd' as i8;
 const TYPTYPE_PSEUDO: i8 = b'p' as i8;
 
+// Expression identity (C: the PLpgSQL_expr pointer, freed with the function's
+// memory context). Ids released by a dead function are reissued.
+struct ExprIdPool {
+    next: u32,
+    free: Vec<u32>,
+}
+
 std::thread_local! {
-    static NEXT_EXPR_ID: core::cell::Cell<u32> = const { core::cell::Cell::new(1) };
+    static EXPR_IDS: core::cell::RefCell<ExprIdPool> =
+        const { core::cell::RefCell::new(ExprIdPool { next: 1, free: Vec::new() }) };
+}
+
+// plpgsql_free_function_memory: the ids are reusable once no plan-table
+// entry keys them (exec.rs free_function_plans).
+pub(crate) fn alloc_expr_id() -> u32 {
+    EXPR_IDS.with(|p| {
+        let mut p = p.borrow_mut();
+        p.free.pop().unwrap_or_else(|| {
+            let v = p.next;
+            p.next = v.checked_add(1).expect("plpgsql expression ids exhausted");
+            v
+        })
+    })
+}
+
+pub fn release_expr_ids(ids: &[u32]) {
+    EXPR_IDS.with(|p| p.borrow_mut().free.extend_from_slice(ids));
+}
+
+/// D4312: the thread's exit drain (exec.rs release_plpgsql_state_at_exit) dropped everything an id keys, so the pool
+/// starts over: a retained standby's next task reissues ids from 1 instead of counting on toward the plan slab's bound.
+pub(crate) fn reset_expr_ids() {
+    EXPR_IDS.with(|p| *p.borrow_mut() = ExprIdPool { next: 1, free: Vec::new() });
+}
+
+impl Drop for CompState {
+    fn drop(&mut self) {
+        if !self.expr_ids.is_empty() {
+            release_expr_ids(&self.expr_ids);
+        }
+    }
 }
 
 // PLPGSQL_XCHECK_* (plpgsql.h:1194-1199).
@@ -42,6 +81,7 @@ pub struct CompState {
     pub nstatements: u32,
     pub resolve_option: i32,
     pub print_strict_params: bool,
+    pub dump_exec_tree: bool,
     // Promoted from the GUCs only at CREATE FUNCTION time (pl_comp.c:249-250);
     // inline blocks and non-validator recompiles keep 0 (pl_comp.c:796-797).
     pub extra_warnings: u32,
@@ -61,6 +101,7 @@ impl CompState {
             nstatements: 0,
             resolve_option: PLPGSQL_RESOLVE_ERROR,
             print_strict_params: false,
+            dump_exec_tree: false,
             extra_warnings: 0,
             extra_errors: 0,
             out_param_varno: -1,
@@ -104,26 +145,7 @@ impl CompState {
     }
 
     pub fn new_expr_id(&mut self) -> u32 {
-        let id = NEXT_EXPR_ID.with(|c| {
-            let v = c.get();
-            // The exec-side plan tables (EXPR_PLANS / CALL_TARGETS in exec.rs) are
-            // keyed *solely* by this id, and it also round-trips through plancache's
-            // i32 reanalyze argument (exec.rs SetCachedPlanReanalyze / arg as u32).
-            // A silently wrapping counter would reissue a live expression's id and
-            // alias its plan-cache entry (wrong plan executed -> wrong results or
-            // crash). u32 -> i32 -> u32 is bit-preserving, so the whole u32 range is
-            // usable; detect true exhaustion and hard-fail rather than wrap, so id
-            // reuse is impossible for the thread's lifetime.
-            let next = v.checked_add(1).unwrap_or_else(|| {
-                panic!(
-                    "plpgsql expression-id counter exhausted ({} ids in one backend thread); \
-                     refusing to wrap and alias plan-cache keys",
-                    u32::MAX as u64 + 1
-                )
-            });
-            c.set(next);
-            v
-        });
+        let id = alloc_expr_id();
         self.expr_ids.push(id);
         id
     }
@@ -358,11 +380,23 @@ impl CompState {
     }
 
     pub fn build_row(&mut self, refname: &str, lineno: i32, varnos: Vec<Dno>) -> Dno {
-        let dno = self.datums.len() as Dno;
         let fieldnames = varnos
             .iter()
             .map(|&v| self.datums[v as usize].refname().to_string())
             .collect();
+        self.build_row_named(refname, lineno, varnos, fieldnames)
+    }
+
+    // A scalar INTO/FOR target list: fields named as written (pl_gram.y
+    // NameOfDatum), which may be an alias or a qualified name.
+    pub fn build_row_named(
+        &mut self,
+        refname: &str,
+        lineno: i32,
+        varnos: Vec<Dno>,
+        fieldnames: Vec<String>,
+    ) -> Dno {
+        let dno = self.datums.len() as Dno;
         self.datums.push(PlDatum::Row(PlRow {
             dno,
             refname: refname.to_string(),
@@ -453,7 +487,7 @@ impl CompState {
             location: -1,
         };
         let class_oid = catalog_namespace::RangeVarGetRelid(&rv, types_rel::NoLock, false)?;
-        Self::rowtype_of(class_oid, relname, OrigTypeName::Names(idents.to_vec()))
+        Self::rowtype_of(class_oid, relname, OrigTypeName::Names(::mcx::std_vec_from_slice("plpgsql", &idents)?))
     }
 
     fn rowtype_of(class_oid: Oid, relname: &str, origtypname: OrigTypeName) -> PgResult<PlType> {
@@ -716,5 +750,236 @@ mod tests {
         let err = comp.parse_wordtype("nosuchvar").unwrap_err();
         assert_eq!(err.sqlstate, ERRCODE_UNDEFINED_OBJECT);
         assert_eq!(err.message, "variable \"nosuchvar\" does not exist");
+    }
+
+    // pl_funcs.c:716 plpgsql_free_function_memory: an expression's identity
+    // dies with its function, so a backend compiling DO blocks forever never
+    // runs out of ids; an aborted compile releases its ids the same way.
+    #[test]
+    fn expression_ids_of_freed_functions_are_reissued() {
+        let mut comp = CompState::new();
+        let first: Vec<u32> = (0..3).map(|_| comp.new_expr_id()).collect();
+        let ids = std::mem::take(&mut comp.expr_ids);
+        drop(comp);
+        crate::exec::free_function_plans(&ids);
+        let mut comp = CompState::new();
+        let mut again: Vec<u32> = (0..3).map(|_| comp.new_expr_id()).collect();
+        again.sort_unstable();
+        assert_eq!(again, first);
+        let fresh = comp.new_expr_id();
+        assert!(!first.contains(&fresh));
+        drop(comp);
+        let mut comp = CompState::new();
+        let mut after_abort: Vec<u32> = (0..4).map(|_| comp.new_expr_id()).collect();
+        after_abort.sort_unstable();
+        let mut expected = first.clone();
+        expected.push(fresh);
+        assert_eq!(after_abort, expected);
+        let live: Vec<u32> = (0..2).map(|_| comp.new_expr_id()).collect();
+        assert!(live.iter().all(|id| !after_abort.contains(id)));
+    }
+}
+
+// plpgsql_mark_local_assignment_targets (pl_funcs.c): only reached when the
+// function has an exception block; otherwise every assignment stays local.
+pub(crate) fn mark_local_assignment_targets(func: &mut PlFunction) -> PgResult<()> {
+    if !block_has_exceptions(&func.action) {
+        return Ok(());
+    }
+    let mut args = ::mcx::std_vec_with_capacity("plpgsql", func.fn_argvarnos.len())?;
+    args.extend(
+        func.fn_argvarnos
+            .iter()
+            .zip(func.fn_arg_is_input.iter().chain(std::iter::repeat(&true)))
+            .filter_map(|(&dno, &is_input)| is_input.then_some(dno))
+            .take(func.fn_nargs as usize),
+    );
+    mark_block(&mut func.action, &args)
+}
+
+fn block_has_exceptions(block: &PlBlock) -> bool {
+    block.exceptions.is_some() || stmts_have_exceptions(&block.body)
+}
+
+fn stmts_have_exceptions(stmts: &[PlStmt]) -> bool {
+    stmts.iter().any(|s| {
+        let mut found = false;
+        for_each_child_body(s, &mut |body| found |= stmts_have_exceptions(body));
+        found || matches!(s, PlStmt::Block(b) if block_has_exceptions(b))
+    })
+}
+
+fn for_each_child_body(s: &PlStmt, f: &mut dyn FnMut(&[PlStmt])) {
+    match s {
+        PlStmt::If { then_body, elsifs, else_body, .. } => {
+            f(then_body);
+            for (_, b) in elsifs {
+                f(b);
+            }
+            if let Some(b) = else_body {
+                f(b);
+            }
+        }
+        PlStmt::Case { whens, else_stmts, .. } => {
+            for (_, b) in whens {
+                f(b);
+            }
+            f(else_stmts);
+        }
+        PlStmt::Loop { body, .. }
+        | PlStmt::While { body, .. }
+        | PlStmt::ForI { body, .. }
+        | PlStmt::ForS { body, .. }
+        | PlStmt::ForC { body, .. }
+        | PlStmt::DynForS { body, .. }
+        | PlStmt::ForEachA { body, .. } => f(body),
+        PlStmt::Block(b) => {
+            if let Some(ex) = &b.exceptions {
+                for e in &ex.exc_list {
+                    f(&e.action);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mark_block(block: &mut PlBlock, local: &[Dno]) -> PgResult<()> {
+    if let Some(ex) = &mut block.exceptions {
+        mark_stmts(&mut block.body, &[])?;
+        for e in &mut ex.exc_list {
+            mark_stmts(&mut e.action, &[])?;
+        }
+        Ok(())
+    } else {
+        let mut inner =
+            ::mcx::std_vec_with_capacity("plpgsql", local.len() + block.initvarnos.len())?;
+        inner.extend_from_slice(local);
+        inner.extend_from_slice(&block.initvarnos);
+        mark_stmts(&mut block.body, &inner)
+    }
+}
+
+fn mark_stmts(stmts: &mut [PlStmt], local: &[Dno]) -> PgResult<()> {
+    for s in stmts {
+        match s {
+            PlStmt::Block(b) => mark_block(b, local)?,
+            PlStmt::Assign { expr, .. } => {
+                if expr.target_param >= 0 {
+                    expr.target_is_local = local.contains(&expr.target_param);
+                }
+            }
+            PlStmt::If { then_body, elsifs, else_body, .. } => {
+                mark_stmts(then_body, local)?;
+                for (_, b) in elsifs {
+                    mark_stmts(b, local)?;
+                }
+                if let Some(b) = else_body {
+                    mark_stmts(b, local)?;
+                }
+            }
+            PlStmt::Case { whens, else_stmts, .. } => {
+                for (_, b) in whens {
+                    mark_stmts(b, local)?;
+                }
+                mark_stmts(else_stmts, local)?;
+            }
+            PlStmt::Loop { body, .. }
+            | PlStmt::While { body, .. }
+            | PlStmt::ForI { body, .. }
+            | PlStmt::ForS { body, .. }
+            | PlStmt::ForC { body, .. }
+            | PlStmt::DynForS { body, .. }
+            | PlStmt::ForEachA { body, .. } => mark_stmts(body, local)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod local_target_tests {
+    use super::*;
+
+    fn assign(varno: Dno) -> PlStmt {
+        PlStmt::Assign {
+            lineno: 1,
+            varno,
+            expr: PlExpr {
+                query: "1".into(),
+                parse_mode: parser_seams::RawParseMode::RAW_PARSE_PLPGSQL_ASSIGN1,
+                ns: 0,
+                expr_id: 0,
+                target_param: varno,
+                target_is_local: true,
+            },
+        }
+    }
+
+    fn block(initvarnos: Vec<Dno>, body: Vec<PlStmt>, handler: Option<Vec<PlStmt>>) -> PlBlock {
+        PlBlock {
+            lineno: 1,
+            label: None,
+            body,
+            initvarnos,
+            exceptions: handler.map(|action| ExceptionBlock {
+                sqlstate_varno: -1,
+                sqlerrm_varno: -1,
+                exc_list: vec![PlException { lineno: 1, conditions: Vec::new(), action }],
+            }),
+        }
+    }
+
+    fn locals(stmts: &[PlStmt], out: &mut Vec<(Dno, bool)>) {
+        for s in stmts {
+            match s {
+                PlStmt::Assign { varno, expr, .. } => out.push((*varno, expr.target_is_local)),
+                PlStmt::Block(b) => {
+                    locals(&b.body, out);
+                    if let Some(ex) = &b.exceptions {
+                        for e in &ex.exc_list {
+                            locals(&e.action, out);
+                        }
+                    }
+                }
+                PlStmt::Loop { body, .. } => locals(body, out),
+                _ => {}
+            }
+        }
+    }
+
+    // pl_funcs.c mark_stmt: an exception block resets the local set for its
+    // body and handlers; a plain block adds its own variables.
+    #[test]
+    fn assignment_targets_are_local_up_to_the_nearest_exception_block() {
+        let inner = block(vec![2], vec![assign(2), assign(1), assign(0)], None);
+        let guarded = block(
+            vec![1],
+            vec![assign(1), PlStmt::Block(inner)],
+            Some(vec![assign(1), assign(0)]),
+        );
+        let mut action = block(
+            vec![1],
+            vec![assign(0), assign(1), PlStmt::Loop { lineno: 1, label: None, body: vec![assign(1)] }, PlStmt::Block(guarded)],
+            None,
+        );
+        assert!(block_has_exceptions(&action));
+        mark_block(&mut action, &[0]).unwrap();
+        let mut got = Vec::new();
+        locals(&action.body, &mut got);
+        assert_eq!(
+            got,
+            vec![
+                (0, true),
+                (1, true),
+                (1, true),
+                (1, false),
+                (2, true),
+                (1, false),
+                (0, false),
+                (1, false),
+                (0, false),
+            ]
+        );
     }
 }

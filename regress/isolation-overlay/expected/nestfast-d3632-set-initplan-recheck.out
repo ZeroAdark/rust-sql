@@ -1,0 +1,112 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) UPDATE d3632_t SET v = v + (SELECT 2) FROM d3632_ab WHERE d3632_ab.b = (SELECT 1) AND d3632_ab.a = d3632_t.id;
+QUERY PLAN                                                
+----------------------------------------------------------
+Update on d3632_t                                         
+  InitPlan 1                                              
+    ->  Result                                            
+  InitPlan 2                                              
+    ->  Result                                            
+  ->  Nested Loop                                         
+        Join Filter: (d3632_t.id = d3632_ab.a)            
+        ->  Seq Scan on d3632_t                           
+        ->  Materialize                                   
+              ->  Append                                  
+                    ->  Seq Scan on d3632_ab_b1 d3632_ab_1
+                          Filter: (b = (InitPlan 2).col1) 
+                    ->  Seq Scan on d3632_ab_b2 d3632_ab_2
+                          Filter: (b = (InitPlan 2).col1) 
+(14 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1v s2u s1c s2s s2c
+step s1v: UPDATE d3632_t SET v = v + 100 WHERE id = 1;
+step s2u: UPDATE d3632_t SET v = v + (SELECT 2) FROM d3632_ab WHERE d3632_ab.b = (SELECT 1) AND d3632_ab.a = d3632_t.id RETURNING d3632_t.id, d3632_t.v; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|  v
+--+---
+ 1|112
+ 2| 22
+ 3| 32
+(3 rows)
+
+step s2s: SELECT * FROM d3632_t ORDER BY id;
+id|  v
+--+---
+ 1|112
+ 2| 22
+ 3| 32
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1k s2u s1c s2s s2c
+step s1k: UPDATE d3632_t SET id = 7 WHERE id = 2;
+step s2u: UPDATE d3632_t SET v = v + (SELECT 2) FROM d3632_ab WHERE d3632_ab.b = (SELECT 1) AND d3632_ab.a = d3632_t.id RETURNING d3632_t.id, d3632_t.v; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id| v
+--+--
+ 1|12
+ 3|32
+(2 rows)
+
+step s2s: SELECT * FROM d3632_t ORDER BY id;
+id| v
+--+--
+ 1|12
+ 3|32
+ 7|20
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1pv s2p s1c s2ps s2c
+step s1pv: UPDATE d3632_p SET v = v + 100 WHERE id = 3;
+step s2p: UPDATE d3632_p SET v = v + (SELECT 2) FROM d3632_ab WHERE d3632_ab.b = (SELECT 1) AND d3632_ab.a = d3632_p.id RETURNING d3632_p.id, d3632_p.v; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+id|  v
+--+---
+ 1| 12
+ 2| 22
+ 3|132
+(3 rows)
+
+step s2ps: SELECT * FROM d3632_p ORDER BY id;
+id|  v
+--+---
+ 1| 12
+ 2| 22
+ 3|132
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1v s1m s2um s1c s2s s2c
+step s1v: UPDATE d3632_t SET v = v + 100 WHERE id = 1;
+step s1m: UPDATE d3632_m SET m = 50;
+step s2um: UPDATE d3632_t SET v = v + (SELECT max(m) FROM d3632_m) FROM d3632_ab WHERE d3632_ab.b = (SELECT 1) AND d3632_ab.a = d3632_t.id RETURNING d3632_t.id, d3632_t.v; <waiting ...>
+step s1c: COMMIT;
+step s2um: <... completed>
+id|  v
+--+---
+ 1|115
+ 2| 25
+ 3| 35
+(3 rows)
+
+step s2s: SELECT * FROM d3632_t ORDER BY id;
+id|  v
+--+---
+ 1|115
+ 2| 25
+ 3| 35
+(3 rows)
+
+step s2c: COMMIT;

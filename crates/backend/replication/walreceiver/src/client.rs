@@ -46,25 +46,26 @@ fn lsn_fmt(lsn: XLogRecPtr) -> String {
 /// libpqrcv_check_conninfo: PQconninfoParse rejects unknown keywords too
 /// (fe-connect.c:306), so primary_conninfo and slotsync — which reach this
 /// without the subscription DDL's separate validating parser — refuse them.
+// libpqrcv_get_option_from_conninfo + the forced publisher GUCs (matches
+// pg_dump): the explicit string's own non-empty "options", never PGOPTIONS
+// or service-file defaults.
+fn logical_options(explicit: &[(String, String)]) -> String {
+    format!(
+        "{} -c datestyle=ISO -c intervalstyle=postgres -c extra_float_digits=3",
+        opt(explicit, "options").filter(|o| !o.is_empty()).unwrap_or("")
+    )
+}
+
 pub fn check_conninfo(conninfo: &str) -> PgResult<Vec<(String, String)>> {
-    let bad = |e: String| {
-        throw(
+    match parse_conninfo(conninfo) {
+        Ok(opts) => Ok(opts),
+        Err(e) => throw(
             ereport(ERROR)
                 .errcode(ERRCODE_SYNTAX_ERROR)
-                .errmsg(format!("invalid connection string syntax: {e}"))
+                .errmsg(format!("invalid connection string syntax: {e}\n"))
                 .finish(loc("libpqrcv_check_conninfo")),
-        )
-    };
-    let opts = match parse_conninfo(conninfo) {
-        Ok(opts) => opts,
-        Err(e) => return bad(e),
-    };
-    for (k, _) in &opts {
-        if pgclient::lookup_option(k).is_none() {
-            return bad(format!("invalid connection option \"{k}\""));
-        }
+        ),
     }
-    Ok(opts)
 }
 
 // libpqrcv_connect (replication=true, logical=false): the physical
@@ -108,6 +109,8 @@ pub fn connect_extended(
         );
     }
 
+    let logical_opts = logical_options(&opts);
+
     // PQconnectStartParams (conninfo_array_parse): service file, environment
     // and compiled defaults fill in what the conninfo leaves out.
     let opts = match pgclient::resolve_conninfo(conninfo) {
@@ -123,10 +126,11 @@ pub fn connect_extended(
     let database: &str = if replication && !logical { "replication" } else { dbname.as_str() };
     let forced_options;
     let options_val: &str = if logical {
-        // Force unambiguous output formats on the publisher (matches pg_dump).
-        forced_options = format!(
-            "{options} -c datestyle=ISO -c intervalstyle=postgres -c extra_float_digits=3"
-        );
+        logical_opts.as_str()
+    } else if replication {
+        // pgrcolumnar parts by reference (WR L3, OC-3): ask for referenced files on the physical stream. A stock
+        // primary takes the pgrust.* name as a placeholder.
+        forced_options = format!("{options} {}", crate::pgrc_files::STREAM_FILES_OPTION);
         forced_options.as_str()
     } else {
         options.as_str()
@@ -744,6 +748,8 @@ mod tests {
 
     // Each reply answers the next client frame: a Query ('Q', recorded) or
     // the CopyDone ('c') libpqrcv_endstreaming sends.
+    const NEGOTIATE_SSL_CODE: u32 = 80877103;
+
     fn scripted_server(replies: Vec<Vec<u8>>) -> (u16, std::thread::JoinHandle<Vec<String>>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -754,6 +760,12 @@ mod tests {
             s.read_exact(&mut len).unwrap();
             let mut startup = vec![0u8; u32::from_be_bytes(len) as usize - 4];
             s.read_exact(&mut startup).unwrap();
+            if startup == NEGOTIATE_SSL_CODE.to_be_bytes() {
+                s.write_all(b"N").unwrap();
+                s.read_exact(&mut len).unwrap();
+                startup = vec![0u8; u32::from_be_bytes(len) as usize - 4];
+                s.read_exact(&mut startup).unwrap();
+            }
             let mut hello = wire(b'R', &0i32.to_be_bytes());
             hello.extend_from_slice(&wire(b'Z', b"I"));
             s.write_all(&hello).unwrap();
@@ -1169,6 +1181,22 @@ mod tests {
     // libpqrcv_check_conninfo (libpqwalreceiver.c:299): PQconninfoParse
     // rejects an unknown keyword — the gate primary_conninfo and slotsync
     // rely on (they have no separate validating parser).
+    // fp-libpqwalreceiver-libpqwalreceiver#2: only the conninfo's own
+    // options ride ahead of the forced GUCs (libpqwalreceiver.c:197-199).
+    #[test]
+    fn logical_options_take_only_the_explicit_conninfo() {
+        let explicit = parse_conninfo("host=h options='-c work_mem=1MB'").unwrap();
+        assert_eq!(
+            logical_options(&explicit),
+            "-c work_mem=1MB -c datestyle=ISO -c intervalstyle=postgres -c extra_float_digits=3"
+        );
+        let empty = parse_conninfo("host=h options=''").unwrap();
+        assert_eq!(
+            logical_options(&empty),
+            " -c datestyle=ISO -c intervalstyle=postgres -c extra_float_digits=3"
+        );
+    }
+
     #[test]
     fn check_conninfo_rejects_an_unknown_keyword() {
         let e = match check_conninfo("host=127.0.0.1 nonexistent_option=1") {
@@ -1177,9 +1205,21 @@ mod tests {
         };
         assert_eq!(
             e.message(),
-            "invalid connection string syntax: invalid connection option \"nonexistent_option\""
+            "invalid connection string syntax: invalid connection option \"nonexistent_option\"\n"
         );
         assert_eq!(e.sqlstate(), ERRCODE_SYNTAX_ERROR);
         assert!(check_conninfo("host=127.0.0.1 port=5432 replication=true user=r").is_ok());
+        let msg = |c: &str| match check_conninfo(c) {
+            Ok(_) => panic!("{c} accepted"),
+            Err(e) => e.message().to_string(),
+        };
+        assert_eq!(
+            msg("foo=1 dbname"),
+            "invalid connection string syntax: invalid connection option \"foo\"\n"
+        );
+        assert_eq!(
+            msg("port=5432 dbname"),
+            "invalid connection string syntax: missing \"=\" after \"dbname\" in connection info string\n"
+        );
     }
 }

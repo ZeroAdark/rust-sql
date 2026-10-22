@@ -1,0 +1,174 @@
+-- regress-full-partition_prune-112
+-- explain (costs off) select min(a) over (partition by a order by a) from part_abc where a >= stable_one() + 1 and d <= stable_one() union all select min(a) over (partition by a order by a) from part_abc where a >= stable_one() + 1 and d >= stable_one();
+graph pipelines=16 breakers=14 init_plans=0 root=p15
+p0 node=7 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n7@0 n6@2^
+  source index rel=45646 rti=8 am=heap index=45649
+    key att=1 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v8.1, op551(fn45633(), c23:1)))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  filter op523(v8.4, fn45633())
+  project (1=v8.1)
+  feed slot=0 ordered
+  outs 1=w8:val
+p1 node=8 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n8@0 n6@2^
+  source index rel=45652 rti=9 am=heap index=45655
+    key att=1 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v9.1, op551(fn45633(), c23:1)))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  filter op523(v9.4, fn45633())
+  project (1=v9.1)
+  feed slot=0 ordered
+  outs 1=w8:val
+p2 node=9 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n9@0 n6@2^
+  source index rel=45658 rti=10 am=heap index=45661
+    key att=1 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v10.1, op551(fn45633(), c23:1)))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  filter op523(v10.4, fn45633())
+  project (1=v10.1)
+  feed slot=0 ordered
+  outs 1=w8:val
+p3 node=4 serial site=0 reason=IndexSource end=breaker(slot=1 Materialize)
+  nodes n4@0 n3@2^
+  source index rel=45619 rti=5 am=heap index=45640
+    key att=2 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v5.2, op551(fn45633(), c23:1)))
+    lanes Attr(2):byval8:w8:val Attr(4):byval8:w8:val
+  filter op523(v5.4, fn45633())
+  project (1=v5.2)
+  feed slot=1 ordered
+  outs 1=w8:val
+p4 node=5 serial site=0 reason=IndexSource end=breaker(slot=1 Materialize)
+  nodes n5@0 n3@2^
+  source index rel=45624 rti=6 am=heap index=45641
+    key att=1 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v6.1, op551(fn45633(), c23:1)))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  filter op523(v6.4, fn45633())
+  project (1=v6.1)
+  feed slot=1 ordered
+  outs 1=w8:val
+p5 node=6 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p2
+  nodes n6@0 n3@2^
+  source breaker slot=0
+  append merge slot=0 children=3 keys=1+:I32 prune=initial [rti=7 parts=3 present=(0,1,2) steps=1]
+  project (1=outer.1)
+  feed slot=1 ordered
+  outs 1=w4:val
+p6 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  desc consumes=slot1@p5
+  nodes n3@0 n2@2^
+  source breaker slot=1
+  append union slot=1 children=3 prune=initial [rti=4 parts=3 present=(0,1,2) steps=1]
+  project (1=outer.1)
+  outs 1=w4:val
+p7 node=16 serial site=0 reason=IndexSource end=breaker(slot=1 Sort)
+  nodes n16@0 n15@2^
+  source index rel=45646 rti=15 am=heap index=45649
+    key att=1 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v15.1, op551(fn45633(), c23:1)))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  filter op525(v15.4, fn45633())
+  project (1=v15.1)
+  feed slot=1 ordered
+  outs 1=w8:val
+p8 node=17 serial site=0 reason=IndexSource end=breaker(slot=1 Sort)
+  nodes n17@0 n15@2^
+  source index rel=45652 rti=16 am=heap index=45655
+    key att=1 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v16.1, op551(fn45633(), c23:1)))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  filter op525(v16.4, fn45633())
+  project (1=v16.1)
+  feed slot=1 ordered
+  outs 1=w8:val
+p9 node=18 serial site=0 reason=IndexSource end=breaker(slot=1 Sort)
+  nodes n18@0 n15@2^
+  source index rel=45658 rti=17 am=heap index=45661
+    key att=1 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v17.1, op551(fn45633(), c23:1)))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  filter op525(v17.4, fn45633())
+  project (1=v17.1)
+  feed slot=1 ordered
+  outs 1=w8:val
+p10 node=13 serial site=0 reason=IndexSource end=breaker(slot=2 Materialize)
+  nodes n13@0 n12@2^
+  source index rel=45619 rti=12 am=heap index=45640
+    key att=2 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v12.2, op551(fn45633(), c23:1)))
+    lanes Attr(2):byval8:w8:val Attr(4):byval8:w8:val
+  filter op525(v12.4, fn45633())
+  project (1=v12.2)
+  feed slot=2 ordered
+  outs 1=w8:val
+p11 node=14 serial site=0 reason=IndexSource end=breaker(slot=2 Materialize)
+  nodes n14@0 n12@2^
+  source index rel=45624 rti=13 am=heap index=45641
+    key att=1 op=525 value=op551(fn45633(), c23:1)
+    recheck (op525(v13.1, op551(fn45633(), c23:1)))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  filter op525(v13.4, fn45633())
+  project (1=v13.1)
+  feed slot=2 ordered
+  outs 1=w8:val
+p12 node=15 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 Materialize)
+  desc consumes=slot1@p9
+  nodes n15@0 n12@2^
+  source breaker slot=1
+  append merge slot=1 children=3 keys=1+:I32 prune=initial [rti=14 parts=3 present=(0,1,2) steps=1]
+  project (1=outer.1)
+  feed slot=2 ordered
+  outs 1=w4:val
+p13 node=12 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot2@p12
+  nodes n12@0 n11@2^
+  source breaker slot=2
+  append union slot=2 children=3 prune=initial [rti=11 parts=3 present=(0,1,2) steps=1]
+  project (1=outer.1)
+  outs 1=w4:val
+p14 node=2 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p6
+  nodes n2@0 n1@2 n0@3
+  source breaker slot=0
+  window ref=1 top partition=1=96:I32 order=1=96:I32 frame=Range unbounded-preceding..current-row
+    fn resno=1 Aggregate cursor=peers,frame, win2132(outer.1)
+  project (1=outer.2, 2j=outer.1)
+  project (1=v3.1)
+  append arm 0/2
+  project (1=outer.1)
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val
+  outs 1=w4:val
+p15 node=11 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p13
+  nodes n11@0 n10@2 n0@3
+  source breaker slot=1
+  window ref=1 top partition=1=96:I32 order=1=96:I32 frame=Range unbounded-preceding..current-row
+    fn resno=1 Aggregate cursor=peers,frame, win2132(outer.1)
+  project (1=outer.2, 2j=outer.1)
+  project (1=v2.1)
+  append arm 1/2
+  project (1=outer.1)
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val
+  outs 1=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B order=1+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B order=1+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p5 layout=[]->[Count@0] 8B order=1+
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p6 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p7 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p8 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p9 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p10 layout=[]->[Count@0] 8B order=1+
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p11 layout=[]->[Count@0] 8B order=1+
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p12 layout=[]->[Count@0] 8B order=1+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p13 layout=[I32]->[Count@8] 16B order=1+
+mapped: Append MergeAppend IndexScan SubqueryScan WindowAgg PartitionPruneInfo

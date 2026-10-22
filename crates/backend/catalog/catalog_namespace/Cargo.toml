@@ -28,6 +28,7 @@ cache_syscache = { path = "../../utils/cache/cache_syscache" }
 pg_conversion = { path = "../pg_conversion" }
 lsyscache = { path = "../../utils/cache/lsyscache" }
 inval = { path = "../../utils/cache/inval" }
+gravity_deps = { path = "../../../gravity/deps" } # D4010: a lookup notes the search path it walked
 inval_seams = { path = "../../utils/cache/inval_seams" }
 lmgr_seams = { path = "../../storage/lmgr/lmgr_seams" }
 lmgr_proc = { path = "../../storage/lmgr/lmgr_proc" }

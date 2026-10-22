@@ -1,0 +1,11 @@
+-- part-010
+-- SELECT h, v FROM hp WHERE h = 7;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=4 end=sink
+  nodes n1@0
+  source range rel=16429 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v2.1, c23:7)
+  project (1=v2.1, 2=v2.2)
+  outs 1=w8:val 2=w8:val
+mapped: SeqScan

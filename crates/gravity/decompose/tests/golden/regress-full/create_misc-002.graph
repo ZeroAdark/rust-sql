@@ -1,0 +1,44 @@
+-- regress-full-create_misc-002
+-- SELECT class, a FROM c_star* x WHERE x.c ~ text 'hi';
+graph pipelines=4 breakers=0 init_plans=0 root=p3
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0 n0@2
+  source range rel=18451 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op639(v2.3, c25:'hi')
+  project (1=v2.1, 2=v2.2)
+  append arm 0/4
+  project (1=outer.1, 2=outer.2)
+  outs 1=vl:win/page 2=w8:val
+  outs 1=vl:life/breaker 2=w4:val
+p1 node=2 eligible rows=2 end=sink
+  nodes n2@0 n0@2
+  source range rel=18454 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(4):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op639(v3.4, c25:'hi')
+  project (1=v3.1, 2=v3.2)
+  append arm 1/4
+  project (1=outer.1, 2=outer.2)
+  outs 1=vl:win/page 2=w8:val
+  outs 1=vl:life/breaker 2=w4:val
+p2 node=3 eligible rows=1 end=sink
+  nodes n3@0 n0@2
+  source range rel=18459 rti=4 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op639(v4.3, c25:'hi')
+  project (1=v4.1, 2=v4.2)
+  append arm 2/4
+  project (1=outer.1, 2=outer.2)
+  outs 1=vl:win/page 2=w8:val
+  outs 1=vl:life/breaker 2=w4:val
+p3 node=4 eligible rows=2 end=sink
+  nodes n4@0 n0@2
+  source range rel=18462 rti=5 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op639(v5.3, c25:'hi')
+  project (1=v5.1, 2=v5.2)
+  append arm 3/4
+  project (1=outer.1, 2=outer.2)
+  outs 1=vl:win/page 2=w8:val
+  outs 1=vl:life/breaker 2=w4:val
+mapped: Append SeqScan

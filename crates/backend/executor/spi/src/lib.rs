@@ -27,7 +27,7 @@ pub use access::{SPI_fnumber, SPI_getbinval, SPI_getvalue, SPI_gettypeid};
 pub use execute::{
     SPI_exec, SPI_execp, SPI_execute, SPI_execute_extended, SPI_execute_plan,
     SPI_execute_plan_extended, SPI_execute_plan_with_paramlist, SPI_execute_snapshot,
-    SpiExecuteOptions,
+    SpiExecuteOptions, SpiParamList,
 };
 pub use cursor::{
     SPI_cursor_close, SPI_cursor_close_portal, SPI_cursor_fetch, SPI_cursor_open,
@@ -124,6 +124,10 @@ pub(crate) struct SpiConnection {
     pub tuptables: Vec<tuptable::TuptabEntry>,
     // C procCxt/execCxt; leaked-Box pointers (plancache leak_ctx precedent)
     // so Mcx<'static> handles survive stack reallocation and reentrancy.
+    // Null until the connection first uses one (`proc_ctx` / `exec_ctx`,
+    // D3885): a connection that runs no statement and keeps nothing (a
+    // PL/pgSQL call whose body is simple expressions) makes neither, where
+    // each make and drop is a context's whole setup and teardown.
     pub proc_cxt: *mut MemoryContext,
     pub exec_cxt: *mut MemoryContext,
     pub connect_subid: SubTransactionId,
@@ -134,6 +138,24 @@ pub(crate) struct SpiConnection {
     pub outer_tuptable: Option<TuptabHandle>,
     pub outer_result: i32,
     pub query_env: types_portal::QueryEnvHandle,
+}
+
+impl SpiConnection {
+    // C _SPI_current->procCxt, made at its first use (D3885).
+    pub(crate) fn proc_ctx(&mut self) -> *mut MemoryContext {
+        if self.proc_cxt.is_null() {
+            self.proc_cxt = leak_ctx("SPI Proc");
+        }
+        self.proc_cxt
+    }
+
+    // C _SPI_current->execCxt, made at its first use (D3885).
+    pub(crate) fn exec_ctx(&mut self) -> *mut MemoryContext {
+        if self.exec_cxt.is_null() {
+            self.exec_cxt = leak_wholesale_ctx("SPI Exec");
+        }
+        self.exec_cxt
+    }
 }
 
 thread_local! {
@@ -150,6 +172,10 @@ thread_local! {
 fn sync_connected() {
     let depth = SPI_STACK.with(|s| s.borrow().len());
     SPI_CONNECTED.with(|c| c.set(depth as i32 - 1));
+}
+
+pub fn SPI_connected() -> bool {
+    SPI_CONNECTED.with(Cell::get) >= 0
 }
 
 pub fn SPI_processed() -> u64 {
@@ -180,10 +206,10 @@ fn leak_ctx(name: &'static str) -> *mut MemoryContext {
     Box::into_raw(Box::new(MemoryContext::new(name)))
 }
 
-// C's execCxt is an aset reset wholesale at _SPI_end_call; parse/param cruft
-// is never freed piecemeal, so the bump backend is the matching class.
-fn leak_bump_ctx(name: &'static str) -> *mut MemoryContext {
-    Box::into_raw(Box::new(MemoryContext::new_bump(name)))
+// C's execCxt is an AllocSet ("SPI Exec", spi.c:_SPI_begin_call) reset
+// wholesale at _SPI_end_call: same kind here (mcx parity).
+fn leak_wholesale_ctx(name: &'static str) -> *mut MemoryContext {
+    Box::into_raw(Box::new(MemoryContext::new_wholesale(name)))
 }
 
 pub(crate) fn ctx_mcx(ctx: *mut MemoryContext) -> Mcx<'static> {
@@ -193,12 +219,19 @@ pub(crate) fn ctx_mcx(ctx: *mut MemoryContext) -> Mcx<'static> {
     unsafe { (*ctx).mcx() }
 }
 
+// A context the connection never made (null) has nothing to free or reset.
 fn reclaim_ctx(ctx: *mut MemoryContext) {
+    if ctx.is_null() {
+        return;
+    }
     // SAFETY: leak_ctx provenance; entry already unlinked from the stack.
     drop(unsafe { Box::from_raw(ctx) });
 }
 
 fn reset_ctx(ctx: *mut MemoryContext) {
+    if ctx.is_null() {
+        return;
+    }
     // SAFETY: leak_ctx provenance (see ctx_mcx).
     unsafe { (*ctx).reset() }
 }
@@ -218,8 +251,8 @@ pub fn SPI_connect_ext(options: i32) -> PgResult<i32> {
         tuptable: None,
         exec_subid: InvalidSubTransactionId,
         tuptables: Vec::new(),
-        proc_cxt: leak_ctx("SPI Proc"),
-        exec_cxt: leak_bump_ctx("SPI Exec"),
+        proc_cxt: core::ptr::null_mut(),
+        exec_cxt: core::ptr::null_mut(),
         connect_subid,
         atomic: options & SPI_OPT_NONATOMIC == 0,
         internal_xact: false,
@@ -229,8 +262,12 @@ pub fn SPI_connect_ext(options: i32) -> PgResult<i32> {
         outer_result: SPI_result(),
         query_env: types_portal::QueryEnvHandle::NULL,
     };
-    SPI_STACK.with(|s| s.borrow_mut().push(conn));
-    sync_connected();
+    let depth = SPI_STACK.with(|s| {
+        let mut s = s.borrow_mut();
+        s.push(conn);
+        s.len()
+    });
+    SPI_CONNECTED.with(|c| c.set(depth as i32 - 1));
     set_spi_processed(0);
     set_spi_tuptable(None);
     set_spi_result(0);
@@ -246,11 +283,13 @@ fn teardown_connection(conn: SpiConnection) {
 }
 
 pub fn SPI_finish() -> PgResult<i32> {
-    if SPI_STACK.with(|s| s.borrow().is_empty()) {
+    let Some((conn, depth)) = SPI_STACK.with(|s| {
+        let mut s = s.borrow_mut();
+        s.pop().map(|c| (c, s.len()))
+    }) else {
         return Ok(SPI_ERROR_UNCONNECTED);
-    }
-    let conn = SPI_STACK.with(|s| s.borrow_mut().pop()).expect("checked nonempty");
-    sync_connected();
+    };
+    SPI_CONNECTED.with(|c| c.set(depth as i32 - 1));
     set_spi_processed(conn.outer_processed);
     set_spi_tuptable(conn.outer_tuptable);
     set_spi_result(conn.outer_result);
@@ -285,7 +324,7 @@ pub(crate) fn _SPI_end_call(use_exec: bool) {
 }
 
 pub(crate) fn current_exec_mcx() -> Mcx<'static> {
-    ctx_mcx(with_current(|conn| conn.exec_cxt).expect("SPI: not connected"))
+    ctx_mcx(with_current(|conn| conn.exec_ctx()).expect("SPI: not connected"))
 }
 
 pub fn AtEOXact_SPI(is_commit: bool) -> PgResult<()> {
@@ -317,6 +356,28 @@ pub fn AtEOXact_SPI(is_commit: bool) -> PgResult<()> {
             .finish(loc("AtEOXact_SPI"))?;
     }
     Ok(())
+}
+
+pub fn abort_above_depth(depth: usize) -> bool {
+    let mut found = false;
+    loop {
+        let popped = SPI_STACK.with(|s| {
+            let mut stack = s.borrow_mut();
+            let above = stack.len() > depth;
+            match stack.last() {
+                Some(conn) if above && !conn.internal_xact => stack.pop(),
+                _ => None,
+            }
+        });
+        let Some(conn) = popped else { break };
+        sync_connected();
+        found = true;
+        set_spi_processed(conn.outer_processed);
+        set_spi_tuptable(conn.outer_tuptable);
+        set_spi_result(conn.outer_result);
+        teardown_connection(conn);
+    }
+    found
 }
 
 pub fn AtEOSubXact_SPI(is_commit: bool, my_subid: SubTransactionId) -> PgResult<()> {
@@ -486,11 +547,14 @@ pub fn SPI_cursor_find(name: &str) -> Option<cursor::SpiCursor> {
 
 pub use cursor::SPI_cursor_find_portal;
 
+pub fn SPI_cursor_name_in_use(name: &str) -> bool {
+    portalmem::PortalNameInUse(name)
+}
+
 pub(crate) fn current_query_env() -> types_portal::QueryEnvHandle {
     with_current(|c| c.query_env).unwrap_or(types_portal::QueryEnvHandle::NULL)
 }
 
-// _SPI_find_ENR_by_name (spi.c:3280).
 fn find_enr_by_name(name: &str) -> bool {
     let h = current_query_env();
     if h.is_null() {
@@ -523,7 +587,7 @@ pub fn SPI_register_relation(enr: &SpiNamedRelation<'_>) -> PgResult<i32> {
     } else {
         let h = with_current(|conn| {
             if conn.query_env.is_null() {
-                let mcx = ctx_mcx(conn.proc_cxt);
+                let mcx = ctx_mcx(conn.proc_ctx());
                 conn.query_env =
                     queryenvironment::hold::register(queryenvironment::create_queryEnv(mcx));
             }

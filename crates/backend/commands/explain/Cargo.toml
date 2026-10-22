@@ -81,6 +81,9 @@ waitevent_seams = { path = "../../utils/activity/waitevent_seams" }
 backend_status_seams = { path = "../../utils/activity/backend_status_seams" }
 relcache_seams = { path = "../../utils/cache/relcache_seams" }
 execmain = { path = "../../executor/execmain" }
+# the Gravity entry (the only executor), installed by the tests as the server installs it
+gravity_exec = { path = "../../../gravity/exec" }
+postgres_seams = { path = "../../tcop/postgres_seams" }
 fmgr_seams = { path = "../../utils/fmgr/fmgr_seams" }
 lsyscache_seams = { path = "../../utils/cache/lsyscache_seams" }
 mbutils_seams = { path = "../../utils/mb/mbutils_seams" }

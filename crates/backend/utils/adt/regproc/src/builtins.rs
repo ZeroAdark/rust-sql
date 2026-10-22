@@ -60,7 +60,7 @@ fn with_out_scratch<R>(f: impl FnOnce(::mcx::Mcx<'_>) -> R) -> R {
     OUT_CTX.with(|c| {
         // SAFETY: single-threaded backend; the sole live access is this call.
         let slot = unsafe { &mut *c.get() };
-        let m = slot.get_or_insert_with(|| ::mcx::MemoryContext::new_bump("RegOutScratch"));
+        let m = slot.get_or_insert_with(|| ::mcx::MemoryContext::new_wholesale("RegOutScratch"));
         m.reset();
         f(m.mcx())
     })

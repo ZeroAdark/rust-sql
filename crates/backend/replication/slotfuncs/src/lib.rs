@@ -118,59 +118,8 @@ fn xlog_get_last_removed_segno() -> XLogSegNo {
     ctl.info_lck.with(|| ctl.lastRemovedSegNo.load(Relaxed))
 }
 
-// KeepLogSeg's unsummarized-WAL arm (xlog.c:8033): don't let the kept segment
-// pass WAL that summarization has yet to consume.
-pub(crate) fn apply_unsummarized_keep(
-    segno: XLogSegNo,
-    keep: XLogRecPtr,
-    segsize: i32,
-) -> XLogSegNo {
-    if keep != InvalidXLogRecPtr {
-        let unsummarized_segno = transam_xlog::XLByteToSeg(keep, segsize);
-        if unsummarized_segno < segno {
-            return unsummarized_segno;
-        }
-    }
-    segno
-}
-
-// KeepLogSeg (xlog.c), hosted here until WAL removal lands (this copy feeds
-// GetWALAvailability only).
-fn keep_log_seg(recptr: XLogRecPtr, log_seg_no: XLogSegNo) -> PgResult<XLogSegNo> {
-    let segsize = transam_xlog::wal_segment_size();
-    let curr_seg_no = transam_xlog::XLByteToSeg(recptr, segsize);
-    let mut segno = curr_seg_no;
-
-    let ctl = transam_xlog::ctl::XLogCtl();
-    let keep = ctl.info_lck.with(|| ctl.replicationSlotMinLSN.load(Relaxed));
-    if keep != InvalidXLogRecPtr && keep < recptr {
-        segno = transam_xlog::XLByteToSeg(keep, segsize);
-        let max_slot_wal_keep_size_mb = guc_tables::vars::max_slot_wal_keep_size_mb.read();
-        if max_slot_wal_keep_size_mb >= 0 && !g::IsBinaryUpgrade() {
-            let slot_keep_segs = convert_to_xsegs(max_slot_wal_keep_size_mb, segsize);
-            if curr_seg_no - segno > slot_keep_segs {
-                segno = curr_seg_no - slot_keep_segs;
-            }
-        }
-    }
-
-    // If WAL summarization is in use, don't remove WAL that has yet to be
-    // summarized (C passes NULL, NULL).
-    let keep = walsummarizer::GetOldestUnsummarizedLSN(None, None)?.unwrap_or(InvalidXLogRecPtr);
-    segno = apply_unsummarized_keep(segno, keep, segsize);
-
-    let wal_keep_size_mb = guc_tables::vars::wal_keep_size_mb.read();
-    if wal_keep_size_mb > 0 {
-        let keep_segs = convert_to_xsegs(wal_keep_size_mb, segsize);
-        if curr_seg_no - segno < keep_segs {
-            segno = if curr_seg_no <= keep_segs { 1 } else { curr_seg_no - keep_segs };
-        }
-    }
-
-    Ok(if segno < log_seg_no { segno } else { log_seg_no })
-}
-
-// GetWALAvailability (xlog.c), hosted here for the same reason.
+// GetWALAvailability (xlog.c). WR L4b: the keep point is transam's KeepLogSeg, which counts spool bytes (WR.md
+// "L4b"); the max_wal_size distance counts them too, and a slot that needs a removed spool entry is lost.
 pub(crate) fn get_wal_availability(target_lsn: XLogRecPtr) -> PgResult<WALAvailability> {
     if target_lsn == InvalidXLogRecPtr {
         return Ok(WALAvailability::InvalidLsn);
@@ -178,7 +127,7 @@ pub(crate) fn get_wal_availability(target_lsn: XLogRecPtr) -> PgResult<WALAvaila
 
     let segsize = transam_xlog::wal_segment_size();
     let currpos = get_xlog_write_rec_ptr();
-    let oldest_slot_seg = keep_log_seg(currpos, transam_xlog::XLByteToSeg(currpos, segsize))?;
+    let keep_horizon = transam_xlog::wal_keep_horizon(currpos)?;
 
     let oldest_seg = xlog_get_last_removed_segno() + 1;
 
@@ -187,14 +136,16 @@ pub(crate) fn get_wal_availability(target_lsn: XLogRecPtr) -> PgResult<WALAvaila
     let oldest_seg_max_wal_size = if curr_seg > keep_segs { curr_seg - keep_segs } else { 1 };
 
     let target_seg = transam_xlog::XLByteToSeg(target_lsn, segsize);
+    let spool = transam_xlog::spool_bytes_from(target_lsn);
+    let distance = curr_seg.saturating_sub(target_seg) * segsize as u64 + spool;
 
-    if target_seg >= oldest_slot_seg {
-        if target_seg >= oldest_seg_max_wal_size {
+    if target_lsn >= keep_horizon {
+        if target_seg >= oldest_seg_max_wal_size && distance <= keep_segs * segsize as u64 {
             return Ok(WALAvailability::Reserved);
         }
         return Ok(WALAvailability::Extended);
     }
-    if target_seg >= oldest_seg {
+    if target_seg >= oldest_seg && target_lsn >= transam_xlog::spool_removed_upto() {
         return Ok(WALAvailability::Unreserved);
     }
     Ok(WALAvailability::Removed)

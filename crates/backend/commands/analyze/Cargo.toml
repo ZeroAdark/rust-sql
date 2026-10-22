@@ -9,6 +9,7 @@ name = "commands_analyze"
 path = "src/lib.rs"
 
 [dependencies]
+fp_contract = { path = "../../../_support/fp_contract" }
 mcx = { path = "../../../_support/mcx" }
 datum = { path = "../../../_support/types/datum" }
 types_core = { path = "../../../_support/types/types_core" }
@@ -38,12 +39,16 @@ foreigncmds_seams = { path = "../foreigncmds_seams" }
 snapmgr = { path = "../../utils/time/snapmgr" }
 statistics = { path = "../../statistics/statistics" }
 bufmgr_seams = { path = "../../storage/buffer/bufmgr_seams" }
+read_stream = { path = "../../storage/aio/read_stream" }
 procarray = { path = "../../storage/ipc/procarray" }
 xact = { path = "../../access/transam/xact" }
 typcache = { path = "../../utils/cache/typcache" }
 guc_tables = { path = "../../utils/misc/guc_tables" }
 adt_multirangetypes = { path = "../../utils/adt/multirangetypes" }
 adt_tsvector_core = { path = "../../utils/adt/tsvector_core" }
+adt_jsonb = { path = "../../utils/adt/jsonb" }
+adt_jsonb_pathstats = { path = "../../utils/adt/jsonb_pathstats" }
+adt_numeric = { path = "../../utils/adt/numeric" }
 adt_rangetypes = { path = "../../utils/adt/rangetypes" }
 arrayfuncs = { path = "../../utils/adt/arrayfuncs" }
 detoast = { path = "../../access/common/detoast" }
@@ -52,6 +57,8 @@ lsyscache = { path = "../../utils/cache/lsyscache" }
 attoptcache = { path = "../../utils/cache/attoptcache" }
 relcache_seams = { path = "../../utils/cache/relcache_seams" }
 syscache_seams = { path = "../../utils/cache/syscache_seams" }
+miscinit_seams = { path = "../../utils/init/miscinit_seams" }
+guc_seams = { path = "../../utils/misc/guc_seams" }
 vacuum_seams = { path = "../vacuum_seams" }
 commands_vacuum = { path = "../vacuum" }
 postgres_seams = { path = "../../tcop/postgres_seams" }
@@ -120,7 +127,6 @@ lock_seams = { path = "../../storage/lmgr/lock_seams" }
 logical_seams = { path = "../../replication/logical_seams" }
 logical_worker_seams = { path = "../../replication/logical_worker_seams" }
 lwlock = { path = "../../storage/lmgr/lwlock" }
-miscinit_seams = { path = "../../utils/init/miscinit_seams" }
 multixact_seams = { path = "../../access/transam/multixact_seams" }
 namespace_seams = { path = "../../catalog/namespace_seams" }
 origin_seams = { path = "../../replication/origin_seams" }

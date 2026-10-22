@@ -76,6 +76,8 @@ impl ErrorLocation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PgError {
     pub level: ErrorLevel,
+    pub output_to_server: Option<bool>,
+    pub output_to_client: Option<bool>,
     pub sqlstate: SqlState,
     pub message: String,
     // Exact wire bytes for the primary message when C's message is not valid
@@ -100,6 +102,8 @@ pub struct PgError {
     pub context_domain: Option<String>,
     pub hide_statement: bool,
     pub hide_context: bool,
+    // elog.c's recursion guard drops error_context_stack: no callback lines.
+    pub context_abandoned: bool,
     pub location: Option<ErrorLocation>,
     pub saved_errno: Option<i32>,
     pub cursor_position: Option<i32>,
@@ -135,10 +139,55 @@ impl PgError {
         Self::new_impl(level, message.into(), core::panic::Location::caller())
     }
 
+    /// An error that owns no allocation: the stand-in left behind while a
+    /// boxed error is moved out, rebuilt and moved back.
+    pub const fn vacant() -> Self {
+        Self {
+            level: ERROR,
+            output_to_server: None,
+            output_to_client: None,
+            sqlstate: crate::ERRCODE_INTERNAL_ERROR,
+            message: String::new(),
+            message_raw: None,
+            detail: None,
+            detail_raw: None,
+            context_raw: None,
+            detail_log: None,
+            hint: None,
+            context: None,
+            backtrace: None,
+            message_id: None,
+            domain: None,
+            context_domain: None,
+            hide_statement: false,
+            hide_context: false,
+            context_abandoned: false,
+            location: None,
+            saved_errno: None,
+            cursor_position: None,
+            internal_position: None,
+            internal_query: None,
+            schema_name: None,
+            table_name: None,
+            column_name: None,
+            datatype_name: None,
+            constraint_name: None,
+            plpgsql_context_attached: false,
+        }
+    }
+
     #[cold]
     fn new_impl(level: ErrorLevel, message: String, caller: &core::panic::Location<'_>) -> Self {
+        #[cfg(feature = "std")]
+        let level = if level == ERROR && crate::severity::exit_on_any_error() {
+            crate::FATAL
+        } else {
+            level
+        };
         Self {
             level,
+            output_to_server: None,
+            output_to_client: None,
             sqlstate: default_sqlstate_for_level(level),
             message,
             message_raw: None,
@@ -154,6 +203,7 @@ impl PgError {
             context_domain: None,
             hide_statement: false,
             hide_context: false,
+            context_abandoned: false,
             location: Some(ErrorLocation::from_rust_site(caller.file(), caller.line())),
             saved_errno: None,
             cursor_position: None,
@@ -348,7 +398,7 @@ impl PgError {
     /// `bytes` verbatim as the first CONTEXT line, `context` keeps the lossy
     /// rendering (later `with_context` lines append behind both).
     pub fn with_context_raw(mut self, bytes: alloc::vec::Vec<u8>) -> Self {
-        if !self.hide_context {
+        if !self.context_abandoned {
             let lossy = String::from_utf8_lossy(&bytes).into_owned();
             self.context_raw = if self.context.is_none() { Some(bytes) } else { None };
             self.context = append_context(self.context.take(), lossy);
@@ -403,10 +453,11 @@ impl PgError {
     }
 
     /// Appends to any existing context, newline-separated (C `errcontext()`);
-    /// a hidden-context error (errhidecontext, or elog's depth>2 recursion
-    /// that abandons error_context_stack) takes none.
+    /// an error raised under elog's depth>2 recursion guard (which abandons
+    /// error_context_stack) takes none. errhidecontext only keeps CONTEXT
+    /// out of the server log.
     pub fn with_context(mut self, context: impl Into<String>) -> Self {
-        if !self.hide_context {
+        if !self.context_abandoned {
             self.context = append_context(self.context.take(), context.into());
         }
         self
@@ -420,7 +471,7 @@ impl PgError {
     }
 
     pub fn add_context_line(&mut self, line: impl Into<String>) {
-        if !self.hide_context {
+        if !self.context_abandoned {
             self.context = append_context(self.context.take(), line.into());
         }
     }
@@ -452,6 +503,11 @@ impl PgError {
 
     pub fn with_hide_context(mut self, hide_context: bool) -> Self {
         self.hide_context = hide_context;
+        self
+    }
+
+    pub fn with_context_abandoned(mut self) -> Self {
+        self.context_abandoned = true;
         self
     }
 
@@ -685,6 +741,17 @@ fn append_context(existing: Option<String>, next: String) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{ERRCODE_UNDEFINED_TABLE, INFO};
+
+    // elog.c errhidecontext only suppresses CONTEXT in the server log: the
+    // callbacks still append and the client still gets the field.
+    #[test]
+    fn hidden_context_still_accumulates_context() {
+        let e = PgError::error("m").with_hide_context(true).with_context("a");
+        assert_eq!(e.context.as_deref(), Some("a"));
+        let mut e = PgError::error("m").with_context_abandoned();
+        e.add_context_line("b");
+        assert_eq!(e.with_context("c").context, None);
+    }
 
     // Gate: PgError is fat (~450 B); PgResult must stay pointer-thin.
     #[test]

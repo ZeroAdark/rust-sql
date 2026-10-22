@@ -129,7 +129,7 @@ fn text_datum(mcx: Mcx<'_>, s: &[u8]) -> PgResult<Datum> {
 }
 
 fn bytea_datum(mcx: Mcx<'_>, data: &[u8]) -> PgResult<Datum> {
-    let mut image = Vec::with_capacity(data.len() + 4);
+    let mut image = ::mcx::std_vec_with_capacity("pg_walinspect", data.len() + 4)?;
     image.extend_from_slice(&(((data.len() + 4) as u32) << 2).to_ne_bytes());
     image.extend_from_slice(data);
     ::types_fmgr::byref_result(mcx, &image)
@@ -255,7 +255,7 @@ fn GetWALRecordsInfo(
 
     let (mut reader, mut routine) = InitXLogReaderState(mcx, start_lsn)?;
 
-    let mut tmp = MemoryContext::new_bump("GetWALRecordsInfo temporary cxt");
+    let mut tmp = MemoryContext::new_wholesale("GetWALRecordsInfo temporary cxt");
 
     while ReadNextXLogRecord(&mut reader, &mut routine)? && reader.v.EndRecPtr <= end_lsn {
         let (values, nulls) = GetWALRecordInfo(tmp.mcx(), &reader)?;
@@ -585,7 +585,7 @@ fn GetWALBlockInfo(
 
         match reader.XLogRecGetBlockData(block_id) {
             Some(data) if show_data => {
-                let owned = data.to_vec();
+                let owned = ::mcx::std_vec_from_slice("pg_walinspect", &data)?;
                 values[i] = bytea_datum(mcx, &owned)?;
             }
             _ => nulls[i] = true,
@@ -633,7 +633,7 @@ fn fc_pg_get_wal_block_info(
 
     let (mut reader, mut routine) = InitXLogReaderState(mcx, start_lsn)?;
 
-    let mut tmp = MemoryContext::new_bump("pg_get_wal_block_info temporary cxt");
+    let mut tmp = MemoryContext::new_wholesale("pg_get_wal_block_info temporary cxt");
 
     while ReadNextXLogRecord(&mut reader, &mut routine)? && reader.v.EndRecPtr <= end_lsn {
         postgres_seams::check_for_interrupts::call()?;

@@ -1,4 +1,3 @@
-use mcx::MemoryContext;
 use relcache::schemapg::CLASS_OID_INDEX_ID;
 use relcache_build_seams::ScannedPgClass;
 use types_core::{InvalidOid, Oid, RELATION_RELATION_ID};
@@ -6,10 +5,11 @@ use types_error::{PgError, PgResult, FATAL};
 use types_rel::{AccessShareLock, FormData_pg_class};
 use types_tuple::{HeapTupleData, TupleDescData};
 
-use crate::{getattr, name_from, oid_key, req};
+use crate::{getattr, name_from, oid_key, CatalogRow};
 
 const Anum_pg_class_oid: i32 = 1;
 const Anum_pg_class_reloptions: i32 = 33;
+const CLASS_FIXED_NATTS: i32 = 31;
 
 #[track_caller]
 #[cold]
@@ -23,6 +23,7 @@ fn no_database() -> Box<PgError> {
 
 // ScanPgRelation (relcache.c).
 pub(crate) fn scan_pg_relation(
+    mcx: mcx::Mcx<'_>,
     target_rel_id: Oid,
     index_ok: bool,
     force_non_historic: bool,
@@ -37,8 +38,6 @@ pub(crate) fn scan_pg_relation(
     } else {
         None
     };
-    let cx = MemoryContext::new("ScanPgRelation");
-    let mcx = cx.mcx();
     let rel = table::table_open(mcx, RELATION_RELATION_ID, AccessShareLock)?;
     let keys = [oid_key(Anum_pg_class_oid, target_rel_id)];
     let mut scan = genam::systable_beginscan(
@@ -65,29 +64,30 @@ pub(crate) fn decode(
     tup: &HeapTupleData<'_>,
     relid: Oid,
 ) -> PgResult<ScannedPgClass> {
+    let row = CatalogRow::new(td, tup, CLASS_FIXED_NATTS);
     let form = FormData_pg_class {
-        relname: name_from(tup, req(td, tup, 2)?),
-        relnamespace: req(td, tup, 3)?.as_oid(),
-        reltype: req(td, tup, 4)?.as_oid(),
-        relowner: req(td, tup, 6)?.as_oid(),
-        relam: req(td, tup, 7)?.as_oid(),
-        relfilenode: req(td, tup, 8)?.as_oid(),
-        reltablespace: req(td, tup, 9)?.as_oid(),
-        relpages: req(td, tup, 10)?.as_i32(),
-        reltuples: req(td, tup, 11)?.as_f32(),
-        relallvisible: req(td, tup, 12)?.as_i32(),
-        reltoastrelid: req(td, tup, 14)?.as_oid(),
-        relhasindex: req(td, tup, 15)?.as_bool(),
-        relisshared: req(td, tup, 16)?.as_bool(),
-        relpersistence: req(td, tup, 17)?.as_u8(),
-        relkind: req(td, tup, 18)?.as_u8(),
-        relhassubclass: req(td, tup, 23)?.as_bool(),
-        relrowsecurity: req(td, tup, 24)?.as_bool(),
-        relispopulated: req(td, tup, 26)?.as_bool(),
-        relreplident: req(td, tup, 27)?.as_u8(),
-        relispartition: req(td, tup, 28)?.as_bool(),
-        relfrozenxid: req(td, tup, 30)?.as_transaction_id(),
-        relminmxid: req(td, tup, 31)?.as_transaction_id(),
+        relname: name_from(tup, row.req(2)?),
+        relnamespace: row.req(3)?.as_oid(),
+        reltype: row.req(4)?.as_oid(),
+        relowner: row.req(6)?.as_oid(),
+        relam: row.req(7)?.as_oid(),
+        relfilenode: row.req(8)?.as_oid(),
+        reltablespace: row.req(9)?.as_oid(),
+        relpages: row.req(10)?.as_i32(),
+        reltuples: row.req(11)?.as_f32(),
+        relallvisible: row.req(12)?.as_i32(),
+        reltoastrelid: row.req(14)?.as_oid(),
+        relhasindex: row.req(15)?.as_bool(),
+        relisshared: row.req(16)?.as_bool(),
+        relpersistence: row.req(17)?.as_u8(),
+        relkind: row.req(18)?.as_u8(),
+        relhassubclass: row.req(23)?.as_bool(),
+        relrowsecurity: row.req(24)?.as_bool(),
+        relispopulated: row.req(26)?.as_bool(),
+        relreplident: row.req(27)?.as_u8(),
+        relispartition: row.req(28)?.as_bool(),
+        relfrozenxid: row.req(30)?.as_transaction_id(),
+        relminmxid: row.req(31)?.as_transaction_id(),
     };
     let _ = relid;
     let (opts_datum, opts_null) = getattr(td, tup, Anum_pg_class_reloptions);
@@ -97,10 +97,10 @@ pub(crate) fn decode(
         form.relam,
         if opts_null { None } else { Some(opts_datum) },
     )?;
-    let relnatts = req(td, tup, 19)?.as_i16();
-    let relchecks = req(td, tup, 20)?.as_i16();
-    let relhasrules = req(td, tup, 21)?.as_bool();
-    let relhastriggers = req(td, tup, 22)?.as_bool();
-    let relrewrite = req(td, tup, 29)?.as_oid();
+    let relnatts = row.req(19)?.as_i16();
+    let relchecks = row.req(20)?.as_i16();
+    let relhasrules = row.req(21)?.as_bool();
+    let relhastriggers = row.req(22)?.as_bool();
+    let relrewrite = row.req(29)?.as_oid();
     Ok(ScannedPgClass { form, relchecks, relnatts, relhastriggers, relhasrules, relrewrite, options })
 }

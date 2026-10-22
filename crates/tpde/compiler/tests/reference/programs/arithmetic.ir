@@ -1,0 +1,6 @@
+f(%a,%b) {
+entry:
+%x! = add %a, %b
+%y = sub %x, %a
+ret %y
+}

@@ -1,0 +1,16 @@
+-- regress-full-with-084
+-- WITH aa AS (SELECT 1 a, 2 b) INSERT INTO withz VALUES(1, 'insert') ON CONFLICT (k) DO UPDATE SET v = ' update' WHERE withz.k = (SELECT a FROM aa);
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  project (1=c23:1)
+  outs 1=w4:val
+p1 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:1, 2=c25:'insert')
+  write INSERT rel=43828 rti=1 natts=2 indexes=(43833[1]u) on_conflict=update arbiter=(43833) excl_rti=2 cols=(2) set=(1=c25:' update') where=T_List epq=$exec1
+  outs 1=w4:val 2=vl:stmt/imm
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: Result ModifyTable SubPlan

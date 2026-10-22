@@ -1,0 +1,73 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1b s1am s2w8 s1c s3s
+step s1b: BEGIN;
+step s1am: ALTER TABLE rp1 SET ACCESS METHOD pgrcolumnar;
+step s2w8: INSERT INTO rp SELECT 1, repeat(chr(97 + g % 26), (g * 7919) % 30000 + 1) FROM generate_series(1, 8) g; <waiting ...>
+step s1c: COMMIT;
+step s2w8: <... completed>
+step s3s: SELECT tableoid::regclass, a, length(b), md5(b) FROM rp ORDER BY 1, 2, 3, 4;
+tableoid|a|length|md5                             
+--------+-+------+--------------------------------
+rp1     |1|  1677|abe3a8772210b209b27ea5084d7a379c
+rp1     |1|  3353|e2fda4135036d5b951e265a9de1dbd9c
+rp1     |1|  7920|c9ffcb772e4902afc5d15a9cd2fdb2ff
+rp1     |1|  9596|363f33a5001dab91e7ac55e59ef351b8
+rp1     |1| 15839|59051779b7001a33ca73eb844110d3f0
+rp1     |1| 17515|ec883ee95d4b86394f3d29174098f78c
+rp1     |1| 23758|b7f57003827f303a611f27b43fd9b127
+rp1     |1| 25434|f44efca3c2eec324c0d4d8779f881b2c
+(8 rows)
+
+
+starting permutation: s1b s1am s2w40 s1c s3s
+step s1b: BEGIN;
+step s1am: ALTER TABLE rp1 SET ACCESS METHOD pgrcolumnar;
+step s2w40: INSERT INTO rp SELECT 1, repeat(chr(97 + g % 26), (g * 7919) % 30000 + 1) FROM generate_series(1, 40) g; <waiting ...>
+step s1c: COMMIT;
+step s2w40: <... completed>
+step s3s: SELECT tableoid::regclass, a, length(b), md5(b) FROM rp ORDER BY 1, 2, 3, 4;
+tableoid|a|length|md5                             
+--------+-+------+--------------------------------
+rp1     |1|   462|9d344539242abc1d274d1e0628951771
+rp1     |1|   923|3ceaff96c84791b08bc47bd858e7b980
+rp1     |1|  1677|abe3a8772210b209b27ea5084d7a379c
+rp1     |1|  2138|808fa59b0ff381db8273cc81493e7180
+rp1     |1|  3353|e2fda4135036d5b951e265a9de1dbd9c
+rp1     |1|  3814|050b7a0330c1633d025a34ad678e503c
+rp1     |1|  5029|35369a97398410578750ed35d1307fc2
+rp1     |1|  5490|d0ee0e5134f596f4e7d1a909da6aca2e
+rp1     |1|  6705|6cd77d5f2a7e877458f1a77ecaa16017
+rp1     |1|  7166|ca66552bac92b96c714e17397476bce5
+rp1     |1|  7920|c9ffcb772e4902afc5d15a9cd2fdb2ff
+rp1     |1|  8381|6b338b40aba212c68e0a25bb7a1fec00
+rp1     |1|  8842|dd45317fb4a387fc9adfdfe45f87fcd3
+rp1     |1|  9596|363f33a5001dab91e7ac55e59ef351b8
+rp1     |1| 10057|cd4457191083cddba5f60d8e36f434f4
+rp1     |1| 11272|0e614d733d843030f79822a50111d107
+rp1     |1| 11733|5794d3eb48c1fc4a79220c9a378b3720
+rp1     |1| 12948|54001575222c4ef5d5d6c4ea3b2d9c48
+rp1     |1| 13409|9a243e35228a2b8ba9b4580501ee0b90
+rp1     |1| 14624|d4a9b0290fd4294f53a7466dfc828b5a
+rp1     |1| 15085|813f1ce121a3f52d9d7d9295cb3cf220
+rp1     |1| 15839|59051779b7001a33ca73eb844110d3f0
+rp1     |1| 16300|25fe156a9cb7d197516286935b061c7a
+rp1     |1| 16761|15bc6150ab07ccdfc745d707082a0a1e
+rp1     |1| 17515|ec883ee95d4b86394f3d29174098f78c
+rp1     |1| 17976|bf37047e15b2d7717b98b848d8ee9741
+rp1     |1| 19191|5e701aa29f59d9cedd857e0353c747b0
+rp1     |1| 19652|0b241558c9186e38a82058c749f78550
+rp1     |1| 20867|01cab2cd6b73045902730b23187c8814
+rp1     |1| 21328|f0bae5c6f68f464ea23025d5e3f53d2e
+rp1     |1| 22543|0fca854182f9b7085eba8ad0c759a925
+rp1     |1| 23004|c9c603ded02ef00e9bfec6800ab6877d
+rp1     |1| 23758|b7f57003827f303a611f27b43fd9b127
+rp1     |1| 24219|678c610a09607a4e60eb1aa8f5b9c655
+rp1     |1| 25434|f44efca3c2eec324c0d4d8779f881b2c
+rp1     |1| 25895|23b4fb7d36369dc61a6f528fb79a0c7f
+rp1     |1| 27110|86958edc2071f2dc5311bab6dc9be428
+rp1     |1| 27571|b775fe516ef38d9c6c3ed61ed0ee8dc7
+rp1     |1| 28786|bbf2d74896239f842836c4be1b90bfd7
+rp1     |1| 29247|e1fe6d5c78a846d103f65cff1adc75a7
+(40 rows)
+

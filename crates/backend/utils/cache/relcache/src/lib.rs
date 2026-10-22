@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 pub mod build;
+pub mod defaults;
 pub mod deform_jit;
 pub mod indexlist;
 mod trigdesc;
@@ -27,6 +28,7 @@ use types_core::Oid;
 use types_rel::RelationData;
 
 pub use build::{formrdesc, RelationBuildDesc};
+pub use defaults::RelationGetDefaultExpr;
 pub use indexlist::RelationGetIndexList;
 pub use trigdesc::RelationGetTriggerDesc;
 pub use initfile::{
@@ -69,6 +71,7 @@ pub(crate) struct InProgressEnt {
 }
 
 pub(crate) struct RelcacheState {
+    pub(crate) root: &'static mcx::MemoryContext,
     pub(crate) mcx: Mcx<'static>,
     pub(crate) id_cache: PgHashMap<'static, Oid, RelCacheEnt>,
     pub(crate) rules_cache: PgHashMap<'static, Oid, std::rc::Rc<rules::RdRules>>,
@@ -79,6 +82,7 @@ pub(crate) struct RelcacheState {
     pub(crate) fkey_cache: PgHashMap<'static, Oid, std::rc::Rc<[types_rel::ForeignKeyCacheInfo]>>,
     pub(crate) deform_jit_cache:
         PgHashMap<'static, (Oid, u16), std::rc::Rc<jit_deform::DeformKernel>>,
+    pub(crate) defaults_cache: PgHashMap<'static, Oid, std::rc::Rc<defaults::RdDefaults>>,
     // C rebuilds swap entry contents in place, preserving rd_refcnt identity;
     // our rebuild replaces the Rc, so still-held predecessors are tracked here
     // (weak, pruned on read) to keep per-oid refcounts C-exact.
@@ -104,41 +108,52 @@ thread_local! {
 pub(crate) fn with_state<R>(f: impl FnOnce(&mut RelcacheState) -> R) -> R {
     STATE.with(|cell| {
         let mut slot = cell.borrow_mut();
-        let st = slot.get_or_insert_with(|| {
-            let mcx = ::mcx::session_root("CacheMemoryContext").mcx();
-            // LIFO: drop the state PROPERLY (running the hash maps' drop
-            // glue) before the context is freed wholesale. The rel entries
-            // are `Rc<RelationData>` on the GLOBAL heap — a context-only
-            // free skips the refcount decrements and leaks every entry
-            // (~0.6 MiB/session measured, the dominant FPBUDGET-1 tail).
-            ::mcx::register_session_cleanup(Box::new(|| {
-                STATE.with(|cell| {
-                    if let Some(st) = cell.borrow_mut().take() {
-                        drop(ManuallyDrop::into_inner(st));
-                    }
-                });
-            }));
-            ManuallyDrop::new(RelcacheState {
-                mcx,
-                id_cache: PgHashMap::with_capacity_in(INITRELCACHESIZE, mcx),
-                rules_cache: PgHashMap::new_in(mcx),
-                policies_cache: PgHashMap::new_in(mcx),
-                indexattr_cache: PgHashMap::new_in(mcx),
-                statext_cache: PgHashMap::new_in(mcx),
-                fkey_cache: PgHashMap::new_in(mcx),
-                deform_jit_cache: PgHashMap::new_in(mcx),
-                stale_refs: PgHashMap::new_in(mcx),
-                in_progress: PgVec::new_in(mcx),
-                eoxact_list: [0; MAX_EOXACT_LIST],
-                eoxact_list_len: 0,
-                eoxact_list_overflowed: false,
-                invals_received: 0,
-                critical_relcaches_built: false,
-                critical_shared_relcaches_built: false,
-                lru_clock: 0,
-            })
+        // the session's first use builds the state out of line: every call site instantiates this function, and the
+        // build stays out of all of them
+        if slot.is_none() {
+            *slot = Some(new_state());
+        }
+        f(slot.as_mut().expect("relcache state built above"))
+    })
+}
+
+#[cold]
+#[inline(never)]
+fn new_state() -> ManuallyDrop<RelcacheState> {
+    let root = ::mcx::session_root("CacheMemoryContext");
+    let mcx = root.mcx();
+    // LIFO: drop the state PROPERLY (running the hash maps' drop
+    // glue) before the context is freed wholesale. The rel entries
+    // are `Rc<RelationData>` on the GLOBAL heap — a context-only
+    // free skips the refcount decrements and leaks every entry
+    // (~0.6 MiB/session measured, the dominant FPBUDGET-1 tail).
+    ::mcx::register_session_cleanup(Box::new(|| {
+        STATE.with(|cell| {
+            if let Some(st) = cell.borrow_mut().take() {
+                drop(ManuallyDrop::into_inner(st));
+            }
         });
-        f(st)
+    }));
+    ManuallyDrop::new(RelcacheState {
+        root,
+        mcx,
+        id_cache: PgHashMap::with_capacity_in(INITRELCACHESIZE, mcx),
+        rules_cache: PgHashMap::new_in(mcx),
+        policies_cache: PgHashMap::new_in(mcx),
+        indexattr_cache: PgHashMap::new_in(mcx),
+        statext_cache: PgHashMap::new_in(mcx),
+        fkey_cache: PgHashMap::new_in(mcx),
+        deform_jit_cache: PgHashMap::new_in(mcx),
+        defaults_cache: PgHashMap::new_in(mcx),
+        stale_refs: PgHashMap::new_in(mcx),
+        in_progress: PgVec::new_in(mcx),
+        eoxact_list: [0; MAX_EOXACT_LIST],
+        eoxact_list_len: 0,
+        eoxact_list_overflowed: false,
+        invals_received: 0,
+        critical_relcaches_built: false,
+        critical_shared_relcaches_built: false,
+        lru_clock: 0,
     })
 }
 
@@ -209,6 +224,10 @@ pub fn criticalSharedRelcachesBuilt() -> bool {
 /// PGRUST_RELCACHE_CAP env override for harnesses (env wins if set; cached at
 /// first read — the test suites and scripts set it before spawning backends).
 pub(crate) fn relcache_cap() -> usize {
+    #[cfg(test)]
+    if let Some(v) = tests::CAP_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
     static ENV: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
     if let Some(v) = *ENV.get_or_init(|| {
         std::env::var("PGRUST_RELCACHE_CAP").ok().and_then(|v| v.trim().parse().ok())
@@ -216,6 +235,22 @@ pub(crate) fn relcache_cap() -> usize {
         return v;
     }
     guc_tables::backing::relcache_size_limit().max(0) as usize
+}
+
+thread_local! {
+    static TRIM_AT_IDLE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+pub fn SetRelationCacheTrimAtIdle(on: bool) {
+    TRIM_AT_IDLE.with(|c| c.set(on));
+}
+
+pub(crate) fn trim_at_idle() -> bool {
+    TRIM_AT_IDLE.try_with(core::cell::Cell::get).unwrap_or(false)
+}
+
+pub fn TrimRelationCacheAtIdle() -> types_error::PgResult<()> {
+    store::enforce_cap()
 }
 
 // The default (512, the relcache_size_limit boot value in guc_tables) is
@@ -238,6 +273,7 @@ pub fn PassivateRelationCache() -> types_error::PgResult<usize> {
         st.statext_cache.clear();
         st.fkey_cache.clear();
         st.deform_jit_cache.clear();
+        st.defaults_cache.clear();
         prune_stale_refs(st);
     });
     l2core::prune_mirrors();
@@ -269,7 +305,8 @@ pub fn RelationCacheCensus() -> RelCacheCensus {
             + st.indexattr_cache.len()
             + st.statext_cache.len()
             + st.fkey_cache.len()
-            + st.deform_jit_cache.len();
+            + st.deform_jit_cache.len()
+            + st.defaults_cache.len();
         // Rc box = strong+weak counts (16) + payload; TupleDescData Rc per
         // entry (shared descs undercount — this is an upper-bound estimate).
         let rc_hdr = 16usize;

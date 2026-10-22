@@ -3,7 +3,7 @@
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
-use allocator_api2::alloc::{AllocError, Allocator, Global};
+use allocator_api2::alloc::AllocError;
 
 use crate::aset::{
     recycle_blocks, take_recycled_blocks, Block, INIT_BLOCK_SIZE, MAX_BLOCK_SIZE, POOL_MAX_ALIGN,
@@ -13,7 +13,17 @@ use crate::Acct;
 // C's allocChunkLimit policy (8 chunks per max block), kept although Rust blocks carry no header.
 const BUMP_BLOCK_HDR_SZ: usize = 40;
 #[cfg(test)]
-const BUMP_CHUNK_LIMIT: usize = chunk_limit(MAX_BLOCK_SIZE);
+pub(crate) const BUMP_CHUNK_LIMIT: usize = chunk_limit(MAX_BLOCK_SIZE);
+
+fn fast_limit(chunk_limit: usize) -> u32 {
+    if crate::bump_fast_on() {
+        chunk_limit as u32
+    } else {
+        0
+    }
+}
+
+const _: () = assert!(chunk_limit(MAX_BLOCK_SIZE) <= u32::MAX as usize);
 
 const fn chunk_limit(max_block_size: usize) -> usize {
     let bound = (max_block_size - BUMP_BLOCK_HDR_SZ) / 8;
@@ -27,11 +37,22 @@ const fn chunk_limit(max_block_size: usize) -> usize {
 pub(crate) struct BumpArena {
     // blocks[0] is the keeper (retained over reset, uncharged until claimed).
     blocks: alloc::vec::Vec<Block>,
-    // Dedicated oversize/overaligned chunks; freed wholesale at reset.
-    oversize: alloc::vec::Vec<(NonNull<u8>, Layout)>,
+    // Dedicated oversize/overaligned chunks, with the allocator that served each; freed wholesale at reset.
+    oversize: alloc::vec::Vec<(NonNull<u8>, Layout, crate::heap::Served)>,
     // Invariant: windows null until the keeper is claimed, else cur_ptr <= cur_end in the active block.
     cur_ptr: *mut u8,
     cur_end: *mut u8,
+    // The keeper's base while the keeper is the arena's only memory and the window is open over it (no second block, no
+    // oversize chunk): a reset is then `cur_ptr = keeper_base` and nothing else. Null otherwise.
+    keeper_base: *mut u8,
+    keeper_size: u32,
+    retain_cap: u32,
+    reuse: u32,
+    // The chunk limit of the inline window hit (Mcx::alloc_fast via try_bump_fast): chunk_limit while the
+    // PGRUST_MCX_BUMP_FAST switch is on (default), 0 while off (no hit inline: every allocation takes allocate_slow, the
+    // old route). Copied once at the arena's creation so the switch costs the inline path nothing (it sits in the
+    // u32 hole: the arena does not grow).
+    fast_limit: u32,
     next_block_size: usize,
     max_block_size: usize,
     chunk_limit: usize,
@@ -53,7 +74,9 @@ impl BumpArena {
 
     // Session-root retirement: the keeper goes too; the next alloc grows one.
     pub(crate) fn release_keeper(&mut self) {
+        let fast_limit = self.fast_limit;
         *self = Self::from_blocks(alloc::vec::Vec::new(), self.max_block_size);
+        self.fast_limit = fast_limit;
     }
 
     fn from_blocks(blocks: alloc::vec::Vec<Block>, max_block_size: usize) -> BumpArena {
@@ -65,10 +88,35 @@ impl BumpArena {
             oversize: alloc::vec::Vec::new(),
             cur_ptr: core::ptr::null_mut(),
             cur_end: core::ptr::null_mut(),
+            keeper_base: core::ptr::null_mut(),
+            keeper_size: INIT_BLOCK_SIZE as u32,
+            retain_cap: 0,
+            reuse: 1,
+            fast_limit: fast_limit(chunk_limit(max_block_size)),
             next_block_size: INIT_BLOCK_SIZE,
             max_block_size,
             chunk_limit: chunk_limit(max_block_size),
             mem_allocated,
+        }
+    }
+
+    /// A window arena: a `keeper_size` keeper (allocated at the first allocation, never from the recycle pool) and up to
+    /// `retain_cap` bytes of extra blocks kept across reset and reused in order.
+    pub(crate) fn window(keeper_size: u32, retain_cap: u32) -> BumpArena {
+        BumpArena {
+            blocks: alloc::vec::Vec::new(),
+            oversize: alloc::vec::Vec::new(),
+            cur_ptr: core::ptr::null_mut(),
+            cur_end: core::ptr::null_mut(),
+            keeper_base: core::ptr::null_mut(),
+            keeper_size,
+            retain_cap,
+            reuse: 1,
+            fast_limit: fast_limit(chunk_limit(MAX_BLOCK_SIZE)),
+            next_block_size: INIT_BLOCK_SIZE,
+            max_block_size: MAX_BLOCK_SIZE,
+            chunk_limit: chunk_limit(MAX_BLOCK_SIZE),
+            mem_allocated: 0,
         }
     }
 
@@ -78,6 +126,10 @@ impl BumpArena {
 
     pub(crate) fn nblocks(&self) -> usize {
         self.blocks.len() + self.oversize.len()
+    }
+
+    pub(crate) fn mem_allocated(&self) -> usize {
+        self.mem_allocated + if self.blocks.is_empty() { INIT_BLOCK_SIZE } else { 0 }
     }
 
     pub(crate) fn window_tail(&self) -> usize {
@@ -110,6 +162,53 @@ impl BumpArena {
         self.alloc_from_new_block(csize, acct)
     }
 
+    #[inline(always)]
+    pub(crate) fn try_bump(&mut self, n: usize) -> Option<NonNull<u8>> {
+        let csize = (n + 7) & !7;
+        let avail = self.cur_end as usize - self.cur_ptr as usize;
+        if csize.wrapping_sub(1) >= self.chunk_limit || csize > avail {
+            return None;
+        }
+        let p = self.cur_ptr;
+        // SAFETY: csize <= avail keeps the bump inside the active block; p is non-null there (avail > 0).
+        unsafe {
+            self.cur_ptr = p.add(csize);
+            Some(NonNull::new_unchecked(p))
+        }
+    }
+
+    // Mcx::alloc_fast's window hit: alloc()'s plain bump (a non-ZST, non-dedicated size that fits the open window), which
+    // touches no accounting (bump accounting runs at block transitions only), so a hit here leaves exactly the state
+    // alloc() would. None = nothing touched; the caller then takes alloc(). The caller checks align <= POOL_MAX_ALIGN.
+    #[inline(always)]
+    pub(crate) fn try_bump_fast(&mut self, size: usize) -> Option<NonNull<[u8]>> {
+        let csize = (size + 7) & !7;
+        let avail = self.cur_end as usize - self.cur_ptr as usize;
+        if csize.wrapping_sub(1) >= self.fast_limit as usize || csize > avail {
+            return None;
+        }
+        let p = self.cur_ptr;
+        // SAFETY: csize <= avail keeps the bump inside the active block; p is non-null there (avail > 0).
+        unsafe {
+            self.cur_ptr = p.add(csize);
+            Some(NonNull::slice_from_raw_parts(NonNull::new_unchecked(p), csize))
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_fast(&mut self, on: bool) {
+        self.fast_limit = if on { self.chunk_limit as u32 } else { 0 };
+    }
+
+    #[inline(always)]
+    pub(crate) fn rewind_keeper(&mut self) -> bool {
+        if self.keeper_base.is_null() {
+            return false;
+        }
+        self.cur_ptr = self.keeper_base;
+        true
+    }
+
     #[cold]
     #[inline(never)]
     fn alloc_from_new_block(
@@ -130,13 +229,28 @@ impl BumpArena {
                         self.cur_end = base.add(k.size);
                     }
                     acct.window_tail.set(k.size - csize);
+                    self.keeper_base = base;
                     return Ok(NonNull::slice_from_raw_parts(k.ptr, csize));
                 }
             }
         }
         let is_keeper = self.blocks.is_empty();
+        let reuse = self.reuse as usize;
+        if !is_keeper && reuse < self.blocks.len() && csize <= self.blocks[reuse].size {
+            let b = &self.blocks[reuse];
+            let base = b.ptr.as_ptr();
+            // SAFETY: csize <= b.size; both offsets stay in the kept block.
+            unsafe {
+                self.cur_ptr = base.add(csize);
+                self.cur_end = base.add(b.size);
+            }
+            acct.window_tail.set(b.size - csize);
+            self.keeper_base = core::ptr::null_mut();
+            self.reuse += 1;
+            return Ok(NonNull::slice_from_raw_parts(b.ptr, csize));
+        }
         let mut blksize = if is_keeper {
-            INIT_BLOCK_SIZE
+            self.keeper_size as usize
         } else {
             let b = self.next_block_size;
             self.next_block_size = (b * 2).min(self.max_block_size);
@@ -146,8 +260,9 @@ impl BumpArena {
             blksize = csize.next_power_of_two();
         }
         acct.check_limit(blksize)?;
+        acct.admit_block(blksize);
         self.blocks.try_reserve(1).map_err(|_| AllocError)?;
-        let block = Block::alloc(blksize)?;
+        let block = Block::alloc_for(blksize, &acct.led, is_keeper || self.retains(blksize))?;
         self.mem_allocated += blksize;
         crate::global_footprint::add(blksize);
         acct.commit_block(blksize, self.mem_allocated, self.nblocks() + 1);
@@ -158,7 +273,9 @@ impl BumpArena {
             self.cur_end = p.as_ptr().add(blksize);
         }
         acct.window_tail.set(blksize - csize);
+        self.keeper_base = if is_keeper && self.oversize.is_empty() { p.as_ptr() } else { core::ptr::null_mut() };
         self.blocks.push(block);
+        self.reuse = self.blocks.len() as u32;
         Ok(NonNull::slice_from_raw_parts(p, csize))
     }
 
@@ -180,10 +297,12 @@ impl BumpArena {
         }
         self.oversize.try_reserve(1).map_err(|_| AllocError)?;
         acct.check_limit(size)?;
-        let p = Global.allocate(layout)?;
+        acct.admit_block(size);
+        let (p, served) = crate::heap::allocate_served_for(layout, &acct.led)?;
         self.mem_allocated += size;
         crate::global_footprint::add(size);
-        self.oversize.push((p.cast(), layout));
+        self.oversize.push((p.cast(), layout, served));
+        self.keeper_base = core::ptr::null_mut();
         acct.commit_block(size, self.mem_allocated, self.nblocks());
         acct.window_tail.set(self.window_tail());
         Ok(p)
@@ -214,7 +333,7 @@ impl BumpArena {
     }
 
     // Off the tail-extension fast path. A dedicated (oversize/overaligned)
-    // chunk reallocs through Global like C's AllocSet repalloc of a
+    // chunk reallocs through the heap (mremap when mapped) like C's AllocSet repalloc of a
     // dedicated block: the old block is released by the system allocator,
     // so the peak is old+new only while it copies (string_agg's buffer).
     // Anything else — a block chunk, including one whose new size crosses
@@ -231,17 +350,18 @@ impl BumpArena {
         new_layout: Layout,
         acct: &Acct,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        if let Some(i) = self.oversize.iter().position(|(p, _)| *p == ptr) {
-            let (_, cur_layout) = self.oversize[i];
+        if let Some(i) = self.oversize.iter().position(|(p, _, _)| *p == ptr) {
+            let (_, cur_layout, served) = self.oversize[i];
             let new_size = new_layout.size().max(cur_layout.size());
             let new_layout =
                 Layout::from_size_align(new_size, new_layout.align()).map_err(|_| AllocError)?;
             let delta = new_size - cur_layout.size();
             acct.check_limit(delta)?;
-            // SAFETY: (ptr, cur_layout) is the live Global allocation recorded
+            acct.admit_block(delta);
+            // SAFETY: (ptr, cur_layout) is the live heap allocation recorded
             // for this chunk; new_size >= cur_layout.size().
-            let new = unsafe { Global.grow(ptr, cur_layout, new_layout)? };
-            self.oversize[i] = (new.cast(), new_layout);
+            let (new, served) = unsafe { crate::heap::resize_served_for(ptr, cur_layout, new_layout, &acct.led, served)? };
+            self.oversize[i] = (new.cast(), new_layout, served);
             self.mem_allocated += delta;
             crate::global_footprint::add(delta);
             acct.commit_block(delta, self.mem_allocated, self.nblocks());
@@ -268,31 +388,50 @@ impl BumpArena {
                 self.cur_ptr = base;
                 // SAFETY: base + k.size is the keeper's one-past-the-end.
                 self.cur_end = unsafe { base.add(k.size) };
+                self.keeper_base = base;
             }
             None => {
                 self.cur_ptr = core::ptr::null_mut();
                 self.cur_end = core::ptr::null_mut();
+                self.keeper_base = core::ptr::null_mut();
             }
         }
         self.next_block_size = INIT_BLOCK_SIZE;
-        debug_assert_eq!(self.mem_allocated, self.blocks.first().map_or(0, |b| b.size));
+        self.reuse = 1;
+        debug_assert_eq!(self.mem_allocated, self.blocks.iter().map(|b| b.size).sum::<usize>());
+        debug_assert!(!self.blocks.iter().any(|b| crate::heap::pooled(b.ptr.as_ptr())), "mcx: a block source's block kept over a reset");
+    }
+
+    pub(crate) fn oversize_served(&self, p: NonNull<u8>) -> Option<bool> {
+        self.oversize.iter().find(|e| e.0 == p).and_then(|e| e.2.known(p.as_ptr()))
+    }
+
+    /// Whether a new block of `size` bytes is one a reset keeps (`retain_cap`): never the block source's.
+    fn retains(&self, size: usize) -> bool {
+        self.retain_cap != 0 && self.blocks.iter().skip(1).map(|b| b.size).sum::<usize>() + size <= self.retain_cap as usize
     }
 
     #[cold]
     #[inline(never)]
     fn free_extra_blocks(&mut self) {
-        for (p, layout) in self.oversize.drain(..) {
+        for (p, layout, served) in self.oversize.drain(..) {
             self.mem_allocated -= layout.size();
             crate::global_footprint::sub(layout.size());
-            // SAFETY: reset's &mut proves no oversize chunk is still in use.
-            unsafe { Global.deallocate(p, layout) };
+            // SAFETY: reset's &mut proves no oversize chunk is still in use; the reset's caller resets the Led.
+            unsafe { crate::heap::free_served_block(p, layout, None, served) };
         }
         if self.blocks.len() > 1 {
-            for b in self.blocks.drain(1..) {
+            let mut keep = 1;
+            let mut kept = 0usize;
+            while keep < self.blocks.len() && kept + self.blocks[keep].size <= self.retain_cap as usize {
+                kept += self.blocks[keep].size;
+                keep += 1;
+            }
+            for b in self.blocks.drain(keep..) {
                 self.mem_allocated -= b.size;
                 crate::global_footprint::sub(b.size);
                 // SAFETY: reset's &mut proves no chunk in these blocks is in use.
-                unsafe { b.free() };
+                unsafe { b.free(None) };
             }
         }
     }
@@ -300,6 +439,7 @@ impl BumpArena {
 
 impl Drop for BumpArena {
     fn drop(&mut self) {
+        self.retain_cap = 0;
         self.reset();
         // The keeper's bytes leave this context now, whether freed or parked
         // in the recycle pool.
@@ -314,7 +454,7 @@ impl Drop for BumpArena {
         } else {
             for b in blocks {
                 // SAFETY: Drop proves no chunk is in use; sole free.
-                unsafe { b.free() };
+                unsafe { b.free(None) };
             }
         }
     }
@@ -338,11 +478,15 @@ mod tests {
             window_tail: Cell::new(0),
             live_chunk_bytes: Cell::new(0),
             free_chunks: Cell::new(0),
+            empty_blocks: Cell::new(0),
             is_bump: true,
             wholesale_reset: Cell::new(false),
+            send_root: Cell::new(false),
+            unpooled: false,
             kind: "Bump",
             parent: None,
             children: RefCell::new(alloc::vec::Vec::new()),
+            led: crate::owner::Led::NEW,
         }
     }
 

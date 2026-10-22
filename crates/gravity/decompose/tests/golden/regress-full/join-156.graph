@@ -1,0 +1,22 @@
+-- regress-full-join-156
+-- explain (costs off) select a.unique1, b.unique2 from onek a full join onek b on a.unique1 = b.unique2 where a.unique1 = 42 and b.unique2 = 42;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=16417 rti=1 am=heap index=19335
+    key att=1 op=96 value=c23:42
+    recheck (op96(index.1, c23:42))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  nest inner=n2 JOIN_INNER invariant raise-free params=()
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index-only rel=16417 rti=2 am=heap index=19336
+    key att=2 op=96 value=c23:42
+    recheck (op96(index.1, c23:42))
+    lanes Attr(2):byval8:w8:val
+  project (1=index.1)
+  project (1=outer.1, 2=inner.1)
+  outs 1=w4:val
+  outs 1=w4:val 2=w4:val
+mapped: IndexOnlyScan NestLoop

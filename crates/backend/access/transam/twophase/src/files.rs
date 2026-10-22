@@ -1,4 +1,4 @@
-use elog::{ereport, errno};
+use elog::{ereport, errno, PCT_M};
 use types_core::{
     FullTransactionId, TransactionId, TransactionIdIsNormal, TransactionIdIsValid,
 };
@@ -75,7 +75,7 @@ pub(crate) fn read_twophase_file(
         ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{path}\": %m"))
+            .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
             .finish(here("ReadTwoPhaseFile"))?;
     }
 
@@ -121,7 +121,7 @@ fn read_twophase_body(fd: i32, path: &str) -> PgResult<Vec<u8>> {
         ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not stat file \"{path}\": %m"))
+            .errmsg(format!("could not stat file \"{path}\": {PCT_M}"))
             .finish(here("ReadTwoPhaseFile"))?;
     }
     let st_size = stat.size;
@@ -150,7 +150,7 @@ fn read_twophase_body(fd: i32, path: &str) -> PgResult<Vec<u8>> {
             .finish(here("ReadTwoPhaseFile"))?;
     }
 
-    let mut buf = vec![0u8; st_size as usize];
+    let mut buf = ::mcx::std_vec_from_elem("TwoPhase", 0u8, st_size as usize)?;
     // Freshly opened transient fd: whole-file positional read at offset 0.
     // twophase.c:1347-1361: WAIT_EVENT_TWOPHASE_FILE_READ around the read;
     // C's error arms leave the wait event set for the error cleanup.
@@ -161,7 +161,7 @@ fn read_twophase_body(fd: i32, path: &str) -> PgResult<Vec<u8>> {
             ereport(ERROR)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{path}\": %m"))
+                .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                 .finish(here("ReadTwoPhaseFile"))?;
         } else {
             ereport(ERROR)
@@ -185,7 +185,7 @@ pub(crate) fn recreate_two_phase_file(xid: TransactionId, content: &[u8]) -> PgR
         ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not recreate file \"{path}\": %m"))
+            .errmsg(format!("could not recreate file \"{path}\": {PCT_M}"))
             .finish(here("RecreateTwoPhaseFile"))?;
     }
 
@@ -209,7 +209,7 @@ pub(crate) fn recreate_two_phase_file(xid: TransactionId, content: &[u8]) -> PgR
                 ereport(ERROR)
                     .with_saved_errno(en)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not write file \"{path}\": %m"))
+                    .errmsg(format!("could not write file \"{path}\": {PCT_M}"))
                     .finish(here("RecreateTwoPhaseFile"))?;
             }
         }
@@ -220,7 +220,7 @@ pub(crate) fn recreate_two_phase_file(xid: TransactionId, content: &[u8]) -> PgR
             ereport(ERROR)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not fsync file \"{path}\": %m"))
+                .errmsg(format!("could not fsync file \"{path}\": {PCT_M}"))
                 .finish(here("RecreateTwoPhaseFile"))?;
         }
         report_wait_end();
@@ -239,7 +239,7 @@ pub(crate) fn close_two_phase_file(fd: i32, path: &str, func: &'static str) -> P
         ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{path}\": %m"))
+            .errmsg(format!("could not close file \"{path}\": {PCT_M}"))
             .finish(here(func))?;
     }
     Ok(())
@@ -254,7 +254,7 @@ pub(crate) fn remove_two_phase_file(xid: TransactionId, give_warning: bool) -> P
             ereport(WARNING)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove file \"{path}\": %m"))
+                .errmsg(format!("could not remove file \"{path}\": {PCT_M}"))
                 .finish(here("RemoveTwoPhaseFile"))?;
         }
     }
@@ -293,7 +293,7 @@ pub(crate) fn twophase_file_exists(xid: TransactionId) -> PgResult<bool> {
         ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not access file \"{path}\": %m"))
+            .errmsg(format!("could not access file \"{path}\": {PCT_M}"))
             .finish(here("PrepareRedoAdd"))?;
     }
     Ok(false)

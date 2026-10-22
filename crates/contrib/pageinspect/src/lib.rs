@@ -219,7 +219,7 @@ pub(crate) fn text_datum(mcx: Mcx<'_>, s: &[u8]) -> PgResult<Datum> {
 }
 
 pub(crate) fn bytea_datum(mcx: Mcx<'_>, data: &[u8]) -> PgResult<Datum> {
-    let mut image = Vec::with_capacity(data.len() + 4);
+    let mut image = ::mcx::std_vec_with_capacity("contrib", data.len() + 4)?;
     image.extend_from_slice(&(((data.len() + 4) as u32) << 2).to_ne_bytes());
     image.extend_from_slice(data);
     byref_result(mcx, &image)
@@ -278,14 +278,33 @@ pub(crate) fn composite_tupdesc<'m>(
     Ok(resolved.result_tuple_desc.expect("composite result has tupdesc"))
 }
 
+pub(crate) fn wrong_column_count() -> Box<PgError> {
+    Box::new(
+        PgError::error("function has wrong number of declared columns")
+            .with_sqlstate(types_error::ERRCODE_INVALID_FUNCTION_DEFINITION)
+            .with_hint(
+                "To resolve the problem, update the \"pageinspect\" extension to the latest version.",
+            ),
+    )
+}
+
+// C reads past its values[] for a wider OUT list (UB); refuse instead.
+fn check_declared_width(tupdesc: &TupleDescData<'_>, values: &[Datum]) -> PgResult<()> {
+    if tupdesc.natts as usize > values.len() {
+        return Err(wrong_column_count());
+    }
+    Ok(())
+}
+
 pub(crate) fn tuple_image(
     mcx: Mcx<'_>,
     tupdesc: &TupleDescData<'_>,
     values: &[Datum],
     nulls: &[bool],
 ) -> PgResult<Vec<u8>> {
+    check_declared_width(tupdesc, values)?;
     let tup = heaptuple::heap_form_tuple(mcx, tupdesc, values, nulls)?;
-    Ok(tup.image().to_vec())
+    Ok(::mcx::std_vec_from_slice("contrib", &tup.image())?)
 }
 
 pub(crate) fn composite_result(
@@ -294,43 +313,52 @@ pub(crate) fn composite_result(
     values: &[Datum],
     nulls: &[bool],
 ) -> PgResult<Datum> {
+    check_declared_width(tupdesc, values)?;
     let tup = heaptuple::heap_form_tuple(mcx, tupdesc, values, nulls)?;
     let d = Datum::from_usize(tup.header_ptr() as usize);
     core::mem::forget(tup); // leak into the arming context (C palloc ownership)
     Ok(d)
 }
 
-/// BuildTupleFromCStrings: per-column type input functions over C-formatted
-/// strings, so old extension versions' column types resolve exactly as in C.
+/// TupleDescGetAttInMetadata + BuildTupleFromCStrings (execTuples.c:2303,
+/// 2342): input metadata for every non-dropped attribute first, then the
+/// "in" function per attribute (even for NULLs, to support domains);
+/// dropped attributes are NULL. `values` is indexed by physical attribute
+/// number, as C's `char **values`.
 pub(crate) fn cstrings_tuple_image(
     mcx: Mcx<'_>,
     tupdesc: &TupleDescData<'_>,
     values: &[Option<String>],
 ) -> PgResult<Vec<u8>> {
     let n = tupdesc.natts as usize;
-    debug_assert!(values.len() >= n);
-    let mut datums = vec![Datum::null(); n];
-    let mut nulls = vec![false; n];
+    let mut attin = ::mcx::std_vec_with_capacity("contrib", n)?;
     for i in 0..n {
-        match &values[i] {
-            Some(s) => {
-                let att = tupdesc.attr(i);
-                let (infunc, typioparam) = lsyscache::getTypeInputInfo(att.atttypid)?;
-                let mut flinfo = fmgr_core::fmgr_info(infunc)?;
-                let cstr =
-                    std::ffi::CString::new(s.as_str()).expect("cstrings_tuple_image: interior NUL");
-                datums[i] = types_fmgr::input_function_call(
-                    &mut flinfo,
-                    Some(&cstr),
-                    typioparam,
-                    att.atttypmod,
-                    mcx,
-                )?;
-            }
-            None => nulls[i] = true,
-        }
+        let att = tupdesc.attr(i);
+        attin.push(if att.attisdropped {
+            None
+        } else {
+            let (infunc, typioparam) = lsyscache::getTypeInputInfo(att.atttypid)?;
+            Some((fmgr_core::fmgr_info(infunc)?, typioparam, att.atttypmod))
+        });
+    }
+    let mut datums = ::mcx::std_vec_from_elem("contrib", Datum::null(), n)?;
+    let mut nulls = ::mcx::std_vec_from_elem("contrib", true, n)?;
+    for (i, meta) in attin.iter_mut().enumerate() {
+        let Some((flinfo, typioparam, typmod)) = meta else { continue };
+        let s = cstring_slot(values, i);
+        let cstr =
+            s.map(|s| std::ffi::CString::new(s).expect("cstrings_tuple_image: interior NUL"));
+        datums[i] =
+            types_fmgr::input_function_call(flinfo, cstr.as_deref(), *typioparam, *typmod, mcx)?;
+        nulls[i] = s.is_none();
     }
     tuple_image(mcx, tupdesc, &datums, &nulls)
+}
+
+// C reads values[i] for every physical slot; a slot past the supplied
+// strings (a wider declared row type) is NULL here, not a wild read.
+fn cstring_slot(values: &[Option<String>], i: usize) -> Option<&str> {
+    values.get(i).and_then(|v| v.as_deref())
 }
 
 pub(crate) fn cstrings_composite_result(
@@ -428,11 +456,7 @@ pub(crate) fn relation_open_by_text_arg<'m>(
             // whitespace-trimmed by textToQualifiedNameList) with '.' and does
             // not re-quote (namespace.c:3597). Build the message from the split
             // components, not the raw text argument.
-            let joined = names
-                .iter()
-                .map(|n| n.as_str())
-                .collect::<Vec<_>>()
-                .join(".");
+            let joined = names.join(".");
             return Err(Box::new(
                 PgError::error(format!(
                     "improper relation name (too many dotted names): {joined}"
@@ -540,6 +564,19 @@ pub fn init_seams() {
 mod tests {
     use super::*;
     use types_storage::bufpage::{ItemIdData, PageHeaderData};
+
+    // BuildTupleFromCStrings indexes values by physical attribute number; a
+    // declared row type wider than the function's values reads NULL, never
+    // past the array.
+    #[test]
+    fn cstring_slots_follow_physical_attribute_numbers() {
+        let values = vec![Some("1".to_string()), None, Some("3".to_string())];
+        assert_eq!(cstring_slot(&values, 0), Some("1"));
+        assert_eq!(cstring_slot(&values, 1), None);
+        assert_eq!(cstring_slot(&values, 2), Some("3"));
+        assert_eq!(cstring_slot(&values, 3), None);
+        assert_eq!(cstring_slot(&values, 11), None);
+    }
 
     fn synthetic_page() -> Box<AlignedPage> {
         let mut b = Box::new(AlignedPage([0u8; BLCKSZ]));

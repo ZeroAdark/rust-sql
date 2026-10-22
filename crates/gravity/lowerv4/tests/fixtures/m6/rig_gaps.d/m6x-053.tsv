@@ -1,0 +1,1 @@
+ORDER BY m over macaddr (rep.hosted.order.fixed, V4R-442: its exact word): served, but its output type 829 is one the crate driver does not render (bool / int2 / int4 / int8 / text only); the server runner judges it (e2e v4/m6_hosted_fixed and m6_hosted_order, PG 18.6 goldens)

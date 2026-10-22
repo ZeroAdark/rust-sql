@@ -1,0 +1,21 @@
+-- regress-full-subselect-066
+-- select * from int8_tbl where q1 in (select c1 from inner_text);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=880 end=breaker(slot=0 Distinct)
+  nodes n1@0
+  source range rel=25264 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v2.1)
+  subplan 1 build Any unknown-eq-false ids=($exec0) raise-free test=and(op98(io25(v1.1), $exec0), op98(io25(v1.1), $exec0))
+  outs 1=vl:win/page
+p1 node=0 eligible rows=2 end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source range rel=16403 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  subplan 1 hashed Any unknown-eq-false slot=0 ids=($exec0) raise-free test=and(op98(io25(v1.1), $exec0), op98(io25(v1.1), $exec0))
+  filter subplan1()
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=w8:val
+breaker slot=0 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B
+mapped: SeqScan SubPlan

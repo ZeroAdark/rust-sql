@@ -165,17 +165,7 @@ pub fn pg_get_encoding_from_locale(ctype: Option<&str>, write_message: bool) -> 
         return Ok(PG_SQL_ASCII as i32);
     }
 
-    let mut cbuf = Vec::with_capacity(ctype.len() + 1);
-    cbuf.extend_from_slice(ctype.as_bytes());
-    cbuf.push(0);
-    // SAFETY: cbuf is NUL-terminated and outlives the call.
-    let loc = unsafe {
-        libc::newlocale(
-            crate::lc::LC_CTYPE_MASK,
-            cbuf.as_ptr() as *const c_char,
-            core::ptr::null_mut(),
-        )
-    };
+    let loc = crate::setup::newlocale_backend_env(crate::lc::LC_CTYPE_MASK, ctype, core::ptr::null_mut());
     if loc.is_null() {
         return Ok(-1); // bogus ctype passed in?
     }

@@ -1,0 +1,204 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1key s2u s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) UPDATE uo_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50;
+QUERY PLAN                                         
+---------------------------------------------------
+Update on uo_t t                                   
+  ->  Hash Join                                    
+        Hash Cond: ("*SELECT* 1".k = t.id)         
+        ->  Subquery Scan on "*SELECT* 1"          
+              ->  Seq Scan on uo_s                 
+                    Filter: ((w > 0) AND (w >= 50))
+        ->  Hash                                   
+              ->  Seq Scan on uo_t t               
+(8 rows)
+
+step s1key: UPDATE uo_t SET id = 25 WHERE id = 5;
+step s2u: UPDATE uo_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM uo_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   0
+25|50| 250
+(2 rows)
+
+
+starting permutation: s1v s2u s1c s2sel
+step s1v: UPDATE uo_t SET v = v + 1 WHERE id = 5;
+step s2u: UPDATE uo_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM uo_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|51|  50
+ 7|70|   0
+(2 rows)
+
+
+starting permutation: s1del s2u s1c s2sel
+step s1del: DELETE FROM uo_t WHERE id = 5;
+step s2u: UPDATE uo_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM uo_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   0
+(1 row)
+
+
+starting permutation: s1src s2u s1c s2sel
+step s1src: UPDATE uo_s SET w = 999 WHERE k = 5;
+step s2u: UPDATE uo_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50;
+step s1c: COMMIT;
+step s2sel: SELECT id, v, hits FROM uo_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|50|  50
+ 7|70|   0
+(2 rows)
+
+
+starting permutation: s1key s2d s1c s2sel
+step s1key: UPDATE uo_t SET id = 25 WHERE id = 5;
+step s2d: DELETE FROM uo_t t USING (SELECT k, w FROM uo_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50 RETURNING t.id, t.v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| v
+--+--
+25|50
+(1 row)
+
+step s2sel: SELECT id, v, hits FROM uo_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   0
+(1 row)
+
+
+starting permutation: s1v s2d s1c s2sel
+step s1v: UPDATE uo_t SET v = v + 1 WHERE id = 5;
+step s2d: DELETE FROM uo_t t USING (SELECT k, w FROM uo_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50 RETURNING t.id, t.v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| v
+--+--
+ 5|51
+(1 row)
+
+step s2sel: SELECT id, v, hits FROM uo_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   0
+(1 row)
+
+
+starting permutation: s2bexp s1key s2ub s1c s2sel
+step s2bexp: EXPLAIN (COSTS OFF) UPDATE uo_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_s UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50;
+QUERY PLAN                          
+------------------------------------
+Update on uo_t t                    
+  ->  Hash Join                     
+        Hash Cond: (uo_s.k = t.id)  
+        ->  Seq Scan on uo_s        
+              Filter: (w >= 50)     
+        ->  Hash                    
+              ->  Seq Scan on uo_t t
+(7 rows)
+
+step s1key: UPDATE uo_t SET id = 25 WHERE id = 5;
+step s2ub: UPDATE uo_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_s UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50; <waiting ...>
+step s1c: COMMIT;
+step s2ub: <... completed>
+step s2sel: SELECT id, v, hits FROM uo_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   0
+25|50| 250
+(2 rows)
+
+
+starting permutation: s1v s2ub s1c s2sel
+step s1v: UPDATE uo_t SET v = v + 1 WHERE id = 5;
+step s2ub: UPDATE uo_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_s UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50; <waiting ...>
+step s1c: COMMIT;
+step s2ub: <... completed>
+step s2sel: SELECT id, v, hits FROM uo_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|51|  50
+ 7|70|   0
+(2 rows)
+
+
+starting permutation: s1key s2db s1c s2sel
+step s1key: UPDATE uo_t SET id = 25 WHERE id = 5;
+step s2db: DELETE FROM uo_t t USING (SELECT k, w FROM uo_s UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50; <waiting ...>
+step s1c: COMMIT;
+step s2db: <... completed>
+step s2sel: SELECT id, v, hits FROM uo_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   0
+(1 row)
+
+
+starting permutation: s2pexp s1bkey s2pu s1c s2psel
+step s2pexp: EXPLAIN (COSTS OFF) UPDATE uo_b t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_m WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50;
+QUERY PLAN                                               
+---------------------------------------------------------
+Update on uo_b t                                         
+  ->  Hash Join                                          
+        Hash Cond: (t.id = "*SELECT* 1".k)               
+        ->  Seq Scan on uo_b t                           
+        ->  Hash                                         
+              ->  Subquery Scan on "*SELECT* 1"          
+                    ->  Seq Scan on uo_m                 
+                          Filter: ((w > 0) AND (w >= 50))
+(8 rows)
+
+step s1bkey: UPDATE uo_b SET id = 25 WHERE id = 5;
+step s2pu: UPDATE uo_b t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_m WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50; <waiting ...>
+step s1c: COMMIT;
+step s2pu: <... completed>
+step s2psel: SELECT id, v, hits FROM uo_b WHERE id IN (5, 9, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 9|90|  90
+25|50| 250
+(2 rows)
+
+
+starting permutation: s1bv s2pu s1c s2psel
+step s1bv: UPDATE uo_b SET v = v + 1 WHERE id = 9;
+step s2pu: UPDATE uo_b t SET hits = t.hits + s.w FROM (SELECT k, w FROM uo_m WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50; <waiting ...>
+step s1c: COMMIT;
+step s2pu: <... completed>
+step s2psel: SELECT id, v, hits FROM uo_b WHERE id IN (5, 9, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|50|  50
+ 9|91|  90
+(2 rows)
+
+
+starting permutation: s1bkey s2pd s1c s2psel
+step s1bkey: UPDATE uo_b SET id = 25 WHERE id = 5;
+step s2pd: DELETE FROM uo_b t USING (SELECT k, w FROM uo_m WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND s.w >= 50 RETURNING t.id, t.v; <waiting ...>
+step s1c: COMMIT;
+step s2pd: <... completed>
+id| v
+--+--
+25|50
+ 9|90
+(2 rows)
+
+step s2psel: SELECT id, v, hits FROM uo_b WHERE id IN (5, 9, 25) ORDER BY id;
+id|v|hits
+--+-+----
+(0 rows)
+

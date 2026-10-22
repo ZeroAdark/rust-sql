@@ -1,0 +1,89 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2a s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT id, nextcall, failure_count FROM hcron WHERE active = true AND numbercall != 0 AND (nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM htrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = hcron.id)) AND id = 21 ORDER BY priority FOR NO KEY UPDATE;
+QUERY PLAN                                                                                                                                                              
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+LockRows                                                                                                                                                                
+  ->  Sort                                                                                                                                                              
+        Sort Key: hcron.priority                                                                                                                                        
+        ->  Index Scan using hcron_pkey on hcron                                                                                                                        
+              Index Cond: (id = 21)                                                                                                                                     
+              Filter: (active AND (numbercall <> 0) AND ((nextcall <= 'Thu Jan 01 03:00:00 2026'::timestamp without time zone) OR (ANY (id = (hashed SubPlan 2).col1))))
+              SubPlan 2                                                                                                                                                 
+                ->  Seq Scan on htrig                                                                                                                                   
+                      Filter: (call_at <= 'Thu Jan 01 03:00:00 2026'::timestamp without time zone)                                                                      
+(9 rows)
+
+step s1u: UPDATE hcron SET failure_count = 1 WHERE id = 21;
+step s2a: SELECT id, nextcall, failure_count FROM hcron WHERE active = true AND numbercall != 0 AND (nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM htrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = hcron.id)) AND id = 21 ORDER BY priority FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|nextcall                |failure_count
+--+------------------------+-------------
+21|Thu Jan 01 03:30:00 2026|            1
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2a s1c
+step s1a: UPDATE hcron SET nextcall = timestamp '2026-03-01' WHERE id = 21;
+step s2a: SELECT id, nextcall, failure_count FROM hcron WHERE active = true AND numbercall != 0 AND (nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM htrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = hcron.id)) AND id = 21 ORDER BY priority FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|nextcall                |failure_count
+--+------------------------+-------------
+21|Sun Mar 01 00:00:00 2026|            0
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1t s2a s1c
+step s1t: UPDATE hcron SET nextcall = timestamp '2026-03-01' WHERE id = 21; DELETE FROM htrig WHERE cron_id = 21;
+step s2a: SELECT id, nextcall, failure_count FROM hcron WHERE active = true AND numbercall != 0 AND (nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM htrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = hcron.id)) AND id = 21 ORDER BY priority FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|nextcall                |failure_count
+--+------------------------+-------------
+21|Sun Mar 01 00:00:00 2026|            0
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2b s1c
+step s1n: UPDATE hcron SET nextcall = timestamp '2026-03-01' WHERE id = 7; INSERT INTO htrig (cron_id, call_at) VALUES (7, timestamp '2026-01-01');
+step s2b: SELECT id, nextcall FROM hcron WHERE active = true AND numbercall != 0 AND (nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM htrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = hcron.id)) AND id = 7 ORDER BY priority FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+id|nextcall                
+--+------------------------
+ 7|Sun Mar 01 00:00:00 2026
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2a s1c
+step s1d: UPDATE hcron SET active = false WHERE id = 21;
+step s2a: SELECT id, nextcall, failure_count FROM hcron WHERE active = true AND numbercall != 0 AND (nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM htrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = hcron.id)) AND id = 21 ORDER BY priority FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|nextcall|failure_count
+--+--------+-------------
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT id FROM hcron WHERE id = 21 FOR UPDATE;
+id
+--
+21
+(1 row)
+
+step s2sk: SELECT id FROM hcron WHERE active = true AND numbercall != 0 AND (nextcall <= timestamp '2026-01-01 03:00' OR EXISTS (SELECT cron_id FROM htrig WHERE call_at <= timestamp '2026-01-01 03:00' AND cron_id = hcron.id)) AND id = 21 ORDER BY priority FOR NO KEY UPDATE SKIP LOCKED;
+id
+--
+(0 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

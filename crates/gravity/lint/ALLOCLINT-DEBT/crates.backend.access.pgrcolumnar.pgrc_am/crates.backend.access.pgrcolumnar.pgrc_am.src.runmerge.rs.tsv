@@ -1,0 +1,11 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/runmerge.rs
+growth	std::collections::BTreeMap::entry	1
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	17
+macro	std::format	21
+macro	std::vec	5
+method	std::boxed::Box::new	3
+method	std::clone::Clone::clone	28
+method	std::iter::Iterator::collect	21
+type	std::boxed::Box	3
+type	std::vec::Vec	22

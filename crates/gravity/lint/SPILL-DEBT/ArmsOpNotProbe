@@ -1,0 +1,1 @@
+ArmsOpNotProbe	crates/gravity/lowerv4/src/ops/hashjoin/spill/build.rs	eligible_why	lifetime	-	a union op at the probe's place that is not a probe keeps its build resident	unreachable	No query reaches this: the step Gravity tests under a UNION ALL branch is always the hash probe it found there.

@@ -1,0 +1,109 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1n s2u s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) UPDATE mr_t t SET n = n || '+' FROM mr_ref r WHERE t.id IN (1, 3) AND r.a = t.a + 1;
+QUERY PLAN                                                
+----------------------------------------------------------
+Update on mr_t t                                          
+  ->  Nested Loop                                         
+        ->  Index Scan using mr_t_pkey on mr_t t          
+              Index Cond: (id = ANY ('{1,3}'::integer[])) 
+        ->  Memoize                                       
+              Cache Key: (t.a + 1)                        
+              Cache Mode: logical                         
+              ->  Index Scan using mr_ref_pkey on mr_ref r
+                    Index Cond: (a = (t.a + 1))           
+(9 rows)
+
+step s1n: UPDATE mr_t SET n = n || '!' WHERE id = 1;
+step s2u: UPDATE mr_t t SET n = t.n || '+' || r.b FROM mr_ref r WHERE t.id IN (1, 3) AND r.a = t.a + 1 RETURNING t.id, t.a, t.n; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|a|n    
+--+-+-----
+ 1|3|x!+40
+ 3|5|z+60 
+(2 rows)
+
+step s2sel: SELECT id, a, n FROM mr_t WHERE id < 100 ORDER BY id;
+id| a|n    
+--+--+-----
+ 1| 3|x!+40
+ 2|18|y    
+ 3| 5|z+60 
+(3 rows)
+
+
+starting permutation: s1a s2u s1c s2sel
+step s1a: UPDATE mr_t SET a = 7 WHERE id = 1;
+step s2u: UPDATE mr_t t SET n = t.n || '+' || r.b FROM mr_ref r WHERE t.id IN (1, 3) AND r.a = t.a + 1 RETURNING t.id, t.a, t.n; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|a|n   
+--+-+----
+ 3|5|z+60
+(1 row)
+
+step s2sel: SELECT id, a, n FROM mr_t WHERE id < 100 ORDER BY id;
+id| a|n   
+--+--+----
+ 1| 7|x   
+ 2|18|y   
+ 3| 5|z+60
+(3 rows)
+
+
+starting permutation: s1n s2d s1c s2sel
+step s1n: UPDATE mr_t SET n = n || '!' WHERE id = 1;
+step s2d: DELETE FROM mr_t t USING mr_ref r WHERE t.id IN (1, 3) AND r.a = t.a + 1 RETURNING t.id, t.a, t.n; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|a|n 
+--+-+--
+ 1|3|x!
+ 3|5|z 
+(2 rows)
+
+step s2sel: SELECT id, a, n FROM mr_t WHERE id < 100 ORDER BY id;
+id| a|n
+--+--+-
+ 2|18|y
+(1 row)
+
+
+starting permutation: s2vexp s1n s2vu s1c s2sel
+step s2vexp: EXPLAIN (COSTS OFF) UPDATE mr_v SET n = n || '+' WHERE id IN (1, 3);
+QUERY PLAN                                                
+----------------------------------------------------------
+Update on mr_t t                                          
+  ->  Nested Loop                                         
+        ->  Index Scan using mr_t_pkey on mr_t t          
+              Index Cond: (id = ANY ('{1,3}'::integer[])) 
+        ->  Memoize                                       
+              Cache Key: (t.a + 1)                        
+              Cache Mode: logical                         
+              ->  Index Scan using mr_ref_pkey on mr_ref r
+                    Index Cond: (a = (t.a + 1))           
+  SubPlan 1                                               
+    ->  Index Only Scan using mr_ref_pkey on mr_ref r_1   
+          Index Cond: (a = (t.a + 1))                     
+(12 rows)
+
+step s1n: UPDATE mr_t SET n = n || '!' WHERE id = 1;
+step s2vu: UPDATE mr_v SET n = n || '+' WHERE id IN (1, 3) RETURNING *; <waiting ...>
+step s1c: COMMIT;
+step s2vu: <... completed>
+id|a|n  
+--+-+---
+ 1|3|x!+
+ 3|5|z+ 
+(2 rows)
+
+step s2sel: SELECT id, a, n FROM mr_t WHERE id < 100 ORDER BY id;
+id| a|n  
+--+--+---
+ 1| 3|x!+
+ 2|18|y  
+ 3| 5|z+ 
+(3 rows)
+

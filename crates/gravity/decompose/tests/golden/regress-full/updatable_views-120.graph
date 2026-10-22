@@ -1,0 +1,10 @@
+-- regress-full-updatable_views-120
+-- explain (costs off) insert into uv_iocu_view (aa,bb) values (1,'y') on conflict (aa) do update set bb = 'Rejected: '||excluded.* where excluded.aa > 0 and excluded.bb != '' and excluded.cc is not null;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:1, 2=c25:'y')
+  write INSERT rel=24774 rti=3 natts=2 indexes=(24779[1]u) on_conflict=update arbiter=(24779) excl_rti=4 cols=(2) set=(1=op654(c25:'Rejected: ', io25(T_RowExpr))) where=T_List
+  outs 1=w4:val 2=vl:stmt/imm
+mapped: Result ModifyTable

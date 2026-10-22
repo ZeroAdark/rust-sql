@@ -1,0 +1,4 @@
+path	crates/gravity/driver/src/order.rs
+growth	std::vec::Vec::push	6
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	3

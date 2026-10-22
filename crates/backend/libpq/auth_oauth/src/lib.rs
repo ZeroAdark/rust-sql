@@ -96,6 +96,9 @@ fn load_validator_library(libname: &str) -> PgResult<&'static (dyn OAuthValidato
             .finish(loc(751, "load_validator_library"))?;
         unreachable!()
     };
+    if dfmgr::is_builtin_library(libname) {
+        dfmgr::load_file(libname, false)?;
+    }
     validator.startup(PG_VERSION_NUM);
     Ok(validator)
 }
@@ -171,7 +174,7 @@ impl SaslMech for OAuthMech {
     fn exchange(
         &self,
         ctx: &mut OauthCtx,
-        port: &mut Port,
+        port: &Port,
         input: Option<&[u8]>,
         _logdetail: &mut Option<String>,
     ) -> PgResult<(i32, Option<Vec<u8>>)> {
@@ -182,7 +185,7 @@ impl SaslMech for OAuthMech {
 fn oauth_exchange(
     mech: &OAuthMech,
     ctx: &mut OauthCtx,
-    port: &mut Port,
+    port: &Port,
     input: Option<&[u8]>,
 ) -> PgResult<(i32, Option<Vec<u8>>)> {
     let func = "oauth_exchange";

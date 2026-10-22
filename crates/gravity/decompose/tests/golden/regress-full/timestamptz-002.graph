@@ -1,0 +1,16 @@
+-- regress-full-timestamptz-002
+-- SELECT interval, ts, origin, date_bin(interval::interval, ts, origin) FROM ( VALUES ('15 days'), ('2 hours'), ('1 hour 30 minutes'), ('15 minutes'), ('10 seconds'), ('100 milliseconds'), ('250 microseconds') ) intervals (interval), (VALUES (timestamptz '2020-02-11 15:44:17.71393')) ts (ts), (VALUES (timestamptz '2001-01-01')) origin (origin);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=4 rows=7
+    row (c25:'15 days')
+    row (c25:'2 hours')
+    row (c25:'1 hour 30 minutes')
+    row (c25:'15 minutes')
+    row (c25:'10 seconds')
+    row (c25:'100 milliseconds')
+    row (c25:'250 microseconds')
+  project (1=v4.1, 2=c1184:634779857713930, 3=c1184:31651200000000, 4=fn6178(io1186(v4.1), c1184:634779857713930, c1184:31651200000000))
+  outs 1=vl:row 2=w8:val 3=w8:val 4=w8:val
+mapped: ValuesScan

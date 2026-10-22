@@ -1,0 +1,10 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M8-RIG): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT x, (SELECT sum(y) FROM generate_series(x, 4) y) AS s FROM generate_series(1, 6) x
+cols: x	s
+[pg]
+1	10
+2	9
+3	7
+4	4
+5	\N
+6	\N

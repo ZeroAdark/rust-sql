@@ -26,28 +26,11 @@ pub(crate) fn FastPathStrongLockHashPartition(hashcode: u32) -> u32 {
     hashcode % FAST_PATH_STRONG_LOCK_HASH_PARTITIONS as u32
 }
 
-/// FastPathStrongRelationLockData (lock.c:306-310): `slock_t mutex` padded
-/// to the uint32 boundary, then `uint32 count[FAST_PATH_STRONG_LOCK_HASH_
-/// PARTITIONS]` -- sizeof = 4100, the size LockManagerShmemInit registers
-/// under "Fast Path Strong Relation Lock Data" (lock.c:494-500). The port's
-/// Spinlock is a 4-byte word, so the layout is C's without explicit padding.
 #[repr(C)]
 pub(crate) struct FastPathStrongRelationLockData {
     mutex: Spinlock,
-    // Atomics with SeqCst transitions, NOT SyncCell + the spinlock alone: the
-    // unlocked fast-path read below is the ONLY synchronization edge between
-    // a strong locker's release and a weak locker that then fast-path-grants
-    // without ever touching shared lock state. C gets this for free because
-    // its spinlocks/atomics are documented full memory barriers; Rust
-    // Acquire/Release spinlocks are weaker, and on ARM the plain
-    // count-decrement could become visible BEFORE the releasing backend's
-    // earlier sinval hasMessages store — the weak locker then fast-paths,
-    // AcceptInvalidationMessages sees a stale-false hasMessages, and a
-    // just-invalidated cache entry survives past a freshly granted lock
-    // (found by the D3.2 shared-L2 concurrent-DDL stressor, ~1/3000 probes on
-    // Apple Silicon). SeqCst count ops + SeqCst hasMessages ops (sinval)
-    // restore C's guarantee: observing the decrement implies observing every
-    // store the releasing backend made before it.
+    // SeqCst count ops + SeqCst hasMessages ops (sinval) restore C's guarantee:
+    // observing the decrement implies observing every store the releasing backend made before it.
     count: [std::sync::atomic::AtomicU32; FAST_PATH_STRONG_LOCK_HASH_PARTITIONS],
 }
 
@@ -56,12 +39,6 @@ const _: () = assert!(
     "sizeof(FastPathStrongRelationLockData) is 4100 in C 18.6"
 );
 
-/// lock.c:494-500: `FastPathStrongRelationLocks = ShmemInitStruct("Fast Path
-/// Strong Relation Lock Data", sizeof(FastPathStrongRelationLockData),
-/// &found); if (!found) SpinLockInit(&FastPathStrongRelationLocks->mutex);`
-/// -- the counters live in a ShmemIndex block (so pg_shmem_allocations lists
-/// the row with C's size), not in a process static. SpinLockInit is
-/// S_INIT_LOCK == S_UNLOCK (s_lock.h); the counts are the block's zero fill.
 pub(crate) fn shmem_init_strong_locks() -> PgResult<&'static FastPathStrongRelationLockData> {
     let (raw, found) = shmem::ShmemInitStruct(
         "Fast Path Strong Relation Lock Data",
@@ -99,10 +76,8 @@ fn strong_spin_acquire() {
 }
 
 pub(crate) fn strong_lock_count(fasthashcode: u32) -> u32 {
-    // C reads the count unlocked after an LWLock memory-sequencing point;
-    // SeqCst here pairs with the SeqCst decrement + sinval hasMessages ops
-    // (see FastPathStrongRelationLockData) to keep invalidation delivery
-    // ordered before a fast-path grant that observes the release.
+    // SeqCst pairs with the SeqCst decrement + sinval hasMessages ops to keep
+    // invalidation delivery ordered before a fast-path grant that observes the release.
     strong_locks().count[fasthashcode as usize]
         .load(std::sync::atomic::Ordering::SeqCst)
 }
@@ -126,8 +101,7 @@ pub(crate) fn decrement_strong_lock_count(hashcode: u32) {
     decrement_strong_lock_count_partition(FastPathStrongLockHashPartition(hashcode));
 }
 
-// Boot image: all counts zero, spinlock free. Exclusive postmaster-thread
-// access per the crash choreography.
+// Exclusive postmaster-thread access per the crash choreography.
 pub(crate) fn reset_strong_locks_after_crash() {
     let strong = strong_locks();
     strong.mutex.unlock();
@@ -144,17 +118,12 @@ pub fn FastPathLockSlotsPerBackend() -> u32 {
     fp_groups_per_backend() * FP_LOCK_SLOTS_PER_GROUP as u32
 }
 
-// Simple multiplicative hash spreading relation OIDs across groups; the
-// constant and power-of-two masking must match C's FAST_PATH_REL_GROUP.
+// The constant and power-of-two masking must match C's FAST_PATH_REL_GROUP.
 pub(crate) fn fast_path_rel_group(relid: Oid) -> u32 {
     ((relid as u64).wrapping_mul(49157) & (fp_groups_per_backend() as u64 - 1)) as u32
 }
 
-// Per-proc used-slot counts (C's process-local FastPathLocalUseCounts, kept
-// on the PGPROC so a proc identity leased across pool workers keeps them).
-// Owner-only unlocked read, C-exact: never lower than the true count — only
-// we add locks on our own behalf; a remote transfer can leave it high until
-// our next ungrant recomputes it.
+// Never lower than the true count: only we add locks on our own behalf.
 fn local_use_count(group: u32) -> i32 {
     let proc = lmgr_proc::GetPGProcByNumber(crate::my_procno());
     // SAFETY: own proc; counts are written only by us (under our fpInfoLock).
@@ -181,7 +150,6 @@ pub(crate) fn fast_path_group_in_use(relid: Oid) -> bool {
     local_use_count(fast_path_rel_group(relid)) > 0
 }
 
-/// GetLockConflicts' per-backend fast-path conflict probe.
 /// SAFETY contract: proc's fpInfoLock held.
 pub(crate) unsafe fn fp_group_conflicts(
     proc: &PGPROC,
@@ -204,7 +172,6 @@ pub(crate) unsafe fn fp_group_conflicts(
             continue;
         }
         let lockmask = (lockmask << FAST_PATH_LOCKNUMBER_OFFSET) as types_storage::lock::LOCKMASK;
-        // One entry per relation: found and no conflict means done.
         return lockmask & conflict_mask != 0;
     }
     false
@@ -216,8 +183,6 @@ pub(crate) fn fast_path_local_can_try(locktag: &LOCKTAG, mode: LOCKMODE) -> bool
             < FP_LOCK_SLOTS_PER_GROUP
 }
 
-// The two nominal LWLock types share one C layout; converge them when the
-// lwlock owner adopts types_storage's definition (notes/deferred.md).
 pub(crate) fn fp_info_lock(proc: &PGPROC) -> &lwlock::LWLock {
     const _: () = {
         assert!(
@@ -365,8 +330,6 @@ pub(crate) unsafe fn FastPathUnGrantRelationLock(relid: Oid, lockmode: LOCKMODE)
     result
 }
 
-/// Push every backend's fast-path locks on `locktag` into the shared table.
-/// Returns false on shmem exhaustion.
 pub(crate) fn FastPathTransferRelationLocks(
     lockMethodTable: LockMethod,
     locktag: &LOCKTAG,
@@ -382,8 +345,6 @@ pub(crate) fn FastPathTransferRelationLocks(
         let proc = &hdr.allProcs[i];
         lwlock::LWLockAcquire(fp_info_lock(proc), lwlock::LW_EXCLUSIVE, my_procno)?;
 
-        // databaseId is fixed at backend start; tested under the LWLock for
-        // the fencing argument spelled out in C.
         // SAFETY: fpInfoLock held.
         let view = unsafe { fp_view(proc) };
         if proc.databaseId.load(Relaxed) != locktag.locktag_field1 || view.group_bits(group) == 0 {
@@ -432,8 +393,6 @@ pub(crate) fn FastPathTransferRelationLocks(
     Ok(true)
 }
 
-/// Return the PROCLOCK for a fast-path lock, transferring it to the shared
-/// table if necessary. Sole C caller is AtPrepare_Locks (2PC, phase 2).
 pub(crate) fn FastPathGetRelationLockEntry(
     tag: &types_storage::lock::LOCALLOCKTAG,
 ) -> PgResult<*mut types_storage::lock::PROCLOCK> {
@@ -546,15 +505,11 @@ fn max_prepared_xacts() -> i32 {
     hdr.allProcs.len() as i32 - hdr.allProcCount as i32
 }
 
-// XactLockForVirtualXact (lock.c:4661): wait (or check) for the given XID —
-// or, with an invalid xid, every prepared XID that was known as `vxid` before
-// its PREPARE TRANSACTION.
 fn XactLockForVirtualXact(
     vxid: VirtualTransactionId,
     xid: TransactionId,
     wait: bool,
 ) -> PgResult<bool> {
-    // No point waiting for 2PCs if you have no 2PCs.
     if max_prepared_xacts() == 0 {
         return Ok(true);
     }
@@ -562,13 +517,11 @@ fn XactLockForVirtualXact(
     let mut xid = xid;
     let mut more = false;
     loop {
-        // Clear state from previous iterations.
         if more {
             xid = InvalidTransactionId;
             more = false;
         }
 
-        // If we have no xid, try to find one.
         if xid == InvalidTransactionId {
             if twophase_seams::two_phase_get_xid_by_virtual_xid::is_installed() {
                 let (found, have_more) = twophase_seams::two_phase_get_xid_by_virtual_xid::call(
@@ -584,7 +537,6 @@ fn XactLockForVirtualXact(
             return Ok(true);
         }
 
-        // Check or wait for XID completion.
         let tag = LOCKTAG::transaction(xid);
         if crate::acquire::LockAcquire(&tag, ShareLock, false, !wait)?
             == ::types_storage::lock::LOCKACQUIRE_NOT_AVAIL
@@ -602,7 +554,6 @@ fn XactLockForVirtualXact(
 pub fn VirtualXactLock(vxid: VirtualTransactionId, wait: bool) -> PgResult<bool> {
     debug_assert!(vxid.localTransactionId != InvalidLocalTransactionId);
 
-    // VirtualTransactionIdIsRecoveredPreparedXact: procNumber == INVALID.
     if vxid.procNumber == INVALID_PROC_NUMBER {
         return XactLockForVirtualXact(vxid, vxid.localTransactionId, wait);
     }
@@ -610,7 +561,6 @@ pub fn VirtualXactLock(vxid: VirtualTransactionId, wait: bool) -> PgResult<bool>
     let tag = LOCKTAG::virtualtransaction(vxid.procNumber as u32, vxid.localTransactionId);
     let my_procno = crate::my_procno();
 
-    // ProcNumberGetProc inlined (procarray.c): pid==0 slots are unused.
     let hdr = lmgr_proc::ProcGlobal();
     if vxid.procNumber < 0 || vxid.procNumber >= hdr.allProcCount as ProcNumber {
         return XactLockForVirtualXact(vxid, InvalidTransactionId, wait);

@@ -46,7 +46,26 @@ static PQ_COMM_MQ_METHODS: PQcommMethods = PQcommMethods {
     is_send_pending: mq_is_send_pending,
     putmessage: mq_putmessage,
     putmessage_noblock: mq_putmessage_noblock,
+    putbytes: mq_putbytes,
 };
+
+/// Pre-framed messages over the queue: each frame forwarded through `mq_putmessage`.
+fn mq_putbytes(b: &[u8]) -> PgResult<i32> {
+    let mut at = 0usize;
+    while at + 5 <= b.len() {
+        let n = u32::from_be_bytes([b[at + 1], b[at + 2], b[at + 3], b[at + 4]]) as usize;
+        let end = at + 1 + n;
+        if n < 4 || end > b.len() {
+            break;
+        }
+        let r = mq_putmessage(b[at], &b[at + 5..end])?;
+        if r != 0 {
+            return Ok(r);
+        }
+        at = end;
+    }
+    Ok(0)
+}
 
 pub fn pq_redirect_to_shm_mq(mqh: ShmMqHandle) {
     set_pq_comm_methods(&PQ_COMM_MQ_METHODS);
@@ -102,7 +121,7 @@ fn mq_putmessage(msgtype: u8, s: &[u8]) -> PgResult<i32> {
 
     // C's 2-entry iovec becomes one contiguous copy; cold path (errors,
     // notices), never per-row data.
-    let mut buf = Vec::with_capacity(1 + s.len());
+    let mut buf = ::mcx::std_vec_with_capacity("libpq", 1 + s.len())?;
     buf.push(msgtype);
     buf.extend_from_slice(s);
 

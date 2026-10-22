@@ -1,0 +1,68 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2k s1k
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, (SELECT max(l.amt) FROM d77l l WHERE l.acct = a.grp) AS m FROM d77a a WHERE a.id <= (SELECT lim FROM d77c WHERE name = 'r' FOR UPDATE) - 295 ORDER BY a.id FOR UPDATE;
+QUERY PLAN                                           
+-----------------------------------------------------
+LockRows                                             
+  InitPlan 2                                         
+    ->  LockRows                                     
+          ->  Index Scan using d77c_pkey on d77c     
+                Index Cond: (name = 'r'::text)       
+  ->  Index Scan using d77a_pkey on d77a a           
+        Index Cond: (id <= ((InitPlan 2).col1 - 295))
+        SubPlan 1                                    
+          ->  Aggregate                              
+                ->  Seq Scan on d77l l               
+                      Disabled: true                 
+                      Filter: (acct = a.grp)         
+(12 rows)
+
+step s2k: COMMIT;
+step s1k: COMMIT;
+
+starting permutation: s1g s2l s1k s2k
+step s1g: UPDATE d77a SET grp = 5 WHERE id = 3;
+step s2l: SELECT a.id, a.grp, (SELECT max(l.amt) FROM d77l l WHERE l.acct = a.grp) AS m FROM d77a a WHERE a.id <= (SELECT lim FROM d77c WHERE name = 'r' FOR UPDATE) - 295 ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1k: COMMIT;
+step s2l: <... completed>
+id|grp| m
+--+---+--
+ 1|  1|25
+ 2|  2|32
+ 3|  5|53
+ 4|  4|46
+ 5|  5|53
+(5 rows)
+
+step s2k: COMMIT;
+
+starting permutation: s1m s2l s1k s2k
+step s1m: UPDATE d77a SET id = 33 WHERE id = 4;
+ERROR:  duplicate key value violates unique constraint "d77a_pkey"
+step s2l: SELECT a.id, a.grp, (SELECT max(l.amt) FROM d77l l WHERE l.acct = a.grp) AS m FROM d77a a WHERE a.id <= (SELECT lim FROM d77c WHERE name = 'r' FOR UPDATE) - 295 ORDER BY a.id FOR UPDATE;
+id|grp| m
+--+---+--
+ 1|  1|25
+ 2|  2|32
+ 3|  3|39
+ 4|  4|46
+ 5|  5|53
+(5 rows)
+
+step s1k: COMMIT;
+step s2k: COMMIT;
+
+starting permutation: s1c s2l s1k s2k
+step s1c: UPDATE d77c SET lim = 298 WHERE name = 'r';
+step s2l: SELECT a.id, a.grp, (SELECT max(l.amt) FROM d77l l WHERE l.acct = a.grp) AS m FROM d77a a WHERE a.id <= (SELECT lim FROM d77c WHERE name = 'r' FOR UPDATE) - 295 ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1k: COMMIT;
+step s2l: <... completed>
+id|grp| m
+--+---+--
+ 1|  1|25
+ 2|  2|32
+ 3|  3|39
+(3 rows)
+
+step s2k: COMMIT;

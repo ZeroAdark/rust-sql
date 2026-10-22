@@ -99,6 +99,11 @@ impl<'mcx> HeapTuple<'mcx> {
     }
 
     #[inline]
+    pub fn mcx(&self) -> Mcx<'mcx> {
+        self.mcx
+    }
+
+    #[inline]
     pub fn image_mut(&mut self) -> &mut [u8] {
         // SAFETY: the image is owned, live, unique, and t_len bytes long.
         unsafe {
@@ -122,6 +127,26 @@ impl<'mcx> core::ops::DerefMut for HeapTuple<'mcx> {
     #[inline]
     fn deref_mut(&mut self) -> &mut HeapTupleData<'mcx> {
         &mut self.htup
+    }
+}
+
+/// C `heap_freetuple` for an image the caller detached from its `HeapTuple`
+/// owner (`mem::forget` after `heap_copytuple` / `heap_form_tuple`) to hold as
+/// a bare `HeapTupleData` — the ANALYZE reservoir shape, where a replaced
+/// sample row is freed instead of riding the context to teardown.
+///
+/// # Safety
+/// `tuple`'s image must be one such forgotten owner's image in `mcx`
+/// (`alloc_size == t_len`, which every `from_image` construction guarantees),
+/// and no other handle to it may be used afterwards.
+pub unsafe fn heap_freetuple<'mcx>(mcx: Mcx<'mcx>, tuple: HeapTupleData<'mcx>) {
+    // SAFETY: per the contract, the image was allocated by alloc_image with
+    // exactly this layout and is not aliased.
+    unsafe {
+        mcx.deallocate(
+            NonNull::new_unchecked(tuple.header_ptr().cast_mut()),
+            image_layout(tuple.t_len as usize),
+        )
     }
 }
 
@@ -171,6 +196,11 @@ impl<'mcx> MinimalTuple<'mcx> {
     #[inline]
     pub fn t_len(&self) -> u32 {
         self.alloc_size - self.extra
+    }
+
+    #[inline]
+    pub fn mcx(&self) -> Mcx<'mcx> {
+        self.mcx
     }
 
     #[inline]

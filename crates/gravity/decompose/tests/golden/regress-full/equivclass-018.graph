@@ -1,0 +1,11 @@
+-- regress-full-equivclass-018
+-- explain (costs off) -- this should not require a sort select * from overview where sqli = 'foo' order by sqli;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=4 end=sink
+  nodes n0@0
+  source range rel=39145 rti=2 am=heap
+    lanes Attr(1):byref8:fx64:win/page Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op93(v2.1, c19:#64)
+  project (1=relabel13718(v2.1), 2=v2.2)
+  outs 1=fx64:win/page 2=w8:val
+mapped: SeqScan

@@ -1,0 +1,3 @@
+path	crates/gravity/exec/src/ops/setop/proto.rs
+method	std::boxed::Box::new	3
+type	std::boxed::Box	3

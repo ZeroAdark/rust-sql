@@ -122,10 +122,7 @@ pub fn InitializeWaitEventSupport() -> PgResult<()> {
     #[cfg(not(target_family = "wasm"))]
     {
         if let Err(errno) = waiter::ensure_wake_pipe() {
-            return Err(Box::new(PgError::new(
-                FATAL,
-                format!("waiter wake pipe creation failed: errno {errno}"),
-            )));
+            return Err(wake_pipe_failure(errno));
         }
         fd::ReserveExternalFD()?;
         fd::ReserveExternalFD()?;
@@ -137,6 +134,18 @@ pub fn InitializeWaitEventSupport() -> PgResult<()> {
         POSTMASTER_WAKER.store(waiter::current_handle().as_u64(), Ordering::Release);
     }
     Ok(())
+}
+
+// C's InitializeWaitEventSupport failure text for the platform's wakeup
+// primitive (signalfd on Linux, the self-pipe elsewhere).
+#[cfg(not(target_family = "wasm"))]
+fn wake_pipe_failure(errno: i32) -> Box<PgError> {
+    let msg = if cfg!(target_os = "linux") {
+        "signalfd() failed".to_string()
+    } else {
+        format!("pipe() failed: {}", elog::errno::strerror(errno))
+    };
+    Box::new(PgError::new(FATAL, msg))
 }
 
 /// Pooled-thread reuse boundary (wretain warm claim): reissue this thread's
@@ -173,7 +182,7 @@ pub fn CreateWaitEventSet(nevents: i32) -> PgResult<WaitEventSetHandle> {
     let data = WaitEventSetData {
         nevents: 0,
         nevents_space: nevents,
-        events: Vec::with_capacity(nevents.max(0) as usize),
+        events: ::mcx::std_vec_with_capacity("storage", nevents.max(0) as usize)?,
         latch: None,
         latch_pos: 0,
         backend,
@@ -451,7 +460,7 @@ fn wait_loop(
             }
         }
 
-        // regression: while fd-parked the ONLY route for a latch wake is a
+        // GL-RECWAKE-1: while fd-parked the ONLY route for a latch wake is a
         // waiter unpark writing the wake pipe — a lost one leaves the kernel
         // block deaf to an already-set latch for the caller's whole timeout
         // (forever at -1). Bound each kernel lap by the waiter recheck
@@ -471,6 +480,10 @@ fn wait_loop(
 
         #[cfg(test)]
         tests::note_kernel_block();
+        // D4781 (`fold_on_park`): the thread may sleep here (a backend's wait for its client, the postmaster's loop)
+        if block_timeout != 0 {
+            memledger::park_fold();
+        }
         let rc = backend::wait_block(
             set,
             latch,

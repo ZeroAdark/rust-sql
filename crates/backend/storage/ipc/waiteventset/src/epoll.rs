@@ -24,7 +24,7 @@ impl BackendSet {
         }
         Ok(BackendSet {
             epoll_fd: epfd,
-            ret_events: Vec::with_capacity(nevents.max(0) as usize),
+            ret_events: ::mcx::std_vec_with_capacity("storage", nevents.max(0) as usize)?,
         })
     }
 

@@ -14,6 +14,7 @@ use crate::{
     BackendTypeMask, FastShutdown, ImmediateShutdown, PMState, PgResult, PmChild, SmartShutdown,
     StartupStatusEnum, BTYPE_MASK_NONE, LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STOPPING,
 };
+use elog::PCT_M;
 
 pub fn UpdatePMState(new_state: PMState) {
     let old = with_pm(|pm| pm.pm_state);
@@ -23,9 +24,10 @@ pub fn UpdatePMState(new_state: PMState) {
         3254,
         "UpdatePMState",
     );
+    instaux::note_pm_state(new_state as u8, with_pm(|pm| pm.fatal_error));
     with_pm(|pm| {
         pm.pm_state = new_state;
-        // regression: the shutdown-stall watchdog's progress stamp. Any
+        // GL-GANGWEDGE-1: the shutdown-stall watchdog's progress stamp. Any
         // state change is progress, so re-stamping here (rather than on entry
         // to one named state) is what makes the watchdog measure "stuck"
         // instead of "slow".
@@ -67,6 +69,17 @@ pub fn SignalChildren(signal: i32, target_mask: BackendTypeMask) -> bool {
 
 pub fn TerminateChildren(signal: i32) {
     SignalChildren(signal, btmask_all_except(&[BackendType::Logger]));
+    // The runtime pool's executors are no pmchildren but take LWLocks: the
+    // crash class reaches them too (D2938).
+    match signal {
+        procsignal::signums::SIGQUIT | procsignal::signums::SIGABRT => {
+            launch_backend::rtpool::signal_executors(procsignal::signums::SIGQUIT)
+        }
+        procsignal::signums::SIGKILL => {
+            launch_backend::rtpool::signal_executors(procsignal::signums::SIGKILL)
+        }
+        _ => {}
+    }
     if with_pm(|pm| pm.startup.is_some())
         && (signal == procsignal::signums::SIGQUIT || signal == procsignal::signums::SIGKILL || signal == procsignal::signums::SIGABRT)
     {
@@ -78,7 +91,8 @@ pub(crate) fn HandleFatalError(
     reason: pmsignal::QuitSignalReason,
     consider_sigabrt: bool,
 ) -> PgResult<()> {
-    debug_assert!(with_pm(|pm| !pm.fatal_error));
+    // C asserts only the immediate-shutdown case: PostmasterStateMachine's
+    // PM_STOP_BACKENDS arm calls this with fatal_error already set (D3049).
     debug_assert!(with_pm(|pm| pm.shutdown != ImmediateShutdown));
 
     launch_backend::wpool::flush_for_crash();
@@ -93,6 +107,7 @@ pub(crate) fn HandleFatalError(
     TerminateChildren(sigtosend);
 
     with_pm(|pm| pm.fatal_error = true);
+    instaux::note_pm_state(with_pm(|pm| pm.pm_state) as u8, true);
 
     match with_pm(|pm| pm.pm_state) {
         PMState::PM_INIT => debug_assert!(false),
@@ -183,10 +198,11 @@ pub fn process_pm_shutdown_request() -> PgResult<()> {
                 return Ok(());
             }
             with_pm(|pm| pm.shutdown = ImmediateShutdown);
-            report(LOG, "received immediate shutdown request".into(), 2193, "process_pm_shutdown_request");
 
-            miscinit::AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STOPPING)?;
-
+            // D4816: act, then log (handle_child_crash's note). The SIGQUIT broadcast goes first; this LOG line
+            // and the lock file's status (a write and an fsync of postmaster.pid) after it, as both can wait
+            // seconds on the disk under IO pressure (D4812). The stall watchdog's escalation runs this branch.
+            // Do not restore C's order.
             pmsignal::SetQuitSignalReason(pmsignal::QuitSignalReason::PMQUIT_FOR_STOP);
             // Immediate shutdown skips PM_STOP_BACKENDS: fence the
             // registry-invisible standing gang here (see the
@@ -198,6 +214,9 @@ pub fn process_pm_shutdown_request() -> PgResult<()> {
             UpdatePMState(PMState::PM_WAIT_BACKENDS);
 
             with_pm(|pm| pm.abort_start_time = now_secs());
+
+            report(LOG, "received immediate shutdown request".into(), 2193, "process_pm_shutdown_request");
+            miscinit::AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STOPPING)?;
 
             PostmasterStateMachine()?;
         }
@@ -233,6 +252,7 @@ pub fn PostmasterStateMachine() -> PgResult<()> {
             BackendType::WalSummarizer,
             BackendType::Startup,
             BackendType::WalReceiver,
+            BackendType::InstanceAux,
         ] {
             target_mask = btmask_add(target_mask, t);
         }
@@ -257,8 +277,20 @@ pub fn PostmasterStateMachine() -> PgResult<()> {
             if postmaster_seams::rtgang_retire::is_installed() {
                 postmaster_seams::rtgang_retire::call();
             }
-            SignalChildren(procsignal::signums::SIGTERM, target_mask);
-            UpdatePMState(PMState::PM_WAIT_BACKENDS);
+            // upstream 12f866cd5f (D3049): a shutdown during an early crash
+            // restart (fatal_error still set: PM_STARTUP before
+            // PMSIGNAL_RECOVERY_STARTED) puts the relaunched checkpointer
+            // and io workers in target_mask, and they ignore SIGTERM, so
+            // PM_WAIT_BACKENDS waited on them forever (smart and fast alike).
+            // SIGQUIT them through HandleFatalError, which also arms
+            // abort_start_time (the SIGKILL floor) and marks the startup
+            // process signaled so its exit is not read as a startup failure.
+            if with_pm(|pm| pm.fatal_error) {
+                HandleFatalError(pmsignal::QuitSignalReason::PMQUIT_FOR_STOP, false)?;
+            } else {
+                SignalChildren(procsignal::signums::SIGTERM, target_mask);
+                UpdatePMState(PMState::PM_WAIT_BACKENDS);
+            }
         }
 
         if pmchild_seams::count_children::call(target_mask) == 0
@@ -347,6 +379,9 @@ pub fn PostmasterStateMachine() -> PgResult<()> {
             3205,
             "PostmasterStateMachine",
         );
+        if crate::supervisor::supervised() {
+            crate::supervisor::exit_for_restart();
+        }
 
         if guc_tables::vars::remove_temp_files_after_crash.read() {
             fd::RemovePgTempFiles()?;
@@ -433,7 +468,7 @@ pub(crate) fn log_fork_failure(child_type: BackendType, save_errno: i32) {
     let _ = elog::ereport(LOG)
         .with_saved_errno(save_errno)
         .errmsg(format!(
-            "could not fork \"{}\" process: %m",
+            "could not fork \"{}\" process: {PCT_M}",
             launch_backend::postmaster_child_name(child_type)
         ))
         .finish(loc(3968, "StartChildProcess"));
@@ -444,7 +479,7 @@ pub(crate) fn log_fork_failure(child_type: BackendType, save_errno: i32) {
 pub(crate) fn log_bgworker_fork_failure(save_errno: i32) {
     let _ = elog::ereport(LOG)
         .with_saved_errno(save_errno)
-        .errmsg("could not fork background worker process: %m")
+        .errmsg(format!("could not fork background worker process: {PCT_M}"))
         .finish(loc(4162, "StartBackgroundWorker"));
 }
 

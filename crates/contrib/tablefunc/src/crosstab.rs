@@ -27,6 +27,13 @@ fn err(msg: &str, detail: &str, sqlstate: types_error::SqlState) -> Box<PgError>
     Box::new(e)
 }
 
+fn opt_bytes_to_vec(s: Option<&[u8]>) -> PgResult<Option<Vec<u8>>> {
+    match s {
+        Some(b) => Ok(Some(::mcx::std_vec_from_slice("tablefunc", b)?)),
+        None => Ok(None),
+    }
+}
+
 fn arg_sql(fcinfo: &Fcinfo, i: usize) -> PgResult<String> {
     // SAFETY: catalog args are non-null text varlenas (STRICT fns). Copied to
     // owned so the immutable arg borrow doesn't block the &mut fcinfo below.
@@ -181,7 +188,7 @@ pub(crate) fn fc_crosstab(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
         while call_cntr < max_calls {
             let mut skip_tuple = false;
             // values[0] = rowid, values[1..] = one per category (None = NULL).
-            let mut values: Vec<Option<Vec<u8>>> = vec![None; 1 + num_categories];
+            let mut values: Vec<Option<Vec<u8>>> = ::mcx::std_vec_from_elem("tablefunc", None, 1 + num_categories)?;
 
             let mut i = 0;
             while i < num_categories {
@@ -192,7 +199,7 @@ pub(crate) fn fc_crosstab(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
                 let rowid = spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, 1)?;
 
                 if i == 0 {
-                    values[0] = rowid.map(|s| s.to_vec());
+                    values[0] = opt_bytes_to_vec(rowid)?;
                     if !firstpass && xstreq(lastrowid.as_deref(), rowid) {
                         skip_tuple = true;
                         break;
@@ -200,8 +207,8 @@ pub(crate) fn fc_crosstab(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
                 }
 
                 if xstreq(values[0].as_deref(), rowid) {
-                    values[1 + i] = spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, 3)?
-                        .map(|s| s.to_vec());
+                    values[1 + i] =
+                        opt_bytes_to_vec(spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, 3)?)?;
                     if i < num_categories - 1 {
                         call_cntr += 1;
                     }
@@ -370,14 +377,14 @@ fn get_crosstab_tuplestore(
                 ));
             }
 
-            let mut values: Vec<Option<Vec<u8>>> = vec![None; result_ncols];
+            let mut values: Vec<Option<Vec<u8>>> = ::mcx::std_vec_from_elem("tablefunc", None, result_ncols)?;
             let mut lastrowid: Option<Vec<u8>> = None;
             let mut firstpass = true;
 
             for i in 0..proc as usize {
                 let spi_tuple = &t.vals[i];
-                let rowid = spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, 1)?
-                    .map(|s| s.to_vec());
+                let rowid =
+                    opt_bytes_to_vec(spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, 1)?)?;
 
                 if firstpass || !xstreq(lastrowid.as_deref(), rowid.as_deref()) {
                     if !firstpass {
@@ -388,8 +395,9 @@ fn get_crosstab_tuplestore(
                     }
                     values[0] = rowid.clone();
                     for j in 1..ncols - 2 {
-                        values[j] = spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, (j + 1) as i32)?
-                            .map(|s| s.to_vec());
+                        values[j] = opt_bytes_to_vec(
+                            spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, (j + 1) as i32)?,
+                        )?;
                     }
                     firstpass = false;
                 }
@@ -397,9 +405,9 @@ fn get_crosstab_tuplestore(
                 let catname = spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, (ncols - 1) as i32)?;
                 if let Some(catname) = catname {
                     if let Some(&attidx) = crosstab_hash.get(&cat_key(catname)) {
-                        values[attidx + ncols - 2] =
-                            spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, ncols as i32)?
-                                .map(|s| s.to_vec());
+                        values[attidx + ncols - 2] = opt_bytes_to_vec(
+                            spi::SPI_getvalue(mcx, spi_tuple, &t.tupdesc, ncols as i32)?,
+                        )?;
                     }
                 }
 

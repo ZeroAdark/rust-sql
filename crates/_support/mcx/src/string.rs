@@ -33,6 +33,16 @@ impl<'mcx> PgString<'mcx> {
         self.try_push_str(c.encode_utf8(&mut [0u8; 4]))
     }
 
+    pub fn push_str(&mut self, s: &str) {
+        if let Err(e) = self.try_push_str(s) {
+            crate::raise(e)
+        }
+    }
+
+    pub fn push(&mut self, c: char) {
+        self.push_str(c.encode_utf8(&mut [0u8; 4]))
+    }
+
     pub fn as_str(&self) -> &str {
         // SAFETY: `bytes` invariant — only ever whole `&str` contents.
         unsafe { core::str::from_utf8_unchecked(&self.bytes) }

@@ -82,7 +82,7 @@ macro_rules! split_scan {
             keyData,
             ignore_killed_tuples,
             xs_heaptid,
-            xs_pgstat_index_scans,
+            xs_pgstat,
             xs_nsearches,
             opaque,
             ..
@@ -97,7 +97,7 @@ macro_rules! split_scan {
             ignore_killed_tuples: *ignore_killed_tuples,
             keys: keyData.as_slice(),
             xs_heaptid,
-            xs_pgstat_index_scans,
+            xs_pgstat,
             xs_nsearches,
         }
     }};
@@ -571,7 +571,7 @@ pub(crate) fn hashbucketcleanup(
             if relation_needs_wal(rel) {
                 let is_primary = buf == bucket_buf;
                 let xlrec = wal::xl_hash_delete(clear_dead_marking, is_primary);
-                let mut delbytes: Vec<u8> = Vec::with_capacity(ndeletable * 2);
+                let mut delbytes: Vec<u8> = ::mcx::std_vec_with_capacity("access", ndeletable * 2)?;
                 for &off in &deletable[..ndeletable] {
                     delbytes.extend_from_slice(&off.to_ne_bytes());
                 }

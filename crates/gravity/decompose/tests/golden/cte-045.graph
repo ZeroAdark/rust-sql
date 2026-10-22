@@ -1,0 +1,30 @@
+-- cte-045
+-- SELECT a, COALESCE(NULLIF(a, 2), (SELECT max(x) FROM u WHERE u.y = t.b)) FROM t WHERE a < 4;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@2
+  source index rel=16405 rti=2 am=heap index=16411 backward
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  filter op96(v2.2, $exec0)
+  project (1=v2.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val
+p1 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=16395 rti=1 am=heap index=16402
+    key att=1 op=97 value=c23:4
+    recheck (op97(v1.1, c23:4))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  subplan 2 nested Expr params=($exec0=v1.2) conditional raise-free
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0
+  source const
+  project (1=$exec1)
+  project (1=v1.1, 2=coalesce(nullif96(v1.1, c23:2), subplan2(v1.2)))
+  outs 1=w8:val 2=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec1 raise-free
+rerun node=0 subplan=2 pipelines=p0 slots=
+param $exec0 owner=subplan2 type=23 rep=w8:val
+mapped: Result IndexScan Limit SubPlan

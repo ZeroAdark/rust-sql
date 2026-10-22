@@ -1,7 +1,7 @@
 use std::os::fd::RawFd;
 use std::path::Path;
 
-use ::elog::ereport;
+use ::elog::{ereport, PCT_M};
 use ::types_core::SubTransactionId;
 use ::types_error::{ErrorLevel, PgResult, DEBUG1, ERROR, LOG, WARNING};
 use ::types_storage::{
@@ -152,6 +152,13 @@ pub fn pg_lstat(path: &str, out: &mut vfs::FileInfo) -> i32 {
     vfs::lstat(&vfd::cpath(path), out)
 }
 
+/// lstat(2) over a byte path (a dirent name goes back to the kernel as the
+/// bytes it came from).
+#[inline]
+pub fn pg_lstat_path(path: &vfs::PgPath, out: &mut vfs::FileInfo) -> i32 {
+    vfs::lstat(&path.to_c_string(), out)
+}
+
 /// fstat(2) shape on a caller-owned raw descriptor.
 #[inline]
 pub fn pg_fstat(fd: RawFd, out: &mut vfs::FileInfo) -> i32 {
@@ -162,6 +169,12 @@ pub fn pg_fstat(fd: RawFd, out: &mut vfs::FileInfo) -> i32 {
 #[inline]
 pub fn pg_readlink(path: &str, buf: &mut [u8]) -> isize {
     vfs::read_link(&vfd::cpath(path), buf)
+}
+
+/// readlink(2) over a byte path.
+#[inline]
+pub fn pg_readlink_path(path: &vfs::PgPath, buf: &mut [u8]) -> isize {
+    vfs::read_link(&path.to_c_string(), buf)
 }
 
 /// rename(2) shape: 0 or -1/errno. NOT durable_rename — no fsyncs.
@@ -187,7 +200,14 @@ pub fn read_whole_file(path: &str) -> Result<Vec<u8>, i32> {
         vfs::close(fd);
         return Err(e);
     }
-    let mut buf = vec![0u8; size as usize];
+    // palloc failure in C is an ERROR; on this errno-shaped path it is
+    // ENOMEM (errcode_for_file_access maps it to ERRCODE_OUT_OF_MEMORY).
+    let mut buf: Vec<u8> = Vec::new();
+    if buf.try_reserve_exact(size as usize).is_err() {
+        vfs::close(fd);
+        return Err(libc::ENOMEM);
+    }
+    buf.resize(size as usize, 0);
     let mut off: usize = 0;
     while off < buf.len() {
         let n = vfs::pread(fd, &mut buf[off..], off as libc::off_t);
@@ -257,7 +277,7 @@ pub fn pg_file_exists(name: &str) -> PgResult<bool> {
         ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not access file \"{name}\": %m"))
+            .errmsg(format!("could not access file \"{name}\": {PCT_M}"))
             .finish(loc("pg_file_exists"))?;
     }
     Ok(false)
@@ -295,7 +315,7 @@ pub fn pg_flush_data(fd: RawFd, offset: i64, nbytes: i64) -> PgResult<()> {
             ereport(elevel)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg("could not flush dirty data: %m")
+                .errmsg(format!("could not flush dirty data: {PCT_M}"))
                 .finish(loc("pg_flush_data"))?;
         }
         return Ok(());
@@ -333,7 +353,7 @@ pub fn pg_flush_data(fd: RawFd, offset: i64, mut nbytes: i64) -> PgResult<()> {
             ereport(WARNING)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg("could not determine dirty data size: %m")
+                .errmsg(format!("could not determine dirty data size: {PCT_M}"))
                 .finish(loc("pg_flush_data"))?;
             return Ok(());
         }
@@ -374,7 +394,7 @@ pub fn pg_flush_data(fd: RawFd, offset: i64, mut nbytes: i64) -> PgResult<()> {
             ereport(data_sync_elevel(WARNING))
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg("could not flush dirty data: %m")
+                .errmsg(format!("could not flush dirty data: {PCT_M}"))
                 .finish(loc("pg_flush_data"))?;
         }
         // SAFETY: unmapping the region mapped above.
@@ -383,7 +403,7 @@ pub fn pg_flush_data(fd: RawFd, offset: i64, mut nbytes: i64) -> PgResult<()> {
             ereport(FATAL)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg("could not munmap() while flushing data: %m")
+                .errmsg(format!("could not munmap() while flushing data: {PCT_M}"))
                 .finish(loc("pg_flush_data"))?;
         }
     }
@@ -415,6 +435,10 @@ pub fn fsync_fname(fname: &str, isdir: bool) -> PgResult<()> {
     fsync_fname_ext(fname, isdir, false, data_sync_elevel(ERROR)).map(|_| ())
 }
 
+pub(crate) fn fsync_fname_path(fname: &vfs::PgPath, isdir: bool) -> PgResult<()> {
+    fsync_fname_ext_path(fname, isdir, false, data_sync_elevel(ERROR)).map(|_| ())
+}
+
 pub fn data_sync_elevel(elevel: ErrorLevel) -> ErrorLevel {
     vfd::data_sync_elevel(elevel)
 }
@@ -432,7 +456,7 @@ pub fn durable_rename(oldfile: &str, newfile: &str, elevel: ErrorLevel) -> PgRes
             ereport(elevel)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{newfile}\": %m"))
+                .errmsg(format!("could not open file \"{newfile}\": {PCT_M}"))
                 .finish(loc("durable_rename"))?;
             return Ok(-1);
         }
@@ -443,7 +467,7 @@ pub fn durable_rename(oldfile: &str, newfile: &str, elevel: ErrorLevel) -> PgRes
             ereport(elevel)
                 .with_saved_errno(save_errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not fsync file \"{newfile}\": %m"))
+                .errmsg(format!("could not fsync file \"{newfile}\": {PCT_M}"))
                 .finish(loc("durable_rename"))?;
             return Ok(-1);
         }
@@ -452,7 +476,7 @@ pub fn durable_rename(oldfile: &str, newfile: &str, elevel: ErrorLevel) -> PgRes
             ereport(elevel)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not close file \"{newfile}\": %m"))
+                .errmsg(format!("could not close file \"{newfile}\": {PCT_M}"))
                 .finish(loc("durable_rename"))?;
             return Ok(-1);
         }
@@ -465,7 +489,7 @@ pub fn durable_rename(oldfile: &str, newfile: &str, elevel: ErrorLevel) -> PgRes
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not rename file \"{oldfile}\" to \"{newfile}\": %m"
+                "could not rename file \"{oldfile}\" to \"{newfile}\": {PCT_M}"
             ))
             .finish(loc("durable_rename"))?;
         return Ok(-1);
@@ -486,7 +510,7 @@ pub fn durable_unlink(fname: &str, elevel: ErrorLevel) -> PgResult<i32> {
         ereport(elevel)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not remove file \"{fname}\": %m"))
+            .errmsg(format!("could not remove file \"{fname}\": {PCT_M}"))
             .finish(loc("durable_unlink"))?;
         return Ok(-1);
     }
@@ -504,9 +528,18 @@ pub fn fsync_fname_ext(
     ignore_perm: bool,
     elevel: ErrorLevel,
 ) -> PgResult<i32> {
+    fsync_fname_ext_path(&vfs::PgPath::from(fname), isdir, ignore_perm, elevel)
+}
+
+fn fsync_fname_ext_path(
+    fname: &vfs::PgPath,
+    isdir: bool,
+    ignore_perm: bool,
+    elevel: ErrorLevel,
+) -> PgResult<i32> {
     let flags = if isdir { libc::O_RDONLY } else { libc::O_RDWR };
 
-    let fd = OpenTransientFile(fname, flags)?;
+    let fd = crate::desc::OpenTransientFilePath(fname, flags)?;
 
     if fd < 0 {
         let en = get_errno();
@@ -519,7 +552,7 @@ pub fn fsync_fname_ext(
         ereport(elevel)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{fname}\": %m"))
+            .errmsg(format!("could not open file \"{fname}\": {PCT_M}"))
             .finish(loc("fsync_fname_ext"))?;
         return Ok(-1);
     }
@@ -532,7 +565,7 @@ pub fn fsync_fname_ext(
         ereport(elevel)
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{fname}\": %m"))
+            .errmsg(format!("could not fsync file \"{fname}\": {PCT_M}"))
             .finish(loc("fsync_fname_ext"))?;
         return Ok(-1);
     }
@@ -541,7 +574,7 @@ pub fn fsync_fname_ext(
         ereport(elevel)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{fname}\": %m"))
+            .errmsg(format!("could not close file \"{fname}\": {PCT_M}"))
             .finish(loc("fsync_fname_ext"))?;
         return Ok(-1);
     }
@@ -575,7 +608,7 @@ impl WalkAction {
 
 // common/file_utils.c PGFileType.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PgFileType {
+pub enum PgFileType {
     Error,
     Unknown,
     Reg,
@@ -583,16 +616,37 @@ pub(crate) enum PgFileType {
     Lnk,
 }
 
-// get_dirent_type (common/file_utils.c:547), the `d_type`-less arm: the Vfs
-// dirent carries no d_type, so every entry is classified by stat/lstat —
-// C's PGFILETYPE_UNKNOWN fallback — and a stat failure is reported at
-// `elevel` ("could not stat file") and returned as PGFILETYPE_ERROR.
+// get_dirent_type (common/file_utils.c:547) for walkers that read the
+// dirent through the String view (no d_type): every entry is classified by
+// stat/lstat, C's DT_UNKNOWN fallback.
 pub(crate) fn get_dirent_type(
     path: &str,
     look_through_symlinks: bool,
     elevel: ErrorLevel,
 ) -> PgResult<PgFileType> {
-    let cp = vfd::cpath(path);
+    get_dirent_type_path(&vfs::PgPath::from(path), vfs::VfsDType::Unknown, look_through_symlinks, elevel)
+}
+
+/// get_dirent_type (common/file_utils.c:547): the dirent's `d_type` answers
+/// when it can; DT_UNKNOWN (and a symlink when `look_through_symlinks`) is
+/// classified by stat/lstat, whose failure is reported at `elevel` ("could
+/// not stat file") and returned as PGFILETYPE_ERROR.
+pub fn get_dirent_type_path(
+    path: &vfs::PgPath,
+    d_type: vfs::VfsDType,
+    look_through_symlinks: bool,
+    elevel: ErrorLevel,
+) -> PgResult<PgFileType> {
+    let result = match d_type {
+        vfs::VfsDType::Reg => PgFileType::Reg,
+        vfs::VfsDType::Dir => PgFileType::Dir,
+        vfs::VfsDType::Lnk => PgFileType::Lnk,
+        vfs::VfsDType::Unknown => PgFileType::Unknown,
+    };
+    if !(result == PgFileType::Unknown || (look_through_symlinks && result == PgFileType::Lnk)) {
+        return Ok(result);
+    }
+    let cp = path.to_c_string();
     let mut fst = vfs::FileInfo::zeroed();
     let sret = if look_through_symlinks {
         vfs::stat(&cp, &mut fst)
@@ -603,7 +657,7 @@ pub(crate) fn get_dirent_type(
         ereport(elevel)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not stat file \"{path}\": %m"))
+            .errmsg(format!("could not stat file \"{path}\": {PCT_M}"))
             .finish(loc("get_dirent_type"))?;
         return Ok(PgFileType::Error);
     }
@@ -685,7 +739,7 @@ fn pre_sync_fname(fname: &str, isdir: bool, elevel: ErrorLevel) -> PgResult<()> 
         ereport(elevel)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{fname}\": %m"))
+            .errmsg(format!("could not open file \"{fname}\": {PCT_M}"))
             .finish(loc("pre_sync_fname"))?;
         return Ok(());
     }
@@ -696,7 +750,7 @@ fn pre_sync_fname(fname: &str, isdir: bool, elevel: ErrorLevel) -> PgResult<()> 
         ereport(elevel)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{fname}\": %m"))
+            .errmsg(format!("could not close file \"{fname}\": {PCT_M}"))
             .finish(loc("pre_sync_fname"))?;
     }
     Ok(())
@@ -722,7 +776,7 @@ fn unlink_if_exists_fname(fname: &str, isdir: bool, elevel: ErrorLevel) -> PgRes
                 ereport(elevel)
                     .with_saved_errno(en)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not remove directory \"{fname}\": %m"))
+                    .errmsg(format!("could not remove directory \"{fname}\": {PCT_M}"))
                     .finish(loc("unlink_if_exists_fname"))?;
             }
         }
@@ -750,7 +804,7 @@ fn do_syncfs(path: &str) -> PgResult<()> {
         ereport(LOG)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{path}\": %m"))
+            .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
             .finish(loc("do_syncfs"))?;
         return Ok(());
     }
@@ -759,7 +813,7 @@ fn do_syncfs(path: &str) -> PgResult<()> {
         ereport(LOG)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not synchronize file system for file \"{path}\": %m"))
+            .errmsg(format!("could not synchronize file system for file \"{path}\": {PCT_M}"))
             .finish(loc("do_syncfs"))?;
     }
     CloseTransientFile(fd);
@@ -787,7 +841,7 @@ pub fn SyncDataDirectory() -> PgResult<()> {
             ereport(LOG)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg("could not stat file \"pg_wal\": %m")
+                .errmsg(format!("could not stat file \"pg_wal\": {PCT_M}"))
                 .finish(loc("SyncDataDirectory"))?;
             false
         }
@@ -877,14 +931,14 @@ pub fn RemovePgTempFilesInDir(tmpdirname: &str, missing_ok: bool, unlink_all: bo
                     ereport(LOG)
                         .with_saved_errno(get_errno())
                         .errcode_for_file_access()
-                        .errmsg(format!("could not remove directory \"{rm_path}\": %m"))
+                        .errmsg(format!("could not remove directory \"{rm_path}\": {PCT_M}"))
                         .finish(loc("RemovePgTempFilesInDir"))?;
                 }
             } else if vfs::unlink(&crm) != 0 {
                 ereport(LOG)
                     .with_saved_errno(get_errno())
                     .errcode_for_file_access()
-                    .errmsg(format!("could not remove file \"{rm_path}\": %m"))
+                    .errmsg(format!("could not remove file \"{rm_path}\": {PCT_M}"))
                     .finish(loc("RemovePgTempFilesInDir"))?;
             }
         } else {
@@ -914,6 +968,10 @@ pub(crate) fn RemovePgTempRelationFiles(tsdirname: &str) -> PgResult<()> {
 fn RemovePgTempRelationFilesInDbspace(dbspacedirname: &str) -> PgResult<()> {
     let dbspace_dir = AllocateDir(dbspacedirname)?;
     while let Some(de) = ReadDirExtended(dbspace_dir, dbspacedirname, LOG)? {
+        if matches!(pgrc_format::dirlayout::parse_table_dir_name(&de.d_name), Some((Some(_), _))) {
+            remove_temp_table_dir(&format!("{dbspacedirname}/{}", de.d_name))?;
+            continue;
+        }
         if !looks_like_temp_rel_name(&de.d_name) {
             continue;
         }
@@ -922,11 +980,38 @@ fn RemovePgTempRelationFilesInDbspace(dbspacedirname: &str) -> PgResult<()> {
             ereport(LOG)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove file \"{rm_path}\": %m"))
+                .errmsg(format!("could not remove file \"{rm_path}\": {PCT_M}"))
                 .finish(loc("RemovePgTempRelationFilesInDbspace"))?;
         }
     }
     FreeDir(dbspace_dir)?;
+    Ok(())
+}
+
+/// A pgrcolumnar temp table directory (`pgrc_t<procno>_<n>`, flat): its files, then itself.
+fn remove_temp_table_dir(path: &str) -> PgResult<()> {
+    let dir = AllocateDir(path)?;
+    while let Some(de) = ReadDirExtended(dir, path, LOG)? {
+        if de.d_name == "." || de.d_name == ".." {
+            continue;
+        }
+        let rm_path = format!("{path}/{}", de.d_name);
+        if vfs::unlink(&vfd::cpath(&rm_path)) != 0 {
+            ereport(LOG)
+                .with_saved_errno(get_errno())
+                .errcode_for_file_access()
+                .errmsg(format!("could not remove file \"{rm_path}\": %m"))
+                .finish(loc("RemovePgTempRelationFilesInDbspace"))?;
+        }
+    }
+    FreeDir(dir)?;
+    if vfs::rmdir(&vfd::cpath(path)) != 0 {
+        ereport(LOG)
+            .with_saved_errno(get_errno())
+            .errcode_for_file_access()
+            .errmsg(format!("could not remove directory \"{path}\": %m"))
+            .finish(loc("RemovePgTempRelationFilesInDbspace"))?;
+    }
     Ok(())
 }
 
@@ -1025,11 +1110,32 @@ pub fn AtEOSubXact_Files(
 }
 
 pub fn AtEOXact_Files(is_commit: bool) -> PgResult<()> {
-    CleanupTempFiles(is_commit, false)?;
-    with_fd(|fd| {
-        fd.temp_table_spaces = None;
-        fd.next_temp_table_space = 0;
+    // D4485: CleanupTempFiles (fd.c:3266) walks the VFD cache only `if (isProcExit || have_xact_temporary_files)`
+    // (fd.c:3274) and warns about and frees allocated descs only while numAllocatedDescs > 0 (fd.c:3307-3313): with
+    // neither, the call does nothing, so the common commit takes one borrow for the test and fd.c:3229's
+    // tempTableSpaces reset together. A debug build still runs it there and asserts it did nothing.
+    let idle = with_fd(|fd| {
+        let idle = !fd.have_xact_temporary_files && fd.allocated_descs.iter().all(Option::is_none);
+        if idle {
+            fd.temp_table_spaces = None;
+            fd.next_temp_table_space = 0;
+        }
+        idle
     });
+    if idle && !cfg!(debug_assertions) {
+        return Ok(());
+    }
+    let did = CleanupTempFiles(is_commit, false)?;
+    debug_assert!(
+        !(idle && did),
+        "D4485: AtEOXact_Files skipped a CleanupTempFiles that had work"
+    );
+    if !idle {
+        with_fd(|fd| {
+            fd.temp_table_spaces = None;
+            fd.next_temp_table_space = 0;
+        });
+    }
     Ok(())
 }
 
@@ -1039,7 +1145,8 @@ pub fn BeforeShmemExit_Files() {
     with_fd(|fd| fd.temporary_files_allowed = false);
 }
 
-pub(crate) fn CleanupTempFiles(is_commit: bool, is_proc_exit: bool) -> PgResult<()> {
+/// Whether it did anything (closed a file, warned, freed a desc): AtEOXact_Files's debug cross-check (D4485).
+pub(crate) fn CleanupTempFiles(is_commit: bool, is_proc_exit: bool) -> PgResult<bool> {
     struct ToClose {
         file: File,
         warn: bool,
@@ -1073,6 +1180,7 @@ pub(crate) fn CleanupTempFiles(is_commit: bool, is_proc_exit: bool) -> PgResult<
         result
     });
 
+    let mut did = !to_close.is_empty();
     for ToClose { file, warn } in to_close {
         if warn {
             let name = crate::io::FilePathName(file);
@@ -1086,6 +1194,7 @@ pub(crate) fn CleanupTempFiles(is_commit: bool, is_proc_exit: bool) -> PgResult<
     }
 
     let num_allocated = with_fd(|fd| crate::vfd::occupied_descs(fd));
+    did |= num_allocated > 0;
     if is_commit && num_allocated > 0 {
         ereport(WARNING)
             .errmsg_internal(format!(
@@ -1096,6 +1205,7 @@ pub(crate) fn CleanupTempFiles(is_commit: bool, is_proc_exit: bool) -> PgResult<
 
     while let Some(i) = with_fd(|fd| fd.allocated_descs.iter().position(Option::is_some)) {
         FreeDesc(i as i32);
+        did = true;
     }
-    Ok(())
+    Ok(did)
 }

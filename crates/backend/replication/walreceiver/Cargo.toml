@@ -47,6 +47,9 @@ walreceiverfuncs_seams = { path = "../walreceiverfuncs_seams" }
 walsender_seams = { path = "../walsender_seams" }
 xlogarchive = { path = "../../access/transam/xlogarchive" }
 xlogrecovery_seams = { path = "../../access/transam/xlogrecovery_seams" }
+# pgrcolumnar parts by reference (WR L3): streamed files land in the spool.
+pgrc_spool = { path = "../../access/pgrcolumnar/pgrc_spool" }
+injection_point = { path = "../../utils/misc/injection_point" }
 
 [dev-dependencies]
 # The scripted-server client tests run the real socket-wait stack.

@@ -1,0 +1,96 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1bump s2upd s1c s2sel
+step s1b: BEGIN;
+step s1bump: UPDATE ibar SET f2 = f2 + 10 WHERE f1 = 1;
+step s2upd: UPDATE ibar SET f2 = f2 + 100 WHERE f1 IN (SELECT f1 FROM ifoo); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT tableoid::regclass::text AS rel, f1, f2 FROM ibar ORDER BY 1, 2, 3;
+rel  |f1| f2
+-----+--+---
+ibar | 1|111
+ibar | 2|102
+ibar | 3|103
+ibar | 4|  4
+ibar2| 1|111
+ibar2| 2|102
+ibar2| 3|103
+ibar2| 4|  4
+(8 rows)
+
+
+starting permutation: s1b s1move s2upd s1c s2sel
+step s1b: BEGIN;
+step s1move: UPDATE ONLY ibar SET f1 = 2 WHERE f1 = 1;
+step s2upd: UPDATE ibar SET f2 = f2 + 100 WHERE f1 IN (SELECT f1 FROM ifoo); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT tableoid::regclass::text AS rel, f1, f2 FROM ibar ORDER BY 1, 2, 3;
+rel  |f1| f2
+-----+--+---
+ibar | 2|  1
+ibar | 2|102
+ibar | 3|103
+ibar | 4|  4
+ibar2| 1|101
+ibar2| 2|102
+ibar2| 3|103
+ibar2| 4|  4
+(8 rows)
+
+
+starting permutation: s1b s1part s2upd s1c s2sel
+step s1b: BEGIN;
+step s1part: UPDATE ONLY ifoo SET f1 = 9 WHERE f1 = 1; UPDATE ibar SET f2 = f2 + 10 WHERE f1 = 1;
+step s2upd: UPDATE ibar SET f2 = f2 + 100 WHERE f1 IN (SELECT f1 FROM ifoo); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT tableoid::regclass::text AS rel, f1, f2 FROM ibar ORDER BY 1, 2, 3;
+rel  |f1| f2
+-----+--+---
+ibar | 1|111
+ibar | 2|102
+ibar | 3|103
+ibar | 4|  4
+ibar2| 1|111
+ibar2| 2|102
+ibar2| 3|103
+ibar2| 4|  4
+(8 rows)
+
+
+starting permutation: s1b s1move s2del s1c s2sel
+step s1b: BEGIN;
+step s1move: UPDATE ONLY ibar SET f1 = 2 WHERE f1 = 1;
+step s2del: DELETE FROM ibar WHERE f1 IN (SELECT f1 FROM ifoo); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2sel: SELECT tableoid::regclass::text AS rel, f1, f2 FROM ibar ORDER BY 1, 2, 3;
+rel  |f1|f2
+-----+--+--
+ibar | 2| 1
+ibar | 4| 4
+ibar2| 4| 4
+(3 rows)
+
+
+starting permutation: s1b s1movep s2updp s1c s2sel
+step s1b: BEGIN;
+step s1movep: UPDATE ibar2 SET f1 = 3 WHERE f1 = 1;
+step s2updp: UPDATE ibar SET f2 = f2 + 1000 WHERE f1 IN (SELECT a FROM ipt); <waiting ...>
+step s1c: COMMIT;
+step s2updp: <... completed>
+step s2sel: SELECT tableoid::regclass::text AS rel, f1, f2 FROM ibar ORDER BY 1, 2, 3;
+rel  |f1|  f2
+-----+--+----
+ibar | 1|1001
+ibar | 2|1002
+ibar | 3|1003
+ibar | 4|   4
+ibar2| 2|1002
+ibar2| 3|   1
+ibar2| 3|1003
+ibar2| 4|   4
+(8 rows)
+

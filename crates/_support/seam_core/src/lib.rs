@@ -150,11 +150,154 @@ macro_rules! seam {
                 SLOT.load(::std::sync::atomic::Ordering::Relaxed) != __stub_ptr()
             }
 
+            pub fn wrap(implementation: Signature) -> Signature {
+                if !$crate::tap_boot_phase_open() {
+                    panic!(concat!("seam wrapped after boot: ", module_path!()));
+                }
+                let prev = SLOT.swap(
+                    implementation as *mut (),
+                    ::std::sync::atomic::Ordering::Relaxed,
+                );
+                if prev == __stub_ptr() {
+                    panic!(concat!("seam wrapped before install: ", module_path!()));
+                }
+                // SAFETY: a non-stub SLOT always holds a valid `Signature`.
+                unsafe { ::std::mem::transmute::<*mut (), Signature>(prev) }
+            }
+
+            // Inlined into the caller: a seam call is the slot load and one indirect call, not a call to this function
+            // first (a separate function per seam, each its own instruction-cache line on the statement path).
+            #[inline]
             pub fn call $(<$($lt),+>)? ($($arg: $arg_ty),*) $(-> $ret)? {
                 let raw = SLOT.load(::std::sync::atomic::Ordering::Relaxed);
                 // SAFETY: set-once invariant (crate top) — always a valid `Signature`.
                 let f: Signature = unsafe { ::std::mem::transmute::<*mut (), Signature>(raw) };
                 f($($arg),*)
+            }
+        }
+    };
+}
+
+// A `seam!` whose callers' lines matter (testflow K11, main 2026-10-12T21:08:00Z; D4214 / D4229). A #[track_caller]
+// implementation reached through a seam's fn pointer reports its own definition line, so every CHECK_FOR_INTERRUPTS through
+// the seam read 'crates/backend/tcop/postgres/src/lib.rs:312' in Gravity's poll-gap probe, whatever code called it.
+// `seam_tracked!` declares a zero-argument seam with `seam!`'s API (set / is_installed / wrap / call) plus `set_tracked`: an
+// implementation that takes the call's own location. `call()` is #[inline(always)] #[track_caller], so the location is a
+// constant at each call site (or its #[track_caller] caller's), and a call costs what `seam!`'s does: one relaxed load and
+// one indirect call. Until `set_tracked`, the tracked slot holds an adapter that calls the `set` implementation (a test's
+// mock), so a seam with only `set` behaves as a `seam!`.
+#[macro_export]
+macro_rules! seam_tracked {
+    (
+        $(#[$attr:meta])*
+        $vis:vis fn $name:ident () $(-> $ret:ty)?
+    ) => {
+        $(#[$attr])*
+        $vis mod $name {
+            #![allow(dead_code, unused_imports)]
+            use super::*;
+
+            pub type Signature = fn() $(-> $ret)?;
+            pub type Tracked = fn(&'static ::core::panic::Location<'static>) $(-> $ret)?;
+
+            #[cold]
+            #[inline(never)]
+            fn __uninstalled_stub() $(-> $ret)? {
+                panic!(concat!("seam not installed: ", module_path!()))
+            }
+
+            #[inline(always)]
+            fn __stub_ptr() -> *mut () {
+                __uninstalled_stub as Signature as *mut ()
+            }
+
+            static SLOT: ::std::sync::atomic::AtomicPtr<()> =
+                ::std::sync::atomic::AtomicPtr::new(__uninstalled_stub as Signature as *mut ());
+
+            // The tracked slot until `set_tracked`: the `set` implementation (or the stub), the location dropped.
+            fn __adapter(_site: &'static ::core::panic::Location<'static>) $(-> $ret)? {
+                let raw = SLOT.load(::std::sync::atomic::Ordering::Relaxed);
+                // SAFETY: set-once invariant (crate top) — SLOT always holds a valid `Signature`.
+                let f: Signature = unsafe { ::std::mem::transmute::<*mut (), Signature>(raw) };
+                f()
+            }
+
+            #[inline(always)]
+            fn __adapter_ptr() -> *mut () {
+                __adapter as Tracked as *mut ()
+            }
+
+            static TRACKED: ::std::sync::atomic::AtomicPtr<()> =
+                ::std::sync::atomic::AtomicPtr::new(__adapter as Tracked as *mut ());
+
+            pub fn set(implementation: Signature) {
+                // compare_exchange from the stub, as `seam!`: a second install fails without clobbering the first
+                if SLOT
+                    .compare_exchange(
+                        __stub_ptr(),
+                        implementation as *mut (),
+                        ::std::sync::atomic::Ordering::Relaxed,
+                        ::std::sync::atomic::Ordering::Relaxed,
+                    )
+                    .is_err()
+                {
+                    panic!(concat!("seam installed twice: ", module_path!()));
+                }
+            }
+
+            /// The implementation `call()` runs from now on, with the call's own location. Set once, after `set`, during
+            /// single-threaded startup (the same window as `set`).
+            pub fn set_tracked(implementation: Tracked) {
+                if TRACKED
+                    .compare_exchange(
+                        __adapter_ptr(),
+                        implementation as *mut (),
+                        ::std::sync::atomic::Ordering::Relaxed,
+                        ::std::sync::atomic::Ordering::Relaxed,
+                    )
+                    .is_err()
+                {
+                    panic!(concat!("tracked seam installed twice: ", module_path!()));
+                }
+            }
+
+            pub fn is_installed() -> bool {
+                SLOT.load(::std::sync::atomic::Ordering::Relaxed) != __stub_ptr()
+            }
+
+            /// `set_tracked` ran: `call()` passes its location on.
+            pub fn is_tracked() -> bool {
+                TRACKED.load(::std::sync::atomic::Ordering::Relaxed) != __adapter_ptr()
+            }
+
+            pub fn wrap(implementation: Signature) -> Signature {
+                if !$crate::tap_boot_phase_open() {
+                    panic!(concat!("seam wrapped after boot: ", module_path!()));
+                }
+                if is_tracked() {
+                    // `call()` runs the tracked implementation: a wrap of the untracked one would never run
+                    panic!(concat!("seam wrapped after set_tracked: ", module_path!()));
+                }
+                let prev = SLOT.swap(
+                    implementation as *mut (),
+                    ::std::sync::atomic::Ordering::Relaxed,
+                );
+                if prev == __stub_ptr() {
+                    panic!(concat!("seam wrapped before install: ", module_path!()));
+                }
+                // SAFETY: a non-stub SLOT always holds a valid `Signature`.
+                unsafe { ::std::mem::transmute::<*mut (), Signature>(prev) }
+            }
+
+            // Inlined into the caller, #[track_caller]: the location is the call site's constant (one more register
+            // argument, no branch). The probe's poll site reads it (K11).
+            #[inline(always)]
+            #[track_caller]
+            pub fn call() $(-> $ret)? {
+                let raw = TRACKED.load(::std::sync::atomic::Ordering::Relaxed);
+                // SAFETY: TRACKED always holds a valid `Tracked` (the adapter, or set_tracked's, set once).
+                let f: Tracked = unsafe { ::std::mem::transmute::<*mut (), Tracked>(raw) };
+                f(::core::panic::Location::caller())
             }
         }
     };
@@ -247,6 +390,53 @@ mod tests {
         first::set(|xs| &xs[0]);
         let data = [7, 8, 9];
         assert_eq!(*first::call(&data), 7);
+    }
+
+    crate::seam_tracked!(pub fn tracked_mock() -> u32);
+    crate::seam_tracked!(pub fn tracked_site() -> u32);
+    crate::seam_tracked!(pub fn tracked_never() -> u32);
+    crate::seam_tracked!(pub fn tracked_twice() -> u32);
+
+    // K11: a seam with only `set` (a test's mock) runs it through the adapter; set_tracked's implementation then gets each
+    // call's own line, and a #[track_caller] caller passes its caller's
+    #[test]
+    fn tracked_seam_set_alone_runs_the_untracked_implementation() {
+        assert!(!tracked_mock::is_installed() && !tracked_mock::is_tracked());
+        tracked_mock::set(|| 7);
+        assert!(tracked_mock::is_installed() && !tracked_mock::is_tracked());
+        assert_eq!(tracked_mock::call(), 7);
+    }
+
+    #[track_caller]
+    fn through() -> u32 {
+        tracked_site::call()
+    }
+
+    #[test]
+    fn tracked_seam_passes_the_call_sites_line() {
+        tracked_site::set(|| 0);
+        tracked_site::set_tracked(|site| site.line());
+        assert!(tracked_site::is_tracked());
+        let here = line!() + 1;
+        let a = tracked_site::call();
+        let there = line!() + 1;
+        let b = through(); // a #[track_caller] caller passes its own caller's line
+        assert_eq!((a, b), (here, there));
+        let (c, at) = (tracked_site::call(), line!());
+        assert_eq!(c, at, "a constant per call site");
+    }
+
+    #[test]
+    #[should_panic(expected = "seam not installed: seam_core::tests::tracked_never")]
+    fn tracked_seam_uninstalled_call_panics_with_path() {
+        tracked_never::call();
+    }
+
+    #[test]
+    #[should_panic(expected = "tracked seam installed twice: seam_core::tests::tracked_twice")]
+    fn tracked_seam_double_set_tracked_panics_with_path() {
+        tracked_twice::set_tracked(|_| 1);
+        tracked_twice::set_tracked(|_| 2);
     }
 
     crate::tap!(pub fn counter(x: i32));

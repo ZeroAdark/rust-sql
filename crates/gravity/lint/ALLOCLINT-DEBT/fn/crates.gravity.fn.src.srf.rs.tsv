@@ -1,0 +1,8 @@
+path	crates/gravity/fn/src/srf.rs
+growth	std::vec::Vec::push	2
+growth	std::vec::Vec::resize	1
+growth	std::vec::Vec::resize_with	1
+growth	std::vec::Vec::shrink_to	2
+method	std::boxed::Box::new	1
+type	std::boxed::Box	1
+type	std::vec::Vec	2

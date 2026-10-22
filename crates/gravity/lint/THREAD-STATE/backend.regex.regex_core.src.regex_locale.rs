@@ -1,0 +1,2 @@
+backend/regex/regex_core/src/regex_locale.rs	REGEX_LOCALE_STATE	pgport	call	scratch	C's pg_regex_strategy / pg_regex_locale: pg_set_regex_collation writes it at every compile and every exec (regcomp / regexec), before any read
+backend/regex/regex_core/src/regex_locale.rs	TRANSIENT_CVEC	pgport	call	scratch	C's v->cv size: reset_transient_cvec at every compile (regcomp newcvec(100, 20)), grown by transient_getcvec within it

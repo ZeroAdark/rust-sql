@@ -1,0 +1,8 @@
+path	crates/gravity/exec/src/ops/setop/generation.rs
+growth	std::collections::HashMap::insert	1
+growth	std::collections::HashMap::try_reserve	1
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	2
+growth	std::vec::Vec::try_reserve	3
+method	std::boxed::Box::new	2
+type	std::boxed::Box	2

@@ -122,7 +122,8 @@ pub fn asc_toupper(buff: &[u8]) -> Vec<u8> {
 }
 
 pub fn asc_initcap(buff: &[u8]) -> Vec<u8> {
-    let mut result = Vec::with_capacity(buff.len());
+    let mut result = Vec::new();
+    let _ = result.try_reserve_exact(buff.len());
     let mut wasalnum = false;
     for &b in buff {
         let c = if wasalnum {

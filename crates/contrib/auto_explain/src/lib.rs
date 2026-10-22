@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use types_error::PgResult;
 use types_fmgr::PGFunction;
 
+mod settings;
 mod hooks;
 
 const LIBRARY: &str = "auto_explain";
@@ -126,6 +127,8 @@ pub fn init_seams() {
         finish: Some(hooks::explain_executor_finish),
         finish_leave: Some(hooks::explain_executor_finish_leave),
         end: Some(hooks::explain_executor_end),
+        // loaded in this backend with a duration threshold set.
+        active: Some(hooks::explain_active),
     });
 }
 
@@ -137,6 +140,10 @@ pub fn init_seams() {
 /// module comment); this backend's activation is its dfmgr file_list entry,
 /// linked by the caller right after this returns.
 fn pg_init() -> PgResult<()> {
+    for &setting in settings::SETTINGS {
+        guc::DefineCustomVariable(setting)?;
+    }
+
     guc::MarkGUCPrefixReserved("auto_explain");
     EVER_LOADED.store(true, Ordering::Relaxed);
     Ok(())

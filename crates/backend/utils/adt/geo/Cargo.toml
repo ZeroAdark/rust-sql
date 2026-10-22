@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+fp_contract = { path = "../../../../_support/fp_contract" }
 datum = { path = "../../../../_support/types/datum" }
 mcx = { path = "../../../../_support/mcx" }
 types_core = { path = "../../../../_support/types/types_core" }

@@ -1,0 +1,10 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/walsink.rs
+growth	std::collections::BTreeMap::insert	1
+growth	std::vec::Vec::push	4
+macro	std::format	1
+method	pgrc_format::try_to_vec	2
+method	std::clone::Clone::clone	3
+method	std::string::ToString::to_string	6
+type	std::collections::BTreeMap	1
+type	std::string::String	1
+type	std::vec::Vec	4

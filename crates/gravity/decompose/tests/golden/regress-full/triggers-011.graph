@@ -1,0 +1,9 @@
+-- regress-full-triggers-011
+-- INSERT INTO main_view VALUES (20, 30);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op654($14, T_SubscriptingRef))
+  outs 1=vl:call1258
+mapped: Result

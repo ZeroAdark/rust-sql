@@ -13,9 +13,7 @@ pub mod relation;
 pub(crate) mod scratch;
 pub mod statistics;
 pub mod typ;
-// Per-planning-cycle catalog memos (NOT glob-re-exported: its names shadow
-// the incumbent per-call accessors deliberately, callers opt in via the
-// module path + a &PlannerRun).
+// Not glob-re-exported: its names shadow the incumbent per-call accessors deliberately.
 pub mod run_memo;
 
 #[cfg(test)]
@@ -39,7 +37,6 @@ pub use types_pathnodes::{
 pub type StrategyNumber = u16;
 pub const InvalidStrategy: StrategyNumber = 0;
 
-// lsyscache.h
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OpIndexInterpretation {
     pub opfamily_id: Oid,
@@ -48,7 +45,6 @@ pub struct OpIndexInterpretation {
     pub oprighttype: Oid,
 }
 
-// lsyscache.h
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IOFuncSelector {
     IOFunc_input,
@@ -63,7 +59,6 @@ pub(crate) fn cache_lookup_error(msg: String) -> Box<types_error::PgError> {
     Box::new(types_error::PgError::error(msg))
 }
 
-/// Install every declaration this unit owns in `lsyscache_seams`.
 pub fn init_seams() {
     lsyscache_seams::get_type_output_info::set(typ::getTypeOutputInfo);
     lsyscache_seams::get_type_binary_output_info::set(typ::getTypeBinaryOutputInfo);

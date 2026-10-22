@@ -1,0 +1,12 @@
+-- regress-full-rowsecurity-116
+-- SELECT refclassid::regclass, deptype FROM pg_shdepend WHERE classid = 'pg_policy'::regclass AND refobjid IN ('regress_rls_eve'::regrole, 'regress_rls_frank'::regrole);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=1214 rti=1 am=heap
+    lanes Attr(2):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Offset:byval2:w2:val
+  filter any607(v1.6, c1028:'\x01\x00\x00\x00\x00\x00\x00\x00\x1a\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\xcco\x00\x00\xcdo\x00\x00')
+  filter op607(v1.2, c26:3256)
+  project (1=relabel2205(v1.5), 2=v1.7)
+  outs 1=w8:val 2=w8:val
+mapped: SeqScan

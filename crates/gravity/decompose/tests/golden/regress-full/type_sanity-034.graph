@@ -1,0 +1,22 @@
+-- regress-full-type_sanity-034
+-- SELECT indexrelid::regclass FROM pg_index WHERE (is_catalog_text_unique_index_oid(indexrelid) <> (indisunique AND indexrelid < 16384 AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = indexrelid AND atttypid = 'text'::regtype)));
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=210 end=breaker(slot=0 Distinct)
+  nodes n1@0
+  source range rel=1249 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v3.3, c26:25)
+  project (1=v3.1)
+  subplan 2 build Any unknown-eq-false ids=($exec1) conditional raise-free test=op607(v1.1, $exec1)
+  outs 1=w8:val
+p1 node=0 eligible rows=203 end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source range rel=2610 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(5):byval8:w8:val Offset:byval2:w2:val
+  subplan 2 hashed Any unknown-eq-false slot=0 ids=($exec1) conditional raise-free test=op607(v1.1, $exec1)
+  filter op85(fn17368(v1.1), and(v1.5, op609(v1.1, c26:16384), subplan2()))
+  project (1=relabel2205(v1.1))
+  outs 1=w8:val
+breaker slot=0 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+mapped: SeqScan SubPlan

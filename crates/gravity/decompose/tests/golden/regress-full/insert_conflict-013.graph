@@ -1,0 +1,12 @@
+-- regress-full-insert_conflict-013
+-- insert into excluded AS target values(1, '2') on conflict (key) do update set data = target.data RETURNING *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:1, 2=c25:'2')
+  write INSERT rel=18299 rti=1 natts=2 indexes=(18305[1]up) on_conflict=update arbiter=(18305) excl_rti=2 cols=(2) set=(1=v1.2) returning
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=vl:stmt/imm
+  outs 1=w4:val 2=vl:row
+mapped: Result ModifyTable

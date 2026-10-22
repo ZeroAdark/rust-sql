@@ -30,4 +30,5 @@ types_tuple = { path = "../../../../_support/types/types_tuple" }
 varlena = { path = "../varlena" }
 
 [dev-dependencies]
+pg_locale = { path = "../pg_locale" }
 wchar = { path = "../../../../common/wchar" }

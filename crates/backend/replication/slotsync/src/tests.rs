@@ -1,6 +1,7 @@
 // SlotSyncCtx is process-global: the tests below serialize on TEST_LOCK and
 // reset it at entry.
 use super::*;
+use types_error::{ERRCODE_INVALID_TEXT_REPRESENTATION, ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -228,12 +229,58 @@ fn slot_harness() {
         lmgr_proc::InitProcess(types_core::BackendType::Backend).expect("InitProcess");
         procarray::ProcArrayAdd(lmgr_proc::MyProc().unwrap()).expect("ProcArrayAdd self");
 
-        let dir = std::env::temp_dir().join(format!("pgrust-slotsync-tests-{}", std::process::id()));
+        let dir = data_dir_of(std::process::id());
         std::fs::create_dir_all(dir.join("pg_replslot")).unwrap();
         std::fs::create_dir_all(dir.join("pg_logical/snapshots")).unwrap();
+        remove_data_dir_at_exit();
         std::env::set_current_dir(&dir).unwrap();
+        println!("data dir {}", dir.display());
     });
     become_backend();
+}
+
+fn data_dir_of(pid: u32) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("pgrust-slotsync-tests-{pid}"))
+}
+
+/// The process's data directory (every test's working directory, so no
+/// test's end may remove it) goes at the process's exit.
+fn remove_data_dir_at_exit() {
+    extern "C" fn gone() {
+        let _ = std::fs::remove_dir_all(data_dir_of(std::process::id()));
+    }
+    extern "C" {
+        fn atexit(f: extern "C" fn()) -> core::ffi::c_int;
+    }
+    // SAFETY: the C library's atexit, given a function that cannot unwind
+    // (it ignores the removal's error).
+    unsafe { atexit(gone) };
+}
+
+/// A run of this test alone, in a child process, leaves no data directory
+/// behind once the child exits.
+#[test]
+fn a_run_leaves_nothing_behind() {
+    const CHILD: &str = "PGRUST_SLOTSYNC_LEAVE_NOTHING_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        slot_harness();
+        return;
+    }
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "tests::a_run_leaves_nothing_behind", "--nocapture"])
+        .env(CHILD, "1")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let dir = data_dir_of(child.id());
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "child failed: {stdout}");
+    assert!(
+        stdout.contains(&format!("data dir {}", dir.display())),
+        "the child never made its data dir: {stdout}"
+    );
+    assert!(!dir.exists(), "{} left behind", dir.display());
 }
 
 static STANDBY_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -507,7 +554,7 @@ fn dbname_from_conninfo_takes_the_last_occurrence() {
 
 // slotsync.c:1519 pqsignal(SIGINT, StatementCancelHandler): a pending SIGINT
 // (pg_cancel_backend on the slot sync worker) raises QueryCancelPending at
-// the next drain instead of sitting unhandled (audit regression).
+// the next drain instead of sitting unhandled (audit fp-logical-slotsync#1).
 #[test]
 fn worker_sigint_disposition_is_statement_cancel() {
     let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -542,4 +589,111 @@ fn nfields_mismatch_detail_matches_libpqrcv_process_tuples() {
         format!("Expected {SLOT_QUERY_NFIELDS} fields, got {}.", nfields_text(9)),
         "Expected 10 fields, got 9 fields."
     );
+}
+
+// libpqrcv_processTuples runs the declared column types' input functions
+// over the primary's text, so a malformed value is that type's 22P02 error
+// rather than a zero LSN/xid or a false flag.
+#[test]
+fn remote_slot_row_uses_the_column_types_input_functions() {
+    fn row(cells: [Option<&str>; SLOT_QUERY_NFIELDS]) -> Vec<Option<Vec<u8>>> {
+        cells.iter().map(|c| c.map(|s| s.as_bytes().to_vec())).collect()
+    }
+    let good = row([
+        Some("s1"),
+        Some("pgoutput"),
+        Some("0/16B3748"),
+        Some("0/16B3710"),
+        Some("745"),
+        Some("t"),
+        Some("0/0"),
+        Some("true"),
+        Some("postgres"),
+        None,
+    ]);
+    let slot = remote_slot_from_row(&good).unwrap().unwrap();
+    assert_eq!(slot.confirmed_lsn, 0x16B3748);
+    assert_eq!(slot.restart_lsn, 0x16B3710);
+    assert_eq!(slot.catalog_xmin, 745);
+    assert!(slot.two_phase && slot.failover);
+    assert_eq!(slot.two_phase_at, 0);
+    assert_eq!(slot.invalidated, RS_INVAL_NONE);
+
+    let mut nulls = good.clone();
+    nulls[2] = None;
+    nulls[3] = None;
+    nulls[4] = None;
+    let slot = remote_slot_from_row(&nulls).unwrap().unwrap();
+    assert_eq!((slot.confirmed_lsn, slot.restart_lsn, slot.catalog_xmin), (0, 0, 0));
+
+    for (col, text, message) in [
+        (2, "junk", "invalid input syntax for type pg_lsn: \"junk\""),
+        (4, "12x", "invalid input syntax for type xid: \"12x\""),
+        (4, "4294967296", "value \"4294967296\" is out of range for type xid"),
+        (5, "maybe", "invalid input syntax for type boolean: \"maybe\""),
+        (6, "0x10/0", "invalid input syntax for type pg_lsn: \"0x10/0\""),
+        (7, "", "invalid input syntax for type boolean: \"\""),
+    ] {
+        let mut bad = good.clone();
+        bad[col] = Some(text.as_bytes().to_vec());
+        let err = remote_slot_from_row(&bad).err().expect("rejected");
+        assert_eq!(err.message(), message);
+        assert_eq!(
+            err.sqlstate(),
+            if message.starts_with("value") { ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE } else { ERRCODE_INVALID_TEXT_REPRESENTATION }
+        );
+    }
+}
+
+#[test]
+fn sql_sync_proc_exit_clears_shared_state_before_shmem_teardown() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    slot_harness();
+    reset_ctx();
+    init_small::globals::SetIsUnderPostmaster(true);
+    static CLEAN_BEFORE_SHMEM: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    ipc::on_shmem_exit(|_, _| {
+        CLEAN_BEFORE_SHMEM.store(
+            with_ctx(|ctx| !ctx.syncing && ctx.pid == InvalidPid)
+                && !slot::syncing_replication_slots(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }, 0);
+    let exit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_sync_cleanup(|| {
+            check_and_set_sync_info(4242)?;
+            ipc::proc_exit(1, init_small::globals::MyProcPid());
+        })
+    })).unwrap_err();
+    assert_eq!(exit.downcast_ref::<ipc::ProcExitThread>().unwrap().code, 1);
+    assert_eq!(ipc::run_deferred_exit_callbacks(1), 1);
+    assert!(CLEAN_BEFORE_SHMEM.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(with_ctx(|ctx| !ctx.syncing && ctx.pid == InvalidPid));
+    assert!(!slot::syncing_replication_slots());
+    ipc::reset_exit_state_for_retained_park();
+    init_small::globals::SetIsUnderPostmaster(false);
+    check_and_set_sync_info(4243).unwrap();
+    reset_syncing_flag();
+
+    let err = with_sync_cleanup(|| {
+        check_and_set_sync_info(4242)?;
+        ereport(ERROR).errmsg("sync failed").finish(loc("test"))
+    }).unwrap_err();
+    assert_eq!(err.message(), "sync failed");
+    assert!(with_ctx(|ctx| !ctx.syncing && ctx.pid == InvalidPid));
+    check_and_set_sync_info(4243).unwrap();
+    ipc::shmem_exit(0).unwrap();
+    assert!(with_ctx(|ctx| ctx.syncing && ctx.pid == 4243));
+    reset_syncing_flag();
+
+    with_sync_cleanup(|| {
+        check_and_set_sync_info(4242)?;
+        reset_syncing_flag();
+        Ok(())
+    }).unwrap();
+    check_and_set_sync_info(4243).unwrap();
+    ipc::shmem_exit(0).unwrap();
+    assert!(with_ctx(|ctx| ctx.syncing && ctx.pid == 4243));
+    reset_syncing_flag();
 }

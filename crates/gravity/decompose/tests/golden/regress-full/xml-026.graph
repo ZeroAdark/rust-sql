@@ -1,0 +1,9 @@
+-- regress-full-xml-026
+-- SELECT * FROM XMLTABLE('.' PASSING '<foo/>' COLUMNS a text PATH 'foo/namespace::node()');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=Host end=sink
+  nodes n0@0
+  source tablefunc rti=1 kind=xmltable cols=1 ordinality=-1 doc=c142:'<foo/>' row=c25:'.'
+  project (1=v1.1)
+  outs 1=vl:row
+mapped: TableFuncScan

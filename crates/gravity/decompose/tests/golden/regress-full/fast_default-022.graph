@@ -1,0 +1,17 @@
+-- regress-full-fast_default-022
+-- EXPLAIN (VERBOSE TRUE, COSTS FALSE) DELETE FROM T WHERE pk BETWEEN 10 AND 20 RETURNING *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@0 n0@1
+  source bitmap rel=47682 rti=1 am=heap
+    bitmap index node=2 index=47686 rows=6
+      key att=1 op=525 value=c23:10
+      key att=1 op=523 value=c23:20
+    recheck (op525(v1.1, c23:10), op523(v1.1, c23:20))
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write DELETE rel=47682 rti=1 natts=3 indexes=() returning
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  outs 1=fx6:row
+  outs 1=w4:val 2=w8:val 3=vl:row
+mapped: ModifyTable BitmapIndexScan BitmapHeapScan

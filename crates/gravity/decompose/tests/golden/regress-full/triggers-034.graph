@@ -1,0 +1,15 @@
+-- regress-full-triggers-034
+-- merge into parent p using (values (1)) as v(id) on p.aid = v.id when matched then delete;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=21514 rti=1 am=heap index=21522
+    key att=1 op=96 value=c23:1
+    recheck (op96(v1.1, c23:1))
+    lanes RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write MERGE rel=21514 rti=1 natts=6 indexes=(21522[1]up)
+    merge rowid=outer.1 target_cols=()
+    when matched then delete
+  outs 1=fx6:row
+mapped: ModifyTable IndexScan

@@ -1,0 +1,17 @@
+# W6-D655-ROWC (V4R-534, D655 Row C): cte-031, a DELETE ... RETURNING in a data-modifying CTE over the pk index, which
+# rechecks in the IR (write/rowop_epq.rs). Scripted, not recorded (as d604-share-nokey): another session updated the row
+# after the statement's snapshot (`~`: its newer version, slot 1) and kept x = 100001, so the recheck's index qual passes:
+# the op fetches the newer version (WRITE_EPQ_ROW), deletes it there and RETURNING reads it (y = 2's row gone, the scan's
+# y = 1 version superseded). PostgreSQL 18.6's answer by ExecDelete's EvalPlanQual rule.
+plan: cte-031
+table: 16405 u x:int4 y:int4 z:text
+[before 16405]
+100001	1	a
+~100001	2	b
+7	7	e
+[pg]
+100001
+[tag]
+1
+[after 16405]
+7	7	e

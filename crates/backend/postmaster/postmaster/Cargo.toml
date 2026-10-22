@@ -9,6 +9,7 @@ name = "postmaster"
 path = "src/lib.rs"
 
 [dependencies]
+pagegive = { path = "../../../_support/pagegive" }
 aio_core = { path = "../../storage/aio/aio_core" }
 pg_clock = { path = "../../../port/pg_clock" }
 seam_core = { path = "../../../_support/seam_core" }
@@ -41,15 +42,18 @@ ipc = { path = "../../storage/ipc/ipc" }
 lwlock = { path = "../../storage/lmgr/lwlock" }
 dsm_core = { path = "../../storage/ipc/dsm_core" }
 ipci = { path = "../../storage/ipc/ipci" }
+bufmgr = { path = "../../storage/buffer/bufmgr" }
 varsup = { path = "../../access/transam/varsup" }
 transam_xlog = { path = "../../access/transam/transam_xlog" }
 launch_backend = { path = "../launch_backend" }
-memwatchdog = { path = "../memwatchdog" }
+pgrc_maint = { path = "../../access/pgrcolumnar/pgrc_maint" }
+memruntime = { path = "../memruntime" }
 slotsync = { path = "../../replication/slotsync" }
 backend_startup = { path = "../../tcop/backend_startup" }
 be_secure = { path = "../../libpq/be_secure" }
 bgworker = { path = "../bgworker" }
 wait_error = { path = "../../../common/wait_error" }
+backend_status = { path = "../../utils/activity/backend_status" }
 backend_status_seams = { path = "../../utils/activity/backend_status_seams" }
 libpq_pqsignal = { path = "../../libpq/libpq_pqsignal" }
 timestamp_seams = { path = "../../utils/adt/timestamp_seams" }
@@ -60,12 +64,14 @@ pmchild_seams = { path = "../pmchild_seams" }
 postmaster_seams = { path = "../postmaster_seams" }
 pqcomm_seams = { path = "../../libpq/pqcomm_seams" }
 guc_seams = { path = "../../utils/misc/guc_seams" }
+pgsync = { path = "../../../_support/pgsync" }
 miscinit_seams = { path = "../../utils/init/miscinit_seams" }
 auth_seams = { path = "../../libpq/auth_seams" }
 autovacuum_seams = { path = "../autovacuum_seams" }
 syslogger = { path = "../syslogger" }
 syslogger_seams = { path = "../syslogger_seams" }
 janitor_seams = { path = "../janitor_seams" }
+instaux = { path = "../instaux" }
 launcher_seams = { path = "../../replication/launcher_seams" }
 transam_xlog_seams = { path = "../../access/transam/transam_xlog_seams" }
 xlogrecovery_seams = { path = "../../access/transam/xlogrecovery_seams" }

@@ -1,1 +1,0 @@
-A$.a.datetime("HH24:MI TZH") <= $.b.time_tz(2)

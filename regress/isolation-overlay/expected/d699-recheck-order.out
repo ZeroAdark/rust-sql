@@ -1,0 +1,224 @@
+Parsed test spec with 4 sessions
+
+starting permutation: up5 lock c1 c2 read c4
+step up5: UPDATE d699 SET v = v + 1000 WHERE id = 5;
+step lock: SELECT id, v FROM d699 WHERE v > 0 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step lock: <... completed>
+id|   v
+--+----
+ 1|  10
+ 2|  20
+ 3|  30
+ 4|  40
+ 5|1050
+ 6|  60
+ 7|  70
+ 8|  80
+ 9|  90
+10| 100
+(10 rows)
+
+step c2: COMMIT;
+step read: SELECT * FROM d699 ORDER BY id;
+id|   v
+--+----
+ 1|  10
+ 2|  20
+ 3|  30
+ 4|  40
+ 5|1050
+ 6|  60
+ 7|  70
+ 8|  80
+ 9|  90
+10| 100
+(10 rows)
+
+step c4: COMMIT;
+
+starting permutation: out5 lock c1 c2 read c4
+step out5: UPDATE d699 SET v = -1 WHERE id = 5;
+step lock: SELECT id, v FROM d699 WHERE v > 0 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step lock: <... completed>
+id|  v
+--+---
+ 1| 10
+ 2| 20
+ 3| 30
+ 4| 40
+ 6| 60
+ 7| 70
+ 8| 80
+ 9| 90
+10|100
+(9 rows)
+
+step c2: COMMIT;
+step read: SELECT * FROM d699 ORDER BY id;
+id|  v
+--+---
+ 1| 10
+ 2| 20
+ 3| 30
+ 4| 40
+ 5| -1
+ 6| 60
+ 7| 70
+ 8| 80
+ 9| 90
+10|100
+(10 rows)
+
+step c4: COMMIT;
+
+starting permutation: plan4 c4 c2 c1
+step plan4: EXPLAIN (COSTS OFF) SELECT id, v FROM d699 WHERE id BETWEEN 2 AND 8 FOR UPDATE;
+QUERY PLAN                                         
+---------------------------------------------------
+LockRows                                           
+  ->  Bitmap Heap Scan on d699                     
+        Recheck Cond: ((id >= 2) AND (id <= 8))    
+        ->  Bitmap Index Scan on d699_pkey         
+              Index Cond: ((id >= 2) AND (id <= 8))
+(5 rows)
+
+step c4: COMMIT;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: up5 lockix c1 c4 read c2
+step up5: UPDATE d699 SET v = v + 1000 WHERE id = 5;
+step lockix: SELECT id, v FROM d699 WHERE id BETWEEN 2 AND 8 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step lockix: <... completed>
+id|   v
+--+----
+ 2|  20
+ 3|  30
+ 4|  40
+ 5|1050
+ 6|  60
+ 7|  70
+ 8|  80
+(7 rows)
+
+step c4: COMMIT;
+step read: SELECT * FROM d699 ORDER BY id;
+id|   v
+--+----
+ 1|  10
+ 2|  20
+ 3|  30
+ 4|  40
+ 5|1050
+ 6|  60
+ 7|  70
+ 8|  80
+ 9|  90
+10| 100
+(10 rows)
+
+step c2: COMMIT;
+
+starting permutation: up5 share c1 c2 read c4
+step up5: UPDATE d699 SET v = v + 1000 WHERE id = 5;
+step share: SELECT id, v FROM d699 WHERE v > 0 FOR SHARE; <waiting ...>
+step c1: COMMIT;
+step share: <... completed>
+id|   v
+--+----
+ 1|  10
+ 2|  20
+ 3|  30
+ 4|  40
+ 5|1050
+ 6|  60
+ 7|  70
+ 8|  80
+ 9|  90
+10| 100
+(10 rows)
+
+step c2: COMMIT;
+step read: SELECT * FROM d699 ORDER BY id;
+id|   v
+--+----
+ 1|  10
+ 2|  20
+ 3|  30
+ 4|  40
+ 5|1050
+ 6|  60
+ 7|  70
+ 8|  80
+ 9|  90
+10| 100
+(10 rows)
+
+step c4: COMMIT;
+
+starting permutation: up5 updret c1 c2 read c4
+step up5: UPDATE d699 SET v = v + 1000 WHERE id = 5;
+step updret: UPDATE d699 SET v = v + 1 WHERE v > 0 RETURNING id, v; <waiting ...>
+step c1: COMMIT;
+step updret: <... completed>
+id|   v
+--+----
+ 1|  11
+ 2|  21
+ 3|  31
+ 4|  41
+ 5|1051
+ 6|  61
+ 7|  71
+ 8|  81
+ 9|  91
+10| 101
+(10 rows)
+
+step c2: COMMIT;
+step read: SELECT * FROM d699 ORDER BY id;
+id|   v
+--+----
+ 1|  11
+ 2|  21
+ 3|  31
+ 4|  41
+ 5|1051
+ 6|  61
+ 7|  71
+ 8|  81
+ 9|  91
+10| 101
+(10 rows)
+
+step c4: COMMIT;
+
+starting permutation: up5 delret c1 c2 read c4
+step up5: UPDATE d699 SET v = v + 1000 WHERE id = 5;
+step delret: DELETE FROM d699 WHERE v > 0 RETURNING id, v; <waiting ...>
+step c1: COMMIT;
+step delret: <... completed>
+id|   v
+--+----
+ 1|  10
+ 2|  20
+ 3|  30
+ 4|  40
+ 5|1050
+ 6|  60
+ 7|  70
+ 8|  80
+ 9|  90
+10| 100
+(10 rows)
+
+step c2: COMMIT;
+step read: SELECT * FROM d699 ORDER BY id;
+id|v
+--+-
+(0 rows)
+
+step c4: COMMIT;

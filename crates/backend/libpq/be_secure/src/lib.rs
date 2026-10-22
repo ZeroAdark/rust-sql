@@ -1,5 +1,5 @@
-// be-secure.c, USE_SSL build (openssl), non-ENABLE_GSS: the GSS arms are
-// compiled out as in C.
+// be-secure.c, USE_SSL build (openssl) with GSSAPI encryption (gssapi.rs)
+// when a system GSSAPI library loads.
 
 #![allow(non_upper_case_globals)]
 #![allow(clippy::result_large_err)]
@@ -60,6 +60,10 @@ fn ssize_result(n: isize, e: i32) -> Result<usize, i32> {
     }
 }
 
+pub mod gssapi;
+
+pub use tls_impl::{inherit_tls_config, tls_config_snapshot, TlsConfig};
+
 pub fn secure_initialize(is_server_start: bool) -> PgResult<i32> {
     tls_impl::be_tls_init(is_server_start)
 }
@@ -75,7 +79,7 @@ pub fn secure_loaded_verify_locations() -> bool {
 pub fn secure_open_server() -> PgResult<i32> {
     // Push unencrypted buffered data back through SSL setup.
     let len = pqcomm::pq_buffer_remaining_data();
-    let mut raw_buf = vec![0u8; len.max(0) as usize];
+    let mut raw_buf = ::mcx::std_vec_from_elem("libpq", 0u8, len.max(0) as usize)?;
     if len > 0 {
         pqcomm::pq_startmsgread()?;
         if pqcomm::pq_getbytes(&mut raw_buf)? == pqcomm::EOF {
@@ -102,7 +106,7 @@ pub fn secure_open_server() -> PgResult<i32> {
         let peer_cn = open.peer_cn.clone();
         let peer_dn = open.peer_dn.clone();
         let peer_cert_valid = open.peer_cert_valid;
-        init_small::globals::WithMyProcPort(|p| {
+        init_small::globals::WithMyProcPortMut(|p| {
             p.ssl_in_use = true;
             p.alpn_used = alpn_used;
             p.peer_cn = peer_cn.clone();
@@ -177,7 +181,10 @@ pub fn secure_read(buf: &mut [u8]) -> PgResult<Result<usize, i32>> {
 
     let (n, e) = loop {
         let (sock, noblock, ssl_in_use) = my_port_state();
-        let (n, e, waitfor) = if ssl_in_use {
+        let (n, e, waitfor) = if gssapi::be_gssapi_get_enc() {
+            let (n, e) = gssapi::be_gssapi_read(sock, buf)?;
+            (n, e, WL_SOCKET_READABLE)
+        } else if ssl_in_use {
             tls_read_arm(buf)?
         } else {
             let n = secure_raw_read(sock, buf);
@@ -206,7 +213,10 @@ pub fn secure_write(buf: &[u8]) -> PgResult<Result<usize, i32>> {
 
     let (n, e) = loop {
         let (sock, noblock, ssl_in_use) = my_port_state();
-        let (n, e, waitfor) = if ssl_in_use {
+        let (n, e, waitfor) = if gssapi::be_gssapi_get_enc() {
+            let (n, e) = gssapi::be_gssapi_write(sock, buf)?;
+            (n, e, WL_SOCKET_WRITEABLE)
+        } else if ssl_in_use {
             tls_write_arm(buf)?
         } else {
             let n = secure_raw_write(sock, buf);

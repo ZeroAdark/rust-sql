@@ -1,0 +1,7 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/residency.rs
+growth	std::collections::BTreeMap::entry	2
+method	std::clone::Clone::clone	6
+method	std::iter::Iterator::collect	9
+method	std::sync::Arc::new	2
+type	std::sync::Arc	8
+type	std::vec::Vec	6

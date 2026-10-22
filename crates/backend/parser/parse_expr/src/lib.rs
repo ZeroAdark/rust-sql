@@ -340,6 +340,7 @@ fn transformAExprNullIf<'mcx>(
 ) -> PgResult<Node<'mcx>> {
     let lexpr = transformExprRecurse(mcx, pstate, a.lexpr.expect("AEXPR_NULLIF lexpr"))?;
     let rexpr = transformExprRecurse(mcx, pstate, a.rexpr.expect("AEXPR_NULLIF rexpr"))?;
+    // C passes p_last_srf as it stands after the operands (parse_expr.c:1092).
     let last_srf = pstate.p_last_srf;
     let result = parse_oper::make_op(
         mcx,
@@ -845,7 +846,7 @@ fn transformArrayExpr<'mcx>(
         if newelems.is_nil() {
             return Err(empty_array_error(pstate, a.location));
         }
-        let mut pairs: Vec<(types_core::Oid, i32)> = Vec::with_capacity(newelems.len());
+        let mut pairs: Vec<(types_core::Oid, i32)> = ::mcx::std_vec_with_capacity("parser", newelems.len())?;
         for e in newelems.iter() {
             pairs.push((expr_type(e), expr_location(e)));
         }
@@ -1076,14 +1077,14 @@ fn collation_lookup_position(
     e: Box<types_error::PgError>,
     location: types_core::ParseLoc,
 ) -> Box<types_error::PgError> {
-    if e.cursor_position().is_some() {
+    if e.sqlstate() == types_error::ERRCODE_QUERY_CANCELED || e.cursor_position().is_some() {
         return e;
     }
-    Box::new((*e).with_cursor_position(parser_small1::parser_errposition(
-        pstate,
-        location,
-        mbutils::GetDatabaseEncoding(),
-    )))
+    let pos = parser_small1::parser_errposition(pstate, location, mbutils::GetDatabaseEncoding());
+    if pos <= 0 {
+        return e;
+    }
+    Box::new((*e).with_cursor_position(pos))
 }
 
 fn cannot_cast_error(
@@ -1200,62 +1201,81 @@ fn transformAExprBetween<'mcx>(
         n.map(|n| copyfuncs::copy_object(mcx, n)).transpose()
     };
 
+    // transformAExprOp's ROW() op ROW() arm tests the RAW operands: a
+    // transformed whole-row alias (a JOIN USING alias is a RowExpr after
+    // transformation) still takes the composite operator.
+    let is_row = |n: Option<Node<'mcx>>| n.is_some_and(|n| n.node_tag() == NodeTag::T_RowExpr);
+    let row_ab = is_row(aexpr) && is_row(bexpr);
+    let row_ac = is_row(aexpr) && is_row(cexpr);
+
     let result = match a.kind {
         A_Expr_Kind::AEXPR_BETWEEN => {
             let a2 = copy(aexpr)?;
+            let last_srf = pstate.p_last_srf;
             let ta = tx(pstate, aexpr)?;
             let tb = tx(pstate, bexpr)?;
-            let cmp1 = between_comparison(mcx, pstate, ">=", ta, tb, loc, "AND")?;
+            let cmp1 = between_comparison(mcx, pstate, ">=", ta, tb, row_ab, last_srf, loc, "AND")?;
+            let last_srf = pstate.p_last_srf;
             let ta2 = tx(pstate, a2)?;
             let tc = tx(pstate, cexpr)?;
-            let cmp2 = between_comparison(mcx, pstate, "<=", ta2, tc, loc, "AND")?;
+            let cmp2 = between_comparison(mcx, pstate, "<=", ta2, tc, row_ac, last_srf, loc, "AND")?;
             between_bool_expr(mcx, AND_EXPR, cmp1, cmp2, loc)?
         }
         A_Expr_Kind::AEXPR_NOT_BETWEEN => {
             let a2 = copy(aexpr)?;
+            let last_srf = pstate.p_last_srf;
             let ta = tx(pstate, aexpr)?;
             let tb = tx(pstate, bexpr)?;
-            let cmp1 = between_comparison(mcx, pstate, "<", ta, tb, loc, "OR")?;
+            let cmp1 = between_comparison(mcx, pstate, "<", ta, tb, row_ab, last_srf, loc, "OR")?;
+            let last_srf = pstate.p_last_srf;
             let ta2 = tx(pstate, a2)?;
             let tc = tx(pstate, cexpr)?;
-            let cmp2 = between_comparison(mcx, pstate, ">", ta2, tc, loc, "OR")?;
+            let cmp2 = between_comparison(mcx, pstate, ">", ta2, tc, row_ac, last_srf, loc, "OR")?;
             between_bool_expr(mcx, OR_EXPR, cmp1, cmp2, loc)?
         }
         A_Expr_Kind::AEXPR_BETWEEN_SYM => {
             let (a2, a3, a4) = (copy(aexpr)?, copy(aexpr)?, copy(aexpr)?);
             let (b2, c2) = (copy(bexpr)?, copy(cexpr)?);
+            let last_srf = pstate.p_last_srf;
             let ta = tx(pstate, aexpr)?;
             let tb = tx(pstate, bexpr)?;
-            let cmp1 = between_comparison(mcx, pstate, ">=", ta, tb, loc, "AND")?;
+            let cmp1 = between_comparison(mcx, pstate, ">=", ta, tb, row_ab, last_srf, loc, "AND")?;
+            let last_srf = pstate.p_last_srf;
             let ta2 = tx(pstate, a2)?;
             let tc = tx(pstate, cexpr)?;
-            let cmp2 = between_comparison(mcx, pstate, "<=", ta2, tc, loc, "AND")?;
+            let cmp2 = between_comparison(mcx, pstate, "<=", ta2, tc, row_ac, last_srf, loc, "AND")?;
             let sub1 = between_bool_expr(mcx, AND_EXPR, cmp1, cmp2, loc)?;
+            let last_srf = pstate.p_last_srf;
             let ta3 = tx(pstate, a3)?;
             let tc2 = tx(pstate, c2)?;
-            let cmp3 = between_comparison(mcx, pstate, ">=", ta3, tc2, loc, "AND")?;
+            let cmp3 = between_comparison(mcx, pstate, ">=", ta3, tc2, row_ac, last_srf, loc, "AND")?;
+            let last_srf = pstate.p_last_srf;
             let ta4 = tx(pstate, a4)?;
             let tb2 = tx(pstate, b2)?;
-            let cmp4 = between_comparison(mcx, pstate, "<=", ta4, tb2, loc, "AND")?;
+            let cmp4 = between_comparison(mcx, pstate, "<=", ta4, tb2, row_ab, last_srf, loc, "AND")?;
             let sub2 = between_bool_expr(mcx, AND_EXPR, cmp3, cmp4, loc)?;
             between_bool_expr(mcx, OR_EXPR, sub1, sub2, loc)?
         }
         A_Expr_Kind::AEXPR_NOT_BETWEEN_SYM => {
             let (a2, a3, a4) = (copy(aexpr)?, copy(aexpr)?, copy(aexpr)?);
             let (b2, c2) = (copy(bexpr)?, copy(cexpr)?);
+            let last_srf = pstate.p_last_srf;
             let ta = tx(pstate, aexpr)?;
             let tb = tx(pstate, bexpr)?;
-            let cmp1 = between_comparison(mcx, pstate, "<", ta, tb, loc, "OR")?;
+            let cmp1 = between_comparison(mcx, pstate, "<", ta, tb, row_ab, last_srf, loc, "OR")?;
+            let last_srf = pstate.p_last_srf;
             let ta2 = tx(pstate, a2)?;
             let tc = tx(pstate, cexpr)?;
-            let cmp2 = between_comparison(mcx, pstate, ">", ta2, tc, loc, "OR")?;
+            let cmp2 = between_comparison(mcx, pstate, ">", ta2, tc, row_ac, last_srf, loc, "OR")?;
             let sub1 = between_bool_expr(mcx, OR_EXPR, cmp1, cmp2, loc)?;
+            let last_srf = pstate.p_last_srf;
             let ta3 = tx(pstate, a3)?;
             let tc2 = tx(pstate, c2)?;
-            let cmp3 = between_comparison(mcx, pstate, "<", ta3, tc2, loc, "OR")?;
+            let cmp3 = between_comparison(mcx, pstate, "<", ta3, tc2, row_ac, last_srf, loc, "OR")?;
+            let last_srf = pstate.p_last_srf;
             let ta4 = tx(pstate, a4)?;
             let tb2 = tx(pstate, b2)?;
-            let cmp4 = between_comparison(mcx, pstate, ">", ta4, tb2, loc, "OR")?;
+            let cmp4 = between_comparison(mcx, pstate, ">", ta4, tb2, row_ab, last_srf, loc, "OR")?;
             let sub2 = between_bool_expr(mcx, OR_EXPR, cmp3, cmp4, loc)?;
             between_bool_expr(mcx, AND_EXPR, sub1, sub2, loc)?
         }
@@ -1273,13 +1293,13 @@ fn between_comparison<'mcx>(
     op: &'mcx str,
     lexpr: Option<Node<'mcx>>,
     rexpr: Option<Node<'mcx>>,
+    row_pair: bool,
+    last_srf: Option<Node<'mcx>>,
     location: i32,
     bool_construct: &str,
 ) -> PgResult<Node<'mcx>> {
     let name = types_nodes::list::NodeList::make1(mcx, Node::mk_string(mcx, op)?)?;
-    let cmp = if lexpr.is_some_and(|n| n.node_tag() == NodeTag::T_RowExpr)
-        && rexpr.is_some_and(|n| n.node_tag() == NodeTag::T_RowExpr)
-    {
+    let cmp = if row_pair {
         let lrow = lexpr.expect("checked above");
         let rrow = rexpr.expect("checked above");
         let largs = &lrow.as_row_expr().expect("transformed RowExpr").args;
@@ -1294,7 +1314,7 @@ fn between_comparison<'mcx>(
             rexpr,
             lexpr.map_or(types_core::InvalidOid, expr_type),
             rexpr.map_or(types_core::InvalidOid, expr_type),
-            pstate.p_last_srf,
+            last_srf,
             location,
         )?
     };
@@ -2444,7 +2464,11 @@ fn srf_not_allowed_in(
                 mbutils::GetDatabaseEncoding(),
             ))
             .into_error()
-            .with_error_location(ErrorLocation::new(file!(), line!() as i32, "transformCaseExpr")),
+            .with_error_location(if construct == "COALESCE" {
+                ErrorLocation::new("parse_expr.c", 2267, "transformCoalesceExpr")
+            } else {
+                ErrorLocation::new(file!(), line!() as i32, "transformCaseExpr")
+            }),
     )
 }
 
@@ -2813,9 +2837,13 @@ fn plpgsql_column_ref<'mcx>(
     }
     let n = fields.len();
     if fields[n - 1].node_tag() == NodeTag::T_A_Star {
-        // Use the same whole-row key as parse_target's star expansion.
-        // It selects a record binding without matching a literal "*" field
-        // or a scalar that shadows the record's unqualified name.
+        // Whole-row arms (pl_comp.c:1133 `rec.*`, :1158 `label.rec.*`): C
+        // sets the trailing name to "*" with only nnames_wholerow, so
+        // plpgsql_ns_lookup matches a REC binding and never a scalar or a
+        // field (:1190). The flattened table carries that binding under the
+        // WHOLE_ROW_FIELD key ("*\0", never a field's name), so the lookup
+        // must use it too: a bare "*" misses and reaches the "has no field"
+        // arm instead (parse_target's plpgsql_star_ref precedent).
         if n < 2 {
             return Ok(None);
         }

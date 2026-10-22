@@ -1,0 +1,12 @@
+# WITH .. INSERT .. RETURNING: the statement is DML
+sql: WITH d AS (SELECT x FROM t)
+sql: INSERT INTO u SELECT x FROM d ORDER BY x RETURNING x;
+cols: x
+class: unordered
+verdict: match
+[pg]
+1
+2
+[got]
+2
+1

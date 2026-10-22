@@ -1,0 +1,5 @@
+path	crates/gravity/exec/src/ops/subplan/hash.rs
+method	std::boxed::Box::new	5
+method	std::iter::Iterator::collect	1
+type	std::boxed::Box	5
+type	std::vec::Vec	1

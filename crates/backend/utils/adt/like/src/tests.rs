@@ -230,6 +230,26 @@ fn mb_encoding_arm_is_clean_feature_error() {
 }
 
 #[test]
+fn like_escape_default_escape_checks_result_size() {
+    use types_fmgr::LocalFcinfo;
+    utf8();
+    let plen = 536_870_910usize;
+    let mut pat = vec![0u8; 4 + plen];
+    pat[..4].copy_from_slice(&datum::varlena::set_varsize_4b(4 + plen));
+    let mut esc = Vec::new();
+    esc.extend_from_slice(&datum::varlena::set_varsize_4b(5));
+    esc.push(b'\\');
+    let ctx = mcx::MemoryContext::new("t");
+    let mut fcinfo = LocalFcinfo::<2>::new(C);
+    // SAFETY: ctx outlives every call through this frame.
+    unsafe { fcinfo.set_result_mcx(ctx.mcx()) };
+    fcinfo.set_arg(0, datum::Datum::from_usize(pat.as_ptr() as usize));
+    fcinfo.set_arg(1, datum::Datum::from_usize(esc.as_ptr() as usize));
+    let err = builtins::fc_like_escape(None, &mut fcinfo).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+}
+
+#[test]
 fn fc_wrappers_and_oids() {
     use types_fmgr::LocalFcinfo;
     utf8();

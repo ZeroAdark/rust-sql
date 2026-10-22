@@ -1,0 +1,91 @@
+[package]
+name = "gravity_backend"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "gravity_backend"
+path = "src/lib.rs"
+
+[dependencies]
+# C7 runtime half: its leader-class thread-locals are declared through leader_tls!
+leader_tls = { path = "../../_support/leader_tls" }
+pagegive = { path = "../../_support/pagegive" }
+# C6 (d): a stopped compile's interrupt is taken through the interrupt facade (cache.rs take_interrupt)
+cancelpoll = { path = "../../_support/cancelpoll" }
+gravity_abi = { path = "../abi" }
+gravity_deps = { path = "../deps" }
+gravity_program = { path = "../program" }
+gravity_ir = { path = "../ir" }
+gravity_driver = { path = "../driver" }
+gravity_interp = { path = "interp" }
+gravity_tpde = { path = "tpde" }
+fires = { path = "../../_support/fires" }
+# planprod P2: an entry's root context is owned by construction (SendRoot::new_owned, set_owner), mcx's std API (on in
+# every server build already, through init_small)
+mcx = { path = "../../_support/mcx", features = ["std"] }
+# C2: the code cache's filed modules on the program caches' memory account
+memledger = { path = "../../_support/memledger" }
+pgsync = { path = "../../_support/pgsync" }
+types_error = { path = "../../_support/types/types_error" }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+gravity_wasm = { path = "wasm" }
+
+[dev-dependencies]
+gravity_ir = { path = "../ir", features = ["text-loader"] }
+gravity_program = { path = "../program", features = ["hand"] }
+# C6 (d): the interrupt tests install PostgreSQL's interrupt seams, which the facade reads
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+gravity_driver = { path = "../driver" }
+gravity_parallel = { path = "../parallel", features = ["fixture-pool"] }
+gravity_kernels = { path = "../kernels" }
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# gravity_backend_suite (tests/gravity_backend_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs
+# it once per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot
+# share a process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text
+# naming process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state
+# call): then it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the
+# file is in exactly one of the two places.
+[[test]]
+name = "gravity_backend_suite"
+path = "tests/gravity_backend_suite.rs"
+
+[[test]]
+name = "dump_knob"
+path = "tests/dump_knob.rs"
+
+[[test]]
+name = "perfmap_knob"
+path = "tests/perfmap_knob.rs"
+
+[[test]]
+name = "tier0"
+path = "tests/tier0.rs"
+
+[[test]]
+name = "tier0_async"
+path = "tests/tier0_async.rs"
+
+[[test]]
+name = "tier0_stop"
+path = "tests/tier0_stop.rs"
+
+[[test]]
+name = "tier0_pool_home"
+path = "tests/tier0_pool_home.rs"
+
+[[test]]
+name = "code_cache_balance"
+path = "tests/code_cache_balance.rs"
+
+[[test]]
+name = "staged_side_trim"
+path = "tests/staged_side_trim.rs"
+
+[[test]]
+name = "tier0_wait_interrupt"
+path = "tests/tier0_wait_interrupt.rs"

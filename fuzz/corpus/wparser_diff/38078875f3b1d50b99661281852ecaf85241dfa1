@@ -1,3 +1,0 @@
-Å) AS query;
-
-SELECT ts_rewrite(tsquery_phrase(

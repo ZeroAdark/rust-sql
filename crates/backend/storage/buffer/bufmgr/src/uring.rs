@@ -41,8 +41,8 @@ pub fn start_read(
     // ring drain (AtEOXact_Buffers) only clears IOs that reached a ring
     // slot. A panic escaping the smgr seam here therefore leaks
     // BM_IO_IN_PROGRESS forever and every later toucher of the buffer
-    // sleeps on its IO condvar — a cluster-wide wedge (an
-    // smgr start_buffer_read arm that believed itself
+    // sleeps on its IO condvar — a cluster-wide wedge (the archil-neon
+    // deadlock: an smgr start_buffer_read arm that believed itself
     // unreachable panicked right here). Terminate the IO and drop the pin
     // before letting the panic keep crashing.
     // unwind-ok: log-then-die

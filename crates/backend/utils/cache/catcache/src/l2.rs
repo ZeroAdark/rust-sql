@@ -20,7 +20,7 @@ use types_error::PgResult;
 use types_tuple::{HeapTupleData, ItemPointerData};
 
 use crate::compute::{CatCKey, CCFastKind};
-use crate::graph::tuple_key;
+use crate::graph::build_positive_payload;
 use crate::{eq_stored, pack_ref, stored_bytes, with_state, CATCACHE_MAXKEYS, IMG_PREFIX};
 
 /// 8-aligned (MAXALIGN) owned byte buffer on the global heap: tuple images
@@ -140,32 +140,15 @@ pub(crate) fn build_positive(cache_id: i32, ntp: &HeapTupleData<'_>) -> PgResult
     let tupdesc = tupdesc.expect("catcache: entry created before phase-2 init");
 
     let t_len = ntp.t_len;
-    let buf = AlignedBytes::new_zeroed(IMG_PREFIX + t_len as usize)?;
-    // SAFETY: fresh IMG_PREFIX + t_len bytes; source image live for t_len.
-    let image = unsafe {
-        let p = buf.as_ptr();
-        core::ptr::write(p.cast::<ItemPointerData>(), ntp.t_self);
-        core::ptr::write(p.add(8).cast::<Oid>(), ntp.t_tableOid);
-        core::ptr::write(p.add(12).cast::<u32>(), t_len);
-        let image = p.add(IMG_PREFIX);
-        core::ptr::copy_nonoverlapping(ntp.header_ptr(), image, t_len as usize);
-        image
-    };
-    // SAFETY: `image` now holds a valid tuple image (verbatim copy).
-    let cached_view: HeapTupleData<'_> =
-        unsafe { HeapTupleData::from_raw_parts(image, t_len, ntp.t_self, ntp.t_tableOid) };
-
-    let mut keys = [Datum::null(); CATCACHE_MAXKEYS];
-    for i in 0..nkeys as usize {
-        keys[i] = match tuple_key(kinds[i], &cached_view, keyno[i], tupdesc)? {
-            CatCKey::Value(d) => d,
-            CatCKey::Bytes(b) => {
-                let off = b.as_ptr() as usize - buf.as_ptr() as usize;
-                pack_ref(off as u32, b.len() as u32)
-            }
-            CatCKey::Str(_) => unreachable!(),
-        };
-    }
+    let (buf, keys, _) = build_positive_payload(
+        &kinds,
+        nkeys,
+        &keyno,
+        tupdesc,
+        ntp,
+        AlignedBytes::new_zeroed,
+        |b| b.as_ptr(),
+    )?;
 
     Ok(Arc::new(CatL2Entry {
         keys,

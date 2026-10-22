@@ -80,8 +80,13 @@ const PAYLOAD_ENTRIES_OFF: usize = 4;
 
 impl<'a> TsVec<'a> {
     #[inline]
+    pub fn size_field(self) -> i32 {
+        i32::from_ne_bytes(self.payload[0..4].try_into().unwrap())
+    }
+
+    #[inline]
     pub fn size(self) -> usize {
-        i32::from_ne_bytes(self.payload[0..4].try_into().unwrap()).max(0) as usize
+        self.size_field().max(0) as usize
     }
 
     #[inline]
@@ -170,13 +175,19 @@ pub struct TsVecBuilder<'mcx> {
     data: PgVec<'mcx, u8>,
 }
 
+macro_rules! def_builder {
+    ($name:ident) => {
+        pub fn $name(mcx: Mcx<'mcx>, n: usize, datalen: usize) -> PgResult<Self> {
+            Ok(TsVecBuilder {
+                entries: vec_with_capacity_in(mcx, n)?,
+                data: vec_with_capacity_in(mcx, datalen)?,
+            })
+        }
+    };
+}
+
 impl<'mcx> TsVecBuilder<'mcx> {
-    pub fn with_capacity(mcx: Mcx<'mcx>, n: usize, datalen: usize) -> PgResult<Self> {
-        Ok(TsVecBuilder {
-            entries: vec_with_capacity_in(mcx, n)?,
-            data: vec_with_capacity_in(mcx, datalen)?,
-        })
-    }
+    def_builder!(with_capacity);
 
     #[inline]
     pub fn cur_off(&self) -> usize {

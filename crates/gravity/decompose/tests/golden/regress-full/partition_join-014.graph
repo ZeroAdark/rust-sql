@@ -1,0 +1,109 @@
+-- regress-full-partition_join-014
+-- EXPLAIN (COSTS OFF) SELECT * FROM prt1 t1 LEFT JOIN LATERAL (SELECT t2.a AS t2a, t3.a AS t3a, least(t1.a,t2.a,t3.b) FROM prt1 t2 JOIN prt2 t3 ON (t2.a = t3.b)) ss ON t1.a = ss.t2a WHERE t1.b = 0 ORDER BY t1.a;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=3 eligible rows=5 end=breaker(slot=0 Sort)
+  nodes n3@0 n2@2 n1@4 n0@6^
+  source range rel=43946 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(v7.2, c23:0)
+  project (1=v7.1, 2=v7.2, 3=v7.3)
+  nest inner=n4 JOIN_LEFT params=($exec0=outer.1)
+  inner node=5 serial site=0 reason=IndexSource end=sink
+  nodes n5@0 n4@1
+  source index-only rel=43946 rti=10 am=heap index=43961
+    key att=1 op=96 value=$exec0
+    recheck (op96(index.1, $exec0))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  nest inner=n6 JOIN_INNER raise-free params=($exec1=outer.1)
+  inner node=6 serial site=0 reason=IndexSource end=sink
+  nodes n6@0
+  source index rel=43967 rti=13 am=heap index=43982
+    key att=2 op=96 value=$exec1
+    recheck (op96(v13.2, $exec1))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=v13.1, 2=v13.2)
+  project (1=outer.1, 2=inner.1, 3=minmax($exec0, outer.1, inner.2))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=w4:val
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=w4:val
+p1 node=8 eligible rows=5 end=breaker(slot=0 Sort)
+  nodes n8@0 n7@2 n1@4 n0@6^
+  source range rel=43956 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(v8.2, c23:0)
+  project (1=v8.1, 2=v8.2, 3=v8.3)
+  nest inner=n9 JOIN_LEFT params=($exec2=outer.1)
+  inner node=10 serial site=0 reason=IndexSource end=sink
+  nodes n10@0 n9@1
+  source index-only rel=43956 rti=11 am=heap index=43962
+    key att=1 op=96 value=$exec2
+    recheck (op96(index.1, $exec2))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  nest inner=n11 JOIN_INNER raise-free params=($exec3=outer.1)
+  inner node=11 serial site=0 reason=IndexSource end=sink
+  nodes n11@0
+  source index rel=43972 rti=14 am=heap index=43983
+    key att=2 op=96 value=$exec3
+    recheck (op96(v14.2, $exec3))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=v14.1, 2=v14.2)
+  project (1=outer.1, 2=inner.1, 3=minmax($exec2, outer.1, inner.2))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=w4:val
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=w4:val
+p2 node=13 eligible rows=2 end=breaker(slot=0 Sort)
+  nodes n13@0 n12@2 n1@4 n0@6^
+  source range rel=43951 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(v9.2, c23:0)
+  project (1=v9.1, 2=v9.2, 3=v9.3)
+  nest inner=n14 JOIN_LEFT params=($exec4=outer.1)
+  inner node=15 serial site=0 reason=IndexSource end=sink
+  nodes n15@0 n14@1
+  source index-only rel=43951 rti=12 am=heap index=43963
+    key att=1 op=96 value=$exec4
+    recheck (op96(index.1, $exec4))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  nest inner=n16 JOIN_INNER raise-free params=($exec5=outer.1)
+  inner node=16 serial site=0 reason=IndexSource end=sink
+  nodes n16@0
+  source index rel=43977 rti=15 am=heap index=43984
+    key att=2 op=96 value=$exec5
+    recheck (op96(v15.2, $exec5))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=v15.1, 2=v15.2)
+  project (1=outer.1, 2=inner.1, 3=minmax($exec4, outer.1, inner.2))
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=w4:val
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=w4:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[I32]->[Count@8] 16B order=1+
+param $exec0 owner=n2 type=23 rep=w8:val
+param $exec1 owner=n4 type=23 rep=w4:val
+param $exec2 owner=n7 type=23 rep=w8:val
+param $exec3 owner=n9 type=23 rep=w4:val
+param $exec4 owner=n12 type=23 rep=w8:val
+param $exec5 owner=n14 type=23 rep=w4:val
+mapped: Append SeqScan IndexScan IndexOnlyScan NestLoop NestLoopParam Sort

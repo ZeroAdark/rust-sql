@@ -1,0 +1,4 @@
+path	crates/gravity/fn/src/fmgr_call.rs
+growth	std::vec::Vec::push	1
+method	std::boxed::Box::new	7
+type	std::boxed::Box	7

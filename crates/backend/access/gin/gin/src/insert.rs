@@ -25,7 +25,7 @@ use std::cell::RefCell;
 
 thread_local! {
     static GIN_INSERT_SCRATCH: RefCell<MemoryContext> =
-        RefCell::new(MemoryContext::new_bump("gin insert scratch"));
+        RefCell::new(MemoryContext::new_wholesale("gin insert scratch"));
 }
 
 pub(crate) fn with_insert_scratch<R>(
@@ -41,7 +41,7 @@ pub(crate) fn with_insert_scratch<R>(
             res
         }
         Err(_) => {
-            let ctx = MemoryContext::new_bump("gin insert scratch (reentrant)");
+            let ctx = MemoryContext::new_wholesale("gin insert scratch (reentrant)");
             f(ctx.mcx())
         }
     })
@@ -99,6 +99,7 @@ pub(crate) fn cached_gin_state(rel: &Relation<'_>) -> PgResult<GinState> {
                 key_byval: c.key_byval,
                 key_len: c.key_len,
                 key_storage: c.key_storage,
+                secdef: c.secdef,
             };
         }
         return Ok(GinState {
@@ -121,6 +122,7 @@ pub(crate) fn cached_gin_state(rel: &Relation<'_>) -> PgResult<GinState> {
         key_byval: false,
         key_len: 0,
         key_storage: 0,
+        secdef: [::types_core::InvalidOid; 6],
     }; GIN_MAX_KEY_COLS];
     for (i, col) in state.cols.iter().enumerate().take(state.natts as usize) {
         cached_cols[i] = RdAmCacheGinCol {
@@ -139,6 +141,7 @@ pub(crate) fn cached_gin_state(rel: &Relation<'_>) -> PgResult<GinState> {
             key_byval: col.key_byval,
             key_len: col.key_len,
             key_storage: col.key_storage,
+            secdef: col.secdef,
         };
     }
     *rel.rd_amcache_gin.borrow_mut() = Some(Box::new(RdAmCacheGin {

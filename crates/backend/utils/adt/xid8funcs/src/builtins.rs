@@ -1,7 +1,3 @@
-//! fmgr wrappers (`fc_*`) + `XID8FUNCS_BUILTINS` for fmgr-core. The txid_*
-//! rows (int8/txid_snapshot) and the xid8/pg_snapshot rows share prosrc, as in
-//! C's fmgr_builtins[].
-
 use ::datum::{Datum, Varlena};
 use ::types_core::Oid;
 use ::types_error::PgResult;
@@ -150,8 +146,6 @@ const fn srf(foid: Oid, name: &'static str, nargs: i16, func: PGFunction) -> Fmg
     FmgrBuiltin { foid, name, nargs, strict: true, retset: true, func }
 }
 
-// pg_export_snapshot (snapmgr.c): hosted with the snapshot builtins (the
-// crate already owns the snapmgr dep).
 pub fn fc_pg_export_snapshot(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let name = snapmgr::ExportSnapshot(&snapmgr::GetActiveSnapshot())?;
     let mcx = fcinfo.result_mcx();
@@ -161,8 +155,6 @@ pub fn fc_pg_export_snapshot(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo
     Ok(varlena_result(Varlena::from_image(image)))
 }
 
-// pg_proc.dat rows over xid8funcs.c prosrcs: the txid_* legacy aliases
-// (2939-2948, 3348, 3360) and the xid8/pg_snapshot rows (5055-5066).
 pub const XID8FUNCS_BUILTINS: &[FmgrBuiltin] = &[
     b(2939, "pg_snapshot_in", 1, fc_pg_snapshot_in),
     b(2940, "pg_snapshot_out", 1, fc_pg_snapshot_out),

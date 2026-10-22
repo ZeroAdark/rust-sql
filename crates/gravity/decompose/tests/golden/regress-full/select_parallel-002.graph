@@ -1,0 +1,73 @@
+-- regress-full-select_parallel-002
+-- explain (costs off) select round(avg(aa)), sum(aa) from a_star;
+graph pipelines=7 breakers=6 init_plans=0 root=p6
+p0 node=2 eligible rows=3 end=breaker(slot=0 PlainAgg)
+  nodes n2@0 n1@1 n0@3^
+  source range rel=18443 rti=2 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.2)
+  append arm 0/6
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p1 node=3 eligible rows=4 end=breaker(slot=0 PlainAgg)
+  nodes n3@0 n1@1 n0@3^
+  source range rel=18446 rti=3 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v3.2)
+  append arm 1/6
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p2 node=4 eligible rows=4 end=breaker(slot=0 PlainAgg)
+  nodes n4@0 n1@1 n0@3^
+  source range rel=18451 rti=4 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v4.2)
+  append arm 2/6
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p3 node=5 eligible rows=16 end=breaker(slot=0 PlainAgg)
+  nodes n5@0 n1@1 n0@3^
+  source range rel=18454 rti=5 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v5.2)
+  append arm 3/6
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p4 node=6 eligible rows=7 end=breaker(slot=0 PlainAgg)
+  nodes n6@0 n1@1 n0@3^
+  source range rel=18459 rti=6 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v6.2)
+  append arm 4/6
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p5 node=7 eligible rows=16 end=breaker(slot=0 PlainAgg)
+  nodes n7@0 n1@1 n0@3^
+  source range rel=18462 rti=7 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.2)
+  append arm 5/6
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p5
+  nodes n0@0
+  source breaker slot=0
+  project (1=fn1707(agg2101(1=outer.1), c23:0), 2=agg2108(1=outer.1))
+  outs 1=vl:call1707 2=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(104) spill=None producer=p0 layout=[]->[AvgI128@0,SumI64@24,Count@32]+valid 48B
+breaker slot=0 kind=PlainAgg budget=Fixed(104) spill=None producer=p1 layout=[]->[AvgI128@0,SumI64@24,Count@32]+valid 48B
+breaker slot=0 kind=PlainAgg budget=Fixed(104) spill=None producer=p2 layout=[]->[AvgI128@0,SumI64@24,Count@32]+valid 48B
+breaker slot=0 kind=PlainAgg budget=Fixed(104) spill=None producer=p3 layout=[]->[AvgI128@0,SumI64@24,Count@32]+valid 48B
+breaker slot=0 kind=PlainAgg budget=Fixed(104) spill=None producer=p4 layout=[]->[AvgI128@0,SumI64@24,Count@32]+valid 48B
+breaker slot=0 kind=PlainAgg budget=Fixed(104) spill=None producer=p5 layout=[]->[AvgI128@0,SumI64@24,Count@32]+valid 48B
+group slot=0 producer=p5 node=0 form=Plain hints=[] layout=[]->[AvgI128@0,SumI64@24,Count@32]+valid 48B
+  agg aggno=0 fn=2101 reg=AvgInt slot=0 count_slot=- final=Int128Avg class=AvgI128 trans=Abi(AvgI128) mods=[] expr=agg2101(1=outer.1)
+  agg aggno=1 fn=2108 reg=SumInt slot=1 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.1)
+mapped: Append SeqScan Agg

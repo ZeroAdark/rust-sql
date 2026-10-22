@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/ops/result/gate.rs
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	2
+type	std::rc::Rc	2

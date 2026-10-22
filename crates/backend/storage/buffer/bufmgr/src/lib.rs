@@ -26,6 +26,11 @@ mod read;
 mod uring;
 mod write;
 mod drop_buffers;
+mod extent;
+mod giveback;
+mod pool_sql;
+mod resize;
+mod wss;
 
 use types_core::{
     BlockNumber, Buffer, ForkNumber, Oid, INVALID_PROC_NUMBER, RELPERSISTENCE_TEMP,
@@ -41,6 +46,7 @@ pub use buf_hdr::{
     UnlockBufHdr, BUFFERDESC_PAD_TO_SIZE,
 };
 pub use buf_table::{BufMappingPartitionLock, BufTableHashCode, BufTableLookup};
+pub use extent::blocks_span;
 pub use freelist::{
     have_free_buffer, FreeAccessStrategy, GetAccessStrategy, GetAccessStrategyWithSize,
     GetPinLimit, IOContextForStrategy, StrategyFreeBuffer, StrategyGetBuffer,
@@ -60,6 +66,13 @@ pub use pin::{
 };
 pub use privref::{debug_all_private_pins, GetPrivateRefCount, ReservePrivateRefCountEntry};
 pub use evict::{EvictAllUnpinnedBuffers, EvictCounts, EvictRelUnpinnedBuffers, EvictUnpinnedBuffer};
+pub use pool_sql::{BUFPOOL_BUILTINS, PGRUST_BUFFER_POOL_RESIZE_FOID, PGRUST_BUFFER_POOL_STATS_FOID};
+pub use resize::{grow_counts, BufferPoolResize, BufferPoolStats, PoolStats, ResizeOutcome};
+pub use giveback::{
+    evicted_bytes, giveback_landing, giveback_reclaimable, giveback_request, giveback_stats, giveback_step, grow_request, GivebackStats,
+    GIVEBACK_SLICE,
+};
+pub use resize::GivebackStep;
 
 // Diagnostic (PGRUST_REDO_PIN_CHECK): wait out this thread's in-flight uring
 // prefetch pins so the check sees only genuine leaks.
@@ -82,7 +95,8 @@ pub use localbuf::{
 pub use gucs::ignore_checksum_failure;
 pub use read::{
     page_is_verified, relpath_backend_desc, relpath_desc, ReadBufferWithoutRelcache,
-    ReadBuffer_common, ReadRecentBuffer, PIV_IGNORE_CHECKSUM_FAILURE, PIV_LOG_LOG, PIV_LOG_WARNING,
+    ReadBuffer_common, ReadRecentBuffer, StartReadBuffer, StartReadBuffers, WaitReadBuffers,
+    PIV_IGNORE_CHECKSUM_FAILURE, PIV_LOG_LOG, PIV_LOG_WARNING,
 };
 pub use extend::{ExtendBufferedRelBy, ExtendBufferedRelTo, ExtendBufferedRelToSmgr};
 
@@ -177,15 +191,45 @@ pub fn ReadBufferExtended(
         block_num,
         mode,
         strategy,
-        true,
     )?;
     pgstat_count_buffer_acct(rel, acct);
     Ok(buffer)
 }
 
+/// `read_buffer_if_valid` (D3608): ReadBufferExtended's hit path for a main-fork block, counted the same, or
+/// InvalidBuffer when the block is not resident and valid. A miss starts no IO and counts nothing: PinBufferForBlock's
+/// invalid buffer is unpinned again, as C's read_stream_reset releases a forwarded buffer, and the caller's read stream
+/// pins it and reads it.
+pub fn ReadBufferIfValid(
+    rel: &RelationData<'_>,
+    block_num: BlockNumber,
+    strategy: BufferAccessStrategy,
+) -> PgResult<Buffer> {
+    if rel.rd_rel.relpersistence == RELPERSISTENCE_TEMP && !rel.rd_islocaltemp {
+        return Err(Box::new(
+            types_error::PgError::new(ERROR, "cannot access temporary tables of other sessions")
+                .with_sqlstate(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
+                .with_error_location(ErrorLocation::new(file!(), line!() as i32, "ReadBufferIfValid")),
+        ));
+    }
+    let (buffer, found) = read::PinBufferForBlock(
+        rel_locator_backend(rel),
+        rel.rd_rel.relpersistence,
+        ForkNumber::MAIN_FORKNUM,
+        block_num,
+        &strategy,
+    )?;
+    if found {
+        pgstat_count_buffer_acct(rel, read::ReadAccounting::Hit);
+        return Ok(buffer);
+    }
+    pin::ReleaseBuffer(buffer)?;
+    Ok(types_core::InvalidBuffer)
+}
+
 // The per-relation counts PinBufferForBlock makes in C: one
 // pgstat_count_buffer_read per pinned block, plus pgstat_count_buffer_hit for
-// a block found valid; nothing for an extension or a credited re-pin.
+// a block found valid; nothing for an extension.
 fn pgstat_count_buffer_acct(rel: &RelationData<'_>, acct: read::ReadAccounting) {
     match acct {
         read::ReadAccounting::Hit => pgstat_count_buffer(rel, true),
@@ -205,7 +249,7 @@ fn pgstat_count_buffer_acct(rel: &RelationData<'_>, acct: read::ReadAccounting) 
 // pgstat_enabled Cell is C's pgstat_should_count_relation, and pgstat_link is
 // C's rel->pgstat_info — count through the cached pointer while its gen is
 // current, re-assoc (one map probe) when pgstat invalidated it.
-fn pgstat_count_buffer(rel: &RelationData<'_>, hit: bool) {
+pub(crate) fn pgstat_count_buffer(rel: &RelationData<'_>, hit: bool) {
     if !rel.pgstat_enabled.get() {
         return;
     }
@@ -218,33 +262,13 @@ fn pgstat_count_buffer(rel: &RelationData<'_>, hit: bool) {
     unsafe { pgstat::relation::pgstat_count_buffer_read_via(counts, hit) };
 }
 
-/// Sequential-batch ReadBuffer (StartReadBuffers collapsed): see
-/// read::ReadBuffer_batched. Hit path is identical to ReadBuffer.
-pub fn ReadBufferBatched(
-    rel: &RelationData<'_>,
-    block_num: BlockNumber,
-    nblocks_hint: BlockNumber,
-    strategy: BufferAccessStrategy,
-) -> PgResult<Buffer> {
-    if rel.rd_rel.relpersistence == RELPERSISTENCE_TEMP && !rel.rd_islocaltemp {
-        return Err(Box::new(
-            types_error::PgError::new(
-                ERROR,
-                "cannot access temporary tables of other sessions",
-            )
-            .with_sqlstate(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
-            .with_error_location(ErrorLocation::new(file!(), line!() as i32, "ReadBufferExtended")),
-        ));
+// pgstat_count_buffer_hit(rel) alone: AsyncReadBuffers' block another
+// backend completed after this one pinned (and counted the read of) it.
+pub(crate) fn pgstat_count_buffer_hit_only(rel: &RelationData<'_>) {
+    if !rel.pgstat_enabled.get() {
+        return;
     }
-    let (buffer, acct) = read::ReadBuffer_batched_acct(
-        rel_locator_backend(rel),
-        rel.rd_rel.relpersistence,
-        block_num,
-        nblocks_hint,
-        strategy,
-    )?;
-    pgstat_count_buffer_acct(rel, acct);
-    Ok(buffer)
+    pgstat::relation::pgstat_count_buffer_hit(rel.rd_id, rel.rd_rel.relisshared);
 }
 
 /// Same-block fastpath keeps the pin (heapam's re-read path).
@@ -303,7 +327,7 @@ pub fn FlushRelationBuffers(rlocator: RelFileLocatorBackend) -> PgResult<()> {
 }
 
 pub use dbcopy::CreateAndCopyRelationData;
-pub use drop_buffers::DropDatabaseBuffers;
+pub use drop_buffers::{set_dropped_hooks, DropDatabaseBuffers};
 pub use write::FlushDatabaseBuffers;
 
 // HoldingBufferPinThatDelaysRecovery (bufmgr.c:5822): are we holding a pin on
@@ -452,6 +476,8 @@ fn AtProcExit_Buffers(_code: i32, _arg: usize) {
 
 pub fn init_seams() {
     aio_read::init_seams();
+    // L6: the memory ladder's shared_buffers rung (D4649's give-back hooks; inert with buf_giveback off)
+    mcx::ladder::install_buffers(&giveback::LADDER_BUFFERS);
     gucs::install_guc_backing();
     localbuf::install_check_temp_buffers_hook();
 
@@ -495,8 +521,9 @@ pub fn init_seams() {
             strategy,
         )
     });
-    bufmgr_seams::read_buffer_batched::set(ReadBufferBatched);
-    bufmgr_seams::forget_batch_credit::set(read::ForgetBatchCredit);
+    bufmgr_seams::read_buffer_if_valid::set(ReadBufferIfValid);
+    bufmgr_seams::read_buffer_batched_without_relcache::set(read::ReadBufferBatchedWithoutRelcache);
+    bufmgr_seams::prefetch_range_without_relcache::set(read::PrefetchRangeWithoutRelcache);
     bufmgr_seams::read_buffer_extended::set(ReadBufferExtended);
     bufmgr_seams::prefetch_buffer::set(|rel, forknum, blkno| {
         Ok(!matches!(
@@ -521,6 +548,15 @@ pub fn init_seams() {
     bufmgr_seams::buffer_get_tag::set(BufferGetTag);
     bufmgr_seams::buffer_is_permanent::set(BufferIsPermanent);
     bufmgr_seams::buffer_get_lsn_atomic::set(BufferGetLSNAtomic);
+    bufmgr_seams::start_read_buffers::set(read::StartReadBuffers);
+    bufmgr_seams::start_read_buffer::set(read::StartReadBuffer);
+    bufmgr_seams::wait_read_buffers::set(read::WaitReadBuffers);
+    bufmgr_seams::io_combine_limit::set(gucs::io_combine_limit);
+    bufmgr_seams::get_pin_limit::set(|| freelist::GetPinLimit().max(0) as u32);
+    bufmgr_seams::get_additional_pin_limit::set(extend::GetAdditionalPinLimit);
+    bufmgr_seams::get_local_pin_limit::set(localbuf::GetLocalPinLimit);
+    bufmgr_seams::get_additional_local_pin_limit::set(localbuf::GetAdditionalLocalPinLimit);
+    bufmgr_seams::get_access_strategy_pin_limit::set(freelist::GetAccessStrategyPinLimit);
 }
 
 // Internal pin kernel exposure for bench/rig only (PinBuffer is pub(crate)).

@@ -1,0 +1,21 @@
+path	crates/gravity/exec/src/admit/mod.rs
+growth	std::collections::HashMap::insert	3
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	2
+growth	std::vec::Vec::push	20
+growth	std::vec::Vec::resize	1
+macro	std::vec	7
+method	slice::join	1
+method	slice::sort_by_key	1
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	20
+method	std::iter::Iterator::collect	15
+method	std::sync::Arc::new	4
+method	std::vec::Vec::into_boxed_slice	5
+method	std::vec::Vec::with_capacity	3
+method	str::to_ascii_lowercase	2
+type	std::boxed::Box	2
+type	std::rc::Rc	1
+type	std::string::String	1
+type	std::sync::Arc	7
+type	std::vec::Vec	15

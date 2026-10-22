@@ -7,6 +7,7 @@ publish.workspace = true
 [dependencies]
 stack_depth_core = { path = "../../misc/stack_depth_core" }
 mcx = { path = "../../../../_support/mcx" }
+memledger = { path = "../../../../_support/memledger" }
 mcxt_seams = { path = "../mcxt_seams" }
 types_error = { path = "../../../../_support/types/types_error" }
 elog = { path = "../../error/elog" }

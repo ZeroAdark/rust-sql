@@ -1,0 +1,6 @@
+Rust translation of TPDE StringTable, revision 116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception; full texts are retained in
+tests/upstream/LICENSES. Modifications: Rust ownership, context allocation,
+checked arithmetic, and a private inline-storage kernel. Original reference
+sources and their provenance are retained under tests/upstream for testing only.

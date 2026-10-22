@@ -17,3 +17,6 @@ nodes_core = { path = "../../../nodes/nodes_core" }
 copyfuncs = { path = "../../../nodes/copyfuncs" }
 var_seams = { path = "../var_seams" }
 rewrite_manip = { path = "../../../rewrite/rewrite_manip" }
+
+[dev-dependencies]
+stack_depth_core = { path = "../../../utils/misc/stack_depth_core" }

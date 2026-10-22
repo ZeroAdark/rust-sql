@@ -1,0 +1,5 @@
+path	crates/backend/access/parquet_read/src/fast.rs
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::try_reserve	1
+growth	std::vec::Vec::try_reserve_exact	1
+method	std::clone::Clone::clone	1

@@ -1,0 +1,13 @@
+-- regress-full-hash_func-001
+-- SELECT v as value, hashenum(v)::bit(32) as standard, hashenumextended(v, 0)::bit(32) as extended0, hashenumextended(v, 1)::bit(32) as extended1 FROM (VALUES ('sad'::mood), ('ok'), ('happy')) x(v) WHERE hashenum(v)::bit(32) != hashenumextended(v, 0)::bit(32) OR hashenum(v)::bit(32) = hashenumextended(v, 1)::bit(32);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=3
+    row (c25051:25052)
+    row (c25051:25054)
+    row (c25051:25056)
+  filter or(op1785(fn1683(fn3515(v2.1), c23:32), fn2075(fn3414(v2.1, c20:0), c23:32)), op1784(fn1683(fn3515(v2.1), c23:32), fn2075(fn3414(v2.1, c20:1), c23:32)))
+  project (1=v2.1, 2=fn1683(fn3515(v2.1), c23:32), 3=fn2075(fn3414(v2.1, c20:0), c23:32), 4=fn2075(fn3414(v2.1, c20:1), c23:32))
+  outs 1=? 2=vl:call1683 3=vl:call2075 4=vl:call2075
+mapped: ValuesScan

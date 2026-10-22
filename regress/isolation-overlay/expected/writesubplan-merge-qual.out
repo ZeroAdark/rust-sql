@@ -1,0 +1,100 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1b s2m s1c s3sel
+step s1b: UPDATE wmq_tgt SET b = 1 WHERE a = 1;
+step s2m: 
+  MERGE INTO wmq_tgt t USING (SELECT *, (SELECT count(*) FROM wmq_ref r WHERE r.ab = s.a + s.b AND r.cd = s.c - s.d) cnt FROM wmq_src s) s
+  ON t.a = s.a AND t.b < s.cnt WHEN MATCHED AND t.c > s.cnt THEN UPDATE SET (b, c) = (SELECT s.b, s.cnt);
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM wmq_tgt ORDER BY a;
+a|b|c|d
+-+-+-+-
+1|1|9|0
+2|0|2|0
+(2 rows)
+
+
+starting permutation: s1c2 s2m s1c s3sel
+step s1c2: UPDATE wmq_tgt SET c = 1 WHERE a = 2;
+step s2m: 
+  MERGE INTO wmq_tgt t USING (SELECT *, (SELECT count(*) FROM wmq_ref r WHERE r.ab = s.a + s.b AND r.cd = s.c - s.d) cnt FROM wmq_src s) s
+  ON t.a = s.a AND t.b < s.cnt WHEN MATCHED AND t.c > s.cnt THEN UPDATE SET (b, c) = (SELECT s.b, s.cnt);
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM wmq_tgt ORDER BY a;
+a|b|c|d
+-+-+-+-
+1|1|1|0
+2|0|1|0
+(2 rows)
+
+
+starting permutation: s1del s2m s1c s3sel
+step s1del: DELETE FROM wmq_tgt WHERE a = 1;
+step s2m: 
+  MERGE INTO wmq_tgt t USING (SELECT *, (SELECT count(*) FROM wmq_ref r WHERE r.ab = s.a + s.b AND r.cd = s.c - s.d) cnt FROM wmq_src s) s
+  ON t.a = s.a AND t.b < s.cnt WHEN MATCHED AND t.c > s.cnt THEN UPDATE SET (b, c) = (SELECT s.b, s.cnt);
+ <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s3sel: SELECT * FROM wmq_tgt ORDER BY a;
+a|b|c|d
+-+-+-+-
+2|0|2|0
+(1 row)
+
+
+starting permutation: s1b s2mt s1c s3sel
+step s1b: UPDATE wmq_tgt SET b = 1 WHERE a = 1;
+step s2mt: 
+  MERGE INTO wmq_tgt t USING wmq_src s ON t.a = s.a AND t.b < (SELECT count(*) FROM wmq_ref r WHERE r.ab = t.a + t.b + s.b)
+  WHEN MATCHED THEN UPDATE SET d = t.d + 1 WHEN NOT MATCHED THEN INSERT VALUES (s.a + 10, s.b, s.c, s.d);
+ <waiting ...>
+step s1c: COMMIT;
+step s2mt: <... completed>
+step s3sel: SELECT * FROM wmq_tgt ORDER BY a;
+ a|b|c|d
+--+-+-+-
+ 1|1|9|0
+ 2|0|9|1
+11|1|5|1
+(3 rows)
+
+
+starting permutation: s1b s2mt s1r s3sel
+step s1b: UPDATE wmq_tgt SET b = 1 WHERE a = 1;
+step s2mt: 
+  MERGE INTO wmq_tgt t USING wmq_src s ON t.a = s.a AND t.b < (SELECT count(*) FROM wmq_ref r WHERE r.ab = t.a + t.b + s.b)
+  WHEN MATCHED THEN UPDATE SET d = t.d + 1 WHEN NOT MATCHED THEN INSERT VALUES (s.a + 10, s.b, s.c, s.d);
+ <waiting ...>
+step s1r: ROLLBACK;
+step s2mt: <... completed>
+step s3sel: SELECT * FROM wmq_tgt ORDER BY a;
+a|b|c|d
+-+-+-+-
+1|0|9|1
+2|0|9|1
+(2 rows)
+
+
+starting permutation: s2mj s1b s2mt s1c s3sel s2mjr
+step s2mj: SET enable_hashjoin = off; SET enable_nestloop = off;
+step s1b: UPDATE wmq_tgt SET b = 1 WHERE a = 1;
+step s2mt: 
+  MERGE INTO wmq_tgt t USING wmq_src s ON t.a = s.a AND t.b < (SELECT count(*) FROM wmq_ref r WHERE r.ab = t.a + t.b + s.b)
+  WHEN MATCHED THEN UPDATE SET d = t.d + 1 WHEN NOT MATCHED THEN INSERT VALUES (s.a + 10, s.b, s.c, s.d);
+ <waiting ...>
+step s1c: COMMIT;
+step s2mt: <... completed>
+step s3sel: SELECT * FROM wmq_tgt ORDER BY a;
+ a|b|c|d
+--+-+-+-
+ 1|1|9|0
+ 2|0|9|1
+11|1|5|1
+(3 rows)
+
+step s2mjr: RESET enable_hashjoin; RESET enable_nestloop;

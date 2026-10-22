@@ -1,0 +1,20 @@
+-- regress-full-interval-003
+-- select avg(f1) from interval_tbl where isfinite(f1);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=617 end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@2^
+  source range rel=17177 rti=1 am=heap
+    lanes Attr(1):byref8:fx16:win/page Offset:byval2:w2:val
+  filter fn1390(v1.1)
+  project (1=v1.1)
+  outs 1=fx16:win/page
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2106(1=outer.1))
+  outs 1=fx16:call2106
+breaker slot=0 kind=PlainAgg budget=Fixed(136) spill=None producer=p0 layout=[]->[IntervalSum@0,Count@64]+valid 80B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[IntervalSum@0,Count@64]+valid 80B
+  agg aggno=0 fn=2106 reg=AvgInterval slot=0 count_slot=- final=IntervalAvg class=AvgInterval trans=Abi(IntervalSum) mods=[] expr=agg2106(1=outer.1)
+mapped: SeqScan Agg

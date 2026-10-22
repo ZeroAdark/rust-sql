@@ -1,0 +1,1 @@
+backend/access/pgrcolumnar/pgrc_am/src/catalog.rs	SHARED_CALLS	pgrc	exit	thread	COMPOSED: this thread's view registry visits (shared_view, kept_filtered), one u64: monotonic, read as deltas (shared_view_calls: the COMPOSED cost guard test)

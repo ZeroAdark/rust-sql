@@ -142,6 +142,8 @@ pub(crate) struct IndexCore {
     pub has_indpred: bool,
     pub indexprs_src: Option<Box<str>>,
     pub indpred_src: Option<Box<str>>,
+    /// The opclass material below (opcintype, opfamily, support, supportinfo_oids) is the publisher's copy: only the
+    /// init file's load takes it; a miss-path shell takes its own backend's (`shell_from_core`, D3888).
     pub opcintype: Box<[Oid]>,
     pub opfamily: Box<[Oid]>,
     pub indoption: Box<[i16]>,
@@ -167,12 +169,28 @@ pub(crate) struct RelCoreShared {
     pub compact: Box<[CompactAttribute]>,
     pub constr: Option<ConstrCore>,
     pub index: Option<IndexCore>,
+    /// D4737: the account the core was built on (`from_built`), where its blocks were allocated. Its last `Arc` drops on
+    /// whichever thread lets go of it last (another backend's tupdesc mirror, a DROP's own open of the relation), so its
+    /// fields and block free inside this home, not on that thread's account: freed there, they left their bytes on the
+    /// builder and took as much off the dropper, a transfer that grew with every relation another backend built.
+    home: memledger::Home,
+    /// D4737: the last field: the core's fields and its `Arc` block leave inside `home` (armed by `Drop`).
+    home_exit: memledger::HomeExit,
+}
+
+impl Drop for RelCoreShared {
+    fn drop(&mut self) {
+        let home = self.home;
+        self.home_exit.arm(&home);
+    }
 }
 
 // SAFETY: immutable after construction and publication. The lone interior-
 // mutable member (CompactAttribute::attcacheoff Cells in `compact`) is a
 // template that is only ever READ (cloned element-wise into per-thread
-// copies), never written through, on any thread.
+// copies), never written through, on any thread. `home_exit` is written only
+// by `Drop` (exclusive access), on the dropping thread, which leaves the home
+// before the drop returns.
 unsafe impl Send for RelCoreShared {}
 // SAFETY: as above.
 unsafe impl Sync for RelCoreShared {}
@@ -301,6 +319,8 @@ impl RelCoreShared {
             compact: td.compact_attrs.iter().cloned().collect(),
             constr,
             index,
+            home: memledger::Home::here(),
+            home_exit: memledger::HomeExit::for_block(memledger::arc_bytes::<RelCoreShared>()),
         })
     }
 }
@@ -321,6 +341,8 @@ thread_local! {
     // the bare TLS destructor (a free into a reset arena, found by the first
     // crash smoke). Re-armed per session (threads may be reused).
     static TD_CLEANUP_ARMED: Cell<bool> = const { Cell::new(false) };
+    // Next prune at twice the survivors: amortized O(1) per insert.
+    static TD_NEXT_PRUNE: Cell<usize> = const { Cell::new(TD_MIRROR_PRUNE_LEN) };
 }
 
 const TD_MIRROR_PRUNE_LEN: usize = 256;
@@ -333,6 +355,7 @@ fn tupdesc_mirror(core: &Arc<RelCoreShared>) -> PgResult<Rc<TupleDescData<'stati
     if !TD_CLEANUP_ARMED.with(|c| c.replace(true)) {
         ::mcx::register_session_cleanup(Box::new(|| {
             TD_MIRRORS.with(|m| m.borrow_mut().clear());
+            TD_NEXT_PRUNE.set(TD_MIRROR_PRUNE_LEN);
             TD_CLEANUP_ARMED.with(|c| c.set(false));
         }));
     }
@@ -396,8 +419,9 @@ fn tupdesc_mirror(core: &Arc<RelCoreShared>) -> PgResult<Rc<TupleDescData<'stati
     let rc = Rc::new(td);
     TD_MIRRORS.with(|m| {
         let mut m = m.borrow_mut();
-        if m.len() >= TD_MIRROR_PRUNE_LEN {
+        if m.len() >= TD_NEXT_PRUNE.get() {
             m.retain(|_, (rc, _)| Rc::strong_count(rc) > 1);
+            TD_NEXT_PRUNE.set((2 * m.len()).max(TD_MIRROR_PRUNE_LEN));
         }
         m.insert(key, (Rc::clone(&rc), Arc::clone(core)));
     });
@@ -411,7 +435,14 @@ fn tupdesc_mirror(core: &Arc<RelCoreShared>) -> PgResult<Rc<TupleDescData<'stati
 /// Build a thread-local `RelationData` shell over a shared core: all
 /// thread-affine state fresh (smgr, subids, pgstat, amcaches, lock info,
 /// physical addr), all immutable bulk aliased from the core.
-pub(crate) fn shell_from_core(core: &Arc<RelCoreShared>) -> PgResult<RelationData<'static>> {
+///
+/// `own_support` (D3888, the miss path): an index's opclass material (rd_opcintype, rd_opfamily, rd_support,
+/// rd_supportinfo) comes from this backend's own opclass cache, as C's RelationInitIndexAccessInfo takes it from the
+/// backend's OpClassCache, never from the core. That cache is never flushed (C's neither): after a support catalog
+/// change, an older backend keeps its copy and a newer one loads the new rows, so the core's arrays are the
+/// publisher's copy, which another backend may not take. The init file's load (critical indexes, before catalog
+/// access) takes the core's arrays, as C's init file carries rd_support.
+pub(crate) fn shell_from_core(core: &Arc<RelCoreShared>, own_support: bool) -> PgResult<RelationData<'static>> {
     let mcx = cache_mcx();
     let rd_att = tupdesc_mirror(core)?;
 
@@ -440,23 +471,43 @@ pub(crate) fn shell_from_core(core: &Arc<RelCoreShared>) -> PgResult<RelationDat
                     indexprs_src: ix.indexprs_src.as_deref().map(|s| unsafe { mirror_string(s) }),
                     indpred_src: ix.indpred_src.as_deref().map(|s| unsafe { mirror_string(s) }),
                 };
-                let mut si: Vec<Option<types_fmgr::FmgrInfo>> =
-                    Vec::with_capacity(ix.supportinfo_oids.len());
-                for slot in ix.supportinfo_oids.iter() {
-                    si.push(match slot {
-                        Some(oid) => Some(fmgr_seams::fmgr_info::call(*oid)?),
-                        None => None,
-                    });
+                if own_support {
+                    // relnatts: the pg_attribute rows the core holds, as the build's scan counted them.
+                    let relnatts = i16::try_from(core.attrs.len()).unwrap_or(i16::MAX);
+                    let ii = relcache_build_seams::relation_init_index_access_info::call(
+                        mcx,
+                        core.relid,
+                        &core.form,
+                        relnatts,
+                    )?;
+                    (
+                        Some(index),
+                        ii.opcintype,
+                        ii.opfamily,
+                        unsafe { mirror_vec(&ix.indoption) },
+                        unsafe { mirror_vec(&ix.indcollation) },
+                        ii.support,
+                        ii.supportinfo,
+                    )
+                } else {
+                    let mut si: Vec<Option<types_fmgr::FmgrInfo>> =
+                        ::mcx::std_vec_with_capacity("CacheMemoryContext", ix.supportinfo_oids.len())?;
+                    for slot in ix.supportinfo_oids.iter() {
+                        si.push(match slot {
+                            Some(oid) => Some(fmgr_seams::fmgr_info::call(*oid)?),
+                            None => None,
+                        });
+                    }
+                    (
+                        Some(index),
+                        unsafe { mirror_vec(&ix.opcintype) },
+                        unsafe { mirror_vec(&ix.opfamily) },
+                        unsafe { mirror_vec(&ix.indoption) },
+                        unsafe { mirror_vec(&ix.indcollation) },
+                        unsafe { mirror_vec(&ix.support) },
+                        si,
+                    )
                 }
-                (
-                    Some(index),
-                    unsafe { mirror_vec(&ix.opcintype) },
-                    unsafe { mirror_vec(&ix.opfamily) },
-                    unsafe { mirror_vec(&ix.indoption) },
-                    unsafe { mirror_vec(&ix.indcollation) },
-                    unsafe { mirror_vec(&ix.support) },
-                    si,
-                )
             }
             None => (
                 None,
@@ -497,6 +548,7 @@ pub(crate) fn shell_from_core(core: &Arc<RelCoreShared>) -> PgResult<RelationDat
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: support,
         rd_supportinfo: RefCell::new(supportinfo),
         rd_opcoptions: Default::default(),
@@ -534,6 +586,10 @@ pub(crate) fn miss_via_l2(relid: Oid) -> PgResult<Option<Rc<RelationData<'static
     let db = init_small::globals::MyDatabaseId();
     let key = l2cache::L2Key { kind: l2cache::KIND_REL, id: relid, db, hash: 0 };
     let domain = l2cache::Domain::Rel(relid);
+    // RelationBuildDesc's pg_class scan opens the catalog with AccessShareLock
+    // (relcache.c:371), which absorbs queued invalidations (lmgr.c:136); the
+    // L2 arm skips that open, so absorb them before reading the view.
+    inval_seams::accept_invalidation_messages::call()?;
     loop {
         let gen = l2cache::view_gen(domain);
         if let Some(v) = l2cache::lookup(key, gen, |a| a.is::<RelCoreShared>()) {
@@ -549,7 +605,7 @@ pub(crate) fn miss_via_l2(relid: Oid) -> PgResult<Option<Rc<RelationData<'static
                     std::thread::current().id()
                 );
             }
-            let data = shell_from_core(&core)?;
+            let data = shell_from_core(&core, true)?;
             // The shell assembly can process invalidations (AM registration
             // takes catalog locks): if this relid's domain moved meanwhile,
             // the shell is stale at birth — discard and retry at the new view.
@@ -597,6 +653,43 @@ pub(crate) fn miss_via_l2(relid: Oid) -> PgResult<Option<Rc<RelationData<'static
             }
         }
     }
+}
+
+pub(crate) struct StatExtShared(Box<[Oid]>);
+
+pub(crate) enum StatExtProbe {
+    Hit(Rc<[Oid]>),
+    Miss(Option<u64>),
+}
+
+/// `RelationGetStatExtList`'s L1-miss arm. Like `miss_via_l2`, absorbs queued
+/// invalidations first: C's miss opens pg_statistic_ext, which absorbs them.
+pub(crate) fn statext_probe(relid: Oid) -> PgResult<StatExtProbe> {
+    if !l2_active() {
+        return Ok(StatExtProbe::Miss(None));
+    }
+    inval_seams::accept_invalidation_messages::call()?;
+    let key = l2cache::rel_key(relid, init_small::globals::MyDatabaseId());
+    let gen = l2cache::view_gen(l2cache::Domain::Rel(relid));
+    Ok(match l2cache::lookup(key, gen, |a| a.is::<StatExtShared>()) {
+        Some(v) => {
+            let list = v.downcast_ref::<StatExtShared>().expect("matched StatExtShared");
+            StatExtProbe::Hit(Rc::from(&list.0[..]))
+        }
+        None => StatExtProbe::Miss(Some(gen)),
+    })
+}
+
+/// Publish a list scanned after `statext_probe` returned `Miss(Some(gen))`,
+/// unless an invalidation raced the scan (the catcache / relcache rule).
+pub(crate) fn statext_publish(relid: Oid, gen: u64, oids: &[Oid]) {
+    if l2cache::current_gen(l2cache::Domain::Rel(relid)) != gen || l2cache::private_build_mode() {
+        return;
+    }
+    let key = l2cache::rel_key(relid, init_small::globals::MyDatabaseId());
+    let bytes = core::mem::size_of::<StatExtShared>() + core::mem::size_of_val(oids);
+    let v: Arc<dyn core::any::Any + Send + Sync> = Arc::new(StatExtShared(oids.into()));
+    l2cache::insert(key, gen, v, bytes, |a| a.is::<StatExtShared>());
 }
 
 /// D3.4 idle passivation: drop registry entries whose mirror the registry is

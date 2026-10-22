@@ -1,0 +1,12 @@
+-- oltpc-103
+-- SELECT abalance FROM pgbench_accounts WHERE aid = 4242 /* C71 TPCB select account */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=16573 rti=1 am=heap index=16577
+    key att=1 op=96 value=c23:4242
+    recheck (op96(v1.1, c23:4242))
+    lanes Attr(3):byval8:w8:val
+  project (1=v1.3)
+  outs 1=w8:val
+mapped: IndexScan

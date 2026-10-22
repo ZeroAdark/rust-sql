@@ -1,0 +1,16 @@
+-- regress-full-create_index-051
+-- explain (costs off) SELECT thousand, tenthous FROM tenk1 WHERE thousand > -1 AND tenthous IN (1001,3000) ORDER BY thousand limit 2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=16423 rti=1 am=heap index=19342
+    key att=8 op=521 value=c23:-1
+    key att=11 op=96 form=any value=c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\xe9\x03\x00\x00\xb8\x0b\x00\x00'
+    recheck (op521(index.1, c23:-1), any96(index.2, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\xe9\x03\x00\x00\xb8\x0b\x00\x00'))
+    lanes Attr(8):byval8:w8:val Attr(11):byval8:w8:val
+  project (1=index.1, 2=index.2)
+  limit count=2 offset=all
+  project (1=outer.1, 2=outer.2)
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val 2=w4:val
+mapped: IndexOnlyScan Limit

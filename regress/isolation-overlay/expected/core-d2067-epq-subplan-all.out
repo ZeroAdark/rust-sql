@@ -1,0 +1,49 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2e s1u s2q s1c s2last s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2e: EXPLAIN (COSTS OFF) SELECT a.id, b.id FROM ua a JOIN ub b ON b.a_id = a.id WHERE b.w > ALL (SELECT utick(x) FROM uc) FOR UPDATE;
+QUERY PLAN                                        
+--------------------------------------------------
+LockRows                                          
+  ->  Hash Join                                   
+        Hash Cond: (b.a_id = a.id)                
+        ->  Seq Scan on ub b                      
+              Filter: (ALL (w > (SubPlan 1).col1))
+              SubPlan 1                           
+                ->  Materialize                   
+                      ->  Seq Scan on uc          
+        ->  Hash                                  
+              ->  Seq Scan on ua a                
+(10 rows)
+
+step s1u: UPDATE ub SET w = w WHERE id IN (1, 6, 11); UPDATE ua SET v = v WHERE id = 2;
+step s2q: SELECT a.id, b.id FROM ua a JOIN ub b ON b.a_id = a.id WHERE b.w > ALL (SELECT utick(x) FROM uc) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+id|id
+--+--
+ 1| 1
+ 2| 2
+ 3| 3
+ 4| 4
+ 5| 5
+ 1| 6
+ 2| 7
+ 3| 8
+ 4| 9
+ 5|10
+ 1|11
+ 2|12
+ 3|13
+ 4|14
+ 5|15
+(15 rows)
+
+step s2last: SELECT last_value, is_called FROM ucnt;
+last_value|is_called
+----------+---------
+        21|t        
+(1 row)
+
+step s2c: COMMIT;

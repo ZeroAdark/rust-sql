@@ -1,0 +1,159 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1bump s2upd s1c s2sel
+step s1b: BEGIN;
+step s1bump: UPDATE rt SET b = b + 100 WHERE a IN (40, 45);
+step s2upd: UPDATE rt SET b = b + rp.v FROM rp WHERE rt.a = rp.id AND rp.v >= 400 AND rp.v <= 460; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT a, b FROM rt WHERE a BETWEEN 40 AND 50 OR a > 1000 ORDER BY a;
+ a|  b
+--+---
+40|501
+41|411
+42|421
+43|431
+44|441
+45|551
+46|461
+47|  1
+48|  1
+49|  1
+50|  1
+(11 rows)
+
+
+starting permutation: s1b s1move s2upd s1c s2sel
+step s1b: BEGIN;
+step s1move: UPDATE rt SET a = a + 1000 WHERE a = 45;
+step s2upd: UPDATE rt SET b = b + rp.v FROM rp WHERE rt.a = rp.id AND rp.v >= 400 AND rp.v <= 460; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT a, b FROM rt WHERE a BETWEEN 40 AND 50 OR a > 1000 ORDER BY a;
+   a|  b
+----+---
+  40|401
+  41|411
+  42|421
+  43|431
+  44|441
+  46|461
+  47|  1
+  48|  1
+  49|  1
+  50|  1
+1045|  1
+(11 rows)
+
+
+starting permutation: s1b s1part s2upd s1c s2sel
+step s1b: BEGIN;
+step s1part: UPDATE rc SET v = 9 WHERE id = 45; UPDATE rt SET b = b + 100 WHERE a IN (40, 45);
+step s2upd: UPDATE rt SET b = b + rp.v FROM rp WHERE rt.a = rp.id AND rp.v >= 400 AND rp.v <= 460; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT a, b FROM rt WHERE a BETWEEN 40 AND 50 OR a > 1000 ORDER BY a;
+ a|  b
+--+---
+40|501
+41|411
+42|421
+43|431
+44|441
+45|551
+46|461
+47|  1
+48|  1
+49|  1
+50|  1
+(11 rows)
+
+
+starting permutation: s1b s1bump s2del s1c s2sel
+step s1b: BEGIN;
+step s1bump: UPDATE rt SET b = b + 100 WHERE a IN (40, 45);
+step s2del: DELETE FROM rt USING rq WHERE rt.a = rq.id AND rq.v BETWEEN 44 AND 46; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2sel: SELECT a, b FROM rt WHERE a BETWEEN 40 AND 50 OR a > 1000 ORDER BY a;
+ a|  b
+--+---
+40|101
+41|  1
+42|  1
+43|  1
+47|  1
+48|  1
+49|  1
+50|  1
+(8 rows)
+
+
+starting permutation: s1b s1bump s2mrg s1c s2sel
+step s1b: BEGIN;
+step s1bump: UPDATE rt SET b = b + 100 WHERE a IN (40, 45);
+step s2mrg: MERGE INTO rt USING rp ON rt.a = rp.id AND rp.v BETWEEN 440 AND 460 WHEN MATCHED THEN UPDATE SET b = rt.b + rp.v; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT a, b FROM rt WHERE a BETWEEN 40 AND 50 OR a > 1000 ORDER BY a;
+ a|  b
+--+---
+40|101
+41|  1
+42|  1
+43|  1
+44|441
+45|551
+46|461
+47|  1
+48|  1
+49|  1
+50|  1
+(11 rows)
+
+
+starting permutation: s1b s1bump s2two s1c s2sel
+step s1b: BEGIN;
+step s1bump: UPDATE rt SET b = b + 100 WHERE a IN (40, 45);
+step s2two: UPDATE rt SET b = b + rp.v + rq.v FROM rp, rq WHERE rt.a = rp.id AND rt.a = rq.id AND rp.v >= 400 AND rp.v <= 460 AND rq.v BETWEEN 38 AND 47; <waiting ...>
+step s1c: COMMIT;
+step s2two: <... completed>
+step s2sel: SELECT a, b FROM rt WHERE a BETWEEN 40 AND 50 OR a > 1000 ORDER BY a;
+ a|  b
+--+---
+40|541
+41|452
+42|463
+43|474
+44|485
+45|596
+46|507
+47|  1
+48|  1
+49|  1
+50|  1
+(11 rows)
+
+
+starting permutation: s1b s1part s2two s1c s2sel
+step s1b: BEGIN;
+step s1part: UPDATE rc SET v = 9 WHERE id = 45; UPDATE rt SET b = b + 100 WHERE a IN (40, 45);
+step s2two: UPDATE rt SET b = b + rp.v + rq.v FROM rp, rq WHERE rt.a = rp.id AND rt.a = rq.id AND rp.v >= 400 AND rp.v <= 460 AND rq.v BETWEEN 38 AND 47; <waiting ...>
+step s1c: COMMIT;
+step s2two: <... completed>
+step s2sel: SELECT a, b FROM rt WHERE a BETWEEN 40 AND 50 OR a > 1000 ORDER BY a;
+ a|  b
+--+---
+40|541
+41|452
+42|463
+43|474
+44|485
+45|596
+46|507
+47|  1
+48|  1
+49|  1
+50|  1
+(11 rows)
+

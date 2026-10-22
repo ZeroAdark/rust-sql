@@ -1,0 +1,5 @@
+path	crates/gravity/backend/src/cache.rs
+growth	std::collections::HashMap::insert	2
+growth	std::vec::Vec::push	1
+method	std::sync::Arc::new	2
+type	std::sync::Arc	2

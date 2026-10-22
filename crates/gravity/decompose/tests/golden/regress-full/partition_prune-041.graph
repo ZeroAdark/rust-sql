@@ -1,0 +1,11 @@
+-- regress-full-partition_prune-041
+-- explain (costs off) select * from coercepart where a = all ('{ab}');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=7 end=sink
+  nodes n1@0
+  source range rel=44977 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  filter all98(relabel25(v2.1), c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x18\x00\x00\x00ab\x00\x00')
+  project (1=v2.1)
+  outs 1=vl:win/page
+mapped: SeqScan

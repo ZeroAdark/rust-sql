@@ -1,0 +1,1 @@
+gravity/hosts/src/scratch.rs	SMALL	runtime	scope:small_roots	thread	pglpoint S3b (D4572): NodeScratch::new makes small-first roots while a small_roots guard lives on this thread (the hosts a memo entry keeps); the guard puts the previous value back on every exit

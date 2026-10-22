@@ -1,0 +1,2 @@
+backend/utils/adt/pg_locale/src/locale_time.rs	CURRENT_LC_TIME_VALID	pgport	key:the lc_time setting (invalidate_lc_time on every lc_time write)	cache	cleared by the lc_time hook the gucs member runs; LC_TIME_CACHE's valid flag
+backend/utils/adt/pg_locale/src/locale_time.rs	LC_TIME_CACHE	pgport	key:the lc_time setting (invalidate_lc_time on every lc_time write)	cache	cleared by the lc_time hook the gucs member runs; localized day / month names

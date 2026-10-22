@@ -1,0 +1,2 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/vacuum.rs
+macro	std::format	2

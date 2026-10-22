@@ -1,0 +1,9 @@
+-- regress-full-join_hash-008
+-- select original > 1 as initially_multibatch, final > original as increased_batches from hash_join_batches( $$ select count(*) from simple r join simple s using (id); $$);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=io23(op3963($7, c25:'Hash Batches')))
+  outs 1=w4:val
+mapped: Result

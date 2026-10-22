@@ -1,0 +1,9 @@
+-- regress-full-plpgsql-023
+-- insert into PSlot values ('PS.base.b1', 'PF0_1', '', 'WS.002.1a');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn668(relabel1042(op654(fn401($4), fn877(fn401($2), c23:1, c23:2))), c23:8, c16:0))
+  outs 1=vl:call668
+mapped: Result

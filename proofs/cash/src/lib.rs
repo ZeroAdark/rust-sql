@@ -509,7 +509,7 @@ mod proofs {
     // 53-bit multiply/divide = wall class -> special-grid + zero-arm
     // treatment (float law). Runs need --no-overflow-checks (legal IEEE NaN
     // production trips Kani's default float checks, property noise not
-    // parity). Pinned mechanism (triage 2026-07-31, CI cluster re-sweep
+    // parity). Pinned mechanism (triage 2026-07-31, fleet re-sweep
     // 4257c775bf): CBMC's "NaN on division" check flags ANY x / +-inf —
     // its div NaN condition is (0/0 || isinf(divisor)), though x/inf is
     // +-0.0, not NaN, for finite x (native probe: 7.0/inf FAILS the check,

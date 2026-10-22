@@ -1,0 +1,7 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M7-RIG m7x table-free join rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT a.x, b.y FROM (SELECT g AS x FROM generate_series(1, 0) g) a FULL JOIN (VALUES (1), (NULL), (1)) b(y) ON a.x = b.y
+cols: x	y
+[pg]
+\N	1
+\N	\N
+\N	1

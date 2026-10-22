@@ -52,7 +52,9 @@ fn query(json: &str, path: &str, silent: bool, tz: bool) -> Result<Vec<String>, 
     let jb = jb_payload(mcx, json);
     let jp = jp_image(mcx, path);
     match jsonb_path_query_core(mcx, &jb[4..], &jp, JsonPathVars::None, silent, tz) {
-        Ok(rows) => Ok(rows.iter().map(|img| out(mcx, &img[4..])).collect()),
+        Ok(rows) => Ok((0..rows.len())
+            .map(|i| out(mcx, &rows.image(mcx, i).unwrap().unwrap()[4..]))
+            .collect()),
         Err(e) => Err(e.message().to_string()),
     }
 }
@@ -686,7 +688,9 @@ mod passing_text_detoast {
         let rows = jsonb_path_query_core(mcx, &jb[4..], &jp, JsonPathVars::List(&var), false, false)
             .unwrap_or_else(|e| panic!("$x: {}", e.message()));
         assert_eq!(rows.len(), 1);
-        out(mcx, &rows[0][4..])
+        let img = rows.image(mcx, 0).unwrap().unwrap();
+        let s = out(mcx, &img[4..]);
+        s
     }
 
     #[test]
@@ -722,4 +726,47 @@ fn missing_variable_message_keeps_raw_name_bytes() {
         err.message_raw.as_deref(),
         Some(b"could not find jsonpath variable \"c\xC3\"".as_slice())
     );
+}
+
+#[test]
+fn recursive_descent_rows_hold_linear_memory() {
+    setup();
+    let retained = |depth: usize| {
+        let cx = MemoryContext::new("jsonpath exec test");
+        let mcx = cx.mcx();
+        let json = format!("[{}1{}]", "[".repeat(depth), "]".repeat(depth));
+        let jb = jb_payload(mcx, &json);
+        let jp = jp_image(mcx, "strict $.**");
+        let rows = jsonb_path_query_core(mcx, &jb[4..], &jp, JsonPathVars::None, false, false)
+            .expect("query");
+        assert_eq!(rows.len(), depth + 2);
+        let deepest = rows.image(mcx, depth).unwrap().unwrap();
+        assert_eq!(out(mcx, &deepest[4..]), "[1]");
+        let leaf = rows.image(mcx, depth + 1).unwrap().unwrap();
+        assert_eq!(out(mcx, &leaf[4..]), "1");
+        rows.retained_bytes()
+    };
+    let small = retained(500);
+    let large = retained(2000);
+    assert!(large < small * 6, "retained {small} B at depth 500, {large} B at depth 2000");
+}
+
+// Stack bytes per jsonpath recursion level for '---...$' on 1: the parse's
+// flatten plus the unary-minus executor, measured through the guard.
+// C 18.6 (clang -O2): 256 B per level (executeUnaryArithmExpr +
+// executeItemOptUnwrapResult). Measured 2026-09-22, opt3/opt0: 1,171/33,554 B.
+#[test]
+fn jsonpath_recursion_stack_per_level_is_capped() {
+    setup();
+    let per_level = stack_depth::measured_bytes_per_level(4 << 20, 9_000, |n| {
+        let cx = MemoryContext::new("jsonpath stack probe");
+        let mcx = cx.mcx();
+        let jb = jb_payload(mcx, "1");
+        let path = format!("{}$", "-".repeat(n));
+        let jp = adt_jsonpath::path::jsonpath_in(mcx, path.as_bytes(), None)?.expect("hard path");
+        jsonb_path_query_core(mcx, &jb[4..], &jp, JsonPathVars::None, false, false).map(|_| ())
+    });
+    eprintln!("jsonpath stack per level: unary minus {per_level} B");
+    let cap = stack_depth::per_level_cap(1_700, 44_000);
+    assert!(per_level <= cap, "'-' chain costs {per_level} B/level (cap {cap})");
 }

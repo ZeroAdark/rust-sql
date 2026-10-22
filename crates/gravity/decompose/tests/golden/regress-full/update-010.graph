@@ -1,0 +1,20 @@
+-- regress-full-update-010
+-- UPDATE update_test SET (b,a) = (select a+1,b from update_test where a = 1000) WHERE a = 11;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 eligible rows=6 end=sink
+  nodes n2@0
+  source range rel=26416 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v2.1, c23:1000)
+  project (1=op551(v2.1, c23:1), 2=v2.2)
+  outs 1=w4:val 2=w8:val
+p1 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=26416 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v1.1, c23:11)
+  project (1=$exec1, 2=$exec0, 3j=c2249:null, 4j=v1.-1, 5j=v1.3)
+  write UPDATE rel=26416 rti=1 natts=3 indexes=() set=(1,2) epq=$exec2
+  outs 1=w4:val 2=w4:val 3=vl:stmt/imm 4=fx6:row 5=vl:win/page
+init_plan id=1 pipeline=p0 link=MultiExpr param=$exec0 sets=($exec0,$exec1)
+mapped: ModifyTable SeqScan SubPlan

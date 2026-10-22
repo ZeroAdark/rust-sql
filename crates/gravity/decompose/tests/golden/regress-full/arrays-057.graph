@@ -1,0 +1,30 @@
+-- regress-full-arrays-057
+-- select array_agg(nullif(ten, 4)) from (select ten from tenk1 where unique1 < 15 order by unique1) ss;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n4@0 n3@0 n2@1^
+  source bitmap rel=16423 rti=2 am=heap
+    bitmap index node=4 index=19339 rows=15
+      key att=1 op=97 value=c23:15
+    recheck (op97(v2.1, c23:15))
+    lanes Attr(1):byval8:w8:val Attr(5):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.5, 2j=v2.1)
+  sort keys=2+:I32 form=runs
+  outs 1=w8:val 2=w8:val
+p1 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 PlainAgg)
+  desc consumes=slot0@p0
+  nodes n2@0 n0@1^
+  source breaker slot=0
+  project (1=outer.1, 2j=outer.2)
+  outs 1=w8:val 2=w8:val
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=agg2335(1=nullif96(outer.1, c23:4)))
+  outs 1=vl:call2335
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=1 kind=PlainAgg budget=Fixed(72) spill=None producer=p1 layout=[]->[Count@0]+valid 16B
+group slot=1 producer=p1 node=0 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=2335 reg=Collect slot=- count_slot=- final=Collect class=Collect(Array) trans=Var mods=[] expr=agg2335(1=nullif96(outer.1, c23:4))
+mapped: BitmapIndexScan BitmapHeapScan Sort Agg

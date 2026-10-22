@@ -1,0 +1,9 @@
+-- regress-full-numeric-035
+-- select log(590489.45235237);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn1736(c1700:'\x00\x80\x0a\x00', $1))
+  outs 1=vl:call1736
+mapped: Result

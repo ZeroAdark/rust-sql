@@ -54,18 +54,24 @@ pub(crate) fn RelationInitTableAccessMethod(relid: Oid, relkind: u8, relam: Oid)
         )));
     }
     // pgrcolumnar is identified by pg_am.amname, not amhandler: the closed-AM
-    // engine never invokes handlers (docs/design/pgrcolumnar-impl.md §7.1).
+    // engine never invokes handlers (one DDL-minted pg_am row).
     match syscache_seams::pg_am_amname::call(relam)?.as_deref() {
         Some("pgrcolumnar") => {
             tableam_vocab::register_pgrcolumnar_table_am(relam);
             return Ok(());
         }
-        // The pgrcolumnar2 sibling AM (lanev3 M3-H; O-M3-2: sibling name,
-        // one DDL-minted pg_am row during coexistence): same amname-probe
-        // registration, sibling registry.
-        Some("pgrcolumnar2") => {
-            tableam_vocab::register_pgrcolumnar2_table_am(relam);
-            return Ok(());
+        // PGRCSERVE M0: another build's closed columnar AM (its row names heap_tableam_handler too): refuse, never heap
+        Some(name) if tableam_vocab::FOREIGN_CLOSED_TABLE_AMS.contains(&name) => {
+            return Err(Box::new(
+                PgError::error(format!(
+                    "table access method \"{name}\" (relam {relam}) is not supported by this server"
+                ))
+                .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
+                .with_detail(format!(
+                    "\"{name}\" is another pgrust build's columnar access method; this server reads \
+                     pgrcolumnar only, so its tables cannot be read here."
+                )),
+            ));
         }
         _ => {}
     }
@@ -127,7 +133,9 @@ pub(crate) fn RelationInitPhysicalAddr(data: &RelationData<'_>) -> PgResult<()> 
             && relation_is_accessible_in_logical_decoding(data)
             && xact_seams::is_transaction_state::call()
         {
+            let scan_cx = mcx::MemoryContext::new("ScanPgRelation");
             let phys = relcache_build_seams::scan_pg_relation::call(
+                scan_cx.mcx(),
                 data.rd_id,
                 data.rd_id != CLASS_OID_INDEX_ID,
                 true,
@@ -217,17 +225,22 @@ fn resolve_backend(form: &FormData_pg_class) -> PgResult<(ProcNumber, bool)> {
 // On error the in_progress frame stays, exactly like C: AtEOXact_RelationCache
 // clears it during abort.
 pub(crate) fn build_desc_data(target_rel_id: Oid) -> PgResult<Option<RelationData<'static>>> {
+    if elog::message_level_is_interesting(types_error::DEBUG5) {
+        let _ = elog::elog(types_error::DEBUG5, format!("relcache: build desc {target_rel_id}"));
+    }
     let offset = with_state(|st| {
         st.in_progress.push(InProgressEnt { reloid: target_rel_id, invalidated: false });
         st.in_progress.len() - 1
     });
 
+    let scan_cx = mcx::MemoryContext::new("RelationBuildDesc");
+    let smcx = scan_cx.mcx();
     let built = loop {
         with_state(|st| st.in_progress[offset].invalidated = false);
 
         let index_ok = with_state(|st| st.critical_relcaches_built);
         let Some(scanned) =
-            relcache_build_seams::scan_pg_relation::call(target_rel_id, index_ok, false)?
+            relcache_build_seams::scan_pg_relation::call(smcx, target_rel_id, index_ok, false)?
         else {
             break None;
         };
@@ -238,6 +251,7 @@ pub(crate) fn build_desc_data(target_rel_id: Oid) -> PgResult<Option<RelationDat
         let rd_att =
             relcache_build_seams::relation_build_tuple_desc::call(
                 mcx,
+                smcx,
                 target_rel_id,
                 &scanned.form,
                 scanned.relnatts,
@@ -302,7 +316,7 @@ pub(crate) fn build_desc_data(target_rel_id: Oid) -> PgResult<Option<RelationDat
             pgstat_enabled: Cell::new(false),
             pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
             rd_amcache: Default::default(),
-            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
             rd_support: support,
             rd_supportinfo: core::cell::RefCell::new(supportinfo),
             rd_opcoptions: Default::default(),
@@ -425,7 +439,7 @@ pub fn formrdesc(cat: &BootstrapCatalog) -> PgResult<()> {
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),

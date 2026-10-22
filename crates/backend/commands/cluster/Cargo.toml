@@ -47,6 +47,7 @@ nbtree = { path = "../../access/nbtree/nbtree" }
 execindexing = { path = "../../executor/execindexing" }
 tableam = { path = "../../access/table/tableam" }
 tableam_vocab = { path = "../../access/table/tableam_vocab" }
+pgrc_companion = { path = "../../catalog/pgrc_companion" }
 tuplesort = { path = "../../utils/sort/tuplesort" }
 rewriteheap = { path = "../../access/heap/rewriteheap" }
 heaptoast = { path = "../../access/heap/heaptoast" }

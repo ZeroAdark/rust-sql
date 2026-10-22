@@ -24,12 +24,13 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 
 use datum::Datum;
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use init_small::globals as g;
 use pgsync::Mutex;
 use procsignal::ThreadSignalHandler::Simple;
 use types_core::{
-    BlockNumber, ForkNumber, InvalidOid, Oid, OidIsValid, RelFileNumber, InvalidForkNumber,
+    BlockNumber, ForkNumber, InvalidBlockNumber, InvalidOid, Oid, OidIsValid, RelFileNumber,
+    InvalidForkNumber,
 };
 use types_error::{
     ErrorLocation, PgError, PgResult, DEBUG1, ERRCODE_INSUFFICIENT_RESOURCES,
@@ -107,16 +108,24 @@ fn apw_init_shmem() -> bool {
     // The registry's found bit is the C one: a crash restart clears the
     // registry (DSMRegistryShmemResetAfterCrash), so the next leader starts
     // from apw_init_state rather than the dead leader's PID.
-    let (_, found) = dsm_registry::GetNamedDSMSegment("autoprewarm", APW_SEGMENT_SIZE, None)
-        .unwrap_or_else(|e| std::panic::panic_any(e));
+    let (_, found) =
+        dsm_registry::GetNamedDSMSegment("autoprewarm", APW_SEGMENT_SIZE, Some(apw_init_callback))
+            .unwrap_or_else(|e| std::panic::panic_any(e));
     apw_attach_state(found)
 }
 
 const APW_SEGMENT_SIZE: usize = 48;
 
+// dsm_registry.c:177 init_callback: the creator seeds the state while the
+// registry entry lock is still held, so no attacher can claim a PID the
+// creator then resets.
+fn apw_init_callback(_seg: *mut u8) {
+    *pgsync::lock(&APW_STATE) = Some(apw_init_state());
+}
+
 fn apw_attach_state(found: bool) -> bool {
     let mut guard = pgsync::lock(&APW_STATE);
-    if !found || guard.is_none() {
+    if guard.is_none() {
         *guard = Some(apw_init_state());
     }
     found
@@ -140,13 +149,52 @@ fn file_error(verb: &str, name: &str, errno: i32) -> Box<PgError> {
         ereport(ERROR)
             .with_saved_errno(errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not {verb} file \"{name}\": %m"))
+            .errmsg(format!("could not {verb} file \"{name}\": {PCT_M}"))
             .into_error(),
     )
 }
 
 fn io_errno(err: &std::io::Error) -> i32 {
     err.raw_os_error().unwrap_or(0)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StdioFailure {
+    Write(i32),
+    Close(i32),
+}
+
+// The stdio buffer a fully buffered stream gets: glibc filedoalloc.c takes
+// st_blksize when it is below BUFSIZ (8192), BSD/macOS makebuf.c takes
+// st_blksize itself (BUFSIZ 1024 when the stat gives none).
+fn stdio_buffer_size(f: &impl std::os::fd::AsRawFd) -> usize {
+    let mut st = fd::FileInfo::zeroed();
+    let blksize = if fd::pg_fstat(f.as_raw_fd(), &mut st) == 0 { st.blksize } else { 0 };
+    if cfg!(target_os = "linux") {
+        if blksize > 0 && blksize < 8192 { blksize as usize } else { 8192 }
+    } else if blksize > 0 {
+        blksize as usize
+    } else {
+        1024
+    }
+}
+
+// C writes the image with fprintf on a fully buffered stream and closes it
+// with FreeFile: every time the buffer fills, `bufsize` bytes reach the file
+// during an fprintf (a failure there is "could not write to file"), and the
+// remainder reaches it inside fclose (a failure there is "could not close
+// file", autoprewarm.c:800).
+fn write_stdio_image(
+    image: &[u8],
+    bufsize: usize,
+    mut write: impl FnMut(&[u8]) -> std::io::Result<()>,
+) -> Result<(), StdioFailure> {
+    let bufsize = bufsize.max(1);
+    let flushed = if image.is_empty() { 0 } else { (image.len() - 1) / bufsize * bufsize };
+    for chunk in image[..flushed].chunks(bufsize) {
+        write(chunk).map_err(|e| StdioFailure::Write(io_errno(&e)))?;
+    }
+    write(&image[flushed..]).map_err(|e| StdioFailure::Close(io_errno(&e)))
 }
 
 /// apw_detach_shmem (autoprewarm.c:905): clear our PID from the shared state.
@@ -165,6 +213,9 @@ fn apw_detach_shmem(_code: i32, _arg: Datum) -> PgResult<()> {
 
 /// autoprewarm_main (autoprewarm.c:167): the leader's bgw_main.
 pub(crate) fn autoprewarm_main(_main_arg: u64) -> PgResult<()> {
+    // LookupBackgroundWorkerFunction loads bgw_library_name in the worker,
+    // so _PG_init defines this worker's own pg_prewarm GUCs.
+    dfmgr::load_file("pg_prewarm", false)?;
     let mut first_time = true;
     let mut final_dump_allowed = true;
     let mut last_dump_time: types_core::TimestampTz = 0;
@@ -398,7 +449,7 @@ fn apw_load_buffers() -> PgResult<()> {
 
     // Read records, one per line.
     let num_elements = num_elements.max(0) as usize;
-    let mut blkinfo: Vec<BlockInfoRecord> = Vec::with_capacity(num_elements);
+    let mut blkinfo: Vec<BlockInfoRecord> = ::mcx::std_vec_with_capacity("pg_prewarm", num_elements)?;
     for i in 0..num_elements {
         match sc.record() {
             Some(r) => blkinfo.push(r),
@@ -510,6 +561,9 @@ fn apw_load_buffers() -> PgResult<()> {
 /// database (and possibly also global objects, if those got grouped with
 /// this database).
 pub(crate) fn autoprewarm_database_main(_main_arg: u64) -> PgResult<()> {
+    // LookupBackgroundWorkerFunction loads bgw_library_name in the worker,
+    // so _PG_init defines this worker's own pg_prewarm GUCs.
+    dfmgr::load_file("pg_prewarm", false)?;
     // SIGTERM = die: bgworker's default handler. Unblock signals.
     bgworker::BackgroundWorkerUnblockSignals();
 
@@ -526,7 +580,7 @@ pub(crate) fn autoprewarm_database_main(_main_arg: u64) -> PgResult<()> {
     };
     bgworker::BackgroundWorkerInitializeConnectionByOid(database, InvalidOid, 0)?;
 
-    let cx = mcx::MemoryContext::new_bump("autoprewarm worker");
+    let cx = mcx::MemoryContext::new_wholesale("autoprewarm worker");
     let mcx = cx.mcx();
     let mut i = start_idx;
 
@@ -595,30 +649,50 @@ pub(crate) fn autoprewarm_database_main(_main_arg: u64) -> PgResult<()> {
 
             let nblocks = bufmgr::RelationGetNumberOfBlocksInFork(&rel, fork)?;
 
-            // apw_read_stream_next_block (:452) driving the per-block read:
-            // the callback checks free buffers and the (tablespace,
-            // filenumber, fork) key before every block, fast-forwards past
-            // blocks beyond the fork's size, and leaves `i` at the next
-            // relation or fork when the stream ends.
-            while i < stop_idx {
+            // autoprewarm.c:631: apw_read_stream_next_block (:452) checks free
+            // buffers and the (tablespace, filenumber, fork) key before every
+            // block, skips blocks beyond the fork's size, and leaves `i` at
+            // the next relation or fork when the stream ends.
+            let mut stream = read_stream::read_stream_begin_relation::<()>(
+                mcx,
+                read_stream::READ_STREAM_MAINTENANCE
+                    | read_stream::READ_STREAM_DEFAULT
+                    | read_stream::READ_STREAM_USE_BATCHING,
+                None,
+                &rel,
+                fork,
+            )?;
+            let mut next_block = |_: &mut ()| -> PgResult<BlockNumber> {
                 postgres_seams::check_for_interrupts::call()?;
-                if !bufmgr::have_free_buffer() {
-                    i = stop_idx;
+                while i < stop_idx {
+                    let b = block_info[i];
+                    if !bufmgr::have_free_buffer() {
+                        i = stop_idx;
+                        return Ok(InvalidBlockNumber);
+                    }
+                    if b.tablespace != tablespace
+                        || b.filenumber != filenumber
+                        || b.forknum != forknum
+                    {
+                        return Ok(InvalidBlockNumber);
+                    }
+                    i += 1;
+                    if b.blocknum >= nblocks {
+                        continue;
+                    }
+                    return Ok(b.blocknum);
+                }
+                Ok(InvalidBlockNumber)
+            };
+            loop {
+                let buf = stream.next_buffer(&mut next_block)?;
+                if buf == types_core::InvalidBuffer {
                     break;
                 }
-                let b = block_info[i];
-                if b.tablespace != tablespace || b.filenumber != filenumber || b.forknum != forknum {
-                    break;
-                }
-                i += 1;
-                if b.blocknum >= nblocks {
-                    continue;
-                }
-                let buf =
-                    bufmgr::ReadBufferExtended(&rel, fork, b.blocknum, ReadBufferMode::Normal, None)?;
                 with_state(|s| s.prewarmed_blocks += 1);
                 bufmgr::ReleaseBuffer(buf)?;
             }
+            stream.end()?;
         }
 
         rel.close(types_rel::AccessShareLock)?;
@@ -655,7 +729,7 @@ fn apw_dump_now(is_bgworker: bool, dump_unlogged: bool) -> PgResult<i32> {
     }
 
     let nbuffers = bufmgr::NBuffersInited();
-    let mut block_info_array: Vec<BlockInfoRecord> = Vec::with_capacity(nbuffers.max(0) as usize);
+    let mut block_info_array: Vec<BlockInfoRecord> = ::mcx::std_vec_with_capacity("pg_prewarm", nbuffers.max(0) as usize)?;
 
     for i in 0..nbuffers {
         postgres_seams::check_for_interrupts::call()?;
@@ -705,17 +779,23 @@ fn apw_dump_now(is_bgworker: bool, dump_unlogged: bool) -> PgResult<i32> {
     }
     drop(block_info_array);
 
-    let written = fd::with_allocated_stdio(file, |f| f.write_all(image.as_bytes()));
+    let written = fd::with_allocated_stdio(file, |f| {
+        write_stdio_image(image.as_bytes(), stdio_buffer_size(f), |chunk| f.write_all(chunk))
+    });
     drop(image);
-    let write_errno = match written {
+    let failure = match written {
         Some(Ok(())) => None,
-        Some(Err(e)) => Some(io_errno(&e)),
-        None => Some(0),
+        Some(Err(failure)) => Some(failure),
+        None => Some(StdioFailure::Write(0)),
     };
-    if let Some(errno) = write_errno {
+    if let Some(failure) = failure {
+        let (verb, errno) = match failure {
+            StdioFailure::Write(errno) => ("write to", errno),
+            StdioFailure::Close(errno) => ("close", errno),
+        };
         fd::FreeFile(file)?;
         fd::pg_unlink(&transient_dump_file_path);
-        return Err(file_error("write to", &transient_dump_file_path, errno));
+        return Err(file_error(verb, &transient_dump_file_path, errno));
     }
 
     // Rename transient_dump_file_path to AUTOPREWARM_FILE to make things
@@ -925,17 +1005,57 @@ mod tests {
         assert_eq!(neg.record().unwrap().forknum, -1);
     }
 
+    // apw_dump_now (autoprewarm.c:760/:800): a dump that fits the stdio
+    // buffer only reaches the file inside fclose, so its write fault is
+    // "could not close file"; a larger dump flushes whole buffers from
+    // inside fprintf, whose fault is "could not write to file".
+    #[test]
+    fn stdio_image_faults_classify_like_fprintf_then_fclose() {
+        let record = |len: usize| -> Vec<u8> { (0..len).map(|i| b'0' + (i % 10) as u8).collect() };
+        let run = |image: &[u8], bufsize: usize, fail_at: Option<usize>| {
+            let mut calls: Vec<usize> = Vec::new();
+            let result = write_stdio_image(image, bufsize, |chunk| {
+                calls.push(chunk.len());
+                match fail_at {
+                    Some(n) if calls.len() == n => Err(std::io::Error::from_raw_os_error(libc_enospc())),
+                    _ => Ok(()),
+                }
+            });
+            (calls, result)
+        };
+
+        assert_eq!(run(&record(285), 4096, None), (vec![285], Ok(())));
+        assert_eq!(run(&record(285), 4096, Some(1)), (vec![285], Err(StdioFailure::Close(libc_enospc()))));
+        assert_eq!(run(&record(4096), 4096, Some(1)), (vec![4096], Err(StdioFailure::Close(libc_enospc()))));
+        assert_eq!(run(&record(4097), 4096, Some(1)), (vec![4096], Err(StdioFailure::Write(libc_enospc()))));
+        assert_eq!(run(&record(4097), 4096, Some(2)), (vec![4096, 1], Err(StdioFailure::Close(libc_enospc()))));
+        assert_eq!(run(&record(10000), 4096, None), (vec![4096, 4096, 1808], Ok(())));
+        assert_eq!(run(&record(10000), 4096, Some(2)), (vec![4096, 4096], Err(StdioFailure::Write(libc_enospc()))));
+        assert_eq!(run(&record(10000), 4096, Some(3)), (vec![4096, 4096, 1808], Err(StdioFailure::Close(libc_enospc()))));
+        assert_eq!(run(b"", 4096, Some(1)), (vec![0], Err(StdioFailure::Close(libc_enospc()))));
+    }
+
+    fn libc_enospc() -> i32 {
+        28
+    }
+
     // apw_init_shmem: the registry's found bit drives the state — a fresh
     // segment (first boot, or the registry cleared by a crash restart) starts
     // from apw_init_state; an attach keeps the live PIDs.
     #[test]
     fn init_shmem_reports_found() {
+        apw_init_callback(core::ptr::null_mut());
         assert!(!apw_attach_state(false));
         assert_eq!(with_state(|s| (s.bgworker_pid, s.pid_using_dumpfile)), (INVALID_PID, INVALID_PID));
         with_state(|s| s.bgworker_pid = 4242);
         assert!(apw_attach_state(true), "an existing segment attaches");
         assert_eq!(with_state(|s| s.bgworker_pid), 4242);
-        assert!(!apw_attach_state(false), "crash restart: the registry no longer knows the segment");
+        // The creator's post-registry attach never resets a PID an attacher
+        // claimed after the callback ran (autoprewarm.rs:117 race).
+        with_state(|s| s.pid_using_dumpfile = 77);
+        assert!(!apw_attach_state(false));
+        assert_eq!(with_state(|s| s.pid_using_dumpfile), 77);
+        apw_init_callback(core::ptr::null_mut());
         assert_eq!(with_state(|s| (s.bgworker_pid, s.pid_using_dumpfile)), (INVALID_PID, INVALID_PID));
     }
 }

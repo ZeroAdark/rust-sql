@@ -1,0 +1,177 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pd s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE lt SET x = x + 1 FROM la LEFT JOIN lb ON lb.la_id = la.id WHERE lt.la_id = la.id AND la.w = 1 AND lt.id < 60;
+QUERY PLAN                                   
+---------------------------------------------
+Update on lt                                 
+  ->  Nested Loop                            
+        Join Filter: (lt.la_id = la.id)      
+        ->  Nested Loop Left Join            
+              Join Filter: (lb.la_id = la.id)
+              ->  Seq Scan on la             
+                    Filter: (w = 1)          
+              ->  Seq Scan on lb             
+        ->  Index Scan using lt_pkey on lt   
+              Index Cond: (id < 60)          
+(10 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM lt USING la LEFT JOIN lb ON lb.la_id = la.id WHERE lt.la_id = la.id AND la.w = 1 AND lt.id < 60;
+QUERY PLAN                                   
+---------------------------------------------
+Delete on lt                                 
+  ->  Nested Loop                            
+        Join Filter: (lt.la_id = la.id)      
+        ->  Nested Loop Left Join            
+              Join Filter: (lb.la_id = la.id)
+              ->  Seq Scan on la             
+                    Filter: (w = 1)          
+              ->  Seq Scan on lb             
+        ->  Index Scan using lt_pkey on lt   
+              Index Cond: (id < 60)          
+(10 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1k s1d s1b s1n s1a s2u s1c s2c s3sel s3row
+step s1x: UPDATE lt SET x = x + 1000 WHERE id IN (9, 12, 33);
+step s1k: UPDATE lt SET la_id = 2 WHERE id = 18;
+step s1d: DELETE FROM lt WHERE id = 27;
+step s1b: UPDATE lb SET tag = 'b4new' WHERE id = 4;
+step s1n: INSERT INTO lb VALUES (10, 7, 'b10');
+step s1a: UPDATE la SET w = 0 WHERE id = 7;
+step s2u: UPDATE lt SET x = x + 1 FROM la LEFT JOIN lb ON lb.la_id = la.id WHERE lt.la_id = la.id AND la.w = 1 AND lt.id < 60 RETURNING lt.id, lt.la_id, lt.x, lb.tag, la.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|la_id|   x|tag|id
+--+-----+----+---+--
+ 9|    1|1001|b1 | 1
+36|    1|   1|b1 | 1
+45|    1|   1|b1 | 1
+54|    1|   1|b1 | 1
+ 3|    4|   1|b4 | 4
+12|    4|1001|b4 | 4
+21|    4|   1|b4 | 4
+30|    4|   1|b4 | 4
+39|    4|   1|b4 | 4
+48|    4|   1|b4 | 4
+57|    4|   1|b4 | 4
+ 6|    7|   1|   | 7
+15|    7|   1|   | 7
+24|    7|   1|   | 7
+33|    7|1001|   | 7
+42|    7|   1|   | 7
+51|    7|   1|   | 7
+(17 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(la_id), sum(x) FROM lt;
+count| sum| sum
+-----+----+----
+  899|4500|3017
+(1 row)
+
+step s3row: SELECT id, la_id, x FROM lt WHERE id IN (9, 12, 33, 18, 27, 1, 3) ORDER BY id;
+id|la_id|   x
+--+-----+----
+ 1|    2|   0
+ 3|    4|   1
+ 9|    1|1001
+12|    4|1001
+18|    2|   0
+33|    7|1001
+(6 rows)
+
+
+starting permutation: s1x s1k s1d s1b s2d s1c s2c s3sel s3row
+step s1x: UPDATE lt SET x = x + 1000 WHERE id IN (9, 12, 33);
+step s1k: UPDATE lt SET la_id = 2 WHERE id = 18;
+step s1d: DELETE FROM lt WHERE id = 27;
+step s1b: UPDATE lb SET tag = 'b4new' WHERE id = 4;
+step s2d: DELETE FROM lt USING la LEFT JOIN lb ON lb.la_id = la.id WHERE lt.la_id = la.id AND la.w = 1 AND lt.id < 60 RETURNING lt.id, lb.tag, la.id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|tag|id
+--+---+--
+ 9|b1 | 1
+36|b1 | 1
+45|b1 | 1
+54|b1 | 1
+ 3|b4 | 4
+12|b4 | 4
+21|b4 | 4
+30|b4 | 4
+39|b4 | 4
+48|b4 | 4
+57|b4 | 4
+ 6|   | 7
+15|   | 7
+24|   | 7
+33|   | 7
+42|   | 7
+51|   | 7
+(17 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(la_id), sum(x) FROM lt;
+count| sum|sum
+-----+----+---
+  882|4426|  0
+(1 row)
+
+step s3row: SELECT id, la_id, x FROM lt WHERE id IN (9, 12, 33, 18, 27, 1, 3) ORDER BY id;
+id|la_id|x
+--+-----+-
+ 1|    2|0
+18|    2|0
+(2 rows)
+
+
+starting permutation: s2u s1x s2c s1c s3sel s3row
+step s2u: UPDATE lt SET x = x + 1 FROM la LEFT JOIN lb ON lb.la_id = la.id WHERE lt.la_id = la.id AND la.w = 1 AND lt.id < 60 RETURNING lt.id, lt.la_id, lt.x, lb.tag, la.id;
+id|la_id|x|tag|id
+--+-----+-+---+--
+ 9|    1|1|b1 | 1
+18|    1|1|b1 | 1
+27|    1|1|b1 | 1
+36|    1|1|b1 | 1
+45|    1|1|b1 | 1
+54|    1|1|b1 | 1
+ 3|    4|1|b4 | 4
+12|    4|1|b4 | 4
+21|    4|1|b4 | 4
+30|    4|1|b4 | 4
+39|    4|1|b4 | 4
+48|    4|1|b4 | 4
+57|    4|1|b4 | 4
+ 6|    7|1|   | 7
+15|    7|1|   | 7
+24|    7|1|   | 7
+33|    7|1|   | 7
+42|    7|1|   | 7
+51|    7|1|   | 7
+(19 rows)
+
+step s1x: UPDATE lt SET x = x + 1000 WHERE id IN (9, 12, 33); <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT count(*), sum(la_id), sum(x) FROM lt;
+count| sum| sum
+-----+----+----
+  900|4500|3019
+(1 row)
+
+step s3row: SELECT id, la_id, x FROM lt WHERE id IN (9, 12, 33, 18, 27, 1, 3) ORDER BY id;
+id|la_id|   x
+--+-----+----
+ 1|    2|   0
+ 3|    4|   1
+ 9|    1|1001
+12|    4|1001
+18|    1|   1
+27|    1|   1
+33|    7|1001
+(7 rows)
+

@@ -1,0 +1,3 @@
+backend/executor/execexpr/src/compile.rs	COMPILE_ECONOMY	pgport	scope:EconomyWindow	thread	PROCPERF P2's compile-economy window on this thread (EconomyWindow's Drop puts the previous value back, an unwind too); a compile-cost policy, never a result byte
+backend/executor/execexpr/src/compile.rs	SUBPLAN_PARENT_WIN	pgport	scope:SubplanParentWinScope	thread	init_subplan_expr's stash of its parent window projection's bind for one SubPlan init; the SubplanParentWinScope guard puts it back, an unwind too
+backend/executor/execexpr/src/compile.rs	EXECUTE_ACL_SESSION	pgport	scope:ExecuteAclWindow	thread	the EXECUTE-ACL recording windows over a compile, nestable; exec admit's bind holds an ExecuteAclWindow, whose drop closes a window an unwind left unfinished

@@ -208,6 +208,9 @@ fn fmgr_wrappers_and_table() {
 
     let mut flinfo = FmgrInfo::new(fc_int8out, 461, 1, true, false);
     let mut fci = LocalFcinfo::<1>::new(0);
+    let cx = ::mcx::MemoryContext::new_bump("int8out test");
+    // SAFETY: cx outlives every call through this frame.
+    unsafe { fci.set_result_mcx(cx.mcx()) };
     for v in [0i64, i64::MIN, i64::MAX, -1] {
         fci.set_arg(0, Datum::from_i64(v));
         let d = flinfo.invoke(&mut fci).unwrap();
@@ -266,6 +269,9 @@ fn int8out_results_do_not_alias_across_carriers() {
     let mut f1 = ::types_fmgr::FmgrInfo::new(fc_int8out, 461, 1, true, false);
     let mut f2 = ::types_fmgr::FmgrInfo::new(fc_int8out, 461, 1, true, false);
     let mut fci = ::types_fmgr::LocalFcinfo::<1>::new(0);
+    let cx = ::mcx::MemoryContext::new_bump("int8out alias test");
+    // SAFETY: cx outlives every call through fci and every read of its results.
+    unsafe { fci.set_result_mcx(cx.mcx()) };
     fci.set_arg(0, Datum::from_i64(11));
     let d1 = f1.invoke(&mut fci).unwrap();
     fci.set_arg(0, Datum::from_i64(22));

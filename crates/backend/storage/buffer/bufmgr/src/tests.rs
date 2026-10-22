@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::Once;
 
 use init_small::globals;
-use types_core::{ForkNumber, BLCKSZ, INVALID_PROC_NUMBER, RELPERSISTENCE_PERMANENT};
+use types_core::{ForkNumber, InvalidBuffer, BLCKSZ, INVALID_PROC_NUMBER, RELPERSISTENCE_PERMANENT};
 use types_error::PgError;
 use types_storage::buf::{
     BufferAccessStrategyType, BM_DIRTY, BM_LOCKED, BM_VALID, BUF_REFCOUNT_MASK,
@@ -31,6 +31,9 @@ static READ_ERROR_INJECT: AtomicBool = AtomicBool::new(false);
 const WRITE_ERROR_REL: u32 = 9909;
 const WRITE_ERROR_REL_LOCAL: u32 = 9910;
 static WRITE_ERROR_INJECT: AtomicBool = AtomicBool::new(false);
+// D2940 (paniccensus): an unwind (a PANIC's PanicExitThread) out of the write in FlushBuffer.
+const WRITE_PANIC_REL: u32 = 9911;
+static WRITE_PANIC_INJECT: AtomicBool = AtomicBool::new(false);
 const PARTIAL_READ_REL: u32 = 9912;
 static PARTIAL_READ_ONCE: AtomicBool = AtomicBool::new(false);
 
@@ -42,6 +45,11 @@ static PARTIAL_READ_ONCE: AtomicBool = AtomicBool::new(false);
 // >= 16.
 const TEST_NBUFFERS: i32 = 8192;
 const TEST_MAX_CONNECTIONS: i32 = 128;
+const TEST_POOL_MAX: i32 = 16384;
+static TEST_RELOCATE: AtomicBool = AtomicBool::new(true);
+static TEST_DRAIN_RATE: AtomicI32 = AtomicI32::new(0);
+static TEST_WAL_UNFLUSHED: AtomicBool = AtomicBool::new(false);
+static TEST_IN_RECOVERY: AtomicBool = AtomicBool::new(false);
 
 fn test_max_backends() -> i32 {
     TEST_MAX_CONNECTIONS + 3 + 2 + 2 + NUM_SPECIAL_WORKER_PROCS
@@ -74,50 +82,71 @@ fn setup() -> std::sync::MutexGuard<'static, ()> {
     let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     setup_once();
     become_backend();
-    // Pins register with CurrentResourceOwner (thread-local), as in C.
+    guard
+}
+
+fn become_backend() {
+    // NBuffers and MaxBackends are thread-locals: a helper thread starts at the boot defaults, mirror the harness's
+    // (D2497: with MaxBackends 0, AioProcs() covered the aux slots only and pgaio_init_backend refused a later procno).
+    globals::SetNBuffers(TEST_NBUFFERS);
+    globals::SetMaxBackends(test_max_backends());
+    if globals::MyProcNumber() == INVALID_PROC_NUMBER {
+        static NEXT_PROCNO: AtomicI32 = AtomicI32::new(0);
+        let procno = NEXT_PROCNO.fetch_add(1, Ordering::Relaxed);
+        assert!(procno < test_max_backends(), "proc slots exhausted");
+        globals::SetMyProcNumber(procno);
+        globals::SetMyProcPid(7000 + procno);
+        waiteventset::InitializeWaitEventSupport().unwrap();
+        let h = types_storage::latch::LatchHandle::proc(procno);
+        latch::OwnLatch(h).unwrap();
+        globals::SetMyLatch(Some(h));
+        latch::InitializeLatchWaitSet().unwrap();
+        // The read pipeline issues IO through pgaio: attach this thread's aio
+        // backend slot (MyProc is the bind_task_proc TLS in this harness).
+        lmgr_proc::bind_task_proc(procno);
+        aio_core::pgaio_init_backend().expect("pgaio_init_backend");
+    }
+    // Pins register with CurrentResourceOwner (thread-local, as in C): every backend thread gets one (D2529: a helper
+    // thread's BufferSync pinned a dirty buffer with none).
     if resowner::CurrentResourceOwner().is_null() {
         let owner =
             resowner::ResourceOwnerCreate(types_resowner::ResourceOwner::NULL, "bufmgr-tests")
                 .unwrap();
         resowner::SetCurrentResourceOwner(owner);
     }
-    guard
-}
-
-fn become_backend() {
-    // Per-thread globals (C's per-backend statics): spawned reader threads
-    // need them too, before pgaio_init_backend sizes AioProcs from them.
-    globals::SetNBuffers(TEST_NBUFFERS);
-    globals::SetMaxBackends(test_max_backends());
-    if globals::MyProcNumber() != INVALID_PROC_NUMBER {
-        return;
-    }
-    static NEXT_PROCNO: AtomicI32 = AtomicI32::new(0);
-    let procno = NEXT_PROCNO.fetch_add(1, Ordering::Relaxed);
-    assert!(procno < test_max_backends(), "proc slots exhausted");
-    globals::SetMyProcNumber(procno);
-    globals::SetMyProcPid(7000 + procno);
-    waiteventset::InitializeWaitEventSupport().unwrap();
-    let h = types_storage::latch::LatchHandle::proc(procno);
-    latch::OwnLatch(h).unwrap();
-    globals::SetMyLatch(Some(h));
-    latch::InitializeLatchWaitSet().unwrap();
-    // The read pipeline issues IO through pgaio: attach this thread's aio
-    // backend slot (MyProc is the bind_task_proc TLS in this harness).
-    lmgr_proc::bind_task_proc(procno);
-    aio_core::pgaio_init_backend().expect("pgaio_init_backend");
 }
 
 // Per-relation backing file for the smgr_startreadv fake; grown on demand
 // with valid pages so the real preadv returns real bytes.
+//
+// Each file is unlinked as soon as it is opened: the open descriptor (kept in
+// FAKE_REL_FILES for the process's life) still reads and writes it, and the
+// kernel frees its blocks when the process exits, however it exits (a
+// panicking test, an abort, a kill). A named file left in the temp dir per
+// relation filled the root disks of the boxes that run `cargo test --workspace`
+// (20-400 MB a run). Statics are never dropped, so a Drop guard over the set
+// would not run at exit; the unlink is the cleanup.
+const FAKE_REL_PREFIX: &str = "bufmgr-aio-test-";
+
+/// The fake relations' open files, by relation number. Its lock is held across
+/// a file's create and unlink, so no name is ever visible to a reader holding it.
+static FAKE_REL_FILES: std::sync::Mutex<Vec<(u32, std::fs::File)>> = std::sync::Mutex::new(Vec::new());
+
+/// The temp-dir entries this process's fake relations left named.
+fn fake_rel_names_left() -> Vec<String> {
+    let mine = format!("{FAKE_REL_PREFIX}{}-", std::process::id());
+    std::fs::read_dir(std::env::temp_dir())
+        .map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(&mine)).collect())
+        .unwrap_or_default()
+}
+
 fn fake_rel_fd(rel: u32, blocknum: u32, nblocks: u32) -> i32 {
     use std::io::{Seek, SeekFrom, Write};
     use std::os::fd::AsRawFd;
-    static FILES: std::sync::Mutex<Vec<(u32, std::fs::File)>> = std::sync::Mutex::new(Vec::new());
-    let mut files = FILES.lock().unwrap();
+    let mut files = FAKE_REL_FILES.lock().unwrap_or_else(|e| e.into_inner());
     if !files.iter().any(|(r, _)| *r == rel) {
         let path = std::env::temp_dir().join(format!(
-            "bufmgr-aio-test-{}-{}.rel",
+            "{FAKE_REL_PREFIX}{}-{}.rel",
             std::process::id(),
             rel
         ));
@@ -126,8 +155,9 @@ fn fake_rel_fd(rel: u32, blocknum: u32, nblocks: u32) -> i32 {
             .truncate(true)
             .read(true)
             .write(true)
-            .open(path)
+            .open(&path)
             .unwrap();
+        std::fs::remove_file(&path).unwrap();
         files.push((rel, f));
     }
     let f = &mut files.iter_mut().find(|(r, _)| *r == rel).unwrap().1;
@@ -156,6 +186,27 @@ fn fake_rel_fd(rel: u32, blocknum: u32, nblocks: u32) -> i32 {
         f.flush().unwrap();
     }
     f.as_raw_fd()
+}
+
+#[test]
+fn fake_rel_files_leave_no_name_behind() {
+    // two relations' files grown and read back through their descriptors, then
+    // no bufmgr-aio-test-<pid>-* entry left in the temp dir (checked under the
+    // set's lock, so a concurrent test's create-then-unlink is never seen)
+    use std::os::unix::fs::FileExt;
+    for rel in [9990u32, 9991] {
+        let fd = fake_rel_fd(rel, 0, 4);
+        // SAFETY: the descriptor stays open in FAKE_REL_FILES for the process's life; ManuallyDrop never closes it.
+        let f = std::mem::ManuallyDrop::new(unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fd) });
+        let mut page = vec![0u8; BLCKSZ];
+        f.read_exact_at(&mut page, 3 * BLCKSZ as u64).unwrap();
+        let mut want = vec![0u8; BLCKSZ];
+        valid_page_into(&mut want, 3);
+        assert!(page == want, "rel {rel}: block 3 reads back as written");
+    }
+    let _held = FAKE_REL_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let left = fake_rel_names_left();
+    assert!(left.is_empty(), "fake relation files left named in {}: {left:?}", std::env::temp_dir().display());
 }
 
 fn setup_once() {
@@ -319,6 +370,27 @@ fn setup_once() {
         waiteventset::init_seams();
         latch::init_seams();
         lwlock::CreateLWLocks(false).unwrap();
+        // The suite runs the pool in its resizable shape: boot 8192 buffers
+        // inside a 16384-buffer reservation.
+        guc_tables::vars::pgrust_buffer_pool_max.install_if_absent(guc_tables::GucVarAccessors {
+            get: || TEST_POOL_MAX,
+            set: |_| {},
+        });
+        guc_tables::vars::pgrust_buffer_pool_relocate.install_if_absent(
+            guc_tables::GucVarAccessors {
+                get: || TEST_RELOCATE.load(Ordering::Relaxed),
+                set: |v| TEST_RELOCATE.store(v, Ordering::Relaxed),
+            },
+        );
+        guc_tables::vars::pgrust_buffer_pool_drain_rate.install_if_absent(
+            guc_tables::GucVarAccessors {
+                get: || TEST_DRAIN_RATE.load(Ordering::Relaxed),
+                set: |v| TEST_DRAIN_RATE.store(v, Ordering::Relaxed),
+            },
+        );
+        if !transam_xlog_seams::recovery_in_progress::is_installed() {
+            transam_xlog_seams::recovery_in_progress::set(|| TEST_IN_RECOVERY.load(Ordering::Relaxed));
+        }
         BufferManagerShmemInit().unwrap();
         init_seams();
         aio_core::init_seams();
@@ -382,7 +454,7 @@ fn batched_read_lands_run_and_stops_at_resident() {
     ReleaseBuffer(pre).unwrap();
 
     let before = SMGR_READS.load(Ordering::Relaxed);
-    let (b0, _) = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 0, 32, None).unwrap();
+    let (b0, _) = read_run(smgr, 0, 32, None).unwrap();
     assert!(b0 > 0);
     assert_eq!(GetPrivateRefCount(b0), 1);
     assert_eq!(
@@ -416,15 +488,15 @@ fn batched_read_caps_by_hint_and_combine_limit() {
         backend: INVALID_PROC_NUMBER,
     };
     // hint 3 caps the run.
-    let (b, _) = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 10, 3, None).unwrap();
+    let (b, _) = read_run(smgr, 10, 3, None).unwrap();
     assert_eq!(*READV_SIZES.lock().unwrap().last().unwrap(), 3);
     ReleaseBuffer(b).unwrap();
     // io_combine_limit (default 16) caps a large hint.
-    let (b, _) = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 100, 10_000, None).unwrap();
+    let (b, _) = read_run(smgr, 100, 10_000, None).unwrap();
     assert_eq!(*READV_SIZES.lock().unwrap().last().unwrap(), 16);
     ReleaseBuffer(b).unwrap();
     // hint 1 degrades to a single-block vectored read.
-    let (b, _) = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 200, 1, None).unwrap();
+    let (b, _) = read_run(smgr, 200, 1, None).unwrap();
     assert_eq!(*READV_SIZES.lock().unwrap().last().unwrap(), 1);
     ReleaseBuffer(b).unwrap();
 }
@@ -450,7 +522,7 @@ fn io_combine_limit_clamped_to_io_max_combine_limit() {
     TEST_IO_MAX_COMBINE_LIMIT.store(4, Ordering::Relaxed);
     crate::gucs::set_io_combine_limit_guc(32);
     assert_eq!(crate::gucs::io_combine_limit(), 4, "effective limit = min(32, 4)");
-    let (b, _) = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 0, 10_000, None).unwrap();
+    let (b, _) = read_run(smgr, 0, 10_000, None).unwrap();
     let sz = *READV_SIZES.lock().unwrap().last().unwrap();
     assert!(sz <= 4, "batch {sz} must not exceed io_max_combine_limit 4");
     let page = buffer_page_ref(b);
@@ -463,7 +535,7 @@ fn io_combine_limit_clamped_to_io_max_combine_limit() {
     TEST_IO_MAX_COMBINE_LIMIT.store(1, Ordering::Relaxed);
     crate::gucs::set_io_combine_limit_guc(16);
     assert_eq!(crate::gucs::io_combine_limit(), 1, "effective limit = min(16, 1)");
-    let (b, _) = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 100, 10_000, None).unwrap();
+    let (b, _) = read_run(smgr, 100, 10_000, None).unwrap();
     let sz = *READV_SIZES.lock().unwrap().last().unwrap();
     assert_eq!(sz, 1, "io_max_combine_limit 1 forces single-block reads");
     ReleaseBuffer(b).unwrap();
@@ -473,7 +545,7 @@ fn io_combine_limit_clamped_to_io_max_combine_limit() {
     TEST_IO_MAX_COMBINE_LIMIT.store(16, Ordering::Relaxed);
     crate::gucs::set_io_combine_limit_guc(17);
     assert_eq!(crate::gucs::io_combine_limit(), 16, "effective limit = min(17, 16)");
-    let (b, _) = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 200, 10_000, None).unwrap();
+    let (b, _) = read_run(smgr, 200, 10_000, None).unwrap();
     let sz = *READV_SIZES.lock().unwrap().last().unwrap();
     assert!(sz <= 16, "batch {sz} must not exceed io_max_combine_limit 16");
     ReleaseBuffer(b).unwrap();
@@ -515,7 +587,7 @@ fn read_miss_then_warm_hit() {
 
 #[test]
 fn privref_new_pin_entry_is_independently_droppable() {
-    // regression A1 — the born-RED, at the accounting layer.
+    // GL-ASSERTMASK-1 A1 — the born-RED, at the accounting layer.
     //
     // Deliberately NOT routed through PinBuffer_Locked: that function guards
     // this very state with `debug_assert!(GetPrivateRefCount(b) == 0)`, so a
@@ -557,7 +629,7 @@ fn privref_new_pin_entry_is_independently_droppable() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn pin_buffer_locked_pairs_each_shared_bump_with_its_own_drop() {
-    // regression A1 — born-RED for the assertion-masked shared-refcount
+    // GL-ASSERTMASK-1 A1 — born-RED for the assertion-masked shared-refcount
     // leak. `PinBuffer_Locked` adds a shared refcount UNCONDITIONALLY (the
     // bump is fused into the header unlock), and its `debug_assert!` that no
     // local pin preexists is stripped from every shipped profile. With the
@@ -809,6 +881,9 @@ fn setup_write_seams() {
     ONCE.call_once(|| {
         smgr_seams::smgr_write::set(|rlocator, forknum, blocknum, buffer, _skip_fsync| {
             assert_eq!(buffer.len(), BLCKSZ);
+            if WRITE_PANIC_INJECT.load(Ordering::Relaxed) && rlocator.locator.relNumber == WRITE_PANIC_REL {
+                std::panic::panic_any(types_error::PanicExitThread);
+            }
             if WRITE_ERROR_INJECT.load(Ordering::Relaxed)
                 && (rlocator.locator.relNumber == WRITE_ERROR_REL
                     || rlocator.locator.relNumber == WRITE_ERROR_REL_LOCAL)
@@ -839,6 +914,7 @@ fn setup_write_seams() {
             Ok(())
         });
         transam_xlog_seams::xlog_flush::set(|_| Ok(()));
+        transam_xlog_seams::xlog_needs_flush::set(|_| TEST_WAL_UNFLUSHED.load(Ordering::Relaxed));
         transam_xlog_seams::data_checksums_enabled::set(|| true);
     });
 }
@@ -1377,6 +1453,7 @@ fn extend_to_fallback_read_counts_against_the_relation() {
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: ::mcx::PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -1666,7 +1743,7 @@ fn p_new_redirects_to_extend_buffered_rel() {
     DropRelationAllLocalBuffers(rloc(rel)).unwrap();
 }
 
-// A failed checkpoint-scratch reserve must surface as ERROR
+// Issue #56: a failed checkpoint-scratch reserve must surface as ERROR
 // (53200) through BufferSync's PgResult — the checkpointer's recovery loop
 // absorbs that and retries — never as a thread-killing panic (which the
 // postmaster escalates to a cluster-wide crash-restart). These allocations
@@ -1730,11 +1807,19 @@ fn setup_uring_prefetch_seams() {
         smgr_seams::smgr_start_buffer_read::set(|_rl, _fork, _blk, _buf| {
             panic!("simulated smgr start_buffer_read guard panic")
         });
-        smgr_seams::smgr_prefetch::set(|_rl, _fork, _blk, _n| Ok(true));
+        smgr_seams::smgr_prefetch::set(|rl, fork, blk, n| {
+            PREFETCH_CALLS.lock().unwrap().push((rl, fork, blk, n));
+            Ok(true)
+        });
     });
 }
 
-// The io_method contract: with io_method=sync, the boot default,
+// Every advisory smgr_prefetch the fixture above served (the H03a read-ahead seam tests read it; the uring tests ignore it).
+static PREFETCH_CALLS: std::sync::Mutex<Vec<(types_storage::RelFileLocatorBackend, ForkNumber, u32, i32)>> =
+    std::sync::Mutex::new(Vec::new());
+
+// The io_method contract (archil-neon incident, first defect): with
+// io_method=sync — the wedged cluster's setting, and the boot default —
 // PrefetchSharedBuffer must NOT take the uring route just because the ring
 // initialized; it takes the advisory smgr_prefetch fallback, like C. The
 // panic seam below is the route's tripwire: if the gate leaks, this test
@@ -1759,7 +1844,7 @@ fn prefetch_with_io_method_sync_never_takes_the_uring_route() {
     assert!(res.initiated_io, "the advisory smgr_prefetch fallback must be taken");
 }
 
-// A cluster deadlock occurred when an smgr start_buffer_read arm
+// The archil-neon cluster deadlock (2026-08): an smgr start_buffer_read arm
 // that believed itself unreachable panicked with BM_IO_IN_PROGRESS freshly
 // set by uring::start_read — and that IO has NO owner any cleanup path knows
 // about (remember_owner=false: no resowner AbortBufferIO entry; the ring
@@ -1802,7 +1887,7 @@ fn uring_prefetch_seam_panic_leaves_no_orphaned_buffer_io() {
         assert_eq!(
             state & types_storage::buf::BM_IO_IN_PROGRESS,
             0,
-            "panic across StartBufferIO leaked BM_IO_IN_PROGRESS"
+            "panic across StartBufferIO leaked BM_IO_IN_PROGRESS — the archil-neon wedge"
         );
         assert_eq!(state & BUF_REFCOUNT_MASK, 0, "victim pin leaked across the panic");
     }
@@ -1811,7 +1896,7 @@ fn uring_prefetch_seam_panic_leaves_no_orphaned_buffer_io() {
     AtEOXact_Buffers(true);
 }
 
-// With io_method=sync, a read error
+// Second face of the archil-neon incident (io_method=sync leg): a read error
 // raised BETWEEN StartBufferIO and the pgaio stage (mdstartreadv's own
 // pre-stage failures live exactly there) must be fully undone by the abort
 // ceremony — pgaio error cleanup + resowner release — leaving the buffer's
@@ -2191,40 +2276,26 @@ fn b039_init_buffer_manager_access_registers_at_proc_exit_buffers() {
 
 // bufmgr.c:1157 PinBufferForBlock / StartReadBuffers: every block of a
 // combined read is one shared_blks_read at pin time and the stream hands the
-// pinned buffers to the scan without further hit accounting. The scan's
-// per-block re-pins of a batch it already paid for are therefore not hits:
-// a cold N-block scan is read=N, hit=0.
+// pinned buffers to the scan without further hit accounting: a cold N-block
+// scan is read=N, hit=0.
 #[test]
-fn b039_batched_scan_counts_each_block_once_as_a_read() {
+fn b039_streamed_scan_counts_each_block_once_as_a_read() {
     let _g = setup();
-    let rel = 9906u32;
     let smgr = RelFileLocatorBackend {
-        locator: rloc(rel),
+        locator: rloc(9906),
         backend: INVALID_PROC_NUMBER,
     };
     let nblocks = 8u32;
     let hit0 = counters::shared_blks_hit();
     let read0 = counters::shared_blks_read();
     let reads0 = SMGR_READS.load(Ordering::Relaxed);
-    // heapam's forward scan: one call per block, hint = blocks left.
-    for blk in 0..nblocks {
-        let (b, _) =
-            read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, blk, nblocks - blk, None)
-                .unwrap();
-        assert_eq!(BufferGetBlockNumber(b), blk);
-        ReleaseBuffer(b).unwrap();
-    }
+    assert_eq!(stream_blocks(smgr, 0, nblocks, None), (0..nblocks).collect::<Vec<_>>());
     assert_eq!(SMGR_READS.load(Ordering::Relaxed) - reads0, 1, "one vectored read");
     assert_eq!(counters::shared_blks_read() - read0, nblocks as u64, "read once per block");
     assert_eq!(counters::shared_blks_hit() - hit0, 0, "no hit for a block this scan read");
 
     // A second pass is pure hits, as in C.
-    for blk in 0..nblocks {
-        let (b, _) =
-            read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, blk, nblocks - blk, None)
-                .unwrap();
-        ReleaseBuffer(b).unwrap();
-    }
+    stream_blocks(smgr, 0, nblocks, None);
     assert_eq!(counters::shared_blks_read() - read0, nblocks as u64);
     assert_eq!(counters::shared_blks_hit() - hit0, nblocks as u64);
 }
@@ -2245,7 +2316,7 @@ fn b039_segment_boundary_clamp_emits_debug2() {
     elog::config::set_log_min_messages(types_error::DEBUG2);
     B039_CAPTURED.with(|c| c.borrow_mut().clear());
     let prev_hook = elog::set_emit_log_hook(Some(b039_capture_hook));
-    let res = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, blk, 13, None);
+    let res = read_run(smgr, blk, 13, None);
     elog::set_emit_log_hook(prev_hook);
     elog::config::set_log_min_messages(prev_level);
     let (b, _) = res.unwrap();
@@ -2265,6 +2336,67 @@ fn b039_segment_boundary_clamp_emits_debug2() {
     ReleaseBuffer(b).unwrap();
 }
 
+// D2940 (paniccensus): a PANIC inside FlushBuffer's write (fdatasync ENOSPC
+// raises PANIC, which unwinds as PanicExitThread) leaves the write IO in
+// progress, and the resource owner's release on the way out runs
+// AbortBufferIO. It used to panic! there ("no write path can leak
+// BM_IO_IN_PROGRESS"), which during the PANIC's unwind aborts the whole
+// process instead of the crash restart (cgstress 5be47aff248, read.rs:733).
+// C (bufmgr.c:6177) terminates the IO with BM_IO_ERROR and keeps the buffer
+// dirty; the next flush retries it.
+#[test]
+fn d2940_abort_buffer_io_after_unwind_out_of_flush() {
+    let _g = setup();
+    setup_write_seams();
+    use types_resowner::{ResourceOwner, RESOURCE_RELEASE_BEFORE_LOCKS};
+    let rel = WRITE_PANIC_REL;
+    let b = dirty_block(rel, 5);
+    let pinned = read_blk(rel, 5);
+    assert_eq!(pinned, b);
+    LockBuffer(b, BUFFER_LOCK_SHARE).unwrap();
+    let desc = GetBufferDescriptor(b - 1);
+
+    let save = resowner::CurrentResourceOwner();
+    let owner = resowner::ResourceOwnerCreate(ResourceOwner::NULL, "flush-io-panic").unwrap();
+    resowner::SetCurrentResourceOwner(owner);
+    WRITE_PANIC_INJECT.store(true, Ordering::Relaxed);
+    // unwind-ok: test
+    let flushed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::write::FlushBuffer(desc, types_storage::buf::IOContext::IOCONTEXT_NORMAL)
+    }));
+    WRITE_PANIC_INJECT.store(false, Ordering::Relaxed);
+    let payload = flushed.expect_err("the injected PANIC unwinds out of FlushBuffer");
+    assert!(payload.is::<types_error::PanicExitThread>());
+    let state = desc.state.load(Ordering::Acquire);
+    assert!(
+        state & types_storage::buf::BM_IO_IN_PROGRESS != 0,
+        "the unwind left the write IO in progress for the resowner"
+    );
+
+    // unwind-ok: test
+    let released = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        resowner::ResourceOwnerRelease(owner, RESOURCE_RELEASE_BEFORE_LOCKS, false, true)
+    }));
+    resowner::SetCurrentResourceOwner(ResourceOwner::NULL);
+    assert!(
+        matches!(released, Ok(Ok(()))),
+        "AbortBufferIO terminates the IO; it must not panic on the unwind path"
+    );
+    resowner::ResourceOwnerDelete(owner);
+    resowner::SetCurrentResourceOwner(save);
+
+    let state = desc.state.load(Ordering::Acquire);
+    assert_eq!(state & types_storage::buf::BM_IO_IN_PROGRESS, 0, "the IO was terminated");
+    assert!(state & types_storage::buf::BM_IO_ERROR != 0, "terminated as failed (BM_IO_ERROR)");
+    assert!(state & BM_DIRTY != 0, "the page was never written: it stays dirty");
+
+    // With the write back, the same flush succeeds and cleans the buffer.
+    crate::write::FlushBuffer(desc, types_storage::buf::IOContext::IOCONTEXT_NORMAL).unwrap();
+    assert_eq!(desc.state.load(Ordering::Acquire) & BM_DIRTY, 0);
+    LockBuffer(b, BUFFER_LOCK_UNLOCK).unwrap();
+    ReleaseBuffer(b).unwrap();
+}
+
 // bufmgr.c:1628 ProcessReadBuffersResult: a partial read reports the AIO
 // result at DEBUG1 and adds elog(DEBUG3, "partial read, will retry") before
 // the operation re-issues the rest.
@@ -2281,7 +2413,7 @@ fn b229_partial_read_emits_debug3_and_retries() {
     B039_CAPTURED.with(|c| c.borrow_mut().clear());
     let prev_hook = elog::set_emit_log_hook(Some(b039_capture_hook));
     PARTIAL_READ_ONCE.store(true, Ordering::Relaxed);
-    let res = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 0, 4, None);
+    let res = read_run(smgr, 0, 4, None);
     PARTIAL_READ_ONCE.store(false, Ordering::Relaxed);
     elog::set_emit_log_hook(prev_hook);
     elog::config::set_log_min_messages(prev_level);
@@ -2425,7 +2557,7 @@ fn b039_flush_relation_local_buffers_error_carries_write_context() {
 // read may pin (nbuffers for BAS_BULKREAD, nbuffers / 2 otherwise, at least
 // one). A 2-buffer vacuum ring therefore reads one block at a time.
 #[test]
-fn b039_batched_read_caps_at_the_strategy_pin_limit() {
+fn b039_stream_read_caps_at_the_strategy_pin_limit() {
     let _g = setup();
     let smgr = RelFileLocatorBackend {
         locator: rloc(9911),
@@ -2434,16 +2566,13 @@ fn b039_batched_read_caps_at_the_strategy_pin_limit() {
     let strategy =
         crate::freelist::GetAccessStrategyWithSize(BufferAccessStrategyType::BasVacuum, 16);
     assert_eq!(crate::freelist::GetAccessStrategyBufferCount(&strategy), 2);
-    let (b, _) =
-        read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 0, 8, strategy.clone()).unwrap();
-    let last_readv = *READV_SIZES.lock().unwrap().last().unwrap();
-    assert_eq!(last_readv, 1, "a 2-buffer vacuum ring pins at most nbuffers / 2 = 1 block per read");
-    ReleaseBuffer(b).unwrap();
-    // The default (unlimited) case is unchanged: the run is capped by the hint.
-    let (b, _) = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 100, 8, None).unwrap();
-    let last_readv = *READV_SIZES.lock().unwrap().last().unwrap();
-    assert_eq!(last_readv, 8);
-    ReleaseBuffer(b).unwrap();
+    let before = READV_SIZES.lock().unwrap().len();
+    stream_blocks(smgr, 0, 8, strategy);
+    let sizes = READV_SIZES.lock().unwrap()[before..].to_vec();
+    assert_eq!(sizes, vec![1; 8], "a 2-buffer vacuum ring pins nbuffers / 2 = 1 block per read");
+    // Without a strategy the whole range is one read.
+    stream_blocks(smgr, 100, 108, None);
+    assert_eq!(*READV_SIZES.lock().unwrap().last().unwrap(), 8);
 }
 
 // ---- audit-18.6 b244 witnesses ----
@@ -2977,6 +3106,151 @@ fn w2_036_init_local_buffers_alloc_failure_is_fatal_out_of_memory() {
     assert_eq!(retry.map_err(|e| e.message().to_string()), Ok(1024));
 }
 
+// ---- STORAGE H03a: prefetch_range_without_relcache (the heap source's read-ahead, D143) ----
+
+fn prefetch_range_setup() {
+    setup_extend_seams(); // smgr_nblocks: NBLOCKS by relNumber
+    setup_uring_prefetch_seams(); // smgr_prefetch: recorded in PREFETCH_CALLS
+    PREFETCH_CALLS.lock().unwrap().clear();
+}
+
+fn prefetch_calls() -> Vec<(types_storage::RelFileLocatorBackend, ForkNumber, u32, i32)> {
+    core::mem::take(&mut *PREFETCH_CALLS.lock().unwrap())
+}
+
+// The registered seam issues ONE smgr_prefetch per call, on the main fork, by locator with no relcache entry (shared
+// buffers: backend INVALID), for exactly the asked run, and pins / reads nothing.
+#[test]
+fn prefetch_range_issues_one_main_fork_prefetch_per_call() {
+    let _g = setup();
+    prefetch_range_setup();
+    let rel = 9601;
+    NBLOCKS.lock().unwrap().insert(rel, 64);
+    let reads = rel_reads(rel);
+    assert!(bufmgr_seams::prefetch_range_without_relcache::is_installed());
+    assert!(bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), 16, 16).unwrap());
+    assert!(bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), 32, 16).unwrap());
+    let calls = prefetch_calls();
+    assert_eq!(calls.len(), 2, "one smgr_prefetch per call: {calls:?}");
+    for (c, blk) in calls.iter().zip([16u32, 32]) {
+        assert_eq!(c.0.locator, rloc(rel));
+        assert_eq!(c.0.backend, INVALID_PROC_NUMBER);
+        assert_eq!(c.1, ForkNumber::MAIN_FORKNUM);
+        assert_eq!((c.2, c.3), (blk, 16));
+    }
+    assert_eq!(rel_reads(rel), reads, "advice reads no block");
+    // nblocks == 0 is nothing.
+    assert!(!bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), 0, 0).unwrap());
+    assert!(prefetch_calls().is_empty());
+}
+
+// A run past the relation's end is clipped to it; a run wholly past it (or a relation with no blocks) advises nothing.
+#[test]
+fn prefetch_range_past_eof_is_clipped_or_nothing() {
+    let _g = setup();
+    prefetch_range_setup();
+    let rel = 9602;
+    NBLOCKS.lock().unwrap().insert(rel, 40);
+    assert!(bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), 32, 16).unwrap());
+    assert!(!bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), 40, 16).unwrap());
+    assert!(!bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), u32::MAX - 1, 16).unwrap());
+    assert!(!bufmgr_seams::prefetch_range_without_relcache::call(rloc(9603), 0, 16).unwrap(), "empty relation");
+    let calls = prefetch_calls();
+    assert_eq!(calls.iter().map(|c| (c.2, c.3)).collect::<Vec<_>>(), vec![(32, 8)], "clipped to [32, 40)");
+}
+
+// PostgreSQL's rule (read_stream.c): advice only under io_method=sync, effective_io_concurrency > 0 and buffered I/O.
+#[test]
+fn prefetch_range_gate_follows_read_stream_rule() {
+    use guc_tables::consts::{IOMETHOD_IO_URING, IOMETHOD_SYNC, IOMETHOD_WORKER};
+    use types_storage::IO_DIRECT_DATA;
+    assert!(crate::read::prefetch_range_advises(IOMETHOD_SYNC, 16, 0));
+    assert!(crate::read::prefetch_range_advises(IOMETHOD_SYNC, 1, 0));
+    assert!(!crate::read::prefetch_range_advises(IOMETHOD_WORKER, 16, 0));
+    assert!(!crate::read::prefetch_range_advises(IOMETHOD_IO_URING, 16, 0));
+    assert!(!crate::read::prefetch_range_advises(IOMETHOD_SYNC, 0, 0));
+    assert!(!crate::read::prefetch_range_advises(IOMETHOD_SYNC, 16, IO_DIRECT_DATA));
+
+    // The registered seam reads the live settings: direct data I/O is a no-op.
+    let _g = setup();
+    prefetch_range_setup();
+    let rel = 9604;
+    NBLOCKS.lock().unwrap().insert(rel, 64);
+    let saved = fd::io_direct_flags();
+    fd::set_io_direct_flags(saved | IO_DIRECT_DATA);
+    let r = bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), 0, 16);
+    fd::set_io_direct_flags(saved);
+    assert!(!r.unwrap(), "direct I/O: nothing issued");
+    guc_tables::vars::io_method.write(IOMETHOD_WORKER);
+    let r = bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), 0, 16);
+    guc_tables::vars::io_method.write(IOMETHOD_SYNC);
+    assert!(!r.unwrap(), "io_method=worker: nothing issued");
+    assert!(prefetch_calls().is_empty());
+    assert!(bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), 0, 16).unwrap(), "sync again: issued");
+    assert_eq!(prefetch_calls().len(), 1);
+}
+
+fn err_with(message: &str, sqlstate: types_error::SqlState) -> Box<PgError> {
+    let mut e = PgError::error(message);
+    e.sqlstate = sqlstate;
+    Box::new(e)
+}
+
+// A dropped relation (its fork file gone: md's size probe raises ERRCODE_UNDEFINED_FILE, smgr's
+// smgr_prefetch_range_contract test pins that) advises nothing and does not raise; any other error is the caller's.
+#[test]
+fn prefetch_range_missing_file_is_a_safe_no_op() {
+    use crate::read::prefetch_range_clipped;
+    let missing = || -> PgResult<u32> {
+        Err(err_with(
+            "could not open file \"base/5/9605\": No such file or directory",
+            types_error::ERRCODE_UNDEFINED_FILE,
+        ))
+    };
+    let never = |_: u32, _: u32| -> PgResult<bool> { panic!("no advice for a missing fork") };
+    assert!(!prefetch_range_clipped(0, 16, missing, never).unwrap());
+    let eio = || -> PgResult<u32> { Err(err_with("could not seek", types_error::ERRCODE_IO_ERROR)) };
+    assert_eq!(prefetch_range_clipped(0, 16, eio, never).unwrap_err().sqlstate, types_error::ERRCODE_IO_ERROR);
+    // nblocks == 0 probes nothing.
+    let no_probe = || -> PgResult<u32> { panic!("no size probe for an empty run") };
+    assert!(!prefetch_range_clipped(0, 0, no_probe, never).unwrap());
+    // In range: exactly the run, once.
+    let seen = core::cell::Cell::new(None);
+    assert!(prefetch_range_clipped(8, 16, || Ok(100), |b, n| {
+        seen.set(Some((b, n)));
+        Ok(true)
+    })
+    .unwrap());
+    assert_eq!(seen.get(), Some((8, 16)));
+}
+
+// Under local (temp) buffers: the seam is shared-buffer-only (backend INVALID, like the *_without_relcache reads), so
+// a temp relation's locator reaches smgr at the shared path (where md finds no file: the missing-file no-op above) and
+// the backend's local buffers are untouched: same pool, same pins, the resident temp page still valid.
+#[test]
+fn prefetch_range_leaves_local_buffers_alone() {
+    let _g = setup();
+    prefetch_range_setup();
+    let rel = 9606;
+    NBLOCKS.lock().unwrap().insert(rel, 8);
+    let b = read_local_blk(rel, 3);
+    assert!(b < 0);
+    let (nloc, refs) = (crate::localbuf::n_loc_buffer(), crate::localbuf::local_ref_count(b));
+    let reads = rel_reads(rel);
+    assert!(bufmgr_seams::prefetch_range_without_relcache::call(rloc(rel), 0, 8).unwrap());
+    let calls = prefetch_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0.backend, INVALID_PROC_NUMBER, "never the temp (backend-local) path");
+    assert_eq!(crate::localbuf::n_loc_buffer(), nloc);
+    assert_eq!(crate::localbuf::local_ref_count(b), refs);
+    assert_eq!(rel_reads(rel), reads);
+    assert_eq!(read_local_blk(rel, 3), b, "the temp page is still resident");
+    assert_eq!(rel_reads(rel), reads, "a hit, not a re-read");
+    ReleaseBuffer(b).unwrap();
+    ReleaseBuffer(b).unwrap();
+    AtEOXact_Buffers(true);
+}
+
 // bufmgr.c:4563 DropRelationBuffers: nBlocksToInvalidate is a uint64 sum of
 // per-fork BlockNumber differences. A wrapped per-fork difference (cached
 // size below firstDelBlock) plus a small fork must NOT wrap the total back
@@ -3021,7 +3295,7 @@ fn b95_drop_relation_buffers_multi_fork_total_is_uint64() {
 #[test]
 fn b95_clock_sweep_wrap_loser_still_counts_its_pass() {
     let _g = setup();
-    let nbuffers = NBuffersInited() as u32;
+    let nbuffers = crate::extent::span() as u32;
     let (_, passes_before, _) = StrategySyncStart();
     let (hand_before, _, _) = StrategySyncStart();
     // Another wrapper already folded two laps down to hand 1; this caller's
@@ -3032,48 +3306,6 @@ fn b95_clock_sweep_wrap_loser_still_counts_its_pass() {
     assert_eq!(hand, 1);
     assert_eq!(passes, passes_before + 1, "the losing wraparound caller counts its pass");
     crate::freelist::set_clock_hand_for_test(hand_before as u32);
-}
-
-// A follow-up batch inside a surviving credited tail (an evicted extra split
-// at a still-resident block) extends the tail instead of truncating it: the
-// blocks past the split stay uncounted re-pins, not spurious hits.
-#[test]
-fn b95_batch_credit_regrant_extends_surviving_tail() {
-    let _g = setup();
-    let loc = rloc(9962);
-    let fork = ForkNumber::MAIN_FORKNUM;
-    crate::read::clear_batch_credits();
-    crate::read::credit_grant(loc, fork, 1, 10);
-    assert!(crate::read::credit_consume(loc, fork, 1));
-    crate::read::credit_grant(loc, fork, 2, 3);
-    for blk in 2..10 {
-        assert!(crate::read::credit_consume(loc, fork, blk), "block {blk} stays credited");
-    }
-    assert!(!crate::read::credit_consume(loc, fork, 10));
-    // A disjoint batch replaces the tail.
-    crate::read::credit_grant(loc, fork, 1, 10);
-    crate::read::credit_grant(loc, fork, 20, 30);
-    assert!(!crate::read::credit_consume(loc, fork, 1));
-    assert!(crate::read::credit_consume(loc, fork, 20));
-    crate::read::clear_batch_credits();
-}
-
-// read_stream_end: the scan that read the tail is over, so a later reader
-// of those blocks is a hit (bufmgr.c:1157 PinBufferForBlock), not a credited
-// re-pin.
-#[test]
-fn b95_forget_batch_credit_ends_the_scan_tail() {
-    let _g = setup();
-    let loc = rloc(9963);
-    let other = rloc(9964);
-    let fork = ForkNumber::MAIN_FORKNUM;
-    crate::read::clear_batch_credits();
-    crate::read::credit_grant(loc, fork, 1, 10);
-    crate::read::credit_grant(other, fork, 1, 10);
-    crate::read::ForgetBatchCredit(loc, fork);
-    assert!(!crate::read::credit_consume(loc, fork, 1));
-    assert!(crate::read::credit_consume(other, fork, 1));
-    crate::read::clear_batch_credits();
 }
 
 // bufmgr.c:1886-1906 AsyncReadBuffers: a block this backend pinned invalid
@@ -3093,7 +3325,6 @@ fn b95_single_read_completed_by_other_backend_counts_hit() {
         ForkNumber::MAIN_FORKNUM,
         0,
         &None,
-        true,
     )
     .unwrap();
     assert!(!found);
@@ -3116,3 +3347,363 @@ fn b95_single_read_completed_by_other_backend_counts_hit() {
     assert_eq!(counters::shared_blks_hit(), hits + 1);
     ReleaseBuffer(buffer).unwrap();
 }
+
+static COMPLETE_BEFORE_IO_CHECK: AtomicI32 = AtomicI32::new(InvalidBuffer);
+
+pub(crate) fn complete_read_before_io_check(buffer: Buffer) {
+    if COMPLETE_BEFORE_IO_CHECK
+        .compare_exchange(buffer, InvalidBuffer, Ordering::Relaxed, Ordering::Relaxed)
+        .is_ok()
+    {
+        let desc = GetBufferDescriptor(buffer - 1);
+        assert!(crate::read::StartBufferIO(desc, true, false, true).unwrap());
+        crate::read::TerminateBufferIO(desc, false, BM_VALID, true, false);
+    }
+}
+
+#[test]
+fn single_worker_read_completed_at_io_check_counts_one_hit() {
+    let _g = setup();
+    let smgr = RelFileLocatorBackend {
+        locator: rloc(9966),
+        backend: INVALID_PROC_NUMBER,
+    };
+    let (buffer, found) = crate::read::PinBufferForBlock(
+        smgr,
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+        0,
+        &None,
+    )
+    .unwrap();
+    assert!(!found);
+    let hits = counters::shared_blks_hit();
+    let io_hits = || {
+        pgstat::io::pgstat_pending_io().counts[pgstat::io::IOObject::Relation as usize]
+            [pgstat::io::IOContext::IOCONTEXT_NORMAL as usize][pgstat::io::IOOp::Hit as usize]
+    };
+    let io_before = io_hits();
+    let balance = globals::VacuumCostBalance();
+    let active = globals::VacuumCostActive();
+    globals::SetVacuumCostActive(true);
+    COMPLETE_BEFORE_IO_CHECK.store(buffer, Ordering::Relaxed);
+    guc_tables::vars::io_method.write(guc_tables::consts::IOMETHOD_WORKER);
+    let result = crate::read::read_pinned_shared_block(
+        smgr,
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+        0,
+        ReadBufferMode::Normal,
+        None,
+        buffer,
+    );
+    guc_tables::vars::io_method.write(guc_tables::consts::IOMETHOD_SYNC);
+    globals::SetVacuumCostActive(active);
+    let cost = globals::VacuumCostBalance() - balance;
+    globals::SetVacuumCostBalance(balance);
+    ReleaseBuffer(buffer).unwrap();
+    assert!(result.unwrap());
+    assert_eq!(COMPLETE_BEFORE_IO_CHECK.load(Ordering::Relaxed), InvalidBuffer);
+    assert_eq!(counters::shared_blks_hit() - hits, 1);
+    assert_eq!(cost, globals::VacuumCostPageHit());
+    assert_eq!(io_hits() - io_before, 1);
+}
+
+#[test]
+fn failed_shared_flush_retains_pin_until_owner_cleanup() {
+    let _g = setup();
+    setup_write_seams();
+    setup_b039_seams();
+    use types_resowner::{ResourceOwner, RESOURCE_RELEASE_BEFORE_LOCKS};
+    use types_storage::buf::{BM_IO_ERROR, BM_IO_IN_PROGRESS};
+
+    for path in 0..3 {
+        let b = dirty_block(WRITE_ERROR_REL, 3);
+        let desc = GetBufferDescriptor(b - 1);
+        let locator = RelFileLocatorBackend {
+            locator: RelFileLocator { spcOid: 1663, dbOid: 5, relNumber: WRITE_ERROR_REL },
+            backend: INVALID_PROC_NUMBER,
+        };
+        let saved = resowner::CurrentResourceOwner();
+        let owner = resowner::ResourceOwnerCreate(ResourceOwner::NULL, "failed-flush").unwrap();
+        resowner::SetCurrentResourceOwner(owner);
+        let mut wb = crate::write::WritebackContext::for_checkpoint();
+        let mut flush = || match path {
+            0 => crate::write::SyncOneBuffer(b - 1, false, &mut wb).map(|_| ()),
+            1 => FlushRelationBuffers(locator),
+            _ => FlushDatabaseBuffers(locator.locator.dbOid),
+        };
+        WRITE_ERROR_INJECT.store(true, Ordering::Relaxed);
+        let result = flush();
+        WRITE_ERROR_INJECT.store(false, Ordering::Relaxed);
+        assert!(result.unwrap_err().message().contains("injected write failure"));
+        assert!(desc.state.load(Ordering::Acquire) & BM_IO_IN_PROGRESS != 0);
+        assert_eq!(crate::privref::GetPrivateRefCount(b), 1, "flush path {path}");
+        resowner::ResourceOwnerRelease(owner, RESOURCE_RELEASE_BEFORE_LOCKS, false, true).unwrap();
+        resowner::SetCurrentResourceOwner(saved);
+        resowner::ResourceOwnerDelete(owner);
+        let state = desc.state.load(Ordering::Acquire);
+        assert_eq!(state & (BM_IO_IN_PROGRESS | BUF_REFCOUNT_MASK), 0);
+        assert_eq!(state & (BM_IO_ERROR | BM_DIRTY), BM_IO_ERROR | BM_DIRTY);
+        assert_eq!(crate::privref::GetPrivateRefCount(b), 0);
+        flush().unwrap();
+        assert_eq!(desc.state.load(Ordering::Acquire) & (BM_DIRTY | BM_IO_IN_PROGRESS | BUF_REFCOUNT_MASK), 0);
+    }
+}
+
+use bufmgr_seams::ReadBuffersOperation;
+
+fn shared_smgr(rel: u32) -> RelFileLocatorBackend {
+    RelFileLocatorBackend { locator: rloc(rel), backend: INVALID_PROC_NUMBER }
+}
+
+// One StartReadBuffers run of up to `hint` blocks (capped as read_stream caps
+// it); returns the first block pinned, the rest resident and unpinned.
+fn read_run(
+    smgr: RelFileLocatorBackend,
+    blkno: BlockNumber,
+    hint: BlockNumber,
+    strategy: BufferAccessStrategy,
+) -> PgResult<(Buffer, bool)> {
+    let mut nblocks = (hint.max(1) as i32)
+        .min(crate::gucs::io_combine_limit())
+        .min(crate::freelist::GetAccessStrategyPinLimit(&strategy).max(1));
+    let mut op =
+        ReadBuffersOperation::new(smgr, RELPERSISTENCE_PERMANENT, ForkNumber::MAIN_FORKNUM, strategy, 0);
+    let mut buffers = [InvalidBuffer; bufmgr_seams::MAX_IO_COMBINE_LIMIT];
+    let n = nblocks as usize;
+    let io = StartReadBuffers(&mut op, None, &mut buffers[..n], blkno, &mut nblocks, 0)?;
+    if io {
+        WaitReadBuffers(&mut op, None)?;
+    }
+    for &b in &buffers[1..n] {
+        if b != InvalidBuffer {
+            ReleaseBuffer(b)?;
+        }
+    }
+    Ok((buffers[0], !io))
+}
+
+// Stream [first, end) over the pool, releasing each buffer; the blocks seen.
+fn stream_blocks(
+    smgr: RelFileLocatorBackend,
+    first: BlockNumber,
+    end: BlockNumber,
+    strategy: BufferAccessStrategy,
+) -> Vec<BlockNumber> {
+    let cx = mcx::MemoryContext::new_wholesale("stream_blocks");
+    let mut stream = read_stream::read_stream_begin_smgr_relation::<()>(
+        cx.mcx(),
+        read_stream::READ_STREAM_FULL,
+        strategy,
+        smgr,
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+    )
+    .unwrap();
+    let mut range = read_stream::BlockRangeReadStreamPrivate::new(first, end);
+    let mut got = Vec::new();
+    loop {
+        let b = stream.next_buffer(&mut |_: &mut ()| Ok(range.next_block())).unwrap();
+        if b == InvalidBuffer {
+            break;
+        }
+        got.push(BufferGetBlockNumber(b));
+        ReleaseBuffer(b).unwrap();
+    }
+    stream.end().unwrap();
+    got
+}
+
+#[test]
+fn start_read_buffers_splits_at_hit_and_forwards_it() {
+    let _g = setup();
+    let rel = 9470;
+    let pre = read_blk(rel, 3);
+    ReleaseBuffer(pre).unwrap();
+
+    let mut op = ReadBuffersOperation::new(
+        shared_smgr(rel),
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+        None,
+        0,
+    );
+    let mut buffers = [InvalidBuffer; 8];
+    let mut nblocks = 8;
+    assert!(StartReadBuffers(&mut op, None, &mut buffers, 0, &mut nblocks, 0).unwrap());
+    assert_eq!(nblocks, 3, "the run stops before resident block 3");
+    assert!(buffers[3] != InvalidBuffer, "the hit is forwarded, pinned");
+    assert_eq!(BufferGetBlockNumber(buffers[3]), 3);
+    assert!(buffers[4..].iter().all(|&b| b == InvalidBuffer));
+    WaitReadBuffers(&mut op, None).unwrap();
+    assert_eq!(*READV_SIZES.lock().unwrap().last().unwrap(), 3);
+    for (i, &b) in buffers[..3].iter().enumerate() {
+        assert_eq!(BufferGetBlockNumber(b), i as u32);
+        assert!(!buffer_page_ref(b).is_new());
+    }
+
+    // Continue with the forwarded buffer: a hit, no IO, same pin.
+    let forwarded = buffers[3];
+    let mut op2 = ReadBuffersOperation::new(
+        shared_smgr(rel),
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+        None,
+        0,
+    );
+    let mut n = 5;
+    assert!(!StartReadBuffers(&mut op2, None, &mut buffers[3..8], 3, &mut n, 0).unwrap());
+    assert_eq!(n, 1);
+    assert_eq!(buffers[3], forwarded);
+    assert_eq!(GetPrivateRefCount(forwarded), 1, "forwarded pin is not re-pinned");
+    let mut n = 4;
+    assert!(StartReadBuffers(&mut op2, None, &mut buffers[4..8], 4, &mut n, 0).unwrap());
+    assert_eq!(n, 4);
+    WaitReadBuffers(&mut op2, None).unwrap();
+    assert_eq!(*READV_SIZES.lock().unwrap().last().unwrap(), 4);
+    for (i, &b) in buffers.iter().enumerate() {
+        assert_eq!(BufferGetBlockNumber(b), i as u32);
+        assert_eq!(GetPrivateRefCount(b), 1);
+        ReleaseBuffer(b).unwrap();
+        assert_eq!(GetPrivateRefCount(b), 0);
+    }
+}
+
+#[test]
+fn start_read_buffer_single_block_hit_and_miss() {
+    let _g = setup();
+    let rel = 9472;
+    let mut op = ReadBuffersOperation::new(
+        shared_smgr(rel),
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+        None,
+        0,
+    );
+    let mut b = InvalidBuffer;
+    assert!(StartReadBuffer(&mut op, None, &mut b, 7, 0).unwrap());
+    WaitReadBuffers(&mut op, None).unwrap();
+    assert_eq!(BufferGetBlockNumber(b), 7);
+    let mut b2 = 12345;
+    assert!(!StartReadBuffer(&mut op, None, &mut b2, 7, 0).unwrap(), "resident: no IO");
+    assert_eq!(b2, b);
+    assert_eq!(GetPrivateRefCount(b), 2);
+    ReleaseBuffer(b).unwrap();
+    ReleaseBuffer(b2).unwrap();
+}
+
+#[test]
+fn read_stream_over_the_pool_combines_and_releases() {
+    let _g = setup();
+    setup_uring_prefetch_seams(); // smgr_prefetch: the stream's advice, recorded in PREFETCH_CALLS
+    let rel = 9471;
+    for pre in [10u32, 11, 40] {
+        let b = read_blk(rel, pre);
+        ReleaseBuffer(b).unwrap();
+    }
+    let reads_before = READV_SIZES.lock().unwrap().len();
+    let cx = mcx::MemoryContext::new_wholesale("read stream test");
+    let mut stream = read_stream::read_stream_begin_smgr_relation::<()>(
+        cx.mcx(),
+        read_stream::READ_STREAM_FULL,
+        None,
+        shared_smgr(rel),
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+    )
+    .unwrap();
+    let mut range = read_stream::BlockRangeReadStreamPrivate::new(0, 64);
+    let mut cb = |_: &mut ()| Ok(range.next_block());
+    let mut got = Vec::new();
+    loop {
+        let b = stream.next_buffer(&mut cb).unwrap();
+        if b == InvalidBuffer {
+            break;
+        }
+        let blk = BufferGetBlockNumber(b);
+        assert!(!buffer_page_ref(b).is_new());
+        assert_eq!(GetPrivateRefCount(b), 1);
+        got.push(blk);
+        ReleaseBuffer(b).unwrap();
+    }
+    stream.end().unwrap();
+    assert_eq!(got, (0..64).collect::<Vec<u32>>());
+    let sizes: Vec<usize> = READV_SIZES.lock().unwrap()[reads_before..].to_vec();
+    assert_eq!(sizes.iter().sum::<usize>(), 61, "every miss read once: {sizes:?}");
+    let limit = crate::gucs::io_combine_limit() as usize;
+    assert!(sizes.iter().all(|&n| n <= limit));
+    assert!(sizes.iter().filter(|&&n| n == limit).count() >= 2, "{sizes:?}");
+    for blk in 0..64 {
+        let b = read_blk(rel, blk);
+        assert_eq!(GetPrivateRefCount(b), 1, "stream left no pin on block {blk}");
+        ReleaseBuffer(b).unwrap();
+    }
+}
+
+#[test]
+fn read_stream_end_mid_scan_releases_lookahead() {
+    let _g = setup();
+    let rel = 9473;
+    let cx = mcx::MemoryContext::new_wholesale("read stream test");
+    let mut stream = read_stream::read_stream_begin_smgr_relation::<()>(
+        cx.mcx(),
+        read_stream::READ_STREAM_FULL,
+        None,
+        shared_smgr(rel),
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+    )
+    .unwrap();
+    let mut range = read_stream::BlockRangeReadStreamPrivate::new(0, 100);
+    let mut cb = |_: &mut ()| Ok(range.next_block());
+    for want in 0..5 {
+        let b = stream.next_buffer(&mut cb).unwrap();
+        assert_eq!(BufferGetBlockNumber(b), want);
+        ReleaseBuffer(b).unwrap();
+    }
+    stream.end().unwrap();
+    for blk in 0..40 {
+        let b = read_blk(rel, blk);
+        assert_eq!(GetPrivateRefCount(b), 1, "block {blk} still pinned by the stream");
+        ReleaseBuffer(b).unwrap();
+    }
+}
+
+#[test]
+fn temp_relation_reads_combine_into_one_readv() {
+    let _g = setup();
+    let rel = 9520;
+    let pre = read_local_blk(rel, 5);
+    ReleaseBuffer(pre).unwrap();
+    let mut op = ReadBuffersOperation::new(
+        temp_smgr(rel),
+        types_core::RELPERSISTENCE_TEMP,
+        ForkNumber::MAIN_FORKNUM,
+        None,
+        0,
+    );
+    let mut buffers = [InvalidBuffer; 8];
+    let mut nblocks = 8;
+    let before = READV_SIZES.lock().unwrap().len();
+    assert!(StartReadBuffers(&mut op, None, &mut buffers, 0, &mut nblocks, 0).unwrap());
+    assert_eq!(nblocks, 5);
+    assert!(buffers[5] < 0, "the resident local block is forwarded");
+    WaitReadBuffers(&mut op, None).unwrap();
+    assert_eq!(READV_SIZES.lock().unwrap()[before..], [5]);
+    for (i, &b) in buffers[..6].iter().enumerate() {
+        assert!(b < 0);
+        assert_eq!(BufferGetBlockNumber(b), i as u32);
+        assert!(!buffer_page_ref(b).is_new());
+        ReleaseBuffer(b).unwrap();
+        assert_eq!(crate::localbuf::local_ref_count(b), 0);
+    }
+    AtEOXact_Buffers(true);
+}
+
+#[path = "resize_tests.rs"]
+mod resize_tests;
+
+#[cfg(target_os = "linux")]
+#[path = "release_tests.rs"]
+mod release_tests;

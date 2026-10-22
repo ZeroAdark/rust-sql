@@ -1298,7 +1298,7 @@ fn pgoutput_truncate(
     change: &mut ReorderBufferChange,
 ) -> PgResult<()> {
     let data = data_from(opc);
-    let mut relids: Vec<Oid> = Vec::with_capacity(relations.len());
+    let mut relids: Vec<Oid> = ::mcx::std_vec_with_capacity("pgoutput", relations.len())?;
     let mut queued: Vec<(Rc<RelationData<'static>>, Rc<RefCell<RelationSyncEntry>>)> = Vec::new();
 
     for relation in relations {
@@ -1430,7 +1430,7 @@ fn send_repl_origin(
 // LoadPublications (pgoutput.c:1799): missing publications are skipped with
 // a WARNING so they can be created later in the WAL stream.
 fn load_publications(pubnames: &[String]) -> PgResult<Vec<OwnedPublication>> {
-    let mut result = Vec::with_capacity(pubnames.len());
+    let mut result = ::mcx::std_vec_with_capacity("pgoutput", pubnames.len())?;
     let ctx = MemoryContext::new("LoadPublications");
     for pubname in pubnames {
         match GetPublicationByName(ctx.mcx(), pubname, true)? {
@@ -1465,12 +1465,16 @@ fn publication_invalidation_cb(_arg: Datum, _cacheid: i32, _hashvalue: u32) {
 }
 
 // init_rel_sync_cache (pgoutput.c:1971).
+//
+// D4302: C returns early when RelationSyncCache exists, but at startup it never does: the cache dies with the decoding
+// context, in pgoutput_shutdown or, when the decoding ends in an ERROR, in pgoutput_memory_context_reset (the reset
+// callback pgoutput_startup registers on ctx->context). The port drops it only in pgoutput_shutdown, so a cache found
+// here belongs to a decoding that ended in an ERROR (the SQL interface's error path, a walsender back in its command
+// loop). Its entries' schema_sent / streamed_txns would skip the RELATION messages the next consumer needs, so this
+// startup takes a fresh cache; the old entries drop outside the cache's borrow.
 fn init_rel_sync_cache() -> PgResult<()> {
-    let exists = REL_SYNC_CACHE.with(|c| c.borrow().is_some());
-    if exists {
-        return Ok(());
-    }
-    REL_SYNC_CACHE.with(|c| *c.borrow_mut() = Some(HashMap::new()));
+    let stale = REL_SYNC_CACHE.with(|c| c.borrow_mut().replace(HashMap::new()));
+    drop(stale);
 
     if RELATION_CALLBACKS_REGISTERED.with(|c| c.get()) {
         return Ok(());
@@ -1556,7 +1560,10 @@ fn init_rel_attrmap(
         tupdesc::build_attrmap_by_name_if_req(ctx.mcx(), &relation.rd_att, &ancestor.rd_att, false)?;
     // Owned copy: the entry outlives this validation's context (C copies into
     // data->cachectx).
-    entry.attrmap = map.map(|m| m.to_vec());
+    entry.attrmap = match map {
+        Some(m) => Some(::mcx::std_vec_from_slice("pgoutput", &m)?),
+        None => None,
+    };
     Ok(())
 }
 
@@ -1681,7 +1688,8 @@ fn pgoutput_row_filter_init(
         if srcs.is_empty() {
             continue;
         }
-        let mut filters: Vec<Node<'static>> = Vec::with_capacity(srcs.len());
+        let mut filters: Vec<Node<'static>> =
+            ::mcx::std_vec_with_capacity("pgoutput", srcs.len())?;
         for src in srcs {
             let node = readfuncs::stringToNode(emcx, src)?;
             filters.push(planner::prepjointree::expand_generated_columns_in_expr(
@@ -2240,6 +2248,29 @@ mod tests {
         assert!(entry.borrow().replicate_valid);
         assert!(!other.borrow().replicate_valid);
         REL_SYNC_CACHE.with(|c| *c.borrow_mut() = None);
+    }
+
+    // D4302: a decoding that ends in an ERROR skips pgoutput_shutdown, so its cache outlives it; the next startup's init
+    // starts a fresh one (C: pgoutput_memory_context_reset destroyed it with the decoding context). A kept entry whose
+    // schema was sent would skip the RELATION message the next consumer needs.
+    #[test]
+    fn startup_drops_the_cache_of_a_decoding_that_ended_in_error() {
+        // the callbacks are the backend's to register, not this test's
+        RELATION_CALLBACKS_REGISTERED.with(|c| c.set(true));
+        let sent = Rc::new(RefCell::new(RelationSyncEntry::new()));
+        sent.borrow_mut().schema_sent = true;
+        REL_SYNC_CACHE.with(|c| {
+            let mut m: HashMap<Oid, Rc<RefCell<RelationSyncEntry>>> = HashMap::default();
+            m.insert(1234, sent);
+            *c.borrow_mut() = Some(m);
+        });
+        init_rel_sync_cache().unwrap();
+        assert!(
+            REL_SYNC_CACHE.with(|c| c.borrow().as_ref().is_some_and(|m| m.is_empty())),
+            "the next decoding starts with no entry, so it sends each relation's schema again"
+        );
+        REL_SYNC_CACHE.with(|c| *c.borrow_mut() = None);
+        RELATION_CALLBACKS_REGISTERED.with(|c| c.set(false));
     }
 
     #[test]

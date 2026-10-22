@@ -1,0 +1,9 @@
+# SHOW is exact
+sql: SHOW work_mem;
+cols: work_mem
+class: exact
+verdict: match
+[pg]
+4MB
+[got]
+4MB

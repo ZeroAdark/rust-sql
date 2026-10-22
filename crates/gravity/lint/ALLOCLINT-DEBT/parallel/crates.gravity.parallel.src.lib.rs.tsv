@@ -1,0 +1,3 @@
+path	crates/gravity/parallel/src/lib.rs
+ir-only	<T as core::convert::Into<U>>::into	9
+method	std::iter::Iterator::collect	1

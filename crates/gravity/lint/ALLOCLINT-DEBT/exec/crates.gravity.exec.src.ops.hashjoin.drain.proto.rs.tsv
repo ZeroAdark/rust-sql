@@ -1,0 +1,3 @@
+path	crates/gravity/exec/src/ops/hashjoin/drain/proto.rs
+method	std::boxed::Box::new	1
+type	std::boxed::Box	1

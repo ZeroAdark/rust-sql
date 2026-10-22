@@ -1,0 +1,24 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/catalog.rs
+growth	std::collections::BTreeMap::entry	1
+growth	std::collections::BTreeMap::insert	1
+growth	std::collections::BTreeSet::insert	2
+growth	std::iter::Extend::extend	9
+growth	std::vec::Vec::push	18
+growth	std::vec::Vec::resize	1
+growth	std::vec::Vec::try_reserve_exact	4
+macro	std::format	16
+method	slice::sort_by_key	2
+method	std::boxed::Box::new	4
+method	std::clone::Clone::clone	30
+method	std::ffi::CString::new	1
+method	std::iter::Iterator::collect	26
+method	std::iter::Iterator::partition	3
+method	std::string::ToString::to_string	6
+method	std::sync::Arc::new	12
+method	std::vec::Vec::into_boxed_slice	1
+type	std::boxed::Box	5
+type	std::collections::BTreeMap	1
+type	std::collections::BTreeSet	3
+type	std::ffi::CString	1
+type	std::sync::Arc	31
+type	std::vec::Vec	20

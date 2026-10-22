@@ -1,0 +1,9 @@
+# pinned-spawn.allow: spawn(..) calls in production code that need no pagegive::pinned (tests/pinned_spawn_lint.rs).
+# path<TAB>count<TAB>reason. A count must match the file exactly; every other spawn call pins its thread.
+crates/_support/pgsync/src/sim_world.rs	3	the sim pgsync::thread::Builder::spawn forwards the caller's body (pinned at the caller, which this lint checks), pgsync::thread::spawn forwards to it, and h.spawn(v, site) is the scheduler hook, not a thread
+crates/backend/executor/runtime/src/pool.rs	1	WorkerPool::spawn_with calls its spawner argument; each spawner (spawn_std here, launch_backend's rtpool) pins the thread
+crates/backend/postmaster/launch_backend/src/lib.rs	2	pool.spawn(job) submits the residency prime as a job to the gravity pool's existing threads (gravity_pool RuntimePool::spawn): gravity_server_ready (PM_RUN) and gravity_standby_ready (PMSIGNAL_BEGIN_HOT_STANDBY); no thread starts
+crates/gravity/exec/src/runner/portal.rs	1	pool.spawn(job) submits the residency prime as a job to the gravity pool's existing threads; no thread starts
+crates/gravity/hosts/src/ops/scan/pgrc/prime.rs	1	kick_off calls its job-submit argument (pool.spawn); no thread starts
+crates/backend/lib/dshash/bench/rig/src/main.rs	1	the dshash bench rig binary, not the server
+crates/bin/fuzzgen/src/ssi.rs	1	the fuzzgen tool binary, not the server

@@ -1,0 +1,35 @@
+-- regress-full-stats-024
+-- SELECT sessions > 482 FROM pg_stat_database WHERE datname = (SELECT current_database());
+graph pipelines=3 breakers=0 init_plans=1 root=p2
+p0 node=6 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n6@0
+  source const
+  project (1=fn861())
+  outs 1=fx64:call861
+p1 node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0 n2@2 n1@3 n0@5
+  source const
+  gate T_List
+  project (1=c23:0, 2=c19:null)
+  project (1=relabel26(c23:0), 2=c19:null)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2)
+  project (1=op419(fn6188(v2.1), c23:482))
+  outs 1=w4:val 2=fx64:stmt/imm
+  outs 1=w4:val 2=fx64:stmt/imm
+  outs 1=w4:val 2=fx64:life/breaker
+  outs 1=w1:val
+p2 node=5 eligible rows=1 end=sink
+  nodes n5@0 n1@2 n0@4
+  source range rel=1262 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v6.2, $exec0)
+  project (1=v6.1, 2=v6.2)
+  append arm 1/2
+  project (1=outer.1, 2=outer.2)
+  project (1=op419(fn6188(v2.1), c23:482))
+  outs 1=w8:val 2=fx64:win/page
+  outs 1=w4:val 2=fx64:life/breaker
+  outs 1=w1:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 vol=s raise-free
+mapped: Result Append SeqScan SubqueryScan SubPlan

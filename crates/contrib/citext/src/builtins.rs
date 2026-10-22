@@ -11,7 +11,7 @@ const LIBRARY: &str = "citext";
 // PG_FREE_IF_COPY (citext.c:118-119): detoasted copies die with the call
 // instead of accumulating in a sort's context.
 fn fc_citext_cmp(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let scratch = mcx::MemoryContext::new_bump("citext cmp detoast");
+    let scratch = mcx::MemoryContext::new_wholesale("citext cmp detoast");
     // SAFETY: catalog args are non-null citext/text varlenas (strict fn).
     let (a, b) = unsafe {
         (
@@ -27,7 +27,7 @@ fn fc_citext_cmp(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
 }
 
 fn fc_citext_pattern_cmp(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let scratch = mcx::MemoryContext::new_bump("citext cmp detoast");
+    let scratch = mcx::MemoryContext::new_wholesale("citext cmp detoast");
     // SAFETY: catalog args are non-null citext/text varlenas (strict fn).
     let (a, b) = unsafe {
         (

@@ -9,6 +9,7 @@ name = "indexcmds"
 path = "src/lib.rs"
 
 [dependencies]
+tableam_vocab = { path = "../../access/table/tableam_vocab" }
 commands_amcmds = { path = "../amcmds" }
 mbutils_seams = { path = "../../utils/mb/mbutils_seams" }
 mbutils = { path = "../../utils/mb/mbutils" }

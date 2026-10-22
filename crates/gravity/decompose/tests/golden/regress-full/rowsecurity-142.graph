@@ -1,0 +1,12 @@
+-- regress-full-rowsecurity-142
+-- execute r;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=1360 end=sink
+  nodes n1@0 n0@1
+  source range rel=28773 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v3.1)
+  project (1=T_SQLValueFunction, 2=v1.1)
+  outs 1=vl:win/page
+  outs 1=fx64:call0 2=vl:row
+mapped: SeqScan SubqueryScan

@@ -1,0 +1,119 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1a s2u s1c
+step s2x: EXPLAIN (COSTS OFF) WITH a AS (SELECT id FROM dq WHERE status = 'queued' ORDER BY priority DESC, id LIMIT 3 FOR UPDATE), b AS (SELECT id FROM dq WHERE entrypoint = 'fetch' AND status = 'picked' AND heartbeat < now() - interval '30 seconds' ORDER BY heartbeat DESC, id LIMIT 2 FOR UPDATE), c AS (SELECT DISTINCT id FROM (SELECT id FROM a UNION ALL SELECT id FROM b) s), u AS (UPDATE dq SET status = 'picked', heartbeat = now() WHERE id = ANY (SELECT id FROM c) RETURNING *) SELECT id, priority, entrypoint FROM u ORDER BY priority DESC, id;
+QUERY PLAN                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------
+Sort                                                                                                                                              
+  Sort Key: u.priority DESC, u.id                                                                                                                 
+  CTE a                                                                                                                                           
+    ->  Limit                                                                                                                                     
+          ->  LockRows                                                                                                                            
+                ->  Sort                                                                                                                          
+                      Sort Key: dq.priority DESC, dq.id                                                                                           
+                      ->  Seq Scan on dq                                                                                                          
+                            Filter: (status = 'queued'::text)                                                                                     
+  CTE b                                                                                                                                           
+    ->  Limit                                                                                                                                     
+          ->  LockRows                                                                                                                            
+                ->  Sort                                                                                                                          
+                      Sort Key: dq_1.heartbeat DESC, dq_1.id                                                                                      
+                      ->  Seq Scan on dq dq_1                                                                                                     
+                            Filter: ((entrypoint = 'fetch'::text) AND (status = 'picked'::text) AND (heartbeat < (now() - '@ 30 secs'::interval)))
+  CTE u                                                                                                                                           
+    ->  Update on dq dq_2                                                                                                                         
+          ->  Hash Join                                                                                                                           
+                Hash Cond: (dq_2.id = c.id)                                                                                                       
+                ->  Seq Scan on dq dq_2                                                                                                           
+                ->  Hash                                                                                                                          
+                      ->  Subquery Scan on c                                                                                                      
+                            ->  HashAggregate                                                                                                     
+                                  Group Key: a.id                                                                                                 
+                                  ->  Append                                                                                                      
+                                        ->  CTE Scan on a                                                                                         
+                                        ->  CTE Scan on b                                                                                         
+  ->  CTE Scan on u                                                                                                                               
+(29 rows)
+
+step s1a: UPDATE dq SET priority = priority WHERE id = 2;
+step s2u: WITH a AS (SELECT id FROM dq WHERE status = 'queued' ORDER BY priority DESC, id LIMIT 3 FOR UPDATE), b AS (SELECT id FROM dq WHERE entrypoint = 'fetch' AND status = 'picked' AND heartbeat < now() - interval '30 seconds' ORDER BY heartbeat DESC, id LIMIT 2 FOR UPDATE), c AS (SELECT DISTINCT id FROM (SELECT id FROM a UNION ALL SELECT id FROM b) s), u AS (UPDATE dq SET status = 'picked', heartbeat = now() WHERE id = ANY (SELECT id FROM c) RETURNING *) SELECT id, priority, entrypoint FROM u ORDER BY priority DESC, id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ id|priority|entrypoint
+---+--------+----------
+  2|       2|fetch     
+  5|       2|mail      
+  8|       2|fetch     
+ 98|       2|fetch     
+112|       1|fetch     
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2u s1c
+step s1p: UPDATE dq SET status = 'picked', heartbeat = now() WHERE id = 2;
+step s2u: WITH a AS (SELECT id FROM dq WHERE status = 'queued' ORDER BY priority DESC, id LIMIT 3 FOR UPDATE), b AS (SELECT id FROM dq WHERE entrypoint = 'fetch' AND status = 'picked' AND heartbeat < now() - interval '30 seconds' ORDER BY heartbeat DESC, id LIMIT 2 FOR UPDATE), c AS (SELECT DISTINCT id FROM (SELECT id FROM a UNION ALL SELECT id FROM b) s), u AS (UPDATE dq SET status = 'picked', heartbeat = now() WHERE id = ANY (SELECT id FROM c) RETURNING *) SELECT id, priority, entrypoint FROM u ORDER BY priority DESC, id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ id|priority|entrypoint
+---+--------+----------
+  5|       2|mail      
+  8|       2|fetch     
+ 11|       2|mail      
+ 98|       2|fetch     
+112|       1|fetch     
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2u s1c
+step s1d: DELETE FROM dq WHERE id = 5;
+step s2u: WITH a AS (SELECT id FROM dq WHERE status = 'queued' ORDER BY priority DESC, id LIMIT 3 FOR UPDATE), b AS (SELECT id FROM dq WHERE entrypoint = 'fetch' AND status = 'picked' AND heartbeat < now() - interval '30 seconds' ORDER BY heartbeat DESC, id LIMIT 2 FOR UPDATE), c AS (SELECT DISTINCT id FROM (SELECT id FROM a UNION ALL SELECT id FROM b) s), u AS (UPDATE dq SET status = 'picked', heartbeat = now() WHERE id = ANY (SELECT id FROM c) RETURNING *) SELECT id, priority, entrypoint FROM u ORDER BY priority DESC, id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ id|priority|entrypoint
+---+--------+----------
+  2|       2|fetch     
+  8|       2|fetch     
+ 11|       2|mail      
+ 98|       2|fetch     
+112|       1|fetch     
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1h s2u s1c
+step s1h: UPDATE dq SET heartbeat = now() WHERE id = 112;
+step s2u: WITH a AS (SELECT id FROM dq WHERE status = 'queued' ORDER BY priority DESC, id LIMIT 3 FOR UPDATE), b AS (SELECT id FROM dq WHERE entrypoint = 'fetch' AND status = 'picked' AND heartbeat < now() - interval '30 seconds' ORDER BY heartbeat DESC, id LIMIT 2 FOR UPDATE), c AS (SELECT DISTINCT id FROM (SELECT id FROM a UNION ALL SELECT id FROM b) s), u AS (UPDATE dq SET status = 'picked', heartbeat = now() WHERE id = ANY (SELECT id FROM c) RETURNING *) SELECT id, priority, entrypoint FROM u ORDER BY priority DESC, id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|priority|entrypoint
+--+--------+----------
+ 2|       2|fetch     
+ 5|       2|mail      
+ 8|       2|fetch     
+98|       2|fetch     
+84|       0|fetch     
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM dq WHERE id = 2 FOR UPDATE;
+id
+--
+ 2
+(1 row)
+
+step s2sk: WITH a AS (SELECT id FROM dq WHERE status = 'queued' ORDER BY priority DESC, id LIMIT 3 FOR UPDATE SKIP LOCKED), b AS (SELECT id FROM dq WHERE entrypoint = 'fetch' AND status = 'picked' AND heartbeat < now() - interval '30 seconds' ORDER BY heartbeat DESC, id LIMIT 2 FOR UPDATE SKIP LOCKED), c AS (SELECT DISTINCT id FROM (SELECT id FROM a UNION ALL SELECT id FROM b) s), u AS (UPDATE dq SET status = 'picked', heartbeat = now() WHERE id = ANY (SELECT id FROM c) RETURNING *) SELECT id, priority, entrypoint FROM u ORDER BY priority DESC, id;
+ id|priority|entrypoint
+---+--------+----------
+  5|       2|mail      
+  8|       2|fetch     
+ 11|       2|mail      
+ 98|       2|fetch     
+112|       1|fetch     
+(5 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

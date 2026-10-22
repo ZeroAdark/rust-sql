@@ -1,0 +1,3 @@
+gravity/lowerv4/src/frame/env.rs	PIPE_SITES	lowering	scope:with_pipe_sites	leader	lowering scope: every pipeline's driving site for Envs made inside; with_pipe_sites' Clear guard takes it
+gravity/lowerv4/src/frame/env.rs	USER_KEYS	lowering	scope:with_user_keys	leader	lowering scope: the program's keys.user word while its functions are made, and whether a user key's site read it; with_user_keys' Back guard puts the scope before back
+gravity/lowerv4/src/frame/env.rs	SITE_RELS	lowering	scope:with_pipe_sites	leader	lowering scope: PGRCSERVE M0 (D2) the relation each numbered site reads (site_relation, keys_bpchar.rs); set beside PIPE_SITES by with_pipe_sites, whose Clear guard takes both on return or unwind

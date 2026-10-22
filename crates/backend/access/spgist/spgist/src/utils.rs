@@ -448,17 +448,17 @@ pub fn initSpGistState<'mcx>(
     let leaf_tup_desc = getSpGistTupleDesc(mcx, index, &cache.attLeafType)?;
     let redirect_xid = xact::GetTopTransactionIdIfAny();
 
-    let resolve = |procnum: u16| -> PgResult<::types_fmgr::FmgrInfo> {
+    let mut missing = false;
+    let mut resolve = |procnum: u16| -> PgResult<::types_fmgr::FmgrInfo> {
         let oid = index_getprocid(index, spgKeyColumn, procnum);
         if oid == InvalidOid {
-            // C: index_getprocinfo's elog (indexam.c).
-            return Err(Box::new(PgError::error(format!(
-                "missing support function {procnum} for attribute 1 of index \"{}\"",
-                index.name()
-            ))));
+            missing = true;
+            return Ok(::types_fmgr::FmgrInfo::unresolved());
         }
         fmgr_seams::fmgr_info::call(oid)
     };
+    let choose = resolve(SPGIST_CHOOSE_PROC)?;
+    let picksplit = resolve(SPGIST_PICKSPLIT_PROC)?;
     let compress_oid = index_getprocid(index, spgKeyColumn, SPGIST_COMPRESS_PROC);
     let compress = if compress_oid != InvalidOid {
         fmgr_seams::fmgr_info::call(compress_oid)?
@@ -476,9 +476,10 @@ pub fn initSpGistState<'mcx>(
         redirectXid: redirect_xid,
         isBuild: false,
         indexCollation: index.rd_indcollation.first().copied().unwrap_or(InvalidOid),
-        chooseFn: resolve(SPGIST_CHOOSE_PROC)?,
-        picksplitFn: resolve(SPGIST_PICKSPLIT_PROC)?,
+        chooseFn: choose,
+        picksplitFn: picksplit,
         compressFn: compress,
+        missingProcIndex: if missing { Some(index.name().to_string()) } else { None },
         opclassOptions: None,
         frame1: ::types_fmgr::LocalFcinfo::<1>::new(0),
         frame2: ::types_fmgr::LocalFcinfo::<2>::new(0),
@@ -1444,6 +1445,7 @@ pub(crate) mod node_label_tests {
             chooseFn: fi(),
             picksplitFn: fi(),
             compressFn: fi(),
+            missingProcIndex: None,
             opclassOptions: None,
             frame1: ::types_fmgr::LocalFcinfo::new(0),
             frame2: ::types_fmgr::LocalFcinfo::new(0),
@@ -1483,6 +1485,31 @@ pub(crate) mod node_label_tests {
             .expect_err("mixed null/non-null labels must be rejected");
         assert_eq!(err.message(), "some but not all node labels are null in SPGiST inner tuple");
         assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INTERNAL_ERROR);
+    }
+}
+
+// spgutils.c initSpGistState resolves only config/compress; choose and
+// picksplit go through index_getprocinfo at first use (spgdoinsert.c).
+#[cfg(test)]
+mod lazy_support_proc_tests {
+    use super::node_label_tests::state;
+
+    #[test]
+    fn missing_choose_and_picksplit_error_only_when_called() {
+        let ctx = ::mcx::MemoryContext::new("spgist lazy proc test");
+        let mut st = state(ctx.mcx());
+        st.chooseFn = ::types_fmgr::FmgrInfo::unresolved();
+        st.picksplitFn = ::types_fmgr::FmgrInfo::unresolved();
+        st.missingProcIndex = Some("st_a_idx".to_string());
+        // SAFETY: the missing-proc check fails before any field is read.
+        let (cin, mut cout, pin, mut pout) = unsafe {
+            (core::mem::zeroed(), core::mem::zeroed(), core::mem::zeroed(), core::mem::zeroed())
+        };
+        assert!(st.require_choose().is_err());
+        let e = st.call_choose(ctx.mcx(), &cin, &mut cout).unwrap_err();
+        assert_eq!(e.message(), "missing support function 2 for attribute 1 of index \"st_a_idx\"");
+        let e = st.call_picksplit(ctx.mcx(), &pin, &mut pout).unwrap_err();
+        assert_eq!(e.message(), "missing support function 3 for attribute 1 of index \"st_a_idx\"");
     }
 }
 

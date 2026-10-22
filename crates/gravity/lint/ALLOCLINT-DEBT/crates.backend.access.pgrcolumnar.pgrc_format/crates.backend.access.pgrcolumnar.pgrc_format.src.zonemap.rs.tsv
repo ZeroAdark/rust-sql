@@ -1,0 +1,11 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/zonemap.rs
+growth	pgrc_format::wire::put_i64	1
+growth	pgrc_format::wire::put_u32	4
+growth	std::vec::Vec::extend_from_slice	3
+growth	std::vec::Vec::push	4
+ir-only	<T as core::convert::Into<U>>::into	2
+method	pgrc_format::try_vec	2
+method	std::clone::Clone::clone	11
+method	std::iter::Iterator::collect	8
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	16

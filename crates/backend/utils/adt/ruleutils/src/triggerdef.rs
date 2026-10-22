@@ -83,7 +83,7 @@ fn bytea_strings(d: Datum, n: usize) -> PgResult<Vec<String>> {
     let scratch = MemoryContext::new("pg_get_triggerdef tgargs");
     let image = detoast::detoast_attr(scratch.mcx(), raw)?;
     let bytes = &image[datum::varlena::VARHDRSZ..];
-    let mut out = Vec::with_capacity(n);
+    let mut out = ::mcx::std_vec_with_capacity("ruleutils", n)?;
     let mut p = 0usize;
     for _ in 0..n {
         let end = bytes[p..].iter().position(|&b| b == 0).map(|e| p + e).unwrap_or(bytes.len());

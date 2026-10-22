@@ -5,12 +5,12 @@
 
 #![cfg(feature = "rig")]
 
-use pgrc2_format::class::{CollationClass, ColSchema, StorageClass, TypeSemantics};
-use pgrc2_write::ingest::RawDatum;
-use pgrc2_write::publish::TxnVerdict;
-use pgrc2_write::testkit::{Kit, Probe};
-use pgrc2_write::writer::{PartCutPolicy, SealEnv, TableWriter, TxnStamp};
-use pgrc2_write::wvfs::RealVfs;
+use pgrc_format::class::{CollationClass, ColSchema, StorageClass, TypeSemantics};
+use pgrc_write::ingest::RawDatum;
+use pgrc_write::publish::TxnVerdict;
+use pgrc_write::testkit::{Kit, Probe};
+use pgrc_write::writer::{PartCutPolicy, SealEnv, TableWriter, TxnStamp};
+use pgrc_write::wvfs::RealVfs;
 use sqe::bank::{Bank, ColMeta, OpenOpts};
 use sqe::engine::{Engine, SqeConfig};
 use sqe::planner::{plan_from_ap, AAgg, AFamily, AKeyExpr, AOrderBy, AOrderSpec, APlan, AValExpr};
@@ -63,7 +63,7 @@ fn seal_bank(dir: &str) {
     for i in 0..ROWS {
         let (k, g) = row(i);
         let datums = [RawDatum::Word(k as u64), RawDatum::Word(g as u64)];
-        let sources: [&dyn pgrc2_write::elect::CandidateSource; 1] = [&kit.cands];
+        let sources: [&dyn pgrc_write::elect::CandidateSource; 1] = [&kit.cands];
         let mut env = SealEnv {
             vfs: &mut vfs,
             sources: &sources,
@@ -75,7 +75,7 @@ fn seal_bank(dir: &str) {
     }
     let probe = Probe::new(TxnVerdict::Committed);
     {
-        let sources: [&dyn pgrc2_write::elect::CandidateSource; 1] = [&kit.cands];
+        let sources: [&dyn pgrc_write::elect::CandidateSource; 1] = [&kit.cands];
         let mut env = SealEnv {
             vfs: &mut vfs,
             sources: &sources,

@@ -1,0 +1,14 @@
+-- regress-full-alter_operator-002
+-- SELECT oprcanmerge, oprcanhash, pg_describe_object('pg_operator'::regclass, oprcom, 0) AS commutator, pg_describe_object('pg_operator'::regclass, oprnegate, 0) AS negator FROM pg_operator WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'real'::regtype;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=2617 rti=1 am=heap index=2689
+    key att=2 op=93 value=c19:#64
+    key att=8 op=607 value=c26:16
+    key att=9 op=607 value=c26:700
+    recheck (op93(v1.2, c19:#64), op607(v1.8, c26:16), op607(v1.9, c26:700))
+    lanes Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val
+  project (1=v1.6, 2=v1.7, 3=fn3537(c26:2617, v1.11, c23:0), 4=fn3537(c26:2617, v1.12, c23:0))
+  outs 1=w8:val 2=w8:val 3=vl:call3537 4=vl:call3537
+mapped: IndexScan

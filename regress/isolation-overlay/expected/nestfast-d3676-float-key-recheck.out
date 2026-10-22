@@ -1,0 +1,89 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) UPDATE d76_a SET note = note || '+' WHERE id < 6 AND f8 NOT IN (SELECT f8 FROM d76_s) AND f4 NOT IN (SELECT f4 FROM d76_s);
+QUERY PLAN                                                                                                              
+------------------------------------------------------------------------------------------------------------------------
+Update on d76_a                                                                                                         
+  ->  Seq Scan on d76_a                                                                                                 
+        Filter: ((id < 6) AND (NOT (ANY (f8 = (hashed SubPlan 1).col1))) AND (NOT (ANY (f4 = (hashed SubPlan 2).col1))))
+        SubPlan 1                                                                                                       
+          ->  Seq Scan on d76_s                                                                                         
+        SubPlan 2                                                                                                       
+          ->  Seq Scan on d76_s d76_s_1                                                                                 
+(7 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1z s2u s1c s2s s2c
+step s1z: UPDATE d76_a SET f8 = '-0' WHERE id = 3;
+step s2u: UPDATE d76_a SET note = note || '+' WHERE id < 6 AND f8 NOT IN (SELECT f8 FROM d76_s) AND f4 NOT IN (SELECT f4 FROM d76_s); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, f8, f4, note FROM d76_a WHERE id < 7 ORDER BY id;
+id| f8|  f4|note
+--+---+----+----
+ 1|1.5|1.25|n1+ 
+ 2|2.5|2.25|n2+ 
+ 3| -0|3.25|n3  
+ 4|4.5|4.25|n4+ 
+ 5|5.5|5.25|n5+ 
+ 6|6.5|6.25|n6  
+(6 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s2u s1c s2s s2c
+step s1n: UPDATE d76_a SET f8 = -'NaN'::float8 WHERE id = 3;
+step s2u: UPDATE d76_a SET note = note || '+' WHERE id < 6 AND f8 NOT IN (SELECT f8 FROM d76_s) AND f4 NOT IN (SELECT f4 FROM d76_s); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, f8, f4, note FROM d76_a WHERE id < 7 ORDER BY id;
+id|f8 |  f4|note
+--+---+----+----
+ 1|1.5|1.25|n1+ 
+ 2|2.5|2.25|n2+ 
+ 3|NaN|3.25|n3  
+ 4|4.5|4.25|n4+ 
+ 5|5.5|5.25|n5+ 
+ 6|6.5|6.25|n6  
+(6 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1f s2u s1c s2s s2c
+step s1f: UPDATE d76_a SET f4 = -'NaN'::float4 WHERE id = 3;
+step s2u: UPDATE d76_a SET note = note || '+' WHERE id < 6 AND f8 NOT IN (SELECT f8 FROM d76_s) AND f4 NOT IN (SELECT f4 FROM d76_s); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, f8, f4, note FROM d76_a WHERE id < 7 ORDER BY id;
+id| f8|f4  |note
+--+---+----+----
+ 1|1.5|1.25|n1+ 
+ 2|2.5|2.25|n2+ 
+ 3|3.5|NaN |n3  
+ 4|4.5|4.25|n4+ 
+ 5|5.5|5.25|n5+ 
+ 6|6.5|6.25|n6  
+(6 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1o s2u s1c s2s s2c
+step s1o: UPDATE d76_a SET note = note || '*' WHERE id = 3;
+step s2u: UPDATE d76_a SET note = note || '+' WHERE id < 6 AND f8 NOT IN (SELECT f8 FROM d76_s) AND f4 NOT IN (SELECT f4 FROM d76_s); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, f8, f4, note FROM d76_a WHERE id < 7 ORDER BY id;
+id| f8|  f4|note
+--+---+----+----
+ 1|1.5|1.25|n1+ 
+ 2|2.5|2.25|n2+ 
+ 3|3.5|3.25|n3*+
+ 4|4.5|4.25|n4+ 
+ 5|5.5|5.25|n5+ 
+ 6|6.5|6.25|n6  
+(6 rows)
+
+step s2c: COMMIT;

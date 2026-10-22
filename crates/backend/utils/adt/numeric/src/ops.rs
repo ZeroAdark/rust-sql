@@ -1,7 +1,6 @@
 use types_error::{ereturn, PgError, PgResult, SoftErrorContext, ERRCODE_FEATURE_NOT_SUPPORTED};
 
 use crate::arith::{add_var, cmp_var, cmp_var_common, div_var, mul_var, select_div_scale, sub_var};
-use crate::io::get_str_from_var;
 use crate::var::{
     int64_to_var, make_result, make_result_into, make_result_opt_error, set_var_from_int64,
     var_to_int32, var_to_int64, NumericImage, NumericVar, CONST_ONE, CONST_ZERO,
@@ -794,11 +793,13 @@ pub fn numeric_float8_no_overflow(num: Num<'_>) -> f64 {
             f64::NAN
         };
     }
-    let mut buf = Vec::with_capacity(32);
-    get_str_from_var(num.view(), &mut buf);
-    let s = core::str::from_utf8(&buf).expect("numeric text is ASCII");
+    if let Some(v) = crate::float_cast::float8_exact(num) {
+        return v;
+    }
     // C strtod ignoring ERANGE: Rust parse saturates to +/-inf the same way.
-    s.parse::<f64>().expect("numeric text parses as f64")
+    crate::float_cast::with_numeric_text(num, |s| {
+        s.parse::<f64>().expect("numeric text parses as f64")
+    })
 }
 
 // Stats arrays hand out packed elements at arbitrary byte offsets; a 1-byte
@@ -809,7 +810,10 @@ pub fn numeric_float8_no_overflow_any(payload: &[u8]) -> f64 {
     if num.is_special() || (payload.as_ptr() as usize + num.header_size()) % 2 == 0 {
         return numeric_float8_no_overflow(num);
     }
-    let mut buf = vec![0u16; payload.len().div_ceil(2)];
+    let nwords = payload.len().div_ceil(2);
+    let mut buf = Vec::new();
+    let _ = buf.try_reserve_exact(nwords);
+    buf.resize(nwords, 0u16);
     // SAFETY: the u16 buffer reinterpreted as bytes, sized to cover payload.
     let dst =
         unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), payload.len()) };
@@ -827,10 +831,10 @@ pub fn numeric_float8(num: Num<'_>) -> PgResult<f64> {
             f64::NAN
         });
     }
-    let mut buf = Vec::with_capacity(32);
-    get_str_from_var(num.view(), &mut buf);
-    let s = core::str::from_utf8(&buf).expect("numeric text is ASCII");
-    adt_float::float8in(s, None)
+    if let Some(v) = crate::float_cast::float8_exact(num) {
+        return Ok(v);
+    }
+    crate::float_cast::with_numeric_text(num, |s| adt_float::float8in(s, None))
 }
 
 pub fn numeric_float4(num: Num<'_>) -> PgResult<f32> {
@@ -843,10 +847,10 @@ pub fn numeric_float4(num: Num<'_>) -> PgResult<f32> {
             f32::NAN
         });
     }
-    let mut buf = Vec::with_capacity(32);
-    get_str_from_var(num.view(), &mut buf);
-    let s = core::str::from_utf8(&buf).expect("numeric text is ASCII");
-    adt_float::float4in(s, None)
+    if let Some(v) = crate::float_cast::float4_exact(num) {
+        return Ok(v);
+    }
+    crate::float_cast::with_numeric_text(num, |s| adt_float::float4in(s, None))
 }
 
 pub fn numeric_avg_div(sum: Num<'_>, count: i64) -> PgResult<NumericImage> {

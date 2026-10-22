@@ -1,0 +1,4 @@
+path	crates/gravity/expr/src/bake.rs
+growth	std::vec::Vec::push	2
+ir-only	core::option::Option<&T>::cloned	1
+type	std::vec::Vec	1

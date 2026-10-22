@@ -1,0 +1,52 @@
+-- regress-full-sanity_check-001
+-- SELECT relname, nspname FROM pg_class c LEFT JOIN pg_namespace n ON n.oid = relnamespace JOIN pg_attribute a ON (attrelid = c.oid AND attname = 'oid') WHERE relkind = 'r' and c.oid < 16384 AND ((nspname ~ '^pg_') IS NOT FALSE) AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE indrelid = c.oid AND indkey[0] = a.attnum AND indnatts = 1 AND indisunique AND indimmediate);
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=5 eligible rows=49 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n5@0 n4@1
+  source range rel=2615 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v2.2, 2=v2.1)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=fx64:win/page 2=w8:val
+p1 node=3 eligible rows=125 end=sink
+  desc consumes=slot0@p0
+  nodes n3@0 n2@3 n1@6 n0@8
+  source range rel=1259 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(18):byval8:w8:val Offset:byval2:w2:val
+  filter op609(v1.1, c26:16384)
+  filter op92(v1.18, c18:114)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24, 25=v1.25, 26=v1.26, 27=v1.27, 28=v1.28, 29=v1.29, 30=v1.30, 31=v1.31, 32=v1.32, 33=v1.33, 34=v1.34)
+  probe slot=0 inner=n4 JOIN_LEFT unique keys=(outer.3) decls=26/26:I32 clauses=(op607(outer.3, inner.2))
+  filter T_BooleanTest
+  project (1=outer.2, 2=outer.1, 3=inner.1)
+  nest inner=n6 JOIN_INNER unique raise-free params=($exec0=outer.2)
+  inner node=6 serial site=0 reason=IndexSource end=sink
+  nodes n6@0
+  source index rel=1249 rti=4 am=heap index=2658
+    key att=1 op=607 value=$exec0
+    key att=2 op=93 value=c19:#64
+    recheck (op607(v4.1, $exec0), op93(v4.2, c19:#64))
+    lanes Attr(5):byval8:w8:val
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9, 10=v4.10, 11=v4.11, 12=v4.12, 13=v4.13, 14=v4.14, 15=v4.15, 16=v4.16, 17=v4.17, 18=v4.18, 19=v4.19, 20=v4.20, 21=v4.21, 22=v4.22, 23=v4.23, 24=v4.24, 25=v4.25)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.5)
+  nest inner=n7 JOIN_ANTI raise-free params=($exec1=outer.2) qual=(op94(T_SubscriptingRef, outer.4))
+  inner node=7 serial site=0 reason=IndexSource end=sink
+  nodes n7@0
+  source index rel=2610 rti=6 am=heap index=2678
+    key att=2 op=607 value=$exec1
+    recheck (op607(v6.2, $exec1))
+    lanes Attr(3):byval8:w8:val Attr(5):byval8:w8:val Attr(9):byval8:w8:val Attr(16):byref8:vl:win/page
+  filter v6.5
+  filter v6.9
+  filter op532(v6.3, c23:1)
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=v6.4, 5=v6.5, 6=v6.6, 7=v6.7, 8=v6.8, 9=v6.9, 10=v6.10, 11=v6.11, 12=v6.12, 13=v6.13, 14=v6.14, 15=v6.15, 16=v6.16, 17=v6.17, 18=v6.18, 19=v6.19, 20=v6.20, 21=v6.21)
+  project (1=outer.1, 2=outer.3)
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=w4:val 15=w1:val 16=w1:val 17=w1:val 18=w8:val 19=w2:val 20=w2:val 21=w1:val 22=w1:val 23=w1:val 24=w1:val 25=w1:val 26=w1:val 27=w1:val 28=w1:val 29=w4:val 30=w4:val 31=w4:val 32=vl:row 33=vl:row 34=vl:row
+  outs 1=fx64:win/page 2=w8:val 3=fx64:life/breaker
+  outs 1=fx64:win/page 2=w8:val 3=fx64:life/breaker 4=w2:val
+  outs 1=fx64:win/page 2=fx64:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+param $exec0 owner=n1 type=26 rep=w8:val
+param $exec1 owner=n0 type=26 rep=w8:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam HashJoin Hash

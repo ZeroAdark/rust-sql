@@ -20,6 +20,11 @@ fn desc_mcx() -> Mcx<'static> {
             let m: &'static MemoryContext =
                 ::mcx::session_root("UtilityTupleDescs");
             c.set(Some(m));
+            // D4682: the teardown retires this root; clear the slot first, so a reused thread's next
+            // session builds a new one.
+            ::mcx::register_session_cleanup(Box::new(|| {
+                let _ = CTX.try_with(|c| c.set(None));
+            }));
             m.mcx()
         }
     })

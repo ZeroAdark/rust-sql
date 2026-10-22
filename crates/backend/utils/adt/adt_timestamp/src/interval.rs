@@ -431,6 +431,11 @@ fn ts_round(j: f64) -> f64 {
 }
 
 #[inline]
+fn fractional_product(value: i32, factor: f64, whole: i32) -> f64 {
+    ::fp_contract::fnmsub(value as f64, factor, whole as f64)
+}
+
+#[inline]
 fn float8_fits_in_int32(num: f64) -> bool {
     // exclusive upper bound per C FLOAT8_FITS_IN_INT32
     num >= -2147483648.0 && num < 2147483648.0
@@ -481,9 +486,9 @@ pub fn interval_mul(span: &Interval, factor: f64) -> PgResult<Interval> {
 
     // cascade fractional month/day parts down (never up), per C
     let mut month_remainder_days =
-        (orig_month as f64 * factor - result.month as f64) * DAYS_PER_MONTH as f64;
+        fractional_product(orig_month, factor, result.month) * DAYS_PER_MONTH as f64;
     month_remainder_days = ts_round(month_remainder_days);
-    let mut sec_remainder = (orig_day as f64 * factor - result.day as f64 + month_remainder_days
+    let mut sec_remainder = (fractional_product(orig_day, factor, result.day) + month_remainder_days
         - (month_remainder_days as i32) as f64)
         * SECS_PER_DAY as f64;
     sec_remainder = ts_round(sec_remainder);
@@ -503,7 +508,8 @@ pub fn interval_mul(span: &Interval, factor: f64) -> PgResult<Interval> {
     };
     result.day = day;
     result_double =
-        (span.time as f64 * factor + sec_remainder * USECS_PER_SEC as f64).round_ties_even();
+        ::fp_contract::fmadd(span.time as f64, factor, sec_remainder * USECS_PER_SEC as f64)
+            .round_ties_even();
     if result_double.is_nan() || !float8_fits_in_int64(result_double) {
         return Err(interval_out_of_range());
     }
@@ -572,7 +578,8 @@ pub fn interval_div(span: &Interval, factor: f64) -> PgResult<Interval> {
     };
     result.day = day;
     result_double =
-        (span.time as f64 / factor + sec_remainder * USECS_PER_SEC as f64).round_ties_even();
+        ::fp_contract::fmadd(sec_remainder, USECS_PER_SEC as f64, span.time as f64 / factor)
+            .round_ties_even();
     if result_double.is_nan() || !float8_fits_in_int64(result_double) {
         return Err(interval_out_of_range());
     }
@@ -872,9 +879,8 @@ pub fn in_range_interval_interval(
 pub fn timestamptz_pl_interval_internal(
     timestamp: TimestampTz,
     span: &Interval,
-    attimezone: Option<&'static PgTz>,
+    attimezone: Option<&PgTz>,
 ) -> PgResult<TimestampTz> {
-    let mut timestamp = timestamp;
     if span.is_nobegin() {
         if TIMESTAMP_IS_NOEND(timestamp) {
             return Err(timestamp_out_of_range());
@@ -891,14 +897,22 @@ pub fn timestamptz_pl_interval_internal(
         return Ok(timestamp);
     }
 
-    // C resolves NULL attimezone to session_timezone
-    let attimezone = match attimezone {
-        Some(z) => z,
-        None => tz::session_timezone().unwrap_or_else(|| {
-            panic!("session timezone not initialized (pg_timezone_initialize) — timestamptz_pl_interval")
-        }),
-    };
+    // C resolves NULL attimezone to session_timezone (borrowed: a per-datum read)
+    match attimezone {
+        Some(z) => timestamptz_pl_interval_in(timestamp, span, z),
+        None => tz::with_required_session_timezone(
+            "session timezone not initialized (pg_timezone_initialize) — timestamptz_pl_interval",
+            |z| timestamptz_pl_interval_in(timestamp, span, z),
+        ),
+    }
+}
 
+// timestamptz_pl_interval_internal's finite case under the resolved zone.
+fn timestamptz_pl_interval_in(
+    mut timestamp: TimestampTz,
+    span: &Interval,
+    attimezone: &PgTz,
+) -> PgResult<TimestampTz> {
     if span.month != 0 {
         let mut tm = pg_tm::default();
         let mut fsec: fsec_t = 0;
@@ -950,7 +964,7 @@ pub fn timestamptz_pl_interval_internal(
 pub fn timestamptz_mi_interval_internal(
     timestamp: TimestampTz,
     span: &Interval,
-    attimezone: Option<&'static PgTz>,
+    attimezone: Option<&PgTz>,
 ) -> PgResult<TimestampTz> {
     let mut tspan = Interval::default();
     interval_um_internal(span, &mut tspan)?;
@@ -972,10 +986,10 @@ pub fn timestamp2timestamptz_opt_overflow(
     let mut fsec: fsec_t = 0;
     // we don't expect this to fail, but check it pro forma
     if timestamp2tm(timestamp, None, &mut tm, &mut fsec, None, None).is_ok() {
-        let attimezone = tz::session_timezone().unwrap_or_else(|| {
-            panic!("session timezone not initialized (pg_timezone_initialize) — timestamp2timestamptz")
-        });
-        let tzv = tz::DetermineTimeZoneOffset(&mut tm, attimezone);
+        let tzv = tz::with_required_session_timezone(
+            "session timezone not initialized (pg_timezone_initialize) — timestamp2timestamptz",
+            |z| tz::DetermineTimeZoneOffset(&mut tm, z),
+        );
         let result = timestamp.wrapping_sub(-(tzv as i64) * USECS_PER_SEC);
         if IS_VALID_TIMESTAMP(result) {
             return Ok(result);

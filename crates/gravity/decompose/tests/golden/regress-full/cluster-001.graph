@@ -1,0 +1,11 @@
+-- regress-full-cluster-001
+-- INSERT INTO clstr_tst_s (b) SELECT b FROM clstr_tst_s;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=38276 rti=3 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=fn480(fn1574(c2205:38275)), 2=v3.2)
+  write INSERT rel=38276 rti=1 natts=2 indexes=(38281[1]up)
+  outs 1=w4:val 2=w8:val
+mapped: ModifyTable SeqScan

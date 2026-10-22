@@ -1,0 +1,11 @@
+-- regress-full-geometry-016
+-- SELECT polygon(f1) FROM PATH_TBL WHERE isclosed(f1);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=453 end=sink
+  nodes n0@0
+  source range rel=17114 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  filter fn1430(v1.1)
+  project (1=fn1449(v1.1))
+  outs 1=vl:call1449
+mapped: SeqScan

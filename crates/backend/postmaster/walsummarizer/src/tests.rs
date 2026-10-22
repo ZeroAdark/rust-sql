@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn summary_allocations_use_wal_summarizer_context() {
+    procsignal_seams::proc_signal_barrier_pending::set(|| true);
+    procsignal_seams::process_proc_signal_barrier::set(|| {
+        Err(Box::new(PgError::new(ERROR, "stop after summary allocation")))
+    });
+    let mut context = MemoryContext::new("Wal Summarizer");
+    let err = SummarizeWAL(context.mcx(), 1, 0x1000000, true, 0, 0x1000000, &[]).unwrap_err();
+    assert_eq!(err.message, "stop after summary allocation");
+    assert!(context.stats().peak >= 8192);
+    context.reset();
+    assert_eq!(context.stats().used, 0);
+}
+
+#[test]
 fn wal_summary_filename_roundtrip() {
     let ws = WalSummaryFile { tli: 1, start_lsn: 0x0000_0001_0428_0048, end_lsn: 0x0000_0001_0500_0000 };
     let name = format!(
@@ -236,14 +250,43 @@ mod contents_rows {
         fd::InitFileAccess();
     }
 
-    fn scratch_summaries_dir() -> String {
+    /// A test's `<scratch>/summaries` directory: reads as its path (`Deref` to the `String`), and its scratch parent is
+    /// removed with everything below it when dropped (the test's end, or a panic's unwind), so the suite leaves no
+    /// pgrust_walsummary_srf_test_* in the temp dir.
+    struct Summaries(String);
+
+    impl std::ops::Deref for Summaries {
+        type Target = String;
+        fn deref(&self) -> &String {
+            &self.0
+        }
+    }
+
+    impl Drop for Summaries {
+        fn drop(&mut self) {
+            if let Some(parent) = std::path::Path::new(&self.0).parent() {
+                let _ = std::fs::remove_dir_all(parent);
+            }
+        }
+    }
+
+    fn scratch_summaries_dir() -> Summaries {
         let n = SCRATCH_N.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
             "pgrust_walsummary_srf_test_{}_{n}/summaries",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        dir.to_str().unwrap().to_owned()
+        Summaries(dir.to_str().unwrap().to_owned())
+    }
+
+    #[test]
+    fn scratch_summaries_dirs_leave_nothing_behind() {
+        let dir = scratch_summaries_dir();
+        let parent = std::path::Path::new(&*dir).parent().unwrap().to_path_buf();
+        std::fs::write(format!("{}/f", *dir), b"x").unwrap();
+        drop(dir);
+        assert!(!parent.exists(), "{} left behind", parent.display());
     }
 
     fn rl(spc: u32, db: u32, rel: u32) -> RelFileLocator {
@@ -536,4 +579,70 @@ fn pre_epoch_summary_mtime_is_expired() {
     assert!(summary_expired(1_699_999_999, 1_700_000_000));
     assert!(!summary_expired(1_700_000_000, 1_700_000_000));
     assert!(!summary_expired(i64::MAX, 1_700_000_000));
+}
+
+#[test]
+fn shutdown_closes_open_wal_segment() {
+    if std::env::var_os("WAL_SUMMARIZER_SHUTDOWN_TEST").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::shutdown_closes_open_wal_segment", "--nocapture"])
+            .env("WAL_SUMMARIZER_SHUTDOWN_TEST", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}{}",
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+    file_seams::basic_open_file::set(|_, flags| fd::BasicOpenFile("/dev/null", flags).unwrap());
+    procsignal_seams::proc_signal_barrier_pending::set(|| false);
+    guc_tables::vars::summarize_wal.install(guc_tables::GucVarAccessors {
+        get: || false,
+        set: |_| {},
+    });
+    for mode in ["disabled", "shutdown", "normal"] {
+        std::thread::spawn(move || {
+            g::SetIsUnderPostmaster(true);
+            interrupt::SetShutdownRequestPending(mode == "shutdown");
+            let raw = Cell::new(-1);
+            let exited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let cx = MemoryContext::new("summarizer shutdown test");
+                let mut reader = allocate_summarizer_reader(cx.mcx(), 16 * 1024 * 1024).unwrap();
+                let mut routine = SummarizerPageRead {
+                    segment: guards::WalSegmentGuard(-1),
+                    tli: 1,
+                    historic: false,
+                    read_upto: 0,
+                    end_of_wal: false,
+                    descendant_tlis: &[],
+                };
+                routine.segment_open(&mut reader.v, 1, &mut 1).unwrap();
+                let first = reader.v.seg.ws_file;
+                routine.segment_close(&mut reader.v);
+                assert_eq!(reader.v.seg.ws_file, -1);
+                assert_eq!(fd::pg_fstat(first, &mut fd::FileInfo::default()), -1);
+                routine.segment_open(&mut reader.v, 2, &mut 1).unwrap();
+                raw.set(reader.v.seg.ws_file);
+                if mode == "normal" {
+                    reader.XLogReaderFree(&mut routine);
+                    assert_eq!(fd::pg_fstat(raw.get(), &mut fd::FileInfo::default()), -1);
+                    raw.set(fd::BasicOpenFile("/dev/null", libc::O_RDONLY).unwrap());
+                } else {
+                    ProcessWalSummarizerInterrupts().unwrap();
+                }
+            }));
+            if mode == "normal" {
+                assert!(exited.is_ok());
+            } else {
+                assert_eq!(exited.unwrap_err().downcast_ref::<ipc::ProcExitThread>().unwrap().code, 0);
+            }
+            let result = fd::pg_fstat(raw.get(), &mut fd::FileInfo::default());
+            if result == 0 {
+                fd::pg_close(raw.get());
+            }
+            assert_eq!(result, if mode == "normal" { 0 } else { -1 }, "{mode}");
+            if mode != "normal" {
+                assert_eq!(fd::get_errno(), libc::EBADF);
+            }
+        }).join().unwrap();
+    }
 }

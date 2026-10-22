@@ -1,0 +1,1 @@
+crates/gravity/decompose/src/ops/setop.rs	map_recursive_union	licence	fn	a recursive CTE's seed and once-run term inputs run whole at the first pull (PG pulls the seed row by row); also a Materialize over a hashed group filled in pipeline order (D3373) [EFFECTS-ONLY; D2732,D3373,D3377,D2034]

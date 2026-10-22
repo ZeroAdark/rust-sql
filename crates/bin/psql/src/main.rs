@@ -5,6 +5,7 @@
 
 #![allow(clippy::too_many_lines)]
 
+mod args;
 mod auth;
 mod commands;
 mod describe;
@@ -415,6 +416,11 @@ fn prompt(st: &PsqlState, scan: &ScanState, first: bool) -> String {
 
 // --------------------------------------------------------------------- main
 
+const DEFAULT_PGSOCKET_DIR: &str = match option_env!("PGRUST_DEFAULT_PGSOCKET_DIR") {
+    Some(d) => d,
+    None => "/tmp",
+};
+
 fn main() {
     // C psql runs with SIGPIPE at its default: writing to a closed stdout pipe
     // (`psql -f script.sql | head -1`) kills the process, so the rest of the
@@ -424,13 +430,14 @@ fn main() {
     // runtime sets SIGPIPE to SIG_IGN before main, which made the port get
     // EPIPE, keep running the script, then panic in println!. Restore the
     // default before anything is written.
+    #[cfg(unix)]
     // SAFETY: single-threaded at this point; SIG_DFL is a valid disposition.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
     let mut args = std::env::args();
     let progname = pg_path::get_progname(&args.next().unwrap_or_default()).to_string();
-    let mut host = env_or("PGHOST", "/tmp");
+    let mut host = env_or("PGHOST", DEFAULT_PGSOCKET_DIR);
     let mut port = env_or("PGPORT", "5432");
     let mut user = env_or("PGUSER", &os_user());
     let mut dbname = std::env::var("PGDATABASE").ok().filter(|v| !v.is_empty());
@@ -442,27 +449,37 @@ fn main() {
     let mut fd_transport: Option<(i32, i32)> = None;
     let mut positional: Vec<String> = Vec::new();
 
-    while let Some(a) = args.next() {
-        let need = |args: &mut dyn Iterator<Item = String>| -> String {
-            args.next().unwrap_or_else(|| {
-                eprintln!("psql: error: missing argument");
-                std::process::exit(1);
-            })
+    // startup.c:536 getopt_long: bundled short options, attached or next-word arguments, `--`.
+    let argv: Vec<String> = args.collect();
+    let parsed = args::getopt_long(&argv).unwrap_or_else(|m| {
+        eprintln!("psql: {m}");
+        eprintln!("psql: hint: Try \"psql --help\" for more information.");
+        std::process::exit(1);
+    });
+    for tok in parsed {
+        let (a, mut val) = match tok {
+            args::Arg::Operand(p) => {
+                positional.push(p);
+                continue;
+            }
+            args::Arg::Opt(name, val) => (name, val),
         };
+        // getopt_long hands every argument-taking option its argument.
+        let mut need = || val.take().unwrap_or_default();
         match a.as_str() {
-            "-h" | "--host" => host = need(&mut args),
-            "-p" | "--port" => port = need(&mut args),
-            "-U" | "--username" => user = need(&mut args),
-            "-d" | "--dbname" => dbname = Some(need(&mut args)),
-            "-c" | "--command" => commands.push(need(&mut args)),
-            "-f" | "--file" => files.push(need(&mut args)),
+            "-h" | "--host" => host = need(),
+            "-p" | "--port" => port = need(),
+            "-U" | "--username" => user = need(),
+            "-d" | "--dbname" => dbname = Some(need()),
+            "-c" | "--command" => commands.push(need()),
+            "-f" | "--file" => files.push(need()),
             "-X" | "--no-psqlrc" => {}
             "-q" | "--quiet" => quiet = true,
             "-t" | "--tuples-only" => popt.tuples_only = true,
             "-A" | "--no-align" => popt.format = print::FORMAT_UNALIGNED,
             "-x" | "--expanded" => popt.expanded = true,
             "-v" | "--set" | "--variable" => {
-                let kv = need(&mut args);
+                let kv = need();
                 match kv.split_once('=') {
                     Some((k, v)) => set_vars.push((k.to_string(), v.to_string())),
                     None => set_vars.push((kv, String::new())),
@@ -472,7 +489,7 @@ fn main() {
                 // Raw-fd/pipe transport: "R,W" fd numbers. Default 4,5 —
                 // NOT 3: in the wasm host (tools/wasm-web/pgrust-wasi.js)
                 // fd 3 is the WASI "/" preopen directory.
-                let v = need(&mut args);
+                let v = need();
                 let (r, w) = v.split_once(',').unwrap_or(("4", "5"));
                 fd_transport = Some((r.parse().unwrap_or(4), w.parse().unwrap_or(5)));
             }
@@ -480,15 +497,14 @@ fn main() {
                 println!("psql (PostgreSQL) {PSQL_VERSION} (pgrust)");
                 return;
             }
-            "--help" => {
+            "--help" | "-?" => {
                 println!("psql is the PostgreSQL interactive terminal (pgrust port).\n\nUsage:\n  psql [OPTION]... [DBNAME [USERNAME]]\n\nRun \\? inside psql for meta-command help.");
                 return;
             }
-            _ if a.starts_with('-') && a.len() > 1 => {
+            _ => {
                 eprintln!("psql: error: unrecognized option \"{a}\"");
                 std::process::exit(1);
             }
-            _ => positional.push(a),
         }
     }
     if let Some(p) = positional.first() {

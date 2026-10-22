@@ -202,6 +202,38 @@ fn record_shape_keeps_attribute_name_case() {
     b.atttypmod = -1;
     let td = ::tupdesc::CreateTupleDesc(cx.mcx(), &[a, b]).unwrap();
     assert_eq!(td.attrs.len(), 2);
-    let desc = crate::exec::RecDesc::from_tupdesc(&td);
+    let desc = crate::exec::RecDesc::from_tupdesc(&td).unwrap();
     assert_eq!(desc.names, vec!["Foo".to_string(), "foo".to_string()]);
+}
+
+#[test]
+fn recfield_index_cache_follows_the_record_shape() {
+    let cx = mcx::MemoryContext::new("recfield cache");
+    let att = |name: &str, num: i16| {
+        let mut a = types_tuple::FormData_pg_attribute::default();
+        a.attname.namestrcpy(name);
+        a.atttypid = 23;
+        a.attnum = num;
+        a.attlen = 4;
+        a.attbyval = true;
+        a.attalign = b'i' as i8;
+        a.atttypmod = -1;
+        a
+    };
+    let ab = ::tupdesc::CreateTupleDesc(cx.mcx(), &[att("a", 1), att("b", 2)]).unwrap();
+    let ba = ::tupdesc::CreateTupleDesc(cx.mcx(), &[att("b", 1), att("a", 2)]).unwrap();
+    let d1 = crate::exec::RecDesc::from_tupdesc(&ab).unwrap();
+    let d2 = crate::exec::RecDesc::from_tupdesc(&ba).unwrap();
+    assert_ne!(d1.id, d2.id);
+    let mut cache = Vec::new();
+    let idx = |cache: &mut Vec<(u64, u32)>, d: &crate::exec::RecDesc| {
+        match crate::exec::rec_lookup_field_cached(cache, 3, d, "b") {
+            Some(crate::exec::RecFieldRef::User(i)) => i,
+            _ => panic!("field b"),
+        }
+    };
+    assert_eq!(idx(&mut cache, &d1), 1);
+    assert_eq!(idx(&mut cache, &d1.clone()), 1);
+    assert_eq!(idx(&mut cache, &d2), 0);
+    assert_eq!(idx(&mut cache, &d1), 1);
 }

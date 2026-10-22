@@ -8,3 +8,6 @@ publish.workspace = true
 guc_tables = { path = "../../misc/guc_tables" }
 types_core = { path = "../../../../_support/types/types_core" }
 parallel_seams = { path = "../../../access/transam/parallel_seams" }
+rustc-hash = { version = "2", default-features = false }
+# C2: the published entries on the catalog L2's memory ledger account
+memledger = { path = "../../../../_support/memledger" }

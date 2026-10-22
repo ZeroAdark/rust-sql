@@ -14,7 +14,7 @@ use ::elog::ereport;
 use ::mcx::Mcx;
 use ::tableam_vocab::{
     VacOptValue, VacuumCutoffs, VacuumParams, VACOPT_ANALYZE, VACOPT_DISABLE_PAGE_SKIPPING,
-    VACOPT_FREEZE, VACOPT_FULL, VACOPT_ONLY_DATABASE_STATS, VACOPT_PROCESS_MAIN,
+    VACOPT_FREEZE, VACOPT_FULL, VACOPT_ONLY_DATABASE_STATS, VACOPT_PROCESS_MAIN, VACOPT_RENUMBER,
     VACOPT_PROCESS_TOAST,
     VACOPT_SKIP_DATABASE_STATS, VACOPT_SKIP_LOCKED, VACOPT_VACUUM, VACOPT_VERBOSE,
 };
@@ -26,7 +26,7 @@ use ::types_core::xact::{
 use ::types_core::{BlockNumber, InvalidOid, MultiXactId, Oid};
 use ::types_error::{
     PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_PARAMETER_VALUE,
-    ERRCODE_LOCK_NOT_AVAILABLE, ERRCODE_SYNTAX_ERROR, ERRCODE_UNDEFINED_TABLE, ERROR, LOG, WARNING,
+    ERRCODE_LOCK_NOT_AVAILABLE, ERRCODE_SYNTAX_ERROR, ERRCODE_UNDEFINED_TABLE, ERROR, INFO, LOG, WARNING,
 };
 use ::types_nodes::parsenodes::VacuumStmt;
 use ::types_nodes::NodeList;
@@ -76,6 +76,64 @@ pub fn parallel_vacuum_worker_delay_ns() -> i64 {
     PARALLEL_VACUUM_WORKER_DELAY_NS.get()
 }
 
+// Pool/morsel helpers' sleeps, folded by the parked leader (no message queue).
+thread_local! {
+    static WORKER_DELAY_SINK: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicI64>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[must_use]
+pub struct WorkerDelaySink(());
+
+impl WorkerDelaySink {
+    pub fn install(sink: std::sync::Arc<std::sync::atomic::AtomicI64>) -> WorkerDelaySink {
+        WORKER_DELAY_SINK.with(|c| *c.borrow_mut() = Some(sink));
+        WorkerDelaySink(())
+    }
+}
+
+impl Drop for WorkerDelaySink {
+    fn drop(&mut self) {
+        WORKER_DELAY_SINK.with(|c| *c.borrow_mut() = None);
+    }
+}
+
+fn worker_delay_sink_add(delay_ns: i64) -> bool {
+    WORKER_DELAY_SINK.with(|c| match c.borrow().as_ref() {
+        Some(sink) => {
+            sink.fetch_add(delay_ns, std::sync::atomic::Ordering::Relaxed);
+            true
+        }
+        None => false,
+    })
+}
+
+/// The PG_FINALLY mirror as a Drop type (this crate's second resource
+/// guard, beside WorkerDelaySink). vacuum_window takes it
+/// before anything that can fail, as C sets in_vacuum inside PG_TRY, so
+/// in_vacuum and the cost state go back on every exit: an ERROR from the
+/// cost setup (D4261) or from a relation, and a panic that unwinds. Its drop
+/// only sets thread-local Cells (init_small's scalar_global! setters are
+/// Cell::set): nothing in it can raise, call a hook or panic mid-unwind.
+#[must_use]
+struct VacuumFinally(());
+
+impl VacuumFinally {
+    fn enter() -> Self {
+        IN_VACUUM.set(true);
+        VacuumFinally(())
+    }
+}
+
+impl Drop for VacuumFinally {
+    fn drop(&mut self) {
+        IN_VACUUM.set(false);
+        init_small::globals::SetVacuumCostActive(false);
+        VACUUM_FAILSAFE_ACTIVE.set(false);
+        init_small::globals::SetVacuumCostBalance(0);
+    }
+}
+
 // A fresh C worker process starts with both statics zeroed (vacuum.c:95);
 // pooled worker threads must reset them at entry.
 pub fn reset_parallel_vacuum_worker_delay() {
@@ -119,13 +177,33 @@ pub fn set_vacuum_cost_balance_local(v: i32) {
     VACUUM_COST_BALANCE_LOCAL.set(v);
 }
 
+// vacuum.c:627-630: a parallel pass that errored out must not leave its
+// shared balance behind for the next VACUUM/ANALYZE.
+pub fn reset_vacuum_cost_balances() {
+    init_small::globals::SetVacuumCostBalance(0);
+    VACUUM_COST_BALANCE_LOCAL.set(0);
+    set_vacuum_shared_cost(None);
+}
+
 // C's static in_vacuum (vacuum.c); commands_analyze's ANALYZE entry shares it.
 pub fn in_vacuum() -> bool {
     IN_VACUUM.get()
 }
 
-pub fn set_in_vacuum(v: bool) {
-    IN_VACUUM.set(v);
+/// The in_vacuum window (C vacuum()'s PG_TRY): in_vacuum is set, `update_costs`
+/// (VacuumUpdateCosts; callers pass the autovacuum seam) arms cost
+/// accounting, `body` runs the relations, and PG_FINALLY (VacuumFinally's
+/// drop) disarms. VACUUM's vacuum() and commands_analyze's ANALYZE entry
+/// both run it.
+pub fn vacuum_window(
+    update_costs: impl FnOnce() -> PgResult<()>,
+    body: impl FnOnce() -> PgResult<()>,
+) -> PgResult<()> {
+    let _finally = VacuumFinally::enter();
+    VACUUM_FAILSAFE_ACTIVE.set(false);
+    update_costs()?;
+    reset_vacuum_cost_balances();
+    body()
 }
 
 // MIN_BAS_VAC_RING_SIZE_KB (miscadmin.h:278); MAX in guc_tables consts.
@@ -223,6 +301,7 @@ pub fn ExecVacuum<'mcx>(
     let mut process_toast = true;
     let mut skip_database_stats = false;
     let mut only_database_stats = false;
+    let mut renumber = false;
     let mut ring_size: i32 = -1;
     for opt_node in vacstmt.options.iter() {
         let opt = opt_node.as_def_elem().expect("VacuumStmt option is DefElem");
@@ -257,6 +336,7 @@ pub fn ExecVacuum<'mcx>(
             "process_toast" => process_toast = explain::defGetBoolean(opt)?,
             "skip_database_stats" => skip_database_stats = explain::defGetBoolean(opt)?,
             "only_database_stats" => only_database_stats = explain::defGetBoolean(opt)?,
+            "renumber" => renumber = explain::defGetBoolean(opt)?,
             "parallel" => {
                 // MAX_PARALLEL_WORKER_LIMIT (bgworker_internals.h)
                 const MAX_PARALLEL_WORKER_LIMIT: i32 = 1024;
@@ -312,7 +392,16 @@ pub fn ExecVacuum<'mcx>(
         | (if full { VACOPT_FULL } else { 0 })
         | (if analyze { VACOPT_ANALYZE } else { 0 })
         | (if skip_database_stats { VACOPT_SKIP_DATABASE_STATS } else { 0 })
-        | (if only_database_stats { VACOPT_ONLY_DATABASE_STATS } else { 0 });
+        | (if only_database_stats { VACOPT_ONLY_DATABASE_STATS } else { 0 })
+        | (if renumber { VACOPT_RENUMBER } else { 0 });
+
+    if renumber && !full {
+        return Err(ereport(ERROR)
+            .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
+            .errmsg("VACUUM option RENUMBER requires FULL")
+            .into_error()
+            .into());
+    }
 
     if full && params.nworkers > 0 {
         return Err(ereport(ERROR)
@@ -468,14 +557,7 @@ pub fn vacuum<'mcx>(
     }
     xact::CommitTransactionCommand()?;
 
-    IN_VACUUM.set(true);
-    VACUUM_FAILSAFE_ACTIVE.set(false);
-    autovacuum_seams::vacuum_update_costs::call()?;
-    init_small::globals::SetVacuumCostBalance(0);
-    // catch_unwind = C's PG_FINALLY: panics become ERRORs at the tcop
-    // boundary and the session survives, so in_vacuum must reset here too.
-    // unwind-ok: log-then-die
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> PgResult<()> {
+    vacuum_window(autovacuum_seams::vacuum_update_costs::call, || {
         for vrel in vacrels.iter() {
             if params.options & VACOPT_VACUUM != 0 {
                 let params_copy = *params;
@@ -505,15 +587,7 @@ pub fn vacuum<'mcx>(
             VACUUM_FAILSAFE_ACTIVE.set(false);
         }
         Ok(())
-    }));
-    IN_VACUUM.set(false);
-    init_small::globals::SetVacuumCostActive(false);
-    VACUUM_FAILSAFE_ACTIVE.set(false);
-    init_small::globals::SetVacuumCostBalance(0);
-    match result {
-        Ok(r) => r?,
-        Err(p) => std::panic::resume_unwind(p),
-    }
+    })?;
 
     // Matches the CommitTransaction waiting in PostgresMain.
     xact::StartTransactionCommand()?;
@@ -687,8 +761,20 @@ fn vacuum_rel<'mcx>(
     // the snapshot taken below, so C deliberately keeps its xmin visible to
     // other backends' horizons rather than breaking transaction semantics.
     // Must precede GetTransactionSnapshot (see the setter's own note).
+    // The flag also drops this transaction's xid from every other backend's snapshot, so a lazy VACUUM must do no
+    // regular catalog update; pgrcolumnar's VACUUM does, so such a table vacuums like VACUUM FULL: xid and xmin
+    // visible, the wraparound bit kept. The relam is read before the lock, so the catalog snapshot that read takes is
+    // dropped again before the flag, which must still precede any advertised xmin.
     if params.options & VACOPT_FULL == 0 {
-        procarray::ProcSetStatusFlagInVacuum(params.is_wraparound)?;
+        let writes_catalog = relation_vacuum_writes_catalog(relid)?;
+        snapmgr::InvalidateCatalogSnapshot();
+        if writes_catalog {
+            if params.is_wraparound {
+                procarray::ProcSetStatusFlagVacuumForWraparound()?;
+            }
+        } else {
+            procarray::ProcSetStatusFlagInVacuum(params.is_wraparound)?;
+        }
     }
 
     let snapshot = snapmgr::GetTransactionSnapshot()?;
@@ -774,6 +860,63 @@ fn vacuum_rel<'mcx>(
         return Ok(true);
     }
 
+    // Heap's VACUUM FULL of a columnar table would run copy_for_cluster, which reads none of its rows, and swap an
+    // empty relfilenode in: every row lost. A pgrcolumnar table without the compaction seam is refused here, before
+    // the session lock and any rewrite, so the table is untouched.
+    let full_main = params.options & VACOPT_FULL != 0 && params.options & VACOPT_PROCESS_MAIN != 0;
+    let pgrc_full = full_main
+        && matches!(::tableam_vocab::TableAm::of(&rel), Some(::tableam_vocab::TableAm::Pgrcolumnar))
+        && tableam_seams::pgrc_vacuum_full::is_installed();
+    let columnar_am = match ::tableam_vocab::TableAm::of(&rel) {
+        Some(::tableam_vocab::TableAm::Pgrcolumnar) if !pgrc_full => Some("pgrcolumnar"),
+        _ => None,
+    };
+    if let (true, Some(am)) = (full_main, columnar_am) {
+        let refusal = ereport(if relname.is_some() { ERROR } else { WARNING })
+            .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
+            .errmsg(format!("access method \"{am}\" does not support VACUUM FULL or CLUSTER"))
+            .errdetail(format!("Table \"{}\" was left unchanged.", rel.name()));
+        if relname.is_some() {
+            return Err(refusal.into_error().into());
+        }
+        refusal.finish(loc("vacuum_rel"))?;
+        rel.close(lmode)?;
+        snapmgr::PopActiveSnapshot()?;
+        xact::CommitTransactionCommand()?;
+        return Ok(false);
+    }
+    // A pgrcolumnar companion is a heap, but heap's rewrite of it moves the live rows' TIDs, while a segment row's
+    // RowIdent is its position: the parent's tombstones and the seal's RowIdentMap then name other rows.
+    if params.options & VACOPT_FULL != 0 && params.options & VACOPT_PROCESS_MAIN != 0 {
+        if let Some(parent) =
+            ::pgrc_companion::companion_parent(rel.rd_rel.relnamespace, rel.name().as_bytes(), rel.rd_rel.relkind)
+        {
+            if relname.is_some() {
+                let detail = match ::lsyscache::get_rel_name(mcx, parent)? {
+                    Some(p) => format!(
+                        "It stores part of table \"{}\"; rewriting it on its own would lose that table's deletes.",
+                        p.as_str()
+                    ),
+                    None => "It stores part of a pgrcolumnar table; rewriting it on its own would lose that table's deletes."
+                        .to_string(),
+                };
+                return Err(ereport(ERROR)
+                    .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
+                    .errmsg(format!(
+                        "cannot run VACUUM FULL or CLUSTER on pgrcolumnar companion table \"{}\"",
+                        rel.name()
+                    ))
+                    .errdetail(detail)
+                    .into_error()
+                    .into());
+            }
+            rel.close(lmode)?;
+            snapmgr::PopActiveSnapshot()?;
+            xact::CommitTransactionCommand()?;
+            return Ok(false);
+        }
+    }
+
     // Get a session-level lock too (vacuum.c:2182-2191): it protects our
     // access to the relation across the per-relation transaction commits, so
     // the TOAST recursion below runs secure in the knowledge that no one is
@@ -783,6 +926,35 @@ fn vacuum_rel<'mcx>(
     // and ProcReleaseLocks(!isCommit) releases session locks too, like C.
     let lockrelid = rel.rd_lockInfo.lockRelId;
     lmgr::LockRelationIdForSession(&lockrelid, lmode)?;
+
+    // The flush runs first, in short ordinary transactions of its own under the session lock: a segment the flush
+    // drained then holds off no inserter for the heap pass, and those transactions, which update pg_class under their
+    // xid, never carry PROC_IN_VACUUM. Autovacuum does not flush (the front maintenance worker owns the front).
+    let rel = if params.options & VACOPT_FULL == 0
+        && params.options & VACOPT_PROCESS_MAIN != 0
+        && miscinit::GetMyBackendType() != types_core::BackendType::AutovacWorker
+        && matches!(::tableam_vocab::TableAm::of(&rel), Some(::tableam_vocab::TableAm::Pgrcolumnar))
+        && tableam_seams::pgrc_vacuum_flush::is_installed()
+    {
+        let owner = rel.rd_rel.relowner;
+        rel.close(NoLock)?;
+        snapmgr::PopActiveSnapshot()?;
+        xact::CommitTransactionCommand()?;
+        pgrc_vacuum_flush_steps(relid, owner)?;
+        xact::StartTransactionCommand()?;
+        if params.is_wraparound {
+            procarray::ProcSetStatusFlagVacuumForWraparound()?;
+        }
+        let snapshot = snapmgr::GetTransactionSnapshot()?;
+        snapmgr::PushActiveSnapshot(&snapshot)?;
+        postgres_seams::check_for_interrupts::call()?;
+        // the session lock keeps the relation; this transaction's lock on it is granted at once
+        relation::try_relation_open(mcx, relid, lmode)?.ok_or_else(|| {
+            Box::new(PgError::error(format!("could not open relation with OID {relid}")))
+        })?
+    } else {
+        rel
+    };
 
     // Toast applies its own reloptions; do not inherit the parent's scribbles.
     let mut toast_params = *params;
@@ -828,12 +1000,22 @@ fn vacuum_rel<'mcx>(
         InvalidOid
     };
 
-    let guard = miscinit::SecContextGuard::security_restricted(rel.rd_rel.relowner);
+    let owner = rel.rd_rel.relowner;
+    let pgrc_indexed = pgrc_full && rel.rd_rel.relhasindex;
+    let mut vf = tableam_seams::PgrcVacFull::default();
+    let mut vf_more = false;
+    let guard = miscinit::SecContextGuard::security_restricted(owner);
     let save_nestlevel = guc::NewGUCNestLevel();
     let work = (|| -> PgResult<()> {
         guc::RestrictSearchPath()?;
         if params.options & VACOPT_PROCESS_MAIN != 0 {
-            if params.options & VACOPT_FULL != 0 {
+            if pgrc_full {
+                if params.options & VACOPT_VERBOSE != 0 {
+                    ereport(INFO).errmsg(format!("vacuuming \"{}\"", qualified_name(mcx, &rel)?)).finish(loc("vacuum_rel"))?;
+                }
+                vf_more = tableam_seams::pgrc_vacuum_full::call(mcx, &rel, &params, bstrategy.clone(), &mut vf)?;
+                rel.close(NoLock)?;
+            } else if params.options & VACOPT_FULL != 0 {
                 let cluster_options: u32 =
                     if params.options & VACOPT_VERBOSE != 0 { 0x01 } else { 0 };
                 cluster_seams::cluster_rel::call(mcx, rel, InvalidOid, cluster_options)?;
@@ -852,6 +1034,13 @@ fn vacuum_rel<'mcx>(
     snapmgr::PopActiveSnapshot()?;
     xact::CommitTransactionCommand()?;
 
+    if vf_more {
+        pgrc_vacuum_full_rest(relid, owner, &params, bstrategy.clone(), &mut vf)?;
+    }
+    if pgrc_indexed {
+        pgrc_vacuum_full_reindex(relid, owner)?;
+    }
+
     if toast_relid != InvalidOid {
         toast_params.options |= VACOPT_PROCESS_MAIN;
         toast_params.toast_parent = relid;
@@ -862,6 +1051,148 @@ fn vacuum_rel<'mcx>(
     lmgr::UnlockRelationIdForSession(&lockrelid, lmode)?;
 
     Ok(true)
+}
+
+fn pgrc_vacuum_flush_steps(relid: Oid, owner: Oid) -> PgResult<()> {
+    let mut st = tableam_seams::PgrcVacFlush::default();
+    loop {
+        xact::StartTransactionCommand()?;
+        let snapshot = snapmgr::GetTransactionSnapshot()?;
+        snapmgr::PushActiveSnapshot(&snapshot)?;
+        postgres_seams::check_for_interrupts::call()?;
+        let cx = ::mcx::MemoryContext::new("pgrc VACUUM flush step");
+        let mcx = cx.mcx();
+        let rel = relation::try_relation_open(mcx, relid, NoLock)?.ok_or_else(|| {
+            Box::new(PgError::error(format!("could not open relation with OID {relid}")))
+        })?;
+        let guard = miscinit::SecContextGuard::security_restricted(owner);
+        let save_nestlevel = guc::NewGUCNestLevel();
+        let more = (|| -> PgResult<bool> {
+            guc::RestrictSearchPath()?;
+            tableam_seams::pgrc_vacuum_flush::call(mcx, &rel, &mut st)
+        })();
+        guc::AtEOXact_GUC(false, save_nestlevel);
+        guard.restore();
+        let more = more?;
+        rel.close(NoLock)?;
+        snapmgr::PopActiveSnapshot()?;
+        xact::CommitTransactionCommand()?;
+        if !more {
+            return Ok(());
+        }
+    }
+}
+
+fn pgrc_vacuum_full_rest(
+    relid: Oid,
+    owner: Oid,
+    params: &VacuumParams,
+    bstrategy: BufferAccessStrategy,
+    vf: &mut tableam_seams::PgrcVacFull,
+) -> PgResult<()> {
+    loop {
+        xact::StartTransactionCommand()?;
+        let snapshot = snapmgr::GetTransactionSnapshot()?;
+        snapmgr::PushActiveSnapshot(&snapshot)?;
+        postgres_seams::check_for_interrupts::call()?;
+        let cx = ::mcx::MemoryContext::new("pgrc VACUUM FULL step");
+        let mcx = cx.mcx();
+        let rel = relation::try_relation_open(mcx, relid, NoLock)?.ok_or_else(|| {
+            Box::new(PgError::error(format!("could not open relation with OID {relid}")))
+        })?;
+        let guard = miscinit::SecContextGuard::security_restricted(owner);
+        let save_nestlevel = guc::NewGUCNestLevel();
+        let more = (|| -> PgResult<bool> {
+            guc::RestrictSearchPath()?;
+            if vf.phase == tableam_seams::PGRC_VACFULL_RENUMBER && vf.steps == 0 && rel.rd_rel.relhasindex {
+                catalog_index::pgrc_indexes_set_unusable(mcx, &rel)?;
+            }
+            tableam_seams::pgrc_vacuum_full::call(mcx, &rel, params, bstrategy.clone(), vf)
+        })();
+        guc::AtEOXact_GUC(false, save_nestlevel);
+        guard.restore();
+        let more = more?;
+        if !more && params.options & VACOPT_VERBOSE != 0 {
+            pgrc_vacuum_full_report(mcx, &rel, vf)?;
+        }
+        rel.close(NoLock)?;
+        snapmgr::PopActiveSnapshot()?;
+        xact::CommitTransactionCommand()?;
+        if !more {
+            return Ok(());
+        }
+    }
+}
+
+fn pgrc_vacuum_full_reindex(relid: Oid, owner: Oid) -> PgResult<()> {
+    xact::StartTransactionCommand()?;
+    let snapshot = snapmgr::GetTransactionSnapshot()?;
+    snapmgr::PushActiveSnapshot(&snapshot)?;
+    let cx = ::mcx::MemoryContext::new("pgrc VACUUM FULL reindex");
+    let mcx = cx.mcx();
+    let guard = miscinit::SecContextGuard::security_restricted(owner);
+    let save_nestlevel = guc::NewGUCNestLevel();
+    let done = (|| -> PgResult<()> {
+        guc::RestrictSearchPath()?;
+        let params = catalog_index::ReindexParams { options: 0, tablespace_oid: InvalidOid };
+        catalog_index::reindex_relation(mcx, relid, catalog_index::REINDEX_REL_CHECK_CONSTRAINTS, &params, &mut |_| {})?;
+        Ok(())
+    })();
+    guc::AtEOXact_GUC(false, save_nestlevel);
+    guard.restore();
+    done?;
+    snapmgr::PopActiveSnapshot()?;
+    xact::CommitTransactionCommand()
+}
+
+fn pgrc_vacuum_full_report<'mcx>(
+    mcx: Mcx<'mcx>,
+    rel: &Relation<'mcx>,
+    vf: &tableam_seams::PgrcVacFull,
+) -> PgResult<()> {
+    let mut e = ereport(INFO).errmsg(format!(
+        "\"{}\": removed {} deleted rows, {} rows remain in {} parts ({} parts and {} front segments before); {} compaction jobs, {} tombstones folded",
+        qualified_name(mcx, rel)?,
+        vf.removed,
+        vf.rows_after,
+        vf.parts_after,
+        vf.parts_before,
+        vf.sealed,
+        vf.jobs,
+        vf.folded
+    ));
+    if vf.held_bytes > 0 {
+        e = e.errdetail(format!(
+            "{} bytes of retired files stay until snapshots older than this command end; a later VACUUM frees them.",
+            vf.held_bytes
+        ));
+    }
+    e.finish(loc("vacuum_rel"))?;
+    if vf.renumber && vf.renumbered {
+        ereport(INFO)
+            .errmsg(format!("\"{}\": row IDs renumbered: {} parts rewritten, the next row ID is {}", qualified_name(mcx, rel)?, vf.rewritten, vf.next_id))
+            .finish(loc("vacuum_rel"))?;
+    }
+    Ok(())
+}
+
+fn qualified_name<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>) -> PgResult<String> {
+    Ok(match ::lsyscache::get_namespace_name(mcx, rel.rd_rel.relnamespace)? {
+        Some(n) => format!("{}.{}", n.as_str(), rel.name()),
+        None => rel.name().to_string(),
+    })
+}
+
+/// By pg_am.amname, as the relcache registers the AM (a backend that has not built one of its relations yet has an
+/// empty registry).
+fn relation_vacuum_writes_catalog(relid: Oid) -> PgResult<bool> {
+    let Some(class) = syscache_seams::lookup_pg_class_ls_shape::call(relid)? else {
+        return Ok(false);
+    };
+    if class.relam == InvalidOid || class.relam == ::tableam_vocab::HEAP_TABLE_AM_OID {
+        return Ok(false);
+    }
+    Ok(syscache_seams::pg_am_amname::call(class.relam)?.as_deref() == Some("pgrcolumnar"))
 }
 
 /// vacuum_open_relation (vacuum.c); commands_analyze enters with
@@ -1089,12 +1420,15 @@ fn estimate_reltuples(
         return old_rel_tuples;
     }
     if old_rel_tuples < 0.0 || old_rel_pages == 0 {
-        return ((scanned_tuples / scanned_pages as f64) * total_pages as f64 + 0.5).floor();
+        // vacuum.c:1386 (D400)
+        return fp_contract::fmadd(scanned_tuples / scanned_pages as f64, total_pages as f64, 0.5).floor();
     }
 
     let old_density = old_rel_tuples / old_rel_pages as f64;
     let unscanned_pages = total_pages as f64 - scanned_pages as f64;
-    (old_density * unscanned_pages + scanned_tuples + 0.5).floor()
+    // vacuum.c:1396 (D400)
+    let total_tuples = fp_contract::fmadd(old_density, unscanned_pages, scanned_tuples);
+    (total_tuples + 0.5).floor()
 }
 
 const RelationRelationId: Oid = 1259;
@@ -1184,7 +1518,7 @@ pub fn vac_update_relstats(
         (false, false)
     } else {
         (
-            !relcache_seams::relation_has_rules::call(relid)?,
+            rules_absent(relation)?,
             relcache_seams::relation_get_trigger_desc::call(relid)?.is_none(),
         )
     };
@@ -1314,6 +1648,12 @@ pub fn vac_update_relstats(
             .finish(loc("vac_update_relstats"))?;
     }
     Ok((frozenxid_updated, minmulti_updated))
+}
+
+// C's `rd_rules == NULL`: rd_rules is built only when relhasrules was set at
+// relcache build time (relcache.c:1252), so no pg_rewrite scan otherwise.
+fn rules_absent(relation: &RelationData<'_>) -> PgResult<bool> {
+    Ok(!relation.rd_hasrules || !relcache_seams::relation_has_rules::call(relation.rd_id)?)
 }
 
 pub fn vac_update_datfrozenxid(mcx: Mcx<'_>) -> PgResult<()> {
@@ -1480,6 +1820,22 @@ fn vac_truncate_clog(
 
         // Databases being dropped can't be connected to or autovacuumed.
         if datconnlimit == pg_database::DATCONNLIMIT_INVALID_DB {
+            let name_d = getattr(tup, pg_database::Anum_pg_database_datname as usize, desc);
+            // SAFETY: a NameData column datum: NAMEDATALEN readable bytes,
+            // NUL-terminated.
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    name_d.as_usize() as *const u8,
+                    types_core::fmgr::NAMEDATALEN as usize,
+                )
+            };
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            elog::ereport(::types_error::DEBUG2)
+                .errmsg_internal(format!(
+                    "skipping invalid database \"{}\" while computing relfrozenxid",
+                    String::from_utf8_lossy(&bytes[..end])
+                ))
+                .finish(loc("vac_truncate_clog"))?;
             continue;
         }
 
@@ -1644,28 +2000,35 @@ pub fn vac_cleanup_one_index<'mcx>(
     istat: Option<::types_nbtree::IndexBulkDeleteResult>,
 ) -> PgResult<Option<::types_nbtree::IndexBulkDeleteResult>> {
     let istat = indexam::index_vacuum_cleanup(mcx, ivinfo, istat)?;
-
     if let Some(istat) = &istat {
-        elog::ereport(ivinfo.message_level)
-            .errmsg(format!(
-                "index \"{}\" now contains {:.0} row versions in {} pages",
-                ivinfo.index.name(),
-                istat.num_index_tuples,
-                istat.num_pages
-            ))
-            .errdetail(format!(
-                "{:.0} index row versions were removed.\n\
-                 {} index pages were newly deleted.\n\
-                 {} index pages are currently deleted, of which {} are currently reusable.",
-                istat.tuples_removed,
-                istat.pages_newly_deleted,
-                istat.pages_deleted,
-                istat.pages_free
-            ))
-            .finish(loc("vac_cleanup_one_index"))?;
+        report_index_cleanup(ivinfo, istat)?;
     }
-
     Ok(istat)
+}
+
+/// vac_cleanup_one_index's per-index report (vacuum.c:2690-2702).
+pub fn report_index_cleanup(
+    ivinfo: &nbtree::IndexVacuumInfo<'_, '_>,
+    istat: &::types_nbtree::IndexBulkDeleteResult,
+) -> PgResult<()> {
+    elog::ereport(ivinfo.message_level)
+        .errmsg(format!(
+            "index \"{}\" now contains {:.0} row versions in {} pages",
+            ivinfo.index.name(),
+            istat.num_index_tuples,
+            istat.num_pages
+        ))
+        .errdetail(format!(
+            "{:.0} index row versions were removed.\n\
+             {} index pages were newly deleted.\n\
+             {} index pages are currently deleted, of which {} are currently reusable.",
+            istat.tuples_removed,
+            istat.pages_newly_deleted,
+            istat.pages_deleted,
+            istat.pages_free
+        ))
+        .finish(loc("vac_cleanup_one_index"))?;
+    Ok(())
 }
 
 /// WAIT_EVENT_VACUUM_DELAY (wait_event_names.txt, Timeout class):
@@ -1716,14 +2079,18 @@ pub fn vacuum_delay_point(is_analyze: bool) -> PgResult<()> {
         if let Some(delay_start) = delay_start {
             let delay_end = pg_clock::MonoStamp::now();
             let delay_ns = delay_end.since_ns(delay_start) as i64;
-            if parallel_seams::is_parallel_worker::call() {
+            if worker_delay_sink_add(delay_ns) {
+                debug_assert!(!is_analyze);
+            } else if parallel_seams::is_parallel_worker::call() {
                 debug_assert!(!is_analyze);
                 let accum = PARALLEL_VACUUM_WORKER_DELAY_NS.get() + delay_ns;
                 PARALLEL_VACUUM_WORKER_DELAY_NS.set(accum);
                 let since_last_report = LAST_DELAY_REPORT
                     .get()
                     .map_or(i64::MAX, |t| delay_end.since_ns(t) as i64);
-                if since_last_report >= PARALLEL_VACUUM_DELAY_REPORT_INTERVAL_NS {
+                if since_last_report >= PARALLEL_VACUUM_DELAY_REPORT_INTERVAL_NS
+                    && parallel_seams::parallel_worker_has_leader_channel::call()
+                {
                     pgstat_progress_parallel_incr_param(PROGRESS_VACUUM_DELAY_TIME, accum);
                     LAST_DELAY_REPORT.set(Some(delay_end));
                     PARALLEL_VACUUM_WORKER_DELAY_NS.set(0);
@@ -1795,6 +2162,44 @@ fn cache_lookup_failed(oid: Oid) -> Box<PgError> {
 }
 
 #[cfg(test)]
+mod vacuum_window_tests {
+    //! D4261: C sets in_vacuum and runs VacuumUpdateCosts inside PG_TRY,
+    //! so an ERROR from the cost setup leaves in_vacuum
+    //! false. Left true, the autovacuum worker that caught the ERROR fails
+    //! every later table with "VACUUM cannot be executed from VACUUM or
+    //! ANALYZE". The cost setup is the window's closure argument, so the
+    //! ERROR is injected here without the set-once seam.
+    use super::{in_vacuum, vacuum_window, VacuumFailsafeActive};
+    use ::types_error::PgError;
+
+    #[test]
+    fn a_cost_setup_error_leaves_in_vacuum_false() {
+        let r = vacuum_window(
+            || {
+                init_small::globals::SetVacuumCostActive(true);
+                Err(Box::new(PgError::error("nworkers_for_balance must be > 0")))
+            },
+            || panic!("the relations run only after the cost setup"),
+        );
+        assert_eq!(r.unwrap_err().message(), "nworkers_for_balance must be > 0");
+        assert!(!in_vacuum());
+        assert!(!init_small::globals::VacuumCostActive());
+        assert!(!VacuumFailsafeActive());
+    }
+
+    #[test]
+    fn a_relation_error_or_panic_leaves_in_vacuum_false() {
+        let r = vacuum_window(|| Ok(()), || Err(Box::new(PgError::error("relation failed"))));
+        assert_eq!(r.unwrap_err().message(), "relation failed");
+        assert!(!in_vacuum());
+        // unwind-ok: test
+        let p = std::panic::catch_unwind(|| vacuum_window(|| Ok(()), || panic!("relation panicked")));
+        assert!(p.is_err());
+        assert!(!in_vacuum());
+    }
+}
+
+#[cfg(test)]
 mod cache_lookup_error_tests {
     use super::cache_lookup_failed;
 
@@ -1832,6 +2237,7 @@ mod ivinfo_tests {
 
     thread_local! {
         static CAPTURED: RefCell<Vec<PgError>> = const { RefCell::new(Vec::new()) };
+        static RULE_SCANS: Cell<u32> = const { Cell::new(0) };
     }
 
     fn capture_hook(err: &PgError, output_to_server: &mut bool) {
@@ -1844,6 +2250,10 @@ mod ivinfo_tests {
     }
 
     fn btree_index_rel(mcx: Mcx<'_>) -> Relation<'_> {
+        btree_index_rel_rules(mcx, false)
+    }
+
+    fn btree_index_rel_rules(mcx: Mcx<'_>, hasrules: bool) -> Relation<'_> {
         let att = FormData_pg_attribute {
             attnum: 1,
             atttypid: 23,
@@ -1917,15 +2327,34 @@ mod ivinfo_tests {
             rd_amcache_hash: Default::default(),
             rd_amcache_gin: Default::default(),
             rd_amcache_spgist: Default::default(),
+            rd_amcache_bloom: Default::default(),
             rd_support: PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
             rd_indexlist: Default::default(),
             rd_trigdesc: Default::default(),
             rd_hastriggers: false,
-            rd_hasrules: false,
+            rd_hasrules: hasrules,
         };
         Relation::open(data, Some(noop_close))
+    }
+
+    #[test]
+    fn rules_absent_scans_pg_rewrite_only_when_relhasrules() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            relcache_seams::relation_has_rules::set(|_relid| {
+                RULE_SCANS.with(|c| c.set(c.get() + 1));
+                Ok(false)
+            });
+        });
+        let cx = MemoryContext::new("t");
+        let plain = btree_index_rel_rules(cx.mcx(), false);
+        assert!(super::rules_absent(&plain).unwrap());
+        assert_eq!(RULE_SCANS.with(Cell::get), 0, "no pg_rewrite scan without relhasrules");
+        let stale = btree_index_rel_rules(cx.mcx(), true);
+        assert!(super::rules_absent(&stale).unwrap(), "relhasrules with no rows left");
+        assert_eq!(RULE_SCANS.with(Cell::get), 1);
     }
 
     #[test]
@@ -2017,6 +2446,34 @@ mod reltuples_and_worker_delay_tests {
 }
 
 #[cfg(test)]
+mod cost_reset_tests {
+    #[test]
+    fn cost_reset_clears_a_stale_parallel_balance() {
+        super::set_vacuum_shared_cost(Some(std::sync::Arc::new(super::VacuumSharedCost {
+            cost_balance: 5.into(),
+            active_nworkers: 0.into(),
+        })));
+        super::set_vacuum_cost_balance_local(7);
+        super::reset_vacuum_cost_balances();
+        assert!(super::vacuum_shared_cost().is_none());
+        assert_eq!(super::VACUUM_COST_BALANCE_LOCAL.get(), 0);
+    }
+
+    #[test]
+    fn helper_delay_goes_to_the_installed_sink_until_dropped() {
+        let sink = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+        assert!(!super::worker_delay_sink_add(5));
+        {
+            let _g = super::WorkerDelaySink::install(std::sync::Arc::clone(&sink));
+            assert!(super::worker_delay_sink_add(5));
+            assert!(super::worker_delay_sink_add(7));
+        }
+        assert!(!super::worker_delay_sink_add(9));
+        assert_eq!(sink.load(std::sync::atomic::Ordering::Relaxed), 12);
+    }
+}
+
+#[cfg(test)]
 mod expand_vacuum_rel_tests {
     use ::mcx::{MemoryContext, PgVec};
     use ::types_nodes::parsenodes::VacuumRelation;
@@ -2042,5 +2499,18 @@ mod expand_vacuum_rel_tests {
         assert_eq!(vacrels.len(), 1);
         assert_eq!(vacrels[0].oid, 16384);
         assert_eq!(vacrels[0].relname, Some("b230_t"));
+    }
+}
+
+#[cfg(test)]
+mod fma_parity_tests {
+    use super::*;
+
+    #[test]
+    fn estimate_reltuples_density_fused() {
+        let old_rel_tuples = f64::from_bits(0x3FAC_71C7_1C55_5555); // 0x1.c71c71c555555p-5
+        let got = estimate_reltuples(1, old_rel_tuples, 11, 2, 1048576.0);
+        let want = if cfg!(target_arch = "aarch64") { 1048576.0 } else { 1048577.0 };
+        assert_eq!(got, want);
     }
 }

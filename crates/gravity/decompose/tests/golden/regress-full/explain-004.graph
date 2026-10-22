@@ -1,0 +1,9 @@
+-- regress-full-explain-004
+-- select explain_filter_to_json('explain (settings, format json) select * from int8_tbl i8') #> '{0,Settings,plan_cache_mode}';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op3213(fn46932(c25:'explain (settings, format json) select * from int8_tbl i8'), c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x14\x00\x00\x000\x00\x00\x000\x00\x00\x00SettingsL\x00\x00\x00plan_cache_mode\x00'))
+  outs 1=vl:call3217
+mapped: Result

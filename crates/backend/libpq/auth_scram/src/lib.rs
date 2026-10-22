@@ -196,7 +196,7 @@ pub fn mock_scram_secret(username: &str) -> PgResult<MockScramSecret> {
     let raw_salt = scram_mock_salt(username);
 
     let cap = pg_b64_enc_len(SCRAM_DEFAULT_SALT_LEN as i32);
-    let mut encoded = vec![0u8; cap as usize];
+    let mut encoded = ::mcx::std_vec_from_elem("libpq", 0u8, cap as usize)?;
     let n = pg_b64_encode(&raw_salt[..SCRAM_DEFAULT_SALT_LEN], SCRAM_DEFAULT_SALT_LEN as i32, &mut encoded, cap);
     if n < 0 {
         elog::ereport(ERROR)
@@ -270,7 +270,9 @@ fn strtol_base10_full(s: &[u8]) -> Option<i32> {
 
 pub(crate) fn b64dec(src: &[u8]) -> Option<Vec<u8>> {
     let cap = pg_b64_dec_len(src.len() as i32);
-    let mut dst = vec![0u8; cap as usize];
+    let mut dst = Vec::new();
+    dst.try_reserve_exact(cap as usize).ok()?;
+    dst.resize(cap as usize, 0u8);
     let n = pg_b64_decode(src, src.len() as i32, &mut dst, cap);
     if n < 0 {
         return None;

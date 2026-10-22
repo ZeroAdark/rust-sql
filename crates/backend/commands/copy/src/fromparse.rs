@@ -6,7 +6,7 @@
 use core::ffi::CStr;
 
 use datum::Datum;
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use mcx::{vec_append_bytes, Mcx};
 use types_error::{
     ErrorLocation, PgError, PgResult, ERRCODE_BAD_COPY_FILE_FORMAT, ERRCODE_CONNECTION_FAILURE,
@@ -20,7 +20,7 @@ pub const RAW_BUF_SIZE: usize = 65536;
 pub const INPUT_BUF_SIZE: usize = 65536;
 const MAX_CONVERSION_INPUT_LENGTH: usize = 16;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EolType {
     Unknown,
     Nl,
@@ -134,17 +134,44 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
                 };
                 self.copy_read_frontend_into(dst, minread)
             }
-            CopySrc::Chunk(cur) => {
-                let n = cur.read(&mut self.raw_buf[at..at + maxread]);
-                if n == 0 {
-                    self.raw_reached_eof = true;
-                }
-                Ok(n)
-            }
             CopySrc::Parquet(_) => {
                 unreachable!("parquet sources produce rows, not raw bytes")
             }
+            CopySrc::Chunk { .. } => {
+                let CopyFromState { src, raw_buf, raw_reached_eof, .. } = self;
+                let CopySrc::Chunk { cur, .. } = src else { unreachable!() };
+                let n = cur.read(&mut raw_buf[at..at + maxread])?;
+                if n == 0 {
+                    *raw_reached_eof = true;
+                }
+                Ok(n)
+            }
         }
+    }
+
+    /// The parallel text leader's read (text_pgrc.rs): fill `dst` from a
+    /// file or the client stream until full or the source ends
+    /// (`raw_reached_eof`). A failure after some bytes returns them WITH the
+    /// error: the serial reader consumes every delivered byte first.
+    pub(crate) fn copy_read_stream(&mut self, dst: &mut [u8]) -> (usize, Option<Box<PgError>>) {
+        let mut filled = 0usize;
+        while filled < dst.len() && !self.raw_reached_eof {
+            let file_fd = match &self.src {
+                CopySrc::File { fd, .. } => Some(*fd),
+                CopySrc::Frontend { .. } => None,
+                _ => unreachable!("parallel text COPY reads a file or the client stream"),
+            };
+            let r = match file_fd {
+                Some(fd) => Self::file_read(fd, &mut dst[filled..]),
+                None => self.copy_read_frontend_into(&mut dst[filled..], 1),
+            };
+            match r {
+                Ok(0) => self.raw_reached_eof = true,
+                Ok(n) => filled += n,
+                Err(e) => return (filled, Some(e)),
+            }
+        }
+        (filled, None)
     }
 
     // The stdin arm of C's fread: loop plain reads until the buffer is full
@@ -164,7 +191,7 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
                     ereport(ERROR)
                         .with_saved_errno(e.raw_os_error().unwrap_or(0))
                         .errcode_for_file_access()
-                        .errmsg("could not read from COPY file: %m")
+                        .errmsg(format!("could not read from COPY file: {PCT_M}"))
                         .finish(loc("CopyGetData"))?;
                 }
             }
@@ -181,7 +208,7 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
                 ereport(ERROR)
                     .with_saved_errno(en)
                     .errcode_for_file_access()
-                    .errmsg("could not read from COPY file: %m")
+                    .errmsg(format!("could not read from COPY file: {PCT_M}"))
                     .finish(loc("CopyGetData"))?;
                 unreachable!()
             }
@@ -199,7 +226,7 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
                 ereport(ERROR)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg("could not read from COPY file: %m")
+                    .errmsg(format!("could not read from COPY file: {PCT_M}"))
                     .finish(loc("CopyGetData"))?;
                 unreachable!()
             }
@@ -207,47 +234,9 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
         }
     }
 
-    /// Parallel COPY leader (segmentator): raw stream read into an external
-    /// buffer — fills `dst` fully unless the source hits EOF. Sets
-    /// `raw_reached_eof` exactly like the buffered path.
-    pub(crate) fn copy_read_stream(&mut self, dst: &mut [u8]) -> PgResult<usize> {
-        match &mut self.src {
-            CopySrc::File { fd, .. } => {
-                let fd = *fd;
-                let mut filled = 0usize;
-                while filled < dst.len() {
-                    let n = Self::file_read(fd, &mut dst[filled..])?;
-                    if n == 0 {
-                        self.raw_reached_eof = true;
-                        break;
-                    }
-                    filled += n;
-                }
-                Ok(filled)
-            }
-            CopySrc::Frontend { .. } => {
-                let len = dst.len();
-                self.copy_read_frontend_into(dst, len)
-            }
-            CopySrc::Callback { .. } => {
-                unreachable!("callback sources are refused at parallel admission")
-            }
-            CopySrc::Stdin => {
-                unreachable!("stdin sources are refused at parallel admission")
-            }
-            CopySrc::Program { .. } => {
-                unreachable!("program sources are refused at parallel admission")
-            }
-            CopySrc::Chunk(_) => unreachable!("chunk sources never feed the segmentator"),
-            CopySrc::Parquet(_) => {
-                unreachable!("parquet format is refused at parallel admission")
-            }
-        }
-    }
-
     // CopyGetData, COPY_FRONTEND arm: drain CopyData messages, terminate on
     // CopyDone/CopyFail, ignore Flush/Sync per protocol. `dst` may alias
-    // raw_buf (see copy_get_data) or be an external buffer (copy_read_stream).
+    // raw_buf (see copy_get_data) or be an external buffer.
     fn copy_read_frontend_into(&mut self, dst: &mut [u8], minread: usize) -> PgResult<usize> {
         let mut maxread = dst.len();
         let mut at = 0usize;
@@ -489,8 +478,8 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
         if upto > self.input_buf_index {
             let range = self.input_buf_index..upto;
             match &self.input_buf {
-                Some(b) => vec_append_bytes(&mut self.line_buf, &b[range])?,
-                None => vec_append_bytes(&mut self.line_buf, &self.raw_buf[range])?,
+                Some(b) => stringinfo_append(&mut self.line_buf, &b[range])?,
+                None => stringinfo_append(&mut self.line_buf, &self.raw_buf[range])?,
             }
             self.input_buf_index = upto;
         }
@@ -699,8 +688,7 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
         // De-escaping shrinks and each field adds one NUL for its delimiter
         // (plus one for the last), so line len + 1 bounds the output.
         let cap = line.len() + 1;
-        out.try_reserve(cap)
-            .map_err(|_| PgError::error("out of memory"))?;
+        stringinfo_reserve(out, cap)?;
         let dst = out.as_mut_ptr();
 
         // SAFETY: raw cursors mirror C's pointer loop (post-increment
@@ -845,8 +833,7 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
         // De-quoting shrinks; one NUL per field bounds the output as in the
         // text arm.
         let cap = line.len() + 1;
-        out.try_reserve(cap)
-            .map_err(|_| PgError::error("out of memory"))?;
+        stringinfo_reserve(out, cap)?;
 
         let mut cur = 0usize;
         let mut fieldno = 0usize;
@@ -1119,16 +1106,13 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
                                 self.attname(m)
                             ),
                         };
-                        // C uses relname_only for this notice. Keep its explicit
-                        // context for callers without CopyFrom's emit callback,
-                        // and suppress only this COPY frame while it is emitted.
-                        self.in_skip_row_notice = true;
-                        let notice = ereport(types_error::NOTICE)
+                        self.relname_only = true;
+                        let reported = ereport(types_error::NOTICE)
                             .errmsg(msg)
                             .errcontext_msg(format!("COPY {}", self.relname))
                             .finish(loc("CopyFromTextLikeOneRow"));
-                        self.in_skip_row_notice = false;
-                        notice?;
+                        self.relname_only = false;
+                        reported?;
                     }
                     break;
                 }
@@ -1416,6 +1400,45 @@ fn missing_data(attname: &str) -> Box<PgError> {
     )
 }
 
+// appendBinaryStringInfo's enlargeStringInfo (stringinfo.c): 54000 once the
+// buffer would reach MaxAllocSize.
+pub(crate) fn stringinfo_append(buf: &mut mcx::PgVec<'_, u8>, bytes: &[u8]) -> PgResult<()> {
+    stringinfo_check(buf.len(), bytes.len())?;
+    vec_append_bytes(buf, bytes)
+}
+
+pub(crate) fn stringinfo_check(len: usize, needed: usize) -> PgResult<()> {
+    if needed >= mcx::MAX_ALLOC_SIZE.saturating_sub(len) {
+        return Err(string_buffer_limit(len, needed));
+    }
+    Ok(())
+}
+
+// enlargeStringInfo on a reset buffer: doubling growth clamped at
+// MaxAllocSize, never a request past it.
+pub(crate) fn stringinfo_reserve(buf: &mut mcx::PgVec<'_, u8>, total: usize) -> PgResult<()> {
+    stringinfo_check(buf.len(), total.saturating_sub(1))?;
+    if buf.capacity() < total {
+        let mcx = *buf.allocator();
+        let target = mcx::grow_target(buf.capacity(), total);
+        buf.try_reserve_exact(target - buf.len()).map_err(|_| mcx.oom_boxed(target))?;
+    }
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn string_buffer_limit(len: usize, needed: usize) -> Box<PgError> {
+    Box::new(
+        PgError::error(format!(
+            "string buffer exceeds maximum allowed length ({} bytes)",
+            mcx::MAX_ALLOC_SIZE
+        ))
+        .with_sqlstate(types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED)
+        .with_detail(format!("Cannot enlarge string buffer containing {len} bytes by {needed} more bytes.")),
+    )
+}
+
 #[doc(hidden)]
 pub mod bench_internals {
     use mcx::{vec_append_bytes, Mcx, MemoryContext, PgVec};
@@ -1495,9 +1518,9 @@ pub mod bench_internals {
             defmap: PgVec::new_in(mcx),
             where_clause: types_nodes::NodeList::nil(),
             relname: String::new(),
+            relname_only: false,
             escontext: None,
             num_errors: 0,
-            in_skip_row_notice: false,
             defaults: mcx::vec_from_elem_in(mcx, false, max_fields),
             bytes_processed: 0,
             volatile_defexprs: false,
@@ -1560,7 +1583,11 @@ pub mod bench_internals {
                         }
                         let rest = &buf[off as usize..];
                         let end = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
-                        Some(rest[..end].to_vec())
+                        let slice = &rest[..end];
+                        let mut v = Vec::new();
+                        let _ = v.try_reserve(slice.len());
+                        v.extend_from_slice(slice);
+                        Some(v)
                     })
                     .collect();
                 Ok(fields)
@@ -1619,7 +1646,8 @@ pub mod bench_internals {
                     .with_sqlstate(types_error::ERRCODE_BAD_COPY_FILE_FORMAT),
                 ));
             }
-            let mut fields = Vec::with_capacity(nattrs);
+            let mut fields = Vec::new();
+            let _ = fields.try_reserve(nattrs);
             for _ in 0..nattrs {
                 let Some(fld_size) = st.copy_get_int32()? else {
                     return Err(super::unexpected_eof_in_copy_data());
@@ -1631,7 +1659,11 @@ pub mod bench_internals {
                         return Err(super::bad_copy_format("invalid field size"));
                     }
                     st.read_binary_attr_data(fld_size as usize)?;
-                    fields.push(Some(st.binary_attr_buf.as_bytes().to_vec()));
+                    let bytes = st.binary_attr_buf.as_bytes();
+                    let mut b = Vec::new();
+                    let _ = b.try_reserve(bytes.len());
+                    b.extend_from_slice(bytes);
+                    fields.push(Some(b));
                 }
             }
             Ok(fields)
@@ -1692,7 +1724,10 @@ pub mod bench_internals {
                     return Ok((lines, true));
                 }
                 let line: &[u8] = &st.line_buf;
-                lines.push(line.to_vec());
+                let mut v = Vec::new();
+                let _ = v.try_reserve(line.len());
+                v.extend_from_slice(line);
+                lines.push(v);
                 if done {
                     // The emitted line was the last (unterminated tail / pre-\.).
                     return Ok((lines, true));

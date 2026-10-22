@@ -1,0 +1,20 @@
+[package]
+name = "memledger"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+# The memory ledger: who holds how many bytes now (the consumers' registry, the broker's settings, the accounts and their
+# doors). It counts and decides nothing (mempolicy decides); it depends on nothing but pgsync, pg_clock (the caches' miss
+# timers) and libc on unix (the exit fold's pthread key, D3998), so the global allocator's door and every layer above can
+# count into it.
+[lib]
+name = "memledger"
+path = "src/lib.rs"
+
+[dependencies]
+pg_clock = { path = "../../port/pg_clock" }
+pgsync = { path = "../pgsync" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -18,4 +18,5 @@ pg_md5 = { path = "../../common/md5" }
 pg_sha1 = { path = "../../common/sha1" }
 pg_strong_random = { path = "../../port/pg_strong_random" }
 dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
+mcx = { path = "../../_support/mcx" }
 libc = "0.2"

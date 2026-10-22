@@ -1,0 +1,9 @@
+backend/utils/mmgr/portalmem/src/tests.rs	PERSIST_SPAWN	unittest	test	test	#[cfg(test)] mod of backend/utils/mmgr/portalmem/src/lib.rs
+backend/utils/mmgr/portalmem/src/tests.rs	EVENTS	unittest	test	test	#[cfg(test)] mod of backend/utils/mmgr/portalmem/src/lib.rs
+backend/utils/mmgr/portalmem/src/tests.rs	CUR_SUBID	unittest	test	test	#[cfg(test)] mod of backend/utils/mmgr/portalmem/src/lib.rs
+backend/utils/mmgr/portalmem/src/tests.rs	NEST_LEVEL	unittest	test	test	#[cfg(test)] mod of backend/utils/mmgr/portalmem/src/lib.rs
+backend/utils/mmgr/portalmem/src/tests.rs	STMT_TS	unittest	test	test	#[cfg(test)] mod of backend/utils/mmgr/portalmem/src/lib.rs
+backend/utils/mmgr/portalmem/src/tests.rs	NEXT_OWNER	unittest	test	test	#[cfg(test)] mod of backend/utils/mmgr/portalmem/src/lib.rs
+backend/utils/mmgr/portalmem/src/tests.rs	ACTIVE_SNAPS	unittest	test	test	#[cfg(test)] mod of backend/utils/mmgr/portalmem/src/lib.rs
+backend/utils/mmgr/portalmem/src/tests.rs	SHMEM_EXIT	unittest	test	test	#[cfg(test)] mod of backend/utils/mmgr/portalmem/src/lib.rs
+backend/utils/mmgr/portalmem/src/tests.rs	CLEANUP_FAILS	unittest	test	test	#[cfg(test)] mod of backend/utils/mmgr/portalmem/src/lib.rs

@@ -1,0 +1,15 @@
+-- oltpc-021
+-- DELETE FROM new_order WHERE no_w_id = 1 AND no_d_id = 1 AND no_o_id = 999999 /* C28 cleanup delete 3-key */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16484 rti=1 am=heap index=16490
+    key att=1 op=96 value=c23:1
+    key att=3 op=532 value=c23:1
+    key att=2 op=96 value=c23:999999
+    recheck (op96(v1.1, c23:1), op532(v1.3, c23:1), op96(v1.2, c23:999999))
+    lanes RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write DELETE rel=16484 rti=1 natts=3 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable IndexScan

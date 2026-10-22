@@ -1,0 +1,22 @@
+-- regress-full-brin-008
+-- WITH rand_value AS (SELECT string_agg(fipshash((-i)::text),'') AS val FROM generate_series(1,60) s(i)) INSERT INTO brintest_3 SELECT val, val, val, val FROM rand_value;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 PlainAgg)
+  nodes n3@0 n2@2^
+  source const
+  srf from rti=4 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:60)]
+  project (1=v4.1)
+  outs 1=w4:val
+p1 node=2 serial site=0 reason=Write end=sink
+  desc consumes=slot0@p0
+  nodes n2@0 n1@1 n0@2
+  source breaker slot=0
+  project (1=agg3538(1=fn877(fn1946(fn3420(io17(io25(op558(outer.1)))), c25:'hex'), c23:1, c23:32), 2=c25:''))
+  project (1=v3.1, 2=v3.1, 3=v3.1, 4=v3.1)
+  write INSERT rel=27029 rti=1 natts=4 indexes=(27037[2, 3]:brin, 27038[1])
+  outs 1=vl:call3538
+  outs 1=vl:row 2=vl:row 3=vl:row 4=vl:row
+breaker slot=0 kind=PlainAgg budget=Fixed(72) spill=None producer=p0 layout=[]->[Count@0]+valid 16B
+group slot=0 producer=p0 node=2 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=3538 reg=Collect slot=- count_slot=- final=Collect class=Collect(String) trans=Var mods=[] expr=agg3538(1=fn877(fn1946(fn3420(io17(io25(op558(outer.1)))), c25:'hex'), c23:1, c23:32), 2=c25:'')
+mapped: ModifyTable SubqueryScan FunctionScan Agg

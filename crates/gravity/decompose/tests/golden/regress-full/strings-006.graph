@@ -1,0 +1,9 @@
+-- regress-full-strings-006
+-- SELECT SUBSTRING('abcdefg' SIMILAR 'a|b#"%#"g' ESCAPE '#') AS "bcdef";
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn2073($1, fn1986($2, $3)))
+  outs 1=vl:call2073
+mapped: Result

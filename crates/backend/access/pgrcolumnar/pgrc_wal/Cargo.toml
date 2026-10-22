@@ -1,0 +1,46 @@
+# pgrc_wal — the pgrc WAL resource manager's backend half (delta v2 design §7): the sink that logs a table
+# directory's writes, redo, end-of-recovery cleanup, and the per-directory sync handler. rmgr, sync and
+# xlogrecovery call it directly; it must never depend on them (or on xlogreader), which would close a cycle.
+
+[package]
+name = "pgrc_wal"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pgrc_wal"
+path = "src/lib.rs"
+
+[dependencies]
+pgrc_format = { path = "../pgrc_format" }
+pgrc_write = { path = "../pgrc_write" }
+pgrc_am = { path = "../pgrc_am" }
+pgrc_wal_seams = { path = "../pgrc_wal_seams" }
+pgsync = { path = "../../../../_support/pgsync" }
+memledger = { path = "../../../../_support/memledger" }
+types_core = { path = "../../../../_support/types/types_core" }
+types_error = { path = "../../../../_support/types/types_error" }
+types_rel = { path = "../../../../_support/types/rel" }
+standby = { path = "../../../storage/ipc/standby" }
+types_storage = { path = "../../../../_support/types/types_storage" }
+elog = { path = "../../../utils/error/elog" }
+init_small = { path = "../../../utils/init/init_small" }
+lmgr_proc = { path = "../../../storage/lmgr/lmgr_proc" }
+transam_xlog = { path = "../../transam/transam_xlog" }
+xact = { path = "../../transam/xact" }
+xloginsert = { path = "../../transam/xloginsert" }
+xlogreader_seams = { path = "../../transam/xlogreader_seams" }
+sync_seams = { path = "../../../storage/sync/sync_seams" }
+twophase_seams = { path = "../../transam/twophase_seams" }
+pgrc_spool = { path = "../pgrc_spool" }
+injection_point = { path = "../../../utils/misc/injection_point" }
+guc_seams = { path = "../../../utils/misc/guc_seams" }
+xlogrecovery_seams = { path = "../../transam/xlogrecovery_seams" }
+xlogarchive_seams = { path = "../../transam/xlogarchive_seams" }
+timeline_seams = { path = "../../transam/timeline_seams" }
+mcx = { path = "../../../../_support/mcx" }
+libc = "0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

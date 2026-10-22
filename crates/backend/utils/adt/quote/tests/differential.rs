@@ -4,7 +4,7 @@
 
 use std::io::Write;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use mcx::MemoryContext;
 
@@ -25,15 +25,45 @@ fn sql_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-fn psql(sql: &str) -> Option<Vec<(usize, String)>> {
-    let path = std::env::temp_dir().join(format!("pgrust_quote_diff_{}.sql", std::process::id()));
-    std::fs::File::create(&path)
+/// The oracle's script file, removed on drop, so an early return or a
+/// panic takes it too.
+struct SqlFile(std::path::PathBuf);
+
+impl Drop for SqlFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn sql_file(sql: &str) -> Option<SqlFile> {
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let name = format!(
+        "pgrust_quote_diff_{}_{}.sql",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    );
+    let file = SqlFile(std::env::temp_dir().join(name));
+    std::fs::File::create(&file.0)
         .ok()?
         .write_all(sql.as_bytes())
         .ok()?;
+    Some(file)
+}
+
+#[test]
+fn oracle_script_leaves_nothing_behind() {
+    let file = sql_file("SELECT 1;\n").expect("write the oracle script");
+    let path = file.0.clone();
+    assert!(path.exists());
+    drop(file);
+    assert!(!path.exists(), "{} left behind", path.display());
+}
+
+fn psql(sql: &str) -> Option<Vec<(usize, String)>> {
+    let file = sql_file(sql)?;
     let out = Command::new("psql")
         .args(["-h", "/tmp", "-p", "5432", "-d", "postgres", "-tAF", "\t", "-f"])
-        .arg(&path)
+        .arg(&file.0)
         .output()
         .ok()?;
     if !out.status.success() {

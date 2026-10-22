@@ -675,13 +675,27 @@ pub fn AlterObjectOwner_internal<'mcx>(
     let rel = table::table_open(mcx, catalog_id, RowExclusiveLock)?;
     let td = rel.descr();
 
-    // get_catalog_object_by_oid_extended(locktup=true).
-    let mut scan = begin_oid_scan(mcx, &rel, object_id)?;
-    let Some(oldtup) = genam::systable_getnext(mcx, &mut scan)? else {
-        return Err(row_missing(&rel, object_id));
+    let cache_id = catalog_objectaddress::get_object_catcache_oid(catalog_id);
+    let owned_tuple = if cache_id > 0 {
+        cache_syscache::SearchSysCacheLockedCopy1(
+            mcx,
+            cache_id,
+            SysCacheKey::Value(Datum::from_oid(object_id)),
+        )?
+        .ok_or_else(|| row_missing(&rel, object_id))?
+    } else {
+        let mut scan = begin_oid_scan(mcx, &rel, object_id)?;
+        let Some(tuple) = genam::systable_getnext(mcx, &mut scan)? else {
+            genam::systable_endscan(mcx, scan)?;
+            return Err(row_missing(&rel, object_id));
+        };
+        lmgr::LockTuple(&rel, &tuple.t_self, InplaceUpdateTupleLock)?;
+        let copy = heaptuple::heap_copytuple(mcx, tuple)?;
+        genam::systable_endscan(mcx, scan)?;
+        copy
     };
+    let oldtup = owned_tuple.as_tuple();
     let otid: ItemPointerData = oldtup.t_self;
-    lmgr::LockTuple(&rel, &otid, InplaceUpdateTupleLock)?;
 
     let old_owner_id = getattr(td, oldtup, anum_owner).0.as_oid();
     let namespace_id = if anum_namespace > 0 {
@@ -731,13 +745,11 @@ pub fn AlterObjectOwner_internal<'mcx>(
 
         let mut newtup =
             build_replace_tuple(mcx, td, td.natts as usize, &replacements, oldtup)?;
-        genam::systable_endscan(mcx, scan)?;
         catalog_indexing::CatalogTupleUpdate(mcx, &rel, &otid, &mut newtup)?;
         lmgr::UnlockTuple(&rel, &otid, InplaceUpdateTupleLock)?;
 
         pg_shdepend::changeDependencyOnOwner(mcx, class_id, object_id, new_owner_id)?;
     } else {
-        genam::systable_endscan(mcx, scan)?;
         lmgr::UnlockTuple(&rel, &otid, InplaceUpdateTupleLock)?;
     }
 

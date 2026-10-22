@@ -258,3 +258,34 @@ fn c_str_restores_spare_slot_after_fixed_write() {
     buf.write_fixed([b'x']);
     assert_eq!(buf.as_c_str().unwrap().to_bytes_with_nul(), b"x\0");
 }
+
+#[test]
+fn append_formatted_follows_append_stringinfo_va() {
+    let ctx = MemoryContext::new("t");
+    let mut s = StringInfo::new_in(ctx.mcx()).unwrap();
+    s.append_bytes(&[b'x'; 1010]).unwrap();
+    // Under 16 bytes free: appendStringInfoVA asks for 32 more first.
+    s.append_formatted(&[b",", b"y"]).unwrap();
+    assert_eq!(s.capacity(), 2048);
+    assert_eq!(&s.as_bytes()[1010..], b",y");
+    assert_eq!(sentinel(&s), 0);
+
+    // A formatted piece over MaxAllocSize - 1 is pvsnprintf's "out of memory".
+    let half = alloc::vec![0u8; 1 << 29];
+    let err = s.append_formatted(&[&half, &half]).unwrap_err();
+    assert_eq!(err.message(), "out of memory");
+    assert_eq!(err.sqlstate(), ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(s.len(), 1012);
+}
+
+#[test]
+fn vec_append_binary_refuses_at_the_stringinfo_ceiling() {
+    let ctx = MemoryContext::new("t");
+    let mut buf: ::mcx::PgVec<u8> = ::mcx::vec_with_capacity_in(ctx.mcx(), ::mcx::MAX_ALLOC_SIZE).unwrap();
+    // SAFETY: u8 has no invalid bit patterns and the untouched prefix is never read.
+    unsafe { buf.set_len(::mcx::MAX_ALLOC_SIZE - 3) };
+    let err = vec_append_binary(&mut buf, &[0u8; 8]).unwrap_err();
+    assert_eq!(err.sqlstate(), ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(err.message(), "string buffer exceeds maximum allowed length (1073741823 bytes)");
+    assert_eq!(err.detail(), Some("Cannot enlarge string buffer containing 1073741820 bytes by 8 more bytes."));
+}

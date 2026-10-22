@@ -25,9 +25,7 @@ use crate::{report_config, token_is_keyword, TokenizedAuthLine};
 
 // Build flags of this tree: SSL on; LDAP on (in-tree client, OpenLDAP-style
 // API surface: ldapurl accepted, ldapserver not mandatory); RADIUS on; GSS
-// (auth) and PAM on; no SSPI / BSD. GSSAPI *encryption* (gssencmode) is not
-// implemented, so hostgssenc lines parse cleanly (ENABLE_GSS build) but
-// never match at check time.
+// (auth and encryption) and PAM on; no SSPI / BSD.
 pub(crate) const fn use_ssl() -> bool {
     true
 }

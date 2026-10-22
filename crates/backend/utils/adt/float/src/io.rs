@@ -689,9 +689,8 @@ pub(crate) fn token_true_value_below_dblmin(token: &[u8], is_hex: bool) -> bool 
             }
         }
         // d <<= 1022
-        let limb_shift = 1022 / 64;
         let bit_shift = 1022 % 64;
-        let mut left: Vec<u64> = vec![0; limb_shift];
+        let mut left: Vec<u64> = vec![0; 1022 / 64];
         let mut carry = 0u64;
         for &l in &d {
             left.push((l << bit_shift) | carry);

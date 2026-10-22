@@ -1,0 +1,12 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/rowcache.rs
+growth	std::collections::HashMap::insert	2
+growth	std::collections::HashSet::insert	1
+growth	std::vec::Vec::push	7
+growth	std::vec::Vec::resize_with	1
+growth	std::vec::Vec::try_reserve	1
+macro	std::format	3
+method	std::boxed::Box::new	3
+method	std::iter::Iterator::collect	3
+type	std::boxed::Box	3
+type	std::sync::Arc	1
+type	std::vec::Vec	1

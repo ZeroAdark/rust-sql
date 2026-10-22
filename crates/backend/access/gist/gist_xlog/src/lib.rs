@@ -192,7 +192,7 @@ fn gistRedoPageUpdateRecord(record: &XLogReaderState) -> PgResult<()> {
                     data.len()
                 )
             })?;
-            let mut todelete: Vec<OffsetNumber> = Vec::with_capacity(n);
+            let mut todelete: Vec<OffsetNumber> = ::mcx::std_vec_with_capacity("gist", n)?;
             for i in 0..n {
                 todelete.push(OffsetNumber::from_ne_bytes([
                     data[i * 2],
@@ -257,7 +257,7 @@ fn gistRedoDeleteRecord(record: &XLogReaderState) -> PgResult<()> {
                 md.len()
             )
         })?;
-        let mut todelete: Vec<OffsetNumber> = Vec::with_capacity(n);
+        let mut todelete: Vec<OffsetNumber> = ::mcx::std_vec_with_capacity("gist", n)?;
         for i in 0..n {
             let base = SizeOfGistxlogDelete + i * 2;
             todelete.push(OffsetNumber::from_ne_bytes([md[base], md[base + 1]]));

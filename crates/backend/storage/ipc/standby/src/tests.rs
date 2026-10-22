@@ -39,7 +39,7 @@ fn standby_lock_body_matches_c_layout() {
         xl_standby_lock { xid: 700, dbOid: 5, relOid: 16384 },
         xl_standby_lock { xid: 701, dbOid: 5, relOid: 16385 },
     ];
-    let body = standby_locks_body(&locks);
+    let body = standby_locks_body(&locks).unwrap();
     assert_eq!(body.len(), 2 * SIZE_OF_XL_STANDBY_LOCK);
     assert_eq!(u32::from_ne_bytes(body[0..4].try_into().unwrap()), 700);
     assert_eq!(u32::from_ne_bytes(body[4..8].try_into().unwrap()), 5);
@@ -64,7 +64,7 @@ fn recovery_lock_table_bookkeeping_dedupes_and_chains() {
     assert_eq!(ts::chain(701), vec![(5, 16384)]);
     assert_eq!(ts::chain(702), vec![]);
     // standby.c:1021 prepends, :1040 walks from the head: newest lock first
-    // (batch-232 regression).
+    // (batch-232 fp-ipc-standby#2).
     assert_eq!(ts::release_sequence(&ts::chain(700)), vec![(5, 16385), (5, 16384)]);
 }
 
@@ -298,4 +298,26 @@ fn running_xacts_snapshot_message_formats_lsn_like_c() {
         running_xacts_snapshot_message(&overflowed, 0x0000_0001_0000_000Au64 as XLogRecPtr),
         "snapshot of 3 running transactions overflowed (lsn 1/A oldest xid 754 latest complete 753 next xid 754)"
     );
+}
+
+#[test]
+fn child_delay_bind_preserves_startup_reload() {
+    use guc_tables::vars::{max_standby_archive_delay, max_standby_streaming_delay};
+
+    crate::recovery::install_guc_backings();
+    max_standby_archive_delay.write(30_000);
+    max_standby_streaming_delay.write(30_000);
+    let captured = (max_standby_archive_delay.read(), max_standby_streaming_delay.read());
+    max_standby_archive_delay.write(60_000);
+    max_standby_streaming_delay.write(-1);
+    std::thread::spawn(move || {
+        max_standby_archive_delay.write(captured.0);
+        max_standby_streaming_delay.write(captured.1);
+        assert_eq!(max_standby_archive_delay.read(), 30_000);
+        assert_eq!(max_standby_streaming_delay.read(), 30_000);
+    })
+    .join()
+    .unwrap();
+    assert_eq!(max_standby_archive_delay.read(), 60_000);
+    assert_eq!(max_standby_streaming_delay.read(), -1);
 }

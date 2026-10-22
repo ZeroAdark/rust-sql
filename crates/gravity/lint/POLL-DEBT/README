@@ -1,0 +1,54 @@
+POLL-DEBT: host-step work not yet polled through cancelpoll's Step (rule RQ, crates/gravity/lint/rules/rq_polls.py; C9).
+
+One row per file, named <path below crates/, '/' as '.'>@<function>@<kind>:
+    path<TAB>function<TAB>kind<TAB>count<TAB>owner lane<TAB>why it stays
+kind:
+    byte   the function polls the abort byte itself (cancelpoll::canceled / polled, gravity_abi abort_set / abort_byte_set)
+    phase  the function labels a step with cancelpoll::phase (a Step labels and polls)
+    loop   a loop or whole-slice sort in host-step code that ticks no Step and carries no bounded marker
+count is the function's sites of that kind. The list only shrinks: a new row, or a count above the parent's, fails a
+landing (a row moved with its function's rename is allowed). Seeded 2026-10-12 at 539 rows, 865 sites.
+Once, by exception: the landing that made RQ's call match precise (a method `.name(`, a free function `name(`) added
+the rows of the loops the name-only match had credited with calls they don't make; their why says 'RQ precise match'.
+
+A bounded loop carries, on its line or the line above:
+    // bounded("<category>: <why>")
+category: const-domain | catalog-sized | key-columns | small-fixed | polled-callee:<fn> | other
+(polled-callee names a function RQ sees ticking a Step; other says why in a sentence a reviewer can check).
+`python3 crates/gravity/lint/rules/rq_polls.py --list-bounded` prints every marker and the count per category.
+
+Polled on the leader (RQ's LEADER): PostgreSQL's CHECK_FOR_INTERRUPTS, cancelpoll::interrupts::check(), polls a cancel
+on the statement's leader thread only (off it, it reads the pool thread's own interrupt state, which no cancel sets). In
+these leader-only hosts a loop is polled when every pass calls `check()?` (or `if let Err(..) = check()`), or a function
+of the same host that calls it on every path (`name(..)?`): in a `while` header or in the body outside any nested block,
+no `continue` (in a function: no `return`) before it, no `&&`, `|` or `else` in its statement. A marker on such a loop
+fails (delete it); a loop outside LEADER resting on check() fails.
+    crates/gravity/hosts/src/ops/window/          window pipelines are leader-only: decompose leaves the fill
+                                                  Ineligible{Sink} and the reader site-less; frame.rs keys_match
+                                                  debug-asserts no pool thread runs it (D1368)
+    crates/gravity/hosts/src/ops/srf/store.rs     ScanStore::check, at every batch, refuses a read off the thread that
+                                                  built the store, the leader
+    crates/gravity/hosts/src/ops/modifytable/     a write's pipeline is serial (decompose serial_after(.., Reason::Write));
+                                                  a row op runs leader-only with no pool wake (lowerv4 modifytable/rowop.rs)
+    crates/gravity/hosts/src/ops/agg/hosts.rs     admit_set only: exec's after_pipeline hooks (keyed.twopass, join.domain)
+                                                  call it, the leader's serial lay-out of pass 1's keys
+    crates/gravity/pool/src/lib.rs                run_led only, by its own spelling (self.ambient.interrupts)(): the
+                                                  section's leader parks in it (parallel run_section, exec leaf_fan_out,
+                                                  pool end_fan_out); Ambient::SERVER.interrupts is cancelpoll::interrupts::check
+
+Not debt, by rule (RQ's CONTROL; neither is a host step's poll):
+- crates/gravity/abi/src/: the abort byte's own readers (ctx.rs abort_set, abort_byte_set, poll).
+- The statement's stops at its own boundaries, which read gravity_abi::ctx::abort_set between pipelines, claims,
+  sections and workers:
+    crates/gravity/driver/src/entry.rs     run_pipeline_at, claim_at, out_of_order, run_ahead, pull_nested
+    crates/gravity/parallel/src/lib.rs     run_section, own_run_end
+    crates/gravity/parallel/src/worker.rs  run_claim
+- The kernels' poll and the leader's own service check (a set byte at a back-edge, C's CHECK_FOR_INTERRUPTS):
+    crates/gravity/exec/src/glue/raw.rs    poll_kernel
+    crates/gravity/exec/src/glue.rs        service_interrupts
+Outside RQ's sources: tcop postgres mark_poll (CHECK_FOR_INTERRUPTS marks the probe) and the latch's waiting().
+
+C9's kernel face: crates/gravity/kernels/src/ops/sort/polled.rs (D4140). The kernels crate depends on the ABI only, so its
+host code has no cancelpoll::Step: a kernel-side host step polls through polled.rs's Poll (tick / batch / sort_by over the
+host entry's gravity_abi::ctx::cancel_pending(ctx)) and nothing else. Every later kernel site that needs a poll uses it.
+RQ does not scan the kernels crate yet.

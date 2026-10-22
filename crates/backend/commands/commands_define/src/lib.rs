@@ -76,9 +76,9 @@ pub fn defGetString<'mcx>(mcx: Mcx<'mcx>, def: &DefElem<'mcx>) -> PgResult<&'mcx
     })
 }
 
+// floatVal (value.h) is atof: strtod's longest prefix, hex included.
 pub fn floatVal(fval: &str) -> f64 {
-    let s = fval.split('_').next().unwrap_or(fval);
-    s.parse::<f64>().unwrap_or(0.0)
+    adt_float::io::strtod_c(fval.as_bytes()).map_or(0.0, |(v, _, _)| v)
 }
 
 pub fn defGetNumeric(def: &DefElem<'_>) -> PgResult<f64> {
@@ -297,6 +297,15 @@ pub fn TypeNameToString<'a>(mcx: Mcx<'a>, tn: &TypeName<'_>) -> PgResult<PgStrin
 mod tests {
     use super::*;
     use types_nodes::Node;
+
+    #[test]
+    fn float_val_is_atof() {
+        assert_eq!(floatVal("0x100000000"), 4294967296.0);
+        assert_eq!(floatVal("0x1_0000_0000"), 1.0);
+        assert_eq!(floatVal("1_000.5"), 1.0);
+        assert_eq!(floatVal("2.5e3"), 2500.0);
+        assert_eq!(floatVal("junk"), 0.0);
+    }
 
     // TypeNameToString decoration parity (appendTypeNameToBuffer,
     // parse_type.c): %TYPE suffix and "[]" appended once regardless of the

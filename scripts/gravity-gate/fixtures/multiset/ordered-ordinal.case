@@ -1,0 +1,11 @@
+# ORDER BY an ordinal with DESC NULLS FIRST
+sql: SELECT a, b FROM t ORDER BY 2 DESC NULLS FIRST;
+cols: a	b
+class: ordered 2
+verdict: mismatch-order
+[pg]
+x	9
+y	8
+[got]
+y	8
+x	9

@@ -1,0 +1,72 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT j.id, j.prio FROM d60_j j WHERE j.prio > (SELECT prio FROM d60_c WHERE name = 'q' FOR UPDATE) AND EXISTS (SELECT 1 FROM d60_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE);
+QUERY PLAN                                                       
+-----------------------------------------------------------------
+Seq Scan on d60_j j                                              
+  Filter: ((prio > (InitPlan 1).col1) AND EXISTS(SubPlan 2))     
+  InitPlan 1                                                     
+    ->  LockRows                                                 
+          ->  Seq Scan on d60_c                                  
+                Filter: (name = 'q'::text)                       
+  SubPlan 2                                                      
+    ->  LockRows                                                 
+          ->  Seq Scan on d60_j k                                
+                Filter: ((id = j.id) AND (state = 'ready'::text))
+(10 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1q s2l s1c s2c
+step s1q: UPDATE d60_c SET prio = 7 WHERE name = 'q';
+step s2l: SELECT j.id, j.prio FROM d60_j j WHERE j.prio > (SELECT prio FROM d60_c WHERE name = 'q' FOR UPDATE) AND EXISTS (SELECT 1 FROM d60_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio
+--+----
+ 9|   9
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1s s2l s1c s2c
+step s1s: UPDATE d60_j SET state = 'done' WHERE id = 6;
+step s2l: SELECT j.id, j.prio FROM d60_j j WHERE j.prio > (SELECT prio FROM d60_c WHERE name = 'q' FOR UPDATE) AND EXISTS (SELECT 1 FROM d60_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio
+--+----
+ 7|   7
+ 9|   9
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1a s2l s1c s2c
+step s1a: UPDATE d60_j SET prio = prio + 0 WHERE id = 9;
+step s2l: SELECT j.id, j.prio FROM d60_j j WHERE j.prio > (SELECT prio FROM d60_c WHERE name = 'q' FOR UPDATE) AND EXISTS (SELECT 1 FROM d60_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio
+--+----
+ 6|   6
+ 7|   7
+ 9|   9
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1q s1s s2l s1c s2c
+step s1q: UPDATE d60_c SET prio = 7 WHERE name = 'q';
+step s1s: UPDATE d60_j SET state = 'done' WHERE id = 6;
+step s2l: SELECT j.id, j.prio FROM d60_j j WHERE j.prio > (SELECT prio FROM d60_c WHERE name = 'q' FOR UPDATE) AND EXISTS (SELECT 1 FROM d60_j k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio
+--+----
+ 9|   9
+(1 row)
+
+step s2c: COMMIT;

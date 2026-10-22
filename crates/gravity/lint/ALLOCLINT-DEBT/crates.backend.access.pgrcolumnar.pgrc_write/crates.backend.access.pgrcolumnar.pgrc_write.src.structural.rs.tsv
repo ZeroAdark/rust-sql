@@ -1,0 +1,3 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/structural.rs
+method	std::clone::Clone::clone	3
+type	std::vec::Vec	4

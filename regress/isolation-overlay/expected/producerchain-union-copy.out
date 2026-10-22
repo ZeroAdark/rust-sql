@@ -1,0 +1,229 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pv s3ps s3po s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE ut SET b = 'u', x = ut.x + 1 FROM (SELECT a FROM us UNION ALL SELECT a FROM us) ss (a) WHERE ut.a = ss.a;
+QUERY PLAN                                       
+-------------------------------------------------
+Update on ut                                     
+  Update on ut1 ut_1                             
+  Update on ut2 ut_2                             
+  Update on ut3 ut_3                             
+  ->  Merge Join                                 
+        Merge Cond: (ut.a = us.a)                
+        ->  Sort                                 
+              Sort Key: ut.a                     
+              ->  Append                         
+                    ->  Seq Scan on ut1 ut_1     
+                    ->  Seq Scan on ut2 ut_2     
+                    ->  Seq Scan on ut3 ut_3     
+        ->  Sort                                 
+              Sort Key: us.a                     
+              ->  Append                         
+                    ->  Seq Scan on us           
+                    ->  Seq Scan on us_child us_1
+                    ->  Seq Scan on us us_2      
+                    ->  Seq Scan on us_child us_3
+(19 rows)
+
+step s3pv: EXPLAIN (COSTS OFF) UPDATE ut SET b = 'v', x = ut.x + 2 FROM (SELECT 0 FROM ut UNION ALL SELECT 1 FROM ut) ss (a) WHERE ut.a = ss.a;
+QUERY PLAN                                  
+--------------------------------------------
+Update on ut                                
+  Update on ut1 ut_1                        
+  Update on ut2 ut_2                        
+  Update on ut3 ut_3                        
+  ->  Merge Join                            
+        Merge Cond: (ut.a = (0))            
+        ->  Sort                            
+              Sort Key: ut.a                
+              ->  Append                    
+                    ->  Seq Scan on ut1 ut_1
+                    ->  Seq Scan on ut2 ut_2
+                    ->  Seq Scan on ut3 ut_3
+        ->  Sort                            
+              Sort Key: (0)                 
+              ->  Append                    
+                    ->  Seq Scan on ut1 ut_4
+                    ->  Seq Scan on ut2 ut_5
+                    ->  Seq Scan on ut3 ut_6
+                    ->  Seq Scan on ut1 ut_7
+                    ->  Seq Scan on ut2 ut_8
+                    ->  Seq Scan on ut3 ut_9
+(21 rows)
+
+step s3ps: EXPLAIN (COSTS OFF) UPDATE pt SET b = 'b' FROM (SELECT a FROM us UNION ALL SELECT a + 1 FROM us) ss (a) WHERE pt.a = ss.a;
+QUERY PLAN                                       
+-------------------------------------------------
+Update on pt                                     
+  Update on pt1 pt_1                             
+  Update on pt2 pt_2                             
+  Update on pt3 pt_3                             
+  ->  Merge Join                                 
+        Merge Cond: (us.a = pt.a)                
+        ->  Sort                                 
+              Sort Key: us.a                     
+              ->  Append                         
+                    ->  Seq Scan on us           
+                    ->  Seq Scan on us_child us_1
+                    ->  Seq Scan on us us_2      
+                    ->  Seq Scan on us_child us_3
+        ->  Sort                                 
+              Sort Key: pt.a                     
+              ->  Append                         
+                    ->  Seq Scan on pt1 pt_1     
+                    ->  Seq Scan on pt2 pt_2     
+                    ->  Seq Scan on pt3 pt_3     
+(19 rows)
+
+step s3po: EXPLAIN (COSTS OFF) UPDATE ut SET b = 'o', x = ut.x + op.w FROM op WHERE ut.a = op.id;
+QUERY PLAN                                       
+-------------------------------------------------
+Update on ut                                     
+  Update on ut1 ut_1                             
+  Update on ut2 ut_2                             
+  Update on ut3 ut_3                             
+  ->  Merge Join                                 
+        Merge Cond: (op.id = ut.a)               
+        ->  Sort                                 
+              Sort Key: op.id                    
+              ->  Append                         
+                    ->  Seq Scan on op op_1      
+                    ->  Seq Scan on op_child op_2
+        ->  Sort                                 
+              Sort Key: ut.a                     
+              ->  Append                         
+                    ->  Seq Scan on ut1 ut_1     
+                    ->  Seq Scan on ut2 ut_2     
+                    ->  Seq Scan on ut3 ut_3     
+(17 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1d s1i s1r s2u s1c s2c s3sel
+step s1x: UPDATE ut SET x = x + 10 WHERE a IN (1, 2);
+step s1d: DELETE FROM ut WHERE a = 3;
+step s1i: INSERT INTO us VALUES (3), (5);
+step s1r: DELETE FROM us_child WHERE a = 2;
+step s2u: UPDATE ut SET b = 'u', x = ut.x + 1 FROM (SELECT a FROM us UNION ALL SELECT a FROM us) ss (a) WHERE ut.a = ss.a; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b| x
+---+-+-+--
+ut1|1|u|11
+ut2|2|u|11
+(2 rows)
+
+
+starting permutation: s1x s1d s1i s1r s2v s1c s2c s3sel
+step s1x: UPDATE ut SET x = x + 10 WHERE a IN (1, 2);
+step s1d: DELETE FROM ut WHERE a = 3;
+step s1i: INSERT INTO us VALUES (3), (5);
+step s1r: DELETE FROM us_child WHERE a = 2;
+step s2v: UPDATE ut SET b = 'v', x = ut.x + 2 FROM (SELECT 0 FROM ut UNION ALL SELECT 1 FROM ut) ss (a) WHERE ut.a = ss.a; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b| x
+---+-+-+--
+ut1|1|v|12
+ut2|2|a|10
+(2 rows)
+
+
+starting permutation: s2u s1x s2c s1c s3sel
+step s2u: UPDATE ut SET b = 'u', x = ut.x + 1 FROM (SELECT a FROM us UNION ALL SELECT a FROM us) ss (a) WHERE ut.a = ss.a;
+step s1x: UPDATE ut SET x = x + 10 WHERE a IN (1, 2); <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b| x
+---+-+-+--
+ut1|1|u|11
+ut2|2|u|11
+ut3|3|a| 0
+(3 rows)
+
+
+starting permutation: s1m s2u s1c s2c s3sel
+step s1m: UPDATE ut SET a = 3 WHERE a = 2;
+step s2u: UPDATE ut SET b = 'u', x = ut.x + 1 FROM (SELECT a FROM us UNION ALL SELECT a FROM us) ss (a) WHERE ut.a = ss.a; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b|x
+---+-+-+-
+ut1|1|a|0
+ut3|3|a|0
+ut3|3|a|0
+(3 rows)
+
+
+starting permutation: s1y s1e s1i s1r s2s s1c s2c s3pt
+step s1y: UPDATE pt SET b = 'y' WHERE a = 1;
+step s1e: DELETE FROM pt WHERE a = 2;
+step s1i: INSERT INTO us VALUES (3), (5);
+step s1r: DELETE FROM us_child WHERE a = 2;
+step s2s: UPDATE pt SET b = 'b' FROM (SELECT a FROM us UNION ALL SELECT a + 1 FROM us) ss (a) WHERE pt.a = ss.a; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+step s2c: COMMIT;
+step s3pt: SELECT tableoid::regclass::text AS rel, a, b FROM pt ORDER BY a, rel;
+rel|a|b
+---+-+-
+pt1|1|b
+pt3|3|b
+(2 rows)
+
+
+starting permutation: s2s s1y s2c s1c s3pt
+step s2s: UPDATE pt SET b = 'b' FROM (SELECT a FROM us UNION ALL SELECT a + 1 FROM us) ss (a) WHERE pt.a = ss.a;
+step s1y: UPDATE pt SET b = 'y' WHERE a = 1; <waiting ...>
+step s2c: COMMIT;
+step s1y: <... completed>
+step s1c: COMMIT;
+step s3pt: SELECT tableoid::regclass::text AS rel, a, b FROM pt ORDER BY a, rel;
+rel|a|b
+---+-+-
+pt1|1|y
+pt2|2|b
+pt3|3|b
+(3 rows)
+
+
+starting permutation: s1x s1o s1q s2o s1c s2c s3sel
+step s1x: UPDATE ut SET x = x + 10 WHERE a IN (1, 2);
+step s1o: UPDATE op SET w = w + 100 WHERE id = 2;
+step s1q: DELETE FROM op WHERE id = 1;
+step s2o: UPDATE ut SET b = 'o', x = ut.x + op.w FROM op WHERE ut.a = op.id; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b| x
+---+-+-+--
+ut1|1|o|20
+ut2|2|o|30
+ut3|3|o|30
+(3 rows)
+
+
+starting permutation: s2o s1o s2c s1c s3sel
+step s2o: UPDATE ut SET b = 'o', x = ut.x + op.w FROM op WHERE ut.a = op.id;
+step s1o: UPDATE op SET w = w + 100 WHERE id = 2;
+step s2c: COMMIT;
+step s1c: COMMIT;
+step s3sel: SELECT tableoid::regclass::text AS rel, a, b, x FROM ut ORDER BY a, rel;
+rel|a|b| x
+---+-+-+--
+ut1|1|o|10
+ut2|2|o|20
+ut3|3|o|30
+(3 rows)
+

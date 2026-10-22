@@ -1,0 +1,11 @@
+-- regress-full-privileges-050
+-- SELECT backend_type FROM pg_stat_activity WHERE CASE WHEN COALESCE(usesysid, 10) = 10 THEN terminate_nothrow(pid) END;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=2 [1:Other fn2022 cols=31 fn2022(c23:null)]
+  filter case(when op607(coalesce(v2.3, c26:10), c26:10) then fn27505(v2.2)) else c16:null
+  project (1=v2.18)
+  outs 1=vl:row
+mapped: FunctionScan

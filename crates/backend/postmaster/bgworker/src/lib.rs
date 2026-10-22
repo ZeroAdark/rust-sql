@@ -125,12 +125,14 @@ struct RegisteredBgWorker {
     // Registration order; C's BackgroundWorkerList is head-inserted
     // (bgworker.c:1032, :455), so every traversal sees the newest first.
     seq: u64,
+    startup_log_pending: bool,
 }
 
 struct Registry {
     total_slots: usize,
     parallel_register_count: u32,
     parallel_terminate_count: u32,
+    pool_held_slots: u32,
     slots: Vec<BackgroundWorkerSlot>,
     registered: Vec<Option<RegisteredBgWorker>>,
     next_seq: u64,
@@ -226,6 +228,7 @@ pub fn BackgroundWorkerShmemInit() -> PgResult<()> {
             shmem_slot: -1,
             terminate: false,
             seq: next_seq,
+            startup_log_pending: false,
         }));
         next_seq += 1;
     }
@@ -255,6 +258,7 @@ pub fn BackgroundWorkerShmemInit() -> PgResult<()> {
     *guard = Some(Registry {
         total_slots,
         parallel_register_count: 0,
+        pool_held_slots: 0,
         parallel_terminate_count: 0,
         slots,
         registered,
@@ -303,6 +307,7 @@ pub fn BackgroundWorkerStateChange(allow_new_workers: bool) {
             if let Some(idx) = find_rw_by_slot(reg, slotno as i32) {
                 let slot_terminate = reg.slots[slotno].terminate;
                 let rw = rw_mut(reg, idx);
+                report_pending_startup(rw);
                 if slot_terminate && !rw.terminate {
                     rw.terminate = true;
                     if rw.pid != 0 {
@@ -366,6 +371,7 @@ pub fn BackgroundWorkerStateChange(allow_new_workers: bool) {
                 shmem_slot: slotno as i32,
                 terminate: false,
                 seq: reg.next_seq,
+                startup_log_pending: false,
             };
             reg.next_seq += 1;
             match reg.registered.iter_mut().find(|e| e.is_none()) {
@@ -379,10 +385,30 @@ pub fn BackgroundWorkerStateChange(allow_new_workers: bool) {
     }
 }
 
+// Pool dispatch runs on the leader; only the postmaster may emit these reports.
+fn report_pending_startup(rw: &mut RegisteredBgWorker) {
+    if !std::mem::take(&mut rw.startup_log_pending) {
+        return;
+    }
+    let _ = ereport(DEBUG1)
+        .errmsg_internal(format!("registering background worker \"{}\"", rw.worker.bgw_name))
+        .finish(loc(411, "BackgroundWorkerStateChange"));
+    let _ = ereport(DEBUG1)
+        .errmsg_internal(format!("starting background worker process \"{}\"", rw.worker.bgw_name))
+        .finish(ErrorLocation::new(
+            "src/backend/postmaster/postmaster.c", 4136, "do_start_bgworker",
+        ));
+}
+
+pub fn ReportPendingBackgroundWorkerStartup(idx: usize) {
+    with_registry(|reg| report_pending_startup(rw_mut(reg, idx)));
+}
+
 fn forget_locked(reg: &mut Registry, idx: usize) {
-    let rw = reg.registered[idx]
+    let mut rw = reg.registered[idx]
         .take()
         .unwrap_or_else(|| panic!("bgworker: stale registered-worker index {idx}"));
+    report_pending_startup(&mut rw);
     let slot = &mut reg.slots[rw.shmem_slot as usize];
     debug_assert!(slot.in_use);
     if rw.worker.bgw_flags & BGWORKER_CLASS_PARALLEL != 0 {
@@ -629,6 +655,41 @@ pub fn RegisterBackgroundWorker(worker: &BackgroundWorker) -> PgResult<()> {
     Ok(())
 }
 
+/// Standing-pool admission on the parallel-worker counter that
+/// RegisterDynamicBackgroundWorker checks (bgworker.c:1055): grants up to
+/// `want` slots under max_parallel_workers and counts them as registered
+/// until `parallel_release` returns them. Each grant also holds one free
+/// slot of the max_worker_processes array, as C's per-worker registration does.
+pub fn parallel_admit(want: u32) -> u32 {
+    if !g::IsUnderPostmaster() {
+        return 0;
+    }
+    with_registry(|reg| {
+        let active = reg.parallel_register_count.wrapping_sub(reg.parallel_terminate_count);
+        let granted = want
+            .min((g::max_parallel_workers() as u32).saturating_sub(active))
+            .min(free_slots(reg));
+        reg.parallel_register_count = reg.parallel_register_count.wrapping_add(granted);
+        reg.pool_held_slots += granted;
+        granted
+    })
+}
+
+fn free_slots(reg: &Registry) -> u32 {
+    let unused = reg.slots.iter().filter(|s| !s.in_use).count() as u32;
+    unused.saturating_sub(reg.pool_held_slots)
+}
+
+pub fn parallel_release(n: u32) {
+    if n == 0 || !g::IsUnderPostmaster() {
+        return;
+    }
+    with_registry(|reg| {
+        reg.parallel_terminate_count = reg.parallel_terminate_count.wrapping_add(n);
+        reg.pool_held_slots = reg.pool_held_slots.saturating_sub(n);
+    });
+}
+
 pub fn RegisterDynamicBackgroundWorker(
     mut worker: BackgroundWorker,
 ) -> PgResult<Option<BackgroundWorkerHandle>> {
@@ -652,6 +713,9 @@ pub fn RegisterDynamicBackgroundWorker(
                 reg.parallel_register_count.wrapping_sub(reg.parallel_terminate_count)
                     <= MAX_PARALLEL_WORKER_LIMIT
             );
+            return None;
+        }
+        if free_slots(reg) == 0 {
             return None;
         }
 
@@ -679,12 +743,10 @@ pub fn RegisterDynamicBackgroundWorker(
                         g::MyDatabaseId(),
                     );
                     if pid == 0 {
-                        // Loud by design: a pool miss is a C-parity-preserving
-                        // slow path (the postmaster still starts the worker),
-                        // but sustained misses mean the pool is undersized or
-                        // broken.
+                        // C has no such message: server-side debug output only.
+                        let _server_only = elog::postmaster_context();
                         let _ = report(
-                            LOG,
+                            DEBUG1,
                             format!(
                                 "parallel worker pool empty; deferring \"{}\" to postmaster start",
                                 worker.bgw_name
@@ -692,22 +754,6 @@ pub fn RegisterDynamicBackgroundWorker(
                         );
                     }
                     if pid != 0 {
-                        // Both are postmaster-side elogs in C (bgworker.c
-                        // BackgroundWorkerStateChange, postmaster.c
-                        // do_start_bgworker) and never reach a client; the
-                        // pool fast path raises them on the registering
-                        // backend's thread, so raise them as the postmaster
-                        // (DestNone, %b = postmaster).
-                        let server_only = elog::postmaster_context();
-                        let _ = report(
-                            DEBUG1,
-                            format!("registering background worker \"{}\"", worker.bgw_name),
-                        );
-                        let _ = report(
-                            DEBUG1,
-                            format!("starting background worker process \"{}\"", worker.bgw_name),
-                        );
-                        drop(server_only);
                         let rw = RegisteredBgWorker {
                             worker: worker.clone(),
                             pid,
@@ -715,6 +761,7 @@ pub fn RegisterDynamicBackgroundWorker(
                             shmem_slot: slotno as i32,
                             terminate: false,
                             seq: reg.next_seq,
+                            startup_log_pending: true,
                         };
                         reg.next_seq += 1;
                         match reg.registered.iter_mut().find(|e| e.is_none()) {

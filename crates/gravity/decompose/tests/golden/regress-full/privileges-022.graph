@@ -1,0 +1,10 @@
+-- regress-full-privileges-022
+-- SELECT 1 FROM atest6;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2260 end=sink
+  nodes n0@0
+  source range rel=27248 rti=1 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=c23:1)
+  outs 1=w4:val
+mapped: SeqScan

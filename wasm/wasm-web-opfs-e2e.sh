@@ -28,7 +28,7 @@
 # wasm32-wasip1/{wasm-release,debug}/postgres.wasm).
 set -u
 
-REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"  # the public workspace root (git toplevel is the monorepo)
 WEB="$REPO/wasm"
 
 command -v node >/dev/null || { echo "node not installed"; exit 2; }
@@ -51,7 +51,7 @@ fi
 [ -n "$WASM_BIN" ] && [ -f "$WASM_BIN" ] || { echo "no wasm binary (wasm/wasm-build.sh)"; exit 2; }
 
 . "$REPO/wasm/lib/scratch.sh"
-WORK="${WASM_OPFS_E2E_DIR:-$(scratch_datadir pgrust-wasm-opfs-e2e)}"
+WORK="${WASM_OPFS_E2E_DIR:-$(scratch_datadir pgrust-fast-wasm-opfs-e2e)}"
 scratch_adopt "$WORK"
 rm -rf "$WORK"; mkdir -p "$WORK"
 

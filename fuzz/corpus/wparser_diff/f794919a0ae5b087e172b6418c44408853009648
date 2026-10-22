@@ -1,2 +1,0 @@
-‚) ORDER BY ndoc DESC, nentry DESC, word LIMIT 10;
-SELECT * FROM ts_stat(

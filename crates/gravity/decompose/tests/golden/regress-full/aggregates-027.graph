@@ -1,0 +1,22 @@
+-- regress-full-aggregates-027
+-- explain (costs off) select max(100) from tenk1;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=3 eligible rows=10000 end=sink
+  nodes n3@0 n2@1 n1@3
+  source range rel=16423 rti=2 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9, 10=v2.10, 11=v2.11, 12=v2.12, 13=v2.13, 14=v2.14, 15=v2.15, 16=v2.16)
+  gate T_List
+  project (1=c23:100)
+  limit count=1 offset=all
+  project (1=c23:100)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=fx64:row 15=fx64:row 16=fx64:row
+  outs 1=w4:val
+  outs 1=w4:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec0)
+  outs 1=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: Result SeqScan Limit SubPlan

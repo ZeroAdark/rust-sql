@@ -1,0 +1,20 @@
+path	crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs
+growth	std::collections::BTreeMap::entry	2
+growth	std::collections::BTreeMap::insert	6
+growth	std::collections::BTreeSet::insert	3
+growth	std::vec::Vec::dedup_by_key	1
+growth	std::vec::Vec::push	11
+growth	std::vec::Vec::resize	1
+growth	std::vec::Vec::try_reserve	2
+growth	std::vec::Vec::try_reserve_exact	1
+ir-only	alloc::collections::btree::map::entry::VacantEntry<K,V,A>::insert	1
+method	pgrc_format::try_filled	1
+method	pgrc_format::try_vec	2
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	5
+method	std::sync::Arc::new	3
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	1
+type	std::sync::Arc	3
+type	std::vec::Vec	3

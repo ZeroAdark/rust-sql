@@ -174,9 +174,11 @@ pub fn GetNewRelFileNumber<'mcx>(
             None => varsup::GetNewObjectId()?,
         };
         let locator = RelFileLocator::new(spc_oid, db_oid, rel_number);
-        // access(F_OK) relative to the datadir cwd, as C's relpath probe.
+        // access(F_OK) relative to the datadir cwd, as C's relpath probe (and a pgrc directory's).
         let rpath = relpath::GetRelationPath(locator, proc_number, ForkNumber::MAIN_FORKNUM);
-        if !std::path::Path::new(&rpath).exists() {
+        if !std::path::Path::new(&rpath).exists()
+            && !std::path::Path::new(&pgrc_am::dirpath::table_dir_path(locator, proc_number)).exists()
+        {
             return Ok(rel_number);
         }
     }

@@ -1,0 +1,11 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/compact.rs
+growth	std::vec::Vec::push	2
+macro	std::format	8
+macro	std::vec	2
+method	std::boxed::Box::new	4
+method	std::clone::Clone::clone	3
+method	std::iter::Iterator::collect	12
+method	std::sync::Arc::new	2
+type	std::boxed::Box	6
+type	std::sync::Arc	2
+type	std::vec::Vec	9

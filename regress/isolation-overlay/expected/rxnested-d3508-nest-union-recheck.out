@@ -1,0 +1,215 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1key s2u s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) UPDATE nr_t t SET hits = t.hits + s.w FROM (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s WHERE t.id = s.k;
+QUERY PLAN                                      
+------------------------------------------------
+Update on nr_t t                                
+  ->  Nested Loop                               
+        ->  Append                              
+              ->  Result                        
+              ->  Result                        
+              ->  Result                        
+        ->  Index Scan using nr_t_pkey on nr_t t
+              Index Cond: (id = (5))            
+(8 rows)
+
+step s1key: UPDATE nr_t SET id = 2500 WHERE id = 5;
+step s2u: UPDATE nr_t t SET hits = t.hits + s.w FROM (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+  id| v|hits
+----+--+----
+   7|70|   1
+2500|50|   0
+(2 rows)
+
+
+starting permutation: s1v s2u s1c s2sel
+step s1v: UPDATE nr_t SET v = v + 1 WHERE id = 5;
+step s2u: UPDATE nr_t t SET hits = t.hits + s.w FROM (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|51|  50
+ 7|70|   1
+(2 rows)
+
+
+starting permutation: s1del s2u s1c s2sel
+step s1del: DELETE FROM nr_t WHERE id = 5;
+step s2u: UPDATE nr_t t SET hits = t.hits + s.w FROM (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   1
+(1 row)
+
+
+starting permutation: s1far s2u s1c s2sel
+step s1far: UPDATE nr_t SET id = 2900 WHERE id = 5;
+step s2u: UPDATE nr_t t SET hits = t.hits + s.w FROM (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+  id| v|hits
+----+--+----
+   7|70|   1
+2900|50|   0
+(2 rows)
+
+
+starting permutation: s1key s2d s1c s2sel
+step s1key: UPDATE nr_t SET id = 2500 WHERE id = 5;
+step s2d: DELETE FROM nr_t t USING (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s WHERE t.id = s.k RETURNING t.id, t.v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| v
+--+--
+ 7|70
+(1 row)
+
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+  id| v|hits
+----+--+----
+2500|50|   0
+(1 row)
+
+
+starting permutation: s1v s2d s1c s2sel
+step s1v: UPDATE nr_t SET v = v + 1 WHERE id = 5;
+step s2d: DELETE FROM nr_t t USING (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s WHERE t.id = s.k RETURNING t.id, t.v; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| v
+--+--
+ 5|51
+ 7|70
+(2 rows)
+
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+id|v|hits
+--+-+----
+(0 rows)
+
+
+starting permutation: s2sexp s1v s2us s1c s2sel
+step s2sexp: EXPLAIN (COSTS OFF) UPDATE nr_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM nr_s WHERE w >= 50 UNION ALL SELECT 7, 1) s WHERE t.id = s.k;
+QUERY PLAN                                      
+------------------------------------------------
+Update on nr_t t                                
+  ->  Nested Loop                               
+        ->  Append                              
+              ->  Subquery Scan on "*SELECT* 1" 
+                    ->  Seq Scan on nr_s        
+                          Filter: (w >= 50)     
+              ->  Result                        
+        ->  Index Scan using nr_t_pkey on nr_t t
+              Index Cond: (id = "*SELECT* 1".k) 
+(9 rows)
+
+step s1v: UPDATE nr_t SET v = v + 1 WHERE id = 5;
+step s2us: UPDATE nr_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM nr_s WHERE w >= 50 UNION ALL SELECT 7, 1) s WHERE t.id = s.k; <waiting ...>
+step s1c: COMMIT;
+step s2us: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|51|  50
+ 7|70|   1
+(2 rows)
+
+
+starting permutation: s2fexp s1v s2f s1c s2sel
+step s2fexp: EXPLAIN (COSTS OFF) UPDATE nr_t t SET hits = t.hits + s.w FROM (SELECT 5 AS k, 49 AS w UNION ALL SELECT 5, 40 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND t.v + s.w < 100;
+QUERY PLAN                                      
+------------------------------------------------
+Update on nr_t t                                
+  ->  Nested Loop                               
+        ->  Append                              
+              ->  Result                        
+              ->  Result                        
+              ->  Result                        
+        ->  Index Scan using nr_t_pkey on nr_t t
+              Index Cond: (id = (5))            
+              Filter: ((v + (49)) < 100)        
+(9 rows)
+
+step s1v: UPDATE nr_t SET v = v + 1 WHERE id = 5;
+step s2f: UPDATE nr_t t SET hits = t.hits + s.w FROM (SELECT 5 AS k, 49 AS w UNION ALL SELECT 5, 40 UNION ALL SELECT 7, 1) s WHERE t.id = s.k AND t.v + s.w < 100; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|51|  40
+ 7|70|   1
+(2 rows)
+
+
+starting permutation: s2mexp s1key s2m s1c s2sel
+step s2mexp: EXPLAIN (COSTS OFF) MERGE INTO nr_t t USING (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w;
+QUERY PLAN                                      
+------------------------------------------------
+Merge on nr_t t                                 
+  ->  Nested Loop                               
+        ->  Append                              
+              ->  Result                        
+              ->  Result                        
+              ->  Result                        
+        ->  Index Scan using nr_t_pkey on nr_t t
+              Index Cond: (id = (5))            
+(8 rows)
+
+step s1key: UPDATE nr_t SET id = 2500 WHERE id = 5;
+step s2m: MERGE INTO nr_t t USING (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+  id| v|hits
+----+--+----
+   7|70|   1
+2500|50|   0
+(2 rows)
+
+
+starting permutation: s1v s2m s1c s2sel
+step s1v: UPDATE nr_t SET v = v + 1 WHERE id = 5;
+step s2m: MERGE INTO nr_t t USING (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+id| v|hits
+--+--+----
+ 5|51|  50
+ 7|70|   1
+(2 rows)
+
+
+starting permutation: s1del s2m s1c s2sel
+step s1del: DELETE FROM nr_t WHERE id = 5;
+step s2m: MERGE INTO nr_t t USING (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   1
+(1 row)
+
+
+starting permutation: s1v s2mq s1c s2sel
+step s1v: UPDATE nr_t SET v = v + 1 WHERE id = 5;
+step s2mq: MERGE INTO nr_t t USING (SELECT 5 AS k, 50 AS w UNION ALL SELECT 7, 1 UNION ALL SELECT 2500, 250) s ON t.id = s.k WHEN MATCHED AND s.w < 100 THEN DELETE WHEN MATCHED THEN UPDATE SET hits = 999; <waiting ...>
+step s1c: COMMIT;
+step s2mq: <... completed>
+step s2sel: SELECT id, v, hits FROM nr_t WHERE id IN (5, 7, 2500, 2900) ORDER BY id;
+id|v|hits
+--+-+----
+(0 rows)
+

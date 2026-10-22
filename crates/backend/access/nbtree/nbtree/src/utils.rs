@@ -14,6 +14,8 @@ use ::types_nbtree::{
     BTP_HAS_GARBAGE, BT_READ, P_FIRSTDATAKEY,
 };
 use ::types_rel::Relation;
+
+use crate::readrel::BtReadRel;
 use ::types_scan::scankey::{
     BTEqualStrategyNumber, BTGreaterEqualStrategyNumber, BTGreaterStrategyNumber,
     BTLessEqualStrategyNumber, BTLessStrategyNumber, InvalidStrategy, ScanKeyData, SK_BT_DESC,
@@ -486,8 +488,8 @@ fn bt_binsrch_skiparray_skey(
 /// # Safety
 /// As [`bt_checkkeys`].
 #[allow(clippy::too_many_arguments)]
-unsafe fn bt_tuple_before_array_skeys(
-    rel: &Relation<'_>,
+unsafe fn bt_tuple_before_array_skeys<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     dir: ScanDirection,
     tuple: ITup,
@@ -497,7 +499,7 @@ unsafe fn bt_tuple_before_array_skeys(
     mut scan_behind: Option<&mut bool>,
     frame: &mut OrderProcFrame,
 ) -> PgResult<bool> {
-    let tupdesc: &TupleDescData<'_> = &rel.rd_att;
+    let tupdesc: &TupleDescData<'_> = rel.tupdesc();
     debug_assert!(so.numArrayKeys > 0 && so.numberOfKeys > 0);
     debug_assert!(sktrig == 0 || readpagetup);
     debug_assert!(!readpagetup || scan_behind.is_none());
@@ -618,8 +620,8 @@ pub(crate) fn bt_start_prim_scan(
 /// As [`bt_checkkeys`]; `pstate.finaltup` (when set) points into the same
 /// pinned+locked page.
 #[allow(clippy::too_many_arguments)]
-unsafe fn bt_advance_array_keys(
-    rel: &Relation<'_>,
+unsafe fn bt_advance_array_keys<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     mut pstate: Option<&mut BtReadPageState<'_>>,
     tuple: ITup,
@@ -628,7 +630,7 @@ unsafe fn bt_advance_array_keys(
     sktrig_required: bool,
     frame: &mut OrderProcFrame,
 ) -> PgResult<bool> {
-    let tupdesc: &TupleDescData<'_> = &rel.rd_att;
+    let tupdesc: &TupleDescData<'_> = rel.tupdesc();
     let dir = so.currPos.dir;
     debug_assert!(!so.needPrimScan && !so.scanBehind && !so.oppositeDirCheck);
     debug_assert!(sktrig_required == pstate.is_some());
@@ -646,7 +648,7 @@ unsafe fn bt_advance_array_keys(
         let mut least_sign_ikey = so.numberOfKeys - 1;
         let mut continuescan = true;
         debug_assert!(so.keyData[sktrig as usize].sk_flags & SK_SEARCHARRAY != 0);
-        if !bt_check_compare::<false>(
+        if !bt_check_compare::<false, _>(
             rel,
             so,
             dir,
@@ -846,7 +848,7 @@ unsafe fn bt_advance_array_keys(
         let mut continuescan = true;
         debug_assert!(all_required_satisfied);
 
-        if bt_check_compare::<false>(
+        if bt_check_compare::<false, _>(
             rel,
             so,
             dir,
@@ -955,8 +957,8 @@ unsafe fn bt_advance_array_keys(
 ///
 /// # Safety
 /// `tuple` points at a live index tuple on a page pinned+locked by caller.
-pub(crate) unsafe fn bt_checkkeys<const ARRAY_KEYS: bool>(
-    rel: &Relation<'_>,
+pub(crate) unsafe fn bt_checkkeys<const ARRAY_KEYS: bool, R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     pstate: &mut BtReadPageState<'_>,
     tuple: ITup,
@@ -969,7 +971,7 @@ pub(crate) unsafe fn bt_checkkeys<const ARRAY_KEYS: bool>(
     debug_assert!(ARRAY_KEYS || so.numArrayKeys == 0);
     debug_assert!(!pstate.forcenonrequired || ARRAY_KEYS);
 
-    let res = bt_check_compare::<ARRAY_KEYS>(
+    let res = bt_check_compare::<ARRAY_KEYS, _>(
         rel,
         so,
         dir,
@@ -1003,8 +1005,8 @@ pub(crate) unsafe fn bt_checkkeys<const ARRAY_KEYS: bool>(
 ///
 /// # Safety
 /// `finaltup` per [`bt_checkkeys`].
-pub(crate) unsafe fn bt_scanbehind_checkkeys(
-    rel: &Relation<'_>,
+pub(crate) unsafe fn bt_scanbehind_checkkeys<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     dir: ScanDirection,
     finaltup: ITup,
@@ -1041,8 +1043,8 @@ pub(crate) unsafe fn bt_scanbehind_checkkeys(
 
 // _bt_oppodir_checkkeys: false when an inequality required in the opposite
 // direction only isn't satisfied by finaltup.
-unsafe fn bt_oppodir_checkkeys(
-    rel: &Relation<'_>,
+unsafe fn bt_oppodir_checkkeys<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     dir: ScanDirection,
     finaltup: ITup,
@@ -1054,7 +1056,7 @@ unsafe fn bt_oppodir_checkkeys(
     let mut continuescan = true;
     debug_assert!(so.numArrayKeys > 0);
 
-    bt_check_compare::<false>(
+    bt_check_compare::<false, _>(
         rel,
         so,
         flipped,
@@ -1203,8 +1205,8 @@ unsafe fn bt_check_rowcompare(
 /// As [`bt_checkkeys`].
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-unsafe fn bt_check_compare<const ADVANCE_NONREQUIRED: bool>(
-    rel: &Relation<'_>,
+unsafe fn bt_check_compare<const ADVANCE_NONREQUIRED: bool, R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     dir: ScanDirection,
     tuple: ITup,
@@ -1214,7 +1216,7 @@ unsafe fn bt_check_compare<const ADVANCE_NONREQUIRED: bool>(
     ikey: &mut i32,
     frame: &mut OrderProcFrame,
 ) -> PgResult<bool> {
-    let tupdesc: &TupleDescData<'_> = &rel.rd_att;
+    let tupdesc: &TupleDescData<'_> = rel.tupdesc();
     *continuescan = true;
 
     while *ikey < so.numberOfKeys {
@@ -1343,8 +1345,8 @@ unsafe fn bt_check_compare<const ADVANCE_NONREQUIRED: bool>(
 #[cold]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-unsafe fn check_compare_sentinel(
-    rel: &Relation<'_>,
+unsafe fn check_compare_sentinel<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     tuple: ITup,
     tupnatts: i32,
@@ -1362,8 +1364,8 @@ unsafe fn check_compare_sentinel(
 
 #[cold]
 #[inline(never)]
-unsafe fn advance_nonrequired_cold(
-    rel: &Relation<'_>,
+unsafe fn advance_nonrequired_cold<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     tuple: ITup,
     tupnatts: i32,
@@ -1388,8 +1390,8 @@ pub(crate) fn look_ahead_targetdistance(targetdistance: i32) -> i32 {
 //
 // # Safety
 // As [`bt_checkkeys`]; pstate.page items live for the call.
-unsafe fn bt_checkkeys_look_ahead(
-    rel: &Relation<'_>,
+unsafe fn bt_checkkeys_look_ahead<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     pstate: &mut BtReadPageState<'_>,
     tupnatts: i32,
@@ -1440,7 +1442,7 @@ pub(crate) unsafe fn datum_image_eq(a: Datum, b: Datum, attbyval: bool, attlen: 
     if attbyval {
         // Compare at attlen width: a formed-then-deformed datum may differ
         // from the original in the upper bits (C 49315de).
-        let (x, y) = (a.as_usize(), b.as_usize());
+        let (x, y) = (a.as_u64(), b.as_u64());
         return match attlen {
             1 => x as u8 == y as u8,
             2 => x as u16 == y as u16,
@@ -1507,8 +1509,12 @@ fn varlena_image_eq(a: &[u8], b: &[u8]) -> bool {
 ///
 /// # Safety
 /// As [`bt_checkkeys`] for both tuples.
-pub unsafe fn bt_keep_natts_fast(rel: &Relation<'_>, lastleft: ITup, firstright: ITup) -> i32 {
-    let tupdesc: &TupleDescData<'_> = &rel.rd_att;
+pub unsafe fn bt_keep_natts_fast<R: BtReadRel + ?Sized>(
+    rel: &R,
+    lastleft: ITup,
+    firstright: ITup,
+) -> i32 {
+    let tupdesc: &TupleDescData<'_> = rel.tupdesc();
     let keysz = rel.indnkeyatts();
     let mut keepnatts = 1;
 
@@ -1535,13 +1541,13 @@ pub unsafe fn bt_keep_natts_fast(rel: &Relation<'_>, lastleft: ITup, firstright:
 ///
 /// # Safety
 /// Page in `pstate` is pinned+locked by caller.
-pub(crate) unsafe fn bt_set_startikey(
-    rel: &Relation<'_>,
+pub(crate) unsafe fn bt_set_startikey<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     pstate: &mut BtReadPageState<'_>,
     frame: &mut OrderProcFrame,
 ) -> PgResult<()> {
-    let tupdesc: &TupleDescData<'_> = &rel.rd_att;
+    let tupdesc: &TupleDescData<'_> = rel.tupdesc();
     debug_assert!(!so.scanBehind && !pstate.firstpage && pstate.minoff < pstate.maxoff);
     debug_assert!(pstate.startikey == 0);
 
@@ -1728,7 +1734,10 @@ unsafe fn set_has_garbage(page: &PageRef<'_>) {
 }
 
 /// _bt_killitems.
-pub(crate) fn bt_killitems(rel: &Relation<'_>, so: &mut BTScanOpaqueData<'_>) -> PgResult<()> {
+pub(crate) fn bt_killitems<R: BtReadRel + ?Sized>(
+    rel: &R,
+    so: &mut BTScanOpaqueData<'_>,
+) -> PgResult<()> {
     let num_killed = so.numKilled as usize;
     debug_assert!(num_killed > 0);
     debug_assert!(BTScanPosIsValid(&so.currPos));
@@ -1824,6 +1833,69 @@ pub(crate) fn bt_killitems(rel: &Relation<'_>, so: &mut BTScanOpaqueData<'_>) ->
         None => bufmgr::lock_buffer::call(buf, bufmgr::BUFFER_LOCK_UNLOCK)?,
     }
     Ok(())
+}
+
+/// _bt_killitems' drop-pin path for a leaf a reader left long ago and holds no pin on: `buf` is the leaf, pinned by the
+/// caller (read by block, no descent), read by the reader at page LSN `lsn` (under its read lock, `lsnWithPin`). Under a
+/// share lock, when the LSN is unchanged (no split, no deletion and no VACUUM moved an entry since; the index must be
+/// WAL-logged), each `(offset, heap TID)` of `items` whose entry at that offset still holds the TID is marked LP_DEAD: a
+/// plain tuple whose TID it is, a posting tuple only when each of its TIDs is in `dead` (sorted, the heap TIDs whose HOT
+/// chains are all dead). Then BTP_HAS_GARBAGE and the hint dirty. Returns whether an entry was marked.
+pub fn bt_kill_by_block(
+    buf: ::types_core::Buffer,
+    lsn: XLogRecPtr,
+    items: &[(OffsetNumber, ItemPointerData)],
+    dead: &[ItemPointerData],
+) -> PgResult<bool> {
+    let in_dead = |t: &ItemPointerData| dead.binary_search_by(|d| ItemPointerCompare(d, t).cmp(&0)).is_ok();
+    bufmgr::lock_buffer::call(buf, BT_READ)?;
+    if bufmgr::buffer_get_lsn_atomic::call(buf) != lsn {
+        bufmgr::lock_buffer::call(buf, bufmgr::BUFFER_LOCK_UNLOCK)?;
+        return Ok(false);
+    }
+    // SAFETY: pinned by the caller and share-locked just above.
+    let page = unsafe { PageRef::from_raw(bufmgr::buffer_get_page::call(buf)) };
+    let opaque = page_opaque(&page);
+    let mut killedsomething = false;
+    if ::types_nbtree::P_ISLEAF(&opaque) && !::types_nbtree::P_IGNORE(&opaque) {
+        let minoff = P_FIRSTDATAKEY(&opaque);
+        let maxoff = page.max_offset_number();
+        for &(offnum, tid) in items {
+            if offnum < minoff || offnum > maxoff {
+                continue;
+            }
+            let iid = page.item_id(offnum);
+            if !iid.is_normal() {
+                continue; // LP_DEAD already, or not an entry
+            }
+            let ituple = page_item(&page, iid);
+            // SAFETY: an item of the pinned, locked leaf.
+            let killtuple = unsafe {
+                if bt_tuple_is_posting(ituple) {
+                    let n = bt_tuple_get_nposting(ituple);
+                    (0..n).any(|j| ItemPointerEquals(&bt_tuple_get_posting_n(ituple, j), &tid))
+                        && (0..n).all(|j| in_dead(&bt_tuple_get_posting_n(ituple, j)))
+                } else {
+                    ItemPointerEquals(&crate::itup::t_tid(ituple), &tid)
+                }
+            };
+            if killtuple {
+                // SAFETY: offnum in [minoff, maxoff] of the pinned, locked page.
+                unsafe { mark_itemid_dead(&page, offnum) };
+                killedsomething = true;
+            }
+        }
+    }
+    if killedsomething {
+        // SAFETY: page pinned+locked; BTP_HAS_GARBAGE is a hint bit.
+        unsafe { set_has_garbage(&page) };
+        if let Err(e) = bufmgr::mark_buffer_dirty_hint::call(buf, true) {
+            let _ = bufmgr::lock_buffer::call(buf, bufmgr::BUFFER_LOCK_UNLOCK);
+            return Err(e);
+        }
+    }
+    bufmgr::lock_buffer::call(buf, bufmgr::BUFFER_LOCK_UNLOCK)?;
+    Ok(killedsomething)
 }
 
 /// _bt_truncate: pivot tuple for a leaf split, suffix-truncated where the
@@ -2253,10 +2325,19 @@ pub(crate) fn bt_end_vacuum_key(key: (::types_core::Oid, ::types_core::Oid)) -> 
 /// _bt_mkscankey; `itup: None` is the utility-statement arm. C divergence:
 /// Keys past tupnatts are SK_ISNULL with unset arguments, per C.
 pub fn bt_mkscankey(rel: &Relation<'_>, itup: Option<ITup>) -> PgResult<BtScanInsert> {
+    let mut key = BtScanInsert::new();
+    bt_mkscankey_into(rel, itup, &mut key)?;
+    Ok(key)
+}
+
+/// D4560: `bt_mkscankey` into the caller's fresh key (`BtScanInsert::new()`, nothing pushed). The key holds
+/// INDEX_MAX_KEYS entries (~2.3 KB) and has a Drop, so returning it by value copied it twice per index insertion (into
+/// the result, then out of it at the `?`); C pallocs it and passes the pointer.
+pub fn bt_mkscankey_into(rel: &Relation<'_>, itup: Option<ITup>, key: &mut BtScanInsert) -> PgResult<()> {
+    debug_assert!(key.keys_len() == 0);
     let tupdesc: &TupleDescData<'_> = &rel.rd_att;
     let indnkeyatts = rel.indnkeyatts();
 
-    let mut key = BtScanInsert::new();
     // SAFETY: caller guarantees `itup` points at a live index tuple.
     let tupnatts = match itup {
         Some(itup) => {
@@ -2314,7 +2395,7 @@ pub fn bt_mkscankey(rel: &Relation<'_>, itup: Option<ITup>) -> PgResult<BtScanIn
     // its untruncated prefix; the remaining entries stay initialized for the
     // utility arms.
     key.set_keysz((indnkeyatts as usize).min(tupnatts as usize));
-    Ok(key)
+    Ok(())
 }
 
 /// _bt_check_natts (nbtutils.c).

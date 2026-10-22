@@ -1,0 +1,11 @@
+-- regress-full-encoding-011
+-- UPDATE toast_3b_utf8 SET c = c || test_bytea_to_text('\xe280');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=17499 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=op654(v1.1, fn17482(c17:'\xe2\x80')), 2j=v1.-1)
+  write UPDATE rel=17499 rti=1 natts=1 indexes=() set=(1)
+  outs 1=vl:call1258 2=fx6:row
+mapped: ModifyTable SeqScan

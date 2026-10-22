@@ -1,0 +1,13 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/granule_source/raw.rs
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::reserve	2
+ir-only	alloc::boxed::Box<T>::from_raw	3
+ir-only	alloc::sync::Arc<T>::from_raw	3
+macro	std::vec	1
+method	slice::to_vec	4
+method	std::boxed::Box::new	1
+method	std::vec::Vec::into_boxed_slice	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	2
+type	std::vec::Vec	1

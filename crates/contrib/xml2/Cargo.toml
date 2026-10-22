@@ -1,0 +1,23 @@
+[package]
+name = "xml2"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "xml2"
+path = "src/lib.rs"
+
+[dependencies]
+datum = { path = "../../_support/types/datum" }
+mcx = { path = "../../_support/mcx" }
+types_error = { path = "../../_support/types/types_error" }
+types_fmgr = { path = "../../_support/types/fmgr" }
+adt_xml = { path = "../../backend/utils/adt/xml" }
+spi = { path = "../../backend/executor/spi" }
+elog = { path = "../../backend/utils/error/elog" }
+funcapi = { path = "../../backend/utils/fmgr/funcapi" }
+varlena = { path = "../../backend/utils/adt/varlena" }
+dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
+
+[dev-dependencies]

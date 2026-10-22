@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use vfs::VfsFd;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use lwlock::{LWLockAcquire, LWLockAcquireOrWait, LWLockConditionalAcquire, LWLockRelease, LW_EXCLUSIVE, LW_SHARED};
 use types_core::{TimeLineID, XLogRecPtr, XLogSegNo};
 use types_error::{
@@ -18,45 +18,28 @@ use crate::*;
 
 #[track_caller]
 fn loc(func: &'static str) -> ErrorLocation {
-    // pgrust is Rust: report where in OUR source this was raised.
-    // #[track_caller] resolves to the call site, not this helper.
     let site = core::panic::Location::caller();
     ErrorLocation::new(site.file(), site.line() as i32, func)
 }
 
 thread_local! {
-    // (Write, Flush) — private copy of the shared log write/flush results.
     pub(crate) static LOGWRT_RESULT: Cell<(XLogRecPtr, XLogRecPtr)> = const { Cell::new((0, 0)) };
-    // C's per-backend `openLogFile`. The C process model never closes this
-    // fd before backend exit — process death reclaims it (xlog.c has no
-    // at-exit close). Backends here are THREADS, so the holder itself is the
-    // close guard: VfsFd's Drop runs on every thread-death path (clean
-    // proc_exit unwind, FATAL, quickdie's exit_thread_raw, TLS teardown) and
-    // releases through the vfs that minted the fd (finding F1b). Only this
-    // thread's own descriptor is involved — walwriter/checkpointer keep
-    // theirs until THEIR thread ends, matching C's per-process scope.
-    // (Without the guard, every DML backend leaked its WAL segment fd:
-    // Thermite server-soak finding, ~1 host fd per connection.)
+    // The C process model never closes this fd before backend exit — process death reclaims it (xlog.c has no at-exit close).
+    // Backends here are THREADS, so the holder itself is the close guard: VfsFd's Drop runs on every thread-death path.
     static OPEN_LOG_FILE: RefCell<Option<VfsFd>> = const { RefCell::new(None) };
     static OPEN_LOG_SEG_NO: Cell<XLogSegNo> = const { Cell::new(0) };
     static OPEN_LOG_TLI: Cell<TimeLineID> = const { Cell::new(0) };
     pub(crate) static LOCAL_MIN_RECOVERY_POINT: Cell<XLogRecPtr> = const { Cell::new(0) };
     pub(crate) static LOCAL_MIN_RECOVERY_POINT_TLI: Cell<TimeLineID> = const { Cell::new(0) };
     static UPDATE_MIN_RECOVERY_POINT: Cell<bool> = const { Cell::new(true) };
-    // wake_wal_senders (xlog.c): set after an fsync in XLogWrite, consumed at the
-    // XLogWrite / XLogBackgroundFlush tails. Per-backend like C's global (set and
-    // read within one flushing backend).
     static WAKE_WAL_SENDERS: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Raw-fd view of C's `openLogFile` (-1 = no open WAL segment). Ownership
-/// stays with the OPEN_LOG_FILE guard; callers must not close this fd
-/// directly — deliberate closes go through [`XLogFileClose`].
+/// Callers must not close this fd directly — deliberate closes go through [`XLogFileClose`].
 fn open_log_file() -> i32 {
     OPEN_LOG_FILE.with(|c| c.borrow().as_ref().map_or(-1, |g| g.as_raw_fd()))
 }
 
-/// C's `openLogFile = fd` after XLogFileInit/XLogFileOpen.
 fn set_open_log_file(raw: i32) {
     debug_assert!(raw >= 0);
     // SAFETY: `raw` was just minted by BasicOpenFile (vfs::open) on this
@@ -64,27 +47,20 @@ fn set_open_log_file(raw: i32) {
     // is TLS-bound, honoring VfsFd's thread-affinity contract.
     let guard = unsafe { VfsFd::from_raw(raw) };
     let prev = OPEN_LOG_FILE.with(|c| c.borrow_mut().replace(guard));
-    // The write paths always XLogFileClose() before opening the next
-    // segment; if that invariant ever broke, dropping `prev` still closes
-    // the orphaned descriptor rather than leaking it.
+    // The write paths always XLogFileClose() before opening the next segment.
     debug_assert!(prev.is_none(), "WAL segment fd replaced while still open");
 }
 
-// WalSndWakeupRequest() (walsender.h).
 fn WalSndWakeupRequest() {
     WAKE_WAL_SENDERS.set(true);
 }
 
-// WalSndWakeupProcessRequests(physical, logical) (walsender.h). The
-// WAKE_WAL_SENDERS early-out keeps read-only backends (no WAL fsync) off the
-// wakeup machinery entirely; the seam is skipped when walsender is unlinked.
 fn WalSndWakeupProcessRequests(physical: bool, logical: bool) {
     if !WAKE_WAL_SENDERS.get() {
         return;
     }
     WAKE_WAL_SENDERS.set(false);
-    // is_installed() first: standalone transam_xlog tests do not link walsender
-    // (nor install GUCs), so short-circuit before reading max_wal_senders.
+    // Standalone transam_xlog tests do not link walsender (nor install GUCs), so short-circuit before reading max_wal_senders.
     if walsender_seams::wal_snd_wakeup::is_installed()
         && guc_tables::vars::max_wal_senders.read() > 0
     {
@@ -93,7 +69,7 @@ fn WalSndWakeupProcessRequests(physical: bool, logical: bool) {
 }
 
 // Flush is read before Write with an intervening barrier so Flush always
-// trails the Write value seen (C's RefreshXLogWriteResult).
+// trails the Write value seen.
 pub(crate) fn RefreshXLogWriteResult() {
     let ctl = XLogCtl();
     let flush = ctl.logFlushResult.load(Acquire);
@@ -105,9 +81,6 @@ pub(crate) fn set_logwrt_result(write: XLogRecPtr, flush: XLogRecPtr) {
     LOGWRT_RESULT.set((write, flush));
 }
 
-// wait_event.h, PG_WAIT_IO class: the ids are the positions in the
-// waitevent crate's IO name table (pgstat_get_wait_event(PG_WAIT_IO | 80)
-// == "WalWrite").
 const PG_WAIT_IO: u32 = 0x0A00_0000;
 const WAIT_EVENT_WAL_COPY_READ: u32 = PG_WAIT_IO | 70;
 const WAIT_EVENT_WAL_COPY_SYNC: u32 = PG_WAIT_IO | 71;
@@ -118,10 +91,6 @@ const WAIT_EVENT_WAL_SYNC: u32 = PG_WAIT_IO | 78;
 const WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN: u32 = PG_WAIT_IO | 79;
 const WAIT_EVENT_WAL_WRITE: u32 = PG_WAIT_IO | 80;
 
-// pgstat_report_wait_start/end (wait_event.h): the WAL file I/O of xlog.c is
-// bracketed so pg_stat_activity.wait_event shows WALWrite/WALSync/... while
-// the syscall runs. The seam is uninstalled in unit tests (no backend
-// status storage), where the report is a no-op.
 #[inline]
 pub(crate) fn report_wait_start(wait_event_info: u32) {
     if waitevent_seams::pgstat_report_wait_start::is_installed() {
@@ -136,12 +105,6 @@ pub(crate) fn report_wait_end() {
     }
 }
 
-// assign_wal_sync_method (xlog.c:8712-8738): a changed sync method
-// invalidates the open-flag/fsync posture of the open segment; fsync it
-// under WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN and close it if the open flags
-// change. An fsync failure is ereport(PANIC, errcode_for_file_access(),
-// "could not fsync file \"%s\": %m") — the structured PANIC (log line +
-// crash choreography), not a raw thread panic.
 pub(crate) fn assign_wal_sync_method(new_val: i32, _extra: Option<&guc_tables::GucHookExtra>) {
     if wal_sync_method() != new_val && open_log_file() >= 0 {
         report_wait_start(WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN);
@@ -152,7 +115,7 @@ pub(crate) fn assign_wal_sync_method(new_val: i32, _extra: Option<&guc_tables::G
             let _ = ereport(PANIC)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not fsync file \"{xlogfname}\": %m"))
+                .errmsg(format!("could not fsync file \"{xlogfname}\": {PCT_M}"))
                 .finish(loc("assign_wal_sync_method"));
             unreachable!("ereport(PANIC) returned");
         }
@@ -167,11 +130,6 @@ fn wal_sync_method() -> i32 {
     guc_tables::vars::wal_sync_method.read()
 }
 
-/// M4 walwriter job overlay: stamp wal_sync_method into the EXECUTING
-/// worker's cell with the assign-hook semantics — a changed method
-/// invalidates the open segment's sync posture, so the open WAL file (per
-/// worker, like C's per-backend openLogFile) is fsync'd + closed first
-/// (assign_wal_sync_method). Raw var writes must not bypass that.
 pub fn stamp_wal_sync_method(new_val: i32) {
     assign_wal_sync_method(new_val, None);
     guc_tables::vars::wal_sync_method.write(new_val);
@@ -185,12 +143,20 @@ fn count_wal_io(io_context: pgstat::io::IOContext, io_op: pgstat::io::IOOp, star
     pgstat::io::pgstat_count_io_op_time(pgstat::io::IOObject::Wal, io_context, io_op, start_ns, 1, bytes);
 }
 
-// get_sync_bit (xlog.c:8654-8700): the extra open(2) flags for a WAL
-// segment from wal_sync_method, fsync and debug_io_direct.
+// xlog.c:3226-3232: the temp segment opens with PG_O_DIRECT under
+// debug_io_direct=wal_init.
+pub(crate) fn xlog_init_open_flags() -> i32 {
+    let flags = libc::O_RDWR | libc::O_CREAT | libc::O_EXCL;
+    if fd::io_direct_flags() & types_storage::IO_DIRECT_WAL_INIT != 0 {
+        flags | vfs::PG_O_DIRECT
+    } else {
+        flags
+    }
+}
+
 pub(crate) fn get_sync_bit(method: i32) -> i32 {
-    // Use O_DIRECT if requested, except in the walreceiver process: the
-    // startup process reads its WAL right after it is written, and the
-    // walreceiver performs unaligned writes, which don't work with O_DIRECT.
+    // Except in the walreceiver process: the startup process reads its WAL right
+    // after it is written, and the walreceiver performs unaligned writes, which don't work with O_DIRECT.
     let o_direct_flag = if fd::io_direct_flags() & types_storage::IO_DIRECT_WAL != 0
         && miscinit::GetMyBackendType() != types_core::BackendType::WalReceiver
     {
@@ -199,7 +165,6 @@ pub(crate) fn get_sync_bit(method: i32) -> i32 {
         0
     };
 
-    // If fsync is disabled, never open in sync mode.
     if !init_small::globals::enableFsync() {
         return o_direct_flag;
     }
@@ -255,7 +220,7 @@ pub fn issue_xlog_fsync(fd: i32, segno: XLogSegNo, tli: TimeLineID) -> PgResult<
         return ereport(PANIC)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(fsync_failure_message(method).replace("%s", &fname))
+            .errmsg(fsync_failure_message(method).replace("%m", &format!("{PCT_M}")).replace("%s", &fname))
             .finish(loc("issue_xlog_fsync"));
     }
     report_wait_end();
@@ -282,7 +247,6 @@ pub(crate) fn InstallXLogFileSegment(
     if !find_free {
         fd::durable_unlink(&path, types_error::DEBUG1).ok();
     } else {
-        // stat(2) existence probe, as in C's InstallXLogFileSegment.
         let mut fi = fd::FileInfo::zeroed();
         while fd::pg_stat(&path, &mut fi) == 0 {
             if *segno >= max_segno {
@@ -303,9 +267,11 @@ pub(crate) fn InstallXLogFileSegment(
 }
 
 // xlog.c:3227 names the temp segment by getpid(): backends are threads of one
-// process here, so the per-backend MyProcPid keeps concurrent creators apart.
+// process here, so the tag is unique per call, not per process or per MyProcPid
+// (P9: a backend's segment switch and the checkpointer's preallocation unlinked
+// each other's file; threads that share a MyProcPid create segments too).
 pub(crate) fn xlog_temp_path() -> String {
-    format!("{XLOGDIR}/xlogtemp.{}", init_small::globals::MyProcPid())
+    format!("{XLOGDIR}/xlogtemp.{}", init_small::globals::temp_file_tag())
 }
 
 fn XLogFileInitInternal(
@@ -323,15 +289,13 @@ fn XLogFileInitInternal(
         Ok(f) if f >= 0 => return Ok(f),
         res => {
             let _ = res?;
-            // As in C: only ENOENT from the failed open falls through to
-            // segment creation; anything else (EACCES, a directory in the
-            // way, ...) reports the open failure.
+            // Only ENOENT from the failed open falls through to segment creation.
             let en = fd::get_errno();
             if en != libc::ENOENT {
                 return ereport(ERROR)
                     .with_saved_errno(en)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not open file \"{path}\": %m"))
+                    .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                     .finish(loc("XLogFileInitInternal"))
                     .map(|_| -1);
             }
@@ -343,19 +307,17 @@ fn XLogFileInitInternal(
     let tmppath = xlog_temp_path();
     let _ = fd::pg_unlink(&tmppath);
 
-    let f = fd::BasicOpenFile(&tmppath, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL)?;
+    let f = fd::BasicOpenFile(&tmppath, xlog_init_open_flags())?;
     if f < 0 {
         return ereport(ERROR)
             .with_saved_errno(fd::get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{tmppath}\": %m"))
+            .errmsg(format!("could not create file \"{tmppath}\": {PCT_M}"))
             .finish(loc("XLogFileInitInternal"))
             .map(|_| -1);
     }
 
     let wal_segsz = wal_segment_size();
-    // xlog.c:3258-3291: save_errno; "if write didn't set errno, assume no
-    // disk space".
     let mut save_errno: i32 = 0;
     let io_start = wal_io_start();
     let init_zero = guc_tables::vars::wal_init_zero.read();
@@ -367,7 +329,6 @@ fn XLogFileInitInternal(
             save_errno = if en != 0 { en } else { libc::ENOSPC };
         }
     } else {
-        // One byte at segment end.
         let rc = fd::pg_pwrite(f, b"\0", (wal_segsz - 1) as i64);
         if rc != 1 {
             let en = fd::get_errno();
@@ -376,21 +337,16 @@ fn XLogFileInitInternal(
     }
     report_wait_end();
     if save_errno != 0 {
-        // If we fail to make the file, delete it to release disk space.
         let _ = fd::pg_unlink(&tmppath);
-        // fd owned here.
         fd::pg_close(f);
         return ereport(ERROR)
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not write to file \"{tmppath}\": %m"))
+            .errmsg(format!("could not write to file \"{tmppath}\": {PCT_M}"))
             .finish(loc("XLogFileInitInternal"))
             .map(|_| -1);
     }
 
-    // upstream 13f940b4b56f (18.6): Fix pgstat_count_io_op_time() calls passing incorrect information
-    // A full segment worth of data is written when using wal_init_zero. One
-    // byte is written when not using it.
     count_wal_io(
         pgstat::io::IOContext::IOCONTEXT_INIT,
         pgstat::io::IOOp::Write,
@@ -401,27 +357,23 @@ fn XLogFileInitInternal(
     let io_start = wal_io_start();
     report_wait_start(WAIT_EVENT_WAL_INIT_SYNC);
     if fd::pg_fsync(f) != 0 {
-        // xlog.c:3306-3315: save_errno; close(fd); errno = save_errno;
-        // ereport(ERROR, errcode_for_file_access(), "...: %m").
         let en = fd::get_errno();
-        // fd owned here.
         fd::pg_close(f);
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{tmppath}\": %m"))
+            .errmsg(format!("could not fsync file \"{tmppath}\": {PCT_M}"))
             .finish(loc("XLogFileInitInternal"))
             .map(|_| -1);
     }
     report_wait_end();
     count_wal_io(pgstat::io::IOContext::IOCONTEXT_INIT, pgstat::io::IOOp::Fsync, io_start, 0);
-    // fd owned here.
     if fd::pg_close(f) != 0 {
         let en = fd::get_errno();
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{tmppath}\": %m"))
+            .errmsg(format!("could not close file \"{tmppath}\": {PCT_M}"))
             .finish(loc("XLogFileInitInternal"))
             .map(|_| -1);
     }
@@ -458,7 +410,7 @@ fn reopen_initialized_wal(path: &str) -> PgResult<i32> {
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{path}\": %m"))
+            .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
             .finish(loc("XLogFileInit"))
             .map(|_| -1);
     }
@@ -484,7 +436,7 @@ pub(crate) fn XLogFileCopy(
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{path}\": %m"))
+            .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
             .finish(loc("XLogFileCopy"));
     }
 
@@ -499,7 +451,7 @@ pub(crate) fn XLogFileCopy(
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{tmppath}\": %m"))
+            .errmsg(format!("could not create file \"{tmppath}\": {PCT_M}"))
             .finish(loc("XLogFileCopy"));
     }
 
@@ -518,14 +470,12 @@ pub(crate) fn XLogFileCopy(
             // SAFETY: srcfd open; buffer holds >= nread bytes.
             let r = unsafe { libc::read(srcfd, buffer.as_mut_ptr().cast(), nread as usize) };
             if r != nread as isize {
-                // xlog.c:3474-3484: a failed read is errcode_for_file_access()
-                // + "%m"; a short read is ERRCODE_DATA_CORRUPTED.
                 if r < 0 {
                     let en = fd::get_errno();
                     return ereport(ERROR)
                         .with_saved_errno(en)
                         .errcode_for_file_access()
-                        .errmsg(format!("could not read file \"{path}\": %m"))
+                        .errmsg(format!("could not read file \"{path}\": {PCT_M}"))
                         .finish(loc("XLogFileCopy"));
                 }
                 return ereport(ERROR)
@@ -540,14 +490,12 @@ pub(crate) fn XLogFileCopy(
         // SAFETY: f open; buffer is XLOG_BLCKSZ bytes.
         let w = unsafe { libc::write(f, buffer.as_ptr().cast(), XLOG_BLCKSZ) };
         if w != XLOG_BLCKSZ as isize {
-            // xlog.c:3490-3502: unlink the partial file; "if write didn't
-            // set errno, assume problem is no disk space".
             let en = fd::get_errno();
             let _ = std::fs::remove_file(&tmppath);
             return ereport(ERROR)
                 .with_saved_errno(if en != 0 { en } else { libc::ENOSPC })
                 .errcode_for_file_access()
-                .errmsg(format!("could not write to file \"{tmppath}\": %m"))
+                .errmsg(format!("could not write to file \"{tmppath}\": {PCT_M}"))
                 .finish(loc("XLogFileCopy"));
         }
         report_wait_end();
@@ -556,13 +504,12 @@ pub(crate) fn XLogFileCopy(
 
     report_wait_start(WAIT_EVENT_WAL_COPY_SYNC);
     if fd::pg_fsync(f) != 0 {
-        // C xlog.c:3510: data_sync_elevel(ERROR) — PANIC at default
-        // data_sync_retry=off (post-fsyncgate: never retry a failed fsync).
+        // PANIC at default data_sync_retry=off (never retry a failed fsync).
         let en = fd::get_errno();
         return ereport(fd::data_sync_elevel(ERROR))
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{tmppath}\": %m"))
+            .errmsg(format!("could not fsync file \"{tmppath}\": {PCT_M}"))
             .finish(loc("XLogFileCopy"));
     }
     report_wait_end();
@@ -571,7 +518,7 @@ pub(crate) fn XLogFileCopy(
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{tmppath}\": %m"))
+            .errmsg(format!("could not close file \"{tmppath}\": {PCT_M}"))
             .finish(loc("XLogFileCopy"));
     }
     if fd::CloseTransientFile(srcfd) != 0 {
@@ -579,7 +526,7 @@ pub(crate) fn XLogFileCopy(
         return ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{path}\": %m"))
+            .errmsg(format!("could not close file \"{path}\": {PCT_M}"))
             .finish(loc("XLogFileCopy"));
     }
 
@@ -603,7 +550,7 @@ pub fn XLogFileOpen(segno: XLogSegNo, tli: TimeLineID) -> PgResult<i32> {
             ereport(PANIC)
                 .with_saved_errno(en)
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m"))
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                 .finish(loc("XLogFileOpen"))
                 .map(|_| -1)
         }
@@ -626,7 +573,7 @@ fn close_wal_file(f: i32) -> PgResult<()> {
         return ereport(PANIC)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{fname}\": %m"))
+            .errmsg(format!("could not close file \"{fname}\": {PCT_M}"))
             .finish(loc("XLogFileClose"));
     }
     fd::ReleaseExternalFD();
@@ -656,7 +603,6 @@ pub(crate) fn PreallocXlogFiles(endptr: XLogRecPtr, tli: TimeLineID) -> PgResult
     Ok(())
 }
 
-// (Write, Flush) request pair.
 pub(crate) fn XLogWrite(write_rqst: (XLogRecPtr, XLogRecPtr), tli: TimeLineID, flexible: bool) -> PgResult<()> {
     let ctl = XLogCtl();
     debug_assert!(init_small::globals::CritSectionCount() > 0);
@@ -733,9 +679,6 @@ pub(crate) fn XLogWrite(write_rqst: (XLogRecPtr, XLogRecPtr), tli: TimeLineID, f
                 );
                 report_wait_end();
                 if written <= 0 {
-                    // xlog.c:2440-2452: EINTR retries; otherwise
-                    // ereport(PANIC, errcode_for_file_access(), "...: %m")
-                    // (ENOSPC -> SQLSTATE 53100, strerror text).
                     let en = fd::get_errno();
                     if en == libc::EINTR {
                         continue;
@@ -745,12 +688,11 @@ pub(crate) fn XLogWrite(write_rqst: (XLogRecPtr, XLogRecPtr), tli: TimeLineID, f
                         .with_saved_errno(en)
                         .errcode_for_file_access()
                         .errmsg(format!(
-                            "could not write to log file \"{fname}\" at offset {startoffset}, length {nleft}: %m"
+                            "could not write to log file \"{fname}\" at offset {startoffset}, length {nleft}: {PCT_M}"
                         ))
                         .finish(loc("XLogWrite"));
                 }
 
-                // upstream 13f940b4b56f (18.6): Fix pgstat_count_io_op_time() calls passing incorrect information
                 count_wal_io(
                     pgstat::io::IOContext::IOCONTEXT_NORMAL,
                     pgstat::io::IOOp::Write,
@@ -826,10 +768,8 @@ pub(crate) fn XLogWrite(write_rqst: (XLogRecPtr, XLogRecPtr), tli: TimeLineID, f
             }
             issue_xlog_fsync(open_log_file(), OPEN_LOG_SEG_NO.get(), tli)?;
         }
-        // C signals the walsender wakeup OUTSIDE the sync-method guard
-        // (xlog.c:2553): with wal_sync_method=open/open_dsync the flush
-        // advances without an explicit fsync and walsenders must still be
-        // woken, or sync-rep/catchup waits stall until the next write.
+        // With wal_sync_method=open/open_dsync the flush advances without an
+        // explicit fsync and walsenders must still be woken, or sync-rep/catchup waits stall.
         WalSndWakeupRequest();
         LOGWRT_RESULT.set((lw_write, lw_write));
     }
@@ -848,10 +788,6 @@ pub(crate) fn XLogWrite(write_rqst: (XLogRecPtr, XLogRecPtr), tli: TimeLineID, f
     ctl.logWriteResult.store(lw_write, Release);
     ctl.logFlushResult.store(lw_flush, Release);
 
-    // C's XLogWrite only REQUESTS the walsender wakeup (xlog.c:2482/2554);
-    // XLogFlush and XLogBackgroundFlush process it after LWLockRelease
-    // (WALWriteLock) + END_CRIT_SECTION (2913/3088). AdvanceXLInsertBuffer's
-    // write leaves the request for the caller's next processing site.
     Ok(())
 }
 
@@ -890,6 +826,13 @@ pub(crate) fn UpdateMinRecoveryPoint(lsn: XLogRecPtr, force: bool) -> PgResult<(
             UpdateControlFile()?;
             LOCAL_MIN_RECOVERY_POINT.set(new_mrp);
             LOCAL_MIN_RECOVERY_POINT_TLI.set(new_mrp_tli);
+            let _ = elog::elog(
+                types_error::DEBUG2,
+                format!(
+                    "updated min recovery point to {:X}/{:X} on timeline {}",
+                    new_mrp >> 32, new_mrp & 0xFFFF_FFFF, new_mrp_tli
+                ),
+            );
         }
     }
     LWLockRelease(ControlFileLock())?;
@@ -900,7 +843,7 @@ pub(crate) fn UpdateMinRecoveryPoint(lsn: XLogRecPtr, force: bool) -> PgResult<(
 /// [`XLogFlush`] and [`XLogFlushPipelined`]. Returns whether it slept (the
 /// caller then re-waits insertions, as C does).
 ///
-/// The sleep rides `waiter::sleep` (regression negotiated ask §5.3.2):
+/// The sleep rides `waiter::sleep` (GL-FLUSHSIM-1 negotiated ask §5.3.2):
 /// DST-schedulable (virtual clock), and native-equivalent — a pending
 /// unpark can end it early, exactly as C's pg_usleep returns early on
 /// EINTR (the delay is best-effort batching either way).
@@ -932,7 +875,7 @@ pub fn XLogFlush(record: XLogRecPtr) -> PgResult<()> {
     let insert_tli = ctl.InsertTimeLineID.load(Relaxed);
     init_small::globals::StartCriticalSection();
 
-    // regression E-2: every fallible step below sits INSIDE the critical
+    // GL-ERRFIX-1 E-2: every fallible step below sits INSIDE the critical
     // section opened above. Propagating with `?` from here skipped
     // EndCriticalSection and LEAKED CritSectionCount onto the calling thread
     // — and the caller can be a pool worker, whose Fatal arm never resets it,
@@ -973,12 +916,10 @@ pub fn XLogFlush(record: XLogRecPtr) -> PgResult<()> {
                 insertpos = WaitXLogInsertionsToFinish(insertpos);
             }
 
+            let mark = crate::flushpipe::FlushMark::begin();
             XLogWrite((insertpos, insertpos), insert_tli, false)?;
             LWLockRelease(WALWriteLock())?;
-            // regression: this leader's flush may cover pipelined commit
-            // waiters; complete them (after the lock release — wakes must not
-            // lengthen the flush critical path). Knob-OFF cost: one memoized
-            // bool read.
+            drop(mark);
             crate::flushpipe::complete_up_to(LOGWRT_RESULT.get().1);
             break;
         }
@@ -988,8 +929,6 @@ pub fn XLogFlush(record: XLogRecPtr) -> PgResult<()> {
     init_small::globals::EndCriticalSection();
     loop_result?;
 
-    // xlog.c:2912-2913: wake up walsenders now that we've released heavily
-    // contended locks.
     WalSndWakeupProcessRequests(true, !crate::insert::RecoveryInProgress());
 
     if LOGWRT_RESULT.get().1 < record {
@@ -1007,21 +946,8 @@ pub fn XLogFlush(record: XLogRecPtr) -> PgResult<()> {
     Ok(())
 }
 
-/// regression — [`XLogFlush`] for the sync-commit call site (xact.c:1502's
-/// `XLogFlush(XactLastRecEnd)`, and ONLY that site; every other flush caller
-/// keeps the incumbent path). Installed as the `xlog_flush_commit` seam.
-///
-/// Disarmed (knob off / no walwriter / no latch) this IS [`XLogFlush`] (one
-/// memoized bool read of overhead). Armed, the ONE behavioral change is the
-/// contended arm: where [`XLogFlush`] joins the WALWriteLock convoy
-/// (`LWLockAcquireOrWait` — the leader-follower herd), this registers the
-/// commit LSN on the pending-flush queue and parks for a DIRECTED completion
-/// ([`crate::flushpipe`]; walwriter is the guaranteed-progress flusher). The
-/// uncontended arm (conditional acquire won) is the incumbent leader half,
-/// line-for-line — including the commit_delay gate, which composes here
-/// exactly as in [`XLogFlush`]. Commit ordering, criticality, and the
-/// non-cancellable wait posture are all unchanged (letter §2: "v1 splits
-/// nothing").
+/// Where [`XLogFlush`] joins the WALWriteLock convoy (`LWLockAcquireOrWait`),
+/// this registers the commit LSN on the pending-flush queue and parks for a directed completion.
 pub fn XLogFlushPipelined(record: XLogRecPtr) -> PgResult<()> {
     if !crate::flushpipe::pipeline_available() {
         return XLogFlush(record);
@@ -1029,7 +955,6 @@ pub fn XLogFlushPipelined(record: XLogRecPtr) -> PgResult<()> {
 
     let ctl = XLogCtl();
 
-    // Parity prelude (XLogFlush).
     if !XLogInsertAllowed() {
         return UpdateMinRecoveryPoint(record, false);
     }
@@ -1040,11 +965,8 @@ pub fn XLogFlushPipelined(record: XLogRecPtr) -> PgResult<()> {
     let insert_tli = ctl.InsertTimeLineID.load(Relaxed);
     init_small::globals::StartCriticalSection();
 
-    // regression (E-2, the "escape being uncounted" half): balance the critical
-    // section on the `?`-escape paths exactly as [`XLogFlush`] above — the loop
-    // runs in a closure so EndCriticalSection is unconditional before any error
-    // from a lock op or XLogWrite propagates out (C's END_CRIT_SECTION is
-    // unconditional and an in-crit ereport promotes to PANIC).
+    // The loop runs in a closure so EndCriticalSection is unconditional before any error
+    // from a lock op or XLogWrite propagates out.
     let loop_result: PgResult<()> = (|| {
         let mut write_rqst_ptr = record;
         loop {
@@ -1059,22 +981,14 @@ pub fn XLogFlushPipelined(record: XLogRecPtr) -> PgResult<()> {
                     write_rqst_ptr = w;
                 }
             });
-            // As in XLogFlush: wait for in-flight insertions BEFORE taking the
-            // write lock, never while holding it.
+            // Wait for in-flight insertions BEFORE taking the write lock, never while holding it.
             let mut insertpos = WaitXLogInsertionsToFinish(write_rqst_ptr);
 
             if !LWLockConditionalAcquire(WALWriteLock(), LW_EXCLUSIVE)? {
-                // A flush is in flight — the pipelining case. Register + park;
-                // the in-flight leader's walk (or walwriter) completes us.
-                // Completed => loop re-reads results and breaks covered.
-                // Retry (liveness re-arm, flusher-death windows) => same loop:
-                // we contend for the lock ourselves next lap, C's
-                // uncovered-follower-becomes-leader shape.
                 let _ = crate::flushpipe::wait_for_flush(record);
                 continue;
             }
 
-            // LEADER arm — XLogFlush's got-the-lock half, verbatim.
             RefreshXLogWriteResult();
             if record <= LOGWRT_RESULT.get().1 {
                 LWLockRelease(WALWriteLock())?;
@@ -1085,9 +999,11 @@ pub fn XLogFlushPipelined(record: XLogRecPtr) -> PgResult<()> {
                 insertpos = WaitXLogInsertionsToFinish(insertpos);
             }
 
+            let mark = crate::flushpipe::FlushMark::begin();
             XLogWrite((insertpos, insertpos), insert_tli, false)?;
             LWLockRelease(WALWriteLock())?;
             crate::flushpipe::count_leader_flush();
+            drop(mark);
             crate::flushpipe::complete_up_to(LOGWRT_RESULT.get().1);
             break;
         }
@@ -1097,8 +1013,6 @@ pub fn XLogFlushPipelined(record: XLogRecPtr) -> PgResult<()> {
     init_small::globals::EndCriticalSection();
     loop_result?;
 
-    // xlog.c:2912-2913: wake up walsenders now that we've released heavily
-    // contended locks.
     WalSndWakeupProcessRequests(true, !crate::insert::RecoveryInProgress());
 
     if LOGWRT_RESULT.get().1 < record {
@@ -1178,13 +1092,8 @@ pub fn XLogSetAsyncXactLSN(async_xact_lsn: XLogRecPtr) {
     }
 }
 
-/// C XLogBackgroundFlush's function-static `lastflush`, extracted to
-/// CALLER-owned state (M4 walwriter migration): job-mode cycles hop pool
-/// workers, and the previous thread-local would reset the flush pacing to
-/// "flush immediately" on every hop, silently defeating
-/// wal_writer_flush_after batching. The thread driver owns one on its
-/// frame — behavior identical to the C static (walwriter is the only
-/// caller).
+/// Job-mode cycles hop pool workers, and a thread-local would reset the flush pacing to
+/// "flush immediately" on every hop, silently defeating wal_writer_flush_after batching.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WalFlushPacing {
     last_flush: i64,
@@ -1196,12 +1105,6 @@ impl WalFlushPacing {
     }
 }
 
-/// The flush-or-defer decision (xlog.c XLogBackgroundFlush's pacing
-/// block), pure for the deterministic unit tests: whether to flush up to
-/// the write request now; advances the pacing clock when it does. C
-/// ordering preserved exactly: flush_after==0 / first call → flush;
-/// wal_writer_delay elapsed → flush; wal_writer_flush_after blocks
-/// accumulated → flush; else defer.
 pub fn wal_flush_pacing_decide(
     pacing: &mut WalFlushPacing,
     now: i64,
@@ -1221,7 +1124,6 @@ pub fn wal_flush_pacing_decide(
     }
 }
 
-/// XLogBackgroundFlush (xlog.c).
 pub fn XLogBackgroundFlush(pacing: &mut WalFlushPacing) -> PgResult<bool> {
     if crate::insert::RecoveryInProgress() {
         return Ok(false);
@@ -1244,12 +1146,6 @@ pub fn XLogBackgroundFlush(pacing: &mut WalFlushPacing) -> PgResult<bool> {
         flexible = false;
     }
 
-    // regression (armed only; knob-OFF cost one memoized bool read):
-    // pipelined commit waiters are SYNC durability requests — raise the
-    // write request to the pending max (which can exceed both LogwrtRqst
-    // and asyncXactLSN: a mid-page commit record bumps neither) and treat
-    // the cycle as flush-forced below, bypassing the async batching
-    // deliberately built into the pacing.
     let pending_force = crate::flushpipe::pending_max()
         .filter(|p| *p > LOGWRT_RESULT.get().1);
     if let Some(p) = pending_force {
@@ -1257,13 +1153,14 @@ pub fn XLogBackgroundFlush(pacing: &mut WalFlushPacing) -> PgResult<bool> {
             write_rqst_write = p;
         }
         flexible = false;
+        let refine = crate::flushpipe::refine();
+        if refine.absorb {
+            pacing.last_flush = timestamp_seams::get_current_timestamp::call();
+            return background_flush_absorb(write_rqst_write, insert_tli, refine.chain);
+        }
     }
 
     if write_rqst_write <= LOGWRT_RESULT.get().1 {
-        // regression safety drain: nothing to flush, but a registrant
-        // covered by an earlier flush may still be parked (e.g. its
-        // completer raced its link — the fence pair makes one side win,
-        // and this cycle is the guaranteed winner's backstop).
         crate::flushpipe::complete_up_to(LOGWRT_RESULT.get().1);
         if open_log_file() >= 0
             && !XLByteInPrevSeg(LOGWRT_RESULT.get().0, OPEN_LOG_SEG_NO.get(), wal_segment_size())
@@ -1279,8 +1176,6 @@ pub fn XLogBackgroundFlush(pacing: &mut WalFlushPacing) -> PgResult<bool> {
     let flush_after = guc_tables::vars::WalWriterFlushAfter.read();
     let delay_us = guc_tables::vars::WalWriterDelay.read() as i64 * 1000;
 
-    // Pending commit waiters force the flush leg: flush_after=0 takes the
-    // pacing's always-flush arm (and stamps its clock), C ordering intact.
     let flush_after = if pending_force.is_some() { 0 } else { flush_after };
 
     if wal_flush_pacing_decide(pacing, now, flushblocks, flush_after, delay_us) {
@@ -1294,6 +1189,7 @@ pub fn XLogBackgroundFlush(pacing: &mut WalFlushPacing) -> PgResult<bool> {
     WaitXLogInsertionsToFinish(write_rqst_write);
     LWLockAcquire(WALWriteLock(), LW_EXCLUSIVE, init_small::globals::MyProcNumber())?;
     RefreshXLogWriteResult();
+    let mark = crate::flushpipe::FlushMark::begin();
     if write_rqst_write > LOGWRT_RESULT.get().0 || write_rqst_flush > LOGWRT_RESULT.get().1 {
         XLogWrite((write_rqst_write, write_rqst_flush), insert_tli, flexible)?;
     }
@@ -1301,15 +1197,81 @@ pub fn XLogBackgroundFlush(pacing: &mut WalFlushPacing) -> PgResult<bool> {
 
     init_small::globals::EndCriticalSection();
 
-    // regression: complete pipelined commit waiters this cycle's flush
-    // covered (after the lock release; no-op when the knob is off).
+    drop(mark);
     crate::flushpipe::complete_up_to(LOGWRT_RESULT.get().1);
 
-    // Wake up walsenders now that we've released heavily contended locks.
     WalSndWakeupProcessRequests(true, !crate::insert::RecoveryInProgress());
 
     crate::insert::AdvanceXLInsertBuffer(InvalidXLogRecPtr, insert_tli, true);
 
+    Ok(true)
+}
+
+/// Chain laps one walwriter cycle may run before it goes back through its
+/// cycle (interrupts, config reload, stats).
+const ABSORB_MAX_LAPS: u32 = 16;
+
+/// The `absorb` arm of [`XLogBackgroundFlush`] when commits wait on the flush
+/// pipeline: [`XLogFlush`]'s leader loop run for `target`. The flush covers
+/// every FINISHED insert (WaitXLogInsertionsToFinish's return, as PG's leader
+/// batch), recomputed after any wait for WALWriteLock (LWLockAcquireOrWait
+/// returns false once the holder released it), so commits inserted while
+/// another flusher held the lock join this fsync. `chain`: after a flush, a
+/// waiter that registered meanwhile starts the next lap at once.
+fn background_flush_absorb(
+    mut target: XLogRecPtr,
+    insert_tli: TimeLineID,
+    chain: bool,
+) -> PgResult<bool> {
+    let ctl = XLogCtl();
+    init_small::globals::StartCriticalSection();
+    let loop_result: PgResult<()> = (|| {
+        let mut laps = 0u32;
+        loop {
+            RefreshXLogWriteResult();
+            if target <= LOGWRT_RESULT.get().1 {
+                break;
+            }
+            ctl.info_lck.with(|| {
+                let w = ctl.LogwrtRqstWrite.load(Relaxed);
+                if target < w {
+                    target = w;
+                }
+            });
+            let insertpos = WaitXLogInsertionsToFinish(target);
+            if !LWLockAcquireOrWait(
+                WALWriteLock(),
+                LW_EXCLUSIVE,
+                init_small::globals::MyProcNumber(),
+            )? {
+                continue;
+            }
+            RefreshXLogWriteResult();
+            let mark = crate::flushpipe::FlushMark::begin();
+            if insertpos > LOGWRT_RESULT.get().1 {
+                XLogWrite((insertpos, insertpos), insert_tli, false)?;
+            }
+            LWLockRelease(WALWriteLock())?;
+            drop(mark);
+            crate::flushpipe::complete_up_to(LOGWRT_RESULT.get().1);
+            laps += 1;
+            match crate::flushpipe::pending_max() {
+                Some(p) if chain && laps < ABSORB_MAX_LAPS && p > LOGWRT_RESULT.get().1 => {
+                    crate::flushpipe::count_chain_lap();
+                    target = p;
+                }
+                _ => break,
+            }
+        }
+        Ok(())
+    })();
+    init_small::globals::EndCriticalSection();
+    loop_result?;
+
+    // Every lap completed its own flush; a lap that found its target covered
+    // left the completion to the flusher that covered it.
+    WalSndWakeupProcessRequests(true, !crate::insert::RecoveryInProgress());
+    crate::insert::AdvanceXLInsertBuffer(InvalidXLogRecPtr, insert_tli, true);
     Ok(true)
 }
 
@@ -1377,6 +1339,13 @@ mod file_error_tests {
         REPORTED.with(|slot| slot.borrow_mut().take().expect("PANIC diagnostic"))
     }
 
+    // The paths under test read the wal_sync_method GUC slot, which
+    // transam_xlog's init_seams installs. Share the crate tests' Once so the
+    // module passes on its own and in any order (a second install panics).
+    fn setup() {
+        crate::tests::init_seams_once();
+    }
+
     fn check(error: &PgError, errno: i32, state: types_error::SqlState, message: &str) {
         assert_eq!(error.saved_errno, Some(errno));
         assert_eq!(error.sqlstate, state);
@@ -1385,6 +1354,7 @@ mod file_error_tests {
 
     #[test]
     fn initialized_segment_reopen_reports_kernel_errors() {
+        setup();
         let root = std::env::temp_dir().join(format!("pgrust-wal-reopen-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         let missing = root.join("missing");
@@ -1407,6 +1377,7 @@ mod file_error_tests {
 
     #[test]
     fn open_missing_segment_keeps_panic_and_file_sqlstate() {
+        setup();
         let segno = u32::MAX as u64;
         let tli = u32::MAX;
         let path = XLogFilePath(tli, segno, wal_segment_size());
@@ -1419,6 +1390,7 @@ mod file_error_tests {
 
     #[test]
     fn failed_segment_close_keeps_panic_and_errno() {
+        setup();
         OPEN_LOG_TLI.set(1);
         OPEN_LOG_SEG_NO.set(1);
         let error = panic_error(|| { let _ = close_wal_file(-1); });

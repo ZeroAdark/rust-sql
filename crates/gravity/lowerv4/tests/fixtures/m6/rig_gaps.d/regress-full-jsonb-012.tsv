@@ -1,0 +1,1 @@
+(jsonb_each(j)).key GROUP BY key ORDER BY count DESC, key: jsonb_each is a function-manager set the crate rig has no live catalog for; the server serves it = PG 18.6 (box 19 probe on B + R2, W0 / W8, main 10:10Z check) (reached once rep.varlena.order is built, M6-TEXT R2)

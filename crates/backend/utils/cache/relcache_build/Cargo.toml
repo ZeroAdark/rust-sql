@@ -30,6 +30,7 @@ cache_syscache = { path = "../cache_syscache" }
 relcache = { path = "../relcache" }
 snapmgr = { path = "../../time/snapmgr" }
 relcache_build_seams = { path = "../relcache_build_seams" }
+relcache_seams = { path = "../relcache_seams" }
 typcache_seams = { path = "../typcache_seams" }
 fmgr_seams = { path = "../../fmgr/fmgr_seams" }
 types_fmgr = { path = "../../../../_support/types/fmgr" }

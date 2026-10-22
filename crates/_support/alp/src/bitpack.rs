@@ -114,9 +114,54 @@ pub fn unpack(packed: &[u64], bit_width: u32, out: &mut [u64; VECTOR_SIZE]) {
     }
 }
 
+/// One value of a packed vector straight from its little-endian image: what [`unpack`] writes at `i`, reading one
+/// or two words. Value `i` is lane `i % LANES`, row `i / LANES`, at bit `row * bit_width` of that lane's words (word
+/// `w` of lane `l` at `w * LANES + l`); a value that straddles a word boundary continues at bit 0 of the lane's next
+/// word. `packed` holds `packed_words(bit_width)` words; `i < VECTOR_SIZE`.
+#[inline]
+pub fn get_le(packed: &[u8], bit_width: u32, i: usize) -> u64 {
+    debug_assert!(bit_width <= 64 && i < VECTOR_SIZE);
+    debug_assert_eq!(packed.len(), packed_words(bit_width) * 8);
+    let word = |k: usize| u64::from_le_bytes(packed[k * 8..k * 8 + 8].try_into().expect("8 bytes"));
+    match bit_width {
+        0 => 0,
+        // Full width: the interleaved layout coincides with value order.
+        64 => word(i),
+        bw => {
+            let bit = (i / LANES) * bw as usize;
+            let (w, shift) = (bit / 64, (bit % 64) as u32);
+            let lane = i % LANES;
+            let low = word(w * LANES + lane) >> shift;
+            let v = if shift + bw <= 64 { low } else { low | (word((w + 1) * LANES + lane) << (64 - shift)) };
+            v & ((1u64 << bw) - 1)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `get_le` answers what `unpack` writes, for every bit width and position.
+    #[test]
+    fn one_value_matches_the_unpacked_vector_at_every_width_and_position() {
+        let mut seed = 0x0E1D_u64;
+        for bw in 0..=64u32 {
+            let mask = if bw == 64 { u64::MAX } else { (1u64 << bw) - 1 };
+            let mut input = [0u64; VECTOR_SIZE];
+            for v in input.iter_mut() {
+                *v = splitmix(&mut seed) & mask;
+            }
+            let mut packed = vec![0u64; packed_words(bw)];
+            pack(&input, bw, &mut packed);
+            let bytes: Vec<u8> = packed.iter().flat_map(|w| w.to_le_bytes()).collect();
+            let mut out = [0u64; VECTOR_SIZE];
+            unpack(&packed, bw, &mut out);
+            for i in 0..VECTOR_SIZE {
+                assert_eq!(get_le(&bytes, bw, i), out[i], "width {bw} value {i}");
+            }
+        }
+    }
 
     // Deterministic splitmix64 so failures reproduce.
     fn splitmix(state: &mut u64) -> u64 {

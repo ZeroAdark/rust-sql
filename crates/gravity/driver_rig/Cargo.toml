@@ -1,0 +1,29 @@
+# gravity_driver's integration-test rig (driver/tests/common/mod.rs, 1,928 lines) as a lib compiled once (BD-12): 65 test
+# files declared `mod common;` and so compiled the whole rig into each binary next to their own few hundred lines. They say
+# `use gravity_driver_rig as common;` now; still one binary and one process per test file, the same names.
+[package]
+name = "gravity_driver_rig"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "../driver/tests/common/mod.rs"
+test = false
+doctest = false
+
+[dependencies]
+gravity_driver = { path = "../driver" }
+gravity_abi = { path = "../abi" }
+gravity_program = { path = "../program" }
+mcx = { path = "../../_support/mcx" }
+fires = { path = "../../_support/fires" }
+pgsync = { path = "../../_support/pgsync" }
+pagegive = { path = "../../_support/pagegive" }
+# pagepool P3: PGRUST_POOL_GRAVITY=1 arms the pool for every rig test (the forced-on arm)
+pagepool = { path = "../../_support/pagepool" }
+pg_clock = { path = "../../port/pg_clock" }
+waiter = { path = "../../backend/storage/ipc/waiter" }
+guc_seams = { path = "../../backend/utils/misc/guc_seams" }
+allocator-api2 = { version = "0.2", default-features = false, features = ["alloc"] }
+lz4_flex = "0.11"

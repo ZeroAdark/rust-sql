@@ -71,8 +71,6 @@ commit_ts_seams = { path = "../../access/transam/commit_ts_seams" }
 condition_variable_seams = { path = "../../storage/lmgr/condition_variable_seams" }
 controldata_utils = { path = "../../../common/controldata_utils" }
 deadlock_seams = { path = "../../storage/lmgr/deadlock_seams" }
-execmain = { path = "../../executor/execmain" }
-execmain_seams = { path = "../../executor/execmain_seams" }
 exectuples = { path = "../../executor/exectuples" }
 executils = { path = "../../executor/executils" }
 explain = { path = "../../commands/explain" }
@@ -93,7 +91,6 @@ lwlock = { path = "../../storage/lmgr/lwlock" }
 miscinit_seams = { path = "../../utils/init/miscinit_seams" }
 multixact_seams = { path = "../../access/transam/multixact_seams" }
 namespace_seams = { path = "../../catalog/namespace_seams" }
-nodeseqscan = { path = "../../executor/nodeseqscan" }
 origin_seams = { path = "../../replication/origin_seams" }
 parallel_seams = { path = "../../access/transam/parallel_seams" }
 parser_analyze = { path = "../../parser/parser_analyze" }
@@ -104,6 +101,7 @@ pg_sema_seams = { path = "../../port/pg_sema_seams" }
 pgstat = { path = "../../utils/activity/pgstat" }
 planner = { path = "../../optimizer/plan/planner" }
 pmsignal_seams = { path = "../../storage/ipc/pmsignal_seams" }
+postgres_seams = { path = "../../tcop/postgres_seams" }
 predicate_seams = { path = "../../storage/lmgr/predicate_seams" }
 procarray = { path = "../../storage/ipc/procarray" }
 pruneheap_seams = { path = "../../access/heap/pruneheap_seams" }

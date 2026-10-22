@@ -1,0 +1,8 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/fetch_site.rs
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::resize_with	2
+ir-only	<alloc::sync::Arc<[T]> as core::convert::From<&[T]>>::from	2
+macro	std::vec	2
+method	std::boxed::Box::new	1
+type	std::boxed::Box	1
+type	std::vec::Vec	1

@@ -1,0 +1,10 @@
+-- regress-full-rangefuncs-007
+-- SELECT * FROM getrngfunc8(1) AS t1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn40730 fn40730(c23:1)]
+  project (1=v1.1)
+  outs 1=w4:val
+mapped: FunctionScan

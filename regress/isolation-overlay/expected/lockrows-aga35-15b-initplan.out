@@ -1,0 +1,428 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1v s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE;
+QUERY PLAN                                             
+-------------------------------------------------------
+Limit                                                  
+  InitPlan 1                                           
+    ->  Seq Scan on acfg                               
+          Filter: (name = 'q'::text)                   
+  ->  LockRows                                         
+        ->  Sort                                       
+              Sort Key: ajob.prio, ajob.id             
+              ->  Seq Scan on ajob                     
+                    Filter: (prio >= (InitPlan 1).col1)
+(9 rows)
+
+step s1v: UPDATE ajob SET v = v || '+' WHERE id = 20;
+step s2l: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+18|  82|v18 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2l s1c
+step s1p: UPDATE ajob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2l: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v  
+--+----+---
+19|  81|v19
+18|  82|v18
+17|  83|v17
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1v s2l s1c
+step s1q: UPDATE acfg SET min_prio = 95 WHERE name = 'q';
+step s1v: UPDATE ajob SET v = v || '+' WHERE id = 20;
+step s2l: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+18|  82|v18 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2o s1c
+step s1v: UPDATE ajob SET v = v || '+' WHERE id = 20;
+step s2o: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|prio|v  
+--+----+---
+19|  81|v19
+18|  82|v18
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2o s1c
+step s1p: UPDATE ajob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2o: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|prio|v  
+--+----+---
+18|  82|v18
+17|  83|v17
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM ajob WHERE id = 20 FOR UPDATE;
+id
+--
+20
+(1 row)
+
+step s2sk: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 1 FOR UPDATE SKIP LOCKED;
+id|prio|v  
+--+----+---
+19|  81|v19
+(1 row)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM ajob WHERE id = 20 FOR UPDATE;
+id
+--
+20
+(1 row)
+
+step s2nw: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 1 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "ajob"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2n s1c s2seq
+step s1v: UPDATE ajob SET v = v || '+' WHERE id = 20;
+step s2n: SELECT id, prio, v FROM ajob WHERE prio > (SELECT nextval('asq'))::int + 78 ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM asq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2case s1c s2seq
+step s1v: UPDATE ajob SET v = v || '+' WHERE id = 20;
+step s2case: SELECT id, prio, v FROM ajob WHERE CASE WHEN prio > 0 THEN prio >= 80 ELSE prio > (SELECT nextval('asq'))::int END ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2case: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM asq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2l s1n17 s1n18 s2c s1c
+step s2b: BEGIN;
+step s2l: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE;
+id|prio|v  
+--+----+---
+20|  80|v20
+19|  81|v19
+18|  82|v18
+(3 rows)
+
+step s1n17: SELECT id FROM ajob WHERE id = 17 FOR UPDATE NOWAIT;
+id
+--
+17
+(1 row)
+
+step s1n18: SELECT id FROM ajob WHERE id = 18 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "ajob"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2o s1n17 s1n20 s2c s1c
+step s2b: BEGIN;
+step s2o: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q') ORDER BY prio, id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE;
+id|prio|v  
+--+----+---
+19|  81|v19
+18|  82|v18
+(2 rows)
+
+step s1n17: SELECT id FROM ajob WHERE id = 17 FOR UPDATE NOWAIT;
+id
+--
+17
+(1 row)
+
+step s1n20: SELECT id FROM ajob WHERE id = 20 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "ajob"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v2 s2ln s1c
+step s1v2: UPDATE ajob SET v = v || '+' WHERE id IN (2, 4);
+step s2ln: SELECT id, v FROM ajob WHERE id <= 3 ORDER BY id FOR UPDATE LIMIT (SELECT NULL::bigint); <waiting ...>
+step s1c: COMMIT;
+step s2ln: <... completed>
+id|v  
+--+---
+ 1|v1 
+ 2|v2+
+ 3|v3 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2ox s1k2 s2o2 s1c
+step s2ox: EXPLAIN (COSTS OFF) SELECT id, v FROM ajob WHERE id <= 5 ORDER BY id FOR UPDATE OFFSET (SELECT 2);
+QUERY PLAN                           
+-------------------------------------
+Limit                                
+  InitPlan 1                         
+    ->  Result                       
+  ->  LockRows                       
+        ->  Sort                     
+              Sort Key: ajob.id      
+              ->  Seq Scan on ajob   
+                    Filter: (id <= 5)
+(8 rows)
+
+step s1k2: UPDATE ajob SET id = id + 100 WHERE id = 2;
+step s2o2: SELECT id, v FROM ajob WHERE id <= 5 ORDER BY id FOR UPDATE OFFSET (SELECT 2); <waiting ...>
+step s1c: COMMIT;
+step s2o2: <... completed>
+id|v 
+--+--
+ 4|v4
+ 5|v5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k2 s2l0 s1c
+step s1k2: UPDATE ajob SET id = id + 100 WHERE id = 2;
+step s2l0: SELECT id, v FROM ajob WHERE id <= 3 ORDER BY id FOR UPDATE LIMIT (SELECT 0);
+id|v
+--+-
+(0 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2l0 s1n1 s2c s1c
+step s2b: BEGIN;
+step s2l0: SELECT id, v FROM ajob WHERE id <= 3 ORDER BY id FOR UPDATE LIMIT (SELECT 0);
+id|v
+--+-
+(0 rows)
+
+step s1n1: SELECT id FROM ajob WHERE id = 1 FOR UPDATE NOWAIT;
+id
+--
+ 1
+(1 row)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2ln s1n4 s1n3 s2c s1c
+step s2b: BEGIN;
+step s2ln: SELECT id, v FROM ajob WHERE id <= 3 ORDER BY id FOR UPDATE LIMIT (SELECT NULL::bigint);
+id|v 
+--+--
+ 1|v1
+ 2|v2
+ 3|v3
+(3 rows)
+
+step s1n4: SELECT id FROM ajob WHERE id = 4 FOR UPDATE NOWAIT;
+id
+--
+ 4
+(1 row)
+
+step s1n3: SELECT id FROM ajob WHERE id = 3 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "ajob"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2o2 s1n6 s1n1 s2c s1c
+step s2b: BEGIN;
+step s2o2: SELECT id, v FROM ajob WHERE id <= 5 ORDER BY id FOR UPDATE OFFSET (SELECT 2);
+id|v 
+--+--
+ 3|v3
+ 4|v4
+ 5|v5
+(3 rows)
+
+step s1n6: SELECT id FROM ajob WHERE id = 6 FOR UPDATE NOWAIT;
+id
+--
+ 6
+(1 row)
+
+step s1n1: SELECT id FROM ajob WHERE id = 1 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "ajob"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2ix s1q s2il s1c
+step s2ix: EXPLAIN (COSTS OFF) SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE;
+QUERY PLAN                                             
+-------------------------------------------------------
+Limit                                                  
+  InitPlan 1                                           
+    ->  LockRows                                       
+          ->  Seq Scan on acfg                         
+                Filter: (name = 'q'::text)             
+  ->  LockRows                                         
+        ->  Sort                                       
+              Sort Key: ajob.prio, ajob.id             
+              ->  Seq Scan on ajob                     
+                    Filter: (prio >= (InitPlan 1).col1)
+(10 rows)
+
+step s1q: UPDATE acfg SET min_prio = 95 WHERE name = 'q';
+step s2il: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+id|prio|v 
+--+----+--
+ 5|  95|v5
+ 4|  96|v4
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2il s1c
+step s1v: UPDATE ajob SET v = v || '+' WHERE id = 20;
+step s2il: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2il s1c
+step s1p: UPDATE ajob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2il: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+id|prio|v  
+--+----+---
+19|  81|v19
+18|  82|v18
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2il s1nq s2c s1c
+step s2b: BEGIN;
+step s2il: SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min_prio FROM acfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE;
+id|prio|v  
+--+----+---
+20|  80|v20
+19|  81|v19
+(2 rows)
+
+step s1nq: SELECT name FROM acfg WHERE name = 'q' FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "acfg"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2cx s1v s2ic s1c s2log
+step s2cx: EXPLAIN (COSTS OFF) WITH w AS (INSERT INTO alog VALUES (1, 'x') RETURNING id) SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min(id) FROM w) + 79 ORDER BY prio, id LIMIT 2 FOR UPDATE;
+QUERY PLAN                                                    
+--------------------------------------------------------------
+Limit                                                         
+  CTE w                                                       
+    ->  Insert on alog                                        
+          ->  Result                                          
+  InitPlan 2                                                  
+    ->  Aggregate                                             
+          ->  CTE Scan on w                                   
+  ->  LockRows                                                
+        ->  Sort                                              
+              Sort Key: ajob.prio, ajob.id                    
+              ->  Seq Scan on ajob                            
+                    Filter: (prio >= ((InitPlan 2).col1 + 79))
+(12 rows)
+
+step s1v: UPDATE ajob SET v = v || '+' WHERE id = 20;
+step s2ic: WITH w AS (INSERT INTO alog VALUES (1, 'x') RETURNING id) SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min(id) FROM w) + 79 ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2ic: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+(2 rows)
+
+step s2log: SELECT count(*), min(id) FROM alog;
+count|min
+-----+---
+    1|  1
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2ic s1c s2log
+step s1p: UPDATE ajob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2ic: WITH w AS (INSERT INTO alog VALUES (1, 'x') RETURNING id) SELECT id, prio, v FROM ajob WHERE prio >= (SELECT min(id) FROM w) + 79 ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2ic: <... completed>
+id|prio|v  
+--+----+---
+19|  81|v19
+18|  82|v18
+(2 rows)
+
+step s2log: SELECT count(*), min(id) FROM alog;
+count|min
+-----+---
+    1|  1
+(1 row)
+
+s1: WARNING:  there is no transaction in progress

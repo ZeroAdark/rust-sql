@@ -30,7 +30,7 @@ fn payload_varlena<'mcx>(mcx: Mcx<'mcx>, payload: &[u8]) -> PgResult<Varlena<'mc
 
 pub fn fc_xml_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of the in-function is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes().to_vec();
+    let s = ::mcx::std_vec_from_slice("adt", &unsafe { fcinfo.arg_cstring(0) }.to_bytes())?;
     // SAFETY: context, if set, rides per the ErrorSaveNode contract.
     let esc = unsafe { fcinfo.soft_error_context() };
     match crate::xml_in(&s, esc)? {
@@ -56,7 +56,7 @@ pub fn fc_xml_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     }
     let buf = &mut flinfo.fn_extra_mut::<OutBuf>().unwrap().0;
     buf.clear();
-    buf.reserve(out.len() + 1);
+    ::mcx::std_vec_reserve("xml", buf, out.len() + 1)?;
     buf.extend_from_slice(&out);
     buf.push(0);
     Ok(Datum::from_usize(buf.as_ptr() as usize))
@@ -66,7 +66,7 @@ pub fn fc_xml_recv(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     // SAFETY: recv arg0 is the live StringInfo pointer per the recv ABI.
     let buf = unsafe { fcinfo.arg_stringinfo(0) };
     let cursor = buf.cursor;
-    let raw = buf.as_bytes()[cursor..].to_vec();
+    let raw = ::mcx::std_vec_from_slice("xml", &buf.as_bytes()[cursor..])?;
     buf.cursor = buf.len();
     let mcx = fcinfo.result_mcx();
     let converted = crate::xml_recv(mcx, &raw)?;

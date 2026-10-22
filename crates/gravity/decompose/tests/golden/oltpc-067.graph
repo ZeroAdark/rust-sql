@@ -1,0 +1,14 @@
+-- oltpc-067
+-- UPDATE stock SET s_ytd = s_ytd + 1 WHERE s_w_id = $1 AND s_i_id = $2 /* C05 OL5 update pk */
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16462 rti=1 am=heap index=16482
+    key att=1 op=96 value=$2
+    key att=2 op=96 value=$1
+    recheck (op96(v1.1, $2), op96(v1.2, $1))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byref8:vl:win/page Attr(8):byref8:vl:win/page Attr(9):byref8:vl:win/page Attr(10):byref8:vl:win/page Attr(11):byref8:vl:win/page Attr(12):byref8:vl:win/page Attr(13):byref8:vl:win/page Attr(14):byref8:vl:win/page Attr(15):byref8:vl:win/page Attr(16):byref8:vl:win/page Attr(17):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=op551(v1.3, c23:1), 2j=v1.-1, 3j=v1.1, 4j=v1.2, 5j=v1.4, 6j=v1.5, 7j=v1.6, 8j=v1.7, 9j=v1.8, 10j=v1.9, 11j=v1.10, 12j=v1.11, 13j=v1.12, 14j=v1.13, 15j=v1.14, 16j=v1.15, 17j=v1.16, 18j=v1.17)
+  write UPDATE rel=16462 rti=1 natts=17 indexes=(16482[1, 2]up) set=(3)
+  outs 1=w4:val 2=fx6:row 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=vl:win/page 9=vl:win/page 10=vl:win/page 11=vl:win/page 12=vl:win/page 13=vl:win/page 14=vl:win/page 15=vl:win/page 16=vl:win/page 17=vl:win/page 18=vl:win/page
+mapped: ModifyTable IndexScan

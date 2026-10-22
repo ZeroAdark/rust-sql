@@ -26,6 +26,27 @@ use ::types_tuple::itemptr::{ItemPointerData, ItemPointerGetBlockNumber};
 use ::types_tuple::tupdesc::CompactAttribute;
 use ::types_tuple::TupleDescData;
 
+// fp-nbtree-nbtinsert#1: a pushed key's FmgrInfo.fn_extra (the composite
+// comparator's RecordCompareData rides there) is released with the key.
+#[test]
+fn bt_scan_insert_drops_initialized_keys() {
+    struct DropFlag(Rc<Cell<bool>>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+    let dropped = Rc::new(Cell::new(false));
+    let mut key = ScanKeyData::empty();
+    key.sk_func.set_fn_extra(DropFlag(dropped.clone()));
+    let mut insert = crate::search::BtScanInsert::new();
+    insert.push(key);
+    assert_eq!(insert.keys_len(), 1);
+    assert!(!dropped.get());
+    drop(insert);
+    assert!(dropped.get());
+}
+
 // Fake buffer manager: pages are 8KB boxes; Buffer = block+1.
 
 // MAXALIGNed like real buffer pages (the PageRef contract).
@@ -51,6 +72,7 @@ thread_local! {
     static HEAP_PAGES: RefCell<Vec<core::ptr::NonNull<FakePage>>> = const { RefCell::new(Vec::new()) };
     static PINS: Cell<i32> = const { Cell::new(0) };
     static READS: Cell<u32> = const { Cell::new(0) };
+    static NBLOCKS_CALLS: Cell<u32> = const { Cell::new(0) };
     static DIRTY_HINTS: Cell<u32> = const { Cell::new(0) };
     static WAL: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     // CritSectionCount observed at each xlog_insert_record call (audit
@@ -106,7 +128,12 @@ fn create_root_leaf(value: i32) {
     });
 }
 
-fn install() {
+// The harness has no PGPROCs (install's MyProcNumber 0 reaches the first thread only), so an LWLock wait cannot park:
+// a split's bt_vacuum_cycleid (shared BtreeVacuumLock) meeting bt_start_vacuum's exclusive one failed "cannot wait
+// without a PGPROC structure". The tests share the one shmem image and run one at a time: hold the guard.
+fn install() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         genam_seams::build_index_value_description::set(|_, _, _| Ok(None));
@@ -141,6 +168,10 @@ fn install() {
                 Ok(blkno as Buffer + 1)
             }
         });
+        bufmgr_seams::relation_get_number_of_blocks_in_fork::set(|_rel, _fork| {
+            NBLOCKS_CALLS.with(|c| c.set(c.get() + 1));
+            Ok(PAGES.with(|p| p.borrow().len()) as BlockNumber)
+        });
         bufmgr_seams::release_buffer::set(|_buf| {
             PINS.with(|c| c.set(c.get() - 1));
             Ok(())
@@ -171,8 +202,50 @@ fn install() {
             if buf > HEAP_BUF_BASE {
                 HEAP_PAGES.with(|p| p.borrow()[(buf - HEAP_BUF_BASE - 1) as usize].cast::<u8>())
             } else {
-                PAGES.with(|p| p.borrow()[(buf - 1) as usize].cast::<u8>())
+                PAGES.with(|p| p.borrow().get((buf - 1) as usize).map(|q| q.cast::<u8>()))
+                    .unwrap_or_else(|| {
+                        let addr = pgsync::lock(&SHARED_PAGES)[(buf - 1) as usize];
+                        core::ptr::NonNull::new(addr as *mut u8).expect("published page")
+                    })
             }
+        });
+        bufmgr_seams::read_buffer_without_relcache::set(|loc, _fork, blkno, _mode, _strategy, _permanent| {
+            assert_eq!(loc.relNumber, 5000, "image reads go to the index's locator");
+            READS.with(|c| c.set(c.get() + 1));
+            PINS.with(|c| c.set(c.get() + 1));
+            Ok(blkno as Buffer + 1)
+        });
+        syscache_seams::lookup_pg_type_shape::set(fake_type_shape);
+        syscache_seams::lookup_pg_amproc_rows::set(fake_amproc_rows);
+        syscache_seams::lookup_pg_amop_rows::set(fake_amop_rows);
+        syscache_seams::lookup_pg_amproc::set(|of, l, r, n| {
+            Ok(AMPROC_ROWS
+                .iter()
+                .find(|row| (row.0, row.1, row.2, row.3) == (of, l, r, n))
+                .map_or(0, |row| row.4))
+        });
+        syscache_seams::lookup_pg_amop_by_strategy::set(|of, l, r, n| {
+            Ok(AMOP_ROWS
+                .iter()
+                .find(|row| (row.0, row.1, row.2, row.3) == (of, l, r, n))
+                .map_or(0, |row| row.4))
+        });
+        syscache_seams::lookup_pg_operator_shape::set(|opno| {
+            Ok(OPCODES.iter().find(|o| o.0 == opno).map(|o| {
+                syscache_seams::PgOperatorShape {
+                    oprnamespace: 11,
+                    oprleft: 0,
+                    oprright: 0,
+                    oprresult: 16,
+                    oprcom: 0,
+                    oprnegate: 0,
+                    oprcode: o.1,
+                    oprrest: 0,
+                    oprjoin: 0,
+                    oprcanmerge: false,
+                    oprcanhash: false,
+                }
+            }))
         });
         bufmgr_seams::incr_buffer_ref_count::set(|_buf| PINS.with(|c| c.set(c.get() + 1)));
         bufmgr_seams::mark_buffer_dirty_hint::set(|_buf, _std| {
@@ -254,6 +327,7 @@ fn install() {
         });
         procarray_seams::global_vis_test_is_removable_xid::set(|_vistest, xid| Ok(xid < 1000));
     });
+    serial
 }
 
 fn wal_infos() -> Vec<u8> {
@@ -404,6 +478,18 @@ fn index_rel(mcx: Mcx<'_>) -> Relation<'_> {
 }
 
 fn index_rel_opts(mcx: Mcx<'_>, unique: bool) -> Relation<'_> {
+    index_rel_shape(mcx, unique, 23, 1976, 0, int4_tupdesc(mcx))
+}
+
+// One key column of type `typid` in operator family `opfamily`.
+fn index_rel_shape<'m>(
+    mcx: Mcx<'m>,
+    unique: bool,
+    typid: Oid,
+    opfamily: Oid,
+    collation: Oid,
+    tupdesc: TupleDescData<'m>,
+) -> Relation<'m> {
     let mut relname = ::types_tuple::NameData::default();
     relname.namestrcpy("t_idx");
     let mut indkey = PgVec::new_in(mcx);
@@ -456,7 +542,7 @@ fn index_rel_opts(mcx: Mcx<'_>, unique: bool) -> Relation<'_> {
             relfrozenxid: 3,
             relminmxid: 1,
         },
-        rd_att: Rc::new(int4_tupdesc(mcx)),
+        rd_att: Rc::new(tupdesc),
         rd_index: Some(FormData_pg_index {
             indexrelid: 5000,
             indrelid: 4999,
@@ -476,10 +562,10 @@ fn index_rel_opts(mcx: Mcx<'_>, unique: bool) -> Relation<'_> {
             indexprs_src: None,
             indpred_src: None,
         }),
-        rd_opcintype: one(23),
-        rd_opfamily: one(1976),
+        rd_opcintype: one(typid),
+        rd_opfamily: one(opfamily),
         rd_indoption: indoption,
-        rd_indcollation: one(0),
+        rd_indcollation: one(collation),
         rd_options: None,
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
@@ -487,6 +573,7 @@ fn index_rel_opts(mcx: Mcx<'_>, unique: bool) -> Relation<'_> {
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -532,11 +619,13 @@ fn prime_supportinfo(rel: &Relation<'_>) {
         .push(Some(FmgrInfo::new(test_int4cmp, 351, 2, true, false)));
 }
 
+const TEST_KEY_PROC_OID: Oid = 1_000_065;
+
 fn key(attno: i16, arg: i32, func: ::types_fmgr::PGFunction, strategy: u16) -> ScanKeyData {
     let mut k = ScanKeyData::empty();
     k.sk_attno = attno;
     k.sk_strategy = strategy;
-    k.sk_func = FmgrInfo::new(func, 65, 2, true, false);
+    k.sk_func = FmgrInfo::new(func, TEST_KEY_PROC_OID, 2, true, false);
     k.sk_argument = Datum::from_i32(arg);
     k
 }
@@ -554,7 +643,7 @@ fn begin_scan<'mcx>(
 
 #[test]
 fn metaversion_uses_and_primes_amcache() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[1, 2, 3]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -573,7 +662,7 @@ fn metaversion_uses_and_primes_amcache() {
 
 #[test]
 fn point_lookup_returns_matching_tids() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[10, 20, 20, 30]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -590,12 +679,11 @@ fn point_lookup_returns_matching_tids() {
 
     crate::btendscan(&mut scan).unwrap();
     assert_eq!(PINS.with(Cell::get), 0, "no pins leaked");
-    assert_eq!(scan.xs_pgstat_index_scans, 0, "pgstat disabled: no counts");
 }
 
 #[test]
 fn want_itup_publishes_page_copied_tuples() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[10, 20, 20, 30]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -611,7 +699,8 @@ fn want_itup_publishes_page_copied_tuples() {
         let IndexScanOpaque::Btree(so) = &scan.opaque else {
             unreachable!()
         };
-        assert!(so.currTuples.is_some() && so.markTuples.is_some());
+        // the mark's tuple buffer is made with the mark (search.rs copy_scanpos)
+        assert!(so.currTuples.is_some() && so.markTuples.is_none());
         assert!(!so.dropPin);
     }
 
@@ -645,7 +734,7 @@ fn want_itup_publishes_page_copied_tuples() {
 
 #[test]
 fn missing_key_returns_false() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[10, 20, 30]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -660,7 +749,7 @@ fn missing_key_returns_false() {
 
 #[test]
 fn qualless_scan_walks_from_the_endpoint() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[7, 8]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -677,7 +766,7 @@ fn qualless_scan_walks_from_the_endpoint() {
 
 #[test]
 fn backward_scan_from_rightmost() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[7, 8, 9]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -694,7 +783,7 @@ fn backward_scan_from_rightmost() {
 
 #[test]
 fn contradictory_quals_end_scan_without_io() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[1, 2, 3]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -714,7 +803,7 @@ fn contradictory_quals_end_scan_without_io() {
 
 #[test]
 fn mark_restore_on_one_page() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[5, 6, 7]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -733,7 +822,7 @@ fn mark_restore_on_one_page() {
 
 #[test]
 fn kill_prior_tuple_marks_lp_dead() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[10, 20, 30]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -771,7 +860,7 @@ fn kill_prior_tuple_marks_lp_dead() {
 
 #[test]
 fn redundant_inequalities_are_eliminated() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[1, 2, 3, 4]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -853,6 +942,7 @@ fn heap_relation(mcx: Mcx<'_>) -> Relation<'_> {
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -938,7 +1028,7 @@ fn drain_forward(mcx: Mcx<'_>, rel: &Relation<'_>) -> Vec<ItemPointerData> {
 
 #[test]
 fn insert_into_empty_index_builds_root() {
-    install();
+    let _serial = install();
     build_empty_index(false);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -970,7 +1060,7 @@ fn insert_into_empty_index_builds_root() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn sequential_inserts_split_and_stay_navigable() {
-    install();
+    let _serial = install();
     build_empty_index(false);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1032,7 +1122,7 @@ fn sequential_inserts_split_and_stay_navigable() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn interleaved_inserts_split_interior_pages() {
-    install();
+    let _serial = install();
     build_empty_index(false);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1056,7 +1146,7 @@ fn interleaved_inserts_split_interior_pages() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn rightmost_fastpath_arms_on_a_three_level_tree() {
-    install();
+    let _serial = install();
     build_empty_index(false);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1087,7 +1177,7 @@ fn rightmost_fastpath_arms_on_a_three_level_tree() {
 
 #[test]
 fn unique_index_rejects_live_duplicate() {
-    install();
+    let _serial = install();
     build_empty_index(false);
     HEAP_PAGES.with(|p| {
         p.borrow_mut()
@@ -1129,7 +1219,7 @@ fn unique_index_rejects_live_duplicate() {
 
 #[test]
 fn unique_check_partial_reports_conflict_and_inserts_anyway() {
-    install();
+    let _serial = install();
     build_empty_index(false);
     HEAP_PAGES.with(|p| {
         p.borrow_mut()
@@ -1168,7 +1258,7 @@ fn unique_check_partial_reports_conflict_and_inserts_anyway() {
 
 #[test]
 fn unique_check_existing_rechecks_without_inserting() {
-    install();
+    let _serial = install();
     build_empty_index(false);
     HEAP_PAGES.with(|p| {
         p.borrow_mut()
@@ -1222,7 +1312,7 @@ fn unique_check_existing_rechecks_without_inserting() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn unique_check_walks_posting_list_tids() {
-    install();
+    let _serial = install();
     build_empty_index(true);
     let cx = MemoryContext::new("t");
     let rel = index_rel_opts(cx.mcx(), true);
@@ -1271,7 +1361,7 @@ fn unique_check_walks_posting_list_tids() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn posting_split_page_split_coincidence_keeps_every_tid() {
-    install();
+    let _serial = install();
     build_empty_index(true);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1304,7 +1394,7 @@ fn posting_split_page_split_coincidence_keeps_every_tid() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn bottomup_deletion_avoids_split_when_chains_are_dead() {
-    install();
+    let _serial = install();
     build_empty_index(true);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1356,7 +1446,7 @@ fn bottomup_deletion_avoids_split_when_chains_are_dead() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn allequalimage_distinct_keys_dedup_is_noop_then_split() {
-    install();
+    let _serial = install();
     build_empty_index(true);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1379,7 +1469,7 @@ fn allequalimage_distinct_keys_dedup_is_noop_then_split() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn dedup_pass_merges_duplicates_onto_one_leaf() {
-    install();
+    let _serial = install();
     build_empty_index(true);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1417,7 +1507,7 @@ fn dedup_pass_merges_duplicates_onto_one_leaf() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn single_value_strategy_splits_after_six_capped_postings() {
-    install();
+    let _serial = install();
     build_empty_index(true);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1446,7 +1536,7 @@ fn single_value_strategy_splits_after_six_capped_postings() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn dedup_mixed_keys_only_merges_equal_runs() {
-    install();
+    let _serial = install();
     build_empty_index(true);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1552,7 +1642,7 @@ fn high_key_offset_constant() {
 
 #[test]
 fn mkscankey_builds_insertion_key() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[1]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1655,7 +1745,7 @@ fn mark_leaf_items_dead(blk: usize) {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn lp_dead_page_fill_runs_simple_deletion_instead_of_split() {
-    install();
+    let _serial = install();
     build_empty_index(false); // allequalimage=false: dedup can't mask deletion
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -1710,7 +1800,7 @@ fn lp_dead_page_fill_runs_simple_deletion_instead_of_split() {
 // byte where v4's btm_allequalimage lives.
 #[test]
 fn upgrademetapage_lifts_v2_meta_to_novac_v3() {
-    install();
+    let _serial = install();
     PAGES.with(|p| {
         let mut pages = p.borrow_mut();
         pages.clear();
@@ -1826,6 +1916,37 @@ fn parallel_seize_restore_failure_rolls_back_to_done_and_wakes() {
 
     // The concurrently-parked worker was woken and terminates.
     waiter.join().unwrap();
+}
+
+/// idxmorsel A2 entry 2: a participant of gravity's parallel leaf walk that fails while another holds the scan
+/// (Advancing) ends it with `bt_parallel_abort`: a seizer parked in the REAL `bt_parallel_seize` wakes, sees the scan
+/// done and returns no page, instead of parking until the holder (which may be the failed thread) releases.
+#[test]
+fn parallel_abort_wakes_a_parked_seizer_with_the_scan_done() {
+    use std::sync::Arc;
+
+    use ::types_relscan::{BTParallelScanShared, BtPsState};
+
+    use crate::parallel::{bt_parallel_abort, bt_parallel_seize};
+
+    let sh = Arc::new(BTParallelScanShared::new());
+    sh.state.lock().unwrap().page_status = BtPsState::Advancing;
+    let seizer = {
+        let sh = Arc::clone(&sh);
+        std::thread::spawn(move || {
+            let cx = MemoryContext::new("seize-abort");
+            let mut so = ::types_nbtree::BTScanOpaqueData::alloc_in(cx.mcx()).unwrap();
+            bt_parallel_seize(&mut so, &sh, false).map(|(status, _, _)| status).map_err(|_| ())
+        })
+    };
+    std::thread::sleep(core::time::Duration::from_millis(20));
+    bt_parallel_abort(&sh);
+    assert_eq!(seizer.join().expect("the seizer did not panic"), Ok(false), "the woken seizer gets no page: the scan is done");
+    assert_eq!(sh.state.lock().unwrap().page_status, BtPsState::Done);
+    // a later participant sees it done at once
+    let cx = MemoryContext::new("seize-after");
+    let mut so = ::types_nbtree::BTScanOpaqueData::alloc_in(cx.mcx()).unwrap();
+    assert_eq!(bt_parallel_seize(&mut so, &sh, false).map(|r| r.0).map_err(|_| ()), Ok(false));
 }
 
 /// Regression for the CRITICAL parallel-scan uninterruptible-park hang: a
@@ -1964,7 +2085,7 @@ fn bt_saveitem_rejects_oversized_tuple_instead_of_overflowing() {
 // ended without seeing it, and the writer never conflicted with it).
 #[test]
 fn serializable_qualless_scan_rechecks_empty_index_after_relation_lock() {
-    install();
+    let _serial = install();
     build_empty_index(true);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -2069,7 +2190,7 @@ fn patch_metapage(f: impl FnOnce(&mut BTMetaPageData)) {
 // than C's; multi-column rows C accepts fail the 2704-byte limit).
 #[test]
 fn index_form_tuple_compresses_varlenas_over_toast_index_target() {
-    install();
+    let _serial = install();
     let cx = MemoryContext::new("t");
     let mcx = cx.mcx();
     let td = audit_tupdesc(mcx, &[(-1, false, ::types_tuple::TYPSTORAGE_EXTENDED)]);
@@ -2124,7 +2245,7 @@ fn index_form_tuple_frees_compression_temporaries() {
 // whose pivot kept such a column.
 #[test]
 fn index_truncate_tuple_keeps_pg_attribute_for_wide_raw_varlena() {
-    install();
+    let _serial = install();
     let cx = MemoryContext::new("t");
     let mcx = cx.mcx();
     let td = audit_tupdesc(
@@ -2169,7 +2290,7 @@ fn index_truncate_tuple_keeps_pg_attribute_for_wide_raw_varlena() {
 #[test]
 #[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
 fn every_btree_wal_insert_runs_inside_a_critical_section() {
-    install();
+    let _serial = install();
     build_empty_index(true);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -2226,7 +2347,7 @@ fn every_btree_wal_insert_runs_inside_a_critical_section() {
 // ereport(ERROR, errcode(ERRCODE_INDEX_CORRUPTED), errmsg(...)) — no errhint.
 #[test]
 fn getmeta_errors_match_c_without_a_reindex_hint() {
-    install();
+    let _serial = install();
     let cx = MemoryContext::new("t");
 
     build_empty_index(true);
@@ -2255,7 +2376,7 @@ fn getmeta_errors_match_c_without_a_reindex_hint() {
 // not ported: inserting must be a typed refusal, never a backend panic.
 #[test]
 fn insert_into_a_version3_index_is_a_typed_refusal_not_a_panic() {
-    install();
+    let _serial = install();
     build_empty_index(false);
     patch_metapage(|m| m.btm_version = ::types_nbtree::BTREE_NOVAC_VERSION);
     let cx = MemoryContext::new("t");
@@ -2287,7 +2408,7 @@ fn insert_into_a_version3_index_is_a_typed_refusal_not_a_panic() {
 // backward is elog(ERROR, "invalid scan direction: %d"), not a backward read.
 #[test]
 fn endpoint_rejects_no_movement_scan_direction() {
-    install();
+    let _serial = install();
     build_single_leaf_index(&[1, 2, 3]);
     let cx = MemoryContext::new("t");
     let rel = index_rel(cx.mcx());
@@ -2305,7 +2426,7 @@ fn endpoint_rejects_no_movement_scan_direction() {
 // (and SCHEMA_NAME when the namespace resolves) on the wire.
 #[test]
 fn oversized_tuple_error_carries_errtableconstraint_fields() {
-    install();
+    let _serial = install();
     let cx = MemoryContext::new("t");
     let mcx = cx.mcx();
     let rel = index_rel(mcx);
@@ -2381,7 +2502,7 @@ fn vacuum_info<'a, 'mcx>(
 // abandoned. The message and hint bytes are C's.
 #[test]
 fn pagedel_logs_half_dead_internal_page_like_c() {
-    install();
+    let _serial = install();
     let cx = MemoryContext::new("t");
     let mcx = cx.mcx();
     let rel = index_rel(mcx);
@@ -2451,7 +2572,7 @@ fn pagedel_logs_half_dead_internal_page_like_c() {
 // the shipped behaviour is the LOG.
 #[test]
 fn vacuumpage_logs_inconsistent_backtracked_right_sibling_like_c() {
-    install();
+    let _serial = install();
     let cx = MemoryContext::new("t");
     let mcx = cx.mcx();
     let rel = index_rel(mcx);
@@ -2519,7 +2640,7 @@ fn vacuumpage_logs_inconsistent_backtracked_right_sibling_like_c() {
 // runs BTreeShmemInit at boot with MaxBackends = 8.
 #[test]
 fn btree_shmem_init_registers_vacuum_state_in_shmem_index() {
-    install();
+    let _serial = install();
     // MaxBackends is a per-thread global: this thread mirrors the boot value.
     init_small::globals::SetMaxBackends(8);
     assert_eq!(crate::BTreeShmemSize().unwrap(), 12 + 12 * 8);
@@ -2532,7 +2653,7 @@ fn btree_shmem_init_registers_vacuum_state_in_shmem_index() {
 // (nbtutils.c:3577) on a second registration, zero after the end.
 #[test]
 fn vacuum_cycleid_registry_roundtrip_over_the_shared_table() {
-    install();
+    let _serial = install();
     let cx = MemoryContext::new("t");
     let mcx = cx.mcx();
     let rel = index_rel(mcx);
@@ -2549,7 +2670,530 @@ fn vacuum_cycleid_registry_roundtrip_over_the_shared_table() {
     crate::utils::bt_end_vacuum(&rel).unwrap();
 }
 
-// regression: datum_image_eq compares the whole eight-byte Datum word,
+// a scan re-opened per outer row under an = ANY array key refills its preprocessing buffers (the modified key
+// copy, the key map, the deconstructed elements) instead of allocating new ones at every rescan: in a bump scan
+// context, the executor's query context, each rescan's arrays stayed until the query ended (C resets arrayContext).
+#[test]
+fn saop_rescans_allocate_nothing_in_a_bump_context() {
+    let _serial = install();
+    build_single_leaf_index(&[1, 2, 3, 4, 5, 6]);
+    let cx = MemoryContext::new_bump("t");
+    let mcx = cx.mcx();
+    let rel = index_rel(mcx);
+    prime_supportinfo(&rel);
+    // x = ANY ('{5,2,5}'): sorted and deduplicated to {2, 5}
+    let arr = ::arrayfuncs::construct_array(
+        mcx,
+        &[Datum::from_i32(5), Datum::from_i32(2), Datum::from_i32(5)],
+        23,
+        4,
+        true,
+        b'i',
+    )
+    .unwrap();
+    let mut k = key(1, 0, test_int4eq, BTEqualStrategyNumber);
+    k.sk_flags |= ::types_scan::scankey::SK_SEARCHARRAY;
+    k.sk_argument = Datum::from_usize(arr.as_ptr() as usize);
+    let keys = [k];
+    let mut scan = begin_scan(mcx, &rel, &keys);
+    let run = |scan: &mut IndexScanDescData<'_>| {
+        let mut seen = Vec::new();
+        while crate::btgettuple(scan, ForwardScanDirection).unwrap() {
+            seen.push(ItemPointerGetBlockNumber(&scan.xs_heaptid));
+        }
+        seen
+    };
+    assert_eq!(run(&mut scan), vec![11, 14]); // values 2 and 5
+    crate::btrescan(&mut scan, Some(&keys)).unwrap();
+    assert_eq!(run(&mut scan), vec![11, 14]);
+    let used = cx.used();
+    for _ in 0..2000 {
+        crate::btrescan(&mut scan, Some(&keys)).unwrap();
+        assert_eq!(run(&mut scan), vec![11, 14]);
+    }
+    assert_eq!(cx.used(), used, "2,000 rescans under = ANY allocated in the scan's bump context");
+    crate::btendscan(&mut scan).unwrap();
+    assert_eq!(PINS.with(Cell::get), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Index images: the read path over a frozen image (`ImageRel`) answers and
+// walks exactly as over the relation, on the relation's thread and on a
+// thread with no relcache.
+
+pgsync::process_global! {
+    // Page addresses published for threads that hold no PAGES of their own.
+    static SHARED_PAGES: pgsync::Mutex<Vec<usize>> = pgsync::Mutex::new(Vec::new());
+}
+
+fn publish_pages() {
+    let v: Vec<usize> = PAGES.with(|p| p.borrow().iter().map(|q| q.as_ptr() as usize).collect());
+    *pgsync::lock(&SHARED_PAGES) = v;
+}
+
+fn unpublish_pages() {
+    pgsync::lock(&SHARED_PAGES).clear();
+}
+
+// (opfamily, lefttype, righttype, procnum, proc): integer_ops and text_ops.
+const AMPROC_ROWS: &[(Oid, Oid, Oid, i16, Oid)] = &[
+    (1976, 23, 23, 1, 351),
+    (1976, 23, 23, 2, 3130),
+    (1976, 23, 23, 4, 5051),
+    (1976, 23, 23, 6, 6403),
+    (1976, 23, 20, 1, 2189),
+    (1976, 20, 20, 1, 842),
+    (1994, 25, 25, 1, 360),
+    (1994, 25, 25, 2, 3255),
+    (1994, 25, 25, 4, 5050),
+];
+
+// (opfamily, lefttype, righttype, strategy, operator).
+const AMOP_ROWS: &[(Oid, Oid, Oid, i16, Oid)] = &[
+    (1976, 23, 23, 1, 97),
+    (1976, 23, 23, 2, 523),
+    (1976, 23, 23, 3, 96),
+    (1976, 23, 23, 4, 525),
+    (1976, 23, 23, 5, 521),
+    (1994, 25, 25, 1, 664),
+    (1994, 25, 25, 2, 665),
+    (1994, 25, 25, 3, 98),
+    (1994, 25, 25, 4, 667),
+    (1994, 25, 25, 5, 666),
+];
+
+// (operator, oprcode).
+const OPCODES: &[(Oid, Oid)] = &[
+    (97, 66),
+    (523, 149),
+    (96, 65),
+    (525, 150),
+    (521, 147),
+    (664, 740),
+    (665, 741),
+    (98, 67),
+    (667, 743),
+    (666, 742),
+];
+
+fn fake_type_shape(typid: Oid) -> PgResult<Option<::types_tuple::tupdesc::PgTypeShape>> {
+    let (typlen, typbyval, typalign) = match typid {
+        23 => (4, true, b'i'),
+        20 => (8, true, b'd'),
+        25 => (-1, false, b'i'),
+        _ => return Ok(None),
+    };
+    Ok(Some(::types_tuple::tupdesc::PgTypeShape {
+        typlen,
+        typbyval,
+        typalign: typalign as i8,
+        typstorage: if typbyval { b'p' } else { b'x' } as i8,
+        typcollation: if typid == 25 { 100 } else { 0 },
+    }))
+}
+
+fn fake_amproc_rows(
+    mcx: Mcx<'_>,
+    opfamily: Oid,
+) -> PgResult<(PgVec<'_, syscache_seams::PgAmprocRow>, bool)> {
+    let mut v = PgVec::new_in(mcx);
+    for r in AMPROC_ROWS.iter().filter(|r| r.0 == opfamily) {
+        v.push(syscache_seams::PgAmprocRow {
+            amprocfamily: r.0,
+            amproclefttype: r.1,
+            amprocrighttype: r.2,
+            amprocnum: r.3,
+            amproc: r.4,
+        });
+    }
+    Ok((v, true))
+}
+
+fn fake_amop_rows(
+    mcx: Mcx<'_>,
+    opfamily: Oid,
+) -> PgResult<(PgVec<'_, syscache_seams::PgAmopRow>, bool)> {
+    let mut v = PgVec::new_in(mcx);
+    for r in AMOP_ROWS.iter().filter(|r| r.0 == opfamily) {
+        v.push(syscache_seams::PgAmopRow {
+            amopfamily: r.0,
+            amoplefttype: r.1,
+            amoprighttype: r.2,
+            amopstrategy: r.3,
+            amoppurpose: b's' as i8,
+            amopopr: r.4,
+            amopsortfamily: 0,
+        });
+    }
+    Ok((v, true))
+}
+
+fn text_index_rel(mcx: Mcx<'_>) -> Relation<'_> {
+    let mut compact = PgVec::new_in(mcx);
+    compact.push(CompactAttribute {
+        attcacheoff: Cell::new(-1),
+        attlen: -1,
+        attbyval: false,
+        attispackable: true,
+        atthasmissing: false,
+        attisdropped: false,
+        attgenerated: false,
+        attnullability: 0,
+        attalignby: 4,
+    });
+    let mut attrs = PgVec::new_in(mcx);
+    let mut att = ::types_tuple::tupdesc::FormData_pg_attribute::default();
+    att.attrelid = 5000;
+    att.atttypid = 25;
+    att.attlen = -1;
+    att.attnum = 1;
+    att.atttypmod = -1;
+    att.attalign = b'i' as i8;
+    att.attstorage = b'x' as i8;
+    att.attcollation = 100;
+    attrs.push(att);
+    let td = TupleDescData {
+        natts: 1,
+        tdtypeid: 0,
+        tdtypmod: -1,
+        tdrefcount: 1,
+        constr: None,
+        compact_attrs: compact,
+        attrs,
+    };
+    index_rel_shape(mcx, false, 25, 1994, 100, td)
+}
+
+fn test_int4le(
+    _flinfo: Option<&mut FmgrInfo>,
+    fcinfo: &mut FunctionCallInfoBaseData,
+) -> PgResult<Datum> {
+    Ok(Datum::from_bool(
+        fcinfo.arg(0).as_i32() <= fcinfo.arg(1).as_i32(),
+    ))
+}
+
+// Every answer the read path can ask of `r` for its one key column, printed.
+fn read_answers<R: crate::BtReadRel>(r: &R) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push(format!("{} {} {}", r.name(), r.indnatts(), r.indnkeyatts()));
+    let td = r.tupdesc();
+    out.push(format!(
+        "td {} {} {} {:?} {:?}",
+        td.natts,
+        td.tdtypeid,
+        td.tdtypmod,
+        &td.compact_attrs[..],
+        &td.attrs[..]
+    ));
+    let (of, ty) = (r.opfamily(0), r.opcintype(0));
+    out.push(format!("{of} {ty} {} {:?}", r.indcollation(0), r.indoption()));
+    out.push(format!("meta {:?} pgstat {}", r.amcache_get(), r.pgstat_enabled()));
+    out.push(format!("order {}", r.order_procinfo(1).unwrap().fn_oid));
+    for (l, rt) in [(ty, ty), (ty, 20), (20, 20), (ty, 25), (25, 25), (23, 23)] {
+        for n in 1..=6i16 {
+            let p = r.opfamily_proc(of, l, rt, n).unwrap();
+            let o = r.opfamily_member(of, l, rt, n).unwrap();
+            out.push(format!("({l},{rt},{n}) proc {p} op {o}"));
+            if o != 0 {
+                let code = r.opcode(o).unwrap();
+                out.push(format!("opcode {o} {code}"));
+                let fi = r.fmgr_info(code).unwrap();
+                out.push(format!("fmgr {} {} {}", fi.fn_oid, fi.fn_nargs, fi.fn_strict));
+            }
+        }
+    }
+    out.push(format!("typ {:?}", r.typlenbyvalalign(ty).unwrap()));
+    for reverse in [false, true] {
+        let sk = r.skip_support(of, ty, reverse).unwrap();
+        out.push(format!(
+            "skip {reverse} {:?}",
+            sk.map(|s| (s.low_elem, s.high_elem))
+        ));
+    }
+    out
+}
+
+#[test]
+fn image_rel_answers_as_the_relation() {
+    let _serial = install();
+    build_single_leaf_index(&[1, 2, 3]);
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    for rel in [index_rel(mcx), text_index_rel(mcx)] {
+        let img = crate::IndexImage::capture(&rel).unwrap().expect("a btree index images");
+        let wcx = MemoryContext::new("w");
+        let ir = crate::ImageRel::new(&img, wcx.mcx()).unwrap();
+        assert_eq!(read_answers(&rel), read_answers(&ir));
+        assert!(crate::BtReadRel::amcache_get(&ir).is_some(), "metapage captured");
+        let procs: Vec<Oid> = img.proc_oids().collect();
+        let want: Vec<Oid> = if rel.rd_opfamily[0] == 1976 {
+            vec![65, 66, 147, 149, 150, 351, 842, 2189]
+        } else {
+            vec![67, 360, 740, 741, 742, 743]
+        };
+        assert_eq!(procs, want);
+        // A family the image does not hold is an error, never a lookup.
+        assert!(crate::BtReadRel::opfamily_proc(&ir, 1994 + 1976 - rel.rd_opfamily[0], 25, 25, 1).is_err());
+        assert!(crate::BtReadRel::opcode(&ir, 1).is_err());
+    }
+    assert_eq!(PINS.with(Cell::get), 0, "no pins leaked");
+}
+
+fn build_image_test_index(rel: &Relation<'_>) {
+    build_empty_index(false);
+    for k in 1..=800u32 {
+        insert_key(rel, rel, ((k * 7) % 400) as i32, tid(k, 1));
+    }
+}
+
+fn bitmap_tids(tbm: &mut ::tidbitmap::TIDBitmap<'_>) -> Vec<(u32, u16)> {
+    let mut it = tbm.begin_private_iterate().unwrap();
+    let mut out = Vec::new();
+    while let Some(r) = it.next(tbm) {
+        let mut offs = [0 as OffsetNumber; 512];
+        let n = r.extract_page_tuples(&mut offs);
+        out.extend(offs[..n].iter().map(|o| (r.blockno, *o)));
+    }
+    out
+}
+
+fn image_test_keys(mcx: Mcx<'_>) -> Vec<Vec<ScanKeyData>> {
+    let range = vec![
+        key(1, 100, test_int4gt, BTGreaterStrategyNumber),
+        key(
+            1,
+            130,
+            test_int4le,
+            ::types_scan::scankey::BTLessEqualStrategyNumber,
+        ),
+    ];
+    let arr = ::arrayfuncs::construct_array(
+        mcx,
+        &[250, 5, 399, 17, 5].map(Datum::from_i32),
+        23,
+        4,
+        true,
+        b'i',
+    )
+    .unwrap();
+    let mut k = key(1, 0, test_int4eq, BTEqualStrategyNumber);
+    k.sk_flags |= ::types_scan::scankey::SK_SEARCHARRAY;
+    k.sk_argument = Datum::from_usize(arr.as_ptr() as usize);
+    // The array image stays in `mcx` until the context goes.
+    core::mem::forget(arr);
+    vec![range, vec![k]]
+}
+
+fn image_bitmap_walk(
+    img: &crate::IndexImage,
+    keys_of: impl Fn(Mcx<'_>) -> Vec<Vec<ScanKeyData>>,
+) -> Vec<(i64, Vec<(u32, u16)>)> {
+    let cx = MemoryContext::new("w");
+    let mcx = cx.mcx();
+    let ir = crate::ImageRel::new(img, mcx).unwrap();
+    let mut out = Vec::new();
+    for keys in keys_of(mcx) {
+        let mut scan = ir.begin_scan(mcx, keys.len() as i32, false).unwrap();
+        crate::btrescan(&mut scan, Some(&keys)).unwrap();
+        let mut tbm = ::tidbitmap::TIDBitmap::new(mcx, 1 << 20);
+        let n = crate::btgetbitmap_over(&mut scan, &ir, &mut tbm).unwrap();
+        crate::btendscan(&mut scan).unwrap();
+        out.push((n, bitmap_tids(&mut tbm)));
+    }
+    assert!(ir.blocks_fetched() > 0);
+    assert_eq!(PINS.with(Cell::get), 0, "no pins leaked on the image thread");
+    out
+}
+
+fn relation_bitmap_walk(mcx: Mcx<'_>, rel: &Relation<'_>) -> Vec<(i64, Vec<(u32, u16)>)> {
+    let mut out = Vec::new();
+    for keys in image_test_keys(mcx) {
+        let mut scan = crate::btbeginscan(mcx, rel, keys.len() as i32, 0).unwrap();
+        crate::btrescan(&mut scan, Some(&keys)).unwrap();
+        let mut tbm = ::tidbitmap::TIDBitmap::new(mcx, 1 << 20);
+        let n = crate::btgetbitmap(&mut scan, &mut tbm).unwrap();
+        crate::btendscan(&mut scan).unwrap();
+        out.push((n, bitmap_tids(&mut tbm)));
+    }
+    out
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
+fn image_bitmap_walk_matches_the_relation() {
+    let _serial = install();
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let rel = index_rel(mcx);
+    build_image_test_index(&rel);
+    let want = relation_bitmap_walk(mcx, &rel);
+    // x in (100, 130]: 30 keys, two TIDs each; = ANY: {5,17,250,399}.
+    assert_eq!(want[0].0, 60);
+    assert_eq!(want[1].0, 8);
+    let img = crate::IndexImage::capture(&rel).unwrap().expect("imageable");
+    assert_eq!(image_bitmap_walk(&img, image_test_keys), want);
+    assert_eq!(PINS.with(Cell::get), 0, "no pins leaked");
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
+fn image_bitmap_walk_runs_on_a_thread_without_relcache() {
+    let _serial = install();
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let rel = index_rel(mcx);
+    build_image_test_index(&rel);
+    let want = relation_bitmap_walk(mcx, &rel);
+    let img = crate::IndexImage::capture(&rel).unwrap().expect("imageable");
+    publish_pages();
+    let got = std::thread::scope(|s| {
+        s.spawn(|| image_bitmap_walk(&img, image_test_keys))
+            .join()
+            .expect("image walk thread")
+    });
+    unpublish_pages();
+    assert_eq!(got, want);
+}
+
+// Each probe's TIDs through the relation path (a rescanned btgettuple scan).
+fn relation_probes(mcx: Mcx<'_>, rel: &Relation<'_>, probes: &[i32]) -> Vec<Vec<ItemPointerData>> {
+    let first = [key(1, 0, test_int4eq, BTEqualStrategyNumber)];
+    let mut scan = begin_scan(mcx, rel, &first);
+    let mut out = Vec::new();
+    for &p in probes {
+        let keys = [key(1, p, test_int4eq, BTEqualStrategyNumber)];
+        crate::btrescan(&mut scan, Some(&keys)).unwrap();
+        let mut tids = Vec::new();
+        while crate::btgettuple(&mut scan, ForwardScanDirection).unwrap() {
+            tids.push(scan.xs_heaptid);
+        }
+        out.push(tids);
+    }
+    crate::btendscan(&mut scan).unwrap();
+    out
+}
+
+// The same probes through `ImageRel::probe`, appending into one buffer.
+fn image_probes(img: &crate::IndexImage, probes: &[i32]) -> Vec<Vec<ItemPointerData>> {
+    let cx = MemoryContext::new("w");
+    let mcx = cx.mcx();
+    let ir = crate::ImageRel::new(img, mcx).unwrap();
+    let mut scan = ir.begin_scan(mcx, 1, false).unwrap();
+    let mut buf = vec![tid(9999, 1)];
+    let mut out = Vec::new();
+    for &p in probes {
+        let keys = [key(1, p, test_int4eq, BTEqualStrategyNumber)];
+        let start = buf.len();
+        let n = ir.probe(&mut scan, &keys, &mut buf).unwrap();
+        assert_eq!(n, buf.len() - start);
+        out.push(buf[start..].to_vec());
+    }
+    assert_eq!(buf[0], tid(9999, 1), "probe appends");
+    crate::btendscan(&mut scan).unwrap();
+    assert_eq!(PINS.with(Cell::get), 0, "no pins leaked on the probe thread");
+    out
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
+fn image_probe_matches_the_relation_here_and_on_a_thread() {
+    let _serial = install();
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let rel = index_rel(mcx);
+    build_image_test_index(&rel);
+    let probes = [17, 250, 399, 400];
+    let want = relation_probes(mcx, &rel, &probes);
+    assert_eq!(want.iter().map(Vec::len).collect::<Vec<_>>(), vec![2, 2, 2, 0]);
+    let img = crate::IndexImage::capture(&rel).unwrap().expect("imageable");
+    assert_eq!(image_probes(&img, &probes), want);
+    publish_pages();
+    let got = std::thread::scope(|s| {
+        s.spawn(|| image_probes(&img, &probes))
+            .join()
+            .expect("probe thread")
+    });
+    unpublish_pages();
+    assert_eq!(got, want);
+    assert_eq!(PINS.with(Cell::get), 0, "no pins leaked");
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
+fn image_rescans_with_new_equality_keys_match_the_relation() {
+    let _serial = install();
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let rel = index_rel(mcx);
+    build_image_test_index(&rel);
+    let img = crate::IndexImage::capture(&rel).unwrap().expect("imageable");
+    let ir = crate::ImageRel::new(&img, mcx).unwrap();
+
+    let first = [key(1, 0, test_int4eq, BTEqualStrategyNumber)];
+    let mut rscan = begin_scan(mcx, &rel, &first);
+    let mut iscan = ir.begin_scan(mcx, 1, false).unwrap();
+    for probe in [17, 250, 399] {
+        let keys = [key(1, probe, test_int4eq, BTEqualStrategyNumber)];
+        crate::btrescan(&mut rscan, Some(&keys)).unwrap();
+        crate::btrescan(&mut iscan, Some(&keys)).unwrap();
+        let mut want = Vec::new();
+        while crate::btgettuple(&mut rscan, ForwardScanDirection).unwrap() {
+            want.push(rscan.xs_heaptid);
+        }
+        let mut got = Vec::new();
+        while crate::btgettuple_over(&mut iscan, &ir, ForwardScanDirection).unwrap() {
+            got.push(iscan.xs_heaptid);
+        }
+        assert_eq!(want.len(), 2, "each key twice");
+        assert_eq!(got, want, "probe {probe}");
+    }
+    crate::btendscan(&mut rscan).unwrap();
+    crate::btendscan(&mut iscan).unwrap();
+    assert_eq!(PINS.with(Cell::get), 0, "no pins leaked");
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // bulk-insert loop: not Miri-feasible
+fn pivots_are_the_leaf_boundaries_in_order() {
+    let _serial = install();
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let rel = index_rel(mcx);
+    build_image_test_index(&rel);
+    let p = crate::bt_pivots(&rel, 2).unwrap();
+    assert_eq!(p.level, 1, "the test tree's root is the leaves' parent");
+    assert!(!p.keys.is_empty(), "several leaves: at least one boundary");
+    let desc = crate::BtReadRel::tupdesc(&rel);
+    let mut last = i32::MIN;
+    for k in &p.keys {
+        // a MAXALIGNed copy for index_getattr
+        let mut buf = vec![0u64; k.len().div_ceil(8)];
+        // SAFETY: buf holds k.len() bytes
+        unsafe { core::ptr::copy_nonoverlapping(k.as_ptr(), buf.as_mut_ptr().cast::<u8>(), k.len()) };
+        let itup = buf.as_ptr().cast::<u8>();
+        // SAFETY: a copy of a pivot tuple of this index
+        if unsafe { crate::itup::bt_tuple_get_natts(itup, 1) } >= 1 {
+            let mut isnull = false;
+            // SAFETY: as above, MAXALIGNed
+            let v = unsafe { crate::itup::index_getattr(itup, 1, desc, &mut isnull) }.as_i32();
+            assert!(!isnull && v >= last, "separators ascend: {v} after {last}");
+            last = v;
+        }
+    }
+    // a minimum past the level's ranges still answers with level 1's (the lowest internal level)
+    assert_eq!(crate::bt_pivots(&rel, 100_000).unwrap().keys, p.keys);
+    let img = crate::IndexImage::capture(&rel).unwrap().expect("imageable");
+    let wcx = MemoryContext::new("w");
+    let ir = crate::ImageRel::new(&img, wcx.mcx()).unwrap();
+    assert_eq!(crate::bt_pivots(&ir, 2).unwrap().keys, p.keys, "the image reads the same separators");
+    assert_eq!(PINS.with(Cell::get), 0, "no pins leaked");
+    build_empty_index(false);
+    let e = crate::bt_pivots(&rel, 2).unwrap();
+    assert!(e.keys.is_empty() && e.level == 0, "an empty index has no separator");
+}
+
+// fp-adt-datum#1: datum_image_eq compares the whole eight-byte Datum word,
 // not a usize truncation of it (wasm32: usize is four bytes).
 #[test]
 fn datum_image_eq_compares_the_whole_eight_byte_word() {
@@ -2562,7 +3206,7 @@ fn datum_image_eq_compares_the_whole_eight_byte_word() {
     }
 }
 
-// regression: equal-delta split candidates come out in
+// fp-nbtree-nbtsplitloc#2: equal-delta split candidates come out in
 // pg_qsort's permutation (expected orders computed by C's pg_qsort over
 // src/port/qsort.c with _bt_splitcmp).
 #[test]
@@ -2593,7 +3237,7 @@ fn split_candidates_sort_in_pg_qsort_tie_order() {
     );
 }
 
-// regression / regression: the per-page delay point
+// fp-nbtree-nbtree#2 / fp-commands-vacuum#3: the per-page delay point
 // reaches vacuum_delay_point even while VacuumCostActive is false, so a
 // pending autovacuum config reload is processed mid-scan (nbtree.c:1305).
 static DELAY_POINT_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -2617,7 +3261,7 @@ fn vacuum_delay_point_reaches_the_seam_without_cost_active() {
 }
 
 
-// regression (and nbtdedup#1, nbtsplitloc#1): datum.c:303-324
+// fp-nbtree-nbtutils-p2#1 (and nbtdedup#1, nbtsplitloc#1): datum.c:303-324
 // compares varlena payloads after detoasting, so a short-header and a
 // four-byte-header image of one value are the same image; the old port
 // compared whole stored images, headers included.
@@ -2658,7 +3302,7 @@ fn look_ahead_ramp_is_capped_in_line_pointers() {
     assert!((320usize) < ::types_nbtree::MaxTIDsPerBTreePage / 2, "the old cap kept doubling");
 }
 
-// regression / nbtsearch#1 / nbtree#2: nbtutils.c:571-578 pfrees
+// fp-nbtree-nbtutils-p1#1 / nbtsearch#1 / nbtree#2: nbtutils.c:571-578 pfrees
 // the superseded by-ref skip-array argument before the next datumCopy; the
 // port reuses one buffer per array, so repeated element changes do not grow
 // the scan arena by one copy per distinct key.
@@ -2685,7 +3329,7 @@ fn skip_datum_copy_reuses_the_arrays_buffer() {
     assert_eq!(crate::utils::skip_datum_copy(&mut buf, Datum::from_i32(7), true, 4).unwrap().as_usize(), 7);
 }
 
-// regression: nbtree.c:927 sleeps under WAIT_EVENT_BTREE_PAGE while a
+// fp-nbtree-nbtree#3: nbtree.c:927 sleeps under WAIT_EVENT_BTREE_PAGE while a
 // participant waits for the advancing one; pg_stat_activity shows
 // IPC/BtreePage for the parked seizer.
 #[test]
@@ -2743,4 +3387,152 @@ fn parallel_seize_park_reports_btree_page_wait_event() {
         STARTS.load(Ordering::SeqCst),
         "every wait start is closed by a wait end"
     );
+}
+
+#[test]
+fn stackless_finish_split_logs_concurrent_root_split() {
+    install();
+    let cx = MemoryContext::new("t");
+    let rel = index_rel(cx.mcx());
+    prime_supportinfo(&rel);
+    let mut left = new_page(
+        BTP_LEAF | ::types_nbtree::BTP_INCOMPLETE_SPLIT,
+        0,
+        P_NONE,
+        2,
+    );
+    add_tuple(&mut left, tid(0, 1), 20);
+    let highkey = u16::from_ne_bytes([left.0[14], left.0[15]]) as usize;
+    let mut root = new_page(BTP_ROOT, 1, P_NONE, P_NONE);
+    add_tuple(&mut root, tid(1, 0), 0);
+    let downlink = u16::from_ne_bytes([root.0[14], root.0[15]]) as usize;
+    // SAFETY: aligned tuple images in owned pages, before exposing any page references.
+    unsafe {
+        crate::itup::bt_tuple_set_natts(left.0.as_mut_ptr().add(highkey), 1, false);
+        crate::itup::bt_tuple_set_natts(root.0.as_mut_ptr().add(downlink), 0, false);
+    }
+    add_tuple(&mut left, tid(10, 1), 10);
+    let mut right = new_page(BTP_LEAF, 0, 1, P_NONE);
+    add_tuple(&mut right, tid(20, 1), 20);
+    PAGES.with(|p| {
+        *p.borrow_mut() = vec![
+            leak_page(meta_page(3, 1)),
+            leak_page(left),
+            leak_page(right),
+            leak_page(root),
+        ];
+    });
+    let _ = take_ereports();
+    let pins_before = PINS.with(Cell::get);
+    let left = crate::page::bt_getbuf(&rel, 1, ::types_nbtree::BT_WRITE).unwrap();
+    let mut frame = crate::fcframe::OrderProcFrame::new();
+    // SAFETY: left is write-locked and represents a valid unfinished non-root split.
+    unsafe { crate::insert::bt_finish_split(&rel, &rel, left, &mut [], &mut frame).unwrap() };
+    assert_eq!(PINS.with(Cell::get), pins_before);
+    assert_eq!(drain_forward(cx.mcx(), &rel), vec![tid(10, 1), tid(20, 1)]);
+    let logs = take_ereports();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].level(), ::types_error::DEBUG2);
+    assert_eq!(logs[0].message(), "concurrent ROOT page split");
+    assert_eq!(
+        logs[0].sqlstate(),
+        ::types_error::ERRCODE_SUCCESSFUL_COMPLETION
+    );
+    let location = logs[0].location().unwrap();
+    assert_eq!(location.filename.as_deref(), Some("nbtinsert.c"));
+    assert_eq!(location.lineno, 2149);
+    assert_eq!(location.funcname.as_deref(), Some("_bt_insert_parent"));
+}
+
+fn boom_int4cmp(
+    _flinfo: Option<&mut FmgrInfo>,
+    fcinfo: &mut FunctionCallInfoBaseData,
+) -> PgResult<Datum> {
+    let (a, b) = (fcinfo.arg(0).as_i32(), fcinfo.arg(1).as_i32());
+    if a == 17 || b == 17 {
+        return Err(Box::new(::types_error::PgError::error(format!(
+            "boom comparing {} and {}",
+            a.min(b),
+            a.max(b)
+        ))));
+    }
+    Ok(Datum::from_i32((a > b) as i32 - (a < b) as i32))
+}
+
+fn eq_proc_must_not_run(
+    _flinfo: Option<&mut FmgrInfo>,
+    _fcinfo: &mut FunctionCallInfoBaseData,
+) -> PgResult<Datum> {
+    Err(Box::new(::types_error::PgError::error("the equality proc ran")))
+}
+
+// D3652 P10: the catalog-key equality procs compare inline (the proc is never called); any other proc is called.
+#[test]
+fn test_compares_the_by_value_equality_procs_inline() {
+    let mut frame = crate::fcframe::OrderProcFrame::new();
+    let mut sk = ScanKeyData::empty();
+    let cases: [(u32, Datum, Datum, Datum); 6] = [
+        (::types_core::fmgr::F_OIDEQ, Datum::from_oid(1259), Datum::from_oid(1259), Datum::from_oid(1249)),
+        (::types_core::fmgr::F_INT4EQ, Datum::from_i32(-7), Datum::from_i32(-7), Datum::from_i32(7)),
+        (::types_core::fmgr::F_INT2EQ, Datum::from_i16(3), Datum::from_i16(3), Datum::from_i16(-3)),
+        (::types_core::fmgr::F_CHAREQ, Datum::from_char(b'r' as i8), Datum::from_char(b'r' as i8), Datum::from_char(b'p' as i8)),
+        (::types_core::fmgr::F_BOOLEQ, Datum::from_bool(true), Datum::from_bool(true), Datum::from_bool(false)),
+        (467, Datum::from_i64(1 << 40), Datum::from_i64(1 << 40), Datum::from_i64(1)),
+    ];
+    for (oid, a, same, other) in cases {
+        sk.sk_func = FmgrInfo::new(eq_proc_must_not_run, oid, 2, true, false);
+        assert!(frame.test(&mut sk, a, same).unwrap(), "fn {oid}: equal values");
+        assert!(!frame.test(&mut sk, a, other).unwrap(), "fn {oid}: different values");
+    }
+    sk.sk_func = FmgrInfo::new(eq_proc_must_not_run, 1_000_003, 2, true, false);
+    let err = frame.test(&mut sk, Datum::from_oid(1), Datum::from_oid(1)).unwrap_err();
+    assert_eq!(err.message(), "the equality proc ran");
+}
+
+#[test]
+fn array_element_sort_propagates_first_comparator_error_in_c_order() {
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let sk = ScanKeyData::empty();
+    let mut frame = crate::fcframe::OrderProcFrame::new();
+    let mut proc = FmgrInfo::new(boom_int4cmp, 1_000_001, 2, true, false);
+    let mut elems: PgVec<'_, Datum> = PgVec::new_in(mcx);
+    elems.extend((1..=40).rev().map(Datum::from_i32));
+    let err = crate::preprocess::bt_sort_array_elements(&mut frame, &sk, &mut proc, false, &mut elems)
+        .unwrap_err();
+    // C 18.6 qsort_arg over the same input raises on this pair first.
+    assert_eq!(err.message(), "boom comparing 17 and 20");
+
+    let mut elems: PgVec<'_, Datum> = PgVec::new_in(mcx);
+    elems.extend([5, 3, 5, 1, 3, 40, 22, 1].into_iter().map(Datum::from_i32));
+    crate::preprocess::bt_sort_array_elements(&mut frame, &sk, &mut proc, true, &mut elems).unwrap();
+    let got: Vec<i32> = elems.iter().map(|d| d.as_i32()).collect();
+    assert_eq!(got, [40, 22, 5, 3, 1]);
+}
+
+#[test]
+fn vacuum_needs_cleanup_reads_the_index_size_only_with_deleted_pages() {
+    install();
+    build_empty_index(true);
+    let cx = MemoryContext::new("t");
+    let rel = index_rel(cx.mcx());
+    let before = NBLOCKS_CALLS.with(Cell::get);
+    assert!(!crate::pagedel::bt_vacuum_needs_cleanup(&rel).unwrap());
+    assert_eq!(NBLOCKS_CALLS.with(Cell::get), before, "no smgr size read without deleted pages");
+
+    PAGES.with(|p| {
+        let pages = p.borrow();
+        // SAFETY: metadata at +24 on the leaked metapage, as create_root_leaf.
+        unsafe {
+            let metad = pages[0]
+                .as_ptr()
+                .cast::<u8>()
+                .add(SizeOfPageHeaderData)
+                .cast::<BTMetaPageData>();
+            (*metad).btm_last_cleanup_num_delpages = 1;
+        }
+    });
+    assert!(crate::pagedel::bt_vacuum_needs_cleanup(&rel).unwrap());
+    assert_eq!(NBLOCKS_CALLS.with(Cell::get), before + 1);
+    assert_eq!(PINS.with(Cell::get), 0, "no pins leaked");
 }

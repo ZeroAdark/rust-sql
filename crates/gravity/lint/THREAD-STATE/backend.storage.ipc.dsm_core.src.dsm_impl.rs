@@ -1,0 +1,2 @@
+backend/storage/ipc/dsm_core/src/dsm_impl.rs	DYNAMIC_SHARED_MEMORY_TYPE	pgport	at:set_dynamic_shared_memory_type	thread	dynamic_shared_memory_type (POSTMASTER): process-wide, never carried; GUC storage per thread, written by its set accessor set_dynamic_shared_memory_type
+backend/storage/ipc/dsm_core/src/dsm_impl.rs	MIN_DYNAMIC_SHARED_MEMORY	pgport	at:set_min_dynamic_shared_memory	thread	min_dynamic_shared_memory (POSTMASTER): process-wide, never carried; GUC storage per thread, written by its set accessor set_min_dynamic_shared_memory

@@ -1,0 +1,10 @@
+-- regress-full-sqljson_queryfuncs-017
+-- SELECT * FROM unnest((JSON_QUERY(jsonb '{"jsa": [{"a": 1, "b": ["foo"]}, {"a": 2, "c": {}}, 123]}', '$' RETURNING sqljsonb_rec)).jsa);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Unnest fn2331 fn2331(T_FieldSelect)]
+  project (1=v1.1)
+  outs 1=vl:row
+mapped: FunctionScan

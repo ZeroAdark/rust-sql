@@ -1,0 +1,66 @@
+-- regress-full-window-094
+-- EXPLAIN (COSTS OFF) SELECT DISTINCT empno, enroll_date, depname, sum(salary) OVER (PARTITION BY depname order by empno) depsalary, min(salary) OVER (PARTITION BY depname order by enroll_date) depminsalary FROM empsalary ORDER BY depname, enroll_date;
+graph pipelines=7 breakers=6 init_plans=0 root=p6
+p0 node=6 eligible rows=1070 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n6@0 n5@1^
+  source range rel=38921 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.2, 2=v1.4, 3=v1.1, 4=v1.3)
+  sort keys=3+:Fp128@100,1+:I64 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w8:val
+p1 node=5 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n5@0 n4@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w8:val
+p2 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot1@p1
+  nodes n4@0 n3@2^
+  source breaker slot=1
+  window ref=1 partition=3=98:Fp128 order=1=410:I64 frame=Range unbounded-preceding..current-row
+    fn resno=5 Aggregate cursor=peers,frame, win2108(outer.4)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5)
+  sort keys=3+:Fp128@100,2+:Date presorted=1 form=runs
+  outs 1=w8:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w8:val
+p3 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p2
+  nodes n3@0 n2@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5)
+  outs 1=w8:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w8:val
+p4 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot1@p3
+  nodes n2@0 n1@2^
+  source breaker slot=1
+  window ref=2 top partition=3=98:Fp128 order=2=1093:Date frame=Range unbounded-preceding..current-row
+    fn resno=5 Aggregate cursor=peers,frame, win2132(outer.4)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.5, 5=outer.6)
+  sort keys=3+:Fp128@100,2+:Date,1+:I64,4+:I64,5+:I32 presorted=2 form=runs
+  outs 1=w8:val 2=w4:val 3=vl:life/breaker 4=w8:val 5=w4:val
+p5 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Distinct)
+  desc consumes=slot0@p4 owner=key/0 words=bits@3/5
+  nodes n1@0 n0@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5)
+  outs 1=w8:val 2=w4:val 3=vl:life/breaker 4=w8:val 5=w4:val
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p5
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5)
+  outs 1=w8:val 2=w4:val 3=vl:life/breaker 4=w8:val 5=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128,I64]->[Count@24] 32B order=3+,1+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=3+,1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128,Date]->[Count@24] 32B order=3+,2+
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p3 layout=[Fp128,Fp128]->[Count@16] 24B order=3+,2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p4 layout=[Fp128,Fp128,Date,I64,I64,I32]->[Count@48] 56B order=3+,2+,1+,4+,5+
+breaker slot=1 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[Fp128,Fp128,Date,I64,I64,I32]->[MinCode@48,Count@56] 64B order=3+,2+,1+,4+,5+
+group slot=1 producer=p5 node=0 form=Unique hints=[] layout=[Fp128,Fp128,Date,I64,I64,I32]->[MinCode@48,Count@56] 64B
+  key 0 word=0 resno=3 kind=Fp128 attno=0 type=1043 rep=0 expr=outer.3
+  key 1 word=2 resno=2 kind=Date attno=0 type=1082 expr=outer.2
+  key 2 word=3 resno=1 kind=I64 attno=0 type=20 expr=outer.1
+  key 3 word=4 resno=4 kind=I64 attno=0 type=20 expr=outer.4
+  key 4 word=5 resno=5 kind=I32 attno=0 type=23 expr=outer.5
+mapped: SeqScan Sort IncrementalSort WindowAgg Unique

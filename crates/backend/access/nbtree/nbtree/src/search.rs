@@ -14,10 +14,12 @@ use types_error::{PgError, PgResult};
 use types_fmgr::FmgrInfo;
 use types_nbtree::{
     BTScanOpaqueData, BTScanPosData, BTScanPosInvalidate, BTScanPosIsPinned, BTScanPosIsValid,
-    BTScanPosItem, MaxTIDsPerBTreePage, BTORDER_PROC, BT_READ, P_FIRSTDATAKEY, P_HIKEY, P_IGNORE,
+    BTScanPosItem, MaxTIDsPerBTreePage, BT_POS_FEW_ITEMS, BTORDER_PROC, BT_READ, P_FIRSTDATAKEY, P_HIKEY, P_IGNORE,
     P_ISDELETED, P_ISLEAF, P_LEFTMOST, P_NONE, P_RIGHTMOST,
 };
 use types_rel::Relation;
+
+use crate::readrel::BtReadRel;
 use types_scan::scankey::{
     BTEqualStrategyNumber, BTGreaterEqualStrategyNumber, BTGreaterStrategyNumber,
     BTLessEqualStrategyNumber, BTLessStrategyNumber, InvalidStrategy, ScanKeyData, StrategyNumber,
@@ -39,7 +41,7 @@ use crate::itup::{
     index_getattr, index_tuple_size, ITup, INDEX_SIZE_MASK,
 };
 use crate::page::{
-    bt_getbuf, bt_getroot, bt_metaversion, bt_relandgetbuf, bt_relbuf, page_item, page_opaque,
+    bt_getbuf, bt_getroot_read, bt_metaversion, bt_relandgetbuf, bt_relbuf, page_item, page_opaque,
 };
 use crate::utils::{
     bt_checkkeys, bt_killitems, bt_scanbehind_checkkeys, bt_set_startikey, bt_start_array_keys,
@@ -66,15 +68,15 @@ pub(crate) fn pos_unpin_if_pinned(pos: &mut BTScanPosData) -> PgResult<()> {
 }
 
 // IndexScanDescData split-borrowed once per AM entry point.
-pub(crate) struct ScanCtx<'a, 'mcx> {
-    pub rel: &'a Relation<'mcx>,
+pub(crate) struct ScanCtx<'a, 'mcx, R: BtReadRel + ?Sized> {
+    pub rel: &'a R,
     pub so: &'a mut BTScanOpaqueData<'mcx>,
     pub snapshot: Option<&'a SnapshotData<'mcx>>,
     pub ignore_killed_tuples: bool,
     pub input_keys: &'a mut [ScanKeyData],
     pub xs_heaptid: &'a mut ItemPointerData,
     pub xs_itup: &'a mut Option<core::ptr::NonNull<u8>>,
-    pub xs_pgstat_index_scans: &'a mut u64,
+    pub xs_pgstat: &'a mut types_relscan::PgStatRelationCounts,
     pub xs_nsearches: &'a mut u64,
     pub parallel: Option<&'a ::types_relscan::BTParallelScanShared>,
     pub frame: OrderProcFrame,
@@ -141,18 +143,29 @@ impl BtScanInsert {
     }
 }
 
+// C pfrees the insertion scan key (nbtinsert.c:273) and its fn_extra caches
+// die with the per-tuple context; the pushed keys' FmgrInfo owners drop here.
+impl Drop for BtScanInsert {
+    fn drop(&mut self) {
+        for key in &mut self.scankeys[..self.initialized] {
+            // SAFETY: [0, initialized) written by push; dropped exactly once.
+            unsafe { key.assume_init_drop() };
+        }
+    }
+}
+
 /// _bt_search, BT_READ arm; `None` for an empty index. C divergence: the
 /// parent-page BTStack is insert-only (read callers free it unread) — the
 /// insert lane adds the stacked variant.
 /// Batched-descent lever (docs/graviton.md §1.5), noted not forced: overlap
 /// the child-page fetch with the tail of the parent's binary search; needs
 /// bufmgr prefetch support and a measured win.
-pub fn bt_search(
-    rel: &Relation<'_>,
+pub fn bt_search<R: BtReadRel + ?Sized>(
+    rel: &R,
     key: &mut BtScanInsert,
     frame: &mut OrderProcFrame,
 ) -> PgResult<Option<BufferPin>> {
-    let Some(mut pin) = bt_getroot(rel, None, BT_READ)? else {
+    let Some(mut pin) = bt_getroot_read(rel)? else {
         return Ok(None);
     };
 
@@ -182,8 +195,8 @@ pub fn bt_search(
 }
 
 /// _bt_moveright, read arm (forupdate/finish-incomplete-split is insert-lane).
-pub(crate) fn bt_moveright(
-    rel: &Relation<'_>,
+pub(crate) fn bt_moveright<R: BtReadRel + ?Sized>(
+    rel: &R,
     key: &mut BtScanInsert,
     mut pin: BufferPin,
     frame: &mut OrderProcFrame,
@@ -220,7 +233,7 @@ pub(crate) fn bt_moveright(
 #[track_caller]
 #[cold]
 #[inline(never)]
-fn fell_off_the_end(rel: &Relation<'_>) -> Box<PgError> {
+fn fell_off_the_end<R: BtReadRel + ?Sized>(rel: &R) -> Box<PgError> {
     Box::new(PgError::error(format!(
         "fell off the end of index \"{}\"",
         rel.name()
@@ -228,8 +241,8 @@ fn fell_off_the_end(rel: &Relation<'_>) -> Box<PgError> {
 }
 
 /// _bt_binsrch: first offset >= (or >, when nextkey) the scan key.
-pub fn bt_binsrch(
-    rel: &Relation<'_>,
+pub fn bt_binsrch<R: BtReadRel + ?Sized>(
+    rel: &R,
     key: &mut BtScanInsert,
     page: &PageRef<'_>,
     frame: &mut OrderProcFrame,
@@ -272,14 +285,14 @@ pub fn bt_binsrch(
 }
 
 /// _bt_compare: insertion scankey vs the tuple at `offnum`; <0 / 0 / >0.
-pub fn bt_compare(
-    rel: &Relation<'_>,
+pub fn bt_compare<R: BtReadRel + ?Sized>(
+    rel: &R,
     key: &mut BtScanInsert,
     page: &PageRef<'_>,
     offnum: OffsetNumber,
     frame: &mut OrderProcFrame,
 ) -> PgResult<i32> {
-    let tupdesc: &TupleDescData<'_> = &rel.rd_att;
+    let tupdesc: &TupleDescData<'_> = rel.tupdesc();
     let opaque = page_opaque(page);
 
     debug_assert!(key.keysz as i32 <= rel.indnkeyatts());
@@ -365,8 +378,14 @@ pub fn bt_compare(
 }
 
 /// _bt_drop_lock_and_maybe_pin.
-fn drop_lock_and_maybe_pin(rel: &Relation<'_>, so: &mut BTScanOpaqueData<'_>) -> PgResult<()> {
+fn drop_lock_and_maybe_pin<R: BtReadRel + ?Sized>(
+    rel: &R,
+    so: &mut BTScanOpaqueData<'_>,
+) -> PgResult<()> {
     if !so.dropPin {
+        if so.lsnWithPin {
+            so.currPos.lsn = bufmgr::buffer_get_lsn_atomic::call(so.currPos.buf);
+        }
         return bufmgr::lock_buffer::call(so.currPos.buf, bufmgr::BUFFER_LOCK_UNLOCK);
     }
     so.currPos.lsn = bufmgr::buffer_get_lsn_atomic::call(so.currPos.buf);
@@ -375,12 +394,21 @@ fn drop_lock_and_maybe_pin(rel: &Relation<'_>, so: &mut BTScanOpaqueData<'_>) ->
     bt_relbuf(rel, pin)
 }
 
-/// index_getprocinfo + fmgr_info_copy over the rd_supportinfo rule-5 cache.
-pub fn order_procinfo(rel: &Relation<'_>, attno: usize) -> PgResult<FmgrInfo> {
+/// index_getprocinfo + fmgr_info_copy: the column's BTORDER_PROC.
+#[inline]
+pub fn order_procinfo<R: BtReadRel + ?Sized>(rel: &R, attno: usize) -> PgResult<FmgrInfo> {
+    rel.order_procinfo(attno)
+}
+
+pub(crate) fn relation_order_procinfo(rel: &Relation<'_>, attno: usize) -> PgResult<FmgrInfo> {
     {
         let mut cache = rel.rd_supportinfo.borrow_mut();
         if cache.is_empty() {
-            cache.resize_with(rel.indnkeyatts() as usize, || None);
+            let n = rel.indnkeyatts() as usize;
+            cache.try_reserve(n).map_err(|_| {
+                ::mcx::oom_named("nbtree", n * std::mem::size_of::<Option<FmgrInfo>>())
+            })?;
+            cache.resize_with(n, || None);
         }
         if let Some(fi) = &cache[attno - 1] {
             return Ok(fi.clone());
@@ -407,8 +435,8 @@ pub fn order_procinfo(rel: &Relation<'_>, attno: usize) -> PgResult<FmgrInfo> {
 #[track_caller]
 #[cold]
 #[inline(never)]
-fn missing_cross_type_support_function(
-    rel: &Relation<'_>,
+fn missing_cross_type_support_function<R: BtReadRel + ?Sized>(
+    rel: &R,
     lefttype: Oid,
     righttype: Oid,
     attno: usize,
@@ -424,7 +452,7 @@ fn missing_cross_type_support_function(
 #[track_caller]
 #[cold]
 #[inline(never)]
-fn missing_support_function(rel: &Relation<'_>, attno: usize) -> Box<PgError> {
+pub(crate) fn missing_support_function<R: BtReadRel + ?Sized>(rel: &R, attno: usize) -> Box<PgError> {
     // C: index_getprocinfo's elog (indexam.c) — the same-type rd_support
     // path carries no argtype parenthetical (that spelling belongs to the
     // cross-type get_opfamily_proc probes only).
@@ -448,7 +476,10 @@ enum Chosen {
 }
 
 /// _bt_first.
-pub(crate) fn bt_first(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResult<bool> {
+pub(crate) fn bt_first<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
+    dir: ScanDirection,
+) -> PgResult<bool> {
     let rel = ctx.rel;
 
     debug_assert!(!BTScanPosIsValid(&ctx.so.currPos));
@@ -491,8 +522,8 @@ pub(crate) fn bt_first(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResul
         return Ok(true);
     }
 
-    if rel.pgstat_enabled.get() {
-        *ctx.xs_pgstat_index_scans += 1;
+    if rel.pgstat_enabled() {
+        ctx.xs_pgstat.count(1, 0, 0);
     }
     *ctx.xs_nsearches += 1;
 
@@ -731,24 +762,24 @@ pub(crate) fn bt_first(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResul
             break;
         }
 
-        let sk_func = if bkey.sk_subtype == rel.rd_opcintype[i] || bkey.sk_subtype == 0 {
+        let sk_func = if bkey.sk_subtype == rel.opcintype(i) || bkey.sk_subtype == 0 {
             order_procinfo(rel, i + 1)?
         } else {
-            let cmp_proc = lsyscache::get_opfamily_proc(
-                rel.rd_opfamily[i],
-                rel.rd_opcintype[i],
+            let cmp_proc = rel.opfamily_proc(
+                rel.opfamily(i),
+                rel.opcintype(i),
                 bkey.sk_subtype,
                 BTORDER_PROC as i16,
             )?;
             if cmp_proc == 0 {
                 return Err(missing_cross_type_support_function(
                     rel,
-                    rel.rd_opcintype[i],
+                    rel.opcintype(i),
                     bkey.sk_subtype,
                     bkey.sk_attno as usize,
                 ));
             }
-            fmgr_core::fmgr_info(cmp_proc)?
+            rel.fmgr_info(cmp_proc)?
         };
         inskey.push(ScanKeyData {
             sk_flags: bkey.sk_flags,
@@ -802,7 +833,7 @@ pub(crate) fn bt_first(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResul
         debug_assert!(!ctx.so.needPrimScan);
         if xact::IsolationIsSerializable() {
             let snap = ctx.snapshot.expect("serializable scan has a snapshot");
-            predicate_seams::predicate_lock_relation::call(rel, snap)?;
+            rel.predicate_lock_relation(snap)?;
             leaf = bt_search(rel, &mut inskey, &mut ctx.frame)?;
         }
         if leaf.is_none() {
@@ -827,7 +858,10 @@ pub(crate) fn bt_first(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResul
 }
 
 /// _bt_next.
-pub(crate) fn bt_next(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResult<bool> {
+pub(crate) fn bt_next<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
+    dir: ScanDirection,
+) -> PgResult<bool> {
     debug_assert!(BTScanPosIsValid(&ctx.so.currPos));
 
     if ScanDirectionIsForward(dir) {
@@ -869,8 +903,8 @@ pub(crate) struct BtReadPageState<'p> {
 }
 
 /// _bt_readpage: load all matching items from the currPos page.
-fn bt_readpage(
-    ctx: &mut ScanCtx<'_, '_>,
+fn bt_readpage<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
     dir: ScanDirection,
     mut offnum: OffsetNumber,
     firstpage: bool,
@@ -906,7 +940,7 @@ fn bt_readpage(
     }
 
     if let Some(snap) = ctx.snapshot {
-        predicate_seams::predicate_lock_page::call(rel, so.currPos.currPage, snap)?;
+        rel.predicate_lock_page(so.currPos.currPage, snap)?;
     }
 
     let indnatts = rel.indnatts();
@@ -950,7 +984,7 @@ fn bt_readpage(
                             so,
                             shared,
                             so.currPos.currPage,
-                        );
+                        )?;
                     }
                     return Ok(false);
                 }
@@ -982,9 +1016,9 @@ fn bt_readpage(
 
                 pstate.offnum = offnum;
                 let passes_quals = if array_keys {
-                    bt_checkkeys::<true>(rel, so, &mut pstate, itup, indnatts, &mut ctx.frame)?
+                    bt_checkkeys::<true, _>(rel, so, &mut pstate, itup, indnatts, &mut ctx.frame)?
                 } else {
-                    bt_checkkeys::<false>(rel, so, &mut pstate, itup, indnatts, &mut ctx.frame)?
+                    bt_checkkeys::<false, _>(rel, so, &mut pstate, itup, indnatts, &mut ctx.frame)?
                 };
 
                 if array_keys && pstate.skip != 0 {
@@ -1010,7 +1044,7 @@ fn bt_readpage(
                                 offnum,
                                 bt_tuple_get_posting_n(itup, i),
                                 tuple_offset,
-                            );
+                            )?;
                             item_index += 1;
                         }
                     }
@@ -1034,9 +1068,9 @@ fn bt_readpage(
             unsafe {
                 let truncatt = bt_tuple_get_natts(itup, indnatts);
                 if array_keys {
-                    bt_checkkeys::<true>(rel, so, &mut pstate, itup, truncatt, &mut ctx.frame)?;
+                    bt_checkkeys::<true, _>(rel, so, &mut pstate, itup, truncatt, &mut ctx.frame)?;
                 } else {
-                    bt_checkkeys::<false>(rel, so, &mut pstate, itup, truncatt, &mut ctx.frame)?;
+                    bt_checkkeys::<false, _>(rel, so, &mut pstate, itup, truncatt, &mut ctx.frame)?;
                 }
             }
         }
@@ -1067,7 +1101,7 @@ fn bt_readpage(
                             so,
                             shared,
                             so.currPos.currPage,
-                        );
+                        )?;
                     }
                     return Ok(false);
                 }
@@ -1109,9 +1143,9 @@ fn bt_readpage(
                     bt_start_array_keys(so, dir);
                 }
                 let passes_quals = if array_keys {
-                    bt_checkkeys::<true>(rel, so, &mut pstate, itup, indnatts, &mut ctx.frame)?
+                    bt_checkkeys::<true, _>(rel, so, &mut pstate, itup, indnatts, &mut ctx.frame)?
                 } else {
-                    bt_checkkeys::<false>(rel, so, &mut pstate, itup, indnatts, &mut ctx.frame)?
+                    bt_checkkeys::<false, _>(rel, so, &mut pstate, itup, indnatts, &mut ctx.frame)?
                 };
 
                 if array_keys && so.scanBehind {
@@ -1145,7 +1179,7 @@ fn bt_readpage(
                                 offnum,
                                 bt_tuple_get_posting_n(itup, i),
                                 tuple_offset,
-                            );
+                            )?;
                         }
                     }
                 }
@@ -1176,7 +1210,7 @@ fn bt_readpage(
     // shared-state currency check makes the delayed call equivalent).
     if so.needPrimScan {
         if let Some(shared) = ctx.parallel {
-            crate::parallel::bt_parallel_primscan_schedule(so, shared, so.currPos.currPage);
+            crate::parallel::bt_parallel_primscan_schedule(so, shared, so.currPos.currPage)?;
         }
     }
 
@@ -1230,7 +1264,7 @@ pub(crate) unsafe fn bt_saveitem(
         core::ptr::copy_nonoverlapping(itup, curr_tuples.as_mut_ptr().add(start), itupsz);
         so.currPos.nextTupleOffset += MAXALIGN(itupsz) as i32;
     }
-    so.currPos.set_item(item_index as usize, item);
+    so.currPos.set_item(item_index as usize, item)?;
     Ok(())
 }
 
@@ -1278,7 +1312,7 @@ unsafe fn bt_setuppostingitems(
         info_p.write((info_p.read() & !INDEX_SIZE_MASK) | itupsz as u16);
         so.currPos.nextTupleOffset += itupsz as i32;
     }
-    so.currPos.set_item(item_index as usize, item);
+    so.currPos.set_item(item_index as usize, item)?;
     Ok(tuple_offset)
 }
 
@@ -1289,7 +1323,7 @@ fn bt_savepostingitem(
     offnum: OffsetNumber,
     heap_tid: ItemPointerData,
     tuple_offset: u16,
-) {
+) -> PgResult<()> {
     so.currPos.set_item(
         item_index as usize,
         BTScanPosItem {
@@ -1301,11 +1335,11 @@ fn bt_savepostingitem(
                 0
             },
         },
-    );
+    )
 }
 
 /// _bt_returnitem: publish items[itemIndex] as the amgettuple result.
-fn bt_returnitem(ctx: &mut ScanCtx<'_, '_>) {
+fn bt_returnitem<R: BtReadRel + ?Sized>(ctx: &mut ScanCtx<'_, '_, R>) {
     let so = &ctx.so;
     debug_assert!(BTScanPosIsValid(&so.currPos));
     debug_assert!(so.currPos.itemIndex >= so.currPos.firstItem);
@@ -1359,7 +1393,10 @@ pub fn bt_peek_same_block_tids(
 }
 
 /// _bt_steppage.
-fn bt_steppage(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResult<bool> {
+fn bt_steppage<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
+    dir: ScanDirection,
+) -> PgResult<bool> {
     let so = &mut *ctx.so;
     debug_assert!(BTScanPosIsValid(&so.currPos));
 
@@ -1371,17 +1408,20 @@ fn bt_steppage(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResult<bool> 
         if BTScanPosIsPinned(&so.currPos) {
             bufmgr::incr_buffer_ref_count::call(so.currPos.buf);
         }
-        copy_scanpos(so);
-        so.markPos.itemIndex = so.markItemIndex;
+        copy_scanpos(so)?;
+        let forward = ScanDirectionIsForward(so.currPos.dir);
+        let (mark_index, open) = (so.markItemIndex, so.needPrimScan);
         so.markItemIndex = -1;
+        let mark = so.markPos.as_deref_mut().expect("made by copy_scanpos");
+        mark.itemIndex = mark_index;
 
         // btrestrpos re-starts the arrays; leave the marked page's
         // moreRight/moreLeft open so the restored scan can keep reading.
-        if so.needPrimScan {
-            if ScanDirectionIsForward(so.currPos.dir) {
-                so.markPos.moreRight = true;
+        if open {
+            if forward {
+                mark.moreRight = true;
             } else {
-                so.markPos.moreLeft = true;
+                mark.moreLeft = true;
             }
         }
 
@@ -1405,22 +1445,32 @@ fn bt_steppage(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResult<bool> 
     bt_readnextpage(ctx, blkno, lastcurrblkno, dir, false)
 }
 
-// C's offsetof-bounded markPos memcpy: header fields + live items prefix.
-fn copy_scanpos(so: &mut BTScanOpaqueData<'_>) {
+// C's offsetof-bounded markPos memcpy: header fields + live items prefix. The mark (and an index-only scan's mark tuple
+// buffer) is made here at the scan's first mark saved off its page: a scan that never marks holds neither.
+fn copy_scanpos(so: &mut BTScanOpaqueData<'_>) -> PgResult<()> {
+    let mcx = *so.keyData.allocator();
+    if so.markPos.is_none() {
+        so.markPos = Some(BTScanPosData::alloc_in(mcx)?);
+    }
+    if so.currTuples.is_some() && so.markTuples.is_none() {
+        so.markTuples = Some(vec_with_capacity_in(mcx, BLCKSZ)?);
+    }
     let n = (so.currPos.lastItem + 1).max(0) as usize;
-    so.markPos.buf = so.currPos.buf;
-    so.markPos.currPage = so.currPos.currPage;
-    so.markPos.prevPage = so.currPos.prevPage;
-    so.markPos.nextPage = so.currPos.nextPage;
-    so.markPos.lsn = so.currPos.lsn;
-    so.markPos.dir = so.currPos.dir;
-    so.markPos.nextTupleOffset = so.currPos.nextTupleOffset;
-    so.markPos.moreLeft = so.currPos.moreLeft;
-    so.markPos.moreRight = so.currPos.moreRight;
-    so.markPos.firstItem = so.currPos.firstItem;
-    so.markPos.lastItem = so.currPos.lastItem;
-    so.markPos.itemIndex = so.currPos.itemIndex;
-    so.markPos.items[..n].copy_from_slice(&so.currPos.items[..n]);
+    let BTScanOpaqueData { currPos, markPos, .. } = so;
+    let mark = markPos.as_deref_mut().expect("made above");
+    mark.buf = currPos.buf;
+    mark.currPage = currPos.currPage;
+    mark.prevPage = currPos.prevPage;
+    mark.nextPage = currPos.nextPage;
+    mark.lsn = currPos.lsn;
+    mark.dir = currPos.dir;
+    mark.nextTupleOffset = currPos.nextTupleOffset;
+    mark.moreLeft = currPos.moreLeft;
+    mark.moreRight = currPos.moreRight;
+    mark.firstItem = currPos.firstItem;
+    mark.lastItem = currPos.lastItem;
+    mark.itemIndex = currPos.itemIndex;
+    mark.copy_items(currPos, n)?;
     if let (Some(mark), Some(curr)) = (so.markTuples.as_mut(), so.currTuples.as_ref()) {
         let len = so.currPos.nextTupleOffset as usize;
         // SAFETY: both buffers hold BLCKSZ capacity; len <= BLCKSZ.
@@ -1428,42 +1478,41 @@ fn copy_scanpos(so: &mut BTScanOpaqueData<'_>) {
             core::ptr::copy_nonoverlapping(curr.as_ptr(), mark.as_mut_ptr(), len);
         }
     }
+    Ok(())
 }
 
 // btrestrpos's markPos -> currPos restore (the mirror of copy_scanpos).
-pub(crate) fn restore_scanpos(so: &mut BTScanOpaqueData<'_>) {
-    let n = (so.markPos.lastItem + 1).max(0) as usize;
-    so.currPos.buf = so.markPos.buf;
-    so.currPos.currPage = so.markPos.currPage;
-    so.currPos.prevPage = so.markPos.prevPage;
-    so.currPos.nextPage = so.markPos.nextPage;
-    so.currPos.lsn = so.markPos.lsn;
-    so.currPos.dir = so.markPos.dir;
-    so.currPos.nextTupleOffset = so.markPos.nextTupleOffset;
-    so.currPos.moreLeft = so.markPos.moreLeft;
-    so.currPos.moreRight = so.markPos.moreRight;
-    so.currPos.firstItem = so.markPos.firstItem;
-    so.currPos.lastItem = so.markPos.lastItem;
-    so.currPos.itemIndex = so.markPos.itemIndex;
-    let (curr_items, mark_items) = {
-        let BTScanOpaqueData {
-            currPos, markPos, ..
-        } = so;
-        (&mut currPos.items, &markPos.items)
-    };
-    curr_items[..n].copy_from_slice(&mark_items[..n]);
+// The caller saw a valid mark (so `markPos` is made).
+pub(crate) fn restore_scanpos(so: &mut BTScanOpaqueData<'_>) -> PgResult<()> {
+    let BTScanOpaqueData { currPos, markPos, .. } = so;
+    let mark = markPos.as_deref().expect("a valid mark");
+    let n = (mark.lastItem + 1).max(0) as usize;
+    currPos.buf = mark.buf;
+    currPos.currPage = mark.currPage;
+    currPos.prevPage = mark.prevPage;
+    currPos.nextPage = mark.nextPage;
+    currPos.lsn = mark.lsn;
+    currPos.dir = mark.dir;
+    currPos.nextTupleOffset = mark.nextTupleOffset;
+    currPos.moreLeft = mark.moreLeft;
+    currPos.moreRight = mark.moreRight;
+    currPos.firstItem = mark.firstItem;
+    currPos.lastItem = mark.lastItem;
+    currPos.itemIndex = mark.itemIndex;
+    currPos.copy_items(mark, n)?;
+    let len = mark.nextTupleOffset as usize;
     if let (Some(curr), Some(mark)) = (so.currTuples.as_mut(), so.markTuples.as_ref()) {
-        let len = so.markPos.nextTupleOffset as usize;
         // SAFETY: both buffers hold BLCKSZ capacity; len <= BLCKSZ.
         unsafe {
             core::ptr::copy_nonoverlapping(mark.as_ptr(), curr.as_mut_ptr(), len);
         }
     }
+    Ok(())
 }
 
 /// _bt_readfirstpage: currPos.buf is pinned and locked on entry.
-fn bt_readfirstpage(
-    ctx: &mut ScanCtx<'_, '_>,
+fn bt_readfirstpage<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
     offnum: OffsetNumber,
     dir: ScanDirection,
 ) -> PgResult<bool> {
@@ -1495,8 +1544,8 @@ fn bt_readfirstpage(
 }
 
 /// _bt_readnextpage.
-fn bt_readnextpage(
-    ctx: &mut ScanCtx<'_, '_>,
+fn bt_readnextpage<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
     mut blkno: BlockNumber,
     mut lastcurrblkno: BlockNumber,
     dir: ScanDirection,
@@ -1615,8 +1664,8 @@ fn bt_readnextpage(
 }
 
 /// _bt_lock_and_validate_left: backwards scans' split/deletion-safe left move.
-fn bt_lock_and_validate_left(
-    rel: &Relation<'_>,
+fn bt_lock_and_validate_left<R: BtReadRel + ?Sized>(
+    rel: &R,
     blkno: &mut BlockNumber,
     mut lastcurrblkno: BlockNumber,
 ) -> PgResult<Option<BufferPin>> {
@@ -1688,13 +1737,13 @@ fn bt_lock_and_validate_left(
 
 /// _bt_get_endpoint: first/last page on a given tree level. Leaf descends
 /// from the fast root; non-leaf levels descend from the true root.
-pub(crate) fn bt_get_endpoint(
-    rel: &Relation<'_>,
+pub(crate) fn bt_get_endpoint<R: BtReadRel + ?Sized>(
+    rel: &R,
     level: u32,
     rightmost: bool,
 ) -> PgResult<Option<BufferPin>> {
     let root = if level == 0 {
-        bt_getroot(rel, None, BT_READ)?
+        bt_getroot_read(rel)?
     } else {
         crate::page::bt_gettrueroot(rel)?
     };
@@ -1740,7 +1789,10 @@ pub(crate) fn bt_get_endpoint(
 }
 
 /// _bt_endpoint: position at the first/last page for a full-index scan.
-fn bt_endpoint(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResult<bool> {
+fn bt_endpoint<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
+    dir: ScanDirection,
+) -> PgResult<bool> {
     let rel = ctx.rel;
     debug_assert!(!BTScanPosIsValid(&ctx.so.currPos));
     debug_assert!(!ctx.so.needPrimScan);
@@ -1752,7 +1804,7 @@ fn bt_endpoint(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResult<bool> 
         // same point, and look again for a key that landed meanwhile.
         if xact::IsolationIsSerializable() {
             let snap = ctx.snapshot.expect("serializable scan has a snapshot");
-            predicate_seams::predicate_lock_relation::call(rel, snap)?;
+            rel.predicate_lock_relation(snap)?;
             endpoint = bt_get_endpoint(rel, 0, ScanDirectionIsBackward(dir))?;
         }
     }
@@ -1789,25 +1841,27 @@ fn bt_endpoint(ctx: &mut ScanCtx<'_, '_>, dir: ScanDirection) -> PgResult<bool> 
 }
 
 /// btgettuple's killed-item bookkeeping + _bt_next dispatch (nbtree.c body).
-pub(crate) fn bt_gettuple_continue(
-    ctx: &mut ScanCtx<'_, '_>,
+pub(crate) fn bt_gettuple_continue<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
     dir: ScanDirection,
     kill_prior_tuple: bool,
 ) -> PgResult<bool> {
     if kill_prior_tuple {
-        if ctx.so.killedItems.capacity() == 0 {
-            let mcx = *ctx.so.keyData.allocator();
-            let v: ::mcx::PgVec<'_, i32> = vec_with_capacity_in(mcx, MaxTIDsPerBTreePage)?;
-            // 'mcx unification: killedItems shares keyData's scan context.
-            ctx.so.killedItems = v;
-        }
         // C's killedItems[numKilled++]: _bt_killitems resets numKilled
         // without truncating, so append here would replay stale indexes.
+        // The array grows as kills need it (C pallocs MaxTIDsPerBTreePage at
+        // the first kill): a point probe kept between statements kills a few.
         if (ctx.so.numKilled as usize) < MaxTIDsPerBTreePage {
             let n = ctx.so.numKilled as usize;
             if n < ctx.so.killedItems.len() {
                 ctx.so.killedItems[n] = ctx.so.currPos.itemIndex;
             } else {
+                if ctx.so.killedItems.len() == ctx.so.killedItems.capacity() {
+                    let more = ctx.so.killedItems.capacity().max(BT_POS_FEW_ITEMS).min(MaxTIDsPerBTreePage - n);
+                    if ctx.so.killedItems.try_reserve_exact(more).is_err() {
+                        return Err(ctx.so.killedItems.allocator().oom_boxed(more * core::mem::size_of::<i32>()));
+                    }
+                }
                 ctx.so.killedItems.push(ctx.so.currPos.itemIndex);
             }
             ctx.so.numKilled += 1;

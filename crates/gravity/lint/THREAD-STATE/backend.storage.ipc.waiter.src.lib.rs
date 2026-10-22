@@ -1,0 +1,1 @@
+backend/storage/ipc/waiter/src/lib.rs	CURRENT	pgport	exit	thread	this thread's waiter slot (its WaiterGuard, made on first use by try_current_slot): a claim's waits park on its own thread's waiter; the guard's drop at thread exit retires the slot's token, closes its wake pipe and frees the slot

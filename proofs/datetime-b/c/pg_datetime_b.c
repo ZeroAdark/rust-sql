@@ -3345,7 +3345,7 @@ j2day(int date)
  * pointer provenance strictly and reports "pointer outside object bounds"
  * on the very next `position->token` dereference — and once a
  * dereference check fails, CBMC continues with an unconstrained value, so
- * every downstream assertion in the harness becomes garbage. CI job
+ * every downstream assertion in the harness becomes garbage. Fleet job
  * pgrust-kani-suite-1785496407 reported exactly that: a bogus hit/miss
  * mismatch on keys "ago" and the all-NUL key that was pure UB fallout,
  * NOT a Rust-vs-C divergence (confirmed by per-cell bisection).

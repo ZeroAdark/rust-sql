@@ -1,0 +1,10 @@
+path	crates/backend/access/pgrcolumnar/pgrc_scan/src/prune.rs
+growth	std::collections::HashMap::entry	1
+growth	std::collections::HashMap::insert	1
+growth	std::vec::Vec::push	4
+method	slice::to_vec	1
+method	std::clone::Clone::clone	3
+method	std::sync::Arc::new	1
+method	std::vec::Vec::with_capacity	2
+type	std::sync::Arc	1
+type	std::vec::Vec	6

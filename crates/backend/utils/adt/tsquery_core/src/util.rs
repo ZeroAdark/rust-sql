@@ -140,7 +140,9 @@ pub fn qtn_sort(n: &mut QtNode<'_>) -> PgResult<()> {
         // Apply the permutation: new[k] = old[idx[k]]. Invert it so the
         // cycle-swap walk below can scatter in place with slice::swap
         // (no Copy/clone of QtNode, no second node buffer).
-        let mut inv = vec![0u32; idx.len()];
+        let mut inv = Vec::new();
+        inv.try_reserve_exact(idx.len()).map_err(|_| ::mcx::oom_named("tsquery", idx.len() * 4))?;
+        inv.resize(idx.len(), 0);
         for (k, &v) in idx.iter().enumerate() {
             inv[v as usize] = k as u32;
         }
@@ -175,20 +177,19 @@ pub fn qtn_ternary(n: &mut QtNode<'_>) -> PgResult<()> {
     if opr.oper != OP_AND && opr.oper != OP_OR {
         return Ok(());
     }
-    let mut i = 0usize;
-    while i < n.children.len() {
-        let same = matches!(n.children[i].item, Item::Opr(co) if co.oper == opr.oper);
-        if same {
-            let cc = n.children.remove(i);
-            let ncc = cc.children.len();
-            let mut k = i;
-            for gc in cc.children {
-                n.children.insert(k, gc);
-                k += 1;
-            }
-            i += ncc;
+    let same = |c: &QtNode<'_>| matches!(c.item, Item::Opr(co) if co.oper == opr.oper);
+    if !n.children.iter().any(same) {
+        return Ok(());
+    }
+    let len: usize = n.children.iter().map(|c| if same(c) { c.children.len() } else { 1 }).sum();
+    let mcx = *n.children.allocator();
+    let mut out: PgVec<QtNode> = PgVec::new_in(mcx);
+    out.try_reserve_exact(len).map_err(|_| mcx.oom(len))?;
+    for c in core::mem::replace(&mut n.children, out) {
+        if same(&c) {
+            n.children.extend(c.children);
         } else {
-            i += 1;
+            n.children.push(c);
         }
     }
     Ok(())

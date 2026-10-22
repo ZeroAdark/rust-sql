@@ -87,7 +87,6 @@ fn txn_by_xid_creates_and_caches() {
     assert_eq!(a2, Some(a));
 
     assert!(rb.txn_by_xid(99, false, 0, false).0.is_none());
-    // Cached negative lookup stays negative until a create.
     assert!(rb.txn_by_xid(99, false, 0, false).0.is_none());
     let (c, is_new) = rb.txn_by_xid(99, true, 300, true);
     assert!(is_new);
@@ -114,7 +113,6 @@ fn assign_child_moves_subtxn_off_toplevel_list() {
     assert_eq!(rb.txn(top).nsubtxns, 1);
     assert_eq!(rb.get_oldest_txn(), Some(top));
 
-    // Idempotent for an already-known subxact.
     rb.assign_child(1, 2, 70);
     assert_eq!(rb.txn(top).nsubtxns, 1);
 }
@@ -162,7 +160,6 @@ fn xid_has_base_snapshot_follows_toplevel() {
     rb.assign_child(1, 2, 15);
     assert!(!rb.xid_has_base_snapshot(2));
     rb.set_base_snapshot(2, 16, snap(500));
-    // A known subxact's base snapshot lands on the toplevel txn.
     assert!(rb.xid_has_base_snapshot(1));
     assert!(rb.xid_has_base_snapshot(2));
     let sub = rb.txn_by_xid(2, false, 0, false).0.unwrap();
@@ -182,8 +179,6 @@ fn queue_change_updates_memory_accounting() {
     assert_eq!(rb.txn(txn).total_size, rb.size);
 
     let cid = rb.txn(txn).changes.head;
-    // C: sizeof(ReorderBufferChange) 80 + strlen(prefix)+1 + message_size +
-    // 2 * sizeof(Size) (reorderbuffer.c:4487).
     let expected = 80 + "test".len() + 1 + "hello".len() + 2 * 8;
     assert_eq!(rb.change_size(cid), expected);
 
@@ -208,8 +203,6 @@ fn subtxn_changes_roll_up_into_top_total_size() {
     let sub = rb.txn_by_xid(2, false, 0, false).0.unwrap();
     assert_eq!(rb.txn(top).size, s_a);
     assert_eq!(rb.txn(sub).size, s_b + s_c);
-    // As in C, total_size accrued before the child assignment stays where it
-    // was counted; only post-assignment changes roll up to the new top.
     assert_eq!(rb.txn(top).total_size, s_a + s_c);
     assert_eq!(rb.txn(sub).total_size, s_b);
     assert_eq!(rb.txn(top).size + rb.txn(sub).size, rb.size);
@@ -283,7 +276,6 @@ fn invalidations_accumulate_on_toplevel() {
     let sub = rb.txn_by_xid(2, false, 0, false).0.unwrap();
     assert_eq!(rb.txn(top).invalidations.len(), 3);
     assert!(rb.txn(sub).invalidations.is_empty());
-    // The change itself is queued under the originating xid.
     assert_eq!(rb.txn(sub).nentries, 1);
     assert_eq!(rb.txn(top).nentries, 1);
     assert_eq!(rb.get_invalidations(1).len(), 3);
@@ -306,7 +298,6 @@ fn distributed_invalidations_overflow_sets_flag_and_clears() {
     assert!(rb.txn(top).distr_inval_overflowed());
     assert!(rb.txn(top).invalidations_distributed.is_empty());
 
-    // Further messages are dropped from the distributed store, still queued.
     rb.add_distributed_invalidations(1, 13, &[inval_msg(9)]).unwrap();
     assert!(rb.txn(top).invalidations_distributed.is_empty());
     assert_eq!(rb.txn(top).nentries, 3);
@@ -324,7 +315,6 @@ fn catalog_changes_tracked_and_sorted() {
     assert!(!rb.xid_has_catalog_changes(4));
     assert_eq!(rb.get_catalog_changes_xacts(), vec![3, 9]);
 
-    // A subxact marks its toplevel too.
     rb.process_xid(11, 13);
     rb.assign_child(11, 12, 14);
     rb.xid_set_catalog_changes(12, 15);
@@ -578,10 +568,6 @@ fn toast_chunks_reassemble_behind_an_indirect_pointer() {
 
     match &rb.change(cid).data {
         ReorderBufferChangeData::Tp { newtuple: Some(t), .. } => {
-            // C rebuilds the tuple around a 10-byte VARTAG_INDIRECT pointer
-            // (reorderbuffer.c:5212): MAXALIGN(header) 24 + 10, no padding for
-            // a 1B_E datum. Detoasting follows the pointer to the reassembled
-            // value, which the toast hash entry owns until toast_reset.
             assert_eq!(t.t_len, 24 + 10);
             let mut values = [Datum::from_usize(0)];
             let mut isnull = [true];
@@ -626,13 +612,10 @@ fn toast_chunk_sequence_gap_errors() {
 #[test]
 fn commit_of_unknown_or_snapshotless_txn_is_cheap() {
     let mut rb = rb();
-    // Unknown xid: no-op.
     rb.commit(999, 100, 101, 0, 0, 0).unwrap();
 
-    // Known but without a base snapshot: cleaned up without replay.
     rb.queue_change(5, 10, msg_change("x"), false).unwrap();
     let txn = rb.txn_by_xid(5, false, 0, false).0.unwrap();
-    // No invalidations, no base snapshot -> ReorderBufferCleanupTXN path.
     rb.commit(5, 100, 101, 0, 0, 0).unwrap();
     let _ = txn;
     assert!(rb.txn_by_xid(5, false, 0, false).0.is_none());
@@ -668,15 +651,12 @@ fn change_size_formula_matches_shapes() {
     rb.add_snapshot(3, 10, snap(100)).unwrap();
     let txn = rb.txn_by_xid(3, false, 0, false).0.unwrap();
     let cid = rb.txn(txn).changes.head;
-    // C: sizeof(ReorderBufferChange) 80 + sizeof(SnapshotData) 104 + xcnt/subxcnt
-    // TransactionIds (reorderbuffer.c:4508); a command-id change is the bare 80.
     assert_eq!(rb.change_size(cid), 80 + 104);
 
     rb.add_new_command_id(3, 11, 2).unwrap();
     let cid2 = rb.txn(txn).changes.tail;
     assert_eq!(rb.change_size(cid2), 80);
 
-    // Tuplecid changes never count toward the memory limit.
     let before = rb.size;
     rb.add_new_tuple_cids(
         3,
@@ -720,7 +700,6 @@ fn queued_change_to_aborted_txn_is_dropped() {
     assert_eq!(rb.size, 0);
 }
 
-// --- two-phase (prepared transaction) machinery ---
 
 thread_local! {
     static TWOPC_EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -763,7 +742,7 @@ fn rec_rollback_prepared_cb(
 #[test]
 fn remember_prepare_info_marks_prepared() {
     let mut rb = rb();
-    assert!(!rb.remember_prepare_info(21, 100, 110, 777, 3, 55)); // unknown xid
+    assert!(!rb.remember_prepare_info(21, 100, 110, 777, 3, 55));
 
     rb.process_xid(21, 90);
     assert!(rb.remember_prepare_info(21, 100, 110, 777, 3, 55));
@@ -792,9 +771,6 @@ fn skip_prepare_marks_skipped() {
     );
 }
 
-// upstream b563fc6bd926 (18.6): Fix logical decoding of empty prepared
-// transactions — a prepared txn with no base snapshot (nothing decoded)
-// must reach the plugin neither at PREPARE nor at COMMIT/ROLLBACK PREPARED.
 #[test]
 fn prepare_of_empty_txn_sends_no_prepare() {
     let mut rb = rb();
@@ -805,7 +781,6 @@ fn prepare_of_empty_txn_sends_no_prepare() {
     assert!(rb.remember_prepare_info(23, 100, 110, 777, 0, 0));
     rb.prepare(23, "gid_23").unwrap();
 
-    // No ProcessTXN and (18.6) no trailing send-prepare arm either.
     assert!(twopc_events().is_empty());
     let txn = rb.txn_by_xid(23, false, 0, false).0.unwrap();
     assert!(!rb.txn(txn).sent_prepare());
@@ -818,8 +793,6 @@ fn finish_prepared_of_empty_txn_is_cleaned_up_without_callbacks() {
     rb.callbacks.commit_prepared = rec_commit_prepared_cb;
     TWOPC_EVENTS.with(|e| e.borrow_mut().clear());
 
-    // Skipped-prepare shape (100 < two_phase_at 200): the replay arm finds
-    // nothing to decode, then the empty-txn arm cleans up silently.
     rb.process_xid(24, 90);
     assert!(rb.remember_prepare_info(24, 100, 110, 777, 0, 0));
     rb.skip_prepare(24);
@@ -854,7 +827,6 @@ fn finish_prepared_already_sent_goes_straight_to_commit_prepared() {
     rb.callbacks.commit_prepared = rec_commit_prepared_cb;
     TWOPC_EVENTS.with(|e| e.borrow_mut().clear());
 
-    // Decoded-at-prepare-time shape: base snapshot, prepare already sent.
     rb.process_xid(25, 290);
     rb.set_base_snapshot(25, 295, snap(25));
     assert!(rb.remember_prepare_info(25, 300, 310, 777, 0, 0));
@@ -882,7 +854,6 @@ fn finish_prepared_rollback_uses_prepare_record_info() {
     rb.finish_prepared(26, 600, 610, 200, 999, 0, 0, "gid_26", false)
         .unwrap();
 
-    // rollback_prepared carries the PREPARE record's end LSN and time.
     assert_eq!(twopc_events(), ["rollback_prepared:gid_26:310:777".to_string()]);
     assert!(rb.txn_by_xid(26, false, 0, false).0.is_none());
 }
@@ -894,15 +865,12 @@ fn finish_prepared_unknown_xid_is_noop() {
         .unwrap();
 }
 
-// --- CheckXidAlive (concurrent-abort detection during prepared decode) ---
 
 thread_local! {
     pub(crate) static DID_COMMIT_ANSWER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-// Seams are set-once per process; every test that needs the stub funnels
-// through this. The stub answers from a thread-local so parallel tests
-// cannot see each other's value.
+// The stub answers from a thread-local so parallel tests cannot see each other's value.
 pub(crate) fn install_did_commit_stub() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -912,11 +880,6 @@ pub(crate) fn install_did_commit_stub() {
     });
 }
 
-// The mapping-file reader goes through fd.c's transient-file API and the
-// wait-event brackets, whose seams are set-once per process; every test that
-// reaches ApplyLogicalMappingFile funnels through this. The wait-event
-// recorder is keyed by the reporting thread (the xlogreader WalRead witness
-// precedent) so parallel tests only ever witness their own reports.
 use std::thread::ThreadId;
 static WAIT_STARTS: std::sync::Mutex<Vec<(ThreadId, u32)>> = std::sync::Mutex::new(Vec::new());
 static WAIT_ENDS: std::sync::Mutex<Vec<ThreadId>> = std::sync::Mutex::new(Vec::new());
@@ -938,13 +901,11 @@ pub(crate) fn install_file_seams() {
     });
 }
 
-// This thread's pgstat_report_wait_start ids, in report order.
 pub(crate) fn my_wait_starts() -> Vec<u32> {
     let me = std::thread::current().id();
     WAIT_STARTS.lock().unwrap().iter().filter(|(t, _)| *t == me).map(|(_, i)| *i).collect()
 }
 
-// This thread's pgstat_report_wait_end count.
 pub(crate) fn my_wait_ends() -> usize {
     let me = std::thread::current().id();
     WAIT_ENDS.lock().unwrap().iter().filter(|t| **t == me).count()
@@ -955,18 +916,14 @@ fn setup_check_xid_live_matches_c_arms() {
     install_did_commit_stub();
     xact::SetCheckXidAlive(types_core::InvalidTransactionId);
 
-    // Uncommitted xid: published for the catalog-scan guards.
     DID_COMMIT_ANSWER.with(|c| c.set(false));
     crate::replay::setup_check_xid_live(501).unwrap();
     assert_eq!(xact::CheckXidAlive(), 501);
 
-    // Same xid again: the TransactionIdEquals early-return arm — no re-probe
-    // (the commit status is not consulted; flipping it must not matter).
     DID_COMMIT_ANSWER.with(|c| c.set(true));
     crate::replay::setup_check_xid_live(501).unwrap();
     assert_eq!(xact::CheckXidAlive(), 501);
 
-    // A different, already-committed xid resets to invalid.
     crate::replay::setup_check_xid_live(502).unwrap();
     assert_eq!(xact::CheckXidAlive(), types_core::InvalidTransactionId);
 
@@ -984,8 +941,7 @@ fn check_xid_guard_clears_state_on_panic_unwind() {
     }));
     assert!(unwound.is_err());
 
-    // The thread survives a caught panic in the threaded server; a leaked
-    // CheckXidAlive would poison every later catalog scan on this thread.
+    // A leaked CheckXidAlive would poison every later catalog scan on this thread.
     assert_eq!(xact::CheckXidAlive(), types_core::InvalidTransactionId);
     assert!(!xact::bsysscan());
 }
@@ -1001,20 +957,18 @@ fn check_xid_guard_is_idempotent_when_clean() {
     assert!(!xact::bsysscan());
 }
 
-// ---- spill-to-disk ---------------------------------------------------------
 
 const TEST_SEG_SIZE: u64 = 16 * 1024 * 1024;
 
-// Per-test spill environment: seams once per process, a private DataDir per
-// test thread (DataDir is thread-local), and a slot dir for the files.
 fn spill_rb(slot: &str) -> ReorderBuffer {
     static SEAMS: std::sync::Once = std::sync::Once::new();
     SEAMS.call_once(|| {
         transam_xlog_seams::wal_segment_size::set(|| TEST_SEG_SIZE as i32);
         postgres_seams::check_for_interrupts::set(|| Ok(()));
-        // Eviction candidates read as in-progress: no truncation, plain spill.
         procarray_seams::transaction_id_is_in_progress::set(|_| Ok(true));
     });
+    install_file_seams();
+    fd::vfd::InitFileAccess();
     let base = std::env::temp_dir().join(format!("pgrust-rb-spill-{}-{slot}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("pg_replslot").join(slot)).unwrap();
@@ -1070,7 +1024,6 @@ fn spill_roundtrip_preserves_every_change_type() {
     let xid: TransactionId = 60;
     let (main_desc, _) = toast_descs();
 
-    // One change of every payload-carrying kind, ascending LSNs.
     rb.queue_change(xid, 100, msg_change("alpha"), false).unwrap();
     let payload = inline_varlena(b"spilled tuple payload");
     let values = [Datum::from_usize(payload.as_ptr() as usize)];
@@ -1133,10 +1086,8 @@ fn spill_roundtrip_preserves_every_change_type() {
     assert_eq!(rb.spillTxns, 1);
     assert_eq!(rb.spillCount, 1);
     assert_eq!(rb.spillBytes, size_before as i64);
-    // All LSNs below one segment: exactly one file, named for segment 0.
     assert_eq!(spill_files(slot), vec![format!("xid-{xid}-lsn-0-0.spill")]);
 
-    // Restore through the iterator and deep-verify each payload.
     let mut state = None;
     rb.iter_txn_init(txn, &mut state).unwrap();
     let mut state = state.unwrap();
@@ -1190,7 +1141,6 @@ fn spill_roundtrip_preserves_every_change_type() {
         vec![100, 110, 120, 130, 140, 150]
     );
 
-    // Cleanup removes the on-disk files.
     rb.cleanup_txn(txn).unwrap();
     assert!(spill_files(slot).is_empty());
     assert_eq!(rb.size, 0);
@@ -1200,7 +1150,6 @@ fn spill_roundtrip_preserves_every_change_type() {
 fn spill_eviction_fires_from_queue_change_and_reports_stats() {
     let slot = "spill_evict";
     let mut rb = spill_rb(slot);
-    // 8 kB limit; each message is ~1 kB.
     (guc_tables::vars::logical_decoding_work_mem.get().set)(8);
 
     thread_local! {
@@ -1227,13 +1176,11 @@ fn spill_eviction_fires_from_queue_change_and_reports_stats() {
     let txn = rb.txn_by_xid(70, false, 0, false).0.unwrap();
     assert!(rb.txn(txn).is_serialized());
     assert_eq!(rb.txn(txn).nentries, 64);
-    // In-memory tail = the changes queued after the last eviction.
     assert_eq!(
         rb.txn(txn).nentries - rb.txn(txn).nentries_mem,
         64 - rb.txn(txn).nentries_mem
     );
 
-    // A partially-serialized txn iterates spilled-then-live in LSN order.
     let lsns = drain_lsns(&mut rb, txn);
     assert_eq!(lsns, (0..64u64).map(|i| 1000 + i).collect::<Vec<_>>());
 
@@ -1246,7 +1193,7 @@ fn spill_restore_runs_in_bounded_batches() {
     let slot = "spill_batches";
     let mut rb = spill_rb(slot);
     let xid: TransactionId = 80;
-    let n: u64 = 5000; // crosses the 4096-change restore batch bound
+    let n: u64 = 5000;
 
     for i in 0..n {
         rb.queue_change(xid, 10_000 + i, msg_change(&format!("m{i}")), false).unwrap();
@@ -1272,7 +1219,6 @@ fn spill_restore_runs_in_bounded_batches() {
             _ => panic!("expected Msg data"),
         }
         count += 1;
-        // Never more than one restore batch in memory.
         assert!(rb.txn(txn).nentries_mem <= 4096);
     }
     rb.iter_txn_finish(state);
@@ -1324,8 +1270,6 @@ fn spill_iterates_subtxns_merged_by_lsn() {
     let top = rb.txn_by_xid(top_xid, false, 0, false).0.unwrap();
     let sub = rb.txn_by_xid(sub_xid, false, 0, false).0.unwrap();
 
-    // Serializing the toplevel recurses into the subtransaction; each spills
-    // into its own xid file and counts separately in the spill stats.
     rb.serialize_txn(top).unwrap();
     assert!(rb.txn(top).is_serialized());
     assert!(rb.txn(sub).is_serialized());
@@ -1418,8 +1362,6 @@ fn spill_toast_chunks_reassemble_after_restore() {
     rb.serialize_txn(txn).unwrap();
     assert_eq!(rb.txn(txn).nentries_mem, 0);
 
-    // Replay-shaped consumption of the restored stream: chunk inserts are
-    // extracted into the toast hash, the main tuple is then rewritten.
     let mut state = None;
     rb.iter_txn_init(txn, &mut state).unwrap();
     let mut state = state.unwrap();
@@ -1440,8 +1382,6 @@ fn spill_toast_chunks_reassemble_after_restore() {
             let mut isnull = [true];
             types_tuple::heap_deform_tuple(t.as_tuple(), &main_desc, &mut values, &mut isnull);
             assert!(!isnull[0]);
-            // A VARTAG_INDIRECT pointer at the reassembled value
-            // (reorderbuffer.c:5212); detoasting follows it.
             let img = unsafe { crate::toast::varlena_image(values[0].as_usize() as *const u8) };
             assert_eq!((img.len(), img[0], img[1]), (10, 0x01, 1));
             let detoasted = detoast::detoast_attr(rb.mcx, img).unwrap();
@@ -1530,8 +1470,6 @@ fn spill_tuplecid_and_speculative_forms_roundtrip() {
     let mut rb = spill_rb(slot);
     let xid: TransactionId = 150;
 
-    // Spec-confirm keeps its locator and clear-toast flag through disk (C
-    // memcpy's the base struct; the port encodes the Tp payload for it too).
     let change = ReorderBufferChange::new(
         InternalSpecConfirm,
         ReorderBufferChangeData::Tp {
@@ -1544,8 +1482,6 @@ fn spill_tuplecid_and_speculative_forms_roundtrip() {
     rb.queue_change(xid, 100, change, false).unwrap();
     let txn = rb.txn_by_xid(xid, false, 0, false).0.unwrap();
 
-    // TupleCid changes live on the separate tuplecids list and are never
-    // spilled with the change stream; queue one to prove spill leaves it be.
     rb.add_new_tuple_cids(
         xid,
         105,
@@ -1578,19 +1514,15 @@ fn spill_tuplecid_and_speculative_forms_roundtrip() {
     rb.cleanup_txn(txn).unwrap();
 }
 
-// ---- streaming eviction selection -------------------------------------------
 
 #[test]
 fn largest_streamable_top_txn_selection_rules() {
     let mut rb = rb();
 
-    // txn 200: streamable, base snapshot, two changes.
     rb.queue_change(200, 100, msg_change(&"x".repeat(500)), false).unwrap();
     rb.queue_change(200, 110, msg_change("small"), false).unwrap();
     rb.set_base_snapshot(200, 90, snap(200));
-    // txn 201: bigger but no base snapshot -> not a candidate.
     rb.queue_change(201, 120, msg_change(&"y".repeat(5000)), false).unwrap();
-    // txn 202: base snapshot but only non-streamable changes.
     rb.add_new_command_id(202, 130, 7).unwrap();
     rb.set_base_snapshot(202, 125, snap(202));
 
@@ -1598,12 +1530,10 @@ fn largest_streamable_top_txn_selection_rules() {
     let picked = rb.largest_streamable_top_txn();
     assert_eq!(picked, Some(t200), "only the snapshot-bearing streamable txn qualifies");
 
-    // A partial change disqualifies the toplevel.
     rb.txn_mut(t200).txn_flags |= RBTXN_HAS_PARTIAL_CHANGE;
     assert_eq!(rb.largest_streamable_top_txn(), None);
     rb.txn_mut(t200).txn_flags &= !RBTXN_HAS_PARTIAL_CHANGE;
 
-    // An aborted txn is skipped.
     rb.txn_mut(t200).txn_flags |= RBTXN_IS_ABORTED;
     assert_eq!(rb.largest_streamable_top_txn(), None);
 }
@@ -1635,7 +1565,6 @@ fn save_txn_snapshot_copies_uncopied_snapshots() {
     rb.queue_change(210, 100, msg_change("x"), false).unwrap();
     let txn = rb.txn_by_xid(210, false, 0, false).0.unwrap();
 
-    // Uncopied (shared snapbuild-style) snapshot: a private copy is stored.
     let shared = snap(210);
     assert!(!shared.copied);
     rb.save_txn_snapshot(txn, &shared, 3);
@@ -1646,32 +1575,22 @@ fn save_txn_snapshot_copies_uncopied_snapshots() {
         assert_eq!(rb.txn(txn).command_id, 3);
     }
 
-    // Already-copied snapshot: stored as-is (same Rc identity).
     let copied = rb.copy_snap(&snap(211), txn, 5);
     rb.save_txn_snapshot(txn, &copied, 5);
     let stored = rb.txn(txn).snapshot_now.as_ref().unwrap();
     assert!(Rc::ptr_eq(stored, &copied), "copied snapshots are not re-copied");
 }
 
-// ---- audit-remediation b060 witnesses ---------------------------------------
 
-// UpdateLogicalMappings parses mapping file names with
-// sscanf(LOGICAL_REWRITE_FORMAT) (reorderbuffer.c:5501): the six conversions
-// decide, trailing bytes after the sixth are ignored, and the LSN separator
-// is exactly one '_' (rows a186-candidate-fp-logical-reorderbuffer-p3-
-// 38f29a7c6464322aebaf-1 and -f6c5350a40a62bd646b1-1).
 #[test]
 fn mapping_filename_parse_follows_sscanf() {
     use crate::visibility::parse_mapping_filename;
     let lsn = (3u64 << 32) | 4;
     assert_eq!(parse_mapping_filename("map-1-2-3_4-5-6"), Some((1, 2, lsn, 5, 6)));
-    // sscanf returns 6 and stops: trailing junk after the sixth field is fine.
     assert_eq!(parse_mapping_filename("map-1-2-3_4-5-6-extra"), Some((1, 2, lsn, 5, 6)));
-    // %x is greedy over hex digits: "6extra" scans as 0x6e, then stops.
     assert_eq!(parse_mapping_filename("map-1-2-3_4-5-6extra"), Some((1, 2, lsn, 5, 0x6e)));
     assert_eq!(parse_mapping_filename("map-1-2-3_4-5-6zzz"), Some((1, 2, lsn, 5, 6)));
     assert_eq!(parse_mapping_filename("map-1-2-3_4-5-6.tmp"), Some((1, 2, lsn, 5, 6)));
-    // %X_%X: a second '_' fails the '-' literal after the fourth conversion.
     assert_eq!(parse_mapping_filename("map-1-2-3_4_5-6-7"), None);
     assert_eq!(parse_mapping_filename("map-1-2-3-4-5-6"), None);
     assert_eq!(parse_mapping_filename("map-1-2-3_4-5"), None);
@@ -1681,7 +1600,6 @@ fn mapping_filename_parse_follows_sscanf() {
         parse_mapping_filename("map-a-B-c_D-e-F"),
         Some((0xa, 0xb, (0xc << 32) | 0xd, 0xe, 0xf))
     );
-    // %x accepts an optional 0x prefix and sign (strtoul semantics).
     assert_eq!(parse_mapping_filename("map-0x1-2-3_4-5-6"), Some((1, 2, lsn, 5, 6)));
     assert_eq!(
         parse_mapping_filename("map-1-2-3_4-5--1"),
@@ -1689,15 +1607,8 @@ fn mapping_filename_parse_follows_sscanf() {
     );
 }
 
-// ApplyLogicalMappingFile (reorderbuffer.c:5397): a torn entry reports
-// 'could not read from file "pg_logical/mappings/<name>": read N instead of
-// 36 bytes' — the relative PG_LOGICAL_MAPPINGS_DIR path, not an absolute one
-// (row a186-candidate-fp-logical-reorderbuffer-p3-064eab6c298f40df6c15-1).
 #[test]
 fn torn_mapping_entry_reports_c_message_with_relative_path() {
-    // ApplyLogicalMappingFile now opens the file through fd::OpenTransientFile
-    // (#1974), which consults the xact/wait-event seams; install them so the
-    // test does not depend on another test in the process having done so.
     install_file_seams();
     let dir = std::env::temp_dir().join(format!("pgrust_rb_mapping_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1711,17 +1622,13 @@ fn torn_mapping_entry_reports_c_message_with_relative_path() {
         err.message(),
         "could not read from file \"pg_logical/mappings/map-1-2-3_4-5-6\": read 20 instead of 36 bytes"
     );
-    // A complete entry set and EOF: no error, nothing mapped (empty hash).
     std::fs::write(dir.join(fname), [0u8; 36]).unwrap();
     crate::visibility::ApplyLogicalMappingFile(&hash, &dir, fname).unwrap();
     assert!(hash.borrow().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// --- audit-18.6 w2-027: C-exact diagnostics and accounting ---
 
-// Answer for the relid_by_relfilenumber stub below; both arms of the mapping
-// failure live in one test so the process-global seam sees one writer.
 static MAPPED_RELOID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 fn install_relfilenumber_stubs() {
@@ -1730,13 +1637,11 @@ fn install_relfilenumber_stubs() {
         relfilenumbermap_seams::relid_by_relfilenumber::set(|_, _| {
             Ok(MAPPED_RELOID.load(std::sync::atomic::Ordering::Relaxed))
         });
-        // relpathperm for the default tablespace (relpath.c:172 "base/%u/%u").
         relpath_seams::relpathperm::set(|rlocator, _forknum| {
             format!("base/{}/{}", rlocator.dbOid, rlocator.relNumber)
         });
-        // Every relcache miss resolves to "no such relation": RelationBuildDesc
-        // returns NULL, so RelationIdGetRelation is !RelationIsValid.
-        relcache_build_seams::scan_pg_relation::set(|_, _, _| Ok(None));
+        relcache_build_seams::scan_pg_relation::set(|_, _, _, _| Ok(None));
+        syscache_seams::pg_class_relrewrite::set(|_| Ok(None));
     });
 }
 
@@ -1752,14 +1657,10 @@ fn apply_tuple_change_reports_relfilenumber_paths_like_c() {
     let txn = rb.txn_by_xid(31, false, 0, false).0.unwrap();
     let cid = rb.txn(txn).changes.head;
 
-    // reorderbuffer.c:2340: a change carrying tuple data whose relfilenumber
-    // no longer maps names the relation by its relpathperm path.
     MAPPED_RELOID.store(types_core::InvalidOid, std::sync::atomic::Ordering::Relaxed);
     let err = rb.apply_tuple_change(txn, cid, &mut None, &mut None, false).unwrap_err();
     assert_eq!(err.message(), "could not map filenumber \"base/5/55555\" to relation OID");
 
-    // reorderbuffer.c:2347: a mapped OID the relcache cannot open carries the
-    // same path as a "(for filenumber ...)" suffix.
     MAPPED_RELOID.store(424242, std::sync::atomic::Ordering::Relaxed);
     let err = rb.apply_tuple_change(txn, cid, &mut None, &mut None, false).unwrap_err();
     assert_eq!(
@@ -1774,16 +1675,12 @@ fn apply_tuple_change_reports_relfilenumber_paths_like_c() {
 fn cleanup_serialized_txns_reports_relative_paths_like_c() {
     let dir = std::env::temp_dir().join(format!("pgrust_rb_cleanup_{}", std::process::id()));
     let slot = dir.join("pg_replslot/relslot");
-    // A directory named like a spill file: unlink() refuses it on every
-    // platform (EISDIR / EPERM), whatever uid runs the test.
     std::fs::create_dir_all(slot.join("xid-7-lsn-0-1.spill")).unwrap();
 
     let dir_str: &'static str = Box::leak(dir.to_string_lossy().into_owned().into_boxed_str());
     init_small::globals::SetDataDir(dir_str);
 
     let err = crate::startup::ReorderBufferCleanupSerializedTXNs("relslot").unwrap_err();
-    // reorderbuffer.c:4899: both paths are PG_REPLSLOT_DIR-relative (C runs
-    // with DataDir as its cwd), never the absolute DataDir-joined path.
     let expect = "could not remove file \"pg_replslot/relslot/xid-7-lsn-0-1.spill\" \
                   during removal of pg_replslot/relslot/xid*: ";
     assert!(err.message().starts_with(expect), "got: {}", err.message());
@@ -1791,8 +1688,6 @@ fn cleanup_serialized_txns_reports_relative_paths_like_c() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-// reorderbuffer.c:4266/4609: spill writes report ReorderBufferWrite and the
-// restore reads report ReorderBufferRead in pg_stat_activity.
 #[test]
 fn spill_io_reports_reorder_buffer_wait_events() {
     install_file_seams();
@@ -1815,9 +1710,6 @@ fn spill_io_reports_reorder_buffer_wait_events() {
     rb.cleanup_txn(txn).unwrap();
 }
 
-// ReorderBufferLargestTXN reads rb->txn_heap, whose merge keeps the existing
-// root on equal sizes (pairingheap.c:87): once B has overtaken A and A catches
-// up to a tie, B stays the eviction candidate.
 #[test]
 fn largest_txn_resolves_size_ties_like_the_pairing_heap() {
     let mut rb = rb();
@@ -1836,13 +1728,11 @@ fn largest_txn_resolves_size_ties_like_the_pairing_heap() {
     assert_eq!(rb.txn(a).txn_node, pairingheap::INVALID);
 }
 
-// reorderbuffer.c:3619: 8MB over C's 16-byte SharedInvalidationMessage union.
 #[test]
 fn distributed_invalidation_overflow_threshold_matches_c() {
     assert_eq!(MAX_DISTR_INVAL_MSG_PER_TXN, 524288);
 }
 
-// reorderbuffer.c:3996 / :3166: both announce at DEBUG2.
 #[test]
 fn serialize_and_abort_old_announce_at_debug2() {
     let slot = "spill_debug2";
@@ -1875,4 +1765,52 @@ fn serialize_and_abort_old_announce_at_debug2() {
     assert!(seen.iter().any(|m| m == "spill 4 changes in XID 90 to disk"), "{seen:?}");
     assert!(seen.iter().any(|m| m == "aborting old transaction 90"), "{seen:?}");
     assert!(rb.txn_by_xid(90, false, 0, false).0.is_none());
+}
+
+// A subxact-accounted toast chunk on the top txn is freed at cleanup.
+#[test]
+fn cleanup_releases_top_toast_chunks_owned_by_a_subxact() {
+    let mut rb = rb();
+    let (_, toast_desc) = toast_descs();
+    let (top_xid, sub_xid): (TransactionId, TransactionId) = (120, 121);
+    rb.queue_change(top_xid, 10, msg_change("t10"), false).unwrap();
+    let chunk = inline_varlena(b"chunk");
+    let values = [
+        Datum::from_usize(4242usize),
+        Datum::from_usize(0usize),
+        Datum::from_usize(chunk.as_ptr() as usize),
+    ];
+    let change = tuple_change(&rb, &toast_desc, &values, &[false, false, false]);
+    rb.queue_change(sub_xid, 20, change, true).unwrap();
+    rb.assign_child(top_xid, sub_xid, 20);
+    let top = rb.txn_by_xid(top_xid, false, 0, false).0.unwrap();
+    let sub = rb.txn_by_xid(sub_xid, false, 0, false).0.unwrap();
+    let cid = unlink_tail(&mut rb, sub);
+    rb.toast_append_chunk_with_desc(top, &toast_desc, cid).unwrap();
+    assert_eq!(rb.change(cid).txn, sub);
+
+    rb.cleanup_txn(top).unwrap();
+    assert_eq!(rb.size, 0);
+    assert!(rb.txn_heap.is_empty());
+}
+
+// Spill errors name the file relative to DataDir, as C does.
+#[test]
+fn spill_error_path_is_datadir_relative() {
+    let slot = "spill_relpath";
+    let mut rb = spill_rb(slot);
+    rb.queue_change(130, 100, msg_change("x"), false).unwrap();
+    let txn = rb.txn_by_xid(130, false, 0, false).0.unwrap();
+    // A file in place of the dir fails with ENOTDIR, even as root.
+    let dir = slot_dir(slot);
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::write(&dir, b"").unwrap();
+    let err = rb.serialize_txn(txn).unwrap_err();
+    std::fs::remove_file(&dir).unwrap();
+    std::fs::create_dir(&dir).unwrap();
+    assert!(
+        err.message().starts_with("could not open file \"pg_replslot/spill_relpath/xid-130-lsn-"),
+        "{}",
+        err.message()
+    );
 }

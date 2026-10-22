@@ -169,3 +169,7 @@ seam_core::seam!(
     // ms) until the next flush is due, 0 when nothing is pending.
     pub fn pgstat_report_stat(force: bool) -> i64
 );
+
+seam_core::tap!(
+    pub fn pgstat_flush_extra()
+);

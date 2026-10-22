@@ -1,0 +1,11 @@
+-- regress-full-arrays-027
+-- update arrtest1 set i[11:12] = array[null,22], t[11:12] = array[null,'p22'];
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=26240 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=T_SubscriptingRef, 2=T_SubscriptingRef, 3j=v1.-1)
+  write UPDATE rel=26240 rti=1 natts=2 indexes=() set=(1,2)
+  outs 1=vl:call0 2=vl:call0 3=fx6:row
+mapped: ModifyTable SeqScan

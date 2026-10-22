@@ -1,0 +1,395 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1rc s1scan s2seal s1u s1c rsel rcount
+step s1rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|0
+(2 rows)
+
+step s2seal: CALL pgrc_seal('pgrc_t');
+step s1u: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   20|  1|   20
+(1 row)
+
+
+starting permutation: s1rr s1scan s2seal s1u s1scan s1c rsel rcount
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|0
+(2 rows)
+
+step s2seal: CALL pgrc_seal('pgrc_t');
+step s1u: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   20|  1|   20
+(1 row)
+
+
+starting permutation: chold s1rc s1ug s2seal cgo s1c rsel rcount
+step chold: SELECT pg_advisory_lock(1);
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s1rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1ug: UPDATE pgrc_t SET v = pgrc_gate(1, v + 1) WHERE id = 11 RETURNING id, v; <waiting ...>
+step s2seal: CALL pgrc_seal('pgrc_t');
+step cgo: SELECT pg_advisory_unlock(1);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s1ug: <... completed>
+id|v
+--+-
+11|1
+(1 row)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   20|  1|   20
+(1 row)
+
+
+starting permutation: chold s1rr s1scan s1ug s2seal cgo s1scan s1c rsel rcount
+step chold: SELECT pg_advisory_lock(1);
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|0
+(2 rows)
+
+step s1ug: UPDATE pgrc_t SET v = pgrc_gate(1, v + 1) WHERE id = 11 RETURNING id, v; <waiting ...>
+step s2seal: CALL pgrc_seal('pgrc_t');
+step cgo: SELECT pg_advisory_unlock(1);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s1ug: <... completed>
+id|v
+--+-
+11|1
+(1 row)
+
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   20|  1|   20
+(1 row)
+
+
+starting permutation: s1rc s1u s2seal s1c rsel rcount
+step s1rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s2seal: CALL pgrc_seal('pgrc_t');
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   20|  1|   20
+(1 row)
+
+
+starting permutation: s1rr s1scan s2seal s1u s1scan s1all s1c rsel rcount
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|0
+(2 rows)
+
+step s2seal: CALL pgrc_seal('pgrc_t');
+step s1u: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step s1all: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   20|  1|  1| 20
+(1 row)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   20|  1|   20
+(1 row)
+
+
+starting permutation: s1sr s1scan s2seal s1u s1scan s1c rsel rcount
+step s1sr: BEGIN ISOLATION LEVEL SERIALIZABLE;
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|0
+(2 rows)
+
+step s2seal: CALL pgrc_seal('pgrc_t');
+step s1u: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|1
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   20|  1|   20
+(1 row)
+
+
+starting permutation: s1rr s1scan s2seal s1u s1u s1scan s1c rsel rcount
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|0
+(2 rows)
+
+step s2seal: CALL pgrc_seal('pgrc_t');
+step s1u: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s1u: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|2
+(1 row)
+
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|2
+(2 rows)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|2
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   20|  2|   20
+(1 row)
+
+
+starting permutation: s1rr s1all s2seal s1i s1all s1d s1all s1c rsel rcount
+step s1rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1all: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   20|  0|  1| 20
+(1 row)
+
+step s2seal: CALL pgrc_seal('pgrc_t');
+step s1i: INSERT INTO pgrc_t VALUES (21, 5);
+step s1all: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   21|  5|  1| 21
+(1 row)
+
+step s1d: DELETE FROM pgrc_t WHERE id = 21 RETURNING id, v;
+id|v
+--+-
+21|5
+(1 row)
+
+step s1all: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   20|  0|  1| 20
+(1 row)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|0
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   20|  0|   20
+(1 row)
+
+
+starting permutation: s1rc s1scan s2seal s1u s1u s1i s1all s1c rsel rcount
+step s1rc: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1scan: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|0
+(2 rows)
+
+step s2seal: CALL pgrc_seal('pgrc_t');
+step s1u: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|1
+(1 row)
+
+step s1u: UPDATE pgrc_t SET v = v + 1 WHERE id = 11 RETURNING id, v;
+id|v
+--+-
+11|2
+(1 row)
+
+step s1i: INSERT INTO pgrc_t VALUES (21, 5);
+step s1all: SELECT count(*), sum(v), min(id), max(id) FROM pgrc_t;
+count|sum|min|max
+-----+---+---+---
+   21|  7|  1| 21
+(1 row)
+
+step s1c: COMMIT;
+step rsel: SELECT id, v FROM pgrc_t WHERE id IN (1, 11) ORDER BY id;
+id|v
+--+-
+ 1|0
+11|2
+(2 rows)
+
+step rcount: SELECT count(*), sum(v), count(DISTINCT id) FROM pgrc_t;
+count|sum|count
+-----+---+-----
+   21|  7|   21
+(1 row)
+

@@ -1,0 +1,5 @@
+f(%v_a,%v_b) {
+entry:
+%v_x = add %v_a, %v_b
+ret %v_x
+}

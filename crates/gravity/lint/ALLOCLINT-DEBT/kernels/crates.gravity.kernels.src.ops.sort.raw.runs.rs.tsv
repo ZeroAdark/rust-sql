@@ -1,0 +1,4 @@
+path	crates/gravity/kernels/src/ops/sort/raw/runs.rs
+growth	std::vec::Vec::extend_from_slice	1
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

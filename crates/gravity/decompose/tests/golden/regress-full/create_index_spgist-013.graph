@@ -1,0 +1,23 @@
+-- regress-full-create_index_spgist-013
+-- SELECT (SELECT p FROM kd_point_tbl ORDER BY p <-> pt, p <-> '0,0' LIMIT 1) FROM (VALUES (point '1,2'), (NULL), ('1234,5678')) pts(pt);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=3
+    row (c600:#16)
+    row (c600:null)
+    row (c600:#16)
+  subplan 1 nested Expr params=($exec0=v2.1)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@1
+  source index-only rel=19797 rti=3 am=heap index=19800 iam=spgist
+    key att=1 op=517 form=orderby value=$exec0
+    key att=1 op=517 form=orderby value=c600:#16
+    lanes Attr(1):byref8:fx16:win/page
+  project (1=index.1, 2j=op517(index.1, $exec0), 3j=op517(index.1, c600:#16))
+  limit count=1 offset=all
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  project (1=subplan1(v2.1))
+  outs 1=fx16:call0
+param $exec0 owner=subplan1 type=600 rep=fx16:row
+mapped: IndexOnlyScan ValuesScan Limit SubPlan

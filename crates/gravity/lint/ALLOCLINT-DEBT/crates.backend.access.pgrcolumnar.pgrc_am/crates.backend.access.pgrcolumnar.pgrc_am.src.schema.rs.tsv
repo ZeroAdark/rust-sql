@@ -1,0 +1,12 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/schema.rs
+growth	std::vec::Vec::push	5
+macro	std::format	5
+macro	std::vec	4
+method	pgrc_format::try_vec	2
+method	std::borrow::Cow::into_owned	1
+method	std::borrow::ToOwned::to_owned	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	2
+type	std::boxed::Box	1
+type	std::vec::Vec	5

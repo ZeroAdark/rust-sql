@@ -1,0 +1,6 @@
+The C2 run-ahead tracer's baseline (scripts/gravity-v5/ahead_trace.py judge): one file per e2e file (<group>.<name>, the
+rig's group: v4, v5, ald = archive-ladder, av2 = archive-v2), one row per accepted key:
+W<width>	<statement key>	<event>	<why>
+A row is a run ahead the tracer reports that the user accepted as a divergence: an error PostgreSQL 18.6 never raises,
+from early work with no side effect. Early work that calls a VOLATILE function, writes or takes nextval is never a row.
+Shrink-only: a row goes when its key no longer hits; a new row needs the user's word.

@@ -1,0 +1,188 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT p.id, p.title, c.name, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' ORDER BY c.id, i.id FOR UPDATE OF i;
+QUERY PLAN                                                                    
+------------------------------------------------------------------------------
+LockRows                                                                      
+  ->  Sort                                                                    
+        Sort Key: c.id, i.id                                                  
+        ->  Nested Loop                                                       
+              ->  Nested Loop                                                 
+                    ->  Nested Loop                                           
+                          ->  Index Scan using scp_pkey on scp p              
+                                Index Cond: (id = 1)                          
+                          ->  Hash Join                                       
+                                Hash Cond: (c.id = pc."categoryId")           
+                                ->  Seq Scan on scc c                         
+                                ->  Hash                                      
+                                      ->  Bitmap Heap Scan on scpc pc         
+                                            Recheck Cond: ("postId" = 1)      
+                                            ->  Bitmap Index Scan on scpc_pkey
+                                                  Index Cond: ("postId" = 1)  
+                    ->  Index Scan using scci_pkey on scci ci                 
+                          Index Cond: ("categoryId" = c.id)                   
+              ->  Index Scan using sci_pkey on sci i                          
+                    Index Cond: (id = ci."imageId")                           
+                    Filter: ((url)::text <> 'gone'::text)                     
+(21 rows)
+
+step s1u: UPDATE sci SET url = url || '!' WHERE id = 1;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' ORDER BY c.id, i.id FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1!
+ 1|p1   |c1  | 4|i4 
+ 1|p1   |c2  | 2|i2 
+ 1|p1   |c3  | 3|i3 
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2l s1c
+step s1d: UPDATE sci SET url = 'gone' WHERE id = 2;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' ORDER BY c.id, i.id FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1 
+ 1|p1   |c1  | 4|i4 
+ 1|p1   |c3  | 3|i3 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1i s2l s1c
+step s1i: UPDATE sci SET id = 30 WHERE id = 3;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' ORDER BY c.id, i.id FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1 
+ 1|p1   |c1  | 4|i4 
+ 1|p1   |c2  | 2|i2 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2l s1c
+step s1n: UPDATE scc SET name = 'renamed' WHERE id = 1; UPDATE sci SET url = url || '!' WHERE id = 1;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' ORDER BY c.id, i.id FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1!
+ 1|p1   |c1  | 4|i4 
+ 1|p1   |c2  | 2|i2 
+ 1|p1   |c3  | 3|i3 
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c
+step s1m: UPDATE scci SET "imageId" = 2 WHERE "categoryId" = 1 AND "imageId" = 1; UPDATE sci SET url = url || '!' WHERE id = 1;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' ORDER BY c.id, i.id FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1!
+ 1|p1   |c1  | 4|i4 
+ 1|p1   |c2  | 2|i2 
+ 1|p1   |c3  | 3|i3 
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1t s2l s1c
+step s1t: UPDATE scp SET title = 'retitled' WHERE id = 1; UPDATE sci SET url = url || '!' WHERE id = 1;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' ORDER BY c.id, i.id FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1!
+ 1|p1   |c1  | 4|i4 
+ 1|p1   |c2  | 2|i2 
+ 1|p1   |c3  | 3|i3 
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1z s2o s1c
+step s1z: UPDATE sci SET url = 'a' || url WHERE id = 3;
+step s2o: SELECT c.id, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 ORDER BY i.url FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|id|url
+--+--+---
+ 1| 1|i1 
+ 2| 2|i2 
+ 3| 3|ai3
+ 1| 4|i4 
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2lim s1c
+step s1d: UPDATE sci SET url = 'gone' WHERE id = 2;
+step s2lim: SELECT c.id, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' ORDER BY c.id DESC, i.id LIMIT 2 FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2lim: <... completed>
+id|id|url
+--+--+---
+ 3| 3|i3 
+ 1| 1|i1 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1u s2s s1c
+step s1u: UPDATE sci SET url = url || '!' WHERE id = 1;
+step s2s: SELECT p.id, c.name, i.id, i.url FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 ORDER BY c.id, i.id FOR SHARE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|name|id|url
+--+----+--+---
+ 1|c1  | 1|i1!
+ 1|c1  | 4|i4 
+ 1|c2  | 2|i2 
+ 1|c3  | 3|i3 
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM sci WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2sk: SELECT p.id, c.name, i.id FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 ORDER BY c.id, i.id FOR UPDATE OF i SKIP LOCKED;
+id|name|id
+--+----+--
+ 1|c1  | 4
+ 1|c2  | 2
+ 1|c3  | 3
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM sci WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2nw: SELECT p.id, c.name, i.id FROM scp p JOIN scpc pc ON pc."postId" = p.id JOIN scc c ON c.id = pc."categoryId" JOIN scci ci ON ci."categoryId" = c.id JOIN sci i ON i.id = ci."imageId" WHERE p.id = 1 ORDER BY c.id, i.id FOR UPDATE OF i NOWAIT;
+ERROR:  could not obtain lock on row in relation "sci"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

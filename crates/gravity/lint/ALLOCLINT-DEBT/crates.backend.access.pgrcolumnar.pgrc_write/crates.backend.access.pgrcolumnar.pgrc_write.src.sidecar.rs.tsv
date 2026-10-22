@@ -1,0 +1,6 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/sidecar.rs
+growth	std::vec::Vec::extend_from_slice	3
+growth	std::vec::Vec::push	1
+macro	std::format	2
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

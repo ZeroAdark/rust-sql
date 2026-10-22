@@ -112,13 +112,14 @@ pub fn DefineRange<'mcx>(
                 let mut buf = [""; 4];
                 let nnames = names.len();
                 if !(1..=3).contains(&nnames) {
-                    return Err(catalog_namespace::improper_qualified_name_joined(
-                        names
-                            .iter()
-                            .map(|n| n.as_string().expect("qualified name").sval)
-                            .collect::<Vec<_>>()
-                            .join("."),
-                    ));
+                    let mut joined = String::new();
+                    for (i, n) in names.iter().enumerate() {
+                        if i > 0 {
+                            joined.push('.');
+                        }
+                        joined.push_str(n.as_string().expect("qualified name").sval);
+                    }
+                    return Err(catalog_namespace::improper_qualified_name_joined(joined));
                 }
                 for (i, n) in names.iter().enumerate() {
                     buf[i] = n.as_string().expect("qualified name").sval;
@@ -185,13 +186,14 @@ pub fn DefineRange<'mcx>(
                 let mut buf = [""; 4];
                 let nnames = names.len();
                 if !(1..=3).contains(&nnames) {
-                    return Err(catalog_namespace::improper_qualified_name_joined(
-                        names
-                            .iter()
-                            .map(|n| n.as_string().expect("qualified name").sval)
-                            .collect::<Vec<_>>()
-                            .join("."),
-                    ));
+                    let mut joined = String::new();
+                    for (i, n) in names.iter().enumerate() {
+                        if i > 0 {
+                            joined.push('.');
+                        }
+                        joined.push_str(n.as_string().expect("qualified name").sval);
+                    }
+                    return Err(catalog_namespace::improper_qualified_name_joined(joined));
                 }
                 for (i, n) in names.iter().enumerate() {
                     buf[i] = n.as_string().expect("qualified name").sval;

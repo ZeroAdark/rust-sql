@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/partitioning/partprune.c: 1 stack-depth check sites
+2556	get_steps_using_prefix_recurse	crates/backend/optimizer/plan/planner/src/partprune.rs	get_steps_using_prefix_recurse	yes	

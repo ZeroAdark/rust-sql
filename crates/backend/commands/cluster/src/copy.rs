@@ -79,7 +79,7 @@ pub fn copy_for_cluster<'mcx>(
         {
             Some((
                 execindexing::BuildIndexInfo(mcx, index)?,
-                mcx::MemoryContext::new_bump("ClusterExprPerTuple"),
+                mcx::MemoryContext::new_wholesale("ClusterExprPerTuple"),
             ))
         }
         _ => None,
@@ -401,4 +401,40 @@ fn reform_and_rewrite_tuple<'mcx>(
     }
     let mut copied_tuple = heaptuple::heap_form_tuple(mcx, new_tup_desc, values, isnull)?;
     rewriteheap::rewrite_heap_tuple(rwstate, new_heap, tuple, &mut copied_tuple)
+}
+
+// Columnar arm of relation_copy_for_cluster: no per-row xmin/xmax to carry
+// over, so the rewrite re-ingests the rows visible to a fresh snapshot.
+pub fn copy_for_cluster_pgrcolumnar<'mcx>(
+    mcx: Mcx<'mcx>,
+    old_heap: &Relation<'mcx>,
+    new_heap: &Relation<'mcx>,
+) -> PgResult<f64> {
+    let snapshot = snapmgr::GetLatestSnapshot()?;
+    let snapshot = snapmgr::RegisterSnapshot(Some(&snapshot))?.expect("registered snapshot");
+    let mut scan = tableam::table_beginscan(
+        mcx,
+        old_heap,
+        Some(snapshot.clone()),
+        0,
+        mcx::PgVec::new_in(mcx),
+    )?;
+    let mut slot = tableam::table_slot_create(mcx, old_heap)?;
+    let cid = xact::GetCurrentCommandId(true)?;
+    let options = tableam_vocab::TABLE_INSERT_SKIP_FSM;
+    let mut num_tuples = 0f64;
+    while tableam::table_scan_getnextslot(
+        mcx,
+        &mut scan,
+        ScanDirection::ForwardScanDirection,
+        &mut slot,
+    )? {
+        postgres_seams::check_for_interrupts::call()?;
+        tableam::table_tuple_insert(mcx, new_heap, &mut slot, cid, options, None)?;
+        num_tuples += 1.0;
+    }
+    tableam::table_endscan(scan)?;
+    snapmgr::UnregisterSnapshot(Some(&snapshot));
+    tableam::table_finish_bulk_insert(new_heap, options)?;
+    Ok(num_tuples)
 }

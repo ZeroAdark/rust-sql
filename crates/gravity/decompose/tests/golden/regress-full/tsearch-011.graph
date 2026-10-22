@@ -1,0 +1,50 @@
+-- regress-full-tsearch-011
+-- SELECT conname, conrelid::pg_catalog.regclass AS ontable, pg_catalog.pg_get_constraintdef(oid, true) AS condef FROM pg_catalog.pg_constraint c WHERE confrelid IN (SELECT pg_catalog.pg_partition_ancestors('38616') UNION ALL VALUES ('38616'::pg_catalog.regclass)) AND contype = 'f' AND conparentid = 0 ORDER BY conname;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=7 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  nodes n7@0 n6@1 n4@3^
+  source const
+  project ()
+  srf tlist [1:Other fn3425 fn3425(c2205:38616)]
+  project (1=fn3425(c2205:38616))
+  feed slot=0
+  outs
+  outs 1=w4:val
+p1 node=8 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Materialize)
+  nodes n8@0 n4@1^
+  source const
+  project (1=c2205:38616)
+  feed slot=0
+  outs 1=w4:val
+p2 node=2 serial site=0 reason=IndexSource end=breaker(slot=1 Sort)
+  desc consumes=slot0@p1
+  nodes n3@0 n2@0 n1@2 n0@4^
+  source bitmap rel=2606 rti=1 am=heap
+    bitmap index node=3 index=2579 rows=570
+      key att=12 op=607 value=c26:0
+    recheck (op607(v1.12, c26:0))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(4):byval8:w8:val Attr(9):byval8:w8:val Attr(13):byval8:w8:val Offset:byval2:w2:val
+  filter op92(v1.4, c18:102)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24, 25=v1.25, 26=v1.26, 27=v1.27, 28=v1.28)
+  nest inner=n4 JOIN_SEMI vol=v eq=#0:op607:fam1990:26/26:L params=() qual=(op607(outer.13, relabel26(inner.1)))
+  inner node=4 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1
+  nodes n4@0
+  source breaker slot=0
+  append union slot=0 children=2
+  project (1=outer.1)
+  project (1=outer.2, 2=relabel2205(outer.9), 3=fn2508(outer.1, c16:1))
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=w8:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w8:val 10=w4:val 11=w4:val 12=w4:val 13=w8:val 14=w1:val 15=w1:val 16=w1:val 17=w1:val 18=w2:val 19=w1:val 20=w1:val 21=vl:row 22=vl:row 23=vl:row 24=vl:row 25=vl:row 26=vl:row 27=vl:row 28=vl:row
+  outs 1=fx64:win/page 2=w8:val 3=vl:call2508
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p2
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=fx64:win/page 2=w8:val 3=vl:call2508
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+rerun node=1 pipelines=p0,p1 slots=0
+mapped: Result ProjectSet Append BitmapIndexScan BitmapHeapScan NestLoop Sort

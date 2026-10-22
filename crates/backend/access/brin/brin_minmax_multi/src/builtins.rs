@@ -247,7 +247,7 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
     // use a short header).
     // SAFETY: STRICT varlena arg.
     let payload = unsafe { fcinfo.arg_varlena_packed(0)? };
-    let mut image = Vec::with_capacity(payload.data().len() + 4);
+    let mut image = ::mcx::std_vec_with_capacity("access", payload.data().len() + 4)?;
     image.extend_from_slice(&(((payload.data().len() + 4) as u32) << 2).to_ne_bytes());
     image.extend_from_slice(payload.data());
 
@@ -268,13 +268,13 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
         let d = ::fmgr::function_call1_coll_in(out_fn, ::types_core::InvalidOid, mcx, val)?;
         // SAFETY: output functions return NUL-terminated cstrings.
         let cs = unsafe { core::ffi::CStr::from_ptr(d.as_usize() as *const core::ffi::c_char) };
-        Ok(cs.to_bytes().to_vec())
+        Ok(::mcx::std_vec_from_slice("brin", &cs.to_bytes())?)
     };
-    let text_elem = |txt: &[u8]| -> Vec<u8> {
-        let mut img = Vec::with_capacity(txt.len() + 4);
+    let text_elem = |txt: &[u8]| -> PgResult<Vec<u8>> {
+        let mut img = ::mcx::std_vec_with_capacity("brin", txt.len() + 4)?;
         img.extend_from_slice(&(((txt.len() + 4) as u32) << 2).to_ne_bytes());
         img.extend_from_slice(txt);
-        img
+        Ok(img)
     };
     let anyarray_text = |astate: &::datum::array_build::ArrayBuildState<'_>| -> PgResult<Vec<u8>> {
         let (typoutput, _) = ::lsyscache::getTypeOutputInfo(::types_core::ANYARRAYOID)?;
@@ -284,7 +284,7 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
         let d = ::fmgr::function_call1_coll_in(&mut arr_out, ::types_core::InvalidOid, mcx, val)?;
         // SAFETY: array_out returns a NUL-terminated cstring.
         let cs = unsafe { core::ffi::CStr::from_ptr(d.as_usize() as *const core::ffi::c_char) };
-        let s = cs.to_bytes().to_vec();
+        let s = ::mcx::std_vec_from_slice("access", &cs.to_bytes())?;
         core::mem::forget(img); // keep the mcx image alive for the call above
         Ok(s)
     };
@@ -297,7 +297,7 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
         idx += 2;
         a.extend_from_slice(b" ... ");
         a.extend_from_slice(&b);
-        let elem = text_elem(&a);
+        let elem = text_elem(&a)?;
         astate = Some(::arrayfuncs::build::accum_array_result(
             mcx,
             astate,
@@ -315,7 +315,7 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
     for _ in 0..ranges.nvalues {
         let a = call_out(&mut out_fn, ranges.values[idx])?;
         idx += 1;
-        let elem = text_elem(&a);
+        let elem = text_elem(&a)?;
         astate = Some(::arrayfuncs::build::accum_array_result(
             mcx,
             astate,

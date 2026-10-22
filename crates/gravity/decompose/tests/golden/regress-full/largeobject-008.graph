@@ -1,0 +1,10 @@
+-- regress-full-largeobject-008
+-- SELECT lo_from_bytea(0, lo_get(loid)) AS newloid FROM lotest_stash_values
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2260 end=sink
+  nodes n0@0
+  source range rel=43700 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=fn3457(c26:0, fn3458(v1.1)))
+  outs 1=w4:val
+mapped: SeqScan

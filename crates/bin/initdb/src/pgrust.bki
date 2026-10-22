@@ -1,0 +1,14 @@
+# pgrust-only bootstrap catalog rows: the pg_pgrust system schema and the
+# three janitor builtins, whose reserved oids fmgr resolves to the Rust
+# implementations. initdb splices each row into postgres.bki immediately
+# before `close <catalog>`, so template1 (and every database copied from it)
+# carries them as initdb rows; nothing is written when a session connects.
+# Row format: <catalog> <bki insert statement>.
+pg_proc insert ( 9001 pin_database 9006 10 12 1 0 0 0 f f f t f v u 1 0 16 25 _null_ _null_ '{dbname}' _null_ _null_ pgrust_pin_database _null_ _null_ _null_ _null_ )
+pg_proc insert ( 9002 unpin_database 9006 10 12 1 0 0 0 f f f t f v u 1 0 16 25 _null_ _null_ '{dbname}' _null_ _null_ pgrust_unpin_database _null_ _null_ _null_ _null_ )
+pg_proc insert ( 9005 seal_template 9006 10 12 1 0 0 0 f f f t f v u 1 0 2278 25 _null_ _null_ '{dbname}' _null_ _null_ pgrust_seal_template _null_ _null_ _null_ _null_ )
+pg_description insert ( 9001 1255 0 'pin an ephemeral database against janitor reaping until restart' )
+pg_description insert ( 9002 1255 0 'unpin an ephemeral database so the janitor may reap it again' )
+pg_description insert ( 9005 1255 0 'freeze-vacuum a database and seal it as a template via the janitor' )
+pg_description insert ( 9006 2615 0 'pgrust ephemeral-database controls' )
+pg_namespace insert ( 9006 pg_pgrust 10 _null_ )

@@ -48,6 +48,11 @@ thread_local! {
     static UNNAMED_STMT_PSRC: Cell<Option<CachedPlanSourceHandle>> = const { Cell::new(None) };
 }
 
+/// D4682: the handle points into the plan cache the last session's teardown dropped (see reset_session_statics).
+pub(crate) fn forget_unnamed_stmt() {
+    UNNAMED_STMT_PSRC.with(|c| c.set(None));
+}
+
 pub fn drop_unnamed_stmt() {
     // Cleared before the drop (C's dangling-pointer paranoia).
     if let Some(psrc) = UNNAMED_STMT_PSRC.take() {
@@ -99,11 +104,34 @@ pub(crate) fn aborted_xact_error(funcname: &'static str) -> Box<types_error::PgE
 // ParamsErrorCallback on error_context_stack: non-ERROR reports emitted
 // while it is installed carry the parameter context too (C's errfinish walks
 // the stack for every elevel); the ERROR path attaches on propagation.
-fn push_params_error_callback(portal_name: &str, params: ParamListHandle) -> u64 {
-    let name = portal_name.to_owned();
-    elog::push_emit_context_callback(Box::new(move |e| {
-        nodes_params::params_error_callback(e, &name, params)
-    }))
+// D3639: C's callback returns at once when the portal has no parameters or
+// bind stored no paramValuesStr (log_parameter_max_length_on_error = 0, the
+// default), and bind stores it before either push. Such a frame can never add
+// a line, so it is not registered. When it is, the callback is a closure in
+// the caller's frame (elog::push_context_frame_borrowed, no allocation per
+// message), popped on drop so a cancel raised as a panic (add_path's cancel
+// point) unwinding through the span cannot leave the callback behind.
+struct ParamsErrorCallback(Option<u64>);
+
+impl ParamsErrorCallback {
+    /// # Safety
+    /// As `elog::push_context_frame_borrowed`: `frame` outlives the returned
+    /// guard (declare the guard after the closure).
+    unsafe fn push(params: ParamListHandle, frame: &mut (dyn FnMut(&mut types_error::PgError) + '_)) -> Self {
+        if types_portal::params::param_values_str(params).is_none() {
+            return ParamsErrorCallback(None);
+        }
+        // SAFETY: the caller's contract above.
+        ParamsErrorCallback(Some(unsafe { elog::push_context_frame_borrowed(frame, true) }))
+    }
+}
+
+impl Drop for ParamsErrorCallback {
+    fn drop(&mut self) {
+        if let Some(id) = self.0 {
+            elog::pop_emit_context_callback(id);
+        }
+    }
 }
 
 fn errdetail_params(mcx: Mcx<'_>, params: ParamListHandle) -> PgResult<Option<String>> {
@@ -180,13 +208,15 @@ pub fn exec_parse_message<'mcx>(
         ResetUsage();
     }
 
-    // postgres.c:1417
-    ereport(DEBUG2)
-        .errmsg_internal(format!(
-            "parse {}: {query_string}",
-            if stmt_name.is_empty() { "<unnamed>" } else { stmt_name }
-        ))
-        .finish(loc(1417, "exec_parse_message"))?;
+    // postgres.c:1417 (C's ereport evaluates its message only past errstart: the string is built only when DEBUG2 is output)
+    if ::elog::message_level_is_interesting(DEBUG2) {
+        ereport(DEBUG2)
+            .errmsg_internal(format!(
+                "parse {}: {query_string}",
+                if stmt_name.is_empty() { "<unnamed>" } else { stmt_name }
+            ))
+            .finish(loc(1417, "exec_parse_message"))?;
+    }
 
     start_xact_command()?;
 
@@ -204,12 +234,12 @@ pub fn exec_parse_message<'mcx>(
     let parsetree_list = pg_parse_query(mcx, query_string)?;
 
     if parsetree_list.len() > 1 {
-        // With C's location: libpq_pipeline's pipeline_abort trace diffs the
-        // ErrorResponse's R (routine) field.
-        ereport(ERROR)
+        return Err(ereport(ERROR)
             .errcode(ERRCODE_SYNTAX_ERROR)
             .errmsg("cannot insert multiple commands into a prepared statement")
-            .finish(loc(1475, "exec_parse_message"))?;
+            .into_error()
+            .with_error_location(loc(1475, "exec_parse_message"))
+            .into());
     }
 
     let psrc = if let Some(raw) = parsetree_list.first() {
@@ -415,7 +445,12 @@ fn bind_param_error_context(
     paramno: usize,
     value: Option<&str>,
 ) -> Box<types_error::PgError> {
-    let line = match value {
+    err.add_context_line(bind_param_context_line(portal_name, paramno, value));
+    err
+}
+
+fn bind_param_context_line(portal_name: &str, paramno: usize, value: Option<&str>) -> String {
+    match value {
         Some(s) => {
             let maxlen = guc_tables::backing::log_parameter_max_length_on_error();
             let (clip, ellipsis) = if maxlen < 0 || maxlen as usize >= s.len() {
@@ -427,7 +462,8 @@ fn bind_param_error_context(
                 }
                 (&s[..end], true)
             };
-            let mut quoted = String::with_capacity(clip.len() + 8);
+            let mut quoted = String::new();
+            let _ = quoted.try_reserve(clip.len() + 8);
             quoted.push('\'');
             for c in clip.chars() {
                 if c == '\'' {
@@ -449,9 +485,57 @@ fn bind_param_error_context(
             format!("unnamed portal parameter ${}", paramno + 1)
         }
         None => format!("portal \"{}\" parameter ${}", portal_name, paramno + 1),
-    };
-    err.add_context_line(line);
-    err
+    }
+}
+
+// The per-parameter bind_param_error_callback frame (postgres.c:1801-1810):
+// non-ERROR reports raised while a parameter is converted, and
+// GetErrorContextStack, see its CONTEXT line; ERRORs attach it through
+// bind_param_error_context. `value` is set only around the text input call.
+struct BindParamFrame<'a> {
+    portal_name: &'a str,
+    paramno: usize,
+    value: core::cell::Cell<Option<(*const u8, usize)>>,
+}
+
+impl BindParamFrame<'_> {
+    fn add_context(&self, e: &mut types_error::PgError) {
+        // SAFETY: `value` is set only around the text input call, to bytes
+        // that outlive it, and cleared right after.
+        let value = self.value.get().map(|(p, n)| {
+            String::from_utf8_lossy(unsafe { core::slice::from_raw_parts(p, n) })
+        });
+        e.add_context_line(bind_param_context_line(self.portal_name, self.paramno, value.as_deref()));
+    }
+}
+
+struct BindParamFrameGuard(u64);
+
+impl Drop for BindParamFrameGuard {
+    fn drop(&mut self) {
+        elog::pop_emit_context_callback(self.0);
+    }
+}
+
+// The name the Bind / Execute context lines show: the portal's stored name
+// (postgres.c:1804), i.e. the message's name clipped to NAMEDATALEN - 1 bytes
+// at a character boundary (portalmem's key), so a prefix of the message's
+// name. Borrowed from the message, not copied per message (D3639); `spill`
+// holds a copy only if the stored name is not that prefix.
+fn stored_portal_name<'a>(
+    portal: &Portal<'static>,
+    wire: &'a str,
+    spill: &'a mut String,
+) -> &'a str {
+    let p = portal.borrow();
+    let stored = p.name.as_str();
+    match wire.get(..stored.len()) {
+        Some(prefix) if prefix == stored => prefix,
+        _ => {
+            spill.push_str(stored);
+            spill.as_str()
+        }
+    }
 }
 
 fn portal_mcx(portal: &Portal<'static>) -> Mcx<'static> {
@@ -474,14 +558,16 @@ pub fn exec_bind_message<'mcx>(
     let portal_name = owned_msg_string(mcx, input_message)?;
     let stmt_name = owned_msg_string(mcx, input_message)?;
 
-    // postgres.c:1652
-    ereport(DEBUG2)
-        .errmsg_internal(format!(
-            "bind {} to {}",
-            if portal_name.is_empty() { "<unnamed>" } else { portal_name.as_str() },
-            if stmt_name.is_empty() { "<unnamed>" } else { stmt_name.as_str() }
-        ))
-        .finish(loc(1652, "exec_bind_message"))?;
+    // postgres.c:1652 (built only when DEBUG2 is output, as C's ereport evaluates its message past errstart; H16 (a))
+    if ::elog::message_level_is_interesting(DEBUG2) {
+        ereport(DEBUG2)
+            .errmsg_internal(format!(
+                "bind {} to {}",
+                if portal_name.is_empty() { "<unnamed>" } else { portal_name.as_str() },
+                if stmt_name.is_empty() { "<unnamed>" } else { stmt_name.as_str() }
+            ))
+            .finish(loc(1652, "exec_bind_message"))?;
+    }
 
     let psrc = lookup_plansource(stmt_name.as_str())?;
     let query_string = plancache::CachedPlanQueryString(psrc);
@@ -569,7 +655,8 @@ pub fn exec_bind_message<'mcx>(
     };
 
     let pmcx = portal_mcx(&portal);
-    let ctx_name = portal.borrow().name.as_str().to_owned();
+    let mut name_spill = String::new();
+    let ctx_name: &str = stored_portal_name(&portal, portal_name.as_str(), &mut name_spill);
 
     let mut snapshot_set = false;
     if num_params > 0 || plancache::CachedPlanRequiresSnapshot(psrc) {
@@ -586,13 +673,22 @@ pub fn exec_bind_message<'mcx>(
         let mut known_text_values: Option<Vec<Option<String>>> = None;
 
         for paramno in 0..num_params {
+            let frame = BindParamFrame {
+                portal_name: ctx_name,
+                paramno,
+                value: core::cell::Cell::new(None),
+            };
+            let mut frame_cb = |e: &mut types_error::PgError| frame.add_context(e);
+            // SAFETY: the guard is declared after `frame` and `frame_cb`, so it
+            // pops the entry before either goes away (unwinding included).
+            let _frame_guard = BindParamFrameGuard(unsafe {
+                elog::push_context_frame_borrowed(&mut frame_cb, true)
+            });
             // bind_param_error_callback (postgres.c): every error thrown while
             // processing this parameter carries a CONTEXT line; the textual
-            // value rides only on the input-function call. Non-error reports
-            // emitted inside input functions do not attach it (the propagation
-            // pattern covers the ERROR path only).
+            // value rides only on the input-function call.
             let pctx = |e: Box<types_error::PgError>| {
-                bind_param_error_context(e, ctx_name.as_str(), paramno, None)
+                bind_param_error_context(e, ctx_name, paramno, None)
             };
             let ptype = param_types[paramno];
             let plength =
@@ -629,12 +725,14 @@ pub fn exec_bind_message<'mcx>(
                             .expect("client_to_server_cstring NUL-terminates")
                     });
                     let mut finfo = fmgr_seams::fmgr_info::call(typinput).map_err(pctx)?;
-                    let v = types_fmgr::input_function_call(&mut finfo, cstr, typioparam, -1, pmcx)
-                        .map_err(|e| {
+                    frame.value.set(cstr.map(|c| (c.as_ptr().cast::<u8>(), c.to_bytes().len())));
+                    let v = types_fmgr::input_function_call(&mut finfo, cstr, typioparam, -1, pmcx);
+                    frame.value.set(None);
+                    let v = v.map_err(|e| {
                             let val = cstr.map(|c| String::from_utf8_lossy(c.to_bytes()).into_owned());
                             bind_param_error_context(
                                 e,
-                                ctx_name.as_str(),
+                                ctx_name,
                                 paramno,
                                 val.as_deref(),
                             )
@@ -659,8 +757,10 @@ pub fn exec_bind_message<'mcx>(
                                 }
                                 s[..end].to_string()
                             };
-                            known_text_values.get_or_insert_with(|| vec![None; num_params])
-                                [paramno] = Some(kept);
+                            if known_text_values.is_none() {
+                                known_text_values = Some(::mcx::std_vec_from_elem("MessageContext", None, num_params)?);
+                            }
+                            known_text_values.as_mut().expect("just set")[paramno] = Some(kept);
                         }
                     }
                     // The result may alias finfo's scratch (fc_textin's
@@ -738,7 +838,7 @@ pub fn exec_bind_message<'mcx>(
             if guc_tables::backing::log_parameter_max_length_on_error() != 0 {
                 let known_refs: Vec<Option<&str>> = match &known_text_values {
                     Some(k) => k.iter().map(|o| o.as_deref()).collect(),
-                    None => vec![None; num_params],
+                    None => ::mcx::std_vec_from_elem("MessageContext", None, num_params)?,
                 };
                 nodes_params::build_param_log_string(
                     pmcx,
@@ -826,7 +926,12 @@ pub fn exec_bind_message<'mcx>(
             snapmgr::PopActiveSnapshot()?;
         }
 
-        if retained {
+        // Gravity: if it takes the statement over it records a token on the
+        // portal and a result descriptor (so PortalSetResultFormat still
+        // populates portal.formats), and the incumbent PortalStart is skipped.
+        if gravity_entry_seams::bind::call(&portal, cplan, params)? {
+            // served by Gravity
+        } else if retained {
             pquery::PortalStartParked(&portal, params)?;
         } else {
             pquery::PortalStart(&portal, params, 0, None)?;
@@ -836,10 +941,14 @@ pub fn exec_bind_message<'mcx>(
         pquery::PortalSetResultFormat(&portal, &rformats)?;
         Ok(())
     };
-    let params_cb = push_params_error_callback(ctx_name.as_str(), params);
+    let mut params_frame =
+        move |e: &mut types_error::PgError| nodes_params::params_error_callback(e, ctx_name, params);
+    // SAFETY: params_cb is dropped below, before params_frame goes out of
+    // scope; on an unwind it drops first (declared after it).
+    let params_cb = unsafe { ParamsErrorCallback::push(params, &mut params_frame) };
     let bound = bind_tail();
-    elog::pop_emit_context_callback(params_cb);
-    bound.map_err(|e| nodes_params::params_error_context(e, ctx_name.as_str(), params))?;
+    drop(params_cb);
+    bound.map_err(|e| nodes_params::params_error_context(e, ctx_name, params))?;
 
     if elog::config::where_to_send_output() == CommandDest::Remote {
         pqformat::pq_putemptymessage(pqmsg::BIND_COMPLETE)?;
@@ -1007,7 +1116,8 @@ pub fn exec_execute_message<'mcx>(
     let execute_is_fetch = !portal.borrow().atStart;
 
     let mut portal_params = portal.borrow().portalParams;
-    let ctx_name = portal.borrow().name.as_str().to_owned();
+    let mut name_spill = String::new();
+    let ctx_name: &str = stored_portal_name(&portal, portal_name, &mut name_spill);
 
     let mut was_logged = false;
     if check_log_statement_planned(&portal)? {
@@ -1040,18 +1150,34 @@ pub fn exec_execute_message<'mcx>(
     // Okay to run the portal. Set the error callback so that parameters are
     // logged; they must have been saved during the bind phase (C pushes
     // ParamsErrorCallback around PortalRun).
-    let params_cb = push_params_error_callback(ctx_name.as_str(), portal_params);
-    let completed = pquery::PortalRun(
-        &portal,
-        max_rows,
-        true, /* always top level */
-        &mut receiver,
-        None, /* altdest aliases dest, as in C */
-        Some(&mut qc),
-    );
-    elog::pop_emit_context_callback(params_cb);
+    let run_params = portal_params;
+    let mut params_frame = move |e: &mut types_error::PgError| {
+        nodes_params::params_error_callback(e, ctx_name, run_params)
+    };
+    // SAFETY: params_cb is dropped below, before params_frame goes out of
+    // scope; on an unwind it drops first (declared after it).
+    let params_cb = unsafe { ParamsErrorCallback::push(run_params, &mut params_frame) };
+    // Gravity: a served portal runs here (to completion, or to `max_rows` and
+    // suspends holding its execution on the portal); else the incumbent runs.
+    let completed = match gravity_entry_seams::execute::call(&portal, max_rows, &mut receiver) {
+        Err(e) => Err(e),
+        Ok(Some(Some(gqc))) => {
+            qc = gqc;
+            Ok(true)
+        }
+        Ok(Some(None)) => Ok(false),
+        Ok(None) => pquery::PortalRun(
+            &portal,
+            max_rows,
+            true, /* always top level */
+            &mut receiver,
+            None, /* altdest aliases dest, as in C */
+            Some(&mut qc),
+        ),
+    };
+    drop(params_cb);
     let completed = completed
-        .map_err(|e| nodes_params::params_error_context(e, ctx_name.as_str(), portal_params))?;
+        .map_err(|e| nodes_params::params_error_context(e, ctx_name, portal_params))?;
     crate::stmt_trace::probe("e.run");
 
     receiver.destroy();
@@ -1225,6 +1351,13 @@ pub fn exec_describe_portal_message<'mcx>(mcx: Mcx<'mcx>, portal_name: &str) -> 
 
     if elog::config::where_to_send_output() != CommandDest::Remote {
         return Ok(()); /* can't actually do anything... */
+    }
+
+    // Gravity: a served SELECT portal answers RowDescription from the program's
+    // output columns (gravity_wire); a served write portal has no tupDesc and
+    // falls through to the NoData arm below.
+    if gravity_entry_seams::describe::call(&portal)? {
+        return Ok(());
     }
 
     let tup_desc = portal.borrow().tupDesc.clone();

@@ -1,0 +1,147 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1upd s2mrg s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO uf_t t USING (SELECT k, w FROM uf_src WHERE w > 0 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1;
+QUERY PLAN                                           
+-----------------------------------------------------
+Merge on uf_t t                                      
+  ->  Hash Left Join                                 
+        Hash Cond: (t.id = "*SELECT* 1".k)           
+        ->  Seq Scan on uf_t t                       
+        ->  Hash                                     
+              ->  Append                             
+                    ->  Subquery Scan on "*SELECT* 1"
+                          ->  Seq Scan on uf_src     
+                                Filter: (w > 0)      
+                    ->  Result                       
+(10 rows)
+
+step s1upd: UPDATE uf_t SET v = v + 1 WHERE id = 7;
+step s2mrg: MERGE INTO uf_t t USING (SELECT k, w FROM uf_src WHERE w > 0 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM uf_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   7|   72|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1mat s2mrg s1c s2sel
+step s1mat: UPDATE uf_t SET v = v + 1 WHERE id = 5;
+step s2mrg: MERGE INTO uf_t t USING (SELECT k, w FROM uf_src WHERE w > 0 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM uf_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   51|  50
+   6|   61|1000
+   7|   71|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1matkey s2mrg s1c s2sel
+step s1matkey: UPDATE uf_t SET id = 2500 WHERE id = 5;
+step s2mrg: MERGE INTO uf_t t USING (SELECT k, w FROM uf_src WHERE w > 0 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM uf_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   6|   61|1000
+   7|   71|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+2500|   50|   0
+(11 rows)
+
+
+starting permutation: s1src s2mrg s1c s2sel
+step s1src: UPDATE uf_src SET k = 9 WHERE k = 5;
+step s2mrg: MERGE INTO uf_t t USING (SELECT k, w FROM uf_src WHERE w > 0 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1;
+step s1c: COMMIT;
+step s2sel: SELECT id, v, hits FROM uf_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   7|   71|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1mat s2mrgg s1c s2sel
+step s1mat: UPDATE uf_t SET v = v + 1 WHERE id = 5;
+step s2mrgg: MERGE INTO uf_t t USING (SELECT k, w FROM uf_src WHERE w > 0 UNION ALL SELECT 2500, 1 WHERE false UNION ALL SELECT 2600, 2) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 THEN UPDATE SET hits = t.hits + 1000; <waiting ...>
+step s1c: COMMIT;
+step s2mrgg: <... completed>
+step s2sel: SELECT id, v, hits FROM uf_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   10|1000
+   2|   20|1000
+   3|   30|  30
+   4|   40|1000
+   5|   51|  50
+   6|   60|1000
+   7|   70|1000
+   8|   80|1000
+   9|   90|1000
+  10|  100|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1matkey s2mrgg s1c s2sel
+step s1matkey: UPDATE uf_t SET id = 2500 WHERE id = 5;
+step s2mrgg: MERGE INTO uf_t t USING (SELECT k, w FROM uf_src WHERE w > 0 UNION ALL SELECT 2500, 1 WHERE false UNION ALL SELECT 2600, 2) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 THEN UPDATE SET hits = t.hits + 1000; <waiting ...>
+step s1c: COMMIT;
+step s2mrgg: <... completed>
+step s2sel: SELECT id, v, hits FROM uf_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   10|1000
+   2|   20|1000
+   3|   30|  30
+   4|   40|1000
+   6|   60|1000
+   7|   70|1000
+   8|   80|1000
+   9|   90|1000
+  10|  100|1000
+2000|20000|   0
+2500|   50|   0
+(11 rows)
+

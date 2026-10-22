@@ -1,0 +1,14 @@
+ERROR:  22003: smallint out of range
+LOCATION:  int2pl, int.c:944
+ERROR:  22003: smallint out of range
+LOCATION:  i4toi2, int.c:384
+ERROR:  22003: smallint out of range
+LOCATION:  int2um, int.c:922
+ERROR:  22003: smallint out of range
+LOCATION:  int2mi, int.c:958
+ERROR:  22003: smallint out of range
+LOCATION:  int2mul, int.c:972
+ERROR:  22003: smallint out of range
+LOCATION:  int2div, int.c:1004
+ERROR:  22003: smallint out of range
+LOCATION:  int2abs, int.c:1242

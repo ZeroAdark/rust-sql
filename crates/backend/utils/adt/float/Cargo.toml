@@ -9,6 +9,7 @@ name = "adt_float"
 path = "src/lib.rs"
 
 [dependencies]
+fp_contract = { path = "../../../../_support/fp_contract" }
 hashfn = { path = "../../../../common/hashfn" }
 datum = { path = "../../../../_support/types/datum" }
 ryu = { path = "../../../../common/ryu" }

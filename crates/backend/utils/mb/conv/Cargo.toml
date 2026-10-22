@@ -12,6 +12,15 @@ wchar = { path = "../../../../common/wchar" }
 mbutils = { path = "../mbutils" }
 mcx = { path = "../../../../_support/mcx" }
 
+[features]
+# The East-Asian (CJK) conversion procs and the maps only they read (~1.84 MB of .rodata): big5, euc_cn, euc_jp,
+# euc_kr, euc_tw, gb18030, gbk, johab, sjis, uhc, euc_jis_2004, shift_jis_2004 <-> UTF8, and the CJK <-> MULE_INTERNAL /
+# CJK <-> CJK procs. C PostgreSQL ships these as loadable utf8_and_* / *_and_mic modules; without the feature their
+# pg_proc rows resolve like a module that is not installed (fmgr's C-language leg). Default ON: every build has them
+# unless the server binary (main_main) is built without its `cjk-encodings` feature.
+default = ["cjk-encodings"]
+cjk-encodings = []
+
 [dev-dependencies]
 fmgr_core = { path = "../../fmgr/fmgr_core" }
 xact_seams = { path = "../../../access/transam/xact_seams" }

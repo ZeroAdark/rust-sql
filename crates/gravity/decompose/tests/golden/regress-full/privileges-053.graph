@@ -1,0 +1,11 @@
+-- regress-full-privileges-053
+-- DELETE FROM datdba_only;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=27506 rti=1 am=heap
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write DELETE rel=27506 rti=1 natts=0 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable SeqScan

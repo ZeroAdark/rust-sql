@@ -1,0 +1,21 @@
+-- regress-full-rowsecurity-011
+-- EXPLAIN (COSTS OFF) SELECT * FROM document WHERE f_leak(dtitle);
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=28321 rti=2 am=heap index=28325
+    key att=1 op=93 value=T_SQLValueFunction
+    recheck (op93(v2.1, T_SQLValueFunction))
+    lanes Attr(2):byval8:w8:val
+  project (1=v2.2)
+  outs 1=w8:val
+p1 node=0 eligible rows=67 end=sink
+  nodes n0@0
+  source range rel=28335 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byref8:fx64:win/page Attr(5):byref8:vl:win/page Offset:byval2:w2:val
+  filter op523(v1.3, $exec0)
+  filter fn28320(v1.5)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=fx64:win/page 5=vl:win/page
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 vol=s
+mapped: SeqScan IndexScan SubPlan

@@ -4,7 +4,7 @@
 use core::fmt::Write;
 
 use stringinfo::StringInfo;
-use types_error::PgResult;
+use types_error::{PgError, PgResult};
 
 use crate::state::{
     ExplainState, EXPLAIN_FORMAT_JSON, EXPLAIN_FORMAT_TEXT, EXPLAIN_FORMAT_XML,
@@ -16,154 +16,166 @@ const X_CLOSING: i32 = 1;
 const X_CLOSE_IMMEDIATE: i32 = 2;
 const X_NOWHITESPACE: i32 = 4;
 
-// StringInfo append is fallible; explain output assembly maps failures to the
-// same panic C's palloc OOM raises through.
-pub(crate) struct Si<'a, 'b>(pub(crate) &'a mut stringinfo::StringInfo<'b>);
+// StringInfo append is fallible; the write! adapter parks the PgError so the
+// caller can surface it as C's ereport does.
+pub(crate) struct Si<'a, 'b>(pub(crate) &'a mut stringinfo::StringInfo<'b>, pub(crate) Option<Box<PgError>>);
 
 impl Write for Si<'_, '_> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        self.0.append_str(s).map_err(|_| core::fmt::Error)
+        self.0.append_str(s).map_err(|e| {
+            self.1 = Some(e);
+            core::fmt::Error
+        })
+    }
+}
+
+impl Si<'_, '_> {
+    pub(crate) fn finish(self, r: core::fmt::Result) -> PgResult<()> {
+        match (r, self.1) {
+            (Ok(()), _) => Ok(()),
+            (Err(_), Some(e)) => Err(e),
+            (Err(_), None) => Err(Box::new(PgError::error("explain output append"))),
+        }
     }
 }
 
 macro_rules! append {
     ($es:expr, $($arg:tt)*) => {{
         use core::fmt::Write as _;
-        write!($crate::format::Si(&mut $es.str), $($arg)*).expect("explain output append")
+        let mut si = $crate::format::Si(&mut $es.str, None);
+        let r = write!(si, $($arg)*);
+        si.finish(r)
     }};
 }
 pub(crate) use append;
 
 // escape_json (json.c): quoted string literal with control/quote escapes.
-fn escape_json(buf: &mut StringInfo<'_>, s: &str) {
-    fn put(buf: &mut StringInfo<'_>, b: &[u8]) {
-        buf.append_bytes(b).expect("explain output append");
-    }
-    put(buf, b"\"");
+fn escape_json(buf: &mut StringInfo<'_>, s: &str) -> PgResult<()> {
+    buf.append_byte(b'"')?;
     for &c in s.as_bytes() {
         match c {
-            b'\x08' => put(buf, b"\\b"),
-            b'\x0c' => put(buf, b"\\f"),
-            b'\n' => put(buf, b"\\n"),
-            b'\r' => put(buf, b"\\r"),
-            b'\t' => put(buf, b"\\t"),
-            b'"' => put(buf, b"\\\""),
-            b'\\' => put(buf, b"\\\\"),
+            b'\x08' => buf.append_bytes(b"\\b")?,
+            b'\x0c' => buf.append_bytes(b"\\f")?,
+            b'\n' => buf.append_bytes(b"\\n")?,
+            b'\r' => buf.append_bytes(b"\\r")?,
+            b'\t' => buf.append_bytes(b"\\t")?,
+            b'"' => buf.append_bytes(b"\\\"")?,
+            b'\\' => buf.append_bytes(b"\\\\")?,
             _ if c < b' ' => {
                 use core::fmt::Write as _;
-                write!(Si(buf), "\\u{:04x}", c).expect("explain output append")
+                let mut si = Si(buf, None);
+                let r = write!(si, "\\u{:04x}", c);
+                si.finish(r)?
             }
-            _ => buf.append_byte(c).expect("explain output append"),
+            _ => buf.append_byte(c)?,
         }
     }
-    put(buf, b"\"");
+    buf.append_byte(b'"')
 }
 
 // escape_xml (xml.c).
-fn escape_xml(buf: &mut StringInfo<'_>, s: &str) {
-    fn put(buf: &mut StringInfo<'_>, b: &[u8]) {
-        buf.append_bytes(b).expect("explain output append");
-    }
+fn escape_xml(buf: &mut StringInfo<'_>, s: &str) -> PgResult<()> {
     for &c in s.as_bytes() {
         match c {
-            b'&' => put(buf, b"&amp;"),
-            b'<' => put(buf, b"&lt;"),
-            b'>' => put(buf, b"&gt;"),
-            b'\r' => put(buf, b"&#x0d;"),
-            _ => buf.append_byte(c).expect("explain output append"),
+            b'&' => buf.append_bytes(b"&amp;")?,
+            b'<' => buf.append_bytes(b"&lt;")?,
+            b'>' => buf.append_bytes(b"&gt;")?,
+            b'\r' => buf.append_bytes(b"&#x0d;")?,
+            _ => buf.append_byte(c)?,
         }
     }
+    Ok(())
 }
 
 // C: YAML quoting rules are a superset headache; everything quotes as JSON.
-fn escape_yaml(buf: &mut StringInfo<'_>, s: &str) {
-    escape_json(buf, s);
+fn escape_yaml(buf: &mut StringInfo<'_>, s: &str) -> PgResult<()> {
+    escape_json(buf, s)
 }
 
-pub fn ExplainPropertyList(qlabel: &str, data: &[impl AsRef<str>], es: &mut ExplainState<'_>) {
+pub fn ExplainPropertyList(qlabel: &str, data: &[impl AsRef<str>], es: &mut ExplainState<'_>) -> PgResult<()> {
     match es.format {
         EXPLAIN_FORMAT_TEXT => {
-            ExplainIndentText(es);
-            append!(es, "{qlabel}: ");
+            ExplainIndentText(es)?;
+            append!(es, "{qlabel}: ")?;
             for (i, item) in data.iter().enumerate() {
                 if i > 0 {
-                    append!(es, ", ");
+                    append!(es, ", ")?;
                 }
-                append!(es, "{}", item.as_ref());
+                append!(es, "{}", item.as_ref())?;
             }
-            append!(es, "\n");
+            append!(es, "\n")?;
         }
         EXPLAIN_FORMAT_XML => {
-            ExplainXMLTag(qlabel, X_OPENING, es);
+            ExplainXMLTag(qlabel, X_OPENING, es)?;
             for item in data {
                 es.str
-                    .append_spaces(es.indent as usize * 2 + 2)
-                    .expect("explain output append");
-                append!(es, "<Item>");
-                escape_xml(&mut es.str, item.as_ref());
-                append!(es, "</Item>\n");
+                    .append_spaces(es.indent as usize * 2 + 2)?;
+                append!(es, "<Item>")?;
+                escape_xml(&mut es.str, item.as_ref())?;
+                append!(es, "</Item>\n")?;
             }
-            ExplainXMLTag(qlabel, X_CLOSING, es);
+            ExplainXMLTag(qlabel, X_CLOSING, es)?;
         }
         EXPLAIN_FORMAT_JSON => {
-            ExplainJSONLineEnding(es);
-            es.str.append_spaces(es.indent as usize * 2).expect("explain output append");
-            escape_json(&mut es.str, qlabel);
-            append!(es, ": [");
+            ExplainJSONLineEnding(es)?;
+            es.str.append_spaces(es.indent as usize * 2)?;
+            escape_json(&mut es.str, qlabel)?;
+            append!(es, ": [")?;
             for (i, item) in data.iter().enumerate() {
                 if i > 0 {
-                    append!(es, ", ");
+                    append!(es, ", ")?;
                 }
-                escape_json(&mut es.str, item.as_ref());
+                escape_json(&mut es.str, item.as_ref())?;
             }
-            append!(es, "]");
+            append!(es, "]")?;
         }
         EXPLAIN_FORMAT_YAML => {
-            ExplainYAMLLineStarting(es);
-            append!(es, "{qlabel}: ");
+            ExplainYAMLLineStarting(es)?;
+            append!(es, "{qlabel}: ")?;
             for item in data {
-                append!(es, "\n");
+                append!(es, "\n")?;
                 es.str
-                    .append_spaces(es.indent as usize * 2 + 2)
-                    .expect("explain output append");
-                append!(es, "- ");
-                escape_yaml(&mut es.str, item.as_ref());
+                    .append_spaces(es.indent as usize * 2 + 2)?;
+                append!(es, "- ")?;
+                escape_yaml(&mut es.str, item.as_ref())?;
             }
         }
     }
+    Ok(())
 }
 
 pub fn ExplainPropertyListNested(
     qlabel: &str,
     data: &[impl AsRef<str>],
     es: &mut ExplainState<'_>,
-) {
+) -> PgResult<()> {
     match es.format {
-        EXPLAIN_FORMAT_TEXT | EXPLAIN_FORMAT_XML => ExplainPropertyList(qlabel, data, es),
+        EXPLAIN_FORMAT_TEXT | EXPLAIN_FORMAT_XML => ExplainPropertyList(qlabel, data, es)?,
         EXPLAIN_FORMAT_JSON => {
-            ExplainJSONLineEnding(es);
-            es.str.append_spaces(es.indent as usize * 2).expect("explain output append");
-            append!(es, "[");
+            ExplainJSONLineEnding(es)?;
+            es.str.append_spaces(es.indent as usize * 2)?;
+            append!(es, "[")?;
             for (i, item) in data.iter().enumerate() {
                 if i > 0 {
-                    append!(es, ", ");
+                    append!(es, ", ")?;
                 }
-                escape_json(&mut es.str, item.as_ref());
+                escape_json(&mut es.str, item.as_ref())?;
             }
-            append!(es, "]");
+            append!(es, "]")?;
         }
         EXPLAIN_FORMAT_YAML => {
-            ExplainYAMLLineStarting(es);
-            append!(es, "- [");
+            ExplainYAMLLineStarting(es)?;
+            append!(es, "- [")?;
             for (i, item) in data.iter().enumerate() {
                 if i > 0 {
-                    append!(es, ", ");
+                    append!(es, ", ")?;
                 }
-                escape_yaml(&mut es.str, item.as_ref());
+                escape_yaml(&mut es.str, item.as_ref())?;
             }
-            append!(es, "]");
+            append!(es, "]")?;
         }
     }
+    Ok(())
 }
 
 fn ExplainProperty(
@@ -172,51 +184,54 @@ fn ExplainProperty(
     value: &str,
     numeric: bool,
     es: &mut ExplainState<'_>,
-) {
+) -> PgResult<()> {
     match es.format {
         EXPLAIN_FORMAT_TEXT => {
-            ExplainIndentText(es);
+            ExplainIndentText(es)?;
             match unit {
-                Some(u) => append!(es, "{qlabel}: {value} {u}\n"),
-                None => append!(es, "{qlabel}: {value}\n"),
+                Some(u) => append!(es, "{qlabel}: {value} {u}\n")?,
+                None => append!(es, "{qlabel}: {value}\n")?,
             }
         }
         EXPLAIN_FORMAT_XML => {
-            es.str.append_spaces(es.indent as usize * 2).expect("explain output append");
-            ExplainXMLTag(qlabel, X_OPENING | X_NOWHITESPACE, es);
-            escape_xml(&mut es.str, value);
-            ExplainXMLTag(qlabel, X_CLOSING | X_NOWHITESPACE, es);
-            append!(es, "\n");
+            es.str.append_spaces(es.indent as usize * 2)?;
+            ExplainXMLTag(qlabel, X_OPENING | X_NOWHITESPACE, es)?;
+            escape_xml(&mut es.str, value)?;
+            ExplainXMLTag(qlabel, X_CLOSING | X_NOWHITESPACE, es)?;
+            append!(es, "\n")?;
         }
         EXPLAIN_FORMAT_JSON => {
-            ExplainJSONLineEnding(es);
-            es.str.append_spaces(es.indent as usize * 2).expect("explain output append");
-            escape_json(&mut es.str, qlabel);
-            append!(es, ": ");
+            ExplainJSONLineEnding(es)?;
+            es.str.append_spaces(es.indent as usize * 2)?;
+            escape_json(&mut es.str, qlabel)?;
+            append!(es, ": ")?;
             if numeric {
-                append!(es, "{value}");
+                append!(es, "{value}")?;
             } else {
-                escape_json(&mut es.str, value);
+                escape_json(&mut es.str, value)?;
             }
         }
         EXPLAIN_FORMAT_YAML => {
-            ExplainYAMLLineStarting(es);
-            append!(es, "{qlabel}: ");
+            ExplainYAMLLineStarting(es)?;
+            append!(es, "{qlabel}: ")?;
             if numeric {
-                append!(es, "{value}");
+                append!(es, "{value}")?;
             } else {
-                escape_yaml(&mut es.str, value);
+                escape_yaml(&mut es.str, value)?;
             }
         }
     }
+    Ok(())
 }
 
-pub fn ExplainPropertyText(qlabel: &str, value: &str, es: &mut ExplainState<'_>) {
-    ExplainProperty(qlabel, None, value, false, es);
+pub fn ExplainPropertyText(qlabel: &str, value: &str, es: &mut ExplainState<'_>) -> PgResult<()> {
+    ExplainProperty(qlabel, None, value, false, es)?;
+    Ok(())
 }
 
-pub fn ExplainPropertyInteger(qlabel: &str, unit: Option<&str>, value: i64, es: &mut ExplainState<'_>) {
-    ExplainProperty(qlabel, unit, &format!("{value}"), true, es);
+pub fn ExplainPropertyInteger(qlabel: &str, unit: Option<&str>, value: i64, es: &mut ExplainState<'_>) -> PgResult<()> {
+    ExplainProperty(qlabel, unit, &format!("{value}"), true, es)?;
+    Ok(())
 }
 
 pub fn ExplainPropertyUInteger(
@@ -224,8 +239,9 @@ pub fn ExplainPropertyUInteger(
     unit: Option<&str>,
     value: u64,
     es: &mut ExplainState<'_>,
-) {
-    ExplainProperty(qlabel, unit, &format!("{value}"), true, es);
+) -> PgResult<()> {
+    ExplainProperty(qlabel, unit, &format!("{value}"), true, es)?;
+    Ok(())
 }
 
 pub fn ExplainPropertyFloat(
@@ -234,8 +250,9 @@ pub fn ExplainPropertyFloat(
     value: f64,
     ndigits: usize,
     es: &mut ExplainState<'_>,
-) {
-    ExplainProperty(qlabel, unit, &fmt_float(value, ndigits), true, es);
+) -> PgResult<()> {
+    ExplainProperty(qlabel, unit, &fmt_float(value, ndigits), true, es)?;
+    Ok(())
 }
 
 // snprintf.c fmtfloat: %.Nf spells infinities "Infinity" (libc spells NaN).
@@ -249,8 +266,9 @@ pub(crate) fn fmt_float(value: f64, ndigits: usize) -> String {
     }
 }
 
-pub fn ExplainPropertyBool(qlabel: &str, value: bool, es: &mut ExplainState<'_>) {
-    ExplainProperty(qlabel, None, if value { "true" } else { "false" }, true, es);
+pub fn ExplainPropertyBool(qlabel: &str, value: bool, es: &mut ExplainState<'_>) -> PgResult<()> {
+    ExplainProperty(qlabel, None, if value { "true" } else { "false" }, true, es)?;
+    Ok(())
 }
 
 pub fn ExplainOpenGroup(
@@ -258,36 +276,37 @@ pub fn ExplainOpenGroup(
     labelname: Option<&str>,
     labeled: bool,
     es: &mut ExplainState<'_>,
-) {
+) -> PgResult<()> {
     match es.format {
         EXPLAIN_FORMAT_TEXT => {}
         EXPLAIN_FORMAT_XML => {
-            ExplainXMLTag(objtype, X_OPENING, es);
+            ExplainXMLTag(objtype, X_OPENING, es)?;
             es.indent += 1;
         }
         EXPLAIN_FORMAT_JSON => {
-            ExplainJSONLineEnding(es);
-            es.str.append_spaces(2 * es.indent as usize).expect("explain output append");
+            ExplainJSONLineEnding(es)?;
+            es.str.append_spaces(2 * es.indent as usize)?;
             if let Some(label) = labelname {
-                escape_json(&mut es.str, label);
-                append!(es, ": ");
+                escape_json(&mut es.str, label)?;
+                append!(es, ": ")?;
             }
-            append!(es, "{}", if labeled { '{' } else { '[' });
+            append!(es, "{}", if labeled { '{' } else { '[' })?;
             es.grouping_stack.push(0);
             es.indent += 1;
         }
         EXPLAIN_FORMAT_YAML => {
-            ExplainYAMLLineStarting(es);
+            ExplainYAMLLineStarting(es)?;
             if let Some(label) = labelname {
-                append!(es, "{label}: ");
+                append!(es, "{label}: ")?;
                 es.grouping_stack.push(1);
             } else {
-                append!(es, "- ");
+                append!(es, "- ")?;
                 es.grouping_stack.push(0);
             }
             es.indent += 1;
         }
     }
+    Ok(())
 }
 
 pub fn ExplainCloseGroup(
@@ -295,18 +314,18 @@ pub fn ExplainCloseGroup(
     _labelname: Option<&str>,
     labeled: bool,
     es: &mut ExplainState<'_>,
-) {
+) -> PgResult<()> {
     match es.format {
         EXPLAIN_FORMAT_TEXT => {}
         EXPLAIN_FORMAT_XML => {
             es.indent -= 1;
-            ExplainXMLTag(objtype, X_CLOSING, es);
+            ExplainXMLTag(objtype, X_CLOSING, es)?;
         }
         EXPLAIN_FORMAT_JSON => {
             es.indent -= 1;
-            append!(es, "\n");
-            es.str.append_spaces(2 * es.indent as usize).expect("explain output append");
-            append!(es, "{}", if labeled { '}' } else { ']' });
+            append!(es, "\n")?;
+            es.str.append_spaces(2 * es.indent as usize)?;
+            append!(es, "{}", if labeled { '}' } else { ']' })?;
             es.grouping_stack.pop().expect("JSON grouping stack underflow");
         }
         EXPLAIN_FORMAT_YAML => {
@@ -314,6 +333,7 @@ pub fn ExplainCloseGroup(
             es.grouping_stack.pop().expect("YAML grouping stack underflow");
         }
     }
+    Ok(())
 }
 
 pub fn ExplainOpenSetAsideGroup(
@@ -359,44 +379,44 @@ pub fn ExplainRestoreGroup(es: &mut ExplainState<'_>, depth: i32, state_save: &i
     }
 }
 
-pub fn ExplainDummyGroup(objtype: &str, labelname: Option<&str>, es: &mut ExplainState<'_>) {
+pub fn ExplainDummyGroup(objtype: &str, labelname: Option<&str>, es: &mut ExplainState<'_>) -> PgResult<()> {
     match es.format {
         EXPLAIN_FORMAT_TEXT => {}
-        EXPLAIN_FORMAT_XML => ExplainXMLTag(objtype, X_CLOSE_IMMEDIATE, es),
+        EXPLAIN_FORMAT_XML => ExplainXMLTag(objtype, X_CLOSE_IMMEDIATE, es)?,
         EXPLAIN_FORMAT_JSON => {
-            ExplainJSONLineEnding(es);
-            es.str.append_spaces(2 * es.indent as usize).expect("explain output append");
+            ExplainJSONLineEnding(es)?;
+            es.str.append_spaces(2 * es.indent as usize)?;
             if let Some(label) = labelname {
-                escape_json(&mut es.str, label);
-                append!(es, ": ");
+                escape_json(&mut es.str, label)?;
+                append!(es, ": ")?;
             }
-            escape_json(&mut es.str, objtype);
+            escape_json(&mut es.str, objtype)?;
         }
         EXPLAIN_FORMAT_YAML => {
-            ExplainYAMLLineStarting(es);
+            ExplainYAMLLineStarting(es)?;
             if let Some(label) = labelname {
-                escape_yaml(&mut es.str, label);
-                append!(es, ": ");
+                escape_yaml(&mut es.str, label)?;
+                append!(es, ": ")?;
             } else {
-                append!(es, "- ");
+                append!(es, "- ")?;
             }
-            escape_yaml(&mut es.str, objtype);
+            escape_yaml(&mut es.str, objtype)?;
         }
     }
+    Ok(())
 }
 
-pub fn ExplainBeginOutput(es: &mut ExplainState<'_>) {
+pub fn ExplainBeginOutput(es: &mut ExplainState<'_>) -> PgResult<()> {
     match es.format {
         EXPLAIN_FORMAT_TEXT => {}
         EXPLAIN_FORMAT_XML => {
             es.str
-                .append_str("<explain xmlns=\"http://www.postgresql.org/2009/explain\">\n")
-                .expect("explain output append");
+                .append_str("<explain xmlns=\"http://www.postgresql.org/2009/explain\">\n")?;
             es.indent += 1;
         }
         EXPLAIN_FORMAT_JSON => {
             // top-level structure is an array of plans
-            append!(es, "[");
+            append!(es, "[")?;
             es.grouping_stack.push(0);
             es.indent += 1;
         }
@@ -404,24 +424,26 @@ pub fn ExplainBeginOutput(es: &mut ExplainState<'_>) {
             es.grouping_stack.push(0);
         }
     }
+    Ok(())
 }
 
-pub fn ExplainEndOutput(es: &mut ExplainState<'_>) {
+pub fn ExplainEndOutput(es: &mut ExplainState<'_>) -> PgResult<()> {
     match es.format {
         EXPLAIN_FORMAT_TEXT => {}
         EXPLAIN_FORMAT_XML => {
             es.indent -= 1;
-            append!(es, "</explain>");
+            append!(es, "</explain>")?;
         }
         EXPLAIN_FORMAT_JSON => {
             es.indent -= 1;
-            append!(es, "\n]");
+            append!(es, "\n]")?;
             es.grouping_stack.pop().expect("JSON grouping stack underflow");
         }
         EXPLAIN_FORMAT_YAML => {
             es.grouping_stack.pop().expect("YAML grouping stack underflow");
         }
     }
+    Ok(())
 }
 
 pub fn ExplainSeparatePlans(es: &mut ExplainState<'_>) -> PgResult<()> {
@@ -433,61 +455,63 @@ pub fn ExplainSeparatePlans(es: &mut ExplainState<'_>) -> PgResult<()> {
 
 // XML tag names are more restricted than the other formats' labels; invalid
 // characters become dashes ("I/O Read Time" -> "I-O-Read-Time").
-fn ExplainXMLTag(tagname: &str, flags: i32, es: &mut ExplainState<'_>) {
+fn ExplainXMLTag(tagname: &str, flags: i32, es: &mut ExplainState<'_>) -> PgResult<()> {
     if flags & X_NOWHITESPACE == 0 {
-        es.str.append_spaces(2 * es.indent as usize).expect("explain output append");
+        es.str.append_spaces(2 * es.indent as usize)?;
     }
-    es.str.append_byte(b'<').expect("explain output append");
+    es.str.append_byte(b'<')?;
     if flags & X_CLOSING != 0 {
-        es.str.append_byte(b'/').expect("explain output append");
+        es.str.append_byte(b'/')?;
     }
     for &b in tagname.as_bytes() {
         let ok = b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.';
-        es.str.append_byte(if ok { b } else { b'-' }).expect("explain output append");
+        es.str.append_byte(if ok { b } else { b'-' })?;
     }
     if flags & X_CLOSE_IMMEDIATE != 0 {
-        es.str.append_str(" /").expect("explain output append");
+        es.str.append_str(" /")?;
     }
-    es.str.append_byte(b'>').expect("explain output append");
+    es.str.append_byte(b'>')?;
     if flags & X_NOWHITESPACE == 0 {
-        es.str.append_byte(b'\n').expect("explain output append");
+        es.str.append_byte(b'\n')?;
     }
+    Ok(())
 }
 
-pub fn ExplainIndentText(es: &mut ExplainState<'_>) {
+pub fn ExplainIndentText(es: &mut ExplainState<'_>) -> PgResult<()> {
     debug_assert_eq!(es.format, EXPLAIN_FORMAT_TEXT);
     let bytes = es.str.as_bytes();
     if bytes.is_empty() || bytes[bytes.len() - 1] == b'\n' {
         es.str
-            .append_spaces(es.indent as usize * 2)
-            .expect("explain output append");
+            .append_spaces(es.indent as usize * 2)?;
     }
+    Ok(())
 }
 
 // Each JSON property is emitted just after the preceding line break (and
 // comma, when the group already has members).
-fn ExplainJSONLineEnding(es: &mut ExplainState<'_>) {
+fn ExplainJSONLineEnding(es: &mut ExplainState<'_>) -> PgResult<()> {
     debug_assert_eq!(es.format, EXPLAIN_FORMAT_JSON);
     let top = es.grouping_stack.last_mut().expect("JSON grouping stack underflow");
     if *top != 0 {
-        es.str.append_byte(b',').expect("explain output append");
+        es.str.append_byte(b',')?;
     } else {
         *top = 1;
     }
-    es.str.append_byte(b'\n').expect("explain output append");
+    es.str.append_byte(b'\n')?;
+    Ok(())
 }
 
 // The first property of an unlabeled YAML group rides the group's own "- "
 // line; every later property starts a fresh indented line.
-fn ExplainYAMLLineStarting(es: &mut ExplainState<'_>) {
+fn ExplainYAMLLineStarting(es: &mut ExplainState<'_>) -> PgResult<()> {
     debug_assert_eq!(es.format, EXPLAIN_FORMAT_YAML);
     let top = es.grouping_stack.last_mut().expect("YAML grouping stack underflow");
     if *top == 0 {
         *top = 1;
     } else {
-        es.str.append_byte(b'\n').expect("explain output append");
+        es.str.append_byte(b'\n')?;
         es.str
-            .append_spaces(es.indent as usize * 2)
-            .expect("explain output append");
+            .append_spaces(es.indent as usize * 2)?;
     }
+    Ok(())
 }

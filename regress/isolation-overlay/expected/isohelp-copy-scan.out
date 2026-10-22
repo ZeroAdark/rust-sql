@@ -1,0 +1,205 @@
+Parsed test spec with 3 sessions
+
+starting permutation: fexpl s1u fupd s1c sel
+step fexpl: EXPLAIN (COSTS OFF) UPDATE cst SET v = cst.v + g.k FROM generate_series(1, 2) AS g(k) WHERE cst.k = g.k AND cst.k = 1;
+QUERY PLAN                                    
+----------------------------------------------
+Update on cst                                 
+  ->  Nested Loop                             
+        ->  Index Scan using cst_pkey on cst  
+              Index Cond: (k = 1)             
+        ->  Function Scan on generate_series g
+              Filter: (k = 1)                 
+(6 rows)
+
+step s1u: UPDATE cst SET v = v + 100 WHERE k = 1;
+step fupd: UPDATE cst SET v = cst.v + g.k FROM generate_series(1, 2) AS g(k) WHERE cst.k = g.k AND cst.k = 1 RETURNING cst.k, cst.v, g.k; <waiting ...>
+step s1c: COMMIT;
+step fupd: <... completed>
+k|  v|k
+-+---+-
+1|111|1
+(1 row)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k|  v
+-+---
+1|111
+2| 20
+3| 30
+(3 rows)
+
+
+starting permutation: s1k fupd s1c sel
+step s1k: UPDATE cst SET k = 9 WHERE k = 1;
+step fupd: UPDATE cst SET v = cst.v + g.k FROM generate_series(1, 2) AS g(k) WHERE cst.k = g.k AND cst.k = 1 RETURNING cst.k, cst.v, g.k; <waiting ...>
+step s1c: COMMIT;
+step fupd: <... completed>
+k|v|k
+-+-+-
+(0 rows)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k| v
+-+--
+2|20
+3|30
+9|10
+(3 rows)
+
+
+starting permutation: s1d fupd s1c sel
+step s1d: DELETE FROM cst WHERE k = 1;
+step fupd: UPDATE cst SET v = cst.v + g.k FROM generate_series(1, 2) AS g(k) WHERE cst.k = g.k AND cst.k = 1 RETURNING cst.k, cst.v, g.k; <waiting ...>
+step s1c: COMMIT;
+step fupd: <... completed>
+k|v|k
+-+-+-
+(0 rows)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k| v
+-+--
+2|20
+3|30
+(2 rows)
+
+
+starting permutation: s1u fdel s1c sel
+step s1u: UPDATE cst SET v = v + 100 WHERE k = 1;
+step fdel: DELETE FROM cst USING generate_series(1, 3) AS g(k) WHERE cst.k = g.k AND cst.k = 1 RETURNING cst.k, cst.v, g.k; <waiting ...>
+step s1c: COMMIT;
+step fdel: <... completed>
+k|  v|k
+-+---+-
+1|110|1
+(1 row)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k| v
+-+--
+2|20
+3|30
+(2 rows)
+
+
+starting permutation: s1k fdel s1c sel
+step s1k: UPDATE cst SET k = 9 WHERE k = 1;
+step fdel: DELETE FROM cst USING generate_series(1, 3) AS g(k) WHERE cst.k = g.k AND cst.k = 1 RETURNING cst.k, cst.v, g.k; <waiting ...>
+step s1c: COMMIT;
+step fdel: <... completed>
+k|v|k
+-+-+-
+(0 rows)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k| v
+-+--
+2|20
+3|30
+9|10
+(3 rows)
+
+
+starting permutation: cexpl s1u cupd s1c sel
+step cexpl: EXPLAIN (COSTS OFF) WITH src AS MATERIALIZED (SELECT k, d FROM csc) UPDATE cst SET v = cst.v + src.d FROM src WHERE cst.k = src.k AND cst.k = 1;
+QUERY PLAN                                  
+--------------------------------------------
+Update on cst                               
+  CTE src                                   
+    ->  Seq Scan on csc                     
+  ->  Nested Loop                           
+        ->  Index Scan using cst_pkey on cst
+              Index Cond: (k = 1)           
+        ->  CTE Scan on src                 
+              Filter: (k = 1)               
+(8 rows)
+
+step s1u: UPDATE cst SET v = v + 100 WHERE k = 1;
+step cupd: WITH src AS MATERIALIZED (SELECT k, d FROM csc) UPDATE cst SET v = cst.v + src.d FROM src WHERE cst.k = src.k AND cst.k = 1 RETURNING cst.k, cst.v, src.d; <waiting ...>
+step s1c: COMMIT;
+step cupd: <... completed>
+k|  v|d
+-+---+-
+1|115|5
+(1 row)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k|  v
+-+---
+1|115
+2| 20
+3| 30
+(3 rows)
+
+
+starting permutation: s1k cupd s1c sel
+step s1k: UPDATE cst SET k = 9 WHERE k = 1;
+step cupd: WITH src AS MATERIALIZED (SELECT k, d FROM csc) UPDATE cst SET v = cst.v + src.d FROM src WHERE cst.k = src.k AND cst.k = 1 RETURNING cst.k, cst.v, src.d; <waiting ...>
+step s1c: COMMIT;
+step cupd: <... completed>
+k|v|d
+-+-+-
+(0 rows)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k| v
+-+--
+2|20
+3|30
+9|10
+(3 rows)
+
+
+starting permutation: s1d cupd s1c sel
+step s1d: DELETE FROM cst WHERE k = 1;
+step cupd: WITH src AS MATERIALIZED (SELECT k, d FROM csc) UPDATE cst SET v = cst.v + src.d FROM src WHERE cst.k = src.k AND cst.k = 1 RETURNING cst.k, cst.v, src.d; <waiting ...>
+step s1c: COMMIT;
+step cupd: <... completed>
+k|v|d
+-+-+-
+(0 rows)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k| v
+-+--
+2|20
+3|30
+(2 rows)
+
+
+starting permutation: s1u cdel s1c sel
+step s1u: UPDATE cst SET v = v + 100 WHERE k = 1;
+step cdel: WITH src AS MATERIALIZED (SELECT k, d FROM csc) DELETE FROM cst USING src WHERE cst.k = src.k AND cst.k = 1 RETURNING cst.k, src.d; <waiting ...>
+step s1c: COMMIT;
+step cdel: <... completed>
+k|d
+-+-
+1|5
+(1 row)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k| v
+-+--
+2|20
+3|30
+(2 rows)
+
+
+starting permutation: s1k cdel s1c sel
+step s1k: UPDATE cst SET k = 9 WHERE k = 1;
+step cdel: WITH src AS MATERIALIZED (SELECT k, d FROM csc) DELETE FROM cst USING src WHERE cst.k = src.k AND cst.k = 1 RETURNING cst.k, src.d; <waiting ...>
+step s1c: COMMIT;
+step cdel: <... completed>
+k|d
+-+-
+(0 rows)
+
+step sel: SELECT k, v FROM cst ORDER BY k;
+k| v
+-+--
+2|20
+3|30
+9|10
+(3 rows)
+

@@ -25,6 +25,8 @@ pub struct ToastAttrInfo {
     pub tai_size: i32,
     pub tai_colflags: u8,
     pub tai_compression: i8,
+    // Capacity of the owned buffer behind a TOASTCOL_NEEDS_FREE value.
+    pub tai_free_cap: usize,
 }
 
 pub struct ToastTupleContext<'a, 'rel> {
@@ -76,6 +78,32 @@ pub(crate) fn leak_datum(v: ::mcx::PgVec<'_, u8>) -> Datum {
     Datum::from_usize(v.leak().as_ptr() as usize)
 }
 
+/// Leaks `v` into a Datum and returns its capacity for [`free_datum`].
+pub(crate) fn own_datum(v: ::mcx::PgVec<'_, u8>) -> (Datum, usize) {
+    let cap = v.capacity();
+    (leak_datum(v), cap)
+}
+
+/// C pfree of a value produced by [`own_datum`].
+///
+/// # Safety
+/// `d`/`cap` come from `own_datum` over a vec allocated in `mcx`, not yet
+/// freed, and nothing reads `d` afterwards.
+pub(crate) unsafe fn free_datum(mcx: Mcx<'_>, d: Datum, cap: usize) {
+    // SAFETY: caller contract; u8 elements need no drop, so len 0 suffices.
+    drop(unsafe { ::mcx::PgVec::from_raw_parts_in(d.as_usize() as *mut u8, 0, cap, mcx) });
+}
+
+/// Frees `attr`'s current value if this context owns it (C: the
+/// TOASTCOL_NEEDS_FREE pfree before a value is replaced).
+fn free_owned_value(mcx: Mcx<'_>, value: Datum, attr: &mut ToastAttrInfo) {
+    if (attr.tai_colflags & TOASTCOL_NEEDS_FREE) != 0 {
+        // SAFETY: NEEDS_FREE values are set only through own_datum in mcx.
+        unsafe { free_datum(mcx, value, attr.tai_free_cap) };
+        attr.tai_colflags &= !TOASTCOL_NEEDS_FREE;
+    }
+}
+
 pub fn toast_tuple_init<'mcx>(mcx: Mcx<'mcx>, ttc: &mut ToastTupleContext<'_, '_>) -> PgResult<()> {
     let tuple_desc = &ttc.ttc_rel.rd_att;
     let num_attrs = tuple_desc.natts as usize;
@@ -91,6 +119,7 @@ pub fn toast_tuple_init<'mcx>(mcx: Mcx<'mcx>, ttc: &mut ToastTupleContext<'_, '_
             tai_oldexternal: None,
             tai_compression: att.attcompression,
             tai_size: 0,
+            tai_free_cap: 0,
         };
 
         if let (Some(oldvalues), Some(oldisnull)) = (ttc.ttc_oldvalues, ttc.ttc_oldisnull) {
@@ -134,8 +163,10 @@ pub fn toast_tuple_init<'mcx>(mcx: Mcx<'mcx>, ttc: &mut ToastTupleContext<'_, '_
                 } else {
                     detoast::detoast_external_attr(mcx, attr)?
                 };
-                new_value = leak_datum(fetched);
+                let (d, cap) = own_datum(fetched);
+                new_value = d;
                 ttc.ttc_values[i] = new_value;
+                ttc.ttc_attr[i].tai_free_cap = cap;
                 ttc.ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
                 ttc.ttc_flags |= TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE;
             }
@@ -207,7 +238,10 @@ pub fn toast_tuple_try_compression<'mcx>(
     match toast_compress_datum(mcx, value, attr.tai_compression)? {
         Some(new_value) => {
             attr.tai_size = new_value.len() as i32;
-            ttc.ttc_values[attribute] = leak_datum(new_value);
+            free_owned_value(mcx, ttc.ttc_values[attribute], attr);
+            let (d, cap) = own_datum(new_value);
+            ttc.ttc_values[attribute] = d;
+            attr.tai_free_cap = cap;
             attr.tai_colflags |= TOASTCOL_NEEDS_FREE;
             ttc.ttc_flags |= TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE;
         }
@@ -233,19 +267,27 @@ pub fn toast_tuple_externalize<'mcx>(
         toast_save_datum(mcx, ttc.ttc_rel, old_value, oldexternal, ttc.ttc_toastoid, options)?;
     let mut img = ::mcx::vec_with_capacity_in(mcx, pointer.len())?;
     ::mcx::vec_append_bytes(&mut img, &pointer)?;
-    ttc.ttc_values[attribute] = leak_datum(img);
+    free_owned_value(mcx, ttc.ttc_values[attribute], attr);
+    let (d, cap) = own_datum(img);
+    ttc.ttc_values[attribute] = d;
+    attr.tai_free_cap = cap;
     attr.tai_colflags |= TOASTCOL_NEEDS_FREE;
     ttc.ttc_flags |= TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE;
     Ok(())
 }
 
-// TOAST_NEEDS_FREE releases are arena resets here (values die with the
-// caller's scratch mcx); only the delete-old external work remains.
 pub fn toast_tuple_cleanup<'mcx>(
     mcx: Mcx<'mcx>,
     ttc: &mut ToastTupleContext<'_, '_>,
 ) -> PgResult<()> {
     let num_attrs = ttc.ttc_rel.rd_att.natts as usize;
+
+    if (ttc.ttc_flags & TOAST_NEEDS_FREE) != 0 {
+        for i in 0..num_attrs {
+            free_owned_value(mcx, ttc.ttc_values[i], &mut ttc.ttc_attr[i]);
+        }
+        ttc.ttc_flags &= !TOAST_NEEDS_FREE;
+    }
 
     if (ttc.ttc_flags & TOAST_NEEDS_DELETE_OLD) != 0 {
         let oldvalues = ttc.ttc_oldvalues.expect("delete-old flagged without old values");

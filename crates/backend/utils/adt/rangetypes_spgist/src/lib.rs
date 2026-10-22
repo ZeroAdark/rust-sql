@@ -120,7 +120,7 @@ fn fc_spg_range_quad_picksplit(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
     // SAFETY: nTuples datums per protocol.
     let datums = unsafe { core::slice::from_raw_parts(input.datums, n) };
 
-    let mut ranges = Vec::with_capacity(n);
+    let mut ranges = ::mcx::std_vec_with_capacity("adt", n)?;
     for &d in datums {
         // SAFETY: leaf datums are live range varlenas.
         ranges.push(unsafe { varlena_image(mcx, d) }?);
@@ -131,8 +131,8 @@ fn fc_spg_range_quad_picksplit(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
         range_type_oid(ranges[0]),
     )?;
 
-    let mut lower_bounds = Vec::with_capacity(n);
-    let mut upper_bounds = Vec::with_capacity(n);
+    let mut lower_bounds = ::mcx::std_vec_with_capacity("adt", n)?;
+    let mut upper_bounds = ::mcx::std_vec_with_capacity("adt", n)?;
     for &r in &ranges {
         let (lower, upper, empty) = range_deserialize(&ri.elem, r);
         if !empty {
@@ -555,11 +555,14 @@ fn fc_spg_range_quad_leaf_consistent(
     let mut res = true;
     for key in scankeys {
         let key_datum = key.sk_argument;
-        res = match key.sk_strategy {
+        let strategy = key.sk_strategy;
+        res = match strategy {
             RANGESTRAT_CONTAINS_ELEM => {
                 ops::range_contains_elem_internal(mcx, ri, leaf, key_datum)?
             }
-            strategy => {
+            RANGESTRAT_BEFORE | RANGESTRAT_OVERLEFT | RANGESTRAT_OVERLAPS | RANGESTRAT_OVERRIGHT
+            | RANGESTRAT_AFTER | RANGESTRAT_ADJACENT | RANGESTRAT_CONTAINS
+            | RANGESTRAT_CONTAINED_BY | RANGESTRAT_EQ => {
                 // SAFETY: range scankey argument is a live varlena.
                 let query = unsafe { varlena_image(mcx, key_datum) }?;
                 match strategy {
@@ -577,6 +580,7 @@ fn fc_spg_range_quad_leaf_consistent(
                     other => return Err(unrecognized_range_strategy(other)),
                 }
             }
+            other => return Err(unrecognized_range_strategy(other)),
         };
         if !res {
             break;

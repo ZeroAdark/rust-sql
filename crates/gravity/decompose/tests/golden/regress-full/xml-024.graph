@@ -1,0 +1,9 @@
+-- regress-full-xml-024
+-- SELECT * FROM XMLTABLE(XMLNAMESPACES(DEFAULT 'http://x.y'), '/rows/row' PASSING '<rows xmlns="http://x.y"><row><a>10</a></row></rows>' COLUMNS a int PATH 'a');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=Host end=sink
+  nodes n0@0
+  source tablefunc rti=1 kind=xmltable cols=1 ordinality=-1 doc=c142:'<rows xmlns="http://x.y"><row><a>10</a></row></rows>' row=c25:'/rows/row'
+  project (1=v1.1)
+  outs 1=w4:val
+mapped: TableFuncScan

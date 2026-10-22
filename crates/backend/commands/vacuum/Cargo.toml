@@ -9,9 +9,11 @@ name = "commands_vacuum"
 path = "src/lib.rs"
 
 [dependencies]
+fp_contract = { path = "../../../_support/fp_contract" }
 pg_clock = { path = "../../../port/pg_clock" }
 cluster_seams = { path = "../cluster_seams" }
 indexam = { path = "../../access/index/indexam" }
+catalog_index = { path = "../../catalog/catalog_index" }
 nbtree = { path = "../../access/nbtree/nbtree" }
 types_nbtree = { path = "../../../_support/types/types_nbtree" }
 relcache_seams = { path = "../../utils/cache/relcache_seams" }
@@ -23,6 +25,8 @@ types_rel = { path = "../../../_support/types/rel" }
 types_storage = { path = "../../../_support/types/types_storage" }
 rel_vocab = { path = "../../../_support/types/rel_vocab" }
 tableam_vocab = { path = "../../access/table/tableam_vocab" }
+pgrc_companion = { path = "../../catalog/pgrc_companion" }
+lsyscache = { path = "../../utils/cache/lsyscache" }
 tableam_seams = { path = "../../access/table/tableam_seams" }
 elog = { path = "../../utils/error/elog" }
 explain = { path = "../explain" }
@@ -70,6 +74,7 @@ mbutils = { path = "../../utils/mb/mbutils" }
 parallel_seams = { path = "../../access/transam/parallel_seams" }
 waitevent_seams = { path = "../../utils/activity/waitevent_seams" }
 [dev-dependencies]
+read_stream = { path = "../../storage/aio/read_stream" }
 indexcmds_seams = { path = "../indexcmds_seams" }
 bufmgr = { path = "../../storage/buffer/bufmgr" }
 transam_seams = { path = "../../access/transam/transam_seams" }
@@ -99,9 +104,7 @@ commit_ts_seams = { path = "../../access/transam/commit_ts_seams" }
 condition_variable_seams = { path = "../../storage/lmgr/condition_variable_seams" }
 controldata_utils = { path = "../../../common/controldata_utils" }
 deadlock_seams = { path = "../../storage/lmgr/deadlock_seams" }
-execmain = { path = "../../executor/execmain" }
 execreplication_seams = { path = "../../executor/execreplication_seams" }
-execmain_seams = { path = "../../executor/execmain_seams" }
 executils = { path = "../../executor/executils" }
 exectuples = { path = "../../executor/exectuples" }
 fd = { path = "../../storage/file/fd" }
@@ -115,7 +118,6 @@ lock_seams = { path = "../../storage/lmgr/lock_seams" }
 logical_seams = { path = "../../replication/logical_seams" }
 lwlock = { path = "../../storage/lmgr/lwlock" }
 multixact_seams = { path = "../../access/transam/multixact_seams" }
-nodeseqscan = { path = "../../executor/nodeseqscan" }
 origin_seams = { path = "../../replication/origin_seams" }
 parallel_seams = { path = "../../access/transam/parallel_seams" }
 parse_expr = { path = "../../parser/parse_expr" }

@@ -63,7 +63,7 @@ pub fn blbuild<'mcx>(
 
     let mut buildstate = BloomBuildState {
         blstate: init_bloom_state(index)?,
-        tmp_ctx: mcx::MemoryContext::new_bump("Bloom build temporary context"),
+        tmp_ctx: mcx::MemoryContext::new_wholesale("Bloom build temporary context"),
         indtuples: 0.0,
         data: Box::new([0u8; BLCKSZ]),
         count: 0,
@@ -115,7 +115,7 @@ pub fn blbuild<'mcx>(
 }
 
 pub fn blbuildempty(index: &Relation<'_>) -> PgResult<()> {
-    let ctx = mcx::MemoryContext::new_bump("bloom buildempty");
+    let ctx = mcx::MemoryContext::new_wholesale("bloom buildempty");
     bloom_init_metapage(ctx.mcx(), index, ForkNumber::INIT_FORKNUM)
 }
 

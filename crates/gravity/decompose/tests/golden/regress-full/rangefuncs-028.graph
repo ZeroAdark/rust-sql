@@ -1,0 +1,10 @@
+-- regress-full-rangefuncs-028
+-- select * from rows from(getrngfunc9(1),getrngfunc8(1), getrngfunc7(1) AS (rngfuncid int, rngfuncsubid int, rngfuncname text), getrngfunc6(1) AS (rngfuncid int, rngfuncsubid int, rngfuncname text), getrngfunc5(1),getrngfunc4(1),getrngfunc3(1),getrngfunc2(1),getrngfunc1(1)) with ordinality as t1(a,b,c,d,e,f,g,h,i,j,k,l,m,o,p,q,r,s,t,u);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 ordinality [1:Scalar fn40739 cols=3 fn40739(c23:1)] [4:Scalar fn40730 fn40730(c23:1)] [5:Other fn40721 cols=3 fn40721(c23:1)] [8:Scalar fn40712 cols=3 fn40712(c23:1)] [11:Other fn40703 cols=3 fn40703(c23:1)] [14:Scalar fn40694 cols=3 fn40694(c23:1)] [17:Other fn40685 fn40685(c23:1)] [18:Other fn40676 fn40676(c23:1)] [19:Expr fn0 c23:1]
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20)
+  outs 1=w4:val 2=w4:val 3=vl:row 4=w4:val 5=w4:val 6=w4:val 7=vl:row 8=w4:val 9=w4:val 10=vl:row 11=w4:val 12=w4:val 13=vl:row 14=w4:val 15=w4:val 16=vl:row 17=vl:row 18=w4:val 19=w4:val 20=w8:val
+mapped: FunctionScan

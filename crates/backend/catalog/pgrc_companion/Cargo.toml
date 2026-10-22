@@ -1,0 +1,42 @@
+[package]
+name = "pgrc_companion"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+mcx = { path = "../../../_support/mcx" }
+types_core = { path = "../../../_support/types/types_core" }
+types_error = { path = "../../../_support/types/types_error" }
+types_rel = { path = "../../../_support/types/rel" }
+tupdesc = { path = "../../access/common/tupdesc" }
+table = { path = "../../access/table/table" }
+tableam_vocab = { path = "../../access/table/tableam_vocab" }
+catalog_heap = { path = "../catalog_heap" }
+catalog_index = { path = "../catalog_index" }
+catalog_namespace = { path = "../catalog_namespace" }
+catalog_toasting = { path = "../catalog_toasting" }
+pg_depend = { path = "../pg_depend" }
+xact = { path = "../../access/transam/xact" }
+lsyscache = { path = "../../utils/cache/lsyscache" }
+pgrc_front_seams = { path = "../../access/pgrcolumnar/pgrc_front_seams" }
+reorderbuffer_seams = { path = "../../replication/logical/reorderbuffer_seams" }
+datum = { path = "../../../_support/types/datum" }
+execindexing = { path = "../../executor/execindexing" }
+exectuples = { path = "../../executor/exectuples" }
+fmgr_seams = { path = "../../utils/fmgr/fmgr_seams" }
+heapam = { path = "../../access/heap/heapam" }
+pruneheap = { path = "../../access/heap/pruneheap" }
+heaptuple = { path = "../../access/common/heaptuple" }
+indexam = { path = "../../access/index/indexam" }
+lmgr = { path = "../../storage/lmgr/lmgr" }
+pgrc_format = { path = "../../access/pgrcolumnar/pgrc_format" }
+relcache_seams = { path = "../../utils/cache/relcache_seams" }
+tableam = { path = "../../access/table/tableam" }
+types_nbtree = { path = "../../../_support/types/types_nbtree" }
+types_nodes = { path = "../../../_support/types/nodes" }
+types_scan = { path = "../../../_support/types/types_scan" }
+types_slot = { path = "../../../_support/types/types_slot" }
+types_snapshot = { path = "../../../_support/types/snapshot" }
+types_tuple = { path = "../../../_support/types/types_tuple" }
+pgrc_marks = { path = "../../access/pgrcolumnar/pgrc_marks" }

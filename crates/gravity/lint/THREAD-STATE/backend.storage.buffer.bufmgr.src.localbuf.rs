@@ -1,0 +1,1 @@
+backend/storage/buffer/bufmgr/src/localbuf.rs	LOCAL	pgport	at:AtProcExit_LocalBuffers	leader	a temporary relation's local buffers (localbuf.c): a temp relation's pipeline is serial on the leader (hosts heap_source local, Reason::TempSource), so no claim reads them; made by ensure_local_buffers, freed at proc exit by AtProcExit_LocalBuffers; capped by temp_buffers

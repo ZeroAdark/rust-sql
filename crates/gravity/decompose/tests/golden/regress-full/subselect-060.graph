@@ -1,0 +1,21 @@
+-- regress-full-subselect-060
+-- insert into upsert values(1, 'val') on conflict (key) do update set val = 'seen with subselect ' || (select f1 from int4_tbl where f1 != 0 limit 1)::text;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=3 eligible rows=4 end=sink
+  nodes n3@0 n2@2
+  source range rel=16400 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op518(v4.1, c23:0)
+  project (1=v4.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val
+p1 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:1, 2=c25:'val')
+  write INSERT rel=25245 rti=1 natts=2 indexes=(25251[1]up) on_conflict=update arbiter=(25251) excl_rti=2 cols=(2) set=(1=op654(c25:'seen with subselect ', io25($exec0))) epq=$exec1
+  outs 1=w4:val 2=vl:stmt/imm
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: Result ModifyTable SeqScan Limit SubPlan

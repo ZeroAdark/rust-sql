@@ -3,7 +3,7 @@ use ::ts_locale::{DictSubState, TsLexeme, TSL_FILTER};
 use ::types_core::Oid;
 use ::types_error::PgResult;
 
-use crate::parse::{parsetext, ParsedText, TsParseEnv};
+use crate::parse::{grow_lenwords, parsetext, ParsedText, ParsedWord, TsParseEnv, MAX_LENWORDS};
 
 const D_STEM: Oid = 1001;
 const D_STOP: Oid = 1002;
@@ -345,4 +345,23 @@ fn stale_thesaurus_result_survives_queue_compaction() {
     assert_eq!(&w[..3], &[("new".into(), 1), ("york".into(), 2), ("123".into(), 3)]);
     assert_eq!(w.len(), 1104);
     assert_eq!(w[1103], ("nyc".into(), 1104));
+}
+
+#[test]
+fn words_array_ceiling_is_counted_in_c_parsedword_units() {
+    assert!(!core::mem::needs_drop::<ParsedWord<'_>>());
+    assert_eq!(MAX_LENWORDS, 44_739_242);
+    assert_eq!(grow_lenwords(22_369_621).unwrap(), 44_739_242);
+    let err = grow_lenwords(44_739_242).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 2147483616");
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INTERNAL_ERROR);
+
+    let ctx = MemoryContext::new("ts-parse-test");
+    let mcx = ctx.mcx();
+    let mut prs = ParsedText::with_capacity(mcx, 2).unwrap();
+    for i in 0..5u16 {
+        prs.push(ParsedWord { word: b"w", nvariant: 0, flags: 0, pos: i, apos: &[] }).unwrap();
+    }
+    assert_eq!(prs.words.iter().map(|w| w.pos).collect::<Vec<_>>(), [0, 1, 2, 3, 4]);
+    assert!(ParsedText::with_capacity(mcx, MAX_LENWORDS + 1).is_err());
 }

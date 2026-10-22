@@ -1,0 +1,36 @@
+-- regress-full-opr_sanity-081
+-- SELECT DISTINCT amopmethod, amopstrategy, oprname FROM pg_amop a1 LEFT JOIN pg_operator o1 ON amopopr = o1.oid ORDER BY 1, 2, 3;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=5 eligible rows=799 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n5@0 n4@1
+  source range rel=2617 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v2.2, 2=v2.1)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=fx64:win/page 2=w8:val
+p1 node=3 eligible rows=945 end=breaker(slot=1 Distinct)
+  desc consumes=slot0@p0 owner=key/0 words=bits@3/5
+  nodes n3@0 n2@1 n1@3 n0@4^
+  source range rel=2602 rti=1 am=heap
+    lanes Attr(5):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9)
+  probe slot=0 inner=n4 JOIN_LEFT unique keys=(outer.7) decls=26/26:I32 clauses=(op607(outer.7, inner.2))
+  project (1=outer.8, 2=outer.5, 3=inner.1)
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=w8:val 6=w1:val 7=w8:val 8=w8:val 9=w4:val
+  outs 1=w8:val 2=w8:val 3=fx64:life/breaker
+  outs 1=w8:val 2=w8:val 3=fx64:life/breaker
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w2:val 3=fx64:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32,I32,Fp128,Fp128]->[MinCode@32,Count@40] 48B order=1+,2+,3+
+group slot=1 producer=p1 node=0 form=Unique hints=[] layout=[I32,I32,Fp128,Fp128]->[MinCode@32,Count@40] 48B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=26 expr=outer.1
+  key 1 word=1 resno=2 kind=I32 attno=0 type=21 expr=outer.2
+  key 2 word=2 resno=3 kind=Fp128 attno=0 type=19 rep=0 expr=outer.3
+mapped: SeqScan HashJoin Unique Hash

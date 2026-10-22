@@ -1,0 +1,12 @@
+-- regress-full-plpgsql-071
+-- select recurse(10);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=fn39868($1))
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val
+mapped: Result Limit

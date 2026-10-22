@@ -1,5 +1,51 @@
 use types_core::{InvalidRepOriginId, InvalidXLogRecPtr};
 
+#[test]
+fn apply_wait_returns_on_latch_without_waiting_for_timeout() {
+    use types_storage::waiteventset::{WaitEvent, WaitEventSetHandle, WL_LATCH_SET, WL_TIMEOUT};
+    use waiteventset_seams as wes;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+
+    static WAITS: AtomicUsize = AtomicUsize::new(0);
+
+    wes::create_wait_event_set_current_owner::set(|_| Ok(WaitEventSetHandle::new(1)));
+    wes::add_wait_event_to_set::set(|_, _, _, _, _| Ok(0));
+    wes::free_wait_event_set::set(|_| {});
+    wes::wait_event_set_wait_one::set(|_, timeout, event| {
+        assert_eq!(timeout, super::NAPTIME_PER_CYCLE);
+        assert_eq!(event, super::WAIT_EVENT_LOGICAL_APPLY_MAIN);
+        match WAITS.fetch_add(1, SeqCst) {
+            0 => Ok(Some(WaitEvent { events: WL_LATCH_SET, ..WaitEvent::default() })),
+            1 => Ok(None),
+            2 => Ok(Some(WaitEvent {
+                events: super::WL_SOCKET_READABLE,
+                ..WaitEvent::default()
+            })),
+            _ => panic!("unexpected extra wait"),
+        }
+    });
+    postgres_seams::check_for_interrupts::set(|| {
+        assert_eq!(WAITS.load(SeqCst), 1);
+        let latch = init_small::globals::MyLatch().unwrap();
+        assert!(!latch::latch_ref(latch).is_set());
+        Ok(())
+    });
+    let latch = latch::allocate_local_latch();
+    latch::InitLatch(latch);
+    init_small::globals::SetMyLatch(Some(latch));
+    latch::SetLatch(latch);
+    assert_eq!(super::wait_for_apply(-1, super::NAPTIME_PER_CYCLE).unwrap(), WL_LATCH_SET);
+
+    assert_eq!(WAITS.load(SeqCst), 1, "latch wake must return to apply loop");
+    assert_eq!(super::wait_for_apply(-1, super::NAPTIME_PER_CYCLE).unwrap(), WL_TIMEOUT);
+    assert_eq!(
+        super::wait_for_apply(-1, super::NAPTIME_PER_CYCLE).unwrap(),
+        super::WL_SOCKET_READABLE
+    );
+    init_small::globals::SetMyLatch(None);
+    latch::free_local_latch(latch);
+}
+
 // replorigin_reset (worker.c) as a before_shmem_exit hook: the exit drain of
 // a dying worker must clear the session-origin advance state BEFORE
 // ShutdownPostgres aborts the pending remote transaction, or the abort
@@ -298,6 +344,17 @@ fn stream_options_negotiate_by_server_version() {
 // maybe_reread_subscription (worker.c:4064): a superuser-owned subscription
 // whose owner loses superuser must restart (row
 // a186-candidate-fp-logical-worker-p2-ff9cfa15c8364174721a-1).
+// InitializeLogRepWorker (worker.c:4730) on a subscription disabled during
+// startup calls apply_worker_exit: the leader forgets its launcher start
+// time and exits, a tablesync worker just exits, and a parallel apply worker
+// returns and keeps running for its leader to shut down.
+#[test]
+fn subscription_disabled_during_startup_follows_apply_worker_exit() {
+    assert_eq!(super::startup_disabled_action(false, false), (true, true));
+    assert_eq!(super::startup_disabled_action(true, false), (false, true));
+    assert_eq!(super::startup_disabled_action(false, true), (false, false));
+}
+
 #[test]
 fn owner_superuser_revoked_predicate() {
     assert!(super::owner_superuser_revoked(true, false));
@@ -509,8 +566,9 @@ fn start_replication_gates_options_on_publisher_version() {
     let streamed = super::start_replication_command(
         160000, "s", 0, &pubs, false, "any", Some("parallel"), false,
     );
-    assert!(streamed.contains("(proto_version '4', streaming 'parallel', publication_names"));
-    assert!(!streamed.contains("origin") && !streamed.contains("two_phase"));
+    assert!(streamed
+        .contains("(proto_version '4', streaming 'parallel', origin 'any', publication_names"));
+    assert!(!streamed.contains("two_phase"));
 }
 
 // ProcessParallelApplyMessages (applyparallelworker.c:1141): a pool worker
@@ -535,9 +593,9 @@ fn leader_reports_lost_connection_for_a_silently_exited_pa_worker() {
     super::parallel::ProcessParallelApplyMessages().unwrap();
     // The leader's exit releases every pooled worker's segment
     // (dsm_backend_shutdown): the registry no longer holds its queue.
-    let before = super::parallel::test_registry_len();
+    assert!(super::parallel::test_registry_holds(&w));
     super::parallel::pa_release_pool_dsm();
-    assert_eq!(super::parallel::test_registry_len(), before - 1);
+    assert!(!super::parallel::test_registry_holds(&w));
     super::parallel::ProcessParallelApplyMessages().unwrap();
 }
 

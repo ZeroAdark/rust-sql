@@ -1178,7 +1178,7 @@ fn process_owned_by<'mcx>(
                 .into());
         }
     } else {
-        let mut names: Vec<&str> = Vec::with_capacity(nnames);
+        let mut names: Vec<&str> = ::mcx::std_vec_with_capacity("commands", nnames)?;
         for n in owned_by.iter() {
             names.push(n.as_string().expect("OWNED BY name").sval);
         }

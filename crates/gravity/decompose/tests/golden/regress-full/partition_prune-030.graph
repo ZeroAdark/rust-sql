@@ -1,0 +1,44 @@
+-- regress-full-partition_prune-030
+-- explain (costs off) select * from mc3p where (a = 1 and abs(b) = 1) or (a = 10 and abs(b) = 9);
+graph pipelines=4 breakers=0 init_plans=0 root=p3
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0 n0@2
+  source range rel=44878 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter or(and(op96(v2.1, c23:1), op96(fn1397(v2.2), c23:1)), and(op96(v2.1, c23:10), op96(fn1397(v2.2), c23:9)))
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  append arm 0/4
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=w8:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w4:val
+p1 node=2 eligible rows=1 end=sink
+  nodes n2@0 n0@2
+  source range rel=44881 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter or(and(op96(v3.1, c23:1), op96(fn1397(v3.2), c23:1)), and(op96(v3.1, c23:10), op96(fn1397(v3.2), c23:9)))
+  project (1=v3.1, 2=v3.2, 3=v3.3)
+  append arm 1/4
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=w8:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w4:val
+p2 node=3 eligible rows=1 end=sink
+  nodes n3@0 n0@2
+  source range rel=44884 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter or(and(op96(v4.1, c23:1), op96(fn1397(v4.2), c23:1)), and(op96(v4.1, c23:10), op96(fn1397(v4.2), c23:9)))
+  project (1=v4.1, 2=v4.2, 3=v4.3)
+  append arm 2/4
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=w8:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w4:val
+p3 node=4 eligible rows=1 end=sink
+  nodes n4@0 n0@2
+  source range rel=44875 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter or(and(op96(v5.1, c23:1), op96(fn1397(v5.2), c23:1)), and(op96(v5.1, c23:10), op96(fn1397(v5.2), c23:9)))
+  project (1=v5.1, 2=v5.2, 3=v5.3)
+  append arm 3/4
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=w8:val 3=w8:val
+  outs 1=w4:val 2=w4:val 3=w4:val
+mapped: Append SeqScan

@@ -1370,7 +1370,7 @@ fn agg_plan_field_order_matches_c() {
     let crate::plannodes::Agg {
         plan: _, aggstrategy: _, aggsplit: _, numCols: _, grpColIdx: _, grpOperators: _,
         grpCollations: _, numGroups: _, transitionSpace: _, aggParams: _, groupingSets: _,
-        chain: _,
+        chain: _, distinctHashed: _, gravity_rewrite: _, gravity_finals: _, gravity_groups_default: _,
     } = crate::plannodes::Agg::default();
 }
 

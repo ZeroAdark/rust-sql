@@ -1,0 +1,14 @@
+-- regress-full-without_overlaps-010
+-- UPDATE temporal_rng SET valid_at = CASE WHEN lower(valid_at) = '2018-01-01' THEN daterange('2018-01-01', '2018-01-05') WHEN lower(valid_at) = '2018-02-01' THEN daterange('2018-01-05', '2018-03-01') END WHERE id = '[6,7)';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@0 n0@1
+  source bitmap rel=32079 rti=1 am=heap
+    bitmap index node=2 index=32086 rows=4 iam=gist
+      key att=1 op=3882 form=amop value=c3904:'@\x0f\x00\x00\x06\x00\x00\x00\x07\x00\x00\x00\x02'
+    recheck (op3882(v1.1, c3904:'@\x0f\x00\x00\x06\x00\x00\x00\x07\x00\x00\x00\x02'))
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=case(when op1093(fn3848(v1.2), c1082:6575) then c3912:'H\x0f\x00\x00\xaf\x19\x00\x00\xb3\x19\x00\x00\x02', when op1093(fn3848(v1.2), c1082:6606) then c3912:'H\x0f\x00\x00\xb3\x19\x00\x00\xea\x19\x00\x00\x02') else c3912:null, 2j=v1.-1, 3j=v1.1)
+  write UPDATE rel=32079 rti=1 natts=2 indexes=(32086[1, 2]upx:gist) set=(2)
+  outs 1=vl:stmt/imm 2=fx6:row 3=vl:win/page
+mapped: ModifyTable BitmapIndexScan BitmapHeapScan

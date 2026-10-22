@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/common/jsonapi.c: 2 stack-depth check sites
+1406	parse_object	crates/backend/utils/adt/json/src/jsonapi.rs	parse_object	yes	
+1523	parse_array	crates/backend/utils/adt/json/src/jsonapi.rs	parse_array	yes	

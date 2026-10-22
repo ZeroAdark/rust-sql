@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use init_small::globals as g;
 use types_error::{ErrorLocation, PgResult, ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERROR, FATAL};
 
@@ -19,7 +19,7 @@ pub fn make_absolute_path(path: &str) -> PgResult<String> {
             Err(e) => {
                 return ereport(ERROR)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
-                    .errmsg("could not get current working directory: %m")
+                    .errmsg(format!("could not get current working directory: {PCT_M}"))
                     .finish(ErrorLocation::new("src/port/path.c", 868, "make_absolute_path"))
                     .map(|()| String::new());
             }
@@ -79,7 +79,7 @@ pub fn checkDataDir() -> PgResult<()> {
             .with_saved_errno(errno)
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not read permissions of directory \"{data_dir}\": %m"
+                "could not read permissions of directory \"{data_dir}\": {PCT_M}"
             ))
             .finish(loc(361, "checkDataDir"))?;
     }

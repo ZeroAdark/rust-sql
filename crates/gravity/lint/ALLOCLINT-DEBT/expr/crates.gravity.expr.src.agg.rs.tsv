@@ -1,0 +1,4 @@
+path	crates/gravity/expr/src/agg.rs
+growth	std::vec::Vec::push	1
+method	slice::to_vec	1
+method	std::borrow::ToOwned::to_owned	1

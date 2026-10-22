@@ -1,0 +1,11 @@
+-- regress-full-float8-005
+-- SELECT f.f1 ^ '2.0' AS square_f1 FROM FLOAT8_TBL f where f.f1 = '1004.3';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=11 end=sink
+  nodes n0@0
+  source range rel=16549 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op670(v1.1, c701:4652045132041184870)
+  project (1=op965(v1.1, c701:4611686018427387904))
+  outs 1=w8:val
+mapped: SeqScan

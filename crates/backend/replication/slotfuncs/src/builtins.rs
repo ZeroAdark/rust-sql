@@ -277,7 +277,9 @@ pub fn fc_pg_get_replication_slots(
                     crate::convert_to_xsegs(guc_tables::vars::wal_keep_size_mb.read(), segsize);
                 let fail_seg = target_seg + slot_keep_segs.max(keep_segs) + 1;
                 let fail_lsn = fail_seg * segsize as u64;
-                values[i] = Datum::from_i64(fail_lsn.wrapping_sub(currlsn) as i64);
+                // WR L4b: the spool bytes the slot holds count against the same limit.
+                let spool = transam_xlog::spool_bytes_from(data.restart_lsn);
+                values[i] = Datum::from_i64(fail_lsn.wrapping_sub(currlsn).wrapping_sub(spool) as i64);
             }
             i += 1;
 

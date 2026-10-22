@@ -25,6 +25,10 @@ procsignal_seams = { path = "../procsignal_seams" }
 waiteventset_seams = { path = "../waiteventset_seams" }
 waitevent_seams = { path = "../../../utils/activity/waitevent_seams" }
 waiter = { path = "../waiter" }
+# D3962: a latch wait is polled time for Gravity's poll-gap probe
+cancelpoll = { path = "../../../../_support/cancelpoll" }
+# D4781: a thread folds its ledger counts before it parks (`fold_on_park`)
+memledger = { path = "../../../../_support/memledger" }
 lmgr_proc_seams = { path = "../../lmgr/lmgr_proc_seams" }
 
 # Solely for tests/loom.rs (the direct WaitLatch/SetLatch models — loom::model

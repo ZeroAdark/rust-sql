@@ -1,11 +1,12 @@
 use super::*;
 use ::types_portal::{CMDTAG_INSERT, CMDTAG_SELECT};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::sync::Once;
 
 thread_local! {
     static SENT: RefCell<Vec<(u8, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
-    static FLUSHES: Cell<u32> = const { Cell::new(0) };
+    // one entry per flush: how many messages had been put when it ran (the put / flush order)
+    static FLUSHES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
 fn setup() -> mcx::MemoryContext {
@@ -16,13 +17,14 @@ fn setup() -> mcx::MemoryContext {
             Ok(0)
         });
         pqcomm_seams::pq_flush::set(|| {
-            FLUSHES.with(|c| c.set(c.get() + 1));
+            let n = SENT.with(|s| s.borrow().len());
+            FLUSHES.with(|f| f.borrow_mut().push(n));
             Ok(0)
         });
         xact_seams::transaction_block_status_code::set(|| b'I');
     });
     SENT.with(|s| s.borrow_mut().clear());
-    FLUSHES.with(|c| c.set(0));
+    FLUSHES.with(|f| f.borrow_mut().clear());
     mcx::MemoryContext::new("tcop_dest-test")
 }
 
@@ -183,5 +185,6 @@ fn ready_for_query_sends_status_and_flushes_for_remote_only() {
         sent(),
         vec![(b'Z', b"I".to_vec()), (b'Z', b"I".to_vec()), (b'Z', b"I".to_vec())]
     );
-    assert_eq!(FLUSHES.with(|c| c.get()), 3);
+    // each 'Z' is flushed right after it is put, once (D4484: the direct put keeps RFQ's flush and its order)
+    assert_eq!(FLUSHES.with(|f| f.borrow().clone()), vec![1, 2, 3]);
 }

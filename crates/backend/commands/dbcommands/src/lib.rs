@@ -6,7 +6,7 @@
 use cache_syscache::cacheinfo::DATABASEOID;
 use cache_syscache::{ReleaseSysCache, SearchSysCache1, SysCacheGetAttrNotNull, SysCacheKey};
 use datum::Datum;
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use mcx::Mcx;
 use pg_database_seams::PgDatabaseForm;
 use types_core::catalog::DATABASE_RELATION_ID;
@@ -33,6 +33,21 @@ pub use createdb::{
     createdb_skip_checkpoints, forget_walog_database, log_file_copy_record, DeferredFileCopy,
     FileCopyDir,
 };
+pub fn table_dir_names(dbpath: &str) -> types_error::PgResult<Vec<(String, u64)>> {
+    let dirs = pgrc_am::dircopy::table_dirs(dbpath)?;
+    let mut names = ::mcx::std_vec_with_capacity("dbcommands", dirs.len())?;
+    for (rel, name) in dirs {
+        names.push((name, rel as u64));
+    }
+    Ok(names)
+}
+pub fn parse_table_dir_name(name: &str) -> Option<u64> {
+    let digits = name.strip_prefix("pgrc_")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
 pub use walcopy::count_swept_relations;
 pub(crate) use dropdb::name_key;
 pub use dropdb::{dropdb, dropdb_skip_checkpoint};
@@ -204,6 +219,10 @@ pub fn errdetail_busy_db(notherbackends: i32, npreparedxacts: i32) -> String {
     }
 }
 
+pub fn copy_columnar_table_dirs(src_db: &str, dst_db: &str, spc: Oid, db: Oid) -> PgResult<()> {
+    pgrc_am::dircopy::copy_table_dirs(src_db, dst_db, spc, db)
+}
+
 /// remove_dbtablespaces (dbcommands.c): rmtree every per-tablespace dir of the
 /// database and log one XLOG_DBASE_DROP record naming them all.
 pub fn remove_dbtablespaces(mcx: Mcx<'_>, db_id: Oid) -> PgResult<()> {
@@ -228,6 +247,7 @@ pub fn remove_dbtablespaces(mcx: Mcx<'_>, db_id: Oid) -> PgResult<()> {
             Ok(md) if md.is_dir() => {}
             _ => continue,
         }
+        pgrc_am::catalog::remove_under(dstpath.as_str());
         if !fd::rmtree(dstpath.as_str(), true)? {
             ereport(WARNING)
                 .errmsg(format!(
@@ -236,6 +256,7 @@ pub fn remove_dbtablespaces(mcx: Mcx<'_>, db_id: Oid) -> PgResult<()> {
                 ))
                 .finish(loc("remove_dbtablespaces"))?;
         }
+        pgrc_am::catalog::remove_under(dstpath.as_str());
         tablespace_ids.push(dsttablespace);
     }
     genam::systable_endscan(mcx, scan)?;
@@ -245,7 +266,7 @@ pub fn remove_dbtablespaces(mcx: Mcx<'_>, db_id: Oid) -> PgResult<()> {
         return Ok(());
     }
 
-    let mut xlrec = Vec::with_capacity(8 + 4 * tablespace_ids.len());
+    let mut xlrec = ::mcx::std_vec_with_capacity("commands", 8 + 4 * tablespace_ids.len())?;
     xlrec.extend_from_slice(&db_id.to_ne_bytes());
     xlrec.extend_from_slice(&(tablespace_ids.len() as i32).to_ne_bytes());
     for ts in &tablespace_ids {
@@ -329,7 +350,7 @@ fn recovery_create_dbdir(path: &str, only_tblspc: bool) -> PgResult<()> {
     fd::pg_mkdir_p(path).map_err(|e| {
         ereport(PANIC)
             .with_saved_errno(e.saved_errno().unwrap_or(0))
-            .errmsg(format!("could not create missing directory \"{path}\": %m"))
+            .errmsg(format!("could not create missing directory \"{path}\": {PCT_M}"))
             .into_error()
             .into()
     })
@@ -422,6 +443,7 @@ pub fn dbase_redo(record: &mut XLogReaderState) -> PgResult<()> {
                     ))
                     .finish(loc("dbase_redo"))?;
             }
+            pgrc_am::catalog::remove_under(dst_path.as_str());
         }
 
         let parent = get_parent_directory(dst_path.as_str());
@@ -431,7 +453,7 @@ pub fn dbase_redo(record: &mut XLogReaderState) -> PgResult<()> {
                 return Err(ereport(types_error::FATAL)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errmsg(format!(
-                        "could not stat directory \"{}\": %m",
+                        "could not stat directory \"{}\": {PCT_M}",
                         dst_path.as_str()
                     ))
                     .into_error()
@@ -453,6 +475,7 @@ pub fn dbase_redo(record: &mut XLogReaderState) -> PgResult<()> {
         procsignal::WaitForProcSignalBarrier(gen)?;
 
         fd::copydir(src_path.as_str(), dst_path.as_str(), false)?;
+        pgrc_am::dircopy::copy_table_dirs(src_path.as_str(), dst_path.as_str(), tablespace_id, db_id)?;
     } else if info == XLOG_DBASE_CREATE_WAL_LOG {
         // xl_dbase_create_wal_log_rec: db_id, tablespace_id (2 x u32).
         require_dbase_len(data, 8, "XLOG_DBASE_CREATE_WAL_LOG")?;
@@ -481,6 +504,7 @@ pub fn dbase_redo(record: &mut XLogReaderState) -> PgResult<()> {
         }
         bufmgr::DropDatabaseBuffers(db_id)?;
         smgr::ForgetDatabaseSyncRequests(db_id)?;
+        l2cache::forget_database(db_id);
         xlogutils::XLogDropDatabase(db_id)?;
 
         let gen = procsignal::EmitProcSignalBarrier(
@@ -491,6 +515,7 @@ pub fn dbase_redo(record: &mut XLogReaderState) -> PgResult<()> {
         for i in 0..ntablespaces as usize {
             let tsid = u32_at(8 + 4 * i);
             let dst_path = relpath::GetDatabasePath(mcx, db_id, tsid)?;
+            pgrc_am::catalog::remove_under(dst_path.as_str());
             if !fd::rmtree(dst_path.as_str(), true)? {
                 ereport(WARNING)
                     .errmsg(format!(
@@ -499,6 +524,7 @@ pub fn dbase_redo(record: &mut XLogReaderState) -> PgResult<()> {
                     ))
                     .finish(loc("dbase_redo"))?;
             }
+            pgrc_am::catalog::remove_under(dst_path.as_str());
         }
 
         if xlogutils::InHotStandby() {
@@ -531,8 +557,9 @@ mod tests {
         init_seams();
         assert!(dbcommands_seams::get_database_name::is_installed());
         assert!(dbcommands_seams::dbase_redo::is_installed());
-        // Unbooted catcache: loud stop, never a fabricated name.
-        assert!(std::panic::catch_unwind(|| dbcommands_seams::get_database_name::call(1)).is_err());
+        // Unbooted catcache: a loud stop (the catcache's named "not registered" ERROR), never a fabricated name.
+        let r = std::panic::catch_unwind(|| dbcommands_seams::get_database_name::call(1));
+        assert!(matches!(r, Ok(Err(_))), "an unregistered catcache is an ERROR, not a name or a panic");
     }
 
     // Untrusted WAL: a truncated RM_DBASE record must surface as a catchable

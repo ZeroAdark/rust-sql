@@ -1,0 +1,35 @@
+-- regress-full-memoize-012
+-- EXPLAIN (COSTS OFF) SELECT unique1 FROM tenk1 t0 WHERE unique1 < 3 AND EXISTS ( SELECT 1 FROM tenk1 t1 INNER JOIN tenk1 t2 ON t1.unique1 = t2.hundred WHERE t0.ten = t1.twenty AND t0.two <> t2.four OFFSET 0);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=16423 rti=1 am=heap index=19339
+    key att=1 op=97 value=c23:3
+    recheck (op97(v1.1, c23:3))
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Attr(5):byval8:w8:val
+  subplan 1 nested Exists unknown-eq-false params=($exec0=v1.5, $exec1=v1.3) raise-free
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@2
+  source index rel=16423 rti=3 am=heap index=19341
+    lanes Attr(4):byval8:w8:val Attr(7):byval8:w8:val
+  filter op518($exec1, v3.4)
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4, 5=v3.5, 6=v3.6, 7=v3.7, 8=v3.8, 9=v3.9, 10=v3.10, 11=v3.11, 12=v3.12, 13=v3.13, 14=v3.14, 15=v3.15, 16=v3.16)
+  nest inner=n3 JOIN_INNER raise-free params=($exec2=outer.7)
+  inner node=4 serial site=0 reason=IndexSource end=sink
+  nodes n4@0 n3@2
+  source index rel=16423 rti=2 am=heap index=19339
+    key att=1 op=96 value=$exec2
+    recheck (op96(v2.1, $exec2))
+    lanes Attr(1):byval8:w8:val Attr(6):byval8:w8:val
+  filter op96($exec0, v2.6)
+  project (1=v2.1)
+  memo entries=100 keys=($exec2)
+  project (1=outer.1)
+  project (1=c23:1)
+  filter subplan1(v1.5, v1.3)
+  project (1=v1.1)
+  outs 1=w8:val
+param $exec0 owner=subplan1 type=23 rep=w8:val
+param $exec1 owner=subplan1 type=23 rep=w8:val
+param $exec2 owner=n1 type=23 rep=w8:val
+mapped: IndexScan NestLoop NestLoopParam Memoize SubPlan

@@ -28,7 +28,7 @@ pub(super) fn geqo_selection(
 fn linear_rand(state: &mut GeqoState, pool_size: i32, bias: f64) -> i32 {
     let max = pool_size as f64;
     loop {
-        let mut sqrtval = (bias * bias) - 4.0 * (bias - 1.0) * geqo_rand(state);
+        let mut sqrtval = crate::fma_sites::geqo_sqrtval(bias, geqo_rand(state));
         if sqrtval > 0.0 {
             sqrtval = sqrtval.sqrt();
         }

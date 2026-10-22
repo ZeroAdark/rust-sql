@@ -115,7 +115,7 @@ pub fn GUCArrayAdd(array: &[String], name: &str, value: &str) -> PgResult<Vec<St
     let newval = format!("{name}={value}");
     let prefix_len = name.len() + 1;
 
-    let mut out: Vec<String> = array.to_vec();
+    let mut out: Vec<String> = ::mcx::std_vec_from_slice("misc", &array)?;
     for entry in out.iter_mut() {
         if entry.as_bytes().len() >= prefix_len && entry.as_bytes()[..prefix_len] == newval.as_bytes()[..prefix_len] {
             *entry = newval;
@@ -161,7 +161,7 @@ pub fn GUCArrayReset(array: &[String]) -> PgResult<Option<Vec<String>>> {
 }
 
 pub fn TransformGUCArray(array: &[String]) -> PgResult<Vec<(String, String)>> {
-    let mut out = Vec::with_capacity(array.len());
+    let mut out = ::mcx::std_vec_with_capacity("utils", array.len())?;
     for entry in array {
         let (name, value) = ParseLongOption(entry);
         match value {

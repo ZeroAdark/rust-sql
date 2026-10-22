@@ -1,0 +1,36 @@
+-- regress-full-inherit-038
+-- explain (costs off) SELECT thousand, tenthous, thousand+tenthous AS x FROM tenk1 UNION ALL SELECT 42, 42, hundred FROM tenk1 ORDER BY thousand, tenthous;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n1@0 n0@1^
+  source index-only rel=16423 rti=4 am=heap index=19342
+    lanes Attr(8):byval8:w8:val Attr(11):byval8:w8:val
+  project (1=index.1, 2=index.2, 3=op551(index.1, index.2))
+  feed slot=0 ordered
+  outs 1=w4:val 2=w4:val 3=w4:val
+p1 node=3 eligible rows=10000 end=breaker(slot=1 Sort)
+  desc finishing
+  nodes n3@0 n2@1^
+  source range rel=16423 rti=5 am=heap
+    lanes Attr(7):byval8:w8:val Offset:byval2:w2:val
+  project (1=c23:42, 2=c23:42, 3=v5.7)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w4:val 2=w4:val 3=w8:val
+p2 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  desc consumes=slot1@p1
+  nodes n2@0 n0@1^
+  source breaker slot=1
+  project (1=c23:42, 2=c23:42, 3=outer.3)
+  feed slot=0 ordered
+  outs 1=w4:val 2=w4:val 3=w8:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  append merge slot=0 children=2 keys=1+:I32,2+:I32
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+mapped: MergeAppend IndexOnlyScan Sort

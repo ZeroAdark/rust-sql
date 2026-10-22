@@ -1,0 +1,5 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M8-RIG): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: WITH c AS MATERIALIZED (SELECT x, x * x AS sq FROM generate_series(1, 4) x) SELECT (SELECT sum(sq) FROM c), (SELECT count(*) FROM c WHERE x > 2)
+cols: sum	count
+[pg]
+30	2

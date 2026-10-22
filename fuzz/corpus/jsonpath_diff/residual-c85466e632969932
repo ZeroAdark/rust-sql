@@ -1,1 +1,0 @@
-hlax $[*].datetime() == $.a.time_tz()

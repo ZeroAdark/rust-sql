@@ -12,11 +12,15 @@ mod dedup;
 mod delete;
 mod fcframe;
 mod insert;
+pub mod image;
+pub mod imagerel;
 pub mod itup;
 mod page;
 mod pagedel;
 mod parallel;
+pub mod pivots;
 mod preprocess;
+pub mod readrel;
 mod search;
 mod splitloc;
 mod utils;
@@ -28,7 +32,11 @@ mod tests;
 
 pub use insert::btinsert;
 pub use page::{bt_getrootheight, bt_initmetapage, bt_metaversion, bt_pageinit};
-pub use parallel::btparallelrescan;
+pub use parallel::{bt_parallel_abort, btparallelrescan};
+pub use pivots::{bt_pivots, Pivots};
+pub use image::IndexImage;
+pub use imagerel::ImageRel;
+pub use readrel::BtReadRel;
 pub use vacuum::{
     bt_chunked_bulkdelete_begin, bt_chunked_bulkdelete_finish, bt_chunked_cleanup_begin,
     bt_chunked_cleanup_finish, bt_chunked_scan_step, btbulkdelete, btbulkdelete_collect,
@@ -51,7 +59,7 @@ use utils::bt_killitems;
 pub use fcframe::OrderProcFrame;
 pub use search::{bt_peek_same_block_tids, BtScanInsert};
 pub use utils::{
-    bt_allequalimage, bt_check_third_page, bt_keep_natts_fast, bt_mkscankey, bt_truncate,
+    bt_allequalimage, bt_check_third_page, bt_keep_natts_fast, bt_kill_by_block, bt_mkscankey, bt_truncate,
     BTreeShmemInit, BTreeShmemResetAfterCrash, BTreeShmemSize,
 };
 
@@ -94,15 +102,23 @@ pub(crate) fn check_for_interrupts() -> PgResult<()> {
 }
 
 macro_rules! split_scan {
-    ($scan:expr) => {{
+    ($scan:expr) => {
+        split_scan!(@with $scan, indexRelation => indexRelation
+            .as_ref()
+            .expect("index scan parked (skeleton)"))
+    };
+    ($scan:expr, $rel:expr) => {
+        split_scan!(@with $scan, _indexRelation => $rel)
+    };
+    (@with $scan:expr, $ir:ident => $rel:expr) => {{
         let IndexScanDescData {
-            indexRelation,
+            indexRelation: $ir,
             xs_snapshot,
             keyData,
             ignore_killed_tuples,
             xs_heaptid,
             xs_itup,
-            xs_pgstat_index_scans,
+            xs_pgstat,
             xs_nsearches,
             opaque,
             parallel_scan,
@@ -112,16 +128,14 @@ macro_rules! split_scan {
             non_btree_opaque()
         };
         ScanCtx {
-            rel: indexRelation
-                .as_ref()
-                .expect("index scan parked (skeleton)"),
+            rel: $rel,
             so: &mut **so,
             snapshot: xs_snapshot.as_deref(),
             ignore_killed_tuples: *ignore_killed_tuples,
             input_keys: keyData.as_mut_slice(),
             xs_heaptid,
             xs_itup,
-            xs_pgstat_index_scans,
+            xs_pgstat,
             xs_nsearches,
             parallel: parallel_scan.as_deref().map(|p| {
                 let ::types_relscan::ParallelIndexAmShared::Btree(b) = &p.am;
@@ -203,13 +217,13 @@ pub fn btrescan(scan: &mut IndexScanDescData<'_>, scankey: Option<&[ScanKeyData]
         so.needPrimScan = false;
         so.scanBehind = false;
         so.oppositeDirCheck = false;
-        pos_unpin_if_pinned(&mut so.markPos)?;
-        BTScanPosInvalidate(&mut so.markPos);
+        mark_unpin(so)?;
+        mark_invalidate(so);
 
+        // the mark's tuple buffer is made with the mark (search.rs copy_scanpos)
         if scan.xs_want_itup && so.currTuples.is_none() {
             let mcx = *so.keyData.allocator();
             so.currTuples = Some(::mcx::vec_with_capacity_in(mcx, BLCKSZ)?);
-            so.markTuples = Some(::mcx::vec_with_capacity_in(mcx, BLCKSZ)?);
         }
 
         so.numberOfKeys = 0; // until _bt_preprocess_keys sets it
@@ -234,13 +248,60 @@ pub fn btgettuple(scan: &mut IndexScanDescData<'_>, dir: ScanDirection) -> PgRes
 
     let kill_prior_tuple = scan.kill_prior_tuple;
     let mut ctx = split_scan!(&mut *scan);
+    gettuple_loop(&mut ctx, dir, kill_prior_tuple)
+}
 
+/// A reader that marks the dead entries of the leaves it read later, by block (`bt_kill_by_block`): from now on the
+/// scan reads each leaf's LSN under its read lock although an index-only scan keeps the pin (`lsnWithPin`).
+pub fn bt_scan_lsn_with_pin(scan: &mut IndexScanDescData<'_>) {
+    let IndexScanOpaque::Btree(so) = &mut scan.opaque else { non_btree_opaque() };
+    so.lsnWithPin = true;
+}
+
+/// The entry btgettuple returned last: its leaf's block, its offset on the leaf (a posting tuple's TIDs share one) and
+/// the leaf's LSN when the scan read it (`bt_scan_lsn_with_pin`, else 0). `None` without a current leaf.
+#[inline]
+pub fn bt_scan_entry(scan: &IndexScanDescData<'_>) -> Option<(::types_core::BlockNumber, ::types_core::OffsetNumber, ::types_core::XLogRecPtr)> {
+    let IndexScanOpaque::Btree(so) = &scan.opaque else { non_btree_opaque() };
+    let pos = &so.currPos;
+    if !BTScanPosIsValid(pos) || pos.itemIndex < pos.firstItem || pos.itemIndex > pos.lastItem {
+        return None;
+    }
+    // SAFETY: itemIndex within [firstItem, lastItem], written when the leaf was read.
+    let item = unsafe { pos.item(pos.itemIndex as usize) };
+    Some((pos.currPage, item.indexOffset, pos.lsn))
+}
+
+/// btgettuple over `rel` instead of the descriptor's index relation (which
+/// may be absent). The descriptor's keys and position state are used as
+/// btgettuple uses them. The caller must leave `kill_prior_tuple` false:
+/// killed items are flushed at rescan/end through the descriptor's own
+/// relation.
+pub fn btgettuple_over<R: BtReadRel + ?Sized>(
+    scan: &mut IndexScanDescData<'_>,
+    rel: &R,
+    dir: ScanDirection,
+) -> PgResult<bool> {
+    debug_assert!(!scan.kill_prior_tuple || scan.indexRelation.is_some());
+
+    scan.xs_recheck = false;
+
+    let kill_prior_tuple = scan.kill_prior_tuple;
+    let mut ctx = split_scan!(&mut *scan, rel);
+    gettuple_loop(&mut ctx, dir, kill_prior_tuple)
+}
+
+fn gettuple_loop<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
+    dir: ScanDirection,
+    kill_prior_tuple: bool,
+) -> PgResult<bool> {
     // Each loop iteration performs another primitive index scan.
     loop {
         let res = if !BTScanPosIsValid(&ctx.so.currPos) {
-            bt_first(&mut ctx, dir)?
+            bt_first(ctx, dir)?
         } else {
-            bt_gettuple_continue(&mut ctx, dir, kill_prior_tuple)?
+            bt_gettuple_continue(ctx, dir, kill_prior_tuple)?
         };
         if res {
             return Ok(true);
@@ -257,19 +318,38 @@ pub fn btgetbitmap(
     tbm: &mut tidbitmap::TIDBitmap<'_>,
 ) -> PgResult<i64> {
     debug_assert!(scan.heapRelation.is_none());
-    let mut ntids: i64 = 0;
-
     let mut ctx = split_scan!(&mut *scan);
+    getbitmap_loop(&mut ctx, tbm)
+}
+
+/// btgetbitmap over `rel` instead of the descriptor's index relation (which
+/// may be absent): the same walk, reading pages and catalog answers through
+/// `rel`.
+pub fn btgetbitmap_over<R: BtReadRel + ?Sized>(
+    scan: &mut IndexScanDescData<'_>,
+    rel: &R,
+    tbm: &mut tidbitmap::TIDBitmap<'_>,
+) -> PgResult<i64> {
+    debug_assert!(scan.heapRelation.is_none());
+    let mut ctx = split_scan!(&mut *scan, rel);
+    getbitmap_loop(&mut ctx, tbm)
+}
+
+fn getbitmap_loop<R: BtReadRel + ?Sized>(
+    ctx: &mut ScanCtx<'_, '_, R>,
+    tbm: &mut tidbitmap::TIDBitmap<'_>,
+) -> PgResult<i64> {
+    let mut ntids: i64 = 0;
     // Each loop iteration performs another primitive index scan.
     loop {
-        if bt_first(&mut ctx, ::types_scan::sdir::ForwardScanDirection)? {
+        if bt_first(ctx, ::types_scan::sdir::ForwardScanDirection)? {
             tbm.add_tuples(core::slice::from_ref(ctx.xs_heaptid), false)?;
             ntids += 1;
 
             loop {
                 ctx.so.currPos.itemIndex += 1;
                 if ctx.so.currPos.itemIndex > ctx.so.currPos.lastItem {
-                    if !search::bt_next(&mut ctx, ::types_scan::sdir::ForwardScanDirection)? {
+                    if !search::bt_next(ctx, ::types_scan::sdir::ForwardScanDirection)? {
                         break;
                     }
                 }
@@ -305,7 +385,7 @@ pub fn btendscan(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
     }
 
     so.markItemIndex = -1;
-    pos_unpin_if_pinned(&mut so.markPos)?;
+    mark_unpin(so)?;
     Ok(())
 }
 
@@ -332,9 +412,24 @@ pub fn btparkscan(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
     }
     so.numKilled = 0;
     so.markItemIndex = -1;
-    pos_unpin_if_pinned(&mut so.markPos)?;
-    BTScanPosInvalidate(&mut so.markPos);
+    mark_unpin(so)?;
+    mark_invalidate(so);
     Ok(())
+}
+
+/// The mark's pin dropped, when the scan has made one (`markPos` is made at the first mark saved off its page).
+fn mark_unpin(so: &mut BTScanOpaqueData<'_>) -> PgResult<()> {
+    match so.markPos.as_deref_mut() {
+        Some(m) => pos_unpin_if_pinned(m),
+        None => Ok(()),
+    }
+}
+
+/// The mark invalidated, when the scan has made one.
+fn mark_invalidate(so: &mut BTScanOpaqueData<'_>) {
+    if let Some(m) = so.markPos.as_deref_mut() {
+        BTScanPosInvalidate(m);
+    }
 }
 
 /// btmarkpos.
@@ -343,13 +438,13 @@ pub fn btmarkpos(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
         non_btree_opaque()
     };
 
-    pos_unpin_if_pinned(&mut so.markPos)?;
+    mark_unpin(so)?;
 
     // the scan leaves the page before the mark is moved.
     if BTScanPosIsValid(&so.currPos) {
         so.markItemIndex = so.currPos.itemIndex;
     } else {
-        BTScanPosInvalidate(&mut so.markPos);
+        mark_invalidate(so);
         so.markItemIndex = -1;
     }
     Ok(())
@@ -378,11 +473,11 @@ pub fn btrestrpos(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
         pos_unpin_if_pinned(&mut so.currPos)?;
     }
 
-    if BTScanPosIsValid(&so.markPos) {
-        if BTScanPosIsPinned(&so.markPos) {
-            bufmgr_seams::incr_buffer_ref_count::call(so.markPos.buf);
+    if let Some(m) = so.markPos.as_deref().filter(|m| BTScanPosIsValid(m)) {
+        if BTScanPosIsPinned(m) {
+            bufmgr_seams::incr_buffer_ref_count::call(m.buf);
         }
-        restore_scanpos(so);
+        restore_scanpos(so)?;
         // Reset the scan's array keys (see _bt_steppage for why).
         if so.numArrayKeys != 0 {
             let dir = so.currPos.dir;

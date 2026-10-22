@@ -1,0 +1,10 @@
+-- regress-full-domain-047
+-- select * from domview;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2550 end=sink
+  nodes n0@0
+  source range rel=40483 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=relabel40487(v2.1))
+  outs 1=w8:val
+mapped: SeqScan

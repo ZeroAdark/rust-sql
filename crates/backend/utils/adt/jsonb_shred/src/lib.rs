@@ -40,8 +40,9 @@ pub mod walk;
 mod tests;
 
 pub use chunk::{Bitmap, LaneValues, ResidualBucket, ShredChunk, TypedLane};
-pub use elect::{elect_manifest, PathHint, ShredBudgets};
+pub use elect::{elect_manifest, elect_manifest_auto, PathHint, ShredBudgets};
 pub use manifest::{ElectedPath, Lane, ManifestError, ShredManifest};
 pub use path::JsonPath;
 pub use reconstruct::{reconstruct_row, reconstruct_rows};
 pub use shred::{shred_chunk, FS_ELECT_SCALE_MAX};
+pub use walk::object_root;

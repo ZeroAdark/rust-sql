@@ -1,0 +1,16 @@
+-- regress-full-arrays-068
+-- select array(select '11 22 33'::int2vector from generate_series(1,5));
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0
+  source const
+  srf from rti=2 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:5)]
+  project (1=c22:'\x01\x00\x00\x00\x00\x00\x00\x00\x15\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\x0b\x00\x16\x00!\x00')
+  outs 1=vl:stmt/imm
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec0)
+  outs 1=?
+init_plan id=1 pipeline=p0 link=Array param=$exec0 raise-free
+mapped: Result FunctionScan SubPlan

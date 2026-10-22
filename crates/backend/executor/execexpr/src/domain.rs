@@ -8,7 +8,7 @@ use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
 
 use ::datum::{Datum, NullableDatum};
-use ::mcx::{Mcx, MemoryContext, PgBox, PgHashMap};
+use ::mcx::{Mcx, MemoryContext, PgBox, PgHashMap, PgVec};
 use ::types_core::Oid;
 use ::types_error::PgResult;
 use ::types_nodes::Node;
@@ -32,11 +32,8 @@ struct DomainMemo {
 
 struct EngineState {
     mcx: Mcx<'static>,
-    // C's standalone-econtext per-tuple memory: checks leave by-ref results
-    // in it and ReScanExprContext frees them wholesale, hence a bump arena;
-    // reset at depth 0 (checks can re-enter for nested domains).
-    scratch: NonNull<MemoryContext>,
-    depth: u32,
+    scratch: PgVec<'static, NonNull<MemoryContext>>,
+    depth: usize,
     memos: PgHashMap<'static, Oid, DomainMemo>,
 }
 
@@ -49,16 +46,14 @@ fn with_state<R>(f: impl FnOnce(&mut EngineState) -> R) -> R {
         let mut slot = cell.borrow_mut();
         let st = slot.get_or_insert_with(|| {
             let mcx = ::mcx::session_root("DomainCheckEngine").mcx();
-            // The scratch NonNull must carry WRITE provenance: depth-0 calls
-            // reset() through it (as_mut below). session_root's shared
-            // &'static only grants SharedReadOnly — the _mut variant is the
-            // reset-per-use scratch-holder shape (regexp's RegexpExecScratch).
-            let scratch = NonNull::from(::mcx::session_root_mut(MemoryContext::new_bump(
-                "DomainCheckScratch",
-            )));
+            // D4682: the teardown retires this root; clear the slot first, so a reused thread's next
+            // session builds a new one.
+            ::mcx::register_session_cleanup(Box::new(|| {
+                let _ = STATE.try_with(|c| drop(c.borrow_mut().take()));
+            }));
             ManuallyDrop::new(EngineState {
                 mcx,
-                scratch,
+                scratch: PgVec::new_in(mcx),
                 depth: 0,
                 memos: PgHashMap::with_capacity_in(4, mcx),
             })
@@ -195,17 +190,14 @@ pub fn domain_check_input(
     // may re-enter this engine for a different domain (map growth would move
     // entries). Ownership round-trips instead of a raw pointer.
     let mut memo = with_state(|st| st.memos.remove(&domain_type)).unwrap();
-    let (scratch, depth) = with_state(|st| {
-        if st.depth == 0 {
-            // SAFETY: single-threaded TLS engine at depth 0 — no live
-            // borrows of scratch allocations survive a completed call.
-            unsafe { st.scratch.as_mut().reset() };
+    let mut scratch = match acquire_scratch() {
+        Ok(scratch) => scratch,
+        Err(error) => {
+            with_state(|st| st.memos.insert(domain_type, memo));
+            return Err(error);
         }
-        st.depth += 1;
-        (st.scratch, st.depth)
-    });
-    let _ = depth;
-    // SAFETY: the leaked scratch context is 'static; reset only at depth 0.
+    };
+    // SAFETY: each active depth owns a stable context until its checks return.
     let scratch_mcx = unsafe { scratch.as_ref() }.mcx();
     let result = run_checks(
         &mut memo,
@@ -215,11 +207,38 @@ pub fn domain_check_input(
         domain_type,
         escontext,
     );
+    // SAFETY: run_checks has returned; enclosing calls use separate contexts.
+    unsafe { scratch.as_mut().reset() };
     with_state(|st| {
         st.depth -= 1;
         st.memos.insert(domain_type, memo)
     });
     result
+}
+
+fn acquire_scratch() -> PgResult<NonNull<MemoryContext>> {
+    with_state(|st| {
+        if st.depth == st.scratch.len() {
+            ::mcx::pgvec_reserve(&mut st.scratch, 1)?;
+            st.scratch.push(NonNull::from(::mcx::session_root_mut(
+                MemoryContext::new_wholesale("DomainCheckScratch"),
+            )));
+        }
+        let scratch = st.scratch[st.depth];
+        st.depth += 1;
+        Ok(scratch)
+    })
+}
+
+#[cfg(test)]
+pub(super) fn assert_scratch_released() {
+    with_state(|st| {
+        assert_eq!(st.depth, 0);
+        for scratch in &st.scratch {
+            // SAFETY: the context is session-owned and no checks are active.
+            assert_eq!(unsafe { scratch.as_ref() }.used(), 0);
+        }
+    });
 }
 
 fn run_checks(
@@ -274,4 +293,35 @@ fn run_checks(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_scratch_preserves_outer_allocations() {
+        let mut outer = acquire_scratch().unwrap();
+        // SAFETY: outer remains active until the end of this test.
+        let outer_mcx = unsafe { outer.as_ref() }.mcx();
+        let value = ::mcx::alloc_leak_in(outer_mcx, [42u8; 1024]).unwrap();
+        for _ in 0..16 {
+            let mut inner = acquire_scratch().unwrap();
+            assert_ne!(outer, inner);
+            // SAFETY: inner has a distinct context and no surviving allocations.
+            unsafe {
+                ::mcx::alloc_leak_in(inner.as_ref().mcx(), [7u8; 1024]).unwrap();
+                inner.as_mut().reset();
+                assert_eq!(inner.as_ref().used(), 0);
+            }
+            with_state(|st| st.depth -= 1);
+            assert_eq!(*value, [42u8; 1024]);
+            // SAFETY: outer is still active and its allocation is live.
+            assert!(unsafe { outer.as_ref() }.used() >= 1024);
+        }
+        // SAFETY: no outer allocations are accessed after this reset.
+        unsafe { outer.as_mut().reset() };
+        with_state(|st| st.depth -= 1);
+        assert_scratch_released();
+    }
 }

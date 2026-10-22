@@ -45,14 +45,68 @@ macro_rules! fc_textcmp {
 }
 
 fc_textcmp! {
-    fc_texteq: texteq -> from_bool;
-    fc_textne: textne -> from_bool;
     fc_text_lt: text_lt -> from_bool;
     fc_text_le: text_le -> from_bool;
     fc_text_gt: text_gt -> from_bool;
     fc_text_ge: text_ge -> from_bool;
     fc_bttextcmp: bttextcmp -> from_i32;
-    fc_text_starts_with: text_starts_with -> from_bool;
+}
+
+fn extended_raw_sizes_differ(fcinfo: &Fcinfo) -> bool {
+    // SAFETY: catalog args are non-null varlenas (strict fn).
+    unsafe {
+        (fcinfo.arg_varlena_is_extended(0) || fcinfo.arg_varlena_is_extended(1))
+            && ::detoast::toast_raw_datum_size(fcinfo.arg_varlena_raw(0))
+                != ::detoast::toast_raw_datum_size(fcinfo.arg_varlena_raw(1))
+    }
+}
+
+fn text_eq_by_size(fcinfo: &Fcinfo) -> PgResult<bool> {
+    if !extended_raw_sizes_differ(fcinfo) {
+        return Ok(false);
+    }
+    let collid = fcinfo.get_collation();
+    crate::check_collation_set(collid)?;
+    crate::collation_is_deterministic(collid)
+}
+
+pub fn fc_texteq(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    if text_eq_by_size(fcinfo)? {
+        return Ok(Datum::from_bool(false));
+    }
+    // SAFETY: catalog args are non-null text varlenas (strict fn).
+    let (a, b) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
+    Ok(Datum::from_bool(crate::texteq(a.data(), b.data(), fcinfo.get_collation())?))
+}
+
+pub fn fc_textne(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    if text_eq_by_size(fcinfo)? {
+        return Ok(Datum::from_bool(true));
+    }
+    // SAFETY: catalog args are non-null text varlenas (strict fn).
+    let (a, b) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
+    Ok(Datum::from_bool(crate::textne(a.data(), b.data(), fcinfo.get_collation())?))
+}
+
+pub fn fc_text_starts_with(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    // SAFETY: catalog args are non-null text varlenas (strict fn).
+    if unsafe { fcinfo.arg_varlena_is_extended(0) || fcinfo.arg_varlena_is_extended(1) } {
+        crate::check_substring_collation(fcinfo.get_collation())?;
+        // SAFETY: as above.
+        let (raw1, raw2) = unsafe { (fcinfo.arg_varlena_raw(0), fcinfo.arg_varlena_raw(1)) };
+        let len2 = ::detoast::toast_raw_datum_size(raw2);
+        if len2 > ::detoast::toast_raw_datum_size(raw1) {
+            return Ok(Datum::from_bool(false));
+        }
+        let prefix = crate::text_substring(fcinfo.result_mcx(), raw1, 1, len2 as i32, false)?;
+        // SAFETY: as above.
+        let b = unsafe { fcinfo.arg_varlena_packed(1)? };
+        let (p, b) = (prefix.data(), b.data());
+        return Ok(Datum::from_bool(p.len() >= b.len() && &p[..b.len()] == b));
+    }
+    // SAFETY: catalog args are non-null text varlenas (strict fn).
+    let (a, b) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
+    Ok(Datum::from_bool(crate::text_starts_with(a.data(), b.data(), fcinfo.get_collation())?))
 }
 
 // hashtext/hashtextextended (hashfunc.c); nondeterministic collations hash
@@ -109,7 +163,7 @@ fn hash_collation_err() -> Box<PgError> {
     )
 }
 
-pub(crate) fn hashtext_nondeterministic(
+pub fn hashtext_nondeterministic(
     collid: types_core::Oid,
     data: &[u8],
     seed: Option<u64>,
@@ -157,9 +211,25 @@ macro_rules! fc_byteacmp {
     )*};
 }
 
+pub fn fc_byteaeq(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    if extended_raw_sizes_differ(fcinfo) {
+        return Ok(Datum::from_bool(false));
+    }
+    // SAFETY: catalog args are non-null bytea varlenas (strict fn).
+    let (a, b) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
+    Ok(Datum::from_bool(crate::bytea::byteaeq(a.data(), b.data())))
+}
+
+pub fn fc_byteane(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    if extended_raw_sizes_differ(fcinfo) {
+        return Ok(Datum::from_bool(true));
+    }
+    // SAFETY: catalog args are non-null bytea varlenas (strict fn).
+    let (a, b) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
+    Ok(Datum::from_bool(crate::bytea::byteane(a.data(), b.data())))
+}
+
 fc_byteacmp! {
-    fc_byteaeq: byteaeq -> from_bool;
-    fc_byteane: byteane -> from_bool;
     fc_bytealt: bytealt -> from_bool;
     fc_byteale: byteale -> from_bool;
     fc_byteagt: byteagt -> from_bool;
@@ -234,21 +304,17 @@ pub fn fc_textin(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult
     mcx::check_alloc_size(total)?;
     let buf = out_scratch(flinfo, "textin");
     buf.clear();
-    buf.reserve(total);
+    ::mcx::std_vec_reserve("adt", buf, total)?;
     buf.extend_from_slice(&datum::varlena::set_varsize_4b(total));
     buf.extend_from_slice(s);
     Ok(Datum::from_usize(buf.as_ptr() as usize))
 }
 
-pub fn fc_textout(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+pub fn fc_textout(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is a non-null text varlena (strict fn).
     let payload = unsafe { fcinfo.arg_varlena_packed(0)? }.data();
-    let buf = out_scratch(flinfo, "textout");
-    buf.clear();
-    buf.reserve(payload.len() + 1);
-    buf.extend_from_slice(payload);
-    buf.push(0);
-    Ok(Datum::from_usize(buf.as_ptr() as usize))
+    let mcx = fcinfo.result_mcx();
+    Ok(cstring_result(crate::textout(mcx, payload)?))
 }
 
 pub fn fc_byteaout(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -360,14 +426,18 @@ pub fn fc_textlen(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
 
 pub fn fc_textoctetlen(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is a non-null text varlena (strict fn).
-    let payload = unsafe { fcinfo.arg_varlena_packed(0)? }.data();
-    Ok(Datum::from_i32(crate::textoctetlen(payload)))
+    let raw = unsafe { fcinfo.arg_varlena_raw(0) };
+    Ok(Datum::from_i32(raw_octet_length(raw)))
 }
 
 pub fn fc_byteaoctetlen(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is a non-null bytea varlena (strict fn).
-    let payload = unsafe { fcinfo.arg_varlena_packed(0)? }.data();
-    Ok(Datum::from_i32(crate::bytea::byteaoctetlen(payload)))
+    let raw = unsafe { fcinfo.arg_varlena_raw(0) };
+    Ok(Datum::from_i32(raw_octet_length(raw)))
+}
+
+pub fn raw_octet_length(raw: &[u8]) -> i32 {
+    (::detoast::toast_raw_datum_size(raw) - ::types_tuple::varatt::VARHDRSZ) as i32
 }
 
 pub fn fc_bytea_get_byte(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -1041,4 +1111,31 @@ pub const VARLENA_BUILTINS: &[FmgrBuiltin] = &[
     b(1269, "pg_column_size", 1, fc_pg_column_size),
     b(2121, "pg_column_compression", 1, fc_pg_column_compression),
     b(6316, "pg_column_toast_chunk_id", 1, fc_pg_column_toast_chunk_id),
+];
+
+// textout into the caller's buffer (printtup, COPY TO): an inline image's payload as is; a toasted one takes the fmgr path.
+fn text_bound(v: Datum) -> Option<usize> {
+    let p = v.as_usize() as *const u8;
+    // SAFETY: a non-null text datum is a live varlena image; its first byte tells the header form.
+    unsafe {
+        let inline = !types_tuple::varatt::varatt_is_1b_e(p) && (types_tuple::varatt::varatt_is_1b(p) || types_tuple::varatt::varatt_is_4b_u(p));
+        inline.then(|| types_fmgr::PackedVarlena::from_ptr(p).data().len())
+    }
+}
+unsafe fn text_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: text_bound returned Some: an inline image, and `dst` has room for its payload.
+    let data = unsafe { types_fmgr::PackedVarlena::from_ptr(v.as_usize() as *const u8) }.data();
+    unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
+    Ok(data.len())
+}
+
+pub static TEXT_OUT_INTO: &[types_fmgr::OutInto] =
+    &[types_fmgr::OutInto { foid: 47, bound: text_bound, render: text_render, chars: None }];
+
+// textsend, bpcharsend and varcharsend into the caller's buffer (printtup's binary columns): pq_sendtext's payload with no
+// encoding conversion (the caller takes this road only when none applies) is the inline image's payload as is.
+pub static TEXT_SEND_INTO: &[types_fmgr::OutInto] = &[
+    types_fmgr::OutInto { foid: 2415, bound: text_bound, render: text_render, chars: None },
+    types_fmgr::OutInto { foid: 2431, bound: text_bound, render: text_render, chars: None },
+    types_fmgr::OutInto { foid: 2433, bound: text_bound, render: text_render, chars: None },
 ];

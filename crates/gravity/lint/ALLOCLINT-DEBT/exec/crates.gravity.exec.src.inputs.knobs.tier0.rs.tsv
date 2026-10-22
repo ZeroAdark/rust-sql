@@ -1,0 +1,5 @@
+path	crates/gravity/exec/src/inputs/knobs/tier0.rs
+growth	std::iter::Extend::extend	2
+growth	std::vec::Vec::push	1
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

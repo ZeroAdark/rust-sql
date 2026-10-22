@@ -640,3 +640,13 @@ fn errno_str(en: i32) -> String {
     // SAFETY: strerror returns a static NUL-terminated string for a known errno.
     unsafe { std::ffi::CStr::from_ptr(libc::strerror(en)) }.to_string_lossy().into_owned()
 }
+
+// audit fp-transam-twophase#1: abort between StartPrepare/EndPrepare frees the records buffer.
+#[test]
+fn abort_drops_the_prepare_records_buffer() {
+    let _g = test_lock();
+    setup();
+    crate::core::prepare_builder_for_tests(true);
+    crate::AtAbort_Twophase();
+    assert!(!crate::core::prepare_builder_for_tests(false));
+}

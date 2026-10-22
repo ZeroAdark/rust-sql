@@ -1,0 +1,6 @@
+path	crates/gravity/driver/src/mem/reap.rs
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::reserve_exact	1
+method	std::thread::Builder::spawn	1
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	2

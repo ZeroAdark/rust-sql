@@ -48,7 +48,7 @@ const PG_WAIT_IPC: u32 = 0x0800_0000;
 const WAIT_EVENT_BGWORKER_STARTUP: u32 = PG_WAIT_IPC + 6;
 const WAIT_EVENT_BGWORKER_SHUTDOWN: u32 = PG_WAIT_IPC + 5;
 // LOGICAL_LAUNCHER_MAIN's index in wait_event_names.txt's Activity section is
-// 8, not 5 — 5 is CHECKPOINTER_SHUTDOWN. regression (second instance of
+// 8, not 5 — 5 is CHECKPOINTER_SHUTDOWN. GL-SYNCWEDGE-1 (second instance of
 // the same class); scripts/lint-waitevent-tags.sh pins it.
 const WAIT_EVENT_LOGICAL_LAUNCHER_MAIN: u32 = 0x0500_0000 | 8;
 
@@ -938,6 +938,20 @@ pub fn my_worker_update_stats(last_lsn: XLogRecPtr, send_time: TimestampTz, repl
                 w.reply_lsn = last_lsn;
                 w.reply_time = send_time;
             }
+        });
+    }
+}
+
+// ParallelApplyWorkerMain (applyparallelworker.c:955): a parallel apply
+// worker never reports message times, so pg_stat_subscription shows NULL
+// (0), not the launch-time -infinity.
+pub fn my_worker_clear_stat_times() {
+    if let Some(slot) = my_worker_slot() {
+        with_ctx(|ctx| {
+            let w = &mut ctx.workers[slot];
+            w.last_send_time = 0;
+            w.last_recv_time = 0;
+            w.reply_time = 0;
         });
     }
 }

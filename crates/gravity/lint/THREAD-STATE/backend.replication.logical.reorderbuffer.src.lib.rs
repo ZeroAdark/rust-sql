@@ -1,0 +1,1 @@
+backend/replication/logical/reorderbuffer/src/lib.rs	RB_CTX	pgport	exit	leader	logical decoding's session-root ReorderBuffer context, looked up once per thread (rb_mcx); decoding runs in a walsender or the PARALLEL UNSAFE pg_logical_slot_* SRFs on the leader, never in a claim

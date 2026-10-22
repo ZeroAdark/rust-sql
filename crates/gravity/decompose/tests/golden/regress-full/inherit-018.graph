@@ -1,0 +1,118 @@
+-- regress-full-inherit-018
+-- update parted_tab set b = 'b' from (select 0 from parted_tab union all select 1 from parted_tab) ss (a) where parted_tab.a = ss.a;
+graph pipelines=10 breakers=9 init_plans=0 root=p9
+p0 node=9 eligible rows=2040 end=breaker(slot=0 Sort)
+  nodes n9@0 n8@1 n7@3^
+  source range rel=22551 rti=10 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=T_RowExpr, 2=c23:0)
+  append arm 0/6
+  project (1=outer.1, 2=outer.2)
+  sort keys=2+:I32 form=runs
+  outs 1=vl:call0 2=w4:val
+  outs 1=vl:life/breaker 2=w4:val
+p1 node=10 eligible rows=2040 end=breaker(slot=0 Sort)
+  nodes n10@0 n8@1 n7@3^
+  source range rel=22554 rti=11 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=T_RowExpr, 2=c23:0)
+  append arm 1/6
+  project (1=outer.1, 2=outer.2)
+  sort keys=2+:I32 form=runs
+  outs 1=vl:call0 2=w4:val
+  outs 1=vl:life/breaker 2=w4:val
+p2 node=11 eligible rows=2040 end=breaker(slot=0 Sort)
+  nodes n11@0 n8@1 n7@3^
+  source range rel=22557 rti=12 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=T_RowExpr, 2=c23:0)
+  append arm 2/6
+  project (1=outer.1, 2=outer.2)
+  sort keys=2+:I32 form=runs
+  outs 1=vl:call0 2=w4:val
+  outs 1=vl:life/breaker 2=w4:val
+p3 node=12 eligible rows=2040 end=breaker(slot=0 Sort)
+  nodes n12@0 n8@1 n7@3^
+  source range rel=22551 rti=13 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=T_RowExpr, 2=c23:1)
+  append arm 3/6
+  project (1=outer.1, 2=outer.2)
+  sort keys=2+:I32 form=runs
+  outs 1=vl:call0 2=w4:val
+  outs 1=vl:life/breaker 2=w4:val
+p4 node=13 eligible rows=2040 end=breaker(slot=0 Sort)
+  nodes n13@0 n8@1 n7@3^
+  source range rel=22554 rti=14 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=T_RowExpr, 2=c23:1)
+  append arm 4/6
+  project (1=outer.1, 2=outer.2)
+  sort keys=2+:I32 form=runs
+  outs 1=vl:call0 2=w4:val
+  outs 1=vl:life/breaker 2=w4:val
+p5 node=14 eligible rows=2040 end=breaker(slot=0 Sort)
+  nodes n14@0 n8@1 n7@3
+  source range rel=22557 rti=15 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=T_RowExpr, 2=c23:1)
+  append arm 5/6
+  project (1=outer.1, 2=outer.2)
+  sort keys=2+:I32 form=runs
+  outs 1=vl:call0 2=w4:val
+  outs 1=vl:life/breaker 2=w4:val
+p6 node=4 eligible rows=2040 end=breaker(slot=1 Sort)
+  nodes n4@0 n3@1 n2@3^
+  source range rel=22551 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v7.1, 2=v7.-6, 3=v7.-1)
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w4:val 3=fx6:row
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+p7 node=5 eligible rows=2040 end=breaker(slot=1 Sort)
+  nodes n5@0 n3@1 n2@3^
+  source range rel=22554 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v8.1, 2=v8.-6, 3=v8.-1)
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w4:val 3=fx6:row
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+p8 node=6 eligible rows=2040 end=breaker(slot=1 Sort)
+  nodes n6@0 n3@1 n2@3^
+  source range rel=22557 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v9.1, 2=v9.-6, 3=v9.-1)
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w4:val 3=fx6:row
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+p9 node=2 serial site=0 reason=Write end=sink
+  desc consumes=slot1@p8 consumes=slot0@p5
+  nodes n2@0 n1@1 n0@3
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  merge slot=0 inner=n7 JOIN_INNER clauses=(op96(outer.1, inner.2)) reversals=[false] nulls_first=[false]
+  project (1=c1042:'b', 2j=inner.1, 3j=outer.2, 4j=outer.3)
+  write UPDATE rel=22551 rti=7 natts=2 indexes=() set=(2) marks=1 (rti2:ROW_MARK_COPY) tableoid=outer.3 route=rti1:22548 natts=2
+    target rti=8 rel=22554 natts=2 indexes=() set=(2)
+    target rti=9 rel=22557 natts=2 indexes=() set=(2)
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+  outs 1=vl:stmt/imm 2=vl:life/breaker 3=w4:val 4=fx6:life/breaker
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p3 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p4 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p5 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p6 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p7 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p8 layout=[I32]->[Count@8] 16B order=1+
+scan-lanes node=4 rti=7 rel=22551 tableoid
+scan-lanes node=5 rti=8 rel=22554 tableoid
+scan-lanes node=6 rti=9 rel=22557 tableoid
+mapped: ModifyTable Append SeqScan MergeJoin Sort PlanRowMark

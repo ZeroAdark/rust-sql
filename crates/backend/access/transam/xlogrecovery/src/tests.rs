@@ -1220,7 +1220,7 @@ fn commit_record_reader<'a>(
 // TimestampDifferenceMilliseconds, which rounds a positive fraction UP, so a
 // commit 500 us short of its apply deadline still waits one millisecond; the
 // pre-fix port truncated it to 0 and replayed the record at once.
-// Audit regression / Detail bug_7b44423a.
+// Audit fp-transam-xlogrecovery-p2#4 / Detail bug_7b44423a.
 #[test]
 fn recovery_apply_delay_rounds_a_sub_millisecond_remainder_up_like_c() {
     let _g = datadir_lock();
@@ -1266,13 +1266,13 @@ fn recovery_apply_delay_rounds_a_sub_millisecond_remainder_up_like_c() {
     );
 }
 
-// xlogrecovery.c:2757-2830: recoveryStopsAfter has no RECOVERY_TARGET_IMMEDIATE
-// arm — reaching consistency stops BEFORE the next record (recoveryStopsBefore,
-// :2620-2631), and when no next record exists PerformWalRecovery reports
-// "recovery ended before configured recovery target was reached". The pre-fix
-// port stopped after the record that reached consistency. Detail bug_de559d36.
+// xlogrecovery.c:2620-2631 / 2895-2906: with recovery_target = immediate,
+// reaching consistency stops BEFORE the next record, and recoveryStopsAfter
+// also fires — but only for an RM_XACT_ID record (:2817 returns false for
+// every other rmgr), so the consistency point established by a transaction
+// record needs no further WAL. Detail bug_de559d36; audit fp-transam-xlogrecovery-p2#1.
 #[test]
-fn immediate_target_stops_before_the_next_record_never_after_like_c() {
+fn immediate_target_stops_before_the_next_record_and_after_a_xact_record_like_c() {
     let _g = datadir_lock();
     let dir = boot_fixture("immediate_stops_before");
     install_startup_process_seams();
@@ -1291,7 +1291,7 @@ fn immediate_target_stops_before_the_next_record_never_after_like_c() {
     drop(reader);
     let _ = std::fs::remove_dir_all(&dir);
 
-    assert!(!after.unwrap(), "recoveryStopsAfter never fires for recovery_target = immediate");
+    assert!(after.unwrap(), "recoveryStopsAfter fires for a xact record once consistency is reached");
     assert!(before.unwrap(), "recoveryStopsBefore stops once consistency is reached");
     assert_eq!(reason, "reached consistency");
 }
@@ -1592,10 +1592,11 @@ fn wal_retry_wait_ms_clamps_a_backward_clock_step() {
 
 #[test]
 fn reread_walrcv_config_requests_one_restart_per_change() {
-    // startup.c:136-151 (audit regression): a reload that changes
+    // startup.c:136-151 (audit fp-postmaster-b2#3): a reload that changes
     // primary_conninfo requests the restart once; the next unchanged reload
     // (restart still pending) compares against the reloaded values and
     // requests nothing.
+    let _dd = datadir_lock();
     install_startup_process_seams();
     WALRCV_UP.store(true, Relaxed);
     CURRENT_SOURCE.with(|c| c.set(XLogSource::Stream));
@@ -1645,7 +1646,7 @@ fn rescan_fork_interrupt() {
 // fork point against. The pre-fix port passed XLogRecoveryCtl->replayEndRecPtr,
 // still 0 while the checkpoint record is being fetched, so a timeline that
 // forked off before the checkpoint was adopted ("new target timeline is 2")
-// where C rejects it. Audit regression.
+// where C rejects it. Audit fp-transam-xlogrecovery-p2#3.
 #[test]
 fn checkpoint_fetch_rejects_a_timeline_forked_before_the_reader_position_like_c() {
     let _g = datadir_lock();
@@ -1855,4 +1856,37 @@ fn standby_segment_start_check_logs_the_validator_message() {
         ),
         "got {msgs:?}"
     );
+}
+
+// xlogrecovery.c:473-476 (XLogRecoveryShmemInit under the crash-cycle
+// CreateSharedMemoryAndSemaphores): the recovery ctl image is zeroed and the
+// wakeup latch re-inited, so a startup process that died holding the latch
+// (SIGQUIT skips ShutdownWalRecovery's DisownLatch) does not leave the
+// replacement startup's OwnLatch to PANIC "latch already owned by PID".
+#[test]
+fn reset_after_crash_reinits_the_recovery_wakeup_latch_and_chunk_time() {
+    let _g = datadir_lock();
+    let h = targets::recovery_wakeup_latch();
+    latch::OwnLatch(h).expect("fresh latch is unowned");
+    targets::SetCurrentChunkStartTime(123_456);
+
+    XLogRecoveryResetAfterCrash();
+
+    assert_eq!(targets::GetCurrentChunkReplayStartTime(), 0);
+    latch::OwnLatch(h).expect("crash reset must leave the latch unowned");
+    latch::DisownLatch(h);
+}
+
+// validateRecoveryParameters' pause -> shutdown rewrite (hot_standby off) is
+// the startup process's own copy in C; a later GUC republish of "pause" by
+// another child (walreceiver start etc.) must not undo it.
+#[test]
+fn recovery_target_action_shutdown_survives_guc_republish() {
+    install_boot_seams();
+    guc_tables::vars::recoveryTargetAction.write(targets::RECOVERY_TARGET_ACTION_PAUSE);
+    targets::set_recovery_target_action_shutdown(true);
+    guc_tables::vars::recoveryTargetAction.write(targets::RECOVERY_TARGET_ACTION_PAUSE);
+    assert_eq!(targets::recovery_target_action(), targets::RECOVERY_TARGET_ACTION_SHUTDOWN);
+    targets::set_recovery_target_action_shutdown(false);
+    assert_eq!(targets::recovery_target_action(), targets::RECOVERY_TARGET_ACTION_PAUSE);
 }

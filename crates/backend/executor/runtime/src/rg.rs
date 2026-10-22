@@ -38,6 +38,13 @@ pub trait TaskSetWork: Send + Sync {
     /// keeps the default no-op.
     fn bind_generation(&self, _generation: Generation) {}
 
+    /// D611: called on the worker once per task, before it joins the task
+    /// set or claims a morsel (`Scheduler::run_task_admitted`). May UNWIND to
+    /// kill the thread (a pool thread whose identity died across the crash
+    /// fence exits RAW here, holding no range, so the other participants
+    /// claim every morsel exactly once). The default does nothing.
+    fn before_claims(&self) {}
+
     /// Execute one claimed morsel (whole-granule range). Called in parallel
     /// from many workers.
     fn run_morsel(&self, worker: usize, range: MorselRange);
@@ -189,14 +196,15 @@ impl Completion {
         let mut g = lock(&self.state);
         debug_assert!(g.outcome.is_none(), "resource group completed twice");
         g.outcome = Some(outcome);
-        let wakers = std::mem::take(&mut g.wakers);
-        drop(g);
+        // D4552 (a): the words are unparked where they are, under the lock: the list frees with the group, not here,
+        // after a woken leader may have ended its session (its home's account gone to UNBOUND)
         #[cfg(not(loom))]
-        for w in wakers {
+        // bounded("other: the leaders waiting on one resource group, one word each")
+        for &w in g.wakers.iter() {
             let _ = waiter::unpark_word(w);
         }
         #[cfg(loom)]
-        debug_assert!(wakers.is_empty(), "loom models must poll try_wait, not park");
+        debug_assert!(g.wakers.is_empty(), "loom models must poll try_wait, not park");
     }
 
     #[cfg(not(loom))]
@@ -319,6 +327,9 @@ pub struct ResourceGroup {
     /// applied at the task-completion charge site in sched.rs; monotone
     /// non-increasing over the RG's life).
     pub(crate) priority: AtomicU32,
+    /// Participant cap of every task set (V4R-70): at most this many workers inside `run_task` at once; 0 =
+    /// uncapped. Set at admission from the submit's width ceiling; surplus pool workers stay parked.
+    pub(crate) width_cap: AtomicU32,
     /// M5-5 decay bookkeeping: last consumed-CPU quantum count the decay
     /// was applied at (CAS-guarded — each boundary applies exactly once
     /// across racing workers).
@@ -358,6 +369,20 @@ pub struct ResourceGroup {
     pub(crate) submit_ns: AtomicU64,
     pub(crate) first_service_ns: AtomicU64,
     pub(crate) done_ns: AtomicU64,
+    /// D4552 (a): the submitting thread's account. The group (its task sets' work and sources, the leader's session carry
+    /// among them; the lifecycle and its abort error) is the submitter's, but its last reference often drops on a pool
+    /// worker (a worker's task-set cache holds it past the statement), so it frees inside this home (the memory
+    /// policy's `ledger_home` knob).
+    home: memledger::Home,
+    /// D4552 (a): last field: the group's fields drop inside `home` (armed by `Drop`).
+    home_exit: memledger::HomeExit,
+}
+
+impl Drop for ResourceGroup {
+    fn drop(&mut self) {
+        let home = self.home;
+        self.home_exit.arm(&home);
+    }
 }
 
 impl ResourceGroup {
@@ -405,6 +430,7 @@ impl ResourceGroup {
             completion: Completion::new(),
             stats: RgStats::default(),
             priority: AtomicU32::new(INITIAL_PRIORITY),
+            width_cap: AtomicU32::new(0),
             decay_quanta: AtomicU64::new(0),
             cpu_consumed_ns: AtomicU64::new(0),
             session_token,
@@ -414,6 +440,8 @@ impl ResourceGroup {
             submit_ns: AtomicU64::new(0),
             first_service_ns: AtomicU64::new(0),
             done_ns: AtomicU64::new(0),
+            home: memledger::Home::here(),
+            home_exit: memledger::HomeExit::for_block(memledger::arc_bytes::<ResourceGroup>()),
         })
     }
 
@@ -496,6 +524,13 @@ impl ResourceGroup {
     /// inside run_task, so the drain never waits. The lifecycle's recorded
     /// first error (the abort) is deliberately dropped here: the RG's
     /// outcome channel is [`Completion`], not the lifecycle error.
+    /// D4552 (a): the calling thread charges the group's home until the guard drops (its retirement on a pool worker:
+    /// the lifecycle's abort error and the leader's waker words are the submitter's). None with the switch off.
+    #[must_use]
+    pub(crate) fn enter_home(&self) -> Option<memledger::Entered> {
+        self.home.enter()
+    }
+
     pub(crate) fn retire_lifecycle(&self) {
         let lifecycle = Arc::clone(self.handle.lifecycle());
         let _ = self
@@ -579,7 +614,12 @@ impl RgHandle {
     /// RG popped before it starts normally and aborts through the ordinary
     /// generation-refusal drain.
     pub fn abort(&self) {
-        self.rg.task.cancel(abort_error());
+        // D4552 (a): the error is the group's home's, made there as the retirement that drops it frees it there
+        // (`complete_rg`), whichever thread aborts (a pool worker's failed claim off its carry, the leader's cancel)
+        {
+            let _home = self.rg.enter_home();
+            self.rg.task.cancel(abort_error());
+        }
         if let Some(sched) = self.rg.sched.upgrade() {
             sched.reap_queued_abort(&self.rg);
         }

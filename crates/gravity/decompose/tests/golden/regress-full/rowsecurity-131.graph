@@ -1,0 +1,37 @@
+-- regress-full-rowsecurity-131
+-- SELECT count(*) = 1 FROM pg_shdepend WHERE objid = (SELECT oid FROM pg_policy WHERE polname = 'dep_p1') AND refobjid = (SELECT oid FROM pg_authid WHERE rolname = 'regress_rls_bob');
+graph pipelines=4 breakers=1 init_plans=2 root=p3
+p0 node=2 eligible rows=1 end=sink
+  nodes n2@0
+  source range rel=3256 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v2.2, c19:#64)
+  project (1=v2.1)
+  outs 1=w8:val
+p1 node=3 eligible rows=1 end=sink
+  nodes n3@0
+  source range rel=1260 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v3.2, c19:#64)
+  project (1=v3.1)
+  outs 1=w8:val
+p2 node=1 eligible rows=1 end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@3^
+  source range rel=1214 rti=1 am=heap
+    lanes Attr(3):byval8:w8:val Attr(6):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v1.3, $exec0)
+  filter op607(v1.6, $exec1)
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7)
+  outs 1=w4:val 2=w4:val 3=w8:val 4=w4:val 5=w4:val 6=w8:val 7=w1:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  project (1=op416(agg2803*(), c23:1))
+  outs 1=w1:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p2 layout=[]->[Count@0] 8B
+group slot=0 producer=p2 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+init_plan id=2 pipeline=p1 link=Expr param=$exec1
+mapped: SeqScan Agg SubPlan

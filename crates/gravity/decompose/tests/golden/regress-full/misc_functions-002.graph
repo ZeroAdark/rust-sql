@@ -1,0 +1,11 @@
+-- regress-full-misc_functions-002
+-- SELECT pg_log_backend_memory_contexts(pid) FROM pg_stat_activity WHERE backend_type = 'checkpointer';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=2 [1:Other fn2022 cols=31 fn2022(c23:null)]
+  filter op98(v2.18, c25:'checkpointer')
+  project (1=fn4543(v2.2))
+  outs 1=w1:val
+mapped: FunctionScan

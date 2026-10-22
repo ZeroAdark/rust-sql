@@ -1,0 +1,3 @@
+path	crates/gravity/expr/src/emit/jsonb.rs
+growth	std::vec::Vec::push	1
+method	slice::to_vec	2

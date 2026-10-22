@@ -1,0 +1,10 @@
+path	crates/backend/access/pgrcolumnar/pgrc_codec/src/onpairwrap.rs
+growth	pgrc_format::dict::front_code_frame	1
+growth	pgrc_format::try_reserve_more	1
+growth	pgrc_format::try_resize	3
+growth	std::vec::Vec::extend_from_slice	9
+growth	std::vec::Vec::push	5
+growth	std::vec::Vec::resize	2
+growth	std::vec::Vec::try_reserve_exact	2
+method	pgrc_format::try_vec	3
+type	std::vec::Vec	2

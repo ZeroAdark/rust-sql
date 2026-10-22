@@ -1,0 +1,22 @@
+-- regress-full-misc-001
+-- UPDATE tmp SET stringu1 = reverse_name(onek.stringu1) FROM onek WHERE onek.stringu1 = 'JBAAAA' and onek.stringu1 = tmp.stringu1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@1 n0@3
+  source index rel=16417 rti=2 am=heap index=19338
+    key att=14 op=93 value=c19:#64
+    recheck (op93(v2.14, c19:#64))
+    lanes Attr(14):byref8:fx64:win/page RowId:byval8:w8:val
+  project (1=v2.14, 2=v2.-1)
+  nest inner=n3 JOIN_INNER invariant raise-free params=()
+  inner node=3 eligible rows=9 end=sink
+  nodes n3@0
+  source range rel=30650 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byref8:fx64:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op93(v1.2, c19:#64)
+  project (1=v1.-1, 2=v1.2, 3j=v1.1, 4j=v1.3, 5j=v1.4)
+  project (1=fn30649(outer.1), 2j=inner.1, 3j=outer.2, 4j=inner.3, 5j=inner.4, 6j=inner.5)
+  write UPDATE rel=30650 rti=1 natts=4 indexes=() set=(2) marks=1 (rti2:ROW_MARK_REFERENCE)
+  outs 1=fx64:win/page 2=fx6:row
+  outs 1=fx64:call30649 2=fx6:life/breaker 3=fx6:row 4=w4:val 5=w4:val 6=fx64:life/breaker
+mapped: ModifyTable SeqScan IndexScan NestLoop PlanRowMark

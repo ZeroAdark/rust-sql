@@ -25,6 +25,13 @@ thread_local! {
     static CALLBACK_REGISTERED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// D4682 (client backend thread reuse, launch_backend cpool): the cache is not a session root's, so the session
+/// teardown leaves it; a parked thread misses the invalidations sent while it waits, and the next session may be in
+/// another database. Emptied as a fresh thread's.
+pub fn reset_for_thread_reuse() {
+    ATTOPT_CACHE.with(|c| c.borrow_mut().clear());
+}
+
 // InvalidateAttoptCacheCallback (attoptcache.c:53-77): C flushes every entry
 // regardless of the hash value (the callback is keyed on the cache, not the
 // tuple), so a flush is a clear.

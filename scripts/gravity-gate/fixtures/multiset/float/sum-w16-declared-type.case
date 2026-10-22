@@ -1,0 +1,10 @@
+# V4R-2 (user 2026-09-24): order-dependent float aggregates within 1e-12 relative (float8) / 4 ulps (float4)
+# the text path with the declared result type
+sql: SELECT sum(x) FROM r;
+types: double precision
+class: unordered
+verdict: match
+[pg]
+-643677878.4940954
+[got]
+-643677878.4940783

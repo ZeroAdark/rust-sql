@@ -22,12 +22,12 @@ macro_rules! plain_fixed {
             if *pos + need > end || end > buf.len() {
                 return Err(corrupt_page("values end before the declared count"));
             }
-            out.try_reserve(n).map_err(|_| {
-                Box::new(PgError::error("out of memory decoding parquet values"))
+            out.try_reserve(n).map_err(|_| { // alloc: Exec charged the cursor's dict charge or the batch keeper's charge (ColumnBatch::held_bytes)
+                Box::new(PgError::error("out of memory decoding parquet values")) // alloc: Cold
             })?;
             let src = &buf[*pos..*pos + need];
             for chunk in src.chunks_exact(W) {
-                out.push(<$ty>::from_le_bytes(chunk.try_into().expect("exact chunk")));
+                out.push(<$ty>::from_le_bytes(chunk.try_into().expect("exact chunk"))); // alloc: Exec charged the cursor's dict charge or the batch keeper's charge (ColumnBatch::held_bytes)
             }
             *pos += need;
             Ok(())
@@ -40,13 +40,42 @@ plain_fixed!(plain_i64, i64);
 plain_fixed!(plain_f32, f32);
 plain_fixed!(plain_f64, f64);
 
+/// INT96 PLAIN values: three little-endian words each, kept as stored.
+pub(crate) fn plain_i96(
+    buf: &[u8],
+    end: usize,
+    pos: &mut usize,
+    n: usize,
+    out: &mut Vec<[u32; 3]>,
+) -> PgResult<()> {
+    let need = n.checked_mul(12).ok_or_else(|| corrupt_page("value count overflow"))?;
+    if *pos + need > end || end > buf.len() {
+        return Err(corrupt_page("values end before the declared count"));
+    }
+    out.try_reserve(n).map_err(|_| Box::new(PgError::error("out of memory decoding parquet values")))?; // alloc: Exec charged the cursor's dict charge or the batch keeper's charge (ColumnBatch::held_bytes)
+    for c in buf[*pos..*pos + need].chunks_exact(12) {
+        let w = |i: usize| u32::from_le_bytes(c[i..i + 4].try_into().expect("4-byte slice"));
+        out.push([w(0), w(4), w(8)]); // alloc: Exec charged the cursor's dict charge or the batch keeper's charge (ColumnBatch::held_bytes)
+    }
+    *pos += need;
+    Ok(())
+}
+
+/// One FIXED_LEN_BYTE_ARRAY value of `width` bytes appended to `arena`;
+/// the caller has bounds-checked `*pos + width`.
+#[inline]
+pub(crate) fn plain_fixed_bytes(buf: &[u8], pos: &mut usize, width: usize, arena: &mut Vec<u8>) {
+    arena.extend_from_slice(&buf[*pos..*pos + width]); // alloc: Exec charged the cursor's dict charge or the batch keeper's charge (ColumnBatch::held_bytes)
+    *pos += width;
+}
+
 #[cold]
 #[inline(never)]
 pub(crate) fn invalid_utf8(column: &str) -> Box<PgError> {
     Box::new(
         PgError::error("invalid byte sequence for encoding \"UTF8\" in parquet string column")
             .with_sqlstate(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE)
-            .with_detail(format!("Column \"{column}\".")),
+            .with_detail(format!("Column \"{column}\".")), // alloc: Cold
     )
 }
 
@@ -85,8 +114,8 @@ pub(crate) fn plain_byte_array(
     column: &str,
 ) -> PgResult<()> {
     offsets
-        .try_reserve(n)
-        .map_err(|_| Box::new(PgError::error("out of memory decoding parquet strings")))?;
+        .try_reserve(n) // alloc: Exec charged the cursor's dict charge or the batch keeper's charge (ColumnBatch::held_bytes)
+        .map_err(|_| Box::new(PgError::error("out of memory decoding parquet strings")))?; // alloc: Cold
     for _ in 0..n {
         let Some(lb) = buf.get(*pos..*pos + 4).filter(|_| *pos + 4 <= end) else {
             return Err(corrupt_page("string values end before the declared count"));
@@ -104,10 +133,10 @@ pub(crate) fn plain_byte_array(
             return Err(corrupt_page("string batch exceeds 4GB"));
         }
         arena
-            .try_reserve(len)
-            .map_err(|_| Box::new(PgError::error("out of memory decoding parquet strings")))?;
-        arena.extend_from_slice(v);
-        offsets.push(arena.len() as u32);
+            .try_reserve(len) // alloc: Exec charged the cursor's dict charge or the batch keeper's charge (ColumnBatch::held_bytes)
+            .map_err(|_| Box::new(PgError::error("out of memory decoding parquet strings")))?; // alloc: Cold
+        arena.extend_from_slice(v); // alloc: Exec charged the cursor's dict charge or the batch keeper's charge (ColumnBatch::held_bytes)
+        offsets.push(arena.len() as u32); // alloc: Exec charged the cursor's dict charge or the batch keeper's charge (ColumnBatch::held_bytes)
         *pos = start + len;
     }
     Ok(())

@@ -1,0 +1,59 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s1c s2c
+step s2e: EXPLAIN (COSTS OFF) SELECT id, k FROM qr ORDER BY k, id LIMIT 4 OFFSET 249998 FOR UPDATE SKIP LOCKED;
+QUERY PLAN                                   
+---------------------------------------------
+Limit                                        
+  ->  LockRows                               
+        ->  Incremental Sort                 
+              Sort Key: k, id                
+              Presorted Key: k               
+              ->  Index Scan using qr_k on qr
+(6 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1h s2a s1c s2c
+step s1h: SELECT id FROM qr WHERE id IN (5, 250001, 250003) ORDER BY id FOR UPDATE;
+    id
+------
+     5
+250001
+250003
+(3 rows)
+
+step s2a: SELECT id, k FROM qr ORDER BY k, id LIMIT 4 OFFSET 249998 FOR UPDATE SKIP LOCKED;
+    id|k
+------+-
+250000|1
+250002|2
+250004|3
+250005|4
+(4 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1h s2b s1c s2c
+step s1h: SELECT id FROM qr WHERE id IN (5, 250001, 250003) ORDER BY id FOR UPDATE;
+    id
+------
+     5
+250001
+250003
+(3 rows)
+
+step s2b: SELECT id, k, note FROM qr ORDER BY k, id LIMIT 5 OFFSET 249997 FOR UPDATE SKIP LOCKED;
+    id|k|note
+------+-+----
+249999|1|n1  
+250000|1|n2  
+250002|2|n4  
+250004|3|n6  
+250005|4|n0  
+(5 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;

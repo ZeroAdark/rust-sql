@@ -3,24 +3,25 @@
 mod catalog;
 mod ddl;
 mod exec;
+pub mod instr;
 mod queue;
 mod state;
 
 pub use catalog::{map_partition_qual, CreateTriggerFiringOn, CreateTriggerInternal, InternalTriggerArgs, TriggerSetParentTrigger};
 pub use ddl::{get_trigger_oid, renametrig, CreateTrigger, EnableDisableTrigger, RemoveTriggerById};
 pub use exec::{
-    trigger_depth, ExecBRDeleteTriggers, ExecBRInsertTriggers, ExecBRUpdateTriggers,
-    ExecBSInsertTriggers, ExecBSTruncateTriggers, ExecCallTriggerFunc, ExecIRInsertTriggers,
+    trigger_depth, ExecBRDeleteTriggers, ExecBRInsertTriggers, ExecBRInsertTriggersIn, ExecBRUpdateTriggers,
+    ExecBSInsertTriggers, ExecBSTruncateTriggers, ExecCallTriggerFunc, ExecIRInsertTriggers, ExecIRInsertTriggersIn,
     TriggerEnabled, TriggerFmgrCache, TriggerWhenCache, TriggerWhenEval,
 };
 pub use queue::{
-    before_stmt_triggers_fired, check_foreign_transition_capture, ri_trigger_kind, AfterTriggerBeginQuery, AfterTriggerBeginSubXact,
+    before_stmt_triggers_fired, check_foreign_transition_capture, query_depth, ri_trigger_kind, AfterTriggerBeginQuery, AfterTriggerBeginSubXact,
     AfterTriggerBeginXact, AfterTriggerEndQuery, AfterTriggerEndSubXact, AfterTriggerEndXact,
-    AfterTriggerInstrSink,
+    AfterTriggerInstrSink, AfterTriggerQueryHasEvents,
     AfterTriggerFireDeferred, AfterTriggerPendingOnRel, ExecARDeleteTriggers,
     ExecARInsertTriggers, ExecARRowTriggersFdw, ExecARUpdateTriggers, ExecASDeleteTriggers, ExecASInsertTriggers,
     ChildToRoot, ExecASTruncateTriggers, ExecASUpdateTriggers, MakeTransitionCaptureState,
-    TransitionCaptureState,
+    TransitionCaptureState, TrigTargetDesc,
 };
 pub use state::AfterTriggerSetState;
 
@@ -84,8 +85,8 @@ mod tests {
         assert_eq!(queue::query_depth(), 0);
         AfterTriggerBeginQuery();
         assert_eq!(queue::query_depth(), 1);
-        AfterTriggerEndQuery(None).unwrap();
-        AfterTriggerEndQuery(None).unwrap();
+        AfterTriggerEndQuery(None, &[]).unwrap();
+        AfterTriggerEndQuery(None, &[]).unwrap();
         assert_eq!(queue::query_depth(), -1);
         trigger_seams::after_trigger_end_xact::call(true).unwrap();
     }

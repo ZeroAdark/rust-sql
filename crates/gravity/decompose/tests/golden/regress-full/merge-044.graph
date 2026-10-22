@@ -1,0 +1,72 @@
+-- regress-full-merge-044
+-- WITH m AS ( MERGE INTO sq_target t USING sq_source s ON tid = sid WHEN MATCHED AND tid >= 2 THEN UPDATE SET balance = t.balance + delta WHEN NOT MATCHED THEN INSERT (balance, tid) VALUES (balance + delta, sid) WHEN MATCHED AND tid < 2 THEN DELETE RETURNING merge_action() AS action, old AS old_data, new AS new_data, t.*, CASE merge_action() WHEN 'INSERT' THEN 'Inserted '||t WHEN 'UPDATE' THEN 'Added '||delta||' to balance' WHEN 'DELETE' THEN 'Removed '||t END AS description ), m2 AS ( MERGE INTO sq_target_merge_log l USING m ON l.tid = m.tid WHEN MATCHED THEN UPDATE SET last_change = description WHEN NOT MATCHED THEN INSERT VALUES (m.tid, description) RETURNING m.*, merge_action() AS log_action, old AS old_log, new AS new_log, l.* ) SELECT * FROM m2;
+graph pipelines=6 breakers=5 init_plans=2 root=p5
+p0 node=6 eligible rows=2260 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n6@0 n5@1
+  source range rel=30733 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v2.-1, 2=v2.1, 3j=v2.1, 4j=v2.2)
+  sort keys=2+:I32 form=runs
+  outs 1=fx6:row 2=w8:val 3=w8:val 4=w8:val
+p1 node=4 eligible rows=2040 end=breaker(slot=1 Sort)
+  desc finishing
+  nodes n4@0 n3@1^
+  source range rel=30737 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.-1)
+  sort keys=2+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=w8:val 4=fx6:row
+p2 node=3 serial site=0 reason=Write end=breaker(slot=2 Materialize)
+  desc consumes=slot1@p1 consumes=slot0@p0
+  nodes n3@0 n2@1 n1@3
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  merge slot=0 inner=n5 JOIN_LEFT clauses=(op96(outer.2, inner.2)) reversals=[false] nulls_first=[false]
+  project (1j=inner.1, 2j=outer.1, 3j=outer.2, 4j=outer.3, 5j=outer.4, 6j=inner.3, 7j=inner.4)
+  write MERGE rel=30733 rti=2 natts=2 indexes=() returning old=old new=new marks=1 (rti3:ROW_MARK_REFERENCE)
+    merge rowid=outer.1 target_cols=(1@6,2@7) returning merge_action()
+    when matched and (op525(v2.1, c23:2)) then update set=(2) (1=op551(v2.2, inner.2))
+    when not matched then insert (1=inner.3, 2=op551(inner.4, inner.2))
+    when matched and (op97(v2.1, c23:2)) then delete
+  project (1=T_MergeSupportFunc, 2=v2.0, 3=v2.0, 4=v2.1, 5=v2.2, 6=case[T_MergeSupportFunc](when op98(T_CaseTestExpr, c25:'INSERT') then op654(c25:'Inserted ', io25(v2.0)), when op98(T_CaseTestExpr, c25:'UPDATE') then op654(op654(c25:'Added ', io25(outer.2)), c25:' to balance'), when op98(T_CaseTestExpr, c25:'DELETE') then op654(c25:'Removed ', io25(v2.0))) else c25:null)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=fx6:row
+  outs 1=fx6:life/breaker 2=w8:val 3=w8:val 4=w8:val 5=fx6:row 6=w4:val 7=w4:val
+  outs 1=vl:call0 2=? 3=? 4=w4:val 5=w4:val 6=vl:call1258
+p3 node=11 eligible rows=1270 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n11@0 n10@1
+  source range rel=30750 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v5.-1, 2=v5.1, 3j=v5.1, 4j=v5.2)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=fx6:row 2=w8:val 3=w8:val 4=vl:win/page
+p4 node=9 serial site=0 reason=Write end=breaker(slot=1 Materialize)
+  desc consumes=slot2@p2 consumes=slot0@p3
+  nodes n9@0 n8@1 n7@3
+  source breaker slot=2
+  project (1=v6.6, 2=v6.4, 3=v6.0, 4=v6.1, 5=v6.2, 6=v6.3, 7=v6.5)
+  probe slot=0 inner=n10 JOIN_LEFT keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.2))
+  project (1j=inner.1, 2j=outer.1, 3j=outer.2, 4j=outer.3, 5j=outer.4, 6j=outer.5, 7j=outer.6, 8j=outer.7, 9j=inner.3, 10j=inner.4)
+  write MERGE rel=30750 rti=5 natts=2 indexes=() returning old=old new=new epq=$exec2 marks=1 (rti6:ROW_MARK_COPY)
+    merge rowid=outer.1 target_cols=(1@9,2@10) returning merge_action()
+    when matched then update set=(2) (1=inner.2)
+    when not matched then insert (1=inner.3, 2=inner.2)
+  project (1=outer.5, 2=outer.6, 3=outer.7, 4=outer.3, 5=outer.8, 6=outer.2, 7=T_MergeSupportFunc, 8=v5.0, 9=v5.0, 10=v5.1, 11=v5.2)
+  outs 1=vl:row 2=w4:val 3=vl:row 4=vl:row 5=? 6=? 7=w4:val
+  outs 1=fx6:life/breaker 2=vl:row 3=w4:val 4=vl:row 5=vl:row 6=? 7=? 8=w4:val 9=w4:val 10=vl:life/breaker
+  outs 1=vl:row 2=? 3=? 4=w4:val 5=w4:val 6=vl:row 7=vl:call0 8=? 9=? 10=w4:val 11=vl:row
+p5 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p4
+  nodes n0@0
+  source breaker slot=1
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11)
+  outs 1=vl:row 2=? 3=? 4=w4:val 5=w4:val 6=vl:row 7=vl:row 8=? 9=? 10=w4:val 11=vl:row
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p2 layout=[]->[Count@0] 8B
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B
+init_plan id=1 pipeline=p2 link=Cte param=$exec1 slot=2 vol=v
+init_plan id=2 pipeline=p4 link=Cte param=$exec3 slot=1 vol=v
+mapped: ModifyTable SeqScan CteScan MergeJoin HashJoin Sort Hash PlanRowMark SubPlan

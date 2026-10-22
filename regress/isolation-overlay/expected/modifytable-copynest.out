@@ -1,0 +1,71 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3e s1u s1k s1d s1o s2u s1c s2c s3s
+step s3e: EXPLAIN (COSTS OFF) UPDATE cnn_c SET tier = 4 WHERE id IN (SELECT cid FROM cnn_o GROUP BY cid ORDER BY sum(amt) DESC, cid LIMIT 6) RETURNING id, note;
+QUERY PLAN                                                          
+--------------------------------------------------------------------
+Update on cnn_c                                                     
+  ->  Nested Loop                                                   
+        ->  Subquery Scan on "ANY_subquery"                         
+              ->  Limit                                             
+                    ->  Sort                                        
+                          Sort Key: (sum(cnn_o.amt)) DESC, cnn_o.cid
+                          ->  HashAggregate                         
+                                Group Key: cnn_o.cid                
+                                ->  Seq Scan on cnn_o               
+        ->  Index Scan using cnn_c_pkey on cnn_c                    
+              Index Cond: (id = "ANY_subquery".cid)                 
+(11 rows)
+
+step s1u: UPDATE cnn_c SET note = note || '*' WHERE id IN (11, 12);
+step s1k: UPDATE cnn_c SET id = id + 1000 WHERE id = 13;
+step s1d: DELETE FROM cnn_c WHERE id = 14;
+step s1o: UPDATE cnn_o SET amt = 0 WHERE cid = 15; UPDATE cnn_c SET note = note || '+' WHERE id = 15;
+step s2u: UPDATE cnn_c SET tier = 4 WHERE id IN (SELECT cid FROM cnn_o GROUP BY cid ORDER BY sum(amt) DESC, cid LIMIT 6) RETURNING id, note; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|note
+--+----
+16|c16 
+15|c15+
+12|c12*
+11|c11*
+(4 rows)
+
+step s2c: COMMIT;
+step s3s: SELECT id, tier, note FROM cnn_c WHERE id BETWEEN 10 AND 20 OR id > 1000 ORDER BY id;
+  id|tier|note
+----+----+----
+  10|   0|c10 
+  11|   4|c11*
+  12|   4|c12*
+  15|   4|c15+
+  16|   4|c16 
+  17|   0|c17 
+  18|   0|c18 
+  19|   0|c19 
+  20|   0|c20 
+1013|   0|c13 
+(10 rows)
+
+
+starting permutation: s1u s1k s1d s1o s2d s1c s2c s3s
+step s1u: UPDATE cnn_c SET note = note || '*' WHERE id IN (11, 12);
+step s1k: UPDATE cnn_c SET id = id + 1000 WHERE id = 13;
+step s1d: DELETE FROM cnn_c WHERE id = 14;
+step s1o: UPDATE cnn_o SET amt = 0 WHERE cid = 15; UPDATE cnn_c SET note = note || '+' WHERE id = 15;
+step s2d: DELETE FROM cnn_c WHERE id IN (SELECT cid FROM cnn_o GROUP BY cid ORDER BY sum(amt) DESC, cid LIMIT 6); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3s: SELECT id, tier, note FROM cnn_c WHERE id BETWEEN 10 AND 20 OR id > 1000 ORDER BY id;
+  id|tier|note
+----+----+----
+  10|   0|c10 
+  17|   0|c17 
+  18|   0|c18 
+  19|   0|c19 
+  20|   0|c20 
+1013|   0|c13 
+(6 rows)
+

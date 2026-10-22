@@ -32,6 +32,16 @@ oid_cmp_ops! {
 
 /// `oidlarger` (oid.c): the greater of two OIDs.
 #[inline]
+pub fn oidout(mcx: ::mcx::Mcx<'_>, o: Oid) -> PgResult<::mcx::PgVec<'_, u8>> {
+    let mut v = ::mcx::PgVec::new_in(mcx);
+    v.try_reserve_exact(11).map_err(|_| mcx.oom(11))?;
+    v.resize(11, 0);
+    let n = ::numutils::pg_ultoa_n(o, &mut v[..10]);
+    v.truncate(n + 1);
+    v[n] = 0;
+    Ok(v)
+}
+
 pub fn oidlarger(arg1: Oid, arg2: Oid) -> Oid {
     if arg1 > arg2 { arg1 } else { arg2 }
 }

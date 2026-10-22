@@ -1,0 +1,5 @@
+# NOALLOC (TD-197 LINT-FP; findings.NOALLOC_ITEMS): findings the IR leg proved allocate nothing, keyed on the line's normalized text. Written by run.sh full + ratchet.py write --noalloc only; an edited line's row goes.
+file	line	kind	item	count	text	class
+crates/backend/access/pgrcolumnar/pgrc_ingest_par/src/lib.rs	255	method	std::clone::Clone::clone	1	b6ce6ce2357f	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_ingest_par/src/lib.rs	306	method	std::clone::Clone::clone	1	3ab863713792	NOALLOC
+crates/backend/access/pgrcolumnar/pgrc_ingest_par/src/lib.rs	343	method	std::clone::Clone::clone	1	fecf03915cac	NOALLOC

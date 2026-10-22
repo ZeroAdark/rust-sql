@@ -30,17 +30,42 @@ fn invalid_encoding_name(which: &str, name: &str) -> Box<PgError> {
     )
 }
 
+fn memo(flinfo: Option<&mut FmgrInfo>) -> Option<&mut crate::ConvertMemo> {
+    let flinfo = flinfo?;
+    if !flinfo.has_fn_extra() {
+        flinfo.set_fn_extra(crate::ConvertMemo::default());
+    }
+    flinfo.fn_extra_mut::<crate::ConvertMemo>()
+}
+
+/// pg_char_to_encoding of a `name` argument, through the site's memo slot `i` (the name a site passes is nearly
+/// always the same constant).
+fn name_encoding(memo: &mut Option<&mut crate::ConvertMemo>, i: usize, name: &[u8; 64]) -> pg_enc {
+    if let Some(m) = memo.as_deref_mut() {
+        if let Some((n, e)) = m.names[i] {
+            if n == *name {
+                return e;
+            }
+        }
+        let e = crate::pg_char_to_encoding(name_str(name));
+        m.names[i] = Some((*name, e));
+        return e;
+    }
+    crate::pg_char_to_encoding(name_str(name))
+}
+
 fn convert_common(
     fcinfo: &mut Fcinfo,
     string_arg: usize,
     src_encoding: pg_enc,
     dest_encoding: pg_enc,
+    memo: Option<&mut crate::ConvertMemo>,
 ) -> PgResult<Datum> {
     let string = unsafe { fcinfo.arg_varlena_packed(string_arg)? };
     let src = string.data();
     crate::pg_verify_mbstr(src_encoding, src, false)?;
     let mcx = fcinfo.result_mcx();
-    match crate::pg_do_encoding_conversion(mcx, src, src_encoding, dest_encoding)? {
+    match crate::pg_do_encoding_conversion_at(mcx, src, src_encoding, dest_encoding, memo)? {
         // mbutils.c:599 PG_RETURN_BYTEA_P(string): the detoasted image.
         None => Ok(Datum::from_usize(string.as_ptr() as usize)),
         Some(out) => {
@@ -53,38 +78,41 @@ fn convert_common(
 }
 
 // BYTEA convert(BYTEA string, NAME src_encoding_name, NAME dest_encoding_name)
-pub fn fc_pg_convert(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let src_name = name_str(unsafe { fcinfo.arg_name(1) });
-    let src_encoding = crate::pg_char_to_encoding(src_name);
+pub fn fc_pg_convert(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let mut memo = memo(flinfo);
+    let src_name = unsafe { fcinfo.arg_name(1) };
+    let src_encoding = name_encoding(&mut memo, 0, src_name);
     if src_encoding < 0 {
-        return Err(invalid_encoding_name("source", src_name));
+        return Err(invalid_encoding_name("source", name_str(src_name)));
     }
-    let dest_name = name_str(unsafe { fcinfo.arg_name(2) });
-    let dest_encoding = crate::pg_char_to_encoding(dest_name);
+    let dest_name = unsafe { fcinfo.arg_name(2) };
+    let dest_encoding = name_encoding(&mut memo, 1, dest_name);
     if dest_encoding < 0 {
-        return Err(invalid_encoding_name("destination", dest_name));
+        return Err(invalid_encoding_name("destination", name_str(dest_name)));
     }
-    convert_common(fcinfo, 0, src_encoding, dest_encoding)
+    convert_common(fcinfo, 0, src_encoding, dest_encoding, memo)
 }
 
 // TEXT convert_from(BYTEA string, NAME src_encoding_name); dest = DB encoding.
-pub fn fc_pg_convert_from(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let src_name = name_str(unsafe { fcinfo.arg_name(1) });
-    let src_encoding = crate::pg_char_to_encoding(src_name);
+pub fn fc_pg_convert_from(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let mut memo = memo(flinfo);
+    let src_name = unsafe { fcinfo.arg_name(1) };
+    let src_encoding = name_encoding(&mut memo, 0, src_name);
     if src_encoding < 0 {
-        return Err(invalid_encoding_name("source", src_name));
+        return Err(invalid_encoding_name("source", name_str(src_name)));
     }
-    convert_common(fcinfo, 0, src_encoding, crate::GetDatabaseEncoding())
+    convert_common(fcinfo, 0, src_encoding, crate::GetDatabaseEncoding(), memo)
 }
 
 // BYTEA convert_to(TEXT string, NAME dest_encoding_name); src = DB encoding.
-pub fn fc_pg_convert_to(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let dest_name = name_str(unsafe { fcinfo.arg_name(1) });
-    let dest_encoding = crate::pg_char_to_encoding(dest_name);
+pub fn fc_pg_convert_to(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let mut memo = memo(flinfo);
+    let dest_name = unsafe { fcinfo.arg_name(1) };
+    let dest_encoding = name_encoding(&mut memo, 1, dest_name);
     if dest_encoding < 0 {
-        return Err(invalid_encoding_name("destination", dest_name));
+        return Err(invalid_encoding_name("destination", name_str(dest_name)));
     }
-    convert_common(fcinfo, 0, crate::GetDatabaseEncoding(), dest_encoding)
+    convert_common(fcinfo, 0, crate::GetDatabaseEncoding(), dest_encoding, memo)
 }
 
 // INT4 length(BYTEA string, NAME src_encoding_name) — C length_in_encoding

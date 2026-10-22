@@ -1,0 +1,9 @@
+path	crates/gravity/hosts/src/ops/agg/trans/hosted_bind.rs
+growth	std::vec::Vec::push	4
+method	std::boxed::Box::new	3
+method	std::ffi::CString::new	1
+method	std::iter::Iterator::collect	2
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	3
+type	std::ffi::CString	1
+type	std::vec::Vec	2

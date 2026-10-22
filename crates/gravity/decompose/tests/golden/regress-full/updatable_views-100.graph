@@ -1,0 +1,20 @@
+-- regress-full-updatable_views-100
+-- EXPLAIN (costs off) INSERT INTO rw_view1 VALUES (2, 'New row 2');
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index-only rel=24594 rti=4 am=heap index=24600
+    key att=1 op=96 value=c23:2
+    recheck (op96(index.1, c23:2))
+    lanes
+  project ()
+  outs
+p1 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=c23:2, 2=c25:'New row 2', 3=c16:null)
+  write INSERT rel=24594 rti=2 natts=3 indexes=(24600[1]up) epq=$exec1
+  outs 1=w4:val 2=vl:stmt/imm 3=w1:val
+init_plan id=1 pipeline=p0 link=Exists param=$exec0 raise-free
+mapped: Result ModifyTable IndexOnlyScan SubPlan

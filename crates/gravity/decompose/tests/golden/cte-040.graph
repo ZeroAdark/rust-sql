@@ -1,0 +1,29 @@
+-- cte-040
+-- DELETE FROM u WHERE x = (SELECT min(a) FROM t) + 100000;
+graph pipelines=3 breakers=0 init_plans=2 root=p2
+p0 node=3 serial site=0 reason=IndexSource end=sink
+  nodes n3@0 n2@1
+  source index-only rel=16395 rti=2 am=heap index=16402
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+p1 node=4 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n4@0
+  source const
+  project (1=$exec0)
+  outs 1=w4:val
+p2 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16405 rti=1 am=heap index=16411
+    key att=1 op=96 value=op551($exec1, c23:100000)
+    recheck (op96(v1.1, op551($exec1, c23:100000)))
+    lanes RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write DELETE rel=16405 rti=1 natts=3 indexes=() epq=$exec2
+  outs 1=fx6:row
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+init_plan id=2 pipeline=p1 link=Expr param=$exec1 raise-free
+mapped: Result ModifyTable IndexScan IndexOnlyScan Limit SubPlan

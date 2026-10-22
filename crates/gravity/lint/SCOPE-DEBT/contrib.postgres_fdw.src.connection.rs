@@ -1,0 +1,9 @@
+contrib/postgres_fdw/src/connection.rs	CONNECTIONS	isojoin	owner, reset, carry
+contrib/postgres_fdw/src/connection.rs	CALLBACKS_REGISTERED	isojoin	owner, reset, carry
+contrib/postgres_fdw/src/connection.rs	EXIT_CLOSE_ARMED	isojoin	owner, reset, carry
+contrib/postgres_fdw/src/connection.rs	XACT_GOT_CONNECTION	isojoin	owner, reset, carry
+contrib/postgres_fdw/src/connection.rs	CURSOR_NUMBER	isojoin	owner, reset, carry
+contrib/postgres_fdw/src/connection.rs	PREP_STMT_NUMBER	isojoin	owner, reset, carry
+contrib/postgres_fdw/src/connection.rs	WE_CONNECT	isojoin	owner, reset, carry
+contrib/postgres_fdw/src/connection.rs	WE_GET_RESULT	isojoin	owner, reset, carry
+contrib/postgres_fdw/src/connection.rs	WE_CLEANUP_RESULT	isojoin	owner, reset, carry

@@ -1,0 +1,11 @@
+-- regress-full-opr_sanity-001
+-- SELECT p1.oid, p1.proname FROM pg_proc as p1 WHERE p1.prolang = 0 OR p1.prorettype = 0 OR p1.pronargs < 0 OR p1.pronargdefaults < 0 OR p1.pronargdefaults > p1.pronargs OR array_lower(p1.proargtypes, 1) != 0 OR array_upper(p1.proargtypes, 1) != p1.pronargs-1 OR 0::oid = ANY (p1.proargtypes) OR procost <= 0 OR CASE WHEN proretset THEN prorows <= 0 ELSE prorows != 0 END OR prokind NOT IN ('f', 'a', 'w', 'p') OR provolatile NOT IN ('i', 's', 'v') OR proparallel NOT IN ('s', 'r', 'u');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=3413 end=sink
+  nodes n0@0
+  source range rel=1255 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(10):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byref8:vl:win/page Offset:byval2:w2:val
+  filter or(op607(v1.5, c26:0), op607(v1.19, c26:0), op95(v1.17, c21:0), op95(v1.18, c21:0), op520(v1.18, v1.17), op518(fn2091(v1.20, c23:1), c23:0), op518(fn2092(v1.20, c23:1), op556(v1.17, c23:1)), any607(c26:0, T_ArrayCoerceExpr), op1124(v1.6, c701:0), case(when v1.14 then op1124(v1.7, c701:0)) else op1121(v1.7, c701:0), all630(v1.10, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00fawp'), all630(v1.15, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00isv'), all630(v1.16, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00sru'))
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

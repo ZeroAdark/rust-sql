@@ -1,0 +1,30 @@
+-- regress-full-numeric-017
+-- WITH v(x) AS (VALUES('0'::numeric),('1'),('-1'),('4.2'),('-7.777'),('1e340'),('-1e340'), ('inf'),('-inf'),('nan'), ('inf'),('-inf'),('nan')) SELECT substring(x::text, 1, 32) FROM v ORDER BY x;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Sort)
+  nodes n1@0 n0@1^
+  source values rti=2 rows=13
+    row (c1700:'\x00\x80')
+    row (c1700:'\x00\x80\x01\x00')
+    row (c1700:'\x00\xa0\x01\x00')
+    row (c1700:'\x80\x80\x04\x00\xd0\x07')
+    row (c1700:'\x80\xa1\x07\x00Z\x1e')
+    row (c1700:'\x00\x00U\x00\x01\x00')
+    row (c1700:'\x00@U\x00\x01\x00')
+    row (c1700:'\x00\xd0')
+    row (c1700:'\x00\xf0')
+    row (c1700:'\x00\xc0')
+    row (c1700:'\x00\xd0')
+    row (c1700:'\x00\xf0')
+    row (c1700:'\x00\xc0')
+  project (1=fn936(io25(v2.1), c23:1, c23:32), 2j=v2.1)
+  sort keys=2+:Fp128/NumNormalized form=runs
+  outs 1=vl:call936 2=vl:row
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2j=outer.2)
+  outs 1=vl:call936 2=vl:row
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B order=2+
+mapped: ValuesScan Sort

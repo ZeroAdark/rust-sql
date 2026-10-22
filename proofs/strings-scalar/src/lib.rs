@@ -280,7 +280,7 @@ mod proofs {
         /// row 1244: decoded-content parity at len<=4 (result-image claim
         /// kept narrow: derived-offset stores — expect the ladder).
         /// unwind 10: sym_cstring::<9>'s fill loop runs CAP-1 = 8
-        /// iterations (CI cluster 31ad423d unwinding assertion at unwind(7)).
+        /// iterations (fleet 31ad423d unwinding assertion at unwind(7)).
         #[kani::unwind(10)]
         fn eq_byteain_escape_content_len4() { body_byteain(true, 5) }
     }
@@ -562,7 +562,7 @@ mod proofs {
         /// toast_datum_size != 4 is a counterexample. DEFAULT solver.
         /// CONCRETE image (2026-07-29): the original sym_toast_image()
         /// plane walled >350s before emitting a counterexample on the
-        /// CI cluster AND locally (FAILED-without-playback = wall, encnames
+        /// fleet AND locally (FAILED-without-playback = wall, encnames
         /// law) — one literal 3-byte short varlena (C sees 3, Rust fixed
         /// typlen sees 4) witnesses the seam in milliseconds; symbolic
         /// width buys nothing for a non-vacuity control.

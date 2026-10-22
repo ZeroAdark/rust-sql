@@ -1,0 +1,34 @@
+-- regress-full-subselect-082
+-- select val.x from generate_series(1,10) as s(i), lateral ( values ((select s.i + 1)), (s.i + 101) ) as val(x) where s.i < 10 and (select val.x) < 110;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@3
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10)]
+  filter op97(v1.1, c23:10)
+  project (1=v1.1)
+  nest inner=n2 JOIN_INNER params=($exec2=outer.1)
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source values rti=3 rows=2
+    row (subplan2($exec2))
+    row (op551($exec2, c23:101))
+  subplan 2 nested Expr params=($exec1=$exec2) site=values
+  inner node=4 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n4@0
+  source const
+  project (1=op551($exec1, c23:1))
+  subplan 1 nested Expr params=($exec0=v3.1) raise-free
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0
+  source const
+  project (1=$exec0)
+  filter op97(subplan1(v3.1), c23:110)
+  project (1=v3.1)
+  project (1=inner.1)
+  outs 1=w4:val
+  outs 1=w4:val
+param $exec2 owner=n0 type=23 rep=w4:val
+param $exec1 owner=subplan2 type=23 rep=w4:val
+param $exec0 owner=subplan1 type=23 rep=w4:val
+mapped: Result FunctionScan ValuesScan NestLoop NestLoopParam SubPlan

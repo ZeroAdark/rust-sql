@@ -59,6 +59,8 @@ mod repr {
         a.word_slice_mut()
     }
 
+    #[inline]
+
     pub fn relids_singleton<'mcx>(mcx: Mcx<'mcx>, x: u32) -> Relids<'mcx> {
         if x < 64 {
             return Relids::Small(1u64 << x);
@@ -67,6 +69,8 @@ mod repr {
         words[x as usize / 64] |= 1u64 << (x % 64);
         Relids::Big(words)
     }
+
+    #[inline]
 
     pub fn relids_union<'mcx>(mcx: Mcx<'mcx>, a: &Relids<'mcx>, b: &Relids<'mcx>) -> Relids<'mcx> {
         let (aw, bw) = (a.word_slice(), b.word_slice());
@@ -84,6 +88,8 @@ mod repr {
         }
         Relids::Big(words)
     }
+
+    #[inline]
 
     pub fn relids_intersect<'mcx>(
         mcx: Mcx<'mcx>,
@@ -110,6 +116,8 @@ mod repr {
         Relids::Big(words)
     }
 
+    #[inline]
+
     pub fn relids_add_member<'mcx>(mcx: Mcx<'mcx>, a: &Relids<'mcx>, x: u32) -> Relids<'mcx> {
         match a {
             Relids::Empty => relids_singleton(mcx, x),
@@ -121,6 +129,7 @@ mod repr {
     }
 
     // bms_add_member's mutate-in-place shape; allocates only to widen.
+    #[inline]
     pub fn relids_add_member_mut<'mcx>(mcx: Mcx<'mcx>, a: &mut Relids<'mcx>, x: u32) {
         let wordnum = x as usize / 64;
         match a {
@@ -129,6 +138,8 @@ mod repr {
             _ => *a = relids_union(mcx, a, &relids_singleton(mcx, x)),
         }
     }
+
+    #[inline]
 
     pub fn relids_del_member<'mcx>(mcx: Mcx<'mcx>, a: &Relids<'mcx>, x: i32) -> Relids<'mcx> {
         let mut out = relids_copy(mcx, a);
@@ -139,6 +150,8 @@ mod repr {
         }
         out
     }
+
+    #[inline]
 
     pub fn relids_difference<'mcx>(
         mcx: Mcx<'mcx>,
@@ -159,6 +172,8 @@ mod repr {
         }
         Relids::Big(words)
     }
+
+    #[inline]
 
     pub fn relids_copy<'mcx>(mcx: Mcx<'mcx>, a: &Relids<'mcx>) -> Relids<'mcx> {
         match a {
@@ -228,6 +243,8 @@ mod repr {
         a.as_mut().map_or(&mut [] as &mut [u64], |b| b.word_slice_mut())
     }
 
+    #[inline]
+
     pub fn relids_singleton<'mcx>(mcx: Mcx<'mcx>, x: u32) -> Relids<'mcx> {
         if x < 64 {
             return Some(box_new_in(mcx, Bitmapset::Small(1u64 << x)));
@@ -236,6 +253,8 @@ mod repr {
         words[x as usize / 64] |= 1u64 << (x % 64);
         Some(box_new_in(mcx, Bitmapset::Big(words)))
     }
+
+    #[inline]
 
     pub fn relids_union<'mcx>(mcx: Mcx<'mcx>, a: &Relids<'mcx>, b: &Relids<'mcx>) -> Relids<'mcx> {
         let aw = a.as_ref().map_or(&[] as &[u64], |x| x.word_slice());
@@ -254,6 +273,8 @@ mod repr {
         }
         Some(box_new_in(mcx, Bitmapset::Big(words)))
     }
+
+    #[inline]
 
     pub fn relids_intersect<'mcx>(
         mcx: Mcx<'mcx>,
@@ -276,6 +297,8 @@ mod repr {
         Some(box_new_in(mcx, Bitmapset::Big(words)))
     }
 
+    #[inline]
+
     pub fn relids_add_member<'mcx>(mcx: Mcx<'mcx>, a: &Relids<'mcx>, x: u32) -> Relids<'mcx> {
         if a.is_none() {
             return relids_singleton(mcx, x);
@@ -284,6 +307,7 @@ mod repr {
     }
 
     // bms_add_member's mutate-in-place shape; allocates only to widen.
+    #[inline]
     pub fn relids_add_member_mut<'mcx>(mcx: Mcx<'mcx>, a: &mut Relids<'mcx>, x: u32) {
         let wordnum = x as usize / 64;
         match a {
@@ -293,6 +317,8 @@ mod repr {
             _ => *a = relids_union(mcx, a, &relids_singleton(mcx, x)),
         }
     }
+
+    #[inline]
 
     pub fn relids_del_member<'mcx>(mcx: Mcx<'mcx>, a: &Relids<'mcx>, x: i32) -> Relids<'mcx> {
         let mut out = relids_copy(mcx, a);
@@ -305,6 +331,8 @@ mod repr {
         }
         out
     }
+
+    #[inline]
 
     pub fn relids_difference<'mcx>(
         mcx: Mcx<'mcx>,
@@ -324,6 +352,8 @@ mod repr {
         }
         Some(box_new_in(mcx, Bitmapset::Big(words)))
     }
+
+    #[inline]
 
     pub fn relids_copy<'mcx>(mcx: Mcx<'mcx>, a: &Relids<'mcx>) -> Relids<'mcx> {
         a.as_ref().map(|b| match &**b {
@@ -362,9 +392,12 @@ mod repr {
 
 /// Move the value out, leaving the unset value behind (the boxed arm's
 /// `Option::take`); the read-modify-write idiom for in-place field updates.
+#[inline]
 pub fn relids_take<'mcx>(a: &mut Relids<'mcx>) -> Relids<'mcx> {
     core::mem::replace(a, relids_empty())
 }
+
+#[inline]
 
 pub fn relids_overlap(a: &Relids<'_>, b: &Relids<'_>) -> bool {
     relids_word_slice(a)
@@ -373,16 +406,29 @@ pub fn relids_overlap(a: &Relids<'_>, b: &Relids<'_>) -> bool {
         .any(|(x, y)| x & y != 0)
 }
 
-pub fn relids_equal(a: &Relids<'_>, b: &Relids<'_>) -> bool {
-    if relids_is_unset(a) || relids_is_unset(b) {
-        return relids_is_unset(a) && relids_is_unset(b);
-    }
-    relids_word_slice(a) == relids_word_slice(b)
+/// The set's words without trailing zero words: C keeps every bitmapset in
+/// this form (an empty set is NULL), and bms_equal / bitmap_hash rely on it.
+#[inline]
+pub fn relids_canonical_words<'a>(a: &'a Relids<'_>) -> &'a [u64] {
+    let w = relids_word_slice(a);
+    let n = w.iter().rposition(|&x| x != 0).map_or(0, |i| i + 1);
+    &w[..n]
 }
+
+// bms_equal: membership equality, whatever word count or unset/all-zero
+// form either side carries.
+#[inline]
+pub fn relids_equal(a: &Relids<'_>, b: &Relids<'_>) -> bool {
+    relids_canonical_words(a) == relids_canonical_words(b)
+}
+
+#[inline]
 
 pub fn relids_is_empty(a: &Relids<'_>) -> bool {
     relids_word_slice(a).iter().all(|w| *w == 0)
 }
+
+#[inline]
 
 pub fn relids_is_member(x: i32, a: &Relids<'_>) -> bool {
     if x < 0 {
@@ -393,9 +439,13 @@ pub fn relids_is_member(x: i32, a: &Relids<'_>) -> bool {
         .is_some_and(|w| w & (1u64 << (x % 64)) != 0)
 }
 
+#[inline]
+
 pub fn relids_num_members(a: &Relids<'_>) -> i32 {
     relids_word_slice(a).iter().map(|w| w.count_ones() as i32).sum()
 }
+
+#[inline]
 
 pub fn relids_is_subset(a: &Relids<'_>, b: &Relids<'_>) -> bool {
     let bw = relids_word_slice(b);
@@ -469,6 +519,7 @@ pub enum SubsetCmp {
 }
 
 // bms_subset_compare (bitmapset.c).
+#[inline]
 pub fn relids_subset_compare(a: &Relids<'_>, b: &Relids<'_>) -> SubsetCmp {
     match (relids_is_subset(a, b), relids_is_subset(b, a)) {
         (true, true) => SubsetCmp::Equal,
@@ -551,7 +602,9 @@ pub fn fetch_upper_rel_with_relids<'mcx>(
     id
 }
 
-pub fn pgvec_clone_shallow<'mcx, T: Copy>(mcx: Mcx<'mcx>, v: &PgVec<'mcx, T>) -> PgVec<'mcx, T> {
+#[inline]
+
+pub fn pgvec_clone_shallow<'mcx, T: Copy>(mcx: Mcx<'mcx>, v: &[T]) -> PgVec<'mcx, T> {
     let mut out = PgVec::new_in(mcx);
     out.reserve(v.len());
     out.extend(v.iter().copied());

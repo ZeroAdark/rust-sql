@@ -1,0 +1,11 @@
+# ORDER BY u.c never resolves through the header name c of t.c
+sql: SELECT t.c FROM t JOIN u ON t.id = u.id ORDER BY u.c;
+cols: c
+class: exact
+verdict: mismatch-order
+[pg]
+1
+2
+[got]
+2
+1

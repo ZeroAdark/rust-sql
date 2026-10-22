@@ -1,0 +1,20 @@
+-- regress-full-opr_sanity-018
+-- SELECT oid::regprocedure, provariadic::regtype, proargtypes::regtype[] FROM pg_proc WHERE provariadic != 0 AND case proargtypes[array_length(proargtypes, 1)-1] WHEN '"any"'::regtype THEN '"any"'::regtype WHEN 'anyarray'::regtype THEN 'anyelement'::regtype WHEN 'anycompatiblearray'::regtype THEN 'anycompatible'::regtype ELSE (SELECT t.oid FROM pg_type t WHERE t.typarray = proargtypes[array_length(proargtypes, 1)-1]) END != provariadic;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=37 end=sink
+  nodes n0@0
+  source range rel=1255 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(8):byval8:w8:val Attr(20):byref8:vl:win/page Offset:byval2:w2:val
+  filter op608(v1.8, c26:0)
+  subplan 1 nested Expr params=($exec0=v1.20) conditional
+  inner node=1 eligible rows=2 end=sink
+  nodes n1@0
+  source range rel=1247 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(15):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v2.15, T_SubscriptingRef)
+  project (1=v2.1)
+  filter op608(case[T_SubscriptingRef](when op607(T_CaseTestExpr, c26:2276) then c26:2276, when op607(T_CaseTestExpr, c26:2277) then c26:2283, when op607(T_CaseTestExpr, c26:5078) then c26:5077) else subplan1(v1.20), v1.8)
+  project (1=relabel2202(v1.1), 2=relabel2206(v1.8), 3=T_ArrayCoerceExpr)
+  outs 1=w8:val 2=w8:val 3=?
+param $exec0 owner=subplan1 type=30 rep=vl:win/page
+mapped: SeqScan SubPlan

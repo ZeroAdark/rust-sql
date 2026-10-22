@@ -1,4 +1,4 @@
-use std::sync::Once;
+use std::sync::{Mutex, MutexGuard, Once};
 
 use manifest::{
     AddFileToBackupManifest, AddWALInfoToBackupManifest, BackupManifestInfo,
@@ -21,6 +21,62 @@ fn install_seams() {
         manifest::seams::get_system_identifier::set(|| TEST_SYSID);
         pgtz_seams::pg_open_tzfile::set(|_name, _canon, _buf| Ok(None));
     });
+}
+
+static CWD: Mutex<()> = Mutex::new(());
+
+// The emitter accumulates the manifest in a BufFile temp file under the
+// datadir's base/pgsql_tmp: stand up fd's temp-file access (the sort_storage
+// test recipe) and hold the cwd lock while the emitter runs.
+fn emitter_scaffold(tag: &str) -> MutexGuard<'static, ()> {
+    static ONCE: Once = Once::new();
+    install_seams();
+    ONCE.call_once(|| {
+        guc_tables::init_seams();
+        elog::init_seams();
+        fd::init_seams();
+        xact_seams::get_current_sub_transaction_id::set(|| 1);
+        aio_seams::pgaio_closing_fd::set(|_| {});
+        aio_seams::pgaio_io_start_readv::set(|_, _, _| Ok(()));
+        waitevent_seams::pgstat_report_wait_start::set(|_| {});
+        waitevent_seams::pgstat_report_wait_end::set(|| {});
+        pgstat_seams::pgstat_report_tempfile::set(|_| {});
+        ipc_seams::before_shmem_exit::set(|_, _| Ok(()));
+        ipc_seams::on_shmem_exit::set(|_cb, _arg| {});
+        resowner::init_seams();
+    });
+    let guard = CWD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = format!(
+        "{}/pgrust-parse-manifest-{}-{tag}",
+        std::env::temp_dir().display(),
+        std::process::id()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(format!("{dir}/base/pgsql_tmp")).unwrap();
+    std::env::set_current_dir(&dir).unwrap();
+    fd::InitFileAccess();
+    let _ = fd::InitTemporaryFileAccess();
+    if resowner_seams::current_resource_owner::call().is_null() {
+        let owner = resowner::ResourceOwnerCreate(
+            types_resowner::ResourceOwner::NULL,
+            "parse-manifest-test",
+        )
+        .unwrap();
+        resowner_seams::set_current_resource_owner::call(owner);
+    }
+    guard
+}
+
+fn send_all(m: &mut BackupManifestInfo<'_>) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 64];
+    SendBackupManifest(m, chunk.len(), |read_exact, n| {
+        read_exact(&mut chunk[..n])?;
+        out.extend_from_slice(&chunk[..n]);
+        Ok(())
+    })
+    .unwrap();
+    out
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -104,7 +160,7 @@ fn checksum_of(ty: PgChecksumType, data: &[u8]) -> Vec<u8> {
 
 #[test]
 fn roundtrips_emitter_manifest() {
-    install_seams();
+    let _cwd = emitter_scaffold("roundtrip");
     let ctx = MemoryContext::new("emitter-roundtrip");
     let mcx = ctx.mcx();
 
@@ -126,7 +182,7 @@ fn roundtrips_emitter_manifest() {
             .unwrap();
     }
     AddWALInfoToBackupManifest(mcx, &mut m, 0x016B3D50, 1, 0x016C0000, 1).unwrap();
-    let bytes = SendBackupManifest(&mut m).unwrap().to_vec();
+    let bytes = send_all(&mut m);
 
     let parsed = parse(&bytes).unwrap();
     assert_eq!(parsed.version, 2);
@@ -152,7 +208,7 @@ fn roundtrips_emitter_manifest() {
 
 #[test]
 fn roundtrips_encoded_path() {
-    install_seams();
+    let _cwd = emitter_scaffold("encoded");
     let ctx = MemoryContext::new("emitter-roundtrip-encoded");
     let mcx = ctx.mcx();
 
@@ -167,7 +223,7 @@ fn roundtrips_encoded_path() {
     let mut cc = PgChecksumContext::init(PgChecksumType::None);
     AddFileToBackupManifest(&mut m, 0, b"PG_VERSION", 3, 1_700_000_000, &mut cc).unwrap();
     AddWALInfoToBackupManifest(mcx, &mut m, 0x0, 1, 0x100, 1).unwrap();
-    let bytes = SendBackupManifest(&mut m).unwrap().to_vec();
+    let bytes = send_all(&mut m);
     assert!(!bytes.windows(7).any(|w| w == b"\"Path\":"), "FORCE_ENCODE emits Encoded-Path only");
 
     let parsed = parse(&bytes).unwrap();

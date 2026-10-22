@@ -14,6 +14,7 @@ const F_RECORD_OUT: Oid = 1004;
 const F_RECORD_ONE_OUT: Oid = 1005;
 const P_ONE_OUT: Oid = 1006;
 const F_POLY: Oid = 1007;
+const F_POLY_OUT: Oid = 1008;
 
 fn proc_shape(prorettype: Oid, prokind: i8, pronargs: i16) -> PgProcShape {
     PgProcShape {
@@ -58,6 +59,7 @@ fn install_seams() {
                 F_RECORD_ONE_OUT => Some(proc_shape(RECORDOID, PROKIND_FUNCTION, 1)),
                 P_ONE_OUT => Some(proc_shape(RECORDOID, PROKIND_PROCEDURE, 1)),
                 F_POLY => Some(proc_shape(ANYELEMENTOID, PROKIND_FUNCTION, 1)),
+                F_POLY_OUT => Some(proc_shape(RECORDOID, PROKIND_FUNCTION, 1)),
                 _ => None,
             })
         });
@@ -73,7 +75,7 @@ fn install_seams() {
             let mut args: PgVec<'_, Oid> = vec_with_capacity_in(mcx, 2)?;
             match funcid {
                 F_SCALAR | F_RECORD_OUT | F_RECORD_ONE_OUT | P_ONE_OUT => args.push(INT4OID),
-                F_POLY => args.push(ANYELEMENTOID),
+                F_POLY | F_POLY_OUT => args.push(ANYELEMENTOID),
                 _ => {}
             }
             Ok(Some((InvalidOid, args)))
@@ -115,6 +117,11 @@ fn install_seams() {
                     &[PROARGMODE_IN, PROARGMODE_OUT],
                     None,
                 )?),
+                F_POLY_OUT => Some(arrays(
+                    &[ANYELEMENTOID, ANYELEMENTOID, INT4OID],
+                    &[PROARGMODE_IN, PROARGMODE_OUT, PROARGMODE_OUT],
+                    Some(&["s", "first", "n"]),
+                )?),
                 F_RECORD_BARE | F_SCALAR | F_COMPOSITE | F_POLY => {
                     Some(syscache_seams::PgProcResultArraysShape {
                         proallargtypes: None,
@@ -149,6 +156,8 @@ fn install_seams() {
                     typstorage: TYPSTORAGE_EXTENDED,
                     typcollation: 100,
                 }),
+                // pg_type.dat anyelement: an OUT column's declared type before
+                // resolve_polymorphic_tupdesc replaces it
                 ANYELEMENTOID => Some(PgTypeShape {
                     typlen: 4,
                     typbyval: true,
@@ -204,6 +213,25 @@ fn dummy(
 
 fn flinfo_for(oid: Oid) -> FmgrInfo {
     FmgrInfo::new(dummy, oid, 1, true, false)
+}
+
+#[test]
+fn record_param_expansion_error_location() {
+    install_seams();
+    let ctx = MemoryContext::new("t");
+    let expr = Node::mk(
+        ctx.mcx(),
+        nodes::primnodes::Param { paramtype: RECORDOID, paramtypmod: -1, ..Default::default() },
+    )
+    .unwrap();
+    let err = get_expr_result_tupdesc(ctx.mcx(), Some(expr), false).unwrap_err();
+    assert_eq!(err.sqlstate, ERRCODE_WRONG_OBJECT_TYPE);
+    assert_eq!(err.message, "record type has not been registered");
+    let location = err.location().unwrap();
+    assert_eq!(location.filename.as_deref(), Some("funcapi.c"));
+    assert_eq!(location.lineno, 574);
+    assert_eq!(location.funcname.as_deref(), Some("get_expr_result_tupdesc"));
+    assert!(get_expr_result_tupdesc(ctx.mcx(), Some(expr), true).unwrap().is_none());
 }
 
 #[test]
@@ -529,7 +557,7 @@ fn agg_carrier_reports_variadic() {
     for variadic in [false, true] {
         let carrier = ::mcx::alloc_leak_in(
             mcx,
-            types_core::fmgr::AggFnArgTypes { rettype: INT4OID, argtypes: &CARRIER_ARGS, variadic },
+            types_core::fmgr::AggFnArgTypes { rettype: INT4OID, argtypes: &CARRIER_ARGS, variadic, inputcollid: InvalidOid, stable: 0 },
         )
         .unwrap();
         // SAFETY: carrier is arena-backed and outlives the flinfo below.
@@ -548,7 +576,7 @@ fn polymorphic_rettype_resolves_via_agg_carrier() {
     static CARRIER_ARGS: [Oid; 1] = [INT4OID];
     let carrier = ::mcx::alloc_leak_in(
         mcx,
-        types_core::fmgr::AggFnArgTypes { rettype: INT4OID, argtypes: &CARRIER_ARGS, variadic: false },
+        types_core::fmgr::AggFnArgTypes { rettype: INT4OID, argtypes: &CARRIER_ARGS, variadic: false, stable: 0, inputcollid: InvalidOid },
     )
     .unwrap();
     // SAFETY: carrier is arena-backed and outlives the flinfo below.
@@ -735,6 +763,70 @@ fn call_expr_argtype_covers_all_six_call_families() {
     assert_eq!(get_call_expr_argtype(int_const(1), 0), InvalidOid);
 }
 
+#[test]
+fn agg_carrier_answers_variadic_and_arg_stable() {
+    install_seams();
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    static CARRIER_ARGS: [Oid; 3] = [TEXTOID, INT4OID, TEXTOID];
+    let with = |variadic: bool, stable: u128| -> FmgrInfo {
+        let mut flinfo = flinfo_for(F_SCALAR);
+        let carrier = ::mcx::alloc_leak_in(
+            mcx,
+            types_core::fmgr::AggFnArgTypes { rettype: TEXTOID, argtypes: &CARRIER_ARGS, variadic, stable, inputcollid: InvalidOid },
+        )
+        .unwrap();
+        // SAFETY: carrier is arena-backed and outlives the flinfo.
+        flinfo.fn_expr = Some(unsafe { types_core::fmgr::FnExprErased::from_node_ref(carrier) });
+        flinfo
+    };
+    let v = with(true, 0);
+    assert!(get_fn_expr_variadic(Some(&v)));
+    assert!(!get_fn_expr_arg_stable(Some(&v), 0));
+    let s = with(false, 1 << 2);
+    assert!(!get_fn_expr_variadic(Some(&s)));
+    assert!(!get_fn_expr_arg_stable(Some(&s), 0));
+    assert!(!get_fn_expr_arg_stable(Some(&s), 1));
+    assert!(get_fn_expr_arg_stable(Some(&s), 2));
+    assert!(!get_fn_expr_arg_stable(Some(&s), 3));
+    assert!(!get_fn_expr_arg_stable(Some(&s), 128));
+    let none = with(false, 0);
+    assert!(!get_fn_expr_variadic(Some(&none)));
+    assert!(!get_fn_expr_arg_stable(Some(&none), 0));
+}
+
+// An aggregate final function's polymorphic OUT columns resolve against the
+// carrier standing in for build_aggregate_finalfn_expr's FuncExpr
+// (funcapi.c internal_get_result_type -> resolve_polymorphic_tupdesc).
+#[test]
+fn polymorphic_out_columns_resolve_via_agg_carrier() {
+    install_seams();
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut flinfo = flinfo_for(F_POLY_OUT);
+    static CARRIER_ARGS: [Oid; 1] = [INT4OID];
+    let carrier = ::mcx::alloc_leak_in(
+        mcx,
+        types_core::fmgr::AggFnArgTypes {
+            rettype: RECORDOID,
+            argtypes: &CARRIER_ARGS,
+            variadic: false,
+            stable: 0,
+            inputcollid: InvalidOid,
+        },
+    )
+    .unwrap();
+    // SAFETY: carrier is arena-backed and outlives the flinfo below.
+    flinfo.fn_expr = Some(unsafe { types_core::fmgr::FnExprErased::from_node_ref(carrier) });
+    let r = get_call_result_type(mcx, &flinfo, None).unwrap();
+    assert_eq!(r.class, TypeFuncClass::Composite);
+    let desc = r.result_tuple_desc.unwrap();
+    assert_eq!(desc.natts, 2);
+    assert_eq!(desc.attr(0).attname.name_str(), b"first");
+    assert_eq!(desc.attr(0).atttypid, INT4OID);
+    assert_eq!(desc.attr(1).atttypid, INT4OID);
+}
+
 // resolve_polymorphic_tupdesc takes the call's input collation through
 // exprInputCollation (nodeFuncs.c:1088), which covers every call family: a
 // WindowFunc carrier's nondefault inputcollid reaches the polymorphic output
@@ -767,4 +859,36 @@ fn polymorphic_tupdesc_takes_window_func_input_collation() {
         assert_eq!(desc.attr(0).atttypid, TEXTOID);
         assert_eq!(desc.attr(0).attcollation, want, "inputcollid {inputcollid}");
     }
+}
+
+// get_call_expr_arg_stable (fmgr.c:1994) covers the same six call families
+// as get_call_expr_argtype: a ScalarArrayOpExpr's Const array is stable.
+#[test]
+fn arg_stable_covers_every_call_family() {
+    let ctx = MemoryContext::new("funcapi-argstable");
+    let mcx = ctx.mcx();
+    let text_const = || Node::mk_const(mcx, TEXTOID, -1, 100, -1, Datum::from_i32(0), false, false).unwrap();
+    let saop = Node::mk(
+        mcx,
+        ::nodes::primnodes::ScalarArrayOpExpr {
+            opno: 1,
+            opfuncid: 1,
+            hashfuncid: InvalidOid,
+            negfuncid: InvalidOid,
+            useOr: true,
+            inputcollid: 100,
+            args: ::nodes::list::NodeList::make2(mcx, text_const(), text_const()).unwrap(),
+            location: -1,
+        },
+    )
+    .unwrap();
+    let stored = ::mcx::alloc_leak_in(mcx, saop).unwrap();
+    // SAFETY: the arena outlives every use of the flinfo in this test.
+    let stored: &Node<'static> = unsafe { core::mem::transmute(stored) };
+    let mut flinfo = flinfo_for(F_SCALAR);
+    // SAFETY: stored is arena-backed and outlives the flinfo below.
+    flinfo.fn_expr = Some(unsafe { types_core::fmgr::FnExprErased::from_node_ref(stored) });
+    assert!(get_fn_expr_arg_stable(Some(&flinfo), 0));
+    assert!(get_fn_expr_arg_stable(Some(&flinfo), 1));
+    assert!(!get_fn_expr_arg_stable(Some(&flinfo), 2));
 }

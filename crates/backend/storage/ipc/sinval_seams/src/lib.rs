@@ -22,3 +22,7 @@ seam_core::seam!(
     // implementation must be allocation-free.
     pub fn handle_catchup_interrupt()
 );
+
+seam_core::seam!(
+    pub fn shared_invalid_message_counter() -> u64
+);

@@ -1,0 +1,11 @@
+-- regress-full-domain-053
+-- update op set f1[2] = 0;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=40603 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=T_CoerceToDomain, 2j=v1.-1)
+  write UPDATE rel=40603 rti=1 natts=1 indexes=() set=(1)
+  outs 1=? 2=fx6:row
+mapped: ModifyTable SeqScan

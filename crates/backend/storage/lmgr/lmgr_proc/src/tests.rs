@@ -1,4 +1,5 @@
 use super::*;
+use types_storage::storage::NUM_AUXILIARY_PROCS;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Condvar, Mutex, Once, OnceLock};
@@ -38,7 +39,7 @@ impl WaitOutcome for PgResult<()> {
     }
 }
 
-// regression injection flags: arm to make the corresponding seam panic
+// GL-CONNSLOT-1 injection flags: arm to make the corresponding seam panic
 // ONCE (swap-consumed) inside a PGPROC-release path.
 static SYNCREP_PANIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static LOCKRELEASE_PANIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -205,6 +206,50 @@ fn init_proc_global_shapes() {
     SetStartupBufferPinWaitBufId(7);
     assert_eq!(GetStartupBufferPinWaitBufId(), 7);
     SetStartupBufferPinWaitBufId(-1);
+}
+
+// fp-lmgr-proc#1: a PGPROC handed to a new backend carries zeroed fast-path
+// use counts (C's process-local static), not the previous owner's.
+#[test]
+fn init_process_zeroes_fast_path_use_counts() {
+    setup();
+    let _guard = freelist_guard();
+    thread_globals(131);
+
+    InitProcess(BackendType::Backend).unwrap();
+    let procno = MyProc().unwrap();
+    let proc = GetPGProcByNumber(procno);
+    let groups = ProcGlobal().fpLockGroupsPerBackend as usize;
+    unsafe { proc.fp_use_counts(groups)[0].set(FP_LOCK_SLOTS_PER_GROUP as i32) };
+    ProcKill(0, 0);
+
+    // Cycle the freelist until the poisoned slot comes back to a new backend.
+    for _ in 0..ProcGlobal().allProcCount {
+        InitProcess(BackendType::Backend).unwrap();
+        if MyProc().unwrap() == procno {
+            break;
+        }
+        ProcKill(0, 0);
+    }
+    assert_eq!(MyProc().unwrap(), procno);
+    assert_eq!(unsafe { proc.fp_use_counts(groups)[0].get() }, 0);
+    ProcKill(0, 0);
+}
+
+/// D4749: the copy of the last interrupt-raised error (init_small LAST_INTERRUPT, a FATAL's for a terminated backend) goes
+/// in ProcKill, before the unbind, while the thread still charges its session's account. Kept past it, nothing freed it
+/// at the thread's exit (a const-init ManuallyDrop, no TLS destructor) and its bytes stayed on UNBOUND.
+#[test]
+fn prockill_forgets_the_last_interrupt_raised() {
+    setup();
+    let _guard = freelist_guard();
+    thread_globals(141);
+    InitProcess(BackendType::Backend).unwrap();
+    let fatal = types_error::PgError::new(types_error::FATAL, "terminating connection due to administrator command")
+        .with_sqlstate(types_error::ERRCODE_ADMIN_SHUTDOWN);
+    g::NoteInterruptRaised(&fatal);
+    ProcKill(0, 0);
+    assert!(g::TakeInterruptRaised().is_none(), "the error's copy outlived the backend's ProcKill");
 }
 
 #[test]
@@ -465,7 +510,7 @@ fn guc_storage_and_installed_seams() {
 
 #[test]
 fn prockill_releases_slot_despite_cleanup_panic() {
-    // regression regression (round-10 Antithesis DL-connslot-exhaustion):
+    // GL-CONNSLOT-1 regression (round-10 Antithesis DL-connslot-exhaustion):
     // ProcKill runs inside the guarded exit-callback drain, which swallows
     // panics — before the fix, a panic in any pre-release cleanup step
     // unwound past the freelist push and permanently leaked the Regular
@@ -493,7 +538,7 @@ fn prockill_releases_slot_despite_cleanup_panic() {
 
 #[test]
 fn deferred_leader_return_survives_member_cleanup_panic() {
-    // regression regression, the round-10 signature shape: a leader dies
+    // GL-CONNSLOT-1 regression, the round-10 signature shape: a leader dies
     // FIRST with a lock-group member still attached (its Regular PGPROC is
     // deferred to the last member out), and the member's own release path
     // then hits a cleanup panic. Before the fix the member's exit unwound

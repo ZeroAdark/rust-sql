@@ -25,7 +25,7 @@ use types_nodes::parsenodes::{
 use types_nodes::plannodes::PlannedStmt;
 use types_nodes::primnodes::{
     Aggref, Alias, ArrayCoerceExpr, BoolExpr, BoolExprType, CoerceToDomain, CoerceToDomainValue,
-    CoerceViaIO, Const, ConvertRowtypeExpr, FromExpr, FuncExpr, JoinExpr, NamedArgExpr, NullTest,
+    CoerceViaIO, CollateClause, Const, ConvertRowtypeExpr, FromExpr, FuncExpr, JoinExpr, NamedArgExpr, NullTest,
     OpExpr, PlaceHolderVar, RangeTblRef, RangeVar, RelabelType, ScalarArrayOpExpr, SubLink,
     TableFunc, TargetEntry, Var, XmlExpr,
 };
@@ -47,6 +47,7 @@ macro_rules! w {
 }
 
 mod stmt_plan;
+mod stmt_utility;
 
 thread_local! {
     // outfuncs.c:29 `static bool write_location_fields = false;` — set only
@@ -1164,15 +1165,7 @@ fn out_node(out: &mut PgString<'_>, node: Node<'_>) -> PgResult<()> {
         }
         NodeTag::T_ObjectWithArgs => {
             let o = node.as_variant::<ObjectWithArgs>().expect("ObjectWithArgs");
-            w!(out, "{{OBJECTWITHARGS :objname ");
-            out_list(out, &o.objname)?;
-            w!(out, " :objargs ");
-            out_opt_list(out, &o.objargs)?;
-            w!(out, " :objfuncargs ");
-            out_list(out, &o.objfuncargs)?;
-            w!(out, " :args_unspecified ");
-            out_bool(out, o.args_unspecified);
-            w!(out, "}}");
+            out_object_with_args(out, o)?;
         }
         NodeTag::T_FunctionParameter => {
             let p = node.as_variant::<FunctionParameter>().expect("FunctionParameter");
@@ -1183,6 +1176,70 @@ fn out_node(out: &mut PgString<'_>, node: Node<'_>) -> PgResult<()> {
             w!(out, " :mode {} :defexpr ", p.mode as u32);
             out_opt_node(out, p.defexpr)?;
             w!(out, " :location {}}}", loc(p.location));
+        }
+        NodeTag::T_CreateStmt => {
+            let s = node.as_variant::<types_nodes::rawnodes::CreateStmt>().expect("CreateStmt");
+            w!(out, "{{CREATESTMT :relation ");
+            out_opt_range_var(out, s.relation)?;
+            w!(out, " :tableElts ");
+            out_list(out, &s.tableElts)?;
+            w!(out, " :inhRelations ");
+            out_list(out, &s.inhRelations)?;
+            w!(out, " :partbound ");
+            out_opt_node(out, s.partbound)?;
+            w!(out, " :partspec ");
+            out_opt_node(out, s.partspec)?;
+            w!(out, " :ofTypename ");
+            out_opt_node(out, s.ofTypename)?;
+            w!(out, " :constraints ");
+            out_list(out, &s.constraints)?;
+            w!(out, " :nnconstraints ");
+            out_list(out, &s.nnconstraints)?;
+            w!(out, " :options ");
+            out_list(out, &s.options)?;
+            w!(out, " :oncommit {} :tablespacename ", s.oncommit as u32);
+            out_str(out, s.tablespacename);
+            w!(out, " :accessMethod ");
+            out_str(out, s.accessMethod);
+            w!(out, " :if_not_exists ");
+            out_bool(out, s.if_not_exists);
+            w!(out, "}}");
+        }
+        NodeTag::T_ColumnDef => {
+            let c = node.as_variant::<types_nodes::rawnodes::ColumnDef>().expect("ColumnDef");
+            w!(out, "{{COLUMNDEF :colname ");
+            out_str(out, c.colname);
+            w!(out, " :typeName ");
+            out_opt_node(out, c.typeName)?;
+            w!(out, " :compression ");
+            out_str(out, c.compression);
+            w!(out, " :inhcount {} :is_local ", c.inhcount);
+            out_bool(out, c.is_local);
+            w!(out, " :is_not_null ");
+            out_bool(out, c.is_not_null);
+            w!(out, " :is_from_type ");
+            out_bool(out, c.is_from_type);
+            w!(out, " :storage ");
+            out_char(out, c.storage)?;
+            w!(out, " :storage_name ");
+            out_str(out, c.storage_name);
+            w!(out, " :raw_default ");
+            out_opt_node(out, c.raw_default)?;
+            w!(out, " :cooked_default ");
+            out_opt_node(out, c.cooked_default)?;
+            w!(out, " :identity ");
+            out_char(out, c.identity)?;
+            w!(out, " :identitySequence ");
+            out_opt_range_var(out, c.identitySequence)?;
+            w!(out, " :generated ");
+            out_char(out, c.generated)?;
+            w!(out, " :collClause ");
+            out_opt_node(out, c.collClause)?;
+            w!(out, " :collOid {} :constraints ", c.collOid);
+            out_list(out, &c.constraints)?;
+            w!(out, " :fdwoptions ");
+            out_list(out, &c.fdwoptions)?;
+            w!(out, " :location {}}}", loc(c.location));
         }
         NodeTag::T_TypeName => {
             let t = node.as_variant::<TypeName>().expect("TypeName");
@@ -1217,6 +1274,14 @@ fn out_node(out: &mut PgString<'_>, node: Node<'_>) -> PgResult<()> {
         NodeTag::T_Bitmapset => out_bitmapset(out, node.as_bitmapset().expect("Bitmapset")),
         NodeTag::T_XidList => out_xid_list(out, node.as_xid_list().expect("XidList")),
         NodeTag::T_A_Expr => out_a_expr(out, node.as_a_expr().expect("A_Expr"))?,
+        NodeTag::T_CollateClause => {
+            let c = node.as_variant::<CollateClause>().expect("CollateClause");
+            w!(out, "{{COLLATECLAUSE :arg ");
+            out_opt_node(out, c.arg)?;
+            w!(out, " :collname ");
+            out_list(out, &c.collname)?;
+            w!(out, " :location {}}}", loc(c.location));
+        }
         // outNode's default arm (outfuncs.c:766) is elog(WARNING, "could not
         // dump unrecognized node type: %d") plus an empty "{}" — reachable in
         // C only for tags outside its generated switch, i.e. never for a real
@@ -1476,7 +1541,20 @@ fn out_null_if_expr(
     Ok(())
 }
 
-fn out_func_expr(out: &mut PgString<'_>, f: &FuncExpr<'_>) -> PgResult<()> {
+pub(crate) fn out_object_with_args(out: &mut PgString<'_>, o: &ObjectWithArgs<'_>) -> PgResult<()> {
+    w!(out, "{{OBJECTWITHARGS :objname ");
+    out_list(out, &o.objname)?;
+    w!(out, " :objargs ");
+    out_opt_list(out, &o.objargs)?;
+    w!(out, " :objfuncargs ");
+    out_list(out, &o.objfuncargs)?;
+    w!(out, " :args_unspecified ");
+    out_bool(out, o.args_unspecified);
+    w!(out, "}}");
+    Ok(())
+}
+
+pub(crate) fn out_func_expr(out: &mut PgString<'_>, f: &FuncExpr<'_>) -> PgResult<()> {
     w!(out, "{{FUNCEXPR :funcid {} :funcresulttype {} :funcretset ", f.funcid, f.funcresulttype);
     out_bool(out, f.funcretset);
     w!(out, " :funcvariadic ");

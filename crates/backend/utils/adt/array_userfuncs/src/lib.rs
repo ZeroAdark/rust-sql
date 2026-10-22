@@ -469,7 +469,10 @@ pub fn accum_array_result_arr<'m>(
             Some(bm) => {
                 if newnitems > st.aitems {
                     st.aitems = core::cmp::max(st.aitems * 2, newnitems);
-                    bm.resize((st.aitems as usize + 7) / 8, 0);
+                    let want = (st.aitems as usize + 7) / 8;
+                    let bmcx = *bm.allocator();
+                    bm.try_reserve(want.saturating_sub(bm.len())).map_err(|_| bmcx.oom(want))?;
+                    bm.resize(want, 0);
                 }
             }
         }
@@ -603,7 +606,10 @@ pub fn combine_array_build_state_arr(
             Some(bm) => {
                 if newnitems > s1.aitems {
                     s1.aitems = pg_nextpower2_32(newnitems as u32) as i32;
-                    bm.resize((s1.aitems as usize + 7) / 8, 0);
+                    let want = (s1.aitems as usize + 7) / 8;
+                    let bmcx = *bm.allocator();
+                    bm.try_reserve(want.saturating_sub(bm.len())).map_err(|_| bmcx.oom(want))?;
+                    bm.resize(want, 0);
                 }
             }
         }

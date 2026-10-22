@@ -10,6 +10,12 @@ path = "src/lib.rs"
 types_core = { path = "../../../_support/types/types_core" }
 types_error = { path = "../../../_support/types/types_error" }
 elog = { path = "../../utils/error/elog" }
+fd = { path = "../../storage/file/fd" }
+libc = "0.2"
+pgrc_format = { path = "../../access/pgrcolumnar/pgrc_format" }
+# D3150: the publish generation stamp (pgrc_am walgen.rs: record payload + WALGEN file).
+pgrc_am = { path = "../../access/pgrcolumnar/pgrc_am" }
+relpath_seams = { path = "../../../common/relpath_seams" }
 types_storage = { path = "../../../_support/types/types_storage" }
 smgr = { path = "../../storage/smgr/smgr" }
 freespace = { path = "../../storage/freespace/freespace" }

@@ -1,0 +1,1 @@
+crates/gravity/exec/src/runner/execute.rs	simple_at	licence	bind	simple protocol: every Expr key word evaluated before any pipeline (PG at the scan's first pull) [NONE; D899,D2219]

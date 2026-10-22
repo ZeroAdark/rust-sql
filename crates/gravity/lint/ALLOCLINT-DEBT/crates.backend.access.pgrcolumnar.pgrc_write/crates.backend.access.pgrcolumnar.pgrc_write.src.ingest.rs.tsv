@@ -1,0 +1,8 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/ingest.rs
+growth	pgrc_format::try_reserve_more	5
+growth	pgrc_format::try_resize	1
+growth	std::vec::Vec::extend_from_slice	3
+growth	std::vec::Vec::push	10
+method	pgrc_format::try_to_vec	3
+method	slice::to_vec	1
+method	std::clone::Clone::clone	4

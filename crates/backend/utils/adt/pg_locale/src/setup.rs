@@ -58,7 +58,10 @@ fn global_locale_frozen() -> bool {
     GLOBAL_LOCALE_FROZEN.load(Ordering::Acquire)
 }
 
-fn record_thread_locale(category: c_int, value: &str) {
+pub(crate) fn record_thread_locale(category: c_int, value: &str) {
+    if category == crate::lc::LC_CTYPE {
+        crate::libc_locale::reset_backend_ctype();
+    }
     THREAD_LOCALES.with(|l| {
         let mut l = l.borrow_mut();
         if let Some(slot) = l.iter_mut().find(|(c, _)| *c == category) {
@@ -107,8 +110,68 @@ pub fn set_database_ctype_is_c(value: bool) {
     DATABASE_CTYPE_IS_C.with(|c| c.set(value));
 }
 
+/// C7 (c): the database ctype a Gravity pool claim takes from its leader, as a PostgreSQL parallel worker has its
+/// database's from InitPostgres: `database_ctype_is_c` and the LC_CTYPE this thread recorded (`with_backend_ctype`,
+/// tsearch). A pool thread has none, or the one a bound serve of another database left.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DatabaseCtype {
+    is_c: bool,
+    ctype: Option<String>,
+}
+
+/// This thread's database ctype (a leader's, at submit).
+pub fn capture_database_ctype() -> DatabaseCtype {
+    DatabaseCtype { is_c: database_ctype_is_c(), ctype: thread_locale(crate::lc::LC_CTYPE) }
+}
+
+/// Arm `want` on this thread until `restore_database_ctype` gets the returned value back; `None`: the thread's already
+/// matched, nothing to put back.
+pub fn arm_database_ctype(want: &DatabaseCtype) -> PgResult<Option<DatabaseCtype>> {
+    let same = DATABASE_CTYPE_IS_C.with(Cell::get) == want.is_c
+        && THREAD_LOCALES.with(|l| l.borrow().iter().find(|(c, _)| *c == crate::lc::LC_CTYPE).map(|(_, v)| v.as_str()) == want.ctype.as_deref());
+    if same {
+        return Ok(None);
+    }
+    let oom = |_: std::collections::TryReserveError| -> Box<types_error::PgError> { Box::new(types_error::PgError::error("out of memory").with_sqlstate(types_error::ERRCODE_OUT_OF_MEMORY)) };
+    let ctype = match &want.ctype {
+        Some(name) => {
+            let mut copy = String::new();
+            copy.try_reserve_exact(name.len()).map_err(oom)?;
+            copy.push_str(name);
+            THREAD_LOCALES.with(|l| l.borrow_mut().try_reserve(1)).map_err(oom)?;
+            Some(copy)
+        }
+        None => None,
+    };
+    Ok(Some(swap_database_ctype(DatabaseCtype { is_c: want.is_c, ctype })))
+}
+
+/// A claim's end: the thread's own database ctype back (a move, no allocation: `arm_database_ctype` reserved the room).
+pub fn restore_database_ctype(own: DatabaseCtype) {
+    let _ = swap_database_ctype(own);
+}
+
+fn swap_database_ctype(new: DatabaseCtype) -> DatabaseCtype {
+    let is_c = DATABASE_CTYPE_IS_C.with(|c| c.replace(new.is_c));
+    let ctype = THREAD_LOCALES.with(|l| {
+        let mut l = l.borrow_mut();
+        match (l.iter().position(|(c, _)| *c == crate::lc::LC_CTYPE), new.ctype) {
+            (Some(i), Some(name)) => Some(core::mem::replace(&mut l[i].1, name)),
+            (Some(i), None) => Some(l.swap_remove(i).1),
+            (None, Some(name)) => {
+                l.push((crate::lc::LC_CTYPE, name));
+                None
+            }
+            (None, None) => None,
+        }
+    });
+    crate::libc_locale::reset_backend_ctype();
+    DatabaseCtype { is_c, ctype }
+}
+
 fn cstr(s: &str) -> Vec<u8> {
-    let mut v = Vec::with_capacity(s.len() + 1);
+    let mut v = Vec::new();
+    let _ = v.try_reserve(s.len() + 1);
     v.extend_from_slice(s.as_bytes());
     v.push(0);
     v
@@ -165,6 +228,11 @@ fn category_envvar(category: c_int) -> Option<&'static str> {
 // name of the "" locale in the thread-safe paths (which validate via
 // newlocale and so never learn the resolved name from libc).
 fn resolve_env_locale_name(category: c_int) -> String {
+    if global_locale_frozen() {
+        if let Some(v) = thread_locale(category) {
+            return v;
+        }
+    }
     let mut names: [&str; 3] = ["LC_ALL", "", "LANG"];
     names[1] = category_envvar(category).unwrap_or("");
     for name in names {
@@ -187,16 +255,7 @@ fn resolve_env_locale_name(category: c_int) -> String {
 // on macOS and glibc), and "" resolves from the environment the same way.
 // Returns None when the OS does not recognize the locale.
 fn validate_locale_threadsafe(category: c_int, locale: &str) -> Option<String> {
-    let cbuf = cstr(locale);
-    // SAFETY: cbuf is NUL-terminated and outlives the call; a null base is
-    // allowed (newlocale builds on the C locale).
-    let loc = unsafe {
-        libc::newlocale(
-            category_mask(category),
-            cbuf.as_ptr() as *const c_char,
-            core::ptr::null_mut(),
-        )
-    };
+    let loc = newlocale_backend_env(category_mask(category), locale, core::ptr::null_mut());
     if loc.is_null() {
         return None;
     }
@@ -207,6 +266,45 @@ fn validate_locale_threadsafe(category: c_int, locale: &str) -> Option<String> {
     } else {
         canonical_locale_name(locale).to_owned()
     })
+}
+
+const CATEGORY_MASKS: [(c_int, c_int); 6] = [
+    (crate::lc::LC_COLLATE, crate::lc::LC_COLLATE_MASK),
+    (crate::lc::LC_CTYPE, crate::lc::LC_CTYPE_MASK),
+    (crate::lc::LC_MESSAGES, crate::lc::LC_MESSAGES_MASK),
+    (crate::lc::LC_MONETARY, crate::lc::LC_MONETARY_MASK),
+    (crate::lc::LC_NUMERIC, crate::lc::LC_NUMERIC_MASK),
+    (crate::lc::LC_TIME, crate::lc::LC_TIME_MASK),
+];
+
+/// newlocale as a C backend sees it: pg_perm_setlocale's setenv (pg_locale.c:283)
+/// makes "" the database locale; this thread's records stand in for the env.
+pub(crate) fn newlocale_backend_env(mask: c_int, locale: &str, base: libc::locale_t) -> libc::locale_t {
+    let open = |m: c_int, name: &str, b: libc::locale_t| {
+        let c = cstr(name);
+        // SAFETY: c is NUL-terminated and outlives the call.
+        unsafe { libc::newlocale(m, c.as_ptr() as *const c_char, b) }
+    };
+    if !locale.is_empty() || !global_locale_frozen() {
+        return open(mask, locale, base);
+    }
+    let mut cur = base;
+    for (category, cmask) in CATEGORY_MASKS {
+        if mask & cmask == 0 {
+            continue;
+        }
+        let name = thread_locale(category).unwrap_or_default();
+        let next = open(cmask, &name, cur);
+        if next.is_null() {
+            if cur != base {
+                // SAFETY: cur came from newlocale in this loop.
+                unsafe { libc::freelocale(cur) };
+            }
+            return core::ptr::null_mut();
+        }
+        cur = next;
+    }
+    cur
 }
 
 // setlocale's returned name, which newlocale cannot supply: glibc and musl

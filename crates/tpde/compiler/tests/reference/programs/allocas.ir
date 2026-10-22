@@ -1,0 +1,7 @@
+f(%a) {
+entry:
+%small = alloca 17, 16
+%large = alloca 512, 32
+%z = any %small, %large, %a
+ret %z
+}

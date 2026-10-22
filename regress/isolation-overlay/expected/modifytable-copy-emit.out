@@ -1,0 +1,112 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1n s1k s1x s1o s2d s1c s2c s3sel
+step s1n: UPDATE ct_t SET note = note || '*' WHERE id IN (1, 3);
+step s1k: UPDATE ct_t SET cid = 4 WHERE id = 5;
+step s1x: DELETE FROM ct_t WHERE id = 7;
+step s1o: UPDATE ct_t SET cid = 3 WHERE id = 9;
+step s2d: DELETE FROM ct_t WHERE cid IN (SELECT id FROM ct_c WHERE tier = 1 INTERSECT SELECT cid FROM ct_o WHERE status = 'returned') RETURNING id, cid, note; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|cid|note
+--+---+----
+ 1|  1|n1* 
+ 3|  3|n3* 
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, note FROM ct_t ORDER BY id;
+id|cid|note
+--+---+----
+ 2|  2|n2  
+ 4|  4|n4  
+ 5|  4|n5  
+ 6|  6|n6  
+ 8|  8|n8  
+ 9|  3|n9  
+10| 10|n10 
+(7 rows)
+
+
+starting permutation: s1n s1k s1x s1o s2u s1c s2c s3sel
+step s1n: UPDATE ct_t SET note = note || '*' WHERE id IN (1, 3);
+step s1k: UPDATE ct_t SET cid = 4 WHERE id = 5;
+step s1x: DELETE FROM ct_t WHERE id = 7;
+step s1o: UPDATE ct_t SET cid = 3 WHERE id = 9;
+step s2u: UPDATE ct_t SET note = note || '+' WHERE cid IN (SELECT id FROM ct_c WHERE tier = 1 INTERSECT SELECT cid FROM ct_o WHERE status = 'returned') RETURNING id, cid, note; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|cid|note
+--+---+----
+ 1|  1|n1*+
+ 3|  3|n3*+
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, note FROM ct_t ORDER BY id;
+id|cid|note
+--+---+----
+ 1|  1|n1*+
+ 2|  2|n2  
+ 3|  3|n3*+
+ 4|  4|n4  
+ 5|  4|n5  
+ 6|  6|n6  
+ 8|  8|n8  
+ 9|  3|n9  
+10| 10|n10 
+(9 rows)
+
+
+starting permutation: s1s s2d s1c s2c s3sel
+step s1s: UPDATE ct_c SET tier = 0 WHERE id = 3; UPDATE ct_t SET note = note || '#' WHERE id = 3;
+step s2d: DELETE FROM ct_t WHERE cid IN (SELECT id FROM ct_c WHERE tier = 1 INTERSECT SELECT cid FROM ct_o WHERE status = 'returned') RETURNING id, cid, note; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|cid|note
+--+---+----
+ 1|  1|n1  
+ 3|  3|n3# 
+ 5|  5|n5  
+ 7|  7|n7  
+ 9|  9|n9  
+(5 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, note FROM ct_t ORDER BY id;
+id|cid|note
+--+---+----
+ 2|  2|n2  
+ 4|  4|n4  
+ 6|  6|n6  
+ 8|  8|n8  
+10| 10|n10 
+(5 rows)
+
+
+starting permutation: s1n s1x s2d s1r s2c s3sel
+step s1n: UPDATE ct_t SET note = note || '*' WHERE id IN (1, 3);
+step s1x: DELETE FROM ct_t WHERE id = 7;
+step s2d: DELETE FROM ct_t WHERE cid IN (SELECT id FROM ct_c WHERE tier = 1 INTERSECT SELECT cid FROM ct_o WHERE status = 'returned') RETURNING id, cid, note; <waiting ...>
+step s1r: ROLLBACK;
+step s2d: <... completed>
+id|cid|note
+--+---+----
+ 1|  1|n1  
+ 3|  3|n3  
+ 5|  5|n5  
+ 7|  7|n7  
+ 9|  9|n9  
+(5 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, cid, note FROM ct_t ORDER BY id;
+id|cid|note
+--+---+----
+ 2|  2|n2  
+ 4|  4|n4  
+ 6|  6|n6  
+ 8|  8|n8  
+10| 10|n10 
+(5 rows)
+

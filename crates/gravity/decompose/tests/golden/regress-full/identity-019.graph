@@ -1,0 +1,21 @@
+-- regress-full-identity-019
+-- MERGE INTO itest15 t USING (SELECT 20 AS s_a, 'inserted by merge' AS s_b) s ON t.a = s.s_a WHEN NOT MATCHED THEN INSERT (a, b) OVERRIDING USER VALUE VALUES (s.s_a, s.s_b);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=0 reason=Write end=sink
+  nodes n2@0 n1@1 n0@3
+  source const
+  project ()
+  nest inner=n3 JOIN_LEFT invariant raise-free params=()
+  inner node=3 eligible rows=6 end=sink
+  nodes n3@0
+  source range rel=29297 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v1.1, c23:20)
+  project (1=v1.-1)
+  project (1j=inner.1)
+  write MERGE rel=29297 rti=1 natts=2 indexes=()
+    merge rowid=outer.1 target_cols=()
+    when not matched then insert (1=T_NextValueExpr, 2=c25:'inserted by merge')
+  outs
+  outs 1=fx6:life/breaker
+mapped: Result ModifyTable SeqScan NestLoop

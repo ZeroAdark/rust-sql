@@ -1,0 +1,1 @@
+HAVING ROW(x, 1) < ROW('ABC' COLLATE case_sensitive, 1): a row compare under the test's own ICU collation, an expression the rig catalog cannot answer (reached once rep.varlena.order is built, M6-TEXT R2)

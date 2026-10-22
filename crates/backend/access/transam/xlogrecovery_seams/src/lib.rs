@@ -122,6 +122,10 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    pub fn pgrc_restartpoint_temps()
+);
+
+seam_core::seam!(
     // GetRecoveryPauseState() (xlogrecovery.c).
     pub fn get_recovery_pause_state() -> i32
 );

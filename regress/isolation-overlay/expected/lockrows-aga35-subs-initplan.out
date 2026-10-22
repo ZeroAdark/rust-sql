@@ -1,0 +1,233 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1a s2f s1c
+step s1a: UPDATE sacct SET v = v + 1 WHERE id = 3;
+step s2f: SELECT a.id, a.v, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id <= 6 AND a.v >= (SELECT lo FROM scfg WHERE name = 'q') ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id| v|  m
+--+--+---
+ 2|20|114
+ 3|31|120
+ 4|40|111
+ 5|50|114
+ 6|60|120
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2f s1c
+step s1g: UPDATE sacct SET grp = grp + 1 WHERE id = 3;
+step s2f: SELECT a.id, a.v, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id <= 6 AND a.v >= (SELECT lo FROM scfg WHERE name = 'q') ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id| v|  m
+--+--+---
+ 2|20|114
+ 3|30|111
+ 4|40|111
+ 5|50|114
+ 6|60|120
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2q s1c
+step s1v: UPDATE sacct SET v = 100000 WHERE id = 3;
+step s2q: SELECT a.id, a.v FROM sacct a WHERE a.id <= (SELECT lim FROM scfg WHERE name = 'q') AND a.v < (SELECT sum(l.amt) FROM sled l WHERE l.acct = a.grp) ORDER BY a.id FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+id| v
+--+--
+ 1|10
+ 2|20
+ 4|40
+ 5|50
+ 6|60
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2f s1c
+step s1d: DELETE FROM sacct WHERE id = 3;
+step s2f: SELECT a.id, a.v, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id <= 6 AND a.v >= (SELECT lo FROM scfg WHERE name = 'q') ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id| v|  m
+--+--+---
+ 2|20|114
+ 4|40|111
+ 5|50|114
+ 6|60|120
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM sacct WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2sk: SELECT a.id, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id <= (SELECT lim FROM scfg WHERE name = 'q') ORDER BY a.id FOR UPDATE SKIP LOCKED;
+id|  m
+--+---
+ 1|111
+ 2|114
+ 4|111
+ 5|114
+ 6|120
+(5 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM sacct WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2nw: SELECT a.id, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id <= (SELECT lim FROM scfg WHERE name = 'q') ORDER BY a.id FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "sacct"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1a s2f s1c
+step s1q: UPDATE scfg SET lo = 1000, lim = 2 WHERE name = 'q';
+step s1a: UPDATE sacct SET v = v + 1 WHERE id = 3;
+step s2f: SELECT a.id, a.v, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id <= 6 AND a.v >= (SELECT lo FROM scfg WHERE name = 'q') ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id| v|  m
+--+--+---
+ 2|20|114
+ 3|31|120
+ 4|40|111
+ 5|50|114
+ 6|60|120
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1a s2q s1c
+step s1q: UPDATE scfg SET lo = 1000, lim = 2 WHERE name = 'q';
+step s1a: UPDATE sacct SET v = v + 1 WHERE id = 3;
+step s2q: SELECT a.id, a.v FROM sacct a WHERE a.id <= (SELECT lim FROM scfg WHERE name = 'q') AND a.v < (SELECT sum(l.amt) FROM sled l WHERE l.acct = a.grp) ORDER BY a.id FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+id| v
+--+--
+ 1|10
+ 2|20
+ 3|31
+ 4|40
+ 5|50
+ 6|60
+(6 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s1g s2f s1c
+step s1m: UPDATE sled SET amt = amt + 500 WHERE acct = 1;
+step s1g: UPDATE sacct SET grp = grp + 1 WHERE id = 3;
+step s2f: SELECT a.id, a.v, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id <= 6 AND a.v >= (SELECT lo FROM scfg WHERE name = 'q') ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id| v|  m
+--+--+---
+ 2|20|114
+ 3|30|111
+ 4|40|111
+ 5|50|114
+ 6|60|120
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2v s1c s2seq
+step s1a: UPDATE sacct SET v = v + 1 WHERE id = 3;
+step s2v: SELECT a.id, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id <= (SELECT nextval('ssq') * 0 + 6) ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+id|  m
+--+---
+ 1|111
+ 2|114
+ 3|120
+ 4|111
+ 5|114
+ 6|120
+(6 rows)
+
+step s2seq: SELECT last_value, is_called FROM ssq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2e s1c
+step s1a: UPDATE sacct SET v = v + 1 WHERE id = 3;
+step s2e: SELECT a.id, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id <= 6 AND CASE WHEN a.v > 100000 THEN a.v > (SELECT 1 / (lim - lim) FROM scfg WHERE name = 'q') ELSE true END ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2e: <... completed>
+ERROR:  division by zero
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2l s1c
+step s1a: UPDATE sacct SET v = v + 1 WHERE id = 3;
+step s2l: SELECT a.id, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp) AS m FROM sacct a WHERE a.id > 1 AND a.v >= (SELECT lo FROM scfg WHERE name = 'q') ORDER BY a.id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|  m
+--+---
+ 2|114
+ 3|120
+ 4|111
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2i s1c
+step s1a: UPDATE sacct SET v = v + 1 WHERE id = 3;
+step s2i: SELECT a.id, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp AND l.amt < (SELECT lim * 10 FROM scfg WHERE name = 'q')) AS m FROM sacct a WHERE a.id <= 6 ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+id| m
+--+--
+ 1|51
+ 2|54
+ 3|48
+ 4|51
+ 5|54
+ 6|48
+(6 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s2vi s1c s2seq
+step s1a: UPDATE sacct SET v = v + 1 WHERE id = 3;
+step s2vi: SELECT a.id, (SELECT max(l.amt) FROM sled l WHERE l.acct = a.grp AND l.amt > (SELECT nextval('ssq') * 0 - 1)) AS m FROM sacct a WHERE a.id <= 6 ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2vi: <... completed>
+id|  m
+--+---
+ 1|111
+ 2|114
+ 3|120
+ 4|111
+ 5|114
+ 6|120
+(6 rows)
+
+step s2seq: SELECT last_value, is_called FROM ssq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress

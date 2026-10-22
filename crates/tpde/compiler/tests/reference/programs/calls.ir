@@ -1,0 +1,7 @@
+main(%a,%b,%c,%d,%e,%f) {
+entry:
+%x = call @external, %a, %b, %c, %d, %e, %f
+%y = add %x, %a
+ret %y
+}
+external(%a,%b,%c,%d,%e,%f)!

@@ -9,6 +9,7 @@ name = "intarray"
 path = "src/lib.rs"
 
 [dependencies]
+arrayutils = { path = "../../backend/utils/adt/arrayutils" }
 datum = { path = "../../_support/types/datum" }
 mcx = { path = "../../_support/mcx" }
 pg_qsort = { path = "../../_support/pg_qsort" }

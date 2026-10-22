@@ -1,0 +1,198 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2x s1a s2u s1c
+step s2x: EXPLAIN (COSTS OFF) UPDATE lsj j SET attempts = j.attempts + 1 WHERE EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' AND k.prio = 9 FOR UPDATE) RETURNING j.id, j.attempts;
+QUERY PLAN                                                    
+--------------------------------------------------------------
+Update on lsj j                                               
+  ->  Seq Scan on lsj j                                       
+        Disabled: true                                        
+        Filter: EXISTS(SubPlan 1)                             
+        SubPlan 1                                             
+          ->  LockRows                                        
+                ->  Index Scan using lsj_ready on lsj k       
+                      Index Cond: ((prio = 9) AND (id = j.id))
+                      Filter: (state = 'ready'::text)         
+(9 rows)
+
+step s1a: UPDATE lsj SET attempts = attempts + 100 WHERE id = 5;
+step s2u: UPDATE lsj j SET attempts = j.attempts + 1 WHERE EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' AND k.prio = 9 FOR UPDATE) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+ 1|       1
+ 3|       1
+ 5|     101
+ 7|       1
+ 9|       1
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2u s1c
+step s1s: UPDATE lsj SET state = 'done' WHERE id = 5;
+step s2u: UPDATE lsj j SET attempts = j.attempts + 1 WHERE EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' AND k.prio = 9 FOR UPDATE) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+ 1|       1
+ 3|       1
+ 7|       1
+ 9|       1
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2u s1c
+step s1p: UPDATE lsj SET prio = 2 WHERE id = 5;
+step s2u: UPDATE lsj j SET attempts = j.attempts + 1 WHERE EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' AND k.prio = 9 FOR UPDATE) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+ 1|       1
+ 3|       1
+ 7|       1
+ 9|       1
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2u s1c
+step s1d: DELETE FROM lsj WHERE id = 5;
+step s2u: UPDATE lsj j SET attempts = j.attempts + 1 WHERE EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' AND k.prio = 9 FOR UPDATE) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+ 1|       1
+ 3|       1
+ 7|       1
+ 9|       1
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM lsj WHERE id = 5 FOR UPDATE;
+id
+--
+ 5
+(1 row)
+
+step s2sk: UPDATE lsj j SET attempts = j.attempts + 1 WHERE EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' AND k.prio = 9 FOR UPDATE SKIP LOCKED) RETURNING j.id, j.attempts;
+id|attempts
+--+--------
+ 1|       1
+ 3|       1
+ 7|       1
+ 9|       1
+(4 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM lsj WHERE id = 5 FOR UPDATE;
+id
+--
+ 5
+(1 row)
+
+step s2nw: UPDATE lsj j SET attempts = j.attempts + 1 WHERE EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' AND k.prio = 9 FOR UPDATE NOWAIT) RETURNING j.id, j.attempts;
+ERROR:  could not obtain lock on row in relation "lsj"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2w s1c
+step s1j: UPDATE lsj SET attempts = attempts + 100 WHERE id = 1;
+step s2w: UPDATE lsj j SET attempts = j.attempts + 1 WHERE j.id <= 4 AND EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.ref AND k.state = 'ready' FOR UPDATE) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+id|attempts
+--+--------
+ 1|     101
+ 2|       1
+ 3|       1
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2w s1c
+step s1r: UPDATE lsj SET ref = 99 WHERE id = 1;
+step s2w: UPDATE lsj j SET attempts = j.attempts + 1 WHERE j.id <= 4 AND EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.ref AND k.state = 'ready' FOR UPDATE) RETURNING j.id, j.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+id|attempts
+--+--------
+ 2|       1
+ 3|       1
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s3l s1c
+step s1a: UPDATE lsj SET attempts = attempts + 100 WHERE id = 5;
+step s3l: SELECT j.id FROM lsj j WHERE j.id <= 8 AND EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' FOR SHARE); <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id
+--
+ 1
+ 2
+ 3
+ 5
+ 6
+ 7
+(6 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s3l s1c
+step s1s: UPDATE lsj SET state = 'done' WHERE id = 5;
+step s3l: SELECT j.id FROM lsj j WHERE j.id <= 8 AND EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' FOR SHARE); <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id
+--
+ 1
+ 2
+ 3
+ 6
+ 7
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s4l s1c
+step s1a: UPDATE lsj SET attempts = attempts + 100 WHERE id = 5;
+step s4l: SELECT j.id FROM lsj j WHERE j.prio = 9 AND EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+id
+--
+ 1
+ 3
+ 5
+ 7
+ 9
+(5 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s4l s1c
+step s1s: UPDATE lsj SET state = 'done' WHERE id = 5;
+step s4l: SELECT j.id FROM lsj j WHERE j.prio = 9 AND EXISTS (SELECT 1 FROM lsj k WHERE k.id = j.id AND k.state = 'ready' FOR UPDATE); <waiting ...>
+step s1c: COMMIT;
+step s4l: <... completed>
+id
+--
+ 1
+ 3
+ 7
+ 9
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress

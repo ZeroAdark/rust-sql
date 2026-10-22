@@ -1,0 +1,14 @@
+-- cte-052
+-- SELECT a FROM t WHERE c > 'c1' ORDER BY b LIMIT 5;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@2
+  source index rel=16395 rti=1 am=heap index=16404
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page
+  filter op666(v1.3, c25:'c1')
+  project (1=v1.1, 2j=v1.2)
+  limit count=5 offset=all
+  project (1=outer.1, 2j=outer.2)
+  outs 1=w8:val 2=w8:val
+  outs 1=w8:val 2=w8:val
+mapped: IndexScan Limit

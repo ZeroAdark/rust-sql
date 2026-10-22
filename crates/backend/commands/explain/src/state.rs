@@ -70,6 +70,18 @@ pub struct ExplainState<'mcx> {
     // C's ExplainPrintPlan(es, queryDesc) argument: live while the plan walk
     // may read per-node Instrumentation, NULL otherwise.
     pub qd: types_portal::QueryDescHandle,
+    /// pgrust-only (Gravity's EXPLAIN ANALYZE, pgrust-fast
+    /// docs/gravity/entry.md §4): the node being printed is a served
+    /// statement's (the query_desc_gravity_node seam answered for it), whose
+    /// run keeps none of PostgreSQL's per-node counters but an Index Only
+    /// Scan's Heap Fetches (the query_desc_gravity_heap_fetches seam): Index
+    /// Searches, Heap Blocks and Workers Launched are not printed for it.
+    pub gravity: bool,
+    pub gravity_ran: bool,
+    /// pgrust-only: a counted served node of the plan left out a line
+    /// PostgreSQL prints for it, its value not the run's (`gravity_omits`);
+    /// the plan's Gravity block then follows the tree without ENGINE too.
+    pub gravity_inexact: bool,
     pub pstmt: Option<&'mcx PlannedStmt<'mcx>>,
     pub rtable: Option<&'mcx NodeList<'mcx>>,
     pub rtable_size: i32,
@@ -102,6 +114,9 @@ pub fn NewExplainState(mcx: Mcx<'_>) -> PgResult<ExplainState<'_>> {
         indent: 0,
         grouping_stack: PgVec::new_in(mcx),
         qd: types_portal::QueryDescHandle::NULL,
+        gravity: false,
+        gravity_ran: false,
+        gravity_inexact: false,
         pstmt: None,
         printed_subplans: types_nodes::bitmapset::Bitmapset::empty(),
         rtable: None,

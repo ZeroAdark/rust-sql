@@ -1,0 +1,101 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1upd2 s2merge s1c s2sel
+step s1upd2: UPDATE wrb SET b = 's1' WHERE a = 2;
+step s2merge: MERGE INTO wrbv t USING (VALUES (2, 'm2'), (3, 'm3'), (70, 'm70')) AS v(a, b) ON t.a = v.a WHEN MATCHED AND t.a = 2 THEN UPDATE SET b = v.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED AND v.a > 0 THEN INSERT (a, b) VALUES (v.a, v.b) RETURNING merge_action(), v.a, old.d, new.d, old.e, new.e, t.d; <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+merge_action| a|d    |d     |e|e|d     
+------------+--+-----+------+-+-+------
+UPDATE      | 2|b: s1|b: m2 |5|5|b: m2 
+DELETE      | 3|b: r3|      |3| |b: r3 
+INSERT      |70|     |b: m70| |0|b: m70
+(3 rows)
+
+step s2sel: SELECT * FROM wrbv WHERE a IN (2, 3, 70) ORDER BY a;
+ a|b  |d     |e
+--+---+------+-
+ 2|m2 |b: m2 |5
+70|m70|b: m70|0
+(2 rows)
+
+
+starting permutation: s1del3 s2merge s1c s2sel
+step s1del3: DELETE FROM wrb WHERE a = 3;
+step s2merge: MERGE INTO wrbv t USING (VALUES (2, 'm2'), (3, 'm3'), (70, 'm70')) AS v(a, b) ON t.a = v.a WHEN MATCHED AND t.a = 2 THEN UPDATE SET b = v.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED AND v.a > 0 THEN INSERT (a, b) VALUES (v.a, v.b) RETURNING merge_action(), v.a, old.d, new.d, old.e, new.e, t.d; <waiting ...>
+step s1c: COMMIT;
+step s2merge: <... completed>
+merge_action| a|d    |d     |e|e|d     
+------------+--+-----+------+-+-+------
+UPDATE      | 2|b: r2|b: m2 |5|5|b: m2 
+INSERT      | 3|     |b: m3 | |3|b: m3 
+INSERT      |70|     |b: m70| |0|b: m70
+(3 rows)
+
+step s2sel: SELECT * FROM wrbv WHERE a IN (2, 3, 70) ORDER BY a;
+ a|b  |d     |e
+--+---+------+-
+ 2|m2 |b: m2 |5
+ 3|m3 |b: m3 |3
+70|m70|b: m70|0
+(3 rows)
+
+
+starting permutation: s1upd2 s2merge s1a s2sel
+step s1upd2: UPDATE wrb SET b = 's1' WHERE a = 2;
+step s2merge: MERGE INTO wrbv t USING (VALUES (2, 'm2'), (3, 'm3'), (70, 'm70')) AS v(a, b) ON t.a = v.a WHEN MATCHED AND t.a = 2 THEN UPDATE SET b = v.b WHEN MATCHED THEN DELETE WHEN NOT MATCHED AND v.a > 0 THEN INSERT (a, b) VALUES (v.a, v.b) RETURNING merge_action(), v.a, old.d, new.d, old.e, new.e, t.d; <waiting ...>
+step s1a: ROLLBACK;
+step s2merge: <... completed>
+merge_action| a|d    |d     |e|e|d     
+------------+--+-----+------+-+-+------
+UPDATE      | 2|b: r2|b: m2 |5|5|b: m2 
+DELETE      | 3|b: r3|      |3| |b: r3 
+INSERT      |70|     |b: m70| |0|b: m70
+(3 rows)
+
+step s2sel: SELECT * FROM wrbv WHERE a IN (2, 3, 70) ORDER BY a;
+ a|b  |d     |e
+--+---+------+-
+ 2|m2 |b: m2 |5
+70|m70|b: m70|0
+(2 rows)
+
+
+starting permutation: s1upd2 s3merge s1c s2sel
+step s1upd2: UPDATE wrb SET b = 's1' WHERE a = 2;
+step s3merge: MERGE INTO wrbv2 t USING (VALUES (2, 'n2'), (3, 'n3'), (80, 'n80')) AS v(a, b) ON aaa = v.a WHEN MATCHED AND aaa = 3 THEN DELETE WHEN MATCHED THEN UPDATE SET bbb = v.b WHEN NOT MATCHED THEN INSERT (aaa) VALUES (v.a) RETURNING merge_action(), v.a, (SELECT old), (SELECT (SELECT new)); <waiting ...>
+step s1c: COMMIT;
+step s3merge: <... completed>
+merge_action| a|old     |new     
+------------+--+--------+--------
+UPDATE      | 2|(2,s1,K)|(2,n2,K)
+DELETE      | 3|(3,r3,K)|        
+INSERT      |80|        |(80,u,K)
+(3 rows)
+
+step s2sel: SELECT * FROM wrbv WHERE a IN (2, 3, 70) ORDER BY a;
+a|b |d    |e
+-+--+-----+-
+2|n2|b: n2|5
+(1 row)
+
+
+starting permutation: s1del3 s3merge s1c s2sel
+step s1del3: DELETE FROM wrb WHERE a = 3;
+step s3merge: MERGE INTO wrbv2 t USING (VALUES (2, 'n2'), (3, 'n3'), (80, 'n80')) AS v(a, b) ON aaa = v.a WHEN MATCHED AND aaa = 3 THEN DELETE WHEN MATCHED THEN UPDATE SET bbb = v.b WHEN NOT MATCHED THEN INSERT (aaa) VALUES (v.a) RETURNING merge_action(), v.a, (SELECT old), (SELECT (SELECT new)); <waiting ...>
+step s1c: COMMIT;
+step s3merge: <... completed>
+merge_action| a|old     |new     
+------------+--+--------+--------
+UPDATE      | 2|(2,r2,K)|(2,n2,K)
+INSERT      | 3|        |(3,u,K) 
+INSERT      |80|        |(80,u,K)
+(3 rows)
+
+step s2sel: SELECT * FROM wrbv WHERE a IN (2, 3, 70) ORDER BY a;
+a|b |d    |e
+-+--+-----+-
+2|n2|b: n2|5
+3|u |b: u |3
+(2 rows)
+

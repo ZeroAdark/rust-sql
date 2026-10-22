@@ -1,0 +1,35 @@
+-- regress-full-boolean-007
+-- SELECT BOOLTBL1.*, BOOLTBL2.* FROM BOOLTBL1, BOOLTBL2 WHERE BOOLTBL2.f1 = BOOLTBL1.f1 or BOOLTBL1.f1 = bool 'true' ORDER BY BOOLTBL1.f1, BOOLTBL2.f1;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=4 eligible rows=2810 end=breaker(slot=0 Materialize)
+  nodes n4@0 n3@1^
+  source range rel=16509 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1)
+  spool
+  outs 1=w8:val
+p1 node=2 eligible rows=2810 end=breaker(slot=1 Sort)
+  desc consumes=slot0@p0 finishing
+  nodes n2@0 n1@1 n0@3^
+  source range rel=16506 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  nest inner=n3 JOIN_INNER invariant raise-free params=() qual=(or(op91(inner.1, outer.1), outer.1))
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n3@0
+  source breaker slot=0
+  project (1=outer.1)
+  project (1=outer.1, 2=inner.1)
+  sort keys=1+:I32,2+:I32 form=runs
+  outs 1=w8:val
+  outs 1=w8:val 2=w1:val
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=w1:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32,I32]->[Count@16] 24B order=1+,2+
+mapped: SeqScan NestLoop Material Sort

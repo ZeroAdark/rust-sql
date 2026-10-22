@@ -1,0 +1,12 @@
+-- regress-full-insert-008
+-- insert into inserttest (f3.if1, f3.if2) values (1,'{foo}'), (2,'{bar}');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source values rti=2 rows=2
+    row (c23:1, c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x1c\x00\x00\x00foo\x00')
+    row (c23:2, c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x1c\x00\x00\x00bar\x00')
+  project (1=c23:null, 2=c1007:null, 3=T_FieldStore, 4=c17698:null)
+  write INSERT rel=17700 rti=1 natts=4 indexes=()
+  outs 1=w4:val 2=vl:stmt/imm 3=? 4=?
+mapped: ModifyTable ValuesScan

@@ -83,6 +83,8 @@ impl TransactionNode {
     }
 }
 
+const SUB_STACK_KEEP: usize = 8;
+
 #[derive(Debug)]
 struct XactStack {
     top: TransactionNode,
@@ -119,6 +121,9 @@ pub(crate) struct XactState {
     stack: XactStack,
     pub xact_callbacks: Vec<XactCallbackItem>,
     pub subxact_callbacks: Vec<SubXactCallbackItem>,
+    /// Bumped by every Register / Unregister of a transaction or subtransaction callback (D4485): a walk that
+    /// sees it unchanged since its copy knows every copied item is still registered without searching the list.
+    pub callbacks_gen: u64,
     pub top_transaction_context: Option<MemoryContext>,
     pub transaction_abort_context: Option<MemoryContext>,
 }
@@ -219,6 +224,7 @@ impl XactState {
             stack: XactStack { top: TransactionNode::top(), subs: Vec::new() },
             xact_callbacks: Vec::new(),
             subxact_callbacks: Vec::new(),
+            callbacks_gen: 0,
             top_transaction_context: None,
             transaction_abort_context: None,
         }
@@ -299,6 +305,15 @@ impl XactState {
         Ok(())
     }
 
+    // C pallocs each TransactionState in TopTransactionContext, freed at
+    // transaction end; a deep savepoint stack's nodes go with it here too.
+    pub(crate) fn release_sub_stack(&mut self) {
+        debug_assert!(self.stack.subs.is_empty());
+        if self.stack.subs.capacity() > SUB_STACK_KEEP {
+            self.stack.subs = Vec::new();
+        }
+    }
+
     pub(crate) fn pop_node(&mut self) {
         self.stack.subs.pop();
         refresh_node_mirrors(self.current());
@@ -358,13 +373,70 @@ pub(crate) fn xs<R>(f: impl FnOnce(&mut XactState) -> R) -> R {
 }
 
 /// Session-memory teardown (FPBUDGET-1): free the transaction contexts at
-/// clean task end. Contexts only — the state shell stays in TLS untouched
-/// (nothing runs xact code after teardown; the thread is exiting).
+/// clean task end. Contexts only: the state shell stays in TLS, and a reused
+/// or retained thread runs its next session on it (D4682, wretain). The
+/// registered callbacks stay too: every registrant's once-flag is
+/// thread-scoped, so the next session on the thread registers nothing again.
+/// The shell's heap goes at the thread's real exit ([`thread_exit_teardown`]).
 pub fn session_mem_teardown() {
     xs(|s| {
         drop(s.top_transaction_context.take());
         drop(s.transaction_abort_context.take());
+        s.stack.subs = Vec::new();
     });
+    crate::forget_pooled_top_owner();
+}
+
+/// D4780: the heap the thread's transaction state owns (the callback lists, the
+/// unreported and parallel xid lists, a prepared transaction's gid), freed when
+/// the thread really exits: launch_backend's thread bodies after their last
+/// task (a client thread once it leaves the reuse pool, a standby once it
+/// retires). The state leaks at thread exit as C's globals do, and without
+/// this each backend thread that registered a callback leaked its lists'
+/// blocks (two 64 B blocks a session). Never at a session's end: a reused
+/// thread's next session keeps the callbacks its registrants armed once per
+/// thread. Nothing runs transaction code on the thread afterwards.
+pub fn thread_exit_teardown() {
+    xs(|s| {
+        s.xact_callbacks = Vec::new();
+        s.subxact_callbacks = Vec::new();
+        s.unreported_xids = Vec::new();
+        s.parallel_current_xids = Vec::new();
+        s.prepare_gid = None;
+    });
+}
+
+/// C's CurrentMemoryContext right after StartTransactionCommand
+/// (CurTransactionContext; TopTransactionContext at top level), for callers
+/// that allocate transaction-lifetime memory. `f` must be a leaf (see `xs`).
+pub fn with_cur_transaction_context<R>(f: impl FnOnce(&MemoryContext) -> R) -> Option<R> {
+    xs(|s| {
+        s.current()
+            .cur_transaction_context
+            .as_ref()
+            .or(s.top_transaction_context.as_ref())
+            .map(f)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn subs_capacity_for_tests() -> usize {
+    xs(|s| s.stack.subs.capacity())
+}
+
+/// The heap capacities `thread_exit_teardown` frees: the two callback lists, the unreported and parallel xid lists, the
+/// prepared gid's.
+#[cfg(test)]
+pub(crate) fn exit_heap_for_tests() -> [usize; 5] {
+    xs(|s| {
+        [
+            s.xact_callbacks.capacity(),
+            s.subxact_callbacks.capacity(),
+            s.unreported_xids.capacity(),
+            s.parallel_current_xids.capacity(),
+            s.prepare_gid.as_ref().map_or(0, String::capacity),
+        ]
+    })
 }
 
 /// The state's TLS address, resolved once per transaction phase and threaded

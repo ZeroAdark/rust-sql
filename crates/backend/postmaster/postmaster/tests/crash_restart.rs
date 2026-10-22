@@ -43,6 +43,45 @@ fn write_valid_control_file(dir: &str) {
 const VICTIM_PID: i32 = 9001;
 const SIBLING_PID: i32 = 9002;
 
+fn data_dir_of(pid: u32) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("pgrust-crash-restart-{pid}"))
+}
+
+/// The scratch data directory is the process's (SetDataDir), and the
+/// postmaster's threads may still use it after the test returns, so it goes
+/// at the process's exit.
+fn remove_data_dir_at_exit() {
+    extern "C" fn gone() {
+        let _ = std::fs::remove_dir_all(data_dir_of(std::process::id()));
+    }
+    extern "C" {
+        fn atexit(f: extern "C" fn()) -> core::ffi::c_int;
+    }
+    // SAFETY: the C library's atexit, given a function that cannot unwind
+    // (it ignores the removal's error).
+    unsafe { atexit(gone) };
+}
+
+/// The test, run alone in a child process, leaves no data directory behind
+/// once the child exits.
+#[test]
+fn a_run_leaves_nothing_behind() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "crash_fans_out_sigquit_and_reinit_completes", "--nocapture"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let dir = data_dir_of(child.id());
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "child failed: {stdout}");
+    assert!(
+        stdout.contains(&format!("data dir {}", dir.display())),
+        "the child never made its data dir: {stdout}"
+    );
+    assert!(!dir.exists(), "{} left behind", dir.display());
+}
+
 #[test]
 fn crash_fans_out_sigquit_and_reinit_completes() {
     guc_tables::init_seams();
@@ -132,8 +171,10 @@ fn crash_fans_out_sigquit_and_reinit_completes() {
     pmchild_seams::init_postmaster_child_slots::call();
     bgworker::BackgroundWorkerShmemInit().expect("bgworker shmem init");
 
-    let dir = std::env::temp_dir().join(format!("pgrust-crash-restart-{}", std::process::id()));
+    let dir = data_dir_of(std::process::id());
     let _ = std::fs::remove_dir_all(&dir);
+    remove_data_dir_at_exit();
+    println!("data dir {}", dir.display());
     let dir: &'static str = Box::leak(dir.to_str().unwrap().to_string().into_boxed_str());
     write_valid_control_file(dir);
     init_small::globals::SetDataDir(dir);
@@ -235,4 +276,59 @@ fn crash_fans_out_sigquit_and_reinit_completes() {
     );
     // The real startup thread recovers against the scratch datadir in the
     // background; its eventual exit stays queued and unreaped here.
+
+    // D3049 (upstream 12f866cd5f): a fast shutdown during this early crash
+    // restart (PM_STARTUP, fatal_error still set) must not wait forever on a
+    // relaunched checkpointer, which ignores SIGTERM (C checkpointer.c
+    // `pqsignal(SIGTERM, SIG_IGN)`, ours alike). Before the fix the
+    // PM_STOP_BACKENDS arm sent it SIGTERM only and PM_WAIT_BACKENDS never
+    // drained; now it gets SIGQUIT, and the abort timer is armed.
+    let ckpt_slot =
+        pmchild_seams::assign_postmaster_child_slot::call(BackendType::Checkpointer).unwrap();
+    pmchild_seams::set_child_pid::call(ckpt_slot, CHECKPOINTER_PID);
+    let (ckpt_ready_tx, ckpt_ready_rx) = channel();
+    let checkpointer = std::thread::spawn(move || {
+        init_small::globals::SetIsUnderPostmaster(true);
+        init_small::globals::SetMyProcNumber(2);
+        init_small::globals::SetMyProcPid(CHECKPOINTER_PID);
+        procsignal::ProcSignalInit(&[]).unwrap();
+        procsignal::pqsignal_thread(libc::SIGTERM, procsignal::ThreadSignalHandler::Ignore);
+        procsignal::pqsignal_thread(
+            libc::SIGQUIT,
+            procsignal::ThreadSignalHandler::Simple(observe_checkpointer_sigquit),
+        );
+        ckpt_ready_tx.send(()).unwrap();
+        let start = std::time::Instant::now();
+        while !CKPT_SIGQUIT_SEEN.load(Ordering::SeqCst) {
+            if start.elapsed() > std::time::Duration::from_secs(5) {
+                return false;
+            }
+            procsignal::DrainThreadSignals().unwrap();
+            std::thread::yield_now();
+        }
+        true
+    });
+    ckpt_ready_rx.recv().unwrap();
+
+    postmaster::handle_pm_shutdown_request_signal(libc::SIGINT);
+    postmaster::statemachine::process_pm_shutdown_request().unwrap();
+
+    assert!(
+        checkpointer.join().unwrap(),
+        "a fast shutdown during an early crash restart must SIGQUIT the relaunched checkpointer within 5 s"
+    );
+    assert_eq!(with_pm(|pm| pm.pm_state), PMState::PM_WAIT_BACKENDS);
+    assert!(with_pm(|pm| pm.abort_start_time) != 0, "the SIGKILL floor must be armed");
+    assert_eq!(
+        with_pm(|pm| pm.startup_status),
+        StartupStatusEnum::Signaled,
+        "the startup child's exit must not read as a startup failure"
+    );
+}
+
+static CKPT_SIGQUIT_SEEN: AtomicBool = AtomicBool::new(false);
+const CHECKPOINTER_PID: i32 = 9003;
+
+fn observe_checkpointer_sigquit() {
+    CKPT_SIGQUIT_SEEN.store(true, Ordering::SeqCst);
 }

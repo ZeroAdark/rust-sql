@@ -1,0 +1,67 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1n s2u s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) UPDATE cv_ipv SET a = a + 1 WHERE id > 10;
+QUERY PLAN                                   
+---------------------------------------------
+Update on cv_ip p                            
+  Update on cv_ip p_1                        
+  Update on cv_ic p_2                        
+  ->  Hash Right Semi Join                   
+        Hash Cond: (r.a = p.a)               
+        ->  Seq Scan on cv_kr r              
+        ->  Hash                             
+              ->  Append                     
+                    ->  Seq Scan on cv_ip p_1
+                          Filter: (id > 10)  
+                    ->  Seq Scan on cv_ic p_2
+                          Filter: (id > 10)  
+  SubPlan 1                                  
+    ->  Seq Scan on cv_kr r_1                
+          Filter: (a = p_1.a)                
+(15 rows)
+
+step s1n: UPDATE cv_ip SET n = 'c' WHERE id = 12;
+step s2u: UPDATE cv_ipv SET a = a + 1 WHERE id > 10; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT tableoid::regclass, id, a, n FROM cv_ip ORDER BY id;
+tableoid|id|a|n  
+--------+--+-+---
+cv_ip   | 1|1|p1 
+cv_ic   | 2|2|c2 
+cv_ip   |11|4|p11
+cv_ic   |12|3|c  
+(4 rows)
+
+
+starting permutation: s1a s2u s1c s2sel
+step s1a: UPDATE cv_ip SET a = 1 WHERE id = 12;
+step s2u: UPDATE cv_ipv SET a = a + 1 WHERE id > 10; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT tableoid::regclass, id, a, n FROM cv_ip ORDER BY id;
+tableoid|id|a|n  
+--------+--+-+---
+cv_ip   | 1|1|p1 
+cv_ic   | 2|2|c2 
+cv_ip   |11|4|p11
+cv_ic   |12|1|c12
+(4 rows)
+
+
+starting permutation: s1n s2bad s1c s2sel
+step s1n: UPDATE cv_ip SET n = 'c' WHERE id = 12;
+step s2bad: UPDATE cv_ipv SET a = 9 WHERE id = 12; <waiting ...>
+step s1c: COMMIT;
+step s2bad: <... completed>
+ERROR:  new row violates check option for view "cv_ipv"
+step s2sel: SELECT tableoid::regclass, id, a, n FROM cv_ip ORDER BY id;
+tableoid|id|a|n  
+--------+--+-+---
+cv_ip   | 1|1|p1 
+cv_ic   | 2|2|c2 
+cv_ip   |11|3|p11
+cv_ic   |12|2|c  
+(4 rows)
+

@@ -65,7 +65,8 @@ pub fn unicode_assigned(input: &[u8]) -> PgResult<bool> {
 
 fn utf8_to_wchars<'mcx>(mcx: Mcx<'mcx>, input: &[u8]) -> PgResult<PgVec<'mcx, pg_wchar>> {
     let size = mbutils::pg_mbstrlen_with_len(input)? as usize;
-    let mut chars = mcx::vec_with_capacity_in(mcx, size)?;
+    // varlena.c palloc_array(pg_wchar, size + 1): room for C's 0 terminator.
+    let mut chars = mcx::vec_with_capacity_in(mcx, size + 1)?;
     let mut off = 0usize;
     while off < input.len() {
         chars.push(utf8_to_unicode(&input[off..]));

@@ -1,0 +1,44 @@
+# unreached.tsv (TD-197 amendment, USER RULING via memacct 2026-10-15 task A (3), GO 2026-10-15T20:3xZ): functions no server
+# path reaches; their findings are UNREACHED (a named class, not debt) while unreached.py's proof holds (ratchet.py base
+# re-proves every row on every range; a REACHED row fails). <file>\t<function>\t<note>. The 48-site re-check (lanebox-alloclint,
+# trunk 271b2078c2d): 1 function of 23 survives the strict bar; the other 22 are REACHED by a common name and go to CONVERT;
+# Deps::caches and expr::shape had no caller and were deleted.
+# FILE rows (memacct 2026-10-16T05:0xZ, the same class at file granularity): <file>\t*\t<note naming the file proof's version and its exclusions>; the whole module file is UNREACHED while unreached.py prove_file holds, re-run on every lint run.
+crates/gravity/lower/src/rerun/spool.rs	encode_row	rerun spool's row encoder: called only from #[cfg(test)] code (3 sites)
+# SLICE 1 (lane alloclint, memacct GO 2026-10-16 ~00:0xZ; the ruled proof, nothing narrowed): 44 functions / 119 sites called ONLY
+# from test code (scan of every debt site's enclosing fn at trunk 77f657cdb72, re-proven by unreached.py check on this tree). Each
+# note names the test callers. MERGE NOTES (Delta / malisper-31, 10-16): (1) pgrc_delta has no counterpart on Delta's line: its
+# rows (SimHeap::*, DeltaScanState::get_or_publish) go stale at that merge; DELETE them, don't map them. (2) Delta's line edited
+# the other pgrc crates heavily, testkit.rs included: at that merge re-run `unreached.py check` (and, for new candidates, the
+# proof) on the MERGED tree instead of carrying these rows by rename. Long term the owners may instead gate the testkit modules
+# with #[cfg(any(test, feature = "testkit"))], which takes them out of the server build by construction (then drop the rows).
+crates/backend/access/pgrcolumnar/pgrc_batch/src/mask.rs	Mask::from_selection	called only from test code (mask.rs x3); 1 site(s)
+crates/backend/access/pgrcolumnar/pgrc_batch/src/mask.rs	Mask::from_validity	called only from test code (mask.rs x2); 1 site(s)
+crates/backend/access/pgrcolumnar/pgrc_codec/src/jsonbshred.rs	lane_from_row_aligned	called only from test code (tests/jsonb_lanes.rs x2); 5 site(s)
+crates/backend/access/pgrcolumnar/pgrc_codec/src/jsonbshred.rs	lane_to_row_aligned	called only from test code (tests/jsonb_lanes.rs x2); 1 site(s)
+crates/backend/access/pgrcolumnar/pgrc_meta/src/pcache.rs	GranuleBitmap::all_clear	called only from test code (tests/pcache_tests.rs); 1 site(s)
+crates/backend/access/pgrcolumnar/pgrc_meta/src/pcache.rs	GranuleBitmap::all_set	called only from test code (tests/pcache_tests.rs x15); 1 site(s)
+crates/backend/access/pgrcolumnar/pgrc_read/src/openpart.rs	OpenPart::user_accounts	called only from test code (tests/core_d3994_rebind_owner.rs, tests/d4554_kept_parked.rs); 1 site(s)
+crates/backend/access/pgrcolumnar/pgrc_write/src/shred.rs	decode_path_table	called only from test code (tests/shred_jsonb_tests.rs, tests/shred_tests.rs x4); 5 site(s)
+crates/backend/access/pgrcolumnar/pgrc_write/src/structural.rs	StructuralPolicy::with_array	called only from test code (tests/structural_arrays.rs); 1 site(s)
+crates/backend/access/pgrcolumnar/pgrc_write/src/testkit.rs	capture_mixed_chunks	called only from test code (tests/par_determinism.rs x7); 2 site(s)
+crates/backend/access/pgrcolumnar/pgrc_write/src/testkit.rs	capture_mixed_col_chunks	called only from test code (tests/par_determinism.rs); 9 site(s)
+crates/backend/access/pgrcolumnar/pgrc_write/src/testkit.rs	img_pglz	called only from test code (tests/crash.rs, tests/detoast_tests.rs x2); 6 site(s)
+crates/backend/access/pgrcolumnar/pgrc_write/src/testkit.rs	img_short	called only from test code (tests/detoast_tests.rs x2); 4 site(s)
+crates/backend/access/pgrcolumnar/pgrc_write/src/testkit.rs	logical_totals	called only from test code (tests/runtime_binding.rs x3, tests/par_determinism.rs x2); 1 site(s)
+crates/backend/access/pgrcolumnar/pgrc_write/src/testkit.rs	serial_mixed_tmp_bytes	called only from test code (tests/runtime_binding.rs, tests/par_determinism.rs x4); 3 site(s)
+crates/backend/access/pgrcolumnar/pgrc_write/src/testkit.rs	*	file-proof v1 (unreached.py prove_file): pgrc_write's test kit (fixtures, the in-memory WAL and crash recovery, par providers); only tests/ and #[cfg(test)] items name the module (pgrc_write src/tests/, the ingest.rs and octet.rs test mods, pgrc_am / pgrc_scan / pgrc_wal tests.rs); exclusions: tests/ examples/ benches/ build.rs, #[cfg(test)] items and the files they load, comments, packages outside the server closure, the parent's `mod testkit;`; @SITES@. MERGE r15 (DEBT15 2026-10-16): replaces the function rows PartView::meta_body and read_manifest (REACHED by name only: stats.rs's own meta_body, plan::read_manifest) and par_providers (REACHED from testkit's own logged_par_providers)
+crates/gravity/backend/tpde/src/lib.rs	Compiled::regalloc_report	called only from test code (tests/asm_debug.rs, tests/fixedregs.rs); 2 site(s)
+crates/gravity/exec/src/ops/ctescan/proto.rs	prepare_bare	called only from test code (common/on_demand.rs x6); 1 site(s)
+crates/gravity/exec/src/ops/material/proto.rs	prepare_bare	called only from test code (common/on_demand.rs x6); 1 site(s)
+crates/gravity/exec/src/ops/memoize/proto.rs	prepare_bare	called only from test code (common/on_demand.rs x6); 1 site(s)
+crates/gravity/exec/src/ops/modifytable/proto.rs	prepare_bare	called only from test code (common/on_demand.rs x6); 5 site(s)
+crates/gravity/exec/src/ops/subplan/initplan/init.rs	prepare_bare	called only from test code (common/on_demand.rs x6); 1 site(s)
+crates/gravity/fn/src/fmgr_call.rs	FmgrCall::bind_under	called only from test code (tests/result_life.rs x2, tests/result_life_scribble.rs x9); 2 site(s)
+crates/gravity/fn/src/fmgr_call.rs	FmgrCall::bind_under_window	called only from test code (tests/window_alloc.rs x2); 2 site(s)
+crates/gravity/hosts/src/ops/scan/pgrc/granule_source.rs	GranuleRecipe::for_test_classes	called only from test code (tests/scan_pgrc_granule_shred_codes.rs x2, tests/scan_pgrc_granule_source.rs x9, tests/scan_pgrc_merged.rs); 2 site(s)
+crates/gravity/hosts/src/ops/scan/pgrc/granule_source.rs	GranuleRecipe::for_test_codes	called only from test code (tests/core_d4315_walk_unpin.rs, tests/core_d4321_fp_cache_scope.rs, tests/core_d4329_dict_build_gate.rs +13 more); 2 site(s)
+crates/gravity/hosts/src/ops/scan/pgrc/granule_source.rs	GranuleRecipe::with_profile	called only from test code (tests/core_d4482_list_faces.rs, tests/core_d4504_faces_trim.rs, tests/scan_pgrc_granule_census.rs x6 +3 more); 1 site(s)
+crates/gravity/hosts/src/ops/scan/pgrc/granule_source.rs	Resolved::site_cells	called only from test code (tests/scan_pgrc_granule_source.rs); 1 site(s)
+crates/gravity/lowerv4/src/hir/raw.rs	Lanes::rest_lane	called only from test code (hir.rs x3, hir/raw.rs); 2 site(s)
+crates/gravity/decompose/src/corpus.rs	*	file-proof v1 (unreached.py prove_file): decompose's plan fixture reader (corpus::load and its readers); only tests/, examples/ and #[cfg(test)] items name the module (its one production path, lowerv4 frame/program.rs's gate_tags tag_name, moved to ledger::Kind::tag_name 2026-10-16); exclusions: tests/ examples/ benches/ build.rs, #[cfg(test)] items and the files they load, comments, packages outside the server closure, the parent's `mod corpus;`; 34 site(s) at the move (Vec::push 19, collect 7, String::push 3, Vec 2, push_str / clone / ir-only from_residual 1)

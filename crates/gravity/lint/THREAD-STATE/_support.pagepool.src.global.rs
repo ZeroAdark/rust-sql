@@ -1,0 +1,3 @@
+_support/pagepool/src/global.rs	STARTING	memory	call	scratch	the pool start guard: true only inside start() on the thread starting the pool (its own allocations meanwhile are the system's), cleared before start() returns
+_support/pagepool/src/global.rs	UNCAPPED	memory	call	scratch	D4718: PoolAlloc's claim scope, nonzero only inside its own slow-path claims (the small tier's fresh run, big blocks, the cache class's big blocks, an in-place resize), which pass the pool's claim cap; a drop guard takes it back to 0 when each returns
+_support/pagepool/src/global.rs	BASE_ASK	memory	call	scratch	C.23: true only inside base_pages's closure on the calling thread (its zeroed blocks of a superpage and up are base spans); a drop guard clears it when the closure returns

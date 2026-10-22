@@ -1,0 +1,1 @@
+backend/utils/misc/guc/src/knob.rs	KNOB_READS	pgport	key:store mutation count	cache	each hot pgrust.* placeholder knob's reading (guc_seams Knob) with the store mutation count it was read at; a fixed array, one cell per knob; a claim reads its own thread's store, as GetConfigOption did

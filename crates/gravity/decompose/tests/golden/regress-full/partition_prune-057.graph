@@ -1,0 +1,118 @@
+-- regress-full-partition_prune-057
+-- explain (analyze, costs off, summary off, timing off, buffers off) execute ab_q2 (2, 2);
+graph pipelines=10 breakers=0 init_plans=1 root=p9
+p0 node=10 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n10@0
+  source const
+  project (1=c23:3)
+  outs 1=w4:val
+p1 node=1 eligible rows=4 end=sink
+  nodes n1@0 n0@4
+  source range rel=45142 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v3.1, $1)
+  filter op523(v3.1, $2)
+  filter op97(v3.2, $exec0)
+  project (1=v3.1)
+  append arm 0/9 prune=initial+exec [rti=1 parts=3 present=(0,1,2) steps=3] [rti=2 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=6 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=10 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p2 node=2 eligible rows=4 end=sink
+  nodes n2@0 n0@4
+  source range rel=45147 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v4.1, $1)
+  filter op523(v4.1, $2)
+  filter op97(v4.2, $exec0)
+  project (1=v4.1)
+  append arm 1/9 prune=initial+exec [rti=1 parts=3 present=(0,1,2) steps=3] [rti=2 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=6 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=10 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p3 node=3 eligible rows=4 end=sink
+  nodes n3@0 n0@4
+  source range rel=45152 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v5.1, $1)
+  filter op523(v5.1, $2)
+  filter op97(v5.2, $exec0)
+  project (1=v5.1)
+  append arm 2/9 prune=initial+exec [rti=1 parts=3 present=(0,1,2) steps=3] [rti=2 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=6 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=10 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p4 node=4 eligible rows=4 end=sink
+  nodes n4@0 n0@4
+  source range rel=45122 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v7.1, $1)
+  filter op523(v7.1, $2)
+  filter op97(v7.2, $exec0)
+  project (1=v7.1)
+  append arm 3/9 prune=initial+exec [rti=1 parts=3 present=(0,1,2) steps=3] [rti=2 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=6 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=10 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p5 node=5 eligible rows=4 end=sink
+  nodes n5@0 n0@4
+  source range rel=45127 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v8.1, $1)
+  filter op523(v8.1, $2)
+  filter op97(v8.2, $exec0)
+  project (1=v8.1)
+  append arm 4/9 prune=initial+exec [rti=1 parts=3 present=(0,1,2) steps=3] [rti=2 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=6 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=10 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p6 node=6 eligible rows=4 end=sink
+  nodes n6@0 n0@4
+  source range rel=45132 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v9.1, $1)
+  filter op523(v9.1, $2)
+  filter op97(v9.2, $exec0)
+  project (1=v9.1)
+  append arm 5/9 prune=initial+exec [rti=1 parts=3 present=(0,1,2) steps=3] [rti=2 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=6 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=10 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p7 node=7 eligible rows=4 end=sink
+  nodes n7@0 n0@4
+  source range rel=45162 rti=11 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v11.1, $1)
+  filter op523(v11.1, $2)
+  filter op97(v11.2, $exec0)
+  project (1=v11.1)
+  append arm 6/9 prune=initial+exec [rti=1 parts=3 present=(0,1,2) steps=3] [rti=2 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=6 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=10 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p8 node=8 eligible rows=4 end=sink
+  nodes n8@0 n0@4
+  source range rel=45167 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v12.1, $1)
+  filter op523(v12.1, $2)
+  filter op97(v12.2, $exec0)
+  project (1=v12.1)
+  append arm 7/9 prune=initial+exec [rti=1 parts=3 present=(0,1,2) steps=3] [rti=2 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=6 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=10 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+p9 node=9 eligible rows=4 end=sink
+  nodes n9@0 n0@4
+  source range rel=45172 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op525(v13.1, $1)
+  filter op523(v13.1, $2)
+  filter op97(v13.2, $exec0)
+  project (1=v13.1)
+  append arm 8/9 prune=initial+exec [rti=1 parts=3 present=(0,1,2) steps=3] [rti=2 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=6 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)] [rti=10 parts=3 present=(0,1,2) steps=0 exec_steps=1 params=($exec0)]
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w4:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: Result Append SeqScan PartitionPruneInfo SubPlan

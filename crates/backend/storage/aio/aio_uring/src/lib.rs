@@ -5,8 +5,8 @@
 //! drain a ring's completions (C's deadlock rule: whoever waits completes).
 //! Like C 18, the route is io_method-gated: PrefetchSharedBuffer takes it
 //! only under io_method=io_uring (AND uring_available()); fadvise stays the
-//! fallback everywhere else. The previous availability-only gate allowed
-//! io_method=sync clusters to issue ring reads.
+//! fallback everywhere else. It was availability-gated only until the
+//! archil-neon incident showed io_method=sync clusters issuing ring reads.
 //!
 //! M1 §2.9 (parallelism-redesign): every in-flight slot carries a
 //! `waiter::io::IoToken`; reaping completes it (unpark-all). Runtime-pool
@@ -170,6 +170,8 @@ mod imp {
         cq_len: usize,
         sqes: *mut Sqe,
         sqes_len: usize,
+        /// G1-A door 2 + C8 move 7: the ring's mappings on its opener's session (a pool worker's: its holder) while mapped.
+        charge: Option<memledger::Charge>,
         sq_tail: *mut u32,
         sq_mask: u32,
         sq_array: *mut u32,
@@ -279,6 +281,14 @@ mod imp {
             close_fd(fd);
             return None;
         }
+        let acct = memledger::current();
+        let (owner, release) = if acct.is_backend() {
+            (memledger::Owner::Session(acct), memledger::Release::Session)
+        } else {
+            (memledger::Owner::Cache(memledger::Holder::of_acct(acct)), memledger::Release::Evict)
+        };
+        let mapped = (sq_len + if single { 0 } else { cq_len } + sqes_len) as u64;
+        let charge = memledger::Charge::open(owner, release, memledger::Kind::Mapped, memledger::charge::Door::Mapped, mapped);
         // SAFETY: offsets come from the kernel's io_uring_params for these maps.
         unsafe {
             let sq_mask = *sq_ptr.add(p.sq_off.ring_mask as usize).cast::<u32>();
@@ -293,6 +303,7 @@ mod imp {
                 cq_len,
                 sqes: sqes.cast(),
                 sqes_len,
+                charge: Some(charge),
                 sq_tail: sq_ptr.add(p.sq_off.tail as usize).cast(),
                 sq_mask,
                 sq_array: sq_ptr.add(p.sq_off.array as usize).cast(),
@@ -743,6 +754,7 @@ mod imp {
         st.alive = false;
         // SAFETY: alive=false under the mutex; no deref of these maps can
         // happen after this point.
+        drop(st.charge.take());
         unsafe {
             libc::munmap(st.sqes.cast(), st.sqes_len);
             if st.cq_ptr != st.sq_ptr {
@@ -809,19 +821,33 @@ mod tests {
     static URING_SYNC_FILE: std::sync::Mutex<Option<std::fs::File>> =
         std::sync::Mutex::new(None);
 
+    // The backing files are process-wide (shared by every test of the binary), so no per-test guard can own
+    // them: each is created in its own scratch directory, opened, then unlinked with its directory at once.
+    // The open fds keep the inodes alive on the same filesystem (O_DIRECT still engages on /work) and nothing
+    // is left behind, even when a test panics or the binary is killed.
+    // /work is the CI cluster NVMe (O_DIRECT-capable); temp_dir may be tmpfs.
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let base = if std::path::Path::new("/work").is_dir() {
+            std::path::PathBuf::from("/work")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = base.join(format!("aio-uring-pool-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn unlink_scratch(path: &std::path::Path) {
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+    }
+
     fn sync_file_fd(blocknum: u32, nblocks: u32) -> i32 {
         use std::io::{Seek, SeekFrom, Write};
         use std::os::fd::AsRawFd;
         let mut guard = URING_SYNC_FILE.lock().unwrap();
         if guard.is_none() {
-            let base = if std::path::Path::new("/work").is_dir() {
-                std::path::PathBuf::from("/work")
-            } else {
-                std::env::temp_dir()
-            };
-            let dir = base.join(format!("aio-uring-pool-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).unwrap();
-            let path = dir.join("rel-sync.dat");
+            let path = scratch_dir("sync").join("rel-sync.dat");
             *guard = Some(
                 std::fs::OpenOptions::new()
                     .create(true)
@@ -831,6 +857,7 @@ mod tests {
                     .open(&path)
                     .unwrap(),
             );
+            unlink_scratch(&path);
         }
         let f = guard.as_mut().unwrap();
         let needed_end = (blocknum + nblocks) as u64 * BLCKSZ as u64;
@@ -854,15 +881,7 @@ mod tests {
         use std::os::unix::fs::OpenOptionsExt;
         URING_FILE
             .get_or_init(|| {
-                // /work is the CI cluster NVMe (O_DIRECT-capable); temp_dir may be tmpfs.
-                let base = if std::path::Path::new("/work").is_dir() {
-                    std::path::PathBuf::from("/work")
-                } else {
-                    std::env::temp_dir()
-                };
-                let dir = base.join(format!("aio-uring-pool-{}", std::process::id()));
-                std::fs::create_dir_all(&dir).unwrap();
-                let path = dir.join("rel.dat");
+                let path = scratch_dir("dio").join("rel.dat");
                 let mut f = std::fs::OpenOptions::new()
                     .create(true)
                     .truncate(true)
@@ -878,7 +897,7 @@ mod tests {
                 }
                 f.flush().unwrap();
                 f.sync_all().unwrap();
-                match std::fs::OpenOptions::new().read(true).custom_flags(libc::O_DIRECT).open(&path)
+                let opened = match std::fs::OpenOptions::new().read(true).custom_flags(libc::O_DIRECT).open(&path)
                 {
                     Ok(dio) => {
                         DIO_ENGAGED.store(true, Ordering::Relaxed);
@@ -888,7 +907,9 @@ mod tests {
                         eprintln!("O_DIRECT open failed ({e}); pool-read tests run buffered");
                         f
                     }
-                }
+                };
+                unlink_scratch(&path);
+                opened
             })
             .as_raw_fd()
     }

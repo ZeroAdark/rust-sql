@@ -1,0 +1,9 @@
+-- regress-full-uuid-009
+-- SELECT uuid_extract_timestamp(uuidv7('1000 years'::interval)) > now() + '999 years'::interval;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op1324(fn6342(fn6430(c1186:#16)), op1327(fn1299(), c1186:#16)))
+  outs 1=w1:val
+mapped: Result

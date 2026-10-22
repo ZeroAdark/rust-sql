@@ -1,0 +1,1 @@
+backend/utils/activity/waitevent/src/lib.rs	MY_WAIT_EVENT_INFO	pgport	at:pgstat_reset_wait_event_storage	thread	my_wait_event_info: this thread's wait-event slot (its PGPROC's or a bgjob seat's, pgstat_set_wait_event_storage), cleared at its proc exit; a claim's waits report into its own thread's slot (none unless bound), never its leader's

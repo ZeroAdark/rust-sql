@@ -1,0 +1,213 @@
+-- regress-full-partition_join-026
+-- EXPLAIN (COSTS OFF) SELECT COUNT(*) FROM prt1 FULL JOIN prt2 p2(b,a,c) USING(a,b) FULL JOIN prt2 p3(b,a,c) USING (a, b) FULL JOIN prt1 p4 (a,b,c) USING (a, b) WHERE a BETWEEN 490 AND 510;
+graph pipelines=22 breakers=21 init_plans=0 root=p21
+p0 node=11 eligible rows=125 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n11@0 n10@1
+  source range rel=43946 rti=17 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v17.1, 2=v17.2)
+  build keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32
+  outs 1=w8:val 2=w8:val
+p1 node=9 eligible rows=84 end=breaker(slot=1 HashBuild)
+  desc words=bits@6/7
+  nodes n9@0 n8@1
+  source range rel=43967 rti=14 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v14.2, 2=v14.1)
+  build keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32
+  outs 1=w8:val 2=w8:val
+p2 node=7 eligible rows=84 end=breaker(slot=2 HashBuild)
+  desc words=bits@7/8
+  nodes n7@0 n6@1
+  source range rel=43967 rti=11 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v11.2, 2=v11.1)
+  build keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32
+  outs 1=w8:val 2=w8:val
+p3 node=5 eligible rows=125 end=breaker(slot=3 Materialize)
+  desc consumes=slot2@p2
+  nodes n5@0 n4@1^
+  source range rel=43946 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v8.1, 2=v8.2)
+  probe slot=2 inner=n6 JOIN_FULL marks build-first keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32 clauses=(op96(outer.1, inner.1), op96(outer.2, inner.2))
+  outs 1=w8:val 2=w8:val
+p4 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=4 Materialize)
+  desc consumes=slot2@p2 consumes=slot3@p3 consumes=slot1@p1
+  nodes n4@0 n3@2^
+  source breaker slot=2
+  drain matches=slot3 JOIN_FULL
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  probe slot=1 inner=n8 JOIN_FULL marks build-first keys=(coalesce(outer.1, outer.3), coalesce(outer.2, outer.4)) decls=23/23:I32,23/23:I32 clauses=(op96(coalesce(outer.1, outer.3), inner.1), op96(coalesce(outer.2, outer.4), inner.2))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+p5 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 Materialize)
+  desc consumes=slot1@p1 consumes=slot4@p4 consumes=slot0@p0
+  nodes n3@0 n2@2^
+  source breaker slot=1
+  drain matches=slot4 JOIN_FULL
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=inner.1, 6=inner.2)
+  probe slot=0 inner=n10 JOIN_FULL marks build-first keys=(coalesce(coalesce(outer.1, outer.3), outer.5), coalesce(coalesce(outer.2, outer.4), outer.6)) decls=23/23:I32,23/23:I32 clauses=(op96(coalesce(coalesce(outer.1, outer.3), outer.5), inner.1), op96(coalesce(coalesce(outer.2, outer.4), outer.6), inner.2))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=w4:val
+p6 node=21 eligible rows=125 end=breaker(slot=1 HashBuild)
+  desc words=bits@8/9
+  nodes n21@0 n20@1
+  source range rel=43956 rti=18 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v18.1, 2=v18.2)
+  build keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32
+  outs 1=w8:val 2=w8:val
+p7 node=19 eligible rows=83 end=breaker(slot=3 HashBuild)
+  desc words=bits@9/10
+  nodes n19@0 n18@1
+  source range rel=43972 rti=15 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v15.2, 2=v15.1)
+  build keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32
+  outs 1=w8:val 2=w8:val
+p8 node=17 eligible rows=83 end=breaker(slot=4 HashBuild)
+  desc words=bits@10/11
+  nodes n17@0 n16@1
+  source range rel=43972 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v12.2, 2=v12.1)
+  build keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32
+  outs 1=w8:val 2=w8:val
+p9 node=15 eligible rows=125 end=breaker(slot=5 Materialize)
+  desc consumes=slot4@p8
+  nodes n15@0 n14@1^
+  source range rel=43956 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v9.1, 2=v9.2)
+  probe slot=4 inner=n16 JOIN_FULL marks build-first keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32 clauses=(op96(outer.1, inner.1), op96(outer.2, inner.2))
+  outs 1=w8:val 2=w8:val
+p10 node=14 serial site=-1 reason=NoDrivingSite end=breaker(slot=6 Materialize)
+  desc consumes=slot4@p8 consumes=slot5@p9 consumes=slot3@p7
+  nodes n14@0 n13@2^
+  source breaker slot=4
+  drain matches=slot5 JOIN_FULL
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  probe slot=3 inner=n18 JOIN_FULL marks build-first keys=(coalesce(outer.1, outer.3), coalesce(outer.2, outer.4)) decls=23/23:I32,23/23:I32 clauses=(op96(coalesce(outer.1, outer.3), inner.1), op96(coalesce(outer.2, outer.4), inner.2))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+p11 node=13 serial site=-1 reason=NoDrivingSite end=breaker(slot=4 Materialize)
+  desc consumes=slot3@p7 consumes=slot6@p10 consumes=slot1@p6
+  nodes n13@0 n12@2^
+  source breaker slot=3
+  drain matches=slot6 JOIN_FULL
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=inner.1, 6=inner.2)
+  probe slot=1 inner=n20 JOIN_FULL marks build-first keys=(coalesce(coalesce(outer.1, outer.3), outer.5), coalesce(coalesce(outer.2, outer.4), outer.6)) decls=23/23:I32,23/23:I32 clauses=(op96(coalesce(coalesce(outer.1, outer.3), outer.5), inner.1), op96(coalesce(coalesce(outer.2, outer.4), outer.6), inner.2))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=w4:val
+p12 node=31 eligible rows=50 end=breaker(slot=3 HashBuild)
+  desc words=bits@11/12
+  nodes n31@0 n30@1
+  source range rel=43951 rti=19 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v19.1, 2=v19.2)
+  build keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32
+  outs 1=w8:val 2=w8:val
+p13 node=29 eligible rows=33 end=breaker(slot=5 HashBuild)
+  desc words=bits@12/13
+  nodes n29@0 n28@1
+  source range rel=43977 rti=16 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v16.2, 2=v16.1)
+  build keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32
+  outs 1=w8:val 2=w8:val
+p14 node=27 eligible rows=33 end=breaker(slot=6 HashBuild)
+  desc words=bits@13/14
+  nodes n27@0 n26@1
+  source range rel=43977 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v13.2, 2=v13.1)
+  build keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32
+  outs 1=w8:val 2=w8:val
+p15 node=25 eligible rows=50 end=breaker(slot=7 Materialize)
+  desc consumes=slot6@p14
+  nodes n25@0 n24@1^
+  source range rel=43951 rti=10 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v10.1, 2=v10.2)
+  probe slot=6 inner=n26 JOIN_FULL marks build-first keys=(outer.1, outer.2) decls=23/23:I32,23/23:I32 clauses=(op96(outer.1, inner.1), op96(outer.2, inner.2))
+  outs 1=w8:val 2=w8:val
+p16 node=24 serial site=-1 reason=NoDrivingSite end=breaker(slot=8 Materialize)
+  desc consumes=slot6@p14 consumes=slot7@p15 consumes=slot5@p13
+  nodes n24@0 n23@2^
+  source breaker slot=6
+  drain matches=slot7 JOIN_FULL
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  probe slot=5 inner=n28 JOIN_FULL marks build-first keys=(coalesce(outer.1, outer.3), coalesce(outer.2, outer.4)) decls=23/23:I32,23/23:I32 clauses=(op96(coalesce(outer.1, outer.3), inner.1), op96(coalesce(outer.2, outer.4), inner.2))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+p17 node=23 serial site=-1 reason=NoDrivingSite end=breaker(slot=6 Materialize)
+  desc consumes=slot5@p13 consumes=slot8@p16 consumes=slot3@p12
+  nodes n23@0 n22@2^
+  source breaker slot=5
+  drain matches=slot8 JOIN_FULL
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=inner.1, 6=inner.2)
+  probe slot=3 inner=n30 JOIN_FULL marks build-first keys=(coalesce(coalesce(outer.1, outer.3), outer.5), coalesce(coalesce(outer.2, outer.4), outer.6)) decls=23/23:I32,23/23:I32 clauses=(op96(coalesce(coalesce(outer.1, outer.3), outer.5), inner.1), op96(coalesce(coalesce(outer.2, outer.4), outer.6), inner.2))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=w4:val
+p18 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=5 PlainAgg)
+  desc consumes=slot0@p0 consumes=slot2@p5
+  nodes n2@0 n1@4 n0@6^
+  source breaker slot=0
+  drain matches=slot2 JOIN_FULL
+  filter op525(coalesce(coalesce(coalesce(outer.1, outer.3), outer.5), inner.1), c23:490)
+  filter op523(coalesce(coalesce(coalesce(outer.1, outer.3), outer.5), inner.1), c23:510)
+  project ()
+  append arm 0/3
+  project ()
+  outs
+  outs
+p19 node=12 serial site=-1 reason=NoDrivingSite end=breaker(slot=5 PlainAgg)
+  desc consumes=slot1@p6 consumes=slot4@p11
+  nodes n12@0 n1@4 n0@6^
+  source breaker slot=1
+  drain matches=slot4 JOIN_FULL
+  filter op525(coalesce(coalesce(coalesce(outer.1, outer.3), outer.5), inner.1), c23:490)
+  filter op523(coalesce(coalesce(coalesce(outer.1, outer.3), outer.5), inner.1), c23:510)
+  project ()
+  append arm 1/3
+  project ()
+  outs
+  outs
+p20 node=22 serial site=-1 reason=NoDrivingSite end=breaker(slot=5 PlainAgg)
+  desc consumes=slot3@p12 consumes=slot6@p17
+  nodes n22@0 n1@4 n0@6^
+  source breaker slot=3
+  drain matches=slot6 JOIN_FULL
+  filter op525(coalesce(coalesce(coalesce(outer.1, outer.3), outer.5), inner.1), c23:490)
+  filter op523(coalesce(coalesce(coalesce(outer.1, outer.3), outer.5), inner.1), c23:510)
+  project ()
+  append arm 2/3
+  project ()
+  outs
+  outs
+p21 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot5@p20
+  nodes n0@0
+  source breaker slot=5
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32,I32]->[Count@16] 24B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32,I32]->[Count@16] 24B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32,I32]->[Count@16] 24B
+breaker slot=3 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B
+breaker slot=4 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p5 layout=[]->[Count@0] 8B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p6 layout=[I32,I32]->[Count@16] 24B
+breaker slot=3 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p7 layout=[I32,I32]->[Count@16] 24B
+breaker slot=4 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p8 layout=[I32,I32]->[Count@16] 24B
+breaker slot=5 kind=Materialize budget=Share spill=Runs producer=p9 layout=[]->[Count@0] 8B
+breaker slot=6 kind=Materialize budget=Share spill=Runs producer=p10 layout=[]->[Count@0] 8B
+breaker slot=4 kind=Materialize budget=Share spill=Runs producer=p11 layout=[]->[Count@0] 8B
+breaker slot=3 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p12 layout=[I32,I32]->[Count@16] 24B
+breaker slot=5 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p13 layout=[I32,I32]->[Count@16] 24B
+breaker slot=6 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p14 layout=[I32,I32]->[Count@16] 24B
+breaker slot=7 kind=Materialize budget=Share spill=Runs producer=p15 layout=[]->[Count@0] 8B
+breaker slot=8 kind=Materialize budget=Share spill=Runs producer=p16 layout=[]->[Count@0] 8B
+breaker slot=6 kind=Materialize budget=Share spill=Runs producer=p17 layout=[]->[Count@0] 8B
+breaker slot=5 kind=PlainAgg budget=Fixed(64) spill=None producer=p18 layout=[]->[Count@0] 8B
+breaker slot=5 kind=PlainAgg budget=Fixed(64) spill=None producer=p19 layout=[]->[Count@0] 8B
+breaker slot=5 kind=PlainAgg budget=Fixed(64) spill=None producer=p20 layout=[]->[Count@0] 8B
+group slot=5 producer=p20 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: Append SeqScan HashJoin Agg Hash

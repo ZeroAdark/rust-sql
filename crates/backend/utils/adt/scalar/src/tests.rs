@@ -21,12 +21,15 @@ fn tid_in_out() {
     // strtoul wrap: C accepts (-1,0) as block 4294967295
     assert_eq!(t("(-1,0)"), Tid { block: u32::MAX, offset: 0 });
     assert_eq!(t("( 42,7)"), Tid { block: 42, offset: 7 });
-    // glibc strtoul: no digits is 0 with endptr == nptr, so an empty field
-    // directly followed by its delimiter parses as 0 (BSD libc sets EINVAL).
+    assert_eq!(t("(,1)"), Tid { block: 0, offset: 1 });
+    assert_eq!(t("(1,)"), Tid { block: 1, offset: 0 });
     assert_eq!(t("(,5)"), Tid { block: 0, offset: 5 });
     assert_eq!(t("(5,)"), Tid { block: 5, offset: 0 });
     assert_eq!(t("(,)"), Tid { block: 0, offset: 0 });
-    for bad in ["", "1,2", "(1,2", "(1 ,2)", "( 42 , 7 )", "(1,65536)", "(1,2)x", "( ,5)", "(-,5)", "(5,+)"] {
+    for bad in [
+        "", "1,2", "(1,2", "(1 ,2)", "( 42 , 7 )", "(1,65536)", "(1,2)x", "( ,1)", "(-,1)", "(1, )", "(1,+)", "( ,5)",
+        "(-,5)", "(5,+)",
+    ] {
         // trailing garbage after ')' is accepted by C (scan stops at RDELIM)
         if bad == "(1,2)x" {
             assert!(tidin(bad.as_bytes()).is_some());
@@ -201,6 +204,25 @@ mod datum_ops_tests {
         v
     }
 
+    // D4728's class: a 4-byte header that declares under its own 4 bytes is refused (XX001) instead of copied short;
+    // every reader of a short copy takes the header word past its end. A 1-byte header and the bare 4-byte header copy.
+    #[test]
+    fn copy_refuses_a_4_byte_header_under_its_size() {
+        let ctx = MemoryContext::new("t");
+        let mcx = ctx.mcx();
+        for n in 0u32..4 {
+            for bits in [0x00u32, 0x02] {
+                let img = ((n << 2) | bits).to_ne_bytes();
+                let err = datum_copy(mcx, Datum::from_usize(img.as_ptr() as usize), false, -1).unwrap_err();
+                assert_eq!(err.sqlstate(), types_error::ERRCODE_DATA_CORRUPTED, "VARSIZE {n} bits {bits}");
+            }
+        }
+        let short = [0x03u8, b'x'];
+        assert!(datum_copy(mcx, Datum::from_usize(short.as_ptr() as usize), false, -1).is_ok());
+        let empty = varlena(b"");
+        assert!(datum_copy(mcx, Datum::from_usize(empty.as_ptr() as usize), false, -1).is_ok());
+    }
+
     #[test]
     fn get_size_arms() {
         assert_eq!(datum_get_size(Datum::from_i32(7), true, 4).unwrap(), 4);
@@ -345,6 +367,9 @@ fn out_functions_do_not_alias_across_fmgrinfos() {
         let mut f1 = FmgrInfo::new(f, oid, 1, true, false);
         let mut f2 = FmgrInfo::new(f, oid, 1, true, false);
         let mut fcinfo = LocalFcinfo::<1>::new(0);
+        let cx = ::mcx::MemoryContext::new_bump("oid/xid/cid out alias test");
+        // SAFETY: cx outlives every call through fcinfo and every read of its results.
+        unsafe { fcinfo.set_result_mcx(cx.mcx()) };
         fcinfo.set_arg(0, Datum::from_u32(a));
         let d1 = f1.invoke(&mut fcinfo).unwrap();
         fcinfo.set_arg(0, Datum::from_u32(b));

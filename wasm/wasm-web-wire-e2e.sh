@@ -34,7 +34,7 @@
 # or target/wasm32-wasip1/{wasm-release,debug}/postgres.wasm).
 set -u
 
-REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"  # the public workspace root (git toplevel is the monorepo)
 WEB="$REPO/wasm"
 
 command -v node >/dev/null || { echo "node not installed"; exit 2; }
@@ -65,7 +65,7 @@ done
 [ -n "${TZSRC:-}" ] || { echo "no timezone share dir under $PGBIN/../share"; exit 2; }
 
 . "$REPO/wasm/lib/scratch.sh"
-WORK="${WASM_WIRE_E2E_DIR:-$(scratch_datadir pgrust-wasm-wire-e2e)}"
+WORK="${WASM_WIRE_E2E_DIR:-$(scratch_datadir pgrust-fast-wasm-wire-e2e)}"
 scratch_adopt "$WORK"
 rm -rf "$WORK"; mkdir -p "$WORK"
 
@@ -148,10 +148,18 @@ PGRUST_WASM="$WORK/assets/postgres.wasm" PGRUST_VFS="$WORK/assets/vfs" \
     > "$WORK/wasm.transcript"
 [ $? -eq 0 ] || miss "run-node-wire.mjs driver failed (see $WORK/wasm.err)"
 
+# D4680: each arm's datadir is its own initdb, so the startup NOTICE names that datadir's own last shutdown second
+for t in "$WORK/native.transcript" "$WORK/wasm.transcript"; do
+    sed -E 's/^(N NOTICE: database system was shut down at ).*$/\1<time>/' "$t" > "$t.n" && mv -f "$t.n" "$t"
+done
+
 if diff -u "$WORK/native.transcript" "$WORK/wasm.transcript" > "$WORK/transcript.diff"; then
     echo "transcripts byte-identical (native vs wasm-under-node)"
 else
     miss "transcripts differ (see $WORK/transcript.diff)"
+    # D4680: scratch_adopt's exit trap removes $WORK, so the diff goes to the log (the S3 leg keeps it)
+    echo "transcript.diff: $(wc -l < "$WORK/transcript.diff") line(s), the first 80:"
+    head -n 80 "$WORK/transcript.diff" | sed 's/^/  | /'
 fi
 
 # --- session-content spot checks (guard an empty==empty diff). ---------------

@@ -1,0 +1,12 @@
+-- regress-full-opr_sanity-041
+-- SELECT o1.oid, o1.oprname FROM pg_operator AS o1 WHERE (o1.oprcanmerge OR o1.oprcanhash) AND NOT (o1.oprkind = 'b' AND o1.oprresult = 'bool'::regtype AND o1.oprcom != 0);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=56 end=sink
+  nodes n0@0
+  source range rel=2617 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Offset:byval2:w2:val
+  filter or(v1.6, v1.7)
+  filter or(op630(v1.5, c18:98), op608(v1.10, c26:16), op607(v1.11, c26:0))
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

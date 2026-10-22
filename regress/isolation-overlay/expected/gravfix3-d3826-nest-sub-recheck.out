@@ -1,0 +1,67 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1out s2del s1c s2show s2c
+step s1out: UPDATE d3826mm SET out_id = 4 WHERE in_id = 2;
+step s2del: delete from d3826mm to_delete_ where to_delete_.in_id in (select sewa1_0.id from d3826s1 sewa1_0 where (select count(*) from d3826s2 ae1_0 where sewa1_0.id=ae1_0.simple_1_id)=0 and sewa1_0.name like '%' escape '') <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT * FROM d3826mm ORDER BY 1, 2;
+in_id|out_id
+-----+------
+    1|     2
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1in s2del s1c s2show s2c
+step s1in: UPDATE d3826mm SET in_id = 1 WHERE in_id = 2;
+step s2del: delete from d3826mm to_delete_ where to_delete_.in_id in (select sewa1_0.id from d3826s1 sewa1_0 where (select count(*) from d3826s2 ae1_0 where sewa1_0.id=ae1_0.simple_1_id)=0 and sewa1_0.name like '%' escape '') <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT * FROM d3826mm ORDER BY 1, 2;
+in_id|out_id
+-----+------
+    1|     2
+    1|     3
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1sub s2del s1c s2show s2c
+step s1sub: INSERT INTO d3826s2 VALUES (20, 'y', 2); UPDATE d3826mm SET out_id = 4 WHERE in_id = 2;
+step s2del: delete from d3826mm to_delete_ where to_delete_.in_id in (select sewa1_0.id from d3826s1 sewa1_0 where (select count(*) from d3826s2 ae1_0 where sewa1_0.id=ae1_0.simple_1_id)=0 and sewa1_0.name like '%' escape '') <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT * FROM d3826mm ORDER BY 1, 2;
+in_id|out_id
+-----+------
+    1|     2
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2del s1c s2show s2c
+step s1del: DELETE FROM d3826mm WHERE in_id = 2;
+step s2del: delete from d3826mm to_delete_ where to_delete_.in_id in (select sewa1_0.id from d3826s1 sewa1_0 where (select count(*) from d3826s2 ae1_0 where sewa1_0.id=ae1_0.simple_1_id)=0 and sewa1_0.name like '%' escape '') <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT * FROM d3826mm ORDER BY 1, 2;
+in_id|out_id
+-----+------
+    1|     2
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1out s2del s1a s2show s2c
+step s1out: UPDATE d3826mm SET out_id = 4 WHERE in_id = 2;
+step s2del: delete from d3826mm to_delete_ where to_delete_.in_id in (select sewa1_0.id from d3826s1 sewa1_0 where (select count(*) from d3826s2 ae1_0 where sewa1_0.id=ae1_0.simple_1_id)=0 and sewa1_0.name like '%' escape '') <waiting ...>
+step s1a: ROLLBACK;
+step s2del: <... completed>
+step s2show: SELECT * FROM d3826mm ORDER BY 1, 2;
+in_id|out_id
+-----+------
+    1|     2
+(1 row)
+
+step s2c: COMMIT;

@@ -76,6 +76,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "addr2line"
+version = "0.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59317f77929f0e679d39364702289274de2f0f0b22cbf50b2b8cff2169a0b27a"
+dependencies = [
+ "gimli",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -206,6 +215,7 @@ dependencies = [
  "adt_datetime",
  "adt_numeric",
  "adt_timestamp",
+ "catcache_seams",
  "datum",
  "elog",
  "fd",
@@ -239,6 +249,7 @@ dependencies = [
  "init_small",
  "localtime",
  "numutils",
+ "pgsync",
  "pgtz",
  "timestamp_seams",
  "types_core",
@@ -325,6 +336,7 @@ dependencies = [
  "datum",
  "detoast_seams",
  "fmgr_core",
+ "fp_contract",
  "guc_tables",
  "hashfn",
  "libc",
@@ -370,6 +382,7 @@ version = "0.1.0"
 dependencies = [
  "adt_float",
  "datum",
+ "fp_contract",
  "mcx",
  "pg_string",
  "postgres_seams",
@@ -488,6 +501,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "adt_jsonb_pathstats"
+version = "0.1.0"
+
+[[package]]
 name = "adt_jsonb_shred"
 version = "0.1.0"
 dependencies = [
@@ -512,6 +529,7 @@ dependencies = [
  "mbutils",
  "mcx",
  "numutils",
+ "pg_locale",
  "pgstrcasecmp",
  "postgres_seams",
  "pqformat",
@@ -619,6 +637,7 @@ name = "adt_mcxtfuncs"
 version = "0.1.0"
 dependencies = [
  "datum",
+ "dynahash",
  "elog",
  "funcapi",
  "lmgr_proc",
@@ -630,6 +649,7 @@ dependencies = [
  "types_core",
  "types_error",
  "types_fmgr",
+ "types_hash",
  "types_storage",
  "varlena",
 ]
@@ -654,7 +674,7 @@ dependencies = [
  "fmgr_seams",
  "format_type",
  "funcapi",
- "genam_seams",
+ "genam",
  "guc",
  "guc_tables",
  "heaptuple",
@@ -671,6 +691,7 @@ dependencies = [
  "postgres_seams",
  "postmaster_seams",
  "ruleutils",
+ "snapmgr",
  "standby",
  "superuser_seams",
  "syscache_seams",
@@ -758,6 +779,7 @@ dependencies = [
  "datum",
  "detoast_seams",
  "elog",
+ "fp_contract",
  "funcapi_srf",
  "guc_tables",
  "hashfn",
@@ -987,8 +1009,10 @@ dependencies = [
  "adt_numeric",
  "clauses_seams",
  "datum",
+ "detoast_seams",
  "elog",
  "fd",
+ "fp_contract",
  "funcapi",
  "guc_tables",
  "hashfn",
@@ -1009,6 +1033,7 @@ dependencies = [
  "types_error",
  "types_fmgr",
  "types_nodes",
+ "types_tuple",
  "xact",
  "xact_seams",
 ]
@@ -1193,6 +1218,7 @@ version = "0.1.0"
 dependencies = [
  "arrayfuncs",
  "datum",
+ "detoast_seams",
  "mbutils",
  "mcx",
  "nodes_core",
@@ -1211,6 +1237,7 @@ version = "0.1.0"
 dependencies = [
  "arrayfuncs",
  "datum",
+ "detoast_seams",
  "hashfn",
  "mbutils",
  "mcx",
@@ -1394,6 +1421,7 @@ dependencies = [
  "libc",
  "lmgr_proc",
  "lwlock",
+ "memledger",
  "pg_sema",
  "postgres_seams",
  "resowner",
@@ -1411,10 +1439,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
+name = "allocarena"
+version = "0.0.0"
+dependencies = [
+ "init_small",
+ "libc",
+ "libmimalloc-sys",
+ "memledger",
+ "mimalloc",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "allpaths"
@@ -1502,6 +1554,7 @@ dependencies = [
  "pg_class_seams",
  "postgres_seams",
  "procarray",
+ "read_stream",
  "relation",
  "smgr",
  "snapmgr",
@@ -1563,6 +1616,18 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "anyhow"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
+name = "arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
 name = "archive"
@@ -1633,6 +1698,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "assoc"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfdc70193dadb9d7287fa4b633f15f90c876915b31f6af17da307fc59c9859a8"
+
+[[package]]
+name = "async-trait"
+version = "0.1.92"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "async_seams"
 version = "0.0.0"
 dependencies = [
@@ -1666,6 +1748,7 @@ dependencies = [
  "auth_scram",
  "auth_seams",
  "backend_startup",
+ "be_gssapi_common",
  "be_secure",
  "crypt",
  "elog",
@@ -1714,6 +1797,7 @@ name = "auth_oauth"
 version = "0.0.0"
 dependencies = [
  "auth_sasl",
+ "dfmgr",
  "elog",
  "hba",
  "miscinit",
@@ -1788,6 +1872,7 @@ dependencies = [
  "types_core",
  "types_error",
  "types_fmgr",
+ "types_guc",
  "types_nodes",
  "types_portal",
  "types_slot",
@@ -1798,6 +1883,28 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "autoinc"
+version = "0.0.0"
+dependencies = [
+ "catalog_namespace",
+ "datum",
+ "dfmgr",
+ "heaptuple",
+ "mcx",
+ "rel_vocab",
+ "sequence_seams",
+ "spi",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_storage",
+ "types_trigger",
+ "types_trigger_call",
+ "types_tuple",
+ "varlena",
+]
 
 [[package]]
 name = "autovacuum"
@@ -1892,6 +1999,7 @@ dependencies = [
  "libc",
  "lmgr_proc",
  "miscinit",
+ "pg_sema_seams",
  "postinit",
  "postmaster_seams",
  "procsignal",
@@ -1902,6 +2010,7 @@ dependencies = [
  "types_guc",
  "types_resowner",
  "types_storage",
+ "waitevent",
  "waitevent_seams",
 ]
 
@@ -2019,6 +2128,7 @@ dependencies = [
  "timeout_seams",
  "types_core",
  "types_error",
+ "types_startup",
  "types_storage",
  "waitevent_seams",
  "xact",
@@ -2037,6 +2147,7 @@ dependencies = [
 name = "backup_copy"
 version = "0.0.0"
 dependencies = [
+ "adt_timestamp",
  "backup_copy_seams",
  "mbutils_seams",
  "mcx",
@@ -2056,12 +2167,6 @@ dependencies = [
  "types_core",
  "types_error",
 ]
-
-[[package]]
-name = "base64"
-version = "0.21.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "basebackup"
@@ -2088,6 +2193,8 @@ dependencies = [
  "manifest",
  "mcx",
  "pg_clock",
+ "pgrc_format",
+ "pgrc_spool",
  "pgstat",
  "pgstrcasecmp",
  "postgres_seams",
@@ -2095,6 +2202,7 @@ dependencies = [
  "ps_status",
  "ps_status_seams",
  "repl_gram",
+ "resowner",
  "sink",
  "sink_support",
  "tcop_dest",
@@ -2207,13 +2315,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "be_gssapi_common"
+version = "0.0.0"
+dependencies = [
+ "elog",
+ "libc",
+ "pgsync",
+ "types_error",
+]
+
+[[package]]
 name = "be_secure"
 version = "0.0.0"
 dependencies = [
+ "be_gssapi_common",
  "be_secure_openssl",
  "be_secure_seams",
  "elog",
  "fd",
+ "guc_tables",
  "init_small",
  "injection_point",
  "ip",
@@ -2247,6 +2367,7 @@ dependencies = [
  "init_small_seams",
  "ipc_seams",
  "libc",
+ "mcx",
  "pgstat_seams",
  "types_error",
  "waitevent_seams",
@@ -2267,6 +2388,7 @@ dependencies = [
  "mbutils",
  "mcx",
  "openssl",
+ "openssl-src",
  "openssl-sys",
  "pg_string",
  "postgres_seams",
@@ -2274,6 +2396,7 @@ dependencies = [
  "types_error",
  "types_storage",
  "wchar",
+ "xact_seams",
 ]
 
 [[package]]
@@ -2290,6 +2413,7 @@ version = "0.0.0"
 dependencies = [
  "elog",
  "latch",
+ "pagegive",
  "pg_clock",
  "pgsync",
  "runtime",
@@ -2385,14 +2509,27 @@ dependencies = [
 [[package]]
 name = "binaryheap"
 version = "0.1.0"
+dependencies = [
+ "mcx",
+ "types_error",
+]
 
 [[package]]
 name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+
+[[package]]
+name = "bitvec"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddcec3d12c579d40898fe0a9a358a803c23e9c52ca3c425707f81c9436211837"
 dependencies = [
- "serde_core",
+ "funty",
+ "radium",
+ "tap",
+ "wyz",
 ]
 
 [[package]]
@@ -2400,11 +2537,20 @@ name = "blkreftable"
 version = "0.1.0"
 dependencies = [
  "crc32c",
- "hashbrown",
+ "hashbrown 0.14.5",
  "mcx",
  "types_core",
  "types_error",
  "types_storage",
+]
+
+[[package]]
+name = "block-buffer"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
+dependencies = [
+ "generic-array",
 ]
 
 [[package]]
@@ -2485,6 +2631,73 @@ checksum = "e412e2cd0f2b2d93e02543ceae7917b3c70331573df19ee046bcbc35e45e87d7"
 dependencies = [
  "byteorder",
  "cipher",
+]
+
+[[package]]
+name = "bootstrap"
+version = "0.0.0"
+dependencies = [
+ "bootstrap_seams",
+ "catalog_heap",
+ "catalog_index",
+ "catalog_namespace",
+ "catalog_toasting",
+ "clog",
+ "commit_ts",
+ "datum",
+ "elog",
+ "execindexing",
+ "fd",
+ "fmgr_seams",
+ "genam",
+ "guc",
+ "guc_seams",
+ "guc_tables",
+ "heapam",
+ "heaptuple",
+ "indexam",
+ "indexcmds",
+ "init_small",
+ "ipc",
+ "ipci_seams",
+ "libc",
+ "libpq_pqsignal",
+ "lmgr_proc",
+ "mcx",
+ "miscinit",
+ "miscinit_seams",
+ "multixact",
+ "pgsync",
+ "pmchild_seams",
+ "postinit",
+ "postmaster_seams",
+ "rel_vocab",
+ "relmapper",
+ "stack_depth",
+ "subtrans",
+ "table",
+ "timestamp_seams",
+ "transam_xlog",
+ "transam_xlog_seams",
+ "tupdesc",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_guc",
+ "types_nodes",
+ "types_rel",
+ "types_storage",
+ "types_tuple",
+ "xact",
+]
+
+[[package]]
+name = "bootstrap_seams"
+version = "0.0.0"
+dependencies = [
+ "seam_core",
+ "types_core",
+ "types_error",
 ]
 
 [[package]]
@@ -2720,6 +2933,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "brotli-decompressor"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a334ef7c9e23abf0ce748e8cd309037da93e606ad52eb372e4ce327a0dcfbdfd"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+]
+
+[[package]]
 name = "btree_gin"
 version = "0.0.0"
 dependencies = [
@@ -2797,22 +3020,31 @@ dependencies = [
  "dynahash",
  "elog",
  "fd",
+ "funcapi",
  "guc_seams",
  "guc_tables",
+ "heaptuple",
  "init_small",
  "ipc_seams",
  "latch",
+ "libc",
  "lmgr",
  "lmgr_proc",
  "lmgr_proc_seams",
  "lwlock",
  "mcx",
+ "memledger",
+ "mempolicy",
+ "pagegive",
  "parallel_seams",
+ "pg_clock",
  "pg_sema",
  "pgstat",
+ "pgsync",
  "postgres_seams",
  "procsignal_seams",
  "ps_status_seams",
+ "read_stream",
  "relmapper_seams",
  "relpath",
  "relpath_seams",
@@ -2822,11 +3054,15 @@ dependencies = [
  "shmem",
  "shmem_seams",
  "smgr_seams",
+ "snapmgr_portal_seams",
+ "snapmgr_seams",
  "standby_seams",
+ "superuser_seams",
  "timestamp_seams",
  "transam_xlog_seams",
  "types_core",
  "types_error",
+ "types_fmgr",
  "types_guc",
  "types_hash",
  "types_rel",
@@ -2857,6 +3093,7 @@ version = "0.1.0"
 dependencies = [
  "bufmgr",
  "elog",
+ "fd",
  "lmgr_proc",
  "smgr",
  "transam_xlog",
@@ -2866,6 +3103,15 @@ dependencies = [
  "types_rel",
  "types_storage",
  "xloginsert",
+]
+
+[[package]]
+name = "bumpalo"
+version = "3.20.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+dependencies = [
+ "allocator-api2",
 ]
 
 [[package]]
@@ -2903,17 +3149,29 @@ dependencies = [
  "datum",
  "detoast",
  "detoast_seams",
+ "gravity_deps",
  "heaptuple",
  "init_small",
  "inval",
  "lock_seams",
  "mcx",
+ "sinval_seams",
  "syscache_seams",
  "types_array",
  "types_core",
  "types_error",
  "types_storage",
  "types_tuple",
+]
+
+[[package]]
+name = "cancelpoll"
+version = "0.1.0"
+dependencies = [
+ "pg_clock",
+ "pgsync",
+ "postgres_seams",
+ "types_error",
 ]
 
 [[package]]
@@ -2938,6 +3196,7 @@ dependencies = [
  "mcx",
  "miscinit_seams",
  "namespace_seams",
+ "pgrc_am",
  "postgres_seams",
  "relpath",
  "types_core",
@@ -3058,6 +3317,7 @@ dependencies = [
 name = "catalog_index"
 version = "0.1.0"
 dependencies = [
+ "allpaths",
  "autovacuum_seams",
  "backend_progress",
  "bloom_build",
@@ -3080,6 +3340,7 @@ dependencies = [
  "ginbuild",
  "gistbuild",
  "guc",
+ "guc_tables",
  "hashsort",
  "heaptuple",
  "indexam",
@@ -3101,6 +3362,7 @@ dependencies = [
  "pg_inherits",
  "pg_rusage",
  "pgstat",
+ "pgsync",
  "pgvector_hnsw_build",
  "predicate_seams",
  "readfuncs",
@@ -3172,6 +3434,7 @@ dependencies = [
  "dbcommands_seams",
  "dependency_seams",
  "elog",
+ "gravity_deps",
  "guc_seams",
  "guc_tables",
  "init_small",
@@ -3299,6 +3562,7 @@ dependencies = [
  "lmgr_proc",
  "mcx",
  "pg_sema_seams",
+ "pgrc_am",
  "pgstat",
  "pgstat_seams",
  "postgres_seams",
@@ -3350,6 +3614,7 @@ dependencies = [
  "mcx",
  "miscinit_seams",
  "pg_depend",
+ "rel_vocab",
  "table",
  "tableam",
  "tupdesc",
@@ -3368,19 +3633,24 @@ version = "0.1.0"
 dependencies = [
  "catcache_seams",
  "datum",
+ "detoast",
  "elog",
  "fmgr_seams",
  "genam_seams",
+ "gravity_deps",
  "guc_tables",
  "hashfn",
  "heaptoast",
+ "heaptuple",
  "indexam",
  "init_small",
  "inval",
+ "inval_seams",
  "l2cache",
  "lmgr_seams",
  "mcx",
  "miscinit_seams",
+ "pglz",
  "relcache_seams",
  "seam_core",
  "table",
@@ -3457,6 +3727,7 @@ dependencies = [
  "dynahash",
  "elog",
  "fd",
+ "gravity_entry_seams",
  "guc_file",
  "guc_tables",
  "init_small",
@@ -3546,6 +3817,7 @@ dependencies = [
  "copyfuncs",
  "datum",
  "detoast_seams",
+ "elog",
  "fmgr_core",
  "lsyscache",
  "mcx",
@@ -3640,6 +3912,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cobs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "coerce"
 version = "0.0.0"
 dependencies = [
@@ -3656,6 +3937,7 @@ dependencies = [
  "parse_relation_seams",
  "parser_small1",
  "pg_inherits_seams",
+ "stack_depth_core",
  "syscache_seams",
  "typcache_seams",
  "types_core",
@@ -3719,6 +4001,7 @@ dependencies = [
  "combocid_seams",
  "heapam",
  "init_small",
+ "mcx",
  "types_core",
  "types_error",
  "types_tuple",
@@ -3817,7 +4100,10 @@ dependencies = [
  "aclchk_seams",
  "adt_bool",
  "adt_float",
+ "adt_jsonb",
+ "adt_jsonb_pathstats",
  "adt_multirangetypes",
+ "adt_numeric",
  "adt_rangetypes",
  "adt_timestamp",
  "adt_tsvector_core",
@@ -3858,9 +4144,11 @@ dependencies = [
  "fmgr_core",
  "fmgr_seams",
  "foreigncmds_seams",
+ "fp_contract",
  "freespace_seams",
  "genam",
  "guc",
+ "guc_seams",
  "guc_tables",
  "hashfn",
  "heapam",
@@ -3904,6 +4192,7 @@ dependencies = [
  "predicate_seams",
  "procarray",
  "pruneheap_seams",
+ "read_stream",
  "rel_vocab",
  "relation_seams",
  "relcache_seams",
@@ -4051,6 +4340,7 @@ dependencies = [
  "pg_depend",
  "pg_inherits",
  "pg_rusage",
+ "pgrc_companion",
  "planner",
  "postgres_seams",
  "predicate_seams",
@@ -4149,6 +4439,7 @@ dependencies = [
  "parse_expr",
  "parser_analyze",
  "pg_depend",
+ "pgrc_front",
  "postgres",
  "prepare",
  "queryjumble",
@@ -4179,6 +4470,7 @@ dependencies = [
 name = "commands_define"
 version = "0.0.0"
 dependencies = [
+ "adt_float",
  "adt_int8",
  "format_type",
  "mbutils",
@@ -4223,6 +4515,7 @@ dependencies = [
  "catalog_heap",
  "catalog_indexing",
  "catalog_namespace",
+ "clauses",
  "commands_cluster",
  "datum",
  "elog",
@@ -4436,6 +4729,7 @@ dependencies = [
  "be_fsstubs_seams",
  "bufmgr",
  "bufmgr_seams",
+ "catalog_index",
  "catalog_index_seams",
  "catalog_seams",
  "catalog_storage_seams",
@@ -4452,14 +4746,13 @@ dependencies = [
  "dbcommands_seams",
  "deadlock_seams",
  "elog",
- "execmain",
- "execmain_seams",
  "execreplication_seams",
  "exectuples",
  "executils",
  "explain",
  "fd",
  "fmgr_seams",
+ "fp_contract",
  "freespace",
  "genam",
  "gram_core",
@@ -4482,6 +4775,7 @@ dependencies = [
  "lock_seams",
  "logical_seams",
  "logical_worker_seams",
+ "lsyscache",
  "lwlock",
  "mbutils",
  "mcx",
@@ -4491,7 +4785,6 @@ dependencies = [
  "multixact_seams",
  "namespace_seams",
  "nbtree",
- "nodeseqscan",
  "origin_seams",
  "parallel_seams",
  "parse_expr",
@@ -4504,6 +4797,7 @@ dependencies = [
  "pg_enum_seams",
  "pg_inherits",
  "pg_sema_seams",
+ "pgrc_companion",
  "pgstat",
  "pgstat_seams",
  "planner",
@@ -4512,6 +4806,7 @@ dependencies = [
  "predicate_seams",
  "procarray",
  "pruneheap_seams",
+ "read_stream",
  "rel_vocab",
  "relation",
  "relation_seams",
@@ -4721,6 +5016,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-siphasher"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03efed02df0504d71e44bfd51d3329f401b8303a2fd14254acf05c95a0af0153"
+
+[[package]]
 name = "contrib_cube"
 version = "0.0.0"
 dependencies = [
@@ -4728,6 +5029,7 @@ dependencies = [
  "arrayfuncs",
  "datum",
  "dfmgr",
+ "fp_contract",
  "mcx",
  "pqformat",
  "types_core",
@@ -4744,6 +5046,7 @@ version = "0.0.0"
 dependencies = [
  "datum",
  "dfmgr",
+ "fp_contract",
  "types_core",
  "types_error",
  "types_fmgr",
@@ -4841,6 +5144,7 @@ dependencies = [
  "acl_seams",
  "aclchk_seams",
  "aio_seams",
+ "arrayfuncs",
  "backend_progress",
  "clauses",
  "commands_analyze",
@@ -4853,8 +5157,10 @@ dependencies = [
  "execmain_seams",
  "execpartition",
  "exectuples",
+ "executils",
  "fd",
  "fmgr_core",
+ "foreigncmds_seams",
  "format_type",
  "guc_tables",
  "heapam",
@@ -4866,6 +5172,8 @@ dependencies = [
  "mbutils",
  "mcx",
  "memchr",
+ "memledger",
+ "mempolicy",
  "miscinit_seams",
  "namespace_seams",
  "nodemodifytable",
@@ -4878,7 +5186,10 @@ dependencies = [
  "parse_relation",
  "parser_small1",
  "pg_prng",
- "pgrcolumnar",
+ "pgrc_am",
+ "pgrc_front",
+ "pgrc_ingest_par",
+ "pgrc_write",
  "pgsync",
  "planner",
  "portalmem",
@@ -4914,6 +5225,7 @@ dependencies = [
  "varlena",
  "vars",
  "wait_error",
+ "waiter",
  "waitevent_seams",
  "wchar",
  "xact",
@@ -4944,19 +5256,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "corosensei"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6886a0c0f263965933c438626e7179139a62b978a33aa18281cbf0cd5a975f34"
+dependencies = [
+ "autocfg",
+ "cfg-if",
+ "libc",
+ "scopeguard",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "cost_profile"
+version = "0.0.0"
+dependencies = [
+ "pgsync",
+]
+
+[[package]]
 name = "costsize"
 version = "0.1.0"
 dependencies = [
  "allpaths",
+ "cost_profile",
  "datum",
+ "fp_contract",
  "guc_tables",
  "init_small",
  "lsyscache",
  "mcx",
- "nodeagg",
- "nodehash",
- "nodememoize",
  "nodes_core",
+ "order_key",
+ "pgrc_zonequal",
+ "pgsync",
  "planner_seams",
  "spccache",
  "table",
@@ -4972,6 +5306,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpp_demangle"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0667304c32ea56cb4cd6d2d7c0cfe9a2f8041229db8c033af7f8d69492429def"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4981,8 +5324,163 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranelift-assembler-x64"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c0ca95f115597232c3c5d7286bf847d49332bee5934749f40808b7fe0c6312"
+dependencies = [
+ "cranelift-assembler-x64-meta",
+]
+
+[[package]]
+name = "cranelift-assembler-x64-meta"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd7d59ef8a52c82ea2ac2ca96aee3c52644845440f70611b573bc20ce37e6a2"
+dependencies = [
+ "cranelift-srcgen",
+]
+
+[[package]]
+name = "cranelift-bforest"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "547433a3f4204f0ed0f5a5e3ffaf086a0c005fd0efdf040098083f38572e8a49"
+dependencies = [
+ "cranelift-entity",
+ "wasmtime-internal-core",
+]
+
+[[package]]
+name = "cranelift-bitset"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61ca4f30f5f2eb3837b6e73664d9c0c9a42c4c0dce05f0027f2f2af54c1b20d7"
+dependencies = [
+ "serde",
+ "serde_derive",
+ "wasmtime-internal-core",
+]
+
+[[package]]
+name = "cranelift-codegen"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "effcb11ccea65cfb2b8dd4f53b92c6449ad37745504bae036bffda597a5cfa48"
+dependencies = [
+ "bumpalo",
+ "cranelift-assembler-x64",
+ "cranelift-bforest",
+ "cranelift-bitset",
+ "cranelift-codegen-meta",
+ "cranelift-codegen-shared",
+ "cranelift-control",
+ "cranelift-entity",
+ "cranelift-isle",
+ "gimli",
+ "hashbrown 0.17.1",
+ "libm",
+ "log",
+ "postcard",
+ "pulley-interpreter",
+ "regalloc2",
+ "rustc-hash",
+ "serde",
+ "serde_derive",
+ "sha2",
+ "smallvec",
+ "target-lexicon",
+ "wasmtime-internal-core",
+]
+
+[[package]]
+name = "cranelift-codegen-meta"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cd5b4e429e24f7fd0bfe15d653ec5841fc1831ef68521b0d30182ef0d48bd01"
+dependencies = [
+ "cranelift-assembler-x64-meta",
+ "cranelift-codegen-shared",
+ "cranelift-srcgen",
+ "heck",
+ "pulley-interpreter",
+]
+
+[[package]]
+name = "cranelift-codegen-shared"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8aefe7ed05aa9a831a4696f55e020a6c93998325a09c642863f0be7845fe3a8"
+
+[[package]]
+name = "cranelift-control"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3ceaa06b6ece027bb001093bf0c6984a96281e061fd40a99c60bae0ec57171d"
+dependencies = [
+ "arbitrary",
+]
+
+[[package]]
+name = "cranelift-entity"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc2c3088c6be94765abea42eccff7ac2b6519488e66bb5159febabcf539afd6e"
+dependencies = [
+ "cranelift-bitset",
+ "serde",
+ "serde_derive",
+ "wasmtime-internal-core",
+]
+
+[[package]]
+name = "cranelift-frontend"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e2c4a0a90aedfa88408f33e65eda7b1f73de0af20ebec516c004b3a1cdc602b"
+dependencies = [
+ "cranelift-codegen",
+ "hashbrown 0.17.1",
+ "log",
+ "smallvec",
+ "target-lexicon",
+]
+
+[[package]]
+name = "cranelift-isle"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcb1cc85ccb60cfc53c3d55e23196fef28ae78fbcebe4e1ff3ff866a3c93d61c"
+
+[[package]]
+name = "cranelift-native"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a0a8f5d008c1f5b78426e83028f7517295f6819b5cebe8193949e1bb66cc01a"
+dependencies = [
+ "cranelift-codegen",
+ "libc",
+ "target-lexicon",
+]
+
+[[package]]
+name = "cranelift-srcgen"
+version = "0.135.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56caa8a7f1e0f2c61400996cc1567fb06dd417c49d5e673131a149cb9628625f"
+
+[[package]]
 name = "crc32c"
 version = "0.1.0"
+
+[[package]]
+name = "crc32fast"
+version = "1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "createas_seams"
@@ -5040,6 +5538,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ct_carrier_mimalloc"
+version = "0.0.0"
+dependencies = [
+ "init_small",
+ "libmimalloc-sys",
+]
+
+[[package]]
 name = "cty"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5060,11 +5566,13 @@ version = "0.0.0"
 dependencies = [
  "aclchk",
  "adt_acl",
+ "aio_seams",
  "bufmgr",
  "cache_syscache",
  "catalog",
  "catalog_indexing",
  "catalog_namespace",
+ "catalog_storage_seams",
  "checkpointer",
  "commands_define",
  "commands_tablespace",
@@ -5082,6 +5590,7 @@ dependencies = [
  "heapam_visibility_seams",
  "heaptuple",
  "init_small",
+ "l2cache",
  "libc",
  "lmgr",
  "mbutils",
@@ -5096,6 +5605,9 @@ dependencies = [
  "pg_depend",
  "pg_locale",
  "pg_shdepend",
+ "pgrc_am",
+ "pgrc_format",
+ "pgrc_wal",
  "pgstat",
  "postgres_seams",
  "postmaster_seams",
@@ -5107,6 +5619,7 @@ dependencies = [
  "smgr",
  "snapmgr",
  "standby",
+ "storage_xlog",
  "superuser",
  "table",
  "transam_xlog",
@@ -5122,6 +5635,7 @@ dependencies = [
  "waitevent_seams",
  "wchar",
  "xact",
+ "xact_seams",
  "xloginsert",
  "xlogreader_seams",
  "xlogrecovery_seams",
@@ -5163,6 +5677,7 @@ dependencies = [
  "heaptuple",
  "init_small",
  "inval_seams",
+ "ipc",
  "lsyscache",
  "mbutils",
  "mcx",
@@ -5206,6 +5721,7 @@ dependencies = [
  "mcx",
  "miscinit_seams",
  "namespace_seams",
+ "pgrc_am",
  "postgres_seams",
  "relation_seams",
  "relcache_seams",
@@ -5213,6 +5729,8 @@ dependencies = [
  "relmapper_seams",
  "relpath",
  "syscache_seams",
+ "tableam_seams",
+ "tableam_vocab",
  "tablespace_seams",
  "types_core",
  "types_error",
@@ -5323,6 +5841,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dict_int"
+version = "0.0.0"
+dependencies = [
+ "datum",
+ "dfmgr",
+ "mcx",
+ "ts_locale",
+ "types_error",
+ "types_fmgr",
+]
+
+[[package]]
 name = "dict_snowball"
 version = "0.1.0"
 dependencies = [
@@ -5335,6 +5865,31 @@ dependencies = [
  "types_error",
  "types_fmgr",
  "wchar",
+]
+
+[[package]]
+name = "dict_xsyn"
+version = "0.0.0"
+dependencies = [
+ "datum",
+ "dfmgr",
+ "mbutils",
+ "mcx",
+ "pg_qsort",
+ "pg_string",
+ "ts_locale",
+ "types_error",
+ "types_fmgr",
+]
+
+[[package]]
+name = "digest"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+dependencies = [
+ "block-buffer",
+ "crypto-common",
 ]
 
 [[package]]
@@ -5412,6 +5967,7 @@ dependencies = [
  "elog",
  "hashfn",
  "mcx",
+ "pg_bitutils",
  "s_lock_seams",
  "types_core",
  "types_error",
@@ -5427,6 +5983,12 @@ checksum = "1a8bfa975b1aec2145850fcaa1c6fe269a16578c44705a532ae3edc92b8881c7"
 dependencies = [
  "cipher",
 ]
+
+[[package]]
+name = "either"
+version = "1.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "elog"
@@ -5462,6 +6024,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-io"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
+
+[[package]]
+name = "embedded-io"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+
+[[package]]
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
 name = "equivclass"
 version = "0.1.0"
 dependencies = [
@@ -5475,6 +6055,16 @@ dependencies = [
  "types_error",
  "types_nodes",
  "types_pathnodes",
+]
+
+[[package]]
+name = "errno"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5597,8 +6187,6 @@ dependencies = [
  "hstore_subs_seams",
  "indexcmds_seams",
  "init_small",
- "jit_deform",
- "lanereg",
  "lsyscache",
  "mbutils",
  "mcx",
@@ -5641,7 +6229,7 @@ dependencies = [
  "executils",
  "fmgr_core",
  "guc_tables",
- "hashbrown",
+ "hashbrown 0.14.5",
  "hashfn",
  "heaptuple",
  "init_small",
@@ -5694,7 +6282,6 @@ dependencies = [
  "miscinit_seams",
  "namespace_seams",
  "nbtree",
- "nodeindexscan",
  "nodes_core",
  "planner_seams",
  "postgres_seams",
@@ -5759,203 +6346,20 @@ name = "execmain"
 version = "0.1.0"
 dependencies = [
  "aclchk_seams",
- "adt_bool",
- "adt_float",
- "adt_jsonb",
- "adt_numeric",
- "adt_timestamp",
- "aio_seams",
- "arrayfuncs",
- "async_seams",
- "autovacuum_seams",
- "backend_progress_seams",
- "backend_status_seams",
- "be_fsstubs_seams",
- "bgworker",
- "bufmgr_seams",
- "catalog_index_seams",
- "catalog_storage_seams",
- "catcache_seams",
- "clog",
- "coerce",
- "combocid",
- "commit_ts_seams",
- "condition_variable_seams",
- "controldata_utils",
- "datum",
- "deadlock_seams",
- "detoast",
- "elog",
- "execexpr",
- "execgrouping",
- "execjunk",
  "execmain_seams",
- "execpartition",
- "execreplication_seams",
  "execscan",
- "exectuples",
- "executils",
- "fd",
- "fmgr_core",
- "format_type",
- "funcapi",
- "guc",
  "guc_tables",
- "hashfn",
- "heapam",
- "heapam_visibility",
- "heapam_visibility_seams",
  "indexam",
- "init_small",
- "instrument",
- "inval",
- "ipc",
- "ipc_seams",
- "latch",
- "lmgr_proc",
- "lmgr_seams",
- "lock",
- "lock_seams",
- "logical_seams",
- "logical_worker_seams",
  "lsyscache",
- "lwlock",
- "mbutils",
  "mcx",
- "miscinit",
  "miscinit_seams",
- "multixact_seams",
- "namespace_seams",
- "nodeagg",
- "nodeappend",
- "nodebitmapheapscan",
- "nodebitmapindexscan",
- "nodectescan",
- "nodeforeignscan",
- "nodefunctionscan",
- "nodegroup",
- "nodehash",
- "nodehashjoin",
- "nodeincrementalsort",
- "nodeindexonlyscan",
- "nodeindexscan",
- "nodelimit",
- "nodelockrows",
- "nodematerial",
- "nodememoize",
- "nodemergeappend",
- "nodemergejoin",
- "nodemodifytable",
- "nodenamedtuplestorescan",
- "nodenestloop",
- "noderecursiveunion",
- "nodes_core",
- "nodesamplescan",
- "nodeseqscan",
- "nodesetop",
- "nodesort",
- "nodetablefuncscan",
- "nodetidrangescan",
- "nodetidscan",
- "nodeunique",
- "nodevaluesscan",
- "nodewindowagg",
- "nodeworktablescan",
- "objectaccess",
- "orderedsetaggs",
- "origin_seams",
- "parallel",
- "partprune",
- "pg_clock",
- "pg_enum",
- "pg_sema_seams",
- "pglz",
- "pgrc2_am",
- "pgrc2_format",
- "pgrc2_read",
- "pgrc2_write",
- "pgstat",
- "pgstat_seams",
- "pgsync",
- "plancache_portal_seams",
- "pmchild_seams",
- "pmsignal",
- "pmsignal_seams",
  "portalmem",
- "postgres_seams",
- "predicate_seams",
- "procarray",
- "procarray_seams",
- "procsignal",
- "pruneheap_seams",
- "queryenvironment",
- "relation_seams",
- "relcache_seams",
- "reloptions",
- "resowner",
- "resowner_seams",
- "runtime",
- "s_lock_seams",
- "seam_core",
- "shm_mq",
- "shmem",
- "sinval_seams",
- "slot_seams",
- "snapbuild_seams",
- "snapmgr",
- "spi_seams",
- "spillset",
- "sqe",
- "sqe_spill",
- "stack_depth_core",
- "subtrans",
- "sync_seams",
- "syncrep_seams",
  "syscache_seams",
- "table",
- "tableam",
- "tableam_vocab",
- "tablecmds_seams",
- "tcop_dest",
- "tidbitmap",
- "timeout_seams",
- "timestamp_seams",
- "tqueue",
- "transam",
- "transam_xlog",
- "transam_xlog_seams",
- "trigger",
- "trigger_seams",
- "tstore_receiver",
- "tupdesc",
- "tuplesort",
- "tuplestore",
- "typcache_seams",
  "types_core",
- "types_dest",
  "types_error",
- "types_fmgr",
- "types_nbtree",
  "types_nodes",
  "types_portal",
- "types_rel",
- "types_resowner",
- "types_scan",
- "types_slot",
- "types_snapshot",
- "types_startup",
- "types_storage",
- "types_trigger",
  "types_tuple",
- "varlena",
- "varsup",
- "waiter",
- "waitevent_seams",
- "waiteventset",
- "wchar",
- "xact",
- "xloginsert",
- "xlogutils",
 ]
 
 [[package]]
@@ -6162,6 +6566,7 @@ dependencies = [
  "fmgr_seams",
  "foreigncmds_seams",
  "format_type",
+ "gravity_exec",
  "guc_seams",
  "guc_tables",
  "indexcmds_seams",
@@ -6188,6 +6593,7 @@ dependencies = [
  "planner",
  "pmsignal_seams",
  "postgres",
+ "postgres_seams",
  "pqcomm_seams",
  "prepare",
  "printtup",
@@ -6289,7 +6695,6 @@ dependencies = [
  "miscinit",
  "objectaccess",
  "objectaddress_seams",
- "parser_seams",
  "parser_small1",
  "pg_depend",
  "pg_path",
@@ -6376,7 +6781,9 @@ dependencies = [
  "pg_clock",
  "pg_prng",
  "pg_string",
+ "pgrc_format",
  "pgstat_seams",
+ "pgsync",
  "postgres_seams",
  "resowner",
  "resowner_seams",
@@ -6415,6 +6822,7 @@ dependencies = [
  "exectuples",
  "executils",
  "foreigncmds",
+ "fp_contract",
  "heaptuple",
  "mcx",
  "miscinit",
@@ -6449,6 +6857,10 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+
+[[package]]
+name = "fires"
+version = "0.1.0"
 
 [[package]]
 name = "fmgr_core"
@@ -6550,6 +6962,18 @@ dependencies = [
  "types_error",
  "types_fmgr",
 ]
+
+[[package]]
+name = "fnv"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "foreign-types"
@@ -6654,6 +7078,10 @@ dependencies = [
  "types_core",
  "types_error",
 ]
+
+[[package]]
+name = "fp_contract"
+version = "0.1.0"
 
 [[package]]
 name = "freespace"
@@ -6806,6 +7234,76 @@ dependencies = [
 ]
 
 [[package]]
+name = "funty"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
+
+[[package]]
+name = "futures"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a31d2a3fbaaeb2af2368bbdd904aa8e812d3c04a1ee10d3171f52d556e5d0a3"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+]
+
+[[package]]
+name = "futures-channel"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+]
+
+[[package]]
+name = "futures-core"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
+
+[[package]]
+name = "futures-io"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
+
+[[package]]
+name = "futures-sink"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1944426bf7d03f1d14f708785e4b33efd750b36d48a157b836b3efc15ede8e1d"
+
+[[package]]
+name = "futures-task"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
+
+[[package]]
+name = "futures-util"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "memchr",
+ "pin-project-lite",
+ "slab",
+]
+
+[[package]]
 name = "fuzzgen"
 version = "0.0.0"
 dependencies = [
@@ -6848,6 +7346,7 @@ dependencies = [
  "exectuples",
  "fmgr_core",
  "genam_seams",
+ "gravity_deps",
  "heapam",
  "heaptuple",
  "indexam",
@@ -6981,6 +7480,7 @@ dependencies = [
  "init_small",
  "libc",
  "mbutils",
+ "mcx",
  "miscinit",
  "pg_path",
  "slot",
@@ -7015,6 +7515,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gimli"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bf7f043f89559805f8c7cacc432749b2fa0d0a0a9ee46ce47164ed5ba7f126c"
+dependencies = [
+ "fnv",
+ "hashbrown 0.16.1",
+ "indexmap",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "gin"
 version = "0.1.0"
 dependencies = [
@@ -7036,6 +7548,7 @@ dependencies = [
  "gin_int4_seams",
  "gin_trgm_seams",
  "gin_vocab",
+ "guc_seams",
  "guc_tables",
  "init_small",
  "lmgr",
@@ -7043,6 +7556,7 @@ dependencies = [
  "lsyscache",
  "mcx",
  "miscinit",
+ "miscinit_seams",
  "nbtree",
  "pg_prng",
  "pglz",
@@ -7167,6 +7681,7 @@ dependencies = [
  "bufmask",
  "bufmgr_seams",
  "gin_vocab",
+ "mcx",
  "types_core",
  "types_error",
  "types_storage",
@@ -7204,6 +7719,7 @@ dependencies = [
  "fmgr_seams",
  "freespace",
  "genam_seams",
+ "heaptuple",
  "indexam_seams",
  "init_small",
  "lmgr",
@@ -7213,6 +7729,7 @@ dependencies = [
  "postgres_seams",
  "predicate_seams",
  "procarray_seams",
+ "read_stream",
  "stack_depth_core",
  "syscache_seams",
  "tidbitmap",
@@ -7259,6 +7776,7 @@ version = "0.1.0"
 dependencies = [
  "bufmask",
  "bufmgr_seams",
+ "mcx",
  "standby",
  "types_core",
  "types_error",
@@ -7301,6 +7819,7 @@ dependencies = [
  "adt_geo",
  "datum",
  "gist",
+ "mcx",
  "pg_qsort",
  "types_core",
  "types_error",
@@ -7323,6 +7842,1325 @@ dependencies = [
 ]
 
 [[package]]
+name = "gravity_abi"
+version = "0.0.0"
+dependencies = [
+ "cost_profile",
+ "types_error",
+]
+
+[[package]]
+name = "gravity_backend"
+version = "0.0.0"
+dependencies = [
+ "cancelpoll",
+ "fires",
+ "gravity_abi",
+ "gravity_deps",
+ "gravity_driver",
+ "gravity_interp",
+ "gravity_ir",
+ "gravity_kernels",
+ "gravity_parallel",
+ "gravity_program",
+ "gravity_tpde",
+ "gravity_wasm",
+ "leader_tls",
+ "mcx",
+ "memledger",
+ "pagegive",
+ "pgsync",
+ "postgres_seams",
+ "types_error",
+]
+
+[[package]]
+name = "gravity_decompose"
+version = "0.0.0"
+dependencies = [
+ "allocator-api2",
+ "copyfuncs",
+ "datum",
+ "fires",
+ "gravity_abi",
+ "gravity_lint",
+ "gravity_program",
+ "leader_tls",
+ "mcx",
+ "nodes_core",
+ "order_key",
+ "pgsync",
+ "readfuncs",
+ "stack_depth_core",
+ "types_core",
+ "types_error",
+ "types_nodes",
+]
+
+[[package]]
+name = "gravity_deps"
+version = "0.0.0"
+dependencies = [
+ "init_small",
+ "l2cache",
+ "leader_tls",
+ "pgsync",
+ "types_core",
+]
+
+[[package]]
+name = "gravity_dict"
+version = "0.0.0"
+dependencies = [
+ "adt_like",
+ "adt_regexp",
+ "gravity_abi",
+ "guc_tables",
+ "mbutils",
+ "mcx",
+ "memchr",
+ "postgres_seams",
+ "regex",
+ "regex_core",
+ "regexp_alt",
+ "types_core",
+ "wchar",
+]
+
+[[package]]
+name = "gravity_driver"
+version = "0.0.0"
+dependencies = [
+ "allocarena",
+ "allocator-api2",
+ "cancelpoll",
+ "fires",
+ "gravity_abi",
+ "gravity_driver_rig",
+ "gravity_program",
+ "guc_seams",
+ "lz4_flex",
+ "mcx",
+ "memledger",
+ "mempolicy",
+ "pagegive",
+ "pagepool",
+ "pg_clock",
+ "pgsync",
+ "stack_depth_core",
+ "waiter",
+]
+
+[[package]]
+name = "gravity_driver_rig"
+version = "0.0.0"
+dependencies = [
+ "allocator-api2",
+ "fires",
+ "gravity_abi",
+ "gravity_driver",
+ "gravity_program",
+ "guc_seams",
+ "lz4_flex",
+ "mcx",
+ "pagegive",
+ "pagepool",
+ "pg_clock",
+ "pgsync",
+ "waiter",
+]
+
+[[package]]
+name = "gravity_entry_seams"
+version = "0.0.0"
+dependencies = [
+ "mcx",
+ "seam_core",
+ "tcop_dest",
+ "types_dest",
+ "types_error",
+ "types_nodes",
+ "types_portal",
+]
+
+[[package]]
+name = "gravity_exec"
+version = "0.0.0"
+dependencies = [
+ "allocator-api2",
+ "bufmgr_seams",
+ "cancelpoll",
+ "catalog_seams",
+ "catcache_seams",
+ "clauses",
+ "combocid_seams",
+ "copyfuncs",
+ "crc32c",
+ "datum",
+ "elog",
+ "execexpr",
+ "execmain_seams",
+ "execpartition",
+ "exectuples",
+ "executils",
+ "fd",
+ "fires",
+ "fmgr_core",
+ "gravity_abi",
+ "gravity_backend",
+ "gravity_decompose",
+ "gravity_deps",
+ "gravity_driver",
+ "gravity_entry_seams",
+ "gravity_expr",
+ "gravity_fn",
+ "gravity_hosts",
+ "gravity_kernels",
+ "gravity_lower",
+ "gravity_lowerv4",
+ "gravity_parallel",
+ "gravity_program",
+ "gravity_wire",
+ "guc",
+ "guc_seams",
+ "guc_tables",
+ "heaptoast",
+ "indexam",
+ "init_small",
+ "injection_point",
+ "instrument",
+ "l2cache",
+ "leader_tls",
+ "libc",
+ "lmgr_seams",
+ "localtime",
+ "lsyscache",
+ "mcx",
+ "memledger",
+ "mempolicy",
+ "miscinit_seams",
+ "nodes_core",
+ "numutils",
+ "pg_clock",
+ "pgrc_front",
+ "pgrc_read",
+ "pgsync",
+ "pgtz",
+ "plancache",
+ "plancache_portal_seams",
+ "planner_seams",
+ "portalmem",
+ "postgres_seams",
+ "pquery",
+ "procsignal_seams",
+ "relcache_seams",
+ "snapmgr",
+ "spi",
+ "sql_functions_seams",
+ "stack_depth_core",
+ "syscache_seams",
+ "table",
+ "tableam",
+ "tableam_vocab",
+ "tcop_dest",
+ "timeout_seams",
+ "trigger",
+ "tupdesc",
+ "tuplestore",
+ "types_core",
+ "types_dest",
+ "types_error",
+ "types_nodes",
+ "types_portal",
+ "types_rel",
+ "types_resowner",
+ "types_scan",
+ "types_slot",
+ "types_snapshot",
+ "types_storage",
+ "types_tuple",
+ "waitevent",
+ "xact",
+ "xact_seams",
+]
+
+[[package]]
+name = "gravity_expr"
+version = "0.0.0"
+dependencies = [
+ "aclchk_seams",
+ "adt_date",
+ "adt_datetime",
+ "adt_float",
+ "adt_formatting",
+ "adt_json",
+ "adt_jsonb",
+ "adt_jsonpath",
+ "adt_jsonpath_exec",
+ "adt_numeric",
+ "adt_timestamp",
+ "adt_xml",
+ "arrayfuncs",
+ "arrayutils",
+ "clauses",
+ "datum",
+ "dbcommands_seams",
+ "detoast_seams",
+ "elog",
+ "execexpr",
+ "exectuples",
+ "expandedrecord_seams",
+ "fd",
+ "fires",
+ "fmgr_core",
+ "format_type",
+ "funcapi",
+ "gravity_abi",
+ "gravity_backend",
+ "gravity_dict",
+ "gravity_fn",
+ "gravity_ir",
+ "gravity_lint",
+ "gravity_program",
+ "gravity_wasm",
+ "guc_tables",
+ "heaptuple",
+ "hstore_subs_seams",
+ "indexcmds_seams",
+ "init_small",
+ "leader_tls",
+ "lsyscache",
+ "mbutils",
+ "mcx",
+ "miscinit_seams",
+ "namespace_seams",
+ "nodes_core",
+ "numutils",
+ "objectaccess",
+ "pg_enum_seams",
+ "pgtz",
+ "postgres_seams",
+ "relation_seams",
+ "sequence_seams",
+ "stack_depth_core",
+ "syscache_seams",
+ "tupdesc",
+ "typcache",
+ "typcache_seams",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_nodes",
+ "types_portal",
+ "types_rel",
+ "types_slot",
+ "types_tuple",
+ "varlena",
+ "wasmtime",
+ "wchar",
+ "xact_seams",
+]
+
+[[package]]
+name = "gravity_fn"
+version = "0.0.0"
+dependencies = [
+ "aclchk_seams",
+ "adt_acl",
+ "adt_amutils",
+ "adt_ascii",
+ "adt_bool",
+ "adt_cash",
+ "adt_char",
+ "adt_date",
+ "adt_datetime",
+ "adt_encode",
+ "adt_float",
+ "adt_formatting",
+ "adt_geo",
+ "adt_int",
+ "adt_int8",
+ "adt_json",
+ "adt_jsonb",
+ "adt_jsonpath",
+ "adt_jsonpath_exec",
+ "adt_like",
+ "adt_mac",
+ "adt_mac8",
+ "adt_multirangetypes",
+ "adt_network",
+ "adt_numeric",
+ "adt_oracle_compat",
+ "adt_pg_lsn",
+ "adt_pseudotypes",
+ "adt_quote",
+ "adt_rangetypes",
+ "adt_regexp",
+ "adt_scalar",
+ "adt_timestamp",
+ "adt_tsginidx",
+ "adt_tsgistidx",
+ "adt_tsquery_core",
+ "adt_tsrank",
+ "adt_tsvector_core",
+ "adt_uuid",
+ "adt_varbit",
+ "adt_varchar",
+ "adt_xml",
+ "allocator-api2",
+ "array_userfuncs",
+ "arrayfuncs",
+ "arrayutils",
+ "catcache",
+ "clauses_seams",
+ "coerce",
+ "crc32c",
+ "cryptohashfuncs",
+ "datum",
+ "dbsize",
+ "detoast",
+ "detoast_seams",
+ "elog",
+ "execmain_seams",
+ "exectuples",
+ "fd",
+ "fmgr_core",
+ "fmgr_seams",
+ "format_type",
+ "funcapi",
+ "gravity_abi",
+ "gravity_deps",
+ "gravity_lint",
+ "guc_tables",
+ "hashbrown 0.14.5",
+ "hashfn",
+ "init_small",
+ "inval",
+ "leader_tls",
+ "lsyscache",
+ "mbutils",
+ "mcx",
+ "memledger",
+ "miscinit_seams",
+ "name",
+ "namespace_seams",
+ "nbt_compare",
+ "numutils",
+ "pagepool",
+ "pg_locale",
+ "pg_locale_seams",
+ "pg_md5",
+ "pg_qsort",
+ "pg_sha2",
+ "pgstat",
+ "pgsync",
+ "pgtz",
+ "postgres_seams",
+ "pqformat",
+ "pseudorandomfuncs",
+ "regex_core",
+ "seams_init",
+ "stringinfo",
+ "syscache_seams",
+ "to_tsany",
+ "tupdesc",
+ "tuplestore",
+ "typcache",
+ "typcache_seams",
+ "types_array",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_nodes",
+ "types_slot",
+ "types_tuple",
+ "varlena",
+ "wchar",
+ "xact",
+ "xact_seams",
+ "xid8funcs",
+]
+
+[[package]]
+name = "gravity_hosts"
+version = "0.0.0"
+dependencies = [
+ "aclchk_seams",
+ "adt_datetime",
+ "adt_float",
+ "adt_jsonb",
+ "adt_like",
+ "adt_numeric",
+ "adt_regproc",
+ "adt_scalar",
+ "adt_timestamp",
+ "aio_seams",
+ "allocarena",
+ "arrayfuncs",
+ "bufmgr",
+ "bufmgr_seams",
+ "cancelpoll",
+ "catalog_heap",
+ "catalog_seams",
+ "coerce",
+ "combocid_seams",
+ "cost_profile",
+ "datum",
+ "detoast",
+ "detoast_seams",
+ "elog",
+ "execexpr",
+ "execindexing",
+ "execmain_seams",
+ "execpartition",
+ "execreplication_seams",
+ "execscan",
+ "exectuples",
+ "executils",
+ "fd",
+ "fires",
+ "fmgr_core",
+ "fmgr_seams",
+ "freespace_seams",
+ "funcapi",
+ "genam_seams",
+ "gravity_abi",
+ "gravity_decompose",
+ "gravity_deps",
+ "gravity_dict",
+ "gravity_driver",
+ "gravity_fn",
+ "gravity_hosts_rig",
+ "gravity_kernels",
+ "gravity_parallel",
+ "gravity_program",
+ "guc",
+ "guc_seams",
+ "guc_tables",
+ "heapam",
+ "heapam_visibility_seams",
+ "heaptoast",
+ "heaptuple",
+ "indexam",
+ "indexam_seams",
+ "indexcmds_seams",
+ "init_small",
+ "injection_point",
+ "inval",
+ "l2cache",
+ "leader_tls",
+ "lmgr",
+ "lmgr_seams",
+ "lock_seams",
+ "lsyscache",
+ "matview_seams",
+ "mbutils",
+ "mcx",
+ "memchr",
+ "memledger",
+ "mempolicy",
+ "memruntime",
+ "miscinit_seams",
+ "multixact_seams",
+ "nbtree",
+ "nodefunctionscan",
+ "nodemodifytable",
+ "nodenamedtuplestorescan",
+ "nodetablefuncscan",
+ "objectaccess",
+ "pagegive",
+ "pagepool",
+ "pairingheap",
+ "partdesc",
+ "pg_clock",
+ "pg_inherits",
+ "pg_locale",
+ "pg_prng",
+ "pg_strong_random",
+ "pgrc_am",
+ "pgrc_codec",
+ "pgrc_format",
+ "pgrc_meta",
+ "pgrc_qa",
+ "pgrc_read",
+ "pgrc_scan",
+ "pgrc_write",
+ "pgstat",
+ "pgstat_seams",
+ "pgsync",
+ "pgtz",
+ "postgres_seams",
+ "predicate_seams",
+ "procarray",
+ "procarray_seams",
+ "pruneheap",
+ "pruneheap_seams",
+ "queryenvironment",
+ "readfuncs",
+ "regex",
+ "regex_core",
+ "regexp_alt",
+ "relation_seams",
+ "relcache_seams",
+ "resowner",
+ "rewrite_manip",
+ "rls_seams",
+ "seam_core",
+ "smgr_seams",
+ "snapmgr",
+ "snapmgr_seams",
+ "stack_depth_core",
+ "syscache_seams",
+ "table",
+ "tableam",
+ "tableam_vocab",
+ "tablesample",
+ "test_boot",
+ "tidbitmap",
+ "transam_seams",
+ "transam_xlog",
+ "trigger",
+ "tupdesc",
+ "tuplesort",
+ "tuplestore",
+ "typcache",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_nbtree",
+ "types_nodes",
+ "types_portal",
+ "types_rel",
+ "types_relscan",
+ "types_resowner",
+ "types_scan",
+ "types_slot",
+ "types_snapshot",
+ "types_storage",
+ "types_trigger",
+ "types_trigger_call",
+ "types_tuple",
+ "vfs",
+ "visibilitymap",
+ "waiter",
+ "wchar",
+ "xact_seams",
+ "xloginsert_seams",
+ "zstd",
+]
+
+[[package]]
+name = "gravity_hosts_it"
+version = "0.0.0"
+dependencies = [
+ "aclchk_seams",
+ "adt_datetime",
+ "adt_float",
+ "adt_jsonb",
+ "adt_like",
+ "adt_numeric",
+ "adt_regproc",
+ "adt_scalar",
+ "adt_timestamp",
+ "aio_seams",
+ "arrayfuncs",
+ "bufmgr",
+ "bufmgr_seams",
+ "catalog_heap",
+ "catalog_seams",
+ "coerce",
+ "combocid_seams",
+ "datum",
+ "detoast",
+ "detoast_seams",
+ "elog",
+ "execexpr",
+ "execindexing",
+ "execmain_seams",
+ "execpartition",
+ "execreplication_seams",
+ "execscan",
+ "exectuples",
+ "executils",
+ "fd",
+ "fires",
+ "fmgr_core",
+ "fmgr_seams",
+ "freespace_seams",
+ "funcapi",
+ "genam_seams",
+ "gravity_abi",
+ "gravity_decompose",
+ "gravity_dict",
+ "gravity_driver",
+ "gravity_fn",
+ "gravity_hosts",
+ "gravity_kernels",
+ "gravity_parallel",
+ "gravity_program",
+ "guc",
+ "guc_seams",
+ "guc_tables",
+ "heapam",
+ "heapam_visibility_seams",
+ "heaptuple",
+ "indexam",
+ "indexcmds_seams",
+ "init_small",
+ "inval",
+ "l2cache",
+ "lmgr",
+ "lmgr_seams",
+ "lock_seams",
+ "lsyscache",
+ "matview_seams",
+ "mbutils",
+ "mcx",
+ "memchr",
+ "miscinit_seams",
+ "multixact_seams",
+ "nbtree",
+ "nodefunctionscan",
+ "nodemodifytable",
+ "nodenamedtuplestorescan",
+ "nodetablefuncscan",
+ "objectaccess",
+ "pagegive",
+ "pairingheap",
+ "partdesc",
+ "pg_clock",
+ "pg_inherits",
+ "pg_locale",
+ "pg_prng",
+ "pg_strong_random",
+ "pgrc_am",
+ "pgrc_codec",
+ "pgrc_format",
+ "pgrc_meta",
+ "pgrc_qa",
+ "pgrc_read",
+ "pgrc_scan",
+ "pgrc_write",
+ "pgstat",
+ "pgstat_seams",
+ "pgsync",
+ "pgtz",
+ "postgres_seams",
+ "predicate_seams",
+ "procarray_seams",
+ "pruneheap",
+ "pruneheap_seams",
+ "queryenvironment",
+ "readfuncs",
+ "regex",
+ "regex_core",
+ "regexp_alt",
+ "relation_seams",
+ "relcache_seams",
+ "resowner",
+ "rewrite_manip",
+ "rls_seams",
+ "seam_core",
+ "seams_init",
+ "smgr_seams",
+ "snapmgr",
+ "snapmgr_seams",
+ "syscache_seams",
+ "table",
+ "tableam",
+ "tableam_vocab",
+ "tablesample",
+ "test_boot",
+ "tidbitmap",
+ "transam_seams",
+ "trigger",
+ "tupdesc",
+ "tuplesort",
+ "tuplestore",
+ "typcache",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_nbtree",
+ "types_nodes",
+ "types_portal",
+ "types_rel",
+ "types_relscan",
+ "types_resowner",
+ "types_scan",
+ "types_slot",
+ "types_snapshot",
+ "types_storage",
+ "types_trigger",
+ "types_trigger_call",
+ "types_tuple",
+ "vfs",
+ "visibilitymap",
+ "waiter",
+ "wchar",
+ "xact_seams",
+ "xloginsert_seams",
+ "zstd",
+]
+
+[[package]]
+name = "gravity_hosts_rig"
+version = "0.0.0"
+dependencies = [
+ "aclchk_seams",
+ "adt_datetime",
+ "adt_float",
+ "adt_jsonb",
+ "adt_like",
+ "adt_numeric",
+ "adt_regproc",
+ "adt_scalar",
+ "adt_timestamp",
+ "aio_seams",
+ "arrayfuncs",
+ "bufmgr",
+ "bufmgr_seams",
+ "catalog_heap",
+ "catalog_seams",
+ "coerce",
+ "combocid_seams",
+ "datum",
+ "detoast",
+ "detoast_seams",
+ "elog",
+ "execexpr",
+ "execindexing",
+ "execmain_seams",
+ "execpartition",
+ "execreplication_seams",
+ "execscan",
+ "exectuples",
+ "executils",
+ "fd",
+ "fires",
+ "fmgr_core",
+ "fmgr_seams",
+ "freespace_seams",
+ "funcapi",
+ "genam_seams",
+ "gravity_abi",
+ "gravity_decompose",
+ "gravity_dict",
+ "gravity_driver",
+ "gravity_fn",
+ "gravity_hosts",
+ "gravity_kernels",
+ "gravity_parallel",
+ "gravity_program",
+ "guc",
+ "guc_seams",
+ "guc_tables",
+ "heapam",
+ "heapam_visibility_seams",
+ "heaptuple",
+ "indexam",
+ "indexcmds_seams",
+ "init_small",
+ "inval",
+ "l2cache",
+ "lmgr",
+ "lmgr_seams",
+ "lock_seams",
+ "lsyscache",
+ "matview_seams",
+ "mbutils",
+ "mcx",
+ "memchr",
+ "miscinit_seams",
+ "multixact_seams",
+ "nbtree",
+ "nodefunctionscan",
+ "nodemodifytable",
+ "nodenamedtuplestorescan",
+ "nodetablefuncscan",
+ "objectaccess",
+ "pagegive",
+ "pairingheap",
+ "partdesc",
+ "pg_clock",
+ "pg_inherits",
+ "pg_locale",
+ "pg_prng",
+ "pg_strong_random",
+ "pgrc_am",
+ "pgrc_codec",
+ "pgrc_format",
+ "pgrc_meta",
+ "pgrc_qa",
+ "pgrc_read",
+ "pgrc_scan",
+ "pgrc_write",
+ "pgstat",
+ "pgstat_seams",
+ "pgsync",
+ "pgtz",
+ "postgres_seams",
+ "predicate_seams",
+ "procarray_seams",
+ "pruneheap",
+ "pruneheap_seams",
+ "queryenvironment",
+ "readfuncs",
+ "regex",
+ "regex_core",
+ "regexp_alt",
+ "relation_seams",
+ "relcache_seams",
+ "resowner",
+ "rewrite_manip",
+ "rls_seams",
+ "seam_core",
+ "smgr_seams",
+ "snapmgr",
+ "snapmgr_seams",
+ "syscache_seams",
+ "table",
+ "tableam",
+ "tableam_vocab",
+ "tablesample",
+ "test_boot",
+ "tidbitmap",
+ "transam_seams",
+ "trigger",
+ "tupdesc",
+ "tuplesort",
+ "tuplestore",
+ "typcache",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_nbtree",
+ "types_nodes",
+ "types_portal",
+ "types_rel",
+ "types_relscan",
+ "types_resowner",
+ "types_scan",
+ "types_slot",
+ "types_snapshot",
+ "types_storage",
+ "types_trigger",
+ "types_trigger_call",
+ "types_tuple",
+ "vfs",
+ "visibilitymap",
+ "waiter",
+ "wchar",
+ "xact_seams",
+ "xloginsert_seams",
+ "zstd",
+]
+
+[[package]]
+name = "gravity_interp"
+version = "0.0.0"
+dependencies = [
+ "gravity_abi",
+ "gravity_ir",
+]
+
+[[package]]
+name = "gravity_ir"
+version = "0.0.0"
+dependencies = [
+ "allocator-api2",
+ "mcx",
+ "memledger",
+]
+
+[[package]]
+name = "gravity_kernels"
+version = "0.0.0"
+dependencies = [
+ "cost_profile",
+ "gravity_abi",
+ "gravity_dict",
+ "gravity_fn",
+ "gravity_kernels_rig",
+ "gravity_program",
+ "pg_locale_seams",
+]
+
+[[package]]
+name = "gravity_kernels_rig"
+version = "0.0.0"
+dependencies = [
+ "cost_profile",
+ "gravity_abi",
+ "gravity_dict",
+ "gravity_fn",
+ "gravity_kernels",
+ "gravity_program",
+ "pg_locale_seams",
+]
+
+[[package]]
+name = "gravity_lint"
+version = "0.0.0"
+
+[[package]]
+name = "gravity_lower"
+version = "0.0.0"
+dependencies = [
+ "aclchk_seams",
+ "adt_numeric",
+ "adt_regexp",
+ "coerce",
+ "datum",
+ "detoast_seams",
+ "fires",
+ "fmgr_core",
+ "format_type",
+ "gravity_abi",
+ "gravity_backend",
+ "gravity_decompose",
+ "gravity_dict",
+ "gravity_exec",
+ "gravity_expr",
+ "gravity_fn",
+ "gravity_ir",
+ "gravity_kernels",
+ "gravity_lint",
+ "gravity_program",
+ "gravity_tpde",
+ "leader_tls",
+ "mbutils",
+ "mcx",
+ "miscinit_seams",
+ "namespace_seams",
+ "pg_locale",
+ "pgsync",
+ "postgres_seams",
+ "regex_core",
+ "syscache_seams",
+ "tpde_disarm",
+ "typcache",
+ "types_core",
+ "types_error",
+ "types_nodes",
+ "types_portal",
+ "types_storage",
+ "types_tuple",
+]
+
+[[package]]
+name = "gravity_lowerv4"
+version = "0.0.0"
+dependencies = [
+ "adt_numeric",
+ "cancelpoll",
+ "datum",
+ "fires",
+ "fmgr_core",
+ "gravity_abi",
+ "gravity_decompose",
+ "gravity_deps",
+ "gravity_dict",
+ "gravity_driver",
+ "gravity_expr",
+ "gravity_fn",
+ "gravity_interp",
+ "gravity_ir",
+ "gravity_kernels",
+ "gravity_lower",
+ "gravity_program",
+ "guc_seams",
+ "init_small",
+ "leader_tls",
+ "mbutils_seams",
+ "mcx",
+ "memledger",
+ "pgsync",
+ "pgtz",
+ "postgres_seams",
+ "stack_depth_core",
+ "syscache_seams",
+ "types_core",
+ "types_error",
+ "types_nodes",
+ "types_portal",
+ "types_tuple",
+ "xact_seams",
+]
+
+[[package]]
+name = "gravity_lowerv4_it"
+version = "0.0.0"
+dependencies = [
+ "adt_numeric",
+ "datum",
+ "fires",
+ "fmgr_core",
+ "gravity_abi",
+ "gravity_decompose",
+ "gravity_dict",
+ "gravity_driver",
+ "gravity_exec",
+ "gravity_expr",
+ "gravity_fn",
+ "gravity_interp",
+ "gravity_ir",
+ "gravity_kernels",
+ "gravity_lower",
+ "gravity_lowerv4",
+ "gravity_program",
+ "guc_seams",
+ "init_small",
+ "mbutils_seams",
+ "mcx",
+ "pagepool",
+ "pg_locale",
+ "pgsync",
+ "pgtz",
+ "postgres_seams",
+ "syscache_seams",
+ "types_core",
+ "types_error",
+ "types_nodes",
+ "types_portal",
+ "types_tuple",
+ "xact_seams",
+]
+
+[[package]]
+name = "gravity_parallel"
+version = "0.0.0"
+dependencies = [
+ "cancelpoll",
+ "fires",
+ "gravity_abi",
+ "gravity_driver",
+ "gravity_kernels",
+ "gravity_parallel",
+ "gravity_program",
+ "leader_tls",
+ "memledger",
+ "pgsync",
+ "stack_depth_core",
+]
+
+[[package]]
+name = "gravity_pool"
+version = "0.0.0"
+dependencies = [
+ "aclchk_seams",
+ "bufmgr",
+ "bufmgr_seams",
+ "cancelpoll",
+ "catalog_seams",
+ "combocid_seams",
+ "datum",
+ "fd",
+ "freespace_seams",
+ "genam_seams",
+ "gravity_abi",
+ "gravity_driver",
+ "gravity_hosts",
+ "gravity_kernels",
+ "gravity_parallel",
+ "gravity_program",
+ "heapam",
+ "heapam_visibility_seams",
+ "heaptuple",
+ "indexam",
+ "init_small",
+ "instrument",
+ "lmgr_seams",
+ "lock_seams",
+ "mcx",
+ "miscinit_seams",
+ "multixact_seams",
+ "nbtree",
+ "parallel",
+ "pgstat",
+ "pgstat_seams",
+ "pgsync",
+ "postgres_seams",
+ "predicate_seams",
+ "procarray",
+ "procarray_seams",
+ "pruneheap_seams",
+ "relation_seams",
+ "relcache_seams",
+ "rls_seams",
+ "runtime",
+ "seam_core",
+ "smgr",
+ "smgr_seams",
+ "snapmgr_seams",
+ "spillset",
+ "syscache_seams",
+ "tableam",
+ "tableam_vocab",
+ "test_boot",
+ "transam_seams",
+ "transam_xlog",
+ "transam_xlog_seams",
+ "types_core",
+ "types_error",
+ "types_nbtree",
+ "types_nodes",
+ "types_rel",
+ "types_scan",
+ "types_snapshot",
+ "types_storage",
+ "types_trigger",
+ "types_tuple",
+ "waiter",
+ "xact",
+ "xact_seams",
+ "xloginsert_seams",
+]
+
+[[package]]
+name = "gravity_prewarm"
+version = "0.0.0"
+dependencies = [
+ "bgworker",
+ "bufmgr",
+ "datum",
+ "elog",
+ "genam",
+ "gravity_backend",
+ "gravity_exec",
+ "gravity_hosts",
+ "init_small",
+ "ipc",
+ "lsyscache",
+ "mcx",
+ "pg_clock",
+ "pg_database",
+ "pgrc_am",
+ "pgsync",
+ "pmsignal",
+ "relation",
+ "relcache",
+ "relfilenumbermap",
+ "table",
+ "types_core",
+ "types_error",
+ "types_rel",
+ "types_storage",
+ "types_tuple",
+ "waiter",
+ "xact",
+]
+
+[[package]]
+name = "gravity_program"
+version = "0.0.0"
+dependencies = [
+ "allocator-api2",
+ "cost_profile",
+ "gravity_abi",
+ "gravity_kernels",
+ "leader_tls",
+ "libc",
+ "memledger",
+ "mempolicy",
+ "pagegive",
+ "pagepool",
+ "pgsync",
+ "types_error",
+]
+
+[[package]]
+name = "gravity_tpde"
+version = "0.0.0"
+dependencies = [
+ "cancelpoll",
+ "gravity_interp",
+ "gravity_ir",
+ "mcx",
+ "tpde_assembler",
+ "tpde_base",
+ "tpde_compiler",
+ "tpde_compiler_a64",
+ "tpde_compiler_x64",
+ "tpde_core",
+ "tpde_disarm",
+ "tpde_elf_mapper",
+ "tpde_fadec",
+ "tpde_function_writer_a64",
+ "tpde_function_writer_x64",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "gravity_wasm"
+version = "0.0.0"
+dependencies = [
+ "aclchk_seams",
+ "adt_regexp",
+ "datum",
+ "fmgr_core",
+ "gravity_abi",
+ "gravity_backend",
+ "gravity_decompose",
+ "gravity_dict",
+ "gravity_expr",
+ "gravity_fn",
+ "gravity_interp",
+ "gravity_ir",
+ "gravity_kernels",
+ "gravity_program",
+ "mbutils",
+ "mcx",
+ "miscinit_seams",
+ "namespace_seams",
+ "pg_locale",
+ "postgres_seams",
+ "regex_core",
+ "relcache_seams",
+ "stack_depth_core",
+ "syscache_seams",
+ "types_core",
+ "types_error",
+ "types_nodes",
+ "types_portal",
+ "types_tuple",
+ "wasm-encoder 0.259.0",
+ "wasmtime",
+]
+
+[[package]]
+name = "gravity_wire"
+version = "0.0.0"
+dependencies = [
+ "adt_float",
+ "adt_numeric",
+ "datum",
+ "fmgr_seams",
+ "gravity_abi",
+ "gravity_driver",
+ "gravity_program",
+ "lsyscache_seams",
+ "mbutils_seams",
+ "mcx",
+ "memledger",
+ "numutils",
+ "pqcomm_seams",
+ "pqformat",
+ "pquery_seams",
+ "printtup",
+ "stringinfo",
+ "types_core",
+ "types_dest",
+ "types_error",
+ "types_fmgr",
+ "types_portal",
+ "types_resowner",
+ "types_slot",
+ "types_tuple",
+]
+
+[[package]]
 name = "guc"
 version = "0.0.0"
 dependencies = [
@@ -7337,8 +9175,10 @@ dependencies = [
  "init_small",
  "mbutils_seams",
  "mcx",
+ "memledger",
  "miscinit",
  "parser_small1",
+ "pgsync",
  "pgtz",
  "pqcomm_seams",
  "scalar_seams",
@@ -7357,6 +9197,7 @@ dependencies = [
 name = "guc_file"
 version = "0.0.0"
 dependencies = [
+ "conffiles",
  "conffiles_seams",
  "elog",
  "guc_file_seams",
@@ -7444,8 +9285,10 @@ name = "guc_tables"
 version = "0.0.0"
 dependencies = [
  "guc_seams",
+ "pgsync",
  "types_error",
  "types_guc",
+ "types_storage",
 ]
 
 [[package]]
@@ -7510,6 +9353,7 @@ version = "0.1.0"
 dependencies = [
  "bufmask",
  "bufmgr_seams",
+ "mcx",
  "standby",
  "types_core",
  "types_error",
@@ -7527,6 +9371,23 @@ checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
  "ahash",
  "allocator-api2",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+
+[[package]]
+name = "hashbrown"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "foldhash",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -7571,6 +9432,7 @@ dependencies = [
  "guc_tables",
  "hba_seams",
  "ifaddr",
+ "init_small",
  "ip",
  "libc",
  "mbutils",
@@ -7659,6 +9521,7 @@ dependencies = [
  "procarray",
  "procarray_seams",
  "pruneheap_seams",
+ "read_stream",
  "relcache_seams",
  "rmgr",
  "s_lock_seams",
@@ -7912,18 +9775,20 @@ dependencies = [
  "heaptuple",
  "indexam",
  "init_small",
- "lz4_flex",
+ "lz4_block",
  "mcx",
  "miscinit_seams",
  "multixact_seams",
  "nbt_compare",
  "pglz",
+ "pgsync",
  "postgres_seams",
  "predicate_seams",
  "procarray_seams",
  "pruneheap_seams",
  "relation_seams",
  "relcache_seams",
+ "smgr_seams",
  "snapmgr",
  "table",
  "tableam_vocab",
@@ -7967,6 +9832,18 @@ dependencies = [
  "types_error",
  "types_tuple",
 ]
+
+[[package]]
+name = "heck"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hstore"
@@ -8072,6 +9949,7 @@ dependencies = [
  "types_slot",
  "types_snapshot",
  "types_tuple",
+ "xact",
 ]
 
 [[package]]
@@ -8156,6 +10034,7 @@ dependencies = [
  "snapmgr",
  "syscache_seams",
  "table",
+ "tableam_vocab",
  "tablecmds",
  "tupdesc",
  "types_array",
@@ -8183,6 +10062,18 @@ dependencies = [
  "types_error",
  "types_nodes",
  "types_rel",
+]
+
+[[package]]
+name = "indexmap"
+version = "2.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
+dependencies = [
+ "equivalent",
+ "hashbrown 0.17.1",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -8218,8 +10109,11 @@ dependencies = [
  "guc_seams",
  "guc_tables",
  "init_small_seams",
+ "ip",
  "mcx",
+ "memledger",
  "miscinit_seams",
+ "pagepool",
  "pgsync",
  "types_core",
  "types_error",
@@ -8232,6 +10126,13 @@ name = "init_small_seams"
 version = "0.0.0"
 dependencies = [
  "seam_core",
+]
+
+[[package]]
+name = "initdb"
+version = "0.0.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -8268,6 +10169,85 @@ dependencies = [
 ]
 
 [[package]]
+name = "insert_username"
+version = "0.0.0"
+dependencies = [
+ "datum",
+ "dfmgr",
+ "heaptuple",
+ "mcx",
+ "miscinit",
+ "spi",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_trigger",
+ "types_trigger_call",
+ "types_tuple",
+ "varlena",
+]
+
+[[package]]
+name = "instaux"
+version = "0.0.0"
+dependencies = [
+ "auth_scram",
+ "auxprocess",
+ "bgworker",
+ "cache_syscache",
+ "catcache",
+ "datum",
+ "elog",
+ "fd",
+ "guc",
+ "guc_file",
+ "guc_tables",
+ "hba",
+ "init_small",
+ "instaux_seams",
+ "interrupt",
+ "ipc",
+ "latch",
+ "libc",
+ "libpq_pqsignal",
+ "lwlock",
+ "mcx",
+ "miscinit",
+ "openssl",
+ "pagegive",
+ "pg_clock",
+ "pgsync",
+ "pmchild_seams",
+ "postmaster_seams",
+ "procarray",
+ "procsignal",
+ "resowner",
+ "serde_json",
+ "syscache_seams",
+ "transam_xlog",
+ "types_core",
+ "types_error",
+ "types_guc",
+ "types_nodes",
+ "types_startup",
+ "types_storage",
+ "types_tuple",
+ "user",
+ "vfs",
+ "walreceiverfuncs",
+ "xact",
+ "xloginsert",
+ "xlogrecovery",
+]
+
+[[package]]
+name = "instaux_seams"
+version = "0.0.0"
+dependencies = [
+ "seam_core",
+]
+
+[[package]]
 name = "instrument"
 version = "0.1.0"
 dependencies = [
@@ -8283,6 +10263,7 @@ dependencies = [
 name = "intarray"
 version = "0.0.0"
 dependencies = [
+ "arrayutils",
  "datum",
  "detoast",
  "dfmgr",
@@ -8330,6 +10311,7 @@ dependencies = [
  "catcache_seams",
  "datum",
  "elog",
+ "gravity_deps",
  "guc_tables",
  "init_small",
  "inval_seams",
@@ -8482,6 +10464,7 @@ dependencies = [
  "types_guc",
  "types_storage",
  "varsup",
+ "waiter",
  "waitevent",
  "walreceiverfuncs",
  "walsender",
@@ -8515,6 +10498,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8527,10 +10519,7 @@ dependencies = [
  "aclchk",
  "adt_acl",
  "bgworker",
- "cache_syscache",
- "catalog_indexing",
  "checkpointer",
- "commands_comment",
  "commands_vacuum",
  "datum",
  "dbcommands",
@@ -8541,7 +10530,6 @@ dependencies = [
  "guc",
  "guc_file",
  "guc_tables",
- "heaptuple",
  "init_small",
  "interrupt",
  "janitor_seams",
@@ -8551,10 +10539,11 @@ dependencies = [
  "mbutils",
  "mcx",
  "miscinit",
+ "pagegive",
  "pg_clock",
  "pg_database",
  "pg_db_role_setting",
- "pg_proc",
+ "pgrc_am",
  "pgsync",
  "postgres_seams",
  "procarray",
@@ -8591,6 +10580,8 @@ dependencies = [
  "datum",
  "libc",
  "mcx",
+ "memledger",
+ "mempolicy",
  "types_tuple",
 ]
 
@@ -8613,41 +10604,9 @@ name = "l2cache"
 version = "0.1.0"
 dependencies = [
  "guc_tables",
+ "memledger",
  "parallel_seams",
- "types_core",
-]
-
-[[package]]
-name = "laneexec"
-version = "0.1.0"
-dependencies = [
- "adt_like",
- "datum",
- "elog_seams",
- "execexpr",
- "exectuples",
- "fmgr_core",
- "lanereg",
- "lsyscache",
- "mbutils",
- "mcx",
- "memchr",
- "pg_locale",
- "regex",
- "regexp_seams",
- "syscache_seams",
- "types_core",
- "types_error",
- "types_fmgr",
- "types_tuple",
- "varlena",
- "wchar",
-]
-
-[[package]]
-name = "lanereg"
-version = "0.0.0"
-dependencies = [
+ "rustc-hash",
  "types_core",
 ]
 
@@ -8688,10 +10647,12 @@ dependencies = [
 name = "latch"
 version = "0.0.0"
 dependencies = [
+ "cancelpoll",
  "init_small",
  "latch_seams",
  "lmgr_proc_seams",
  "loom",
+ "memledger",
  "pgsync",
  "procsignal_seams",
  "timeout_seams",
@@ -8715,19 +10676,30 @@ dependencies = [
 name = "launch_backend"
 version = "0.0.0"
 dependencies = [
+ "adt_acl",
+ "attoptcache",
  "autovacuum",
  "backend_startup",
  "backend_status",
+ "be_secure",
  "bgjobs",
  "bgworker",
  "bgwriter",
+ "cache_evtcache",
+ "catalog_namespace",
  "checkpointer",
  "dfmgr",
  "elog",
  "fd",
+ "gravity_hosts",
+ "gravity_parallel",
+ "gravity_pool",
+ "gravity_prewarm",
  "guc",
  "guc_tables",
+ "hba",
  "init_small",
+ "instaux",
  "interrupt",
  "io_worker",
  "ip",
@@ -8735,19 +10707,27 @@ dependencies = [
  "libc",
  "libpq_pqsignal",
  "lmgr_proc",
- "lwlock",
+ "mbutils",
  "mcx",
  "mcxt_stats",
+ "memledger",
+ "mempolicy",
  "miscinit",
  "objectaccess",
+ "pagegive",
+ "pagepool",
  "parallel",
+ "pg_sema_seams",
  "pgarch",
+ "pgrc_am",
+ "pgstat",
  "pgsync",
  "pmchild_seams",
  "pmsignal",
  "postinit",
  "postmaster_seams",
  "postmaster_startup",
+ "pqcomm",
  "pqcomm_seams",
  "procsignal",
  "ps_status",
@@ -8756,6 +10736,8 @@ dependencies = [
  "sinval",
  "slotsync",
  "stack_depth",
+ "startup_seams",
+ "superuser",
  "syslogger_seams",
  "timeout_seams",
  "timestamp_seams",
@@ -8831,6 +10813,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
+name = "leader_tls"
+version = "0.0.0"
+dependencies = [
+ "pgsync",
+ "types_error",
+]
+
+[[package]]
+name = "leb128fmt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8847,10 +10843,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
 name = "libmimalloc-sys"
 version = "0.1.49"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
 dependencies = [
  "cc",
  "cty",
@@ -8882,6 +10882,12 @@ dependencies = [
  "quote",
  "syn 3.0.3",
 ]
+
+[[package]]
+name = "linux-raw-sys"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "lmgr"
@@ -8927,6 +10933,7 @@ dependencies = [
  "lmgr_proc_seams",
  "lock_seams",
  "lwlock",
+ "memledger",
  "miscinit_seams",
  "pg_sema_seams",
  "pmsignal_seams",
@@ -8975,6 +10982,7 @@ dependencies = [
 name = "localtime"
 version = "0.1.0"
 dependencies = [
+ "pgsync",
  "pgtz_seams",
  "types_core",
  "types_error",
@@ -9001,6 +11009,7 @@ dependencies = [
  "pg_sema_seams",
  "pmsignal_seams",
  "postgres_seams",
+ "procarray_seams",
  "procsignal_seams",
  "ps_status_seams",
  "resowner",
@@ -9127,6 +11136,7 @@ dependencies = [
  "heaptuple",
  "logical",
  "mcx",
+ "pgrc_format",
  "postgres_seams",
  "reorderbuffer",
  "snapbuild",
@@ -9190,6 +11200,8 @@ dependencies = [
  "resowner_seams",
  "slot",
  "transam_xlog",
+ "tupdesc",
+ "tuplestore",
  "types_core",
  "types_error",
  "types_fmgr",
@@ -9332,6 +11344,7 @@ dependencies = [
  "types_storage",
  "types_trigger",
  "types_tuple",
+ "waiteventset_seams",
  "walreceiver",
  "wchar",
  "xact",
@@ -9356,6 +11369,7 @@ version = "0.1.0"
 dependencies = [
  "aclchk_seams",
  "adt_scalar",
+ "bootstrap_seams",
  "datum",
  "fmgr_seams",
  "format_type",
@@ -9428,6 +11442,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_block"
+version = "0.0.0"
+dependencies = [
+ "lz4_flex",
+]
+
+[[package]]
 name = "lz4_flex"
 version = "0.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9437,12 +11458,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mach2"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
+
+[[package]]
 name = "main_main"
 version = "0.0.0"
 dependencies = [
+ "allocarena",
  "antithesis-instrumentation",
  "antithesis_sdk",
+ "bootstrap",
+ "conv",
  "elog",
+ "gravity_pool",
  "guc",
  "guc_tables",
  "init_small",
@@ -9450,9 +11481,12 @@ dependencies = [
  "libc",
  "libmimalloc-sys",
  "mcx",
- "memwatchdog",
+ "memledger",
+ "mempolicy",
+ "memruntime",
  "mimalloc",
  "oauth_validators",
+ "pagepool",
  "pg_locale",
  "pg_path",
  "pgsync",
@@ -9470,17 +11504,28 @@ dependencies = [
 name = "manifest"
 version = "0.1.0"
 dependencies = [
+ "aio_seams",
  "crc32c",
+ "elog",
+ "fd",
+ "guc_tables",
+ "ipc_seams",
  "localtime",
  "mcx",
  "pg_sha2",
+ "pgstat_seams",
  "pgtz_seams",
+ "resowner",
+ "resowner_seams",
  "seam_core",
  "strftime",
  "timeline",
  "types_core",
  "types_error",
+ "types_resowner",
  "varlena",
+ "waitevent_seams",
+ "xact_seams",
 ]
 
 [[package]]
@@ -9512,11 +11557,13 @@ dependencies = [
 name = "mbutils"
 version = "0.1.0"
 dependencies = [
+ "catcache_seams",
  "datum",
  "fmgr_seams",
  "mbutils_seams",
  "mcx",
  "namespace_seams",
+ "sinval_seams",
  "types_core",
  "types_error",
  "types_fmgr",
@@ -9539,9 +11586,12 @@ name = "mcx"
 version = "0.0.0"
 dependencies = [
  "allocator-api2",
- "hashbrown",
+ "hashbrown 0.14.5",
  "libc",
+ "memledger",
+ "mempolicy",
  "mimalloc",
+ "pagepool",
  "rustc-hash",
  "types_error",
 ]
@@ -9562,6 +11612,7 @@ dependencies = [
  "init_small",
  "mcx",
  "mcxt_seams",
+ "memledger",
  "stack_depth_core",
  "types_error",
 ]
@@ -9576,6 +11627,8 @@ dependencies = [
  "guc_tables",
  "init_small",
  "libc",
+ "mcx",
+ "memledger",
  "pgstat",
  "pgsync",
  "relpath_seams",
@@ -9594,15 +11647,52 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "memwatchdog"
+name = "memfd"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57804b2c9b69967f1536a56f86297e367a33b19e98852ed624b84551cdbc0d90"
+dependencies = [
+ "rustix",
+]
+
+[[package]]
+name = "memledger"
 version = "0.0.0"
 dependencies = [
+ "libc",
+ "pg_clock",
+ "pgsync",
+]
+
+[[package]]
+name = "mempolicy"
+version = "0.0.0"
+dependencies = [
+ "memledger",
+ "pgsync",
+]
+
+[[package]]
+name = "memruntime"
+version = "0.0.0"
+dependencies = [
+ "allocarena",
+ "backend_status",
  "elog",
  "guc_tables",
+ "init_small",
  "libc",
+ "libmimalloc-sys",
  "lmgr_proc",
  "localtime",
  "mcx",
+ "memledger",
+ "mempolicy",
+ "mimalloc",
+ "pagegive",
+ "pagepool",
+ "pg_clock",
+ "pgsync",
  "procsignal",
  "types_core",
  "types_error",
@@ -9677,6 +11767,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "moddatetime"
+version = "0.0.0"
+dependencies = [
+ "adt_timestamp",
+ "datum",
+ "dfmgr",
+ "heaptuple",
+ "mcx",
+ "spi",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_trigger",
+ "types_trigger_call",
+ "types_tuple",
+]
+
+[[package]]
 name = "multixact"
 version = "0.0.0"
 dependencies = [
@@ -9731,10 +11839,13 @@ dependencies = [
  "fmgr_core",
  "funcapi",
  "heaptuple",
+ "mcx",
  "multixact",
  "typcache_seams",
+ "types_core",
  "types_error",
  "types_fmgr",
+ "types_storage",
  "types_tuple",
  "varlena",
 ]
@@ -9813,6 +11924,7 @@ dependencies = [
  "arrayfuncs",
  "autovacuum_seams",
  "backend_progress",
+ "bufmgr",
  "bufmgr_seams",
  "catalog_seams",
  "condition_variable_seams",
@@ -9851,6 +11963,7 @@ dependencies = [
  "procarray",
  "procarray_seams",
  "pruneheap_seams",
+ "read_stream",
  "rmgr",
  "s_lock_seams",
  "seam_core",
@@ -9919,6 +12032,7 @@ dependencies = [
  "predicate_seams",
  "procarray",
  "procarray_seams",
+ "read_stream",
  "relpath_seams",
  "rmgr",
  "s_lock_seams",
@@ -9951,6 +12065,7 @@ name = "nbtsort"
 version = "0.1.0"
 dependencies = [
  "backend_progress",
+ "backend_status",
  "bufmgr",
  "bulkwrite",
  "catalog",
@@ -9962,17 +12077,23 @@ dependencies = [
  "guc_tables",
  "indexam",
  "init_small",
+ "instrument",
  "latch",
+ "lmgr_proc",
  "mcx",
  "miscinit",
  "nbtree",
  "parallel",
  "pg_clock",
+ "pgsync",
  "postgres_seams",
  "procarray",
  "runtime",
+ "snapmgr",
  "syscache_seams",
  "table",
+ "tableam",
+ "transam_xlog_seams",
  "tuplesort",
  "types_core",
  "types_dest",
@@ -9991,6 +12112,7 @@ version = "0.1.0"
 dependencies = [
  "adt_network",
  "datum",
+ "mcx",
  "types_core",
  "types_error",
  "types_fmgr",
@@ -10011,177 +12133,6 @@ dependencies = [
  "types_scan",
  "types_spgist",
  "types_tuple",
-]
-
-[[package]]
-name = "nodeagg"
-version = "0.0.0"
-dependencies = [
- "aclchk_seams",
- "adt_numeric",
- "aio_seams",
- "coerce",
- "datum",
- "detoast",
- "elog",
- "execexpr",
- "execgrouping",
- "execscan",
- "exectuples",
- "executils",
- "fd",
- "fmgr_core",
- "guc_tables",
- "hashfn",
- "heaptuple",
- "hyperloglog",
- "init_small",
- "ipc_seams",
- "lsyscache",
- "mcx",
- "mcxt_stats",
- "miscinit_seams",
- "nodes_core",
- "objectaccess",
- "pg_locale",
- "pglz",
- "pgstat_seams",
- "postgres_seams",
- "pqformat",
- "resowner",
- "resowner_seams",
- "sort_storage",
- "stringhash",
- "syscache_seams",
- "tuplesort",
- "types_core",
- "types_error",
- "types_fmgr",
- "types_nodes",
- "types_pathnodes",
- "types_portal",
- "types_resowner",
- "types_slot",
- "types_tuple",
- "varlena",
- "waitevent_seams",
- "xact_seams",
-]
-
-[[package]]
-name = "nodeappend"
-version = "0.1.0"
-dependencies = [
- "execpartition",
- "executils",
- "fd",
- "init_small",
- "latch",
- "libc",
- "mcx",
- "partprune",
- "postgres_seams",
- "types_core",
- "types_error",
- "types_nodes",
- "types_scan",
- "types_slot",
- "types_storage",
- "waitevent_seams",
- "waiteventset",
-]
-
-[[package]]
-name = "nodebitmapheapscan"
-version = "0.1.0"
-dependencies = [
- "aclchk_seams",
- "bufmgr_seams",
- "datum",
- "execexpr",
- "execscan",
- "exectuples",
- "executils",
- "heapam_visibility_seams",
- "init_small",
- "mcx",
- "miscinit_seams",
- "nodebitmapindexscan",
- "pgsync",
- "postgres_seams",
- "predicate_seams",
- "procarray_seams",
- "pruneheap_seams",
- "syscache_seams",
- "tableam",
- "tidbitmap",
- "transam_xlog_seams",
- "types_core",
- "types_error",
- "types_nbtree",
- "types_nodes",
- "types_rel",
- "types_slot",
- "types_snapshot",
- "types_storage",
- "types_tuple",
- "waiter",
- "waitevent_seams",
- "xact_seams",
-]
-
-[[package]]
-name = "nodebitmapindexscan"
-version = "0.1.0"
-dependencies = [
- "datum",
- "executils",
- "indexam",
- "init_small",
- "mcx",
- "nodeindexscan",
- "postgres_seams",
- "tidbitmap",
- "types_core",
- "types_error",
- "types_nodes",
- "types_rel",
- "types_scan",
- "types_slot",
-]
-
-[[package]]
-name = "nodectescan"
-version = "0.1.0"
-dependencies = [
- "aio_seams",
- "datum",
- "elog",
- "execexpr",
- "execscan",
- "exectuples",
- "executils",
- "fd",
- "guc_tables",
- "init_small",
- "ipc_seams",
- "mcx",
- "pgstat_seams",
- "postgres_seams",
- "resowner",
- "resowner_seams",
- "syscache_seams",
- "tuplestore",
- "types_core",
- "types_error",
- "types_nodes",
- "types_portal",
- "types_resowner",
- "types_scan",
- "types_slot",
- "types_tuple",
- "waitevent_seams",
- "xact_seams",
 ]
 
 [[package]]
@@ -10238,313 +12189,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nodegroup"
-version = "0.1.0"
-dependencies = [
- "aclchk_seams",
- "datum",
- "execexpr",
- "exectuples",
- "executils",
- "init_small",
- "lsyscache",
- "mcx",
- "miscinit_seams",
- "postgres_seams",
- "syscache_seams",
- "types_core",
- "types_error",
- "types_nodes",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodehash"
-version = "0.1.0"
-dependencies = [
- "datum",
- "execexpr",
- "exectuples",
- "executils",
- "fd",
- "fmgr_core",
- "guc_tables",
- "hashfn",
- "heaptuple",
- "init_small",
- "mcx",
- "parallel",
- "pg_barrier",
- "postgres_seams",
- "sharedtuplestore",
- "syscache_seams",
- "types_core",
- "types_error",
- "types_nodes",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodehashjoin"
-version = "0.1.0"
-dependencies = [
- "execexpr",
- "exectuples",
- "executils",
- "fd",
- "hashfn",
- "init_small",
- "instrument",
- "loom",
- "lsyscache",
- "mcx",
- "nodehash",
- "postgres_seams",
- "types_core",
- "types_error",
- "types_nodes",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodeincrementalsort"
-version = "0.1.0"
-dependencies = [
- "datum",
- "exectuples",
- "executils",
- "fmgr_core",
- "init_small",
- "lsyscache",
- "mcx",
- "postgres_seams",
- "syscache_seams",
- "tuplesort",
- "types_core",
- "types_error",
- "types_fmgr",
- "types_nodes",
- "types_scan",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodeindexonlyscan"
-version = "0.1.0"
-dependencies = [
- "aclchk_seams",
- "bufmgr_seams",
- "datum",
- "execexpr",
- "execscan",
- "exectuples",
- "executils",
- "heapam_visibility_seams",
- "indexam",
- "init_small",
- "mcx",
- "miscinit_seams",
- "nbtree",
- "nodeindexscan",
- "postgres_seams",
- "predicate_seams",
- "procarray_seams",
- "pruneheap_seams",
- "smgr_seams",
- "syscache_seams",
- "tableam",
- "transam_xlog_seams",
- "types_core",
- "types_error",
- "types_fmgr",
- "types_nbtree",
- "types_nodes",
- "types_rel",
- "types_relscan",
- "types_scan",
- "types_slot",
- "types_snapshot",
- "types_storage",
- "types_tuple",
- "visibilitymap",
-]
-
-[[package]]
-name = "nodeindexscan"
-version = "0.1.0"
-dependencies = [
- "aclchk_seams",
- "adt_scalar",
- "arrayfuncs",
- "bufmgr_seams",
- "datum",
- "detoast",
- "execexpr",
- "execscan",
- "exectuples",
- "executils",
- "fmgr_core",
- "heapam_visibility_seams",
- "heaptuple",
- "indexam",
- "init_small",
- "lsyscache",
- "mcx",
- "miscinit_seams",
- "nodes_core",
- "pairingheap",
- "parallel_seams",
- "postgres_seams",
- "predicate_seams",
- "procarray_seams",
- "pruneheap_seams",
- "syscache_seams",
- "tableam",
- "transam_xlog_seams",
- "tuplesort",
- "types_core",
- "types_error",
- "types_fmgr",
- "types_nbtree",
- "types_nodes",
- "types_rel",
- "types_scan",
- "types_slot",
- "types_snapshot",
- "types_storage",
- "types_tuple",
-]
-
-[[package]]
-name = "nodelimit"
-version = "0.1.0"
-dependencies = [
- "aclchk_seams",
- "datum",
- "execexpr",
- "exectuples",
- "executils",
- "init_small",
- "lsyscache",
- "mcx",
- "miscinit_seams",
- "postgres_seams",
- "syscache_seams",
- "types_core",
- "types_error",
- "types_nodes",
- "types_portal",
- "types_scan",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodelockrows"
-version = "0.1.0"
-dependencies = [
- "datum",
- "exectuples",
- "executils",
- "init_small",
- "mcx",
- "postgres_seams",
- "tableam",
- "tableam_vocab",
- "types_core",
- "types_error",
- "types_nodes",
- "types_slot",
- "types_tuple",
- "xact_seams",
-]
-
-[[package]]
-name = "nodematerial"
-version = "0.1.0"
-dependencies = [
- "exectuples",
- "executils",
- "init_small",
- "mcx",
- "postgres_seams",
- "tuplestore",
- "types_core",
- "types_error",
- "types_nodes",
- "types_scan",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodememoize"
-version = "0.1.0"
-dependencies = [
- "datum",
- "detoast_seams",
- "execexpr",
- "exectuples",
- "executils",
- "guc_tables",
- "hashbrown",
- "hashfn",
- "heaptuple",
- "init_small",
- "lsyscache",
- "mcx",
- "nodehash",
- "postgres_seams",
- "types_core",
- "types_error",
- "types_nodes",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodemergeappend"
-version = "0.1.0"
-dependencies = [
- "execpartition",
- "exectuples",
- "executils",
- "init_small",
- "mcx",
- "partprune",
- "postgres_seams",
- "tuplesort",
- "types_error",
- "types_nodes",
- "types_slot",
-]
-
-[[package]]
-name = "nodemergejoin"
-version = "0.1.0"
-dependencies = [
- "datum",
- "execexpr",
- "exectuples",
- "executils",
- "init_small",
- "lsyscache",
- "mcx",
- "postgres_seams",
- "syscache_seams",
- "tuplesort",
- "types_error",
- "types_nbtree",
- "types_nodes",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
 name = "nodemodifytable"
 version = "0.1.0"
 dependencies = [
@@ -10572,30 +12216,20 @@ dependencies = [
  "dbcommands_seams",
  "deadlock_seams",
  "execexpr",
- "execindexing",
- "execmain",
- "execmain_seams",
  "execpartition",
- "execreplication_seams",
- "execscan",
  "exectuples",
  "executils",
  "fd",
- "fmgr_core",
  "foreigncmds_seams",
- "format_type",
  "freespace_seams",
  "gram_core",
  "guc",
  "guc_tables",
  "heapam_visibility",
- "heaptuple",
  "init_small",
- "instrument",
  "inval",
  "ipc_seams",
  "latch_seams",
- "lmgr",
  "lmgr_proc",
  "lmgr_seams",
  "lock",
@@ -10604,13 +12238,11 @@ dependencies = [
  "logical_worker_seams",
  "lsyscache",
  "lwlock",
- "matview_seams",
  "mcx",
  "miscinit_seams",
  "multixact_seams",
  "namespace_seams",
  "nodes_core",
- "nodeseqscan",
  "origin_seams",
  "parallel_seams",
  "parse_expr",
@@ -10618,24 +12250,18 @@ dependencies = [
  "parser_driver",
  "parser_seams",
  "pg_enum_seams",
- "pg_inherits",
  "pg_sema_seams",
- "pgrc2_am",
  "pgstat",
  "planner",
  "pmsignal_seams",
- "postgres_seams",
  "predicate_seams",
  "procarray",
  "pruneheap_seams",
  "readfuncs",
  "rel_vocab",
  "relation_seams",
- "relcache",
- "relcache_seams",
  "resowner",
  "rewrite_handler",
- "rewrite_manip",
  "rmgr",
  "s_lock_seams",
  "scan_fgram",
@@ -10649,7 +12275,6 @@ dependencies = [
  "syncrep_seams",
  "syscache_seams",
  "table",
- "tableam",
  "tableam_vocab",
  "tablecmds_seams",
  "tcop_dest",
@@ -10659,7 +12284,6 @@ dependencies = [
  "transam_seams",
  "transam_xlog",
  "transam_xlog_seams",
- "trigger",
  "trigger_seams",
  "tupdesc",
  "tuplestore",
@@ -10673,10 +12297,6 @@ dependencies = [
  "types_rel",
  "types_scan",
  "types_slot",
- "types_snapshot",
- "types_storage",
- "types_trigger",
- "types_trigger_call",
  "types_tuple",
  "vars",
  "varsup",
@@ -10697,8 +12317,6 @@ dependencies = [
  "backend_status_seams",
  "datum",
  "execexpr",
- "execmain",
- "execmain_seams",
  "execscan",
  "exectuples",
  "executils",
@@ -10727,38 +12345,6 @@ dependencies = [
  "types_slot",
  "types_tuple",
  "xact",
-]
-
-[[package]]
-name = "nodenestloop"
-version = "0.1.0"
-dependencies = [
- "execexpr",
- "exectuples",
- "executils",
- "init_small",
- "mcx",
- "postgres_seams",
- "types_error",
- "types_nodes",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "noderecursiveunion"
-version = "0.1.0"
-dependencies = [
- "execgrouping",
- "executils",
- "init_small",
- "mcx",
- "postgres_seams",
- "tuplestore",
- "types_error",
- "types_nodes",
- "types_slot",
- "types_tuple",
 ]
 
 [[package]]
@@ -10805,110 +12391,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nodesamplescan"
-version = "0.1.0"
-dependencies = [
- "adt_float",
- "datum",
- "execexpr",
- "execscan",
- "exectuples",
- "executils",
- "mcx",
- "pg_prng",
- "tableam",
- "tablesample",
- "types_core",
- "types_error",
- "types_nodes",
- "types_rel",
- "types_slot",
-]
-
-[[package]]
-name = "nodeseqscan"
-version = "0.1.0"
-dependencies = [
- "aclchk_seams",
- "bufmgr_seams",
- "datum",
- "execexpr",
- "execscan",
- "exectuples",
- "executils",
- "guc_tables",
- "hashfn",
- "heapam_visibility_seams",
- "jit_deform",
- "laneexec",
- "mcx",
- "miscinit_seams",
- "nodehash",
- "nodes_core",
- "pg_locale",
- "predicate_seams",
- "procarray_seams",
- "pruneheap_seams",
- "relcache_seams",
- "syscache_seams",
- "tableam",
- "types_core",
- "types_error",
- "types_nodes",
- "types_portal",
- "types_rel",
- "types_scan",
- "types_slot",
- "types_snapshot",
- "types_storage",
- "types_tuple",
-]
-
-[[package]]
-name = "nodesetop"
-version = "0.1.0"
-dependencies = [
- "aclchk_seams",
- "datum",
- "execgrouping",
- "exectuples",
- "executils",
- "guc_tables",
- "init_small",
- "mcx",
- "miscinit_seams",
- "postgres_seams",
- "syscache_seams",
- "tuplesort",
- "types_core",
- "types_error",
- "types_nodes",
- "types_pathnodes",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodesort"
-version = "0.1.0"
-dependencies = [
- "datum",
- "exectuples",
- "executils",
- "heaptuple",
- "init_small",
- "mcx",
- "postgres_seams",
- "syscache_seams",
- "tuplesort",
- "types_error",
- "types_nodes",
- "types_scan",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
 name = "nodetablefuncscan"
 version = "0.1.0"
 dependencies = [
@@ -10937,152 +12419,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "nodetidrangescan"
-version = "0.1.0"
-dependencies = [
- "execexpr",
- "execscan",
- "exectuples",
- "executils",
- "mcx",
- "tableam",
- "types_core",
- "types_error",
- "types_nodes",
- "types_scan",
- "types_tuple",
-]
-
-[[package]]
-name = "nodetidscan"
-version = "0.1.0"
-dependencies = [
- "arrayfuncs",
- "bufmgr_seams",
- "datum",
- "detoast",
- "execexpr",
- "execmain_seams",
- "execscan",
- "exectuples",
- "executils",
- "format_type",
- "heapam_visibility_seams",
- "init_small",
- "mcx",
- "postgres_seams",
- "predicate_seams",
- "tableam",
- "types_core",
- "types_error",
- "types_nodes",
- "types_rel",
- "types_scan",
- "types_slot",
- "types_snapshot",
- "types_storage",
- "types_tuple",
- "varlena",
-]
-
-[[package]]
-name = "nodeunique"
-version = "0.1.0"
-dependencies = [
- "aclchk_seams",
- "datum",
- "execexpr",
- "exectuples",
- "executils",
- "init_small",
- "lsyscache",
- "mcx",
- "miscinit_seams",
- "postgres_seams",
- "syscache_seams",
- "types_core",
- "types_error",
- "types_nodes",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodevaluesscan"
-version = "0.0.0"
-dependencies = [
- "clauses",
- "datum",
- "execexpr",
- "execscan",
- "exectuples",
- "executils",
- "mcx",
- "syscache_seams",
- "tupdesc",
- "types_core",
- "types_error",
- "types_nodes",
- "types_scan",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodewindowagg"
-version = "0.1.0"
-dependencies = [
- "aclchk_seams",
- "adt_int8",
- "adt_regproc",
- "clauses",
- "coerce",
- "datum",
- "execexpr",
- "exectuples",
- "executils",
- "fmgr_core",
- "guc_tables",
- "init_small",
- "lsyscache",
- "mcx",
- "miscinit_seams",
- "namespace_seams",
- "nodes_core",
- "objectaccess",
- "postgres_seams",
- "syscache_seams",
- "tuplestore",
- "types_core",
- "types_error",
- "types_fmgr",
- "types_nodes",
- "types_slot",
- "types_tuple",
-]
-
-[[package]]
-name = "nodeworktablescan"
-version = "0.1.0"
-dependencies = [
- "execexpr",
- "execscan",
- "exectuples",
- "executils",
- "mcx",
- "types_error",
- "types_nodes",
- "types_scan",
- "types_slot",
-]
-
-[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11125,12 +12467,27 @@ name = "oauth_validators"
 version = "0.0.0"
 dependencies = [
  "auth_oauth",
+ "dfmgr",
  "elog",
+ "guc",
  "guc_tables",
  "openssl",
  "pg_clock",
  "pgsync",
  "types_error",
+ "types_guc",
+]
+
+[[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "crc32fast",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "memchr",
 ]
 
 [[package]]
@@ -11306,11 +12663,11 @@ dependencies = [
  "execexpr",
  "exectuples",
  "fmgr_core",
+ "fp_contract",
  "funcapi",
  "init_small",
  "lsyscache",
  "mcx",
- "nodeagg",
  "nodes_core",
  "tupdesc",
  "tuplesort",
@@ -11394,6 +12751,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "owo-colors"
+version = "4.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c45bb4a6ae1280ec0803b1ef9d3455eb50f01efbbe1447ab020f1d54fba9d8"
+
+[[package]]
+name = "pagegive"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "pageinspect"
 version = "0.0.0"
 dependencies = [
@@ -11448,6 +12818,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pagepool"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "libmimalloc-sys",
+ "loom",
+ "memledger",
+ "mempolicy",
+ "mimalloc",
+ "pagegive",
+ "pg_clock",
+ "shuttle",
+]
+
+[[package]]
 name = "pairingheap"
 version = "0.1.0"
 
@@ -11498,10 +12883,12 @@ dependencies = [
  "lwlock",
  "mbutils",
  "mcx",
+ "memledger",
  "miscinit",
  "multixact_seams",
  "namespace_seams",
  "origin_seams",
+ "pagegive",
  "parallel_seams",
  "pg_enum",
  "pg_sema_seams",
@@ -11515,6 +12902,7 @@ dependencies = [
  "procarray",
  "procarray_seams",
  "procsignal",
+ "pseudorandomfuncs",
  "relcache_seams",
  "relmapper",
  "resowner",
@@ -11533,7 +12921,6 @@ dependencies = [
  "tablecmds_seams",
  "timeout_seams",
  "timestamp_seams",
- "tqueue",
  "transam",
  "transam_xlog",
  "transam_xlog_seams",
@@ -11569,7 +12956,11 @@ dependencies = [
 name = "parquet_read"
 version = "0.0.0"
 dependencies = [
+ "brotli-decompressor",
  "lz4_flex",
+ "memledger",
+ "miniz_oxide",
+ "pgsync",
  "simdutf8",
  "snap",
  "types_error",
@@ -11667,6 +13058,7 @@ dependencies = [
  "parse_collate_seams",
  "parse_expr",
  "parser_small1",
+ "stack_depth",
  "syscache_seams",
  "types_core",
  "types_error",
@@ -11776,14 +13168,25 @@ name = "parse_manifest"
 version = "0.1.0"
 dependencies = [
  "adt_json",
+ "aio_seams",
+ "elog",
+ "fd",
+ "guc_tables",
+ "ipc_seams",
  "manifest",
  "mcx",
  "pg_sha2",
  "pg_string",
+ "pgstat_seams",
  "pgtz_seams",
+ "resowner",
+ "resowner_seams",
  "types_core",
  "types_error",
+ "types_resowner",
+ "waitevent_seams",
  "wchar",
+ "xact_seams",
 ]
 
 [[package]]
@@ -11796,6 +13199,7 @@ dependencies = [
  "datum",
  "elog",
  "format_type",
+ "gravity_deps",
  "indexcmds_seams",
  "inval",
  "lsyscache",
@@ -12079,6 +13483,7 @@ dependencies = [
  "detoast_seams",
  "elog_seams",
  "execexpr",
+ "fmgr_seams",
  "format_type",
  "funcapi",
  "hashfn",
@@ -12088,6 +13493,7 @@ dependencies = [
  "parser_small1",
  "partcache",
  "pg_inherits",
+ "pg_qsort",
  "planner_seams",
  "readfuncs",
  "relation_seams",
@@ -12167,6 +13573,7 @@ dependencies = [
  "datum",
  "funcapi",
  "heaptuple",
+ "mcx",
  "pg_inherits",
  "syscache_seams",
  "types_core",
@@ -12202,6 +13609,7 @@ dependencies = [
  "mcx",
  "types_error",
  "types_fmgr",
+ "types_guc",
  "user",
 ]
 
@@ -12210,14 +13618,19 @@ name = "pathnode"
 version = "0.1.0"
 dependencies = [
  "clauses",
+ "cost_profile",
  "costsize",
+ "fires",
+ "fp_contract",
+ "gravity_program",
  "init_small",
  "lsyscache",
  "mcx",
- "nodehash",
  "nodes_core",
+ "pgsync",
  "planner_seams",
  "postgres_seams",
+ "types_core",
  "types_error",
  "types_nodes",
  "types_pathnodes",
@@ -12491,6 +13904,76 @@ dependencies = [
  "types_error",
  "types_rel",
  "types_tuple",
+]
+
+[[package]]
+name = "pg_cron"
+version = "0.0.0"
+dependencies = [
+ "acl_seams",
+ "aclchk",
+ "adt_datetime",
+ "adt_timestamp",
+ "analyze_seams",
+ "backend_status",
+ "backend_status_seams",
+ "bgworker",
+ "cache_syscache",
+ "catalog_namespace",
+ "cmdtag",
+ "datum",
+ "dbcommands",
+ "dfmgr",
+ "elog",
+ "extension",
+ "fmgr_seams",
+ "funcapi",
+ "genam",
+ "guc",
+ "guc_file",
+ "guc_tables",
+ "heapam",
+ "init_small",
+ "interrupt",
+ "inval",
+ "latch",
+ "lmgr_proc",
+ "localtime",
+ "lsyscache",
+ "mcx",
+ "miscinit",
+ "pg_depend",
+ "pgsync",
+ "pgtz",
+ "portalmem",
+ "postgres",
+ "postgres_seams",
+ "pquery",
+ "procsignal",
+ "ruleutils",
+ "sequence_seams",
+ "snapmgr",
+ "spi",
+ "superuser_seams",
+ "syscache_seams",
+ "table",
+ "tcop_dest",
+ "timeout_seams",
+ "transam_xlog",
+ "types_core",
+ "types_dest",
+ "types_error",
+ "types_fmgr",
+ "types_guc",
+ "types_nodes",
+ "types_portal",
+ "types_scan",
+ "types_storage",
+ "types_trigger_call",
+ "types_tuple",
+ "utility_seams",
+ "varlena",
+ "xact",
 ]
 
 [[package]]
@@ -12910,6 +14393,7 @@ dependencies = [
  "pgsync",
  "postgres_seams",
  "procsignal",
+ "read_stream",
  "relation",
  "relfilenumbermap",
  "smgr",
@@ -13124,7 +14608,9 @@ dependencies = [
  "exec_hooks",
  "execmain",
  "executils",
+ "fp_contract",
  "funcapi",
+ "guc",
  "guc_tables",
  "heaptuple",
  "init_small",
@@ -13145,6 +14631,8 @@ dependencies = [
  "types_core",
  "types_error",
  "types_fmgr",
+ "types_guc",
+ "types_hash",
  "types_nodes",
  "types_portal",
  "utility",
@@ -13350,6 +14838,7 @@ dependencies = [
  "pg_class_seams",
  "postgres_seams",
  "procarray",
+ "read_stream",
  "relation",
  "smgr",
  "storage_xlog",
@@ -13429,6 +14918,8 @@ dependencies = [
  "mcxt_seams",
  "miscinit",
  "pg_clock",
+ "pgrc_format",
+ "pgrc_spool",
  "pgstat",
  "procsignal",
  "procsignal_seams",
@@ -13451,12 +14942,16 @@ dependencies = [
 name = "pgclient"
 version = "0.0.0"
 dependencies = [
+ "fd",
  "file_seams",
+ "foreign-types",
  "init_small",
  "ip",
  "latch",
  "libc",
  "mcx",
+ "openssl",
+ "openssl-sys",
  "pg_b64",
  "pg_clock",
  "pg_hmac",
@@ -13472,6 +14967,8 @@ dependencies = [
  "types_error",
  "types_storage",
  "vfs",
+ "waitevent_seams",
+ "waiteventset",
  "wchar",
 ]
 
@@ -13494,6 +14991,7 @@ dependencies = [
  "elog",
  "funcapi",
  "guc",
+ "guc_tables",
  "mbutils",
  "mcx",
  "miniz_oxide",
@@ -13511,6 +15009,7 @@ dependencies = [
  "types_core",
  "types_error",
  "types_fmgr",
+ "types_guc",
  "types_tuple",
  "varlena",
  "wchar",
@@ -13559,31 +15058,51 @@ dependencies = [
 ]
 
 [[package]]
-name = "pgrc2_am"
+name = "pgrc_am"
 version = "0.0.0"
 dependencies = [
  "datum",
  "elog",
  "exectuples",
+ "fd",
+ "guc_seams",
+ "init_small",
+ "injection_point",
  "inval",
+ "ipc_seams",
  "libc",
+ "lmgr",
+ "lmgr_proc",
  "mbutils",
+ "mcx",
+ "memledger",
+ "mempolicy",
+ "pg_clock",
  "pg_locale_seams",
- "pgrc2_codec",
- "pgrc2_format",
- "pgrc2_meta",
- "pgrc2_read",
- "pgrc2_scan",
- "pgrc2_write",
+ "pgrc_codec",
+ "pgrc_compact",
+ "pgrc_format",
+ "pgrc_meta",
+ "pgrc_read",
+ "pgrc_scan",
+ "pgrc_wal_seams",
+ "pgrc_write",
+ "pgstat",
  "pgsync",
+ "postgres_seams",
+ "procarray",
  "procarray_seams",
+ "relation_seams",
  "relpath",
  "snapmgr",
  "syscache_seams",
  "tableam_vocab",
  "transam_seams",
+ "transam_xlog",
+ "transam_xlog_seams",
  "types_core",
  "types_error",
+ "types_fmgr",
  "types_rel",
  "types_slot",
  "types_snapshot",
@@ -13591,28 +15110,32 @@ dependencies = [
  "types_tuple",
  "varsup_seams",
  "vfs",
+ "waiter",
  "wchar",
  "xact",
  "xact_seams",
+ "xloginsert_seams",
 ]
 
 [[package]]
-name = "pgrc2_batch"
+name = "pgrc_batch"
 version = "0.0.0"
 dependencies = [
  "datum",
+ "memledger",
  "order_key",
- "pgrc2_format",
+ "pagepool",
+ "pgrc_format",
  "types_core",
  "types_tuple",
 ]
 
 [[package]]
-name = "pgrc2_claim"
+name = "pgrc_claim"
 version = "0.0.0"
 
 [[package]]
-name = "pgrc2_codec"
+name = "pgrc_codec"
 version = "0.0.0"
 dependencies = [
  "adt_jsonb",
@@ -13621,146 +15144,404 @@ dependencies = [
  "alp",
  "mbutils",
  "mcx",
- "pgrc2_format",
+ "pgrc_format",
  "pgsync",
  "wchar",
  "zstd",
 ]
 
 [[package]]
-name = "pgrc2_delta"
+name = "pgrc_colcache"
 version = "0.0.0"
 dependencies = [
- "loom",
- "pgrc2_format",
+ "bufmgr",
+ "datum",
+ "heapam",
+ "mcx",
+ "pgrc_am",
+ "pgrc_compact",
+ "pgrc_format",
+ "pgrc_front",
+ "pgrc_front_seams",
+ "pgrc_marks",
+ "pgrc_read",
+ "pgrc_scan",
+ "pgrc_write",
  "pgsync",
+ "procarray",
+ "snapmgr",
+ "table",
+ "tableam_vocab",
+ "transam_seams",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_rel",
+ "types_scan",
+ "types_snapshot",
+ "types_storage",
+ "types_tuple",
+ "varsup",
+ "xact",
 ]
 
 [[package]]
-name = "pgrc2_format"
+name = "pgrc_compact"
+version = "0.0.0"
+dependencies = [
+ "pgrc_format",
+ "pgrc_write",
+]
+
+[[package]]
+name = "pgrc_companion"
+version = "0.0.0"
+dependencies = [
+ "catalog_heap",
+ "catalog_index",
+ "catalog_namespace",
+ "catalog_toasting",
+ "datum",
+ "execindexing",
+ "exectuples",
+ "fmgr_seams",
+ "heapam",
+ "heaptuple",
+ "indexam",
+ "lmgr",
+ "lsyscache",
+ "mcx",
+ "pg_depend",
+ "pgrc_format",
+ "pgrc_front_seams",
+ "pgrc_marks",
+ "pruneheap",
+ "relcache_seams",
+ "reorderbuffer_seams",
+ "table",
+ "tableam",
+ "tableam_vocab",
+ "tupdesc",
+ "types_core",
+ "types_error",
+ "types_nbtree",
+ "types_nodes",
+ "types_rel",
+ "types_scan",
+ "types_slot",
+ "types_snapshot",
+ "types_tuple",
+ "xact",
+]
+
+[[package]]
+name = "pgrc_format"
 version = "0.0.0"
 dependencies = [
  "crc32c",
+ "memledger",
 ]
 
 [[package]]
-name = "pgrc2_ingest_par"
+name = "pgrc_front"
+version = "0.0.0"
+dependencies = [
+ "aclchk_seams",
+ "bufmgr",
+ "bufmgr_seams",
+ "datum",
+ "detoast",
+ "elog",
+ "exectuples",
+ "freespace_seams",
+ "guc",
+ "guc_seams",
+ "heapam",
+ "heaptoast_seams",
+ "heaptuple",
+ "init_small",
+ "injection_point",
+ "inval",
+ "inval_seams",
+ "latch_seams",
+ "lmgr",
+ "lmgr_proc",
+ "lock",
+ "lock_seams",
+ "mcx",
+ "miscinit_seams",
+ "pg_clock",
+ "pg_rusage",
+ "pgrc_am",
+ "pgrc_compact",
+ "pgrc_format",
+ "pgrc_front_seams",
+ "pgrc_marks",
+ "pgrc_wal_seams",
+ "pgrc_write",
+ "pgstat",
+ "pgsync",
+ "postgres_seams",
+ "predicate_seams",
+ "procarray",
+ "relation_seams",
+ "relcache_seams",
+ "resowner",
+ "snapmgr",
+ "superuser_seams",
+ "table",
+ "tableam_seams",
+ "tableam_vocab",
+ "transam_xlog_seams",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_nbtree",
+ "types_nodes",
+ "types_rel",
+ "types_scan",
+ "types_slot",
+ "types_snapshot",
+ "types_storage",
+ "types_trigger",
+ "types_tuple",
+ "varlena",
+ "varsup",
+ "vfs",
+ "waiter",
+ "waitevent",
+ "xact",
+ "xact_seams",
+ "xloginsert_seams",
+]
+
+[[package]]
+name = "pgrc_front_seams"
+version = "0.0.0"
+dependencies = [
+ "mcx",
+ "pgrc_am",
+ "pgrc_format",
+ "pgrc_write",
+ "seam_core",
+ "tableam_vocab",
+ "types_core",
+ "types_error",
+ "types_rel",
+ "types_snapshot",
+ "types_tuple",
+]
+
+[[package]]
+name = "pgrc_ingest_par"
 version = "0.0.0"
 dependencies = [
  "libc",
- "pgrc2_format",
- "pgrc2_write",
+ "memledger",
+ "pgrc_format",
+ "pgrc_write",
  "runtime",
 ]
 
 [[package]]
-name = "pgrc2_meta"
+name = "pgrc_maint"
 version = "0.0.0"
 dependencies = [
- "order_key",
- "pgrc2_format",
+ "bgworker",
+ "elog",
+ "init_small",
+ "injection_point",
+ "latch",
+ "lmgr",
+ "mcx",
+ "pg_clock",
+ "pgrc_am",
+ "pgrc_front",
+ "pgrc_front_seams",
+ "pgrc_ingest_par",
+ "pgrc_write",
+ "pgsync",
+ "postgres",
+ "postgres_seams",
+ "procarray",
+ "procsignal",
+ "relfilenumbermap",
+ "table",
+ "tableam_vocab",
+ "types_core",
+ "types_error",
+ "types_rel",
+ "types_storage",
+ "xact",
 ]
 
 [[package]]
-name = "pgrc2_qa"
+name = "pgrc_marks"
+version = "0.0.0"
+dependencies = [
+ "loom",
+ "pgsync",
+]
+
+[[package]]
+name = "pgrc_meta"
+version = "0.0.0"
+dependencies = [
+ "cost_profile",
+ "memledger",
+ "order_key",
+ "pgrc_format",
+]
+
+[[package]]
+name = "pgrc_qa"
 version = "0.0.0"
 dependencies = [
  "libc",
- "pgrc2_codec",
- "pgrc2_format",
- "pgrc2_read",
- "pgrc2_write",
+ "pgrc_codec",
+ "pgrc_format",
+ "pgrc_read",
+ "pgrc_write",
+ "pgsync",
 ]
 
 [[package]]
-name = "pgrc2_read"
+name = "pgrc_read"
 version = "0.0.0"
 dependencies = [
+ "cancelpoll",
+ "cost_profile",
+ "fires",
  "libc",
  "loom",
- "pgrc2_batch",
- "pgrc2_format",
+ "memledger",
+ "mempolicy",
+ "pagegive",
+ "pagepool",
+ "pgrc_batch",
+ "pgrc_format",
  "pgsync",
  "vfs",
 ]
 
 [[package]]
-name = "pgrc2_scan"
+name = "pgrc_scan"
 version = "0.0.0"
 dependencies = [
  "adt_jsonb",
  "datum",
  "mbutils",
  "mcx",
- "pgrc2_batch",
- "pgrc2_claim",
- "pgrc2_codec",
- "pgrc2_format",
- "pgrc2_meta",
- "pgrc2_qa",
- "pgrc2_read",
- "pgrc2_write",
+ "memledger",
+ "pagegive",
+ "pgrc_batch",
+ "pgrc_claim",
+ "pgrc_codec",
+ "pgrc_format",
+ "pgrc_meta",
+ "pgrc_qa",
+ "pgrc_read",
+ "pgrc_write",
  "pgsync",
  "wchar",
 ]
 
 [[package]]
-name = "pgrc2_write"
+name = "pgrc_spool"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "pgrc_format",
+ "pgsync",
+ "vfs",
+]
+
+[[package]]
+name = "pgrc_wal"
+version = "0.0.0"
+dependencies = [
+ "elog",
+ "guc_seams",
+ "init_small",
+ "injection_point",
+ "libc",
+ "lmgr_proc",
+ "mcx",
+ "memledger",
+ "pgrc_am",
+ "pgrc_format",
+ "pgrc_spool",
+ "pgrc_wal_seams",
+ "pgrc_write",
+ "pgsync",
+ "standby",
+ "sync_seams",
+ "timeline_seams",
+ "transam_xlog",
+ "twophase_seams",
+ "types_core",
+ "types_error",
+ "types_rel",
+ "types_storage",
+ "xact",
+ "xlogarchive_seams",
+ "xloginsert",
+ "xlogreader_seams",
+ "xlogrecovery_seams",
+]
+
+[[package]]
+name = "pgrc_wal_seams"
+version = "0.0.0"
+dependencies = [
+ "pgrc_format",
+ "pgrc_write",
+ "seam_core",
+ "types_core",
+ "types_error",
+ "types_rel",
+]
+
+[[package]]
+name = "pgrc_write"
 version = "0.0.0"
 dependencies = [
  "adt_jsonb",
  "adt_jsonb_shred",
  "adt_numeric",
+ "cost_profile",
+ "init_small",
  "libc",
  "loom",
  "mbutils",
  "mcx",
+ "memledger",
+ "mempolicy",
+ "pg_clock",
  "pglz",
- "pgrc2_claim",
- "pgrc2_codec",
- "pgrc2_format",
- "pgrc2_meta",
- "pgrc2_read",
+ "pgrc_claim",
+ "pgrc_codec",
+ "pgrc_format",
+ "pgrc_meta",
+ "pgrc_read",
  "pgsync",
  "simdutf8",
  "vfs",
+ "waiter",
  "wchar",
  "write_governor",
  "xact_seams",
 ]
 
 [[package]]
-name = "pgrcolumnar"
-version = "0.0.0"
+name = "pgrc_zonequal"
+version = "0.1.0"
 dependencies = [
  "datum",
- "exectuples",
- "init_small",
- "inval",
- "laneexec",
- "libc",
- "lz4_flex",
- "mbutils_seams",
- "mcx",
- "pgsync",
- "relpath",
- "smgr_seams",
- "snapmgr",
- "tableam_vocab",
- "transam_seams",
- "tuplesort",
- "tuplesort_seams",
+ "lsyscache",
  "types_core",
  "types_error",
- "types_rel",
- "types_scan",
- "types_slot",
- "types_snapshot",
- "types_storage",
- "types_tuple",
- "vfs",
- "xact_seams",
- "zstd",
+ "types_nodes",
 ]
 
 [[package]]
@@ -13811,12 +15592,13 @@ dependencies = [
  "elog",
  "fd",
  "guc_tables",
- "hashbrown",
+ "hashbrown 0.14.5",
  "init_small",
  "inval_seams",
  "ipc_seams",
  "libc",
  "mcx",
+ "memledger",
  "miscinit",
  "pgstat_seams",
  "pgsync",
@@ -13868,10 +15650,13 @@ dependencies = [
  "procarray",
  "slot",
  "transam_xlog_seams",
+ "tupdesc",
+ "typcache_seams",
  "types_core",
  "types_error",
  "types_fmgr",
  "types_storage",
+ "types_tuple",
  "varlena",
  "waitevent",
  "walreceiverfuncs_seams",
@@ -13933,6 +15718,7 @@ version = "0.1.0"
 dependencies = [
  "antithesis_sdk",
  "loom",
+ "pagegive",
  "pg_clock",
  "pg_strong_random",
 ]
@@ -14076,6 +15862,7 @@ dependencies = [
  "datum",
  "elog",
  "execscan",
+ "fp_contract",
  "guc_tables",
  "inval",
  "inval_seams",
@@ -14125,6 +15912,8 @@ dependencies = [
  "aclchk_seams",
  "adt_acl",
  "adt_int8",
+ "adt_jsonb",
+ "adt_jsonb_pathstats",
  "adt_multirangetypes",
  "adt_network",
  "adt_numeric",
@@ -14142,20 +15931,26 @@ dependencies = [
  "clauses_seams",
  "coerce",
  "copyfuncs",
+ "cost_profile",
  "costsize",
  "datum",
  "detoast",
  "elog_seams",
  "equivclass",
  "execexpr",
+ "execindexing",
  "execmain",
  "exectuples",
+ "fires",
  "fmgr_core",
  "fmgr_seams",
  "foreigncmds_seams",
  "format_type",
+ "fp_contract",
  "gin",
  "gist",
+ "gravity_fn",
+ "guc_seams",
  "guc_tables",
  "indexam",
  "indexam_seams",
@@ -14170,9 +15965,6 @@ dependencies = [
  "miscinit",
  "miscinit_seams",
  "nbtree",
- "nodeagg",
- "nodehash",
- "nodememoize",
  "nodes_core",
  "outfuncs",
  "parallel_seams",
@@ -14190,6 +15982,7 @@ dependencies = [
  "pg_inherits",
  "pg_locale",
  "pg_prng",
+ "pg_qsort",
  "pgvector_hnsw",
  "planner_seams",
  "postgres_seams",
@@ -14213,6 +16006,7 @@ dependencies = [
  "tableam_vocab",
  "tablesample",
  "tidbitmap",
+ "transam_xlog",
  "transam_xlog_seams",
  "typcache",
  "types_core",
@@ -14232,6 +16026,7 @@ dependencies = [
  "vars",
  "visibilitymap",
  "wchar",
+ "xact_seams",
 ]
 
 [[package]]
@@ -14265,6 +16060,7 @@ dependencies = [
  "clauses",
  "cmdtag",
  "coerce",
+ "copyfuncs",
  "datum",
  "dbcommands_seams",
  "detoast",
@@ -14304,6 +16100,7 @@ dependencies = [
  "resowner",
  "rewrite_handler_seams",
  "rustc-hash",
+ "scalar_seams",
  "scan_fgram",
  "snapmgr",
  "spi",
@@ -14319,6 +16116,7 @@ dependencies = [
  "types_dest",
  "types_error",
  "types_fmgr",
+ "types_guc",
  "types_nodes",
  "types_portal",
  "types_rel",
@@ -14330,6 +16128,7 @@ dependencies = [
  "varlena",
  "wchar",
  "xact",
+ "xact_seams",
 ]
 
 [[package]]
@@ -14503,6 +16302,7 @@ dependencies = [
  "hashfn",
  "ipc_portal_seams",
  "mcx",
+ "memledger",
  "plancache_portal_seams",
  "portalcmds_seams",
  "pquery_seams",
@@ -14522,6 +16322,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "postcard"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
+dependencies = [
+ "cobs",
+ "embedded-io 0.4.0",
+ "embedded-io 0.6.1",
+ "serde",
+]
+
+[[package]]
 name = "postgres"
 version = "0.1.0"
 dependencies = [
@@ -14538,6 +16350,7 @@ dependencies = [
  "be_fsstubs_seams",
  "be_secure_seams",
  "bufmgr",
+ "cancelpoll",
  "catalog_index_seams",
  "catalog_storage_seams",
  "catcache",
@@ -14555,9 +16368,12 @@ dependencies = [
  "execmain_seams",
  "fastpath",
  "fd",
+ "fires",
  "fmgr_core",
  "fmgr_seams",
  "gram_core",
+ "gravity_entry_seams",
+ "gravity_exec",
  "guc",
  "guc_file",
  "guc_seams",
@@ -14569,7 +16385,6 @@ dependencies = [
  "ipc",
  "ipc_seams",
  "ipci_seams",
- "janitor_seams",
  "l2cache",
  "latch",
  "latch_seams",
@@ -14587,7 +16402,9 @@ dependencies = [
  "mcx",
  "mcxt_seams",
  "mcxt_stats",
- "memwatchdog",
+ "memledger",
+ "mempolicy",
+ "memruntime",
  "miscinit",
  "miscinit_seams",
  "multixact_seams",
@@ -14596,6 +16413,8 @@ dependencies = [
  "nodes_params",
  "origin_seams",
  "outfuncs",
+ "pagegive",
+ "pagepool",
  "parallel_seams",
  "parse_expr",
  "parse_oper",
@@ -14606,7 +16425,6 @@ dependencies = [
  "pg_sema_seams",
  "pg_string",
  "pg_strong_random",
- "pgrcolumnar",
  "pgstat",
  "pgstat_seams",
  "pgsync",
@@ -14713,6 +16531,7 @@ dependencies = [
  "fmgr_seams",
  "foreigncmds",
  "format_type",
+ "fp_contract",
  "funcapi",
  "guc",
  "heaptuple",
@@ -14824,6 +16643,7 @@ dependencies = [
  "smgr",
  "smgr_seams",
  "snapmgr",
+ "startup_seams",
  "superuser_seams",
  "sync_seams",
  "table",
@@ -14850,9 +16670,11 @@ dependencies = [
  "auth_seams",
  "autovacuum_seams",
  "backend_startup",
+ "backend_status",
  "backend_status_seams",
  "be_secure",
  "bgworker",
+ "bufmgr",
  "controldata_utils",
  "dsm_core",
  "elog",
@@ -14863,6 +16685,7 @@ dependencies = [
  "guc_seams",
  "guc_tables",
  "init_small",
+ "instaux",
  "ip",
  "ipc",
  "ipc_seams",
@@ -14878,9 +16701,10 @@ dependencies = [
  "lwlock",
  "mbutils_seams",
  "mcx",
- "memwatchdog",
+ "memruntime",
  "miscinit",
  "miscinit_seams",
+ "pagegive",
  "pg_clock",
  "pg_locale",
  "pg_path",
@@ -14888,7 +16712,9 @@ dependencies = [
  "pg_sema_seams",
  "pg_string",
  "pgarch",
+ "pgrc_maint",
  "pgstat",
+ "pgsync",
  "pmchild",
  "pmchild_seams",
  "pmsignal",
@@ -14990,6 +16816,7 @@ dependencies = [
  "pqcomm_seams",
  "stringinfo",
  "types_core",
+ "types_dest",
  "types_error",
  "types_startup",
  "types_storage",
@@ -15105,9 +16932,11 @@ dependencies = [
  "exectuples",
  "explain",
  "fmgr_seams",
+ "gravity_entry_seams",
  "guc",
  "guc_tables",
  "init_small",
+ "ipc_portal_seams",
  "ipc_seams",
  "latch_seams",
  "lmgr_proc",
@@ -15116,6 +16945,7 @@ dependencies = [
  "lwlock",
  "mbutils_seams",
  "mcx",
+ "memledger",
  "miscinit",
  "miscinit_seams",
  "pg_sema_seams",
@@ -15123,6 +16953,7 @@ dependencies = [
  "plancache",
  "planner",
  "pmsignal_seams",
+ "portalcmds_seams",
  "portalmem",
  "postgres_seams",
  "pqcomm_seams",
@@ -15155,6 +16986,7 @@ dependencies = [
  "types_resowner",
  "types_scan",
  "types_slot",
+ "types_snapshot",
  "types_tuple",
  "utility",
  "utility_seams",
@@ -15162,6 +16994,8 @@ dependencies = [
  "varsup",
  "waitevent_seams",
  "xact",
+ "xact_portal_seams",
+ "xact_seams",
 ]
 
 [[package]]
@@ -15372,6 +17206,7 @@ dependencies = [
  "libc",
  "lmgr_proc",
  "lmgr_proc_seams",
+ "lock",
  "lock_seams",
  "lwlock",
  "mcx",
@@ -15584,6 +17419,7 @@ dependencies = [
  "adt_numeric",
  "adt_timestamp",
  "datum",
+ "fp_contract",
  "init_small",
  "pg_prng",
  "pg_strong_random",
@@ -15616,6 +17452,29 @@ dependencies = [
  "seam_core",
  "types_core",
  "types_error",
+]
+
+[[package]]
+name = "pulley-interpreter"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e95d890afdd44c1269bdc84e9f043c3a6c02e8bfd1781d64468e62f05880c83"
+dependencies = [
+ "cranelift-bitset",
+ "log",
+ "pulley-macros",
+ "wasmtime-internal-core",
+]
+
+[[package]]
+name = "pulley-macros"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "550c64f4245f013664d187a37ec94b4e99bd43a00980134e0e5fd48896b1d3af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -15662,6 +17521,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "radium"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
+
+[[package]]
 name = "radixtree"
 version = "0.1.0"
 dependencies = [
@@ -15700,6 +17565,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_pcg"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59cad018caf63deb318e5a4586d99a24424a364f40f1e5778c29aca23f4fc73e"
+dependencies = [
+ "rand_core",
+]
+
+[[package]]
 name = "rangetypes_gist"
 version = "0.1.0"
 dependencies = [
@@ -15733,6 +17607,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "read_stream"
+version = "0.0.0"
+dependencies = [
+ "aio_core",
+ "aio_seams",
+ "bufmgr_seams",
+ "catalog_seams",
+ "fd",
+ "guc_tables",
+ "init_small",
+ "mcx",
+ "spccache",
+ "types_core",
+ "types_error",
+ "types_rel",
+ "types_storage",
+]
+
+[[package]]
 name = "readfuncs"
 version = "0.1.0"
 dependencies = [
@@ -15742,6 +17635,39 @@ dependencies = [
  "types_core",
  "types_error",
  "types_nodes",
+]
+
+[[package]]
+name = "refint"
+version = "0.0.0"
+dependencies = [
+ "datum",
+ "dfmgr",
+ "elog",
+ "mcx",
+ "numutils",
+ "spi",
+ "types_core",
+ "types_error",
+ "types_fmgr",
+ "types_trigger",
+ "types_trigger_call",
+ "types_tuple",
+]
+
+[[package]]
+name = "regalloc2"
+version = "0.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "757712e8e61590d6d4f5d563483755538b5aa13467837a3b41cd9832509a7f85"
+dependencies = [
+ "allocator-api2",
+ "bumpalo",
+ "hashbrown 0.17.1",
+ "log",
+ "rustc-hash",
+ "serde",
+ "smallvec",
 ]
 
 [[package]]
@@ -15806,6 +17732,7 @@ name = "regexp_alt"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "gravity_dict",
  "guc_tables",
  "mbutils",
  "mcx",
@@ -15813,6 +17740,7 @@ dependencies = [
  "pkg-config",
  "postgres_seams",
  "regex",
+ "stringinfo",
  "types_error",
  "wchar",
 ]
@@ -15857,6 +17785,7 @@ dependencies = [
  "heaptuple",
  "init_small",
  "libc",
+ "lmgr_proc",
  "mbutils",
  "mcx",
  "miscinit",
@@ -15864,6 +17793,7 @@ dependencies = [
  "pg_path",
  "pglz",
  "postgres_seams",
+ "procarray",
  "relpath",
  "s_lock_seams",
  "superuser",
@@ -15928,6 +17858,7 @@ dependencies = [
  "fd",
  "fmgr_core",
  "fmgr_seams",
+ "gravity_deps",
  "guc_tables",
  "init_small",
  "inval_seams",
@@ -15937,6 +17868,7 @@ dependencies = [
  "lmgr",
  "lwlock",
  "mcx",
+ "memledger",
  "miscinit_seams",
  "namespace_seams",
  "nodes_core",
@@ -15946,6 +17878,7 @@ dependencies = [
  "relcache_build_seams",
  "relcache_seams",
  "relmapper_seams",
+ "shmem_seams",
  "smgr",
  "snapmgr",
  "syscache_seams",
@@ -15982,6 +17915,7 @@ dependencies = [
  "mcx",
  "relcache",
  "relcache_build_seams",
+ "relcache_seams",
  "reloptions",
  "snapmgr",
  "table",
@@ -16107,10 +18041,13 @@ dependencies = [
  "adt_bool",
  "datum",
  "define",
+ "detoast",
  "elog",
  "fmgr_seams",
  "guc",
  "mcx",
+ "parser_seams",
+ "pglz",
  "syscache_seams",
  "tableam_vocab",
  "types_core",
@@ -16167,6 +18104,7 @@ dependencies = [
  "relpath_seams",
  "reorderbuffer_seams",
  "snapmgr",
+ "syscache_seams",
  "transam_seams",
  "transam_xlog_seams",
  "tupdesc",
@@ -16186,6 +18124,7 @@ name = "reorderbuffer_seams"
 version = "0.0.0"
 dependencies = [
  "seam_core",
+ "types_core",
  "types_error",
 ]
 
@@ -16332,8 +18271,6 @@ dependencies = [
  "datum",
  "dbcommands_seams",
  "deadlock_seams",
- "execmain",
- "execmain_seams",
  "execreplication",
  "exectuples",
  "executils",
@@ -16365,7 +18302,6 @@ dependencies = [
  "multixact_seams",
  "namespace_seams",
  "nodes_core",
- "nodeseqscan",
  "origin_seams",
  "parallel_seams",
  "parse_expr",
@@ -16380,6 +18316,7 @@ dependencies = [
  "pgstat",
  "planner",
  "pmsignal_seams",
+ "postgres_seams",
  "predicate_seams",
  "procarray",
  "pruneheap_seams",
@@ -16492,11 +18429,13 @@ dependencies = [
  "catalog",
  "elog",
  "fd",
+ "guc_tables",
  "heapam",
  "heapam_visibility",
  "heaptoast",
  "heaptuple",
  "init_small",
+ "libc",
  "mcx",
  "procarray",
  "rewriteheap_seams",
@@ -16548,6 +18487,8 @@ dependencies = [
  "superuser",
  "syscache_seams",
  "table",
+ "tableam",
+ "tableam_vocab",
  "types_core",
  "types_error",
  "types_fmgr",
@@ -16628,6 +18569,7 @@ dependencies = [
  "multixact",
  "nbtree_xlog",
  "origin_seams",
+ "pgrc_wal",
  "relmapper",
  "rmgrdesc",
  "sequence_xlog",
@@ -16658,6 +18600,8 @@ dependencies = [
  "heapam_xlog",
  "mcx",
  "multixact",
+ "pgrc_am",
+ "pgrc_format",
  "relmapper",
  "relpath_seams",
  "rmgr",
@@ -16675,18 +18619,6 @@ dependencies = [
  "types_tuple",
  "xact",
  "xlogreader_seams",
-]
-
-[[package]]
-name = "ron"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b91f7eff05f748767f183df4320a63d6936e9c6107d97c9e6bdd9784f4289c94"
-dependencies = [
- "base64",
- "bitflags",
- "serde",
- "serde_derive",
 ]
 
 [[package]]
@@ -16733,6 +18665,7 @@ dependencies = [
  "guc_tables",
  "indexcmds_seams",
  "init_small",
+ "lmgr_seams",
  "lsyscache",
  "mbutils",
  "mcx",
@@ -16755,6 +18688,7 @@ dependencies = [
  "rewrite_handler_seams",
  "rewrite_manip",
  "ruleutils_seams",
+ "rustc-hash",
  "snapmgr",
  "stack_depth_core",
  "syscache_seams",
@@ -16793,6 +18727,9 @@ dependencies = [
  "guc_tables",
  "init_small",
  "loom",
+ "mcx",
+ "memledger",
+ "pagegive",
  "parallel",
  "pg_clock",
  "pgsync",
@@ -16801,6 +18738,12 @@ dependencies = [
  "types_relscan",
  "waiter",
 ]
+
+[[package]]
+name = "rustc-demangle"
+version = "0.1.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
 
 [[package]]
 name = "rustc-hash"
@@ -16825,6 +18768,19 @@ checksum = "2dd18cd2bae1820af0b6ad5e54f4a51d0f3fcc53b05f845675074efcc7af071d"
 dependencies = [
  "rustc_version",
  "semver",
+]
+
+[[package]]
+name = "rustix"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+dependencies = [
+ "bitflags",
+ "errno",
+ "libc",
+ "linux-raw-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -16938,6 +18894,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
+name = "scopeguard"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
 name = "scram_common"
 version = "0.1.0"
 dependencies = [
@@ -16986,6 +18948,7 @@ dependencies = [
  "auth_oauth",
  "auth_scram",
  "auto_explain",
+ "autoinc",
  "autovacuum",
  "auxprocess",
  "backend_progress",
@@ -17045,12 +19008,14 @@ dependencies = [
  "dblink",
  "deadlock",
  "detoast",
+ "dfmgr",
+ "dict_int",
  "dict_snowball",
+ "dict_xsyn",
  "dsm_core",
  "elog",
  "event_trigger",
  "execexpr",
- "execjunk",
  "execmain",
  "execreplication",
  "execscan",
@@ -17070,18 +19035,21 @@ dependencies = [
  "gin",
  "gin_funcs",
  "gistproc",
+ "gravity_exec",
  "guc",
  "guc_file",
  "guc_funcs",
  "guc_tables",
  "hba",
  "heapam_visibility",
+ "heapam_xlog",
  "heaptoast",
  "hstore",
  "indexam",
  "indexcmds",
  "init_small",
  "injection_points",
+ "insert_username",
  "intarray",
  "interrupt",
  "inval",
@@ -17106,27 +19074,11 @@ dependencies = [
  "mbutils",
  "mcxt_stats",
  "miscinit",
+ "moddatetime",
  "multixact",
  "multixactfuncs",
  "network_gist",
  "network_spgist",
- "nodeagg",
- "nodegroup",
- "nodeindexonlyscan",
- "nodeindexscan",
- "nodelimit",
- "nodelockrows",
- "nodematerial",
- "nodememoize",
- "nodemergejoin",
- "nodenestloop",
- "nodesamplescan",
- "nodeseqscan",
- "nodesort",
- "nodetidrangescan",
- "nodetidscan",
- "nodeunique",
- "nodewindowagg",
  "oauth_validators",
  "opclasscmds",
  "operatorcmds",
@@ -17151,6 +19103,7 @@ dependencies = [
  "pg_config",
  "pg_constraint",
  "pg_controldata",
+ "pg_cron",
  "pg_database",
  "pg_db_role_setting",
  "pg_enum",
@@ -17175,6 +19128,12 @@ dependencies = [
  "pgarch",
  "pgcrypto",
  "pgoutput",
+ "pgrc_am",
+ "pgrc_colcache",
+ "pgrc_companion",
+ "pgrc_front",
+ "pgrc_marks",
+ "pgrc_wal",
  "pgrowlocks",
  "pgstat",
  "pgstattuple",
@@ -17208,6 +19167,7 @@ dependencies = [
  "queryenvironment",
  "rangetypes_gist",
  "rangetypes_spgist",
+ "refint",
  "regex_core",
  "regress_lib",
  "relation",
@@ -17260,6 +19220,7 @@ dependencies = [
  "sysv_shmem",
  "table",
  "tableam",
+ "tableam_seams",
  "tablecmds",
  "tablefunc",
  "tablesample",
@@ -17309,6 +19270,7 @@ dependencies = [
  "xlogreader",
  "xlogrecovery",
  "xlogutils",
+ "xml2",
  "xmlmap",
 ]
 
@@ -17348,6 +19310,10 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "sequence"
@@ -17511,6 +19477,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17567,6 +19544,7 @@ dependencies = [
  "libc",
  "lmgr_proc",
  "lmgr_proc_seams",
+ "mcx",
  "pg_clock",
  "pg_sema_seams",
  "postgres_seams",
@@ -17607,6 +19585,75 @@ version = "0.0.0"
 dependencies = [
  "seam_core",
  "types_error",
+]
+
+[[package]]
+name = "shuttle"
+version = "0.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "781e1c7db5a7036b8debea4f67c1393deeeca1962df400515efa5c615256be27"
+dependencies = [
+ "bitvec",
+ "cfg-if",
+ "const-siphasher",
+ "corosensei",
+ "hex",
+ "owo-colors",
+ "rand",
+ "rand_core",
+ "rand_pcg",
+ "scoped-tls",
+ "shuttle-engine",
+ "shuttle-schedulers",
+ "shuttle-std",
+ "tracing",
+]
+
+[[package]]
+name = "shuttle-engine"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ff11c5eb32e53fc4a4f15b4dab4ee13b4604db1feb97a989877001475a8efb8"
+dependencies = [
+ "assoc",
+ "bitvec",
+ "cfg-if",
+ "const-siphasher",
+ "corosensei",
+ "hex",
+ "owo-colors",
+ "rand",
+ "rand_core",
+ "rand_pcg",
+ "scoped-tls",
+ "smallvec",
+ "tracing",
+]
+
+[[package]]
+name = "shuttle-schedulers"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7673a579e1660404067f5aa1344d6530f15b59f53b0fe98767d7ab117d14067"
+dependencies = [
+ "rand",
+ "rand_pcg",
+ "shuttle-engine",
+ "smallvec",
+ "tracing",
+]
+
+[[package]]
+name = "shuttle-std"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05fa35d22b2671e0184a13d0221055ae9e07a570862798e866118acd4be50f15"
+dependencies = [
+ "assoc",
+ "owo-colors",
+ "shuttle-engine",
+ "smallvec",
+ "tracing",
 ]
 
 [[package]]
@@ -17668,6 +19715,7 @@ dependencies = [
 name = "sinval"
 version = "0.0.0"
 dependencies = [
+ "catcache_seams",
  "condition_variable_seams",
  "elog",
  "init_small",
@@ -17713,6 +19761,12 @@ dependencies = [
  "types_error",
  "types_nbtree",
 ]
+
+[[package]]
+name = "slab"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slot"
@@ -17817,6 +19871,8 @@ dependencies = [
 name = "slotsync"
 version = "0.0.0"
 dependencies = [
+ "adt_bool",
+ "adt_pg_lsn",
  "autovacuum_seams",
  "condition_variable_seams",
  "datum",
@@ -17841,6 +19897,7 @@ dependencies = [
  "mcx",
  "miscinit",
  "miscinit_seams",
+ "numutils",
  "pg_sema_seams",
  "pgsync",
  "pmsignal_seams",
@@ -17915,6 +19972,9 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "smgr"
@@ -17978,6 +20038,7 @@ dependencies = [
  "mcx",
  "procarray",
  "reorderbuffer",
+ "resowner",
  "seam_core",
  "slot",
  "snapbuild_seams",
@@ -17986,6 +20047,7 @@ dependencies = [
  "transam_xlog",
  "types_core",
  "types_error",
+ "types_resowner",
  "types_snapshot",
  "types_storage",
  "waitevent_seams",
@@ -18122,6 +20184,7 @@ dependencies = [
  "postgres_seams",
  "predicate_seams",
  "procarray_seams",
+ "read_stream",
  "snapmgr_seams",
  "tidbitmap",
  "transam_xlog",
@@ -18339,7 +20402,6 @@ dependencies = [
  "namespace_seams",
  "nodes_core",
  "nodes_params",
- "nodeseqscan",
  "origin_seams",
  "outfuncs",
  "parallel_seams",
@@ -18448,67 +20510,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sqe"
-version = "0.0.0"
-dependencies = [
- "adt_numeric",
- "adt_regexp",
- "hashbrown",
- "mbutils",
- "mcx",
- "mimalloc",
- "pgrc2_codec",
- "pgrc2_format",
- "pgrc2_meta",
- "pgrc2_read",
- "pgrc2_write",
- "pgsync",
- "postgres_seams",
- "regex_core",
- "ron",
- "serde",
- "sqe",
- "stack_depth_core",
- "types_core",
- "types_error",
- "wchar",
-]
-
-[[package]]
-name = "sqe_lanestitch"
-version = "0.0.0"
-dependencies = [
- "datum",
- "jit_deform",
- "sqe",
- "types_error",
-]
-
-[[package]]
-name = "sqe_spill"
-version = "0.0.0"
-dependencies = [
- "aio_seams",
- "datum",
- "elog",
- "fd",
- "guc_tables",
- "ipc_seams",
- "libc",
- "nodehashjoin",
- "pgstat_seams",
- "postgres_seams",
- "resowner",
- "resowner_seams",
- "runtime",
- "types_error",
- "types_resowner",
- "types_storage",
- "waitevent_seams",
- "xact_seams",
-]
-
-[[package]]
 name = "sql_functions"
 version = "0.1.0"
 dependencies = [
@@ -18592,15 +20593,23 @@ dependencies = [
  "datum",
  "dfmgr",
  "funcapi",
+ "heaptuple",
  "init_small",
  "mbutils",
  "mcx",
+ "typcache_seams",
  "types_error",
  "types_fmgr",
  "types_tuple",
  "varlena",
  "wchar",
 ]
+
+[[package]]
+name = "stable_deref_trait"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stack_depth"
@@ -18619,6 +20628,7 @@ version = "0.0.0"
 dependencies = [
  "elog",
  "libc",
+ "pagegive",
  "types_error",
 ]
 
@@ -18703,6 +20713,7 @@ dependencies = [
  "execexpr",
  "exectuples",
  "fmgr_seams",
+ "fp_contract",
  "funcapi",
  "genam",
  "guc_tables",
@@ -18817,8 +20828,13 @@ name = "storage_xlog"
 version = "0.1.0"
 dependencies = [
  "elog",
+ "fd",
  "freespace",
  "init_small",
+ "libc",
+ "pgrc_am",
+ "pgrc_format",
+ "relpath_seams",
  "smgr",
  "transam_xlog",
  "types_core",
@@ -18841,13 +20857,6 @@ name = "string_seams"
 version = "0.0.0"
 dependencies = [
  "seam_core",
-]
-
-[[package]]
-name = "stringhash"
-version = "0.0.0"
-dependencies = [
- "libc",
 ]
 
 [[package]]
@@ -19018,6 +21027,7 @@ dependencies = [
  "miscinit",
  "multixact",
  "pg_clock",
+ "pgrc_wal",
  "pgstat_seams",
  "relpath_seams",
  "smgr",
@@ -19051,6 +21061,7 @@ dependencies = [
  "latch",
  "lmgr_proc",
  "lwlock",
+ "mcx",
  "pgsync",
  "ps_status_seams",
  "syncrep_seams",
@@ -19214,8 +21225,11 @@ dependencies = [
  "init_small",
  "mcx",
  "multixact",
- "pgrc2_am",
- "pgrcolumnar",
+ "pgrc_am",
+ "pgrc_format",
+ "pgrc_front",
+ "pgrc_marks",
+ "pgrc_wal",
  "procarray",
  "smgr",
  "snapmgr",
@@ -19225,6 +21239,7 @@ dependencies = [
  "types_core",
  "types_error",
  "types_guc",
+ "types_nodes",
  "types_rel",
  "types_scan",
  "types_slot",
@@ -19338,9 +21353,13 @@ dependencies = [
  "pg_publication",
  "pg_shdepend",
  "pg_type",
- "pgrcolumnar",
+ "pgrc_am",
+ "pgrc_front",
+ "pgrc_front_seams",
+ "pgrc_marks",
  "pgstat",
  "planner",
+ "postgres_seams",
  "predicate_seams",
  "procarray",
  "readfuncs",
@@ -19407,6 +21426,7 @@ dependencies = [
  "datum",
  "dfmgr",
  "format_type",
+ "fp_contract",
  "funcapi",
  "heaptuple",
  "mbutils",
@@ -19455,6 +21475,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tap"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
+
+[[package]]
+name = "target-lexicon"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+
+[[package]]
 name = "tcn"
 version = "0.0.0"
 dependencies = [
@@ -19487,7 +21519,6 @@ dependencies = [
  "printtup",
  "spi_seams",
  "sql_functions_seams",
- "tqueue",
  "tstore_receiver",
  "types_core",
  "types_dest",
@@ -19496,6 +21527,15 @@ dependencies = [
  "types_slot",
  "types_tuple",
  "xact_seams",
+]
+
+[[package]]
+name = "termcolor"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
+dependencies = [
+ "winapi-util",
 ]
 
 [[package]]
@@ -19598,6 +21638,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "thiserror"
+version = "2.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "thread_local"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -19625,9 +21685,8 @@ name = "tidbitmap"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
- "hashbrown",
+ "hashfn",
  "mcx",
- "rustc-hash",
  "types_core",
  "types_error",
  "types_nodes",
@@ -19686,6 +21745,7 @@ version = "0.0.0"
 dependencies = [
  "init_small",
  "latch",
+ "pagegive",
  "pg_clock",
  "pgsync",
  "timeout_seams",
@@ -19760,30 +21820,180 @@ dependencies = [
 ]
 
 [[package]]
-name = "tqueue"
-version = "0.0.0"
+name = "tpde_assembler"
+version = "0.1.0"
 dependencies = [
- "elog",
- "exectuples",
- "heaptuple",
- "init_small",
- "ipc_seams",
- "latch",
- "lmgr_proc",
- "lmgr_proc_seams",
  "mcx",
- "pg_sema_seams",
- "postgres_seams",
- "s_lock_seams",
- "shm_mq",
- "shmem_seams",
- "types_core",
+ "tpde_string_table",
+ "tpde_util",
  "types_error",
- "types_slot",
- "types_storage",
- "types_tuple",
- "waitevent_seams",
- "waiteventset",
+]
+
+[[package]]
+name = "tpde_base"
+version = "0.1.0"
+
+[[package]]
+name = "tpde_compiler"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "tpde_assembler",
+ "tpde_base",
+ "tpde_core",
+ "tpde_function_writer",
+ "tpde_test_ir",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_compiler_a64"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "tpde_assembler",
+ "tpde_base",
+ "tpde_compiler",
+ "tpde_core",
+ "tpde_disarm",
+ "tpde_elf_mapper",
+ "tpde_function_writer",
+ "tpde_function_writer_a64",
+ "tpde_test_ir",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_compiler_x64"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "tpde_assembler",
+ "tpde_base",
+ "tpde_compiler",
+ "tpde_core",
+ "tpde_fadec",
+ "tpde_function_writer",
+ "tpde_function_writer_x64",
+ "tpde_test_ir",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_core"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "tpde_assembler",
+ "tpde_base",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_disarm"
+version = "0.1.0"
+dependencies = [
+ "tpde_disarm_gen",
+]
+
+[[package]]
+name = "tpde_disarm_gen"
+version = "0.1.0"
+
+[[package]]
+name = "tpde_elf_mapper"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mcx",
+ "memledger",
+ "mempolicy",
+ "tpde_assembler",
+ "tpde_disarm",
+ "tpde_fadec",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_fadec"
+version = "0.1.0"
+dependencies = [
+ "tpde_fadec_gen",
+]
+
+[[package]]
+name = "tpde_fadec_gen"
+version = "0.1.0"
+
+[[package]]
+name = "tpde_function_writer"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "tpde_assembler",
+ "tpde_base",
+ "tpde_core",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_function_writer_a64"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "tpde_assembler",
+ "tpde_core",
+ "tpde_disarm",
+ "tpde_function_writer",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_function_writer_x64"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "tpde_assembler",
+ "tpde_core",
+ "tpde_fadec",
+ "tpde_function_writer",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_string_table"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_test_ir"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "tpde_base",
+ "tpde_compiler",
+ "tpde_core",
+ "tpde_util",
+ "types_error",
+]
+
+[[package]]
+name = "tpde_util"
+version = "0.1.0"
+dependencies = [
+ "mcx",
+ "types_error",
 ]
 
 [[package]]
@@ -19876,6 +22086,7 @@ dependencies = [
 name = "transam_xlog"
 version = "0.0.0"
 dependencies = [
+ "adt_timestamp",
  "aio_seams",
  "bufmgr_seams",
  "checkpointer_seams",
@@ -19902,6 +22113,8 @@ dependencies = [
  "multixact_seams",
  "origin_seams",
  "pg_clock",
+ "pg_strong_random",
+ "pgrc_spool",
  "pgstat",
  "pgstat_seams",
  "pgtz",
@@ -19926,6 +22139,7 @@ dependencies = [
  "strftime",
  "subtrans_seams",
  "sync_seams",
+ "test_boot",
  "timeline_seams",
  "timestamp_seams",
  "transam_xlog_seams",
@@ -19934,6 +22148,7 @@ dependencies = [
  "types_error",
  "types_guc",
  "types_storage",
+ "types_tuple",
  "varsup",
  "varsup_seams",
  "vfs",
@@ -20021,11 +22236,14 @@ dependencies = [
  "readfuncs",
  "rel_vocab",
  "relcache",
+ "resowner",
  "rewrite_manip",
  "ri_triggers_seams",
  "snapmgr",
  "superuser",
  "table",
+ "tableam",
+ "tableam_vocab",
  "trigger_seams",
  "tupdesc",
  "tuplestore",
@@ -20151,6 +22369,7 @@ name = "tsearchcmds"
 version = "0.1.0"
 dependencies = [
  "aclchk",
+ "adt_float",
  "cache_syscache",
  "catalog",
  "catalog_dependency",
@@ -20209,9 +22428,11 @@ version = "0.0.0"
 dependencies = [
  "datum",
  "dfmgr",
+ "init_small",
  "mcx",
  "pg_clock",
  "pg_prng",
+ "postgres_seams",
  "types_core",
  "types_error",
  "types_fmgr",
@@ -20269,6 +22490,7 @@ dependencies = [
  "fd",
  "fmgr_seams",
  "genam_seams",
+ "guc_seams",
  "guc_tables",
  "heaptuple",
  "init_small",
@@ -20282,6 +22504,7 @@ dependencies = [
  "pg_rusage",
  "pglz",
  "pgstat_seams",
+ "pgsync",
  "postgres_seams",
  "resowner",
  "resowner_seams",
@@ -20468,6 +22691,7 @@ dependencies = [
  "fmgr_core",
  "fmgr_seams",
  "format_type",
+ "gravity_deps",
  "indexcmds_seams",
  "inval",
  "lsyscache",
@@ -21044,6 +23268,7 @@ dependencies = [
  "parser_small1",
  "pg_depend",
  "pg_inherits",
+ "pgrc_front",
  "plancache",
  "portalcmds",
  "portalmem",
@@ -21106,6 +23331,7 @@ dependencies = [
  "datum",
  "dfmgr",
  "libc",
+ "mcx",
  "pg_clock",
  "pg_md5",
  "pg_sha1",
@@ -21161,16 +23387,21 @@ dependencies = [
  "pg_clock",
  "pg_prng_seams",
  "pg_rusage",
+ "pgrc_am",
  "pgstat",
+ "pgsync",
  "postgres_seams",
  "procarray_seams",
  "pruneheap",
+ "read_stream",
+ "relation_seams",
  "relcache_seams",
  "runtime",
  "sinval_seams",
  "smgr_seams",
  "syscache_seams",
  "table",
+ "tableam",
  "tableam_seams",
  "tableam_vocab",
  "tidstore",
@@ -21337,6 +23568,7 @@ dependencies = [
  "mcx",
  "nodes_core",
  "rewrite_manip",
+ "stack_depth_core",
  "types_core",
  "types_error",
  "types_nodes",
@@ -21359,6 +23591,7 @@ dependencies = [
  "guc_tables",
  "init_small",
  "ipc_seams",
+ "l2cache",
  "latch_seams",
  "libc",
  "lmgr_proc",
@@ -21499,6 +23732,8 @@ dependencies = [
  "latch",
  "latch_seams",
  "libc",
+ "mcx",
+ "memledger",
  "pg_clock",
  "types_core",
  "types_error",
@@ -21560,6 +23795,7 @@ dependencies = [
  "guc_file",
  "guc_tables",
  "init_small",
+ "injection_point",
  "interrupt",
  "ipc",
  "latch",
@@ -21571,6 +23807,7 @@ dependencies = [
  "miscinit",
  "numutils",
  "pgclient",
+ "pgrc_spool",
  "pgstat",
  "postgres_seams",
  "procarray",
@@ -21656,6 +23893,7 @@ dependencies = [
  "file_seams",
  "guc_file",
  "guc_funcs",
+ "guc_seams",
  "guc_tables",
  "init_small",
  "interrupt",
@@ -21668,6 +23906,8 @@ dependencies = [
  "logical_decode",
  "lwlock",
  "mcx",
+ "pgrc_format",
+ "pgrc_spool",
  "pgstat",
  "pgstat_seams",
  "pmsignal",
@@ -21835,8 +24075,241 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
+name = "wasm-encoder"
+version = "0.254.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09480d646178e5fdd12bb06e812d0af9a3a191dbc9cd697fdc86687beade7393"
+dependencies = [
+ "leb128fmt",
+ "wasmparser 0.254.0",
+]
+
+[[package]]
+name = "wasm-encoder"
+version = "0.259.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1d0246511d901aacf25d2dc9111f0054947de5e093fe662099e709ff7530dc3"
+dependencies = [
+ "leb128fmt",
+ "wasmparser 0.259.0",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.254.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5769a29f799fbab136aaf65b4fe5384cd7d93fe6fc9ba0dcb6c8382a1f16e27"
+dependencies = [
+ "bitflags",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "semver",
+ "serde",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.259.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f7c12eac7bb587801590f6a67ff0bc84d0748513864b71108e4b311cc3df694"
+dependencies = [
+ "bitflags",
+ "indexmap",
+ "semver",
+]
+
+[[package]]
+name = "wasmprinter"
+version = "0.254.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64e3ba11e024f504698f87b629b2b66c22a1231758de7607754963f7d198be39"
+dependencies = [
+ "anyhow",
+ "termcolor",
+ "wasmparser 0.254.0",
+]
+
+[[package]]
+name = "wasmtime"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "699c2cb832d70d284b2839ebeb12721ca2ef80aa4a3389d2d2d13acf3e19c821"
+dependencies = [
+ "addr2line",
+ "async-trait",
+ "bitflags",
+ "bumpalo",
+ "cc",
+ "futures",
+ "libc",
+ "log",
+ "mach2",
+ "memfd",
+ "object",
+ "once_cell",
+ "postcard",
+ "pulley-interpreter",
+ "rustix",
+ "serde",
+ "serde_derive",
+ "smallvec",
+ "target-lexicon",
+ "wasmparser 0.254.0",
+ "wasmtime-environ",
+ "wasmtime-internal-core",
+ "wasmtime-internal-cranelift",
+ "wasmtime-internal-fiber",
+ "wasmtime-internal-jit-debug",
+ "wasmtime-internal-jit-icache-coherence",
+ "wasmtime-internal-unwinder",
+ "wasmtime-internal-versioned-export-macros",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "wasmtime-environ"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13f10ef166b4850535bc43c347797364cda5189870be163a617ebe5c0d72f139"
+dependencies = [
+ "anyhow",
+ "cpp_demangle",
+ "cranelift-bforest",
+ "cranelift-bitset",
+ "cranelift-entity",
+ "gimli",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "log",
+ "object",
+ "postcard",
+ "rustc-demangle",
+ "semver",
+ "serde",
+ "serde_derive",
+ "sha2",
+ "smallvec",
+ "target-lexicon",
+ "wasm-encoder 0.254.0",
+ "wasmparser 0.254.0",
+ "wasmprinter",
+ "wasmtime-internal-component-util",
+ "wasmtime-internal-core",
+]
+
+[[package]]
+name = "wasmtime-internal-component-util"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "540b7151342d75c3d596447c136d3862a280600bc6fd10b5dfc7c9e67c2f719f"
+
+[[package]]
+name = "wasmtime-internal-core"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8679b612a408274d91d1e0edf6baa36b63cc48d937f84dd1e7fb2fbe16a907ae"
+dependencies = [
+ "hashbrown 0.17.1",
+ "libm",
+ "serde",
+]
+
+[[package]]
+name = "wasmtime-internal-cranelift"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc46c460fb62d839ac441ccdf4b8b94bce30842ad4ccefd7744d9e28bf631232"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-control",
+ "cranelift-entity",
+ "cranelift-frontend",
+ "cranelift-native",
+ "gimli",
+ "itertools",
+ "log",
+ "object",
+ "pulley-interpreter",
+ "smallvec",
+ "target-lexicon",
+ "thiserror",
+ "wasmparser 0.254.0",
+ "wasmtime-environ",
+ "wasmtime-internal-core",
+ "wasmtime-internal-unwinder",
+ "wasmtime-internal-versioned-export-macros",
+]
+
+[[package]]
+name = "wasmtime-internal-fiber"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31a94596377490aa56f5c58ebbcc39af49176dd9d4051a78e3fca3c024daf4f6"
+dependencies = [
+ "cc",
+ "libc",
+ "rustix",
+ "wasmtime-environ",
+ "wasmtime-internal-versioned-export-macros",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "wasmtime-internal-jit-debug"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70026f001b46af7552ce89cfe748f0dea59097e7c8c3740998d8019b73d87ee5"
+dependencies = [
+ "cc",
+ "wasmtime-internal-versioned-export-macros",
+]
+
+[[package]]
+name = "wasmtime-internal-jit-icache-coherence"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf7d8a6fc6d21eb177c38f096636661ca13ae924cccbb6f447c1498ca972ab10"
+dependencies = [
+ "libc",
+ "wasmtime-internal-core",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "wasmtime-internal-unwinder"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4994aca882a65d2b06a7fc57a4a149de27b8851738d07ea2e778a21f74234a14"
+dependencies = [
+ "cranelift-codegen",
+ "log",
+ "object",
+ "wasmtime-environ",
+]
+
+[[package]]
+name = "wasmtime-internal-versioned-export-macros"
+version = "48.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f325614219c58c9f625b591ac79dbbefc76728720d72a721a6350c872d848e4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "wchar"
 version = "0.1.0"
+
+[[package]]
+name = "winapi-util"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
+dependencies = [
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "windows-link"
@@ -21855,12 +24328,85 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
+version = "0.59.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
+dependencies = [
+ "windows-targets",
+]
+
+[[package]]
+name = "windows-sys"
 version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
 ]
+
+[[package]]
+name = "windows-targets"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973"
+dependencies = [
+ "windows_aarch64_gnullvm",
+ "windows_aarch64_msvc",
+ "windows_i686_gnu",
+ "windows_i686_gnullvm",
+ "windows_i686_msvc",
+ "windows_x86_64_gnu",
+ "windows_x86_64_gnullvm",
+ "windows_x86_64_msvc",
+]
+
+[[package]]
+name = "windows_aarch64_gnullvm"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
+
+[[package]]
+name = "windows_aarch64_msvc"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
+
+[[package]]
+name = "windows_i686_gnu"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e9b5ad5ab802e97eb8e295ac6720e509ee4c243f69d781394014ebfe8bbfa0b"
+
+[[package]]
+name = "windows_i686_gnullvm"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66"
+
+[[package]]
+name = "windows_i686_msvc"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
+
+[[package]]
+name = "windows_x86_64_gnu"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78"
+
+[[package]]
+name = "windows_x86_64_gnullvm"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
+
+[[package]]
+name = "windows_x86_64_msvc"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "wparser_def"
@@ -21901,8 +24447,18 @@ version = "0.0.0"
 dependencies = [
  "elog",
  "libc",
+ "mempolicy",
  "pgsync",
  "vfs",
+]
+
+[[package]]
+name = "wyz"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
+dependencies = [
+ "tap",
 ]
 
 [[package]]
@@ -21921,6 +24477,7 @@ dependencies = [
  "commit_ts_seams",
  "condition_variable_seams",
  "datum",
+ "dynahash",
  "elog",
  "fd",
  "guc",
@@ -22083,6 +24640,8 @@ dependencies = [
  "init_small",
  "libc",
  "lwlock",
+ "lz4_block",
+ "lz4_flex",
  "mcx",
  "mcxt_stats",
  "miscinit",
@@ -22102,6 +24661,7 @@ dependencies = [
  "xlogreader",
  "xlogreader_seams",
  "xlogutils",
+ "zstd",
 ]
 
 [[package]]
@@ -22161,6 +24721,8 @@ dependencies = [
  "crc32c",
  "guc_tables",
  "libc",
+ "lz4_block",
+ "lz4_flex",
  "mcx",
  "pglz",
  "pgstat_seams",
@@ -22171,6 +24733,7 @@ dependencies = [
  "waitevent_seams",
  "xlogreader_seams",
  "xlogutils",
+ "zstd",
 ]
 
 [[package]]
@@ -22266,6 +24829,7 @@ dependencies = [
  "pg_sema",
  "pg_sema_seams",
  "pg_string",
+ "pgrc_wal",
  "pgstat",
  "pgstat_seams",
  "pgsync",
@@ -22394,6 +24958,22 @@ name = "xlogutils_seams"
 version = "0.0.0"
 dependencies = [
  "seam_core",
+]
+
+[[package]]
+name = "xml2"
+version = "0.0.0"
+dependencies = [
+ "adt_xml",
+ "datum",
+ "dfmgr",
+ "elog",
+ "funcapi",
+ "mcx",
+ "spi",
+ "types_error",
+ "types_fmgr",
+ "varlena",
 ]
 
 [[package]]

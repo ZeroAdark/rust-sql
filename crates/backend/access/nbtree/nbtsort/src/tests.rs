@@ -82,6 +82,7 @@ fn named_rel<'mcx>(mcx: ::mcx::Mcx<'mcx>, name: &str, oid: ::types_core::Oid) ->
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -101,7 +102,7 @@ struct Oversized([u8; 2712]);
 
 #[test]
 fn buildadd_oversized_detail_names_heap_not_index() {
-    let cx = MemoryContext::new("yaiz");
+    let cx = MemoryContext::new("d233");
     let mcx = cx.mcx();
     let heap = named_rel(mcx, "heap_tbl", 4999);
     let index = named_rel(mcx, "idx", 5000);

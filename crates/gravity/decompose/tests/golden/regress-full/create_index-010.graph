@@ -1,0 +1,20 @@
+-- regress-full-create_index-010
+-- EXPLAIN (COSTS OFF) SELECT * FROM fast_emp4000 WHERE home_base <@ '(200,200),(2000,1000)'::box ORDER BY (home_base[0])[0];
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n1@0 n0@1^
+  source index-only rel=19355 rti=1 am=heap index=19358 iam=gist
+    key att=1 op=497 form=amop value=c603:#32
+    recheck (op497(index.1, c603:#32))
+    lanes Attr(1):byref8:fx32:win/page
+  project (1=index.1, 2j=T_SubscriptingRef)
+  sort keys=2+:F64/F64 form=runs
+  outs 1=fx32:win/page 2=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2j=outer.2)
+  outs 1=fx32:win/page 2=w8:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[F64]->[Count@8] 16B order=2+
+mapped: IndexOnlyScan Sort

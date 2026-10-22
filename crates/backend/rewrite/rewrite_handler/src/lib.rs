@@ -85,6 +85,12 @@ pub fn QueryRewrite<'mcx>(
     Ok(results)
 }
 
+// C: `i >= list_length(cteList) - num_ctes_processed` in signed int; a
+// product query with fewer CTEs than were processed skips all of them.
+fn cte_already_processed(i: usize, cte_len: usize, num_ctes_processed: usize) -> bool {
+    i as i64 >= cte_len as i64 - num_ctes_processed as i64
+}
+
 fn RewriteQuery<'mcx>(
     mcx: Mcx<'mcx>,
     mut parsetree: Query<'mcx>,
@@ -102,7 +108,7 @@ fn RewriteQuery<'mcx>(
     // and already-processed CTEs at the list tail are skipped on recursion.
     let cte_len = parsetree.cteList.len();
     for (i, cte_node) in parsetree.cteList.iter().enumerate() {
-        if i >= cte_len - num_ctes_processed {
+        if cte_already_processed(i, cte_len, num_ctes_processed) {
             break;
         }
         let cte = cte_node.as_common_table_expr().expect("cteList cell");
@@ -1089,7 +1095,7 @@ pub fn build_column_default<'mcx>(
             Some(s) => s,
             None => return Err(default_expression_not_found(attrno, rel)),
         };
-        Some(readfuncs::stringToNode(mcx, adbin.as_str())?)
+        Some(relcache::RelationGetDefaultExpr(mcx, rel.rd_id, attrno as i16, adbin.as_str())?)
     } else {
         None
     };

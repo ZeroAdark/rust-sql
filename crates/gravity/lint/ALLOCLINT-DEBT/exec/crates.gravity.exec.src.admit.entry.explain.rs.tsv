@@ -1,0 +1,3 @@
+path	crates/gravity/exec/src/admit/entry/explain.rs
+method	std::boxed::Box::new	5
+type	std::boxed::Box	5

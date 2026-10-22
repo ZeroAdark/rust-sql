@@ -1,0 +1,16 @@
+-- regress-full-rowsecurity-110
+-- EXPLAIN (COSTS OFF) UPDATE current_check SET payload = payload WHERE CURRENT OF current_check_cursor;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@3
+  source tid rel=28600 rti=1 am=heap form=current
+    tid T_CurrentOfExpr
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v1.1, c23:4)
+  filter op96(op530(v1.1, c23:2), c23:0)
+  project (1=v1.2, 2j=v1.-1, 3j=v1.1, 4j=v1.3)
+  write UPDATE rel=28600 rti=1 natts=3 indexes=() set=(2)
+    check rls update rel=current_check (op260(v1.3, T_SQLValueFunction))
+    check rls update rel=current_check (op96(op530(v1.1, c23:2), c23:0))
+  outs 1=vl:win/page 2=fx6:row 3=w8:val 4=vl:win/page
+mapped: ModifyTable TidScan

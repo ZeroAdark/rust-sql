@@ -1,0 +1,120 @@
+Parsed test spec with 2 sessions
+
+starting permutation: b1 keep mv c1 sel
+step b1: BEGIN;
+step keep: UPDATE r3282 SET b = b + 10 WHERE b = 1;
+step mv: UPDATE r3282 t SET a = 3 FROM (VALUES (1), (2)) s(a) WHERE t.a = s.a AND s.a = 1; <waiting ...>
+step c1: COMMIT;
+step mv: <... completed>
+step sel: SELECT tableoid::regclass, a, b FROM r3282 ORDER BY 1, 2, 3;
+tableoid|a| b
+--------+-+--
+r3282_2 |2| 3
+r3282_3 |3| 2
+r3282_3 |3|11
+(3 rows)
+
+
+starting permutation: b1 away mv c1 sel
+step b1: BEGIN;
+step away: UPDATE r3282 SET a = 4 WHERE b = 1;
+step mv: UPDATE r3282 t SET a = 3 FROM (VALUES (1), (2)) s(a) WHERE t.a = s.a AND s.a = 1; <waiting ...>
+step c1: COMMIT;
+step mv: <... completed>
+step sel: SELECT tableoid::regclass, a, b FROM r3282 ORDER BY 1, 2, 3;
+tableoid|a|b
+--------+-+-
+r3282_1 |4|1
+r3282_2 |2|3
+r3282_3 |3|2
+(3 rows)
+
+
+starting permutation: b1 moved mv c1 sel
+step b1: BEGIN;
+step moved: UPDATE r3282 SET a = 2 WHERE b = 1;
+step mv: UPDATE r3282 t SET a = 3 FROM (VALUES (1), (2)) s(a) WHERE t.a = s.a AND s.a = 1; <waiting ...>
+step c1: COMMIT;
+step mv: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step sel: SELECT tableoid::regclass, a, b FROM r3282 ORDER BY 1, 2, 3;
+tableoid|a|b
+--------+-+-
+r3282_1 |1|2
+r3282_2 |2|1
+r3282_2 |2|3
+(3 rows)
+
+
+starting permutation: b1 gone mv c1 sel
+step b1: BEGIN;
+step gone: DELETE FROM r3282 WHERE b = 1;
+step mv: UPDATE r3282 t SET a = 3 FROM (VALUES (1), (2)) s(a) WHERE t.a = s.a AND s.a = 1; <waiting ...>
+step c1: COMMIT;
+step mv: <... completed>
+step sel: SELECT tableoid::regclass, a, b FROM r3282 ORDER BY 1, 2, 3;
+tableoid|a|b
+--------+-+-
+r3282_2 |2|3
+r3282_3 |3|2
+(2 rows)
+
+
+starting permutation: b1 keep st c1 sel
+step b1: BEGIN;
+step keep: UPDATE r3282 SET b = b + 10 WHERE b = 1;
+step st: UPDATE r3282 t SET b = t.b * 100 FROM (VALUES (1), (2)) s(a) WHERE t.a = s.a AND s.a = 1; <waiting ...>
+step c1: COMMIT;
+step st: <... completed>
+step sel: SELECT tableoid::regclass, a, b FROM r3282 ORDER BY 1, 2, 3;
+tableoid|a|   b
+--------+-+----
+r3282_1 |1| 200
+r3282_1 |1|1100
+r3282_2 |2|   3
+(3 rows)
+
+
+starting permutation: b1 away st c1 sel
+step b1: BEGIN;
+step away: UPDATE r3282 SET a = 4 WHERE b = 1;
+step st: UPDATE r3282 t SET b = t.b * 100 FROM (VALUES (1), (2)) s(a) WHERE t.a = s.a AND s.a = 1; <waiting ...>
+step c1: COMMIT;
+step st: <... completed>
+step sel: SELECT tableoid::regclass, a, b FROM r3282 ORDER BY 1, 2, 3;
+tableoid|a|  b
+--------+-+---
+r3282_1 |1|200
+r3282_1 |4|  1
+r3282_2 |2|  3
+(3 rows)
+
+
+starting permutation: b1 keep del c1 sel
+step b1: BEGIN;
+step keep: UPDATE r3282 SET b = b + 10 WHERE b = 1;
+step del: DELETE FROM r3282 t USING (VALUES (1), (2)) s(a) WHERE t.a = s.a AND s.a = 1; <waiting ...>
+step c1: COMMIT;
+step del: <... completed>
+step sel: SELECT tableoid::regclass, a, b FROM r3282 ORDER BY 1, 2, 3;
+tableoid|a|b
+--------+-+-
+r3282_2 |2|3
+(1 row)
+
+
+starting permutation: b1 moved del c1 sel
+step b1: BEGIN;
+step moved: UPDATE r3282 SET a = 2 WHERE b = 1;
+step del: DELETE FROM r3282 t USING (VALUES (1), (2)) s(a) WHERE t.a = s.a AND s.a = 1; <waiting ...>
+step c1: COMMIT;
+step del: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step sel: SELECT tableoid::regclass, a, b FROM r3282 ORDER BY 1, 2, 3;
+tableoid|a|b
+--------+-+-
+r3282_1 |1|2
+r3282_2 |2|1
+r3282_2 |2|3
+(3 rows)
+

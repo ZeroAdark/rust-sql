@@ -29,9 +29,9 @@ pub use ::fmgr::{
     receive_function_call, send_function_call, ErrorSaveNode,
 };
 pub use ::fmgr::{
-    direct_function_call1_coll, direct_function_call1_coll_in, direct_function_call2_coll,
+    direct_function_call1_coll_in, direct_function_call2_coll,
     direct_function_call2_coll_in, direct_function_call3_coll, direct_function_call3_coll_in,
-    function_call0_coll, function_call1_coll, function_call1_coll_in, function_call2_coll,
+    function_call0_coll, function_call1_coll_in, function_call2_coll,
     function_call2_coll_in, function_call3_coll, function_call3_coll_in, function_call4_coll,
     function_call5_coll, function_call6_coll, function_call7_coll, function_call8_coll,
     function_call9_coll,
@@ -42,6 +42,8 @@ pub fn init_seams() {
     fmgr_seams::fmgr_info::set(fmgr_info);
     fmgr_seams::fmgr_info_not_ported_name::set(fmgr_info_not_ported_name);
     fmgr_seams::internal_builtin_oid::set(internal_builtin_oid);
+    fmgr_seams::fmgr_out_into::set(fmgr_out_into);
+    fmgr_seams::fmgr_send_into::set(fmgr_send_into);
 }
 
 /// pgrust-only (no C analogue): `Some(builtin name)` iff `flinfo`'s resolved
@@ -287,10 +289,7 @@ pub fn row_is_stub(b: &FmgrBuiltin) -> bool {
 }
 
 // Overlay for builtin tables whose crates would cycle into fmgr_core via
-// cache_syscache -> catcache -> indexam -> nbtree (regproc/acl/ruleutils…),
-// plus obj/col_description (prolang=sql in C, hosted natively — result-
-// equivalent: C's inline_function rejects their table-reading bodies, so
-// treating them as non-inlinable internal fns matches C's plan shape).
+// cache_syscache -> catcache -> indexam -> nbtree (regproc/acl/ruleutils…).
 // INVARIANT (set-once): written by install_extra_builtins during
 // single-threaded startup, before any lookup, never again.
 static EXTRA_PTR: core::sync::atomic::AtomicPtr<()> =
@@ -298,12 +297,16 @@ static EXTRA_PTR: core::sync::atomic::AtomicPtr<()> =
 static EXTRA_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 pub fn install_extra_builtins(tables: &'static [&'static [FmgrBuiltin]]) {
-    for t in tables {
-        for b in *t {
-            // Live = a ported canonical row, or an already-installed extra
-            // row (never the stub's own row) — by the table's bit, not `x.func`.
-            let live = fmgr_isbuiltin(b.foid).is_some_and(|x| !row_is_stub(x));
-            assert!(!live, "extra builtin {} collides with a live row", b.foid);
+    let rows = || tables.iter().flat_map(|t| t.iter());
+    for (i, b) in rows().enumerate() {
+        // Live = a ported canonical row, or an already-installed extra
+        // row (never the stub's own row) — by the table's bit, not `x.func`.
+        let live = fmgr_isbuiltin(b.foid).is_some_and(|x| !row_is_stub(x));
+        assert!(!live, "extra builtin {} collides with a live row", b.foid);
+        // extra_builtin answers the first row with an oid: a second row with
+        // the same oid would take that row's calls by oid (D3128).
+        if let Some(c) = rows().skip(i + 1).find(|c| c.foid == b.foid) {
+            panic!("extra builtins {} and {} share oid {}", b.name, c.name, b.foid);
         }
     }
     let prev = EXTRA_PTR.swap(
@@ -346,6 +349,12 @@ pub fn assert_rows_match_canonical(rows: &[FmgrBuiltin]) {
     }
 }
 
+/// B2 (workersess): whether `id` resolves to a native entry point (an fmgr builtin or an in-core C-language function),
+/// never through pg_proc: a pool claim, which has no catalog, may call its address as resolved on the leader.
+pub fn fmgr_is_native(id: Oid) -> bool {
+    fmgr_isbuiltin(id).is_some() || native_clang_builtin(id).is_some()
+}
+
 pub fn fmgr_isbuiltin(id: Oid) -> Option<&'static FmgrBuiltin> {
     match FMGR_BUILTIN_OID_INDEX.lookup(&FMGR_BUILTINS, id) {
         Some(b) if row_is_stub(b) => extra_builtin(id).or(Some(b)),
@@ -375,6 +384,53 @@ pub fn fmgr_thin_builtin(flinfo: &FmgrInfo, nargs: i16) -> Option<::fmgr::PGFunc
         }
     }
     None
+}
+
+// The caller-supplied-destination text output entries (FMGR ruling 09-23); one row per oid, any order.
+const OUT_INTO_TABLES: &[&[::fmgr::OutInto]] = &[
+    ::adt_int::builtins::INT_OUT_INTO,
+    ::adt_int8::builtins::INT8_OUT_INTO,
+    ::adt_float::builtins::FLOAT_OUT_INTO,
+    ::adt_numeric::builtins::NUMERIC_OUT_INTO,
+    ::adt_bool::builtins::BOOL_OUT_INTO,
+    ::adt_date::builtins::DATE_OUT_INTO,
+    ::adt_timestamp::builtins::TIMESTAMP_OUT_INTO,
+    ::adt_scalar::builtins::OID_OUT_INTO,
+    ::varlena::builtins::TEXT_OUT_INTO,
+];
+
+/// The into-entry of a resolved text output function (printtup / COPY TO look it up once per column). The carrier must be
+/// the builtin table's own body for the oid (as `fmgr_thin_builtin`), so a wrapper or a user function keeps the fmgr path.
+pub fn fmgr_out_into(flinfo: &FmgrInfo) -> Option<&'static ::fmgr::OutInto> {
+    OUT_INTO_TABLES
+        .iter()
+        .flat_map(|t| t.iter())
+        .find(|e| e.foid == flinfo.fn_oid)
+        .filter(|e| flinfo.is_builtin_body(e.foid))
+}
+
+// The caller-supplied-destination binary send entries: the bytes the send function's bytea would hold.
+const SEND_INTO_TABLES: &[&[::fmgr::OutInto]] = &[::varlena::builtins::TEXT_SEND_INTO];
+
+static SEND_INTO: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+/// printtup's binary columns render straight into the DataRow (`fmgr_send_into`; on until set; exec glue sets it once per
+/// process from `PGRUST_GRAVITY_SEND_INTO`).
+pub fn set_send_into(on: bool) {
+    SEND_INTO.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// `fmgr_out_into` for a resolved binary send function (printtup looks it up once per binary column): the builtin's own
+/// body only; `None` when the switch is off.
+pub fn fmgr_send_into(flinfo: &FmgrInfo) -> Option<&'static ::fmgr::OutInto> {
+    if !SEND_INTO.load(core::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    SEND_INTO_TABLES
+        .iter()
+        .flat_map(|t| t.iter())
+        .find(|e| e.foid == flinfo.fn_oid)
+        .filter(|e| flinfo.is_builtin_body(e.foid))
 }
 
 /// C: `fmgr_lookupByName` — linear, validator/alias resolution only (cold).
@@ -670,6 +726,19 @@ pub(crate) fn function_lookup_failed(
     )))
 }
 
+/// The pg_proc tuple's up-to-dateness stamp (xmin, t_self) — the read `fmgr_info_pg_proc` keys its
+/// C-function cache by — for a program keyed by its content: a replaced function is another program
+/// (gravity lower/src/hosted.rs). `None` for a builtin of the table.
+pub fn proc_stamp(function_id: Oid) -> PgResult<Option<(TransactionId, ItemPointerData)>> {
+    if fmgr_isbuiltin(function_id).is_some() {
+        return Ok(None);
+    }
+    let Some(row) = syscache_seams::lookup_pg_proc_fmgr::call(function_id)? else {
+        return Err(function_lookup_failed(function_id));
+    };
+    Ok(Some((row.xmin, row.tid)))
+}
+
 #[cold]
 #[inline(never)]
 fn fmgr_info_pg_proc(
@@ -927,8 +996,14 @@ macro_rules! define_oid_calls {
     )*};
 }
 
+/// C OidFunctionCall1Coll with the result context named (no one-argument call without one: `fmgr::function_call1_coll_in`).
+pub fn oid_function_call1_coll_in(function_id: Oid, collation: Oid, mcx: ::mcx::Mcx<'_>, a1: Datum) -> PgResult<Datum> {
+    let mut flinfo = FmgrInfo::unresolved();
+    fmgr_info_into(function_id, &mut flinfo)?;
+    ::fmgr::function_call1_coll_in(&mut flinfo, collation, mcx, a1)
+}
+
 define_oid_calls! {
-    oid_function_call1_coll function_call1_coll (a1);
     oid_function_call2_coll function_call2_coll (a1, a2);
     oid_function_call3_coll function_call3_coll (a1, a2, a3);
     oid_function_call4_coll function_call4_coll (a1, a2, a3, a4);

@@ -1,0 +1,10 @@
+# string_agg with a column delimiter: exact
+sql: SELECT string_agg(x, d) FROM t;
+cols: string_agg
+tables: t
+class: unordered
+verdict: mismatch
+[pg]
+a,b
+[got]
+b,a

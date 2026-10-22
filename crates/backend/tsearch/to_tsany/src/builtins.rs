@@ -21,7 +21,7 @@ fn to_tsvector_image<'mcx>(mcx: Mcx<'mcx>, cfg: Oid, data: &[u8]) -> PgResult<Da
     // Config resolution happens inside parsetext (prs_start), which C's
     // to_tsvector reaches unconditionally — even for empty text.
     let mut env = CacheEnv::new(mcx, cfg);
-    let cap = (data.len() / 6).clamp(2, 1 << 20);
+    let cap = (data.len() / 6).clamp(2, ::ts_parse::MAX_LENWORDS);
     let mut prs = ParsedText::with_capacity(mcx, cap)?;
     parsetext(mcx, &mut env, &mut prs, data)?;
     let img = make_tsvector(mcx, &mut prs)?;

@@ -77,3 +77,30 @@ fn signalled_process_returns_true_without_warning() {
     assert!(found);
     assert!(w.is_empty(), "unexpected WARNINGs: {w:?}");
 }
+
+#[test]
+fn context_id_table_is_visible_during_walk_and_destroyed_afterward() {
+    mcxt_stats::init_seams();
+    let parent = mcx::MemoryContext::new("context-id-test");
+    for fail in [false, true] {
+        let result = with_context_id_table(parent.mcx(), |_| {
+            let forest = mcxt_stats::backend_context_forest();
+            let root = forest.iter().find(|t| t.name == "context-id-test").unwrap();
+            assert_eq!(root.children.len(), 1);
+            let table = &root.children[0];
+            assert_eq!(table.name, "dynahash");
+            assert_eq!(table.ident.as_deref(), Some("pg_get_backend_memory_contexts"));
+            assert_eq!(table.kind, "AllocSet");
+            assert!(table.used > 0);
+            if fail {
+                Err(Box::new(PgError::error("test failure")))
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result.is_err(), fail);
+        let forest = mcxt_stats::backend_context_forest();
+        let root = forest.iter().find(|t| t.name == "context-id-test").unwrap();
+        assert!(root.children.is_empty());
+    }
+}

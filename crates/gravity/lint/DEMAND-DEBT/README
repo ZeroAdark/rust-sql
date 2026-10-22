@@ -1,0 +1,11 @@
+# RC's registry (lint/rules/rc_demand.py; C5 (c), reports/BUG-RECURRENCE-20261011.md §3: one column-demand fact): the
+# functions outside the column-demand home (decompose/src/facts/demand/, `reads_above`) that still decide which output
+# columns of a plan node a node above reads, to null a resjunk entry, drop (not carry) a column or lane, or pin a column,
+# or that walk up the plan to a column's readers for such a decision, by repository path, name and owner lane. Seeded
+# from the RC detector over trunk 4c507d6c115 plus the local walks the 2026-10-11 census named that neither detector sees.
+# A row goes when its decision reads `reads_above`; a landing never adds a row (a certified move rewrites one).
+# kind: null (emits a typed NULL for an unread column), drop (does not carry a column / lane), pin (keeps a column from a
+# first row), walk (an upward walk to a column's readers that feeds such a decision).
+# path	fn	owner	kind	what it decides
+# Layout: one row per file, named <path>@<fn> (the row's path with crates/gravity/ dropped and '/' as '.'), holding the
+# row line; this README is not a row. Deleting a row deletes its file.

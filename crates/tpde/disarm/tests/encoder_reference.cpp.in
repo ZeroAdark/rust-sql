@@ -1,0 +1,35 @@
+#include <cstdio>
+#include <cstring>
+#include "disarm64.h"
+static_assert(sizeof(uintptr_t) == 8 && sizeof(ptrdiff_t) == 8);
+static float input_f32(uint64_t bits) {
+  uint32_t raw = uint32_t(bits);
+  float value;
+  std::memcpy(&value, &raw, sizeof(value));
+  return value;
+}
+static double input_f64(uint64_t bits) {
+  double value;
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+int main() {
+  unsigned char record[68];
+  size_t size;
+  while ((size = std::fread(record, 1, sizeof(record), stdin)) != 0) {
+    if (size != sizeof(record)) return 2;
+    uint32_t id = 0, value = 0;
+    for (unsigned i = 0; i < 4; ++i) id |= uint32_t(record[i]) << (8*i);
+    uint64_t args[8] = {};
+    for (unsigned i = 0; i < 8; ++i)
+      for (unsigned j = 0; j < 8; ++j)
+        args[i] |= uint64_t(record[4+i*8+j]) << (8*j);
+    switch (id) {
+@ARMS@
+    default: return 3;
+    }
+    for (unsigned i = 0; i < 4; ++i) record[i] = value >> (8*i);
+    if (std::fwrite(record, 1, 4, stdout) != 4) return 4;
+  }
+  return std::ferror(stdin) ? 5 : 0;
+}

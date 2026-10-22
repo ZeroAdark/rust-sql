@@ -7,14 +7,17 @@
 // crate is otherwise core-only.
 extern crate alloc;
 
+pub mod cast;
 pub mod catalog;
 pub mod cmdtag;
+pub mod eq_alike;
 pub mod fmgr;
 pub mod geo;
 pub mod init;
 pub mod instrument;
 pub mod keywords;
 pub mod primitive;
+pub mod quiet;
 pub mod xact;
 
 pub use catalog::*;

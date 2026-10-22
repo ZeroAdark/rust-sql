@@ -122,7 +122,7 @@ pub fn brin_minmax_multi_add_value(
         );
         let maxvalues = clamp_buffer_size(target_maxvalues, bdesc.bd_pages_per_range);
 
-        let mut ranges = minmax_multi_init(maxvalues);
+        let mut ranges = minmax_multi_init(maxvalues)?;
         ranges.attno = attno;
         ranges.colloid = colloid;
         ranges.typid = atttypid;
@@ -277,15 +277,16 @@ pub fn brin_minmax_multi_union(
     let mut cmp = minmax_multi_get_strategy_procinfo(bdesc, attno, atttypid, BTLessStrategyNumber)?;
 
     {
-        let ctx = ::mcx::MemoryContext::new_bump("minmax-multi context");
+        let ctx = ::mcx::MemoryContext::new_wholesale("minmax-multi context");
         let cmcx = ctx.mcx();
 
         let mut eranges: ::mcx::PgVec<'_, ExpandedRange> =
             ::mcx::vec_with_capacity_in(cmcx, n_a + n_b)?;
-        eranges.resize(
+        ::mcx::pgvec_resize(
+            &mut eranges,
             n_a + n_b,
             ExpandedRange { minval: Datum::null(), maxval: Datum::null(), collapsed: false },
-        );
+        )?;
         fill_expanded_ranges(&mut eranges[..n_a], n_a, &ranges_a);
         fill_expanded_ranges(&mut eranges[n_a..], n_b, &ranges_b);
 

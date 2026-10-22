@@ -108,7 +108,7 @@ pub(crate) fn opclass_option_i32(f: &Option<&mut FmgrInfo>, default: i32) -> i32
 
 /// PG_GETARG_ARRAYTYPE_P(_COPY): owned full-image copy of an array arg.
 unsafe fn arg_array(fcinfo: &Fcinfo, i: usize) -> PgResult<IntArray> {
-    Ok(IntArray::from_image(&unsafe { arg_image(fcinfo, i) }?))
+    IntArray::from_image(&unsafe { arg_image(fcinfo, i) }?)
 }
 
 /// Full 4B image of a varlena arg (arrays, query_int values).
@@ -116,7 +116,7 @@ unsafe fn arg_image(fcinfo: &Fcinfo, i: usize) -> PgResult<Vec<u8>> {
     // SAFETY: forwarded caller contract — non-null varlena arg (strict fn).
     let v = unsafe { fcinfo.arg_varlena_packed(i)? };
     let payload = v.data();
-    let mut img = Vec::with_capacity(payload.len() + 4);
+    let mut img = ::mcx::std_vec_with_capacity("intarray", payload.len() + 4)?;
     img.extend_from_slice(&varatt::set_varsize_4b_word((payload.len() + 4) as u32).to_ne_bytes());
     img.extend_from_slice(payload);
     Ok(img)
@@ -158,7 +158,7 @@ fn fc_bqarr_in(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum
 
 fn fc_bqarr_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let img = unsafe { arg_image(fcinfo, 0)? };
-    let items = boolquery::parse_items(&img);
+    let items = boolquery::parse_items(&img)?;
     ret_cstring(fcinfo, &boolquery::deparse(&items)?)
 }
 
@@ -169,9 +169,9 @@ fn fc_querytree(_f: Option<&mut FmgrInfo>, _fcinfo: &mut Fcinfo) -> PgResult<Dat
 fn boolop_core(fcinfo: &Fcinfo, array_arg: usize, query_arg: usize) -> PgResult<Datum> {
     let mut val = unsafe { arg_array(fcinfo, array_arg)? };
     let qimg = unsafe { arg_image(fcinfo, query_arg)? };
-    let items = boolquery::parse_items(&qimg);
+    let items = boolquery::parse_items(&qimg)?;
     val.check_valid()?;
-    val.prepare();
+    val.prepare()?;
     if items.is_empty() {
         return Ok(Datum::from_bool(false));
     }
@@ -207,8 +207,8 @@ fn contains_core(fcinfo: &Fcinfo, ai: usize, bi: usize) -> PgResult<Datum> {
     let mut b = unsafe { arg_array(fcinfo, bi)? };
     a.check_valid()?;
     b.check_valid()?;
-    a.prepare();
-    b.prepare();
+    a.prepare()?;
+    b.prepare()?;
     Ok(Datum::from_bool(tool::inner_int_contains(a.elems(), b.elems())))
 }
 
@@ -217,11 +217,11 @@ fn same_core(fcinfo: &Fcinfo) -> PgResult<bool> {
     let mut b = unsafe { arg_array(fcinfo, 1)? };
     a.check_valid()?;
     b.check_valid()?;
-    if a.nelems() != b.nelems() {
+    if a.nelems()? != b.nelems()? {
         return Ok(false);
     }
-    a.sort(true);
-    b.sort(true);
+    a.sort(true)?;
+    b.sort(true)?;
     Ok(a.elems() == b.elems())
 }
 
@@ -238,11 +238,11 @@ fn fc_int_overlap(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
     let mut b = unsafe { arg_array(fcinfo, 1)? };
     a.check_valid()?;
     b.check_valid()?;
-    if a.is_empty() || b.is_empty() {
+    if a.is_empty()? || b.is_empty()? {
         return Ok(Datum::from_bool(false));
     }
-    a.sort(true);
-    b.sort(true);
+    a.sort(true)?;
+    b.sort(true)?;
     Ok(Datum::from_bool(tool::inner_int_overlap(a.elems(), b.elems())))
 }
 
@@ -251,8 +251,8 @@ fn fc_int_union(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
     let mut b = unsafe { arg_array(fcinfo, 1)? };
     a.check_valid()?;
     b.check_valid()?;
-    a.sort(true);
-    b.sort(true);
+    a.sort(true)?;
+    b.sort(true)?;
     ret_array(fcinfo, &tool::inner_int_union(&a, &b)?)
 }
 
@@ -261,9 +261,9 @@ fn fc_int_inter(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
     let mut b = unsafe { arg_array(fcinfo, 1)? };
     a.check_valid()?;
     b.check_valid()?;
-    a.sort(true);
-    b.sort(true);
-    ret_array(fcinfo, &tool::inner_int_inter(&a, &b))
+    a.sort(true)?;
+    b.sort(true)?;
+    ret_array(fcinfo, &tool::inner_int_inter(&a, &b)?)
 }
 
 // ===========================================================================
@@ -271,26 +271,26 @@ fn fc_int_inter(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
 // ===========================================================================
 
 fn fc_intset(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let mut r = IntArray::new(1);
+    let mut r = IntArray::try_new(1)?;
     r.elems_mut()[0] = fcinfo.arg(0).as_i32();
     ret_array(fcinfo, &r)
 }
 
 fn fc_icount(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let a = unsafe { arg_array(fcinfo, 0)? };
-    Ok(Datum::from_i32(a.nelems() as i32))
+    Ok(Datum::from_i32(a.nelems()? as i32))
 }
 
 fn fc_sort(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mut a = unsafe { arg_array(fcinfo, 0)? };
     let dir_arg = if fcinfo.nargs() == 2 {
         // SAFETY: catalog arg is a non-null text varlena (strict fn).
-        Some(unsafe { fcinfo.arg_varlena_packed(1)? }.data().to_vec())
+        Some(::mcx::std_vec_from_slice("intarray", unsafe { fcinfo.arg_varlena_packed(1)? }.data())?)
     } else {
         None
     };
     a.check_valid()?;
-    if a.nelems() < 2 {
+    if a.nelems()? < 2 {
         return ret_array(fcinfo, &a);
     }
     let dir = match &dir_arg {
@@ -303,31 +303,31 @@ fn fc_sort(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
                 .into())
         }
     };
-    a.sort(dir);
+    a.sort(dir)?;
     ret_array(fcinfo, &a)
 }
 
 fn fc_sort_asc(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mut a = unsafe { arg_array(fcinfo, 0)? };
     a.check_valid()?;
-    a.sort(true);
+    a.sort(true)?;
     ret_array(fcinfo, &a)
 }
 
 fn fc_sort_desc(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mut a = unsafe { arg_array(fcinfo, 0)? };
     a.check_valid()?;
-    a.sort(false);
+    a.sort(false)?;
     ret_array(fcinfo, &a)
 }
 
 fn fc_uniq(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mut a = unsafe { arg_array(fcinfo, 0)? };
     a.check_valid()?;
-    if a.nelems() < 2 {
+    if a.nelems()? < 2 {
         return ret_array(fcinfo, &a);
     }
-    a.unique();
+    a.unique()?;
     ret_array(fcinfo, &a)
 }
 
@@ -335,7 +335,7 @@ fn fc_idx(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let a = unsafe { arg_array(fcinfo, 0)? };
     a.check_valid()?;
     let elem = fcinfo.arg(1).as_i32();
-    let mut result = a.nelems() as i32;
+    let mut result = a.nelems()? as i32;
     if result != 0 {
         result = match a.elems().iter().position(|&v| v == elem) {
             Some(i) => i as i32 + 1,
@@ -353,11 +353,11 @@ fn fc_subarray(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum
     start = if start > 0 { start - 1 } else { start };
 
     a.check_valid()?;
-    if a.is_empty() {
+    if a.is_empty()? {
         return ret_array(fcinfo, &IntArray::empty());
     }
     // All the range arithmetic wraps in int32 (C is built with -fwrapv).
-    let c = a.nelems() as i32;
+    let c = a.nelems()? as i32;
     if start < 0 {
         start = c.wrapping_add(start);
     }
@@ -377,7 +377,7 @@ fn fc_subarray(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum
     if start >= end || end <= 0 {
         return ret_array(fcinfo, &IntArray::empty());
     }
-    let mut result = IntArray::new((end - start) as usize);
+    let mut result = IntArray::try_new((end - start) as usize)?;
     result
         .elems_mut()
         .copy_from_slice(&a.elems()[start as usize..end as usize]);
@@ -386,8 +386,8 @@ fn fc_subarray(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum
 
 fn add_elem(a: &IntArray, elem: i32) -> PgResult<IntArray> {
     a.check_valid()?;
-    let c = a.nelems();
-    let mut result = IntArray::new(c + 1);
+    let c = a.nelems()?;
+    let mut result = IntArray::try_new(c + 1)?;
     if c > 0 {
         result.elems_mut()[..c].copy_from_slice(a.elems());
     }
@@ -406,8 +406,8 @@ fn fc_intarray_push_array(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     let b = unsafe { arg_array(fcinfo, 1)? };
     a.check_valid()?;
     b.check_valid()?;
-    let (ac, bc) = (a.nelems(), b.nelems());
-    let mut result = IntArray::new(ac + bc);
+    let (ac, bc) = (a.nelems()?, b.nelems()?);
+    let mut result = IntArray::try_new(ac + bc)?;
     if ac > 0 {
         result.elems_mut()[..ac].copy_from_slice(a.elems());
     }
@@ -421,7 +421,7 @@ fn fc_intarray_del_elem(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     let mut a = unsafe { arg_array(fcinfo, 0)? };
     let elem = fcinfo.arg(1).as_i32();
     a.check_valid()?;
-    if !a.is_empty() {
+    if !a.is_empty()? {
         let aa = a.elems_mut();
         let mut n = 0usize;
         for i in 0..aa.len() {
@@ -432,7 +432,7 @@ fn fc_intarray_del_elem(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
                 n += 1;
             }
         }
-        a.resize(n);
+        a.resize(n)?;
     }
     ret_array(fcinfo, &a)
 }
@@ -440,8 +440,8 @@ fn fc_intarray_del_elem(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
 fn fc_intset_union_elem(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let a = unsafe { arg_array(fcinfo, 0)? };
     let mut result = add_elem(&a, fcinfo.arg(1).as_i32())?;
-    result.sort(true);
-    result.unique();
+    result.sort(true)?;
+    result.unique()?;
     ret_array(fcinfo, &result)
 }
 
@@ -450,11 +450,11 @@ fn fc_intset_subtract(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     let mut b = unsafe { arg_array(fcinfo, 1)? };
     a.check_valid()?;
     b.check_valid()?;
-    a.prepare();
-    b.prepare();
+    a.prepare()?;
+    b.prepare()?;
     let (aa, bb) = (a.elems(), b.elems());
     let (ca, cb) = (aa.len(), bb.len());
-    let mut result = IntArray::new(ca);
+    let mut result = IntArray::try_new(ca)?;
     let mut n = 0usize;
     {
         let r = result.elems_mut();
@@ -472,7 +472,7 @@ fn fc_intset_subtract(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
             }
         }
     }
-    result.resize(n);
+    result.resize(n)?;
     ret_array(fcinfo, &result)
 }
 
@@ -482,7 +482,7 @@ fn fc_intset_subtract(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
 
 fn int4_extract_query(image: &[u8], strategy: u16) -> PgResult<(Vec<i32>, i32)> {
     if strategy == BOOLEAN_SEARCH_STRATEGY {
-        let items = boolquery::parse_items(image);
+        let items = boolquery::parse_items(image)?;
         // Empty query must fail: C's NULL return with searchMode DEFAULT.
         if items.is_empty() {
             return Ok((Vec::new(), GIN_SEARCH_MODE_DEFAULT));
@@ -493,12 +493,17 @@ fn int4_extract_query(image: &[u8], strategy: u16) -> PgResult<(Vec<i32>, i32)> 
             // No required primitive values (e.g. '!42'): full index scan.
             GIN_SEARCH_MODE_ALL
         };
-        let entries = items.iter().filter(|it| it.typ == VAL as i16).map(|it| it.val).collect();
+        let mut entries = ::mcx::std_vec_with_capacity("intarray", items.len())?;
+        for it in &items {
+            if it.typ == VAL as i16 {
+                entries.push(it.val);
+            }
+        }
         Ok((entries, search_mode))
     } else {
-        let arr = IntArray::from_image(image);
+        let arr = IntArray::from_image(image)?;
         arr.check_valid()?;
-        let entries: Vec<i32> = arr.elems().to_vec();
+        let entries: Vec<i32> = ::mcx::std_vec_from_slice("intarray", arr.elems())?;
         let search_mode = match strategy {
             RT_OVERLAP => GIN_SEARCH_MODE_DEFAULT,
             // empty set is contained in everything
@@ -542,8 +547,11 @@ fn int4_consistent(
         RT_SAME => ((0..nkeys).all(|i| check[i] != 0), true),
         RT_CONTAINS | RT_OLD_CONTAINS => ((0..nkeys).all(|i| check[i] != 0), false),
         BOOLEAN_SEARCH_STRATEGY => {
-            let items = boolquery::parse_items(query_image);
-            let boolcheck: Vec<bool> = check[..nkeys].iter().map(|&c| c != 0).collect();
+            let items = boolquery::parse_items(query_image)?;
+            let mut boolcheck: Vec<bool> = ::mcx::std_vec_with_capacity("intarray", nkeys)?;
+            for &c in &check[..nkeys] {
+                boolcheck.push(c != 0);
+            }
             (boolquery::gin_bool_consistent(&items, &boolcheck)?, false)
         }
         other => {

@@ -163,7 +163,7 @@ pub(crate) fn relation_init_index_access_info(
     };
     let mut opfamily: PgVec<'static, Oid> = mcx::vec_with_capacity_in(mcx, nkey)?;
     let mut opcintype: PgVec<'static, Oid> = mcx::vec_with_capacity_in(mcx, nkey)?;
-    let mut supportinfo: Vec<Option<types_fmgr::FmgrInfo>> = Vec::with_capacity(nkey);
+    let mut supportinfo: Vec<Option<types_fmgr::FmgrInfo>> = ::mcx::std_vec_with_capacity("utils", nkey)?;
     // C rd_support: nkey x amsupport proc OIDs, row-major.
     let mut support: PgVec<'static, Oid> = mcx::vec_with_capacity_in(mcx, nkey * amsupport)?;
     for &opc in &classvals[..nkey] {
@@ -266,11 +266,63 @@ fn lookup_opclass_info(opc: Oid, amsupport: usize) -> PgResult<OpClassEnt> {
         let mut slot = c.borrow_mut();
         let m = slot.get_or_insert_with(|| {
             let mcx = ::mcx::session_root("OpClassCache").mcx();
+            // D4682: the teardown retires this root; clear the slot first, so a reused thread's next
+            // session builds a new one.
+            ::mcx::register_session_cleanup(Box::new(|| {
+                let _ = OPCLASS_CACHE.try_with(|c| drop(c.borrow_mut().take()));
+            }));
             ManuallyDrop::new(PgHashMap::with_capacity_in(64, mcx))
         });
         m.insert(opc, ent);
     });
     Ok(ent)
+}
+
+const Anum_pg_opclass_oid: i32 = 1;
+const PARTITIONED_RELATION_ID: Oid = 3350;
+const Anum_pg_partitioned_table_partrelid: i32 = 1;
+const Anum_pg_partitioned_table_partclass: i32 = 6;
+
+/// D3888 (relcache_seams `support_family_relids`): the relations whose relcache entries hold operator families
+/// `families`' support material: the indexes and partitioned indexes with an opclass of a family in `indclass`, the
+/// partitioned tables with one in their key's `partclass`. No catalog index covers those columns (nor in C): heap scans,
+/// run only at the commit of a transaction that changed a support catalog.
+pub(crate) fn support_family_relids<'mcx>(mcx: Mcx<'mcx>, families: &[Oid]) -> PgResult<PgVec<'mcx, Oid>> {
+    let cx = MemoryContext::new("support_family_relids");
+    let smcx = cx.mcx();
+    let mut opcs: PgVec<'_, Oid> = PgVec::new_in(smcx);
+    let rel = table::table_open(smcx, OPERATOR_CLASS_RELATION_ID, AccessShareLock)?;
+    for &f in families {
+        let keys = [oid_key(Anum_pg_opclass_opcfamily, f)];
+        let mut scan = genam::systable_beginscan(smcx, &rel, InvalidOid, false, None, &keys)?;
+        while let Some(tup) = genam::systable_getnext(smcx, &mut scan)? {
+            opcs.push(req(rel.descr(), tup, Anum_pg_opclass_oid)?.as_oid());
+        }
+        genam::systable_endscan(smcx, scan)?;
+    }
+    rel.close(AccessShareLock)?;
+    let mut out = PgVec::new_in(mcx);
+    if opcs.is_empty() {
+        return Ok(out);
+    }
+    for (catalog, own, classes) in [
+        (INDEX_RELATION_ID, Anum_pg_index_indexrelid, Anum_pg_index_indclass),
+        (PARTITIONED_RELATION_ID, Anum_pg_partitioned_table_partrelid, Anum_pg_partitioned_table_partclass),
+    ] {
+        let rel = table::table_open(smcx, catalog, AccessShareLock)?;
+        let mut scan = genam::systable_beginscan(smcx, &rel, InvalidOid, false, None, &[])?;
+        while let Some(tup) = genam::systable_getnext(smcx, &mut scan)? {
+            // SAFETY: an oidvector column of a live catalog row, read in place as relation_init_index_access_info reads
+            // indclass (C: DatumGetPointer, never detoasted).
+            let class = unsafe { oidvector_values(req(rel.descr(), tup, classes)?) };
+            if class.iter().any(|c| opcs.contains(c)) {
+                out.push(req(rel.descr(), tup, own)?.as_oid());
+            }
+        }
+        genam::systable_endscan(smcx, scan)?;
+        rel.close(AccessShareLock)?;
+    }
+    Ok(out)
 }
 
 fn load_opclass(opc: Oid, amsupport: usize) -> PgResult<OpClassEnt> {
@@ -362,8 +414,7 @@ pub(crate) fn scan_pg_statistic_ext_oids<'mcx>(
     mcx: Mcx<'mcx>,
     stxrelid: Oid,
 ) -> PgResult<PgVec<'mcx, Oid>> {
-    let cx = MemoryContext::new("RelationGetStatExtList");
-    let smcx = cx.mcx();
+    let smcx = mcx;
     let rel = table::table_open(smcx, STATISTIC_EXT_RELATION_ID, AccessShareLock)?;
     let keys = [oid_key(Anum_pg_statistic_ext_stxrelid, stxrelid)];
     let mut scan =

@@ -1,10 +1,10 @@
 //! gistbuild.c buffering-mode machinery: gistInitBuffering, gistProcessItup,
 //! gistbufferinginserttuples, the emptying queue, and the parent map.
 
-use std::collections::HashMap;
+use std::cell::OnceCell;
 
 use ::bufmgr_seams::{self as bufmgr, BufferPin};
-use ::mcx::{Mcx, MemoryContext};
+use ::mcx::{Mcx, MemoryContext, PgHashMap};
 use ::types_core::{BlockNumber, InvalidBlockNumber, OffsetNumber, BLCKSZ};
 use ::types_error::PgResult;
 use ::types_gist::{GISTPageOpaqueData, GistPageIsLeaf, GIST_ROOT_BLKNO};
@@ -48,7 +48,7 @@ fn read_buffer<'mcx>(rel: &Relation<'mcx>, blkno: BlockNumber) -> PgResult<Buffe
 /// Buffering-build state: GISTBuildState's gfbb + parentMap.
 pub struct BufBuild<'mcx> {
     pub gfbb: GistBuildBuffers<'mcx>,
-    pub parent_map: HashMap<BlockNumber, BlockNumber>,
+    pub parent_map: PgHashMap<'mcx, BlockNumber, BlockNumber>,
 }
 
 fn page_free_space_for_tuples(freespace: usize) -> usize {
@@ -67,6 +67,7 @@ fn effective_cache_size() -> i32 {
 /// maintenance_work_mem (C's fall back to GIST_BUFFERING_DISABLED).
 pub fn gist_init_buffering<'mcx>(
     mcx: Mcx<'mcx>,
+    parent_context: &'mcx OnceCell<MemoryContext>,
     index: &Relation<'_>,
     freespace: usize,
     indtuples: u64,
@@ -113,8 +114,11 @@ pub fn gist_init_buffering<'mcx>(
     level_step -= 1;
 
     if level_step <= 0 {
-        // gistbuild.c:757 elog(DEBUG1).
-        crate::debug_msg(::types_error::DEBUG1, "failed to switch to buffered GiST build")?;
+        crate::debug_msg(
+            ::types_error::DEBUG1,
+            "failed to switch to buffered GiST build",
+            crate::ErrorLocation::new("gistbuild.c", 757, "gistInitBuffering"),
+        )?;
         return Ok(None);
     }
 
@@ -122,18 +126,32 @@ pub fn gist_init_buffering<'mcx>(
         calculate_pages_per_buffer(index, freespace, indtuples, indtuples_size, level_step);
     let gfbb = GistBuildBuffers::new(mcx, pages_per_buffer, level_step, gist_get_max_level(index)?)?;
 
-    // gistbuild.c:777 elog(DEBUG1).
     crate::debug_msg(
         ::types_error::DEBUG1,
         format!(
             "switched to buffered GiST build; level step = {level_step}, pagesPerBuffer = {pages_per_buffer}"
         ),
+        crate::ErrorLocation::new("gistbuild.c", 777, "gistInitBuffering"),
     )?;
 
     Ok(Some(BufBuild {
         gfbb,
-        parent_map: HashMap::new(),
+        parent_map: gist_init_parent_map(mcx, parent_context)?,
     }))
+}
+
+fn gist_init_parent_map<'mcx>(
+    mcx: Mcx<'mcx>,
+    context: &'mcx OnceCell<MemoryContext>,
+) -> PgResult<PgHashMap<'mcx, BlockNumber, BlockNumber>> {
+    let context = context.get_or_init(|| {
+        let context = mcx.context().new_child("dynahash");
+        context.set_ident(Some("gistbuild parent map"));
+        context
+    });
+    let mut map = PgHashMap::new_in(context.mcx());
+    map.try_reserve(1024).map_err(|_| context.mcx().oom(1024 * 8))?;
+    Ok(map)
 }
 
 /// calculatePagesPerBuffer: emptying half a buffer fills on average one page
@@ -266,7 +284,7 @@ pub fn gist_process_itup(
     }
 
     if bb.gfbb.level_has_buffers(level) {
-        bb.gfbb.get_node_buffer(blkno, level);
+        bb.gfbb.get_node_buffer(blkno, level)?;
         bb.gfbb.push_itup(blkno, itup)?;
         if bb.gfbb.node_buffers[&blkno].blocks_count > bb.gfbb.pages_per_buffer {
             result = true;
@@ -334,10 +352,10 @@ fn gist_buffering_insert_tuples(
         debug_assert!(level == bb.gfbb.rootlevel);
         bb.gfbb.rootlevel += 1;
 
-        // gistbuild.c:1090 elog(DEBUG2).
         crate::debug_msg(
             ::types_error::DEBUG2,
             format!("splitting GiST root page, now {} levels deep", bb.gfbb.rootlevel),
+            crate::ErrorLocation::new("gistbuild.c", 1090, "gistbufferinginserttuples"),
         )?;
 
         // The old root's downlinks all moved to the new children: memorize
@@ -384,7 +402,7 @@ fn gist_buffering_insert_tuples(
         )?;
 
         let parent_blkno = parent_pin.block_number();
-        let mut downlinks = Vec::with_capacity(splitinfo.len());
+        let mut downlinks = ::mcx::std_vec_with_capacity("access", splitinfo.len())?;
         let mut original_pin = Some(buffer);
         for si in splitinfo {
             let si_blkno = bufmgr::buffer_get_block_number::call(si.buf);
@@ -575,17 +593,17 @@ pub fn gist_empty_all_buffers(
                 bb.gfbb.buffers_on_levels[i].pop_front();
             }
         }
-        // gistbuild.c:1418 elog(DEBUG2).
         crate::debug_msg(
             ::types_error::DEBUG2,
             format!("emptied all buffers at level {i}"),
+            crate::ErrorLocation::new("gistbuild.c", 1418, "gistEmptyAllBuffers"),
         )?;
     }
     Ok(())
 }
 
 /// gistMemorizeAllDownlinks.
-fn memorize_all_downlinks(parent_map: &mut HashMap<BlockNumber, BlockNumber>, parent: &BufferPin) {
+fn memorize_all_downlinks(parent_map: &mut PgHashMap<'_, BlockNumber, BlockNumber>, parent: &BufferPin) {
     let parentblkno = parent.block_number();
     let page = parent.page();
     debug_assert!(!GistPageIsLeaf(&page));
@@ -594,5 +612,32 @@ fn memorize_all_downlinks(parent_map: &mut HashMap<BlockNumber, BlockNumber>, pa
         // SAFETY: page item under our content lock.
         let childblkno = unsafe { itup_block_number(page_item(&page, off)) };
         parent_map.insert(childblkno, parentblkno);
+    }
+}
+
+#[cfg(test)]
+mod parent_map_tests {
+    use super::*;
+
+    #[test]
+    fn parent_map_context_identity_and_accounting() {
+        let build = MemoryContext::new("build");
+        let context = OnceCell::new();
+        {
+            let mut map = gist_init_parent_map(build.mcx(), &context).unwrap();
+            let tree = build.stats_tree();
+            assert_eq!(tree.children.len(), 1);
+            let child = &tree.children[0];
+            assert_eq!(child.name, "dynahash");
+            assert_eq!(child.ident.as_deref(), Some("gistbuild parent map"));
+            assert!(child.subtree_used > 0);
+            for block in 0..4096 {
+                map.insert(block, block / 2);
+            }
+            assert_eq!(map.get(&2048), Some(&1024));
+            assert!(build.stats_tree().children[0].subtree_used > child.subtree_used);
+        }
+        drop(context);
+        assert!(build.stats_tree().children.is_empty());
     }
 }

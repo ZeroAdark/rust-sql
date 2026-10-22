@@ -46,7 +46,8 @@ fn exec_or_fail(
 // anywhere forces the E'' form with backslashes doubled, so a publisher
 // running standard_conforming_strings = off decodes the name correctly.
 pub(crate) fn quote_literal_cstr(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len() * 2 + 3);
+    let mut out = String::new();
+    let _ = out.try_reserve(raw.len() * 2 + 3);
     if raw.contains('\\') {
         out.push('E');
     }
@@ -64,11 +65,14 @@ pub(crate) fn quote_literal_cstr(raw: &str) -> String {
 // GetPublicationsStr (pg_subscription.c:41) with quote_literal = true:
 // comma-separated quote_literal_cstr renderings.
 fn publications_str(publications: &[&str]) -> String {
-    publications
-        .iter()
-        .map(|p| quote_literal_cstr(p))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let mut out = String::new();
+    for (i, p) in publications.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&quote_literal_cstr(p));
+    }
+    out
 }
 
 // check_publications (subscriptioncmds.c): WARN about missing publications.
@@ -88,7 +92,15 @@ pub(crate) fn check_publications(conn: &mut PgConn, publications: &[&str]) -> Pg
     let missing: Vec<&&str> =
         publications.iter().filter(|p| !found.iter().any(|f| f == **p)).collect();
     if !missing.is_empty() {
-        let list = missing.iter().map(|p| format!("\"{p}\"")).collect::<Vec<_>>().join(", ");
+        let mut list = String::new();
+        for (i, p) in missing.iter().enumerate() {
+            if i > 0 {
+                list.push_str(", ");
+            }
+            list.push('"');
+            list.push_str(p);
+            list.push('"');
+        }
         elog::ereport(WARNING)
             .errcode(ERRCODE_UNDEFINED_OBJECT)
             .errmsg(if missing.len() == 1 {
@@ -167,8 +179,15 @@ pub(crate) fn check_publications_origin(
         }
     }
     if !publist.is_empty() {
-        // GetPublicationsStr(publist, pubnames, false): "name" renderings.
-        let list = publist.iter().map(|p| format!("\"{p}\"")).collect::<Vec<_>>().join(", ");
+        let mut list = String::new();
+        for (i, p) in publist.iter().enumerate() {
+            if i > 0 {
+                list.push_str(", ");
+            }
+            list.push('"');
+            list.push_str(p);
+            list.push('"');
+        }
         elog::ereport(WARNING)
             .errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
             .errmsg(format!(
@@ -256,7 +275,7 @@ pub(crate) fn fetch_table_list(
         "receive list of replicated tables from the publisher",
         ERRCODE_CONNECTION_FAILURE,
     )?;
-    let mut tablelist = Vec::with_capacity(res.rows.len());
+    let mut tablelist = ::mcx::std_vec_with_capacity("commands", res.rows.len())?;
     for r in &res.rows {
         let (nspname, relname) = (row_text(r, 0), row_text(r, 1));
         if check_columnlist {
@@ -428,7 +447,7 @@ pub(crate) fn AlterSubscription_refresh<'mcx>(
         )?;
 
         // Add remote tables missing locally.
-        let mut pubrel_local_oids: Vec<types_core::Oid> = Vec::with_capacity(pubrels.len());
+        let mut pubrel_local_oids: Vec<types_core::Oid> = ::mcx::std_vec_with_capacity("commands", pubrels.len())?;
         for (nspname, relname) in &pubrels {
             let rv = rel_vocab::RangeVar {
                 catalogname: None,
@@ -444,7 +463,6 @@ pub(crate) fn AlterSubscription_refresh<'mcx>(
                 nspname,
                 relname,
             )?;
-            crate::CheckSubscriptionRelam(mcx, relid, nspname, relname)?;
             pubrel_local_oids.push(relid);
 
             if subrel_local_oids.binary_search(&relid).is_err() {

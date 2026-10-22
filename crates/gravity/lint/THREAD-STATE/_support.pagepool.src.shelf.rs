@@ -1,0 +1,1 @@
+_support/pagepool/src/shelf.rs	SHELF	memory	at:flush_shelf	thread	the page pool's per-thread free blocks and short runs (bounded: shelf_max bytes and a count cap per key, half to the central lists past either); flush_shelf drains it at idle, release_retained and thread exit (a pthread key destructor)

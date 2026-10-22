@@ -1,0 +1,6 @@
+backend/utils/cache/inval/src/lib.rs	CALLBACKS	pgport	exit	leader	session envelope; registered syscache / relcache / relsync callbacks: never unregistered (as in C)
+backend/utils/cache/inval/src/lib.rs	SYSCACHE_LINKS	pgport	exit	leader	session envelope; per-syscache head links of the registered callback chains: never unregistered
+backend/utils/cache/inval/src/lib.rs	STATE	pgport	xact:AtEOXact_Inval@backend/utils/cache/inval/src/eoxact.rs	leader	session envelope; invalidation message state, cleared per transaction by AtEOXact_Inval, taken by the session cleanup init_state registers
+backend/utils/cache/inval/src/lib.rs	DEBUG_DISCARD_CACHES	pgport	at:set_debug_discard_caches	leader	session envelope; debug_discard_caches GUC storage, written by its GUC set accessor (SET / RESET / revert)
+backend/utils/cache/inval/src/lib.rs	ACCEPT_RECURSION_DEPTH	pgport	scope:accept@backend/utils/cache/inval/src/local.rs	leader	session envelope; debug discard recursion depth: accept sets it around InvalidateSystemCachesExtended and puts it back
+backend/utils/cache/inval/src/lib.rs	REL_SCOPE	deps	scope:with_relcache_scope	leader	the sender scope of this backend's relcache registrations (C3 S5a), set for with_relcache_scope's extent and put back at its end

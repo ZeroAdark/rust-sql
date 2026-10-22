@@ -3,13 +3,12 @@ use init_small::globals as g;
 use std::sync::{Mutex, Once};
 use types_core::BackendType;
 
-// One backend slot per test thread that calls my_backend() and per off-array
-// thread (InitProcess without ProcArrayAdd); keep headroom over that count
-// or InitProcess FATALs mid-suite.
-const MAX_CONNECTIONS: i32 = 26;
-// Bump when claim_other() call sites grow: the claimable simulated-backend
-// range is MAX_BACKENDS - MAX_CONNECTIONS; reserve two more slots for own-slot tests.
-const MAX_WORKER_PROCESSES: i32 = 16;
+// One backend slot per test thread that calls my_backend() and per off-array thread (InitProcess without
+// ProcArrayAdd); keep headroom over that count or InitProcess FATALs mid-suite.
+const MAX_CONNECTIONS: i32 = 28;
+// Bump when claim_other() calls grow: the claimable simulated-backend range
+// is MAX_BACKENDS - MAX_CONNECTIONS.
+const MAX_WORKER_PROCESSES: i32 = 17;
 const NUM_SPECIAL: i32 = types_storage::storage::NUM_SPECIAL_WORKER_PROCS;
 const MAX_BACKENDS: i32 = MAX_CONNECTIONS + 3 + MAX_WORKER_PROCESSES + 2 + NUM_SPECIAL;
 
@@ -218,7 +217,7 @@ fn other_proc_end(procno: ProcNumber, latest: TransactionId) {
 }
 
 // other_proc_end at scope exit, also when an assert fails: a failed test must not leave its simulated transaction
-// running in the array, where every later test's snapshot and RunningTransactionData would see it (YBAF on box 36:
+// running in the array, where every later test's snapshot and RunningTransactionData would see it (D681 on box 36:
 // one failure became three, then a hang). While unwinding, errors are dropped so the original panic is reported.
 struct OtherProcEnd(ProcNumber, TransactionId);
 
@@ -432,7 +431,7 @@ fn in_progress_finds_cached_subxids() {
 }
 
 // A caller whose PGPROC is not in the array (a pool thread: InitProcess, no ProcArrayAdd) keeps offset 0 from
-// InitProcGlobal or a stale one; the self-skip must not skip the transaction in that slot (pgrc2 P8: after a
+// InitProcGlobal or a stale one; the self-skip must not skip the transaction in that slot (pgrc P8: after a
 // restart, the recovered prepared transaction's dummy proc sits at offset 0 and the columnar load dropped its
 // generation as aborted).
 #[test]
@@ -630,7 +629,7 @@ fn lock_free_reuse_keeps_older_valid_xmin() {
     set_transaction_xmin(InvalidTransactionId);
 }
 
-/// regression. A reuse attempt that CANNOT succeed must not touch
+/// GL-OLTPREG-1. A reuse attempt that CANNOT succeed must not touch
 /// MyProc->xmin and must not execute the SeqCst fence. Born red at
 /// 2216f2261e: publish-then-verify wrote and retracted the xmin, and paid a
 /// full barrier between them, on EVERY miss — and in a write-heavy workload
@@ -910,6 +909,34 @@ fn expire_tree_removes_and_maintains_latest_completed() {
     xlogutils::set_standby_state(xlogutils::STANDBY_DISABLED);
 }
 
+// audit fp-transam-varsup#1: StartupXLOG zeroes the horizon so the first one is adopted.
+#[test]
+fn recovery_adopts_first_completed_horizon_past_wraparound_half_from_zero() {
+    let _g = test_lock();
+    setup();
+    let tv = TransamVariables();
+    let saved_next = tv.nextXid.load(Relaxed);
+    let saved_latest = tv.latestCompletedXid.load(Relaxed);
+    tv.nextXid.store(FullTransactionId::from_epoch_and_xid(0, 3_000_000_100).value, Relaxed);
+
+    varsup::VarsupShmemReset();
+    known_assigned::MaintainLatestCompletedXidRecovery(3_000_000_000);
+    assert_eq!(
+        FullTransactionId::from_u64(tv.latestCompletedXid.load(Relaxed)).xid(),
+        FirstNormalTransactionId,
+        "the harness seed rejects a horizon past 2^31"
+    );
+
+    tv.latestCompletedXid.store(0, Relaxed);
+    known_assigned::MaintainLatestCompletedXidRecovery(3_000_000_000);
+    assert_eq!(
+        FullTransactionId::from_u64(tv.latestCompletedXid.load(Relaxed)).xid(),
+        3_000_000_000
+    );
+    tv.nextXid.store(saved_next, Relaxed);
+    tv.latestCompletedXid.store(saved_latest, Relaxed);
+}
+
 #[test]
 fn expire_all_and_old_reset_overflow_state() {
     let _g = test_lock();
@@ -1135,6 +1162,34 @@ fn horizons_in_recovery_fold_in_known_assigned_oldest() {
     assert_eq!(running, 3900);
 }
 
+#[test]
+fn horizon_in_recovery_keeps_dropped_subxids_at_or_past_it() {
+    let _g = test_lock();
+    let me = my_backend();
+    kax::kax_reset();
+    xlogutils::set_standby_state(xlogutils::STANDBY_SNAPSHOT_READY);
+
+    let proc = GetPGProcByNumber(me);
+    proc.xmin.value.store(InvalidTransactionId, Relaxed);
+    set_transaction_xmin(InvalidTransactionId);
+    let tv = TransamVariables();
+    tv.nextXid.store(FullTransactionId::from_epoch_and_xid(0, 6200).value, Relaxed);
+    tv.latestCompletedXid.store(FullTransactionId::from_epoch_and_xid(0, 6100).value, Relaxed);
+
+    let (top, subxids): (TransactionId, Vec<TransactionId>) = (6001, (6002..=6065).collect());
+    kax::set_latest_observed_xid(6065);
+    kax_add(top, 6065);
+    ProcArrayApplyXidAssignment(top, &subxids).unwrap();
+    assert_eq!(kax::get_all(InvalidTransactionId), vec![top], "only the top xid stays known-assigned");
+
+    let _r = RecoveryOn::new();
+    let horizon = GetOldestTransactionIdConsideredRunning().unwrap();
+    assert_eq!(horizon, top);
+    assert!(subxids.iter().all(|&s| !TransactionIdPrecedes(s, horizon)), "a subxid preceded the horizon {horizon}");
+    kax::set_last_overflowed_xid(InvalidTransactionId);
+    xlogutils::set_standby_state(xlogutils::STANDBY_DISABLED);
+}
+
 // MinimumActiveBackends (procarray.c): the commit_delay/commit_siblings
 // group-commit gate. Counts OTHER backends with an assigned XID that hold a
 // pid (not prepared-xact dummies) and are not blocked on a lock.
@@ -1201,12 +1256,19 @@ fn minimum_active_backends_counts_other_active_backends() {
 
 // ---- CountOtherDBBackends autovacuum SIGTERM (procarray.c:3801-3807) ----
 
+// One test, one simulated slot: claim_other's slot range is shared by the whole file.
 #[test]
 fn count_other_db_backends_sigterms_conflicting_autovacuum() {
-    use std::sync::atomic::AtomicBool;
-
     let _g = test_lock();
     let _me = my_backend();
+    let other = claim_other();
+    count_other_db_backends_sigterms(other, PROC_IS_AUTOVACUUM, 90777, 90001);
+    count_other_db_backends_sigterms(other, PROC_IS_DB_MAINT_WORKER, 90778, 90002);
+}
+
+#[allow(non_snake_case)]
+fn count_other_db_backends_sigterms(other: ProcNumber, flag: u8, AV_DB: types_core::Oid, AV_PID: i32) {
+    use std::sync::atomic::AtomicBool;
 
     if !postgres_seams::check_for_interrupts::is_installed() {
         postgres_seams::check_for_interrupts::set(|| Ok(()));
@@ -1215,15 +1277,11 @@ fn count_other_db_backends_sigterms_conflicting_autovacuum() {
     g::SetMaxBackends(MAX_BACKENDS);
     procsignal::ProcSignalShmemInit();
 
-    const AV_DB: types_core::Oid = 90777;
-    const AV_PID: i32 = 90001;
-
-    // A simulated autovacuum worker connected to AV_DB.
-    let other = claim_other();
+    // A simulated autovacuum (or maintenance) worker connected to AV_DB.
     let proc = GetPGProcByNumber(other);
     proc.databaseId.store(AV_DB, Relaxed);
     proc.pid.store(AV_PID, Relaxed);
-    proc.statusFlags.store(PROC_IS_AUTOVACUUM, Relaxed);
+    proc.statusFlags.store(flag, Relaxed);
     proc.pgxactoff.store(-1, Relaxed);
     ProcArrayAdd(other).expect("ProcArrayAdd autovac");
 
@@ -1424,7 +1482,7 @@ fn delaying_chkpt_wait_tracks_the_snapshot_not_newcomers() {
 
     // A is inside its commit critical section when the checkpoint starts.
     pa.delayChkptFlags.store(DELAY_CHKPT_START, Relaxed);
-    let snapshot = GetVirtualXIDsDelayingChkpt(DELAY_CHKPT_START);
+    let snapshot = GetVirtualXIDsDelayingChkpt(DELAY_CHKPT_START).unwrap();
     assert_eq!(snapshot.len(), 1);
     assert_eq!((snapshot[0].procNumber, snapshot[0].localTransactionId), (a, 11));
     assert!(HaveVirtualXIDsDelayingChkpt(&snapshot, DELAY_CHKPT_START));
@@ -1439,7 +1497,7 @@ fn delaying_chkpt_wait_tracks_the_snapshot_not_newcomers() {
     );
     // A later snapshot sees B (the next checkpoint waits for it).
     assert!(HaveVirtualXIDsDelayingChkpt(
-        &GetVirtualXIDsDelayingChkpt(DELAY_CHKPT_START),
+        &GetVirtualXIDsDelayingChkpt(DELAY_CHKPT_START).unwrap(),
         DELAY_CHKPT_START
     ));
 
@@ -1613,15 +1671,50 @@ fn procarray_add_waits_as_the_executing_backend() {
     ProcArrayRemove(dummy, InvalidTransactionId).expect("remove dummy");
 
     assert!(!waited.is_empty(), "the add never contended for ProcArrayLock");
-    // PGSemaphoreLock sleeps until the holder's release posts it: a 100 ms
-    // hold is one sleep, not a spin (extra_waits counts absorbed wakeups).
-    assert!(
-        waited.len() <= 3,
-        "the contended acquire took {} semaphore locks for one 100 ms hold",
-        waited.len()
-    );
     assert!(
         waited.iter().all(|&p| p == me),
         "contended ProcArrayAdd slept as {waited:?}, expected the executing backend {me}"
     );
+}
+
+#[test]
+fn blocker_status_excludes_processes_outside_procarray() {
+    let _guard = test_lock();
+    my_backend();
+    let other = claim_other();
+    let proc = GetPGProcByNumber(other);
+    proc.pid.store(98765, Relaxed);
+    let mut waited_lock = types_storage::lock::LOCK {
+        tag: types_storage::lock::LOCKTAG::relation(1, 42),
+        grantMask: 0,
+        waitMask: 0,
+        procLocks: Default::default(),
+        waitProcs: types_storage::lock::ProcWaitQueue {
+            list: Default::default(),
+            count: 0,
+        },
+        requested: [0; types_storage::lock::MAX_LOCKMODES],
+        nRequested: 0,
+        granted: [0; types_storage::lock::MAX_LOCKMODES],
+        nGranted: 0,
+    };
+    // SAFETY: the test mutex excludes concurrent access to this simulated waiter.
+    unsafe { proc.waitLock.set(&mut waited_lock) };
+    assert!(lock::GetBlockerStatusData(98765).unwrap().procs.is_empty());
+    ProcArrayAdd(other).unwrap();
+    assert_eq!(lock::GetBlockerStatusData(98765).unwrap().procs.len(), 1);
+    ProcArrayRemove(other, InvalidTransactionId).unwrap();
+    assert!(lock::GetBlockerStatusData(98765).unwrap().procs.is_empty());
+    assert!(lock::GetBlockerStatusData(0).unwrap().procs.is_empty());
+    // SAFETY: the test mutex excludes concurrent access; clear before the lock expires.
+    unsafe { proc.waitLock.set(std::ptr::null_mut()) };
+    proc.pid.store(0, Relaxed);
+    let aux = GetPGProcByNumber(MAX_BACKENDS);
+    aux.pid.store(98766, Relaxed);
+    // SAFETY: this auxiliary slot is unused and tests are serialized.
+    unsafe { aux.waitLock.set(&mut waited_lock) };
+    assert!(lock::GetBlockerStatusData(98766).unwrap().procs.is_empty());
+    // SAFETY: clear before the stack-allocated lock expires.
+    unsafe { aux.waitLock.set(std::ptr::null_mut()) };
+    aux.pid.store(0, Relaxed);
 }

@@ -22,3 +22,7 @@ seam_core::seam!(
         cid: types_core::CommandId,
     ) -> types_error::PgResult<(types_core::CommandId, bool)>
 );
+
+seam_core::seam!(
+    pub fn combo_cid_count() -> usize
+);

@@ -1,0 +1,15 @@
+# NULL keys form one run (DESC NULLS FIRST)
+sql: SELECT k, v FROM t ORDER BY k DESC NULLS FIRST;
+cols: k	v
+class: ordered 1
+verdict: match
+[pg]
+\N	a
+\N	b
+2	c
+1	d
+[got]
+\N	b
+\N	a
+2	c
+1	d

@@ -1,0 +1,11 @@
+-- regress-full-collate-016
+-- SELECT a, b, a < b as lt FROM (VALUES ('a', 'B'), ('A', 'b' COLLATE "C")) v(a,b);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=2
+    row (c25:'a', c25:'B')
+    row (c25:'A', c25:'b')
+  project (1=v2.1, 2=v2.2, 3=op664(v2.1, v2.2))
+  outs 1=vl:row 2=vl:row 3=w1:val
+mapped: ValuesScan

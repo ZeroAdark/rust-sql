@@ -1,0 +1,230 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2pl
+step s2pl: EXPLAIN (COSTS OFF) WITH d AS (DELETE FROM d4664i_t USING d4664i_s WHERE id = d4664i_s.k RETURNING id, v) SELECT * FROM d ORDER BY id;
+QUERY PLAN                                                    
+--------------------------------------------------------------
+Sort                                                          
+  Sort Key: d.id                                              
+  CTE d                                                       
+    ->  Delete on d4664i_t                                    
+          ->  Merge Join                                      
+                Merge Cond: (d4664i_t.id = d4664i_s.k)        
+                ->  Index Scan using d4664i_t_pkey on d4664i_t
+                ->  Sort                                      
+                      Sort Key: d4664i_s.k                    
+                      ->  Seq Scan on d4664i_s                
+  ->  CTE Scan on d                                           
+(11 rows)
+
+
+starting permutation: s1v s2del s1c s3show
+step s1v: BEGIN; UPDATE d4664i_t SET v = 999 WHERE id = 5;
+step s2del: WITH d AS (DELETE FROM d4664i_t USING d4664i_s WHERE id = d4664i_s.k RETURNING id, v, note) SELECT * FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|  v|note
+--+---+----
+ 5|999|a   
+15|150|b   
+(2 rows)
+
+step s3show: SELECT id, v FROM d4664i_t WHERE id IN (5, 15, 205) ORDER BY id; SELECT k, note FROM d4664i_s ORDER BY k;
+id|v
+--+-
+(0 rows)
+
+ k|note
+--+----
+ 5|a   
+15|b   
+(2 rows)
+
+
+starting permutation: s1mv s2del s1c s3show
+step s1mv: BEGIN; UPDATE d4664i_t SET id = 205 WHERE id = 5;
+step s2del: WITH d AS (DELETE FROM d4664i_t USING d4664i_s WHERE id = d4664i_s.k RETURNING id, v, note) SELECT * FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|  v|note
+--+---+----
+15|150|b   
+(1 row)
+
+step s3show: SELECT id, v FROM d4664i_t WHERE id IN (5, 15, 205) ORDER BY id; SELECT k, note FROM d4664i_s ORDER BY k;
+ id| v
+---+--
+205|50
+(1 row)
+
+ k|note
+--+----
+ 5|a   
+15|b   
+(2 rows)
+
+
+starting permutation: s1del s2del s1c s3show
+step s1del: BEGIN; DELETE FROM d4664i_t WHERE id = 5;
+step s2del: WITH d AS (DELETE FROM d4664i_t USING d4664i_s WHERE id = d4664i_s.k RETURNING id, v, note) SELECT * FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|  v|note
+--+---+----
+15|150|b   
+(1 row)
+
+step s3show: SELECT id, v FROM d4664i_t WHERE id IN (5, 15, 205) ORDER BY id; SELECT k, note FROM d4664i_s ORDER BY k;
+id|v
+--+-
+(0 rows)
+
+ k|note
+--+----
+ 5|a   
+15|b   
+(2 rows)
+
+
+starting permutation: s1ref s2del s1c s3show
+step s1ref: BEGIN; UPDATE d4664i_t SET v = 999 WHERE id = 5; UPDATE d4664i_s SET k = 6, note = 'moved' WHERE k = 5;
+step s2del: WITH d AS (DELETE FROM d4664i_t USING d4664i_s WHERE id = d4664i_s.k RETURNING id, v, note) SELECT * FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|  v|note
+--+---+----
+ 5|999|a   
+15|150|b   
+(2 rows)
+
+step s3show: SELECT id, v FROM d4664i_t WHERE id IN (5, 15, 205) ORDER BY id; SELECT k, note FROM d4664i_s ORDER BY k;
+id|v
+--+-
+(0 rows)
+
+ k|note 
+--+-----
+ 6|moved
+15|b    
+(2 rows)
+
+
+starting permutation: s1refdel s2del s1c s3show
+step s1refdel: BEGIN; UPDATE d4664i_t SET v = 999 WHERE id = 5; DELETE FROM d4664i_s WHERE k = 5;
+step s2del: WITH d AS (DELETE FROM d4664i_t USING d4664i_s WHERE id = d4664i_s.k RETURNING id, v, note) SELECT * FROM d ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|  v|note
+--+---+----
+ 5|999|a   
+15|150|b   
+(2 rows)
+
+step s3show: SELECT id, v FROM d4664i_t WHERE id IN (5, 15, 205) ORDER BY id; SELECT k, note FROM d4664i_s ORDER BY k;
+id|v
+--+-
+(0 rows)
+
+ k|note
+--+----
+15|b   
+(1 row)
+
+
+starting permutation: s1v s2upd s1c s3show
+step s1v: BEGIN; UPDATE d4664i_t SET v = 999 WHERE id = 5;
+step s2upd: WITH u AS (UPDATE d4664i_t SET v = v + d4664i_s.k FROM d4664i_s WHERE id = d4664i_s.k RETURNING id, v, note) SELECT * FROM u ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|   v|note
+--+----+----
+ 5|1004|a   
+15| 165|b   
+(2 rows)
+
+step s3show: SELECT id, v FROM d4664i_t WHERE id IN (5, 15, 205) ORDER BY id; SELECT k, note FROM d4664i_s ORDER BY k;
+id|   v
+--+----
+ 5|1004
+15| 165
+(2 rows)
+
+ k|note
+--+----
+ 5|a   
+15|b   
+(2 rows)
+
+
+starting permutation: s1mv s2upd s1c s3show
+step s1mv: BEGIN; UPDATE d4664i_t SET id = 205 WHERE id = 5;
+step s2upd: WITH u AS (UPDATE d4664i_t SET v = v + d4664i_s.k FROM d4664i_s WHERE id = d4664i_s.k RETURNING id, v, note) SELECT * FROM u ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|  v|note
+--+---+----
+15|165|b   
+(1 row)
+
+step s3show: SELECT id, v FROM d4664i_t WHERE id IN (5, 15, 205) ORDER BY id; SELECT k, note FROM d4664i_s ORDER BY k;
+ id|  v
+---+---
+ 15|165
+205| 50
+(2 rows)
+
+ k|note
+--+----
+ 5|a   
+15|b   
+(2 rows)
+
+
+starting permutation: s1ref s2upd s1c s3show
+step s1ref: BEGIN; UPDATE d4664i_t SET v = 999 WHERE id = 5; UPDATE d4664i_s SET k = 6, note = 'moved' WHERE k = 5;
+step s2upd: WITH u AS (UPDATE d4664i_t SET v = v + d4664i_s.k FROM d4664i_s WHERE id = d4664i_s.k RETURNING id, v, note) SELECT * FROM u ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|   v|note
+--+----+----
+ 5|1004|a   
+15| 165|b   
+(2 rows)
+
+step s3show: SELECT id, v FROM d4664i_t WHERE id IN (5, 15, 205) ORDER BY id; SELECT k, note FROM d4664i_s ORDER BY k;
+id|   v
+--+----
+ 5|1004
+15| 165
+(2 rows)
+
+ k|note 
+--+-----
+ 6|moved
+15|b    
+(2 rows)
+
+
+starting permutation: s1v s2qual s1c s3show
+step s1v: BEGIN; UPDATE d4664i_t SET v = 999 WHERE id = 5;
+step s2qual: WITH u AS (UPDATE d4664i_t SET v = v + 1 FROM d4664i_s WHERE id = d4664i_s.k AND d4664i_t.v + length(d4664i_s.note) < 500 RETURNING id, v) SELECT * FROM u ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2qual: <... completed>
+id|  v
+--+---
+15|151
+(1 row)
+
+step s3show: SELECT id, v FROM d4664i_t WHERE id IN (5, 15, 205) ORDER BY id; SELECT k, note FROM d4664i_s ORDER BY k;
+id|  v
+--+---
+ 5|999
+15|151
+(2 rows)
+
+ k|note
+--+----
+ 5|a   
+15|b   
+(2 rows)
+

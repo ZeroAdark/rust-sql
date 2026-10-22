@@ -27,7 +27,7 @@ use brin_pageops::{
     brinGetTupleForHeapBlock, brinRevmapInitialize, brinRevmapTerminate,
     brin_can_do_samepage_update, brin_doupdate,
 };
-use brin_tuple::{brin_deform_tuple, brin_form_tuple, brin_new_memtuple};
+use brin_tuple::{brin_deform_tuple, brin_form_tuple, brin_new_memtuple_fallible};
 
 // C CHECK_FOR_INTERRUPTS (heapam's gated-helper shape): brin.c CFIs every
 // range in bringetbitmap and every brininsert retry.
@@ -265,7 +265,7 @@ pub fn brin_build_desc<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>) -> PgResult<B
         None
     };
 
-    let mut info: Vec<BrinColInfo> = Vec::with_capacity(natts);
+    let mut info: Vec<BrinColInfo> = ::mcx::std_vec_with_capacity("access", natts)?;
     let mut totalstored = 0usize;
     for keyno in 0..natts {
         let opfamily = rel.rd_opfamily[keyno];
@@ -276,6 +276,9 @@ pub fn brin_build_desc<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>) -> PgResult<B
             opcintype,
             BRIN_PROCNUM_OPCINFO as i16,
         )?;
+        if opcinfo_proc == ::types_core::InvalidOid {
+            return Err(missing_support_function(BRIN_PROCNUM_OPCINFO, keyno + 1, rel.name()));
+        }
         // brin.c:1608 index_getprocinfo + FunctionCall1: a LANGUAGE internal
         // alias of an in-core opcInfo proc dispatches to that proc's body.
         let opcinfo_proc = if opcinfo_proc >= ::types_core::catalog::FirstNormalObjectId
@@ -383,7 +386,7 @@ pub fn brin_build_desc<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>) -> PgResult<B
     };
 
     let amsupport = rel.rd_support.len() / natts.max(1);
-    let mut procs: Vec<BrinColProcs> = Vec::with_capacity(natts);
+    let mut procs: Vec<BrinColProcs> = ::mcx::std_vec_with_capacity("access", natts)?;
     for keyno in 0..natts {
         let options = info[keyno].oi_opclass_options.as_deref();
         let proc_oid = |procnum: u16| {
@@ -532,7 +535,7 @@ pub fn brininsert<'mcx>(
         // previous one (C brininsert's autosummarize block).
         if autosummarize && heapBlk > 0 && heapBlk == origHeapBlk && heaptid.ip_posid == 1 {
             let lastPageRange = heapBlk - 1;
-            let probecxt = MemoryContext::new_bump("brininsert autosummarize probe");
+            let probecxt = MemoryContext::new_wholesale("brininsert autosummarize probe");
             let mut lastPageTuple: PgVec<'_, u8> = PgVec::new_in(probecxt.mcx());
             let got = brinGetTupleForHeapBlock(
                 idxRel,
@@ -550,7 +553,7 @@ pub fn brininsert<'mcx>(
             }
         }
 
-        let tupcxt = MemoryContext::new_bump("brininsert cxt");
+        let tupcxt = MemoryContext::new_wholesale("brininsert cxt");
         let cmcx = tupcxt.mcx();
         let mut brtup: PgVec<'_, u8> = PgVec::new_in(cmcx);
         let got = brinGetTupleForHeapBlock(
@@ -567,7 +570,7 @@ pub fn brininsert<'mcx>(
             break;
         };
 
-        let mut dtup = brin_new_memtuple(bdesc);
+        let mut dtup = brin_new_memtuple_fallible(bdesc)?;
         brin_deform_tuple(bdesc, &brtup, &mut dtup)?;
 
         let need_insert = add_values_to_range(bdesc, &mut dtup, values, nulls)?;
@@ -636,7 +639,7 @@ pub fn bringetbitmap(
     tbm: &mut tidbitmap::TIDBitmap<'_>,
 ) -> PgResult<i64> {
     if scan.index_rel().pgstat_enabled.get() {
-        scan.xs_pgstat_index_scans += 1;
+        scan.xs_pgstat.count(1, 0, 0);
     }
     scan.xs_nsearches += 1;
 
@@ -659,10 +662,20 @@ pub fn bringetbitmap(
     )?;
     heapRel.close(AccessShareLock)?;
 
-    let mut keys: Vec<Vec<&ScanKeyData>> =
-        (0..natts).map(|_| Vec::with_capacity(nkeys_total)).collect();
-    let mut nullkeys: Vec<Vec<&ScanKeyData>> =
-        (0..natts).map(|_| Vec::with_capacity(nkeys_total)).collect();
+    let mut keys: Vec<Vec<&ScanKeyData>> = {
+        let mut v = ::mcx::std_vec_with_capacity("brin", natts)?;
+        for _ in 0..natts {
+            v.push(::mcx::std_vec_with_capacity("brin", nkeys_total)?);
+        }
+        v
+    };
+    let mut nullkeys: Vec<Vec<&ScanKeyData>> = {
+        let mut v = ::mcx::std_vec_with_capacity("brin", natts)?;
+        for _ in 0..natts {
+            v.push(::mcx::std_vec_with_capacity("brin", nkeys_total)?);
+        }
+        v
+    };
     for key in scan.keyData.iter().take(nkeys_total) {
         let keyattno = key.sk_attno as usize;
         debug_assert!(
@@ -687,9 +700,9 @@ pub fn bringetbitmap(
         }
     }
 
-    let mut dtup = brin_new_memtuple(bdesc);
+    let mut dtup = brin_new_memtuple_fallible(bdesc)?;
 
-    let mut per_range = MemoryContext::new_bump("bringetbitmap cxt");
+    let mut per_range = MemoryContext::new_wholesale("bringetbitmap cxt");
     let mut buf: Buffer = InvalidBuffer;
     let mut btup: PgVec<'_, u8> = PgVec::new_in(scan_mcx);
 
@@ -982,7 +995,7 @@ fn check_null_keys(bval: &BrinValues, nullkeys: &[&ScanKeyData]) -> bool {
 
 /// union_tuples (summarize_range's merge step).
 pub fn union_tuples(bdesc: &BrinDesc<'_>, a: &mut BrinMemTuple, b: &[u8]) -> PgResult<()> {
-    let mut db = brin_new_memtuple(bdesc);
+    let mut db = brin_new_memtuple_fallible(bdesc)?;
     brin_deform_tuple(bdesc, b, &mut db)?;
 
     if db.bt_empty_range {
@@ -1324,6 +1337,7 @@ mod autosummarize_request_tests {
             rd_amcache_hash: Default::default(),
             rd_amcache_gin: Default::default(),
             rd_amcache_spgist: Default::default(),
+            rd_amcache_bloom: Default::default(),
             rd_support: PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),

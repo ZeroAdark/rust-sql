@@ -1,0 +1,49 @@
+-- regress-full-updatable_views-025
+-- MERGE INTO rw_view2 t USING (VALUES (4, 'r4'), (5, 'r5'), (6, 'r6')) AS v(a,b) ON aaa = v.a WHEN MATCHED AND aaa = 4 THEN DELETE WHEN MATCHED THEN UPDATE SET bbb = v.b WHEN NOT MATCHED THEN INSERT (aaa) VALUES (v.a) WHEN NOT MATCHED BY SOURCE THEN UPDATE SET bbb = 'Not matched by source' RETURNING merge_action(), v.*, old, (SELECT new FROM (VALUES ((SELECT new)))), t.*;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=5 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n5@0 n4@1
+  source values rti=6 rows=3
+    row (c23:4, c25:'r4')
+    row (c23:5, c25:'r5')
+    row (c23:6, c25:'r6')
+  project (1=v6.2, 2=v6.1, 3=v6.0, 4=T_RowExpr)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=vl:row 2=w4:val 3=vl:row 4=vl:call0
+p1 node=2 serial site=0 reason=IndexSource end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n3@0 n2@0 n1@1^
+  source bitmap rel=24270 rti=4 am=heap
+    bitmap index node=3 index=24277 rows=6
+      key att=1 op=97 value=c23:10
+      key att=1 op=521 value=c23:0
+    recheck (op97(v4.1, c23:10), op521(v4.1, c23:0))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v4.-1, 2=v4.1, 3j=v4.1, 4j=v4.2)
+  probe slot=0 inner=n4 JOIN_FULL marks build-first keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.2))
+  outs 1=fx6:row 2=w8:val 3=w8:val 4=vl:win/page
+p2 node=1 serial site=0 reason=Write end=sink
+  desc consumes=slot0@p0 consumes=slot1@p1
+  nodes n1@0 n0@2
+  source breaker slot=0
+  drain matches=slot1 JOIN_FULL
+  project (1j=outer.1, 2j=inner.1, 3j=inner.2, 4j=inner.4, 5j=inner.3, 6j=outer.3, 7j=outer.4)
+  write MERGE rel=24270 rti=4 natts=2 indexes=(24277[1]up) returning old=old new=new epq=$exec1 marks=1 (rti6:ROW_MARK_COPY)
+    merge rowid=outer.1 target_cols=(1@6,2@7) returning merge_action() join_cond=(notnull(inner.4), op96(v4.1, inner.3))
+    when matched and (op96(v4.1, c23:4)) then delete
+    when matched then update set=(2) (1=inner.2)
+    when not matched then insert (1=inner.3, 2=c25:'Unspecified')
+    when not matched by source then update set=(2) (1=c25:'Not matched by source')
+  subplan 1 nested Expr params=($exec0=T_ReturningExpr) raise-free
+  inner node=6 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n6@0
+  source const
+  project (1=$exec0)
+  project (1=T_MergeSupportFunc, 2=outer.3, 3=outer.2, 4=T_ReturningExpr, 5=subplan1(T_ReturningExpr), 6=v4.1, 7=v4.2, 8=c25:'Const1', 9=c25:'Const2')
+  outs 1=fx6:life/breaker 2=vl:life/breaker 3=w4:val 4=vl:life/breaker 5=vl:life/breaker 6=w4:val 7=vl:life/breaker
+  outs 1=vl:call0 2=w4:val 3=vl:life/breaker 4=? 5=? 6=w4:val 7=vl:row 8=vl:stmt/imm 9=vl:stmt/imm
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+param $exec0 owner=subplan1 type=24285 rep=?
+mapped: Result ModifyTable BitmapIndexScan BitmapHeapScan ValuesScan HashJoin Hash PlanRowMark SubPlan

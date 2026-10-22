@@ -1,4 +1,0 @@
-Å);
-
--- test quotes
-select websearch_to_tsquery(

@@ -80,6 +80,12 @@ pub(crate) fn process_group_locally(
     process_group_with(&group, LocalExecuteInvalidationMessage)
 }
 
+/// D3866: cache `id`'s bit in `InvalState::stamp_touched` (0 outside 0..128: such an id names no catcache).
+#[inline]
+pub(crate) fn stamp_bit(id: i32) -> u128 {
+    u32::try_from(id).ok().and_then(|i| 1u128.checked_shl(i)).unwrap_or(0)
+}
+
 pub(crate) fn l2_bump_debug() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("PGRUST_L2_DEBUG").is_ok_and(|v| v.trim() == "1"))
@@ -92,18 +98,57 @@ pub(crate) fn l2_bump_debug() -> bool {
 // could be undone by an L2 hit at the stale generation. The bump also adopts
 // the new generation as the sender's own view (its caches reflect the new
 // state; atomics only, safe under the live state borrow).
-pub(crate) fn l2_bump_for_messages(msgs: &[SharedInvalidationMessage]) {
+//
+// D3866: a row-stamped cache's program stamp (l2cache ROW_STAMPED_CAT_IDS) moves
+// after its generation when `touched` (this transaction's own batch: the
+// caches a committed row of which it changed, `InvalState::stamp_touched`)
+// names it, or for every such message when `touched` is None (a batch whose
+// origin this backend did not register: a replayed commit's).
+//
+// C3 S5 (D3890, D3889): a relcache message whose relation this transaction registered only under a scope (`Scopes`:
+// `InvalState::rel_scopes`, the triggers' or the storage's) moves the L2 relcache, and the storage generation for the
+// storage's, not the relation's program generation (l2cache `invalidate_rel_part`); a catcache message of a row registered only under the
+// storage's scope (`cat_scopes`: a pg_class row) leaves its row's (`invalidate_cat_storage`). With no `touched` (a batch
+// of unknown origin) every message is whole.
+pub(crate) struct Scopes<'a> {
+    pub(crate) touched: u128,
+    pub(crate) rels: &'a [(Oid, u8)],
+    pub(crate) cats: &'a [(i32, u32, u8)],
+}
+
+pub(crate) fn l2_bump_for_messages(msgs: &[SharedInvalidationMessage], scoped: Option<Scopes<'_>>) {
+    let (touched, scopes, cat_scopes) = match scoped {
+        Some(s) => (Some(s.touched), s.rels, s.cats),
+        None => (None, &[][..], &[][..]),
+    };
     for msg in msgs {
         match *msg {
             SharedInvalidationMessage::Catcache(m) => {
-                l2cache::bump(l2cache::Domain::Cat(m.id as i32));
+                let id = m.id as i32;
+                if crate::cat_scope(cat_scopes, id, m.hashValue) == crate::REL_SCOPE_STORAGE {
+                    l2cache::invalidate_cat_storage(id, m.dbId, m.hashValue);
+                    continue;
+                }
+                l2cache::invalidate_key(
+                    l2cache::Domain::Cat(id),
+                    l2cache::cat_key(id, m.dbId, m.hashValue),
+                );
+                if l2cache::row_stamped(id) && touched.is_none_or(|t| stamp_bit(id) & t != 0) {
+                    l2cache::bump_stamp(id, m.hashValue, m.dbId);
+                }
             }
             SharedInvalidationMessage::Catalog(_) => l2cache::bump_all_cat(),
             SharedInvalidationMessage::Relcache(m) => {
+                let s = crate::rel_scope(scopes, m.relId);
                 if m.relId == types_core::InvalidOid {
                     l2cache::bump_all_rel();
+                } else if s & crate::REL_SCOPE_ALL == 0 {
+                    l2cache::invalidate_rel_part(m.relId, m.dbId, s & crate::REL_SCOPE_STORAGE != 0);
                 } else {
-                    l2cache::bump(l2cache::Domain::Rel(m.relId));
+                    l2cache::invalidate_key(
+                        l2cache::Domain::Rel(m.relId),
+                        l2cache::rel_key(m.relId, m.dbId),
+                    );
                     if l2_bump_debug() {
                         eprintln!(
                             "L2DBG bump rel={} newgen={} thr={:?}",
@@ -126,7 +171,7 @@ fn send_group(state: &InvalState<'_>, group: &InvalidationMsgsGroup) -> PgResult
     for subgroup in [CAT_CACHE_MSGS, REL_CACHE_MSGS] {
         let msgs = subgroup_slice(&state.msg_arrays, group, subgroup);
         if !msgs.is_empty() {
-            l2_bump_for_messages(msgs);
+            l2_bump_for_messages(msgs, Some(Scopes { touched: state.stamp_touched, rels: &state.rel_scopes[..], cats: &state.cat_scopes[..] }));
             sinval_seams::send_shared_invalid_messages::call(msgs)?;
         }
     }
@@ -140,6 +185,10 @@ pub fn CommandEndInvalidationMessages() -> PgResult<()> {
         return Ok(());
     };
     process_group_with(&group, LocalExecuteInvalidationMessage)?;
+    // C3 S4b: what this thread read under its own messages before them no longer holds (gravity_deps)
+    if group.num_in_group() > 0 {
+        l2cache::note_own_invals();
+    }
 
     if transam_xlog_seams::xlog_logical_info_active::call() {
         LogLogicalInvalidations()?;
@@ -156,6 +205,28 @@ pub fn CommandEndInvalidationMessages() -> PgResult<()> {
     Ok(())
 }
 
+/// D3888 (xact.c's pre-commit / pre-prepare point: catalog access allowed, before the commit or PREPARE record): the
+/// relations built from the operator families this transaction's support catalog rows named (`support_families`) get
+/// relcache messages of their own: an index's support material and a partition key's are their relcache entries', which
+/// no other message covers. A build without the scan's seam registers a whole relcache message instead.
+pub fn PreCommit_Inval() -> PgResult<()> {
+    // every commit comes here and nearly none changed a support catalog: no context, no copy (the counter bar's q0)
+    if with_state(|state| state.support_families.is_empty()) {
+        return Ok(());
+    }
+    let cx = mcx::MemoryContext::new("PreCommit_Inval");
+    let families = with_state(|state| mcx::slice_in(cx.mcx(), &state.support_families))?;
+    if !relcache_seams::support_family_relids::is_installed() {
+        crate::invalidate::CacheInvalidateRelcacheAll()?;
+    } else {
+        for &relid in relcache_seams::support_family_relids::call(cx.mcx(), &families)?.iter() {
+            crate::invalidate::CacheInvalidateRelcacheByRelid(relid)?;
+        }
+    }
+    with_state(|state| state.support_families.clear());
+    Ok(())
+}
+
 pub fn AtEOXact_Inval(isCommit: bool) -> PgResult<()> {
     enum Eox {
         Empty,
@@ -166,7 +237,16 @@ pub fn AtEOXact_Inval(isCommit: bool) -> PgResult<()> {
     let action = with_state(|state| {
         state.inplace_info = None;
         match state.trans_stack.first() {
-            None => Eox::Empty,
+            None => {
+                // D3866: an in-place update's bits went with its own send (AtInplace_Inval)
+                state.stamp_touched = 0;
+                state.pending = crate::PendingSummary::default();
+                state.rel_scopes.clear();
+                state.cat_scopes.clear();
+                state.cat_unscoped = 0;
+                state.support_families.clear();
+                Eox::Empty
+            }
             Some(info) => {
                 /* Must be at top of stack */
                 debug_assert!(state.trans_stack.len() == 1 && info.my_level == 1);
@@ -204,11 +284,20 @@ pub fn AtEOXact_Inval(isCommit: bool) -> PgResult<()> {
             process_group_with(&group, LocalExecuteInvalidationMessage)?;
         }
     }
+    // C3 S4b: what this thread read under its own uncommitted messages holds no longer, committed (their generations
+    // moved as they were sent) or rolled back (no generation records them)
+    l2cache::note_own_invals();
 
     // C frees the arrays with TopTransactionContext; capacity retained here
     // (alloc-free steady state per commit).
     with_state(|state| {
         state.trans_stack.clear();
+        state.stamp_touched = 0;
+        state.pending = crate::PendingSummary::default();
+        state.rel_scopes.clear();
+        state.cat_scopes.clear();
+        state.cat_unscoped = 0;
+        state.support_families.clear();
         for arr in &mut state.msg_arrays {
             arr.clear();
         }
@@ -278,6 +367,8 @@ pub fn AtEOSubXact_Inval(isCommit: bool) -> PgResult<()> {
         });
     } else {
         process_group_locally(|state| Some(state.trans_stack.last()?.prior_cmd_invalid_msgs))?;
+        // C3 S4b: a rolled-back subtransaction's catalog changes: what was read under them holds no longer
+        l2cache::note_own_invals();
 
         with_state(|state| {
             state.trans_stack.pop();
@@ -448,7 +539,7 @@ pub fn ProcessCommittedInvalidationMessages(
         }
     }
 
-    l2_bump_for_messages(msgs);
+    l2_bump_for_messages(msgs, None);
     sinval_seams::send_shared_invalid_messages::call(msgs)?;
 
     if relcache_init_file_inval {

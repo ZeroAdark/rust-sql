@@ -1,0 +1,2 @@
+path	crates/gravity/driver/src/machine.rs
+ir-only	std::thread::functions::available_parallelism	1

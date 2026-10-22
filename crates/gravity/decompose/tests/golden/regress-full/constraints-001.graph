@@ -1,0 +1,10 @@
+-- regress-full-constraints-001
+-- INSERT INTO deferred_excl VALUES(1) ON CONFLICT ON CONSTRAINT deferred_excl_con DO NOTHING;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:1, 2=c23:null)
+  write INSERT rel=20885 rti=1 natts=2 indexes=(20888[1]dx) on_conflict=nothing arbiter=(20888)
+  outs 1=w4:val 2=w4:val
+mapped: Result ModifyTable

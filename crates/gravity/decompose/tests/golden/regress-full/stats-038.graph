@@ -1,0 +1,9 @@
+-- regress-full-stats-038
+-- SELECT current_setting('fsync') = 'off' OR current_setting('wal_sync_method') IN ('open_sync', 'open_datasync') OR 0 > 0;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=or(op98(fn2077(c25:'fsync'), c25:'off'), any98(fn2077(c25:'wal_sync_method'), c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x004\x00\x00\x00open_sync\x00\x00\x00D\x00\x00\x00open_datasync\x00\x00\x00')))
+  outs 1=w1:val
+mapped: Result

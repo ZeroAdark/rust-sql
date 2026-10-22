@@ -225,15 +225,33 @@ fn version_string_default_is_postgres_first() {
     assert_eq!(
         crate::introspect::pg_version_str(),
         format!(
-            "PostgreSQL 18.6 (pgrust 0.3.1) on {}, 64-bit",
+            "PostgreSQL 18.6 (pgrust 0.4-beta) on {}, 64-bit",
             env!("PGRUST_TARGET_TRIPLE")
         )
     );
 }
 
 #[test]
-fn version_string_pgrust_first_renders_the_legacy_form() {
-    // pgrust_first must reproduce the pre-ruling banner byte-for-byte.
+fn version_string_names_the_build_id_inside_the_pgrust_identity() {
+    let id = "pgrust 0.4-beta, build 1a2b3c4";
+    assert_eq!(
+        crate::introspect::version_str_postgres_first(id),
+        format!(
+            "PostgreSQL 18.6 (pgrust 0.4-beta, build 1a2b3c4) on {}, 64-bit",
+            env!("PGRUST_TARGET_TRIPLE")
+        )
+    );
+    assert_eq!(
+        crate::introspect::version_str_pgrust_first(id),
+        format!(
+            "pgrust 0.4-beta, build 1a2b3c4 (PostgreSQL 18.6 compatible) on {}, 64-bit",
+            env!("PGRUST_TARGET_TRIPLE")
+        )
+    );
+}
+
+#[test]
+fn version_string_pgrust_first_keeps_legacy_ordering() {
     guc_tables::backing::set_pgrust_version_string_style(
         guc_tables::consts::VERSION_STRING_PGRUST_FIRST,
     );
@@ -245,7 +263,7 @@ fn version_string_pgrust_first_renders_the_legacy_form() {
     assert_eq!(
         s,
         format!(
-            "pgrust 0.3.1 (PostgreSQL 18.6 compatible) on {}, 64-bit",
+            "pgrust 0.4-beta (PostgreSQL 18.6 compatible) on {}, 64-bit",
             env!("PGRUST_TARGET_TRIPLE")
         )
     );

@@ -1,0 +1,9 @@
+-- regress-full-with-011
+-- WITH q AS (SELECT 'foo' AS x) SELECT x, pg_typeof(x) FROM q;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=c25:'foo', 2=fn1619(c25:'foo'))
+  outs 1=vl:stmt/imm 2=w4:val
+mapped: Result

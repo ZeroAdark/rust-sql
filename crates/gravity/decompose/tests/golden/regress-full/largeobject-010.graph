@@ -1,0 +1,9 @@
+-- regress-full-largeobject-010
+-- SELECT lo_from_bytea(0, lo_get(43709)) AS newloid_2
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3457(c26:0, fn3458(c26:43709)))
+  outs 1=w4:val
+mapped: Result

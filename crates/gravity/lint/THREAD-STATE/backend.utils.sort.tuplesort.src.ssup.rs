@@ -1,0 +1,3 @@
+backend/utils/sort/tuplesort/src/ssup.rs	COLL_BUFFERS	pgport	call	scratch	the collation comparator's two conversion buffers, overwritten at each comparison (retained capacity only)
+backend/utils/sort/tuplesort/src/ssup.rs	SHIM_FLINFO	pgport	key:sort setup slot	cache	the shim comparators' FmgrInfo carriers, each under the slot and function oid its sort's setup installed (install_shim_flinfo resolves afresh at every setup); at most SHIM_CARRIERS (16), an evicted one is re-resolved
+backend/utils/sort/tuplesort/src/ssup.rs	SHIM_NEXT_SLOT	pgport	exit	thread	the slot counter install_shim_flinfo stamps each carrier with; no data

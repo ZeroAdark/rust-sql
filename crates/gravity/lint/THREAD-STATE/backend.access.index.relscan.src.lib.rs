@@ -1,0 +1,1 @@
+backend/access/index/relscan/src/lib.rs	REGISTERED_INDEX_AMS	pgport	key:the pg_am OID	cache	key: the pg_am OID; a non-builtin index AM's kind, filled on a miss through the pg_am.amhandler resolver; an AM's handler never changes for its OID (no ALTER ACCESS METHOD .. HANDLER), so an entry never goes stale

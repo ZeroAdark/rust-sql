@@ -1,0 +1,43 @@
+-- cte-048
+-- SELECT b, sum((SELECT count(*) FROM u WHERE u.y = t.b)) FILTER (WHERE a > 2) FROM t WHERE a < 6 GROUP BY b;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=4 eligible rows=40 end=breaker(slot=0 PlainAgg)
+  nodes n4@0 n3@2^
+  source range rel=16405 rti=3 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v3.2, $exec0)
+  project (1=v3.1, 2=v3.2, 3=v3.3)
+  outs 1=w4:val 2=w8:val 3=vl:row
+p1 node=2 serial site=0 reason=IndexSource end=breaker(slot=1 HashAgg)
+  desc consumes=slot0@p0 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n1@1 n0@2^
+  source index rel=16395 rti=1 am=heap index=16402
+    key att=1 op=97 value=c23:6
+    recheck (op97(v1.1, c23:6))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=v1.2, 2=v1.1)
+  project (1=outer.1, 2=outer.2)
+  subplan 1 nested Expr params=($exec0=outer.1) site=aggarg conditional raise-free
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n3@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val 2=w8:val
+  outs 1=w8:val 2=w8:val
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=agg2107(1=subplan1(outer.1)) filter op521(outer.2, c23:2))
+  outs 1=w4:val 2=vl:call2107
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+breaker slot=1 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[SumI128@8,Count@24]+valid 40B order=1+
+group slot=0 producer=p0 node=3 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+group slot=1 producer=p1 node=0 form=Sorted hints=[] layout=[I32]->[SumI128@8,Count@24]+valid 40B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  agg aggno=0 fn=2107 reg=SumInt128 slot=0 count_slot=- final=Int128Sum class=SumI128 trans=Abi(SumI128) mods=[filter] expr=agg2107(1=subplan1(outer.1)) filter op521(outer.2, c23:2) filter=op521(outer.2, c23:2)
+rerun node=0 subplan=1 pipelines=p0 slots=0
+param $exec0 owner=subplan1 type=23 rep=w8:val
+mapped: SeqScan IndexScan Agg SubPlan

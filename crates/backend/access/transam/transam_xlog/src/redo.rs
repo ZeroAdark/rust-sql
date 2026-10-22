@@ -120,7 +120,7 @@ pub fn xlog_redo(record: &mut XLogReaderState) -> PgResult<()> {
                 multixact_seams::multixact_set_next_mxact::call(
                     check_point.nextMulti,
                     check_point.nextMultiOffset,
-                );
+                )?;
             }
             if multixact_seams::multixact_advance_oldest::is_installed() {
                 multixact_seams::multixact_advance_oldest::call(

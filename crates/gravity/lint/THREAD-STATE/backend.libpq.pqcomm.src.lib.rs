@@ -1,0 +1,5 @@
+backend/libpq/pqcomm/src/lib.rs	PQ	pgport	exit	thread	C pqcomm.c's PqRecvBuffer / pointers and comm flags: this thread's client wire state (pq_init_buffers); a claim never touches the client connection
+backend/libpq/pqcomm/src/lib.rs	SEND	pgport	at:register_send_teardown	thread	C PqSendBuffer: this thread's send buffer, made at its first send and freed by the session teardown register_send_teardown registers; a claim never touches the client connection
+backend/libpq/pqcomm/src/lib.rs	SEND_ACTIVE	pgport	scope:SendActiveGuard	thread	debug build only: SEND's reentry check, set by send_active_guard and put back by SendActiveGuard's Drop
+backend/libpq/pqcomm/src/lib.rs	REGISTERED	pgport	at:register_send_teardown	thread	once per session: SEND's session teardown is registered; the teardown puts it back (D4245), so a thread that serves another session (a retained bgworker) registers it again
+backend/libpq/pqcomm/src/lib.rs	PQ_COMM_METHODS	pgport	exit	thread	C PqCommMethods: this thread's wire methods, socket by default, a parallel worker's shm_mq through set_pq_comm_methods (pq_redirect_to_shm_mq)

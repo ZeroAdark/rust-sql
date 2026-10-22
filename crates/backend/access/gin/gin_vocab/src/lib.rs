@@ -669,21 +669,29 @@ pub struct TrgmPackedGraph {
 }
 
 impl TrgmPackedGraph {
+    pub fn try_new(
+        color_trigram_groups: Vec<i32>,
+        states: Vec<(u32, u32)>,
+        arcs: Vec<TrgmPackedArc>,
+    ) -> PgResult<Self> {
+        let ncolors = color_trigram_groups.len();
+        let nstates = states.len();
+        Ok(TrgmPackedGraph {
+            color_trigram_groups,
+            states,
+            arcs,
+            color_trigrams_active: ::mcx::std_vec_from_elem("gin", false, ncolors)?,
+            states_active: ::mcx::std_vec_from_elem("gin", false, nstates)?,
+            states_queue: ::mcx::std_vec_from_elem("gin", 0, nstates)?,
+        })
+    }
+
     pub fn new(
         color_trigram_groups: Vec<i32>,
         states: Vec<(u32, u32)>,
         arcs: Vec<TrgmPackedArc>,
     ) -> Self {
-        let ncolors = color_trigram_groups.len();
-        let nstates = states.len();
-        TrgmPackedGraph {
-            color_trigram_groups,
-            states,
-            arcs,
-            color_trigrams_active: vec![false; ncolors],
-            states_active: vec![false; nstates],
-            states_queue: vec![0; nstates],
-        }
+        Self::try_new(color_trigram_groups, states, arcs).expect("TrgmPackedGraph::new")
     }
 
     /// trigramsMatchGraph: `check` is indexed by simple-trigram number in
@@ -743,9 +751,15 @@ pub struct GinColState {
     /// pg_type.typstorage of the key type (ginutil.c:125-128 TupleDescInitEntry):
     /// the multicolumn entry tupdesc's attstorage, never the index column's.
     pub key_storage: i8,
+    /// Per slot 1..=6: the proc oid when its pg_proc row has prosecdef/proconfig (fmgr_security_definer), else InvalidOid.
+    pub secdef: [Oid; 6],
 }
 
 impl GinColState {
+    pub fn secdef_proc(&self, procnum: u16) -> Oid {
+        self.secdef[procnum as usize - 1]
+    }
+
     /// The core array_ops shape (ginarrayproc.c: procs 2/3/4/6, no proc 1 —
     /// `compare` is the element type's default btree comparator) over a
     /// storage attribute of the given byval/len.
@@ -762,6 +776,7 @@ impl GinColState {
             key_byval,
             key_len,
             key_storage: if key_len == -1 { b'x' as i8 } else { b'p' as i8 },
+            secdef: [::types_core::InvalidOid; 6],
         }
     }
 
@@ -779,6 +794,7 @@ impl GinColState {
             key_byval: false,
             key_len: -1,
             key_storage: b'x' as i8,
+            secdef: [::types_core::InvalidOid; 6],
         }
     }
 
@@ -797,6 +813,7 @@ impl GinColState {
             key_byval: false,
             key_len: -1,
             key_storage: b'x' as i8,
+            secdef: [::types_core::InvalidOid; 6],
         }
     }
 
@@ -815,6 +832,7 @@ impl GinColState {
             key_byval: false,
             key_len: -1,
             key_storage: b'x' as i8,
+            secdef: [::types_core::InvalidOid; 6],
         }
     }
 
@@ -838,6 +856,7 @@ impl GinColState {
             key_byval,
             key_len,
             key_storage: if key_len == -1 { b'x' as i8 } else { b'p' as i8 },
+            secdef: [::types_core::InvalidOid; 6],
         }
     }
 }
@@ -975,7 +994,7 @@ pub struct GinScanWork {
 
 impl GinScanWork {
     pub fn new() -> Self {
-        let key_ctx = mcx::PinnedContext::new(mcx::MemoryContext::new_bump("Gin scan key context"));
+        let key_ctx = mcx::PinnedContext::new(mcx::MemoryContext::new_wholesale("Gin scan key context"));
         // SAFETY: state is private and destroyed before key_ctx; with() bounds
         // every exposed allocator lifetime to a generative invocation.
         let kcx = unsafe { key_ctx.handle() };
@@ -984,7 +1003,7 @@ impl GinScanWork {
                 keys: PgVec::new_in(kcx),
                 entries: PgVec::new_in(kcx),
                 kcx,
-                temp_ctx: Box::new(mcx::MemoryContext::new_bump("Gin scan temporary context")),
+                temp_ctx: Box::new(mcx::MemoryContext::new_wholesale("Gin scan temporary context")),
             }),
             key_ctx,
         }

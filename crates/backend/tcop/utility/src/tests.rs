@@ -588,7 +588,7 @@ fn log_level_explain_probe_raises_c_syntax_error() {
     assert_eq!(GetCommandLogLevel(exec).unwrap(), LOGSTMT_ALL);
 }
 
-// regression: foreigncmds.c:1558 parses each FDW-generated
+// fp-commands-foreigncmds#2: foreigncmds.c:1558 parses each FDW-generated
 // command through pg_parse_query, PARSER STATISTICS bracket included.
 static IMPORT_USAGE_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 

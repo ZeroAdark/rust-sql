@@ -1,1 +1,0 @@
-4$.a.timestamp(2) == $.b.timestamp()

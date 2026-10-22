@@ -1,4 +1,5 @@
 use super::*;
+use types_storage::storage::NUM_AUXILIARY_PROCS;
 use init_small::globals as g;
 use std::sync::atomic::AtomicU32 as StdAtomicU32;
 use std::sync::{Mutex, Once, OnceLock};
@@ -197,7 +198,7 @@ fn setup() {
 
         // StartupXLOG boot order over the fixture "checkpoint": nextMulti 2,
         // nextOffset 4, oldestMulti 1.
-        multixact_seams::multixact_set_next_mxact::call(2, 4);
+        multixact_seams::multixact_set_next_mxact::call(2, 4).unwrap();
         multixact_seams::set_multixact_id_limit::call(1, 1, true);
         multixact_seams::startup_multixact::call().unwrap();
         multixact_seams::trim_multixact::call().unwrap();
@@ -569,7 +570,7 @@ fn recovery_checkpoint_race_initializes_next_offsets_page() {
             IN_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
             PRE_INITIALIZED_OFFSETS_PAGE.set(-1);
             LAST_INITIALIZED_OFFSETS_PAGE.set(-1);
-            multixact_seams::multixact_set_next_mxact::call(self.next, self.off);
+            multixact_seams::multixact_set_next_mxact::call(self.next, self.off).unwrap();
             OffsetCtl().set_latest_page_number(self.latest);
         }
     }
@@ -593,7 +594,7 @@ fn recovery_checkpoint_race_initializes_next_offsets_page() {
     // Checkpoint said nextMulti = first multi of page 6; StartupMultiXact
     // seeds latest_page_number to 6 before any CREATE_ID for it is replayed.
     let boundary = 6 * MULTIXACT_OFFSETS_PER_PAGE;
-    multixact_seams::multixact_set_next_mxact::call(boundary, save_off);
+    multixact_seams::multixact_set_next_mxact::call(boundary, save_off).unwrap();
     multixact_seams::startup_multixact::call().unwrap();
     assert_eq!(octl.latest_page_number(), 6);
     assert!(!SimpleLruDoesPhysicalPageExist(octl, 6).unwrap());
@@ -1047,4 +1048,29 @@ fn truncation_replay_debug_message_uses_lowercase_hex_segments_like_c() {
     );
     let msgs = MSGS.lock().unwrap();
     assert!(msgs.iter().any(|m| *m == expected), "expected {expected:?}; got {msgs:?}");
+}
+
+#[test]
+fn binary_upgrade_offsets_extension_io_failure_is_reported() {
+    let _l = test_lock();
+    setup();
+    let st = MultiXactState();
+    let next = st.nextMXact.load(Relaxed);
+    let offset = st.nextOffset.load(Relaxed);
+    let upgrading = g::IsBinaryUpgrade();
+    std::fs::rename("pg_multixact/offsets", "pg_multixact/offsets.saved").unwrap();
+    std::fs::write("pg_multixact/offsets", b"").unwrap();
+    g::SetIsBinaryUpgrade(true);
+    let result = std::panic::catch_unwind(|| {
+        multixact_seams::multixact_set_next_mxact::call(next, offset)
+    });
+    g::SetIsBinaryUpgrade(upgrading);
+    std::fs::remove_file("pg_multixact/offsets").unwrap();
+    std::fs::rename("pg_multixact/offsets.saved", "pg_multixact/offsets").unwrap();
+    let err = result.expect("SLRU errors must not panic").unwrap_err();
+    assert_eq!(err.level(), ERROR);
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_WRONG_OBJECT_TYPE);
+    assert_eq!(err.message(), "could not access status of transaction 0");
+    assert!(err.detail().unwrap().starts_with("Could not open file \"pg_multixact/offsets/"));
+    assert!(err.detail().unwrap().ends_with("Not a directory."));
 }

@@ -1,0 +1,10 @@
+-- facts-007
+-- SELECT b FROM fd ORDER BY b NULLS FIRST;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=16395 rti=1 am=heap index=16405
+    lanes Attr(3):byval8:w8:val
+  project (1=index.1)
+  outs 1=w4:val
+mapped: IndexOnlyScan

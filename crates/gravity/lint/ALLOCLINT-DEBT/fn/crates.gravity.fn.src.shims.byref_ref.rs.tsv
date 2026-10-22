@@ -1,0 +1,11 @@
+path	crates/gravity/fn/src/shims/byref_ref.rs
+growth	std::vec::Vec::extend_from_slice	9
+growth	std::vec::Vec::push	10
+macro	std::format	4
+method	slice::sort_by	1
+method	std::boxed::Box::new	1
+method	std::string::String::from_utf8_lossy	2
+method	std::string::ToString::to_string	1
+type	std::boxed::Box	2
+type	std::string::String	3
+type	std::vec::Vec	21

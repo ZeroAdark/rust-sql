@@ -1,0 +1,9 @@
+-- regress-full-timestamptz-006
+-- TABLE timestamp_local_view;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn6334(c1184:-677982120000000), 2=fn6334(c1184:-677982120000000), 3=fn6335(c1114:-677996520000000), 4=fn6335(c1114:-677996520000000))
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val
+mapped: Result

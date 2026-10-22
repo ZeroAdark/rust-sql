@@ -216,7 +216,7 @@ fn t_iseq(s: &[u8], x: u8) -> bool {
 #[inline]
 fn str_tolower(mcx: Mcx<'_>, src: &[u8]) -> PgResult<Vec<u8>> {
     let folded = ::ts_locale::lowerstr(mcx, src)?;
-    Ok(folded.as_slice().to_vec())
+    Ok(::mcx::std_vec_from_slice("tsearch", &folded.as_slice())?)
 }
 
 #[inline]

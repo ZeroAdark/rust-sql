@@ -205,7 +205,7 @@ fn repair_graph_element(
         }
     }
 
-    let tmp = mcx::MemoryContext::new_bump("hnsw repair");
+    let tmp = mcx::MemoryContext::new_wholesale("hnsw repair");
     let tmcx = tmp.mcx();
     let mut pool = ElementPool::new(tmcx);
     let e_id = pool.from_block(element.0, element.1);
@@ -232,7 +232,7 @@ fn repair_graph_element(
     )?;
 
     let mut ntup: Vec<u8> = Vec::new();
-    set_neighbor_tuple(&mut ntup, &pool, e_id, vs.m);
+    set_neighbor_tuple(&mut ntup, &pool, e_id, vs.m)?;
 
     let (npage_blk, noffno) = {
         let e = pool.get(e_id);
@@ -668,7 +668,7 @@ pub fn hnswbulkdelete<'mcx>(
     istat: Option<IndexBulkDeleteResult>,
     dead_items: &[ItemPointerData],
 ) -> PgResult<IndexBulkDeleteResult> {
-    let op = mcx::MemoryContext::new_bump("hnsw vacuum");
+    let op = mcx::MemoryContext::new_wholesale("hnsw vacuum");
     let op_mcx = op.mcx();
     let support = init_support(info.index)?;
     let meta = read_meta(info.index)?;

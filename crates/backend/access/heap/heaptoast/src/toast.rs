@@ -78,6 +78,7 @@ pub fn heap_toast_insert_or_update<'mcx>(
                 tai_size: 0,
                 tai_colflags: 0,
                 tai_compression: 0,
+                tai_free_cap: 0,
             },
             num_attrs,
         );
@@ -211,6 +212,7 @@ pub fn toast_flatten_tuple<'mcx>(
 ) -> PgResult<HeapTuple<'mcx>> {
     let num_attrs = tuple_desc.natts as usize;
     let (mut toast_values, toast_isnull) = deform(mcx, tup, tuple_desc);
+    let mut owned = FreeList::new(mcx);
 
     for i in 0..num_attrs {
         if !toast_isnull[i] && tuple_desc.compact_attrs[i].attlen == -1 {
@@ -218,12 +220,13 @@ pub fn toast_flatten_tuple<'mcx>(
             let v = unsafe { va_slice(toast_values[i]) };
             if v[0] == 0x01 {
                 let flat = detoast::detoast_external_attr(mcx, v)?;
-                toast_values[i] = crate::helper::leak_datum(flat);
+                toast_values[i] = owned.own(flat)?;
             }
         }
     }
 
     let mut new_tuple = heap_form_tuple(mcx, tuple_desc, &toast_values, &toast_isnull)?;
+    drop(owned);
 
     new_tuple.as_tuple_mut().t_self = tup.t_self;
     new_tuple.as_tuple_mut().t_tableOid = tup.t_tableOid;
@@ -249,6 +252,7 @@ pub fn toast_flatten_tuple_to_datum<'mcx>(
 ) -> PgResult<Datum> {
     let num_attrs = tuple_desc.natts as usize;
     let (mut toast_values, toast_isnull) = deform(mcx, tup, tuple_desc);
+    let mut owned = FreeList::new(mcx);
 
     let mut has_nulls = false;
     for i in 0..num_attrs {
@@ -259,7 +263,7 @@ pub fn toast_flatten_tuple_to_datum<'mcx>(
             let v = unsafe { va_slice(toast_values[i]) };
             if crate::helper::is_external(v) || crate::helper::is_compressed(v) {
                 let flat = detoast::detoast_attr(mcx, v)?;
-                toast_values[i] = crate::helper::leak_datum(flat);
+                toast_values[i] = owned.own(flat)?;
             }
         }
     }
@@ -300,6 +304,7 @@ pub fn toast_flatten_tuple_to_datum<'mcx>(
         );
     }
 
+    drop(owned);
     let d = Datum::from_usize(result.image().as_ptr() as usize);
     core::mem::forget(result);
     Ok(d)
@@ -316,6 +321,7 @@ pub fn toast_build_flattened_tuple<'mcx>(
     let num_attrs = tuple_desc.natts as usize;
     let mut new_values = ::mcx::vec_with_capacity_in(mcx, num_attrs)?;
     new_values.extend_from_slice(&values[..num_attrs]);
+    let mut owned = FreeList::new(mcx);
 
     for i in 0..num_attrs {
         if !isnull[i] && tuple_desc.compact_attrs[i].attlen == -1 {
@@ -323,10 +329,38 @@ pub fn toast_build_flattened_tuple<'mcx>(
             let v = unsafe { va_slice(new_values[i]) };
             if v[0] == 0x01 {
                 let flat = detoast::detoast_external_attr(mcx, v)?;
-                new_values[i] = crate::helper::leak_datum(flat);
+                new_values[i] = owned.own(flat)?;
             }
         }
     }
 
     heap_form_tuple(mcx, tuple_desc, &new_values, isnull)
+}
+
+/// Detoasted copies a flatten call pfrees once the new tuple is formed.
+struct FreeList<'mcx> {
+    mcx: Mcx<'mcx>,
+    values: PgVec<'mcx, (Datum, usize)>,
+}
+
+impl<'mcx> FreeList<'mcx> {
+    fn new(mcx: Mcx<'mcx>) -> Self {
+        FreeList { mcx, values: PgVec::new_in(mcx) }
+    }
+
+    fn own(&mut self, v: PgVec<'mcx, u8>) -> PgResult<Datum> {
+        ::mcx::pgvec_reserve(&mut self.values, 1)?;
+        let (d, cap) = crate::helper::own_datum(v);
+        self.values.push((d, cap));
+        Ok(d)
+    }
+}
+
+impl Drop for FreeList<'_> {
+    fn drop(&mut self) {
+        for &(d, cap) in self.values.iter() {
+            // SAFETY: each entry came from own_datum in self.mcx, freed once.
+            unsafe { crate::helper::free_datum(self.mcx, d, cap) };
+        }
+    }
 }

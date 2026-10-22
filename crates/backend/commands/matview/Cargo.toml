@@ -9,6 +9,7 @@ name = "commands_matview"
 path = "src/lib.rs"
 
 [dependencies]
+clauses = { path = "../../optimizer/util/clauses" }
 mcx = { path = "../../../_support/mcx" }
 datum = { path = "../../../_support/types/datum" }
 types_core = { path = "../../../_support/types/types_core" }

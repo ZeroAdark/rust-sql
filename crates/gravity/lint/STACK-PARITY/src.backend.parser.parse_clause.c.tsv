@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/parser/parse_clause.c: 2 stack-depth check sites
+1059	transformFromClauseItem	crates/backend/parser/parse_clause/src/lib.rs	transformFromClauseItem	yes	
+2261	flatten_grouping_sets	crates/backend/parser/parse_clause/src/lib.rs	flatten_grouping_sets	yes	

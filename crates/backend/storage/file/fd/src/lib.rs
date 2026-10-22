@@ -12,6 +12,7 @@ pub mod desc;
 pub mod fileset;
 pub mod reinit;
 pub mod io;
+pub mod orphan;
 pub mod sync;
 pub mod temp;
 pub mod vfd;
@@ -34,44 +35,50 @@ pub use buffile::{
     BufFileOpenFileSetMaybe, PrepareTempTablespaces,
 };
 pub use fileset::{FileSet, FileSetKey};
-pub use copydir::{copy_file, copydir, directory_is_empty, pg_mkdir_p, rmtree};
+pub use copydir::{copy_file, copy_file_by_method, copydir, directory_is_empty, pg_mkdir_p, rmtree};
 pub use desc::{
-    closeAllVfds, with_allocated_dir, with_allocated_stdio, AllocateDir, AllocateFile,
-    ClosePipeStream, CloseTransientFile, FreeDir, FreeFile, OpenPipeStream, OpenTransientFile,
-    OpenTransientFilePerm, PipeStreamGets, PipeStreamRead, PipeStreamWrite, ReadDir,
-    ReadDirExtended, TransientFileRawFd,
+    closeAllVfds, with_allocated_dir, with_allocated_dir_path, with_allocated_stdio, AllocateDir,
+    AllocateDirPath, AllocateFile, AllocateFilePath, ClosePipeStream, CloseTransientFile, FreeDir, FreeFile,
+    OpenPipeStream, OpenTransientFile, OpenTransientFilePath, OpenTransientFilePerm,
+    OpenTransientFilePermPath, PipeStreamGets, PipeStreamRead, PipeStreamWrite, ReadDir,
+    ReadDirEntry, ReadDirExtended, ReadDirPath, StdioFlush, StdioSetBuf, StdioWrite, TransientFileRawFd,
 };
 pub use io::{
-    pg_file_size_raw, pg_pread, pg_pwrite, FileClose, FileFallocate, FileGetRawDesc, FileGetRawFlags,
-    FileGetRawMode, FilePathName, FilePrefetch, FileRead, FileReadV, FileSize,
+    pg_file_size_raw, pg_pread, pg_pwrite, FileClose, FileCloseGeneration, FileFallocate, FileGeneration, FileGetRawDesc,
+    FileGetRawFlags, FileGetRawMode, FilePathName, FilePrefetch, FileRead, FileReadV, FileSize,
     FileRawDescForAio, FileStartBufferRead, FileStartReadV, FileSync, FileTruncate, FileWrite,
     FileWriteV,
-    FileWriteback, FileZero, PathNameOpenFile, PathNameOpenFilePerm,
+    FileWriteback, FileZero, PathNameOpenFile, PathNameOpenFilePerm, zero_block,
 };
 pub use sync::{
     data_sync_elevel, durable_rename, durable_unlink, fsync_fname, fsync_fname_ext,
-    looks_like_temp_rel_name, pg_close, pg_fdatasync, pg_file_exists, pg_flush_data, pg_fstat,
-    pg_fsync, pg_fsync_no_writethrough, pg_fsync_writethrough, pg_lstat, pg_readlink, pg_rename,
+    get_dirent_type_path, looks_like_temp_rel_name, pg_close, pg_fdatasync, pg_file_exists, pg_flush_data, pg_fstat,
+    pg_fsync, pg_fsync_no_writethrough, pg_fsync_writethrough, pg_lstat, pg_lstat_path,
+    pg_readlink, pg_readlink_path, pg_rename,
     pg_stat, pg_truncate, pg_unlink, read_whole_file, write_whole_file, AtEOSubXact_Files,
     AtEOXact_Files, BeforeShmemExit_Files, RemovePgTempFiles, RemovePgTempFilesInDir,
-    SyncDataDirectory,
+    PgFileType, SyncDataDirectory,
 };
 // The VFS's plain stat carrier, for the pg_stat/pg_lstat callers.
 pub use ::vfs::FileInfo;
+// The byte path type (raw dirent / readlink / WAL-record bytes, C's char*).
+pub use ::vfs::{PgPath, VfsDType, VfsDirEnt};
 // The shared errno TLS cell (DST P1 errno contract): fenced callers read the
 // raw errno after fd-crate calls through these, not via std::io::Error.
 pub use ::vfs::{get_errno, set_errno};
 pub use temp::{
     GetNextTempTableSpace, GetTempTablespaces, OpenTemporaryFile, PathNameCreateTemporaryDir,
     PathNameCreateTemporaryFile, PathNameDeleteTemporaryDir, PathNameDeleteTemporaryFile,
-    PathNameOpenTemporaryFile, SetTempTablespaces, TempTablespacePath, TempTablespacesAreSet,
+    PathNameDeleteTemporaryFilesWith, PathNameOpenTemporaryFile, SetTempTablespaces, SetTempTablespacesShared,
+    TempTablespacePath,
+    TempTablespacesAreSet,
 };
 pub use vfd::resowner::FILE_RESOWNER_DESC;
 pub use vfd::{
     io_direct_flags, max_files_per_process, max_safe_fds, set_io_direct_flags, set_max_safe_fds,
     AcquireExternalFD, BasicOpenFile, BasicOpenFilePerm, InitFileAccess, InitTemporaryFileAccess,
-    MakePGDirectory, ReattachRetainedFileAccess, ReleaseExternalFD, ReserveExternalFD,
-    TempFileAccessReady,
+    MakePGDirectory, MakePGDirectoryPath, ReattachRetainedFileAccess, ReleaseExternalFD,
+    ReserveExternalFD, ShedIdleFiles, FileAccessReady, TempFileAccessReady, temp_account, charge_temp_to,
 };
 
 pub fn init_seams() {

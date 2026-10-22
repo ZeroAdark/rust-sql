@@ -27,7 +27,7 @@ pub fn plan_set_operations<'mcx>(run: &mut PlannerRun<'mcx>) -> PgResult<RelId> 
     debug_assert!(run.root.eq_classes.is_empty());
     run.root.ec_merging_done = true;
 
-    crate::relnode::setup_simple_rel_arrays(&mut run.root, parse.rtable.len());
+    crate::relnode::setup_simple_rel_arrays(&mut run.root, parse.rtable.len())?;
 
     let mut node = topop.larg.expect("setop larg");
     while let Some(op) = node.as_set_operation_stmt() {
@@ -43,6 +43,9 @@ pub fn plan_set_operations<'mcx>(run: &mut PlannerRun<'mcx>) -> PgResult<RelId> 
         run.processed_tlist = Some(mcx::leak_in(mcx::alloc_in(run.mcx, top_tlist)?));
         return Ok(setop_rel);
     }
+    // Gravity width costing: a set operation's level never reaches query_planner, so its state is set here, before
+    // its Append and its union's group paths are made (each arm's level sets its own)
+    crate::gravity_width_cost::level_setup(run)?;
     let (setop_rel, top_tlist, _trivial) = recurse_set_operations(
         run,
         top_node,
@@ -182,10 +185,6 @@ fn build_setop_child_paths<'mcx>(
 
     let idx = run.root.rel(rel).subroot_idx.expect("subquery rel has a subroot");
     run.swap_with_rel_subroot(idx);
-    // C: the child subroot's parent_root chain stays live here; selfuncs
-    // climbs it for the child's uplevel CTE references (reached via
-    // cost_incremental_sort -> estimate_num_groups on presorted keys).
-    run.swapped_parent_subroot = Some(idx);
     let mut candidates: PgVec<'mcx, ChildCandidate> = PgVec::new_in(run.mcx);
     let mut partial_candidate: Option<ChildCandidate> = None;
     // Swap back before propagating errors (num_groups block pattern below).
@@ -210,8 +209,7 @@ fn build_setop_child_paths<'mcx>(
             .rel(final_rel)
             .cheapest_total_path
             .expect("subquery final rel has a cheapest path");
-        let setop_pathkeys =
-            crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.setop_pathkeys);
+        let setop_pathkeys = run.root.setop_pathkeys;
         let limittuples = run.root.limit_tuples;
         let paths =
             crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.rel(final_rel).pathlist);
@@ -263,7 +261,6 @@ fn build_setop_child_paths<'mcx>(
         }
         Ok(consider_parallel)
     })();
-    run.swapped_parent_subroot = None;
     run.swap_with_rel_subroot(idx);
     let consider_parallel = subroot_result?;
 
@@ -314,9 +311,6 @@ fn build_setop_child_paths<'mcx>(
         run.root.path(cheapest).base().rows
     };
     run.swap_with_rel_subroot(idx);
-    // C: the child subroot's parent_root chain stays live here; selfuncs
-    // climbs it for the child's uplevel CTE references.
-    run.swapped_parent_subroot = Some(idx);
     let result = (|| -> PgResult<f64> {
         let sub_parse = run.parse();
         if !sub_parse.groupClause.is_nil()
@@ -338,7 +332,6 @@ fn build_setop_child_paths<'mcx>(
         }
         crate::selfuncs::estimate_num_groups(run, &exprs, input_rows)
     })();
-    run.swapped_parent_subroot = None;
     run.swap_with_rel_subroot(idx);
     Ok(Some(result?))
 }
@@ -374,15 +367,14 @@ fn generate_union_paths<'mcx>(
 
     let mut group_list = NodeList::nil();
     let mut try_sorted = false;
-    let mut union_pathkeys: PgVec<'mcx, PathKey> = PgVec::new_in(mcx);
+    let mut union_pathkeys: &'mcx [PathKey] = &[];
     if !op.all {
         group_list = generate_setop_grouplist(run, op, &tlist)?;
         if grouping_is_sortable_nodes(&op.groupClauses) {
             try_sorted = true;
             union_pathkeys =
-                crate::pathkeys::make_pathkeys_for_sortclauses(run, &group_list, &tlist)?;
-            run.root.query_pathkeys =
-                crate::relnode::pgvec_clone_shallow(mcx, &union_pathkeys);
+                ::mcx::freeze_fit(crate::pathkeys::make_pathkeys_for_sortclauses(run, &group_list, &tlist)?);
+            run.root.query_pathkeys = union_pathkeys;
         }
     }
 
@@ -627,7 +619,7 @@ fn generate_recursion_path<'mcx>(
         }
         let (lrows, rrows) =
             (run.root.path(lpath).base().rows, run.root.path(rpath).base().rows);
-        (intern_clause_list(run, &group_list), lrows + rrows * 10.0)
+        (intern_clause_list(run, &group_list), crate::fma_sites::recursion_groups(lrows, rrows))
     };
 
     let wt_param = run.root.wt_param_id;
@@ -692,12 +684,11 @@ fn generate_nonunion_paths<'mcx>(
         ));
     }
 
-    let mut nonunion_pathkeys: PgVec<'mcx, PathKey> = PgVec::new_in(mcx);
+    let mut nonunion_pathkeys: &'mcx [PathKey] = &[];
     if can_sort {
         nonunion_pathkeys =
-            crate::pathkeys::make_pathkeys_for_sortclauses(run, &group_list, &tlist)?;
-        run.root.query_pathkeys =
-            crate::relnode::pgvec_clone_shallow(mcx, &nonunion_pathkeys);
+            ::mcx::freeze_fit(crate::pathkeys::make_pathkeys_for_sortclauses(run, &group_list, &tlist)?);
+        run.root.query_pathkeys = nonunion_pathkeys;
     }
 
     let mut d_left_groups =

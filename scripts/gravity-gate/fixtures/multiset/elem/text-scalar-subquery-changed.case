@@ -1,0 +1,10 @@
+# D3732: a scalar subquery's collect pieces compare as a multiset, never as any value: another piece fails
+sql: SELECT b.id, (SELECT string_agg(u2.name, ';') FROM book u0 LEFT JOIN author u2 ON u0.id = u2.id WHERE u0.id = b.id) AS agg FROM book b;
+cols: id	agg
+tables: book author
+class: unordered
+verdict: mismatch
+[pg]
+1	ann;bob
+[got]
+1	bob;bob

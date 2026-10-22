@@ -18,6 +18,8 @@ mod syslog;
 pub use ::types_error::{ErrorLevel, PgError, PgResult, SoftErrorContext, SqlState};
 pub use builder::{elog, ereport, ErrorBuilder};
 pub use crit::CritSection;
+pub use errno::{PctM, PCT_M};
+
 pub use config::{
     assign_backtrace_functions, assign_log_destination, assign_syslog_facility,
     assign_syslog_ident, check_backtrace_functions, check_log_destination,
@@ -38,8 +40,8 @@ pub use config::{in_postmaster_context, postmaster_context, PostmasterContext};
 pub use sink::{
     backend_log_context, clear_retired_debug_query_string, debug_query_string_scope,
     set_backend_log_context, set_emit_log_hook,
-    set_frontend_redirect, with_debug_query_string, BackendLogContext, DebugQueryStringScope,
-    EmitLogHook, FrontendRedirect,
+    set_frontend_redirect, set_server_log_defer, with_debug_query_string, BackendLogContext,
+    DebugQueryStringScope, EmitLogHook, FrontendRedirect, ServerLogDefer,
 };
 pub use errposition::{arm_parser_errposition, ParserErrpositionScope};
 pub use stack::{
@@ -50,10 +52,12 @@ pub use stack::{
     errhint_plural, errmsg, errmsg_internal, errmsg_plural, error_stack_clean, errposition,
     errsave_finish, errsave_start, errstart, errstart_cold, geterrcode, geterrposition,
     getinternalerrposition, in_error_recursion_trouble, internalerrposition, internalerrquery,
-    panic_on_crit_section_escape, pg_re_throw, pop_emit_context_callback, push_context_frame,
+    abort_on_plain_panic, panic_on_crit_section_escape, pg_re_throw, pop_emit_context_callback, push_context_frame,
+    push_context_frame_borrowed,
+    apply_emit_context_callbacks_below, context_stack_mark,
     push_emit_context_callback, reset_statement_suppressed, set_errcontext_domain,
-    suppress_statement, CopyErrorData, EmitErrorReport, FlushErrorState, FreeErrorData,
-    GetErrorContextStack, ReThrowError, ThrowErrorData, ERRORDATA_STACK_SIZE,
+    suppress_statement, try_emit_error_report_for, CopyErrorData, EmitErrorReport, FlushErrorState,
+    FreeErrorData, GetErrorContextStack, ReThrowError, ThrowErrorData, ERRORDATA_STACK_SIZE,
 };
 pub use syslog::write_syslog;
 
@@ -64,6 +68,7 @@ pub fn init_seams() {
     elog_seams::ereport::set(stack::ThrowErrorData);
     elog_seams::sqlstate_for_file_access::set(errno::sqlstate_for_file_access);
     elog_seams::ereport_msg::set(stack::ereport_msg);
+    elog_seams::ereport_msg_detail_log::set(stack::ereport_msg_detail_log);
 
     vars::log_min_messages.install(GucVarAccessors {
         get: || config::log_min_messages().0,

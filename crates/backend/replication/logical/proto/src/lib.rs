@@ -151,11 +151,8 @@ fn to_client_encoding(out: &mut Vec<u8>, s: &[u8]) {
         && mbutils_seams::server_to_client_conversion_needed::call();
     if needed {
         let cx = mcx::MemoryContext::new("LogicalProtoClientEncoding");
-        let converted = match mbutils_seams::pg_server_to_client::call(cx.mcx(), s) {
-            Ok(Some(v)) => Some(v.to_vec()),
-            _ => None,
-        };
-        if let Some(v) = converted {
+        let converted = mbutils_seams::pg_server_to_client::call(cx.mcx(), s);
+        if let Ok(Some(v)) = converted {
             out.extend_from_slice(&v);
             return;
         }
@@ -221,11 +218,14 @@ fn report_invalid_utf8(bad: &[u8]) -> Box<PgError> {
     } else {
         1
     };
-    let shown = bad[..mblen.min(bad.len())]
-        .iter()
-        .map(|b| format!("0x{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(" ");
+    use core::fmt::Write as _;
+    let mut shown = String::new();
+    for (i, b) in bad[..mblen.min(bad.len())].iter().enumerate() {
+        if i > 0 {
+            shown.push(' ');
+        }
+        let _ = write!(shown, "0x{b:02x}");
+    }
     Box::new(
         PgError::error(format!("invalid byte sequence for encoding \"UTF8\": {shown}"))
             .with_sqlstate(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
@@ -253,6 +253,14 @@ impl<'a> Reader<'a> {
     // driven by wire-supplied counts so a lying count can't reserve gigabytes.
     fn remaining(&self) -> usize {
         self.buf.len().saturating_sub(self.pos)
+    }
+    // pq_getmsgint(msg, 1) (pqformat.c:417): a one-byte integer read through
+    // pq_copymsgbytes, whose short-data message differs from pq_getmsgbyte's.
+    pub fn get_int8(&mut self) -> PgResult<u8> {
+        self.need(1)?;
+        let b = self.buf[self.pos];
+        self.pos += 1;
+        Ok(b)
     }
     // pq_getmsgbyte (pqformat.c:399) has its own message.
     pub fn get_byte(&mut self) -> PgResult<u8> {
@@ -296,7 +304,7 @@ impl<'a> Reader<'a> {
     }
     pub fn get_bytes(&mut self, n: usize) -> PgResult<Vec<u8>> {
         self.need(n)?;
-        let v = self.buf[self.pos..self.pos + n].to_vec();
+        let v = ::mcx::std_vec_from_slice("replication", &self.buf[self.pos..self.pos + n])?;
         self.pos += n;
         Ok(v)
     }
@@ -549,14 +557,14 @@ pub fn logicalrep_write_truncate(
 
 pub fn logicalrep_read_truncate(r: &mut Reader<'_>) -> PgResult<(Vec<Oid>, bool, bool)> {
     let nrelids = r.get_int32()? as usize;
-    let flags = r.get_byte()?;
+    let flags = r.get_int8()?;
     let cascade = flags & TRUNCATE_CASCADE != 0;
     let restart_seqs = flags & TRUNCATE_RESTART_SEQS != 0;
     // Each relid is a 4-byte Oid; a hostile publisher can claim nrelids up to
     // ~1B in a tiny message, so cap the pre-allocation by the bytes actually
     // present. The per-element get_int32() still errors if nrelids overstates
     // the body (C appends via lappend_oid, bounded by the message length).
-    let mut relids = Vec::with_capacity(nrelids.min(r.remaining() / 4));
+    let mut relids = ::mcx::std_vec_with_capacity("replication", nrelids.min(r.remaining() / 4))?;
     for _ in 0..nrelids {
         relids.push(r.get_int32()?);
     }
@@ -687,7 +695,7 @@ fn oid_output_function_call(mcx: Mcx<'_>, typoutput: Oid, val: Datum) -> PgResul
     // SAFETY: output functions return a NUL-terminated cstring datum.
     let bytes =
         unsafe { core::ffi::CStr::from_ptr((d.as_usize() as *const u8).cast()) }.to_bytes();
-    Ok(bytes.to_vec())
+    Ok(::mcx::std_vec_from_slice("replication", &bytes)?)
 }
 
 // OidSendFunctionCall: returns the bytea payload (without header).
@@ -704,7 +712,7 @@ fn oid_send_function_call(mcx: Mcx<'_>, typsend: Oid, val: Datum) -> PgResult<Ve
             (varatt::VARHDRSZ, varatt::varsize_4b(p))
         };
         let raw = core::slice::from_raw_parts(p, total);
-        Ok(raw[off..].to_vec())
+        Ok(::mcx::std_vec_from_slice("replication", &raw[off..])?)
     }
 }
 
@@ -796,8 +804,8 @@ const MAX_ALLOC_SIZE: u64 = 0x3fff_ffff;
 fn logicalrep_read_tuple(r: &mut Reader<'_>) -> PgResult<LogicalRepTupleData> {
     let natts = r.get_int16()? as usize;
     let mut tuple = LogicalRepTupleData {
-        colvalues: Vec::with_capacity(natts),
-        colstatus: Vec::with_capacity(natts),
+        colvalues: ::mcx::std_vec_with_capacity("replication", natts)?,
+        colstatus: ::mcx::std_vec_with_capacity("replication", natts)?,
         ncols: natts,
     };
     for _ in 0..natts {
@@ -822,10 +830,18 @@ fn logicalrep_read_tuple(r: &mut Reader<'_>) -> PgResult<LogicalRepTupleData> {
                 tuple.colvalues.push(Some(r.get_bytes(len as usize)?));
             }
             other => {
-                elog(
-                    ERROR,
-                    format!("unrecognized data representation type '{}'", other as char),
-                )?;
+                let mut message = ::mcx::std_vec_with_capacity("replication", 40)?;
+                message.extend_from_slice(b"unrecognized data representation type '");
+                if other != 0 {
+                    message.extend_from_slice(&[other, b'\'']);
+                }
+                elog::ereport(ERROR)
+                    .errmsg_raw(message)
+                    .finish(types_error::ErrorLocation {
+                        filename: Some("proto.c".into()),
+                        lineno: 912,
+                        funcname: Some("logicalrep_read_tuple".into()),
+                    })?;
                 unreachable!();
             }
         }
@@ -890,9 +906,9 @@ fn logicalrep_read_attrs(
     r: &mut Reader<'_>,
 ) -> PgResult<(usize, Vec<String>, Vec<Oid>, Vec<bool>)> {
     let natts = r.get_int16()? as usize;
-    let mut attnames = Vec::with_capacity(natts);
-    let mut atttyps = Vec::with_capacity(natts);
-    let mut attkeys = vec![false; natts];
+    let mut attnames = ::mcx::std_vec_with_capacity("replication", natts)?;
+    let mut atttyps = ::mcx::std_vec_with_capacity("replication", natts)?;
+    let mut attkeys = ::mcx::std_vec_from_elem("replication", false, natts)?;
 
     for key in attkeys.iter_mut() {
         let flags = r.get_byte()?;

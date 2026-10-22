@@ -1,0 +1,11 @@
+-- regress-full-vacuum-006
+-- INSERT INTO vacparted_i SELECT i, 'test_'|| i from generate_series(1,10) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10)]
+  project (1=v3.1, 2=fn669(relabel1043(op654(c25:'test_', io25(v3.1))), c23:104, c16:0))
+  write INSERT rel=24041 rti=1 natts=2 indexes=() route=rti1:24041 natts=2
+  outs 1=w4:val 2=vl:call669
+mapped: ModifyTable FunctionScan

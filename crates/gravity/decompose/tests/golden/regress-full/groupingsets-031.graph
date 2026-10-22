@@ -1,0 +1,10 @@
+-- regress-full-groupingsets-031
+-- select a, b, sum(v.x) from (values (1),(2)) v(x), gstest_data(v.x) group by rollup (a,b);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:3)]
+  project (1=c23:1, 2=v1.1)
+  outs 1=w4:val 2=w4:val
+mapped: FunctionScan

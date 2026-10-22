@@ -11,7 +11,7 @@ use core::ptr::NonNull;
 
 use ::types_fmgr::{
     thin_arg, varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
-    PGFunction, ThinBuiltin, ThinFcinfo,
+    OutInto, PGFunction, ThinBuiltin, ThinFcinfo, OUT_CHARS_INT,
 };
 
 pub fn fc_int8recv(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -34,12 +34,9 @@ pub fn fc_int8in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     Ok(Datum::from_i64(crate::int8in(num, esc)?))
 }
 
-pub fn fc_int8out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let [a] = fcinfo.args_n::<1>();
-    let val = a.value.as_i64();
-    let mut buf = [0u8; 24];
-    let len = crate::int8out(val, &mut buf);
-    Ok(::types_fmgr::cstring_scratch(flinfo, "int8out", &buf[..len]))
+pub fn fc_int8out(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let val = fcinfo.args_n::<1>()[0].value.as_i64();
+    ::types_fmgr::out_cstring(fcinfo, 21, |buf| crate::int8out(val, buf))
 }
 
 macro_rules! fc1 {
@@ -283,9 +280,9 @@ pub fn fc_generate_series_int8_support(
 ) -> PgResult<Datum> {
     let [a] = fcinfo.args_n::<1>();
     let p = a.value.as_usize() as *mut ();
-    // The estimated argument trees live in this bump arena and die with it;
+    // The estimated argument trees live in this scratch context and die with it;
     // the request's node lifetime is unified with it below.
-    let cx = ::mcx::MemoryContext::new_bump("generate_series support estimate");
+    let cx = ::mcx::MemoryContext::new_wholesale("generate_series support estimate");
     // SAFETY: prosupport contract — the internal arg points at a live
     // tag-first support-request node exclusively owned by this call.
     let Some(req) = (unsafe { ::types_nodes::supportnodes::support_request_rows_mut(p) }) else {
@@ -540,3 +537,14 @@ pub static INT8_THIN: &[ThinBuiltin] = &[
     t(5045, 2, fc_int8gcd, th_int8gcd),
     t(5047, 2, fc_int8lcm, th_int8lcm),
 ];
+
+// int8out into the caller's buffer (printtup, COPY TO): the same renderer, no allocation.
+fn int8_bound(_: Datum) -> Option<usize> {
+    Some(20)
+}
+unsafe fn int8_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: the caller's 20 writable bytes (int8_bound).
+    Ok(crate::int8out(v.as_i64(), unsafe { core::slice::from_raw_parts_mut(dst, 20) }))
+}
+
+pub static INT8_OUT_INTO: &[OutInto] = &[OutInto { foid: 461, bound: int8_bound, render: int8_render, chars: Some(OUT_CHARS_INT) }];

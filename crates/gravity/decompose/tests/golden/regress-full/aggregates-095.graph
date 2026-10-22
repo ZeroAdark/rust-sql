@@ -1,0 +1,19 @@
+-- regress-full-aggregates-095
+-- select pg_typeof(cleast_agg(variadic array[4.5,f1])) from int4_tbl;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=5 end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@1^
+  source range rel=16400 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  outs 1=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=fn1619(agg20524(1=array(c1700:'\x80\x80\x04\x00\x88\x13', fn1740(outer.1)))))
+  outs 1=w4:val
+breaker slot=0 kind=PlainAgg budget=Fixed(72) spill=None producer=p0 layout=[]->[Count@0]+valid 16B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0]+valid 16B
+  agg aggno=0 fn=20524 reg=User slot=- count_slot=- final=User class=User trans=Var mods=[] expr=agg20524(1=array(c1700:'\x80\x80\x04\x00\x88\x13', fn1740(outer.1)))
+mapped: SeqScan Agg

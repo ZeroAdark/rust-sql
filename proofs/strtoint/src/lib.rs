@@ -2,7 +2,7 @@
 //!
 //! C side: c/pg_numutils_vendored.c — verbatim postgres-master parsing logic
 //! with ereturn shimmed to an err_kind out-param (see SHIM MANIFEST in that
-//! file). Rust side: the SHIPPED numutils crate from pgrust (path dep),
+//! file). Rust side: the SHIPPED numutils crate from pgrust-fast (path dep),
 //! including its SWAR fast path and deferred overflow guard.
 //!
 //! Equivalence claim, per symbolic input of bounded length:

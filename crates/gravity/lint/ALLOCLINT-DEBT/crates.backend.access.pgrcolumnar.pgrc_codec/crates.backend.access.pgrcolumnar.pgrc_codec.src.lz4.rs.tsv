@@ -1,0 +1,3 @@
+path	crates/backend/access/pgrcolumnar/pgrc_codec/src/lz4.rs
+growth	std::vec::Vec::extend_from_slice	2
+growth	std::vec::Vec::push	4

@@ -1,0 +1,9 @@
+-- regress-full-join-176
+-- explain (costs off) select 1 from parted_b t1 join (select t2.id from parted_b t2 left join parted_b t3 on t2.id = t3.id) s on t1.id = s.id group by ();
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=c23:1)
+  outs 1=w4:val
+mapped: Result

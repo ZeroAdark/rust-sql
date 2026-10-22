@@ -1,0 +1,88 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp_mn s1upd_mn s2cte_mn s1c s2sel_mn
+step s2exp_mn: EXPLAIN (COSTS OFF) WITH merge_source_cte AS MATERIALIZED (SELECT 13 a, 'src' b) MERGE INTO mn USING (SELECT * FROM merge_source_cte) o ON mn.k = o.a WHEN MATCHED THEN UPDATE SET v = (SELECT b || merge_source_cte.*::text || ' merge update' FROM merge_source_cte WHERE a = 13) WHEN NOT MATCHED THEN INSERT VALUES (o.a, o.b || (SELECT merge_source_cte.*::text || ' merge insert' FROM merge_source_cte));
+QUERY PLAN                                             
+-------------------------------------------------------
+Merge on mn                                            
+  CTE merge_source_cte                                 
+    ->  Result                                         
+  InitPlan 2                                           
+    ->  CTE Scan on merge_source_cte merge_source_cte_1
+          Filter: (a = 13)                             
+  InitPlan 3                                           
+    ->  CTE Scan on merge_source_cte merge_source_cte_2
+  ->  Nested Loop Left Join                            
+        ->  CTE Scan on merge_source_cte               
+        ->  Index Scan using mn_pkey on mn             
+              Index Cond: (k = merge_source_cte.a)     
+(12 rows)
+
+step s1upd_mn: UPDATE mn SET v = v || ' s1' WHERE k = 13;
+step s2cte_mn: WITH merge_source_cte AS MATERIALIZED (SELECT 13 a, 'src' b) MERGE INTO mn USING (SELECT * FROM merge_source_cte) o ON mn.k = o.a WHEN MATCHED THEN UPDATE SET v = (SELECT b || merge_source_cte.*::text || ' merge update' FROM merge_source_cte WHERE a = 13) WHEN NOT MATCHED THEN INSERT VALUES (o.a, o.b || (SELECT merge_source_cte.*::text || ' merge insert' FROM merge_source_cte)); <waiting ...>
+step s1c: COMMIT;
+step s2cte_mn: <... completed>
+step s2sel_mn: SELECT * FROM mn WHERE k IN (13, 1013, 1300) ORDER BY k;
+   k|v                       
+----+------------------------
+  13|src(13,src) merge update
+1013|1013 v                  
+1300|1300 v                  
+(3 rows)
+
+
+starting permutation: s1key_mn s2cte_mn s1c s2sel_mn
+step s1key_mn: UPDATE mn SET k = 1300 WHERE k = 13;
+ERROR:  duplicate key value violates unique constraint "mn_pkey"
+step s2cte_mn: WITH merge_source_cte AS MATERIALIZED (SELECT 13 a, 'src' b) MERGE INTO mn USING (SELECT * FROM merge_source_cte) o ON mn.k = o.a WHEN MATCHED THEN UPDATE SET v = (SELECT b || merge_source_cte.*::text || ' merge update' FROM merge_source_cte WHERE a = 13) WHEN NOT MATCHED THEN INSERT VALUES (o.a, o.b || (SELECT merge_source_cte.*::text || ' merge insert' FROM merge_source_cte));
+step s1c: COMMIT;
+step s2sel_mn: SELECT * FROM mn WHERE k IN (13, 1013, 1300) ORDER BY k;
+   k|v                       
+----+------------------------
+  13|src(13,src) merge update
+1013|1013 v                  
+1300|1300 v                  
+(3 rows)
+
+
+starting permutation: s1del_mn s2cte_mn s1c s2sel_mn
+step s1del_mn: DELETE FROM mn WHERE k = 13;
+step s2cte_mn: WITH merge_source_cte AS MATERIALIZED (SELECT 13 a, 'src' b) MERGE INTO mn USING (SELECT * FROM merge_source_cte) o ON mn.k = o.a WHEN MATCHED THEN UPDATE SET v = (SELECT b || merge_source_cte.*::text || ' merge update' FROM merge_source_cte WHERE a = 13) WHEN NOT MATCHED THEN INSERT VALUES (o.a, o.b || (SELECT merge_source_cte.*::text || ' merge insert' FROM merge_source_cte)); <waiting ...>
+step s1c: COMMIT;
+step s2cte_mn: <... completed>
+step s2sel_mn: SELECT * FROM mn WHERE k IN (13, 1013, 1300) ORDER BY k;
+   k|v                       
+----+------------------------
+  13|src(13,src) merge insert
+1013|1013 v                  
+1300|1300 v                  
+(3 rows)
+
+
+starting permutation: s1upd_mn s2src_mn s1c s2sel_mn
+step s1upd_mn: UPDATE mn SET v = v || ' s1' WHERE k = 13;
+step s2src_mn: WITH merge_source_cte AS MATERIALIZED (SELECT 13 a, 'src' b) MERGE INTO mn USING (SELECT * FROM merge_source_cte) o ON mn.k = o.a WHEN MATCHED THEN UPDATE SET v = mn.v || ' + ' || o.b || (SELECT merge_source_cte.*::text FROM merge_source_cte WHERE a = 13) WHEN NOT MATCHED THEN INSERT VALUES (o.a + 1000, o.b); <waiting ...>
+step s1c: COMMIT;
+step s2src_mn: <... completed>
+step s2sel_mn: SELECT * FROM mn WHERE k IN (13, 1013, 1300) ORDER BY k;
+   k|v                    
+----+---------------------
+  13|13 v s1 + src(13,src)
+1013|1013 v               
+1300|1300 v               
+(3 rows)
+
+
+starting permutation: s1upd_mn s2cte_mn s1a s2sel_mn
+step s1upd_mn: UPDATE mn SET v = v || ' s1' WHERE k = 13;
+step s2cte_mn: WITH merge_source_cte AS MATERIALIZED (SELECT 13 a, 'src' b) MERGE INTO mn USING (SELECT * FROM merge_source_cte) o ON mn.k = o.a WHEN MATCHED THEN UPDATE SET v = (SELECT b || merge_source_cte.*::text || ' merge update' FROM merge_source_cte WHERE a = 13) WHEN NOT MATCHED THEN INSERT VALUES (o.a, o.b || (SELECT merge_source_cte.*::text || ' merge insert' FROM merge_source_cte)); <waiting ...>
+step s1a: ROLLBACK;
+step s2cte_mn: <... completed>
+step s2sel_mn: SELECT * FROM mn WHERE k IN (13, 1013, 1300) ORDER BY k;
+   k|v                       
+----+------------------------
+  13|src(13,src) merge update
+1013|1013 v                  
+1300|1300 v                  
+(3 rows)
+

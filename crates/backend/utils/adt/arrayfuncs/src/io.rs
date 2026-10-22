@@ -53,7 +53,9 @@ fn malformed(orig: &[u8], detail: &str) -> PgError {
     let err = match core::str::from_utf8(orig) {
         Ok(s) => PgError::error(alloc::format!("malformed array literal: \"{s}\"")),
         Err(_) => {
-            let mut msg = b"malformed array literal: \"".to_vec();
+            let mut msg = Vec::new();
+            let _ = msg.try_reserve(32 + orig.len());
+            msg.extend_from_slice(b"malformed array literal: \"");
             msg.extend_from_slice(orig);
             msg.push(b'"');
             PgError::error_raw_message(msg)
@@ -508,7 +510,8 @@ fn read_array_str<'mcx>(
                 if !expect_delim {
                     // arrayfuncs.c:704 errdetail %c emits the single raw
                     // typdelim byte (DELIMITER is not restricted to ASCII).
-                    let mut detail = b"Unexpected \"".to_vec();
+                    let mut detail = Vec::new();
+                    detail.extend_from_slice(b"Unexpected \"");
                     detail.push(meta.typdelim as u8);
                     detail.extend_from_slice(b"\" character.");
                     return soft(escontext, malformed(orig, "").with_detail_raw(detail));
@@ -1005,17 +1008,21 @@ pub fn array_send<'mcx>(
         ::pqformat::pq_sendint32(&mut buf, dims[i] as u32)?;
         ::pqformat::pq_sendint32(&mut buf, lb[i] as u32)?;
     }
+    // C pfrees each element's outputbytes; the per-element scratch is reset
+    // instead (the caller's context may be bump).
+    let mut elem_scratch = ::mcx::MemoryContext::new_bump("array_send element");
     for i in 0..nitems as usize {
         if elem_nulls[i] {
             ::pqformat::pq_sendint32(&mut buf, (-1i32) as u32)?;
         } else {
-            let d = send_function_call(proc, elems[i], mcx)?;
+            let d = send_function_call(proc, elems[i], elem_scratch.mcx())?;
             let p = d.as_usize() as *const u8;
             let total = varsize_any(p);
             // SAFETY: send returns a live 4B-header bytea of `total` bytes.
             let payload = unsafe { core::slice::from_raw_parts(p.add(::datum::VARHDRSZ), total - ::datum::VARHDRSZ) };
             ::pqformat::pq_sendint32(&mut buf, (total - ::datum::VARHDRSZ) as u32)?;
             ::pqformat::pq_sendbytes(&mut buf, payload)?;
+            elem_scratch.reset();
         }
     }
     Ok(::pqformat::pq_endtypsend(buf))

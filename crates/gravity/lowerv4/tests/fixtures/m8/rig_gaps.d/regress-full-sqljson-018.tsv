@@ -1,0 +1,1 @@
+sqljson-018: the fixture plan keeps a JsonExpr (a JSON_ARRAY(query) over its InitPlan) the emitter refuses by Shape; the server serves the statement (sqljson#24 served, fallback off, W0 regress, box 72 t51, the switch tip 23dc2e7d846; the m6 rig_gaps.d sqljson-021 form; claimed once nest.initplan is built)

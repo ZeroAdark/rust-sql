@@ -78,7 +78,7 @@ fn parse_prepare_record<'a>(data: &'a [u8]) -> PgResult<(ParsedPrepare<'a>, Tran
     };
 
     check(nsubxacts, 4, off)?;
-    let mut subxacts = Vec::with_capacity(nsubxacts);
+    let mut subxacts = ::mcx::std_vec_with_capacity("access", nsubxacts)?;
     for i in 0..nsubxacts {
         subxacts.push(r.u32(off + 4 * i, what)?);
     }

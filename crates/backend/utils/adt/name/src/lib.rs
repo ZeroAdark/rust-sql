@@ -12,7 +12,7 @@ use types_core::{Oid, C_COLLATION_OID, NAMEDATALEN};
 use types_error::{ErrorLocation, PgResult, ERRCODE_NAME_TOO_LONG, ERROR};
 use types_tuple::NameData;
 
-pub(crate) const NAMELEN: usize = NAMEDATALEN as usize;
+pub const NAMELEN: usize = NAMEDATALEN as usize;
 
 pub fn namein(s: &[u8]) -> NameData {
     let mut len = s.len();

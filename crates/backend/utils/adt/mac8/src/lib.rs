@@ -103,7 +103,8 @@ fn hex2_to_uchar(bytes: &[u8], pos: usize, badhex: &mut bool) -> u8 {
 // mac8.c:229: the input bytes verbatim in the message (a SQL_ASCII database
 // can hand over non-UTF-8 bytes).
 fn invalid_syntax_err(input: &[u8]) -> PgError {
-    let mut msg = b"invalid input syntax for type macaddr8: \"".to_vec();
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"invalid input syntax for type macaddr8: \"");
     msg.extend_from_slice(input);
     msg.push(b'"');
     PgError::error_raw_message(msg).with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)

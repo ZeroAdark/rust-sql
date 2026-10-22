@@ -1,0 +1,12 @@
+-- regress-full-gist-005
+-- select circle(p,1) from gist_tbl where p <@ box(point(5, 5), point(5.3, 5.3));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=27091 rti=1 am=heap index=27097 iam=gist
+    key att=2 op=511 form=amop value=c603:#32
+    recheck (op511(index.2, c603:#32))
+    lanes Attr(2):byref8:fx16:win/page
+  project (1=fn1473(index.2, c701:4607182418800017408))
+  outs 1=fx24:call1473
+mapped: IndexOnlyScan

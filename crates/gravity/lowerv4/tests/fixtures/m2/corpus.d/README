@@ -1,0 +1,11 @@
+M2 seed corpus: one file per fixture, `<fixture>.tsv` holding its row(s) `fixture<TAB>source<TAB>expect` (one per source)
+(tests/m2.rs m2_seed_verdicts reads every *.tsv here; column 1 must be the file's name). A lane adds its rows as new files
+and flips a row by editing that fixture's file: two lanes never edit one line (Michael 09-24: lists several lanes append
+to are directories; scripts/gravity-gate/m2-decompose.py; the lint in crates/gravity/lint/tests/append_dirs.rs).
+
+M2 seed corpus (M2-RIG, 2026-09-24; tests/m2.rs m2_seed_verdicts). fixture = decompose plan fixture id (plans/<id>.plan,
+regress-full-<stem> = plans/regress-full/<stem>.plan); source = M2-DRYRUN bar cell or regress family (census/serve.tsv);
+expect = the crate's verdict today: NotBuilt <name> until a lane builds <name>, then served (flip it in the building commit).
+A row whose names are all built but whose function the test creates (the rig catalog has no row) pins the refusal text (tests/m2.rs RIG_GAPS).
+The regress rows: up to 3 per (family, named M2 need), 2 for src.heap, 1 per family already served at M1 (census over-placement).
+C81's census plan is a Bitmap Heap Scan; at runtime it takes an Index Only Scan (M2-DRYRUN §2): both are M2.

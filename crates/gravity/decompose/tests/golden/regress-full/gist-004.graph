@@ -1,0 +1,26 @@
+-- regress-full-gist-004
+-- explain (costs off) select p from (values (box(point(0,0), point(0.5,0.5))), (box(point(0.5,0.5), point(0.75,0.75))), (box(point(0.8,0.8), point(1.0,1.0)))) as v(bb) cross join lateral (select p from gist_tbl where p <@ bb order by p <-> bb[0] limit 2) ss;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source values rti=4 rows=3
+    row (c603:#32)
+    row (c603:#32)
+    row (c603:#32)
+  project (1=v4.1)
+  nest inner=n3 JOIN_INNER params=($exec0=outer.1)
+  inner node=4 serial site=0 reason=IndexSource end=sink
+  nodes n4@0 n3@1
+  source index-only rel=27091 rti=5 am=heap index=27094 iam=gist
+    key att=2 op=511 form=amop value=$exec0
+    key att=2 op=517 form=orderby value=T_SubscriptingRef
+    recheck (op511(index.1, $exec0))
+    lanes Attr(2):byref8:fx16:win/page
+  project (1=index.1, 2j=op517(index.1, T_SubscriptingRef))
+  limit count=2 offset=all
+  project (1=outer.1, 2j=outer.2)
+  project (1=inner.1)
+  outs 1=fx32:row
+  outs 1=fx16:life/breaker
+param $exec0 owner=n0 type=603 rep=fx32:row
+mapped: IndexOnlyScan ValuesScan NestLoop NestLoopParam Limit

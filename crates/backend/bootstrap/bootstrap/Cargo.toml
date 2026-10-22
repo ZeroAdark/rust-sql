@@ -1,0 +1,66 @@
+[package]
+name = "bootstrap"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "bootstrap"
+path = "src/lib.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+
+[dependencies]
+libc = "0.2"
+mcx = { path = "../../../_support/mcx" }
+datum = { path = "../../../_support/types/datum" }
+types_core = { path = "../../../_support/types/types_core" }
+types_error = { path = "../../../_support/types/types_error" }
+types_guc = { path = "../../../_support/types/types_guc" }
+types_tuple = { path = "../../../_support/types/types_tuple" }
+types_rel = { path = "../../../_support/types/rel" }
+rel_vocab = { path = "../../../_support/types/rel_vocab" }
+types_nodes = { path = "../../../_support/types/nodes" }
+types_storage = { path = "../../../_support/types/types_storage" }
+types_fmgr = { path = "../../../_support/types/fmgr" }
+elog = { path = "../../utils/error/elog" }
+guc = { path = "../../utils/misc/guc" }
+guc_seams = { path = "../../utils/misc/guc_seams" }
+guc_tables = { path = "../../utils/misc/guc_tables" }
+init_small = { path = "../../utils/init/init_small" }
+miscinit = { path = "../../utils/init/miscinit" }
+miscinit_seams = { path = "../../utils/init/miscinit_seams" }
+postinit = { path = "../../utils/init/postinit" }
+stack_depth = { path = "../../utils/misc/stack_depth" }
+pmchild_seams = { path = "../../postmaster/pmchild_seams" }
+postmaster_seams = { path = "../../postmaster/postmaster_seams" }
+timestamp_seams = { path = "../../utils/adt/timestamp_seams" }
+ipci_seams = { path = "../../storage/ipc/ipci_seams" }
+ipc = { path = "../../storage/ipc/ipc" }
+fd = { path = "../../storage/file/fd" }
+lmgr_proc = { path = "../../storage/lmgr/lmgr_proc" }
+libpq_pqsignal = { path = "../../libpq/libpq_pqsignal" }
+transam_xlog = { path = "../../access/transam/transam_xlog" }
+transam_xlog_seams = { path = "../../access/transam/transam_xlog_seams" }
+clog = { path = "../../access/transam/clog" }
+subtrans = { path = "../../access/transam/subtrans" }
+multixact = { path = "../../access/transam/multixact" }
+commit_ts = { path = "../../access/transam/commit_ts" }
+xact = { path = "../../access/transam/xact" }
+relmapper = { path = "../../utils/cache/relmapper" }
+catalog_heap = { path = "../../catalog/catalog_heap" }
+catalog_index = { path = "../../catalog/catalog_index" }
+catalog_toasting = { path = "../../catalog/catalog_toasting" }
+catalog_namespace = { path = "../../catalog/catalog_namespace" }
+indexcmds = { path = "../../commands/indexcmds" }
+table = { path = "../../access/table/table" }
+heaptuple = { path = "../../access/common/heaptuple" }
+tupdesc = { path = "../../access/common/tupdesc" }
+heapam = { path = "../../access/heap/heapam" }
+genam = { path = "../../access/index/genam" }
+indexam = { path = "../../access/index/indexam" }
+execindexing = { path = "../../executor/execindexing" }
+fmgr_seams = { path = "../../utils/fmgr/fmgr_seams" }
+bootstrap_seams = { path = "../bootstrap_seams" }
+pgsync = { path = "../../../_support/pgsync" }

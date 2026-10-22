@@ -1,0 +1,37 @@
+-- regress-full-rowsecurity-075
+-- MERGE INTO document d USING (SELECT 1 as sdid) s ON did = s.sdid WHEN MATCHED THEN UPDATE SET dnotes = dnotes || ' notes added by merge1 ', dlevel = 0;
+graph pipelines=3 breakers=0 init_plans=2 root=p2
+p0 node=2 eligible rows=3 end=sink
+  nodes n2@0
+  source range rel=28327 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op98(v5.2, c25:'novel')
+  filter case(when op93(T_SQLValueFunction, c19:#64) then any96(v5.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x0b\x00\x00\x00!\x00\x00\x00'), when op93(T_SQLValueFunction, c19:#64) then any96(v5.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x16\x00\x00\x00,\x00\x00\x00')) else c16:0
+  project (1=v5.1)
+  outs 1=w8:val
+p1 node=3 eligible rows=3 end=sink
+  nodes n3@0
+  source range rel=28327 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op98(v6.2, c25:'manga')
+  filter case(when op93(T_SQLValueFunction, c19:#64) then any96(v6.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x0b\x00\x00\x00!\x00\x00\x00'), when op93(T_SQLValueFunction, c19:#64) then any96(v6.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x16\x00\x00\x00,\x00\x00\x00')) else c16:0
+  project (1=v6.1)
+  outs 1=w8:val
+p2 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=28335 rti=1 am=heap index=28342
+    key att=1 op=96 value=c23:1
+    recheck (op96(v1.1, c23:1))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byref8:fx64:win/page Attr(5):byref8:vl:win/page Attr(6):byref8:vl:win/page RowId:byval8:w8:val
+  project (1j=v1.-1, 2j=v1.1, 3j=v1.2, 4j=v1.3, 5j=v1.4, 6j=v1.5, 7j=v1.6)
+  write MERGE rel=28335 rti=1 natts=6 indexes=(28342[1]up) epq=$exec2
+    check rls merge update rel=document (op96(v1.2, $exec0))
+    check rls update rel=document (op521(v1.3, c23:0))
+    check rls merge delete rel=document (op96(v1.2, $exec1))
+    check rls insert rel=document (op93(v1.4, T_SQLValueFunction))
+    merge rowid=outer.1 target_cols=(1@2,2@3,3@4,4@5,5@6,6@7)
+    when matched then update set=(3,6) (1=c23:0, 2=op654(v1.6, c25:' notes added by merge1 '))
+  outs 1=fx6:row 2=w8:val 3=w8:val 4=w8:val 5=fx64:win/page 6=vl:win/page 7=vl:win/page
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 vol=s
+init_plan id=2 pipeline=p1 link=Expr param=$exec1 vol=s
+mapped: ModifyTable SeqScan IndexScan SubPlan

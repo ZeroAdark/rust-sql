@@ -1,0 +1,6 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/dict.rs
+growth	pgrc_format::dict::BitWriter::flush	2
+growth	pgrc_format::dict::BitWriter::put	1
+growth	pgrc_format::try_resize	3
+growth	pgrc_format::wire::put_u32	9
+growth	std::vec::Vec::extend_from_slice	1

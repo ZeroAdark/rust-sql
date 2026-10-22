@@ -498,6 +498,207 @@ mod init_sexpr_witness {
     }
 }
 
+thread_local! {
+    static SRF_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+fn counted_mat_srf(
+    flinfo: Option<&mut FmgrInfo>,
+    fcinfo: &mut FunctionCallInfoBaseData,
+) -> PgResult<Datum> {
+    SRF_CALLS.with(|c| c.set(c.get() + 1));
+    mat_srf(flinfo, fcinfo)
+}
+
+fn srf_calls() -> usize {
+    SRF_CALLS.with(|c| c.get())
+}
+
+type Row = Vec<Option<i32>>;
+
+fn scan_of<'mcx>(
+    mcx: Mcx<'mcx>,
+    estate: &mut EStateData<'mcx>,
+    nfuncs: usize,
+    funcparams: &'mcx ::types_nodes::bitmapset::Bitmapset<'mcx>,
+) -> FunctionScanState<'mcx> {
+    let simple = nfuncs == 1;
+    let ps_ExprContext = estate.exec_assign_expr_context();
+    let mut funcstates = PgVec::new_in(mcx);
+    for _ in 0..nfuncs {
+        let tupdesc = Rc::new(int4_desc(mcx, 2));
+        let func_slot = (!simple).then(|| {
+            estate.exec_init_extra_tuple_slot(Some(Rc::clone(&tupdesc)), TupleSlotKind::MinimalTuple)
+        });
+        let mut setexpr = setexpr_for(mcx, true);
+        setexpr.flinfo = Some(FmgrInfo::new(counted_mat_srf, 4242, 0, false, true));
+        funcstates.push(FunctionScanPerFuncState {
+            setexpr,
+            tupdesc,
+            colcount: 2,
+            tstore: None,
+            rowcount: -1,
+            func_slot,
+            funcparams,
+        });
+    }
+    let ss_ScanTupleSlot = estate.exec_init_extra_tuple_slot(
+        Some(Rc::new(int4_desc(mcx, 2 * nfuncs as i32))),
+        if simple { TupleSlotKind::MinimalTuple } else { TupleSlotKind::Virtual },
+    );
+    FunctionScanState {
+        ss: ScanState {
+            qual: None,
+            ps_ProjInfo: None,
+            ps_ExprContext,
+            scanrelid: 1,
+            ss_currentRelation: None,
+            ss_currentScanDesc: None,
+            ss_ScanTupleSlot,
+            instr_idx: None,
+        },
+        simple,
+        ordinality: false,
+        ordinal: 0,
+        funcstates,
+        scratch: PgVec::new_in(mcx),
+        arg_mcx: make_arg_ctx(mcx).unwrap(),
+        eflags: 0,
+    }
+}
+
+fn params_of<'mcx>(mcx: Mcx<'mcx>, x: i32) -> &'mcx ::types_nodes::bitmapset::Bitmapset<'mcx> {
+    Box::leak(Box::new(::types_nodes::bitmapset::Bitmapset::make_singleton(mcx, x).unwrap()))
+}
+
+fn slot_row(slot: &mut ::types_slot::SlotData<'_>) -> Row {
+    exectuples::slot_getallattrs(slot);
+    let b = slot.base();
+    (0..b.tts_values.len())
+        .map(|i| (!b.tts_isnull[i]).then(|| b.tts_values[i].as_i32()))
+        .collect()
+}
+
+fn store_rows<'mcx>(store: &mut Tuplestore, desc: &Rc<TupleDescData<'mcx>>, mcx: Mcx<'mcx>) -> Vec<Row> {
+    let mut slot =
+        exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(Rc::clone(desc)));
+    let mut rows = Vec::new();
+    while store.gettupleslot(true, false, &mut slot, mcx).unwrap() {
+        rows.push(slot_row(&mut slot));
+    }
+    rows
+}
+
+fn scan_rows<'mcx>(node: &mut FunctionScanState<'mcx>, estate: &mut EStateData<'mcx>) -> Vec<Row> {
+    let mut rows = Vec::new();
+    while node.scan_next(estate).unwrap() {
+        rows.push(slot_row(estate.slot_mut(node.ss.ss_ScanTupleSlot)));
+    }
+    rows
+}
+
+fn mat_rows() -> Vec<Row> {
+    vec![vec![Some(10), Some(20)], vec![Some(30), None]]
+}
+
+#[test]
+fn materialize_entry_calls_once_and_lends_the_rewound_store() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut estate = EStateData::new_in(mcx);
+    let mut node = scan_of(mcx, &mut estate, 1, params_of(mcx, 1));
+    assert!(node.is_simple());
+    assert_eq!(node.nfuncs(), 1);
+    assert_eq!(node.func_colcount(0), 2);
+    assert!(node.func_store_mut(0).is_none());
+
+    let before = srf_calls();
+    let desc = Rc::clone(node.func_tupdesc(0));
+    let store = exec_function_scan_materialize(&mut node, &mut estate, 0).unwrap();
+    assert_eq!(store_rows(store, &desc, mcx), mat_rows());
+    assert_eq!(srf_calls(), before + 1);
+
+    let store = exec_function_scan_materialize(&mut node, &mut estate, 0).unwrap();
+    assert_eq!(store.tuple_count(), 2);
+    assert!(node.func_store_mut(0).is_some());
+    assert_eq!(srf_calls(), before + 1);
+
+    exec_end_function_scan(&mut node);
+    assert_eq!(node.nfuncs(), 0);
+}
+
+#[test]
+fn scan_after_the_entry_reads_the_same_store_as_a_plain_scan() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut estate = EStateData::new_in(mcx);
+
+    let mut plain = scan_of(mcx, &mut estate, 1, params_of(mcx, 1));
+    let before = srf_calls();
+    let plain_rows = scan_rows(&mut plain, &mut estate);
+    assert_eq!(srf_calls(), before + 1);
+    assert_eq!(plain_rows, mat_rows());
+
+    let mut node = scan_of(mcx, &mut estate, 1, params_of(mcx, 1));
+    exec_function_scan_materialize(&mut node, &mut estate, 0).unwrap();
+    assert_eq!(scan_rows(&mut node, &mut estate), plain_rows);
+    assert_eq!(srf_calls(), before + 2);
+    exec_end_function_scan(&mut plain);
+    exec_end_function_scan(&mut node);
+}
+
+#[test]
+fn rescan_rewinds_the_lent_store_and_a_changed_param_recalls() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut estate = EStateData::new_in(mcx);
+    let mut node = scan_of(mcx, &mut estate, 1, params_of(mcx, 1));
+    let desc = Rc::clone(node.func_tupdesc(0));
+    let before = srf_calls();
+    let store = exec_function_scan_materialize(&mut node, &mut estate, 0).unwrap();
+    assert_eq!(store_rows(store, &desc, mcx), mat_rows());
+
+    exec_rescan_function_scan(&mut node, &mut estate).unwrap();
+    let store = node.func_store_mut(0).expect("a plain rescan keeps the store");
+    assert_eq!(store_rows(store, &desc, mcx), mat_rows());
+
+    exec_rescan_function_scan_chg(&mut node, &mut estate, params_of(mcx, 2)).unwrap();
+    let store = node.func_store_mut(0).expect("an unrelated param keeps the store");
+    assert_eq!(store_rows(store, &desc, mcx), mat_rows());
+    assert_eq!(srf_calls(), before + 1);
+
+    exec_rescan_function_scan_chg(&mut node, &mut estate, params_of(mcx, 1)).unwrap();
+    assert!(node.func_store_mut(0).is_none());
+    let store = exec_function_scan_materialize(&mut node, &mut estate, 0).unwrap();
+    assert_eq!(store_rows(store, &desc, mcx), mat_rows());
+    assert_eq!(srf_calls(), before + 2);
+    exec_end_function_scan(&mut node);
+}
+
+#[test]
+fn rows_from_member_materializes_alone_and_the_scan_uses_it() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut estate = EStateData::new_in(mcx);
+    let mut node = scan_of(mcx, &mut estate, 2, params_of(mcx, 1));
+    assert!(!node.is_simple());
+    assert_eq!(node.nfuncs(), 2);
+
+    let before = srf_calls();
+    exec_function_scan_materialize(&mut node, &mut estate, 1).unwrap();
+    assert_eq!(srf_calls(), before + 1);
+    assert!(node.func_store_mut(0).is_none());
+    assert!(node.func_store_mut(1).is_some());
+
+    let rows = scan_rows(&mut node, &mut estate);
+    assert_eq!(
+        rows,
+        vec![vec![Some(10), Some(20), Some(10), Some(20)], vec![Some(30), None, Some(30), None]]
+    );
+    assert_eq!(srf_calls(), before + 2);
+    exec_end_function_scan(&mut node);
+}
+
 // execSRF.c:340: a NULL from a tuple-returning SRF expands to an all-nulls
 // row in per-tuple memory (reset per call), never in the query context.
 #[test]

@@ -18,7 +18,7 @@ pub struct ShredBudgets {
     /// `jsonb_residual_buckets`.
     pub nbuckets: u8,
     /// `jsonb_min_presence` divisor: floor = max(1, nrows / div) — the
-    /// anti-CH-Object guard (a 10k-unique-path stream elects nothing).
+    /// sparse-path guard (a 10k-unique-path stream elects nothing).
     pub min_presence_div: u32,
 }
 
@@ -91,6 +91,22 @@ pub fn elect_manifest(
     hints: &[PathHint],
     budgets: &ShredBudgets,
 ) -> ShredManifest {
+    elect_manifest_auto(rows, hints, &[], budgets)
+}
+
+/// [`elect_manifest`] plus `auto` (sortpath: a pgrcolumnar `sorted_by`
+/// path key with no typed declaration): each auto path is admitted right
+/// after the hints, exempt from the presence floor like a hint, at the lane
+/// its observed scalars elect (`majority_lane`, the auto-election's rule;
+/// Text when no scalar was seen), never at a lane fixed in advance: a
+/// numeric key forced to Text would forfeit its lane in every part (one
+/// number is an exception) and the reads would fall to the image.
+pub fn elect_manifest_auto(
+    rows: &[&[u8]],
+    hints: &[PathHint],
+    auto: &[JsonPath],
+    budgets: &ShredBudgets,
+) -> ShredManifest {
     let mut stats: BTreeMap<JsonPath, PathStats> = BTreeMap::new();
     for payload in rows {
         walk_row(payload, budgets.max_depth, &mut |_| false, &mut |segs, v| {
@@ -135,6 +151,14 @@ pub fn elect_manifest(
         }
         let presence = stats.get(&hint.path).map_or(0, |s| s.presence);
         admit(&hint.path, hint.lane, true, presence, &mut admitted);
+    }
+    for path in auto {
+        if path.is_root() || path.depth() > budgets.max_depth as usize {
+            continue;
+        }
+        let s = stats.get(path);
+        let lane = s.and_then(PathStats::majority_lane).unwrap_or(Lane::Text);
+        admit(path, lane, true, s.map_or(0, |s| s.presence), &mut admitted);
     }
 
     let floor = 1.max(rows.len() as u64 / budgets.min_presence_div.max(1) as u64);

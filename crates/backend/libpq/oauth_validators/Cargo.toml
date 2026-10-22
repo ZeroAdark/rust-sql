@@ -18,11 +18,14 @@ test-validator = ["guc_tables/oauth-test-validator"]
 
 [dependencies]
 auth_oauth = { path = "../auth_oauth" }
+dfmgr = { path = "../../utils/fmgr/dfmgr" }
 elog = { path = "../../utils/error/elog" }
 guc_tables = { path = "../../utils/misc/guc_tables" }
+guc = { path = "../../utils/misc/guc" }
 pg_clock = { path = "../../../port/pg_clock" }
 pgsync = { path = "../../../_support/pgsync" }
 types_error = { path = "../../../_support/types/types_error" }
+types_guc = { path = "../../../_support/types/types_guc" }
 
 # Same vendored build be_secure_openssl and auth (ldapber) link; openssl-src
 # does not compile for wasm32, where jwt_validator is not registered.

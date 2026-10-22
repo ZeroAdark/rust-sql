@@ -135,16 +135,10 @@ impl Default for Relids<'_> {
     }
 }
 
-// Same equality as the boxed repr: unset equals only unset (an allocated
-// all-zero set is NOT unset); otherwise verbatim word-slice comparison.
 #[cfg(not(feature = "boxed_relids"))]
 impl PartialEq for Relids<'_> {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Relids::Empty, Relids::Empty) => true,
-            (Relids::Empty, _) | (_, Relids::Empty) => false,
-            _ => self.word_slice() == other.word_slice(),
-        }
+        relids::relids_equal(self, other)
     }
 }
 #[cfg(not(feature = "boxed_relids"))]
@@ -508,7 +502,10 @@ pub struct RowIdentityVarInfo<'mcx> {
 
 /// C builds each IndexOptInfo once (get_relation_info) and every consumer
 /// shares the pointer; `tree_height`/`predOK`/`indrestrictinfo` are the only
-/// fields C mutates through it afterwards (an internal issue).
+/// fields C mutates through it afterwards (an internal issue). Its per-column
+/// arrays are context slices (D4561 step 2, tranche 1): built once with
+/// `mcx::pgvec_exact_in` and frozen with `mcx::freeze`, so a copy is a pointer
+/// copy and nothing drops them (C's palloc'd arrays).
 #[derive(Debug)]
 pub struct IndexOptInfo<'mcx> {
     pub indexoid: Oid,
@@ -519,18 +516,18 @@ pub struct IndexOptInfo<'mcx> {
     pub tree_height: Cell<i32>,
     pub ncolumns: i32,
     pub nkeycolumns: i32,
-    pub indexkeys: PgVec<'mcx, i32>,
-    pub indexcollations: PgVec<'mcx, Oid>,
-    pub opfamily: PgVec<'mcx, Oid>,
-    pub opcintype: PgVec<'mcx, Oid>,
-    pub sortopfamily: PgVec<'mcx, Oid>,
-    pub reverse_sort: PgVec<'mcx, bool>,
-    pub nulls_first: PgVec<'mcx, bool>,
-    pub canreturn: PgVec<'mcx, bool>,
+    pub indexkeys: &'mcx [i32],
+    pub indexcollations: &'mcx [Oid],
+    pub opfamily: &'mcx [Oid],
+    pub opcintype: &'mcx [Oid],
+    pub sortopfamily: &'mcx [Oid],
+    pub reverse_sort: &'mcx [bool],
+    pub nulls_first: &'mcx [bool],
+    pub canreturn: &'mcx [bool],
     pub relam: Oid,
-    pub indexprs: PgVec<'mcx, NodeId>,
-    pub indpred: PgVec<'mcx, NodeId>,
-    pub indextlist: PgVec<'mcx, NodeId>,
+    pub indexprs: &'mcx [NodeId],
+    pub indpred: &'mcx [NodeId],
+    pub indextlist: &'mcx [NodeId],
     pub indrestrictinfo: RefCell<PgVec<'mcx, RinfoId>>,
     pub predOK: Cell<bool>,
     pub unique: bool,
@@ -545,10 +542,6 @@ pub struct IndexOptInfo<'mcx> {
     pub amhasgetbitmap: bool,
     pub amcanparallel: bool,
     pub amcanmarkpos: bool,
-    /// GIN metapage stats captured at plancat time (C's gincostestimate
-    /// reopens the index; rule 6 passes them down instead). None for
-    /// non-GIN indexes.
-    pub gin_stats: Option<GinIndexStats>,
 }
 
 /// GinStatsData mirror for the planner (avoids a pathnodes->gin dep).
@@ -573,18 +566,18 @@ impl<'mcx> IndexOptInfo<'mcx> {
             tree_height: Cell::new(-1),
             ncolumns: 0,
             nkeycolumns: 0,
-            indexkeys: PgVec::new_in(mcx),
-            indexcollations: PgVec::new_in(mcx),
-            opfamily: PgVec::new_in(mcx),
-            opcintype: PgVec::new_in(mcx),
-            sortopfamily: PgVec::new_in(mcx),
-            reverse_sort: PgVec::new_in(mcx),
-            nulls_first: PgVec::new_in(mcx),
-            canreturn: PgVec::new_in(mcx),
+            indexkeys: &[],
+            indexcollations: &[],
+            opfamily: &[],
+            opcintype: &[],
+            sortopfamily: &[],
+            reverse_sort: &[],
+            nulls_first: &[],
+            canreturn: &[],
             relam: 0,
-            indexprs: PgVec::new_in(mcx),
-            indpred: PgVec::new_in(mcx),
-            indextlist: PgVec::new_in(mcx),
+            indexprs: &[],
+            indpred: &[],
+            indextlist: &[],
             indrestrictinfo: RefCell::new(PgVec::new_in(mcx)),
             predOK: Cell::new(false),
             unique: false,
@@ -599,7 +592,6 @@ impl<'mcx> IndexOptInfo<'mcx> {
             amhasgetbitmap: false,
             amcanparallel: false,
             amcanmarkpos: false,
-            gin_stats: None,
         }
     }
 }
@@ -867,6 +859,7 @@ pub struct ProjectSetPath<'mcx> {
 pub struct SortPath<'mcx> {
     pub path: Path<'mcx>,
     pub subpath: Option<PathId>,
+    pub gravity_rewrite: Option<types_nodes::plannodes::GravityRewrite>,
 }
 
 #[derive(Clone, Debug)]
@@ -900,6 +893,10 @@ pub struct AggPath<'mcx> {
     pub transitionSpace: u64,
     pub groupClause: PgVec<'mcx, NodeId>,
     pub qual: PgVec<'mcx, NodeId>,
+    /// pgrust (gravity §3 #2): every DISTINCT aggregate under this node keeps
+    /// a hashed identity set per group instead of presorted input.
+    pub distinctHashed: bool,
+    pub gravity_rewrite: Option<types_nodes::plannodes::GravityRewrite>,
 }
 
 #[derive(Clone, Debug)]
@@ -1159,7 +1156,7 @@ pub struct RestrictInfo<'mcx> {
     pub eval_cost: QualCost,
     pub norm_selec: f64,
     pub outer_selec: f64,
-    pub mergeopfamilies: PgVec<'mcx, Oid>,
+    pub mergeopfamilies: &'mcx [Oid],
     pub left_ec: Option<EcId>,
     pub right_ec: Option<EcId>,
     pub left_em: Option<EmId>,
@@ -1179,7 +1176,7 @@ pub struct RestrictInfo<'mcx> {
 
 #[derive(Clone, Debug)]
 pub struct EquivalenceClass<'mcx> {
-    pub ec_opfamilies: PgVec<'mcx, Oid>,
+    pub ec_opfamilies: &'mcx [Oid],
     pub ec_collation: Oid,
     pub ec_childmembers_size: i32,
     pub ec_members: PgVec<'mcx, EmId>,
@@ -1200,7 +1197,7 @@ pub struct EquivalenceClass<'mcx> {
 impl<'mcx> EquivalenceClass<'mcx> {
     pub fn new(mcx: Mcx<'mcx>) -> Self {
         EquivalenceClass {
-            ec_opfamilies: PgVec::new_in(mcx),
+            ec_opfamilies: &[],
             ec_collation: 0,
             ec_childmembers_size: 0,
             ec_members: PgVec::new_in(mcx),
@@ -1396,23 +1393,48 @@ impl<'mcx> Subroot<'mcx> {
 }
 
 // RelOptInfo.amflags bits (C: uint32 amflags in RelOptInfo; bit 0 matches
-// C's AMFLAG_HAS_TID_RANGE, bits 1-2 are pgrust-only).
+// C's AMFLAG_HAS_TID_RANGE, the others are pgrust-only; bits 1-2 are retired).
 pub const AMFLAG_HAS_TID_RANGE: u32 = 1 << 0;
-pub const AMFLAG_PGRCOLUMNAR: u32 = 1 << 1;
-/// pgrust-only (q2box lane): every committed row group of the pgrcolumnar
-/// part carries exact v7 zero/empty counts (RG_FLAG_ZEROCNT on all RGs) —
-/// the executor's footer META answer can serve zero-count-qual COUNT
-/// shapes (`col <> 0` / `col = 0`) without a scan. Plan-time consumers
-/// (m5_suppress CbPlainAggFold keying) must treat a CLEAR bit as NOT
-/// answerable (v<=6 parts, preserved-RG mixtures, footer-less rels).
-pub const AMFLAG_PGRCOLUMNAR_ZEROCNT: u32 = 1 << 2;
-/// pgrust-only (M4-S4; the origin/lanev3 pgrc2-costing sibling bit,
-/// dc3c67c56214): the rel's AM is pgrcolumnar2 — the lanev4 engine.
+/// pgrust-only (M4-S4; the origin/lanev3 pgrc-costing sibling bit,
+/// dc3c67c56214): the rel's AM is pgrcolumnar — the lanev4 engine.
 /// Plan-time consumers key on it for the v4 posture: NO planner partial
 /// paths (and therefore no Gather) are generated over these rels —
 /// parallelism is the sqe statement-grain pool's over the claim plane
 /// (v2-76 / PC-2.2 "no PG Gather hosting"; the ES-4.4 DOP election).
-pub const AMFLAG_PGRCOLUMNAR2: u32 = 1 << 3;
+pub const AMFLAG_PGRCOLUMNAR: u32 = 1 << 3;
+
+pub const PGRC_CODEC_UNKNOWN: u8 = 0;
+pub const PGRC_CODEC_WORD: u8 = 1;
+pub const PGRC_CODEC_DICT: u8 = 2;
+pub const PGRC_CODEC_TEXT: u8 = 3;
+pub const PGRC_CODEC_FIXED: u8 = 4;
+
+/// One zone column as the planner holds it (the columnar scan cost model's
+/// statement-floor summary): the scan cost census answers from the
+/// summary — `keyed` granules with a bound of `granules`, the extrema, and
+/// the shared key grid with the exact count of granule minima / maxima `<`
+/// and `≤` each key and of granules whose both bounds equal it
+/// (`pgrc_format::zonemap::ZoneSummary`'s contract; the
+/// reader is `costsize::pgrc_cost::ZoneSummary`). `ranges` — the exact
+/// per-granule `[min_key, max_key]` in granule order, an all-null granule
+/// `(i64::MAX, i64::MIN)` — is set only for the zone-walk columns and under
+/// the census trace; empty otherwise. The slices borrow the footer cache's
+/// column, pinned until the planning context resets (plancat).
+#[derive(Debug, Clone)]
+pub struct PgrcZoneCol<'mcx> {
+    pub attno: i16,
+    pub granules: u32,
+    pub keyed: u32,
+    pub lo: i64,
+    pub hi: i64,
+    pub keys: &'mcx [i64],
+    pub min_lt: &'mcx [u32],
+    pub min_le: &'mcx [u32],
+    pub max_lt: &'mcx [u32],
+    pub max_le: &'mcx [u32],
+    pub eq_whole: &'mcx [u32],
+    pub ranges: &'mcx [(i64, i64)],
+}
 
 #[derive(Clone, Debug)]
 pub struct RelOptInfo<'mcx> {
@@ -1458,24 +1480,34 @@ pub struct RelOptInfo<'mcx> {
     pub top_parent_relids: Relids<'mcx>,
     pub rel_parallel_workers: i32,
     pub amflags: u32,
-    // pgrcolumnar v5 footer sorted-asc columns (1-based attnos, ascending order)
+    // pgrcolumnar `sorted_by` columns (1-based attnos, ascending order)
     // usable as scan pathkeys; empty for every other relation.
     pub pgrcolumnar_sorted_attnos: PgVec<'mcx, i16>,
-    // pgrcolumnar per-column on-disk chunk bytes (1-based attno = index + 1)
+    // pgrcolumnar per-column on-disk data bytes (1-based attno = index + 1)
     // for column-fraction seqscan disk costing; empty for every other
     // relation (and when the part has no committed footer).
     pub pgrcolumnar_col_bytes: PgVec<'mcx, u64>,
-    // pgrcolumnar ingest-time per-column NDV from the part footer (whole-stream
-    // HLL; 1-based attno = index + 1, 0 = unknown) for group-key ndistinct
+    // pgrcolumnar per-column NDV from the parts' HLL sections (whole-table;
+    // 1-based attno = index + 1, 0 = unknown) for group-key ndistinct
     // estimation on never-ANALYZEd tables; empty for every other relation
     // (and when the part has no committed footer).
     pub pgrcolumnar_col_ndv: PgVec<'mcx, u64>,
-    // pgrcolumnar v7 per-column part-global stitch dict sizes (1-based attno
-    // = index + 1, 0 = no stitch) for the SE-TOPNNI text sort-key plan-time
-    // answerability probe; populated only while PGRUST_LANE_V2_TOPN_NONINT
-    // is armed (default ON since the regression flip; empty for every
-    // other relation, footer-less parts, and under the kill spelling).
-    pub pgrcolumnar_stitch_gndv: PgVec<'mcx, u64>,
+    pub pgrcolumnar_col_qual_class: PgVec<'mcx, u8>,
+    pub pgrcolumnar_col_max_len: PgVec<'mcx, i32>,
+    /// NEW-stats-2: pgrcolumnar per-column NULL fractions (attnum-1 indexed; the facts' row total less the parts'
+    /// Stats non-null sum, over that total; `None` = unknown), the NULLS FIRST census's cost input in place of the
+    /// sampled `stanullfrac`; empty when the relation has no facts. Never a proof of no NULL (it may lag the snapshot).
+    pub pgrcolumnar_col_null_frac: PgVec<'mcx, Option<f64>>,
+    pub pgrcolumnar_col_codec: PgVec<'mcx, u8>,
+    pub pgrcolumnar_col_ncodes: PgVec<'mcx, u64>,
+    pub pgrcolumnar_granules: u64,
+    /// D4469 road 2: the committed part count of a pgrcolumnar sorted_by relation (0 = unknown), the merged sorted
+    /// path's estimate of its streams; a cost input only.
+    pub pgrcolumnar_parts: u64,
+    pub pgrcolumnar_zones: PgVec<'mcx, PgrcZoneCol<'mcx>>,
+    // IXPLAN-1 (2): the rows of the unsealed front segments, estimated as PG
+    // estimates a heap of their size (plancat); 0 for every other relation.
+    pub pgrcolumnar_front_rows: f64,
     pub fdwroutine: Option<types_nodes::FdwKind>,
     pub attr_needed: PgVec<'mcx, Relids<'mcx>>,
     pub notnullattnums: Relids<'mcx>,
@@ -1505,6 +1537,10 @@ pub struct RelOptInfo<'mcx> {
     pub all_partrels: Relids<'mcx>,
     pub partexprs: PgVec<'mcx, PgVec<'mcx, NodeId>>,
     pub nullable_partexprs: PgVec<'mcx, PgVec<'mcx, NodeId>>,
+    /// pgrust: a grouping / distinct rel whose group estimate took some key's ndistinct from DEFAULT_NUM_DISTINCT
+    /// (C's estinfo SELFLAG_USED_DEFAULT, planner grouping.rs `get_number_of_groups`); createplan copies it onto the Agg
+    /// (`Agg::gravity_groups_default`). Read by nothing in the planner.
+    pub gravity_groups_default: bool,
 }
 
 impl<'mcx> RelOptInfo<'mcx> {
@@ -1555,7 +1591,15 @@ impl<'mcx> RelOptInfo<'mcx> {
             pgrcolumnar_sorted_attnos: PgVec::new_in(mcx),
             pgrcolumnar_col_bytes: PgVec::new_in(mcx),
             pgrcolumnar_col_ndv: PgVec::new_in(mcx),
-            pgrcolumnar_stitch_gndv: PgVec::new_in(mcx),
+            pgrcolumnar_col_qual_class: PgVec::new_in(mcx),
+            pgrcolumnar_col_max_len: PgVec::new_in(mcx),
+            pgrcolumnar_col_null_frac: PgVec::new_in(mcx),
+            pgrcolumnar_col_codec: PgVec::new_in(mcx),
+            pgrcolumnar_col_ncodes: PgVec::new_in(mcx),
+            pgrcolumnar_granules: 0,
+            pgrcolumnar_parts: 0,
+            pgrcolumnar_zones: PgVec::new_in(mcx),
+            pgrcolumnar_front_rows: 0.0,
             fdwroutine: None,
             attr_needed: PgVec::new_in(mcx),
             notnullattnums: relids::relids_empty(),
@@ -1579,6 +1623,7 @@ impl<'mcx> RelOptInfo<'mcx> {
             all_partrels: relids::relids_empty(),
             partexprs: PgVec::new_in(mcx),
             nullable_partexprs: PgVec::new_in(mcx),
+            gravity_groups_default: false,
         }
     }
 }
@@ -1645,13 +1690,34 @@ pub enum ArenaNode<'mcx> {
     /// the crate doc): C shares `Expr *` by pointer; `Node` is that pointer.
     Expr(::types_nodes::node_tree::Node<'mcx>),
     TargetEntry(TargetEntryNode<'mcx>),
-    ForeignKey(ForeignKeyOptInfo<'mcx>),
-    StatisticExt(StatisticExtInfo<'mcx>),
+    // The list-heavy payloads are boxed so an entry stays the size of a target entry: the arena is mostly expressions,
+    // and a ForeignKeyOptInfo inline made every entry ~4x larger (growth copies, cache lines per lookup).
+    ForeignKey(PgBox<'mcx, ForeignKeyOptInfo<'mcx>>),
+    StatisticExt(PgBox<'mcx, StatisticExtInfo<'mcx>>),
     AggInfo(AggInfo<'mcx>),
-    AggTransInfo(AggTransInfo<'mcx>),
+    AggTransInfo(PgBox<'mcx, AggTransInfo<'mcx>>),
     PlannerParamItem(PlannerParamItem),
     MinMaxAggInfo(MinMaxAggInfo),
-    WindowClause(WindowClauseNode<'mcx>),
+    WindowClause(PgBox<'mcx, WindowClauseNode<'mcx>>),
+}
+
+/// An arena payload made from its value: the value itself, or the value boxed in the planner context.
+trait ArenaPayload<'mcx, T> {
+    fn payload(v: T, mcx: Mcx<'mcx>) -> Self;
+}
+
+impl<'mcx, T> ArenaPayload<'mcx, T> for T {
+    #[inline]
+    fn payload(v: T, _: Mcx<'mcx>) -> T {
+        v
+    }
+}
+
+impl<'mcx, T> ArenaPayload<'mcx, T> for PgBox<'mcx, T> {
+    #[inline]
+    fn payload(v: T, mcx: Mcx<'mcx>) -> PgBox<'mcx, T> {
+        PgBox::new_in(v, mcx)
+    }
 }
 
 #[derive(Debug)]
@@ -1792,7 +1858,8 @@ macro_rules! arena_node_accessors {
             #[inline]
             pub fn $alloc(&mut self, v: $ty) -> NodeId {
                 let id = self.reserve_node_id();
-                self.node_arena.push(ArenaNode::$variant(v));
+                let mcx = self.mcx;
+                self.node_arena.push(ArenaNode::$variant(ArenaPayload::payload(v, mcx)));
                 id
             }
         )+}
@@ -1817,6 +1884,191 @@ pub struct CteScanParam {
     pub plan_id: i32,
     pub cte_param: i32,
 }
+
+#[derive(Debug)]
+pub struct GravityWidthCost<'mcx> {
+    /// Gravity's width for this level's plan when the paths are compared by their predicted pipelines; 0 (or 1): PostgreSQL's
+    /// costs decide (the GUC off, no workers, a nested level, a write or a lock, a temporary relation).
+    pub width: u16,
+    pub free_aggs: bool,
+    /// A plain SELECT with no row marks or data-modifying CTE: an index or bitmap scan may take the morsel form.
+    pub morsel: bool,
+    pub end_hint: u8,
+    /// Each path's predicted pipelines, by `PathId`, computed once (`GwMemo::stamp` guards a path whose costs moved since).
+    pub memo: core::cell::RefCell<PgVec<'mcx, GwMemo>>,
+}
+
+impl<'mcx> GravityWidthCost<'mcx> {
+    pub fn new(mcx: Mcx<'mcx>) -> Self {
+        GravityWidthCost { width: 0, free_aggs: false, morsel: false, end_hint: 0, memo: core::cell::RefCell::new(PgVec::new_in(mcx)) }
+    }
+}
+
+/// One path's predicted pipelines (pathnode gwcost.rs `GState`): the cost of its finished pipelines over their speedups,
+/// the open pipeline's raw cost, its flags and width, and the PostgreSQL costs it was computed from (`stamp`, NaN: none).
+#[derive(Clone, Copy, Debug)]
+pub struct GwMemo {
+    pub stamp: (f64, f64),
+    pub closed: f64,
+    pub open: f64,
+    pub nest: f64,
+    pub flags: u8,
+    pub why: u8,
+    pub w: u16,
+    pub driver: u32,
+}
+
+impl Default for GwMemo {
+    fn default() -> Self {
+        GwMemo { stamp: (f64::NAN, f64::NAN), closed: 0.0, open: 0.0, nest: 0.0, flags: 0, why: 0, w: 0, driver: 0 }
+    }
+}
+
+mcx::forget_safe_nodrop!(GwMemo);
+mcx::forget_safe_struct!(GravityWidthCost<'_> { width, free_aggs, morsel, end_hint, memo });
+
+/// Path storage: each path is its own allocation (C palloc's a Path per
+/// create_*_path), indexed by a table of fixed-size segments so neither the
+/// paths nor the index ever need one allocation near MaxAllocSize. The first
+/// segment starts at PATH_SEGMENT_FIRST slots and doubles up to the segment
+/// length, so a short plan does not take a whole segment. A freed slot is
+/// never reused, so a stale PathId fails loudly instead of aliasing.
+#[derive(Debug)]
+pub struct PathStore<'mcx> {
+    mcx: Mcx<'mcx>,
+    segments: PgVec<'mcx, PgVec<'mcx, Option<PgBox<'mcx, PathNode<'mcx>>>>>,
+    len: u32,
+    freed: u32,
+    // A join search tour is running (between join_search_mark and release_join_search): a freed path's lists go back
+    // with it, since the tour's release only reaches the paths still in the store.
+    whole_frees: bool,
+}
+
+const PATH_SEGMENT_SHIFT: u32 = 12;
+const PATH_SEGMENT_LEN: usize = 1 << PATH_SEGMENT_SHIFT;
+const PATH_SEGMENT_FIRST: usize = 16;
+
+impl<'mcx> PathStore<'mcx> {
+    pub fn new(mcx: Mcx<'mcx>) -> Self {
+        PathStore { mcx, segments: PgVec::new_in(mcx), len: 0, freed: 0, whole_frees: false }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Paths currently allocated (allocated minus freed).
+    #[inline]
+    pub fn live(&self) -> usize {
+        (self.len - self.freed) as usize
+    }
+
+    pub fn alloc(&mut self, path: PathNode<'mcx>) -> PathId {
+        let id = self.len;
+        let seg = (id >> PATH_SEGMENT_SHIFT) as usize;
+        if seg == self.segments.len() {
+            let cap = if seg == 0 { PATH_SEGMENT_FIRST } else { PATH_SEGMENT_LEN };
+            self.segments.push(PgVec::with_capacity_in(cap, self.mcx));
+        }
+        self.segments[seg].push(Some(PgBox::new_in(path, self.mcx)));
+        self.len = id.checked_add(1).expect("path id space exhausted");
+        PathId(id)
+    }
+
+    #[inline]
+    fn slot(&self, id: PathId) -> &Option<PgBox<'mcx, PathNode<'mcx>>> {
+        let i = id.index();
+        &self.segments[i >> PATH_SEGMENT_SHIFT][i & (PATH_SEGMENT_LEN - 1)]
+    }
+
+    #[inline]
+    pub fn get(&self, id: PathId) -> &PathNode<'mcx> {
+        match self.slot(id) {
+            Some(p) => p,
+            None => freed_path(id),
+        }
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, id: PathId) -> &mut PathNode<'mcx> {
+        let i = id.index();
+        match &mut self.segments[i >> PATH_SEGMENT_SHIFT][i & (PATH_SEGMENT_LEN - 1)] {
+            Some(p) => p,
+            None => freed_path(id),
+        }
+    }
+
+    pub fn is_live(&self, id: PathId) -> bool {
+        id.index() < self.len() && self.slot(id).is_some()
+    }
+
+    /// C `pfree(path)` in add_path: the path's own chunk goes back to the planner context, and what it points to (pathkeys,
+    /// clause and sort-key lists) stays there until the context's reset, as in C. Its drop glue would only give arena bytes
+    /// back (`PathNode` is `ForgetSafe`), one deallocation per list, for memory the planner context reclaims anyway.
+    /// Inside a join search tour the lists go too: C frees them with the tour's context, and the tour's release here
+    /// only drops the paths still in the store.
+    pub fn free(&mut self, id: PathId) {
+        let i = id.index();
+        let Some(b) = self.segments[i >> PATH_SEGMENT_SHIFT][i & (PATH_SEGMENT_LEN - 1)].take() else { freed_path(id) };
+        if self.whole_frees {
+            drop(b);
+        } else {
+            mcx::free_shell(b);
+        }
+        self.freed += 1;
+    }
+
+    /// Drops every path with id >= `len`.
+    pub fn truncate(&mut self, len: usize) {
+        assert!(len <= self.len(), "PathStore::truncate past the end");
+        let tail_freed = (len..self.len())
+            .filter(|&i| self.slot(PathId(i as u32)).is_none())
+            .count() as u32;
+        let keep_segments = len.div_ceil(PATH_SEGMENT_LEN);
+        self.segments.truncate(keep_segments);
+        if let Some(last) = self.segments.last_mut() {
+            last.truncate(len - (keep_segments - 1) * PATH_SEGMENT_LEN);
+        }
+        self.freed -= tail_freed;
+        self.len = len as u32;
+    }
+}
+
+fn rel_path_handles<'a>(rel: &'a RelOptInfo<'_>) -> impl Iterator<Item = PathId> + 'a {
+    rel.pathlist
+        .iter()
+        .chain(rel.partial_pathlist.iter())
+        .chain(rel.cheapest_parameterized_paths.iter())
+        .chain(rel.cheapest_startup_path.iter())
+        .chain(rel.cheapest_total_path.iter())
+        .chain(rel.cheapest_unique_path.iter())
+        .copied()
+}
+
+/// See [`PlannerInfo::join_search_mark`].
+#[derive(Clone, Copy, Debug)]
+pub struct JoinSearchMark {
+    rels: usize,
+    paths: usize,
+    pathtargets: usize,
+    nodes: usize,
+    rinfos: usize,
+    ems: usize,
+    phinfos: usize,
+}
+
+#[cold]
+#[inline(never)]
+fn freed_path(id: PathId) -> ! {
+    panic!("path {} was freed by add_path and is no longer valid", id.index())
+}
+
 
 #[derive(Debug)]
 pub struct PlannerInfo<'mcx> {
@@ -1872,22 +2124,21 @@ pub struct PlannerInfo<'mcx> {
     pub placeholder_array: PgVec<'mcx, Option<PhInfoId>>,
     pub placeholder_array_size: i32,
     pub fkey_list: PgVec<'mcx, NodeId>,
-    pub query_pathkeys: PgVec<'mcx, PathKey>,
-    pub group_pathkeys: PgVec<'mcx, PathKey>,
+    pub query_pathkeys: &'mcx [PathKey],
+    pub group_pathkeys: &'mcx [PathKey],
     pub num_groupby_pathkeys: i32,
-    pub window_pathkeys: PgVec<'mcx, PathKey>,
-    pub distinct_pathkeys: PgVec<'mcx, PathKey>,
-    pub sort_pathkeys: PgVec<'mcx, PathKey>,
-    pub setop_pathkeys: PgVec<'mcx, PathKey>,
+    pub window_pathkeys: &'mcx [PathKey],
+    pub distinct_pathkeys: &'mcx [PathKey],
+    pub sort_pathkeys: &'mcx [PathKey],
+    pub setop_pathkeys: &'mcx [PathKey],
     pub part_schemes: PgVec<'mcx, PartitionScheme<'mcx>>,
     pub initial_rels: PgVec<'mcx, RelId>,
     pub upper_rels: [PgVec<'mcx, RelId>; NUM_UPPERREL_KINDS],
     pub upper_targets: [Option<PtId>; NUM_UPPERREL_KINDS],
-    pub processed_groupClause: PgVec<'mcx, NodeId>,
-    pub processed_distinctClause: PgVec<'mcx, NodeId>,
-    pub processed_tlist: PgVec<'mcx, NodeId>,
-    pub update_colnos: PgVec<'mcx, AttrNumber>,
-    pub grouping_map: PgVec<'mcx, AttrNumber>,
+    pub processed_groupClause: &'mcx [NodeId],
+    pub processed_distinctClause: &'mcx [NodeId],
+    pub update_colnos: &'mcx [AttrNumber],
+    pub grouping_map: &'mcx [AttrNumber],
     pub minmax_aggs: PgVec<'mcx, NodeId>,
     pub total_table_pages: Cardinality,
     pub tuple_fraction: Selectivity,
@@ -1904,6 +2155,7 @@ pub struct PlannerInfo<'mcx> {
     pub agginfos: PgVec<'mcx, NodeId>,
     pub aggtransinfos: PgVec<'mcx, NodeId>,
     pub numOrderedAggs: i32,
+    pub numOrderByAggs: i32,
     pub hasNonPartialAggs: bool,
     pub hasNonSerialAggs: bool,
     pub wt_param_id: i32,
@@ -1920,11 +2172,16 @@ pub struct PlannerInfo<'mcx> {
     pub join_search_private: Option<PgBox<'mcx, JoinSearchPrivate>>,
     pub isAltSubplan: PgVec<'mcx, bool>,
     pub isUsedSubplan: PgVec<'mcx, bool>,
+    pub gravity_nested: bool,
+    /// Not in C (Gravity width costing, D3164): this level's state, set by the planner before
+    /// its base relations' paths are made (planner gravity_width_cost.rs) and read by every path comparison (pathnode
+    /// gwcost.rs). Width 0 (the default, a sub-level's own until its planner sets it): PostgreSQL's costs decide.
+    pub gravity_width_cost: GravityWidthCost<'mcx>,
     // The backbone arenas: the whole aliasing node graph, bump-allocated in
     // the per-query planner context, reclaimed wholesale at the planner
     // boundary. Not in the C struct (C shares these by raw pointer).
     pub rel_arena: PgVec<'mcx, RelOptInfo<'mcx>>,
-    pub path_arena: PgVec<'mcx, PathNode<'mcx>>,
+    pub path_arena: PathStore<'mcx>,
     pub rinfo_arena: PgVec<'mcx, RestrictInfo<'mcx>>,
     pub em_arena: PgVec<'mcx, EquivalenceMember<'mcx>>,
     pub ph_info_arena: PgVec<'mcx, PlaceHolderInfo<'mcx>>,
@@ -1977,22 +2234,21 @@ impl<'mcx> PlannerInfo<'mcx> {
             placeholder_array: PgVec::new_in(mcx),
             placeholder_array_size: 0,
             fkey_list: PgVec::new_in(mcx),
-            query_pathkeys: PgVec::new_in(mcx),
-            group_pathkeys: PgVec::new_in(mcx),
+            query_pathkeys: &[],
+            group_pathkeys: &[],
             num_groupby_pathkeys: 0,
-            window_pathkeys: PgVec::new_in(mcx),
-            distinct_pathkeys: PgVec::new_in(mcx),
-            sort_pathkeys: PgVec::new_in(mcx),
-            setop_pathkeys: PgVec::new_in(mcx),
+            window_pathkeys: &[],
+            distinct_pathkeys: &[],
+            sort_pathkeys: &[],
+            setop_pathkeys: &[],
             part_schemes: PgVec::new_in(mcx),
             initial_rels: PgVec::new_in(mcx),
             upper_rels: core::array::from_fn(|_| PgVec::new_in(mcx)),
             upper_targets: [None; NUM_UPPERREL_KINDS],
-            processed_groupClause: PgVec::new_in(mcx),
-            processed_distinctClause: PgVec::new_in(mcx),
-            processed_tlist: PgVec::new_in(mcx),
-            update_colnos: PgVec::new_in(mcx),
-            grouping_map: PgVec::new_in(mcx),
+            processed_groupClause: &[],
+            processed_distinctClause: &[],
+            update_colnos: &[],
+            grouping_map: &[],
             minmax_aggs: PgVec::new_in(mcx),
             total_table_pages: 0.0,
             tuple_fraction: 0.0,
@@ -2009,6 +2265,7 @@ impl<'mcx> PlannerInfo<'mcx> {
             agginfos: PgVec::new_in(mcx),
             aggtransinfos: PgVec::new_in(mcx),
             numOrderedAggs: 0,
+            numOrderByAggs: 0,
             hasNonPartialAggs: false,
             hasNonSerialAggs: false,
             wt_param_id: 0,
@@ -2021,8 +2278,10 @@ impl<'mcx> PlannerInfo<'mcx> {
             join_search_private: None,
             isAltSubplan: PgVec::new_in(mcx),
             isUsedSubplan: PgVec::new_in(mcx),
+            gravity_nested: false,
+            gravity_width_cost: GravityWidthCost::new(mcx),
             rel_arena: PgVec::new_in(mcx),
-            path_arena: PgVec::new_in(mcx),
+            path_arena: PathStore::new(mcx),
             rinfo_arena: PgVec::new_in(mcx),
             em_arena: PgVec::new_in(mcx),
             ph_info_arena: PgVec::new_in(mcx),
@@ -2035,6 +2294,7 @@ impl<'mcx> PlannerInfo<'mcx> {
         let mut sub = PlannerInfo::new(self.mcx);
         sub.command_type = self.command_type;
         sub.query_level = self.query_level + 1;
+        sub.gravity_nested = self.gravity_nested;
         sub.tuple_fraction = self.tuple_fraction;
         sub.limit_tuples = self.limit_tuples;
         sub.total_table_pages = self.total_table_pages;
@@ -2093,12 +2353,12 @@ impl<'mcx> PlannerInfo<'mcx> {
 
     #[inline]
     pub fn path(&self, id: PathId) -> &PathNode<'mcx> {
-        &self.path_arena[id.index()]
+        self.path_arena.get(id)
     }
 
     #[inline]
     pub fn path_mut(&mut self, id: PathId) -> &mut PathNode<'mcx> {
-        &mut self.path_arena[id.index()]
+        self.path_arena.get_mut(id)
     }
 
     #[inline]
@@ -2192,9 +2452,153 @@ impl<'mcx> PlannerInfo<'mcx> {
 
     #[inline]
     pub fn alloc_path(&mut self, path: PathNode<'mcx>) -> PathId {
-        let id = PathId(self.path_arena.len() as u32);
-        self.path_arena.push(path);
-        id
+        self.path_arena.alloc(path)
+    }
+
+    /// C pfree(path) in add_path / add_partial_path: the caller guarantees no
+    /// other path or list still references `id`.
+    #[inline]
+    pub fn free_path(&mut self, id: PathId) {
+        self.path_arena.free(id);
+    }
+
+    /// Arena high-water marks for [`Self::release_join_search`]; until that release, a path add_path frees gives its
+    /// lists back with it (see [`PathStore::free`]).
+    pub fn join_search_mark(&mut self) -> JoinSearchMark {
+        self.path_arena.whole_frees = true;
+        JoinSearchMark {
+            rels: self.rel_arena.len(),
+            paths: self.path_arena.len(),
+            pathtargets: self.pathtarget_arena.len(),
+            nodes: self.node_arena.len(),
+            rinfos: self.rinfo_arena.len(),
+            ems: self.em_arena.len(),
+            phinfos: self.ph_info_arena.len(),
+        }
+    }
+
+    /// C geqo_eval's MemoryContextDelete of its per-tour context: drops every
+    /// RelOptInfo, Path and PathTarget allocated since `mark`, and the
+    /// expression handles interned since then. As in C, state that must
+    /// outlive the tour (ECs and their members, derived join clauses,
+    /// canonical pathkeys, innerrel uniqueness caches) lives in arenas this
+    /// does not truncate; expressions those new entries reference are kept.
+    /// The caller has already restored join_rel_list and join_rel_hash.
+    pub fn release_join_search(&mut self, mark: JoinSearchMark) {
+        self.path_arena.whole_frees = false;
+        // C builds a path for an existing rel (a semijoin input's cached
+        // unique-ified path, mark_dummy_rel) in that rel's own context so it
+        // survives the tour. Such a tour is kept whole; it happens at most
+        // once per rel, since both results are cached on the rel.
+        if self.rel_arena[..mark.rels]
+            .iter()
+            .any(|rel| rel_path_handles(rel).any(|p| p.index() >= mark.paths))
+        {
+            return;
+        }
+        let mut keep_nodes = mark.nodes;
+        let mut keep = |id: NodeId| keep_nodes = keep_nodes.max(id.index() + 1);
+        for ri in &self.rinfo_arena[mark.rinfos..] {
+            keep(ri.clause);
+            ri.orclause.into_iter().for_each(&mut keep);
+        }
+        self.em_arena[mark.ems..].iter().for_each(|em| keep(em.em_expr));
+        self.ph_info_arena[mark.phinfos..].iter().for_each(|ph| keep(ph.ph_var_phexpr));
+        #[cfg(debug_assertions)]
+        self.assert_no_handles_past(mark, keep_nodes);
+        self.rel_arena.truncate(mark.rels);
+        self.path_arena.truncate(mark.paths);
+        self.pathtarget_arena.truncate(mark.pathtargets);
+        self.node_arena.truncate(keep_nodes);
+    }
+
+    // Every rel, path and target handle reachable from state that survives
+    // the release must predate the mark.
+    #[cfg(debug_assertions)]
+    fn assert_no_handles_past(&self, mark: JoinSearchMark, keep_nodes: usize) {
+        let rel_ok = |r: RelId| r.index() < mark.rels;
+        let pt_ok = |t: PtId| t.index() < mark.pathtargets;
+        let rels = self
+            .simple_rel_array
+            .iter()
+            .flatten()
+            .chain(self.join_rel_list.iter())
+            .chain(self.join_rel_hash.iter().flat_map(|h| h.values()))
+            .chain(self.join_rel_level.iter().flatten())
+            .chain(self.initial_rels.iter())
+            .chain(self.upper_rels.iter().flatten());
+        for &r in rels {
+            assert!(rel_ok(r), "rel {} built during a join search tour outlives it", r.index());
+        }
+        for t in self.upper_targets.iter().flatten() {
+            assert!(pt_ok(*t), "upper target {} outlives its join search tour", t.index());
+        }
+        if let Some(p) = self.non_recursive_path {
+            assert!(p.index() < mark.paths, "non_recursive_path outlives its join search tour");
+        }
+        for (i, rel) in self.rel_arena[..mark.rels].iter().enumerate() {
+            let linked = rel
+                .parent
+                .iter()
+                .chain(rel.top_parent.iter())
+                .chain(rel.part_rels.iter().flatten());
+            for &r in linked {
+                assert!(rel_ok(r), "rel {i} links rel {} from a join search tour", r.index());
+            }
+            if let Some(t) = rel.pathtarget_id {
+                assert!(pt_ok(t), "rel {i} keeps target {} from a join search tour", t.index());
+            }
+        }
+        let mut nodes: alloc::vec::Vec<NodeId> = alloc::vec::Vec::new();
+        for ri in self.rinfo_arena.iter() {
+            nodes.push(ri.clause);
+            nodes.extend(ri.orclause);
+        }
+        nodes.extend(self.em_arena.iter().map(|em| em.em_expr));
+        nodes.extend(self.ph_info_arena.iter().map(|ph| ph.ph_var_phexpr));
+        for t in &self.pathtarget_arena[..mark.pathtargets] {
+            nodes.extend(t.exprs.iter().copied());
+        }
+        for rel in &self.rel_arena[..mark.rels] {
+            nodes.extend(rel.lateral_vars.iter().chain(rel.statlist.iter()));
+            nodes.extend(rel.subplan_params.iter().chain(rel.partition_qual.iter()));
+            nodes.extend(rel.partexprs.iter().chain(rel.nullable_partexprs.iter()).flatten());
+            nodes.push(rel.fdw_private);
+        }
+        let lists: [&[NodeId]; 9] = [
+            &self.plan_params,
+            &self.init_plans,
+            &self.fkey_list,
+            self.processed_groupClause,
+            self.processed_distinctClause,
+            &self.minmax_aggs,
+            &self.agginfos,
+            &self.aggtransinfos,
+            &self.curOuterParams,
+        ];
+        nodes.extend(lists.into_iter().flatten());
+        nodes.extend(self.multiexpr_params.iter().flatten());
+        nodes.extend(self.join_info_list.iter().flat_map(|sj| sj.semi_rhs_exprs.iter()));
+        nodes.extend(self.append_rel_list.iter().flat_map(|a| a.translated_vars.iter()));
+        nodes.extend(self.row_identity_vars.iter().map(|r| r.rowidvar));
+        for id in nodes {
+            assert!(
+                id.index() < keep_nodes,
+                "expression {} from a join search tour outlives it",
+                id.index()
+            );
+        }
+        for i in 0..mark.paths {
+            let id = PathId(i as u32);
+            if self.path_arena.is_live(id) {
+                let base = self.path_arena.get(id).base();
+                assert!(rel_ok(base.parent), "path {i} has a parent from a join search tour");
+                if let Some(t) = base.pathtarget_id {
+                    let t = t.index();
+                    assert!(t < mark.pathtargets, "path {i} keeps target {t} from a join search tour");
+                }
+            }
+        }
     }
 
     #[inline]
@@ -2243,8 +2647,164 @@ impl<'mcx> PlannerInfo<'mcx> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn path_store_segments_and_frees() {
+        extern crate std;
+        let cx = ::mcx::MemoryContext::new("t");
+        let mut store = PathStore::new(cx.mcx());
+        let n = 3 * PATH_SEGMENT_LEN + 1;
+        for _ in 0..n {
+            store.alloc(PathNode::Path(empty_path(cx.mcx(), RelId(1), None)));
+        }
+        assert_eq!(store.len(), n);
+        assert_eq!(store.segments.len(), 4);
+        assert!(store.segments.iter().all(|s| s.capacity() == PATH_SEGMENT_LEN));
+        let id = PathId(PATH_SEGMENT_LEN as u32 + 7);
+        store.free(id);
+        assert!(!store.is_live(id));
+        assert!(store.is_live(PathId(0)));
+        assert_eq!(store.live(), n - 1);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = store.get(id).base().total_cost;
+        }));
+        assert!(r.is_err(), "a freed path id must not resolve");
+    }
     use super::*;
     use ::mcx::MemoryContext;
+
+    #[test]
+    fn path_store_first_segment_starts_small_and_doubles() {
+        let cx = MemoryContext::new("t");
+        let mut store = PathStore::new(cx.mcx());
+        for _ in 0..3 {
+            store.alloc(PathNode::Path(empty_path(cx.mcx(), RelId(1), None)));
+        }
+        assert_eq!(store.segments[0].capacity(), PATH_SEGMENT_FIRST);
+        for _ in 3..PATH_SEGMENT_FIRST + 1 {
+            store.alloc(PathNode::Path(empty_path(cx.mcx(), RelId(1), None)));
+        }
+        assert_eq!(store.segments[0].capacity(), 2 * PATH_SEGMENT_FIRST);
+        for _ in PATH_SEGMENT_FIRST + 1..PATH_SEGMENT_LEN + 1 {
+            store.alloc(PathNode::Path(empty_path(cx.mcx(), RelId(1), None)));
+        }
+        assert_eq!(store.segments.len(), 2);
+        assert_eq!(store.segments[0].capacity(), PATH_SEGMENT_LEN);
+        assert_eq!(store.segments[1].capacity(), PATH_SEGMENT_LEN);
+        assert!(store.is_live(PathId(0)) && store.is_live(PathId(PATH_SEGMENT_LEN as u32)));
+    }
+
+    #[test]
+    fn path_store_truncate_drops_tail_and_recounts_frees() {
+        let cx = MemoryContext::new("t");
+        let mut store = PathStore::new(cx.mcx());
+        let n = PATH_SEGMENT_LEN + 5;
+        for _ in 0..n {
+            store.alloc(PathNode::Path(empty_path(cx.mcx(), RelId(1), None)));
+        }
+        store.free(PathId(3));
+        store.free(PathId(PATH_SEGMENT_LEN as u32 + 1));
+        store.truncate(PATH_SEGMENT_LEN);
+        assert_eq!(store.len(), PATH_SEGMENT_LEN);
+        assert_eq!(store.segments.len(), 1);
+        assert_eq!(store.live(), PATH_SEGMENT_LEN - 1);
+        store.truncate(0);
+        assert_eq!((store.len(), store.live(), store.segments.len()), (0, 0, 0));
+        assert_eq!(store.alloc(PathNode::Path(empty_path(cx.mcx(), RelId(1), None))), PathId(0));
+    }
+
+    // Expression payloads are arena-leaked; a tour interns existing ones.
+    fn tour<'mcx>(
+        root: &mut PlannerInfo<'mcx>,
+        var: ::types_nodes::Node<'mcx>,
+        persistent_em: bool,
+    ) {
+        let mcx = root.mcx;
+        let expr = |root: &mut PlannerInfo<'mcx>| root.alloc_expr_node(var);
+        let mut joinrel = RelOptInfo::new(mcx);
+        joinrel.pathtarget_id = Some(root.alloc_pathtarget(PathTarget::new(mcx)));
+        joinrel.attr_widths.extend([4; 64]);
+        let joinrel = root.alloc_rel(joinrel);
+        for _ in 0..8 {
+            let p = root.alloc_path(PathNode::Path(empty_path(mcx, joinrel, None)));
+            root.rel_mut(joinrel).pathlist.push(p);
+        }
+        let rejected = root.alloc_path(PathNode::Path(empty_path(mcx, joinrel, None)));
+        root.free_path(rejected);
+        expr(root);
+        if persistent_em {
+            let em_expr = expr(root);
+            root.alloc_em(EquivalenceMember { em_expr, ..Default::default() });
+        }
+        expr(root);
+    }
+
+    #[test]
+    fn release_join_search_reclaims_each_tour() {
+        let cx = MemoryContext::new("planner");
+        let mcx = cx.mcx();
+        let mut root = PlannerInfo::new(mcx);
+        let var = ::types_nodes::Node::mk_var(mcx, 1, 1, 23, -1, 0, 0).unwrap();
+        let base = root.alloc_rel(RelOptInfo::new(mcx));
+        let base_path = root.alloc_path(PathNode::Path(empty_path(mcx, base, None)));
+        root.rel_mut(base).pathlist.push(base_path);
+        root.simple_rel_array.push(Some(base));
+
+        let mark = root.join_search_mark();
+        tour(&mut root, var, true);
+        root.release_join_search(mark);
+        assert_eq!(root.rel_arena.len(), 1);
+        assert_eq!((root.path_arena.len(), root.path_arena.live()), (1, 1));
+        assert_eq!(root.pathtarget_arena.len(), 0);
+        // The member created during the tour keeps its expression; the
+        // interned expression after it goes.
+        let em_expr = root.em_arena[0].em_expr;
+        assert_eq!(root.node_arena.len(), em_expr.index() + 1);
+
+        // Arena backing vectors keep their capacity; after one tour at the
+        // new high-water mark, further tours must not grow the context.
+        let mark = root.join_search_mark();
+        tour(&mut root, var, false);
+        root.release_join_search(mark);
+        let settled = cx.stats().used;
+        for _ in 0..200 {
+            tour(&mut root, var, false);
+            root.release_join_search(mark);
+            assert_eq!(cx.stats().used, settled);
+        }
+        assert_eq!(root.node_arena.len(), em_expr.index() + 1);
+        assert!(root.path_arena.is_live(base_path));
+    }
+
+    #[test]
+    fn release_join_search_keeps_a_tour_that_extended_a_surviving_rel() {
+        let cx = MemoryContext::new("planner");
+        let mcx = cx.mcx();
+        let mut root = PlannerInfo::new(mcx);
+        let base = root.alloc_rel(RelOptInfo::new(mcx));
+        let mark = root.join_search_mark();
+        let joinrel = root.alloc_rel(RelOptInfo::new(mcx));
+        root.alloc_path(PathNode::Path(empty_path(mcx, joinrel, None)));
+        let unique = root.alloc_path(PathNode::Path(empty_path(mcx, base, None)));
+        root.rel_mut(base).cheapest_unique_path = Some(unique);
+        root.release_join_search(mark);
+        assert_eq!((root.rel_arena.len(), root.path_arena.len()), (2, 2));
+        assert!(root.path_arena.is_live(unique));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "links rel")]
+    fn release_join_search_rejects_a_surviving_link_to_a_tour_rel() {
+        let cx = MemoryContext::new("planner");
+        let mcx = cx.mcx();
+        let mut root = PlannerInfo::new(mcx);
+        let base = root.alloc_rel(RelOptInfo::new(mcx));
+        let mark = root.join_search_mark();
+        let child = root.alloc_rel(RelOptInfo::new(mcx));
+        root.rel_mut(base).part_rels.push(Some(child));
+        root.release_join_search(mark);
+    }
 
     #[test]
     fn c_enum_values_match_headers() {
@@ -2369,6 +2929,7 @@ mod tests {
             spath: SortPath {
                 path: empty_path(cx.mcx(), RelId(1), None),
                 subpath: None,
+                gravity_rewrite: None,
             },
             nPresortedCols: 2,
         });
@@ -2388,12 +2949,13 @@ mcx::forget_safe_nodrop!(
 
 mcx::forget_safe_struct!(
     DerivesHash<'_> { size, sizemask, members, grow_threshold, data },
+    PathStore<'_> { mcx, segments, len, freed, whole_frees },
     PartitionBoundInfoData<'_> { strategy, ndatums, nindexes, null_index, default_index, indexes, datums, kind, interleaved_parts },
     JoinDomain<'_> { jd_relids },
     AppendRelInfo<'_> { parent_relid, child_relid, parent_reltype, child_reltype, translated_vars, num_child_cols, parent_colnos, parent_reloid },
     RowIdentityVarInfo<'_> { rowidvar, rowidwidth, rowidname, rowidrels },
     GinIndexStats { pending_pages, total_pages, entry_pages, data_pages, entries, version },
-    IndexOptInfo<'_> { indexoid, reltablespace, rel, pages, tuples, tree_height, ncolumns, nkeycolumns, indexkeys, indexcollations, opfamily, opcintype, sortopfamily, reverse_sort, nulls_first, canreturn, relam, indexprs, indpred, indextlist, indrestrictinfo, predOK, unique, nullsnotdistinct, immediate, hypothetical, amcanorderbyop, amoptionalkey, amsearcharray, amsearchnulls, amhasgettuple, amhasgetbitmap, amcanparallel, amcanmarkpos, gin_stats },
+    IndexOptInfo<'_> { indexoid, reltablespace, rel, pages, tuples, tree_height, ncolumns, nkeycolumns, indexkeys, indexcollations, opfamily, opcintype, sortopfamily, reverse_sort, nulls_first, canreturn, relam, indexprs, indpred, indextlist, indrestrictinfo, predOK, unique, nullsnotdistinct, immediate, hypothetical, amcanorderbyop, amoptionalkey, amsearcharray, amsearchnulls, amhasgettuple, amhasgetbitmap, amcanparallel, amcanmarkpos },
     GroupByOrdering<'_> { pathkeys, clauses },
     PathTarget<'_> { exprs, sortgrouprefs, cost, width, has_volatile_expr },
     ParamPathInfo<'_> { ppi_req_outer, ppi_rows, ppi_clauses, ppi_serials },
@@ -2422,11 +2984,11 @@ mcx::forget_safe_struct!(
     GatherMergePath<'_> { path, subpath, num_workers },
     ProjectionPath<'_> { path, subpath, dummypp },
     ProjectSetPath<'_> { path, subpath },
-    SortPath<'_> { path, subpath },
+    SortPath<'_> { path, subpath, gravity_rewrite },
     IncrementalSortPath<'_> { spath, nPresortedCols },
     GroupPath<'_> { path, subpath, groupClause, qual },
     UpperUniquePath<'_> { path, subpath, numkeys },
-    AggPath<'_> { path, subpath, aggstrategy, aggsplit, numGroups, transitionSpace, groupClause, qual },
+    AggPath<'_> { path, subpath, aggstrategy, aggsplit, numGroups, transitionSpace, groupClause, qual, distinctHashed, gravity_rewrite },
     GroupingSetData<'_> { set, numGroups },
     RollupData<'_> { groupClause, gsets, gsets_data, numGroups, hashable, is_hashed },
     GroupingSetsPath<'_> { path, subpath, aggstrategy, rollups, qual, transitionSpace },
@@ -2447,13 +3009,14 @@ mcx::forget_safe_struct!(
     OuterJoinClauseInfo<'_> { rinfo, sjinfo },
     PlaceHolderInfo<'_> { phid, ph_var_phexpr, ph_var_phrels, ph_eval_at, ph_lateral, ph_needed, ph_width },
     UniqueRelInfo<'_> { outerrelids, self_join, extra_clauses },
-    RelOptInfo<'_> { reloptkind, relids, rows, consider_startup, consider_param_startup, consider_parallel, pathtarget_id, pathlist, ppilist, partial_pathlist, cheapest_startup_path, cheapest_total_path, cheapest_unique_path, cheapest_parameterized_paths, direct_lateral_relids, lateral_relids, lateral_vars, relid, reltablespace, rtekind, min_attr, max_attr, attr_widths, nulling_relids, lateral_referencers, pages, tuples, allvisfrac, baserestrictinfo, baserestrictcost, baserestrict_min_security, joininfo, has_eclass_joins, consider_partitionwise_join, serverid, userid, useridiscurrent, parent, top_parent, top_parent_relids, rel_parallel_workers, amflags, pgrcolumnar_sorted_attnos, pgrcolumnar_col_bytes, pgrcolumnar_col_ndv, pgrcolumnar_stitch_gndv, fdwroutine, attr_needed, notnullattnums, indexlist, statlist, eclass_indexes, subroot, subroot_idx, subplan_params, fdw_private, fdw_state, unique_for_rels, non_unique_for_rels, part_scheme, nparts, boundinfo, partbounds_merged, partition_qual, part_rels, live_parts, all_partrels, partexprs, nullable_partexprs },
+    PgrcZoneCol<'_> { attno, granules, keyed, lo, hi, keys, min_lt, min_le, max_lt, max_le, eq_whole, ranges },
+    RelOptInfo<'_> { reloptkind, relids, rows, consider_startup, consider_param_startup, consider_parallel, pathtarget_id, pathlist, ppilist, partial_pathlist, cheapest_startup_path, cheapest_total_path, cheapest_unique_path, cheapest_parameterized_paths, direct_lateral_relids, lateral_relids, lateral_vars, relid, reltablespace, rtekind, min_attr, max_attr, attr_widths, nulling_relids, lateral_referencers, pages, tuples, allvisfrac, baserestrictinfo, baserestrictcost, baserestrict_min_security, joininfo, has_eclass_joins, consider_partitionwise_join, serverid, userid, useridiscurrent, parent, top_parent, top_parent_relids, rel_parallel_workers, amflags, pgrcolumnar_sorted_attnos, pgrcolumnar_col_bytes, pgrcolumnar_col_ndv, pgrcolumnar_col_qual_class, pgrcolumnar_col_max_len, pgrcolumnar_col_null_frac, pgrcolumnar_col_codec, pgrcolumnar_col_ncodes, pgrcolumnar_granules, pgrcolumnar_parts, pgrcolumnar_zones, pgrcolumnar_front_rows, fdwroutine, attr_needed, notnullattnums, indexlist, statlist, eclass_indexes, subroot, subroot_idx, subplan_params, fdw_private, fdw_state, unique_for_rels, non_unique_for_rels, part_scheme, nparts, boundinfo, partbounds_merged, partition_qual, part_rels, live_parts, all_partrels, partexprs, nullable_partexprs, gravity_groups_default },
     PlannerGlobal<'_> { subplans, subpaths, subroots, rewind_plan_ids, finalrtable, all_relids, prunable_relids, finalrteperminfos, finalrowmarks, result_relations, relation_oids, param_exec_types, last_ph_id, last_row_mark_id, last_plan_node_id, transient_plan, depends_on_role, parallel_mode_ok, parallel_mode_needed, max_parallel_hazard },
     WindowClauseNode<'_> { name, partitionClause, orderClause, frameOptions, startOffset, endOffset, startInRangeFunc, endInRangeFunc, inRangeColl, inRangeAsc, inRangeNullsFirst, winref },
     AggInfo<'_> { aggrefs, transno, shareable, finalfn_oid },
     AggTransInfo<'_> { args, aggfilter, transfn_oid, serialfn_oid, deserialfn_oid, combinefn_oid, aggtranstype, aggtranstypmod, transtypeLen, transtypeByVal, aggtransspace, initValue, initValueIsNull, initValueImage },
     TargetEntryNode<'_> { expr, resno, resname, ressortgroupref, resorigtbl, resorigcol, resjunk },
-    PlannerInfo<'_> { mcx, parse, command_type, glob, query_level, parent_root, plan_params, outer_params, simple_rel_array, simple_rel_array_size, simple_rte_array, append_rel_array, all_baserels, outer_join_rels, all_query_rels, join_rel_list, join_rel_hash, join_rel_level, join_cur_level, init_plans, cte_plan_ids, cte_list, cte_scan_params, multiexpr_params, join_domains, eq_classes, ec_merging_done, canon_pathkeys, left_join_clauses, right_join_clauses, full_join_clauses, join_info_list, last_rinfo_serial, all_result_relids, leaf_result_relids, append_rel_list, row_identity_vars, rowMarks, placeholder_list, placeholder_array, placeholder_array_size, fkey_list, query_pathkeys, group_pathkeys, num_groupby_pathkeys, window_pathkeys, distinct_pathkeys, sort_pathkeys, setop_pathkeys, part_schemes, initial_rels, upper_rels, upper_targets, processed_groupClause, processed_distinctClause, processed_tlist, update_colnos, grouping_map, minmax_aggs, total_table_pages, tuple_fraction, limit_tuples, qual_security_level, hasJoinRTEs, hasLateralRTEs, hasHavingQual, hasPseudoConstantQuals, hasAlternativeSubPlans, placeholdersFrozen, hasRecursion, group_rtindex, agginfos, aggtransinfos, numOrderedAggs, hasNonPartialAggs, hasNonSerialAggs, wt_param_id, non_recursive_path, non_recursive_rows, self_ref_wt_params, curOuterRels, curOuterParams, partColsUpdated, join_search_private, isAltSubplan, isUsedSubplan, rel_arena, path_arena, rinfo_arena, em_arena, ph_info_arena, node_arena, pathtarget_arena },
+    PlannerInfo<'_> { mcx, parse, command_type, glob, query_level, parent_root, plan_params, outer_params, simple_rel_array, simple_rel_array_size, simple_rte_array, append_rel_array, all_baserels, outer_join_rels, all_query_rels, join_rel_list, join_rel_hash, join_rel_level, join_cur_level, init_plans, cte_plan_ids, cte_list, cte_scan_params, multiexpr_params, join_domains, eq_classes, ec_merging_done, canon_pathkeys, left_join_clauses, right_join_clauses, full_join_clauses, join_info_list, last_rinfo_serial, all_result_relids, leaf_result_relids, append_rel_list, row_identity_vars, rowMarks, placeholder_list, placeholder_array, placeholder_array_size, fkey_list, query_pathkeys, group_pathkeys, num_groupby_pathkeys, window_pathkeys, distinct_pathkeys, sort_pathkeys, setop_pathkeys, part_schemes, initial_rels, upper_rels, upper_targets, processed_groupClause, processed_distinctClause, update_colnos, grouping_map, minmax_aggs, total_table_pages, tuple_fraction, limit_tuples, qual_security_level, hasJoinRTEs, hasLateralRTEs, hasHavingQual, hasPseudoConstantQuals, hasAlternativeSubPlans, placeholdersFrozen, hasRecursion, group_rtindex, agginfos, aggtransinfos, numOrderedAggs, numOrderByAggs, hasNonPartialAggs, hasNonSerialAggs, wt_param_id, non_recursive_path, non_recursive_rows, self_ref_wt_params, curOuterRels, curOuterParams, partColsUpdated, join_search_private, isAltSubplan, isUsedSubplan, gravity_nested, gravity_width_cost, rel_arena, path_arena, rinfo_arena, em_arena, ph_info_arena, node_arena, pathtarget_arena },
 );
 
 // partsupfunc exempt: plain fmgr_info resolutions, fn_expr never set on the

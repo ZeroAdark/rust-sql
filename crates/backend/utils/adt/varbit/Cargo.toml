@@ -17,3 +17,6 @@ pqformat = { path = "../../../libpq/pqformat" }
 stringinfo = { path = "../../../../_support/types/stringinfo" }
 nodes_core = { path = "../../../nodes/nodes_core" }
 types_nodes = { path = "../../../../_support/types/nodes" }
+
+[dev-dependencies]
+detoast_seams = { path = "../../../access/common/detoast_seams" }

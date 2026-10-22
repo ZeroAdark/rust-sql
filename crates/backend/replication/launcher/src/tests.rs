@@ -325,3 +325,25 @@ fn claimed_worker_slot_starts_its_message_times_at_nobegin() {
     assert_eq!(TIMESTAMP_NOBEGIN, i64::MIN);
     assert_ne!(w.last_send_time, 0, "0 is the NULL sentinel of pg_stat_get_subscription");
 }
+
+// applyparallelworker.c:955: the parallel apply worker zeroes the three
+// message times it inherited from logicalrep_worker_launch (-infinity), so
+// pg_stat_subscription reads NULL for it, as for C.
+#[test]
+fn parallel_apply_worker_clears_launch_time_stats_to_null() {
+    let _g = ctx_test_guard();
+    ApplyLauncherShmemInit();
+    with_ctx(|ctx| {
+        ctx.workers[0].in_use = true;
+        ctx.workers[0].wtype = LogicalRepWorkerType::ParallelApply;
+        ctx.workers[0].subid = 100;
+        ctx.workers[0].last_send_time = TIMESTAMP_NOBEGIN;
+        ctx.workers[0].last_recv_time = TIMESTAMP_NOBEGIN;
+        ctx.workers[0].reply_time = TIMESTAMP_NOBEGIN;
+    });
+    logicalrep_worker_attach(0).unwrap();
+    my_worker_clear_stat_times();
+    let w = worker_snapshot(0).unwrap();
+    assert_eq!((w.last_send_time, w.last_recv_time, w.reply_time), (0, 0, 0));
+    logicalrep_worker_detach();
+}

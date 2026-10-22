@@ -1,0 +1,55 @@
+-- regress-full-with-021
+-- SELECT * FROM vsubdepartment ORDER BY name;
+graph pipelines=6 breakers=5 init_plans=1 root=p5
+p0 node=5 eligible rows=6 end=breaker(slot=0 Materialize)
+  nodes n5@0 n3@2^
+  source range rel=43718 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op98(v5.3, c25:'A')
+  project (1=v5.1, 2=v5.2, 3=v5.3)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p1 node=10 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p0 words=bits@5/6
+  nodes n10@0 n9@1
+  source breaker slot=0
+  project (1=v7.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w4:val
+p2 node=8 eligible rows=1200 end=breaker(slot=2 Materialize)
+  desc consumes=slot1@p1
+  nodes n8@0 n7@1 n3@3^
+  source range rel=43718 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v6.1, 2=v6.2, 3=v6.3)
+  probe slot=1 inner=n9 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p3 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Materialize)
+  desc consumes=slot0@p0 consumes=slot2@p2
+  nodes n3@0
+  source breaker slot=0
+  iterate body=p2 work=slot0 next=slot2 until=Empty wtparam=0 reruns=p1,p2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker
+p4 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=4 Sort)
+  desc consumes=slot3@p3
+  nodes n2@0 n0@1^
+  source breaker slot=3
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  sort keys=3+:Fp128@100 form=runs
+  outs 1=w4:val 2=w4:val 3=vl:row
+p5 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot4@p4
+  nodes n0@0
+  source breaker slot=4
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=vl:row
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p2 layout=[]->[Count@0] 8B
+breaker slot=3 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B
+breaker slot=4 kind=Sort budget=Share spill=Runs producer=p4 layout=[Fp128,Fp128]->[Count@16] 24B order=3+
+init_plan id=1 pipeline=p3 link=Cte param=$exec1 slot=3 raise-free
+rerun node=3 subplan=-1 pipelines=p1,p2 slots=0,1,2
+mapped: RecursiveUnion SeqScan CteScan WorkTableScan HashJoin Sort Hash SubPlan

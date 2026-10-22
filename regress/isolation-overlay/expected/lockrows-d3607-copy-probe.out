@@ -1,0 +1,98 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1fin s2done s1c s2show
+step s2x: EXPLAIN (COSTS OFF) WITH job_to_finalized_at AS (SELECT unnest(ARRAY[1, 2, 4]::bigint[]) AS id, unnest(ARRAY['2026-02-01', '2026-02-02', '2026-02-04']::timestamptz[]) AS finalized_at), job_to_update AS (SELECT cpp_job.id, job_to_finalized_at.finalized_at FROM cpp_job, job_to_finalized_at WHERE cpp_job.id = job_to_finalized_at.id AND cpp_job.state = 'running' FOR UPDATE), updated_job AS (UPDATE cpp_job SET finalized_at = job_to_update.finalized_at, state = 'completed' FROM job_to_update WHERE cpp_job.id = job_to_update.id RETURNING cpp_job.*) SELECT id, state, finalized_at FROM cpp_job WHERE id IN (SELECT id FROM job_to_finalized_at EXCEPT SELECT id FROM updated_job) UNION SELECT id, state, finalized_at FROM updated_job ORDER BY id;
+QUERY PLAN                                                                     
+-------------------------------------------------------------------------------
+Unique                                                                         
+  CTE job_to_finalized_at                                                      
+    ->  ProjectSet                                                             
+          ->  Result                                                           
+  CTE job_to_update                                                            
+    ->  LockRows                                                               
+          ->  Hash Join                                                        
+                Hash Cond: (cpp_job_1.id = job_to_finalized_at_1.id)           
+                ->  Seq Scan on cpp_job cpp_job_1                              
+                      Filter: (state = 'running'::text)                        
+                ->  Hash                                                       
+                      ->  CTE Scan on job_to_finalized_at job_to_finalized_at_1
+  CTE updated_job                                                              
+    ->  Update on cpp_job cpp_job_2                                            
+          ->  Hash Join                                                        
+                Hash Cond: (cpp_job_2.id = job_to_update.id)                   
+                ->  Seq Scan on cpp_job cpp_job_2                              
+                ->  Hash                                                       
+                      ->  CTE Scan on job_to_update                            
+  ->  Sort                                                                     
+        Sort Key: cpp_job.id, cpp_job.state, cpp_job.finalized_at              
+        ->  Append                                                             
+              ->  Hash Join                                                    
+                    Hash Cond: (cpp_job.id = job_to_finalized_at.id)           
+                    ->  Seq Scan on cpp_job                                    
+                    ->  Hash                                                   
+                          ->  HashSetOp Except                                 
+                                ->  CTE Scan on job_to_finalized_at            
+                                ->  CTE Scan on updated_job                    
+              ->  CTE Scan on updated_job updated_job_1                        
+(30 rows)
+
+step s1fin: UPDATE cpp_job SET state = 'completed', finalized_at = '2026-01-05' WHERE id = 1;
+step s2done: WITH job_to_finalized_at AS (SELECT unnest(ARRAY[1, 2, 4]::bigint[]) AS id, unnest(ARRAY['2026-02-01', '2026-02-02', '2026-02-04']::timestamptz[]) AS finalized_at), job_to_update AS (SELECT cpp_job.id, job_to_finalized_at.finalized_at FROM cpp_job, job_to_finalized_at WHERE cpp_job.id = job_to_finalized_at.id AND cpp_job.state = 'running' FOR UPDATE), updated_job AS (UPDATE cpp_job SET finalized_at = job_to_update.finalized_at, state = 'completed' FROM job_to_update WHERE cpp_job.id = job_to_update.id RETURNING cpp_job.*) SELECT id, state, finalized_at FROM cpp_job WHERE id IN (SELECT id FROM job_to_finalized_at EXCEPT SELECT id FROM updated_job) UNION SELECT id, state, finalized_at FROM updated_job ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+id|state    |finalized_at                
+--+---------+----------------------------
+ 1|running  |                            
+ 2|completed|Mon Feb 02 00:00:00 2026 PST
+ 4|completed|Wed Feb 04 00:00:00 2026 PST
+(3 rows)
+
+step s2show: SELECT id, state, finalized_at, metadata FROM cpp_job WHERE id IN (1, 2, 4) ORDER BY id;
+id|state    |finalized_at                |metadata
+--+---------+----------------------------+--------
+ 1|completed|Mon Jan 05 00:00:00 2026 PST|{}      
+ 2|completed|Mon Feb 02 00:00:00 2026 PST|{}      
+ 4|completed|Wed Feb 04 00:00:00 2026 PST|{}      
+(3 rows)
+
+
+starting permutation: s1meta s2done s1c s2show
+step s1meta: UPDATE cpp_job SET metadata = jsonb_build_object('seen', true) WHERE id = 1;
+step s2done: WITH job_to_finalized_at AS (SELECT unnest(ARRAY[1, 2, 4]::bigint[]) AS id, unnest(ARRAY['2026-02-01', '2026-02-02', '2026-02-04']::timestamptz[]) AS finalized_at), job_to_update AS (SELECT cpp_job.id, job_to_finalized_at.finalized_at FROM cpp_job, job_to_finalized_at WHERE cpp_job.id = job_to_finalized_at.id AND cpp_job.state = 'running' FOR UPDATE), updated_job AS (UPDATE cpp_job SET finalized_at = job_to_update.finalized_at, state = 'completed' FROM job_to_update WHERE cpp_job.id = job_to_update.id RETURNING cpp_job.*) SELECT id, state, finalized_at FROM cpp_job WHERE id IN (SELECT id FROM job_to_finalized_at EXCEPT SELECT id FROM updated_job) UNION SELECT id, state, finalized_at FROM updated_job ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+id|state    |finalized_at                
+--+---------+----------------------------
+ 1|completed|Sun Feb 01 00:00:00 2026 PST
+ 2|completed|Mon Feb 02 00:00:00 2026 PST
+ 4|completed|Wed Feb 04 00:00:00 2026 PST
+(3 rows)
+
+step s2show: SELECT id, state, finalized_at, metadata FROM cpp_job WHERE id IN (1, 2, 4) ORDER BY id;
+id|state    |finalized_at                |metadata      
+--+---------+----------------------------+--------------
+ 1|completed|Sun Feb 01 00:00:00 2026 PST|{"seen": true}
+ 2|completed|Mon Feb 02 00:00:00 2026 PST|{}            
+ 4|completed|Wed Feb 04 00:00:00 2026 PST|{}            
+(3 rows)
+
+
+starting permutation: s1del s2done s1c s2show
+step s1del: DELETE FROM cpp_job WHERE id = 2;
+step s2done: WITH job_to_finalized_at AS (SELECT unnest(ARRAY[1, 2, 4]::bigint[]) AS id, unnest(ARRAY['2026-02-01', '2026-02-02', '2026-02-04']::timestamptz[]) AS finalized_at), job_to_update AS (SELECT cpp_job.id, job_to_finalized_at.finalized_at FROM cpp_job, job_to_finalized_at WHERE cpp_job.id = job_to_finalized_at.id AND cpp_job.state = 'running' FOR UPDATE), updated_job AS (UPDATE cpp_job SET finalized_at = job_to_update.finalized_at, state = 'completed' FROM job_to_update WHERE cpp_job.id = job_to_update.id RETURNING cpp_job.*) SELECT id, state, finalized_at FROM cpp_job WHERE id IN (SELECT id FROM job_to_finalized_at EXCEPT SELECT id FROM updated_job) UNION SELECT id, state, finalized_at FROM updated_job ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2done: <... completed>
+id|state    |finalized_at                
+--+---------+----------------------------
+ 1|completed|Sun Feb 01 00:00:00 2026 PST
+ 2|running  |                            
+ 4|completed|Wed Feb 04 00:00:00 2026 PST
+(3 rows)
+
+step s2show: SELECT id, state, finalized_at, metadata FROM cpp_job WHERE id IN (1, 2, 4) ORDER BY id;
+id|state    |finalized_at                |metadata
+--+---------+----------------------------+--------
+ 1|completed|Sun Feb 01 00:00:00 2026 PST|{}      
+ 4|completed|Wed Feb 04 00:00:00 2026 PST|{}      
+(2 rows)
+

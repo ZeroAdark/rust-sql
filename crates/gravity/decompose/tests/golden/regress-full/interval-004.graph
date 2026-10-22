@@ -1,0 +1,10 @@
+-- regress-full-interval-004
+-- SELECT f1, f1::INTERVAL DAY TO MINUTE AS "minutes", (f1 + INTERVAL '1 month')::INTERVAL MONTH::INTERVAL YEAR AS "years" FROM interval_tbl;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1850 end=sink
+  nodes n0@0
+  source range rel=17177 rti=1 am=heap
+    lanes Attr(1):byref8:fx16:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=fn1200(v1.1, c23:201916415), 3=fn1200(fn1200(op1337(v1.1, c1186:#16), c23:196607), c23:327679))
+  outs 1=fx16:win/page 2=fx16:call1200 3=fx16:call1200
+mapped: SeqScan

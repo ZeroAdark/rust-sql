@@ -1,0 +1,13 @@
+-- oltpc-102
+-- UPDATE pgbench_accounts SET abalance = abalance + 10 WHERE aid = 4242 /* C70 TPCB update accounts */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16573 rti=1 am=heap index=16577
+    key att=1 op=96 value=c23:4242
+    recheck (op96(v1.1, c23:4242))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=op551(v1.3, c23:10), 2j=v1.-1, 3j=v1.1, 4j=v1.2, 5j=v1.4)
+  write UPDATE rel=16573 rti=1 natts=4 indexes=(16577[1]up) set=(3)
+  outs 1=w4:val 2=fx6:row 3=w8:val 4=w8:val 5=vl:win/page
+mapped: ModifyTable IndexScan

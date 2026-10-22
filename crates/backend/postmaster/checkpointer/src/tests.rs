@@ -18,6 +18,11 @@ fn stub_shmem_seams_once() {
     });
 }
 
+fn procsignal_seams_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(procsignal::init_seams);
+}
+
 fn shmem_for_tests() -> &'static CheckpointerShmemStruct {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| CheckpointerShmemInit(64).unwrap());
@@ -43,6 +48,19 @@ fn shmem_sizing_caps_at_max_requests() {
 fn main_fn_matches_child_main_shape() {
     let f: fn(&types_startup::StartupData) -> ! = CheckpointerMain;
     let _ = f;
+}
+
+#[test]
+fn main_loop_refreshes_shared_config_on_every_entry() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    struct ConfigUpdated;
+    syncrep_seams::sync_rep_update_sync_standbys_defined::set(|| {
+        std::panic::panic_any(ConfigUpdated);
+    });
+    for _ in 0..2 {
+        let result = std::panic::catch_unwind(checkpointer_main_loop);
+        assert!(result.unwrap_err().is::<ConfigUpdated>());
+    }
 }
 
 fn test_request(rel: u32) -> CheckpointerRequest {
@@ -202,6 +220,46 @@ fn shmem_init_registers_checkpointer_data() {
     assert_eq!(cp.requests.len(), 64);
 }
 
+#[test]
+fn signal_pended_before_reset_latch_is_handled_by_process_interrupts() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    const CKPT_PID: i32 = 4_000_017;
+    std::thread::spawn(|| {
+        g::SetMaxConnections(4);
+        g::set_max_worker_processes(2);
+        g::SetMaxBackends(4 + 3 + 2 + 2 + types_storage::storage::NUM_SPECIAL_WORKER_PROCS);
+        g::SetMyProcPid(CKPT_PID);
+        static SETUP: std::sync::Once = std::sync::Once::new();
+        SETUP.call_once(|| {
+            latch::init_seams();
+            procsignal_seams_once();
+            procsignal::ProcSignalShmemInit();
+        });
+        miscinit::InitProcessLocalLatch().expect("local latch");
+        procsignal::PreIdentitySignalAdopt(CKPT_PID);
+        procsignal::pqsignal_thread(
+            procsignal::signums::SIGUSR2,
+            procsignal::ThreadSignalHandler::Simple(interrupt::SignalHandlerForShutdownRequest),
+        );
+        assert!(!interrupt::ShutdownRequestPending());
+
+        assert_eq!(procsignal::SendThreadSignal(CKPT_PID, procsignal::signums::SIGUSR2), 0);
+        latch::ResetLatch(g::MyLatch().expect("MyLatch"));
+        ProcessCheckpointerInterrupts().expect("interrupts");
+
+        let seen = interrupt::ShutdownRequestPending();
+        procsignal::PreIdentitySignalRelease();
+        interrupt::SetShutdownRequestPending(false);
+        assert!(
+            seen,
+            "a SIGUSR2 pended before ResetLatch must be handled by ProcessCheckpointerInterrupts \
+             (else the shutdown-wait loop parks forever: D2500)"
+        );
+    })
+    .join()
+    .expect("test thread");
+}
+
 // checkpointer.c:829: a SIGHUP/SIGUSR1 pended while the checkpoint writes
 // buffers is dispatched by CheckpointWriteDelay itself, so a barrier or
 // reload does not wait for the write loop to finish.
@@ -218,7 +276,7 @@ fn checkpoint_write_delay_drains_pended_thread_signals() {
         stub_shmem_seams_once();
         init_small::globals::SetMaxBackends(16);
         procsignal::ProcSignalShmemInit();
-        procsignal_seams::proc_signal_barrier_pending::set(|| false);
+        procsignal_seams_once();
     });
     const PID: i32 = 424_151;
     procsignal::PreIdentitySignalAdopt(PID);

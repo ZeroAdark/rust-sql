@@ -724,3 +724,77 @@ fn convert_tuples_by_name_attrmap_is_identity() {
     let wrapped = convert_tuples_by_name_attrmap(&indesc, &outdesc, attmap);
     assert_eq!(&wrapped[..], &expected[..]);
 }
+
+#[test]
+fn missing_images_have_independent_exact_allocations() {
+    let ctx = MemoryContext::new("missing");
+    let before = ctx.used();
+    let a = [1u8; 17];
+    let b = [2u8; 33];
+    let (missing, mut store) = build_missing(ctx.mcx(), 4, &[
+        (0, MissingValue::ByVal(Datum::from_i32(42))),
+        (1, MissingValue::ByRef(&a)),
+        (3, MissingValue::ByRef(&b)),
+    ]).unwrap();
+    assert_eq!(store.len(), 2);
+    assert_eq!(store[0].capacity(), a.len());
+    assert_eq!(store[1].capacity(), b.len());
+    assert_eq!(store[0].as_slice(), a);
+    assert_eq!(store[1].as_slice(), b);
+    assert_eq!(missing[0].am_value, Datum::from_i32(42));
+    assert!(!missing[2].am_present);
+    for (i, image) in [(1, &store[0]), (3, &store[1])] {
+        assert_eq!(missing[i].am_value.as_usize(), image.as_ptr() as usize);
+        assert_eq!(image.as_ptr() as usize % MAXIMUM_ALIGNOF, 0);
+    }
+    assert_ne!(store[0].as_ptr(), a.as_ptr());
+    assert_ne!(store[1].as_ptr(), b.as_ptr());
+    let allocated = ctx.used();
+    drop(store.pop().unwrap());
+    assert_eq!(ctx.used(), allocated - b.len());
+    drop(store.pop().unwrap());
+    assert_eq!(ctx.used(), allocated - b.len() - a.len());
+    drop((missing, store));
+    assert_eq!(ctx.used(), before);
+}
+
+#[test]
+fn missing_image_size_limit_is_per_value() {
+    let sizes = [67_108_864usize; 16];
+    assert!(::mcx::check_alloc_size(sizes.iter().sum()).is_err());
+    for size in sizes {
+        ::mcx::check_alloc_size(size).unwrap();
+    }
+    ::mcx::check_alloc_size(1_073_741_823).unwrap();
+    assert!(::mcx::check_alloc_size(1_073_741_824).is_err());
+}
+
+#[test]
+fn missing_copy_outlives_source_context() {
+    install_seams();
+    let dst = MemoryContext::new("dst");
+    let copy = {
+        let src = MemoryContext::new("src");
+        let desc = with_constraints(src.mcx());
+        CreateTupleDescCopyConstr(dst.mcx(), &desc).unwrap()
+    };
+    let constr = copy.constr.as_ref().unwrap();
+    assert_eq!(constr.missing[0].am_value, Datum::from_i32(7));
+    assert_eq!(constr.missing[1].am_value.as_usize(), constr.missing_store[0].as_ptr() as usize);
+    assert_eq!(constr.missing_store[0].len(), 4);
+}
+
+#[test]
+fn missing_images_accounted_individually() {
+    let ctx = MemoryContext::new("missing");
+    let values = [
+        (0, MissingValue::ByRef(&[1u8; 17])),
+        (1, MissingValue::ByRef(&[2u8; 33])),
+    ];
+    let (missing, store) = build_missing(ctx.mcx(), 2, &values).unwrap();
+    assert_eq!(ctx.used(),
+        2 * core::mem::size_of::<AttrMissing>()
+        + 2 * core::mem::size_of::<PgVec<'_, u8>>() + 17 + 33);
+    drop((missing, store));
+    assert_eq!(ctx.used(), 0);
+}

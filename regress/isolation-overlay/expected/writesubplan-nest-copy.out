@@ -1,0 +1,190 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pd s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE wnc_v2 SET b = b || '!' WHERE a = 3;
+QUERY PLAN                                                
+----------------------------------------------------------
+Update on wnc                                             
+  ->  Nested Loop                                         
+        ->  Index Scan using wnc_pkey on wnc              
+              Index Cond: (a = 3)                         
+        ->  Subquery Scan on wnc_v1                       
+              Filter: ((wnc_v1.a < 10) AND (wnc_v1.a = 3))
+              ->  Bitmap Heap Scan on wnc wnc_1           
+                    Recheck Cond: (a > 0)                 
+                    ->  Bitmap Index Scan on wnc_pkey     
+                          Index Cond: (a > 0)             
+(10 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM wnc_v2 WHERE a = 2;
+QUERY PLAN                                                
+----------------------------------------------------------
+Delete on wnc                                             
+  ->  Nested Loop                                         
+        ->  Index Scan using wnc_pkey on wnc              
+              Index Cond: (a = 2)                         
+        ->  Subquery Scan on wnc_v1                       
+              Filter: ((wnc_v1.a < 10) AND (wnc_v1.a = 2))
+              ->  Bitmap Heap Scan on wnc wnc_1           
+                    Recheck Cond: (a > 0)                 
+                    ->  Bitmap Index Scan on wnc_pkey     
+                          Index Cond: (a > 0)             
+(10 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1b s1o s2b s1c s2c s3sel
+step s1b: UPDATE wnc SET b = b || ' s1' WHERE a = 3;
+step s1o: UPDATE wnc SET b = 'other' WHERE a = 5;
+step s2b: UPDATE wnc_v2 SET b = b || '!' WHERE a = 3 RETURNING old.*, new.*; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+a|b     |a|b     
+-+------+-+------
+3|Row 3!|3|Row 3!
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT a, b FROM wnc ORDER BY a;
+ a|b     
+--+------
+-2|Row -2
+-1|Row -1
+ 0|Row 0 
+ 1|Row 1 
+ 2|Row 2 
+ 3|Row 3!
+ 4|Row 4 
+ 5|other 
+ 6|Row 6 
+(9 rows)
+
+
+starting permutation: s1k s2k s1c s2c s3sel
+step s1k: UPDATE wnc SET a = 30 WHERE a = 4;
+step s2k: UPDATE wnc_v2 SET b = b || '!' WHERE a = 4 RETURNING *; <waiting ...>
+step s1c: COMMIT;
+step s2k: <... completed>
+a|b
+-+-
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT a, b FROM wnc ORDER BY a;
+ a|b     
+--+------
+-2|Row -2
+-1|Row -1
+ 0|Row 0 
+ 1|Row 1 
+ 2|Row 2 
+ 3|Row 3 
+ 5|Row 5 
+ 6|Row 6 
+30|Row 4 
+(9 rows)
+
+
+starting permutation: s1d s2d s1c s2c s3sel
+step s1d: DELETE FROM wnc WHERE a = 2;
+step s2d: DELETE FROM wnc_v2 WHERE a = 2 RETURNING old.*, new.*; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+a|b|a|b
+-+-+-+-
+(0 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT a, b FROM wnc ORDER BY a;
+ a|b     
+--+------
+-2|Row -2
+-1|Row -1
+ 0|Row 0 
+ 1|Row 1 
+ 3|Row 3 
+ 4|Row 4 
+ 5|Row 5 
+ 6|Row 6 
+(8 rows)
+
+
+starting permutation: s1b s2bd s1c s2c s3sel
+step s1b: UPDATE wnc SET b = b || ' s1' WHERE a = 3;
+step s2bd: DELETE FROM wnc_v2 WHERE a = 3 RETURNING *; <waiting ...>
+step s1c: COMMIT;
+step s2bd: <... completed>
+a|b    
+-+-----
+3|Row 3
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT a, b FROM wnc ORDER BY a;
+ a|b     
+--+------
+-2|Row -2
+-1|Row -1
+ 0|Row 0 
+ 1|Row 1 
+ 2|Row 2 
+ 4|Row 4 
+ 5|Row 5 
+ 6|Row 6 
+(8 rows)
+
+
+starting permutation: s1b s1k s2m s1c s2c s3sel
+step s1b: UPDATE wnc SET b = b || ' s1' WHERE a = 3;
+step s1k: UPDATE wnc SET a = 30 WHERE a = 4;
+step s2m: UPDATE wnc_v2 SET b = b || '!' WHERE a IN (2, 3, 4) RETURNING *; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+a|b     
+-+------
+2|Row 2!
+3|Row 3!
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT a, b FROM wnc ORDER BY a;
+ a|b     
+--+------
+-2|Row -2
+-1|Row -1
+ 0|Row 0 
+ 1|Row 1 
+ 2|Row 2!
+ 3|Row 3!
+ 5|Row 5 
+ 6|Row 6 
+30|Row 4 
+(9 rows)
+
+
+starting permutation: s2b s1b s2c s1c s3sel
+step s2b: UPDATE wnc_v2 SET b = b || '!' WHERE a = 3 RETURNING old.*, new.*;
+a|b     |a|b     
+-+------+-+------
+3|Row 3!|3|Row 3!
+(1 row)
+
+step s1b: UPDATE wnc SET b = b || ' s1' WHERE a = 3; <waiting ...>
+step s2c: COMMIT;
+step s1b: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT a, b FROM wnc ORDER BY a;
+ a|b        
+--+---------
+-2|Row -2   
+-1|Row -1   
+ 0|Row 0    
+ 1|Row 1    
+ 2|Row 2    
+ 3|Row 3! s1
+ 4|Row 4    
+ 5|Row 5    
+ 6|Row 6    
+(9 rows)
+

@@ -1,0 +1,161 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1a s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.attempts FROM rdt t WHERE t.status = 'ready' AND t.priority = 3 AND t.id < 60 AND NOT EXISTS (SELECT 1 FROM rdl l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at FOR UPDATE;
+QUERY PLAN                                                                     
+-------------------------------------------------------------------------------
+LockRows                                                                       
+  ->  Sort                                                                     
+        Sort Key: t.run_at                                                     
+        ->  Hash Right Anti Join                                               
+              Hash Cond: (l.task_id = t.id)                                    
+              ->  Seq Scan on rdl l                                            
+              ->  Hash                                                         
+                    ->  Index Scan using rdt_pkey on rdt t                     
+                          Index Cond: (id < 60)                                
+                          Filter: ((status = 'ready'::text) AND (priority = 3))
+(10 rows)
+
+step s1a: UPDATE rdt SET attempts = attempts + 10 WHERE id = 7;
+step s2l: SELECT t.id, t.attempts FROM rdt t WHERE t.status = 'ready' AND t.priority = 3 AND t.id < 60 AND NOT EXISTS (SELECT 1 FROM rdl l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts
+--+--------
+ 7|      11
+11|       2
+19|       1
+23|       2
+27|       0
+31|       1
+39|       0
+43|       1
+47|       2
+51|       0
+59|       2
+(11 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2l s1c
+step s1s: UPDATE rdt SET status = 'done' WHERE id = 7;
+step s2l: SELECT t.id, t.attempts FROM rdt t WHERE t.status = 'ready' AND t.priority = 3 AND t.id < 60 AND NOT EXISTS (SELECT 1 FROM rdl l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts
+--+--------
+11|       2
+19|       1
+23|       2
+27|       0
+31|       1
+39|       0
+43|       1
+47|       2
+51|       0
+59|       2
+(10 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2l s1c
+step s1p: UPDATE rdt SET priority = 2 WHERE id = 7;
+step s2l: SELECT t.id, t.attempts FROM rdt t WHERE t.status = 'ready' AND t.priority = 3 AND t.id < 60 AND NOT EXISTS (SELECT 1 FROM rdl l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts
+--+--------
+11|       2
+19|       1
+23|       2
+27|       0
+31|       1
+39|       0
+43|       1
+47|       2
+51|       0
+59|       2
+(10 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2l s1c
+step s1l: INSERT INTO rdl VALUES (7, 'x'); UPDATE rdt SET attempts = attempts + 10 WHERE id = 7;
+step s2l: SELECT t.id, t.attempts FROM rdt t WHERE t.status = 'ready' AND t.priority = 3 AND t.id < 60 AND NOT EXISTS (SELECT 1 FROM rdl l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts
+--+--------
+ 7|      11
+11|       2
+19|       1
+23|       2
+27|       0
+31|       1
+39|       0
+43|       1
+47|       2
+51|       0
+59|       2
+(11 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1u s2l s1c
+step s1u: DELETE FROM rdl WHERE task_id = 15; UPDATE rdt SET attempts = attempts + 10 WHERE id = 7;
+step s2l: SELECT t.id, t.attempts FROM rdt t WHERE t.status = 'ready' AND t.priority = 3 AND t.id < 60 AND NOT EXISTS (SELECT 1 FROM rdl l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts
+--+--------
+ 7|      11
+11|       2
+19|       1
+23|       2
+27|       0
+31|       1
+39|       0
+43|       1
+47|       2
+51|       0
+59|       2
+(11 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT id FROM rdt WHERE id = 7 FOR UPDATE;
+id
+--
+ 7
+(1 row)
+
+step s2sk: SELECT t.id FROM rdt t WHERE t.status = 'ready' AND t.priority = 3 AND t.id < 60 AND NOT EXISTS (SELECT 1 FROM rdl l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at FOR UPDATE SKIP LOCKED;
+id
+--
+11
+19
+23
+27
+31
+39
+43
+47
+51
+59
+(10 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2nw s1c
+step s1k: SELECT id FROM rdt WHERE id = 7 FOR UPDATE;
+id
+--
+ 7
+(1 row)
+
+step s2nw: SELECT t.id FROM rdt t WHERE t.status = 'ready' AND t.priority = 3 AND t.id < 60 AND NOT EXISTS (SELECT 1 FROM rdl l WHERE l.task_id = t.id) ORDER BY t.priority DESC, t.run_at FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "rdt"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

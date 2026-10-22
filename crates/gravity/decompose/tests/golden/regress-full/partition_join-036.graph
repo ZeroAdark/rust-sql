@@ -1,0 +1,11 @@
+-- regress-full-partition_join-036
+-- INSERT INTO pht1_e SELECT i, i, 'A' || to_char(i/50, 'FM0000') FROM generate_series(0, 299, 2) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: true } fn1066 fn1066(c23:0, c23:299, c23:2)]
+  project (1=v3.1, 2=v3.1, 3=op654(c25:'A', fn1773(op528(v3.1, c23:50), c25:'FM0000')))
+  write INSERT rel=44126 rti=1 natts=3 indexes=() route=rti1:44126 natts=3
+  outs 1=w4:val 2=w4:val 3=vl:call1258
+mapped: ModifyTable FunctionScan

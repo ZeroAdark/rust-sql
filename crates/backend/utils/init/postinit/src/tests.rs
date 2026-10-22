@@ -1,7 +1,5 @@
 use super::*;
 
-// Test-local accessors for GUC slots whose owner units are unported
-// (autovacuum, walsender, lock); values are the C boot_vals.
 fn install_test_gucs() {
     use std::sync::atomic::{AtomicI32, Ordering};
     use std::sync::Once;
@@ -55,7 +53,6 @@ fn split_opts_matches_c() {
     pg_split_opts(&mut av, "   ");
     assert!(av.is_empty());
 
-    // Trailing single escape swallows nothing and terminates the option.
     let mut av = Vec::new();
     pg_split_opts(&mut av, r"end\");
     assert_eq!(av, vec!["end"]);
@@ -64,7 +61,6 @@ fn split_opts_matches_c() {
 #[test]
 fn fastpath_groups_default_is_four() {
     install_test_gucs();
-    // max_locks_per_transaction boot value 64 => nextpower2(64)/16 = 4.
     assert_eq!(InitializeFastPathLocks(), 4);
 }
 
@@ -82,9 +78,6 @@ fn fastpath_groups_unsigned_nextpower2_before_clamp() {
 #[test]
 fn initialize_max_backends_sums_and_gates() {
     install_test_gucs();
-    // Boot values: 100 + 16 + 16 + 10 + 2 (max_connections + autovacuum_worker_slots
-    // + max_worker_processes + max_wal_senders + NUM_SPECIAL_WORKER_PROCS).
-    // max_worker_processes moved 8 -> 16 with the t34 jit/parallel shipped defaults.
     init_small::globals::SetMaxBackends(0);
     InitializeMaxBackends().unwrap();
     assert_eq!(init_small::globals::MaxBackends(), 144);
@@ -133,11 +126,6 @@ fn timeout_flag_handlers_set_pending_flags() {
 
 #[test]
 fn init_postgres_fails_loud_at_first_unported_seam() {
-    // Boot-readiness probe: bootstrap-mode InitPostgres must reach the C
-    // sequence and stop at a NAMED uninstalled seam, not a mystery. With
-    // landed units wired, the first loud stop for a bootstrap backend is
-    // pgstat_beinit (backend_status.c unported); InitProcessPhase2 requires
-    // shmem-armed PGPROC, so with no proc it panics with its own name first.
     let result = std::panic::catch_unwind(|| {
         let top = mcx::MemoryContext::new("postinit test");
         miscinit::SetProcessingMode(types_core::ProcessingMode::BootstrapProcessing);
@@ -155,16 +143,16 @@ fn init_postgres_fails_loud_at_first_unported_seam() {
     );
 }
 
-// UTF-8-only server-encoding carve (docs/design/carve-ratifications.md §11,
-// ratified 2026-08-18): CheckMyDatabase refuses non-UTF8/non-SQL_ASCII
-// databases with a clean per-database FATAL naming the database, its
-// encoding, and the carve.
 #[test]
 fn utf8_only_connection_gate() {
     assert!(unsupported_database_encoding_error("db", wchar::PG_UTF8).is_none());
-    assert!(unsupported_database_encoding_error("db", wchar::PG_SQL_ASCII).is_none());
 
-    for (enc, ename) in [(wchar::PG_LATIN1, "LATIN1"), (wchar::PG_EUC_JP, "EUC_JP")] {
+    for (enc, ename) in [
+        (wchar::PG_SQL_ASCII, "SQL_ASCII"),
+        (wchar::PG_LATIN1, "LATIN1"),
+        (wchar::PG_WIN1252, "WIN1252"),
+        (wchar::PG_EUC_JP, "EUC_JP"),
+    ] {
         let e = unsupported_database_encoding_error("legacy", enc).expect("must be refused");
         assert_eq!(e.level(), types_error::FATAL);
         assert_eq!(e.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);
@@ -172,7 +160,7 @@ fn utf8_only_connection_gate() {
             e.message(),
             format!(
                 "database \"legacy\" has server encoding \"{ename}\", which is not supported \
-                 by pgrust; only \"UTF8\" and \"SQL_ASCII\" server encodings are accepted \
+                 by pgrust; only the \"UTF8\" server encoding is accepted \
                  (UTF-8-only carve, docs/design/carve-ratifications.md)"
             )
         );
@@ -186,8 +174,6 @@ fn utf8_only_connection_gate() {
     }
 }
 
-// audit-18.6 b051 (postinit.c:530): pg_split_opts appends raw bytes, so a
-// multi-byte UTF-8 option value survives the split unchanged.
 #[test]
 fn split_opts_preserves_utf8_bytes() {
     let mut av = Vec::new();
@@ -196,15 +182,11 @@ fn split_opts_preserves_utf8_bytes() {
     assert_eq!(av[1].as_bytes(), b"b051.name=caf\xc3\xa9");
 }
 
-// audit-18.6 b051 (postinit.c:479 via ruleutils.c:13112-13115): the
-// collation-mismatch HINT quotes the database name like C's
-// quote_identifier — reserved keywords are quoted even when all-lowercase.
 #[test]
 fn quote_identifier_quotes_keywords() {
     assert_eq!(quote_identifier("user"), "\"user\"");
     assert_eq!(quote_identifier("order"), "\"order\"");
     assert_eq!(quote_identifier("table"), "\"table\"");
-    // Unreserved keywords stay bare, exactly like C.
     assert_eq!(quote_identifier("data"), "data");
     assert_eq!(quote_identifier("plain_db1"), "plain_db1");
 }

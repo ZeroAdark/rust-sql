@@ -1,0 +1,85 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1mv s1v s1d s1cap s2d s1c s2c s3sel s3cnt
+step s1mv: UPDATE sk SET grp = 9 WHERE k = 51;
+step s1v: UPDATE sk SET v = 1000 WHERE k = 61;
+step s1d: DELETE FROM sk WHERE k = 71;
+step s1cap: UPDATE sl SET cap = 1000 WHERE grp = 1;
+step s2d: WITH d AS (DELETE FROM sk t WHERE t.grp = 1 AND t.v > (SELECT l.cap FROM sl l WHERE l.grp = t.grp) * 2) SELECT count(*) FROM sk; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+count
+-----
+  200
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v, grp FROM sk WHERE k IN (36, 41, 51, 61, 71, 81) ORDER BY k;
+ k| v|grp
+--+--+---
+36|36|  1
+51|51|  9
+(2 rows)
+
+step s3cnt: SELECT count(*), sum(v) FROM sk;
+count|  sum
+-----+-----
+  169|16359
+(1 row)
+
+
+starting permutation: s1mv s1v s1d s1cap s2u s1c s2c s3sel s3cnt
+step s1mv: UPDATE sk SET grp = 9 WHERE k = 51;
+step s1v: UPDATE sk SET v = 1000 WHERE k = 61;
+step s1d: DELETE FROM sk WHERE k = 71;
+step s1cap: UPDATE sl SET cap = 1000 WHERE grp = 1;
+step s2u: WITH u AS (UPDATE sk t SET v = t.v + 1 WHERE t.grp = 1 AND t.v > (SELECT l.cap FROM sl l WHERE l.grp = t.grp) * 2) SELECT count(*), sum(v) FROM sk; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+count|  sum
+-----+-----
+  200|20100
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v, grp FROM sk WHERE k IN (36, 41, 51, 61, 71, 81) ORDER BY k;
+ k|   v|grp
+--+----+---
+36|  36|  1
+41|  42|  1
+51|  51|  9
+61|1001|  1
+81|  82|  1
+(5 rows)
+
+step s3cnt: SELECT count(*), sum(v) FROM sk;
+count|  sum
+-----+-----
+  199|20998
+(1 row)
+
+
+starting permutation: s1mv s1v s2d s1r s2c s3sel s3cnt
+step s1mv: UPDATE sk SET grp = 9 WHERE k = 51;
+step s1v: UPDATE sk SET v = 1000 WHERE k = 61;
+step s2d: WITH d AS (DELETE FROM sk t WHERE t.grp = 1 AND t.v > (SELECT l.cap FROM sl l WHERE l.grp = t.grp) * 2) SELECT count(*) FROM sk; <waiting ...>
+step s1r: ROLLBACK;
+step s2d: <... completed>
+count
+-----
+  200
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT k, v, grp FROM sk WHERE k IN (36, 41, 51, 61, 71, 81) ORDER BY k;
+ k| v|grp
+--+--+---
+36|36|  1
+(1 row)
+
+step s3cnt: SELECT count(*), sum(v) FROM sk;
+count|  sum
+-----+-----
+  168|16308
+(1 row)
+

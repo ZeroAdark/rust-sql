@@ -9,6 +9,7 @@ path = "src/lib.rs"
 
 [dependencies]
 mcx = { path = "../../../_support/mcx" }
+memledger = { path = "../../../_support/memledger" }
 types_core = { path = "../../../_support/types/types_core" }
 types_error = { path = "../../../_support/types/types_error" }
 types_portal = { path = "../../../_support/types/portal" }
@@ -25,6 +26,7 @@ xact = { path = "../../access/transam/xact" }
 exectuples = { path = "../../executor/exectuples" }
 guc_tables = { path = "../../utils/misc/guc_tables" }
 pquery_seams = { path = "../pquery_seams" }
+gravity_entry_seams = { path = "../gravity_entry_seams" }
 plancache = { path = "../../utils/cache/plancache" }
 prepare_seams = { path = "../../commands/prepare_seams" }
 resowner_seams = { path = "../../utils/resowner/resowner_seams" }
@@ -46,6 +48,7 @@ explain = { path = "../../commands/explain" }
 fmgr_seams = { path = "../../utils/fmgr/fmgr_seams" }
 guc = { path = "../../utils/misc/guc" }
 init_small = { path = "../../utils/init/init_small" }
+ipc_portal_seams = { path = "../../storage/ipc/ipc_portal_seams" }
 ipc_seams = { path = "../../storage/ipc/ipc_seams" }
 latch_seams = { path = "../../storage/ipc/latch_seams" }
 lmgr_proc = { path = "../../storage/lmgr/lmgr_proc" }
@@ -59,6 +62,7 @@ pg_sema_seams = { path = "../../port/pg_sema_seams" }
 pgtz = { path = "../../timezone/pgtz" }
 planner = { path = "../../optimizer/plan/planner" }
 pmsignal_seams = { path = "../../storage/ipc/pmsignal_seams" }
+portalcmds_seams = { path = "../../commands/portalcmds_seams" }
 pqcomm_seams = { path = "../../libpq/pqcomm_seams" }
 printtup = { path = "../../access/common/printtup" }
 procarray = { path = "../../storage/ipc/procarray" }
@@ -75,8 +79,11 @@ timestamp_seams = { path = "../../utils/adt/timestamp_seams" }
 transam_xlog_seams = { path = "../../access/transam/transam_xlog_seams" }
 tuplestore = { path = "../../utils/sort/tuplestore" }
 types_fmgr = { path = "../../../_support/types/fmgr" }
+types_snapshot = { path = "../../../_support/types/snapshot" }
 types_tuple = { path = "../../../_support/types/types_tuple" }
 utility = { path = "../utility" }
 variable = { path = "../../commands/variable" }
 varsup = { path = "../../access/transam/varsup" }
 waitevent_seams = { path = "../../utils/activity/waitevent_seams" }
+xact_portal_seams = { path = "../../access/transam/xact_portal_seams" }
+xact_seams = { path = "../../access/transam/xact_seams" }

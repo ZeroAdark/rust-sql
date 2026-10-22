@@ -1,0 +1,20 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/manifest.rs
+growth	pgrc_format::try_reserve_more	1
+growth	pgrc_format::try_resize	1
+growth	pgrc_format::wire::put_u16	6
+growth	pgrc_format::wire::put_u32	35
+growth	pgrc_format::wire::put_u64	18
+growth	pgrc_format::wire::put_u8	10
+growth	std::iter::Extend::extend	2
+growth	std::vec::Vec::extend_from_slice	7
+growth	std::vec::Vec::push	13
+growth	std::vec::Vec::shrink_to_fit	1
+macro	std::vec	1
+method	pgrc_format::try_filled	1
+method	pgrc_format::try_to_vec	3
+method	pgrc_format::try_vec	14
+method	slice::sort_by_key	1
+method	std::clone::Clone::clone	7
+method	std::iter::Iterator::collect	4
+method	std::vec::Vec::with_capacity	5
+type	std::vec::Vec	14

@@ -1,0 +1,26 @@
+-- oltpc-049
+-- SELECT o_id FROM orders o WHERE o_w_id = 1 AND o_d_id = 1 AND o_id = 3 AND EXISTS (SELECT 1 FROM order_line ol WHERE ol.ol_w_id = o.o_w_id AND ol.ol_d_id = o.o_d_id AND ol.ol_o_id = o.o_id) /* C83 exists semi-join */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index-only rel=16492 rti=1 am=heap index=16502
+    key att=3 op=96 value=c23:1
+    key att=5 op=532 value=c23:1
+    key att=2 op=96 value=c23:3
+    recheck (op96(index.1, c23:1), op532(index.2, c23:1), op96(index.3, c23:3))
+    lanes Attr(2):byval8:w8:val
+  project (1=index.1, 2=index.2, 3=index.3)
+  nest inner=n2 JOIN_SEMI invariant raise-free params=()
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index-only rel=16504 rti=2 am=heap index=16514
+    key att=3 op=96 value=c23:1
+    key att=6 op=532 value=c23:1
+    key att=2 op=96 value=c23:3
+    recheck (op96(index.1, c23:1), op532(index.2, c23:1), op96(index.3, c23:3))
+    lanes
+  project (1=index.1, 2=index.2, 3=index.3, 4=index.4)
+  project (1=outer.3)
+  outs 1=w4:val 2=w2:val 3=w4:val
+  outs 1=w4:val
+mapped: IndexOnlyScan NestLoop

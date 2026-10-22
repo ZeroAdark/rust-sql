@@ -1,0 +1,1 @@
+backend/utils/error/elog/src/errposition.rs	PARSER_ERRPOSITION	pgport	scope:ParserErrpositionScope	thread	the parse location a parser call on this thread arms for the non-ERROR reports raised inside it (C's pcb_error_callback); the guard's Drop puts the previous arming back

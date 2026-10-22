@@ -1,0 +1,13 @@
+# ORDER BY an expression equal to a select item
+sql: SELECT g, count(*) FROM t GROUP BY g ORDER BY count(*) DESC;
+cols: g	count
+class: ordered 2
+verdict: match
+[pg]
+a	3
+b	3
+c	1
+[got]
+b	3
+a	3
+c	1

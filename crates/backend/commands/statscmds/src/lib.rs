@@ -870,6 +870,6 @@ fn lookup_statext_in_search_path(stats_name: &str) -> PgResult<Oid> {
         if n <= path.len() {
             return first_statext_on_path(stats_name, &path[..n]);
         }
-        path.resize(n, InvalidOid);
+        ::mcx::std_vec_resize("commands", &mut path, n, InvalidOid)?;
     }
 }

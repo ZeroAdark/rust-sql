@@ -1,0 +1,4 @@
+# PostgreSQL 18.6 src/backend/utils/adt/jsonfuncs.c: 3 stack-depth check sites
+2835	populate_array_dim_jsonb	crates/backend/utils/adt/jsonb/src/populate.rs	populate_array_dim_jsonb	yes	
+3419	populate_record_field	crates/backend/utils/adt/jsonb/src/populate.rs	populate_record_field	yes	
+5212	setPath	crates/backend/utils/adt/jsonb/src/mutate.rs	set_path_rec	yes	set_path's recursive step

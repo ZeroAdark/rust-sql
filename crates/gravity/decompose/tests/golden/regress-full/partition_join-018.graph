@@ -1,0 +1,81 @@
+-- regress-full-partition_join-018
+-- EXPLAIN (COSTS OFF) SELECT count(*) FROM prt1 t1 LEFT JOIN LATERAL (SELECT t1.b AS t1b, t2.* FROM prt2 t2) s ON t1.a = s.b WHERE s.t1b = s.b;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=3 eligible rows=125 end=breaker(slot=0 PlainAgg)
+  nodes n3@0 n2@1 n1@3 n0@5^
+  source range rel=43946 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v5.1, 2=v5.2)
+  nest inner=n4 JOIN_INNER raise-free params=($exec0=outer.2, $exec1=outer.1)
+  inner node=4 serial site=0 reason=IndexSource end=sink
+  nodes n4@0
+  source index-only rel=43967 rti=8 am=heap index=43982
+    key att=2 op=96 value=$exec1
+    recheck (op96(index.1, $exec1))
+    lanes Attr(2):byval8:w8:val
+  filter op96(index.1, $exec0)
+  project (1=index.1, 2=$exec0)
+  project ()
+  append arm 0/3
+  project ()
+  outs 1=w8:val 2=w8:val
+  outs
+  outs
+p1 node=6 eligible rows=125 end=breaker(slot=0 PlainAgg)
+  nodes n6@0 n5@1 n1@3 n0@5^
+  source range rel=43956 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v6.1, 2=v6.2)
+  nest inner=n7 JOIN_INNER raise-free params=($exec2=outer.2, $exec3=outer.1)
+  inner node=7 serial site=0 reason=IndexSource end=sink
+  nodes n7@0
+  source index-only rel=43972 rti=9 am=heap index=43983
+    key att=2 op=96 value=$exec3
+    recheck (op96(index.1, $exec3))
+    lanes Attr(2):byval8:w8:val
+  filter op96(index.1, $exec2)
+  project (1=index.1, 2=$exec2)
+  project ()
+  append arm 1/3
+  project ()
+  outs 1=w8:val 2=w8:val
+  outs
+  outs
+p2 node=9 eligible rows=50 end=breaker(slot=0 PlainAgg)
+  nodes n9@0 n8@1 n1@3 n0@5^
+  source range rel=43951 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.1, 2=v7.2)
+  nest inner=n10 JOIN_INNER raise-free params=($exec4=outer.2, $exec5=outer.1)
+  inner node=10 serial site=0 reason=IndexSource end=sink
+  nodes n10@0
+  source index-only rel=43977 rti=10 am=heap index=43984
+    key att=2 op=96 value=$exec5
+    recheck (op96(index.1, $exec5))
+    lanes Attr(2):byval8:w8:val
+  filter op96(index.1, $exec4)
+  project (1=index.1, 2=$exec4)
+  project ()
+  append arm 2/3
+  project ()
+  outs 1=w8:val 2=w8:val
+  outs
+  outs
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p1 layout=[]->[Count@0] 8B
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p2 layout=[]->[Count@0] 8B
+group slot=0 producer=p2 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+param $exec0 owner=n2 type=23 rep=w8:val
+param $exec1 owner=n2 type=23 rep=w8:val
+param $exec2 owner=n5 type=23 rep=w8:val
+param $exec3 owner=n5 type=23 rep=w8:val
+param $exec4 owner=n8 type=23 rep=w8:val
+param $exec5 owner=n8 type=23 rep=w8:val
+mapped: Append SeqScan IndexOnlyScan NestLoop NestLoopParam Agg

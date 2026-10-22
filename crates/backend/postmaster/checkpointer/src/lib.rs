@@ -115,10 +115,9 @@ struct CheckpointerRequest {
     ftag: FileTag,
 }
 
-// align(8): requests[] (64-bit FileTag fields) follows this header in the
-// same block, so the header's alignment must cover the element's on every
-// pointer width — natively it already is 8 (the slice reference); wasm32's
-// pointer-sized 4 would fail the CheckpointerShmemInit const assertion.
+// align(8): the requests[] flexible array starts right after the header, so
+// the header's alignment must cover the element's (FileTag carries u64 block
+// numbers). Native already is 8; wasm32's header is 4-aligned without this.
 #[repr(align(8))]
 struct CheckpointerShmemStruct {
     checkpointer_pid: AtomicI32,
@@ -337,14 +336,6 @@ pub fn CheckpointerMain(startup_data: &StartupData) -> ! {
 
     libpq_pqsignal::unblock_signals();
 
-    if let Err(e) = UpdateSharedMemoryConfig() {
-        fatal_exit(&e);
-    }
-
-    lmgr_proc::ProcGlobal()
-        .checkpointerProc
-        .store(g::MyProcNumber(), Relaxed);
-
     // sigsetjmp(PG_exception_stack) equivalent: an Err escaping the cycle
     // runs the minimal-abort cleanup, then re-enters after 1 s.
     loop {
@@ -362,6 +353,7 @@ pub fn CheckpointerMain(startup_data: &StartupData) -> ! {
     if SHUTDOWN_XLOG_PENDING.load(Relaxed) {
         pending_stats::pgstat_count_checkpointer_num_requested();
         transam_xlog::ShutdownXLOG().unwrap_or_else(|e| fatal_exit(&e));
+        gravity_feedback_flush();
         report_checkpointer_stats();
         report_wal_stats(true);
 
@@ -391,6 +383,12 @@ pub fn CheckpointerMain(startup_data: &StartupData) -> ! {
     }
 
     ipc::proc_exit(0, g::MyProcPid())
+}
+
+fn gravity_feedback_flush() {
+    if gravity_entry_seams::feedback_flush::is_installed() {
+        gravity_entry_seams::feedback_flush::call();
+    }
 }
 
 fn pgstat_before_server_shutdown_cb(code: i32, _arg: datum::Datum) -> PgResult<()> {
@@ -448,6 +446,12 @@ fn abort_cleanup(err: &PgError) {
 }
 
 fn checkpointer_main_loop() -> PgResult<()> {
+    UpdateSharedMemoryConfig()?;
+
+    lmgr_proc::ProcGlobal()
+        .checkpointerProc
+        .store(g::MyProcNumber(), Relaxed);
+
     loop {
         let mut do_checkpoint = false;
         let mut flags = 0i32;
@@ -538,6 +542,7 @@ fn checkpointer_main_loop() -> PgResult<()> {
             };
 
             smgr::smgrdestroyall()?;
+            gravity_feedback_flush();
 
             with_ckpt_lck(|cp| {
                 cp.ckpt_done.store(cp.ckpt_started.load(Relaxed), Relaxed);
@@ -598,6 +603,8 @@ fn checkpointer_main_loop() -> PgResult<()> {
 }
 
 pub fn ProcessCheckpointerInterrupts() -> PgResult<()> {
+    procsignal::DrainThreadSignals()?;
+
     if procsignal_seams::proc_signal_barrier_pending::call() {
         procsignal_seams::process_proc_signal_barrier::call()?;
     }
@@ -721,7 +728,9 @@ fn IsCheckpointOnSchedule(progress: f64) -> bool {
     } else {
         transam_xlog::GetInsertRecPtr()
     };
-    let elapsed_xlogs = (recptr.wrapping_sub(CKPT_START_RECPTR.get()) as f64
+    // WR L4b: spool bytes referenced since the checkpoint began count as WAL written.
+    let written = recptr.wrapping_sub(CKPT_START_RECPTR.get()) + transam_xlog::spool_bytes_from(CKPT_START_RECPTR.get());
+    let elapsed_xlogs = (written as f64
         / transam_xlog::wal_segment_size() as f64)
         / transam_xlog::CheckPointSegments() as f64;
 

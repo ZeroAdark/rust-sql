@@ -1,0 +1,11 @@
+-- regress-full-inherit-074
+-- insert into permtest_parent select 1, 'a', left(fipshash(i::text), 5) from generate_series(0, 100) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, c23:100)]
+  project (1=c23:1, 2=c25:'a', 3=fn3060(fn877(fn1946(fn3420(io17(io25(v3.1))), c25:'hex'), c23:1, c23:32), c23:5))
+  write INSERT rel=23717 rti=1 natts=3 indexes=() route=rti1:23717 natts=3
+  outs 1=w4:val 2=vl:stmt/imm 3=vl:call3060
+mapped: ModifyTable FunctionScan

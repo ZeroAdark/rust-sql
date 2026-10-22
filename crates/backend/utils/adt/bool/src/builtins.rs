@@ -7,7 +7,8 @@ use ::datum::Datum;
 use ::types_core::Oid;
 use ::types_error::PgResult;
 use ::types_fmgr::{
-    varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction,
+    varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, OutInto, PGFunction,
+    OUT_CHARS_BOOL,
 };
 
 pub fn fc_boolrecv(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -35,10 +36,13 @@ pub fn fc_boolin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     Ok(Datum::from_bool(crate::boolin(s, esc)?))
 }
 
-pub fn fc_boolout(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let [a] = fcinfo.args_n::<1>();
-    let b = a.value.as_bool();
-    Ok(::types_fmgr::cstring_scratch(flinfo, "boolout", &[crate::boolout(b)]))
+
+pub fn fc_boolout(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let b = fcinfo.args_n::<1>()[0].value.as_bool();
+    ::types_fmgr::out_cstring(fcinfo, 2, |buf| {
+        buf[0] = crate::boolout(b);
+        1
+    })
 }
 
 macro_rules! fc_bool2 {
@@ -206,3 +210,15 @@ pub const BOOL_BUILTINS: &[FmgrBuiltin] = &[
     b(6417, "hashbool", 1, fc_hashbool),
     b(6418, "hashboolextended", 2, fc_hashboolextended),
 ];
+
+// boolout into the caller's buffer (printtup, COPY TO).
+fn bool_bound(_: Datum) -> Option<usize> {
+    Some(1)
+}
+unsafe fn bool_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: the caller's 1 writable byte (bool_bound).
+    unsafe { *dst = crate::boolout(v.as_bool()) };
+    Ok(1)
+}
+
+pub static BOOL_OUT_INTO: &[OutInto] = &[OutInto { foid: 1243, bound: bool_bound, render: bool_render, chars: Some(OUT_CHARS_BOOL) }];

@@ -749,7 +749,7 @@ fn get_gist_range_class(range: &[u8]) -> usize {
 
 fn entry_ranges<'m>(mcx: Mcx<'m>, entryvec: &GistEntryVector) -> PgResult<Vec<&'m [u8]>> {
     let maxoff = (entryvec.n - 1) as usize;
-    let mut ranges = Vec::with_capacity(maxoff + 1);
+    let mut ranges = ::mcx::std_vec_with_capacity("adt", maxoff + 1)?;
     ranges.push(&[][..]);
     for i in 1..=maxoff {
         // SAFETY: gist fmgr protocol; picksplit keys are live range varlenas.
@@ -768,8 +768,8 @@ fn fc_range_gist_picksplit(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     let maxoff = (entryvec.n - 1) as usize;
     let cache = cached_gist_range_cache(f, range_type_oid(ranges[1]))?;
 
-    v.spl_left = Vec::with_capacity(maxoff + 1);
-    v.spl_right = Vec::with_capacity(maxoff + 1);
+    v.spl_left = ::mcx::std_vec_with_capacity("adt", maxoff + 1)?;
+    v.spl_right = ::mcx::std_vec_with_capacity("adt", maxoff + 1)?;
 
     let mut count_in_classes = [0i32; CLS_COUNT];
     for r in &ranges[1..] {
@@ -901,7 +901,7 @@ fn single_sorting_split<'m>(
     }
 
     let maxoff = ranges.len() - 1;
-    let mut sort_items = Vec::with_capacity(maxoff);
+    let mut sort_items = ::mcx::std_vec_with_capacity("adt", maxoff)?;
     for (i, &range) in ranges.iter().enumerate().skip(1) {
         let (mut lower, mut upper) = range_bound_slots();
         let empty = range_deserialize_into(&cache.ri.elem, range, &mut lower, &mut upper);
@@ -1023,7 +1023,7 @@ fn double_sorting_split<'m>(
         common_right: 0,
     };
 
-    let mut by_lower = Vec::with_capacity(maxoff);
+    let mut by_lower = ::mcx::std_vec_with_capacity("adt", maxoff)?;
     for &range in &ranges[1..] {
         let (mut lower, mut upper) = range_bound_slots();
         let empty = range_deserialize_into(&cache.ri.elem, range, &mut lower, &mut upper);
@@ -1140,7 +1140,7 @@ fn double_sorting_split<'m>(
     v.spl_right.clear();
     let mut placer = Placer { left: None, right: None };
 
-    let mut common_entries: Vec<CommonEntry> = Vec::with_capacity(maxoff);
+    let mut common_entries: Vec<CommonEntry> = ::mcx::std_vec_with_capacity("adt", maxoff)?;
     for (i, &range) in ranges.iter().enumerate().skip(1) {
         let (mut lower, mut upper) = range_bound_slots();
         let _empty = range_deserialize_into(&cache.ri.elem, range, &mut lower, &mut upper);

@@ -1,0 +1,34 @@
+-- regress-full-update-022
+-- UPDATE part_b_10_b_20 set b = b - 6 WHERE c > 116 returning *;
+graph pipelines=2 breakers=0 init_plans=0 root=p1
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@2 n0@4
+  source range rel=26481 rti=3 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op1756(v3.2, c1700:'\x00\x80t\x00')
+  project (1=op689(v3.5, c23:6), 2=v3.-6, 3=v3.-1)
+  append arm 0/2
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=26481 rti=3 natts=5 indexes=() set=(5) returning tableoid=outer.2 route=rti1:26460 natts=5 map=(5,2,1,3,4)
+    target rti=4 rel=26486 natts=5 indexes=() set=(5) returning map=(5,2,1,3,4)
+  project (1=v3.3, 2=v3.2, 3=v3.4, 4=v3.5, 5=v3.1)
+  outs 1=w8:val 2=w4:val 3=fx6:row
+  outs 1=w8:val 2=w4:val 3=fx6:life/breaker
+  outs 1=vl:row 2=vl:row 3=vl:row 4=w8:val 5=w4:val
+p1 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n1@2 n0@4
+  source range rel=26486 rti=4 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op1756(v4.2, c1700:'\x00\x80t\x00')
+  project (1=op689(v4.5, c23:6), 2=v4.-6, 3=v4.-1)
+  append arm 1/2
+  project (1=outer.1, 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=26481 rti=3 natts=5 indexes=() set=(5) returning tableoid=outer.2 route=rti1:26460 natts=5 map=(5,2,1,3,4)
+    target rti=4 rel=26486 natts=5 indexes=() set=(5) returning map=(5,2,1,3,4)
+  project (1=v4.3, 2=v4.2, 3=v4.4, 4=v4.5, 5=v4.1)
+  outs 1=w8:val 2=w4:val 3=fx6:row
+  outs 1=w8:val 2=w4:val 3=fx6:life/breaker
+  outs 1=vl:row 2=vl:row 3=vl:row 4=w8:val 5=w4:val
+scan-lanes node=2 rti=3 rel=26481 tableoid
+scan-lanes node=3 rti=4 rel=26486 tableoid
+mapped: ModifyTable Append SeqScan

@@ -1,0 +1,19 @@
+Rust translation of TPDE x64/FunctionWriterX64.hpp and FunctionWriterX64.cpp,
+revision 116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception. Original sources and license
+texts are retained under tests/reference/tpde (LICENSES/ and manifest.json);
+the translated files, as pinned there:
+  tpde/include/tpde/x64/FunctionWriterX64.hpp
+    sha256 0be7324e04de2ba89b8c01fa4e7efd3b183d70ae772e3f0b67c0be7215f40546
+    git blob 287bd9a6bd1669b4d10b207864e60599d2d197e8
+  tpde/src/x64/FunctionWriterX64.cpp
+    sha256 2d1e878f8a1f85a1827b27d11b5e82366d643bb4b9164f12a9cc8ead8c668b92
+    git blob 4374db7ca73859120d37df9321da8e7c4b0ce56e
+Rust changes include exclusive writer ownership, checked jump-relaxation
+arithmetic and the Fadec encoder reached through the fresh tpde_fadec crate.
+See docs/tpde-rewrite/coverage/function-writer-x64.md.
+Fadec sources retained under tests/reference/fadec (revision
+3994d89500985491b1a7ccc17827a22058b3de49) are test-only oracles: Copyright (c)
+2018, Alexis Engelke, BSD-3-Clause, license text in
+tests/reference/fadec/LICENSE.

@@ -1,0 +1,15 @@
+# V4R-270 (D7, main 09-26): an equal-not-identical group / DISTINCT key outputs any member of its group; eqk maps the key
+# column's texts to their class under PG's `=` (the rig asks PG); everything else stays exact
+# eqk classes never merge values PG's `=` keeps apart: 1.5 is not 2.25
+sql: SELECT n, count(*) FROM t GROUP BY n;
+eqk: 1	1.5	1.5
+eqk: 1	1.50	1.5
+eqk: 1	2.25	2.25
+class: unordered
+verdict: mismatch
+[pg]
+1.5	2
+2.25	1
+[got]
+2.25	1
+2.25	2

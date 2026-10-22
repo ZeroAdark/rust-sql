@@ -1,0 +1,15 @@
+path	crates/gravity/hosts/src/dict/text_hosts.rs
+growth	std::collections::HashMap::entry	1
+growth	std::vec::Vec::extend_from_slice	6
+growth	std::vec::Vec::push	6
+growth	std::vec::Vec::resize	6
+macro	std::vec	6
+method	slice::to_vec	9
+method	std::clone::Clone::clone	29
+method	std::iter::Iterator::collect	7
+method	std::sync::Arc::new	4
+method	std::thread::Builder::spawn	1
+method	std::vec::Vec::into_boxed_slice	1
+method	std::vec::Vec::with_capacity	3
+type	std::sync::Arc	6
+type	std::vec::Vec	27

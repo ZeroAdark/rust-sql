@@ -1,0 +1,2 @@
+backend/utils/error/elog/src/report.rs	LOG_STATE	pgport	exit	thread	this thread's log-line state (C log_line_prefix's statics: log_line_number, the pid it counts for, the formatted log and start times); bounded: two formatted times and one domain name
+backend/utils/error/elog/src/report.rs	ERR_CONVERT_CX	pgport	exit	thread	C's ErrorContext for client-bound sends: this thread's scratch context for converting outgoing error fields to the client encoding, reset after every field, built at the first client send and freed by its session cleanup at backend exit

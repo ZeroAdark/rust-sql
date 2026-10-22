@@ -1,0 +1,26 @@
+-- regress-full-compression-004
+-- SELECT length(f1) FROM cmdata;
+graph pipelines=2 breakers=0 init_plans=0 root=p1
+p0 node=2 eligible rows=2 end=sink
+  nodes n2@0 n1@1 n0@3
+  source range rel=47136 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v2.1)
+  append arm 0/2
+  project (1=outer.1)
+  project (1=fn1317(outer.1))
+  outs 1=vl:win/page
+  outs 1=vl:life/breaker
+  outs 1=w4:val
+p1 node=3 eligible rows=1 end=sink
+  nodes n3@0 n1@1 n0@3
+  source range rel=47225 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v3.1)
+  append arm 1/2
+  project (1=outer.1)
+  project (1=fn1317(outer.1))
+  outs 1=vl:win/page
+  outs 1=vl:life/breaker
+  outs 1=w4:val
+mapped: Result Append SeqScan

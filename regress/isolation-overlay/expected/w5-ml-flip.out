@@ -1,0 +1,177 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2e s1u s2r s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2e: EXPLAIN (COSTS OFF) SELECT a.id, b.id FROM fa a JOIN fb b ON b.a_id = a.id WHERE a.v > 0 AND 100 / (b.w - 999) < 1000 FOR UPDATE;
+QUERY PLAN                                      
+------------------------------------------------
+LockRows                                        
+  ->  Hash Join                                 
+        Hash Cond: (b.a_id = a.id)              
+        ->  Seq Scan on fb b                    
+              Filter: ((100 / (w - 999)) < 1000)
+        ->  Hash                                
+              ->  Seq Scan on fa a              
+                    Filter: (v > 0)             
+(8 rows)
+
+step s1u: UPDATE fb SET w = w WHERE id = 1; UPDATE fa SET v = -1 WHERE id = 3; UPDATE fb SET w = 999 WHERE id = 8;
+step s2r: SELECT a.id, b.id FROM fa a JOIN fb b ON b.a_id = a.id WHERE a.v > 0 AND 100 / (b.w - 999) < 1000 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|id
+--+--
+ 1| 1
+ 2| 2
+ 4| 4
+ 5| 5
+ 1| 6
+ 2| 7
+ 4| 9
+ 5|10
+ 1|11
+ 2|12
+ 4|14
+ 5|15
+(12 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1u s2v s1c s2last s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE fb SET w = w WHERE id = 1; UPDATE fa SET v = -1 WHERE id = 3; UPDATE fb SET w = 999 WHERE id = 8;
+step s2v: SELECT a.id, b.id FROM fa a JOIN fb b ON b.a_id = a.id WHERE a.v > 0 AND ftick(b.w) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+id|id
+--+--
+ 1| 1
+ 2| 2
+ 4| 4
+ 5| 5
+ 1| 6
+ 2| 7
+ 4| 9
+ 5|10
+ 1|11
+ 2|12
+ 4|14
+ 5|15
+(12 rows)
+
+step s2last: SELECT last_value, is_called FROM fcnt;
+last_value|is_called
+----------+---------
+        16|t        
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1u s2va s1c s2last s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE fb SET w = w WHERE id = 1; UPDATE fa SET v = -1 WHERE id = 3; UPDATE fb SET w = 999 WHERE id = 8;
+step s2va: SELECT a.id, b.id FROM fa a JOIN fb b ON b.a_id = a.id WHERE a.v > 0 AND ftick(b.w) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2va: <... completed>
+id|id
+--+--
+ 1| 1
+ 2| 2
+ 4| 4
+ 5| 5
+ 1| 6
+ 2| 7
+ 4| 9
+ 5|10
+ 1|11
+ 2|12
+ 4|14
+ 5|15
+(12 rows)
+
+step s2last: SELECT last_value, is_called FROM fcnt;
+last_value|is_called
+----------+---------
+        16|t        
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1u s2q s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE fb SET w = w WHERE id = 1; UPDATE fa SET v = -1 WHERE id = 3; UPDATE fb SET w = 999 WHERE id = 8;
+step s2q: SELECT a.id, b.id, b.w FROM fa a JOIN fb b ON b.a_id = a.id WHERE a.v > 0 AND b.w <> 12345 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+id|id|  w
+--+--+---
+ 1| 1| 10
+ 2| 2| 20
+ 4| 4| 40
+ 5| 5| 50
+ 1| 6| 60
+ 2| 7| 70
+ 4| 9| 90
+ 5|10|100
+ 1|11|110
+ 2|12|120
+ 4|14|140
+ 5|15|150
+(12 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2xe s1x s2xr s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xe: EXPLAIN (COSTS OFF) SELECT b.id, c.k, a.id FROM xb b JOIN xc c ON c.k = b.c_id JOIN xa a ON a.id = b.a_id WHERE 100 / (c.x - 999) < 1000 AND a.v > 0 FOR UPDATE;
+QUERY PLAN                                                  
+------------------------------------------------------------
+LockRows                                                    
+  ->  Hash Join                                             
+        Hash Cond: (b.a_id = a.id)                          
+        ->  Hash Join                                       
+              Hash Cond: (b.c_id = c.k)                     
+              ->  Seq Scan on xb b                          
+              ->  Hash                                      
+                    ->  Seq Scan on xc c                    
+                          Filter: ((100 / (x - 999)) < 1000)
+        ->  Hash                                            
+              ->  Seq Scan on xa a                          
+                    Filter: (v > 0)                         
+(12 rows)
+
+step s1x: UPDATE xb SET c_id = c_id WHERE id = 1; UPDATE xa SET v = -1 WHERE id = 3; UPDATE xc SET x = 999 WHERE k = 2;
+step s2xr: SELECT b.id, c.k, a.id FROM xb b JOIN xc c ON c.k = b.c_id JOIN xa a ON a.id = b.a_id WHERE 100 / (c.x - 999) < 1000 AND a.v > 0 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2xr: <... completed>
+id|k|id
+--+-+--
+ 1|1| 1
+ 2|1| 2
+ 4|1| 4
+ 5|1| 5
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1x s2xv s1c s2last s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1x: UPDATE xb SET c_id = c_id WHERE id = 1; UPDATE xa SET v = -1 WHERE id = 3; UPDATE xc SET x = 999 WHERE k = 2;
+step s2xv: SELECT b.id, c.k, a.id FROM xb b JOIN xc c ON c.k = b.c_id JOIN xa a ON a.id = b.a_id WHERE ftick(c.x) AND a.v > 0 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2xv: <... completed>
+id|k|id
+--+-+--
+ 1|1| 1
+ 2|1| 2
+ 4|1| 4
+ 5|1| 5
+(4 rows)
+
+step s2last: SELECT last_value, is_called FROM fcnt;
+last_value|is_called
+----------+---------
+         3|t        
+(1 row)
+
+step s2c: COMMIT;

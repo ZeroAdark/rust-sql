@@ -129,7 +129,7 @@ pub fn build_local_reloptions(
 
     // allocateReloptStruct + fillRelOptions over the local parse table.
     let size = relopts.struct_size;
-    let mut out = vec![0u8; size];
+    let mut out = ::mcx::std_vec_from_elem("access", 0u8, size)?;
     out[0..4].copy_from_slice(&(((size as u32) << 2).to_ne_bytes()));
     for (def, (isset, val)) in relopts.opts.iter().zip(vals.iter()) {
         match (&def.data, isset, val) {

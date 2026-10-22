@@ -1,0 +1,15 @@
+-- regress-full-timestamptz-001
+-- SELECT str, interval, date_trunc(str, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal FROM ( VALUES ('day', '1 d'), ('hour', '1 h'), ('minute', '1 m'), ('second', '1 s'), ('millisecond', '1 ms'), ('microsecond', '1 us') ) intervals (str, interval), (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=3 rows=6
+    row (c25:'day', c25:'1 d')
+    row (c25:'hour', c25:'1 h')
+    row (c25:'minute', c25:'1 m')
+    row (c25:'second', c25:'1 s')
+    row (c25:'millisecond', c25:'1 ms')
+    row (c25:'microsecond', c25:'1 us')
+  project (1=v3.1, 2=v3.2, 3=op1320(fn1284(v3.1, c1184:636306257713930, c25:'Australia/Sydney'), fn6178(io1186(v3.2), c1184:636306257713930, c1184:31582800000000)))
+  outs 1=vl:row 2=vl:row 3=w1:val
+mapped: ValuesScan

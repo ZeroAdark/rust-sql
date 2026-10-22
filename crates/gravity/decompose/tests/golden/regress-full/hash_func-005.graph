@@ -1,0 +1,10 @@
+-- regress-full-hash_func-005
+-- SELECT v as value, hash_record(v)::bit(32) as standard, hash_record_extended(v, 0)::bit(32) as extended0, hash_record_extended(v, 1)::bit(32) as extended1 FROM (VALUES (row(1, 'aaa')::hash_test_t1, row(2, 'bbb'), row(-1, 'ccc'))) x(v) WHERE hash_record(v)::bit(32) != hash_record_extended(v, 0)::bit(32) OR hash_record(v)::bit(32) = hash_record_extended(v, 1)::bit(32);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  gate T_List
+  project (1=c25059:'\xff\xff\xff\xff\xe3a\x00\x00\xff\xff\xff\xff\x00\x00\x02\x00\x02\x00\x18\x00\x01\x00\x00\x00\x09aaa', 2=c1560:' \x00\x00\x00\xd6\xf0\xc6\xff', 3=c1560:' \x00\x00\x00\xd6\xf0\xc6\xff', 4=c1560:' \x00\x00\x000eib')
+  outs 1=? 2=vl:stmt/imm 3=vl:stmt/imm 4=vl:stmt/imm
+mapped: Result

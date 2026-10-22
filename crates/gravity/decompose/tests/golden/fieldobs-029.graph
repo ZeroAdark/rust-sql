@@ -1,0 +1,33 @@
+-- fieldobs-029
+-- SELECT notes, count(*) AS n FROM sightings WHERE notes <> '' GROUP BY notes ORDER BY n DESC LIMIT 10;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 eligible rows=1804667 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n2@2^
+  source range rel=16464 rti=1 am=pgrc
+    lanes Attr(28):codes4:code:part/dict Offset:byval2:w2:val
+  filter op531(v1.28, c25:'')
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24, 25=v1.25, 26=v1.26, 27=v1.27, 28=v1.28, 29=v1.29, 30=v1.30, 31=v1.31, 32=v1.32, 33=v1.33, 34=v1.34, 35=v1.35, 36=v1.36, 37=v1.37)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w4:val 5=w8:val 6=w4:val 7=w2:val 8=w8:val 9=w4:val 10=w4:val 11=w2:val 12=w2:val 13=w2:val 14=w2:val 15=w2:val 16=w2:val 17=w2:val 18=w4:val 19=w8:val 20=w1:val 21=w1:val 22=w1:val 23=vl:row 24=vl:row 25=vl:row 26=vl:row 27=vl:row 28=code:part/dict 29=vl:row 30=vl:row 31=vl:row 32=vl:row 33=vl:row 34=vl:row 35=vl:row 36=w4:val 37=w8:val
+p1 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 TopK)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@1^
+  source breaker slot=0
+  project (1=outer.28, 2=agg2803*())
+  sort keys=2-n:I64 form=topk count=10 offset=all
+  outs 1=vl:life/breaker 2=w8:val
+p2 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n1@0 n0@1
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2)
+  limit count=10 offset=all
+  project (1=outer.1, 2=outer.2)
+  outs 1=vl:life/breaker 2=w8:val
+  outs 1=vl:life/breaker 2=w8:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[Fp128,Fp128]->[Count@16,MinCode@24] 32B
+breaker slot=1 kind=TopK budget=Fixed(464) spill=None producer=p1 layout=[I64]->[Count@8] 16B order=2-n
+group slot=0 producer=p0 node=2 form=Hashed hints=[] layout=[Fp128,Fp128]->[Count@16,MinCode@24] 32B
+  key 0 word=0 resno=28 kind=Fp128 attno=28 type=25 rep=1 expr=v1.28
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan Sort Agg Limit

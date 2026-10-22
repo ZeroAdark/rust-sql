@@ -1,0 +1,10 @@
+-- regress-full-timestamp-003
+-- SELECT d1 as "timestamp", date_part( 'decade', d1) AS decade, date_part( 'century', d1) AS century, date_part( 'millennium', d1) AS millennium, round(date_part( 'julian', d1)) AS julian, date_part( 'epoch', d1) AS epoch FROM TIMESTAMP_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2260 end=sink
+  nodes n0@0
+  source range rel=17154 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=fn2021(c25:'decade', v1.1), 3=fn2021(c25:'century', v1.1), 4=fn2021(c25:'millennium', v1.1), 5=fn1342(fn2021(c25:'julian', v1.1)), 6=fn2021(c25:'epoch', v1.1))
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val
+mapped: SeqScan

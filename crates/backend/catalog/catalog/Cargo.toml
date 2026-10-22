@@ -27,6 +27,7 @@ varsup = { path = "../../access/transam/varsup" }
 init_small = { path = "../../utils/init/init_small" }
 postgres_seams = { path = "../../tcop/postgres_seams" }
 relpath = { path = "../../../common/relpath" }
+pgrc_am = { path = "../../access/pgrcolumnar/pgrc_am" }
 
 [dev-dependencies]
 types_tuple = { path = "../../../_support/types/types_tuple" }

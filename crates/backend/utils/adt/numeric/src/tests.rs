@@ -1006,9 +1006,11 @@ mod fc_results {
             Datum::from_i32(-1),
         )
         .unwrap();
-        // numeric_out needs a resolved FmgrInfo (retained cstring scratch).
+        // numeric_out's cstring is fresh in the frame's result context.
         let mut flinfo = FmgrInfo::new(fc_numeric_out, 1702, 1, true, false);
         let mut fci = LocalFcinfo::<1>::fresh(0);
+        // SAFETY: ctx outlives every call through this frame.
+        unsafe { fci.set_result_mcx(ctx.mcx()) };
         fci.set_arg(0, d);
         let out = flinfo.invoke(&mut fci).unwrap();
         // SAFETY: numeric_out result is a live NUL-terminated cstring scratch.
@@ -1047,6 +1049,34 @@ mod fc_results {
             crate::cmp_numerics(result_num(d2), crate::int64_to_numeric(84).num()),
             0
         );
+    }
+
+    #[test]
+    fn short_header_comparisons_leave_the_context_flat() {
+        let ctx = MemoryContext::new_bump("t");
+        let short = |v: i64, buf: &mut [u16; 16]| {
+            let img = crate::int64_to_numeric(v);
+            let payload = img.payload();
+            let p = buf.as_mut_ptr().cast::<u8>();
+            // SAFETY: 1 + payload.len() <= 32 bytes of buf.
+            unsafe {
+                *p = (((1 + payload.len()) as u8) << 1) | 1;
+                core::ptr::copy_nonoverlapping(payload.as_ptr(), p.add(1), payload.len());
+            }
+            Datum::from_usize(p as usize)
+        };
+        let (mut ba, mut bb) = ([0u16; 16], [0u16; 16]);
+        let (a, b) = (short(7, &mut ba), short(-12345, &mut bb));
+        let before = ctx.used();
+        for _ in 0..100 {
+            let c = direct_function_call2_coll_in(fc_numeric_cmp, 0, ctx.mcx(), a, b).unwrap();
+            assert_eq!(c.as_i32(), 1);
+            let lt = direct_function_call2_coll_in(fc_numeric_lt, 0, ctx.mcx(), b, a).unwrap();
+            assert!(lt.as_bool());
+            let eq = direct_function_call2_coll_in(fc_numeric_eq, 0, ctx.mcx(), a, a).unwrap();
+            assert!(eq.as_bool());
+        }
+        assert_eq!(ctx.used(), before);
     }
 
     #[test]
@@ -1998,6 +2028,13 @@ mod transarray_detoast {
                 // mock hands back the embedded plain image, standing in for
                 // the real decompression engine (tested in its own crate).
                 ::detoast_seams::detoast_attr::set(|mcx, image| {
+                    if image[0] & 0x01 == 0x01 {
+                        let total = image.len() + 3;
+                        let mut v = ::mcx::vec_with_capacity_in(mcx, total)?;
+                        ::mcx::vec_append_bytes(&mut v, &((total as u32) << 2).to_ne_bytes())?;
+                        ::mcx::vec_append_bytes(&mut v, &image[1..])?;
+                        return Ok(v);
+                    }
                     assert_eq!(image[0] & 0x03, 0x02, "4B_C compressed header");
                     let mut v = ::mcx::vec_with_capacity_in(mcx, image.len() - 4)?;
                     ::mcx::vec_append_bytes(&mut v, &image[4..])?;
@@ -2048,6 +2085,33 @@ mod transarray_detoast {
         fci.set_arg(1, Datum::from_i16(23));
         let d = fc_int2_avg_accum_inv(None, &mut fci).unwrap();
         assert_eq!(read2(d), [4, 100]);
+    }
+
+    // '{10,2}'::cstring[] as a 1-byte-header varlena, the form a typmod
+    // array takes after passing through a formed tuple.
+    fn short_cstring_array() -> Vec<u8> {
+        let mut body = Vec::new();
+        for w in [1i32, 0, 2275, 2, 1] {
+            body.extend_from_slice(&w.to_ne_bytes());
+        }
+        body.extend_from_slice(b"10\0" as &[u8]);
+        body.extend_from_slice(b"2\0" as &[u8]);
+        let mut img = vec![(((body.len() + 1) as u8) << 1) | 0x01];
+        img.extend_from_slice(&body);
+        img
+    }
+
+    #[test]
+    fn numerictypmodin_detoasts_short_header_array() {
+        install_detoast_mock();
+        let ctx = MemoryContext::new_bump("t");
+        let img = short_cstring_array();
+        let mut fci = LocalFcinfo::<1>::fresh(0);
+        // SAFETY: ctx outlives the call.
+        unsafe { fci.set_result_mcx(ctx.mcx()) };
+        fci.set_arg(0, Datum::from_usize(img.as_ptr() as usize));
+        let d = fc_numerictypmodin(None, &mut fci).unwrap();
+        assert_eq!(d.as_i32(), 655366);
     }
 }
 
@@ -2159,4 +2223,16 @@ fn make_numeric_typmod_safe_soft_errors() {
         numerictypmodin_core(&[5]).unwrap(),
         make_numeric_typmod(5, 0)
     );
+}
+
+#[test]
+fn int128_to_var_digits_across_the_64_bit_boundary() {
+    // the 128-bit digit loop hands over to the 64-bit one at 2^64: every value prints its own decimal
+    let b = u64::MAX as i128;
+    let probes: &[i128] = &[0, 1, -1, 9999, 10000, -10000, 99999999, b - 1, b, b + 1, -b, -b - 1, 10i128.pow(19), 10i128.pow(20) - 1, 10i128.pow(20), -(10i128.pow(24)), 1234567890123456789012345678901234567, i128::MAX, i128::MIN + 1, i128::MIN];
+    for &v in probes {
+        let mut var = crate::var::NumericVar::new();
+        crate::var::int128_to_var(v, &mut var);
+        assert_eq!(out(&crate::var::make_result(var.view()).unwrap()), v.to_string(), "{v}");
+    }
 }

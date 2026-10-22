@@ -66,15 +66,15 @@
 
 use std::ffi::CString;
 use std::io::Read as _;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
-#[cfg(target_family = "wasm")]
+#[cfg(target_os = "wasi")]
 use std::os::wasi::ffi::OsStrExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_error::{PgResult, ERROR};
 
 /// One destination directory to materialize: `dst` is created by the
@@ -84,6 +84,9 @@ pub(crate) struct CopyDirJob {
     /// (absolute source path, absolute destination path) per top-level
     /// regular file — `copydir(recurse = false)`'s exact file population.
     pub files: Vec<(String, String)>,
+    /// The pgrcolumnar table directories copydir skips, copied by the same
+    /// worker after this directory exists.
+    pub subdirs: Vec<CopyDirJob>,
 }
 
 /// Copy-phase telemetry for the batch witness line.
@@ -150,15 +153,16 @@ pub(crate) fn snapshot_knobs() -> CopyKnobs {
 /// Enumerate one source directory into a CopyDirJob (janitor thread only:
 /// plain read_dir, but the caller context — batch transaction — is
 /// thread-bound anyway). Mirrors `copydir`'s population: top-level entries,
-/// lstat, regular files only (subdirectories are not recursed — database
-/// directories contain only files; symlinks and specials are skipped).
+/// lstat, regular files, plus the pgrcolumnar table directories it skips
+/// (other subdirectories, symlinks and specials are skipped).
 pub(crate) fn enumerate_dir_job(src_dir: &str, dst_dir: &str) -> PgResult<CopyDirJob> {
     let mut files = Vec::new();
+    let mut subdirs = Vec::new();
     let entries = std::fs::read_dir(src_dir).map_err(|e| {
         ereport(ERROR)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg(format!("could not open directory \"{src_dir}\": %m"))
+            .errmsg(format!("could not open directory \"{src_dir}\": {PCT_M}"))
             .into_error()
     })?;
     for entry in entries {
@@ -166,7 +170,7 @@ pub(crate) fn enumerate_dir_job(src_dir: &str, dst_dir: &str) -> PgResult<CopyDi
             ereport(ERROR)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not read directory \"{src_dir}\": %m"))
+                .errmsg(format!("could not read directory \"{src_dir}\": {PCT_M}"))
                 .into_error()
         })?;
         let name = entry.file_name();
@@ -178,17 +182,22 @@ pub(crate) fn enumerate_dir_job(src_dir: &str, dst_dir: &str) -> PgResult<CopyDi
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "could not stat file \"{}\": %m",
+                    "could not stat file \"{}\": {PCT_M}",
                     entry.path().display()
                 ))
                 .into_error()
         })?;
+        let name = name.to_string_lossy();
         if md.is_file() {
-            let name = name.to_string_lossy();
             files.push((format!("{src_dir}/{name}"), format!("{dst_dir}/{name}")));
+        } else if md.is_dir() && dbcommands::parse_table_dir_name(&name).is_some() {
+            subdirs.push(enumerate_dir_job(
+                &format!("{src_dir}/{name}"),
+                &format!("{dst_dir}/{name}"),
+            )?);
         }
     }
-    Ok(CopyDirJob { dst_dir: dst_dir.to_owned(), files })
+    Ok(CopyDirJob { dst_dir: dst_dir.to_owned(), files, subdirs })
 }
 
 /// Run every job across `workers` scoped threads (clamped to the job
@@ -205,7 +214,7 @@ pub(crate) fn copy_dirs_parallel(
     knobs: CopyKnobs,
 ) -> PgResult<CopyStats> {
     let dirs = jobs.len();
-    let files: usize = jobs.iter().map(|j| j.files.len()).sum();
+    let files: usize = jobs.iter().map(CopyDirJob::file_count).sum();
     let threads = workers.min(dirs).max(1);
 
     let queue: Mutex<Vec<CopyDirJob>> = Mutex::new(jobs);
@@ -215,30 +224,36 @@ pub(crate) fn copy_dirs_parallel(
 
     let t0 = std::time::Instant::now();
     let mut interrupt_err: Option<Box<types_error::PgError>> = None;
+    let mut worker_unwind: Option<Box<dyn std::any::Any + Send>> = None;
 
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(threads);
         for _ in 0..threads {
-            handles.push(scope.spawn(|| {
+            handles.push(scope.spawn(pagegive::pinned(|| {
                 let started = std::time::Instant::now();
                 // unwind-ok: worker-containment
                 let caught = catch_unwind(AssertUnwindSafe(|| {
                     worker_loop(&queue, &abort, &failure, knobs);
                 }));
-                if caught.is_err() {
-                    park_failure(
-                        &failure,
-                        &abort,
-                        CopyFailure {
-                            op: "copy worker",
-                            path: String::new(),
-                            errno: 0,
-                            panic: true,
-                        },
-                    );
-                }
                 busy_ns.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            }));
+                match caught {
+                    Ok(()) => None,
+                    Err(payload) => {
+                        park_failure(
+                            &failure,
+                            &abort,
+                            CopyFailure {
+                                op: "copy worker",
+                                path: String::new(),
+                                errno: 0,
+                                panic: true,
+                            },
+                        );
+                        // D2933: the janitor thread resumes it after the join
+                        Some(payload)
+                    }
+                }
+            })));
         }
         // Babysit: interrupts are serviced HERE (the only thread whose
         // interrupt TLS is real). A trip stops the workers and surfaces
@@ -257,9 +272,21 @@ pub(crate) fn copy_dirs_parallel(
         // Scope end joins every worker (all finished — the loop above saw
         // them so). Panics were caught inside the workers.
         for h in handles {
-            let _ = h.join();
+            if let Ok(Some(payload)) = h.join() {
+                worker_unwind.get_or_insert(payload);
+            }
         }
     });
+    // D2933 (user 2026-09-29: "when crashing, the whole system should abort
+    // like postgres does"): a worker's plain panic (or a PANIC's exit payload)
+    // is C's abort() on the janitor thread, never the batch's ERROR: the
+    // thread dies as crashed and the postmaster runs the crash restart. A
+    // structured error keeps the batch's ERROR below.
+    if let Some(payload) = worker_unwind {
+        if !(payload.is::<types_error::PgError>() || payload.is::<Box<types_error::PgError>>()) {
+            elog::abort_on_plain_panic(payload);
+        }
+    }
     let wall_ns = t0.elapsed().as_nanos() as u64;
 
     if let Some(e) = interrupt_err {
@@ -276,7 +303,7 @@ pub(crate) fn copy_dirs_parallel(
         return Err(ereport(ERROR)
             .with_saved_errno(f.errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not {} \"{}\": %m", f.op, f.path))
+            .errmsg(format!("could not {} \"{}\": {PCT_M}", f.op, f.path))
             .into_error()
             .into());
     }
@@ -338,7 +365,16 @@ fn copy_one_dir(job: &CopyDirJob, abort: &AtomicBool, knobs: CopyKnobs) -> Resul
         }
         copy_one_file(src, dst, abort, knobs)?;
     }
+    for sub in &job.subdirs {
+        copy_one_dir(sub, abort, knobs)?;
+    }
     Ok(())
+}
+
+impl CopyDirJob {
+    fn file_count(&self) -> usize {
+        self.files.len() + self.subdirs.iter().map(CopyDirJob::file_count).sum::<usize>()
+    }
 }
 
 /// One file. Abort responsiveness matches C's cadence: the buffered loop
@@ -365,15 +401,13 @@ fn copy_one_file(
     }
     let mut from = std::fs::File::open(src).map_err(|e| io_failure("open file", src, &e))?;
     let mut to = {
-        let mut oo = std::fs::OpenOptions::new();
-        oo.write(true).create_new(true);
-        // wasi has no file modes (OpenOptionsExt::mode is unix-only).
-        #[cfg(not(target_family = "wasm"))]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            oo.mode(knobs.file_mode);
-        }
-        oo.open(dst).map_err(|e| io_failure("create file", dst, &e))?
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true).create_new(true);
+        // wasm32-wasip1: WASI p1 has no file modes (pg_file_create_mode is moot).
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut o, knobs.file_mode);
+        o.open(dst)
+            .map_err(|e| io_failure("create file", dst, &e))?
     };
     let mut buf = vec![0u8; 8 * 8192];
     loop {
@@ -613,6 +647,28 @@ mod tests {
                 assert_eq!(got, format!("j{j}f{f}").into_bytes());
             }
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn table_directories_are_copied_and_other_subdirectories_skipped() {
+        let root = scratch("tabledir");
+        let src = root.join("src");
+        std::fs::create_dir_all(src.join("pgrc_16386")).unwrap();
+        std::fs::create_dir_all(src.join("pgrc_t3_16390")).unwrap();
+        std::fs::create_dir_all(src.join("other")).unwrap();
+        mkfile(&src.join("16386"), b"");
+        mkfile(&src.join("pgrc_16386/CURRENT"), b"current");
+        mkfile(&src.join("pgrc_16386/part-0.pgrc"), b"part");
+        mkfile(&src.join("other/x"), b"x");
+        let dst = root.join("dst");
+        let job = enumerate_dir_job(src.to_str().unwrap(), dst.to_str().unwrap()).unwrap();
+        let stats = copy_dirs_parallel(vec![job], 2, knobs()).unwrap();
+        assert_eq!(stats.files, 3);
+        assert_eq!(std::fs::read(dst.join("pgrc_16386/CURRENT")).unwrap(), b"current");
+        assert_eq!(std::fs::read(dst.join("pgrc_16386/part-0.pgrc")).unwrap(), b"part");
+        assert!(!dst.join("pgrc_t3_16390").exists());
+        assert!(!dst.join("other").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

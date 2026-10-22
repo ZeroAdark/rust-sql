@@ -1,0 +1,2 @@
+path	crates/gravity/lowerv4/src/hir/raw.rs
+ir-only	alloc::boxed::Box<T>::from_raw	1

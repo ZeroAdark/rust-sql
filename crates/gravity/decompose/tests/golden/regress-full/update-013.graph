@@ -1,0 +1,23 @@
+-- regress-full-update-013
+-- INSERT INTO upsert_test VALUES (1, 'Bat'), (3, 'Zot') ON CONFLICT(a) DO UPDATE SET (b, a) = (SELECT b || ', Excluded', a from upsert_test i WHERE i.a = excluded.a) RETURNING *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source values rti=2 rows=2
+    row (c23:1, c25:'Bat')
+    row (c23:3, c25:'Zot')
+  project (1=v2.1, 2=v2.2)
+  subplan 1 nested MultiExpr params=($exec0=inner.1) sets=($exec1,$exec2)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=26422 rti=4 am=heap index=26428
+    key att=1 op=96 value=$exec0
+    recheck (op96(v4.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page
+  project (1=op654(v4.2, c25:', Excluded'), 2=v4.1)
+  write INSERT rel=26422 rti=1 natts=2 indexes=(26428[1]up) on_conflict=update arbiter=(26428) excl_rti=3 cols=(1,2) set=(1=$exec2, 2=$exec1, 3j=subplan1(inner.1)) returning epq=$exec3
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=vl:row
+  outs 1=w4:val 2=vl:row
+param $exec0 owner=subplan1 type=23 rep=w4:val
+mapped: ModifyTable IndexScan ValuesScan SubPlan

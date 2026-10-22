@@ -141,7 +141,7 @@ fn make<'mcx>(mcx: Mcx<'mcx>, oid: Oid, name: &str, relkind: u8, rls: bool) -> R
         pgstat_enabled: std::cell::Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -962,4 +962,12 @@ fn insert_with_two_values_rtes_is_internal_error() {
     };
     assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
     assert_eq!(err.message(), "more than one VALUES RTE found");
+}
+
+#[test]
+fn cte_skip_matches_c_signed_compare() {
+    assert!(!crate::cte_already_processed(0, 3, 1));
+    assert!(crate::cte_already_processed(2, 3, 1));
+    // Product query with fewer CTEs than the parent processed: C breaks at once.
+    assert!(crate::cte_already_processed(0, 1, 2));
 }

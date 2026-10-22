@@ -1,0 +1,1 @@
+tpde/base/src/lib.rs	LOG_CONFIG	runtime	exit	thread	tpde's log level and sink, the compiling thread's own (default Info to stderr); set only by tests (set_log_config / set_log_level); read by should_log / emit_log, which compile to nothing without the logging feature

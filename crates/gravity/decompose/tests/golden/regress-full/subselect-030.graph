@@ -1,0 +1,21 @@
+-- regress-full-subselect-030
+-- explain (costs off) select * from int4_tbl o where exists (select 1 from int4_tbl i where i.f1=o.f1 limit 0);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2 end=sink
+  nodes n0@0
+  source range rel=16400 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  subplan 1 nested Exists unknown-eq-false params=($exec0=v1.1) raise-free
+  inner node=2 eligible rows=1 end=sink
+  nodes n2@0 n1@2
+  source range rel=16400 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v2.1, $exec0)
+  project (1=c23:1)
+  limit count=0 offset=all
+  project (1=c23:1)
+  filter subplan1(v1.1)
+  project (1=v1.1)
+  outs 1=w8:val
+param $exec0 owner=subplan1 type=23 rep=w8:val
+mapped: SeqScan Limit SubPlan

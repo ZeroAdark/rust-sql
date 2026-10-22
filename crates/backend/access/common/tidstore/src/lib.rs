@@ -198,6 +198,10 @@ fn local_max_block_size(max_bytes: usize) -> usize {
     max_block_size
 }
 
+// tidstore.c RT_PREFIX local_ts / shared_ts.
+const LOCAL_TS_NAMES: radixtree::RtClassNames = radixtree::rt_class_names!("local_ts");
+const SHARED_TS_NAMES: radixtree::RtClassNames = radixtree::rt_class_names!("shared_ts");
+
 impl TidStore {
     /// Drop is TidStoreDestroy. tidstore.c:172: the context maxBlockSize is
     /// the largest power of two no larger than max_bytes/16 (8 KiB floor), so
@@ -210,7 +214,16 @@ impl TidStore {
         } else {
             parent.context().new_child("TID storage")
         };
-        Ok(TidStore { tree: RadixTree::create_in(rt_context)? })
+        Ok(TidStore { tree: RadixTree::create_in(rt_context, &LOCAL_TS_NAMES)? })
+    }
+
+    /// Local storage; memory_usage is TidStoreCreateShared's DSA total size.
+    pub fn create_dsa_accounted(parent: Mcx<'_>, max_bytes: usize) -> PgResult<TidStore> {
+        let rt_context = parent
+            .context()
+            .new_child_bump_with_max_block_size("TID storage", local_max_block_size(max_bytes));
+        let dsa = radixtree::DsaSizeModel::for_tidstore(max_bytes)?;
+        Ok(TidStore { tree: RadixTree::create_in_dsa_accounted(rt_context, &SHARED_TS_NAMES, dsa)? })
     }
 
     /// Creates or replaces the entry for `blkno`; `offsets` sorted ascending.
@@ -383,6 +396,7 @@ pub struct TidStoreIter<'t, S: RtStore = LocalStore> {
     iter: radixtree::TreeIter<'t, BlocktableEntry, S>,
 }
 
+#[derive(Clone, Copy)]
 pub struct TidStoreIterResult<'t> {
     pub blkno: BlockNumber,
     internal_page: NonNull<BlocktableEntry>,

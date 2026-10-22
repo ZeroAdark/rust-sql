@@ -1,0 +1,62 @@
+-- regress-full-psql-099
+-- SELECT m.rolname AS "Role name", r.rolname AS "Member of", pg_catalog.concat_ws(', ', CASE WHEN pam.admin_option THEN 'ADMIN' END, CASE WHEN pam.inherit_option THEN 'INHERIT' END, CASE WHEN pam.set_option THEN 'SET' END ) AS "Options", g.rolname AS "Grantor" FROM pg_catalog.pg_roles m JOIN pg_catalog.pg_auth_members pam ON (pam.member = m.oid) LEFT JOIN pg_catalog.pg_roles r ON (pam.roleid = r.oid) LEFT JOIN pg_catalog.pg_roles g ON (pam.grantor = g.oid) WHERE m.rolname OPERATOR(pg_catalog.~) '^(regress_du_role.*)$' COLLATE pg_catalog.default ORDER BY 1, 2, 4;
+graph pipelines=6 breakers=5 init_plans=0 root=p5
+p0 node=9 eligible rows=3 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n9@0 n7@1^
+  source range rel=1261 rti=2 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7)
+  build keys=(outer.3) decls=26/26:I32
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+p1 node=8 eligible rows=1 end=breaker(slot=1 Sort)
+  desc consumes=slot0@p0 finishing
+  nodes n8@0 n7@2 n6@4
+  source range rel=1260 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op639(v8.2, c25:'^(regress_du_role.*)$')
+  project (1=v8.1, 2=v8.2, 3=v8.3, 4=v8.4, 5=v8.5, 6=v8.6, 7=v8.7, 8=v8.8, 9=v8.9, 10=v8.10, 11=v8.11, 12=v8.12)
+  probe slot=0 inner=n9 JOIN_INNER catalog keys=(outer.1) decls=26/26:I32 clauses=(op607(inner.3, outer.1))
+  project (1=outer.2, 2=inner.5, 3=inner.6, 4=inner.7, 5=inner.2, 6=inner.4)
+  sort keys=6+:I32 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w1:val 4=w1:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w4:val 11=vl:row 12=w8:val
+  outs 1=fx64:win/page 2=w1:val 3=w1:val 4=w1:val 5=w4:val 6=w4:val
+p2 node=5 serial site=0 reason=IndexSource end=breaker(slot=0 HashBuild)
+  desc consumes=slot1@p1 words=bits@6/7
+  nodes n5@0 n4@1 n3@3
+  source index rel=1260 rti=14 am=heap index=2677
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page
+  project (1=v14.1, 2=v14.2, 3=v14.3, 4=v14.4, 5=v14.5, 6=v14.6, 7=v14.7, 8=v14.8, 9=v14.9, 10=v14.10, 11=v14.11, 12=v14.12)
+  merge slot=1 inner=n6 JOIN_RIGHT clauses=(op607(outer.1, inner.6)) reversals=[false] nulls_first=[false]
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=inner.5, 6=outer.2)
+  build keys=(outer.5) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w1:val 4=w1:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w4:val 11=vl:row 12=w8:val
+  outs 1=fx64:life/breaker 2=w1:val 3=w1:val 4=w1:val 5=w4:val 6=fx64:win/page
+p3 node=2 eligible rows=17 end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p2
+  nodes n2@0 n1@1^
+  source range rel=1260 rti=11 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v11.1, 2=v11.2, 3=v11.3, 4=v11.4, 5=v11.5, 6=v11.6, 7=v11.7, 8=v11.8, 9=v11.9, 10=v11.10, 11=v11.11, 12=v11.12)
+  probe slot=0 inner=n3 JOIN_RIGHT marks build-first keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.5))
+  outs 1=w8:val 2=fx64:win/page 3=w1:val 4=w1:val 5=w1:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w4:val 11=vl:row 12=w8:val
+p4 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 Sort)
+  desc consumes=slot0@p2 consumes=slot1@p3
+  nodes n1@0 n0@2^
+  source breaker slot=0
+  drain matches=slot1 JOIN_RIGHT
+  project (1=inner.1, 2=outer.2, 3=fn3059(c25:', ', case(when inner.2 then c25:'ADMIN') else c25:null, case(when inner.3 then c25:'INHERIT') else c25:null, case(when inner.4 then c25:'SET') else c25:null), 4=inner.6)
+  sort keys=1+:Fp128@950#19,2+:Fp128@950#19,4+:Fp128@950#19 form=runs
+  outs 1=fx64:life/breaker 2=fx64:life/breaker 3=vl:call3059 4=fx64:life/breaker
+p5 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p4
+  nodes n0@0
+  source breaker slot=2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=fx64:life/breaker 2=fx64:life/breaker 3=vl:call3059 4=fx64:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32]->[Count@8] 16B order=6+
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p4 layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[Count@48] 56B order=1+,2+,4+
+mapped: SeqScan IndexScan NestLoop MergeJoin HashJoin Sort Hash

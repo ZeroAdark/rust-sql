@@ -1,0 +1,15 @@
+Rust translation of TPDE ElfMapper.hpp and ElfMapper.cpp, revision
+116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception. Original sources and license
+texts are retained under tests/reference (LICENSES/ and manifest.json); the
+translated files, as pinned there:
+  tpde/include/tpde/ElfMapper.hpp
+    sha256 8a7036e62e73713c5ccf4cf329b8452563536f589957711a6cec652f8e306840
+    git blob e924fb0e641b7944a228376572d17e10e36f9544
+  tpde/src/ElfMapper.cpp
+    sha256 e6d309ff9832eccfc3faef817063f9d152a4a15adc353b3447ea2feb26382cf2
+    git blob e12f794927ab51f0208765e466eecbd713975766
+Rust changes include an owned mapped-image type, a mapping guard for the
+mmap/mprotect/unwind lifecycle, checked section arithmetic and Rust failure
+handling. See docs/tpde-rewrite/coverage/elf-mapper.md.

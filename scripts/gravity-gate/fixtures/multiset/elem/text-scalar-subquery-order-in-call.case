@@ -1,0 +1,10 @@
+# D3732: ORDER BY in the scalar subquery's collect call: exact
+sql: SELECT g, (SELECT string_agg(c.v, ',' ORDER BY c.v) FROM c WHERE c.g = t.g) FROM t;
+cols: g	string_agg
+tables: t c
+class: unordered
+verdict: mismatch
+[pg]
+1	a,b
+[got]
+1	b,a

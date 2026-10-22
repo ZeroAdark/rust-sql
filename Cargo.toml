@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# The vendored libmimalloc-sys and allocator-api2 ([patch.crates-io] below) are path dependencies, not members.
+exclude = ["third_party/libmimalloc-sys", "third_party/allocator-api2"]
 members = [
     "crates/backend/replication/origin",
     "crates/backend/replication/slotsync",
@@ -10,6 +12,7 @@ members = [
     "crates/backend/backup/sink",
     "crates/backend/backup/compress",
     "crates/common/compression",
+    "crates/common/lz4_block",
     "crates/backend/backup/sink_support",
     "crates/backend/backup/backup_copy",
     "crates/backend/backup/backup_copy_seams",
@@ -23,11 +26,20 @@ members = [
     "crates/_support/types/types_core",
     "crates/_support/mcx",
     "crates/_support/secure_zero",
+    "crates/_support/pagegive",
+    "crates/_support/pagepool",
+    "crates/_support/memledger",
+    "crates/_support/allocarena",
+    "crates/_support/mempolicy",
+    "crates/_support/fp_contract",
     "crates/_support/pg_qsort",
     "crates/_support/jit_deform",
     "crates/_support/types/datum",
     "crates/_support/seam_core",
     "crates/_support/pgsync",
+    "crates/_support/fires",
+    "crates/_support/cancelpoll",
+    "crates/_support/leader_tls",
     "crates/_support/test_boot",
     "crates/_support/types/types_tuple",
     "crates/_support/types/types_trigger",
@@ -36,9 +48,9 @@ members = [
     "crates/backend/utils/adt/tsvector_stat",
     "crates/_support/types/stringinfo",
     "crates/common/blkreftable",
+    "crates/common/ct_carrier_mimalloc",
     "crates/common/parse_manifest",
     "crates/common/hashfn",
-    "crates/common/stringhash",
     "crates/_support/types/fmgr",
     "crates/_support/types/types_scan",
     "crates/_support/types/types_guc",
@@ -144,6 +156,7 @@ members = [
     "crates/backend/libpq/be_secure_seams",
     "crates/backend/libpq/be_secure",
     "crates/backend/libpq/be_secure_common",
+    "crates/backend/libpq/be_gssapi_common",
     "crates/backend/libpq/be_secure_openssl",
     "crates/backend/libpq/pqcomm",
     "crates/backend/libpq/pqmq",
@@ -156,6 +169,7 @@ members = [
     "crates/backend/tcop/fastpath",
     "crates/backend/storage/aio/aio_seams",
     "crates/backend/storage/aio/aio_core",
+    "crates/backend/storage/aio/read_stream",
     "crates/backend/postmaster/io_worker",
     "crates/backend/storage/aio/aio_uring",
     "crates/backend/storage/aio/aio_funcs",
@@ -208,11 +222,7 @@ members = [
     "crates/backend/executor/exectuples_output",
     "crates/backend/executor/execexpr",
     "crates/backend/executor/runtime",
-    "crates/backend/executor/sqe",
-    "crates/backend/executor/sqe/lanestitch",
     "crates/backend/executor/spillset",
-    "crates/backend/executor/laneexec",
-    "crates/backend/executor/lanereg",
     "crates/backend/executor/executils",
     "crates/backend/executor/instrument",
     "crates/backend/executor/execjunk",
@@ -221,35 +231,7 @@ members = [
     "crates/backend/executor/nodemodifytable",
     "crates/backend/executor/nodefunctionscan",
     "crates/backend/executor/nodetablefuncscan",
-    "crates/backend/executor/nodevaluesscan",
-    "crates/backend/executor/nodeseqscan",
-    "crates/backend/executor/nodetidscan",
-    "crates/backend/executor/nodetidrangescan",
-    "crates/backend/executor/nodeindexscan",
-    "crates/backend/executor/nodebitmapindexscan",
-    "crates/backend/executor/nodectescan",
     "crates/backend/executor/nodenamedtuplestorescan",
-    "crates/backend/executor/noderecursiveunion",
-    "crates/backend/executor/nodeworktablescan",
-    "crates/backend/executor/nodebitmapheapscan",
-    "crates/backend/executor/nodeindexonlyscan",
-    "crates/backend/executor/nodesort",
-    "crates/backend/executor/nodeincrementalsort",
-    "crates/backend/executor/nodegroup",
-    "crates/backend/executor/nodeunique",
-    "crates/backend/executor/nodeappend",
-    "crates/backend/executor/nodemergeappend",
-    "crates/backend/executor/nodesetop",
-    "crates/backend/executor/nodelimit",
-    "crates/backend/executor/nodelockrows",
-    "crates/backend/executor/nodehash",
-    "crates/backend/executor/nodehashjoin",
-    "crates/backend/executor/nodematerial",
-    "crates/backend/executor/nodememoize",
-    "crates/backend/executor/nodemergejoin",
-    "crates/backend/executor/nodenestloop",
-    "crates/backend/executor/nodeagg",
-    "crates/backend/executor/nodewindowagg",
     "crates/backend/utils/sort/sharedtuplestore",
     "crates/backend/utils/sort/sort_storage",
     "crates/backend/utils/sort/tuplesort",
@@ -313,27 +295,35 @@ members = [
     "crates/backend/access/transam/xlogutils",
     "crates/backend/access/table/tableam_vocab",
     "crates/backend/access/table/tableam",
-    "crates/backend/access/pgrcolumnar",
-    "crates/backend/access/pgrcolumnar2/pgrc2_batch",
-    "crates/backend/access/pgrcolumnar2/pgrc2_claim",
-    "crates/backend/access/pgrcolumnar2/pgrc2_format",
-    "crates/backend/access/pgrcolumnar2/pgrc2_codec",
-    "crates/backend/access/pgrcolumnar2/pgrc2_meta",
-    "crates/backend/access/pgrcolumnar2/pgrc2_delta",
-    "crates/backend/access/pgrcolumnar2/pgrc2_write",
-    "crates/backend/access/pgrcolumnar2/pgrc2_ingest_par",
-    "crates/backend/access/pgrcolumnar2/pgrc2_read",
-    "crates/backend/access/pgrcolumnar2/pgrc2_scan",
-    "crates/backend/access/pgrcolumnar2/pgrc2_qa",
-    "crates/backend/access/pgrcolumnar2/pgrc2_am",
-    "crates/backend/executor/sqe_spill",
+    "crates/backend/access/pgrcolumnar/pgrc_batch",
+    "crates/backend/access/pgrcolumnar/pgrc_claim",
+    "crates/backend/access/pgrcolumnar/pgrc_format",
+    "crates/backend/access/pgrcolumnar/pgrc_codec",
+    "crates/backend/access/pgrcolumnar/pgrc_meta",
+    "crates/backend/access/pgrcolumnar/pgrc_write",
+    "crates/backend/access/pgrcolumnar/pgrc_ingest_par",
+    "crates/backend/access/pgrcolumnar/pgrc_read",
+    "crates/backend/access/pgrcolumnar/pgrc_scan",
+    "crates/backend/access/pgrcolumnar/pgrc_qa",
+    "crates/backend/access/pgrcolumnar/pgrc_am",
+    "crates/backend/access/pgrcolumnar/pgrc_wal",
+    "crates/backend/access/pgrcolumnar/pgrc_spool",
+    "crates/backend/access/pgrcolumnar/pgrc_wal_seams",
+    "crates/backend/access/pgrcolumnar/pgrc_front",
+    "crates/backend/access/pgrcolumnar/pgrc_maint",
+    "crates/backend/access/pgrcolumnar/pgrc_compact",
+    "crates/backend/access/pgrcolumnar/pgrc_front_seams",
+    "crates/backend/access/pgrcolumnar/pgrc_marks",
+    "crates/backend/access/pgrcolumnar/pgrc_colcache",
+    "crates/backend/catalog/pgrc_companion",
     "crates/_support/alp",
     "crates/_support/order_key",
+    "crates/_support/cost_profile",
     "crates/backend/utils/adt/jsonb_shred",
+    "crates/backend/utils/adt/jsonb_pathstats",
     "crates/backend/storage/file/write_governor",
     "crates/backend/access/parquet_read",
     "crates/backend/access/tablesample/tablesample",
-    "crates/backend/executor/nodesamplescan",
     "crates/backend/storage/lmgr/predicate",
     "crates/backend/storage/lmgr/predicate_seams",
     "crates/backend/access/common/syncscan",
@@ -611,11 +601,12 @@ members = [
     "crates/backend/utils/misc/guc",
     "crates/_support/types/types_startup",
     "crates/backend/tcop/postgres_seams",
+    "crates/backend/tcop/gravity_entry_seams",
     "crates/common/string",
     "crates/common/string_seams",
     "crates/backend/tcop/backend_startup",
     "crates/backend/postmaster/launch_backend",
-    "crates/backend/postmaster/memwatchdog",
+    "crates/backend/postmaster/memruntime",
     "crates/backend/storage/buffer/bufmgr",
     "crates/backend/utils/activity/pgstat",
     "crates/backend/utils/cache/relcache_build_seams",
@@ -721,6 +712,10 @@ members = [
     "crates/contrib/pg_stat_statements",
     "crates/contrib/pg_buffercache",
     "crates/contrib/auto_explain",
+    "crates/contrib/pg_cron",
+    "crates/backend/bootstrap/bootstrap",
+    "crates/backend/bootstrap/bootstrap_seams",
+    "crates/bin/initdb",
     "crates/contrib/passwordcheck",
     "crates/contrib/test_oat_hooks",
     "crates/contrib/exec_hooks",
@@ -747,6 +742,13 @@ members = [
     "crates/contrib/tablefunc",
     "crates/contrib/lo",
     "crates/contrib/tcn",
+    "crates/contrib/autoinc",
+    "crates/contrib/insert_username",
+    "crates/contrib/moddatetime",
+    "crates/contrib/refint",
+    "crates/contrib/dict_int",
+    "crates/contrib/dict_xsyn",
+    "crates/contrib/xml2",
     "crates/contrib/pageinspect",
     "crates/contrib/pgstattuple",
     "crates/contrib/pg_freespacemap",
@@ -765,6 +767,8 @@ members = [
     "crates/backend/postmaster/bgworker_seams",
     "crates/backend/postmaster/janitor",
     "crates/backend/postmaster/janitor_seams",
+    "crates/backend/postmaster/instaux",
+    "crates/backend/postmaster/instaux_seams",
     "crates/backend/storage/ipc/ipci_seams",
     "crates/backend/storage/ipc/ipci",
     "crates/backend/postmaster/postmaster",
@@ -785,7 +789,6 @@ members = [
     "crates/backend/tcop/utility",
     "crates/backend/executor/execmain_seams",
     "crates/backend/executor/execmain",
-    "crates/backend/executor/tqueue",
     "crates/backend/parser/parser_seams",
     "crates/backend/parser/analyze_seams",
     "crates/backend/rewrite/rewrite_manip",
@@ -809,6 +812,7 @@ members = [
     "crates/backend/optimizer/util/clauses_seams",
     "crates/backend/optimizer/util/vars",
     "crates/backend/optimizer/util/var_seams",
+    "crates/backend/optimizer/util/pgrc_zonequal",
     "crates/backend/parser/parser_driver",
     "crates/common/ryu",
     "crates/backend/utils/adt/float",
@@ -891,6 +895,51 @@ members = [
     "crates/backend/utils/adt/pseudorandomfuncs",
     "crates/backend/utils/adt/pg_upgrade_support",
     "crates/bin/fuzzgen",
+    "crates/gravity/abi",
+    "crates/gravity/deps",
+    "crates/gravity/program",
+    "crates/gravity/driver",
+    "crates/gravity/driver_rig",
+    "crates/gravity/kernels",
+    "crates/gravity/kernels_rig",
+    "crates/gravity/parallel",
+    "crates/gravity/prewarm",
+    "crates/gravity/pool",
+    "crates/gravity/hosts",
+    "crates/gravity/hosts_it",
+    "crates/gravity/hosts_rig",
+    "crates/gravity/wire",
+    "crates/gravity/exec",
+    "crates/gravity/lint",
+    "crates/gravity/dict",
+    "crates/gravity/fn",
+    "crates/gravity/ir",
+    "crates/gravity/backend",
+    "crates/gravity/backend/interp",
+    "crates/gravity/backend/tpde",
+    "crates/gravity/backend/wasm",
+    "crates/gravity/expr",
+    "crates/gravity/decompose",
+    "crates/gravity/lower",
+    "crates/gravity/lowerv4",
+    "crates/gravity/lowerv4_it",
+    "crates/tpde/string-table",
+    "crates/tpde/assembler",
+    "crates/tpde/util",
+    "crates/tpde/base",
+    "crates/tpde/core",
+    "crates/tpde/test-ir",
+    "crates/tpde/disarm-gen",
+    "crates/tpde/fadec-gen",
+    "crates/tpde/function-writer",
+    "crates/tpde/compiler",
+    "crates/tpde/disarm",
+    "crates/tpde/fadec",
+    "crates/tpde/function-writer-a64",
+    "crates/tpde/function-writer-x64",
+    "crates/tpde/elf-mapper",
+    "crates/tpde/compiler-a64",
+    "crates/tpde/compiler-x64",
 ]
 
 [workspace.package]
@@ -901,6 +950,26 @@ publish = false
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
 incremental = false
+
+# check.sh crate tests (land tier): dev + opt-level 1. Keeps debug_assertions/overflow checks (the
+# #[cfg(debug_assertions)] test seams) but the differential tests stop crawling at opt-level 0.
+[profile.check-test]
+inherits = "dev"
+opt-level = 1
+# stack-depth tests calibrated to opt-level 0 frame sizes (at opt 1 the depth-8000 probe no longer reaches the
+# stack limit: "PROBE OK" instead of 54001, box 27 ctab 10-02) stay at opt-level 0
+[profile.check-test.package.adt_tsquery_core]
+opt-level = 0
+[profile.check-test.package.ltree]
+opt-level = 0
+# D4477: the planning context's allocator (mcx, its debug-only FreedSet's hashbrown, allocator-api2's Vec) at opt-level
+# 3 in crate tests, debug_assertions kept: at opt-level 1 each plan-time allocation cost several times malloc
+[profile.check-test.package.mcx]
+opt-level = 3
+[profile.check-test.package.hashbrown]
+opt-level = 3
+[profile.check-test.package.allocator-api2]
+opt-level = 3
 
 # Iterate on fast-profile (no LTO tail); numbers only from release/dist.
 [profile.fast-profile]
@@ -919,15 +988,16 @@ codegen-units = 1
 
 # Optimized wasm artifact for the web demo (wasm). NATIVE-INERT:
 # nothing native selects this profile; only wasm/wasm-build.sh's optional
-# PGRUST_WASM_PROFILE=wasm-release leg uses it. Size-first (opt-level=s,
-# symbols stripped, no LTO tail) so the module fits browser/iOS budgets.
+# PGRUST_WASM_PROFILE=wasm-release leg uses it. opt-level=3 for speed, like
+# native; size is no longer the first goal (D4462: opt s ran 1.35-2x slower
+# on every workload; opt 3 costs +9 % code / gzip). Symbols stripped, no LTO.
 [profile.wasm-release]
 inherits = "release"
-opt-level = "s"
+opt-level = 3
 lto = false
 codegen-units = 16
 
-# The official benchmark artifact.
+# The release artifact.
 [profile.dist]
 inherits = "release"
 lto = "fat"
@@ -943,3 +1013,35 @@ debug = 1
 inherits = "release"
 debug = 1
 strip = false
+
+# libmimalloc-sys 0.1.49 (mimalloc v3.3.2) as published, vendored so its Linux decommit can avoid one MADV_DONTNEED over a
+# whole 2 MiB-aligned range (CVE-2026-74674: Linux 7.0 reclaims the PTE table under such a call and flushes the wrong
+# address). The change is in c_src/mimalloc/v3/src/prim/unix/prim.c (_mi_prim_decommit).
+# Second vendored change (C3, memacct2 2026-10-15): c_src/mimalloc/v3/src/arena.c + include/mimalloc.h export
+# mi_arena_purge_now(arena_id, force), one arena's freed ranges purged now under the arenas' purge try-guard (pgrust's
+# cache arena; every other arena keeps the process-wide purge delay). Third (C3 purge owned), same
+# files: mi_arena_set_purge_owned / mi_arena_purge_owned_fallbacks, the owned arena skipped by every other purge (a
+# dead-man fallback after 1 s without its owner's purge). Fourth (REUSE BEFORE RELEASE), same
+# files: mi_arena_set_reuse_donor / mi_arena_reuse_stats, a general heap's fresh page first takes the donor arena's
+# committed free slices (mi_arena_try_reuse in mi_arenas_page_alloc_fresh_area, the marks cleared in _mi_arenas_free).
+# Fifth (REUSE gate + purge after idle), same files: mi_arena_committed_free / mi_arena_reuse_self_stats (a general arena's
+# own committed free run claimed before the donor's), mi_arena_reuse_cache_self_stats (the cache heap's new page claims
+# the cache arena's committed free run before fresh slices), mi_arena_purge_after_idle (the owner purges an arena only once no
+# slice was claimed from it for a while: a claim count in mi_arena_try_alloc_at and the reuse claim, kept only once the
+# hold's first tick turned it on; mi_arena_claims_noted reads it) and
+# mi_arena_purged_bytes (bytes purged by the owner vs every other caller, counted in mi_arena_purge).
+# Sixth (pressure purge + purge timing), same files: mi_arena_purge_unused (decommit every free committed run now, whatever
+# the purge delay), mi_arena_set_purge_phase / mi_arena_purge_batch / mi_arena_purge_times (each purge event's time by
+# thread class: the owner, a session inside a statement, a session after its ReadyForQuery, an executor worker, other).
+# Seventh (H3 step (2), give_back_service), same files: mi_arena_purge_now_busy, whether this thread's last
+# mi_arena_purge_now returned at the purge try-guard (another thread held it), so a forced purge past the watchdog's cancel
+# line hands the refused arena to the give-back service instead of losing it.
+# Eighth (macfix 2026-10-21, macOS only): c_src/mimalloc/v3/src/prim/osx/alloc-override-zone.c gives the malloc zone's
+# introspection table the `reinit_lock` hook a version >= 9 zone must have (libmalloc's fork child handler calls it
+# unchecked; NULL crashed every fork() on macOS 26). The file is compiled only for Apple targets.
+# A mimalloc bump ports all eight.
+# allocator-api2 0.2.21 as published, vendored so its Vec grow path can carry std's inline attributes (one out-of-line grow
+# per element type and one cold finish_grow per allocator, instead of the whole path inlined at every push / reserve site).
+[patch.crates-io]
+libmimalloc-sys = { path = "third_party/libmimalloc-sys" }
+allocator-api2 = { path = "third_party/allocator-api2" }

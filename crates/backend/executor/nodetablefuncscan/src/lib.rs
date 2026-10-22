@@ -47,13 +47,8 @@ pub struct TableFuncScanState<'mcx> {
     tstore: Option<Tuplestore>,
     ordinal: i32,
     cstr_scratch: PgVec<'mcx, u8>,
-    // C perTableCxt ("TableFunc per value context", nodeTableFuncscan.c:170):
-    // per-one-call (one result table) lifetime data — the JSON_TABLE exec
-    // context, PASSING values, detoasted documents — reset at the end of
-    // every tfuncFetchRows (line 330), so a LATERAL join over many outer
-    // rows keeps flat memory instead of leaking every call into
-    // es_query_cxt. Arena-slot + estate reset-callback ownership, the
-    // nodefunctionscan make_arg_ctx idiom.
+    // C perTableCxt (nodeTableFuncscan.c:170): one result table's data, reset
+    // at the end of every tfuncFetchRows; the nodefunctionscan make_arg_ctx idiom.
     per_table_mcx: NonNull<MemoryContext>,
 }
 
@@ -66,7 +61,7 @@ fn make_per_table_ctx(mcx: Mcx<'_>) -> PgResult<NonNull<MemoryContext>> {
     let raw = mcx.allocate(layout).map_err(|_| mcx.oom(layout.size()))?;
     let p: NonNull<MemoryContext> = raw.cast();
     // SAFETY: fresh allocation of the exact layout.
-    unsafe { p.write(mcx.context().new_child_bump("TableFunc per value context")) };
+    unsafe { p.write(mcx.context().new_child_wholesale("TableFunc per value context")) };
     // SAFETY: fires exactly once, before the arena bytes are reclaimed.
     mcx.context()
         .register_reset_callback(move || unsafe { core::ptr::drop_in_place(p.as_ptr()) });
@@ -568,25 +563,16 @@ fn varlena_payload<'m>(mcx: Mcx<'m>, d: Datum) -> PgResult<&'m [u8]> {
     let p = d.as_usize() as *const u8;
     // SAFETY: by-ref varlena datum readable through its header.
     unsafe {
-        let flat = if varatt::varatt_is_1b_e(p)
-            || (!varatt::varatt_is_1b(p) && !varatt::varatt_is_4b_u(p))
-        {
+        let flat = if varatt::varatt_is_1b(p) || !varatt::varatt_is_4b_u(p) {
             let image = core::slice::from_raw_parts(p, varatt::varsize_any(p));
             detoast_seams::detoast_attr::call(mcx, image)?.leak().as_ptr()
         } else {
             p
         };
-        if varatt::varatt_is_1b(flat) {
-            Ok(core::slice::from_raw_parts(
-                flat.add(varatt::VARHDRSZ_SHORT),
-                varatt::varsize_1b(flat) - varatt::VARHDRSZ_SHORT,
-            ))
-        } else {
-            Ok(core::slice::from_raw_parts(
-                flat.add(varatt::VARHDRSZ),
-                varatt::varsize_4b(flat) - varatt::VARHDRSZ,
-            ))
-        }
+        Ok(core::slice::from_raw_parts(
+            flat.add(varatt::VARHDRSZ),
+            varatt::varsize_4b(flat) - varatt::VARHDRSZ,
+        ))
     }
 }
 
@@ -594,6 +580,10 @@ pub fn exec_end_table_func_scan(node: &mut TableFuncScanState<'_>) {
     if let Some(store) = node.tstore.take() {
         store.end();
     }
+    // FreeExecutorState (execUtils.c:229) reclaims the input functions'
+    // fn_mcxt caches (record_in / array_in fn_extra); the forgotten arena
+    // slot never drops them.
+    node.in_functions.clear();
 }
 
 /// `ExecReScanTableFuncScan`: params changed → rebuild; else rewind.

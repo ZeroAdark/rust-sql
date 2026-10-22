@@ -1,0 +1,52 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1v s1id s1del s2d s1c s2c s3sel s3cnt
+step s1v: UPDATE rcs SET v = v + 1000 WHERE id = 7;
+step s1id: UPDATE rcs SET id = 2717 WHERE id = 17;
+step s1del: DELETE FROM rcs WHERE id = 27;
+step s2d: WITH u AS (UPDATE rcb SET amt = amt + 1 WHERE grp = 7 RETURNING id), d AS (DELETE FROM rcs WHERE id IN (SELECT id FROM u) RETURNING id, v) SELECT (SELECT count(*) FROM u), (SELECT count(*) FROM d), (SELECT sum(v) FROM d); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+count|count|  sum
+-----+-----+-----
+   50|   48|13556
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, v FROM rcs WHERE id IN (7, 17, 27, 37, 2717) ORDER BY id;
+  id| v
+----+--
+2717|17
+(1 row)
+
+step s3cnt: SELECT count(*), sum(v) FROM rcs;
+count|    sum
+-----+-------
+ 1951|1988417
+(1 row)
+
+
+starting permutation: s1v s1id s1del s2d s1r s2c s3sel s3cnt
+step s1v: UPDATE rcs SET v = v + 1000 WHERE id = 7;
+step s1id: UPDATE rcs SET id = 2717 WHERE id = 17;
+step s1del: DELETE FROM rcs WHERE id = 27;
+step s2d: WITH u AS (UPDATE rcb SET amt = amt + 1 WHERE grp = 7 RETURNING id), d AS (DELETE FROM rcs WHERE id IN (SELECT id FROM u) RETURNING id, v) SELECT (SELECT count(*) FROM u), (SELECT count(*) FROM d), (SELECT sum(v) FROM d); <waiting ...>
+step s1r: ROLLBACK;
+step s2d: <... completed>
+count|count|  sum
+-----+-----+-----
+   50|   50|12600
+(1 row)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, v FROM rcs WHERE id IN (7, 17, 27, 37, 2717) ORDER BY id;
+id|v
+--+-
+(0 rows)
+
+step s3cnt: SELECT count(*), sum(v) FROM rcs;
+count|    sum
+-----+-------
+ 1950|1988400
+(1 row)
+

@@ -76,14 +76,14 @@ fn metaphone_limit_errors() {
 
 #[test]
 fn dmetaphone_oracle() {
-    let (p, a) = dmetaphone::double_metaphone(b"gumbo");
+    let (p, a) = dmetaphone::double_metaphone(b"gumbo").unwrap();
     assert_eq!((p.as_slice(), a.as_slice()), (&b"KMP"[..], &b"KMP"[..]));
     // Classic primary/alternate splits (C dmetaphone reference behavior).
-    let (p, a) = dmetaphone::double_metaphone(b"Schmidt");
+    let (p, a) = dmetaphone::double_metaphone(b"Schmidt").unwrap();
     assert_eq!((p.as_slice(), a.as_slice()), (&b"XMT"[..], &b"SMT"[..]));
-    let (p, a) = dmetaphone::double_metaphone(b"Jose");
+    let (p, a) = dmetaphone::double_metaphone(b"Jose").unwrap();
     assert_eq!((p.as_slice(), a.as_slice()), (&b"HS"[..], &b"HS"[..]));
-    let (p, a) = dmetaphone::double_metaphone(b"");
+    let (p, a) = dmetaphone::double_metaphone(b"").unwrap();
     assert!(p.is_empty() && a.is_empty());
 }
 

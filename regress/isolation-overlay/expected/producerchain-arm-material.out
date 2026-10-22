@@ -1,0 +1,336 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pd s3pr s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE ap SET x = ap.x + bp.a FROM bp WHERE bp.a < ap.k AND bp.k = 7 AND ap.a <= 20;
+QUERY PLAN                                  
+--------------------------------------------
+Update on ap                                
+  Update on ap ap_1                         
+  Update on ac1 ap_2                        
+  Update on ac2 ap_3                        
+  ->  Nested Loop                           
+        Join Filter: (bp.a < ap.k)          
+        ->  Append                          
+              ->  Seq Scan on ap ap_1       
+                    Filter: (a <= 20)       
+              ->  Seq Scan on ac1 ap_2      
+                    Filter: (a <= 20)       
+              ->  Seq Scan on ac2 ap_3      
+                    Filter: (a <= 20)       
+        ->  Materialize                     
+              ->  Append                    
+                    ->  Seq Scan on bp bp_1 
+                          Filter: (k = 7)   
+                    ->  Seq Scan on bc1 bp_2
+                          Filter: (k = 7)   
+                    ->  Seq Scan on bc2 bp_3
+                          Filter: (k = 7)   
+(21 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM ap USING bp WHERE bp.a BETWEEN ap.k - 1 AND ap.k AND bp.k IN (1, 2) AND ap.x = 0 AND ap.a <= 20;
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Delete on ap                                                    
+  Delete on ap ap_1                                             
+  Delete on ac1 ap_2                                            
+  Delete on ac2 ap_3                                            
+  ->  Nested Loop                                               
+        Join Filter: ((bp.a <= ap.k) AND (bp.a >= (ap.k - 1)))  
+        ->  Append                                              
+              ->  Seq Scan on ap ap_1                           
+                    Filter: ((a <= 20) AND (x = 0))             
+              ->  Seq Scan on ac1 ap_2                          
+                    Filter: ((a <= 20) AND (x = 0))             
+              ->  Seq Scan on ac2 ap_3                          
+                    Filter: ((a <= 20) AND (x = 0))             
+        ->  Materialize                                         
+              ->  Append                                        
+                    ->  Seq Scan on bp bp_1                     
+                          Filter: (k = ANY ('{1,2}'::integer[]))
+                    ->  Seq Scan on bc1 bp_2                    
+                          Filter: (k = ANY ('{1,2}'::integer[]))
+                    ->  Seq Scan on bc2 bp_3                    
+                          Filter: (k = ANY ('{1,2}'::integer[]))
+(21 rows)
+
+step s3pr: EXPLAIN (COSTS OFF) UPDATE ap_ordered SET x = x + 100 WHERE a = 4 AND k = 4;
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Update on ap                                                 
+  Update on ap ap_1                                          
+  Update on ac1 ap_2                                         
+  Update on ac2 ap_3                                         
+  ->  Nested Loop                                            
+        ->  Append                                           
+              ->  Seq Scan on ap ap_1                        
+                    Filter: ((k = 4) AND (a = 4))            
+              ->  Seq Scan on ac1 ap_2                       
+                    Filter: ((k = 4) AND (a = 4))            
+              ->  Seq Scan on ac2 ap_3                       
+                    Filter: ((k = 4) AND (a = 4))            
+        ->  Materialize                                      
+              ->  Subquery Scan on ap_ordered                
+                    ->  Append                               
+                          ->  Seq Scan on ap ap_5            
+                                Filter: ((k = 4) AND (a = 4))
+                          ->  Seq Scan on ac1 ap_6           
+                                Filter: ((k = 4) AND (a = 4))
+                          ->  Seq Scan on ac2 ap_7           
+                                Filter: ((k = 4) AND (a = 4))
+(21 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1k s1d s2u s1c s2c s3sel s3row
+step s1x: UPDATE ac1 SET x = x + 1000 WHERE a = 10;
+step s1k: UPDATE ac2 SET k = 0 WHERE a = 20;
+step s1d: DELETE FROM ap WHERE a = 16 AND k = 7;
+step s2u: UPDATE ap SET x = ap.x + bp.a FROM bp WHERE bp.a < ap.k AND bp.k = 7 AND ap.a <= 20 RETURNING ap.a, ap.k, ap.x; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ a| k|   x
+--+--+----
+ 8| 8|   7
+17| 8|   7
+ 8| 8|   7
+ 9| 9|   7
+10|10|1007
+11|11|   7
+12|12|   7
+ 8| 8|   7
+ 9| 9|   7
+10|10|   7
+19| 8|   7
+(11 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, count(*), sum(k), sum(x) FROM ap GROUP BY 1 ORDER BY 1;
+tableoid|count|sum| sum
+--------+-----+---+----
+ap      |   19| 68|  14
+ac1     |   40|235|1035
+ac2     |   30|137|  28
+(3 rows)
+
+step s3row: SELECT tableoid::regclass, a, k, x FROM ap WHERE a IN (4, 7, 8, 10, 16, 20) ORDER BY 1, 2, 3;
+tableoid| a| k|   x
+--------+--+--+----
+ap      | 4| 4|   0
+ap      | 7| 7|   0
+ap      | 8| 8|   7
+ap      |10| 1|   0
+ap      |20| 2|   0
+ac1     | 4| 4|   0
+ac1     | 7| 7|   0
+ac1     | 8| 8|   7
+ac1     |10|10|1007
+ac1     |16| 3|   0
+ac1     |20| 7|   0
+ac2     | 4| 4|   0
+ac2     | 7| 7|   0
+ac2     | 8| 8|   7
+ac2     |10|10|   7
+ac2     |16| 5|   0
+ac2     |20| 0|   0
+(17 rows)
+
+
+starting permutation: s1x s1k s1d s1s s2u s1c s2c s3sel s3row
+step s1x: UPDATE ac1 SET x = x + 1000 WHERE a = 10;
+step s1k: UPDATE ac2 SET k = 0 WHERE a = 20;
+step s1d: DELETE FROM ap WHERE a = 16 AND k = 7;
+step s1s: UPDATE ONLY bp SET k = 0 WHERE a = 7;
+step s2u: UPDATE ap SET x = ap.x + bp.a FROM bp WHERE bp.a < ap.k AND bp.k = 7 AND ap.a <= 20 RETURNING ap.a, ap.k, ap.x; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ a| k|   x
+--+--+----
+ 8| 8|   7
+17| 8|   7
+ 8| 8|   7
+ 9| 9|   7
+10|10|1007
+11|11|   7
+12|12|   7
+ 8| 8|   7
+ 9| 9|   7
+10|10|   7
+19| 8|   7
+(11 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, count(*), sum(k), sum(x) FROM ap GROUP BY 1 ORDER BY 1;
+tableoid|count|sum| sum
+--------+-----+---+----
+ap      |   19| 68|  14
+ac1     |   40|235|1035
+ac2     |   30|137|  28
+(3 rows)
+
+step s3row: SELECT tableoid::regclass, a, k, x FROM ap WHERE a IN (4, 7, 8, 10, 16, 20) ORDER BY 1, 2, 3;
+tableoid| a| k|   x
+--------+--+--+----
+ap      | 4| 4|   0
+ap      | 7| 7|   0
+ap      | 8| 8|   7
+ap      |10| 1|   0
+ap      |20| 2|   0
+ac1     | 4| 4|   0
+ac1     | 7| 7|   0
+ac1     | 8| 8|   7
+ac1     |10|10|1007
+ac1     |16| 3|   0
+ac1     |20| 7|   0
+ac2     | 4| 4|   0
+ac2     | 7| 7|   0
+ac2     | 8| 8|   7
+ac2     |10|10|   7
+ac2     |16| 5|   0
+ac2     |20| 0|   0
+(17 rows)
+
+
+starting permutation: s1k s1d s2d s1c s2c s3sel s3row
+step s1k: UPDATE ac2 SET k = 0 WHERE a = 20;
+step s1d: DELETE FROM ap WHERE a = 16 AND k = 7;
+step s2d: DELETE FROM ap USING bp WHERE bp.a BETWEEN ap.k - 1 AND ap.k AND bp.k IN (1, 2) AND ap.x = 0 AND ap.a <= 20 RETURNING ap.a, ap.k;
+ a| k
+--+--
+ 1| 1
+ 2| 2
+ 3| 3
+10| 1
+11| 2
+12| 3
+19| 1
+20| 2
+ 1| 1
+ 2| 2
+ 3| 3
+10|10
+11|11
+12|12
+14| 1
+15| 2
+16| 3
+ 1| 1
+ 2| 2
+ 3| 3
+10|10
+12| 1
+13| 2
+14| 3
+(24 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, count(*), sum(k), sum(x) FROM ap GROUP BY 1 ORDER BY 1;
+tableoid|count|sum|sum
+--------+-----+---+---
+ap      |   11| 53|  0
+ac1     |   31|190|  0
+ac2     |   23|115|  0
+(3 rows)
+
+step s3row: SELECT tableoid::regclass, a, k, x FROM ap WHERE a IN (4, 7, 8, 10, 16, 20) ORDER BY 1, 2, 3;
+tableoid| a|k|x
+--------+--+-+-
+ap      | 4|4|0
+ap      | 7|7|0
+ap      | 8|8|0
+ac1     | 4|4|0
+ac1     | 7|7|0
+ac1     | 8|8|0
+ac1     |20|7|0
+ac2     | 4|4|0
+ac2     | 7|7|0
+ac2     | 8|8|0
+ac2     |16|5|0
+ac2     |20|0|0
+(12 rows)
+
+
+starting permutation: s2u s1x s2c s1c s3sel s3row
+step s2u: UPDATE ap SET x = ap.x + bp.a FROM bp WHERE bp.a < ap.k AND bp.k = 7 AND ap.a <= 20 RETURNING ap.a, ap.k, ap.x;
+ a| k|x
+--+--+-
+ 8| 8|7
+17| 8|7
+ 8| 8|7
+ 9| 9|7
+10|10|7
+11|11|7
+12|12|7
+ 8| 8|7
+ 9| 9|7
+10|10|7
+19| 8|7
+20| 9|7
+(12 rows)
+
+step s1x: UPDATE ac1 SET x = x + 1000 WHERE a = 10; <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT tableoid::regclass, count(*), sum(k), sum(x) FROM ap GROUP BY 1 ORDER BY 1;
+tableoid|count|sum| sum
+--------+-----+---+----
+ap      |   20| 75|  14
+ac1     |   40|235|1035
+ac2     |   30|146|  35
+(3 rows)
+
+step s3row: SELECT tableoid::regclass, a, k, x FROM ap WHERE a IN (4, 7, 8, 10, 16, 20) ORDER BY 1, 2, 3;
+tableoid| a| k|   x
+--------+--+--+----
+ap      | 4| 4|   0
+ap      | 7| 7|   0
+ap      | 8| 8|   7
+ap      |10| 1|   0
+ap      |16| 7|   0
+ap      |20| 2|   0
+ac1     | 4| 4|   0
+ac1     | 7| 7|   0
+ac1     | 8| 8|   7
+ac1     |10|10|1007
+ac1     |16| 3|   0
+ac1     |20| 7|   0
+ac2     | 4| 4|   0
+ac2     | 7| 7|   0
+ac2     | 8| 8|   7
+ac2     |10|10|   7
+ac2     |16| 5|   0
+ac2     |20| 9|   7
+(18 rows)
+
+
+starting permutation: s1v s2r s1c s2c s3row
+step s1v: UPDATE ac1 SET x = x + 5 WHERE a = 4;
+step s2r: UPDATE ap_ordered SET x = x + 100 WHERE a = 4 AND k = 4; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2c: COMMIT;
+step s3row: SELECT tableoid::regclass, a, k, x FROM ap WHERE a IN (4, 7, 8, 10, 16, 20) ORDER BY 1, 2, 3;
+tableoid| a| k|  x
+--------+--+--+---
+ap      | 4| 4|100
+ap      | 7| 7|  0
+ap      | 8| 8|  0
+ap      |10| 1|  0
+ap      |16| 7|  0
+ap      |20| 2|  0
+ac1     | 4| 4|100
+ac1     | 7| 7|  0
+ac1     | 8| 8|  0
+ac1     |10|10|  0
+ac1     |16| 3|  0
+ac1     |20| 7|  0
+ac2     | 4| 4|100
+ac2     | 7| 7|  0
+ac2     | 8| 8|  0
+ac2     |10|10|  0
+ac2     |16| 5|  0
+ac2     |20| 9|  0
+(18 rows)
+

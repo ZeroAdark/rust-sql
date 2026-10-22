@@ -130,7 +130,7 @@ pub fn CreateTupleDescCopyConstr<'mcx>(
             });
         }
 
-        let mut values: Vec<(usize, MissingValue<'_>)> = Vec::with_capacity(constr.missing.len());
+        let mut values: Vec<(usize, MissingValue<'_>)> = ::mcx::std_vec_with_capacity("access", constr.missing.len())?;
         for (i, m) in constr.missing.iter().enumerate() {
             if !m.am_present {
                 continue;
@@ -576,41 +576,28 @@ impl<'a> MissingValue<'a> {
     }
 }
 
-/// datumCopy of each by-ref attmissingval into one MAXALIGN-laid-out store
-/// that the descriptor owns (the AttrMissing entries point into it), so the
-/// images free with the descriptor exactly as FreeTupleDesc pfrees them.
 pub fn build_missing<'mcx>(
     mcx: Mcx<'mcx>,
     natts: usize,
     values: &[(usize, MissingValue<'_>)],
-) -> PgResult<(PgVec<'mcx, AttrMissing>, PgVec<'mcx, u8>)> {
-    let maxalign = |n: usize| (n + MAXIMUM_ALIGNOF - 1) & !(MAXIMUM_ALIGNOF - 1);
-    let total: usize = values
-        .iter()
-        .map(|(_, v)| match v {
-            MissingValue::ByVal(_) => 0,
-            MissingValue::ByRef(b) => maxalign(b.len()),
-        })
-        .sum();
-    // The store never grows past this exact capacity, so its base is stable.
-    let mut store: PgVec<'mcx, u8> = vec_with_capacity_in(mcx, total)?;
+) -> PgResult<(PgVec<'mcx, AttrMissing>, PgVec<'mcx, PgVec<'mcx, u8>>)> {
+    let mut store = vec_droppy_with_capacity(mcx, values.len())?;
     let mut missing: PgVec<'mcx, AttrMissing> = vec_with_capacity_in(mcx, natts)?;
     missing.resize(natts, AttrMissing { am_present: false, am_value: Datum::null() });
     for (i, v) in values {
         let am_value = match v {
             MissingValue::ByVal(d) => *d,
             MissingValue::ByRef(b) => {
-                let off = store.len();
-                store.extend_from_slice(b);
-                store.resize(maxalign(store.len()), 0);
-                // SAFETY: off < capacity; the buffer is never reallocated.
-                Datum::from_usize(unsafe { store.as_ptr().add(off) } as usize)
+                let mut image = vec_with_capacity_in(mcx, b.len())?;
+                ::mcx::vec_append_bytes(&mut image, b)?;
+                debug_assert!(image.as_ptr() as usize % MAXIMUM_ALIGNOF == 0);
+                let datum = Datum::from_usize(image.as_ptr() as usize);
+                store.push(image);
+                datum
             }
         };
         missing[*i] = AttrMissing { am_present: true, am_value };
     }
-    debug_assert!(store.len() == total);
-    debug_assert!(total == 0 || store.as_ptr() as usize % MAXIMUM_ALIGNOF == 0);
     Ok((missing, store))
 }
 

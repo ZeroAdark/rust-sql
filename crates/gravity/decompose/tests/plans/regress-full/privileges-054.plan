@@ -1,0 +1,22 @@
+-- name: regress-full-privileges-054
+-- sql: TABLE information_schema.enabled_roles;
+-- test: privileges
+-- shape: b19510c141f2e0c1 seen=1
+-- rel 1260 pg_authid am=heap kind=r natts=12
+-- att 1260 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1260 2 rolname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1260 3 rolsuper typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 4 rolinherit typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 5 rolcreaterole typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 6 rolcreatedb typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 7 rolcanlogin typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 8 rolreplication typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 9 rolbypassrls typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 10 rolconnlimit typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1260 11 rolpassword typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1260 12 rolvaliduntil typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- idx 2676 rel=1260 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2677 rel=1260 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- rel 13816 enabled_roles am=none kind=v natts=1
+-- att 13816 1 role_name typid=13718 typmod=-1 len=64 byval=f notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 1.2125 :scan.plan.plan_rows 6 :scan.plan.plan_width 64 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 0 :scan.plan.targetlist ({TARGETENTRY :expr {RELABELTYPE :arg {VAR :varno 2 :varattno 2 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 2 :location -1} :resulttype 13718 :resulttypmod -1 :resultcollid 950 :relabelformat 1 :location -1} :resno 1 :resname role_name :ressortgroupref 0 :resorigtbl 13816 :resorigcol 1 :resjunk false}) :scan.plan.qual ({FUNCEXPR :funcid 2710 :funcresulttype 16 :funcretset false :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 100 :args ({VAR :varno 2 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 2 :varattnosyn 1 :location -1} {CONST :consttype 25 :consttypmod -1 :constcollid 100 :constlen -1 :constbyval false :constisnull false :location -1 :constvalue 9 [ 36 0 0 0 85 83 65 71 69 ]}) :location -1}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 2 :cb_scan_cols (b 1 2)} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname enabled_roles :colnames ("role_name")} :rtekind 1 :subquery <> :security_barrier false :relid 13816 :inh false :relkind v :rellockmode 1 :perminfoindex 1 :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname a :colnames <>} :eref {ALIAS :aliasname a :colnames ("oid" "rolname" "rolsuper" "rolinherit" "rolcreaterole" "rolcreatedb" "rolcanlogin" "rolreplication" "rolbypassrls" "rolconnlimit" "rolpassword" "rolvaliduntil")} :rtekind 0 :relid 1260 :inh false :relkind r :rellockmode 1 :perminfoindex 2 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1 2) :permInfos ({RTEPERMISSIONINFO :relid 13816 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1260 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 13816 1260) :invalItems ({PLANINVALITEM :cacheId 82 :hashValue 2285844475}) :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 38}

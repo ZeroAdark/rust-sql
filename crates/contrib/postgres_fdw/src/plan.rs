@@ -336,7 +336,9 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
             fpextra.is_some_and(|f| f.has_limit),
             None,
         )?;
-        let mut sql = String::with_capacity(query.as_str().len() + 8);
+        let mut sql = String::new();
+        sql.try_reserve(query.as_str().len() + 8)
+            .map_err(|_| mcx::oom_named("postgres_fdw", query.as_str().len() + 8))?;
         sql.push_str("EXPLAIN ");
         sql.push_str(query.as_str());
 
@@ -371,7 +373,6 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
         rows = planner::costsize::clamp_row_est(r_rows * local_sel);
 
         startup_cost += local_conds_cost.startup;
-        total_cost += local_conds_cost.per_tuple * retrieved_rows;
         let mut local_cost = types_pathnodes::QualCost::default();
         for &ri in &local_ids {
             let clause = run.root.rinfo(ri).clause;
@@ -381,12 +382,18 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
             local_cost.per_tuple += c.per_tuple;
         }
         startup_cost += local_cost.startup;
-        total_cost += local_cost.per_tuple * retrieved_rows;
 
         let rt_cost = run.pathtarget(run.rel_reltarget_id(rel_id)).cost;
         startup_cost += rt_cost.startup;
-        total_cost += rt_cost.startup;
-        total_cost += rt_cost.per_tuple * rows;
+        total_cost = fma_remote_local(
+            total_cost,
+            local_conds_cost.per_tuple,
+            local_cost.per_tuple,
+            retrieved_rows,
+            rt_cost.startup,
+            rt_cost.per_tuple,
+            rows,
+        );
         if matches!(
             run.root.rel(rel_id).reloptkind,
             types_pathnodes::RELOPT_UPPER_REL | types_pathnodes::RELOPT_OTHER_UPPER_REL
@@ -401,8 +408,7 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
                 tlist_cost.per_tuple += c.per_tuple;
             }
             startup_cost -= tlist_cost.startup;
-            total_cost -= tlist_cost.startup;
-            total_cost -= tlist_cost.per_tuple * rows;
+            total_cost = fma_tlist_back(total_cost, tlist_cost.startup, tlist_cost.per_tuple, rows);
         }
     } else {
         debug_assert!(param_join_conds.is_empty());
@@ -431,7 +437,7 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
                     ));
                     let rt_cost = run.pathtarget(run.rel_reltarget_id(rel_id)).cost;
                     startup_cost += rt_cost.startup;
-                    run_cost += rt_cost.per_tuple * rows;
+                    run_cost = fma_add_eval(run_cost, rt_cost.per_tuple, rows); // :3266
                 }
             }
         } else if matches!(
@@ -488,16 +494,22 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
             startup_cost += remote_conds_cost.startup;
             startup_cost += local_conds_cost.startup;
 
-            let mut rc = (i_total - i_start) + (o_total - o_start);
-            rc += nrows * join_cost.per_tuple;
+            let nrows0 = nrows;
             nrows = planner::costsize::clamp_row_est(nrows * joinclause_sel);
-            rc += nrows * remote_conds_cost.per_tuple;
-            rc += local_conds_cost.per_tuple * retrieved_rows;
 
             let rt_cost = run.pathtarget(run.rel_reltarget_id(rel_id)).cost;
             startup_cost += rt_cost.startup;
-            rc += rt_cost.per_tuple * rows;
-            run_cost = rc;
+            run_cost = fma_join_run_cost(
+                (i_start, i_total, o_start, o_total),
+                nrows0,
+                join_cost.per_tuple,
+                nrows,
+                remote_conds_cost.per_tuple,
+                local_conds_cost.per_tuple,
+                retrieved_rows,
+                rt_cost.per_tuple,
+                rows,
+            );
         } else if matches!(
             run.root.rel(rel_id).reloptkind,
             types_pathnodes::RELOPT_UPPER_REL | types_pathnodes::RELOPT_OTHER_UPPER_REL
@@ -559,19 +571,26 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
             width = run.pathtarget(run.rel_reltarget_id(rel_id)).width;
 
             let o_rt_cost = run.pathtarget(run.rel_reltarget_id(outerrel)).cost;
-            startup_cost = o_start;
-            startup_cost += o_rt_cost.startup;
-            startup_cost += aggcosts.transCost.startup;
-            startup_cost += aggcosts.transCost.per_tuple * input_rows;
-            startup_cost += aggcosts.finalCost.startup;
-            startup_cost +=
-                (planner::costsize::gucs::cpu_operator_cost() * num_group_cols as f64)
-                    * input_rows;
+            startup_cost = fma_upper_startup(
+                o_start,
+                o_rt_cost.startup,
+                aggcosts.transCost.startup,
+                aggcosts.transCost.per_tuple,
+                input_rows,
+                aggcosts.finalCost.startup,
+                planner::costsize::gucs::cpu_operator_cost(),
+                num_group_cols,
+            );
 
-            let mut rc = o_total - o_start;
-            rc += o_rt_cost.per_tuple * input_rows;
-            rc += aggcosts.finalCost.per_tuple * num_groups;
-            rc += planner::costsize::gucs::cpu_tuple_cost() * num_groups;
+            let mut rc = fma_upper_run_cost_head(
+                o_total,
+                o_start,
+                o_rt_cost.per_tuple,
+                input_rows,
+                aggcosts.finalCost.per_tuple,
+                num_groups,
+                planner::costsize::gucs::cpu_tuple_cost(),
+            );
 
             if run.root.hasHavingQual {
                 let remote_ids: Vec<RinfoId> = fpinfo(run.root.rel(rel_id))
@@ -589,15 +608,19 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
                     remote_cost.per_tuple += c.per_tuple;
                 }
                 startup_cost += remote_cost.startup;
-                rc += remote_cost.per_tuple * num_groups;
                 startup_cost += local_conds_cost.startup;
-                rc += local_conds_cost.per_tuple * retrieved_rows;
+                rc = fma_having_run_cost(
+                    rc,
+                    remote_cost.per_tuple,
+                    num_groups,
+                    local_conds_cost.per_tuple,
+                    retrieved_rows,
+                );
             }
 
             let rt_cost = run.pathtarget(run.rel_reltarget_id(rel_id)).cost;
             startup_cost += rt_cost.startup;
-            rc += rt_cost.per_tuple * rows;
-            run_cost = rc;
+            run_cost = fma_add_eval(rc, rt_cost.per_tuple, rows); // :3455
         } else {
             let local_conds_sel = fpinfo(run.root.rel(rel_id)).borrow().local_conds_sel;
             let r = run.root.rel(rel_id);
@@ -614,16 +637,18 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
             }
             retrieved_rows = rr;
             startup_cost = 0.0;
-            let mut rc = planner::costsize::gucs::seq_page_cost() * pages as f64;
             startup_cost += baserestrict_startup;
-            let cpu_per_tuple =
-                planner::costsize::gucs::cpu_tuple_cost() + baserestrict_per_tuple;
-            rc += cpu_per_tuple * tuples;
-
             let rt_cost = run.pathtarget(run.rel_reltarget_id(rel_id)).cost;
             startup_cost += rt_cost.startup;
-            rc += rt_cost.per_tuple * rows;
-            run_cost = rc;
+            run_cost = fma_base_run_cost(
+                planner::costsize::gucs::seq_page_cost(),
+                pages as f64,
+                planner::costsize::gucs::cpu_tuple_cost(),
+                baserestrict_per_tuple,
+                tuples,
+                rt_cost.per_tuple,
+                rows,
+            );
         }
 
         // Without remote estimates, we have no real way to estimate the cost
@@ -631,6 +656,9 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
         // won't pick the sorted path when the ordering isn't locally useful,
         // but low enough to err on the side of pushing down the ORDER BY
         // when it is (postgres_fdw.c:3452-3474).
+        // postgres_fdw.c:3518: when the grouping path takes the 1.05
+        // multiplier, aarch64 GCC fuses `run_cost * m` into `startup + run`.
+        let mut fused_total = None;
         if !pathkeys.is_empty() {
             if is_upper_rel(run, rel_id) {
                 debug_assert!(
@@ -639,7 +667,8 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
                 );
                 let limit_tuples =
                     fpextra.expect("a sorted grouping path carries fpextra").limit_tuples;
-                adjust_foreign_grouping_path_cost(
+                let run_before = run_cost;
+                if let Some(m) = adjust_foreign_grouping_path_cost(
                     run,
                     pathkeys,
                     retrieved_rows,
@@ -647,14 +676,16 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
                     limit_tuples,
                     &mut startup_cost,
                     &mut run_cost,
-                );
+                ) {
+                    fused_total = Some(fma_sort_multiplied_total(startup_cost, run_before, m));
+                }
             } else {
                 startup_cost *= DEFAULT_FDW_SORT_MULTIPLIER;
                 run_cost *= DEFAULT_FDW_SORT_MULTIPLIER;
             }
         }
 
-        total_cost = startup_cost + run_cost;
+        total_cost = fused_total.unwrap_or(startup_cost + run_cost);
 
         // Adjust the cost estimates if we have LIMIT.
         if let Some(f) = fpextra {
@@ -682,7 +713,7 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
             let newcost = run.pathtarget(f.target).cost;
             startup_cost += newcost.startup - oldcost.startup;
             total_cost += newcost.startup - oldcost.startup;
-            total_cost += (newcost.per_tuple - oldcost.per_tuple) * rows;
+            total_cost = fma_add_eval(total_cost, newcost.per_tuple - oldcost.per_tuple, rows); // :3543
         }
     }
 
@@ -704,8 +735,12 @@ pub(crate) fn estimate_path_cost_size<'mcx>(
     };
     startup_cost += fdw_startup_cost;
     total_cost += fdw_startup_cost;
-    total_cost += fdw_tuple_cost * retrieved_rows;
-    total_cost += planner::costsize::gucs::cpu_tuple_cost() * retrieved_rows;
+    total_cost = fma_transfer(
+        total_cost,
+        fdw_tuple_cost,
+        planner::costsize::gucs::cpu_tuple_cost(),
+        retrieved_rows,
+    );
 
     // If we have LIMIT, prefer performing the restriction remotely: the core
     // code doesn't account for the extra fetches a local LIMIT causes (see
@@ -735,7 +770,7 @@ fn adjust_foreign_grouping_path_cost(
     limit_tuples: f64,
     p_startup_cost: &mut f64,
     p_run_cost: &mut f64,
-) {
+) -> Option<f64> {
     // If the GROUP BY clause isn't sort-able, the plan chosen by the remote
     // side is unlikely to generate properly-sorted output, so it would need
     // an explicit sort; adjust the given costs with cost_sort(). Likewise if
@@ -758,13 +793,141 @@ fn adjust_foreign_grouping_path_cost(
         );
         *p_startup_cost = startup_cost;
         *p_run_cost = total_cost - startup_cost;
+        None
     } else {
         // The default extra cost seems too large for foreign-grouping cases;
         // add 1/4th of that default.
         let sort_multiplier = 1.0 + (DEFAULT_FDW_SORT_MULTIPLIER - 1.0) * 0.25;
         *p_startup_cost *= sort_multiplier;
         *p_run_cost *= sort_multiplier;
+        Some(sort_multiplier)
     }
+}
+
+// D400: the cost arithmetic GCC contracts on aarch64 in
+// estimate_path_cost_size (postgres_fdw.c:3106), in its association; x86-64
+// rounds every product (fp_contract).
+use ::fp_contract::{fmadd, fmsub};
+
+// `acc += per_tuple * rows`: postgres_fdw.c:3266, 3455, 3543.
+fn fma_add_eval(acc: f64, per_tuple: f64, rows: f64) -> f64 {
+    fmadd(per_tuple, rows, acc)
+}
+
+// postgres_fdw.c:3420-3425 (grouping startup).
+#[allow(clippy::too_many_arguments)]
+fn fma_upper_startup(
+    o_start: f64,
+    o_rt_startup: f64,
+    trans_startup: f64,
+    trans_per_tuple: f64,
+    input_rows: f64,
+    final_startup: f64,
+    cpu_operator_cost: f64,
+    num_group_cols: usize,
+) -> f64 {
+    let mut s = o_start + o_rt_startup;
+    s += trans_startup;
+    s = fmadd(trans_per_tuple, input_rows, s);
+    s += final_startup;
+    fmadd(cpu_operator_cost * num_group_cols as f64, input_rows, s)
+}
+
+// postgres_fdw.c:3447/3450 (HAVING quals).
+fn fma_having_run_cost(
+    rc: f64,
+    remote_per_tuple: f64,
+    num_groups: f64,
+    local_per_tuple: f64,
+    retrieved_rows: f64,
+) -> f64 {
+    fmadd(local_per_tuple, retrieved_rows, fmadd(remote_per_tuple, num_groups, rc))
+}
+
+// postgres_fdw.c:3573/3574.
+fn fma_transfer(total: f64, fdw_tuple_cost: f64, cpu_tuple_cost: f64, retrieved_rows: f64) -> f64 {
+    fmadd(cpu_tuple_cost, retrieved_rows, fmadd(fdw_tuple_cost, retrieved_rows, total))
+}
+
+// postgres_fdw.c:3201/3204/3213 (remote-estimate lane).
+fn fma_remote_local(
+    total: f64,
+    local_conds_per_tuple: f64,
+    local_per_tuple: f64,
+    retrieved_rows: f64,
+    rt_startup: f64,
+    rt_per_tuple: f64,
+    rows: f64,
+) -> f64 {
+    let mut total = fmadd(local_conds_per_tuple, retrieved_rows, total);
+    total = fmadd(local_per_tuple, retrieved_rows, total);
+    total += rt_startup;
+    fmadd(rt_per_tuple, rows, total)
+}
+
+// postgres_fdw.c:3220/3221: fmsub.
+fn fma_tlist_back(total: f64, tl_startup: f64, tl_per_tuple: f64, rows: f64) -> f64 {
+    fmsub(tl_per_tuple, rows, total - tl_startup)
+}
+
+// postgres_fdw.c:3337-3346 (join): nrows0 before, nrows after joinclause_sel.
+#[allow(clippy::too_many_arguments)]
+fn fma_join_run_cost(
+    (i_start, i_total, o_start, o_total): (f64, f64, f64, f64),
+    nrows0: f64,
+    join_per_tuple: f64,
+    nrows: f64,
+    remote_per_tuple: f64,
+    local_per_tuple: f64,
+    retrieved_rows: f64,
+    rt_per_tuple: f64,
+    rows: f64,
+) -> f64 {
+    let mut rc = i_total - i_start;
+    rc += o_total - o_start;
+    rc = fmadd(nrows0, join_per_tuple, rc);
+    rc = fmadd(nrows, remote_per_tuple, rc);
+    rc = fmadd(local_per_tuple, retrieved_rows, rc);
+    fmadd(rt_per_tuple, rows, rc)
+}
+
+// postgres_fdw.c:3434-3437 (grouping run cost head).
+fn fma_upper_run_cost_head(
+    o_total: f64,
+    o_start: f64,
+    o_rt_per_tuple: f64,
+    input_rows: f64,
+    final_per_tuple: f64,
+    num_groups: f64,
+    cpu_tuple_cost: f64,
+) -> f64 {
+    let mut rc = o_total - o_start;
+    rc = fmadd(o_rt_per_tuple, input_rows, rc);
+    rc = fmadd(final_per_tuple, num_groups, rc);
+    fmadd(cpu_tuple_cost, num_groups, rc)
+}
+
+// postgres_fdw.c:3478-3487 (base scan). 3479 `run_cost = 0; += spc * pages`
+// fuses with 0 and so equals the plain product.
+fn fma_base_run_cost(
+    seq_page_cost: f64,
+    pages: f64,
+    cpu_tuple_cost: f64,
+    restrict_per_tuple: f64,
+    tuples: f64,
+    rt_per_tuple: f64,
+    rows: f64,
+) -> f64 {
+    let rc = seq_page_cost * pages;
+    let cpu_per_tuple = cpu_tuple_cost + restrict_per_tuple;
+    let rc = fmadd(cpu_per_tuple, tuples, rc);
+    fmadd(rt_per_tuple, rows, rc)
+}
+
+// postgres_fdw.c:3518 after adjust_foreign_grouping_path_cost's multiplier
+// arm (inlined): fmadd(run_cost, m, startup_cost * m).
+fn fma_sort_multiplied_total(scaled_startup: f64, run_before: f64, m: f64) -> f64 {
+    fmadd(run_before, m, scaled_startup)
 }
 
 // find_em_for_rel (postgres_fdw.c:7851): an EquivalenceClass member whose
@@ -1711,8 +1874,13 @@ fn postgres_get_foreign_join_paths<'mcx>(
         if ct == CmdType::CMD_DELETE || ct == CmdType::CMD_UPDATE || !run.root.rowMarks.is_empty()
         {
             let Some(p) = planner::pathnode::get_existing_local_join_path(run, joinrel) else {
-                // elog(DEBUG3, "could not push down foreign join because a
-                // local path suitable for EPQ checks was not found")
+                // postgres_fdw.c:6423, elog(DEBUG3).
+                let _ = elog::ereport(types_error::DEBUG3)
+                    .errmsg_internal(
+                        "could not push down foreign join because a local path suitable for EPQ checks was not found"
+                            .to_string(),
+                    )
+                    .finish(crate::loc("postgresGetForeignJoinPaths"));
                 return Ok(());
             };
             Some(p)
@@ -2958,6 +3126,8 @@ static MODIFY_ROUTINE: nodemodifytable::FdwModifyRoutine = nodemodifytable::FdwM
     end: crate::modify::end_foreign_modify,
     explain: Some(crate::modify::explain_foreign_modify),
     flush: Some(crate::modify::flush_foreign_modify),
+    batch_size: Some(crate::modify::foreign_modify_state_batch_size),
+    disable_batching: Some(crate::modify::foreign_modify_disable_batching),
     begin_insert: Some(crate::modify::begin_foreign_insert),
 };
 
@@ -3016,4 +3186,51 @@ pub fn install() {
     static UPDATABLE_FN: foreigncmds::foreign::FdwUpdatableFn =
         crate::modify::is_foreign_rel_updatable;
     foreigncmds::foreign::install_fdw_updatable(FdwKind::PostgresFdw, &UPDATABLE_FN);
+}
+
+#[cfg(test)]
+mod d400_fma_tests {
+    use super::*;
+
+    // D400: estimate_path_cost_size's contracted sites. Each row's aarch64
+    // value is GCC 13.3 -O2 (the pgdg build's compiler) on the C statements,
+    // with the fused shapes checked against postgres_fdw.so; x86-64 rounds
+    // every product. The row set flips every fused site at least once
+    // (checked by unfusing each site in turn).
+    #[test]
+    fn estimate_path_cost_size_fma_sites() {
+        let m = 1.0 + (DEFAULT_FDW_SORT_MULTIPLIER - 1.0) * 0.25;
+        let arm = cfg!(target_arch = "aarch64");
+        let rows: [(&str, f64, f64, f64); 26] = [
+        ("remote", fma_remote_local(2913.1804, 0.019570902, 0.037947012, 2716.7862, 0.094169167, 0.067663908, 2601.4288), 3245.561283166737, 3245.5612831667377),
+        ("remote", fma_remote_local(333.54099, 0.03195005, 0.0054359381, 2050.5072, 0.054311253, 0.044602921, 715.45719), 442.1670195556163, 442.16701955561626),
+        ("remote", fma_remote_local(794.88864, 0.079802813, 0.088792722, 4038.2765, 0.056305389, 0.072003817, 4316.9522), 1786.6173685909748, 1786.6173685909753),
+        ("tback", fma_tlist_back(1046.4749, 0.0098519362, 0.057469066, 4976.0174), 760.4979756860515, 760.4979756860516),
+        ("cached", fma_add_eval(2264.209, 0.047271021, 4438.1591), 2474.005312017441, 2474.0053120174407),
+        ("join", fma_join_run_cost((1398.736, 3304.5155, 2590.5449, 2735.228), 239.20996, 0.029364198, 2206.0191, 0.090203655, 0.097372643, 446.40747, 0.043253469, 947.13778), 2340.9126642636247, 2340.9126642636243),
+        ("join", fma_join_run_cost((3801.5732, 1532.6533, 2135.9076, 4469.6686), 2457.1045, 0.021154384, 1700.9012, 0.0081237343, 0.095765685, 1898.5735, 0.048660025, 310.75222), 327.5767040848323, 327.5767040848322),
+        ("join", fma_join_run_cost((2320.6801, 468.20174, 1183.0925, 2370.4062), 4450.6417, 0.086801146, 1333.2895, 0.072202157, 0.098525353, 3436.7284, 0.086780766, 2256.9768), 351.88957212419353, 351.88957212419353),
+        ("join", fma_join_run_cost((1345.8887, 836.68968, 909.60969, 2117.2094), 3228.0772, 0.011058053, 215.73624, 0.033265464, 0.058068378, 1366.8529, 0.019884238, 712.97162), 834.8213331378289, 834.8213331378288),
+        ("ustart", fma_upper_startup(616.43837, 0.076270859, 0.047885382, 0.05126854, 2655.436, 0.077947411, 0.0025, 3), 772.69657043544, 772.6965704354399),
+        ("ustart", fma_upper_startup(3691.4938, 0.0014721062, 0.091010829, 0.076394925, 1718.672, 0.082444582, 0.0025, 3), 3835.8565860568, 3835.8565860567996),
+        ("urun0", fma_add_eval(fma_upper_run_cost_head(474.97775, 4534.5374, 0.083858164, 1586.9892, 0.095267728, 4330.6886, 0.01), 0.096736264, 4981.6776), -2988.6870203261838, -2988.687020326184),
+        ("urun0", fma_add_eval(fma_upper_run_cost_head(286.84737, 3520.4045, 0.051684818, 3463.5611, 0.090776152, 1778.5999, 0.01), 0.039422236, 4115.6995), -2713.0530740509535, -2713.053074050953),
+        ("urun0", fma_add_eval(fma_upper_run_cost_head(3839.5964, 4355.6998, 0.097548933, 537.597, 0.089840184, 4244.4159, 0.01), 0.026808274, 1508.7634), 0.5492207908978205, 0.5492207908978344),
+        ("urun0", fma_add_eval(fma_upper_run_cost_head(1242.4528, 3738.048, 0.040088843, 3056.87, 0.015922996, 2128.3772, 0.01), 0.091217343, 2507.1214), -2089.181952170058, -2089.1819521700586),
+        ("urun1", fma_add_eval(fma_having_run_cost(fma_upper_run_cost_head(3661.9547, 2625.136, 0.062908257, 4746.5009, 0.028600514, 2972.3155, 0.01), 0.055791912, 2972.3155, 0.024271862, 3151.5655), 0.065485159, 3539.4251), 1924.251047692386, 1924.2510476923862),
+        ("urun1", fma_add_eval(fma_having_run_cost(fma_upper_run_cost_head(2397.2075, 4408.4774, 0.067977197, 4898.2646, 0.045728091, 2809.0007, 0.01), 0.098108432, 2809.0007, 0.018419653, 4601.8336), 0.043446953, 2497.7898), -1052.887167414887, -1052.8871674148872),
+        ("urun1", fma_add_eval(fma_having_run_cost(fma_upper_run_cost_head(784.61758, 1339.1066, 0.072514456, 1149.7205, 0.047712773, 1798.1721, 0.01), 0.023231266, 1798.1721, 0.014389196, 568.22506), 0.098682741, 4070.4497), 84.29308445973929, 84.2930844597393),
+        ("urun1", fma_add_eval(fma_having_run_cost(fma_upper_run_cost_head(4164.3737, 3960.6444, 0.096689998, 2153.0971, 0.049664514, 2723.1867, 0.01), 0.022347485, 2723.1867, 0.017144735, 4187.5523), 0.087392593, 1149.7482), 807.5201901872422, 807.5201901872423),
+        ("urun1", fma_add_eval(fma_having_run_cost(fma_upper_run_cost_head(1811.3161, 3499.1138, 0.075912159, 1010.2311, 0.021507163, 3276.0537, 0.01), 0.081612189, 3276.0537, 0.050053476, 3040.899), 0.094270805, 4180.6084), -694.2069200761667, -694.2069200761669),
+        ("base", fma_base_run_cost(1.0, 669.86257, 0.01, 0.04040327, 4400.2481, 0.026926937, 174.84146), 896.357408029695, 896.3574080296951),
+        ("base", fma_base_run_cost(1.0, 551.61974, 0.01, 0.074452654, 4981.6871, 0.021473075, 1724.0129), 1009.3562952952308, 1009.3562952952309),
+        ("usort", fma_sort_multiplied_total(1497.9513 * m, 1827.3879, m), 3491.60616, 3491.6061600000003),
+        ("fsort", fma_add_eval(349.25376, 0.0026572531 - 0.071463728, 4195.487), 60.57708904122371, 60.5770890412237),
+        ("xfer", fma_transfer(3512.4033, 0.01, 0.01, 4321.8795), 3598.8408900000004, 3598.8408899999995),
+        ("xfer", fma_transfer(4700.3304, 0.01, 0.01, 3827.7063), 4776.884526000001, 4776.884526),
+        ];
+        for (site, got, fused, unfused) in rows {
+            assert_eq!(got, if arm { fused } else { unfused }, "{site}");
+        }
+    }
 }

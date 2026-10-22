@@ -1,0 +1,3 @@
+path	crates/gravity/hosts/src/ops/modifytable/write_view_rows.rs
+growth	std::vec::Vec::push	2
+method	std::iter::Iterator::collect	1

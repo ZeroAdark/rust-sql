@@ -89,10 +89,31 @@ pub fn deconstruct_array<'mcx>(
     elmalign: u8,
     allow_nulls: bool,
 ) -> PgResult<(PgVec<'mcx, Datum>, PgVec<'mcx, bool>)> {
+    let mut elems: PgVec<Datum> = PgVec::new_in(mcx);
+    let mut nulls: PgVec<bool> = PgVec::new_in(mcx);
+    deconstruct_array_into(array, elmlen, elmbyval, elmalign, allow_nulls, &mut elems, &mut nulls)?;
+    Ok((elems, nulls))
+}
+
+pub fn deconstruct_array_into<'mcx>(
+    array: &[u8],
+    elmlen: i32,
+    elmbyval: bool,
+    elmalign: u8,
+    allow_nulls: bool,
+    elems: &mut PgVec<'mcx, Datum>,
+    nulls: &mut PgVec<'mcx, bool>,
+) -> PgResult<()> {
     let (ndim, dims, _lbs) = read_dims_lbounds(array);
     let nelems = array_get_n_items(ndim, &dims)? as usize;
-    let mut elems: PgVec<Datum> = vec_with_capacity_in(mcx, nelems)?;
-    let mut nulls: PgVec<bool> = vec_with_capacity_in(mcx, nelems)?;
+    elems.clear();
+    nulls.clear();
+    if elems.capacity() < nelems {
+        *elems = vec_with_capacity_in(*elems.allocator(), nelems)?;
+    }
+    if nulls.capacity() < nelems {
+        *nulls = vec_with_capacity_in(*nulls.allocator(), nelems)?;
+    }
 
     let base = array.as_ptr();
     let mut off = arr_data_offset(array);
@@ -144,7 +165,7 @@ pub fn deconstruct_array<'mcx>(
         elems.set_len(nelems);
         nulls.set_len(nelems);
     }
-    Ok((elems, nulls))
+    Ok(())
 }
 
 pub fn deconstruct_array_builtin<'mcx>(

@@ -1,0 +1,11 @@
+-- srf-023
+-- SELECT * FROM three() f(i) WHERE i <> 2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Other fn16404 fn16404()]
+  filter op518(v1.1, c23:2)
+  project (1=v1.1)
+  outs 1=w4:val
+mapped: FunctionScan

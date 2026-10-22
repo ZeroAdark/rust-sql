@@ -199,8 +199,8 @@ columns non-empty, `expected`/`tier` vocabulary, numeric `time_s`,
 unexpanded `<...>` placeholders, prose or shell metacharacters in the flags
 column, `--c-lib` paths that exist, and harness fields holding packed data
 instead of a name. Every one of those classes has shipped into the manifest
-and been discovered only on a CI cluster solve run, where a malformed row looks
-exactly like a divergence (see `CI-SOLVING.md`).
+and been discovered only on a fleet solve run, where a malformed row looks
+exactly like a divergence (see `FLEET-SOLVING.md`).
 
 `check-suite-names.py` validates names against ground truth and prints a
 **census**: rows considered = checked + skipped + errored, asserted. If a

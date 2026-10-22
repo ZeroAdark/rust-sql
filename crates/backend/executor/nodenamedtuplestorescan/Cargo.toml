@@ -21,8 +21,6 @@ types_slot = { path = "../../../_support/types/types_slot" }
 aclchk_seams = { path = "../../catalog/aclchk_seams" }
 backend_status_seams = { path = "../../utils/activity/backend_status_seams" }
 datum = { path = "../../../_support/types/datum" }
-execmain = { path = "../execmain" }
-execmain_seams = { path = "../execmain_seams" }
 exectuples = { path = "../exectuples" }
 gram_core = { path = "../../parser/gram_core" }
 guc_tables = { path = "../../utils/misc/guc_tables" }

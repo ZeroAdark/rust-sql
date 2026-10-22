@@ -57,6 +57,8 @@ counters!(RuntimeStats, RuntimeStatsSnapshot;
     sizing_shutdown,
     /// Tasks refused by a dead generation (aborted-query cleanup path).
     generation_refusals,
+    /// Joins refused by a full task set (V4R-70 width cap).
+    cap_refusals,
     /// Idle worker parks.
     worker_parks,
     /// Aborted still-QUEUED RGs reaped from the wait queue at abort time

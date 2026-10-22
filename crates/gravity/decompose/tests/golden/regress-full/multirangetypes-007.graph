@@ -1,0 +1,11 @@
+-- regress-full-multirangetypes-007
+-- insert into test_multirange_gist select int4multirange(int4range(g*10, g*20, '(]'), int4range(g*20, NULL, '(]')) from generate_series(1,100) g;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:100)]
+  project (1=fn4282(array(fn3841(op514(v3.1, c23:10), op514(v3.1, c23:20), c25:'(]'), fn3841(op514(v3.1, c23:20), c23:null, c25:'(]'))))
+  write INSERT rel=17217 rti=1 natts=1 indexes=()
+  outs 1=vl:call4282
+mapped: ModifyTable FunctionScan

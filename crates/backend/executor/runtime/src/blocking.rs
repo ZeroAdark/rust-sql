@@ -67,6 +67,9 @@ impl Drop for PermitThreadReg {
 /// that donated it.
 pub struct BlockingIoSection {
     sem: *const Semaphore,
+    /// The width grant was donated with the permit (the spill section);
+    /// false for the over-width wait, which keeps its grant.
+    grant: bool,
 }
 
 impl Drop for BlockingIoSection {
@@ -79,9 +82,31 @@ impl Drop for BlockingIoSection {
             // Grant follows permit (§2.8 × ledger composition): retake the
             // width grant only once the permit is back (no-op under knob
             // OFF / off-task).
-            crate::sched::ledger_restore_current();
+            if self.grant {
+                crate::sched::ledger_restore_current();
+            }
         }
     }
+}
+
+/// Enter an OVER-WIDTH wait: the calling pool worker holds a claim but no
+/// slot in its section (every one of the section's W slots is taken) and
+/// is about to park until a slot frees. The permit goes back to the pool
+/// for the wait — a plain release, there is nothing to absorb —
+/// and is retaken on drop, once the thread holds a slot. A slot-less wait
+/// that HELD its permit deadlocked K >= W standbys (box 1, 2026-09-15, K = 8
+/// at W = 8 on a spilling join query, twice): the W slot holders release inside the
+/// spill, K standbys absorb the permits, pull claims and wait slot-less
+/// holding every permit, and the donors never retake. The
+/// grant is kept (the thread is still the task's participant). Armed on a
+/// registered pool-worker thread; no-op anywhere else.
+pub fn over_width_section() -> BlockingIoSection {
+    let sem = PERMIT_SEM.with(Cell::get);
+    if !sem.is_null() {
+        // SAFETY: as in Drop.
+        unsafe { (*sem).release() }
+    }
+    BlockingIoSection { sem, grant: false }
 }
 
 /// Enter a declared blocking section for spill I/O. Armed (permit donated)
@@ -97,5 +122,5 @@ pub fn blocking_io_section() -> BlockingIoSection {
         // SAFETY: as in Drop.
         unsafe { (*sem).release() }
     }
-    BlockingIoSection { sem }
+    BlockingIoSection { sem, grant: true }
 }

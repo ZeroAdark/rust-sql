@@ -1,0 +1,10 @@
+-- regress-full-groupingsets-084
+-- create table gs_data_1 as select g%1000 as g1000, g%100 as g100, g%10 as g10, g from generate_series(0,1999) g;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, c23:1999)]
+  project (1=op530(v1.1, c23:1000), 2=op530(v1.1, c23:100), 3=op530(v1.1, c23:10), 4=v1.1)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val
+mapped: FunctionScan

@@ -1,0 +1,12 @@
+-- regress-full-with-075
+-- EXPLAIN (VERBOSE, COSTS OFF) SELECT q1 FROM ( WITH t_cte AS (SELECT * FROM int8_tbl t) SELECT q1, (SELECT q2 FROM t_cte WHERE t_cte.q1 = i8.q1) AS t_sub FROM int8_tbl i8 ) ss;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=5 end=sink
+  nodes n1@0 n0@1
+  source range rel=16403 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.1, 2=c20:null)
+  project (1=v1.1)
+  outs 1=w8:val 2=w8:val
+  outs 1=w8:val
+mapped: SeqScan SubqueryScan

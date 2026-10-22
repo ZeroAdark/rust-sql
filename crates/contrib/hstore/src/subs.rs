@@ -42,18 +42,22 @@ pub(crate) fn assign<'m>(
     key: Datum,
     replace: NullableDatum,
 ) -> PgResult<Datum> {
-    let key = text_payload(mcx, key)?.to_vec();
+    let key = ::mcx::std_vec_from_slice("hstore", &text_payload(mcx, key)?)?;
     check_key_len(key.len())?;
     let val = if replace.isnull {
         None
     } else {
-        let v = text_payload(mcx, replace.value)?.to_vec();
+        let v = ::mcx::std_vec_from_slice("hstore", &text_payload(mcx, replace.value)?)?;
         check_val_len(v.len())?;
         Some(v)
     };
     let p = Pair { key, val, needfree: false };
 
     let img = if source.isnull {
+        ::mcx::check_alloc_size(crate::repr::c_int32_alloc_size(null_assign_alloc_size(
+            p.key.len(),
+            p.val.as_ref().map_or(0, |v| v.len()),
+        )))?;
         build_hstore(&[p])
     } else {
         // hstore_concat with the single new pair (s2 wins ties).
@@ -68,6 +72,11 @@ pub(crate) fn assign<'m>(
     let d = Datum::from_usize(out.as_ptr() as usize);
     core::mem::forget(out);
     Ok(d)
+}
+
+// hstore_subs.c:183 hstorePairs(&p, 1, keylen + vallen): CALCDATASIZE(1, buflen).
+pub(crate) fn null_assign_alloc_size(keylen: usize, vallen: usize) -> usize {
+    8 + crate::repr::HSHRDSIZE + keylen + vallen
 }
 
 // hstore_subs.c:204: CALCDATASIZE(s1count + 1, VARSIZE(hs) + keylen + vallen).

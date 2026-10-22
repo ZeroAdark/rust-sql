@@ -1,0 +1,16 @@
+[package]
+name = "pgrc_compact"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pgrc_compact"
+path = "src/lib.rs"
+
+# K1 L2 (docs/design/pgrc-delta-v2/K1.md): the pure half of compaction — the job policy, a job's row order and
+# the output's RowIdentMap. No backend crates: the rewrite itself (decode, re-seal, publish) is pgrc_am's (L3).
+[dependencies]
+pgrc_format = { path = "../pgrc_format" }
+# The cluster sort's comparator (`pgrc_write::seal::cmp`), so a sorted merge orders rows exactly as the seal would.
+pgrc_write = { path = "../pgrc_write" }

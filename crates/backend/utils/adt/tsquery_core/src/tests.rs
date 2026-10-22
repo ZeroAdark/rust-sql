@@ -310,7 +310,7 @@ fn tsquery_out_over_ceiling_raises_c_repalloc_error() {
 // in pg_qsort's tie order (fuzz/divergences/tsqrw_diff/FINDINGS-qsort-tie.md,
 // docker-18.3 adjudicated). qtn_sort therefore runs the canonical
 // pg_qsort_arg over an index proxy (util.rs). Witness structure per
-// regression: within-tie ORDER is the ratified non-surface for equal
+// GL-PARMERGE-1: within-tie ORDER is the ratified non-surface for equal
 // elements — the multiset gate is the always-true witness — and where the
 // order IS observable (>= 7 tie-carrying children through ts_rewrite's sort)
 // the gate is byte-exact against adjudicated PostgreSQL 18.3 output.
@@ -583,4 +583,15 @@ fn parser_messages_keep_non_utf8_input_bytes() {
     let e = tsquery_in_core(mcx, b"a & )", None).unwrap_err();
     assert_eq!(e.message_raw, None);
     assert_eq!(e.message(), "syntax error in tsquery: \"a & )\"");
+}
+
+#[test]
+fn tsquery_recv_checks_c_item_array_size_first() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut buf = ::stringinfo::StringInfo::new_in(mcx).unwrap();
+    buf.append_bytes(&89_478_485u32.to_be_bytes()).unwrap();
+    buf.append_bytes(&[1, 0, 0, 0]).unwrap();
+    let err = crate::io::tsquery_recv_core(mcx, &mut buf).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741828");
 }

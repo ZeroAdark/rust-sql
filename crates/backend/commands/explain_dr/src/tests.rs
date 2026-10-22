@@ -23,9 +23,8 @@ fn int4out_fn(
     fcinfo: &mut FunctionCallInfoBaseData,
 ) -> PgResult<Datum> {
     let s = format!("{}\0", fcinfo.arg(0).as_i32());
-    Ok(Datum::from_usize(
-        Box::leak(s.into_boxed_str()).as_ptr() as usize
-    ))
+    let out = mcx::slice_in(fcinfo.result_mcx(), s.as_bytes())?.leak();
+    Ok(Datum::from_usize(out.as_ptr() as usize))
 }
 
 fn int4send_fn(
@@ -35,9 +34,8 @@ fn int4send_fn(
     let mut img = Vec::with_capacity(8);
     img.extend_from_slice(&set_varsize_4b(8));
     img.extend_from_slice(&fcinfo.arg(0).as_i32().to_be_bytes());
-    Ok(Datum::from_usize(
-        Box::leak(img.into_boxed_slice()).as_ptr() as usize
-    ))
+    let out = mcx::slice_in(fcinfo.result_mcx(), &img)?.leak();
+    Ok(Datum::from_usize(out.as_ptr() as usize))
 }
 
 fn install_fixtures() {
@@ -157,12 +155,21 @@ fn binary_rows_counted() {
 
     let mut slot = make_slot(
         mcx,
-        desc,
+        desc.clone(),
         &[(Datum::from_i32(7), false), (Datum::from_i32(9), false)],
     );
     assert!(dr.receive_slot(&mut slot).unwrap());
     // 2 + 2 * (4 + 4)
     assert_eq!(dr.metrics.bytesSent, 18);
+
+    let mut slot = make_slot(
+        mcx,
+        desc,
+        &[(Datum::from_i32(1), false), (Datum::from_i32(0), true)],
+    );
+    assert!(dr.receive_slot(&mut slot).unwrap());
+    assert_eq!(dr.metrics.bytesSent, 18 + 14);
+    dr.shutdown();
 }
 
 #[test]

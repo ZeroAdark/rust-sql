@@ -1,0 +1,9 @@
+# both sides raise the same error
+sql: SELECT 1 / x FROM t;
+cols: ?column?
+class: unordered
+verdict: match
+[pg_error]
+22012	division by zero
+[got_error]
+22012	division by zero

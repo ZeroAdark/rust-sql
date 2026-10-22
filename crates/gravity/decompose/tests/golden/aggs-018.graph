@@ -1,0 +1,38 @@
+-- aggs-018
+-- SELECT v, count(*), sum(v), avg(f), min(v) FROM pg GROUP BY v;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=2 eligible rows=10000 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n1@1 n0@3^
+  source range rel=16406 rti=3 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v3.2, 2=v3.3)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=w8:val
+  outs 1=w4:val 2=w8:val
+p1 node=3 eligible rows=10000 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n1@1 n0@3^
+  source range rel=16410 rti=4 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v4.2, 2=v4.3)
+  append arm 1/2
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=w8:val
+  outs 1=w4:val 2=w8:val
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=agg2803*(), 3=agg2108(1=outer.1), 4=agg2105(1=outer.2), 5=agg2132(1=outer.1))
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w8:val 5=w4:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8,SumI64@16,F64Accum@24,MinI64@48]+valid 64B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8,SumI64@16,F64Accum@24,MinI64@48]+valid 64B
+group slot=0 producer=p1 node=0 form=Hashed hints=[] layout=[I32]->[Count@8,SumI64@16,F64Accum@24,MinI64@48]+valid 64B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+  agg aggno=1 fn=2108 reg=SumInt slot=1 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=outer.1)
+  agg aggno=2 fn=2105 reg=AvgF64 slot=2 count_slot=- final=F64Avg class=AvgF64 trans=Abi(F64Accum) mods=[] expr=agg2105(1=outer.2)
+  agg aggno=3 fn=2132 reg=MinInt slot=3 count_slot=- final=Identity class=Min(Int) trans=Abi(MinI64) mods=[] expr=agg2132(1=outer.1)
+mapped: Append SeqScan Agg

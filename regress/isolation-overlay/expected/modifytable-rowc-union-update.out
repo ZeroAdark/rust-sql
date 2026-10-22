@@ -1,0 +1,125 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3e s1u s1f s1d s2u s1c s2c s3s
+step s3e: EXPLAIN (COSTS OFF) WITH u AS (UPDATE ruu SET note = 'cte' WHERE v < 10) SELECT 1 AS done;
+QUERY PLAN                                
+------------------------------------------
+Result                                    
+  CTE u                                   
+    ->  Update on ruu                     
+          Update on ruu1 ruu_1            
+          Update on ruu2 ruu_2            
+          ->  Append                      
+                ->  Seq Scan on ruu1 ruu_1
+                      Filter: (v < 10)    
+                ->  Seq Scan on ruu2 ruu_2
+                      Filter: (v < 10)    
+(10 rows)
+
+step s1u: UPDATE ruu SET note = note || '*' WHERE v IN (2, 3);
+step s1f: UPDATE ruu SET v = v + 50 WHERE v = 4;
+step s1d: DELETE FROM ruu WHERE v = 5;
+step s2u: WITH u AS (UPDATE ruu SET note = 'cte' WHERE v < 10) SELECT 1 AS done; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+done
+----
+   1
+(1 row)
+
+step s2c: COMMIT;
+step s3s: SELECT tableoid::regclass AS leaf, k, v, note FROM ruu ORDER BY v, k;
+leaf|k| v|note
+----+-+--+----
+ruu2|2| 1|cte 
+ruu1|1| 2|cte 
+ruu2|2| 3|cte 
+ruu1|1| 6|cte 
+ruu2|2| 7|cte 
+ruu1|1| 8|cte 
+ruu2|2| 9|cte 
+ruu1|1|10|r10 
+ruu2|2|11|r11 
+ruu1|1|12|r12 
+ruu2|2|13|r13 
+ruu1|1|14|r14 
+ruu2|2|15|r15 
+ruu1|1|16|r16 
+ruu2|2|17|r17 
+ruu1|1|18|r18 
+ruu2|2|19|r19 
+ruu1|1|20|r20 
+ruu1|1|54|r4  
+(19 rows)
+
+
+starting permutation: s1u s1f s1d s2m s1c s2c s3s
+step s1u: UPDATE ruu SET note = note || '*' WHERE v IN (2, 3);
+step s1f: UPDATE ruu SET v = v + 50 WHERE v = 4;
+step s1d: DELETE FROM ruu WHERE v = 5;
+step s2m: WITH u AS (UPDATE ruu SET k = 2, note = 'moved' WHERE v < 10) SELECT 1 AS done; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+done
+----
+   1
+(1 row)
+
+step s2c: COMMIT;
+step s3s: SELECT tableoid::regclass AS leaf, k, v, note FROM ruu ORDER BY v, k;
+leaf|k| v|note 
+----+-+--+-----
+ruu2|2| 1|moved
+ruu2|2| 2|moved
+ruu2|2| 3|moved
+ruu2|2| 6|moved
+ruu2|2| 7|moved
+ruu2|2| 8|moved
+ruu2|2| 9|moved
+ruu1|1|10|r10  
+ruu2|2|11|r11  
+ruu1|1|12|r12  
+ruu2|2|13|r13  
+ruu1|1|14|r14  
+ruu2|2|15|r15  
+ruu1|1|16|r16  
+ruu2|2|17|r17  
+ruu1|1|18|r18  
+ruu2|2|19|r19  
+ruu1|1|20|r20  
+ruu1|1|54|r4   
+(19 rows)
+
+
+starting permutation: s1x s2u s1c s2c s3s
+step s1x: UPDATE ruu SET k = 3 - k WHERE v = 6;
+step s2u: WITH u AS (UPDATE ruu SET note = 'cte' WHERE v < 10) SELECT 1 AS done; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3s: SELECT tableoid::regclass AS leaf, k, v, note FROM ruu ORDER BY v, k;
+leaf|k| v|note
+----+-+--+----
+ruu2|2| 1|r1  
+ruu1|1| 2|r2  
+ruu2|2| 3|r3  
+ruu1|1| 4|r4  
+ruu2|2| 5|r5  
+ruu2|2| 6|r6  
+ruu2|2| 7|r7  
+ruu1|1| 8|r8  
+ruu2|2| 9|r9  
+ruu1|1|10|r10 
+ruu2|2|11|r11 
+ruu1|1|12|r12 
+ruu2|2|13|r13 
+ruu1|1|14|r14 
+ruu2|2|15|r15 
+ruu1|1|16|r16 
+ruu2|2|17|r17 
+ruu1|1|18|r18 
+ruu2|2|19|r19 
+ruu1|1|20|r20 
+(20 rows)
+

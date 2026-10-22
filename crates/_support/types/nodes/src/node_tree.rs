@@ -23,7 +23,7 @@ pub(crate) struct NodeRep<T> {
 fn mk_rep<'mcx, T>(mcx: Mcx<'mcx>, tag: NodeTag, payload: T) -> PgResult<NonNull<NodeRep<T>>> {
     let rep = mcx
         .alloc_uninit_bytes(Layout::new::<NodeRep<T>>())
-        .map_err(|_| mcx.oom(core::mem::size_of::<NodeRep<T>>()))?
+        .map_err(|_| mcx.oom_boxed(core::mem::size_of::<NodeRep<T>>()))?
         .cast::<NodeRep<T>>();
     // SAFETY: fresh uninit arena bytes sized/aligned for `NodeRep<T>`; one init write.
     unsafe { rep.as_ptr().write(NodeRep { tag, payload }) };

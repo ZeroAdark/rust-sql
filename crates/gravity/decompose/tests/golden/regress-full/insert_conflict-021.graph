@@ -1,0 +1,10 @@
+-- regress-full-insert_conflict-021
+-- insert into parted_conflict_test (a, b) values (4, 'a') on conflict (a) do update set b = excluded.b;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:4, 2=c23:null, 3=c1042:'a')
+  write INSERT rel=18328 rti=1 natts=3 indexes=() on_conflict=update arbiter=(18331) excl_rti=2 cols=(3) set=(1=inner.3) route=rti1:18328 natts=3
+  outs 1=w4:val 2=w4:val 3=vl:stmt/imm
+mapped: Result ModifyTable

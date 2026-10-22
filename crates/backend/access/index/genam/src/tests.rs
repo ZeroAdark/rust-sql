@@ -140,7 +140,7 @@ fn make<'mcx>(mcx: Mcx<'mcx>, oid: Oid, name: &str, relkind: u8, relam: Oid) -> 
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: two_col_vec(mcx, relkind, 0),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -307,7 +307,7 @@ fn seam_scan_reaches_the_buffer_layer() {
     let mcx = cx.mcx();
     let tbl = make(mcx, TBL, "pg_class", RELKIND_RELATION, HEAP_AM);
     let mut consume = |_: &HeapTupleData<'_>| Ok(true);
-    let _ = genam_seams::systable_scan_catalog::call(&tbl, IDX, true, &[key_on(3)], &mut consume);
+    let _ = genam_seams::systable_scan_catalog::call(mcx, &tbl, IDX, true, &[key_on(3)], &mut consume);
 }
 
 #[test]

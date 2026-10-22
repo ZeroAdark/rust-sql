@@ -1,0 +1,12 @@
+-- regress-full-join_hash-004
+-- create table join_foo as select generate_series(1, 3) as id, 'xxxxx'::text as t;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project ()
+  srf tlist [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:3)]
+  project (1=fn1067(c23:1, c23:3), 2=c25:'xxxxx')
+  outs
+  outs 1=w4:val 2=vl:stmt/imm
+mapped: Result ProjectSet

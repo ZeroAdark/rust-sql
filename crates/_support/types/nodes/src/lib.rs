@@ -11,7 +11,7 @@ extern crate std;
 #[cold]
 #[inline(never)]
 pub(crate) fn oom(mcx: mcx::Mcx<'_>, request: usize) -> alloc::boxed::Box<types_error::PgError> {
-    alloc::boxed::Box::new(mcx.oom(request))
+    mcx.oom_boxed(request)
 }
 
 pub mod bitmapset;
@@ -29,7 +29,7 @@ pub mod supportnodes;
 mod tags;
 
 pub use bitmapset::{bitmapword, Bitmapset, BmsComparison, BmsMembership, BITS_PER_BITMAPWORD};
-pub use equal::{equal, equal_opt, NodeEqual};
+pub use equal::{equal, equal_as, equal_opt, NodeEqual};
 pub use fdw::{FdwExplainFlags, FdwExplainProp, FdwKind, FdwRoutine, NUM_FDW_KINDS};
 pub use jointype::JoinType;
 // pg_stat_statements scribbles PlannedStmt.queryId in place (C parity);

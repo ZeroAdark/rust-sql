@@ -262,6 +262,121 @@ fn all_byval_virtual_materialize_is_noop() {
     assert!(!slot.base().should_free());
 }
 
+/// D3385 (D3383's class): a virtual slot keeps its materialize scratch across clears (`clear_virtual`), so the scratch
+/// lives in the slot's own context whatever context the caller passes, as C's tts_virtual_materialize allocates in
+/// slot->tts_mcxt. Gravity's insert_via_am passed its per-row exec context, which it resets after each row: from the
+/// second row on, a row that fit was written into bytes the reset had handed out again. The row context here is
+/// erased to the slot's lifetime, as the hosts' `Mcx<'static>` is.
+#[test]
+fn virtual_materialize_keeps_its_scratch_in_the_slot_context() {
+    let ctx = MemoryContext::new("slot");
+    let mut row = MemoryContext::new_wholesale("row");
+    let mcx = ctx.mcx();
+    let desc = desc3(mcx);
+    let wide = text_varlena(&"w".repeat(20_000));
+    let narrow = text_varlena("narrow row");
+    let mut slot = make_tuple_table_slot(mcx, TupleSlotKind::Virtual, Some(desc));
+    {
+        let base = slot.base_mut();
+        base.tts_values[0] = Datum::from_i32(1);
+        base.tts_values[1] = text_datum(&wide);
+        base.tts_values[2] = Datum::from_i64(1);
+        base.tts_isnull.fill(false);
+    }
+    exec_store_virtual_tuple(&mut slot);
+    let (row_used, slot_used) = (row.used(), ctx.used());
+    // SAFETY: `row` is declared before `slot` and outlives it; the caller's erased per-row context.
+    exec_materialize_slot(&mut slot, unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'_>>(row.mcx()) }).unwrap();
+    assert_eq!(row.used(), row_used, "no scratch byte in the caller's row context");
+    assert!(ctx.used() > slot_used, "the scratch is in the slot's own context");
+    assert_eq!(datum_text_bytes(slot.base().tts_values[1]).len(), 20_000);
+
+    exec_clear_tuple(&mut slot, mcx);
+    row.reset();
+    let mut junk = ::mcx::vec_with_capacity_in::<u8>(row.mcx(), 65_536).unwrap();
+    junk.resize(65_536, 0x6b);
+    {
+        let base = slot.base_mut();
+        base.tts_values[0] = Datum::from_i32(2);
+        base.tts_values[1] = text_datum(&narrow);
+        base.tts_values[2] = Datum::from_i64(2);
+        base.tts_isnull.fill(false);
+    }
+    exec_store_virtual_tuple(&mut slot);
+    // SAFETY: as above.
+    exec_materialize_slot(&mut slot, unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'_>>(row.mcx()) }).unwrap();
+    junk.fill(0x7f);
+    assert_eq!(datum_text_bytes(slot.base().tts_values[1]), b"narrow row");
+    let mut n = true;
+    assert_eq!(slot_getattr(&mut slot, 3, &mut n).as_i64(), 2);
+    drop(junk);
+}
+
+/// a slot-owned (shouldFree) image is freed in the context it lives in,
+/// whatever context the clear's caller passes. C's pfree finds the owner
+/// from the chunk header; `Mcx::deallocate` dispatches on the context it is
+/// handed, so a clear through another context gave a foreign chunk to that
+/// context's free list (here a bump context, whose free is a no-op: the
+/// image's own context kept the bytes charged).
+#[test]
+fn an_owned_image_is_freed_in_its_own_context_whatever_the_clear_passes() {
+    let slot_ctx = MemoryContext::new("slot");
+    let image_ctx = MemoryContext::new("image");
+    let other = MemoryContext::new_bump("other");
+    let mcx = slot_ctx.mcx();
+    let desc = desc3(mcx);
+    let txt = text_varlena(&"o".repeat(1_000));
+    let values = [Datum::from_i32(1), text_datum(&txt), Datum::from_i64(2)];
+
+    let mut heap = make_tuple_table_slot(mcx, TupleSlotKind::HeapTuple, Some(Rc::clone(&desc)));
+    let before = image_ctx.used();
+    let tuple = heap_form_tuple(image_ctx.mcx(), &desc, &values, &[false; 3]).unwrap();
+    assert!(image_ctx.used() > before);
+    exec_store_heap_tuple_owned(&mut heap, mcx, tuple);
+    exec_clear_tuple(&mut heap, other.mcx());
+    assert_eq!(image_ctx.used(), before, "the heap image went back to its own context");
+
+    let mut minimal = make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(Rc::clone(&desc)));
+    let mtup = heap_form_minimal_tuple(image_ctx.mcx(), &desc, &values, &[false; 3], 0).unwrap();
+    assert!(image_ctx.used() > before);
+    exec_store_minimal_tuple_owned(&mut minimal, mcx, mtup);
+    let mtup2 = heap_form_minimal_tuple(mcx, &desc, &values, &[false; 3], 0).unwrap();
+    exec_store_minimal_tuple_owned(&mut minimal, other.mcx(), mtup2);
+    assert_eq!(image_ctx.used(), before, "the minimal image went back to its own context");
+    let slot_used = slot_ctx.used();
+    exec_clear_tuple(&mut minimal, other.mcx());
+    assert!(slot_ctx.used() < slot_used, "the second image went back to the slot context");
+}
+
+#[test]
+fn a_materialized_image_is_freed_in_the_context_it_was_formed_in() {
+    let slot_ctx = MemoryContext::new_bump("slot");
+    let row = MemoryContext::new("row");
+    let other = MemoryContext::new_bump("other");
+    let mcx = slot_ctx.mcx();
+    let desc = desc3(mcx);
+    let txt = text_varlena(&"m".repeat(1_000));
+    for kind in [TupleSlotKind::HeapTuple, TupleSlotKind::MinimalTuple, TupleSlotKind::BufferHeapTuple] {
+        let mut slot = make_tuple_table_slot(mcx, kind, Some(Rc::clone(&desc)));
+        {
+            let base = slot.base_mut();
+            base.tts_values[0] = Datum::from_i32(4);
+            base.tts_values[1] = text_datum(&txt);
+            base.tts_values[2] = Datum::from_i64(5);
+            base.tts_isnull.fill(false);
+        }
+        exec_store_virtual_tuple(&mut slot);
+        let row_used = row.used();
+        exec_materialize_slot(&mut slot, row.mcx()).unwrap();
+        assert!(slot.base().should_free());
+        assert!(row.used() > row_used, "{kind:?}: the image is in the caller's context");
+        let mut n = true;
+        assert_eq!(datum_text_bytes(slot_getattr(&mut slot, 2, &mut n)).len(), 1_000);
+        exec_clear_tuple(&mut slot, other.mcx());
+        assert_eq!(row.used(), row_used, "{kind:?}: the clear freed it in the context it was formed in");
+    }
+}
+
 #[test]
 fn store_all_null_tuple() {
     let ctx = MemoryContext::new("test");

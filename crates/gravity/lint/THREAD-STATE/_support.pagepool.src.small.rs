@@ -1,0 +1,1 @@
+_support/pagepool/src/small.rs	HEAP	memory	exit	thread	the small tier's per-thread heap (current / partial / full runs per class, one spare run, pending remote frees); const init, Cell payload, no drop; trimmed by release_heap at idle, abandoned to the shared lists by a pthread key destructor at thread exit

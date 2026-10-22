@@ -95,7 +95,7 @@ pub fn pgaio_io_acquire_nb(
             let popped = dclist_pop_head(&mut mb.idle_ios);
             debug_assert!(popped == index);
 
-            h.set_state(PGAIO_HS_HANDED_OUT);
+            update_state(index, PGAIO_HS_HANDED_OUT);
             mb.handed_out_io = index;
 
             if !ret.is_null() {
@@ -238,16 +238,20 @@ pub(crate) fn pgaio_io_stage(index: u32, op: u8) -> PgResult<()> {
     unsafe { h.data() }.op = op;
     h.result.store(0, Ordering::Relaxed);
 
-    h.set_state(PGAIO_HS_DEFINED);
+    update_state(index, PGAIO_HS_DEFINED);
 
     // SAFETY: owner-thread slot access.
     unsafe { my_backend() }.handed_out_io = NO_HANDLE;
 
     crate::callback::pgaio_io_call_stage(index);
 
-    h.set_state(PGAIO_HS_STAGED);
+    update_state(index, PGAIO_HS_STAGED);
 
     let needs_synchronous = pgaio_io_needs_synchronous_execution(index);
+
+    // SAFETY: owner-thread slot access.
+    let in_batchmode = unsafe { my_backend() }.in_batchmode;
+    report_staged(index, h, needs_synchronous, in_batchmode)?;
 
     if !needs_synchronous {
         // SAFETY: owner-thread slot access, released before submit.
@@ -273,6 +277,33 @@ pub(crate) fn pgaio_io_stage(index: u32, op: u8) -> PgResult<()> {
     Ok(())
 }
 
+pub(crate) fn report_staged(
+    index: u32,
+    h: &PgAioHandle,
+    synchronous: bool,
+    in_batchmode: bool,
+) -> PgResult<()> {
+    let report = ereport(types_error::DEBUG3);
+    if report.is_suppressed() {
+        return Ok(());
+    }
+    // SAFETY: the owner is staging this handle; callbacks have finished.
+    let d = unsafe { h.data() };
+    report
+        .errhidestmt(true)
+        .errhidecontext(true)
+        .errmsg_internal(format!(
+            "io {:<10}|op {:<5}|target {:<4}|state {:<16}: staged (synchronous: {}, in_batch: {})",
+            index,
+            crate::io::pgaio_io_op_name(d.op),
+            crate::target::pgaio_io_target_name(d.target),
+            state_name(h.state()),
+            u8::from(synchronous),
+            u8::from(in_batchmode),
+        ))
+        .finish(ErrorLocation::new("aio.c", 459, "pgaio_io_stage"))
+}
+
 pub(crate) fn pgaio_io_needs_synchronous_execution(index: u32) -> bool {
     let h = ioh(index);
     if h.flags.load(Ordering::Relaxed) & PGAIO_HF_SYNCHRONOUS != 0 {
@@ -286,7 +317,7 @@ pub(crate) fn pgaio_io_needs_synchronous_execution(index: u32) -> bool {
 
 pub(crate) fn pgaio_io_prepare_submit(index: u32) {
     let h = ioh(index);
-    h.set_state(PGAIO_HS_SUBMITTED);
+    update_state(index, PGAIO_HS_SUBMITTED);
     // SAFETY: owner-thread slot access.
     unsafe {
         let mb = my_backend();
@@ -301,11 +332,11 @@ pub(crate) fn pgaio_io_process_completion(index: u32, result: i32) {
     debug_assert!(g::CritSectionCount() > 0);
 
     h.result.store(result, Ordering::Relaxed);
-    h.set_state(PGAIO_HS_COMPLETED_IO);
+    update_state(index, PGAIO_HS_COMPLETED_IO);
 
     crate::callback::pgaio_io_call_complete_shared(index);
 
-    h.set_state(PGAIO_HS_COMPLETED_SHARED);
+    update_state(index, PGAIO_HS_COMPLETED_SHARED);
 
     ConditionVariableBroadcast(&h.cv);
 
@@ -402,7 +433,7 @@ fn pgaio_io_reclaim(index: u32) {
 
     if h.state() == PGAIO_HS_COMPLETED_SHARED {
         let local_result = crate::callback::pgaio_io_call_complete_local(index);
-        h.set_state(PGAIO_HS_COMPLETED_LOCAL);
+        update_state(index, PGAIO_HS_COMPLETED_LOCAL);
 
         // SAFETY: owner thread past COMPLETED_SHARED; completer is done.
         let d = unsafe { h.data() };
@@ -414,6 +445,18 @@ fn pgaio_io_reclaim(index: u32) {
             }
         }
     }
+
+    aio_debug_io(types_error::DEBUG4, index, 703, "pgaio_io_reclaim", || {
+        // SAFETY: owner thread past completion; completer is done.
+        let d = unsafe { h.data() };
+        format!(
+            "reclaiming: distilled_result: (status {}, id {}, error_data {}), raw_result: {}",
+            crate::callback::pgaio_result_status_string(d.distilled_result.status),
+            d.distilled_result.id,
+            d.distilled_result.error_data,
+            h.result.load(Ordering::Relaxed)
+        )
+    });
 
     if h.state() != PGAIO_HS_HANDED_OUT {
         // SAFETY: owner-thread slot access.
@@ -432,7 +475,7 @@ fn pgaio_io_reclaim(index: u32) {
     // Generation bump first, then state (Release publishes both), then field
     // reset: concurrent viewers see either the old generation or IDLE.
     h.generation.fetch_add(1, Ordering::Relaxed);
-    h.set_state(PGAIO_HS_IDLE);
+    update_state(index, PGAIO_HS_IDLE);
     // aio.c:735 pg_write_barrier: the Release store orders nothing after it,
     // so the field reset below could otherwise become visible first.
     types_storage::latch::pg_memory_barrier();
@@ -457,6 +500,15 @@ fn pgaio_io_reclaim(index: u32) {
 
 fn pgaio_io_wait_for_free() -> PgResult<()> {
     let mut reclaimed = 0;
+
+    aio_debug(types_error::DEBUG2, 765, "pgaio_io_wait_for_free", || {
+        // SAFETY: owner-thread slot access.
+        let mb = unsafe { my_backend() };
+        format!(
+            "waiting for free IO with {} pending, {} in-flight, {} idle IOs",
+            mb.num_staged_ios, mb.in_flight_ios.count, mb.idle_ios.count
+        )
+    });
 
     // SAFETY: owner-thread slot access (copied out, no reference held).
     let io_handle_off = {
@@ -526,6 +578,9 @@ fn pgaio_io_wait_for_free() -> PgResult<()> {
                     .finish(loc("pgaio_io_wait_for_free"))?;
             }
             PGAIO_HS_COMPLETED_IO | PGAIO_HS_SUBMITTED => {
+                aio_debug_io(types_error::DEBUG2, index, 845, "pgaio_io_wait_for_free", || {
+                    format!("waiting for free io with {in_flight_count} in flight")
+                });
                 // Racy in general, but we only look at our own backend's IOs
                 pgaio_io_wait(index, generation)?;
             }
@@ -542,7 +597,56 @@ fn pgaio_io_wait_for_free() -> PgResult<()> {
     }
 }
 
-fn state_name(s: u8) -> &'static str {
+// aio_internal.h pgaio_debug: hidden-statement/context debug report.
+pub(crate) fn aio_debug(
+    level: types_error::ErrorLevel,
+    line: i32,
+    function: &'static str,
+    message: impl FnOnce() -> String,
+) {
+    let report = ereport(level);
+    if report.is_suppressed() {
+        return;
+    }
+    let _ = report
+        .errhidestmt(true)
+        .errhidecontext(true)
+        .errmsg_internal(message())
+        .finish(types_error::ErrorLocation::new("aio.c", line, function));
+}
+
+// aio_internal.h pgaio_debug_io: pgaio_debug prefixed with the handle's
+// id, op, target and current state.
+pub(crate) fn aio_debug_io(
+    level: types_error::ErrorLevel,
+    index: u32,
+    line: i32,
+    function: &'static str,
+    message: impl FnOnce() -> String,
+) {
+    aio_debug(level, line, function, || {
+        let h = ioh(index);
+        // SAFETY: the caller is on the state-machine edge that owns the handle.
+        let d = unsafe { h.data() };
+        format!(
+            "io {index:<10}|op {:<5}|target {:<4}|state {:<16}: {}",
+            crate::io::pgaio_io_op_name(d.op),
+            crate::target::pgaio_io_target_name(d.target),
+            state_name(h.state()),
+            message()
+        )
+    });
+}
+
+// aio.c pgaio_io_update_state.
+pub(crate) fn update_state(index: u32, new_state: u8) {
+    aio_debug_io(types_error::DEBUG5, index, 395, "pgaio_io_update_state", || {
+        format!("updating state to {}", state_name(new_state))
+    });
+    ioh(index).set_state(new_state);
+}
+
+pub(crate) fn state_name(s: u8) -> &'static str {
     match s {
         PGAIO_HS_IDLE => "IDLE",
         PGAIO_HS_HANDED_OUT => "HANDED_OUT",
@@ -663,6 +767,9 @@ pub fn pgaio_submit_staged() -> PgResult<()> {
 
     // SAFETY: owner-thread slot access.
     unsafe { my_backend() }.num_staged_ios = 0;
+    aio_debug(types_error::DEBUG4, 1145, "pgaio_submit_staged", || {
+        format!("aio: submitted {} IOs", staged.1)
+    });
     Ok(())
 }
 
@@ -699,12 +806,16 @@ pub fn AtEOXact_Aio(_is_commit: bool) {
 }
 
 /// fd. Neither ported method sets wait_on_fd_before_close (that's io_uring's),
-pub fn pgaio_closing_fd(_fd: i32) {
+pub fn pgaio_closing_fd(fd: i32) {
     if MY_BACKEND.get().is_none() {
         return;
     }
     // SAFETY: owner-thread slot access.
-    if unsafe { my_backend() }.num_staged_ios > 0 {
+    let num_staged = unsafe { my_backend() }.num_staged_ios;
+    if num_staged > 0 {
+        aio_debug(types_error::DEBUG2, 1235, "pgaio_closing_fd", || {
+            format!("submitting {num_staged} IOs before FD {fd} gets closed")
+        });
         pgaio_submit_staged().expect("pgaio_closing_fd: submit staged");
     }
 }
@@ -729,7 +840,14 @@ pub(crate) fn pgaio_shutdown(code: i32, _arg: datum::Datum) -> PgResult<()> {
         };
         match candidate {
             None => break,
-            Some((index, generation)) => pgaio_io_wait(index, generation)?,
+            Some((index, generation)) => {
+                aio_debug_io(types_error::DEBUG2, index, 1310, "pgaio_shutdown", || {
+                    // SAFETY: owner-thread slot access.
+                    let n = unsafe { my_backend() }.in_flight_ios.count;
+                    format!("waiting for IO to complete during shutdown, {n} in-flight IOs")
+                });
+                pgaio_io_wait(index, generation)?
+            }
         }
     }
 

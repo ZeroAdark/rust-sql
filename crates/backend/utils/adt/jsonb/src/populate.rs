@@ -59,7 +59,7 @@ struct RecordIoData<'mcx> {
 enum ColumnKind<'mcx> {
     Scalar,
     Array {
-        element: PgBox<'mcx, ColumnIoData<'mcx>>,
+        element: ArrayElementCache<'mcx>,
     },
     Composite {
         io: CompositeIoData<'mcx>,
@@ -70,6 +70,27 @@ enum ColumnKind<'mcx> {
     Domain {
         base: PgBox<'mcx, ColumnIoData<'mcx>>,
     },
+}
+
+/// C ArrayIOData.element_info: zeroed by prepare_column_cache, prepared by the
+/// first populate_array_element (jsonfuncs.c:3312, :2624).
+struct ArrayElementCache<'mcx> {
+    cache_mcx: Mcx<'mcx>,
+    typid: Oid,
+    typmod: i32,
+    io: Option<PgBox<'mcx, ColumnIoData<'mcx>>>,
+}
+
+impl<'mcx> ArrayElementCache<'mcx> {
+    fn prepare(&mut self) -> PgResult<&mut ColumnIoData<'mcx>> {
+        if self.io.is_none() {
+            self.io = Some(alloc_in(
+                self.cache_mcx,
+                ColumnIoData::new(self.cache_mcx, self.typid, self.typmod)?,
+            )?);
+        }
+        Ok(self.io.as_mut().expect("prepared above"))
+    }
 }
 
 /// C ColumnIOData: resolve-once type metadata for one (typid, typmod).
@@ -123,10 +144,12 @@ impl<'mcx> ColumnIoData<'mcx> {
         } else if element_type != types_core::InvalidOid {
             // C: array element typmod is the attribute's typmod.
             ColumnKind::Array {
-                element: alloc_in(
+                element: ArrayElementCache {
                     cache_mcx,
-                    ColumnIoData::new(cache_mcx, element_type, typmod)?,
-                )?,
+                    typid: element_type,
+                    typmod,
+                    io: None,
+                },
             }
         } else {
             ColumnKind::Scalar
@@ -730,7 +753,7 @@ fn populate_record<'c>(
     };
     if refresh {
         let mut columns: alloc::vec::Vec<Option<ColumnIoData<'c>>> =
-            alloc::vec::Vec::with_capacity(ncolumns);
+            ::mcx::std_vec_with_capacity("adt", ncolumns)?;
         columns.resize_with(ncolumns, || None);
         *record_io = Some(RecordIoData {
             record_type: InvalidOid,
@@ -897,7 +920,7 @@ fn populate_composite(
 
 // C PopulateArrayContext: `astate` lives in C's ctx.acxt = CurrentMemoryContext.
 struct PopulateArrayContext<'e, 'c, 'r> {
-    element: &'e mut ColumnIoData<'c>,
+    element: &'e mut ArrayElementCache<'c>,
     astate: Option<::datum::array_build::ArrayBuildState<'r>>,
     colname: Option<&'e str>,
     mcx: Mcx<'r>,
@@ -1000,7 +1023,7 @@ fn populate_array_element(
 ) -> PgResult<bool> {
     let mut element_isnull = false;
     let element = populate_record_field(
-        ctx.element,
+        ctx.element.prepare()?,
         None,
         ctx.mcx,
         None,
@@ -1206,7 +1229,7 @@ fn populate_array_dim_jsonb(
 
 // C populate_array.
 fn populate_array(
-    element: &mut ColumnIoData<'_>,
+    element: &mut ArrayElementCache<'_>,
     colname: Option<&str>,
     mcx: Mcx<'_>,
     jsv: &JsValue<'_>,

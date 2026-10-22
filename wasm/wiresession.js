@@ -20,7 +20,7 @@
 // Environment-agnostic (browser worker + Node): only WebAssembly + the
 // pgrust-wasi.js host are used.
 
-import { makeWasi, GuestExit } from './pgrust-wasi.js';
+import { makeWasi, makeGravityHost, GuestExit } from './pgrust-wasi.js';
 import { WireReader, encodeStartup, encodeQuery, TERMINATE, parseMessage, canonMessage } from './wire.js';
 
 export function jspiSupported() {
@@ -36,7 +36,7 @@ export function defaultWireArgv(extraGucs = []) {
   return [
     'postgres', '--stdio-wire',
     '-D', '/pgdata',
-    '-c', 'max_stack_depth=60000',
+    // no max_stack_depth override (D3103): the server derives it from the declared engine stack
     '-c', 'io_method=sync',
     '-c', 'autovacuum=off',
     '-c', 'wal_sync_method=fdatasync',
@@ -49,8 +49,9 @@ export function defaultWireArgv(extraGucs = []) {
 export class WireSessionDead extends Error {}
 
 export class WireSession {
-  constructor({ wasmModule, vfs, argv, env, onStderr, onMessage }) {
+  constructor({ wasmModule, vfs, argv, env, onStderr, onMessage, cancel }) {
     this.wasmModule = wasmModule;
+    this.cancel = cancel || null; // the page's cancel word (pgrust-wasi.js makeWasi)
     this.vfs = vfs;
     this.argv = argv || defaultWireArgv();
     this.env = env;
@@ -158,6 +159,7 @@ export class WireSession {
       onStderr: (b) => this.onStderr(b),
       argv: this.argv,
       env: this.env,
+      cancel: this.cancel,
     });
     const imports = {
       wasi_snapshot_preview1: {
@@ -167,8 +169,12 @@ export class WireSession {
         fd_read: new WebAssembly.Suspending(h.wasi.fd_read),
       },
     };
+    const jit = makeGravityHost({ cancel: this.cancel });
+    imports.env = jit.env;
     const instance = await WebAssembly.instantiate(this.wasmModule, imports);
     h.setMemory(instance.exports.memory);
+    jit.setExports(instance.exports);
+    this.jit = jit;
     const startAsync = WebAssembly.promising(instance.exports._start);
     this.startPromise = startAsync()
       .then(() => { this.exitCode = 0; this._fail(new WireSessionDead('session exited (code 0)')); return 0; })

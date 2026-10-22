@@ -17,6 +17,7 @@ bufmgr_seams = { path = "../../../storage/buffer/bufmgr_seams" }
 standby = { path = "../../../storage/ipc/standby" }
 
 [dev-dependencies]
+read_stream = { path = "../../../storage/aio/read_stream" }
 mcx = { path = "../../../../_support/mcx" }
 datum = { path = "../../../../_support/types/datum" }
 types_fmgr = { path = "../../../../_support/types/fmgr" }

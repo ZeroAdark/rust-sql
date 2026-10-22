@@ -5,7 +5,9 @@ use std::sync::Once;
 use datum::{Datum, VarlenaRef};
 use mcx::{Mcx, MemoryContext};
 use tcop_dest::DestReceiver;
-use types_error::{ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_SYNTAX_ERROR};
+use types_error::{
+    ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_PROGRAM_LIMIT_EXCEEDED, ERRCODE_SYNTAX_ERROR,
+};
 use types_fmgr::{FmgrInfo, FunctionCallInfoBaseData};
 use types_nodes::list::NodeList;
 use types_nodes::nodes_enums::CmdType;
@@ -140,6 +142,20 @@ fn install_fixtures() {
         planner::init_seams();
         rewrite_handler::init_seams();
         execmain::init_seams();
+        init_small::init_seams();
+        gravity_exec::init_seams();
+        gravity_exec::admit::entry::init_seams();
+        // A served statement polls interrupts and asks each column type's base shape (the fixture's types are plain base types).
+        postgres_seams::check_for_interrupts::set(|| Ok(()));
+        syscache_seams::pg_type_base_shape::set(|_| {
+            Ok(Some(syscache_seams::PgTypeBaseShape {
+                typtype: b'b' as i8,
+                typbasetype: 0,
+                typtypmod: -1,
+                typelem: 0,
+                typsubscript: 0,
+            }))
+        });
         xact::init_seams();
         elog::init_seams();
         backend_status_seams::pgstat_report_plan_id::set(|_, _| {});
@@ -410,6 +426,7 @@ fn make_portal(mcx: Mcx<'_>) -> Portal<'_> {
         activeSubid: 0,
         createLevel: 0,
         sourceText: None,
+        sourceTextOwned: None,
         commandTag: CMDTAG_UNKNOWN,
         qc: QueryCompletion::default(),
         stmts: StmtListHandle::NULL,
@@ -439,6 +456,8 @@ fn make_portal(mcx: Mcx<'_>) -> Portal<'_> {
         cursorFillExhausted: false,
         currentOfEligible: None,
         cursorCaptureBatch: false,
+        gravity: 0,
+        memory_owner: None,
         cursorTidStore: TuplestoreHandle::NULL,
     })
 }
@@ -715,7 +734,7 @@ fn jit_block_matches_pg() {
     let mut es = NewExplainState(mcx).unwrap();
     es.analyze = true;
     es.timing = true;
-    crate::ExplainPrintJIT(&mut es, expr_deform, 3, 1_234_567);
+    crate::ExplainPrintJIT(&mut es, expr_deform, 3, 1_234_567).unwrap();
     assert_eq!(
         es_text(&es),
         "JIT:\n\
@@ -727,7 +746,7 @@ fn jit_block_matches_pg() {
 
     // Plain EXPLAIN (no analyze/timing) omits the Timing line.
     let mut es = NewExplainState(mcx).unwrap();
-    crate::ExplainPrintJIT(&mut es, 0b11111, 1, 0);
+    crate::ExplainPrintJIT(&mut es, 0b11111, 1, 0).unwrap();
     assert_eq!(
         es_text(&es),
         "JIT:\n\
@@ -739,7 +758,7 @@ fn jit_block_matches_pg() {
     let mut es = NewExplainState(mcx).unwrap();
     es.analyze = true;
     es.timing = true;
-    crate::ExplainPrintJIT(&mut es, expr_deform, 0, 55);
+    crate::ExplainPrintJIT(&mut es, expr_deform, 0, 55).unwrap();
     assert_eq!(es_text(&es), "");
 }
 
@@ -823,7 +842,7 @@ fn show_wal_usage_matches_c_shape() {
         wal_bytes: 177,
         ..Default::default()
     };
-    crate::show_wal_usage(&mut es, &u);
+    crate::show_wal_usage(&mut es, &u).unwrap();
     assert_eq!(es_text(&es), "WAL: records=3 bytes=177\n");
 
     let mut es = NewExplainState(mcx).unwrap();
@@ -833,13 +852,13 @@ fn show_wal_usage_matches_c_shape() {
         wal_bytes: 4242,
         wal_buffers_full: 7,
     };
-    crate::show_wal_usage(&mut es, &u);
+    crate::show_wal_usage(&mut es, &u).unwrap();
     assert_eq!(es_text(&es), "WAL: records=1 fpi=2 bytes=4242 buffers full=7\n");
 
     // All-zero usage prints nothing in text format.
     let mut es = NewExplainState(mcx).unwrap();
     u = Default::default();
-    crate::show_wal_usage(&mut es, &u);
+    crate::show_wal_usage(&mut es, &u).unwrap();
     assert_eq!(es_text(&es), "");
 }
 
@@ -856,13 +875,13 @@ fn show_buffer_usage_matches_c_shape() {
         ..Default::default()
     };
     assert!(crate::peek_buffer_usage(&es, &u));
-    crate::show_buffer_usage(&mut es, &u);
+    crate::show_buffer_usage(&mut es, &u).unwrap();
     assert_eq!(es_text(&es), "Buffers: shared hit=3 read=2, temp written=5\n");
 
     u = Default::default();
     assert!(!crate::peek_buffer_usage(&es, &u));
     let mut es = NewExplainState(mcx).unwrap();
-    crate::show_buffer_usage(&mut es, &u);
+    crate::show_buffer_usage(&mut es, &u).unwrap();
     assert_eq!(es_text(&es), "");
 }
 
@@ -1070,9 +1089,14 @@ mod order_by_limit_e2e {
     fn install_scan_fixtures() {
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
-            relation_seams::relation_open::set(|mcx, relid, _lockmode| {
+            // Built in a leaked context: the served statement holds its relations past the opener's context until
+            // ExecutorEnd, as a relcache entry lives in CacheMemoryContext.
+            relation_seams::relation_open::set(|_mcx, relid, _lockmode| {
                 assert_eq!(relid, TBL);
-                Ok(make_heap_rel(mcx))
+                Ok(make_heap_rel(leaked_mcx()))
+            });
+            relation_seams::try_relation_open::set(|_mcx, relid, _lockmode| {
+                Ok((relid == TBL).then(|| make_heap_rel(leaked_mcx())))
             });
             bufmgr_seams::relation_get_number_of_blocks_in_fork::set(|_rel, _fork| Ok(100));
             syscache_seams::pg_class_relname::set(|relid| {
@@ -1151,6 +1175,13 @@ mod order_by_limit_e2e {
                     (INT4_BTREE_FAM, INT4OID, INT4OID, 1) => INT4_LT_OP,
                     (INT4_BTREE_FAM, INT4OID, INT4OID, 3) => INT4EQ_OP,
                     (INT4_BTREE_FAM, INT4OID, INT4OID, 5) => INT4_GT_OP,
+                    _ => 0,
+                })
+            });
+            // The served sort's comparison support (BTORDER_PROC 1 of the int4 btree family: btint4cmp, 351).
+            syscache_seams::lookup_pg_amproc::set(|opfamily, left, right, procnum| {
+                Ok(match (opfamily, left, right, procnum) {
+                    (INT4_BTREE_FAM, INT4OID, INT4OID, 1) => 351,
                     _ => 0,
                 })
             });
@@ -1260,7 +1291,7 @@ mod order_by_limit_e2e {
                 pgstat_enabled: Cell::new(false),
                 pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
                 rd_amcache: Default::default(),
-                rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+                rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
                 rd_support: ::mcx::PgVec::new_in(mcx),
                 rd_supportinfo: Default::default(),
                 rd_opcoptions: Default::default(),
@@ -1598,11 +1629,11 @@ mod order_by_limit_e2e {
         let pstmt = nestloop_pstmt(mcx);
         let mut es = crate::state::NewExplainState(mcx).unwrap();
         es.format = crate::state::EXPLAIN_FORMAT_JSON;
-        crate::format::ExplainBeginOutput(&mut es);
-        crate::format::ExplainOpenGroup("Query", None, true, &mut es);
+        crate::format::ExplainBeginOutput(&mut es).unwrap();
+        crate::format::ExplainOpenGroup("Query", None, true, &mut es).unwrap();
         crate::node::ExplainPrintPlan(mcx, &mut es, pstmt).unwrap();
-        crate::format::ExplainCloseGroup("Query", None, true, &mut es);
-        crate::format::ExplainEndOutput(&mut es);
+        crate::format::ExplainCloseGroup("Query", None, true, &mut es).unwrap();
+        crate::format::ExplainEndOutput(&mut es).unwrap();
         assert_eq!(
             es_text(&es),
             concat!(
@@ -1675,15 +1706,36 @@ fn property_float_spells_infinity_like_c() {
     let mcx = ctx.mcx();
     let mut es = NewExplainState(mcx).unwrap();
     es.format = EXPLAIN_FORMAT_JSON;
-    ExplainBeginOutput(&mut es);
-    ExplainPropertyFloat("Total Cost", None, f64::INFINITY, 2, &mut es);
-    ExplainPropertyFloat("Startup Cost", None, f64::NEG_INFINITY, 2, &mut es);
-    ExplainPropertyFloat("Plan Rows", None, 2.5, 0, &mut es);
-    ExplainEndOutput(&mut es);
+    ExplainBeginOutput(&mut es).unwrap();
+    ExplainPropertyFloat("Total Cost", None, f64::INFINITY, 2, &mut es).unwrap();
+    ExplainPropertyFloat("Startup Cost", None, f64::NEG_INFINITY, 2, &mut es).unwrap();
+    ExplainPropertyFloat("Plan Rows", None, 2.5, 0, &mut es).unwrap();
+    ExplainEndOutput(&mut es).unwrap();
     let out = String::from_utf8(es.str.as_bytes().to_vec()).unwrap();
     assert!(out.contains("\"Total Cost\": Infinity"), "{out}");
     assert!(out.contains("\"Startup Cost\": -Infinity"), "{out}");
     assert!(out.contains("\"Plan Rows\": 2"), "{out}");
     assert_eq!(crate::format::fmt_float(f64::INFINITY, 2), "Infinity");
     assert_eq!(crate::format::fmt_float(0.005, 2), "0.01");
+}
+
+// C: enlargeStringInfo (stringinfo.c:360) rejects the growth with SQLSTATE
+// 54000; the property writers must surface it, not panic through expect().
+#[test]
+fn property_over_max_alloc_size_is_a_pg_error() {
+    let ctx = MemoryContext::new("t");
+    let mut es = NewExplainState(ctx.mcx()).unwrap();
+    // Zeroed pages are never written before enlarge rejects the request.
+    let big = vec![0u8; mcx::MAX_ALLOC_SIZE];
+    let big = unsafe { std::str::from_utf8_unchecked(&big) };
+    let err = ExplainPropertyText("Output", big, &mut es).unwrap_err();
+    assert_eq!(err.sqlstate(), ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(
+        err.message(),
+        "string buffer exceeds maximum allowed length (1073741823 bytes)"
+    );
+    assert_eq!(
+        err.detail(),
+        Some("Cannot enlarge string buffer containing 8 bytes by 1073741823 more bytes.")
+    );
 }

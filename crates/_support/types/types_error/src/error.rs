@@ -430,9 +430,60 @@ pub const fn errcode_is_category(sqlstate: SqlState) -> bool {
 /// the death). Panic-to-error converters re-raise it, never map it to ERROR.
 pub struct PanicExitThread;
 
+/// D2962: "is this unwind payload a designed thread exit?" — the one test every catch asks before it turns a payload into
+/// an error, a refusal or a log line. A designed exit (PanicExitThread here; FATAL's ProcExitThread and the crash-injected
+/// KilledBySignal in ipc; the standing pool's PoolRetireRaw in parallel) is rethrown unchanged: the thread is dying and its
+/// exit path (proc_exit callbacks or the crash restart) owns the cleanup. The crates that define the other payloads register
+/// a test at startup (seams_init), so a crate that sees only types_error (Gravity) can still ask.
+pub struct ExitPayloadTest(pub fn(&(dyn core::any::Any + Send)) -> bool);
+
+const EXIT_TEST_SLOTS: usize = 4;
+static EXIT_TESTS: [core::sync::atomic::AtomicPtr<ExitPayloadTest>; EXIT_TEST_SLOTS] =
+    [const { core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()) }; EXIT_TEST_SLOTS];
+
+/// Register one crate's exit test (idempotent: the same `&'static` twice is one slot).
+pub fn register_exit_payload_test(test: &'static ExitPayloadTest) {
+    use core::sync::atomic::Ordering;
+    let t = test as *const ExitPayloadTest as *mut ExitPayloadTest;
+    for slot in &EXIT_TESTS {
+        match slot.compare_exchange(core::ptr::null_mut(), t, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return,
+            Err(cur) if cur == t => return,
+            Err(_) => {}
+        }
+    }
+    panic!("types_error: more than {EXIT_TEST_SLOTS} exit payload tests registered");
+}
+
+/// True when `payload` is a designed thread exit (see `ExitPayloadTest`): PanicExitThread, or any registered test's.
+pub fn is_exit_payload(payload: &(dyn core::any::Any + Send)) -> bool {
+    if payload.is::<PanicExitThread>() {
+        return true;
+    }
+    EXIT_TESTS.iter().any(|slot| {
+        let p = slot.load(core::sync::atomic::Ordering::Acquire);
+        // SAFETY: a non-null slot holds a pointer made from a `&'static ExitPayloadTest` (register_exit_payload_test is
+        // the only writer), so it is valid for the rest of the process.
+        !p.is_null() && (unsafe { &*p }.0)(payload)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn d2962_registered_exit_payloads_are_exits() {
+        struct OtherExit;
+        static OTHER: ExitPayloadTest = ExitPayloadTest(|p| p.is::<OtherExit>());
+        let plain: alloc::boxed::Box<dyn core::any::Any + Send> = alloc::boxed::Box::new("bug");
+        assert!(is_exit_payload(&PanicExitThread));
+        assert!(!is_exit_payload(&OtherExit));
+        register_exit_payload_test(&OTHER);
+        register_exit_payload_test(&OTHER);
+        assert!(is_exit_payload(&OtherExit));
+        assert!(!is_exit_payload(&*plain));
+    }
 
     #[test]
     fn sqlstate_round_trips() {

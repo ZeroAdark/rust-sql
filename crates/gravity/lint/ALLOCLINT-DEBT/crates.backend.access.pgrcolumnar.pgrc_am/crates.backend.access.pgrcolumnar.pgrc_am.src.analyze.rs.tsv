@@ -1,0 +1,10 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/analyze.rs
+growth	std::vec::Vec::push	4
+macro	std::format	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	21
+method	std::ffi::CString::new	2
+method	std::iter::Iterator::collect	1
+type	std::boxed::Box	2
+type	std::ffi::CString	2
+type	std::vec::Vec	2

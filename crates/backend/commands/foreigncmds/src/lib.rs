@@ -1224,7 +1224,7 @@ pub fn IsImportableForeignTable(tablename: &str, stmt: &ImportForeignSchemaStmt<
 pub fn ImportForeignSchema<'mcx>(
     mcx: Mcx<'mcx>,
     stmt: &ImportForeignSchemaStmt<'mcx>,
-) -> PgResult<mcx::PgVec<'mcx, &'mcx str>> {
+) -> PgResult<(&'mcx str, mcx::PgVec<'mcx, &'mcx str>)> {
     let servername = stmt.server_name.expect("ImportForeignSchemaStmt.server_name");
     let server = GetForeignServerByName(mcx, servername, false)?.expect("missing_ok=false");
     if aclchk::object_aclcheck(
@@ -1263,7 +1263,7 @@ pub fn ImportForeignSchema<'mcx>(
             .into_error()
             .into());
     };
-    import(mcx, stmt, server.serverid)
+    Ok((fdw.fdwname, import(mcx, stmt, server.serverid)?))
 }
 
 /// import_error_callback (foreigncmds.c:1616-1633) and its registration on

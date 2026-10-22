@@ -1,0 +1,103 @@
+-- regress-full-alter_table-040
+-- SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^logged1' UNION ALL SELECT r.relname || ' toast table', t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^logged1' UNION ALL SELECT r.relname ||' toast index', ri.relkind, ri.relpersistence FROM pg_class r join pg_class t ON t.oid = r.reltoastrelid JOIN pg_index i ON i.indrelid = t.oid JOIN pg_class ri ON ri.oid = i.indexrelid WHERE r.relname ~ '^logged1' ORDER BY relname;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=3 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n3@0 n1@2 n0@4^
+  source index rel=1259 rti=4 am=heap index=2663
+    key att=2 op=257 value=c25:'logged1'
+    key att=2 op=255 value=c25:'logged2'
+    recheck (op257(v4.2, c25:'logged1'), op255(v4.2, c25:'logged2'))
+    lanes Attr(2):byref8:fx64:win/page Attr(17):byval8:w8:val Attr(18):byval8:w8:val
+  filter op639(v4.2, c25:'^logged1')
+  project (1=v4.2, 2=v4.18, 3=v4.17)
+  append arm 0/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=fx64:win/page 2=w8:val 3=w8:val
+  outs 1=fx64:life/breaker 2=w1:val 3=w1:val
+p1 node=6 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n6@0 n5@2 n4@4 n1@5 n0@7^
+  source index rel=1259 rti=5 am=heap index=2663
+    key att=2 op=257 value=c25:'logged1'
+    key att=2 op=255 value=c25:'logged2'
+    recheck (op257(v5.2, c25:'logged1'), op255(v5.2, c25:'logged2'))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byval8:w8:val Attr(31):byval8:w8:val Attr(32):byref8:vl:win/page Attr(33):byref8:vl:win/page Attr(34):byref8:vl:win/page
+  filter op639(v5.2, c25:'^logged1')
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7, 8=v5.8, 9=v5.9, 10=v5.10, 11=v5.11, 12=v5.12, 13=v5.13, 14=v5.14, 15=v5.15, 16=v5.16, 17=v5.17, 18=v5.18, 19=v5.19, 20=v5.20, 21=v5.21, 22=v5.22, 23=v5.23, 24=v5.24, 25=v5.25, 26=v5.26, 27=v5.27, 28=v5.28, 29=v5.29, 30=v5.30, 31=v5.31, 32=v5.32, 33=v5.33, 34=v5.34)
+  nest inner=n7 JOIN_INNER unique raise-free params=($exec0=outer.14)
+  inner node=7 serial site=0 reason=IndexSource end=sink
+  nodes n7@0
+  source index rel=1259 rti=6 am=heap index=2662
+    key att=1 op=607 value=$exec0
+    recheck (op607(v6.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byval8:w8:val Attr(31):byval8:w8:val Attr(32):byref8:vl:win/page Attr(33):byref8:vl:win/page Attr(34):byref8:vl:win/page
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=v6.4, 5=v6.5, 6=v6.6, 7=v6.7, 8=v6.8, 9=v6.9, 10=v6.10, 11=v6.11, 12=v6.12, 13=v6.13, 14=v6.14, 15=v6.15, 16=v6.16, 17=v6.17, 18=v6.18, 19=v6.19, 20=v6.20, 21=v6.21, 22=v6.22, 23=v6.23, 24=v6.24, 25=v6.25, 26=v6.26, 27=v6.27, 28=v6.28, 29=v6.29, 30=v6.30, 31=v6.31, 32=v6.32, 33=v6.33, 34=v6.34)
+  project (1=op654(fn406(outer.2), c25:' toast table'), 2=inner.18, 3=inner.17)
+  project (1=relabel19(fn407(v2.1)), 2=v2.2, 3=v2.3)
+  append arm 1/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=w8:val 15=w8:val 16=w8:val 17=w8:val 18=w8:val 19=w8:val 20=w8:val 21=w8:val 22=w8:val 23=w8:val 24=w8:val 25=w8:val 26=w8:val 27=w8:val 28=w8:val 29=w8:val 30=w8:val 31=w8:val 32=vl:win/page 33=vl:win/page 34=vl:win/page
+  outs 1=vl:call1258 2=w1:val 3=w1:val
+  outs 1=fx64:call407 2=w1:val 3=w1:val
+  outs 1=fx64:life/breaker 2=w1:val 3=w1:val
+p2 node=12 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n12@0 n11@2 n10@4 n9@6 n8@8 n1@9 n0@11^
+  source index rel=1259 rti=8 am=heap index=2663
+    key att=2 op=257 value=c25:'logged1'
+    key att=2 op=255 value=c25:'logged2'
+    recheck (op257(v8.2, c25:'logged1'), op255(v8.2, c25:'logged2'))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byval8:w8:val Attr(31):byval8:w8:val Attr(32):byref8:vl:win/page Attr(33):byref8:vl:win/page Attr(34):byref8:vl:win/page
+  filter op639(v8.2, c25:'^logged1')
+  project (1=v8.1, 2=v8.2, 3=v8.3, 4=v8.4, 5=v8.5, 6=v8.6, 7=v8.7, 8=v8.8, 9=v8.9, 10=v8.10, 11=v8.11, 12=v8.12, 13=v8.13, 14=v8.14, 15=v8.15, 16=v8.16, 17=v8.17, 18=v8.18, 19=v8.19, 20=v8.20, 21=v8.21, 22=v8.22, 23=v8.23, 24=v8.24, 25=v8.25, 26=v8.26, 27=v8.27, 28=v8.28, 29=v8.29, 30=v8.30, 31=v8.31, 32=v8.32, 33=v8.33, 34=v8.34)
+  nest inner=n13 JOIN_INNER unique raise-free params=($exec1=outer.14)
+  inner node=13 serial site=0 reason=IndexSource end=sink
+  nodes n13@0
+  source index-only rel=1259 rti=9 am=heap index=2662
+    key att=1 op=607 value=$exec1
+    recheck (op607(index.1, $exec1))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  project (1=outer.2, 2=outer.14, 3=inner.1)
+  nest inner=n14 JOIN_INNER raise-free params=($exec2=outer.3)
+  inner node=14 serial site=0 reason=IndexSource end=sink
+  nodes n14@0
+  source index rel=2610 rti=11 am=heap index=2678
+    key att=2 op=607 value=$exec2
+    recheck (op607(v11.2, $exec2))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byref8:vl:win/page Attr(17):byref8:vl:win/page Attr(18):byref8:vl:win/page Attr(19):byref8:vl:win/page Attr(20):byref8:vl:win/page Attr(21):byref8:vl:win/page
+  project (1=v11.1, 2=v11.2, 3=v11.3, 4=v11.4, 5=v11.5, 6=v11.6, 7=v11.7, 8=v11.8, 9=v11.9, 10=v11.10, 11=v11.11, 12=v11.12, 13=v11.13, 14=v11.14, 15=v11.15, 16=v11.16, 17=v11.17, 18=v11.18, 19=v11.19, 20=v11.20, 21=v11.21)
+  project (1=outer.1, 2=inner.1)
+  nest inner=n15 JOIN_INNER unique raise-free params=($exec3=outer.2)
+  inner node=15 serial site=0 reason=IndexSource end=sink
+  nodes n15@0
+  source index rel=1259 rti=13 am=heap index=2662
+    key att=1 op=607 value=$exec3
+    recheck (op607(v13.1, $exec3))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byval8:w8:val Attr(31):byval8:w8:val Attr(32):byref8:vl:win/page Attr(33):byref8:vl:win/page Attr(34):byref8:vl:win/page
+  project (1=v13.1, 2=v13.2, 3=v13.3, 4=v13.4, 5=v13.5, 6=v13.6, 7=v13.7, 8=v13.8, 9=v13.9, 10=v13.10, 11=v13.11, 12=v13.12, 13=v13.13, 14=v13.14, 15=v13.15, 16=v13.16, 17=v13.17, 18=v13.18, 19=v13.19, 20=v13.20, 21=v13.21, 22=v13.22, 23=v13.23, 24=v13.24, 25=v13.25, 26=v13.26, 27=v13.27, 28=v13.28, 29=v13.29, 30=v13.30, 31=v13.31, 32=v13.32, 33=v13.33, 34=v13.34)
+  project (1=op654(fn406(outer.1), c25:' toast index'), 2=inner.18, 3=inner.17)
+  project (1=relabel19(fn407(v3.1)), 2=v3.2, 3=v3.3)
+  append arm 2/3
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=w8:val 15=w8:val 16=w8:val 17=w8:val 18=w8:val 19=w8:val 20=w8:val 21=w8:val 22=w8:val 23=w8:val 24=w8:val 25=w8:val 26=w8:val 27=w8:val 28=w8:val 29=w8:val 30=w8:val 31=w8:val 32=vl:win/page 33=vl:win/page 34=vl:win/page
+  outs 1=fx64:win/page 2=w8:val 3=w4:val
+  outs 1=fx64:win/page 2=w4:val
+  outs 1=vl:call1258 2=w1:val 3=w1:val
+  outs 1=fx64:call407 2=w1:val 3=w1:val
+  outs 1=fx64:life/breaker 2=w1:val 3=w1:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=fx64:life/breaker 2=w1:val 3=w1:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+param $exec0 owner=n5 type=26 rep=w8:val
+param $exec1 owner=n11 type=26 rep=w8:val
+param $exec2 owner=n10 type=26 rep=w4:val
+param $exec3 owner=n9 type=26 rep=w4:val
+mapped: Append IndexScan IndexOnlyScan SubqueryScan NestLoop NestLoopParam Sort

@@ -1,6 +1,3 @@
-// index.c, bounded to plain btree indexes on non-shared, non-mapped,
-// permanent relations built empty (the toast-index lane); unreached arms are
-// loud with their C symbol.
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
@@ -26,7 +23,6 @@ pub const INDEX_CREATE_CONCURRENT: u16 = 1 << 3;
 pub const INDEX_CREATE_IF_NOT_EXISTS: u16 = 1 << 4;
 pub const INDEX_CREATE_PARTITIONED: u16 = 1 << 5;
 pub const INDEX_CREATE_INVALID: u16 = 1 << 6;
-// upstream e4527519b77e (18.6): Fix propagation of indimmediate flag in index_create_copy()
 pub const INDEX_CREATE_DEFERRABLE: u16 = 1 << 7;
 
 pub const INDEX_CONSTR_CREATE_MARK_AS_PRIMARY: u16 = 1 << 0;
@@ -56,11 +52,23 @@ const Anum_pg_class_relallvisible: usize = 12;
 const Anum_pg_class_relallfrozen: usize = 13;
 const Anum_pg_class_relhasindex: usize = 15;
 
-#[cold]
-#[inline(never)]
-fn unported(what: &str) -> ! {
-    panic!("unported: index.c {what}")
+pgsync::process_global! {
+    /// bootstrap.c ILHead: (heap, index) pairs `declare index` registered,
+    /// built by `build indices`.
+    static BOOTSTRAP_INDEXES: pgsync::Mutex<Vec<(Oid, Oid)>> = pgsync::Mutex::new(Vec::new());
 }
+
+/// `index_register` (bootstrap.c).
+pub fn bootstrap_index_register(heap: Oid, index: Oid) {
+    BOOTSTRAP_INDEXES.lock().unwrap_or_else(|e| e.into_inner()).push((heap, index));
+}
+
+/// `build_indices`' input, in registration order.
+pub fn take_bootstrap_indexes() -> Vec<(Oid, Oid)> {
+    core::mem::take(&mut *BOOTSTRAP_INDEXES.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+
 
 #[track_caller]
 #[cold]
@@ -69,10 +77,6 @@ fn err(msg: String, sqlstate: types_error::SqlState) -> Box<PgError> {
     Box::new(PgError::new(types_error::ERROR, msg).with_sqlstate(sqlstate))
 }
 
-// index.c reports every syscache miss below with
-// `elog(ERROR, "cache lookup failed for <noun> %u", oid)` (:168, :377, :433,
-// :466, :1348, :1367, :2087, :2370, :3168, :3544, :3623, :3888) -- a catchable
-// error whose SQLSTATE is elog's ERROR default, XX000.  Never a backend abort.
 #[cold]
 #[inline(never)]
 pub(crate) fn index_lookup_failed(indexId: Oid) -> Box<PgError> {
@@ -97,35 +101,24 @@ pub(crate) fn opclass_lookup_failed(opclass: Oid) -> Box<PgError> {
     Box::new(PgError::error(format!("cache lookup failed for opclass {opclass}")))
 }
 
-// index.c:1602/:1606/:1632/:1636/:2947 and relcache.c:3825 raise a vanished
-// pg_class / pg_index row with `elog(ERROR, "could not find tuple for
-// relation %u", oid)` -- catchable, level ERROR, SQLSTATE XX000.  Never a
-// backend abort.
 #[cold]
 #[inline(never)]
 pub(crate) fn relation_tuple_missing(relid: Oid) -> Box<PgError> {
     Box::new(PgError::error(format!("could not find tuple for relation {relid}")))
 }
 
-// relcache.c:3891 RelationSetNewRelfilenumber: `elog(ERROR, "relation \"%s\"
-// does not have storage", RelationGetRelationName(relation))` for a relkind
-// that has neither a table AM nor storage.
 #[cold]
 #[inline(never)]
 pub(crate) fn relation_has_no_storage(relname: &str) -> Box<PgError> {
     Box::new(PgError::error(format!("relation \"{relname}\" does not have storage")))
 }
 
-// index.c:2588 CompareIndexInfo: `elog(ERROR, "incorrect attribute map")`
-// when the map is shorter than an index column's attribute number.
 #[cold]
 #[inline(never)]
 pub(crate) fn incorrect_attribute_map() -> Box<PgError> {
     Box::new(PgError::error("incorrect attribute map"))
 }
 
-// index.c:2587-2588: the attribute map must cover every index attribute
-// number of info2 before it is consulted.
 #[inline]
 pub(crate) fn check_attribute_map_covers(maplen: usize, attno: AttrNumber) -> PgResult<()> {
     if (maplen as i64) < attno as i64 {
@@ -134,7 +127,6 @@ pub(crate) fn check_attribute_map_covers(maplen: usize, attno: AttrNumber) -> Pg
     Ok(())
 }
 
-// Set-once, consume-once binary-upgrade overrides (index.c globals).
 macro_rules! next_oid_override {
     ($cell:ident, $setter:ident, $take:ident) => {
         thread_local! {
@@ -197,8 +189,7 @@ fn getattr(
 const Anum_pg_index_indisprimary: usize = 7;
 const Anum_pg_index_indimmediate: usize = 9;
 
-// index_check_primary_key (index.c); NULLS NOT DISTINCT indexes are
-// unreachable here (USING INDEX is loud upstream).
+// NULLS NOT DISTINCT indexes are unreachable here (USING INDEX is loud upstream).
 pub fn index_check_primary_key<'mcx>(
     mcx: Mcx<'mcx>,
     heapRel: &Relation<'mcx>,
@@ -263,7 +254,6 @@ fn relationHasPrimaryKey<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>) -> PgResult
     Ok(false)
 }
 
-// ConstructTupleDescriptor (index.c).
 fn ConstructTupleDescriptor<'mcx>(
     mcx: Mcx<'mcx>,
     heapRelation: &Relation<'mcx>,
@@ -273,9 +263,6 @@ fn ConstructTupleDescriptor<'mcx>(
     collationIds: &[Oid],
     opclassIds: &[Oid],
 ) -> PgResult<TupleDescData<'mcx>> {
-    // amroutine->amkeytype: InvalidOid for btree/gin/gist/spgist/brin,
-    // INT4OID for hash; from_relam covers non-builtin AMs over builtin
-    // handlers (index_create registered the mapping).
     let amkeytype = match types_relscan::IndexAmKind::from_relam(accessMethodId) {
         types_relscan::IndexAmKind::Hash => INT4OID,
         _ => InvalidOid,
@@ -290,7 +277,6 @@ fn ConstructTupleDescriptor<'mcx>(
     let mut indexpr_item = indexInfo.ii_Expressions.iter();
     for i in 0..numatts {
         let atnum = indexInfo.ii_IndexAttrNumbers[i];
-        // namestrcpy truncates at NAMEDATALEN-1 bytes, as C.
         let colname = indexColNames[i];
         if atnum != 0 {
             if atnum < 0 || atnum as i32 > natts {
@@ -345,10 +331,9 @@ fn ConstructTupleDescriptor<'mcx>(
             to.attrelid = InvalidOid;
         }
 
-        // amkeytype, overridable by pg_opclass.opckeytype.
         let mut keyType = amkeytype;
         if i < numkeyatts {
-            let (opckeytype, opcintype) = lookup_opclass_keytype(mcx, opclassIds[i])?;
+            let (opckeytype, opcintype) = lookup_opclass_keytype(opclassIds[i])?;
             if opckeytype != InvalidOid {
                 keyType = opckeytype;
             }
@@ -380,20 +365,13 @@ fn ConstructTupleDescriptor<'mcx>(
     Ok(indexTupDesc)
 }
 
-fn lookup_opclass_keytype<'mcx>(mcx: Mcx<'mcx>, opclass: Oid) -> PgResult<(Oid, Oid)> {
-    // C: SearchSysCache1(CLAOID); the shape cache lacks opckeytype, so read
-    // the row directly.
-    let rel = table::table_open(mcx, catalog::OperatorClassRelationId, types_rel::AccessShareLock)?;
-    let key = oid_scankey(1, opclass);
-    let mut scan = genam::systable_beginscan(mcx, &rel, OpclassOidIndexId, true, None, &[key])?;
-    let Some(tup) = genam::systable_getnext(mcx, &mut scan)? else {
+// index.c:431 SearchSysCache1(CLAOID): a warm syscache answers without
+// opening pg_opclass, so an exclusive lock on it elsewhere does not block.
+fn lookup_opclass_keytype(opclass: Oid) -> PgResult<(Oid, Oid)> {
+    let Some(shape) = syscache_seams::lookup_pg_opclass_shape::call(opclass)? else {
         return Err(crate::opclass_lookup_failed(opclass));
     };
-    let opckeytype = getattr(tup, Anum_pg_opclass_opckeytype, rel.descr()).as_oid();
-    let opcintype = getattr(tup, Anum_pg_opclass_opcintype, rel.descr()).as_oid();
-    genam::systable_endscan(mcx, scan)?;
-    rel.close(types_rel::AccessShareLock)?;
-    Ok((opckeytype, opcintype))
+    Ok((shape.opckeytype, shape.opcintype))
 }
 
 fn build_vector_datum<'mcx>(
@@ -425,7 +403,6 @@ fn build_vector_datum<'mcx>(
     Ok(buf)
 }
 
-// UpdateIndexRelation: insert the pg_index row.
 #[allow(clippy::too_many_arguments)]
 fn UpdateIndexRelation<'mcx>(
     mcx: Mcx<'mcx>,
@@ -518,9 +495,6 @@ fn UpdateIndexRelation<'mcx>(
     pg_index.close(RowExclusiveLock)
 }
 
-// index_opclass_options (indexam.c:1043). Lives here rather than the indexam
-// crate: the no-options-proc error needs syscache-backed opclass naming, and
-// the syscache sits above indexam in the crate graph.
 pub fn index_opclass_options<'mcx>(
     mcx: Mcx<'mcx>,
     indrel: &Relation<'mcx>,
@@ -531,8 +505,6 @@ pub fn index_opclass_options<'mcx>(
     let kind = types_relscan::IndexAmKind::from_relam(indrel.rd_rel.relam);
     let amoptsprocnum = kind.amoptsprocnum() as usize;
     let amsupport = kind.amsupport() as usize;
-    // index_getprocid over the rd_support preload (nkey x amsupport, row-major).
-    // amoptsprocnum == 0: the AM has no opclass-options proc (hnsw).
     let procid = if amoptsprocnum == 0 {
         InvalidOid
     } else {
@@ -569,13 +541,9 @@ pub fn index_opclass_options<'mcx>(
     )?))
 }
 
-// RelationGetIndexAttOptions (relcache.c): parsed per-key-column opclass
-// options, cached on the relcache entry (C rd_opcoptions).
 pub fn relation_get_index_att_options(
     rel: &Relation<'_>,
 ) -> PgResult<std::rc::Rc<[Option<Box<[u8]>>]>> {
-    // pg_attribute.attoptions is attnum 23 (attmissingval is 25). Reading the
-    // wrong attnum here silently discarded all per-column opclass options.
     const Anum_pg_attribute_attoptions: i32 = 23;
     if let Some(cached) = rel.rd_opcoptions.borrow().as_ref() {
         return Ok(cached.clone());
@@ -583,7 +551,7 @@ pub fn relation_get_index_att_options(
     let owner = mcx::MemoryContext::new("RelationGetIndexAttOptions");
     let mcx = owner.mcx();
     let natts = rel.indnkeyatts() as usize;
-    let mut opts: Vec<Option<Box<[u8]>>> = Vec::with_capacity(natts);
+    let mut opts: Vec<Option<Box<[u8]>>> = ::mcx::std_vec_with_capacity("catalog_index", natts)?;
     for attnum in 1..=natts as AttrNumber {
         let Some(tuple) = cache_syscache::SearchSysCacheAttNum(rel.rd_id, attnum as i16)? else {
             return Err(PgError::error(format!(
@@ -619,20 +587,16 @@ pub struct IndexCreateExtra<'a> {
     pub reloptions: Option<&'a [u8]>,
     pub opclass_options: Option<&'a [Datum]>,
     pub stattargets: Option<&'a [datum::NullableDatum]>,
-    // C relFileNumber: valid means adopt this existing storage (TryReuseIndex).
+    // Valid means adopt this existing storage (TryReuseIndex).
     pub old_number: types_core::RelFileNumber,
 }
 
-// index_create; relFileNumber/opclassOptions/stattargets fixed at their
-// toast-lane values. Returns (index oid, constraint oid or InvalidOid).
-// upstream 2780538433fc (18.5): NB: caller is responsible for ensuring the
-// user has USAGE on all types indexInfo.ii_{Expressions,Predicate} depend on.
+// Caller is responsible for ensuring the user has USAGE on all types indexInfo.ii_{Expressions,Predicate} depend on.
 #[allow(clippy::too_many_arguments)]
 pub fn index_create<'mcx>(
     mcx: Mcx<'mcx>,
     heapRelation: &Relation<'mcx>,
-    // Bytes, as C's char*: a makeObjectName-generated name may end inside
-    // a multibyte character (SQL_ASCII) and is stored verbatim.
+    // A makeObjectName-generated name may end inside a multibyte character (SQL_ASCII) and is stored verbatim.
     indexRelationName: &[u8],
     indexRelationId: Oid,
     indexInfo: &mut IndexInfo<'mcx>,
@@ -652,18 +616,6 @@ pub fn index_create<'mcx>(
     let skip_build = extra.flags & INDEX_CREATE_SKIP_BUILD != 0;
     let parentIndexRelid = extra.parent_index_relid;
 
-    if concurrent && catalog::IsCatalogRelation(heapRelation) {
-        return Err(err(
-            "concurrent index creation on system catalog tables is not supported".into(),
-            ERRCODE_FEATURE_NOT_SUPPORTED,
-        ));
-    }
-    if concurrent && indexInfo.ii_HasExclusion {
-        return Err(err(
-            "concurrent index creation for exclusion constraints is not supported".into(),
-            ERRCODE_FEATURE_NOT_SUPPORTED,
-        ));
-    }
     assert!(!partitioned || skip_build, "partitioned indexes must never be built");
     assert!(
         extra.constr_flags == 0 || extra.flags & INDEX_CREATE_ADD_CONSTRAINT != 0,
@@ -677,7 +629,7 @@ pub fn index_create<'mcx>(
     let relpersistence = heapRelation.rd_rel.relpersistence;
 
     if indexInfo.ii_NumIndexAttrs < 1 {
-        panic!("must index at least one column");
+        return Err(Box::new(PgError::error("must index at least one column")));
     }
     if !extra.allow_system_table_mods
         && catalog::IsSystemRelation(heapRelation)
@@ -689,9 +641,6 @@ pub fn index_create<'mcx>(
         ));
     }
     for i in 0..indexInfo.ii_NumIndexKeyAttrs as usize {
-        // TEXT/VARCHAR/BPCHAR_BTREE_PATTERN_OPS_OID (pg_opclass.dat); the
-        // name comes from the current pg_opclass row (index.c:847), so a
-        // renamed opclass reports its new name.
         if collationIds[i] != InvalidOid
             && matches!(opclassIds[i], 4217 | 4218 | 4219)
             && !lsyscache::get_collation_isdeterministic(collationIds[i])?
@@ -711,11 +660,20 @@ pub fn index_create<'mcx>(
         }
     }
 
-    // We cannot allow indexing a shared relation after initdb (there's no way
-    // to make the entry in other databases' pg_class). C index.c:868-873 —
-    // reachable with allow_system_table_mods on, so it must be this clean
-    // 55000 and it must come AFTER the system-catalog refusal above, which is
-    // what a plain superuser sees.
+    if concurrent && catalog::IsCatalogRelation(heapRelation) {
+        return Err(err(
+            "concurrent index creation on system catalog tables is not supported".into(),
+            ERRCODE_FEATURE_NOT_SUPPORTED,
+        ));
+    }
+    if concurrent && indexInfo.ii_HasExclusion {
+        return Err(err(
+            "concurrent index creation for exclusion constraints is not supported".into(),
+            ERRCODE_FEATURE_NOT_SUPPORTED,
+        ));
+    }
+
+    // We cannot allow indexing a shared relation after initdb (there's no way to make the entry in other databases' pg_class).
     if heapRelation.rd_rel.relisshared && !miscinit_seams::is_bootstrap_processing_mode::call() {
         return Err(err(
             "shared indexes cannot be created after initdb".to_string(),
@@ -726,8 +684,6 @@ pub fn index_create<'mcx>(
     if lsyscache::get_relname_relid_bytes(indexRelationName, namespaceId)? != InvalidOid {
         let shown = String::from_utf8_lossy(indexRelationName);
         if extra.flags & INDEX_CREATE_IF_NOT_EXISTS != 0 {
-            // index.c:899-902: the NOTICE carries errcode(ERRCODE_DUPLICATE_TABLE)
-            // (42P07), which psql shows under VERBOSITY verbose.
             elog_seams::ereport::call(
                 PgError::new(
                     types_error::NOTICE,
@@ -796,9 +752,6 @@ pub fn index_create<'mcx>(
         catalog::GetNewRelFileNumber(mcx, tableSpaceId, Some(&pg_class), relpersistence)?
     };
 
-    // InitializeAttributeOids runs on the pre-copy descriptor; the relcache
-    // copy in heap_create then carries attrelid from the start (C fixes the
-    // copy up after the fact — same rows reach pg_attribute).
     for i in 0..indexInfo.ii_NumIndexAttrs as usize {
         indexTupDesc.attr_mut(i).attrelid = indexRelationId;
     }
@@ -815,11 +768,8 @@ pub fn index_create<'mcx>(
         &indexTupDesc,
         relkind,
         relpersistence,
-        // shared_relation = heapRelation->rd_rel->relisshared (index.c:792);
-        // always false here after the index.c:877 post-initdb refusal above.
         heapRelation.rd_rel.relisshared,
-        // mapped_relation = RelationIsMapped(heapRelation) (index.c:786);
-        // indexes on mapped catalogs are themselves mapped.
+        // Indexes on mapped catalogs are themselves mapped.
         heapRelation.is_mapped(),
         extra.allow_system_table_mods,
         create_storage,
@@ -845,7 +795,6 @@ pub fn index_create<'mcx>(
     )?;
     pg_class.close(RowExclusiveLock)?;
 
-    // AppendAttributeTuples.
     {
         let natts = indexTupDesc.natts as usize;
         let mut attrs_extra: mcx::PgVec<'_, catalog_heap::FormExtraData_pg_attribute> =
@@ -889,7 +838,6 @@ pub fn index_create<'mcx>(
         coloptions,
         isprimary,
         indexInfo.ii_HasExclusion,
-        // upstream e4527519b77e (18.6): Fix propagation of indimmediate flag in index_create_copy()
         extra.constr_flags & INDEX_CONSTR_CREATE_DEFERRABLE == 0
             && extra.flags & INDEX_CREATE_DEFERRABLE == 0,
         !concurrent && !invalid,
@@ -1017,11 +965,8 @@ pub fn index_create<'mcx>(
                 false,
             )?;
         }
-    } else {
-        unported("index_create: bootstrap-mode index_register");
     }
 
-    // Post creation hook for new index (index.c:1229-1230).
     objectaccess::InvokeObjectPostCreateHookArg(
         RELATION_RELATION_ID,
         indexRelationId,
@@ -1031,7 +976,16 @@ pub fn index_create<'mcx>(
 
     xact::CommandCounterIncrement()?;
 
-    // Validate opclass-specific options (index.c:1243-1248).
+    // index.c:504-554: in bootstrap mode sinval does not rebuild the new
+    // entry, so its index-access fields are loaded here; and the build is
+    // deferred to `build indices` (index_register), whatever the flags.
+    if miscinit_seams::is_bootstrap_processing_mode::call() {
+        drop(indexRelation);
+        relcache::invalidate::RelationInitIndexAccessInfoBootstrap(indexRelationId)?;
+        bootstrap_index_register(heapRelationId, indexRelationId);
+        return Ok((indexRelationId, constraintId));
+    }
+
     if let Some(attopts) = extra.opclass_options {
         let irel = indexam::index_open(mcx, indexRelationId, NoLock)?;
         for i in 0..indexInfo.ii_NumIndexKeyAttrs as usize {
@@ -1041,26 +995,23 @@ pub fn index_create<'mcx>(
     }
 
     if skip_build {
-        // The heap must still be marked as indexed; the caller fills the
-        // index later (partitioned indexes never are).
-        index_update_stats(mcx, heapRelation, true, -1.0)?;
+        // The heap must still be marked as indexed; the caller fills the index later.
+        index_update_stats(mcx, heapRelation, true, -1.0, false)?;
         xact::CommandCounterIncrement()?;
         drop(indexRelation);
         return Ok((indexRelationId, constraintId));
     }
 
-    // The relcache entry was rebuilt from the catalogs at CCI; reopen to get
-    // the index-access fields (C keeps the same pointer, rebuilt in place).
+    // The relcache entry was rebuilt from the catalogs at CCI; reopen to get the index-access fields.
     drop(indexRelation);
     let indexRelation = indexam::index_open(mcx, indexRelationId, NoLock)?;
 
-    index_build(mcx, heapRelation, &indexRelation, indexInfo, false)?;
+    index_build(mcx, heapRelation, &indexRelation, indexInfo, false, true)?;
 
     indexam::index_close(indexRelation, NoLock)?;
     Ok((indexRelationId, constraintId))
 }
 
-// index_constraint_create (index.c).
 #[allow(clippy::too_many_arguments)]
 pub fn index_constraint_create<'mcx>(
     mcx: Mcx<'mcx>,
@@ -1079,8 +1030,7 @@ pub fn index_constraint_create<'mcx>(
     let deferrable = constr_flags & INDEX_CONSTR_CREATE_DEFERRABLE != 0;
     let initdeferred = constr_flags & INDEX_CONSTR_CREATE_INIT_DEFERRED != 0;
     debug_assert!(!initdeferred || deferrable);
-    // C's order: the system-table restriction fires before the expressions
-    // check and before any AUTO-dependency deletion (index.c).
+    // The system-table restriction fires before the expressions check and before any AUTO-dependency deletion.
     if !allow_system_table_mods
         && catalog::IsSystemRelation(heapRelation)
         && !miscinit_seams::is_bootstrap_processing_mode::call()
@@ -1213,8 +1163,7 @@ pub fn index_constraint_create<'mcx>(
             let otid = tup.t_self;
             genam::systable_endscan(mcx, scan)?;
             catalog_indexing::CatalogTupleUpdate(mcx, &pg_index, &otid, &mut newtup)?;
-            // Marking an existing index primary must flush the parent
-            // table's relcache entry (replication behavior depends on it).
+            // Marking an existing index primary must flush the parent table's relcache entry (replication behavior depends on it).
             if set_primary {
                 inval::invalidate::CacheInvalidateRelcacheByRelid(heapRelation.rd_id)?;
             }
@@ -1235,44 +1184,110 @@ pub fn index_constraint_create<'mcx>(
     Ok(con_oid)
 }
 
-// index_build: btree only, serial only (C divergence: plan_create_index_workers
-// is not consulted — every build runs with ii_ParallelWorkers = 0; C picks the
-// same for tables under min_parallel_table_scan_size). The blocker is one
-// level down: C's parallel builds (_bt_begin_parallel, gin's equivalent) hand
-// each worker a tuplesort sharing a SortCoordinate/Sharedsort, and tuplesort
-// here is serial-only — no coordinate surface exists to hand out. Parallel
-// builds wait on a parallel tuplesort.
+/// `plan_create_index_workers` (planner.c:7114): the number of parallel
+/// workers a CREATE INDEX on `heap` should request.
+fn plan_create_index_workers(
+    heap: &Relation<'_>,
+    index_info: &IndexInfo<'_>,
+) -> PgResult<i32> {
+    let max_workers = guc_tables::vars::max_parallel_maintenance_workers.read();
+    if !init_small::globals::IsUnderPostmaster() || max_workers == 0 {
+        return Ok(0);
+    }
+    // Workers can't access the leader's temporary tables, and index
+    // expressions and predicates must be parallel safe.
+    if heap.rd_rel.relpersistence == types_core::RELPERSISTENCE_TEMP {
+        return Ok(0);
+    }
+    // A pgrcolumnar build scan has no block ranges to share: each participant would index every row.
+    if tableam::TableAm::of(heap) == Some(tableam::TableAm::Pgrcolumnar) {
+        return Ok(0);
+    }
+    for list in [&index_info.ii_Expressions, &index_info.ii_Predicate] {
+        for expr in list.iter() {
+            if !clauses::is_parallel_safe(0, true, Vec::new(), expr)? {
+                return Ok(0);
+            }
+        }
+    }
+    // The parallel_workers storage parameter is taken as-is (capped only by
+    // max_parallel_maintenance_workers).
+    let rel_parallel_workers = heap.get_parallel_workers(-1);
+    if rel_parallel_workers != -1 {
+        return Ok(rel_parallel_workers.min(max_workers));
+    }
+    let (mut heap_blocks, mut reltuples, mut allvisfrac) = (0, 0.0, 0.0);
+    tableam::table_relation_estimate_size(
+        heap,
+        HEAP_OVERHEAD_BYTES_PER_TUPLE,
+        HEAP_USABLE_BYTES_PER_PAGE,
+        |_| Ok(0),
+        None,
+        &mut heap_blocks,
+        &mut reltuples,
+        &mut allvisfrac,
+    )?;
+    let mut parallel_workers = allpaths::compute_parallel_worker_for(
+        rel_parallel_workers,
+        true,
+        f64::from(heap_blocks),
+        -1.0,
+        max_workers,
+    );
+    // Leave each participant (the leader included) at least 32MB of
+    // maintenance_work_mem.
+    let maintenance_work_mem = init_small::globals::maintenance_work_mem();
+    while parallel_workers > 0 && maintenance_work_mem / (parallel_workers + 1) < 32 * 1024 {
+        parallel_workers -= 1;
+    }
+    Ok(parallel_workers)
+}
+
+// heapam_handler.c HEAP_OVERHEAD_BYTES_PER_TUPLE / HEAP_USABLE_BYTES_PER_PAGE.
+const HEAP_OVERHEAD_BYTES_PER_TUPLE: usize = 24 + 4;
+const HEAP_USABLE_BYTES_PER_PAGE: usize = types_core::BLCKSZ - 24;
+
 pub fn index_build<'mcx>(
     mcx: Mcx<'mcx>,
     heapRelation: &Relation<'mcx>,
     indexRelation: &Relation<'mcx>,
     indexInfo: &mut IndexInfo<'mcx>,
     isreindex: bool,
+    parallel: bool,
 ) -> PgResult<()> {
     let am_kind = types_relscan::IndexAmKind::from_relam(indexRelation.rd_rel.relam);
+
+    // Only btree builds in parallel here; C's GIN and BRIN parallel builds
+    // are not ported, so they build serially.
+    if parallel
+        && miscinit::IsNormalProcessingMode()
+        && am_kind == types_relscan::IndexAmKind::Btree
+    {
+        indexInfo.ii_ParallelWorkers = plan_create_index_workers(heapRelation, indexInfo)?;
+    }
+
+    let message = if indexInfo.ii_ParallelWorkers == 0 {
+        format!(
+            "building index \"{}\" on table \"{}\" serially",
+            indexRelation.name(),
+            heapRelation.name()
+        )
+    } else {
+        format!(
+            "building index \"{}\" on table \"{}\" with request for {} parallel workers",
+            indexRelation.name(),
+            heapRelation.name(),
+            indexInfo.ii_ParallelWorkers
+        )
+    };
+    elog_seams::ereport::call(
+        PgError::new(types_error::DEBUG1, message).with_location("index.c", 3034, "index_build"),
+    )?;
 
     let guard = miscinit::SecContextGuard::security_restricted(heapRelation.rd_rel.relowner);
     let save_nestlevel = guc::NewGUCNestLevel();
     guc::RestrictSearchPath()?;
 
-    // C index.c:3033-3043: report which build path was chosen. Every pgrust
-    // build is serial (ii_ParallelWorkers == 0 always — see the header
-    // comment), so only C's "serially" branch is reachable; the
-    // "with request for %d parallel workers" branch belongs to the
-    // unported parallel-build path. errmsg_internal: not translated.
-    elog_seams::ereport::call(
-        PgError::new(
-            types_error::DEBUG1,
-            format!(
-                "building index \"{}\" on table \"{}\" serially",
-                indexRelation.name(),
-                heapRelation.name()
-            ),
-        )
-        .with_location("index.c", 3034, "index_build"),
-    )?;
-
-    // Set up initial progress report status (index.c:3085-3102).
     {
         use backend_progress::progress::*;
         backend_progress::pgstat_progress_update_multi_param(
@@ -1351,8 +1366,8 @@ pub fn index_build<'mcx>(
         set_indcheckxmin(mcx, indexRelation.rd_id)?;
     }
 
-    index_update_stats(mcx, heapRelation, true, stats.0)?;
-    index_update_stats(mcx, indexRelation, false, stats.1)?;
+    index_update_stats(mcx, heapRelation, true, stats.0, isreindex)?;
+    index_update_stats(mcx, indexRelation, false, stats.1, isreindex)?;
 
     xact::CommandCounterIncrement()?;
 
@@ -1365,7 +1380,6 @@ pub fn index_build<'mcx>(
     Ok(())
 }
 
-// index.c:3125 broken-HOT-chain arm: flip pg_index.indcheckxmin in place.
 fn set_indcheckxmin<'mcx>(mcx: Mcx<'mcx>, indexId: Oid) -> PgResult<()> {
     const Anum_pg_index_indcheckxmin: usize = 12;
     let pg_index = table::table_open(mcx, INDEX_RELATION_ID, RowExclusiveLock)?;
@@ -1391,12 +1405,15 @@ fn set_indcheckxmin<'mcx>(mcx: Mcx<'mcx>, indexId: Oid) -> PgResult<()> {
     pg_index.close(RowExclusiveLock)
 }
 
-// index_update_stats (non-transactional inplace pg_class update).
+/// pg_am's heap (`pg_am.dat`).
+const HEAP_TABLE_AM_OID: Oid = 2;
+
 fn index_update_stats<'mcx>(
     mcx: Mcx<'mcx>,
     rel: &Relation<'mcx>,
     hasindex: bool,
     mut reltuples: f64,
+    rebuild: bool,
 ) -> PgResult<()> {
     let relid = rel.rd_id;
 
@@ -1423,7 +1440,12 @@ fn index_update_stats<'mcx>(
 
     let (mut relpages, mut relallvisible, mut relallfrozen) = (0u32, 0u32, 0u32);
     if update_stats {
-        relpages = bufmgr::RelationGetNumberOfBlocksInFork(rel, ForkNumber::MAIN_FORKNUM)?;
+        // pgrcolumnar's main fork is empty: its pages are ANALYZE's (`analyzable_relpages`), the planner's footer bytes.
+        relpages = match tableam::TableAm::of(rel) {
+            Some(tableam::TableAm::Pgrcolumnar) => tableam::pgrc_footer_size(rel)?
+                .map_or(0, |(_rows, bytes)| bytes.div_ceil(types_core::BLCKSZ as u64) as u32),
+            _ => bufmgr::RelationGetNumberOfBlocksInFork(rel, ForkNumber::MAIN_FORKNUM)?,
+        };
         if rel.rd_rel.relkind != RELKIND_INDEX {
             let counts = visibilitymap::visibilitymap_count(rel)?;
             relallvisible = counts.0;
@@ -1431,17 +1453,23 @@ fn index_update_stats<'mcx>(
         }
     }
 
+    // C3 S5 (D3889): a rebuild of an existing index (REINDEX, TRUNCATE's) leaves the relation's index list as it was:
+    // its statistics update, or the relcache message forced without one, is the storage's alone (inval
+    // `REL_SCOPE_STORAGE`) for a heap relation or a btree index. A new index (`rebuild` false) is the heap's new index
+    // list, a whole entry's change, as is a relhasindex that moves. The scope covers the in-place update's begin, which
+    // registers its messages (`CacheInvalidateHeapTupleInplace`, before the tuple is read): the relcache's relhasindex
+    // says whether it will move, and the tuple's is checked below.
+    let am = rel.rd_rel.relam;
+    let outer = inval::relcache_scope();
+    let storage = rebuild && rel.rd_rel.relhasindex == hasindex && (am == HEAP_TABLE_AM_OID || am == BTREE_AM_OID);
+    let scope = if storage { outer | inval::REL_SCOPE_STORAGE } else { outer };
+
     let pg_class = table::table_open(mcx, RELATION_RELATION_ID, RowExclusiveLock)?;
     let key = oid_scankey(Anum_pg_class_oid, relid);
-    let Some((ctup, inplace_state)) = genam::systable_inplace_update_begin(
-        mcx,
-        &pg_class,
-        catalog::ClassOidIndexId,
-        true,
-        &[key],
-    )?
+    let Some((ctup, inplace_state)) = inval::with_relcache_scope(scope, || {
+        genam::systable_inplace_update_begin(mcx, &pg_class, catalog::ClassOidIndexId, true, &[key])
+    })?
     else {
-        // index.c:2946-2947 elog(ERROR): catchable, not a backend abort.
         return Err(relation_tuple_missing(relid));
     };
 
@@ -1461,7 +1489,8 @@ fn index_update_stats<'mcx>(
         *dirty = true;
     };
 
-    if getattr(old, Anum_pg_class_relhasindex, desc).as_bool() != hasindex {
+    let hasindex_moved = getattr(old, Anum_pg_class_relhasindex, desc).as_bool() != hasindex;
+    if hasindex_moved {
         set(Anum_pg_class_relhasindex, Datum::from_bool(hasindex), &mut values, &mut replace, &mut dirty);
     }
     if update_stats {
@@ -1479,20 +1508,25 @@ fn index_update_stats<'mcx>(
         }
     }
 
-    if dirty {
-        let newtup = heaptuple::heap_modify_tuple(mcx, old, desc, &values, &isnull, &replace)?;
-        genam::systable_inplace_update_finish(mcx, inplace_state, newtup.as_tuple())?;
-    } else {
-        genam::systable_inplace_update_cancel(mcx, inplace_state)?;
-        inval::invalidate::CacheInvalidateRelcacheByTuple(old)?;
+    if storage && hasindex_moved {
+        // the relcache's relhasindex was not the row's: the change is the whole entry's (an unscoped registration of the
+        // row widens the scoped ones, inval `note_rel_scope` / `note_cat_scope`, before the in-place send)
+        inval::with_relcache_scope(outer, || inval::invalidate::CacheInvalidateHeapTuple(&pg_class, old, None))?;
     }
+    inval::with_relcache_scope(scope, || -> PgResult<()> {
+        if dirty {
+            let newtup = heaptuple::heap_modify_tuple(mcx, old, desc, &values, &isnull, &replace)?;
+            genam::systable_inplace_update_finish(mcx, inplace_state, newtup.as_tuple())?;
+        } else {
+            genam::systable_inplace_update_cancel(mcx, inplace_state)?;
+            inval::invalidate::CacheInvalidateRelcacheByTuple(old)?;
+        }
+        Ok(())
+    })?;
 
     pg_class.close(RowExclusiveLock)
 }
 
-// CompareIndexInfo (index.c); AM identity and per-key collation/opfamily come
-// from the two open index relations, attmap maps rel2's table attnos to
-// rel1's (build_attrmap_by_name shape).
 pub fn CompareIndexInfo<'mcx>(
     mcx: Mcx<'mcx>,
     info1: &IndexInfo<'mcx>,
@@ -1558,8 +1592,6 @@ pub fn CompareIndexInfo<'mcx>(
     if !map_list_equal(&info1.ii_Predicate, &info2.ii_Predicate)? {
         return Ok(false);
     }
-    // upstream 19e3aa704126 (18.6): Fix restore of partitions with exclusion constraints
-    // If they're exclusion indexes, their properties must be identical.
     if info1.ii_HasExclusion != info2.ii_HasExclusion {
         return Ok(false);
     }
@@ -1587,7 +1619,7 @@ fn index_build_dummy<'mcx>(
     isreindex: bool,
 ) -> types_error::PgResult<()> {
     let mut indexInfo = execindexing::BuildDummyIndexInfo(mcx, index_relation)?;
-    index_build(mcx, heap_relation, index_relation, &mut indexInfo, isreindex)
+    index_build(mcx, heap_relation, index_relation, &mut indexInfo, isreindex, false)
 }
 
 pub fn init_seams() {
@@ -1598,9 +1630,7 @@ pub fn init_seams() {
     indexam_seams::get_func_rettype::set(lsyscache::get_func_rettype);
 }
 
-// GetIndexInputType's expression-column arm (spgutils.c):
-// getBaseType(exprType(<indexcol's rd_indexprs entry>)). The expression
-// trees live only as long as the scratch context; only the Oid escapes.
+// The expression trees live only as long as the scratch context; only the Oid escapes.
 fn index_expression_input_type(
     rel: &Relation<'_>,
     indexcol_0based: usize,
@@ -1626,7 +1656,8 @@ pub use drop::{index_drop, IndexGetRelation};
 mod drop;
 pub use concurrent::{
     index_concurrently_build, index_concurrently_create_copy, index_concurrently_set_dead,
-    index_concurrently_swap, index_set_state_flags, validate_index, IndexStateFlagsAction,
+    index_concurrently_swap, index_set_state_flags, pgrc_indexes_set_unusable, validate_index,
+    IndexStateFlagsAction,
 };
 mod concurrent;
 pub use reindex::{
@@ -1642,9 +1673,6 @@ mod reindex;
 mod tests {
     use super::*;
 
-    // index.c raises each of these misses with
-    // elog(ERROR, "cache lookup failed for ... %u") -- catchable, level ERROR,
-    // SQLSTATE XX000.  pgrust used to panic!(), which aborts the backend.
     #[test]
     fn cache_lookup_failures_are_catchable_xx000() {
         for (e, want) in [
@@ -1659,10 +1687,6 @@ mod tests {
         }
     }
 
-    // index.c:2947 / relcache.c:3825 "could not find tuple for relation %u",
-    // relcache.c:3891 "relation \"%s\" does not have storage" and index.c:2588
-    // "incorrect attribute map" are elog(ERROR) sites -- catchable, level
-    // ERROR, SQLSTATE XX000, C's message bytes.  pgrust used to panic!().
     #[test]
     fn elog_error_sites_are_catchable_xx000() {
         for (e, want) in [
@@ -1676,9 +1700,6 @@ mod tests {
         }
     }
 
-    // index.c:2587 `if (attmap->maplen < info2->ii_IndexAttrNumbers[i])
-    // elog(ERROR, ...)`: a map of length n covers attribute numbers 1..=n
-    // (and 0, an expression column); n+1 is the error.
     #[test]
     fn attribute_map_length_check_matches_index_c() {
         assert!(check_attribute_map_covers(2, 0).is_ok());
@@ -1690,9 +1711,6 @@ mod tests {
         assert!(check_attribute_map_covers(0, 1).is_err());
     }
 
-    // index.h constr_flags bits; INDEX_CONSTR_CREATE_REMOVE_OLD_DEPS rides
-    // index_create -> index_constraint_create unfenced (the constraint lane
-    // deletes the index's AUTO column dependencies exactly where C does).
     #[test]
     fn constr_flags_match_index_h() {
         assert_eq!(INDEX_CONSTR_CREATE_MARK_AS_PRIMARY, 1 << 0);
@@ -1703,11 +1721,6 @@ mod tests {
         assert_eq!(INDEX_CONSTR_CREATE_WITHOUT_OVERLAPS, 1 << 5);
     }
 
-    // relation_get_index_att_options fetches per-column opclass options from
-    // pg_attribute.attoptions. That column is attnum 23; attmissingval (25)
-    // must not be confused for it, or every stored opclass option is silently
-    // dropped and GiST/BRIN indexes run with default parameters that disagree
-    // with the catalog and with C-built on-disk keys.
     #[test]
     fn attoptions_is_attnum_23() {
         let attnum_of = |name: &[u8]| -> i16 {

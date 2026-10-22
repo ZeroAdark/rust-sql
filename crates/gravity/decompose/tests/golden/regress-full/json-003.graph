@@ -1,0 +1,15 @@
+-- regress-full-json-003
+-- SELECT array_to_json(array(select 1 as a));
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0
+  source const
+  project (1=c23:1)
+  outs 1=w4:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3153($exec0))
+  outs 1=vl:call3153
+init_plan id=1 pipeline=p0 link=Array param=$exec0 raise-free
+mapped: Result SubPlan

@@ -26,7 +26,7 @@
 # build with PGRUST_WASM_PROFILE=wasm-release wasm/wasm-build.sh).
 set -u
 
-REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"  # the public workspace root (git toplevel is the monorepo)
 WEB="$REPO/wasm"
 
 command -v node >/dev/null || { echo "node not installed"; exit 2; }
@@ -53,7 +53,7 @@ done
 [ -n "${TZSRC:-}" ] || { echo "no timezone share dir under $PGBIN/../share"; exit 2; }
 
 . "$REPO/wasm/lib/scratch.sh"
-WORK="${WASM_WEB_E2E_DIR:-$(scratch_datadir pgrust-wasm-web-e2e)}"
+WORK="${WASM_WEB_E2E_DIR:-$(scratch_datadir pgrust-fast-wasm-web-e2e)}"
 scratch_adopt "$WORK"
 rm -rf "$WORK"; mkdir -p "$WORK"
 

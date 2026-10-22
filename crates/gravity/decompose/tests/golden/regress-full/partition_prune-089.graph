@@ -1,0 +1,41 @@
+-- regress-full-partition_prune-089
+-- explain (analyze, costs off, summary off, timing off, buffers off) execute mt_q1(15);
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n1@0 n0@3^
+  source index rel=45352 rti=2 am=heap index=45362
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  filter op525(v2.1, $1)
+  filter op96(op530(v2.1, c23:10), c23:5)
+  project (1=v2.1, 2=v2.2)
+  feed slot=0 ordered
+  outs 1=w8:val 2=w8:val
+p1 node=2 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n2@0 n0@3^
+  source index rel=45355 rti=3 am=heap index=45363
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  filter op525(v3.1, $1)
+  filter op96(op530(v3.1, c23:10), c23:5)
+  project (1=v3.1, 2=v3.2)
+  feed slot=0 ordered
+  outs 1=w8:val 2=w8:val
+p2 node=3 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n3@0 n0@3^
+  source index rel=45358 rti=4 am=heap index=45364
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  filter op525(v4.1, $1)
+  filter op96(op530(v4.1, c23:10), c23:5)
+  project (1=v4.1, 2=v4.2)
+  feed slot=0 ordered
+  outs 1=w8:val 2=w8:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  append merge slot=0 children=3 keys=2+:I32 prune=initial [rti=1 parts=3 present=(0,1,2) steps=1]
+  project (1=outer.1, 2j=outer.2)
+  outs 1=w4:val 2=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32]->[Count@8] 16B order=2+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p2 layout=[I32]->[Count@8] 16B order=2+
+mapped: MergeAppend IndexScan PartitionPruneInfo

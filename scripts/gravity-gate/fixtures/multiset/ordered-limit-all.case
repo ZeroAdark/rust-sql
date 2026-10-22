@@ -1,0 +1,13 @@
+# LIMIT ALL is no limit
+sql: SELECT g, x FROM t ORDER BY g LIMIT ALL;
+cols: g	x
+class: ordered 1
+verdict: match
+[pg]
+1	a
+1	b
+2	c
+[got]
+1	b
+1	a
+2	c

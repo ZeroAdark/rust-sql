@@ -1,0 +1,39 @@
+-- regress-full-subselect-026
+-- select q1, float8(count(*)) / (select count(*) from int8_tbl) from int8_tbl group by q1 order by q1;
+graph pipelines=4 breakers=2 init_plans=1 root=p3
+p0 node=4 eligible rows=5 end=breaker(slot=0 PlainAgg)
+  nodes n4@0 n3@1^
+  source range rel=16403 rti=3 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=v3.1, 2=v3.2)
+  outs 1=w8:val 2=w8:val
+p1 node=3 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n3@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val
+p2 node=2 eligible rows=5 end=breaker(slot=0 HashAgg)
+  desc owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n1@1 n0@2^
+  source range rel=16403 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  project (1=outer.1)
+  outs 1=w8:val
+  outs 1=w8:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p2
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=op593(fn482(agg2803*()), fn482($exec0)))
+  outs 1=w8:val 2=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I64]->[Count@8] 16B order=1+
+group slot=0 producer=p0 node=3 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+group slot=0 producer=p2 node=0 form=Sorted hints=[] layout=[I64]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I64 attno=0 type=20 expr=outer.1
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+init_plan id=1 pipeline=p1 link=Expr param=$exec0 raise-free
+mapped: SeqScan Agg SubPlan

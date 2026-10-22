@@ -1,8 +1,3 @@
-//! pg_constraint.c create lane: CreateConstraintEntry full C surface
-//! (CHECK/NOT NULL/PRIMARY/UNIQUE/FOREIGN; exclusion vocab arrives with its
-//! DDL) with C's auto/normal dependency records; CHECK expression
-//! dependencies ride pg_depend's recordDependencyOnSingleRelExpr walker.
-
 #![allow(non_snake_case, non_upper_case_globals)]
 
 use datum::Datum;
@@ -69,7 +64,7 @@ fn eq_key(attno: AttrNumber, func: RegProcedure, arg: Datum) -> ScanKeyData {
 }
 
 // A name of NAMEDATALEN+ bytes keeps its first NAMEDATALEN bytes, no NUL, so
-// nameeq's strncmp never matches it (C passes CStringGetDatum(conname)).
+// nameeq's strncmp never matches it.
 fn name_arg<'mcx>(mcx: Mcx<'mcx>, name: impl AsRef<[u8]>) -> PgResult<PgVec<'mcx, u8>> {
     let name = name.as_ref();
     let n = NAMEDATALEN as usize;
@@ -81,10 +76,8 @@ fn name_arg<'mcx>(mcx: Mcx<'mcx>, name: impl AsRef<[u8]>) -> PgResult<PgVec<'mcx
 }
 
 pub struct ConstraintEntry<'a> {
-    /// conname as C carries it: bytes, not text. A generated name
-    /// (makeObjectName) can be clipped inside a multibyte character in a
-    /// SQL_ASCII database and is still stored verbatim (pg_constraint.c
-    /// namestrcpy).
+    /// A generated name can be clipped inside a multibyte character in a
+    /// SQL_ASCII database and is still stored verbatim.
     pub name: &'a [u8],
     pub namespace_id: Oid,
     pub contype: u8,
@@ -94,8 +87,6 @@ pub struct ConstraintEntry<'a> {
     pub is_validated: bool,
     pub parent_constr_id: Oid,
     pub relid: Oid,
-    /// C constraintKey with constraintNTotalKeys entries; n_keys is the
-    /// key-column prefix (constraintNKeys).
     pub conkey: &'a [i16],
     pub n_keys: usize,
     pub domain_id: Oid,
@@ -156,8 +147,7 @@ impl<'a> ConstraintEntry<'a> {
     }
 }
 
-// upstream 2780538433fc (18.5): NB: caller is responsible for ensuring the
-// user has USAGE on all types con_expr depends on.
+// NB: caller is responsible for ensuring the user has USAGE on all types con_expr depends on.
 pub fn CreateConstraintEntry<'mcx>(mcx: Mcx<'mcx>, e: &ConstraintEntry<'_>) -> PgResult<Oid> {
     use types_core::OIDOID;
     debug_assert!(
@@ -212,8 +202,7 @@ pub fn CreateConstraintEntry<'mcx>(mcx: Mcx<'mcx>, e: &ConstraintEntry<'_>) -> P
         v.extend(vals.iter().map(|&k| Datum::from_oid(k)));
         Ok(Some(datum::array_build::construct_array_image(mcx, &v, OIDOID, 4, true, b'i')?))
     };
-    // conkey holds the constraintNKeys key-column prefix (pg_constraint.c:
-    // 117-127); included columns appear only in the dependency records below.
+    // Included columns appear only in the dependency records below.
     let arrays = [
         (Anum_pg_constraint_conkey, i16_array(&e.conkey[..e.n_keys])?),
         (Anum_pg_constraint_confkey, i16_array(e.confkey)?),
@@ -302,8 +291,6 @@ pub fn CreateConstraintEntry<'mcx>(mcx: Mcx<'mcx>, e: &ConstraintEntry<'_>) -> P
     Ok(con_oid)
 }
 
-// recordDependencyOnSingleRelExpr (dependency.c) over the CHECK conExpr,
-// NORMAL/NORMAL, reverse_self=false (pg_constraint.c:387).
 fn record_check_expr_dependencies<'mcx>(
     mcx: Mcx<'mcx>,
     conobject: &pg_depend::ObjectAddress,
@@ -345,7 +332,6 @@ impl NotNullConTup {
     }
 }
 
-// findNotNullConstraintAttnum (pg_constraint.c), decoded-form return.
 pub fn findNotNullConstraintAttnum<'mcx>(
     mcx: Mcx<'mcx>,
     relid: Oid,
@@ -404,7 +390,6 @@ pub fn findNotNullConstraintAttnum<'mcx>(
     Ok(found)
 }
 
-// extractNotNullColumn (pg_constraint.c): sole conkey element.
 pub fn extract_notnull_column<'mcx>(
     mcx: Mcx<'mcx>,
     tup: &types_tuple::HeapTupleData<'mcx>,
@@ -420,15 +405,12 @@ pub fn extract_notnull_column<'mcx>(
     // SAFETY: live int2[] varlena image through its extent.
     let image = unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
     let payload = varlena::open_image(mcx, image)?;
-    // DatumGetArrayTypeP: rebuild the 4B-header form (image may be packed).
     let body = payload.as_bytes();
     let total = body.len() + 4;
     let mut full: PgVec<'_, u8> = mcx::vec_with_capacity_in(mcx, total)?;
     mcx::vec_append_bytes(&mut full, &(((total as u32) << 2).to_ne_bytes()))?;
     mcx::vec_append_bytes(&mut full, body)?;
     let elems = datum::array_build::deconstruct_array_image(mcx, &full, 2, true, b's')?;
-    // pg_constraint.c:716-720: ARR_DIMS(arr)[0] != 1 is
-    // elog(ERROR, "conkey is not a 1-D smallint array") — XX000, catchable.
     if elems.len() != 1 {
         return Err(conkey_not_1d_smallint());
     }
@@ -464,8 +446,6 @@ impl ConShape {
     }
 }
 
-// The ATExecDropConstraint / rename_constraint_internal lookup: the
-// (conrelid, contypid=0, conname) row, decoded.
 pub fn findConstraintByName<'mcx>(
     mcx: Mcx<'mcx>,
     relid: Oid,
@@ -533,9 +513,7 @@ pub fn findConstraintByName<'mcx>(
     Ok(found)
 }
 
-// The convalidated=true flip shared by the Queue*ConstraintValidation arms
-// (tablecmds.c); DIVERGENCE: C updates the tuple found by the caller's name
-// scan, this re-finds the row by oid (catalog-only, same row).
+// DIVERGENCE: C updates the tuple found by the caller's name scan, this re-finds the row by oid (catalog-only, same row).
 pub fn SetConstraintValidated<'mcx>(mcx: Mcx<'mcx>, con_id: Oid) -> PgResult<()> {
     let con_rel = table::table_open(mcx, CONSTRAINT_RELATION_ID, RowExclusiveLock)?;
     let keys = [eq_key(Anum_pg_constraint_oid, F_OIDEQ, Datum::from_oid(con_id))];
@@ -559,7 +537,6 @@ pub fn SetConstraintValidated<'mcx>(mcx: Mcx<'mcx>, con_id: Oid) -> PgResult<()>
     con_rel.close(RowExclusiveLock)
 }
 
-// The QueueCheckConstraintValidation conbin fetch (tablecmds.c).
 pub fn constraint_conbin<'mcx>(mcx: Mcx<'mcx>, con_id: Oid) -> PgResult<mcx::PgString<'mcx>> {
     let con_rel = table::table_open(mcx, CONSTRAINT_RELATION_ID, AccessShareLock)?;
     let keys = [eq_key(Anum_pg_constraint_oid, F_OIDEQ, Datum::from_oid(con_id))];
@@ -588,7 +565,6 @@ pub fn constraint_conbin<'mcx>(mcx: Mcx<'mcx>, con_id: Oid) -> PgResult<mcx::PgS
     Ok(s)
 }
 
-// RenameConstraintById (pg_constraint.c) minus the object-access hook.
 pub fn RenameConstraintById<'mcx>(mcx: Mcx<'mcx>, con_id: Oid, newname: &str) -> PgResult<()> {
     let con_rel = table::table_open(mcx, CONSTRAINT_RELATION_ID, RowExclusiveLock)?;
     let keys = [eq_key(Anum_pg_constraint_oid, F_OIDEQ, Datum::from_oid(con_id))];
@@ -660,8 +636,6 @@ pub enum ConstraintCategory {
     Domain,
 }
 
-// findDomainNotNullConstraint (pg_constraint.c): the validated NOTNULL row's
-// oid (C returns the copied tuple; callers use only the oid).
 pub fn findDomainNotNullConstraint<'mcx>(mcx: Mcx<'mcx>, typid: Oid) -> PgResult<Option<Oid>> {
     let con_rel = table::table_open(mcx, CONSTRAINT_RELATION_ID, AccessShareLock)?;
     // C keys only contypid (index column 2); the conrelid=0 prefix key is
@@ -701,7 +675,6 @@ pub fn findDomainNotNullConstraint<'mcx>(mcx: Mcx<'mcx>, typid: Oid) -> PgResult
     Ok(found)
 }
 
-// get_domain_constraint_oid (pg_constraint.c).
 pub fn get_domain_constraint_oid<'mcx>(
     mcx: Mcx<'mcx>,
     typid: Oid,
@@ -750,8 +723,6 @@ pub fn get_domain_constraint_oid<'mcx>(
     Ok(con_oid)
 }
 
-// AlterConstraintNamespaces (pg_constraint.c); objs_moved carries the
-// caller's ObjectAddresses dedup set.
 pub fn AlterConstraintNamespaces<'mcx>(
     mcx: Mcx<'mcx>,
     owner_id: Oid,
@@ -843,8 +814,6 @@ pub fn ConstraintNameIsUsed<'mcx>(
     Ok(found)
 }
 
-// get_relation_constraint_attnos-free slice of RemoveConstraintById
-// (pg_constraint.c): CHECK decrements pg_class.relchecks.
 pub fn RemoveConstraintById<'mcx>(mcx: Mcx<'mcx>, con_id: Oid) -> PgResult<()> {
     let con_rel = table::table_open(mcx, CONSTRAINT_RELATION_ID, RowExclusiveLock)?;
     let keys = [eq_key(Anum_pg_constraint_oid, F_OIDEQ, Datum::from_oid(con_id))];
@@ -877,8 +846,6 @@ pub fn RemoveConstraintById<'mcx>(mcx: Mcx<'mcx>, con_id: Oid) -> PgResult<()> {
         }
         rel.close(types_rel::NoLock)?;
     } else if contypid == InvalidOid {
-        // pg_constraint.c:985: elog(ERROR, "constraint %u is not of a known
-        // type") — XX000, catchable; the backend survives.
         return Err(Box::new(PgError::error(format!("constraint {con_id} is not of a known type"))));
     }
     let tid = tup.t_self;
@@ -928,8 +895,6 @@ fn decrement_relchecks<'mcx>(mcx: Mcx<'mcx>, relid: Oid, relname: &str) -> PgRes
         types_tuple::heap_getattr(reltup, Anum_pg_class_relchecks as i32, desc, &mut isnull)
     }
     .as_i16();
-    // pg_constraint.c:961-963: elog(ERROR, "relation \"%s\" has relchecks =
-    // 0", RelationGetRelationName(rel)) — XX000 naming the relation.
     if relchecks == 0 {
         return Err(Box::new(PgError::error(format!("relation \"{relname}\" has relchecks = 0"))));
     }
@@ -950,8 +915,6 @@ fn decrement_relchecks<'mcx>(mcx: Mcx<'mcx>, relid: Oid, relname: &str) -> PgRes
     pgrel.close(RowExclusiveLock)
 }
 
-// ChooseConstraintName (pg_constraint.c): "name1_name2_label[N]" probed
-// against pg_constraint and the in-flight `others` list.
 pub fn ChooseConstraintName<'mcx>(
     mcx: Mcx<'mcx>,
     name1: &str,
@@ -962,9 +925,7 @@ pub fn ChooseConstraintName<'mcx>(
 ) -> PgResult<PgVec<'mcx, u8>> {
     let con_rel = table::table_open(mcx, CONSTRAINT_RELATION_ID, AccessShareLock)?;
     let mut pass = 0;
-    // C tries the unmodified label first UNLESS it's empty; an empty label
-    // starts at "<label>1" (pg_constraint.c:867-871) — FK partition clones
-    // (label "") are named parent_1, parent_2, never "parent_".
+    // An empty label starts at "<label>1" — FK partition clones (label "") are named parent_1, parent_2, never "parent_".
     let mut modlabel = if label.is_empty() {
         pass += 1;
         let mut m = mcx::PgString::from_str_in(label, mcx)?;
@@ -1007,15 +968,10 @@ pub fn ChooseConstraintName<'mcx>(
     Ok(conname)
 }
 
-// makeObjectName (indexcmds.c:2518-2577): truncate the longer of name1/name2
-// until "name1[_name2]_label" fits in NAMEDATALEN-1 bytes. The budget is
-// BYTES: pg_mbcliplen backs each piece off to a character boundary under
+// The budget is BYTES: pg_mbcliplen backs each piece off to a character boundary under
 // the database encoding, and under SQL_ASCII (single-byte) that boundary is
 // wherever the byte budget lands -- inside a multibyte character when the
-// input carries one. C stores those bytes as-is (the name is a NameData,
-// not text), so the result is a byte string, never a `&str`. This is the
-// ONE makeObjectName of the port: indexcmds (ChooseRelationName,
-// ChooseIndexName) and ChooseConstraintName both call it.
+// input carries one.
 pub fn make_object_name<'mcx>(
     mcx: Mcx<'mcx>,
     name1: &[u8],
@@ -1027,8 +983,6 @@ pub fn make_object_name<'mcx>(
     })
 }
 
-/// makeObjectName over an explicit `pg_mbcliplen(s, n, n)`; the unit tests
-/// pin the byte arithmetic without the encoding seam.
 pub fn make_object_name_with<'mcx>(
     mcx: Mcx<'mcx>,
     name1: &[u8],
@@ -1065,12 +1019,8 @@ pub fn make_object_name_with<'mcx>(
     Ok(s)
 }
 
-/// The str-typed consumers of a generated name (a serial sequence's
-/// RangeVar, a foreign-key or CHECK constraint whose name rides the
-/// parse-tree / trigger machinery as `&str`): a byte-clipped name that is
-/// not UTF-8 -- only reachable in a SQL_ASCII database with a multibyte
-/// identifier at the clip -- is a typed refusal there, never a panic. The
-/// index/constraint catalog writes carry the bytes verbatim like C.
+/// A byte-clipped name that is not UTF-8 -- only reachable in a SQL_ASCII database with
+/// a multibyte identifier at the clip -- is a typed refusal there, never a panic.
 pub fn generated_name_utf8<'a>(name: &'a [u8], what: &str) -> PgResult<&'a str> {
     core::str::from_utf8(name).map_err(|_| {
         Box::new(
@@ -1122,7 +1072,6 @@ fn name_str<'mcx>(mcx: Mcx<'mcx>, d: Datum) -> PgResult<&'mcx str> {
     Ok(unsafe { core::str::from_utf8_unchecked(v.leak()) })
 }
 
-// extractNotNullColumn (pg_constraint.c): conkey[0] of a not-null row.
 fn extract_not_null_column<'mcx>(mcx: Mcx<'mcx>, conkey: Datum) -> PgResult<AttrNumber> {
     let p = conkey.as_usize() as *const u8;
     // SAFETY: not-null int2[] column: live varlena image through its extent.
@@ -1134,14 +1083,12 @@ fn extract_not_null_column<'mcx>(mcx: Mcx<'mcx>, conkey: Datum) -> PgResult<Attr
     mcx::vec_append_bytes(&mut full, &(((total as u32) << 2).to_ne_bytes()))?;
     mcx::vec_append_bytes(&mut full, body)?;
     let elems = datum::array_build::deconstruct_array_image(mcx, &full, 2, true, b's')?;
-    // pg_constraint.c:716-720: elog(ERROR, "conkey is not a 1-D smallint array").
     if elems.len() != 1 {
         return Err(conkey_not_1d_smallint());
     }
     Ok(elems[0].as_i16())
 }
 
-// RelationGetNotNullConstraints, cooked=false arm (raw Constraint nodes).
 pub fn RelationGetNotNullConstraints<'mcx>(
     mcx: Mcx<'mcx>,
     rel: &types_rel::Relation<'mcx>,
@@ -1203,9 +1150,6 @@ pub fn RelationGetNotNullConstraints<'mcx>(
     Ok(notnulls)
 }
 
-// get_relation_constraint_oid / get_domain_constraint_oid (pg_constraint.c);
-// both walk ConstraintRelidTypidNameIndexId with one of (conrelid, contypid)
-// pinned to InvalidOid, matching conname in the loop.
 fn constraint_oid_by_name<'mcx>(
     mcx: Mcx<'mcx>,
     relid: Oid,
@@ -1250,14 +1194,8 @@ pub fn get_relation_constraint_oid<'mcx>(
     Ok(found)
 }
 
-// pg_constraint.c raises every one of these misses with
-// `elog(ERROR, "cache lookup failed for ... %u", oid)` (:925, :956, :1016,
-// :1141, :1689) — catchable, SQLSTATE XX000 via elog's default for ERROR,
-// never a backend abort.
 #[cold]
 #[inline(never)]
-// pg_constraint.c:720 / :1309 / :1509: elog(ERROR, "conkey is not a 1-D
-// smallint array") — XX000 at level ERROR.
 fn conkey_not_1d_smallint() -> Box<PgError> {
     Box::new(PgError::error("conkey is not a 1-D smallint array".to_string()))
 }
@@ -1296,9 +1234,7 @@ fn constraint_does_not_exist<'mcx>(
     ))
 }
 
-// get_relation_constraint_attnos (pg_constraint.c): constraint oid + raw
-// conkey attnums for the named relation constraint; C returns a Bitmapset
-// offset by FirstLowInvalidHeapAttributeNumber — that offset is the caller's.
+// C returns a Bitmapset offset by FirstLowInvalidHeapAttributeNumber — that offset is the caller's.
 pub fn get_relation_constraint_attnos<'mcx>(
     mcx: Mcx<'mcx>,
     relid: Oid,
@@ -1326,8 +1262,6 @@ pub fn get_relation_constraint_attnos<'mcx>(
         let desc = con_rel.descr();
         constraint_oid = getattr(&con_rel, tup, Anum_pg_constraint_oid).0.as_oid();
         if let Some(img) = fk_array_image(mcx, tup, desc, Anum_pg_constraint_conkey)? {
-            // pg_constraint.c:1304-1319: numcols is not bounded by
-            // INDEX_MAX_KEYS here; a negative dims[0] is the same elog.
             conattnos = fk_i16_vec(mcx, &img, "conkey is not a 1-D smallint array")?;
         }
     }
@@ -1339,9 +1273,7 @@ pub fn get_relation_constraint_attnos<'mcx>(
     Ok((constraint_oid, conattnos))
 }
 
-// get_primary_key_attnos (pg_constraint.c:1450): the rel's PK column attnums
-// and constraint OID, or None when there is no usable PK (a deferrable PK
-// stops the search when deferrable_ok is false — a table has at most one PK).
+// A deferrable PK stops the search when deferrable_ok is false — a table has at most one PK.
 pub fn get_primary_key_attnos<'mcx>(
     mcx: Mcx<'mcx>,
     relid: Oid,
@@ -1368,13 +1300,10 @@ pub fn get_primary_key_attnos<'mcx>(
             break;
         }
         let con_oid = getattr(&con_rel, tup, Anum_pg_constraint_oid).0.as_oid();
-        // C: elog(ERROR, "null conkey for constraint %u") — pg_constraint.c:1498.
         let img = fk_array_image(mcx, tup, con_rel.descr(), Anum_pg_constraint_conkey)?
             .ok_or_else(|| {
                 Box::new(PgError::error(format!("null conkey for constraint {con_oid}")))
             })?;
-        // pg_constraint.c:1504-1509: numkeys < 0 is the same elog; the count
-        // is otherwise unbounded.
         let pkattnos = fk_i16_vec(mcx, &img, "conkey is not a 1-D smallint array")?;
         result = Some((pkattnos, con_oid));
         break;
@@ -1384,10 +1313,6 @@ pub fn get_primary_key_attnos<'mcx>(
     Ok(result)
 }
 
-// check_functional_grouping (pg_constraint.c:1740): can every column of relid
-// be proven functionally dependent on grouping_columns? Only a non-deferrable
-// PK that is a subset of the grouping columns qualifies; the proof's
-// constraint OID is appended to constraint_deps.
 pub fn check_functional_grouping<'mcx>(
     mcx: Mcx<'mcx>,
     relid: Oid,
@@ -1408,8 +1333,6 @@ pub fn check_functional_grouping<'mcx>(
     Ok(false)
 }
 
-// The catalog-free core of check_functional_grouping: pkattnos ⊆ the attnos
-// of grouping_columns Vars matching (varno, varlevelsup).
 fn pk_subset_of_grouping_columns(
     pkattnos: &[i16],
     varno: i32,
@@ -1489,8 +1412,6 @@ pub fn get_relation_idx_constraint_oid<'mcx>(
     Ok(constraint_id)
 }
 
-// ConstraintSetParentConstraint, attach direction only (parent valid); the
-// detach arm rides the DETACH PARTITION lane.
 pub fn ConstraintSetParentConstraint<'mcx>(
     mcx: Mcx<'mcx>,
     child_constr_id: Oid,
@@ -1528,16 +1449,11 @@ pub fn ConstraintSetParentConstraint<'mcx>(
         replace[anum as usize - 1] = true;
     };
     if parent_constr_id != InvalidOid {
-        // pg_constraint.c:1150-1152: C's Assert(coninhcount == 0) is a
-        // cassert-only arm; the catchable check is on conparentid —
-        // elog(ERROR, "constraint %u already has a parent constraint").
         if conparentid != InvalidOid {
             return Err(Box::new(PgError::error(format!(
                 "constraint {child_constr_id} already has a parent constraint"
             ))));
         }
-        // pg_constraint.c:1155-1159: pg_add_s16_overflow(coninhcount, 1) →
-        // ERRCODE_PROGRAM_LIMIT_EXCEEDED "too many inheritance parents".
         let Some(inhcount) = prior_inhcount.checked_add(1) else {
             return Err(Box::new(
                 PgError::new(ERROR, "too many inheritance parents".to_string())
@@ -1548,8 +1464,6 @@ pub fn ConstraintSetParentConstraint<'mcx>(
         set(Anum_pg_constraint_coninhcount, Datum::from_i16(inhcount));
         set(Anum_pg_constraint_conparentid, Datum::from_oid(parent_constr_id));
     } else {
-        // pg_constraint.c:1174-1180: coninhcount-- (int16 arithmetic; the
-        // Assert(coninhcount == 0) after it is cassert-only).
         set(Anum_pg_constraint_conislocal, Datum::from_bool(true));
         set(Anum_pg_constraint_coninhcount, Datum::from_i16(prior_inhcount.wrapping_sub(1)));
         set(Anum_pg_constraint_conparentid, Datum::from_oid(InvalidOid));
@@ -1585,8 +1499,6 @@ pub fn ConstraintSetParentConstraint<'mcx>(
     con_rel.close(RowExclusiveLock)
 }
 
-// extractNotNullColumn (pg_constraint.c), callable from external
-// pg_constraint scans.
 pub fn extractNotNullColumn<'mcx>(
     mcx: Mcx<'mcx>,
     tup: &types_tuple::HeapTupleData<'mcx>,
@@ -1595,7 +1507,6 @@ pub fn extractNotNullColumn<'mcx>(
     extract_notnull_column(mcx, tup, desc)
 }
 
-// Single-row pg_constraint fixed-width field update by constraint OID.
 pub fn update_constraint_fields<'mcx>(
     mcx: Mcx<'mcx>,
     con_id: Oid,
@@ -1624,8 +1535,6 @@ pub fn update_constraint_fields<'mcx>(
     con_rel.close(RowExclusiveLock)
 }
 
-// AdjustNotNullInheritance (pg_constraint.c): relname/attname supplied by the
-// caller (C reads them via syscache getters).
 pub fn AdjustNotNullInheritance<'mcx>(
     mcx: Mcx<'mcx>,
     relid: Oid,
@@ -1741,7 +1650,6 @@ fn fk_array_image<'mcx>(
     // SAFETY: live varlena image through its extent.
     let image = unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
     let payload = varlena::open_image(mcx, image)?;
-    // DatumGetArrayTypeP: rebuild the 4B-header form (image may be packed).
     let body = payload.as_bytes();
     let total = body.len() + 4;
     let mut full: PgVec<'mcx, u8> = mcx::vec_with_capacity_in(mcx, total)?;
@@ -1750,12 +1658,6 @@ fn fk_array_image<'mcx>(
     Ok(Some(full))
 }
 
-// C's malformed-array arms are elog(ERROR, ...) — XX000, the backend
-// survives (pg_constraint.c DeconstructFkConstraintRow) — not panics.
-//
-// ARR_NDIM / ARR_HASNULL / ARR_ELEMTYPE check; returns ARR_DIMS(arr)[0]
-// as C reads it (an int, possibly negative — each C site checks the sign
-// with its own message, so the caller decides).
 fn fk_array_nelems(img: &[u8], elemtype: Oid, errmsg: &str) -> PgResult<i32> {
     let rd = |off: usize| i32::from_ne_bytes(img[off..off + 4].try_into().unwrap());
     if !(img.len() >= ARR_1D_HDRSZ && rd(4) == 1 && rd(8) == 0 && rd(12) as u32 == elemtype) {
@@ -1764,9 +1666,6 @@ fn fk_array_nelems(img: &[u8], elemtype: Oid, errmsg: &str) -> PgResult<i32> {
     Ok(rd(16))
 }
 
-// The elements the image actually holds for a claimed count: C reads
-// ARR_DATA_PTR blindly; an image shorter than its dims[0] is reported with
-// the caller's elog rather than read past the varlena.
 fn fk_array_body_len(img: &[u8], n: i32, elemsize: usize, errmsg: &str) -> PgResult<usize> {
     if n < 0 {
         return Err(Box::new(PgError::error(errmsg.to_string())));
@@ -1778,10 +1677,6 @@ fn fk_array_body_len(img: &[u8], n: i32, elemsize: usize, errmsg: &str) -> PgRes
     Ok(n)
 }
 
-// Fixed INDEX_MAX_KEYS-slot readers (DeconstructFkConstraintRow arms): copy
-// up to INDEX_MAX_KEYS elements and hand back C's raw count for the
-// caller's own range check (pg_constraint.c:1562 "foreign key constraint
-// cannot have %d columns").
 fn fk_i16_array(img: &[u8], errmsg: &str, out: &mut [i16; INDEX_MAX_KEYS]) -> PgResult<i32> {
     let n = fk_array_nelems(img, INT2OID, errmsg)?;
     let have = fk_array_body_len(img, n, 2, errmsg)?;
@@ -1802,9 +1697,6 @@ fn fk_oid_array(img: &[u8], errmsg: &str, out: &mut [Oid; INDEX_MAX_KEYS]) -> Pg
     Ok(n)
 }
 
-// Unbounded reader (get_relation_constraint_attnos :1304-1319,
-// get_primary_key_attnos :1504-1515): C builds a Bitmapset from every
-// element; a negative dims[0] is the same "not a 1-D smallint array" elog.
 fn fk_i16_vec<'mcx>(mcx: Mcx<'mcx>, img: &[u8], errmsg: &str) -> PgResult<PgVec<'mcx, i16>> {
     let n = fk_array_nelems(img, INT2OID, errmsg)?;
     let n = fk_array_body_len(img, n, 2, errmsg)?;
@@ -1832,9 +1724,6 @@ pub fn DeconstructFkConstraintRow<'mcx>(
         fk_del_set_cols: [0; INDEX_MAX_KEYS],
     };
 
-    // C reads the NOT NULL attrs via SysCacheGetAttrNotNull; a null is its
-    // elog(ERROR, "unexpected null value in cached tuple ...") — XX000, the
-    // backend survives — not a panic.
     let req = |attnum: AttrNumber, name: &str| -> PgResult<PgVec<'mcx, u8>> {
         fk_array_image(mcx, tup, desc, attnum)?.ok_or_else(|| {
             Box::new(PgError::error(format!(
@@ -1845,7 +1734,6 @@ pub fn DeconstructFkConstraintRow<'mcx>(
 
     let conkey = req(Anum_pg_constraint_conkey, "conkey")?;
     let numkeys = fk_i16_array(&conkey, "conkey is not a 1-D smallint array", &mut out.conkey)?;
-    // pg_constraint.c:1562-1563.
     if !(numkeys > 0 && numkeys <= INDEX_MAX_KEYS as i32) {
         return Err(Box::new(PgError::error(format!(
             "foreign key constraint cannot have {numkeys} columns"
@@ -1872,9 +1760,6 @@ pub fn DeconstructFkConstraintRow<'mcx>(
     }
 
     if let Some(img) = fk_array_image(mcx, tup, desc, Anum_pg_constraint_confdelsetcols)? {
-        // pg_constraint.c:1633-1641 copies dims[0] elements into the
-        // caller's INDEX_MAX_KEYS buffer unchecked; a wider image is
-        // reported with the same elog rather than overrun.
         let bad = "confdelsetcols is not a 1-D smallint array";
         let n = fk_i16_array(&img, bad, &mut out.fk_del_set_cols)?;
         if n > INDEX_MAX_KEYS as i32 {
@@ -1886,13 +1771,9 @@ pub fn DeconstructFkConstraintRow<'mcx>(
     Ok(out)
 }
 
-// pg_operator.dat
 const OID_RANGE_INTERSECT_RANGE_OP: Oid = 3900;
 const OID_MULTIRANGE_INTERSECT_MULTIRANGE_OP: Oid = 4394;
 
-// GetOperatorFromCompareType (indexcmds.c), FindFKPeriodOpers callers' slice:
-// the DDL-time lookup in DefineIndex keeps its own copy (richer errors);
-// runtime RI lookups land here below the tablecmds/indexcmds cycle.
 fn operator_from_compare_type(
     opclass: Oid,
     rhstype: Oid,
@@ -1929,8 +1810,6 @@ fn operator_from_compare_type(
     Ok((opid, strat))
 }
 
-// FindFKPeriodOpers (pg_constraint.c): (containedby, agged containedby,
-// intersect) operators for the PERIOD part of a temporal foreign key.
 pub fn FindFKPeriodOpers(opclass: Oid) -> PgResult<(Oid, Oid, Oid)> {
     let Some((_, opcintype)) = lsyscache::get_opclass_opfamily_and_input_type(opclass)? else {
         return Err(opclass_lookup_failed(opclass));
@@ -1961,9 +1840,6 @@ mod tests {
     use super::pk_subset_of_grouping_columns;
     use mcx::MemoryContext;
 
-    // C pg_constraint.c reports each of these misses with
-    // elog(ERROR, "cache lookup failed for ... %u") — catchable XX000 at level
-    // ERROR.  pgrust used to panic!(), aborting the backend.
     #[test]
     fn cache_lookup_failures_are_catchable_xx000() {
         for (e, want) in [
@@ -1977,8 +1853,6 @@ mod tests {
         }
     }
 
-    // A 4B-header int2[] image: vl_len, ndim, dataoffset, elemtype,
-    // dims[0], lbound[0], then the elements.
     fn int2_array_image(ndim: i32, dims0: i32, elems: &[i16]) -> Vec<u8> {
         let total = super::ARR_1D_HDRSZ + 2 * elems.len();
         let mut v = Vec::with_capacity(total);
@@ -1994,10 +1868,6 @@ mod tests {
         v
     }
 
-    // pg_constraint.c:1309 (get_relation_constraint_attnos) and :1506
-    // (get_primary_key_attnos) reject a negative dims[0] with
-    // elog(ERROR, "conkey is not a 1-D smallint array") — XX000, catchable.
-    // pgrust cast the negative count to usize and ran off the image.
     #[test]
     fn negative_conkey_dims_is_catchable_xx000() {
         let img = int2_array_image(1, -1, &[1]);
@@ -2008,7 +1878,6 @@ mod tests {
         assert_eq!(e.message(), "conkey is not a 1-D smallint array");
         assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
         assert_eq!(e.level(), types_error::ERROR);
-        // The ndim/elemtype arms are unchanged: a 2-D image is the same elog.
         let msg = "conkey is not a 1-D smallint array";
         let e = super::fk_i16_array(&int2_array_image(2, 1, &[1]), msg, &mut out)
             .err()
@@ -2024,27 +1893,21 @@ mod tests {
     fn pk_subset_matches_only_full_pk_at_varno_level() {
         let cx = MemoryContext::new("t");
         let mcx = cx.mcx();
-        // GROUP BY t1.a, t1.b, t2.a  (varno 1 attnos {1,2}; varno 2 attno 1)
         let cols = [
             Node::mk_var(mcx, 1, 1, INT4OID, -1, InvalidOid, 0).unwrap(),
             Node::mk_var(mcx, 1, 2, INT4OID, -1, InvalidOid, 0).unwrap(),
             Node::mk_var(mcx, 2, 1, INT4OID, -1, InvalidOid, 0).unwrap(),
         ];
-        // PK(a) and PK(a,b) of varno 1 are covered.
         assert!(pk_subset_of_grouping_columns(&[1], 1, 0, &cols));
         assert!(pk_subset_of_grouping_columns(&[1, 2], 1, 0, &cols));
-        // Partial coverage fails: PK(a,b,c) of varno 1, PK(a,b) of varno 2.
         assert!(!pk_subset_of_grouping_columns(&[1, 2, 3], 1, 0, &cols));
         assert!(!pk_subset_of_grouping_columns(&[1, 2], 2, 0, &cols));
-        // A grouping Var of another level does not count.
         let upper = [Node::mk_var(mcx, 1, 1, INT4OID, -1, InvalidOid, 1).unwrap()];
         assert!(!pk_subset_of_grouping_columns(&[1], 1, 0, &upper));
         assert!(pk_subset_of_grouping_columns(&[1], 1, 1, &upper));
     }
 }
 
-// Registered from seams_init (the parser sits above this crate only through
-// the projection seam).
 pub fn init_seams() {
     syscache_seams::pg_constraint_primary_key_attnos::set(get_primary_key_attnos);
 }
@@ -2054,7 +1917,6 @@ mod truncation_tests {
 
     fn setup() {
         SETUP.call_once(|| {
-            // UTF-8 boundary clip, enough for the test inputs.
             mbutils_seams::pg_mbcliplen::set(|s, len, limit| {
                 let mut l = (limit as usize).min(len as usize);
                 while l > 0 && l < s.len() && s[l] & 0xC0 == 0x80 {
@@ -2065,7 +1927,6 @@ mod truncation_tests {
         });
     }
 
-    // foreign_key.out oracle: three FKs on fktable2 over a 51-char column.
     #[test]
     fn make_object_name_matches_c_truncation() {
         setup();
@@ -2085,15 +1946,8 @@ mod truncation_tests {
         }
     }
 
-    // regression: the budget is bytes. With a
-    // single-byte database encoding (SQL_ASCII: pg_mbcliplen is cliplen,
-    // no back-off) the clip lands inside the multibyte character and C
-    // keeps the partial byte -- oracle (PostgreSQL 18.6, SQL_ASCII
-    // database): CREATE TABLE "<57 a's>éé"(id int PRIMARY KEY) names the
-    // constraint <57 a's> 0xC3 "_pkey" (63 bytes).
     #[test]
     fn make_object_name_clips_bytes_under_single_byte_encoding() {
-        // SQL_ASCII pg_mbcliplen: cliplen, byte-exact.
         let sb = |_: &[u8], n: usize| n;
         let ctx = mcx::MemoryContext::new("t");
         let name1 = format!("{}éé", "a".repeat(57));
@@ -2106,12 +1960,10 @@ mod truncation_tests {
         assert_eq!(&got[..], &want[..]);
         assert_eq!(got.len(), super::NAMEDATALEN as usize - 1);
         assert!(core::str::from_utf8(&got).is_err(), "the C name is not UTF-8");
-        // 56 a's + éé: the clip lands after the first é (58 bytes of name1).
         let name1 = format!("{}éé", "a".repeat(56));
         let got =
             super::make_object_name_with(ctx.mcx(), name1.as_bytes(), None, "pkey", sb).unwrap();
         assert_eq!(&got[..], format!("{}é_pkey", "a".repeat(56)).as_bytes());
-        // name2 is clipped the same way (the longer piece loses first).
         let name2 = format!("{}é", "b".repeat(61));
         let got =
             super::make_object_name_with(ctx.mcx(), b"t", Some(name2.as_bytes()), "key", sb)

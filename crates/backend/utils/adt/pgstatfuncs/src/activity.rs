@@ -1,6 +1,6 @@
 use ::datum::Datum;
 use ::types_core::{BackendType, Oid, ProcNumber, INVALID_PROC_NUMBER};
-use ::types_error::{PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED};
+use ::types_error::PgResult;
 use ::types_fmgr::{varlena_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
 
 use backend_status_seams::BackendState;
@@ -10,6 +10,25 @@ pub(crate) const ROLE_PG_READ_ALL_STATS: Oid = 3375;
 
 pub(crate) fn text_datum(fcinfo: &Fcinfo, s: &str) -> PgResult<Datum> {
     Ok(varlena_result(varlena::cstring_to_text(fcinfo.result_mcx(), s.as_bytes())?))
+}
+
+fn bytes_text_datum(fcinfo: &Fcinfo, b: &[u8]) -> PgResult<Datum> {
+    Ok(varlena_result(varlena::cstring_to_text(fcinfo.result_mcx(), b)?))
+}
+
+// pgstatfuncs.c:455-476: a process that leads its own lock group falls
+// through to the parallel-apply lookup; InvalidPid (-1) means no leader.
+fn leader_pid_column(
+    group_leader_pid: Option<i32>,
+    st_procpid: i32,
+    is_bgworker: bool,
+    leader_apply_worker_pid: impl FnOnce(i32) -> i32,
+) -> Option<i32> {
+    match group_leader_pid {
+        Some(pid) if pid != st_procpid => Some(pid),
+        _ if is_bgworker => Some(leader_apply_worker_pid(st_procpid)).filter(|&p| p != -1),
+        _ => None,
+    }
 }
 
 pub(crate) fn has_pgstat_permissions(userid: Oid) -> PgResult<bool> {
@@ -59,7 +78,7 @@ pub(crate) fn aux_pid_get_proc(pid: i32) -> Option<&'static types_storage::stora
     }
     let procs = &lmgr_proc::ProcGlobal().allProcs;
     let base = lmgr_proc::AuxiliaryProcsBase() as usize;
-    procs[base..base + types_storage::storage::NUM_AUXILIARY_PROCS as usize]
+    procs[base..base + ::init_small::globals::NumAuxiliaryProcs() as usize]
         .iter()
         .find(|p| p.pid.load(core::sync::atomic::Ordering::Relaxed) == pid)
 }
@@ -181,21 +200,19 @@ pub fn fc_pg_stat_get_activity(
 
                 let leader: ProcNumber =
                     proc.lockGroupLeader.load(core::sync::atomic::Ordering::Relaxed);
-                if leader != INVALID_PROC_NUMBER {
-                    let leader_pid = lmgr_proc::GetPGProcByNumber(leader)
+                let group_leader_pid = (leader != INVALID_PROC_NUMBER).then(|| {
+                    lmgr_proc::GetPGProcByNumber(leader)
                         .pid
-                        .load(core::sync::atomic::Ordering::Relaxed);
-                    if leader_pid != be.st_procpid {
-                        values[29] = Datum::from_i32(leader_pid);
-                        nulls[29] = false;
-                    }
-                } else if be.st_backendType == BackendType::BgWorker {
-                    // InvalidPid (-1) unless this is a parallel apply worker.
-                    let leader_pid = launcher_seams::get_leader_apply_worker_pid::call(be.st_procpid);
-                    if leader_pid != -1 {
-                        values[29] = Datum::from_i32(leader_pid);
-                        nulls[29] = false;
-                    }
+                        .load(core::sync::atomic::Ordering::Relaxed)
+                });
+                if let Some(pid) = leader_pid_column(
+                    group_leader_pid,
+                    be.st_procpid,
+                    be.st_backendType == BackendType::BgWorker,
+                    launcher_seams::get_leader_apply_worker_pid::call,
+                ) {
+                    values[29] = Datum::from_i32(pid);
+                    nulls[29] = false;
                 }
             }
 
@@ -298,8 +315,8 @@ pub fn fc_pg_stat_get_activity(
                 values[19] = text_datum(fcinfo, &be.st_ssl_version)?;
                 values[20] = text_datum(fcinfo, &be.st_ssl_cipher)?;
                 values[21] = Datum::from_i32(be.st_ssl_bits);
-                if !be.st_ssl_client_dn.is_empty() {
-                    values[22] = text_datum(fcinfo, &be.st_ssl_client_dn)?;
+                if !be.st_ssl_client_dn.as_bytes().is_empty() {
+                    values[22] = bytes_text_datum(fcinfo, be.st_ssl_client_dn.as_bytes())?;
                 } else {
                     nulls[22] = true;
                 }
@@ -310,8 +327,8 @@ pub fn fc_pg_stat_get_activity(
                 } else {
                     nulls[23] = true;
                 }
-                if !be.st_ssl_issuer_dn.is_empty() {
-                    values[24] = text_datum(fcinfo, &be.st_ssl_issuer_dn)?;
+                if !be.st_ssl_issuer_dn.as_bytes().is_empty() {
+                    values[24] = bytes_text_datum(fcinfo, be.st_ssl_issuer_dn.as_bytes())?;
                 } else {
                     nulls[24] = true;
                 }
@@ -326,21 +343,20 @@ pub fn fc_pg_stat_get_activity(
             }
 
             if be.st_gss {
-                // unported: PgBackendGSSStatus — gssapi lane. Defensive
-                // only: every bestart site sets st_gss = false (no-GSS
-                // build), so this arm is unreachable today.
-                return Err(Box::new(
-                    PgError::error(
-                        "pg_stat_get_activity over a GSSAPI-authenticated backend \
-                         is not yet implemented",
-                    )
-                    .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
-                ));
+                values[25] = Datum::from_bool(be.st_gssstatus.authenticated);
+                let principal = &be.st_gssstatus.principal;
+                let end = principal.iter().position(|&b| b == 0).unwrap_or(principal.len());
+                values[26] = varlena_result(varlena::cstring_to_text(
+                    fcinfo.result_mcx(), &principal[..end],
+                )?);
+                values[27] = Datum::from_bool(be.st_gssstatus.encrypted);
+                values[28] = Datum::from_bool(be.st_gssstatus.delegated);
+            } else {
+                values[25] = Datum::from_bool(false);
+                nulls[26] = true;
+                values[27] = Datum::from_bool(false);
+                values[28] = Datum::from_bool(false);
             }
-            values[25] = Datum::from_bool(false);
-            nulls[26] = true;
-            values[27] = Datum::from_bool(false);
-            values[28] = Datum::from_bool(false);
 
             if be.st_query_id == 0 {
                 nulls[30] = true;
@@ -370,6 +386,16 @@ pub fn fc_pg_stat_get_activity(
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn self_led_bgworker_reports_its_apply_leader() {
+        assert_eq!(leader_pid_column(Some(10), 20, false, |_| -1), Some(10));
+        assert_eq!(leader_pid_column(Some(20), 20, true, |_| 7), Some(7));
+        assert_eq!(leader_pid_column(Some(20), 20, true, |_| -1), None);
+        assert_eq!(leader_pid_column(Some(20), 20, false, |_| 7), None);
+        assert_eq!(leader_pid_column(None, 20, true, |_| 7), Some(7));
+        assert_eq!(leader_pid_column(None, 20, false, |_| 7), None);
+    }
 
     fn sockaddr_in4(ip: [u8; 4], port: u16) -> ::ip::SockAddr {
         // SAFETY: zeroed sockaddr_in is a valid all-defaults value.

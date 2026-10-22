@@ -17,7 +17,8 @@ use crate::{errno, policy};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ErrorBuilder {
     level: ErrorLevel,
-    error: Option<PgError>,
+    error: Option<Box<PgError>>,
+    verbatim: bool,
 }
 
 impl ErrorBuilder {
@@ -28,13 +29,16 @@ impl ErrorBuilder {
     pub fn new(level: ErrorLevel) -> Self {
         Self {
             level,
-            error: Some(PgError::new(level, String::new()).with_saved_errno(errno::current_errno())),
+            verbatim: false,
+            error: Some(Box::new(
+                PgError::new(level, String::new()).with_saved_errno(errno::current_errno()),
+            )),
         }
     }
 
     #[inline]
     fn suppressed(level: ErrorLevel) -> Self {
-        Self { level, error: None }
+        Self { level, error: None, verbatim: false }
     }
 
     #[inline]
@@ -45,8 +49,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn with_domain(mut self, domain: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_domain(domain));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_domain(domain);
         }
         self
     }
@@ -54,8 +59,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn with_context_domain(mut self, context_domain: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_context_domain(context_domain));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_context_domain(context_domain);
         }
         self
     }
@@ -63,8 +69,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn with_message_id(mut self, message_id: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_message_id(message_id));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_message_id(message_id);
         }
         self
     }
@@ -72,8 +79,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn with_saved_errno(mut self, saved_errno: i32) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_saved_errno(saved_errno));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_saved_errno(saved_errno);
         }
         self
     }
@@ -81,8 +89,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errcode(mut self, sqlstate: SqlState) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_sqlstate(sqlstate));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_sqlstate(sqlstate);
         }
         self
     }
@@ -90,9 +99,10 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errcode_for_file_access(mut self) -> Self {
-        if let Some(error) = self.error.take() {
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
             let errnum = error.saved_errno.unwrap_or_else(errno::current_errno);
-            self.error = Some(error.with_sqlstate(errno::sqlstate_for_file_access(errnum)));
+            *slot = error.with_sqlstate(errno::sqlstate_for_file_access(errnum));
         }
         self
     }
@@ -100,20 +110,27 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errcode_for_socket_access(mut self) -> Self {
-        if let Some(error) = self.error.take() {
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
             let errnum = error.saved_errno.unwrap_or_else(errno::current_errno);
-            self.error = Some(error.with_sqlstate(errno::sqlstate_for_socket_access(errnum)));
+            *slot = error.with_sqlstate(errno::sqlstate_for_socket_access(errnum));
         }
+        self
+    }
+
+    #[inline]
+    pub fn errverbatim(self) -> Self {
         self
     }
 
     #[cold]
     #[inline(never)]
     pub fn errmsg(mut self, message: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
             let message_id = message.into();
-            let message = format_message(&error, message_id.clone());
-            self.error = Some(error.with_message(message).with_message_id(message_id));
+            let message = format_message(self.verbatim, &error, message_id.clone());
+            *slot = error.with_message(message).with_message_id(message_id);
         }
         self
     }
@@ -121,10 +138,11 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errmsg_internal(mut self, message: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
             let message_id = message.into();
-            let message = format_message(&error, message_id.clone());
-            self.error = Some(error.with_message(message).with_message_id(message_id));
+            let message = format_message(self.verbatim, &error, message_id.clone());
+            *slot = error.with_message(message).with_message_id(message_id);
         }
         self
     }
@@ -134,10 +152,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errmsg_raw(mut self, message: Vec<u8>) -> Self {
-        if let Some(mut error) = self.error.take() {
+        if let Some(error) = self.error.as_deref_mut() {
             error.message = String::from_utf8_lossy(&message).into_owned();
             error.message_raw = Some(message);
-            self.error = Some(error);
         }
         self
     }
@@ -150,15 +167,16 @@ impl ErrorBuilder {
         plural: impl Into<String>,
         n: u64,
     ) -> Self {
-        if let Some(error) = self.error.take() {
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
             let singular = singular.into();
             let picked = if n == 1 {
                 singular.clone()
             } else {
                 plural.into()
             };
-            let message = format_message(&error, picked);
-            self.error = Some(error.with_message(message).with_message_id(singular));
+            let message = format_message(self.verbatim, &error, picked);
+            *slot = error.with_message(message).with_message_id(singular);
         }
         self
     }
@@ -166,9 +184,10 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errdetail(mut self, detail: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
-            let detail = format_message(&error, detail.into());
-            self.error = Some(error.with_detail(detail));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            let detail = format_message(self.verbatim, &error, detail.into());
+            *slot = error.with_detail(detail);
         }
         self
     }
@@ -184,8 +203,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errdetail_raw(mut self, detail: Vec<u8>) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_detail_raw(detail));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_detail_raw(detail);
         }
         self
     }
@@ -193,9 +213,10 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errdetail_log(mut self, detail_log: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
-            let detail_log = format_message(&error, detail_log.into());
-            self.error = Some(error.with_detail_log(detail_log));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            let detail_log = format_message(self.verbatim, &error, detail_log.into());
+            *slot = error.with_detail_log(detail_log);
         }
         self
     }
@@ -233,9 +254,10 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errhint(mut self, hint: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
-            let hint = format_message(&error, hint.into());
-            self.error = Some(error.with_hint(hint));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            let hint = format_message(self.verbatim, &error, hint.into());
+            *slot = error.with_hint(hint);
         }
         self
     }
@@ -264,9 +286,10 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errcontext_msg(mut self, context: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
-            let context = format_message(&error, context.into());
-            self.error = Some(error.with_context(context));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            let context = format_message(self.verbatim, &error, context.into());
+            *slot = error.with_context(context);
         }
         self
     }
@@ -274,8 +297,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errhidestmt(mut self, hide_statement: bool) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_hide_statement(hide_statement));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_hide_statement(hide_statement);
         }
         self
     }
@@ -283,8 +307,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errhidecontext(mut self, hide_context: bool) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_hide_context(hide_context));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_hide_context(hide_context);
         }
         self
     }
@@ -301,8 +326,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn errposition(mut self, cursor_position: i32) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_cursor_position(cursor_position));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_cursor_position(cursor_position);
         }
         self
     }
@@ -310,8 +336,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn internalerrposition(mut self, internal_position: i32) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_internal_position(internal_position));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_internal_position(internal_position);
         }
         self
     }
@@ -319,8 +346,9 @@ impl ErrorBuilder {
     #[cold]
     #[inline(never)]
     pub fn internalerrquery(mut self, query: impl Into<String>) -> Self {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_internal_query(query));
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_internal_query(query);
         }
         self
     }
@@ -332,8 +360,9 @@ impl ErrorBuilder {
         field: ErrorField,
         value: impl Into<String>,
     ) -> PgResult<Self> {
-        if let Some(error) = self.error.take() {
-            self.error = Some(error.with_error_field(field, value)?);
+        if let Some(slot) = self.error.as_deref_mut() {
+            let error = core::mem::replace(slot, PgError::vacant());
+            *slot = error.with_error_field(field, value)?;
         }
         Ok(self)
     }
@@ -342,25 +371,34 @@ impl ErrorBuilder {
     #[inline(never)]
     pub fn into_error(self) -> PgError {
         let level = self.level;
-        self.error
-            .unwrap_or_else(|| PgError::new(level, String::new()))
+        match self.error {
+            Some(error) => *error,
+            None => PgError::new(level, String::new()),
+        }
     }
 
     #[inline]
     pub fn finish(self, location: ErrorLocation) -> PgResult<()> {
         match self.error {
-            Some(error) => crate::ThrowErrorData(error.with_error_location(location)),
+            Some(error) => throw_boxed(error, location),
             None => Ok(()),
         }
     }
 }
 
+// Out of line so the unboxed PgError never lands in the reporting frame.
 #[cold]
 #[inline(never)]
-fn format_message(error: &PgError, message: String) -> String {
+fn throw_boxed(error: Box<PgError>, location: ErrorLocation) -> PgResult<()> {
+    crate::ThrowErrorData((*error).with_error_location(location))
+}
+
+#[cold]
+#[inline(never)]
+fn format_message(_verbatim: bool, error: &PgError, message: String) -> String {
     match error.saved_errno {
         Some(errnum) => errno::replace_percent_m(&message, errnum),
-        None => message,
+        _ => message,
     }
 }
 

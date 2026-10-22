@@ -1,0 +1,3 @@
+gravity/exec/src/inputs/front.rs	MEMO	admission	at:clear	leader	admission (front key): front shape -> filed variants (content key, images); forget per key, clear at session end (invalidate session_end); capped at FRONT_ENTRIES (1024) keys of FRONT_VARIANTS (4) variants (a full memo is cleared)
+gravity/exec/src/inputs/front.rs	CHECK	admission	key:the GUC store mutation count	leader	admission (front key): pgrust.gravity_front_check value, read again only when the thread's GUC store mutation count moves
+gravity/exec/src/inputs/front.rs	CHECK_SLOT	admission	key:the GUC registry generation (OptionSlot)	leader	admission (front key): pgrust.gravity_front_check's registry slot (D2896); get_config_option_at looks it up again on a new registry generation

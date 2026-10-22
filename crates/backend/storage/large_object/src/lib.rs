@@ -93,28 +93,57 @@ fn int4_ge_key(attno: AttrNumber, value: i32) -> ScanKeyData {
 }
 
 fn open_lo_relation<'mcx>(mcx: Mcx<'mcx>) -> PgResult<(Relation<'mcx>, Relation<'mcx>)> {
-    // C caches these in statics until xact end; the relcache makes per-op
-    // opens equivalent, and the NoLock closes retain the lock to xact end.
-    // The locks belong to the top transaction (inv_api.c:82-88), so a
-    // subtransaction abort does not release them.
-    let current_owner = resowner::CurrentResourceOwner();
-    resowner::SetCurrentResourceOwner(resowner::TopTransactionResourceOwner());
-    let opened = table::table_open(mcx, LargeObjectRelationId, RowExclusiveLock).and_then(
-        |lo_heap_r| {
-            let lo_index_r =
-                indexam::index_open(mcx, LargeObjectLOidPNIndexId, RowExclusiveLock)?;
-            Ok((lo_heap_r, lo_index_r))
-        },
-    );
-    resowner::SetCurrentResourceOwner(current_owner);
-    opened
+    LO_RELS.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            // The relation references belong to the top transaction
+            // (inv_api.c:82-88): a subtransaction abort keeps them, and the
+            // relcache refcount they hold makes CheckTableNotInUse refuse a
+            // REINDEX of pg_largeobject until close_lo_relation.
+            let current_owner = resowner::CurrentResourceOwner();
+            resowner::SetCurrentResourceOwner(resowner::TopTransactionResourceOwner());
+            let opened = table::table_open(mcx, LargeObjectRelationId, RowExclusiveLock).and_then(
+                |lo_heap_r| {
+                    let lo_index_r =
+                        indexam::index_open(mcx, LargeObjectLOidPNIndexId, RowExclusiveLock)?;
+                    Ok((lo_heap_r, lo_index_r))
+                },
+            );
+            resowner::SetCurrentResourceOwner(current_owner);
+            let (lo_heap_r, lo_index_r) = opened?;
+            // SAFETY: relation_open ignores its context; the handle wraps the
+            // relcache entry's Rc<RelationData<'static>>, so the 'mcx it was
+            // opened under is a phantom and the cache holds it to xact end.
+            *slot = Some(unsafe {
+                (
+                    core::mem::transmute::<Relation<'mcx>, Relation<'static>>(lo_heap_r),
+                    core::mem::transmute::<Relation<'mcx>, Relation<'static>>(lo_index_r),
+                )
+            });
+        }
+        let (lo_heap_r, lo_index_r) = slot.as_ref().expect("opened above");
+        Ok((lo_heap_r.alias(), lo_index_r.alias()))
+    })
 }
 
-pub fn close_lo_relation(_isCommit: bool) -> PgResult<()> {
+pub fn close_lo_relation(isCommit: bool) -> PgResult<()> {
+    let Some((lo_heap_r, lo_index_r)) = LO_RELS.with(|cell| cell.borrow_mut().take()) else {
+        return Ok(());
+    };
+    if isCommit {
+        let current_owner = resowner::CurrentResourceOwner();
+        resowner::SetCurrentResourceOwner(resowner::TopTransactionResourceOwner());
+        let closed = indexam::index_close(lo_index_r, NoLock).and_then(|()| lo_heap_r.close(NoLock));
+        resowner::SetCurrentResourceOwner(current_owner);
+        closed?;
+    }
     Ok(())
 }
 
 std::thread_local! {
+    // lo_heap_r / lo_index_r (inv_api.c:65-66): open until close_lo_relation.
+    static LO_RELS: core::cell::RefCell<Option<(Relation<'static>, Relation<'static>)>> =
+        const { core::cell::RefCell::new(None) };
     // bool lo_compat_privileges (inv_api.c:56): PGC_SUSET, boot false.
     static LO_COMPAT_PRIVILEGES: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }

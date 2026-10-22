@@ -1,0 +1,81 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1u s1d s2m s1c s2c s3sel
+step s1u: UPDATE wr_t SET grp = 7, v = v + 1 WHERE id IN (2, 3);
+step s1d: DELETE FROM wr_t WHERE id = 4;
+step s2m: MERGE INTO wr_t t USING wr_s s ON t.id = s.id WHEN MATCHED AND s.id BETWEEN 2 AND 4 AND EXISTS (SELECT 1 FROM wr_d d WHERE d.grp = t.grp AND d.w > 500) THEN UPDATE SET v = (SELECT d.w FROM wr_d d WHERE d.grp = t.grp + s.d) WHEN MATCHED AND s.id BETWEEN 2 AND 4 THEN UPDATE SET v = -1; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, v FROM wr_t WHERE id BETWEEN 1 AND 5 ORDER BY id;
+id|grp|   v
+--+---+----
+ 1|  1|  10
+ 2|  7| 900
+ 3|  7|1000
+ 5|  2|  50
+(4 rows)
+
+
+starting permutation: s1u s1d s2r s1c s2c s3sel
+step s1u: UPDATE wr_t SET grp = 7, v = v + 1 WHERE id IN (2, 3);
+step s1d: DELETE FROM wr_t WHERE id = 4;
+step s2r: UPDATE wr_t SET v = v + 1000 WHERE id IN (2, 3, 4) RETURNING id, grp, v, (SELECT d.w FROM wr_d d WHERE d.grp = wr_t.grp) AS w; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|grp|   v|  w
+--+---+----+---
+ 2|  7|1021|700
+ 3|  7|1031|700
+(2 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, v FROM wr_t WHERE id BETWEEN 1 AND 5 ORDER BY id;
+id|grp|   v
+--+---+----
+ 1|  1|  10
+ 2|  7|1021
+ 3|  7|1031
+ 5|  2|  50
+(4 rows)
+
+
+starting permutation: s2m s1u s2c s1c s3sel
+step s2m: MERGE INTO wr_t t USING wr_s s ON t.id = s.id WHEN MATCHED AND s.id BETWEEN 2 AND 4 AND EXISTS (SELECT 1 FROM wr_d d WHERE d.grp = t.grp AND d.w > 500) THEN UPDATE SET v = (SELECT d.w FROM wr_d d WHERE d.grp = t.grp + s.d) WHEN MATCHED AND s.id BETWEEN 2 AND 4 THEN UPDATE SET v = -1;
+step s1u: UPDATE wr_t SET grp = 7, v = v + 1 WHERE id IN (2, 3); <waiting ...>
+step s2c: COMMIT;
+step s1u: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, grp, v FROM wr_t WHERE id BETWEEN 1 AND 5 ORDER BY id;
+id|grp| v
+--+---+--
+ 1|  1|10
+ 2|  7| 0
+ 3|  7| 0
+ 4|  1|-1
+ 5|  2|50
+(5 rows)
+
+
+starting permutation: s2r s1d s2c s1c s3sel
+step s2r: UPDATE wr_t SET v = v + 1000 WHERE id IN (2, 3, 4) RETURNING id, grp, v, (SELECT d.w FROM wr_d d WHERE d.grp = wr_t.grp) AS w;
+id|grp|   v|  w
+--+---+----+---
+ 2|  2|1020|200
+ 3|  0|1030|  0
+ 4|  1|1040|100
+(3 rows)
+
+step s1d: DELETE FROM wr_t WHERE id = 4; <waiting ...>
+step s2c: COMMIT;
+step s1d: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, grp, v FROM wr_t WHERE id BETWEEN 1 AND 5 ORDER BY id;
+id|grp|   v
+--+---+----
+ 1|  1|  10
+ 2|  2|1020
+ 3|  0|1030
+ 5|  2|  50
+(4 rows)
+

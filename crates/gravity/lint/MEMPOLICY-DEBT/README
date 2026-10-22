@@ -1,0 +1,8 @@
+# RM's registry (lint/rules/rm_mempolicy.py; the memory core's design rev 4 §2: a memory decision anywhere else fails
+# review once step 2 (C1) lands): the memory knobs and the memory comparisons outside mempolicy that still decide, by
+# repository path, name and owner lane, each with the step of the memory core that removes it (step3 .. step7, the
+# design's §7 order). Step 2 moved every one it found into mempolicy, so it ends with no row; a row goes when its step
+# moves the decision into mempolicy; a landing never adds a row (a certified move rewrites one).
+# path	name	owner	step	what it decides
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<name> (the row's path with
+# '/' as '.'), holding the row line; this README is not a row.

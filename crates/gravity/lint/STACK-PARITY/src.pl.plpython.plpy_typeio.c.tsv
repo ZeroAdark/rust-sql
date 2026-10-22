@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/pl/plpython/plpy_typeio.c: 2 stack-depth check sites
+306	PLy_output_setup_func	-	-	unported	PL/Perl, PL/Python and their jsonb transforms are not ported (crates/pl has plpgsql only)
+429	PLy_input_setup_func	-	-	unported	PL/Perl, PL/Python and their jsonb transforms are not ported (crates/pl has plpgsql only)

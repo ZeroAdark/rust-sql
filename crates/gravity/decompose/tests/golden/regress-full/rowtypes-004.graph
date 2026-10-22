@@ -1,0 +1,10 @@
+-- regress-full-rowtypes-004
+-- insert into quadtable (f1, q.c1.r, q.c2.i) values(44,55,66);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:44, 2=T_FieldStore)
+  write INSERT rel=43500 rti=1 natts=2 indexes=()
+  outs 1=w4:val 2=?
+mapped: Result ModifyTable

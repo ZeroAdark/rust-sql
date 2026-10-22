@@ -1,2 +1,0 @@
-Å) AS query;
-SELECT ts_rewrite( query, 

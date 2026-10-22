@@ -1,0 +1,1 @@
+crates/gravity/decompose/src/facts/hoist.rs	plan	licence	fn	an index-key / pruning SubPlan evaluated on each outer row before the Nest op where PG may prune or skip it (hoist_ok) [EFFECTS-ONLY; D2013]

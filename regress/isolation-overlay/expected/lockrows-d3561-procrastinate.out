@@ -1,0 +1,161 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1a s2f s1c s2c
+step s2x: EXPLAIN (COSTS OFF) WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.attempts, pj.status, pj.worker_id;
+QUERY PLAN                                                                                                                
+--------------------------------------------------------------------------------------------------------------------------
+Update on pj                                                                                                              
+  CTE candidate                                                                                                           
+    ->  Limit                                                                                                             
+          ->  LockRows                                                                                                    
+                ->  Nested Loop Anti Join                                                                                 
+                      Join Filter: (jobs.lock IS NOT NULL)                                                                
+                      ->  Index Scan using pj_priority_idx on pj jobs                                                     
+                            Filter: ((status = 'todo'::pj_status) AND ((scheduled_at IS NULL) OR (scheduled_at <= now())))
+                      ->  Index Scan using pj_id_lock_idx on pj earlier_jobs                                              
+                            Index Cond: ((id < jobs.id) AND (lock = jobs.lock))                                           
+                            Filter: (status = ANY ('{todo,doing}'::pj_status[]))                                          
+  ->  Hash Join                                                                                                           
+        Hash Cond: (pj.id = candidate.id)                                                                                 
+        ->  Seq Scan on pj                                                                                                
+        ->  Hash                                                                                                          
+              ->  CTE Scan on candidate                                                                                   
+(16 rows)
+
+step s1a: UPDATE pj SET attempts = attempts + 1 WHERE id = 2;
+step s2f: WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.attempts, pj.status, pj.worker_id; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id|lock|attempts|status|worker_id
+--+----+--------+------+---------
+ 2|    |       1|doing |        7
+(1 row)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1e s2f s1c s2c
+s3: WARNING:  there is already a transaction in progress
+step s1e: UPDATE pj SET lock = 'lockA' WHERE id IN (1, 2);
+step s2f: WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.attempts, pj.status, pj.worker_id; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id|lock |attempts|status|worker_id
+--+-----+--------+------+---------
+ 2|lockA|       0|doing |        7
+(1 row)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2f s1c s2c
+s3: WARNING:  there is already a transaction in progress
+step s1s: UPDATE pj SET status = 'doing', worker_id = 9 WHERE id = 2;
+step s2f: WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.attempts, pj.status, pj.worker_id; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id|lock|attempts|status|worker_id
+--+----+--------+------+---------
+ 5|    |       0|doing |        7
+(1 row)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2f s1c s2c
+s3: WARNING:  there is already a transaction in progress
+step s1p: UPDATE pj SET scheduled_at = timestamptz '2999-01-01' WHERE id = 2;
+step s2f: WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.attempts, pj.status, pj.worker_id; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id|lock|attempts|status|worker_id
+--+----+--------+------+---------
+ 5|    |       0|doing |        7
+(1 row)
+
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2sk s1c s2c
+s3: WARNING:  there is already a transaction in progress
+step s1k: SELECT id FROM pj WHERE id = 2 FOR UPDATE;
+id
+--
+ 2
+(1 row)
+
+step s2sk: WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs SKIP LOCKED) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.status;
+id|lock|status
+--+----+------
+ 5|    |doing 
+(1 row)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1a s3f s1c s3c
+s3: WARNING:  there is already a transaction in progress
+step s3x: EXPLAIN (COSTS OFF) WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.attempts, pj.status, pj.worker_id;
+QUERY PLAN                                                                                                                      
+--------------------------------------------------------------------------------------------------------------------------------
+Update on pj                                                                                                                    
+  CTE candidate                                                                                                                 
+    ->  Limit                                                                                                                   
+          ->  LockRows                                                                                                          
+                ->  Sort                                                                                                        
+                      Sort Key: jobs.priority DESC, jobs.id                                                                     
+                      ->  Hash Anti Join                                                                                        
+                            Hash Cond: (jobs.lock = earlier_jobs.lock)                                                          
+                            Join Filter: ((jobs.lock IS NOT NULL) AND (earlier_jobs.id < jobs.id))                              
+                            ->  Seq Scan on pj jobs                                                                             
+                                  Filter: ((status = 'todo'::pj_status) AND ((scheduled_at IS NULL) OR (scheduled_at <= now())))
+                            ->  Hash                                                                                            
+                                  ->  Seq Scan on pj earlier_jobs                                                               
+                                        Filter: (status = ANY ('{todo,doing}'::pj_status[]))                                    
+  ->  Hash Join                                                                                                                 
+        Hash Cond: (pj.id = candidate.id)                                                                                       
+        ->  Seq Scan on pj                                                                                                      
+        ->  Hash                                                                                                                
+              ->  CTE Scan on candidate                                                                                         
+(19 rows)
+
+step s1a: UPDATE pj SET attempts = attempts + 1 WHERE id = 2;
+step s3f: WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.attempts, pj.status, pj.worker_id; <waiting ...>
+step s1c: COMMIT;
+step s3f: <... completed>
+id|lock|attempts|status|worker_id
+--+----+--------+------+---------
+ 2|    |       1|doing |        7
+(1 row)
+
+step s3c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1e s3f s1c s3c
+s2: WARNING:  there is already a transaction in progress
+step s1e: UPDATE pj SET lock = 'lockA' WHERE id IN (1, 2);
+step s3f: WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.attempts, pj.status, pj.worker_id; <waiting ...>
+step s1c: COMMIT;
+step s3f: <... completed>
+id|lock |attempts|status|worker_id
+--+-----+--------+------+---------
+ 2|lockA|       0|doing |        7
+(1 row)
+
+step s3c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s3f s1c s3c
+s2: WARNING:  there is already a transaction in progress
+step s1s: UPDATE pj SET status = 'doing', worker_id = 9 WHERE id = 2;
+step s3f: WITH candidate AS (SELECT jobs.* FROM pj AS jobs WHERE NOT EXISTS (SELECT 1 FROM pj AS earlier_jobs WHERE jobs.lock IS NOT NULL AND earlier_jobs.lock = jobs.lock AND earlier_jobs.status IN ('todo', 'doing') AND earlier_jobs.id < jobs.id) AND jobs.status = 'todo' AND (jobs.scheduled_at IS NULL OR jobs.scheduled_at <= now()) ORDER BY jobs.priority DESC, jobs.id ASC LIMIT 1 FOR UPDATE OF jobs) UPDATE pj SET status = 'doing', worker_id = 7 FROM candidate WHERE pj.id = candidate.id RETURNING pj.id, pj.lock, pj.attempts, pj.status, pj.worker_id; <waiting ...>
+step s1c: COMMIT;
+step s3f: <... completed>
+id|lock|attempts|status|worker_id
+--+----+--------+------+---------
+ 5|    |       0|doing |        7
+(1 row)
+
+step s3c: COMMIT;
+s1: WARNING:  there is no transaction in progress

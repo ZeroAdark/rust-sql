@@ -1,0 +1,11 @@
+path	crates/gravity/exec/src/ops/scan/pgrc/verdicts.rs
+growth	std::collections::HashMap::insert	1
+growth	std::iter::Extend::extend	3
+growth	std::vec::Vec::push	7
+method	slice::sort_by_key	1
+method	slice::to_vec	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	2
+type	std::boxed::Box	1
+type	std::vec::Vec	1

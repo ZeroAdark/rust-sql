@@ -7,7 +7,7 @@ use super::*;
 // NOTE: PGRUST_TEST_DROP_WAKE_1IN / recheck-cadence env vars are read once
 // per process; these tests assume the default environment (no injection).
 // The cadence default (1000ms) bounds park() AND park_timeout laps
-// (regression); every sub-second timed park below is unaffected
+// (GL-RECWAKE-1); every sub-second timed park below is unaffected
 // (min(timeout, cadence) picks the timeout), and untimed parks are bounded
 // by delivering a real unpark.
 
@@ -58,7 +58,7 @@ fn park_timeout_expires() {
     assert!(start.elapsed() >= Duration::from_millis(25));
 }
 
-// regression: timed parks are ALSO bounded by the recheck cadence. A
+// GL-RECWAKE-1: timed parks are ALSO bounded by the recheck cadence. A
 // dropped cross-thread unpark leaves the caller's predicate flagged but the
 // slot un-notified; a minutes-class caller timeout (the checkpointer main
 // lap) must not be the only backstop. Driven through Slot::park_core with a
@@ -242,7 +242,7 @@ fn virtual_time_drives_timeouts() {
     let done = Arc::new(AtomicU64::new(0));
     let done2 = Arc::clone(&done);
     let t = std::thread::spawn(move || {
-        // Timed parks lap at the recheck cadence (regression): re-park for
+        // Timed parks lap at the recheck cadence (GL-RECWAKE-1): re-park for
         // the remainder as real callers do, judging the deadline on the
         // installed (virtual) clock.
         let deadline = now_ms() + 5_000;
@@ -426,7 +426,7 @@ fn io_wait_with_degrades_to_blocking_reap_when_owner_never_reaps() {
     assert!(reaped.load(Ordering::Relaxed));
 }
 
-// -- signal-route unpark (regression) ---------------------------------------
+// -- signal-route unpark (fp-ipc-b1#1) ---------------------------------------
 //
 // The postmaster's sigaction handlers reach SetLatch -> unpark; C's SetLatch
 // is handler-safe (latch.c:290), so the route must never block on the slot
@@ -531,4 +531,72 @@ mod signal_route {
         let stale = WakerHandle::new(h.unpack().0, h.unpack().1.wrapping_add(7));
         assert_eq!(unpark_word_from_signal(stale.as_u64()), Unparked::Stale);
     }
+}
+
+// fp-ipc-b1#2: C's latch wait infrastructure (latch.c InitializeLatchWaitSet)
+// is per-process with no owner cap short of MAX_BACKENDS (262143); the waiter
+// slab behind it must scale with the configured backend count instead of
+// failing InitializeWaitEventSupport (ensure_wake_pipe EAGAIN) for the
+// 8193rd concurrent owner.
+#[test]
+fn waiter_slab_scales_with_configured_backends() {
+    // ipci sizes this from MaxLivePostmasterChildren() + 1 at shmem init.
+    WaiterSlabInit(64);
+    // 32 slots stay free for the other tests running in this process.
+    let want = WAITER_CAP + 32;
+    let mut got = Vec::with_capacity(want);
+    while got.len() < want {
+        match global::try_allocate_slot() {
+            Some(idx) => got.push(idx),
+            None => break,
+        }
+    }
+    let high = got.iter().copied().max().unwrap_or(0);
+    let ext_idx = got.iter().copied().find(|&i| i >= WAITER_CAP);
+    // Handles into the extension route exactly like boot-slab handles.
+    let routed = ext_idx.map(|idx| {
+        let h = WakerHandle::new(idx, 0);
+        (unpark(h), describe_word(h.as_u64()))
+    });
+    for idx in got.iter().copied() {
+        global::release_slot_for_test(idx);
+    }
+    assert_eq!(got.len(), want, "slab exhausted after {} slots", got.len());
+    assert!(high >= WAITER_CAP, "high water {high} never left the boot slab");
+    let (unparked, described) = routed.expect("no extension slot allocated");
+    assert_eq!(unparked, Unparked::Pending);
+    assert_eq!(
+        described,
+        format!("waiter:slot={} tok=0 state=notified", ext_idx.unwrap())
+    );
+}
+
+/// D4484: `Slot::owner_token` (current_handle's lock-free read) is the token under the mutex through a slot's whole
+/// life (issue, reissue at a pooled-thread reuse, retire, the next owner's issue), and `current_handle` publishes the
+/// same handle the locked read did: an unpark through it reaches this thread, one through the pre-reissue handle is
+/// Stale.
+#[test]
+fn owner_token_is_the_locked_token_through_a_slot_life() {
+    let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+    let locked = |s: &Slot| s.lock().token;
+    assert_eq!(slot.owner_token(), locked(slot));
+    let t = slot.issue_token();
+    assert_eq!(slot.owner_token(), t);
+    let t2 = slot.reissue_token();
+    assert_ne!(t2, t);
+    assert_eq!(slot.owner_token(), t2);
+    let _ = slot.retire_token();
+    assert_eq!(slot.owner_token(), locked(slot));
+    let t3 = slot.issue_token();
+    assert_eq!(slot.owner_token(), t3);
+    assert_ne!(t3, t2);
+
+    let before = current_handle();
+    assert_eq!(current_handle(), before, "the handle is stable between reissues");
+    reissue_current_token();
+    let after = current_handle();
+    assert_ne!(after, before, "a reissue publishes a fresh handle");
+    assert_eq!(unpark(before), Unparked::Stale, "the old incarnation's handle no longer wakes this thread");
+    assert_eq!(unpark(after), Unparked::Pending);
+    assert_eq!(park(), ParkResult::Notified);
 }

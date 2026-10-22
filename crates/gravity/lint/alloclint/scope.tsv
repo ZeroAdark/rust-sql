@@ -1,0 +1,40 @@
+# alloclint scope (round 2; reports/ALLOCLINT-GRAVITY-20261014.md section 1): the Gravity crates the detector lints, the IR leg
+# checks and the ratchet holds. dir<TAB>package<TAB>role (the crate's phase role; the call graph sets each function's phase)[<TAB>files: the only files of the crate in scope, comma-separated]
+crates/gravity/abi	gravity_abi	RUNTIME
+crates/gravity/backend	gravity_backend	BOTH
+crates/gravity/backend/interp	gravity_interp	RUNTIME
+crates/gravity/backend/tpde	gravity_tpde	PLAN
+crates/gravity/decompose	gravity_decompose	PLAN
+crates/gravity/deps	gravity_deps	PLAN
+crates/gravity/dict	gravity_dict	RUNTIME
+crates/gravity/driver	gravity_driver	BOTH
+crates/gravity/exec	gravity_exec	BOTH
+crates/gravity/expr	gravity_expr	BOTH
+crates/gravity/fn	gravity_fn	BOTH
+crates/gravity/hosts	gravity_hosts	BOTH
+crates/gravity/ir	gravity_ir	PLAN
+crates/gravity/kernels	gravity_kernels	RUNTIME
+crates/gravity/lower	gravity_lower	BOTH
+crates/gravity/lowerv4	gravity_lowerv4	BOTH
+crates/gravity/parallel	gravity_parallel	RUNTIME
+crates/gravity/pool	gravity_pool	RUNTIME
+crates/gravity/program	gravity_program	BOTH
+crates/gravity/wire	gravity_wire	RUNTIME
+# round 3 (main 2026-10-14T18:15:24Z (5), cvgap: the server crates the query's bytes land in; ledger key = the dir with '/' as '.'):
+# the pgrcolumnar crates (in-flight extent images ~177 MiB, openpart.rs:2140 prefetch <= 62 MiB, codec / format / sidecar
+# buffers) and spillset (EpochWriter). pgrc_qa is the QA harness (not the server): out.
+crates/backend/access/pgrcolumnar/pgrc_am	pgrc_am	RUNTIME
+crates/backend/access/pgrcolumnar/pgrc_batch	pgrc_batch	RUNTIME
+crates/backend/access/pgrcolumnar/pgrc_claim	pgrc_claim	RUNTIME
+crates/backend/access/pgrcolumnar/pgrc_codec	pgrc_codec	RUNTIME
+crates/backend/access/pgrcolumnar/pgrc_format	pgrc_format	RUNTIME
+crates/backend/access/pgrcolumnar/pgrc_ingest_par	pgrc_ingest_par	RUNTIME
+crates/backend/access/pgrcolumnar/pgrc_meta	pgrc_meta	RUNTIME
+crates/backend/access/pgrcolumnar/pgrc_read	pgrc_read	RUNTIME
+crates/backend/access/pgrcolumnar/pgrc_scan	pgrc_scan	RUNTIME
+crates/backend/access/pgrcolumnar/pgrc_write	pgrc_write	RUNTIME
+crates/backend/executor/spillset	spillset	RUNTIME
+# main 2026-10-14T19:42:45Z (iv): the pgrc COPY files only (the load path; the 4th column lists the files in scope)
+crates/backend/commands/copy	copy_cmd	RUNTIME	src/text_pgrc.rs,src/parquet_pgrc.rs,src/parquet_cluster.rs
+# main 2026-10-14T21:01:51Z: the parquet COPY decoder (load time; ~400 MiB unattributed on a 2 M-row parquet load, MEASURED by cvwrite)
+crates/backend/access/parquet_read	parquet_read	RUNTIME

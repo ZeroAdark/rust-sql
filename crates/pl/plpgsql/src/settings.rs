@@ -1,0 +1,11 @@
+use guc_tables::*;
+use guc_tables::consts::*;
+use types_guc::*;
+
+pub(super) static SETTINGS: &[GucSetting] = &[
+    GucSetting::Enum(GucEnumSetting { name: "plpgsql.variable_conflict", context: PGC_SUSET, group: CUSTOM_OPTIONS, short_desc: Some("Sets handling of conflicts between PL/pgSQL variable names and table column names."), long_desc: None, flags: 0, variable: &vars::plpgsql_variable_conflict, boot_val: GucDefaultValue::Enum(PLPGSQL_RESOLVE_ERROR), options: GucEnumOptions::Inline(plpgsql_variable_conflict_options), check_hook: None, assign_hook: None, show_hook: None }),
+    GucSetting::Bool(GucBoolSetting { name: "plpgsql.print_strict_params", context: PGC_USERSET, group: CUSTOM_OPTIONS, short_desc: Some("Print information about parameters in the DETAIL part of the error messages generated on INTO ... STRICT failures."), long_desc: None, flags: 0, variable: &vars::plpgsql_print_strict_params, boot_val: GucDefaultValue::Bool(false), check_hook: None, assign_hook: None, show_hook: None }),
+    GucSetting::Bool(GucBoolSetting { name: "plpgsql.check_asserts", context: PGC_USERSET, group: CUSTOM_OPTIONS, short_desc: Some("Perform checks given in ASSERT statements."), long_desc: None, flags: 0, variable: &vars::plpgsql_check_asserts, boot_val: GucDefaultValue::Bool(true), check_hook: None, assign_hook: None, show_hook: None }),
+    GucSetting::String(GucStringSetting { name: "plpgsql.extra_warnings", context: PGC_USERSET, group: CUSTOM_OPTIONS, short_desc: Some("List of programming constructs that should produce a warning."), long_desc: None, flags: GUC_LIST_INPUT, variable: &vars::plpgsql_extra_warnings_string, boot_val: GucDefaultValue::String(Some("none")), check_hook: Some(&hooks::check_plpgsql_extra_checks), assign_hook: None, show_hook: None }),
+    GucSetting::String(GucStringSetting { name: "plpgsql.extra_errors", context: PGC_USERSET, group: CUSTOM_OPTIONS, short_desc: Some("List of programming constructs that should produce an error."), long_desc: None, flags: GUC_LIST_INPUT, variable: &vars::plpgsql_extra_errors_string, boot_val: GucDefaultValue::String(Some("none")), check_hook: Some(&hooks::check_plpgsql_extra_checks), assign_hook: None, show_hook: None }),
+];

@@ -1,0 +1,4 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/front_claim.rs
+growth	std::collections::BTreeMap::insert	1
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	1

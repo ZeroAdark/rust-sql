@@ -1,0 +1,18 @@
+-- regress-full-partition_prune-096
+-- explain (analyze, costs off, summary off, timing off, buffers off) select * from listp where a = (select 2) and b <> 10;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  project (1=c23:2)
+  outs 1=w4:val
+p1 node=1 eligible rows=11 end=sink
+  nodes n1@0
+  source range rel=45499 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op518(v2.2, c23:10)
+  filter op96(v2.1, $exec0)
+  project (1=v2.1, 2=v2.2)
+  outs 1=w8:val 2=w8:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: Result SeqScan SubPlan

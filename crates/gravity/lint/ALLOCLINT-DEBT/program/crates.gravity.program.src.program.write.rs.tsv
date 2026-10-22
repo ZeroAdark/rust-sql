@@ -1,0 +1,2 @@
+path	crates/gravity/program/src/program/write.rs
+method	std::clone::Clone::clone	1

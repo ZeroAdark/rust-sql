@@ -84,11 +84,22 @@ fn write_control_file(dir: &std::path::Path) {
     std::fs::write(dir.join("global/pg_control"), &image).unwrap();
 }
 
+/// The test's data directory, removed when dropped (the test's end, or a panic's unwind): a run leaves nothing in the
+/// temp dir.
+struct TempGone(std::path::PathBuf);
+
+impl Drop for TempGone {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn invalidations_record_roundtrips_through_reader_desc_and_redo() {
     let dir =
         std::env::temp_dir().join(format!("pgrust_standby_inval_test_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    let gone = TempGone(dir.clone());
     for sub in ["global", "pg_wal"] {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
@@ -195,4 +206,7 @@ fn invalidations_record_roundtrips_through_reader_desc_and_redo() {
 
     assert_eq!(xlogutils::standby_state(), xlogutils::STANDBY_DISABLED);
     standby::standby_redo(&mut reader.v).unwrap();
+    // the data directory goes with the test: nothing left in the temp dir
+    drop(gone);
+    assert!(!dir.exists(), "{} left behind", dir.display());
 }

@@ -1,0 +1,5 @@
+RT's debt (crates/gravity/lint/rules/rt_thread_state.py): the thread-locals in RT's scope not yet in the thread-state
+registry (../THREAD-STATE) with an owner, a reset point and a carry rule. One file per source file, one row per static:
+<path> <static> <owner lane> <carry today> <what is missing>. A row goes when its static's registry row is written (or the
+static is removed). The list only shrinks: on a landing a row the parent lacks fails. Seeded (C7 (b)) with every static
+of the scope but the claim-carried ones, which were registered with it.

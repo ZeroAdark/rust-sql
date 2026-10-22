@@ -1,0 +1,7 @@
+path	crates/gravity/exec/src/ops/append/proto.rs
+growth	std::vec::Vec::push	2
+growth	std::vec::Vec::resize	1
+macro	std::vec	2
+method	std::boxed::Box::new	1
+method	std::iter::Iterator::collect	1
+type	std::boxed::Box	2

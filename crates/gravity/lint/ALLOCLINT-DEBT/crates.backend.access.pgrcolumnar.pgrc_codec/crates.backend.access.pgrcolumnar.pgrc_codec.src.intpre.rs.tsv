@@ -1,0 +1,9 @@
+path	crates/backend/access/pgrcolumnar/pgrc_codec/src/intpre.rs
+growth	pgrc_format::try_reserve_more	8
+growth	pgrc_format::try_resize	2
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	12
+growth	std::vec::Vec::push	18
+method	pgrc_format::try_filled	19
+method	pgrc_format::try_vec	5
+method	std::iter::Iterator::collect	1

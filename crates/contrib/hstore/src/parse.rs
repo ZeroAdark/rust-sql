@@ -7,9 +7,8 @@ use types_error::{PgError, PgResult, ERRCODE_SYNTAX_ERROR};
 use crate::repr::Pair;
 use crate::{check_key_len, check_val_len};
 
-// scanner_isspace (scansup.c): must match scan.l's {space} class, which
-// includes \v (0x0b) since PG 16. Missing \v was a real divergence found by
-// hstore_diff (lane p1-mb-contribc).
+// scanner_isspace (scansup.c): scan.l's {space} class, which includes \v
+// (0x0b) since PG 16.
 fn is_space(c: u8) -> bool {
     matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
 }
@@ -53,7 +52,7 @@ fn grow_pairs(pcur: usize, plen: usize) -> PgResult<usize> {
 fn get_val(input: &[u8], mut ptr: usize, ignoreeq: bool) -> PgResult<Option<(Vec<u8>, bool, usize)>> {
     let mut st = Gv::WaitVal;
     let mut wordlen = 32usize;
-    let mut word: Vec<u8> = Vec::with_capacity(wordlen);
+    let mut word: Vec<u8> = ::mcx::std_vec_with_capacity("contrib", wordlen)?;
     let mut escaped = false;
     loop {
         let c = at(input, ptr);
@@ -135,7 +134,7 @@ pub fn parse_hstore(input: &[u8]) -> PgResult<Vec<Pair>> {
     let mut st = St::Key;
     let mut ptr = 0usize;
     let mut plen = 16usize;
-    let mut pairs: Vec<Pair> = Vec::with_capacity(plen);
+    let mut pairs: Vec<Pair> = ::mcx::std_vec_with_capacity("contrib", plen)?;
     let mut cur_key: Option<Vec<u8>> = None;
     loop {
         match st {

@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/include/lib/radixtree.h: 1 stack-depth check sites
+1926	RT_FREE_RECURSE	crates/backend/lib/radixtree (free_node per level)	-	n/a	depth bounded by RT_MAX_LEVEL = 8 (64-bit keys), not by input

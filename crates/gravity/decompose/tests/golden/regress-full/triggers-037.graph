@@ -1,0 +1,10 @@
+-- regress-full-triggers-037
+-- insert into upsert values(2, 'red') on conflict (key) do update set color = 'updated ' || upsert.color;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:2, 2=c25:'red')
+  write INSERT rel=21574 rti=1 natts=2 indexes=(21580[1]up) on_conflict=update arbiter=(21580) excl_rti=2 cols=(2) set=(1=op654(c25:'updated ', v1.2))
+  outs 1=w4:val 2=vl:stmt/imm
+mapped: Result ModifyTable

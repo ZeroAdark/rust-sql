@@ -107,6 +107,17 @@ fn get_rmgr_builtin_and_exists() {
 }
 
 #[test]
+fn pgrc_slot_is_id_150_with_startup_cleanup_and_no_mask() {
+    assert_eq!(types_core::RM_PGRC_ID, 150);
+    assert!(RmgrIdExists(150));
+    assert!(!RmgrIdExists(149) && !RmgrIdExists(151));
+    let r = GetRmgr(150).unwrap();
+    assert_eq!(r.rm_name, "pgrc");
+    assert!(r.rm_startup.is_some() && r.rm_cleanup.is_some() && r.rm_mask.is_none());
+    assert_eq!((r.rm_identify)(0x20), Some("PUBLISH"));
+}
+
+#[test]
 fn get_rmgr_unregistered_errors_like_rmgr_not_found() {
     let err = match GetRmgr(131) {
         Err(err) => err,

@@ -20,3 +20,7 @@ syscache_seams = { path = "../syscache_seams" }
 lock_seams = { path = "../../../storage/lmgr/lock_seams" }
 init_small = { path = "../../init/init_small" }
 inval = { path = "../inval" }
+gravity_deps = { path = "../../../../gravity/deps" }
+
+[dev-dependencies]
+sinval_seams = { path = "../../../storage/ipc/sinval_seams" }

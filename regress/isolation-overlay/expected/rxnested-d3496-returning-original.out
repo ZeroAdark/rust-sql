@@ -1,0 +1,135 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1key s2u s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k RETURNING t.id, t.hits, s.k, s.w;
+QUERY PLAN                                     
+-----------------------------------------------
+Update on ur_t t                               
+  ->  Hash Join                                
+        Hash Cond: ("*SELECT* 1".k = t.id)     
+        ->  Append                             
+              ->  Subquery Scan on "*SELECT* 1"
+                    ->  Seq Scan on ur_s       
+                          Filter: (w > 0)      
+              ->  Result                       
+        ->  Hash                               
+              ->  Seq Scan on ur_t t           
+(10 rows)
+
+step s1key: UPDATE ur_t SET id = 25 WHERE id = 5;
+step s2u: UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k RETURNING t.id, t.hits, s.k, s.w; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|hits|k| w
+--+----+-+--
+25| 250|5|50
+ 7|   1|7| 1
+(2 rows)
+
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   1
+25|50| 250
+(2 rows)
+
+
+starting permutation: s1key s2ub s1c s2sel
+step s1key: UPDATE ur_t SET id = 25 WHERE id = 5;
+step s2ub: UPDATE ur_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ur_s UNION ALL SELECT 7, 1) s WHERE t.id = s.k RETURNING t.id, s.w * 2 + t.hits AS x; <waiting ...>
+step s1c: COMMIT;
+step s2ub: <... completed>
+id|  x
+--+---
+25|350
+ 7|  3
+(2 rows)
+
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id| v|hits
+--+--+----
+ 7|70|   1
+25|50| 250
+(2 rows)
+
+
+starting permutation: s1key s2d s1c s2sel
+step s1key: UPDATE ur_t SET id = 25 WHERE id = 5;
+step s2d: DELETE FROM ur_t t USING (SELECT k, w FROM ur_s WHERE w > 0 UNION ALL SELECT 7, 1) s WHERE t.id = s.k RETURNING t.id, t.v, s.k, s.w; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| v|k| w
+--+--+-+--
+25|50|5|50
+ 7|70|7| 1
+(2 rows)
+
+step s2sel: SELECT id, v, hits FROM ur_t WHERE id IN (5, 7, 25) ORDER BY id;
+id|v|hits
+--+-+----
+(0 rows)
+
+
+starting permutation: s2aexp s1akey s2au s1c s2asel
+step s2aexp: EXPLAIN (COSTS OFF) UPDATE ua_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ua_a UNION ALL SELECT k, w FROM ua_b) s WHERE t.id = s.k RETURNING t.id, t.hits, s.k, s.w;
+QUERY PLAN                              
+----------------------------------------
+Update on ua_t t                        
+  ->  Hash Join                         
+        Hash Cond: (t.id = ua_a.k)      
+        ->  Seq Scan on ua_t t          
+        ->  Hash                        
+              ->  Append                
+                    ->  Seq Scan on ua_a
+                    ->  Seq Scan on ua_b
+(8 rows)
+
+step s1akey: UPDATE ua_t SET id = 10 WHERE id = 3;
+step s2au: UPDATE ua_t t SET hits = t.hits + s.w FROM (SELECT k, w FROM ua_a UNION ALL SELECT k, w FROM ua_b) s WHERE t.id = s.k RETURNING t.id, t.hits, s.k, s.w; <waiting ...>
+step s1c: COMMIT;
+step s2au: <... completed>
+id|hits|k|  w
+--+----+-+---
+10| 103|3|  1
+ 4| 101|4|101
+ 6|   2|6|  2
+(3 rows)
+
+step s2asel: SELECT id, hits FROM ua_t WHERE hits <> 0 OR id <= 11 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 4| 101
+ 6|   2
+ 7|   0
+ 8|   0
+ 9|   0
+10| 103
+11|   0
+(9 rows)
+
+
+starting permutation: s1akey s2ad s1c s2asel
+step s1akey: UPDATE ua_t SET id = 10 WHERE id = 3;
+step s2ad: DELETE FROM ua_t t USING (SELECT k, w FROM ua_a UNION ALL SELECT k, w FROM ua_b) s WHERE t.id = s.k RETURNING t.id, s.k, s.w; <waiting ...>
+step s1c: COMMIT;
+step s2ad: <... completed>
+id|k|  w
+--+-+---
+10|3|  1
+ 4|4|101
+ 6|6|  2
+(3 rows)
+
+step s2asel: SELECT id, hits FROM ua_t WHERE hits <> 0 OR id <= 11 ORDER BY id;
+id|hits
+--+----
+ 1|   0
+ 2|   0
+ 7|   0
+ 8|   0
+ 9|   0
+11|   0
+(6 rows)
+

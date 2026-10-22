@@ -191,13 +191,9 @@ pub const CACHEINFO: [CacheDesc; SYS_CACHE_SIZE] = [
 
 #[cfg(test)]
 mod relcore_dependent_ids {
-    // l2cache::RELCORE_DEPENDENT_CAT_IDS hardcodes these ids (it cannot depend
-    // on this crate); keep the two lists in step.
+    // D3866: l2cache::ROW_STAMPED_CAT_IDS hardcodes pg_proc's and pg_type's OID caches.
     #[test]
-    fn opclass_family_syscache_ids_are_pinned() {
-        assert_eq!(
-            [super::AMOPOPID, super::AMOPSTRATEGY, super::AMPROCNUM, super::CLAAMNAMENSP, super::CLAOID, super::OPFAMILYAMNAMENSP, super::OPFAMILYOID],
-            [3, 4, 5, 13, 14, 41, 42]
-        );
+    fn row_stamped_syscache_ids_are_pinned() {
+        assert_eq!([super::PROCOID, super::TYPEOID], [47, 82]);
     }
 }

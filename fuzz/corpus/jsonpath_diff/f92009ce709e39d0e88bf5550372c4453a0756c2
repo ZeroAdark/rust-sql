@@ -1,1 +1,0 @@
-$ ? (@ like_regex "pat@r\L\\\\m\\mmmmmmmmmmmmmRRRRRRRRRRRRRRRRRRRat~t@r\\\\\\m\\mm^^^^^^^^^^*\\\\\\\\V\\\\\\\\\\\\\\\last\\\\\\\\\\\\\\\\n" flag "isim")

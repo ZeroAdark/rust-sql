@@ -1,0 +1,16 @@
+# V4R-270 (D7, main 09-26): an equal-not-identical group / DISTINCT key outputs any member of its group; eqk maps the key
+# column's texts to their class under PG's `=` (the rig asks PG); everything else stays exact
+# two groups where PG has one: the classes keep the multiset's counts
+sql: SELECT s, count(*) FROM cn GROUP BY s;
+eqk: 1	apple	APPLE
+eqk: 1	APPLE	APPLE
+eqk: 1	Apple	APPLE
+eqk: 1	banana	BANANA
+eqk: 1	BANANA	BANANA
+class: unordered
+verdict: mismatch
+[pg]
+apple	3
+[got]
+APPLE	2
+apple	1

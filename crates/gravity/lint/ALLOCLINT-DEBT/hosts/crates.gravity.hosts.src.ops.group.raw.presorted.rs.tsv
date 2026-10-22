@@ -1,0 +1,5 @@
+path	crates/gravity/hosts/src/ops/group/raw/presorted.rs
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::resize	1
+growth	std::vec::Vec::resize_with	1
+type	std::vec::Vec	1

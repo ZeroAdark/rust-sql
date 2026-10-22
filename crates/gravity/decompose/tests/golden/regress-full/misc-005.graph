@@ -1,0 +1,72 @@
+-- regress-full-misc-005
+-- SELECT p.name, name(p.hobbies) FROM person* p;
+graph pipelines=4 breakers=0 init_plans=0 root=p3
+p0 node=4 eligible rows=50 end=sink
+  nodes n4@0 n3@1 n2@3 n1@4 n0@6
+  source range rel=16429 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx16:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.0)
+  append arm 0/4
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.2, 2=outer.1)
+  srf tlist [1:Other fn30673 fn30673(outer.1)]
+  project (1=fn30673(outer.1), 2=outer.2)
+  project (1=outer.2, 2=T_FieldSelect)
+  outs 1=vl:win/page 2=?
+  outs 1=vl:life/breaker 2=?
+  outs 1=? 2=vl:life/breaker
+  outs 1=? 2=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:call0
+p1 node=5 eligible rows=3 end=sink
+  nodes n5@0 n3@1 n2@3 n1@4 n0@6
+  source range rel=16434 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx16:win/page Attr(4):byval8:w8:val Attr(5):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v3.1, 2=T_ConvertRowtypeExpr)
+  append arm 1/4
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.2, 2=outer.1)
+  srf tlist [1:Other fn30673 fn30673(outer.1)]
+  project (1=fn30673(outer.1), 2=outer.2)
+  project (1=outer.2, 2=T_FieldSelect)
+  outs 1=vl:win/page 2=?
+  outs 1=vl:life/breaker 2=?
+  outs 1=? 2=vl:life/breaker
+  outs 1=? 2=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:call0
+p2 node=6 eligible rows=2 end=sink
+  nodes n6@0 n3@1 n2@3 n1@4 n0@6
+  source range rel=16439 rti=4 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx16:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v4.1, 2=T_ConvertRowtypeExpr)
+  append arm 2/4
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.2, 2=outer.1)
+  srf tlist [1:Other fn30673 fn30673(outer.1)]
+  project (1=fn30673(outer.1), 2=outer.2)
+  project (1=outer.2, 2=T_FieldSelect)
+  outs 1=vl:win/page 2=?
+  outs 1=vl:life/breaker 2=?
+  outs 1=? 2=vl:life/breaker
+  outs 1=? 2=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:call0
+p3 node=7 eligible rows=3 end=sink
+  nodes n7@0 n3@1 n2@3 n1@4 n0@6
+  source range rel=16444 rti=5 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx16:win/page Attr(4):byval8:w8:val Attr(5):byref8:fx64:win/page Attr(6):byval8:w8:val Attr(7):byval8:w8:val Offset:byval2:w2:val
+  project (1=v5.1, 2=T_ConvertRowtypeExpr)
+  append arm 3/4
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.2, 2=outer.1)
+  srf tlist [1:Other fn30673 fn30673(outer.1)]
+  project (1=fn30673(outer.1), 2=outer.2)
+  project (1=outer.2, 2=T_FieldSelect)
+  outs 1=vl:win/page 2=?
+  outs 1=vl:life/breaker 2=?
+  outs 1=? 2=vl:life/breaker
+  outs 1=? 2=vl:life/breaker
+  outs 1=vl:life/breaker 2=vl:call0
+scan-lanes node=4 rti=2 rel=16429 wholerow
+scan-lanes node=5 rti=3 rel=16434 wholerow
+scan-lanes node=6 rti=4 rel=16439 wholerow
+scan-lanes node=7 rti=5 rel=16444 wholerow
+mapped: Result ProjectSet Append SeqScan

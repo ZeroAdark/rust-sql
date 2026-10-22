@@ -1,0 +1,161 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1b s2hot s2mov s2del s2ins s3vac s1q0 s1q8 s1f0 s1f8 s1c s1q0 s1q8 s1f0 s1f8
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM lvm WHERE k < 0;
+count
+-----
+    0
+(1 row)
+
+step s2hot: UPDATE lvm SET w = w || 'h' WHERE id % 5 = 0;
+step s2mov: UPDATE lvm SET k = k + 1 WHERE id % 7 = 0;
+step s2del: DELETE FROM lvm WHERE id % 11 = 0 OR id BETWEEN 60000 AND 70000;
+step s2ins: INSERT INTO lvm SELECT 1000000 + i, i * 2 + 1, 'q' || i FROM generate_series(1, 40000) i;
+step s3vac: VACUUM lvm;
+step s1q0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+count|       sum|       sum|min|  max
+-----+----------+----------+---+-----
+99999|9999900000|4999950000|  2|99999
+(1 row)
+
+step s1q8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+count|       sum|       sum|min|  max
+-----+----------+----------+---+-----
+99999|9999900000|4999950000|  2|99999
+(1 row)
+
+step s1f0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+step s1f8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+step s1c: COMMIT;
+step s1q0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+ count|       sum|        sum|min|    max
+------+----------+-----------+---+-------
+121817|9509020780|44754484546|  2|1040000
+(1 row)
+
+step s1q8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+ count|       sum|        sum|min|    max
+------+----------+-----------+---+-------
+121817|9509020780|44754484546|  2|1040000
+(1 row)
+
+step s1f0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|        sum|min|    max
+------+-----------+-----------+---+-------
+167272|20872790911|50436366365|  2|1040000
+(1 row)
+
+step s1f8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|        sum|min|    max
+------+-----------+-----------+---+-------
+167272|20872790911|50436366365|  2|1040000
+(1 row)
+
+
+starting permutation: s1b s2bi s1q8 s1f8 s2a s3vac s1q0 s1f0 s1c s1q8 s1f8
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM lvm WHERE k < 0;
+count
+-----
+    0
+(1 row)
+
+step s2bi: BEGIN; INSERT INTO lvm SELECT 2000000 + i, i * 2 + 1, 'r' || i FROM generate_series(1, 40000) i;
+step s1q8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+count|       sum|       sum|min|  max
+-----+----------+----------+---+-----
+99999|9999900000|4999950000|  2|99999
+(1 row)
+
+step s1f8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+step s2a: ROLLBACK;
+step s3vac: VACUUM lvm;
+step s1q0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+count|       sum|       sum|min|  max
+-----+----------+----------+---+-----
+99999|9999900000|4999950000|  2|99999
+(1 row)
+
+step s1f0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+step s1c: COMMIT;
+step s1q8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+count|       sum|       sum|min|  max
+-----+----------+----------+---+-----
+99999|9999900000|4999950000|  2|99999
+(1 row)
+
+step s1f8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+
+starting permutation: s2hot s2del s1b s3vac s1q8 s1f8 s2mov s2ins s1q0 s1f0 s1c s1q8 s1f8
+step s2hot: UPDATE lvm SET w = w || 'h' WHERE id % 5 = 0;
+step s2del: DELETE FROM lvm WHERE id % 11 = 0 OR id BETWEEN 60000 AND 70000;
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM lvm WHERE k < 0;
+count
+-----
+    0
+(1 row)
+
+step s3vac: VACUUM lvm;
+step s1q8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+count|       sum|       sum|min|  max
+-----+----------+----------+---+-----
+81817|7908929092|3954464546|  2|99999
+(1 row)
+
+step s1f8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|       sum|min|   max
+------+-----------+----------+---+------
+127272|19272692730|9636346365|  2|150000
+(1 row)
+
+step s2mov: UPDATE lvm SET k = k + 1 WHERE id % 7 = 0;
+step s2ins: INSERT INTO lvm SELECT 1000000 + i, i * 2 + 1, 'q' || i FROM generate_series(1, 40000) i;
+step s1q0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+count|       sum|       sum|min|  max
+-----+----------+----------+---+-----
+81817|7908929092|3954464546|  2|99999
+(1 row)
+
+step s1f0: SET max_parallel_workers_per_gather = 0; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|       sum|min|   max
+------+-----------+----------+---+------
+127272|19272692730|9636346365|  2|150000
+(1 row)
+
+step s1c: COMMIT;
+step s1q8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm WHERE k < 200000;
+ count|       sum|        sum|min|    max
+------+----------+-----------+---+-------
+121817|9509020780|44754484546|  2|1040000
+(1 row)
+
+step s1f8: SET max_parallel_workers_per_gather = 8; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM lvm;
+ count|        sum|        sum|min|    max
+------+-----------+-----------+---+-------
+167272|20872790911|50436366365|  2|1040000
+(1 row)
+

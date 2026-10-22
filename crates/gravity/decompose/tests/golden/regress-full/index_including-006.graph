@@ -1,0 +1,16 @@
+-- regress-full-index_including-006
+-- select * from tbl where (c1,c2,c3) < (262,1,1) limit 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@2
+  source index-only rel=20380 rti=1 am=heap index=20385
+    key att=1 op=523 form=row value=T_RowCompareExpr
+    recheck (T_RowCompareExpr)
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byref8:fx32:win/page
+  filter T_RowCompareExpr
+  project (1=index.1, 2=index.2, 3=index.3, 4=index.4)
+  limit count=1 offset=all
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=fx32:win/page
+  outs 1=w4:val 2=w4:val 3=w4:val 4=fx32:win/page
+mapped: IndexOnlyScan Limit

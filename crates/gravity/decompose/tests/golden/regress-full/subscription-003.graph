@@ -1,0 +1,20 @@
+-- regress-full-subscription-003
+-- SELECT '<timestamp>' < stats_reset FROM pg_stat_subscription_stats WHERE subname = 'regress_testsub';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0 n0@2
+  source range rel=6100 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(4):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v2.4, c19:#64)
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9, 10=v2.10, 11=v2.11, 12=v2.12, 13=v2.13, 14=v2.14, 15=v2.15, 16=v2.16, 17=v2.17, 18=v2.18)
+  nest inner=n2 JOIN_INNER vol=s params=($exec0=outer.1)
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  srf from rti=3 [1:Scalar fn6231 cols=11 fn6231($exec0)]
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4, 5=v3.5, 6=v3.6, 7=v3.7, 8=v3.8, 9=v3.9, 10=v3.10, 11=v3.11)
+  project (1=op1322(c1184:843011142553518, inner.11))
+  outs 1=w8:val 2=w4:val 3=w8:val 4=fx64:win/page 5=w4:val 6=w1:val 7=w1:val 8=w1:val 9=w1:val 10=w1:val 11=w1:val 12=w1:val 13=w1:val 14=vl:row 15=fx64:row 16=vl:row 17=vl:row 18=vl:row
+  outs 1=w1:val
+param $exec0 owner=n0 type=26 rep=w8:val
+mapped: SeqScan FunctionScan NestLoop NestLoopParam

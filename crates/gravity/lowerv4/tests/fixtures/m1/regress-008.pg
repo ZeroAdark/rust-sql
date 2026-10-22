@@ -1,0 +1,7 @@
+# PostgreSQL 18.6 (box 19, 09-24): COPY (<sql>) TO STDOUT over a fresh initdb
+sql: SELECT * FROM (VALUES (1, 'x'), (2, 'y')) v(i, s) WHERE i > 0;
+cols: i	s
+class: unordered
+[pg]
+1	x
+2	y

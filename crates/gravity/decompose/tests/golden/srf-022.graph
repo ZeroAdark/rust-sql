@@ -1,0 +1,10 @@
+-- srf-022
+-- SELECT * FROM jsonb_each('{"k": 1, "j": 2}'::jsonb);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:JsonbEach { text: false } fn3208 cols=2 fn3208(c3802:'\x02\x00\x00 \x01\x00\x00\x80\x01\x00\x00\x00\x0a\x00\x00\x10\x08\x00\x00\x10jk\x00\x00 \x00\x00\x00\x00\x80\x02\x00 \x00\x00\x00\x00\x80\x01\x00')]
+  project (1=v1.1, 2=v1.2)
+  outs 1=vl:row 2=vl:row
+mapped: FunctionScan

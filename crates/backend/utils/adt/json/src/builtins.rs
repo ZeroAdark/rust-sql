@@ -184,13 +184,18 @@ pub fn fc_json_object_two_arg(
     )?))
 }
 
+// text_to_cstring: the key bytes up to the first NUL (jsonfuncs.c:850, :1054).
+fn cstring_prefix(b: &[u8]) -> &[u8] {
+    &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())]
+}
+
 fn object_field_common(fcinfo: &mut Fcinfo, normalize: bool) -> PgResult<Datum> {
     let d = {
         let mcx = fcinfo.result_mcx();
         // SAFETY: catalog args are non-null varlenas (strict fn).
         let json = unsafe { fcinfo.arg_varlena_packed(0)? };
         let key = unsafe { fcinfo.arg_varlena_packed(1)? };
-        let names = [key.data()];
+        let names = [cstring_prefix(key.data())];
         get_worker(mcx, json.data(), Some(&names), None, 1, normalize)?.map(varlena_result)
     };
     match d {
@@ -258,7 +263,7 @@ fn get_path_all(fcinfo: &mut Fcinfo, as_text: bool) -> PgResult<Datum> {
             for d in elems.iter() {
                 // SAFETY: non-null text element datums point into the flat image.
                 let pv = unsafe { PackedVarlena::from_ptr(d.as_usize() as *const u8) };
-                let payload = pv.data();
+                let payload = cstring_prefix(pv.data());
                 names.push(payload);
                 indexes.push(path_index(payload));
             }
@@ -346,45 +351,29 @@ pub fn fc_json_object_keys(
 }
 
 pub fn fc_json_each(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    crate::srfs::srf_drive(flinfo, fcinfo, "json_each", |fcinfo| {
-        let mcx = fcinfo.result_mcx();
-        // SAFETY: catalog arg 0 is a non-null json varlena (strict fn).
-        let json = unsafe { fcinfo.arg_varlena_packed(0)? };
-        crate::srfs::each_rows(mcx, json.data(), false)
-    })
+    let flinfo = flinfo.unwrap_or_else(|| panic!("json_each: NULL flinfo"));
+    crate::srfs::each_worker(flinfo, fcinfo, false)
 }
 
 pub fn fc_json_each_text(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    crate::srfs::srf_drive(flinfo, fcinfo, "json_each_text", |fcinfo| {
-        let mcx = fcinfo.result_mcx();
-        // SAFETY: catalog arg 0 is a non-null json varlena (strict fn).
-        let json = unsafe { fcinfo.arg_varlena_packed(0)? };
-        crate::srfs::each_rows(mcx, json.data(), true)
-    })
+    let flinfo = flinfo.unwrap_or_else(|| panic!("json_each_text: NULL flinfo"));
+    crate::srfs::each_worker(flinfo, fcinfo, true)
 }
 
 pub fn fc_json_array_elements(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    crate::srfs::srf_drive(flinfo, fcinfo, "json_array_elements", |fcinfo| {
-        let mcx = fcinfo.result_mcx();
-        // SAFETY: catalog arg 0 is a non-null json varlena (strict fn).
-        let json = unsafe { fcinfo.arg_varlena_packed(0)? };
-        crate::srfs::elements_rows(mcx, json.data(), "json_array_elements", false)
-    })
+    let flinfo = flinfo.unwrap_or_else(|| panic!("json_array_elements: NULL flinfo"));
+    crate::srfs::elements_worker(flinfo, fcinfo, "json_array_elements", false)
 }
 
 pub fn fc_json_array_elements_text(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    crate::srfs::srf_drive(flinfo, fcinfo, "json_array_elements_text", |fcinfo| {
-        let mcx = fcinfo.result_mcx();
-        // SAFETY: catalog arg 0 is a non-null json varlena (strict fn).
-        let json = unsafe { fcinfo.arg_varlena_packed(0)? };
-        crate::srfs::elements_rows(mcx, json.data(), "json_array_elements_text", true)
-    })
+    let flinfo = flinfo.unwrap_or_else(|| panic!("json_array_elements_text: NULL flinfo"));
+    crate::srfs::elements_worker(flinfo, fcinfo, "json_array_elements_text", true)
 }
 
 const fn b(foid: Oid, name: &'static str, nargs: i16, func: PGFunction) -> FmgrBuiltin {

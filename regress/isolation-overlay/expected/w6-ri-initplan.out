@@ -1,0 +1,354 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1kx s2dy s1c s2r
+step s1kx: UPDATE w6f SET id = '[7,8)' WHERE id = '[3,4)';
+step s2dy: DELETE FROM w6r WHERE valid_at = daterange('2018-01-01', '2018-02-01'); <waiting ...>
+step s1c: COMMIT;
+step s2dy: <... completed>
+ERROR:  update or delete on table "w6r" violates foreign key constraint "w6f_fk" on table "w6f"
+step s2r: SELECT * FROM w6r ORDER BY valid_at; SELECT * FROM w6f ORDER BY id;
+id   |valid_at               
+-----+-----------------------
+[5,6)|[01-01-2018,02-01-2018)
+[5,6)|[02-01-2018,03-01-2018)
+(2 rows)
+
+id   |valid_at               |parent_id
+-----+-----------------------+---------
+[4,5)|[01-20-2018,02-10-2018)|[5,6)    
+[7,8)|[01-05-2018,01-10-2018)|[5,6)    
+(2 rows)
+
+
+starting permutation: s1mz s2uy s1c s2r
+step s1mz: UPDATE w6f SET valid_at = daterange('2018-01-12', '2018-01-15') WHERE id = '[4,5)';
+step s2uy: UPDATE w6r SET valid_at = daterange('2018-02-15', '2018-03-01') WHERE valid_at = daterange('2018-02-01', '2018-03-01'); <waiting ...>
+step s1c: COMMIT;
+step s2uy: <... completed>
+step s2r: SELECT * FROM w6r ORDER BY valid_at; SELECT * FROM w6f ORDER BY id;
+id   |valid_at               
+-----+-----------------------
+[5,6)|[01-01-2018,02-01-2018)
+[5,6)|[02-15-2018,03-01-2018)
+(2 rows)
+
+id   |valid_at               |parent_id
+-----+-----------------------+---------
+[3,4)|[01-05-2018,01-10-2018)|[5,6)    
+[4,5)|[01-12-2018,01-15-2018)|[5,6)    
+(2 rows)
+
+
+starting permutation: s1kz s2q s1c s2n
+step s1kz: UPDATE w6f SET id = '[8,9)' WHERE id = '[4,5)';
+step s2q: SELECT x.id FROM ONLY w6f x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6r y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-01-01', '2018-02-01') AND w6r_bump(y.id) FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+id   
+-----
+[8,9)
+(1 row)
+
+step s2n: SELECT CASE WHEN is_called THEN last_value ELSE 0 END AS calls FROM w6r_seq;
+calls
+-----
+    1
+(1 row)
+
+
+starting permutation: s1mz s2q s1c s2n
+step s1mz: UPDATE w6f SET valid_at = daterange('2018-01-12', '2018-01-15') WHERE id = '[4,5)';
+step s2q: SELECT x.id FROM ONLY w6f x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6r y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-01-01', '2018-02-01') AND w6r_bump(y.id) FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+id
+--
+(0 rows)
+
+step s2n: SELECT CASE WHEN is_called THEN last_value ELSE 0 END AS calls FROM w6r_seq;
+calls
+-----
+    1
+(1 row)
+
+
+starting permutation: s1dz s2q s1c s2n
+step s1dz: DELETE FROM w6f WHERE id = '[4,5)';
+step s2q: SELECT x.id FROM ONLY w6f x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6r y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-01-01', '2018-02-01') AND w6r_bump(y.id) FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+id
+--
+(0 rows)
+
+step s2n: SELECT CASE WHEN is_called THEN last_value ELSE 0 END AS calls FROM w6r_seq;
+calls
+-----
+    1
+(1 row)
+
+
+starting permutation: s1kz s2q s1a s2n
+step s1kz: UPDATE w6f SET id = '[8,9)' WHERE id = '[4,5)';
+step s2q: SELECT x.id FROM ONLY w6f x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6r y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-01-01', '2018-02-01') AND w6r_bump(y.id) FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1a: ROLLBACK;
+step s2q: <... completed>
+id   
+-----
+[4,5)
+(1 row)
+
+step s2n: SELECT CASE WHEN is_called THEN last_value ELSE 0 END AS calls FROM w6r_seq;
+calls
+-----
+    1
+(1 row)
+
+
+starting permutation: s1ey s2q s1c s2n
+step s1ey: UPDATE w6r SET valid_at = daterange('2017-12-01', '2018-02-01') WHERE valid_at = daterange('2018-01-01', '2018-02-01');
+step s2q: SELECT x.id FROM ONLY w6f x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6r y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-01-01', '2018-02-01') AND w6r_bump(y.id) FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+id   
+-----
+[4,5)
+(1 row)
+
+step s2n: SELECT CASE WHEN is_called THEN last_value ELSE 0 END AS calls FROM w6r_seq;
+calls
+-----
+    2
+(1 row)
+
+
+starting permutation: s2rr s1kz s1c s2q s2c s2n
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM w6f;
+count
+-----
+    2
+(1 row)
+
+step s1kz: UPDATE w6f SET id = '[8,9)' WHERE id = '[4,5)';
+step s1c: COMMIT;
+step s2q: SELECT x.id FROM ONLY w6f x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6r y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-01-01', '2018-02-01') AND w6r_bump(y.id) FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x;
+ERROR:  could not serialize access due to concurrent update
+step s2c: COMMIT;
+step s2n: SELECT CASE WHEN is_called THEN last_value ELSE 0 END AS calls FROM w6r_seq;
+calls
+-----
+    1
+(1 row)
+
+
+starting permutation: s2sr s1ey s1c s2q s2c s2n
+step s2sr: BEGIN ISOLATION LEVEL SERIALIZABLE; SELECT count(*) FROM w6r;
+count
+-----
+    2
+(1 row)
+
+step s1ey: UPDATE w6r SET valid_at = daterange('2017-12-01', '2018-02-01') WHERE valid_at = daterange('2018-01-01', '2018-02-01');
+step s1c: COMMIT;
+step s2q: SELECT x.id FROM ONLY w6f x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6r y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-01-01', '2018-02-01') AND w6r_bump(y.id) FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x;
+ERROR:  could not serialize access due to concurrent update
+step s2c: COMMIT;
+step s2n: SELECT CASE WHEN is_called THEN last_value ELSE 0 END AS calls FROM w6r_seq;
+calls
+-----
+    1
+(1 row)
+
+
+starting permutation: s1pk s2dp s1c s2pr
+step s1pk: UPDATE w6fp SET id = '[8,9)' WHERE id = '[4,5)';
+step s2dp: DELETE FROM w6rp WHERE id = '[5,6)' AND valid_at = daterange('2018-01-01', '2018-02-01'); <waiting ...>
+step s1c: COMMIT;
+step s2dp: <... completed>
+ERROR:  update or delete on table "w6rp" violates foreign key constraint "w6fp_fk" on table "w6fp"
+step s2pr: SELECT * FROM w6rp ORDER BY id, valid_at; SELECT tableoid::regclass, * FROM w6fp ORDER BY id;
+id    |valid_at               
+------+-----------------------
+[5,6) |[01-01-2018,02-01-2018)
+[5,6) |[02-01-2018,03-01-2018)
+[9,10)|[01-01-2018,03-01-2018)
+(3 rows)
+
+tableoid|id   |valid_at               |parent_id
+--------+-----+-----------------------+---------
+w6fp1   |[3,4)|[02-05-2018,02-10-2018)|[5,6)    
+w6fp3b  |[6,7)|[01-22-2018,01-25-2018)|[9,10)   
+w6fp2   |[8,9)|[01-20-2018,01-25-2018)|[5,6)    
+(3 rows)
+
+
+starting permutation: s1pm s2dp s1c s2pr
+step s1pm: UPDATE w6fp SET id = '[7,8)' WHERE id = '[4,5)';
+step s2dp: DELETE FROM w6rp WHERE id = '[5,6)' AND valid_at = daterange('2018-01-01', '2018-02-01'); <waiting ...>
+step s1c: COMMIT;
+step s2dp: <... completed>
+ERROR:  update or delete on table "w6rp" violates foreign key constraint "w6fp_fk" on table "w6fp"
+step s2pr: SELECT * FROM w6rp ORDER BY id, valid_at; SELECT tableoid::regclass, * FROM w6fp ORDER BY id;
+id    |valid_at               
+------+-----------------------
+[5,6) |[01-01-2018,02-01-2018)
+[5,6) |[02-01-2018,03-01-2018)
+[9,10)|[01-01-2018,03-01-2018)
+(3 rows)
+
+tableoid|id   |valid_at               |parent_id
+--------+-----+-----------------------+---------
+w6fp1   |[3,4)|[02-05-2018,02-10-2018)|[5,6)    
+w6fp3b  |[6,7)|[01-22-2018,01-25-2018)|[9,10)   
+w6fp1   |[7,8)|[01-20-2018,01-25-2018)|[5,6)    
+(3 rows)
+
+
+starting permutation: s1pv s2dp s1c s2pr
+step s1pv: UPDATE w6fp SET valid_at = daterange('2018-02-12', '2018-02-15') WHERE id = '[4,5)';
+step s2dp: DELETE FROM w6rp WHERE id = '[5,6)' AND valid_at = daterange('2018-01-01', '2018-02-01'); <waiting ...>
+step s1c: COMMIT;
+step s2dp: <... completed>
+step s2pr: SELECT * FROM w6rp ORDER BY id, valid_at; SELECT tableoid::regclass, * FROM w6fp ORDER BY id;
+id    |valid_at               
+------+-----------------------
+[5,6) |[02-01-2018,03-01-2018)
+[9,10)|[01-01-2018,03-01-2018)
+(2 rows)
+
+tableoid|id   |valid_at               |parent_id
+--------+-----+-----------------------+---------
+w6fp1   |[3,4)|[02-05-2018,02-10-2018)|[5,6)    
+w6fp2   |[4,5)|[02-12-2018,02-15-2018)|[5,6)    
+w6fp3b  |[6,7)|[01-22-2018,01-25-2018)|[9,10)   
+(3 rows)
+
+
+starting permutation: s1pd s2dp s1c s2pr
+step s1pd: DELETE FROM w6fp WHERE id = '[4,5)';
+step s2dp: DELETE FROM w6rp WHERE id = '[5,6)' AND valid_at = daterange('2018-01-01', '2018-02-01'); <waiting ...>
+step s1c: COMMIT;
+step s2dp: <... completed>
+step s2pr: SELECT * FROM w6rp ORDER BY id, valid_at; SELECT tableoid::regclass, * FROM w6fp ORDER BY id;
+id    |valid_at               
+------+-----------------------
+[5,6) |[02-01-2018,03-01-2018)
+[9,10)|[01-01-2018,03-01-2018)
+(2 rows)
+
+tableoid|id   |valid_at               |parent_id
+--------+-----+-----------------------+---------
+w6fp1   |[3,4)|[02-05-2018,02-10-2018)|[5,6)    
+w6fp3b  |[6,7)|[01-22-2018,01-25-2018)|[9,10)   
+(2 rows)
+
+
+starting permutation: s1sv s2dq s1c s2pr
+step s1sv: UPDATE w6fp SET valid_at = daterange('2018-01-22', '2018-01-26') WHERE id = '[6,7)';
+step s2dq: DELETE FROM w6rp WHERE id = '[9,10)'; <waiting ...>
+step s1c: COMMIT;
+step s2dq: <... completed>
+ERROR:  update or delete on table "w6rp" violates foreign key constraint "w6fp_fk" on table "w6fp"
+step s2pr: SELECT * FROM w6rp ORDER BY id, valid_at; SELECT tableoid::regclass, * FROM w6fp ORDER BY id;
+id    |valid_at               
+------+-----------------------
+[5,6) |[01-01-2018,02-01-2018)
+[5,6) |[02-01-2018,03-01-2018)
+[9,10)|[01-01-2018,03-01-2018)
+(3 rows)
+
+tableoid|id   |valid_at               |parent_id
+--------+-----+-----------------------+---------
+w6fp1   |[3,4)|[02-05-2018,02-10-2018)|[5,6)    
+w6fp2   |[4,5)|[01-20-2018,01-25-2018)|[5,6)    
+w6fp3b  |[6,7)|[01-22-2018,01-26-2018)|[9,10)   
+(3 rows)
+
+
+starting permutation: s1sk s2dq s1c s2pr
+step s1sk: UPDATE w6fp SET id = '[10,11)' WHERE id = '[6,7)';
+step s2dq: DELETE FROM w6rp WHERE id = '[9,10)'; <waiting ...>
+step s1c: COMMIT;
+step s2dq: <... completed>
+ERROR:  update or delete on table "w6rp" violates foreign key constraint "w6fp_fk" on table "w6fp"
+step s2pr: SELECT * FROM w6rp ORDER BY id, valid_at; SELECT tableoid::regclass, * FROM w6fp ORDER BY id;
+id    |valid_at               
+------+-----------------------
+[5,6) |[01-01-2018,02-01-2018)
+[5,6) |[02-01-2018,03-01-2018)
+[9,10)|[01-01-2018,03-01-2018)
+(3 rows)
+
+tableoid|id     |valid_at               |parent_id
+--------+-------+-----------------------+---------
+w6fp1   |[3,4)  |[02-05-2018,02-10-2018)|[5,6)    
+w6fp2   |[4,5)  |[01-20-2018,01-25-2018)|[5,6)    
+w6fp3b  |[10,11)|[01-22-2018,01-25-2018)|[9,10)   
+(3 rows)
+
+
+starting permutation: s1pk s2qp s1c
+step s1pk: UPDATE w6fp SET id = '[8,9)' WHERE id = '[4,5)';
+step s2qp: SELECT x.id, x.valid_at FROM w6fp x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6rp y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-02-01', '2018-03-01') FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2qp: <... completed>
+id   |valid_at               
+-----+-----------------------
+[8,9)|[01-20-2018,01-25-2018)
+(1 row)
+
+
+starting permutation: s1pv s2qp s1c
+step s1pv: UPDATE w6fp SET valid_at = daterange('2018-02-12', '2018-02-15') WHERE id = '[4,5)';
+step s2qp: SELECT x.id, x.valid_at FROM w6fp x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6rp y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-02-01', '2018-03-01') FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2qp: <... completed>
+id|valid_at
+--+--------
+(0 rows)
+
+
+starting permutation: s1pd s2qp s1c
+step s1pd: DELETE FROM w6fp WHERE id = '[4,5)';
+step s2qp: SELECT x.id, x.valid_at FROM w6fp x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6rp y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-02-01', '2018-03-01') FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2qp: <... completed>
+id|valid_at
+--+--------
+(0 rows)
+
+
+starting permutation: s1pm s2qp s1c
+step s1pm: UPDATE w6fp SET id = '[7,8)' WHERE id = '[4,5)';
+step s2qp: SELECT x.id, x.valid_at FROM w6fp x WHERE x.parent_id = '[5,6)' AND NOT coalesce((x.valid_at * daterange('2018-01-01', '2018-03-01')) <@ (SELECT range_agg(r) FROM (SELECT y.valid_at r FROM ONLY w6rp y WHERE y.id = '[5,6)' AND y.valid_at && daterange('2018-02-01', '2018-03-01') FOR KEY SHARE OF y) y2), false) FOR KEY SHARE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2qp: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+
+starting permutation: s2rp s1pk s1c s2dp s2c s2pr
+step s2rp: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM w6fp;
+count
+-----
+    3
+(1 row)
+
+step s1pk: UPDATE w6fp SET id = '[8,9)' WHERE id = '[4,5)';
+step s1c: COMMIT;
+step s2dp: DELETE FROM w6rp WHERE id = '[5,6)' AND valid_at = daterange('2018-01-01', '2018-02-01');
+ERROR:  update or delete on table "w6rp" violates foreign key constraint "w6fp_fk" on table "w6fp"
+step s2c: COMMIT;
+step s2pr: SELECT * FROM w6rp ORDER BY id, valid_at; SELECT tableoid::regclass, * FROM w6fp ORDER BY id;
+id    |valid_at               
+------+-----------------------
+[5,6) |[01-01-2018,02-01-2018)
+[5,6) |[02-01-2018,03-01-2018)
+[9,10)|[01-01-2018,03-01-2018)
+(3 rows)
+
+tableoid|id   |valid_at               |parent_id
+--------+-----+-----------------------+---------
+w6fp1   |[3,4)|[02-05-2018,02-10-2018)|[5,6)    
+w6fp3b  |[6,7)|[01-22-2018,01-25-2018)|[9,10)   
+w6fp2   |[8,9)|[01-20-2018,01-25-2018)|[5,6)    
+(3 rows)
+

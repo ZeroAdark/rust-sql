@@ -1,0 +1,21 @@
+# PostgreSQL 18.6 (m4_write_golden.py): the tables before, the statement, its rows, count and tables after
+plan: ret-011
+table: 16395 ret_t k:int4 v:int4 b:bool s:text
+unique: 16395 ret_t_pkey k
+[before 16395]
+1	10	t	one
+2	20	f	two
+11	110	f	eleven
+12	\N	t	twelve
+13	130	\N	\N
+14	140	t	fourteen
+[pg]
+11	111	t	eleven!	132
+12	\N	f	twelve!	\N
+13	131	\N	\N	156
+[tag]
+3
+[after 16395]
+1	10	t	one
+2	20	f	two
+14	140	t	fourteen

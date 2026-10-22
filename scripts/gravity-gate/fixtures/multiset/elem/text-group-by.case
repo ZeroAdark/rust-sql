@@ -1,0 +1,10 @@
+# the text seam: a bare array_agg over the file's table
+sql: SELECT g, array_agg(x) FROM t GROUP BY g;
+cols: g	array_agg
+tables: t
+class: unordered
+verdict: match
+[pg]
+1	{1,2}
+[got]
+1	{2,1}

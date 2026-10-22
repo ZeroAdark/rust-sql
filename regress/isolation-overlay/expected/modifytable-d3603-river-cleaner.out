@@ -1,0 +1,64 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1retry s2clean s1c s2show
+step s2x: EXPLAIN (COSTS OFF) WITH deleted_jobs AS (DELETE FROM rcl_job WHERE id IN (SELECT id FROM rcl_job WHERE state = 'completed' AND finalized_at < '2026-01-01 00:20' ORDER BY id LIMIT 4) RETURNING *) SELECT count(*) FROM deleted_jobs;
+QUERY PLAN                                                                                                                                                       
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+Aggregate                                                                                                                                                        
+  CTE deleted_jobs                                                                                                                                               
+    ->  Delete on rcl_job                                                                                                                                        
+          ->  Hash Semi Join                                                                                                                                     
+                Hash Cond: (rcl_job.id = "ANY_subquery".id)                                                                                                      
+                ->  Seq Scan on rcl_job                                                                                                                          
+                ->  Hash                                                                                                                                         
+                      ->  Subquery Scan on "ANY_subquery"                                                                                                        
+                            ->  Limit                                                                                                                            
+                                  ->  Sort                                                                                                                       
+                                        Sort Key: rcl_job_1.id                                                                                                   
+                                        ->  Seq Scan on rcl_job rcl_job_1                                                                                        
+                                              Filter: ((finalized_at < 'Thu Jan 01 00:20:00 2026 PST'::timestamp with time zone) AND (state = 'completed'::text))
+  ->  CTE Scan on deleted_jobs                                                                                                                                   
+(14 rows)
+
+step s1retry: UPDATE rcl_job SET state = 'available', finalized_at = NULL WHERE id = 2;
+step s2clean: WITH deleted_jobs AS (DELETE FROM rcl_job WHERE id IN (SELECT id FROM rcl_job WHERE state = 'completed' AND finalized_at < '2026-01-01 00:20' ORDER BY id LIMIT 4) RETURNING *) SELECT count(*), array_agg(id ORDER BY id) FROM deleted_jobs; <waiting ...>
+step s1c: COMMIT;
+step s2clean: <... completed>
+count|array_agg
+-----+---------
+    4|{2,4,6,8}
+(1 row)
+
+step s2show: SELECT id, state FROM rcl_job WHERE id <= 10 ORDER BY id;
+id|state    
+--+---------
+ 1|available
+ 3|available
+ 5|available
+ 7|available
+ 9|available
+10|completed
+(6 rows)
+
+
+starting permutation: s1del s2clean s1c s2show
+step s1del: DELETE FROM rcl_job WHERE id = 4;
+step s2clean: WITH deleted_jobs AS (DELETE FROM rcl_job WHERE id IN (SELECT id FROM rcl_job WHERE state = 'completed' AND finalized_at < '2026-01-01 00:20' ORDER BY id LIMIT 4) RETURNING *) SELECT count(*), array_agg(id ORDER BY id) FROM deleted_jobs; <waiting ...>
+step s1c: COMMIT;
+step s2clean: <... completed>
+count|array_agg
+-----+---------
+    3|{2,6,8}  
+(1 row)
+
+step s2show: SELECT id, state FROM rcl_job WHERE id <= 10 ORDER BY id;
+id|state    
+--+---------
+ 1|available
+ 3|available
+ 5|available
+ 7|available
+ 9|available
+10|completed
+(6 rows)
+

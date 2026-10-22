@@ -1,0 +1,18 @@
+-- regress-full-numeric-038
+-- SELECT a, b, gcd(a, b), gcd(a, -b), gcd(-b, a), gcd(-b, -a) FROM (VALUES (0::numeric, 0::numeric), (0::numeric, numeric 'NaN'), (0::numeric, 46375::numeric), (433125::numeric, 46375::numeric), (43312.5::numeric, 4637.5::numeric), (4331.250::numeric, 463.75000::numeric), ('inf', '0'), ('inf', '42'), ('inf', 'inf') ) AS v(a, b);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=9
+    row (c1700:'\x00\x80', c1700:'\x00\x80')
+    row (c1700:'\x00\x80', c1700:'\x00\xc0')
+    row (c1700:'\x00\x80', c1700:'\x01\x80\x04\x00\xe7\x18')
+    row (c1700:'\x01\x80+\x005\x0c', c1700:'\x01\x80\x04\x00\xe7\x18')
+    row (c1700:'\x81\x80\x04\x00\xf0\x0c\x88\x13', c1700:'\x80\x80\x1d\x12\x88\x13')
+    row (c1700:'\x80\x81\xeb\x10\xc4\x09', c1700:'\x80\x82\xcf\x01L\x1d')
+    row (c1700:'\x00\xd0', c1700:'\x00\x80')
+    row (c1700:'\x00\xd0', c1700:'\x00\x80*\x00')
+    row (c1700:'\x00\xd0', c1700:'\x00\xd0')
+  project (1=v2.1, 2=v2.2, 3=fn5048(v2.1, v2.2), 4=fn5048(v2.1, op1751(v2.2)), 5=fn5048(op1751(v2.2), v2.1), 6=fn5048(op1751(v2.2), op1751(v2.1)))
+  outs 1=vl:row 2=vl:row 3=vl:call5048 4=vl:call5048 5=vl:call5048 6=vl:call5048
+mapped: ValuesScan

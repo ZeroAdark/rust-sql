@@ -43,11 +43,9 @@ impl SpiCursor {
 // path.
 fn cursor_params(
     portal: &Portal<'static>,
-    argtypes: &[types_core::Oid],
-    values: &[Datum],
-    nulls: &[bool],
+    caller_params: &[ParamExternData],
 ) -> PgResult<ParamListHandle> {
-    if argtypes.is_empty() {
+    if caller_params.is_empty() {
         return Ok(ParamListHandle::NULL);
     }
     // SAFETY: portalContext is PgBox'd for address stability and outlives this
@@ -58,16 +56,8 @@ fn cursor_params(
             as *const mcx::MemoryContext)
     };
     let mcx = ctx.mcx();
-    let caller_params: Vec<ParamExternData> = (0..argtypes.len())
-        .map(|i| ParamExternData {
-            value: values[i],
-            isnull: nulls[i],
-            pflags: PARAM_FLAG_CONST,
-            ptype: argtypes[i],
-        })
-        .collect();
     // copyParamList: by-ref datums are datumCopy'd into portalContext.
-    let v = nodes_params::copy_param_list(mcx, &caller_params)?;
+    let v = nodes_params::copy_param_list(mcx, caller_params)?;
     let slice = mcx::vec_borrow_in(mcx, v)?;
     // SAFETY: slice lives in portalContext, which PortalDrop deletes only
     // after release_portal_registry_handles frees the handle. The copy has
@@ -86,28 +76,38 @@ pub fn SPI_cursor_open(
     nulls: &[bool],
     read_only: bool,
 ) -> PgResult<SpiCursor> {
-    cursor_open_internal(name, ptr, values, nulls, read_only)
+    let argtypes = crate::plan::state_snapshot(ptr).map(|s| s.argtypes).unwrap_or_default();
+    let params: Vec<ParamExternData> = if values.is_empty() {
+        Vec::new()
+    } else {
+        (0..argtypes.len())
+            .map(|i| ParamExternData {
+                value: values[i],
+                isnull: nulls[i],
+                pflags: PARAM_FLAG_CONST,
+                ptype: argtypes[i],
+            })
+            .collect()
+    };
+    cursor_open_internal(name, ptr, &params, read_only)
 }
 
-// SPI_cursor_open_with_paramlist (spi.c): C's entry for a PL-built
-// ParamListInfo (plpgsql setup_param_list). This port materializes PL
-// variables into value arrays, so the shape matches SPI_cursor_open, and
-// C's copyParamList leaves the portal's list hookless either way.
+// SPI_cursor_open_with_paramlist (spi.c): copyParamList fetches every slot
+// non-speculatively, so the PL's list arrives complete and the portal's copy
+// has no paramFetch hook.
 pub fn SPI_cursor_open_with_paramlist(
     name: Option<&str>,
     ptr: SpiPlanPtr,
-    values: &[Datum],
-    nulls: &[bool],
+    params: &[ParamExternData],
     read_only: bool,
 ) -> PgResult<SpiCursor> {
-    cursor_open_internal(name, ptr, values, nulls, read_only)
+    cursor_open_internal(name, ptr, params, read_only)
 }
 
 fn cursor_open_internal(
     name: Option<&str>,
     ptr: SpiPlanPtr,
-    values: &[Datum],
-    nulls: &[bool],
+    caller_params: &[ParamExternData],
     read_only: bool,
 ) -> PgResult<SpiCursor> {
     let Some(state) = crate::plan::state_snapshot(ptr) else {
@@ -118,6 +118,7 @@ fn cursor_open_internal(
             .errcode(ERRCODE_INVALID_CURSOR_DEFINITION)
             .errmsg("cannot open multi-query plan as cursor")
             .into_error()
+            .with_location("spi.c", 1602, "SPI_cursor_open_internal")
             .into());
     }
     let (psrc, cursor_options) = single_source(ptr).expect("checked");
@@ -132,6 +133,7 @@ fn cursor_open_internal(
             .errcode(ERRCODE_INVALID_CURSOR_DEFINITION)
             .errmsg(format!("cannot open {cmdname} query as cursor"))
             .into_error()
+            .with_location("spi.c", 1612, "SPI_cursor_open_internal")
             .into());
     }
 
@@ -162,7 +164,7 @@ fn cursor_open_internal(
         let query_string = plancache::CachedPlanQueryString(psrc);
         errctx.set_query(query_string);
 
-        let params = cursor_params(&portal, &state.argtypes, values, nulls)?;
+        let params = cursor_params(&portal, caller_params)?;
 
         let cplan = plancache::GetCachedPlan(psrc, params, None, crate::current_query_env())?;
         let stmt_slice = plancache::CachedPlanStmtList(cplan);

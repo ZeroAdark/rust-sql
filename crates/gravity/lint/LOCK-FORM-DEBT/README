@@ -1,0 +1,12 @@
+# RF's registry (lint/rules/rf_lock_forms.py; construct C11 "one lock plan", main 2026-10-12T15:41:55Z / 16:05:32Z):
+# the functions outside the lock plan's home (lowerv4 ops/lockrows/plan.rs, to come) that still decide part of a row
+# lock's plan, by repository path, name and owner lane. Kinds: locks (a Program.locks write or the INITMULTI handshake),
+# write (the one write plan, px.write), role (lock_init / set_lock mark, pair_mark, claim_mark, write_pair), census (a
+# census helper over the statement's other pipelines), shape (a lock form's shape test), count (a local pipeline-count
+# sum in ops/lockrows/ or rerun/epq/). A row covers its kinds only. A row goes when its owner moves the decision into the
+# plan (E1a census, E1b count sums, E2 roles and Program.locks, E3 forms and the write owner); a landing never adds a
+# row or widens one (a certified move rewrites one). C11 is DONE at 0 rows.
+# path	fn	owner	kind[+kind..]	what it decides
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<fn> (the row's path with
+# crates/gravity/ dropped and '/' as '.'), holding the row line; this README is not a row. Deleting a row deletes
+# its file, so lanes that delete different rows never touch the same file.

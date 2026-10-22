@@ -1,10 +1,12 @@
-// tuplesort.c + tuplesortvariants.c serial core, in-memory + external
-// (spill-to-tape balanced k-way merge in tape.rs over sort_storage's
-// logtape); parallel sort and cstring datum sorts = loud panics naming C.
+// tuplesort.c + tuplesortvariants.c core, in-memory + external (spill-to-tape
+// balanced k-way merge in tape.rs over sort_storage's logtape), plus the
+// parallel worker/leader arms for btree index sorts (Sharedsort);
+// cstring datum sorts = loud panics naming C.
 #![allow(non_snake_case)]
 
 use core::cell::Cell;
 use core::mem;
+use std::sync::Arc;
 
 use ::datum::{Datum, NullableDatum};
 use ::mcx::{McxOwned, Mcx, MemoryContext, PgVec};
@@ -91,46 +93,6 @@ pub fn init_seams() {
             Ok(out)
         },
     );
-    tuplesort_seams::pgrcolumnar_ingest_sort::set(|tup_desc, keys, work_mem| {
-        use tuplesort_seams::CbSortKeyKind;
-        assert!(!keys.is_empty());
-        let ssup: Vec<SortSupport> = keys
-            .iter()
-            .map(|&(attno, kind)| SortSupport {
-                ssup_collation: ::types_core::catalog::C_COLLATION_OID,
-                ssup_reverse: false,
-                ssup_nulls_first: false,
-                ssup_attno: attno,
-                comparator: match kind {
-                    CbSortKeyKind::Int16 => SortComparator::Int16,
-                    CbSortKeyKind::Int32 => SortComparator::Int32,
-                    CbSortKeyKind::Int64 => SortComparator::SignedI64,
-                    CbSortKeyKind::TextC => SortComparator::TextC,
-                },
-            })
-            .collect();
-        let ts = Tuplesort::begin_heap_with_keys(tup_desc, &ssup, work_mem, TUPLESORT_NONE);
-        Ok(Box::new(CbIngestSortImpl { ts }))
-    });
-}
-
-// pgrcolumnar ingest-sort seam impl: a heap tuplesort driven value-wise.
-struct CbIngestSortImpl {
-    ts: Tuplesort,
-}
-
-impl tuplesort_seams::CbIngestSort for CbIngestSortImpl {
-    fn put_row(&mut self, values: &[Datum], isnull: &[bool]) -> PgResult<()> {
-        self.ts.putvalues(values, isnull)
-    }
-
-    fn sort(&mut self) -> PgResult<()> {
-        self.ts.performsort()
-    }
-
-    fn next_row(&mut self, values: &mut [Datum], isnull: &mut [bool]) -> PgResult<bool> {
-        self.ts.getvalues(true, values, isnull)
-    }
 }
 
 pub const TUPLESORT_NONE: i32 = 0;
@@ -345,6 +307,56 @@ pub struct TuplesortData<'m> {
     // Dropped on an error path: C never reaches tuplesort_end there, so the
     // "ended" trace line is not written.
     discarded: bool,
+    // Parallel sort coordination (C shared/worker/nParticipants): None for a
+    // serial sort; worker is -1 for serial and leader sorts.
+    shared: Option<Arc<Sharedsort>>,
+    worker: i32,
+    n_participants: i32,
+}
+
+/// `Sharedsort` (tuplesort.c:343): the state every participant of one
+/// parallel sort shares; workers' result runs live in `fileset`.
+pub struct Sharedsort {
+    state: pgsync::Mutex<SharedsortState>,
+    fileset: fd::fileset::FileSet,
+}
+
+struct SharedsortState {
+    current_worker: i32,
+    workers_finished: i32,
+    tapes: Vec<sort_storage::TapeShare>,
+}
+
+impl Sharedsort {
+    fn lock(&self) -> pgsync::MutexGuard<'_, SharedsortState> {
+        pgsync::lock(&self.state)
+    }
+}
+
+/// `tuplesort_initialize_shared`: called by the leader before launching
+/// workers; `n_workers` counts every participant tuplesort.
+pub fn tuplesort_initialize_shared(n_workers: i32) -> PgResult<Arc<Sharedsort>> {
+    assert!(n_workers > 0);
+    let tapes = ::mcx::std_vec_from_elem(
+        "utils",
+        sort_storage::TapeShare { firstblocknumber: 0 },
+        n_workers as usize,
+    )?;
+    Ok(Arc::new(Sharedsort {
+        state: pgsync::Mutex::new(SharedsortState {
+            current_worker: 0,
+            workers_finished: 0,
+            tapes,
+        }),
+        fileset: fd::fileset::FileSet::init()?,
+    }))
+}
+
+/// `SortCoordinateData`.
+pub struct SortCoordinate {
+    pub is_worker: bool,
+    pub n_participants: i32,
+    pub sharedsort: Arc<Sharedsort>,
 }
 
 ::mcx::bind!(pub TuplesortTy => TuplesortData<'mcx>);
@@ -359,7 +371,8 @@ impl Drop for Tuplesort {
         self.0.with_mut(|st| {
             // C tuplesort_free: the space figure is read before the tapes
             // close; the "ended" line follows LogicalTapeSetClose.
-            let space = if st.discarded { None } else { st.trace_free_space() };
+            let silent = st.discarded || ABORT_RELEASE.with(|c| c.get());
+            let space = if silent { None } else { st.trace_free_space() };
             if let Some(ts) = st.tapes.take() {
                 let _ = ts.tapeset.close();
             }
@@ -368,6 +381,32 @@ impl Drop for Tuplesort {
             }
         })
     }
+}
+
+std::thread_local! {
+    static ABORT_RELEASE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+/// Runs `f` (an aborted query's executor teardown) without the trace_sort
+/// "ended" lines: C never calls tuplesort_end there, the memory just goes.
+/// The flag goes back when `f` returns or unwinds (`AbortReleaseScope`).
+pub fn release_without_end_trace<R>(f: impl FnOnce() -> R) -> R {
+    let _scope = AbortReleaseScope(ABORT_RELEASE.with(|c| c.replace(true)));
+    f()
+}
+
+/// `release_without_end_trace`'s guard: its drop puts back the flag it found.
+struct AbortReleaseScope(bool);
+
+impl Drop for AbortReleaseScope {
+    fn drop(&mut self) {
+        ABORT_RELEASE.with(|c| c.set(self.0));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn abort_release() -> bool {
+    ABORT_RELEASE.with(|c| c.get())
 }
 
 // C `bool trace_sort = false` (tuplesort.c:124): this crate owns the GUC's
@@ -379,10 +418,6 @@ impl Drop for Tuplesort {
 pub(crate) fn trace_sort() -> bool {
     trace_sort_guc()
 }
-
-/// C `state->worker`: this crate is the serial arm (SERIAL(state)), whose
-/// worker number is -1 in every trace line.
-pub(crate) const TRACE_WORKER: i32 = -1;
 
 /// C `elog(LOG, ...)` under trace_sort. LOG never raises; the finish result
 /// carries nothing for a LOG-level report.
@@ -1017,7 +1052,8 @@ impl Tuplesort {
                 trace_random_access(sortopt)
             )
         });
-        let mut keys = Vec::with_capacity(nkeys);
+        let mut keys = Vec::new();
+        let _ = keys.try_reserve(nkeys);
         let mut abbrev_arm = None;
         for i in 0..nkeys {
             debug_assert!(att_nums[i] != 0 && sort_operators[i] != 0);
@@ -1078,11 +1114,33 @@ impl Tuplesort {
     /// `tuplesort_begin_index_btree`, serial arm; keys read straight off the
     /// index relation — the same values C pulls via `_bt_mkscankey`.
     pub fn begin_index_btree(
+        heap_rel: &types_rel::Relation<'_>,
+        index_rel: &types_rel::Relation<'_>,
+        enforce_unique: bool,
+        unique_nulls_not_distinct: bool,
+        work_mem: i32,
+        sortopt: i32,
+    ) -> PgResult<Tuplesort> {
+        Self::begin_index_btree_coordinated(
+            heap_rel,
+            index_rel,
+            enforce_unique,
+            unique_nulls_not_distinct,
+            work_mem,
+            None,
+            sortopt,
+        )
+    }
+
+    /// `tuplesort_begin_index_btree` with its `coordinate` argument: a
+    /// parallel worker's partial sort or the leader's final merge.
+    pub fn begin_index_btree_coordinated(
         _heap_rel: &types_rel::Relation<'_>,
         index_rel: &types_rel::Relation<'_>,
         enforce_unique: bool,
         unique_nulls_not_distinct: bool,
         work_mem: i32,
+        coordinate: Option<&SortCoordinate>,
         sortopt: i32,
     ) -> PgResult<Tuplesort> {
         const INDOPTION_DESC: i16 = 1 << 0;
@@ -1104,7 +1162,7 @@ impl Tuplesort {
             btorder_proc_check(index_rel, i)?;
         }
         amcanorder_check(index_rel)?;
-        let mut keys = Vec::with_capacity(nkeys);
+        let mut keys = ::mcx::std_vec_with_capacity("utils", nkeys)?;
         for i in 0..nkeys {
             let indoption = index_rel.rd_indoption[i];
             let collation = index_rel.rd_indcollation[i];
@@ -1128,7 +1186,7 @@ impl Tuplesort {
             unsafe { mem::transmute(index_rel.rd_att.clone()) };
         let index_rel_erased: std::rc::Rc<types_rel::RelationData<'static>> =
             unsafe { mem::transmute(index_rel.data_rc().clone()) };
-        Ok(Self::begin_index_traced(
+        let mut sort = Self::begin_index_traced(
             tup_desc,
             &keys,
             nkeys as u16,
@@ -1139,7 +1197,14 @@ impl Tuplesort {
             work_mem,
             sortopt,
             ru_start,
-        ))
+        );
+        if let Some(coordinate) = coordinate {
+            if sortopt & TUPLESORT_RANDOMACCESS != 0 {
+                return Err(Box::new(PgError::error("random access disallowed under parallel sort")));
+            }
+            sort.0.with_mut(|st| st.set_coordinate(coordinate));
+        }
+        Ok(sort)
     }
 
     /// `tuplesort_begin_index_gist`, serial arm; comparators resolved from
@@ -1166,7 +1231,7 @@ impl Tuplesort {
                 index_rel.rd_rel.relam
             ))));
         }
-        let mut keys = Vec::with_capacity(nkeys);
+        let mut keys = ::mcx::std_vec_with_capacity("utils", nkeys)?;
         for i in 0..nkeys {
             let comparator = ssup::comparator_for_gist_index_col(
                 index_rel.rd_opfamily[i],
@@ -1272,7 +1337,7 @@ impl Tuplesort {
             } else {
                 None
             };
-        let mut keys = Vec::with_capacity(nkeys);
+        let mut keys = ::mcx::std_vec_with_capacity("utils", nkeys)?;
         for i in 0..nkeys {
             let indoption = index_rel.rd_indoption[i];
             let collation = index_rel.rd_indcollation[i];
@@ -1483,6 +1548,9 @@ impl Tuplesort {
                 tapes: None,
                 ru_start,
                 discarded: false,
+                shared: None,
+                worker: -1,
+                n_participants: -1,
                 tuple_mem: 0,
                 sort_keys,
                 only_key,
@@ -2027,7 +2095,16 @@ impl Tuplesort {
                 panic!("compare_index_tuples on a non-index tuplesort")
             };
             for nkey in 1..=(*nkeys as i16) {
-                let key = &st.sort_keys[nkey as usize - 1];
+                let mut key = st.sort_keys[nkey as usize - 1];
+                // C builds a non-abbreviated SortSupport for the merge
+                // (nbtsort.c:1181); key 0 may still hold the abbreviated
+                // comparator, which is meaningless over full datums.
+                if nkey == 1 {
+                    if let Some(abbrev) = &st.abbrev {
+                        key.comparator = abbrev.full_comparator;
+                    }
+                }
+                let key = &key;
                 let (mut isnull1, mut isnull2) = (false, false);
                 // SAFETY: live images under this sort's descriptor (fn contract).
                 let (d1, d2) = unsafe {
@@ -2166,14 +2243,26 @@ impl Tuplesort {
         self.0.with_mut(|st| {
             if trace_sort() {
                 trace_log(format!(
-                    "performsort of worker {TRACE_WORKER} starting: {}",
+                    "performsort of worker {} starting: {}",
+                    st.worker,
                     pg_rusage_show(&st.ru_start).as_str()
                 ));
             }
             match st.status {
                 TupSortStatus::Initial => {
-                    st.sort_memtuples()?;
-                    st.status = TupSortStatus::SortedInMem;
+                    if st.shared.is_none() {
+                        st.sort_memtuples()?;
+                        st.status = TupSortStatus::SortedInMem;
+                    } else if st.is_worker() {
+                        // Workers still dump to tape; one run needs no merge.
+                        st.inittapes(false)?;
+                        st.dumptuples(true)?;
+                        st.worker_nomergeruns()?;
+                        st.status = TupSortStatus::SortedOnTape;
+                    } else {
+                        st.leader_takeover_tapes()?;
+                        st.mergeruns()?;
+                    }
                 }
                 TupSortStatus::Bounded => st.sort_bounded_heap()?,
                 TupSortStatus::BuildRuns => {
@@ -2198,12 +2287,14 @@ impl Tuplesort {
                 let rusage = pg_rusage_show(&st.ru_start);
                 match (&st.status, &st.tapes) {
                     (TupSortStatus::FinalMerge, Some(ts)) => trace_log(format!(
-                        "performsort of worker {TRACE_WORKER} done (except {}-way final merge): {}",
+                        "performsort of worker {} done (except {}-way final merge): {}",
+                        st.worker,
                         ts.n_input_tapes(),
                         rusage.as_str()
                     )),
                     _ => trace_log(format!(
-                        "performsort of worker {TRACE_WORKER} done: {}",
+                        "performsort of worker {} done: {}",
+                        st.worker,
                         rusage.as_str()
                     )),
                 }
@@ -2542,6 +2633,34 @@ fn datum_put_slow<'m>(
 }
 
 impl<'m> TuplesortData<'m> {
+    /// C `WORKER(state)`.
+    #[inline]
+    pub(crate) fn is_worker(&self) -> bool {
+        self.shared.is_some() && self.worker != -1
+    }
+
+    /// C `LEADER(state)`.
+    #[inline]
+    pub(crate) fn is_leader(&self) -> bool {
+        self.shared.is_some() && self.worker == -1
+    }
+
+    /// tuplesort_begin_common's coordinate arms (tuplesort.c:716-737).
+    fn set_coordinate(&mut self, coordinate: &SortCoordinate) {
+        self.shared = Some(Arc::clone(&coordinate.sharedsort));
+        if coordinate.is_worker {
+            // worker_get_identifier: distinct, gapless ordinals.
+            let mut st = coordinate.sharedsort.lock();
+            self.worker = st.current_worker;
+            st.current_worker += 1;
+            self.n_participants = -1;
+        } else {
+            self.worker = -1;
+            self.n_participants = coordinate.n_participants;
+            debug_assert!(self.n_participants >= 1);
+        }
+    }
+
     /// `tuplesort_puttuple_common`; the useAbbrev arm lives in puttuple_full
     /// (tuplen==0 puts are by-value datums, never abbreviated).
     /// SortTuple fields arrive as scalars (registers), not by-ref like C's
@@ -2599,7 +2718,7 @@ impl<'m> TuplesortData<'m> {
                     datum1 = self.abbrev_datum1(datum1);
                 }
                 if self.memtuples.len() >= self.memtuples.capacity() - 1 {
-                    self.grow_memtuples();
+                    self.grow_memtuples()?;
                     debug_assert!(self.memtuples.len() < self.memtuples.capacity());
                 }
                 let len = self.memtuples.len();
@@ -2649,7 +2768,7 @@ impl<'m> TuplesortData<'m> {
     #[cold]
     #[inline(never)]
     fn spill_to_tape(&mut self) -> PgResult<()> {
-        self.inittapes()?;
+        self.inittapes(true)?;
         self.dumptuples(false)
     }
 
@@ -2770,13 +2889,18 @@ impl<'m> TuplesortData<'m> {
     pub(crate) fn trace_free_log(&self, (on_disk, space): (bool, i64)) {
         let rusage = pg_rusage_show(&self.ru_start);
         if on_disk {
+            let what = if self.shared.is_none() { "external sort" } else { "parallel external sort" };
             trace_log(format!(
-                "external sort of worker {TRACE_WORKER} ended, {space} disk blocks used: {}",
+                "{what} of worker {} ended, {space} disk blocks used: {}",
+                self.worker,
                 rusage.as_str()
             ))
         } else {
+            let what =
+                if self.shared.is_none() { "internal sort" } else { "unperformed parallel sort" };
             trace_log(format!(
-                "internal sort of worker {TRACE_WORKER} ended, {space} KB used: {}",
+                "{what} of worker {} ended, {space} KB used: {}",
+                self.worker,
                 rusage.as_str()
             ))
         }
@@ -2911,12 +3035,12 @@ impl<'m> TuplesortData<'m> {
 
     /// `grow_memtuples`; chunk space approximated as capacity * sizeof(SortTuple).
     #[inline(never)]
-    fn grow_memtuples(&mut self) -> bool {
+    fn grow_memtuples(&mut self) -> PgResult<bool> {
         let memtupsize = self.memtuples.capacity();
         let mem_now_used = self.allowed_mem - self.avail_mem;
 
         if !self.grow_memtuples {
-            return false;
+            return Ok(false);
         }
 
         let newmemtupsize = if mem_now_used <= self.avail_mem {
@@ -2938,7 +3062,7 @@ impl<'m> TuplesortData<'m> {
                 < ((newmemtupsize - memtupsize) * mem::size_of::<SortTuple>()) as i64
         {
             self.grow_memtuples = false;
-            return false;
+            return Ok(false);
         }
 
         self.avail_mem += memtuples_space(memtupsize);
@@ -2946,11 +3070,10 @@ impl<'m> TuplesortData<'m> {
         // MaxAllocSize (1GB), so this must bypass the allocator's palloc
         // ceiling via the explicit huge entry point.
         let add = newmemtupsize - self.memtuples.len();
-        ::mcx::vec_reserve_huge(&mut self.memtuples, add)
-            .expect("grow_memtuples: huge memtuples repalloc failed");
+        ::mcx::vec_reserve_huge(&mut self.memtuples, add)?;
         self.avail_mem -= memtuples_space(self.memtuples.capacity());
         debug_assert!(!self.lackmem());
-        true
+        Ok(true)
     }
 
     #[inline]
@@ -3052,7 +3175,8 @@ impl<'m> TuplesortData<'m> {
     /// array is restored and re-sorted on the exact pg_qsort path — C tie
     /// order holds unconditionally.
     fn mksort_heap(&self, tuples: &mut [SortTuple]) -> PgResult<()> {
-        let mut scratch: PgVec<'_, SortTuple> = PgVec::new_in(self.mcx);
+        // memtuples is a huge allocation (repalloc_huge); so is its copy.
+        let mut scratch: PgVec<'_, SortTuple> = ::mcx::vec_with_capacity_huge_in(self.mcx, tuples.len())?;
         scratch.extend_from_slice(tuples);
         let ctx0 = CmpCtx {
             mcx: self.mcx,

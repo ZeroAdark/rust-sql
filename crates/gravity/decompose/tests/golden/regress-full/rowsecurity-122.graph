@@ -1,0 +1,12 @@
+-- regress-full-rowsecurity-122
+-- UPDATE r1 SET a = 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=c23:1, 2j=v1.-1)
+  write UPDATE rel=28644 rti=1 natts=1 indexes=() set=(1)
+    check rls update rel=r1 (c16:0)
+  outs 1=w4:val 2=fx6:row
+mapped: Result ModifyTable

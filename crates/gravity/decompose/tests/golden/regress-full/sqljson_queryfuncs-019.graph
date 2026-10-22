@@ -1,0 +1,105 @@
+-- regress-full-sqljson_queryfuncs-019
+-- SELECT check_clause FROM information_schema.check_constraints WHERE constraint_name LIKE 'test_jsonb_constraint%' ORDER BY 1;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=5 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n5@0 n4@3 n3@5 n2@8 n1@9 n0@11^
+  source index rel=2606 rti=4 am=heap index=2664
+    key att=2 op=257 value=c25:'test'
+    key att=2 op=255 value=c25:'tesu'
+    recheck (op257(v4.2, c25:'test'), op255(v4.2, c25:'tesu'))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byref8:vl:win/page Attr(22):byref8:vl:win/page Attr(23):byref8:vl:win/page Attr(24):byref8:vl:win/page Attr(25):byref8:vl:win/page Attr(26):byref8:vl:win/page Attr(27):byref8:vl:win/page Attr(28):byref8:vl:win/page
+  filter op1207(v4.2, c25:'test_jsonb_constraint%')
+  filter op92(v4.4, c18:99)
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9, 10=v4.10, 11=v4.11, 12=v4.12, 13=v4.13, 14=v4.14, 15=v4.15, 16=v4.16, 17=v4.17, 18=v4.18, 19=v4.19, 20=v4.20, 21=v4.21, 22=v4.22, 23=v4.23, 24=v4.24, 25=v4.25, 26=v4.26, 27=v4.27, 28=v4.28)
+  nest inner=n6 JOIN_LEFT unique raise-free params=($exec0=outer.9)
+  inner node=6 serial site=0 reason=IndexSource end=sink
+  nodes n6@0
+  source index rel=1259 rti=7 am=heap index=2662
+    key att=1 op=607 value=$exec0
+    recheck (op607(v7.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byval8:w8:val Attr(31):byval8:w8:val Attr(32):byref8:vl:win/page Attr(33):byref8:vl:win/page Attr(34):byref8:vl:win/page
+  project (1=v7.1, 2=v7.2, 3=v7.3, 4=v7.4, 5=v7.5, 6=v7.6, 7=v7.7, 8=v7.8, 9=v7.9, 10=v7.10, 11=v7.11, 12=v7.12, 13=v7.13, 14=v7.14, 15=v7.15, 16=v7.16, 17=v7.17, 18=v7.18, 19=v7.19, 20=v7.20, 21=v7.21, 22=v7.22, 23=v7.23, 24=v7.24, 25=v7.25, 26=v7.26, 27=v7.27, 28=v7.28, 29=v7.29, 30=v7.30, 31=v7.31, 32=v7.32, 33=v7.33, 34=v7.34)
+  project (1=outer.28, 2=outer.10, 3=inner.1, 4=inner.6)
+  nest inner=n7 JOIN_LEFT unique raise-free params=($exec1=outer.2)
+  inner node=7 serial site=0 reason=IndexSource end=sink
+  nodes n7@0
+  source index rel=1247 rti=9 am=heap index=2703
+    key att=1 op=607 value=$exec1
+    recheck (op607(v9.1, $exec1))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byref8:vl:win/page Attr(31):byref8:vl:win/page Attr(32):byref8:vl:win/page
+  project (1=v9.1, 2=v9.2, 3=v9.3, 4=v9.4, 5=v9.5, 6=v9.6, 7=v9.7, 8=v9.8, 9=v9.9, 10=v9.10, 11=v9.11, 12=v9.12, 13=v9.13, 14=v9.14, 15=v9.15, 16=v9.16, 17=v9.17, 18=v9.18, 19=v9.19, 20=v9.20, 21=v9.21, 22=v9.22, 23=v9.23, 24=v9.24, 25=v9.25, 26=v9.26, 27=v9.27, 28=v9.28, 29=v9.29, 30=v9.30, 31=v9.31, 32=v9.32)
+  filter fn2710(coalesce(outer.4, inner.4), c25:'USAGE')
+  project (1=c13718:null, 2=c13718:null, 3=c13718:null, 4=relabel13716(fn1716(outer.1, coalesce(outer.3, c26:0))))
+  project (1=v2.4)
+  append arm 0/2
+  project (1=outer.1)
+  sort keys=1+:Fp128/ByRef@950 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=w8:val 15=w8:val 16=w8:val 17=w8:val 18=w8:val 19=w8:val 20=w8:val 21=vl:win/page 22=vl:win/page 23=vl:win/page 24=vl:win/page 25=vl:win/page 26=vl:win/page 27=vl:win/page 28=vl:win/page
+  outs 1=vl:win/page 2=w8:val 3=w4:val 4=w4:val
+  outs 1=? 2=? 3=? 4=vl:call1716
+  outs 1=?
+  outs 1=?
+p1 node=12 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n12@0 n11@3 n10@5 n9@8 n8@10 n1@11 n0@13^
+  source index rel=2606 rti=11 am=heap index=2664
+    key att=2 op=257 value=c25:'test'
+    key att=2 op=255 value=c25:'tesu'
+    recheck (op257(v11.2, c25:'test'), op255(v11.2, c25:'tesu'))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byref8:vl:win/page Attr(22):byref8:vl:win/page Attr(23):byref8:vl:win/page Attr(24):byref8:vl:win/page Attr(25):byref8:vl:win/page Attr(26):byref8:vl:win/page Attr(27):byref8:vl:win/page Attr(28):byref8:vl:win/page
+  filter op1207(v11.2, c25:'test_jsonb_constraint%')
+  filter op92(v11.4, c18:110)
+  project (1=v11.1, 2=v11.2, 3=v11.3, 4=v11.4, 5=v11.5, 6=v11.6, 7=v11.7, 8=v11.8, 9=v11.9, 10=v11.10, 11=v11.11, 12=v11.12, 13=v11.13, 14=v11.14, 15=v11.15, 16=v11.16, 17=v11.17, 18=v11.18, 19=v11.19, 20=v11.20, 21=v11.21, 22=v11.22, 23=v11.23, 24=v11.24, 25=v11.25, 26=v11.26, 27=v11.27, 28=v11.28)
+  nest inner=n13 JOIN_LEFT unique raise-free params=($exec2=outer.9)
+  inner node=13 serial site=0 reason=IndexSource end=sink
+  nodes n13@0
+  source index rel=1259 rti=14 am=heap index=2662
+    key att=1 op=607 value=$exec2
+    recheck (op607(v14.1, $exec2))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byval8:w8:val Attr(31):byval8:w8:val Attr(32):byref8:vl:win/page Attr(33):byref8:vl:win/page Attr(34):byref8:vl:win/page
+  project (1=v14.1, 2=v14.2, 3=v14.3, 4=v14.4, 5=v14.5, 6=v14.6, 7=v14.7, 8=v14.8, 9=v14.9, 10=v14.10, 11=v14.11, 12=v14.12, 13=v14.13, 14=v14.14, 15=v14.15, 16=v14.16, 17=v14.17, 18=v14.18, 19=v14.19, 20=v14.20, 21=v14.21, 22=v14.22, 23=v14.23, 24=v14.24, 25=v14.25, 26=v14.26, 27=v14.27, 28=v14.28, 29=v14.29, 30=v14.30, 31=v14.31, 32=v14.32, 33=v14.33, 34=v14.34)
+  project (1=outer.9, 2=outer.10, 3=outer.21, 4=inner.6)
+  nest inner=n14 JOIN_LEFT unique raise-free params=($exec3=outer.2)
+  inner node=14 serial site=0 reason=IndexSource end=sink
+  nodes n14@0
+  source index rel=1247 rti=16 am=heap index=2703
+    key att=1 op=607 value=$exec3
+    recheck (op607(v16.1, $exec3))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byref8:vl:win/page Attr(31):byref8:vl:win/page Attr(32):byref8:vl:win/page
+  project (1=v16.1, 2=v16.2, 3=v16.3, 4=v16.4, 5=v16.5, 6=v16.6, 7=v16.7, 8=v16.8, 9=v16.9, 10=v16.10, 11=v16.11, 12=v16.12, 13=v16.13, 14=v16.14, 15=v16.15, 16=v16.16, 17=v16.17, 18=v16.18, 19=v16.19, 20=v16.20, 21=v16.21, 22=v16.22, 23=v16.23, 24=v16.24, 25=v16.25, 26=v16.26, 27=v16.27, 28=v16.28, 29=v16.29, 30=v16.30, 31=v16.31, 32=v16.32)
+  filter fn2710(coalesce(outer.4, inner.4), c25:'USAGE')
+  project (1=outer.1, 2=outer.3)
+  nest inner=n15 JOIN_LEFT unique params=($exec4=outer.1, $exec5=outer.2)
+  inner node=15 serial site=0 reason=IndexSource end=sink
+  nodes n15@0
+  source index rel=1249 rti=18 am=heap index=2659
+    key att=1 op=607 value=$exec4
+    key att=5 op=94 value=T_SubscriptingRef
+    recheck (op607(v18.1, $exec4), op94(v18.5, T_SubscriptingRef))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byref8:vl:win/page Attr(23):byref8:vl:win/page Attr(24):byref8:vl:win/page Attr(25):byref8:vl:win/page
+  project (1=v18.1, 2=v18.2, 3=v18.3, 4=v18.4, 5=v18.5, 6=v18.6, 7=v18.7, 8=v18.8, 9=v18.9, 10=v18.10, 11=v18.11, 12=v18.12, 13=v18.13, 14=v18.14, 15=v18.15, 16=v18.16, 17=v18.17, 18=v18.18, 19=v18.19, 20=v18.20, 21=v18.21, 22=v18.22, 23=v18.23, 24=v18.24, 25=v18.25)
+  project (1=c13718:null, 2=c13718:null, 3=c13718:null, 4=relabel13716(fn3539(c25:'%s IS NOT NULL', coalesce(inner.2, c19:#64))))
+  project (1=v3.4)
+  append arm 1/2
+  project (1=outer.1)
+  sort keys=1+:Fp128/ByRef@950 form=runs
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=w8:val 15=w8:val 16=w8:val 17=w8:val 18=w8:val 19=w8:val 20=w8:val 21=vl:win/page 22=vl:win/page 23=vl:win/page 24=vl:win/page 25=vl:win/page 26=vl:win/page 27=vl:win/page 28=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val
+  outs 1=w8:val 2=vl:win/page
+  outs 1=? 2=? 3=? 4=vl:call3539
+  outs 1=?
+  outs 1=?
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1)
+  outs 1=?
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+param $exec0 owner=n4 type=26 rep=w8:val
+param $exec1 owner=n3 type=26 rep=w8:val
+param $exec2 owner=n11 type=26 rep=w8:val
+param $exec3 owner=n10 type=26 rep=w8:val
+param $exec4 owner=n9 type=26 rep=w8:val
+param $exec5 owner=n9 type=1005 rep=vl:win/page
+mapped: Append IndexScan SubqueryScan NestLoop NestLoopParam Sort

@@ -1,0 +1,7 @@
+Fresh Rust port of Fadec fadec-enc2.h and encode2.c.
+Upstream: https://github.com/aengelke/fadec
+Pinned revision: 3994d89500985491b1a7ccc17827a22058b3de49
+Copyright (c) 2018, Alexis Engelke. BSD-3-Clause; see LICENSE.
+
+The production build consumes the fresh tpde_fadec_gen Rust generator and
+its pinned instruction table. C and Python references are test-only.

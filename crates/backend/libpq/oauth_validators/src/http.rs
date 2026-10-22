@@ -241,7 +241,10 @@ fn request(
             chunked = true;
         }
     }
-    let mut rest = raw[header_end + 4..].to_vec();
+    let mut rest = Vec::new();
+    let body_prefix = &raw[header_end + 4..];
+    rest.try_reserve_exact(body_prefix.len()).map_err(|_| "out of memory")?;
+    rest.extend_from_slice(body_prefix);
     let want = if chunked { None } else { content_length };
     loop {
         if let Some(w) = want {

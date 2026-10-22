@@ -1,0 +1,199 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2x s1a s2u s1c
+step s2x: EXPLAIN (COSTS OFF) UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id IN (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t) RETURNING id, attempts;
+QUERY PLAN                                                                      
+--------------------------------------------------------------------------------
+Update on rpt                                                                   
+  ->  Hash Semi Join                                                            
+        Hash Cond: (rpt.id = "ANY_subquery".id)                                 
+        ->  Seq Scan on rpt                                                     
+        ->  Hash                                                                
+              ->  Subquery Scan on "ANY_subquery"                               
+                    ->  Limit                                                   
+                          ->  LockRows                                          
+                                ->  Nested Loop                                 
+                                      Join Filter: (q.id = t.queue_id)          
+                                      ->  Index Scan using rpt_claim on rpt t   
+                                            Index Cond: (status = 'ready'::text)
+                                      ->  Materialize                           
+                                            ->  Seq Scan on rpq q               
+                                                  Filter: (NOT paused)          
+(15 rows)
+
+step s1a: UPDATE rpt SET attempts = attempts + 10 WHERE id = 3;
+step s2u: UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id IN (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t) RETURNING id, attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+ 3|      11
+11|       3
+15|       1
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2u s1c
+step s1s: UPDATE rpt SET status = 'done' WHERE id = 3;
+step s2u: UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id IN (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t) RETURNING id, attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+11|       3
+15|       1
+19|       2
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s2u s1c
+step s1q: UPDATE rpt SET queue_id = 3 WHERE id = 3;
+step s2u: UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id IN (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t) RETURNING id, attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+11|       3
+15|       1
+19|       2
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2u s1c
+step s1d: DELETE FROM rpt WHERE id = 11;
+step s2u: UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id IN (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t) RETURNING id, attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+ 3|       1
+15|       1
+19|       2
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM rpt WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2sk: UPDATE rpt SET status = 'running' WHERE id IN (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t SKIP LOCKED) RETURNING id;
+id
+--
+11
+15
+19
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1a s3u s1c
+step s3x: EXPLAIN (COSTS OFF) UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id IN (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t) RETURNING id, attempts;
+QUERY PLAN                                                                        
+----------------------------------------------------------------------------------
+Update on rpt                                                                     
+  ->  Hash Semi Join                                                              
+        Hash Cond: (rpt.id = "ANY_subquery".id)                                   
+        ->  Seq Scan on rpt                                                       
+        ->  Hash                                                                  
+              ->  Subquery Scan on "ANY_subquery"                                 
+                    ->  Limit                                                     
+                          ->  LockRows                                            
+                                ->  Nested Loop                                   
+                                      ->  Index Scan using rpt_claim on rpt t     
+                                            Index Cond: (status = 'ready'::text)  
+                                      ->  Memoize                                 
+                                            Cache Key: t.queue_id                 
+                                            Cache Mode: logical                   
+                                            ->  Index Scan using rpq_pkey on rpq q
+                                                  Index Cond: (id = t.queue_id)   
+                                                  Filter: (NOT paused)            
+(17 rows)
+
+step s1a: UPDATE rpt SET attempts = attempts + 10 WHERE id = 3;
+step s3u: UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id IN (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t) RETURNING id, attempts; <waiting ...>
+step s1c: COMMIT;
+step s3u: <... completed>
+id|attempts
+--+--------
+ 3|      11
+11|       3
+15|       1
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s3u s1c
+step s1q: UPDATE rpt SET queue_id = 3 WHERE id = 3;
+step s3u: UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id IN (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 3 FOR UPDATE OF t) RETURNING id, attempts; <waiting ...>
+step s1c: COMMIT;
+step s3u: <... completed>
+id|attempts
+--+--------
+11|       3
+15|       1
+19|       2
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s4x s1a s4u s1c
+step s4x: EXPLAIN (COSTS OFF) UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id = (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 1 FOR UPDATE OF t) RETURNING id, attempts;
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Update on rpt                                                   
+  InitPlan 1                                                    
+    ->  Limit                                                   
+          ->  LockRows                                          
+                ->  Nested Loop                                 
+                      Join Filter: (q.id = t.queue_id)          
+                      ->  Index Scan using rpt_claim on rpt t   
+                            Index Cond: (status = 'ready'::text)
+                      ->  Materialize                           
+                            ->  Seq Scan on rpq q               
+                                  Filter: (NOT paused)          
+  ->  Index Scan using rpt_pkey on rpt                          
+        Index Cond: (id = (InitPlan 1).col1)                    
+(13 rows)
+
+step s1a: UPDATE rpt SET attempts = attempts + 10 WHERE id = 3;
+step s4u: UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id = (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 1 FOR UPDATE OF t) RETURNING id, attempts; <waiting ...>
+step s1c: COMMIT;
+step s4u: <... completed>
+id|attempts
+--+--------
+ 3|      11
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s4u s1c
+step s1s: UPDATE rpt SET status = 'done' WHERE id = 3;
+step s4u: UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id = (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 1 FOR UPDATE OF t) RETURNING id, attempts; <waiting ...>
+step s1c: COMMIT;
+step s4u: <... completed>
+id|attempts
+--+--------
+11|       3
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s4u s1c
+step s1q: UPDATE rpt SET queue_id = 3 WHERE id = 3;
+step s4u: UPDATE rpt SET status = 'running', attempts = attempts + 1 WHERE id = (SELECT t.id FROM rpt t JOIN rpq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at LIMIT 1 FOR UPDATE OF t) RETURNING id, attempts; <waiting ...>
+step s1c: COMMIT;
+step s4u: <... completed>
+id|attempts
+--+--------
+11|       3
+(1 row)
+
+s1: WARNING:  there is no transaction in progress

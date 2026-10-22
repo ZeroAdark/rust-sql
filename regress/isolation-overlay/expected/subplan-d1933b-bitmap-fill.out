@@ -1,0 +1,93 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1upd s2m s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO bf_t t USING bf_s s ON t.tid IS NOT DISTINCT FROM s.sid AND s.sid >= 2 WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE;
+QUERY PLAN                                               
+---------------------------------------------------------
+Merge on bf_t t                                          
+  ->  Nested Loop                                        
+        Join Filter: (NOT (t.tid IS DISTINCT FROM s.sid))
+        ->  Seq Scan on bf_t t                           
+        ->  Materialize                                  
+              ->  Bitmap Heap Scan on bf_s s             
+                    Recheck Cond: (sid >= 2)             
+                    ->  Bitmap Index Scan on bf_s_pkey   
+                          Index Cond: (sid >= 2)         
+(9 rows)
+
+step s1upd: UPDATE bf_t SET bal = bal + 1 WHERE tid = 3;
+step s2m: MERGE INTO bf_t t USING bf_s s ON t.tid IS NOT DISTINCT FROM s.sid AND s.sid >= 2 WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT * FROM bf_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+  3|331|c  
+(2 rows)
+
+
+starting permutation: s1upd2 s2m s1c s2sel
+step s1upd2: UPDATE bf_t SET bal = bal + 7 WHERE tid = 2;
+step s2m: MERGE INTO bf_t t USING bf_s s ON t.tid IS NOT DISTINCT FROM s.sid AND s.sid >= 2 WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT * FROM bf_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+  3|330|c  
+(2 rows)
+
+
+starting permutation: s1key s2m s1c s2sel
+step s1key: UPDATE bf_t SET tid = 90 WHERE tid = 3;
+step s2m: MERGE INTO bf_t t USING bf_s s ON t.tid IS NOT DISTINCT FROM s.sid AND s.sid >= 2 WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT * FROM bf_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+ 90|300|c  
+(2 rows)
+
+
+starting permutation: s1del s2m s1c s2sel
+step s1del: DELETE FROM bf_t WHERE tid = 3;
+step s2m: MERGE INTO bf_t t USING bf_s s ON t.tid IS NOT DISTINCT FROM s.sid AND s.sid >= 2 WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT * FROM bf_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+(1 row)
+
+
+starting permutation: s1supd s1upd s2m s1c s2sel
+step s1supd: UPDATE bf_s SET delta = 99 WHERE sid = 3;
+step s1upd: UPDATE bf_t SET bal = bal + 1 WHERE tid = 3;
+step s2m: MERGE INTO bf_t t USING bf_s s ON t.tid IS NOT DISTINCT FROM s.sid AND s.sid >= 2 WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT * FROM bf_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+  3|331|c  
+(2 rows)
+
+
+starting permutation: s1upd s2m s1a s2sel
+step s1upd: UPDATE bf_t SET bal = bal + 1 WHERE tid = 3;
+step s2m: MERGE INTO bf_t t USING bf_s s ON t.tid IS NOT DISTINCT FROM s.sid AND s.sid >= 2 WHEN MATCHED AND s.sid > 2 THEN UPDATE SET bal = t.bal + s.delta WHEN MATCHED THEN DELETE; <waiting ...>
+step s1a: ROLLBACK;
+step s2m: <... completed>
+step s2sel: SELECT * FROM bf_t ORDER BY tid, bal;
+tid|bal|val
+---+---+---
+  1|100|a  
+  3|330|c  
+(2 rows)
+

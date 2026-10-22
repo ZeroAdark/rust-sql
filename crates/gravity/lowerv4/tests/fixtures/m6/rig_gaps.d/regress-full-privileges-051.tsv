@@ -1,0 +1,1 @@
+information_schema.enabled_roles: its sql_identifier domain (the rig catalog has no information_schema pg_type rows; m2/rig_gaps.d's entry); the server runner judges it

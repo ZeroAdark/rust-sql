@@ -1,6 +1,0 @@
--- FS-354. One session.
-SELECT float8send(var_samp(x)), float8send(var_pop(x)) FROM (VALUES (0::float8), ('NaN'::float8), (1::float8)) v(x);   -- PostgreSQL: \xfff8000000000000 | \xfff8000000000000; pgrust: \x7ff8000000000000 | \x7ff8000000000000
-SELECT var_samp(x)::text FROM (VALUES (0::float8), ('NaN'::float8), (1::float8)) v(x);
-SET extra_float_digits = 3; SELECT regr_sxx(x, x) FROM (VALUES (2147483647::int4), (5::int4), (0::int4)) v(x);   -- PostgreSQL: 3.0744573355966684e+18; pgrust: 3.074457335596668e+18
-SELECT float8send(regr_sxx(x, x)) FROM (VALUES (2147483647::int4), ('0b101'::int4), ('  -0 '::int4), (NULL)) v(x);   -- PostgreSQL: \x43c55555542aaaab; pgrust: \x43c55555542aaaaa
-SET extra_float_digits = 3; SELECT cbrt(27.0), cbrt(2147483647), ||/ 1e15;   -- PostgreSQL: 3.0000000000000004 | 1290.1591548920912 | 100000.00000000001; pgrust: 3 | 1290.159154892091 | 100000

@@ -5,7 +5,7 @@ use ::adt_tsquery_core::util::{
     QtNode, QTN_NOCHANGE,
 };
 use ::adt_tsvector_core::builtins::arg_tsquery;
-use ::adt_tsvector_core::query::{Item, TsQueryRef, OP_AND, OP_NOT, OP_OR};
+use ::adt_tsvector_core::query::{Item, TsQueryRef, OP_NOT};
 use ::datum::Datum;
 use ::mcx::{vec_with_capacity_in, Mcx, PgVec};
 use ::types_error::{PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE};
@@ -15,47 +15,40 @@ use ::types_fmgr::{
 
 const TSQUERYOID: ::types_core::Oid = 3615;
 
-// findeq (tsquery_rewrite.c): match `ex` at this node (or a subset of an
-// AND/OR node's children) and substitute a copy of `subs`. None = the node
-// was replaced by the empty substitution.
+// findeq (tsquery_rewrite.c), in place like C; false = the node was replaced
+// by the empty substitution.
 fn findeq<'mcx>(
     mcx: Mcx<'mcx>,
-    mut node: QtNode<'mcx>,
+    node: &mut QtNode<'mcx>,
     ex: &QtNode<'_>,
     subs: Option<&QtNode<'_>>,
     isfind: &mut bool,
-) -> PgResult<Option<QtNode<'mcx>>> {
+) -> PgResult<bool> {
     if (node.sign & ex.sign) != ex.sign
         || core::mem::discriminant(&node.item) != core::mem::discriminant(&ex.item)
     {
-        return Ok(Some(node));
+        return Ok(true);
     }
     if node.flags & QTN_NOCHANGE != 0 {
-        return Ok(Some(node));
+        return Ok(true);
     }
 
     match (node.item, ex.item) {
         (Item::Opr(nopr), Item::Opr(eopr)) => {
             if nopr.oper != eopr.oper {
-                return Ok(Some(node));
+                return Ok(true);
             }
             if node.children.len() == ex.children.len() {
-                if qtn_eq(&node, ex)? {
+                if qtn_eq(node, ex)? {
                     *isfind = true;
-                    return Ok(match subs {
-                        Some(s) => {
-                            let mut n = qtn_copy(mcx, s)?;
-                            n.flags |= QTN_NOCHANGE;
-                            Some(n)
-                        }
-                        None => None,
-                    });
+                    return substitute(mcx, node, subs);
                 }
             } else if node.children.len() > ex.children.len() && !ex.children.is_empty() {
                 // AND/OR are commutative/associative: match a subset of the
                 // (sorted) children in one merge pass.
-                debug_assert!(nopr.oper == OP_AND || nopr.oper == OP_OR);
-                let mut matched = vec![false; node.children.len()];
+                let mut matched = Vec::new();
+                matched.try_reserve_exact(node.children.len()).map_err(|_| ::mcx::oom_named("tsquery", node.children.len()))?;
+                matched.resize(node.children.len(), false);
                 let mut nmatched = 0usize;
                 let (mut i, mut j) = (0usize, 0usize);
                 while i < node.children.len() && j < ex.children.len() {
@@ -72,98 +65,105 @@ fn findeq<'mcx>(
                     }
                 }
                 if nmatched == ex.children.len() {
-                    let old: PgVec<'mcx, QtNode<'mcx>> =
-                        core::mem::replace(&mut node.children, PgVec::new_in(mcx));
-                    node.children
-                        .try_reserve_exact(old.len() + 1)
-                        .map_err(|_| mcx.oom(old.len() + 1))?;
-                    for (i, c) in old.into_iter().enumerate() {
-                        if !matched[i] {
-                            node.children.push(c);
-                        }
-                    }
+                    compact(&mut node.children, |i| !matched[i]);
                     if let Some(s) = subs {
                         let mut sc = qtn_copy(mcx, s)?;
                         sc.flags |= QTN_NOCHANGE;
+                        node.children.try_reserve(1).map_err(|_| mcx.oom(1))?;
                         node.children.push(sc);
                     }
                     // Zero-or-one-child simplification is dofindsubquery's
                     // job; the re-sort keeps regression output stable.
-                    qtn_sort(&mut node)?;
+                    qtn_sort(node)?;
                     *isfind = true;
                 }
             }
-            Ok(Some(node))
+            Ok(true)
         }
         (Item::Val(nop), Item::Val(eop)) => {
-            if nop.valcrc != eop.valcrc || !qtn_eq(&node, ex)? {
-                return Ok(Some(node));
+            if nop.valcrc != eop.valcrc || !qtn_eq(node, ex)? {
+                return Ok(true);
             }
             *isfind = true;
-            Ok(match subs {
-                Some(s) => {
-                    let mut n = qtn_copy(mcx, s)?;
-                    n.flags |= QTN_NOCHANGE;
-                    Some(n)
-                }
-                None => None,
-            })
+            substitute(mcx, node, subs)
         }
-        _ => Ok(Some(node)),
+        _ => Ok(true),
     }
+}
+
+fn substitute<'mcx>(
+    mcx: Mcx<'mcx>,
+    node: &mut QtNode<'mcx>,
+    subs: Option<&QtNode<'_>>,
+) -> PgResult<bool> {
+    let Some(s) = subs else { return Ok(false) };
+    let mut n = qtn_copy(mcx, s)?;
+    n.flags |= QTN_NOCHANGE;
+    *node = n;
+    Ok(true)
+}
+
+fn compact(children: &mut PgVec<'_, QtNode<'_>>, mut keep: impl FnMut(usize) -> bool) {
+    let mut j = 0usize;
+    for i in 0..children.len() {
+        if keep(i) {
+            children.swap(i, j);
+            j += 1;
+        }
+    }
+    children.truncate(j);
 }
 
 // dofindsubquery (tsquery_rewrite.c): substitute at the root, else recurse;
 // drop voided subtrees and simplify zero/one-child operator nodes.
 fn dofindsubquery<'mcx>(
     mcx: Mcx<'mcx>,
-    root: QtNode<'mcx>,
+    root: &mut QtNode<'mcx>,
     ex: &QtNode<'_>,
     subs: Option<&QtNode<'_>>,
     isfind: &mut bool,
-) -> PgResult<Option<QtNode<'mcx>>> {
+) -> PgResult<bool> {
     // C tsquery_rewrite.c dofindsubquery(): check_stack_depth() alongside
     // CHECK_FOR_INTERRUPTS() (one frame per tree level).
     ::stack_depth::check_stack_depth()?;
     ::postgres_seams::check_for_interrupts::call()?;
 
-    let Some(mut root) = findeq(mcx, root, ex, subs, isfind)? else {
-        return Ok(None);
-    };
+    if !findeq(mcx, root, ex, subs, isfind)? {
+        return Ok(false);
+    }
 
     if root.flags & QTN_NOCHANGE == 0 {
         if let Item::Opr(opr) = root.item {
-            let old: PgVec<'mcx, QtNode<'mcx>> =
-                core::mem::replace(&mut root.children, PgVec::new_in(mcx));
-            root.children
-                .try_reserve_exact(old.len())
-                .map_err(|_| mcx.oom(old.len()))?;
-            for c in old.into_iter() {
-                if let Some(kept) = dofindsubquery(mcx, c, ex, subs, isfind)? {
-                    root.children.push(kept);
+            let mut j = 0usize;
+            for i in 0..root.children.len() {
+                if dofindsubquery(mcx, &mut root.children[i], ex, subs, isfind)? {
+                    root.children.swap(i, j);
+                    j += 1;
                 }
             }
+            root.children.truncate(j);
             if root.children.is_empty() {
-                return Ok(None);
+                return Ok(false);
             }
             if root.children.len() == 1 && opr.oper != OP_NOT {
-                return Ok(Some(root.children.pop().expect("one child")));
+                let only = root.children.pop().expect("one child");
+                *root = only;
             }
         }
     }
-    Ok(Some(root))
+    Ok(true)
 }
 
 // findsubquery (tsquery_rewrite.c). Both root and ex must be QTNTernary'd
 // and QTNSort'ed.
 pub fn findsubquery<'mcx>(
     mcx: Mcx<'mcx>,
-    root: QtNode<'mcx>,
+    mut root: QtNode<'mcx>,
     ex: &QtNode<'_>,
     subs: Option<&QtNode<'_>>,
 ) -> PgResult<Option<QtNode<'mcx>>> {
     let mut did_find = false;
-    dofindsubquery(mcx, root, ex, subs, &mut did_find)
+    Ok(dofindsubquery(mcx, &mut root, ex, subs, &mut did_find)?.then_some(root))
 }
 
 fn image_result(img: PgVec<'_, u8>) -> Datum {
@@ -359,6 +359,42 @@ pub const TSQUERY_REWRITE_BUILTINS: &[FmgrBuiltin] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tree<'mcx>(mcx: ::mcx::Mcx<'mcx>, text: &str) -> QtNode<'mcx> {
+        let img = ::adt_tsquery_core::io::tsquery_in_core(mcx, text.as_bytes(), None).unwrap().unwrap();
+        prepared_tree(mcx, TsQueryRef { payload: &img[4..] }).unwrap()
+    }
+
+    fn printed(mcx: ::mcx::Mcx<'_>, t: Option<QtNode<'_>>) -> String {
+        let img = match t {
+            Some(mut t) => {
+                ::adt_tsquery_core::util::qtn_binary(mcx, &mut t).unwrap();
+                qtn2qt(mcx, &t).unwrap()
+            }
+            None => empty_tsquery(mcx).unwrap(),
+        };
+        let out = ::adt_tsquery_core::io::tsquery_out_core(mcx, TsQueryRef { payload: &img[4..] }).unwrap();
+        String::from_utf8(out[..out.len() - 1].to_vec()).unwrap()
+    }
+
+    // C edits the child array in place; no per-rule rebuild of the tree.
+    #[test]
+    fn findsubquery_edits_children_in_place() {
+        ::postgres_seams::check_for_interrupts::set(|| Ok(()));
+        let ctx = ::mcx::MemoryContext::new("tsquery_rewrite test");
+        let mcx = ctx.mcx();
+        let q = tree(mcx, "a | b | c | d | e | f | g | h");
+        let buf = q.children.as_ptr();
+        let q = findsubquery(mcx, q, &tree(mcx, "zz"), Some(&tree(mcx, "zz | yy"))).unwrap().unwrap();
+        assert_eq!(q.children.as_ptr(), buf);
+        let q = findsubquery(mcx, q, &tree(mcx, "c"), Some(&tree(mcx, "c & x"))).unwrap().unwrap();
+        assert_eq!(q.children.as_ptr(), buf);
+        let q = findsubquery(mcx, q, &tree(mcx, "d | e"), Some(&tree(mcx, "y"))).unwrap().unwrap();
+        assert_eq!(q.children.as_ptr(), buf);
+        assert_eq!(printed(mcx, Some(q)), "'a' | 'y' | 'g' | 'b' | 'f' | 'h' | 'c' & 'x'");
+        let q = findsubquery(mcx, tree(mcx, "a | b"), &tree(mcx, "a"), None).unwrap();
+        assert_eq!(printed(mcx, q), "'b'");
+    }
 
     // tsquery_rewrite.c:344-370: a plain 4-byte-header rule datum is used in
     // place (no per-row copy); a short-header one is detoasted into an

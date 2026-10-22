@@ -1,0 +1,24 @@
+-- regress-full-equivclass-014
+-- explain (costs off) select * from ec0 a, ec1 b where a.ff = b.ff and a.ff = 43::bigint::int8alias1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index rel=39121 rti=1 am=heap index=39125
+    key att=1 op=39111 value=c39092:43
+    recheck (op39111(v1.1, c39092:43))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  nest inner=n2 JOIN_INNER unique vol=v params=($exec0=outer.1)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=39127 rti=2 am=heap index=39131
+    key att=1 op=410 value=$exec0
+    recheck (op410(v2.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val
+  filter op39117(v2.2, c39092:5)
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  outs 1=w8:val 2=w8:val 3=w8:val
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=? 6=?
+param $exec0 owner=n0 type=20 rep=w8:val
+mapped: IndexScan NestLoop NestLoopParam

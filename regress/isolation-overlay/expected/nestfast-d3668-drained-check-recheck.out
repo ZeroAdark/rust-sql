@@ -1,0 +1,90 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) UPDATE d68_tv SET note = note || '+' WHERE id < 5;
+QUERY PLAN                           
+-------------------------------------
+Update on d68_t t                    
+  ->  Hash Right Semi Join           
+        Hash Cond: (r.a = t.b)       
+        ->  Seq Scan on d68_kr r     
+        ->  Hash                     
+              ->  Seq Scan on d68_t t
+                    Filter: (id < 5) 
+  SubPlan 1                          
+    ->  Seq Scan on d68_kr r_1       
+          Filter: (a = t.b)          
+(10 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1b s2u s1c s2s s2c
+step s1b: UPDATE d68_t SET b = 4, note = note || '*' WHERE id = 2;
+step s2u: UPDATE d68_tv SET note = note || '+' WHERE id < 5; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, b, note FROM d68_t WHERE id < 10 ORDER BY id;
+id| b|note
+--+--+----
+ 1| 2|n1+ 
+ 2| 4|n2* 
+ 3| 4|n3+ 
+ 4| 5|n4+ 
+ 5| 6|n5  
+ 6| 7|n6  
+ 7| 8|n7  
+ 8| 9|n8  
+ 9|10|n9  
+(9 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1x s2u s1c s2s s2c
+step s1x: UPDATE d68_t SET b = 7 WHERE id = 2;
+step s2u: UPDATE d68_tv SET note = note || '+' WHERE id < 5; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, b, note FROM d68_t WHERE id < 10 ORDER BY id;
+id| b|note
+--+--+----
+ 1| 2|n1+ 
+ 2| 7|n2  
+ 3| 4|n3+ 
+ 4| 5|n4+ 
+ 5| 6|n5  
+ 6| 7|n6  
+ 7| 8|n7  
+ 8| 9|n8  
+ 9|10|n9  
+(9 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1d s2u s1c s2s s2c
+step s1d: DELETE FROM d68_t WHERE id = 2;
+step s2u: UPDATE d68_tv SET note = note || '+' WHERE id < 5; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT id, b, note FROM d68_t WHERE id < 10 ORDER BY id;
+id| b|note
+--+--+----
+ 1| 2|n1+ 
+ 3| 4|n3+ 
+ 4| 5|n4+ 
+ 5| 6|n5  
+ 6| 7|n6  
+ 7| 8|n7  
+ 8| 9|n8  
+ 9|10|n9  
+(8 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s2f s1c s2c
+step s1n: UPDATE d68_t SET note = note || '*' WHERE id = 2;
+step s2f: UPDATE d68_tv SET b = b + 4 WHERE id = 2; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+ERROR:  new row violates check option for view "d68_tv"
+step s2c: COMMIT;

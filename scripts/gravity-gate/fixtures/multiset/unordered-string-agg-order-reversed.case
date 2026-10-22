@@ -1,0 +1,11 @@
+# string_agg(.. ORDER BY ..): the value's element order stays exact
+sql: SELECT g, string_agg(x, ',' ORDER BY x) FROM t GROUP BY g;
+cols: g	string_agg
+class: unordered
+verdict: mismatch
+[pg]
+1	a,b
+2	c
+[got]
+2	c
+1	b,a

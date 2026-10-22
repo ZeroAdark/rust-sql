@@ -1,0 +1,113 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1g s2a s1c
+step s1g: UPDATE img SET name = 'cyrus' WHERE id = 3;
+step s2a: SELECT x.id, g.name FROM imx x JOIN img g ON g.id = x.guest WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM imr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|name 
+--+-----
+ 3|cyrus
+ 5|ann  
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1gk s2a s1c
+step s1gk: UPDATE img SET id = 30 WHERE id = 3;
+step s2a: SELECT x.id, g.name FROM imx x JOIN img g ON g.id = x.guest WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM imr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|name
+--+----
+ 5|ann 
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1gd s2a s1c
+step s1gd: DELETE FROM img WHERE id = 3;
+step s2a: SELECT x.id, g.name FROM imx x JOIN img g ON g.id = x.guest WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM imr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|name
+--+----
+ 5|ann 
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1x s2a s1c
+step s1x: UPDATE imx SET room = 9 WHERE id = 3;
+step s2a: SELECT x.id, g.name FROM imx x JOIN img g ON g.id = x.guest WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM imr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|name
+--+----
+ 5|ann 
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2o s1c
+step s1g: UPDATE img SET name = 'cyrus' WHERE id = 3;
+step s2o: SELECT x.id, g.name FROM imx x JOIN img g ON g.id = x.guest WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM imr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) FOR UPDATE OF x;
+id|name
+--+----
+ 3|cy  
+ 5|ann 
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1x s2o s1c
+step s1x: UPDATE imx SET room = 9 WHERE id = 3;
+step s2o: SELECT x.id, g.name FROM imx x JOIN img g ON g.id = x.guest WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM imr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) FOR UPDATE OF x; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|name
+--+----
+ 5|ann 
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2s s1c
+step s1r: UPDATE imr SET valid = int4range(0, 70) WHERE id = 1;
+step s2s: SELECT x.id, g.name FROM imx x JOIN img g ON g.id = x.guest WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM imr y WHERE y.id <= 3 FOR SHARE OF y) y2), false) FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|name
+--+----
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2n s1c
+step s1l: SELECT id FROM img WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2n: SELECT x.id, g.name FROM imx x JOIN img g ON g.id = x.guest WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM imr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "img"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2k s1c
+step s1l: SELECT id FROM img WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2k: SELECT x.id, g.name FROM imx x JOIN img g ON g.id = x.guest WHERE x.room <= 3 AND NOT coalesce(x.valid <@ (SELECT range_agg(r) FROM (SELECT y.valid r FROM imr y WHERE y.id <= 3 FOR KEY SHARE OF y) y2), false) FOR UPDATE SKIP LOCKED;
+id|name
+--+----
+ 5|ann 
+(1 row)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

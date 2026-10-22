@@ -1,0 +1,10 @@
+-- regress-full-random-018
+-- SELECT random(1, 6) FROM generate_series(1, 10);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10)]
+  project (1=fn6339(c23:1, c23:6))
+  outs 1=w4:val
+mapped: FunctionScan

@@ -1,0 +1,1 @@
+backend/storage/ipc/procarray/src/running.rs	RUNNING_XACTS_SCRATCH	pgport	call	scratch	CurrentRunningXactsData's xids workspace (bgwriter / checkpointer / startup callers): GetRunningTransactionData clears and refills it; reserved once at the max subxid count

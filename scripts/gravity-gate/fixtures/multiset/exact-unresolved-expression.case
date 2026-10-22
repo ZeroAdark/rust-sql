@@ -1,0 +1,11 @@
+# ORDER BY an expression not in the target list: the whole result compares exactly
+sql: SELECT x FROM t ORDER BY x + 1;
+cols: x
+class: exact
+verdict: mismatch-order
+[pg]
+1
+2
+[got]
+2
+1

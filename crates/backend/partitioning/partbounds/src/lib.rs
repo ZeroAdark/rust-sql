@@ -141,44 +141,28 @@ fn key_cmp(key: &PartitionKeyData, col: usize, a: Datum, b: Datum) -> PgResult<i
 }
 
 // qsort with a comparator that can raise (partbounds.c:533 qsort_arg,
-// :771 qsort): the first error aborts the sort and is returned. Stable
-// bottom-up merge over an index permutation; the comparator is never called
-// again once it has failed.
+// :771 qsort): PostgreSQL's own algorithm (pg_qsort crate, sort_template.h)
+// over an index permutation, so a user btree support function is called in
+// C's exact sequence and count (its NOTICEs, its side effects, the first
+// error); the first error aborts the sort and is returned, and the comparator
+// is never called again once it has failed.
 fn try_sort_by<T, F>(items: &mut Vec<T>, mut cmp: F) -> PgResult<()>
 where
     F: FnMut(&T, &T) -> PgResult<i32>,
 {
     let n = items.len();
-    if n < 2 {
+    if n < 7 {
+        for i in 1..n {
+            let mut j = i;
+            while j > 0 && cmp(&items[j - 1], &items[j])? > 0 {
+                items.swap(j - 1, j);
+                j -= 1;
+            }
+        }
         return Ok(());
     }
     let mut idx: Vec<usize> = (0..n).collect();
-    let mut buf: Vec<usize> = vec![0; n];
-    let mut width = 1;
-    while width < n {
-        let mut lo = 0;
-        while lo < n {
-            let mid = (lo + width).min(n);
-            let hi = (lo + 2 * width).min(n);
-            let (mut i, mut j, mut k) = (lo, mid, lo);
-            while i < mid && j < hi {
-                if cmp(&items[idx[j]], &items[idx[i]])? < 0 {
-                    buf[k] = idx[j];
-                    j += 1;
-                } else {
-                    buf[k] = idx[i];
-                    i += 1;
-                }
-                k += 1;
-            }
-            buf[k..k + (mid - i)].copy_from_slice(&idx[i..mid]);
-            k += mid - i;
-            buf[k..k + (hi - j)].copy_from_slice(&idx[j..hi]);
-            lo = hi;
-        }
-        core::mem::swap(&mut idx, &mut buf);
-        width *= 2;
-    }
+    pg_qsort::pg_qsort_arg(&mut idx, |&a, &b| cmp(&items[a], &items[b]))?;
     let mut taken: Vec<Option<T>> = items.drain(..).map(Some).collect();
     for &i in &idx {
         items.push(taken[i].take().expect("sort permutation"));

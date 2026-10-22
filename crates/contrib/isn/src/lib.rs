@@ -5,11 +5,10 @@
 //! script, so none of those live here.
 //!
 //! C's `_PG_init` runs `DefineCustomBoolVariable("isn.weak")` +
-//! `MarkGUCPrefixReserved("isn")`: `isn.weak` is statically defined in
-//! guc_tables (the auto_explain pattern) over the per-session cell below, and
-//! the prefix is reserved at library load.
+//! `MarkGUCPrefixReserved("isn")`; both happen when the library loads.
 
 pub mod builtins;
+mod settings;
 mod tables;
 
 pub use builtins::init_seams;
@@ -445,6 +444,7 @@ pub fn ean2string(
 
 // C's errmsg("...%s...", str) carries the input bytes as-is (isn.c:901).
 fn input_error(before: &str, input: &[u8], after: &str) -> PgError {
+    // ALLOC-REVIEW(antigravity): error-report buffer (input_error builds PgError on ereport path)
     let mut msg = Vec::with_capacity(before.len() + input.len() + after.len());
     msg.extend_from_slice(before.as_bytes());
     msg.extend_from_slice(input);

@@ -1,0 +1,10 @@
+path	crates/gravity/hosts/src/ops/modifytable/write_check.rs
+growth	std::vec::Vec::push	4
+ir-only	<T as core::convert::Into<U>>::into	1
+macro	std::vec	4
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	4
+method	std::vec::Vec::into_boxed_slice	3
+method	std::vec::Vec::with_capacity	2
+type	std::rc::Rc	2
+type	std::vec::Vec	3

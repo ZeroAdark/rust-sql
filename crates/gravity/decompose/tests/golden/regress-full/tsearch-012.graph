@@ -1,0 +1,41 @@
+-- regress-full-tsearch-012
+-- SELECT pol.polname, pol.polpermissive, CASE WHEN pol.polroles = '{0}' THEN NULL ELSE pg_catalog.array_to_string(array(select rolname from pg_catalog.pg_roles where oid = any (pol.polroles) order by 1),',') END, pg_catalog.pg_get_expr(pol.polqual, pol.polrelid), pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid), CASE pol.polcmd WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT' WHEN 'w' THEN 'UPDATE' WHEN 'd' THEN 'DELETE' END AS cmd FROM pg_catalog.pg_policy pol WHERE pol.polrelid = '38616' ORDER BY 1;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=4 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n5@0 n4@0 n3@1^
+  source bitmap rel=1260 rti=3 am=heap
+    bitmap index node=5 index=2677 rows=8
+      key att=1 op=607 form=any value=$exec0
+    recheck (any607(v3.1, $exec0))
+    lanes Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v3.2)
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=fx64:win/page
+p1 node=1 serial site=0 reason=IndexSource end=breaker(slot=1 Sort)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@0 n0@2^
+  source bitmap rel=3256 rti=1 am=heap
+    bitmap index node=2 index=3258 rows=1
+      key att=3 op=607 value=c26:38616
+    recheck (op607(v1.3, c26:38616))
+    lanes Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byref8:vl:win/page Attr(7):byref8:vl:win/page Attr(8):byref8:vl:win/page Offset:byval2:w2:val
+  subplan 1 nested Array params=($exec0=v1.6) conditional raise-free
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n3@0
+  source breaker slot=0
+  project (1=outer.1)
+  project (1=v1.2, 2=v1.5, 3=case(when op1070(v1.6, c1028:'\x01\x00\x00\x00\x00\x00\x00\x00\x1a\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00') then c25:null) else fn395(subplan1(v1.6), c25:','), 4=fn1716(v1.7, v1.3), 5=fn1716(v1.8, v1.3), 6=case[v1.4](when op92(T_CaseTestExpr, c18:114) then c25:'SELECT', when op92(T_CaseTestExpr, c18:97) then c25:'INSERT', when op92(T_CaseTestExpr, c18:119) then c25:'UPDATE', when op92(T_CaseTestExpr, c18:100) then c25:'DELETE') else c25:null)
+  sort keys=1+:Fp128@950#19 form=runs
+  outs 1=fx64:win/page 2=w8:val 3=vl:call395 4=vl:call1716 5=vl:call1716 6=vl:stmt/imm
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=fx64:win/page 2=w8:val 3=vl:call395 4=vl:call1716 5=vl:call1716 6=vl:stmt/imm
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[Fp128,Fp128]->[Count@16] 24B order=1+
+rerun node=1 subplan=1 pipelines=p0 slots=0
+param $exec0 owner=subplan1 type=1028 rep=vl:win/page
+mapped: BitmapIndexScan BitmapHeapScan Sort SubPlan

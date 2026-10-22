@@ -1,0 +1,9 @@
+-- regress-full-stats_import-003
+-- SELECT pg_catalog.pg_restore_attribute_stats( 'schemaname', 'stats_import', 'relname', 'test_mr', 'attname', 'mrange', 'inherited', false, 'most_common_vals', ARRAY['[1,3)']::text, 'most_common_freqs', ARRAY[1.0]::real[] );
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn6363(c705:#-2, c705:#-2, c705:#-2, c705:#-2, c705:#-2, c705:#-2, c705:#-2, c16:0, c705:#-2, io25(c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00$\x00\x00\x00[1,3)\x00\x00\x00'), c705:#-2, c1021:'\x01\x00\x00\x00\x00\x00\x00\x00\xbc\x02\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x80?'))
+  outs 1=w1:val
+mapped: Result

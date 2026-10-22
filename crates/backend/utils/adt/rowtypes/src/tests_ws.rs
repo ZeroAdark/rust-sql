@@ -62,7 +62,7 @@ fn payload<'a>(d: Datum) -> &'a [u8] {
 }
 
 fn fc_mytextout(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let bytes = payload(fcinfo.arg(0)).to_vec();
+    let bytes = ::mcx::std_vec_from_slice("adt", &payload(fcinfo.arg(0)))?;
     OUT_SCRATCH.with(|c| {
         let mut b = c.borrow_mut();
         b.clear();
@@ -140,7 +140,8 @@ fn hex(b: &[u8]) -> String {
 
 /// record_in.  `Err` collapses to None, matching the table's "ERR".
 fn record_in(mcx: ::mcx::Mcx<'_>, typmod: i32, literal: &[u8]) -> Option<Datum> {
-    let mut cstr = literal.to_vec();
+    let mut cstr = Vec::new();
+    cstr.extend_from_slice(literal);
     cstr.push(0);
     let mut fci = LocalFcinfo::<3>::new(0);
     unsafe { fci.set_result_mcx(mcx) };
@@ -194,7 +195,13 @@ fn fields(mcx: ::mcx::Mcx<'_>, d: Datum) -> [Option<Vec<u8>>; 2] {
     let mut values: PgVec<'_, Datum> = vec_from_elem_in(mcx, Datum::null(), n);
     let mut nulls: PgVec<'_, bool> = vec_from_elem_in(mcx, true, n);
     ::types_tuple::heap_deform_tuple(&tuple, &tupdesc, &mut values, &mut nulls);
-    [0usize, 1].map(|i| (!nulls[i]).then(|| payload(values[i]).to_vec()))
+    [0usize, 1].map(|i| {
+        (!nulls[i]).then(|| {
+            let mut v = Vec::new();
+            v.extend_from_slice(payload(values[i]));
+            v
+        })
+    })
 }
 
 /// The exact string the SQL fixture printed, so a cell compares verbatim.
@@ -316,7 +323,8 @@ fn record_out_over_ceiling_output_raises_c_stringinfo_error() {
 
     let n = ::mcx::MAX_ALLOC_SIZE / 2 + 16;
     let total = ::datum::VARHDRSZ + n;
-    let mut img: Vec<u8> = Vec::with_capacity(total);
+    let mut img: Vec<u8> = Vec::new();
+    let _ = img.try_reserve_exact(total);
     img.extend_from_slice(&::datum::varlena::set_varsize_4b(total));
     img.resize(total, b'"');
     let d = Datum::from_usize(img.as_ptr() as usize);
@@ -353,4 +361,15 @@ fn record_out_reservation_is_exact() {
     assert_eq!(record_out_quoting(b"a\"b\\"), (true, 8));
     assert_eq!(record_out_quoting(b"(x)"), (true, 5));
     assert_eq!(record_out_quoting(b"x,y"), (true, 5));
+}
+
+#[test]
+fn record_out_overflow_detail_matches_per_byte_appends() {
+    let e = super::record_out_column_room(1, 1_200_000_002).unwrap_err();
+    assert_eq!(
+        e.detail(),
+        Some("Cannot enlarge string buffer containing 1073741822 bytes by 1 more bytes.")
+    );
+    assert!(super::record_out_column_room(1, 1_073_741_821).is_ok());
+    assert!(super::record_out_column_room(1, 1_073_741_822).is_err());
 }

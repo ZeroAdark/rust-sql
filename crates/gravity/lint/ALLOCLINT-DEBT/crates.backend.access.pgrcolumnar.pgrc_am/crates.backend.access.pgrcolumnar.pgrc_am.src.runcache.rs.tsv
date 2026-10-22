@@ -1,0 +1,13 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/runcache.rs
+growth	std::collections::HashMap::insert	1
+macro	std::format	2
+macro	std::vec	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	2
+method	std::ffi::CString::new	2
+method	std::sync::Arc::new	3
+method	std::sync::Arc::new_cyclic	1
+method	std::vec::Vec::into_boxed_slice	1
+type	std::boxed::Box	1
+type	std::ffi::CString	2
+type	std::sync::Arc	7

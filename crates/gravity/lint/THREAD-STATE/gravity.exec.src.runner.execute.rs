@@ -1,0 +1,2 @@
+gravity/exec/src/runner/execute.rs	KEPT	lifetime	at:drop_kept_at_teardown	leader	the simple protocol's kept statement state: context + wire node; KeptGuard takes / puts back per statement, dropped at session teardown
+gravity/exec/src/runner/execute.rs	KEPT_CLEANUP_ARMED	lifetime	at:drop_kept_at_teardown	leader	the simple protocol's kept statement state: teardown registration flag; drop_kept_at_teardown clears it (re-armed for a reused thread)

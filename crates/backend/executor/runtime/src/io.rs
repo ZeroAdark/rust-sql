@@ -72,7 +72,12 @@ pub(crate) fn worker_exit() {
         aio_seams::uring_worker_ring_teardown::call();
     }
     WORKER_RT.with(|c| *c.borrow_mut() = None);
-    debug_assert!(!IN_IO_SECTION.get(), "worker exited inside a blocking section");
+    // D611: an unwind out of an aio wait skips io_permit_reacquire; its permit already went back.
+    debug_assert!(
+        !IN_IO_SECTION.get() || std::thread::panicking(),
+        "worker exited inside a blocking section"
+    );
+    IN_IO_SECTION.set(false);
     PERMIT_HELD.set(false);
 }
 
@@ -85,6 +90,12 @@ pub(crate) fn worker_exit() {
 /// double-release guard. One TLS load.
 pub(crate) fn in_io_section() -> bool {
     IN_IO_SECTION.get()
+}
+
+/// D611: whether THIS pool worker holds its execution permit now (false
+/// inside an aio blocking wait, and on threads outside the pool loop).
+pub(crate) fn permit_held() -> bool {
+    PERMIT_HELD.get()
 }
 
 pub(crate) fn note_permit(held: bool) {

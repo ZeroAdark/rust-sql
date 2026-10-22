@@ -1,0 +1,18 @@
+-- regress-full-tsearch-025
+-- explain (costs off) select * from test_tsquery, to_tsquery('new') q where txtsample @@ q;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=2 [1:Scalar fn3750 fn3750(c25:'new')]
+  project (1=v2.1)
+  nest inner=n2 JOIN_INNER invariant raise-free params=() qual=(op3763(inner.2, outer.1))
+  inner node=2 eligible rows=520 end=sink
+  nodes n2@0
+  source range rel=38631 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4)
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=outer.1)
+  outs 1=vl:row
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=vl:life/breaker 4=vl:life/breaker 5=vl:row
+mapped: SeqScan FunctionScan NestLoop

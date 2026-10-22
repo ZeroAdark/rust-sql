@@ -1,0 +1,128 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s1c
+step s2e: EXPLAIN (COSTS OFF) DELETE FROM cq WHERE id IN (SELECT id FROM cq WHERE owner = 'A' FOR UPDATE) RETURNING id;
+QUERY PLAN                                                 
+-----------------------------------------------------------
+Delete on cq                                               
+  ->  Hash Semi Join                                       
+        Hash Cond: (cq.id = "ANY_subquery".id)             
+        ->  Seq Scan on cq                                 
+        ->  Hash                                           
+              ->  Subquery Scan on "ANY_subquery"          
+                    ->  LockRows                           
+                          ->  Seq Scan on cq cq_1          
+                                Filter: (owner = 'A'::text)
+(9 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1upd s2d s1c s2r
+step s1upd: UPDATE cq SET state = 'held' WHERE id = 3;
+step s2d: DELETE FROM cq WHERE id IN (SELECT id FROM cq WHERE owner = 'A' FOR UPDATE) RETURNING id, state; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|state
+--+-----
+ 3|held 
+ 4|new  
+(2 rows)
+
+step s2r: SELECT id, state, owner FROM cq ORDER BY id;
+id|state|owner
+--+-----+-----
+ 1|new  |     
+ 2|new  |     
+ 5|new  |B    
+ 6|new  |B    
+ 7|new  |     
+ 8|new  |     
+(6 rows)
+
+
+starting permutation: s1own s2d s1c s2r
+step s1own: UPDATE cq SET owner = 'B' WHERE id = 3;
+step s2d: DELETE FROM cq WHERE id IN (SELECT id FROM cq WHERE owner = 'A' FOR UPDATE) RETURNING id, state; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|state
+--+-----
+ 4|new  
+(1 row)
+
+step s2r: SELECT id, state, owner FROM cq ORDER BY id;
+id|state|owner
+--+-----+-----
+ 1|new  |     
+ 2|new  |     
+ 3|new  |B    
+ 5|new  |B    
+ 6|new  |B    
+ 7|new  |     
+ 8|new  |     
+(7 rows)
+
+
+starting permutation: s1id s2d s1c s2r
+step s1id: UPDATE cq SET id = 30 WHERE id = 3;
+step s2d: DELETE FROM cq WHERE id IN (SELECT id FROM cq WHERE owner = 'A' FOR UPDATE) RETURNING id, state; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|state
+--+-----
+ 4|new  
+(1 row)
+
+step s2r: SELECT id, state, owner FROM cq ORDER BY id;
+id|state|owner
+--+-----+-----
+ 1|new  |     
+ 2|new  |     
+ 5|new  |B    
+ 6|new  |B    
+ 7|new  |     
+ 8|new  |     
+30|new  |A    
+(7 rows)
+
+
+starting permutation: s1del s2d s1c s2r
+step s1del: DELETE FROM cq WHERE id = 3;
+step s2d: DELETE FROM cq WHERE id IN (SELECT id FROM cq WHERE owner = 'A' FOR UPDATE) RETURNING id, state; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|state
+--+-----
+ 4|new  
+(1 row)
+
+step s2r: SELECT id, state, owner FROM cq ORDER BY id;
+id|state|owner
+--+-----+-----
+ 1|new  |     
+ 2|new  |     
+ 5|new  |B    
+ 6|new  |B    
+ 7|new  |     
+ 8|new  |     
+(6 rows)
+
+
+starting permutation: s1upd s2n s1c s2r
+step s1upd: UPDATE cq SET state = 'held' WHERE id = 3;
+step s2n: DELETE FROM cq WHERE id IN (SELECT id FROM cq WHERE owner = 'A' FOR UPDATE NOWAIT) RETURNING id;
+ERROR:  could not obtain lock on row in relation "cq"
+step s1c: COMMIT;
+step s2r: SELECT id, state, owner FROM cq ORDER BY id;
+id|state|owner
+--+-----+-----
+ 1|new  |     
+ 2|new  |     
+ 3|held |A    
+ 4|new  |A    
+ 5|new  |B    
+ 6|new  |B    
+ 7|new  |     
+ 8|new  |     
+(8 rows)
+

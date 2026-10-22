@@ -1,4 +1,0 @@
-€);
-
--- ... but not here
-select websearch_to_tsquery(

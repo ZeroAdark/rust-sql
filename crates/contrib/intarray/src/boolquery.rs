@@ -50,10 +50,10 @@ impl ParseError {
 }
 
 /// ITEMs of a QUERYTYPE image (on-disk: i16 type, i16 left, i32 val).
-pub fn parse_items(image: &[u8]) -> Vec<Item> {
+pub fn parse_items(image: &[u8]) -> PgResult<Vec<Item>> {
     let size = (i32::from_ne_bytes(image[4..8].try_into().unwrap()).max(0) as usize)
         .min(image.len().saturating_sub(HDRSIZEQT) / 8);
-    let mut items = Vec::with_capacity(size);
+    let mut items = ::mcx::std_vec_with_capacity("intarray", size)?;
     for i in 0..size {
         let off = HDRSIZEQT + i * 8;
         items.push(Item {
@@ -62,12 +62,12 @@ pub fn parse_items(image: &[u8]) -> Vec<Item> {
             val: i32::from_ne_bytes(image[off + 4..off + 8].try_into().unwrap()),
         });
     }
-    items
+    Ok(items)
 }
 
-fn build_image(items: &[Item]) -> Vec<u8> {
+fn build_image(items: &[Item]) -> PgResult<Vec<u8>> {
     let nbytes = HDRSIZEQT + items.len() * 8;
-    let mut img = Vec::with_capacity(nbytes);
+    let mut img = ::mcx::std_vec_with_capacity("intarray", nbytes)?;
     img.extend_from_slice(&varatt::set_varsize_4b_word(nbytes as u32).to_ne_bytes());
     img.extend_from_slice(&(items.len() as i32).to_ne_bytes());
     for it in items {
@@ -75,7 +75,7 @@ fn build_image(items: &[Item]) -> Vec<u8> {
         img.extend_from_slice(&it.left.to_ne_bytes());
         img.extend_from_slice(&it.val.to_ne_bytes());
     }
-    img
+    Ok(img)
 }
 
 struct WorkState<'a> {
@@ -316,7 +316,7 @@ pub fn parse_query(buf: &[u8]) -> Result<Vec<u8>, ParseError> {
     let mut pos = items.len() as i32 - 1;
     findoprnd(&mut items, &mut pos)?;
     debug_assert_eq!(pos, -1);
-    Ok(build_image(&items))
+    build_image(&items).map_err(ParseError::hard)
 }
 
 /// The boolean evaluator over reverse polish notation; chkcond receives the
@@ -387,7 +387,7 @@ pub fn gin_bool_consistent(items: &[Item], check: &[bool]) -> PgResult<bool> {
     if items.is_empty() {
         return Ok(false);
     }
-    let mut mapped = vec![false; items.len()];
+    let mut mapped = ::mcx::std_vec_from_elem("intarray", false, items.len())?;
     let mut j = 0usize;
     for (i, it) in items.iter().enumerate() {
         if it.typ == VAL as i16 {
@@ -428,26 +428,39 @@ pub fn query_has_required_values(items: &[Item]) -> PgResult<bool> {
     contains_required_value(items, items.len() as i32 - 1)
 }
 
-fn infix(items: &[Item], pos: i32, first: bool) -> PgResult<(String, i32)> {
+fn infix(items: &[Item], pos: i32, first: bool, out: &mut String) -> PgResult<i32> {
     stack_depth::check_stack_depth()?;
     let cur = &items[pos as usize];
     if cur.typ == VAL as i16 {
-        Ok((format!("{}", cur.val), pos - 1))
+        use core::fmt::Write;
+        let _ = write!(out, "{}", cur.val);
+        Ok(pos - 1)
     } else if cur.val == '!' as i32 {
         let operand = pos - 1;
         let isopr = items[operand as usize].typ == OPR as i16;
-        let (s, next) = infix(items, operand, isopr)?;
-        Ok((if isopr { format!("!( {s} )") } else { format!("!{s}") }, next))
+        out.push_str(if isopr { "!( " } else { "!" });
+        let next = infix(items, operand, isopr, out)?;
+        if isopr {
+            out.push_str(" )");
+        }
+        Ok(next)
     } else {
         let op = cur.val as u8 as char;
-        let (right, rnext) = infix(items, pos - 1, false)?;
-        let (left, lnext) = infix(items, rnext, false)?;
-        let s = if op == '|' && !first {
-            format!("( {left} {op} {right} )")
-        } else {
-            format!("{left} {op} {right}")
-        };
-        Ok((s, lnext))
+        let paren = op == '|' && !first;
+        if paren {
+            out.push_str("( ");
+        }
+        let mut right = String::new();
+        let rnext = infix(items, pos - 1, false, &mut right)?;
+        let lnext = infix(items, rnext, false, out)?;
+        out.push(' ');
+        out.push(op);
+        out.push(' ');
+        out.push_str(&right);
+        if paren {
+            out.push_str(" )");
+        }
+        Ok(lnext)
     }
 }
 
@@ -458,6 +471,7 @@ pub fn deparse(items: &[Item]) -> PgResult<Vec<u8>> {
             .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
             .into());
     }
-    let (s, _) = infix(items, items.len() as i32 - 1, true)?;
+    let mut s = String::new();
+    infix(items, items.len() as i32 - 1, true, &mut s)?;
     Ok(s.into_bytes())
 }

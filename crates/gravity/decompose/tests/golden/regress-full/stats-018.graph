@@ -1,0 +1,59 @@
+-- regress-full-stats-018
+-- SELECT seq_scan, '<timestamp>' = last_seq_scan AS seq_ok, idx_scan, '<timestamp>' < last_idx_scan AS idx_ok FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=7 serial site=0 reason=IndexSource end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n7@0 n6@2
+  source index rel=1259 rti=2 am=heap index=2662
+    key att=1 op=607 value=c26:47055
+    recheck (op607(v2.1, c26:47055))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(18):byval8:w8:val
+  filter any92(v2.18, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00rtmp')
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  build keys=(outer.3) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w8:val
+p1 node=5 eligible rows=98 end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n5@0 n4@1^
+  source range rel=2615 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4)
+  probe slot=0 inner=n6 JOIN_RIGHT unique marks build-first keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.3))
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+p2 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 HashAgg)
+  desc consumes=slot0@p0 consumes=slot1@p1 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n3@2 n2@4 n1@5^
+  source breaker slot=0
+  drain matches=slot1 JOIN_RIGHT
+  project (1=inner.1, 2=inner.2, 3=outer.2)
+  nest inner=n8 JOIN_LEFT invariant raise-free params=()
+  inner node=8 serial site=0 reason=IndexSource end=sink
+  nodes n8@0
+  source index rel=2610 rti=3 am=heap index=2678
+    key att=2 op=607 value=c26:47055
+    recheck (op607(v3.2, c26:47055))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byref8:vl:win/page Attr(17):byref8:vl:win/page Attr(18):byref8:vl:win/page Attr(19):byref8:vl:win/page Attr(20):byref8:vl:win/page Attr(21):byref8:vl:win/page
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4, 5=v3.5, 6=v3.6, 7=v3.7, 8=v3.8, 9=v3.9, 10=v3.10, 11=v3.11, 12=v3.12, 13=v3.13, 14=v3.14, 15=v3.15, 16=v3.16, 17=v3.17, 18=v3.18, 19=v3.19, 20=v3.20, 21=v3.21)
+  project (1=outer.3, 2=outer.1, 3=outer.2, 4=inner.1)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=w4:val 2=fx64:life/breaker 3=fx64:life/breaker
+  outs 1=fx64:life/breaker 2=w4:val 3=fx64:life/breaker 4=w4:val
+  outs 1=fx64:life/breaker 2=w4:val 3=fx64:life/breaker 4=w4:val
+p3 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p2
+  nodes n1@0 n0@1
+  source breaker slot=2
+  project (1=outer.2, 2=outer.1, 3=outer.3, 4=fn1928(outer.2), 5=fn6310(outer.2), 6=c20:null, 7=fn1779(agg2107(1=fn1928(outer.4))), 8=agg2127(1=fn6310(outer.4)), 9=c20:null, 10=c20:null, 11=c20:null, 12=c20:null, 13=c20:null, 14=c20:null, 15=c20:null, 16=c20:null, 17=c20:null, 18=c20:null, 19=c1184:null, 20=c1184:null, 21=c1184:null, 22=c1184:null, 23=c20:null, 24=c20:null, 25=c20:null, 26=c20:null, 27=c701:null, 28=c701:null, 29=c701:null, 30=c701:null)
+  project (1=v1.4, 2=op1320(c1184:843011157135246, v1.5), 3=v1.7, 4=op1322(c1184:843011157028175, v1.8))
+  outs 1=w4:val 2=fx64:life/breaker 3=fx64:life/breaker 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=w8:val 15=w8:val 16=w8:val 17=w8:val 18=w8:val 19=w8:val 20=w8:val 21=w8:val 22=w8:val 23=w8:val 24=w8:val 25=w8:val 26=w8:val 27=w8:val 28=w8:val 29=w8:val 30=w8:val
+  outs 1=w8:val 2=w1:val 3=w8:val 4=w1:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[Fp128,Fp128,I32,Fp128,Fp128]->[SumI128@40,MaxI64@56,MinCode@64,MinCode@72,Count@80]+valid 96B order=1+,2+,3+
+group slot=2 producer=p2 node=1 form=Sorted hints=[] layout=[Fp128,Fp128,I32,Fp128,Fp128]->[SumI128@40,MaxI64@56,MinCode@64,MinCode@72,Count@80]+valid 96B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=19 rep=2 expr=outer.1
+  key 1 word=2 resno=2 kind=I32 attno=0 type=26 expr=outer.2
+  key 2 word=3 resno=3 kind=Fp128 attno=0 type=19 rep=3 expr=outer.3
+  agg aggno=0 fn=2107 reg=SumInt128 slot=0 count_slot=- final=Int128Sum class=SumI128 trans=Abi(SumI128) mods=[] expr=agg2107(1=fn1928(outer.4))
+  agg aggno=1 fn=2127 reg=MaxInt slot=1 count_slot=- final=Identity class=Max(Int) trans=Abi(MaxI64) mods=[] expr=agg2127(1=fn6310(outer.4))
+mapped: SeqScan IndexScan SubqueryScan NestLoop HashJoin Agg Hash

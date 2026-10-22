@@ -1,0 +1,11 @@
+-- regress-full-opr_sanity-036
+-- SELECT o1.oid, o1.oprname FROM pg_operator as o1 WHERE (o1.oprleft = 0 and o1.oprkind != 'l') OR (o1.oprleft != 0 and o1.oprkind = 'l') OR o1.oprright = 0;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=77 end=sink
+  nodes n0@0
+  source range rel=2617 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(5):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Offset:byval2:w2:val
+  filter or(and(op607(v1.8, c26:0), op630(v1.5, c18:108)), and(op608(v1.8, c26:0), op92(v1.5, c18:108)), op607(v1.9, c26:0))
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

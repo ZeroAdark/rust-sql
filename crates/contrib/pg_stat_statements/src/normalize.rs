@@ -33,7 +33,9 @@ pub(crate) fn generate_normalized_query(
     fill_in_constant_lengths(&mut locs, query, query_loc)?;
 
     let qbytes = query.as_bytes();
-    let mut norm = String::with_capacity(query.len() + locs.len() * 10);
+    let mut norm = String::new();
+    norm.try_reserve(query.len() + locs.len() * 10)
+        .map_err(|_| mcx::oom_named("pg_stat_statements", query.len() + locs.len() * 10))?;
     let mut quer_loc = 0usize; // source byte position
     let mut last_off = 0usize;
     let mut last_tok_len = 0usize;
@@ -88,7 +90,6 @@ fn fill_in_constant_lengths(locs: &mut [Loc], query: &str, query_loc: i32) -> Pg
         // C: we don't want to re-emit any escape string warnings.
         escape_string_warning: false,
         encoding: mbutils::GetDatabaseEncoding(),
-        client_encoding: mbutils::GetDatabaseEncoding(),
         ..scan_fgram::ScannerSettings::default()
     };
     let mut scanner = scan_fgram::Scanner::new(query.as_bytes(), mcx, settings);

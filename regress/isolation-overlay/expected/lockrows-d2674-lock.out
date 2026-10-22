@@ -1,0 +1,66 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s1e s2d s1c s2last s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x: EXPLAIN (COSTS OFF) SELECT tt.id FROM tt JOIN tb b ON tt.id = b.id WHERE tt.f = 1 AND ptick(b.n) FOR UPDATE OF tt;
+QUERY PLAN                         
+-----------------------------------
+LockRows                           
+  ->  Hash Join                    
+        Hash Cond: (b.id = tt.id)  
+        ->  Seq Scan on tb b       
+              Filter: ptick(n)     
+        ->  Hash                   
+              ->  Seq Scan on tt   
+                    Filter: (f = 1)
+(8 rows)
+
+step s1e: UPDATE tt SET f = 0 WHERE id = 1; UPDATE tt SET f = 0 WHERE id = 2;
+step s2d: SELECT tt.id FROM tt JOIN tb b ON tt.id = b.id WHERE tt.f = 1 AND ptick(b.n) FOR UPDATE OF tt; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id
+--
+ 3
+(1 row)
+
+step s2last: SELECT last_value, is_called FROM pcnt; SELECT * FROM tt ORDER BY id;
+last_value|is_called
+----------+---------
+       101|t        
+(1 row)
+
+id|f
+--+-
+ 1|0
+ 2|0
+ 3|1
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1m s2d s1c s2last s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1m: UPDATE tt SET id = 1001 WHERE id = 1; UPDATE tt SET f = 0 WHERE id = 2;
+step s2d: SELECT tt.id FROM tt JOIN tb b ON tt.id = b.id WHERE tt.f = 1 AND ptick(b.n) FOR UPDATE OF tt; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id
+--
+ 3
+(1 row)
+
+step s2last: SELECT last_value, is_called FROM pcnt; SELECT * FROM tt ORDER BY id;
+last_value|is_called
+----------+---------
+       101|t        
+(1 row)
+
+  id|f
+----+-
+   2|0
+   3|1
+1001|1
+(3 rows)
+
+step s2c: COMMIT;

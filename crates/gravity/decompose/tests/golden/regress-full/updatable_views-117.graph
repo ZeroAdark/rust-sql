@@ -1,0 +1,20 @@
+-- regress-full-updatable_views-117
+-- insert into wcowrtest_v2 values (2, 'no such row in sometable');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:2, 2=c25:'no such row in sometable')
+  subplan 1 nested Any unknown-eq-false params=($exec0=v2.1) ids=($exec1) test=op2988(v2.0, $exec1)
+  inner node=2 eligible rows=6 end=sink
+  nodes n2@0
+  source range rel=24754 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96($exec0, v4.1)
+  project (1=v4.0)
+  write INSERT rel=24737 rti=2 natts=2 indexes=() epq=$exec2 route=rti2:24737 natts=2
+    check view rel=wcowrtest_v2 cascaded (subplan1(v2.1))
+  outs 1=w4:val 2=vl:stmt/imm
+param $exec0 owner=subplan1 type=23 rep=w4:val
+scan-lanes node=2 rti=4 rel=24754 wholerow
+mapped: Result ModifyTable SeqScan SubPlan

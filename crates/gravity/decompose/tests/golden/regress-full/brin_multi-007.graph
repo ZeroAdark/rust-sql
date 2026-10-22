@@ -1,0 +1,16 @@
+-- regress-full-brin_multi-007
+-- INSERT INTO brintest_multi (inetcol, cidrcol) SELECT inet 'fe80::6e40:8ff:fea9:8c46' + tenthous, cidr 'fe80::6e40:8ff:fea9:8c46' + tenthous FROM tenk1 ORDER BY thousand, tenthous LIMIT 25;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n2@1 n1@3 n0@4
+  source index-only rel=16423 rti=3 am=heap index=19342
+    lanes Attr(8):byval8:w8:val Attr(11):byval8:w8:val
+  project (1=op2637(c869:'\x03\x80\xfe\x80\x00\x00\x00\x00\x00\x00n@\x08\xff\xfe\xa9\x8cF', fn481(index.2)), 2=op2637(c869:'\x03\x80\xfe\x80\x00\x00\x00\x00\x00\x00n@\x08\xff\xfe\xa9\x8cF', fn481(index.2)), 3j=index.1, 4j=index.2)
+  limit count=25 offset=all
+  project (1=outer.1, 2=outer.2, 3j=outer.3, 4j=outer.4)
+  project (1=c20:null, 2=c21:null, 3=c23:null, 4=c26:null, 5=c27:null, 6=c700:null, 7=c701:null, 8=c829:null, 9=c774:null, 10=v2.1, 11=fn1715(v2.2), 12=c1082:null, 13=c1083:null, 14=c1114:null, 15=c1184:null, 16=c1186:null, 17=c1266:null, 18=c1700:null, 19=c2950:null, 20=c3220:null)
+  write INSERT rel=30057 rti=1 natts=20 indexes=()
+  outs 1=vl:call2630 2=vl:call2630 3=w4:val 4=w4:val
+  outs 1=vl:call2630 2=vl:call2630 3=w4:val 4=w4:val
+  outs 1=w8:val 2=w2:val 3=w4:val 4=w4:val 5=fx6:stmt/imm 6=w4:val 7=w8:val 8=fx6:stmt/imm 9=fx8:stmt/imm 10=vl:row 11=vl:call1715 12=w4:val 13=w8:val 14=w8:val 15=w8:val 16=fx16:stmt/imm 17=fx12:stmt/imm 18=vl:stmt/imm 19=fx16:stmt/imm 20=w8:val
+mapped: ModifyTable IndexOnlyScan SubqueryScan Limit

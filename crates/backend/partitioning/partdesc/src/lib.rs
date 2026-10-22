@@ -58,7 +58,13 @@ fn with_state<R>(f: impl FnOnce(&mut PartDescState) -> R) -> R {
     STATE.with(|cell| {
         let mut slot = cell.borrow_mut();
         let st = slot.get_or_insert_with(|| {
-            let root = ::mcx::session_root("PartDescContext");
+            let root = ::mcx::session_root("CacheMemoryContext");
+            // D4682: the teardown retires this root; clear the slot first, so a reused thread's next
+            // session builds a new one.
+            ::mcx::register_session_cleanup(Box::new(|| {
+                // into_inner: the descriptors' Rc and the quals' contexts live outside the root and go back too
+                let _ = STATE.try_with(|c| c.borrow_mut().take().map(ManuallyDrop::into_inner));
+            }));
             let mcx = root.mcx();
             ManuallyDrop::new(PartDescState {
                 root,

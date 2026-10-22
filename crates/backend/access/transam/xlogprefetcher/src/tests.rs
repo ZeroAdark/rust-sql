@@ -433,3 +433,12 @@ fn shmem_init_registers_xlog_prefetch_stats_in_shmem_index() {
         "XLogPrefetchStats row missing or wrong size: {rows:?}"
     );
 }
+
+#[test]
+fn allocate_drops_stale_page_read_stats_lsn() {
+    rig();
+    XLogPrefetcherComputeStatsAtPageRead(0x5000_0000);
+    let cx = MemoryContext::new("t");
+    let _pf = XLogPrefetcher::XLogPrefetcherAllocate(cx.mcx());
+    assert_eq!(PAGE_READ_NEXT_STATS_LSN.load(Relaxed), 0);
+}

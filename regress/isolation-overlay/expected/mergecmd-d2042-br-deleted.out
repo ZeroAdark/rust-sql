@@ -1,0 +1,72 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1del5 s2upd s1c s2sel
+step s1del5: DELETE FROM dt WHERE k = 5;
+step s2upd: MERGE INTO dt t USING (SELECT 5 AS k, 50 AS v) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v + 100, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2sel: SELECT * FROM dt WHERE k IN (3, 4, 5) ORDER BY k;
+k|  v|note
+-+---+----
+3|  3|i   
+4|  4|i   
+5|150|nm  
+(3 rows)
+
+
+starting permutation: s1del5 s2del s1c s2sel
+step s1del5: DELETE FROM dt WHERE k = 5;
+step s2del: MERGE INTO dt t USING (SELECT 5 AS k, 50 AS v) s ON t.k = s.k WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v + 200, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2sel: SELECT * FROM dt WHERE k IN (3, 4, 5) ORDER BY k;
+k|  v|note
+-+---+----
+3|  3|i   
+4|  4|i   
+5|250|nm  
+(3 rows)
+
+
+starting permutation: s1del3 s3upd s1c s2sel
+step s1del3: DELETE FROM dt WHERE k = 3;
+step s3upd: MERGE INTO dt t USING ds s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v + 100, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s3upd: <... completed>
+step s2sel: SELECT * FROM dt WHERE k IN (3, 4, 5) ORDER BY k;
+k|  v|note
+-+---+----
+3|130|nm  
+4| 40|br  
+5|  5|i   
+(3 rows)
+
+
+starting permutation: s1del5 s2upd s1a s2sel
+step s1del5: DELETE FROM dt WHERE k = 5;
+step s2upd: MERGE INTO dt t USING (SELECT 5 AS k, 50 AS v) s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v + 100, 'nm'); <waiting ...>
+step s1a: ROLLBACK;
+step s2upd: <... completed>
+step s2sel: SELECT * FROM dt WHERE k IN (3, 4, 5) ORDER BY k;
+k| v|note
+-+--+----
+3| 3|i   
+4| 4|i   
+5|50|br  
+(3 rows)
+
+
+starting permutation: s1del4b s3updb s1c s2selb
+step s1del4b: DELETE FROM dt2 WHERE k = 4;
+step s3updb: MERGE INTO dt2 t USING ds2 s ON t.k = s.k WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v + 100, 'nm'); <waiting ...>
+step s1c: COMMIT;
+step s3updb: <... completed>
+step s2selb: SELECT * FROM dt2 WHERE k IN (3, 4, 5, 6) ORDER BY k;
+k|  v|note
+-+---+----
+3| 30|br  
+4|140|nm  
+5| 50|br  
+6|160|nm  
+(4 rows)
+

@@ -1,0 +1,7 @@
+M4 seed corpus: one file per fixture, `<fixture>.tsv` holding its row `fixture<TAB>source<TAB>expect`
+(tests/modifytable_m4.rs m4_seed_verdicts_and_pins reads every *.tsv here; column 1 must be the file's name).
+- fixture: a decompose plan fixture id (plans/<id>.plan; regress-full-<stem> = plans/regress-full/<stem>.plan), or a
+  fixtures/m4/<id>.plan.
+- source: the census family (census/serve.tsv).
+- expect: the crate's verdict today: `served` (with its IR pin, LOWERV4_PIN=write after review), or `refused <text>`.
+Re-keyed by fixture name (v5 core-face landing 8); the rows were first seeded per M4 kind / road (M4-RIG d2, 2026-09-25).

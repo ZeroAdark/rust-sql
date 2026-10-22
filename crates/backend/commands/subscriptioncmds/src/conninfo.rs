@@ -100,7 +100,8 @@ fn conninfo_uri_decode(s: &str) -> Result<String, String> {
     while q < b.len() && b[q] == b' ' {
         q += 1;
     }
-    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut out: Vec<u8> = Vec::new();
+    let _ = out.try_reserve(b.len());
     while q < b.len() && b[q] != b' ' {
         if b[q] != b'%' {
             out.push(b[q]);
@@ -461,6 +462,11 @@ pub(crate) fn conninfo_parse<'mcx>(
             }
         }
         let val = String::from_utf8(val).expect("conninfo input is UTF-8");
+        let (pname, val) = if pname == "requiressl" {
+            ("sslmode", if val.starts_with('1') { "require" } else { "prefer" }.to_string())
+        } else {
+            (pname, val)
+        };
 
         let Some(idx) = KNOWN_OPTIONS.iter().position(|k| *k == pname) else {
             return Err(format!("invalid connection option \"{pname}\"\n"));
@@ -632,5 +638,15 @@ mod tests {
         assert_eq!(get(&opts, "dbname").as_deref(), Some("db"));
         let e = parse(mcx, "bogus=x").unwrap_err();
         assert_eq!(e, "invalid connection option \"bogus\"\n");
+    }
+
+    #[test]
+    fn keyword_value_requiressl_rewrites_to_sslmode() {
+        let cx = mcx::MemoryContext::new("conninfo-test");
+        let mcx = cx.mcx();
+        let opts = parse(mcx, "dbname=x requiressl=0").unwrap();
+        assert_eq!(get(&opts, "sslmode").as_deref(), Some("prefer"));
+        let opts = parse(mcx, "requiressl=1 dbname=x").unwrap();
+        assert_eq!(get(&opts, "sslmode").as_deref(), Some("require"));
     }
 }

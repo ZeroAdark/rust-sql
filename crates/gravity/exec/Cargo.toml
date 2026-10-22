@@ -1,0 +1,222 @@
+[package]
+name = "gravity_exec"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "gravity_exec"
+path = "src/lib.rs"
+
+[dependencies]
+# C7 runtime half: its leader-class thread-locals are declared through leader_tls!
+leader_tls = { path = "../../_support/leader_tls" }
+bufmgr_seams = { path = "../../backend/storage/buffer/bufmgr_seams" } # inputs/knobs/grant.rs D4064: the shared_buffers row reads the live pool size
+catalog_seams = { path = "../../backend/catalog/catalog_seams" } # runner/point/select.rs (pglpoint S1): a system table is declined
+fmgr_core = { path = "../../backend/utils/fmgr/fmgr_core" } # runner/point/probe.rs (pglpoint S1): the scan keys' sk_func
+lmgr_seams = { path = "../../backend/storage/lmgr/lmgr_seams" } # runner/point/select.rs (pglpoint S1): the index lock the planner took, held
+miscinit_seams = { path = "../../backend/utils/init/miscinit_seams" } # runner/point/skip.rs (pgrust.point_noplan): the role a memo slot is filed for
+gravity_deps = { path = "../deps" }
+heaptoast = { path = "../../backend/access/heap/heaptoast" }
+numutils = { path = "../../backend/utils/adt/numutils" }
+gravity_abi = { path = "../abi" }
+gravity_driver = { path = "../driver" }
+gravity_hosts = { path = "../hosts" }
+gravity_fn = { path = "../fn" }
+gravity_kernels = { path = "../kernels" }
+gravity_program = { path = "../program" }
+gravity_wire = { path = "../wire" }
+gravity_lower = { path = "../lower" }
+gravity_lowerv4 = { path = "../lowerv4" }
+# D3887: the abort poll of host loops and the poll-gap probe.
+cancelpoll = { path = "../../_support/cancelpoll" }
+fires = { path = "../../_support/fires" }
+gravity_decompose = { path = "../decompose" }
+gravity_backend = { path = "../backend" }
+gravity_expr = { path = "../expr" }
+guc_seams = { path = "../../backend/utils/misc/guc_seams" }
+combocid_seams = { path = "../../backend/utils/time/combocid_seams" }
+mcx = { path = "../../_support/mcx" }
+# planprod P6-b: a template's lists in its root (`admit::TplVec`: allocator-api2's Vec over mcx::RootA)
+allocator-api2 = { version = "0.2", default-features = false, features = ["alloc"] }
+datum = { path = "../../_support/types/datum" }
+types_core = { path = "../../_support/types/types_core" }
+types_error = { path = "../../_support/types/types_error" }
+types_nodes = { path = "../../_support/types/nodes" }
+types_portal = { path = "../../_support/types/portal" }
+types_rel = { path = "../../_support/types/rel" }
+types_scan = { path = "../../_support/types/types_scan" }
+types_slot = { path = "../../_support/types/types_slot" }
+types_snapshot = { path = "../../_support/types/snapshot" }
+types_tuple = { path = "../../_support/types/types_tuple" }
+types_dest = { path = "../../_support/types/types_dest" }
+tcop_dest = { path = "../../backend/tcop/dest" }
+tuplestore = { path = "../../backend/utils/sort/tuplestore" }
+portalmem = { path = "../../backend/utils/mmgr/portalmem" }
+lsyscache = { path = "../../backend/utils/cache/lsyscache" }
+# GENP-1 (D3004): the one read-only planner seam, scan_restriction_rows
+planner_seams = { path = "../../backend/optimizer/plan/planner_seams" }
+exectuples = { path = "../../backend/executor/exectuples" }
+types_storage = { path = "../../_support/types/types_storage" }
+clauses = { path = "../../backend/optimizer/util/clauses" }
+execexpr = { path = "../../backend/executor/execexpr" }
+execpartition = { path = "../../backend/executor/execpartition" }
+executils = { path = "../../backend/executor/executils" }
+indexam = { path = "../../backend/access/index/indexam" }
+table = { path = "../../backend/access/table/table" }
+tableam = { path = "../../backend/access/table/tableam" } # runner/point/probe.rs (pglpoint S1): the scan's slot (table_slot_create, as ExecInitIndexScan)
+tableam_vocab = { path = "../../backend/access/table/tableam_vocab" }
+pgrc_front = { path = "../../backend/access/pgrcolumnar/pgrc_front" }
+gravity_parallel = { path = "../parallel" }
+guc_tables = { path = "../../backend/utils/misc/guc_tables" }
+guc = { path = "../../backend/utils/misc/guc" }
+tupdesc = { path = "../../backend/access/common/tupdesc" }
+plancache = { path = "../../backend/utils/cache/plancache" }
+plancache_portal_seams = { path = "../../backend/utils/cache/plancache_portal_seams" }
+gravity_entry_seams = { path = "../../backend/tcop/gravity_entry_seams" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+# C9: the cancel-at-step witness lever sends its statement's backend a SIGINT
+procsignal_seams = { path = "../../backend/storage/ipc/procsignal_seams" }
+timeout_seams = { path = "../../backend/utils/misc/timeout_seams" }
+snapmgr = { path = "../../backend/utils/time/snapmgr" }
+injection_point = { path = "../../backend/utils/misc/injection_point" }
+xact = { path = "../../backend/access/transam/xact" }
+trigger = { path = "../../backend/commands/trigger" }
+init_small = { path = "../../backend/utils/init/init_small" }
+# D4579: DROP DATABASE's forget-database hook (the program tier lets the dropped database's programs go); lib.rs C3 S4c test
+l2cache = { path = "../../backend/utils/cache/l2cache" }
+elog = { path = "../../backend/utils/error/elog" }
+# B2-31: the session TimeZone's identity inputs/front.rs lends normalize's timestamptz retype (an admission's zone stamp)
+pgtz = { path = "../../backend/timezone/pgtz" }
+# SRC-07: the session zone's offset spread around a timestamptz constant (pg_next_dst_boundary), normalize `implied`
+localtime = { path = "../../backend/timezone/localtime" }
+relcache_seams = { path = "../../backend/utils/cache/relcache_seams" }
+# SRC-38: a heap site's key domain from pg_statistic (statement.rs stats_range)
+syscache_seams = { path = "../../backend/utils/cache/syscache_seams" }
+catcache_seams = { path = "../../backend/utils/cache/catcache_seams" }
+types_resowner = { path = "../../_support/types/types_resowner" }
+pgsync = { path = "../../_support/pgsync" }
+pg_clock = { path = "../../port/pg_clock" }
+mempolicy = { path = "../../_support/mempolicy" }
+memledger = { path = "../../_support/memledger" }
+# the entry crate folded in (v5 admit): the executor seams over the runner
+execmain_seams = { path = "../../backend/executor/execmain_seams" }
+pquery = { path = "../../backend/tcop/pquery" }
+spi = { path = "../../backend/executor/spi" }
+stack_depth_core = { path = "../../backend/utils/misc/stack_depth_core" }
+# D421 (V4R-82): the identity plan copy, the tid sidecar
+copyfuncs = { path = "../../backend/nodes/copyfuncs" }
+nodes_core = { path = "../../backend/nodes/nodes_core" }
+# M12 Row D (D1717): pgBufferUsage around a served EXPLAIN ANALYZE run
+instrument = { path = "../../backend/executor/instrument" }
+# W1: the GravityMemory wait event around a memory wait
+waitevent = { path = "../../backend/utils/activity/waitevent" }
+# memory step 3b: the history file (pg_stat/pgrust_gravity_grant_feedback): its I/O, CRC-32C and the build id
+fd = { path = "../../backend/storage/file/fd" }
+crc32c = { path = "../../port/crc32c" }
+libc = "0.2"
+
+[dev-dependencies]
+pgrc_read = { path = "../../backend/access/pgrcolumnar/pgrc_read" } # m3_fetch.rs test: FetchRecipe::for_test's registry
+gravity_parallel = { path = "../parallel", features = ["fixture-pool"] }
+gravity_program = { path = "../program", features = ["hand", "rig"] }
+plancache_portal_seams = { path = "../../backend/utils/cache/plancache_portal_seams" }
+gravity_entry_seams = { path = "../../backend/tcop/gravity_entry_seams" }
+sql_functions_seams = { path = "../../backend/executor/sql_functions_seams" } # d1217_sqlfn_store.rs
+xact_seams = { path = "../../backend/access/transam/xact_seams" } # inputs/front.rs src07_spread: pg_tzset reads the subtransaction id
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# gravity_exec_suite (tests/gravity_exec_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs it
+# once per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot share
+# a process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text naming
+# process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state call): then
+# it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the file is in
+# exactly one of the two places.
+[[test]]
+name = "gravity_exec_suite"
+path = "tests/gravity_exec_suite.rs"
+
+[[test]]
+name = "owner_fold_registry"
+path = "tests/owner_fold_registry.rs"
+
+[[test]]
+name = "admit_d842_kept_key_expr"
+path = "tests/admit_d842_kept_key_expr.rs"
+
+[[test]]
+name = "admit_memo_alloc"
+path = "tests/admit_memo_alloc.rs"
+
+[[test]]
+name = "admit_plan_key"
+path = "tests/admit_plan_key.rs"
+
+[[test]]
+name = "admit_reentry"
+path = "tests/admit_reentry.rs"
+
+[[test]]
+name = "d2373_session_end_order"
+path = "tests/d2373_session_end_order.rs"
+
+[[test]]
+name = "d3322_owner_cut"
+path = "tests/d3322_owner_cut.rs"
+
+[[test]]
+name = "d4402_canceled_admission"
+path = "tests/d4402_canceled_admission.rs"
+
+[[test]]
+name = "d4414_canceled_small_admission"
+path = "tests/d4414_canceled_small_admission.rs"
+
+[[test]]
+name = "d656_crash_exit_arena"
+path = "tests/d656_crash_exit_arena.rs"
+
+[[test]]
+name = "inputs_alias_tables"
+path = "tests/inputs_alias_tables.rs"
+
+[[test]]
+name = "inputs_front_census"
+path = "tests/inputs_front_census.rs"
+
+[[test]]
+name = "inputs_front_session_charge"
+path = "tests/inputs_front_session_charge.rs"
+
+[[test]]
+name = "invalidate_seams"
+path = "tests/invalidate_seams.rs"
+
+[[test]]
+name = "nr3_owner_named"
+path = "tests/nr3_owner_named.rs"
+
+[[test]]
+name = "srf_d1217_sqlfn_store"
+path = "tests/srf_d1217_sqlfn_store.rs"
+
+[[test]]
+name = "table_owner_floor"
+path = "tests/table_owner_floor.rs"
+
+[[test]]
+name = "table_owner_leader"
+path = "tests/table_owner_leader.rs"
+
+[[test]]
+name = "table_owner_past_grant"
+path = "tests/table_owner_past_grant.rs"
+
+[[test]]
+name = "table_owner_pin_free"
+path = "tests/table_owner_pin_free.rs"
+
+[[test]]
+name = "table_owner_wall"
+path = "tests/table_owner_wall.rs"

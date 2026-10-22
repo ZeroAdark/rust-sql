@@ -69,12 +69,13 @@ fn o_overlap(a: &ORelids<'_>, b: &ORelids<'_>) -> bool {
     a.word_slice().iter().zip(b.word_slice().iter()).any(|(x, y)| x & y != 0)
 }
 
+// bms_equal: membership equality (C sets are canonical).
 fn o_equal(a: &ORelids<'_>, b: &ORelids<'_>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => a.word_slice() == b.word_slice(),
-        _ => false,
+    fn trim<'a>(r: &'a ORelids<'_>) -> &'a [u64] {
+        let w = r.as_ref().map_or(&[][..], |b| b.word_slice());
+        &w[..w.iter().rposition(|&x| x != 0).map_or(0, |i| i + 1)]
     }
+    trim(a) == trim(b)
 }
 
 fn o_is_empty(a: &ORelids<'_>) -> bool {
@@ -324,9 +325,9 @@ fn unset_vs_allocated_zero_are_distinct() {
     let oi = o_intersect(mcx, &o_singleton(mcx, 3), &o_singleton(mcx, 5));
     assert_same("intersect disjoint", &i, &oi);
 
-    // It compares UNEQUAL to the unset value (word slices [0] vs []).
+    // It compares equal to the unset value (bms_equal is membership).
     let none = relids_empty();
-    assert!(!relids_equal(&i, &none));
+    assert!(relids_equal(&i, &none));
     assert!(relids_equal(&none, &relids_empty()));
 
     // Difference of a set with itself: same shape.
@@ -352,15 +353,16 @@ fn word_count_is_part_of_the_value() {
     a = relids_add_member(mcx, &a, 70);
     let a_del = relids_del_member(mcx, &a, 70);
     assert_eq!(relids_word_slice(&a_del), &[2u64, 0]);
-    // ...which is NOT equal to the one-word {1}: no trimming, ever.
+    // ...which still equals the one-word {1}: equality ignores trailing
+    // zero words (C bms_del_member trims them).
     let b = relids_singleton(mcx, 1);
     assert_eq!(relids_word_slice(&b), &[2u64]);
-    assert!(!relids_equal(&a_del, &b));
-    // Same verdict from the oracle.
+    assert!(relids_equal(&a_del, &b));
+    assert!(a_del == b);
     let mut oa = o_singleton(mcx, 1);
     oa = o_add_member(mcx, &oa, 70);
     let oa_del = o_del_member(mcx, &oa, 70);
-    assert!(!o_equal(&oa_del, &o_singleton(mcx, 1)));
+    assert!(o_equal(&oa_del, &o_singleton(mcx, 1)));
     assert_same("del leaves trailing zero", &a_del, &oa_del);
 
     // But membership-level predicates still agree across lengths.

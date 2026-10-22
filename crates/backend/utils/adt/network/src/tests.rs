@@ -534,7 +534,7 @@ fn out_functions_do_not_alias_across_fmgrinfos() {
     assert_eq!(cs(d2), b"5.6.7.8");
 }
 
-// audit-18.6 regression: network.c:337 clones VARSIZE_ANY(src) bytes and
+// audit-18.6 fp-adt-network#1: network.c:337 clones VARSIZE_ANY(src) bytes and
 // patches ip_bits, so set_masklen on a packed (heap-stored) inet keeps the
 // 1-byte header (pg_column_size 7) while a 4-byte-header source stays 10.
 #[test]

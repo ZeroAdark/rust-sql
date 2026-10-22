@@ -374,7 +374,7 @@ pub fn heapam_tuple_get_latest_tid(
     let snap = match scan.rs_base.rs_snapshot.as_deref() {
         Some(s) => s,
         None => {
-            scratch = ::mcx::MemoryContext::new_bump("SnapshotAny sentinel");
+            scratch = ::mcx::MemoryContext::new_wholesale("SnapshotAny sentinel");
             snapshot_any = SnapshotData::sentinel(scratch.mcx(), ::types_snapshot::SNAPSHOT_ANY);
             &snapshot_any
         }

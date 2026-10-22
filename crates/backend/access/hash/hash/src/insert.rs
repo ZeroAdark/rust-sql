@@ -259,7 +259,7 @@ pub(crate) fn _hash_vacuum_one_page(
         // index_compute_xid_horizon_for_tuples through the genam seam (genam
         // sits above the AM crates via indexam). Scratch context: C pallocs
         // the delstate in the caller's context and pfrees it before return.
-        let cx = ::mcx::MemoryContext::new_bump("hash vacuum one page");
+        let cx = ::mcx::MemoryContext::new_wholesale("hash vacuum one page");
         let snapshot_conflict_horizon =
             ::genam_seams::index_compute_xid_horizon_for_tuples::call(
                 cx.mcx(),
@@ -296,7 +296,7 @@ pub(crate) fn _hash_vacuum_one_page(
                 ndeletable as u16,
                 is_catalog,
             );
-            let mut offbytes: Vec<u8> = Vec::with_capacity(ndeletable * 2);
+            let mut offbytes: Vec<u8> = ::mcx::std_vec_with_capacity("access", ndeletable * 2)?;
             for &off in &deletable[..ndeletable] {
                 offbytes.extend_from_slice(&off.to_ne_bytes());
             }

@@ -1,0 +1,10 @@
+-- regress-full-aggregates-108
+-- CREATE TABLE group_agg_pk AS SELECT i % 10 AS x, i % 2 AS y, i % 2 AS z, 2 AS w, i % 10 AS f FROM generate_series(1,100) AS i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:100)]
+  project (1=op530(v1.1, c23:10), 2=op530(v1.1, c23:2), 3=op530(v1.1, c23:2), 4=c23:2, 5=op530(v1.1, c23:10))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val
+mapped: FunctionScan

@@ -62,7 +62,7 @@ pub fn fc_unique_key_recheck(
         mcx,
         ::types_snapshot::SnapshotType::SNAPSHOT_SELF,
     ));
-    let mut fetch = tableam::table_index_fetch_begin(trig_rel);
+    let mut fetch = tableam::table_index_fetch_begin(trig_rel)?;
     let mut call_again = false;
     let mut all_dead = false;
     let found = tableam::table_index_fetch_tuple(

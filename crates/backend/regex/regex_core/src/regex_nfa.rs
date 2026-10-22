@@ -2424,11 +2424,12 @@ fn clonesuccessorstates<'mcx>(
         }
         None => {
             let mut donemap: Vec<u8> = Vec::new();
-            donemap.try_reserve_exact(nstates as usize)?;
             if let Some(outer) = outerdonemap {
+                donemap.try_reserve_exact(nstates as usize)?;
                 debug_assert_eq!(outer.len(), nstates as usize);
                 donemap.extend_from_slice(outer);
             } else {
+                donemap.try_reserve_exact(nstates as usize)?;
                 donemap.resize(nstates as usize, 0);
                 debug_assert!((nfa.st(spredecessor).no as i64) < nstates as i64);
                 donemap[nfa.st(spredecessor).no as usize] = 1;

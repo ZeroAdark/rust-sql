@@ -1,0 +1,258 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2b s2x s1a s2j s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE;
+QUERY PLAN                          
+------------------------------------
+LockRows                            
+  ->  Hash Join                     
+        Hash Cond: (a.id = b.a_id)  
+        ->  Seq Scan on ma a        
+              Filter: (v > 0)       
+        ->  Hash                    
+              ->  Seq Scan on mb b  
+                    Filter: (w < 50)
+(8 rows)
+
+step s1a: UPDATE ma SET v = v + 100 WHERE id = 2;
+step s2j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id|  v|id| w
+--+---+--+--
+ 1|  1| 1|10
+ 2|102| 2|20
+ 3|  3| 3|30
+ 4|  4| 4|40
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, v FROM ma WHERE id <= 4 ORDER BY id; SELECT id, a_id, w FROM mb WHERE id <= 4 ORDER BY id;
+id|  v
+--+---
+ 1|  1
+ 2|102
+ 3|  3
+ 4|  4
+(4 rows)
+
+id|a_id| w
+--+----+--
+ 1|   1|10
+ 2|   2|20
+ 3|   3|30
+ 4|   4|40
+(4 rows)
+
+
+starting permutation: s2b s1b s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: UPDATE mb SET w = w + 1 WHERE id = 2;
+step s2j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id|v|id| w
+--+-+--+--
+ 1|1| 1|10
+ 2|2| 2|21
+ 3|3| 3|30
+ 4|4| 4|40
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1ab s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1ab: UPDATE ma SET v = v + 100 WHERE id = 3; UPDATE mb SET w = w + 1 WHERE id = 3;
+step s2j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id|  v|id| w
+--+---+--+--
+ 1|  1| 1|10
+ 2|  2| 2|20
+ 3|103| 3|31
+ 4|  4| 4|40
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1mv s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1mv: UPDATE mb SET a_id = 9 WHERE id = 2;
+step s2j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id|v|id| w
+--+-+--+--
+ 1|1| 1|10
+ 3|3| 3|30
+ 4|4| 4|40
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1db s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1db: DELETE FROM mb WHERE id = 2;
+step s2j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id|v|id| w
+--+-+--+--
+ 1|1| 1|10
+ 3|3| 3|30
+ 4|4| 4|40
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1da s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1da: DELETE FROM ma WHERE id = 2;
+step s2j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id|v|id| w
+--+-+--+--
+ 1|1| 1|10
+ 3|3| 3|30
+ 4|4| 4|40
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1neg s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1neg: UPDATE ma SET v = -1 WHERE id = 2;
+step s2j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id|v|id| w
+--+-+--+--
+ 1|1| 1|10
+ 3|3| 3|30
+ 4|4| 4|40
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2xob s1b s2ob s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xob: EXPLAIN (COSTS OFF) SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE OF b;
+QUERY PLAN                          
+------------------------------------
+LockRows                            
+  ->  Hash Join                     
+        Hash Cond: (a.id = b.a_id)  
+        ->  Seq Scan on ma a        
+              Filter: (v > 0)       
+        ->  Hash                    
+              ->  Seq Scan on mb b  
+                    Filter: (w < 50)
+(8 rows)
+
+step s1b: UPDATE mb SET w = w + 1 WHERE id = 2;
+step s2ob: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2ob: <... completed>
+id|v|id| w
+--+-+--+--
+ 1|1| 1|10
+ 2|2| 2|21
+ 3|3| 3|30
+ 4|4| 4|40
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1a s2ob s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1a: UPDATE ma SET v = v + 100 WHERE id = 2;
+step s2ob: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE OF b;
+id|v|id| w
+--+-+--+--
+ 1|1| 1|10
+ 2|2| 2|20
+ 3|3| 3|30
+ 4|4| 4|40
+(4 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s1mv s2ob s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1mv: UPDATE mb SET a_id = 9 WHERE id = 2;
+step s2ob: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2ob: <... completed>
+id|v|id| w
+--+-+--+--
+ 1|1| 1|10
+ 3|3| 3|30
+ 4|4| 4|40
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s3rr s3snap s1a s3j s1c s3c
+step s3rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s3snap: SELECT count(*) FROM ma;
+count
+-----
+   10
+(1 row)
+
+step s1a: UPDATE ma SET v = v + 100 WHERE id = 2;
+step s3j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3j: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s3c: COMMIT;
+
+starting permutation: s3rr s3snap s1db s3j s1c s3c
+step s3rr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s3snap: SELECT count(*) FROM ma;
+count
+-----
+   10
+(1 row)
+
+step s1db: DELETE FROM mb WHERE id = 2;
+step s3j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3j: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s3c: COMMIT;
+
+starting permutation: s3sr s3snap s1b s3j s1c s3c
+step s3sr: BEGIN ISOLATION LEVEL SERIALIZABLE;
+step s3snap: SELECT count(*) FROM ma;
+count
+-----
+   10
+(1 row)
+
+step s1b: UPDATE mb SET w = w + 1 WHERE id = 2;
+step s3j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3j: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s3c: COMMIT;
+
+starting permutation: s3sr s3snap s1da s3j s1c s3c
+step s3sr: BEGIN ISOLATION LEVEL SERIALIZABLE;
+step s3snap: SELECT count(*) FROM ma;
+count
+-----
+   10
+(1 row)
+
+step s1da: DELETE FROM ma WHERE id = 2;
+step s3j: SELECT a.id, a.v, b.id, b.w FROM ma a JOIN mb b ON b.a_id = a.id WHERE a.v > 0 AND b.w < 50 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3j: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s3c: COMMIT;

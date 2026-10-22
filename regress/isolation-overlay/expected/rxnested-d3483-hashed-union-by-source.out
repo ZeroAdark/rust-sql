@@ -1,0 +1,257 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1v s2m s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE;
+QUERY PLAN                                 
+-------------------------------------------
+Merge on hp t                              
+  Merge on hp1 t_1                         
+  Merge on hp2 t_2                         
+  Merge on hp3 t_3                         
+  ->  Hash Right Join                      
+        Hash Cond: (s.k = t.k)             
+        ->  Seq Scan on hs s               
+        ->  Hash                           
+              ->  Append                   
+                    ->  Seq Scan on hp1 t_1
+                    ->  Seq Scan on hp2 t_2
+                    ->  Seq Scan on hp3 t_3
+(12 rows)
+
+step s1v: UPDATE hp SET hits = 7 WHERE k = 12;
+step s2m: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|b0  
+hp1     | 2| 101|n2  
+hp1     | 3|   0|b0  
+hp2     |11|   0|b0  
+hp2     |12| 109|n12 
+hp2     |13|   0|b0  
+hp3     |22| 103|n22 
+(7 rows)
+
+
+starting permutation: s1key s2m s1c s2sel
+step s1key: UPDATE hp SET k = 14 WHERE k = 12;
+step s2m: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|b0  
+hp1     | 2| 101|n2  
+hp1     | 3|   0|b0  
+hp2     |11|   0|b0  
+hp2     |13|   0|b0  
+hp2     |14|   0|b0  
+hp3     |22| 103|n22 
+(7 rows)
+
+
+starting permutation: s1nv s2m s1c s2sel
+step s1nv: UPDATE hp SET hits = 8 WHERE k = 13;
+step s2m: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|b0  
+hp1     | 2| 101|n2  
+hp1     | 3|   0|b0  
+hp2     |11|   0|b0  
+hp2     |12| 102|n12 
+hp2     |13|   8|b8  
+hp3     |22| 103|n22 
+(7 rows)
+
+
+starting permutation: s1nkey s2m s1c s2sel
+step s1nkey: UPDATE hp SET k = 12 WHERE k = 13;
+step s2m: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|b0  
+hp1     | 2| 101|n2  
+hp1     | 3|   0|b0  
+hp2     |11|   0|b0  
+hp2     |12|   0|b0  
+hp2     |12| 102|n12 
+hp3     |22| 103|n22 
+(7 rows)
+
+
+starting permutation: s1nfar s2m s1c s2sel
+step s1nfar: UPDATE hp SET k = 16 WHERE k = 13;
+step s2m: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|b0  
+hp1     | 2| 101|n2  
+hp1     | 3|   0|b0  
+hp2     |11|   0|b0  
+hp2     |12| 102|n12 
+hp3     |22| 103|n22 
+(6 rows)
+
+
+starting permutation: s1del s2m s1c s2sel
+step s1del: DELETE FROM hp WHERE k = 22;
+step s2m: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|b0  
+hp1     | 2| 101|n2  
+hp1     | 3|   0|b0  
+hp2     |11|   0|b0  
+hp2     |12| 102|n12 
+hp2     |13|   0|b0  
+(6 rows)
+
+
+starting permutation: s1nkey s2b s1c s2sel
+step s1nkey: UPDATE hp SET k = 12 WHERE k = 13;
+step s2b: MERGE INTO hp t USING hs s ON t.k = s.k WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET hits = t.hits + 1; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   1|n1  
+hp1     | 2|   0|n2  
+hp1     | 3|   1|n3  
+hp2     |11|   1|n11 
+hp2     |12|   0|n12 
+hp2     |12|   1|n13 
+hp3     |21|   0|n21 
+hp3     |22|   0|n22 
+hp3     |23|   0|n23 
+(9 rows)
+
+
+starting permutation: s1mv s2m s1c s2sel
+step s1mv: UPDATE hp SET k = 15 WHERE k = 2;
+step s2m: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k < 15 THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED BY SOURCE THEN DELETE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|n1  
+hp1     | 3|   0|n3  
+hp2     |11|   0|n11 
+hp2     |12|   0|n12 
+hp2     |13|   0|n13 
+hp2     |15|   0|n2  
+hp3     |21|   0|n21 
+hp3     |22|   0|n22 
+hp3     |23|   0|n23 
+(9 rows)
+
+
+starting permutation: s2fexp s1key s2f s1c s2sel
+step s2fexp: EXPLAIN (COSTS OFF) MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED AND s.k < 203 THEN INSERT VALUES (s.k % 100 + 30, s.w, 'i' || s.k);
+QUERY PLAN                                 
+-------------------------------------------
+Merge on hp t                              
+  Merge on hp1 t_1                         
+  Merge on hp2 t_2                         
+  Merge on hp3 t_3                         
+  ->  Hash Full Join                       
+        Hash Cond: (s.k = t.k)             
+        ->  Seq Scan on hs s               
+        ->  Hash                           
+              ->  Append                   
+                    ->  Seq Scan on hp1 t_1
+                    ->  Seq Scan on hp2 t_2
+                    ->  Seq Scan on hp3 t_3
+(12 rows)
+
+step s1key: UPDATE hp SET k = 14 WHERE k = 12;
+step s2f: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED AND s.k < 203 THEN INSERT VALUES (s.k % 100 + 30, s.w, 'i' || s.k); <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|b0  
+hp1     | 2| 101|n2  
+hp1     | 3|   0|b0  
+hp2     |11|   0|b0  
+hp2     |13|   0|b0  
+hp2     |14|   0|b0  
+hp3     |21|   0|b0  
+hp3     |22| 103|n22 
+hp3     |23|   0|b0  
+hp3     |30|   0|i200
+hp3     |31|   0|i201
+hp3     |32|   0|i202
+hp3     |42|   2|i12 
+(13 rows)
+
+
+starting permutation: s1v s2f s1c s2sel
+step s1v: UPDATE hp SET hits = 7 WHERE k = 12;
+step s2f: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE THEN UPDATE SET note = 'b' || t.hits WHEN NOT MATCHED AND s.k < 203 THEN INSERT VALUES (s.k % 100 + 30, s.w, 'i' || s.k); <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|b0  
+hp1     | 2| 101|n2  
+hp1     | 3|   0|b0  
+hp2     |11|   0|b0  
+hp2     |12| 109|n12 
+hp2     |13|   0|b0  
+hp3     |21|   0|b0  
+hp3     |22| 103|n22 
+hp3     |23|   0|b0  
+hp3     |30|   0|i200
+hp3     |31|   0|i201
+hp3     |32|   0|i202
+(12 rows)
+
+
+starting permutation: s1v s2r s1c s2sel
+step s1v: UPDATE hp SET hits = 7 WHERE k = 12;
+step s2r: MERGE INTO hp t USING hs s ON t.k = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + 100 + s.w WHEN NOT MATCHED BY SOURCE AND t.k = 13 THEN UPDATE SET note = 'b' || t.hits RETURNING merge_action(), t.k, t.hits, t.note, s.k, s.w; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+merge_action| k|hits|note| k|w
+------------+--+----+----+--+-
+UPDATE      | 2| 101|n2  | 2|1
+UPDATE      |12| 109|n12 |12|2
+UPDATE      |22| 103|n22 |22|3
+UPDATE      |13|   0|b0  |  | 
+(4 rows)
+
+step s2sel: SELECT tableoid::regclass, k, hits, note FROM hp ORDER BY k, note;
+tableoid| k|hits|note
+--------+--+----+----
+hp1     | 1|   0|n1  
+hp1     | 2| 101|n2  
+hp1     | 3|   0|n3  
+hp2     |11|   0|n11 
+hp2     |12| 109|n12 
+hp2     |13|   0|b0  
+hp3     |21|   0|n21 
+hp3     |22| 103|n22 
+hp3     |23|   0|n23 
+(9 rows)
+

@@ -136,10 +136,33 @@ pub fn set_emit_log_hook(hook: Option<EmitLogHook>) -> Option<EmitLogHook> {
     EMIT_LOG_HOOK.with(|slot| slot.replace(hook))
 }
 
+pub(crate) fn emit_log_hook_installed() -> bool {
+    EMIT_LOG_HOOK.with(Cell::get).is_some()
+}
+
 pub(crate) fn call_emit_log_hook(error: &PgError, output_to_server: &mut bool) {
     if let Some(hook) = EMIT_LOG_HOOK.with(Cell::get) {
         hook(error, output_to_server);
     }
+}
+
+/// D4812: a thread's server-log writes handed to a writer off the thread, so a memory safety thread (the memory
+/// watchdog's ladder pass) never waits on the log's file or pipe: under writeback pressure one write(2) to server.log
+/// waited seconds on the filesystem's journal. The hook gets the bytes of one write exactly as they would go to fd 2 (a
+/// formatted line, or one syslogger pipe chunk: formatted here, so the prefix keeps this moment and this thread's pid)
+/// and returns whether it took them (queued, or counted as dropped); false: written here, as before. Only the server
+/// log's stderr path: syslog stays synchronous. Unset on every thread that never installs it.
+pub type ServerLogDefer = fn(&[u8]) -> bool;
+
+thread_local! { static SERVER_LOG_DEFER: Cell<Option<ServerLogDefer>> = const { Cell::new(None) }; }
+
+pub fn set_server_log_defer(hook: Option<ServerLogDefer>) -> Option<ServerLogDefer> {
+    SERVER_LOG_DEFER.with(|slot| slot.replace(hook))
+}
+
+/// Whether this thread's [`ServerLogDefer`] took `bytes` (false with none installed: the caller writes them).
+pub(crate) fn defer_server_log(bytes: &[u8]) -> bool {
+    SERVER_LOG_DEFER.with(Cell::get).is_some_and(|hook| hook(bytes))
 }
 
 // C's pq_redirect_to_shm_mq: while installed, client-bound reports go to the
@@ -246,6 +269,16 @@ pub fn debug_query_string_scope(query: &str) -> DebugQueryStringScope<'_> {
     DebugQueryStringScope {
         id,
         _borrow: PhantomData,
+    }
+}
+
+impl DebugQueryStringScope<'_> {
+    /// C's `debug_query_string = NULL` at the end of a statement that finished (exec_simple_query's tail): drop this
+    /// guard's entry without retiring a copy of the text. Only an error that unwinds past the guard needs the
+    /// retired copy, for the tcop catch's STATEMENT line, and that path still drops the guard (D4481).
+    pub fn finish(self) {
+        DEBUG_QUERY_STACK.with(|s| s.borrow_mut().retain(|&(id, _, _)| id != self.id));
+        core::mem::forget(self);
     }
 }
 

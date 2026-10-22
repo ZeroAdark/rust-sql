@@ -755,7 +755,7 @@ pub fn preprocess_targetlist<'mcx>(run: &mut PlannerRun<'mcx>) -> PgResult<()> {
         _ => {
             if command_type == CmdType::CMD_UPDATE {
                 run.root.update_colnos =
-                    extract_update_targetlist_colnos(mcx, &parse.targetList);
+                    ::mcx::freeze_fit(extract_update_targetlist_colnos(mcx, &parse.targetList));
             }
             if rte.inh {
                 // Inherited target: row identity is registered per leaf by

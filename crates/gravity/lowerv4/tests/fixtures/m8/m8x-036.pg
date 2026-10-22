@@ -1,0 +1,9 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M8-RIG): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT a, b FROM generate_series(1, 4) a LEFT JOIN generate_series(1, 3) b ON a < b
+cols: a	b
+[pg]
+1	2
+1	3
+2	3
+3	\N
+4	\N

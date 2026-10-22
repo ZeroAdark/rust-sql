@@ -354,6 +354,17 @@ pub fn sbsref_check_subscripts(st: &mut SbsRefState) -> PgResult<bool> {
 
 pub fn sbsref_fetch(st: &mut SbsRefState, cur: NullableDatum) -> PgResult<NullableDatum> {
     debug_assert!(!cur.isnull);
+    if st.refattrlength == -1 {
+        // SAFETY: a non-null varlena container datum.
+        if let Some(eah) = unsafe { arrayfuncs::expanded::expanded_array(cur.value) } {
+            // SAFETY: the object is live and not otherwise borrowed here.
+            let (value, isnull) = arrayfuncs::array_get_element_expanded(
+                unsafe { &mut *eah },
+                &st.upperidx[..st.numupper as usize],
+            )?;
+            return Ok(NullableDatum { value, isnull });
+        }
+    }
     let arr = if st.refattrlength > 0 {
         // Fixed-length container: raw bytes, no varlena header.
         let p = cur.value.as_usize() as *const u8;
@@ -407,6 +418,26 @@ pub fn sbsref_assign(
     cparam_arg: *mut (),
 ) -> PgResult<NullableDatum> {
     let mcx = res_mcx(&st.resmcx);
+    if !cur.isnull && st.refattrlength == -1 {
+        // SAFETY: a non-null varlena container datum.
+        if let Some(eah) = unsafe { arrayfuncs::expanded::rw_expanded_array(cur.value) } {
+            // C array_set_element detoasts a varlena replacement, then
+            // array_set_element_expanded changes the object in place.
+            let mut replace = st.replace;
+            if st.refelemlength == -1 && !replace.isnull {
+                let img = datum_array_image(replace.value, &st.resmcx)?;
+                replace.value = Datum::from_usize(img.as_ptr() as usize);
+            }
+            arrayfuncs::array_set_element_expanded(
+                // SAFETY: the object is live and not otherwise borrowed here.
+                unsafe { &mut *eah },
+                &st.upperidx[..st.numupper as usize],
+                replace.value,
+                replace.isnull,
+            )?;
+            return Ok(cur);
+        }
+    }
     // SAFETY: cparam_arg is what the list owner armed for this evaluation.
     let expanded = !cur.isnull
         && st.container_param.is_some_and(|(f, id)| unsafe { f(cparam_arg, id) });

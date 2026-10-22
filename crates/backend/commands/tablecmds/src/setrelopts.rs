@@ -100,6 +100,24 @@ fn update_one<'mcx>(
         }
     };
 
+    let sets_key = namspace.is_none()
+        && relkind == RELKIND_RELATION
+        && reloptions::relam_is_pgrcolumnar(relam)
+        && operation != AlterTableType::AT_ResetRelOptions
+        && def_list.iter().any(|d| d.as_def_elem().and_then(|d| d.defname) == Some(reloptions::PGRC_SORTED_BY));
+    let mut with_partial;
+    let def_list = if sets_key {
+        with_partial = NodeList::nil();
+        for d in def_list.iter() {
+            if d.as_def_elem().and_then(|d| d.defname) != Some(reloptions::PGRC_SORTED_BY_PARTIAL) {
+                with_partial.lappend(mcx, d)?;
+            }
+        }
+        with_partial.lappend(mcx, reloptions::pgrc_sorted_by_partial_def(mcx, tableam::pgrc_table_has_data(rel)?)?)?;
+        &with_partial
+    } else {
+        def_list
+    };
     let new_options = reloptions::transformRelOptions(
         mcx,
         datum,
@@ -119,8 +137,11 @@ fn update_one<'mcx>(
         )?;
     } else {
         match relkind {
-            RELKIND_RELATION if reloptions::relam_is_pgrcolumnar(relam) => {
-                reloptions::pgrcolumnar_reloptions(mcx, new_options.as_deref(), true)?;
+            RELKIND_RELATION | RELKIND_MATVIEW if reloptions::relam_is_pgrcolumnar(relam) => {
+                let opts = reloptions::pgrcolumnar_reloptions(mcx, new_options.as_deref(), true)?;
+                reloptions::pgrcolumnar_check_sorted_by(opts.as_ref(), |key| {
+                    crate::sorted_by_column_verdict(&rel.rd_att.attrs, key)
+                })?;
             }
             RELKIND_RELATION | RELKIND_MATVIEW => {
                 reloptions::heap_reloptions(mcx, relkind, new_options.as_deref(), true)?;

@@ -1,2 +1,0 @@
-‚);
-UPDATE test_tsvector S t = null WHERE t = 

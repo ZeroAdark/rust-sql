@@ -46,7 +46,7 @@
 use std::collections::HashMap;
 
 use blkreftable::{BlockRefTable, BlockRefTableReader};
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use manifest::checksum::PgChecksumType;
 use mcx::{oom_named, Mcx, MemoryContext, PgVec, MAX_ALLOC_SIZE};
 use parse_manifest::{JsonManifestParseContext, JsonManifestParseIncrementalState};
@@ -612,7 +612,7 @@ fn merge_required_summaries<'mcx>(
             ereport(ERROR)
                 .with_saved_errno(fd::get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m"))
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}"))
                 .finish(loc("PrepareForIncrementalBackup"))?;
             unreachable!();
         }
@@ -630,7 +630,7 @@ fn merge_required_summaries<'mcx>(
                 return ereport(ERROR)
                     .with_saved_errno(fd::get_errno())
                     .errcode_for_file_access()
-                    .errmsg(format!("could not read file \"{}\": %m", fd::FilePathName(file)))
+                    .errmsg(format!("could not read file \"{}\": {PCT_M}", fd::FilePathName(file)))
                     .finish(loc("ReadWalSummary"))
                     .map(|()| 0);
             }

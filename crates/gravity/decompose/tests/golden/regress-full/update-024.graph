@@ -1,0 +1,284 @@
+-- regress-full-update-024
+-- UPDATE upview set c = 120 WHERE b = 4;
+graph pipelines=7 breakers=0 init_plans=0 root=p6
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@4 n0@6
+  source range rel=26473 rti=3 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op410(v3.2, c20:4)
+  subplan 2 nested Expr unknown-eq-false params=($exec1=v3.3)
+  inner node=10 eligible rows=2550 end=sink
+  nodes n10@0
+  source range rel=26517 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec1, fn1740(v13.1)))
+  filter subplan2(v3.3)
+  project (1=c1700:'\x00\x80x\x00', 2=v3.-6, 3=v3.-1)
+  append arm 0/7
+  project (1=c1700:'\x00\x80x\x00', 2j=outer.2, 3j=outer.3)
+  subplan 1 nested Expr unknown-eq-false params=($exec0=v3.3)
+  inner node=9 eligible rows=2550 end=sink
+  nodes n9@0
+  source range rel=26517 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec0, fn1740(v12.1)))
+  write UPDATE rel=26473 rti=3 natts=5 indexes=() set=(3) epq=$exec2 tableoid=outer.2 route=rti2:26452 natts=5 cross-partition
+    target rti=4 rel=26468 natts=5 indexes=() set=(3)
+    target rti=5 rel=26463 natts=5 indexes=() set=(3)
+    target rti=7 rel=26491 natts=5 indexes=() set=(3) map=(5,4,3,2,1)
+    target rti=9 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=10 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=11 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+    check view target=0 rel=upview cascaded (subplan1(v3.3))
+    check view target=1 rel=upview cascaded (subplan1(v4.3))
+    check view target=2 rel=upview cascaded (subplan1(v5.3))
+    check view target=3 rel=upview cascaded (subplan1(v7.3))
+    check view target=4 rel=upview cascaded (subplan1(v9.2))
+    check view target=5 rel=upview cascaded (subplan1(v10.2))
+    check view target=6 rel=upview cascaded (subplan1(v11.2))
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+p1 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n1@4 n0@6
+  source range rel=26468 rti=4 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op410(v4.2, c20:4)
+  subplan 2 nested Expr unknown-eq-false params=($exec1=v4.3)
+  inner node=10 eligible rows=2550 end=sink
+  nodes n10@0
+  source range rel=26517 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec1, fn1740(v13.1)))
+  filter subplan2(v4.3)
+  project (1=c1700:'\x00\x80x\x00', 2=v4.-6, 3=v4.-1)
+  append arm 1/7
+  project (1=c1700:'\x00\x80x\x00', 2j=outer.2, 3j=outer.3)
+  subplan 1 nested Expr unknown-eq-false params=($exec0=v3.3)
+  inner node=9 eligible rows=2550 end=sink
+  nodes n9@0
+  source range rel=26517 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec0, fn1740(v12.1)))
+  write UPDATE rel=26473 rti=3 natts=5 indexes=() set=(3) epq=$exec2 tableoid=outer.2 route=rti2:26452 natts=5 cross-partition
+    target rti=4 rel=26468 natts=5 indexes=() set=(3)
+    target rti=5 rel=26463 natts=5 indexes=() set=(3)
+    target rti=7 rel=26491 natts=5 indexes=() set=(3) map=(5,4,3,2,1)
+    target rti=9 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=10 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=11 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+    check view target=0 rel=upview cascaded (subplan1(v3.3))
+    check view target=1 rel=upview cascaded (subplan1(v4.3))
+    check view target=2 rel=upview cascaded (subplan1(v5.3))
+    check view target=3 rel=upview cascaded (subplan1(v7.3))
+    check view target=4 rel=upview cascaded (subplan1(v9.2))
+    check view target=5 rel=upview cascaded (subplan1(v10.2))
+    check view target=6 rel=upview cascaded (subplan1(v11.2))
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+p2 node=4 serial site=1 reason=Write end=sink
+  nodes n4@0 n1@4 n0@6
+  source range rel=26463 rti=5 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op410(v5.2, c20:4)
+  subplan 2 nested Expr unknown-eq-false params=($exec1=v5.3)
+  inner node=10 eligible rows=2550 end=sink
+  nodes n10@0
+  source range rel=26517 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec1, fn1740(v13.1)))
+  filter subplan2(v5.3)
+  project (1=c1700:'\x00\x80x\x00', 2=v5.-6, 3=v5.-1)
+  append arm 2/7
+  project (1=c1700:'\x00\x80x\x00', 2j=outer.2, 3j=outer.3)
+  subplan 1 nested Expr unknown-eq-false params=($exec0=v3.3)
+  inner node=9 eligible rows=2550 end=sink
+  nodes n9@0
+  source range rel=26517 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec0, fn1740(v12.1)))
+  write UPDATE rel=26473 rti=3 natts=5 indexes=() set=(3) epq=$exec2 tableoid=outer.2 route=rti2:26452 natts=5 cross-partition
+    target rti=4 rel=26468 natts=5 indexes=() set=(3)
+    target rti=5 rel=26463 natts=5 indexes=() set=(3)
+    target rti=7 rel=26491 natts=5 indexes=() set=(3) map=(5,4,3,2,1)
+    target rti=9 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=10 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=11 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+    check view target=0 rel=upview cascaded (subplan1(v3.3))
+    check view target=1 rel=upview cascaded (subplan1(v4.3))
+    check view target=2 rel=upview cascaded (subplan1(v5.3))
+    check view target=3 rel=upview cascaded (subplan1(v7.3))
+    check view target=4 rel=upview cascaded (subplan1(v9.2))
+    check view target=5 rel=upview cascaded (subplan1(v10.2))
+    check view target=6 rel=upview cascaded (subplan1(v11.2))
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+p3 node=5 serial site=1 reason=Write end=sink
+  nodes n5@0 n1@4 n0@6
+  source range rel=26491 rti=7 am=heap
+    lanes Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op410(v7.4, c20:4)
+  subplan 2 nested Expr unknown-eq-false params=($exec1=v7.3)
+  inner node=10 eligible rows=2550 end=sink
+  nodes n10@0
+  source range rel=26517 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec1, fn1740(v13.1)))
+  filter subplan2(v7.3)
+  project (1=c1700:'\x00\x80x\x00', 2=v7.-6, 3=v7.-1)
+  append arm 3/7
+  project (1=c1700:'\x00\x80x\x00', 2j=outer.2, 3j=outer.3)
+  subplan 1 nested Expr unknown-eq-false params=($exec0=v3.3)
+  inner node=9 eligible rows=2550 end=sink
+  nodes n9@0
+  source range rel=26517 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec0, fn1740(v12.1)))
+  write UPDATE rel=26473 rti=3 natts=5 indexes=() set=(3) epq=$exec2 tableoid=outer.2 route=rti2:26452 natts=5 cross-partition
+    target rti=4 rel=26468 natts=5 indexes=() set=(3)
+    target rti=5 rel=26463 natts=5 indexes=() set=(3)
+    target rti=7 rel=26491 natts=5 indexes=() set=(3) map=(5,4,3,2,1)
+    target rti=9 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=10 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=11 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+    check view target=0 rel=upview cascaded (subplan1(v3.3))
+    check view target=1 rel=upview cascaded (subplan1(v4.3))
+    check view target=2 rel=upview cascaded (subplan1(v5.3))
+    check view target=3 rel=upview cascaded (subplan1(v7.3))
+    check view target=4 rel=upview cascaded (subplan1(v9.2))
+    check view target=5 rel=upview cascaded (subplan1(v10.2))
+    check view target=6 rel=upview cascaded (subplan1(v11.2))
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+p4 node=6 serial site=1 reason=Write end=sink
+  nodes n6@0 n1@4 n0@6
+  source range rel=26481 rti=9 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op410(v9.5, c20:4)
+  subplan 2 nested Expr unknown-eq-false params=($exec1=v9.2)
+  inner node=10 eligible rows=2550 end=sink
+  nodes n10@0
+  source range rel=26517 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec1, fn1740(v13.1)))
+  filter subplan2(v9.2)
+  project (1=c1700:'\x00\x80x\x00', 2=v9.-6, 3=v9.-1)
+  append arm 4/7
+  project (1=c1700:'\x00\x80x\x00', 2j=outer.2, 3j=outer.3)
+  subplan 1 nested Expr unknown-eq-false params=($exec0=v3.3)
+  inner node=9 eligible rows=2550 end=sink
+  nodes n9@0
+  source range rel=26517 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec0, fn1740(v12.1)))
+  write UPDATE rel=26473 rti=3 natts=5 indexes=() set=(3) epq=$exec2 tableoid=outer.2 route=rti2:26452 natts=5 cross-partition
+    target rti=4 rel=26468 natts=5 indexes=() set=(3)
+    target rti=5 rel=26463 natts=5 indexes=() set=(3)
+    target rti=7 rel=26491 natts=5 indexes=() set=(3) map=(5,4,3,2,1)
+    target rti=9 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=10 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=11 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+    check view target=0 rel=upview cascaded (subplan1(v3.3))
+    check view target=1 rel=upview cascaded (subplan1(v4.3))
+    check view target=2 rel=upview cascaded (subplan1(v5.3))
+    check view target=3 rel=upview cascaded (subplan1(v7.3))
+    check view target=4 rel=upview cascaded (subplan1(v9.2))
+    check view target=5 rel=upview cascaded (subplan1(v10.2))
+    check view target=6 rel=upview cascaded (subplan1(v11.2))
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+p5 node=7 serial site=1 reason=Write end=sink
+  nodes n7@0 n1@4 n0@6
+  source range rel=26486 rti=10 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op410(v10.5, c20:4)
+  subplan 2 nested Expr unknown-eq-false params=($exec1=v10.2)
+  inner node=10 eligible rows=2550 end=sink
+  nodes n10@0
+  source range rel=26517 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec1, fn1740(v13.1)))
+  filter subplan2(v10.2)
+  project (1=c1700:'\x00\x80x\x00', 2=v10.-6, 3=v10.-1)
+  append arm 5/7
+  project (1=c1700:'\x00\x80x\x00', 2j=outer.2, 3j=outer.3)
+  subplan 1 nested Expr unknown-eq-false params=($exec0=v3.3)
+  inner node=9 eligible rows=2550 end=sink
+  nodes n9@0
+  source range rel=26517 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec0, fn1740(v12.1)))
+  write UPDATE rel=26473 rti=3 natts=5 indexes=() set=(3) epq=$exec2 tableoid=outer.2 route=rti2:26452 natts=5 cross-partition
+    target rti=4 rel=26468 natts=5 indexes=() set=(3)
+    target rti=5 rel=26463 natts=5 indexes=() set=(3)
+    target rti=7 rel=26491 natts=5 indexes=() set=(3) map=(5,4,3,2,1)
+    target rti=9 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=10 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=11 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+    check view target=0 rel=upview cascaded (subplan1(v3.3))
+    check view target=1 rel=upview cascaded (subplan1(v4.3))
+    check view target=2 rel=upview cascaded (subplan1(v5.3))
+    check view target=3 rel=upview cascaded (subplan1(v7.3))
+    check view target=4 rel=upview cascaded (subplan1(v9.2))
+    check view target=5 rel=upview cascaded (subplan1(v10.2))
+    check view target=6 rel=upview cascaded (subplan1(v11.2))
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+p6 node=8 serial site=1 reason=Write end=sink
+  nodes n8@0 n1@4 n0@6
+  source range rel=26455 rti=11 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op410(v11.4, c20:4)
+  subplan 2 nested Expr unknown-eq-false params=($exec1=v11.2)
+  inner node=10 eligible rows=2550 end=sink
+  nodes n10@0
+  source range rel=26517 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec1, fn1740(v13.1)))
+  filter subplan2(v11.2)
+  project (1=c1700:'\x00\x80x\x00', 2=v11.-6, 3=v11.-1)
+  append arm 6/7
+  project (1=c1700:'\x00\x80x\x00', 2j=outer.2, 3j=outer.3)
+  subplan 1 nested Expr unknown-eq-false params=($exec0=v3.3)
+  inner node=9 eligible rows=2550 end=sink
+  nodes n9@0
+  source range rel=26517 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op1756($exec0, fn1740(v12.1)))
+  write UPDATE rel=26473 rti=3 natts=5 indexes=() set=(3) epq=$exec2 tableoid=outer.2 route=rti2:26452 natts=5 cross-partition
+    target rti=4 rel=26468 natts=5 indexes=() set=(3)
+    target rti=5 rel=26463 natts=5 indexes=() set=(3)
+    target rti=7 rel=26491 natts=5 indexes=() set=(3) map=(5,4,3,2,1)
+    target rti=9 rel=26481 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=10 rel=26486 natts=5 indexes=() set=(2) map=(4,3,5,1,2)
+    target rti=11 rel=26455 natts=5 indexes=() set=(2) map=(5,3,1,2,4)
+    check view target=0 rel=upview cascaded (subplan1(v3.3))
+    check view target=1 rel=upview cascaded (subplan1(v4.3))
+    check view target=2 rel=upview cascaded (subplan1(v5.3))
+    check view target=3 rel=upview cascaded (subplan1(v7.3))
+    check view target=4 rel=upview cascaded (subplan1(v9.2))
+    check view target=5 rel=upview cascaded (subplan1(v10.2))
+    check view target=6 rel=upview cascaded (subplan1(v11.2))
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+param $exec1 owner=subplan2 type=1700 rep=vl:win/page
+param $exec0 owner=subplan1 type=1700 rep=vl:row
+param $exec1 owner=subplan2 type=1700 rep=vl:win/page
+param $exec0 owner=subplan1 type=1700 rep=vl:row
+param $exec1 owner=subplan2 type=1700 rep=vl:win/page
+param $exec0 owner=subplan1 type=1700 rep=vl:row
+param $exec1 owner=subplan2 type=1700 rep=vl:win/page
+param $exec0 owner=subplan1 type=1700 rep=vl:row
+param $exec1 owner=subplan2 type=1700 rep=vl:win/page
+param $exec0 owner=subplan1 type=1700 rep=vl:row
+param $exec1 owner=subplan2 type=1700 rep=vl:win/page
+param $exec0 owner=subplan1 type=1700 rep=vl:row
+param $exec1 owner=subplan2 type=1700 rep=vl:win/page
+param $exec0 owner=subplan1 type=1700 rep=vl:row
+scan-lanes node=2 rti=3 rel=26473 tableoid
+scan-lanes node=3 rti=4 rel=26468 tableoid
+scan-lanes node=4 rti=5 rel=26463 tableoid
+scan-lanes node=5 rti=7 rel=26491 tableoid
+scan-lanes node=6 rti=9 rel=26481 tableoid
+scan-lanes node=7 rti=10 rel=26486 tableoid
+scan-lanes node=8 rti=11 rel=26455 tableoid
+mapped: ModifyTable Append SeqScan SubPlan

@@ -1,0 +1,14 @@
+-- regress-full-create_index-016
+-- EXPLAIN (COSTS OFF) SELECT * FROM gpolygon_tbl ORDER BY f1 <-> '(0,0)'::point LIMIT 10;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index rel=19365 rti=1 am=heap index=19373 iam=gist
+    key att=1 op=3289 form=orderby value=c600:#16
+    lanes Attr(1):byref8:vl:win/page
+  project (1=v1.1, 2j=op3289(v1.1, c600:#16))
+  limit count=10 offset=all
+  project (1=outer.1, 2j=outer.2)
+  outs 1=vl:win/page 2=w8:val
+  outs 1=vl:win/page 2=w8:val
+mapped: IndexScan Limit

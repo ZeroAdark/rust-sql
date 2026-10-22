@@ -1,0 +1,1 @@
+select sp_test_func() order by 1: a set-returning SQL function select_parallel.sql creates; the rig catalog has no pg_proc row, so its function-manager set refuses by Shape (reached once rep.varlena.order is built, M6-TEXT R2)

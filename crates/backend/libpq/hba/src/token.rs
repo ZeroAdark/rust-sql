@@ -1,17 +1,15 @@
-use elog::ereport;
+use std::cell::RefCell;
+use std::io::BufReader;
+
+use elog::{ereport, PCT_M};
 use types_error::{ErrorLevel, PgResult};
 use types_startup::AuthToken;
 
 use crate::{loc, CONF_FILE_MAX_DEPTH};
 
-// C reads via AllocateFile + pg_get_line_append; auth config files are small
-// text, so the handle carries the whole content (guc_file precedent) and the
-// tokenizer walks its lines.
-pub struct FileHandle {
-    pub content: Vec<u8>,
+pub struct FileHandle<R> {
+    pub(crate) reader: RefCell<R>,
     pub depth: i32,
-    // errno of the read failure that ended the content (C: ferror(file)).
-    pub read_errno: Option<i32>,
 }
 
 #[inline]
@@ -96,15 +94,20 @@ pub(crate) fn next_token(
     saw_quote || !buf.is_empty()
 }
 
-pub(crate) fn make_auth_token(token: &[u8], quoted: bool) -> AuthToken {
+pub(crate) fn make_auth_token(token: &[u8], quoted: bool) -> PgResult<AuthToken> {
     let lossy = std::str::from_utf8(token).is_err();
-    AuthToken {
+    let raw = if lossy {
+        Some(::mcx::std_vec_from_slice("hba", token)?)
+    } else {
+        None
+    };
+    Ok(AuthToken {
         string: String::from_utf8_lossy(token).into_owned(),
         quoted,
         regex: false,
         lossy,
-        raw: lossy.then(|| token.to_vec()),
-    }
+        raw,
+    })
 }
 
 pub(crate) fn copy_auth_token(input: &AuthToken) -> AuthToken {
@@ -198,14 +201,14 @@ pub(crate) fn regexec_auth_token(
     Ok(result)
 }
 
-pub fn free_auth_file(_file: FileHandle, _depth: i32) {}
+pub fn free_auth_file<R>(_file: FileHandle<R>, _depth: i32) {}
 
 pub fn open_auth_file(
     filename: &str,
     elevel: ErrorLevel,
     depth: i32,
     err_msg: &mut Option<String>,
-) -> PgResult<Option<FileHandle>> {
+) -> PgResult<Option<FileHandle<impl std::io::BufRead>>> {
     if depth > CONF_FILE_MAX_DEPTH {
         let msg = format!("could not open file \"{filename}\": maximum nesting depth exceeded");
         ereport(elevel)
@@ -217,19 +220,13 @@ pub fn open_auth_file(
     }
 
     match std::fs::File::open(filename) {
-        Ok(mut file) => {
-            let mut content = Vec::new();
-            let read_errno = std::io::Read::read_to_end(&mut file, &mut content)
-                .err()
-                .map(|e| e.raw_os_error().unwrap_or(0));
-            Ok(Some(FileHandle { content, depth, read_errno }))
-        }
+        Ok(file) => Ok(Some(FileHandle { reader: RefCell::new(BufReader::new(file)), depth })),
         Err(e) => {
             let errno = e.raw_os_error().unwrap_or(0);
             ereport(elevel)
                 .with_saved_errno(errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{filename}\": %m"))
+                .errmsg(format!("could not open file \"{filename}\": {PCT_M}"))
                 .finish(loc(620, "open_auth_file"))?;
             *err_msg = Some(format!(
                 "could not open file \"{filename}\": {}",

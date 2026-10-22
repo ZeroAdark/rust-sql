@@ -1,0 +1,9 @@
+-- regress-full-plpgsql-066
+-- SELECT * FROM leaker_1(false);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=T_FieldSelect)
+  outs 1=w4:val
+mapped: Result

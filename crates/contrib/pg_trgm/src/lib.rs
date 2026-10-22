@@ -13,15 +13,8 @@
 //! Both GiST consistent/distance keep C's fn_extra cache of the extracted
 //! query trigrams (and graph) across calls.
 //!
-//! Thresholds: trgm_op.c:145 _PG_init's three DefineCustomRealVariable GUCs
-//! are defined statically in guc_tables (the auto_explain.* pattern; this
-//! port has no DefineCustomXxxVariable machinery), so SET range-checks
-//! 0.0 .. 1.0 at SET time and pg_settings carries the rows; the C double
-//! statics (trgm_op.c:24-26) are the per-session cells below. _PG_init's
-//! MarkGUCPrefixReserved("pg_trgm") runs from pg_init when the library
-//! loads. (Divergence shared with auto_explain.*: the GUCs exist before the
-//! library is loaded, where C would still treat them as placeholders.)
 
+mod settings;
 pub mod gist;
 pub mod regexp;
 pub mod trgm;
@@ -160,7 +153,7 @@ fn fc_show_trgm(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
     let rendered = show_trgm_elements(input.data());
 
     let mcx = fcinfo.result_mcx();
-    let mut elems: Vec<Datum> = Vec::with_capacity(rendered.len());
+    let mut elems: Vec<Datum> = ::mcx::std_vec_with_capacity("pg_trgm", rendered.len())?;
     for bytes in &rendered {
         let v = varlena::cstring_to_text(mcx, bytes)?;
         elems.push(varlena_result(v));
@@ -639,7 +632,7 @@ fn gtrgm_cached<'f>(
         };
         flinfo.fn_extra = Some(FnExtra::new(GtrgmCache {
             strategy,
-            query: payload.to_vec(),
+            query: ::mcx::std_vec_from_slice("pg_trgm", &payload)?,
             trigrams,
             graph,
         }));
@@ -707,7 +700,7 @@ fn fc_gtrgm_union(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Dat
     // SAFETY: gist fmgr protocol.
     let entryvec = unsafe { &*(fcinfo.arg(0).as_usize() as *const GistEntryVector) };
     let siglen = get_siglen(&f);
-    let mut keys = Vec::with_capacity(entryvec.n as usize);
+    let mut keys = ::mcx::std_vec_with_capacity("pg_trgm", entryvec.n as usize)?;
     for e in &entryvec.vector[..entryvec.n as usize] {
         keys.push(gist::decode_key(key_image(e.key))?);
     }
@@ -748,7 +741,7 @@ fn fc_gtrgm_picksplit(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult
     let siglen = get_siglen(&f);
 
     let maxoff = (entryvec.n - 1) as usize;
-    let mut keys: Vec<Option<gist::TrgmKey>> = Vec::with_capacity(maxoff + 1);
+    let mut keys: Vec<Option<gist::TrgmKey>> = ::mcx::std_vec_with_capacity("pg_trgm", maxoff + 1)?;
     keys.push(None);
     for e in &entryvec.vector[1..=maxoff] {
         keys.push(Some(gist::decode_key(key_image(e.key))?));
@@ -819,9 +812,11 @@ fn lookup(function: &str) -> Option<PGFunction> {
     })
 }
 
-// trgm_op.c:145 _PG_init: the three GUCs are defined statically (guc_tables);
-// the prefix reservation (trgm_op.c:189) runs at library load.
 fn pg_init() -> PgResult<()> {
+    for &setting in settings::SETTINGS {
+        guc::DefineCustomVariable(setting)?;
+    }
+
     guc::MarkGUCPrefixReserved("pg_trgm");
     Ok(())
 }

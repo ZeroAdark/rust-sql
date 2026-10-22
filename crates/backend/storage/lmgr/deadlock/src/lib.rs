@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering::Relaxed;
 
 use init_small::globals::MaxBackends;
 use lmgr_proc::{foreach_lock_group_member, GetPGProcByNumber};
-use mcx::{Mcx, MemoryContext, PgVec};
+use mcx::{Mcx, PgVec};
 use types_core::{ProcNumber, INVALID_PROC_NUMBER};
 use types_error::{PgError, PgResult, ERRCODE_T_R_DEADLOCK_DETECTED, ERROR};
 use types_storage::lock::{
@@ -86,29 +86,17 @@ thread_local! {
 }
 
 fn backend_mcx() -> Mcx<'static> {
-    thread_local! {
-        static CTX: Cell<Option<&'static MemoryContext>> = const { Cell::new(None) };
-    }
-    CTX.with(|c| match c.get() {
-        Some(m) => m.mcx(),
-        None => {
-            let m: &'static MemoryContext =
-                ::mcx::session_root("DeadLockChecking");
-            // LIFO: empty the droppy workspace TLS before its context is
-            // freed (all workspace vecs allocate from this context).
-            ::mcx::register_session_cleanup(Box::new(|| {
-                WORKSPACE.with(|w| drop(w.borrow_mut().take()));
-            }));
-            c.set(Some(m));
-            m.mcx()
-        }
-    })
+    let top = init_small::globals::TopMemoryContext();
+    ::mcx::register_session_cleanup(Box::new(|| {
+        WORKSPACE.with(|w| drop(w.borrow_mut().take()));
+    }));
+    top.mcx()
 }
 
-fn filled<T: Copy + Default>(mcx: Mcx<'static>, n: usize) -> PgVec<'static, T> {
-    let mut v: PgVec<'static, T> = PgVec::with_capacity_in(n, mcx);
+fn filled<T: Copy + Default>(mcx: Mcx<'static>, n: usize) -> PgResult<PgVec<'static, T>> {
+    let mut v: PgVec<'static, T> = mcx::vec_with_capacity_in(mcx, n)?;
     v.resize(n, T::default());
-    v
+    Ok(v)
 }
 
 // D3.5 (docs/design/connection-scaling.md): lazy and idempotent. C allocates
@@ -132,19 +120,19 @@ pub fn InitDeadLockChecking() -> PgResult<()> {
     let max_procs = max_backends + twophase_config::max_prepared_xacts().max(0) as usize;
     let mcx = backend_mcx();
     let ws = Workspace {
-        visitedProcs: filled(mcx, max_procs),
+        visitedProcs: filled(mcx, max_procs)?,
         nVisitedProcs: 0,
-        deadlockDetails: filled(mcx, max_procs),
+        deadlockDetails: filled(mcx, max_procs)?,
         nDeadlockDetails: 0,
-        beforeConstraints: filled(mcx, max_backends),
-        afterConstraints: filled(mcx, max_backends),
-        waitOrders: filled(mcx, max_backends / 2),
+        beforeConstraints: filled(mcx, max_backends)?,
+        afterConstraints: filled(mcx, max_backends)?,
+        waitOrders: filled(mcx, max_backends / 2)?,
         nWaitOrders: 0,
-        waitOrderProcs: filled(mcx, max_backends),
-        curConstraints: filled(mcx, max_backends),
+        waitOrderProcs: filled(mcx, max_backends)?,
+        curConstraints: filled(mcx, max_backends)?,
         nCurConstraints: 0,
         maxCurConstraints: MaxBackends(),
-        possibleConstraints: filled(mcx, max_backends * 4),
+        possibleConstraints: filled(mcx, max_backends * 4)?,
         nPossibleConstraints: 0,
         maxPossibleConstraints: MaxBackends() * 4,
     };
@@ -630,8 +618,8 @@ pub fn DeadLockReport() -> PgResult<()> {
     let details: Vec<DeadLockInfo> = WORKSPACE.with(|w| {
         let ws = w.borrow();
         let ws = ws.as_ref().expect("InitDeadLockChecking not run");
-        ws.deadlockDetails[..ws.nDeadlockDetails as usize].to_vec()
-    });
+        ::mcx::std_vec_from_slice("DeadLockReport", &ws.deadlockDetails[..ws.nDeadlockDetails as usize])
+    })?;
     let n = details.len();
 
     let mut clientbuf = String::new();
@@ -666,6 +654,7 @@ pub fn DeadLockReport() -> PgResult<()> {
 
     Err(Box::new(
         PgError::new(ERROR, "deadlock detected")
+            .with_location("deadlock.c", 1138, "DeadLockReport")
             .with_sqlstate(ERRCODE_T_R_DEADLOCK_DETECTED)
             .with_detail(clientbuf)
             .with_detail_log(logbuf)

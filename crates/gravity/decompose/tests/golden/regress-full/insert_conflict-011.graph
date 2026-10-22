@@ -1,0 +1,10 @@
+-- regress-full-insert_conflict-011
+-- explain (costs off) insert into insertconflicttest as i values (23, 'Avocado') on conflict (key) do update set fruit = excluded.*::text;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:23, 2=c25:'Avocado')
+  write INSERT rel=18240 rti=1 natts=2 indexes=(18264[1]u) on_conflict=update arbiter=(18264) excl_rti=2 cols=(2) set=(1=io25(inner.0))
+  outs 1=w4:val 2=vl:stmt/imm
+mapped: Result ModifyTable

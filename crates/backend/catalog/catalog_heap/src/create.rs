@@ -1,6 +1,3 @@
-// heap.c DDL half, plain-table lane. Out of scope (loud or WARNING'd below):
-// TOAST, typed/partitioned/shared/mapped rels, constraints/defaults,
-// pg_shdepend recording.
 use std::rc::Rc;
 
 use catalog::AccessMethodRelationId;
@@ -36,9 +33,6 @@ fn err(msg: String, sqlstate: types_error::SqlState) -> Box<PgError> {
     Box::new(PgError::new(ERROR, msg).with_sqlstate(sqlstate))
 }
 
-// binary_upgrade_next_{heap,toast}_pg_class_{oid,relfilenumber}
-// (pg_upgrade_support.c / heap.c): set-once, consume-once overrides used by
-// heap_create_with_catalog while in binary upgrade mode.
 macro_rules! next_oid_override {
     ($cell:ident, $setter:ident, $take:ident) => {
         thread_local! {
@@ -144,7 +138,6 @@ pub fn CheckAttributeNamesTypes<'mcx>(
     }
     let mut containing_rowtypes: mcx::PgVec<'mcx, Oid> = mcx::vec_with_capacity_in(mcx, 4)?;
     for att in &tupdesc.attrs[..natts] {
-        // upstream 01db3f0398fd (18.4): Don't call CheckAttributeType() with InvalidOid on dropped cols
         if att.attisdropped {
             continue;
         }
@@ -250,8 +243,6 @@ pub fn CheckAttributeType<'mcx>(
             flags,
         )?;
     } else if att_typtype == lsyscache::typ::TYPTYPE_MULTIRANGE {
-        // upstream ff8f27d6eae2 (18.4): Don't allow composite type to be member of itself via multirange
-        // If it's a multirange, recurse to check its plain range type.
         CheckAttributeType(
             mcx,
             attname,
@@ -305,9 +296,6 @@ pub fn CheckAttributeType<'mcx>(
     Ok(())
 }
 
-// heap.c:314-326 (heap_create). heap_create_with_catalog also runs it ahead
-// of its hoisted AssignTypeArrayOid, keeping C's error order in binary
-// upgrade mode (heap.c:1330 before :1368).
 fn check_system_namespace_create(
     mcx: Mcx<'_>,
     relname: &[u8],
@@ -369,26 +357,21 @@ pub fn heap_create<'mcx>(
     if !RELKIND_HAS_STORAGE(relkind) {
         create_storage = false;
     } else if relfilenumber == InvalidRelFileNumber {
-        // Unspecified by the caller: storage gets oid == relid.
         relfilenumber = relid;
     }
     if reltablespace == init_small::globals::MyDatabaseTableSpace() {
         reltablespace = InvalidOid;
     }
 
-    // relcache.c:3566-3568 (RelationBuildLocalRelation): the hardwired
-    // shared-relation list must agree with the caller's flag; a shared
-    // toast/index for a shared catalog created after initdb (binary-upgrade
-    // preset OIDs, allow_system_table_mods) fails here in C too.
     if shared_relation != catalog::IsSharedRelation(relid) {
         return Err(Box::new(PgError::error(format!(
             "shared_relation flag for \"{}\" does not match IsSharedRelation({relid})",
             String::from_utf8_lossy(relname)
         ))));
     }
-    // A shared relation whose OID is on that list is only built in
-    // bootstrap; pgrust's relcache has no post-initdb shared build.
-    if shared_relation {
+    // Shared relations are created only by bootstrap (postgres.bki
+    // `shared_relation`); afterwards IsSharedRelation() is a fixed set.
+    if shared_relation && !miscinit_seams::is_bootstrap_processing_mode::call() {
         return Err(err(
             format!("cannot create shared relation \"{}\"", String::from_utf8_lossy(relname)),
             types_error::ERRCODE_FEATURE_NOT_SUPPORTED,
@@ -431,7 +414,6 @@ pub fn heap_create<'mcx>(
     if !create_storage && reltablespace != InvalidOid {
         pg_depend::recordDependencyOnTablespace(mcx, RELATION_RELATION_ID, relid, reltablespace)?;
     }
-    // Ensures the stats entry is dropped if the transaction aborts.
     pgstat::relation::pgstat_create_relation(relid, rel.rd_rel.relisshared);
     Ok((rel, relfrozenxid, relminmxid))
 }
@@ -453,7 +435,6 @@ pub fn InsertPgClassTuple<'mcx>(
 ) -> PgResult<()> {
     let mut values = [Datum::null(); Natts_pg_class];
     let mut nulls = [false; Natts_pg_class];
-    // Anum_pg_class_* order (pg_class.h, 18.3: relallfrozen is column 13).
     values[0] = Datum::from_oid(new_rel_oid);
     values[1] = name_datum(&rd_rel.relname);
     values[2] = Datum::from_oid(rd_rel.relnamespace);
@@ -466,19 +447,19 @@ pub fn InsertPgClassTuple<'mcx>(
     values[9] = Datum::from_i32(rd_rel.relpages);
     values[10] = Datum::from_f32(rd_rel.reltuples);
     values[11] = Datum::from_i32(rd_rel.relallvisible);
-    values[12] = Datum::from_i32(0); // relallfrozen
+    values[12] = Datum::from_i32(0);
     values[13] = Datum::from_oid(rd_rel.reltoastrelid);
     values[14] = Datum::from_bool(rd_rel.relhasindex);
     values[15] = Datum::from_bool(rd_rel.relisshared);
     values[16] = Datum::from_char(rd_rel.relpersistence as i8);
     values[17] = Datum::from_char(rd_rel.relkind as i8);
     values[18] = Datum::from_i16(natts);
-    values[19] = Datum::from_i16(0); // relchecks
-    values[20] = Datum::from_bool(false); // relhasrules
-    values[21] = Datum::from_bool(false); // relhastriggers
+    values[19] = Datum::from_i16(0);
+    values[20] = Datum::from_bool(false);
+    values[21] = Datum::from_bool(false);
     values[22] = Datum::from_bool(rd_rel.relhassubclass);
     values[23] = Datum::from_bool(rd_rel.relrowsecurity);
-    values[24] = Datum::from_bool(false); // relforcerowsecurity
+    values[24] = Datum::from_bool(false);
     values[25] = Datum::from_bool(rd_rel.relispopulated);
     values[26] = Datum::from_char(rd_rel.relreplident as i8);
     values[27] = Datum::from_bool(rd_rel.relispartition);
@@ -583,7 +564,6 @@ fn form_pg_attribute_tuple<'mcx>(
     values[17] = Datum::from_bool(attrs.attislocal);
     values[18] = Datum::from_i16(attrs.attinhcount);
     values[19] = Datum::from_oid(attrs.attcollation);
-    // attstattarget, attacl, attoptions, attfdwoptions, attmissingval.
     for n in &mut nulls[20..25] {
         *n = true;
     }
@@ -597,7 +577,6 @@ fn form_pg_attribute_tuple<'mcx>(
     heaptuple::heap_form_tuple(mcx, pg_attribute_rel.descr(), &values, &nulls)
 }
 
-// InsertPgAttributeTuples (heap.c): batches of Heap2 MULTI_INSERT records.
 pub fn InsertPgAttributeTuples<'mcx>(
     mcx: Mcx<'mcx>,
     pg_attribute_rel: &Relation<'mcx>,
@@ -621,7 +600,7 @@ pub fn InsertPgAttributeTuples<'mcx>(
     };
     debug_assert!(attrs_extra.is_none_or(|e| e.len() == attrs.len()));
     for (chunk_i, chunk) in attrs.chunks(nslots).enumerate() {
-        let mut tuples = std::vec::Vec::with_capacity(chunk.len());
+        let mut tuples = ::mcx::std_vec_with_capacity("catalog_heap", chunk.len())?;
         for (j, att) in chunk.iter().enumerate() {
             let extra = attrs_extra.map(|e| &e[chunk_i * nslots + j]);
             tuples.push(form_pg_attribute_tuple(
@@ -665,7 +644,6 @@ fn AddNewAttributeTuples<'mcx>(
 
     for i in 0..tupdesc.natts as usize {
         let att = &tupdesc.attrs[i];
-        // upstream f9d5a52da4ca (18.5): Don't try to record dependency on a dropped column's datatype
         if att.attisdropped {
             continue;
         }
@@ -698,6 +676,10 @@ fn AddNewAttributeTuples<'mcx>(
 
 pub struct HeapCreateParams<'a> {
     pub relname: &'a str,
+    /// Preassigned pg_class OID (bootstrap's `create <name> <oid>`); InvalidOid = allocate.
+    pub relid: Oid,
+    /// Preassigned row-type OID (bootstrap's `rowtype_oid`); InvalidOid = allocate.
+    pub reltypeid: Oid,
     pub relnamespace: Oid,
     pub reltablespace: Oid,
     pub ownerid: Oid,
@@ -705,20 +687,11 @@ pub struct HeapCreateParams<'a> {
     pub relkind: u8,
     pub relpersistence: u8,
     pub reloftype: Oid,
-    // heap.c shared_relation: true only for a shared catalog's toast table
-    // (toasting.c:241 "Toast table is shared if and only if its parent is").
     pub shared: bool,
-    // RelationIsMapped(source): CLUSTER/VACUUM FULL transient heaps for
-    // mapped catalogs must themselves be mapped (cluster.c make_new_heap).
     pub mapped: bool,
     pub allow_system_table_mods: bool,
     pub reloptions: Option<&'a [u8]>,
-    // heap.c:1129 "link to original relation during a table rewrite":
-    // pg_class.relrewrite of a transient heap (cluster.c make_new_heap) or of
-    // its toast table (toasting.c OIDOldToast); InvalidOid otherwise.
     pub relrewrite: Oid,
-    // heap.c use_user_acl: false for toast tables (toasting.c) and rewrite
-    // heaps (cluster.c make_new_heap), whose relacl stays NULL.
     pub use_user_acl: bool,
     pub is_internal: bool,
 }
@@ -739,8 +712,6 @@ pub fn heap_create_with_catalog<'mcx>(
             || p.relkind == types_rel::RELKIND_FOREIGN_TABLE,
         "only plain/partitioned tables, toast, sequences, views, matviews, composite types and foreign tables ported"
     );
-    // C: no rowtype/array pg_type entry where the relation is an
-    // implementation detail (toast, sequences, indexes).
     let make_rowtype =
         p.relkind != types_rel::RELKIND_TOASTVALUE && p.relkind != types_rel::RELKIND_SEQUENCE;
     let pg_class_desc = table::table_open(mcx, RELATION_RELATION_ID, RowExclusiveLock)?;
@@ -780,19 +751,14 @@ pub fn heap_create_with_catalog<'mcx>(
         .into());
     }
 
-    // heap.c:1221-1222: shared relations must be in pg_global (last-ditch check).
     if p.shared && p.reltablespace != GLOBALTABLESPACE_OID {
         return Err(Box::new(PgError::error(
             "shared relations must be placed in pg_global tablespace",
         )));
     }
-    // C moveArrayTypeName returns true WITHOUT renaming when the colliding
-    // type is a shell: TypeCreate then fills the shell in place, reusing its
-    // OID (newTypeOid stays InvalidOid on C's AddNewRelationType path). The
-    // composite-OID hoist below must therefore reuse the shell's OID instead
+    // The composite-OID hoist below must therefore reuse the shell's OID instead
     // of preassigning a fresh one — a preassigned OID trips TypeCreate's
-    // "cannot assign new OID to existing shell type" XX000 guard (round-16
-    // gramwalk: CREATE MATERIALIZED VIEW over a same-named shell type).
+    // "cannot assign new OID to existing shell type" XX000 guard.
     let shell_row_type_oid =
         if old_type_oid != InvalidOid && !lsyscache::typ::get_typisdefined(old_type_oid)? {
             old_type_oid
@@ -800,15 +766,12 @@ pub fn heap_create_with_catalog<'mcx>(
             InvalidOid
         };
 
-    // Binary-upgrade override for pg_class.oid and relfilenumber (heap.c);
-    // indexes use binary_upgrade_next_index_pg_class_oid instead.
-    let mut relid = InvalidOid;
+    let mut relid = p.relid;
     let mut relfilenumber = InvalidRelFileNumber;
     if init_small::globals::IsBinaryUpgrade() {
         debug_assert!(p.relkind != types_rel::RELKIND_INDEX);
         debug_assert!(p.relkind != types_rel::RELKIND_PARTITIONED_INDEX);
         if p.relkind == types_rel::RELKIND_TOASTVALUE {
-            // There might be no TOAST table, so we have to test for it.
             if let Some(oid) = take_next_toast_pg_class_oid() {
                 relid = oid;
                 relfilenumber = take_next_toast_pg_class_relfilenumber().ok_or_else(|| {
@@ -848,20 +811,14 @@ pub fn heap_create_with_catalog<'mcx>(
 
     // C allocates the array-type oid after heap_create and the composite oid
     // inside TypeCreate; both are hoisted here so the relcache entry can carry
-    // reltype at build time. GetNewObjectId order (relid, array, composite)
-    // and both TypeCreate calls' catalog effects are unchanged.
+    // reltype at build time.
     let (new_array_oid, new_type_oid) = if make_rowtype {
         let array_oid = pg_type::AssignTypeArrayOid(mcx)?;
         if shell_row_type_oid != InvalidOid {
-            // Shell reuse: the rowtype IS the surviving shell type; C never
-            // draws a composite OID in this case (TypeCreate updates the
-            // shell tuple in place).
             (array_oid, shell_row_type_oid)
+        } else if types_core::OidIsValid(p.reltypeid) {
+            (array_oid, p.reltypeid)
         } else if init_small::globals::IsBinaryUpgrade() {
-            // pg_type.c:472-481 (TypeCreate with reltypeid = InvalidOid,
-            // heap.c:1379): the rowtype consumes
-            // binary_upgrade_next_pg_type_oid, so pg_class.reltype and
-            // pg_type.oid equal pg_upgrade's preset.
             let oid = pg_type::take_next_pg_type_oid().ok_or_else(|| {
                 binary_upgrade_err("pg_type OID value not set when in binary upgrade mode")
             })?;
@@ -882,8 +839,6 @@ pub fn heap_create_with_catalog<'mcx>(
         (InvalidOid, InvalidOid)
     };
 
-    // heap.c:1297-1311: RELATION, VIEW, MATVIEW, FOREIGN_TABLE and
-    // PARTITIONED_TABLE share OBJECT_TABLE.
     let relacl: Option<mcx::PgVec<'mcx, u8>> = match p.relkind {
         _ if !p.use_user_acl => None,
         RELKIND_RELATION
@@ -928,9 +883,6 @@ pub fn heap_create_with_catalog<'mcx>(
             relid,
             p.relkind,
             p.ownerid,
-            // Shell reuse: pass InvalidOid so TypeCreate takes its existing-shell
-            // update-in-place branch (which resolves to shell_row_type_oid ==
-            // new_type_oid); a preassigned OID there is the XX000 guard.
             if shell_row_type_oid != InvalidOid {
                 InvalidOid
             } else {
@@ -1016,7 +968,6 @@ pub fn heap_create_with_catalog<'mcx>(
             )?;
         }
         pg_depend::recordDependencyOnCurrentExtension(mcx, &myself, false)?;
-        // C address order: namespace, then reloftype, then access method.
         let mut addrs: [ObjectAddress; 3] =
             [ObjectAddress::set(catalog::NamespaceRelationId, p.relnamespace); 3];
         let mut live = 1;
@@ -1091,8 +1042,6 @@ fn AddNewRelationType<'mcx>(
     )
 }
 
-// RelationClearMissing (heap.c): reset atthasmissing/attmissingval on every
-// user column ahead of a table rewrite.
 pub fn RelationClearMissing<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgResult<()> {
     let rel = table::table_open(mcx, relid, types_rel::NoLock)?;
     let natts = rel.rd_att.natts;
@@ -1122,9 +1071,9 @@ pub fn RelationClearMissing<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgResult<()> {
         values.resize(n, Datum::null());
         isnull.resize(n, false);
         replace.resize(n, false);
-        values[14 - 1] = Datum::from_bool(false); // atthasmissing
+        values[14 - 1] = Datum::from_bool(false);
         replace[14 - 1] = true;
-        isnull[25 - 1] = true; // attmissingval
+        isnull[25 - 1] = true;
         replace[25 - 1] = true;
         let mut newtup = heaptuple::heap_modify_tuple(mcx, tup, desc, &values, &isnull, &replace)?;
         let otid = tup.t_self;
@@ -1135,8 +1084,6 @@ pub fn RelationClearMissing<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgResult<()> {
     rel.close(types_rel::NoLock)
 }
 
-// StoreAttrMissingVal (heap.c): wrap the evaluated default in a 1-element
-// array of the column type and flip atthasmissing. Plain tables only.
 pub fn StoreAttrMissingVal<'mcx>(
     mcx: Mcx<'mcx>,
     rel: &Relation<'mcx>,
@@ -1150,7 +1097,7 @@ pub fn StoreAttrMissingVal<'mcx>(
         crate::drop::int2_scankey(5, attnum),
     ];
     let mut scan = genam::systable_beginscan(
-        mcx, &attrrel, 2659, // AttributeRelidNumIndexId
+        mcx, &attrrel, 2659,
         true, None, &keys,
     )?;
     let Some(tup) = genam::systable_getnext(mcx, &mut scan)? else {

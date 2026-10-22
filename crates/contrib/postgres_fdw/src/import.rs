@@ -24,7 +24,7 @@ fn push_quoted_ident(out: &mut String, mcx: Mcx<'_>, s: &str) -> PgResult<()> {
 fn string_literal(out: &mut String, val: &str) {
     // deparseStringLiteral (deparse.c).
     if val.contains('\\') {
-        out.push_str(" E'");
+        out.push_str("E'");
     } else {
         out.push('\'');
     }
@@ -371,6 +371,13 @@ pub fn postgresImportForeignSchema<'mcx>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn escape_string_literal_has_no_leading_space() {
+        let mut out = String::from("nspname = ");
+        super::string_literal(&mut out, "a\\b'c");
+        assert_eq!(out, "nspname = E'a\\\\b''c'");
+    }
+
     use super::{
         col, column_def_tail, effective_import_collate, import_columns_query, ImportOptions,
     };

@@ -1,0 +1,7 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M8-RIG): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT x, x IN (SELECT y FROM (VALUES (2), (NULL)) v(y)) AS in_null FROM generate_series(1, 3) x
+cols: x	in_null
+[pg]
+1	\N
+2	t
+3	\N

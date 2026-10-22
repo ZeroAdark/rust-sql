@@ -1,0 +1,3 @@
+RI's registry (crates/gravity/lint/rules/ri_interrupts.py): the Gravity functions that still check for interrupts
+themselves instead of asking cancelpoll::interrupts. One row per file: path<TAB>function<TAB>owner lane<TAB>why it
+stays. The list only shrinks.

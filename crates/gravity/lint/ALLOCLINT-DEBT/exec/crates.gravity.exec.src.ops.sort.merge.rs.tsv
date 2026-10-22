@@ -1,0 +1,9 @@
+path	crates/gravity/exec/src/ops/sort/merge.rs
+growth	std::collections::BinaryHeap::push	2
+growth	std::vec::Vec::push	2
+method	std::boxed::Box::new	2
+method	std::collections::BinaryHeap::with_capacity	1
+method	std::iter::Iterator::collect	2
+type	std::boxed::Box	3
+type	std::collections::BinaryHeap	1
+type	std::vec::Vec	1

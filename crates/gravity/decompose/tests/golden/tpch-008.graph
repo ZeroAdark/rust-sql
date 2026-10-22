@@ -1,0 +1,119 @@
+-- tpch-008
+-- SELECT o_year, sum( CASE WHEN nation = 'BRAZIL' THEN volume ELSE 0 END) / sum(volume) AS mkt_share FROM ( SELECT extract(year FROM o_orderdate) AS o_year, l_extendedprice * (1 - l_discount) AS volume, n2.n_name AS nation FROM part, supplier, lineitem, orders, customer, nation n1, nation n2, region WHERE p_partkey = l_partkey AND s_suppkey = l_suppkey AND l_orderkey = o_orderkey AND o_custkey = c_custkey AND c_nationkey = n1.n_nationkey AND n1.n_regionkey = r_regionkey AND r_name = 'AMERICA' AND s_nationkey = n2.n_nationkey AND o_orderdate BETWEEN CAST('1995-01-01' AS date) AND CAST('1996-12-31' AS date) AND p_type = 'ECONOMY ANODIZED STEEL') AS all_nations GROUP BY o_year ORDER BY o_year /* TH8 */;
+graph pipelines=7 breakers=6 init_plans=0 root=p6
+p0 node=18 eligible rows=67 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n18@0 n17@2
+  source range rel=16408 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(5):byref8:vl:win/page Offset:byval2:w2:val
+  filter op98(relabel25(v3.5), c25:'ECONOMY ANODIZED STEEL')
+  project (1=v3.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val
+p1 node=15 eligible rows=1 end=breaker(slot=1 HashBuild)
+  desc words=bits@6/7
+  nodes n15@0 n14@2
+  source range rel=16397 rti=10 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  filter op1054(v10.2, c1042:'AMERICA')
+  project (1=v10.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val
+p2 node=13 eligible rows=25 end=breaker(slot=2 HashBuild)
+  desc consumes=slot1@p1 words=bits@7/8
+  nodes n13@0 n12@1 n11@3
+  source range rel=16402 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  project (1=v8.1, 2=v8.2, 3=v8.3, 4=v8.4)
+  probe slot=1 inner=n14 JOIN_INNER unique keys=(outer.3) decls=23/23:I32 clauses=(op96(outer.3, inner.1))
+  project (1=outer.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=vl:row 3=w8:val 4=vl:row
+  outs 1=w8:val
+p3 node=10 eligible rows=1500 end=breaker(slot=1 HashBuild)
+  desc consumes=slot2@p2 words=bits@8/9
+  nodes n10@0 n9@1 n8@3
+  source range rel=16438 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.1, 2=v7.2, 3=v7.3, 4=v7.4, 5=v7.5, 6=v7.6, 7=v7.7, 8=v7.8)
+  probe slot=2 inner=n11 JOIN_INNER keys=(outer.4) decls=23/23:I32 clauses=(op96(outer.4, inner.1))
+  project (1=outer.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=vl:row 3=vl:row 4=w8:val 5=vl:row 6=vl:row 7=vl:row 8=vl:row
+  outs 1=w8:val
+p4 node=7 eligible rows=4562 end=breaker(slot=2 Sort)
+  desc consumes=slot1@p3 consumes=slot0@p0 finishing
+  nodes n7@0 n6@3 n5@5 n4@7 n3@9 n2@11 n1@13^
+  source range rel=16449 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(5):byval8:w8:val Offset:byval2:w2:val
+  filter op1098(v6.5, c1082:-1826)
+  filter op1096(v6.5, c1082:-1096)
+  project (1=v6.1, 2=v6.2, 3=v6.3, 4=v6.4, 5=v6.5, 6=v6.6, 7=v6.7, 8=v6.8, 9=v6.9)
+  probe slot=1 inner=n8 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  project (1=outer.5, 2=outer.1)
+  nest inner=n16 JOIN_INNER raise-free params=($exec0=outer.2)
+  inner node=16 serial site=0 reason=IndexSource end=sink
+  nodes n16@0
+  source index rel=16461 rti=5 am=heap index=16494
+    key att=1 op=96 value=$exec0
+    recheck (op96(v5.1, $exec0))
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(6):byref8:vl:win/page Attr(7):byref8:vl:win/page
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7, 8=v5.8, 9=v5.9, 10=v5.10, 11=v5.11, 12=v5.12, 13=v5.13, 14=v5.14, 15=v5.15, 16=v5.16)
+  project (1=inner.6, 2=inner.7, 3=inner.2, 4=inner.3, 5=outer.1)
+  probe slot=0 inner=n17 JOIN_INNER unique keys=(outer.3) decls=23/23:I32 clauses=(op96(outer.3, inner.1))
+  project (1=outer.1, 2=outer.2, 3=outer.4, 4=outer.5)
+  nest inner=n19 JOIN_INNER unique raise-free params=($exec1=outer.3)
+  inner node=20 serial site=0 reason=IndexSource end=sink
+  nodes n20@0 n19@1
+  source index rel=16420 rti=4 am=heap index=16486
+    key att=1 op=96 value=$exec1
+    recheck (op96(v4.1, $exec1))
+    lanes Attr(1):byval8:w8:val Attr(4):byval8:w8:val
+  project (1=v4.1, 2=v4.4)
+  memo entries=100 singlerow keys=($exec1)
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.1, 2=outer.2, 3=inner.2, 4=outer.4)
+  nest inner=n21 JOIN_INNER unique raise-free params=($exec2=outer.3)
+  inner node=22 serial site=0 reason=IndexSource end=sink
+  nodes n22@0 n21@1
+  source index rel=16402 rti=9 am=heap index=16482
+    key att=1 op=96 value=$exec2
+    recheck (op96(v9.1, $exec2))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page
+  project (1=v9.2, 2=v9.1)
+  memo entries=16 singlerow keys=($exec2)
+  project (1=outer.1, 2=outer.2)
+  project (1=fn6199(c25:'year', outer.4), 2=inner.1, 3=outer.1, 4=outer.2)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:row 4=vl:row 5=w8:val 6=vl:row 7=vl:row 8=w4:val 9=vl:row
+  outs 1=w8:val 2=w8:val
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w4:val 5=w8:val
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w8:val
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w8:val
+  outs 1=vl:call6199 2=vl:life/breaker 3=vl:life/breaker 4=vl:life/breaker
+p5 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashAgg)
+  desc consumes=slot2@p4 owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n1@0 n0@1^
+  source breaker slot=2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=vl:call6199 2=vl:life/breaker 3=vl:life/breaker 4=vl:life/breaker
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p5
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=op1761(agg2114(1=case(when op1054(outer.2, c1042:'BRAZIL') then op1760(outer.3, op1759(c1700:'\x00\x80\x01\x00', outer.4))) else c1700:'\x00\x80'), agg2114(1=op1760(outer.3, op1759(c1700:'\x00\x80\x01\x00', outer.4)))))
+  outs 1=vl:life/breaker 2=vl:call1727
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p4 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[Fp128,Fp128]->[SumNumWide@16,MaxI64@48,SumNumWide@56,MinCode@88,Count@96]+valid 112B order=1+
+group slot=0 producer=p5 node=0 form=Sorted hints=[] layout=[Fp128,Fp128]->[SumNumWide@16,MaxI64@48,SumNumWide@56,MinCode@88,Count@96]+valid 112B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=1700 rep=3 image=NumNormalized expr=outer.1
+  agg aggno=0 fn=2114 reg=SumNum slot=0 count_slot=- final=Numeric scale=4 dscale_slot=1 dscales=4,0 class=SumNum trans=Abi(SumNumWide) mods=[] expr=agg2114(1=case(when op1054(outer.2, c1042:'BRAZIL') then op1760(outer.3, op1759(c1700:'\x00\x80\x01\x00', outer.4))) else c1700:'\x00\x80')
+  agg aggno=1 fn=2114 reg=SumNum slot=2 count_slot=- final=Numeric scale=4 class=SumNum trans=Abi(SumNumWide) mods=[] expr=agg2114(1=op1760(outer.3, op1759(c1700:'\x00\x80\x01\x00', outer.4)))
+param $exec0 owner=n5 type=23 rep=w8:val
+param $exec1 owner=n3 type=23 rep=w4:val
+param $exec2 owner=n2 type=23 rep=w4:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam HashJoin Memoize Sort Agg Hash

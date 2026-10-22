@@ -1,0 +1,6 @@
+path	crates/gravity/hosts/src/ops/window/lazy.rs
+growth	std::vec::Vec::push	3
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	1
+type	std::vec::Vec	1

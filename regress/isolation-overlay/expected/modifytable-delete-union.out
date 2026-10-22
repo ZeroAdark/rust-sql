@@ -1,0 +1,116 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3e s1v s1k s1d s2h s1c s2c s3p
+step s3e: EXPLAIN (COSTS OFF) DELETE FROM dun_p USING dun_s s WHERE dun_p.id = s.id AND s.tag = 'go';
+QUERY PLAN                                          
+----------------------------------------------------
+Delete on dun_p                                     
+  Delete on dun_p_eu dun_p_1                        
+  Delete on dun_p_jp dun_p_2                        
+  Delete on dun_p_us dun_p_3                        
+  ->  Hash Join                                     
+        Hash Cond: (s.id = dun_p.id)                
+        ->  Seq Scan on dun_s s                     
+              Filter: (tag = 'go'::text)            
+        ->  Hash                                    
+              ->  Append                            
+                    ->  Seq Scan on dun_p_eu dun_p_1
+                    ->  Seq Scan on dun_p_jp dun_p_2
+                    ->  Seq Scan on dun_p_us dun_p_3
+(13 rows)
+
+step s1v: UPDATE dun_p SET v = v + 1 WHERE id IN (2, 4, 6);
+step s1k: UPDATE dun_p SET id = id + 1 WHERE id = 8;
+step s1d: DELETE FROM dun_p WHERE id = 10;
+step s2h: DELETE FROM dun_p USING dun_s s WHERE dun_p.id = s.id AND s.tag = 'go'; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+step s2c: COMMIT;
+step s3p: SELECT tableoid::regclass, id, v FROM dun_p ORDER BY id, v;
+tableoid|id|  v
+--------+--+---
+dun_p_us| 1| 10
+dun_p_eu| 3| 30
+dun_p_jp| 5| 50
+dun_p_us| 7| 70
+dun_p_jp| 9| 80
+dun_p_eu| 9| 90
+dun_p_jp|11|110
+dun_p_us|13|130
+dun_p_eu|15|150
+dun_p_jp|17|170
+dun_p_us|19|190
+dun_p_eu|21|210
+dun_p_jp|23|230
+dun_p_us|25|250
+dun_p_eu|27|270
+dun_p_jp|29|290
+(16 rows)
+
+
+starting permutation: s1m s2h s1c s2c s3p
+step s1m: UPDATE dun_p SET region = 'jp' WHERE id = 12;
+step s2h: DELETE FROM dun_p USING dun_s s WHERE dun_p.id = s.id AND s.tag = 'go'; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3p: SELECT tableoid::regclass, id, v FROM dun_p ORDER BY id, v;
+tableoid|id|  v
+--------+--+---
+dun_p_us| 1| 10
+dun_p_jp| 2| 20
+dun_p_eu| 3| 30
+dun_p_us| 4| 40
+dun_p_jp| 5| 50
+dun_p_eu| 6| 60
+dun_p_us| 7| 70
+dun_p_jp| 8| 80
+dun_p_eu| 9| 90
+dun_p_us|10|100
+dun_p_jp|11|110
+dun_p_jp|12|120
+dun_p_us|13|130
+dun_p_jp|14|140
+dun_p_eu|15|150
+dun_p_us|16|160
+dun_p_jp|17|170
+dun_p_eu|18|180
+dun_p_us|19|190
+dun_p_jp|20|200
+dun_p_eu|21|210
+dun_p_us|22|220
+dun_p_jp|23|230
+dun_p_eu|24|240
+dun_p_us|25|250
+dun_p_jp|26|260
+dun_p_eu|27|270
+dun_p_us|28|280
+dun_p_jp|29|290
+dun_p_eu|30|300
+(30 rows)
+
+
+starting permutation: s1i s1j s2i s1c s2c s3i
+step s1i: UPDATE dun_cld SET f2 = f2 || '*' WHERE f1 IN (12, 14);
+step s1j: UPDATE dun_cld SET f1 = 13 WHERE f1 = 16;
+step s2i: DELETE FROM dun_par USING dun_s s WHERE dun_par.f1 = s.id AND s.tag = 'go'; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2c: COMMIT;
+step s3i: SELECT tableoid::regclass, f1, f2 FROM dun_par ORDER BY f1;
+tableoid|f1|f2
+--------+--+--
+dun_par | 1|p1
+dun_par | 3|p3
+dun_par | 5|p5
+dun_par | 7|p7
+dun_par | 9|p9
+dun_cld |11|c1
+dun_cld |13|c3
+dun_cld |13|c6
+dun_cld |15|c5
+dun_cld |17|c7
+dun_cld |19|c9
+(11 rows)
+

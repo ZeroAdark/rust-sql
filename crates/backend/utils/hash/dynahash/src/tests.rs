@@ -711,8 +711,17 @@ fn get_hash_value_matches_search_lane() {
 }
 
 #[test]
+fn estimate_size_overflow_raises_like_c() {
+    // 2^62 buckets need 2^54 segments of 2048 bytes: 2^65 overflows.
+    let err = hash_estimate_size(1 << 62, 8).unwrap_err();
+    assert_eq!(err.sqlstate, ::types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(err.message, "invalid memory allocation request size 18014398509481984 * 2048");
+    assert!(hash_estimate_size(1 << 50, 1 << 20).is_err());
+}
+
+#[test]
 fn estimates_have_expected_monotonicity() {
-    assert!(hash_estimate_size(100, 16) < hash_estimate_size(200, 16));
+    assert!(hash_estimate_size(100, 16).unwrap() < hash_estimate_size(200, 16).unwrap());
     assert_eq!(hash_select_dirsize(1), DEF_DIRSIZE);
     assert_eq!(my_log2(1), 0);
     assert_eq!(my_log2(8), 3);
@@ -722,6 +731,13 @@ fn estimates_have_expected_monotonicity() {
     info.max_dsize = info.dsize;
     let sz = hash_get_shared_size(&info, HASH_DIRSIZE);
     assert!(sz > size_of::<HASHHDR>());
+}
+
+#[test]
+fn my_log2_negative_num_converts_to_uint64() {
+    assert_eq!(my_log2(-1), 64);
+    assert_eq!(my_log2(i64::MIN), 63);
+    assert_eq!(next_pow2_long(i64::MIN), i64::MIN);
 }
 
 #[test]
@@ -743,7 +759,7 @@ fn subxact_cleanup_drops_only_deeper_scans() {
     hash_destroy(table);
 }
 
-// regression row 5: the freeList spinlock's contended path must go through
+// GL-VACGUARD-1 row 5: the freeList spinlock's contended path must go through
 // C's perform_spin_delay backoff (s_lock.c:97), not an unbounded busy-spin.
 //
 // The seam IS the observation point, which is what makes this deterministic: the

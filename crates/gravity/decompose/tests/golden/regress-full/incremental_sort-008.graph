@@ -1,0 +1,9 @@
+-- regress-full-incremental_sort-008
+-- select jsonb_pretty(explain_analyze_inc_sort_nodes_without_memory('select * from (select * from t order by a) s order by a, b limit 55'));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3305($4, array($5, $6, c25:'Peak Sort Space Used'), c3802:'\x01\x00\x00P\x02\x00\x00\x80NN', c16:0))
+  outs 1=vl:call3305
+mapped: Result

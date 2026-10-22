@@ -1,0 +1,10 @@
+# an inner array is one element, its own order exact
+sql: SELECT array_agg(a) FROM t;
+cols: array_agg
+elem: 1	array
+class: unordered
+verdict: match
+[pg]
+{{1,2},{3,4}}
+[got]
+{{3,4},{1,2}}

@@ -1,0 +1,11 @@
+-- regress-full-alter_table-014
+-- UPDATE old_system_table SET id = -id;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=42574 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=op558(v1.1), 2j=v1.-1, 3j=v1.2)
+  write UPDATE rel=42574 rti=1 natts=2 indexes=(42581[1]up, 42583[2]) set=(1)
+  outs 1=w4:val 2=fx6:row 3=vl:win/page
+mapped: ModifyTable SeqScan

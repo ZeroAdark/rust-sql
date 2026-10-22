@@ -3,6 +3,8 @@
 // consumer visit order on comparator ties — matches C for the same op
 // sequence. T: Copy mirrors C's bh_node_type word semantics.
 
+use types_error::PgResult;
+
 pub struct BinaryHeap<T: Copy, C: Fn(&T, &T) -> i32> {
     // One fixed allocation at create, mirroring C's single palloc; the only
     // drop glue is the buffer deallocation itself (T: Copy has none).
@@ -13,13 +15,14 @@ pub struct BinaryHeap<T: Copy, C: Fn(&T, &T) -> i32> {
 }
 
 impl<T: Copy + Default, C: Fn(&T, &T) -> i32> BinaryHeap<T, C> {
-    pub fn allocate(capacity: usize, compare: C) -> Self {
-        BinaryHeap {
-            nodes: vec![T::default(); capacity].into_boxed_slice(),
+    pub fn allocate(capacity: usize, compare: C) -> PgResult<Self> {
+        let v = ::mcx::std_vec_from_elem("binaryheap", T::default(), capacity)?;
+        Ok(BinaryHeap {
+            nodes: v.into_boxed_slice(),
             size: 0,
             has_heap_property: true,
             compare,
-        }
+        })
     }
 }
 
@@ -159,15 +162,19 @@ mod tests {
 
     fn min_heap(cap: usize) -> BinaryHeap<i64, fn(&i64, &i64) -> i32> {
         // Max-heap with inverted comparator = min-heap, the C consumers' idiom.
-        BinaryHeap::allocate(cap, |a, b| {
-            if a < b {
-                1
-            } else if a > b {
-                -1
-            } else {
-                0
-            }
-        })
+        BinaryHeap::allocate(
+            cap,
+            (|a, b| {
+                if a < b {
+                    1
+                } else if a > b {
+                    -1
+                } else {
+                    0
+                }
+            }) as fn(&i64, &i64) -> i32,
+        )
+        .unwrap()
     }
 
     #[test]

@@ -1,0 +1,12 @@
+# RH's registry (lint/rules/rh_ahead.py; construct C2, licence-typed departures, reports BUG-RECURRENCE-20261011 §3 C2):
+# the strategies that run work before PostgreSQL 18.6's executor first demands it (an eager build, a read-whole, a fill
+# at open, an evaluation at Bind, a build before the first outer row) and hold no `Licence`, by repository path, name
+# and owner lane. Seeded from the C2 census (lanes/licence/CENSUS-c2.tsv in the plan dir); a row goes when its strategy
+# holds the Licence the effects home grants (the variant's payload, the field's type or the fn's signature names
+# `Licence`) or stops running ahead; a landing never adds a row (a certified move rewrites one). Done at 0 rows.
+# kind: variant (an enum variant), flag (a struct field), fn (a deciding function), bind (work done at Bind / open).
+# The last column says what runs early, PostgreSQL's demand point, then [the cover today; the D-ids].
+# path	name	owner	kind	what runs early
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<name> (the row's path with
+# crates/gravity/ dropped and '/' as '.', a variant's '::' as '.'), holding the row line; this README is not a row.
+# Deleting a row deletes its file, so lanes that delete different rows never touch the same file.

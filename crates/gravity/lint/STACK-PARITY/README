@@ -1,0 +1,10 @@
+# RSP's table (lint/rules/rsp_stack_parity.py): PostgreSQL 18.6's 148 stack-depth check sites (its check_stack_depth()
+# and stack_is_too_deep() calls) and their Rust counterparts, one file per PostgreSQL C file (its path with '/' as '.',
+# then .tsv; shared lists are directories). A file: the header '# PostgreSQL 18.6 <c file>: <n> stack-depth check
+# sites', then one row per site:
+# C line<TAB>C function<TAB>Rust file<TAB>Rust function (name | Type::name)<TAB>status<TAB>reason
+# status: yes (the Rust function holds a stack-depth check) | n/a (no recursion in the port, a constant bound, a Drop
+# of a tree built under its own check) | gravity (a row executor site: Gravity has none, lint RS covers its
+# recursions) | unported (no Rust port of the C code yet). n/a, gravity and unported rows say why.
+# A function that moves takes its row along (edit the Rust file / function columns). The C side is frozen
+# (PostgreSQL 18.6): rows never drop out. Re-derive with lint/reports/stack_parity_census.py where the C source is.

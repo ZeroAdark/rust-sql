@@ -1,0 +1,205 @@
+Parsed test spec with 2 sessions
+
+starting permutation: nplan keep nlock c1 c2
+step nplan: EXPLAIN (COSTS OFF) SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+QUERY PLAN                                      
+------------------------------------------------
+LockRows                                        
+  ->  Nested Loop                               
+        Join Filter: (vo.k = "*VALUES*".column1)
+        ->  Seq Scan on vo                      
+              Filter: (id <= 3)                 
+        ->  Values Scan on "*VALUES*"           
+(6 rows)
+
+step keep: UPDATE vo SET v = 'new' WHERE id = 2;
+step nlock: SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo; <waiting ...>
+step c1: COMMIT;
+step nlock: <... completed>
+id|k|v  |tag
+--+-+---+---
+ 1|1|v1 |a  
+ 2|2|new|b  
+ 2|2|new|bb 
+ 3|3|v3 |c  
+(4 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan away nlock c1 c2
+step nplan: EXPLAIN (COSTS OFF) SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+QUERY PLAN                                      
+------------------------------------------------
+LockRows                                        
+  ->  Nested Loop                               
+        Join Filter: (vo.k = "*VALUES*".column1)
+        ->  Seq Scan on vo                      
+              Filter: (id <= 3)                 
+        ->  Values Scan on "*VALUES*"           
+(6 rows)
+
+step away: UPDATE vo SET k = 9 WHERE id = 2;
+step nlock: SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo; <waiting ...>
+step c1: COMMIT;
+step nlock: <... completed>
+id|k|v |tag
+--+-+--+---
+ 1|1|v1|a  
+ 3|3|v3|c  
+(2 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan onto nlock c1 c2
+step nplan: EXPLAIN (COSTS OFF) SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+QUERY PLAN                                      
+------------------------------------------------
+LockRows                                        
+  ->  Nested Loop                               
+        Join Filter: (vo.k = "*VALUES*".column1)
+        ->  Seq Scan on vo                      
+              Filter: (id <= 3)                 
+        ->  Values Scan on "*VALUES*"           
+(6 rows)
+
+step onto: UPDATE vo SET k = 3 WHERE id = 2;
+step nlock: SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo; <waiting ...>
+step c1: COMMIT;
+step nlock: <... completed>
+id|k|v |tag
+--+-+--+---
+ 1|1|v1|a  
+ 3|3|v3|c  
+(2 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan out nlock c1 c2
+step nplan: EXPLAIN (COSTS OFF) SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+QUERY PLAN                                      
+------------------------------------------------
+LockRows                                        
+  ->  Nested Loop                               
+        Join Filter: (vo.k = "*VALUES*".column1)
+        ->  Seq Scan on vo                      
+              Filter: (id <= 3)                 
+        ->  Values Scan on "*VALUES*"           
+(6 rows)
+
+step out: UPDATE vo SET id = 100 WHERE id = 2;
+step nlock: SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo; <waiting ...>
+step c1: COMMIT;
+step nlock: <... completed>
+id|k|v |tag
+--+-+--+---
+ 1|1|v1|a  
+ 3|3|v3|c  
+(2 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan away nmulti c1 c2
+step nplan: EXPLAIN (COSTS OFF) SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+QUERY PLAN                                      
+------------------------------------------------
+LockRows                                        
+  ->  Nested Loop                               
+        Join Filter: (vo.k = "*VALUES*".column1)
+        ->  Seq Scan on vo                      
+              Filter: (id <= 3)                 
+        ->  Values Scan on "*VALUES*"           
+(6 rows)
+
+step away: UPDATE vo SET k = 9 WHERE id = 2;
+step nmulti: 
+  SELECT 1;
+  SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+ <waiting ...>
+step c1: COMMIT;
+step nmulti: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|k|v |tag
+--+-+--+---
+ 1|1|v1|a  
+ 3|3|v3|c  
+(2 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan keep nmulti c1 c2
+step nplan: EXPLAIN (COSTS OFF) SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+QUERY PLAN                                      
+------------------------------------------------
+LockRows                                        
+  ->  Nested Loop                               
+        Join Filter: (vo.k = "*VALUES*".column1)
+        ->  Seq Scan on vo                      
+              Filter: (id <= 3)                 
+        ->  Values Scan on "*VALUES*"           
+(6 rows)
+
+step keep: UPDATE vo SET v = 'new' WHERE id = 2;
+step nmulti: 
+  SELECT 1;
+  SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+ <waiting ...>
+step c1: COMMIT;
+step nmulti: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|k|v  |tag
+--+-+---+---
+ 1|1|v1 |a  
+ 2|2|new|b  
+ 2|2|new|bb 
+ 3|3|v3 |c  
+(4 rows)
+
+step c2: COMMIT;
+
+starting permutation: cur fetch1 away fetchall c1 c2
+step cur: DECLARE c CURSOR FOR SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+step fetch1: FETCH 1 FROM c;
+id|k|v |tag
+--+-+--+---
+ 1|1|v1|a  
+(1 row)
+
+step away: UPDATE vo SET k = 9 WHERE id = 2;
+step fetchall: FETCH ALL FROM c; <waiting ...>
+step c1: COMMIT;
+step fetchall: <... completed>
+id|k|v |tag
+--+-+--+---
+ 3|3|v3|c  
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: cur fetch1 keep fetchall c1 c2
+step cur: DECLARE c CURSOR FOR SELECT vo.id, vo.k, vo.v, vs.tag FROM vo JOIN (VALUES (1, 'a'), (2, 'b'), (2, 'bb'), (3, 'c'), (5, 'e'), (6, 'f'), (7, 'g'), (8, 'h')) AS vs(k, tag) ON vs.k = vo.k WHERE vo.id <= 3 FOR UPDATE OF vo;
+step fetch1: FETCH 1 FROM c;
+id|k|v |tag
+--+-+--+---
+ 1|1|v1|a  
+(1 row)
+
+step keep: UPDATE vo SET v = 'new' WHERE id = 2;
+step fetchall: FETCH ALL FROM c; <waiting ...>
+step c1: COMMIT;
+step fetchall: <... completed>
+id|k|v  |tag
+--+-+---+---
+ 2|2|new|b  
+ 2|2|new|bb 
+ 3|3|v3 |c  
+(3 rows)
+
+step c2: COMMIT;

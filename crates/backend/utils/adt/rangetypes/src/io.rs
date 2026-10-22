@@ -209,7 +209,7 @@ fn parse_bound<'m>(
         Some(b',') | Some(b')') | Some(b']') => return Ok(Some((None, true))),
         _ => {}
     }
-    let mut buf: PgVec<'m, u8> = ::mcx::vec_with_capacity_in(mcx, 16)?;
+    let mut buf = ::stringinfo::StringInfo::with_capacity_in(mcx, 16)?;
     let mut inquote = false;
     loop {
         if !inquote {
@@ -226,21 +226,21 @@ fn parse_bound<'m>(
                 return ereturn(esc, None, malformed(string, "Unexpected end of input."));
             };
             *pos += 1;
-            buf.push(nx);
+            buf.append_byte(nx)?;
         } else if ch == b'"' {
             if !inquote {
                 inquote = true;
             } else if string.get(*pos) == Some(&b'"') {
-                buf.push(b'"');
+                buf.append_byte(b'"')?;
                 *pos += 1;
             } else {
                 inquote = false;
             }
         } else {
-            buf.push(ch);
+            buf.append_byte(ch)?;
         }
     }
-    Ok(Some((Some(buf), false)))
+    Ok(Some((Some(buf.into_vec()), false)))
 }
 
 /// range_deparse (rangetypes.c): NUL-terminated cstring image. C builds this

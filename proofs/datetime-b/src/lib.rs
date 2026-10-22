@@ -571,7 +571,7 @@ mod proofs {
 
     // unwind 66 for every band: the binding loop bound is NOT the digit
     // loop but (a) the whole-image r_buf == c_buf compare (64-byte memcmp
-    // -> 65 iterations) and (b) the emit_str/fieldstr copy loops — CI cluster
+    // -> 65 iterations) and (b) the emit_str/fieldstr copy loops — fleet
     // 31ad423d failed d1-d3 "Not unwinding pg_proof_emit_str" at the
     // digit-only bounds, and +17 still truncated the 64-byte memcmp
     // (measured locally). Digit-band split still prices the divide chain.
@@ -1000,7 +1000,7 @@ mod proofs {
     /// row counts — nonnegative, and bounded far below overflow-adjacent
     /// magnitudes. 0 <= c < 2^62 keeps every counter add/sub (accum +1,
     /// combine c1+c2, final pInf+nInf) inside i64 with headroom, killing
-    /// the CI cluster 31ad423d "attempt to add/subtract with overflow" Kani
+    /// the fleet 31ad423d "attempt to add/subtract with overflow" Kani
     /// checks on UNREACHABLE states (real states grow by +-1 per row from
     /// 0; C is -fwrapv on the same plane). The fence is part of the
     /// recorded bounds. Bound is 2^61 (not 2^62): interval_sum_final sums
@@ -1424,10 +1424,10 @@ mod proofs {
             // env/OnceLock pair: routes mcx pool traffic off the
             // thread_local-destructor arm — the Linux toolchain's TLS
             // destructor registration crashes CBMC (status 6,
-            // pthread_key_create type mismatch; CI cluster 31ad423d).
+            // pthread_key_create type mismatch; fleet 31ad423d).
             #[kani::stub(std::env::var, stubs::stub_env_var_zero)]
             #[kani::stub(std::sync::OnceLock::get_or_init, stubs::stub_once_lock_get_or_init)]
-            // Numeric TLS-pool stub quartet (CI cluster 33d7d09d31 status-6
+            // Numeric TLS-pool stub quartet (fleet 33d7d09d31 status-6
             // repair; numeric-probe recipe): part_result's statically-
             // present Numeric arms pull adt_numeric's NumericVar/
             // NumericImage machinery into the call graph, and its
@@ -3066,7 +3066,7 @@ mod rem {
     // Planes (nonfinite lattice, range reject) are pure float compares =
     // fast class; the in-range value arm multiplies a full-symbolic f64 by
     // USECS_PER_SEC (53-bit constant multiply = wall class, TRIAGE float
-    // law) -> concrete spot grid + honest full screen (CI-bound).
+    // law) -> concrete spot grid + honest full screen (fleet-bound).
 
     extern "C" {
         fn pg_ts_float8_timestamptz(seconds: f64, out: *mut i64, err: *mut c_int) -> c_int;
@@ -3157,7 +3157,7 @@ mod rem {
 
     /// Honest full screen of the in-range value arm (53-bit constant
     /// multiply + rint over full-symbolic f64). EXPECTED WALL locally —
-    /// authored for the CI cluster high-memory tier; if it walls there too the
+    /// authored for the fleet high-memory tier; if it walls there too the
     /// planes + spots + native differential stand.
     #[kani::proof]
     #[kani::unwind(40)]
@@ -3473,7 +3473,7 @@ mod hlp {
     // The five `_full`/`_band` equality ladders above wall in CBMC's
     // per-property refinement phase (symex is trivial at ~0.03s; the SAT
     // instance decides in ms, then per-property classification does not
-    // terminate inside 600s on the CI cluster under cadical). Bisecting those
+    // terminate inside 600s on the fleet under cadical). Bisecting those
     // instances property-by-property showed every Kani-inserted
     // arithmetic-overflow / division / subtraction check passing INDIVIDUALLY
     // and only the cross-implementation equality assertion undecidable.
@@ -3690,7 +3690,7 @@ mod hlp {
         // symbolic index merges the loop states and CBMC then cannot bound
         // the data-dependent bsearch loop at all (the unwinding assertion
         // for `while (last >= base)` FAILED at unwind 16 AND 80, > table
-        // size 61/72, on CI cluster job pgrust-kani-suite-1785496407 — and a
+        // size 61/72, on fleet job pgrust-kani-suite-1785496407 — and a
         // failed unwinding assertion makes every downstream check garbage:
         // it reported a bogus pointer-OOB in strncmp and a bogus hit/miss
         // mismatch that were pure loop-truncation artifacts, NOT a

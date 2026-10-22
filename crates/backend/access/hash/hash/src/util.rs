@@ -31,7 +31,11 @@ pub fn hash_procinfo(rel: &Relation<'_>) -> PgResult<FmgrInfo> {
     {
         let mut cache = rel.rd_supportinfo.borrow_mut();
         if cache.is_empty() {
-            cache.resize_with(rel.indnkeyatts() as usize, || None);
+            let n = rel.indnkeyatts() as usize;
+            cache.try_reserve(n).map_err(|_| {
+                ::mcx::oom_named("hash", n * std::mem::size_of::<Option<FmgrInfo>>())
+            })?;
+            cache.resize_with(n, || None);
         }
         if let Some(fi) = &cache[0] {
             return Ok(fi.clone());
@@ -77,7 +81,7 @@ pub(crate) fn hash_procid(rel: &Relation<'_>) -> PgResult<RegProcedure> {
 
 thread_local! {
     static HASH_PROC_SCRATCH: RefCell<MemoryContext> =
-        RefCell::new(MemoryContext::new_bump("hash proc scratch"));
+        RefCell::new(MemoryContext::new_wholesale("hash proc scratch"));
 }
 
 #[inline]
@@ -91,7 +95,7 @@ fn invoke_hash_proc(finfo: &mut FmgrInfo, collation: Oid, key: Datum) -> PgResul
                 invoke_hash_proc_slow(finfo, collation, key, ctx.mcx())
             }
             Err(_) => {
-                let ctx = MemoryContext::new_bump("hash proc scratch (reentrant)");
+                let ctx = MemoryContext::new_wholesale("hash proc scratch (reentrant)");
                 invoke_hash_proc_slow(finfo, collation, key, ctx.mcx())
             }
         }),

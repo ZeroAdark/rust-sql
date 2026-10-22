@@ -1,0 +1,8 @@
+path	crates/gravity/hosts/src/ops/modifytable/write_move.rs
+growth	std::vec::Vec::resize_with	1
+ir-only	core::option::Option<T>::map	1
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	1
+method	std::rc::Rc::new	1
+type	std::rc::Rc	2
+type	std::vec::Vec	1

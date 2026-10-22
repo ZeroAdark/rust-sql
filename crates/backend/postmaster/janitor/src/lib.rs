@@ -18,20 +18,19 @@
 //!   arming the janitor hands it the whole matching namespace — there is no
 //!   adoption guard, no PAUSED state, and no marker file.
 //! - **Pin/unpin/seal**: builtins.rs, reserved-oid `LANGUAGE internal`
-//!   builtins whose pg_proc rows every database carries (bootstrap.rs
-//!   backfills them — no install step); pin state is process-global memory
-//!   only (registry.rs), lost on restart BY DESIGN.
+//!   builtins whose pg_proc rows pgrust's initdb creates in template1 (no
+//!   install step); pin state is process-global memory only (registry.rs),
+//!   lost on restart BY DESIGN.
 //!
 //! Containment contract: the loop catches every `PgResult` error from its
 //! own work (drop failures included) and keeps running; an unrecoverable
-//! error exits FATAL-cleanly (status 1) with a loud disabled-until-restart
-//! log. `BGW_NEVER_RESTART` supplies the no-respawn half. A panic inside a
+//! error or a pg_terminate_backend exits FATAL-cleanly (status 1) with a LOG
+//! line naming the reason, and the postmaster starts it again after
+//! `JANITOR_RESTART_SECS` (the logical replication launcher's restart
+//! policy), including after a cluster crash-restart. A panic inside a
 //! ported crate's critical section still crash-restarts the cluster per the
 //! standing panic-fatality ruling — deliberately outside this containment
-//! scope. NOTE: a cluster crash-restart also FORGETS the registration
-//! (`ResetBackgroundWorkerCrashTimes` drops NEVER_RESTART workers, matching
-//! C), so the janitor is gone until a full postmaster restart in that case
-//! too — "disabled until restart" includes crash cycles.
+//! scope.
 //!
 //! pgrust-only code discipline: ported C-parity crates are touched only at
 //! public entry points (`dropdb`, `CountDBBackends`, catalog scans) plus the
@@ -43,7 +42,6 @@
 //! wal_log strategy pick).
 #![allow(non_snake_case)]
 
-pub mod bootstrap;
 pub mod builtins;
 mod dbscan;
 pub mod grammar;
@@ -69,9 +67,13 @@ pub use builtins::JANITOR_BUILTINS;
 /// datadir this port boots. Must stay outside any sane ephemeral prefix; if
 /// it IS inside the prefix, the own-database guard in the reap predicate
 /// still protects it. If the database is missing (renamed/dropped by an
-/// operator) the connect FATALs and the janitor is disabled until restart —
-/// the loud log is the only witness, documented here on purpose.
+/// operator) the connect FATALs and the janitor retries every
+/// `JANITOR_RESTART_SECS` — the log is the only witness.
 pub const JANITOR_HOME_DB: &str = "postgres";
+
+/// Seconds between a janitor exit and its restart (ApplyLauncherRegister's
+/// bgw_restart_time).
+pub const JANITOR_RESTART_SECS: i32 = 5;
 
 /// `pgrust.ephemeral_db_prefix` (PGC_POSTMASTER, default `''` = feature
 /// off). Reads the process-global backing cell, set during config load.
@@ -124,8 +126,7 @@ pub fn ephemeral_db_prewarm() -> bool {
 /// Static bgworker registration (ApplyLauncherRegister precedent): called by
 /// PostmasterMain through `janitor_seams::janitor_register`, after config
 /// load and strictly before `BackgroundWorkerShmemInit`. Gated on the prefix
-/// GUC; `BGW_NEVER_RESTART` because a janitor that failed once must stay
-/// down until an operator restarts the server (containment contract).
+/// GUC.
 pub fn JanitorRegister() -> types_error::PgResult<()> {
     let prefix = ephemeral_db_prefix();
     if prefix.is_empty() {
@@ -144,20 +145,23 @@ pub fn JanitorRegister() -> types_error::PgResult<()> {
         );
         return Ok(());
     }
-    let bgw = bgworker::BackgroundWorker {
+    bgworker::RegisterBackgroundWorker(&janitor_worker())
+}
+
+fn janitor_worker() -> bgworker::BackgroundWorker {
+    bgworker::BackgroundWorker {
         bgw_name: "pgrust ephemeral-db janitor".to_string(),
         bgw_type: "pgrust ephemeral-db janitor".to_string(),
         bgw_flags: bgworker::BGWORKER_SHMEM_ACCESS | bgworker::BGWORKER_BACKEND_DATABASE_CONNECTION,
         // Earliest legal start for a DB-connected worker; also implements
         // spec item 3's "cannot run at literal postmaster start".
         bgw_start_time: bgworker::BgWorkerStartTime::RecoveryFinished,
-        bgw_restart_time: bgworker::BGW_NEVER_RESTART,
+        bgw_restart_time: JANITOR_RESTART_SECS,
         bgw_main: main_loop::janitor_bgw_main,
         bgw_main_arg: 0,
         bgw_extra: [0; bgworker::BGW_EXTRALEN],
         bgw_notify_pid: 0,
-    };
-    bgworker::RegisterBackgroundWorker(&bgw)
+    }
 }
 
 pub fn init_seams() {
@@ -165,10 +169,6 @@ pub fn init_seams() {
     // D2 mint-on-connect: the InitPostgres lookup-miss hook (uninstalled =
     // stock behavior; the postinit guard checks is_installed()).
     janitor_seams::ephemeral_db_mint_on_connect::set(mint::mint_on_connect);
-    // Bootstrap-builtin backfill: PostgresMain calls through the seam after
-    // InitPostgres so the three janitor builtins exist in every database a
-    // session can reach — no install step (bootstrap.rs).
-    janitor_seams::builtin_backfill::set(bootstrap::backfill_builtin_rows);
     guc_tables::hooks::check_pgrust_ephemeral_db_mint_roles
         .install(mint::check_ephemeral_db_mint_roles);
 }

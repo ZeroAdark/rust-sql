@@ -1,0 +1,11 @@
+-- regress-full-vacuum-003
+-- INSERT INTO pvactst SELECT i, array[1,2,3], point(i, i+1) FROM generate_series(1,1000) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:1000)]
+  project (1=v3.1, 2=c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00', 3=fn1440(fn316(v3.1), fn316(op551(v3.1, c23:1))))
+  write INSERT rel=23908 rti=1 natts=3 indexes=()
+  outs 1=w4:val 2=vl:stmt/imm 3=fx16:call1440
+mapped: ModifyTable FunctionScan

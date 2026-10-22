@@ -1,17 +1,10 @@
-# Whitelist-completion wave (fix/epq-whitelist-completion): a WITH
-# RECURSIVE cte joined under FOR UPDATE. NOT an admission — this pins the
-# RecursiveUnion / WorkTableScan class-A verdict: recursive CTEs are
-# never inlined, so RecursiveUnion (and the WorkTableScan inside its
-# recursive term) lives in a PlannedStmt SUBPLAN read through an admitted
-# CteScan, and check_epq_plan's walk never enters subplans — the recheck
-# tree contains only the CteScan (the EXPLAIN step pins exactly that
-# shape: CTE r hangs off LockRows, the join reads CTE Scan on r).
-# Divergence note vs C (documented in epq.rs + lane-epq.md section 9): C's
-# EvalPlanQualStart re-inits es_subplanstates in its child estate (fresh
-# CTE tuplestore per recheck); pgrust's shared parent estate reuses the
-# already-populated CTE state — equal results at the recheck's snapshot
-# for stable CTE bodies, which this spec's C-oracle expected output
-# (PostgreSQL 18.3) witnesses.
+# A WITH RECURSIVE cte joined under FOR UPDATE OF the table. The plan: a
+# LockRows over a hash join whose probe side is the CTE Scan of the
+# recursive union (the EXPLAIN step pins it). PG's LockRows pulls its
+# subplan row by row and never stops it on its own; its EvalPlanQual
+# recheck reads the CTE Scan's ROW_MARK_COPY row, never the union again,
+# and rejoins it with the locked row's newest version. Served: decompose's
+# reader walk over the union passes the LockRows (setop.rs `readers`).
 
 setup
 {

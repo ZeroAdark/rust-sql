@@ -40,6 +40,9 @@ nbt_compare = { path = "../compare" }
 skipsupport = { path = "../../../utils/adt/skipsupport" }
 varlena = { path = "../../../utils/adt/varlena" }
 bufmgr_seams = { path = "../../../storage/buffer/bufmgr_seams" }
+bufmgr = { path = "../../../storage/buffer/bufmgr" }
+syscache_seams = { path = "../../../utils/cache/syscache_seams" }
+read_stream = { path = "../../../storage/aio/read_stream" }
 lmgr = { path = "../../../storage/lmgr/lmgr" }
 predicate_seams = { path = "../../../storage/lmgr/predicate_seams" }
 transam_xlog_seams = { path = "../../transam/transam_xlog_seams" }
@@ -60,7 +63,6 @@ waitevent_seams = { path = "../../../utils/activity/waitevent_seams" }
 
 [dev-dependencies]
 seam_core = { path = "../../../../_support/seam_core" }
-syscache_seams = { path = "../../../utils/cache/syscache_seams" }
 heapam_visibility = { path = "../../heap/heapam_visibility" }
 pruneheap_seams = { path = "../../heap/pruneheap_seams" }
 smgr_seams = { path = "../../../storage/smgr/smgr_seams" }

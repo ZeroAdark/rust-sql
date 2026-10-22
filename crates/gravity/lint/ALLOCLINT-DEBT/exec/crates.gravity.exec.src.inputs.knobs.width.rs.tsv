@@ -1,0 +1,3 @@
+path	crates/gravity/exec/src/inputs/knobs/width.rs
+method	std::iter::Iterator::collect	1
+type	std::vec::Vec	1

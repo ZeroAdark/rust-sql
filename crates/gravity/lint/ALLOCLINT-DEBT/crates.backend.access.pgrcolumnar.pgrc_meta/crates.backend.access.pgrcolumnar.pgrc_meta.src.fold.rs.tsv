@@ -1,0 +1,9 @@
+path	crates/backend/access/pgrcolumnar/pgrc_meta/src/fold.rs
+growth	std::vec::Vec::push	12
+macro	std::vec	1
+method	pgrc_format::try_to_vec	8
+method	pgrc_format::try_vec	6
+method	slice::sort_by	1
+method	std::clone::Clone::clone	6
+method	std::iter::Iterator::collect	2
+type	std::vec::Vec	11

@@ -5,13 +5,20 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+pgsync = { path = "../../../_support/pgsync" }
+# CONVERT wave 3 (cvwrite job 2): the decoder's buffers are charged to the loading statement's owner (src/held.rs).
+memledger = { path = "../../../_support/memledger" }
 types_error = { path = "../../../_support/types/types_error" }
 # Codecs are borrowed, kernels are owned (build-vs-borrow ruling in the
 # lane letter): snap = pure-Rust snappy, lz4_flex = the raw-block lz4 arm
-# (already in-tree for the columnar store), zstd = the C binding already
-# in-tree for the columnar store's frame codec.
+# (already in-tree for the columnar store; the Hadoop-framed form wraps the
+# same blocks), zstd = the C binding already in-tree for the columnar
+# store's frame codec, miniz_oxide = pure-Rust inflate for GZIP pages
+# (already in the lockfile), brotli-decompressor = pure-Rust brotli.
 snap = "1"
 lz4_flex = "0.11"
+miniz_oxide = "0.8"
+brotli-decompressor = "4"
 # Batched UTF-8 validation for string pages (dictionary values validated
 # once per chunk; fallback pages validated per batch).
 simdutf8 = "0.1"
@@ -19,4 +26,4 @@ simdutf8 = "0.1"
 # zstd links C (zstd-sys); no wasm32 build — the wasm arm refuses the codec
 # at the decompress call site, mirroring pgrcolumnar's arrangement.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-zstd = "0.13"
+zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off

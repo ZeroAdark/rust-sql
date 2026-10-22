@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/executor/execSRF.c: 1 stack-depth check sites
+514	ExecMakeFunctionResultSet	gravity (decompose + lowerv4 + runtime)	-	gravity	gravity: no row executor (rowexec deleted 10-09, E1-E4); plan-depth recursion is decompose's Builder::plan (walk.rs stack_check) + lowerv4 + the runtime crates, all under lint RS

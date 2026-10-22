@@ -86,6 +86,132 @@ pub(crate) fn pushdown_quals_into_subquery<'mcx>(
     Ok(())
 }
 
+/// D3342 (cte_or.rs): a CTE body's pushdown safety (subquery_is_pushdown_safe over the body as written), None when no qual
+/// may be pushed into it at all.
+pub(crate) struct CteSafety<'mcx>(PushdownSafetyInfo<'mcx>);
+
+pub(crate) fn cte_safety<'mcx>(mcx: Mcx<'mcx>, body: &'mcx Query<'mcx>) -> PgResult<Option<CteSafety<'mcx>>> {
+    let mut safety = PushdownSafetyInfo {
+        unsafe_flags: mcx::vec_from_elem_in(mcx, 0u8, body.targetList.len() + 1),
+        unsafe_volatile: false,
+        unsafe_leaky: false,
+    };
+    Ok(subquery_is_pushdown_safe(mcx, body, body, &mut safety)?.then_some(CteSafety(safety)))
+}
+
+/// D3342 (cte_or.rs): qual_is_pushdown_safe's tests for a bare clause over the body's output columns named by `rti` (the
+/// CTE's quals are pushed in ss_process_ctes, before any is a RestrictInfo): no SubPlan, no volatile function (at all, not
+/// only past a DISTINCT / window / SRF layer), a Var of `rti` alone and of a column every test passes (a window run
+/// condition is not pushed), and no grouping conflict (check point 6). The caller has refused upper-level Vars,
+/// PlaceHolderVars, aggregates and SubLinks.
+pub(crate) fn cte_clause_safe<'mcx>(
+    mcx: Mcx<'mcx>,
+    body: &'mcx Query<'mcx>,
+    rti: usize,
+    clause: Node<'mcx>,
+    safety: &CteSafety<'mcx>,
+) -> PgResult<bool> {
+    if clauses::contain_subplans(clause)? || clauses::contain_volatile_functions(clause)? {
+        return Ok(false);
+    }
+    let vars_list = vars::pull_var_clause(mcx, clause, vars::PVC_INCLUDE_PLACEHOLDERS)?;
+    for v in vars_list.iter() {
+        let Some(var) = v.as_var() else { return Ok(false) };
+        if var.varno != rti as i32 || var.varattno <= 0 || var.varattno as usize >= safety.0.unsafe_flags.len() {
+            return Ok(false);
+        }
+        if safety.0.unsafe_flags[var.varattno as usize] != 0 {
+            return Ok(false);
+        }
+    }
+    if body.hasWindowFuncs || !body.distinctClause.is_nil() || body.setOperations.map_or(false, setop_has_grouping) {
+        let conflict = clauses::expression_has_grouping_conflict(clause, &mut |var| {
+            if var.varlevelsup != 0 {
+                return Ok(types_core::InvalidOid);
+            }
+            subquery_column_grouping_eqop(body, var.varattno)
+        })?;
+        if conflict {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// D3342 (cte_or.rs): subquery_push_qual into the copy `body` of a CTE's query, `qual`'s Vars naming `rte` at `rti`.
+pub(crate) fn cte_push_qual<'mcx>(
+    mcx: Mcx<'mcx>,
+    body: &mut Query<'mcx>,
+    rte: &'mcx RangeTblEntry<'mcx>,
+    rti: usize,
+    qual: Node<'mcx>,
+) -> PgResult<()> {
+    subquery_push_qual(mcx, body, rte, rti, qual)
+}
+
+/// D3342 (cte_or.rs): whether every leaf `subquery_push_qual` would push `qual` into (each set-operation arm of `body`, or
+/// `body` itself) already keeps only rows `qual` keeps: `qual` in the leaf's terms (its Vars replaced from the leaf's target
+/// list, as the push replaces them, and a group RTE's Vars by their grouping expressions) is implied by the leaf's own
+/// WHERE (predtest `predicate_implied_by`, both constant-folded as preprocessing folds them). Then the push would add only a redundant clause, which moves the body's
+/// estimates and so the join order, never its work (e.g. each arm's `d_year in (1998, 1998+1)` already keeps the
+/// readers' two years).
+pub(crate) fn cte_qual_implied<'mcx>(
+    mcx: Mcx<'mcx>,
+    body: &Query<'mcx>,
+    rte: &'mcx RangeTblEntry<'mcx>,
+    rti: usize,
+    qual: Node<'mcx>,
+) -> PgResult<bool> {
+    match body.setOperations {
+        Some(setop) => cte_leaves_imply(mcx, setop, body, rte, rti, qual),
+        None => {
+            let Some(where_) = body.jointree.and_then(|j| j.quals) else { return Ok(false) };
+            let mut has_sublinks = body.hasSubLinks;
+            let q = rewrite_manip::ReplaceVarsFromTargetList(
+                mcx,
+                rewrite_manip::copy_node(mcx, qual)?,
+                rti as i32,
+                0,
+                rte,
+                &body.targetList,
+                body.resultRelation,
+                rewrite_manip::ReplaceVarsNoMatchOption::ReportError,
+                Some(&mut has_sublinks),
+            )?;
+            // a grouped leaf's output columns are its group RTE's Vars: the grouping expressions they stand for are the
+            // terms its WHERE names (flatten_group_exprs, the root == NULL arm, as subquery_planner flattens the HAVING it
+            // moves to WHERE)
+            let q = vars::flatten_group_exprs(mcx, body, q)?;
+            let q = clauses::eval_const_expressions(mcx, q)?;
+            let w = clauses::eval_const_expressions(mcx, rewrite_manip::copy_node(mcx, where_)?)?;
+            let w = clauses::make_ands_implicit(mcx, Some(w))?;
+            crate::predtest::predicate_implied_by(mcx, &[q], w.as_slice(), false)
+        }
+    }
+}
+
+/// `cte_qual_implied` over the leaves of set operation `set_op` of `top` (recurse_push_qual's walk).
+fn cte_leaves_imply<'mcx>(
+    mcx: Mcx<'mcx>,
+    set_op: Node<'mcx>,
+    top: &Query<'mcx>,
+    rte: &'mcx RangeTblEntry<'mcx>,
+    rti: usize,
+    qual: Node<'mcx>,
+) -> PgResult<bool> {
+    if let Some(r) = set_op.as_range_tbl_ref() {
+        let Some(sub) = top.rtable.nth(r.rtindex as usize - 1).as_range_tbl_entry().and_then(|e| e.subquery) else { return Ok(false) };
+        return cte_qual_implied(mcx, sub, rte, rti, qual);
+    }
+    match set_op.as_set_operation_stmt() {
+        Some(op) => match (op.larg, op.rarg) {
+            (Some(l), Some(r)) => Ok(cte_leaves_imply(mcx, l, top, rte, rti, qual)? && cte_leaves_imply(mcx, r, top, rte, rti, qual)?),
+            _ => Ok(false),
+        },
+        None => Ok(false),
+    }
+}
+
 fn subquery_is_pushdown_safe<'mcx>(
     mcx: Mcx<'mcx>,
     subquery: &'mcx Query<'mcx>,
@@ -426,7 +552,7 @@ fn setop_has_grouping(setop: Node<'_>) -> bool {
 
 // contain_volatile_functions((Node *) rinfo): the walker's RestrictInfo arm
 // answers from rinfo->has_volatile and caches a computed verdict.
-fn rinfo_contains_volatile(run: &mut PlannerRun<'_>, rid: RinfoId) -> PgResult<bool> {
+pub(crate) fn rinfo_contains_volatile(run: &mut PlannerRun<'_>, rid: RinfoId) -> PgResult<bool> {
     match run.root.rinfo(rid).has_volatile {
         VOLATILITY_NOVOLATILE => Ok(false),
         VOLATILITY_VOLATILE => Ok(true),
@@ -672,9 +798,10 @@ fn find_window_run_conditions<'mcx>(
         agg_has_filter: wfunc.aggfilter.is_some(),
         monotonic: MONOTONICFUNC_NONE,
     };
-    let res = fmgr_core::oid_function_call1_coll(
+    let res = fmgr_core::oid_function_call1_coll_in(
         prosupport,
         0,
+        mcx,
         datum::Datum::from_usize(&mut req as *mut _ as usize),
     )?;
     if res.as_usize() == 0 || req.monotonic == MONOTONICFUNC_NONE {

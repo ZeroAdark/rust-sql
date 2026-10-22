@@ -1,8 +1,7 @@
 // pl_gram.y as recursive descent (keyword-led statements; the bison
 // grammar's pushback tricks map 1:1). Named louds: CASE, FOREACH,
 // FOR ... IN EXECUTE, OPEN/FETCH/MOVE/CLOSE, DO, COMMIT/ROLLBACK,
-// RETURN NEXT/QUERY, cursor declarations, %ROWTYPE, qualified %TYPE,
-// #option dump.
+// RETURN NEXT/QUERY, cursor declarations, %ROWTYPE, qualified %TYPE.
 use parser_seams::RawParseMode;
 use types_core::{Oid, OidIsValid};
 use types_error::{PgError, PgResult, ERRCODE_SYNTAX_ERROR, ERROR};
@@ -179,6 +178,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             ns,
             expr_id: self.comp.new_expr_id(),
             target_param: -1,
+            target_is_local: false,
         }
     }
 
@@ -188,25 +188,16 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         if !self.check_syntax {
             return Ok(());
         }
-        // plpgsql_sql_error_callback runs for every elevel: warnings emitted
-        // by the raw parse (scanner escape warnings) get the same
-        // expr-to-function-source cursor remap as the Err path below.
-        let base = self.sc.errposition(location);
-        let cb = elog::push_emit_context_callback(Box::new(move |e| {
-            if let Some(p) = e.cursor_position.filter(|&p| p > 0) {
-                e.cursor_position = Some(base + p - 1);
-            }
-        }));
+        // plpgsql_sql_error_callback runs for every elevel: the statement's
+        // start becomes the internal position (a report without its own
+        // cursor keeps exactly that), a core-parser cursor is added to it.
+        let cb = elog::push_emit_context_callback(self.sql_error_ctx(Some(location)));
         let r = parser_seams::raw_parser::call(self.scratch, query, mode);
         elog::pop_emit_context_callback(cb);
         match r {
             Ok(_) => Ok(()),
             Err(mut e) => {
-                // plpgsql_sql_error_callback: expr-relative cursor becomes a
-                // function-source cursor (both 1-based char positions).
-                if let Some(p) = e.cursor_position.filter(|&p| p > 0) {
-                    e.cursor_position = Some(base + p - 1);
-                }
+                self.sql_error_ctx(Some(location))(&mut e);
                 Err(e)
             }
         }
@@ -324,17 +315,8 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
     // plpgsql_sql_error_callback; the built type carries fn_input_collation
     // and remembers its SQL spelling for later re-resolution.
     fn parse_datatype(&mut self, type_name: &str, location: i32) -> PgResult<PlType> {
-        let (pos, query) = if location >= 0 {
-            (
-                Some(self.sc.errposition(location)),
-                Some(self.source_span(0, self.sc.scanbuf().len() as i32)),
-            )
-        } else {
-            (None, None)
-        };
-        let cb = elog::push_emit_context_callback(Box::new(move |e| {
-            Self::sql_error_callback_at(e, pos, query.as_deref());
-        }));
+        let cb =
+            elog::push_emit_context_callback(self.sql_error_ctx((location >= 0).then_some(location)));
         let r = parse_utilcmd::parseTypeString(self.scratch, type_name);
         elog::pop_emit_context_callback(cb);
         let (typoid, typmod) = r.map_err(|e| self.sql_error_callback(e, location))?;
@@ -360,6 +342,22 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         };
         Self::sql_error_callback_at(&mut e, pos, query.as_deref());
         e
+    }
+
+    // The position and body text are computed only when a report fires.
+    fn sql_error_ctx(&self, location: Option<i32>) -> Box<dyn FnMut(&mut PgError)> {
+        let src = location.map(|_| self.sc.scanorig_shared());
+        Box::new(move |e| match (&src, location) {
+            (Some(src), Some(loc)) => {
+                let pos = parser_small1::parser_errposition_source(
+                    Some(&src[..]),
+                    loc,
+                    mbutils::GetDatabaseEncoding(),
+                );
+                Self::sql_error_callback_at(e, Some(pos), Some(&String::from_utf8_lossy(src)));
+            }
+            _ => Self::sql_error_callback_at(e, None, None),
+        })
     }
 
     fn sql_error_callback_at(e: &mut PgError, pos: Option<i32>, query: Option<&str>) {
@@ -403,11 +401,10 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 } else if Self::tok_is_keyword(&t3, K_ROWTYPE, "rowtype") {
                     result = Some(self.comp.parse_wordrowtype(&name)?);
                 } else {
-                    self.push_back(&t3)?;
-                    self.push_back(&t2)?;
+                    t = t3;
                 }
             } else {
-                self.push_back(&t2)?;
+                t = t2;
             }
         } else if t.0 == T_CWORD {
             let idents = t.1.cword.as_ref().map(|c| c.idents.clone()).unwrap_or_default();
@@ -419,11 +416,10 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 } else if Self::tok_is_keyword(&t3, K_ROWTYPE, "rowtype") {
                     result = Some(self.comp.parse_cwordrowtype(&idents)?);
                 } else {
-                    self.push_back(&t3)?;
-                    self.push_back(&t2)?;
+                    t = t3;
                 }
             } else {
-                self.push_back(&t2)?;
+                t = t2;
             }
         }
 
@@ -539,16 +535,8 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             if opt.0 == K_OPTION {
                 let v = self.yylex()?;
                 if v.0 == K_DUMP {
-                    // pl_gram.y:387 sets plpgsql_DumpExecTree and pl_comp.c
-                    // prints the compiled tree (pl_funcs.c plpgsql_dumptree)
-                    // to the server's stdout after compiling. The dump is
-                    // unported: a typed refusal at the option, never a
-                    // backend panic and never a silent no-op.
-                    return Err(self.gram_err_pos(
-                        types_error::ERRCODE_FEATURE_NOT_SUPPORTED,
-                        "#option dump is not supported".to_string(),
-                        v.2,
-                    ));
+                    self.comp.dump_exec_tree = true;
+                    continue;
                 }
                 return Err(self.yyerror("syntax error", v.2));
             } else if opt.0 == K_PRINT_STRICT_PARAMS {
@@ -798,7 +786,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         // otherwise every plerrcodes entry with the name chains in.
         if name == "others" {
             return Ok(vec![PlCondition {
-                sqlerrstate: types_error::SqlState(0),
+                sqlerrstate: PLPGSQL_OTHERS,
                 condname: name,
             }]);
         }
@@ -822,10 +810,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
 
     // decl_statement.
     fn parse_decl_statement(&mut self) -> PgResult<()> {
-        let (name, name_loc) = self.decl_varname()?;
-        // decl_varname action (pl_gram.y:716): lineno computed before the
-        // datatype is read, so %TYPE compile errors report this line.
-        let lineno = self.lineno(name_loc);
+        let (name, name_loc, lineno) = self.decl_varname()?;
 
         // ALIAS / CURSOR forms peek after the name.
         let t = self.yylex()?;
@@ -928,6 +913,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 v.notnull = notnull;
                 if let Some(mut e) = default_val {
                     e.target_param = dno;
+                    e.target_is_local = true;
                     v.default_val = Some(e);
                 }
             }
@@ -964,8 +950,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             let arg_loc = t.2;
             let mut varnos = Vec::new();
             loop {
-                let (argname, arg_name_loc) = self.decl_varname()?;
-                let arg_lineno = self.lineno(arg_name_loc);
+                let (argname, _, arg_lineno) = self.decl_varname()?;
                 let datatype = self.read_datatype(None)?;
                 let dno = self.comp.build_variable(&argname, arg_lineno, datatype, true)?;
                 varnos.push(dno);
@@ -1017,7 +1002,9 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         Ok(())
     }
 
-    fn decl_varname(&mut self) -> PgResult<(String, i32)> {
+    // decl_varname (pl_gram.y:716): the line is computed before the
+    // duplicate and shadow checks and before the datatype is read.
+    fn decl_varname(&mut self) -> PgResult<(String, i32, i32)> {
         let t = self.yylex()?;
         let (name, loc) = if t.0 == T_WORD {
             (t.1.word.as_ref().expect("T_WORD").ident.clone(), t.2)
@@ -1026,6 +1013,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         } else {
             return Err(self.yyerror("syntax error", t.2));
         };
+        let lineno = self.lineno(loc);
         if self
             .comp
             .ns_lookup(self.comp.ns_top, true, &name, None, None)
@@ -1051,7 +1039,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             // the compile-scope emit callback (do_compile).
             b.finish(types_error::ErrorLocation::new(file!(), line!() as i32, "decl_varname"))?;
         }
-        Ok((name, loc))
+        Ok((name, loc, lineno))
     }
 
     fn decl_aliasitem(&mut self) -> PgResult<(NsType, i32)> {
@@ -1192,8 +1180,8 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 Ok(Some(PlStmt::Call { lineno, expr, is_call: t.0 == K_CALL }))
             }
             K_COMMIT | K_ROLLBACK => {
-                let lineno = self.lineno(lloc);
                 let chain = self.parse_opt_transaction_chain()?;
+                let lineno = self.lineno(lloc);
                 Ok(Some(if t.0 == K_COMMIT {
                     PlStmt::Commit { lineno, chain }
                 } else {
@@ -1245,7 +1233,9 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         let t = self.yylex()?;
         if t.0 == T_DATUM {
             let dno = t.1.wdatum.as_ref().expect("T_DATUM").dno;
-            let is_var = matches!(&self.comp.datums[dno as usize], PlDatum::Var(_));
+            // C's TG_* promise datums are DTYPE_PROMISE, not DTYPE_VAR.
+            let is_var = matches!(&self.comp.datums[dno as usize],
+                PlDatum::Var(v) if v.promise == PROMISE_NONE);
             if !is_var || self.peek()? == ('[' as i32) {
                 return Err(self.gram_err_pos(
                     types_error::ERRCODE_DATATYPE_MISMATCH,
@@ -1270,8 +1260,8 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
 
     // stmt_open (pl_gram.y:2100).
     fn parse_open(&mut self, lloc: i32) -> PgResult<PlStmt> {
-        let lineno = self.lineno(lloc);
         let curvar = self.cursor_variable()?;
+        let lineno = self.lineno(lloc);
         let mut cursor_options = CURSOR_OPT_FAST_PLAN;
         let mut argquery = None;
         let mut query = None;
@@ -1522,7 +1512,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             _ => unreachable!("cursor argrow is a Row"),
         };
         let nfields = fieldnames.len();
-        let mut argv: Vec<Option<String>> = vec![None; nfields];
+        let mut argv: Vec<Option<String>> = ::mcx::std_vec_from_elem("plpgsql", None, nfields)?;
         let mut any_named = false;
 
         for argc in 0..nfields {
@@ -1655,8 +1645,10 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             None,
             None,
         )?;
-        if matches!(self.comp.datums[varno as usize], PlDatum::Var(_)) {
+        if matches!(&self.comp.datums[varno as usize], PlDatum::Var(v) if v.promise == PROMISE_NONE)
+        {
             expr.target_param = varno;
+            expr.target_is_local = true;
         }
         Ok(PlStmt::Assign { lineno, varno, expr })
     }
@@ -1701,6 +1693,9 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 K_ELSIF => {
                     let c = self.read_sql_expression(K_THEN, "THEN")?;
                     let b = self.parse_proc_sect(&[K_ELSIF, K_ELSE, K_END])?;
+                    // stmt_elsifs (pl_gram.y:1216): the branch's line is
+                    // computed once it is reduced.
+                    self.lineno(t.2);
                     elsifs.push((c, b));
                 }
                 K_ELSE => {
@@ -1736,10 +1731,11 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
     fn parse_loop(&mut self, label: Option<String>, lloc: i32) -> PgResult<PlStmt> {
         self.comp.ns_push_label(label.as_deref(), LABEL_LOOP);
         let (body, end_label, end_loc) = self.parse_loop_body()?;
+        let lineno = self.lineno(lloc);
         self.check_labels(label.as_deref(), end_label.as_deref(), end_loc)?;
         self.comp.ns_pop();
         Ok(PlStmt::Loop {
-            lineno: self.lineno(lloc),
+            lineno,
             label,
             body,
         })
@@ -1749,10 +1745,11 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         self.comp.ns_push_label(label.as_deref(), LABEL_LOOP);
         let cond = self.read_sql_expression(K_LOOP, "LOOP")?;
         let (body, end_label, end_loc) = self.parse_loop_body()?;
+        let lineno = self.lineno(lloc);
         self.check_labels(label.as_deref(), end_label.as_deref(), end_loc)?;
         self.comp.ns_pop();
         Ok(PlStmt::While {
-            lineno: self.lineno(lloc),
+            lineno,
             label,
             cond,
             body,
@@ -1868,10 +1865,11 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 }
             }
             let (body, end_label, end_loc) = self.parse_loop_body()?;
+            let lineno = self.lineno(for_loc);
             self.check_labels(label.as_deref(), end_label.as_deref(), end_loc)?;
             self.comp.ns_pop();
             return Ok(PlStmt::DynForS {
-                lineno: self.lineno(for_loc),
+                lineno,
                 label,
                 var,
                 query: dynquery,
@@ -1910,10 +1908,11 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 let argquery = self.read_cursor_args(curvar, K_LOOP)?;
                 let var = self.comp.build_rec(&name, var_lineno, true);
                 let (body, end_label, end_loc) = self.parse_loop_body()?;
+                let lineno = self.lineno(for_loc);
                 self.check_labels(label.as_deref(), end_label.as_deref(), end_loc)?;
                 self.comp.ns_pop();
                 return Ok(PlStmt::ForC {
-                    lineno: self.lineno(for_loc),
+                    lineno,
                     label,
                     var,
                     curvar,
@@ -1967,10 +1966,11 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 true,
             )?;
             let (body, end_label, end_loc) = self.parse_loop_body()?;
+            let lineno = self.lineno(for_loc);
             self.check_labels(label.as_deref(), end_label.as_deref(), end_loc)?;
             self.comp.ns_pop();
             Ok(PlStmt::ForI {
-                lineno: self.lineno(for_loc),
+                lineno,
                 label,
                 var: fvar,
                 lower: expr1,
@@ -1997,10 +1997,11 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 ERRCODE_SYNTAX_ERROR,
             )?;
             let (body, end_label, end_loc) = self.parse_loop_body()?;
+            let lineno = self.lineno(for_loc);
             self.check_labels(label.as_deref(), end_label.as_deref(), end_loc)?;
             self.comp.ns_pop();
             Ok(PlStmt::ForS {
-                lineno: self.lineno(for_loc),
+                lineno,
                 label,
                 var,
                 query: expr1,
@@ -2011,26 +2012,29 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
 
     // stmt_case + make_case (pl_gram.y).
     fn parse_case(&mut self, lloc: i32) -> PgResult<PlStmt> {
-        let lineno = self.lineno(lloc);
         let t = self.yylex()?;
-        let t_expr = if t.0 == K_WHEN {
-            None
+        let (t_expr, mut when_loc) = if t.0 == K_WHEN {
+            (None, t.2)
         } else {
             self.push_back(&t)?;
             let e = self.read_sql_expression(K_WHEN, "WHEN")?;
-            Some(e)
+            (Some(e), self.last_endtoken_loc)
         };
 
         let mut whens: Vec<(PlExpr, Vec<PlStmt>)> = Vec::new();
         loop {
             let expr = self.read_sql_expression(K_THEN, "THEN")?;
             let stmts = self.parse_proc_sect(&[K_WHEN, K_ELSE, K_END])?;
+            // case_when (pl_gram.y:1269): its line is computed after the
+            // branch (only the scanner's latest-line side effect remains).
+            self.lineno(when_loc);
             whens.push((expr, stmts));
             let nt = self.yylex()?;
             if nt.0 != K_WHEN {
                 self.push_back(&nt)?;
                 break;
             }
+            when_loc = nt.2;
         }
         let mut have_else = false;
         let mut else_stmts = Vec::new();
@@ -2044,6 +2048,8 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         }
         self.expect(K_CASE, "syntax error")?;
         self.expect(';' as i32, "syntax error")?;
+        // make_case (pl_gram.y:4176) runs once END CASE ; is reduced.
+        let lineno = self.lineno(lloc);
 
         let mut t_varno: Dno = 0;
         if t_expr.is_some() {
@@ -2079,6 +2085,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         self.expect(K_ARRAY, "syntax error")?;
         let expr = self.read_sql_expression(K_LOOP, "LOOP")?;
         let (body, end_label, end_loc) = self.parse_loop_body()?;
+        let lineno = self.lineno(lloc);
         let varno = if let Some(r) = rowrec {
             self.check_assignable(r, var_loc)?;
             r
@@ -2096,7 +2103,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         self.check_labels(label.as_deref(), end_label.as_deref(), end_loc)?;
         self.comp.ns_pop();
         Ok(PlStmt::ForEachA {
-            lineno: self.lineno(lloc),
+            lineno,
             label,
             varno,
             slice,
@@ -2105,9 +2112,9 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         })
     }
 
-    fn make_scalar_list1(&mut self, _name: &str, dno: Dno, lineno: i32, loc: i32) -> PgResult<Dno> {
+    fn make_scalar_list1(&mut self, name: &str, dno: Dno, lineno: i32, loc: i32) -> PgResult<Dno> {
         self.check_assignable(dno, loc)?;
-        Ok(self.comp.build_row("(unnamed row)", lineno, vec![dno]))
+        Ok(self.comp.build_row_named("(unnamed row)", lineno, vec![dno], vec![name.to_string()]))
     }
 
     fn read_into_scalar_list(
@@ -2118,6 +2125,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
     ) -> PgResult<Dno> {
         self.check_assignable(initial_dno, initial_loc)?;
         let mut varnos = vec![initial_dno];
+        let mut fieldnames = vec![initial_name.to_string()];
         loop {
             let t = self.yylex()?;
             if t.0 != (',' as i32) {
@@ -2150,15 +2158,21 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                             vt.2,
                         ));
                     }
-                    _ => varnos.push(w.dno),
+                    _ => {
+                        varnos.push(w.dno);
+                        fieldnames.push(if !w.ident.is_empty() {
+                            w.ident.clone()
+                        } else {
+                            w.idents.join(".")
+                        });
+                    }
                 }
             } else {
                 return Err(self.current_token_is_not_variable(&vt));
             }
         }
-        let _ = initial_name;
         let lineno = self.lineno(initial_loc);
-        Ok(self.comp.build_row("(unnamed row)", lineno, varnos))
+        Ok(self.comp.build_row_named("(unnamed row)", lineno, varnos, fieldnames))
     }
 
     fn parse_exit(&mut self, is_exit: bool, lloc: i32) -> PgResult<PlStmt> {
@@ -2171,6 +2185,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         } else {
             return Err(self.yyerror("syntax error", t.2));
         };
+        let lineno = self.lineno(lloc);
 
         if let Some(lbl) = &label {
             match self.comp.ns_lookup_label(self.comp.ns_top, lbl) {
@@ -2203,7 +2218,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         }
 
         Ok(PlStmt::ExitContinue {
-            lineno: self.lineno(lloc),
+            lineno,
             is_exit,
             label,
             cond,
@@ -2565,6 +2580,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
     }
 
     fn parse_assert(&mut self, lloc: i32) -> PgResult<PlStmt> {
+        let lineno = self.lineno(lloc);
         let mut term = 0i32;
         let cond = self.read_sql_expression2(',' as i32, ';' as i32, ", or ;", &mut term)?;
         let message = if term == (',' as i32) {
@@ -2572,11 +2588,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         } else {
             None
         };
-        Ok(PlStmt::Assert {
-            lineno: self.lineno(lloc),
-            cond,
-            message,
-        })
+        Ok(PlStmt::Assert { lineno, cond, message })
     }
 
     fn parse_perform(&mut self, t: Tok, lloc: i32) -> PgResult<PlStmt> {
@@ -2693,6 +2705,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
 
         // pl_gram.y:1013-1057: area restrictions are checked only after the
         // whole item list and the ';' have been consumed.
+        let lineno = self.lineno(lloc);
         for item in &items {
             let kind = item.kind;
             let kindname = getdiag_kindname(kind);
@@ -2719,7 +2732,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         }
 
         Ok(PlStmt::GetDiag {
-            lineno: self.lineno(lloc),
+            lineno,
             is_stacked,
             items,
         })
@@ -2860,6 +2873,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             None,
             Some(&mut endtoken),
         )?;
+        let lineno = self.lineno(lloc);
         let mut into = false;
         let mut strict = false;
         let mut target: Dno = -1;
@@ -2908,7 +2922,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             }
         }
         Ok(PlStmt::DynExecute {
-            lineno: self.lineno(lloc),
+            lineno,
             query,
             into,
             strict,
@@ -2994,6 +3008,9 @@ mod bugs_batch186_tests;
 #[cfg(test)]
 #[path = "gram_bugs_batch233_tests.rs"]
 mod bugs_batch233_tests;
+#[cfg(test)]
+#[path = "gram_wio_w2_tests.rs"]
+mod wio_w2_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3049,6 +3066,17 @@ mod tests {
                 last_endtoken_loc: -1,
             }
         }};
+    }
+
+    #[test]
+    fn others_and_success_sqlstate_are_distinct() {
+        let cx = mcx::MemoryContext::new("exception conditions");
+        let mut comp = crate::comp::CompState::new();
+        let mut parser = parser_for!(cx, comp, b"others SQLSTATE '00000'");
+        let others = parser.parse_proc_condition().unwrap();
+        let success = parser.parse_proc_condition().unwrap();
+        assert_eq!(others[0].sqlerrstate, types_error::SqlState(-1));
+        assert_eq!(success[0].sqlerrstate, types_error::make_sqlstate(*b"00000"));
     }
 
     // plpgsql_yyerror quotes only the token at yylloc (plpgsql_varprops:
@@ -3165,6 +3193,7 @@ mod tests {
                 ns: 0,
                 expr_id: 0,
                 target_param: -1,
+                target_is_local: false,
             });
         }
         comp.build_variable("x", 1, scalar_int_type(), true).unwrap();
@@ -3199,6 +3228,7 @@ mod tests {
                 ns: 0,
                 expr_id: 0,
                 target_param: -1,
+                target_is_local: false,
             });
         }
         comp.build_variable("x", 1, scalar_int_type(), true).unwrap();
@@ -3207,20 +3237,26 @@ mod tests {
         assert!(matches!(block.body.as_slice(), [PlStmt::ForC { .. }]));
     }
 
-    // pl_gram.y comp_option (387): '#option dump' is accepted by C (it sets
-    // plpgsql_DumpExecTree). The dump itself is unported: the option must be a
-    // typed ERRCODE_FEATURE_NOT_SUPPORTED refusal positioned at the option,
-    // never a backend panic (a186-candidate-fp-pl-plpgsql-pl_gram-p1-41cd6c00).
     #[test]
-    fn option_dump_is_a_typed_refusal_not_a_panic() {
-        let cx = mcx::MemoryContext::new("plpgsql #option dump test");
+    fn option_dump_accepts_chained_options_and_resets() {
+        let cx = mcx::MemoryContext::new("plpgsql dump test");
+        for source in [
+            b"#option dump begin end".as_slice(),
+            b"#variable_conflict error #option dump #print_strict_params on begin end",
+        ] {
+            let mut comp = crate::comp::CompState::new();
+            assert!(!comp.dump_exec_tree);
+            comp.ns_push_label(Some("f"), LABEL_BLOCK);
+            let mut parser = parser_for!(cx, comp, source);
+            parser.parse_function_body().unwrap();
+            assert!(comp.dump_exec_tree);
+        }
         let mut comp = crate::comp::CompState::new();
         comp.ns_push_label(Some("f"), LABEL_BLOCK);
-        let mut parser = parser_for!(cx, comp, b"#option dump\nbegin end");
+        let mut parser = parser_for!(cx, comp, b"#option nosuch begin end");
         let err = parser.parse_function_body().unwrap_err();
-        assert_eq!(err.sqlstate, types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
-        assert_eq!(err.message, "#option dump is not supported");
-        assert_eq!(err.internal_position, Some(9));
-        assert_eq!(err.cursor_position, None);
+        assert_eq!(err.sqlstate, types_error::ERRCODE_SYNTAX_ERROR);
+        assert_eq!(err.message, "syntax error at or near \"nosuch\"");
+        assert!(!comp.dump_exec_tree);
     }
 }

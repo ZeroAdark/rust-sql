@@ -41,9 +41,14 @@ pub const FILE_COPY_METHOD_CLONE: FileCopyMethod = 1;
 pub const DATA_DIR_SYNC_METHOD_FSYNC: DataDirSyncMethod = 0;
 pub const DATA_DIR_SYNC_METHOD_SYNCFS: DataDirSyncMethod = 1;
 
+// fd.h: POSIX_FALLOCATE exists only with HAVE_POSIX_FALLOCATE (Linux, not macOS).
+#[cfg(target_os = "linux")]
 pub const FILE_EXTEND_METHOD_POSIX_FALLOCATE: FileExtendMethod = 0;
+#[cfg(target_os = "linux")]
 pub const FILE_EXTEND_METHOD_WRITE_ZEROS: FileExtendMethod = 1;
-pub const DEFAULT_FILE_EXTEND_METHOD: FileExtendMethod = FILE_EXTEND_METHOD_POSIX_FALLOCATE;
+#[cfg(not(target_os = "linux"))]
+pub const FILE_EXTEND_METHOD_WRITE_ZEROS: FileExtendMethod = 0;
+pub const DEFAULT_FILE_EXTEND_METHOD: FileExtendMethod = 0;
 
 pub const IO_DIRECT_DATA: i32 = 0x01;
 pub const IO_DIRECT_WAL: i32 = 0x02;

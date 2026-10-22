@@ -1,0 +1,9 @@
+-- regress-full-date-001
+-- SELECT DATE_TRUNC('CENTURY', DATE '2004-08-10');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn1217(c25:'CENTURY', fn1174(c1082:1683)))
+  outs 1=w8:val
+mapped: Result

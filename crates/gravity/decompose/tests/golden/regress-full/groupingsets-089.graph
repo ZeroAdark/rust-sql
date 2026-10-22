@@ -1,0 +1,98 @@
+-- regress-full-groupingsets-089
+-- select distinct a, b, c from (values (1, 2, 3), (4, null, 6), (7, 8, 9)) as t (a, b, c) group by rollup(a, b), rollup(a, c) order by a, b, c;
+graph pipelines=11 breakers=10 init_plans=0 root=p10
+p0 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@4
+  source const
+  project (1=c23:null, 2=c23:null, 3=c23:null)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=c16:null)
+  srf tlist [5:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:1)]
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=fn1067(c23:1, c23:1))
+  append arm 0/2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=case(when op96(outer.5, c23:1) then c23:null) else outer.1, 7=case(when op96(outer.5, c23:0) then outer.3, when op96(outer.5, c23:2) then outer.3, when op96(outer.5, c23:3) then outer.3) else c23:null, 8=case(when op96(outer.5, c23:0) then outer.2, when op96(outer.5, c23:4) then outer.2, when op96(outer.5, c23:5) then outer.2) else c23:null)
+  outs 1=w4:val 2=w4:val 3=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w1:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w1:val 5=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w1:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val
+p1 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n2@5
+  source values rti=3 rows=3
+    row (c23:1, c23:2, c23:3)
+    row (c23:4, c23:null, c23:6)
+    row (c23:7, c23:8, c23:9)
+  project (1=v3.1, 2=v3.2, 3=v3.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=c16:1)
+  srf tlist [5:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, c23:1)]
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=fn1067(c23:0, c23:1))
+  append arm 1/2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=case(when op96(outer.5, c23:1) then c23:null) else outer.1, 7=case(when op96(outer.5, c23:0) then outer.3, when op96(outer.5, c23:2) then outer.3, when op96(outer.5, c23:3) then outer.3) else c23:null, 8=case(when op96(outer.5, c23:0) then outer.2, when op96(outer.5, c23:4) then outer.2, when op96(outer.5, c23:5) then outer.2) else c23:null)
+  outs 1=w4:val 2=w4:val 3=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w1:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w1:val 5=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val 4=w1:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val
+p2 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashAgg)
+  desc consumes=slot0@p1 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0
+  source breaker slot=0
+p3 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 HashAgg)
+  desc consumes=slot0@p1 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0
+  source breaker slot=0
+p4 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 HashAgg)
+  desc consumes=slot0@p1 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0
+  source breaker slot=0
+p5 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=4 HashAgg)
+  desc consumes=slot0@p1 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0
+  source breaker slot=0
+p6 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=5 HashAgg)
+  desc consumes=slot0@p1 consumes=slot1@p2 consumes=slot2@p3 consumes=slot3@p4 consumes=slot4@p5 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0
+  source breaker slot=0
+p7 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=6 HashAgg)
+  desc consumes=slot0@p1 consumes=slot1@p2 consumes=slot2@p3 consumes=slot3@p4 consumes=slot4@p5 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0
+  source breaker slot=0
+p8 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=7 HashAgg)
+  desc consumes=slot0@p1 consumes=slot1@p2 consumes=slot2@p3 consumes=slot3@p4 consumes=slot4@p5 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0
+  source breaker slot=0
+p9 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=8 Distinct)
+  desc consumes=slot0@p1 consumes=slot1@p2 consumes=slot2@p3 consumes=slot3@p4 consumes=slot4@p5 consumes=slot5@p6 consumes=slot6@p7 consumes=slot7@p8 owner=key/0 words=bits@3/5
+  nodes n2@0 n1@1 n0@2^
+  source breaker slot=0
+  project (1=outer.6, 2=outer.8, 3=outer.7)
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val
+p10 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot8@p9
+  nodes n0@0
+  source breaker slot=8
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=w4:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32,I32,I32,I32]->[Count@32] 40B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32,I32,I32,I32]->[Count@32] 40B
+breaker slot=1 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32,I32,I32,I32]->[Count@32] 40B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32,I32,I32,I32]->[Count@32] 40B
+breaker slot=3 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[I32,I32,I32,I32]->[Count@32] 40B
+breaker slot=4 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p5 layout=[I32,I32,I32,I32]->[Count@32] 40B
+breaker slot=5 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p6 layout=[I32,I32,I32,I32]->[Count@32] 40B
+breaker slot=6 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p7 layout=[I32,I32,I32,I32]->[Count@32] 40B
+breaker slot=7 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p8 layout=[I32,I32,I32,I32]->[Count@32] 40B
+breaker slot=8 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p9 layout=[I32,I32,I32]->[Count@24] 32B order=1+,2+,3+
+group slot=0 producer=p1 node=2 form=Hashed hints=[] layout=[I32,I32,I32,I32]->[Count@32] 40B
+  key 0 word=0 resno=5 kind=I32 attno=0 type=23 expr=outer.5
+  key 1 word=1 resno=6 kind=I32 attno=0 type=23 expr=case(when op96(outer.5, c23:1) then c23:null) else outer.1
+  key 2 word=2 resno=7 kind=I32 attno=0 type=23 expr=case(when op96(outer.5, c23:0) then outer.3, when op96(outer.5, c23:2) then outer.3, when op96(outer.5, c23:3) then outer.3) else c23:null
+  key 3 word=3 resno=8 kind=I32 attno=0 type=23 expr=case(when op96(outer.5, c23:0) then outer.2, when op96(outer.5, c23:4) then outer.2, when op96(outer.5, c23:5) then outer.2) else c23:null
+group slot=8 producer=p9 node=0 form=Unique hints=[] layout=[I32,I32,I32]->[Count@24] 32B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  key 1 word=1 resno=2 kind=I32 attno=0 type=23 expr=outer.2
+  key 2 word=2 resno=3 kind=I32 attno=0 type=23 expr=outer.3
+mapped: ValuesScan Agg Unique

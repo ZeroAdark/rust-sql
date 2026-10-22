@@ -1,0 +1,10 @@
+-- regress-full-sequence-002
+-- INSERT INTO serialTest1 VALUES ('bar');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c25:'bar', 2=fn480(fn1574(c2205:43321)))
+  write INSERT rel=43322 rti=1 natts=2 indexes=()
+  outs 1=vl:stmt/imm 2=w4:val
+mapped: Result ModifyTable

@@ -1,0 +1,1 @@
+backend/access/pgrcolumnar/pgrc_front/src/compact.rs	TRIGGER	pgrc	key:the GUC store mutation count	leader	pgrc front runs on the leader: (GUC store mutation, value) of pgrust.pgrc_l0_parts_trigger, read again only when this thread's GUC store mutation count moves (maint::per_guc_change); read by l0_trigger in bulk_published (tableam table_finish_bulk_insert)

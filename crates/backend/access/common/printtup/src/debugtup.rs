@@ -18,6 +18,11 @@ use ::types_tuple::TupleDescData;
 /// allocations and is reset after each row (printtup's send_ctx convention).
 pub struct DrDebugtup {
     out_ctx: Option<MemoryContext>,
+    /// pgrust (D3134, Gravity's simple seam in --single): `hold_header` makes the next startup render its column header
+    /// here instead of printing it; the first row, the shutdown or `release_header` prints it, `drop_header` discards it
+    /// (a statement re-run whose own startup prints it), as the server's wire holds a RowDescription.
+    hold: bool,
+    held: Option<Vec<u8>>,
 }
 
 impl Default for DrDebugtup {
@@ -32,25 +37,52 @@ pub fn debugtup_create_DR() -> DrDebugtup {
 
 impl DrDebugtup {
     pub fn new() -> Self {
-        DrDebugtup { out_ctx: None }
+        DrDebugtup { out_ctx: None, hold: false, held: None }
     }
 
     // debugStartup (printtup.c:444): show the return type of the tuples.
     pub fn startup(&mut self, _operation: i32, typeinfo: &TupleDescData<'_>) -> PgResult<()> {
-        let mut out = std::io::stdout().lock();
+        let mut buf = Vec::new();
         for i in 0..typeinfo.natts as usize {
-            printatt(&mut out, i as u32 + 1, typeinfo, i, None);
+            printatt(&mut buf, i as u32 + 1, typeinfo, i, None);
         }
-        let _ = writeln!(out, "\t----");
+        let _ = writeln!(buf, "\t----");
+        if core::mem::take(&mut self.hold) {
+            self.held = Some(buf);
+        } else {
+            let _ = std::io::stdout().lock().write_all(&buf);
+        }
         Ok(())
+    }
+
+    pub fn hold_header(&mut self) {
+        self.hold = true;
+    }
+
+    /// pgrust: a held header is still unprinted (no row and no shutdown since the startup).
+    pub fn header_held(&self) -> bool {
+        self.held.is_some()
+    }
+
+    pub fn release_header(&mut self) {
+        self.hold = false;
+        if let Some(h) = self.held.take() {
+            let _ = std::io::stdout().lock().write_all(&h);
+        }
+    }
+
+    pub fn drop_header(&mut self) {
+        self.hold = false;
+        self.held = None;
     }
 
     // debugtup (printtup.c:462): print one tuple for an interactive backend.
     pub fn receive_slot(&mut self, slot: &mut SlotData<'_>) -> PgResult<bool> {
+        self.release_header();
         exectuples::slot_getallattrs(slot);
 
         if self.out_ctx.is_none() {
-            self.out_ctx = Some(MemoryContext::new_bump("DebugtupOutput"));
+            self.out_ctx = Some(MemoryContext::new_wholesale("DebugtupOutput"));
         }
         let out_ctx = self.out_ctx.as_mut().expect("just set");
 
@@ -90,6 +122,7 @@ impl DrDebugtup {
     }
 
     pub fn shutdown(&mut self) {
+        self.release_header();
         self.out_ctx = None;
     }
 }

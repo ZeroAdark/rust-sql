@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/adt/tsquery_rewrite.c: 1 stack-depth check sites
+209	dofindsubquery	crates/backend/utils/adt/tsquery_rewrite/src/lib.rs	dofindsubquery	yes	

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::sync::RwLock;
 
 // Session-settable vars (PGC_USERSET/SUSET/BACKEND + per-session INTERNAL
@@ -34,32 +34,58 @@ crate::session_guc_cluster!(BackingSessionGucs, BACKING_SESSION_GUCS:
     (log_executor_stats_cell, bool, log_executor_stats, set_log_executor_stats, false),
     (log_statement_stats_cell, bool, log_statement_stats, set_log_statement_stats, false),
     (row_security_cell, bool, row_security, set_row_security, true),
-    // pgrust.lane_executor (pgrust-only): TOMBSTONE (P7-2 D-8; boot default
-    // OFF since S-1 2026-08-19). The lane-v2 executor is deleted; the cell
-    // stays so the registered GUC keeps its slot (SET accepted, warn-once,
-    // no effect — no consumer reads it). PGRUST_LANE_V2 no longer seeds it
-    // (accepted and ignored for one release).
-    (pgrust_lane_executor_cell, bool, pgrust_lane_executor, set_pgrust_lane_executor, false),
-    // pgrust.condition_cache (pgrust-only): the pgrcolumnar per-granule
-    // qual-verdict cache (ClickHouse QueryConditionCache counterpart).
-    // Default OFF — the benchmark arms enable it explicitly and record it in
-    // manifests. The PREWHERE arm reads the cell at qual-arm time.
-    (pgrust_condition_cache_cell, bool, pgrust_condition_cache, set_pgrust_condition_cache, false),
-    // pgrust.explain_runtime_verdicts (pgrust-only): EXPLAIN ANALYZE display
-    // gate for the runtime admission walk's refusal verdicts. Default OFF —
-    // C prints nothing there and default EXPLAIN output stays C-parity
-    // (covdiff-fuzzer E1-A).
-    (pgrust_explain_runtime_verdicts_cell, bool, pgrust_explain_runtime_verdicts, set_pgrust_explain_runtime_verdicts, false),
+    (pgrust_condition_cache_cell, i32, pgrust_condition_cache, set_pgrust_condition_cache, crate::ConditionCacheMode::Full as i32),
+    (pgrust_zone_store_cell, bool, pgrust_zone_store, set_pgrust_zone_store, true),
+    (pgrust_dict_filter_cache_cell, bool, pgrust_dict_filter_cache, set_pgrust_dict_filter_cache, true),
+    // pgrust.condition_cache_unlogged (pgrust-only): an UNLOGGED pgrcolumnar
+    // relation enters the condition cache too (a temporary one never).
+    // Default ON; off keeps unlogged relations out of it.
+    (pgrust_condition_cache_unlogged_cell, bool, pgrust_condition_cache_unlogged, set_pgrust_condition_cache_unlogged, true),
+    // pgrust.pgrc_merge_scan (pgrust-only): the planner's sorted path over a
+    // pgrcolumnar sorted_by table, whose scan merges its parts (D4469 road
+    // 2). Default ON; off = every ordered read sorts. A plan made either way
+    // stays right after a change.
+    (pgrust_pgrc_merge_scan_cell, bool, pgrust_pgrc_merge_scan, set_pgrust_pgrc_merge_scan, true),
+    // pgrust.pgrc_merge_skip_hash_group (pgrust-only, D4568 part 2): no
+    // sorted path over a pgrcolumnar sorted_by table whose order would only
+    // presort (an Incremental Sort) a GROUP BY a hash aggregate serves.
+    // Default ON (a PG-visible plan change: such a GROUP BY plans over the
+    // plain path); off = every candidate sorted path is kept.
+    (pgrust_pgrc_merge_skip_hash_group_cell, bool, pgrust_pgrc_merge_skip_hash_group, set_pgrust_pgrc_merge_skip_hash_group, true),
+    // pgrust.jsonb_path_stats (pgrust-only): ANALYZE's per-path jsonb
+    // statistics slot and the planner's estimates from it (crate
+    // adt_jsonb_pathstats). Default ON; off = PostgreSQL 18's statistics and
+    // estimates exactly.
+    (pgrust_jsonb_path_stats_cell, bool, pgrust_jsonb_path_stats, set_pgrust_jsonb_path_stats, true),
+    // pgrust.gravity_admit (pgrust-only): `graph` (default) admits from the
+    // plan's graph; `shape` turns graph admission off.
+    (pgrust_gravity_admit_cell, i32, pgrust_gravity_admit, set_pgrust_gravity_admit, crate::consts::GRAVITY_ADMIT_GRAPH),
+    (pgrust_gravity_lowerer_cell, i32, pgrust_gravity_lowerer, set_pgrust_gravity_lowerer, crate::consts::GRAVITY_LOWERER_AUTO),
+    (pgrust_point_path_cell, i32, pgrust_point_path, set_pgrust_point_path, crate::consts::POINT_PATH_ON),
+    // pgrust.point_noplan: on by default (D4550)
+    (pgrust_point_noplan_cell, i32, pgrust_point_noplan, set_pgrust_point_noplan, crate::consts::POINT_NOPLAN_ON),
+    // pgrust.point_write (pgrust-only): pglpoint S3, a point DELETE by a unique key driven through the Gravity write and
+    // index hosts with no program (gravity exec runner/point/delete.rs, update.rs). On by default (D4572).
+    (pgrust_point_write_cell, bool, pgrust_point_write, set_pgrust_point_write, true),
+    // pgrust.point_keep (pgrust-only): pglpoint S3 option (a), a point statement's per-statement pieces kept in S5's memo
+    // entry across statements (gravity exec runner/point/keep.rs). On by default (D4572).
+    (pgrust_point_keep_cell, bool, pgrust_point_keep, set_pgrust_point_keep, true),
+    // pgrust.point_portal_keep (pgrust-only): an S1x portal's bound probe kept across the portals of one
+    // generic plan (gravity exec runner/point/pkeep.rs). Default on.
+    (pgrust_point_portal_keep_cell, bool, pgrust_point_portal_keep, set_pgrust_point_portal_keep, true),
+    // pgrust.gravity_unnest (pgrust-only): the planner's unnesting alternative; the plan cache
+    // rebuilds a generic plan built under another value.
+    (pgrust_gravity_unnest_cell, i32, pgrust_gravity_unnest, set_pgrust_gravity_unnest, crate::consts::GRAVITY_UNNEST_CONTAINED),
+    // pgrust.gravity_cte_pushdown (pgrust-only, D3342): the OR of a multiply-read CTE's readers' filters pushed into its body.
+    (pgrust_gravity_cte_pushdown_cell, i32, pgrust_gravity_cte_pushdown, set_pgrust_gravity_cte_pushdown, crate::consts::GRAVITY_CTE_PUSHDOWN_OFF),
+    // pgrust.gravity_exact_size (pgrust-only, developer): which structures Gravity sizes from their count.
+    (pgrust_gravity_exact_size_cell, i32, pgrust_gravity_exact_size, set_pgrust_gravity_exact_size, crate::consts::GRAVITY_EXACT_SIZE_NONE),
+    // pgrust.gravity_jit_perfmap (pgrust-only, superuser): the JIT perf map's mode.
+    (pgrust_gravity_jit_perfmap_cell, i32, pgrust_gravity_jit_perfmap, set_pgrust_gravity_jit_perfmap, crate::consts::GRAVITY_JIT_PERFMAP_OFF),
     // pgrust.condition_cache_size: the cache's byte budget in KB (work_mem
-    // unit idiom); default 102400 KB = 100 MB, ClickHouse's
-    // query_condition_cache_size default. LRU-evicted at that bound.
-    (pgrust_condition_cache_size_cell, i32, pgrust_condition_cache_size, set_pgrust_condition_cache_size, 102400),
-    // pgrust.parallel_engine (pgrust-only, M5-0): the product parallel-engine
-    // selector (consts::PARALLEL_ENGINE_*). Default RUNTIME since the M5
-    // boarding flip (§4.4 criteria met; `legacy` restores pre-M5 planning
-    // byte-for-byte); the per-arm bench pool GUCs layer BENEATH the switch
-    // and keep working verbatim either way.
-    (pgrust_parallel_engine_cell, i32, pgrust_parallel_engine, set_pgrust_parallel_engine, 1),
+    // unit idiom); default -1 = derived from the machine
+    // (crate::pgrust_condition_cache_bytes). LRU-evicted at that bound.
+    (pgrust_condition_cache_size_cell, i32, pgrust_condition_cache_size, set_pgrust_condition_cache_size, -1),
     // pgrust.version_string_style (pgrust-only, dl-verstring ruling
     // 2026-08-06): which identity leads in version()'s banner. Default
     // postgres_first — clients that take the FIRST number in version()
@@ -68,38 +94,8 @@ crate::session_guc_cluster!(BackingSessionGucs, BACKING_SESSION_GUCS:
     // PostgreSQL compatibility version. pgrust_first restores the legacy
     // pgrust-led form byte-for-byte. `server_version` is unaffected.
     (pgrust_version_string_style_cell, i32, pgrust_version_string_style, set_pgrust_version_string_style, crate::consts::VERSION_STRING_POSTGRES_FIRST),
-    // pgrust.runtime_dop (pgrust-only, M5-0): the product DOP knob, consulted
-    // ONLY under engine=runtime (the M5-1 router). 0 = auto (available cores).
-    (pgrust_runtime_dop_cell, i32, pgrust_runtime_dop, set_pgrust_runtime_dop, 0),
-    // pgrust.sqe_heap (pgrust-only): heap-on-sqe v1 (heap-face.md). OFF by
-    // default — the v1 safety switch: when off, heap statements never enter
-    // the sqe slot (one TLS read per SELECT). When on, recognized heap
-    // analytic shapes serve through the sqe heap face (R1: serve or typed
-    // ERROR); unrecognized shapes keep routing to the incumbent engines
-    // until their rung lands.
-    (pgrust_sqe_heap_cell, bool, pgrust_sqe_heap, set_pgrust_sqe_heap, false),
-    // pgrust.sqe_threads (pgrust-only): the sqe server engine's worker width
-    // (SqeConfig.threads at the seam's engine build). 0 = auto (available
-    // cores); N caps at N. Default 0 = auto per Michael's ruling (auto,
-    // 2026-08-18; a width budget governor is the eventual fairness
-    // mechanism — see seam.rs::engine_threads). PGRUST_SQE_THREADS seeds
-    // the startup default (PGC_S_ENV_VAR).
-    (pgrust_sqe_threads_cell, i32, pgrust_sqe_threads, set_pgrust_sqe_threads, 0),
-    // pgrust.runtime_*_pool / lane_parallel_pool / gather_fair_stride
-    // (pgrust-only, env-to-guc train): the per-arm DEV/BENCH force-override
-    // layer BENEATH pgrust.parallel_engine. Registered (env-to-guc) so they
-    // are discoverable/tunable in pg_settings; each defaults 0 = auto (inherit
-    // pgrust.runtime_dop under engine=runtime). TOMBSTONED P7-2 D-8 with the
-    // per-arm readers (runtime_pool.rs / lane_pool.rs — deleted): the cells
-    // stay so the registered GUCs keep their slots (SET accepted, warn-once,
-    // no effect).
-    (pgrust_runtime_scan_pool_cell, i32, pgrust_runtime_scan_pool, set_pgrust_runtime_scan_pool, 0),
-    (pgrust_runtime_agg_pool_cell, i32, pgrust_runtime_agg_pool, set_pgrust_runtime_agg_pool, 0),
-    (pgrust_runtime_distinct_pool_cell, i32, pgrust_runtime_distinct_pool, set_pgrust_runtime_distinct_pool, 0),
-    (pgrust_runtime_hashjoin_pool_cell, i32, pgrust_runtime_hashjoin_pool, set_pgrust_runtime_hashjoin_pool, 0),
-    (pgrust_runtime_sort_pool_cell, i32, pgrust_runtime_sort_pool, set_pgrust_runtime_sort_pool, 0),
-    (pgrust_runtime_bitmap_pool_cell, i32, pgrust_runtime_bitmap_pool, set_pgrust_runtime_bitmap_pool, 0),
-    (pgrust_lane_parallel_pool_cell, i32, pgrust_lane_parallel_pool, set_pgrust_lane_parallel_pool, 0),
+    // pgrust.gather_fair_stride (pgrust-only, env-to-guc train): the Gather
+    // read-fairness stride (gather_fair.rs). 0 = C parity.
     (pgrust_gather_fair_stride_cell, i32, pgrust_gather_fair_stride, set_pgrust_gather_fair_stride, 0),
     // pgrust.memory_watchdog_test_hog (pgrust-only, regression, developer):
     // per-query deliberate leak in MB into a named session-lifetime context
@@ -200,6 +196,13 @@ bool_var!(B_pgrust_runtime, pgrust_runtime, set_pgrust_runtime, true);
 // unless the operator opts in. Seeded by the PGRUST_MEM_AUTOTUNE boot env var.
 bool_var!(B_pgrust_mem_autotune, pgrust_mem_autotune, set_pgrust_mem_autotune, false);
 
+// The resizable buffer pool: max and THP size the startup reservation
+// (PGC_POSTMASTER); relocate and drain_rate are read by each resize call.
+int_var!(I_pgrust_buffer_pool_max, pgrust_buffer_pool_max, set_pgrust_buffer_pool_max, 0);
+bool_var!(B_pgrust_buffer_pool_thp, pgrust_buffer_pool_thp, set_pgrust_buffer_pool_thp, false);
+bool_var!(B_pgrust_buffer_pool_relocate, pgrust_buffer_pool_relocate, set_pgrust_buffer_pool_relocate, true);
+int_var!(I_pgrust_buffer_pool_drain_rate, pgrust_buffer_pool_drain_rate, set_pgrust_buffer_pool_drain_rate, 50000);
+
 // pgrust.runtime_vacuum_pool (pgrust-only, regression flip): parallel VACUUM's
 // driver rides the morsel-pool workers (M4.1 ⊕ Q2, PGPROC-leasing bound gate
 // at QoS Utility) instead of a launched bgworker gang. DEFAULT ON since the
@@ -228,6 +231,23 @@ bool_var!(
     pgrust_memory_watchdog,
     set_pgrust_memory_watchdog,
     true
+);
+// C5 (revoke): the memory ladder may ask running statements to spill (mcx::revoke). Opt-in, off by default; the
+// watchdog thread publishes it each tick (memruntime), so PGC_SIGHUP edits apply without a restart.
+bool_var!(
+    B_pgrust_memory_revoke,
+    pgrust_memory_revoke,
+    set_pgrust_memory_revoke,
+    false
+);
+// LEDGER2 step 4: the cancel pick (R6) ranks a statement by the bytes its owners hold (its statement's and portal's owner
+// subtrees) when that is more than its measured or charged bytes. Off by default; the watchdog thread publishes it each
+// tick (memruntime), so PGC_SIGHUP edits apply without a restart.
+bool_var!(
+    B_pgrust_memory_ledger_v2,
+    pgrust_memory_ledger_v2,
+    set_pgrust_memory_ledger_v2,
+    false
 );
 // On breach, also signal every live backend to dump its memory-context tree
 // to the log (the pg_log_backend_memory_contexts machinery, fanned out).
@@ -262,6 +282,60 @@ int_var!(
     pgrust_memory_watchdog_limit,
     set_pgrust_memory_watchdog_limit,
     0
+);
+// Percent of the memory limit (watchdog limit sources) at which a backend's
+// context block allocation fails with 53200 instead of growing the process
+// toward the kernel OOM killer; 0 = off (pgrust main d0f2ed28ab4).
+int_var!(
+    I_pgrust_memory_governor_threshold,
+    pgrust_memory_governor_threshold,
+    set_pgrust_memory_governor_threshold,
+    0
+);
+// kB; 0 = off. One statement's memory-context blocks (all its threads, Gravity
+// workers included) past this fail the statement with 53200.
+crate::session_guc_int!(
+    PGRUST_STATEMENT_MEM_LIMIT,
+    pgrust_statement_mem_limit,
+    set_pgrust_statement_mem_limit,
+    0
+);
+// Percent of the memory limit; 0 = off. Past it the watchdog cancels the
+// running statement that holds the most context memory.
+int_var!(
+    I_pgrust_memory_cancel_threshold,
+    pgrust_memory_cancel_threshold,
+    set_pgrust_memory_cancel_threshold,
+    0
+);
+// pgrust.memory_cancel_rule: crate::consts::MEMORY_CANCEL_RULE_*; memruntime's sampler reads it every period.
+int_var!(
+    I_pgrust_memory_cancel_rule,
+    pgrust_memory_cancel_rule,
+    set_pgrust_memory_cancel_rule,
+    crate::consts::MEMORY_CANCEL_RULE_THRESHOLD
+);
+// pgrust.memory_ladder: crate::consts::MEMORY_LADDER_*; memruntime's sampler reads it every period.
+int_var!(
+    I_pgrust_memory_ladder,
+    pgrust_memory_ladder,
+    set_pgrust_memory_ladder,
+    crate::consts::MEMORY_LADDER_OFF
+);
+// kB; 0 = off. Read once per ReadyForQuery (pgrust main 5100cad95d0).
+int_var!(
+    I_pgrust_memory_release_threshold,
+    pgrust_memory_release_threshold,
+    set_pgrust_memory_release_threshold,
+    65536
+);
+// ms; 0 = off. An idle session hands freed allocator memory back this long
+// after its last command (lane memfree).
+int_var!(
+    I_pgrust_memory_release_idle,
+    pgrust_memory_release_idle,
+    set_pgrust_memory_release_idle,
+    1000
 );
 // Connection-scaling admission control (docs/design/connection-scaling.md
 // D1 + D6). All process-global cells per this file's header law:
@@ -386,6 +460,18 @@ bool_var!(
     set_shared_catalog_cache,
     true
 );
+// pgrust-only (lane membroker, memory step 5): Gravity's one memory budget. Process-global cells, read off backend
+// threads (the memory watchdog's sampler; Gravity's budget at its arming). target / floors / reserve in MB (0 = derived),
+// the broker an enum index (consts MEMORY_BROKER_*), the interval in seconds.
+int_var!(I_pgrust_memory_target, pgrust_memory_target, set_pgrust_memory_target, 0);
+int_var!(I_pgrust_memory_broker, pgrust_memory_broker, set_pgrust_memory_broker, crate::consts::MEMORY_BROKER_ADVISE);
+string_var!(CELL_pgrust_memory_broker_actuators, pgrust_memory_broker_actuators, set_pgrust_memory_broker_actuators, Some("all"));
+int_var!(I_pgrust_memory_broker_interval, pgrust_memory_broker_interval, set_pgrust_memory_broker_interval, 30);
+int_var!(I_pgrust_memory_page_cache_floor_mb, pgrust_memory_page_cache_floor_mb, set_pgrust_memory_page_cache_floor_mb, 0);
+int_var!(I_pgrust_memory_reserve_mb, pgrust_memory_reserve_mb, set_pgrust_memory_reserve_mb, 0);
+// the pgrc part cache's server-wide budget in MB (-1 = derived, `cost::part_cache_cap`): read at every Gravity statement
+// start, one value for every session (a session SET is refused, PGC_SIGHUP)
+int_var!(I_pgrust_pgrc_part_cache_mb, pgrust_pgrc_part_cache_mb, set_pgrust_pgrc_part_cache_mb, -1);
 // pgrust-only (docs/design/test-views.md D1): the ephemeral-database
 // janitor. Both are process-global cells per this file's header law —
 // prefix is PGC_POSTMASTER, grace PGC_SIGHUP (the janitor thread runs the
@@ -440,6 +526,12 @@ bool_var!(
     B_pgrust_ephemeral_db_prewarm,
     pgrust_ephemeral_db_prewarm,
     set_pgrust_ephemeral_db_prewarm,
+    true
+);
+bool_var!(
+    B_pgrust_gravity_prewarm,
+    pgrust_gravity_prewarm,
+    set_pgrust_gravity_prewarm,
     true
 );
 bool_var!(
@@ -564,7 +656,7 @@ string_var!(
     CELL_Unix_socket_directories,
     Unix_socket_directories,
     set_Unix_socket_directories,
-    Some("/tmp")
+    Some(crate::consts::DEFAULT_PGSOCKET_DIR)
 );
 
 int_var!(I_huge_pages, huge_pages, set_huge_pages, 2); // HUGE_PAGES_TRY
@@ -582,6 +674,21 @@ int_var!(
     set_huge_pages_status,
     3
 ); // HUGE_PAGES_UNKNOWN
+
+// pgrust.allocator (pgrust-only, PGC_INTERNAL preset): the global allocator serving the process, named once by the
+// binary at start (`set_pgrust_allocator_name`); a write has nothing to store, so SHOW never reports the boot value.
+// The index into ALLOCATOR_NAMES (0 until the binary names one).
+static PGRUST_ALLOCATOR: AtomicU8 = AtomicU8::new(0);
+const ALLOCATOR_NAMES: [&str; 3] = ["mimalloc", "hearth", "system"];
+pub fn set_pgrust_allocator_name(name: &'static str) {
+    if let Some(i) = ALLOCATOR_NAMES.iter().position(|n| *n == name) {
+        PGRUST_ALLOCATOR.store(i as u8, Ordering::Relaxed);
+    }
+}
+pub fn pgrust_allocator() -> Option<String> {
+    Some(ALLOCATOR_NAMES[PGRUST_ALLOCATOR.load(Ordering::Relaxed) as usize].to_owned())
+}
+pub fn set_pgrust_allocator(_: Option<String>) {}
 
  // COMPUTE_QUERY_ID_AUTO
 
@@ -611,6 +718,11 @@ session_string_var!(CELL_role_string,
     role_string,
     set_role_string,
     Some("none")
+);
+session_string_var!(CELL_pgrust_gravity_dump_dir,
+    pgrust_gravity_dump_dir,
+    set_pgrust_gravity_dump_dir,
+    Some("")
 );
 session_string_var!(CELL_session_authorization_string,
     session_authorization_string,
@@ -859,3 +971,23 @@ string_var!(
 pub extern "C" fn pgrust_guc_tls_probe() -> i32 {
     log_statement() + Debug_print_plan() as i32 + log_duration() as i32
 }
+
+// pgrust-only: the instance aux process. Process-global cells: its listener
+// threads read them without a GUC store of their own.
+bool_var!(B_pgrust_instance_aux, pgrust_instance_aux, set_pgrust_instance_aux, false);
+int_var!(I_pgrust_instance_aux_ready_commit_age, pgrust_instance_aux_ready_commit_age, set_pgrust_instance_aux_ready_commit_age, 5000);
+int_var!(I_pgrust_instance_aux_ready_lag, pgrust_instance_aux_ready_lag, set_pgrust_instance_aux_ready_lag, 10000);
+int_var!(I_pgrust_instance_aux_startup_stall, pgrust_instance_aux_startup_stall, set_pgrust_instance_aux_startup_stall, 60000);
+int_var!(I_pgrust_instance_aux_liveness_interval, pgrust_instance_aux_liveness_interval, set_pgrust_instance_aux_liveness_interval, 1000);
+int_var!(I_pgrust_instance_aux_wedge_timeout, pgrust_instance_aux_wedge_timeout, set_pgrust_instance_aux_wedge_timeout, 10000);
+string_var!(CELL_pgrust_instance_aux_listen, pgrust_instance_aux_listen, set_pgrust_instance_aux_listen, Some(""));
+string_var!(CELL_pgrust_instance_aux_socket, pgrust_instance_aux_socket, set_pgrust_instance_aux_socket, Some(""));
+string_var!(CELL_pgrust_instance_aux_cert_file, pgrust_instance_aux_cert_file, set_pgrust_instance_aux_cert_file, Some(""));
+string_var!(CELL_pgrust_instance_aux_key_file, pgrust_instance_aux_key_file, set_pgrust_instance_aux_key_file, Some(""));
+string_var!(CELL_pgrust_instance_aux_ca_file, pgrust_instance_aux_ca_file, set_pgrust_instance_aux_ca_file, Some(""));
+string_var!(CELL_pgrust_instance_aux_admin_identities, pgrust_instance_aux_admin_identities, set_pgrust_instance_aux_admin_identities, Some(""));
+string_var!(CELL_pgrust_instance_aux_cluster, pgrust_instance_aux_cluster, set_pgrust_instance_aux_cluster, Some(""));
+string_var!(CELL_pgrust_instance_aux_instance, pgrust_instance_aux_instance, set_pgrust_instance_aux_instance, Some(""));
+string_var!(CELL_pgrust_instance_aux_incarnation, pgrust_instance_aux_incarnation, set_pgrust_instance_aux_incarnation, Some(""));
+string_var!(CELL_pgrust_instance_aux_managed_conf, pgrust_instance_aux_managed_conf, set_pgrust_instance_aux_managed_conf, Some("pgrust.managed.conf"));
+string_var!(CELL_pgrust_instance_aux_state_file, pgrust_instance_aux_state_file, set_pgrust_instance_aux_state_file, Some("pgrust_instance_aux.state"));

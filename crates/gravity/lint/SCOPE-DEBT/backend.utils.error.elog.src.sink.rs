@@ -1,0 +1,5 @@
+backend/utils/error/elog/src/sink.rs	BACKEND_LOG_CONTEXT	isojoin	owner, reset, carry: a carry gap, D4243 (a claim's non-ERROR reports on a pool thread)
+backend/utils/error/elog/src/sink.rs	EMIT_LOG_HOOK	isojoin	owner, reset, carry: a carry gap, D4243 (a claim's non-ERROR reports on a pool thread)
+backend/utils/error/elog/src/sink.rs	FRONTEND_REDIRECT	isojoin	owner, reset, carry: a carry gap, D4243 (a claim's non-ERROR reports on a pool thread)
+backend/utils/error/elog/src/sink.rs	DEBUG_QUERY_STACK	isojoin	owner, reset, carry: a carry gap, D4243 (a claim's non-ERROR reports on a pool thread)
+backend/utils/error/elog/src/sink.rs	RETIRED_QUERY	isojoin	owner, reset, carry: a carry gap, D4243 (a claim's non-ERROR reports on a pool thread)

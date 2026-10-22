@@ -96,7 +96,7 @@ fn decode_key(image: &[u8]) -> PgResult<GhKey> {
     if flag & ALLISTRUE != 0 {
         Ok(GhKey::AllTrue)
     } else {
-        Ok(GhKey::Sign(image[GTHDRSIZE..varsize].to_vec()))
+        Ok(GhKey::Sign(::mcx::std_vec_from_slice("contrib", &image[GTHDRSIZE..varsize])?))
     }
 }
 
@@ -234,7 +234,7 @@ pub fn fc_ghstore_compress(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         let mcx = unsafe { fcinfo.result_mcx_detached() };
         let img = detoasted_image(mcx, entry.key)?;
         let val = HstoreView::from_vardata(&img[4..]);
-        let mut sign = vec![0u8; siglen];
+        let mut sign = ::mcx::std_vec_from_elem("contrib", 0u8, siglen)?;
         for i in 0..val.count() {
             hash(&mut sign, crc32_sz(val.key(i)), siglen);
             if !val.val_isnull(i) {
@@ -281,7 +281,7 @@ pub fn fc_ghstore_union(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
     // SAFETY: gist fmgr protocol.
     let entryvec = unsafe { &*(fcinfo.arg(0).as_usize() as *const GistEntryVector) };
     let siglen = get_siglen(&f);
-    let mut base = vec![0u8; siglen];
+    let mut base = ::mcx::std_vec_from_elem("contrib", 0u8, siglen)?;
     let mut allistrue = false;
     for e in &entryvec.vector[..entryvec.n as usize] {
         match decode_key(key_image(e.key))? {
@@ -375,14 +375,14 @@ pub fn fc_ghstore_picksplit(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
     let datum_r_allistrue = keys[seed_2].as_ref().unwrap().is_alltrue();
     let mut union_l: Vec<u8> = match keys[seed_1].as_ref().unwrap() {
         GhKey::Sign(s) => s.clone(),
-        GhKey::AllTrue => vec![0u8; siglen],
+        GhKey::AllTrue => ::mcx::std_vec_from_elem("contrib", 0u8, siglen)?,
     };
     let mut union_r: Vec<u8> = match keys[seed_2].as_ref().unwrap() {
         GhKey::Sign(s) => s.clone(),
-        GhKey::AllTrue => vec![0u8; siglen],
+        GhKey::AllTrue => ::mcx::std_vec_from_elem("contrib", 0u8, siglen)?,
     };
 
-    let mut costvector: Vec<(usize, i32)> = Vec::with_capacity(maxoff);
+    let mut costvector: Vec<(usize, i32)> = ::mcx::std_vec_with_capacity("contrib", maxoff)?;
     for j in 1..=maxoff {
         let kj = keys[j].as_ref().unwrap();
         let size_alpha = hemdist_working(datum_l_allistrue, &union_l, kj, siglen);
@@ -463,10 +463,14 @@ pub fn fc_ghstore_consistent(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
 
     // SAFETY: the armed result mcx outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let query_image = detoasted_image(mcx, fcinfo.arg(1))?;
+    // hstore_gist.c:608: the query datum is only read by a known strategy;
+    // an unsupported one (a cross-type operator added to the family) errors
+    // before the datum is interpreted as a pointer.
+    let query_image = || detoasted_image(mcx, fcinfo.arg(1));
 
     let res = match strategy {
         HSTORE_CONTAINS_STRATEGY | HSTORE_OLD_CONTAINS_STRATEGY => {
+            let query_image = query_image()?;
             let query = HstoreView::from_vardata(&query_image[4..]);
             (0..query.count()).all(|i| {
                 getbit(sign, hashval(crc32_sz(query.key(i)), siglen))
@@ -475,18 +479,18 @@ pub fn fc_ghstore_consistent(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
             })
         }
         HSTORE_EXISTS_STRATEGY => {
-            getbit(sign, hashval(crc32_sz(&query_image[4..]), siglen))
+            getbit(sign, hashval(crc32_sz(&query_image()?[4..]), siglen))
         }
         HSTORE_EXISTS_ALL_STRATEGY => {
             let scratch = mcx::MemoryContext::new("ghstore consistent text[]");
-            let keys = crate::deconstruct_text_array(scratch.mcx(), query_image)?;
+            let keys = crate::deconstruct_text_array(scratch.mcx(), query_image()?)?;
             keys.iter()
                 .flatten()
                 .all(|k| getbit(sign, hashval(crc32_sz(k), siglen)))
         }
         HSTORE_EXISTS_ANY_STRATEGY => {
             let scratch = mcx::MemoryContext::new("ghstore consistent text[]");
-            let keys = crate::deconstruct_text_array(scratch.mcx(), query_image)?;
+            let keys = crate::deconstruct_text_array(scratch.mcx(), query_image()?)?;
             keys.iter()
                 .flatten()
                 .any(|k| getbit(sign, hashval(crc32_sz(k), siglen)))

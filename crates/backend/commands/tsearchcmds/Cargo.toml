@@ -35,6 +35,7 @@ types_fmgr = { path = "../../../_support/types/fmgr" }
 fmgr_seams = { path = "../../utils/fmgr/fmgr_seams" }
 elog_seams = { path = "../../utils/error/elog_seams" }
 format_type = { path = "../../utils/adt/format_type" }
+adt_float = { path = "../../utils/adt/float" }
 varlena = { path = "../../utils/adt/varlena" }
 ts_locale = { path = "../../tsearch/ts_locale" }
 rel_vocab = { path = "../../../_support/types/rel_vocab" }

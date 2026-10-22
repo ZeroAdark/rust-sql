@@ -1,0 +1,34 @@
+-- regress-full-aggregates-017
+-- select (select max((select i.unique2 from tenk1 i where i.unique1 = o.unique1))) from tenk1 o;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=10000 end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@1^
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  subplan 1 nested Expr params=($exec1=outer.1) site=aggarg
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=16423 rti=2 am=heap index=19339
+    key att=1 op=96 value=$exec1
+    recheck (op96(v2.1, $exec1))
+    lanes Attr(2):byval8:w8:val
+  project (1=v2.2)
+  outs 1=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  subplan 2 nested Expr params=($exec0=agg2116(1=subplan1(outer.1)))
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0
+  source const
+  project (1=$exec0)
+  project (1=subplan2(agg2116(1=subplan1(outer.1))))
+  outs 1=w4:val
+breaker slot=0 kind=PlainAgg budget=Fixed(80) spill=None producer=p0 layout=[]->[MaxI64@0,Count@8]+valid 24B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[MaxI64@0,Count@8]+valid 24B
+  agg aggno=0 fn=2116 reg=MaxInt slot=0 count_slot=- final=Identity class=Max(Int) trans=Abi(MaxI64) mods=[] expr=agg2116(1=subplan1(outer.1))
+param $exec1 owner=subplan1 type=23 rep=w8:val
+param $exec0 owner=subplan2 type=23 rep=w4:val
+mapped: Result IndexScan IndexOnlyScan Agg SubPlan

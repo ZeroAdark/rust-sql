@@ -83,10 +83,28 @@ struct Reader<'a, 'mcx> {
     tok_start: usize,
 }
 
-const SPECIALS: &[u8] = b"(){}";
+const K_SPACE: u8 = 1;
+const K_SPECIAL: u8 = 2;
+const K_STOP: u8 = K_SPACE | K_SPECIAL;
+const K_ESCAPE: u8 = 4;
 
-fn is_space(c: u8) -> bool {
-    c == b' ' || c == b'\n' || c == b'\t'
+// pg_strtok's byte classes (read.c), one load per byte on the token scan.
+const BYTE_CLASS: [u8; 256] = {
+    let mut t = [0u8; 256];
+    t[b' ' as usize] = K_SPACE;
+    t[b'\n' as usize] = K_SPACE;
+    t[b'\t' as usize] = K_SPACE;
+    t[b'(' as usize] = K_SPECIAL;
+    t[b')' as usize] = K_SPECIAL;
+    t[b'{' as usize] = K_SPECIAL;
+    t[b'}' as usize] = K_SPECIAL;
+    t[b'\\' as usize] = K_ESCAPE;
+    t
+};
+
+#[inline(always)]
+fn byte_class(c: u8) -> u8 {
+    BYTE_CLASS[c as usize]
 }
 
 fn lossy(t: &[u8]) -> String {
@@ -183,30 +201,35 @@ fn c_atoui(tok: &[u8]) -> u32 {
 impl<'a, 'mcx> Reader<'a, 'mcx> {
     // pg_strtok (read.c): "<>" comes back as an empty token (NULL marker).
     fn next_token(&mut self) -> Option<&'a [u8]> {
-        while self.pos < self.buf.len() && is_space(self.buf[self.pos]) {
-            self.pos += 1;
+        let buf = self.buf;
+        let mut p = self.pos;
+        while p < buf.len() && byte_class(buf[p]) == K_SPACE {
+            p += 1;
         }
-        if self.pos >= self.buf.len() {
+        if p >= buf.len() {
+            self.pos = p;
             return None;
         }
-        let start = self.pos;
+        let start = p;
         self.tok_start = start;
-        if SPECIALS.contains(&self.buf[self.pos]) {
-            self.pos += 1;
-            return Some(&self.buf[start..self.pos]);
-        }
-        while self.pos < self.buf.len() {
-            let c = self.buf[self.pos];
-            if is_space(c) || SPECIALS.contains(&c) {
-                break;
+        if byte_class(buf[p]) == K_SPECIAL {
+            p += 1;
+        } else {
+            while p < buf.len() {
+                let k = byte_class(buf[p]);
+                if k != 0 {
+                    if k & K_STOP != 0 {
+                        break;
+                    }
+                    if p + 1 < buf.len() {
+                        p += 1;
+                    }
+                }
+                p += 1;
             }
-            if c == b'\\' && self.pos + 1 < self.buf.len() {
-                self.pos += 2;
-            } else {
-                self.pos += 1;
-            }
         }
-        let tok = &self.buf[start..self.pos];
+        self.pos = p;
+        let tok = &buf[start..p];
         if tok == b"<>" {
             return Some(b"");
         }

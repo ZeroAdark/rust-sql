@@ -269,11 +269,11 @@ fn fgets_line_splitting() {
 }
 
 #[test]
-fn xlog_temp_path_is_named_by_the_backend_pid() {
-    let prev = init_small::globals::MyProcPid();
-    init_small::globals::SetMyProcPid(4242);
-    assert_eq!(xlog_temp_path(), "pg_wal/xlogtemp.4242");
-    init_small::globals::SetMyProcPid(prev);
+fn xlog_temp_path_is_unique_per_call() {
+    let (a, b) = (xlog_temp_path(), xlog_temp_path());
+    assert!(a.starts_with("pg_wal/xlogtemp."), "{a}");
+    assert!(b.starts_with("pg_wal/xlogtemp."), "{b}");
+    assert_ne!(a, b, "two calls name two files");
 }
 
 #[test]

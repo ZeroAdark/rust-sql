@@ -1,0 +1,11 @@
+-- regress-full-bit-007
+-- INSERT INTO BIT_SHIFT_TABLE SELECT b>>1 FROM BIT_SHIFT_TABLE;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source range rel=16572 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn1685(op1796(v3.1, c23:1), c23:16, c16:0))
+  write INSERT rel=16572 rti=1 natts=1 indexes=()
+  outs 1=vl:call1685
+mapped: ModifyTable SeqScan

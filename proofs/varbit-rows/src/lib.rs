@@ -70,7 +70,7 @@
 //! coercions, catenate/substring/overlay, get/set bit, position, bit_count,
 //! and anybit_typmodin — 82 harnesses incl. three regime covers and two
 //! negative controls. Claims, fences, the per-cell literal-scalar
-//! structural law, and the five cap-relative memory walls (CI cluster 40GB
+//! structural law, and the five cap-relative memory walls (fleet 40GB
 //! retry tier) are documented at the module header. All 102 harnesses in
 //! both modules are registered in proofs/SUITE.tsv (2026-07-30);
 //! representative re-verification at the v0.2 lineage: 10 greens
@@ -544,7 +544,7 @@ mod proofs {
 //     (StringInfo read + image build in one formula); the protocol/short/
 //     invalid-length/typmod-mismatch recv planes all proved.
 // Memory walls are CAP-RELATIVE: these five stay as live #[kani::proof]
-// harnesses for the CI cluster 40GB retry tier (uuid[] precedent).
+// harnesses for the fleet 40GB retry tier (uuid[] precedent).
 #[cfg(kani)]
 mod proofs_w10 {
     use proof_support::{mcx_stubs, stubs};
@@ -1391,7 +1391,7 @@ mod proofs_w10 {
     // two-substring + two-catenate chain is the heaviest image shape in the
     // family) — cells sized down to <= 9-bit inputs. RE-DERIVED 2026-07-29:
     // still OOM at the 6GiB cap on BOTH solvers even at <= 9 bits — kept as
-    // live proofs for the CI cluster 40GB retry tier; bitoverlay's ledger claim
+    // live proofs for the fleet 40GB retry tier; bitoverlay's ledger claim
     // rests on the proved kernels (bitsubstring/bit_catenate image cells)
     // plus the overlay_err_cell planes below.
     overlay_cell! {
@@ -1761,7 +1761,7 @@ mod proofs_w10 {
     // measured OOM). RE-DERIVED 2026-07-29: the Ok-IMAGE cells
     // (eq_bit_recv_c12 / eq_varbit_recv_c12, concrete dlen=12) OOM at the
     // 6GiB cap on BOTH solvers — the recv Ok arm is UNPROVEN at this cap
-    // (CI cluster 40GB retry owed); the short-header, short-body, negative-len,
+    // (fleet 40GB retry owed); the short-header, short-body, negative-len,
     // over-max and typmod-mismatch/truncation planes all proved.
     macro_rules! recv_harness {
         ($h:ident, $cfn:ident, $fixed:expr, $mismatch_code:expr,

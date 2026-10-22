@@ -1,0 +1,10 @@
+-- regress-full-rangefuncs-054
+-- SELECT *, pg_typeof(f3), pg_typeof(f4) FROM dup(22, array[44::bigint]);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn40764 cols=2 fn40764(c20:22, c1016:'\x01\x00\x00\x00\x00\x00\x00\x00\x14\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00,\x00\x00\x00\x00\x00\x00\x00')]
+  project (1=v1.1, 2=v1.2, 3=fn1619(v1.1), 4=fn1619(v1.2))
+  outs 1=w8:val 2=vl:row 3=w4:val 4=w4:val
+mapped: FunctionScan

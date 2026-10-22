@@ -7,8 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
-use conffiles_seams::{absolute_config_location, get_conf_files_in_dir};
-use elog::ereport;
+use conffiles::absolute_config_location;
+use conffiles_seams::get_conf_files_in_dir;
+use elog::{ereport, PCT_M};
 use types_error::{
     ErrorLevel, PgError, PgResult, DEBUG1, DEBUG2, ERRCODE_INVALID_PARAMETER_VALUE,
     ERRCODE_PROGRAM_LIMIT_EXCEEDED, ERRCODE_SYNTAX_ERROR, ERROR, LOG,
@@ -76,7 +77,7 @@ pub fn ProcessConfigFile(context: GucContext) -> PgResult<()> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn ParseConfigFile(
-    config_file: &str,
+    config_file: impl AsRef<Path>,
     strict: bool,
     calling_file: Option<&Path>,
     calling_lineno: i32,
@@ -84,11 +85,17 @@ pub fn ParseConfigFile(
     elevel: ErrorLevel,
     variables: &mut Vec<ConfigVariable>,
 ) -> PgResult<bool> {
+    let config_file = config_file.as_ref();
     // An all-blank (or empty) name would read the containing directory.
-    if config_file.bytes().all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n')) {
+    if config_file
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+    {
         let error = ereport(elevel)
             .errcode(ERRCODE_INVALID_PARAMETER_VALUE)
-            .errmsg(format!("empty configuration file name: \"{config_file}\""))
+            .errmsg(format!("empty configuration file name: \"{}\"", config_file.display()))
             .into_error();
         record_or_throw(
             elevel,
@@ -105,15 +112,15 @@ pub fn ParseConfigFile(
         let error = ereport(elevel)
             .errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED)
             .errmsg(format!(
-                "could not open configuration file \"{config_file}\": maximum nesting depth exceeded"
+                "could not open configuration file \"{}\": maximum nesting depth exceeded",
+                config_file.display()
             ))
             .into_error();
         record_or_throw(elevel, error, "nesting depth exceeded", calling_file, calling_lineno, variables)?;
         return Ok(false);
     }
 
-    let abs_path =
-        absolute_config_location::call(config_file.to_string(), calling_file.map(Path::to_path_buf));
+    let abs_path = absolute_config_location(config_file, calling_file);
 
     // Reject direct recursion (canonicalization above makes strcmp likely to
     // match; indirect recursion is caught by the depth limit).
@@ -149,7 +156,7 @@ pub fn ParseConfigFile(
             }
             let pg_error = builder
                 .errmsg(format!(
-                    "could not open configuration file \"{}\": %m",
+                    "could not open configuration file \"{}\": {PCT_M}",
                     abs_path.display()
                 ))
                 .into_error();
@@ -293,7 +300,6 @@ pub fn ParseConfigDirectory(
     }
 
     for filename in files.filenames {
-        let filename = filename.to_string_lossy().into_owned();
         if !ParseConfigFile(&filename, true, calling_file, calling_lineno, depth, elevel, variables)? {
             return Ok(false);
         }
@@ -361,7 +367,8 @@ pub fn deescape_quoted_bytes(bytes: &[u8]) -> Vec<u8> {
     // stop there exactly as they do in C.
     let at = |i: usize| -> u8 { if i < len { s[i] } else { 0 } };
 
-    let mut out = Vec::with_capacity(len);
+    let mut out = Vec::new();
+    let _ = out.try_reserve(len);
     let mut i = 0;
     while i < len {
         if at(i) == b'\\' {

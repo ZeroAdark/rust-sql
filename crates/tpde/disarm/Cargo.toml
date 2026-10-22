@@ -1,0 +1,18 @@
+[package]
+name = "tpde_disarm"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "BSD-3-Clause"
+autotests = false
+
+[features]
+upstream-oracle = []
+really-all = []
+
+[build-dependencies]
+tpde_disarm_gen = { path = "../disarm-gen" }
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]

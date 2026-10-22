@@ -11,6 +11,7 @@ catalog = { path = "../../../catalog/catalog" }
 elog = { path = "../../../utils/error/elog" }
 fd = { path = "../../../storage/file/fd" }
 init_small = { path = "../../../utils/init/init_small" }
+libc = "0.2"
 procarray = { path = "../../../storage/ipc/procarray" }
 rewriteheap_seams = { path = "../rewriteheap_seams" }
 slot_seams = { path = "../../../replication/slot_seams" }
@@ -28,3 +29,6 @@ types_rel = { path = "../../../../_support/types/rel" }
 types_storage = { path = "../../../../_support/types/types_storage" }
 types_tuple = { path = "../../../../_support/types/types_tuple" }
 waitevent_seams = { path = "../../../utils/activity/waitevent_seams" }
+
+[dev-dependencies]
+guc_tables = { path = "../../../utils/misc/guc_tables" }

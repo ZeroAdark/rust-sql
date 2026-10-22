@@ -76,7 +76,7 @@ struct Entry {
 // local cache is non-empty — C destroys such a cache the next time a refresh
 // finds max_inuse == 0 (:447-452), so a thread holding cached entries must
 // still take the slow path after the last detach, to do that destruction.
-// u64 on every target: the high half needs bit 32 (wasm32 has a 4-byte usize).
+// u64, not usize: the high half must exist on 32-bit-pointer wasm32 too.
 static GATE: AtomicU64 = AtomicU64::new(0);
 const CACHE_HOLDER: u64 = 1 << 32;
 const ATTACHED_MASK: u64 = CACHE_HOLDER - 1;

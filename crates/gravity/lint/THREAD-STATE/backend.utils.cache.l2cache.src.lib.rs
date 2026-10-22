@@ -1,0 +1,5 @@
+backend/utils/cache/l2cache/src/lib.rs	VIEW_INIT	pgport	at:readopt_views	leader	the backend's views of the shared generations (admission's catalog stamp); cleared and re-adopted by readopt_views after sinval registration
+backend/utils/cache/l2cache/src/lib.rs	CAT_VIEW	pgport	at:readopt_views	leader	the backend's views of the shared generations (admission's catalog stamp); advanced by sync_view, re-adopted by readopt_views
+backend/utils/cache/l2cache/src/lib.rs	REL_VIEW	pgport	at:readopt_views	leader	the backend's views of the shared generations (admission's catalog stamp); advanced by sync_view, re-adopted by readopt_views
+backend/utils/cache/l2cache/src/lib.rs	VIEW_MOVES	deps	exit	leader	the backend's views of the shared generations: a monotonic count of this thread's view moves (C3 Deps::current_since); never reset
+backend/utils/cache/l2cache/src/lib.rs	OWN_SEQ	deps	exit	leader	the backend's views of the shared generations: a monotonic count of this thread's own-invalidation messages (C3 S4b own_seq); never reset

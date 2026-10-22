@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/subplan/per_row.rs	certain_first	licence	fn	acting kept feeders run ahead when PG surely runs them first; stop-early readers delegated [WHOLE-READ; D2117,D3374]

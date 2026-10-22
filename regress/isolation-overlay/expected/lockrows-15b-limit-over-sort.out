@@ -1,0 +1,155 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1v s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 3 FOR UPDATE;
+QUERY PLAN                           
+-------------------------------------
+Limit                                
+  ->  LockRows                       
+        ->  Sort                     
+              Sort Key: k            
+              ->  Seq Scan on lsl    
+                    Filter: (grp = 1)
+(6 rows)
+
+step s1v: UPDATE lsl SET v = v || '+' WHERE id = 19;
+step s2l: SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id| k|v   
+--+--+----
+22|78|v22 
+19|81|v19+
+16|84|v16 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2l s1c
+step s1k: UPDATE lsl SET k = 0, v = v || 'k' WHERE id = 19;
+step s2l: SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id| k|v   
+--+--+----
+22|78|v22 
+19| 0|v19k
+16|84|v16 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2l s1c
+step s1g: UPDATE lsl SET grp = 2 WHERE id = 19;
+step s2l: SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id| k|v  
+--+--+---
+22|78|v22
+16|84|v16
+13|87|v13
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2o s1c
+step s1v: UPDATE lsl SET v = v || '+' WHERE id = 19;
+step s2o: SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 2 OFFSET 1 FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id| k|v   
+--+--+----
+19|81|v19+
+16|84|v16 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2o s1c
+step s1g: UPDATE lsl SET grp = 2 WHERE id = 19;
+step s2o: SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 2 OFFSET 1 FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id| k|v  
+--+--+---
+16|84|v16
+13|87|v13
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2o2 s1c
+step s1g: UPDATE lsl SET grp = 2 WHERE id = 19;
+step s2o2: SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 2 OFFSET 2 FOR SHARE; <waiting ...>
+step s1c: COMMIT;
+step s2o2: <... completed>
+id| k|v  
+--+--+---
+13|87|v13
+10|90|v10
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2t s1c
+step s1v: UPDATE lsl SET v = v || '+' WHERE id = 19;
+step s2t: SELECT id, v, k * 2 AS k2 FROM lsl WHERE grp = 1 AND v <> 'none' ORDER BY v DESC LIMIT 4 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2t: <... completed>
+id|v   | k2
+--+----+---
+ 7|v7  |186
+ 4|v4  |192
+22|v22 |156
+19|v19+|162
+(4 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM lsl WHERE id = 22 FOR UPDATE;
+id
+--
+22
+(1 row)
+
+step s2sk: SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 2 FOR UPDATE SKIP LOCKED;
+id| k|v  
+--+--+---
+19|81|v19
+16|84|v16
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s1v s2sk s1c
+step s1l: SELECT id FROM lsl WHERE id = 22 FOR UPDATE;
+id
+--
+22
+(1 row)
+
+step s1v: UPDATE lsl SET v = v || '+' WHERE id = 19;
+step s2sk: SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 2 FOR UPDATE SKIP LOCKED;
+id| k|v  
+--+--+---
+16|84|v16
+13|87|v13
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM lsl WHERE id = 22 FOR UPDATE;
+id
+--
+22
+(1 row)
+
+step s2nw: SELECT id, k, v FROM lsl WHERE grp = 1 ORDER BY k LIMIT 1 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "lsl"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

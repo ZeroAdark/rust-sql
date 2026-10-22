@@ -56,6 +56,11 @@ fn tzdir(pgbin: &Path) -> Option<PathBuf> {
 /// profile the test itself runs under. Reusing an existing binary would let a
 /// stale server answer the assertions — the build is a no-op when current.
 fn server_binary() -> PathBuf {
+    if let Some(p) = std::env::var_os("PGRUST_TEST_SERVER_BIN").filter(|p| !p.is_empty()) {
+        let bin = PathBuf::from(p);
+        assert!(bin.is_file(), "PGRUST_TEST_SERVER_BIN={} is not a file", bin.display());
+        return bin;
+    }
     // target/<profile>/deps/refresh_freeze_e2e-... -> target/<profile>/postgres
     let exe = std::env::current_exe().expect("current_exe");
     let profile_dir = exe
@@ -65,19 +70,23 @@ fn server_binary() -> PathBuf {
         .expect("profile dir")
         .to_path_buf();
     let bin = profile_dir.join("postgres");
-    let release = profile_dir.file_name().is_some_and(|n| n == "release");
+    let dir = profile_dir.file_name().and_then(|n| n.to_str()).unwrap_or("debug").to_string();
+    let profile = if dir == "debug" { "dev".to_string() } else { dir };
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let root = manifest.ancestors().nth(4).expect("workspace root");
     let mut cmd = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     cmd.current_dir(root).args(["build", "-p", "main_main", "--bin", "postgres"]);
-    if release {
-        cmd.arg("--release");
-    }
-    eprintln!("(building {} postgres server binary...)", if release { "release" } else { "debug" });
+    cmd.args(["--profile", profile.as_str()]);
+    eprintln!("(building {profile} postgres server binary...)");
     let status = cmd.status().expect("spawn cargo build");
     assert!(status.success(), "cargo build of the postgres binary failed");
     assert!(bin.is_file(), "built server binary missing at {}", bin.display());
     bin
+}
+
+fn ports() -> (u16, u16) {
+    let base = 20000 + 2 * (std::process::id() % 10000) as u16;
+    (base, base + 1)
 }
 
 struct Server {
@@ -93,8 +102,10 @@ impl Server {
         let dd = work.join("dd");
         // The Unix socket path has a 103-byte kernel cap, so the socket dir
         // lives at a short path instead of under target/ (the datadir and log
-        // stay in `work`).
-        let sock = PathBuf::from(format!("/tmp/pgrfz{port}"));
+        // stay in `work`). D2589: the dir is this run's alone (pid and port),
+        // and the port comes from the pid (`ports`), so two checks on one box
+        // never share a socket, a lock file or a listener.
+        let sock = PathBuf::from(format!("/tmp/pgrfz.{}.{port}", std::process::id()));
         let log = work.join("server.log");
         let _ = std::fs::remove_dir_all(&sock);
         std::fs::create_dir_all(&sock).unwrap();
@@ -112,7 +123,7 @@ impl Server {
         // ulimit -s for the main thread (session threads get RUST_MIN_STACK).
         let script = format!(
             "ulimit -s 65520 2>/dev/null; exec \"$1\" -D \"$2\" -k \"$3\" -p {port} \
-             -c max_stack_depth=60000 -c io_method=sync -c autovacuum=off >>\"$4\" 2>&1"
+             -c listen_addresses= -c max_stack_depth=60000 -c io_method=sync -c autovacuum=off >>\"$4\" 2>&1"
         );
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
@@ -166,13 +177,13 @@ impl Server {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn psql");
-        child.stdin.take().unwrap().write_all(sql.as_bytes()).unwrap();
+        let wrote = child.stdin.take().unwrap().write_all(sql.as_bytes());
         let out = child.wait_with_output().expect("psql wait");
-        if out.status.success() {
+        if out.status.success() && wrote.is_ok() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {
             Err(format!(
-                "psql failed\nstdout: {}\nstderr: {}",
+                "psql failed (stdin {wrote:?})\nstdout: {}\nstderr: {}",
                 String::from_utf8_lossy(&out.stdout),
                 String::from_utf8_lossy(&out.stderr)
             ))
@@ -297,9 +308,25 @@ fn matview_fill_writes_frozen_tuples() {
     let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("refresh_freeze_e2e");
 
     // Arm 1: W1 multi-insert buffering (the default) — heap_multi_insert lane.
-    run_arm(&pgbin, &bin, &tmp.join("multi"), 5573, true);
+    let (multi, single) = ports();
+    run_arm(&pgbin, &bin, &tmp.join("multi"), multi, true);
     // Arm 2: per-tuple table_tuple_insert lane.
-    run_arm(&pgbin, &bin, &tmp.join("single"), 5574, false);
+    run_arm(&pgbin, &bin, &tmp.join("single"), single, false);
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn volatile_matview_fill_sees_prior_rows() {
+    let Some(pgbin) = find_pgbin() else { return };
+    let bin = server_binary();
+    let work = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("volatile_matview_fill");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let srv = Server::start(&work, &pgbin, &bin, 5575, true);
+    let output = srv.sql(include_str!("fixtures/volatile_fill.sql"));
+    let arrays = output.lines().filter(|line| line.starts_with('{')).collect::<Vec<_>>().join("\n");
+    srv.stop();
+    assert_eq!(arrays, include_str!("fixtures/volatile_fill.expected").trim());
+    let _ = std::fs::remove_dir_all(&work);
 }

@@ -1,0 +1,21 @@
+-- regress-full-enum-008
+-- SELECT min(col) FROM enumtest;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@1
+  source index-only rel=16792 rti=2 am=heap index=16795
+    key att=1 op=0 form=notnull value=notnull(index.1)
+    recheck (notnull(index.1))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=?
+  outs 1=?
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec0)
+  outs 1=?
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: Result IndexOnlyScan Limit SubPlan

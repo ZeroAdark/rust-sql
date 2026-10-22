@@ -71,13 +71,13 @@ const FRM_MARK_COMMITTED: u16 = 0x0010;
 // A cap enforced by a release `assert!` was a ported-in limit C never had, and a
 // reachable release assertion is a crash.
 //
-// The scratch is a reset-per-call bump context standing in for C's palloc into
+// The scratch is a reset-per-call AllocSet standing in for C's palloc into
 // CurrentMemoryContext: there is no per-tuple mcx reachable this deep in the
 // freeze path, the same reason KEY_TEST_SCRATCH exists in this crate's lib.rs.
 // Capacity is retained across calls, so this is not a context per call.
 std::thread_local! {
     static FREEZE_MEMBER_SCRATCH: core::cell::RefCell<::mcx::MemoryContext> =
-        core::cell::RefCell::new(::mcx::MemoryContext::new_bump("freeze multixact members"));
+        core::cell::RefCell::new(::mcx::MemoryContext::new_wholesale("freeze multixact members"));
 }
 
 #[cold]

@@ -1,0 +1,8 @@
+path	crates/gravity/exec/src/rerun/epq.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	1
+growth	std::vec::Vec::resize	2
+macro	std::vec	4
+method	slice::to_vec	3
+method	std::iter::Iterator::collect	7
+type	std::vec::Vec	6

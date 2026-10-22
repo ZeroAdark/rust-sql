@@ -1,0 +1,14 @@
+-- regress-full-psql-032
+-- SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod) FROM pg_catalog.pg_attribute a WHERE a.attrelid = '2840' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1249 rti=1 am=heap index=2659
+    key att=1 op=607 value=c26:2840
+    key att=5 op=536 value=c23:0
+    recheck (op607(v1.1, c26:2840), op536(v1.5, c23:0))
+    lanes Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(17):byval8:w8:val
+  filter not(v1.17)
+  project (1=v1.2, 2=fn1081(v1.3, v1.6), 3j=v1.5)
+  outs 1=fx64:win/page 2=vl:call1081 3=w8:val
+mapped: IndexScan

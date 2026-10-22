@@ -1,11 +1,12 @@
 //! rmgr.c + GetRmgr/RmgrIdExists (xlog_internal.h); the RmgrIds registry
 //! (rmgr.h) lives in types_core, re-exported here. The table is a fixed
 //! compile-time array indexed by RmgrIds; entry order fixes the WAL-visible
-//! numeric ids. C divergences: custom-rmgr extension slots (ids 128..=255),
-//! RegisterCustomRmgr are omitted — there is no extension ABI (unregistered
-//! ids take the same RmgrNotFound ERROR as C's empty slots). The
-//! rm_decode column is omitted until logical-decoding vocabulary exists.
-//! pg_get_wal_resource_managers lives in funcs.rs (builtin ids only).
+//! numeric ids. C divergences: RegisterCustomRmgr and the extension slots
+//! (ids 128..=255) are omitted — there is no extension ABI (unregistered
+//! ids take the same RmgrNotFound ERROR as C's empty slots) — except one
+//! compiled-in custom slot, pgrcolumnar's [`PGRC_RMGR`] at `RM_PGRC_ID`.
+//! The rm_decode column is omitted until logical-decoding vocabulary exists.
+//! pg_get_wal_resource_managers lives in funcs.rs.
 //! Unported callbacks are #[cold] panics naming the owning unit; a manager
 //! landing replaces its row's fns with direct calls (or a seam iff the dep
 //! would cycle, e.g. transam_xlog).
@@ -318,22 +319,42 @@ pub static RmgrTable: [RmgrData; RM_N_BUILTIN_IDS] = [
     },
 ];
 
-// RmgrIdExists (xlog_internal.h): with custom registration omitted, exactly
-// the builtin range is populated.
+// The pgrcolumnar table AM's resource manager, in the custom range (not
+// registered on the wiki). pgrc_wal never depends on rmgr, so this is a
+// direct call.
+pub static PGRC_RMGR: RmgrData = RmgrData {
+    rm_name: "pgrc",
+    rm_redo: pgrc_wal::pgrc_redo,
+    rm_desc: rmgrdesc::pgrcdesc::pgrc_desc,
+    rm_identify: rmgrdesc::pgrcdesc::pgrc_identify,
+    rm_startup: Some(pgrc_wal::pgrc_startup),
+    rm_cleanup: Some(pgrc_wal::pgrc_cleanup),
+    rm_mask: None,
+};
+
+// RmgrIdExists (xlog_internal.h): with custom registration omitted, the
+// builtin range plus PGRC_RMGR's slot.
 pub fn RmgrIdExists(rmid: RmgrId) -> bool {
-    (rmid as usize) < RM_N_BUILTIN_IDS
+    (rmid as usize) < RM_N_BUILTIN_IDS || rmid == types_core::RM_PGRC_ID
 }
 
 // GetRmgr (xlog_internal.h).
 pub fn GetRmgr(rmid: RmgrId) -> PgResult<&'static RmgrData> {
+    if rmid == types_core::RM_PGRC_ID {
+        return Ok(&PGRC_RMGR);
+    }
     if !RmgrIdExists(rmid) {
         RmgrNotFound(rmid)?;
     }
     Ok(&RmgrTable[rmid as usize])
 }
 
+fn all_rmgrs() -> impl Iterator<Item = &'static RmgrData> {
+    RmgrTable.iter().chain(core::iter::once(&PGRC_RMGR))
+}
+
 pub fn RmgrStartup(parent: Mcx<'_>) -> PgResult<()> {
-    for rmgr in &RmgrTable {
+    for rmgr in all_rmgrs() {
         if let Some(startup) = rmgr.rm_startup {
             startup(parent)?;
         }
@@ -342,7 +363,7 @@ pub fn RmgrStartup(parent: Mcx<'_>) -> PgResult<()> {
 }
 
 pub fn RmgrCleanup() {
-    for rmgr in &RmgrTable {
+    for rmgr in all_rmgrs() {
         if let Some(cleanup) = rmgr.rm_cleanup {
             cleanup();
         }

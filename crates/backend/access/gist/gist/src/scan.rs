@@ -45,7 +45,7 @@ pub fn gistbeginscan<'mcx>(
         giststate.fetchTupdesc = Some(std::rc::Rc::new(desc));
     }
     let scan_cxt = mcx.context().new_child("GiST scan context");
-    let temp = scan_cxt.new_child_bump("GiST temporary context");
+    let temp = scan_cxt.new_child_wholesale("GiST temporary context");
     let so = GISTScanOpaqueData {
         giststate,
         scan_cxt,
@@ -119,7 +119,7 @@ pub fn gistrescan(
         if so.giststate.fetchTupdesc.is_none() {
             so.giststate.fetchTupdesc = Some(index_rel.rd_att.clone());
         }
-        scan.xs_itupdesc = so.giststate.fetchTupdesc.clone();
+        scan.xs_hitupdesc = so.giststate.fetchTupdesc.clone();
     }
 
     so.firstCall = true;
@@ -218,7 +218,7 @@ pub fn gistrescan(
         }
     }
 
-    scan.xs_itup = None;
+    scan.xs_hitup = None;
     so.queue_allocated = true;
     Ok(())
 }

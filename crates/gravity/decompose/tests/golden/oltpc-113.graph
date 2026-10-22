@@ -1,0 +1,10 @@
+-- oltpc-113
+-- INSERT INTO ol_ins (k, w, d, c, amt, t) VALUES (1, $1, $2, $3, 1.00, now()) ON CONFLICT DO NOTHING /* C86 insert on conflict do nothing */
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c20:1, 2=$1, 3=$2, 4=$3, 5=c1700:'\x00\x81\x01\x00', 6=fn1299())
+  write INSERT rel=16527 rti=1 natts=6 indexes=(16531[1]up) on_conflict=nothing arbiter=()
+  outs 1=w8:val 2=w4:val 3=w2:val 4=w4:val 5=vl:stmt/imm 6=w8:val
+mapped: Result ModifyTable

@@ -1,0 +1,14 @@
+-- regress-full-updatable_views-097
+-- EXPLAIN (costs off) DELETE FROM rw_view2 WHERE NOT snoop(person);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@4
+  source range rel=24579 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op98(v3.2, c25:'public')
+  filter fn24588(v3.1)
+  filter not(fn24588(v3.1))
+  project (1j=v3.-1)
+  write DELETE rel=24579 rti=3 natts=2 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable SeqScan

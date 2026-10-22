@@ -1,0 +1,28 @@
+-- aggs-024
+-- SELECT b, d, ts, l, x, m, count(*) FROM g GROUP BY b, d, ts, l, x, m;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=2 eligible rows=2000 end=breaker(slot=0 HashAgg)
+  desc owner=key/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n1@1 n0@2^
+  source range rel=16396 rti=1 am=heap
+    lanes Attr(9):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.15, 2=v1.16, 3=v1.17, 4=v1.22, 5=v1.23, 6=v1.9)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=agg2803*())
+  outs 1=w1:val 2=w4:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32,Date,Timestamp,I64,I64,I64]->[Count@48] 56B order=1+,2+,3+,4+,5+,6+
+group slot=0 producer=p0 node=0 form=Sorted hints=[] layout=[I32,Date,Timestamp,I64,I64,I64]->[Count@48] 56B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=16 expr=outer.1
+  key 1 word=1 resno=2 kind=Date attno=0 type=1082 expr=outer.2
+  key 2 word=2 resno=3 kind=Timestamp attno=0 type=1114 expr=outer.3
+  key 3 word=3 resno=4 kind=I64 attno=0 type=3220 expr=outer.4
+  key 4 word=4 resno=5 kind=I64 attno=0 type=5069 expr=outer.5
+  key 5 word=5 resno=6 kind=I64 attno=0 type=790 expr=outer.6
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan Agg

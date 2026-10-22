@@ -9,7 +9,7 @@ use core::marker::PhantomData;
 
 use crate::container::*;
 use mcx::{Allocator, Mcx, PgVec};
-use stack_depth::check_stack_depth;
+use stack_depth::check_stack_depth_weighted;
 use types_error::{
     PgError, PgResult, ERRCODE_DUPLICATE_JSON_OBJECT_KEY_VALUE, ERRCODE_PROGRAM_LIMIT_EXCEEDED,
 };
@@ -443,7 +443,8 @@ fn convert_value(
     val: &JsonbValue<'_>,
     level: u32,
 ) -> PgResult<()> {
-    check_stack_depth()?;
+    // D3103: native-heavy on wasm32 like the JSON parser it follows, so it charges the weighted depth.
+    check_stack_depth_weighted()?;
     match val {
         JsonbValue::Array { .. } => convert_array(buffer, header, val, level),
         JsonbValue::Object { .. } => convert_object(buffer, header, val, level),

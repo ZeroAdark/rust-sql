@@ -33,6 +33,9 @@ use crate::{GUC_ACTION_LOCAL, GUC_ACTION_SAVE, GUC_ACTION_SET};
 
 pub type GucAction = u32;
 
+/// A registry's name index: the case-folded name to the variable's slot.
+pub type BuiltinIndex = HashMap<Box<str>, usize, GucNameHasherBuilder>;
+
 #[derive(Clone, Debug)]
 pub enum GucVariable {
     Bool(config_bool),
@@ -74,10 +77,15 @@ impl GucVariable {
 #[derive(Clone, Debug, Default)]
 pub struct GucRegistry {
     vars: Vec<GucVariable>,
-    index: HashMap<Box<str>, usize, GucNameHasherBuilder>,
+    // D4682 step 2 (a): the built-in variables' names, shared by the registries a process builds after its first
+    // (`adopt_builtin_index`): the built-ins are defined in one fixed order, so their indexes are the same in every
+    // registry, and `index` then holds only what is defined past them (custom variables and placeholders). None: `index`
+    // holds every name.
+    builtins: Option<std::sync::Arc<BuiltinIndex>>,
+    index: BuiltinIndex,
     stacked: Vec<usize>,
     reported: Vec<usize>,
-    nondef: Vec<usize>,
+    nondef: crate::nondef_list::NondefList,
 }
 
 impl GucRegistry {
@@ -117,12 +125,65 @@ impl GucRegistry {
         let g = self.vars[idx].gen_mut();
         if g.source == PGC_S_DEFAULT {
             if newsource != PGC_S_DEFAULT {
-                self.nondef.push(idx);
+                self.nondef.push_tail(idx);
             }
         } else if newsource == PGC_S_DEFAULT {
-            self.nondef.retain(|&i| i != idx);
+            self.nondef.remove(idx);
         }
         self.vars[idx].gen_mut().source = newsource;
+    }
+
+    /// D4682 step 2 (a): this registry, still empty, takes `builtins` as its built-in variables' names instead of
+    /// building its own (its built-in definitions go through `define_builtin`, then `settle_builtin_index`).
+    pub fn adopt_builtin_index(&mut self, builtins: std::sync::Arc<BuiltinIndex>) {
+        debug_assert!(self.vars.is_empty() && self.index.is_empty(), "a registry adopts the built-in index before any define");
+        self.builtins = Some(builtins);
+    }
+
+    /// The built-in loop's define: with an adopted index the variable's slot is the one the index names (checked in debug
+    /// builds) and only its value is built; without one, `define`.
+    pub fn define_builtin(&mut self, var: GucVariable) -> PgResult<()> {
+        let Some(builtins) = &self.builtins else {
+            return self.define(var);
+        };
+        let idx = self.vars.len();
+        debug_assert_eq!(builtins.get(fold_name(var.name()).as_str()).copied(), Some(idx), "the built-in definition order moved");
+        self.vars.try_reserve(1).map_err(|_| oom())?;
+        self.nondef.try_grow(idx + 1).map_err(|_| oom())?;
+        self.vars.push(var);
+        Ok(())
+    }
+
+    /// After the built-in loop: an adopted index must name exactly the variables defined (its size, and the first and the
+    /// last name where they were defined); if not, this registry builds its own index of them instead.
+    pub fn settle_builtin_index(&mut self) -> PgResult<()> {
+        let Some(builtins) = &self.builtins else {
+            return Ok(());
+        };
+        let at = |i: usize| builtins.get(fold_name(self.vars[i].name()).as_str()).copied() == Some(i);
+        let n = self.vars.len();
+        if builtins.len() == n && (n == 0 || (at(0) && at(n - 1))) {
+            return Ok(());
+        }
+        self.builtins = None;
+        self.index.try_reserve(n).map_err(|_| oom())?;
+        for (idx, var) in self.vars.iter().enumerate() {
+            self.index.insert(fold_name(var.name()).into_boxed_str(), idx);
+        }
+        Ok(())
+    }
+
+    /// The names this registry indexes itself: for the first registry, read right after its built-in loop, every
+    /// built-in variable's (what `adopt_builtin_index` shares).
+    pub fn own_index(&self) -> BuiltinIndex {
+        self.index.clone()
+    }
+
+    fn lookup(&self, key: &str) -> Option<usize> {
+        if let Some(i) = self.builtins.as_ref().and_then(|b| b.get(key)) {
+            return Some(*i);
+        }
+        self.index.get(key).copied()
     }
 
     pub fn define(&mut self, var: GucVariable) -> PgResult<()> {
@@ -130,6 +191,7 @@ impl GucRegistry {
         let key = fold_name(var.name()).into_boxed_str();
         self.vars.try_reserve(1).map_err(|_| oom())?;
         self.index.try_reserve(1).map_err(|_| oom())?;
+        self.nondef.try_grow(idx + 1).map_err(|_| oom())?;
         self.vars.push(var);
         self.index.insert(key, idx);
         Ok(())
@@ -154,7 +216,7 @@ impl GucRegistry {
         }
         self.stacked.retain(|&i| i != idx);
         self.reported.retain(|&i| i != idx);
-        self.nondef.retain(|&i| i != idx);
+        self.nondef.remove(idx);
         match std::mem::replace(&mut self.vars[idx], var) {
             GucVariable::String(holder) => Ok(Some(holder)),
             _ => unreachable!("a placeholder is a string variable"),
@@ -216,9 +278,42 @@ impl GucRegistry {
             reset_val: None,
             reset_extra: None,
         });
-        let idx = self.vars.len();
-        self.define(var)?;
+        let reusable = self.vars.iter().position(|v| {
+            let g = v.gen();
+            g.status & crate::model::GUC_REMOVED != 0
+                && g.flags & types_guc::GUC_CUSTOM_PLACEHOLDER != 0
+        });
+        let Some(idx) = reusable else {
+            let idx = self.vars.len();
+            self.define(var)?;
+            return Ok(idx);
+        };
+        let key = fold_name(var.name()).into_boxed_str();
+        self.index.try_reserve(1).map_err(|_| oom())?;
+        self.vars[idx] = var;
+        self.index.insert(key, idx);
         Ok(idx)
+    }
+
+    // A fresh backend holds no placeholder a prior session created; slots
+    // stay as tombstones that add_placeholder_variable reuses.
+    pub fn remove_all_placeholders(&mut self) {
+        for idx in 0..self.vars.len() {
+            let g = self.vars[idx].gen();
+            if g.flags & types_guc::GUC_CUSTOM_PLACEHOLDER == 0
+                || g.status & crate::model::GUC_REMOVED != 0
+            {
+                continue;
+            }
+            let key = fold_name(&g.name);
+            self.index.remove(key.as_str());
+            self.stacked.retain(|&i| i != idx);
+            self.reported.retain(|&i| i != idx);
+            self.nondef.remove(idx);
+            let g = self.vars[idx].gen_mut();
+            g.status &= !GUC_NEEDS_REPORT;
+            g.status |= crate::model::GUC_REMOVED;
+        }
     }
 
     pub fn find_option(&self, name: &str) -> Option<&GucVariable> {
@@ -231,16 +326,16 @@ impl GucRegistry {
 
     pub fn find_index(&self, name: &str) -> Option<usize> {
         let direct = if name.bytes().any(|b| b.is_ascii_uppercase()) {
-            self.index.get(fold_name(name).as_str()).copied()
+            self.lookup(fold_name(name).as_str())
         } else {
-            self.index.get(name).copied()
+            self.lookup(name)
         };
         if let Some(idx) = direct {
             return Some(idx);
         }
         for (old, new) in MAP_OLD_GUC_NAMES {
             if guc_name_eq(name, old) {
-                return self.index.get(*new).copied();
+                return self.lookup(new);
             }
         }
         None
@@ -278,7 +373,7 @@ impl GucRegistry {
             self.index.remove(fold_name(&name).as_str());
             self.stacked.retain(|&i| i != idx);
             self.reported.retain(|&i| i != idx);
-            self.nondef.retain(|&i| i != idx);
+            self.nondef.remove(idx);
             let g = self.vars[idx].gen_mut();
             g.status &= !GUC_NEEDS_REPORT;
             g.status |= crate::model::GUC_REMOVED;
@@ -289,6 +384,12 @@ impl GucRegistry {
 
     pub fn len(&self) -> usize {
         self.vars.len()
+    }
+
+    // The variable at an index find_index returned before, unless it has
+    // become a tombstone since (remove_reserved_placeholders).
+    pub(crate) fn live_at(&self, idx: usize) -> Option<&GucVariable> {
+        self.vars.get(idx).filter(|v| v.gen().status & crate::model::GUC_REMOVED == 0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -999,7 +1100,7 @@ pub fn get_explain_guc_options<'r>(
     visible: &mut dyn FnMut(&GucVariable) -> PgResult<bool>,
 ) -> PgResult<Vec<(&'r str, Option<String>)>> {
     let mut out = Vec::new();
-    for &idx in &reg.nondef {
+    for idx in reg.nondef.iter() {
         let conf = &reg.vars[idx];
         let gen = conf.gen();
         if gen.flags & types_guc::GUC_EXPLAIN == 0 {
@@ -1273,7 +1374,7 @@ pub fn set_config_option_apply(
 
     // The guc_report_list link of every C set-site (guc.c:4267).
     if change_val {
-        reg.note_reportable(idx);
+        note_reportable_after_hooks(reg, idx, deferred_hooks);
     }
 
     Ok(if change_val { 1 } else { -1 })
@@ -1345,6 +1446,11 @@ impl CapturedGuc {
 
     pub fn pending_restart(&self) -> bool {
         self.pending_restart
+    }
+
+    /// The leader's validated check-hook extra, shared by pointer (carry.rs hands it to a claim thread's assign hook).
+    pub(crate) fn extra(&self) -> Option<&SharedExtra> {
+        self.extra.as_ref()
     }
 
     /// The captured (leader-validated) value. Snapshot consumers diff on this
@@ -1434,11 +1540,19 @@ pub(crate) fn activate_current_values(
 // SerializeGUCState, typed: same variable set as capture_nondefault_variables
 // (both sides of a launch share the postmaster snapshot as baseline, so
 // nondefault-only transfers the whole leader/worker difference).
+// Captured in guc_nondef_list order (guc.c:5684 write_nondefault_variables),
+// so a child's own nondef list, and its EXPLAIN (SETTINGS) line, keep the
+// order the variables first left PGC_S_DEFAULT.
 pub(crate) fn capture_session_gucs(reg: &GucRegistry) -> Vec<CapturedGuc> {
-    reg.iter()
+    reg.nondef
+        .iter()
+        .map(|idx| &reg.vars[idx])
         .filter(|v| {
-            v.gen().source != PGC_S_DEFAULT || v.gen().status & GUC_PENDING_RESTART != 0
+            v.gen().source != PGC_S_DEFAULT && v.gen().status & crate::model::GUC_REMOVED == 0
         })
+        .chain(reg.iter().filter(|v| {
+            v.gen().source == PGC_S_DEFAULT && v.gen().status & GUC_PENDING_RESTART != 0
+        }))
         .map(|v| CapturedGuc {
             name: v.name().to_string(),
             val: current_value(v),
@@ -1687,7 +1801,78 @@ fn apply_value(
     deferred
 }
 
-fn installed_hook<T: Copy + 'static>(slot: Option<&'static guc_tables::GucSlot<T>>) -> Option<T> {
+// apply_value's store half: the value and its provenance, without the assign
+// hook or the backing write (publish_later hands those back).
+fn store_value(
+    record: &mut GucVariable,
+    newval: config_var_val,
+    extra: Option<SharedExtra>,
+    context: GucContext,
+    srole: Oid,
+) {
+    match (&mut *record, newval) {
+        (GucVariable::Bool(c), config_var_val::Boolval(v)) => c.value = Some(v),
+        (GucVariable::Int(c), config_var_val::Intval(v)) => c.value = Some(v),
+        (GucVariable::Real(c), config_var_val::Realval(v)) => c.value = Some(v),
+        (GucVariable::String(c), config_var_val::Stringval(s)) => c.value = Some(s),
+        (GucVariable::Enum(c), config_var_val::Enumval(v)) => c.value = Some(v),
+        _ => {}
+    }
+    let gen = record.gen_mut();
+    gen.extra = extra;
+    gen.scontext = context;
+    gen.srole = srole;
+}
+
+// apply_value's publish half for the variable's current store value: its
+// assign hook, then the backing write (C's order, guc.c:3759), as one closure
+// that the caller runs later or drops. None when there is neither.
+fn publish_later(record: &GucVariable) -> Option<DeferredAssignHook> {
+    fn scalar<T: Copy + 'static>(
+        variable: &'static guc_tables::GucSlot<guc_tables::GucVarAccessors<T>>,
+        hook: Option<fn(T, Option<&GucHookExtra>)>,
+        v: Option<T>,
+        extra: Option<SharedExtra>,
+    ) -> Option<DeferredAssignHook> {
+        let v = v?;
+        if hook.is_none() && !variable.installed() {
+            return None;
+        }
+        Some(Box::new(move || {
+            if let Some(f) = hook {
+                f(v, extra.as_deref());
+            }
+            if variable.installed() {
+                variable.write(v);
+            }
+        }))
+    }
+    let extra = record.gen().extra.clone();
+    match record {
+        GucVariable::Bool(c) => scalar(c.variable, installed_hook(c.assign_hook), c.value, extra),
+        GucVariable::Int(c) => scalar(c.variable, installed_hook(c.assign_hook), c.value, extra),
+        GucVariable::Real(c) => scalar(c.variable, installed_hook(c.assign_hook), c.value, extra),
+        GucVariable::Enum(c) => scalar(c.variable, installed_hook(c.assign_hook), c.value, extra),
+        GucVariable::String(c) => {
+            let s = c.value.clone()?;
+            let variable = c.variable;
+            let hook = installed_hook(c.assign_hook);
+            if hook.is_none() && !variable.installed() {
+                return None;
+            }
+            Some(Box::new(move || {
+                if let Some(f) = hook {
+                    f(s.as_deref(), extra.as_deref());
+                }
+                if variable.installed() {
+                    variable.write(s);
+                }
+            }))
+        }
+    }
+}
+
+pub(crate) fn installed_hook<T: Copy + 'static>(slot: Option<&'static guc_tables::GucSlot<T>>) -> Option<T> {
     let slot = slot?;
     if slot.installed() {
         Some(slot.get())
@@ -1835,58 +2020,64 @@ fn push_old_value(record: &mut GucVariable, action: GucAction) {
 fn restore_stacked_value(
     record: &mut GucVariable,
     newvalue: &config_var_value,
+    pending_restore: bool,
     deferred_hooks: &mut Vec<DeferredAssignHook>,
 ) -> bool {
     let newextra = newvalue.extra.clone();
+    // Earlier pops may have queued backing writes that have not run yet.
     let mut changed = false;
     match (record, newvalue.val.as_ref()) {
         (GucVariable::Bool(c), Some(config_var_val::Boolval(nv))) => {
-            if current_bool(c) != *nv || extra_differs(&c.gen.extra, &newextra) {
-                if let Some(f) = installed_hook(c.assign_hook) {
-                    let v = *nv;
-                    let extra = newextra.clone();
-                    deferred_hooks.push(Box::new(move || f(v, extra.as_deref())));
-                }
+            let current = if pending_restore { c.value.unwrap() } else { current_bool(c) };
+            if current != *nv || extra_differs(&c.gen.extra, &newextra) {
                 c.value = Some(*nv);
-                if c.variable.installed() {
-                    c.variable.write(*nv);
+                if let Some(hook) = defer_assign(
+                    c.variable,
+                    installed_hook(c.assign_hook),
+                    *nv,
+                    newextra.clone(),
+                ) {
+                    deferred_hooks.push(hook);
                 }
                 c.gen.extra = newextra;
                 changed = true;
             }
         }
         (GucVariable::Int(c), Some(config_var_val::Intval(nv))) => {
-            if current_int(c) != *nv || extra_differs(&c.gen.extra, &newextra) {
-                if let Some(f) = installed_hook(c.assign_hook) {
-                    let v = *nv;
-                    let extra = newextra.clone();
-                    deferred_hooks.push(Box::new(move || f(v, extra.as_deref())));
-                }
+            let current = if pending_restore { c.value.unwrap() } else { current_int(c) };
+            if current != *nv || extra_differs(&c.gen.extra, &newextra) {
                 c.value = Some(*nv);
-                if c.variable.installed() {
-                    c.variable.write(*nv);
+                if let Some(hook) = defer_assign(
+                    c.variable,
+                    installed_hook(c.assign_hook),
+                    *nv,
+                    newextra.clone(),
+                ) {
+                    deferred_hooks.push(hook);
                 }
                 c.gen.extra = newextra;
                 changed = true;
             }
         }
         (GucVariable::Real(c), Some(config_var_val::Realval(nv))) => {
-            if current_real(c) != *nv || extra_differs(&c.gen.extra, &newextra) {
-                if let Some(f) = installed_hook(c.assign_hook) {
-                    let v = *nv;
-                    let extra = newextra.clone();
-                    deferred_hooks.push(Box::new(move || f(v, extra.as_deref())));
-                }
+            let current = if pending_restore { c.value.unwrap() } else { current_real(c) };
+            if current != *nv || extra_differs(&c.gen.extra, &newextra) {
                 c.value = Some(*nv);
-                if c.variable.installed() {
-                    c.variable.write(*nv);
+                if let Some(hook) = defer_assign(
+                    c.variable,
+                    installed_hook(c.assign_hook),
+                    *nv,
+                    newextra.clone(),
+                ) {
+                    deferred_hooks.push(hook);
                 }
                 c.gen.extra = newextra;
                 changed = true;
             }
         }
         (GucVariable::String(c), Some(config_var_val::Stringval(nv))) => {
-            let differs = match (current_string(c), nv) {
+            let current = if pending_restore { c.value.clone().unwrap() } else { current_string(c) };
+            let differs = match (current, nv) {
                 (Some(a), Some(b)) => a != *b,
                 (None, None) => false,
                 _ => true,
@@ -1895,26 +2086,32 @@ fn restore_stacked_value(
                 if let Some(f) = installed_hook(c.assign_hook) {
                     let s = nv.clone();
                     let extra = newextra.clone();
-                    deferred_hooks.push(Box::new(move || f(s.as_deref(), extra.as_deref())));
-                }
-                c.value = Some(nv.clone());
-                if c.variable.installed() {
+                    let variable = c.variable;
+                    deferred_hooks.push(Box::new(move || {
+                        f(s.as_deref(), extra.as_deref());
+                        if variable.installed() {
+                            variable.write(s);
+                        }
+                    }));
+                } else if c.variable.installed() {
                     c.variable.write(nv.clone());
                 }
+                c.value = Some(nv.clone());
                 c.gen.extra = newextra;
                 changed = true;
             }
         }
         (GucVariable::Enum(c), Some(config_var_val::Enumval(nv))) => {
-            if current_enum(c) != *nv || extra_differs(&c.gen.extra, &newextra) {
-                if let Some(f) = installed_hook(c.assign_hook) {
-                    let v = *nv;
-                    let extra = newextra.clone();
-                    deferred_hooks.push(Box::new(move || f(v, extra.as_deref())));
-                }
+            let current = if pending_restore { c.value.unwrap() } else { current_enum(c) };
+            if current != *nv || extra_differs(&c.gen.extra, &newextra) {
                 c.value = Some(*nv);
-                if c.variable.installed() {
-                    c.variable.write(*nv);
+                if let Some(hook) = defer_assign(
+                    c.variable,
+                    installed_hook(c.assign_hook),
+                    *nv,
+                    newextra.clone(),
+                ) {
+                    deferred_hooks.push(hook);
                 }
                 c.gen.extra = newextra;
                 changed = true;
@@ -1944,26 +2141,40 @@ pub fn at_eoxact_guc(
 ) {
     debug_assert!(nest_level > 0);
     let indices = core::mem::take(&mut reg.stacked);
-    let mut kept: Vec<usize> = Vec::with_capacity(indices.len());
-    let mut to_report: Vec<usize> = Vec::new();
-    for idx in indices {
+    let mut kept: Vec<usize> = Vec::new();
+    let _ = kept.try_reserve(indices.len());
+    // guc_stack_list is head-pushed and walked newest-first (guc.c:2206,
+    // 2276); `stacked` is oldest-first.
+    for idx in indices.into_iter().rev() {
         let (changed, newsource) =
             pop_var_stack(&mut reg.vars[idx], is_commit, nest_level, deferred_hooks);
         if let Some(src) = newsource {
             reg.set_source(idx, src);
         }
         if changed && reg.vars[idx].gen().flags & GUC_REPORT != 0 {
-            to_report.push(idx);
+            note_reportable_after_hooks(reg, idx, deferred_hooks);
         }
         if reg.vars[idx].gen().stack.is_some() {
             kept.push(idx);
         }
     }
+    kept.reverse();
     reg.stacked = kept;
-    // guc_stack_list is head-pushed and walked newest-first (guc.c:2206,
-    // 2276); `stacked` is oldest-first, so the report pushes run reversed.
-    for idx in to_report.into_iter().rev() {
+}
+
+// C links a variable into guc_report_list after its assign hook ran
+// (guc.c:2533, 4267), so a hook's nested report is sent first.
+fn note_reportable_after_hooks(
+    reg: &mut GucRegistry,
+    idx: usize,
+    deferred_hooks: &mut Vec<DeferredAssignHook>,
+) {
+    if deferred_hooks.is_empty() {
         reg.note_reportable(idx);
+    } else {
+        deferred_hooks.push(Box::new(move || {
+            crate::store::with_store_mut(|r| r.note_reportable(idx));
+        }));
     }
 }
 
@@ -2064,7 +2275,7 @@ fn pop_var_stack(
                 )
             };
 
-            changed = restore_stacked_value(record, &newvalue, deferred_hooks);
+            changed = restore_stacked_value(record, &newvalue, any_changed, deferred_hooks);
 
             discard_stack_value(&mut stack.prior);
             discard_stack_value(&mut stack.masked);
@@ -2085,8 +2296,10 @@ fn pop_var_stack(
 pub fn reset_all_options(reg: &mut GucRegistry) {
     use types_guc::GUC_NO_RESET_ALL;
 
-    let nondef = reg.nondef.clone();
-    for idx in nondef {
+    // dlist_foreach_modify: only the visited variable can be unlinked.
+    let mut cur = reg.nondef.first();
+    while let Some(idx) = cur {
+        cur = reg.nondef.next_of(idx);
         let gen = reg.vars[idx].gen();
         if gen.context != PGC_SUSET && gen.context != PGC_USERSET {
             continue;
@@ -2181,7 +2394,11 @@ fn reset_one(var: &mut GucVariable) {
 // values sourced <= PGC_S_OVERRIDE (client startup options, ALTER
 // ROLE/DATABASE SET). That stamp is the mechanism by which a reused pooled
 // worker thread would otherwise carry one session's GUCs into another's task.
-fn reset_one_to_boot(var: &mut GucVariable) -> Option<DeferredAssignHook> {
+//
+// `publish` false leaves the assign hook AND the backing write unrun and hands
+// both back as the returned closure (publish_later), for a caller that is
+// about to overwrite the variable anyway (D3649).
+fn reset_one_to_boot(var: &mut GucVariable, publish: bool) -> Option<DeferredAssignHook> {
     let (bootval, bootextra) = match boot_default_value(var, PGC_S_DEFAULT) {
         Ok(v) => v,
         // boot_val always passes its own check hook; on the impossible error
@@ -2191,13 +2408,12 @@ fn reset_one_to_boot(var: &mut GucVariable) -> Option<DeferredAssignHook> {
     // The assign hook is handed back to run past the store borrow: the
     // GUC_NO_RESET_ALL hooks (assign_session_authorization / assign_role) go
     // through SetConfigOption("is_superuser") and would re-borrow the store.
-    let hook = apply_value(
-        var,
-        bootval.clone(),
-        bootextra.clone(),
-        PGC_INTERNAL,
-        BOOTSTRAP_SUPERUSERID,
-    );
+    let hook = if publish {
+        apply_value(var, bootval.clone(), bootextra.clone(), PGC_INTERNAL, BOOTSTRAP_SUPERUSERID)
+    } else {
+        store_value(var, bootval.clone(), bootextra.clone(), PGC_INTERNAL, BOOTSTRAP_SUPERUSERID);
+        publish_later(var)
+    };
     match (&mut *var, &bootval) {
         (GucVariable::Bool(c), config_var_val::Boolval(v)) => {
             c.reset_val = *v;
@@ -2248,8 +2464,10 @@ pub fn reset_session_options_to_boot(
     reg: &mut GucRegistry,
     deferred_hooks: &mut Vec<DeferredAssignHook>,
 ) {
-    let nondef = reg.nondef.clone();
-    for idx in nondef {
+    // dlist_foreach_modify: only the visited variable can be unlinked.
+    let mut cur = reg.nondef.first();
+    while let Some(idx) = cur {
+        cur = reg.nondef.next_of(idx);
         let gen = reg.vars[idx].gen();
         if gen.context != PGC_SUSET && gen.context != PGC_USERSET {
             continue;
@@ -2260,7 +2478,7 @@ pub fn reset_session_options_to_boot(
         // the targeted <= PGC_S_OVERRIDE values carry no stack, so this is
         // normally a no-op, but the invariant must hold for every caller.)
         let had_stack = reg.vars[idx].gen().stack.is_some();
-        if let Some(hook) = reset_one_to_boot(&mut reg.vars[idx]) {
+        if let Some(hook) = reset_one_to_boot(&mut reg.vars[idx], true) {
             deferred_hooks.push(hook);
         }
         if had_stack {
@@ -2270,4 +2488,65 @@ pub fn reset_session_options_to_boot(
         reg.set_source(idx, PGC_S_DEFAULT);
         reg.note_reportable(idx);
     }
+}
+
+// RestoreGUCState's first pass (guc.c:6236): every variable the worker holds
+// at a non-default source, except those can_skip_gucvar (guc.c:5842) keeps,
+// goes back to its boot value before the leader's state is applied, so a
+// config value the leader has not adopted yet cannot survive into the worker.
+//
+// A variable `held` names is reset in the store only: its publish (assign
+// hook + backing write) goes to `parked` with its index, unrun (D3649). In C
+// this pass touches only the worker's own copy; here the backings of SIGHUP
+// variables are process-wide (guc_tables backing.rs), so publishing a boot
+// value the caller's capture is about to overwrite shows it to every other
+// session in between. The caller runs unapplied_publishes after the capture.
+pub(crate) fn reset_restorable_to_boot(
+    reg: &mut GucRegistry,
+    deferred_hooks: &mut Vec<DeferredAssignHook>,
+    held: impl Fn(&str) -> bool,
+    parked: &mut Vec<(usize, DeferredAssignHook)>,
+) {
+    // dlist_foreach_modify: only the visited variable can be unlinked.
+    let mut cur = reg.nondef.first();
+    while let Some(idx) = cur {
+        cur = reg.nondef.next_of(idx);
+        let gen = reg.vars[idx].gen();
+        if gen.context == PGC_POSTMASTER || gen.context == PGC_INTERNAL || gen.source == PGC_S_DEFAULT {
+            continue;
+        }
+        if reg.vars[idx].gen().stack.is_some() {
+            reg.stacked.retain(|&i| i != idx);
+        }
+        let publish = !held(reg.vars[idx].name());
+        if let Some(hook) = reset_one_to_boot(&mut reg.vars[idx], publish) {
+            if publish {
+                deferred_hooks.push(hook);
+            } else {
+                parked.push((idx, hook));
+            }
+        }
+        reg.set_source(idx, PGC_S_DEFAULT);
+    }
+}
+
+// Whether the capture carries `name` at a non-default source, i.e. sets it
+// again (bind_captured_guc returns early for PGC_S_DEFAULT captures).
+pub(crate) fn recaptured(caps: &[CapturedGuc], name: &str) -> bool {
+    caps.iter().any(|c| c.source != PGC_S_DEFAULT && guc_name_eq(&c.name, name))
+}
+
+// The parked boot publishes (reset_restorable_to_boot) of variables the
+// capture did not re-apply: still at PGC_S_DEFAULT, so the boot value stands
+// and its backing must say so. A re-applied variable's capture published its
+// own value, and its parked boot publish is dropped.
+pub(crate) fn unapplied_publishes(
+    reg: &GucRegistry,
+    parked: Vec<(usize, DeferredAssignHook)>,
+) -> Vec<DeferredAssignHook> {
+    parked
+        .into_iter()
+        .filter(|(idx, _)| reg.vars[*idx].gen().source == PGC_S_DEFAULT)
+        .map(|(_, hook)| hook)
+        .collect()
 }

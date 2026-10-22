@@ -1,0 +1,27 @@
+-- name: regress-full-aggregates-063
+-- sql: select min(unique1) filter (where unique1 > 100) from tenk1;
+-- test: aggregates
+-- shape: 80e22c3db45a8a86 seen=1
+-- rel 16423 tenk1 am=heap kind=r natts=16
+-- att 16423 1 unique1 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 2 unique2 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 3 two typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 4 four typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 5 ten typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 6 twenty typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 7 hundred typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 8 thousand typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 9 twothousand typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 10 fivethous typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 11 tenthous typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 12 odd typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 13 even typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 16423 14 stringu1 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 16423 15 stringu2 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 16423 16 string4 typid=19 typmod=-1 len=64 byval=f notnull=f
+-- idx 19339 rel=16423 keys=1 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19340 rel=16423 keys=2 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19341 rel=16423 keys=7 opts=0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 19342 rel=16423 keys=8,11 opts=0,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- idx 19396 rel=16423 keys=14 opts=0 unique=f am=hash partial=f deferrable=f excl=f primary=f nkeyatts=1
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 31 :planTree {AGG :plan.disabled_nodes 0 :plan.startup_cost 320.285 :plan.total_cost 320.295 :plan.plan_rows 1 :plan.plan_width 4 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {AGGREF :aggfnoid 2132 :aggtype 23 :aggcollid 0 :inputcollid 0 :aggtranstype 23 :aggargtypes (o 23) :aggdirectargs <> :args ({TARGETENTRY :expr {VAR :varno -2 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 11} :resno 1 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :aggorder <> :aggdistinct <> :aggfilter {OPEXPR :opno 521 :opfuncid 147 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 0 :args ({VAR :varno -2 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location 34} {CONST :consttype 23 :consttypmod -1 :constcollid 0 :constlen 4 :constbyval true :constisnull false :location 44 :constvalue 4 [ 100 0 0 0 0 0 0 0 ]}) :location 42} :aggstar false :aggvariadic false :aggkind n :aggpresorted false :agglevelsup 0 :aggsplit 0 :aggno 0 :aggtransno 0 :location 7} :resno 1 :resname min :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :plan.qual <> :plan.lefttree {INDEXONLYSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0.28500000000000003 :scan.plan.total_cost 270.285 :scan.plan.plan_rows 10000 :scan.plan.plan_width 4 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 1 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno -3 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location -1} :resno 1 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :scan.plan.qual <> :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :indexid 19339 :indexqual <> :recheckqual <> :indexorderby <> :indextlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 1 :vartype 23 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 1 :location -1} :resno 1 :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :indexorderdir 1} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :aggstrategy 0 :aggsplit 0 :numCols 0 :grpColIdx () :grpOperators () :grpCollations () :numGroups 1 :transitionSpace 0 :aggParams (b) :groupingSets <> :chain <>} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname tenk1 :colnames ("unique1" "unique2" "two" "four" "ten" "twenty" "hundred" "thousand" "twothousand" "fivethous" "tenthous" "odd" "even" "stringu1" "stringu2" "string4")} :rtekind 0 :relid 16423 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 16423 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16423) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 59}

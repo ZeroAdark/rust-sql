@@ -179,6 +179,7 @@ fn install_seams() {
         sinval_seams::send_shared_invalid_messages::set(|_| Ok(()));
         guc_tables::vars::wal_log_hints
             .install(guc_tables::GucVarAccessors { get: || false, set: |_| {} });
+        ::read_stream::testing::install_resident_reads();
     });
     let mut g = FAKE.lock().unwrap_or_else(|e| e.into_inner());
     *g = Some(Fake { entries: Vec::new(), pins: Vec::new(), locks: Vec::new(), wal: Vec::new() });
@@ -261,7 +262,7 @@ fn test_relation<'mcx>(mcx: Mcx<'mcx>) -> RelationData<'mcx> {
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: ::mcx::PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -278,6 +279,7 @@ fn vacrel<'a, 'mcx>(rel: &'a RelationData<'mcx>, mcx: Mcx<'mcx>) -> LVRelState<'
         indrels: ::mcx::PgVec::new_in(mcx),
         indstats: ::mcx::PgVec::new_in(mcx),
         nindexes: 1,
+        keep_items: false,
         bstrategy: None,
         aggressive: false,
         verbose: false,
@@ -297,6 +299,7 @@ fn vacrel<'a, 'mcx>(rel: &'a RelationData<'mcx>, mcx: Mcx<'mcx>) -> LVRelState<'
         vistest: GlobalVisStateHandle::new(0),
         skippedallvis: false,
         coverage_hole: false,
+        unmerged_lpdead: (0, 0),
         rel_pages: 1,
         removed_pages: 0,
         folds: {
@@ -319,6 +322,7 @@ fn vacrel<'a, 'mcx>(rel: &'a RelationData<'mcx>, mcx: Mcx<'mcx>) -> LVRelState<'
         eager_scanned_pages: 0,
         next_eager_scan_region_start: InvalidBlockNumber,
         eager_scan_remaining_successes: 0,
+        eager_scan_orig_success_limit: 0,
         eager_scan_max_fails_per_region: 0,
         eager_scan_remaining_fails: 0,
         // C heap_vacuum_rel snapshots the names for the error-context
@@ -352,6 +356,7 @@ fn with_scan_parts<R>(
         vistest: *vistest,
         aggressive: *aggressive,
         nindexes: *nindexes,
+        mark_unused_now: crate::mark_unused_now(*nindexes, false),
     };
     let mut sink = |blkno: BlockNumber, offsets: &[OffsetNumber]| {
         dead_items_add(dead_items.as_mut().unwrap(), dead_items_info, blkno, offsets)
@@ -454,6 +459,12 @@ fn noprune_page(block: BlockNumber) -> Buffer {
 // Share-lock scan of a page with one live (xmin 500 < FreezeLimit), one
 // LP_DEAD, one recently-dead, and one dead-but-unprunable tuple: counters,
 // dead_items, the relfrozenxid ratchet, and hastup all match C.
+#[test]
+fn dead_tid_snapshot_is_not_capped_at_max_alloc_size() {
+    assert_eq!(dead_tids_snapshot_bytes(200_000_000).unwrap(), 1_200_000_000);
+    assert!(dead_tids_snapshot_bytes(usize::MAX / 4).is_err());
+}
+
 #[test]
 fn lazy_scan_noprune_counts_and_collects() {
     let _s = serial();
@@ -903,7 +914,7 @@ fn heap_vac_scan_next_block_flags_eager_page() {
     vr.next_unskippable_vmbuffer.release();
 }
 
-/// C-parity of the index-vacuuming bypass threshold (regression test root
+/// C-parity of the index-vacuuming bypass threshold (Antithesis RB-3 root
 /// cause): C stores `rel_pages * BYPASS_THRESHOLD_PAGES` into an integer
 /// BlockNumber, truncating the fraction, so `lpdead_item_pages == floor(t)`
 /// must NOT bypass. Comparing against the untruncated double bypassed the
@@ -1095,4 +1106,52 @@ fn lazy_scan_new_or_empty_wal_failure_escapes_inside_critical_section() {
     assert_eq!(init_small::globals::CritSectionCount(), 0, "the guard unwound cleanly");
     bufmgr_seams::lock_buffer::call(buf, BUFFER_LOCK_UNLOCK).unwrap();
     bufmgr_seams::release_buffer::call(buf).unwrap();
+}
+
+#[test]
+fn a_pgrc_segment_heap_is_never_truncated() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let named = |name: &str, ns: ::types_core::Oid, persistence: u8, kind: u8| {
+        let mut rel = test_relation(mcx);
+        rel.rd_rel.relname.namestrcpy(name);
+        rel.rd_rel.relnamespace = ns;
+        rel.rd_rel.relpersistence = persistence;
+        rel.rd_rel.relkind = kind;
+        rel
+    };
+    let (toast, perm, temp, r) = (::types_core::catalog::PG_TOAST_NAMESPACE, ::types_core::RELPERSISTENCE_PERMANENT, ::types_core::catalog::RELPERSISTENCE_TEMP, RELKIND_RELATION);
+    let on = VacOptValue::Enabled;
+    assert!(!crate::truncate_allowed(on, &named("pgrc_seg_16384_0", toast, perm, r), "pg_toast"));
+    assert!(!crate::truncate_allowed(on, &named("pgrc_seg_16384_3", 16_999, temp, r), "pg_toast_temp_3"), "a temp parent's segment");
+    let not = [
+        ("an ordinary toast table", named("pg_toast_16384", toast, perm, r), "pg_toast"),
+        ("the tombstone heap", named("pgrc_tomb_16384", toast, perm, r), "pg_toast"),
+        ("a user table named pgrc_seg_x in public", named("pgrc_seg_x", 2200, perm, r), "public"),
+        ("a user table named like a segment in public", named("pgrc_seg_16384_0", 2200, perm, r), "public"),
+        ("a temp user table named pgrc_seg_x", named("pgrc_seg_x", 16_998, temp, r), "pg_temp_3"),
+        ("an ordinary temp toast table", named("pg_toast_16999", 16_999, temp, r), "pg_toast_temp_3"),
+        ("not a heap", named("pgrc_seg_16384_0", toast, perm, b't'), "pg_toast"),
+    ];
+    for (why, rel, ns) in &not {
+        assert!(crate::truncate_allowed(on, rel, ns), "{why}");
+        assert!(!crate::truncate_allowed(VacOptValue::Disabled, rel, ns), "{why}: TRUNCATE false still wins");
+    }
+}
+
+#[test]
+fn a_pgrc_segment_heap_never_marks_items_unused() {
+    assert!(!crate::mark_unused_now(0, true), "a segment heap: no one-pass pruning");
+    assert!(!crate::mark_unused_now(1, true));
+    assert!(crate::mark_unused_now(0, false) && !crate::mark_unused_now(1, false), "heap's one-pass rule unchanged");
+}
+
+#[test]
+fn helper_error_rethrown_by_the_leader_keeps_one_scan_context() {
+    let err = VacErrInfo::new("public".into(), "t".into());
+    update_vacuum_error_info(&err, VacErrPhase::ScanHeap, 7, InvalidOffsetNumber);
+    let mut e = Box::new(PgError::new(::types_error::ERROR, "boom"));
+    e.add_context_line("while scanning block 3 of relation \"public.t\"");
+    let e = err.attach_err(morsels::leader_rethrow(&err, e));
+    assert_eq!(e.context(), Some("while scanning block 3 of relation \"public.t\""));
 }

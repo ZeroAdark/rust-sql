@@ -1,0 +1,1 @@
+backend/utils/activity/pgstat/src/archiver.rs	SNAPSHOT_ARCHIVER	pgport	at:pgstat_archiver_snapshot_clear	leader	the stats snapshot's archiver copy (stats_fetch_consistency cache / snapshot): read by pg_stat_get_archiver (proparallel r: the leader's), cleared with the snapshot at transaction end (clear_snapshot)

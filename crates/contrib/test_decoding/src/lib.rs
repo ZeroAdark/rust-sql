@@ -265,8 +265,10 @@ fn pg_decode_filter(opc: &mut OutputPluginContext, origin_id: RepOriginId) -> Pg
 
 // quote_literal_cstr (quote.c): single-quote, doubling ' and \, with an E
 // prefix when a backslash is present.
-fn quote_literal_str(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len() * 2 + 4);
+fn quote_literal_str(raw: &str) -> PgResult<String> {
+    let mut out = String::new();
+    out.try_reserve(raw.len() * 2 + 4)
+        .map_err(|_| mcx::oom_named("test_decoding", raw.len() * 2 + 4))?;
     if raw.contains('\\') {
         out.push('E');
     }
@@ -278,7 +280,7 @@ fn quote_literal_str(raw: &str) -> String {
         out.push(ch);
     }
     out.push('\'');
-    out
+    Ok(out)
 }
 
 // pg_decode_begin_prepare_txn (test_decoding.c:349).
@@ -331,7 +333,7 @@ fn pg_decode_prepare_txn(
 
     let gid = rb.txn(txn).gid.clone().expect("prepared txn carries a gid");
     OutputPluginPrepareWrite(opc, true)?;
-    let _ = write!(opc.out, "PREPARE TRANSACTION {}", quote_literal_str(&gid));
+    let _ = write!(opc.out, "PREPARE TRANSACTION {}", quote_literal_str(&gid)?);
     if data.include_xids {
         let _ = write!(opc.out, ", txid {}", rb.txn(txn).xid);
     }
@@ -353,7 +355,7 @@ fn pg_decode_commit_prepared_txn(
     let gid = rb.txn(txn).gid.clone().expect("prepared txn carries a gid");
 
     OutputPluginPrepareWrite(opc, true)?;
-    let _ = write!(opc.out, "COMMIT PREPARED {}", quote_literal_str(&gid));
+    let _ = write!(opc.out, "COMMIT PREPARED {}", quote_literal_str(&gid)?);
     if data.include_xids {
         let _ = write!(opc.out, ", txid {}", rb.txn(txn).xid);
     }
@@ -376,7 +378,7 @@ fn pg_decode_rollback_prepared_txn(
     let gid = rb.txn(txn).gid.clone().expect("prepared txn carries a gid");
 
     OutputPluginPrepareWrite(opc, true)?;
-    let _ = write!(opc.out, "ROLLBACK PREPARED {}", quote_literal_str(&gid));
+    let _ = write!(opc.out, "ROLLBACK PREPARED {}", quote_literal_str(&gid)?);
     if data.include_xids {
         let _ = write!(opc.out, ", txid {}", rb.txn(txn).xid);
     }
@@ -398,32 +400,31 @@ fn pg_decode_filter_prepare(
 }
 
 fn print_literal(s: &mut logical::OutBuf, typid: Oid, outputstr: &[u8]) {
-    let buf = s.as_mut_vec();
     match typid {
         INT2OID | INT4OID | INT8OID | OIDOID | FLOAT4OID | FLOAT8OID | NUMERICOID => {
-            buf.extend_from_slice(outputstr);
+            s.push_bytes(outputstr);
         }
         BITOID | VARBITOID => {
-            buf.extend_from_slice(b"B'");
-            buf.extend_from_slice(outputstr);
-            buf.push(b'\'');
+            s.push_bytes(b"B'");
+            s.push_bytes(outputstr);
+            s.push_byte(b'\'');
         }
         BOOLOID => {
             if outputstr == b"t" {
-                buf.extend_from_slice(b"true");
+                s.push_bytes(b"true");
             } else {
-                buf.extend_from_slice(b"false");
+                s.push_bytes(b"false");
             }
         }
         _ => {
-            buf.push(b'\'');
+            s.push_byte(b'\'');
             for &ch in outputstr {
                 if ch == b'\'' {
-                    buf.push(ch);
+                    s.push_byte(ch);
                 }
-                buf.push(ch);
+                s.push_byte(ch);
             }
-            buf.push(b'\'');
+            s.push_byte(b'\'');
         }
     }
 }
@@ -433,7 +434,7 @@ fn oid_output_function_call(mcx: Mcx<'_>, typoutput: Oid, val: Datum) -> PgResul
     let d = types_fmgr::function_call1_coll_in(&mut flinfo, InvalidOid, mcx, val)?;
     // SAFETY: output functions return a NUL-terminated cstring datum.
     let bytes = unsafe { core::ffi::CStr::from_ptr((d.as_usize() as *const u8).cast()) }.to_bytes();
-    Ok(bytes.to_vec())
+    Ok(::mcx::std_vec_from_slice("test_decoding", &bytes)?)
 }
 
 fn varatt_is_external_ondisk(val: Datum) -> bool {
@@ -469,8 +470,7 @@ fn tuple_to_stringinfo(
         }
 
         s.push(' ');
-        s.as_mut_vec()
-            .extend_from_slice(&format_type::quote_identifier_bytes(attr.attname.name_str()));
+        s.push_bytes(&format_type::quote_identifier_bytes(attr.attname.name_str()));
 
         s.push('[');
         s.push_str(&format_type::format_type_be(typid)?);
@@ -671,9 +671,9 @@ fn pg_decode_message(
     // (appendBinaryStringInfo) are emitted byte-for-byte.
     OutputPluginPrepareWrite(opc, true)?;
     let _ = write!(opc.out, "message: transactional: {} prefix: ", transactional as i32);
-    opc.out.as_mut_vec().extend_from_slice(prefix);
+    opc.out.push_bytes(prefix);
     let _ = write!(opc.out, ", sz: {} content:", message.len());
-    opc.out.as_mut_vec().extend_from_slice(message);
+    opc.out.push_bytes(message);
     OutputPluginWrite(opc, true)
 }
 
@@ -807,19 +807,20 @@ fn pg_decode_stream_prepare(
     }
 
     let gid = rb.txn(txn).gid.clone().expect("prepared txn carries a gid");
+    let qgid = quote_literal_str(&gid)?;
     OutputPluginPrepareWrite(opc, true)?;
     if data.include_xids {
         let _ = write!(
             opc.out,
             "preparing streamed transaction TXN {}, txid {}",
-            quote_literal_str(&gid),
+            qgid,
             rb.txn(txn).xid
         );
     } else {
         let _ = write!(
             opc.out,
             "preparing streamed transaction {}",
-            quote_literal_str(&gid)
+            qgid
         );
     }
     if data.include_timestamp {
@@ -912,13 +913,13 @@ fn pg_decode_stream_message(
 
     OutputPluginPrepareWrite(opc, true)?;
     let _ = write!(opc.out, "streaming message: transactional: {} prefix: ", transactional as i32);
-    opc.out.as_mut_vec().extend_from_slice(prefix);
+    opc.out.push_bytes(prefix);
     if transactional {
         // The message content is not output: it may already be gone.
         let _ = write!(opc.out, ", sz: {}", message.len());
     } else {
         let _ = write!(opc.out, ", sz: {} content:", message.len());
-        opc.out.as_mut_vec().extend_from_slice(message);
+        opc.out.push_bytes(message);
     }
     OutputPluginWrite(opc, true)
 }

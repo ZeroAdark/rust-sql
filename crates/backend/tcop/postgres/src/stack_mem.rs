@@ -167,6 +167,14 @@ mod mac_mincore {
 
 /// Residency scan of this thread's stack region. Read-only; used by the
 /// `pgrust: memctx` census. None when bounds or mincore are unavailable.
+/// wasm32-wasip1 has no mincore (and its shadow stack is linear memory).
+#[cfg(target_family = "wasm")]
+pub fn stack_census() -> Option<StackCensus> {
+    None
+}
+
+/// Residency scan of this thread's stack region (see the wasm arm above).
+#[cfg(not(target_family = "wasm"))]
 pub fn stack_census() -> Option<StackCensus> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
@@ -190,7 +198,9 @@ fn stack_census_impl() -> Option<StackCensus> {
     if npages == 0 || npages > 1 << 22 {
         return None;
     }
-    let mut vec = vec![0u8; npages];
+    let mut vec = Vec::new();
+    vec.try_reserve_exact(npages).ok()?;
+    vec.resize(npages, 0);
     // SAFETY: [start, start+npages*page) lies within this thread's mapped
     // stack region; vec is npages bytes as mincore requires.
     let rc = unsafe {
@@ -264,7 +274,9 @@ pub fn release_idle_stack() -> usize {
     let marker = 0u8;
     let Some((lo, _hi)) = stack_region() else { return 0 };
     let page = page_size();
-    let start = (lo + page - 1) & !(page - 1);
+    // one page above the guard: a backend thread locks its stack's lowest page (pagegive::pin_thread_stack, so glibc's
+    // thread-exit MADV_DONTNEED stops there, CVE-2026-74674), and a give-back across it would be refused at that page
+    let start = ((lo + page - 1) & !(page - 1)) + page;
     let cutoff = frame_addr(&marker).saturating_sub(RED_ZONE) & !(page - 1);
     if cutoff <= start {
         return 0;
@@ -277,8 +289,9 @@ pub fn release_idle_stack() -> usize {
         // simply stay charged.
         // SAFETY: [start, cutoff) is entirely below the preserved red zone of
         // this thread's own stack (module safety argument).
+        // `pagegive::give_back_stack`: MADV_DONTNEED in calls that never cover a whole 2 MiB-aligned range (CVE-2026-74674).
         unsafe {
-            libc::madvise(start as *mut libc::c_void, len, libc::MADV_DONTNEED);
+            pagegive::give_back_stack(start, len);
         }
         return len;
     }

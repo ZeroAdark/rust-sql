@@ -1,0 +1,10 @@
+-- regress-full-join-149
+-- explain (costs off) select 1 from t t1 join lateral (select t1.a from (select 1) foo offset 0) as s1 on true join (select 1 from t t2 inner join (t t3 left join (t t4 left join t t5 on t4.a = 1) on t3.a = t4.a) on false where t3.a = coalesce(t5.a,1)) as s2 on true;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  gate T_List
+  project (1=c23:1)
+  outs 1=w4:val
+mapped: Result

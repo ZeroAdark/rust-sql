@@ -188,8 +188,8 @@ fn lossify_grow_during_walk() {
     let ctx = MemoryContext::new("t");
     // Every page in its own chunk (stride > PAGES_PER_CHUNK, bitno != 0):
     // each lossified page deletes its exact entry and inserts a fresh chunk
-    // entry, so the pagetable keeps inserting (and growing) while the raw
-    // bucket walk is mid-flight, across many sustained lossify rounds.
+    // entry, so the pagetable keeps inserting (and growing) while the
+    // lossify walk is mid-flight, across many sustained lossify rounds.
     let mut tbm = TIDBitmap::new(ctx.mcx(), 1);
     assert_eq!(tbm_calculate_entries(1), 16);
     let stride = (PAGES_PER_CHUNK + 1) as BlockNumber;
@@ -523,16 +523,73 @@ fn pagetable_grows_past_maxallocsize() {
     // tidbitmap.c:1503 pagetable_allocate: MemoryContextAllocExtended(..,
     // MCXT_ALLOC_HUGE | MCXT_ALLOC_ZERO) — the pagetable bucket array may
     // exceed MaxAllocSize, which is what lets a >1GB work_mem keep every
-    // page exact instead of lossifying. Only the control bytes are touched,
-    // so the reservation costs virtual memory, not resident memory.
+    // page exact instead of lossifying. Only the in-use flags are touched,
+    // so the entry array costs virtual memory, not resident memory.
     let ctx = MemoryContext::new("t");
     let mut tbm = TIDBitmap::new(ctx.mcx(), 2usize << 30);
     tbm.add_tuples(&[tid(1, 1), tid(2, 1)], false).unwrap();
     let table = tbm.pagetable.as_mut().expect("two pages => TBM_HASH");
-    let want = mcx::MAX_ALLOC_SIZE / core::mem::size_of::<(BlockNumber, PagetableEntry)>() + 1;
+    let want = (mcx::MAX_ALLOC_SIZE / core::mem::size_of::<PagetableEntry>() + 1) as u64;
     table
-        .try_reserve(want)
-        .expect("pagetable reservation above MaxAllocSize is admitted (MCXT_ALLOC_HUGE)");
-    assert!(table.capacity() >= want);
-    assert_eq!(table.len(), 2);
+        .grow(ctx.mcx(), want)
+        .expect("pagetable growth above MaxAllocSize is admitted (MCXT_ALLOC_HUGE)");
+    assert!(table.size >= want);
+    assert_eq!(table.members, 2);
+    assert!(table.lookup(1).is_some() && table.lookup(2).is_some());
+}
+
+// D2181: a bitmap rebuilt per rescan in a bump context (the executor's query
+// context) grew the context by a pagetable per rescan; a recycled bitmap
+// reuses its storage, and fills and reads out exactly as a fresh one.
+#[test]
+fn recycle_reuses_storage_in_a_bump_context() {
+    let ctx = MemoryContext::new_bump("t");
+    let mut tbm = TIDBitmap::new(ctx.mcx(), 1024 * 1024);
+    let fill = |tbm: &mut TIDBitmap<'_>, k: u32| {
+        tbm.add_tuples(&[tid(k % 1000, 1), tid((k * 7) % 1000, 2), tid((k * 13) % 1000, 3)], false).unwrap();
+    };
+    fill(&mut tbm, 1);
+    drain(&mut tbm);
+    tbm.recycle(1024 * 1024);
+    fill(&mut tbm, 2);
+    drain(&mut tbm);
+    for k in 3..203u32 {
+        tbm.recycle(1024 * 1024);
+        fill(&mut tbm, k);
+        let mut fresh = TIDBitmap::new(ctx.mcx(), 1024 * 1024);
+        fill(&mut fresh, k);
+        assert_eq!(drain(&mut tbm), drain(&mut fresh), "rebuild {k}");
+    }
+    let ctx2 = MemoryContext::new_bump("t2");
+    let mut tbm2 = TIDBitmap::new(ctx2.mcx(), 1024 * 1024);
+    fill(&mut tbm2, 1);
+    drain(&mut tbm2);
+    let used2 = ctx2.stats().used;
+    for k in 2..2002u32 {
+        tbm2.recycle(1024 * 1024);
+        fill(&mut tbm2, k);
+        drain(&mut tbm2);
+    }
+    assert_eq!(ctx2.stats().used, used2, "a recycled bitmap rebuilt 2000 times allocates nothing");
+}
+
+#[test]
+fn recycle_after_growth_and_lossify_matches_a_fresh_bitmap() {
+    let ctx = MemoryContext::new("t");
+    let mut tbm = TIDBitmap::new(ctx.mcx(), 1);
+    // grow the pagetable and raise maxentries through lossify
+    for blk in 0..5000u32 {
+        tbm.add_tuples(&[tid(blk, 1)], false).unwrap();
+    }
+    drain(&mut tbm);
+    for round in 0..3u32 {
+        tbm.recycle(1);
+        let mut fresh = TIDBitmap::new(ctx.mcx(), 1);
+        for blk in 0..200u32 {
+            let b = (blk * 37 + round) % 977;
+            tbm.add_tuples(&[tid(b, 1 + (blk % 5) as OffsetNumber)], false).unwrap();
+            fresh.add_tuples(&[tid(b, 1 + (blk % 5) as OffsetNumber)], false).unwrap();
+        }
+        assert_eq!(drain(&mut tbm), drain(&mut fresh), "round {round}");
+    }
 }

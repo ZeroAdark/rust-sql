@@ -1,0 +1,19 @@
+# PostgreSQL 18.6 (m4_write_golden.py): the tables before, the statement, its rows, count and tables after
+plan: oltp-084
+table: 16534 ol_del k:int8
+unique: 16534 ol_del_pkey k
+seek: 16534 >= <=
+[before 16534]
+12358
+12359
+12360
+12361
+12362
+12363
+[pg]
+[tag]
+3
+[after 16534]
+12358
+12359
+12363

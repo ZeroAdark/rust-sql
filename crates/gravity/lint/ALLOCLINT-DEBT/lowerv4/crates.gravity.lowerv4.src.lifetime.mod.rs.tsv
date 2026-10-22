@@ -1,0 +1,5 @@
+path	crates/gravity/lowerv4/src/lifetime/mod.rs
+growth	std::vec::Vec::push	6
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	11
+type	std::vec::Vec	3

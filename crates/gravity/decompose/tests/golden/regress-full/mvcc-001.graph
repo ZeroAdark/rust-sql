@@ -1,0 +1,19 @@
+-- regress-full-mvcc-001
+-- DO $$ BEGIN -- iterate often enough to see index growth even on larger-than-default page sizes FOR i IN 1..100 LOOP BEGIN -- perform index scan over all the inserted keys to get them to be seen as dead IF EXISTS(SELECT * FROM clean_aborted_self WHERE key > 0 AND key < 100) THEN RAISE data_corrupted USING MESSAGE = 'these rows should not exist'; END IF; INSERT INTO clean_aborted_self SELECT g.i, 'rolling back in a sec' FROM generate_series(1, 100) g(i); -- just some error that's not normally thrown RAISE reading_sql_data_not_permitted USING MESSAGE = 'round and round again'; EXCEPTION WHEN reading_sql_data_not_permitted THEN END; END LOOP; END;$$;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=17427 rti=2 am=heap index=17432
+    key att=1 op=521 value=c23:0
+    key att=1 op=97 value=c23:100
+    recheck (op521(v2.1, c23:0), op97(v2.1, c23:100))
+    lanes
+  project ()
+  outs
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec0)
+  outs 1=w1:val
+init_plan id=1 pipeline=p0 link=Exists param=$exec0 raise-free
+mapped: Result IndexScan SubPlan

@@ -496,8 +496,8 @@ fn fc_inet_gist_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         key_at(i).validate()?;
     }
 
-    v.spl_left = Vec::with_capacity(maxoff + 1);
-    v.spl_right = Vec::with_capacity(maxoff + 1);
+    v.spl_left = ::mcx::std_vec_with_capacity("adt", maxoff + 1)?;
+    v.spl_right = ::mcx::std_vec_with_capacity("adt", maxoff + 1)?;
 
     let p = calc_inet_union_params((1..=maxoff).map(key_at));
 

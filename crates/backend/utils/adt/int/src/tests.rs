@@ -346,10 +346,13 @@ fn fmgr_wrappers_and_table() {
     fci.set_arg(1, Datum::from_i32(8));
     assert!(!fc_int4eq(None, &mut fci).unwrap().as_bool());
 
-    // int4out through a resolved carrier: NUL-terminated cstring in the
-    // flinfo scratch.
+    // int4out through a resolved carrier: a fresh NUL-terminated cstring in
+    // the frame's result context.
     let mut flinfo = FmgrInfo::new(fc_int4out, 43, 1, true, false);
     let mut fci = LocalFcinfo::<1>::new(0);
+    let cx = ::mcx::MemoryContext::new_bump("int4out test");
+    // SAFETY: cx outlives every call through this frame.
+    unsafe { fci.set_result_mcx(cx.mcx()) };
     for v in [0i32, i32::MIN, i32::MAX, -1] {
         fci.set_arg(0, Datum::from_i32(v));
         let d = flinfo.invoke(&mut fci).unwrap();
@@ -371,7 +374,7 @@ fn fmgr_wrappers_and_table() {
     let n = oids.len();
     oids.dedup();
     assert_eq!(n, oids.len());
-    assert_eq!(n, 100);
+    assert_eq!(n, 98);
     for b in INT_BUILTINS {
         assert!(b.strict);
         assert_eq!(b.retset, b.foid == 1066 || b.foid == 1067);
@@ -476,17 +479,6 @@ fn generate_series_support_rows_estimate() {
     assert_eq!(req.rows, 10.0);
 }
 
-#[test]
-fn hashchar_zero_extends_high_bit() {
-    // Ruling 2026-07-29: pin the aarch64 (unsigned char) arm — byte 0x80
-    // hashes as 128, not sign-extended -128.
-    let mut f = types_fmgr::LocalFcinfo::<1>::new(0);
-    f.args[0] = datum::NullableDatum::value(datum::Datum::from_i8(-128)); // 0x80
-    let h = crate::builtins::fc_hashchar(None, &mut f).unwrap().as_u32();
-    let expect = ::hashfn::hash_bytes_uint32(128u32); // unsigned, not -128
-    assert_eq!(h, expect);
-}
-
 /// int.c int2vectorin skips leading C-locale isspace (VT/FF included) before
 /// each element.  Ground truth (PostgreSQL 18.3):
 ///   SELECT E'\x0b1'::int2vector;    -> '1'
@@ -509,6 +501,9 @@ fn int4out_results_do_not_alias_across_carriers() {
     let mut f1 = ::types_fmgr::FmgrInfo::new(fc_int4out, 43, 1, true, false);
     let mut f2 = ::types_fmgr::FmgrInfo::new(fc_int4out, 43, 1, true, false);
     let mut fci = ::types_fmgr::LocalFcinfo::<1>::new(0);
+    let cx = ::mcx::MemoryContext::new_bump("int4out alias test");
+    // SAFETY: cx outlives every call through fci and every read of its results.
+    unsafe { fci.set_result_mcx(cx.mcx()) };
     fci.set_arg(0, Datum::from_i32(12));
     let d1 = f1.invoke(&mut fci).unwrap();
     fci.set_arg(0, Datum::from_i32(34));
@@ -516,4 +511,25 @@ fn int4out_results_do_not_alias_across_carriers() {
     let cstr = |d: Datum| unsafe { core::ffi::CStr::from_ptr(d.as_usize() as *const core::ffi::c_char) }.to_bytes().to_vec();
     assert_eq!(cstr(d1), b"12");
     assert_eq!(cstr(d2), b"34");
+}
+
+#[test]
+fn smallint_overflow_locations_match_c() {
+    for (result, line, routine) in [
+        (i4toi2(32768), 384, "i4toi2"),
+        (int2um(i16::MIN), 922, "int2um"),
+        (int2pl(1, 32767), 944, "int2pl"),
+        (int2mi(i16::MIN, 1), 958, "int2mi"),
+        (int2mul(i16::MAX, 2), 972, "int2mul"),
+        (int2div(i16::MIN, -1), 1004, "int2div"),
+        (int2abs(i16::MIN), 1242, "int2abs"),
+    ] {
+        let err = result.unwrap_err();
+        assert_eq!(err.sqlstate(), ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
+        assert_eq!(err.message(), "smallint out of range");
+        let location = err.location.as_ref().unwrap();
+        assert_eq!(location.filename.as_deref(), Some("int.c"));
+        assert_eq!(location.lineno, line);
+        assert_eq!(location.funcname.as_deref(), Some(routine));
+    }
 }

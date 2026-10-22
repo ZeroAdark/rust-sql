@@ -50,7 +50,7 @@ pub fn hashbuild<'mcx>(
     let mut sort_threshold =
         (init_small::globals::maintenance_work_mem() as u64 * 1024) / ::types_core::BLCKSZ as u64;
     if index.rd_rel.relpersistence != ::types_core::RELPERSISTENCE_TEMP {
-        sort_threshold = sort_threshold.min(init_small::globals::NBuffers() as u64);
+        sort_threshold = sort_threshold.min(bufmgr_seams::active_buffers_or(init_small::globals::NBuffers()).max(0) as u64);
     } else {
         sort_threshold = sort_threshold.min(bufmgr::n_loc_buffer().max(0) as u64);
     }
@@ -471,6 +471,7 @@ mod tests {
             rd_amcache_hash: Default::default(),
             rd_amcache_gin: Default::default(),
             rd_amcache_spgist: Default::default(),
+            rd_amcache_bloom: Default::default(),
             rd_support: PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
@@ -518,6 +519,7 @@ mod tests {
             ii_WithoutOverlaps: false,
             ii_CheckedUnchanged: false,
             ii_IndexUnchanged: false,
+            ii_ParallelWorkers: 0,
         }
     }
 

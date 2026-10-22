@@ -1,0 +1,117 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s1b s1u s2l s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x: EXPLAIN (COSTS OFF) SELECT tableoid::regclass, k, v FROM gi WHERE k IN (1, 2, 3, 12, 13) ORDER BY v DESC, k LIMIT 3 FOR UPDATE;
+QUERY PLAN                                                                    
+------------------------------------------------------------------------------
+Limit                                                                         
+  ->  LockRows                                                                
+        ->  Sort                                                              
+              Sort Key: gi.v DESC, gi.k                                       
+              ->  Result                                                      
+                    ->  Append                                                
+                          ->  Seq Scan on gi gi_1                             
+                                Filter: (k = ANY ('{1,2,3,12,13}'::integer[]))
+                          ->  Seq Scan on gi_c gi_2                           
+                                Filter: (k = ANY ('{1,2,3,12,13}'::integer[]))
+                          ->  Seq Scan on gi_d gi_3                           
+                                Filter: (k = ANY ('{1,2,3,12,13}'::integer[]))
+(12 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE gi SET v = v || '1' WHERE k = 2;
+step s2l: SELECT tableoid::regclass, k, v FROM gi WHERE k IN (1, 2, 3, 12, 13) ORDER BY v DESC, k LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+tableoid| k|v 
+--------+--+--
+gi_d    | 3|d 
+gi_d    |13|d 
+gi_c    | 2|c1
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1m s2l s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1m: UPDATE gi SET k = 100 WHERE k = 2;
+step s2l: SELECT tableoid::regclass, k, v FROM gi WHERE k IN (1, 2, 3, 12, 13) ORDER BY v DESC, k LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+tableoid| k|v
+--------+--+-
+gi_d    | 3|d
+gi_d    |13|d
+gi_c    |12|c
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1m s2o s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1m: UPDATE gi SET k = 100 WHERE k = 2;
+step s2o: SELECT tableoid::regclass, k, v FROM gi WHERE k < 50 ORDER BY v DESC, k OFFSET 1 LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+tableoid| k|v
+--------+--+-
+gi_d    |13|d
+gi_c    |12|c
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1l s2s s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l: SELECT k FROM gi WHERE k = 2 FOR UPDATE;
+k
+-
+2
+(1 row)
+
+step s2s: SELECT tableoid::regclass, k, v FROM gi WHERE k < 50 ORDER BY v DESC, k LIMIT 3 FOR UPDATE SKIP LOCKED;
+tableoid| k|v
+--------+--+-
+gi_d    | 3|d
+gi_d    |13|d
+gi_c    |12|c
+(3 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1pu s2p s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1pu: UPDATE gp SET v = 'q', n = -n WHERE k = 10;
+step s2p: SELECT tableoid::regclass, k, v, n FROM gp WHERE n <> 0 AND k BETWEEN 9 AND 14 ORDER BY v DESC, k LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+tableoid| k|v|   n
+--------+--+-+----
+gp1     | 9|p|  90
+gp2     |10|q|-100
+gp2     |11|p| 110
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1pm s2p s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1pm: UPDATE gp SET n = 0 WHERE k = 9;
+step s2p: SELECT tableoid::regclass, k, v, n FROM gp WHERE n <> 0 AND k BETWEEN 9 AND 14 ORDER BY v DESC, k LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+tableoid| k|v|  n
+--------+--+-+---
+gp2     |10|p|100
+gp2     |11|p|110
+gp2     |12|p|120
+(3 rows)
+
+step s2c: COMMIT;

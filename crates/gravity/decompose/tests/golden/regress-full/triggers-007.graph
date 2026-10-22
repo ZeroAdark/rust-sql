@@ -1,0 +1,12 @@
+-- regress-full-triggers-007
+-- DELETE FROM main_table WHERE a IN (123, 456);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=21345 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter any96(v1.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00{\x00\x00\x00\xc8\x01\x00\x00')
+  project (1j=v1.-1)
+  write DELETE rel=21345 rti=1 natts=2 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable SeqScan

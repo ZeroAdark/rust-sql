@@ -44,7 +44,7 @@ pub(crate) unsafe fn cube_payload<'a>(mcx: Mcx<'_>, d: Datum) -> PgResult<std::b
                 varatt::varsize_4b(p) - 4,
             )))
         } else {
-            Ok(std::borrow::Cow::Owned(types_fmgr::datum_varlena_packed(d, mcx)?.data().to_vec()))
+            Ok(std::borrow::Cow::Owned(::mcx::std_vec_from_slice("cube", types_fmgr::datum_varlena_packed(d, mcx)?.data())?))
         }
     }
 }
@@ -61,7 +61,7 @@ fn size_of_image(img: &[u8]) -> f64 {
 /// `cube_union_v0` on images, honoring C's `a == b` pointer-equality
 /// shortcut via an explicit same-image check at the call sites that need it
 /// (picksplit seeds).
-fn union_images(a: &[u8], b: &[u8]) -> Vec<u8> {
+fn union_images(a: &[u8], b: &[u8]) -> PgResult<Vec<u8>> {
     ops::cube_union_v0(
         &CubeView::from_payload(&a[4..]),
         &CubeView::from_payload(&b[4..]),
@@ -119,10 +119,10 @@ pub fn fc_g_cube_union(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
     // SAFETY: non-null cube key datum.
     let mut same_as_key0 = unsafe { varatt::varatt_is_4b_u(key0 as *const u8) };
     // SAFETY: non-null cube key datums.
-    let mut out: Vec<u8> = unsafe { cube_payload(fcinfo.result_mcx(), entryvec.vector[0].key)? }.to_vec();
+    let mut out: Vec<u8> = ::mcx::std_vec_from_slice("cube", &unsafe { cube_payload(fcinfo.result_mcx(), entryvec.vector[0].key)? })?;
     // Rebuild the full image (header + payload) for the union loop.
     let mut cur = {
-        let mut img = Vec::with_capacity(4 + out.len());
+        let mut img = ::mcx::std_vec_with_capacity("cube", 4 + out.len())?;
         img.extend_from_slice(&datum::varlena::set_varsize_4b(4 + out.len()));
         img.append(&mut out);
         img
@@ -134,10 +134,10 @@ pub fn fc_g_cube_union(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
         same_as_key0 = false;
         // SAFETY: non-null cube key datums.
         let other = unsafe { cube_payload(fcinfo.result_mcx(), entryvec.vector[i].key)? };
-        let mut full = Vec::with_capacity(4 + other.len());
+        let mut full = ::mcx::std_vec_with_capacity("cube", 4 + other.len())?;
         full.extend_from_slice(&datum::varlena::set_varsize_4b(4 + other.len()));
         full.extend_from_slice(&other);
-        cur = union_images(&cur, &full);
+        cur = union_images(&cur, &full)?;
     }
     // SAFETY: size out-param live in the caller frame.
     unsafe { *sizep = cur.len() as i32 };
@@ -167,7 +167,7 @@ pub fn fc_g_cube_penalty(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
     let ud = ops::cube_union_v0(
         &CubeView::from_payload(&orig),
         &CubeView::from_payload(&new),
-    );
+    )?;
     let tmp1 = size_of_image(&ud);
     let tmp2 = ops::rt_cube_size(&CubeView::from_payload(&orig));
     // SAFETY: penalty out-param live in the caller frame.
@@ -185,12 +185,12 @@ pub fn fc_g_cube_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
 
     let n = entryvec.n as usize;
     // Full images (header restored) for every valid offset 1..n-1.
-    let mut imgs: Vec<Vec<u8>> = Vec::with_capacity(n);
+    let mut imgs: Vec<Vec<u8>> = ::mcx::std_vec_with_capacity("cube", n)?;
     imgs.push(Vec::new()); // offset 0 unused
     for i in 1..n {
         // SAFETY: non-null cube key datums.
         let payload = unsafe { cube_payload(fcinfo.result_mcx(), entryvec.vector[i].key)? };
-        let mut full = Vec::with_capacity(4 + payload.len());
+        let mut full = ::mcx::std_vec_with_capacity("cube", 4 + payload.len())?;
         full.extend_from_slice(&datum::varlena::set_varsize_4b(4 + payload.len()));
         full.extend_from_slice(&payload);
         imgs.push(full);
@@ -204,12 +204,12 @@ pub fn fc_g_cube_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
     for i in 1..seed_search_maxoff {
         for j in (i + 1)..=seed_search_maxoff {
             // size_waste = size_union - size_inter
-            let union_d = union_images(&imgs[i], &imgs[j]);
+            let union_d = union_images(&imgs[i], &imgs[j])?;
             let size_union = size_of_image(&union_d);
             let inter_d = ops::cube_inter_v0(
                 &CubeView::from_payload(&imgs[i][4..]),
                 &CubeView::from_payload(&imgs[j][4..]),
-            );
+            )?;
             let size_inter = size_of_image(&inter_d);
             let size_waste = size_union - size_inter;
             if size_waste > waste || firsttime {
@@ -243,8 +243,8 @@ pub fn fc_g_cube_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
         }
 
         // which page needs least enlargement?
-        let union_dl = union_images(&datum_l, &imgs[i]);
-        let union_dr = union_images(&datum_r, &imgs[i]);
+        let union_dl = union_images(&datum_l, &imgs[i])?;
+        let union_dr = union_images(&datum_r, &imgs[i])?;
         let size_alpha = size_of_image(&union_dl);
         let size_beta = size_of_image(&union_dr);
 

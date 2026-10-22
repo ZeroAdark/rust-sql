@@ -9,7 +9,7 @@ use types_core::{
     RELPERSISTENCE_TEMP, RELPERSISTENCE_UNLOGGED,
 };
 use types_error::PgResult;
-use types_rel::{FormData_pg_class, RelationData, RELKIND_MATVIEW, RELKIND_PARTITIONED_TABLE, RELKIND_RELATION, REPLICA_IDENTITY_DEFAULT, REPLICA_IDENTITY_NOTHING};
+use types_rel::{FormData_pg_class, RelationData, RELKIND_INDEX, RELKIND_MATVIEW, RELKIND_PARTITIONED_INDEX, RELKIND_PARTITIONED_TABLE, RELKIND_RELATION, RELKIND_SEQUENCE, REPLICA_IDENTITY_DEFAULT, REPLICA_IDENTITY_NOTHING};
 use types_tuple::{NameData, TupleConstr, TupleDescData};
 
 use crate::build::{invalid_relpersistence, RelationInitPhysicalAddr, RelationInitTableAccessMethod};
@@ -31,12 +31,6 @@ pub fn RelationBuildLocalRelation(
     relpersistence: u8,
     relkind: u8,
 ) -> PgResult<Rc<RelationData<'static>>> {
-    if shared_relation {
-        panic!(
-            "RelationBuildLocalRelation (relcache.c): shared relation \
-             creation unported (relid {relid})"
-        );
-    }
     let mcx = cache_mcx();
     let mut rd_att = tupdesc::CreateTupleDescCopy(mcx, tupDesc)?;
     rd_att.tdrefcount = 1;
@@ -95,14 +89,22 @@ pub fn RelationBuildLocalRelation(
         // consults the map (relcache.c RelationBuildLocalRelation).
         relfilenode: if mapped_relation { types_core::InvalidRelFileNumber } else { relfilenumber },
         reltablespace,
-        // C's palloc0 leaves relpages/reltuples/relallvisible zero; the pokes
-        // in AddNewRelationTuple (tables: reltuples -1) happen at insert time.
-        relpages: 0,
-        reltuples: 0.0,
+        // AddNewRelationTuple pokes these into C's entry in place (heap.c:
+        // new_rel_reltup = rd_rel; -1 for tables, 1/1 for sequences, never for
+        // indexes); a nailed entry never rebuilt in bootstrap must carry them.
+        relpages: match relkind {
+            RELKIND_SEQUENCE => 1,
+            _ => 0,
+        },
+        reltuples: match relkind {
+            RELKIND_INDEX | RELKIND_PARTITIONED_INDEX => 0.0,
+            RELKIND_SEQUENCE => 1.0,
+            _ => -1.0,
+        },
         relallvisible: 0,
         reltoastrelid: InvalidOid,
         relhasindex: false,
-        relisshared: false,
+        relisshared: shared_relation,
         relpersistence,
         relkind,
         relhassubclass: false,
@@ -149,7 +151,7 @@ pub fn RelationBuildLocalRelation(
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: core::cell::RefCell::new(Vec::new()),
         rd_opcoptions: Default::default(),
@@ -169,7 +171,21 @@ pub fn RelationBuildLocalRelation(
     RelationInitTableAccessMethod(relid, relkind, accessmtd)?;
 
     let rel = Rc::new(data);
-    store::insert(Rc::clone(&rel), false, false)?;
+    // RelationCacheInsert: replacing an entry is legal only in bootstrap.
+    let bootstrap = miscinit_seams::is_bootstrap_processing_mode::call();
+    // RelationBuildLocalRelation `nailit`: a flush reloads these in place
+    // instead of rebuilding through a scan that reopens the entry itself.
+    let nailed = matches!(
+        relid,
+        types_core::RELATION_RELATION_ID
+            | types_core::ATTRIBUTE_RELATION_ID
+            | types_core::PROCEDURE_RELATION_ID
+            | types_core::TYPE_RELATION_ID
+            | types_core::DATABASE_RELATION_ID
+            | types_core::AUTH_ID_RELATION_ID
+            | types_core::AUTH_MEM_RELATION_ID
+    );
+    store::insert(Rc::clone(&rel), nailed, bootstrap)?;
     store::eoxact_list_add(relid);
     rel.rd_isvalid.set(true);
     Ok(rel)

@@ -116,7 +116,8 @@ fn setting_tuple(mcx: Mcx<'_>, desc: &TupleDescData<'_>, conf: &GucVariable) -> 
             if names.is_empty() {
                 names.push("");
             }
-            let mut elems = Vec::with_capacity(names.len());
+            let mut elems = Vec::new();
+            let _ = elems.try_reserve(names.len());
             for n in &names {
                 elems.push(text_datum(mcx, n)?);
             }
@@ -149,7 +150,7 @@ fn setting_tuple(mcx: Mcx<'_>, desc: &TupleDescData<'_>, conf: &GucVariable) -> 
     values[16] = Datum::from_bool(gen.status & GUC_PENDING_RESTART != 0);
 
     let tuple = heaptuple::heap_form_tuple(mcx, desc, &values, &nulls)?;
-    let image = tuple.image().to_vec();
+    let image = ::mcx::std_vec_from_slice("misc", &tuple.image())?;
     drop(enum_arr);
     Ok(image)
 }

@@ -62,6 +62,13 @@ fn target_block(rel: &Relation<'_>) -> BlockNumber {
     if locator.relNumber == 0 {
         return InvalidBlockNumber;
     }
+    // D4560: the relation's pinned smgr handle (C's rd_smgr->smgr_targblock, a field read) when it has one, the same
+    // SMgrRelation the key lookup below finds; the key lookup hashed the locator per insertion.
+    if crate::fcframe::insert_fast() {
+        if let Some(h) = rel.rd_smgr.get() {
+            return smgr::smgrgettargblock_h(h);
+        }
+    }
     smgr::smgrgettargblock(::types_storage::RelFileLocatorBackend {
         locator,
         backend: rel.rd_backend,
@@ -71,6 +78,15 @@ fn target_block(rel: &Relation<'_>) -> BlockNumber {
 fn set_target_block(rel: &Relation<'_>, blk: BlockNumber) {
     let locator = rel.rd_locator.get();
     if locator.relNumber == 0 {
+        return;
+    }
+    // D4560: C's RelationSetTargetBlock, RelationGetSmgr(rel)->smgr_targblock = blk: the relation's pinned handle, opened
+    // once (heapam hio.rs relation_set_target_block); the key path below opened and hashed the locator per insertion. The
+    // relcache's RelationCloseSmgr (inval, a new relfilenode) drops the handle, as C's.
+    if crate::fcframe::insert_fast() {
+        if let Ok(h) = smgr::RelationGetSmgr(rel) {
+            smgr::smgrsettargblock_h(h, blk);
+        }
         return;
     }
     let key = ::types_storage::RelFileLocatorBackend {
@@ -104,6 +120,16 @@ pub fn btinsert<'mcx>(
     check_unique: IndexUniqueCheck,
     index_unchanged: bool,
 ) -> PgResult<bool> {
+    // D4560: the insertion's tuple in a stack image when it needs no detoast / compression and fits (no per-row
+    // allocation and free); bt_doinsert copies it into the page and keeps no pointer past its return.
+    if crate::fcframe::insert_fast() {
+        let mut stack = [const { core::mem::MaybeUninit::<u64>::uninit() }; crate::itup::ITUP_STACK_WORDS];
+        if let Some(itup) = crate::itup::index_form_tuple_stack(&rel.rd_att, values, isnull, &mut stack)? {
+            // SAFETY: `itup` is the formed image in `stack`, live and writable for this call.
+            unsafe { set_t_tid(itup.cast_mut(), *ht_ctid) };
+            return bt_doinsert(mcx, rel, itup, check_unique, index_unchanged, heap_rel);
+        }
+    }
     let mut itup = index_form_tuple(mcx, &rel.rd_att, values, isnull)?;
     // SAFETY: freshly built owned image.
     unsafe { set_t_tid(itup.as_mut_ptr(), *ht_ctid) };
@@ -129,7 +155,13 @@ fn bt_doinsert<'mcx>(
     let mut is_unique = false;
     let mut checkingunique = !matches!(check_unique, IndexUniqueCheck::UNIQUE_CHECK_NO);
 
-    let mut itup_key = bt_mkscankey(rel, Some(itup))?;
+    let mut itup_key;
+    if crate::fcframe::insert_fast() {
+        itup_key = BtScanInsert::new();
+        crate::utils::bt_mkscankey_into(rel, Some(itup), &mut itup_key)?;
+    } else {
+        itup_key = bt_mkscankey(rel, Some(itup))?;
+    }
     let mut frame = OrderProcFrame::new();
 
     if checkingunique {
@@ -1950,13 +1982,17 @@ unsafe fn bt_insert_parent<'mcx>(
 
     // No descent stack (concurrent root split, or _bt_finish_split with a
     // stackless caller): phony entry at the leftmost page one level up;
-    // bt_getstackbuf corrects blkno/offset. C's elog(DEBUG2) elided.
+    // bt_getstackbuf corrects blkno/offset.
     let mut fakestack = StackEntry {
         blkno: InvalidBlockNumber,
         offset: InvalidOffsetNumber,
     };
     let mut empty: [StackEntry; 0] = [];
     let (top, parent_stack) = if stack.is_empty() {
+        ::elog_seams::ereport::call(
+            PgError::new(::types_error::DEBUG2, "concurrent ROOT page split")
+                .with_location("nbtinsert.c", 2149, "_bt_insert_parent"),
+        )?;
         let opaque = page_opaque(&buf.page());
         // fastpath never splits the rightmost leaf without a stack
         debug_assert!(!(P_ISLEAF(&opaque) && target_block(rel) != InvalidBlockNumber));

@@ -49,7 +49,8 @@
 # Unit-shaped:  cargo test -p catalog_index --test lint_inplace_locks
 set -u
 
-REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+# REPO is the public workspace root (git rev-parse --show-toplevel would be the monorepo root).
+REPO="$(cd "$(dirname "$0")/../../../../.." && pwd)"
 cd "$REPO" || exit 2
 # POSIX grep + find only, no ripgrep: the CI cluster test pods do not ship rg, and a
 # lint that cannot run is a lint that silently stops guarding. (Learned the
@@ -80,6 +81,7 @@ DIVERGENT-FIXED|crates/backend/commands/tablecmds/src/setrelopts.rs|update_one|t
 DIVERGENT-FIXED|crates/backend/commands/tablecmds/src/namespace.rs|AlterRelationNamespaceInternal|tablecmds.c:19065+19099+19113|ALTER TABLE ... SET SCHEMA
 DIVERGENT-FIXED|crates/backend/commands/indexcmds/src/define.rs|update_relispartition|indexcmds.c:4582+4589|IndexSetParentIndex
 C-EXACT|crates/backend/commands/tablecmds/src/alter.rs|ATExecAddColumn|tablecmds.c:7360 SearchSysCacheCopy1|C fetches UNLOCKED here; relnatts only
+C-EXACT|crates/backend/commands/tablecmds/src/alter.rs|set_relnatts|tablecmds.c:7368 (18.6) SearchSysCacheCopy1, as ATExecAddColumn|pgrcolumnar companion relnatts; add_companion_column holds AccessExclusiveLock on the companion before the copy (README.tuplock: ShareRowExclusiveLock or stricter suffices)
 C-EXACT|crates/backend/commands/tablecmds/src/partition.rs|SetRelationHasSubclass|tablecmds.c:3662 SearchSysCacheCopy1|C fetches UNLOCKED
 C-EXACT|crates/backend/commands/tablecmds/src/owner.rs|ATExecChangeOwner|tablecmds.c:16088 SearchSysCache1|C fetches UNLOCKED
 C-EXACT|crates/backend/commands/matview/src/lib.rs|SetMatViewPopulatedState|matview.c:92 SearchSysCacheCopy1|C fetches UNLOCKED
@@ -119,7 +121,7 @@ FILECOUNTS=$(cat <<'ROWS'
 2|crates/backend/commands/publicationcmds/src/lib.rs
 1|crates/backend/commands/sequence/src/lib.rs
 1|crates/backend/commands/statscmds/src/lib.rs
-9|crates/backend/commands/tablecmds/src/alter.rs
+10|crates/backend/commands/tablecmds/src/alter.rs
 7|crates/backend/commands/tablecmds/src/attach.rs
 1|crates/backend/commands/tablecmds/src/constraints.rs
 1|crates/backend/commands/tablecmds/src/fk.rs

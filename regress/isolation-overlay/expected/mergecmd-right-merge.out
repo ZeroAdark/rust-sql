@@ -1,0 +1,739 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2e s1n s2m s1c s2s
+step s2e: EXPLAIN (COSTS OFF) MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted');
+QUERY PLAN                          
+------------------------------------
+Merge on rm_t t                     
+  ->  Merge Right Join              
+        Merge Cond: (t.tid = s.sid) 
+        ->  Sort                    
+              Sort Key: t.tid       
+              ->  Seq Scan on rm_t t
+        ->  Sort                    
+              Sort Key: s.sid       
+              ->  Seq Scan on rm_s s
+(9 rows)
+
+step s1n: UPDATE rm_t SET balance = balance + 1 WHERE tid = 3;
+step s2m: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val            
+---+-------+---------------
+  1|    110|initial updated
+  2|     20|inserted       
+  3|    331|initial updated
+  4|     40|inserted       
+  5|    550|initial updated
+  6|     60|inserted       
+  7|    700|initial        
+  9|    900|initial        
+(8 rows)
+
+
+starting permutation: s1k s2m s1c s2s
+step s1k: UPDATE rm_t SET tid = 30 WHERE tid = 3;
+step s2m: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val            
+---+-------+---------------
+  1|    110|initial updated
+  2|     20|inserted       
+  3|     30|inserted       
+  4|     40|inserted       
+  5|    550|initial updated
+  6|     60|inserted       
+  7|    700|initial        
+  9|    900|initial        
+ 30|    300|initial        
+(9 rows)
+
+
+starting permutation: s1d s2m s1c s2s
+step s1d: DELETE FROM rm_t WHERE tid = 3;
+step s2m: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val            
+---+-------+---------------
+  1|    110|initial updated
+  2|     20|inserted       
+  3|     30|inserted       
+  4|     40|inserted       
+  5|    550|initial updated
+  6|     60|inserted       
+  7|    700|initial        
+  9|    900|initial        
+(8 rows)
+
+
+starting permutation: s1n s2x s1c s2s
+step s1n: UPDATE rm_t SET balance = balance + 1 WHERE tid = 3;
+step s2x: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val     
+---+-------+--------
+  2|     20|inserted
+  4|     40|inserted
+  6|     60|inserted
+  7|    700|initial 
+  9|    900|initial 
+(5 rows)
+
+
+starting permutation: s1k s2x s1c s2s
+step s1k: UPDATE rm_t SET tid = 30 WHERE tid = 3;
+step s2x: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val     
+---+-------+--------
+  2|     20|inserted
+  3|     30|inserted
+  4|     40|inserted
+  6|     60|inserted
+  7|    700|initial 
+  9|    900|initial 
+ 30|    300|initial 
+(7 rows)
+
+
+starting permutation: s3e s1n s3m s1c s2s
+step s3e: EXPLAIN (COSTS OFF) MERGE INTO rm_t t USING rm_s s JOIN rm_s2 s2 ON sid = sid2 ON t.tid = sid WHEN MATCHED THEN UPDATE SET val = val || ' ' || sval WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, sval);
+QUERY PLAN                                        
+--------------------------------------------------
+Merge on rm_t t                                   
+  ->  Merge Right Join                            
+        Merge Cond: (t.tid = s.sid)               
+        ->  Sort                                  
+              Sort Key: t.tid                     
+              ->  Seq Scan on rm_t t              
+        ->  Materialize                           
+              ->  Merge Join                      
+                    Merge Cond: (s2.sid2 = s.sid) 
+                    ->  Sort                      
+                          Sort Key: s2.sid2       
+                          ->  Seq Scan on rm_s2 s2
+                    ->  Sort                      
+                          Sort Key: s.sid         
+                          ->  Seq Scan on rm_s s  
+(15 rows)
+
+step s1n: UPDATE rm_t SET balance = balance + 1 WHERE tid = 3;
+step s3m: MERGE INTO rm_t t USING rm_s s JOIN rm_s2 s2 ON sid = sid2 ON t.tid = sid WHEN MATCHED THEN UPDATE SET val = val || ' ' || sval WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, sval); <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val           
+---+-------+--------------
+  1|    100|initial src2 1
+  2|     20|src2 2        
+  3|    301|initial src2 3
+  4|     40|src2 4        
+  5|    500|initial src2 5
+  6|     60|src2 6        
+  7|    700|initial       
+  9|    900|initial       
+(8 rows)
+
+
+starting permutation: s1k s3m s1c s2s
+step s1k: UPDATE rm_t SET tid = 30 WHERE tid = 3;
+step s3m: MERGE INTO rm_t t USING rm_s s JOIN rm_s2 s2 ON sid = sid2 ON t.tid = sid WHEN MATCHED THEN UPDATE SET val = val || ' ' || sval WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, sval); <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val           
+---+-------+--------------
+  1|    100|initial src2 1
+  2|     20|src2 2        
+  3|     30|src2 3        
+  4|     40|src2 4        
+  5|    500|initial src2 5
+  6|     60|src2 6        
+  7|    700|initial       
+  9|    900|initial       
+ 30|    300|initial       
+(9 rows)
+
+
+starting permutation: s1d s3m s1c s2s
+step s1d: DELETE FROM rm_t WHERE tid = 3;
+step s3m: MERGE INTO rm_t t USING rm_s s JOIN rm_s2 s2 ON sid = sid2 ON t.tid = sid WHEN MATCHED THEN UPDATE SET val = val || ' ' || sval WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, sval); <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val           
+---+-------+--------------
+  1|    100|initial src2 1
+  2|     20|src2 2        
+  3|     30|src2 3        
+  4|     40|src2 4        
+  5|    500|initial src2 5
+  6|     60|src2 6        
+  7|    700|initial       
+  9|    900|initial       
+(8 rows)
+
+
+starting permutation: s2fe s1n s2f s1c s2s
+step s2fe: EXPLAIN (COSTS OFF) MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source';
+QUERY PLAN                          
+------------------------------------
+Merge on rm_t t                     
+  ->  Merge Full Join               
+        Merge Cond: (t.tid = s.sid) 
+        ->  Sort                    
+              Sort Key: t.tid       
+              ->  Seq Scan on rm_t t
+        ->  Sort                    
+              Sort Key: s.sid       
+              ->  Seq Scan on rm_s s
+(9 rows)
+
+step s1n: UPDATE rm_t SET balance = balance + 1 WHERE tid = 3;
+step s2f: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source' RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+merge_action|tid|balance|val              
+------------+---+-------+-----------------
+UPDATE      |  1|    110|initial updated  
+INSERT      |  2|     20|inserted         
+UPDATE      |  3|    331|initial updated  
+INSERT      |  4|     40|inserted         
+UPDATE      |  5|    550|initial updated  
+INSERT      |  6|     60|inserted         
+UPDATE      |  7|    700|initial by source
+UPDATE      |  9|    900|initial by source
+(8 rows)
+
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val              
+---+-------+-----------------
+  1|    110|initial updated  
+  2|     20|inserted         
+  3|    331|initial updated  
+  4|     40|inserted         
+  5|    550|initial updated  
+  6|     60|inserted         
+  7|    700|initial by source
+  9|    900|initial by source
+(8 rows)
+
+
+starting permutation: s1k s2fn s1c s2s
+step s1k: UPDATE rm_t SET tid = 30 WHERE tid = 3;
+step s2fn: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source'; <waiting ...>
+step s1c: COMMIT;
+step s2fn: <... completed>
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val              
+---+-------+-----------------
+  1|    110|initial updated  
+  2|     20|inserted         
+  3|     30|inserted         
+  4|     40|inserted         
+  5|    550|initial updated  
+  6|     60|inserted         
+  7|    700|initial by source
+  9|    900|initial by source
+ 30|    300|initial by source
+(9 rows)
+
+
+starting permutation: s1d s2f s1c s2s
+step s1d: DELETE FROM rm_t WHERE tid = 3;
+step s2f: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source' RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+merge_action|tid|balance|val              
+------------+---+-------+-----------------
+UPDATE      |  1|    110|initial updated  
+INSERT      |  2|     20|inserted         
+INSERT      |  3|     30|inserted         
+INSERT      |  4|     40|inserted         
+UPDATE      |  5|    550|initial updated  
+INSERT      |  6|     60|inserted         
+UPDATE      |  7|    700|initial by source
+UPDATE      |  9|    900|initial by source
+(8 rows)
+
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val              
+---+-------+-----------------
+  1|    110|initial updated  
+  2|     20|inserted         
+  3|     30|inserted         
+  4|     40|inserted         
+  5|    550|initial updated  
+  6|     60|inserted         
+  7|    700|initial by source
+  9|    900|initial by source
+(8 rows)
+
+
+starting permutation: s1u9 s2f s1c s2s
+step s1u9: UPDATE rm_t SET balance = balance + 1 WHERE tid = 9;
+step s2f: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source' RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+merge_action|tid|balance|val              
+------------+---+-------+-----------------
+UPDATE      |  1|    110|initial updated  
+INSERT      |  2|     20|inserted         
+UPDATE      |  3|    330|initial updated  
+INSERT      |  4|     40|inserted         
+UPDATE      |  5|    550|initial updated  
+INSERT      |  6|     60|inserted         
+UPDATE      |  7|    700|initial by source
+UPDATE      |  9|    901|initial by source
+(8 rows)
+
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val              
+---+-------+-----------------
+  1|    110|initial updated  
+  2|     20|inserted         
+  3|    330|initial updated  
+  4|     40|inserted         
+  5|    550|initial updated  
+  6|     60|inserted         
+  7|    700|initial by source
+  9|    901|initial by source
+(8 rows)
+
+
+starting permutation: s1d9 s2f s1c s2s
+step s1d9: DELETE FROM rm_t WHERE tid = 9;
+step s2f: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE THEN UPDATE SET val = val || ' by source' RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+merge_action|tid|balance|val              
+------------+---+-------+-----------------
+UPDATE      |  1|    110|initial updated  
+INSERT      |  2|     20|inserted         
+UPDATE      |  3|    330|initial updated  
+INSERT      |  4|     40|inserted         
+UPDATE      |  5|    550|initial updated  
+INSERT      |  6|     60|inserted         
+UPDATE      |  7|    700|initial by source
+INSERT      |   |       |inserted         
+(8 rows)
+
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val              
+---+-------+-----------------
+  1|    110|initial updated  
+  2|     20|inserted         
+  3|    330|initial updated  
+  4|     40|inserted         
+  5|    550|initial updated  
+  6|     60|inserted         
+  7|    700|initial by source
+   |       |inserted         
+(8 rows)
+
+
+starting permutation: s1u9 s2fd s1c s2s
+step s1u9: UPDATE rm_t SET balance = balance + 1 WHERE tid = 9;
+step s2fd: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN NOT MATCHED BY SOURCE THEN DELETE WHEN NOT MATCHED BY TARGET THEN INSERT VALUES (s.sid, s.delta) RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2fd: <... completed>
+merge_action|tid|balance|val    
+------------+---+-------+-------
+INSERT      |  2|     20|       
+INSERT      |  4|     40|       
+INSERT      |  6|     60|       
+DELETE      |  7|    700|initial
+DELETE      |  9|    901|initial
+(5 rows)
+
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val    
+---+-------+-------
+  1|    100|initial
+  2|     20|       
+  3|    300|initial
+  4|     40|       
+  5|    500|initial
+  6|     60|       
+(6 rows)
+
+
+starting permutation: s1n s2fd s1c s2s
+step s1n: UPDATE rm_t SET balance = balance + 1 WHERE tid = 3;
+step s2fd: MERGE INTO rm_t t USING rm_s s ON t.tid = s.sid WHEN NOT MATCHED BY SOURCE THEN DELETE WHEN NOT MATCHED BY TARGET THEN INSERT VALUES (s.sid, s.delta) RETURNING merge_action(), t.*;
+merge_action|tid|balance|val    
+------------+---+-------+-------
+INSERT      |  2|     20|       
+INSERT      |  4|     40|       
+INSERT      |  6|     60|       
+DELETE      |  7|    700|initial
+DELETE      |  9|    900|initial
+(5 rows)
+
+step s1c: COMMIT;
+step s2s: SELECT * FROM rm_t ORDER BY tid, val;
+tid|balance|val    
+---+-------+-------
+  1|    100|initial
+  2|     20|       
+  3|    301|initial
+  4|     40|       
+  5|    500|initial
+  6|     60|       
+(6 rows)
+
+
+starting permutation: s2oe s1on s2om s1c s2os
+step s2oe: EXPLAIN (COSTS OFF) MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN UPDATE SET n = s.n, val = t.val || ' u' WHEN NOT MATCHED THEN INSERT VALUES (s.id + 100000, s.n, 'nm');
+QUERY PLAN                                      
+------------------------------------------------
+Merge on ro_t t                                 
+  ->  Merge Right Join                          
+        Merge Cond: (t.id = s.id)               
+        ->  Index Scan using ro_t_pkey on ro_t t
+        ->  Sort                                
+              Sort Key: s.id                    
+              ->  Seq Scan on ro_s s            
+(7 rows)
+
+step s1on: UPDATE ro_t SET n = n + 1, val = val || ' s1' WHERE id = 10;
+step s2om: MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN UPDATE SET n = s.n, val = t.val || ' u' WHEN NOT MATCHED THEN INSERT VALUES (s.id + 100000, s.n, 'nm') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2om: <... completed>
+merge_action|    id| n|val    
+------------+------+--+-------
+INSERT      |100001| 1|nm     
+INSERT      |100003| 3|nm     
+UPDATE      |     4|40|v2 u   
+UPDATE      |    10|50|v5 s1 u
+INSERT      |100011|11|nm     
+INSERT      |105001| 7|nm     
+(6 rows)
+
+step s2os: SELECT * FROM ro_t WHERE id <= 12 OR id > 4000 ORDER BY id, val;
+    id| n|val    
+------+--+-------
+     2| 1|v1     
+     4|40|v2 u   
+     6| 3|v3     
+     8| 4|v4     
+    10|50|v5 s1 u
+    12| 6|v6     
+100001| 1|nm     
+100003| 3|nm     
+100011|11|nm     
+105001| 7|nm     
+(10 rows)
+
+
+starting permutation: s1ok s2om s1c s2os
+step s1ok: UPDATE ro_t SET id = 9 WHERE id = 10;
+step s2om: MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN UPDATE SET n = s.n, val = t.val || ' u' WHEN NOT MATCHED THEN INSERT VALUES (s.id + 100000, s.n, 'nm') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2om: <... completed>
+merge_action|    id| n|val 
+------------+------+--+----
+INSERT      |100001| 1|nm  
+INSERT      |100003| 3|nm  
+UPDATE      |     4|40|v2 u
+INSERT      |100010|50|nm  
+INSERT      |100011|11|nm  
+INSERT      |105001| 7|nm  
+(6 rows)
+
+step s2os: SELECT * FROM ro_t WHERE id <= 12 OR id > 4000 ORDER BY id, val;
+    id| n|val 
+------+--+----
+     2| 1|v1  
+     4|40|v2 u
+     6| 3|v3  
+     8| 4|v4  
+     9| 5|v5  
+    12| 6|v6  
+100001| 1|nm  
+100003| 3|nm  
+100010|50|nm  
+100011|11|nm  
+105001| 7|nm  
+(11 rows)
+
+
+starting permutation: s1od s2om s1c s2os
+step s1od: DELETE FROM ro_t WHERE id = 10;
+step s2om: MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN UPDATE SET n = s.n, val = t.val || ' u' WHEN NOT MATCHED THEN INSERT VALUES (s.id + 100000, s.n, 'nm') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2om: <... completed>
+merge_action|    id| n|val 
+------------+------+--+----
+INSERT      |100001| 1|nm  
+INSERT      |100003| 3|nm  
+UPDATE      |     4|40|v2 u
+INSERT      |100010|50|nm  
+INSERT      |100011|11|nm  
+INSERT      |105001| 7|nm  
+(6 rows)
+
+step s2os: SELECT * FROM ro_t WHERE id <= 12 OR id > 4000 ORDER BY id, val;
+    id| n|val 
+------+--+----
+     2| 1|v1  
+     4|40|v2 u
+     6| 3|v3  
+     8| 4|v4  
+    12| 6|v6  
+100001| 1|nm  
+100003| 3|nm  
+100010|50|nm  
+100011|11|nm  
+105001| 7|nm  
+(10 rows)
+
+
+starting permutation: s1oq s2om s1c s2os
+step s1oq: UPDATE ro_t SET n = 50 WHERE id = 10;
+step s2om: MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN UPDATE SET n = s.n, val = t.val || ' u' WHEN NOT MATCHED THEN INSERT VALUES (s.id + 100000, s.n, 'nm') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2om: <... completed>
+merge_action|    id| n|val 
+------------+------+--+----
+INSERT      |100001| 1|nm  
+INSERT      |100003| 3|nm  
+UPDATE      |     4|40|v2 u
+INSERT      |100011|11|nm  
+INSERT      |105001| 7|nm  
+(5 rows)
+
+step s2os: SELECT * FROM ro_t WHERE id <= 12 OR id > 4000 ORDER BY id, val;
+    id| n|val 
+------+--+----
+     2| 1|v1  
+     4|40|v2 u
+     6| 3|v3  
+     8| 4|v4  
+    10|50|v5  
+    12| 6|v6  
+100001| 1|nm  
+100003| 3|nm  
+100011|11|nm  
+105001| 7|nm  
+(10 rows)
+
+
+starting permutation: s1on s2ox s1c s2os
+step s1on: UPDATE ro_t SET n = n + 1, val = val || ' s1' WHERE id = 10;
+step s2ox: MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.id + 100000, s.n, 'nm') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2ox: <... completed>
+merge_action|    id| n|val  
+------------+------+--+-----
+INSERT      |100001| 1|nm   
+INSERT      |100003| 3|nm   
+DELETE      |     4| 2|v2   
+DELETE      |    10| 6|v5 s1
+INSERT      |100011|11|nm   
+INSERT      |105001| 7|nm   
+(6 rows)
+
+step s2os: SELECT * FROM ro_t WHERE id <= 12 OR id > 4000 ORDER BY id, val;
+    id| n|val
+------+--+---
+     2| 1|v1 
+     6| 3|v3 
+     8| 4|v4 
+    12| 6|v6 
+100001| 1|nm 
+100003| 3|nm 
+100011|11|nm 
+105001| 7|nm 
+(8 rows)
+
+
+starting permutation: s1ok s2ox s1c s2os
+step s1ok: UPDATE ro_t SET id = 9 WHERE id = 10;
+step s2ox: MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.id + 100000, s.n, 'nm') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2ox: <... completed>
+merge_action|    id| n|val
+------------+------+--+---
+INSERT      |100001| 1|nm 
+INSERT      |100003| 3|nm 
+DELETE      |     4| 2|v2 
+INSERT      |100010|50|nm 
+INSERT      |100011|11|nm 
+INSERT      |105001| 7|nm 
+(6 rows)
+
+step s2os: SELECT * FROM ro_t WHERE id <= 12 OR id > 4000 ORDER BY id, val;
+    id| n|val
+------+--+---
+     2| 1|v1 
+     6| 3|v3 
+     8| 4|v4 
+     9| 5|v5 
+    12| 6|v6 
+100001| 1|nm 
+100003| 3|nm 
+100010|50|nm 
+100011|11|nm 
+105001| 7|nm 
+(10 rows)
+
+
+starting permutation: s1on s2oq s1c s2os
+step s1on: UPDATE ro_t SET n = n + 1, val = val || ' s1' WHERE id = 10;
+step s2oq: MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN UPDATE SET n = s.n, val = t.val || ' c' || (SELECT count(*) FROM ro_c c WHERE c.id = t.id) WHEN NOT MATCHED AND s.id < 5000 THEN INSERT VALUES (s.id + 100000, s.n, 'nm') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2oq: <... completed>
+merge_action|    id| n|val     
+------------+------+--+--------
+INSERT      |100001| 1|nm      
+INSERT      |100003| 3|nm      
+UPDATE      |     4|40|v2 c1   
+UPDATE      |    10|50|v5 s1 c2
+INSERT      |100011|11|nm      
+(5 rows)
+
+step s2os: SELECT * FROM ro_t WHERE id <= 12 OR id > 4000 ORDER BY id, val;
+    id| n|val     
+------+--+--------
+     2| 1|v1      
+     4|40|v2 c1   
+     6| 3|v3      
+     8| 4|v4      
+    10|50|v5 s1 c2
+    12| 6|v6      
+100001| 1|nm      
+100003| 3|nm      
+100011|11|nm      
+(9 rows)
+
+
+starting permutation: s1ok s2oq s1c s2os
+step s1ok: UPDATE ro_t SET id = 9 WHERE id = 10;
+step s2oq: MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN UPDATE SET n = s.n, val = t.val || ' c' || (SELECT count(*) FROM ro_c c WHERE c.id = t.id) WHEN NOT MATCHED AND s.id < 5000 THEN INSERT VALUES (s.id + 100000, s.n, 'nm') RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2oq: <... completed>
+merge_action|    id| n|val  
+------------+------+--+-----
+INSERT      |100001| 1|nm   
+INSERT      |100003| 3|nm   
+UPDATE      |     4|40|v2 c1
+INSERT      |100010|50|nm   
+INSERT      |100011|11|nm   
+(5 rows)
+
+step s2os: SELECT * FROM ro_t WHERE id <= 12 OR id > 4000 ORDER BY id, val;
+    id| n|val  
+------+--+-----
+     2| 1|v1   
+     4|40|v2 c1
+     6| 3|v3   
+     8| 4|v4   
+     9| 5|v5   
+    12| 6|v6   
+100001| 1|nm   
+100003| 3|nm   
+100010|50|nm   
+100011|11|nm   
+(10 rows)
+
+
+starting permutation: s1od s2oq s1a s2os
+step s1od: DELETE FROM ro_t WHERE id = 10;
+step s2oq: MERGE INTO ro_t t USING ro_s s ON t.id = s.id WHEN MATCHED AND s.n <> t.n THEN UPDATE SET n = s.n, val = t.val || ' c' || (SELECT count(*) FROM ro_c c WHERE c.id = t.id) WHEN NOT MATCHED AND s.id < 5000 THEN INSERT VALUES (s.id + 100000, s.n, 'nm') RETURNING merge_action(), t.*; <waiting ...>
+step s1a: ROLLBACK;
+step s2oq: <... completed>
+merge_action|    id| n|val  
+------------+------+--+-----
+INSERT      |100001| 1|nm   
+INSERT      |100003| 3|nm   
+UPDATE      |     4|40|v2 c1
+UPDATE      |    10|50|v5 c2
+INSERT      |100011|11|nm   
+(5 rows)
+
+step s2os: SELECT * FROM ro_t WHERE id <= 12 OR id > 4000 ORDER BY id, val;
+    id| n|val  
+------+--+-----
+     2| 1|v1   
+     4|40|v2 c1
+     6| 3|v3   
+     8| 4|v4   
+    10|50|v5 c2
+    12| 6|v6   
+100001| 1|nm   
+100003| 3|nm   
+100011|11|nm   
+(9 rows)
+
+
+starting permutation: s4e s1hk s4n s1c s4s
+step s4e: EXPLAIN (COSTS OFF) MERGE INTO hf_t t USING hf_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE AND (t.tid < 12 OR t.tid > 30000) THEN UPDATE SET val = val || ' by source';
+QUERY PLAN                          
+------------------------------------
+Merge on hf_t t                     
+  ->  Hash Full Join                
+        Hash Cond: (t.tid = s.sid)  
+        ->  Seq Scan on hf_t t      
+        ->  Hash                    
+              ->  Seq Scan on hf_s s
+(6 rows)
+
+step s1hk: UPDATE hf_t SET tid = 30001 WHERE tid = 3;
+step s4n: MERGE INTO hf_t t USING hf_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE AND (t.tid < 12 OR t.tid > 30000) THEN UPDATE SET val = val || ' by source'; <waiting ...>
+step s1c: COMMIT;
+step s4n: <... completed>
+step s4s: SELECT * FROM hf_t WHERE tid < 12 OR tid > 30000 ORDER BY tid, val;
+  tid|balance|val              
+-----+-------+-----------------
+    1|    110|initial updated  
+    3|     30|inserted         
+    5|    550|initial updated  
+    6|     60|inserted         
+    7|    700|initial by source
+    9|    900|initial by source
+   11|   1100|initial by source
+30001|    300|initial by source
+(8 rows)
+
+
+starting permutation: s1hk s4r s1c s4s
+step s1hk: UPDATE hf_t SET tid = 30001 WHERE tid = 3;
+step s4r: MERGE INTO hf_t t USING hf_s s ON t.tid = s.sid WHEN MATCHED THEN UPDATE SET balance = balance + delta, val = val || ' updated' WHEN NOT MATCHED THEN INSERT VALUES (sid, delta, 'inserted') WHEN NOT MATCHED BY SOURCE AND (t.tid < 12 OR t.tid > 30000) THEN UPDATE SET val = val || ' by source' RETURNING merge_action(), t.tid, t.val; <waiting ...>
+step s1c: COMMIT;
+step s4r: <... completed>
+merge_action|  tid|val              
+------------+-----+-----------------
+UPDATE      |    1|initial updated  
+UPDATE      |30001|initial by source
+INSERT      |    3|inserted         
+UPDATE      |    5|initial updated  
+UPDATE      |    7|initial by source
+UPDATE      |    9|initial by source
+UPDATE      |   11|initial by source
+INSERT      |    6|inserted         
+(8 rows)
+
+step s4s: SELECT * FROM hf_t WHERE tid < 12 OR tid > 30000 ORDER BY tid, val;
+  tid|balance|val              
+-----+-------+-----------------
+    1|    110|initial updated  
+    3|     30|inserted         
+    5|    550|initial updated  
+    6|     60|inserted         
+    7|    700|initial by source
+    9|    900|initial by source
+   11|   1100|initial by source
+30001|    300|initial by source
+(8 rows)
+

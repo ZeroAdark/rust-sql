@@ -1,0 +1,13 @@
+# D3732 (user 10-10): a scalar subquery whose one item is a bare string_agg over the file's tables (joins, FILTER, a
+# correlated WHERE, GROUP BY): its pieces are a multiset
+sql: SELECT b.id, (SELECT string_agg(u2.name, ';') FILTER (WHERE u2.name IS NOT NULL) FROM book u0 LEFT JOIN book_authors u1 ON u0.id = u1.book_id LEFT JOIN author u2 ON u1.author_id = u2.id WHERE u0.id = b.id GROUP BY u0.id) AS agg FROM book b;
+cols: id	agg
+tables: book book_authors author
+class: unordered
+verdict: match
+[pg]
+1	ann;bob;cy
+2	\N
+[got]
+2	\N
+1	cy;ann;bob

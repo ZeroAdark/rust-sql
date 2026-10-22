@@ -31,6 +31,10 @@ pub(crate) struct LocalState {
     pub mcx: Mcx<'static>,
     pub table: PgFxHashMap<'static, LOCALLOCKTAG, LOCALLOCK>,
     pub scratch: PgVec<'static, LOCALLOCKTAG>,
+    /// D3652 P9: bumped on every insert into and removal from `table`. An entry pointer taken at generation g is
+    /// still that entry while the generation is g: hashbrown moves entries only on an insert-driven rehash, and only
+    /// a removal frees one.
+    pub gen: u64,
 }
 
 thread_local! {
@@ -44,10 +48,20 @@ thread_local! {
     static AWAITED_OWNER: Cell<ResourceOwner> = const { Cell::new(ResourceOwner::NULL) };
     // IsRelationExtensionLockHeld, assert-only as in C.
     static RELATION_EXTENSION_LOCK_HELD: Cell<bool> = const { Cell::new(false) };
+    // D3652 P9: the LOCALLOCK this backend granted last (C's LockAcquireExtended `locallockp` out-parameter), so the
+    // MarkLockClear that lmgr runs right after the acquire needs no table probe while the table is unchanged.
+    static LAST_GRANT: Cell<Option<(LOCALLOCKTAG, LocalLockPtr)>> = const { Cell::new(None) };
 }
 
 pub fn InitLockManagerAccess() {
     let cx: &'static MemoryContext = ::mcx::session_root("LOCALLOCK hash");
+    // D4682: the teardown retires this root; clear the slot first, so a reused thread's next session builds a new one.
+    // ProcKill's LockReleaseAll emptied the table first (the exit-callback drain precedes the teardown).
+    ::mcx::register_session_cleanup(Box::new(|| {
+        // SAFETY: the teardown runs with no with_local borrow live (the session's statements are over).
+        let _ = LOCAL.try_with(|slot| unsafe { *slot.get() = None });
+        let _ = LAST_GRANT.try_with(|g| g.set(None));
+    }));
     let mcx = cx.mcx();
     // SAFETY: no with_local borrow is live (single-threaded backend entry).
     LOCAL.with(|slot| unsafe {
@@ -57,6 +71,7 @@ pub fn InitLockManagerAccess() {
             mcx,
             table: PgFxHashMap::with_hasher_in(Default::default(), mcx),
             scratch: PgVec::new_in(mcx),
+            gen: 0,
         }));
     });
 }
@@ -148,13 +163,24 @@ fn grant_owner_slot(owners: &mut PgVec<'static, LOCALLOCKOWNER>, owner: Resource
     true
 }
 
-/// Entry pointer carried across the straight-line fast-path grant (C's
-/// dynahash `locallock` pointer). Valid only while the table is untouched:
-/// hashbrown entries move only on insert-driven rehash.
-pub(crate) struct LocalLockPtr(std::ptr::NonNull<LOCALLOCK>);
+/// Entry pointer carried across the grant (C's dynahash `locallock` pointer), with the table generation it was
+/// taken at. Valid only while the table is untouched: hashbrown entries move only on insert-driven rehash.
+#[derive(Clone, Copy)]
+pub(crate) struct LocalLockPtr {
+    ptr: std::ptr::NonNull<LOCALLOCK>,
+    gen: u64,
+}
+
+impl LocalLockPtr {
+    /// D3652 P9: the entry, when the table is unchanged since the pointer was taken (a thread-local read, no probe).
+    #[inline]
+    fn live(self) -> Option<std::ptr::NonNull<LOCALLOCK>> {
+        (with_local(|state| state.gen) == self.gen).then_some(self.ptr)
+    }
+}
 
 pub(crate) enum LocalGrant {
-    Held { cleared: bool, new_slot: bool },
+    Held { cleared: bool, new_slot: bool, ll: LocalLockPtr },
     NotHeld { hashcode: u32, ll: LocalLockPtr },
 }
 
@@ -162,28 +188,38 @@ pub(crate) enum LocalGrant {
 /// locally in the same table access (C works on the hash_search pointer).
 pub(crate) fn prepare_or_grant_locallock(tag: &LOCALLOCKTAG, owner: ResourceOwner) -> LocalGrant {
     let out = with_local(|state| {
-        let mcx = state.mcx;
-        let entry = state.table.entry(*tag).or_insert_with(|| new_locallock(tag, mcx));
+        let LocalState { mcx, table, gen, .. } = state;
+        let mcx = *mcx;
+        let mut inserted = false;
+        let entry = table.entry(*tag).or_insert_with(|| {
+            inserted = true;
+            new_locallock(tag, mcx)
+        });
+        if inserted {
+            *gen += 1;
+        }
         if entry.nLocks > 0 {
             entry.nLocks += 1;
             let new_slot = grant_owner_slot(&mut entry.lockOwners, owner);
             LocalGrant::Held {
                 cleared: entry.lockCleared,
                 new_slot,
+                ll: LocalLockPtr { ptr: std::ptr::NonNull::from(entry), gen: *gen },
             }
         } else {
             entry.lockOwners.reserve(1);
             LocalGrant::NotHeld {
                 hashcode: entry.hashcode,
-                ll: LocalLockPtr(std::ptr::NonNull::from(entry)),
+                ll: LocalLockPtr { ptr: std::ptr::NonNull::from(entry), gen: *gen },
             }
         }
     });
-    if let LocalGrant::Held { new_slot, .. } = out {
+    if let LocalGrant::Held { new_slot, ll, .. } = out {
         if new_slot && !owner.is_null() {
             resowner::ResourceOwnerRememberLock(owner, *tag);
         }
         CheckAndSetLockHeld(tag, true);
+        LAST_GRANT.set(Some((*tag, ll)));
     }
     out
 }
@@ -198,11 +234,11 @@ pub(crate) unsafe fn grant_locallock_after_fastpath(
 ) {
     let new_slot = {
         // SAFETY: caller contract; no other LocalState borrow is live.
-        let ll = unsafe { &mut *ll.0.as_ptr() };
-        ll.lock = std::ptr::null_mut();
-        ll.proclock = std::ptr::null_mut();
-        ll.nLocks += 1;
-        grant_owner_slot(&mut ll.lockOwners, owner)
+        let e = unsafe { &mut *ll.ptr.as_ptr() };
+        e.lock = std::ptr::null_mut();
+        e.proclock = std::ptr::null_mut();
+        e.nLocks += 1;
+        grant_owner_slot(&mut e.lockOwners, owner)
     };
     debug_assert!(with_local(|state| {
         state.table.get(tag).is_some_and(|e| e.nLocks > 0)
@@ -211,6 +247,53 @@ pub(crate) unsafe fn grant_locallock_after_fastpath(
         resowner::ResourceOwnerRememberLock(owner, *tag);
     }
     CheckAndSetLockHeld(tag, true);
+    LAST_GRANT.set(Some((*tag, ll)));
+}
+
+/// D3652 P9: record the main-table PROCLOCK / LOCK in the LOCALLOCK through the pointer from
+/// prepare_or_grant_locallock (C writes through its `locallock` pointer); a table probe only when the table changed
+/// since (an insert can move the entry).
+pub(crate) fn set_locallock_shared(
+    tag: &LOCALLOCKTAG,
+    ll: LocalLockPtr,
+    lock: *mut LOCK,
+    proclock: *mut PROCLOCK,
+) {
+    match ll.live() {
+        Some(p) => {
+            // SAFETY: the generation is unchanged, so `p` is still `tag`'s entry; no LocalState borrow is live.
+            let e = unsafe { &mut *p.as_ptr() };
+            debug_assert!(with_local(|state| state.table.get(tag).is_some_and(|x| core::ptr::eq(x, p.as_ptr()))));
+            e.proclock = proclock;
+            e.lock = lock;
+        }
+        None => with_local(|state| {
+            let e = state.table.get_mut(tag).expect("missing LOCALLOCK");
+            e.proclock = proclock;
+            e.lock = lock;
+        }),
+    }
+}
+
+/// D3652 P9: GrantLockLocal through the pointer from prepare_or_grant_locallock (C's GrantLockLocal takes the
+/// `locallock` pointer); GrantLockLocal's probe only when the table changed since.
+pub(crate) fn grant_locallock_ptr(tag: &LOCALLOCKTAG, owner: ResourceOwner, ll: LocalLockPtr) {
+    let Some(p) = ll.live() else {
+        GrantLockLocal(tag, owner);
+        return;
+    };
+    let new_slot = {
+        // SAFETY: the generation is unchanged, so `p` is still `tag`'s entry; no LocalState borrow is live.
+        let e = unsafe { &mut *p.as_ptr() };
+        debug_assert!(with_local(|state| state.table.get(tag).is_some_and(|x| core::ptr::eq(x, p.as_ptr()))));
+        e.nLocks += 1;
+        grant_owner_slot(&mut e.lockOwners, owner)
+    };
+    if new_slot && !owner.is_null() {
+        resowner::ResourceOwnerRememberLock(owner, *tag);
+    }
+    CheckAndSetLockHeld(tag, true);
+    LAST_GRANT.set(Some((*tag, ll)));
 }
 
 pub(crate) fn GrantLockLocal(tag: &LOCALLOCKTAG, owner: ResourceOwner) {
@@ -244,11 +327,14 @@ pub(crate) fn drain_release_all(
     lockmethodid: LOCKMETHODID,
     all_locks: bool,
     forget: &mut Vec<(ResourceOwner, LOCALLOCKTAG)>,
-) -> PgVec<'static, RemovedLock> {
+) -> PgResult<PgVec<'static, RemovedLock>> {
     with_local(|state| {
         let mcx = state.mcx;
         let mut removed: PgVec<'static, RemovedLock> = PgVec::new_in(mcx);
-        removed.reserve(state.table.len());
+        removed
+            .try_reserve(state.table.len())
+            .map_err(|_| mcx.oom(state.table.len() * core::mem::size_of::<RemovedLock>()))?;
+        state.gen += 1;
         state.table.retain(|tag, ll| {
             if ll.nLocks == 0 {
                 // An unused entry means something went wrong while acquiring.
@@ -288,7 +374,7 @@ pub(crate) fn drain_release_all(
             });
             false
         });
-        removed
+        Ok(removed)
     })
 }
 
@@ -314,7 +400,10 @@ pub(crate) fn RemoveLocalLock(tag: &LOCALLOCKTAG) -> PgResult<()> {
     // One probe: entry taken out before the forget calls (lock.c:1479-1483,
     // an unowned reference is ResourceOwnerForgetLock's elog(ERROR));
     // dropping the owner array is C's pfree(lockOwners).
-    let ll = with_local(|state| state.table.remove(tag).expect("missing LOCALLOCK"));
+    let ll = with_local(|state| {
+        state.gen += 1;
+        state.table.remove(tag).expect("missing LOCALLOCK")
+    });
     for o in ll.lockOwners.iter().rev() {
         if !o.owner.is_null() {
             resowner::ResourceOwnerForgetLock(o.owner, *tag)?;
@@ -362,6 +451,18 @@ pub fn MarkLockClear(locktag: &LOCKTAG, lockmode: LOCKMODE) {
         lock: *locktag,
         mode: lockmode,
     };
+    // D3652 P9: lmgr marks the lock it just acquired: C passes the `locallock` pointer LockAcquireExtended returned.
+    if let Some((last, ll)) = LAST_GRANT.get() {
+        if last == tag {
+            if let Some(p) = ll.live() {
+                // SAFETY: the generation is unchanged, so `p` is still `tag`'s entry; no LocalState borrow is live.
+                let e = unsafe { &mut *p.as_ptr() };
+                debug_assert!(e.nLocks > 0);
+                e.lockCleared = true;
+                return;
+            }
+        }
+    }
     with_local(|state| {
         let ll = state.table.get_mut(&tag).expect("missing LOCALLOCK");
         debug_assert!(ll.nLocks > 0);

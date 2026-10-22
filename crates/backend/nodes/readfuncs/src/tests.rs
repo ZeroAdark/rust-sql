@@ -831,3 +831,48 @@ fn extensible_node_read_arm_matches_c() {
     assert_elog("{EXTENSIBLENODE :extnodename", "extnodename has to be supplied");
     assert_elog("{EXTENSIBLENODE", "extnodename has to be supplied");
 }
+
+// pg_strtok (read.c) over the byte-class table: the same token stream as the per-byte compare form it replaced, on
+// generated text over the separators, the specials, backslash escapes (a lone one at the end too), "<>" and UTF-8.
+#[test]
+fn token_scan_matches_pg_strtok() {
+    fn strtok(buf: &[u8]) -> Vec<(usize, usize)> {
+        let space = |c: u8| c == b' ' || c == b'\n' || c == b'\t';
+        let special = |c: u8| matches!(c, b'(' | b')' | b'{' | b'}');
+        let (mut out, mut p) = (Vec::new(), 0);
+        loop {
+            while p < buf.len() && space(buf[p]) {
+                p += 1;
+            }
+            if p >= buf.len() {
+                return out;
+            }
+            let start = p;
+            if special(buf[p]) {
+                p += 1;
+            } else {
+                while p < buf.len() && !space(buf[p]) && !special(buf[p]) {
+                    p += if buf[p] == b'\\' && p + 1 < buf.len() { 2 } else { 1 };
+                }
+            }
+            out.push((start, p));
+        }
+    }
+    const ABC: &[u8] = b" \n\t(){}\\\\a:<>\"0-\xc3\xa9";
+    let ctx = MemoryContext::new("t");
+    let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+    for _ in 0..20_000 {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        let len = (seed >> 58) as usize;
+        let buf: Vec<u8> = (0..len)
+            .map(|i| ABC[((seed.rotate_left(7 * i as u32 + 3) >> 40) as usize) % ABC.len()])
+            .collect();
+        let mut r = crate::Reader { mcx: ctx.mcx(), buf: &buf, pos: 0, tok_start: 0 };
+        let mut got = Vec::new();
+        while let Some(t) = r.next_token() {
+            got.push((r.tok_start, r.pos));
+            assert_eq!(t.is_empty(), &buf[r.tok_start..r.pos] == b"<>", "{buf:?}");
+        }
+        assert_eq!(got, strtok(&buf), "{buf:?}");
+    }
+}

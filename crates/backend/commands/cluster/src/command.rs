@@ -93,6 +93,13 @@ pub fn cluster<'mcx>(
         if rel.is_other_temp() {
             return Err(feature_err("cannot cluster temporary tables of other sessions"));
         }
+        // Refused before the index lookup: a pgrcolumnar table has no index to name.
+        if let Some(am) = columnar_am(&rel) {
+            return Err(Box::new(columnar_rewrite_refusal(ERROR, am, rel.name())));
+        }
+        if let Some(parent) = pgrc_companion_parent(&rel) {
+            return Err(Box::new(pgrc_companion_refusal(mcx, &rel, parent)?));
+        }
 
         let index_oid = if let Some(indexname) = stmt.indexname {
             let idx = lsyscache::get_relname_relid(indexname, rel.rd_rel.relnamespace)?;
@@ -254,6 +261,21 @@ pub fn cluster_rel<'mcx>(
             } else {
                 "cannot vacuum temporary tables of other sessions"
             }));
+        }
+        // On a pgrcolumnar table heap's copy would see neither the parts nor the front and the swap would install
+        // an empty relfilenode. Refused before make_new_heap: no new relfilenode, the table untouched.
+        if let Some(am) = columnar_am(&old_heap) {
+            if recheck {
+                elog_seams::ereport::call(columnar_rewrite_refusal(WARNING, am, old_heap.name()))?;
+                return old_heap.close(AccessExclusiveLock);
+            }
+            return Err(Box::new(columnar_rewrite_refusal(ERROR, am, old_heap.name())));
+        }
+        if let Some(parent) = pgrc_companion_parent(&old_heap) {
+            if recheck {
+                return old_heap.close(AccessExclusiveLock);
+            }
+            return Err(Box::new(pgrc_companion_refusal(mcx, &old_heap, parent)?));
         }
         catalog_heap::CheckTableNotInUse(
             &old_heap,
@@ -700,6 +722,39 @@ fn feature_err(msg: &str) -> Box<PgError> {
     Box::new(
         PgError::new(ERROR, msg.to_string()).with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
     )
+}
+
+fn columnar_am(rel: &Relation<'_>) -> Option<&'static str> {
+    match tableam_vocab::TableAm::of(rel) {
+        Some(tableam_vocab::TableAm::Pgrcolumnar) => Some("pgrcolumnar"),
+        _ => None,
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn columnar_rewrite_refusal(level: types_error::ErrorLevel, am: &str, relname: &str) -> PgError {
+    // VACUUM FULL of a pgrcolumnar table compacts it in place (vacuum_rel never reaches cluster_rel for one).
+    let what = if am == "pgrcolumnar" { "CLUSTER" } else { "VACUUM FULL or CLUSTER" };
+    PgError::new(level, format!("access method \"{am}\" does not support {what}"))
+        .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
+        .with_detail(format!("Table \"{relname}\" was left unchanged."))
+}
+
+fn pgrc_companion_parent(rel: &Relation<'_>) -> Option<Oid> {
+    pgrc_companion::companion_parent(rel.rd_rel.relnamespace, rel.name().as_bytes(), rel.rd_rel.relkind)
+}
+
+#[cold]
+#[inline(never)]
+fn pgrc_companion_refusal<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, parent: Oid) -> PgResult<PgError> {
+    let detail = match lsyscache::get_rel_name(mcx, parent)? {
+        Some(p) => format!("It stores part of table \"{}\"; rewriting it on its own would lose that table's deletes.", p.as_str()),
+        None => "It stores part of a pgrcolumnar table; rewriting it on its own would lose that table's deletes.".to_string(),
+    };
+    Ok(PgError::new(ERROR, format!("cannot run VACUUM FULL or CLUSTER on pgrcolumnar companion table \"{}\"", rel.name()))
+        .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
+        .with_detail(detail))
 }
 
 pub fn init_seams() {

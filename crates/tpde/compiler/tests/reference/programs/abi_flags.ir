@@ -1,0 +1,6 @@
+main(%byval_arg,%sret_arg,%sext_arg,%zext_arg) {
+entry:
+%x = call @external, %byval_arg, %sret_arg, %sext_arg, %zext_arg
+ret %x
+}
+external(%a,%b,%c,%d)!

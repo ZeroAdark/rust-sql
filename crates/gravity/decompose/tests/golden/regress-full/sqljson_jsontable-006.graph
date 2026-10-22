@@ -1,0 +1,18 @@
+-- regress-full-sqljson_jsontable-006
+-- SELECT * FROM json_table_test vals LEFT OUTER JOIN JSON_TABLE( vals.js::jsonb, 'lax $[*]' COLUMNS ( id FOR ORDINALITY, exists1 bool EXISTS PATH '$.aaa', exists2 int EXISTS PATH '$.aaa', exists3 int EXISTS PATH 'strict $.aaa' UNKNOWN ON ERROR, exists4 text EXISTS PATH 'strict $.aaa' FALSE ON ERROR ) ) jt ON true;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=1360 end=sink
+  nodes n1@0 n0@1
+  source range rel=39437 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1)
+  nest inner=n2 JOIN_LEFT vol=v params=($exec0=outer.1)
+  inner node=2 serial site=-1 reason=Host end=sink
+  nodes n2@0
+  source tablefunc rti=2 kind=json_table cols=5 ordinality=-1 doc=T_JsonExpr
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5)
+  project (1=outer.1, 2=inner.1, 3=inner.2, 4=inner.3, 5=inner.4, 6=inner.5)
+  outs 1=vl:win/page
+  outs 1=vl:win/page 2=w4:val 3=w1:val 4=w4:val 5=w4:val 6=vl:life/breaker
+param $exec0 owner=n0 type=25@100 rep=vl:win/page
+mapped: SeqScan TableFuncScan NestLoop NestLoopParam

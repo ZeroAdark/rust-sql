@@ -1,0 +1,24 @@
+-- regress-full-subselect-061
+-- with aa as (select 'int4_tbl' u from int4_tbl limit 1) insert into upsert values (1, 'x'), (999, 'y') on conflict (key) do update set val = (select u from aa) returning *;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=4 eligible rows=5 end=sink
+  nodes n4@0 n3@1
+  source range rel=16400 rti=5 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=c25:'int4_tbl')
+  limit count=1 offset=all
+  project (1=c25:'int4_tbl')
+  outs 1=vl:stmt/imm
+  outs 1=vl:stmt/imm
+p1 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source values rti=2 rows=2
+    row (c23:1, c25:'x')
+    row (c23:999, c25:'y')
+  project (1=v2.1, 2=v2.2)
+  write INSERT rel=25245 rti=1 natts=2 indexes=(25251[1]up) on_conflict=update arbiter=(25251) excl_rti=3 cols=(2) set=(1=$exec0) returning epq=$exec1
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=vl:row
+  outs 1=w4:val 2=vl:row
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 raise-free
+mapped: ModifyTable SeqScan ValuesScan Limit SubPlan

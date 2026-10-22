@@ -125,22 +125,25 @@ fn pg_rewrite_query(
     Ok(querytree_list)
 }
 
-// One-shot completion (C's in-_SPI_execute_plan parse-analysis arm); analysis
-// scribbles query-arena pointers into its input, so the plansource's retained
-// raw tree is copied into the query arena (no re-lex: a second lex re-emits
-// scanner warnings C doesn't).
+// Analysis scribbles on its input, so it runs on a copy of the retained raw
+// tree (no re-lex: a second lex re-emits scanner warnings C doesn't). A saved
+// source is analyzed in the SPI exec context and copied (plancache.c:435).
 pub(crate) fn complete_source(
     psrc: plancache::CachedPlanSourceHandle,
     stmt_index: usize,
     argtypes: &[Oid],
     cursor_options: i32,
+    oneshot: bool,
 ) -> PgResult<()> {
     let src = plancache::CachedPlanQueryString(psrc);
-    let qmcx = plancache::SourceQueryMcx(psrc);
-    let raw = plancache::CachedPlanRawParseTreeCopy(qmcx, psrc)?.expect("created with a raw tree");
+    let amcx = if oneshot { plancache::SourceQueryMcx(psrc) } else { current_exec_mcx() };
+    let raw = plancache::CachedPlanRawParseTreeCopy(amcx, psrc)?.expect("created with a raw tree");
     // Errors ride the enclosing SPI level's _SPI_error_callback frame
     // (_SPI_prepare_plan or, for a one-shot plan, _SPI_execute_plan).
-    let query_list = analyze_and_rewrite(qmcx, raw, src, argtypes, crate::current_query_env())?;
+    let mut query_list = analyze_and_rewrite(amcx, raw, src, argtypes, crate::current_query_env())?;
+    if !oneshot {
+        query_list = plancache::CopyQueryListToSource(psrc, &query_list)?;
+    }
     plancache::CompleteCachedPlan(psrc, query_list, argtypes, cursor_options, false)?;
     plancache::SetCachedPlanReanalyze(psrc, reanalyze_spi_source, stmt_index as i32);
     Ok(())
@@ -244,15 +247,19 @@ fn create_sources(
     let mcx = current_exec_mcx();
     let raw_list =
         parser_seams::raw_parser::call(mcx, src, parser_seams::RawParseMode::RAW_PARSE_DEFAULT)?;
-    let mut sources = Vec::with_capacity(raw_list.len());
+    let mut sources = ::mcx::std_vec_with_capacity("ExecutorState", raw_list.len())?;
     let outcome = (|| -> PgResult<()> {
         for (i, raw) in raw_list.iter().enumerate() {
             let stmt = raw.stmt.expect("RawStmt has a stmt");
             let tag = utility_seams::create_command_tag::call(stmt);
-            let psrc = plancache::CreateCachedPlan(Some(raw), src, tag)?;
+            let psrc = if oneshot {
+                plancache::CreateOneShotCachedPlan(Some(raw), src, tag)?
+            } else {
+                plancache::CreateCachedPlan(Some(raw), src, tag)?
+            };
             sources.push((psrc, i));
             if !oneshot {
-                complete_source(psrc, i, argtypes, cursor_options)?;
+                complete_source(psrc, i, argtypes, cursor_options, false)?;
             }
         }
         Ok(())
@@ -286,7 +293,7 @@ pub(crate) fn prepare_oneshot_args(
         oneshot: true,
         saved: false,
         cursor_options,
-        argtypes: argtypes.to_vec(),
+        argtypes: ::mcx::std_vec_from_slice("spi", &argtypes)?,
         parse_mode: RawParseMode::RAW_PARSE_DEFAULT,
     })
 }
@@ -320,7 +327,7 @@ pub fn SPI_prepare_cursor(src: &str, argtypes: &[Oid], cursor_options: i32) -> P
         oneshot: false,
         saved: false,
         cursor_options,
-        argtypes: argtypes.to_vec(),
+        argtypes: ::mcx::std_vec_from_slice("spi", &argtypes)?,
         parse_mode: RawParseMode::RAW_PARSE_DEFAULT,
     };
 
@@ -362,7 +369,7 @@ pub fn SPI_prepare_plpgsql(
         return Ok(SpiPlanPtr::NULL);
     }
 
-    let mut argtypes: Vec<Oid> = Vec::with_capacity(hooks.params_by_dno.len());
+    let mut argtypes: Vec<Oid> = ::mcx::std_vec_with_capacity("ExecutorState", hooks.params_by_dno.len())?;
     for slot in hooks.params_by_dno {
         argtypes.push(match slot {
             Some((t, _, _)) => *t,
@@ -377,29 +384,29 @@ pub fn SPI_prepare_plpgsql(
     let outcome = (|| -> PgResult<Vec<(plancache::CachedPlanSourceHandle, usize)>> {
         let mcx = current_exec_mcx();
         let raw_list = parser_seams::raw_parser::call(mcx, src, parse_mode)?;
-        let mut sources = Vec::with_capacity(raw_list.len());
+        let mut sources = ::mcx::std_vec_with_capacity("SPI_plan", raw_list.len())?;
         let inner = (|| -> PgResult<()> {
             for (i, raw) in raw_list.iter().enumerate() {
                 let stmt = raw.stmt.expect("RawStmt has a stmt");
                 let tag = utility_seams::create_command_tag::call(stmt);
                 let psrc = plancache::CreateCachedPlan(Some(raw), src, tag)?;
                 sources.push((psrc, i));
-                let qmcx = plancache::SourceQueryMcx(psrc);
                 let qsrc = plancache::CachedPlanQueryString(psrc);
                 // Retained-tree copy, not a re-parse: a second lex re-emits
                 // scanner warnings C doesn't (plpgsql strtest).
-                let qraw = plancache::CachedPlanRawParseTreeCopy(qmcx, psrc)?
+                let qraw = plancache::CachedPlanRawParseTreeCopy(mcx, psrc)?
                     .expect("created with a raw tree");
                 usage_reset();
                 let query = analyze_seams::parse_analyze_plpgsql::call(
-                    qmcx,
+                    mcx,
                     qraw,
                     qsrc,
                     hooks,
                     crate::current_query_env(),
                 )?;
                 usage_show("PARSE ANALYSIS STATISTICS")?;
-                let query_list = pg_rewrite_query(qmcx, query)?;
+                let query_list = pg_rewrite_query(mcx, query)?;
+                let query_list = plancache::CopyQueryListToSource(psrc, &query_list)?;
                 plancache::CompleteCachedPlan(psrc, query_list, &argtypes, cursor_options, false)?;
             }
             Ok(())

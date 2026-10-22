@@ -1,0 +1,11 @@
+# SELECT DISTINCT fixes no order
+sql: SELECT DISTINCT g FROM t;
+cols: g
+class: unordered
+verdict: match
+[pg]
+1
+2
+[got]
+2
+1

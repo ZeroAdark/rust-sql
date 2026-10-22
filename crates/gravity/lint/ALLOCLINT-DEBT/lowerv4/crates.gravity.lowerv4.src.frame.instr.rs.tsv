@@ -1,0 +1,9 @@
+path	crates/gravity/lowerv4/src/frame/instr.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	4
+growth	std::vec::Vec::push	21
+macro	std::vec	1
+method	slice::to_vec	1
+method	std::clone::Clone::clone	5
+method	std::iter::Iterator::collect	2
+type	std::vec::Vec	11

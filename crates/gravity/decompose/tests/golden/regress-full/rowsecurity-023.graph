@@ -1,0 +1,14 @@
+-- regress-full-rowsecurity-023
+-- DELETE FROM category WHERE cid = 33;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source index rel=28327 rti=1 am=heap index=28333
+    key att=1 op=96 value=c23:33
+    recheck (op96(v1.1, c23:33))
+    lanes Attr(1):byval8:w8:val RowId:byval8:w8:val
+  filter case(when op93(T_SQLValueFunction, c19:#64) then any96(v1.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x0b\x00\x00\x00!\x00\x00\x00'), when op93(T_SQLValueFunction, c19:#64) then any96(v1.1, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x16\x00\x00\x00,\x00\x00\x00')) else c16:0
+  project (1j=v1.-1)
+  write DELETE rel=28327 rti=1 natts=2 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable IndexScan

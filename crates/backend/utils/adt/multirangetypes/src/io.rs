@@ -67,7 +67,8 @@ fn malformed(string: &[u8], detail: &str) -> PgError {
     let err = match core::str::from_utf8(string) {
         Ok(s) => PgError::error(format!("malformed multirange literal: \"{s}\"")),
         Err(_) => {
-            let mut msg = b"malformed multirange literal: \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"malformed multirange literal: \"");
             msg.extend_from_slice(string);
             msg.push(b'"');
             PgError::error_raw_message(msg)

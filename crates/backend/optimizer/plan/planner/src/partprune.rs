@@ -200,7 +200,8 @@ fn get_matching_partitions_planner<'mcx>(
     let strategy = ps.strategy as u8;
     let partnatts = ps.partnatts as i32;
     let num_steps = steps.len();
-    let mut results: Vec<Option<PruneStepResult<'mcx>>> = Vec::new();
+    let mut results: Vec<Option<PruneStepResult<'mcx>>> =
+        mcx::std_vec_with_capacity("planner", num_steps)?;
     results.resize_with(num_steps, || None);
     for step in steps.iter() {
         match step.node_tag() {
@@ -247,7 +248,7 @@ fn perform_pruning_base_step_planner<'mcx>(
 ) -> PgResult<PruneStepResult<'mcx>> {
     debug_assert_eq!(opstep.exprs.len(), opstep.cmpfns.len());
     let mut values = [datum::Datum::null(); PARTITION_MAX_KEYS];
-    let mut supfuncs: Vec<types_fmgr::FmgrInfo> = Vec::with_capacity(partnatts as usize);
+    let mut supfuncs: Vec<types_fmgr::FmgrInfo> = ::mcx::std_vec_with_capacity("optimizer", partnatts as usize)?;
     let mut nvalues = 0i32;
     let mut it = opstep.exprs.iter().zip(opstep.cmpfns.iter());
     for keyno in 0..partnatts {
@@ -1299,7 +1300,7 @@ fn match_clause_to_partition_key<'mcx>(
             return Ok(PartClauseMatchStatus::Unsupported);
         }
 
-        let mut elem_clauses: Vec<Node<'mcx>> = Vec::with_capacity(elem_exprs.len());
+        let mut elem_clauses: Vec<Node<'mcx>> = ::mcx::std_vec_with_capacity("optimizer", elem_exprs.len())?;
         for elem in elem_exprs {
             let mut op = Node::build::<types_nodes::primnodes::OpExpr>(mcx)?;
             op.opno = saop_op;
@@ -1472,7 +1473,7 @@ pub(crate) fn make_partition_pruneinfo<'mcx>(
     let mcx = run.mcx;
     let rel_array_size = run.root.simple_rel_array.len();
     let mut allpartrelids: Vec<Bitmapset<'mcx>> = Vec::new();
-    let mut relid_subplan_map = vec![0i32; rel_array_size];
+    let mut relid_subplan_map = ::mcx::std_vec_from_elem("optimizer", 0i32, rel_array_size)?;
 
     for (i, &sp) in subpaths.iter().enumerate() {
         let pathrel = run.root.path(sp).base().parent;
@@ -1581,11 +1582,11 @@ fn make_partitionedrel_pruneinfo<'mcx>(
 ) -> PgResult<NodeList<'mcx>> {
     let mcx = run.mcx;
     let rel_array_size = run.root.simple_rel_array.len();
-    let mut relid_subpart_map = vec![0i32; rel_array_size];
+    let mut relid_subpart_map = ::mcx::std_vec_from_elem("optimizer", 0i32, rel_array_size)?;
     let mut pinfolist = NodeList::nil();
     let mut doruntimeprune = false;
     let mut targetpart: Option<RelId> = None;
-    let mut prunequal_tr: Vec<Node<'mcx>> = prunequal.to_vec();
+    let mut prunequal_tr: Vec<Node<'mcx>> = ::mcx::std_vec_from_slice("optimizer", &prunequal)?;
 
     let mut i = 1;
     let mut rti = partrelids.next_member(-1);
@@ -1609,7 +1610,7 @@ fn make_partitionedrel_pruneinfo<'mcx>(
                 let relids =
                     crate::relnode::relids_copy(mcx, &run.root.rel(subpart).relids);
                 let appinfos = crate::inherit::find_appinfos_by_relids(run, &relids)?;
-                let mut translated = Vec::with_capacity(prunequal_tr.len());
+                let mut translated = ::mcx::std_vec_with_capacity("optimizer", prunequal_tr.len())?;
                 for q in prunequal_tr {
                     translated.push(crate::inherit::adjust_appendrel_attrs_multi(
                         run, q, &appinfos,
@@ -1633,7 +1634,7 @@ fn make_partitionedrel_pruneinfo<'mcx>(
                 let appinfo = run.root.append_rel_array[relid]
                     .clone()
                     .expect("child rel has an AppendRelInfo");
-                let mut translated = Vec::with_capacity(quals.len());
+                let mut translated = ::mcx::std_vec_with_capacity("optimizer", quals.len())?;
                 for q in quals {
                     translated.push(crate::inherit::adjust_appendrel_attrs(run, q, &appinfo)?);
                 }

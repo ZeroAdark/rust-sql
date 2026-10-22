@@ -3,7 +3,7 @@
 //!
 //! Run: RUSTFLAGS="--cfg loom" cargo test -p waiter --test loom --release
 //!
-//! Models:
+//! Models (D4484 adds two: the owner's lock-free token publishes a live handle, also after a slot handoff):
 //!   1. park/unpark race incl. wake-before-park — an unpark issued at ANY
 //!      point relative to the park is never lost (no deadlock in any
 //!      interleaving; loom's deadlock detector is the oracle).
@@ -30,6 +30,10 @@
 //!      partial coverage (an uncovering flush neither completes early nor
 //!      strands) and one-walk-completes-multiple (two registrants, hint
 //!      coherence).
+//!   6b. flushpipe `handoff` + `quiet` (D4574) — a registrant that skips the
+//!      walwriter wake because a commit flush is in flight is seen by that
+//!      flush's walk, which covers it or hands it the lead (no strand); and a
+//!      lead verdict is never given to a covered waiter.
 #![cfg(loom)]
 
 use loom::sync::atomic::{fence, AtomicI32, AtomicU64, Ordering};
@@ -95,6 +99,62 @@ fn unpark_never_lost_incl_wake_before_park() {
         park_until_notified(&slot);
 
         waker.join().unwrap();
+    });
+}
+
+/// D4484: `current_handle` builds the owner's handle from `Slot::owner_token` (token_mirror, no slot mutex). After
+/// the owner's own reissue, the handle it publishes is live in every interleaving: an unpark through it is never
+/// Stale and always wakes the owner (a stale read would leave the park blocked: loom's deadlock oracle).
+#[test]
+fn owner_token_read_publishes_a_live_handle() {
+    loom::model(|| {
+        let slot = fresh_slot();
+        let _ = slot.issue_token();
+        let _ = slot.reissue_token(); // the pooled-thread reuse boundary, on the owner thread
+        let word = Arc::new(AtomicU64::new(0));
+        let waker = {
+            let slot = Arc::clone(&slot);
+            let word = Arc::clone(&word);
+            thread::spawn(move || {
+                let token = loop {
+                    let w = word.load(Ordering::Acquire);
+                    if w != 0 {
+                        break (w - 1) as u32;
+                    }
+                    thread::yield_now();
+                };
+                assert_ne!(slot.unpark_token(token), Unparked::Stale, "the owner's lock-free token is live");
+            })
+        };
+        word.store(slot.owner_token() as u64 + 1, Ordering::Release);
+        park_until_notified(&slot);
+        waker.join().unwrap();
+    });
+}
+
+/// D4484: a slot handed on (the previous owner's retire, then the slot index through a mutex as SLOT_FREE carries
+/// it, then the next owner's issue) reads the NEW incarnation's token lock-free, never the retired one.
+#[test]
+fn owner_token_after_a_slot_handoff_is_the_new_incarnations() {
+    loom::model(|| {
+        let slot = fresh_slot();
+        let old = slot.issue_token();
+        let free = Arc::new(loom::sync::Mutex::new(false));
+        let prev = {
+            let slot = Arc::clone(&slot);
+            let free = Arc::clone(&free);
+            thread::spawn(move || {
+                let _ = slot.retire_token();
+                *free.lock().unwrap() = true;
+            })
+        };
+        while !*free.lock().unwrap() {
+            thread::yield_now();
+        }
+        let new = slot.issue_token();
+        assert_ne!(new, old);
+        assert_eq!(slot.owner_token(), new);
+        prev.join().unwrap();
     });
 }
 
@@ -1000,6 +1060,184 @@ fn flushpipe_one_walk_completes_multiple_in_lsn_order() {
         flusher.join().unwrap();
         assert!(pipe.list.lock().unwrap().is_empty());
         assert_eq!(pipe.min_pending.load(Ordering::SeqCst), u64::MAX);
+    });
+}
+
+// 6b. `handoff` + `quiet` (D4574). Mirror of FlushMark (flushes in flight:
+// taken before the flush publishes, dropped before the walk's fence), the
+// registrant's quiet skip (no walwriter wake while a flush is in flight),
+// and complete_up_to's lead verdict to the lowest uncovered waiter.
+
+#[derive(Debug, PartialEq, Eq)]
+enum QuietOutcome {
+    SelfServed,
+    Covered,
+    Lead,
+    WokeWalwriter,
+}
+
+struct ModelQuietNode {
+    lsn: u64,
+    completed: AtomicU64,
+    lead: AtomicU64,
+    slot: Arc<Slot>,
+    token: u32,
+}
+
+fn model_quiet_node(lsn: u64) -> ModelQuietNode {
+    let slot = fresh_slot();
+    let token = slot.issue_token();
+    ModelQuietNode { lsn, completed: AtomicU64::new(0), lead: AtomicU64::new(0), slot, token }
+}
+
+struct ModelQuiet {
+    list: loom::sync::Mutex<Vec<usize>>,
+    min_pending: AtomicU64,
+    flush_result: AtomicU64,
+    flushers: AtomicU64,
+}
+
+impl ModelQuiet {
+    fn new() -> Self {
+        ModelQuiet {
+            list: loom::sync::Mutex::new(Vec::new()),
+            min_pending: AtomicU64::new(u64::MAX),
+            flush_result: AtomicU64::new(0),
+            flushers: AtomicU64::new(0),
+        }
+    }
+
+    fn refresh_hint(&self, list: &[usize], nodes: &[ModelQuietNode]) {
+        let min = list.iter().map(|&i| nodes[i].lsn).min().unwrap_or(u64::MAX);
+        self.min_pending.swap(min, Ordering::SeqCst);
+    }
+
+    /// flushpipe::wait_for_flush with `quiet` (backstop disabled). A
+    /// registrant that wakes the walwriter returns WokeWalwriter (the
+    /// walwriter's own flush serves it, out of this model's scope); one that
+    /// skips the wake must be covered or handed the lead by the in-flight
+    /// flush's walk, or it parks forever (loom's deadlock oracle).
+    fn register_and_wait(&self, nodes: &[ModelQuietNode], me: usize) -> QuietOutcome {
+        {
+            let mut list = self.list.lock().unwrap();
+            let pos = list
+                .iter()
+                .position(|&i| nodes[i].lsn > nodes[me].lsn)
+                .unwrap_or(list.len());
+            list.insert(pos, me);
+            self.refresh_hint(&list, nodes);
+        }
+        fence(Ordering::SeqCst);
+        if self.flush_result.fetch_add(0, Ordering::SeqCst) >= nodes[me].lsn {
+            let mut list = self.list.lock().unwrap();
+            if let Some(pos) = list.iter().position(|&i| i == me) {
+                list.remove(pos);
+                self.refresh_hint(&list, nodes);
+                return QuietOutcome::SelfServed;
+            }
+        } else if self.flushers.fetch_add(0, Ordering::SeqCst) == 0 {
+            return QuietOutcome::WokeWalwriter;
+        }
+        while nodes[me].completed.fetch_add(0, Ordering::SeqCst) == 0 {
+            let r = nodes[me].slot.park_core(None, None, &CLOCK);
+            assert!(matches!(r, ParkResult::Notified | ParkResult::Recheck));
+        }
+        if nodes[me].lead.fetch_add(0, Ordering::SeqCst) == 1 {
+            QuietOutcome::Lead
+        } else {
+            QuietOutcome::Covered
+        }
+    }
+
+    /// FlushMark::begin, XLogWrite's publication, FlushMark drop, then
+    /// complete_up_to with `handoff`: the covered nodes complete, the lowest
+    /// uncovered one gets the lead verdict.
+    fn flush(&self, nodes: &[ModelQuietNode], flushed: u64) {
+        self.flushers.fetch_add(1, Ordering::SeqCst);
+        self.flush_result.fetch_max(flushed, Ordering::SeqCst);
+        self.flushers.fetch_sub(1, Ordering::SeqCst);
+        fence(Ordering::SeqCst);
+        if self.min_pending.fetch_add(0, Ordering::SeqCst) == u64::MAX {
+            return;
+        }
+        let (covered, lead) = {
+            let mut list = self.list.lock().unwrap();
+            let covered: Vec<usize> =
+                list.iter().copied().filter(|&i| nodes[i].lsn <= flushed).collect();
+            list.retain(|&i| nodes[i].lsn > flushed);
+            let lead = if list.is_empty() { None } else { Some(list.remove(0)) };
+            self.refresh_hint(&list, nodes);
+            (covered, lead)
+        };
+        if let Some(i) = lead {
+            nodes[i].lead.swap(1, Ordering::SeqCst);
+            nodes[i].completed.swap(1, Ordering::SeqCst);
+            nodes[i].slot.unpark_token(nodes[i].token);
+        }
+        for i in covered {
+            nodes[i].completed.swap(1, Ordering::SeqCst);
+            nodes[i].slot.unpark_token(nodes[i].token);
+        }
+    }
+}
+
+#[test]
+fn flushpipe_quiet_skip_is_seen_by_the_inflight_walk() {
+    let mut b = loom::model::Builder::new();
+    b.preemption_bound = Some(3);
+    b.check(|| {
+        let m = Arc::new(ModelQuiet::new());
+        let nodes = Arc::new(vec![model_quiet_node(200)]);
+        // An UNCOVERING flush (150 < 200) at every point relative to the
+        // registration: a registrant that saw it in flight (skipped the
+        // wake) gets the lead verdict; otherwise it woke the walwriter.
+        let flusher = {
+            let m = Arc::clone(&m);
+            let nodes = Arc::clone(&nodes);
+            thread::spawn(move || m.flush(&nodes, 150))
+        };
+        let out = m.register_and_wait(&nodes, 0);
+        assert!(
+            matches!(out, QuietOutcome::Lead | QuietOutcome::WokeWalwriter),
+            "uncovered registrant ended {out:?}"
+        );
+        flusher.join().unwrap();
+    });
+}
+
+#[test]
+fn flushpipe_handoff_leads_only_the_uncovered() {
+    let mut b = loom::model::Builder::new();
+    b.preemption_bound = Some(3);
+    b.check(|| {
+        let m = Arc::new(ModelQuiet::new());
+        let nodes = Arc::new(vec![model_quiet_node(100), model_quiet_node(300)]);
+        // One flush to 200 covers node 100 and not node 300: 100 never gets
+        // a lead verdict and returns only once durable; 300 is never
+        // reported covered.
+        let reg_b = {
+            let m = Arc::clone(&m);
+            let nodes = Arc::clone(&nodes);
+            thread::spawn(move || {
+                let out = m.register_and_wait(&nodes, 1);
+                assert!(
+                    matches!(out, QuietOutcome::Lead | QuietOutcome::WokeWalwriter),
+                    "node 300 ended {out:?} after a flush to 200"
+                );
+            })
+        };
+        let flusher = {
+            let m = Arc::clone(&m);
+            let nodes = Arc::clone(&nodes);
+            thread::spawn(move || m.flush(&nodes, 200))
+        };
+        let out = m.register_and_wait(&nodes, 0);
+        assert_ne!(out, QuietOutcome::Lead, "covered node 100 got a lead verdict");
+        if matches!(out, QuietOutcome::SelfServed | QuietOutcome::Covered) {
+            assert!(m.flush_result.load(Ordering::SeqCst) >= 100);
+        }
+        reg_b.join().unwrap();
+        flusher.join().unwrap();
     });
 }
 

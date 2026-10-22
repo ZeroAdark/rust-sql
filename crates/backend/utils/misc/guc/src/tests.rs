@@ -11,8 +11,12 @@ thread_local! {
     static SENT: RefCell<Vec<(u8, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
 }
 
-// Emit-log-hook capture; the hook is per thread and one test installs it.
+// Emit-log-hook capture; the hook is per thread, but EMITTED is
+// process-global, so every test that installs capture_emitted holds
+// EMITTED_LOCK for its whole capture window (two tests overlapping on
+// parallel test threads steal each other's entries).
 static EMITTED: std::sync::Mutex<Vec<types_error::PgError>> = std::sync::Mutex::new(Vec::new());
+static EMITTED_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // A role pg_parameter_aclcheck_set denies (see setup).
 const DENIED_ROLE: types_core::Oid = 0xB168;
@@ -546,6 +550,107 @@ fn define_custom_string_variable_adopts_placeholder_values() {
     assert_eq!(show("b021ext.app_name"), Some("later".to_string()));
 }
 
+// get_config_option_at reads what GetConfigOption(name, true, false) reads,
+// through the caller's remembered slot: a placeholder absent, appended by a
+// SET, given a new value, RESET, removed by a reserved prefix (a tombstone),
+// a defined variable under its old name, and a reinstalled registry.
+#[test]
+fn get_config_option_at_reads_what_get_config_option_reads() {
+    setup();
+    let same = |slot: &std::cell::Cell<OptionSlot>, name: &str| {
+        let at = get_config_option_at(slot, name).expect("this thread has a store");
+        assert_eq!(at, GetConfigOption(name, true, false).unwrap(), "{name}");
+        at
+    };
+    let knob = std::cell::Cell::new(OptionSlot::Unknown);
+    assert_eq!(same(&knob, "d2896x.knob"), None);
+    assert!(matches!(knob.get(), OptionSlot::Missing { .. }));
+    assert_eq!(same(&knob, "d2896x.knob"), None, "the registry did not grow: still absent");
+    assert_eq!(set_session("d2896x.other", Some("1")).unwrap(), 1);
+    assert_eq!(same(&knob, "d2896x.knob"), None, "another name appended: looked up again, still absent");
+    assert_eq!(set_session("d2896x.knob", Some("7")).unwrap(), 1);
+    assert_eq!(same(&knob, "d2896x.knob"), Some("7".to_string()), "a SET appends the placeholder");
+    assert!(matches!(knob.get(), OptionSlot::Found { .. }));
+    assert_eq!(set_session("d2896x.knob", Some(" 8 ")).unwrap(), 1);
+    assert_eq!(same(&knob, "d2896x.knob"), Some(" 8 ".to_string()));
+    assert_eq!(set_session("d2896x.knob", None).unwrap(), 1);
+    same(&knob, "d2896x.knob");
+
+    let wm = std::cell::Cell::new(OptionSlot::Unknown);
+    assert_eq!(set_session("work_mem", Some("8192")).unwrap(), 1);
+    assert_eq!(same(&wm, "sort_mem"), Some("8192".to_string()), "an old name reads its new variable");
+    assert_eq!(set_session("work_mem", Some("4096")).unwrap(), 1);
+    assert_eq!(same(&wm, "sort_mem"), Some("4096".to_string()));
+
+    MarkGUCPrefixReserved("d2896x");
+    assert_eq!(same(&knob, "d2896x.knob"), None, "a reserved prefix leaves the placeholder a tombstone");
+    assert!(matches!(knob.get(), OptionSlot::Missing { .. }));
+
+    let k2 = std::cell::Cell::new(OptionSlot::Unknown);
+    assert_eq!(set_session("d2896y.k", Some("1")).unwrap(), 1);
+    assert_eq!(same(&k2, "d2896y.k"), Some("1".to_string()));
+    initialize_guc_options().unwrap();
+    assert_eq!(same(&k2, "d2896y.k"), None, "a new registry: the remembered index is not read");
+    assert_eq!(same(&wm, "sort_mem"), GetConfigOption("work_mem", true, false).unwrap());
+}
+
+// knob_read is Knob::read of what GetConfigOption(name, true, false) reads, through the kept reading: absent, a SET
+// (appends the placeholder), a new value, a value that reads as none of the words, a RESET, another option's SET, and a
+// reinstalled registry. Each knob's own words: the width knobs untrimmed, the CTE knob trimmed, both without case.
+#[test]
+fn knob_read_reads_what_get_config_option_reads() {
+    use guc_seams::{Knob, KnobRead};
+    setup();
+    let same = |knob: Knob| {
+        let read = crate::knob::knob_read(knob);
+        assert_eq!(read, knob.read(GetConfigOption(knob.name(), true, false).unwrap().as_deref()), "{knob:?}");
+        assert_eq!(read, crate::knob::knob_read(knob), "{knob:?}: the kept reading");
+        read
+    };
+    let (w, t, c) = (Knob::GravityWidthCosting, Knob::GravityWidthCostingTrace, Knob::GravityDecorrelateCtes);
+    initialize_guc_options().unwrap();
+    assert_eq!(same(w), KnobRead::Unset);
+    assert_eq!(same(c), KnobRead::Unset);
+    assert_eq!(set_session(w.name(), Some("On")).unwrap(), 1);
+    assert_eq!(same(w), KnobRead::Word(0), "a SET appends the placeholder; read without case");
+    assert_eq!(same(t), KnobRead::Unset, "another knob stays absent");
+    assert_eq!(set_session(w.name(), Some(" yes")).unwrap(), 1);
+    assert_eq!(same(w), KnobRead::Other, "the width knobs are not trimmed");
+    assert_eq!(set_session(w.name(), Some("1")).unwrap(), 1);
+    assert_eq!(same(w), KnobRead::Word(3));
+    assert_eq!(set_session(c.name(), Some(" ALL ")).unwrap(), 1);
+    assert_eq!(same(c), KnobRead::Word(6), "the CTE knob is trimmed");
+    assert_eq!(same(w), KnobRead::Word(3), "another option's SET leaves the reading");
+    assert_eq!(set_session(c.name(), Some("materialized")).unwrap(), 1);
+    assert_eq!(same(c), KnobRead::Word(7));
+    assert_eq!(set_session(c.name(), Some("sometimes")).unwrap(), 1);
+    assert_eq!(same(c), KnobRead::Other);
+    assert_eq!(set_session(c.name(), None).unwrap(), 1);
+    same(c); // RESET: the placeholder's reset value, whatever it reads as
+    let f = Knob::GravityDecorrelateOrFactor;
+    assert_eq!(same(f), KnobRead::Unset);
+    assert_eq!(set_session(f.name(), Some(" OFF")).unwrap(), 1);
+    assert_eq!(same(f), KnobRead::Word(0), "the OR-factoring knob is trimmed");
+    assert_eq!(set_session(f.name(), Some("yes")).unwrap(), 1);
+    assert_eq!(same(f), KnobRead::Word(7));
+    let r = Knob::GravityUnnestReach;
+    assert_eq!(same(r), KnobRead::Unset);
+    assert_eq!(set_session(r.name(), Some(" P2")).unwrap(), 1);
+    assert_eq!(same(r), KnobRead::Word(1), "the unnest reach knob is trimmed");
+    assert_eq!(set_session(r.name(), Some("wide")).unwrap(), 1);
+    assert_eq!(same(r), KnobRead::Word(2));
+    let a = Knob::GravityUnnestArgs;
+    assert_eq!(same(a), KnobRead::Unset);
+    assert_eq!(set_session(a.name(), Some("no")).unwrap(), 1);
+    assert_eq!(same(a), KnobRead::Word(3), "the UN-P1 knob reads like the OR-factoring knob");
+    assert_eq!(same(f), KnobRead::Word(7), "another knob's SET leaves the reading");
+    assert_eq!(set_session(w.name(), Some("off")).unwrap(), 1);
+    assert_eq!(same(w), KnobRead::Other);
+    initialize_guc_options().unwrap();
+    assert_eq!(same(w), KnobRead::Unset, "a new registry: the kept reading is not read");
+    assert_eq!(same(c), KnobRead::Unset);
+}
+
 #[test]
 fn old_guc_names_map() {
     setup();
@@ -646,6 +751,41 @@ fn valid_custom_names() {
     assert!(!valid_custom_variable_name("1foo.bar"));
 }
 
+/// A test's scratch directory under the temp dir, removed on drop (the
+/// test's end, or a panic's unwind).
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(name: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn scratch_dirs_leave_nothing_behind() {
+    let dir = Scratch::new("guc_gone_test");
+    std::fs::write(dir.join("postgresql.conf"), "work_mem = 2MB\n").unwrap();
+    let path = dir.0.clone();
+    drop(dir);
+    assert!(!path.exists(), "{} left behind", path.display());
+}
+
 // guc.c:1613: InitializeGUCOptionsFromEnvironment re-applies the rlimit
 // default on every reload, so dropping max_stack_depth from the file lands
 // on the platform default (2MB/DYNAMIC_DEFAULT), not the 100kB boot value.
@@ -658,9 +798,7 @@ fn reload_restores_rlimit_stack_depth_default() {
         return;
     }
     let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("guc_msd_test_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("guc_msd_test");
     let conf = dir.join("postgresql.conf");
     init_small::globals::SetDataDir(dir.to_str().unwrap());
     SetConfigOption("config_file", Some(conf.to_str().unwrap()), PGC_POSTMASTER, PGC_S_OVERRIDE)
@@ -687,9 +825,7 @@ fn reload_restores_rlimit_stack_depth_default() {
 fn select_config_files_empty_paths_resolve_to_cwd() {
     setup();
     let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("guc_scf_test_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("guc_scf_test");
     std::fs::write(dir.join("postgresql.conf"), "data_directory = ''\nhba_file = ''\n").unwrap();
 
     assert!(crate::select::SelectConfigFiles(Some(dir.to_str().unwrap()), "postgres").unwrap());
@@ -706,9 +842,7 @@ fn select_config_files_empty_paths_resolve_to_cwd() {
 fn process_config_file_applies_and_reverts() {
     setup();
     let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("guc_pcf_test_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("guc_pcf_test");
     let conf = dir.join("postgresql.conf");
     init_small::globals::SetDataDir(dir.to_str().unwrap());
 
@@ -758,9 +892,7 @@ fn process_config_file_applies_and_reverts() {
 fn process_config_file_removed_postmaster_param_records_error_item() {
     setup();
     let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("guc_pcf_removed_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("guc_pcf_removed");
     let conf = dir.join("postgresql.conf");
     init_small::globals::SetDataDir(dir.to_str().unwrap());
 
@@ -816,9 +948,7 @@ fn process_config_file_removed_postmaster_param_records_error_item() {
 fn process_config_file_duplicate_orderings_last_wins() {
     setup();
     let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("guc_dup_test_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("guc_dup_test");
     let conf = dir.join("postgresql.conf");
     let auto_conf = dir.join("postgresql.auto.conf");
     init_small::globals::SetDataDir(dir.to_str().unwrap());
@@ -1422,6 +1552,7 @@ fn reapply_adjusts_recursion_pushed_entry_when_own_assignment_fails() {
 #[test]
 fn prefix_reservation_warnings_in_hash_order_with_context() {
     setup();
+    let _emitted = EMITTED_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     for name in ["a", "b", "c", "d", "e", "f", "g", "h", "long_name_x", "zed"] {
         assert_eq!(set_session(&format!("postgres_fdw.{name}"), Some("1")).unwrap(), 1);
     }
@@ -1473,13 +1604,13 @@ fn inherited_custom_definitions_survive_child_registry_rebuild() {
     DefineCustomStringVariable("b168pre.name", Some("desc"), None, Some("boot"), PGC_USERSET, 0)
         .unwrap();
     MarkGUCPrefixReserved("b168pre");
-    let definitions = custom_string_definitions();
-    assert!(definitions.iter().any(|d| d.name == "b168pre.name"));
+    let definitions = custom_variable_definitions();
+    assert!(definitions.iter().any(|d| matches!(d, CustomVariableDefinition::String { name: "b168pre.name", .. })));
     let prefixes = reserved_class_prefixes();
     std::thread::spawn(move || {
         setup();
         inherit_reserved_class_prefixes(&prefixes);
-        inherit_custom_string_definitions(&definitions);
+        inherit_custom_variable_definitions(&definitions);
         crate::store::initialize_guc_options_for_child(&[]).unwrap();
         assert_eq!(show("b168pre.name"), Some("boot".to_string()));
         assert_eq!(set_session("b168pre.name", Some("x")).unwrap(), 1);
@@ -1560,9 +1691,8 @@ fn child_inherits_the_postmaster_reload_time() {
 fn process_config_file_skips_removed_placeholder_tombstones() {
     setup();
     let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("guc_pcf_tombstone_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let _emitted = EMITTED_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = Scratch::new("guc_pcf_tombstone");
     let conf = dir.join("postgresql.conf");
     init_small::globals::SetDataDir(dir.to_str().unwrap());
 
@@ -1617,7 +1747,7 @@ fn check_hook_raw_detail_reaches_the_error() {
     assert_eq!(e.sqlstate(), ERRCODE_INVALID_PARAMETER_VALUE);
 }
 
-// regression: a placeholder's name is owned by the registry (C: a
+// fp-misc-guc-p1#1: a placeholder's name is owned by the registry (C: a
 // guc_strdup into GUCMemoryContext, which dies with the backend), never
 // leaked into the process. Witness: allocations of one sentinel size that
 // nothing else in this test binary requests are censused by the allocator;
@@ -1678,6 +1808,36 @@ fn placeholder_names_die_with_their_registry() {
     );
 }
 
+// guc_nondef_list is a dlist (guc.c:2117-2122): leaving and re-entering
+// PGC_S_DEFAULT is O(1) per variable, so RESET ALL / AtEOXact_GUC over N
+// placeholders is linear, and the list keeps first-left-default order.
+#[test]
+fn nondef_list_unlink_is_constant_time_and_ordered() {
+    let n = 200_000;
+    let mut reg = GucRegistry::new();
+    let idxs: Vec<usize> =
+        (0..n).map(|i| reg.add_placeholder_variable(&format!("my.p{i}")).unwrap()).collect();
+    let start = std::time::Instant::now();
+    for &idx in &idxs {
+        reg.set_source_pub(idx, PGC_S_SESSION);
+    }
+    for &idx in &idxs {
+        reg.set_source_pub(idx, PGC_S_DEFAULT);
+    }
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+
+    for &i in &[3usize, 1, 2, 0] {
+        reg.set_source_pub(idxs[i], PGC_S_SESSION);
+    }
+    reg.set_source_pub(idxs[1], PGC_S_DEFAULT);
+    reg.set_source_pub(idxs[1], PGC_S_SESSION);
+    let order: Vec<String> = crate::registry::capture_session_gucs(&reg)
+        .into_iter()
+        .map(|c| c.name().to_string())
+        .collect();
+    assert_eq!(order, ["my.p3", "my.p2", "my.p0", "my.p1"]);
+}
+
 // C 18.6 BeginReportingGUCOptions on a fresh connection (guc_hashtab
 // hash_seq_search order, 512 buckets), captured from the C oracle.
 #[test]
@@ -1721,9 +1881,7 @@ fn hash_seq_order_matches_c_guc_hashtab() {
 fn process_config_file_removed_params_error_items_in_c_hash_order() {
     setup();
     let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("guc_pcf_removed2_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("guc_pcf_removed2");
     let conf = dir.join("postgresql.conf");
     init_small::globals::SetDataDir(dir.to_str().unwrap());
 
@@ -1754,7 +1912,6 @@ fn process_config_file_removed_params_error_items_in_c_hash_order() {
             "parameter \"max_connections\" cannot be changed without restarting the server",
         ]
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1812,4 +1969,421 @@ fn check_hook_error_is_rethrown_at_demoted_elevel() {
     )
     .unwrap_err();
     assert_eq!(e.message(), "invalid input syntax for type interval: \"xyz\"");
+}
+
+#[test]
+fn typed_custom_variables_adopt_stacks_and_survive_child_rebuild() {
+    setup();
+    let mut setting = guc_tables::ConfigureNamesInt.iter().copied()
+        .find(|s| s.name == "work_mem").unwrap();
+    static SLOT: guc_tables::GucIntVar = guc_tables::GucSlot::new("typed_extension_limit");
+    setting.variable = &SLOT;
+    setting.name = "typed_extension.limit";
+    setting.min = 0;
+    setting.max = 100;
+    setting.flags = 0;
+    setting.boot_val = guc_tables::GucDefaultValue::Int(10);
+    setting.check_hook = None;
+    setting.assign_hook = None;
+    setting.show_hook = None;
+    AtStart_GUC();
+    set_session(setting.name, Some("20")).unwrap();
+    set_config_option_ext(setting.name, Some("30"), PGC_USERSET, PGC_S_SESSION,
+        BOOTSTRAP_SUPERUSERID, GUC_ACTION_LOCAL, true, ErrorLevel(0), false).unwrap();
+    DefineCustomVariable(guc_tables::GucSetting::Int(setting)).unwrap();
+    assert_eq!(get_int(setting.name), Some(30));
+    AtEOXact_GUC(true, 1);
+    assert_eq!(get_int(setting.name), Some(20));
+    assert!(set_session(setting.name, Some("101")).is_err());
+    set_session(setting.name, None).unwrap();
+    assert_eq!(get_int(setting.name), Some(10));
+    let definitions = custom_variable_definitions();
+    std::thread::spawn(move || {
+        setup();
+        inherit_custom_variable_definitions(&definitions);
+        crate::store::initialize_guc_options_for_child(&[]).unwrap();
+        assert_eq!(get_int("typed_extension.limit"), Some(10));
+    }).join().unwrap();
+}
+
+#[test]
+fn restored_enum_assign_hook_observes_previous_backing_value() {
+    use core::sync::atomic::{AtomicI32, Ordering};
+    use guc_tables::{GucEnumAssignHook, GucEnumVar, GucVarAccessors};
+
+    static VALUE: AtomicI32 = AtomicI32::new(0);
+    static OBSERVED: AtomicI32 = AtomicI32::new(-1);
+    static VARIABLE: GucEnumVar = GucEnumVar::new("restore_test");
+    static HOOK: GucEnumAssignHook = GucEnumAssignHook::new("restore_test");
+    VARIABLE.install(GucVarAccessors {
+        get: || VALUE.load(Ordering::SeqCst),
+        set: |v| VALUE.store(v, Ordering::SeqCst),
+    });
+    HOOK.install(|_, _| {
+        OBSERVED.store(VALUE.load(Ordering::SeqCst), Ordering::SeqCst);
+    });
+
+    for (action, commit, nested) in [
+        (GUC_ACTION_SET, false, false),
+        (GUC_ACTION_LOCAL, true, false),
+        (GUC_ACTION_SAVE, true, true),
+    ] {
+        setup();
+        VALUE.store(0, Ordering::SeqCst);
+        with_store_mut(|reg| {
+            let GucVariable::Enum(c) = reg.find_option_mut("session_replication_role").unwrap() else {
+                panic!("expected enum");
+            };
+            c.variable = &VARIABLE;
+            c.assign_hook = Some(&HOOK);
+        })
+        .unwrap();
+        AtStart_GUC();
+        let nest = if nested { NewGUCNestLevel() } else { 1 };
+        set_config_option_ext(
+            "session_replication_role",
+            Some("replica"),
+            PGC_SUSET,
+            PGC_S_SESSION,
+            BOOTSTRAP_SUPERUSERID,
+            action,
+            true,
+            ErrorLevel(0),
+            false,
+        )
+        .unwrap();
+        assert_eq!(OBSERVED.load(Ordering::SeqCst), 0);
+        assert_eq!(VALUE.load(Ordering::SeqCst), 1);
+        AtEOXact_GUC(commit, nest);
+        assert_eq!(OBSERVED.load(Ordering::SeqCst), 1);
+        assert_eq!(VALUE.load(Ordering::SeqCst), 0);
+        if nested {
+            AtEOXact_GUC(true, 1);
+        }
+    }
+
+    AtStart_GUC();
+    for value in ["replica", "origin"] {
+        set_config_option_ext(
+            "session_replication_role",
+            Some(value),
+            PGC_SUSET,
+            PGC_S_SESSION,
+            BOOTSTRAP_SUPERUSERID,
+            GUC_ACTION_SET,
+            true,
+            ErrorLevel(0),
+            false,
+        )
+        .unwrap();
+        if value == "replica" {
+            NewGUCNestLevel();
+        }
+    }
+    AtEOXact_GUC(false, 1);
+    assert_eq!(OBSERVED.load(Ordering::SeqCst), 1);
+    assert_eq!(VALUE.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn session_bind_resets_worker_file_values_leader_lacks() {
+    setup();
+    let caps: Vec<crate::store::CapturedGuc> = Vec::new();
+    std::thread::spawn(move || {
+        setup();
+        let rc = set_config_option_ext(
+            "extra_float_digits",
+            Some("0"),
+            PGC_SIGHUP,
+            PGC_S_FILE,
+            BOOTSTRAP_SUPERUSERID,
+            GUC_ACTION_SET,
+            true,
+            ErrorLevel(0),
+            false,
+        )
+        .unwrap();
+        assert_eq!(rc, 1);
+        assert_eq!(get_int("extra_float_digits"), Some(0));
+        let _binding = crate::store::bind_session_gucs(&caps).unwrap();
+        assert_eq!(get_int("extra_float_digits"), Some(1));
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn reset_store_to_process_base_drops_prior_session_placeholders() {
+    setup();
+    set_session("app_ctx.secret", Some("session-1-value")).unwrap();
+    assert!(with_store(|reg| reg.find_option("app_ctx.secret").is_some()).unwrap());
+    scrub_to_boot();
+    with_store_mut(crate::registry::GucRegistry::remove_all_placeholders).unwrap();
+    assert!(with_store(|reg| reg.find_option("app_ctx.secret").is_none()).unwrap());
+    assert_eq!(GetConfigOption("app_ctx.secret", true, false).unwrap(), None);
+    let len = with_store(|reg| reg.len()).unwrap();
+    set_session("app_ctx.other", Some("x")).unwrap();
+    assert_eq!(with_store(|reg| reg.len()).unwrap(), len);
+    assert_eq!(string_state("app_ctx.other").0.as_deref(), Some("x"));
+    assert!(with_store(|reg| reg.find_option("app_ctx.secret").is_none()).unwrap());
+}
+
+/// A crash-restarted server generation restores the previous one's settings
+/// image (C's postmaster keeps its settings across the crash): values,
+/// sources, sourcefile/sourceline, pending_restart and PgReloadTime.
+#[test]
+fn postmaster_settings_image_round_trips() {
+    let _g = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let image = std::thread::spawn(|| {
+        setup();
+        set_config_option_ext(
+            "work_mem",
+            Some("7MB"),
+            PGC_POSTMASTER,
+            PGC_S_FILE,
+            BOOTSTRAP_SUPERUSERID,
+            GUC_ACTION_SET,
+            true,
+            ErrorLevel(0),
+            false,
+        )
+        .unwrap();
+        crate::process_config::set_config_sourcefile("work_mem", "/dd/postgresql.conf", 12);
+        with_store_mut(|reg| {
+            reg.find_option_mut("shared_buffers").unwrap().gen_mut().status |=
+                crate::model::GUC_PENDING_RESTART;
+        });
+        set_pg_reload_time(4_242);
+        let mut image = Vec::new();
+        crate::store::write_postmaster_gucs(&mut image);
+        image
+    })
+    .join()
+    .unwrap();
+    std::thread::spawn(move || {
+        setup();
+        assert!(!crate::store::read_postmaster_gucs(&image[..image.len() - 1]).unwrap());
+        setup();
+        assert!(crate::store::read_postmaster_gucs(&image).unwrap());
+        assert_eq!(show("work_mem"), Some("7MB".to_string()));
+        let (source, file, line) = with_store(|reg| {
+            let g = reg.find_option("work_mem").unwrap().gen();
+            (g.source, g.sourcefile.clone(), g.sourceline)
+        })
+        .unwrap();
+        assert_eq!((source, file.as_deref(), line), (PGC_S_FILE, Some("/dd/postgresql.conf"), 12));
+        let status = with_store(|reg| reg.find_option("shared_buffers").unwrap().gen().status).unwrap();
+        assert!(status & crate::model::GUC_PENDING_RESTART != 0);
+        assert_eq!(pg_reload_time(), 4_242);
+    })
+    .join()
+    .unwrap();
+}
+
+/// D4244: a claim carries the leader's PGC_SIGHUP server-log settings whose backing is per thread (carry.rs
+/// `THREAD_SIGHUP`), as RestoreGUCState carries them to a parallel worker. A pool thread never rereads the file, so
+/// without the carry a log line a claim writes read the values its thread started with. The claim's end puts the
+/// thread's own back, and a reload on the leader between two claims reaches the next one: the first claim's undo puts
+/// back no stale value.
+#[test]
+fn claim_carry_applies_the_leaders_thread_sighup_log_settings() {
+    let (before, after) = std::thread::spawn(|| {
+        setup();
+        let file = |name: &str, value: &str| {
+            set_config_option_ext(name, Some(value), PGC_SIGHUP, PGC_S_FILE, BOOTSTRAP_SUPERUSERID, GUC_ACTION_SET, true, ErrorLevel(0), false).unwrap()
+        };
+        assert_eq!(file("log_line_prefix", "leader %p "), 1);
+        assert_eq!(file("syslog_split_messages", "off"), 1);
+        let before = crate::layers::current_query_pin();
+        // the leader's reload (ProcessConfigFile sets the file's values at PGC_SIGHUP)
+        assert_eq!(file("log_line_prefix", "reloaded %p "), 1);
+        let after = crate::layers::current_query_pin();
+        assert!(!std::sync::Arc::ptr_eq(&before, &after), "a reload moves the leader's pin");
+        (before, after)
+    })
+    .join()
+    .unwrap();
+    std::thread::spawn(move || {
+        setup();
+        let (prefix, split) = (&guc_tables::vars::Log_line_prefix, &guc_tables::vars::syslog_split_messages);
+        let own = (prefix.read(), split.read());
+        assert_eq!(own, (Some("%m [%p] ".to_string()), true), "a fresh thread holds the boot values");
+        {
+            let _claim = crate::carry::arm_claim(&before).unwrap();
+            assert_eq!((prefix.read(), split.read()), (Some("leader %p ".to_string()), false), "the leader's file values");
+            assert_eq!(elog::config::log_line_prefix_format().as_deref(), Some("leader %p "), "the prefix a log line reads");
+        }
+        assert_eq!((prefix.read(), split.read()), own, "the claim's end put the thread's own back");
+        {
+            let _claim = crate::carry::arm_claim(&after).unwrap();
+            assert_eq!((prefix.read(), split.read()), (Some("reloaded %p ".to_string()), false), "the next claim reads the reload");
+            assert_eq!(elog::config::log_line_prefix_format().as_deref(), Some("reloaded %p "), "the reloaded prefix a log line reads");
+        }
+        assert_eq!((prefix.read(), split.read()), own, "the second claim's end put the thread's own back");
+    })
+    .join()
+    .unwrap();
+}
+
+/// D4240: wal_sync_method is PGC_SIGHUP with a per-thread backing (transam_xlog guc_vars.rs), read by a claim's own WAL
+/// write, so carry.rs `THREAD_SIGHUP` carries it. This binary does not link transam_xlog: the backing is a stand-in.
+#[test]
+fn claim_carry_takes_wal_sync_method() {
+    use core::sync::atomic::{AtomicI32, Ordering};
+    static METHOD: AtomicI32 = AtomicI32::new(0);
+    setup();
+    guc_tables::vars::wal_sync_method.install_if_absent(guc_tables::GucVarAccessors {
+        get: || METHOD.load(Ordering::Relaxed),
+        set: |v| METHOD.store(v, Ordering::Relaxed),
+    });
+    let context = with_store(|reg| reg.find_option("wal_sync_method").unwrap().gen().context).unwrap();
+    assert!(matches!(context, types_guc::GucContext::PGC_SIGHUP), "wal_sync_method is a PGC_SIGHUP variable");
+    assert!(crate::carry::is_carried("wal_sync_method"), "a claim carries the leader's wal_sync_method");
+}
+
+/// D4240: fsync is PGC_SIGHUP with a per-thread backing (init_small globals.rs ENABLE_FSYNC), read by a claim's own WAL
+/// flush (issue_xlog_fsync), so carry.rs `THREAD_SIGHUP` carries it: a claim sees the leader's reloaded value and its end
+/// puts the thread's own back.
+#[test]
+fn claim_carry_takes_the_leaders_fsync() {
+    // the server's backing (init_small::init_seams installs it; this binary's setup does not): the per-thread cell
+    guc_tables::vars::enableFsync.install_if_absent(guc_tables::GucVarAccessors {
+        get: init_small::globals::enableFsync,
+        set: init_small::globals::set_enableFsync,
+    });
+    let pin = std::thread::spawn(|| {
+        setup();
+        let set = set_config_option_ext("fsync", Some("off"), PGC_SIGHUP, PGC_S_FILE, BOOTSTRAP_SUPERUSERID, GUC_ACTION_SET, true, ErrorLevel(0), false);
+        assert_eq!(set.unwrap(), 1);
+        crate::layers::current_query_pin()
+    })
+    .join()
+    .unwrap();
+    std::thread::spawn(move || {
+        setup();
+        assert!(init_small::globals::enableFsync(), "a fresh thread holds the boot value");
+        {
+            let _claim = crate::carry::arm_claim(&pin).unwrap();
+            assert!(!init_small::globals::enableFsync(), "the claim reads the leader's fsync = off");
+        }
+        assert!(init_small::globals::enableFsync(), "the claim's end put the thread's own back");
+    })
+    .join()
+    .unwrap();
+}
+
+/// C7 (D3919): a claim on another thread runs with the leader's session values (carry.rs `arm_claim`), only where they
+/// differ, and puts the thread's own back when it ends, a nested claim of another session's end the outer claim's.
+#[test]
+fn claim_carry_applies_the_leaders_session_and_puts_the_threads_back() {
+    setup();
+    let (rs, admit) = (&guc_tables::vars::row_security, &guc_tables::vars::pgrust_gravity_admit);
+    assert_eq!(set_session("row_security", Some("off")).unwrap(), 1);
+    assert_eq!(set_session("pgrust.gravity_admit", Some("shape")).unwrap(), 1);
+    let shape = admit.read();
+    assert_ne!(shape, guc_tables::consts::GRAVITY_ADMIT_GRAPH);
+    let leader = crate::layers::current_query_pin();
+    assert!(std::sync::Arc::ptr_eq(&leader, &crate::layers::current_query_pin()), "an unmoved store keeps its pin");
+    // another session: row_security on by its own SET (captured), the admission at its default (not captured)
+    let other = std::thread::spawn(|| {
+        setup();
+        assert_eq!(set_session("row_security", Some("on")).unwrap(), 1);
+        crate::layers::current_query_pin()
+    })
+    .join()
+    .unwrap();
+    std::thread::spawn(move || {
+        setup();
+        let own = (rs.read(), admit.read());
+        assert_eq!(own, (true, guc_tables::consts::GRAVITY_ADMIT_GRAPH), "a fresh thread holds the boot values");
+        for round in 0..2 {
+            {
+                let _claim = crate::carry::arm_claim(&leader).unwrap();
+                assert_eq!((rs.read(), admit.read()), (false, shape), "round {round}: the leader's values");
+                {
+                    let _nested = crate::carry::arm_claim(&other).unwrap();
+                    assert_eq!((rs.read(), admit.read()), (true, shape), "round {round}: the nested session's SET, the outer's rest");
+                }
+                assert_eq!((rs.read(), admit.read()), (false, shape), "round {round}: the nested claim's end put the outer's back");
+            }
+            assert_eq!((rs.read(), admit.read()), own, "round {round}: the claim's end put the thread's own back");
+        }
+        // a value set on the thread around its store survives a claim that changes it
+        rs.write(false);
+        drop(crate::carry::arm_claim(&other).unwrap());
+        assert!(!rs.read());
+        rs.write(true);
+    })
+    .join()
+    .unwrap();
+}
+
+/// pgrust.point_path is one USERSET option whose value is its session's: a SET in one
+/// session leaves another's value alone, in both directions, and SHOW reads each session's own.
+#[test]
+fn point_path_set_is_per_session() {
+    use guc_tables::consts::{POINT_PATH_OFF, POINT_PATH_STRICT};
+    let pp = &guc_tables::vars::pgrust_point_path;
+    let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let g = gate.clone();
+    let a = std::thread::spawn(move || {
+        setup();
+        assert_eq!(set_session("pgrust.point_path", Some("strict")).unwrap(), 1);
+        g.wait();
+        g.wait();
+        (pp.read(), guc_tables::backing::pgrust_point_path(), show("pgrust.point_path"))
+    });
+    let b = std::thread::spawn(move || {
+        setup();
+        gate.wait();
+        let before = (pp.read(), show("pgrust.point_path"));
+        assert_eq!(set_session("pgrust.point_path", Some("off")).unwrap(), 1);
+        gate.wait();
+        (before, guc_tables::backing::pgrust_point_path())
+    });
+    let (before, b_after) = b.join().unwrap();
+    assert!(before.0 != POINT_PATH_STRICT && before.1.as_deref() != Some("strict"), "another session's SET left the boot value: {before:?}");
+    assert_eq!(b_after, POINT_PATH_OFF);
+    assert_eq!(a.join().unwrap(), (POINT_PATH_STRICT, POINT_PATH_STRICT, Some("strict".to_string())), "its own SET, after the other session's");
+}
+
+/// pgrust.point_noplan: on at boot (D4550), a USERSET option whose value is its session's,
+/// as pgrust.point_path.
+#[test]
+fn point_noplan_set_is_per_session() {
+    use guc_tables::consts::{POINT_NOPLAN_OFF, POINT_NOPLAN_ON};
+    let a = std::thread::spawn(|| {
+        setup();
+        let boot = (guc_tables::backing::pgrust_point_noplan(), show("pgrust.point_noplan"));
+        assert_eq!(set_session("pgrust.point_noplan", Some("off")).unwrap(), 1);
+        (boot, guc_tables::backing::pgrust_point_noplan(), show("pgrust.point_noplan"))
+    });
+    let b = std::thread::spawn(|| {
+        setup();
+        guc_tables::backing::pgrust_point_noplan()
+    });
+    let (boot, set, shown) = a.join().unwrap();
+    assert_eq!(boot, (POINT_NOPLAN_ON, Some("on".to_string())), "on at boot");
+    assert_eq!((set, shown), (POINT_NOPLAN_OFF, Some("off".to_string())));
+    assert_eq!(b.join().unwrap(), POINT_NOPLAN_ON, "another session's SET leaves this one's value alone");
+}
+
+/// pgrust.point_write and pgrust.point_keep: on at boot (D4572), USERSET options whose values are their session's.
+#[test]
+fn point_write_and_keep_on_at_boot_set_per_session() {
+    let a = std::thread::spawn(|| {
+        setup();
+        let boot = (guc_tables::backing::pgrust_point_write(), show("pgrust.point_write"), guc_tables::backing::pgrust_point_keep(), show("pgrust.point_keep"));
+        assert_eq!(set_session("pgrust.point_write", Some("off")).unwrap(), 1);
+        assert_eq!(set_session("pgrust.point_keep", Some("off")).unwrap(), 1);
+        (boot, guc_tables::backing::pgrust_point_write(), guc_tables::backing::pgrust_point_keep())
+    });
+    let b = std::thread::spawn(|| {
+        setup();
+        (guc_tables::backing::pgrust_point_write(), guc_tables::backing::pgrust_point_keep())
+    });
+    let (boot, write, keep) = a.join().unwrap();
+    assert_eq!(boot, (true, Some("on".to_string()), true, Some("on".to_string())), "both on at boot");
+    assert_eq!((write, keep), (false, false));
+    assert_eq!(b.join().unwrap(), (true, true), "another session's SETs leave this one's values alone");
 }

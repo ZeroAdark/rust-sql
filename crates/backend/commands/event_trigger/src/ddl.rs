@@ -65,7 +65,7 @@ pub fn CreateEventTrigger<'mcx>(
                 .expect("tag filter carries a value list")
                 .as_list()
                 .expect("tag filter value is a String list");
-            let mut vals = Vec::with_capacity(list.len());
+            let mut vals = ::mcx::std_vec_with_capacity("commands", list.len())?;
             for v in list.iter() {
                 vals.push(v.as_string().expect("tag filter values are Strings").sval);
             }
@@ -174,7 +174,7 @@ fn validate_table_rewrite_tags(_filtervar: &str, taglist: &[&str]) -> PgResult<(
 // that name is "function f() does not exist" (42883), never "must return
 // type event_trigger".
 fn LookupFuncName0(funcname: &types_nodes::list::NodeList<'_>) -> PgResult<Oid> {
-    let mut parts: Vec<&str> = Vec::with_capacity(funcname.len());
+    let mut parts: Vec<&str> = ::mcx::std_vec_with_capacity("commands", funcname.len())?;
     for n in funcname.iter() {
         parts.push(n.as_string().expect("funcname holds Strings").sval);
     }
@@ -250,7 +250,7 @@ fn insert_event_trigger_tuple<'mcx>(
 }
 
 fn filter_list_to_array<'mcx>(mcx: Mcx<'mcx>, tags: &[&str]) -> PgResult<PgVec<'mcx, u8>> {
-    let mut elems: Vec<Datum> = Vec::with_capacity(tags.len());
+    let mut elems: Vec<Datum> = ::mcx::std_vec_with_capacity("commands", tags.len())?;
     for tag in tags {
         let upper: String =
             tag.chars().map(|c| if c.is_ascii() { c.to_ascii_uppercase() } else { c }).collect();

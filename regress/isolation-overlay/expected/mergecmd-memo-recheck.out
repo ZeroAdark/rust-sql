@@ -1,0 +1,261 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2eu s2en s1u s2u s1c s2s
+step s2eu: EXPLAIN (COSTS OFF) MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 THEN UPDATE SET val = t.val + 1;
+QUERY PLAN                                          
+----------------------------------------------------
+Merge on mq_t t                                     
+  ->  Nested Loop                                   
+        ->  Seq Scan on mq_s s                      
+        ->  Memoize                                 
+              Cache Key: s.id                       
+              Cache Mode: logical                   
+              ->  Index Scan using mq_t_id on mq_t t
+                    Index Cond: (id = s.id)         
+(8 rows)
+
+step s2en: EXPLAIN (COSTS OFF) MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 THEN UPDATE SET val = t.val + 1 WHEN NOT MATCHED AND s.n <= 1 THEN INSERT VALUES (s.id, -1);
+QUERY PLAN                                          
+----------------------------------------------------
+Merge on mq_t t                                     
+  ->  Nested Loop Left Join                         
+        ->  Seq Scan on mq_s s                      
+        ->  Memoize                                 
+              Cache Key: s.id                       
+              Cache Mode: logical                   
+              ->  Index Scan using mq_t_id on mq_t t
+                    Index Cond: (id = s.id)         
+(8 rows)
+
+step s1u: UPDATE mq_t SET val = val + 1000 WHERE id = 102;
+step s2u: MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 THEN UPDATE SET val = t.val + 1 RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+merge_action| id| val
+------------+---+----
+UPDATE      |100| 101
+UPDATE      |101| 102
+UPDATE      |102|1103
+UPDATE      |103| 104
+UPDATE      |104| 105
+(5 rows)
+
+step s2s: SELECT id, val FROM mq_t WHERE id BETWEEN 100 AND 104 OR id > 5000 OR val < 0 ORDER BY id, val;
+ id| val
+---+----
+100| 101
+101| 102
+102|1103
+103| 104
+104| 105
+(5 rows)
+
+
+starting permutation: s1k s2u s1c s2s
+step s1k: UPDATE mq_t SET id = 9102 WHERE id = 102;
+step s2u: MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 THEN UPDATE SET val = t.val + 1 RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+merge_action| id|val
+------------+---+---
+UPDATE      |100|101
+UPDATE      |101|102
+UPDATE      |103|104
+UPDATE      |104|105
+(4 rows)
+
+step s2s: SELECT id, val FROM mq_t WHERE id BETWEEN 100 AND 104 OR id > 5000 OR val < 0 ORDER BY id, val;
+  id|val
+----+---
+ 100|101
+ 101|102
+ 103|104
+ 104|105
+9102|102
+(5 rows)
+
+
+starting permutation: s1d s2u s1c s2s
+step s1d: DELETE FROM mq_t WHERE id = 102;
+step s2u: MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 THEN UPDATE SET val = t.val + 1 RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+merge_action| id|val
+------------+---+---
+UPDATE      |100|101
+UPDATE      |101|102
+UPDATE      |103|104
+UPDATE      |104|105
+(4 rows)
+
+step s2s: SELECT id, val FROM mq_t WHERE id BETWEEN 100 AND 104 OR id > 5000 OR val < 0 ORDER BY id, val;
+ id|val
+---+---
+100|101
+101|102
+103|104
+104|105
+(4 rows)
+
+
+starting permutation: s1u s2n s1c s2s
+step s1u: UPDATE mq_t SET val = val + 1000 WHERE id = 102;
+step s2n: MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 THEN UPDATE SET val = t.val + 1 WHEN NOT MATCHED AND s.n <= 1 THEN INSERT VALUES (s.id, -1) RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+merge_action|  id| val
+------------+----+----
+UPDATE      | 100| 101
+UPDATE      | 101| 102
+UPDATE      | 102|1103
+UPDATE      | 103| 104
+UPDATE      | 104| 105
+INSERT      |6001|  -1
+INSERT      |6002|  -1
+(7 rows)
+
+step s2s: SELECT id, val FROM mq_t WHERE id BETWEEN 100 AND 104 OR id > 5000 OR val < 0 ORDER BY id, val;
+  id| val
+----+----
+ 100| 101
+ 101| 102
+ 102|1103
+ 103| 104
+ 104| 105
+6001|  -1
+6002|  -1
+(7 rows)
+
+
+starting permutation: s1k s2n s1c s2s
+step s1k: UPDATE mq_t SET id = 9102 WHERE id = 102;
+step s2n: MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 THEN UPDATE SET val = t.val + 1 WHEN NOT MATCHED AND s.n <= 1 THEN INSERT VALUES (s.id, -1) RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+merge_action|  id|val
+------------+----+---
+UPDATE      | 100|101
+UPDATE      | 101|102
+INSERT      | 102| -1
+UPDATE      | 103|104
+UPDATE      | 104|105
+INSERT      |6001| -1
+INSERT      |6002| -1
+(7 rows)
+
+step s2s: SELECT id, val FROM mq_t WHERE id BETWEEN 100 AND 104 OR id > 5000 OR val < 0 ORDER BY id, val;
+  id|val
+----+---
+ 100|101
+ 101|102
+ 102| -1
+ 103|104
+ 104|105
+6001| -1
+6002| -1
+9102|102
+(8 rows)
+
+
+starting permutation: s1d s2n s1c s2s
+step s1d: DELETE FROM mq_t WHERE id = 102;
+step s2n: MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 THEN UPDATE SET val = t.val + 1 WHEN NOT MATCHED AND s.n <= 1 THEN INSERT VALUES (s.id, -1) RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+merge_action|  id|val
+------------+----+---
+UPDATE      | 100|101
+UPDATE      | 101|102
+INSERT      | 102| -1
+UPDATE      | 103|104
+UPDATE      | 104|105
+INSERT      |6001| -1
+INSERT      |6002| -1
+(7 rows)
+
+step s2s: SELECT id, val FROM mq_t WHERE id BETWEEN 100 AND 104 OR id > 5000 OR val < 0 ORDER BY id, val;
+  id|val
+----+---
+ 100|101
+ 101|102
+ 102| -1
+ 103|104
+ 104|105
+6001| -1
+6002| -1
+(7 rows)
+
+
+starting permutation: s1q s2q s1c s2s
+step s1q: UPDATE mq_t SET val = -val WHERE id = 102;
+step s2q: MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 AND t.val > 0 THEN UPDATE SET val = t.val + 1 RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+merge_action| id|val
+------------+---+---
+UPDATE      |100|101
+UPDATE      |101|102
+UPDATE      |103|104
+UPDATE      |104|105
+(4 rows)
+
+step s2s: SELECT id, val FROM mq_t WHERE id BETWEEN 100 AND 104 OR id > 5000 OR val < 0 ORDER BY id, val;
+ id| val
+---+----
+100| 101
+101| 102
+102|-102
+103| 104
+104| 105
+(5 rows)
+
+
+starting permutation: s1u s2q s1c s2s
+step s1u: UPDATE mq_t SET val = val + 1000 WHERE id = 102;
+step s2q: MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 AND t.val > 0 THEN UPDATE SET val = t.val + 1 RETURNING merge_action(), t.*; <waiting ...>
+step s1c: COMMIT;
+step s2q: <... completed>
+merge_action| id| val
+------------+---+----
+UPDATE      |100| 101
+UPDATE      |101| 102
+UPDATE      |102|1103
+UPDATE      |103| 104
+UPDATE      |104| 105
+(5 rows)
+
+step s2s: SELECT id, val FROM mq_t WHERE id BETWEEN 100 AND 104 OR id > 5000 OR val < 0 ORDER BY id, val;
+ id| val
+---+----
+100| 101
+101| 102
+102|1103
+103| 104
+104| 105
+(5 rows)
+
+
+starting permutation: s1k s2u s1a s2s
+step s1k: UPDATE mq_t SET id = 9102 WHERE id = 102;
+step s2u: MERGE INTO mq_t t USING mq_s s ON t.id = s.id WHEN MATCHED AND s.n = 0 THEN UPDATE SET val = t.val + 1 RETURNING merge_action(), t.*; <waiting ...>
+step s1a: ROLLBACK;
+step s2u: <... completed>
+merge_action| id|val
+------------+---+---
+UPDATE      |100|101
+UPDATE      |101|102
+UPDATE      |102|103
+UPDATE      |103|104
+UPDATE      |104|105
+(5 rows)
+
+step s2s: SELECT id, val FROM mq_t WHERE id BETWEEN 100 AND 104 OR id > 5000 OR val < 0 ORDER BY id, val;
+ id|val
+---+---
+100|101
+101|102
+102|103
+103|104
+104|105
+(5 rows)
+

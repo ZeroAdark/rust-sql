@@ -1,0 +1,3 @@
+path	crates/gravity/exec/src/legs.rs
+method	std::sync::Arc::new	1
+type	std::sync::Arc	1

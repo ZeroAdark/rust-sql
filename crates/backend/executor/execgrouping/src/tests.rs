@@ -54,7 +54,6 @@ fn lookup_groups_and_isolates_keys() {
     let mcx = ctx.mcx();
     let table_ctx = MemoryContext::new("entries");
     let desc = one_int4_desc(mcx);
-    // hashint4 (450) / int4eq (65) passed as resolved oids, as nodeAgg does.
     let mut table = build_tuple_hash_table(
         mcx,
         &desc,
@@ -98,7 +97,6 @@ fn lookup_groups_and_isolates_keys() {
     assert_eq!(i4, i5, "NULL keys are NOT DISTINCT");
     assert_eq!(table.num_entries(), 3);
 
-    // The additional block precedes the stored tuple, zeroed.
     let add = table.entry_additional(i1).unwrap();
     // SAFETY: 16 zeroed additional bytes per entry (build arg above).
     let bytes = unsafe { core::slice::from_raw_parts(add.as_ptr(), 16) };
@@ -110,7 +108,6 @@ fn lookup_groups_and_isolates_keys() {
     assert!(renew);
 }
 
-// Hashed DISTINCT: no per-group transition state, additionalsize 0.
 #[test]
 fn lookup_zero_additionalsize() {
     install();
@@ -177,7 +174,6 @@ fn two_int4_desc(mcx: Mcx<'_>) -> Rc<TupleDescData<'_>> {
     })
 }
 
-// Multi-column keys take the compiled-program path, not the probe kernel.
 #[test]
 fn lookup_two_col_expr_path() {
     install();
@@ -263,7 +259,6 @@ fn lookup_int8_kernel() {
         compact_attrs: compact,
         attrs,
     });
-    // hashint8 (949) / int8eq (467).
     let mut table =
         build_tuple_hash_table(mcx, &desc, &[1], &[467], &[949], &[0], 16, 16, false).unwrap();
     assert!(matches!(table.kernel, crate::ProbeKernel::Int8 { .. }));
@@ -298,13 +293,6 @@ fn lookup_int8_kernel() {
     assert_eq!(table.num_entries(), 3);
 }
 
-// q18fin diagnostic (fix/parallel-finalize-stall): the 15M-group finalize
-// does 15M all-miss int8 inserts through lookup() at ~19us each while the
-// serial agg's identical call site pays ~140ns. This probe isolates the
-// variable: N distinct int8 keys inserted (a) in ascending arrival order
-// (serial scan shape) vs (b) in shuffled arrival order (Gather-funnel shape),
-// same keys, same hashes, same growth trajectory. Run explicitly:
-//   cargo test -p execgrouping --release -- --ignored --nocapture probe_cost
 #[test]
 #[ignore]
 fn probe_cost_insert_order() {
@@ -313,7 +301,6 @@ fn probe_cost_insert_order() {
     let init_buckets: usize =
         std::env::var("PROBE_BUCKETS").ok().and_then(|v| v.parse().ok()).unwrap_or(250_000);
 
-    // Deterministic shuffle (splitmix-based Fisher-Yates).
     let mut keys: Vec<i64> = (1..=n as i64).collect();
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut rng = move || {
@@ -386,7 +373,6 @@ fn probe_cost_insert_order() {
 
     run("ascending", &keys);
     run("shuffled", &shuffled);
-    // Serial-scan facsimile: 4 consecutive rows per key (3 hits per insert).
     let mut serial_like: Vec<i64> = Vec::with_capacity(n * 4);
     for &k in &keys {
         serial_like.extend_from_slice(&[k, k, k, k]);
@@ -395,13 +381,6 @@ fn probe_cost_insert_order() {
     run("ascending-x4", &serial_like);
 }
 
-// t26 merge-1 revert regression (staged-hash IV parity): tables built with
-// use_variable_hash_iv fold a per-participant IV into every kernel hash.
-// hash_staged is contractually bit-identical to hash_slot (nodeagg's staged
-// probe debug-asserts exactly that; a release-build mismatch means
-// find_staged misses live groups = silent duplicate groups). The uninstalled
-// parallel_worker_number seam makes the IV deterministic here: worker -1 =>
-// IV = murmurhash32(u32::MAX) != 0.
 #[test]
 fn staged_hash_matches_slot_under_variable_iv() {
     install();
@@ -410,7 +389,6 @@ fn staged_hash_matches_slot_under_variable_iv() {
     let desc = one_int4_desc(mcx);
 
     let hash_both = |variable_iv: bool| -> (Vec<u32>, Vec<u32>) {
-        // hashint4 (450) / int4eq (65), as nodeAgg passes them.
         let mut table = build_tuple_hash_table(
             mcx,
             &desc,
@@ -448,22 +426,12 @@ fn staged_hash_matches_slot_under_variable_iv() {
     assert_ne!(slot0, slot1, "the variable IV must actually engage the kernels");
 }
 
-// q18fin r3 (t26 "q18fin-t26-r2 re-earn verdict" defect): the byref finalize
-// merge compares STORED hashes across participant tables and the finalize's
-// IV=0 table, so the handoff export rebases handed hashes onto the IV=0
-// mapping through `hash_to_iv0`. This unit pins the rebase algebra: for any
-// participant IV, hash_to_iv0(variable-IV hash) must equal the IV=0 twin's
-// hash for the same key — on the word kernels (rot(iv,1) pre-fmix), on the
-// staged kernels (bit-identical to hash_slot), and on the multi-column Expr
-// arm (the IV rides the hash chain as rot(iv, ncols) pre-fmix).
 #[test]
 fn hash_to_iv0_rebases_variable_iv_onto_leader_mapping() {
     install();
     let ctx = MemoryContext::new("execgrouping-iv0");
     let mcx = ctx.mcx();
 
-    // Participant IVs as production derives them: leader -1, workers 0..
-    // (worker 0 is C's quirk — murmurhash32(0) == 0, an IV-0 participant).
     let ivs: [u32; 4] = [
         ::hashfn::murmurhash32(-1i32 as u32),
         ::hashfn::murmurhash32(0),
@@ -471,7 +439,6 @@ fn hash_to_iv0_rebases_variable_iv_onto_leader_mapping() {
         ::hashfn::murmurhash32(7),
     ];
 
-    // Word kernel (single int4) + staged lane.
     {
         let desc = one_int4_desc(mcx);
         let keys = [Datum::from_i32(6), Datum::from_i32(0), Datum::from_i32(-7)];
@@ -509,7 +476,6 @@ fn hash_to_iv0_rebases_variable_iv_onto_leader_mapping() {
         }
     }
 
-    // Expr arm (two int4 key columns — multi-col shapes ARE byref-admitted).
     {
         let desc = two_int4_desc(mcx);
         let keyset: [((i32, bool), (i32, bool)); 4] = [
@@ -557,11 +523,6 @@ fn hash_to_iv0_rebases_variable_iv_onto_leader_mapping() {
     }
 }
 
-/// simplehash.h:629-630 (SH_INSERT_HASH_INTERNAL): a table already at
-/// SH_MAX_SIZE reports `sh_error("hash table size exceeded")` = elog(ERROR)
-/// with ERRCODE_INTERNAL_ERROR (XX000) — an error, never a process abort.
-/// The guard is exercised through its pure form (a 2^32-bucket index is
-/// 16GB); sizes below the cap must pass.
 #[test]
 fn grow_guard_at_max_size_is_an_error_not_a_panic() {
     use crate::{SimpleHashIndex, SH_MAX_SIZE};
@@ -573,9 +534,8 @@ fn grow_guard_at_max_size_is_an_error_not_a_panic() {
     assert_eq!(e.sqlstate(), ::types_error::ERRCODE_INTERNAL_ERROR);
 }
 
-// release() drops the heap-side key metadata too: SetOp/RecursiveUnion
-// states are forgotten (not dropped) at ExecutorEnd, so anything release
-// leaves behind is retained for the session.
+// SetOp/RecursiveUnion states are forgotten (not dropped) at ExecutorEnd,
+// so anything release leaves behind is retained for the session.
 #[test]
 fn release_frees_key_metadata() {
     install();
@@ -587,4 +547,11 @@ fn release_frees_key_metadata() {
     assert_eq!(table.key_cols().len(), 1);
     table.release();
     assert!(table.key_cols().is_empty());
+}
+
+#[test]
+fn bucket_array_allocation_failure_is_error_53200() {
+    let err = crate::SimpleHashIndex::alloc_buckets(1u64 << 62).unwrap_err();
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_OUT_OF_MEMORY);
+    assert_eq!(err.message(), "out of memory");
 }

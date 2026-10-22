@@ -1,0 +1,53 @@
+Parsed test spec with 3 sessions
+
+starting permutation: expl upd sel
+step expl: EXPLAIN (COSTS OFF) UPDATE pit SET v = CASE WHEN v IS NULL THEN (SELECT 1 / count(*) FROM piu WHERE k < 0) ELSE v + 1 END WHERE k = 1;
+QUERY PLAN                            
+--------------------------------------
+Update on pit                         
+  InitPlan 1                          
+    ->  Aggregate                     
+          ->  Seq Scan on piu         
+                Filter: (k < 0)       
+  ->  Index Scan using pit_pkey on pit
+        Index Cond: (k = 1)           
+(7 rows)
+
+step upd: UPDATE pit SET v = CASE WHEN v IS NULL THEN (SELECT 1 / count(*) FROM piu WHERE k < 0) ELSE v + 1 END WHERE k = 1 RETURNING v;
+ v
+--
+11
+(1 row)
+
+step sel: SELECT k, v FROM pit ORDER BY k;
+k| v
+-+--
+1|11
+(1 row)
+
+
+starting permutation: expl s1b s1u upd s1c sel
+step expl: EXPLAIN (COSTS OFF) UPDATE pit SET v = CASE WHEN v IS NULL THEN (SELECT 1 / count(*) FROM piu WHERE k < 0) ELSE v + 1 END WHERE k = 1;
+QUERY PLAN                            
+--------------------------------------
+Update on pit                         
+  InitPlan 1                          
+    ->  Aggregate                     
+          ->  Seq Scan on piu         
+                Filter: (k < 0)       
+  ->  Index Scan using pit_pkey on pit
+        Index Cond: (k = 1)           
+(7 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE pit SET v = v + 1 WHERE k = 1;
+step upd: UPDATE pit SET v = CASE WHEN v IS NULL THEN (SELECT 1 / count(*) FROM piu WHERE k < 0) ELSE v + 1 END WHERE k = 1 RETURNING v; <waiting ...>
+step s1c: COMMIT;
+step upd: <... completed>
+ERROR:  division by zero
+step sel: SELECT k, v FROM pit ORDER BY k;
+k| v
+-+--
+1|11
+(1 row)
+

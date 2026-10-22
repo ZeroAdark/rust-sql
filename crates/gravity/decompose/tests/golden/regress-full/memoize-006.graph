@@ -1,0 +1,11 @@
+-- regress-full-memoize-006
+-- INSERT INTO expr_key (x, t) SELECT d1::numeric, d1::text FROM ( SELECT round((d / pi())::numeric, 7) AS d1 FROM generate_series(1, 20) AS d ) t;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=4 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:20)]
+  project (1=fn1707(fn1743(op593(fn316(v4.1), c701:4614256656552045848)), c23:7), 2=io25(fn1707(fn1743(op593(fn316(v4.1), c701:4614256656552045848)), c23:7)))
+  write INSERT rel=46968 rti=1 natts=2 indexes=()
+  outs 1=vl:call1707 2=vl:call46
+mapped: ModifyTable FunctionScan

@@ -1,0 +1,1 @@
+backend/postmaster/memruntime/src/memlog.rs	GATE_BEFORE	memory	call	scratch	memory crate: the writer this thread had while mcx's block gate defers its lines (gate_defer_begin sets it, gate_defer_end takes it back)

@@ -14,6 +14,7 @@ types_fmgr = { path = "../../../../_support/types/fmgr" }
 types_rel = { path = "../../../../_support/types/rel" }
 types_storage = { path = "../../../../_support/types/types_storage" }
 relation_seams = { path = "../../../access/common/relation_seams" }
+tableam_seams = { path = "../../../access/table/tableam_seams" }
 varlena = { path = "../varlena" }
 aclchk_seams = { path = "../../../catalog/aclchk_seams" }
 acl_seams = { path = "../acl_seams" }
@@ -31,3 +32,5 @@ tablespace_seams = { path = "../../../commands/tablespace_seams" }
 namespace_seams = { path = "../../../catalog/namespace_seams" }
 init_small = { path = "../../init/init_small" }
 postgres_seams = { path = "../../../tcop/postgres_seams" }
+pgrc_am = { path = "../../../access/pgrcolumnar/pgrc_am" }
+tableam_vocab = { path = "../../../access/table/tableam_vocab" }

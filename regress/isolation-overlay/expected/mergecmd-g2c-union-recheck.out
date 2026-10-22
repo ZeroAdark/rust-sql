@@ -1,0 +1,117 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1upd s2mrg s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO gu_view pt USING (SELECT gu_one() AS pid) AS q JOIN gu_abc_1 pt1 ON (q.pid = pt1.a) ON pt.a = pt1.a WHEN MATCHED THEN DELETE RETURNING pt.a, pt.b, pt.c;
+QUERY PLAN                                                       
+-----------------------------------------------------------------
+Merge on gu_abc                                                  
+  Merge on gu_abc_1                                              
+  ->  Nested Loop                                                
+        ->  Append                                               
+              Subplans Removed: 1                                
+              ->  Seq Scan on gu_abc_1                           
+                    Filter: ((b <> 'a'::text) AND (a = gu_one()))
+        ->  Materialize                                          
+              ->  Seq Scan on gu_abc_1 pt1                       
+                    Filter: (a = gu_one())                       
+(10 rows)
+
+step s1upd: UPDATE gu_abc SET b = 'x' WHERE a = 1;
+step s2mrg: MERGE INTO gu_view pt USING (SELECT gu_one() AS pid) AS q JOIN gu_abc_1 pt1 ON (q.pid = pt1.a) ON pt.a = pt1.a WHEN MATCHED THEN DELETE RETURNING pt.a, pt.b, pt.c; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+a|b|c
+-+-+-
+1|x|t
+(1 row)
+
+step s2sel: SELECT a, b, c FROM gu_abc ORDER BY a;
+a|b|c
+-+-+-
+2|c|t
+(1 row)
+
+
+starting permutation: s1qual s2mrg s1c s2sel
+step s1qual: UPDATE gu_abc SET b = 'a' WHERE a = 1;
+step s2mrg: MERGE INTO gu_view pt USING (SELECT gu_one() AS pid) AS q JOIN gu_abc_1 pt1 ON (q.pid = pt1.a) ON pt.a = pt1.a WHEN MATCHED THEN DELETE RETURNING pt.a, pt.b, pt.c; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+a|b|c
+-+-+-
+(0 rows)
+
+step s2sel: SELECT a, b, c FROM gu_abc ORDER BY a;
+a|b|c
+-+-+-
+1|a|t
+2|c|t
+(2 rows)
+
+
+starting permutation: s1del s2mrg s1c s2sel
+step s1del: DELETE FROM gu_abc WHERE a = 1;
+step s2mrg: MERGE INTO gu_view pt USING (SELECT gu_one() AS pid) AS q JOIN gu_abc_1 pt1 ON (q.pid = pt1.a) ON pt.a = pt1.a WHEN MATCHED THEN DELETE RETURNING pt.a, pt.b, pt.c; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+a|b|c
+-+-+-
+(0 rows)
+
+step s2sel: SELECT a, b, c FROM gu_abc ORDER BY a;
+a|b|c
+-+-+-
+2|c|t
+(1 row)
+
+
+starting permutation: s1key s2mrg s1c s2sel
+step s1key: UPDATE gu_abc SET a = 3 WHERE a = 1;
+step s2mrg: MERGE INTO gu_view pt USING (SELECT gu_one() AS pid) AS q JOIN gu_abc_1 pt1 ON (q.pid = pt1.a) ON pt.a = pt1.a WHEN MATCHED THEN DELETE RETURNING pt.a, pt.b, pt.c; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+a|b|c
+-+-+-
+(0 rows)
+
+step s2sel: SELECT a, b, c FROM gu_abc ORDER BY a;
+a|b|c
+-+-+-
+2|c|t
+3|b|t
+(2 rows)
+
+
+starting permutation: s1upd s2mrg s1a s2sel
+step s1upd: UPDATE gu_abc SET b = 'x' WHERE a = 1;
+step s2mrg: MERGE INTO gu_view pt USING (SELECT gu_one() AS pid) AS q JOIN gu_abc_1 pt1 ON (q.pid = pt1.a) ON pt.a = pt1.a WHEN MATCHED THEN DELETE RETURNING pt.a, pt.b, pt.c; <waiting ...>
+step s1a: ROLLBACK;
+step s2mrg: <... completed>
+a|b|c
+-+-+-
+1|b|t
+(1 row)
+
+step s2sel: SELECT a, b, c FROM gu_abc ORDER BY a;
+a|b|c
+-+-+-
+2|c|t
+(1 row)
+
+
+starting permutation: s1upd2 s2mrg2 s1c s2sel
+step s1upd2: UPDATE gu_abc SET b = 'y' WHERE a = 2;
+step s2mrg2: MERGE INTO gu_view pt USING (SELECT gu_one() + 1 AS pid) AS q JOIN gu_abc_2 pt2 ON (q.pid = pt2.a) ON pt.a = pt2.a WHEN MATCHED THEN DELETE RETURNING pt.*, pt2.c; <waiting ...>
+step s1c: COMMIT;
+step s2mrg2: <... completed>
+a|b|c|c
+-+-+-+-
+2|y|t|t
+(1 row)
+
+step s2sel: SELECT a, b, c FROM gu_abc ORDER BY a;
+a|b|c
+-+-+-
+1|b|t
+(1 row)
+

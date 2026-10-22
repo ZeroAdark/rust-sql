@@ -1,0 +1,10 @@
+-- regress-full-strings-001
+-- SELECT substr(f1, 99995) from toasttest;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1360 end=sink
+  nodes n0@0
+  source range rel=17053 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn2086(v1.1, c23:99995))
+  outs 1=vl:call2086
+mapped: SeqScan

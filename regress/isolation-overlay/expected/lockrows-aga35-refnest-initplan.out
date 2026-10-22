@@ -1,0 +1,539 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1v s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j;
+QUERY PLAN                                                  
+------------------------------------------------------------
+Limit                                                       
+  InitPlan 1                                                
+    ->  Index Scan using ncfg_pkey on ncfg                  
+          Index Cond: (name = 'q'::text)                    
+  ->  LockRows                                              
+        ->  Nested Loop                                     
+              ->  Index Scan using njob_pkey on njob j      
+                    Filter: (prio >= (InitPlan 1).col1)     
+              ->  Memoize                                   
+                    Cache Key: j.wid                        
+                    Cache Mode: logical                     
+                    ->  Index Scan using nwrk_pkey on nwrk w
+                          Index Cond: (id = j.wid)          
+(13 rows)
+
+step s1v: UPDATE njob SET v = v || '+' WHERE id = 5;
+step s2l: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|v  |name
+--+---+----
+ 5|v5+|w6  
+ 6|v6 |w7  
+ 7|v7 |w8  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2l s1c
+step s1p: UPDATE njob SET prio = 1, v = v || 'p' WHERE id = 5;
+step s2l: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|v |name
+--+--+----
+ 6|v6|w7  
+ 7|v7|w8  
+ 8|v8|w9  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2l s1c
+step s1j: UPDATE njob SET wid = 7, v = v || 'j' WHERE id = 5;
+step s2l: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|v |name
+--+--+----
+ 6|v6|w7  
+ 7|v7|w8  
+ 8|v8|w9  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1v s2l s1c
+step s1q: UPDATE ncfg SET min_prio = 7, min_cap = 40 WHERE name = 'q';
+step s1v: UPDATE njob SET v = v || '+' WHERE id = 5;
+step s2l: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|v  |name
+--+---+----
+ 5|v5+|w6  
+ 6|v6 |w7  
+ 7|v7 |w8  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s1v s2l s1c
+step s1g: UPDATE nwrk SET cap = 0, name = name || '+' WHERE id = 6;
+step s1v: UPDATE njob SET v = v || '+' WHERE id = 5;
+step s2l: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|v  |name
+--+---+----
+ 5|v5+|w6  
+ 6|v6 |w7  
+ 7|v7 |w8  
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2rx s1g s1v s2r s1c
+step s2rx: EXPLAIN (COSTS OFF) SELECT j.id, j.v, w.cap FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= 5 AND w.cap >= (SELECT min_cap FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j;
+QUERY PLAN                                                  
+------------------------------------------------------------
+Limit                                                       
+  InitPlan 1                                                
+    ->  Index Scan using ncfg_pkey on ncfg                  
+          Index Cond: (name = 'q'::text)                    
+  ->  LockRows                                              
+        ->  Nested Loop                                     
+              ->  Index Scan using njob_pkey on njob j      
+                    Filter: (prio >= 5)                     
+              ->  Memoize                                   
+                    Cache Key: j.wid                        
+                    Cache Mode: logical                     
+                    ->  Index Scan using nwrk_pkey on nwrk w
+                          Index Cond: (id = j.wid)          
+                          Filter: (cap >= (InitPlan 1).col1)
+(14 rows)
+
+step s1g: UPDATE nwrk SET cap = 0, name = name || '+' WHERE id = 6;
+step s1v: UPDATE njob SET v = v || '+' WHERE id = 5;
+step s2r: SELECT j.id, j.v, w.cap FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= 5 AND w.cap >= (SELECT min_cap FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|v  |cap
+--+---+---
+ 5|v5+| 60
+ 6|v6 | 70
+ 7|v7 | 80
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1v s2r s1c
+step s1q: UPDATE ncfg SET min_prio = 7, min_cap = 40 WHERE name = 'q';
+step s1v: UPDATE njob SET v = v || '+' WHERE id = 5;
+step s2r: SELECT j.id, j.v, w.cap FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= 5 AND w.cap >= (SELECT min_cap FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|v  |cap
+--+---+---
+ 5|v5+| 60
+ 6|v6 | 70
+ 7|v7 | 80
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2o s1c
+step s1v: UPDATE njob SET v = v || '+' WHERE id = 5;
+step s2o: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|v |name
+--+--+----
+ 6|v6|w7  
+ 7|v7|w8  
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2o s1c
+step s1p: UPDATE njob SET prio = 1, v = v || 'p' WHERE id = 5;
+step s2o: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|v |name
+--+--+----
+ 7|v7|w8  
+ 8|v8|w9  
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM njob WHERE id = 5 FOR UPDATE;
+id
+--
+ 5
+(1 row)
+
+step s2sk: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED;
+id|v |name
+--+--+----
+ 6|v6|w7  
+(1 row)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM njob WHERE id = 5 FOR UPDATE;
+id
+--
+ 5
+(1 row)
+
+step s2nw: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 1 FOR UPDATE OF j NOWAIT;
+ERROR:  could not obtain lock on row in relation "njob"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2n s1c s2seq
+step s1v: UPDATE njob SET v = v || '+' WHERE id = 5;
+step s2n: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio > (SELECT nextval('nsq'))::int + 3 ORDER BY j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+id|v  |name
+--+---+----
+ 5|v5+|w6  
+ 6|v6 |w7  
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM nsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2case s1c s2seq
+step s1v: UPDATE njob SET v = v || '+' WHERE id = 5;
+step s2case: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE CASE WHEN j.prio > 0 THEN j.prio >= 5 ELSE j.prio > (SELECT nextval('nsq'))::int END ORDER BY j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2case: <... completed>
+id|v  |name
+--+---+----
+ 5|v5+|w6  
+ 6|v6 |w7  
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM nsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2l s1n8 s1w6 s1n7 s2c s1c
+step s2b: BEGIN;
+step s2l: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 3 FOR UPDATE OF j;
+id|v |name
+--+--+----
+ 5|v5|w6  
+ 6|v6|w7  
+ 7|v7|w8  
+(3 rows)
+
+step s1n8: SELECT id FROM njob WHERE id = 8 FOR UPDATE NOWAIT;
+id
+--
+ 8
+(1 row)
+
+step s1w6: SELECT id FROM nwrk WHERE id = 6 FOR UPDATE NOWAIT;
+id
+--
+ 6
+(1 row)
+
+step s1n7: SELECT id FROM njob WHERE id = 7 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "njob"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2o s1n8 s1n5 s2c s1c
+step s2b: BEGIN;
+step s2o: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') ORDER BY j.id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE OF j;
+id|v |name
+--+--+----
+ 6|v6|w7  
+ 7|v7|w8  
+(2 rows)
+
+step s1n8: SELECT id FROM njob WHERE id = 8 FOR UPDATE NOWAIT;
+id
+--
+ 8
+(1 row)
+
+step s1n5: SELECT id FROM njob WHERE id = 5 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "njob"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1v1 s3m s1c
+step s3x: EXPLAIN (COSTS OFF) SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') AND j.id <= 300 AND w.id <= 4 FOR UPDATE OF j;
+QUERY PLAN                                                         
+-------------------------------------------------------------------
+LockRows                                                           
+  InitPlan 1                                                       
+    ->  Seq Scan on ncfg                                           
+          Filter: (name = 'q'::text)                               
+  ->  Nested Loop                                                  
+        Join Filter: (w.id = j.wid)                                
+        ->  Seq Scan on njob j                                     
+              Filter: ((prio >= (InitPlan 1).col1) AND (id <= 300))
+        ->  Materialize                                            
+              ->  Seq Scan on nwrk w                               
+                    Filter: (id <= 4)                              
+(11 rows)
+
+step s1v1: UPDATE njob SET v = v || '+' WHERE id = 101;
+step s3m: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') AND j.id <= 300 AND w.id <= 4 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+ id|v    |name
+---+-----+----
+100|v100 |w1  
+101|v101+|w2  
+102|v102 |w3  
+103|v103 |w4  
+200|v200 |w1  
+201|v201 |w2  
+202|v202 |w3  
+203|v203 |w4  
+300|v300 |w1  
+(9 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1j1 s3m s1c
+step s1j1: UPDATE njob SET wid = 3, v = v || 'j' WHERE id = 101;
+step s3m: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') AND j.id <= 300 AND w.id <= 4 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+ id|v   |name
+---+----+----
+100|v100|w1  
+102|v102|w3  
+103|v103|w4  
+200|v200|w1  
+201|v201|w2  
+202|v202|w3  
+203|v203|w4  
+300|v300|w1  
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g2 s1v1 s3m s1c
+step s1g2: UPDATE nwrk SET cap = 0, name = name || '+' WHERE id = 2;
+step s1v1: UPDATE njob SET v = v || '+' WHERE id = 101;
+step s3m: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q') AND j.id <= 300 AND w.id <= 4 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s3m: <... completed>
+ id|v    |name
+---+-----+----
+100|v100 |w1  
+101|v101+|w2  
+102|v102 |w3  
+103|v103 |w4  
+200|v200 |w1  
+201|v201 |w2  
+202|v202 |w3  
+203|v203 |w4  
+300|v300 |w1  
+(9 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3rx s1g2 s1v1 s3r s1c
+step s3rx: EXPLAIN (COSTS OFF) SELECT j.id, j.v, w.cap FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.id <= 110 AND w.id <= 12 AND w.cap >= (SELECT min_cap FROM ncfg WHERE name = 'q') FOR UPDATE OF j;
+QUERY PLAN                                                             
+-----------------------------------------------------------------------
+LockRows                                                               
+  InitPlan 1                                                           
+    ->  Seq Scan on ncfg                                               
+          Filter: (name = 'q'::text)                                   
+  ->  Nested Loop                                                      
+        Join Filter: (w.id = j.wid)                                    
+        ->  Seq Scan on njob j                                         
+              Filter: (id <= 110)                                      
+        ->  Materialize                                                
+              ->  Seq Scan on nwrk w                                   
+                    Filter: ((id <= 12) AND (cap >= (InitPlan 1).col1))
+(11 rows)
+
+step s1g2: UPDATE nwrk SET cap = 0, name = name || '+' WHERE id = 2;
+step s1v1: UPDATE njob SET v = v || '+' WHERE id = 101;
+step s3r: SELECT j.id, j.v, w.cap FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.id <= 110 AND w.id <= 12 AND w.cap >= (SELECT min_cap FROM ncfg WHERE name = 'q') FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s3r: <... completed>
+ id|v    |cap
+---+-----+---
+  1|v1   | 20
+  2|v2   | 30
+  3|v3   | 40
+  4|v4   | 50
+  5|v5   | 60
+  6|v6   | 70
+  7|v7   | 80
+  8|v8   | 90
+  9|v9   |100
+ 10|v10  |110
+ 11|v11  |120
+101|v101+| 20
+102|v102 | 30
+103|v103 | 40
+104|v104 | 50
+105|v105 | 60
+106|v106 | 70
+107|v107 | 80
+108|v108 | 90
+109|v109 |100
+110|v110 |110
+(21 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1v1 s3r s1c
+step s1q: UPDATE ncfg SET min_prio = 7, min_cap = 40 WHERE name = 'q';
+step s1v1: UPDATE njob SET v = v || '+' WHERE id = 101;
+step s3r: SELECT j.id, j.v, w.cap FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.id <= 110 AND w.id <= 12 AND w.cap >= (SELECT min_cap FROM ncfg WHERE name = 'q') FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s3r: <... completed>
+ id|v    |cap
+---+-----+---
+  1|v1   | 20
+  2|v2   | 30
+  3|v3   | 40
+  4|v4   | 50
+  5|v5   | 60
+  6|v6   | 70
+  7|v7   | 80
+  8|v8   | 90
+  9|v9   |100
+ 10|v10  |110
+ 11|v11  |120
+101|v101+| 20
+102|v102 | 30
+103|v103 | 40
+104|v104 | 50
+105|v105 | 60
+106|v106 | 70
+107|v107 | 80
+108|v108 | 90
+109|v109 |100
+110|v110 |110
+(21 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2ix s1q s2il s1c
+step s2ix: EXPLAIN (COSTS OFF) SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q' FOR UPDATE) ORDER BY j.id LIMIT 2 FOR UPDATE OF j;
+QUERY PLAN                                                  
+------------------------------------------------------------
+Limit                                                       
+  InitPlan 1                                                
+    ->  LockRows                                            
+          ->  Index Scan using ncfg_pkey on ncfg            
+                Index Cond: (name = 'q'::text)              
+  ->  LockRows                                              
+        ->  Nested Loop                                     
+              ->  Index Scan using njob_pkey on njob j      
+                    Filter: (prio >= (InitPlan 1).col1)     
+              ->  Memoize                                   
+                    Cache Key: j.wid                        
+                    Cache Mode: logical                     
+                    ->  Index Scan using nwrk_pkey on nwrk w
+                          Index Cond: (id = j.wid)          
+(14 rows)
+
+step s1q: UPDATE ncfg SET min_prio = 7, min_cap = 40 WHERE name = 'q';
+step s2il: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q' FOR UPDATE) ORDER BY j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+id|v |name
+--+--+----
+ 7|v7|w8  
+ 8|v8|w9  
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2il s1c
+step s1j: UPDATE njob SET wid = 7, v = v || 'j' WHERE id = 5;
+step s2il: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q' FOR UPDATE) ORDER BY j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+id|v |name
+--+--+----
+ 6|v6|w7  
+ 7|v7|w8  
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2il s1nq s2c s1c
+step s2b: BEGIN;
+step s2il: SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min_prio FROM ncfg WHERE name = 'q' FOR UPDATE) ORDER BY j.id LIMIT 2 FOR UPDATE OF j;
+id|v |name
+--+--+----
+ 5|v5|w6  
+ 6|v6|w7  
+(2 rows)
+
+step s1nq: SELECT name FROM ncfg WHERE name = 'q' FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "ncfg"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2cx s1p s2ic s1c s2log
+step s2cx: EXPLAIN (COSTS OFF) WITH x AS (INSERT INTO nlog VALUES (1, 'x') RETURNING id) SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min(id) FROM x) + 4 ORDER BY j.id LIMIT 2 FOR UPDATE OF j;
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Limit                                                        
+  CTE x                                                      
+    ->  Insert on nlog                                       
+          ->  Result                                         
+  InitPlan 2                                                 
+    ->  Aggregate                                            
+          ->  CTE Scan on x                                  
+  ->  LockRows                                               
+        ->  Nested Loop                                      
+              ->  Index Scan using njob_pkey on njob j       
+                    Filter: (prio >= ((InitPlan 2).col1 + 4))
+              ->  Memoize                                    
+                    Cache Key: j.wid                         
+                    Cache Mode: logical                      
+                    ->  Index Scan using nwrk_pkey on nwrk w 
+                          Index Cond: (id = j.wid)           
+(16 rows)
+
+step s1p: UPDATE njob SET prio = 1, v = v || 'p' WHERE id = 5;
+step s2ic: WITH x AS (INSERT INTO nlog VALUES (1, 'x') RETURNING id) SELECT j.id, j.v, w.name FROM njob j JOIN nwrk w ON w.id = j.wid WHERE j.prio >= (SELECT min(id) FROM x) + 4 ORDER BY j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2ic: <... completed>
+id|v |name
+--+--+----
+ 6|v6|w7  
+ 7|v7|w8  
+(2 rows)
+
+step s2log: SELECT count(*), min(id) FROM nlog;
+count|min
+-----+---
+    1|  1
+(1 row)
+
+s1: WARNING:  there is no transaction in progress

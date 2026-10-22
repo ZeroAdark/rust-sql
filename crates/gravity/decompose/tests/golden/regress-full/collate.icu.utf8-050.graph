@@ -1,0 +1,12 @@
+-- regress-full-collate.icu.utf8-050
+-- SELECT x FROM test4c WHERE x LIKE 'ABC%' COLLATE case_sensitive;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@0
+  source bitmap rel=31263 rti=1 am=heap
+    bitmap index node=1 index=31268 rows=1360
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  filter op1209(v1.1, c25:'ABC%')
+  project (1=v1.1)
+  outs 1=vl:win/page
+mapped: BitmapIndexScan BitmapHeapScan

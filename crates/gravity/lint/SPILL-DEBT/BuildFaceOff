@@ -1,0 +1,1 @@
+BuildFaceOff	crates/gravity/lowerv4/src/ops/hashjoin/spill/build.rs	no_bits	lifetime	-	a build whose spill face is off keeps no partition bits	unreachable	No query reaches this: the hash build's spill form is always built in, so a build that may spill always gets its partitions.

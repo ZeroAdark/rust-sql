@@ -679,7 +679,7 @@ pub fn slot_getsysattr(slot: &SlotData<'_>, attnum: i32, isnull: &mut bool) -> P
     }
     if attnum == SelfItemPointerAttributeNumber {
         *isnull = false;
-        return Ok(Datum::from_usize(&base.tts_tid as *const _ as usize));
+        return Ok(Datum::from_usize(base.ctid_datum_ptr() as usize));
     }
 
     debug_assert!(!base.is_empty());

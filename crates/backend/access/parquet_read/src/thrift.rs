@@ -33,7 +33,7 @@ const MAX_DEPTH: u32 = 60;
 #[inline(never)]
 pub(crate) fn corrupt(what: &str) -> Box<PgError> {
     Box::new(
-        PgError::error(format!("invalid parquet metadata: {what}"))
+        PgError::error(format!("invalid parquet metadata: {what}")) // alloc: Cold
             .with_sqlstate(ERRCODE_BAD_COPY_FILE_FORMAT),
     )
 }
@@ -171,17 +171,28 @@ impl<'a> Cur<'a> {
     }
 
     pub fn i32_value(&mut self, t: u8) -> PgResult<i32> {
-        if t != T_I32 {
-            return Err(corrupt("expected i32 field"));
+        match t {
+            T_I32 => self.zig_i32(),
+            // Some writers narrow or widen integer fields; the compact
+            // protocol's varint form is the same, so accept any int width
+            // that fits.
+            T_I16 | T_I64 | T_BYTE => {
+                let v = if t == T_BYTE { i64::from(self.bytes(1)?[0] as i8) } else { self.zig_i64()? };
+                i32::try_from(v).map_err(|_| corrupt("i32 field out of range"))
+            }
+            _ => Err(Box::new(
+                PgError::error(format!("invalid parquet metadata: expected i32 field, found compact type {t}")) // alloc: Cold
+                    .with_sqlstate(ERRCODE_BAD_COPY_FILE_FORMAT),
+            )),
         }
-        self.zig_i32()
     }
 
     pub fn i64_value(&mut self, t: u8) -> PgResult<i64> {
-        if t != T_I64 {
-            return Err(corrupt("expected i64 field"));
+        match t {
+            T_I64 | T_I32 | T_I16 => self.zig_i64(),
+            T_BYTE => Ok(i64::from(self.bytes(1)?[0] as i8)),
+            _ => Err(corrupt("expected i64 field")),
         }
-        self.zig_i64()
     }
 
     pub fn binary_value(&mut self, t: u8) -> PgResult<&'a [u8]> {

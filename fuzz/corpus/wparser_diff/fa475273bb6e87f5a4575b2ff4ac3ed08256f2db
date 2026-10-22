@@ -1,4 +1,0 @@
-‚);
-
--- Edge cases with empty query
-SELECT ts_headline(

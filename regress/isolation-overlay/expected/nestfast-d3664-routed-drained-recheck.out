@@ -1,0 +1,155 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2c s1c
+step s2x: EXPLAIN (COSTS OFF) UPDATE d64_ptv SET note = note || '+' WHERE a < 5;
+QUERY PLAN                              
+----------------------------------------
+Update on d64_pt p                      
+  Update on d64_p1 p_1                  
+  ->  Hash Right Semi Join              
+        Hash Cond: (r.a = p_1.b)        
+        ->  Seq Scan on d64_kr r        
+        ->  Hash                        
+              ->  Seq Scan on d64_p1 p_1
+                    Filter: (a < 5)     
+  SubPlan 1                             
+    ->  Seq Scan on d64_kr r_1          
+          Filter: (a = p_1.b)           
+(11 rows)
+
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1b s2u s1c s2s s2c
+step s1b: UPDATE d64_pt SET b = 4, note = note || '*' WHERE a = 2;
+step s2u: UPDATE d64_ptv SET note = note || '+' WHERE a < 5; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT tableoid::regclass, a, b, note FROM d64_pt WHERE a < 10 OR a > 140 OR a BETWEEN 101 AND 104 ORDER BY a, note;
+tableoid|  a| b|note
+--------+---+--+----
+d64_p1  |  1| 2|n1+ 
+d64_p1  |  2| 4|n2* 
+d64_p1  |  3| 4|n3+ 
+d64_p1  |  4| 5|n4+ 
+d64_p1  |  5| 6|n5  
+d64_p1  |  6| 7|n6  
+d64_p1  |  7| 8|n7  
+d64_p1  |  8| 9|n8  
+d64_p1  |  9|10|n9  
+d64_p2  |101|12|m101
+d64_p2  |102|13|m102
+d64_p2  |103|14|m103
+d64_p2  |104|15|m104
+(13 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1x s2u s1c s2s s2c
+step s1x: UPDATE d64_pt SET b = 7 WHERE a = 2;
+step s2u: UPDATE d64_ptv SET note = note || '+' WHERE a < 5; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT tableoid::regclass, a, b, note FROM d64_pt WHERE a < 10 OR a > 140 OR a BETWEEN 101 AND 104 ORDER BY a, note;
+tableoid|  a| b|note
+--------+---+--+----
+d64_p1  |  1| 2|n1+ 
+d64_p1  |  2| 7|n2  
+d64_p1  |  3| 4|n3+ 
+d64_p1  |  4| 5|n4+ 
+d64_p1  |  5| 6|n5  
+d64_p1  |  6| 7|n6  
+d64_p1  |  7| 8|n7  
+d64_p1  |  8| 9|n8  
+d64_p1  |  9|10|n9  
+d64_p2  |101|12|m101
+d64_p2  |102|13|m102
+d64_p2  |103|14|m103
+d64_p2  |104|15|m104
+(13 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1m s2u s1c s2s s2c
+step s1m: UPDATE d64_pt SET a = 150 WHERE a = 2;
+step s2u: UPDATE d64_ptv SET note = note || '+' WHERE a < 5; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2s: SELECT tableoid::regclass, a, b, note FROM d64_pt WHERE a < 10 OR a > 140 OR a BETWEEN 101 AND 104 ORDER BY a, note;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+step s2c: COMMIT;
+
+starting permutation: s1d s2u s1c s2s s2c
+step s1d: DELETE FROM d64_pt WHERE a = 2;
+step s2u: UPDATE d64_ptv SET note = note || '+' WHERE a < 5; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT tableoid::regclass, a, b, note FROM d64_pt WHERE a < 10 OR a > 140 OR a BETWEEN 101 AND 104 ORDER BY a, note;
+tableoid|  a| b|note
+--------+---+--+----
+d64_p1  |  1| 2|n1+ 
+d64_p1  |  3| 4|n3+ 
+d64_p1  |  4| 5|n4+ 
+d64_p1  |  5| 6|n5  
+d64_p1  |  6| 7|n6  
+d64_p1  |  7| 8|n7  
+d64_p1  |  8| 9|n8  
+d64_p1  |  9|10|n9  
+d64_p2  |101|12|m101
+d64_p2  |102|13|m102
+d64_p2  |103|14|m103
+d64_p2  |104|15|m104
+(12 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1b s2v s1c s2s s2c
+step s1b: UPDATE d64_pt SET b = 4, note = note || '*' WHERE a = 2;
+step s2v: UPDATE d64_ptv SET a = a + 100 WHERE a < 5; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+step s2s: SELECT tableoid::regclass, a, b, note FROM d64_pt WHERE a < 10 OR a > 140 OR a BETWEEN 101 AND 104 ORDER BY a, note;
+tableoid|  a| b|note
+--------+---+--+----
+d64_p1  |  2| 4|n2* 
+d64_p1  |  5| 6|n5  
+d64_p1  |  6| 7|n6  
+d64_p1  |  7| 8|n7  
+d64_p1  |  8| 9|n8  
+d64_p1  |  9|10|n9  
+d64_p2  |101|12|m101
+d64_p2  |101| 2|n1  
+d64_p2  |102|13|m102
+d64_p2  |103|14|m103
+d64_p2  |103| 4|n3  
+d64_p2  |104|15|m104
+d64_p2  |104| 5|n4  
+(13 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1x s2v s1c s2s s2c
+step s1x: UPDATE d64_pt SET b = 7 WHERE a = 2;
+step s2v: UPDATE d64_ptv SET a = a + 100 WHERE a < 5; <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+step s2s: SELECT tableoid::regclass, a, b, note FROM d64_pt WHERE a < 10 OR a > 140 OR a BETWEEN 101 AND 104 ORDER BY a, note;
+tableoid|  a| b|note
+--------+---+--+----
+d64_p1  |  2| 7|n2  
+d64_p1  |  5| 6|n5  
+d64_p1  |  6| 7|n6  
+d64_p1  |  7| 8|n7  
+d64_p1  |  8| 9|n8  
+d64_p1  |  9|10|n9  
+d64_p2  |101|12|m101
+d64_p2  |101| 2|n1  
+d64_p2  |102|13|m102
+d64_p2  |103|14|m103
+d64_p2  |103| 4|n3  
+d64_p2  |104|15|m104
+d64_p2  |104| 5|n4  
+(13 rows)
+
+step s2c: COMMIT;

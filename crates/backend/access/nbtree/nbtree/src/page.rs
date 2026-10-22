@@ -13,6 +13,8 @@ use ::types_nbtree::{
     P_ISMETA, P_LEFTMOST, P_NONE, P_RIGHTMOST, XLOG_BTREE_NEWROOT, XLOG_BTREE_REUSE_PAGE,
 };
 use ::types_rel::Relation;
+
+use crate::readrel::BtReadRel;
 use ::types_storage::bufpage::{ItemIdData, PageMut, PageRef, SizeOfPageHeaderData};
 use ::xloginsert_seams::{XLogRegBuf, REGBUF_STANDARD, REGBUF_WILL_INIT};
 use init_small::globals::{EndCriticalSection, StartCriticalSection};
@@ -108,7 +110,7 @@ fn index_corrupted(msg: std::string::String) -> Box<PgError> {
 }
 
 /// _bt_getmeta.
-fn bt_getmeta(rel: &Relation<'_>, metapin: &BufferPin) -> PgResult<BTMetaPageData> {
+fn bt_getmeta<R: BtReadRel + ?Sized>(rel: &R, metapin: &BufferPin) -> PgResult<BTMetaPageData> {
     let page = metapin.page();
     let metaopaque = page_opaque(&page);
     let metad = page_meta(&page);
@@ -134,13 +136,13 @@ fn bt_getmeta(rel: &Relation<'_>, metapin: &BufferPin) -> PgResult<BTMetaPageDat
 }
 
 /// _bt_checkpage.
-pub(crate) fn bt_checkpage(rel: &Relation<'_>, pin: &BufferPin) -> PgResult<()> {
+pub(crate) fn bt_checkpage<R: BtReadRel + ?Sized>(rel: &R, pin: &BufferPin) -> PgResult<()> {
     bt_checkpage_ref(rel, &pin.page(), pin.block_number())
 }
 
 /// _bt_checkpage over a page image (amcheck reads local page copies).
-pub fn bt_checkpage_ref(
-    rel: &Relation<'_>,
+pub fn bt_checkpage_ref<R: BtReadRel + ?Sized>(
+    rel: &R,
     page: &PageRef<'_>,
     blkno: BlockNumber,
 ) -> PgResult<()> {
@@ -163,13 +165,13 @@ pub fn bt_checkpage_ref(
 
 /// _bt_lockbuf (no Valgrind client requests in this build).
 #[inline]
-pub(crate) fn bt_lockbuf(_rel: &Relation<'_>, pin: &BufferPin, access: i32) -> PgResult<()> {
+pub(crate) fn bt_lockbuf<R: ?Sized>(_rel: &R, pin: &BufferPin, access: i32) -> PgResult<()> {
     bufmgr::lock_buffer::call(pin.buffer(), access)
 }
 
 /// _bt_unlockbuf.
 #[inline]
-pub(crate) fn bt_unlockbuf(_rel: &Relation<'_>, pin: &BufferPin) -> PgResult<()> {
+pub(crate) fn bt_unlockbuf<R: ?Sized>(_rel: &R, pin: &BufferPin) -> PgResult<()> {
     bufmgr::lock_buffer::call(pin.buffer(), bufmgr::BUFFER_LOCK_UNLOCK)
 }
 
@@ -235,21 +237,20 @@ pub(crate) fn bt_page_is_recyclable(
 }
 
 /// _bt_getbuf: pin + lock + checkpage.
-pub(crate) fn bt_getbuf(
-    rel: &Relation<'_>,
+pub(crate) fn bt_getbuf<R: BtReadRel + ?Sized>(
+    rel: &R,
     blkno: BlockNumber,
     access: i32,
 ) -> PgResult<BufferPin> {
-    let pin = BufferPin::adopt(bufmgr::read_buffer::call(rel, blkno)?)
-        .expect("ReadBuffer returned InvalidBuffer");
+    let pin = BufferPin::adopt(rel.read_buffer(blkno)?).expect("ReadBuffer returned InvalidBuffer");
     bt_lockbuf(rel, &pin, access)?;
     bt_checkpage(rel, &pin)?;
     Ok(pin)
 }
 
 /// _bt_relandgetbuf: the lock-coupling step.
-pub(crate) fn bt_relandgetbuf(
-    rel: &Relation<'_>,
+pub(crate) fn bt_relandgetbuf<R: BtReadRel + ?Sized>(
+    rel: &R,
     obuf: Option<BufferPin>,
     blkno: BlockNumber,
     access: i32,
@@ -261,7 +262,7 @@ pub(crate) fn bt_relandgetbuf(
         }
         None => ::types_core::InvalidBuffer,
     };
-    let pin = BufferPin::adopt(bufmgr::release_and_read_buffer::call(old, rel, blkno)?)
+    let pin = BufferPin::adopt(rel.release_and_read_buffer(old, blkno)?)
         .expect("ReleaseAndReadBuffer returned InvalidBuffer");
     bt_lockbuf(rel, &pin, access)?;
     bt_checkpage(rel, &pin)?;
@@ -269,7 +270,7 @@ pub(crate) fn bt_relandgetbuf(
 }
 
 /// _bt_relbuf: drop lock and pin.
-pub fn bt_relbuf(rel: &Relation<'_>, pin: BufferPin) -> PgResult<()> {
+pub fn bt_relbuf<R: ?Sized>(rel: &R, pin: BufferPin) -> PgResult<()> {
     bt_unlockbuf(rel, &pin)?;
     pin.release();
     Ok(())
@@ -291,7 +292,28 @@ pub(crate) fn bt_getroot<'mcx>(
     heaprel: Option<&::types_rel::RelationData<'mcx>>,
     access: i32,
 ) -> PgResult<Option<BufferPin>> {
-    if let Some(metad) = rel.rd_amcache.get() {
+    bt_getroot_with(rel, access, |metapin| {
+        bt_create_root(rel, heaprel, access, metapin)
+    })
+}
+
+/// _bt_getroot, BT_READ: the pinned+read-locked (fast) root, `None` for an
+/// empty index.
+pub(crate) fn bt_getroot_read<R: BtReadRel + ?Sized>(rel: &R) -> PgResult<Option<BufferPin>> {
+    bt_getroot_with(rel, BT_READ, |_metapin| {
+        unreachable!("BT_READ getroot never creates a root")
+    })
+}
+
+/// _bt_getroot's shared arms. `create_root` runs only for BT_WRITE on an
+/// empty index, handed the read-locked metapage.
+#[inline]
+fn bt_getroot_with<R: BtReadRel + ?Sized>(
+    rel: &R,
+    access: i32,
+    create_root: impl FnOnce(BufferPin) -> PgResult<Option<BufferPin>>,
+) -> PgResult<Option<BufferPin>> {
+    if let Some(metad) = rel.amcache_get() {
         debug_assert!(amcache_sane(&metad));
         let rootblkno = metad.btm_fastroot;
         debug_assert!(rootblkno != P_NONE);
@@ -309,7 +331,7 @@ pub(crate) fn bt_getroot<'mcx>(
             return Ok(Some(rootpin));
         }
         bt_relbuf(rel, rootpin)?;
-        rel.rd_amcache.set(None);
+        rel.amcache_set(None);
     }
 
     let metapin = bt_getbuf(rel, BTREE_METAPAGE, BT_READ)?;
@@ -320,94 +342,14 @@ pub(crate) fn bt_getroot<'mcx>(
             bt_relbuf(rel, metapin)?;
             return Ok(None);
         }
-
-        bt_unlockbuf(rel, &metapin)?;
-        bt_lockbuf(rel, &metapin, BT_WRITE)?;
-
-        // C's create-root race recheck; single lock trade keeps the shape.
-        if page_meta(&metapin.page()).btm_root != P_NONE {
-            bt_relbuf(rel, metapin)?;
-            return bt_getroot(rel, heaprel, access);
-        }
-
-        let rootpin = bt_allocbuf(rel, heaprel.expect("BT_WRITE getroot requires heaprel"))?;
-        let rootblkno = rootpin.block_number();
-
-        // nbtpage.c:455 START_CRIT_SECTION: root page init + metapage update
-        // + WAL; an ERROR in here is a PANIC in C.
-        StartCriticalSection();
-        {
-            let mut rootpage = page_of_mut(&rootpin);
-            write_opaque(
-                &mut rootpage,
-                &BTPageOpaqueData {
-                    btpo_prev: P_NONE,
-                    btpo_next: P_NONE,
-                    btpo_level: 0,
-                    btpo_flags: BTP_LEAF | BTP_ROOT,
-                    btpo_cycleid: 0,
-                },
-            );
-        }
-
-        let mut metad = page_meta(&metapin.page());
-        if metad.btm_version < BTREE_NOVAC_VERSION {
-            bt_upgrademetapage(&metapin, &mut metad);
-        }
-        metad.btm_root = rootblkno;
-        metad.btm_level = 0;
-        metad.btm_fastroot = rootblkno;
-        metad.btm_fastlevel = 0;
-        metad.btm_last_cleanup_num_delpages = 0;
-        metad.btm_last_cleanup_num_heap_tuples = -1.0;
-        write_meta(&metapin, &metad);
-
-        bufmgr::mark_buffer_dirty::call(rootpin.buffer())?;
-        bufmgr::mark_buffer_dirty::call(metapin.buffer())?;
-
-        if crate::relation_needs_wal(rel) {
-            debug_assert!(metad.btm_version >= BTREE_NOVAC_VERSION);
-            let md = crate::wal::xl_btree_metadata(&metad);
-            let xlrec = crate::wal::xl_btree_newroot(rootblkno, 0);
-            let recptr = ::xloginsert_seams::xlog_insert_record::call(
-                ::rmgr::RM_BTREE_ID as u8,
-                XLOG_BTREE_NEWROOT,
-                0,
-                &[&xlrec],
-                &[
-                    XLogRegBuf {
-                        block_id: 0,
-                        buffer: rootpin.buffer(),
-                        flags: REGBUF_WILL_INIT,
-                        bufdata: &[],
-                    },
-                    XLogRegBuf {
-                        block_id: 2,
-                        buffer: metapin.buffer(),
-                        flags: REGBUF_WILL_INIT | REGBUF_STANDARD,
-                        bufdata: &[&md],
-                    },
-                ],
-            )?;
-            page_of_mut(&rootpin).set_lsn(recptr);
-            page_of_mut(&metapin).set_lsn(recptr);
-        }
-        // nbtpage.c:504
-        EndCriticalSection();
-
-        // swap the new root's write lock for the read lock callers expect.
-        bt_unlockbuf(rel, &rootpin)?;
-        bt_lockbuf(rel, &rootpin, BT_READ)?;
-
-        bt_relbuf(rel, metapin)?;
-        return Ok(Some(rootpin));
+        return create_root(metapin);
     }
 
     let rootblkno = metad.btm_fastroot;
     debug_assert!(rootblkno != P_NONE);
     let rootlevel = metad.btm_fastlevel;
 
-    rel.rd_amcache.set(Some(metad));
+    rel.amcache_set(Some(metad));
 
     let mut rootpin = metapin;
     let mut rootblkno = rootblkno;
@@ -439,10 +381,99 @@ pub(crate) fn bt_getroot<'mcx>(
     Ok(Some(rootpin))
 }
 
+/// _bt_getroot's root-creation arm (BT_WRITE on an empty index): `metapin`
+/// is the read-locked metapage.
+fn bt_create_root<'mcx>(
+    rel: &Relation<'mcx>,
+    heaprel: Option<&::types_rel::RelationData<'mcx>>,
+    access: i32,
+    metapin: BufferPin,
+) -> PgResult<Option<BufferPin>> {
+    bt_unlockbuf(rel, &metapin)?;
+    bt_lockbuf(rel, &metapin, BT_WRITE)?;
+
+    // C's create-root race recheck; single lock trade keeps the shape.
+    if page_meta(&metapin.page()).btm_root != P_NONE {
+        bt_relbuf(rel, metapin)?;
+        return bt_getroot(rel, heaprel, access);
+    }
+
+    let rootpin = bt_allocbuf(rel, heaprel.expect("BT_WRITE getroot requires heaprel"))?;
+    let rootblkno = rootpin.block_number();
+
+    // nbtpage.c:455 START_CRIT_SECTION: root page init + metapage update
+    // + WAL; an ERROR in here is a PANIC in C.
+    StartCriticalSection();
+    {
+        let mut rootpage = page_of_mut(&rootpin);
+        write_opaque(
+            &mut rootpage,
+            &BTPageOpaqueData {
+                btpo_prev: P_NONE,
+                btpo_next: P_NONE,
+                btpo_level: 0,
+                btpo_flags: BTP_LEAF | BTP_ROOT,
+                btpo_cycleid: 0,
+            },
+        );
+    }
+
+    let mut metad = page_meta(&metapin.page());
+    if metad.btm_version < BTREE_NOVAC_VERSION {
+        bt_upgrademetapage(&metapin, &mut metad);
+    }
+    metad.btm_root = rootblkno;
+    metad.btm_level = 0;
+    metad.btm_fastroot = rootblkno;
+    metad.btm_fastlevel = 0;
+    metad.btm_last_cleanup_num_delpages = 0;
+    metad.btm_last_cleanup_num_heap_tuples = -1.0;
+    write_meta(&metapin, &metad);
+
+    bufmgr::mark_buffer_dirty::call(rootpin.buffer())?;
+    bufmgr::mark_buffer_dirty::call(metapin.buffer())?;
+
+    if crate::relation_needs_wal(rel) {
+        debug_assert!(metad.btm_version >= BTREE_NOVAC_VERSION);
+        let md = crate::wal::xl_btree_metadata(&metad);
+        let xlrec = crate::wal::xl_btree_newroot(rootblkno, 0);
+        let recptr = ::xloginsert_seams::xlog_insert_record::call(
+            ::rmgr::RM_BTREE_ID as u8,
+            XLOG_BTREE_NEWROOT,
+            0,
+            &[&xlrec],
+            &[
+                XLogRegBuf {
+                    block_id: 0,
+                    buffer: rootpin.buffer(),
+                    flags: REGBUF_WILL_INIT,
+                    bufdata: &[],
+                },
+                XLogRegBuf {
+                    block_id: 2,
+                    buffer: metapin.buffer(),
+                    flags: REGBUF_WILL_INIT | REGBUF_STANDARD,
+                    bufdata: &[&md],
+                },
+            ],
+        )?;
+        page_of_mut(&rootpin).set_lsn(recptr);
+        page_of_mut(&metapin).set_lsn(recptr);
+    }
+    EndCriticalSection();
+
+    // swap the new root's write lock for the read lock callers expect.
+    bt_unlockbuf(rel, &rootpin)?;
+    bt_lockbuf(rel, &rootpin, BT_READ)?;
+
+    bt_relbuf(rel, metapin)?;
+    Ok(Some(rootpin))
+}
+
 /// _bt_gettrueroot: BT_READ root via the true-root link. `None` for an empty
 /// index. Flushes the amcache — this path implies it's stale.
-pub(crate) fn bt_gettrueroot(rel: &Relation<'_>) -> PgResult<Option<BufferPin>> {
-    rel.rd_amcache.set(None);
+pub(crate) fn bt_gettrueroot<R: BtReadRel + ?Sized>(rel: &R) -> PgResult<Option<BufferPin>> {
+    rel.amcache_set(None);
 
     let metapin = bt_getbuf(rel, BTREE_METAPAGE, BT_READ)?;
     let metad = bt_getmeta(rel, &metapin)?;
@@ -483,15 +514,15 @@ pub(crate) fn bt_gettrueroot(rel: &Relation<'_>) -> PgResult<Option<BufferPin>> 
     Ok(Some(rootpin))
 }
 
-fn prime_amcache(rel: &Relation<'_>) -> PgResult<Option<BTMetaPageData>> {
-    if rel.rd_amcache.get().is_none() {
+pub(crate) fn prime_amcache<R: BtReadRel + ?Sized>(rel: &R) -> PgResult<Option<BTMetaPageData>> {
+    if rel.amcache_get().is_none() {
         let metapin = bt_getbuf(rel, BTREE_METAPAGE, BT_READ)?;
         let metad = bt_getmeta(rel, &metapin)?;
         if metad.btm_root == P_NONE {
             bt_relbuf(rel, metapin)?;
             return Ok(Some(metad));
         }
-        rel.rd_amcache.set(Some(metad));
+        rel.amcache_set(Some(metad));
         bt_relbuf(rel, metapin)?;
     }
     Ok(None)
@@ -510,14 +541,14 @@ pub fn bt_getrootheight(rel: &Relation<'_>) -> PgResult<i32> {
 }
 
 /// _bt_metaversion -> (heapkeyspace, allequalimage).
-pub fn bt_metaversion(rel: &Relation<'_>) -> PgResult<(bool, bool)> {
+pub fn bt_metaversion<R: BtReadRel + ?Sized>(rel: &R) -> PgResult<(bool, bool)> {
     if let Some(uncached) = prime_amcache(rel)? {
         return Ok((
             uncached.btm_version > BTREE_NOVAC_VERSION,
             uncached.btm_allequalimage,
         ));
     }
-    let metad = rel.rd_amcache.get().expect("amcache primed above");
+    let metad = rel.amcache_get().expect("amcache primed above");
     debug_assert!(amcache_sane(&metad) && metad.btm_fastroot != P_NONE);
     Ok((
         metad.btm_version > BTREE_NOVAC_VERSION,

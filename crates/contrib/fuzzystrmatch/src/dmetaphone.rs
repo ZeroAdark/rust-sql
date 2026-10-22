@@ -3,6 +3,7 @@
 //! padded metastring; `length`/`last` are the pre-padding values.
 
 use crate::c_toupper;
+use types_error::PgResult;
 
 fn get_at(s: &[u8], pos: isize) -> u8 {
     if pos < 0 || pos as usize >= s.len() {
@@ -38,11 +39,11 @@ fn slavo_germanic(s: &[u8]) -> bool {
     contains(s, b"W") || contains(s, b"K") || contains(s, b"CZ") || contains(s, b"WITZ")
 }
 
-pub fn double_metaphone(input: &[u8]) -> (Vec<u8>, Vec<u8>) {
+pub fn double_metaphone(input: &[u8]) -> PgResult<(Vec<u8>, Vec<u8>)> {
     let length = input.len() as isize;
     let last = length - 1;
 
-    let mut original: Vec<u8> = Vec::with_capacity(input.len() + 5);
+    let mut original: Vec<u8> = ::mcx::std_vec_with_capacity("fuzzystrmatch", input.len() + 5)?;
     original.extend(input.iter().map(|&c| c_toupper(c)));
     original.extend_from_slice(b"     ");
     let s = &original[..];
@@ -545,5 +546,5 @@ pub fn double_metaphone(input: &[u8]) -> (Vec<u8>, Vec<u8>) {
 
     primary.truncate(4);
     secondary.truncate(4);
-    (primary, secondary)
+    Ok((primary, secondary))
 }

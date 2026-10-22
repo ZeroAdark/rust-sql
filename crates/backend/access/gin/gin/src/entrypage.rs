@@ -939,9 +939,9 @@ impl<'r> GinBt<'r> for EntryBtree<'_, 'r, '_> {
 
         let mut out = Vec::with_capacity(2);
         out.push(
-            crate::wal::ginxlog_insert_entry_header(off, payload.is_delete).to_vec(),
+            ::mcx::std_vec_from_slice("gin", &crate::wal::ginxlog_insert_entry_header(off, payload.is_delete))?,
         );
-        out.push(entry_bytes[..tuplen].to_vec());
+        out.push(::mcx::std_vec_from_slice("access", &entry_bytes[..tuplen])?);
         Ok(out)
     }
 

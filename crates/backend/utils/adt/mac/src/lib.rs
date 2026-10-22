@@ -66,8 +66,14 @@ pub fn is_c_space(byte: u8) -> bool {
 
 // sscanf %x into an int: strtoul saturates at ULONG_MAX, negates in the
 // unsigned domain, and the store truncates to int.
-fn strtoul_to_int(value: u64, negative: bool) -> i64 {
-    let v = if negative { value.wrapping_neg() } else { value };
+fn strtoul_to_int(value: u64, negative: bool, overflow: bool) -> i64 {
+    let v = if overflow {
+        u64::MAX
+    } else if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    };
     (v as u32 as i32) as i64
 }
 
@@ -108,6 +114,7 @@ impl<'a> Scanner<'a> {
         let max = width.unwrap_or(usize::MAX);
         let mut consumed = 0usize;
         let mut negative = false;
+        let mut overflow = false;
 
         match self.peek() {
             Some(b'+') if consumed < max => {
@@ -139,16 +146,20 @@ impl<'a> Scanner<'a> {
                 while consumed < max {
                     match self.peek() {
                         Some(byte) if byte.is_ascii_hexdigit() => {
-                            value = value
-                                .saturating_mul(16)
-                                .saturating_add(hex_value(byte) as u64);
+                            match value
+                                .checked_mul(16)
+                                .and_then(|v| v.checked_add(hex_value(byte) as u64))
+                            {
+                                Some(v) => value = v,
+                                None => overflow = true,
+                            }
                             self.pos += 1;
                             consumed += 1;
                         }
                         _ => break,
                     }
                 }
-                return Some(strtoul_to_int(value, negative));
+                return Some(strtoul_to_int(value, negative, overflow));
             }
             self.pos = save_pos;
             consumed = save_consumed;
@@ -159,9 +170,13 @@ impl<'a> Scanner<'a> {
         while consumed < max {
             match self.peek() {
                 Some(byte) if byte.is_ascii_hexdigit() => {
-                    value = value
-                        .saturating_mul(16)
-                        .saturating_add(hex_value(byte) as u64);
+                    match value
+                        .checked_mul(16)
+                        .and_then(|v| v.checked_add(hex_value(byte) as u64))
+                    {
+                        Some(v) => value = v,
+                        None => overflow = true,
+                    }
                     self.pos += 1;
                     consumed += 1;
                     any = true;
@@ -172,7 +187,7 @@ impl<'a> Scanner<'a> {
         if !any {
             return None;
         }
-        Some(strtoul_to_int(value, negative))
+        Some(strtoul_to_int(value, negative, overflow))
     }
 
     fn scan_literal(&mut self, expected: u8) -> bool {
@@ -245,7 +260,8 @@ fn quoted(prefix: &str, input: &[u8], suffix: &str) -> PgError {
     match core::str::from_utf8(input) {
         Ok(s) => PgError::error(format!("{prefix}{s}{suffix}")),
         Err(_) => {
-            let mut msg = prefix.as_bytes().to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(prefix.as_bytes());
             msg.extend_from_slice(input);
             msg.extend_from_slice(suffix.as_bytes());
             PgError::error_raw_message(msg)

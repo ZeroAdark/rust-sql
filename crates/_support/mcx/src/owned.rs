@@ -7,10 +7,24 @@ use crate::{Mcx, MemoryContext};
 pub struct PinnedContext(NonNull<MemoryContext>);
 
 impl PinnedContext {
+    /// `ctx` boxed at an address that never moves again. Take no handle from `ctx` before this: a lifetime-extended
+    /// handle comes only from the pinned context (`handle`), never from a context held by value (debug builds name such
+    /// a handle at its first allocation after the move).
     pub fn new(ctx: MemoryContext) -> Self {
         let raw = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(ctx));
         // SAFETY: Box::into_raw returns a non-null, uniquely owned allocation.
         Self(unsafe { NonNull::new_unchecked(raw) })
+    }
+
+    /// A child of `parent` (`MemoryContext::new_child`) made straight into its pinned box: no by-value window in which a
+    /// handle could be taken before the move.
+    pub fn new_child(parent: &MemoryContext, name: &'static str) -> Self {
+        Self::new(parent.new_child(name))
+    }
+
+    /// As `new_child`, for a small child (`MemoryContext::new_child_small`: a side cache's few entries).
+    pub fn new_child_small(parent: &MemoryContext, name: &'static str) -> Self {
+        Self::new(parent.new_child_small(name))
     }
 
     /// # Safety
@@ -103,7 +117,7 @@ impl<B: Bind> McxOwned<B> {
                 }
                 Err(e) => Err(e),
             },
-            Err(_) => Err(mcx.oom(core::mem::size_of::<B::Out<'static>>()).into()),
+            Err(_) => Err(mcx.oom_boxed(core::mem::size_of::<B::Out<'static>>())),
         };
         match built {
             // SAFETY: from Box::into_raw, hence non-null.
@@ -157,7 +171,7 @@ impl<B: Bind> McxOwned<B> {
                 }
                 Err(e) => Err(e),
             },
-            Err(_) => Err(mcx.oom(core::mem::size_of::<B::Out<'static>>()).into()),
+            Err(_) => Err(mcx.oom_boxed(core::mem::size_of::<B::Out<'static>>())),
         };
         match built {
             // SAFETY: from Box::into_raw, hence non-null.

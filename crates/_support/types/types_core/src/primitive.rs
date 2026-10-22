@@ -56,6 +56,8 @@ pub enum RmgrIds {
     RM_LOGICALMSG_ID,
     RM_NEXT_ID,
 }
+
+pub const RM_PGRC_ID: RmgrId = 150;
 pub type XLogSegNo = uint64;
 pub type pg_crc32c = uint32;
 pub type RelFileNumber = Oid;

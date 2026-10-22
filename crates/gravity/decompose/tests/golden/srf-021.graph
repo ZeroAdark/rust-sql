@@ -1,0 +1,10 @@
+-- srf-021
+-- SELECT * FROM string_to_table('a b c', ' ') s;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:StringToTable fn6160 fn6160(c25:'a b c', c25:' ')]
+  project (1=v1.1)
+  outs 1=vl:row
+mapped: FunctionScan

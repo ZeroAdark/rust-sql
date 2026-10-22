@@ -13,12 +13,24 @@ thread_local! {
     static READ_ERRNOS: StdRefCell<Vec<i32>> = const { StdRefCell::new(Vec::new()) };
     static HAVE_PORT: Cell<bool> = const { Cell::new(true) };
     static NOBLOCK: Cell<bool> = const { Cell::new(false) };
+    static WRITE_FATAL: Cell<bool> = const { Cell::new(false) };
+    // the send buffer's growth this test thread runs (lib.rs send_grow): C's flush when full unless a test grows it
+    pub(super) static TEST_SEND_GROW: Cell<usize> = const { Cell::new(PQ_SEND_BUFFER_SIZE) };
 }
 
 fn install() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         be_secure_seams::secure_write::set(|buf| {
+            if WRITE_FATAL.with(|c| c.replace(false)) {
+                return Err(Box::new(
+                    types_error::PgError::new(
+                        types_error::FATAL,
+                        "terminating connection due to administrator command".to_string(),
+                    )
+                    .with_sqlstate(types_error::ERRCODE_ADMIN_SHUTDOWN),
+                ));
+            }
             if let Some(e) = WRITE_ERRNOS.with(|v| v.borrow_mut().pop()) {
                 return Ok(Err(e));
             }
@@ -51,6 +63,7 @@ fn install() {
             })
         });
         init_small::init_seams();
+        crate::init_seams();
         pgstat_seams::pgstat_set_session_end_cause_fatal::set(|| {});
         ipc_seams::proc_exit::set(|code, _pid| panic!("proc_exit({code})"));
         be_secure_seams::set_port_noblock::set(|noblock| {
@@ -136,6 +149,34 @@ fn buffer_full_flushes_mid_message() {
     expect.extend_from_slice(&13u32.to_be_bytes());
     expect.extend_from_slice(b"SELECT 1\0");
     assert_eq!(wire(), expect);
+}
+
+#[test]
+fn send_grow_keeps_a_result_buffered_to_the_flush() {
+    setup();
+    TEST_SEND_GROW.with(|g| g.set(PQ_SEND_BUFFER_GROWN));
+    let row = vec![5u8; 1000];
+    let mut expect = Vec::new();
+    for _ in 0..20 {
+        assert_eq!(pq_putmessage(b'D', &row).unwrap(), 0);
+        expect.push(b'D');
+        expect.extend_from_slice(&((row.len() + 4) as u32).to_be_bytes());
+        expect.extend_from_slice(&row);
+    }
+    assert!(wire().is_empty());
+    assert_eq!(pq_flush().unwrap(), 0);
+    assert_eq!(wire(), expect);
+    for _ in 0..70 {
+        assert_eq!(pq_putmessage(b'D', &row).unwrap(), 0);
+        expect.push(b'D');
+        expect.extend_from_slice(&((row.len() + 4) as u32).to_be_bytes());
+        expect.extend_from_slice(&row);
+    }
+    let before_flush = wire().len();
+    assert!(before_flush > 20 * 1005 && before_flush < expect.len());
+    assert_eq!(pq_flush().unwrap(), 0);
+    assert_eq!(wire(), expect);
+    TEST_SEND_GROW.with(|g| g.set(PQ_SEND_BUFFER_SIZE));
 }
 
 #[test]
@@ -355,9 +396,84 @@ fn startmsgread_twice_is_protocol_loss() {
     let _ = pq_startmsgread();
 }
 
+/// The keepalive GUC hooks LOG a failed getsockopt while MyProcPort is set; the log sink reads
+/// the Port for the line prefix, so the LOG must not run under the hooks' exclusive port borrow
+/// (the logconn hazard: "RefCell already mutably borrowed" aborted the backend).
+#[test]
+fn keepalive_guc_hooks_log_outside_the_port_borrow() {
+    use types_startup::{ClientSocket, Port};
+    setup();
+    struct PortReadingContext;
+    impl elog::sink::BackendLogContext for PortReadingContext {
+        fn has_client_port(&self) -> bool {
+            init_small::globals::HaveMyProcPort()
+        }
+        fn user_name(&self) -> Option<String> {
+            init_small::globals::WithMyProcPort(|p| p.user_name.clone())
+        }
+    }
+    static CTX: PortReadingContext = PortReadingContext;
+    thread_local! { static SEEN: StdRefCell<Vec<String>> = const { StdRefCell::new(Vec::new()) }; }
+    fn hook(e: &types_error::PgError, _to_server: &mut bool) {
+        SEEN.with(|s| s.borrow_mut().push(e.message().to_string()));
+    }
+    let prev_ctx = elog::sink::set_backend_log_context(Some(&CTX));
+    let prev_hook = elog::sink::set_emit_log_hook(Some(hook));
+    let prev_prefix = elog::config::log_line_prefix_format();
+    elog::config::set_log_line_prefix(Some("%u ".to_string()));
+
+    let mut port = Port::new(&ClientSocket { sock: -1, raddr: ip::SockAddr::zeroed() });
+    let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    ss.ss_family = libc::AF_INET as libc::sa_family_t;
+    let n = std::mem::size_of::<libc::sockaddr_storage>().min(port.laddr.addr.len());
+    // SAFETY: a plain-old-data struct viewed as bytes, n within both buffers.
+    let bytes = unsafe { std::slice::from_raw_parts(std::ptr::from_ref(&ss).cast::<u8>(), n) };
+    port.laddr.addr[..n].copy_from_slice(bytes);
+    port.laddr.salen = std::mem::size_of::<libc::sockaddr_in>() as u32;
+    port.user_name = Some("keepalive".to_string());
+    init_small::globals::SetMyProcPort(port);
+    assert!(init_small::globals::HaveMyProcPort());
+
+    crate::socket::assign_tcp_keepalives_idle(30);
+    assert_eq!(crate::socket::show_tcp_keepalives_idle(), "-1", "the failed default read is stored on the Port");
+    crate::socket::assign_tcp_keepalives_count(3);
+    assert_eq!(crate::socket::show_tcp_keepalives_count(), "-1");
+
+    let seen = SEEN.with(|s| s.borrow().clone());
+    let bad = elog::errno::strerror(libc::EBADF);
+    assert_eq!(
+        seen,
+        vec![
+            format!("getsockopt({}) failed: {}", crate::socket::PG_TCP_KEEPALIVE_IDLE_STR, bad),
+            format!("getsockopt(TCP_KEEPCNT) failed: {}", bad),
+        ]
+    );
+
+    elog::config::set_log_line_prefix(prev_prefix);
+    elog::sink::set_emit_log_hook(prev_hook);
+    elog::sink::set_backend_log_context(prev_ctx);
+}
+
+#[test]
+fn a_terminate_raised_while_a_notice_is_sent_ends_the_caller() {
+    setup();
+    let prev = (elog::config::where_to_send_output(), elog::config::client_min_messages());
+    elog::config::set_where_to_send_output(types_dest::CommandDest::Remote);
+    elog::config::set_client_min_messages(types_error::NOTICE);
+    WRITE_FATAL.with(|c| c.set(true));
+    let r = elog::elog(types_error::NOTICE, "a notice to a client that does not read");
+    let fired = !WRITE_FATAL.with(|c| c.replace(false));
+    elog::config::set_where_to_send_output(prev.0);
+    elog::config::set_client_min_messages(prev.1);
+    assert!(fired, "the NOTICE reached the wire (secure_write)");
+    let e = r.expect_err("the terminate raised during the send must end the elog's caller, not be discarded");
+    assert_eq!(e.level(), types_error::FATAL);
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_ADMIN_SHUTDOWN);
+}
+
 // pqcomm.c:453-459: UNIXSOCK_PATH formats into a MAXPGPATH buffer, so the
 // "too long" LOG never echoes more than 1023 bytes of the directory
-// (batch-232 regression).
+// (batch-232 fp-libpq-pqcomm#1).
 #[test]
 fn unix_socket_path_is_clipped_to_maxpgpath() {
     assert_eq!(socket::unix_socket_path_for("/tmp", 5432), "/tmp/.s.PGSQL.5432");
@@ -365,4 +481,30 @@ fn unix_socket_path_is_clipped_to_maxpgpath() {
     let path = socket::unix_socket_path_for(&dir, 5432);
     assert_eq!(path.len(), 1023);
     assert_eq!(path, dir[..1023]);
+}
+
+thread_local! {
+    static CLEANUPS: StdRefCell<Vec<Box<dyn FnOnce()>>> = const { StdRefCell::new(Vec::new()) };
+}
+
+fn collect_cleanup(_phase: ::mcx::SessionCleanupPhase, f: Box<dyn FnOnce()>) {
+    CLEANUPS.with(|c| c.borrow_mut().push(f));
+}
+
+/// D4245: a thread's second session registers the send buffer's teardown again, so its end frees its buffer too.
+#[test]
+fn a_second_session_on_the_thread_frees_its_send_buffer_at_its_end() {
+    install();
+    ::mcx::set_session_cleanup_sink(collect_cleanup);
+    for session in 1..=2 {
+        CLEANUPS.with(|c| c.borrow_mut().clear());
+        setup();
+        assert_eq!(pq_putmessage(b'Z', &[b'I']).unwrap(), 0);
+        for f in CLEANUPS.with(|c| core::mem::take(&mut *c.borrow_mut())) {
+            f();
+        }
+        // SAFETY: this test thread's own SEND slot; no send routine is live
+        let freed = SEND.with(|cell| unsafe { &*cell.get() }.is_none());
+        assert!(freed, "session {session}'s end freed its send buffer");
+    }
 }

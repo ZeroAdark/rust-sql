@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/optimizer/path/joinrels.c: 1 stack-depth check sites
+1435	try_partitionwise_join	crates/backend/optimizer/plan/planner/src/joinrels.rs	try_partitionwise_join	yes	

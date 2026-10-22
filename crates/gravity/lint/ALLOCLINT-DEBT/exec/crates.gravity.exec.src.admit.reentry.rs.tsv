@@ -1,0 +1,9 @@
+path	crates/gravity/exec/src/admit/reentry.rs
+growth	std::vec::Vec::push	3
+growth	std::vec::Vec::split_off	1
+method	std::boxed::Box::new	1
+method	std::iter::Iterator::collect	3
+method	std::rc::Rc::new	1
+type	std::boxed::Box	1
+type	std::rc::Rc	1
+type	std::vec::Vec	5

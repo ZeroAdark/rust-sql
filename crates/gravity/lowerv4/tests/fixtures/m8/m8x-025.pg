@@ -1,0 +1,8 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M8-RIG): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT x, ARRAY(SELECT y FROM generate_series(1, x) y ORDER BY y DESC) AS a FROM generate_series(0, 3) x
+cols: x	a
+[pg]
+0	{}
+1	{1}
+2	{2,1}
+3	{3,2,1}

@@ -5,10 +5,8 @@ use mcx::{Mcx, PgString};
 use types_core::{InvalidOid, Oid, RegProcedure, RECORDOID};
 use types_error::PgResult;
 
-// pg_operator.dat
 pub const ARRAY_EQ_OP: Oid = 1070;
 pub const RECORD_EQ_OP: Oid = 2988;
-// upstream 11aed8d19cd7 (18.4): Fix missed checks for hashability of container-type equality.
 pub const RANGE_EQ_OP: Oid = 3882;
 pub const MULTIRANGE_EQ_OP: Oid = 2860;
 const _: () = assert!(RECORDOID == 2249);

@@ -1,0 +1,12 @@
+-- regress-full-select-014
+-- select sillysrf(42);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project ()
+  srf tlist [1:Other fn22469 fn22469(c23:42)]
+  project (1=fn22469(c23:42))
+  outs
+  outs 1=w4:val
+mapped: Result ProjectSet

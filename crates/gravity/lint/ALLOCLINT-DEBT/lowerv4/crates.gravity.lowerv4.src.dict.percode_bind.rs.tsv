@@ -1,0 +1,2 @@
+path	crates/gravity/lowerv4/src/dict/percode_bind.rs
+method	std::iter::Iterator::collect	1

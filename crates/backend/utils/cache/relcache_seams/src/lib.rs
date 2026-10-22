@@ -19,6 +19,17 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    // D3888: the indexes, partitioned indexes and partitioned tables whose
+    // relcache entries hold support material of operator families
+    // `families` (an opclass of pg_index.indclass or of
+    // pg_partitioned_table.partclass is in one); inval's pre-commit.
+    pub fn support_family_relids<'mcx>(
+        mcx: mcx::Mcx<'mcx>,
+        families: &[Oid],
+    ) -> PgResult<mcx::PgVec<'mcx, Oid>>
+);
+
+seam_core::seam!(
     pub fn relation_get_stat_ext_list<'mcx>(
         mcx: mcx::Mcx<'mcx>,
         relid: Oid,

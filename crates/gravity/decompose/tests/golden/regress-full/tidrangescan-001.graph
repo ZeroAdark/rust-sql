@@ -1,0 +1,11 @@
+-- regress-full-tidrangescan-001
+-- EXPLAIN (COSTS OFF) SELECT ctid FROM tidrangescan WHERE ctid < '(0,0)';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source tid rel=31043 rti=1 am=heap form=range
+    tid op2799(v1.-1, c27:#6)
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v1.-1)
+  outs 1=fx6:row
+mapped: TidRangeScan

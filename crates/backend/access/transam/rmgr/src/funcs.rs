@@ -2,7 +2,7 @@ use datum::Datum;
 use types_error::PgResult;
 use types_fmgr::{varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
 
-use crate::{RmgrIdExists, RmgrTable};
+use crate::{GetRmgr, RmgrIdExists, RmgrIdIsBuiltin};
 
 pub(crate) fn register_builtins() {
     fmgr_core::register_late_builtins(RMGR_BUILTINS);
@@ -32,13 +32,12 @@ pub fn fc_pg_get_wal_resource_managers(
         if !RmgrIdExists(rmid as u8) {
             continue;
         }
-        // No-dlopen carve: only the builtin table is populated, so
-        // RmgrIdIsBuiltin(rmid) is always true for an existing id.
         let name = varlena_result(varlena::cstring_to_text(
             mcx,
-            RmgrTable[rmid].rm_name.as_bytes(),
+            GetRmgr(rmid as u8)?.rm_name.as_bytes(),
         )?);
-        let values = [Datum::from_i32(rmid as i32), name, Datum::from_bool(true)];
+        let builtin = RmgrIdIsBuiltin(rmid as i32);
+        let values = [Datum::from_i32(rmid as i32), name, Datum::from_bool(builtin)];
         srf.putvalues(&values, &[false; 3])?;
     }
 
@@ -53,8 +52,10 @@ mod tests {
     }
 
     #[test]
-    fn only_builtin_ids_exist() {
-        let n = (0..=super::RM_MAX_ID).filter(|&id| crate::RmgrIdExists(id as u8)).count();
-        assert_eq!(n, crate::RM_N_BUILTIN_IDS);
+    fn builtin_ids_and_the_pgrc_slot_exist() {
+        let ids: Vec<usize> = (0..=super::RM_MAX_ID).filter(|&id| crate::RmgrIdExists(id as u8)).collect();
+        assert_eq!(ids.len(), crate::RM_N_BUILTIN_IDS + 1);
+        assert_eq!(ids.last(), Some(&(types_core::RM_PGRC_ID as usize)));
+        assert!(!crate::RmgrIdIsBuiltin(types_core::RM_PGRC_ID as i32));
     }
 }

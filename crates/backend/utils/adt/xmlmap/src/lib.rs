@@ -7,6 +7,7 @@ pub mod builtins;
 use core::fmt::Write as _;
 
 use elog::ereport;
+use adt_xml::stringinfo::StringInfo;
 use execexpr::ResMcx;
 use init_small::globals::MyDatabaseId;
 use lsyscache::typ::TYPTYPE_DOMAIN;
@@ -23,8 +24,8 @@ use types_error::{
 use types_storage::lock::{AccessShareLock, NoLock};
 use types_tuple::TupleDescData;
 
-const NAMESPACE_XSD: &str = "http://www.w3.org/2001/XMLSchema";
-const NAMESPACE_XSI: &str = "http://www.w3.org/2001/XMLSchema-instance";
+const XMLNS_XSI_ATTR: &str = " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"";
+const XSD_SCHEMA_START: &str = "<xsd:schema\n    xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"";
 const VARHDRSZ: i32 = 4;
 
 fn with_scratch<R>(f: impl FnOnce(Mcx<'_>, &ResMcx) -> PgResult<R>) -> PgResult<R> {
@@ -160,37 +161,37 @@ fn database_get_xml_visible_tables() -> PgResult<Vec<Oid>> {
 }
 
 fn xmldata_root_element_start(
-    result: &mut String,
+    result: &mut StringInfo,
     eltname: &str,
     xmlschema: Option<&str>,
     targetns: &str,
     top_level: bool,
-) {
-    let _ = write!(result, "<{eltname}");
+) -> PgResult<()> {
+    result.append_fmt(format_args!("<{eltname}"))?;
     if top_level {
-        let _ = write!(result, " xmlns:xsi=\"{NAMESPACE_XSI}\"");
+        result.append_str(XMLNS_XSI_ATTR)?;
         if !targetns.is_empty() {
-            let _ = write!(result, " xmlns=\"{targetns}\"");
+            result.append_fmt(format_args!(" xmlns=\"{targetns}\""))?;
         }
     }
     if xmlschema.is_some() {
         if !targetns.is_empty() {
-            let _ = write!(result, " xsi:schemaLocation=\"{targetns} #\"");
+            result.append_fmt(format_args!(" xsi:schemaLocation=\"{targetns} #\""))?;
         } else {
-            result.push_str(" xsi:noNamespaceSchemaLocation=\"#\"");
+            result.append_str(" xsi:noNamespaceSchemaLocation=\"#\"")?;
         }
     }
-    result.push_str(">\n");
+    result.append_str(">\n")
 }
 
-fn xmldata_root_element_end(result: &mut String, eltname: &str) {
-    let _ = write!(result, "</{eltname}>\n");
+fn xmldata_root_element_end(result: &mut StringInfo, eltname: &str) -> PgResult<()> {
+    result.append_fmt(format_args!("</{eltname}>\n"))
 }
 
 fn spi_sql_row_to_xmlelement(
     t: &spi::TuptabData<'_>,
     rownum: usize,
-    result: &mut String,
+    result: &mut StringInfo,
     tablename: Option<&str>,
     nulls: bool,
     tableforest: bool,
@@ -204,9 +205,9 @@ fn spi_sql_row_to_xmlelement(
     };
 
     if tableforest {
-        xmldata_root_element_start(result, &xmltn, None, targetns, top_level);
+        xmldata_root_element_start(result, &xmltn, None, targetns, top_level)?;
     } else {
-        result.push_str("<row>\n");
+        result.append_str("<row>\n")?;
     }
 
     for i in 1..=t.tupdesc.natts {
@@ -215,22 +216,21 @@ fn spi_sql_row_to_xmlelement(
         let (colval, isnull) = spi::SPI_getbinval(&t.vals[rownum], &t.tupdesc, i);
         if isnull {
             if nulls {
-                let _ = write!(result, "  <{colname} xsi:nil=\"true\"/>\n");
+                result.append_fmt(format_args!("  <{colname} xsi:nil=\"true\"/>\n"))?;
             }
         } else {
             let v =
                 execexpr::map_sql_value_to_xml_value_utf8(colval, att.atttypid, true, resmcx)?;
-            let _ = write!(result, "  <{colname}>{v}</{colname}>\n");
+            result.append_fmt(format_args!("  <{colname}>{v}</{colname}>\n"))?;
         }
     }
 
     if tableforest {
-        xmldata_root_element_end(result, &xmltn);
-        result.push('\n');
+        xmldata_root_element_end(result, &xmltn)?;
+        result.append_char('\n')
     } else {
-        result.push_str("</row>\n\n");
+        result.append_str("</row>\n\n")
     }
-    Ok(())
 }
 
 fn query_to_xml_internal(
@@ -247,7 +247,7 @@ fn query_to_xml_internal(
         None => "table".to_owned(),
     };
 
-    let mut result = String::new();
+    let mut result = StringInfo::new();
 
     spi::SPI_connect()?;
     let r = (|| -> PgResult<()> {
@@ -260,12 +260,12 @@ fn query_to_xml_internal(
         }
 
         if !tableforest {
-            xmldata_root_element_start(&mut result, &xmltn, xmlschema, targetns, top_level);
-            result.push('\n');
+            xmldata_root_element_start(&mut result, &xmltn, xmlschema, targetns, top_level)?;
+            result.append_char('\n')?;
         }
 
         if let Some(xs) = xmlschema {
-            let _ = write!(result, "{xs}\n\n");
+            result.append_fmt(format_args!("{xs}\n\n"))?;
         }
 
         let n = spi::SPI_processed() as usize;
@@ -283,13 +283,13 @@ fn query_to_xml_internal(
         })?;
 
         if !tableforest {
-            xmldata_root_element_end(&mut result, &xmltn);
+            xmldata_root_element_end(&mut result, &xmltn)?;
         }
         Ok(())
     })();
     spi::SPI_finish()?;
     r?;
-    Ok(result)
+    Ok(result.into_string())
 }
 
 fn table_to_xml_internal(
@@ -344,11 +344,11 @@ pub fn cursor_to_xml(
     tableforest: bool,
     targetns: &str,
 ) -> PgResult<String> {
-    let mut result = String::new();
+    let mut result = StringInfo::new();
 
     if !tableforest {
-        xmldata_root_element_start(&mut result, "table", None, targetns, true);
-        result.push('\n');
+        xmldata_root_element_start(&mut result, "table", None, targetns, true)?;
+        result.append_char('\n')?;
     }
 
     spi::SPI_connect()?;
@@ -372,9 +372,9 @@ pub fn cursor_to_xml(
     r?;
 
     if !tableforest {
-        xmldata_root_element_end(&mut result, "table");
+        xmldata_root_element_end(&mut result, "table")?;
     }
-    Ok(result)
+    Ok(result.into_string())
 }
 
 pub fn table_to_xmlschema(
@@ -466,29 +466,29 @@ fn schema_to_xml_internal(
     top_level: bool,
 ) -> PgResult<String> {
     let xmlsn = xml_name(namespace_name(nspid)?.as_bytes(), true, false)?;
-    let mut result = String::new();
+    let mut result = StringInfo::new();
 
-    xmldata_root_element_start(&mut result, &xmlsn, xmlschema, targetns, top_level);
-    result.push('\n');
+    xmldata_root_element_start(&mut result, &xmlsn, xmlschema, targetns, top_level)?;
+    result.append_char('\n')?;
 
     if let Some(xs) = xmlschema {
-        let _ = write!(result, "{xs}\n\n");
+        result.append_fmt(format_args!("{xs}\n\n"))?;
     }
 
     spi::SPI_connect()?;
     let r = (|| -> PgResult<()> {
         for relid in schema_get_xml_visible_tables(nspid)? {
             let subres = table_to_xml_internal(relid, None, nulls, tableforest, targetns, false)?;
-            result.push_str(&subres);
-            result.push('\n');
+            result.append_str(&subres)?;
+            result.append_char('\n')?;
         }
         Ok(())
     })();
     spi::SPI_finish()?;
     r?;
 
-    xmldata_root_element_end(&mut result, &xmlsn);
-    Ok(result)
+    xmldata_root_element_end(&mut result, &xmlsn)?;
+    Ok(result.into_string())
 }
 
 pub fn schema_to_xml(
@@ -501,19 +501,18 @@ pub fn schema_to_xml(
     schema_to_xml_internal(nspid, None, nulls, tableforest, targetns, true)
 }
 
-fn xsd_schema_element_start(result: &mut String, targetns: &str) {
-    let _ = write!(result, "<xsd:schema\n    xmlns:xsd=\"{NAMESPACE_XSD}\"");
+fn xsd_schema_element_start(result: &mut StringInfo, targetns: &str) -> PgResult<()> {
+    result.append_str(XSD_SCHEMA_START)?;
     if !targetns.is_empty() {
-        let _ = write!(
-            result,
+        result.append_fmt(format_args!(
             "\n    targetNamespace=\"{targetns}\"\n    elementFormDefault=\"qualified\""
-        );
+        ))?;
     }
-    result.push_str(">\n\n");
+    result.append_str(">\n\n")
 }
 
-fn xsd_schema_element_end(result: &mut String) {
-    result.push_str("</xsd:schema>");
+fn xsd_schema_element_end(result: &mut StringInfo) -> PgResult<()> {
+    result.append_str("</xsd:schema>")
 }
 
 fn schema_to_xmlschema_internal(
@@ -523,9 +522,9 @@ fn schema_to_xmlschema_internal(
     targetns: &str,
 ) -> PgResult<String> {
     let nspid = catalog_namespace::LookupExplicitNamespace(schemaname, false)?;
-    let mut result = String::new();
+    let mut result = StringInfo::new();
 
-    xsd_schema_element_start(&mut result, targetns);
+    xsd_schema_element_start(&mut result, targetns)?;
 
     spi::SPI_connect()?;
     let r = with_scratch(|mcx, _| {
@@ -537,17 +536,17 @@ fn schema_to_xmlschema_internal(
             table::table_close(rel, NoLock)?;
         }
         let refs: Vec<&TupleDescData<'_>> = tupdescs.iter().collect();
-        result.push_str(&map_sql_typecoll_to_xmlschema_types(&refs)?);
-        result.push_str(&map_sql_schema_to_xmlschema_types(
+        result.append_str(&map_sql_typecoll_to_xmlschema_types(&refs)?)?;
+        result.append_str(&map_sql_schema_to_xmlschema_types(
             nspid, &relid_list, nulls, tableforest, targetns,
-        )?);
+        )?)?;
         Ok(())
     });
     spi::SPI_finish()?;
     r?;
 
-    xsd_schema_element_end(&mut result);
-    Ok(result)
+    xsd_schema_element_end(&mut result)?;
+    Ok(result.into_string())
 }
 
 pub fn schema_to_xmlschema(
@@ -577,29 +576,29 @@ fn database_to_xml_internal(
     targetns: &str,
 ) -> PgResult<String> {
     let xmlcn = xml_name(database_name()?.as_bytes(), true, false)?;
-    let mut result = String::new();
+    let mut result = StringInfo::new();
 
-    xmldata_root_element_start(&mut result, &xmlcn, xmlschema, targetns, true);
-    result.push('\n');
+    xmldata_root_element_start(&mut result, &xmlcn, xmlschema, targetns, true)?;
+    result.append_char('\n')?;
 
     if let Some(xs) = xmlschema {
-        let _ = write!(result, "{xs}\n\n");
+        result.append_fmt(format_args!("{xs}\n\n"))?;
     }
 
     spi::SPI_connect()?;
     let r = (|| -> PgResult<()> {
         for nspid in database_get_xml_visible_schemas()? {
             let subres = schema_to_xml_internal(nspid, None, nulls, tableforest, targetns, false)?;
-            result.push_str(&subres);
-            result.push('\n');
+            result.append_str(&subres)?;
+            result.append_char('\n')?;
         }
         Ok(())
     })();
     spi::SPI_finish()?;
     r?;
 
-    xmldata_root_element_end(&mut result, &xmlcn);
-    Ok(result)
+    xmldata_root_element_end(&mut result, &xmlcn)?;
+    Ok(result.into_string())
 }
 
 pub fn database_to_xml(nulls: bool, tableforest: bool, targetns: &str) -> PgResult<String> {
@@ -611,8 +610,8 @@ fn database_to_xmlschema_internal(
     _tableforest: bool,
     targetns: &str,
 ) -> PgResult<String> {
-    let mut result = String::new();
-    xsd_schema_element_start(&mut result, targetns);
+    let mut result = StringInfo::new();
+    xsd_schema_element_start(&mut result, targetns)?;
 
     spi::SPI_connect()?;
     let r = with_scratch(|mcx, _| {
@@ -625,15 +624,15 @@ fn database_to_xmlschema_internal(
             table::table_close(rel, NoLock)?;
         }
         let refs: Vec<&TupleDescData<'_>> = tupdescs.iter().collect();
-        result.push_str(&map_sql_typecoll_to_xmlschema_types(&refs)?);
-        result.push_str(&map_sql_catalog_to_xmlschema_types(&nspid_list, targetns)?);
+        result.append_str(&map_sql_typecoll_to_xmlschema_types(&refs)?)?;
+        result.append_str(&map_sql_catalog_to_xmlschema_types(&nspid_list, targetns)?)?;
         Ok(())
     });
     spi::SPI_finish()?;
     r?;
 
-    xsd_schema_element_end(&mut result);
-    Ok(result)
+    xsd_schema_element_end(&mut result)?;
+    Ok(result.into_string())
 }
 
 pub fn database_to_xmlschema(nulls: bool, tableforest: bool, targetns: &str) -> PgResult<String> {
@@ -696,43 +695,41 @@ fn map_sql_table_to_xmlschema(
         rowtypename = "RowType".to_owned();
     }
 
-    let mut result = String::new();
-    xsd_schema_element_start(&mut result, targetns);
+    let mut result = StringInfo::new();
+    xsd_schema_element_start(&mut result, targetns)?;
 
-    result.push_str(&map_sql_typecoll_to_xmlschema_types(&[tupdesc])?);
+    result.append_str(&map_sql_typecoll_to_xmlschema_types(&[tupdesc])?)?;
 
-    let _ = write!(result, "<xsd:complexType name=\"{rowtypename}\">\n  <xsd:sequence>\n");
+    result.append_fmt(format_args!("<xsd:complexType name=\"{rowtypename}\">\n  <xsd:sequence>\n"))?;
 
     for i in 0..tupdesc.natts as usize {
         let att = tupdesc.attr(i);
         if att.attisdropped {
             continue;
         }
-        let _ = write!(
-            result,
+        result.append_fmt(format_args!(
             "    <xsd:element name=\"{}\" type=\"{}\"{}></xsd:element>\n",
             xml_name(att.attname.name_str(), true, false)?,
             map_sql_type_to_xml_name(att.atttypid, -1)?,
             if nulls { " nillable=\"true\"" } else { " minOccurs=\"0\"" }
-        );
+        ))?;
     }
 
-    result.push_str("  </xsd:sequence>\n</xsd:complexType>\n\n");
+    result.append_str("  </xsd:sequence>\n</xsd:complexType>\n\n")?;
 
     if !tableforest {
-        let _ = write!(
-            result,
+        result.append_fmt(format_args!(
             "<xsd:complexType name=\"{tabletypename}\">\n  <xsd:sequence>\n    \
              <xsd:element name=\"row\" type=\"{rowtypename}\" minOccurs=\"0\" maxOccurs=\"unbounded\"/>\n  \
              </xsd:sequence>\n</xsd:complexType>\n\n"
-        );
-        let _ = write!(result, "<xsd:element name=\"{xmltn}\" type=\"{tabletypename}\"/>\n\n");
+        ))?;
+        result.append_fmt(format_args!("<xsd:element name=\"{xmltn}\" type=\"{tabletypename}\"/>\n\n"))?;
     } else {
-        let _ = write!(result, "<xsd:element name=\"{xmltn}\" type=\"{rowtypename}\"/>\n\n");
+        result.append_fmt(format_args!("<xsd:element name=\"{xmltn}\" type=\"{rowtypename}\"/>\n\n"))?;
     }
 
-    xsd_schema_element_end(&mut result);
-    Ok(result)
+    xsd_schema_element_end(&mut result)?;
+    Ok(result.into_string())
 }
 
 fn map_sql_schema_to_xmlschema_types(

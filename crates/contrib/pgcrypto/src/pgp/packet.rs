@@ -139,11 +139,6 @@ impl<'a> PktReader<'a> {
         PktReader { data, pos: 0, allow_ctx: false }
     }
 
-    /// Reader for the decrypted data stream (ALLOW_CTX_SIZE).
-    pub fn new_allow_ctx(data: &'a [u8]) -> PktReader<'a> {
-        PktReader { data, pos: 0, allow_ctx: true }
-    }
-
     #[allow(dead_code)] // C-parity: PktReader surface kept complete
     pub fn eof(&self) -> bool {
         self.pos >= self.data.len()

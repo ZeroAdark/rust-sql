@@ -1,0 +1,9 @@
+-- regress-full-merge-033
+-- DO LANGUAGE plpgsql $$ BEGIN MERGE INTO target t USING source AS s ON t.tid = s.sid WHEN MATCHED AND t.balance > s.delta THEN UPDATE SET balance = t.balance - s.delta; END; $$;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3539(c25:'%s %s %s trigger%s', $4, $6, $5, case(when and(op98($6, c25:'INSERT'), op98($5, c25:'ROW')) then fn3539(c25:' row: %s', $1), when and(op98($6, c25:'UPDATE'), op98($5, c25:'ROW')) then fn3539(c25:' row: %s -> %s', $2, $1), when and(op98($6, c25:'DELETE'), op98($5, c25:'ROW')) then fn3539(c25:' row: %s', $2)) else c25:null))
+  outs 1=vl:call3539
+mapped: Result

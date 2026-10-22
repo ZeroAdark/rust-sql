@@ -228,17 +228,17 @@ pub fn brin_tuples_equal(a: &[u8], b: &[u8]) -> bool {
     a == b
 }
 
-pub fn brin_new_memtuple(bdesc: &BrinDesc<'_>) -> BrinMemTuple {
+pub fn brin_new_memtuple_fallible(bdesc: &BrinDesc<'_>) -> PgResult<BrinMemTuple> {
     let natts = bdesc.natts();
     let mut dtup = BrinMemTuple {
         bt_placeholder: false,
         bt_empty_range: true,
         bt_blkno: 0,
-        bt_context: MemoryContext::new_bump("brin dtuple"),
-        bt_values: Vec::with_capacity(bdesc.bd_totalstored),
-        bt_allnulls: Vec::with_capacity(natts),
-        bt_hasnulls: Vec::with_capacity(natts),
-        bt_columns: Vec::with_capacity(natts),
+        bt_context: MemoryContext::new_wholesale("brin dtuple"),
+        bt_values: ::mcx::std_vec_with_capacity("brin", bdesc.bd_totalstored)?,
+        bt_allnulls: ::mcx::std_vec_with_capacity("brin", natts)?,
+        bt_hasnulls: ::mcx::std_vec_with_capacity("brin", natts)?,
+        bt_columns: ::mcx::std_vec_with_capacity("brin", natts)?,
     };
     for i in 0..natts {
         dtup.bt_columns.push(BrinValues {
@@ -249,7 +249,11 @@ pub fn brin_new_memtuple(bdesc: &BrinDesc<'_>) -> BrinMemTuple {
             bv_mem_value: None,
         });
     }
-    dtup
+    Ok(dtup)
+}
+
+pub fn brin_new_memtuple(bdesc: &BrinDesc<'_>) -> BrinMemTuple {
+    brin_new_memtuple_fallible(bdesc).expect("brin_new_memtuple")
 }
 
 /// brin_memtuple_initialize: C resets the value context and per-column state
@@ -295,11 +299,11 @@ pub fn brin_deform_tuple(
     } = dtup;
 
     bt_values.clear();
-    bt_values.resize(bdesc.bd_totalstored, Datum::null());
+    ::mcx::std_vec_resize("access", bt_values, bdesc.bd_totalstored, Datum::null())?;
     bt_allnulls.clear();
-    bt_allnulls.resize(natts, false);
+    ::mcx::std_vec_resize("access", bt_allnulls, natts, false)?;
     bt_hasnulls.clear();
-    bt_hasnulls.resize(natts, false);
+    ::mcx::std_vec_resize("access", bt_hasnulls, natts, false)?;
 
     let nullbits = if BrinTupleHasNulls(tuple) {
         Some(&tuple[SizeOfBrinTuple..])
@@ -376,7 +380,13 @@ fn checked_attr_len(tp: &[u8], off: usize, attlen: i32) -> PgResult<usize> {
                 if off + VARHDRSZ > tp.len() {
                     return Err(corrupt_tuple());
                 }
-                varsize_4b(p)
+                // A 4-byte header under its own 4 bytes (D4728's class): datum_copy would copy fewer bytes than the
+                // header, and every reader of the copy takes the header word past its end. C trusts it (and over-reads).
+                let n = varsize_4b(p);
+                if n < VARHDRSZ {
+                    return Err(corrupt_tuple());
+                }
+                n
             }
         }
     } else {
@@ -496,6 +506,23 @@ mod tests {
         assert!(checked_attr_len(&tp, 0, -2).is_err());
         let tp2 = [b'a', 0u8];
         assert_eq!(checked_attr_len(&tp2, 0, -2).unwrap(), 2);
+    }
+
+    // D4900 (D4728 sibling, brin_page_items on a crafted page): a 4-byte header that declares 0 to 3 bytes is under its own
+    // header. Taken, brin_deform_tuple's datum_copy made a copy of those bytes and the opclass output read the copy's
+    // 4-byte header past its end. Plain and compressed bits alike are rejected (XX001), never copied short.
+    #[test]
+    fn varlena_under_its_4_byte_header_is_rejected() {
+        for n in 0u32..4 {
+            for bits in [0x00u32, 0x02] {
+                let mut tp = ((n << 2) | bits).to_ne_bytes().to_vec();
+                tp.extend_from_slice(&[0u8; 4]);
+                let err = checked_attr_len(&tp, 0, -1).unwrap_err();
+                assert_eq!(err.sqlstate(), types_error::ERRCODE_DATA_CORRUPTED, "VARSIZE {n} bits {bits}");
+            }
+        }
+        // The header alone (VARSIZE 4) is a well-formed empty value.
+        assert_eq!(checked_attr_len(&(4u32 << 2).to_ne_bytes(), 0, -1).unwrap(), 4);
     }
 
     #[test]

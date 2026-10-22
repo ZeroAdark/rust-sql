@@ -1,0 +1,25 @@
+-- regress-full-rowsecurity-034
+-- EXPLAIN (COSTS OFF) SELECT a, b, tableoid::regclass FROM t2 UNION ALL SELECT a, b, tableoid::regclass FROM t3;
+graph pipelines=2 breakers=0 init_plans=0 root=p1
+p0 node=1 eligible rows=5 end=sink
+  nodes n1@0 n0@2
+  source range rel=28361 rti=4 am=heap
+    lanes Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(op530(v4.2, c23:2), c23:1)
+  project (1=v4.2, 2=v4.3, 3=relabel2205(v4.-6))
+  append arm 0/2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=vl:win/page 3=w4:val
+  outs 1=w4:val 2=vl:life/breaker 3=w4:val
+p1 node=2 eligible rows=810 end=sink
+  nodes n2@0 n0@1
+  source range rel=28367 rti=5 am=heap
+    lanes Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val
+  project (1=v5.4, 2=v5.3, 3=relabel2205(v5.-6))
+  append arm 1/2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w8:val 2=vl:win/page 3=w4:val
+  outs 1=w4:val 2=vl:life/breaker 3=w4:val
+scan-lanes node=1 rti=4 rel=28361 tableoid
+scan-lanes node=2 rti=5 rel=28367 tableoid
+mapped: Append SeqScan

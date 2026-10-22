@@ -1,0 +1,11 @@
+-- regress-full-type_sanity-001
+-- SELECT t1.oid, t1.typname FROM pg_type as t1 WHERE t1.typnamespace = 0 OR (t1.typlen <= 0 AND t1.typlen != -1 AND t1.typlen != -2) OR (t1.typtype not in ('b', 'c', 'd', 'e', 'm', 'p', 'r')) OR NOT t1.typisdefined OR (t1.typalign not in ('c', 's', 'i', 'd')) OR (t1.typstorage not in ('p', 'x', 'e', 'm'));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=385 end=sink
+  nodes n0@0
+  source range rel=1247 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(5):byval8:w8:val Attr(7):byval8:w8:val Attr(10):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Offset:byval2:w2:val
+  filter or(op607(v1.3, c26:0), and(op522(v1.5, c21:0), op538(v1.5, c23:-1), op538(v1.5, c23:-2)), all630(v1.7, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x07\x00\x00\x00\x01\x00\x00\x00bcdempr'), not(v1.10), all630(v1.23, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00csid'), all630(v1.24, c1002:'\x01\x00\x00\x00\x00\x00\x00\x00\x12\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00pxem'))
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

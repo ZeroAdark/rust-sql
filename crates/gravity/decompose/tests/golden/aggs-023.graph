@@ -1,0 +1,23 @@
+-- aggs-023
+-- SELECT u, iv, tz, count(*) FROM g GROUP BY u, iv, tz;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=2000 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n1@0 n0@1^
+  source range rel=16396 rti=1 am=heap
+    lanes Attr(18):byref8:fx12:win/page Attr(19):byref8:fx16:win/page Attr(20):byref8:fx16:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20, 21=v1.21, 22=v1.22, 23=v1.23, 24=v1.24)
+  outs 1=w4:val 2=w2:val 3=w4:val 4=w8:val 5=w4:val 6=w8:val 7=vl:row 8=vl:row 9=w8:val 10=vl:row 11=vl:row 12=vl:row 13=vl:row 14=vl:row 15=w1:val 16=w4:val 17=w8:val 18=fx12:win/page 19=fx16:win/page 20=fx16:win/page 21=vl:row 22=w8:val 23=w8:val 24=vl:row
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.20, 2=outer.19, 3=outer.18, 4=agg2803*())
+  outs 1=fx16:life/breaker 2=fx16:life/breaker 3=fx12:life/breaker 4=w8:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I64,I64,I64,I64,I64,I64]->[Count@48,MinCode@56,MinCode@64,MinCode@72] 80B
+group slot=0 producer=p0 node=0 form=Hashed hints=[] layout=[I64,I64,I64,I64,I64,I64]->[Count@48,MinCode@56,MinCode@64,MinCode@72] 80B
+  key 0 word=0 resno=20 kind=I64 attno=20 type=2950 rep=1 image=Uuid expr=v1.20
+  key 1 word=2 resno=19 kind=I64 attno=19 type=1186 rep=2 image=IntervalNorm expr=v1.19
+  key 2 word=4 resno=18 kind=I64 attno=18 type=1266 rep=3 image=Timetz expr=v1.18
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan Agg

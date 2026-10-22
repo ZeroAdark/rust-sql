@@ -1,0 +1,10 @@
+path	crates/gravity/hosts/src/ops/scan/tid_sample.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	3
+macro	std::vec	5
+method	slice::to_vec	1
+method	std::boxed::Box::new	2
+method	std::clone::Clone::clone	5
+method	std::vec::Vec::into_boxed_slice	1
+type	std::boxed::Box	4
+type	std::vec::Vec	4

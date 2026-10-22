@@ -135,13 +135,12 @@ fn substitute_bound_param<'mcx>(
     }
     let prm: ParamExternData =
         params::with(cx.bound_params, |p| p[(param.paramid - 1) as usize]);
-    if !OidIsValid(prm.ptype) {
+    if !OidIsValid(prm.ptype) || prm.ptype != param.paramtype {
         return Ok(None);
     }
     if !(cx.estimate || (prm.pflags & PARAM_FLAG_CONST) != 0) {
         return Ok(None);
     }
-    debug_assert_eq!(prm.ptype, param.paramtype);
     let (typlen, typbyval) = get_typlenbyval(param.paramtype)?;
     let pval = if prm.isnull || typbyval {
         prm.value
@@ -191,10 +190,7 @@ fn datum_copy_in<'mcx>(mcx: Mcx<'mcx>, value: Datum, typlen: i16) -> PgResult<Da
                     // VARHDRSZ_EXTERNAL + VARTAG_SIZE (postgres.h).
                     let body = match *p.add(1) {
                         18 => 16,
-                        1 => 8,
-                        2 | 3 => panic!(
-                            "datum_copy_in: expanded-object flatten (EOH_flatten_into) unported"
-                        ),
+                        1 | 2 | 3 => 8,
                         tag => panic!("datum_copy_in: unknown vartag {tag}"),
                     };
                     let img = core::slice::from_raw_parts(p, 2 + body);
@@ -1458,7 +1454,7 @@ fn simplify_function<'mcx>(
             types_nodes::supportnodes::SupportRequestSimplify::new(Some(fcall), Some(cx.mcx));
         let addr = core::ptr::from_mut(&mut req) as usize;
         let result =
-            fmgr_core::oid_function_call1_coll(shape.prosupport, 0, Datum::from_usize(addr))?;
+            fmgr_core::oid_function_call1_coll_in(shape.prosupport, 0, cx.mcx, Datum::from_usize(addr))?;
         if result.as_usize() != 0 {
             // SAFETY: prosupport simplify contract — the rewrite is a sealed
             // node the callee allocated in the request's mcx.
@@ -1545,10 +1541,25 @@ fn inline_function<'mcx>(
         af.try_reserve(1).map_err(|_| cx.mcx.oom(1))?;
         af.push(funcid);
     }
-    let result = ece_mutator(newexpr, cx);
-    cx.active_fns.borrow_mut().pop();
     // C's sql_inline_error_callback is still installed across the recursive
-    // re-simplification; the parse-region legs run inside the seam body.
+    // re-simplification (non-ERROR reports and GetErrorContextStack see it);
+    // the parse-region legs run inside the seam body.
+    struct Frame(u64);
+    impl Drop for Frame {
+        fn drop(&mut self) {
+            elog::pop_emit_context_callback(self.0);
+        }
+    }
+    let frame = Frame(elog::push_context_frame(
+        Box::new(move |e: &mut PgError| {
+            let scratch = mcx::MemoryContext::new_wholesale("inline_error_context");
+            e.add_context_line(inline_context_line(scratch.mcx(), funcid));
+        }),
+        true,
+    ));
+    let result = ece_mutator(newexpr, cx);
+    drop(frame);
+    cx.active_fns.borrow_mut().pop();
     let result = result.map_err(|e| sql_inline_recursion_error(cx.mcx, funcid, e))?;
     Ok(Some(result.unwrap_or(newexpr)))
 }
@@ -1561,12 +1572,16 @@ fn sql_inline_recursion_error<'mcx>(
     e: Box<PgError>,
 ) -> Box<PgError> {
     let mut err = *e;
+    err.add_context_line(inline_context_line(mcx, funcid));
+    Box::new(err)
+}
+
+fn inline_context_line(mcx: Mcx<'_>, funcid: Oid) -> String {
     let name = match lsyscache::function::get_func_name(mcx, funcid) {
         Ok(Some(n)) => n.as_str().to_string(),
         _ => funcid.to_string(),
     };
-    err.add_context_line(format!("SQL function \"{name}\" during inlining"));
-    Box::new(err)
+    format!("SQL function \"{name}\" during inlining")
 }
 
 pub fn expand_function_arguments<'mcx>(

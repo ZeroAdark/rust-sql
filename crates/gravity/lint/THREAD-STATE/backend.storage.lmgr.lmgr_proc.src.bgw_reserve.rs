@@ -1,0 +1,1 @@
+backend/storage/lmgr/lmgr_proc/src/bgw_reserve.rs	BGW_HOLDS_RESERVATION	pgport	at:release_bgworker_reservation	thread	whether this thread holds a bgworker PGPROC reservation (adopt_bgworker_reservation), given back by release_bgworker_reservation

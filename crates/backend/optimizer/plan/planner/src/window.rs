@@ -48,9 +48,10 @@ pub(crate) fn optimize_window_clauses<'mcx>(
                 tag: NodeTag::T_SupportRequestOptimizeWindowClause,
                 frame_options: wc.frameOptions,
             };
-            let res = fmgr_core::oid_function_call1_coll(
+            let res = fmgr_core::oid_function_call1_coll_in(
                 prosupport,
                 0,
+                run.mcx,
                 datum::Datum::from_usize(&mut req as *mut _ as usize),
             )?;
             if res.as_usize() == 0 {
@@ -233,6 +234,21 @@ pub(crate) fn make_window_input_target<'mcx>(
         sgrefs.push(gc.as_sort_group_clause().expect("SortGroupClause").tleSortGroupRef);
     }
 
+    // D4169: the hashed DISTINCT form that regroups by the query's own GROUP BY items (grouping.rs
+    // hashed_distinct_regroups: every item EquivalenceClass-redundant) carries each item as a group column of its input,
+    // not the item's columns; an item flattened here to a column that input lacks is kept whole instead (the group hands
+    // it on, the node above reads it). Every other item flattens as PostgreSQL's does.
+    let regroups = crate::grouping::hashed_distinct_regroups(run)?;
+    let group_items: PgVec<'_, u32> = {
+        let mut v = PgVec::new_in(mcx);
+        if regroups {
+            for n in run.parse().groupClause.iter() {
+                v.push(n.as_sort_group_clause().expect("groupClause cell").tleSortGroupRef);
+            }
+        }
+        v
+    };
+
     let mut tlist = NodeList::nil();
     let mut kept_exprs: PgVec<'_, Node<'mcx>> = PgVec::new_in(mcx);
     let mut vars: PgVec<'_, Node<'mcx>> = PgVec::new_in(mcx);
@@ -241,7 +257,13 @@ pub(crate) fn make_window_input_target<'mcx>(
         let ft = run.root.pathtarget(final_target);
         let expr = *run.root.expr_node(ft.exprs[i]);
         let sgref = ft.sortgrouprefs.get(i).copied().unwrap_or(0);
-        if sgref != 0 && sgrefs.contains(&sgref) {
+        let mut keep = sgref != 0 && sgrefs.contains(&sgref);
+        if !keep && sgref != 0 && group_items.contains(&sgref) {
+            let mut cols: PgVec<'_, Node<'mcx>> = PgVec::new_in(mcx);
+            pull_window_input_vars(expr, &mut cols);
+            keep = !crate::grouping::group_input_holds(run, final_target, &cols)?;
+        }
+        if keep {
             let tle = Node::mk(
                 mcx,
                 types_nodes::primnodes::TargetEntry {

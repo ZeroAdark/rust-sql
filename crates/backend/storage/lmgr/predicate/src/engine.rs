@@ -570,18 +570,18 @@ pub fn PredicateLockShmemInit(max_prepared_xacts: i32) -> PgResult<()> {
     Ok(())
 }
 
-pub fn PredicateLockShmemSize(max_prepared_xacts: i32) -> Size {
+pub fn PredicateLockShmemSize(max_prepared_xacts: i32) -> PgResult<Size> {
     let mut max_table_size = NPREDICATELOCKTARGETENTS(max_prepared_xacts);
-    let mut size = hash_estimate_size(max_table_size, size_of::<PREDICATELOCKTARGET>());
+    let mut size = hash_estimate_size(max_table_size, size_of::<PREDICATELOCKTARGET>())?;
     max_table_size *= 2;
-    size += hash_estimate_size(max_table_size, size_of::<PREDICATELOCK>());
+    size += hash_estimate_size(max_table_size, size_of::<PREDICATELOCK>())?;
     size += size / 10;
 
     let mut max_table_size =
         (init_small::globals::MaxBackends() + max_prepared_xacts) as i64 * 10;
     size += PredXactListDataSize();
     size += max_table_size as usize * size_of::<SERIALIZABLEXACT>();
-    size += hash_estimate_size(max_table_size, size_of::<SERIALIZABLEXID>());
+    size += hash_estimate_size(max_table_size, size_of::<SERIALIZABLEXID>())?;
     max_table_size *= 5;
     size += RWConflictPoolHeaderDataSize();
     size += max_table_size as usize * RWConflictDataSize();
@@ -590,7 +590,7 @@ pub fn PredicateLockShmemSize(max_prepared_xacts: i32) -> Size {
     // (C also adds sizeof(SerialControlData); pgrust's serial control word is
     // an ordinary leaked allocation, not shmem-arena bytes.)
     size += slru::SimpleLruShmemSize(init_small::globals::serializable_buffers(), 0);
-    size
+    Ok(size)
 }
 
 /// Crash-cycle reset in place; sizes are PGC_POSTMASTER-stable.
@@ -3272,7 +3272,7 @@ pub fn GetPredicateLockStatusData() -> PgResult<Vec<PredicateLockStatusEntry>> {
     LWLockAcquire(SerializableXactHashLock(), LW_SHARED, procno)?;
 
     let els = dynahash::hash_get_num_entries(shared().lock_hash) as usize;
-    let mut entries = Vec::with_capacity(els);
+    let mut entries = ::mcx::std_vec_with_capacity("GetPredicateLockStatusData", els)?;
 
     let mut seqstat = HASH_SEQ_STATUS::new();
     hash_seq_init(&mut seqstat, shared().lock_hash)?;

@@ -189,8 +189,13 @@ fn install() {
         // AcquireRewriteLocks (rewriteHandler.c) as the deparser reaches it:
         // record every call and its (forExecute, forUpdatePushedDown) flags.
         rewrite_handler_seams::acquire_rewrite_locks::set(record_rewrite_locks);
-        relation_seams::relation_open::set(|_mcx, relid, lockmode| {
-            Err(types_error::PgError::error(format!("open {relid} lockmode {lockmode}")).into())
+        relation_seams::relation_open::set(|mcx, relid, lockmode| {
+            assert_eq!(lockmode, types_rel::AccessShareLock);
+            if relid != REL_OID {
+                return Err(PgError::error("canceling statement due to lock timeout")
+                    .with_sqlstate(types_error::ERRCODE_LOCK_NOT_AVAILABLE).into());
+            }
+            Ok(test_relation(mcx, relid))
         });
         relation_seams::try_relation_open::set(|_mcx, relid, lockmode| {
             Err(types_error::PgError::error(format!("open {relid} lockmode {lockmode}")).into())
@@ -720,8 +725,8 @@ fn viewdef_opens_view_with_access_share_lock() {
     let action = include_str!("fixtures/v1_action.txt");
     let node = readfuncs::stringToNode(mcx, action.trim_end()).unwrap();
     let q = node.as_list().unwrap().nth(0).as_query().unwrap();
-    let err = viewdef::make_viewdef(mcx, REL_OID, q, PRETTYFLAG_INDENT, 0).unwrap_err();
-    assert_eq!(err.message(), format!("open {REL_OID} lockmode {}", types_rel::AccessShareLock));
+    let err = viewdef::make_viewdef(mcx, REL_OID + 2, q, PRETTYFLAG_INDENT, 0).unwrap_err();
+    assert_eq!(err.message(), "canceling statement due to lock timeout");
 }
 
 // ruleutils.c:13171 get_relation_name: a vanished pg_class row (REPEATABLE
@@ -734,4 +739,105 @@ fn deparse_with_vanished_relation_is_catchable() {
     let err = deparse_expression_pretty(ctx.mcx(), node, REL_OID + 1, false, 0).unwrap_err();
     assert_eq!(err.message(), format!("cache lookup failed for relation {}", REL_OID + 1));
     assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+}
+
+fn test_relation(mcx: Mcx<'_>, oid: Oid) -> types_rel::Relation<'_> {
+    use mcx::PgVec;
+    use std::rc::Rc;
+    use types_core::{INVALID_PROC_NUMBER, RELPERSISTENCE_PERMANENT};
+    use types_rel::*;
+    let relname = name("orders");
+    let mut attrs = PgVec::new_in(mcx);
+    for colname in ["id", "qty"] {
+        attrs.push(types_tuple::FormData_pg_attribute {
+            attname: name(colname),
+            atttypid: INT4OID,
+            ..Default::default()
+        });
+    }
+    let data = RelationData {
+        rd_locator: Default::default(),
+        rd_smgr: Default::default(),
+        rd_id: oid,
+        rd_backend: INVALID_PROC_NUMBER,
+        rd_islocaltemp: false,
+        rd_isvalid: std::cell::Cell::new(true),
+        rd_createSubid: std::cell::Cell::new(0),
+        rd_newRelfilelocatorSubid: std::cell::Cell::new(0),
+        rd_firstRelfilelocatorSubid: std::cell::Cell::new(0),
+        rd_droppedSubid: std::cell::Cell::new(0),
+        rd_lockInfo: LockInfoData {
+            lockRelId: LockRelId {
+                relId: oid,
+                dbId: 5,
+            },
+        },
+        rd_rel: FormData_pg_class {
+            relname,
+            relnamespace: 2200,
+            reltype: 0,
+            relowner: 10,
+            relam: 2,
+            relfilenode: oid,
+            reltablespace: 0,
+            relpages: 0,
+            reltuples: -1.0,
+            relallvisible: 0,
+            reltoastrelid: 0,
+            relhasindex: false,
+            relisshared: false,
+            relpersistence: RELPERSISTENCE_PERMANENT,
+            relkind: RELKIND_RELATION,
+            relhassubclass: false,
+            relrowsecurity: false,
+            relispopulated: true,
+            relreplident: REPLICA_IDENTITY_DEFAULT,
+            relispartition: false,
+            relfrozenxid: 3,
+            relminmxid: 1,
+        },
+        rd_att: Rc::new(types_tuple::TupleDescData {
+            natts: attrs.len() as i32,
+            tdtypeid: 0,
+            tdtypmod: -1,
+            tdrefcount: 1,
+            constr: None,
+            compact_attrs: PgVec::new_in(mcx),
+            attrs,
+        }),
+        rd_index: None,
+        rd_opcintype: PgVec::new_in(mcx),
+        rd_opfamily: PgVec::new_in(mcx),
+        rd_indoption: PgVec::new_in(mcx),
+        rd_indcollation: PgVec::new_in(mcx),
+        rd_options: None,
+        pgstat_enabled: std::cell::Cell::new(false),
+        pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
+        rd_amcache: Default::default(),
+        rd_amcache_hash: Default::default(),
+        rd_amcache_gin: Default::default(),
+        rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
+        rd_support: PgVec::new_in(mcx),
+        rd_supportinfo: Default::default(),
+        rd_opcoptions: Default::default(),
+        rd_indexlist: Default::default(),
+        rd_trigdesc: Default::default(),
+        rd_hastriggers: false,
+        rd_hasrules: false,
+    };
+    Relation::open(data, Some(|_, lockmode| {
+        assert_eq!(lockmode, types_rel::AccessShareLock);
+        Ok(())
+    }))
+}
+
+#[test]
+fn deparse_context_propagates_relation_lock_timeout() {
+    install();
+    let ctx = MemoryContext::new("ruleutils relation lock");
+    let err = query::deparse_context_for(ctx.mcx(), "locked", REL_OID + 2)
+        .err().expect("relation lock must be acquired");
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_LOCK_NOT_AVAILABLE);
+    assert_eq!(err.message(), "canceling statement due to lock timeout");
 }

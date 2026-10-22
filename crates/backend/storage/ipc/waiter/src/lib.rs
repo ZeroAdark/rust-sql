@@ -20,7 +20,7 @@
 //!     NOT a correctness crutch): the park returns `ParkResult::Recheck` and
 //!     the caller re-tests its predicate, so even an injected lost wake
 //!     costs one cadence period. Timed parks sleep min(timeout, cadence) per
-//!     lap (regression: a minutes-class caller timeout — the checkpointer
+//!     lap (GL-RECWAKE-1: a minutes-class caller timeout — the checkpointer
 //!     main lap — is no lost-wake backstop; recovery boot and shutdown both
 //!     wedged on it). `sleep` alone is exempt: time is its own predicate.
 //!   * fd-park (`begin_fd_park` / `end_fd_park`) — for waits that must block
@@ -143,10 +143,28 @@ enum Mode {
 pub struct SlotInner {
     token: u32,
     mode: Mode,
-    /// Wake self-pipe (read, write) ends; -1 = not created. Owned by the
-    /// slot, closed on retire.
-    wake_rfd: i32,
-    wake_wfd: i32,
+    /// Wake self-pipe (read, write) ends, each stored as fd + 1 (0 = not created: `wake_rfd()` / `wake_wfd()` read -1), so a
+    /// fresh slot is all zero and the global slab lands in .bss (D4511). Owned by the slot, closed on retire.
+    wake_rfd1: i32,
+    wake_wfd1: i32,
+}
+
+impl SlotInner {
+    /// The wake pipe's read end; -1 = not created.
+    fn wake_rfd(&self) -> i32 {
+        self.wake_rfd1.wrapping_sub(1)
+    }
+
+    /// The wake pipe's write end; -1 = not created.
+    fn wake_wfd(&self) -> i32 {
+        self.wake_wfd1.wrapping_sub(1)
+    }
+
+    /// Set both ends (-1 = none).
+    fn set_wake_fds(&mut self, rfd: i32, wfd: i32) {
+        self.wake_rfd1 = rfd.wrapping_add(1);
+        self.wake_wfd1 = wfd.wrapping_add(1);
+    }
 }
 
 /// One waiter's parking state. Production code reaches slots through the
@@ -159,7 +177,8 @@ pub struct Slot {
     // (`unpark_token_from_signal`): `token` and `wake_wfd` as last written
     // under the mutex, plus the flag a lock-free wake leaves for the owner.
     token_mirror: sync::atomic::AtomicU32,
-    wake_wfd_mirror: sync::atomic::AtomicI32,
+    /// `wake_wfd` + 1 (0 = none), as `SlotInner` stores it: `wake_wfd_mirror()` reads -1 for none.
+    wake_wfd_mirror1: sync::atomic::AtomicI32,
     signal_wake: sync::atomic::AtomicBool,
 }
 
@@ -170,12 +189,12 @@ impl Slot {
             inner: sync::Mutex::new(SlotInner {
                 token: 0,
                 mode: Mode::Free,
-                wake_rfd: -1,
-                wake_wfd: -1,
+                wake_rfd1: 0,
+                wake_wfd1: 0,
             }),
             cv: sync::Condvar::new(),
             token_mirror: sync::atomic::AtomicU32::new(0),
-            wake_wfd_mirror: sync::atomic::AtomicI32::new(-1),
+            wake_wfd_mirror1: sync::atomic::AtomicI32::new(0),
             signal_wake: sync::atomic::AtomicBool::new(false),
         }
     }
@@ -187,14 +206,23 @@ impl Slot {
             inner: sync::Mutex::new(SlotInner {
                 token: 0,
                 mode: Mode::Free,
-                wake_rfd: -1,
-                wake_wfd: -1,
+                wake_rfd1: 0,
+                wake_wfd1: 0,
             }),
             cv: sync::Condvar::new(),
             token_mirror: sync::atomic::AtomicU32::new(0),
-            wake_wfd_mirror: sync::atomic::AtomicI32::new(-1),
+            wake_wfd_mirror1: sync::atomic::AtomicI32::new(0),
             signal_wake: sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// The published wake write end for the lock-free signal route; -1 = none.
+    fn wake_wfd_mirror(&self) -> i32 {
+        self.wake_wfd_mirror1.load(SeqCst).wrapping_sub(1)
+    }
+
+    fn set_wake_wfd_mirror(&self, wfd: i32) {
+        self.wake_wfd_mirror1.store(wfd.wrapping_add(1), SeqCst);
     }
 
     fn lock(&self) -> MutexGuard<'_, SlotInner> {
@@ -214,6 +242,25 @@ impl Slot {
     #[cfg(loom)]
     pub fn wait_for_model<'a>(&self, guard: MutexGuard<'a, SlotInner>) -> MutexGuard<'a, SlotInner> {
         self.cv.wait(guard).unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The token of the incarnation the CALLING thread owns, read without the slot mutex (D4484: `current_handle`
+    /// runs at every wait; the lock was a mutex round trip per client read).
+    ///
+    /// MEMORY ORDERING. `token` changes only in `retire_token` and `reissue_token`, each under the slot mutex and
+    /// each followed by `token_mirror.store(token, SeqCst)` before the guard drops. `issue_token` keeps the token, and
+    /// the constructors start both at 0, so `token_mirror` always holds the last token written. The writers are the
+    /// owner thread (`reissue_token`, the pooled-thread reuse boundary; `retire_token` from the owner's WaiterGuard)
+    /// or a thread that hands the slot on: a retire, then the slot index through SLOT_FREE's mutex, then the next
+    /// owner's `issue_token` under the slot mutex. The owner's own writes are sequenced before its read (coherence).
+    /// The previous owner's retire happens-before the new owner's first read through those two mutexes. So this
+    /// Acquire load returns exactly what the locked read returned, never an older token. A stale token would make
+    /// every unpark of the published handle Stale: a lost latch wake (cancel, timeout, terminate) until the 1 s
+    /// recheck. It cannot occur for an owner. The lock added no ordering the latch relies on: it published no
+    /// write (a read-only critical section), and the Dekker pair (`waker` store, `maybe_sleeping` SeqCst,
+    /// `is_set` recheck) is unchanged. Unparkers still validate the token under the mutex (`unpark_locked`).
+    pub fn owner_token(&self) -> u32 {
+        self.token_mirror.load(sync::atomic::Ordering::Acquire)
     }
 
     // -- slot core: the protocol the loom models verify ---------------------
@@ -237,12 +284,11 @@ impl Slot {
         self.token_mirror.store(g.token, SeqCst);
         // Unpublish the write end BEFORE the guard drops and the owner closes
         // it: a signal-route write racing the close targets -1 (a no-op).
-        self.wake_wfd_mirror.store(-1, SeqCst);
+        self.set_wake_wfd_mirror(-1);
         self.signal_wake.store(false, SeqCst);
-        (
-            std::mem::replace(&mut g.wake_rfd, -1),
-            std::mem::replace(&mut g.wake_wfd, -1),
-        )
+        let fds = (g.wake_rfd(), g.wake_wfd());
+        g.set_wake_fds(-1, -1);
+        fds
     }
 
     /// Reissue in place (pooled-thread reuse boundary): outstanding handles
@@ -292,7 +338,7 @@ impl Slot {
             return self.unpark_locked(g, token);
         }
         self.signal_wake.store(true, SeqCst);
-        let wfd = self.wake_wfd_mirror.load(SeqCst);
+        let wfd = self.wake_wfd_mirror();
         if wfd >= 0 {
             send_wake_byte(wfd);
         }
@@ -319,7 +365,7 @@ impl Slot {
             }
             Mode::ParkedFd => {
                 g.mode = Mode::Notified;
-                let wfd = g.wake_wfd;
+                let wfd = g.wake_wfd();
                 // Write the wake byte while STILL holding the slot mutex so the
                 // liveness/ownership check above and this fd use are atomic
                 // w.r.t. thread-exit close+recycle: `retire_token` (which takes
@@ -345,7 +391,7 @@ impl Slot {
     /// TimedOut); `cadence_ms` = the lost-wake recheck backstop (returns
     /// Recheck). Both None = park until a real unpark.
     ///
-    /// The cadence bounds TIMED parks too (regression): a dropped
+    /// The cadence bounds TIMED parks too (GL-RECWAKE-1): a dropped
     /// cross-thread unpark leaves the caller's predicate flagged but this
     /// slot un-notified, and a caller deadline of minutes-class (checkpointer
     /// main lap = checkpoint_timeout) is no backstop inside a 90s boot window
@@ -435,9 +481,68 @@ mod global {
     static SLOTS: [Slot; WAITER_CAP] = [const { Slot::new() }; WAITER_CAP];
     static SLOT_FREE: sync::Mutex<Vec<usize>> = sync::Mutex::new(Vec::new());
     static SLOT_NEXT: sync::Mutex<usize> = sync::Mutex::new(0);
+    // Extension slab (WaiterSlabInit, the LocalLatchSlabInit pattern): a
+    // leaked boot allocation published once — len stored first, ptr
+    // Release-stored last; readers Acquire the ptr. Slots at or above
+    // WAITER_CAP index into it.
+    static SLOT_EXT: sync::atomic::AtomicPtr<Slot> =
+        sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+    static SLOT_EXT_LEN: sync::atomic::AtomicUsize = sync::atomic::AtomicUsize::new(0);
+    static SLOT_EXT_INIT: sync::Mutex<()> = sync::Mutex::new(());
+
+    /// Size the waiter slab for `owners` concurrent waiters beyond the boot
+    /// slab: C's latch wait infrastructure is per-process (latch.c
+    /// InitializeLatchWaitSet), one per live postmaster child plus the
+    /// postmaster, with no cluster-wide cap short of MAX_BACKENDS, so the
+    /// thread model provisions that many at shared-memory init. A repeat
+    /// call keeps the first slab.
+    #[allow(non_snake_case)]
+    pub fn WaiterSlabInit(owners: usize) {
+        assert!(owners > 0, "WaiterSlabInit: owner count not initialized");
+        let _init = SLOT_EXT_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        if !SLOT_EXT.load(Ordering::Acquire).is_null() {
+            return;
+        }
+        let slab: &'static mut [Slot] = (0..owners)
+            .map(|_| Slot::new())
+            .collect::<Vec<_>>()
+            .leak();
+        SLOT_EXT_LEN.store(slab.len(), Ordering::Relaxed);
+        SLOT_EXT.store(slab.as_mut_ptr(), Ordering::Release);
+    }
+
+    // (ptr, len) of the extension slab; (null, 0) before WaiterSlabInit.
+    #[inline]
+    fn slot_ext() -> (*mut Slot, usize) {
+        let ptr = SLOT_EXT.load(Ordering::Acquire);
+        if ptr.is_null() {
+            (ptr, 0)
+        } else {
+            (ptr, SLOT_EXT_LEN.load(Ordering::Relaxed))
+        }
+    }
+
+    /// Slots addressable right now: boot slab plus the configured extension.
+    #[inline]
+    pub(super) fn slot_cap() -> usize {
+        WAITER_CAP + slot_ext().1
+    }
 
     fn slot(idx: usize) -> &'static Slot {
-        &SLOTS[idx]
+        if idx < WAITER_CAP {
+            return &SLOTS[idx];
+        }
+        let (ext, ext_len) = slot_ext();
+        let ext_idx = idx - WAITER_CAP;
+        assert!(
+            ext_idx < ext_len,
+            "waiter slot {idx} beyond the slab ({WAITER_CAP} boot + {ext_len} configured)"
+        );
+        // SAFETY: a leaked `ext_len`-element slab, never freed or moved; the
+        // Acquire load of the ptr pairs with WaiterSlabInit's Release store,
+        // which follows the len store and the writes that initialized every
+        // element.
+        unsafe { &*ext.add(ext_idx) }
     }
 
     struct WaiterGuard {
@@ -471,7 +576,7 @@ mod global {
     // (every postmaster child, dead-end connections included) is set by
     // network peers, so exhaustion must be a refusable condition at
     // InitPostmasterChild, not an assert on the child thread.
-    fn try_allocate_slot() -> Option<usize> {
+    pub(super) fn try_allocate_slot() -> Option<usize> {
         let recycled = SLOT_FREE
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -481,7 +586,7 @@ mod global {
             None => {
                 let mut next = SLOT_NEXT.lock().unwrap_or_else(|e| e.into_inner());
                 let idx = *next;
-                if idx >= WAITER_CAP {
+                if idx >= slot_cap() {
                     return None;
                 }
                 *next += 1;
@@ -494,6 +599,23 @@ mod global {
 
     fn allocate_slot() -> usize {
         try_allocate_slot().expect("waiter slot slab exhausted")
+    }
+
+    /// Return a slot taken with `try_allocate_slot` outside the thread-owned
+    /// path (test scaffolding: no WaiterGuard owns it).
+    #[cfg(test)]
+    pub(super) fn release_slot_for_test(idx: usize) {
+        let (rfd, wfd) = slot(idx).retire_token();
+        for fd in [rfd, wfd] {
+            if fd >= 0 {
+                // SAFETY: closing pipe fds this slot owned.
+                unsafe { libc::close(fd) };
+            }
+        }
+        SLOT_FREE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(idx);
     }
 
     /// This thread's waiter slot, created on first use.
@@ -522,7 +644,8 @@ mod global {
     /// re-check that precedes the park — the Dekker discipline of the latch.
     pub fn current_handle() -> WakerHandle {
         let idx = current_slot();
-        let token = slot(idx).lock().token;
+        // D4484: the owner's token without the slot mutex (`Slot::owner_token`'s ordering argument)
+        let token = slot(idx).owner_token();
         WakerHandle::new(idx, token)
     }
 
@@ -586,7 +709,7 @@ mod global {
     /// allocation-free.
     pub fn unpark(handle: WakerHandle) -> Unparked {
         let (idx, token) = handle.unpack();
-        if idx >= WAITER_CAP {
+        if idx >= slot_cap() {
             return Unparked::Stale;
         }
         if inject_drop_wake(idx) {
@@ -613,7 +736,7 @@ mod global {
             return Unparked::Stale;
         };
         let (idx, token) = h.unpack();
-        if idx >= WAITER_CAP {
+        if idx >= slot_cap() {
             return Unparked::Stale;
         }
         slot(idx).unpark_token_from_signal(token)
@@ -624,6 +747,45 @@ mod global {
     #[cfg(test)]
     pub(super) fn lock_current_slot_for_test() -> MutexGuard<'static, SlotInner> {
         slot(current_slot()).lock()
+    }
+
+    #[cfg(test)]
+    mod slab_tests {
+        use super::*;
+
+        /// D4511: the boot slab lies in .bss (an anonymous writable mapping: no file bytes), as every fresh slot is
+        /// all zero. Born red on trunk: the -1 wake fds of each slot kept the 320 KiB slab in .data.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn the_boot_slab_is_in_bss() {
+            let last = core::ptr::addr_of!(SLOTS[WAITER_CAP - 1]) as usize + core::mem::size_of::<Slot>() - 1;
+            let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+            let line = maps
+                .lines()
+                .find(|l| {
+                    let (a, z) = l.split(' ').next().unwrap().split_once('-').unwrap();
+                    (usize::from_str_radix(a, 16).unwrap()..usize::from_str_radix(z, 16).unwrap()).contains(&last)
+                })
+                .unwrap_or_else(|| panic!("no mapping holds {last:#x}"));
+            let f: Vec<&str> = line.split_whitespace().collect();
+            assert!(f[1].starts_with("rw") && (f.len() == 5 || f[5] == "[heap]"), "the waiter slab is mapped from the binary (.data), not .bss: {line}");
+        }
+
+        /// D4511: a slot no thread ever took reads "no wake pipe" (-1) on every route, and the fd + 1 codec keeps fd 0.
+        #[test]
+        fn a_fresh_slot_reads_no_wake_fds() {
+            let s = &SLOTS[WAITER_CAP - 1];
+            assert_eq!(s.wake_wfd_mirror(), -1);
+            {
+                let g = s.lock();
+                assert_eq!((g.wake_rfd(), g.wake_wfd()), (-1, -1));
+            }
+            let mut i = SlotInner { token: 0, mode: Mode::Free, wake_rfd1: 0, wake_wfd1: 0 };
+            for (r, w) in [(0, 1), (7, 8), (i32::MAX - 1, 3), (-1, -1)] {
+                i.set_wake_fds(r, w);
+                assert_eq!((i.wake_rfd(), i.wake_wfd()), (r, w));
+            }
+        }
     }
 
     // -- park -----------------------------------------------------------------
@@ -638,7 +800,7 @@ mod global {
     }
 
     /// Park until unparked or `timeout` elapses. The sleep is additionally
-    /// bounded by the recheck cadence (regression): when the cadence is
+    /// bounded by the recheck cadence (GL-RECWAKE-1): when the cadence is
     /// shorter than the remaining timeout the park returns `Recheck` and the
     /// caller re-tests its predicate — a lost wake costs one cadence period,
     /// never the full caller timeout (the recovery-boot wedge shape: a
@@ -691,8 +853,8 @@ mod global {
         let idx = try_current_slot().ok_or(libc::EAGAIN)?;
         let s = slot(idx);
         let mut g = s.lock();
-        if g.wake_rfd >= 0 {
-            return Ok(g.wake_rfd);
+        if g.wake_rfd() >= 0 {
+            return Ok(g.wake_rfd());
         }
         let mut pipefd = [0i32; 2];
         // SAFETY: pipe(2) into a 2-slot array.
@@ -715,16 +877,15 @@ mod global {
                 }
             }
         }
-        g.wake_rfd = pipefd[0];
-        g.wake_wfd = pipefd[1];
-        s.wake_wfd_mirror.store(pipefd[1], SeqCst);
+        g.set_wake_fds(pipefd[0], pipefd[1]);
+        s.set_wake_wfd_mirror(pipefd[1]);
         Ok(pipefd[0])
     }
 
     /// This thread's wake-pipe read fd (must exist).
     pub fn wake_read_fd() -> i32 {
         let idx = current_slot();
-        let fd = slot(idx).lock().wake_rfd;
+        let fd = slot(idx).lock().wake_rfd();
         assert!(fd >= 0, "waiter wake pipe not created (ensure_wake_pipe)");
         fd
     }
@@ -739,7 +900,7 @@ mod global {
         // wasm32: no wake pipe can exist (no pipe(2)); "parked" is pure mode
         // bookkeeping — the wasm wait backend blocks on time alone.
         #[cfg(not(target_family = "wasm"))]
-        debug_assert!(g.wake_wfd >= 0, "fd-park without a wake pipe");
+        debug_assert!(g.wake_wfd() >= 0, "fd-park without a wake pipe");
         match g.mode {
             Mode::Notified => {
                 g.mode = Mode::Idle;
@@ -808,7 +969,7 @@ mod global {
             return "MISSING".into();
         };
         let (idx, token) = h.unpack();
-        if idx >= WAITER_CAP {
+        if idx >= slot_cap() {
             return format!("INVALID(slot:{idx})");
         }
         let g = slot(idx).lock();
@@ -830,7 +991,7 @@ mod global {
 pub use global::{
     begin_fd_park, current_handle, describe_word, drain_wake_fd, end_fd_park, ensure_wake_pipe,
     now_ms, park, park_timeout, recheck_cadence_ms, reissue_current_token, sleep, unpark,
-    unpark_word, unpark_word_from_signal, wake_read_fd,
+    unpark_word, unpark_word_from_signal, wake_read_fd, WaiterSlabInit,
 };
 
 // ===========================================================================
@@ -906,7 +1067,8 @@ mod model_global {
     /// re-check that precedes the park (the Dekker discipline of the latch).
     pub fn current_handle() -> WakerHandle {
         let idx = current_slot();
-        let token = SLOTS[idx].lock().token;
+        // D4484: as `global::current_handle`, so the models check the lock-free read too
+        let token = SLOTS[idx].owner_token();
         WakerHandle::new(idx, token)
     }
 

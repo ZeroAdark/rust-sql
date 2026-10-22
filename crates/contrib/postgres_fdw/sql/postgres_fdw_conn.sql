@@ -399,3 +399,141 @@ SELECT id FROM ft6 ORDER BY id;
 ALTER SERVER loopback OPTIONS (DROP keep_connections);
 ALTER FOREIGN DATA WRAPPER postgres_fdw VALIDATOR postgres_fdw_validator;
 SELECT id FROM ft6 ORDER BY id;
+
+-- ===================================================================
+-- COPY into a foreign table (copyfrom.c:927-941 BeginForeignInsert,
+-- 1404-1420 ExecForeignInsert, 1493-1496 EndForeignInsert): rows reach
+-- the remote one at a time; FREEZE is refused; a remote constraint error
+-- carries COPY's line context; a BEFORE ROW trigger can drop a row.
+-- ===================================================================
+CREATE TABLE "S 1"."T 8" (a int, b text, CONSTRAINT t8_pos CHECK (a > 0));
+CREATE FOREIGN TABLE ft8 (a int, b text)
+  SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 8');
+COPY ft8 FROM STDIN;
+1	one
+2	two
+3	\N
+\.
+SELECT a, b FROM "S 1"."T 8" ORDER BY a;
+COPY ft8 (b, a) FROM STDIN WITH (FORMAT csv);
+"four",4
+\.
+SELECT a, b FROM "S 1"."T 8" ORDER BY a;
+COPY ft8 FROM STDIN WITH (FREEZE);
+5	five
+\.
+COPY ft8 FROM STDIN;
+6	six
+-7	minus seven
+\.
+SELECT a, b FROM "S 1"."T 8" ORDER BY a;
+CREATE FUNCTION ft8_br() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN IF NEW.a % 2 = 0 THEN RETURN NULL; END IF; NEW.b := NEW.b || '!'; RETURN NEW; END $$;
+CREATE TRIGGER ft8_br BEFORE INSERT ON ft8 FOR EACH ROW EXECUTE FUNCTION ft8_br();
+COPY ft8 FROM STDIN;
+8	eight
+9	nine
+\.
+SELECT a, b FROM "S 1"."T 8" ORDER BY a;
+DROP TRIGGER ft8_br ON ft8;
+COPY ft8 FROM STDIN WHERE a > 10;
+10	ten
+11	eleven
+\.
+SELECT a, b FROM "S 1"."T 8" ORDER BY a;
+
+-- ===================================================================
+-- COPY routed to a foreign partition (execPartition.c:1032-1034
+-- BeginForeignInsert on the leaf, copyfrom.c:1408-1420 ExecForeignInsert,
+-- execPartition.c:1267-1272 EndForeignInsert): routed rows reach the
+-- remote; AFTER ROW triggers on the foreign leaf see them.
+-- ===================================================================
+CREATE TABLE "S 1"."T 9" (a int, b text);
+CREATE TABLE pt9 (a int, b text) PARTITION BY LIST (a);
+CREATE TABLE pt9_local PARTITION OF pt9 FOR VALUES IN (1, 2);
+CREATE FOREIGN TABLE pt9_remote PARTITION OF pt9 FOR VALUES IN (6, 7)
+  SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 9');
+COPY pt9 FROM STDIN;
+1	local one
+6	remote six
+7	remote seven
+2	local two
+\.
+SELECT a, b FROM "S 1"."T 9" ORDER BY a;
+SELECT tableoid::regclass, a, b FROM pt9 ORDER BY a;
+CREATE FUNCTION pt9_ar() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN RAISE NOTICE 'after row % on %', NEW.a, TG_TABLE_NAME; RETURN NULL; END $$;
+CREATE TRIGGER pt9_ar AFTER INSERT ON pt9_remote FOR EACH ROW EXECUTE FUNCTION pt9_ar();
+COPY pt9 FROM STDIN;
+6	remote again
+1	local again
+\.
+SELECT a, b FROM "S 1"."T 9" ORDER BY a;
+COPY pt9 FROM STDIN;
+8	nowhere
+\.
+SELECT count(*) FROM pt9;
+
+-- ===================================================================
+-- batch_size on a routed foreign partition (execPartition.c:1047 and
+-- copyfrom.c:951 GetForeignModifyBatchSize): INSERT and COPY rows reach
+-- the remote in batches, which stay pending across rows routed elsewhere
+-- (nodeModifyTable.c:1010-1018) and flush before a BR trigger fires
+-- (nodeModifyTable.c:907-909); a remote statement trigger counts them.
+-- ===================================================================
+CREATE TABLE "S 1"."T 10" (a int, b text);
+CREATE TABLE "S 1"."T 10 log" (id serial, n int);
+CREATE FUNCTION t10_stmt() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN INSERT INTO "S 1"."T 10 log" (n) SELECT count(*) FROM new_rows; RETURN NULL; END $$;
+CREATE TRIGGER t10_stmt AFTER INSERT ON "S 1"."T 10" REFERENCING NEW TABLE AS new_rows
+  FOR EACH STATEMENT EXECUTE FUNCTION t10_stmt();
+CREATE TABLE pt10 (a int, b text) PARTITION BY RANGE (a);
+CREATE TABLE pt10_local PARTITION OF pt10 FOR VALUES FROM (100) TO (200);
+CREATE FOREIGN TABLE pt10_remote PARTITION OF pt10 FOR VALUES FROM (0) TO (100)
+  SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 10', batch_size '3');
+INSERT INTO pt10 SELECT i, 'r' || i FROM generate_series(1, 7) i;
+SELECT n FROM "S 1"."T 10 log" ORDER BY id;
+INSERT INTO pt10 VALUES (11, 'a'), (150, 'local'), (12, 'b'), (13, 'c'), (14, 'd');
+SELECT n FROM "S 1"."T 10 log" ORDER BY id;
+COPY pt10 FROM STDIN;
+21	copy
+150	local
+22	copy
+23	copy
+24	copy
+25	copy
+\.
+SELECT n FROM "S 1"."T 10 log" ORDER BY id;
+COPY pt10_remote FROM STDIN;
+31	direct
+32	direct
+33	direct
+34	direct
+\.
+SELECT n FROM "S 1"."T 10 log" ORDER BY id;
+SELECT count(*), sum(a) FROM "S 1"."T 10";
+SELECT count(*) FROM pt10_local;
+-- A BR trigger on a sibling partition flushes the pending remote batch
+-- before it fires, so the trigger sees the rows through the foreign table.
+CREATE FUNCTION pt10_br() RETURNS trigger LANGUAGE plpgsql AS $$
+  DECLARE n int;
+  BEGIN SELECT count(*) INTO n FROM pt10_remote WHERE a > 40; RAISE NOTICE 'remote rows: %', n; RETURN NEW; END $$;
+CREATE TRIGGER pt10_br BEFORE INSERT ON pt10_local FOR EACH ROW EXECUTE FUNCTION pt10_br();
+INSERT INTO pt10 VALUES (41, 'x'), (42, 'y'), (160, 'local'), (43, 'z');
+SELECT n FROM "S 1"."T 10 log" ORDER BY id;
+-- Row triggers on the foreign partition itself disable batching.
+CREATE TRIGGER pt10_remote_ar AFTER INSERT ON pt10_remote FOR EACH ROW EXECUTE FUNCTION pt10_br();
+INSERT INTO pt10 VALUES (51, 'p'), (52, 'q');
+SELECT n FROM "S 1"."T 10 log" ORDER BY id;
+DROP TRIGGER pt10_remote_ar ON pt10_remote;
+DROP TRIGGER pt10_br ON pt10_local;
+
+-- ===================================================================
+-- postgresGetForeignJoinPaths (postgres_fdw.c:6423): an UPDATE needs a local
+-- join path for EPQ; when none exists the rejection is logged at DEBUG3
+-- before the planner's FULL JOIN error.
+-- ===================================================================
+SET client_min_messages = debug3;
+UPDATE "S 1"."T 1" SET c2 = 1 FROM ft3 FULL JOIN ft4 ON (ft3.id > ft4.id)
+  WHERE "C 1" = coalesce(ft3.a, length(ft4.v));
+RESET client_min_messages;

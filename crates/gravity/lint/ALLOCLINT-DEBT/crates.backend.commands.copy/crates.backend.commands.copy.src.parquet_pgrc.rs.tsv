@@ -1,0 +1,20 @@
+path	crates/backend/commands/copy/src/parquet_pgrc.rs
+growth	std::collections::BTreeMap::insert	1
+growth	std::vec::Vec::push	5
+ir-only	copy_cmd::from::copy_from_error_context	2
+ir-only	copy_cmd::fromparquet::<impl copy_cmd::from::CopyFromState>::copy_from_parquet_one_row	1
+ir-only	copy_cmd::fromparquet::ParquetPlan::make_batches	2
+ir-only	copy_cmd::fromparquet::images_lane	1
+ir-only	copy_cmd::fromparquet::raw_cell	1
+ir-only	copy_cmd::fromparquet::words_lane	2
+ir-only	copy_cmd::parquet_fast::<impl copy_cmd::parquet_pgrc::DecodeShared>::decode_fast	1
+macro	std::vec	1
+method	pgrc_format::try_vec	1
+method	std::boxed::Box::new	3
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	3
+method	std::string::ToString::to_string	1
+method	std::sync::Arc::new	3
+type	std::boxed::Box	3
+type	std::sync::Arc	6
+type	std::vec::Vec	3

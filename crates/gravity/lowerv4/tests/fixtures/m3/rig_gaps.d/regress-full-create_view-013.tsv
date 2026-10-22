@@ -1,0 +1,1 @@
+tt16v: a view whose output column is a type create_view.sql creates (the rig catalog has no pg_type row)

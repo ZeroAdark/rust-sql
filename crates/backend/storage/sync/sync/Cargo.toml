@@ -21,6 +21,7 @@ md = { path = "../../smgr/md" }
 clog = { path = "../../../access/transam/clog" }
 commit_ts = { path = "../../../access/transam/commit_ts" }
 multixact = { path = "../../../access/transam/multixact" }
+pgrc_wal = { path = "../../../access/pgrcolumnar/pgrc_wal" }
 fd = { path = "../../file/fd" }
 latch = { path = "../../ipc/latch" }
 sync_seams = { path = "../sync_seams" }

@@ -403,6 +403,9 @@ fn fc_wrappers_dispatch() {
     assert_eq!(larger.as_usize(), b.as_bytes().as_ptr() as usize);
 
     let mut flinfo = types_fmgr::FmgrInfo::unresolved();
+    let out_cx = ::mcx::MemoryContext::new_bump("out test");
+    // SAFETY: out_cx outlives every call through this frame.
+    unsafe { fcinfo.set_result_mcx(out_cx.mcx()) };
     let out = crate::builtins::fc_textout(Some(&mut flinfo), &mut fcinfo).unwrap();
     let cstr = unsafe { core::ffi::CStr::from_ptr(out.as_usize() as *const _) };
     assert_eq!(cstr.to_bytes(), b"aa");
@@ -750,6 +753,9 @@ mod fc_results {
 
     #[test]
     fn overlay_wrappers() {
+        // The overlay reads slices (detoast) and asks the database encoding (mb): install both here, never rely on a sibling.
+        super::install_mb_for_levenshtein();
+        super::install_detoast_seams();
         let ctx = MemoryContext::new_bump("t");
         let t1 = text_image(b"Txxxxas");
         let t2 = text_image(b"hom");
@@ -1764,6 +1770,8 @@ mod interrupts {
     #[test]
     fn text_to_array_answers_pending_cancel_in_both_split_loops() {
         install();
+        // The result array's element type is text: install its pg_type shape here, never rely on a sibling.
+        super::install_text_type_shape();
         let ctx = MemoryContext::new_bump("t");
         let input = text_image(b"a,b,c");
         let sep = text_image(b",");
@@ -1859,7 +1867,7 @@ fn hex_decode_soft_error_without_details_skips_mblen() {
     assert!(esc.error_occurred());
 }
 
-// regression: varlena.c:4485 pallocs (len + 1) * sizeof(pg_wchar)
+// fp-adt-varlena-p2#2: varlena.c:4485 pallocs (len + 1) * sizeof(pg_wchar)
 // before the engine runs, so a 268435455-byte source is an XX000 alloc error
 // on every engine path.
 #[test]
@@ -1870,7 +1878,7 @@ fn replace_text_regexp_wchar_buffer_is_alloc_bounded() {
     assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
 }
 
-// regression: format('%I', ...) quotes through quote_identifier,
+// fp-adt-varlena-p3#2: format('%I', ...) quotes through quote_identifier,
 // whose palloc(strlen + nquotes + 3) (ruleutils.c:13121) is the XX000 bound
 // on the quoted result, ahead of any StringInfo 54000.
 #[test]
@@ -1881,7 +1889,7 @@ fn format_identifier_is_alloc_bounded() {
     assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
 }
 
-// audit-18.6 regression: textToQualifiedNameList runs over
+// audit-18.6 fp-contrib-pgrowlocks-b1#1: textToQualifiedNameList runs over
 // text_to_cstring's buffer, so SplitIdentifierString never sees bytes past
 // the first NUL (varlena.c:3626).
 #[test]
@@ -1894,4 +1902,50 @@ fn text_to_qualified_name_list_stops_at_nul() {
     assert_eq!(names, [b"s".to_vec(), b"t".to_vec()]);
     let err = textToQualifiedNameList(cx.mcx(), b"\0a").unwrap_err();
     assert_eq!(err.sqlstate, types_error::ERRCODE_INVALID_NAME);
+}
+
+#[test]
+fn unicode_is_normalized_reserves_c_terminator() {
+    install_mb_for_levenshtein();
+    mbutils::SetDatabaseEncoding(wchar::PG_UTF8).unwrap();
+    let ctx = MemoryContext::new("t");
+    let input = std::vec![b'a'; 268_435_455];
+    let err = crate::unicode::unicode_is_normalized(ctx.mcx(), &input, b"NFC").unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+}
+
+#[test]
+fn octet_length_reads_the_raw_size_without_detoasting() {
+    let mut img = std::vec::Vec::new();
+    img.extend_from_slice(&((12u32 << 2) | 0x02).to_ne_bytes());
+    img.extend_from_slice(&5000u32.to_ne_bytes());
+    img.extend_from_slice(&[0u8; 4]);
+    assert_eq!(crate::builtins::raw_octet_length(&img), 5000);
+    assert_eq!(crate::builtins::raw_octet_length(&[(3 << 1) | 1, b'a', b'b']), 2);
+}
+
+#[test]
+fn equality_on_a_compressed_arg_decides_by_raw_size_without_detoasting() {
+    use datum::Datum;
+    use types_fmgr::LocalFcinfo;
+
+    let mut words = [0u64; 2];
+    let img: &mut [u8] = unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr().cast(), 16) };
+    img[..4].copy_from_slice(&((12u32 << 2) | 0x02).to_ne_bytes());
+    img[4..8].copy_from_slice(&5000u32.to_ne_bytes());
+    let short = [(3u8 << 1) | 1, b'a', b'b'];
+
+    for (a, b) in [(img.as_ptr(), short.as_ptr()), (short.as_ptr(), img.as_ptr())] {
+        let mut fcinfo = LocalFcinfo::<2>::new(C);
+        fcinfo.set_arg(0, Datum::from_usize(a as usize));
+        fcinfo.set_arg(1, Datum::from_usize(b as usize));
+        assert!(!crate::builtins::fc_texteq(None, &mut fcinfo).unwrap().as_bool());
+        assert!(crate::builtins::fc_textne(None, &mut fcinfo).unwrap().as_bool());
+        assert!(!crate::builtins::fc_byteaeq(None, &mut fcinfo).unwrap().as_bool());
+        assert!(crate::builtins::fc_byteane(None, &mut fcinfo).unwrap().as_bool());
+    }
+    let mut fcinfo = LocalFcinfo::<2>::new(C);
+    fcinfo.set_arg(0, Datum::from_usize(short.as_ptr() as usize));
+    fcinfo.set_arg(1, Datum::from_usize(img.as_ptr() as usize));
+    assert!(!crate::builtins::fc_text_starts_with(None, &mut fcinfo).unwrap().as_bool());
 }

@@ -1,0 +1,5 @@
+path	crates/gravity/lowerv4/src/frame/mechs.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	3
+method	std::vec::Vec::with_capacity	2
+type	std::vec::Vec	2

@@ -748,7 +748,7 @@ fn _hash_splitbucket(
     // itups carry (start,len) into copy storage: C pallocs CopyIndexTuple per
     // moved tuple; one retained buffer replaces the per-tuple allocs.
     let mut tup_storage: Vec<u8> = Vec::with_capacity(BLCKSZ);
-    let mut itups: Vec<(usize, usize)> = Vec::with_capacity(MaxIndexTuplesPerPage);
+    let mut itups: Vec<(usize, usize)> = ::mcx::std_vec_with_capacity("access", MaxIndexTuplesPerPage)?;
     let mut itup_offsets = [0 as OffsetNumber; MaxIndexTuplesPerPage];
     let mut all_tups_size = 0usize;
 

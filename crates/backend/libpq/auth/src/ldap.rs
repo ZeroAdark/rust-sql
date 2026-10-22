@@ -73,11 +73,21 @@ fn initialize_ldap_connection(port: &Port, hba: &HbaLine) -> PgResult<Result<Lda
         // the list to ldap_initialize, whose URL parser (libldap url.c) takes
         // a bracketed "[v6]" host and connects to the address inside; the
         // brackets are URL syntax, not part of the host name.
-        Some(s) if !s.is_empty() => s
-            .split(' ')
-            .filter(|h| !h.is_empty())
-            .map(|h| (ldap_uri_host(h).to_string(), hba.ldapport))
-            .collect(),
+        Some(s) if !s.is_empty() => {
+            if s.split(' ').any(|h| !h.starts_with('[') && h.contains(':')) {
+                ereport(LOG)
+                    .errmsg(format!(
+                        "could not initialize LDAP: {}",
+                        ldap_err2string(LDAP_PARAM_ERROR)
+                    ))
+                    .finish(loc(2332, "InitializeLDAPConnection"))?;
+                return Ok(Err(()));
+            }
+            s.split(' ')
+                .filter(|h| !h.is_empty())
+                .map(|h| (ldap_uri_host(h).to_string(), hba.ldapport))
+                .collect()
+        }
         _ => {
             // No hostnames: extract a domain name from the base DN and look
             // up DNS SRV records for _ldap._tcp.<domain> (auth.c:2263-2283).
@@ -141,7 +151,7 @@ fn initialize_ldap_connection(port: &Port, hba: &HbaLine) -> PgResult<Result<Lda
     Ok(Ok(conn))
 }
 
-pub(crate) fn CheckLDAPAuth(port: &mut Port) -> PgResult<i32> {
+pub(crate) fn CheckLDAPAuth(port: &Port) -> PgResult<i32> {
     let mut hba = port
         .hba
         .as_ref()

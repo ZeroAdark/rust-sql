@@ -349,25 +349,36 @@ mod tests {
         assert!(process_postgres_switches(&av(&[]), GucContext::PGC_BACKEND as u8).is_ok());
     }
 
+    /// the proc_exit stub unwinds the exit payload (D2933), as the real one does
+    fn assert_proc_exit_1(f: impl FnOnce()) {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+            .expect_err("expected proc_exit(1)");
+        let code = payload.downcast_ref::<ipc::ProcExitThread>().map(|e| e.code);
+        assert_eq!(code, Some(1), "expected proc_exit(1)");
+    }
+
     #[test]
-    #[should_panic(expected = "proc_exit(1)")]
     fn unknown_switch_is_fatal() {
         setup();
-        let _ = process_postgres_switches(&av(&["-Z"]), GucContext::PGC_BACKEND as u8);
+        assert_proc_exit_1(|| {
+            let _ = process_postgres_switches(&av(&["-Z"]), GucContext::PGC_BACKEND as u8);
+        });
     }
 
     #[test]
-    #[should_panic(expected = "proc_exit(1)")]
     fn multibyte_switch_is_fatal_not_a_panic() {
         setup();
-        let _ = process_postgres_switches(&av(&["-é"]), GucContext::PGC_BACKEND as u8);
+        assert_proc_exit_1(|| {
+            let _ = process_postgres_switches(&av(&["-é"]), GucContext::PGC_BACKEND as u8);
+        });
     }
 
     #[test]
-    #[should_panic(expected = "proc_exit(1)")]
     fn trailing_dbname_rejected_when_no_out_param() {
         setup();
-        let _ = process_postgres_switches(&av(&["mydb"]), GucContext::PGC_BACKEND as u8);
+        assert_proc_exit_1(|| {
+            let _ = process_postgres_switches(&av(&["mydb"]), GucContext::PGC_BACKEND as u8);
+        });
     }
 
     // postgres.c:3896 atoi(optarg): values past INT_MAX wrap through the
@@ -477,15 +488,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "proc_exit(1)")]
     fn second_argument_after_double_dash_dbname_is_fatal() {
         setup();
         let mut dbname = None;
-        let _ = process_postgres_switches_dbname(
-            &av(&["--", "mydb", "extra"]),
-            GucContext::PGC_POSTMASTER as u8,
-            &mut dbname,
-        );
+        // The harness's proc_exit stub unwinds the exit payload as the real
+        // proc_exit does (D2933), not a message.
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = process_postgres_switches_dbname(
+                &av(&["--", "mydb", "extra"]),
+                GucContext::PGC_POSTMASTER as u8,
+                &mut dbname,
+            );
+        }))
+        .expect_err("a second argument after -- exits");
+        let exit = payload.downcast_ref::<ipc::ProcExitThread>().expect("the proc_exit payload");
+        assert_eq!(exit.code, 1);
     }
 
     // glibc getopt permutes argv (postgres.c:3833 optstring has no leading

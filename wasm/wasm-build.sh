@@ -31,11 +31,22 @@ LEDGER="$ROOT/wasm/wasm-crate-ledger.md"
 # re2 is a build.rs probe; force the stub engine deterministically on wasm.
 export PGRUST_FORCE_NO_RE2=1
 # panic=unwind + Wasm EH codegen for every unit, including build-std units.
-# 64MiB shadow stack: dev-profile frames are huge and the boot harness pins
+# 64MiB shadow stack: dev-profile frames are huge and the shell harnesses pin
 # max_stack_depth=60000kB (matching the native e2e); the 1MiB link default
-# turns legitimate executor recursion into "stack depth limit exceeded".
-# Any PGRUST_WASM_RUSTFLAGS override MUST carry all three flags.
-export RUSTFLAGS="${PGRUST_WASM_RUSTFLAGS:--C panic=unwind -C target-feature=+exception-handling -C link-arg=-zstack-size=67108864}"
+# turns legitimate executor recursion into "stack depth limit exceeded". Since
+# D3103 the guard's ceiling is min(this shadow room, the host-declared engine
+# stack PGRUST_WASM_ENGINE_STACK / 0.6), and the JS hosts pin nothing: the
+# server derives max_stack_depth's default from the declared engine stack.
+# The Gravity JIT (lane wasmjit stage 2): a Gravity program's module imports
+# the server's memory, function table and shadow-stack pointer, and the host
+# installs its entries into new table slots, so the table and __stack_pointer
+# are exported and the table can grow (crates/gravity/backend/src/wasm.rs,
+# wasm/pgrust-wasi.js makeGravityHost; wasmtime gets wasm/gravity-jit-stub.wat).
+# simd128 is on: every engine the site serves has it (Chrome 91, Firefox 89,
+# Safari / iOS 16.4), and the page refuses an engine without it with a
+# too-old-browser message (backend.js) instead of a failed boot.
+# Any PGRUST_WASM_RUSTFLAGS override MUST carry all seven flags.
+export RUSTFLAGS="${PGRUST_WASM_RUSTFLAGS:--C panic=unwind -C target-feature=+exception-handling -C target-feature=+simd128 -C link-arg=-zstack-size=67108864 -C link-arg=--export-table -C link-arg=--growable-table -C link-arg=--export=__stack_pointer}"
 
 if ! rustup toolchain list | grep -q "^${TOOLCHAIN}"; then
     echo "wasm-build: installing pinned toolchain ${TOOLCHAIN}" >&2
@@ -55,6 +66,14 @@ EXCLUDED=$(awk -F'|' '/^\|/ {gsub(/[[:space:]]/,"",$2); if ($2 != "" && $2 != "c
 MEMBERS=$(cargo metadata --no-deps --format-version 1 \
     | python3 -c 'import json,sys
 for p in json.load(sys.stdin)["packages"]: print(p["name"])' | sort -u)
+
+# Where cargo puts a workspace's artifacts: CARGO_TARGET_DIR or a config's
+# build.target-dir when set, else <workspace>/target. The two outputs checked
+# below are looked up there, so a caller may share one target dir across runs.
+target_dir_of() {
+    (cd "$1" && cargo metadata --no-deps --format-version 1 \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+}
 
 # Ledger staleness: every excluded name must still be a workspace member.
 STALE=$(comm -23 <(echo "$EXCLUDED") <(echo "$MEMBERS") || true)
@@ -93,7 +112,7 @@ case "$PROFILE" in
 esac
 if [ "${PGRUST_WASM_SKIP_LINK:-0}" != "1" ]; then
     cargo +"${TOOLCHAIN}" build --target "$TARGET" -Zbuild-std=std,panic_unwind -p main_main --bin postgres --profile "$PROFILE"
-    BIN_WASM="$ROOT/target/${TARGET}/${PROFILE_DIR}/postgres.wasm"
+    BIN_WASM="$(target_dir_of "$ROOT")/${TARGET}/${PROFILE_DIR}/postgres.wasm"
     [ -f "$BIN_WASM" ] || { echo "wasm-build: FAIL — postgres.wasm not produced" >&2; exit 1; }
     echo "wasm-build: postgres.wasm linked ($(du -h "$BIN_WASM" | cut -f1), profile $PROFILE)"
 else
@@ -106,7 +125,7 @@ fi
     cd "$ROOT/wasm/wasm-unwind-smoke"
     cargo +"${TOOLCHAIN}" build --target "$TARGET" -Zbuild-std=std,panic_unwind --release
 )
-SMOKE_WASM="$ROOT/wasm/wasm-unwind-smoke/target/${TARGET}/release/wasm-unwind-smoke.wasm"
+SMOKE_WASM="$(target_dir_of "$ROOT/wasm/wasm-unwind-smoke")/${TARGET}/release/wasm-unwind-smoke.wasm"
 [ -f "$SMOKE_WASM" ] || { echo "wasm-build: FAIL — smoke wasm not produced" >&2; exit 1; }
 
 if [ "${PGRUST_WASM_RUN_SMOKE:-0}" = "1" ]; then

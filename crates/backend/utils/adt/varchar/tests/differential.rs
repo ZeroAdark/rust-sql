@@ -5,6 +5,7 @@
 
 use std::io::Write;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mcx::MemoryContext;
 use types_core::C_COLLATION_OID;
@@ -217,6 +218,42 @@ fn cstring_array_1d(elems: &[&[u8]]) -> Vec<u8> {
     v
 }
 
+/// The oracle's script file, removed on drop, so an early return or a
+/// panic takes it too.
+struct SqlFile(std::path::PathBuf);
+
+impl Drop for SqlFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn sql_file(sql: &str) -> Option<SqlFile> {
+    static N: AtomicUsize = AtomicUsize::new(0);
+    // pid-unique: a fixed name strands another user's file in sticky /tmp
+    // when an oracle-less run precedes the gated one (quote precedent).
+    let name = format!(
+        "pgrust_varchar_diff_{}_{}.sql",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    );
+    let file = SqlFile(std::env::temp_dir().join(name));
+    std::fs::File::create(&file.0)
+        .ok()?
+        .write_all(sql.as_bytes())
+        .ok()?;
+    Some(file)
+}
+
+#[test]
+fn oracle_script_leaves_nothing_behind() {
+    let file = sql_file("SELECT 1;\n").expect("write the oracle script");
+    let path = file.0.clone();
+    assert!(path.exists());
+    drop(file);
+    assert!(!path.exists(), "{} left behind", path.display());
+}
+
 fn pg_batch(sqls: &[String]) -> Option<Vec<String>> {
     let mut sql = String::new();
     sql.push_str(
@@ -238,16 +275,11 @@ fn pg_batch(sqls: &[String]) -> Option<Vec<String>> {
     }
     sql.push_str("\n) AS v(id, q) ORDER BY v.id;\n");
 
-    let dir = std::env::temp_dir();
-    // pid-unique: a fixed name strands another user's file in sticky /tmp
-    // when an oracle-less run precedes the gated one (quote precedent).
-    let path = dir.join(format!("pgrust_varchar_diff_{}.sql", std::process::id()));
-    std::fs::File::create(&path).ok()?.write_all(sql.as_bytes()).ok()?;
-
+    let file = sql_file(&sql)?;
     let out = Command::new("psql")
         .args(["-h", "/tmp", "-p", "5432", "-d", "postgres"])
         .args(["-tA", "-v", "ON_ERROR_STOP=1", "-f"])
-        .arg(&path)
+        .arg(&file.0)
         .output()
         .ok()?;
     if !out.status.success() {

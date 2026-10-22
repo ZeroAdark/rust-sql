@@ -1,0 +1,9 @@
+-- regress-full-create_function_sql-015
+-- INSERT INTO pt VALUES (1);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op688(c20:8816678312871386366, op528(fn317(fn1598()), c23:0)))
+  outs 1=w8:val
+mapped: Result

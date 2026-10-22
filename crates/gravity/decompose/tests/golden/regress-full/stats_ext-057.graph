@@ -1,0 +1,12 @@
+-- regress-full-stats_ext-057
+-- SELECT * FROM check_estimated_rows('SELECT * FROM functional_dependencies WHERE ((a * 2) = 2 OR (a * 2) = 4 OR (a * 2) = 102 OR (a * 2) = 104) AND (upper(b) = ''1'' OR upper(b) = ''2'')');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=34227 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Attr(3):byval8:w8:val Attr(4):byref8:vl:win/page Attr(5):byval8:w8:val Attr(6):byref8:vl:win/page Attr(7):byref8:vl:win/page Offset:byval2:w2:val
+  filter or(op98(fn871(v1.4), c25:'1'), op98(fn871(v1.4), c25:'2'))
+  filter or(op96(op514(v1.3, c23:2), c23:2), op96(op514(v1.3, c23:2), c23:4), op96(op514(v1.3, c23:2), c23:102), op96(op514(v1.3, c23:2), c23:104))
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7)
+  outs 1=vl:win/page 2=vl:win/page 3=w8:val 4=vl:win/page 5=w8:val 6=vl:win/page 7=vl:win/page
+mapped: SeqScan

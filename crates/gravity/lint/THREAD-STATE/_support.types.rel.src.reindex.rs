@@ -1,0 +1,4 @@
+_support/types/rel/src/reindex.rs	CURRENTLY_REINDEXED_HEAP	pgport	xact:reset_reindex_state	leader	REINDEX's state (index.c), set on the leader by set_reindex_processing; an abort resets it (ResetReindexState, through the xact seam); PostgreSQL's parallel query task restores it (parallel query_task_guard.rs), a Gravity claim carries none of it
+_support/types/rel/src/reindex.rs	CURRENTLY_REINDEXED_INDEX	pgport	xact:reset_reindex_state	leader	as CURRENTLY_REINDEXED_HEAP: the index being rebuilt
+_support/types/rel/src/reindex.rs	PENDING	pgport	xact:reset_reindex_state	leader	as CURRENTLY_REINDEXED_HEAP: the indexes of the one table REINDEX processes, not yet rebuilt
+_support/types/rel/src/reindex.rs	REINDEXING_NEST_LEVEL	pgport	xact:reset_reindex_state	leader	as CURRENTLY_REINDEXED_HEAP: the transaction nest level the state was set at

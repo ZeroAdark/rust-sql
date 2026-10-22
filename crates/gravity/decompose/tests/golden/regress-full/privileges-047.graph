@@ -1,0 +1,12 @@
+-- regress-full-privileges-047
+-- select has_table_privilege(t1.oid,'select') from (select oid from pg_class where relname = 'atest1') as t1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1259 rti=2 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v2.2, c19:#64))
+    lanes Attr(1):byval8:w8:val
+  project (1=fn1927(v2.1, c25:'select'))
+  outs 1=w1:val
+mapped: IndexScan

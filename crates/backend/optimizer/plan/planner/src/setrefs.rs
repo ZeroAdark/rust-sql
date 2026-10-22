@@ -59,9 +59,9 @@ pub(crate) fn set_plan_references_opt<'mcx>(
     if run.root.hasAlternativeSubPlans {
         let n = run.glob.subplans.len();
         run.root.isAltSubplan.clear();
-        run.root.isAltSubplan.resize(n, false);
+        ::mcx::pgvec_resize(&mut run.root.isAltSubplan, n, false)?;
         run.root.isUsedSubplan.clear();
-        run.root.isUsedSubplan.resize(n, false);
+        ::mcx::pgvec_resize(&mut run.root.isUsedSubplan, n, false)?;
     }
     let result = match plan {
         Some(plan) => Some(set_plan_refs(run, plan, rtoffset)?),
@@ -3850,7 +3850,7 @@ fn fix_alternative_subplan<'mcx>(
     let mut best: Option<(Node<'mcx>, f64)> = None;
     for sub_node in &asplan.subplans {
         let sp = sub_node.as_sub_plan().expect("AlternativeSubPlan member");
-        let curcost = sp.startup_cost + num_exec * sp.per_call_cost;
+        let curcost = crate::fma_sites::subplan_cost(sp.startup_cost, num_exec, sp.per_call_cost);
         // Ties prefer the later plan (bias against fast-start), as C.
         if best.as_ref().is_none_or(|(_, c)| curcost <= *c) {
             best = Some((sub_node, curcost));

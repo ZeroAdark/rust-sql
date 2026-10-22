@@ -1,0 +1,2 @@
+path	crates/gravity/lowerv4/src/ops/hashjoin/drain/source.rs
+method	std::iter::Iterator::collect	1

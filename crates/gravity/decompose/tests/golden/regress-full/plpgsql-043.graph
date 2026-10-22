@@ -1,0 +1,9 @@
+-- regress-full-plpgsql-043
+-- select f1(42) as int, f1(4.5) as num;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=array(op551($1, c23:1), op551($1, c23:2)))
+  outs 1=vl:call0
+mapped: Result

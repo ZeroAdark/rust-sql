@@ -1,0 +1,161 @@
+-- regress-full-partition_join-030
+-- SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (SELECT (t1.a + t1.b)/2 FROM prt1_e t1 WHERE t1.c = 0)) AND t1.b = 0 ORDER BY t1.a;
+graph pipelines=16 breakers=15 init_plans=0 root=p15
+p0 node=8 eligible rows=5 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n8@0 n7@2
+  source range rel=43988 rti=12 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v12.3, c23:0)
+  project (1=v12.1, 2=v12.2, 3j=op528(op551(v12.1, v12.2), c23:2))
+  sort keys=3+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=w4:val
+p1 node=6 eligible rows=84 end=breaker(slot=1 Sort)
+  desc finishing
+  nodes n6@0 n5@1^
+  source range rel=43967 rti=9 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v9.2)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val
+p2 node=5 serial site=-1 reason=NoDrivingSite end=breaker(slot=2 Materialize)
+  desc consumes=slot1@p1 consumes=slot0@p0
+  nodes n5@0 n4@1 n1@3^
+  source breaker slot=1
+  project (1=outer.1)
+  merge slot=0 inner=n7 JOIN_SEMI clauses=(op96(outer.1, inner.3)) reversals=[false] nulls_first=[false]
+  project (1=outer.1, 2=inner.1, 3=inner.2)
+  outs 1=w8:val
+  outs 1=w8:val 2=w4:val 3=w4:val
+p3 node=3 eligible rows=5 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n3@0 n2@2^
+  source range rel=43946 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(v6.2, c23:0)
+  project (1=v6.1, 2=v6.2, 3=v6.3)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p4 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot0@p3 consumes=slot2@p2
+  nodes n2@0 n1@1 n0@3^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  merge slot=2 inner=n4 JOIN_SEMI clauses=(op96(outer.1, inner.1)) reversals=[false] nulls_first=[false]
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  feed slot=1 ordered
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p5 node=16 eligible rows=5 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n16@0 n15@2
+  source range rel=43991 rti=13 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v13.3, c23:0)
+  project (1=v13.1, 2=v13.2, 3j=op528(op551(v13.1, v13.2), c23:2))
+  sort keys=3+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=w4:val
+p6 node=14 eligible rows=83 end=breaker(slot=2 Sort)
+  desc finishing
+  nodes n14@0 n13@1^
+  source range rel=43972 rti=10 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v10.2)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val
+p7 node=13 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Materialize)
+  desc consumes=slot2@p6 consumes=slot0@p5
+  nodes n13@0 n12@1 n9@3^
+  source breaker slot=2
+  project (1=outer.1)
+  merge slot=0 inner=n15 JOIN_SEMI clauses=(op96(outer.1, inner.3)) reversals=[false] nulls_first=[false]
+  project (1=outer.1, 2=inner.1, 3=inner.2)
+  outs 1=w8:val
+  outs 1=w8:val 2=w4:val 3=w4:val
+p8 node=11 eligible rows=5 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n11@0 n10@2^
+  source range rel=43956 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(v7.2, c23:0)
+  project (1=v7.1, 2=v7.2, 3=v7.3)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p9 node=10 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot0@p8 consumes=slot3@p7
+  nodes n10@0 n9@1 n0@3^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  merge slot=3 inner=n12 JOIN_SEMI clauses=(op96(outer.1, inner.1)) reversals=[false] nulls_first=[false]
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  feed slot=1 ordered
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p10 node=24 eligible rows=2 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n24@0 n23@2
+  source range rel=43994 rti=14 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v14.3, c23:0)
+  project (1=v14.1, 2=v14.2, 3j=op528(op551(v14.1, v14.2), c23:2))
+  sort keys=3+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=w4:val
+p11 node=22 eligible rows=33 end=breaker(slot=2 Sort)
+  desc finishing
+  nodes n22@0 n21@1^
+  source range rel=43977 rti=11 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v11.2)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val
+p12 node=21 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Materialize)
+  desc consumes=slot2@p11 consumes=slot0@p10
+  nodes n21@0 n20@1 n17@3^
+  source breaker slot=2
+  project (1=outer.1)
+  merge slot=0 inner=n23 JOIN_SEMI clauses=(op96(outer.1, inner.3)) reversals=[false] nulls_first=[false]
+  project (1=outer.1, 2=inner.1, 3=inner.2)
+  outs 1=w8:val
+  outs 1=w8:val 2=w4:val 3=w4:val
+p13 node=19 eligible rows=2 end=breaker(slot=0 Sort)
+  desc finishing
+  nodes n19@0 n18@2^
+  source range rel=43951 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96(v8.2, c23:0)
+  project (1=v8.1, 2=v8.2, 3=v8.3)
+  sort keys=1+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p14 node=18 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot0@p13 consumes=slot3@p12
+  nodes n18@0 n17@1 n0@3^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  merge slot=3 inner=n20 JOIN_SEMI clauses=(op96(outer.1, inner.1)) reversals=[false] nulls_first=[false]
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  feed slot=1 ordered
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+p15 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p14
+  nodes n0@0
+  source breaker slot=1
+  append merge slot=1 children=3 keys=1+:I32
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[I32]->[Count@8] 16B order=3+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p1 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p2 layout=[]->[Count@0] 8B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p3 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p4 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p5 layout=[I32]->[Count@8] 16B order=3+
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p6 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=3 kind=Materialize budget=Share spill=Runs producer=p7 layout=[]->[Count@0] 8B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p8 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p9 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p10 layout=[I32]->[Count@8] 16B order=3+
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p11 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=3 kind=Materialize budget=Share spill=Runs producer=p12 layout=[]->[Count@0] 8B order=1+
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p13 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p14 layout=[I32]->[Count@8] 16B order=1+
+mapped: MergeAppend SeqScan MergeJoin Sort

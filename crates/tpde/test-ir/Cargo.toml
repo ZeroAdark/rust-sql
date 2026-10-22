@@ -1,0 +1,30 @@
+[package]
+name = "tpde_test_ir"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+autotests = false
+
+[dependencies]
+tpde_base = { path = "../base", default-features = false }
+tpde_core = { path = "../core" }
+tpde_compiler = { path = "../compiler" }
+tpde_util = { path = "../util" }
+mcx = { path = "../../_support/mcx" }
+types_error = { path = "../../_support/types/types_error" }
+
+[features]
+upstream-oracle = []
+
+[[test]]
+name = "upstream"
+path = "tests/upstream.rs"
+required-features = ["upstream-oracle"]
+
+[[bin]]
+name = "tpde-test-ir"
+path = "src/bin/qualify.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tpde_address_sanitizer)'] }

@@ -1,0 +1,5 @@
+backend/commands/user/src/lib.rs	CHECK_PASSWORD_HOOKS	pgport	exit	leader	check_password_hook chain installed at a module's _PG_init (passwordcheck), one per loaded module: bounded by the loaded libraries, per session by design; run by CreateRole / AlterRole on the leader
+backend/commands/user/src/lib.rs	NEXT_PG_AUTHID_OID	pgport	at:take_next_pg_authid_oid	leader	binary-upgrade OID override, set by binary_upgrade_set_next_pg_authid_oid (proparallel r; the pool admits s only) and consumed once by CreateRole
+backend/commands/user/src/lib.rs	CREATEROLE_SELF_GRANT_ENABLED	pgport	exit	leader	createrole_self_grant's parsed flag, set by its assign hook (assign_createrole_self_grant) at every SET / RESET / GUC rollback; vars::createrole_self_grant is not installed, so arm_claim does not carry it; read only by CreateRole on the leader
+backend/commands/user/src/lib.rs	CREATEROLE_SELF_GRANT_OPTIONS	pgport	exit	leader	createrole_self_grant's parsed grant options, set by the same assign hook; not carried (vars::createrole_self_grant is not installed); read only by CreateRole on the leader
+backend/commands/user/src/lib.rs	PASSWORD_ENCRYPTION	pgport	claim	claim	gucs

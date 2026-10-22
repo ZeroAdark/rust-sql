@@ -1,0 +1,5 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/shred.rs
+growth	pgrc_format::wire::put_u16	1
+growth	pgrc_format::wire::put_u32	1
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::resize	1

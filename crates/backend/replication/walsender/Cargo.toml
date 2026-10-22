@@ -73,6 +73,10 @@ walsender_config = { path = "../walsender_config" }
 walsender_seams = { path = "../walsender_seams" }
 snapmgr = { path = "../../utils/time/snapmgr" }
 xact = { path = "../../access/transam/xact" }
+# pgrcolumnar parts by reference (WR L3): the spool the walsender streams files from.
+pgrc_format = { path = "../../access/pgrcolumnar/pgrc_format" }
+pgrc_spool = { path = "../../access/pgrcolumnar/pgrc_spool" }
+guc_seams = { path = "../../utils/misc/guc_seams" }
 
 [dev-dependencies]
 be_secure_seams = { path = "../../libpq/be_secure_seams" }

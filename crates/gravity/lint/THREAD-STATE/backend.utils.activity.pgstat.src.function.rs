@@ -1,0 +1,2 @@
+backend/utils/activity/pgstat/src/function.rs	TOTAL_FUNC_TIME	pgport	exit	leader	total_func_time: this thread's running sum of tracked function time, monotonic, read as deltas by each usage pair; tracked calls are user / PL functions (a builtin's fn_stats TRACK_FUNC_ALL is never tracked), which never run on a pool thread (lowerv4 hir pool_unsafe_site)
+backend/utils/activity/pgstat/src/function.rs	TRACK_FUNCTIONS	pgport	claim	claim	gucs

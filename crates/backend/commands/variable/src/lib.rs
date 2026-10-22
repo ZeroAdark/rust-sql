@@ -7,7 +7,7 @@ use adt_datetime::consts::{
     DATEORDER_DMY, DATEORDER_MDY, DATEORDER_YMD, USE_GERMAN_DATES, USE_ISO_DATES,
     USE_POSTGRES_DATES, USE_SQL_DATES,
 };
-use adt_datetime::tz::{self, PgTz};
+use adt_datetime::tz::{self, PgTzRef};
 use adt_datetime::ClearTimeZoneAbbrevCache;
 use elog::{elog, ereport};
 use guc::{GUC_check_errcode, GUC_check_errdetail, GUC_check_errhint, GUC_check_errmsg};
@@ -194,7 +194,7 @@ pub fn assign_datestyle(_newval: Option<&str>, extra: Option<&GucHookExtra>) {
     adt_datetime::settings::set_date_order(order);
 }
 
-fn check_timezone_value(value: &str, log_only: bool) -> PgResult<Option<&'static PgTz>> {
+fn check_timezone_value(value: &str, log_only: bool) -> PgResult<Option<PgTzRef>> {
     if !log_only {
         if value.len() >= 8 && value.as_bytes()[..8].eq_ignore_ascii_case(b"interval") {
             // INTERVAL 'foo': SQL spec compliance arm.
@@ -245,7 +245,7 @@ fn check_timezone_value(value: &str, log_only: bool) -> PgResult<Option<&'static
     let Some(new_tz) = tz::pg_tzset(value.as_bytes())? else {
         return Ok(None);
     };
-    if !tz::pg_tz_acceptable(new_tz) {
+    if !tz::pg_tz_acceptable(&new_tz) {
         GUC_check_errmsg(format!("time zone \"{value}\" appears to use leap seconds"));
         GUC_check_errdetail("PostgreSQL does not support leap seconds.");
         return Ok(None);
@@ -267,18 +267,19 @@ pub fn check_timezone(
 }
 
 pub fn assign_timezone(_newval: Option<&str>, extra: Option<&GucHookExtra>) {
-    let tzp = *extra
-        .and_then(|e| e.downcast_ref::<&'static PgTz>())
-        .expect("assign_timezone extra");
+    // The extra holds a session-cache handle (pgtz.c: pg_tz * into the
+    // backend's timezone_cache); cloning it is C's pointer copy.
+    let tzp = extra
+        .and_then(|e| e.downcast_ref::<PgTzRef>())
+        .expect("assign_timezone extra")
+        .clone();
     tz::set_session_timezone(Some(tzp));
     ClearTimeZoneAbbrevCache();
 }
 
 pub fn show_timezone() -> String {
-    tz::session_timezone()
-        .and_then(tz::pg_get_timezone_name)
-        .unwrap_or("unknown")
-        .to_string()
+    tz::with_session_timezone(|z| z.and_then(tz::pg_get_timezone_name).map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 pub fn check_log_timezone(
@@ -295,17 +296,17 @@ pub fn check_log_timezone(
 }
 
 pub fn assign_log_timezone(_newval: Option<&str>, extra: Option<&GucHookExtra>) {
-    let tzp = *extra
-        .and_then(|e| e.downcast_ref::<&'static PgTz>())
-        .expect("assign_log_timezone extra");
+    let tzp = extra
+        .and_then(|e| e.downcast_ref::<PgTzRef>())
+        .expect("assign_log_timezone extra")
+        .clone();
     tz::set_log_timezone(Some(tzp));
 }
 
 pub fn show_log_timezone() -> String {
     tz::log_timezone()
-        .and_then(tz::pg_get_timezone_name)
-        .unwrap_or("unknown")
-        .to_string()
+        .and_then(|z| tz::pg_get_timezone_name(&z).map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 pub fn check_timezone_abbreviations(
@@ -749,56 +750,6 @@ pub fn show_unix_socket_permissions() -> String {
     )
 }
 
-/// P7-2 D-8 lanev2 GUC tombstones (docs/design/sqe/p72-deletion-plan.md §1.3):
-/// the registry keeps every slot — SET/SHOW/pg_settings stay byte-compatible —
-/// but no consumer remains, so the value has no effect. Warn once per process
-/// on the first non-default-source assignment across the tombstoned family
-/// (boot env / config / session SET alike: accepted, warned, ignored).
-fn lanev2_tombstone_warn_once(source: GucSource) -> PgResult<()> {
-    static WARNED: AtomicBool = AtomicBool::new(false);
-    if source == PGC_S_DEFAULT || WARNED.swap(true, Ordering::Relaxed) {
-        return Ok(());
-    }
-    ereport(WARNING)
-        .errmsg(
-            "this pgrust setting is a lanev2 tombstone and has no effect \
-             (pgrust.lane_executor / pgrust.lane_parallel_pool / \
-             pgrust.runtime_{scan,agg,distinct,hashjoin,sort,bitmap}_pool / \
-             pgrust.runtime_dop / pgrust.parallel_engine / \
-             pgrust.explain_runtime_verdicts): the lane-v2 executor was removed \
-             (P7-2); the value is accepted and ignored",
-        )
-        .finish(loc("lanev2_tombstone"))?;
-    Ok(())
-}
-
-pub fn check_lanev2_tombstone_bool(
-    _newval: &mut bool,
-    _extra: &mut Option<GucHookExtra>,
-    source: GucSource,
-) -> PgResult<bool> {
-    lanev2_tombstone_warn_once(source)?;
-    Ok(true)
-}
-
-pub fn check_lanev2_tombstone_int(
-    _newval: &mut i32,
-    _extra: &mut Option<GucHookExtra>,
-    source: GucSource,
-) -> PgResult<bool> {
-    lanev2_tombstone_warn_once(source)?;
-    Ok(true)
-}
-
-pub fn check_lanev2_tombstone_enum(
-    _newval: &mut i32,
-    _extra: &mut Option<GucHookExtra>,
-    source: GucSource,
-) -> PgResult<bool> {
-    lanev2_tombstone_warn_once(source)?;
-    Ok(true)
-}
-
 pub fn check_bonjour(
     newval: &mut bool,
     _extra: &mut Option<GucHookExtra>,
@@ -870,9 +821,6 @@ pub fn init_seams() {
     hooks::show_log_file_mode.install(show_log_file_mode);
     hooks::show_unix_socket_permissions.install(show_unix_socket_permissions);
     hooks::check_bonjour.install(check_bonjour);
-    hooks::check_lanev2_tombstone_bool.install(check_lanev2_tombstone_bool);
-    hooks::check_lanev2_tombstone_int.install(check_lanev2_tombstone_int);
-    hooks::check_lanev2_tombstone_enum.install(check_lanev2_tombstone_enum);
     hooks::check_default_with_oids.install(check_default_with_oids);
     hooks::check_ssl.install(check_ssl);
 

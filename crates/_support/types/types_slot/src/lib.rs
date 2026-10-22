@@ -6,10 +6,11 @@
 extern crate alloc;
 
 use alloc::rc::Rc;
+use core::cell::Cell;
 use core::ptr::NonNull;
 
 use ::datum::Datum;
-use ::mcx::{vec_from_elem_in, Mcx, PgVec};
+use ::mcx::{vec_from_elem_in, Mcx, PgBox, PgVec};
 use ::types_core::{AttrNumber, Buffer, Oid};
 use ::types_tuple::{HeapTupleData, ItemPointerData, MinimalTupleData, TupleDescData};
 
@@ -22,9 +23,9 @@ pub const EXEC_FLAG_SKIP_TRIGGERS: i32 = 0x0020;
 pub const EXEC_FLAG_WITH_NO_DATA: i32 = 0x0040;
 /// pgrust-only (no C counterpart): EXPLAIN (ENGINE) — arm per-node engine
 /// attribution capture. High bit, clear of C's execnodes.h flag space
-/// (0x0001..0x0040 above). Next free pgrust eflag is 0x0002_0000 (reserved,
 /// unassigned — integration-contract R-KNOBS registry).
 pub const EXEC_FLAG_ENGINE_REPORT: i32 = 0x0001_0000;
+pub const EXEC_FLAG_RUN_WHOLE: i32 = 0x0002_0000;
 
 pub const TTS_FLAG_EMPTY: u16 = 1 << 1;
 pub const TTS_FLAG_SHOULDFREE: u16 = 1 << 2;
@@ -63,6 +64,8 @@ pub struct TupleTableSlot<'mcx> {
     pub tts_isnull: PgVec<'mcx, bool>,
     pub tts_tid: ItemPointerData,
     pub tts_tableOid: Oid,
+    pub tts_free_mcx: Option<Mcx<'mcx>>,
+    tid_cell: PgBox<'mcx, Cell<ItemPointerData>>,
 }
 
 const _: () = assert!(core::mem::size_of::<TupleTableSlot<'_>>() <= 128);
@@ -78,7 +81,15 @@ impl<'mcx> TupleTableSlot<'mcx> {
             tts_isnull: PgVec::new_in(mcx),
             tts_tid: ItemPointerData::invalid(),
             tts_tableOid: 0,
+            tts_free_mcx: None,
+            tid_cell: PgBox::new_in(Cell::new(ItemPointerData::invalid()), mcx),
         }
+    }
+
+    #[inline]
+    pub fn ctid_datum_ptr(&self) -> *const ItemPointerData {
+        self.tid_cell.set(self.tts_tid);
+        self.tid_cell.as_ptr()
     }
 
     pub fn set_descriptor(&mut self, mcx: Mcx<'mcx>, desc: Rc<TupleDescData<'mcx>>) {
@@ -114,6 +125,7 @@ impl<'mcx> TupleTableSlot<'mcx> {
     pub fn mark_empty(&mut self) {
         self.tts_flags |= TTS_FLAG_EMPTY;
         self.tts_flags &= !TTS_FLAG_SHOULDFREE;
+        self.tts_free_mcx = None;
         self.tts_nvalid = 0;
     }
 

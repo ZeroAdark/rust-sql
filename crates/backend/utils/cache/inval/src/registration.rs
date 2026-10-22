@@ -81,6 +81,9 @@ pub(crate) fn register_catcache_invalidation<'mcx>(
     hash_value: u32,
     db_id: Oid,
 ) -> PgResult<()> {
+    // C3 S5: the sender's scope (a pg_class row whose storage alone changed)
+    crate::note_cat_scope(state, cache_id, hash_value);
+    state.pending.cats |= crate::eoxact::stamp_bit(cache_id);
     let (arrays, group) = info.current_cmd_group_mut(state);
     msgs::add_catcache_invalidation_message(mcx, arrays, group, cache_id, hash_value, db_id)
 }
@@ -92,6 +95,7 @@ pub(crate) fn register_catalog_invalidation<'mcx>(
     db_id: Oid,
     cat_id: Oid,
 ) -> PgResult<()> {
+    state.pending.all = true;
     let (arrays, group) = info.current_cmd_group_mut(state);
     msgs::add_catalog_invalidation_message(mcx, arrays, group, db_id, cat_id)
 }
@@ -103,6 +107,9 @@ pub(crate) fn register_relcache_invalidation<'mcx>(
     db_id: Oid,
     rel_id: Oid,
 ) -> PgResult<()> {
+    // C3 S5: the sender's scope, before the summary notes the relation
+    crate::note_rel_scope(state, rel_id);
+    state.pending.note_rel(rel_id);
     {
         let (arrays, group) = info.current_cmd_group_mut(state);
         msgs::add_relcache_invalidation_message(mcx, arrays, group, db_id, rel_id)?;

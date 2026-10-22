@@ -19,6 +19,7 @@ pub struct IntoRelState<'mcx> {
     pub bistate: Option<BulkInsertStateData>,
     /// W1 multi-insert buffer (tableam::write_buffer); None = per-tuple path.
     pub mibuf: Option<WriteMultiInsertBuffer<'mcx>>,
+    pub own_slot: Option<SlotData<'mcx>>,
     /// Buffering is only observable through volatile functions reading the
     /// new table (C's intorel_receive inserts each row immediately); the
     /// caller arms this after checking the query.
@@ -36,6 +37,7 @@ impl<'mcx> IntoRelState<'mcx> {
             ti_options: 0,
             bistate: None,
             mibuf: None,
+            own_slot: None,
             multi_insert_ok: false,
         }
     }

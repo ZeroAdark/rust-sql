@@ -73,6 +73,9 @@ pub struct PlExpr {
     pub expr_id: u32,
     /// RAW_PARSE_PLPGSQL_ASSIGN target datum (C target_param), -1 if none.
     pub target_param: Dno,
+    /// C target_is_local: declared inside the nearest enclosing exception
+    /// block, so its value need not survive a failing assignment.
+    pub target_is_local: bool,
 }
 
 pub const PROMISE_NONE: i32 = 0;
@@ -85,6 +88,8 @@ pub const PROMISE_TG_TABLE_NAME: i32 = 6;
 pub const PROMISE_TG_TABLE_SCHEMA: i32 = 7;
 pub const PROMISE_TG_NARGS: i32 = 8;
 pub const PROMISE_TG_ARGV: i32 = 9;
+pub const PROMISE_TG_EVENT: i32 = 10;
+pub const PROMISE_TG_TAG: i32 = 11;
 
 #[derive(Debug)]
 pub struct PlVar {
@@ -379,7 +384,9 @@ pub enum PlStmt {
     },
 }
 
-/// PLpgSQL_condition; sqlerrstate 0 is OTHERS.
+pub const PLPGSQL_OTHERS: types_error::SqlState = types_error::SqlState(-1);
+
+/// sqlerrstate is an encoded SQLSTATE or PLPGSQL_OTHERS.
 #[derive(Debug)]
 pub struct PlCondition {
     pub sqlerrstate: types_error::SqlState,
@@ -507,7 +514,8 @@ pub enum FnTrigger {
 // PLpgSQL_function (phase-1 fields).
 #[derive(Debug)]
 pub struct PlFunction {
-    pub fn_signature: String,
+    // Shared, not copied, into every invocation's error-context frame (D3885).
+    pub fn_signature: std::rc::Rc<str>,
     pub fn_oid: Oid,
     pub fn_xmin: u32,
     pub fn_tid: (u32, u16),

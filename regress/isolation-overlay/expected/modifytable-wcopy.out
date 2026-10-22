@@ -1,0 +1,73 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3e s1u s1k s1d s1o s2u s1c s2c s3s
+step s3e: EXPLAIN (COSTS OFF) UPDATE wcn_o o SET points = s.running FROM (SELECT order_id, sum(qty) OVER (PARTITION BY customer_id ORDER BY order_id) AS running FROM wcn_o WHERE customer_id = 9) s WHERE s.order_id = o.order_id RETURNING o.order_id, o.qty, o.points, o.note;
+QUERY PLAN                                                 
+-----------------------------------------------------------
+Update on wcn_o o                                          
+  ->  Nested Loop                                          
+        ->  Subquery Scan on s                             
+              ->  WindowAgg                                
+                    Window: w1 AS (ORDER BY wcn_o.order_id)
+                    ->  Sort                               
+                          Sort Key: wcn_o.order_id         
+                          ->  Seq Scan on wcn_o            
+                                Filter: (customer_id = 9)  
+        ->  Index Scan using wcn_o_pkey on wcn_o o         
+              Index Cond: (order_id = s.order_id)          
+(11 rows)
+
+step s1u: UPDATE wcn_o SET note = note || '*' WHERE order_id IN (9, 39);
+step s1k: UPDATE wcn_o SET order_id = order_id + 1000 WHERE order_id = 69;
+step s1d: DELETE FROM wcn_o WHERE order_id = 99;
+step s1o: UPDATE wcn_o SET qty = qty + 100, note = note || '+' WHERE order_id = 129;
+step s2u: UPDATE wcn_o o SET points = s.running FROM (SELECT order_id, sum(qty) OVER (PARTITION BY customer_id ORDER BY order_id) AS running FROM wcn_o WHERE customer_id = 9) s WHERE s.order_id = o.order_id RETURNING o.order_id, o.qty, o.points, o.note; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+order_id|qty|points|note 
+--------+---+------+-----
+       9|  1|     1|o9*  
+      39|  4|     5|o39* 
+     129|104|    17|o129+
+     159|  7|    24|o159 
+     189|  1|    25|o189 
+     219|  4|    29|o219 
+     249|  7|    36|o249 
+     279|  1|    37|o279 
+(8 rows)
+
+step s2c: COMMIT;
+step s3s: SELECT order_id, customer_id, qty, points, note FROM wcn_o WHERE customer_id = 9 OR order_id > 1000 ORDER BY order_id;
+order_id|customer_id|qty|points|note 
+--------+-----------+---+------+-----
+       9|          9|  1|     1|o9*  
+      39|          9|  4|     5|o39* 
+     129|          9|104|    17|o129+
+     159|          9|  7|    24|o159 
+     189|          9|  1|    25|o189 
+     219|          9|  4|    29|o219 
+     249|          9|  7|    36|o249 
+     279|          9|  1|    37|o279 
+    1069|          9|  7|     0|o69  
+(9 rows)
+
+
+starting permutation: s1u s1k s1d s1o s2d s1c s2c s3s
+step s1u: UPDATE wcn_o SET note = note || '*' WHERE order_id IN (9, 39);
+step s1k: UPDATE wcn_o SET order_id = order_id + 1000 WHERE order_id = 69;
+step s1d: DELETE FROM wcn_o WHERE order_id = 99;
+step s1o: UPDATE wcn_o SET qty = qty + 100, note = note || '+' WHERE order_id = 129;
+step s2d: DELETE FROM wcn_o o USING (SELECT order_id, row_number() OVER (ORDER BY order_id) AS rn FROM wcn_o WHERE customer_id = 9) s WHERE s.order_id = o.order_id AND s.rn <= 6; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3s: SELECT order_id, customer_id, qty, points, note FROM wcn_o WHERE customer_id = 9 OR order_id > 1000 ORDER BY order_id;
+order_id|customer_id|qty|points|note
+--------+-----------+---+------+----
+     189|          9|  1|     0|o189
+     219|          9|  4|     0|o219
+     249|          9|  7|     0|o249
+     279|          9|  1|     0|o279
+    1069|          9|  7|     0|o69 
+(5 rows)
+

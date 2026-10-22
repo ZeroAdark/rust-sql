@@ -1,0 +1,124 @@
+-- regress-full-groupingsets-081
+-- explain (costs off) select unique1, count(two), count(four), count(ten), count(hundred), count(thousand), count(twothousand), count(*) from tenk1 group by grouping sets (unique1,hundred,ten,four,two);
+graph pipelines=10 breakers=5 init_plans=0 root=p9
+p0 node=2 eligible rows=10000 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n0@1^
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.7, 3=v1.5, 4=v1.4, 5=v1.3, 6=v1.8, 7=v1.9)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+p1 node=2 eligible rows=10000 end=breaker(slot=1 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n0@1^
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.7, 3=v1.5, 4=v1.4, 5=v1.3, 6=v1.8, 7=v1.9)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+p2 node=2 eligible rows=10000 end=breaker(slot=2 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n0@1^
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.7, 3=v1.5, 4=v1.4, 5=v1.3, 6=v1.8, 7=v1.9)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+p3 node=2 eligible rows=10000 end=breaker(slot=3 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n0@1^
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.7, 3=v1.5, 4=v1.4, 5=v1.3, 6=v1.8, 7=v1.9)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+p4 node=2 eligible rows=10000 end=breaker(slot=4 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n2@0 n0@1^
+  source range rel=16423 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.7, 3=v1.5, 4=v1.4, 5=v1.3, 6=v1.8, 7=v1.9)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val
+p5 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@1
+  source breaker slot=0
+  project (1=c23:null, 2=agg2147(1=outer.5), 3=agg2147(1=outer.4), 4=agg2147(1=outer.3), 5=agg2147(1=outer.2), 6=agg2147(1=outer.6), 7=agg2147(1=outer.7), 8=agg2803*(), 9j=c23:null, 10j=c23:null, 11j=c23:null, 12j=outer.5)
+  append arm 0/5
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val
+p6 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@1
+  source breaker slot=1
+  project (1=c23:null, 2=agg2147(1=outer.5), 3=agg2147(1=outer.4), 4=agg2147(1=outer.3), 5=agg2147(1=outer.2), 6=agg2147(1=outer.6), 7=agg2147(1=outer.7), 8=agg2803*(), 9j=c23:null, 10j=c23:null, 11j=outer.4, 12j=c23:null)
+  append arm 1/5
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val
+p7 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p2
+  nodes n0@1
+  source breaker slot=2
+  project (1=c23:null, 2=agg2147(1=outer.5), 3=agg2147(1=outer.4), 4=agg2147(1=outer.3), 5=agg2147(1=outer.2), 6=agg2147(1=outer.6), 7=agg2147(1=outer.7), 8=agg2803*(), 9j=c23:null, 10j=outer.3, 11j=c23:null, 12j=c23:null)
+  append arm 2/5
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val
+p8 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot3@p3
+  nodes n0@1
+  source breaker slot=3
+  project (1=c23:null, 2=agg2147(1=outer.5), 3=agg2147(1=outer.4), 4=agg2147(1=outer.3), 5=agg2147(1=outer.2), 6=agg2147(1=outer.6), 7=agg2147(1=outer.7), 8=agg2803*(), 9j=outer.2, 10j=c23:null, 11j=c23:null, 12j=c23:null)
+  append arm 3/5
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val
+p9 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot4@p4
+  nodes n0@1
+  source breaker slot=4
+  project (1=outer.1, 2=agg2147(1=outer.5), 3=agg2147(1=outer.4), 4=agg2147(1=outer.3), 5=agg2147(1=outer.2), 6=agg2147(1=outer.6), 7=agg2147(1=outer.7), 8=agg2803*(), 9j=c23:null, 10j=c23:null, 11j=c23:null, 12j=c23:null)
+  append arm 4/5
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B
+breaker slot=1 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B
+breaker slot=3 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B
+breaker slot=4 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p4 layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B
+group slot=0 producer=p0 node=0 form=Hashed hints=[] layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B set=0/5
+  key 0 word=0 resno=5 kind=I32 attno=3 type=23 expr=v1.3
+  agg aggno=0 fn=2147 reg=CountAny slot=0 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.5)
+  agg aggno=1 fn=2147 reg=CountAny slot=1 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.4)
+  agg aggno=2 fn=2147 reg=CountAny slot=2 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.3)
+  agg aggno=3 fn=2147 reg=CountAny slot=3 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.2)
+  agg aggno=4 fn=2147 reg=CountAny slot=4 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.6)
+  agg aggno=5 fn=2147 reg=CountAny slot=5 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.7)
+  agg aggno=6 fn=2803 reg=CountStar slot=6 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+group slot=1 producer=p1 node=0 form=Hashed hints=[] layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B set=1/5
+  key 0 word=0 resno=4 kind=I32 attno=4 type=23 expr=v1.4
+  agg aggno=0 fn=2147 reg=CountAny slot=0 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.5)
+  agg aggno=1 fn=2147 reg=CountAny slot=1 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.4)
+  agg aggno=2 fn=2147 reg=CountAny slot=2 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.3)
+  agg aggno=3 fn=2147 reg=CountAny slot=3 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.2)
+  agg aggno=4 fn=2147 reg=CountAny slot=4 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.6)
+  agg aggno=5 fn=2147 reg=CountAny slot=5 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.7)
+  agg aggno=6 fn=2803 reg=CountStar slot=6 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+group slot=2 producer=p2 node=0 form=Hashed hints=[] layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B set=2/5
+  key 0 word=0 resno=3 kind=I32 attno=5 type=23 expr=v1.5
+  agg aggno=0 fn=2147 reg=CountAny slot=0 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.5)
+  agg aggno=1 fn=2147 reg=CountAny slot=1 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.4)
+  agg aggno=2 fn=2147 reg=CountAny slot=2 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.3)
+  agg aggno=3 fn=2147 reg=CountAny slot=3 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.2)
+  agg aggno=4 fn=2147 reg=CountAny slot=4 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.6)
+  agg aggno=5 fn=2147 reg=CountAny slot=5 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.7)
+  agg aggno=6 fn=2803 reg=CountStar slot=6 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+group slot=3 producer=p3 node=0 form=Hashed hints=[] layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B set=3/5
+  key 0 word=0 resno=2 kind=I32 attno=7 type=23 expr=v1.7
+  agg aggno=0 fn=2147 reg=CountAny slot=0 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.5)
+  agg aggno=1 fn=2147 reg=CountAny slot=1 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.4)
+  agg aggno=2 fn=2147 reg=CountAny slot=2 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.3)
+  agg aggno=3 fn=2147 reg=CountAny slot=3 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.2)
+  agg aggno=4 fn=2147 reg=CountAny slot=4 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.6)
+  agg aggno=5 fn=2147 reg=CountAny slot=5 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.7)
+  agg aggno=6 fn=2803 reg=CountStar slot=6 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+group slot=4 producer=p4 node=0 form=Hashed hints=[] layout=[I32]->[Count@8,Count@16,Count@24,Count@32,Count@40,Count@48,Count@56] 64B set=4/5
+  key 0 word=0 resno=1 kind=I32 attno=1 type=23 expr=v1.1
+  agg aggno=0 fn=2147 reg=CountAny slot=0 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.5)
+  agg aggno=1 fn=2147 reg=CountAny slot=1 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.4)
+  agg aggno=2 fn=2147 reg=CountAny slot=2 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.3)
+  agg aggno=3 fn=2147 reg=CountAny slot=3 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.2)
+  agg aggno=4 fn=2147 reg=CountAny slot=4 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.6)
+  agg aggno=5 fn=2147 reg=CountAny slot=5 count_slot=- final=Identity class=CountAny trans=Abi(Count) mods=[] expr=agg2147(1=outer.7)
+  agg aggno=6 fn=2803 reg=CountStar slot=6 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan Agg

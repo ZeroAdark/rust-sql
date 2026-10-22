@@ -1,0 +1,43 @@
+-- name: fieldobs-040
+-- sql: SELECT notes FROM sightings WHERE notes <> '' ORDER BY notes LIMIT 10;
+-- op 664 family=1994 strat=1
+-- rel 16464 sightings am=pgrcolumnar kind=r natts=37 sorted=6,4,3
+-- att 16464 1 sighting_id typid=20 typmod=-1 len=8 byval=t notnull=t
+-- att 16464 2 checklist_id typid=20 typmod=-1 len=8 byval=t notnull=t
+-- att 16464 3 observed_at typid=1114 typmod=-1 len=8 byval=t notnull=t
+-- att 16464 4 observed_on typid=1082 typmod=-1 len=4 byval=t notnull=t
+-- att 16464 5 uploaded_at typid=1184 typmod=-1 len=8 byval=t notnull=t
+-- att 16464 6 site_id typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16464 7 region_id typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 16464 8 observer_id typid=20 typmod=-1 len=8 byval=t notnull=t
+-- att 16464 9 taxon_id typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16464 10 cell_code typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16464 11 individual_count typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 16464 12 flag_reason typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 16464 13 quality_grade typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 16464 14 tz_offset_min typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 16464 15 photo_width typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 16464 16 photo_height typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 16464 17 elevation_m typid=21 typmod=-1 len=2 byval=t notnull=f
+-- att 16464 18 duration_min typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 16464 19 media_bytes typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 16464 20 is_verified typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 16464 21 has_media typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 16464 22 is_private typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 16464 23 method typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 16464 24 habitat typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 16464 25 weather typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 16464 26 device_model typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 16464 27 taxon_label typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 16464 28 notes typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 16464 29 media_url typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 16464 30 source_url typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 16464 31 upload_key typid=25 typmod=-1 len=-1 byval=f notnull=t
+-- att 16464 32 latitude typid=1700 typmod=589834 len=-1 byval=f notnull=t
+-- att 16464 33 longitude typid=1700 typmod=589834 len=-1 byval=f notnull=t
+-- att 16464 34 temperature_c typid=1700 typmod=262149 len=-1 byval=f notnull=f
+-- att 16464 35 fee_paid typid=1700 typmod=524294 len=-1 byval=f notnull=f
+-- att 16464 36 accuracy_m typid=700 typmod=-1 len=4 byval=t notnull=f
+-- att 16464 37 distance_km typid=701 typmod=-1 len=8 byval=t notnull=t
+-- trigext 16464 before=- after=- instead=- stmt=- trans=- internal=- defer=- rules=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {LIMIT :plan.disabled_nodes 0 :plan.startup_cost 47463.218701080485 :plan.total_cost 47463.243701080486 :plan.plan_rows 10 :plan.plan_width 4 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {VAR :varno -2 :varattno 1 :vartype 25 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 28 :location -1} :resno 1 :resname notes :ressortgroupref 1 :resorigtbl 16464 :resorigcol 28 :resjunk false}) :plan.qual <> :plan.lefttree {SORT :plan.disabled_nodes 0 :plan.startup_cost 47463.218701080485 :plan.total_cost 51974.88620108049 :plan.plan_rows 1804667 :plan.plan_width 4 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 1 :plan.targetlist ({TARGETENTRY :expr {VAR :varno -2 :varattno 1 :vartype 25 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 28 :location -1} :resno 1 :resname notes :ressortgroupref 1 :resorigtbl 16464 :resorigcol 28 :resjunk false}) :plan.qual <> :plan.lefttree {SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 8465.013655 :scan.plan.plan_rows 1804667 :scan.plan.plan_width 4 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 2 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 1 :varattno 28 :vartype 25 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 28 :location 27} :resno 1 :resname notes :ressortgroupref 1 :resorigtbl 16464 :resorigcol 28 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 531 :opfuncid 157 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 950 :args ({VAR :varno 1 :varattno 28 :vartype 25 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 1 :varattnosyn 28 :location 54} {CONST :consttype 25 :consttypmod -1 :constcollid 100 :constlen -1 :constbyval false :constisnull false :location 63 :constvalue 4 [ 16 0 0 0 ]}) :location 60}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 1 :cb_scan_cols (b 28) :cb_target_cols (b 28) :pgrc_merge <>} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :numCols 1 :sortColIdx ( 1) :sortOperators ( 664) :collations ( 950) :nullsFirst ( false)} :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :limitOffset <> :limitCount {CONST :consttype 20 :consttypmod -1 :constcollid 0 :constlen 8 :constbyval true :constisnull false :location -1 :constvalue 8 [ 10 0 0 0 0 0 0 0 ]} :limitOption 0 :uniqNumCols 0 :uniqColIdx <> :uniqOperators <> :uniqCollations <>} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname sightings :colnames ("sighting_id" "checklist_id" "observed_at" "observed_on" "uploaded_at" "site_id" "region_id" "observer_id" "taxon_id" "cell_code" "individual_count" "flag_reason" "quality_grade" "tz_offset_min" "photo_width" "photo_height" "elevation_m" "duration_min" "media_bytes" "is_verified" "has_media" "is_private" "method" "habitat" "weather" "device_model" "taxon_label" "notes" "media_url" "source_url" "upload_key" "latitude" "longitude" "temperature_c" "fee_paid" "accuracy_m" "distance_km")} :rtekind 0 :relid 16464 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1) :permInfos ({RTEPERMISSIONINFO :relid 16464 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 35) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16464) :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 0}

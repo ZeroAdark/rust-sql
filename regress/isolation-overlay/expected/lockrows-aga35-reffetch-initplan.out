@@ -1,0 +1,381 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1v s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j;
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Limit                                                        
+  InitPlan 1                                                 
+    ->  Seq Scan on bcfg                                     
+          Filter: (name = 'q'::text)                         
+  ->  LockRows                                               
+        ->  Sort                                             
+              Sort Key: j.prio, j.id                         
+              ->  Hash Join                                  
+                    Hash Cond: (j.grp = g.grp)               
+                    ->  Seq Scan on bjob j                   
+                          Filter: (prio >= (InitPlan 1).col1)
+                    ->  Hash                                 
+                          ->  Seq Scan on bgrp g             
+(13 rows)
+
+step s1v: UPDATE bjob SET v = v || '+' WHERE id = 20;
+step s2l: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v   |label
+--+----+----+-----
+20|  80|v20+|g0   
+19|  81|v19 |g3   
+18|  82|v18 |g2   
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2l s1c
+step s1p: UPDATE bjob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2l: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v  |label
+--+----+---+-----
+19|  81|v19|g3   
+18|  82|v18|g2   
+17|  83|v17|g1   
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2l s1c
+step s1j: UPDATE bjob SET grp = 1, v = v || 'j' WHERE id = 20;
+step s2l: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v  |label
+--+----+---+-----
+19|  81|v19|g3   
+18|  82|v18|g2   
+17|  83|v17|g1   
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1v s2l s1c
+step s1q: UPDATE bcfg SET min_prio = 95, min_w = 40 WHERE name = 'q';
+step s1v: UPDATE bjob SET v = v || '+' WHERE id = 20;
+step s2l: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v   |label
+--+----+----+-----
+20|  80|v20+|g0   
+19|  81|v19 |g3   
+18|  82|v18 |g2   
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s1v s2l s1c
+step s1g: UPDATE bgrp SET w = 0, label = label || '+' WHERE grp = 0;
+step s1v: UPDATE bjob SET v = v || '+' WHERE id = 20;
+step s2l: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v   |label
+--+----+----+-----
+20|  80|v20+|g0   
+19|  81|v19 |g3   
+18|  82|v18 |g2   
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2rx s1g s1v s2r s1c
+step s2rx: EXPLAIN (COSTS OFF) SELECT j.id, j.prio, j.v, g.w FROM bjob j JOIN bgrp g ON g.grp = j.grp AND g.w >= (SELECT min_w FROM bcfg WHERE name = 'q') WHERE j.prio >= 80 ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j;
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Limit                                                           
+  InitPlan 1                                                    
+    ->  Seq Scan on bcfg                                        
+          Filter: (name = 'q'::text)                            
+  ->  LockRows                                                  
+        ->  Sort                                                
+              Sort Key: j.prio, j.id                            
+              ->  Hash Join                                     
+                    Hash Cond: (j.grp = g.grp)                  
+                    ->  Seq Scan on bjob j                      
+                          Filter: (prio >= 80)                  
+                    ->  Hash                                    
+                          ->  Seq Scan on bgrp g                
+                                Filter: (w >= (InitPlan 1).col1)
+(14 rows)
+
+step s1g: UPDATE bgrp SET w = 0, label = label || '+' WHERE grp = 0;
+step s1v: UPDATE bjob SET v = v || '+' WHERE id = 20;
+step s2r: SELECT j.id, j.prio, j.v, g.w FROM bjob j JOIN bgrp g ON g.grp = j.grp AND g.w >= (SELECT min_w FROM bcfg WHERE name = 'q') WHERE j.prio >= 80 ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|prio|v   | w
+--+----+----+--
+20|  80|v20+|10
+19|  81|v19 |40
+18|  82|v18 |30
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1v s2r s1c
+step s1q: UPDATE bcfg SET min_prio = 95, min_w = 40 WHERE name = 'q';
+step s1v: UPDATE bjob SET v = v || '+' WHERE id = 20;
+step s2r: SELECT j.id, j.prio, j.v, g.w FROM bjob j JOIN bgrp g ON g.grp = j.grp AND g.w >= (SELECT min_w FROM bcfg WHERE name = 'q') WHERE j.prio >= 80 ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|prio|v   | w
+--+----+----+--
+20|  80|v20+|10
+19|  81|v19 |40
+18|  82|v18 |30
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2o s1c
+step s1v: UPDATE bjob SET v = v || '+' WHERE id = 20;
+step s2o: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|prio|v  |label
+--+----+---+-----
+19|  81|v19|g3   
+18|  82|v18|g2   
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2o s1c
+step s1p: UPDATE bjob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2o: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|prio|v  |label
+--+----+---+-----
+18|  82|v18|g2   
+17|  83|v17|g1   
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM bjob WHERE id = 20 FOR UPDATE;
+id
+--
+20
+(1 row)
+
+step s2sk: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED;
+id|prio|v  |label
+--+----+---+-----
+19|  81|v19|g3   
+(1 row)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM bjob WHERE id = 20 FOR UPDATE;
+id
+--
+20
+(1 row)
+
+step s2nw: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 1 FOR UPDATE OF j NOWAIT;
+ERROR:  could not obtain lock on row in relation "bjob"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2n s1c s2seq
+step s1v: UPDATE bjob SET v = v || '+' WHERE id = 20;
+step s2n: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio > (SELECT nextval('bsq'))::int + 78 ORDER BY j.prio, j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+id|prio|v   |label
+--+----+----+-----
+20|  80|v20+|g0   
+19|  81|v19 |g3   
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM bsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2case s1c s2seq
+step s1v: UPDATE bjob SET v = v || '+' WHERE id = 20;
+step s2case: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE CASE WHEN j.prio > 0 THEN j.prio >= 80 ELSE j.prio > (SELECT nextval('bsq'))::int END ORDER BY j.prio, j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2case: <... completed>
+id|prio|v   |label
+--+----+----+-----
+20|  80|v20+|g0   
+19|  81|v19 |g3   
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM bsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2l s1n17 s1g0 s1n18 s2c s1c
+step s2b: BEGIN;
+step s2l: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 3 FOR UPDATE OF j;
+id|prio|v  |label
+--+----+---+-----
+20|  80|v20|g0   
+19|  81|v19|g3   
+18|  82|v18|g2   
+(3 rows)
+
+step s1n17: SELECT id FROM bjob WHERE id = 17 FOR UPDATE NOWAIT;
+id
+--
+17
+(1 row)
+
+step s1g0: SELECT grp FROM bgrp WHERE grp = 0 FOR UPDATE NOWAIT;
+grp
+---
+  0
+(1 row)
+
+step s1n18: SELECT id FROM bjob WHERE id = 18 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "bjob"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2o s1n17 s1n20 s2c s1c
+step s2b: BEGIN;
+step s2o: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q') ORDER BY j.prio, j.id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE OF j;
+id|prio|v  |label
+--+----+---+-----
+19|  81|v19|g3   
+18|  82|v18|g2   
+(2 rows)
+
+step s1n17: SELECT id FROM bjob WHERE id = 17 FOR UPDATE NOWAIT;
+id
+--
+17
+(1 row)
+
+step s1n20: SELECT id FROM bjob WHERE id = 20 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "bjob"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2ix s1q s2il s1c
+step s2ix: EXPLAIN (COSTS OFF) SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q' FOR UPDATE) ORDER BY j.prio, j.id LIMIT 2 FOR UPDATE OF j;
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Limit                                                        
+  InitPlan 1                                                 
+    ->  LockRows                                             
+          ->  Seq Scan on bcfg                               
+                Filter: (name = 'q'::text)                   
+  ->  LockRows                                               
+        ->  Sort                                             
+              Sort Key: j.prio, j.id                         
+              ->  Hash Join                                  
+                    Hash Cond: (j.grp = g.grp)               
+                    ->  Seq Scan on bjob j                   
+                          Filter: (prio >= (InitPlan 1).col1)
+                    ->  Hash                                 
+                          ->  Seq Scan on bgrp g             
+(14 rows)
+
+step s1q: UPDATE bcfg SET min_prio = 95, min_w = 40 WHERE name = 'q';
+step s2il: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q' FOR UPDATE) ORDER BY j.prio, j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+id|prio|v |label
+--+----+--+-----
+ 5|  95|v5|g1   
+ 4|  96|v4|g0   
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2il s1c
+step s1j: UPDATE bjob SET grp = 1, v = v || 'j' WHERE id = 20;
+step s2il: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q' FOR UPDATE) ORDER BY j.prio, j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+id|prio|v  |label
+--+----+---+-----
+19|  81|v19|g3   
+18|  82|v18|g2   
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2il s1nq s2c s1c
+step s2b: BEGIN;
+step s2il: SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min_prio FROM bcfg WHERE name = 'q' FOR UPDATE) ORDER BY j.prio, j.id LIMIT 2 FOR UPDATE OF j;
+id|prio|v  |label
+--+----+---+-----
+20|  80|v20|g0   
+19|  81|v19|g3   
+(2 rows)
+
+step s1nq: SELECT name FROM bcfg WHERE name = 'q' FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "bcfg"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2cx s1p s2ic s1c s2log
+step s2cx: EXPLAIN (COSTS OFF) WITH w AS (INSERT INTO blog VALUES (1, 'x') RETURNING id) SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min(id) FROM w) + 79 ORDER BY j.prio, j.id LIMIT 2 FOR UPDATE OF j;
+QUERY PLAN                                                          
+--------------------------------------------------------------------
+Limit                                                               
+  CTE w                                                             
+    ->  Insert on blog                                              
+          ->  Result                                                
+  InitPlan 2                                                        
+    ->  Aggregate                                                   
+          ->  CTE Scan on w                                         
+  ->  LockRows                                                      
+        ->  Sort                                                    
+              Sort Key: j.prio, j.id                                
+              ->  Hash Join                                         
+                    Hash Cond: (j.grp = g.grp)                      
+                    ->  Seq Scan on bjob j                          
+                          Filter: (prio >= ((InitPlan 2).col1 + 79))
+                    ->  Hash                                        
+                          ->  Seq Scan on bgrp g                    
+(16 rows)
+
+step s1p: UPDATE bjob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2ic: WITH w AS (INSERT INTO blog VALUES (1, 'x') RETURNING id) SELECT j.id, j.prio, j.v, g.label FROM bjob j JOIN bgrp g ON g.grp = j.grp WHERE j.prio >= (SELECT min(id) FROM w) + 79 ORDER BY j.prio, j.id LIMIT 2 FOR UPDATE OF j; <waiting ...>
+step s1c: COMMIT;
+step s2ic: <... completed>
+id|prio|v  |label
+--+----+---+-----
+19|  81|v19|g3   
+18|  82|v18|g2   
+(2 rows)
+
+step s2log: SELECT count(*), min(id) FROM blog;
+count|min
+-----+---
+    1|  1
+(1 row)
+
+s1: WARNING:  there is no transaction in progress

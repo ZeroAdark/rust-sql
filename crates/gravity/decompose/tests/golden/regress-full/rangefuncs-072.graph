@@ -1,0 +1,10 @@
+-- regress-full-rangefuncs-072
+-- SELECT * FROM ROWS FROM(get_users(), generate_series(10,11)) WITH ORDINALITY;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 ordinality [1:Other fn40805 cols=6 fn40805()] [7:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:10, c23:11)]
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.5, 5=v1.6, 6=v1.7, 7=v1.8)
+  outs 1=vl:row 2=w4:val 3=vl:row 4=w4:val 5=w1:val 6=w4:val 7=w8:val
+mapped: FunctionScan

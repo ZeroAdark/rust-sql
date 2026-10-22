@@ -1,0 +1,21 @@
+-- regress-full-join-152
+-- explain (costs off) select * from int4_tbl a left join tenk1 b on f1 = unique2 where f1 = 0;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0 n0@2
+  source range rel=16400 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v1.1, c23:0)
+  project (1=v1.1)
+  nest inner=n2 JOIN_LEFT invariant raise-free params=()
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=16423 rti=2 am=heap index=19340
+    key att=2 op=96 value=c23:0
+    recheck (op96(v2.2, c23:0))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9, 10=v2.10, 11=v2.11, 12=v2.12, 13=v2.13, 14=v2.14, 15=v2.15, 16=v2.16)
+  project (1=outer.1, 2=inner.1, 3=inner.2, 4=inner.3, 5=inner.4, 6=inner.5, 7=inner.6, 8=inner.7, 9=inner.8, 10=inner.9, 11=inner.10, 12=inner.11, 13=inner.12, 14=inner.13, 15=inner.14, 16=inner.15, 17=inner.16)
+  outs 1=w8:val
+  outs 1=w8:val 2=w4:val 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=w4:val 15=fx64:life/breaker 16=fx64:life/breaker 17=fx64:life/breaker
+mapped: SeqScan IndexScan NestLoop

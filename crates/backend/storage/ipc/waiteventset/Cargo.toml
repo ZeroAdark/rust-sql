@@ -20,6 +20,9 @@ fd = { path = "../../file/fd" }
 waitevent_seams = { path = "../../../utils/activity/waitevent_seams" }
 waiteventset_seams = { path = "../waiteventset_seams" }
 waiter = { path = "../waiter" }
+mcx = { path = "../../../../_support/mcx" }
+# D4781: a thread folds its ledger counts before it parks (`fold_on_park`)
+memledger = { path = "../../../../_support/memledger" }
 libc = "0.2"
 
 [dev-dependencies]

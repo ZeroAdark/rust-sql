@@ -1,0 +1,1 @@
+backend/utils/misc/injection_point/src/lib.rs	CACHE	pgport	key:registry generation	cache	C's InjectionPointCache: each entry the name and the registry generation it loaded under; cache_refresh drops an entry whose generation moved and clears all when nothing is attached

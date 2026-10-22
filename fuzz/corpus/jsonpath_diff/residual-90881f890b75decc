@@ -1,1 +1,0 @@
-$.a.timestamp(2) != $.b.timestamp_tz()

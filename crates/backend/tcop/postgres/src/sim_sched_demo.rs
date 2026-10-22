@@ -66,7 +66,7 @@ fn run_plant(iters: u64) -> ! {
         handles.push(
             pgsync::thread::Builder::new()
                 .name(format!("plant-{t}"))
-                .spawn(move || {
+                .spawn(pagegive::pinned(move || {
                     for _ in 0..iters {
                         // THE RACE: read under one acquisition …
                         let seen = *ctr.lock().unwrap_or_else(|e| e.into_inner());
@@ -79,7 +79,7 @@ fn run_plant(iters: u64) -> ! {
                         // overwritten: the classic lost update.
                         *ctr.lock().unwrap_or_else(|e| e.into_inner()) = seen + 1;
                     }
-                })
+                }))
                 .expect("spawn plant thread"),
         );
     }
@@ -196,11 +196,11 @@ fn run_watchdog_red() -> ! {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(20);
-    std::thread::spawn(move || {
+    std::thread::spawn(pagegive::pinned(move || {
         std::thread::sleep(std::time::Duration::from_secs(fallback_s));
         println!("RED-FALLBACK no watchdog fired after {fallback_s}s");
         std::process::exit(3);
-    });
+    }));
 
     // gate: A signals it holds the raw mutex; released is never signalled.
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
@@ -215,7 +215,7 @@ fn run_watchdog_red() -> ! {
         // schedule stays live until B reaches the raw lock.
         pgsync::thread::Builder::new()
             .name("red-holder".into())
-            .spawn(move || {
+            .spawn(pagegive::pinned(move || {
                 let _held = raw.lock().unwrap_or_else(|e| e.into_inner());
                 let (lock, cv) = &*gate;
                 let mut holding = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -227,7 +227,7 @@ fn run_watchdog_red() -> ! {
                     holding = cv.wait(holding).unwrap_or_else(|e| e.into_inner());
                     let _ = &holding;
                 }
-            })
+            }))
             .expect("spawn red-holder")
     };
 

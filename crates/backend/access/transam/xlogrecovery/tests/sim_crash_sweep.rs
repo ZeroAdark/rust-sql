@@ -733,6 +733,7 @@ fn test_relation<'mcx>(mcx: Mcx<'mcx>, oid: Oid) -> RelationData<'mcx> {
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -850,6 +851,7 @@ fn rig_index_data<'mcx>(
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -3650,10 +3652,10 @@ fn product_shaped_crash_recovery_sweep() {
     );
 }
 
-/// `xlogtemp.<pid>` carries the writer process's ambient pid in its NAME
-/// (C's XLogFileInitInternal shape) — harness ambience, not model entropy:
-/// the x3 gate runs three FRESH OS processes. Normalize just that token for
-/// the cross-process byte-compare; everything else must be byte-identical.
+/// `xlogtemp.<pid>.<n>` carries the writer process's ambient pid (and a per-call counter) in its NAME
+/// (C's XLogFileInitInternal shape) — harness ambience, not model entropy: the x3 gate runs three FRESH
+/// OS processes. Normalize just that token for the cross-process byte-compare; everything else must be
+/// byte-identical.
 fn normalize_pid(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -3661,7 +3663,7 @@ fn normalize_pid(s: &str) -> String {
         let split = pos + "xlogtemp.".len();
         out.push_str(&rest[..split]);
         rest = &rest[split..];
-        let nd = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        let nd = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').count();
         if nd > 0 {
             out.push_str("PID");
         }

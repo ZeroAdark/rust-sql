@@ -162,7 +162,56 @@ fn assign_from_expr_collations<'mcx>(
     Ok(())
 }
 
+fn is_default_arm(tag: NodeTag) -> bool {
+    matches!(
+        tag,
+        NodeTag::T_OpExpr
+        | NodeTag::T_NullIfExpr
+        | NodeTag::T_ScalarArrayOpExpr
+        | NodeTag::T_ArrayExpr
+        | NodeTag::T_FuncExpr
+        | NodeTag::T_NamedArgExpr
+        | NodeTag::T_RelabelType
+        | NodeTag::T_CoerceViaIO
+        | NodeTag::T_ArrayCoerceExpr
+        | NodeTag::T_ConvertRowtypeExpr
+        | NodeTag::T_BoolExpr
+        | NodeTag::T_CaseExpr
+        | NodeTag::T_CoalesceExpr
+        | NodeTag::T_MinMaxExpr
+        | NodeTag::T_Aggref
+        | NodeTag::T_GroupingFunc
+        | NodeTag::T_WindowFunc
+        | NodeTag::T_NullTest
+        | NodeTag::T_BooleanTest
+        | NodeTag::T_DistinctExpr
+        | NodeTag::T_JsonValueExpr
+        | NodeTag::T_JsonConstructorExpr
+        | NodeTag::T_JsonIsPredicate
+        | NodeTag::T_JsonExpr
+        | NodeTag::T_JsonBehavior
+        | NodeTag::T_SubLink
+        | NodeTag::T_XmlExpr
+        | NodeTag::T_SubscriptingRef
+        | NodeTag::T_FieldStore
+        | NodeTag::T_MergeSupportFunc
+        | NodeTag::T_NextValueExpr
+    )
+}
+
 fn assign_collations_walker<'mcx>(
+    node: Node<'mcx>,
+    context: &mut AssignCollationsCtx<'_, '_, 'mcx>,
+) -> PgResult<()> {
+    stack_depth::check_stack_depth()?;
+    match node.node_tag() {
+        tag if is_default_arm(tag) => assign_default_arm(tag, node, context),
+        _ => assign_collations_node(node, context),
+    }
+}
+
+#[inline(never)]
+fn assign_collations_node<'mcx>(
     node: Node<'mcx>,
     context: &mut AssignCollationsCtx<'_, '_, 'mcx>,
 ) -> PgResult<()> {
@@ -393,450 +442,7 @@ fn assign_collations_walker<'mcx>(
         | NodeTag::T_FieldStore
         | NodeTag::T_MergeSupportFunc
         | NodeTag::T_NextValueExpr) => {
-            match tag {
-                // C: never recurse into the CASE test expression — it was
-                // collation-marked in transformCaseExpr and doesn't affect
-                // the result; when-conditions are boolean, safe to recurse.
-                NodeTag::T_CaseExpr => {
-                    let c = node.as_case_expr().unwrap();
-                    for w in &c.args {
-                        let w = w.as_case_when().expect("CaseWhen");
-                        if let Some(expr) = w.expr {
-                            assign_collations_walker(expr, &mut loccontext)?;
-                        }
-                        if let Some(result) = w.result {
-                            assign_collations_walker(result, &mut loccontext)?;
-                        }
-                    }
-                    if let Some(defresult) = c.defresult {
-                        assign_collations_walker(defresult, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_CoalesceExpr => {
-                    for arg in &node.as_coalesce_expr().unwrap().args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_MinMaxExpr => {
-                    for arg in &node.as_min_max_expr().unwrap().args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_OpExpr => {
-                    for arg in &node.as_op_expr().unwrap().args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                // NullIfExpr is struct-equivalent to OpExpr (nodeFuncs.c).
-                NodeTag::T_NullIfExpr => {
-                    for arg in &node.as_null_if_expr().unwrap().args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_ScalarArrayOpExpr => {
-                    for arg in &node.as_scalar_array_op_expr().unwrap().args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_ArrayExpr => {
-                    for e in &node.as_array_expr().unwrap().elements {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_CoerceViaIO => {
-                    assign_collations_walker(
-                        node.as_coerce_via_io().unwrap().arg,
-                        &mut loccontext,
-                    )?;
-                }
-                NodeTag::T_ArrayCoerceExpr => {
-                    let a = node.as_array_coerce_expr().unwrap();
-                    assign_collations_walker(a.arg, &mut loccontext)?;
-                    if let Some(e) = a.elemexpr {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_ConvertRowtypeExpr => {
-                    assign_collations_walker(
-                        node.as_convert_rowtype_expr().unwrap().arg,
-                        &mut loccontext,
-                    )?;
-                }
-                NodeTag::T_FieldStore => {
-                    let f = node.as_field_store().unwrap();
-                    assign_collations_walker(f.arg, &mut loccontext)?;
-                    for v in &f.newvals {
-                        assign_collations_walker(v, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_BoolExpr => {
-                    for arg in &node.as_bool_expr().unwrap().args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_FuncExpr => {
-                    for arg in &node.as_func_expr().unwrap().args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_NamedArgExpr => {
-                    assign_collations_walker(
-                        node.as_named_arg_expr()
-                            .unwrap()
-                            .arg
-                            .expect("NamedArgExpr has an arg"),
-                        &mut loccontext,
-                    )?;
-                }
-                NodeTag::T_RelabelType => {
-                    assign_collations_walker(
-                        node.as_relabel_type().unwrap().arg,
-                        &mut loccontext,
-                    )?;
-                }
-                // Resjunk ORDER BY args and FILTER are held at arm's length
-                // (independent walks): they must not conflict with regular
-                // args or affect the aggregate's collation.
-                NodeTag::T_Aggref => {
-                    let agg = node.as_aggref().unwrap();
-                    match agg.aggkind {
-                        types_nodes::primnodes::AGGKIND_ORDERED_SET => {
-                            assign_ordered_set_collations(agg, &mut loccontext)?;
-                        }
-                        types_nodes::primnodes::AGGKIND_HYPOTHETICAL => {
-                            assign_hypothetical_collations(agg, &mut loccontext)?;
-                        }
-                        types_nodes::primnodes::AGGKIND_NORMAL => {
-                            debug_assert!(agg.aggdirectargs.is_nil());
-                            for tle_node in &agg.args {
-                                let tle =
-                                    tle_node.as_target_entry().expect("Aggref arg TargetEntry");
-                                if tle.resjunk {
-                                    assign_expr_collations(
-                                        context.mcx,
-                                        context.pstate,
-                                        tle_node,
-                                    )?;
-                                } else {
-                                    assign_collations_walker(tle_node, &mut loccontext)?;
-                                }
-                            }
-                        }
-                        // parse_collate.c:615 elog(ERROR, "unrecognized aggkind: %d").
-                        other => return Err(unrecognized_aggkind(other)),
-                    }
-                    if let Some(filter) = agg.aggfilter {
-                        assign_expr_collations(context.mcx, context.pstate, filter)?;
-                    }
-                }
-                NodeTag::T_GroupingFunc => {
-                    for arg in &node.as_grouping_func().unwrap().args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_WindowFunc => {
-                    let wf = node.as_window_func().unwrap();
-                    for arg in &wf.args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                    if let Some(filter) = wf.aggfilter {
-                        assign_expr_collations(context.mcx, context.pstate, filter)?;
-                    }
-                }
-                NodeTag::T_SubLink => {
-                    let sl = node.as_sub_link().unwrap();
-                    if let Some(te) = sl.testexpr {
-                        assign_collations_walker(te, &mut loccontext)?;
-                    }
-                    assign_collations_walker(sl.subselect, &mut loccontext)?;
-                }
-                NodeTag::T_NullTest => {
-                    if let Some(arg) = node.as_null_test().unwrap().arg {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_BooleanTest => {
-                    if let Some(arg) = node.as_boolean_test().unwrap().arg {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_DistinctExpr => {
-                    for arg in &node.as_distinct_expr().unwrap().args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                }
-                // The subscripts are independent expressions that do not
-                // contribute to the node's collation (parse_collate.c:684-687:
-                // assign_expr_collations on each subscript list, i.e. one fresh
-                // context per list whose result is discarded).  Only the
-                // container and the assignment source contribute.
-                NodeTag::T_SubscriptingRef => {
-                    let s = node.as_subscripting_ref().unwrap();
-                    let mut upper = AssignCollationsCtx::new(context.mcx, context.pstate);
-                    for e in &s.refupperindexpr {
-                        if let Some(e) = e {
-                            assign_collations_walker(e, &mut upper)?;
-                        }
-                    }
-                    let mut lower = AssignCollationsCtx::new(context.mcx, context.pstate);
-                    for e in &s.reflowerindexpr {
-                        if let Some(e) = e {
-                            assign_collations_walker(e, &mut lower)?;
-                        }
-                    }
-                    if let Some(e) = s.refexpr {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                    if let Some(e) = s.refassgnexpr {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_MergeSupportFunc => {}
-                // No expression subnodes (expression_tree_walker).
-                NodeTag::T_NextValueExpr => {}
-                NodeTag::T_JsonValueExpr => {
-                    let j = node.as_json_value_expr().unwrap();
-                    if let Some(e) = j.raw_expr {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                    if let Some(e) = j.formatted_expr {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_JsonConstructorExpr => {
-                    let c = node.as_json_constructor_expr().unwrap();
-                    for arg in &c.args {
-                        assign_collations_walker(arg, &mut loccontext)?;
-                    }
-                    if let Some(f) = c.func {
-                        assign_collations_walker(f, &mut loccontext)?;
-                    }
-                    if let Some(co) = c.coercion {
-                        assign_collations_walker(co, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_JsonIsPredicate => {
-                    if let Some(e) = node.as_json_is_predicate().unwrap().expr {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_JsonExpr => {
-                    let j = node.as_json_expr().unwrap();
-                    for e in [j.formatted_expr, j.path_spec].into_iter().flatten() {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                    for v in &j.passing_values {
-                        assign_collations_walker(v, &mut loccontext)?;
-                    }
-                    for e in [j.on_empty, j.on_error].into_iter().flatten() {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                }
-                NodeTag::T_JsonBehavior => {
-                    if let Some(e) = node.as_json_behavior().unwrap().expr {
-                        assign_collations_walker(e, &mut loccontext)?;
-                    }
-                }
-                // nodeFuncs.c:2332-2335 walks named_args and args as two
-                // List nodes, each merging its own state upward.
-                NodeTag::T_XmlExpr => {
-                    let x = node.as_xml_expr().unwrap();
-                    for list in [&x.named_args, &x.args] {
-                        let mut listcontext = AssignCollationsCtx::new(context.mcx, context.pstate);
-                        for arg in list {
-                            assign_collations_walker(arg, &mut listcontext)?;
-                        }
-                        merge_collation_state(
-                            listcontext.collation,
-                            listcontext.strength,
-                            listcontext.location,
-                            listcontext.collation2,
-                            listcontext.location2,
-                            &mut loccontext,
-                        )?;
-                    }
-                }
-                _ => unreachable!(),
-            }
-
-            let typcollation = lsyscache::get_typcollation(expr_type(node))?;
-            if OidIsValid(typcollation) {
-                if loccontext.strength > CollateStrength::None {
-                    collation = loccontext.collation;
-                    strength = loccontext.strength;
-                    location = loccontext.location;
-                } else {
-                    collation = typcollation;
-                    strength = CollateStrength::Implicit;
-                    location = expr_location(node);
-                }
-            } else {
-                collation = InvalidOid;
-                strength = CollateStrength::None;
-                location = -1;
-            }
-
-            let set_coll = if strength == CollateStrength::Conflict { InvalidOid } else { collation };
-            let input_coll = if loccontext.strength == CollateStrength::Conflict {
-                InvalidOid
-            } else {
-                loccontext.collation
-            };
-            // SAFETY: parse analysis exclusively owns the just-built tree; the
-            // child borrows above have ended.
-            unsafe {
-                match tag {
-                    NodeTag::T_OpExpr => node
-                        .with_mut::<types_nodes::OpExpr, _>(|o| {
-                            o.opcollid = set_coll;
-                            o.inputcollid = input_coll;
-                        })
-                        .unwrap(),
-                    // NullIfExpr is struct-equivalent to OpExpr (nodeFuncs.c).
-                    NodeTag::T_NullIfExpr => node
-                        .with_mut::<types_nodes::NullIfExpr, _>(|o| {
-                            o.opcollid = set_coll;
-                            o.inputcollid = input_coll;
-                        })
-                        .unwrap(),
-                    // exprSetCollation(ScalarArrayOpExpr) is assert-only in C
-                    // (boolean result); only the input collation is stored.
-                    NodeTag::T_ScalarArrayOpExpr => {
-                        debug_assert!(!OidIsValid(set_coll));
-                        node.with_mut::<types_nodes::ScalarArrayOpExpr, _>(|s| {
-                            s.inputcollid = input_coll;
-                        })
-                        .unwrap()
-                    }
-                    NodeTag::T_ArrayExpr => node
-                        .with_mut::<types_nodes::ArrayExpr, _>(|a| a.array_collid = set_coll)
-                        .unwrap(),
-                    NodeTag::T_FuncExpr => node
-                        .with_mut::<types_nodes::FuncExpr, _>(|f| {
-                            f.funccollid = set_coll;
-                            f.inputcollid = input_coll;
-                        })
-                        .unwrap(),
-                    NodeTag::T_RelabelType => node
-                        .with_mut::<types_nodes::RelabelType, _>(|r| r.resultcollid = set_coll)
-                        .unwrap(),
-                    NodeTag::T_CoerceViaIO => node
-                        .with_mut::<types_nodes::CoerceViaIO, _>(|c| c.resultcollid = set_coll)
-                        .unwrap(),
-                    NodeTag::T_ArrayCoerceExpr => node
-                        .with_mut::<types_nodes::ArrayCoerceExpr, _>(|a| {
-                            a.resultcollid = set_coll
-                        })
-                        .unwrap(),
-                    // exprSetCollation(ConvertRowtypeExpr) is assert-only in C.
-                    NodeTag::T_ConvertRowtypeExpr => {
-                        debug_assert!(!OidIsValid(set_coll))
-                    }
-                    // exprSetCollation(FieldStore) is assert-only in C
-                    // (composite result).
-                    NodeTag::T_FieldStore => {
-                        debug_assert!(!OidIsValid(set_coll))
-                    }
-                    // exprSetCollation(BoolExpr/NullTest/GroupingFunc/
-                    // BooleanTest/NextValueExpr) is assert-only in C.
-                    NodeTag::T_BoolExpr
-                    | NodeTag::T_NullTest
-                    | NodeTag::T_GroupingFunc
-                    | NodeTag::T_BooleanTest
-                    | NodeTag::T_NextValueExpr => {
-                        debug_assert!(!OidIsValid(set_coll))
-                    }
-                    // exprSetCollation(NamedArgExpr) is assert-only in C: the
-                    // collation lives on the wrapped arg.
-                    NodeTag::T_NamedArgExpr => {
-                        debug_assert_eq!(set_coll, expr_collation(node))
-                    }
-                    NodeTag::T_DistinctExpr => node
-                        .with_mut::<types_nodes::DistinctExpr, _>(|d| {
-                            d.opcollid = set_coll;
-                            d.inputcollid = input_coll;
-                        })
-                        .unwrap(),
-                    NodeTag::T_CaseExpr => node
-                        .with_mut::<types_nodes::primnodes::CaseExpr, _>(|c| {
-                            c.casecollid = set_coll
-                        })
-                        .unwrap(),
-                    NodeTag::T_CoalesceExpr => node
-                        .with_mut::<types_nodes::primnodes::CoalesceExpr, _>(|c| {
-                            c.coalescecollid = set_coll
-                        })
-                        .unwrap(),
-                    NodeTag::T_MinMaxExpr => node
-                        .with_mut::<types_nodes::primnodes::MinMaxExpr, _>(|m| {
-                            m.minmaxcollid = set_coll;
-                            m.inputcollid = input_coll;
-                        })
-                        .unwrap(),
-                    NodeTag::T_Aggref => node
-                        .with_mut::<types_nodes::primnodes::Aggref, _>(|a| {
-                            a.aggcollid = set_coll;
-                            a.inputcollid = input_coll;
-                        })
-                        .unwrap(),
-                    NodeTag::T_WindowFunc => node
-                        .with_mut::<types_nodes::primnodes::WindowFunc, _>(|w| {
-                            w.wincollid = set_coll;
-                            w.inputcollid = input_coll;
-                        })
-                        .unwrap(),
-                    // exprSetCollation(SubLink) is assert-only in C.
-                    NodeTag::T_SubLink => {}
-                    NodeTag::T_SubscriptingRef => node
-                        .with_mut::<types_nodes::SubscriptingRef, _>(|s| s.refcollid = set_coll)
-                        .unwrap(),
-                    // exprSetCollation(XmlExpr) is assert-only: the text
-                    // result (IS_XMLSERIALIZE) carries DEFAULT_COLLATION_OID,
-                    // xml results none.
-                    NodeTag::T_XmlExpr => {
-                        debug_assert!(
-                            if node.as_xml_expr().unwrap().op
-                                == types_nodes::XmlExprOp::IS_XMLSERIALIZE
-                            {
-                                set_coll == types_core::catalog::DEFAULT_COLLATION_OID
-                            } else {
-                                !OidIsValid(set_coll)
-                            }
-                        );
-                    }
-                    // exprSetCollation Json arms (nodeFuncs.c:1251).
-                    NodeTag::T_JsonValueExpr => expr_set_collation(
-                        node.as_json_value_expr().unwrap().formatted_expr.expect("formatted"),
-                        set_coll,
-                    ),
-                    NodeTag::T_JsonConstructorExpr => {
-                        let c = node.as_json_constructor_expr().unwrap();
-                        match c.coercion {
-                            Some(co) => expr_set_collation(co, set_coll),
-                            None => debug_assert!(!OidIsValid(set_coll)),
-                        }
-                    }
-                    NodeTag::T_JsonIsPredicate => debug_assert!(!OidIsValid(set_coll)),
-                    NodeTag::T_JsonExpr => node
-                        .with_mut::<types_nodes::JsonExpr, _>(|j| j.collation = set_coll)
-                        .unwrap(),
-                    NodeTag::T_MergeSupportFunc => node
-                        .with_mut::<types_nodes::primnodes::MergeSupportFunc, _>(|m| {
-                            m.msfcollid = set_coll
-                        })
-                        .unwrap(),
-                    // exprSetCollation(JsonBehavior) is assert-only: the
-                    // behavior expr's collation was already assigned.
-                    NodeTag::T_JsonBehavior => {
-                        debug_assert!(node
-                            .as_json_behavior()
-                            .unwrap()
-                            .expr
-                            .is_none_or(|e| expr_collation(e) == set_coll));
-                    }
-                    _ => unreachable!(),
-                }
-            }
+            return assign_default_arm(tag, node, context);
         }
         // Every expression tag parse analysis can produce is handled above;
         // anything else would fall out of C's exprSetCollation switch as an
@@ -855,6 +461,485 @@ fn assign_collations_walker<'mcx>(
         loccontext.location2,
         context,
     )
+}
+
+#[inline(never)]
+fn assign_default_arm<'mcx>(
+    tag: NodeTag,
+    node: Node<'mcx>,
+    context: &mut AssignCollationsCtx<'_, '_, 'mcx>,
+) -> PgResult<()> {
+    let mut loccontext = AssignCollationsCtx::new(context.mcx, context.pstate);
+    let collation;
+    let strength;
+    let location;
+    let args = match tag {
+        NodeTag::T_OpExpr => Some(&node.as_op_expr().unwrap().args),
+        NodeTag::T_FuncExpr => Some(&node.as_func_expr().unwrap().args),
+        NodeTag::T_BoolExpr => Some(&node.as_bool_expr().unwrap().args),
+        NodeTag::T_DistinctExpr => Some(&node.as_distinct_expr().unwrap().args),
+        NodeTag::T_NullIfExpr => Some(&node.as_null_if_expr().unwrap().args),
+        _ => None,
+    };
+    match args {
+        Some(args) => walk_arg_list(args, &mut loccontext)?,
+        None => walk_default_arm_children(tag, node, &mut loccontext)?,
+    }
+
+    let typcollation = lsyscache::get_typcollation(expr_type(node))?;
+    if OidIsValid(typcollation) {
+        if loccontext.strength > CollateStrength::None {
+            collation = loccontext.collation;
+            strength = loccontext.strength;
+            location = loccontext.location;
+        } else {
+            collation = typcollation;
+            strength = CollateStrength::Implicit;
+            location = expr_location(node);
+        }
+    } else {
+        collation = InvalidOid;
+        strength = CollateStrength::None;
+        location = -1;
+    }
+
+    let set_coll = if strength == CollateStrength::Conflict { InvalidOid } else { collation };
+    let input_coll = if loccontext.strength == CollateStrength::Conflict {
+        InvalidOid
+    } else {
+        loccontext.collation
+    };
+    // SAFETY: parse analysis exclusively owns the just-built tree; the
+    // child borrows above have ended.
+    unsafe { set_default_arm_collations(tag, node, set_coll, input_coll) };
+    merge_collation_state(
+        collation,
+        strength,
+        location,
+        loccontext.collation2,
+        loccontext.location2,
+        context,
+    )
+}
+
+// The default arm's child walk and exprSetCollation run in their own frames
+// so the recursion pays one arm per level, not the sum of all arms.
+#[inline(never)]
+fn walk_arg_list<'mcx>(
+    args: &NodeList<'mcx>,
+    loccontext: &mut AssignCollationsCtx<'_, '_, 'mcx>,
+) -> PgResult<()> {
+    for arg in args {
+        assign_collations_walker(arg, loccontext)?;
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn walk_default_arm_children<'mcx>(
+    tag: NodeTag,
+    node: Node<'mcx>,
+    loccontext: &mut AssignCollationsCtx<'_, '_, 'mcx>,
+) -> PgResult<()> {
+    let (mcx, pstate) = (loccontext.mcx, loccontext.pstate);
+    match tag {
+        // C: never recurse into the CASE test expression — it was
+        // collation-marked in transformCaseExpr and doesn't affect
+        // the result; when-conditions are boolean, safe to recurse.
+        NodeTag::T_CaseExpr => {
+            let c = node.as_case_expr().unwrap();
+            for w in &c.args {
+                let w = w.as_case_when().expect("CaseWhen");
+                if let Some(expr) = w.expr {
+                    assign_collations_walker(expr, loccontext)?;
+                }
+                if let Some(result) = w.result {
+                    assign_collations_walker(result, loccontext)?;
+                }
+            }
+            if let Some(defresult) = c.defresult {
+                assign_collations_walker(defresult, loccontext)?;
+            }
+        }
+        NodeTag::T_CoalesceExpr => {
+            for arg in &node.as_coalesce_expr().unwrap().args {
+                assign_collations_walker(arg, loccontext)?;
+            }
+        }
+        NodeTag::T_MinMaxExpr => {
+            for arg in &node.as_min_max_expr().unwrap().args {
+                assign_collations_walker(arg, loccontext)?;
+            }
+        }
+        NodeTag::T_ScalarArrayOpExpr => {
+            for arg in &node.as_scalar_array_op_expr().unwrap().args {
+                assign_collations_walker(arg, loccontext)?;
+            }
+        }
+        NodeTag::T_ArrayExpr => {
+            for e in &node.as_array_expr().unwrap().elements {
+                assign_collations_walker(e, loccontext)?;
+            }
+        }
+        NodeTag::T_CoerceViaIO => {
+            assign_collations_walker(
+                node.as_coerce_via_io().unwrap().arg,
+                loccontext,
+            )?;
+        }
+        NodeTag::T_ArrayCoerceExpr => {
+            let a = node.as_array_coerce_expr().unwrap();
+            assign_collations_walker(a.arg, loccontext)?;
+            if let Some(e) = a.elemexpr {
+                assign_collations_walker(e, loccontext)?;
+            }
+        }
+        NodeTag::T_ConvertRowtypeExpr => {
+            assign_collations_walker(
+                node.as_convert_rowtype_expr().unwrap().arg,
+                loccontext,
+            )?;
+        }
+        NodeTag::T_FieldStore => {
+            let f = node.as_field_store().unwrap();
+            assign_collations_walker(f.arg, loccontext)?;
+            for v in &f.newvals {
+                assign_collations_walker(v, loccontext)?;
+            }
+        }
+        NodeTag::T_NamedArgExpr => {
+            assign_collations_walker(
+                node.as_named_arg_expr()
+                    .unwrap()
+                    .arg
+                    .expect("NamedArgExpr has an arg"),
+                loccontext,
+            )?;
+        }
+        NodeTag::T_RelabelType => {
+            assign_collations_walker(
+                node.as_relabel_type().unwrap().arg,
+                loccontext,
+            )?;
+        }
+        // Resjunk ORDER BY args and FILTER are held at arm's length
+        // (independent walks): they must not conflict with regular
+        // args or affect the aggregate's collation.
+        NodeTag::T_Aggref => {
+            let agg = node.as_aggref().unwrap();
+            match agg.aggkind {
+                types_nodes::primnodes::AGGKIND_ORDERED_SET => {
+                    assign_ordered_set_collations(agg, loccontext)?;
+                }
+                types_nodes::primnodes::AGGKIND_HYPOTHETICAL => {
+                    assign_hypothetical_collations(agg, loccontext)?;
+                }
+                types_nodes::primnodes::AGGKIND_NORMAL => {
+                    debug_assert!(agg.aggdirectargs.is_nil());
+                    for tle_node in &agg.args {
+                        let tle =
+                            tle_node.as_target_entry().expect("Aggref arg TargetEntry");
+                        if tle.resjunk {
+                            assign_expr_collations(
+                                mcx,
+                                pstate,
+                                tle_node,
+                            )?;
+                        } else {
+                            assign_collations_walker(tle_node, loccontext)?;
+                        }
+                    }
+                }
+                // parse_collate.c:615 elog(ERROR, "unrecognized aggkind: %d").
+                other => return Err(unrecognized_aggkind(other)),
+            }
+            if let Some(filter) = agg.aggfilter {
+                assign_expr_collations(mcx, pstate, filter)?;
+            }
+        }
+        NodeTag::T_GroupingFunc => {
+            for arg in &node.as_grouping_func().unwrap().args {
+                assign_collations_walker(arg, loccontext)?;
+            }
+        }
+        NodeTag::T_WindowFunc => {
+            let wf = node.as_window_func().unwrap();
+            for arg in &wf.args {
+                assign_collations_walker(arg, loccontext)?;
+            }
+            if let Some(filter) = wf.aggfilter {
+                assign_expr_collations(mcx, pstate, filter)?;
+            }
+        }
+        NodeTag::T_SubLink => {
+            let sl = node.as_sub_link().unwrap();
+            if let Some(te) = sl.testexpr {
+                assign_collations_walker(te, loccontext)?;
+            }
+            assign_collations_walker(sl.subselect, loccontext)?;
+        }
+        NodeTag::T_NullTest => {
+            if let Some(arg) = node.as_null_test().unwrap().arg {
+                assign_collations_walker(arg, loccontext)?;
+            }
+        }
+        NodeTag::T_BooleanTest => {
+            if let Some(arg) = node.as_boolean_test().unwrap().arg {
+                assign_collations_walker(arg, loccontext)?;
+            }
+        }
+        // The subscripts are independent expressions that do not
+        // contribute to the node's collation (parse_collate.c:684-687:
+        // assign_expr_collations on each subscript list, i.e. one fresh
+        // context per list whose result is discarded).  Only the
+        // container and the assignment source contribute.
+        NodeTag::T_SubscriptingRef => {
+            let s = node.as_subscripting_ref().unwrap();
+            let mut upper = AssignCollationsCtx::new(mcx, pstate);
+            for e in &s.refupperindexpr {
+                if let Some(e) = e {
+                    assign_collations_walker(e, &mut upper)?;
+                }
+            }
+            let mut lower = AssignCollationsCtx::new(mcx, pstate);
+            for e in &s.reflowerindexpr {
+                if let Some(e) = e {
+                    assign_collations_walker(e, &mut lower)?;
+                }
+            }
+            if let Some(e) = s.refexpr {
+                assign_collations_walker(e, loccontext)?;
+            }
+            if let Some(e) = s.refassgnexpr {
+                assign_collations_walker(e, loccontext)?;
+            }
+        }
+        NodeTag::T_MergeSupportFunc => {}
+        // No expression subnodes (expression_tree_walker).
+        NodeTag::T_NextValueExpr => {}
+        NodeTag::T_JsonValueExpr => {
+            let j = node.as_json_value_expr().unwrap();
+            if let Some(e) = j.raw_expr {
+                assign_collations_walker(e, loccontext)?;
+            }
+            if let Some(e) = j.formatted_expr {
+                assign_collations_walker(e, loccontext)?;
+            }
+        }
+        NodeTag::T_JsonConstructorExpr => {
+            let c = node.as_json_constructor_expr().unwrap();
+            for arg in &c.args {
+                assign_collations_walker(arg, loccontext)?;
+            }
+            if let Some(f) = c.func {
+                assign_collations_walker(f, loccontext)?;
+            }
+            if let Some(co) = c.coercion {
+                assign_collations_walker(co, loccontext)?;
+            }
+        }
+        NodeTag::T_JsonIsPredicate => {
+            if let Some(e) = node.as_json_is_predicate().unwrap().expr {
+                assign_collations_walker(e, loccontext)?;
+            }
+        }
+        NodeTag::T_JsonExpr => {
+            let j = node.as_json_expr().unwrap();
+            for e in [j.formatted_expr, j.path_spec].into_iter().flatten() {
+                assign_collations_walker(e, loccontext)?;
+            }
+            for v in &j.passing_values {
+                assign_collations_walker(v, loccontext)?;
+            }
+            for e in [j.on_empty, j.on_error].into_iter().flatten() {
+                assign_collations_walker(e, loccontext)?;
+            }
+        }
+        NodeTag::T_JsonBehavior => {
+            if let Some(e) = node.as_json_behavior().unwrap().expr {
+                assign_collations_walker(e, loccontext)?;
+            }
+        }
+        // nodeFuncs.c:2332-2335 walks named_args and args as two
+        // List nodes, each merging its own state upward.
+        NodeTag::T_XmlExpr => {
+            let x = node.as_xml_expr().unwrap();
+            for list in [&x.named_args, &x.args] {
+                let mut listcontext = AssignCollationsCtx::new(mcx, pstate);
+                for arg in list {
+                    assign_collations_walker(arg, &mut listcontext)?;
+                }
+                merge_collation_state(
+                    listcontext.collation,
+                    listcontext.strength,
+                    listcontext.location,
+                    listcontext.collation2,
+                    listcontext.location2,
+                    loccontext,
+                )?;
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+#[inline(never)]
+unsafe fn set_default_arm_collations(tag: NodeTag, node: Node<'_>, set_coll: Oid, input_coll: Oid) {
+    // SAFETY: caller contract (parse analysis owns the tree).
+    unsafe {
+        match tag {
+            NodeTag::T_OpExpr => node
+                .with_mut::<types_nodes::OpExpr, _>(|o| {
+                    o.opcollid = set_coll;
+                    o.inputcollid = input_coll;
+                })
+                .unwrap(),
+            // NullIfExpr is struct-equivalent to OpExpr (nodeFuncs.c).
+            NodeTag::T_NullIfExpr => node
+                .with_mut::<types_nodes::NullIfExpr, _>(|o| {
+                    o.opcollid = set_coll;
+                    o.inputcollid = input_coll;
+                })
+                .unwrap(),
+            // exprSetCollation(ScalarArrayOpExpr) is assert-only in C
+            // (boolean result); only the input collation is stored.
+            NodeTag::T_ScalarArrayOpExpr => {
+                debug_assert!(!OidIsValid(set_coll));
+                node.with_mut::<types_nodes::ScalarArrayOpExpr, _>(|s| {
+                    s.inputcollid = input_coll;
+                })
+                .unwrap()
+            }
+            NodeTag::T_ArrayExpr => node
+                .with_mut::<types_nodes::ArrayExpr, _>(|a| a.array_collid = set_coll)
+                .unwrap(),
+            NodeTag::T_FuncExpr => node
+                .with_mut::<types_nodes::FuncExpr, _>(|f| {
+                    f.funccollid = set_coll;
+                    f.inputcollid = input_coll;
+                })
+                .unwrap(),
+            NodeTag::T_RelabelType => node
+                .with_mut::<types_nodes::RelabelType, _>(|r| r.resultcollid = set_coll)
+                .unwrap(),
+            NodeTag::T_CoerceViaIO => node
+                .with_mut::<types_nodes::CoerceViaIO, _>(|c| c.resultcollid = set_coll)
+                .unwrap(),
+            NodeTag::T_ArrayCoerceExpr => node
+                .with_mut::<types_nodes::ArrayCoerceExpr, _>(|a| {
+                    a.resultcollid = set_coll
+                })
+                .unwrap(),
+            // exprSetCollation(ConvertRowtypeExpr) is assert-only in C.
+            NodeTag::T_ConvertRowtypeExpr => {
+                debug_assert!(!OidIsValid(set_coll))
+            }
+            // exprSetCollation(FieldStore) is assert-only in C
+            // (composite result).
+            NodeTag::T_FieldStore => {
+                debug_assert!(!OidIsValid(set_coll))
+            }
+            // exprSetCollation(BoolExpr/NullTest/GroupingFunc/
+            // BooleanTest/NextValueExpr) is assert-only in C.
+            NodeTag::T_BoolExpr
+            | NodeTag::T_NullTest
+            | NodeTag::T_GroupingFunc
+            | NodeTag::T_BooleanTest
+            | NodeTag::T_NextValueExpr => {
+                debug_assert!(!OidIsValid(set_coll))
+            }
+            // exprSetCollation(NamedArgExpr) is assert-only in C: the
+            // collation lives on the wrapped arg.
+            NodeTag::T_NamedArgExpr => {
+                debug_assert_eq!(set_coll, expr_collation(node))
+            }
+            NodeTag::T_DistinctExpr => node
+                .with_mut::<types_nodes::DistinctExpr, _>(|d| {
+                    d.opcollid = set_coll;
+                    d.inputcollid = input_coll;
+                })
+                .unwrap(),
+            NodeTag::T_CaseExpr => node
+                .with_mut::<types_nodes::primnodes::CaseExpr, _>(|c| {
+                    c.casecollid = set_coll
+                })
+                .unwrap(),
+            NodeTag::T_CoalesceExpr => node
+                .with_mut::<types_nodes::primnodes::CoalesceExpr, _>(|c| {
+                    c.coalescecollid = set_coll
+                })
+                .unwrap(),
+            NodeTag::T_MinMaxExpr => node
+                .with_mut::<types_nodes::primnodes::MinMaxExpr, _>(|m| {
+                    m.minmaxcollid = set_coll;
+                    m.inputcollid = input_coll;
+                })
+                .unwrap(),
+            NodeTag::T_Aggref => node
+                .with_mut::<types_nodes::primnodes::Aggref, _>(|a| {
+                    a.aggcollid = set_coll;
+                    a.inputcollid = input_coll;
+                })
+                .unwrap(),
+            NodeTag::T_WindowFunc => node
+                .with_mut::<types_nodes::primnodes::WindowFunc, _>(|w| {
+                    w.wincollid = set_coll;
+                    w.inputcollid = input_coll;
+                })
+                .unwrap(),
+            // exprSetCollation(SubLink) is assert-only in C.
+            NodeTag::T_SubLink => {}
+            NodeTag::T_SubscriptingRef => node
+                .with_mut::<types_nodes::SubscriptingRef, _>(|s| s.refcollid = set_coll)
+                .unwrap(),
+            // exprSetCollation(XmlExpr) is assert-only: the text
+            // result (IS_XMLSERIALIZE) carries DEFAULT_COLLATION_OID,
+            // xml results none.
+            NodeTag::T_XmlExpr => {
+                debug_assert!(
+                    if node.as_xml_expr().unwrap().op
+                        == types_nodes::XmlExprOp::IS_XMLSERIALIZE
+                    {
+                        set_coll == types_core::catalog::DEFAULT_COLLATION_OID
+                    } else {
+                        !OidIsValid(set_coll)
+                    }
+                );
+            }
+            // exprSetCollation Json arms (nodeFuncs.c:1251).
+            NodeTag::T_JsonValueExpr => expr_set_collation(
+                node.as_json_value_expr().unwrap().formatted_expr.expect("formatted"),
+                set_coll,
+            ),
+            NodeTag::T_JsonConstructorExpr => {
+                let c = node.as_json_constructor_expr().unwrap();
+                match c.coercion {
+                    Some(co) => expr_set_collation(co, set_coll),
+                    None => debug_assert!(!OidIsValid(set_coll)),
+                }
+            }
+            NodeTag::T_JsonIsPredicate => debug_assert!(!OidIsValid(set_coll)),
+            NodeTag::T_JsonExpr => node
+                .with_mut::<types_nodes::JsonExpr, _>(|j| j.collation = set_coll)
+                .unwrap(),
+            NodeTag::T_MergeSupportFunc => node
+                .with_mut::<types_nodes::primnodes::MergeSupportFunc, _>(|m| {
+                    m.msfcollid = set_coll
+                })
+                .unwrap(),
+            // exprSetCollation(JsonBehavior) is assert-only: the
+            // behavior expr's collation was already assigned.
+            NodeTag::T_JsonBehavior => {
+                debug_assert!(node
+                    .as_json_behavior()
+                    .unwrap()
+                    .expr
+                    .is_none_or(|e| expr_collation(e) == set_coll));
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 // exprSetCollation (nodeFuncs.c), full C 18.3 arm coverage; arms C guards

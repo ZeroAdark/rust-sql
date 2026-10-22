@@ -272,6 +272,7 @@ fn index_rel(mcx: Mcx<'_>) -> Relation<'_> {
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -316,6 +317,7 @@ fn heap_rel(mcx: Mcx<'_>) -> Relation<'_> {
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -813,7 +815,7 @@ fn hashinsert_does_not_retain_its_tuple_image_in_the_caller_context() {
     );
 }
 
-// regression: the per-page delay point in hashbucketcleanup reaches
+// fp-hash-hash#2: the per-page delay point in hashbucketcleanup reaches
 // vacuum_delay_point even while VacuumCostActive is false, so a pending
 // autovacuum config reload is processed mid-scan (hash.c:722).
 static DELAY_POINT_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

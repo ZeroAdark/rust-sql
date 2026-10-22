@@ -1,0 +1,10 @@
+-- regress-full-horology-015
+-- SELECT i, to_timestamp('20181102123456123456', 'YYYYMMDDHH24MISSFF' || i) FROM generate_series(1, 6) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:6)]
+  project (1=v1.1, 2=fn1778(c25:'20181102123456123456', op654(c25:'YYYYMMDDHH24MISSFF', io25(v1.1))))
+  outs 1=w4:val 2=w8:val
+mapped: FunctionScan

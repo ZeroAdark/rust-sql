@@ -1444,9 +1444,10 @@ fn get_index_clause_from_support<'mcx>(
                 index.indexcollations[indexcol],
             );
             let addr = core::ptr::from_mut(&mut req) as usize;
-            let result = fmgr_core::oid_function_call1_coll(
+            let result = fmgr_core::oid_function_call1_coll_in(
                 prosupport,
                 0,
+                run.mcx,
                 datum::Datum::from_usize(addr),
             )?;
             match core::ptr::NonNull::new(result.as_usize() as *mut ()) {
@@ -1653,8 +1654,7 @@ fn match_pathkeys_to_index<'mcx>(
     debug_assert!(index.amcanorderbyop);
     let rel = index.rel.expect("index rel set");
     let rel_relids = types_pathnodes::relids::relids_copy(mcx, &run.root.rel(rel).relids);
-    let mut pathkeys: PgVec<'mcx, types_pathnodes::PathKey> = PgVec::new_in(mcx);
-    pathkeys.extend(run.root.query_pathkeys.iter().copied());
+    let pathkeys = run.root.query_pathkeys;
     for pathkey in pathkeys.iter() {
         if pathkey.pk_cmptype != types_pathnodes::COMPARE_LT || pathkey.pk_nulls_first {
             return Ok((orderby_clauses, clause_columns));

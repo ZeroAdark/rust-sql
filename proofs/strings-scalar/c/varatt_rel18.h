@@ -345,7 +345,7 @@ typedef struct
 	} while (0)
 
 /* VARATT_EXTERNAL_GET_POINTER — verbatim from REL_18_STABLE varatt.h
- * (was missing from this vendored excerpt; CI cluster 31ad423d flagged it as a
+ * (was missing from this vendored excerpt; fleet 31ad423d flagged it as a
  * missing-definition reachable function, added 2026-07-29). Assert is a
  * no-op via pg_proof_shim.h, as everywhere else in the vendored C. */
 #define VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr) \

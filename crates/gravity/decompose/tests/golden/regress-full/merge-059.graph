@@ -1,0 +1,11 @@
+-- regress-full-merge-059
+-- INSERT INTO pa_source SELECT id, id * 10 FROM generate_series(1,14) AS id;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:14)]
+  project (1=v3.1, 2=fn316(op514(v3.1, c23:10)))
+  write INSERT rel=30798 rti=1 natts=2 indexes=()
+  outs 1=w4:val 2=w8:val
+mapped: ModifyTable FunctionScan

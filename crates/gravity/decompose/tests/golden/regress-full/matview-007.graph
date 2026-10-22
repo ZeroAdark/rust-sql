@@ -1,0 +1,34 @@
+-- regress-full-matview-007
+-- DELETE FROM mvtest_v WHERE EXISTS ( SELECT * FROM mvtest_mv_v WHERE mvtest_mv_v.a = mvtest_v.a );
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=5 eligible rows=2550 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n5@0 n4@1^
+  source range rel=28073 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v2.-1, 2=v2.1)
+  outs 1=fx6:row 2=w8:val
+p1 node=4 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p0 words=bits@5/6
+  nodes n4@0 n3@1
+  source breaker slot=0
+  project (1=agg6291(1=outer.1), 2=outer.2)
+  build keys=(outer.2) decls=23/23:I32
+  outs 1=fx6:call6291 2=w4:val
+p2 node=2 serial site=1 reason=Write end=sink
+  desc consumes=slot1@p1
+  nodes n2@0 n1@1 n0@3
+  source range rel=28070 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v1.-1, 2=v1.1)
+  probe slot=1 inner=n3 JOIN_INNER unique keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.2))
+  project (1j=outer.1, 2j=inner.1)
+  write DELETE rel=28070 rti=1 natts=1 indexes=() marks=1 (rti2:ROW_MARK_REFERENCE)
+  outs 1=fx6:row 2=w8:val
+  outs 1=fx6:row 2=fx6:life/breaker
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8]+valid 24B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+group slot=0 producer=p0 node=4 form=Hashed hints=[] layout=[I32]->[Count@8]+valid 24B
+  key 0 word=0 resno=2 kind=I32 attno=1 type=23 expr=v2.1
+  agg aggno=0 fn=6291 reg=Collect slot=- count_slot=- final=Collect class=Collect(AnyValue) trans=Var mods=[] expr=agg6291(1=outer.1)
+mapped: ModifyTable SeqScan HashJoin Agg Hash PlanRowMark

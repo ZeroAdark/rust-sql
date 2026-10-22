@@ -1,0 +1,12 @@
+-- regress-full-fast_default-006
+-- ALTER TABLE has_volatile ADD col4 int DEFAULT (random() * 10000)::int;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1259 rti=1 am=heap index=2662
+    key att=1 op=607 value=fn4566()
+    recheck (op607(v1.1, fn4566()))
+    lanes Attr(3):byval8:w8:val
+  project (1=io25(relabel4089(v1.3)))
+  outs 1=vl:call46
+mapped: IndexScan

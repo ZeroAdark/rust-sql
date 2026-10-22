@@ -1,0 +1,10 @@
+# V4R-2 (user 2026-09-24): order-dependent float aggregates within 1e-12 relative (float8) / 4 ulps (float4)
+# an integer sum stays exact
+sql: SELECT sum(i) FROM r;
+types: bigint
+class: unordered
+verdict: mismatch
+[pg]
+1000000
+[got]
+1000001

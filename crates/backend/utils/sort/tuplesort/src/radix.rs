@@ -90,9 +90,9 @@ impl<'m> TuplesortData<'m> {
         let nulls_first = key0.ssup_nulls_first;
         let (null_base, nonnull_base) = if nulls_first { (0, nnulls) } else { (nn, 0) };
 
-        let mut buf_a: PgVec<'_, SortTuple> = ::mcx::vec_with_capacity_in(self.mcx, n)?;
+        let mut buf_a: PgVec<'_, SortTuple> = ::mcx::vec_with_capacity_huge_in(self.mcx, n)?;
         let mut buf_b: PgVec<'_, SortTuple> = if npasses >= 2 {
-            ::mcx::vec_with_capacity_in(self.mcx, nn)?
+            ::mcx::vec_with_capacity_huge_in(self.mcx, nn)?
         } else {
             PgVec::new_in(self.mcx)
         };

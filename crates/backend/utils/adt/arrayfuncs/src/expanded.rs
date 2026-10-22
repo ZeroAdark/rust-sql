@@ -49,6 +49,9 @@ pub struct ExpandedArrayHeader {
     dvalues: Option<PgVec<'static, Datum>>,
     dnulls: Option<PgVec<'static, bool>>,
     fvalue: Option<PgVec<'static, u8>>,
+    // C fstartptr..fendptr: by-ref dvalues may point into it.
+    retired: Option<PgVec<'static, u8>>,
+    flat_cache: Option<PgVec<'static, u8>>,
     ctx: MemoryContext,
 }
 
@@ -77,6 +80,8 @@ impl ExpandedArrayHeader {
             dvalues: None,
             dnulls: None,
             fvalue: None,
+            retired: None,
+            flat_cache: None,
             ctx,
         }
     }
@@ -94,13 +99,42 @@ impl ExpandedArrayHeader {
     pub fn dvalues(&self) -> Option<(&[Datum], Option<&[bool]>)> {
         self.dvalues.as_ref().map(|v| (v.as_slice(), self.dnulls.as_deref()))
     }
+
+    /// C array_append over an expanded array (array_set_element_expanded at subscript lbound + dims, 1-D or empty):
+    /// the element is appended in place; a by-ref element is copied into the object's context first. `value` of a
+    /// varlena element type is already detoasted. Errors as C: "integer out of range" when the subscript overflows,
+    /// "array size exceeds the maximum allowed" past MaxArraySize. pgrust main's array_set_element_expanded does the
+    /// work (CAND-M10's own append body was folded into it by the main merge).
+    pub fn append_element(&mut self, value: Datum, isnull: bool) -> PgResult<()> {
+        debug_assert!(self.ndims <= 1);
+        let indx = if self.ndims == 0 {
+            1
+        } else {
+            self.lbound[0].checked_add(self.dims[0]).ok_or_else(|| {
+                Box::new(
+                    PgError::error("integer out of range")
+                        .with_sqlstate(::types_error::ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                )
+            })?
+        };
+        array_set_element_expanded(self, &[indx], value, isnull)
+    }
 }
 
 pub fn expand_array(
     arraydatum: Datum,
     parentcontext: &MemoryContext,
-    mut metacache: Option<&mut ArrayMetaState>,
+    metacache: Option<&mut ArrayMetaState>,
 ) -> PgResult<Datum> {
+    let eah = expand_array_boxed(arraydatum, parentcontext, metacache)?;
+    Ok(install(eah, parentcontext))
+}
+
+fn expand_array_boxed(
+    arraydatum: Datum,
+    parentcontext: &MemoryContext,
+    mut metacache: Option<&mut ArrayMetaState>,
+) -> PgResult<Box<ExpandedArrayHeader>> {
     let ctx = parentcontext.new_child("expanded array");
     let mut eah = Box::new(ExpandedArrayHeader::empty(ctx));
 
@@ -121,16 +155,16 @@ pub fn expand_array(
 
         if old.typbyval && old.dvalues.is_some() {
             copy_byval_expanded_array(&mut eah, old)?;
-            return Ok(install(eah, parentcontext));
+            return Ok(eah);
         }
         let flat = flatten_source(&mut eah, arraydatum)?;
         fill_from_flat(&mut eah, flat, Some(cache))?;
-        return Ok(install(eah, parentcontext));
+        return Ok(eah);
     }
 
     let flat = copy_flat_source(&mut eah, arraydatum)?;
     fill_from_flat(&mut eah, flat, metacache.as_deref_mut())?;
-    Ok(install(eah, parentcontext))
+    Ok(eah)
 }
 
 fn install(eah: Box<ExpandedArrayHeader>, parentcontext: &MemoryContext) -> Datum {
@@ -144,6 +178,131 @@ fn install(eah: Box<ExpandedArrayHeader>, parentcontext: &MemoryContext) -> Datu
         parentcontext.register_reset_callback(move || drop(Box::from_raw(p)));
         eohp_get_rw_datum(&raw const (*p).hdr)
     }
+}
+
+/// An expanded array owned by its holder, not by a parent context's reset.
+pub struct OwnedExpandedArray(core::ptr::NonNull<ExpandedArrayHeader>);
+
+impl OwnedExpandedArray {
+    pub fn rw_datum(&self) -> Datum {
+        // SAFETY: the header is live and initialized for self's lifetime.
+        unsafe { eohp_get_rw_datum(&raw const (*self.0.as_ptr()).hdr) }
+    }
+
+    pub fn ro_datum(&self) -> Datum {
+        // SAFETY: the header is live and initialized for self's lifetime.
+        unsafe { ::datum::expandeddatum::eohp_get_ro_datum(&raw const (*self.0.as_ptr()).hdr) }
+    }
+
+    pub fn is_rw_datum(&self, d: Datum) -> bool {
+        d.as_usize() == self.rw_datum().as_usize()
+    }
+
+    pub fn flat_datum(&mut self) -> PgResult<Datum> {
+        // SAFETY: exclusive access through &mut self.
+        expanded_array_flat_datum(unsafe { self.0.as_mut() })
+    }
+}
+
+use crate::{TRANSFERRED, TRANSFER_GEN};
+
+fn transferred_take(addr: usize, generation: Option<u64>) -> bool {
+    TRANSFERRED.with(|slots| {
+        for s in slots {
+            let (a, g) = s.get();
+            if a == addr && generation.is_none_or(|want| want == g) {
+                s.set((0, 0));
+                return true;
+            }
+        }
+        false
+    })
+}
+
+fn transferred_list(addr: usize) -> Option<u64> {
+    let generation = TRANSFER_GEN.with(|c| {
+        let g = c.get() + 1;
+        c.set(g);
+        g
+    });
+    TRANSFERRED.with(|slots| {
+        let free = slots.iter().find(|s| s.get().0 == 0)?;
+        free.set((addr, generation));
+        Some(generation)
+    })
+}
+
+impl OwnedExpandedArray {
+    /// Ownership moves to `ctx` (freed at its reset) until a holder takes it
+    /// back with [`adopt_transferred`]; returns the read/write datum.
+    pub fn transfer_to_context(self, ctx: &MemoryContext) -> Datum {
+        let p = self.0.as_ptr();
+        core::mem::forget(self);
+        let addr = p as usize;
+        let listed = transferred_list(addr);
+        // SAFETY: p is the live Box allocation this value owned; the callback
+        // is its sole release unless adopt_transferred delists it first.
+        ctx.register_reset_callback(move || {
+            if listed.is_none_or(|g| transferred_take(addr, Some(g))) {
+                drop(unsafe { Box::from_raw(p) });
+            }
+        });
+        // SAFETY: the header is live until the callback above runs.
+        unsafe { eohp_get_rw_datum(&raw const (*p).hdr) }
+    }
+}
+
+/// Takes back an array that transfer_to_context handed to a context; None
+/// for any other datum.
+pub fn adopt_transferred(d: Datum) -> Option<OwnedExpandedArray> {
+    // SAFETY: a non-null by-ref varlena datum; the expanded check reads only
+    // its two header bytes.
+    if !unsafe { datum_is_external_expanded_rw(d) } {
+        return None;
+    }
+    // SAFETY: a read/write expanded datum embeds its live header pointer.
+    let p = unsafe { datum_get_eohp(d) } as *mut ExpandedArrayHeader;
+    if !transferred_take(p as usize, None) {
+        return None;
+    }
+    Some(OwnedExpandedArray(core::ptr::NonNull::new(p)?))
+}
+
+impl Drop for OwnedExpandedArray {
+    fn drop(&mut self) {
+        // SAFETY: allocated by Box in expand_array_owned; sole owner.
+        drop(unsafe { Box::from_raw(self.0.as_ptr()) });
+    }
+}
+
+pub fn expand_array_owned(
+    arraydatum: Datum,
+    parentcontext: &MemoryContext,
+    metacache: Option<&mut ArrayMetaState>,
+) -> PgResult<OwnedExpandedArray> {
+    let p = Box::into_raw(expand_array_boxed(arraydatum, parentcontext, metacache)?);
+    // SAFETY: p is the header's final address.
+    unsafe { eoh_init_header(&raw mut (*p).hdr, &EA_METHODS, &raw const (*p).ctx) };
+    Ok(OwnedExpandedArray(core::ptr::NonNull::new(p).expect("Box pointer")))
+}
+
+/// The flat image for read-only consumers, cached until the next change.
+pub fn expanded_array_flat_datum(eah: &mut ExpandedArrayHeader) -> PgResult<Datum> {
+    if let Some(f) = &eah.fvalue {
+        return Ok(Datum::from_usize(f.as_ptr() as usize));
+    }
+    if eah.flat_cache.is_none() {
+        // SAFETY: eah is a live, initialized expanded array.
+        let n = unsafe { ea_get_flat_size(&raw mut eah.hdr) };
+        let mut buf: PgVec<'static, u8> = vec_with_capacity_in(eah.obj_mcx(), n)?;
+        // SAFETY: buf has capacity n; flatten writes exactly n bytes.
+        unsafe {
+            ea_flatten_into(&raw mut eah.hdr, buf.as_mut_ptr(), n);
+            buf.set_len(n);
+        }
+        eah.flat_cache = Some(buf);
+    }
+    Ok(Datum::from_usize(eah.flat_cache.as_ref().unwrap().as_ptr() as usize))
 }
 
 fn copy_byval_expanded_array(
@@ -420,6 +579,240 @@ pub fn deconstruct_expanded_array(eah: &mut ExpandedArrayHeader) -> PgResult<()>
 
 pub fn expanded_array_data_bounds(eah: &ExpandedArrayHeader) -> Option<(usize, usize)> {
     eah.fvalue.as_ref().map(|f| (arr_data_offset(f), arr_size(f)))
+}
+
+fn elem_image_size(value: Datum, typlen: i16) -> usize {
+    if typlen > 0 {
+        typlen as usize
+    } else if typlen == -1 {
+        varsize_any(value.as_usize() as *const u8)
+    } else {
+        att_addlength_datum(0, typlen, false, value)
+    }
+}
+
+fn elem_layout(size: usize) -> core::alloc::Layout {
+    core::alloc::Layout::from_size_align(size, 8).expect("element layout")
+}
+
+/// C array_set_element_expanded (arrayfuncs.c:2501); `data_value` is
+/// already detoasted.
+pub fn array_set_element_expanded(
+    eah: &mut ExpandedArrayHeader,
+    indx: &[i32],
+    data_value: Datum,
+    isnull: bool,
+) -> PgResult<()> {
+    use crate::element::{array_size_exceeded, subscript_out_of_range, wrong_subscripts};
+    let n_subscripts = indx.len();
+    let mut ndim = eah.ndims;
+    let mut dim = eah.dims;
+    let mut lb = eah.lbound;
+    let mut dimschanged = false;
+
+    if n_subscripts == 0 || n_subscripts > MAXDIM {
+        return Err(wrong_subscripts());
+    }
+    if ndim == 0 {
+        ndim = n_subscripts as i32;
+        for i in 0..n_subscripts {
+            dim[i] = 0;
+            lb[i] = indx[i];
+        }
+        dimschanged = true;
+    } else if ndim as usize != n_subscripts {
+        return Err(wrong_subscripts());
+    }
+
+    deconstruct_expanded_array(eah)?;
+
+    let mcx = eah.obj_mcx();
+    // Copy the new element first: it may point into this very array.
+    let data_value = if !eah.typbyval && !isnull {
+        let size = elem_image_size(data_value, eah.typlen);
+        let dst: core::ptr::NonNull<u8> = ::mcx::Allocator::allocate(&mcx, elem_layout(size))
+            .map_err(|_| mcx.oom(size))?
+            .cast();
+        // SAFETY: fresh `size`-byte allocation; the source is readable for size bytes.
+        unsafe { core::ptr::copy_nonoverlapping(data_value.as_usize() as *const u8, dst.as_ptr(), size) };
+        Datum::from_usize(dst.as_ptr() as usize)
+    } else {
+        data_value
+    };
+
+    let mut newhasnulls = eah.dnulls.is_some() || isnull;
+    let mut addedbefore = 0i32;
+    let mut addedafter = 0i32;
+
+    if ndim == 1 {
+        if indx[0] < lb[0] {
+            let (ab, o1) = lb[0].overflowing_sub(indx[0]);
+            let (nd, o2) = dim[0].overflowing_add(ab);
+            if o1 || o2 {
+                return Err(array_size_exceeded());
+            }
+            addedbefore = ab;
+            dim[0] = nd;
+            lb[0] = indx[0];
+            dimschanged = true;
+            if addedbefore > 1 {
+                newhasnulls = true;
+            }
+        }
+        if indx[0] >= dim[0] + lb[0] {
+            let (aa, o1) = indx[0].overflowing_sub(dim[0] + lb[0]);
+            let (aa, o2) = aa.overflowing_add(1);
+            let (nd, o3) = dim[0].overflowing_add(aa);
+            if o1 || o2 || o3 {
+                return Err(array_size_exceeded());
+            }
+            addedafter = aa;
+            dim[0] = nd;
+            dimschanged = true;
+            if addedafter > 1 {
+                newhasnulls = true;
+            }
+        }
+    } else {
+        for i in 0..ndim as usize {
+            if indx[i] < lb[i] || indx[i] >= dim[i] + lb[i] {
+                return Err(subscript_out_of_range());
+            }
+        }
+    }
+
+    if dimschanged {
+        ::arrayutils::array_get_n_items(ndim, &dim)?;
+        ::arrayutils::array_check_bounds(ndim, &dim, &lb)?;
+    }
+    let offset = ::arrayutils::array_get_offset(n_subscripts as i32, &dim, &lb, indx) as usize;
+
+    let nelems = eah.nelems as usize;
+    let newnelems = nelems + addedbefore as usize + addedafter as usize;
+    let target = newnelems.saturating_add(newnelems / 8);
+    let dvalues = eah.dvalues.as_mut().expect("deconstructed");
+    if newnelems > dvalues.capacity() {
+        dvalues.try_reserve_exact(target - dvalues.len()).map_err(|_| mcx.oom(target * 8))?;
+    }
+    if let Some(n) = eah.dnulls.as_mut().filter(|n| newnelems > n.capacity()) {
+        n.try_reserve_exact(target - n.len()).map_err(|_| mcx.oom(target))?;
+    }
+    if newhasnulls && eah.dnulls.is_none() {
+        let cap = eah.dvalues.as_ref().unwrap().capacity().max(newnelems);
+        let mut n: PgVec<'static, bool> = vec_with_capacity_in(mcx, cap)?;
+        n.resize(nelems, false);
+        eah.dnulls = Some(n);
+    }
+
+    // Irreversible changes from here on.
+    if let Some(f) = eah.fvalue.take() {
+        eah.retired = Some(f);
+    }
+    eah.flat_cache = None;
+    eah.flat_size = 0;
+    if dimschanged {
+        eah.ndims = ndim;
+        eah.dims = dim;
+        eah.lbound = lb;
+    }
+    let dvalues = eah.dvalues.as_mut().unwrap();
+    // Growth below stays within the capacity reserved above.
+    if addedbefore > 0 {
+        let ab = addedbefore as usize;
+        dvalues.extend(core::iter::repeat_n(Datum::null(), ab));
+        dvalues.copy_within(0..nelems, ab);
+        dvalues[..ab].fill(Datum::null());
+        if let Some(n) = eah.dnulls.as_mut() {
+            n.extend(core::iter::repeat_n(true, ab));
+            n.copy_within(0..nelems, ab);
+            n[..ab].fill(true);
+        }
+    }
+    if addedafter > 0 {
+        dvalues.extend(core::iter::repeat_n(Datum::null(), addedafter as usize));
+        if let Some(n) = eah.dnulls.as_mut() {
+            n.extend(core::iter::repeat_n(true, addedafter as usize));
+        }
+    }
+    eah.nelems = newnelems as i32;
+    eah.dvalueslen = newnelems as i32;
+
+    let old_null = eah.dnulls.as_ref().is_some_and(|n| n[offset]);
+    let old = eah.dvalues.as_ref().unwrap()[offset];
+    eah.dvalues.as_mut().unwrap()[offset] = data_value;
+    if let Some(n) = eah.dnulls.as_mut() {
+        n[offset] = isnull;
+    }
+
+    if !eah.typbyval && !old_null && old.as_usize() != 0 {
+        let p = old.as_usize();
+        let in_flat = eah
+            .retired
+            .as_ref()
+            .is_some_and(|f| p >= f.as_ptr() as usize && p < f.as_ptr() as usize + f.len());
+        if !in_flat {
+            let size = elem_image_size(old, eah.typlen);
+            // SAFETY: allocated above by an earlier call with this layout;
+            // no longer referenced by the array.
+            unsafe {
+                ::mcx::Allocator::deallocate(
+                    &mcx,
+                    core::ptr::NonNull::new_unchecked(p as *mut u8),
+                    elem_layout(size),
+                )
+            };
+        }
+    }
+    Ok(())
+}
+
+/// C array_get_element_expanded (arrayfuncs.c:1921).
+pub fn array_get_element_expanded(
+    eah: &mut ExpandedArrayHeader,
+    indx: &[i32],
+) -> PgResult<(Datum, bool)> {
+    let ndim = eah.ndims;
+    if ndim as usize != indx.len() || ndim <= 0 || ndim as usize > MAXDIM {
+        return Ok((Datum::null(), true));
+    }
+    for i in 0..ndim as usize {
+        if indx[i] < eah.lbound[i] || indx[i] >= eah.dims[i] + eah.lbound[i] {
+            return Ok((Datum::null(), true));
+        }
+    }
+    let offset = ::arrayutils::array_get_offset(ndim, &eah.dims, &eah.lbound, indx) as usize;
+    deconstruct_expanded_array(eah)?;
+    if eah.dnulls.as_ref().is_some_and(|n| n[offset]) {
+        return Ok((Datum::null(), true));
+    }
+    Ok((eah.dvalues.as_ref().unwrap()[offset], false))
+}
+
+/// C VARATT_IS_EXTERNAL_EXPANDED + DatumGetEOHP.
+///
+/// # Safety
+/// As [`rw_expanded_array`].
+pub unsafe fn expanded_array(d: Datum) -> Option<*mut ExpandedArrayHeader> {
+    if !datum_is_external_expanded(d) {
+        return None;
+    }
+    let eah = datum_get_eohp(d) as *mut ExpandedArrayHeader;
+    assert_eq!((*eah).ea_magic, EA_MAGIC);
+    Some(eah)
+}
+
+/// C VARATT_IS_EXTERNAL_EXPANDED_RW + DatumGetEOHP.
+///
+/// # Safety
+/// `d` is a live non-null varlena datum; the result aliases the object the
+/// datum references.
+pub unsafe fn rw_expanded_array(d: Datum) -> Option<*mut ExpandedArrayHeader> {
+    if !datum_is_external_expanded_rw(d) {
+        return None;
+    }
+    let eah = datum_get_eohp(d) as *mut ExpandedArrayHeader;
+    assert_eq!((*eah).ea_magic, EA_MAGIC);
+    Some(eah)
 }
 
 #[cfg(test)]

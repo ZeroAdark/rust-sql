@@ -21,7 +21,7 @@ const DEFAULT_COLLATION_OID: Oid = 100;
 fn lower(buff: &[u8]) -> PgResult<Vec<u8>> {
     let scratch = MemoryContext::new("citext lower");
     let folded = formatting_seams::str_tolower::call(scratch.mcx(), buff, DEFAULT_COLLATION_OID)?;
-    Ok(folded.as_slice().to_vec())
+    Ok(::mcx::std_vec_from_slice("citext", &folded.as_slice())?)
 }
 
 /// `citextcmp` (citext.c): lowercase both operands under

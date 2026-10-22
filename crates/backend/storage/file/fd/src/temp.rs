@@ -1,4 +1,4 @@
-use ::elog::ereport;
+use ::elog::{ereport, PCT_M};
 use ::types_core::{InvalidOid, Oid, OidIsValid, MAXPGPATH};
 use ::types_error::{PgResult, ERROR, LOG};
 use ::types_storage::{
@@ -17,6 +17,7 @@ pub const GLOBALTABLESPACE_OID: Oid = 1664;
 const TEMP_OPEN_FLAGS: i32 = libc::O_RDWR | libc::O_CREAT | libc::O_TRUNC;
 
 pub fn OpenTemporaryFile(inter_xact: bool) -> PgResult<File> {
+    crate::orphan::drain();
     let mut file = File(0);
 
     debug_assert!(with_fd(|fd| fd.temporary_files_allowed), "temp file access not up");
@@ -108,7 +109,7 @@ pub(crate) fn OpenTemporaryFileInTablespace(tblspc_oid: Oid, reject_error: bool)
             ereport(ERROR)
                 .with_saved_errno(get_errno())
                 .errmsg_internal(format!(
-                    "could not create temporary file \"{tempfilepath}\": %m"
+                    "could not create temporary file \"{tempfilepath}\": {PCT_M}"
                 ))
                 .finish(loc("OpenTemporaryFileInTablespace"))?;
         }
@@ -128,7 +129,7 @@ pub fn PathNameCreateTemporaryFile(path: &str, error_on_failure: bool) -> PgResu
             ereport(ERROR)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not create temporary file \"{path}\": %m"))
+                .errmsg(format!("could not create temporary file \"{path}\": {PCT_M}"))
                 .finish(loc("PathNameCreateTemporaryFile"))?;
         }
         return Ok(file);
@@ -154,7 +155,7 @@ pub fn PathNameOpenTemporaryFile(path: &str, mode: i32) -> PgResult<File> {
         ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open temporary file \"{path}\": %m"))
+            .errmsg(format!("could not open temporary file \"{path}\": {PCT_M}"))
             .finish(loc("PathNameOpenTemporaryFile"))?;
     }
 
@@ -180,7 +181,7 @@ pub fn PathNameCreateTemporaryDir(basedir: &str, directory: &str) -> PgResult<()
             ereport(ERROR)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("cannot create temporary directory \"{basedir}\": %m"))
+                .errmsg(format!("cannot create temporary directory \"{basedir}\": {PCT_M}"))
                 .finish(loc("PathNameCreateTemporaryDir"))?;
         }
 
@@ -189,7 +190,7 @@ pub fn PathNameCreateTemporaryDir(basedir: &str, directory: &str) -> PgResult<()
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "cannot create temporary subdirectory \"{directory}\": %m"
+                    "cannot create temporary subdirectory \"{directory}\": {PCT_M}"
                 ))
                 .finish(loc("PathNameCreateTemporaryDir"))?;
         }
@@ -220,20 +221,24 @@ pub fn PathNameDeleteTemporaryFile(path: &str, error_on_failure: bool) -> PgResu
     // Unlike FileClose's deletion, tolerate non-existence: BufFileDeleteFileSet
     // probes segments until it runs out.
     if stat_errno == libc::ENOENT {
+        vfd::named_temp_gone(path);
         return Ok(false);
     }
 
     if vfs::unlink(&cp) != 0 {
         let unlink_errno = get_errno();
-        if unlink_errno != libc::ENOENT {
+        if unlink_errno == libc::ENOENT {
+            vfd::named_temp_gone(path);
+        } else {
             ereport(if error_on_failure { ERROR } else { LOG })
                 .with_saved_errno(unlink_errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not unlink temporary file \"{path}\": %m"))
+                .errmsg(format!("could not unlink temporary file \"{path}\": {PCT_M}"))
                 .finish(loc("PathNameDeleteTemporaryFile"))?;
         }
         return Ok(false);
     }
+    vfd::named_temp_gone(path);
 
     if stat_errno == 0 {
         ReportTemporaryFileUsage(path, filesize)?;
@@ -241,11 +246,99 @@ pub fn PathNameDeleteTemporaryFile(path: &str, error_on_failure: bool) -> PgResu
         ereport(LOG)
             .with_saved_errno(stat_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not stat file \"{path}\": %m"))
+            .errmsg(format!("could not stat file \"{path}\": {PCT_M}"))
             .finish(loc("PathNameDeleteTemporaryFile"))?;
     }
 
     Ok(true)
+}
+
+// ---- pgrust-only (gravity D3203): a directory's temp files unlinked across threads ----
+//
+// A parallel statement's spill set held its workers' scatter files (GBs at W16); the leader alone unlinked them at the
+// statement's end (FileSetDeleteAll's walk), the kernel freeing each file's page cache inside unlink, every worker
+// idle. No C counterpart: PostgreSQL's participants delete their own files as they detach.
+
+pub fn PathNameDeleteTemporaryFilesWith(
+    dirname: &str,
+    min_bytes: u64,
+    fan: &dyn Fn(usize, &(dyn Fn(usize) + Sync)),
+) -> PgResult<(usize, u64, bool)> {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    let mut info = vfs::FileInfo::zeroed();
+    if vfs::lstat(&vfd::cpath(dirname), &mut info) != 0 {
+        return Ok((0, 0, false));
+    }
+    let mut paths = Vec::new(); // alloc: Cold
+    let dir = crate::desc::AllocateDir(dirname)?;
+    while let Some(de) = crate::desc::ReadDirExtended(dir, dirname, LOG)? {
+        if de.d_name == "." || de.d_name == ".." {
+            continue;
+        }
+        let path = format!("{dirname}/{}", de.d_name);
+        if crate::sync::get_dirent_type(&path, false, LOG)? == crate::sync::PgFileType::Reg {
+            paths.push(path); // alloc: Cold
+        }
+    }
+    crate::desc::FreeDir(dir)?;
+    let cps: Vec<std::ffi::CString> = paths.iter().map(|p| vfd::cpath(p)).collect(); // alloc: Cold
+    let sizes: Vec<(i32, u64)> = cps // alloc: Cold
+        .iter()
+        .map(|cp| {
+            let mut md = vfs::FileInfo::zeroed();
+            if vfs::stat(cp, &mut md) == 0 {
+                (0, md.size as u64)
+            } else {
+                (get_errno(), 0)
+            }
+        })
+        .collect();
+    let done: Vec<AtomicI32> = paths.iter().map(|_| AtomicI32::new(0)).collect(); // alloc: Cold
+    let unlink = |i: usize| {
+        if sizes[i].0 != libc::ENOENT && done[i].load(Ordering::Acquire) == 0 {
+            let r = if vfs::unlink(&cps[i]) == 0 { 1 } else { 2 + get_errno() };
+            done[i].store(r, Ordering::Release);
+        }
+    };
+    let bytes = sizes.iter().map(|s| s.1).sum::<u64>();
+    let fanned = paths.len() >= 2 && bytes >= min_bytes;
+    if fanned {
+        fan(paths.len(), &unlink);
+    }
+    for (i, path) in paths.iter().enumerate() {
+        let (stat_errno, filesize) = sizes[i];
+        if stat_errno == libc::ENOENT {
+            vfd::named_temp_gone(path);
+            continue;
+        }
+        unlink(i);
+        match done[i].load(Ordering::Acquire) {
+            1 => {}
+            r if r - 2 == libc::ENOENT => {
+                vfd::named_temp_gone(path);
+                continue;
+            }
+            r => {
+                ereport(LOG)
+                    .with_saved_errno(r - 2)
+                    .errcode_for_file_access()
+                    .errmsg(format!("could not unlink temporary file \"{path}\": %m"))
+                    .finish(loc("PathNameDeleteTemporaryFile"))?;
+                continue;
+            }
+        }
+        vfd::named_temp_gone(path);
+        if stat_errno == 0 {
+            ReportTemporaryFileUsage(path, filesize)?;
+        } else {
+            ereport(LOG)
+                .with_saved_errno(stat_errno)
+                .errcode_for_file_access()
+                .errmsg(format!("could not stat file \"{path}\": %m"))
+                .finish(loc("PathNameDeleteTemporaryFile"))?;
+        }
+    }
+    Ok((paths.len(), bytes, fanned))
 }
 
 pub(crate) fn ReportTemporaryFileUsage(path: &str, size: u64) -> PgResult<()> {
@@ -269,7 +362,24 @@ pub(crate) fn RegisterTemporaryFile(fd: &mut FdState, file: File) {
     fd.have_xact_temporary_files = true;
 }
 
-pub fn SetTempTablespaces(table_spaces: &[Oid]) {
+/// C PrepareTempTablespaces pallocs the array in TopMemoryContext; a
+/// failure there is ERROR 53200. The GUC assign path already owns its array
+/// (the check hook's extra) and stores it without copying:
+/// [`SetTempTablespacesShared`].
+pub fn SetTempTablespaces(table_spaces: &[Oid]) -> PgResult<()> {
+    let num_spaces = table_spaces.len();
+    let mut owned: Vec<Oid> = Vec::new();
+    owned
+        .try_reserve_exact(num_spaces)
+        .map_err(|_| ::mcx::oom_named("TopMemoryContext", num_spaces * core::mem::size_of::<Oid>()))?;
+    owned.extend_from_slice(table_spaces);
+    SetTempTablespacesShared(std::sync::Arc::new(owned));
+    Ok(())
+}
+
+/// fd.c SetTempTablespaces: store an already-allocated array (C keeps the
+/// caller's pointer; the GUC extra is the owner here). No allocation.
+pub fn SetTempTablespacesShared(table_spaces: std::sync::Arc<Vec<Oid>>) {
     let num_spaces = table_spaces.len();
     // C picks a pg_prng random start to spread sort files across tablespaces.
     let start = if num_spaces > 1 {
@@ -278,7 +388,7 @@ pub fn SetTempTablespaces(table_spaces: &[Oid]) {
         0
     };
     with_fd(|fd| {
-        fd.temp_table_spaces = Some(table_spaces.to_vec());
+        fd.temp_table_spaces = Some(table_spaces);
         fd.next_temp_table_space = start;
     });
 }
@@ -290,7 +400,7 @@ pub fn TempTablespacesAreSet() -> bool {
 pub fn GetTempTablespaces(table_spaces: &mut [Oid]) -> i32 {
     debug_assert!(TempTablespacesAreSet());
     with_fd(|fd| {
-        let src = fd.temp_table_spaces.as_deref().unwrap_or(&[]);
+        let src: &[Oid] = fd.temp_table_spaces.as_deref().map_or(&[], Vec::as_slice);
         debug_assert!(src.len() <= table_spaces.len());
         let n = src.len().min(table_spaces.len());
         table_spaces[..n].copy_from_slice(&src[..n]);
@@ -300,7 +410,7 @@ pub fn GetTempTablespaces(table_spaces: &mut [Oid]) -> i32 {
 
 pub fn GetNextTempTableSpace() -> Oid {
     with_fd(|fd| {
-        let num = fd.temp_table_spaces.as_deref().map_or(0, <[Oid]>::len);
+        let num = fd.temp_table_spaces.as_deref().map_or(0, Vec::len);
         if num > 0 {
             fd.next_temp_table_space += 1;
             if fd.next_temp_table_space as usize >= num {

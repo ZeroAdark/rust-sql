@@ -1,0 +1,16 @@
+-- regress-full-create_index-060
+-- EXPLAIN (COSTS OFF) SELECT * FROM tenk1 WHERE unique1 < 1 OR unique1 < 3 OR hundred < 2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n3@0 n1@0 n0@0
+  source bitmap rel=16423 rti=1 am=heap
+    bitmap or node=1
+      bitmap index node=2 index=19339 rows=4
+        key att=1 op=97 form=any value=c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x03\x00\x00\x00'
+      bitmap index node=3 index=19341 rows=200
+        key att=7 op=97 value=c23:2
+    recheck (or(or(op97(v1.1, c23:1), op97(v1.1, c23:3)), op97(v1.7, c23:2)))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byref8:fx64:win/page Attr(15):byref8:fx64:win/page Attr(16):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16)
+  outs 1=w8:val 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=fx64:win/page 15=fx64:win/page 16=fx64:win/page
+mapped: BitmapOr BitmapIndexScan BitmapHeapScan

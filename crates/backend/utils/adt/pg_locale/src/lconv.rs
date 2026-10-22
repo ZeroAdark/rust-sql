@@ -101,8 +101,8 @@ pub(crate) fn db_encoding_convert(
     raw: &[u8],
 ) -> ::types_error::PgResult<Vec<u8>> {
     Ok(match mbutils::pg_any_to_server(mcx, raw, encoding)? {
-        Some(v) => v.as_slice().to_vec(),
-        None => raw.to_vec(),
+        Some(v) => ::mcx::std_vec_from_slice("pg_locale", v.as_slice())?,
+        None => ::mcx::std_vec_from_slice("pg_locale", raw)?,
     })
 }
 
@@ -123,26 +123,26 @@ fn read_lconv(monetary: &str, numeric: &str) -> ::types_error::PgResult<PgLconv>
             .with_sqlstate(::types_error::ERRCODE_INVALID_PARAMETER_VALUE),
         )
     }
-    fn cstring(s: &str) -> Vec<u8> {
-        let mut v = Vec::with_capacity(s.len() + 1);
+    fn cstring(s: &str) -> ::types_error::PgResult<Vec<u8>> {
+        let mut v = ::mcx::std_vec_with_capacity::<u8>("pg_locale", s.len() + 1)?;
         v.extend_from_slice(s.as_bytes());
         v.push(0);
-        v
+        Ok(v)
     }
     // Copy the raw bytes while the locale is still installed: localeconv's
     // pointers are only valid until we restore/free it. They are in the
     // locale's encoding; the conversion into the database encoding happens
     // below (pg_locale.c:593-618).
-    unsafe fn own(p: *const c_char) -> Vec<u8> {
+    unsafe fn own(p: *const c_char) -> ::types_error::PgResult<Vec<u8>> {
         if p.is_null() {
-            Vec::new()
+            Ok(Vec::new())
         } else {
-            unsafe { CStr::from_ptr(p) }.to_bytes().to_vec()
+            ::mcx::std_vec_from_slice("pg_locale", unsafe { CStr::from_ptr(p) }.to_bytes())
         }
     }
 
-    let mon_c = cstring(monetary);
-    let num_c = cstring(numeric);
+    let mon_c = cstring(monetary)?;
+    let num_c = cstring(numeric)?;
 
     // localeconv() returns a pointer to a process-global static struct (POSIX
     // does not require it to be thread-safe, and glibc's is not). Even with the
@@ -192,15 +192,17 @@ fn read_lconv(monetary: &str, numeric: &str) -> ::types_error::PgResult<PgLconv>
             None
         } else {
             let lc = &*lc;
-            Some((
-                own(lc.decimal_point),
-                own(lc.thousands_sep),
-                own(lc.mon_decimal_point),
-                own(lc.mon_thousands_sep),
-                own(lc.mon_grouping),
-                own(lc.currency_symbol),
-                own(lc.positive_sign),
-                own(lc.negative_sign),
+            // Copies are fallible (ERROR 53200); the result is unwrapped only
+            // after the locale object below is restored and freed.
+            Some((|| -> ::types_error::PgResult<_> { Ok((
+                own(lc.decimal_point)?,
+                own(lc.thousands_sep)?,
+                own(lc.mon_decimal_point)?,
+                own(lc.mon_thousands_sep)?,
+                own(lc.mon_grouping)?,
+                own(lc.currency_symbol)?,
+                own(lc.positive_sign)?,
+                own(lc.negative_sign)?,
                 lc.frac_digits as i8,
                 lc.p_cs_precedes as i8,
                 lc.n_cs_precedes as i8,
@@ -208,7 +210,7 @@ fn read_lconv(monetary: &str, numeric: &str) -> ::types_error::PgResult<PgLconv>
                 lc.n_sep_by_space as i8,
                 lc.p_sign_posn as i8,
                 lc.n_sign_posn as i8,
-            ))
+            )) })())
         };
         // Restore this thread's previous locale (possibly LC_GLOBAL_LOCALE)
         // before freeing ours — freeing the installed locale is undefined.
@@ -218,6 +220,7 @@ fn read_lconv(monetary: &str, numeric: &str) -> ::types_error::PgResult<PgLconv>
         let Some(v) = out else {
             return Err(bad("lc_monetary", monetary));
         };
+        let v = v?;
         // pg_locale.c:593-618: convert from the encoding implied by
         // LC_NUMERIC (decimal_point, thousands_sep) / LC_MONETARY (the rest)
         // into the database encoding; an unidentifiable encoding (-1) means

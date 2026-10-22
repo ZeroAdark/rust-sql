@@ -1,0 +1,11 @@
+-- regress-full-index_including-002
+-- INSERT INTO tbl SELECT 1, NULL, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:10)]
+  project (1=c23:1, 2=c23:null, 3=op514(c23:3, v3.1), 4=c603:#32)
+  write INSERT rel=20380 rti=1 natts=4 indexes=(20385[1, 2, 3, 4]upi)
+  outs 1=w4:val 2=w4:val 3=w4:val 4=fx32:stmt/imm
+mapped: ModifyTable FunctionScan

@@ -237,6 +237,14 @@ mod imp {
         base: *mut u8,
         used: Cell<usize>,
         live: Cell<usize>,
+        /// C8: the chunk's pages on the program caches' charge while it is mapped.
+        _charge: memledger::Charge,
+    }
+
+    /// C8 move 7: deform kernels' code pages (door 2) are the program caches' memory, whichever thread compiled them.
+    fn code_charge(bytes: usize) -> memledger::Charge {
+        let owner = memledger::Owner::Cache(memledger::Holder::Of(memledger::Consumer::ProgramCaches));
+        memledger::Charge::open(owner, memledger::Release::Evict, memledger::Kind::Mapped, memledger::charge::Door::Mapped, bytes as u64)
     }
 
     impl Drop for Chunk {
@@ -289,7 +297,8 @@ mod imp {
         if base == libc::MAP_FAILED {
             return None;
         }
-        Some(Rc::new(Chunk { base: base.cast(), used: Cell::new(0), live: Cell::new(0) }))
+        mempolicy::maps::name(base.cast(), CHUNK_BYTES, c"pgrust:jit_deform");
+        Some(Rc::new(Chunk { base: base.cast(), used: Cell::new(0), live: Cell::new(0), _charge: code_charge(CHUNK_BYTES) }))
     }
 
     pub(crate) fn alloc_code(words: &[u32]) -> Option<CodeAlloc> {
@@ -355,6 +364,8 @@ mod imp {
     pub(crate) struct SharedAlloc {
         base: *mut u8,
         map_len: usize,
+        /// C8: the mapping's pages on the program caches' charge.
+        _charge: memledger::Charge,
     }
 
     impl SharedAlloc {
@@ -400,7 +411,8 @@ mod imp {
             return None;
         }
         let base: *mut u8 = base.cast();
-        let alloc = SharedAlloc { base, map_len };
+        mempolicy::maps::name(base, map_len, c"pgrust:jit_deform");
+        let alloc = SharedAlloc { base, map_len, _charge: code_charge(map_len) };
         // SAFETY: len <= map_len; the mapping is ours alone; after the
         // RX flip it is never writable again (W^X by construction).
         unsafe {

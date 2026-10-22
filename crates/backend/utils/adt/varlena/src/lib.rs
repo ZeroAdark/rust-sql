@@ -107,7 +107,7 @@ fn collation_is_c_known(collid: Oid) -> bool {
 }
 
 #[inline]
-fn collation_is_deterministic(collid: Oid) -> PgResult<bool> {
+pub(crate) fn collation_is_deterministic(collid: Oid) -> PgResult<bool> {
     if collation_is_c_known(collid) {
         Ok(true)
     } else {
@@ -183,6 +183,20 @@ pub fn hashtext_bytes(collid: Oid, data: &[u8]) -> PgResult<u32> {
     Ok(::hashfn::hash_bytes(data))
 }
 
+/// D4560: whether `varstr_cmp` under this collation is `varstrfastcmp_c` (C / POSIX, or a collation whose locale sorts
+/// as C: `collate_is_c`), the answer `varstr_cmp_locale` reads per call. A caller resolving it once (a btree insertion's
+/// text compares, nbtree fcframe.rs) and calling `varstrfastcmp_c` gets exactly what `varstr_cmp` returns for a valid
+/// collation. `false` (not known C) for an invalid collation or one whose locale cannot be resolved here: the caller
+/// keeps `varstr_cmp`, which raises the same error it did before.
+pub fn collation_sorts_as_c(collid: Oid) -> bool {
+    if collation_is_c_known(collid) {
+        return true;
+    }
+    OidIsValid(collid)
+        && pg_locale_seams::collation_collate_is_c::is_installed()
+        && pg_locale_seams::collation_collate_is_c::call(collid).unwrap_or(false)
+}
+
 /// Whether text hashing/equality under this collation reduces to raw bytes
 /// (hashtext = hash_any, texteq = length + memcmp): valid AND deterministic.
 /// Resolve-once gate for execgrouping's text probe kernel — the per-row fmgr
@@ -246,7 +260,7 @@ pub fn text_smaller<'a>(t1: &'a [u8], t2: &'a [u8], collid: Oid) -> PgResult<&'a
     Ok(if text_cmp(t1, t2, collid)? < 0 { t1 } else { t2 })
 }
 
-pub fn text_starts_with(t1: &[u8], t2: &[u8], collid: Oid) -> PgResult<bool> {
+pub(crate) fn check_substring_collation(collid: Oid) -> PgResult<()> {
     check_collation_set(collid)?;
     if !collation_is_deterministic(collid)? {
         return Err(Box::new(
@@ -256,6 +270,11 @@ pub fn text_starts_with(t1: &[u8], t2: &[u8], collid: Oid) -> PgResult<bool> {
             .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
         ));
     }
+    Ok(())
+}
+
+pub fn text_starts_with(t1: &[u8], t2: &[u8], collid: Oid) -> PgResult<bool> {
+    check_substring_collation(collid)?;
     Ok(t2.len() <= t1.len() && &t1[..t2.len()] == t2)
 }
 
@@ -1057,8 +1076,20 @@ pub fn split_identifier_string_bytes(
     separator: u8,
     encoding: wchar::pg_enc,
 ) -> PgResult<Option<Vec<Vec<u8>>>> {
-    Ok(split_identifier_bytes(mcx, rawstring, separator, encoding)?
-        .map(|names| names.iter().map(|name| name.to_vec()).collect()))
+    let Some(names) = split_identifier_bytes(mcx, rawstring, separator, encoding)? else {
+        return Ok(None);
+    };
+    let mut out = Vec::new();
+    out.try_reserve_exact(names.len())
+        .map_err(|_| mcx.oom(names.len() * core::mem::size_of::<Vec<u8>>()))?;
+    for name in &names {
+        let mut n = Vec::new();
+        n.try_reserve_exact(name.len())
+            .map_err(|_| mcx.oom(name.len()))?;
+        n.extend_from_slice(name);
+        out.push(n);
+    }
+    Ok(Some(out))
 }
 
 // textToQualifiedNameList over the detoasted text bytes (text_to_cstring in

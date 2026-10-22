@@ -1,0 +1,15 @@
+# W6-D655-ROWC (V4R-534, D655 Row C): cte-031 as rowc-cte031-pass, the other session's newer version moved to x = 5:
+# the recheck's index qual (x = 100001) fails on it, so the row is skipped (not deleted, not returned) and the main
+# query reads no row. PostgreSQL 18.6's answer by ExecDelete's EvalPlanQual rule (EPQ returns NULL: TM_Updated skipped).
+plan: cte-031
+table: 16405 u x:int4 y:int4 z:text
+[before 16405]
+100001	1	a
+~5	1	b
+7	7	e
+[pg]
+[tag]
+0
+[after 16405]
+5	1	b
+7	7	e

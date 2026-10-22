@@ -1,0 +1,3 @@
+backend/utils/cache/relcache/src/l2core.rs	TD_MIRRORS	pgport	at:prune_mirrors	leader	relcache; per-thread tupdesc mirrors of shared cores: idle passivation prunes unheld ones (prune_mirrors), session teardown clears all; bounded by the held mirrors (unheld ones pruned at twice the survivors, TD_NEXT_PRUNE)
+backend/utils/cache/relcache/src/l2core.rs	TD_CLEANUP_ARMED	pgport	at:tupdesc_mirror	leader	relcache; whether the mirrors' session cleanup is armed, cleared by that cleanup (registered in tupdesc_mirror)
+backend/utils/cache/relcache/src/l2core.rs	TD_NEXT_PRUNE	pgport	at:tupdesc_mirror	leader	relcache; next mirror prune size, set back by the session cleanup tupdesc_mirror arms

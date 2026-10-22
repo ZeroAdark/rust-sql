@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/executor/execPartition.c: 1 stack-depth check sites
+2581	find_matching_subplans_recurse	crates/backend/executor/execpartition/src/pruning.rs	find_matching_subplans_recurse	yes	

@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.argv[2]) || 8080;
+// --isolate: serve the page cross-origin isolated (COOP/COEP), which user cancel needs (backend.js requestCancel). The
+// live site's headers are set where it is deployed, not here.
+const isolate = process.argv.includes('--isolate');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -68,6 +71,10 @@ http.createServer((req, res) => {
       'Cache-Control': forcedEncoding === 'raw' ? 'no-cache, no-transform' : 'no-cache',
       'Vary': 'Accept-Encoding',
     };
+    if (isolate) {
+      headers['Cross-Origin-Opener-Policy'] = 'same-origin';
+      headers['Cross-Origin-Embedder-Policy'] = 'require-corp';
+    }
     const variant = encodedVariant(req, filePath, forcedEncoding);
     if (variant) {
       const encSt = fs.statSync(variant.path);
@@ -112,5 +119,5 @@ http.createServer((req, res) => {
     }
   });
 }).listen(port, () => {
-  console.error(`pgrust wasm webapp: http://localhost:${port}/`);
+  console.error(`pgrust wasm webapp: http://localhost:${port}/${isolate ? ' (cross-origin isolated)' : ''}`);
 });

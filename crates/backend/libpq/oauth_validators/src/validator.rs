@@ -207,7 +207,8 @@ fn validate_jws(env: ValidatorEnv<'_>, hba_issuer: &str, token: &str, cfg: &Conf
 }
 
 fn form_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let mut out = String::new();
+    let _ = out.try_reserve(s.len());
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),

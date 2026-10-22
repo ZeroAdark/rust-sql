@@ -1,0 +1,819 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2b s2xu s1v s2u s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xu: EXPLAIN (COSTS OFF) WITH c AS (UPDATE rc SET v = v + 1 WHERE grp = 0 RETURNING id, grp, v, t) SELECT * FROM c ORDER BY id;
+QUERY PLAN                       
+---------------------------------
+Sort                             
+  Sort Key: c.id                 
+  CTE c                          
+    ->  Update on rc             
+          ->  Seq Scan on rc     
+                Filter: (grp = 0)
+  ->  CTE Scan on c              
+(7 rows)
+
+step s1v: UPDATE rc SET v = v + 100 WHERE id = 3;
+step s2u: WITH c AS (UPDATE rc SET v = v + 1 WHERE grp = 0 RETURNING id, grp, v, t) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|grp|  v|t    
+--+---+---+-----
+ 3|  0|104|row3 
+ 6|  0|  7|row6 
+ 9|  0| 10|row9 
+12|  0| 13|row12
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|104|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|  7|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0| 10|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 13|row12
+(12 rows)
+
+
+starting permutation: s2b s1g s2u s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1g: UPDATE rc SET grp = 2 WHERE id = 6;
+step s2u: WITH c AS (UPDATE rc SET v = v + 1 WHERE grp = 0 RETURNING id, grp, v, t) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|grp| v|t    
+--+---+--+-----
+ 3|  0| 4|row3 
+ 9|  0|10|row9 
+12|  0|13|row12
+(3 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 3|  0| 4|row3 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 6|  2| 6|row6 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+ 9|  0|10|row9 
+10|  1|10|row10
+11|  2|11|row11
+12|  0|13|row12
+(12 rows)
+
+
+starting permutation: s2b s1d s2u s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1d: DELETE FROM rc WHERE id = 9;
+step s2u: WITH c AS (UPDATE rc SET v = v + 1 WHERE grp = 0 RETURNING id, grp, v, t) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|grp| v|t    
+--+---+--+-----
+ 3|  0| 4|row3 
+ 6|  0| 7|row6 
+12|  0|13|row12
+(3 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 3|  0| 4|row3 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 6|  0| 7|row6 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+10|  1|10|row10
+11|  2|11|row11
+12|  0|13|row12
+(11 rows)
+
+
+starting permutation: s2b s1t s2uo s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1t: UPDATE rc SET t = 'new' || id WHERE id = 3;
+step s2uo: WITH c AS (UPDATE rc SET v = v + 1 WHERE grp = 0 RETURNING id, old.v AS ov, new.v AS nv, old.t AS ot) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2uo: <... completed>
+id|ov|nv|ot   
+--+--+--+-----
+ 3| 3| 4|new3 
+ 6| 6| 7|row6 
+ 9| 9|10|row9 
+12|12|13|row12
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 3|  0| 4|new3 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 6|  0| 7|row6 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+ 9|  0|10|row9 
+10|  1|10|row10
+11|  2|11|row11
+12|  0|13|row12
+(12 rows)
+
+
+starting permutation: s2b s1v s2uo s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rc SET v = v + 100 WHERE id = 3;
+step s2uo: WITH c AS (UPDATE rc SET v = v + 1 WHERE grp = 0 RETURNING id, old.v AS ov, new.v AS nv, old.t AS ot) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2uo: <... completed>
+id| ov| nv|ot   
+--+---+---+-----
+ 3|103|104|row3 
+ 6|  6|  7|row6 
+ 9|  9| 10|row9 
+12| 12| 13|row12
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|104|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|  7|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0| 10|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 13|row12
+(12 rows)
+
+
+starting permutation: s2b s1v s2d s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rc SET v = v + 100 WHERE id = 3;
+step s2d: WITH c AS (DELETE FROM rc WHERE grp = 0 RETURNING id, v, t) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|  v|t    
+--+---+-----
+ 3|103|row3 
+ 6|  6|row6 
+ 9|  9|row9 
+12| 12|row12
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+10|  1|10|row10
+11|  2|11|row11
+(8 rows)
+
+
+starting permutation: s2b s1g s2d s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1g: UPDATE rc SET grp = 2 WHERE id = 6;
+step s2d: WITH c AS (DELETE FROM rc WHERE grp = 0 RETURNING id, v, t) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| v|t    
+--+--+-----
+ 3| 3|row3 
+ 9| 9|row9 
+12|12|row12
+(3 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 6|  2| 6|row6 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+10|  1|10|row10
+11|  2|11|row11
+(9 rows)
+
+
+starting permutation: s2b s1d s2d s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1d: DELETE FROM rc WHERE id = 9;
+step s2d: WITH c AS (DELETE FROM rc WHERE grp = 0 RETURNING id, v, t) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id| v|t    
+--+--+-----
+ 3| 3|row3 
+ 6| 6|row6 
+12|12|row12
+(3 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+10|  1|10|row10
+11|  2|11|row11
+(8 rows)
+
+
+starting permutation: s2b s1v s2n s1c s2seq s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rc SET v = v + 100 WHERE id = 3;
+step s2n: WITH c AS (UPDATE rc SET v = nextval('rcsq') WHERE grp = 0 RETURNING id, v) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+id|v
+--+-
+ 3|2
+ 6|3
+ 9|4
+12|5
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM rcsq;
+last_value|is_called
+----------+---------
+         5|t        
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 3|  0| 2|row3 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 6|  0| 3|row6 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+ 9|  0| 4|row9 
+10|  1|10|row10
+11|  2|11|row11
+12|  0| 5|row12
+(12 rows)
+
+
+starting permutation: s2b s1v s2initr s1c s2seq s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE rc SET v = v + 100 WHERE id = 3;
+step s2initr: WITH c AS (UPDATE rc SET v = v + 1 WHERE grp = 0 RETURNING id, v, (SELECT nextval('rcsq')) AS r) SELECT id, v, r FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2initr: <... completed>
+id|  v|r
+--+---+-
+ 3|104|1
+ 6|  7|1
+ 9| 10|1
+12| 13|1
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM rcsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|104|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|  7|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0| 10|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 13|row12
+(12 rows)
+
+
+starting permutation: s2b s2xi s1v s2i s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xi: SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; EXPLAIN (COSTS OFF) WITH c AS (UPDATE rc SET grp = grp + 10 WHERE v = 3 RETURNING id, v) SELECT * FROM c;
+QUERY PLAN                               
+-----------------------------------------
+CTE Scan on c                            
+  CTE c                                  
+    ->  Update on rc                     
+          ->  Index Scan using rc_v on rc
+                Index Cond: (v = 3)      
+(5 rows)
+
+step s1v: UPDATE rc SET v = v + 100 WHERE id = 3;
+step s2i: WITH c AS (UPDATE rc SET grp = grp + 10 WHERE v = 3 RETURNING id, v) SELECT * FROM c; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+id|v
+--+-
+(0 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp|  v|t    
+--+---+---+-----
+ 1|  1|  1|row1 
+ 2|  2|  2|row2 
+ 3|  0|103|row3 
+ 4|  1|  4|row4 
+ 5|  2|  5|row5 
+ 6|  0|  6|row6 
+ 7|  1|  7|row7 
+ 8|  2|  8|row8 
+ 9|  0|  9|row9 
+10|  1| 10|row10
+11|  2| 11|row11
+12|  0| 12|row12
+(12 rows)
+
+
+starting permutation: s2b s2xbm s1v s1d s2bm s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xbm: SET LOCAL enable_seqscan = off; SET LOCAL enable_indexscan = off; EXPLAIN (COSTS OFF) WITH c AS (DELETE FROM rc WHERE id IN (3, 6, 9) RETURNING id, v) SELECT * FROM c ORDER BY id;
+QUERY PLAN                                                         
+-------------------------------------------------------------------
+Sort                                                               
+  Sort Key: c.id                                                   
+  CTE c                                                            
+    ->  Delete on rc                                               
+          ->  Bitmap Heap Scan on rc                               
+                Recheck Cond: (id = ANY ('{3,6,9}'::integer[]))    
+                ->  Bitmap Index Scan on rc_pkey                   
+                      Index Cond: (id = ANY ('{3,6,9}'::integer[]))
+  ->  CTE Scan on c                                                
+(9 rows)
+
+step s1v: UPDATE rc SET v = v + 100 WHERE id = 3;
+step s1d: DELETE FROM rc WHERE id = 9;
+step s2bm: WITH c AS (DELETE FROM rc WHERE id IN (3, 6, 9) RETURNING id, v) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2bm: <... completed>
+id|  v
+--+---
+ 3|103
+ 6|  6
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+10|  1|10|row10
+11|  2|11|row11
+12|  0|12|row12
+(9 rows)
+
+
+starting permutation: s2b s1big s2big s1c s2c s4big
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1big: UPDATE rcl SET v = v + 10 WHERE id = 2;
+step s2big: WITH c AS (UPDATE rcl SET v = v + 1 WHERE grp = 0 RETURNING id, v, length(big) AS len, md5(big) AS h) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2big: <... completed>
+id| v| len|h                               
+--+--+----+--------------------------------
+ 2|13|6400|94f1c2d1615afc11c5ad68b4f8156b32
+ 4| 5|6400|8d982843f6369db338410dee78ae5983
+(2 rows)
+
+step s2c: COMMIT;
+step s4big: SELECT id, v, length(big), md5(big) FROM rcl ORDER BY id;
+id| v|length|md5                             
+--+--+------+--------------------------------
+ 1| 1|  6400|7489150b15eff6c6397a46bf0d018c05
+ 2|13|  6400|94f1c2d1615afc11c5ad68b4f8156b32
+ 3| 3|  6400|be5563e905db5b7ec8fa1a9be0bd2fe7
+ 4| 5|  6400|8d982843f6369db338410dee78ae5983
+(4 rows)
+
+
+starting permutation: s2b s1k s2k s1c s2c s4rest
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1k: UPDATE rck SET v = 150 WHERE id = 2;
+step s2k: WITH c AS (UPDATE rck SET v = v + 100 WHERE id = 2 RETURNING id, v) SELECT * FROM c; <waiting ...>
+step s1c: COMMIT;
+step s2k: <... completed>
+ERROR:  new row for relation "rck" violates check constraint "rck_v_check"
+step s2c: COMMIT;
+step s4rest: SELECT id, v FROM rck ORDER BY id; SELECT id, a, b, g FROM rcg ORDER BY id; SELECT tableoid::regclass, * FROM rcp ORDER BY id;
+id|  v
+--+---
+ 1|  1
+ 2|150
+ 3|  3
+ 4|  4
+(4 rows)
+
+id|a|b| g
+--+-+-+--
+ 1|1|1|11
+ 2|2|2|22
+ 3|3|3|33
+ 4|4|4|44
+(4 rows)
+
+tableoid|id|k|v
+--------+--+-+-
+rcp1    | 1|1|1
+rcp1    | 2|2|2
+(2 rows)
+
+
+starting permutation: s2b s1gb s2gb s1c s2c s4rest
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1gb: UPDATE rcg SET b = b + 5 WHERE id = 2;
+step s2gb: WITH c AS (UPDATE rcg SET a = a + 1 WHERE id = 2 RETURNING id, a, b, g) SELECT * FROM c; <waiting ...>
+step s1c: COMMIT;
+step s2gb: <... completed>
+id|a|b| g
+--+-+-+--
+ 2|3|7|37
+(1 row)
+
+step s2c: COMMIT;
+step s4rest: SELECT id, v FROM rck ORDER BY id; SELECT id, a, b, g FROM rcg ORDER BY id; SELECT tableoid::regclass, * FROM rcp ORDER BY id;
+id|v
+--+-
+ 1|1
+ 2|2
+ 3|3
+ 4|4
+(4 rows)
+
+id|a|b| g
+--+-+-+--
+ 1|1|1|11
+ 2|3|7|37
+ 3|3|3|33
+ 4|4|4|44
+(4 rows)
+
+tableoid|id|k|v
+--------+--+-+-
+rcp1    | 1|1|1
+rcp1    | 2|2|2
+(2 rows)
+
+
+starting permutation: s2b s1mv s2mv s1c s2c s4rest
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1mv: UPDATE rcp SET k = 15 WHERE id = 1;
+step s2mv: WITH c AS (UPDATE rcp1 SET v = v + 1 WHERE id = 1 RETURNING id, k, v) SELECT * FROM c; <waiting ...>
+step s1c: COMMIT;
+step s2mv: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s4rest: SELECT id, v FROM rck ORDER BY id; SELECT id, a, b, g FROM rcg ORDER BY id; SELECT tableoid::regclass, * FROM rcp ORDER BY id;
+id|v
+--+-
+ 1|1
+ 2|2
+ 3|3
+ 4|4
+(4 rows)
+
+id|a|b| g
+--+-+-+--
+ 1|1|1|11
+ 2|2|2|22
+ 3|3|3|33
+ 4|4|4|44
+(4 rows)
+
+tableoid|id| k|v
+--------+--+--+-
+rcp2    | 1|15|1
+rcp1    | 2| 2|2
+(2 rows)
+
+
+starting permutation: s2b s1t s2ct s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1t: UPDATE rc SET t = 'new' || id WHERE id = 3;
+step s2ct: WITH c AS (UPDATE rc SET t = ctid::text || ':' || (rc.*)::text WHERE id = 3 RETURNING id, t) SELECT count(*) FROM c; <waiting ...>
+step s1c: COMMIT;
+step s2ct: <... completed>
+count
+-----
+    1
+(1 row)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t                  
+--+---+--+-------------------
+ 1|  1| 1|row1               
+ 2|  2| 2|row2               
+ 3|  0| 3|(0,13):(3,0,3,new3)
+ 4|  1| 4|row4               
+ 5|  2| 5|row5               
+ 6|  0| 6|row6               
+ 7|  1| 7|row7               
+ 8|  2| 8|row8               
+ 9|  0| 9|row9               
+10|  1|10|row10              
+11|  2|11|row11              
+12|  0|12|row12              
+(12 rows)
+
+
+starting permutation: s2b s2xcw s1t s2cw s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xcw: EXPLAIN (COSTS OFF) WITH c AS (UPDATE rc SET t = ctid::text || ' ' || (rc.*)::text WHERE id IN (3, 4) AND ctid <> '(0,0)' RETURNING id, t) SELECT * FROM c ORDER BY id;
+QUERY PLAN                                                                          
+------------------------------------------------------------------------------------
+Sort                                                                                
+  Sort Key: c.id                                                                    
+  CTE c                                                                             
+    ->  Update on rc                                                                
+          ->  Seq Scan on rc                                                        
+                Filter: ((id = ANY ('{3,4}'::integer[])) AND (ctid <> '(0,0)'::tid))
+  ->  CTE Scan on c                                                                 
+(7 rows)
+
+step s1t: UPDATE rc SET t = 'new' || id WHERE id = 3;
+step s2cw: WITH c AS (UPDATE rc SET t = ctid::text || ' ' || (rc.*)::text WHERE id IN (3, 4) AND ctid <> '(0,0)' RETURNING id, t) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2cw: <... completed>
+id|t                  
+--+-------------------
+ 3|(0,13) (3,0,3,new3)
+ 4|(0,4) (4,1,4,row4) 
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t                  
+--+---+--+-------------------
+ 1|  1| 1|row1               
+ 2|  2| 2|row2               
+ 3|  0| 3|(0,13) (3,0,3,new3)
+ 4|  1| 4|(0,4) (4,1,4,row4) 
+ 5|  2| 5|row5               
+ 6|  0| 6|row6               
+ 7|  1| 7|row7               
+ 8|  2| 8|row8               
+ 9|  0| 9|row9               
+10|  1|10|row10              
+11|  2|11|row11              
+12|  0|12|row12              
+(12 rows)
+
+
+starting permutation: s2b s2xcwi s1v s2cwi s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xcwi: SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; EXPLAIN (COSTS OFF) WITH c AS (UPDATE rc SET t = ctid::text || ' ' || (rc.*)::text WHERE id IN (3, 4) AND ctid <> '(0,0)' RETURNING id, t) SELECT * FROM c ORDER BY id;
+QUERY PLAN                                                 
+-----------------------------------------------------------
+Sort                                                       
+  Sort Key: c.id                                           
+  CTE c                                                    
+    ->  Update on rc                                       
+          ->  Index Scan using rc_pkey on rc               
+                Index Cond: (id = ANY ('{3,4}'::integer[]))
+                Filter: (ctid <> '(0,0)'::tid)             
+  ->  CTE Scan on c                                        
+(8 rows)
+
+step s1v: UPDATE rc SET v = v + 100 WHERE id = 3;
+step s2cwi: SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; WITH c AS (UPDATE rc SET t = ctid::text || ' ' || (rc.*)::text WHERE id IN (3, 4) AND ctid <> '(0,0)' RETURNING id, t) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2cwi: <... completed>
+id|t                    
+--+---------------------
+ 3|(0,13) (3,0,103,row3)
+ 4|(0,4) (4,1,4,row4)   
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp|  v|t                    
+--+---+---+---------------------
+ 1|  1|  1|row1                 
+ 2|  2|  2|row2                 
+ 3|  0|103|(0,13) (3,0,103,row3)
+ 4|  1|  4|(0,4) (4,1,4,row4)   
+ 5|  2|  5|row5                 
+ 6|  0|  6|row6                 
+ 7|  1|  7|row7                 
+ 8|  2|  8|row8                 
+ 9|  0|  9|row9                 
+10|  1| 10|row10                
+11|  2| 11|row11                
+12|  0| 12|row12                
+(12 rows)
+
+
+starting permutation: s2b s2xcwb s1t s2cwb s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xcwb: SET LOCAL enable_seqscan = off; SET LOCAL enable_indexscan = off; EXPLAIN (COSTS OFF) WITH c AS (UPDATE rc SET t = ctid::text || ' ' || (rc.*)::text WHERE id IN (3, 4) AND ctid <> '(0,0)' RETURNING id, t) SELECT * FROM c ORDER BY id;
+QUERY PLAN                                                       
+-----------------------------------------------------------------
+Sort                                                             
+  Sort Key: c.id                                                 
+  CTE c                                                          
+    ->  Update on rc                                             
+          ->  Bitmap Heap Scan on rc                             
+                Recheck Cond: (id = ANY ('{3,4}'::integer[]))    
+                Filter: (ctid <> '(0,0)'::tid)                   
+                ->  Bitmap Index Scan on rc_pkey                 
+                      Index Cond: (id = ANY ('{3,4}'::integer[]))
+  ->  CTE Scan on c                                              
+(10 rows)
+
+step s1t: UPDATE rc SET t = 'new' || id WHERE id = 3;
+step s2cwb: SET LOCAL enable_seqscan = off; SET LOCAL enable_indexscan = off; WITH c AS (UPDATE rc SET t = ctid::text || ' ' || (rc.*)::text WHERE id IN (3, 4) AND ctid <> '(0,0)' RETURNING id, t) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2cwb: <... completed>
+id|t                  
+--+-------------------
+ 3|(0,13) (3,0,3,new3)
+ 4|(0,4) (4,1,4,row4) 
+(2 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t                  
+--+---+--+-------------------
+ 1|  1| 1|row1               
+ 2|  2| 2|row2               
+ 3|  0| 3|(0,13) (3,0,3,new3)
+ 4|  1| 4|(0,4) (4,1,4,row4) 
+ 5|  2| 5|row5               
+ 6|  0| 6|row6               
+ 7|  1| 7|row7               
+ 8|  2| 8|row8               
+ 9|  0| 9|row9               
+10|  1|10|row10              
+11|  2|11|row11              
+12|  0|12|row12              
+(12 rows)
+
+
+starting permutation: s2b s1t s2rw s1c s2c s4sel
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1t: UPDATE rc SET t = 'new' || id WHERE id = 3;
+step s2rw: WITH c AS (UPDATE rc SET v = v + 1 WHERE grp = 0 RETURNING id, (rc.*)::text AS w) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2rw: <... completed>
+id|w              
+--+---------------
+ 3|(3,0,4,new3)   
+ 6|(6,0,7,row6)   
+ 9|(9,0,10,row9)  
+12|(12,0,13,row12)
+(4 rows)
+
+step s2c: COMMIT;
+step s4sel: SELECT id, grp, v, t FROM rc ORDER BY id;
+id|grp| v|t    
+--+---+--+-----
+ 1|  1| 1|row1 
+ 2|  2| 2|row2 
+ 3|  0| 4|new3 
+ 4|  1| 4|row4 
+ 5|  2| 5|row5 
+ 6|  0| 7|row6 
+ 7|  1| 7|row7 
+ 8|  2| 8|row8 
+ 9|  0|10|row9 
+10|  1|10|row10
+11|  2|11|row11
+12|  0|13|row12
+(12 rows)
+
+
+starting permutation: s2b s2xr s1rg s2r s1c s2c s4rls
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xr: SET LOCAL ROLE w6_rowc_r; EXPLAIN (COSTS OFF) WITH c AS (UPDATE rcr SET v = v + 100 WHERE id = 2 RETURNING id, grp, v) SELECT * FROM c;
+QUERY PLAN                                      
+------------------------------------------------
+CTE Scan on c                                   
+  CTE c                                         
+    ->  Update on rcr                           
+          ->  Seq Scan on rcr                   
+                Filter: ((grp = 0) AND (id = 2))
+(5 rows)
+
+step s1rg: UPDATE rcr SET grp = 1 WHERE id = 2;
+step s2r: SET LOCAL ROLE w6_rowc_r; WITH c AS (UPDATE rcr SET v = v + 100 WHERE id = 2 RETURNING id, grp, v) SELECT * FROM c; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|grp|v
+--+---+-
+(0 rows)
+
+step s2c: COMMIT;
+step s4rls: SELECT id, grp, v FROM rcr ORDER BY id;
+id|grp|v
+--+---+-
+ 1|  0|1
+ 2|  1|2
+ 3|  0|3
+ 4|  0|4
+(4 rows)
+
+
+starting permutation: s2b s1rk s2r s1c s2c s4rls
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1rk: UPDATE rcr SET v = 150 WHERE id = 2;
+step s2r: SET LOCAL ROLE w6_rowc_r; WITH c AS (UPDATE rcr SET v = v + 100 WHERE id = 2 RETURNING id, grp, v) SELECT * FROM c; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+ERROR:  new row violates row-level security policy for table "rcr"
+step s2c: COMMIT;
+step s4rls: SELECT id, grp, v FROM rcr ORDER BY id;
+id|grp|  v
+--+---+---
+ 1|  0|  1
+ 2|  0|150
+ 3|  0|  3
+ 4|  0|  4
+(4 rows)
+
+
+starting permutation: s3b s3snap s1v s3u s1c s3c
+step s3b: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s3snap: SELECT count(*) FROM rc;
+count
+-----
+   12
+(1 row)
+
+step s1v: UPDATE rc SET v = v + 100 WHERE id = 3;
+step s3u: WITH c AS (UPDATE rc SET v = v + 1 WHERE grp = 0 RETURNING id, v) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s3u: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s3c: COMMIT;
+
+starting permutation: s3b s3snap s1d s3d s1c s3c
+step s3b: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s3snap: SELECT count(*) FROM rc;
+count
+-----
+   12
+(1 row)
+
+step s1d: DELETE FROM rc WHERE id = 9;
+step s3d: WITH c AS (DELETE FROM rc WHERE grp = 0 RETURNING id) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s3d: <... completed>
+ERROR:  could not serialize access due to concurrent delete
+step s3c: COMMIT;

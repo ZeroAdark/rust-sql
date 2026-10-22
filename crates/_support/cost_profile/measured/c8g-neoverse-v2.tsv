@@ -1,0 +1,454 @@
+primitive	width	unit	ns	fixed_ns	spread_pct	points	runs	box	machine_class	bin_sha	tools_sha	measured_at
+adapt.fill.lower.s	0	row	41.944	5119082	12.9	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.fill.lower.s	8	row	4.484	5206417	6.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.fill.md5.t	0	row	12.481	15290564	1.6	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.fill.md5.t	8	row	1.618	3775472	5.7	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.fill.md5.u	0	row	508.384	20002861	1.5	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.fill.md5.u	8	row	65.181	5912768	1.9	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.fill.upper.u	0	row	193.490	1083700	10.9	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.fill.upper.u	8	row	25.689	3648967	5.8	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.hosted.lower.s	0	row	33.241	39982861	6.6	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.hosted.lower.s	8	row	4.503	5193518	9.4	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.hosted.md5.t	0	row	12.528	15244701	2.0	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.hosted.md5.t	8	row	1.595	3792196	13.8	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.hosted.md5.u	0	row	119.166	3072422535	1.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.hosted.md5.u	8	row	65.303	5775765	4.3	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.hosted.upper.u	0	row	83.103	700665827	2.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+adapt.hosted.upper.u	8	row	25.733	3755837	6.9	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.float8.ge_all	0	elem x row	2.245	0	3.2	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.float8.ge_all	8	elem x row	0.276	0	7.1	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.float8.lt_any	0	elem x row	2.139	0	3.2	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.float8.lt_any	8	elem x row	0.266	0	12.6	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.int4.ge_all	0	elem x row	1.750	0	4.5	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.int4.ge_all	8	elem x row	0.218	0	11.3	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.int4.lt_any	0	elem x row	1.693	0	2.0	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.int4.lt_any	8	elem x row	0.217	0	7.4	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.int8.ge_all	0	elem x row	1.812	0	2.1	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.int8.ge_all	8	elem x row	0.226	0	8.1	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.int8.lt_any	0	elem x row	1.718	0	3.6	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.cmp.prim.int8.lt_any	8	elem x row	0.218	0	7.1	10	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.hit_half.L4	0	row	29.044	0	7.3	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.hit_half.L4	8	row	4.462	0	8.9	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_eq.L1000	0	row	57.438	0	10.8	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_eq.L1000	8	row	14.744	0	8.7	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_eq.L32	0	row	30.950	0	9.7	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_eq.L32	8	row	4.625	0	8.1	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_eq.L4	0	row	30.130	0	9.5	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_eq.L4	8	row	4.601	0	7.4	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_len.L1000	0	row	44.029	0	16.6	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_len.L1000	8	row	12.810	0	8.9	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_len.L32	0	row	19.334	0	8.4	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_len.L32	8	row	3.288	0	6.3	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_len.L4	0	row	18.756	0	4.6	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.byteset.miss_len.L4	8	row	3.241	0	5.4	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.float8.ge_all	0	row	25.691	547443	3.2	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.float8.ge_all	8	row	2.963	702644	7.1	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.float8.lt_any	0	row	25.724	476843	3.2	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.float8.lt_any	8	row	2.948	704551	12.6	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.int4.ge_all	0	row	24.330	449850	4.5	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.int4.ge_all	8	row	2.893	643154	11.3	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.int4.lt_any	0	row	24.572	491909	2.0	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.int4.lt_any	8	row	2.908	739268	7.4	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.int8.ge_all	0	row	24.529	443154	2.1	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.int8.ge_all	8	row	2.884	701356	8.1	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.int8.lt_any	0	row	24.688	442480	3.6	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.extreme.int8.lt_any	8	row	2.848	823018	7.1	12	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.hit_half.L4	0	row	33.007	0	2.8	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.hit_half.L4	8	row	4.841	0	3.0	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_eq.L1000	0	row	59.089	0	3.5	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_eq.L1000	8	row	14.014	0	6.1	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_eq.L32	0	row	32.571	0	5.4	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_eq.L32	8	row	4.802	0	2.7	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_eq.L4	0	row	35.218	0	3.5	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_eq.L4	8	row	4.816	0	5.3	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_len.L1000	0	row	54.460	0	3.6	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_len.L1000	8	row	13.399	0	9.5	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_len.L32	0	row	28.384	0	8.2	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_len.L32	8	row	4.268	0	4.8	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_len.L4	0	row	29.455	0	5.2	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.base.miss_len.L4	8	row	4.038	0	4.3	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.hit_half.L4	0	elem x row	8.005	0	2.8	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.hit_half.L4	8	elem x row	1.011	0	3.0	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_eq.L1000	0	elem x row	7.384	0	3.5	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_eq.L1000	8	elem x row	1.039	0	6.1	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_eq.L32	0	elem x row	6.867	0	5.4	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_eq.L32	8	elem x row	0.883	0	2.7	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_eq.L4	0	elem x row	6.521	0	3.5	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_eq.L4	8	elem x row	0.830	0	5.3	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_len.L1000	0	elem x row	7.046	0	3.6	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_len.L1000	8	elem x row	0.990	0	9.5	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_len.L32	0	elem x row	6.650	0	8.2	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_len.L32	8	elem x row	0.842	0	4.8	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_len.L4	0	elem x row	6.420	0	5.2	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+expr.saop.text_walk.miss_len.L4	8	elem x row	0.828	0	4.3	6	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+fmgr.hosted.date_in	0	call	179.763	0	1.3	1	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+fmgr.hosted.now	0	call	13.936	0	0.6	1	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+fmgr.shim.int8in	0	call	28.766	0	0.5	1	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+fmgr.shim.lower	0	call	20.481	0	1.5	1	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+fmgr.shim.numeric_in	0	call	162.304	0	0.5	1	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+fmgr.shim.uuid_in	0	call	116.727	0	0.3	1	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+join.payload_fp.saved	0	row at the group	61.901	0	13.7	5	5	40	c8g-neoverse-v2	de3abcd62f2+pfpprobe	821dd02e3f1	2026-10-15T04:32Z
+join.payload_fp.saved	8	row at the group	62.231	0	6.4	5	5	40	c8g-neoverse-v2	de3abcd62f2+pfpprobe	821dd02e3f1	2026-10-15T04:32Z
+join.payload_fp.store	0	build row	4.055	0	13.7	5	5	40	c8g-neoverse-v2	de3abcd62f2+pfpprobe	821dd02e3f1	2026-10-15T04:32Z
+join.payload_fp.store	8	build row	-0.531	0	6.4	5	5	40	c8g-neoverse-v2	de3abcd62f2+pfpprobe	821dd02e3f1	2026-10-15T04:32Z
+percode.datum.cheap	0	row	81.264	0	1.6	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.datum.cheap	8	row	11.539	0	4.6	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.datum.fixed.cheap	0	row	56.387	1383766	10.9	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.datum.fixed.cheap	8	row	6.023	1556199	9.3	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.datum.fixed.md5	0	row	517.458	1374124	8.6	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.datum.fixed.md5	8	row	47.519	3164239	5.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.datum.md5	0	row	522.024	0	1.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.datum.md5	8	row	66.286	0	0.6	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.entry.cheap	0	entry	81.905	0	3.6	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.entry.cheap	8	entry	20.617	0	1.5	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.entry.md5	0	entry	455.173	0	2.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.entry.md5	8	entry	489.217	0	1.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.fixed.cheap	0	row	58.725	1698652	15.0	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.fixed.cheap	8	row	58.969	1703328	4.7	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.fixed.md5	0	row	514.361	1579756	4.4	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.fixed.md5	8	row	518.023	1591811	4.4	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.read.cheap	0	row	42.544	0	3.6	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.read.cheap	8	row	41.525	0	1.5	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.read.md5	0	row	70.779	0	2.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+percode.table.read.md5	8	row	30.527	0	1.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+plain.fold_g22	0	granule	10573.300	248817		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+plain.fold_g22	2	granule	5281.800	304414		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+plain.fold_g22	8	granule	1455.300	331752		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+plain.fold_g4096	0	granule	20897.200	104860		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+plain.fold_g4096	2	granule	10389.800	388935		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+plain.fold_g4096	8	granule	2515.800	837709		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+plain.fold_g4194304	0	granule	63761.100	29791556		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+plain.fold_g4194304	2	granule	37407.000	22929501		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+plain.fold_g4194304	8	granule	12128.400	20052578		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.cached.filter_int4_half	0	granule (8,192 rows)	8.651	84134	75.5	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.cached.filter_int4_half	2	granule (8,192 rows)	-13.782	198338	33.6	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.cached.filter_int4_half	8	granule (8,192 rows)	-6.608	206194	15.6	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.distinct.256k	0	granule (8,192 rows)	44669.176	7033761	7.0	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.distinct.256k	2	granule (8,192 rows)	21734.186	7883204	4.1	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.distinct.256k	8	granule (8,192 rows)	7318.575	1710672	9.8	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.facts.count_v	0	granule (8,192 rows)	-3.054	0	26.7	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.facts.count_v	2	granule (8,192 rows)	5.819	0	11.8	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.facts.count_v	8	granule (8,192 rows)	-4.087	0	18.0	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.facts.sum_v	0	granule (8,192 rows)	6.641	0	10.6	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.facts.sum_v	2	granule (8,192 rows)	6.219	0	10.5	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.facts.sum_v	8	granule (8,192 rows)	-5.841	0	8.6	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.facts.zone_skip_all	0	granule (8,192 rows)	-1.488	73114	75.8	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.facts.zone_skip_all	2	granule (8,192 rows)	0.622	80826	48.0	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.facts.zone_skip_all	8	granule (8,192 rows)	4.797	58697	10.0	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.int4_half	0	granule (8,192 rows)	13349.036	107896	2.9	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.int4_half	2	granule (8,192 rows)	6729.944	215055	11.4	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.int4_half	8	granule (8,192 rows)	1769.112	249244	6.4	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.int4_tenth	0	granule (8,192 rows)	8775.664	269035	11.5	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.int4_tenth	2	granule (8,192 rows)	4559.990	229264	12.5	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.int4_tenth	8	granule (8,192 rows)	1255.308	263020	9.6	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.text_eq	0	granule (8,192 rows)	8342.084	696234	4.3	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.text_eq	2	granule (8,192 rows)	4240.094	737567	79.8	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.text_eq	8	granule (8,192 rows)	1086.210	779488	7.2	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.text_range	0	granule (8,192 rows)	8168.066	651841	6.4	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.text_range	2	granule (8,192 rows)	4141.180	817871	34.9	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.filter.text_range	8	granule (8,192 rows)	1041.511	1041025	14.3	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.256k	0	granule (8,192 rows)	172618.304	0	7.3	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.256k	2	granule (8,192 rows)	104633.540	0	55.4	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.256k	8	granule (8,192 rows)	20442.542	0	83.2	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.4k	0	granule (8,192 rows)	23402.341	361741	13.3	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.4k	2	granule (8,192 rows)	11530.239	630090	10.5	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.4k	8	granule (8,192 rows)	2748.834	1005871	14.8	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.4m	0	granule (8,192 rows)	85036.625	7730836	5.9	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.4m	2	granule (8,192 rows)	41003.643	6076796	13.7	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.4m	8	granule (8,192 rows)	13393.557	4113284	6.1	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.clustered	0	granule (8,192 rows)	1590.541	235104	9.4	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.clustered	2	granule (8,192 rows)	832.023	343458	13.1	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.clustered	8	granule (8,192 rows)	155.673	652975	19.8	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.text1k	0	granule (8,192 rows)	410.559	284886	8.6	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.text1k	2	granule (8,192 rows)	227.134	378776	18.9	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.group.text1k	8	granule (8,192 rows)	48.563	477119	10.0	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.build_s64	0	build row	12.647	3425122	86.2	4	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.build_s64	2	build row	5.607	2679093	34.6	4	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.build_s64	8	build row	2.557	1926872	9.9	4	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@1024	0	granule (8,192 rows)	34255.208	359781	2.2	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@1024	2	granule (8,192 rows)	17263.021	419244	4.6	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@1024	8	granule (8,192 rows)	5244.792	383587	3.1	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@16384	0	granule (8,192 rows)	40786.458	606781	1.4	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@16384	2	granule (8,192 rows)	20054.688	854910	3.7	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@16384	8	granule (8,192 rows)	5520.833	709254	4.3	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@262144	0	granule (8,192 rows)	64679.688	4297448	45.6	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@262144	2	granule (8,192 rows)	31598.958	4083244	17.9	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@262144	8	granule (8,192 rows)	7947.917	3924587	9.2	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@4194304	0	granule (8,192 rows)	319218.750	43196448	7.2	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@4194304	2	granule (8,192 rows)	279335.938	12419910	15.8	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.hash.probe@4194304	8	granule (8,192 rows)	239106.771	0	12.0	2	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.pipe.build	0	granule (8,192 rows)	483729.260	76015329	8.4	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.build	2	granule (8,192 rows)	339796.811	38389715	20.6	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.build	4	granule (8,192 rows)	272432.455	18891013	7.9	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.build	8	granule (8,192 rows)	231000.875	8946281	9.9	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.build	16	granule (8,192 rows)	211730.147	4837408	4.5	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.build_narrow	0	granule (8,192 rows)	559821.429	72016167	1.1	3	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:28Z
+prim.pipe.build_narrow	2	granule (8,192 rows)	341452.381	38988333	2.5	3	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:28Z
+prim.pipe.build_narrow	4	granule (8,192 rows)	204988.095	20871833	2.5	3	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:28Z
+prim.pipe.build_narrow	8	granule (8,192 rows)	176190.476	11593667	4.3	3	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:28Z
+prim.pipe.build_narrow	16	granule (8,192 rows)	184476.190	6633333	3.0	3	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:28Z
+prim.pipe.count	0	granule (8,192 rows)	27586.715	693792	3.4	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.count	2	granule (8,192 rows)	15394.195	730583	3.7	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.count	4	granule (8,192 rows)	9034.148	890250	6.6	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.count	8	granule (8,192 rows)	5403.982	813500	3.9	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.count	16	granule (8,192 rows)	3593.855	846958	8.8	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.hashagg	0	granule (8,192 rows)	63502.394	1413250	4.1	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.hashagg	2	granule (8,192 rows)	34600.281	1228208	2.7	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.hashagg	4	granule (8,192 rows)	18167.360	1690792	5.4	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.hashagg	8	granule (8,192 rows)	10079.847	1826917	7.2	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.hashagg	16	granule (8,192 rows)	4989.814	1987042	5.9	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.hashagg_wide	0	granule (8,192 rows)	241968.834	884167	0.8	5	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:25Z
+prim.pipe.hashagg_wide	2	granule (8,192 rows)	128822.812	1361708	3.6	5	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:25Z
+prim.pipe.hashagg_wide	4	granule (8,192 rows)	70875.378	1471250	4.7	5	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:25Z
+prim.pipe.hashagg_wide	8	granule (8,192 rows)	39830.603	1814417	7.6	5	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:25Z
+prim.pipe.hashagg_wide	16	granule (8,192 rows)	26745.800	2141667	12.4	5	5	39	c8g-neoverse-v2	d40a18835d5c	5f3a80d2cd0e	2026-10-08T02:25Z
+prim.pipe.nest	0	granule (8,192 rows)	21210823.757	0	2.6	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.nest	2	granule (8,192 rows)	10833319.388	2342958	7.7	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.nest	4	granule (8,192 rows)	5800603.663	1293458	4.2	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.nest	8	granule (8,192 rows)	2961743.448	8379125	2.6	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.nest	16	granule (8,192 rows)	1752557.124	13466167	7.2	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.probe	0	granule (8,192 rows)	69516.759	1266750	2.8	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.probe	2	granule (8,192 rows)	36691.889	1316458	3.5	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.probe	4	granule (8,192 rows)	19267.935	1464083	4.7	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.probe	8	granule (8,192 rows)	10205.729	1368167	3.5	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.probe	16	granule (8,192 rows)	5497.648	1390333	4.0	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.range	0	granule (8,192 rows)	394805.108	939667	1.3	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.range	2	granule (8,192 rows)	287133.233	1071792	25.8	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.range	4	granule (8,192 rows)	147575.269	3072667	32.1	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.range	8	granule (8,192 rows)	104440.860	3096333	36.1	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.range	16	granule (8,192 rows)	86889.785	2622667	32.3	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.sort	0	granule (8,192 rows)	411570.039	0	4.9	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.sort	2	granule (8,192 rows)	270131.825	0	14.5	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.sort	4	granule (8,192 rows)	175197.098	0	9.7	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.sort	8	granule (8,192 rows)	117735.383	1251000	5.1	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.sort	16	granule (8,192 rows)	450950.332	0	3.3	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.topn	0	granule (8,192 rows)	44599.147	833458	12.7	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.topn	2	granule (8,192 rows)	24083.732	933375	4.4	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.topn	4	granule (8,192 rows)	12788.222	1334833	9.6	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.topn	8	granule (8,192 rows)	7155.410	1314333	10.2	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.pipe.topn	16	granule (8,192 rows)	6149.299	1412958	6.6	5	5	39	c8g-neoverse-v2	d40a18835d5c	30c68fb8adcb	2026-10-08T01:58Z
+prim.probe.fetch.cold	0	probe	6986.786	15370333	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.cold	4	probe	1995.703	9037917	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.cold	8	probe	987.938	33003917	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.hot	0	probe	1317.707	1501375	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.hot	4	probe	449.135	7061333	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.hot	8	probe	285.192	7595625	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.mid	0	probe	2382.586	0	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.mid	4	probe	602.870	0	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.mid	8	probe	320.698	2562292	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.warm	0	probe	2699.949	377083	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.warm	4	probe	684.886	0	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch.warm	8	probe	362.628	6511375	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch4.cold	0	probe	18860.455	0	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch4.cold	4	probe	5318.094	11037042	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch4.cold	8	probe	2669.208	54630833	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch4.warm	0	probe	5166.783	1726167	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch4.warm	4	probe	1038.538	0	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.fetch4.warm	8	probe	529.898	8872708	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.cold	0	probe	3157.331	0	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.cold	4	probe	1990.978	10665042	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.cold	8	probe	999.343	30184042	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.hot	0	probe	1083.920	2010167	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.hot	4	probe	433.353	7174250	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.hot	8	probe	275.864	3385708	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.mid	0	probe	1696.004	0	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.mid	4	probe	593.776	0	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.mid	8	probe	308.403	3169333	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.warm	0	probe	2069.991	3228042	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.warm	4	probe	666.470	0	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.ionly.warm	8	probe	349.575	6424083	0.0	5	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.sorted.cold	0	probe	3596.679	177793833	0.0	3	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.sorted.cold	4	probe	1050.353	51355333	0.0	3	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.sorted.cold	8	probe	511.456	48902833	0.0	3	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.sorted.warm	0	probe	1612.772	27422167	0.0	3	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.sorted.warm	4	probe	529.965	4921167	0.0	3	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.probe.sorted.warm	8	probe	301.365	9137833	0.0	3	1	86	c8g-neoverse-v2	2ab33e09e5a75d4a	d809fa81905	2026-10-08T07:24Z
+prim.read.int4_1op	0	granule (8,192 rows)	36377.743	112438	2.1	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int4_1op	2	granule (8,192 rows)	18177.727	179811	3.9	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int4_1op	8	granule (8,192 rows)	4562.333	315866	4.7	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int4_2op	0	granule (8,192 rows)	78853.878	105308	1.5	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int4_2op	2	granule (8,192 rows)	39515.736	156502	1.8	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int4_2op	8	granule (8,192 rows)	9858.053	313642	3.3	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int4_int8_1op	0	granule (8,192 rows)	46751.766	145761	7.1	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int4_int8_1op	2	granule (8,192 rows)	23339.885	247174	33.3	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int4_int8_1op	8	granule (8,192 rows)	5843.583	322199	6.9	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int8_1op	0	granule (8,192 rows)	35454.702	166388	3.3	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int8_1op	2	granule (8,192 rows)	17715.718	185781	4.1	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.read.int8_1op	8	granule (8,192 rows)	4397.033	378448	9.4	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.sort.int4	0	granule (8,192 rows)	456332.256	0	8.4	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.sort.int4	2	granule (8,192 rows)	335460.255	0	7.2	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.sort.int4	8	granule (8,192 rows)	419739.972	0	10.6	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.sort.int8	0	granule (8,192 rows)	449980.166	0	19.7	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.sort.int8	2	granule (8,192 rows)	282788.857	567965	8.4	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.sort.int8	8	granule (8,192 rows)	425672.808	0	10.9	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.topn.int4_10	0	granule (8,192 rows)	48204.780	185502	2.3	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.topn.int4_10	2	granule (8,192 rows)	24093.539	486552	1.8	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.topn.int4_10	8	granule (8,192 rows)	6573.405	811925	13.5	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.topn.int4_250	0	granule (8,192 rows)	48062.111	371209	2.0	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.topn.int4_250	2	granule (8,192 rows)	24015.203	676194	2.3	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.topn.int4_250	8	granule (8,192 rows)	6627.021	1074229	7.7	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.topn.zone_10	0	granule (8,192 rows)	109.975	272711	7.6	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.topn.zone_10	2	granule (8,192 rows)	27.385	532174	14.7	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+prim.topn.zone_10	8	granule (8,192 rows)	-4.620	639358	19.2	6	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+top.c.key_c16m	0	admitted key	154374.580	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_c16m	8	admitted key	50548.962	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_c1m	0	admitted key	53594.615	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_c1m	8	admitted key	718.041	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_cu	0	admitted key	557477.373	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_cu	8	admitted key	68944.456	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_s16m	0	admitted key	6821665.409	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_s16m	8	admitted key	741756.915	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_s1m	0	admitted key	7096362.408	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_s1m	8	admitted key	771641.272	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_su	0	admitted key	8499708.424	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.key_su	8	admitted key	995377.568	0		4	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_c16m	0	granule (8,192 rows)	65867.020	284031446		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_c16m	2	granule (8,192 rows)	22285.930	208335514		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_c16m	8	granule (8,192 rows)	-2227.284	221893135		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_c1m	0	granule (8,192 rows)	27206.503	47706514		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_c1m	2	granule (8,192 rows)	11670.766	49748378		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_c1m	8	granule (8,192 rows)	-941.309	134736689		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_cu	0	granule (8,192 rows)	441755.965	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_cu	2	granule (8,192 rows)	122458.360	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_cu	8	granule (8,192 rows)	7077.870	154213365		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_s16m	0	granule (8,192 rows)	264552.004	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_s16m	2	granule (8,192 rows)	71794.253	97827784		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_s16m	8	granule (8,192 rows)	1898.323	370771095		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_s1m	0	granule (8,192 rows)	413213.973	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_s1m	2	granule (8,192 rows)	202700.521	137476000		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_s1m	8	granule (8,192 rows)	75454.401	57136176		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_su	0	granule (8,192 rows)	433996.745	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_su	2	granule (8,192 rows)	123677.066	14691784		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.one_su	8	granule (8,192 rows)	2668.285	281399892		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_c16m	0	granule (8,192 rows)	339107.695	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_c16m	2	granule (8,192 rows)	160275.127	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_c16m	8	granule (8,192 rows)	42959.213	121163811		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_c1m	0	granule (8,192 rows)	316994.844	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_c1m	2	granule (8,192 rows)	158323.691	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_c1m	8	granule (8,192 rows)	38406.012	179753581		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_cu	0	granule (8,192 rows)	338316.221	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_cu	2	granule (8,192 rows)	282685.485	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_cu	8	granule (8,192 rows)	39506.246	132804757		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_s16m	0	granule (8,192 rows)	326888.021	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_s16m	2	granule (8,192 rows)	140163.315	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_s16m	8	granule (8,192 rows)	37495.047	223212635		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_s1m	0	granule (8,192 rows)	401105.002	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_s1m	2	granule (8,192 rows)	162182.784	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_s1m	8	granule (8,192 rows)	76101.826	99753243		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_su	0	granule (8,192 rows)	302354.404	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_su	2	granule (8,192 rows)	246074.993	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.onew_su	8	granule (8,192 rows)	44527.115	154254189		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.spill_one_c	0	spilled MiB	514433.634	0	2.0	6	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_one_c	2	spilled MiB	326107.686	0	3.5	6	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_one_c	8	spilled MiB	187352.183	0	7.8	6	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_one_s	0	spilled MiB	512862.651	0	2.5	6	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_one_s	2	spilled MiB	315204.722	0	1.7	6	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_one_s	8	spilled MiB	186134.603	0	1.4	6	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_pass1_c	0	spilled MiB	191364.791	0	5.4	7	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_pass1_c	2	spilled MiB	138447.799	0	0.8	7	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_pass1_c	8	spilled MiB	95733.317	0	20.2	7	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_pass1_s	0	spilled MiB	184346.499	0	1.1	7	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_pass1_s	2	spilled MiB	129606.590	0	1.1	7	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.spill_pass1_s	8	spilled MiB	96259.494	0	8.2	7	3	67	c8g-neoverse-v2	bff7154d59b4	bff7154d59b4	2026-10-08T03:32Z
+top.c.two_c16m	0	granule (8,192 rows)	1131528.158	1291160000		2	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_c16m	2	granule (8,192 rows)	618877.604	0		2	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_c16m	8	granule (8,192 rows)	-208991.048	6109666000		2	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_c1m	0	granule (8,192 rows)	712182.406	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_c1m	2	granule (8,192 rows)	181697.811	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_c1m	8	granule (8,192 rows)	29219.199	422550014		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_cu	0	granule (8,192 rows)	322020.745	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_cu	2	granule (8,192 rows)	71594.076	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_cu	8	granule (8,192 rows)	12826.383	48348595		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_s16m	0	granule (8,192 rows)	3204165.527	0		2	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_s16m	2	granule (8,192 rows)	1943970.052	0		2	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_s16m	8	granule (8,192 rows)	1551976.074	0		2	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_s1m	0	granule (8,192 rows)	3209902.828	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_s1m	2	granule (8,192 rows)	1816264.631	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_s1m	8	granule (8,192 rows)	1609639.965	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_su	0	granule (8,192 rows)	282060.450	0		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_su	2	granule (8,192 rows)	61552.814	55475473		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+top.c.two_su	8	granule (8,192 rows)	13706.794	60174581		3	3	40	c8g-neoverse-v2	cc2c-1e582d02de18	e8a25733957	2026-10-07T10:20Z
+values.coded.cell	0	cell	7144.565	194826	19.1	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.first.cell	0	cell	30997.826	1121130	12.2	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.first.n1	0	statement	1467000.000	0	12.2	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.first.n128	0	statement	5082000.000	0	12.2	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.first.n16	0	statement	1606000.000	0	12.2	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.first.n2	0	statement	1188000.000	0	12.2	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.first.n32	0	statement	2116000.000	0	12.2	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.first.n4	0	statement	1244000.000	0	12.2	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.first.n64	0	statement	3120000.000	0	12.2	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.first.n8	0	statement	1393000.000	0	12.2	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.steady.n1	0	statement	169000.000	0	19.1	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.steady.n128	0	statement	1101000.000	0	19.1	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.steady.n16	0	statement	289000.000	0	19.1	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.steady.n2	0	statement	185000.000	0	19.1	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.steady.n32	0	statement	437000.000	0	19.1	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.steady.n4	0	statement	209000.000	0	19.1	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.steady.n64	0	statement	667000.000	0	19.1	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.steady.n8	0	statement	236000.000	0	19.1	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.tierup.cell	0	cell	46510.326	-335870	20.4	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.tierup.n1	0	statement	371000.000	0	20.4	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.tierup.n128	0	statement	6841000.000	0	20.4	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.tierup.n16	0	statement	893000.000	0	20.4	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.tierup.n2	0	statement	353000.000	0	20.4	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.tierup.n32	0	statement	1541000.000	0	20.4	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.tierup.n4	0	statement	398000.000	0	20.4	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.tierup.n64	0	statement	3038000.000	0	20.4	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.coded.tierup.n8	0	statement	512000.000	0	20.4	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.cell	0	cell	6613.587	197435	36.0	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.first.cell	0	cell	8159.783	1075913	14.9	4	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.first.n1	0	statement	1487000.000	0	14.9	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.first.n128	0	statement	2095000.000	0	14.9	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.first.n16	0	statement	1156000.000	0	14.9	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.first.n2	0	statement	1136000.000	0	14.9	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.first.n32	0	statement	1362000.000	0	14.9	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.first.n4	0	statement	995000.000	0	14.9	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.first.n64	0	statement	1649000.000	0	14.9	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.first.n8	0	statement	1101000.000	0	14.9	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.steady.n1	0	statement	175000.000	0	36.0	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.steady.n128	0	statement	1040000.000	0	36.0	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.steady.n16	0	statement	284000.000	0	36.0	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.steady.n2	0	statement	206000.000	0	36.0	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.steady.n32	0	statement	430000.000	0	36.0	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.steady.n4	0	statement	186000.000	0	36.0	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.steady.n64	0	statement	623000.000	0	36.0	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+values.stream.steady.n8	0	statement	245000.000	0	36.0	1	5	24	c8g-neoverse-v2	651049d26fed+r5probe	7f7f8e640ec7	2026-10-07T15:06Z
+walk.group.plain	0	granule	15170.900	421361		0	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.group.plain	2	granule	7592.900	411308		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.group.plain	8	granule	1770.700	1008303		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.group.walk	0	walked granule	18119.000	132904		0	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.group.walk	2	walked granule	12437.900	1173433		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.group.walk	8	walked granule	0.000	1528392		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.group.walk_per_table_granule	0	walked granule x table granule	10.255	0		0	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.group.walk_per_table_granule	2	walked granule x table granule	1.848	0		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.group.walk_per_table_granule	8	walked granule x table granule	4.056	0		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.keyed.plain	0	granule	18374.600	132839		0	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.keyed.plain	2	granule	9187.600	478830		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.keyed.plain	8	granule	2779.500	1409042		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.keyed.walk	0	walked granule	21257.200	42040		0	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.keyed.walk	2	walked granule	17860.000	1290116		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.keyed.walk	8	walked granule	6101.500	1837794		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.keyed.walk_per_table_granule	0	walked granule x table granule	0.662	0		0	5	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.keyed.walk_per_table_granule	2	walked granule x table granule	1.316	0		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.keyed.walk_per_table_granule	8	walked granule x table granule	1.656	0		0	11	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.lo4	0	walked granule	50336.800	0		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.lo4	2	walked granule	5083.200	322184		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.lo4	8	walked granule	1882.400	151192		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n10	0	walked granule	20683.300	715203		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n10	2	walked granule	9316.700	911061		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n10	8	walked granule	6066.700	992020		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n100	0	walked granule	21994.700	1724147		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n100	2	walked granule	15239.700	1153691		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n100	8	walked granule	4797.200	1587445		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n1000	0	walked granule	34236.400	45622183		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n1000	2	walked granule	45491.500	26866144		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n1000	8	walked granule	33419.700	11371250		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n10000	0	walked granule	63323.300	33099467		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n10000	2	walked granule	36468.000	26683579		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread.walk_n10000	8	walked granule	12916.300	22727484		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread_rec.q	0	first key x walked granule^2	3.800	0		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread_rec.q	2	first key x walked granule^2	0.000	0		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread_rec.q	8	first key x walked granule^2	0.000	0		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread_rec.walk	0	walked granule	14322.400	0		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread_rec.walk	2	walked granule	5455.200	405709		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z
+walk.spread_rec.walk	8	walked granule	1748.200	275372		4	7	40	c8g-neoverse-v2	53ca82e1b455+e7556369dd1a+cc1b	c5db47f6f1f8	2026-10-07T05:40Z

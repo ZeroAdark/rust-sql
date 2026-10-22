@@ -247,7 +247,7 @@ fn policy_role_list_to_array(roles: &NodeList<'_>) -> PgResult<Vec<Oid>> {
     if roles.is_nil() {
         return Ok(vec![ACL_ID_PUBLIC]);
     }
-    let mut role_oids: Vec<Oid> = Vec::with_capacity(roles.len());
+    let mut role_oids: Vec<Oid> = ::mcx::std_vec_with_capacity("commands", roles.len())?;
     for cell in roles.iter() {
         let spec = cell.as_role_spec().expect("policy TO list cell is a RoleSpec");
         if spec.roletype == types_nodes::parsenodes::RoleSpecType::ROLESPEC_PUBLIC {

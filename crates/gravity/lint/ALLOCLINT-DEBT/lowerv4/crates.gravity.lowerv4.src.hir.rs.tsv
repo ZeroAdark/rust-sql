@@ -1,0 +1,17 @@
+path	crates/gravity/lowerv4/src/hir.rs
+growth	std::collections::BTreeMap::insert	1
+growth	std::iter::Extend::extend	4
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	21
+ir-only	<alloc::rc::Rc<[T]> as core::convert::From<[T; N]>>::from	1
+method	std::boxed::Box::new	3
+method	std::clone::Clone::clone	5
+method	std::iter::Iterator::collect	4
+method	std::rc::Rc::new	1
+method	std::sync::Arc::new	1
+method	std::vec::Vec::into_boxed_slice	1
+method	std::vec::Vec::with_capacity	6
+type	std::boxed::Box	7
+type	std::rc::Rc	2
+type	std::sync::Arc	2
+type	std::vec::Vec	11

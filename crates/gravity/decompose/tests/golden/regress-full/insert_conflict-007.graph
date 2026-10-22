@@ -1,0 +1,10 @@
+-- regress-full-insert_conflict-007
+-- insert into insertconflictview as t values (23, 'Blackberry') on conflict (key) where fruit like '%berry' and t.fruit = 'inconsequential' do nothing;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:23, 2=c25:'Blackberry')
+  write INSERT rel=18240 rti=2 natts=2 indexes=(18263[1]uw) on_conflict=nothing arbiter=(18263)
+  outs 1=w4:val 2=vl:stmt/imm
+mapped: Result ModifyTable

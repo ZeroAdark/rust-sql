@@ -407,3 +407,35 @@ fn local_max_block_size_follows_max_bytes() {
     }
     assert!(max_step <= 64 * 1024 + 3 * 128 * 1024, "leaf block step {max_step}");
 }
+
+// C: parallel VACUUM at 256kB passes every 16 blocks, at 64kB every block.
+#[test]
+fn dsa_accounted_store_grows_by_whole_segments() {
+    let ctx = MemoryContext::new("tidstore test");
+    let seg = 256 * 1024;
+    let mut ts = TidStore::create_dsa_accounted(ctx.mcx(), 64 * 1024).unwrap();
+    assert_eq!(ts.memory_usage(), seg);
+    ts.set_block_offsets(0, &[1]).unwrap();
+    assert!(ts.memory_usage() > 64 * 1024);
+
+    let mut ts = TidStore::create_dsa_accounted(ctx.mcx(), seg).unwrap();
+    let offsets: Vec<OffsetNumber> = (1..=113).map(|i| 2 * i).collect();
+    for blk in 0..15 {
+        ts.set_block_offsets(blk, &offsets).unwrap();
+        assert_eq!(ts.memory_usage(), seg, "block {blk}");
+    }
+    ts.set_block_offsets(15, &offsets).unwrap();
+    assert_eq!(ts.memory_usage(), 2 * seg);
+
+    let ts = TidStore::create_dsa_accounted(ctx.mcx(), 64 * 1024 * 1024).unwrap();
+    assert_eq!(ts.memory_usage(), 1024 * 1024);
+}
+
+#[test]
+fn memory_usage_counts_the_bump_initial_block() {
+    let ctx = MemoryContext::new("tidstore test");
+    let mut ts = TidStore::create_local(ctx.mcx(), 64 * 1024, true).unwrap();
+    assert_eq!(ts.memory_usage(), 16384);
+    ts.set_block_offsets(7, &[1]).unwrap();
+    assert_eq!(ts.memory_usage(), 16384);
+}

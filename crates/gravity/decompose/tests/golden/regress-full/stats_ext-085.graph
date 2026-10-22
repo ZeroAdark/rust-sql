@@ -1,0 +1,11 @@
+-- regress-full-stats_ext-085
+-- INSERT INTO mcv_lists_arrays (a, b, c) SELECT ARRAY[fipshash((i/100)::text), fipshash((i/100-1)::text), fipshash((i/100+1)::text)], ARRAY[(i/100-1)::numeric/1000, (i/100)::numeric/1000, (i/100+1)::numeric/1000], ARRAY[(i/100-1), i/100, (i/100+1)] FROM generate_series(1,5000) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:5000)]
+  project (1=array(fn877(fn1946(fn3420(io17(io25(op528(v3.1, c23:100)))), c25:'hex'), c23:1, c23:32), fn877(fn1946(fn3420(io17(io25(op555(op528(v3.1, c23:100), c23:1)))), c25:'hex'), c23:1, c23:32), fn877(fn1946(fn3420(io17(io25(op551(op528(v3.1, c23:100), c23:1)))), c25:'hex'), c23:1, c23:32)), 2=array(op1761(fn1740(op555(op528(v3.1, c23:100), c23:1)), c1700:'\x00\x80\xe8\x03'), op1761(fn1740(op528(v3.1, c23:100)), c1700:'\x00\x80\xe8\x03'), op1761(fn1740(op551(op528(v3.1, c23:100), c23:1)), c1700:'\x00\x80\xe8\x03')), 3=array(op555(op528(v3.1, c23:100), c23:1), op528(v3.1, c23:100), op551(op528(v3.1, c23:100), c23:1)))
+  write INSERT rel=34310 rti=1 natts=3 indexes=()
+  outs 1=vl:call0 2=? 3=vl:call0
+mapped: ModifyTable FunctionScan

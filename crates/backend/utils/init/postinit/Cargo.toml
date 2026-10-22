@@ -49,6 +49,7 @@ ipc_seams = { path = "../../../storage/ipc/ipc_seams" }
 backend_status_seams = { path = "../../activity/backend_status_seams" }
 pgstat_seams = { path = "../../activity/pgstat_seams" }
 transam_xlog_seams = { path = "../../../access/transam/transam_xlog_seams" }
+startup_seams = { path = "../../../postmaster/startup_seams" }
 plancache_portal_seams = { path = "../../cache/plancache_portal_seams" }
 namespace_seams = { path = "../../../catalog/namespace_seams" }
 mbutils_seams = { path = "../../mb/mbutils_seams" }

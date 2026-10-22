@@ -1,4 +1,4 @@
-//! Container-aware memory headroom (regression §3 defect row, the
+//! Container-aware memory headroom (GL-COPYFAST-1 §3 defect row, the
 //! memruns auto-sizing fix).
 //!
 //! The defect: on the CI cluster's 27Gi pods the container-leaf

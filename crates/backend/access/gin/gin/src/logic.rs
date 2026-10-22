@@ -22,20 +22,23 @@ fn direct_bool_consistent(
     trgm_graph: Option<&mut TrgmPackedGraph>,
 ) -> PgResult<(bool, bool)> {
     let mut recheck = true;
-    let res = opclass::consistent(
-        tmp.mcx(),
-        state.col(key.attnum),
-        entry_res,
-        key.strategy,
-        key.query,
-        key.nuserentries as usize,
-        key.queryValues.as_slice(),
-        key.queryCategories.as_slice(),
-        key.jspOps.as_slice(),
-        key.mapItemOperand.as_slice(),
-        trgm_graph,
-        &mut recheck,
-    )?;
+    let col = state.col(key.attnum);
+    let res = crate::secdef::call(col.secdef_proc(GIN_CONSISTENT_PROC), || {
+        opclass::consistent(
+            tmp.mcx(),
+            col,
+            entry_res,
+            key.strategy,
+            key.query,
+            key.nuserentries as usize,
+            key.queryValues.as_slice(),
+            key.queryCategories.as_slice(),
+            key.jspOps.as_slice(),
+            key.mapItemOperand.as_slice(),
+            trgm_graph,
+            &mut recheck,
+        )
+    })?;
     Ok((res, recheck))
 }
 
@@ -45,19 +48,22 @@ fn direct_tri_consistent(
     state: &GinState,
     key: &mut GinScanKeyData<'_>,
 ) -> PgResult<GinTernaryValue> {
-    opclass::tri_consistent(
-        tmp.mcx(),
-        state.col(key.attnum),
-        key.entryRes.as_slice(),
-        key.strategy,
-        key.query,
-        key.nuserentries as usize,
-        key.queryValues.as_slice(),
-        key.queryCategories.as_slice(),
-        key.jspOps.as_slice(),
-        key.mapItemOperand.as_slice(),
-        key.trgmGraph.as_mut(),
-    )
+    let col = state.col(key.attnum);
+    crate::secdef::call(col.secdef_proc(GIN_TRICONSISTENT_PROC), || {
+        opclass::tri_consistent(
+            tmp.mcx(),
+            col,
+            key.entryRes.as_slice(),
+            key.strategy,
+            key.query,
+            key.nuserentries as usize,
+            key.queryValues.as_slice(),
+            key.queryCategories.as_slice(),
+            key.jspOps.as_slice(),
+            key.mapItemOperand.as_slice(),
+            key.trgmGraph.as_mut(),
+        )
+    })
 }
 
 /// boolConsistentFn dispatch: trueConsistentFn for the EVERYTHING mode,
@@ -113,7 +119,7 @@ pub(crate) fn tri_consistent(
         // C twiddles key->entryRes in place and restores it; the probes here
         // run over a scratch copy of all nentries (ginlogic.c:159), the
         // consistent fn reading its first nuserentries as always.
-        let entry_res: Vec<GinTernaryValue> = key.entryRes.as_slice().to_vec();
+        let entry_res: Vec<GinTernaryValue> = ::mcx::std_vec_from_slice("access", &key.entryRes.as_slice())?;
         let graph = std::cell::RefCell::new(key.trgmGraph.take());
         let call = |local: &[GinTernaryValue]| {
             let mut graph = graph.borrow_mut();
@@ -156,7 +162,7 @@ pub(crate) fn shim_tri_consistent(
         return Ok(if res && rc { GIN_MAYBE } else if res { GIN_TRUE } else { GIN_FALSE });
     }
 
-    let mut local: Vec<GinTernaryValue> = check[..nkeys].to_vec();
+    let mut local: Vec<GinTernaryValue> = ::mcx::std_vec_from_slice("access", &check[..nkeys])?;
     for &e in &maybe_entries[..nmaybe] {
         local[e] = GIN_FALSE;
     }

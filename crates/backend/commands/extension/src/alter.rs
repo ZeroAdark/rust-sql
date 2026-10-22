@@ -188,7 +188,7 @@ fn text_datum_bytes(mcx: Mcx<'_>, d: Datum) -> PgResult<Vec<u8>> {
     } else {
         (4usize, (u32::from_ne_bytes([img[0], img[1], img[2], img[3]]) >> 2) as usize)
     };
-    Ok(img[skip..total].to_vec())
+    Ok(::mcx::std_vec_from_slice("commands", &img[skip..total])?)
 }
 
 // ApplyExtensionUpdates (extension.c:3554-3702).

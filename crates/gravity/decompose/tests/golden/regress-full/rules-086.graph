@@ -1,0 +1,12 @@
+-- regress-full-rules-086
+-- INSERT INTO hats VALUES ('h8', 'black') RETURNING *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c1042:'h8        ', 2=c1042:'black     ')
+  write INSERT rel=33838 rti=4 natts=2 indexes=(33841[1]u) on_conflict=update arbiter=(33841) excl_rti=5 cols=(1,2) set=(1=v4.1, 2=inner.2) where=T_List returning
+  project (1=v4.1, 2=v4.2)
+  outs 1=vl:stmt/imm 2=vl:stmt/imm
+  outs 1=vl:row 2=vl:row
+mapped: Result ModifyTable

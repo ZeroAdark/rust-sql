@@ -1,0 +1,1 @@
+gravity/expr/src/emit/scalar.rs	CASE_SELECT	lowering	scope:CaseSelect	leader	lowering scope: lowerv4 road case.select (D3233) for a CaseSelect guard's life, set over one statement's lowering (lowerv4 frame/program.rs lower): a CASE arm that computes anything is emitted in its own block, run only where taken; its drop restores the outer setting on a return or an unwind

@@ -30,6 +30,7 @@ visibilitymap = { path = "../../access/heap/visibilitymap" }
 freespace = { path = "../../storage/freespace/freespace" }
 lmgr_proc = { path = "../../storage/lmgr/lmgr_proc" }
 elog = { path = "../../utils/error/elog" }
+pgrc_am = { path = "../../access/pgrcolumnar/pgrc_am" }
 
 [dev-dependencies]
 fd = { path = "../../storage/file/fd" }

@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/mergejoin/lower.rs	make	licence	fn	a merge inner run whole before the outer's first row (run_ahead, then ahead_unchecked) [LICENCE-ASKED; D1236,D2026,D2178,D3817]

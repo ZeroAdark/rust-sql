@@ -1,0 +1,10 @@
+-- regress-full-fast_default-003
+-- INSERT INTO t DEFAULT VALUES;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project ()
+  write INSERT rel=47835 rti=1 natts=0 indexes=()
+  outs
+mapped: Result ModifyTable

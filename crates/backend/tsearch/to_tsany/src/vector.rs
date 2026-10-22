@@ -4,10 +4,7 @@ use ::ts_parse::{limitpos, ParsedText, ParsedWord, MAXENTRYPOS};
 use ::types_error::{PgError, PgResult, ERRCODE_PROGRAM_LIMIT_EXCEEDED};
 
 fn compare_word(a: &ParsedWord<'_>, b: &ParsedWord<'_>) -> core::cmp::Ordering {
-    a.word
-        .as_slice()
-        .cmp(b.word.as_slice())
-        .then(a.pos.cmp(&b.pos))
+    a.word.cmp(b.word).then(a.pos.cmp(&b.pos))
 }
 
 // uniqueWORD: sort + merge duplicate lexemes, folding positions into apos.
@@ -15,32 +12,30 @@ pub fn unique_words<'mcx>(mcx: Mcx<'mcx>, prs: &mut ParsedText<'mcx>) -> PgResul
     if prs.words.is_empty() {
         return Ok(());
     }
-    let mut words = core::mem::replace(&mut prs.words, PgVec::new_in(mcx));
+    let words = &mut prs.words;
     words.sort_unstable_by(compare_word);
 
-    let mut out: PgVec<'mcx, ParsedWord<'mcx>> = PgVec::new_in(mcx);
-    out.try_reserve_exact(words.len())
-        .map_err(|_| mcx.oom(words.len()))?;
-    for mut w in words {
+    let mut apos: PgVec<'mcx, u16> = PgVec::new_in(mcx);
+    let mut res = 0usize;
+    for i in 0..words.len() {
+        let w = words[i];
         let pos = limitpos(w.pos as u32);
-        match out.last_mut() {
-            Some(res) if res.word.as_slice() == w.word.as_slice() => {
-                let last = *res.apos.last().expect("merged word has positions");
-                if res.apos.len() < MAXNUMPOS - 1
-                    && last != (MAXENTRYPOS - 1) as u16
-                    && last != pos
-                {
-                    res.apos.push(pos);
-                }
+        if res > 0 && words[res - 1].word == w.word {
+            let last = *apos.last().expect("merged word has positions");
+            if apos.len() < MAXNUMPOS - 1 && last != (MAXENTRYPOS - 1) as u16 && last != pos {
+                apos.push(pos);
             }
-            _ => {
-                w.apos = PgVec::new_in(mcx);
-                w.apos.push(pos);
-                out.push(w);
+        } else {
+            if res > 0 {
+                words[res - 1].apos = core::mem::replace(&mut apos, PgVec::new_in(mcx)).leak();
             }
+            apos.push(pos);
+            words[res] = w;
+            res += 1;
         }
     }
-    prs.words = out;
+    words[res - 1].apos = apos.leak();
+    words.truncate(res);
     Ok(())
 }
 
@@ -75,7 +70,7 @@ pub fn make_tsvector<'mcx>(mcx: Mcx<'mcx>, prs: &mut ParsedText<'mcx>) -> PgResu
 
     let mut b = TsVecBuilder::with_capacity(mcx, prs.words.len(), lenstr)?;
     for w in prs.words.iter() {
-        b.push(&w.word, &w.apos)?;
+        b.push(w.word, w.apos)?;
     }
     b.finish(mcx)
 }

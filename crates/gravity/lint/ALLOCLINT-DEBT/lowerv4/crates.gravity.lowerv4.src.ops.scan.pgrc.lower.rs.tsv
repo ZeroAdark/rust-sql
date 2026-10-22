@@ -1,0 +1,4 @@
+path	crates/gravity/lowerv4/src/ops/scan/pgrc/lower.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::push	2
+method	std::iter::Iterator::collect	1

@@ -1,6 +1,3 @@
-//! combocid.c: combo command ID support. cmin/cmax overlay in one header
-//! field; a combo CID maps to the real pair via backend-private state.
-
 #![allow(non_snake_case)]
 #![allow(clippy::result_large_err)]
 
@@ -59,8 +56,6 @@ pub fn HeapTupleHeaderGetCmax(tup: &HeapTupleHeaderData) -> CommandId {
     }
 }
 
-// The cmax to store into a tuple being deleted: (cmax, iscombo). A combo CID
-// is needed iff (a subtransaction of) our transaction inserted the tuple.
 pub fn HeapTupleHeaderAdjustCmax(
     tup: &HeapTupleHeaderData,
     cmax: CommandId,
@@ -69,33 +64,45 @@ pub fn HeapTupleHeaderAdjustCmax(
         && xact_seams::transaction_id_is_current_transaction_id::call(tup.xmin_raw())
     {
         let cmin = HeapTupleHeaderGetCmin(tup);
-        Ok((GetComboCommandId(cmin, cmax), true))
+        Ok((GetComboCommandId(cmin, cmax)?, true))
     } else {
         Ok((cmax, false))
     }
 }
 
+/// How many combo CIDs this backend's transaction has made. The map lives in the
+/// originating thread alone, so a reader on another thread (a Gravity pool worker)
+/// cannot resolve a `HEAP_COMBOCID` tuple: a non-zero count means such a tuple may
+/// be met and the scan belongs on the leader.
+pub fn combo_cid_count() -> usize {
+    STATE.with(|s| s.borrow().comboCids.len())
+}
+
 pub fn AtEOXact_ComboCid() {
     STATE.with(|s| {
-        // combocid.c:182: TopTransactionContext frees the storage; drop the
-        // capacity too rather than pinning the high-water mark for the session.
+        // Drop the capacity too rather than pinning the high-water mark for the session.
         *s.borrow_mut() = ComboCidState::default();
     });
 }
 
-fn GetComboCommandId(cmin: CommandId, cmax: CommandId) -> CommandId {
+fn GetComboCommandId(cmin: CommandId, cmax: CommandId) -> PgResult<CommandId> {
     STATE.with(|s| {
         let mut s = s.borrow_mut();
         let ComboCidState { comboCids, comboHash } = &mut *s;
         let next = comboCids.len() as CommandId;
-        match comboHash.entry((cmin, cmax)) {
-            std::collections::hash_map::Entry::Occupied(e) => *e.get(),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(next);
-                comboCids.push((cmin, cmax));
-                next
-            }
+        if let Some(&existing) = comboHash.get(&(cmin, cmax)) {
+            return Ok(existing);
         }
+        // Reserve both BEFORE inserting so the pair stays consistent.
+        comboCids
+            .try_reserve(1)
+            .map_err(|_| ::mcx::oom_named("TopTransactionContext", core::mem::size_of::<(CommandId, CommandId)>()))?;
+        comboHash
+            .try_reserve(1)
+            .map_err(|_| ::mcx::oom_named("TopTransactionContext", core::mem::size_of::<((CommandId, CommandId), CommandId)>()))?;
+        comboHash.insert((cmin, cmax), next);
+        comboCids.push((cmin, cmax));
+        Ok(next)
     })
 }
 
@@ -137,4 +144,5 @@ pub fn init_seams() {
     combocid_seams::heap_tuple_header_get_cmin::set(HeapTupleHeaderGetCmin);
     combocid_seams::heap_tuple_header_get_cmax::set(HeapTupleHeaderGetCmax);
     combocid_seams::heap_tuple_header_adjust_cmax::set(HeapTupleHeaderAdjustCmax);
+    combocid_seams::combo_cid_count::set(combo_cid_count);
 }

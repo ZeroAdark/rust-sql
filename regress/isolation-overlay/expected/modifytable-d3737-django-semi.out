@@ -1,0 +1,198 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1av s2dela s1c s2show
+step s2x: EXPLAIN (COSTS OFF) DELETE FROM duser WHERE duser.id IN (SELECT U0.id FROM duser U0 LEFT OUTER JOIN avatar U1 ON (U0.avatar_id = U1.id));
+QUERY PLAN                                     
+-----------------------------------------------
+Delete on duser                                
+  ->  Hash Right Semi Join                     
+        Hash Cond: (u0.id = duser.id)          
+        ->  Hash Left Join                     
+              Hash Cond: (u0.avatar_id = u1.id)
+              ->  Seq Scan on duser u0         
+              ->  Hash                         
+                    ->  Seq Scan on avatar u1  
+        ->  Hash                               
+              ->  Seq Scan on duser            
+(10 rows)
+
+step s1av: UPDATE duser SET avatar_id = 1 WHERE id = 2;
+step s2dela: DELETE FROM duser WHERE duser.id IN (SELECT U0.id FROM duser U0 LEFT OUTER JOIN avatar U1 ON (U0.avatar_id = U1.id)) RETURNING id, avatar_id; <waiting ...>
+step s1c: COMMIT;
+step s2dela: <... completed>
+id|avatar_id
+--+---------
+ 1|        1
+ 2|        1
+ 3|        2
+(3 rows)
+
+step s2show: SELECT id, avatar_id FROM duser ORDER BY id;
+id|avatar_id
+--+---------
+(0 rows)
+
+
+starting permutation: s1key s2dela s1c s2show
+step s1key: UPDATE duser SET id = 99 WHERE id = 2;
+step s2dela: DELETE FROM duser WHERE duser.id IN (SELECT U0.id FROM duser U0 LEFT OUTER JOIN avatar U1 ON (U0.avatar_id = U1.id)) RETURNING id, avatar_id; <waiting ...>
+step s1c: COMMIT;
+step s2dela: <... completed>
+id|avatar_id
+--+---------
+ 1|        1
+ 3|        2
+(2 rows)
+
+step s2show: SELECT id, avatar_id FROM duser ORDER BY id;
+id|avatar_id
+--+---------
+99|         
+(1 row)
+
+
+starting permutation: s2xf s1av s2del s1c s2show
+step s2xf: EXPLAIN (COSTS OFF) DELETE FROM duser WHERE duser.id IN (SELECT U0.id FROM duser U0 LEFT OUTER JOIN avatar U1 ON (U0.avatar_id = U1.id) WHERE U1.id IS NULL OR U1."desc" = 'b');
+QUERY PLAN                                                              
+------------------------------------------------------------------------
+Delete on duser                                                         
+  ->  Nested Loop                                                       
+        ->  HashAggregate                                               
+              Group Key: u0.id                                          
+              ->  Hash Left Join                                        
+                    Hash Cond: (u0.avatar_id = u1.id)                   
+                    Filter: ((u1.id IS NULL) OR (u1."desc" = 'b'::text))
+                    ->  Seq Scan on duser u0                            
+                    ->  Hash                                            
+                          ->  Seq Scan on avatar u1                     
+        ->  Index Scan using duser_pkey on duser                        
+              Index Cond: (id = u0.id)                                  
+(12 rows)
+
+step s1av: UPDATE duser SET avatar_id = 1 WHERE id = 2;
+step s2del: DELETE FROM duser WHERE duser.id IN (SELECT U0.id FROM duser U0 LEFT OUTER JOIN avatar U1 ON (U0.avatar_id = U1.id) WHERE U1.id IS NULL OR U1."desc" = 'b') RETURNING id, avatar_id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|avatar_id
+--+---------
+ 3|        2
+ 2|        1
+(2 rows)
+
+step s2show: SELECT id, avatar_id FROM duser ORDER BY id;
+id|avatar_id
+--+---------
+ 1|        1
+(1 row)
+
+
+starting permutation: s1key s2del s1c s2show
+step s1key: UPDATE duser SET id = 99 WHERE id = 2;
+step s2del: DELETE FROM duser WHERE duser.id IN (SELECT U0.id FROM duser U0 LEFT OUTER JOIN avatar U1 ON (U0.avatar_id = U1.id) WHERE U1.id IS NULL OR U1."desc" = 'b') RETURNING id, avatar_id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|avatar_id
+--+---------
+ 3|        2
+(1 row)
+
+step s2show: SELECT id, avatar_id FROM duser ORDER BY id;
+id|avatar_id
+--+---------
+ 1|        1
+99|         
+(2 rows)
+
+
+starting permutation: s1del s2del s1c s2show
+step s1del: DELETE FROM duser WHERE id = 3;
+step s2del: DELETE FROM duser WHERE duser.id IN (SELECT U0.id FROM duser U0 LEFT OUTER JOIN avatar U1 ON (U0.avatar_id = U1.id) WHERE U1.id IS NULL OR U1."desc" = 'b') RETURNING id, avatar_id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|avatar_id
+--+---------
+ 2|         
+(1 row)
+
+step s2show: SELECT id, avatar_id FROM duser ORDER BY id;
+id|avatar_id
+--+---------
+ 1|        1
+(1 row)
+
+
+starting permutation: s2xu s1ceo s2upd s1c s2cshow
+step s2xu: EXPLAIN (COSTS OFF) UPDATE company SET name = 'foo' WHERE company.id IN (SELECT U0.id FROM company U0 LEFT OUTER JOIN employee U1 ON (U0.point_of_contact_id = U1.id) INNER JOIN employee U2 ON (U0.ceo_id = U2.id) WHERE NOT (U2.firstname = (U1.firstname)));
+QUERY PLAN                                                     
+---------------------------------------------------------------
+Update on company                                              
+  ->  Hash Right Semi Join                                     
+        Hash Cond: (u0.id = company.id)                        
+        ->  Hash Join                                          
+              Hash Cond: (u0.ceo_id = u2.id)                   
+              Join Filter: (u2.firstname <> u1.firstname)      
+              ->  Hash Join                                    
+                    Hash Cond: (u0.point_of_contact_id = u1.id)
+                    ->  Seq Scan on company u0                 
+                    ->  Hash                                   
+                          ->  Seq Scan on employee u1          
+              ->  Hash                                         
+                    ->  Seq Scan on employee u2                
+        ->  Hash                                               
+              ->  Seq Scan on company                          
+(15 rows)
+
+step s1ceo: UPDATE company SET ceo_id = 1 WHERE id = 2;
+step s2upd: UPDATE company SET name = 'foo' WHERE company.id IN (SELECT U0.id FROM company U0 LEFT OUTER JOIN employee U1 ON (U0.point_of_contact_id = U1.id) INNER JOIN employee U2 ON (U0.ceo_id = U2.id) WHERE NOT (U2.firstname = (U1.firstname))) RETURNING id, name, ceo_id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|name|ceo_id
+--+----+------
+ 2|foo |     1
+(1 row)
+
+step s2cshow: SELECT id, name, ceo_id FROM company ORDER BY id;
+id|name        |ceo_id
+--+------------+------
+ 1|Example Inc.|     1
+ 2|foo         |     1
+ 3|Test GmbH   |     3
+(3 rows)
+
+
+starting permutation: s1cn s2upd s1c s2cshow
+step s1cn: UPDATE company SET name = 'Bar' WHERE id = 2;
+step s2upd: UPDATE company SET name = 'foo' WHERE company.id IN (SELECT U0.id FROM company U0 LEFT OUTER JOIN employee U1 ON (U0.point_of_contact_id = U1.id) INNER JOIN employee U2 ON (U0.ceo_id = U2.id) WHERE NOT (U2.firstname = (U1.firstname))) RETURNING id, name, ceo_id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|name|ceo_id
+--+----+------
+ 2|foo |     2
+(1 row)
+
+step s2cshow: SELECT id, name, ceo_id FROM company ORDER BY id;
+id|name        |ceo_id
+--+------------+------
+ 1|Example Inc.|     1
+ 2|foo         |     2
+ 3|Test GmbH   |     3
+(3 rows)
+
+
+starting permutation: s1cid s2upd s1c s2cshow
+step s1cid: UPDATE company SET id = 98 WHERE id = 2;
+step s2upd: UPDATE company SET name = 'foo' WHERE company.id IN (SELECT U0.id FROM company U0 LEFT OUTER JOIN employee U1 ON (U0.point_of_contact_id = U1.id) INNER JOIN employee U2 ON (U0.ceo_id = U2.id) WHERE NOT (U2.firstname = (U1.firstname))) RETURNING id, name, ceo_id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|name|ceo_id
+--+----+------
+(0 rows)
+
+step s2cshow: SELECT id, name, ceo_id FROM company ORDER BY id;
+id|name        |ceo_id
+--+------------+------
+ 1|Example Inc.|     1
+ 3|Test GmbH   |     3
+98|Foobar Ltd. |     2
+(3 rows)
+

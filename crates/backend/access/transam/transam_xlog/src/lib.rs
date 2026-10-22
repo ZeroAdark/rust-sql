@@ -12,9 +12,10 @@ use types_core::{pg_time_t, TimeLineID, XLogRecPtr, XLogSegNo};
 use types_error::PgResult;
 
 mod backup;
+pub mod bootstrap;
 pub use backup::{
     do_pg_abort_backup, do_pg_backup_start, do_pg_backup_stop, get_backup_status,
-    register_persistent_abort_backup_handler, SessionBackupState, TablespaceInfo,
+    register_persistent_abort_backup_handler, want_lowlevel_backup, SessionBackupState, TablespaceInfo,
 };
 pub mod control_file;
 pub mod ctl;
@@ -24,6 +25,7 @@ pub mod insert;
 pub mod redo;
 pub(crate) mod removal;
 pub use removal::{CheckXLogRemoved, RemoveNonParentXlogFiles, XLogGetOldestSegno};
+pub use removal::{spool_bytes_from, spool_grew, spool_removed_upto, wal_keep_horizon, wal_removed_horizon};
 pub mod startup;
 pub mod write;
 
@@ -48,6 +50,7 @@ pub use startup::{
     SetInstallXLogFileSegmentActive, ShutdownXLOG, StartupXLOG, SwitchIntoArchiveRecovery,
     UpdateFullPageWrites,
 };
+pub use bootstrap::{BootStrapXLOG, PG_DATA_CHECKSUM_VERSION};
 pub use write::{
     stamp_wal_sync_method, wal_flush_pacing_decide, GetFlushRecPtr, GetLastSegSwitchData,
     GetXLogWriteRecPtr, SetWalWriterSleeping, WalFlushPacing, XLogBackgroundFlush, XLogFileInit,
@@ -337,15 +340,30 @@ pub fn XLogRecPtrToBytePos(ptr: XLogRecPtr) -> u64 {
     }
 }
 
-static CHECK_POINT_SEGMENTS: AtomicI32 = AtomicI32::new(0);
+// Per backend, from this thread's own GUCs: a process-wide value let a starting backend's bring-up (boot max_wal_size,
+// before its snapshot restore) lower every running backend's checkpoint budget. 0 = no hook has run on this thread.
+thread_local! {
+    static CHECK_POINT_SEGMENTS: Cell<i32> = const { Cell::new(0) };
+}
 pub fn CheckPointSegments() -> i32 {
-    CHECK_POINT_SEGMENTS.load(Relaxed)
+    if CHECK_POINT_SEGMENTS.get() == 0
+        && guc_tables::vars::max_wal_size_mb.installed()
+        && guc_tables::vars::CheckPointCompletionTarget.installed()
+    {
+        CalculateCheckpointSegments();
+    }
+    CHECK_POINT_SEGMENTS.get()
 }
 pub fn CalculateCheckpointSegments() {
-    let target = XLogMBVarToSegs(guc_tables::vars::max_wal_size_mb.read(), wal_segment_size())
-        as f64
-        / (1.0 + guc_tables::vars::CheckPointCompletionTarget.read());
-    CHECK_POINT_SEGMENTS.store((target as i32).max(1), Relaxed);
+    calculate_checkpoint_segments(
+        guc_tables::vars::max_wal_size_mb.read(),
+        guc_tables::vars::CheckPointCompletionTarget.read(),
+    );
+}
+fn calculate_checkpoint_segments(max_wal_size_mb: i32, completion_target: f64) {
+    let target =
+        XLogMBVarToSegs(max_wal_size_mb, wal_segment_size()) as f64 / (1.0 + completion_target);
+    CHECK_POINT_SEGMENTS.set((target as i32).max(1));
 }
 
 pub fn XLogCheckpointNeeded(new_segno: XLogSegNo) -> bool {
@@ -353,14 +371,11 @@ pub fn XLogCheckpointNeeded(new_segno: XLogSegNo) -> bool {
     new_segno >= old_segno + (CheckPointSegments() - 1) as u64
 }
 
-fn assign_max_wal_size(_newval: i32, _extra: Option<&guc_tables::GucHookExtra>) {
-    CalculateCheckpointSegments();
+fn assign_max_wal_size(newval: i32, _extra: Option<&guc_tables::GucHookExtra>) {
+    calculate_checkpoint_segments(newval, guc_tables::vars::CheckPointCompletionTarget.read());
 }
-fn assign_checkpoint_completion_target(
-    _newval: f64,
-    _extra: Option<&guc_tables::GucHookExtra>,
-) {
-    CalculateCheckpointSegments();
+fn assign_checkpoint_completion_target(newval: f64, _extra: Option<&guc_tables::GucHookExtra>) {
+    calculate_checkpoint_segments(guc_tables::vars::max_wal_size_mb.read(), newval);
 }
 fn check_wal_segment_size_hook(
     newval: &mut i32,
@@ -627,11 +642,32 @@ pub fn pgWalUsage() -> types_core::instrument::WalUsage {
     wal_usage_update(|wu| *wu)
 }
 
+/// D4240: the WAL usage since `start`, taken off this thread's pgWalUsage (a pool claim's, which its leader adds).
+pub fn take_wal_usage_since(start: &types_core::instrument::WalUsage) -> types_core::instrument::WalUsage {
+    wal_usage_update(|wu| {
+        let took = types_core::instrument::WalUsage {
+            wal_records: wu.wal_records - start.wal_records,
+            wal_fpi: wu.wal_fpi - start.wal_fpi,
+            wal_bytes: wu.wal_bytes.wrapping_sub(start.wal_bytes),
+            wal_buffers_full: wu.wal_buffers_full - start.wal_buffers_full,
+        };
+        *wu = *start;
+        took
+    })
+}
+
 pub fn ProcLastRecPtr() -> XLogRecPtr {
     PROC_LAST_REC_PTR.get()
 }
 pub fn XactLastRecEnd() -> XLogRecPtr {
     XACT_LAST_REC_END.get()
+}
+
+/// D4240: a leader takes the last record end of its section's claims (ParallelWorkerReportLastRecEnd's leader side).
+pub fn raise_xact_last_rec_end(lsn: XLogRecPtr) {
+    if lsn > XACT_LAST_REC_END.get() {
+        XACT_LAST_REC_END.set(lsn);
+    }
 }
 
 pub(crate) fn now_pg_time() -> pg_time_t {
@@ -658,6 +694,14 @@ pub fn init_seams() {
     s::recovery_in_progress::set(insert::RecoveryInProgress);
     s::wal_usage_fpi::set(WalUsageFpi);
     s::wal_usage::set(pgWalUsage);
+    s::wal_usage_add::set(|add| {
+        wal_usage_update(|wu| {
+            wu.wal_records += add.wal_records;
+            wu.wal_fpi += add.wal_fpi;
+            wu.wal_bytes = wu.wal_bytes.wrapping_add(add.wal_bytes);
+            wu.wal_buffers_full += add.wal_buffers_full;
+        })
+    });
     s::get_flush_rec_ptr::set(write::get_flush_rec_ptr_seam);
     // upstream 4bff3aa51c19 (18.6): Fix second race with timeline selection during promotion
     s::get_wal_insertion_time_line_if_set::set(GetWALInsertionTimeLineIfSet);

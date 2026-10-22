@@ -1,0 +1,4 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/meta_wire.rs
+method	std::boxed::Box::new	4
+method	std::iter::Iterator::collect	2
+type	std::boxed::Box	4

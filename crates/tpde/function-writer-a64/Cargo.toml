@@ -1,0 +1,27 @@
+[package]
+name = "tpde_function_writer_a64"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+autotests = false
+
+[dependencies]
+tpde_function_writer = { path = "../function-writer" }
+tpde_assembler = { path = "../assembler" }
+tpde_core = { path = "../core" }
+tpde_disarm = { path = "../disarm" }
+tpde_util = { path = "../util" }
+mcx = { path = "../../_support/mcx" }
+types_error = { path = "../../_support/types/types_error" }
+
+[features]
+upstream-oracle = []
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "reference_prepare"
+required-features = ["upstream-oracle"]

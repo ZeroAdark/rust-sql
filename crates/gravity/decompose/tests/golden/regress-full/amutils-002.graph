@@ -1,0 +1,10 @@
+-- regress-full-amutils-002
+-- select prop, pg_index_has_property('onek_hundred'::regclass, prop) as btree, pg_index_has_property('hash_i4_index'::regclass, prop) as hash, pg_index_has_property('gcircleind'::regclass, prop) as gist, pg_index_has_property('sp_radix_ind'::regclass, prop) as spgist, pg_index_has_property('botharrayidx'::regclass, prop) as gin, pg_index_has_property('brinidx'::regclass, prop) as brin from unnest(array['clusterable', 'index_scan', 'bitmap_scan', 'backward_scan', 'bogus']::text[]) with ordinality as u(prop,ord) order by ord;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 ordinality [1:Unnest fn2331 fn2331(c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x05\x00\x00\x00\x01\x00\x00\x00<\x00\x00\x00clusterable\x008\x00\x00\x00index_scan\x00\x00<\x00\x00\x00bitmap_scan\x00D\x00\x00\x00backward_scan\x00\x00\x00$\x00\x00\x00bogus\x00\x00\x00')]
+  project (1=v1.1, 2=fn637(c2205:19337, v1.1), 3=fn637(c2205:26387, v1.1), 4=fn637(c2205:17363, v1.1), 5=fn637(c2205:19806, v1.1), 6=fn637(c2205:19384, v1.1), 7=fn637(c2205:27006, v1.1), 8j=v1.2)
+  outs 1=vl:row 2=w1:val 3=w1:val 4=w1:val 5=w1:val 6=w1:val 7=w1:val 8=w8:val
+mapped: FunctionScan

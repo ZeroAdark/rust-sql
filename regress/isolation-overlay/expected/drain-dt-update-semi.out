@@ -1,0 +1,109 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2plan
+step s2plan: EXPLAIN (costs off) UPDATE dds_t SET upd = -1 WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY grp ORDER BY n DESC) rn FROM dds_t) x WHERE rn <= 1);
+QUERY PLAN                                                                                              
+--------------------------------------------------------------------------------------------------------
+Update on dds_t                                                                                         
+  ->  Hash Right Semi Join                                                                              
+        Hash Cond: (x.id = dds_t.id)                                                                    
+        ->  Subquery Scan on x                                                                          
+              ->  WindowAgg                                                                             
+                    Window: w1 AS (PARTITION BY dds_t_1.grp ORDER BY dds_t_1.n ROWS UNBOUNDED PRECEDING)
+                    Run Condition: (row_number() OVER w1 <= 1)                                          
+                    ->  Sort                                                                            
+                          Sort Key: dds_t_1.grp, dds_t_1.n DESC                                         
+                          ->  Seq Scan on dds_t dds_t_1                                                 
+        ->  Hash                                                                                        
+              ->  Seq Scan on dds_t                                                                     
+(12 rows)
+
+
+starting permutation: s1v s2upd s1c s2chk s2row
+s1: WARNING:  there is already a transaction in progress
+step s1v: UPDATE dds_t SET upd = upd + 100 WHERE id = 3000;
+step s2upd: UPDATE dds_t SET upd = -1 WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY grp ORDER BY n DESC) rn FROM dds_t) x WHERE rn <= 1); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT count(*), sum(upd), count(*) FILTER (WHERE upd = -1) FROM dds_t;
+count|sum|count
+-----+---+-----
+ 3000|-13|   13
+(1 row)
+
+step s2row: SELECT * FROM dds_t WHERE id IN (3000, 9000);
+  id|   n|grp|upd
+----+----+---+---
+3000|3000| 10| -1
+(1 row)
+
+
+starting permutation: s1n s2upd s1c s2chk s2row
+step s1n: UPDATE dds_t SET n = 0 WHERE id = 3000;
+step s2upd: UPDATE dds_t SET upd = -1 WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY grp ORDER BY n DESC) rn FROM dds_t) x WHERE rn <= 1); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT count(*), sum(upd), count(*) FILTER (WHERE upd = -1) FROM dds_t;
+count|sum|count
+-----+---+-----
+ 3000|-13|   13
+(1 row)
+
+step s2row: SELECT * FROM dds_t WHERE id IN (3000, 9000);
+  id|n|grp|upd
+----+-+---+---
+3000|0| 10| -1
+(1 row)
+
+
+starting permutation: s1id s2upd s1c s2chk s2row
+step s1id: UPDATE dds_t SET id = 9000 WHERE id = 3000;
+step s2upd: UPDATE dds_t SET upd = -1 WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY grp ORDER BY n DESC) rn FROM dds_t) x WHERE rn <= 1); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT count(*), sum(upd), count(*) FILTER (WHERE upd = -1) FROM dds_t;
+count|sum|count
+-----+---+-----
+ 3000|-12|   12
+(1 row)
+
+step s2row: SELECT * FROM dds_t WHERE id IN (3000, 9000);
+  id|   n|grp|upd
+----+----+---+---
+9000|3000| 10|  0
+(1 row)
+
+
+starting permutation: s1del s2upd s1c s2chk s2row
+step s1del: DELETE FROM dds_t WHERE id = 3000;
+step s2upd: UPDATE dds_t SET upd = -1 WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY grp ORDER BY n DESC) rn FROM dds_t) x WHERE rn <= 1); <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT count(*), sum(upd), count(*) FILTER (WHERE upd = -1) FROM dds_t;
+count|sum|count
+-----+---+-----
+ 2999|-12|   12
+(1 row)
+
+step s2row: SELECT * FROM dds_t WHERE id IN (3000, 9000);
+id|n|grp|upd
+--+-+---+---
+(0 rows)
+
+
+starting permutation: s1v s2del s1c s2chk s2row
+step s1v: UPDATE dds_t SET upd = upd + 100 WHERE id = 3000;
+step s2del: DELETE FROM dds_t WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY grp ORDER BY n DESC) rn FROM dds_t) x WHERE rn <= 1); <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2chk: SELECT count(*), sum(upd), count(*) FILTER (WHERE upd = -1) FROM dds_t;
+count|sum|count
+-----+---+-----
+ 2987|  0|    0
+(1 row)
+
+step s2row: SELECT * FROM dds_t WHERE id IN (3000, 9000);
+id|n|grp|upd
+--+-+---+---
+(0 rows)
+

@@ -1,0 +1,8 @@
+path	crates/gravity/exec/src/runner/held.rs
+growth	std::collections::HashMap::entry	1
+growth	std::vec::Vec::push	8
+macro	std::vec	1
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::into_boxed_slice	4
+method	std::vec::Vec::with_capacity	1
+type	std::vec::Vec	1

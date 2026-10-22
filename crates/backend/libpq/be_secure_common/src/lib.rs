@@ -1,6 +1,6 @@
 #![allow(clippy::result_large_err)]
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_error::{ErrorLocation, PgResult, ERRCODE_CONFIG_FILE_ERROR, ERROR, FATAL, LOG};
 
 #[track_caller]
@@ -28,7 +28,10 @@ fn replace_percent_placeholder(
     guc_name: &str,
     prompt: &str,
 ) -> PgResult<String> {
-    let mut result = String::with_capacity(string.len() + prompt.len());
+    let mut result = String::new();
+    result
+        .try_reserve(string.len() + prompt.len())
+        .map_err(|_| ::mcx::oom_named("libpq", string.len() + prompt.len()))?;
     let mut it = string.chars();
     while let Some(c) = it.next() {
         if c != '%' {
@@ -168,7 +171,7 @@ pub fn run_ssl_passphrase_command(
         ereport(loglevel)
             .with_saved_errno(errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not execute command \"{command}\": %m"))
+            .errmsg(format!("could not execute command \"{command}\": {PCT_M}"))
             .finish(loc("run_ssl_passphrase_command"))?;
         return Ok(0);
     }
@@ -181,7 +184,7 @@ pub fn run_ssl_passphrase_command(
             ereport(loglevel)
                 .with_saved_errno(e)
                 .errcode_for_file_access()
-                .errmsg(format!("could not read from command \"{command}\": %m"))
+                .errmsg(format!("could not read from command \"{command}\": {PCT_M}"))
                 .finish(loc("run_ssl_passphrase_command"))?;
             return Ok(0);
         }
@@ -193,7 +196,7 @@ pub fn run_ssl_passphrase_command(
         ereport(loglevel)
             .with_saved_errno(errno())
             .errcode_for_file_access()
-            .errmsg("could not close pipe to external command: %m")
+            .errmsg(format!("could not close pipe to external command: {PCT_M}"))
             .finish(loc("run_ssl_passphrase_command"))?;
         return Ok(0);
     } else if pclose_rc != 0 {
@@ -220,7 +223,7 @@ pub fn check_ssl_key_file_permissions(ssl_key_file: &str, is_server_start: bool)
         ereport(loglevel)
             .with_saved_errno(errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not access private key file \"{ssl_key_file}\": %m"))
+            .errmsg(format!("could not access private key file \"{ssl_key_file}\": {PCT_M}"))
             .finish(loc("check_ssl_key_file_permissions"))?;
         return Ok(false);
     }

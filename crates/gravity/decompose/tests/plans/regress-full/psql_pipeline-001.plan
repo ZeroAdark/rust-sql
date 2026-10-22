@@ -1,0 +1,5 @@
+-- name: regress-full-psql_pipeline-001
+-- sql: ROLLBACK;
+-- test: psql_pipeline
+-- shape: 0e0df550310c6558 seen=2
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {RESULT :plan.disabled_nodes 0 :plan.startup_cost 0 :plan.total_cost 0.01 :plan.plan_rows 1 :plan.plan_width 0 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist <> :plan.qual <> :plan.lefttree <> :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :resconstantqual <>} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname *RESULT* :colnames <>} :rtekind 8 :lateral false :inFromCl false :securityQuals <>}) :unprunableRelids (b) :permInfos <> :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids <> :invalItems <> :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 0}

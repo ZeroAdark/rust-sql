@@ -1,0 +1,39 @@
+-- regress-full-incremental_sort-017
+-- explain (costs off) select distinct sub.unique1, stringu1 from tenk1, lateral (select tenk1.unique1 from generate_series(1, 1000)) as sub;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=5 serial site=0 reason=IndexSource end=breaker(slot=0 Materialize)
+  nodes n5@0 n4@1^
+  source index rel=16423 rti=1 am=heap index=19339
+    lanes Attr(1):byval8:w8:val Attr(14):byref8:fx64:win/page
+  project (1=v1.1, 2=v1.14)
+  spool
+  outs 1=w8:val 2=fx64:win/page
+p1 node=3 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Distinct)
+  desc consumes=slot0@p0 owner=key/0 words=bits@3/5
+  nodes n3@0 n2@2 n1@4 n0@5^
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:1000)]
+  project (1=v3.1)
+  nest inner=n4 JOIN_INNER invariant raise-free params=()
+  inner node=4 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n4@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2)
+  project (1=inner.1, 2=inner.2)
+  project (1=outer.1, 2=outer.2)
+  outs 1=w4:val
+  outs 1=w4:val 2=fx64:life/breaker
+  outs 1=w4:val 2=fx64:life/breaker
+p2 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2)
+  outs 1=w4:val 2=fx64:life/breaker
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B order=1+
+breaker slot=1 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32,Fp128,Fp128]->[MinCode@24,Count@32] 40B order=1+,2+
+group slot=1 producer=p1 node=0 form=Unique hints=[] layout=[I32,Fp128,Fp128]->[MinCode@24,Count@32] 40B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  key 1 word=1 resno=2 kind=Fp128 attno=0 type=19 rep=0 expr=outer.2
+mapped: IndexScan FunctionScan NestLoop Material Unique

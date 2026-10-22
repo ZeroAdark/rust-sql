@@ -1,0 +1,10 @@
+-- regress-full-insert-021
+-- insert into inserttesta (f2[1], f2[2]) select 0,8;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:null, 2=T_CoerceToDomain)
+  write INSERT rel=17719 rti=1 natts=2 indexes=()
+  outs 1=w4:val 2=?
+mapped: Result ModifyTable

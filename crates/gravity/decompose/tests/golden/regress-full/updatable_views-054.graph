@@ -1,0 +1,22 @@
+-- regress-full-updatable_views-054
+-- MERGE INTO rw_view1 t USING (VALUES (6)) AS v(a) ON t.aa = v.a WHEN NOT MATCHED THEN INSERT (aa) VALUES (v.a);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=0 reason=Write end=sink
+  nodes n2@0 n1@1 n0@3
+  source const
+  project ()
+  nest inner=n3 JOIN_LEFT invariant raise-free params=()
+  inner node=3 serial site=0 reason=IndexSource end=sink
+  nodes n3@0
+  source index rel=24396 rti=3 am=heap index=24405
+    key att=1 op=96 value=c23:6
+    recheck (op96(v3.1, c23:6))
+    lanes RowId:byval8:w8:val
+  project (1=v3.-1)
+  project (1j=inner.1)
+  write MERGE rel=24396 rti=3 natts=3 indexes=(24405[1]up)
+    merge rowid=outer.1 target_cols=()
+    when not matched then insert (1=c23:6, 2=c25:'View default', 3=fn480(fn1574(c2205:24395)))
+  outs
+  outs 1=fx6:life/breaker
+mapped: Result ModifyTable IndexScan NestLoop

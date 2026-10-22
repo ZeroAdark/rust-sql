@@ -1,0 +1,24 @@
+-- regress-full-subselect-101
+-- explain (costs off) select tname, attname from ( select relname::information_schema.sql_identifier as tname, * from (select * from pg_class c) ss1) ss2 right join pg_attribute a on a.attrelid = ss2.oid where tname = 'tenk1' and attnum = 1;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@1
+  source index rel=1259 rti=5 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v5.2, c19:#64))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page
+  project (1=v5.1, 2=v5.2, 3=v5.3, 4=v5.4, 5=v5.5, 6=v5.6, 7=v5.7, 8=v5.8, 9=v5.9, 10=v5.10, 11=v5.11, 12=v5.12, 13=v5.13, 14=v5.14, 15=v5.15, 16=v5.16, 17=v5.17, 18=v5.18, 19=v5.19, 20=v5.20, 21=v5.21, 22=v5.22, 23=v5.23, 24=v5.24, 25=v5.25, 26=v5.26, 27=v5.27, 28=v5.28, 29=v5.29, 30=v5.30, 31=v5.31, 32=v5.32, 33=v5.33, 34=v5.34)
+  nest inner=n2 JOIN_INNER unique raise-free params=($exec0=outer.1)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=1249 rti=2 am=heap index=2659
+    key att=1 op=607 value=$exec0
+    key att=5 op=532 value=c23:1
+    recheck (op607(v2.1, $exec0), op532(v2.5, c23:1))
+    lanes Attr(2):byref8:fx64:win/page
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8, 9=v2.9, 10=v2.10, 11=v2.11, 12=v2.12, 13=v2.13, 14=v2.14, 15=v2.15, 16=v2.16, 17=v2.17, 18=v2.18, 19=v2.19, 20=v2.20, 21=v2.21, 22=v2.22, 23=v2.23, 24=v2.24, 25=v2.25)
+  project (1=relabel13718(outer.2), 2=inner.2)
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val 8=w4:val 9=w4:val 10=w4:val 11=w4:val 12=w4:val 13=w4:val 14=w4:val 15=w1:val 16=w1:val 17=w1:val 18=w1:val 19=w2:val 20=w2:val 21=w1:val 22=w1:val 23=w1:val 24=w1:val 25=w1:val 26=w1:val 27=w1:val 28=w1:val 29=w4:val 30=w4:val 31=w4:val 32=vl:row 33=vl:row 34=vl:row
+  outs 1=fx64:win/page 2=fx64:life/breaker
+param $exec0 owner=n0 type=26 rep=w8:val
+mapped: IndexScan NestLoop NestLoopParam

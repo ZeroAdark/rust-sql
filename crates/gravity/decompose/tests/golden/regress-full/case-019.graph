@@ -1,0 +1,9 @@
+-- regress-full-case-019
+-- SELECT CASE 'foo'::text WHEN 'foo' THEN ARRAY['a', 'b', 'c', 'd'] || enum_range(NULL::casetestenum)::text[] ELSE ARRAY['x', 'y'] END;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op375(c1009:'\x01\x00\x00\x00\x00\x00\x00\x00\x19\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00\x14\x00\x00\x00a\x00\x00\x00\x14\x00\x00\x00b\x00\x00\x00\x14\x00\x00\x00c\x00\x00\x00\x14\x00\x00\x00d\x00\x00\x00', T_ArrayCoerceExpr))
+  outs 1=vl:call383
+mapped: Result

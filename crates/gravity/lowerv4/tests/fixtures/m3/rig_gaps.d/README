@@ -1,0 +1,3 @@
+Fixtures whose every need is built but whose types or expressions the rig catalog (the reference .dat files, no server)
+cannot answer: user domains / types / functions created by the test, xml, a syscache seam the rig never installs. The
+server runner judges them. One file per fixture, `<fixture>.tsv`, one line: why. A new entry needs the same cause.

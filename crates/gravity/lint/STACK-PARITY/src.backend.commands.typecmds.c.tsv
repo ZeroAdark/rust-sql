@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/commands/typecmds.c: 2 stack-depth check sites
+3354	get_rels_with_domain	crates/backend/commands/typecmds/src/alter.rs	get_rels_with_domain	yes	
+4609	AlterTypeRecurse	crates/backend/commands/typecmds/src/alter.rs	AlterTypeRecurse	yes	

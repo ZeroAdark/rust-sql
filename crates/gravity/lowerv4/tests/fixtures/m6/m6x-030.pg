@@ -1,0 +1,8 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT i, count(*) FROM (VALUES ('1 mon'::interval), ('2 days'), ('1 day'), ('1 mon'), ('3 hours')) v(i) GROUP BY i ORDER BY i
+cols: i	count
+[pg]
+03:00:00	1
+1 day	1
+2 days	1
+1 mon	2

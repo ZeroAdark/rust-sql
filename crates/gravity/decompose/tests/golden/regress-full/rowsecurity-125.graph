@@ -1,0 +1,17 @@
+-- regress-full-rowsecurity-125
+-- UPDATE r1 SET a = 30 RETURNING *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@0 n0@1
+  source bitmap rel=28699 rti=1 am=heap
+    bitmap index node=2 index=28703 rows=850
+      key att=1 op=97 value=c23:20
+    recheck (op97(v1.1, c23:20))
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=c23:30, 2j=v1.-1)
+  write UPDATE rel=28699 rti=1 natts=1 indexes=(28703[1]up) set=(1) returning
+    check rls update rel=r1 (op97(v1.1, c23:20))
+  project (1=v1.1)
+  outs 1=w4:val 2=fx6:row
+  outs 1=w4:val
+mapped: ModifyTable BitmapIndexScan BitmapHeapScan

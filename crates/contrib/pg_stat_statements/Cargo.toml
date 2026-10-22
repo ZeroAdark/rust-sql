@@ -9,6 +9,9 @@ name = "pg_stat_statements"
 path = "src/lib.rs"
 
 [dependencies]
+fp_contract = { path = "../../_support/fp_contract" }
+guc = { path = "../../backend/utils/misc/guc" }
+types_guc = { path = "../../_support/types/types_guc" }
 datum = { path = "../../_support/types/datum" }
 mcx = { path = "../../_support/mcx" }
 types_core = { path = "../../_support/types/types_core" }
@@ -45,5 +48,6 @@ ipci = { path = "../../backend/storage/ipc/ipci" }
 lwlock = { path = "../../backend/storage/lmgr/lwlock" }
 dynahash = { path = "../../backend/utils/hash/dynahash" }
 shmem = { path = "../../backend/storage/ipc/shmem" }
+types_hash = { path = "../../_support/types/hash" }
 rustc-hash = "2"
 exec_hooks = { path = "../exec_hooks" }

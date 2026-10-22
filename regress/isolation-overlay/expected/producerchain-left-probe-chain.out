@@ -1,0 +1,215 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3e s1u s1d s1k s2u s1x s2c s3r
+step s3e: EXPLAIN (COSTS OFF) UPDATE g6_t t SET v = -t.v - coalesce(c.z, 100) FROM g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id AND coalesce(c.z, 0) < 3;
+QUERY PLAN                                      
+------------------------------------------------
+Update on g6_t t                                
+  ->  Nested Loop                               
+        ->  Hash Left Join                      
+              Hash Cond: (a.k = c.k)            
+              Filter: (COALESCE(c.z, 0) < 3)    
+              ->  Seq Scan on g6_a a            
+              ->  Hash                          
+                    ->  Seq Scan on g6_c c      
+        ->  Index Scan using g6_t_pkey on g6_t t
+              Index Cond: (id = a.id)           
+(10 rows)
+
+step s1u: UPDATE g6_t SET v = v + 1 WHERE id = 9973;
+step s1d: DELETE FROM g6_t WHERE id = 2 * 9973;
+step s1k: UPDATE g6_t SET id = id + 200000 WHERE id = 4 * 9973;
+step s2u: UPDATE g6_t t SET v = -t.v - coalesce(c.z, 100) FROM g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id AND coalesce(c.z, 0) < 3; <waiting ...>
+step s1x: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT id, v FROM g6_t WHERE v < 0 OR id % 9973 = 0 OR id > 100000 ORDER BY id;
+    id|     v
+------+------
+  9973| -9975
+ 29919| 29919
+ 49865|-49965
+ 59838|-59938
+ 69811|-69911
+ 79784|-79785
+ 89757|-89759
+ 99730| 99730
+239892| 39892
+(9 rows)
+
+
+starting permutation: s1u s1c s2u s1x s2c s3r
+step s1u: UPDATE g6_t SET v = v + 1 WHERE id = 9973;
+step s1c: UPDATE g6_c SET z = 9 WHERE k = 1;
+step s2u: UPDATE g6_t t SET v = -t.v - coalesce(c.z, 100) FROM g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id AND coalesce(c.z, 0) < 3; <waiting ...>
+step s1x: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT id, v FROM g6_t WHERE v < 0 OR id % 9973 = 0 OR id > 100000 ORDER BY id;
+   id|     v
+-----+------
+ 9973| -9975
+19946|-19948
+29919| 29919
+39892|-39992
+49865|-49965
+59838|-59938
+69811|-69911
+79784|-79785
+89757|-89759
+99730| 99730
+(10 rows)
+
+
+starting permutation: s1n s2u s1x s2c s3r
+step s1n: UPDATE g6_t SET v = v + 1 WHERE id = 5 * 9973;
+step s2u: UPDATE g6_t t SET v = -t.v - coalesce(c.z, 100) FROM g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id AND coalesce(c.z, 0) < 3; <waiting ...>
+step s1x: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT id, v FROM g6_t WHERE v < 0 OR id % 9973 = 0 OR id > 100000 ORDER BY id;
+   id|     v
+-----+------
+ 9973| -9974
+19946|-19948
+29919| 29919
+39892|-39992
+49865|-49966
+59838|-59938
+69811|-69911
+79784|-79785
+89757|-89759
+99730| 99730
+(10 rows)
+
+
+starting permutation: s1u s1k s2d s1x s2c s3r
+step s1u: UPDATE g6_t SET v = v + 1 WHERE id = 9973;
+step s1k: UPDATE g6_t SET id = id + 200000 WHERE id = 4 * 9973;
+step s2d: DELETE FROM g6_t t USING g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id AND coalesce(c.z, 0) < 3; <waiting ...>
+step s1x: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT id, v FROM g6_t WHERE v < 0 OR id % 9973 = 0 OR id > 100000 ORDER BY id;
+    id|    v
+------+-----
+ 29919|29919
+ 99730|99730
+239892|39892
+(3 rows)
+
+
+starting permutation: s2u s1u s2c s1x s3r
+step s2u: UPDATE g6_t t SET v = -t.v - coalesce(c.z, 100) FROM g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id AND coalesce(c.z, 0) < 3;
+step s1u: UPDATE g6_t SET v = v + 1 WHERE id = 9973; <waiting ...>
+step s2c: COMMIT;
+step s1u: <... completed>
+step s1x: COMMIT;
+step s3r: SELECT id, v FROM g6_t WHERE v < 0 OR id % 9973 = 0 OR id > 100000 ORDER BY id;
+   id|     v
+-----+------
+ 9973| -9973
+19946|-19948
+29919| 29919
+39892|-39992
+49865|-49965
+59838|-59938
+69811|-69911
+79784|-79785
+89757|-89759
+99730| 99730
+(10 rows)
+
+
+starting permutation: s3a s1v s1i s2a s1x s2c s3r
+step s3a: EXPLAIN (COSTS OFF) DELETE FROM g6_t t USING g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id AND c.k IS NULL;
+QUERY PLAN                                      
+------------------------------------------------
+Delete on g6_t t                                
+  ->  Nested Loop                               
+        ->  Hash Anti Join                      
+              Hash Cond: (a.k = c.k)            
+              ->  Seq Scan on g6_a a            
+              ->  Hash                          
+                    ->  Seq Scan on g6_c c      
+        ->  Index Scan using g6_t_pkey on g6_t t
+              Index Cond: (id = a.id)           
+(9 rows)
+
+step s1v: UPDATE g6_t SET v = v + 1 WHERE id = 4 * 9973;
+step s1i: INSERT INTO g6_c VALUES (4, 4);
+step s2a: DELETE FROM g6_t t USING g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id AND c.k IS NULL; <waiting ...>
+step s1x: COMMIT;
+step s2a: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT id, v FROM g6_t WHERE v < 0 OR id % 9973 = 0 OR id > 100000 ORDER BY id;
+   id|    v
+-----+-----
+ 9973| 9973
+19946|19946
+29919|29919
+79784|79784
+89757|89757
+99730|99730
+(6 rows)
+
+
+starting permutation: s3l s1u s1c s1d s2l s1x s2c s3r
+step s3l: EXPLAIN (COSTS OFF) UPDATE g6_t t SET v = -100 - coalesce(c.z, 50) FROM g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id;
+QUERY PLAN                                            
+------------------------------------------------------
+Update on g6_t t                                      
+  ->  Nested Loop Left Join                           
+        Join Filter: (a.k = c.k)                      
+        ->  Nested Loop                               
+              ->  Seq Scan on g6_a a                  
+              ->  Index Scan using g6_t_pkey on g6_t t
+                    Index Cond: (id = a.id)           
+        ->  Materialize                               
+              ->  Seq Scan on g6_c c                  
+(9 rows)
+
+step s1u: UPDATE g6_t SET v = v + 1 WHERE id = 9973;
+step s1c: UPDATE g6_c SET z = 9 WHERE k = 1;
+step s1d: DELETE FROM g6_t WHERE id = 2 * 9973;
+step s2l: UPDATE g6_t t SET v = -100 - coalesce(c.z, 50) FROM g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id; <waiting ...>
+step s1x: COMMIT;
+step s2l: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT id, v FROM g6_t WHERE v < 0 OR id % 9973 = 0 OR id > 100000 ORDER BY id;
+   id|    v
+-----+-----
+ 9973| -101
+29919| -103
+39892| -150
+49865| -150
+59838| -150
+69811| -150
+79784| -101
+89757| -102
+99730|99730
+(9 rows)
+
+
+starting permutation: s1k s1i s2l s1x s2c s3r
+step s1k: UPDATE g6_t SET id = id + 200000 WHERE id = 4 * 9973;
+step s1i: INSERT INTO g6_c VALUES (4, 4);
+step s2l: UPDATE g6_t t SET v = -100 - coalesce(c.z, 50) FROM g6_a a LEFT JOIN g6_c c ON a.k = c.k WHERE t.id = a.id; <waiting ...>
+step s1x: COMMIT;
+step s2l: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT id, v FROM g6_t WHERE v < 0 OR id % 9973 = 0 OR id > 100000 ORDER BY id;
+    id|    v
+------+-----
+  9973| -101
+ 19946| -102
+ 29919| -103
+ 49865| -150
+ 59838| -150
+ 69811| -150
+ 79784| -101
+ 89757| -102
+ 99730|99730
+239892|39892
+(10 rows)
+

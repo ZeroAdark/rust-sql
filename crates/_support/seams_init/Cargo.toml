@@ -9,6 +9,9 @@ name = "seams_init"
 path = "src/lib.rs"
 
 [dependencies]
+pgrc_companion = { path = "../../backend/catalog/pgrc_companion" }
+heapam_xlog = { path = "../../backend/access/heap/heapam_xlog" }
+pgrc_marks = { path = "../../backend/access/pgrcolumnar/pgrc_marks" }
 operatorcmds = { path = "../../backend/commands/operatorcmds" }
 foreigncmds = { path = "../../backend/commands/foreigncmds" }
 opclasscmds = { path = "../../backend/commands/opclasscmds" }
@@ -78,27 +81,15 @@ collationcmds = { path = "../../backend/commands/collationcmds" }
 multixactfuncs = { path = "../../backend/access/transam/multixactfuncs" }
 executils = { path = "../../backend/executor/executils" }
 execexpr = { path = "../../backend/executor/execexpr" }
-execjunk = { path = "../../backend/executor/execjunk" }
 execmain = { path = "../../backend/executor/execmain" }
+pgrc_am = { path = "../../backend/access/pgrcolumnar/pgrc_am" }
+tableam_seams = { path = "../../backend/access/table/tableam_seams" }
+pgrc_front = { path = "../../backend/access/pgrcolumnar/pgrc_front" }
+pgrc_colcache = { path = "../../backend/access/pgrcolumnar/pgrc_colcache" }
+pgrc_wal = { path = "../../backend/access/pgrcolumnar/pgrc_wal" }
+gravity_exec = { path = "../../gravity/exec" }
 execscan = { path = "../../backend/executor/execscan" }
-nodeseqscan = { path = "../../backend/executor/nodeseqscan" }
-nodesamplescan = { path = "../../backend/executor/nodesamplescan" }
 tablesample = { path = "../../backend/access/tablesample/tablesample" }
-nodeindexscan = { path = "../../backend/executor/nodeindexscan" }
-nodetidscan = { path = "../../backend/executor/nodetidscan" }
-nodetidrangescan = { path = "../../backend/executor/nodetidrangescan" }
-nodeindexonlyscan = { path = "../../backend/executor/nodeindexonlyscan" }
-nodeagg = { path = "../../backend/executor/nodeagg" }
-nodewindowagg = { path = "../../backend/executor/nodewindowagg" }
-nodesort = { path = "../../backend/executor/nodesort" }
-nodegroup = { path = "../../backend/executor/nodegroup" }
-nodeunique = { path = "../../backend/executor/nodeunique" }
-nodelimit = { path = "../../backend/executor/nodelimit" }
-nodelockrows = { path = "../../backend/executor/nodelockrows" }
-nodenestloop = { path = "../../backend/executor/nodenestloop" }
-nodemergejoin = { path = "../../backend/executor/nodemergejoin" }
-nodematerial = { path = "../../backend/executor/nodematerial" }
-nodememoize = { path = "../../backend/executor/nodememoize" }
 tuplesort = { path = "../../backend/utils/sort/tuplesort" }
 auth = { path = "../../backend/libpq/auth" }
 auth_oauth = { path = "../../backend/libpq/auth_oauth" }
@@ -316,6 +307,7 @@ pgcrypto = { path = "../../contrib/pgcrypto" }
 pg_stat_statements = { path = "../../contrib/pg_stat_statements" }
 pg_buffercache = { path = "../../contrib/pg_buffercache" }
 auto_explain = { path = "../../contrib/auto_explain" }
+pg_cron = { path = "../../contrib/pg_cron" }
 passwordcheck = { path = "../../contrib/passwordcheck" }
 test_oat_hooks = { path = "../../contrib/test_oat_hooks" }
 pgvector = { path = "../../contrib/pgvector" }
@@ -338,6 +330,13 @@ fuzzystrmatch = { path = "../../contrib/fuzzystrmatch" }
 tablefunc = { path = "../../contrib/tablefunc" }
 contrib_lo = { path = "../../contrib/lo" }
 tcn = { path = "../../contrib/tcn" }
+autoinc = { path = "../../contrib/autoinc" }
+insert_username = { path = "../../contrib/insert_username" }
+moddatetime = { path = "../../contrib/moddatetime" }
+refint = { path = "../../contrib/refint" }
+dict_int = { path = "../../contrib/dict_int" }
+dict_xsyn = { path = "../../contrib/dict_xsyn" }
+xml2 = { path = "../../contrib/xml2" }
 pageinspect = { path = "../../contrib/pageinspect" }
 pgstattuple = { path = "../../contrib/pgstattuple" }
 pg_freespacemap = { path = "../../contrib/pg_freespacemap" }
@@ -363,6 +362,10 @@ ts_cache = { path = "../../backend/utils/cache/ts_cache" }
 statistics = { path = "../../backend/statistics/statistics" }
 stats_import = { path = "../../backend/statistics/stats_import" }
 typecmds = { path = "../../backend/commands/typecmds" }
+
+
+[dev-dependencies]
+dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
 
 # `pgrust_sim` (non-default cfg): P4 sim arms live behind it; empty/absent
 # in product builds (law 0.1).

@@ -1,0 +1,15 @@
+-- regress-full-returning-002
+-- INSERT INTO foo (f2,f3) VALUES ('test', DEFAULT), ('More', 11), (upper('more'), 7+9) RETURNING *, f1+f3 AS sum;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source values rti=2 rows=3
+    row (c25:'test', c23:42)
+    row (c25:'More', c23:11)
+    row (c25:'MORE', c23:16)
+  project (1=fn480(fn1574(c2205:43612)), 2=v2.1, 3=v2.2)
+  write INSERT rel=43613 rti=1 natts=3 indexes=() returning
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=op551(v1.1, v1.3))
+  outs 1=w4:val 2=vl:row 3=w4:val
+  outs 1=w4:val 2=vl:row 3=w4:val 4=w4:val
+mapped: ModifyTable ValuesScan

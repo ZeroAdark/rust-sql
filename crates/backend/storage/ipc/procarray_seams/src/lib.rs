@@ -101,7 +101,7 @@ seam_core::seam!(
 seam_core::seam!(
     // GetVirtualXIDsDelayingChkpt (procarray.c:3043): snapshot the vxids
     // holding `delay_type` delay flags. Empty result = nothing to wait for.
-    pub fn get_virtual_xids_delaying_chkpt(delay_type: i32) -> Vec<types_core::VirtualTransactionId>
+    pub fn get_virtual_xids_delaying_chkpt(delay_type: i32) -> types_error::PgResult<Vec<types_core::VirtualTransactionId>>
 );
 
 seam_core::seam!(
@@ -151,4 +151,8 @@ seam_core::seam!(
     pub fn proc_array_apply_recovery_info<'a, 'mcx>(
         running: &'a types_storage::storage::RunningTransactionsData<'mcx>,
     ) -> PgResult<()>
+);
+
+seam_core::seam!(
+    pub fn backend_pid_get_proc_with_lock(pid: i32) -> Option<&'static types_storage::storage::PGPROC>
 );

@@ -1,0 +1,3 @@
+RL2's registry (crates/gravity/lint/rules/rl2_limit_panic.py): the Gravity functions that still panic plainly on a limit
+user input may reach (a plain panic aborts the server since D2933) instead of raising PostgreSQL's ERROR through
+gravity_abi::limits::exceeded. One row per file: path<TAB>function<TAB>owner lane<TAB>why it stays. The list only shrinks.

@@ -1,0 +1,12 @@
+-- regress-full-insert_conflict-017
+-- insert into dropcol(key, keep1, keep2) values(1, '4', 4) on conflict(key) do update set keep1 = excluded.keep1, keep2 = excluded.keep2 where excluded.keep1 is not null and excluded.keep2 is not null and dropcol.keep1 is not null and dropcol.keep2 is not null returning *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:1, 2=c23:null, 3=c25:'4', 4=c23:null, 5=c701:4616189618054758400)
+  write INSERT rel=18307 rti=1 natts=5 indexes=(18313[1]up) on_conflict=update arbiter=(18313) excl_rti=2 cols=(3,5) set=(1=inner.3, 2=inner.5) where=T_List returning
+  project (1=v1.1, 2=v1.3, 3=v1.5)
+  outs 1=w4:val 2=w4:val 3=vl:stmt/imm 4=w4:val 5=w8:val
+  outs 1=w4:val 2=vl:row 3=w8:val
+mapped: Result ModifyTable

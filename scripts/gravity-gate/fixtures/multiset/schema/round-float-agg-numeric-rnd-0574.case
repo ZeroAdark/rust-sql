@@ -1,0 +1,13 @@
+# D3927 (main 2026-10-11T07:21:16Z, the 09-25 float ruling): c-random seed 6's rnd-0574 at W8: a float8 variance folded in another order, its last bits crossing round(::numeric, 4)'s boundary: one unit in the 4th decimal passes
+sql: SELECT extract(hour from e.e_ts AT TIME ZONE 'UTC')::int, e.e_kind, count(e.e_day), round(variance((e.e_val + e.e_id))::numeric, 4), max(e.e_val), min(e.e_kind) FILTER (WHERE e.e_kind = ''), percentile_cont(0.5) WITHIN GROUP (ORDER BY (e.e_val + e.e_cust)) FROM ev e GROUP BY 1, 2 ORDER BY 1, 2, 3 DESC, 4, 5, 6, 7 DESC
+schema: CREATE TABLE ev (e_id int8 NOT NULL, e_day date, e_ts timestamptz, e_cust int4, e_kind text, e_val float8, e_amt numeric(12,3), e_payload jsonb) PARTITION BY RANGE (e_day);
+class: ordered 1,2,3,4,5,6,7
+verdict: match
+[pg]
+1	click	5	12.5000	99.5	\N	40.5
+2	click	412	135973297.5995	9998.25	\N	5011.5
+2	view	388	129001234.0001	9990.5	\N	4980
+[got]
+1	click	5	12.5000	99.5	\N	40.5
+2	click	412	135973297.5994	9998.25	\N	5011.5
+2	view	388	129001234.0001	9990.5	\N	4980

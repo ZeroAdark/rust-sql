@@ -56,6 +56,11 @@ pub struct LibcLocale(usize);
 impl LibcLocale {
     pub const NONE: LibcLocale = LibcLocale(0);
 
+    /// The handle's address: a locale_t is never freed once built, so the address names one locale for the process.
+    pub(crate) fn id(self) -> usize {
+        self.0
+    }
+
     fn get(self) -> locale_t {
         debug_assert!(self.0 != 0, "libc case/collate op on a C-locale locale_t");
         self.0 as locale_t
@@ -122,18 +127,9 @@ fn set_errno(v: c_int) {
     unsafe { *errno_location() = v }
 }
 
-fn cstr(s: &str) -> Vec<u8> {
-    let mut v = Vec::with_capacity(s.len() + 1);
-    v.extend_from_slice(s.as_bytes());
-    v.push(0);
-    v
-}
-
 fn newlocale(mask: c_int, locale: &str, base: locale_t) -> Option<locale_t> {
-    let c = cstr(locale);
     set_errno(0);
-    // SAFETY: c is NUL-terminated and outlives the call.
-    let loc = unsafe { libc::newlocale(mask, c.as_ptr() as *const c_char, base) };
+    let loc = crate::setup::newlocale_backend_env(mask, locale, base);
     if loc.is_null() {
         None
     } else {
@@ -192,6 +188,8 @@ thread_local! {
     // C's sbuf[TEXTBUFLEN]-else-palloc: retained scratch, no per-call malloc.
     static COLL_SCRATCH: core::cell::RefCell<Vec<u8>> =
         core::cell::RefCell::new(Vec::with_capacity(2 * TEXTBUFLEN));
+    static BACKEND_CTYPE: core::cell::RefCell<BackendCtypeSlot> =
+        const { core::cell::RefCell::new(BackendCtypeSlot(BackendCtype::Unresolved)) };
 }
 
 // pg_locale_libc.c:581 palloc(bufsize1 + bufsize2): MaxAllocSize admission
@@ -200,37 +198,44 @@ pub(crate) fn strncoll_buf_admission(len1: usize, len2: usize) -> ::types_error:
     ::mcx::check_alloc_size(len1 + 1 + len2 + 1)
 }
 
-pub(crate) fn strncoll_libc(arg1: &[u8], arg2: &[u8], lt: LibcLocale) -> i32 {
+pub(crate) fn strcoll_libc(arg1: &[u8], arg2: &[u8], lt: LibcLocale) -> i32 {
+    assert_eq!(arg1.last(), Some(&0));
+    assert_eq!(arg2.last(), Some(&0));
+    // SAFETY: both slices contain a terminating NUL and lt is a live locale.
+    unsafe { strcoll_l(arg1.as_ptr().cast(), arg2.as_ptr().cast(), lt.get()) }
+}
+
+pub(crate) fn strncoll_libc(arg1: &[u8], arg2: &[u8], lt: LibcLocale) -> PgResult<i32> {
     COLL_SCRATCH.with(|cell| {
         let mut buf = cell.borrow_mut();
         buf.clear();
-        buf.reserve(arg1.len() + arg2.len() + 2);
+        ::mcx::std_vec_reserve("pg_locale", &mut buf, arg1.len() + arg2.len() + 2)?;
         buf.extend_from_slice(arg1);
         buf.push(0);
         buf.extend_from_slice(arg2);
         buf.push(0);
         let p1 = buf.as_ptr() as *const c_char;
         // SAFETY: both slices were just NUL-terminated into one buffer.
-        unsafe { strcoll_l(p1, p1.add(arg1.len() + 1), lt.get()) }
+        Ok(unsafe { strcoll_l(p1, p1.add(arg1.len() + 1), lt.get()) })
     })
 }
 
-pub(crate) fn strnxfrm_libc(dest: &mut [u8], src: &[u8], lt: LibcLocale) -> usize {
+pub(crate) fn strnxfrm_libc(dest: &mut [u8], src: &[u8], lt: LibcLocale) -> PgResult<usize> {
     COLL_SCRATCH.with(|cell| {
         let mut buf = cell.borrow_mut();
         buf.clear();
-        buf.reserve(src.len() + 1);
+        ::mcx::std_vec_reserve("pg_locale", &mut buf, src.len() + 1)?;
         buf.extend_from_slice(src);
         buf.push(0);
         // SAFETY: src is NUL-terminated; strxfrm_l writes at most dest.len().
-        unsafe {
+        Ok(unsafe {
             strxfrm_l(
                 dest.as_mut_ptr() as *mut c_char,
                 buf.as_ptr() as *const c_char,
                 dest.len(),
                 lt.get(),
             )
-        }
+        })
     })
 }
 
@@ -239,8 +244,13 @@ pub(crate) fn strnxfrm_libc(dest: &mut [u8], src: &[u8], lt: LibcLocale) -> usiz
 pub fn pg_tolower(ch: u8) -> u8 {
     if ch.is_ascii_uppercase() {
         ch + b'a' - b'A'
-    } else if ch >= 0x80 && unsafe { libc::isupper(ch as c_int) } != 0 {
-        unsafe { libc::tolower(ch as c_int) as u8 }
+    } else if ch >= 0x80 {
+        // SAFETY: pure ctype calls on an unsigned-char value.
+        with_backend_ctype_slot(|b| match *b {
+            BackendCtype::Process if unsafe { libc::isupper(ch as c_int) } != 0 => unsafe { libc::tolower(ch as c_int) as u8 },
+            BackendCtype::Libc(loc) if unsafe { isupper_l(ch as c_int, loc) } != 0 => unsafe { tolower_l(ch as c_int, loc) as u8 },
+            _ => ch,
+        })
     } else {
         ch
     }
@@ -249,8 +259,13 @@ pub fn pg_tolower(ch: u8) -> u8 {
 pub fn pg_toupper(ch: u8) -> u8 {
     if ch.is_ascii_lowercase() {
         ch - (b'a' - b'A')
-    } else if ch >= 0x80 && unsafe { libc::islower(ch as c_int) } != 0 {
-        unsafe { libc::toupper(ch as c_int) as u8 }
+    } else if ch >= 0x80 {
+        // SAFETY: pure ctype calls on an unsigned-char value.
+        with_backend_ctype_slot(|b| match *b {
+            BackendCtype::Process if unsafe { libc::islower(ch as c_int) } != 0 => unsafe { libc::toupper(ch as c_int) as u8 },
+            BackendCtype::Libc(loc) if unsafe { islower_l(ch as c_int, loc) } != 0 => unsafe { toupper_l(ch as c_int, loc) as u8 },
+            _ => ch,
+        })
     } else {
         ch
     }
@@ -287,6 +302,92 @@ fn pg_toupper_db(ch: u8, lt: LibcLocale) -> u8 {
     } else {
         ch
     }
+}
+
+// The backend's LC_CTYPE for C code that calls plain <ctype.h> functions:
+// pg_perm_setlocale installs the database's datctype as the process locale for
+// every collation provider. A backend is a thread here, so the recorded
+// per-thread value is opened as a locale_t; before the global freeze the
+// process locale itself is still the backend's.
+enum BackendCtype {
+    Unresolved,
+    Process,
+    C,
+    Libc(locale_t),
+}
+
+struct BackendCtypeSlot(BackendCtype);
+
+impl Drop for BackendCtypeSlot {
+    fn drop(&mut self) {
+        if let BackendCtype::Libc(loc) = self.0 {
+            // SAFETY: loc came from newlocale and is owned by this slot.
+            unsafe { libc::freelocale(loc) };
+        }
+    }
+}
+
+pub(crate) fn reset_backend_ctype() {
+    BACKEND_CTYPE.with(|b| *b.borrow_mut() = BackendCtypeSlot(BackendCtype::Unresolved));
+}
+
+fn with_backend_ctype_slot<R>(f: impl FnOnce(&BackendCtype) -> R) -> R {
+    BACKEND_CTYPE.with(|b| {
+        if matches!(b.borrow().0, BackendCtype::Unresolved) {
+            let resolved = match crate::setup::thread_locale(crate::lc::LC_CTYPE) {
+                None => BackendCtype::Process,
+                Some(name) => match newlocale(crate::lc::LC_CTYPE_MASK, &name, core::ptr::null_mut()) {
+                    Some(loc) => BackendCtype::Libc(loc),
+                    None => BackendCtype::C,
+                },
+            };
+            *b.borrow_mut() = BackendCtypeSlot(resolved);
+        }
+        f(&b.borrow().0)
+    })
+}
+
+/// Runs `f` under the backend's LC_CTYPE, as C's plain <ctype.h>/mbstowcs
+/// calls do; the thread's prior locale is restored on every exit path.
+pub fn with_backend_ctype<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(locale_t);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: self.0 is the locale uselocale returned.
+            unsafe { libc::uselocale(self.0) };
+        }
+    }
+    let loc = with_backend_ctype_slot(|b| match *b {
+        BackendCtype::Libc(loc) => loc,
+        _ => core::ptr::null_mut(),
+    });
+    if loc.is_null() {
+        return f();
+    }
+    // SAFETY: the slot owns loc until the next LC_CTYPE record, which no
+    // ctype caller performs.
+    let _restore = Restore(unsafe { libc::uselocale(loc) });
+    f()
+}
+
+/// C `toupper()` under the backend's LC_CTYPE.
+pub fn backend_toupper(c: u8) -> u8 {
+    with_backend_ctype_slot(|b| match *b {
+        // SAFETY: pure ctype calls; c promoted as unsigned char per C.
+        BackendCtype::Process => unsafe { libc::toupper(c as c_int) as u8 },
+        BackendCtype::Libc(loc) => unsafe { toupper_l(c as c_int, loc) as u8 },
+        _ => c.to_ascii_uppercase(),
+    })
+}
+
+/// C `isalpha()` under the backend's LC_CTYPE.
+pub fn backend_isalpha(c: u8) -> bool {
+    with_backend_ctype_slot(|b| match *b {
+        // SAFETY: pure ctype calls; c promoted as unsigned char per C.
+        BackendCtype::Process => unsafe { libc::isalpha(c as c_int) != 0 },
+        BackendCtype::Libc(loc) => unsafe { isalpha_l(c as c_int, loc) != 0 },
+        _ => c.is_ascii_alphabetic(),
+    })
 }
 
 pub(crate) fn tolower_l_byte(c: u8, lt: LibcLocale) -> u8 {
@@ -472,7 +573,7 @@ fn char2wchar(to: &mut [wchar_t], from: &[u8], lt: LibcLocale) -> PgResult<usize
     if to.is_empty() {
         return Ok(0);
     }
-    let str_nul = cstr_bytes(from);
+    let str_nul = cstr_bytes(from)?;
     // SAFETY: str_nul is NUL-terminated; mbstowcs_l writes at most to.len().
     let result = unsafe {
         mbstowcs_l(
@@ -505,11 +606,11 @@ fn wchar2char(to: &mut [u8], from: &[wchar_t], lt: LibcLocale) -> usize {
     }
 }
 
-fn cstr_bytes(b: &[u8]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(b.len() + 1);
+fn cstr_bytes(b: &[u8]) -> PgResult<Vec<u8>> {
+    let mut v = ::mcx::std_vec_with_capacity::<u8>("pg_locale", b.len() + 1)?;
     v.extend_from_slice(b);
     v.push(0);
-    v
+    Ok(v)
 }
 
 enum MbCase {
@@ -609,5 +710,18 @@ pub(crate) fn strupper_libc<'mcx>(
         case_libc_mb(mcx, dest, src, locale, MbCase::Upper)
     } else {
         Ok(strupper_libc_sb(dest, src, locale))
+    }
+}
+
+#[cfg(test)]
+mod terminated_tests {
+    #[test]
+    fn terminated_comparison_does_not_borrow_combined_scratch() {
+        let locale = crate::libc_locale_for_tests("en_US.UTF-8").unwrap();
+        super::COLL_SCRATCH.with(|cell| {
+            let _held = cell.borrow_mut();
+            assert!(locale.pg_strcoll(b"a\0", b"b\0").unwrap() < 0);
+            assert_eq!(locale.pg_strcoll(b"a\0", b"a\0").unwrap(), 0);
+        });
     }
 }

@@ -1,0 +1,3 @@
+path	crates/gravity/wire/src/datarow.rs
+growth	std::vec::Vec::extend_from_slice	2
+growth	std::vec::Vec::push	1

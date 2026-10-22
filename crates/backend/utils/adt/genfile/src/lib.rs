@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 
 use adt_datetime::{POSTGRES_EPOCH_JDATE, SECS_PER_DAY, UNIX_EPOCH_JDATE, USECS_PER_SEC};
 use datum::Datum;
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_core::Oid;
 use types_error::{
     PgError, PgResult, ERRCODE_INSUFFICIENT_PRIVILEGE, ERRCODE_INVALID_PARAMETER_VALUE,
@@ -33,7 +33,11 @@ pub(crate) fn os_path(bytes: &[u8]) -> &std::path::Path {
 }
 
 pub(crate) fn os_name_bytes(name: &std::ffi::OsStr) -> Vec<u8> {
-    name.as_bytes().to_vec()
+    let b = name.as_bytes();
+    let mut v = Vec::new();
+    let _ = v.try_reserve(b.len());
+    v.extend_from_slice(b);
+    v
 }
 
 // ereport(errmsg("<prefix>\"%s\"<suffix>", filename)) (genfile.c): with a
@@ -136,27 +140,42 @@ fn read_binary_file(
             .into());
     }
 
-    let mut file = match std::fs::File::open(os_path(filename)) {
-        Ok(f) => f,
-        Err(e) => {
-            if missing_ok && e.kind() == std::io::ErrorKind::NotFound {
-                return Ok(None);
-            }
-            return Err(io_error_path(&e, "could not open file ", filename, " for reading: %m"));
+    let index = fd::AllocateFilePath(&fd::PgPath::from_bytes(filename), "rb")?;
+    if index < 0 {
+        let e = std::io::Error::from_raw_os_error(fd::get_errno());
+        if missing_ok && e.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
         }
-    };
+        return Err(io_error_path(&e, "could not open file ", filename, &format!(" for reading: {PCT_M}")));
+    }
 
+    let r = fd::with_allocated_stdio(index, |file| {
+        read_allocated_file(file, filename, seek_offset, bytes_to_read)
+    });
+    fd::FreeFile(index)?;
+    match r {
+        Some(r) => Ok(Some(r?)),
+        None => Ok(None),
+    }
+}
+
+fn read_allocated_file(
+    file: &mut std::fs::File,
+    filename: &[u8],
+    seek_offset: i64,
+    bytes_to_read: i64,
+) -> PgResult<Vec<u8>> {
     let whence = if seek_offset >= 0 {
         SeekFrom::Start(seek_offset as u64)
     } else {
         SeekFrom::End(seek_offset)
     };
     if let Err(e) = file.seek(whence) {
-        return Err(io_error_path(&e, "could not seek in file ", filename, ": %m"));
+        return Err(io_error_path(&e, "could not seek in file ", filename, &format!(": {PCT_M}")));
     }
 
-    let buf = if bytes_to_read >= 0 {
-        let mut buf = vec![0u8; bytes_to_read as usize];
+    if bytes_to_read >= 0 {
+        let mut buf = ::mcx::std_vec_from_elem("adt", 0u8, bytes_to_read as usize)?;
         let mut nbytes = 0;
         while nbytes < buf.len() {
             match file.read(&mut buf[nbytes..]) {
@@ -164,19 +183,19 @@ fn read_binary_file(
                 Ok(n) => nbytes += n,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(e) => {
-                    return Err(io_error_path(&e, "could not read file ", filename, ": %m"))
+                    return Err(io_error_path(&e, "could not read file ", filename, &format!(": {PCT_M}")))
                 }
             }
         }
         buf.truncate(nbytes);
-        buf
+        Ok(buf)
     } else {
         // C caps the whole-file StringInfo at MaxAllocSize - 1 bytes including
         // the reserved varlena header.
         let limit = MAX_ALLOC_SIZE - 1 - VARHDRSZ;
         let mut buf = Vec::new();
         if let Err(e) = file.by_ref().take(limit as u64 + 1).read_to_end(&mut buf) {
-            return Err(io_error_path(&e, "could not read file ", filename, ": %m"));
+            return Err(io_error_path(&e, "could not read file ", filename, &format!(": {PCT_M}")));
         }
         if buf.len() > limit {
             return Err(ereport(ERROR)
@@ -185,10 +204,8 @@ fn read_binary_file(
                 .into_error()
                 .into());
         }
-        buf
-    };
-
-    Ok(Some(buf))
+        Ok(buf)
+    }
 }
 
 fn read_text_file(

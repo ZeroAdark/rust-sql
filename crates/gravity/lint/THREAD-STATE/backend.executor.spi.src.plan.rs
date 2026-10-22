@@ -1,0 +1,1 @@
+backend/executor/spi/src/plan.rs	PLANS	pgport	at:SPI_freeplan	leader	the SPI plans behind SpiPlanPtrs (C's bare SPIPlanPtr); bounded by the live plans: SPI_freeplan and the connection's end free each slot, and a free slot is reused first

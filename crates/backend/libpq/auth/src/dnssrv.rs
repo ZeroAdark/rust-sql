@@ -350,13 +350,13 @@ fn random_u16() -> u16 {
 // res_nmkquery(QUERY, name, C_IN, type): the wire query, or None when the
 // name cannot be encoded (empty label, label > 63, name > 255 octets).
 fn mkquery(name: &str, qtype: u16) -> Option<Vec<u8>> {
-    let mut q = Vec::with_capacity(12 + name.len() + 6);
+    let mut q = ::mcx::std_vec_with_capacity("auth", 12 + name.len() + 6).ok()?;
     q.extend_from_slice(&random_u16().to_be_bytes());
     q.extend_from_slice(&0x0100u16.to_be_bytes()); // RD
     q.extend_from_slice(&1u16.to_be_bytes());
     q.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
     let name = name.strip_suffix('.').unwrap_or(name);
-    let mut encoded = Vec::with_capacity(name.len() + 2);
+    let mut encoded = ::mcx::std_vec_with_capacity("auth", name.len() + 2).ok()?;
     if !name.is_empty() {
         for label in name.split('.') {
             if label.is_empty() || label.len() > 63 {
@@ -472,7 +472,12 @@ fn send_dg(ns: SocketAddr, query: &[u8], seconds: u32) -> Dg {
         match sock.recv(&mut buf) {
             Ok(n) => {
                 if reply_matches(query, &buf[..n]) {
-                    return Dg::Answer(buf[..n].to_vec());
+                    let mut ans = Vec::new();
+                    if ans.try_reserve_exact(n).is_err() {
+                        return Dg::Error;
+                    }
+                    ans.extend_from_slice(&buf[..n]);
+                    return Dg::Answer(ans);
                 }
                 // an old or foreign answer: keep waiting
             }
@@ -496,7 +501,10 @@ fn send_vc(ns: SocketAddr, query: &[u8], seconds: u32) -> Option<Vec<u8>> {
     s.write_all(query).ok()?;
     let mut lb = [0u8; 2];
     s.read_exact(&mut lb).ok()?;
-    let mut reply = vec![0u8; u16::from_be_bytes(lb) as usize];
+    let len = u16::from_be_bytes(lb) as usize;
+    let mut reply = Vec::new();
+    reply.try_reserve_exact(len).ok()?;
+    reply.resize(len, 0);
     s.read_exact(&mut reply).ok()?;
     if reply_matches(query, &reply) {
         Some(reply)
@@ -643,7 +651,13 @@ fn parse_srv_reply(reply: &[u8]) -> Result<Vec<SrvRecord>, ()> {
             let port = be16(reply, p + 4).ok_or(())?;
             if port != 0 && !host.is_empty() {
                 let mut hostname = host;
-                hostname.truncate(253); // MAXHOST - 1
+                // MAXHOST - 1; the lossy decode may have put a multi-byte
+                // replacement across the cut.
+                let mut cut = hostname.len().min(253);
+                while !hostname.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                hostname.truncate(cut);
                 recs.push(SrvRecord {
                     priority,
                     weight,
@@ -741,6 +755,37 @@ mod dnssrv_tests {
         assert!(ldap_dn2domain("dc=a,").is_err());
         assert!(ldap_dn2domain("=a").is_err());
         assert!(ldap_dn2domain("dc=\"unterminated").is_err());
+    }
+
+    // A lossy-decoded target whose replacement char straddles the MAXHOST
+    // cut must be trimmed to the char boundary, not panic in truncate.
+    #[test]
+    fn srv_target_truncation_stays_on_a_char_boundary() {
+        fn name(labels: &[&[u8]]) -> Vec<u8> {
+            let mut v = Vec::new();
+            for l in labels {
+                v.push(l.len() as u8);
+                v.extend_from_slice(l);
+            }
+            v.push(0);
+            v
+        }
+        let mut reply = vec![0u8; 12];
+        reply.extend(name(&[b"_ldap", b"_tcp", b"foo"]));
+        reply.extend_from_slice(&[0, 33, 0, 1]);
+        let long = [b'a'; 63];
+        let mut odd = vec![b'a'; 60];
+        odd.extend_from_slice(&[0xff, b'a']);
+        let target = name(&[&long, &long, &long, &odd]);
+        reply.extend_from_slice(&[0xc0, 0x0c, 0, 33, 0, 1, 0, 0, 0, 60]);
+        let rdlen = 6 + target.len();
+        reply.extend_from_slice(&[(rdlen >> 8) as u8, rdlen as u8, 0, 1, 0, 1, 1, 133]);
+        reply.extend(target);
+        let recs = parse_srv_reply(&reply).unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].port, 389);
+        assert_eq!(recs[0].hostname.len(), 252);
+        assert!(recs[0].hostname.ends_with('a'));
     }
 
     #[test]

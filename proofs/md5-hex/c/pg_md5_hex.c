@@ -4,7 +4,7 @@
  *
  * Provenance: src/common/md5_common.c @ postgres-src
  * 62d6c7d3df6287f1bd83199c1a746e50d31571a0 (REL_18 = PostgreSQL 18.3, the
- * repo's vendored ground-truth checkout ../pgrust-reference/vendor/postgres-src),
+ * repo's vendored ground-truth checkout ../pgrust-fabled/vendor/postgres-src),
  * copied 2026-07-30. Body VERBATIM.
  *
  * Shims (plumbing only, never logic):

@@ -1,0 +1,9 @@
+-- regress-full-plpgsql-082
+-- do $$ declare v_test plpgsql_arr_domain; begin v_test := array[1]; v_test := v_test || 2; end; $$;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op521(T_SubscriptingRef, c23:0))
+  outs 1=w1:val
+mapped: Result

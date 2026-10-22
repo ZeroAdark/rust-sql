@@ -1,0 +1,97 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s2m s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x: EXPLAIN (COSTS OFF) SELECT id, queue, attempts FROM job WHERE id = (SELECT min(id) FROM job WHERE state = 'ready' AND queue = 'pay') FOR UPDATE;
+QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------
+LockRows                                                                           
+  InitPlan 2                                                                       
+    ->  Result                                                                     
+          InitPlan 1                                                               
+            ->  Limit                                                              
+                  ->  Index Scan using job_pkey on job job_1                       
+                        Filter: ((state = 'ready'::text) AND (queue = 'pay'::text))
+  ->  Index Scan using job_pkey on job                                             
+        Index Cond: (id = (InitPlan 2).col1)                                       
+(9 rows)
+
+step s2m: SELECT id, queue, attempts FROM job WHERE id = (SELECT min(id) FROM job WHERE state = 'ready' AND queue = 'pay') FOR UPDATE;
+id|queue|attempts
+--+-----+--------
+ 1|pay  |       0
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1u s2m s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE job SET attempts = attempts + 1 WHERE id = 1;
+step s2m: SELECT id, queue, attempts FROM job WHERE id = (SELECT min(id) FROM job WHERE state = 'ready' AND queue = 'pay') FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+id|queue|attempts
+--+-----+--------
+ 1|pay  |       1
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1d s2m s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1d: UPDATE job SET state = 'done', attempts = 9 WHERE id = 1;
+step s2m: SELECT id, queue, attempts FROM job WHERE id = (SELECT min(id) FROM job WHERE state = 'ready' AND queue = 'pay') FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+id|queue|attempts
+--+-----+--------
+ 1|pay  |       9
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1x s2m s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1x: DELETE FROM job WHERE id = 1;
+step s2m: SELECT id, queue, attempts FROM job WHERE id = (SELECT min(id) FROM job WHERE state = 'ready' AND queue = 'pay') FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+id|queue|attempts
+--+-----+--------
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1l s2s s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l: SELECT id FROM job WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2s: SELECT id, queue, attempts FROM job WHERE id = (SELECT min(id) FROM job WHERE state = 'ready' AND queue = 'pay') FOR UPDATE SKIP LOCKED;
+id|queue|attempts
+--+-----+--------
+(0 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1l s2n s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l: SELECT id FROM job WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2n: SELECT id, queue, attempts FROM job WHERE id = (SELECT min(id) FROM job WHERE state = 'ready' AND queue = 'pay') FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "job"
+step s1c: COMMIT;
+step s2c: COMMIT;

@@ -1,0 +1,10 @@
+-- regress-full-tstypes-001
+-- SELECT lexeme, positions[1] from unnest('base:7 hidden:6 rebel:1 spaceship:2,33A,34B,35C,36D strike:3'::tsvector);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Other fn3322 cols=3 fn3322(c3614:'\x05\x00\x00\x00\x09\x00\x00\x00\x0d\x80\x00\x00\x0b \x01\x00\x13\xc0\x01\x00\x0d \x03\x00base\x01\x00\x07\x00hidden\x01\x00\x06\x00rebel\x00\x01\x00\x01\x00spaceship\x00\x05\x00\x02\x00!\xc0"\x80#@$\x00strike\x01\x00\x03\x00')]
+  project (1=v1.1, 2=T_SubscriptingRef)
+  outs 1=vl:row 2=w2:val
+mapped: FunctionScan

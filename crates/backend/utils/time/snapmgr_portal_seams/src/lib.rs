@@ -23,3 +23,8 @@ seam_core::seam!(
     // PopActiveSnapshot() (snapmgr.c); elog(ERROR)s on an empty stack.
     pub fn pop_active_snapshot() -> types_error::PgResult<()>
 );
+
+seam_core::seam!(
+    // HaveRegisteredOrActiveSnapshot() (snapmgr.c).
+    pub fn have_registered_or_active_snapshot() -> bool
+);

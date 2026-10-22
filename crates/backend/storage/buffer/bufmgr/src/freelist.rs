@@ -12,9 +12,7 @@ use types_storage::buf::{
 use types_storage::storage::CacheAligned;
 use types_storage::NUM_AUXILIARY_PROCS;
 
-use crate::buf_hdr::{
-    BufferDescriptorGetBuffer, GetBufferDescriptor, LockBufHdr, NBuffersInited, UnlockBufHdr,
-};
+use crate::buf_hdr::{BufferDescriptorGetBuffer, GetBufferDescriptor, LockBufHdr, UnlockBufHdr};
 use crate::buf_table::InitBufTable;
 
 pub(crate) struct SpinLock(AtomicU32);
@@ -100,7 +98,7 @@ pub fn StrategyShmemSize() -> PgResult<usize> {
     let mut size: usize = 0;
     size = mcx::add_size(
         size,
-        crate::buf_table::BufTableShmemSize(globals::NBuffers() + lwlock::NUM_BUFFER_PARTITIONS),
+        crate::buf_table::BufTableShmemSize(globals::NBuffers() + lwlock::NUM_BUFFER_PARTITIONS)?,
     )?;
     size = mcx::add_size(size, C_MAXALIGN_SIZEOF_BUFFER_STRATEGY_CONTROL)?;
     Ok(size)
@@ -144,10 +142,11 @@ pub(crate) fn StrategyResetAfterCrash(nbuffers: i32) {
 }
 
 /// Wraparound folds the hand and bumps completePasses under the spinlock so
-/// StrategySyncStart reads a consistent pair.
+/// StrategySyncStart reads a consistent pair. The modulus is the extent span
+/// (one past the highest non-retired extent), not the descriptor high-water.
 fn ClockSweepTick() -> i32 {
     let c = ctl();
-    let nbuffers = NBuffersInited() as u32;
+    let nbuffers = crate::extent::span() as u32;
     let mut victim = c.clock.next_victim_buffer.fetch_add(1, Ordering::Relaxed);
     if victim >= nbuffers {
         let original_victim = victim;
@@ -165,7 +164,7 @@ fn ClockSweepTick() -> i32 {
 /// equals the number of laps.
 pub(crate) fn fold_clock_hand(mut expected: u32) {
     let c = ctl();
-    let nbuffers = NBuffersInited() as u32;
+    let nbuffers = crate::extent::span() as u32;
     c.buffer_strategy_lock.with(|| loop {
         let wrapped = expected % nbuffers;
         match c.clock.next_victim_buffer.compare_exchange(
@@ -229,8 +228,10 @@ pub fn StrategyGetBuffer(strategy: &BufferAccessStrategy) -> PgResult<(Victim, b
             }
             let buf = GetBufferDescriptor(buf_id);
             let local_buf_state = LockBufHdr(buf);
+            // A draining or retired extent's buffer leaves the list here.
             if local_buf_state & BUF_REFCOUNT_MASK == 0
                 && local_buf_state & BUF_USAGECOUNT_MASK == 0
+                && crate::extent::buffer_active(buf_id)
             {
                 if let Some(s) = strategy {
                     AddBufferToRing(&mut s.borrow_mut(), BufferDescriptorGetBuffer(buf));
@@ -241,15 +242,32 @@ pub fn StrategyGetBuffer(strategy: &BufferAccessStrategy) -> PgResult<(Victim, b
         }
     }
 
-    let mut trycounter = NBuffersInited();
+    // A slot of a non-ACTIVE extent counts like a pinned one: trycounter
+    // still means "a whole lap without a usable buffer".
+    let mut trycounter = crate::extent::span();
     loop {
         let buf_id = ClockSweepTick();
+        if !crate::extent::buffer_active(buf_id) {
+            trycounter -= 1;
+            if trycounter == 0 {
+                return Err(no_unpinned_buffers());
+            }
+            continue;
+        }
         let buf = GetBufferDescriptor(buf_id);
         let local_buf_state = LockBufHdr(buf);
+        if !crate::extent::buffer_active(buf_id) {
+            UnlockBufHdr(buf, local_buf_state);
+            trycounter -= 1;
+            if trycounter == 0 {
+                return Err(no_unpinned_buffers());
+            }
+            continue;
+        }
         if local_buf_state & BUF_REFCOUNT_MASK == 0 {
             if local_buf_state & BUF_USAGECOUNT_MASK != 0 {
                 UnlockBufHdr(buf, local_buf_state - BUF_USAGECOUNT_ONE);
-                trycounter = NBuffersInited();
+                trycounter = crate::extent::span();
             } else {
                 if let Some(s) = strategy {
                     AddBufferToRing(&mut s.borrow_mut(), BufferDescriptorGetBuffer(buf));
@@ -260,18 +278,20 @@ pub fn StrategyGetBuffer(strategy: &BufferAccessStrategy) -> PgResult<(Victim, b
             trycounter -= 1;
             if trycounter == 0 {
                 UnlockBufHdr(buf, local_buf_state);
-                return Err(Box::new(
-                    types_error::PgError::new(ERROR, "no unpinned buffers available")
-                        .with_error_location(ErrorLocation::new(
-                            "freelist.c",
-                            0,
-                            "StrategyGetBuffer",
-                        )),
-                ));
+                return Err(no_unpinned_buffers());
             }
             UnlockBufHdr(buf, local_buf_state);
         }
     }
+}
+
+#[cold]
+fn no_unpinned_buffers() -> Box<types_error::PgError> {
+    Box::new(
+        types_error::PgError::new(ERROR, "no unpinned buffers available").with_error_location(
+            ErrorLocation::new("freelist.c", 0, "StrategyGetBuffer"),
+        ),
+    )
 }
 
 #[inline]
@@ -298,17 +318,49 @@ pub fn StrategyFreeBuffer(buf_id: i32) {
     });
 }
 
+/// Links every invalid buffer of `[lo, hi)` not already on the freelist onto
+/// its head under one spinlock hold (an extent joins or rejoins the pool).
+/// The tag test is racy, like C's freelist: StrategyGetBuffer rechecks.
+pub(crate) fn StrategyFreeBufferRange(lo: i32, hi: i32) {
+    let c = ctl();
+    c.buffer_strategy_lock.with(|| {
+        for buf_id in (lo..hi).rev() {
+            let buf = GetBufferDescriptor(buf_id);
+            if buf.free_next() != FREENEXT_NOT_IN_LIST
+                || buf.state.load(Ordering::Relaxed) & types_storage::buf::BM_TAG_VALID != 0
+            {
+                continue;
+            }
+            let head = c.first_free_buffer.load(Ordering::Relaxed);
+            // SAFETY: strategy spinlock held.
+            unsafe {
+                buf.set_free_next(head);
+                if head < 0 {
+                    *c.last_free_buffer.get() = buf_id;
+                }
+            }
+            c.first_free_buffer.store(buf_id, Ordering::Relaxed);
+        }
+    });
+}
+
 /// Bgwriter's consistent read of the clock pair.
 pub fn StrategySyncStart() -> (i32, u32, u32) {
+    let (hand, passes, allocs, _) = strategy_sync_start();
+    (hand, passes, allocs)
+}
+
+/// StrategySyncStart plus the sweep span the pair was reduced by.
+pub(crate) fn strategy_sync_start() -> (i32, u32, u32, i32) {
     let c = ctl();
-    let nbuffers = NBuffersInited() as u32;
     c.buffer_strategy_lock.with(|| {
+        let nbuffers = crate::extent::span() as u32;
         let hand = c.clock.next_victim_buffer.load(Ordering::Relaxed);
         let result = (hand % nbuffers) as i32;
         // SAFETY: strategy spinlock held.
         let complete_passes = unsafe { *c.clock.complete_passes.get() } + hand / nbuffers;
         let num_buf_alloc = c.num_buffer_allocs.swap(0, Ordering::Relaxed);
-        (result, complete_passes, num_buf_alloc)
+        (result, complete_passes, num_buf_alloc, nbuffers as i32)
     })
 }
 
@@ -348,7 +400,7 @@ pub fn GetAccessStrategyWithSize(
     if ring_buffers == 0 {
         return None;
     }
-    ring_buffers = ring_buffers.min(NBuffersInited() / 8);
+    ring_buffers = ring_buffers.min(crate::extent::active_buffers() / 8);
     Some(std::rc::Rc::new(core::cell::RefCell::new(
         BufferAccessStrategyData {
             btype,
@@ -384,6 +436,7 @@ fn GetBufferFromRing(s: &mut BufferAccessStrategyData) -> Option<Victim> {
     let local_buf_state = LockBufHdr(buf);
     if local_buf_state & BUF_REFCOUNT_MASK == 0
         && (local_buf_state & BUF_USAGECOUNT_MASK) <= BUF_USAGECOUNT_ONE
+        && crate::extent::buffer_active(bufnum - 1)
     {
         return Some(victim(bufnum - 1, local_buf_state));
     }
@@ -431,7 +484,7 @@ pub fn IOContextForStrategy(strategy: &BufferAccessStrategy) -> IOContext {
 /// every buffer without a strategy.
 pub fn GetAccessStrategyPinLimit(strategy: &BufferAccessStrategy) -> i32 {
     match strategy {
-        None => NBuffersInited(),
+        None => crate::extent::active_buffers(),
         Some(s) => {
             let s = s.borrow();
             match s.btype {
@@ -442,8 +495,10 @@ pub fn GetAccessStrategyPinLimit(strategy: &BufferAccessStrategy) -> i32 {
     }
 }
 
-/// MaxProportionalPins (bufmgr.c InitBufferManagerAccess).
+/// MaxProportionalPins (bufmgr.c InitBufferManagerAccess), over C's
+/// MaxBackends: the runtime gang PGPROCs are not user-visible backends. Over
+/// the active pool, so a shrink lowers every backend's share with it.
 pub fn GetPinLimit() -> i32 {
-    let max_backends = globals::MaxBackends().max(1);
-    NBuffersInited() / (max_backends + NUM_AUXILIARY_PROCS)
+    let max_backends = (globals::MaxBackends() - globals::RuntimeGangProcs()).max(1);
+    crate::extent::active_buffers() / (max_backends + NUM_AUXILIARY_PROCS)
 }

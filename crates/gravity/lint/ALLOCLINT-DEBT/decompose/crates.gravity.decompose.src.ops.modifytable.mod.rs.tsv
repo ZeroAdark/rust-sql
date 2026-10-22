@@ -1,0 +1,5 @@
+path	crates/gravity/decompose/src/ops/modifytable/mod.rs
+growth	std::iter::Extend::extend	1
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	1
+type	std::vec::Vec	1

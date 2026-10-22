@@ -1,0 +1,17 @@
+# V4R-270 (D7, main 09-26): an equal-not-identical group / DISTINCT key outputs any member of its group; eqk maps the key
+# column's texts to their class under PG's `=` (the rig asks PG); everything else stays exact
+# the same classes, the runs out of order: the order still fails
+sql: SELECT DISTINCT s FROM cn ORDER BY s;
+eqk: 1	apple	APPLE
+eqk: 1	APPLE	APPLE
+eqk: 1	Apple	APPLE
+eqk: 1	banana	BANANA
+eqk: 1	BANANA	BANANA
+class: ordered 1
+verdict: mismatch-order
+[pg]
+apple
+banana
+[got]
+BANANA
+Apple

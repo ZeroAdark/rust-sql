@@ -1,0 +1,2 @@
+path	crates/backend/access/pgrcolumnar/pgrc_batch/src/batch.rs
+growth	std::vec::Vec::resize	2

@@ -1,0 +1,9 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT t, count(*) FROM (VALUES ('b'), ('a'), ('B'), ('a'), (NULL), ('')) v(t) GROUP BY t
+cols: t	count
+[pg]
+\N	1
+B	1
+b	1
+	1
+a	2

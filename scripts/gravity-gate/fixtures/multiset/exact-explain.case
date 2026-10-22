@@ -1,0 +1,11 @@
+# EXPLAIN output lines keep their order
+sql: EXPLAIN (COSTS OFF) SELECT * FROM t;
+cols: QUERY PLAN
+class: exact
+verdict: mismatch-order
+[pg]
+Seq Scan on t
+  Filter: (x > 1)
+[got]
+  Filter: (x > 1)
+Seq Scan on t

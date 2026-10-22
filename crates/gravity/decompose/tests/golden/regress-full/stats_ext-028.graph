@@ -1,0 +1,11 @@
+-- regress-full-stats_ext-028
+-- INSERT INTO ndistinct (a, b, c, filler1) SELECT mod(i,13), mod(i,17), mod(i,19), mod(i,23) || ' dollars and zero cents' FROM generate_series(1,1000) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:1000)]
+  project (1=op654(io25(fn941(v3.1, c23:23)), c25:' dollars and zero cents'), 2=c1700:null, 3=fn941(v3.1, c23:13), 4=fn941(v3.1, c23:17), 5=c1082:null, 6=fn941(v3.1, c23:19), 7=c23:null)
+  write INSERT rel=34206 rti=1 natts=7 indexes=()
+  outs 1=vl:call1258 2=vl:stmt/imm 3=w4:val 4=w4:val 5=w4:val 6=w4:val 7=w4:val
+mapped: ModifyTable FunctionScan

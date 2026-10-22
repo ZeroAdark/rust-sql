@@ -1,0 +1,2 @@
+backend/utils/cache/attoptcache/src/lib.rs	ATTOPT_CACHE	pgport	at:InvalidateAttoptCacheCallback	leader	planner; attoptions per (attrelid, attnum), cleared wholesale by InvalidateAttoptCacheCallback on an ATTNUM syscache invalidation; per session by design (attoptcache.c's hash)
+backend/utils/cache/attoptcache/src/lib.rs	CALLBACK_REGISTERED	pgport	exit	leader	planner; once-per-thread flag: the ATTNUM syscache callback is registered

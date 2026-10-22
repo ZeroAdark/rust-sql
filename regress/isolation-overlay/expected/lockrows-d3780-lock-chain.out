@@ -1,0 +1,150 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT p.id, p.title, c.name, i.id, i.url FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' FOR UPDATE OF i;
+QUERY PLAN                                                              
+------------------------------------------------------------------------
+LockRows                                                                
+  ->  Nested Loop                                                       
+        ->  Nested Loop                                                 
+              ->  Nested Loop                                           
+                    ->  Index Scan using lcp_pkey on lcp p              
+                          Index Cond: (id = 1)                          
+                    ->  Hash Join                                       
+                          Hash Cond: (c.id = pc."categoryId")           
+                          ->  Seq Scan on lcc c                         
+                          ->  Hash                                      
+                                ->  Bitmap Heap Scan on lcpc pc         
+                                      Recheck Cond: ("postId" = 1)      
+                                      ->  Bitmap Index Scan on lcpc_pkey
+                                            Index Cond: ("postId" = 1)  
+              ->  Index Scan using lcci_pkey on lcci ci                 
+                    Index Cond: ("categoryId" = c.id)                   
+        ->  Index Scan using lci_pkey on lci i                          
+              Index Cond: (id = ci."imageId")                           
+              Filter: ((url)::text <> 'gone'::text)                     
+(19 rows)
+
+step s1u: UPDATE lci SET url = url || '!' WHERE id = 1;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1!
+ 1|p1   |c2  | 2|i2 
+ 1|p1   |c3  | 3|i3 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2l s1c
+step s1d: UPDATE lci SET url = 'gone' WHERE id = 2;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1 
+ 1|p1   |c3  | 3|i3 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1i s2l s1c
+step s1i: UPDATE lci SET id = 30 WHERE id = 3;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1 
+ 1|p1   |c2  | 2|i2 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2l s1c
+step s1n: UPDATE lcc SET name = 'renamed' WHERE id = 1; UPDATE lci SET url = url || '!' WHERE id = 1;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1!
+ 1|p1   |c2  | 2|i2 
+ 1|p1   |c3  | 3|i3 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c
+step s1m: UPDATE lcci SET "imageId" = 2 WHERE "categoryId" = 1; UPDATE lci SET url = url || '!' WHERE id = 1;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1!
+ 1|p1   |c2  | 2|i2 
+ 1|p1   |c3  | 3|i3 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1t s2l s1c
+step s1t: UPDATE lcp SET title = 'retitled' WHERE id = 1; UPDATE lci SET url = url || '!' WHERE id = 1;
+step s2l: SELECT p.id, p.title, c.name, i.id, i.url FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 AND i.url <> 'gone' FOR UPDATE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|title|name|id|url
+--+-----+----+--+---
+ 1|p1   |c1  | 1|i1!
+ 1|p1   |c2  | 2|i2 
+ 1|p1   |c3  | 3|i3 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1u s2s s1c
+step s1u: UPDATE lci SET url = url || '!' WHERE id = 1;
+step s2s: SELECT p.id, c.name, i.id, i.url FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 FOR SHARE OF i; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|name|id|url
+--+----+--+---
+ 1|c1  | 1|i1!
+ 1|c2  | 2|i2 
+ 1|c3  | 3|i3 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM lci WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2sk: SELECT p.id, c.name, i.id FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 FOR UPDATE OF i SKIP LOCKED;
+id|name|id
+--+----+--
+ 1|c2  | 2
+ 1|c3  | 3
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM lci WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2nw: SELECT p.id, c.name, i.id FROM lcp p JOIN lcpc pc ON pc."postId" = p.id JOIN lcc c ON c.id = pc."categoryId" JOIN lcci ci ON ci."categoryId" = c.id JOIN lci i ON i.id = ci."imageId" WHERE p.id = 1 FOR UPDATE OF i NOWAIT;
+ERROR:  could not obtain lock on row in relation "lci"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress

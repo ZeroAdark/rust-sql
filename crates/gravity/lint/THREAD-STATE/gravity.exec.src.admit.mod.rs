@@ -1,0 +1,3 @@
+gravity/exec/src/admit/mod.rs	LEVEL_TIER	lifetime	at:level_drop	thread	the backend's reentry levels: filings static levels share (D3881), stamped by flush gen, each taken only while its recorded reads stand (C3); level_forget at cache reset, level_drop at session end; a pool thread's own (empty) copy is walked by the plan-cache reset hook (exec invalidate.rs drop_for) when that thread processes a reset
+gravity/exec/src/admit/mod.rs	UNFILED	admission	scope:unfiled	leader	the next graph admission does not record (C3 S4c): set for unfiled's extent and put back at its end; graph takes it
+gravity/exec/src/admit/mod.rs	STALE	admission	statement:graph	leader	the admission's retire cause for the report's stale= (C3 S6d); note_stale sets it, graph takes it at the admission's end

@@ -1,0 +1,35 @@
+-- bench-147
+-- SELECT notes, min(media_url), count(*) AS c FROM sv WHERE media_url LIKE '%atlas%' AND notes <> '' GROUP BY 1 ORDER BY 3 DESC, 1 LIMIT 10 /* SVmin */;
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 eligible rows=11216 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n3@0 n2@3^
+  source range rel=16493 rti=1 am=heap
+    lanes Attr(5):byref8:vl:win/page Attr(6):byref8:vl:win/page Offset:byval2:w2:val
+  filter op1209(v1.6, c25:'%atlas%')
+  filter op531(v1.5, c25:'')
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8)
+  outs 1=w4:val 2=w8:val 3=w8:val 4=w2:val 5=vl:win/page 6=vl:win/page 7=vl:row 8=vl:row
+p1 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 TopK)
+  desc consumes=slot0@p0
+  nodes n2@0 n1@1^
+  source breaker slot=0
+  project (1=outer.5, 2=agg2145(1=outer.6), 3=agg2803*())
+  sort keys=3-n:I64,1+:Fp128@950 form=topk count=10 offset=all
+  outs 1=vl:life/breaker 2=vl:call2145 3=w8:val
+p2 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p1
+  nodes n1@0 n0@1
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  limit count=10 offset=all
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  outs 1=vl:life/breaker 2=vl:call2145 3=w8:val
+  outs 1=vl:life/breaker 2=vl:call2145 3=w8:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[Fp128,Fp128]->[Count@16,MinCode@24]+valid 40B
+breaker slot=1 kind=TopK budget=Fixed(544) spill=None producer=p1 layout=[I64,Fp128,Fp128]->[Count@24] 32B order=3-n,1+
+group slot=0 producer=p0 node=2 form=Hashed hints=[] layout=[Fp128,Fp128]->[Count@16,MinCode@24]+valid 40B
+  key 0 word=0 resno=5 kind=Fp128 attno=5 type=25 rep=1 expr=v1.5
+  agg aggno=0 fn=2145 reg=MinVar slot=- count_slot=- final=Rendered class=Min(Text) trans=Var mods=[] expr=agg2145(1=outer.6)
+  agg aggno=1 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan Sort Agg Limit

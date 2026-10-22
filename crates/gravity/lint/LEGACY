@@ -1,0 +1,43 @@
+# Directories not yet clean (PLAN-v5 §3.3). Each line covers that directory's own files, not its
+# subdirectories. A line goes when its directory passes the rules (lint/rules/run.py), or is replaced by
+# the paths a certified move or split sent its files to. Nothing else adds a line.
+crates/backend/optimizer/plan/planner/src
+crates/gravity/decompose/src
+crates/gravity/decompose/src/catalog
+crates/gravity/decompose/src/ops
+crates/gravity/decompose/src/ops/agg
+crates/gravity/decompose/src/ops/scan
+crates/gravity/decompose/src/ops/shared
+crates/gravity/decompose/src/ops/sort
+crates/gravity/exec/src
+crates/gravity/exec/src/admit
+crates/gravity/exec/src/admit/entry
+crates/gravity/exec/src/ops
+crates/gravity/exec/src/ops/append
+crates/gravity/exec/src/ops/sort/topn
+crates/gravity/exec/src/ops/window
+crates/gravity/exec/src/runner
+crates/gravity/expr/src/emit
+crates/gravity/fn/src
+crates/gravity/fn/src/typesem
+crates/gravity/hosts/src/ops/modifytable
+crates/gravity/hosts/src/ops/scan
+crates/gravity/hosts/src/ops/shared
+crates/gravity/kernels/src
+crates/gravity/kernels/src/par_hashagg
+crates/gravity/kernels/src/par_hashjoin
+crates/gravity/kernels/src/par_topk
+crates/gravity/kernels/src/table
+crates/gravity/lower/src/inputs
+crates/gravity/lower/src/ops/subplan
+crates/gravity/lower/src/rerun
+crates/gravity/lowerv4/src
+crates/gravity/lowerv4/src/frame
+crates/gravity/lowerv4/src/ops/agg/numeric
+crates/gravity/lowerv4/src/ops/scan
+crates/gravity/lowerv4/src/ops/sort
+crates/gravity/lowerv4/src/props
+crates/gravity/lowerv4/src/rerun
+crates/gravity/lowerv4/src/step
+crates/gravity/lowerv4/src/step/raw
+crates/gravity/wire/src

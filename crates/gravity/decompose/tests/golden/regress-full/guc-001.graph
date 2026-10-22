@@ -1,0 +1,12 @@
+-- regress-full-guc-001
+-- SELECT pg_listening_channels();
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project ()
+  srf tlist [1:Other fn3035 fn3035()]
+  project (1=fn3035())
+  outs
+  outs 1=vl:call3035
+mapped: Result ProjectSet

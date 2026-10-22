@@ -1,0 +1,7 @@
+path	crates/gravity/driver/src/pull.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::reserve	1
+method	std::boxed::Box::new	2
+type	std::boxed::Box	2
+type	std::vec::Vec	1

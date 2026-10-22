@@ -1,0 +1,252 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2exp s1upd s2mrg s1c s2sel
+step s2exp: EXPLAIN (COSTS OFF) MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1;
+QUERY PLAN                     
+-------------------------------
+Merge on cu_t t                
+  ->  Hash Left Join           
+        Hash Cond: (t.id = (3))
+        ->  Seq Scan on cu_t t 
+        ->  Hash               
+              ->  Append       
+                    ->  Result 
+                    ->  Result 
+                    ->  Result 
+(9 rows)
+
+step s1upd: UPDATE cu_t SET v = v + 1 WHERE id = 7;
+step s2mrg: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   7|   72|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1key s2mrg s1c s2sel
+step s1key: UPDATE cu_t SET id = 2500 WHERE id = 7;
+step s2mrg: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+2500|   70|   0
+(11 rows)
+
+
+starting permutation: s1del s2mrg s1c s2sel
+step s1del: DELETE FROM cu_t WHERE id = 7;
+step s2mrg: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(10 rows)
+
+
+starting permutation: s1mat s2mrg s1c s2sel
+step s1mat: UPDATE cu_t SET v = v + 1 WHERE id = 5;
+step s2mrg: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   51|  50
+   6|   61|1000
+   7|   71|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1matkey s2mrg s1c s2sel
+step s1matkey: UPDATE cu_t SET id = 2500 WHERE id = 5;
+step s2mrg: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   6|   61|1000
+   7|   71|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+2500|   50|   0
+(11 rows)
+
+
+starting permutation: s1qual s2mrg s1c s2sel
+step s1qual: UPDATE cu_t SET hits = 100 WHERE id = 7;
+step s2mrg: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1c: COMMIT;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   7|   70| 100
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s1upd s2mrg s1a s2sel
+step s1upd: UPDATE cu_t SET v = v + 1 WHERE id = 7;
+step s2mrg: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 2500, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED BY SOURCE AND t.id <= 10 AND t.hits < 50 THEN UPDATE SET hits = t.hits + 1000, v = t.v + 1; <waiting ...>
+step s1a: ROLLBACK;
+step s2mrg: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   11|1000
+   2|   21|1000
+   3|   30|  30
+   4|   41|1000
+   5|   50|  50
+   6|   61|1000
+   7|   71|1000
+   8|   81|1000
+   9|   91|1000
+  10|  101|1000
+2000|20000|   0
+(11 rows)
+
+
+starting permutation: s2expo s1upd s2mrgo s1c s2sel
+step s2expo: EXPLAIN (COSTS OFF) MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 4000, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED THEN INSERT (id, v, hits) VALUES (s.k, s.w, -1) WHEN NOT MATCHED BY SOURCE AND t.id <= 10 THEN UPDATE SET hits = t.hits + 1000;
+QUERY PLAN                     
+-------------------------------
+Merge on cu_t t                
+  ->  Hash Full Join           
+        Hash Cond: (t.id = (3))
+        ->  Seq Scan on cu_t t 
+        ->  Hash               
+              ->  Append       
+                    ->  Result 
+                    ->  Result 
+                    ->  Result 
+(9 rows)
+
+step s1upd: UPDATE cu_t SET v = v + 1 WHERE id = 7;
+step s2mrgo: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 4000, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED THEN INSERT (id, v, hits) VALUES (s.k, s.w, -1) WHEN NOT MATCHED BY SOURCE AND t.id <= 10 THEN UPDATE SET hits = t.hits + 1000; <waiting ...>
+step s1c: COMMIT;
+step s2mrgo: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   10|1000
+   2|   20|1000
+   3|   30|  30
+   4|   40|1000
+   5|   50|  50
+   6|   60|1000
+   7|   71|1000
+   8|   80|1000
+   9|   90|1000
+  10|  100|1000
+2000|20000|   0
+4000|    1|  -1
+(12 rows)
+
+
+starting permutation: s1mat s2mrgo s1c s2sel
+step s1mat: UPDATE cu_t SET v = v + 1 WHERE id = 5;
+step s2mrgo: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 4000, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED THEN INSERT (id, v, hits) VALUES (s.k, s.w, -1) WHEN NOT MATCHED BY SOURCE AND t.id <= 10 THEN UPDATE SET hits = t.hits + 1000; <waiting ...>
+step s1c: COMMIT;
+step s2mrgo: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   10|1000
+   2|   20|1000
+   3|   30|  30
+   4|   40|1000
+   5|   51|  50
+   6|   60|1000
+   7|   70|1000
+   8|   80|1000
+   9|   90|1000
+  10|  100|1000
+2000|20000|   0
+4000|    1|  -1
+(12 rows)
+
+
+starting permutation: s1matoff s2mrgo s1c s2sel
+step s1matoff: UPDATE cu_t SET id = 2600 WHERE id = 5;
+step s2mrgo: MERGE INTO cu_t t USING (SELECT 3 AS k, 30 AS w UNION ALL SELECT 5, 50 UNION ALL SELECT 4000, 1) s ON t.id = s.k WHEN MATCHED THEN UPDATE SET hits = t.hits + s.w WHEN NOT MATCHED THEN INSERT (id, v, hits) VALUES (s.k, s.w, -1) WHEN NOT MATCHED BY SOURCE AND t.id <= 10 THEN UPDATE SET hits = t.hits + 1000; <waiting ...>
+step s1c: COMMIT;
+step s2mrgo: <... completed>
+step s2sel: SELECT id, v, hits FROM cu_t WHERE id <= 10 OR id >= 2000 ORDER BY id;
+  id|    v|hits
+----+-----+----
+   1|   10|1000
+   2|   20|1000
+   3|   30|  30
+   4|   40|1000
+   5|   50|  -1
+   6|   60|1000
+   7|   70|1000
+   8|   80|1000
+   9|   90|1000
+  10|  100|1000
+2000|20000|   0
+2600|   50|   0
+4000|    1|  -1
+(13 rows)
+

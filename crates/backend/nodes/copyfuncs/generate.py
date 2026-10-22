@@ -130,6 +130,8 @@ def field_expr(owner, fname, ty):
         return f"XidList::from_slice(mcx, {acc}.as_slice())?"
     if t == "Bitmapset<'mcx>":
         return f"copy_bms(mcx, &{acc})?"
+    if t == "Option<Bitmapset<'mcx>>":
+        return f"{acc}.as_ref().map(|b| copy_bms(mcx, b)).transpose()?"
     if t == "Node<'mcx>":
         return f"copy_node(mcx, {acc})?"
     if t == "Option<Node<'mcx>>":
@@ -162,6 +164,11 @@ def field_expr(owner, fname, ty):
         inner = m.group(1)
         needed.add(inner)
         return f"copy_{inner}(mcx, &{acc})?"
+    m = re.fullmatch(r"SyncCell<(\w+)>", t)
+    if m:
+        return ("// SAFETY: PlannedStmt.queryId is owned by a single backend's plan tree\n"
+                "        // (no cross-thread sharing), matching C's in-place scribble discipline.\n"
+                f"        {fname}: types_nodes::SyncCell::new(unsafe {{ {acc}.get() }})", None)
     if t == "Datum":
         raise SystemExit(f"Datum field outside hand-written arms: {owner}.{fname}")
     if re.fullmatch(r"\w+", t):
@@ -184,7 +191,10 @@ while frontier:
     if name in bodies:
         continue
     before = set(needed)
-    lines = [f"        {fname}: {field_expr(name, fname, ty)}," for fname, ty in fields_of(name)]
+    lines = []
+    for fname, ty in fields_of(name):
+        e = field_expr(name, fname, ty)
+        lines.append(f"        {e[0]}," if isinstance(e, tuple) else f"        {fname}: {e},")
     bodies[name] = lines
     for n in needed - before:
         frontier.append(n)
@@ -230,12 +240,25 @@ for name in arm_structs:
     tag = all_variants[name]
     out.append(f"""        NodeTag::{tag} => {{
             let s = node.as_variant::<{name}>().expect("{name}");
-            Node::mk(mcx, copy_{name}(mcx, s)?)?
+            mkcopy_{name}(mcx, s)?
         }}""")
 out.append("""        _ => return Ok(None),
     };
     Ok(Some(copy))
 }
+""")
+# One out-of-line constructor per arm: a by-value PgResult<X> in each arm of
+# copy_generated would get its own stack slot (LLVM does not overlap them),
+# making the dispatcher's frame the sum of all 310 node sizes (~21 KB) on
+# every copyObject recursion level. C's copyObjectImpl tail-calls _copyX.
+for name in arm_structs:
+    lt = "<'_>" if has_lifetime(name) else ""
+    out.append(f"""
+#[inline(never)]
+fn mkcopy_{name}<'d>(mcx: Mcx<'d>, s: &{name}{lt}) -> PgResult<Node<'d>> {{
+    Node::mk(mcx, copy_{name}(mcx, s)?)
+}}""")
+out.append("""
 
 fn copy_node_opt<'d>(mcx: Mcx<'d>, node: Option<Node<'_>>) -> PgResult<Option<Node<'d>>> {
     match node {

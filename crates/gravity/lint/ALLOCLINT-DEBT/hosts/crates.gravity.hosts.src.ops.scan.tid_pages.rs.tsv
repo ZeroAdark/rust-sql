@@ -1,0 +1,4 @@
+path	crates/gravity/hosts/src/ops/scan/tid_pages.rs
+growth	std::vec::Vec::push	1
+method	std::boxed::Box::new	1
+type	std::boxed::Box	1

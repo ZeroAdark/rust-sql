@@ -1,0 +1,20 @@
+[package]
+name = "tpde_base"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+autotests = false
+
+[features]
+default = ["logging"]
+logging = []
+upstream-oracle = []
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]
+
+[[test]]
+name = "val_local_idx"
+required-features = ["upstream-oracle"]

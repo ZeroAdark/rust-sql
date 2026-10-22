@@ -1,0 +1,4 @@
+path	crates/gravity/exec/src/ops/agg/trans/raw.rs
+macro	std::vec	1
+method	std::iter::Iterator::collect	1
+type	std::vec::Vec	1

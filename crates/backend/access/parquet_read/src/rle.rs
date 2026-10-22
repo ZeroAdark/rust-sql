@@ -14,7 +14,7 @@ use types_error::{PgError, PgResult, ERRCODE_BAD_COPY_FILE_FORMAT};
 #[inline(never)]
 pub(crate) fn corrupt_page(what: &str) -> Box<PgError> {
     Box::new(
-        PgError::error(format!("corrupt parquet page: {what}"))
+        PgError::error(format!("corrupt parquet page: {what}")) // alloc: Cold
             .with_sqlstate(ERRCODE_BAD_COPY_FILE_FORMAT),
     )
 }
@@ -241,25 +241,6 @@ impl HybridState {
         }
         Ok(())
     }
-}
-
-/// Definition levels for a flat OPTIONAL column (max_def = 1): fill a
-/// present/absent mask. Returns the number of present (non-null) values.
-/// The all-set single-RLE-run page never materializes per-value work beyond
-/// the mask fill itself.
-pub(crate) fn def_levels_max1(
-    state: &mut HybridState,
-    buf: &[u8],
-    out: &mut [u32],
-) -> PgResult<usize> {
-    state.fill(buf, out)?;
-    let mut present = 0usize;
-    // Branch-free accumulate: levels are 0/1 by construction (width 1); any
-    // other value is structurally impossible from a 1-bit stream.
-    for &v in out.iter() {
-        present += v as usize;
-    }
-    Ok(present)
 }
 
 /// PLAIN-encoded BOOLEAN values: bit-packed LSB-first, no run structure.

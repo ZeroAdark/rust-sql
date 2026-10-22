@@ -1,0 +1,175 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pt s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE sp SET x = x + 1 WHERE EXISTS (SELECT 1 FROM si4, LATERAL (SELECT si4.f1 FROM si8 LIMIT 2) ss WHERE sp.k = 3);
+QUERY PLAN                                         
+---------------------------------------------------
+Update on sp                                       
+  Update on sp1 sp_1                               
+  Update on sp2 sp_2                               
+  ->  Nested Loop Semi Join                        
+        ->  Append                                 
+              ->  Seq Scan on sp1 sp_1             
+                    Filter: (k = 3)                
+              ->  Seq Scan on sp2 sp_2             
+                    Filter: (k = 3)                
+        ->  Materialize                            
+              ->  Nested Loop                      
+                    ->  Seq Scan on si4            
+                    ->  Subquery Scan on ss        
+                          ->  Limit                
+                                ->  Seq Scan on si8
+(15 rows)
+
+step s3pt: EXPLAIN (COSTS OFF) DELETE FROM st WHERE EXISTS (SELECT 1 FROM si4, LATERAL (SELECT si4.f1 FROM si8 LIMIT 2) ss WHERE st.k = 2);
+QUERY PLAN                                         
+---------------------------------------------------
+Delete on st                                       
+  ->  Nested Loop Semi Join                        
+        ->  Seq Scan on st                         
+              Filter: (k = 2)                      
+        ->  Materialize                            
+              ->  Nested Loop                      
+                    ->  Seq Scan on si4            
+                    ->  Subquery Scan on ss        
+                          ->  Limit                
+                                ->  Seq Scan on si8
+(10 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1k s1x s1d s1i s2u s1c s2c s3sel s3row
+step s1k: UPDATE sp SET k = 4 WHERE a = 24;
+step s1x: UPDATE sp SET x = x + 100 WHERE a = 108;
+step s1d: DELETE FROM sp WHERE a = 150;
+step s1i: DELETE FROM si4 WHERE f1 = 0;
+step s2u: UPDATE sp SET x = x + 1 WHERE EXISTS (SELECT 1 FROM si4, LATERAL (SELECT si4.f1 FROM si8 LIMIT 2) ss WHERE sp.k = 3) RETURNING a, k, x; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+  a|k|  x
+---+-+---
+  3|3|  1
+ 45|3|  1
+ 66|3|  1
+ 87|3|  1
+108|3|101
+129|3|  1
+171|3|  1
+192|3|  1
+(8 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, count(*), sum(k), sum(x) FROM sp GROUP BY 1 ORDER BY 1;
+tableoid|count|sum|sum
+--------+-----+---+---
+sp1     |   34|102|  4
+sp2     |   32| 96|104
+(2 rows)
+
+step s3row: SELECT tableoid::regclass, a, k, x FROM sp WHERE a IN (24, 108, 150, 3, 171) ORDER BY 1, 2;
+tableoid|  a|k|  x
+--------+---+-+---
+sp1     |  3|3|  1
+sp1     | 24|4|  0
+sp2     |108|3|101
+sp2     |171|3|  1
+(4 rows)
+
+
+starting permutation: s1k s1d s2d s1c s2c s3sel s3row
+step s1k: UPDATE sp SET k = 4 WHERE a = 24;
+step s1d: DELETE FROM sp WHERE a = 150;
+step s2d: DELETE FROM sp WHERE EXISTS (SELECT 1 FROM si4, LATERAL (SELECT si4.f1 FROM si8 LIMIT 2) ss WHERE sp.k = 3) RETURNING a, k; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+  a|k
+---+-
+  3|3
+ 45|3
+ 66|3
+ 87|3
+108|3
+129|3
+171|3
+192|3
+(8 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, count(*), sum(k), sum(x) FROM sp GROUP BY 1 ORDER BY 1;
+tableoid|count|sum|sum
+--------+-----+---+---
+sp1     |   30| 90|  0
+sp2     |   28| 84|  0
+(2 rows)
+
+step s3row: SELECT tableoid::regclass, a, k, x FROM sp WHERE a IN (24, 108, 150, 3, 171) ORDER BY 1, 2;
+tableoid| a|k|x
+--------+--+-+-
+sp1     |24|4|0
+(1 row)
+
+
+starting permutation: s2u s1k s2c s1c s3sel s3row
+step s2u: UPDATE sp SET x = x + 1 WHERE EXISTS (SELECT 1 FROM si4, LATERAL (SELECT si4.f1 FROM si8 LIMIT 2) ss WHERE sp.k = 3) RETURNING a, k, x;
+  a|k|x
+---+-+-
+  3|3|1
+ 24|3|1
+ 45|3|1
+ 66|3|1
+ 87|3|1
+108|3|1
+129|3|1
+150|3|1
+171|3|1
+192|3|1
+(10 rows)
+
+step s1k: UPDATE sp SET k = 4 WHERE a = 24; <waiting ...>
+step s2c: COMMIT;
+step s1k: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT tableoid::regclass, count(*), sum(k), sum(x) FROM sp GROUP BY 1 ORDER BY 1;
+tableoid|count|sum|sum
+--------+-----+---+---
+sp1     |   34|102|  5
+sp2     |   33| 99|  5
+(2 rows)
+
+step s3row: SELECT tableoid::regclass, a, k, x FROM sp WHERE a IN (24, 108, 150, 3, 171) ORDER BY 1, 2;
+tableoid|  a|k|x
+--------+---+-+-
+sp1     |  3|3|1
+sp1     | 24|4|1
+sp2     |108|3|1
+sp2     |150|3|1
+sp2     |171|3|1
+(5 rows)
+
+
+starting permutation: s1t s1u s1i s2t s1c s2c s3st
+step s1t: UPDATE st SET k = 0 WHERE a = 7;
+step s1u: UPDATE st SET x = x + 9 WHERE a = 12;
+step s1i: DELETE FROM si4 WHERE f1 = 0;
+step s2t: DELETE FROM st WHERE EXISTS (SELECT 1 FROM si4, LATERAL (SELECT si4.f1 FROM si8 LIMIT 2) ss WHERE st.k = 2) RETURNING a, k, x; <waiting ...>
+step s1c: COMMIT;
+step s2t: <... completed>
+ a|k|x
+--+-+-
+ 2|2|0
+12|2|9
+17|2|0
+22|2|0
+27|2|0
+32|2|0
+37|2|0
+(7 rows)
+
+step s2c: COMMIT;
+step s3st: SELECT a, k, x FROM st WHERE a IN (2, 7, 12, 17) ORDER BY 1;
+a|k|x
+-+-+-
+7|0|0
+(1 row)
+

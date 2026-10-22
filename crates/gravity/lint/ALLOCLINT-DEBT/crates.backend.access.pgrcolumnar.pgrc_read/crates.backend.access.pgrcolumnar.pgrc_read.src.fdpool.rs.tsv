@@ -1,0 +1,6 @@
+path	crates/backend/access/pgrcolumnar/pgrc_read/src/fdpool.rs
+growth	std::vec::Vec::push	2
+method	std::borrow::ToOwned::to_owned	1
+method	std::clone::Clone::clone	2
+method	std::sync::Arc::new	1
+type	std::sync::Arc	3

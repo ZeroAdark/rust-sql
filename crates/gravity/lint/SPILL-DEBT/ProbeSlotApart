@@ -1,0 +1,1 @@
+ProbeSlotApart	crates/gravity/lowerv4/src/ops/hashjoin/spill/build.rs	alone	lifetime	-	a probe of another slot than the build's keeps the build resident	unreachable	No query reaches this: Gravity always tests a hash build against the probe of that same build.

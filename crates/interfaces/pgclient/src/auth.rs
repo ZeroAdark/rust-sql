@@ -1,6 +1,6 @@
 // Client-side auth ladder: trust, cleartext password, md5, SCRAM-SHA-256
-// (no channel binding), then ParameterStatus/BackendKeyData collection up to
-// ReadyForQuery.
+// (SCRAM-SHA-256-PLUS with tls-server-end-point binding over TLS), then
+// ParameterStatus/BackendKeyData collection up to ReadyForQuery.
 //
 // Every byte parsed here arrives from the SERVER, which dblink/postgres_fdw/
 // walreceiver may point at an arbitrary host. A truncated or malformed
@@ -9,6 +9,8 @@
 use scram_common::SCRAM_MAX_KEY_LEN;
 use timingsafe_bcmp::timingsafe_bcmp;
 use types_error::PgResult;
+
+use crate::ChannelBinding;
 
 use crate::{be_i32, msg, parse_diag, parse_error_fields, PgConn};
 
@@ -45,7 +47,18 @@ pub(crate) struct AuthPolicy {
     auth_required: bool,
     allowed_auth_methods: u32,
     allowed_sasl_mechs: [Option<SaslMech>; 2],
-    channel_binding_required: bool,
+    channel_binding: ChannelBinding,
+    sslcertmode_require: bool,
+}
+
+// What the connection has established by the time an AuthRequest is vetted
+// (check_expected_areq's reads of conn->*).
+#[derive(Clone, Copy, Default)]
+struct AreqState {
+    client_finished_auth: bool,
+    channel_bound: bool,
+    ssl_cert_requested: bool,
+    ssl_cert_sent: bool,
 }
 
 impl AuthPolicy {
@@ -57,7 +70,8 @@ impl AuthPolicy {
             auth_required: false,
             allowed_auth_methods: 0,
             allowed_sasl_mechs: [None; 2],
-            channel_binding_required: false,
+            channel_binding: ChannelBinding::Prefer,
+            sslcertmode_require: false,
         };
         let Some(s) = require_auth else {
             return Ok(pol);
@@ -180,20 +194,38 @@ impl AuthPolicy {
     /// fe-auth.c check_expected_areq (:903), require_auth arm: reject every
     /// request the user did not allow, and demand a completed exchange
     /// before AuthenticationOk unless "none" was allowed.
-    pub(crate) fn with_channel_binding_required(mut self, required: bool) -> Self {
-        self.channel_binding_required = required;
+    pub(crate) fn with_channel_binding(mut self, mode: ChannelBinding) -> Self {
+        self.channel_binding = mode;
         self
     }
 
-    fn check_expected_areq(&self, areq: i32, client_finished_auth: bool) -> Result<(), String> {
-        self.check_require_auth(areq, client_finished_auth)?;
+    pub(crate) fn with_sslcertmode_require(mut self, required: bool) -> Self {
+        self.sslcertmode_require = required;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_channel_binding_required(self, required: bool) -> Self {
+        self.with_channel_binding(if required { ChannelBinding::Require } else { ChannelBinding::Prefer })
+    }
+
+    fn check_expected_areq(&self, areq: i32, st: AreqState) -> Result<(), String> {
+        // fe-auth.c:908: sslcertmode=require is judged at AuthenticationOk.
+        if self.sslcertmode_require && areq == AUTH_REQ_OK {
+            if !st.ssl_cert_requested {
+                return Err("server did not request an SSL certificate".into());
+            } else if !st.ssl_cert_sent {
+                return Err("server accepted connection without a valid SSL certificate".into());
+            }
+        }
+        self.check_require_auth(areq, st.client_finished_auth)?;
         // fe-auth.c:1019-1044: with channel_binding=require never answer a
         // non-SASL request (it would leak the password), and never accept an
-        // AuthenticationOk that was not channel-bound. This client has no TLS,
-        // so no exchange is ever channel-bound.
-        if self.channel_binding_required {
+        // AuthenticationOk that was not channel-bound.
+        if self.channel_binding == ChannelBinding::Require {
             match areq {
                 AUTH_REQ_SASL | AUTH_REQ_SASL_CONT | AUTH_REQ_SASL_FIN => {}
+                AUTH_REQ_OK if st.channel_bound => {}
                 AUTH_REQ_OK => {
                     return Err("channel binding required, but server authenticated client without channel binding".into());
                 }
@@ -206,12 +238,44 @@ impl AuthPolicy {
     }
 
     /// pg_SASL_init's first check (fe-auth.c:446): SCRAM under
-    /// channel_binding=require needs a TLS transport, which we never have.
-    pub(crate) fn check_sasl_transport(&self) -> Result<(), String> {
-        if self.channel_binding_required {
+    /// channel_binding=require needs a TLS transport.
+    pub(crate) fn check_sasl_transport(&self, ssl_in_use: bool) -> Result<(), String> {
+        if self.channel_binding == ChannelBinding::Require && !ssl_in_use {
             return Err("channel binding required, but SSL not in use".into());
         }
         Ok(())
+    }
+
+    /// pg_SASL_init's mechanism choice (fe-auth.c:475): SCRAM-SHA-256-PLUS
+    /// over TLS unless channel binding is disabled, else SCRAM-SHA-256;
+    /// -PLUS offered in cleartext is a stripped-TLS symptom and fatal.
+    fn select_sasl_mechanism(&self, mechs: &[String], ssl_in_use: bool) -> Result<&'static str, String> {
+        let mut selected: Option<&'static str> = None;
+        for m in mechs {
+            if m == scram_common::SCRAM_SHA_256_PLUS_NAME {
+                if !ssl_in_use {
+                    return Err("server offered SCRAM-SHA-256-PLUS authentication over a non-SSL connection".into());
+                }
+                if self.channel_binding != ChannelBinding::Disable {
+                    selected = Some(scram_common::SCRAM_SHA_256_PLUS_NAME);
+                }
+            } else if m == scram_common::SCRAM_SHA_256_NAME && selected.is_none() {
+                selected = Some(scram_common::SCRAM_SHA_256_NAME);
+            }
+        }
+        let Some(selected) = selected else {
+            return Err(format!(
+                "none of the server's SASL authentication mechanisms are supported (offered: {})",
+                mechs.join(", ")
+            ));
+        };
+        self.check_sasl_mech(SaslMech::ScramSha256, selected)?;
+        if self.channel_binding == ChannelBinding::Require
+            && selected != scram_common::SCRAM_SHA_256_PLUS_NAME
+        {
+            return Err("channel binding is required, but server did not offer an authentication method that supports channel binding".into());
+        }
+        Ok(selected)
     }
 
     fn check_require_auth(&self, areq: i32, client_finished_auth: bool) -> Result<(), String> {
@@ -376,6 +440,9 @@ pub(crate) fn handshake(
     // done (password sent, SCRAM server signature verified); AuthenticationOk
     // under require_auth demands it (fe-auth.c:955).
     let mut client_finished_auth = false;
+    let mut channel_bound = false;
+    let ssl_in_use = conn.ssl_in_use();
+    let (ssl_cert_requested, ssl_cert_sent) = conn.ssl_cert_state();
     // PQconnectPoll's CONNECTION_AWAITING_RESPONSE arm (fe-connect.c:4010)
     // admits only an authentication request, an error or a protocol
     // negotiation until AuthenticationOk moves it to CONNECTION_AUTH_OK.
@@ -398,7 +465,8 @@ pub(crate) fn handshake(
                 };
                 // pg_fe_sendauth: every request is vetted against
                 // require_auth before it is answered (fe-auth.c:1072).
-                if let Err(e) = auth.policy.check_expected_areq(authtype, client_finished_auth) {
+                let st = AreqState { client_finished_auth, channel_bound, ssl_cert_requested, ssl_cert_sent };
+                if let Err(e) = auth.policy.check_expected_areq(authtype, st) {
                     return Ok(Err(e));
                 }
                 match authtype {
@@ -443,37 +511,30 @@ pub(crate) fn handshake(
                         // (PQconnectionUsedPassword) whether or not the
                         // exchange ends up using a pass-through key.
                         conn.used_password = true;
-                        if let Err(e) = auth.policy.check_sasl_transport() {
+                        if let Err(e) = auth.policy.check_sasl_transport(ssl_in_use) {
                             return Ok(Err(e));
                         }
                         let mechs = match sasl_mechanisms(&mbody) {
                             Ok(v) => v,
                             Err(e) => return Ok(Err(e)),
                         };
-                        if !mechs.iter().any(|m| m == scram_common::SCRAM_SHA_256_NAME) {
-                            return Ok(Err(format!(
-                                "none of the server's SASL authentication mechanisms are supported (offered: {})",
-                                mechs.join(", ")
-                            )));
-                        }
-                        if let Err(e) = auth
-                            .policy
-                            .check_sasl_mech(SaslMech::ScramSha256, scram_common::SCRAM_SHA_256_NAME)
-                        {
-                            return Ok(Err(e));
-                        }
+                        let mech = match auth.policy.select_sasl_mechanism(&mechs, ssl_in_use) {
+                            Ok(m) => m,
+                            Err(e) => return Ok(Err(e)),
+                        };
                         // The password is only demanded when no pass-through
                         // client key was supplied (fe-auth.c:597
                         // "password_needed && !scram_client_key_binary").
                         if auth.keys.client.is_none() && password.is_none() {
                             return Ok(Err("fe_sendauth: no password supplied".into()));
                         }
-                        if let Err(e) = scram_exchange(conn, password, &auth.keys, &auth.policy)? {
+                        if let Err(e) = scram_exchange(conn, password, &auth.keys, &auth.policy, mech)? {
                             return Ok(Err(pgpassfile_warning(conn, auth, e)));
                         }
                         // fe-auth-scram.c:286 (FE_SCRAM_FINISHED after the
                         // server signature verified).
                         client_finished_auth = true;
+                        channel_bound = mech == scram_common::SCRAM_SHA_256_PLUS_NAME;
                     }
                     other => {
                         return Ok(Err(format!("authentication method {other} not supported")))
@@ -581,7 +642,7 @@ fn expect_sasl_request(t: u8, mbody: &[u8], want: i32, policy: &AuthPolicy) -> R
     let what = if want == AUTH_REQ_SASL_CONT { "continue" } else { "final" };
     if t == b'R' {
         if let Ok(code) = auth_req_code(mbody) {
-            policy.check_expected_areq(code, false)?;
+            policy.check_expected_areq(code, AreqState { client_finished_auth: false, ..Default::default() })?;
             if code == want {
                 return Ok(());
             }
@@ -590,7 +651,10 @@ fn expect_sasl_request(t: u8, mbody: &[u8], want: i32, policy: &AuthPolicy) -> R
     Err(format!("expected SASL {what} message from server"))
 }
 
-// SCRAM-SHA-256 client exchange, no channel binding (gs2 = "n,,"). With
+// SCRAM-SHA-256 client exchange. The gs2 header (fe-auth-scram.c:396) is
+// "p=tls-server-end-point" for -PLUS, "y" when the client could bind but the
+// server offered no -PLUS, else "n"; the client-final c= carries the same
+// flag plus the peer certificate hash for -PLUS (:475). With
 // pass-through keys (fe-auth-scram.c calculate_client_proof :783 /
 // verify_server_signature :860) ClientKey / ServerKey are taken verbatim and
 // SaltedPassword is never derived; a key that is missing falls back to the
@@ -601,7 +665,30 @@ fn scram_exchange(
     password: Option<&str>,
     keys: &ScramKeys,
     policy: &AuthPolicy,
+    mechanism: &str,
 ) -> PgResult<Result<(), String>> {
+    let plus = mechanism == scram_common::SCRAM_SHA_256_PLUS_NAME;
+    let could_bind = policy.channel_binding != ChannelBinding::Disable && conn.ssl_in_use();
+    let gs2 = if plus {
+        "p=tls-server-end-point,,"
+    } else if could_bind {
+        "y,,"
+    } else {
+        "n,,"
+    };
+    let cbind = if plus {
+        let hash = match conn.peer_certificate_hash() {
+            Ok(h) => h,
+            Err(e) => return Ok(Err(e)),
+        };
+        let mut input = gs2.as_bytes().to_vec();
+        input.extend_from_slice(&hash);
+        b64(&input)
+    } else if could_bind {
+        "eSws".to_string()
+    } else {
+        "biws".to_string()
+    };
     // scram_init: SASLprep the password when there is one.
     let scratch = mcx::MemoryContext::new("pgclient scram");
     let prep: Vec<u8> = match password {
@@ -623,9 +710,9 @@ fn scram_exchange(
     let client_first_bare = format!("n=,r={client_nonce}");
 
     let mut body = Vec::new();
-    body.extend_from_slice(scram_common::SCRAM_SHA_256_NAME.as_bytes());
+    body.extend_from_slice(mechanism.as_bytes());
     body.push(0);
-    let initial = format!("n,,{client_first_bare}");
+    let initial = format!("{gs2}{client_first_bare}");
     body.extend_from_slice(&((initial.len() as u32).to_be_bytes()));
     body.extend_from_slice(initial.as_bytes());
     if let Err(e) = conn.send_all(&msg(b'p', &body)) {
@@ -658,7 +745,7 @@ fn scram_exchange(
     };
     let stored_key = scram_common::scram_h(&client_key);
 
-    let client_final_wo_proof = format!("c=biws,r={}", sf.server_nonce);
+    let client_final_wo_proof = format!("c={cbind},r={}", sf.server_nonce);
     let auth_message = format!("{client_first_bare},{server_first},{client_final_wo_proof}");
     let client_sig = pg_hmac::hmac_sha256(&stored_key, auth_message.as_bytes());
     let mut proof = client_key;
@@ -845,7 +932,7 @@ mod tests {
     fn require_auth_unset_allows_everything() {
         let p = AuthPolicy::parse(None).unwrap();
         for areq in [0, 3, 5, 7, 8, 9, 10, 11, 12, 1, 99] {
-            assert!(p.check_expected_areq(areq, false).is_ok(), "{areq}");
+            assert!(p.check_expected_areq(areq, AreqState { client_finished_auth: false, ..Default::default() }).is_ok(), "{areq}");
         }
         assert!(p.check_sasl_mech(SaslMech::ScramSha256, "SCRAM-SHA-256").is_ok());
     }
@@ -855,9 +942,9 @@ mod tests {
     #[test]
     fn require_auth_empty_arms_checks_with_defaults() {
         let p = AuthPolicy::parse(Some("")).unwrap();
-        assert!(p.check_expected_areq(0, false).is_ok());
+        assert!(p.check_expected_areq(0, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
         assert_eq!(
-            p.check_expected_areq(3, false).unwrap_err(),
+            p.check_expected_areq(3, AreqState { client_finished_auth: false, ..Default::default() }).unwrap_err(),
             "authentication method requirement \"\" failed: server requested a cleartext password"
         );
         assert_eq!(
@@ -872,27 +959,27 @@ mod tests {
     fn require_auth_scram_only() {
         let p = AuthPolicy::parse(Some("scram-sha-256")).unwrap();
         assert_eq!(
-            p.check_expected_areq(0, false).unwrap_err(),
+            p.check_expected_areq(0, AreqState { client_finished_auth: false, ..Default::default() }).unwrap_err(),
             "authentication method requirement \"scram-sha-256\" failed: server did not complete authentication"
         );
-        assert!(p.check_expected_areq(0, true).is_ok());
+        assert!(p.check_expected_areq(0, AreqState { client_finished_auth: true, ..Default::default() }).is_ok());
         for areq in [10, 11, 12] {
-            assert!(p.check_expected_areq(areq, false).is_ok(), "{areq}");
+            assert!(p.check_expected_areq(areq, AreqState { client_finished_auth: false, ..Default::default() }).is_ok(), "{areq}");
         }
         assert_eq!(
-            p.check_expected_areq(5, false).unwrap_err(),
+            p.check_expected_areq(5, AreqState { client_finished_auth: false, ..Default::default() }).unwrap_err(),
             "authentication method requirement \"scram-sha-256\" failed: server requested a hashed password"
         );
         assert_eq!(
-            p.check_expected_areq(7, false).unwrap_err(),
+            p.check_expected_areq(7, AreqState { client_finished_auth: false, ..Default::default() }).unwrap_err(),
             "authentication method requirement \"scram-sha-256\" failed: server requested GSSAPI authentication"
         );
         assert_eq!(
-            p.check_expected_areq(9, false).unwrap_err(),
+            p.check_expected_areq(9, AreqState { client_finished_auth: false, ..Default::default() }).unwrap_err(),
             "authentication method requirement \"scram-sha-256\" failed: server requested SSPI authentication"
         );
         assert_eq!(
-            p.check_expected_areq(2, false).unwrap_err(),
+            p.check_expected_areq(2, AreqState { client_finished_auth: false, ..Default::default() }).unwrap_err(),
             "authentication method requirement \"scram-sha-256\" failed: server requested an unknown authentication type"
         );
         assert!(p.check_sasl_mech(SaslMech::ScramSha256, "SCRAM-SHA-256").is_ok());
@@ -905,47 +992,47 @@ mod tests {
     #[test]
     fn require_auth_lists_and_none() {
         let p = AuthPolicy::parse(Some("password,md5")).unwrap();
-        assert!(p.check_expected_areq(3, false).is_ok());
-        assert!(p.check_expected_areq(5, false).is_ok());
+        assert!(p.check_expected_areq(3, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
+        assert!(p.check_expected_areq(5, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
         assert_eq!(
-            p.check_expected_areq(10, false).unwrap_err(),
+            p.check_expected_areq(10, AreqState { client_finished_auth: false, ..Default::default() }).unwrap_err(),
             "authentication method requirement \"password,md5\" failed: server requested SASL authentication"
         );
         // "none" allows an unchallenged AuthenticationOk.
         let p = AuthPolicy::parse(Some("none")).unwrap();
-        assert!(p.check_expected_areq(0, false).is_ok());
-        assert!(p.check_expected_areq(3, false).is_err());
+        assert!(p.check_expected_areq(0, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
+        assert!(p.check_expected_areq(3, AreqState { client_finished_auth: false, ..Default::default() }).is_err());
         let p = AuthPolicy::parse(Some("scram-sha-256,none")).unwrap();
-        assert!(p.check_expected_areq(0, false).is_ok());
-        assert!(p.check_expected_areq(10, false).is_ok());
+        assert!(p.check_expected_areq(0, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
+        assert!(p.check_expected_areq(10, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
         // gss/sspi share the GSS_CONT bit.
         let p = AuthPolicy::parse(Some("gss")).unwrap();
-        assert!(p.check_expected_areq(7, false).is_ok());
-        assert!(p.check_expected_areq(8, false).is_ok());
-        assert!(p.check_expected_areq(9, false).is_err());
+        assert!(p.check_expected_areq(7, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
+        assert!(p.check_expected_areq(8, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
+        assert!(p.check_expected_areq(9, AreqState { client_finished_auth: false, ..Default::default() }).is_err());
     }
 
     #[test]
     fn require_auth_negated() {
         let p = AuthPolicy::parse(Some("!password")).unwrap();
-        assert!(p.check_expected_areq(0, false).is_ok());
-        assert!(p.check_expected_areq(3, false).is_err());
-        assert!(p.check_expected_areq(5, false).is_ok());
-        assert!(p.check_expected_areq(10, false).is_ok());
+        assert!(p.check_expected_areq(0, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
+        assert!(p.check_expected_areq(3, AreqState { client_finished_auth: false, ..Default::default() }).is_err());
+        assert!(p.check_expected_areq(5, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
+        assert!(p.check_expected_areq(10, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
         assert!(p.check_sasl_mech(SaslMech::ScramSha256, "SCRAM-SHA-256").is_ok());
         // Negating every mechanism also drops the SASL request bits.
         let p = AuthPolicy::parse(Some("!scram-sha-256,!oauth")).unwrap();
-        assert!(p.check_expected_areq(10, false).is_err());
-        assert!(p.check_expected_areq(3, false).is_ok());
+        assert!(p.check_expected_areq(10, AreqState { client_finished_auth: false, ..Default::default() }).is_err());
+        assert!(p.check_expected_areq(3, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
         // Negating one mechanism keeps SASL requests allowed.
         let p = AuthPolicy::parse(Some("!oauth")).unwrap();
-        assert!(p.check_expected_areq(10, false).is_ok());
+        assert!(p.check_expected_areq(10, AreqState { client_finished_auth: false, ..Default::default() }).is_ok());
         assert!(p.check_sasl_mech(SaslMech::ScramSha256, "SCRAM-SHA-256").is_ok());
         assert!(p.check_sasl_mech(SaslMech::OAuth, "OAUTHBEARER").is_err());
         // "!none" requires an exchange.
         let p = AuthPolicy::parse(Some("!none")).unwrap();
-        assert!(p.check_expected_areq(0, false).is_err());
-        assert!(p.check_expected_areq(0, true).is_ok());
+        assert!(p.check_expected_areq(0, AreqState { client_finished_auth: false, ..Default::default() }).is_err());
+        assert!(p.check_expected_areq(0, AreqState { client_finished_auth: true, ..Default::default() }).is_ok());
     }
 
     #[test]

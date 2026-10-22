@@ -54,9 +54,9 @@ pub fn reconstruct_rows<'mcx>(
     manifest: &ShredManifest,
     chunk: &ShredChunk,
 ) -> PgResult<Vec<Vec<u8>>> {
-    let mut out = Vec::with_capacity(chunk.nrows as usize);
+    let mut out = ::mcx::std_vec_with_capacity("adt", chunk.nrows as usize)?;
     // Sequential cursors: rank(r) is a running count in row order.
-    let mut cursors = vec![0u32; chunk.lanes.len()];
+    let mut cursors = ::mcx::std_vec_from_elem("adt", 0u32, chunk.lanes.len())?;
     let mut entries: Vec<(&JsonPath, Leaf<'_>)> = Vec::new();
     for r in 0..chunk.nrows {
         entries.clear();
@@ -142,7 +142,7 @@ fn build_row<'mcx>(
         let Leaf::ResidualImage(image) = leaf else {
             unreachable!("root entries are residual by construction")
         };
-        return Ok(image.to_vec());
+        return Ok(::mcx::std_vec_from_slice("adt", &image)?);
     }
 
     // Canonical path order; per-row paths are prefix-free, so sibling
@@ -155,7 +155,7 @@ fn build_row<'mcx>(
     let root = state
         .end_object()?
         .expect("balanced begin/end yields the finished tree");
-    Ok(convert_to_jsonb(mcx, &root)?[..].to_vec())
+    Ok(::mcx::std_vec_from_slice("adt", &convert_to_jsonb(mcx, &root)?[..])?)
 }
 
 /// Emit one object level: `entries` all share their first `depth` segments

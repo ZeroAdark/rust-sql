@@ -66,7 +66,11 @@ const INVALID_BTREE_LEVEL: u32 = InvalidBlockNumber;
 const INTERVAL_BTREE_FAM_OID: Oid = 1982;
 const Anum_pg_index_indcheckxmin: i32 = 12;
 const OPAQUE_MAXALIGN: usize = 16;
-// heaptoast.h:68 TOAST_INDEX_TARGET = MaxHeapTupleSize / 16, the same bound nbtree::itup's index_form_tuple compresses at.
+// heaptoast.h:68: TOAST_INDEX_TARGET = MaxHeapTupleSize / 16 (510), the cut nbtree::itup's index_form_tuple compresses
+// at since the nbtree audit b002 (#1650). D3454: the 8160 / 4 = 2040 copy of itup's pre-audit value outlived it here, so a
+// 511..2040-byte value an index stored raw (formed under SET STORAGE plain) was not re-formed after SET STORAGE extended
+// while the heap side's tuple was formed compressed: heapallindexed reported a heap tuple missing from a sound index
+// (contrib/amcheck check_btree's varlena_bug).
 const TOAST_INDEX_TARGET: usize = ::types_storage::bufpage::MaxHeapTupleSize / 16;
 const IMK: usize = INDEX_MAX_KEYS as usize;
 
@@ -121,11 +125,11 @@ struct OwnedTuple {
 
 impl OwnedTuple {
     /// SAFETY: `itup` is a live index-tuple image (pin held / private copy).
-    unsafe fn from_itup(itup: ITup) -> Self {
+    unsafe fn from_itup(itup: ITup) -> PgResult<Self> {
         let len = index_tuple_size(itup);
-        let mut words = vec![0u64; len.div_ceil(8)].into_boxed_slice();
+        let mut words = ::mcx::std_vec_from_elem("amcheck", 0u64, len.div_ceil(8))?.into_boxed_slice();
         copy_nonoverlapping(itup, words.as_mut_ptr().cast(), len);
-        OwnedTuple { words }
+        Ok(OwnedTuple { words })
     }
 
     #[inline]
@@ -310,7 +314,7 @@ fn bt_check_every_level<'mcx>(
 
     let mut state = BtreeCheckState {
         mcx,
-        scratch: MemoryContext::new_bump("amcheck context"),
+        scratch: MemoryContext::new_wholesale("amcheck context"),
         rel: rel.alias(),
         heaprel: heaprel.alias(),
         heapkeyspace,
@@ -657,7 +661,7 @@ fn bt_check_level_from_leftmost<'mcx>(
                 P_HIKEY,
             )?;
             // SAFETY: itup is the live high-key tuple on the alive target copy, validated against lp_len.
-            state.lowkey = Some(unsafe { OwnedTuple::from_itup(itup) });
+            state.lowkey = Some(unsafe { OwnedTuple::from_itup(itup)? });
         }
 
         state.target = None;
@@ -990,6 +994,7 @@ fn bt_target_page_check(state: &mut BtreeCheckState<'_>) -> PgResult<()> {
 
                 if state.checkunique && state.ii_unique() && is_leaf && !is_rightmost {
                     let rightblock_number = topaque.btpo_next;
+                    elog_seams::ereport::call(PgError::new(DEBUG2, "check cross page unique condition"))?;
                     rightkey.scantid = None;
                     if bt_compare(&state.rel, &mut rightkey, &state.target_page(), max, &mut frame)? == 0
                         && !rightkey.anynullkeys
@@ -997,6 +1002,7 @@ fn bt_target_page_check(state: &mut BtreeCheckState<'_>) -> PgResult<()> {
                         if !unique_checked {
                             bt_entry_unique_check(state, itup, state.targetblock, offset, &mut l_vis)?;
                         }
+                        elog_seams::ereport::call(PgError::new(DEBUG2, "cross page equal keys"))?;
                         let rightpage2 = palloc_btree_page(state, rightblock_number)?;
                         let ropaque = page_opaque(&rightpage2.page());
                         if P_IGNORE(&ropaque) {
@@ -1076,7 +1082,19 @@ fn bt_right_page_check_scankey<'mcx>(
             rightpage = page;
             break;
         }
-        // Deleted/half-dead sibling: step right (C divergence: DEBUG2 omitted).
+        elog_seams::ereport::call(
+            PgError::new(
+                DEBUG2,
+                format!(
+                    "level {} sibling page in block {} of index \"{}\" was found deleted or half dead",
+                    op.btpo_level,
+                    targetnext,
+                    state.rel.name()
+                ),
+            )
+            .with_sqlstate(ERRCODE_NO_DATA)
+            .with_detail("Deleted page found when building scankey from right sibling."),
+        )?;
         targetnext = op.btpo_next;
     }
 
@@ -1091,7 +1109,18 @@ fn bt_right_page_check_scankey<'mcx>(
     } else if !is_leaf && nline >= P_FIRSTDATAKEY(&ropaque) + 1 {
         P_FIRSTDATAKEY(&ropaque) + 1
     } else {
-        // No first item (C divergence: DEBUG2 omitted).
+        elog_seams::ereport::call(
+            PgError::new(
+                DEBUG2,
+                format!(
+                    "{} block {} of index \"{}\" has no first data item",
+                    if is_leaf { "leaf" } else { "internal" },
+                    targetnext,
+                    state.rel.name()
+                ),
+            )
+            .with_sqlstate(ERRCODE_NO_DATA),
+        )?;
         return Ok(None);
     };
 
@@ -2363,6 +2392,12 @@ mod tests {
     }
 
     fn text_index_rel(mcx: Mcx<'_>) -> Relation<'_> {
+        text_index_rel_storage(mcx, TYPSTORAGE_EXTENDED, 0)
+    }
+
+    /// attcompression 0 = InvalidCompressionMethod (index_form_tuple then reads the default_toast_compression GUC, which a
+    /// unit test has no owner for); b'p' = pglz, named explicitly.
+    fn text_index_rel_storage(mcx: Mcx<'_>, attstorage: i8, attcompression: i8) -> Relation<'_> {
         use ::types_core::{INVALID_PROC_NUMBER, RELPERSISTENCE_PERMANENT, TEXTOID};
         use ::types_rel::{
             FormData_pg_class, LockInfoData, LockRelId, RelationData, RELKIND_INDEX,
@@ -2383,7 +2418,8 @@ mod tests {
             atttypmod: -1,
             attbyval: false,
             attalign: b'i' as i8,
-            attstorage: TYPSTORAGE_EXTENDED,
+            attstorage,
+            attcompression,
             attislocal: true,
             ..Default::default()
         });
@@ -2455,6 +2491,7 @@ mod tests {
             rd_amcache_hash: Default::default(),
             rd_amcache_gin: Default::default(),
             rd_amcache_spgist: Default::default(),
+            rd_amcache_bloom: Default::default(),
             rd_support: ::mcx::PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
@@ -2488,5 +2525,49 @@ mod tests {
             matches!(norm, NormTuple::Same(_)),
             "a short varlena must not be reformed"
         );
+    }
+
+    // D3454 (contrib/amcheck check_btree, varlena_bug): repeat('Test', 250), a 1004-byte value the index stored raw while
+    // the column was SET STORAGE plain, must normalize to the same image as the heap side's tuple formed after SET STORAGE
+    // extended (compressed, then detoasted and re-formed): C's bt_normalize_tuple re-forms any raw value over
+    // TOAST_INDEX_TARGET (510) under extended / main storage. With the old 2040 cut the stored tuple stayed raw and the
+    // two images differed (heapallindexed: "heap tuple (0,3) ... lacks matching index tuple").
+    #[test]
+    fn normalize_tuple_reforms_a_raw_value_after_set_storage_extended() {
+        static SEAMS: std::sync::Once = std::sync::Once::new();
+        SEAMS.call_once(|| {
+            ::heaptoast::init_seams();
+            ::detoast::init_seams();
+        });
+        let arena = MemoryContext::new_bump("amcheck d3454 normalize test");
+        let mcx = arena.mcx();
+        // pglz named on the column (both sides compress alike; a unit test installs no default_toast_compression GUC)
+        let plain = text_index_rel_storage(mcx, ::types_tuple::tupdesc::TYPSTORAGE_PLAIN, b'p' as i8);
+        let extended = text_index_rel_storage(mcx, TYPSTORAGE_EXTENDED, b'p' as i8);
+
+        let mut value = vec![0u8; 1004];
+        value[..4].copy_from_slice(&::types_tuple::varatt::set_varsize_4b_word(1004).to_ne_bytes());
+        for (i, b) in value[4..].iter_mut().enumerate() {
+            *b = b"Test"[i % 4];
+        }
+        let values = [Datum::from_usize(value.as_ptr() as usize)];
+        let isnull = [false];
+        // the index's tuple, formed while the column was plain: stored raw
+        let stored = index_form_tuple(mcx, plain.descr(), &values, &isnull).unwrap();
+        // the heap side's tuple after SET STORAGE extended: formed compressed
+        let heap = index_form_tuple(mcx, extended.descr(), &values, &isnull).unwrap();
+        // SAFETY: both are freshly formed non-pivot, non-posting tuples.
+        unsafe {
+            assert!(index_tuple_size(stored.as_ptr()) > 1000, "the plain-storage tuple is stored raw");
+            assert!(index_tuple_size(heap.as_ptr()) < 100, "the extended-storage tuple is formed compressed");
+            let a = bt_normalize_tuple(mcx, &extended, stored.as_ptr()).unwrap();
+            let b = bt_normalize_tuple(mcx, &extended, heap.as_ptr()).unwrap();
+            let (pa, pb) = (a.as_itup(), b.as_itup());
+            assert_eq!(
+                from_raw_parts(pa, index_tuple_size(pa)),
+                from_raw_parts(pb, index_tuple_size(pb)),
+                "the stored raw tuple and the heap side's compressed tuple must normalize to one image (D3454)"
+            );
+        }
     }
 }

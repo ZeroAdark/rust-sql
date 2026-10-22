@@ -1,0 +1,10 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (M6-RIG m6x table-free rows): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT t, length(t) FROM (VALUES ('b'), ('a'), ('B'), ('ab'), (NULL), ('')) v(t) ORDER BY t COLLATE "C" NULLS FIRST
+cols: t	length
+[pg]
+\N	\N
+	0
+B	1
+a	1
+ab	2
+b	1

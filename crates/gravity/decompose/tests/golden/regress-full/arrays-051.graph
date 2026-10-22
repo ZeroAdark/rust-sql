@@ -1,0 +1,10 @@
+-- regress-full-arrays-051
+-- select c2[2].f2 from comptable;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=880 end=sink
+  nodes n0@0
+  source range rel=26283 rti=1 am=heap
+    lanes Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=T_FieldSelect)
+  outs 1=vl:call0
+mapped: SeqScan

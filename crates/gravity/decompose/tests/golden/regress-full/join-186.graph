@@ -1,0 +1,69 @@
+-- regress-full-join-186
+-- explain (verbose, costs off) select t1.a from t t1 left join t t2 on t1.a = t2.a join t t3 on true where exists (select 1 from t t4 join t t5 on t4.b = t5.b join t t6 on t5.b = t6.b where t1.a = t4.a and t3.a = t5.a and t4.a = 1);
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=10 serial site=0 reason=IndexSource end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n10@0 n9@1
+  source index rel=25673 rti=6 am=heap index=25676
+    key att=1 op=96 value=c23:1
+    recheck (op96(v6.1, c23:1))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=v6.2, 2=v6.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=w8:val
+p1 node=8 eligible rows=2260 end=breaker(slot=1 HashBuild)
+  desc consumes=slot0@p0 words=bits@6/7
+  nodes n8@0 n7@1 n6@3
+  source range rel=25673 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v7.1, 2=v7.2)
+  probe slot=0 inner=n9 JOIN_INNER unique keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  project (1=inner.1, 2=outer.2, 3=outer.1)
+  build keys=(outer.1) decls=23/23:I32
+  outs 1=w8:val 2=w8:val
+  outs 1=w4:val 2=w8:val 3=w8:val
+p2 node=5 eligible rows=2260 end=breaker(slot=2 HashAgg)
+  desc consumes=slot1@p1 owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n5@0 n4@1 n3@3^
+  source range rel=25673 rti=9 am=heap
+    lanes Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v9.1, 2=v9.2)
+  probe slot=1 inner=n6 JOIN_INNER keys=(outer.2) decls=23/23:I32 clauses=(op96(outer.2, inner.1))
+  project (1=inner.3)
+  outs 1=w4:val 2=w8:val
+  outs 1=w4:val
+p3 node=2 serial site=0 reason=IndexSource end=sink
+  desc consumes=slot2@p2
+  nodes n2@0 n1@1 n0@3
+  source index-only rel=25673 rti=1 am=heap index=25676
+    key att=1 op=96 value=c23:1
+    recheck (op96(index.1, c23:1))
+    lanes Attr(1):byval8:w8:val
+  project (1=index.1)
+  nest inner=n3 JOIN_INNER invariant raise-free params=()
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p2
+  nodes n3@0
+  source breaker slot=2
+  project (1=outer.1)
+  project (1=outer.1, 2=inner.1)
+  nest inner=n11 JOIN_INNER unique raise-free params=($exec0=outer.2)
+  inner node=11 serial site=0 reason=IndexSource end=sink
+  nodes n11@0
+  source index-only rel=25673 rti=4 am=heap index=25676
+    key att=1 op=96 value=$exec0
+    recheck (op96(index.1, $exec0))
+    lanes
+  project (1=index.1)
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+group slot=2 producer=p2 node=3 form=Hashed hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=inner.3
+rerun node=1 pipelines=p0,p1,p2 slots=0,1,2 kept
+param $exec0 owner=n0 type=23 rep=w4:val
+mapped: SeqScan IndexScan IndexOnlyScan NestLoop NestLoopParam HashJoin Agg Hash

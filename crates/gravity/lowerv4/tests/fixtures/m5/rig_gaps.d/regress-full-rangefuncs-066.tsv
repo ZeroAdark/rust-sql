@@ -1,0 +1,1 @@
+a SQL / PL set function in the target list the test creates (D787, V4R-295): FmgrSet resolves it from pg_proc, which the rig has no live catalog for; the server serves it

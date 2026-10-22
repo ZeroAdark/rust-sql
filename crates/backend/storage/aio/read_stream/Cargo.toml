@@ -1,0 +1,24 @@
+[package]
+name = "read_stream"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "read_stream"
+path = "src/lib.rs"
+
+[dependencies]
+aio_core = { path = "../aio_core" }
+aio_seams = { path = "../aio_seams" }
+bufmgr_seams = { path = "../../buffer/bufmgr_seams" }
+catalog_seams = { path = "../../../catalog/catalog_seams" }
+fd = { path = "../../file/fd" }
+guc_tables = { path = "../../../utils/misc/guc_tables" }
+init_small = { path = "../../../utils/init/init_small" }
+mcx = { path = "../../../../_support/mcx" }
+spccache = { path = "../../../utils/cache/spccache" }
+types_core = { path = "../../../../_support/types/types_core" }
+types_error = { path = "../../../../_support/types/types_error" }
+types_rel = { path = "../../../../_support/types/rel" }
+types_storage = { path = "../../../../_support/types/types_storage" }

@@ -101,9 +101,60 @@ pub struct StandingEngagement {
     /// the kill9'd-leader orphaned-board geometry).
     predrive_deaths: AtomicUsize,
     closed: AtomicBool,
+    /// max_parallel_workers slots taken from the bgworker counter for the
+    /// pool serves; returned once, on close or drop.
+    admitted: AtomicUsize,
+}
+
+/// A pool leader's read of its board for the join's verdicts: the
+/// board's detaches, then the arm's own `started` count, then the board's
+/// claims, in that order. Every detach follows its claim, and a participant
+/// that started detaches only once the RG has completed or its error is
+/// recorded. So a claim, start or detach that lands between the reads shows
+/// as LIVE (claimed > detached), never as exited. Claims read first counted
+/// the detaches of bind-refused claimants (a pool thread with resource-owner
+/// residue refuses at bind and is re-served, hundreds of claims per pass)
+/// against a claim count taken before them: a pass whose started participant
+/// was still driving read as "every participant detached", and the leader
+/// aborted it ("pool executors exited before completing the pass").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Participation {
+    pub detached: usize,
+    pub started: usize,
+    pub claimed: usize,
+}
+
+impl Participation {
+    /// The three reads, in the order the type's doc requires.
+    pub fn read(
+        detached: impl FnOnce() -> usize,
+        started: impl FnOnce() -> usize,
+        claimed: impl FnOnce() -> usize,
+    ) -> Participation {
+        let detached = detached();
+        let started = started();
+        let claimed = claimed();
+        Participation { detached, started, claimed }
+    }
+
+    /// No claimant was live across the reads: every claim counted had
+    /// detached (the claim-deadline fallback's condition, with started == 0).
+    pub fn none_live(&self) -> bool {
+        self.detached >= self.claimed
+    }
+
+    pub fn all_exited_after_start(&self) -> bool {
+        self.claimed > 0 && self.started > 0 && self.none_live()
+    }
 }
 
 impl StandingEngagement {
+    /// The leader's [`Participation`] read, `started` being the arm's own
+    /// count of participants that passed the bind and began driving.
+    pub fn participation(&self, started: &AtomicUsize) -> Participation {
+        Participation::read(|| self.detached(), || started.load(SeqCst), || self.claimed())
+    }
+
     pub fn claimed(&self) -> usize {
         self.claimed.load(SeqCst)
     }
@@ -121,6 +172,11 @@ impl StandingEngagement {
     }
     pub fn predrive_deaths(&self) -> usize {
         self.predrive_deaths.load(SeqCst)
+    }
+
+    fn release_admission(&self) {
+        let n = self.admitted.swap(0, SeqCst);
+        bgworker::parallel_release(n as u32);
     }
 
     fn try_claim(&self) -> Option<usize> {
@@ -402,8 +458,8 @@ pub fn pool_binding_enabled() -> bool {
 /// through the runtime's bound-descriptor claim gate
 /// (scratchpad/night/m2-pool-binding-scope.md §3 inc-2).
 ///
-/// **DEFAULT ON since the regression acceptance re-run**
-/// (measured dop1 needle p50
+/// **DEFAULT ON since the GL-POOLDB-1 acceptance re-run**
+/// (scratchpad/night/gl-pooldb-1-letter-spec.md §9: dop1 needle p50
 /// −0.18% vs the ≤1% bar; needle-under-saturated-mixed-load 0.64× vs the
 /// ≤2× bar — the letter's 4.4× small-stream tax INVERTED by the pool-qos
 /// interactive tier; heavy-stream p99 123.5s → 10.3s; gang-churn witness
@@ -490,7 +546,10 @@ pub fn try_engage(shared: &Arc<ParallelShared>, dop: usize) -> Option<Arc<Standi
         return None;
     }
     if g.slots.is_empty() {
-        g.slots = vec![SlotState::Vacant; size];
+        g.slots = match ::mcx::std_vec_from_elem("StandingGang", SlotState::Vacant, size) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
     }
     // Crash-fence recovery: a leader engaging proves reinit completed
     // (backends only run against live shared memory). Pre-crash threads
@@ -524,6 +583,7 @@ pub fn try_engage(shared: &Arc<ParallelShared>, dop: usize) -> Option<Arc<Standi
         yield_grants: AtomicUsize::new(0),
         predrive_deaths: AtomicUsize::new(0),
         closed: AtomicBool::new(false),
+        admitted: AtomicUsize::new(0),
     });
     g.current = Some(Arc::clone(&entry));
     cv.notify_all();
@@ -533,7 +593,7 @@ pub fn try_engage(shared: &Arc<ParallelShared>, dop: usize) -> Option<Arc<Standi
 /// Close the board entry WITHOUT waiting: no new claims; ticketless parked
 /// workers wake off the board. The leader still owes `close_and_await`
 /// before its arena unwinds — this is the CHASE-ORDERING face
-/// (regression): an interrupt chase against a still-open board races a
+/// (GL-STMTTASK-1): an interrupt chase against a still-open board races a
 /// re-claim storm (every detach notifies the gang cv; parked workers
 /// re-claim the aborted-but-open engagement in a tight serve cycle —
 /// witnessed at ~4k claims per chase — and a join poll can livelock against
@@ -587,6 +647,7 @@ pub fn close_and_await(entry: &Arc<StandingEngagement>) {
         g = cv.wait(g).unwrap_or_else(|p| p.into_inner());
     }
     drop(g);
+    entry.release_admission();
 }
 
 /// DROP DATABASE rider (parallel_pool_retire_db seam, alongside wpool's):
@@ -650,6 +711,27 @@ pub fn is_exit_unwind(payload: &(dyn std::any::Any + Send)) -> bool {
     payload.is::<ipc::ProcExitThread>()
         || payload.is::<types_error::PanicExitThread>()
         || payload.is::<ipc::KilledBySignal>()
+}
+
+/// a structured error unwound as a panic (`PgError` / `Box<PgError>`,
+/// the ereport-through-infallible-code idiom): the only payload a containment
+/// layer may turn into an ERROR. Everything else is an exit payload
+/// ([`is_exit_unwind`], [`PoolRetireRaw`]) or a plain panic.
+pub fn is_structured_error(payload: &(dyn std::any::Any + Send)) -> bool {
+    payload.is::<types_error::PgError>() || payload.is::<Box<types_error::PgError>>()
+}
+
+/// D2933 (user 2026-09-29: "when crashing, the whole system should abort like
+/// postgres does"): a containment layer hands every payload that is not a
+/// structured error on to the thread top: an exit payload as itself, a plain
+/// panic as C's abort() (`elog::abort_on_plain_panic`: PanicExitThread, so the
+/// thread top announces the crash and the postmaster runs the crash restart).
+/// Never returns; the caller fails its section first so no thread waits.
+pub fn resume_exit_or_abort(payload: Box<dyn std::any::Any + Send>) -> ! {
+    if is_exit_unwind(&*payload) || payload.is::<PoolRetireRaw>() {
+        std::panic::resume_unwind(payload);
+    }
+    elog::abort_on_plain_panic(payload)
 }
 
 // ---------------------------------------------------------------------------
@@ -876,7 +958,7 @@ fn warm_connect(entry: &Arc<StandingEngagement>) {
             }
             procsignal::ProcSignalRelease();
             // ... and the pg_stat_activity row InitPostgres showed: a parked
-            // pool thread has no C counterpart (regression).
+            // pool thread has no C counterpart (fp-commands-vacuumparallel#2).
             backend_status::pgstat_pool_worker_park();
         }
         Ok(Err(e)) => {
@@ -1149,12 +1231,15 @@ fn serve_ticket(entry: &Arc<StandingEngagement>, ticket: usize) {
                 entry.yield_detach();
             }
             if let Err(payload) = r {
-                if is_exit_unwind(&*payload) {
-                    resume_unwind(payload);
+                // an exit payload keeps unwinding; a plain panic is
+                // C's abort() (the thread dies as crashed, the crash
+                // restart follows), never swallowed.
+                if !is_structured_error(&*payload) {
+                    resume_exit_or_abort(payload);
                 }
-                // Generic panic swallowed by design (the driver recorded
-                // its own failure into the payload slot) — but never
-                // silently: leave a trace for the sliver-panic case the
+                // A structured error is swallowed by design (the driver
+                // recorded its own failure into the payload slot) — but
+                // never silently: leave a trace for the sliver case the
                 // driver's inner catch cannot see.
                 let _ = elog::elog(
                     WARNING,
@@ -1178,7 +1263,7 @@ fn serve_ticket(entry: &Arc<StandingEngagement>, ticket: usize) {
     }
     super::PARALLEL_WORKER_NUMBER.with(|c| c.set(-1));
     init_small::globals::SetParallelLeaderProcNumber(types_core::INVALID_PROC_NUMBER);
-    // regression deterministic wedge injection (inert in production).
+    // GL-GANGWEDGE-1 deterministic wedge injection (inert in production).
     maybe_inject_pool_stall();
     // Park invisibility (see the fn doc): leave the procarray (parked
     // workers must be invisible to CountOtherDBBackends) AND release the
@@ -1243,7 +1328,7 @@ pub fn pool_fence_epoch() -> usize {
     POOL_FENCE.load(SeqCst)
 }
 
-/// regression: pool-db threads inside a shared-memory-touching
+/// GL-POOLDB-HELPERDEATH-1: pool-db threads inside a shared-memory-touching
 /// span the crash reset must wait out — deferred identity bring-up
 /// (InitProcess/BaseInit at the serve gate), exit-callback drains, and the
 /// ticketless warm-connect. The postmaster's PM_WAIT_BACKENDS quiescence
@@ -1271,6 +1356,17 @@ static POOL_CRASH_PENDING: AtomicBool = AtomicBool::new(false);
 
 pub fn pool_crash_pending() -> bool {
     POOL_CRASH_PENDING.load(SeqCst)
+}
+
+/// a Gravity section's leader (a backend running a statement, so on
+/// live, reinitialized shared memory) closes the crash window as an engaging
+/// leader does (the engage paths' clear): its sections ride unbound task
+/// sets and never engage, so without this a pool thread respawned after a
+/// crash could never complete its identity and every section failed.
+pub fn note_section_leader() {
+    if POOL_CRASH_PENDING.load(std::sync::atomic::Ordering::Relaxed) {
+        POOL_CRASH_PENDING.store(false, SeqCst);
+    }
 }
 
 /// See POOL_SHM_BUSY; consumed by the rtgang_live seam sum.
@@ -1334,10 +1430,10 @@ impl Drop for PoolShmBusyGuard {
     }
 }
 
-/// regression RUNTIME-GANG STALL INJECTION (`PGRUST_TEST_POOL_STALL_
+/// GL-GANGWEDGE-1 RUNTIME-GANG STALL INJECTION (`PGRUST_TEST_POOL_STALL_
 /// INJECT_MS`; env-gated, inert in production). The runtime-gang analog of
 /// execparallel's `PGRUST_TEST_MQ_STALL_INJECT_MS`, which
-/// regression §7 named as owed ("the e2e's victim shapes and the
+/// GL-DISCONNECT-WEDGE-1 §7 named as owed ("the e2e's victim shapes and the
 /// injection knob need a runtime-gang analog").
 ///
 /// Called at the TAIL of a serve — the query is finished, but the thread takes
@@ -1374,14 +1470,14 @@ fn maybe_inject_pool_stall() {
     let _ = elog::elog(
         WARNING,
         format!(
-            "regression test injection: runtime executor stalling {ms}ms fence-deaf \
+            "GL-GANGWEDGE-1 test injection: runtime executor stalling {ms}ms fence-deaf \
              while holding the shm-busy charge"
         ),
     );
     std::thread::sleep(std::time::Duration::from_millis(ms));
 }
 
-/// regression QUIESCENCE-TERM FAULT INJECTOR
+/// GL-GANGWEDGE-1 QUIESCENCE-TERM FAULT INJECTOR
 /// (`PGRUST_TEST_WEDGE_SHM_BUSY_MS`; env-gated, inert in production).
 ///
 /// Spawns one thread that takes the `POOL_SHM_BUSY` charge and then sleeps
@@ -1410,23 +1506,31 @@ pub fn install_wedge_shm_busy_injection() {
     };
     let _ = std::thread::Builder::new()
         .name("gangwedge-inject".into())
-        .spawn(move || {
+        .spawn(pagegive::pinned(move || {
             let _busy = pool_shm_busy_guard();
             let _ = elog::elog(
                 WARNING,
                 format!(
-                    "regression test injection: holding the runtime quiescence term \
+                    "GL-GANGWEDGE-1 test injection: holding the runtime quiescence term \
                      (shm-busy) fence-deaf for {ms}ms"
                 ),
             );
             std::thread::sleep(std::time::Duration::from_millis(ms));
-        });
+        }));
 }
 
 /// Panic payload: a pool-db thread must exit RAW — the rtpool spawn glue
 /// catches it, skips the exit-callback drain (shared memory may have been
 /// reset under its identity), and respawns the slot cold.
 pub struct PoolRetireRaw;
+
+pub static EXIT_PAYLOADS: types_error::ExitPayloadTest =
+    types_error::ExitPayloadTest(|p| p.is::<PoolRetireRaw>());
+
+pub fn register_exit_payloads() {
+    ipc::register_exit_payloads();
+    types_error::register_exit_payload_test(&EXIT_PAYLOADS);
+}
 
 /// Boot wiring (launch_backend rtpool): the per-serve identity gate. Runs
 /// ON the pool thread at every serve entry: verifies (or completes) the
@@ -1438,6 +1542,14 @@ static POOL_GATE: OnceLock<fn() -> bool> = OnceLock::new();
 
 pub fn install_pool_gate(f: fn() -> bool) {
     let _ = POOL_GATE.set(f);
+}
+/// Run the installed gate on THIS pool thread: `None` when no pool identity
+/// wiring exists (a bare runtime), else whether the thread's identity is
+/// live after the gate. For work that reaches a pool thread outside
+/// `pool_serve` (Gravity's sections ride unbound task sets) and needs the
+/// thread's PGPROC (buffer reads through AIO).
+pub fn run_pool_gate() -> Option<bool> {
+    POOL_GATE.get().map(|g| g())
 }
 
 thread_local! {
@@ -1532,6 +1644,13 @@ pub fn try_engage_pool(
     shared.standing_driver()?;
     // No pool identity wiring ⇒ no pool thread can ever serve.
     POOL_GATE.get()?;
+    // The launched gang's count (LaunchParallelWorkers →
+    // RegisterDynamicBackgroundWorker): the pool serves take the same
+    // max_parallel_workers slots, so `tickets` is C's nworkers_launched.
+    let admitted = bgworker::parallel_admit(dop as u32) as usize;
+    if admitted == 0 {
+        return None;
+    }
     // A leader engaging proves reinit completed (this leader IS a backend
     // running against live shared memory): close the crash window so the
     // pool's minting spans (identity bring-up, warm-connect) run again —
@@ -1539,11 +1658,12 @@ pub fn try_engage_pool(
     POOL_CRASH_PENDING.store(false, SeqCst);
     // Workers join the leader's lock group the moment they claim a ticket.
     if lmgr_proc::BecomeLockGroupLeader().is_err() {
+        bgworker::parallel_release(admitted as u32);
         return None;
     }
     Some(Arc::new(StandingEngagement {
         shared: Arc::clone(shared),
-        tickets: dop,
+        tickets: admitted,
         claimed: AtomicUsize::new(0),
         detached: AtomicUsize::new(0),
         refused: AtomicUsize::new(0),
@@ -1551,7 +1671,14 @@ pub fn try_engage_pool(
         yield_grants: AtomicUsize::new(0),
         predrive_deaths: AtomicUsize::new(0),
         closed: AtomicBool::new(false),
+        admitted: AtomicUsize::new(admitted),
     }))
+}
+
+impl Drop for StandingEngagement {
+    fn drop(&mut self) {
+        self.release_admission();
+    }
 }
 
 /// Best-effort procarray re-join for a pool-db thread's GENERIC-PANIC exit
@@ -1595,7 +1722,7 @@ pub fn pool_serve(payload: &Arc<dyn std::any::Any + Send + Sync>) -> PoolServe {
     let Ok(entry) = Arc::clone(payload).downcast::<StandingEngagement>() else {
         return PoolServe::Refused;
     };
-    // SERVE-SPAN busy charge (regression v3 — the load-bearing
+    // SERVE-SPAN busy charge (GL-POOLDB-HELPERDEATH-1 v3 — the load-bearing
     // term): the whole serve (gate, identity completion, claim, drive,
     // teardown) is a shared-memory-touching span the crash reset must wait
     // out. The leader's close_and_await does NOT cover it on every path —
@@ -1654,7 +1781,7 @@ pub fn pool_serve(payload: &Arc<dyn std::any::Any + Send + Sync>) -> PoolServe {
     // for it — without its own wake the leader's "nobody will participate"
     // check only ran when its latch quantum expired, and every
     // cross-database engagement against a fully-mismatched pool slept the
-    // whole MQ-recheck quantum (~1 s additive per execution, regression)
+    // whole MQ-recheck quantum (~1 s additive per execution, GL-ZSTALL-1)
     // before falling back to the gang.
     if mine != InvalidOid && mine != entry.shared.database_id {
         entry.refused.fetch_add(1, SeqCst);
@@ -1697,7 +1824,7 @@ pub fn pool_serve(payload: &Arc<dyn std::any::Any + Send + Sync>) -> PoolServe {
 
 #[cfg(test)]
 mod pooldb_flip_tests {
-    /// regression flip pin (t35 flipped-kill law): default ON; `=0|off`
+    /// GL-POOLDB-1 flip pin (t35 flipped-kill law): default ON; `=0|off`
     /// restores the gang-first posture; the historical arming spelling
     /// `=1` stays ON; whitespace trimmed.
     #[test]
@@ -1726,5 +1853,69 @@ mod pooldb_flip_tests {
             expect,
             "process switch disagrees with the spelled posture"
         );
+    }
+}
+
+#[cfg(test)]
+mod participation_tests {
+    use super::Participation;
+
+    #[derive(Clone, Copy)]
+    struct Board {
+        claimed: usize,
+        detached: usize,
+        started: usize,
+    }
+
+    #[test]
+    fn a_bind_refusal_and_a_fresh_start_between_the_reads_read_as_live() {
+        let script: [fn(&mut Board); 7] = [
+            |b| b.detached += 1, // A refuses at bind and detaches
+            |b| b.claimed += 1,  // B claims
+            |b| b.started += 1,  // B binds and starts driving (to the end)
+            |b| b.claimed += 1,  // C claims
+            |b| b.detached += 1, // C refuses and detaches
+            |b| b.claimed += 1,  // D claims
+            |b| b.detached += 1, // D refuses and detaches
+        ];
+        let at = |n: usize| {
+            let mut b = Board { claimed: 1, detached: 0, started: 0 };
+            for e in &script[..n] {
+                e(&mut b);
+            }
+            b
+        };
+        let n = script.len();
+        for i in 0..=n {
+            for j in i..=n {
+                for k in j..=n {
+                    let p = Participation::read(|| at(i).detached, || at(j).started, || at(k).claimed);
+                    assert!(
+                        !p.all_exited_after_start(),
+                        "reads after {i}/{j}/{k} events say every participant exited while B drives: {p:?}"
+                    );
+                }
+            }
+        }
+        let old_order_misreads = (0..=n).any(|i| {
+            (i..=n).any(|j| {
+                (j..=n).any(|k| {
+                    let (claimed, started, detached) = (at(i).claimed, at(j).started, at(k).detached);
+                    claimed > 0 && started > 0 && detached >= claimed
+                })
+            })
+        });
+        assert!(old_order_misreads, "the script must reproduce the claims-first misread");
+    }
+
+    /// The needle still fires when it should: B finished the pass and
+    /// detached, so every claimant has detached after a start.
+    #[test]
+    fn every_claimant_detached_after_a_start_reads_as_exited() {
+        let p = Participation::read(|| 3, || 1, || 3);
+        assert!(p.all_exited_after_start());
+        assert!(p.none_live());
+        let none = Participation::read(|| 0, || 0, || 0);
+        assert!(!none.all_exited_after_start(), "nobody claimed");
     }
 }

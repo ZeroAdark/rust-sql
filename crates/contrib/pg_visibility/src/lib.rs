@@ -17,8 +17,8 @@ use types_core::{
     BlockNumber, ForkNumber, InvalidBlockNumber, MaxBlockNumber, TransactionId,
 };
 use types_error::{
-    PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_PARAMETER_VALUE,
-    ERRCODE_WRONG_OBJECT_TYPE,
+    PgError, PgResult, ERRCODE_DATATYPE_MISMATCH, ERRCODE_FEATURE_NOT_SUPPORTED,
+    ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_WRONG_OBJECT_TYPE,
 };
 use types_fmgr::{byref_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction};
 use types_rel::pg_class::RELKIND_HAS_TABLE_AM;
@@ -61,23 +61,39 @@ fn check_relation_relkind(rel: &types_rel::RelationData<'_>) -> PgResult<()> {
 
 // read_stream_begin_impl (read_stream.c:563-566): the stream rejects another
 // session's temp relation before any block is read.
-fn check_not_other_temp(rel: &types_rel::RelationData<'_>) -> PgResult<()> {
-    if rel.rd_rel.relpersistence == types_core::catalog::RELPERSISTENCE_TEMP && !rel.rd_islocaltemp {
-        return Err(Box::new(
-            PgError::error("cannot access temporary tables of other sessions")
-                .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
-        ));
+// SRF_FIRSTCALL_INIT's calling-context test, run before any argument is read.
+fn require_set_context(fcinfo: &mut Fcinfo) -> PgResult<()> {
+    if fcinfo.rsinfo_mut().is_none() {
+        return Err(funcapi::srf_context_error());
     }
     Ok(())
 }
 
-
-fn composite_tupdesc<'m>(mcx: Mcx<'m>, flinfo: &FmgrInfo) -> PgResult<TupleDescData<'m>> {
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+// get_call_result_type(fcinfo, ...) (pg_visibility.c:309): a RECORD result
+// resolves from the caller's column definition list.
+fn summary_tupdesc<'m>(
+    mcx: Mcx<'m>,
+    flinfo: &FmgrInfo,
+    fcinfo: &mut Fcinfo,
+) -> PgResult<TupleDescData<'m>> {
+    let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
+    // SAFETY: expectedDesc contract — the executor armed it with the scan
+    // tupdesc, live for the duration of this call.
+    let expected = expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(Box::new(PgError::error("return type must be a row type")));
     }
-    Ok(resolved.result_tuple_desc.expect("composite result has tupdesc"))
+    let td = resolved.result_tuple_desc.expect("composite result has tupdesc");
+    // C forms its two int8 values against whatever list was declared and
+    // crashes on a mismatch (pg_visibility.c:317); refuse it instead.
+    if td.natts != 2 || (0..2).any(|i| td.attr(i).atttypid != types_core::INT8OID) {
+        return Err(Box::new(
+            PgError::error("function return row and query-specified return row do not match")
+                .with_sqlstate(ERRCODE_DATATYPE_MISMATCH),
+        ));
+    }
+    Ok(td)
 }
 
 fn pg_visibility_tupdesc<'m>(
@@ -124,7 +140,7 @@ fn tuple_image(
     nulls: &[bool],
 ) -> PgResult<Vec<u8>> {
     let tup = heaptuple::heap_form_tuple(mcx, tupdesc, values, nulls)?;
-    Ok(tup.image().to_vec())
+    Ok(::mcx::std_vec_from_slice("pg_visibility", &tup.image())?)
 }
 
 struct RowSet {
@@ -223,10 +239,19 @@ fn collect_visibility_data(
     check_relation_relkind(&rel)?;
 
     let nblocks = bufmgr::RelationGetNumberOfBlocksInFork(&rel, ForkNumber::MAIN_FORKNUM)?;
-    let mut info = VBits { bits: vec![0u8; nblocks as usize] };
-    if include_pd {
-        check_not_other_temp(&rel)?;
-    }
+    let mut info = VBits { bits: ::mcx::std_vec_from_elem("pg_visibility", 0u8, nblocks as usize)? };
+    let mut p = read_stream::BlockRangeReadStreamPrivate::new(0, nblocks);
+    let mut stream = if include_pd {
+        Some(read_stream::read_stream_begin_relation::<()>(
+            mcx,
+            read_stream::READ_STREAM_FULL | read_stream::READ_STREAM_USE_BATCHING,
+            bstrategy.clone(),
+            &rel,
+            ForkNumber::MAIN_FORKNUM,
+        )?)
+    } else {
+        None
+    };
     let mut vmbuffer = VmBuffer::new();
 
     for blkno in 0..nblocks {
@@ -240,14 +265,8 @@ fn collect_visibility_data(
             info.bits[blkno as usize] |= 1 << 1;
         }
 
-        if include_pd {
-            let buf = bufmgr::ReadBufferExtended(
-                &rel,
-                ForkNumber::MAIN_FORKNUM,
-                blkno,
-                types_storage::storage::ReadBufferMode::Normal,
-                bstrategy.clone(),
-            )?;
+        if let Some(stream) = stream.as_mut() {
+            let buf = stream.next_buffer(&mut |_: &mut ()| Ok(p.next_block()))?;
             bufmgr::LockBuffer(buf, bufmgr::BUFFER_LOCK_SHARE)?;
             let pageptr = bufmgr::BufferGetPagePtr(buf);
             // SAFETY: a locked, pinned buffer page is BLCKSZ readable.
@@ -259,6 +278,13 @@ fn collect_visibility_data(
         }
     }
 
+    if let Some(mut stream) = stream {
+        debug_assert_eq!(
+            stream.next_buffer(&mut |_: &mut ()| Ok(p.next_block()))?,
+            types_core::InvalidBuffer
+        );
+        stream.end()?;
+    }
     vmbuffer.release();
     rel.close(types_rel::AccessShareLock)?;
     Ok(info)
@@ -336,33 +362,43 @@ fn collect_corrupt_items(
     if all_visible {
         oldest_xmin = strict_oldest_nonremovable_xid(&rel)?;
     }
-    check_not_other_temp(&rel)?;
-
     let mut items: Vec<Vec<u8>> = Vec::with_capacity(64);
     let nblocks = bufmgr::RelationGetNumberOfBlocksInFork(&rel, ForkNumber::MAIN_FORKNUM)?;
     let mut filter_vmbuf = VmBuffer::new();
     let mut vmbuffer = VmBuffer::new();
 
-    for blkno in 0..nblocks {
-        postgres_seams::check_for_interrupts::call()?;
-
-        let want_frozen = all_frozen && vm_all_frozen(&rel, blkno, &mut filter_vmbuf)?;
-        let want_visible = all_visible && vm_all_visible(&rel, blkno, &mut filter_vmbuf)?;
-        if !want_frozen && !want_visible {
-            continue;
+    let mut stream = read_stream::read_stream_begin_relation::<()>(
+        mcx,
+        read_stream::READ_STREAM_FULL,
+        bstrategy.clone(),
+        &rel,
+        ForkNumber::MAIN_FORKNUM,
+    )?;
+    let mut current: BlockNumber = 0;
+    let mut next_block = |_: &mut ()| -> PgResult<BlockNumber> {
+        while current < nblocks {
+            postgres_seams::check_for_interrupts::call()?;
+            let blkno = current;
+            current += 1;
+            if (all_frozen && vm_all_frozen(&rel, blkno, &mut filter_vmbuf)?)
+                || (all_visible && vm_all_visible(&rel, blkno, &mut filter_vmbuf)?)
+            {
+                return Ok(blkno);
+            }
         }
+        Ok(types_core::InvalidBlockNumber)
+    };
 
-        let buf = bufmgr::ReadBufferExtended(
-            &rel,
-            ForkNumber::MAIN_FORKNUM,
-            blkno,
-            types_storage::storage::ReadBufferMode::Normal,
-            bstrategy.clone(),
-        )?;
+    loop {
+        let buf = stream.next_buffer(&mut next_block)?;
+        if buf == types_core::InvalidBuffer {
+            break;
+        }
+        let blkno = bufmgr::BufferGetBlockNumber(buf);
         bufmgr::LockBuffer(buf, bufmgr::BUFFER_LOCK_SHARE)?;
 
-        let check_frozen = want_frozen && vm_all_frozen(&rel, blkno, &mut vmbuffer)?;
-        let check_visible = want_visible && vm_all_visible(&rel, blkno, &mut vmbuffer)?;
+        let check_frozen = all_frozen && vm_all_frozen(&rel, blkno, &mut vmbuffer)?;
+        let check_visible = all_visible && vm_all_visible(&rel, blkno, &mut vmbuffer)?;
         if !check_visible && !check_frozen {
             bufmgr::UnlockReleaseBuffer(buf)?;
             continue;
@@ -428,6 +464,8 @@ fn collect_corrupt_items(
 
         bufmgr::UnlockReleaseBuffer(buf)?;
     }
+    stream.end()?;
+    drop(next_block);
 
     filter_vmbuf.release();
     vmbuffer.release();
@@ -516,7 +554,7 @@ fn vbits_rows(
 ) -> PgResult<Vec<Vec<u8>>> {
     let tupdesc = pg_visibility_tupdesc(mcx, true, include_pd)?;
     let info = collect_visibility_data(mcx, relid, include_pd)?;
-    let mut rows = Vec::with_capacity(info.bits.len());
+    let mut rows = ::mcx::std_vec_with_capacity("pg_visibility", info.bits.len())?;
     for (blkno, bits) in info.bits.iter().enumerate() {
         let mut values = vec![
             Datum::from_i64(blkno as i64),
@@ -527,13 +565,14 @@ fn vbits_rows(
             values.push(Datum::from_bool(bits & (1 << 2) != 0));
         }
         let n = values.len();
-        rows.push(tuple_image(mcx, &tupdesc, &values, &vec![false; n])?);
+        rows.push(tuple_image(mcx, &tupdesc, &values, &::mcx::std_vec_from_elem("pg_visibility", false, n)?)?);
     }
     Ok(rows)
 }
 
 fn fc_pg_visibility_map_rel(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let flinfo = flinfo.expect("pg_visibility_map_rel: resolved FmgrInfo required");
+    require_set_context(fcinfo)?;
     let first = if !flinfo.has_fn_extra() {
         let relid = fcinfo.arg(0).as_oid();
         // SAFETY: the arming context outlives this call.
@@ -547,6 +586,7 @@ fn fc_pg_visibility_map_rel(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) 
 
 fn fc_pg_visibility_rel(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let flinfo = flinfo.expect("pg_visibility_rel: resolved FmgrInfo required");
+    require_set_context(fcinfo)?;
     let first = if !flinfo.has_fn_extra() {
         let relid = fcinfo.arg(0).as_oid();
         // SAFETY: the arming context outlives this call.
@@ -587,13 +627,14 @@ fn fc_pg_visibility_map_summary(
     vmbuffer.release();
     rel.close(types_rel::AccessShareLock)?;
 
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = summary_tupdesc(mcx, flinfo, fcinfo)?;
     let values = [Datum::from_i64(all_visible), Datum::from_i64(all_frozen)];
     composite_result(mcx, &tupdesc, &values, &[false; 2])
 }
 
 fn fc_pg_check_frozen(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let flinfo = flinfo.expect("pg_check_frozen: resolved FmgrInfo required");
+    require_set_context(fcinfo)?;
     let first = if !flinfo.has_fn_extra() {
         let relid = fcinfo.arg(0).as_oid();
         // SAFETY: the arming context outlives this call.
@@ -607,6 +648,7 @@ fn fc_pg_check_frozen(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
 
 fn fc_pg_check_visible(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let flinfo = flinfo.expect("pg_check_visible: resolved FmgrInfo required");
+    require_set_context(fcinfo)?;
     let first = if !flinfo.has_fn_extra() {
         let relid = fcinfo.arg(0).as_oid();
         // SAFETY: the arming context outlives this call.

@@ -1,0 +1,10 @@
+-- regress-full-conversion-004
+-- select description, (test_conv(inbytes, 'utf8', 'utf8')).* from utf8_verification_inputs;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn40832 cols=2 fn40832($1, fn407($2), fn407($3), c16:0)]
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=vl:row
+mapped: FunctionScan

@@ -1,0 +1,282 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pk s3pf s3pd s1c s2c
+step s3pk: EXPLAIN (COSTS OFF) UPDATE pt SET x = x + ps.w FROM ps WHERE ps.id = pt.k + 1 AND pt.id <= 40;
+QUERY PLAN                                 
+-------------------------------------------
+Update on pt                               
+  ->  Nested Loop                          
+        ->  Index Scan using pt_pkey on pt 
+              Index Cond: (id <= 40)       
+        ->  Index Scan using ps_pkey on ps 
+              Index Cond: (id = (pt.k + 1))
+(6 rows)
+
+step s3pf: EXPLAIN (COSTS OFF) UPDATE pt SET x = x + ps.id FROM ps WHERE pt.k = 0 AND ps.w = 0 AND ps.id < pt.id AND pt.id <= 40;
+QUERY PLAN                                
+------------------------------------------
+Update on pt                              
+  ->  Nested Loop                         
+        Join Filter: (ps.id < pt.id)      
+        ->  Index Scan using pt_pkey on pt
+              Index Cond: (id <= 40)      
+              Filter: (k = 0)             
+        ->  Seq Scan on ps                
+              Filter: (w = 0)             
+(8 rows)
+
+step s3pd: EXPLAIN (COSTS OFF) DELETE FROM pt USING ps WHERE ps.id = pt.k + 1 AND ps.w IN (1, 2) AND pt.id <= 40;
+QUERY PLAN                                          
+----------------------------------------------------
+Delete on pt                                        
+  ->  Nested Loop                                   
+        ->  Index Scan using pt_pkey on pt          
+              Index Cond: (id <= 40)                
+        ->  Index Scan using ps_pkey on ps          
+              Index Cond: (id = (pt.k + 1))         
+              Filter: (w = ANY ('{1,2}'::integer[]))
+(7 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1k s1d s1s s2k s1c s2c s3sel s3row
+step s1x: UPDATE pt SET x = x + 1000 WHERE id = 10;
+step s1k: UPDATE pt SET k = 7 WHERE id = 20;
+step s1d: DELETE FROM pt WHERE id = 30;
+step s1s: UPDATE ps SET w = w + 100 WHERE id = 1;
+step s2k: UPDATE pt SET x = x + ps.w FROM ps WHERE ps.id = pt.k + 1 AND pt.id <= 40 RETURNING pt.id, pt.k, pt.x, ps.id, ps.w; <waiting ...>
+step s1c: COMMIT;
+step s2k: <... completed>
+id|k|   x|id|w
+--+-+----+--+-
+ 1|1|   2| 2|2
+ 2|2|   3| 3|3
+ 3|3|   4| 4|4
+ 4|4|   0| 5|0
+ 5|5|   1| 6|1
+ 6|6|   2| 7|2
+ 7|7|   3| 8|3
+ 8|8|   4| 9|4
+ 9|9|   0|10|0
+10|0|1001| 1|1
+11|1|   2| 2|2
+12|2|   3| 3|3
+13|3|   4| 4|4
+14|4|   0| 5|0
+15|5|   1| 6|1
+16|6|   2| 7|2
+17|7|   3| 8|3
+18|8|   4| 9|4
+19|9|   0|10|0
+21|1|   2| 2|2
+22|2|   3| 3|3
+23|3|   4| 4|4
+24|4|   0| 5|0
+25|5|   1| 6|1
+26|6|   2| 7|2
+27|7|   3| 8|3
+28|8|   4| 9|4
+29|9|   0|10|0
+31|1|   2| 2|2
+32|2|   3| 3|3
+33|3|   4| 4|4
+34|4|   0| 5|0
+35|5|   1| 6|1
+36|6|   2| 7|2
+37|7|   3| 8|3
+38|8|   4| 9|4
+39|9|   0|10|0
+40|0|   1| 1|1
+(38 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM pt;
+count| sum| sum
+-----+----+----
+ 1999|9007|1078
+(1 row)
+
+step s3row: SELECT id, k, x FROM pt WHERE id IN (10, 11, 20, 21, 30, 31, 40) ORDER BY id;
+id|k|   x
+--+-+----
+10|0|1001
+11|1|   2
+20|7|   0
+21|1|   2
+31|1|   2
+40|0|   1
+(6 rows)
+
+
+starting permutation: s1x s1d s2f s1c s2c s3sel s3row
+step s1x: UPDATE pt SET x = x + 1000 WHERE id = 10;
+step s1d: DELETE FROM pt WHERE id = 30;
+step s2f: UPDATE pt SET x = x + ps.id FROM ps WHERE pt.k = 0 AND ps.w = 0 AND ps.id < pt.id AND pt.id <= 40 RETURNING pt.id, pt.x; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id|   x
+--+----
+10|1005
+20|   5
+40|   5
+(3 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM pt;
+count| sum| sum
+-----+----+----
+ 1999|9000|1015
+(1 row)
+
+step s3row: SELECT id, k, x FROM pt WHERE id IN (10, 11, 20, 21, 30, 31, 40) ORDER BY id;
+id|k|   x
+--+-+----
+10|0|1005
+11|1|   0
+20|0|   5
+21|1|   0
+31|1|   0
+40|0|   5
+(6 rows)
+
+
+starting permutation: s1k s1d s2d s1c s2c s3sel s3row
+step s1k: UPDATE pt SET k = 7 WHERE id = 20;
+step s1d: DELETE FROM pt WHERE id = 30;
+step s2d: DELETE FROM pt USING ps WHERE ps.id = pt.k + 1 AND ps.w IN (1, 2) AND pt.id <= 40 RETURNING pt.id, ps.id; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+id|id
+--+--
+ 1| 2
+ 5| 6
+ 6| 7
+10| 1
+11| 2
+15| 6
+16| 7
+21| 2
+25| 6
+26| 7
+31| 2
+35| 6
+36| 7
+40| 1
+(14 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM pt;
+count| sum|sum
+-----+----+---
+ 1985|8959|  0
+(1 row)
+
+step s3row: SELECT id, k, x FROM pt WHERE id IN (10, 11, 20, 21, 30, 31, 40) ORDER BY id;
+id|k|x
+--+-+-
+20|7|0
+(1 row)
+
+
+starting permutation: s1x s1k s2f s1c s2c s3sel s3row
+step s1x: UPDATE pt SET x = x + 1000 WHERE id = 10;
+step s1k: UPDATE pt SET k = 7 WHERE id = 20;
+step s2f: UPDATE pt SET x = x + ps.id FROM ps WHERE pt.k = 0 AND ps.w = 0 AND ps.id < pt.id AND pt.id <= 40 RETURNING pt.id, pt.x; <waiting ...>
+step s1c: COMMIT;
+step s2f: <... completed>
+id|   x
+--+----
+10|1005
+30|   5
+40|   5
+(3 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM pt;
+count| sum| sum
+-----+----+----
+ 2000|9007|1015
+(1 row)
+
+step s3row: SELECT id, k, x FROM pt WHERE id IN (10, 11, 20, 21, 30, 31, 40) ORDER BY id;
+id|k|   x
+--+-+----
+10|0|1005
+11|1|   0
+20|7|   0
+21|1|   0
+30|0|   5
+31|1|   0
+40|0|   5
+(7 rows)
+
+
+starting permutation: s2k s1x s2c s1c s3sel s3row
+step s2k: UPDATE pt SET x = x + ps.w FROM ps WHERE ps.id = pt.k + 1 AND pt.id <= 40 RETURNING pt.id, pt.k, pt.x, ps.id, ps.w;
+id|k|x|id|w
+--+-+-+--+-
+ 1|1|2| 2|2
+ 2|2|3| 3|3
+ 3|3|4| 4|4
+ 4|4|0| 5|0
+ 5|5|1| 6|1
+ 6|6|2| 7|2
+ 7|7|3| 8|3
+ 8|8|4| 9|4
+ 9|9|0|10|0
+10|0|1| 1|1
+11|1|2| 2|2
+12|2|3| 3|3
+13|3|4| 4|4
+14|4|0| 5|0
+15|5|1| 6|1
+16|6|2| 7|2
+17|7|3| 8|3
+18|8|4| 9|4
+19|9|0|10|0
+20|0|1| 1|1
+21|1|2| 2|2
+22|2|3| 3|3
+23|3|4| 4|4
+24|4|0| 5|0
+25|5|1| 6|1
+26|6|2| 7|2
+27|7|3| 8|3
+28|8|4| 9|4
+29|9|0|10|0
+30|0|1| 1|1
+31|1|2| 2|2
+32|2|3| 3|3
+33|3|4| 4|4
+34|4|0| 5|0
+35|5|1| 6|1
+36|6|2| 7|2
+37|7|3| 8|3
+38|8|4| 9|4
+39|9|0|10|0
+40|0|1| 1|1
+(40 rows)
+
+step s1x: UPDATE pt SET x = x + 1000 WHERE id = 10; <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT count(*), sum(k), sum(x) FROM pt;
+count| sum| sum
+-----+----+----
+ 2000|9000|1080
+(1 row)
+
+step s3row: SELECT id, k, x FROM pt WHERE id IN (10, 11, 20, 21, 30, 31, 40) ORDER BY id;
+id|k|   x
+--+-+----
+10|0|1001
+11|1|   2
+20|0|   1
+21|1|   2
+30|0|   1
+31|1|   2
+40|0|   1
+(7 rows)
+

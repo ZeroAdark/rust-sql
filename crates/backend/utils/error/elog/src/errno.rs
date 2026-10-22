@@ -81,11 +81,25 @@ pub fn strerror(errnum: i32) -> String {
     }
 }
 
+pub const SENTINEL_M: &str = "\u{FDD0}m";
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct PctM;
+
+impl std::fmt::Display for PctM {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(SENTINEL_M)
+    }
+}
+
+pub const PCT_M: PctM = PctM;
+
 #[cold]
 #[inline(never)]
 pub fn replace_percent_m(message: &str, errno: i32) -> String {
-    if !message.contains("%m") {
+    if !message.contains(SENTINEL_M) {
         return message.to_owned();
     }
-    message.replace("%m", &strerror(errno))
+    message.replace(SENTINEL_M, &strerror(errno))
 }
+

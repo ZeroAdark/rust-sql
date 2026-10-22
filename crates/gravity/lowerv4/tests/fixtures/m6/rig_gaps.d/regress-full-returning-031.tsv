@@ -1,0 +1,1 @@
+RETURNING over a view: the arena proto reads the row type through syscache_seams::lookup_pg_type_typcache_shape, a seam the rig never installs; the server rig judges it

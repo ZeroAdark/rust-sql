@@ -10,17 +10,20 @@ use crate::{
     loc, report, try_with_pm, with_pm, PMState, LOCK_FILE_LINE_LISTEN_ADDR, LOCK_FILE_LINE_PM_STATUS,
     LOCK_FILE_LINE_SOCKET_DIR, MAXLISTEN, PM_STATUS_STARTING,
 };
+use elog::PCT_M;
 
 const PROGNAME: &str = "postgres";
 // The startup log banner stays pgrust-first REGARDLESS of
 // pgrust.version_string_style (dl-verstring ruling 2026-08-06): it is
 // human/ops-facing, not parser-facing — the GUC exists for clients that
 // parse SQL version() (adt_misc::introspect has the rationale). Both
-// version numbers come from guc_tables::consts, the single source of truth.
+// version numbers and the build id come from guc_tables::consts, the single
+// source of truth: "pgrust 0.4-beta, build 1a2b3c4 (PostgreSQL 18.6
+// compatible)", the same pgrust identity version() carries.
 static PG_VERSION_STR: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
-        "pgrust {} (PostgreSQL {} compatible)",
-        guc_tables::consts::PGRUST_VERSION,
+        "{} (PostgreSQL {} compatible)",
+        guc_tables::consts::pgrust_identity(),
         guc_tables::consts::PG_COMPAT_VERSION,
     )
 });
@@ -98,17 +101,29 @@ pub(crate) fn getopt_tokens_partial(
     args: &[String],
 ) -> (Vec<(char, Option<String>)>, Option<GetoptError>) {
     let takes_arg = |c: char| -> Option<bool> {
+        if c == ':' {
+            return None;
+        }
         let i = POSTMASTER_OPTSTRING.find(c)?;
         Some(POSTMASTER_OPTSTRING[i + 1..].starts_with(':'))
     };
     let mut tokens = Vec::new();
+    // glibc getopt permutes argv: every option is processed and the first
+    // non-option is left for postmaster.c's optind < argc check.
+    let mut first_nonopt: Option<String> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         if arg == "--" {
-            let err = it.next().map(|rest| GetoptError::NonOption(rest.clone()));
+            let err = first_nonopt
+                .or_else(|| it.next().cloned())
+                .map(GetoptError::NonOption);
             return (tokens, err);
         }
         let Some(rest) = arg.strip_prefix('-').filter(|r| !r.is_empty()) else {
+            if GETOPT_PERMUTES {
+                first_nonopt.get_or_insert_with(|| arg.clone());
+                continue;
+            }
             return (tokens, Some(GetoptError::NonOption(arg.clone())));
         };
         let mut chars = rest.char_indices();
@@ -131,8 +146,10 @@ pub(crate) fn getopt_tokens_partial(
             }
         }
     }
-    (tokens, None)
+    (tokens, first_nonopt.map(GetoptError::NonOption))
 }
+
+const GETOPT_PERMUTES: bool = cfg!(target_os = "linux");
 
 /// atoi(3): optional C-locale whitespace and sign, then the longest digit
 /// prefix; anything else yields 0. Saturates instead of overflowing.
@@ -227,87 +244,19 @@ fn set_config_argv(name: &str, value: &str) -> PgResult<()> {
     guc::SetConfigOption(name, Some(value), GucContext::PGC_POSTMASTER, GucSource::PGC_S_ARGV)
 }
 
-/// `postgres --check` (main.c:206 -> BootstrapModeMain(check_only=true)):
-/// the probe initdb's test_config_settings runs for every candidate
-/// `max_connections` / `shared_buffers` pair, keeping the largest pair whose
-/// probe exits 0. C parses bootstrap's option set ("B:c:d:D:Fkr:X:-:"), sets
-/// each GUC at PGC_POSTMASTER / PGC_S_ARGV (a bad value is a hard error),
-/// checks the data directory, sizes shared memory and exits 0. Refusing the
-/// probe outright (the v0.3-beta behaviour) made initdb pointed at pgrust
-/// fall back to its minimum trial — shared_buffers = 400kB, max_connections
-/// = 20 — so every cluster initialized that way ran on 50 shared buffers and
-/// the regression suite died with "no unpinned buffers available".
-/// Shared memory is not a constraint here (buffers live on the heap), so a
-/// successful parse + data directory is the whole check.
-/// The one PGDATA read (determinism lint: raw env sites are a ratchet budget
-/// per file; both the postmaster and the --check probe go through here).
-fn pgdata_from_env() -> Option<String> {
-    std::env::var("PGDATA").ok()
-}
-
-pub fn CheckMain(argv: &[String]) -> PgResult<()> {
-    guc_seams::initialize_guc_options::call()?;
-    let mut datadir: Option<String> = None;
-    let mut args = argv.iter().skip(2).peekable();
-    let mut fail = |msg: String| -> ! {
-        write_stderr(format!("{PROGNAME}: {msg}\n"));
-        std::process::exit(1)
-    };
-    while let Some(arg) = args.next() {
-        let Some(rest) = arg.strip_prefix('-') else {
-            fail(format!("invalid argument: \"{arg}\""));
-        };
-        let (opt, inline_val) = if let Some(long) = rest.strip_prefix('-') {
-            ('-', Some(long.to_string()))
-        } else {
-            let mut cs = rest.chars();
-            let o = cs.next().unwrap_or('\0');
-            let tail: String = cs.collect();
-            (o, if tail.is_empty() { None } else { Some(tail) })
-        };
-        let mut val = || -> String {
-            inline_val.clone().or_else(|| args.next().cloned()).unwrap_or_else(|| {
-                fail(format!("option requires an argument -- {opt}"))
-            })
-        };
-        match opt {
-            'B' => set_config_argv("shared_buffers", &val())?,
-            'c' | '-' => {
-                let optarg = val();
-                let (name, value) = parse_long_option(&optarg);
-                let Some(value) = value else {
-                    fail(if opt == '-' {
-                        format!("--{optarg} requires a value")
-                    } else {
-                        format!("-c {optarg} requires a value")
-                    });
-                };
-                set_config_argv(&name, &value)?;
-            }
-            'D' => datadir = Some(val()),
-            'd' | 'r' | 'X' => {
-                let _ = val();
-            }
-            'F' => set_config_argv("fsync", "false")?,
-            'k' => {}
-            _ => fail(format!("invalid argument: \"{arg}\"")),
-        }
-    }
-    let datadir = datadir.or_else(pgdata_from_env).unwrap_or_else(|| {
-        fail("no data directory specified".to_string())
-    });
-    if !std::path::Path::new(&datadir).is_dir() {
-        fail(format!("data directory \"{datadir}\" does not exist"));
-    }
-    std::process::exit(0)
-}
-
 /// postmaster.c:599 getopt(3) with opterr set: libc's own diagnostic names
-/// argv[0] verbatim (macOS libc wording), then the common help hint with
+/// argv[0] verbatim (glibc or macOS libc wording), then the common help hint with
 /// progname; a stray non-option argument is postmaster.c:754-758.
 pub(crate) fn getopt_failure_message(argv0: &str, progname: &str, err: &GetoptError) -> String {
     let help = format!("Try \"{progname} --help\" for more information.\n");
     match err {
+        // glibc quotes the option letter; BSD/macOS libc does not.
+        GetoptError::RequiresArgument(opt) if GETOPT_PERMUTES => {
+            format!("{argv0}: option requires an argument -- '{opt}'\n{help}")
+        }
+        GetoptError::UnknownOption(opt) if GETOPT_PERMUTES => {
+            format!("{argv0}: invalid option -- '{opt}'\n{help}")
+        }
         GetoptError::RequiresArgument(opt) => {
             format!("{argv0}: option requires an argument -- {opt}\n{help}")
         }
@@ -324,6 +273,13 @@ pub(crate) fn environment_dump() -> String {
         si.push_str(&format!("\n{}={}", k.to_string_lossy(), v.to_string_lossy()));
     }
     si
+}
+
+/// The one PGDATA read (determinism lint: raw env sites are a ratchet budget
+/// per file).
+#[cfg(pgrust_sim)]
+fn pgdata_from_env() -> Option<String> {
+    std::env::var("PGDATA").ok()
 }
 
 pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
@@ -508,7 +464,12 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
         }
     }
 
-    if !guc_seams::select_config_files::call(user_d_option.as_deref(), progname)? {
+    let restart_config = crate::supervisor::take_restart_config();
+    let restored = match &restart_config {
+        Some((_, image)) => restore_settings(image)?,
+        None => false,
+    };
+    if !restored && !guc_seams::select_config_files::call(user_d_option.as_deref(), progname)? {
         ExitPostmaster(2);
     }
 
@@ -529,7 +490,7 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
         let flags = guc::GetConfigOptionFlags(name, true)?;
         if flags & types_guc::GUC_RUNTIME_COMPUTED == 0 {
             let config_val = guc::GetConfigOption(name, false, false)?;
-            println!("{}", config_val.as_deref().unwrap_or(""));
+            put_config_value(config_val.as_deref().unwrap_or(""));
             ExitPostmaster(0);
         }
         // A runtime-computed GUC will be printed later on; silence any LOG
@@ -574,6 +535,11 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
             .finish(loc(857, "PostmasterMain"));
     }
 
+    // D3793: an explicit part cache setting larger than what the memory limit leaves is FATAL, with the settings' other
+    // checks and before the data directory's lock (the limit is read and published now, before any backend)
+    let (limit, limit_source) = memruntime::limit_at_start();
+    launch_backend::rtpool::gravity_memory_check_at_start(limit, limit_source)?;
+
     // CheckDateTokenTables: a static-order assertion over datetime.c tables;
     // that unit (and its tables) is unported — nothing to check yet.
 
@@ -595,8 +561,15 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
         janitor_seams::janitor_register::call()?;
     }
 
+    // pgrust-only: the instance aux sizes its auxiliary slot and binds its
+    // control listeners here, before MaxBackends and shared memory.
+    instaux::postmaster_start()?;
+
     miscinit_seams::process_shared_preload_libraries::call()?;
     miscinit_seams::process_preload_contrib::call()?;
+    // gravity: the columnar catalog pre-warm's static worker (docs/gravity/hosts.md)
+    launch_backend::rtpool::gravity_prewarm_register()?;
+    pgrc_maint::register()?;
 
     if guc_tables::vars::EnableSSL.read() {
         be_secure::secure_initialize(true)?;
@@ -631,7 +604,7 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     // the runtime-computed value is meaningful now (and not yet shared).
     if let Some(name) = output_config_variable.as_deref() {
         let config_val = guc::GetConfigOption(name, false, false)?;
-        println!("{}", config_val.as_deref().unwrap_or(""));
+        put_config_value(config_val.as_deref().unwrap_or(""));
         ExitPostmaster(0);
     }
 
@@ -654,20 +627,30 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     xlogrecovery_seams::remove_promote_signal_files::call();
     syslogger_seams::remove_logrotate_signal_files::call();
 
-    match std::fs::remove_file(LOG_METAINFO_DATAFILE) {
+    let crash_restart = crate::supervisor::is_crash_restart();
+    let metainfo = if crash_restart { Ok(()) } else { std::fs::remove_file(LOG_METAINFO_DATAFILE) };
+    match metainfo {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
             let _ = elog::ereport(LOG)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove file \"{LOG_METAINFO_DATAFILE}\": %m"))
+                .errmsg(format!("could not remove file \"{LOG_METAINFO_DATAFILE}\": {PCT_M}"))
                 .finish(loc(1068, "PostmasterMain"));
         }
     }
 
     if guc_tables::vars::Logging_collector.read() {
+        syslogger::set_resume_current_files(crash_restart);
         StartSysLogger();
+    }
+    for l in crate::supervisor::take_crash_report() {
+        let mut b = elog::ereport(LOG).errmsg(l.message);
+        if let Some(d) = l.detail {
+            b = b.errdetail(d);
+        }
+        let _ = b.finish(loc(l.line, l.func));
     }
 
     // If we are in fact disabling logging to stderr, first emit a log
@@ -685,9 +668,12 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
 
     elog::config::set_where_to_send_output(types_dest_none());
 
-    report(LOG, format!("starting {}", *PG_VERSION_STR), 1105, "PostmasterMain");
+    // A crash-restarted generation continues C's postmaster: no new banner.
+    if !crate::supervisor::is_crash_restart() {
+        report(LOG, format!("starting {}", *PG_VERSION_STR), 1105, "PostmasterMain");
+    }
 
-    // pgrust extension (regression witness): the regexp engine tiers
+    // pgrust extension (GL-STRDEFECTS-1 witness): the regexp engine tiers
     // are a build property (RE2 links only where libre2 existed at build) —
     // name them once at startup so a Spencer-only binary can never run
     // silently. pg_settings twin: pgrust.regex_re2_linked.
@@ -713,7 +699,25 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
 
     ipc_seams::on_proc_exit::call(close_server_ports_cb, 0);
 
-    let listen_addresses = guc_tables::vars::ListenAddresses.read();
+    // A crash-restarted generation listens on the first generation's
+    // sockets and records its postmaster.pid lines: C's postmaster never
+    // reopens them after a crash, whatever the config file now says.
+    let (mut listen_line, mut socket_dir_line) = (String::new(), String::new());
+    if crash_restart {
+        if pqcomm_seams::adopt_inherited_listen_sockets::is_installed() {
+            (listen_line, socket_dir_line) = with_pm(|pm| {
+                pqcomm_seams::adopt_inherited_listen_sockets::call(&mut pm.listen_sockets)
+            })?;
+        }
+        if !socket_dir_line.is_empty() {
+            miscinit::AddToDataDirLockFile(LOCK_FILE_LINE_SOCKET_DIR, &socket_dir_line)?;
+        }
+        miscinit::AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, &listen_line)?;
+        listen_addr_saved = true;
+    }
+
+    let listen_addresses =
+        if crash_restart { None } else { guc_tables::vars::ListenAddresses.read() };
     if let Some(listen_addresses) = listen_addresses.filter(|s| !s.is_empty()) {
         let mut success = 0;
         // SplitGUCList(rawstring, ',', &elemlist) (postmaster.c:1125): empty
@@ -744,6 +748,7 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
                     success += 1;
                     if !listen_addr_saved {
                         miscinit::AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, curhost)?;
+                        listen_line.clone_from(curhost);
                         listen_addr_saved = true;
                     }
                 }
@@ -761,7 +766,8 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
         }
     }
 
-    let unix_dirs = guc_tables::vars::Unix_socket_directories.read();
+    let unix_dirs =
+        if crash_restart { None } else { guc_tables::vars::Unix_socket_directories.read() };
     if let Some(unix_dirs) = unix_dirs.filter(|s| !s.is_empty()) {
         let mut success = 0;
         // SplitDirectoriesString(rawstring, ',', &elemlist)
@@ -791,6 +797,7 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
                     success += 1;
                     if success == 1 {
                         miscinit::AddToDataDirLockFile(LOCK_FILE_LINE_SOCKET_DIR, socketdir)?;
+                        socket_dir_line.clone_from(socketdir);
                     }
                 }
                 Err(_) => {
@@ -819,12 +826,27 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
         miscinit::AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, "")?;
     }
 
+    #[cfg(not(any(target_family = "wasm", pgrust_sim)))]
+    {
+        let fds = with_pm(|pm| {
+            let mut fds = [-1i32; MAXLISTEN];
+            let n = pm.listen_sockets.len().min(MAXLISTEN);
+            fds[..n].copy_from_slice(&pm.listen_sockets[..n]);
+            (fds, n)
+        });
+        crate::supervisor::hand_off_listen_sockets(
+            &fds.0[..fds.1],
+            &[init_small::globals::DataDir().unwrap_or(""), &listen_line, &socket_dir_line],
+        );
+    }
+
     if !CreateOptsFile(argv) {
         ExitPostmaster(1);
     }
 
-    if let Some(pidfile) = guc_tables::vars::external_pid_file.read().filter(|s| !s.is_empty()) {
-        match std::fs::write(&pidfile, format!("{}\n", init_small::globals::MyProcPid())) {
+    if let Some(pidfile) = guc_tables::vars::external_pid_file.read() {
+        match std::fs::write(&pidfile, format!("{}
+", init_small::globals::launched_pid())) {
             Ok(()) => {
                 // wasm32: no unix mode bits on WASI; the chmod is a no-op
                 // (Ok(()) keeps the C control flow: only failures report).
@@ -851,7 +873,10 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
         ipc_seams::on_proc_exit::call(unlink_external_pid_file_cb, 0);
     }
 
-    fd::RemovePgTempFiles()?;
+    // After a crash C removes them only under remove_temp_files_after_crash.
+    if !crash_restart || guc_tables::vars::remove_temp_files_after_crash.read() {
+        fd::RemovePgTempFiles()?;
+    }
 
     autovacuum_seams::autovac_init::call();
 
@@ -869,7 +894,12 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     // pthread_is_threaded_np check: inverted by design — this postmaster IS
     // multithreaded (thread-model children).
 
-    set_pg_start_time(timestamp_seams::get_current_timestamp::call());
+    let start_time = match restart_config {
+        Some((t, _)) if restored => t,
+        _ => timestamp_seams::get_current_timestamp::call(),
+    };
+    set_pg_start_time(start_time);
+    crate::supervisor::publish_config(start_time);
 
     miscinit::AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STARTING)?;
 
@@ -886,6 +916,11 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     pg_locale::freeze_global_locale();
 
     UpdatePMState(PMState::PM_STARTUP);
+    if crash_restart {
+        // postmaster.c keeps FatalError set from the crash until WAL redo
+        // starts: connections meanwhile get "in recovery mode".
+        with_pm(|pm| pm.fatal_error = true);
+    }
 
     crate::serverloop::maybe_adjust_io_workers();
 
@@ -908,6 +943,20 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     let status = crate::serverloop::ServerLoop()?;
 
     ExitPostmaster(if status == types_core::STATUS_OK { 0 } else { 1 });
+}
+
+/// The previous generation's settings, which a crash restart keeps (C's
+/// postmaster never rereads its files for one). Ok(false) leaves the caller
+/// to read the files: no usable image, or no data_directory in it.
+fn restore_settings(image: &[u8]) -> PgResult<bool> {
+    if !guc::store::read_postmaster_gucs(image)? {
+        return Ok(false);
+    }
+    match guc::store::get_string("data_directory").flatten() {
+        Some(dd) => miscinit::SetDataDir(&dd)?,
+        None => return Ok(false),
+    }
+    Ok(true)
 }
 
 fn types_dest_none() -> types_dest::CommandDest {
@@ -939,7 +988,7 @@ pub(crate) fn close_server_ports_cb(_code: i32, _arg: usize) {
             if unsafe { libc::close(fd) } != 0 {
                 let _ = elog::ereport(LOG)
                     .with_saved_errno(elog::errno::current_errno())
-                    .errmsg("could not close listen socket: %m")
+                    .errmsg(format!("could not close listen socket: {PCT_M}"))
                     .finish(loc(1431, "CloseServerPorts"));
             }
         }
@@ -991,7 +1040,7 @@ fn CreateOptsFile(argv: &[String]) -> bool {
         let _ = elog::ereport(LOG)
             .with_saved_errno(vfs::get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{OPTS_FILE}\": %m"))
+            .errmsg(format!("could not create file \"{OPTS_FILE}\": {PCT_M}"))
             .finish(loc(4072, "CreateOptsFile"));
         return false;
     }
@@ -1024,7 +1073,7 @@ fn CreateOptsFile(argv: &[String]) -> bool {
         let _ = elog::ereport(LOG)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not write file \"{OPTS_FILE}\": %m"))
+            .errmsg(format!("could not write file \"{OPTS_FILE}\": {PCT_M}"))
             .finish(loc(4085, "CreateOptsFile"));
         return false;
     }
@@ -1042,4 +1091,12 @@ pub(crate) fn external_pid_file_failure(
         "{progname}: {what} external PID file \"{pidfile}\": {}\n",
         elog::errno::strerror(e.raw_os_error().unwrap_or(0))
     )
+}
+
+// postmaster.c:814/993 puts(): write failures (EPIPE, ENOSPC) are ignored.
+fn put_config_value(val: &str) {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{val}");
+    let _ = out.flush();
 }

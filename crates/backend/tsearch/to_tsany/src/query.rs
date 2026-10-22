@@ -9,7 +9,7 @@ use crate::{OP_AND, OP_OR};
 // parser state (order matches C: operands before their operator).
 pub enum QPush<'mcx> {
     Value {
-        word: PgVec<'mcx, u8>,
+        word: &'mcx [u8],
         weight: i16,
         prefix: bool,
     },

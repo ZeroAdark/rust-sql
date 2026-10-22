@@ -1,9 +1,10 @@
-use ::elog::ereport;
+use ::elog::{ereport, PCT_M};
 use ::types_error::{PgResult, ERROR, WARNING};
 
-use crate::desc::{CloseTransientFile, OpenTransientFile, TransientFileRawFd};
-use crate::sync::{fsync_fname, pg_flush_data};
-use crate::vfd::{cpath, get_errno, loc, set_errno, MakePGDirectory};
+use crate::desc::{CloseTransientFile, OpenTransientFilePath, TransientFileRawFd};
+use crate::sync::{fsync_fname_path, pg_flush_data};
+use crate::vfd::{cpath, get_errno, loc, set_errno, MakePGDirectoryPath};
+use vfs::PgPath;
 #[cfg(all(not(pgrust_sim), target_os = "linux"))]
 use crate::wait_event::WAIT_EVENT_COPY_FILE_COPY;
 use crate::wait_event::{WAIT_EVENT_COPY_FILE_READ, WAIT_EVENT_COPY_FILE_WRITE};
@@ -21,10 +22,10 @@ const FLUSH_DISTANCE: i64 = 32 * 1024 * 1024;
 #[cfg(not(target_os = "macos"))]
 const FLUSH_DISTANCE: i64 = 1024 * 1024;
 
-fn entry_names(dir: &str) -> PgResult<Vec<String>> {
+fn entry_names(dir: &PgPath) -> PgResult<Vec<PgPath>> {
     let mut names = Vec::new();
-    crate::desc::with_allocated_dir(dir, &mut |name| {
-        if name != "." && name != ".." {
+    crate::desc::with_allocated_dir_path(dir, &mut |name| {
+        if name.as_bytes() != b"." && name.as_bytes() != b".." {
             names.push(name.to_owned());
         }
         Ok(false)
@@ -33,39 +34,39 @@ fn entry_names(dir: &str) -> PgResult<Vec<String>> {
 }
 
 pub fn copydir(fromdir: &str, todir: &str, recurse: bool) -> PgResult<()> {
-    if MakePGDirectory(todir) != 0 {
+    copydir_path(&PgPath::from(fromdir), &PgPath::from(todir), recurse)
+}
+
+fn copydir_path(fromdir: &PgPath, todir: &PgPath, recurse: bool) -> PgResult<()> {
+    if MakePGDirectoryPath(todir) != 0 {
         return Err(ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not create directory \"{todir}\": %m"))
+            .errmsg(format!("could not create directory \"{todir}\": {PCT_M}"))
             .finish(loc("copydir"))
             .unwrap_err());
     }
 
     for name in entry_names(fromdir)? {
         postgres_seams::check_for_interrupts::call()?;
-        let fromfile = format!("{fromdir}/{name}");
-        let tofile = format!("{todir}/{name}");
+        let fromfile = fromdir.join(name.as_bytes());
+        let tofile = todir.join(name.as_bytes());
         // get_dirent_type(look_through_symlinks=false): lstat.
         let mut md = vfs::FileInfo::zeroed();
-        if vfs::lstat(&cpath(&fromfile), &mut md) != 0 {
+        if vfs::lstat(&fromfile.to_c_string(), &mut md) != 0 {
             return Err(ereport(ERROR)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not stat file \"{fromfile}\": %m"))
+                .errmsg(format!("could not stat file \"{fromfile}\": {PCT_M}"))
                 .finish(loc("copydir"))
                 .unwrap_err());
         }
         if md.is_dir() {
             if recurse {
-                copydir(&fromfile, &tofile, true)?;
+                copydir_path(&fromfile, &tofile, true)?;
             }
         } else if md.is_file() {
-            if crate::vfd::file_copy_method() == FILE_COPY_METHOD_CLONE {
-                clone_file(&fromfile, &tofile)?;
-            } else {
-                copy_file(&fromfile, &tofile)?;
-            }
+            copy_file_by_method_path(&fromfile, &tofile)?;
         }
     }
 
@@ -75,48 +76,65 @@ pub fn copydir(fromdir: &str, todir: &str, recurse: bool) -> PgResult<()> {
 
     // Be paranoid here and fsync all files to ensure the copy is really done.
     for name in entry_names(todir)? {
-        let tofile = format!("{todir}/{name}");
+        let tofile = todir.join(name.as_bytes());
         let mut md = vfs::FileInfo::zeroed();
-        if vfs::lstat(&cpath(&tofile), &mut md) != 0 {
+        if vfs::lstat(&tofile.to_c_string(), &mut md) != 0 {
             return Err(ereport(ERROR)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not stat file \"{tofile}\": %m"))
+                .errmsg(format!("could not stat file \"{tofile}\": {PCT_M}"))
                 .finish(loc("copydir"))
                 .unwrap_err());
         }
         if md.is_file() {
-            fsync_fname(&tofile, false)?;
+            fsync_fname_path(&tofile, false)?;
         }
     }
 
     // It's important to fsync the destination directory itself as individual
     // file fsyncs don't guarantee that the directory entry for the file is
     // synced.
-    fsync_fname(todir, true)?;
+    fsync_fname_path(todir, true)?;
     Ok(())
 }
 
+/// Copy one file the way copydir does, honoring file_copy_method.
+pub fn copy_file_by_method(fromfile: &str, tofile: &str) -> PgResult<()> {
+    copy_file_by_method_path(&PgPath::from(fromfile), &PgPath::from(tofile))
+}
+
+fn copy_file_by_method_path(fromfile: &PgPath, tofile: &PgPath) -> PgResult<()> {
+    if crate::vfd::file_copy_method() == FILE_COPY_METHOD_CLONE {
+        clone_file(fromfile, tofile)
+    } else {
+        copy_file_path(fromfile, tofile)
+    }
+}
+
 pub fn copy_file(fromfile: &str, tofile: &str) -> PgResult<()> {
+    copy_file_path(&PgPath::from(fromfile), &PgPath::from(tofile))
+}
+
+fn copy_file_path(fromfile: &PgPath, tofile: &PgPath) -> PgResult<()> {
     let mut buffer = vec![0u8; COPY_BUF_SIZE];
 
-    let srcfd = OpenTransientFile(fromfile, libc::O_RDONLY)?;
+    let srcfd = OpenTransientFilePath(fromfile, libc::O_RDONLY)?;
     if srcfd < 0 {
         return Err(ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{fromfile}\": %m"))
+            .errmsg(format!("could not open file \"{fromfile}\": {PCT_M}"))
             .finish(loc("copy_file"))
             .unwrap_err());
     }
-    let dstfd = OpenTransientFile(tofile, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL)?;
+    let dstfd = OpenTransientFilePath(tofile, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL)?;
     if dstfd < 0 {
         let en = get_errno();
         let _ = CloseTransientFile(srcfd);
         return Err(ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{tofile}\": %m"))
+            .errmsg(format!("could not create file \"{tofile}\": {PCT_M}"))
             .finish(loc("copy_file"))
             .unwrap_err());
     }
@@ -144,7 +162,7 @@ pub fn copy_file(fromfile: &str, tofile: &str) -> PgResult<()> {
             return Err(ereport(ERROR)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not read file \"{fromfile}\": %m"))
+                .errmsg(format!("could not read file \"{fromfile}\": {PCT_M}"))
                 .finish(loc("copy_file"))
                 .unwrap_err());
         }
@@ -160,7 +178,7 @@ pub fn copy_file(fromfile: &str, tofile: &str) -> PgResult<()> {
             return Err(ereport(ERROR)
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not write to file \"{tofile}\": %m"))
+                .errmsg(format!("could not write to file \"{tofile}\": {PCT_M}"))
                 .finish(loc("copy_file"))
                 .unwrap_err());
         }
@@ -176,7 +194,7 @@ pub fn copy_file(fromfile: &str, tofile: &str) -> PgResult<()> {
         return Err(ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{tofile}\": %m"))
+            .errmsg(format!("could not close file \"{tofile}\": {PCT_M}"))
             .finish(loc("copy_file"))
             .unwrap_err());
     }
@@ -184,7 +202,7 @@ pub fn copy_file(fromfile: &str, tofile: &str) -> PgResult<()> {
         return Err(ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{fromfile}\": %m"))
+            .errmsg(format!("could not close file \"{fromfile}\": {PCT_M}"))
             .finish(loc("copy_file"))
             .unwrap_err());
     }
@@ -196,7 +214,7 @@ pub fn copy_file(fromfile: &str, tofile: &str) -> PgResult<()> {
 // file_copy_method's GUC options under pgrust_sim (guc_tables) — no accepted
 // setting reaches here.
 #[cfg(pgrust_sim)]
-fn clone_file(_fromfile: &str, _tofile: &str) -> PgResult<()> {
+fn clone_file(_fromfile: &PgPath, _tofile: &PgPath) -> PgResult<()> {
     panic!("clone_file unreachable: file_copy_method=clone is not an accepted setting under pgrust_sim");
 }
 
@@ -205,9 +223,9 @@ fn clone_file(_fromfile: &str, _tofile: &str) -> PgResult<()> {
 // any other non-sim target is a compile error here where C's #else arm is
 // pg_unreachable().
 #[cfg(all(not(pgrust_sim), target_os = "macos"))]
-fn clone_file(fromfile: &str, tofile: &str) -> PgResult<()> {
-    let from = cpath(fromfile);
-    let to = cpath(tofile);
+fn clone_file(fromfile: &PgPath, tofile: &PgPath) -> PgResult<()> {
+    let from = fromfile.to_c_string();
+    let to = tofile.to_c_string();
     // SAFETY: copyfile(3) on two NUL-terminated paths; NULL clone state.
     let rc = unsafe {
         libc::copyfile(
@@ -222,7 +240,7 @@ fn clone_file(fromfile: &str, tofile: &str) -> PgResult<()> {
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not clone file \"{fromfile}\" to \"{tofile}\": %m"
+                "could not clone file \"{fromfile}\" to \"{tofile}\": {PCT_M}"
             ))
             .finish(loc("clone_file"))
             .unwrap_err());
@@ -233,7 +251,7 @@ fn clone_file(fromfile: &str, tofile: &str) -> PgResult<()> {
 // clone_file (copydir.c), the `#else` arm (neither HAVE_COPYFILE nor
 // HAVE_COPY_FILE_RANGE — e.g. wasm32-wasip1): ereport(ERROR).
 #[cfg(all(not(pgrust_sim), not(any(target_os = "macos", target_os = "linux"))))]
-fn clone_file(_fromfile: &str, _tofile: &str) -> PgResult<()> {
+fn clone_file(_fromfile: &PgPath, _tofile: &PgPath) -> PgResult<()> {
     Err(ereport(ERROR)
         .errcode(::types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
         .errmsg("file cloning not supported on this platform")
@@ -243,24 +261,24 @@ fn clone_file(_fromfile: &str, _tofile: &str) -> PgResult<()> {
 
 // clone_file (copydir.c), HAVE_COPY_FILE_RANGE arm.
 #[cfg(all(not(pgrust_sim), target_os = "linux"))]
-fn clone_file(fromfile: &str, tofile: &str) -> PgResult<()> {
-    let srcfd = OpenTransientFile(fromfile, libc::O_RDONLY)?;
+fn clone_file(fromfile: &PgPath, tofile: &PgPath) -> PgResult<()> {
+    let srcfd = OpenTransientFilePath(fromfile, libc::O_RDONLY)?;
     if srcfd < 0 {
         return Err(ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not open file \"{fromfile}\": %m"))
+            .errmsg(format!("could not open file \"{fromfile}\": {PCT_M}"))
             .finish(loc("clone_file"))
             .unwrap_err());
     }
-    let dstfd = OpenTransientFile(tofile, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
+    let dstfd = OpenTransientFilePath(tofile, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
     if dstfd < 0 {
         let en = get_errno();
         let _ = CloseTransientFile(srcfd);
         return Err(ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not create file \"{tofile}\": %m"))
+            .errmsg(format!("could not create file \"{tofile}\": {PCT_M}"))
             .finish(loc("clone_file"))
             .unwrap_err());
     }
@@ -290,7 +308,7 @@ fn clone_file(fromfile: &str, tofile: &str) -> PgResult<()> {
                 .with_saved_errno(get_errno())
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "could not clone file \"{fromfile}\" to \"{tofile}\": %m"
+                    "could not clone file \"{fromfile}\" to \"{tofile}\": {PCT_M}"
                 ))
                 .finish(loc("clone_file"))
                 .unwrap_err());
@@ -305,7 +323,7 @@ fn clone_file(fromfile: &str, tofile: &str) -> PgResult<()> {
         return Err(ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{tofile}\": %m"))
+            .errmsg(format!("could not close file \"{tofile}\": {PCT_M}"))
             .finish(loc("clone_file"))
             .unwrap_err());
     }
@@ -313,7 +331,7 @@ fn clone_file(fromfile: &str, tofile: &str) -> PgResult<()> {
         return Err(ereport(ERROR)
             .with_saved_errno(get_errno())
             .errcode_for_file_access()
-            .errmsg(format!("could not close file \"{fromfile}\": %m"))
+            .errmsg(format!("could not close file \"{fromfile}\": {PCT_M}"))
             .finish(loc("clone_file"))
             .unwrap_err());
     }
@@ -327,7 +345,7 @@ pub fn rmtree(path: &str, rmtopdir: bool) -> PgResult<bool> {
     let Some(index) = dir else {
         ereport(WARNING)
             .with_saved_errno(get_errno())
-            .errmsg(format!("could not open directory \"{path}\": %m"))
+            .errmsg(format!("could not open directory \"{path}\": {PCT_M}"))
             .finish(loc("rmtree"))?;
         return Ok(false);
     };
@@ -339,12 +357,13 @@ pub fn rmtree(path: &str, rmtopdir: bool) -> PgResult<bool> {
             Some(Err(en)) => {
                 ereport(WARNING)
                     .with_saved_errno(en)
-                    .errmsg(format!("could not read directory \"{path}\": %m"))
+                    .errmsg(format!("could not read directory \"{path}\": {PCT_M}"))
                     .finish(loc("rmtree"))?;
                 result = false;
                 break;
             }
-            Some(Ok(name)) => name,
+            // rmtree keeps its historical lossy String view of the name.
+            Some(Ok(name)) => name.to_string_lossy(),
         };
         if name == "." || name == ".." {
             continue;
@@ -356,7 +375,7 @@ pub fn rmtree(path: &str, rmtopdir: bool) -> PgResult<bool> {
             // PGFILETYPE_ERROR arm: log and press on, result stays true.
             ereport(WARNING)
                 .with_saved_errno(get_errno())
-                .errmsg(format!("could not stat file \"{full}\": %m"))
+                .errmsg(format!("could not stat file \"{full}\": {PCT_M}"))
                 .finish(loc("rmtree"))?;
             continue;
         }
@@ -367,7 +386,7 @@ pub fn rmtree(path: &str, rmtopdir: bool) -> PgResult<bool> {
             if en != libc::ENOENT {
                 ereport(WARNING)
                     .with_saved_errno(en)
-                    .errmsg(format!("could not remove file \"{full}\": %m"))
+                    .errmsg(format!("could not remove file \"{full}\": {PCT_M}"))
                     .finish(loc("rmtree"))?;
                 result = false;
             }
@@ -383,7 +402,7 @@ pub fn rmtree(path: &str, rmtopdir: bool) -> PgResult<bool> {
         if vfs::rmdir(&cpath(path)) != 0 {
             ereport(WARNING)
                 .with_saved_errno(get_errno())
-                .errmsg(format!("could not remove directory \"{path}\": %m"))
+                .errmsg(format!("could not remove directory \"{path}\": {PCT_M}"))
                 .finish(loc("rmtree"))?;
             result = false;
         }
@@ -452,7 +471,7 @@ pub fn pg_mkdir_p(path: &str) -> PgResult<()> {
         ereport(ERROR)
             .with_saved_errno(en)
             .errcode_for_file_access()
-            .errmsg(format!("could not create directory \"{failed}\": %m"))
+            .errmsg(format!("could not create directory \"{failed}\": {PCT_M}"))
             .finish(loc("pg_mkdir_p"))
             .unwrap_err()
     })

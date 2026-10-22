@@ -1,0 +1,213 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2del s2seq s2show s1c
+step s2x: EXPLAIN (COSTS OFF) DELETE FROM vs_inv WHERE product_id NOT IN (SELECT id FROM vs_prod WHERE nextval('vs_seq') > 0) RETURNING id, product_id, qty;
+QUERY PLAN                                                        
+------------------------------------------------------------------
+Delete on vs_inv                                                  
+  ->  Seq Scan on vs_inv                                          
+        Filter: (NOT (ANY (product_id = (hashed SubPlan 1).col1)))
+        SubPlan 1                                                 
+          ->  Seq Scan on vs_prod                                 
+                Filter: (nextval('vs_seq'::regclass) > 0)         
+(6 rows)
+
+step s2del: DELETE FROM vs_inv WHERE product_id NOT IN (SELECT id FROM vs_prod WHERE nextval('vs_seq') > 0) RETURNING id, product_id, qty;
+id|product_id|qty
+--+----------+---
+21|        21| 21
+22|        22| 22
+23|        23| 23
+24|        24| 24
+25|        25| 25
+26|        26| 26
+27|        27| 27
+28|        28| 28
+29|        29| 29
+30|        30| 30
+(10 rows)
+
+step s2seq: SELECT currval('vs_seq');
+currval
+-------
+     20
+(1 row)
+
+step s2show: SELECT id, product_id, qty FROM vs_inv ORDER BY id;
+id|product_id|qty
+--+----------+---
+15|        15| 15
+16|        16| 16
+17|        17| 17
+18|        18| 18
+19|        19| 19
+20|        20| 20
+(6 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1bump s2del s1c s2seq s2show
+step s1bump: UPDATE vs_inv SET qty = qty + 100 WHERE id IN (22, 25);
+step s2del: DELETE FROM vs_inv WHERE product_id NOT IN (SELECT id FROM vs_prod WHERE nextval('vs_seq') > 0) RETURNING id, product_id, qty; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|product_id|qty
+--+----------+---
+21|        21| 21
+22|        22|122
+23|        23| 23
+24|        24| 24
+25|        25|125
+26|        26| 26
+27|        27| 27
+28|        28| 28
+29|        29| 29
+30|        30| 30
+(10 rows)
+
+step s2seq: SELECT currval('vs_seq');
+currval
+-------
+     40
+(1 row)
+
+step s2show: SELECT id, product_id, qty FROM vs_inv ORDER BY id;
+id|product_id|qty
+--+----------+---
+15|        15| 15
+16|        16| 16
+17|        17| 17
+18|        18| 18
+19|        19| 19
+20|        20| 20
+(6 rows)
+
+
+starting permutation: s1in s2del s1c s2seq s2show
+step s1in: UPDATE vs_inv SET product_id = 3, qty = qty + 100 WHERE id = 22;
+step s2del: DELETE FROM vs_inv WHERE product_id NOT IN (SELECT id FROM vs_prod WHERE nextval('vs_seq') > 0) RETURNING id, product_id, qty; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|product_id|qty
+--+----------+---
+21|        21| 21
+23|        23| 23
+24|        24| 24
+25|        25| 25
+26|        26| 26
+27|        27| 27
+28|        28| 28
+29|        29| 29
+30|        30| 30
+(9 rows)
+
+step s2seq: SELECT currval('vs_seq');
+currval
+-------
+     40
+(1 row)
+
+step s2show: SELECT id, product_id, qty FROM vs_inv ORDER BY id;
+id|product_id|qty
+--+----------+---
+15|        15| 15
+16|        16| 16
+17|        17| 17
+18|        18| 18
+19|        19| 19
+20|        20| 20
+22|         3|122
+(7 rows)
+
+
+starting permutation: s1del s2upd s1c s2seq s2show
+step s1del: DELETE FROM vs_inv WHERE id = 22;
+step s2upd: UPDATE vs_inv SET qty = -qty WHERE product_id NOT IN (SELECT id FROM vs_prod WHERE nextval('vs_seq') > 0) RETURNING id, qty; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|qty
+--+---
+21|-21
+23|-23
+24|-24
+25|-25
+26|-26
+27|-27
+28|-28
+29|-29
+30|-30
+(9 rows)
+
+step s2seq: SELECT currval('vs_seq');
+currval
+-------
+     20
+(1 row)
+
+step s2show: SELECT id, product_id, qty FROM vs_inv ORDER BY id;
+id|product_id|qty
+--+----------+---
+15|        15| 15
+16|        16| 16
+17|        17| 17
+18|        18| 18
+19|        19| 19
+20|        20| 20
+21|        21|-21
+23|        23|-23
+24|        24|-24
+25|        25|-25
+26|        26|-26
+27|        27|-27
+28|        28|-28
+29|        29|-29
+30|        30|-30
+(15 rows)
+
+
+starting permutation: s1bump s2upd s1c s2seq s2show
+step s1bump: UPDATE vs_inv SET qty = qty + 100 WHERE id IN (22, 25);
+step s2upd: UPDATE vs_inv SET qty = -qty WHERE product_id NOT IN (SELECT id FROM vs_prod WHERE nextval('vs_seq') > 0) RETURNING id, qty; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id| qty
+--+----
+21| -21
+22|-122
+23| -23
+24| -24
+25|-125
+26| -26
+27| -27
+28| -28
+29| -29
+30| -30
+(10 rows)
+
+step s2seq: SELECT currval('vs_seq');
+currval
+-------
+     40
+(1 row)
+
+step s2show: SELECT id, product_id, qty FROM vs_inv ORDER BY id;
+id|product_id| qty
+--+----------+----
+15|        15|  15
+16|        16|  16
+17|        17|  17
+18|        18|  18
+19|        19|  19
+20|        20|  20
+21|        21| -21
+22|        22|-122
+23|        23| -23
+24|        24| -24
+25|        25|-125
+26|        26| -26
+27|        27| -27
+28|        28| -28
+29|        29| -29
+30|        30| -30
+(16 rows)
+

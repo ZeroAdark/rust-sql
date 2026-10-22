@@ -1,0 +1,2 @@
+backend/access/transam/xact/src/engine.rs	RECORD_COMMIT_SCRATCH	pgport	call	scratch	RecordTransactionCommit's scratch memory context, reset after each commit record that charged it (freed at clean task end by the session cleanup it registers); commit runs on the transaction's own thread, never in a claim
+backend/access/transam/xact/src/engine.rs	RECORD_ABORT_SCRATCH	pgport	call	scratch	RecordTransactionAbort's scratch memory context, reset after each abort record; never in a claim

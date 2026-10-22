@@ -58,6 +58,21 @@ pub fn getcvec<'mcx>(
     newcvec(mcx, nchrs, nranges)
 }
 
+// regcomp.c:449: each compile starts v->cv as newcvec(100, 20).
+pub fn reset_transient_cvec() {
+    crate::regex_locale::TRANSIENT_CVEC.with(|c| c.set((100, 20)));
+}
+
+// regc_cvec.c getcvec over v->cv: reused while the request fits, otherwise
+// replaced by one of exactly the requested size. Returns the cvec and the
+// chrspace C's range() checks against.
+pub fn transient_getcvec<'mcx>(mcx: Mcx<'mcx>, nchrs: i32, nranges: i32) -> RegResult<(Cvec, usize)> {
+    let (c, r) = crate::regex_locale::TRANSIENT_CVEC.with(|t| t.get());
+    let cap = if nchrs <= c && nranges <= r { (c, r) } else { (nchrs, nranges) };
+    crate::regex_locale::TRANSIENT_CVEC.with(|t| t.set(cap));
+    Ok((newcvec(mcx, cap.0, cap.1)?, cap.0 as usize))
+}
+
 pub fn freecvec(cv: Cvec) {
     drop(cv);
 }

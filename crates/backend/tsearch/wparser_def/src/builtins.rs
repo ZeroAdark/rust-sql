@@ -177,7 +177,7 @@ fn cstring_rows_to_tuples(
         ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
     }
     let natts = desc.natts as usize;
-    let mut attinmeta = Vec::with_capacity(natts);
+    let mut attinmeta = ::mcx::std_vec_with_capacity("tsearch", natts)?;
     for i in 0..natts {
         let att = desc.attr(i);
         attinmeta.push(if att.attisdropped {
@@ -187,10 +187,10 @@ fn cstring_rows_to_tuples(
             Some((::fmgr_seams::fmgr_info::call(infunc)?, typioparam, att.atttypmod))
         });
     }
-    let mut images = Vec::with_capacity(rows.len());
+    let mut images = ::mcx::std_vec_with_capacity("tsearch", rows.len())?;
     for row in rows {
-        let mut datums = vec![Datum::null(); natts];
-        let mut nulls = vec![false; natts];
+        let mut datums = ::mcx::std_vec_from_elem("tsearch", Datum::null(), natts)?;
+        let mut nulls = ::mcx::std_vec_from_elem("tsearch", false, natts)?;
         for (i, att) in attinmeta.iter_mut().enumerate() {
             match (att, row.get(i)) {
                 (Some((infn, typioparam, typmod)), Some(v)) => {
@@ -337,14 +337,14 @@ fn parser_lex_descrs(mcx: ::mcx::Mcx<'_>, prsid: ::types_core::Oid) -> PgResult<
 pub(crate) fn token_type_rows(fcinfo: &Fcinfo, prsid: ::types_core::Oid) -> PgResult<SrfRows> {
     let mcx = fcinfo.result_mcx();
     let descrs = parser_lex_descrs(mcx, prsid)?;
-    let mut rows = Vec::with_capacity(descrs.len());
+    let mut rows = ::mcx::std_vec_with_capacity("tsearch", descrs.len())?;
     for d in descrs {
         push_cstrings(
             &mut rows,
             vec![
                 format!("{}", d.lexid).into_bytes(),
-                d.alias.as_bytes().to_vec(),
-                d.descr.as_bytes().to_vec(),
+                ::mcx::std_vec_from_slice("tsearch", &d.alias.as_bytes())?,
+                ::mcx::std_vec_from_slice("tsearch", &d.descr.as_bytes())?,
             ],
             mcx,
         )?;
@@ -465,7 +465,7 @@ pub(crate) fn parse_rows(fcinfo: &Fcinfo, prsid: ::types_core::Oid) -> PgResult<
     let mut push_row = |type_: i32, token_bytes: &[u8]| -> PgResult<()> {
         push_cstrings(
             &mut rows,
-            vec![format!("{type_}").into_bytes(), token_bytes.to_vec()],
+            vec![format!("{type_}").into_bytes(), ::mcx::std_vec_from_slice("wparser_def", &token_bytes)?],
             mcx,
         )
     };

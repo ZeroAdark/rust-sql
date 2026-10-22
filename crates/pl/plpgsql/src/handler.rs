@@ -1,7 +1,3 @@
-// pl_handler.c + pl_comp.c's plpgsql_compile / do_compile + pl_exec.c's
-// plpgsql_exec_function/plpgsql_exec_trigger shells. DO blocks and VARIADIC
-// parameters are named louds. The plpgsql.* GUCs are static guc_tables rows
-// backed by the `gucs` cells below (_PG_init's DefineCustom*Variable set).
 use std::collections::HashMap;
 
 type FxHashMap<K, V> = HashMap<K, V, rustc_hash::FxBuildHasher>;
@@ -89,6 +85,108 @@ std::thread_local! {
         core::cell::RefCell::new(FxHashMap::default());
 }
 
+// The cache's epoch on this thread: a value no other thread or earlier state of this cache ever had, taken anew
+// whenever an entry leaves FUNC_CACHE (stale, replaced or drained). A `CompiledMemo` minted under the current epoch
+// names an entry that is still in this thread's cache (D3885).
+static NEXT_CACHE_EPOCH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+std::thread_local! {
+    static FUNC_CACHE_EPOCH: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
+fn cache_epoch() -> u64 {
+    FUNC_CACHE_EPOCH.with(|e| {
+        let v = e.get();
+        if v != 0 {
+            return v;
+        }
+        let v = NEXT_CACHE_EPOCH.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        e.set(v);
+        v
+    })
+}
+
+fn move_cache_epoch() {
+    FUNC_CACHE_EPOCH.with(|e| e.set(NEXT_CACHE_EPOCH.fetch_add(1, core::sync::atomic::Ordering::Relaxed)));
+}
+
+// C cached_function_compile's fn_extra arm (funccache.c:493-537): the function compiled for this call site, kept in
+// its FmgrInfo, so the next call through it skips the hash key (proargtypes, the polymorphic resolution) and the
+// lookup; the per-call pg_proc xmin / tid check stays, as in C (D3885). It holds no reference count, so dropping it
+// on any thread is plain memory: it is used only while `epoch` is this thread's current FUNC_CACHE epoch, which
+// means the entry it names is still in the cache, holding both Rcs.
+struct CompiledMemo {
+    epoch: u64,
+    func: *const PlFunction,
+    use_count: *const core::cell::Cell<u32>,
+    fn_collation: Oid,
+    kind: (bool, Oid, bool),
+}
+
+fn kind_key(kind: CallKind) -> (bool, Oid, bool) {
+    match kind {
+        CallKind::Function => (false, types_core::InvalidOid, false),
+        CallKind::Trigger(oid) => (true, oid, false),
+        CallKind::EventTrigger => (false, types_core::InvalidOid, true),
+    }
+}
+
+// The memo's entry when it is current and its pg_proc row is unchanged (xmin / tid of the syscache tuple, read per
+// call as C does); None sends the call to plpgsql_compile.
+fn memo_entry(flinfo: &FmgrInfo, fn_collation: Oid, kind: CallKind) -> PgResult<Option<FuncCacheEntry>> {
+    let Some(m) = flinfo.fn_extra_ref::<CompiledMemo>() else {
+        return Ok(None);
+    };
+    if m.epoch != cache_epoch() || m.fn_collation != fn_collation || m.kind != kind_key(kind) {
+        return Ok(None);
+    }
+    let (xmin, tid) = proc_stamp(flinfo.fn_oid)?;
+    // SAFETY: the epoch is current, so FUNC_CACHE still holds the entry the memo was minted from: both pointers come
+    // from Rc::as_ptr of Rcs alive there, so the counts are >= 1, and this thread is the one that owns them.
+    let (func, use_count) = unsafe {
+        Rc::increment_strong_count(m.func);
+        Rc::increment_strong_count(m.use_count);
+        (Rc::from_raw(m.func), Rc::from_raw(m.use_count))
+    };
+    if func.fn_xmin != xmin || func.fn_tid != tid {
+        return Ok(None);
+    }
+    Ok(Some(FuncCacheEntry { func, use_count }))
+}
+
+fn set_memo(flinfo: &mut FmgrInfo, entry: &FuncCacheEntry, fn_collation: Oid, kind: CallKind) {
+    let memo = CompiledMemo {
+        epoch: cache_epoch(),
+        func: Rc::as_ptr(&entry.func),
+        use_count: Rc::as_ptr(&entry.use_count),
+        fn_collation,
+        kind: kind_key(kind),
+    };
+    match flinfo.fn_extra_mut::<CompiledMemo>() {
+        Some(m) => *m = memo,
+        None => flinfo.set_fn_extra(memo),
+    }
+}
+
+// The pg_proc row's raw xmin and t_self (funccache.c:538-540's stamp).
+fn proc_stamp(fn_oid: Oid) -> PgResult<(u32, (u32, u16))> {
+    let Some(tup) = SearchSysCache1(PROCOID, SysCacheKey::Value(Datum::from_oid(fn_oid)))? else {
+        // funccache.c:515 elog(ERROR): XX000, not 42883.
+        return Err(crate::exec::exec_err(
+            types_error::ERRCODE_INTERNAL_ERROR,
+            format!("cache lookup failed for function {fn_oid}"),
+        ));
+    };
+    let t = tup.tuple();
+    let stamp = (
+        t.t_data().xmin_raw(),
+        (((t.t_self.ip_blkid.bi_hi as u32) << 16) | t.t_self.ip_blkid.bi_lo as u32, t.t_self.ip_posid),
+    );
+    drop(t);
+    ReleaseSysCache(tup);
+    Ok(stamp)
+}
+
 // Process-death teardown of the compiled-function hash (C: TopMemoryContext
 // dies with the backend; a parallel worker is a fresh process per query).
 // Called from exec.rs release_plpgsql_state_at_exit, BEFORE it frees the
@@ -97,6 +195,7 @@ std::thread_local! {
 // flight — child threads drain the exit chain at the thread top, after the
 // unwind (ipc proc_exit).
 pub(crate) fn release_func_cache_at_exit() {
+    move_cache_epoch();
     let entries: Vec<FuncCacheEntry> =
         FUNC_CACHE.with(|c| c.borrow_mut().drain().map(|(_, e)| e).collect());
     drop(entries);
@@ -115,10 +214,6 @@ pub fn init_seams() {
         plpgsql_inline_handler,
         plpgsql_validator,
     );
-    // plpgsql _PG_init (pl_handler.c:158-203): the custom GUCs are the
-    // static guc_tables rows backed by `gucs`; MarkGUCPrefixReserved runs
-    // here for LOAD / CREATE EXTENSION and in ensure_library_loaded for the
-    // first native handler entry.
     use guc_tables::GucVarAccessors;
     guc_tables::vars::plpgsql_variable_conflict.install(GucVarAccessors {
         get: gucs::variable_conflict,
@@ -155,10 +250,7 @@ pub fn init_seams() {
             "plpgsql_validator" => Some(plpgsql_validator as fmgr::PGFunction),
             _ => None,
         },
-        pg_init: Some(|| {
-            guc::MarkGUCPrefixReserved("plpgsql");
-            Ok(())
-        }),
+        pg_init: Some(ensure_library_loaded),
     });
 }
 
@@ -195,6 +287,7 @@ fn plpgsql_compile(
         if entry.func.fn_xmin == cur_xmin && entry.func.fn_tid == cur_tid {
             return Ok(entry);
         }
+        move_cache_epoch();
         FUNC_CACHE.with(|c| {
             c.borrow_mut().remove(&key);
         });
@@ -223,9 +316,11 @@ fn plpgsql_compile(
     // Validator compiles are cached too (funccache.c cached_function_compile
     // has no validator carve-out): the CREATE-time compile is the one the
     // first call reuses, so compile-time messages fire once, at CREATE.
-    FUNC_CACHE.with(|c| {
-        c.borrow_mut().insert(key, entry.clone());
-    });
+    let replaced = FUNC_CACHE.with(|c| c.borrow_mut().insert(key, entry.clone()));
+    if replaced.is_some() {
+        move_cache_epoch();
+    }
+    drop(replaced);
     Ok(entry)
 }
 
@@ -264,7 +359,7 @@ fn proc_call_stamp(
         }) {
             return Ok(Vec::new());
         }
-        let mut argtypes = args.to_vec();
+        let mut argtypes = ::mcx::std_vec_from_slice("plpgsql", &args)?;
         let (proname_d, _) = SysCacheGetAttr(PROCOID, &tup, ANUM_PG_PROC_PRONAME)?;
         // SAFETY: NameData attr from the live pinned syscache tuple — 64
         // NUL-padded bytes.
@@ -507,8 +602,8 @@ fn do_compile(
     // Outermost level: named after the function; holds params and FOUND.
     comp.ns_push_label(Some(&proc.proname), crate::gram::LABEL_BLOCK);
 
-    let mut fn_argvarnos = Vec::with_capacity(proc.argtypes.len());
-    let mut fn_arg_is_input = Vec::with_capacity(proc.argtypes.len());
+    let mut fn_argvarnos = ::mcx::std_vec_with_capacity("plpgsql", proc.argtypes.len())?;
+    let mut fn_arg_is_input = ::mcx::std_vec_with_capacity("plpgsql", proc.argtypes.len())?;
     // fn_signature is format_procedure(fn_oid) (pl_comp.c:240) — declared
     // pg_proc types, not the resolved instantiation.
     let mut declared_argtypes: Vec<Oid> = Vec::new();
@@ -584,8 +679,8 @@ fn do_compile(
         fn_retistuple = true;
         fn_retisdomain = false;
         fn_rettyplen = 0;
-        // C makes tg_event/tg_tag lazy PROMISE vars; no promise machinery
-        // here — the exec path materializes them eagerly at entry.
+        // C makes tg_event/tg_tag lazy PROMISE vars; the exec path fills
+        // them eagerly at entry and never arms these promises.
         let tg_event_varno = comp.build_variable(
             "tg_event",
             0,
@@ -598,6 +693,11 @@ fn do_compile(
             CompState::build_datatype(TEXTOID, -1, fn_collation, None)?,
             true,
         )?;
+        for (varno, promise) in [(tg_event_varno, PROMISE_TG_EVENT), (tg_tag_varno, PROMISE_TG_TAG)] {
+            if let PlDatum::Var(v) = &mut comp.datums[varno as usize] {
+                v.promise = promise;
+            }
+        }
         fn_is_trigger = FnTrigger::EventTrigger { tg_event_varno, tg_tag_varno };
     } else {
         const PROARGMODE_IN: i8 = b'i' as i8;
@@ -753,17 +853,23 @@ fn do_compile(
         scratch: scan_cx.mcx(),
         last_endtoken_loc: -1,
     };
-    // function_parse_error_transpose runs for every elevel via the
-    // validator's error-context callback (pg_proc.c:1004); warnings emitted
-    // mid-parse (shadowing, scanner escape warnings) transpose here since
-    // they never reach attach_compile_context.
-    let _emit_guard = if for_validator {
+    // plpgsql_compile_error_callback runs for every elevel (pl_comp.c:905):
+    // warnings emitted mid-parse (shadowing, scanner escape warnings,
+    // identifier truncation) transpose onto the CREATE statement at
+    // validation, else carry the compilation context line.
+    let _emit_guard = {
         let cb_prosrc = proc.prosrc.clone();
-        Some(EmitCbGuard(elog::push_emit_context_callback(Box::new(move |e| {
-            pg_proc::function_parse_error_transpose(e, &cb_prosrc);
-        }))))
-    } else {
-        None
+        let cb_name = proc.proname.clone();
+        let cb_line = parser.sc.latest_lineno_cell();
+        EmitCbGuard(elog::push_emit_context_callback(Box::new(move |e| {
+            if for_validator && pg_proc::function_parse_error_transpose(e, &cb_prosrc) {
+                return;
+            }
+            e.add_context_line(format!(
+                "compilation of PL/pgSQL function \"{cb_name}\" near line {}",
+                cb_line.get()
+            ));
+        })))
     };
     let parse_result = parser.parse_function_body();
     let latest_line = parser.sc.latest_lineno();
@@ -790,8 +896,8 @@ fn do_compile(
         let sig_cx = mcx::MemoryContext::new("plpgsql fn_signature");
         adt_regproc::format_procedure(sig_cx.mcx(), fn_oid)?
     };
-    Ok(PlFunction {
-        fn_signature,
+    let mut function = PlFunction {
+        fn_signature: fn_signature.into(),
         fn_oid,
         fn_xmin,
         fn_tid,
@@ -819,7 +925,12 @@ fn do_compile(
         print_strict_params: comp.print_strict_params,
         nstatements: comp.nstatements,
         expr_ids: std::mem::take(&mut comp.expr_ids),
-    })
+    };
+    crate::comp::mark_local_assignment_targets(&mut function)?;
+    if comp.dump_exec_tree {
+        crate::dump::dump_tree(&function)?;
+    }
+    Ok(function)
 }
 
 // add_dummy_return (pl_comp.c): wrap labeled/EXCEPTION outer blocks so the
@@ -845,13 +956,6 @@ fn add_dummy_return(action: &mut PlBlock, out_param_varno: Dno, nstatements: &mu
     }
 }
 
-// pl_handler.c:40-56 + _PG_init (158-203): the five plpgsql.* GUCs are
-// defined statically in guc_tables (this port has no DefineCustomXxxVariable
-// machinery — the auto_explain / pg_stat_statements precedent) and backed by
-// these per-session cells, which init_seams installs as the table rows'
-// accessors together with the extra-checks check hook. C's globals are read
-// directly (plpgsql_print_strict_params, plpgsql_check_asserts,
-// plpgsql_variable_conflict); so are the cells.
 pub(crate) mod gucs {
     guc_tables::session_guc_cluster!(PlGucs, PL_GUCS:
         (variable_conflict_cell, i32, variable_conflict, set_variable_conflict, guc_tables::consts::PLPGSQL_RESOLVE_ERROR),
@@ -988,19 +1092,32 @@ pub(crate) fn extra_checks_level(mask: u32) -> PgResult<Option<types_error::Erro
     Ok(None)
 }
 
-// _PG_init runs when C loads plpgsql.so — at the session's first PL/pgSQL
-// call. The handlers are native here, so the load-time side effect that is
-// observable from SQL, MarkGUCPrefixReserved("plpgsql") (pl_handler.c:203:
-// purge placeholder plpgsql.* settings, refuse new ones), runs at the first
-// handler entry on this backend thread; the dfmgr pg_init above covers LOAD
-// and CREATE EXTENSION. The GUC definitions themselves are static (gucs).
-fn ensure_library_loaded() {
+fn ensure_library_loaded() -> PgResult<()> {
     thread_local! {
         static LOADED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
     }
-    if !LOADED.with(|c| c.replace(true)) {
-        guc::MarkGUCPrefixReserved("plpgsql");
+    // D4682: a reused backend thread's next session has a new GUC registry; the flag goes back with the session
+    fn mark_loaded() {
+        LOADED.with(|c| c.set(true));
+        ::mcx::register_session_cleanup(Box::new(|| {
+            let _ = LOADED.try_with(|c| c.set(false));
+        }));
     }
+    if !LOADED.with(|c| c.get()) {
+        if guc::store::with_store(|reg| {
+            reg.find_option("plpgsql.variable_conflict")
+                .is_some_and(|v| v.gen().flags & types_guc::GUC_CUSTOM_PLACEHOLDER == 0)
+        }).unwrap_or(false) {
+            mark_loaded();
+            return Ok(());
+        }
+        for &setting in crate::settings::SETTINGS {
+            guc::DefineCustomVariable(setting)?;
+        }
+        guc::MarkGUCPrefixReserved("plpgsql");
+        mark_loaded();
+    }
+    Ok(())
 }
 
 struct EmitCbGuard(u64);
@@ -1020,15 +1137,14 @@ fn attach_compile_context(
     prosrc: &str,
 ) -> Box<types_error::PgError> {
     // plpgsql_compile_error_callback: at validation the cursor transposes
-    // onto the CREATE statement (no context line); otherwise a context line.
+    // onto the CREATE statement (no context line); otherwise the context
+    // line is appended to whatever inner callbacks already reported.
     if for_validator && pg_proc::function_parse_error_transpose(&mut e, prosrc) {
         return e;
     }
-    if e.context.is_none() {
-        e.context = Some(format!(
-            "compilation of PL/pgSQL function \"{fname}\" near line {line}"
-        ));
-    }
+    e.add_context_line(format!(
+        "compilation of PL/pgSQL function \"{fname}\" near line {line}"
+    ));
     e
 }
 
@@ -1052,10 +1168,10 @@ fn add_parameter_name(comp: &mut CompState, dno: Dno, name: &str) -> PgResult<()
 
 // plpgsql_call_handler (pl_handler.c), function + DML trigger arms.
 fn plpgsql_call_handler(
-    flinfo: Option<&mut FmgrInfo>,
+    mut flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut FunctionCallInfoBaseData,
 ) -> PgResult<Datum> {
-    ensure_library_loaded();
+    ensure_library_loaded()?;
     let fn_oid = flinfo.as_ref().map(|f| f.fn_oid).expect("plpgsql_call_handler needs flinfo");
 
     // CALLED_AS_TRIGGER / CALLED_AS_EVENT_TRIGGER demux on the context tag.
@@ -1095,7 +1211,20 @@ fn plpgsql_call_handler(
             _ => CallKind::Function,
         };
         let call_expr = flinfo.as_ref().and_then(|f| f.fn_expr);
-        let entry = plpgsql_compile(fn_oid, fcinfo.fncollation, false, kind, call_expr)?;
+        let memo = match flinfo.as_deref() {
+            Some(f) => memo_entry(f, fcinfo.fncollation, kind)?,
+            None => None,
+        };
+        let entry = match memo {
+            Some(entry) => entry,
+            None => {
+                let entry = plpgsql_compile(fn_oid, fcinfo.fncollation, false, kind, call_expr)?;
+                if let Some(f) = flinfo.as_deref_mut() {
+                    set_memo(f, &entry, fcinfo.fncollation, kind);
+                }
+                entry
+            }
+        };
         entry.use_count.set(entry.use_count.get() + 1);
         let r = match (entry.func.fn_is_trigger, trigdata, evtrigdata) {
             (FnTrigger::DmlTrigger, Some(td), None) => {
@@ -1129,7 +1258,7 @@ fn plpgsql_inline_handler(
     _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut FunctionCallInfoBaseData,
 ) -> PgResult<Datum> {
-    ensure_library_loaded();
+    ensure_library_loaded()?;
     // SAFETY: ExecuteDoStmt passes a live InlineCodeBlock for this call.
     let cb: &types_nodes::parsenodes::InlineCodeBlock =
         unsafe { &*(fcinfo.args[0].value.as_usize() as *const _) };
@@ -1181,19 +1310,28 @@ fn compile_inline(src: &str) -> PgResult<PlFunction> {
         last_endtoken_loc: -1,
     };
     let cb_src = src.to_string();
+    let cb_name = func_name.to_string();
+    let cb_line = parser.sc.latest_lineno_cell();
     let emit_guard = EmitCbGuard(elog::push_emit_context_callback(Box::new(move |e| {
-        pg_proc::function_parse_error_transpose(e, &cb_src);
+        if pg_proc::function_parse_error_transpose(e, &cb_src) {
+            return;
+        }
+        e.add_context_line(format!(
+            "compilation of PL/pgSQL function \"{cb_name}\" near line {}",
+            cb_line.get()
+        ));
     })));
     let parse_result = parser.parse_function_body();
     drop(emit_guard);
     let latest_line = parser.sc.latest_lineno();
     // C's inline callback always tries the position transpose (cbarg
     // .proc_source is set unconditionally for inline blocks).
-    let action = parse_result
+    let mut action = parse_result
         .map_err(|e| attach_compile_context(e, func_name, latest_line, true, src))?;
+    add_dummy_return(&mut action, -1, &mut comp.nstatements);
 
-    Ok(PlFunction {
-        fn_signature: func_name.to_string(),
+    let mut function = PlFunction {
+        fn_signature: func_name.into(),
         fn_oid: types_core::InvalidOid,
         fn_xmin: 0,
         fn_tid: (0, 0),
@@ -1221,7 +1359,12 @@ fn compile_inline(src: &str) -> PgResult<PlFunction> {
         print_strict_params: comp.print_strict_params,
         nstatements: comp.nstatements,
         expr_ids: std::mem::take(&mut comp.expr_ids),
-    })
+    };
+    crate::comp::mark_local_assignment_targets(&mut function)?;
+    if comp.dump_exec_tree {
+        crate::dump::dump_tree(&function)?;
+    }
+    Ok(function)
 }
 
 // plpgsql_validator (pl_handler.c).
@@ -1229,7 +1372,7 @@ fn plpgsql_validator(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut FunctionCallInfoBaseData,
 ) -> PgResult<Datum> {
-    ensure_library_loaded();
+    ensure_library_loaded()?;
     let funcoid = fcinfo.args[0].value.as_oid();
 
     // CheckFunctionValidatorAccess (fmgr.c:2145, pl_handler.c): reject when this
@@ -1309,14 +1452,21 @@ fn plpgsql_exec_function(
     fcinfo: &mut FunctionCallInfoBaseData,
     atomic: bool,
 ) -> PgResult<Datum> {
-    let mut estate = Estate::new(func, func.fn_readonly, atomic);
+    let accept = crate::exec::AcceptArrayResult::set(0);
+    let mut estate = Estate::new(func, func.fn_readonly, atomic)?;
+    estate.caller_adopts = accept.outer() != 0
+        && flinfo
+            .and_then(|f| f.fn_expr.as_ref())
+            .and_then(|e| e.downcast_ref::<types_nodes::Node<'static>>())
+            .and_then(|n| n.as_variant::<types_nodes::primnodes::FuncExpr>())
+            .is_some_and(|f| core::ptr::from_ref(f) as usize == accept.outer());
     if let Some(rsi) = fcinfo.rsinfo_mut() {
         estate.rsi = Some(crate::exec::RsiSnapshot {
             allowed_modes: rsi.allowedModes,
             expected_desc: rsi.expectedDesc,
         });
     }
-    let _frame = crate::exec::FrameGuard::push_pl(&estate);
+    crate::exec::pl_frame!(estate);
 
     // Store call arguments into the argument variables; OUT-only args have
     // no fcinfo slot and stay NULL.
@@ -1432,6 +1582,13 @@ fn plpgsql_exec_function(
         };
     }
 
+    // SPI_datumTransfer's R/W arm: the adopting caller's context takes the
+    // array over instead of a flat copy.
+    if let Some(obj) = estate.ret_expanded.take() {
+        fcinfo.isnull = false;
+        return Ok(obj.transfer_to_context(fcinfo.result_mcx().context()));
+    }
+
     // Scalar case: cast the return value to the function's return type and
     // copy it out of SPI/estate memory (it must survive SPI_finish and
     // estate drop).
@@ -1477,9 +1634,9 @@ fn plpgsql_exec_event_trigger(
     let FnTrigger::EventTrigger { tg_event_varno, tg_tag_varno } = func.fn_is_trigger else {
         panic!("plpgsql_exec_event_trigger: function is not an event trigger");
     };
-    let mut estate = Estate::new(func, func.fn_readonly, true);
+    let mut estate = Estate::new(func, func.fn_readonly, true)?;
 
-    let _frame = crate::exec::FrameGuard::push_pl(&estate);
+    crate::exec::pl_frame!(estate);
     // Divergence from C: tg_event/tg_tag are eager, not PROMISE-lazy.
     estate.frame.text.set(Some("during initialization of execution state"));
     if let Err(e) = estate.assign_text_var(tg_event_varno, trigdata.event) {
@@ -1544,7 +1701,7 @@ fn coerce_function_result_tuple(
             let (desc, src, values, nulls, _) =
                 estate.deconstruct_composite(retval, estate.datum_mcx())?;
             crate::exec::RecValue {
-                owned: vec![false; values.len()],
+                owned: ::mcx::std_vec_from_elem("plpgsql", false, values.len())?,
                 desc,
                 values,
                 nulls,
@@ -1582,7 +1739,7 @@ fn coerce_function_result_tuple(
                 .result_tuple_desc
                 .as_ref()
                 .expect("composite result carries a tupdesc");
-            let dst = crate::exec::RecDesc::from_tupdesc(expected);
+            let dst = crate::exec::RecDesc::from_tupdesc(expected)?;
             let (values, nulls) = crate::exec::convert_values_by_position(
                 &rv.desc,
                 &rv.values,
@@ -1649,14 +1806,13 @@ const TYPALIGN_INT: u8 = b'i';
 // resolved by ER_lookup_fieldnum/namestrcmp case-sensitively
 // (expandedrecord.c:1032), so downcasing here made every quoted mixed-case
 // column of the trigger table unreachable through NEW/OLD.
-fn recdesc_from_tupdesc(td: &types_tuple::TupleDescData<'_>) -> (crate::exec::RecDesc, Vec<bool>) {
-    let d = crate::exec::RecDesc::from_tupdesc(td);
-    let generated = td
-        .attrs
-        .iter()
-        .map(|a| a.attgenerated == ATTRIBUTE_GENERATED_STORED)
-        .collect();
-    (d, generated)
+fn recdesc_from_tupdesc(td: &types_tuple::TupleDescData<'_>) -> PgResult<(crate::exec::RecDesc, Vec<bool>)> {
+    let d = crate::exec::RecDesc::from_tupdesc(td)?;
+    let mut generated = ::mcx::std_vec_with_capacity("plpgsql", td.attrs.len())?;
+    for a in td.attrs.iter() {
+        generated.push(a.attgenerated == ATTRIBUTE_GENERATED_STORED);
+    }
+    Ok((d, generated))
 }
 
 // name datum (NAMEOID): 64-byte NUL-padded image in `mcx`.
@@ -1679,7 +1835,7 @@ fn text_datum(mcx: Mcx<'_>, s: &[u8]) -> PgResult<Datum> {
 // every TG_* promise unfulfilled. C computes a promise on the variable's
 // first read (exec_eval_datum -> plpgsql_fulfill_promise), so a body that
 // renames its own schema and then reads TG_TABLE_SCHEMA sees the new name;
-// an eager fulfilment at entry read the old one (regression).
+// an eager fulfilment at entry read the old one (fp-pl-plpgsql-pl_exec-p1#3).
 fn arm_trigger_promises(
     estate: &mut Estate<'_>,
     trigdata: &types_trigger_call::TriggerData<'_, '_>,
@@ -1751,7 +1907,7 @@ pub(crate) fn compute_trigger_promise(
         PROMISE_TG_NARGS => (Datum::from_i16(src.tgnargs), false),
         PROMISE_TG_ARGV => {
             if src.tgnargs > 0 {
-                let mut elems = Vec::with_capacity(src.tgargs.len());
+                let mut elems = ::mcx::std_vec_with_capacity("plpgsql", src.tgargs.len())?;
                 for a in src.tgargs.iter() {
                     elems.push(text_datum(mcx, a.as_bytes())?);
                 }
@@ -1792,7 +1948,9 @@ fn bind_trigger_tuple(
     let t = unsafe { t.as_ref() };
     let natts = rv.desc.types.len();
     types_tuple::heap_deform_tuple(t, tupdesc, &mut rv.values, &mut rv.nulls);
-    rv.sys = Some(Rc::new(crate::exec::RecSysAttrs::from_tuple(t)));
+    let mut sys = crate::exec::RecSysAttrs::from_tuple(t);
+    sys.trigger_tuple = Some(t as *const _ as usize);
+    rv.sys = Some(Rc::new(sys));
     rv.fvalue_valid = true;
     for i in 0..natts {
         if !rv.desc.dropped[i] {
@@ -1826,8 +1984,8 @@ fn map_returned_row(
         )
     }
     let n = out.types.len();
-    let mut values = vec![Datum::null(); n];
-    let mut nulls = vec![true; n];
+    let mut values = ::mcx::std_vec_from_elem("plpgsql", Datum::null(), n)?;
+    let mut nulls = ::mcx::std_vec_from_elem("plpgsql", true, n)?;
     let mut j = 0usize;
     let mut nincols = 0;
     let mut noutcols = 0;
@@ -1881,13 +2039,13 @@ fn plpgsql_exec_trigger(
         matches!(func.fn_is_trigger, FnTrigger::DmlTrigger),
         "plpgsql_exec_trigger on a non-trigger function"
     );
-    let mut estate = Estate::new(func, func.fn_readonly, true);
-    let _frame = crate::exec::FrameGuard::push_pl(&estate);
+    let mut estate = Estate::new(func, func.fn_readonly, true)?;
+    crate::exec::pl_frame!(estate);
     estate.frame.text.set(Some("during initialization of execution state"));
 
     let rel = trigdata.tg_relation;
     let tupdesc = rel.rd_att.clone();
-    let (desc, generated) = recdesc_from_tupdesc(&tupdesc);
+    let (desc, generated) = recdesc_from_tupdesc(&tupdesc)?;
     let natts = desc.types.len();
     let src_desc =
         Rc::new(tupdesc::CreateTupleDescCopy(estate.datum_mcx(), &tupdesc)?);
@@ -1895,15 +2053,15 @@ fn plpgsql_exec_trigger(
     // unsupplied tuples read as NULL, whole-record use is SQL NULL.
     let empty_rv = crate::exec::RecValue {
         desc: desc.clone(),
-        values: vec![Datum::null(); natts],
-        nulls: vec![true; natts],
+        values: ::mcx::std_vec_from_elem("plpgsql", Datum::null(), natts)?,
+        nulls: ::mcx::std_vec_from_elem("plpgsql", true, natts)?,
         src_desc: Some(src_desc),
         empty: true,
         sys: None,
         fvalue_valid: false,
-        owned: vec![false; natts],
+        owned: ::mcx::std_vec_from_elem("plpgsql", false, natts)?,
     };
-    let mut new_rv = empty_rv.clone();
+    let mut new_rv = empty_rv.try_clone()?;
     let mut old_rv = empty_rv;
 
     let ev = trigdata.tg_event;
@@ -1988,7 +2146,7 @@ fn plpgsql_exec_trigger(
                 Err(e) => return Err(attach_exec_context(e, &estate)),
             };
             crate::exec::RecValue {
-                owned: vec![false; values.len()],
+                owned: ::mcx::std_vec_from_elem("plpgsql", false, values.len())?,
                 desc: d,
                 values,
                 nulls,
@@ -1999,6 +2157,15 @@ fn plpgsql_exec_trigger(
             }
         }
     };
+    if let Some(tuple) = rv.original_trigger_tuple(&tupdesc) {
+        if [trigdata.tg_trigtuple, trigdata.tg_newtuple]
+            .into_iter()
+            .flatten()
+            .any(|input| input.as_ptr() as usize == tuple)
+        {
+            return Ok(Datum::from_usize(tuple));
+        }
+    }
     // build_attrmap_by_position + execute_attr_map_tuple: map the returned
     // row onto the relation rowtype (typmod-aware position walk).
     let (values, nulls) = match map_returned_row(&rv, &desc) {
@@ -2006,9 +2173,10 @@ fn plpgsql_exec_trigger(
         Err(e) => return Err(attach_exec_context(e, &estate)),
     };
 
+    // expanded_record_get_tuple (expandedrecord.c:884) forms the tuple as
+    // is: unchanged out-of-line fields keep their TOAST pointers, which
+    // heap_update then reuses.
     let out_mcx = fcinfo.result_mcx();
-    let mut values = values;
-    crate::exec::detoast_external_fields(out_mcx, &tupdesc, &mut values, &nulls)?;
     let tup = heaptuple::heap_form_tuple(out_mcx, &tupdesc, &values, &nulls)?;
     let (img, t_len) = (tup.header_ptr(), tup.t_len);
     core::mem::forget(tup);
@@ -2030,6 +2198,21 @@ fn plpgsql_exec_trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Once;
+
+    fn setup_library_gucs() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            init_seams();
+            xact_seams::is_in_parallel_mode::set(|| false);
+            scalar_seams::parse_bool::set(|value| match value {
+                "off" | "false" | "no" => Some(false),
+                "on" | "true" | "yes" => Some(true),
+                _ => None,
+            });
+        });
+        guc::initialize_guc_options().unwrap();
+    }
 
     // The plpgsql extension script declares its handlers as
     // `LANGUAGE C AS '$libdir/plpgsql'`; CREATE EXTENSION resolves them
@@ -2039,7 +2222,7 @@ mod tests {
     // with "could not find function \"plpgsql_call_handler\"".
     #[test]
     fn extension_handlers_resolve_through_dfmgr() {
-        init_seams();
+        setup_library_gucs();
         let mut pkglib = [0u8; types_core::MAXPGPATH];
         pkglib[..b"/nonexistent-pkglib".len()].copy_from_slice(b"/nonexistent-pkglib");
         init_small::globals::set_pkglib_path(pkglib);
@@ -2111,7 +2294,6 @@ mod tests {
     // definition list (rsinfo->expectedDesc); pre-fix it was never passed.
     #[test]
     fn record_result_is_coerced_to_the_callers_column_list() {
-        use std::sync::Once;
         const F_RECORD: Oid = 100_200;
         const INT4OID: Oid = 23;
 
@@ -2165,10 +2347,10 @@ mod tests {
         let result_ctx = mcx::MemoryContext::new("result");
 
         let run = |expected: &types_tuple::TupleDescData<'static>| -> PgResult<Datum> {
-            let mut estate = Estate::new(&func, false, true);
+            let mut estate = Estate::new(&func, false, true)?;
             let returned = int4_row(estate.datum_mcx(), 2);
             estate.ret_rec = Some(crate::exec::RecValue {
-                desc: crate::exec::RecDesc::from_tupdesc(&returned),
+                desc: crate::exec::RecDesc::from_tupdesc(&returned)?,
                 values: vec![Datum::from_i32(42), Datum::from_i32(43)],
                 nulls: vec![false, false],
                 owned: vec![false, false],
@@ -2221,7 +2403,7 @@ mod tests {
     // pg_proc's validator_access unit tests.
     #[test]
     fn validator_rejects_foreign_language_function_with_42501() {
-        use std::sync::Once;
+        setup_library_gucs();
 
         // Stand-ins: plpgsql is created dynamically so its lanvalidator OID is
         // not a fixed constant; any value != the target language's lanvalidator

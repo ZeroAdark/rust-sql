@@ -1,5 +1,5 @@
 use datum::Datum;
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use mcx::Mcx;
 use parser_small1::ParseState;
 use pg_database::{
@@ -30,7 +30,7 @@ use types_tuple::{HeapTupleData, NameData};
 
 use crate::{
     cache_lookup_failed, errdetail_busy_db, get_db_info, have_createdb_privilege, loc, name_key,
-    GLOBALTABLESPACE_OID, TableSpaceRelationId, XLOG_DBASE_CREATE_FILE_COPY, XLOG_DBASE_DROP,
+    GLOBALTABLESPACE_OID, TableSpaceRelationId, XLOG_DBASE_DROP,
 };
 
 fn text_datum_string(mcx: Mcx<'_>, d: Datum) -> PgResult<String> {
@@ -124,9 +124,9 @@ pub fn RenameDatabase(mcx: Mcx<'_>, oldname: &str, newname: &str) -> PgResult<Oi
     let mut datname = NameData::default();
     datname.namestrcpy(newname);
     let natts = Natts_pg_database;
-    let mut values = vec![Datum::null(); natts];
-    let isnull = vec![false; natts];
-    let mut replace = vec![false; natts];
+    let mut values = ::mcx::std_vec_from_elem("commands", Datum::null(), natts)?;
+    let isnull = ::mcx::std_vec_from_elem("commands", false, natts)?;
+    let mut replace = ::mcx::std_vec_from_elem("commands", false, natts)?;
     values[Anum_pg_database_datname as usize - 1] =
         Datum::from_usize(datname.data.as_ptr() as usize);
     replace[Anum_pg_database_datname as usize - 1] = true;
@@ -254,7 +254,7 @@ pub fn movedb(mcx: Mcx<'_>, dbname: &str, tblspcname: &str) -> PgResult<()> {
             return Err(ereport(ERROR)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errmsg(format!(
-                    "could not remove directory \"{}\": %m",
+                    "could not remove directory \"{}\": {PCT_M}",
                     dst_dbpath.as_str()
                 ))
                 .into_error()
@@ -274,6 +274,7 @@ pub fn movedb(mcx: Mcx<'_>, dbname: &str, tblspcname: &str) -> PgResult<()> {
     );
     if let Err(e) = moved {
         let _ = fd::rmtree(dst_dbpath.as_str(), true);
+        pgrc_am::catalog::remove_under(dst_dbpath.as_str());
         return Err(e);
     }
 
@@ -292,6 +293,7 @@ pub fn movedb(mcx: Mcx<'_>, dbname: &str, tblspcname: &str) -> PgResult<()> {
             ))
             .finish(loc("movedb"))?;
     }
+    pgrc_am::catalog::remove_under(src_dbpath.as_str());
 
     let mut xlrec = [0u8; 12];
     xlrec[0..4].copy_from_slice(&db_id.to_ne_bytes());
@@ -317,23 +319,13 @@ fn movedb_body(
     db_id: Oid,
     src_dbpath: &str,
     dst_dbpath: &str,
-    _src_tblspcoid: Oid,
+    src_tblspcoid: Oid,
     dst_tblspcoid: Oid,
 ) -> PgResult<()> {
     fd::copydir(src_dbpath, dst_dbpath, false)?;
+    pgrc_am::dircopy::copy_table_dirs(src_dbpath, dst_dbpath, dst_tblspcoid, db_id)?;
 
-    let mut xlrec = [0u8; 16];
-    xlrec[0..4].copy_from_slice(&db_id.to_ne_bytes());
-    xlrec[4..8].copy_from_slice(&dst_tblspcoid.to_ne_bytes());
-    xlrec[8..12].copy_from_slice(&db_id.to_ne_bytes());
-    xlrec[12..16].copy_from_slice(&_src_tblspcoid.to_ne_bytes());
-    xloginsert::insert_record(
-        types_core::primitive::RmgrIds::RM_DBASE_ID as u8,
-        XLOG_DBASE_CREATE_FILE_COPY | xloginsert::XLR_SPECIAL_REL_UPDATE,
-        0,
-        &[&xlrec],
-        &[],
-    )?;
+    crate::createdb::log_file_copy_record(db_id, dst_tblspcoid, db_id, src_tblspcoid)?;
 
     let (_nd, key) = name_key(mcx, dbname)?;
     let mut scan =
@@ -349,9 +341,9 @@ fn movedb_body(
     lmgr::LockTuple(pgdbrel, &otid, InplaceUpdateTupleLock)?;
 
     let natts = Natts_pg_database;
-    let mut values = vec![Datum::null(); natts];
-    let isnull = vec![false; natts];
-    let mut replace = vec![false; natts];
+    let mut values = ::mcx::std_vec_from_elem("commands", Datum::null(), natts)?;
+    let isnull = ::mcx::std_vec_from_elem("commands", false, natts)?;
+    let mut replace = ::mcx::std_vec_from_elem("commands", false, natts)?;
     values[Anum_pg_database_dattablespace as usize - 1] = Datum::from_oid(dst_tblspcoid);
     replace[Anum_pg_database_dattablespace as usize - 1] = true;
     let mut newtuple =
@@ -514,9 +506,9 @@ pub fn AlterDatabase<'mcx>(
     }
 
     let natts = Natts_pg_database;
-    let mut values = vec![Datum::null(); natts];
-    let isnull = vec![false; natts];
-    let mut replace = vec![false; natts];
+    let mut values = ::mcx::std_vec_from_elem("commands", Datum::null(), natts)?;
+    let isnull = ::mcx::std_vec_from_elem("commands", false, natts)?;
+    let mut replace = ::mcx::std_vec_from_elem("commands", false, natts)?;
     if distemplate.is_some() {
         values[Anum_pg_database_datistemplate as usize - 1] = Datum::from_bool(dbistemplate);
         replace[Anum_pg_database_datistemplate as usize - 1] = true;
@@ -608,9 +600,9 @@ pub fn AlterDatabaseRefreshColl<'mcx>(
 
             let version_text = varlena::cstring_to_text(mcx, new.as_bytes())?;
             let natts = Natts_pg_database;
-            let mut values = vec![Datum::null(); natts];
-            let isnull = vec![false; natts];
-            let mut replace = vec![false; natts];
+            let mut values = ::mcx::std_vec_from_elem("commands", Datum::null(), natts)?;
+            let isnull = ::mcx::std_vec_from_elem("commands", false, natts)?;
+            let mut replace = ::mcx::std_vec_from_elem("commands", false, natts)?;
             values[Anum_pg_database_datcollversion as usize - 1] =
                 Datum::from_usize(version_text.as_bytes().as_ptr() as usize);
             replace[Anum_pg_database_datcollversion as usize - 1] = true;
@@ -708,9 +700,9 @@ pub fn AlterDatabaseOwner(mcx: Mcx<'_>, dbname: &str, new_owner_id: Oid) -> PgRe
         lmgr::LockTuple(&rel, &otid, InplaceUpdateTupleLock)?;
 
         let natts = Natts_pg_database;
-        let mut values = vec![Datum::null(); natts];
-        let isnull = vec![false; natts];
-        let mut replace = vec![false; natts];
+        let mut values = ::mcx::std_vec_from_elem("commands", Datum::null(), natts)?;
+        let isnull = ::mcx::std_vec_from_elem("commands", false, natts)?;
+        let mut replace = ::mcx::std_vec_from_elem("commands", false, natts)?;
         replace[Anum_pg_database_datdba as usize - 1] = true;
         values[Anum_pg_database_datdba as usize - 1] = Datum::from_oid(new_owner_id);
 

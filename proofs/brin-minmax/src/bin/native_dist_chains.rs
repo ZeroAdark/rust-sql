@@ -4,7 +4,7 @@
 //! macaddr and inet v4/v6 ride along as free cross-checks of their proved
 //! harnesses. Census-grade only — recorded as `tested(differential)`,
 //! never `proved` (TRIAGE verdict discipline); the walled harnesses stay
-//! staged CI-bound.
+//! staged fleet-bound.
 //!
 //! Same shipped wrappers (dispatch-table lookup) vs the SAME vendored C
 //! (pg_brin_multi_dist.c, build.rs cc link, -fwrapv). Pairs are drawn

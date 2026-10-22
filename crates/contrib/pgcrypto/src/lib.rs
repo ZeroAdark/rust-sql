@@ -1,4 +1,4 @@
-
+mod settings;
 mod cipher;
 mod crypt;
 mod hashing;
@@ -243,7 +243,7 @@ fn fc_pg_random_bytes(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
 
 // pgcrypto.c:471 pg_random_bytes: px_THROW_ERROR(PXE_NO_RANDOM).
 fn random_bytes(len: usize) -> PgResult<Vec<u8>> {
-    let mut buf = vec![0u8; len];
+    let mut buf = ::mcx::std_vec_from_elem("pgcrypto", 0u8, len)?;
     if !pgp::consts::fill_random(&mut buf) {
         return Err(px_msg(pgp::consts::NO_RANDOM));
     }
@@ -295,7 +295,7 @@ fn opt_arg_bytes(fcinfo: &Fcinfo, i: usize) -> PgResult<Option<Vec<u8>>> {
     }
     // SAFETY: arg present and non-null per the guard above.
     let img = unsafe { fcinfo.arg_varlena_packed(i)? };
-    Ok(Some(img.data().to_vec()))
+    Ok(Some(::mcx::std_vec_from_slice("pgcrypto", &img.data())?))
 }
 
 // pgp-pgsql.c:76 convert_from_utf8 / :92 convert_to_utf8.
@@ -367,7 +367,7 @@ fn decrypt_output(fcinfo: &mut Fcinfo, out: pgp::DecryptOutput, need_text: bool)
 fn pgp_sym_encrypt(fcinfo: &mut Fcinfo, is_text: bool) -> PgResult<Datum> {
     // SAFETY: strict on arg0/arg1 (data, key); arg2 (args) optional/nullable.
     let (data, key) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
-    let (data, key) = (data.data().to_vec(), key.data().to_vec());
+    let (data, key) = (::mcx::std_vec_from_slice("pgcrypto", &data.data())?, key.data().to_vec());
     let args = opt_arg_bytes(fcinfo, 2)?;
     let (data, cap) = encrypt_setup(data, args.as_deref(), is_text)?;
     let out = pgp::sym_encrypt(&data, &key, args.as_deref(), is_text).map_err(|e| px_msg(&e))?;
@@ -378,7 +378,7 @@ fn pgp_sym_encrypt(fcinfo: &mut Fcinfo, is_text: bool) -> PgResult<Datum> {
 fn pgp_sym_decrypt(fcinfo: &mut Fcinfo, need_text: bool) -> PgResult<Datum> {
     // SAFETY: strict on arg0/arg1 (data, key); arg2 (args) optional/nullable.
     let (data, key) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
-    let (data, key) = (data.data().to_vec(), key.data().to_vec());
+    let (data, key) = (::mcx::std_vec_from_slice("pgcrypto", &data.data())?, key.data().to_vec());
     let args = opt_arg_bytes(fcinfo, 2)?;
     pgp::validate_args(args.as_deref()).map_err(|e| px_msg(&e))?;
     mbuf_create(data.len(), 2048)?;
@@ -396,7 +396,7 @@ fn pgp_sym_decrypt(fcinfo: &mut Fcinfo, need_text: bool) -> PgResult<Datum> {
 fn pgp_pub_encrypt(fcinfo: &mut Fcinfo, is_text: bool) -> PgResult<Datum> {
     // SAFETY: strict on arg0/arg1 (data, key); arg2 (args) optional/nullable.
     let (data, key) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
-    let (data, key) = (data.data().to_vec(), key.data().to_vec());
+    let (data, key) = (::mcx::std_vec_from_slice("pgcrypto", &data.data())?, key.data().to_vec());
     let args = opt_arg_bytes(fcinfo, 2)?;
     let (data, cap) = encrypt_setup(data, args.as_deref(), is_text)?;
     let out = pgp::pub_encrypt(&data, &key, args.as_deref(), is_text).map_err(|e| {
@@ -412,7 +412,7 @@ fn pgp_pub_encrypt(fcinfo: &mut Fcinfo, is_text: bool) -> PgResult<Datum> {
 fn pgp_pub_decrypt(fcinfo: &mut Fcinfo, need_text: bool) -> PgResult<Datum> {
     // SAFETY: strict on arg0/arg1 (msg, seckey); arg2 psw, arg3 args optional.
     let (data, key) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
-    let (data, key) = (data.data().to_vec(), key.data().to_vec());
+    let (data, key) = (::mcx::std_vec_from_slice("pgcrypto", &data.data())?, key.data().to_vec());
     let psw = opt_arg_bytes(fcinfo, 2)?;
     let args = opt_arg_bytes(fcinfo, 3)?;
     pgp::validate_args(args.as_deref()).map_err(|e| px_msg(&e))?;
@@ -463,7 +463,7 @@ fn fc_pgp_key_id_w(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<D
 
 fn fc_pg_armor(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict fn — arg0 bytea; arg1/arg2 text[] when present.
-    let data = unsafe { fcinfo.arg_varlena_packed(0)? }.data().to_vec();
+    let data = ::mcx::std_vec_from_slice("pgcrypto", &unsafe { fcinfo.arg_varlena_packed(0)? }.data())?;
     let (keys, values) = if fcinfo.nargs() == 3 {
         let scratch = mcx::MemoryContext::new("pgp_armor headers");
         // SAFETY: strict fn — args non-null.
@@ -490,7 +490,7 @@ fn fc_pg_dearmor(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Dat
 
 fn fc_pgp_armor_headers(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict fn — arg0 text.
-    let data = unsafe { fcinfo.arg_varlena_packed(0)? }.data().to_vec();
+    let data = ::mcx::std_vec_from_slice("pgcrypto", &unsafe { fcinfo.arg_varlena_packed(0)? }.data())?;
     let headers = pgp::armor::extract_armor_headers(&data).map_err(|e| match e {
         pgp::armor::ArmorError::Corrupt => px_msg(pgp::armor::CORRUPT_ARMOR),
         pgp::armor::ArmorError::Pg(e) => e,
@@ -524,12 +524,12 @@ unsafe fn array_image(fcinfo: &Fcinfo, i: usize) -> PgResult<Vec<u8>> {
     if v.is_short() {
         let d = v.data();
         let total = 4 + d.len();
-        let mut buf = Vec::with_capacity(total);
+        let mut buf = ::mcx::std_vec_with_capacity("pgcrypto", total)?;
         buf.extend_from_slice(&types_tuple::varatt::set_varsize_4b_word(total as u32).to_ne_bytes());
         buf.extend_from_slice(d);
         Ok(buf)
     } else {
-        Ok(v.image().to_vec())
+        Ok(::mcx::std_vec_from_slice("pgcrypto", &v.image())?)
     }
 }
 
@@ -590,8 +590,8 @@ fn parse_key_value_arrays(
     }
 
     let n = key_datums.len();
-    let mut keys = Vec::with_capacity(n);
-    let mut values = Vec::with_capacity(n);
+    let mut keys = ::mcx::std_vec_with_capacity("pgcrypto", n)?;
+    let mut values = ::mcx::std_vec_with_capacity("pgcrypto", n)?;
     for i in 0..n {
         // Check that the key doesn't contain anything funny.
         if key_nulls[i] {
@@ -676,12 +676,11 @@ fn lookup(function: &str) -> Option<PGFunction> {
     })
 }
 
-/// pgcrypto.c:68 _PG_init. The custom enum GUC pgcrypto.builtin_crypto_enabled
-/// (DefineCustomEnumVariable, PGC_SUSET, on/off/fips) is defined statically in
-/// guc_tables like pg_stat_statements.* / auto_explain.* (this port has no
-/// DefineCustomXxxVariable machinery); the prefix reservation runs here, on
-/// the library's first load, exactly as C's MarkGUCPrefixReserved does.
 fn pg_init() -> PgResult<()> {
+    for &setting in settings::SETTINGS {
+        guc::DefineCustomVariable(setting)?;
+    }
+
     guc::MarkGUCPrefixReserved("pgcrypto");
     Ok(())
 }

@@ -1,0 +1,188 @@
+-- regress-full-updatable_views-108
+-- DELETE FROM v1 WHERE snoop(a) AND leakproof(a);
+graph pipelines=12 breakers=8 init_plans=0 root=p11
+p0 node=7 eligible rows=1 end=breaker(slot=0 Materialize)
+  nodes n7@0 n6@2^
+  source range rel=24621 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v8.1, $exec0)
+  project ()
+  feed slot=0
+  outs
+p1 node=8 eligible rows=1 end=breaker(slot=0 Materialize)
+  nodes n8@0 n6@2^
+  source range rel=24627 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v9.1, $exec0)
+  project ()
+  feed slot=0
+  outs
+p2 node=7 eligible rows=1 end=breaker(slot=1 Materialize)
+  nodes n7@0 n6@2^
+  source range rel=24621 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v8.1, $exec0)
+  project ()
+  feed slot=1
+  outs
+p3 node=8 eligible rows=1 end=breaker(slot=1 Materialize)
+  nodes n8@0 n6@2^
+  source range rel=24627 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v9.1, $exec0)
+  project ()
+  feed slot=1
+  outs
+p4 node=7 eligible rows=1 end=breaker(slot=2 Materialize)
+  nodes n7@0 n6@2^
+  source range rel=24621 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v8.1, $exec0)
+  project ()
+  feed slot=2
+  outs
+p5 node=8 eligible rows=1 end=breaker(slot=2 Materialize)
+  nodes n8@0 n6@2^
+  source range rel=24627 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v9.1, $exec0)
+  project ()
+  feed slot=2
+  outs
+p6 node=7 eligible rows=1 end=breaker(slot=3 Materialize)
+  nodes n7@0 n6@2^
+  source range rel=24621 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v8.1, $exec0)
+  project ()
+  feed slot=3
+  outs
+p7 node=8 eligible rows=1 end=breaker(slot=3 Materialize)
+  nodes n8@0 n6@2^
+  source range rel=24627 rti=9 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op96(v9.1, $exec0)
+  project ()
+  feed slot=3
+  outs
+p8 node=2 serial site=1 reason=Write end=sink
+  desc consumes=slot0@p1
+  nodes n2@0 n1@6 n0@8
+  source range rel=24609 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op521(v3.1, c23:5)
+  subplan 1 nested Exists unknown-eq-false params=($exec0=v3.1) raise-free
+  inner node=6 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1
+  nodes n6@0
+  source breaker slot=0
+  append union slot=0 children=2
+  project ()
+  filter subplan1(v3.1)
+  filter fn24588(v3.1)
+  filter fn24589(v3.1)
+  project (1=v3.-6, 2=v3.-1)
+  append arm 0/4
+  project (1j=outer.1, 2j=outer.2)
+  write DELETE rel=24609 rti=3 natts=3 indexes=() epq=$exec2 tableoid=outer.1 route=rti2:24609 natts=3
+    target rti=4 rel=24615 natts=4 indexes=() map=(1,2,3,0)
+    target rti=5 rel=24621 natts=4 indexes=() map=(1,2,3,0)
+    target rti=6 rel=24627 natts=5 indexes=() map=(1,2,3,0,0)
+  outs 1=w4:val 2=fx6:row
+  outs 1=w4:val 2=fx6:life/breaker
+p9 node=3 serial site=1 reason=Write end=sink
+  desc consumes=slot1@p3
+  nodes n3@0 n1@6 n0@8
+  source range rel=24615 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op521(v4.1, c23:5)
+  subplan 1 nested Exists unknown-eq-false params=($exec0=v4.1) raise-free
+  inner node=6 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p3
+  nodes n6@0
+  source breaker slot=1
+  append union slot=1 children=2
+  project ()
+  filter subplan1(v4.1)
+  filter fn24588(v4.1)
+  filter fn24589(v4.1)
+  project (1=v4.-6, 2=v4.-1)
+  append arm 1/4
+  project (1j=outer.1, 2j=outer.2)
+  write DELETE rel=24609 rti=3 natts=3 indexes=() epq=$exec2 tableoid=outer.1 route=rti2:24609 natts=3
+    target rti=4 rel=24615 natts=4 indexes=() map=(1,2,3,0)
+    target rti=5 rel=24621 natts=4 indexes=() map=(1,2,3,0)
+    target rti=6 rel=24627 natts=5 indexes=() map=(1,2,3,0,0)
+  outs 1=w4:val 2=fx6:row
+  outs 1=w4:val 2=fx6:life/breaker
+p10 node=4 serial site=1 reason=Write end=sink
+  desc consumes=slot2@p5
+  nodes n4@0 n1@6 n0@8
+  source range rel=24621 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op521(v5.1, c23:5)
+  subplan 1 nested Exists unknown-eq-false params=($exec0=v5.1) raise-free
+  inner node=6 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot2@p5
+  nodes n6@0
+  source breaker slot=2
+  append union slot=2 children=2
+  project ()
+  filter subplan1(v5.1)
+  filter fn24588(v5.1)
+  filter fn24589(v5.1)
+  project (1=v5.-6, 2=v5.-1)
+  append arm 2/4
+  project (1j=outer.1, 2j=outer.2)
+  write DELETE rel=24609 rti=3 natts=3 indexes=() epq=$exec2 tableoid=outer.1 route=rti2:24609 natts=3
+    target rti=4 rel=24615 natts=4 indexes=() map=(1,2,3,0)
+    target rti=5 rel=24621 natts=4 indexes=() map=(1,2,3,0)
+    target rti=6 rel=24627 natts=5 indexes=() map=(1,2,3,0,0)
+  outs 1=w4:val 2=fx6:row
+  outs 1=w4:val 2=fx6:life/breaker
+p11 node=5 serial site=1 reason=Write end=sink
+  desc consumes=slot3@p7
+  nodes n5@0 n1@6 n0@8
+  source range rel=24627 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op521(v6.1, c23:5)
+  subplan 1 nested Exists unknown-eq-false params=($exec0=v6.1) raise-free
+  inner node=6 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot3@p7
+  nodes n6@0
+  source breaker slot=3
+  append union slot=3 children=2
+  project ()
+  filter subplan1(v6.1)
+  filter fn24588(v6.1)
+  filter fn24589(v6.1)
+  project (1=v6.-6, 2=v6.-1)
+  append arm 3/4
+  project (1j=outer.1, 2j=outer.2)
+  write DELETE rel=24609 rti=3 natts=3 indexes=() epq=$exec2 tableoid=outer.1 route=rti2:24609 natts=3
+    target rti=4 rel=24615 natts=4 indexes=() map=(1,2,3,0)
+    target rti=5 rel=24621 natts=4 indexes=() map=(1,2,3,0)
+    target rti=6 rel=24627 natts=5 indexes=() map=(1,2,3,0,0)
+  outs 1=w4:val 2=fx6:row
+  outs 1=w4:val 2=fx6:life/breaker
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p2 layout=[]->[Count@0] 8B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p3 layout=[]->[Count@0] 8B
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p4 layout=[]->[Count@0] 8B
+breaker slot=2 kind=Materialize budget=Share spill=Runs producer=p5 layout=[]->[Count@0] 8B
+breaker slot=3 kind=Materialize budget=Share spill=Runs producer=p6 layout=[]->[Count@0] 8B
+breaker slot=3 kind=Materialize budget=Share spill=Runs producer=p7 layout=[]->[Count@0] 8B
+rerun node=2 subplan=1 pipelines=p0,p1 slots=0
+rerun node=3 subplan=1 pipelines=p2,p3 slots=1
+rerun node=4 subplan=1 pipelines=p4,p5 slots=2
+rerun node=5 subplan=1 pipelines=p6,p7 slots=3
+param $exec0 owner=subplan1 type=23 rep=w8:val
+param $exec0 owner=subplan1 type=23 rep=w8:val
+param $exec0 owner=subplan1 type=23 rep=w8:val
+param $exec0 owner=subplan1 type=23 rep=w8:val
+scan-lanes node=2 rti=3 rel=24609 tableoid
+scan-lanes node=3 rti=4 rel=24615 tableoid
+scan-lanes node=4 rti=5 rel=24621 tableoid
+scan-lanes node=5 rti=6 rel=24627 tableoid
+mapped: ModifyTable Append SeqScan SubPlan

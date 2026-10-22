@@ -1,0 +1,12 @@
+-- regress-full-opr_sanity-003
+-- SELECT p1.oid, p1.proname FROM pg_proc AS p1 WHERE proretset AND prokind != 'f';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=6 end=sink
+  nodes n0@0
+  source range rel=1255 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(10):byval8:w8:val Attr(14):byval8:w8:val Offset:byval2:w2:val
+  filter v1.14
+  filter op630(v1.10, c18:102)
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

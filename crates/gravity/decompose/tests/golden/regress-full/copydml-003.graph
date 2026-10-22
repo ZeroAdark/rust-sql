@@ -1,0 +1,14 @@
+-- regress-full-copydml-003
+-- copy (delete from copydml_test where t = 'g' returning id) to stdout;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=17657 rti=1 am=heap
+    lanes Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op98(v1.2, c25:'g')
+  project (1j=v1.-1)
+  write DELETE rel=17657 rti=1 natts=2 indexes=() returning
+  project (1=v1.1)
+  outs 1=fx6:row
+  outs 1=w4:val
+mapped: ModifyTable SeqScan

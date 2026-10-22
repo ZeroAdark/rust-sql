@@ -1,0 +1,95 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1run s2retry s1c s2show
+step s2x: EXPLAIN (COSTS OFF) WITH job_to_update AS (SELECT id FROM rr_job WHERE rr_job.id = 1 FOR UPDATE), updated_job AS (UPDATE rr_job SET state = 'available', scheduled_at = '2026-03-01', max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END, finalized_at = NULL FROM job_to_update WHERE rr_job.id = job_to_update.id AND rr_job.state != 'running' RETURNING rr_job.*) SELECT id, state FROM updated_job UNION ALL SELECT id, state FROM rr_job WHERE id = 1 AND id NOT IN (SELECT id FROM updated_job);
+QUERY PLAN                                                         
+-------------------------------------------------------------------
+Append                                                             
+  CTE job_to_update                                                
+    ->  LockRows                                                   
+          ->  Index Scan using rr_job_pkey on rr_job rr_job_1      
+                Index Cond: (id = 1)                               
+  CTE updated_job                                                  
+    ->  Update on rr_job rr_job_2                                  
+          ->  Nested Loop                                          
+                ->  CTE Scan on job_to_update                      
+                ->  Index Scan using rr_job_pkey on rr_job rr_job_2
+                      Index Cond: (id = job_to_update.id)          
+                      Filter: (state <> 'running'::rr_state)       
+  ->  CTE Scan on updated_job                                      
+  ->  Index Scan using rr_job_pkey on rr_job                       
+        Index Cond: (id = 1)                                       
+        Filter: (NOT (ANY (id = (hashed SubPlan 3).col1)))         
+        SubPlan 3                                                  
+          ->  CTE Scan on updated_job updated_job_1                
+(18 rows)
+
+step s1run: UPDATE rr_job SET state = 'running', finalized_at = NULL WHERE id = 1;
+step s2retry: WITH job_to_update AS (SELECT id FROM rr_job WHERE rr_job.id = 1 FOR UPDATE), updated_job AS (UPDATE rr_job SET state = 'available', scheduled_at = '2026-03-01', max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END, finalized_at = NULL FROM job_to_update WHERE rr_job.id = job_to_update.id AND rr_job.state != 'running' RETURNING rr_job.*) SELECT id, state, scheduled_at, max_attempts, finalized_at FROM updated_job UNION ALL SELECT id, state, scheduled_at, max_attempts, finalized_at FROM rr_job WHERE id = 1 AND id NOT IN (SELECT id FROM updated_job); <waiting ...>
+step s1c: COMMIT;
+step s2retry: <... completed>
+id|state    |scheduled_at                |max_attempts|finalized_at                
+--+---------+----------------------------+------------+----------------------------
+ 1|discarded|Thu Jan 01 00:00:00 2026 PST|           1|Fri Jan 02 00:00:00 2026 PST
+(1 row)
+
+step s2show: SELECT id, state, scheduled_at, finalized_at FROM rr_job WHERE id IN (1, 2) ORDER BY id;
+id|state    |scheduled_at                |finalized_at
+--+---------+----------------------------+------------
+ 1|running  |Thu Jan 01 00:00:00 2026 PST|            
+ 2|scheduled|Thu Jan 01 00:00:00 2026 PST|            
+(2 rows)
+
+
+starting permutation: s1sch s2retry s1c s2show
+step s1sch: UPDATE rr_job SET scheduled_at = '2026-02-01' WHERE id = 1;
+step s2retry: WITH job_to_update AS (SELECT id FROM rr_job WHERE rr_job.id = 1 FOR UPDATE), updated_job AS (UPDATE rr_job SET state = 'available', scheduled_at = '2026-03-01', max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END, finalized_at = NULL FROM job_to_update WHERE rr_job.id = job_to_update.id AND rr_job.state != 'running' RETURNING rr_job.*) SELECT id, state, scheduled_at, max_attempts, finalized_at FROM updated_job UNION ALL SELECT id, state, scheduled_at, max_attempts, finalized_at FROM rr_job WHERE id = 1 AND id NOT IN (SELECT id FROM updated_job); <waiting ...>
+step s1c: COMMIT;
+step s2retry: <... completed>
+id|state    |scheduled_at                |max_attempts|finalized_at
+--+---------+----------------------------+------------+------------
+ 1|available|Sun Mar 01 00:00:00 2026 PST|           2|            
+(1 row)
+
+step s2show: SELECT id, state, scheduled_at, finalized_at FROM rr_job WHERE id IN (1, 2) ORDER BY id;
+id|state    |scheduled_at                |finalized_at
+--+---------+----------------------------+------------
+ 1|available|Sun Mar 01 00:00:00 2026 PST|            
+ 2|scheduled|Thu Jan 01 00:00:00 2026 PST|            
+(2 rows)
+
+
+starting permutation: s1del s2retry s1c s2show
+step s1del: DELETE FROM rr_job WHERE id = 1;
+step s2retry: WITH job_to_update AS (SELECT id FROM rr_job WHERE rr_job.id = 1 FOR UPDATE), updated_job AS (UPDATE rr_job SET state = 'available', scheduled_at = '2026-03-01', max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END, finalized_at = NULL FROM job_to_update WHERE rr_job.id = job_to_update.id AND rr_job.state != 'running' RETURNING rr_job.*) SELECT id, state, scheduled_at, max_attempts, finalized_at FROM updated_job UNION ALL SELECT id, state, scheduled_at, max_attempts, finalized_at FROM rr_job WHERE id = 1 AND id NOT IN (SELECT id FROM updated_job); <waiting ...>
+step s1c: COMMIT;
+step s2retry: <... completed>
+id|state    |scheduled_at                |max_attempts|finalized_at                
+--+---------+----------------------------+------------+----------------------------
+ 1|discarded|Thu Jan 01 00:00:00 2026 PST|           1|Fri Jan 02 00:00:00 2026 PST
+(1 row)
+
+step s2show: SELECT id, state, scheduled_at, finalized_at FROM rr_job WHERE id IN (1, 2) ORDER BY id;
+id|state    |scheduled_at                |finalized_at
+--+---------+----------------------------+------------
+ 2|scheduled|Thu Jan 01 00:00:00 2026 PST|            
+(1 row)
+
+
+starting permutation: s1run2 s2cancel s1c s2show
+step s1run2: UPDATE rr_job SET state = 'running' WHERE id = 2;
+step s2cancel: WITH locked_job AS (SELECT id, queue, state, finalized_at FROM rr_job WHERE rr_job.id = 2 FOR UPDATE), notification AS (SELECT id, pg_notify('rr_control', json_build_object('action', 'cancel', 'job_id', id)::text) FROM locked_job WHERE state NOT IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NULL), updated_job AS (UPDATE rr_job SET state = CASE WHEN state = 'running' THEN state ELSE 'cancelled' END, finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE '2026-03-01' END FROM notification WHERE rr_job.id = notification.id RETURNING rr_job.*) SELECT id, state, finalized_at FROM rr_job WHERE id = 2 AND id NOT IN (SELECT id FROM updated_job) UNION SELECT id, state, finalized_at FROM updated_job; <waiting ...>
+step s1c: COMMIT;
+step s2cancel: <... completed>
+id|state  |finalized_at
+--+-------+------------
+ 2|running|            
+(1 row)
+
+step s2show: SELECT id, state, scheduled_at, finalized_at FROM rr_job WHERE id IN (1, 2) ORDER BY id;
+id|state    |scheduled_at                |finalized_at                
+--+---------+----------------------------+----------------------------
+ 1|discarded|Thu Jan 01 00:00:00 2026 PST|Fri Jan 02 00:00:00 2026 PST
+ 2|running  |Thu Jan 01 00:00:00 2026 PST|                            
+(2 rows)
+

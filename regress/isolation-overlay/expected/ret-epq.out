@@ -1,0 +1,527 @@
+Parsed test spec with 3 sessions
+
+starting permutation: read wx dr c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wx: UPDATE acc SET bal = bal + 450 WHERE id = 'checking';
+step dr: DELETE FROM acc WHERE bal = 600 RETURNING *; <waiting ...>
+step c2: COMMIT;
+step dr: <... completed>
+id     |bal
+-------+---
+savings|600
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+(1 row)
+
+
+starting permutation: read wx dn c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wx: UPDATE acc SET bal = bal + 450 WHERE id = 'checking';
+step dn: DELETE FROM acc WHERE bal = 600; <waiting ...>
+step c2: COMMIT;
+step dn: <... completed>
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+(1 row)
+
+
+starting permutation: readg wg dg c2 c1 readg
+step readg: SELECT * FROM accg ORDER BY id;
+id      |bal|bal2
+--------+---+----
+checking|600|1200
+savings |600|1200
+(2 rows)
+
+step wg: UPDATE accg SET bal = bal + 450 WHERE id = 'checking';
+step dg: DELETE FROM accg WHERE bal = 600 RETURNING *; <waiting ...>
+step c2: COMMIT;
+step dg: <... completed>
+id     |bal|bal2
+-------+---+----
+savings|600|1200
+(1 row)
+
+step c1: COMMIT;
+step readg: SELECT * FROM accg ORDER BY id;
+id      | bal|bal2
+--------+----+----
+checking|1050|2100
+(1 row)
+
+
+starting permutation: read wk dr c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wk: UPDATE acc SET id = 'checking' WHERE id = 'checking';
+step dr: DELETE FROM acc WHERE bal = 600 RETURNING *; <waiting ...>
+step c2: COMMIT;
+step dr: <... completed>
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id|bal
+--+---
+(0 rows)
+
+
+starting permutation: read3 w3 d3 c2 c1 read3
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      |bal
+--------+---
+a       |600
+checking|600
+z       |600
+(3 rows)
+
+step w3: UPDATE acc3 SET bal = bal + 450 WHERE id = 'checking';
+step d3: DELETE FROM acc3 WHERE bal = 600 RETURNING id; <waiting ...>
+step c2: COMMIT;
+step d3: <... completed>
+id
+--
+a 
+z 
+(2 rows)
+
+step c1: COMMIT;
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+(1 row)
+
+
+starting permutation: read wx sf c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wx: UPDATE acc SET bal = bal + 450 WHERE id = 'checking';
+step sf: SELECT * FROM acc WHERE bal = 600 FOR UPDATE; <waiting ...>
+step c2: COMMIT;
+step sf: <... completed>
+id     |bal
+-------+---
+savings|600
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+savings | 600
+(2 rows)
+
+
+starting permutation: read wx cf c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wx: UPDATE acc SET bal = bal + 450 WHERE id = 'checking';
+step cf: DECLARE c CURSOR FOR SELECT * FROM acc WHERE bal = 600 FOR UPDATE; FETCH ALL FROM c; <waiting ...>
+step c2: COMMIT;
+step cf: <... completed>
+id     |bal
+-------+---
+savings|600
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+savings | 600
+(2 rows)
+
+
+starting permutation: read wx di c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wx: UPDATE acc SET bal = bal + 450 WHERE id = 'checking';
+step di: SELECT del_into_acc(); <waiting ...>
+step c2: COMMIT;
+step di: <... completed>
+del_into_acc
+------------
+savings 1   
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+(1 row)
+
+
+starting permutation: read wk di c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wk: UPDATE acc SET id = 'checking' WHERE id = 'checking';
+step di: SELECT del_into_acc(); <waiting ...>
+step c2: COMMIT;
+step di: <... completed>
+ERROR:  query returned more than one row
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+
+starting permutation: read3 w3a di3 c2 c1 read3
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      |bal
+--------+---
+a       |600
+checking|600
+z       |600
+(3 rows)
+
+step w3a: UPDATE acc3 SET bal = bal + 450 WHERE id IN ('checking', 'z');
+step di3: SELECT del_into('acc3'); <waiting ...>
+step c2: COMMIT;
+step di3: <... completed>
+del_into
+--------
+a 1     
+(1 row)
+
+step c1: COMMIT;
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+z       |1050
+(2 rows)
+
+
+starting permutation: read3 w3 di3 c2 c1 read3
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      |bal
+--------+---
+a       |600
+checking|600
+z       |600
+(3 rows)
+
+step w3: UPDATE acc3 SET bal = bal + 450 WHERE id = 'checking';
+step di3: SELECT del_into('acc3'); <waiting ...>
+step c2: COMMIT;
+step di3: <... completed>
+del_into
+--------
+a 2     
+(1 row)
+
+step c1: COMMIT;
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+(1 row)
+
+
+starting permutation: read wx ur c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wx: UPDATE acc SET bal = bal + 450 WHERE id = 'checking';
+step ur: UPDATE acc SET bal = bal + 1 WHERE bal = 600 RETURNING *; <waiting ...>
+step c2: COMMIT;
+step ur: <... completed>
+id     |bal
+-------+---
+savings|601
+(1 row)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      | bal
+--------+----
+checking|1050
+savings | 601
+(2 rows)
+
+
+starting permutation: read wk ur c2 c1 read
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|600
+savings |600
+(2 rows)
+
+step wk: UPDATE acc SET id = 'checking' WHERE id = 'checking';
+step ur: UPDATE acc SET bal = bal + 1 WHERE bal = 600 RETURNING *; <waiting ...>
+step c2: COMMIT;
+step ur: <... completed>
+id      |bal
+--------+---
+checking|601
+savings |601
+(2 rows)
+
+step c1: COMMIT;
+step read: SELECT * FROM acc ORDER BY id;
+id      |bal
+--------+---
+checking|601
+savings |601
+(2 rows)
+
+
+starting permutation: readg wg ug c2 c1 readg
+step readg: SELECT * FROM accg ORDER BY id;
+id      |bal|bal2
+--------+---+----
+checking|600|1200
+savings |600|1200
+(2 rows)
+
+step wg: UPDATE accg SET bal = bal + 450 WHERE id = 'checking';
+step ug: UPDATE accg SET bal = bal + 1 WHERE bal = 600 RETURNING id, bal; <waiting ...>
+step c2: COMMIT;
+step ug: <... completed>
+id     |bal
+-------+---
+savings|601
+(1 row)
+
+step c1: COMMIT;
+step readg: SELECT * FROM accg ORDER BY id;
+id      | bal|bal2
+--------+----+----
+checking|1050|2100
+savings | 601|1202
+(2 rows)
+
+
+starting permutation: read3 w3 u3 c2 c1 read3
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      |bal
+--------+---
+a       |600
+checking|600
+z       |600
+(3 rows)
+
+step w3: UPDATE acc3 SET bal = bal + 450 WHERE id = 'checking';
+step u3: UPDATE acc3 SET bal = bal + 1 WHERE bal = 600 RETURNING id, bal; <waiting ...>
+step c2: COMMIT;
+step u3: <... completed>
+id|bal
+--+---
+a |601
+z |601
+(2 rows)
+
+step c1: COMMIT;
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      | bal
+--------+----
+a       | 601
+checking|1050
+z       | 601
+(3 rows)
+
+
+starting permutation: read3 w3 ui3 c2 c1 read3
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      |bal
+--------+---
+a       |600
+checking|600
+z       |600
+(3 rows)
+
+step w3: UPDATE acc3 SET bal = bal + 450 WHERE id = 'checking';
+step ui3: SELECT upd_into('acc3'); <waiting ...>
+step c2: COMMIT;
+step ui3: <... completed>
+upd_into
+--------
+a 2     
+(1 row)
+
+step c1: COMMIT;
+step read3: SELECT * FROM acc3 ORDER BY id;
+id      | bal
+--------+----
+a       | 601
+checking|1050
+z       | 601
+(3 rows)
+
+
+starting permutation: reado wob uo c2 c1 reado
+step reado: SELECT * FROM acco ORDER BY id;
+id      |bal|note
+--------+---+----
+a       |600|a0  
+checking|600|c0  
+z       |600|z0  
+(3 rows)
+
+step wob: UPDATE acco SET bal = bal + 5 WHERE id = 'checking';
+step uo: UPDATE acco SET bal = bal + 1 WHERE bal >= 600 RETURNING id, old.bal AS ob, new.bal AS nb, old.note AS onote, new.note AS nnote; <waiting ...>
+step c2: COMMIT;
+step uo: <... completed>
+id      | ob| nb|onote|nnote
+--------+---+---+-----+-----
+a       |600|601|a0   |a0   
+checking|605|606|c0   |c0   
+z       |600|601|z0   |z0   
+(3 rows)
+
+step c1: COMMIT;
+step reado: SELECT * FROM acco ORDER BY id;
+id      |bal|note
+--------+---+----
+a       |601|a0  
+checking|606|c0  
+z       |601|z0  
+(3 rows)
+
+
+starting permutation: reado won uo c2 c1 reado
+step reado: SELECT * FROM acco ORDER BY id;
+id      |bal|note
+--------+---+----
+a       |600|a0  
+checking|600|c0  
+z       |600|z0  
+(3 rows)
+
+step won: UPDATE acco SET note = 'c2' WHERE id = 'checking';
+step uo: UPDATE acco SET bal = bal + 1 WHERE bal >= 600 RETURNING id, old.bal AS ob, new.bal AS nb, old.note AS onote, new.note AS nnote; <waiting ...>
+step c2: COMMIT;
+step uo: <... completed>
+id      | ob| nb|onote|nnote
+--------+---+---+-----+-----
+a       |600|601|a0   |a0   
+checking|600|601|c2   |c2   
+z       |600|601|z0   |z0   
+(3 rows)
+
+step c1: COMMIT;
+step reado: SELECT * FROM acco ORDER BY id;
+id      |bal|note
+--------+---+----
+a       |601|a0  
+checking|601|c2  
+z       |601|z0  
+(3 rows)
+
+
+starting permutation: reado wox uo c2 c1 reado
+step reado: SELECT * FROM acco ORDER BY id;
+id      |bal|note
+--------+---+----
+a       |600|a0  
+checking|600|c0  
+z       |600|z0  
+(3 rows)
+
+step wox: UPDATE acco SET bal = 1 WHERE id = 'checking';
+step uo: UPDATE acco SET bal = bal + 1 WHERE bal >= 600 RETURNING id, old.bal AS ob, new.bal AS nb, old.note AS onote, new.note AS nnote; <waiting ...>
+step c2: COMMIT;
+step uo: <... completed>
+id| ob| nb|onote|nnote
+--+---+---+-----+-----
+a |600|601|a0   |a0   
+z |600|601|z0   |z0   
+(2 rows)
+
+step c1: COMMIT;
+step reado: SELECT * FROM acco ORDER BY id;
+id      |bal|note
+--------+---+----
+a       |601|a0  
+checking|  1|c0  
+z       |601|z0  
+(3 rows)
+
+
+starting permutation: reado won dol c2 c1 reado
+step reado: SELECT * FROM acco ORDER BY id;
+id      |bal|note
+--------+---+----
+a       |600|a0  
+checking|600|c0  
+z       |600|z0  
+(3 rows)
+
+step won: UPDATE acco SET note = 'c2' WHERE id = 'checking';
+step dol: DELETE FROM acco WHERE bal >= 600 RETURNING id, old.bal AS ob, new.bal AS nb, old.note AS onote; <waiting ...>
+step c2: COMMIT;
+step dol: <... completed>
+id      | ob|nb|onote
+--------+---+--+-----
+a       |600|  |a0   
+checking|600|  |c2   
+z       |600|  |z0   
+(3 rows)
+
+step c1: COMMIT;
+step reado: SELECT * FROM acco ORDER BY id;
+id|bal|note
+--+---+----
+(0 rows)
+

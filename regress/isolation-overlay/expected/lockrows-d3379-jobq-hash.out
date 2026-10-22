@@ -1,0 +1,107 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1claim s2skip s1c s2read
+step s1b: BEGIN;
+step s1claim: UPDATE jqh SET state = 'running', owner = 'a' WHERE id IN (SELECT id FROM jqh WHERE state = 'new' ORDER BY id LIMIT 2 FOR UPDATE SKIP LOCKED) RETURNING id, state, owner;
+id|state  |owner
+--+-------+-----
+ 1|running|a    
+ 2|running|a    
+(2 rows)
+
+step s2skip: UPDATE jqh SET state = 'running', owner = 'b' WHERE id IN (SELECT id FROM jqh WHERE state = 'new' ORDER BY id LIMIT 2 FOR UPDATE SKIP LOCKED) RETURNING id, state, owner;
+id|state  |owner
+--+-------+-----
+ 3|running|b    
+ 5|running|b    
+(2 rows)
+
+step s1c: COMMIT;
+step s2read: SELECT id, state, owner, prio FROM jqh WHERE state <> 'new' OR owner IS NOT NULL ORDER BY id;
+id|state  |owner|prio
+--+-------+-----+----
+ 1|running|a    |   2
+ 2|running|a    |   4
+ 3|running|b    |   1
+ 4|done   |     |   3
+ 5|running|b    |   0
+ 8|done   |     |   1
+12|done   |     |   4
+(7 rows)
+
+
+starting permutation: s1b s1done s2wait s1c s2read
+step s1b: BEGIN;
+step s1done: UPDATE jqh SET state = 'done' WHERE id = 1;
+step s2wait: UPDATE jqh SET state = 'running', owner = 'b' WHERE id IN (SELECT id FROM jqh WHERE state = 'new' ORDER BY id LIMIT 2 FOR UPDATE) RETURNING id, state, owner, prio; <waiting ...>
+step s1c: COMMIT;
+step s2wait: <... completed>
+id|state  |owner|prio
+--+-------+-----+----
+ 2|running|b    |   4
+ 3|running|b    |   1
+(2 rows)
+
+step s2read: SELECT id, state, owner, prio FROM jqh WHERE state <> 'new' OR owner IS NOT NULL ORDER BY id;
+id|state  |owner|prio
+--+-------+-----+----
+ 1|done   |     |   2
+ 2|running|b    |   4
+ 3|running|b    |   1
+ 4|done   |     |   3
+ 8|done   |     |   1
+12|done   |     |   4
+(6 rows)
+
+
+starting permutation: s1b s1bump s2wait s1c s2read
+step s1b: BEGIN;
+step s1bump: UPDATE jqh SET prio = prio + 10 WHERE id = 1;
+step s2wait: UPDATE jqh SET state = 'running', owner = 'b' WHERE id IN (SELECT id FROM jqh WHERE state = 'new' ORDER BY id LIMIT 2 FOR UPDATE) RETURNING id, state, owner, prio; <waiting ...>
+step s1c: COMMIT;
+step s2wait: <... completed>
+id|state  |owner|prio
+--+-------+-----+----
+ 1|running|b    |  12
+ 2|running|b    |   4
+(2 rows)
+
+step s2read: SELECT id, state, owner, prio FROM jqh WHERE state <> 'new' OR owner IS NOT NULL ORDER BY id;
+id|state  |owner|prio
+--+-------+-----+----
+ 1|running|b    |  12
+ 2|running|b    |   4
+ 4|done   |     |   3
+ 8|done   |     |   1
+12|done   |     |   4
+(5 rows)
+
+
+starting permutation: s1b s1claim s2del s1c s2read
+step s1b: BEGIN;
+step s1claim: UPDATE jqh SET state = 'running', owner = 'a' WHERE id IN (SELECT id FROM jqh WHERE state = 'new' ORDER BY id LIMIT 2 FOR UPDATE SKIP LOCKED) RETURNING id, state, owner;
+id|state  |owner
+--+-------+-----
+ 1|running|a    
+ 2|running|a    
+(2 rows)
+
+step s2del: DELETE FROM jqh WHERE id IN (SELECT id FROM jqh WHERE state = 'new' ORDER BY id LIMIT 2 FOR UPDATE) RETURNING id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id
+--
+ 3
+ 5
+(2 rows)
+
+step s2read: SELECT id, state, owner, prio FROM jqh WHERE state <> 'new' OR owner IS NOT NULL ORDER BY id;
+id|state  |owner|prio
+--+-------+-----+----
+ 1|running|a    |   2
+ 2|running|a    |   4
+ 4|done   |     |   3
+ 8|done   |     |   1
+12|done   |     |   4
+(5 rows)
+

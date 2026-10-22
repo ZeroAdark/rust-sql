@@ -1,6 +1,3 @@
-//! KATs against a real pg_control produced by C PostgreSQL 18.3 initdb
-//! (tests/data/pg_control; see the crate notes for regeneration).
-
 use controldata_utils::*;
 
 fn fixture_path() -> String {
@@ -90,7 +87,6 @@ fn short_file_is_data_corrupted_error() {
 
 #[test]
 fn missing_file_is_open_error() {
-    // controldata_utils.c:91 — `could not open file "%s" for reading: %m`;
     // %m is strerror(errno), never std's `(os error N)` suffix.
     let err = get_controlfile_by_exact_path("/nonexistent/pg_control").unwrap_err();
     assert_eq!(
@@ -103,16 +99,7 @@ fn missing_file_is_open_error() {
     assert!(!err.message().contains("os error"), "{}", err.message());
 }
 
-// --- wait-event witness (controldata_utils.c:235/250 backend arm) ----------
-// pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE) brackets the
-// write, pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_SYNC_UPDATE) the
-// fsync, each closed by pgstat_report_wait_end(). The wait seams are
-// installed ONCE per test process with a recorder keyed by thread id (tests
-// run concurrently; each asserts only its own thread's trace).
-
 const PG_WAIT_IO: u32 = 0x0A00_0000;
-// wait_event_names.txt IO section order (waitevent's WAIT_EVENT_IO_NAMES):
-// ControlFileSyncUpdate = 11, ControlFileWriteUpdate = 13.
 const WAIT_EVENT_CONTROL_FILE_SYNC_UPDATE: u32 = PG_WAIT_IO | 11;
 const WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE: u32 = PG_WAIT_IO | 13;
 
@@ -149,25 +136,18 @@ fn update_controlfile_reports_control_file_wait_events() {
     let datadir = dir.to_str().unwrap();
     let (mut cf, _) = get_controlfile(datadir).unwrap();
 
-    // do_sync = true: write span, then sync span.
     update_controlfile(datadir, &mut cf, true).unwrap();
     assert_eq!(
         my_wait_trace(),
         vec![WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE, 0, WAIT_EVENT_CONTROL_FILE_SYNC_UPDATE, 0]
     );
 
-    // do_sync = false: the sync span is skipped (C: inside `if (do_sync)`).
     WAIT_TRACE.lock().unwrap().retain(|(t, _)| *t != std::thread::current().id());
     update_controlfile(datadir, &mut cf, false).unwrap();
     assert_eq!(my_wait_trace(), vec![WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE, 0]);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
-
-// --- fd.c-arm witness (controldata_utils.c:222/260 `#ifndef FRONTEND`) -----
-// With the file seams installed, the update opens through BasicOpenFile and
-// syncs through pg_fsync. Recorded per thread; the stubs delegate to the raw
-// syscalls.
 
 static FILE_TRACE: std::sync::Mutex<Vec<(std::thread::ThreadId, &'static str)>> =
     std::sync::Mutex::new(Vec::new());
@@ -210,9 +190,6 @@ fn backend_arm_opens_and_syncs_through_fd_seams() {
     std::fs::write(dir.join("global/pg_control"), fixture_bytes()).unwrap();
     let datadir = dir.to_str().unwrap();
 
-    // controldata_utils.c:79: the read opens through OpenTransientFile, i.e.
-    // BasicOpenFilePerm's EMFILE/ENFILE release-and-retry loop, never a raw
-    // open(2) (regression).
     let (mut cf, crc_ok) = get_controlfile(datadir).unwrap();
     assert!(crc_ok);
     assert_eq!(my_file_trace(), vec!["basic_open_file"]);
@@ -231,7 +208,7 @@ fn backend_arm_opens_and_syncs_through_fd_seams() {
 #[test]
 fn wrong_endian_version_is_byte_ordering_mismatch() {
     let mut bytes = fixture_bytes();
-    let off = 8; // pg_control_version
+    let off = 8;
     let v = u32::from_ne_bytes(bytes[off..off + 4].try_into().unwrap());
     bytes[off..off + 4].copy_from_slice(&v.swap_bytes().to_ne_bytes());
     let dir = std::env::temp_dir().join(format!("cdu_bo_{}", std::process::id()));

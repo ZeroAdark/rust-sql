@@ -1,0 +1,16 @@
+-- regress-full-int2-006
+-- SELECT x, x::int2 AS int2_value FROM (VALUES (-2.5::float8), (-1.5::float8), (-0.5::float8), (0.0::float8), (0.5::float8), (1.5::float8), (2.5::float8)) t(x);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source values rti=2 rows=7
+    row (c701:-4610560118520545280)
+    row (c701:-4613937818241073152)
+    row (c701:-4620693217682128896)
+    row (c701:0)
+    row (c701:4602678819172646912)
+    row (c701:4609434218613702656)
+    row (c701:4612811918334230528)
+  project (1=v2.1, 2=fn237(v2.1))
+  outs 1=w8:val 2=w2:val
+mapped: ValuesScan

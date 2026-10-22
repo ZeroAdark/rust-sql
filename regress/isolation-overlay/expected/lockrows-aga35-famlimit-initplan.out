@@ -1,0 +1,330 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1v s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE;
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Limit                                                        
+  InitPlan 1                                                 
+    ->  Seq Scan on fcfg                                     
+          Filter: (name = 'q'::text)                         
+  ->  LockRows                                               
+        ->  Sort                                             
+              Sort Key: fjob.prio, fjob.id                   
+              ->  Append                                     
+                    ->  Seq Scan on fjob1 fjob_1             
+                          Filter: (prio >= (InitPlan 1).col1)
+                    ->  Seq Scan on fjob2 fjob_2             
+                          Filter: (prio >= (InitPlan 1).col1)
+                    ->  Seq Scan on fjobd fjob_3             
+                          Filter: (prio >= (InitPlan 1).col1)
+(14 rows)
+
+step s1v: UPDATE fjob SET v = v || '+' WHERE id = 20;
+step s2l: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+18|  82|v18 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2l s1c
+step s1p: UPDATE fjob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2l: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v  
+--+----+---
+19|  81|v19
+18|  82|v18
+17|  83|v17
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c s2t
+step s1m: UPDATE fjob SET id = 5, v = v || 'm' WHERE id = 20;
+step s2l: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2t: SELECT tableoid::regclass, id, v FROM fjob WHERE id IN (5, 20) ORDER BY id;
+tableoid|id|v   
+--------+--+----
+fjob1   | 5|v5  
+fjob1   | 5|v20m
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s1v s2l s1c
+step s1q: UPDATE fcfg SET min_prio = 95 WHERE name = 'q';
+step s1v: UPDATE fjob SET v = v || '+' WHERE id = 20;
+step s2l: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+18|  82|v18 
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2o s1c
+step s1v: UPDATE fjob SET v = v || '+' WHERE id = 20;
+step s2o: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|prio|v  
+--+----+---
+19|  81|v19
+18|  82|v18
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1p s2o s1c
+step s1p: UPDATE fjob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2o: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|prio|v  
+--+----+---
+18|  82|v18
+17|  83|v17
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM fjob WHERE id = 20 FOR UPDATE;
+id
+--
+20
+(1 row)
+
+step s2sk: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 1 FOR UPDATE SKIP LOCKED;
+id|prio|v  
+--+----+---
+19|  81|v19
+(1 row)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM fjob WHERE id = 20 FOR UPDATE;
+id
+--
+20
+(1 row)
+
+step s2nw: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 1 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "fjob2"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2n s1c s2seq
+step s1v: UPDATE fjob SET v = v || '+' WHERE id = 20;
+step s2n: SELECT id, prio, v FROM fjob WHERE prio > (SELECT nextval('fsq'))::int + 78 ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM fsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2case s1c s2seq
+step s1v: UPDATE fjob SET v = v || '+' WHERE id = 20;
+step s2case: SELECT id, prio, v FROM fjob WHERE CASE WHEN prio > 0 THEN prio >= 80 ELSE prio > (SELECT nextval('fsq'))::int END ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2case: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+(2 rows)
+
+step s2seq: SELECT last_value, is_called FROM fsq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2l s1n17 s1n18 s2c s1c
+step s2b: BEGIN;
+step s2l: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 3 FOR UPDATE;
+id|prio|v  
+--+----+---
+20|  80|v20
+19|  81|v19
+18|  82|v18
+(3 rows)
+
+step s1n17: SELECT id FROM fjob WHERE id = 17 FOR UPDATE NOWAIT;
+id
+--
+17
+(1 row)
+
+step s1n18: SELECT id FROM fjob WHERE id = 18 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "fjob2"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2o s1n17 s1n20 s2c s1c
+step s2b: BEGIN;
+step s2o: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q') ORDER BY prio, id LIMIT 2 OFFSET 1 FOR NO KEY UPDATE;
+id|prio|v  
+--+----+---
+19|  81|v19
+18|  82|v18
+(2 rows)
+
+step s1n17: SELECT id FROM fjob WHERE id = 17 FOR UPDATE NOWAIT;
+id
+--
+17
+(1 row)
+
+step s1n20: SELECT id FROM fjob WHERE id = 20 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "fjob2"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2ix s1q s2il s1c
+step s2ix: EXPLAIN (COSTS OFF) SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE;
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Limit                                                        
+  InitPlan 1                                                 
+    ->  LockRows                                             
+          ->  Seq Scan on fcfg                               
+                Filter: (name = 'q'::text)                   
+  ->  LockRows                                               
+        ->  Sort                                             
+              Sort Key: fjob.prio, fjob.id                   
+              ->  Append                                     
+                    ->  Seq Scan on fjob1 fjob_1             
+                          Filter: (prio >= (InitPlan 1).col1)
+                    ->  Seq Scan on fjob2 fjob_2             
+                          Filter: (prio >= (InitPlan 1).col1)
+                    ->  Seq Scan on fjobd fjob_3             
+                          Filter: (prio >= (InitPlan 1).col1)
+(15 rows)
+
+step s1q: UPDATE fcfg SET min_prio = 95 WHERE name = 'q';
+step s2il: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+id|prio|v 
+--+----+--
+ 5|  95|v5
+ 4|  96|v4
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2il s1c
+step s1v: UPDATE fjob SET v = v || '+' WHERE id = 20;
+step s2il: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+id|prio|v   
+--+----+----
+20|  80|v20+
+19|  81|v19 
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2il s1c s2t
+step s1m: UPDATE fjob SET id = 5, v = v || 'm' WHERE id = 20;
+step s2il: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2il: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2t: SELECT tableoid::regclass, id, v FROM fjob WHERE id IN (5, 20) ORDER BY id;
+tableoid|id|v   
+--------+--+----
+fjob1   | 5|v5  
+fjob1   | 5|v20m
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2b s2il s1nq s2c s1c
+step s2b: BEGIN;
+step s2il: SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min_prio FROM fcfg WHERE name = 'q' FOR UPDATE) ORDER BY prio, id LIMIT 2 FOR UPDATE;
+id|prio|v  
+--+----+---
+20|  80|v20
+19|  81|v19
+(2 rows)
+
+step s1nq: SELECT name FROM fcfg WHERE name = 'q' FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "fcfg"
+step s2c: COMMIT;
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2cx s1p s2ic s1c s2log
+step s2cx: EXPLAIN (COSTS OFF) WITH w AS (INSERT INTO flog VALUES (1, 'x') RETURNING id) SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min(id) FROM w) + 79 ORDER BY prio, id LIMIT 2 FOR UPDATE;
+QUERY PLAN                                                          
+--------------------------------------------------------------------
+Limit                                                               
+  CTE w                                                             
+    ->  Insert on flog                                              
+          ->  Result                                                
+  InitPlan 2                                                        
+    ->  Aggregate                                                   
+          ->  CTE Scan on w                                         
+  ->  LockRows                                                      
+        ->  Sort                                                    
+              Sort Key: fjob.prio, fjob.id                          
+              ->  Append                                            
+                    ->  Seq Scan on fjob1 fjob_1                    
+                          Filter: (prio >= ((InitPlan 2).col1 + 79))
+                    ->  Seq Scan on fjob2 fjob_2                    
+                          Filter: (prio >= ((InitPlan 2).col1 + 79))
+                    ->  Seq Scan on fjobd fjob_3                    
+                          Filter: (prio >= ((InitPlan 2).col1 + 79))
+(17 rows)
+
+step s1p: UPDATE fjob SET prio = 10, v = v || 'p' WHERE id = 20;
+step s2ic: WITH w AS (INSERT INTO flog VALUES (1, 'x') RETURNING id) SELECT id, prio, v FROM fjob WHERE prio >= (SELECT min(id) FROM w) + 79 ORDER BY prio, id LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2ic: <... completed>
+id|prio|v  
+--+----+---
+19|  81|v19
+18|  82|v18
+(2 rows)
+
+step s2log: SELECT count(*), min(id) FROM flog;
+count|min
+-----+---
+    1|  1
+(1 row)
+
+s1: WARNING:  there is no transaction in progress

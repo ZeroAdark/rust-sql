@@ -27,6 +27,8 @@ pub mod switches;
 #[cfg(test)]
 mod session_tests;
 #[cfg(test)]
+mod d4812_tests;
+#[cfg(test)]
 mod tests;
 
 pub use extended_query::{
@@ -51,6 +53,13 @@ pub fn init_seams() {
     #[cfg(pgrust_sim)]
     postgres_seams::postgres_sim_net_main::set(PostgresSimNetMain);
     postgres_seams::check_for_interrupts::set(check_for_interrupts);
+    postgres_seams::check_for_abort_interrupts::set(check_for_abort_interrupts);
+    // K11 (D4214 / D4229): the tracked forms, so a call through the seam marks the poll-gap probe at its own line
+    postgres_seams::check_for_interrupts::set_tracked(check_for_interrupts_at);
+    postgres_seams::check_for_abort_interrupts::set_tracked(check_for_abort_interrupts_at);
+    postgres_seams::interrupts_pending::set(interrupts_pending);
+    postgres_seams::abort_pending::set(abort_pending);
+    postgres_seams::interrupt_flagged::set(interrupt_flagged);
     postgres_seams::die::set(die);
     postgres_seams::statement_cancel_handler::set(StatementCancelHandler);
     postgres_seams::quickdie::set(quickdie);
@@ -193,6 +202,22 @@ thread_local! {
     static USE_SEMI_NEWLINE_NEWLINE: Cell<bool> = const { Cell::new(false) };
 }
 
+/// D4682: a client backend thread reused for a new session (backend_thread_reuse) starts PostgresMain with the
+/// statics a new thread has. The last session can leave them set (a Parse error then Terminate without Sync leaves
+/// IGNORE_TILL_SYNC; the unnamed statement outlives its session), and the unnamed statement's handle points into a
+/// plan cache its teardown dropped, so it is forgotten, never dropped. A no-op on a new thread.
+pub(crate) fn reset_session_statics() {
+    XACT_STARTED.with(|c| c.set(false));
+    DOING_EXTENDED_QUERY_MESSAGE.with(|c| c.set(false));
+    IGNORE_TILL_SYNC.with(|c| c.set(false));
+    DOING_COMMAND_READ.with(|c| c.set(false));
+    RECOVERY_CONFLICT_PENDING_REASONS.with(|c| c.set(0));
+    SAVE_RUSAGE.with(|c| c.set(None));
+    extended_query::forget_unnamed_stmt();
+    passivate::reset_release_stage();
+    stmt_trace::reset();
+}
+
 pub(crate) fn echo_query() -> bool {
     ECHO_QUERY.with(Cell::get)
 }
@@ -299,17 +324,52 @@ pub(crate) fn get_current_timestamp() -> types_core::TimestampTz {
 
 // Per-tuple hot: TLS pointer + Relaxed load + one predictable branch (C's
 // CHECK_FOR_INTERRUPTS; the shared flag is how async senders reach us).
-// regression quantum-yield tick: one MORE thread-local bool load +
+// GL-STMTTASK-2 quantum-yield tick: one MORE thread-local bool load +
 // predictable branch (armed only inside statement-task spans under the
 // DEFAULT-OFF PGRUST_STMT_TASK_YIELD knob; the governor is the executor's
 // registered hook).
 #[inline(always)]
+#[track_caller] // D4128: the probe's 'began after a poll at' names this call's site, not mark_poll's (probe-on path only)
 pub fn check_for_interrupts() -> PgResult<()> {
+    check_for_interrupts_at(core::panic::Location::caller())
+}
+
+/// K11 (testflow, main 2026-10-12T21:08:00Z; D4214 / D4229): check_for_interrupts with the caller's location, the tracked
+/// form postgres_seams::check_for_interrupts::call() runs (seam_core::seam_tracked!, set_tracked in init_seams). Through the
+/// seam's fn pointer a #[track_caller] fn reports its own definition line, so every CHECK_FOR_INTERRUPTS through the seam
+/// (244 call sites, and Gravity's cancelpoll::interrupts::check) read 'lib.rs:312' in the probe. #[inline(always)]: in a
+/// direct call the location stays a constant that only the cold, probe-on mark_poll takes.
+#[inline(always)]
+pub fn check_for_interrupts_at(site: &'static core::panic::Location<'static>) -> PgResult<()> {
+    // D3962 (C6 (d)): a CHECK_FOR_INTERRUPTS that could service a cancel is a poll for Gravity's poll-gap probe
+    // (ProcSleep's wakes, connqueue, latch waits, and the facade cancelpoll::interrupts, which calls this seam); one
+    // relaxed load when the probe is off
+    if cancelpoll::probe_on() {
+        mark_poll(site);
+    }
     if init_small::globals::InterruptPending() {
         return ProcessInterrupts();
     }
     postgres_seams::stmt_yield::tick();
     Ok(())
+}
+
+/// INTERRUPT_PENDING && INTERRUPTS_CAN_BE_PROCESSED: an interrupt CHECK_FOR_INTERRUPTS would process now is pending.
+/// Read only (Gravity's cancelpoll::interrupts::pending: a lowering, a compile or a compile wait stops, then checks).
+fn interrupts_pending() -> bool {
+    init_small::globals::InterruptPending() && init_small::globals::InterruptsCanBeProcessed()
+}
+
+/// INTERRUPTS_CAN_BE_PROCESSED && AbortPending: an abort-class interrupt (a cancel, a timeout, a terminate) a check would
+/// process now is pending. Read only (Gravity's cancelpoll::interrupts::pending_abort: the grant pool's wait wakes).
+fn abort_pending() -> bool {
+    init_small::globals::InterruptsCanBeProcessed() && init_small::globals::AbortPending()
+}
+
+/// INTERRUPT_PENDING alone, read only, whether or not it can be processed now (Gravity's
+/// cancelpoll::interrupts::flagged).
+fn interrupt_flagged() -> bool {
+    init_small::globals::InterruptPending()
 }
 
 thread_local! {
@@ -487,30 +547,110 @@ fn ProcessRecoveryConflictInterrupts() -> PgResult<()> {
 }
 
 #[cold]
+fn noted(e: &::types_error::PgError) {
+    if init_small::globals::NoteInterruptRaised(e) {
+        if let Some(l) = init_small::globals::MyLatch() {
+            latch::SetLatch(l);
+        }
+    }
+}
+
+#[cold]
 #[inline(never)]
 pub fn ProcessInterrupts() -> PgResult<()> {
+    process_interrupts(false).inspect_err(|e| noted(e))
+}
+
+/// The abort class only (docs/gravity/driver.md §6): a termination, a lost connection, a query cancel (user
+/// request, statement / lock timeout), a transaction timeout. Everything
+/// else stays pending (`InterruptPending` is left set) for the next full
+/// `ProcessInterrupts`. The Gravity runner calls this when a kernel stopped on
+/// the abort bit of the backend's `AbortPending` byte; it raises or leaves the
+/// bit cleared. A kernel on the byte's service bit runs the full check (D3406:
+/// the kernels' poll, gravity_exec glue).
+pub fn ProcessAbortInterrupts() -> PgResult<()> {
+    process_interrupts(true).inspect_err(|e| noted(e))
+}
+
+/// CHECK_FOR_INTERRUPTS restricted to the abort class (`ProcessAbortInterrupts`).
+/// D4128: #[inline(always)] as check_for_interrupts, so #[track_caller]'s location is a constant that only the cold,
+/// probe-on mark_poll call takes; a non-inlined #[track_caller] fn would get it as an extra argument on every call (the
+/// probe-off path stays one relaxed load, main 2026-10-12T05:53:24Z (b)).
+#[inline(always)]
+#[track_caller] // D4128: as check_for_interrupts
+pub fn check_for_abort_interrupts() -> PgResult<()> {
+    check_for_abort_interrupts_at(core::panic::Location::caller())
+}
+
+/// K11: check_for_abort_interrupts with the caller's location, the seam's tracked form (as check_for_interrupts_at).
+#[inline(always)]
+pub fn check_for_abort_interrupts_at(site: &'static core::panic::Location<'static>) -> PgResult<()> {
+    if cancelpoll::probe_on() {
+        mark_poll(site); // D3962: the abort class services a query cancel, so it is a poll, as check_for_interrupts
+    }
+    if init_small::globals::AbortPending() {
+        return ProcessAbortInterrupts();
+    }
+    Ok(())
+}
+
+/// D3962: the poll-gap probe's mark (`cancelpoll::polled`) for a CHECK_FOR_INTERRUPTS, only when it could service a cancel:
+/// under HOLD_INTERRUPTS, a query-cancel holdoff or a critical section it services none, and marking it would hide a real
+/// gap. Called only while the probe is on (the holdoff reads stay off the probe-off path), from check_for_interrupts and
+/// check_for_abort_interrupts (its abort class services a query cancel).
+/// D4128 (testflow, main 2026-10-12T05:53:24Z): #[track_caller] here and on its two callers, so `cancelpoll::polled`'s
+/// site is the CHECK_FOR_INTERRUPTS call's own line; before, every one reported this function's line, and the probe's
+/// 'began after a poll at' could not say which code ran. The location is passed only on this cold, probe-on path.
+/// K11: the location is an argument (the call's, from check_for_interrupts' #[track_caller] or the tracked seam).
+#[cold]
+#[inline(never)]
+fn mark_poll(site: &'static core::panic::Location<'static>) {
+    use init_small::globals as g;
+    if g::InterruptHoldoffCount() == 0 && g::QueryCancelHoldoffCount() == 0 && g::CritSectionCount() == 0 {
+        cancelpoll::polled_at(site);
+    }
+}
+
+fn process_interrupts(abort_only: bool) -> PgResult<()> {
     use init_small::globals as g;
 
-    // C's SIGALRM/kill handlers already ran asynchronously by this point;
-    // the thread model runs them here: senders raised InterruptPending, the
-    // drains fire the pended timeout handlers and signal dispositions on
-    // this thread before the flags below are inspected.
+    // PostgreSQL's order (postgres.c ProcessInterrupts): the holdoff check,
+    // then `InterruptPending = false`, then the flags; C's handlers run at
+    // delivery, so a signal landing while ProcessInterrupts runs raises the
+    // flag again and the next CHECK_FOR_INTERRUPTS reaches it. The thread
+    // model runs the handlers here (the drains below fire the pended timeout
+    // handlers and signal dispositions on this thread before the flags are
+    // inspected), so the clear comes FIRST, before any handler runs: a
+    // delivery after the drain took the pending word re-raises
+    // InterruptPending instead of being stranded until the backend idles
+    // (D355). Held off, nothing is cleared and the drains still run (C's
+    // handlers are not held off), their flags waiting for RESUME_INTERRUPTS.
+    let held = g::InterruptHoldoffCount() != 0 || g::CritSectionCount() != 0;
+    if !held {
+        if !abort_only {
+            g::SetInterruptPending(false);
+            // D3406: the kernels' service bit goes with InterruptPending (a delivery after it raises both again)
+            g::ClearServicePending();
+        }
+        // abort_only: the deferrable bits stay pending behind InterruptPending.
+        g::SetAbortPending(false);
+    }
     if timeout_seams::process_timeout_interrupt::is_installed() {
         timeout_seams::process_timeout_interrupt::call();
     }
+    // wasm32: a cancel the embedder requested is drained as a pended SIGINT is
+    #[cfg(target_family = "wasm")]
+    if g::TakeHostCancel() {
+        StatementCancelHandler();
+    }
     procsignal::DrainThreadSignals()?;
-
-    if g::InterruptHoldoffCount() != 0 || g::CritSectionCount() != 0 {
+    if held {
         return Ok(());
     }
-    g::SetInterruptPending(false);
-    // A post landing between the drains above and the clear just lost its
-    // InterruptPending edge (C's handlers run before the clear, never
-    // between): drain again so the pended handler fires now.
-    if timeout_seams::process_timeout_interrupt::is_installed() {
-        timeout_seams::process_timeout_interrupt::call();
+    if let Some(e) = g::RedeliveredInterrupt() {
+        lmgr_proc::LockErrorCleanup()?;
+        return Err(e);
     }
-    procsignal::DrainThreadSignals()?;
 
     if g::ProcDiePending() {
         g::SetProcDiePending(false);
@@ -555,7 +695,7 @@ pub fn ProcessInterrupts() -> PgResult<()> {
             .into());
     }
 
-    if g::CheckClientConnectionPending() {
+    if !abort_only && g::CheckClientConnectionPending() {
         g::SetCheckClientConnectionPending(false);
         // C: check for a lost connection and re-arm, if still configured,
         // but not once back at DoingCommandRead — idle sessions already
@@ -590,11 +730,47 @@ pub fn ProcessInterrupts() -> PgResult<()> {
             .into());
     }
 
+    // D2395: an allocation the emergency reserve rescued on this thread (init_small oom.rs) ends the statement with
+    // palloc's ERROR, as PostgreSQL's backend would have raised at the allocation; the server lives on.
+    if !abort_only {
+        let size = init_small::oom::take_oom_pending();
+        if size != 0 {
+            return Err(ereport(ERROR)
+                .errcode(types_error::ERRCODE_OUT_OF_MEMORY)
+                .errmsg("out of memory")
+                .errdetail(format!("Failed on request of size {size}."))
+                .into_error()
+                .with_error_location(loc(0, "ProcessInterrupts"))
+                .into());
+        }
+    }
+
+    // D3821: the memory watchdog's cancel (memwatchdog refresh_cancel: the victim's condemnation, its InterruptPending and
+    // its Gravity abort byte, with no thread signal) raises 53200 while the statement it chose still runs, at the first
+    // interrupt poll or kernel back-edge after it; a condemnation naming a statement that has ended is dropped (between
+    // statements too), never raised on the next. A user's cancel pending beside it goes first, below, with its 57014, and
+    // the condemnation is dropped after it; held off, it waits as a user's cancel does (the statement's next block or
+    // grant draw fails it meanwhile).
+    if !g::QueryCancelPending() && g::QueryCancelHoldoffCount() == 0 {
+        if DoingCommandRead() {
+            let _ = mcx::governor::take_condemned();
+        } else if let Some(e) = mcx::governor::take_watchdog_cancel() {
+            lmgr_proc::LockErrorCleanup()?;
+            return Err(e.into());
+        }
+    }
+
     if g::QueryCancelPending() && g::QueryCancelHoldoffCount() != 0 {
         // Cancel mustn't fire mid-message-read (FE/BE sync); re-arm for after.
         g::SetInterruptPending(true);
     } else if g::QueryCancelPending() {
-        g::SetQueryCancelPending(false);
+        // D380: the cancel is consumed here, and with it the abort-class byte its sender raised. The byte was cleared
+        // at the top, BEFORE the drains ran this cancel's handler; a byte its sender raised after that clear (the
+        // timer thread's fire or a SIGINT delivery observed by the drains above) outlived the cancel into the next
+        // statement, whose Gravity kernels read it at their first window: a spurious 57014 there. The senders
+        // finish their stores before the drains see their wake (timeout ProcessTimeoutInterrupt, procsignal
+        // DrainThreadSignals), so every byte of the interrupts drained above is set by now.
+        g::ClearQueryCancelPending();
 
         // Uninstalled timeout seams are exact here, not a stub: timeout.c is
         // the only writer of these indicators, so absent it they are false.
@@ -626,7 +802,7 @@ pub fn ProcessInterrupts() -> PgResult<()> {
                 .errcode(types_error::ERRCODE_LOCK_NOT_AVAILABLE)
                 .errmsg("canceling statement due to lock timeout")
                 .into_error()
-                .with_error_location(loc(3438, "ProcessInterrupts"))
+                .with_error_location(loc(3439, "ProcessInterrupts"))
                 .into());
         }
         if stmt_timeout_occurred {
@@ -662,7 +838,7 @@ pub fn ProcessInterrupts() -> PgResult<()> {
         ProcessRecoveryConflictInterrupts()?;
     }
 
-    if g::IdleInTransactionSessionTimeoutPending() {
+    if !abort_only && g::IdleInTransactionSessionTimeoutPending() {
         // A GUC reset to zero between firing and here means ignore the signal
         // (the update itself doesn't disable a pending interrupt).
         g::SetIdleInTransactionSessionTimeoutPending(false);
@@ -686,7 +862,7 @@ pub fn ProcessInterrupts() -> PgResult<()> {
                 .into());
         }
     }
-    if g::IdleSessionTimeoutPending() {
+    if !abort_only && g::IdleSessionTimeoutPending() {
         g::SetIdleSessionTimeoutPending(false);
         if lmgr_proc::globals::IdleSessionTimeout() > 0 {
             return Err(ereport(FATAL)
@@ -698,7 +874,7 @@ pub fn ProcessInterrupts() -> PgResult<()> {
         }
     }
 
-    if g::IdleStatsUpdateTimeoutPending()
+    if !abort_only && g::IdleStatsUpdateTimeoutPending()
         && DoingCommandRead()
         && !xact::IsTransactionOrTransactionBlock()
     {
@@ -708,25 +884,22 @@ pub fn ProcessInterrupts() -> PgResult<()> {
 
     // D3.4 idle passivation: once per idle period (the timer is one-shot);
     // the backend continues waiting for the next command afterwards.
-    if g::IdlePassivateTimeoutPending() {
+    if !abort_only && g::IdlePassivateTimeoutPending() {
         g::SetIdlePassivateTimeoutPending(false);
-        if DoingCommandRead()
-            && !xact::IsTransactionOrTransactionBlock()
-            && crate::passivate::idle_passivate_secs() > 0
-        {
-            crate::passivate::IdlePassivate()?;
+        if DoingCommandRead() {
+            crate::passivate::idle_timer_fired(xact::IsTransactionOrTransactionBlock())?;
         }
     }
 
-    if g::ProcSignalBarrierPending() {
+    if !abort_only && g::ProcSignalBarrierPending() {
         procsignal_seams::process_proc_signal_barrier::call()?;
     }
 
-    if g::ParallelMessagePending() {
+    if !abort_only && g::ParallelMessagePending() {
         parallel_seams::process_parallel_messages::call()?;
     }
 
-    if g::LogMemoryContextPending() {
+    if !abort_only && g::LogMemoryContextPending() {
         mcxt_seams::process_log_memory_context_interrupt::call()?;
     }
 
@@ -735,11 +908,11 @@ pub fn ProcessInterrupts() -> PgResult<()> {
     }
 
     // upstream 58c1188a3eaa (18.4): Fix slotsync worker blocking promotion when stuck in wait
-    if g::SlotSyncShutdownPending() {
+    if !abort_only && g::SlotSyncShutdownPending() {
         slotsync_seams::process_slot_sync_message::call()?;
     }
 
-    // Serial-lease v2 safe-point admission (regression; pgrust extension):
+    // Serial-lease v2 safe-point admission (GL-SLEASE-2; pgrust extension):
     // a sweeper-flagged floor crossing acquires its execution permit HERE —
     // the canonical safe point (past the holdoff/crit-section gates, never
     // on the error-raising arms above, which unwind out of the run anyway).
@@ -891,11 +1064,11 @@ pub fn quickdie() -> ! {
                 "In a moment you should be able to reconnect to the database and \
                  repeat your command.",
             )
-            .finish(loc(2989, "quickdie")),
+            .finish(loc(2995, "quickdie")),
         PMQUIT_FOR_STOP => ereport(types_error::WARNING_CLIENT_ONLY)
             .errcode(types_error::ERRCODE_ADMIN_SHUTDOWN)
             .errmsg("terminating connection due to immediate shutdown command")
-            .finish(loc(3000, "quickdie")),
+            .finish(loc(3001, "quickdie")),
     };
 
     // C's _exit(2), thread rendering: exit code 2 without exit callbacks; the

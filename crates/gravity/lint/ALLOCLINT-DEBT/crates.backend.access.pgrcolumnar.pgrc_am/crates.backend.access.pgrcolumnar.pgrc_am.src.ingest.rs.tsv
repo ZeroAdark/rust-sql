@@ -1,0 +1,17 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/ingest.rs
+growth	std::collections::BTreeMap::insert	1
+growth	std::collections::BTreeSet::insert	11
+growth	std::iter::Extend::extend	4
+growth	std::vec::Vec::push	2
+macro	std::format	12
+macro	std::vec	3
+method	std::boxed::Box::new	3
+method	std::clone::Clone::clone	1
+method	std::iter::Iterator::collect	16
+method	std::string::ToString::to_string	1
+method	std::sync::Arc::new	8
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	3
+type	std::string::String	3
+type	std::sync::Arc	8
+type	std::vec::Vec	12

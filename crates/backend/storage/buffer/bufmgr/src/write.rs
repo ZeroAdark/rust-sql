@@ -243,12 +243,13 @@ pub fn PageSetChecksumInplace(page: &mut [u8; BLCKSZ], blkno: BlockNumber) {
 }
 
 // PageSetChecksumCopy's static pageCopy (bufpage.c): hint bits may change
-// under a share lock, so the checksummed image is built in private storage.
+// under a share lock, so the checksummed image is built in private storage,
+// allocated on first use as C does.
 #[repr(align(4096))]
 struct PageCopy([u8; BLCKSZ]);
 
 thread_local! {
-    static PAGE_COPY: RefCell<PageCopy> = const { RefCell::new(PageCopy([0; BLCKSZ])) };
+    static PAGE_COPY: RefCell<Option<Box<PageCopy>>> = const { RefCell::new(None) };
 }
 
 // PageSetChecksumCopy / the no-checksum straight write (bufpage.c), over a
@@ -285,7 +286,8 @@ pub(crate) fn with_checksummed_page<R>(
         return f(unsafe { types_storage::WriteChunk::from_shared(src, BLCKSZ) });
     }
     PAGE_COPY.with(|c| {
-        let mut copy = c.borrow_mut();
+        let mut slot = c.borrow_mut();
+        let copy = slot.get_or_insert_with(|| Box::new(PageCopy([0; BLCKSZ])));
         // SAFETY: distinct buffers; src stays valid under the caller's pin.
         // This copy IS C's memcpy in PageSetChecksumCopy, including its
         // tolerance of a hint bit changing mid-copy: the checksum is computed
@@ -402,8 +404,8 @@ pub fn FlushDatabaseBuffers(dbid: types_core::Oid) -> PgResult<()> {
             LWLockAcquire(&desc.content_lock, LW_SHARED, globals::MyProcNumber())?;
             let flush_result = FlushBuffer(desc, IOContext::IOCONTEXT_NORMAL);
             LWLockRelease(&desc.content_lock)?;
-            UnpinBuffer(desc);
             flush_result?;
+            UnpinBuffer(desc);
         } else {
             UnlockBufHdr(desc, buf_state);
         }
@@ -461,8 +463,8 @@ pub fn FlushRelationsAllBuffers(rels: &[RelFileLocatorBackend]) -> PgResult<()> 
             LWLockAcquire(&desc.content_lock, LW_SHARED, globals::MyProcNumber())?;
             let flush_result = FlushBuffer(desc, IOContext::IOCONTEXT_NORMAL);
             LWLockRelease(&desc.content_lock)?;
-            UnpinBuffer(desc);
             flush_result?;
+            UnpinBuffer(desc);
         } else {
             UnlockBufHdr(desc, buf_state);
         }
@@ -495,9 +497,9 @@ pub(crate) fn SyncOneBuffer(buf_id: i32, skip_recently_used: bool, wb: &mut Writ
     LWLockAcquire(&desc.content_lock, LW_SHARED, globals::MyProcNumber())?;
     let flush_result = FlushBuffer(desc, IOContext::IOCONTEXT_NORMAL);
     LWLockRelease(&desc.content_lock)?;
+    flush_result?;
     let tag = desc.tag();
     UnpinBuffer(desc);
-    flush_result?;
 
     ScheduleBufferTagForWriteback(wb, IOContext::IOCONTEXT_NORMAL, &tag)?;
     Ok(result | BUF_WRITTEN)
@@ -574,7 +576,7 @@ pub fn BufferSync(flags: i32) -> PgResult<()> {
             }
         });
 
-        let nbuffers = globals::NBuffers();
+        let nbuffers = crate::buf_hdr::NBuffersInited();
         scratch.items.clear();
         // CkptBufferIds analog. Not inside a critical section (CheckPointGuts
         // runs between CreateCheckPoint's crit sections), so allocation

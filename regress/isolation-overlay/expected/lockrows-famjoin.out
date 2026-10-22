@@ -1,0 +1,282 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s1b s1u s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x: EXPLAIN (COSTS OFF) SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p;
+QUERY PLAN                                                  
+------------------------------------------------------------
+LockRows                                                    
+  ->  Hash Join                                             
+        Hash Cond: (p.id = o.id)                            
+        ->  Append                                          
+              ->  Seq Scan on jp1 p_1                       
+                    Filter: (v < 50)                        
+              ->  Seq Scan on jp2 p_2                       
+                    Filter: (v < 50)                        
+        ->  Hash                                            
+              ->  Seq Scan on jo o                          
+                    Filter: (tag = ANY ('{t9,t12}'::text[]))
+(11 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE jp SET v = v + 1 WHERE id = 12;
+step s2j: SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+tableoid|id| v| bal
+--------+--+--+----
+jp1     | 9| 9| 900
+jp2     |12|13|1200
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1m s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1m: UPDATE jp SET v = 99 WHERE id = 12;
+step s2j: SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+tableoid|id|v|bal
+--------+--+-+---
+jp1     | 9|9|900
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1k s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1k: UPDATE jp SET id = 31 WHERE id = 12;
+step s2j: SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+tableoid|id|v|bal
+--------+--+-+---
+jp1     | 9|9|900
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1o s1u s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1o: UPDATE jo SET bal = -1 WHERE id = 12;
+step s1u: UPDATE jp SET v = v + 1 WHERE id = 12;
+step s2j: SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+tableoid|id| v| bal
+--------+--+--+----
+jp1     | 9| 9| 900
+jp2     |12|13|1200
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2y s1b s1m s2k s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2y: EXPLAIN (COSTS OFF) SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.v < 50 AND p.id IN (9, 12) FOR UPDATE OF p;
+QUERY PLAN                                                                       
+---------------------------------------------------------------------------------
+LockRows                                                                         
+  ->  Hash Join                                                                  
+        Hash Cond: (o.id = p.id)                                                 
+        ->  Seq Scan on jo o                                                     
+        ->  Hash                                                                 
+              ->  Append                                                         
+                    ->  Seq Scan on jp1 p_1                                      
+                          Filter: ((v < 50) AND (id = ANY ('{9,12}'::integer[])))
+                    ->  Seq Scan on jp2 p_2                                      
+                          Filter: ((v < 50) AND (id = ANY ('{9,12}'::integer[])))
+(10 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1m: UPDATE jp SET v = 99 WHERE id = 12;
+step s2k: SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.v < 50 AND p.id IN (9, 12) FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2k: <... completed>
+tableoid|id|v|bal
+--------+--+-+---
+jp1     | 9|9|900
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2w s1b s1h s2h s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2w: EXPLAIN (COSTS OFF) SELECT h.tableoid::regclass, h.id, h.v, o.tag FROM jh h JOIN jo o ON o.id = h.id WHERE h.v < 50 AND o.tag IN ('t3', 't8') FOR UPDATE OF h;
+QUERY PLAN                                                 
+-----------------------------------------------------------
+LockRows                                                   
+  ->  Hash Join                                            
+        Hash Cond: (h.id = o.id)                           
+        ->  Append                                         
+              ->  Seq Scan on jh h_1                       
+                    Filter: (v < 50)                       
+              ->  Seq Scan on jh_c h_2                     
+                    Filter: (v < 50)                       
+        ->  Hash                                           
+              ->  Seq Scan on jo o                         
+                    Filter: (tag = ANY ('{t3,t8}'::text[]))
+(11 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1h: UPDATE jh SET v = v + 10 WHERE id IN (3, 8);
+step s2h: SELECT h.tableoid::regclass, h.id, h.v, o.tag FROM jh h JOIN jo o ON o.id = h.id WHERE h.v < 50 AND o.tag IN ('t3', 't8') FOR UPDATE OF h; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+tableoid|id| v|tag
+--------+--+--+---
+jh      | 3|13|t3 
+jh_c    | 8|18|t8 
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1hm s2h s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1hm: UPDATE jh SET v = 99 WHERE id = 8;
+step s2h: SELECT h.tableoid::regclass, h.id, h.v, o.tag FROM jh h JOIN jo o ON o.id = h.id WHERE h.v < 50 AND o.tag IN ('t3', 't8') FOR UPDATE OF h; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+tableoid|id|v|tag
+--------+--+-+---
+jh      | 3|3|t3 
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1hk s2h s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1hk: UPDATE jh SET id = 40 WHERE id = 3;
+step s2h: SELECT h.tableoid::regclass, h.id, h.v, o.tag FROM jh h JOIN jo o ON o.id = h.id WHERE h.v < 50 AND o.tag IN ('t3', 't8') FOR UPDATE OF h; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+tableoid|id|v|tag
+--------+--+-+---
+jh_c    | 8|8|t8 
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1hm s1hk s2h s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1hm: UPDATE jh SET v = 99 WHERE id = 8;
+step s1hk: UPDATE jh SET id = 40 WHERE id = 3;
+step s2h: SELECT h.tableoid::regclass, h.id, h.v, o.tag FROM jh h JOIN jo o ON o.id = h.id WHERE h.v < 50 AND o.tag IN ('t3', 't8') FOR UPDATE OF h; <waiting ...>
+step s1c: COMMIT;
+step s2h: <... completed>
+tableoid|id|v|tag
+--------+--+-+---
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2q s1b s1u s2p s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2q: EXPLAIN (COSTS OFF) SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.d >= 10 AND p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p;
+QUERY PLAN                                                  
+------------------------------------------------------------
+LockRows                                                    
+  ->  Hash Join                                             
+        Hash Cond: (p.id = o.id)                            
+        ->  Seq Scan on jp2 p                               
+              Filter: ((d >= 10) AND (v < 50))              
+        ->  Hash                                            
+              ->  Seq Scan on jo o                          
+                    Filter: (tag = ANY ('{t9,t12}'::text[]))
+(8 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE jp SET v = v + 1 WHERE id = 12;
+step s2p: SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.d >= 10 AND p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+tableoid|id| v| bal
+--------+--+--+----
+jp2     |12|13|1200
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1m s2p s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1m: UPDATE jp SET v = 99 WHERE id = 12;
+step s2p: SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.d >= 10 AND p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+tableoid|id|v|bal
+--------+--+-+---
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2t s1b s1u s2r s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2t: EXPLAIN (COSTS OFF) SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.d = 12 AND p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p;
+QUERY PLAN                                            
+------------------------------------------------------
+LockRows                                              
+  ->  Hash Join                                       
+        Hash Cond: (o.id = p.id)                      
+        ->  Seq Scan on jo o                          
+              Filter: (tag = ANY ('{t9,t12}'::text[]))
+        ->  Hash                                      
+              ->  Seq Scan on jp2 p                   
+                    Filter: ((v < 50) AND (d = 12))   
+(8 rows)
+
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE jp SET v = v + 1 WHERE id = 12;
+step s2r: SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.d = 12 AND p.v < 50 AND o.tag IN ('t9', 't12') FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+tableoid|id| v| bal
+--------+--+--+----
+jp2     |12|13|1200
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1l s2s s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1l: SELECT id FROM jp WHERE id = 12 FOR UPDATE;
+id
+--
+12
+(1 row)
+
+step s2s: SELECT p.tableoid::regclass, p.id, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE o.tag IN ('t11', 't12', 't13') FOR SHARE OF p SKIP LOCKED;
+tableoid|id| bal
+--------+--+----
+jp2     |11|1100
+jp2     |13|1300
+(2 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1u s2o s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1u: UPDATE jp SET v = v + 1 WHERE id = 12;
+step s2o: SELECT p.tableoid::regclass, p.id, p.v, o.bal FROM jp p JOIN jo o ON o.id = p.id WHERE p.v < 50 AND o.tag IN ('t8', 't9', 't11', 't12', 't13') ORDER BY p.id FOR UPDATE OF p; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+tableoid|id| v| bal
+--------+--+--+----
+jp1     | 8| 8| 800
+jp1     | 9| 9| 900
+jp2     |11|11|1100
+jp2     |12|13|1200
+jp2     |13|13|1300
+(5 rows)
+
+step s2c: COMMIT;

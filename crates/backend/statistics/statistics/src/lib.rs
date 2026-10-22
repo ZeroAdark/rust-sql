@@ -523,7 +523,7 @@ fn is_plain_inline(d: Datum) -> bool {
 }
 
 pub fn build_mss(stats: &[ColStats], dims: &[usize]) -> PgResult<MultiSort> {
-    let mut mss = MultiSort::init(dims.len());
+    let mut mss = MultiSort::init(dims.len())?;
     for &d in dims {
         mss.add_dimension(stats[d].attrtypid, stats[d].attrcollid)?;
     }

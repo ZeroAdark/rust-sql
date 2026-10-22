@@ -16,18 +16,25 @@ use types_nodes::parsenodes::CopyStmt;
 use types_nodes::{Node, NodeList};
 use types_rel::Relation;
 use types_tuple::TupleDescData;
+use elog::PCT_M;
 
 mod from;
 mod fromparquet;
+mod parquet_cluster;
+mod parquet_pgrc;
+mod parquet_fast;
 mod fromparse;
 mod memheadroom;
 mod parallel;
+mod text_pgrc;
+mod textseg;
 mod to;
 #[cfg(test)]
 mod tests;
 
 pub use from::{
     check_for_interrupts_in_copy, copy_from_error_context, next_copy_row, BeginCopyFrom,
+    CopyFromEmitContext,
     BeginCopyFromCallback, CopyFrom, CopyFromState, EndCopyFrom,
 };
 pub use to::{BeginCopyTo, DoCopyTo, EndCopyTo};
@@ -48,32 +55,11 @@ pub(crate) fn could_not_stat_file(filename: &str, e: &std::io::Error) -> Box<PgE
         elog::ereport(types_error::ERROR)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg(format!("could not stat file \"{filename}\": %m"))
+            .errmsg(format!("could not stat file \"{filename}\": {PCT_M}"))
             .into_error(),
     )
 }
 
-/// copy.c:574: C has no parquet format. The pgrust reader serves FORMAT
-/// 'parquet' for server-side files on the FROM side only; every other
-/// source (PROGRAM, STDIN) gets C's own refusal — ERRCODE_INVALID_PARAMETER_VALUE
-/// `COPY format "parquet" not recognized` at the format option's position.
-pub(crate) fn parquet_format_not_recognized(
-    options: &NodeList<'_>,
-    src: Option<&str>,
-) -> Box<PgError> {
-    let mut e = PgError::error("COPY format \"parquet\" not recognized")
-        .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE);
-    let location = options
-        .iter()
-        .filter_map(|o| o.as_def_elem())
-        .find(|d| d.defname == Some("format"))
-        .map(|d| d.location)
-        .unwrap_or(-1);
-    if location >= 0 {
-        e = e.with_cursor_position(errpos(src, location));
-    }
-    Box::new(e)
-}
 #[doc(hidden)]
 pub use fromparse::bench_internals;
 #[doc(hidden)]
@@ -618,6 +604,19 @@ pub fn ProcessCopyOptions<'s>(
     options: &NodeList<'s>,
     src: Option<&str>,
 ) -> PgResult<CopyFormatOptions<'s>> {
+    process_copy_options(mcx, is_from, is_from, options, src)
+}
+
+// `parquet_ok`: the source can feed the parquet reader (a server-side file
+// or a callback); otherwise FORMAT 'parquet' is C's unrecognized format, in
+// C's option order.
+pub(crate) fn process_copy_options<'s>(
+    mcx: Mcx<'s>,
+    is_from: bool,
+    parquet_ok: bool,
+    options: &NodeList<'s>,
+    src: Option<&str>,
+) -> PgResult<CopyFormatOptions<'s>> {
     let mut opts = CopyFormatOptions {
         file_encoding: -1,
         binary: false,
@@ -665,6 +664,7 @@ pub fn ProcessCopyOptions<'s>(
     // (ERRCODE_SYNTAX_ERROR, at the option) — in the loop, at their own
     // position, exactly as C reports them.
     let parquet_from = is_from
+        && parquet_ok
         && options.iter().filter_map(|o| o.as_def_elem()).any(|d| {
             d.defname == Some("format")
                 && def_string_transient(d).is_ok_and(|fmt| fmt == "parquet")
@@ -684,7 +684,7 @@ pub fn ProcessCopyOptions<'s>(
                     "text" => {}
                     "csv" => opts.csv_mode = true,
                     "binary" => opts.binary = true,
-                    "parquet" if is_from => opts.parquet = true,
+                    "parquet" if parquet_from => opts.parquet = true,
                     fmt => {
                         return Err(Box::new(
                             PgError::error(format!("COPY format \"{fmt}\" not recognized"))

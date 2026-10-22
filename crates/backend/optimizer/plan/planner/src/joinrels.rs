@@ -52,6 +52,9 @@ pub fn standard_join_search<'mcx>(
     initial_rels: PgVec<'mcx, RelId>,
 ) -> PgResult<RelId> {
     debug_assert!(run.root.join_rel_level.is_empty());
+    // room for the join rels of a chain of levels_needed rels and the upper rels after them, so the rel arena (large
+    // entries) is not copied at each doubling while the search fills it; a bushier search grows it as before
+    ::mcx::pgvec_reserve(&mut run.root.rel_arena, levels_needed * levels_needed.saturating_sub(1) / 2 + 4)?;
     run.root.join_rel_level.push(PgVec::new_in(run.mcx));
     run.root.join_rel_level.push(initial_rels);
     for _ in 2..=levels_needed {
@@ -436,7 +439,7 @@ fn build_join_rel_hash<'mcx>(root: &mut types_pathnodes::PlannerInfo<'mcx>) {
 
 fn join_rel_hash_key<'mcx>(mcx: mcx::Mcx<'mcx>, relids: &Relids<'_>) -> PgVec<'mcx, u64> {
     let mut key: PgVec<'mcx, u64> = PgVec::new_in(mcx);
-    key.extend_from_slice(crate::relnode::relids_word_slice(relids));
+    key.extend_from_slice(types_pathnodes::relids::relids_canonical_words(relids));
     key
 }
 
@@ -590,87 +593,91 @@ fn join_is_legal<'mcx>(
     let mut must_be_leftjoin = false;
 
     for i in 0..run.root.join_info_list.len() {
-        let sj = run.root.join_info_list[i].clone();
-        if !relids_overlap(&sj.min_righthand, joinrelids) {
-            continue;
-        }
-        if relids_is_subset(joinrelids, &sj.min_righthand) {
-            continue;
-        }
-        if relids_is_subset(&sj.min_lefthand, &r1) && relids_is_subset(&sj.min_righthand, &r1) {
-            continue;
-        }
-        if relids_is_subset(&sj.min_lefthand, &r2) && relids_is_subset(&sj.min_righthand, &r2) {
-            continue;
-        }
-        debug_assert!(matches!(
-            sj.jointype,
-            JOIN_LEFT
-                | types_pathnodes::JOIN_SEMI
-                | types_pathnodes::JOIN_ANTI
-                | types_pathnodes::JOIN_FULL
-        ));
-        // A semijoin whose RHS was already joined to other rels inside an
-        // input must have been unique-ified there; it's no longer relevant.
-        if sj.jointype == types_pathnodes::JOIN_SEMI {
-            if relids_is_subset(&sj.syn_righthand, &r1) && !relids_equal(&sj.syn_righthand, &r1)
-            {
+        // C walks the list by pointer: the special join is read in place, and only the one that matches is copied out
+        // (a semijoin's unique-ify test, which needs the planner mutably, takes its own copy)
+        let (a, b, semi_r2, semi_r1, e_skip, e_fail) = {
+            let sj = &run.root.join_info_list[i];
+            if !relids_overlap(&sj.min_righthand, joinrelids) {
                 continue;
             }
-            if relids_is_subset(&sj.syn_righthand, &r2) && !relids_equal(&sj.syn_righthand, &r2)
-            {
+            if relids_is_subset(joinrelids, &sj.min_righthand) {
                 continue;
             }
-        }
-        if relids_is_subset(&sj.min_lefthand, &r1) && relids_is_subset(&sj.min_righthand, &r2) {
+            if relids_is_subset(&sj.min_lefthand, &r1) && relids_is_subset(&sj.min_righthand, &r1) {
+                continue;
+            }
+            if relids_is_subset(&sj.min_lefthand, &r2) && relids_is_subset(&sj.min_righthand, &r2) {
+                continue;
+            }
+            debug_assert!(matches!(
+                sj.jointype,
+                JOIN_LEFT
+                    | types_pathnodes::JOIN_SEMI
+                    | types_pathnodes::JOIN_ANTI
+                    | types_pathnodes::JOIN_FULL
+            ));
+            let semi = sj.jointype == types_pathnodes::JOIN_SEMI;
+            // A semijoin whose RHS was already joined to other rels inside an
+            // input must have been unique-ified there; it's no longer relevant.
+            if semi {
+                if relids_is_subset(&sj.syn_righthand, &r1) && !relids_equal(&sj.syn_righthand, &r1)
+                {
+                    continue;
+                }
+                if relids_is_subset(&sj.syn_righthand, &r2) && !relids_equal(&sj.syn_righthand, &r2)
+                {
+                    continue;
+                }
+            }
+            (
+                relids_is_subset(&sj.min_lefthand, &r1) && relids_is_subset(&sj.min_righthand, &r2),
+                relids_is_subset(&sj.min_lefthand, &r2) && relids_is_subset(&sj.min_righthand, &r1),
+                semi && relids_equal(&sj.syn_righthand, &r2),
+                semi && relids_equal(&sj.syn_righthand, &r1),
+                // Both inputs overlapping the RHS means any violation already
+                // happened below (a previously-allowed commutation).
+                relids_overlap(&r1, &sj.min_righthand) && relids_overlap(&r2, &sj.min_righthand),
+                // Associating into this SJ's RHS (identity 3) demands a LEFT SJ
+                // and no LHS overlap.
+                sj.jointype != JOIN_LEFT || relids_overlap(joinrelids, &sj.min_lefthand),
+            )
+        };
+        let unique_on = |run: &mut PlannerRun<'mcx>, rel: RelId| -> PgResult<bool> {
+            let sj = run.root.join_info_list[i].clone();
+            let cheapest = run.root.rel(rel).cheapest_total_path.expect("cheapest path");
+            Ok(crate::pathnode::create_unique_path(run, rel, cheapest, &sj)?.is_some())
+        };
+        if a {
             if match_sjinfo.is_some() {
                 return Ok(None);
             }
-            match_sjinfo = Some(sj.clone());
+            match_sjinfo = Some(run.root.join_info_list[i].clone());
             reversed = false;
-        } else if relids_is_subset(&sj.min_lefthand, &r2)
-            && relids_is_subset(&sj.min_righthand, &r1)
-        {
+        } else if b {
             if match_sjinfo.is_some() {
                 return Ok(None);
             }
-            match_sjinfo = Some(sj.clone());
+            match_sjinfo = Some(run.root.join_info_list[i].clone());
             reversed = true;
-        } else if sj.jointype == types_pathnodes::JOIN_SEMI
-            && relids_equal(&sj.syn_righthand, &r2)
-            && {
-                let cheapest = run.root.rel(rel2).cheapest_total_path.expect("cheapest path");
-                crate::pathnode::create_unique_path(run, rel2, cheapest, &sj)?.is_some()
-            }
-        {
+        } else if semi_r2 && unique_on(&mut *run, rel2)? {
             if match_sjinfo.is_some() {
                 return Ok(None);
             }
-            match_sjinfo = Some(sj.clone());
+            match_sjinfo = Some(run.root.join_info_list[i].clone());
             reversed = false;
             unique_ified = true;
-        } else if sj.jointype == types_pathnodes::JOIN_SEMI
-            && relids_equal(&sj.syn_righthand, &r1)
-            && {
-                let cheapest = run.root.rel(rel1).cheapest_total_path.expect("cheapest path");
-                crate::pathnode::create_unique_path(run, rel1, cheapest, &sj)?.is_some()
-            }
-        {
+        } else if semi_r1 && unique_on(&mut *run, rel1)? {
             if match_sjinfo.is_some() {
                 return Ok(None);
             }
-            match_sjinfo = Some(sj.clone());
+            match_sjinfo = Some(run.root.join_info_list[i].clone());
             reversed = true;
             unique_ified = true;
         } else {
-            // Both inputs overlapping the RHS means any violation already
-            // happened below (a previously-allowed commutation).
-            if relids_overlap(&r1, &sj.min_righthand) && relids_overlap(&r2, &sj.min_righthand) {
+            if e_skip {
                 continue;
             }
-            // Associating into this SJ's RHS (identity 3) demands a LEFT SJ
-            // and no LHS overlap.
-            if sj.jointype != JOIN_LEFT || relids_overlap(joinrelids, &sj.min_lefthand) {
+            if e_fail {
                 return Ok(None);
             }
             must_be_leftjoin = true;
@@ -724,22 +731,14 @@ fn join_is_legal<'mcx>(
             let mut more = true;
             while more {
                 more = false;
-                for i in 0..run.root.join_info_list.len() {
-                    let (min_l, min_r, jt) = {
-                        let sj = &run.root.join_info_list[i];
-                        (
-                            relids_copy(mcx, &sj.min_lefthand),
-                            relids_copy(mcx, &sj.min_righthand),
-                            sj.jointype,
-                        )
-                    };
-                    if jt == types_pathnodes::JOIN_FULL {
+                for sj in run.root.join_info_list.iter() {
+                    if sj.jointype == types_pathnodes::JOIN_FULL {
                         continue;
                     }
-                    if relids_overlap(&min_l, &join_plus_rhs)
-                        && !relids_is_subset(&min_r, &join_plus_rhs)
+                    if relids_overlap(&sj.min_lefthand, &join_plus_rhs)
+                        && !relids_is_subset(&sj.min_righthand, &join_plus_rhs)
                     {
-                        join_plus_rhs = relids_union(mcx, &join_plus_rhs, &min_r);
+                        join_plus_rhs = relids_union(mcx, &join_plus_rhs, &sj.min_righthand);
                         more = true;
                     }
                 }
@@ -1359,8 +1358,8 @@ fn compute_partition_bounds<'mcx>(
         let merged = {
             let scheme = run.root.rel(joinrel).part_scheme.as_ref().unwrap();
             let mut supfuncs: Vec<types_fmgr::FmgrInfo> =
-                Vec::with_capacity(partnatts as usize);
-            let mut collations: Vec<types_core::Oid> = Vec::with_capacity(partnatts as usize);
+                ::mcx::std_vec_with_capacity("optimizer", partnatts as usize)?;
+            let mut collations: Vec<types_core::Oid> = ::mcx::std_vec_with_capacity("optimizer", partnatts as usize)?;
             for i in 0..partnatts as usize {
                 supfuncs.push(fmgr_core::fmgr_info(scheme.partsupfunc[i].fn_oid)?);
                 collations.push(scheme.partcollation[i]);
@@ -1389,19 +1388,19 @@ fn compute_partition_bounds<'mcx>(
                 }
                 Ok(r.as_i32())
             };
-            let dummy_flags = |run: &PlannerRun<'mcx>, rel: RelId| {
+            let dummy_flags = |run: &PlannerRun<'mcx>, rel: RelId| -> PgResult<Vec<bool>> {
                 let n = run.root.rel(rel).nparts as usize;
-                let mut v: Vec<bool> = Vec::with_capacity(n);
+                let mut v: Vec<bool> = mcx::std_vec_with_capacity("planner", n)?;
                 for i in 0..n {
                     v.push(match run.root.rel(rel).part_rels[i] {
                         Some(p) => is_dummy_rel(&run.root, p),
                         None => true,
                     });
                 }
-                v
+                Ok(v)
             };
-            let outer_dummy = dummy_flags(run, rel1);
-            let inner_dummy = dummy_flags(run, rel2);
+            let outer_dummy = dummy_flags(run, rel1)?;
+            let inner_dummy = dummy_flags(run, rel2)?;
             let outer = partbounds::MergeRel {
                 nparts: run.root.rel(rel1).nparts,
                 boundinfo: &**run.root.rel(rel1).boundinfo.as_ref().unwrap(),

@@ -343,7 +343,8 @@ fn path_poly_out_over_ceiling_raise_stringinfo_error() {
     expect_ceiling(io::poly_out(&pr, &mut out));
 
     // path: payload = [npts i32][closed i32][pad to PATH_HEADER_SIZE-4][points]
-    let mut img = Vec::with_capacity(::types_core::geo::PATH_HEADER_SIZE - 4 + pts_bytes.len());
+    let mut img = Vec::new();
+    let _ = img.try_reserve(::types_core::geo::PATH_HEADER_SIZE - 4 + pts_bytes.len());
     img.extend_from_slice(&(npts as i32).to_ne_bytes());
     img.extend_from_slice(&1i32.to_ne_bytes());
     img.resize(::types_core::geo::PATH_HEADER_SIZE - 4, 0);

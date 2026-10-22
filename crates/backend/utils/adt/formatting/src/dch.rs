@@ -84,7 +84,8 @@ fn fmt_0d(width: usize, val: i64) -> String {
     let sign_len = if neg { 1 } else { 0 };
     let cur = digits.len() + sign_len;
     let pad = width.saturating_sub(cur);
-    let mut out = String::with_capacity(width.max(cur));
+    let mut out = String::new();
+    let _ = out.try_reserve(width.max(cur));
     if neg {
         out.push('-');
     }
@@ -148,7 +149,7 @@ fn tz_format_value_too_long() -> Box<PgError> {
 
 fn apply_thth(out: &mut Vec<u8>, start: usize, suffix: u8) -> PgResult<()> {
     if s_thth(suffix) {
-        let num = out[start..].to_vec();
+        let num = ::mcx::std_vec_from_slice("adt", &out[start..])?;
         let th = get_th(&num, s_th_type(suffix))?;
         pg_append(out, th.as_bytes());
     }
@@ -667,7 +668,7 @@ pub fn dch_to_char<'mcx>(
                 // C: `(tm->tm_yday - 1) / 7 + 1` bare under -fwrapv; interval
                 // tm_yday is caller-unbounded (real 18.3 wraps: to_char(
                 // interval '-2147483648 days','WW') docker-confirmed;
-                // found by the fmt_dch_diff CI campaign 2026-07-31).
+                // found by the fmt_dch_diff FLEET campaign 2026-07-31).
                 pg_append(
                     &mut out,
                     fmt_0d(width, (tm.tm_yday.wrapping_sub(1) / 7 + 1) as i64).as_bytes(),

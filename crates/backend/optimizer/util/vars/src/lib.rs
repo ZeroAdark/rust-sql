@@ -20,9 +20,5 @@ pub use var::{
 };
 
 pub fn init_seams() {
-    var_seams::contain_var_clause::set(|node| {
-        // Infallible in C (pure walk); the PgResult exists only for engine
-        // uniformity, so an Err here is a real bug — fail loud.
-        var::contain_var_clause(node).expect("contain_var_clause")
-    });
+    var_seams::contain_var_clause::set(var::contain_var_clause);
 }

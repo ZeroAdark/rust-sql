@@ -608,7 +608,7 @@ pub fn jsonb_object_two_arg<'mcx>(
         return Err(obj_subscript_error("mismatched array dimensions"));
     }
     let mut pairs: alloc::vec::Vec<(Datum, bool)> =
-        alloc::vec::Vec::with_capacity(key_elems.len() * 2);
+        ::mcx::std_vec_with_capacity("adt", key_elems.len() * 2)?;
     for i in 0..key_elems.len() {
         pairs.push((key_elems[i], key_nulls[i]));
         pairs.push((val_elems[i], val_nulls[i]));

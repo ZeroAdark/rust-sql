@@ -9,6 +9,7 @@ name = "adt_timestamp"
 path = "src/lib.rs"
 
 [dependencies]
+fp_contract = { path = "../../../../_support/fp_contract" }
 clauses_seams = { path = "../../../optimizer/util/clauses_seams" }
 pg_clock = { path = "../../../../port/pg_clock" }
 types_core = { path = "../../../../_support/types/types_core" }
@@ -20,6 +21,7 @@ stringinfo = { path = "../../../../_support/types/stringinfo" }
 pqformat = { path = "../../../libpq/pqformat" }
 hashfn = { path = "../../../../common/hashfn" }
 numeric = { package = "adt_numeric", path = "../numeric" }
+detoast_seams = { path = "../../../access/common/detoast_seams" }
 numutils = { path = "../numutils" }
 adt_datetime = { path = "../adt_datetime" }
 float = { package = "adt_float", path = "../float" }
@@ -31,6 +33,7 @@ xact = { path = "../../../access/transam/xact" }
 elog = { path = "../../error/elog" }
 funcapi = { path = "../../fmgr/funcapi" }
 heaptuple = { path = "../../../access/common/heaptuple" }
+types_tuple = { path = "../../../../_support/types/types_tuple" }
 types_nodes = { path = "../../../../_support/types/nodes" }
 nodes_core = { path = "../../../nodes/nodes_core" }
 mbutils = { path = "../../mb/mbutils" }

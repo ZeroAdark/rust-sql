@@ -1,0 +1,11 @@
+path	crates/gravity/hosts/src/ops/sort/heap_fetch.rs
+growth	std::vec::Vec::push	2
+growth	std::vec::Vec::resize	3
+ir-only	<alloc::sync::Arc<[T],A> as core::convert::From<alloc::vec::Vec<T,A>>>::from	1
+ir-only	<alloc::sync::Arc<[T]> as core::convert::From<&[T]>>::from	1
+macro	std::vec	3
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	1
+type	std::vec::Vec	5

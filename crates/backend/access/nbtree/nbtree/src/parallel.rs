@@ -214,6 +214,17 @@ fn bt_parallel_done_shared(so: &BTScanOpaqueData<'_>, shared: &BTParallelScanSha
     }
 }
 
+/// A participant that fails mid-walk (an error or an unwind on a pool thread, gravity's parallel leaf walk) ends the shared
+/// scan for every one: the others parked in `bt_parallel_seize` wake and see it done, as PostgreSQL's parallel workers
+/// are torn down by the leader's error. No page is handed out after it.
+pub fn bt_parallel_abort(shared: &BTParallelScanShared) {
+    {
+        let mut g = lock(shared);
+        g.page_status = BtPsState::Done;
+    }
+    shared.lot.wake_all();
+}
+
 /// _bt_parallel_primscan_schedule: no-op if the shared state was seized since
 /// this backend last advanced the scan.
 // Parallel-only; outlined so fat LTO keeps it out of the serial descent.
@@ -223,7 +234,7 @@ pub(crate) fn bt_parallel_primscan_schedule(
     so: &BTScanOpaqueData<'_>,
     shared: &BTParallelScanShared,
     curr_page: BlockNumber,
-) {
+) -> PgResult<()> {
     debug_assert!(so.numArrayKeys > 0);
 
     let mut g = lock(shared);
@@ -231,13 +242,14 @@ pub(crate) fn bt_parallel_primscan_schedule(
         g.next_scan_page = InvalidBlockNumber;
         g.last_curr_page = InvalidBlockNumber;
         g.page_status = BtPsState::NeedPrimscan;
-        g.arr_elems = serialize_arrays(so);
+        g.arr_elems = serialize_arrays(so)?;
     }
+    Ok(())
 }
 
 // _bt_parallel_serialize_arrays; caller holds the state lock.
-fn serialize_arrays(so: &BTScanOpaqueData<'_>) -> Vec<BtParallelArrayElem> {
-    let mut out = Vec::with_capacity(so.numArrayKeys as usize);
+fn serialize_arrays(so: &BTScanOpaqueData<'_>) -> PgResult<Vec<BtParallelArrayElem>> {
+    let mut out = ::mcx::std_vec_with_capacity("nbtree", so.numArrayKeys as usize)?;
     for array in so.arrayKeys.iter() {
         let skey = &so.keyData[array.scan_key as usize];
         if array.num_elems != -1 {
@@ -272,7 +284,7 @@ fn serialize_arrays(so: &BTScanOpaqueData<'_>) -> Vec<BtParallelArrayElem> {
                         n + 1
                     }
                 };
-                core::slice::from_raw_parts(p, len).to_vec()
+                ::mcx::std_vec_from_slice("nbtree", core::slice::from_raw_parts(p, len))?
             };
             Some(BtParallelSkipArg::Byref(bytes))
         };
@@ -281,7 +293,7 @@ fn serialize_arrays(so: &BTScanOpaqueData<'_>) -> Vec<BtParallelArrayElem> {
             arg,
         });
     }
-    out
+    Ok(out)
 }
 
 // _bt_parallel_restore_arrays; caller holds the state lock (nbtree.c:733

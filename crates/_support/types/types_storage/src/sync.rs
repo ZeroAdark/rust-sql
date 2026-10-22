@@ -24,6 +24,7 @@ pub enum SyncRequestHandler {
     SYNC_HANDLER_MULTIXACT_OFFSET = 3,
     SYNC_HANDLER_MULTIXACT_MEMBER = 4,
     SYNC_HANDLER_NONE = 5,
+    SYNC_HANDLER_PGRC = 6,
 }
 
 // Pending-operations hash key; C used HASH_BLOBS raw-bytes equality, which

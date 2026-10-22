@@ -1,0 +1,9 @@
+-- regress-061
+-- SELECT * FROM xmltable('/r/e' PASSING '<r><e>1</e></r>' COLUMNS v int PATH '.');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=Host end=sink
+  nodes n0@0
+  source tablefunc rti=1 kind=xmltable cols=1 ordinality=-1 doc=c142:'<r><e>1</e></r>' row=c25:'/r/e'
+  project (1=v1.1)
+  outs 1=w4:val
+mapped: TableFuncScan

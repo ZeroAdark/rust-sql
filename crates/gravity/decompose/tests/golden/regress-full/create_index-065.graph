@@ -1,0 +1,19 @@
+-- regress-full-create_index-065
+-- CREATE TABLE reindex_after AS SELECT oid, relname, relfilenode, relkind FROM pg_class where relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'schema_to_reindex');
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0
+  source range rel=2615 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v2.2, c19:#64)
+  project (1=v2.1)
+  outs 1=w8:val
+p1 node=0 eligible rows=287 end=sink
+  nodes n0@0
+  source range rel=1259 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(8):byval8:w8:val Attr(18):byval8:w8:val Offset:byval2:w2:val
+  filter op607(v1.3, $exec0)
+  project (1=v1.1, 2=v1.2, 3=v1.8, 4=v1.18)
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: SeqScan SubPlan

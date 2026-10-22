@@ -1,0 +1,2 @@
+path	crates/gravity/hosts/src/ops/modifytable/trigger_before.rs
+growth	std::vec::Vec::push	2

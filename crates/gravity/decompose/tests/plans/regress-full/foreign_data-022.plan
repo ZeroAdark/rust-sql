@@ -1,0 +1,39 @@
+-- name: regress-full-foreign_data-022
+-- sql: SELECT has_server_privilege( (SELECT oid FROM pg_roles WHERE rolname='regress_test_role'), 's8', 'USAGE');
+-- test: foreign_data
+-- shape: e01158681b1a67be seen=4
+-- rel 1260 pg_authid am=heap kind=r natts=12
+-- att 1260 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1260 2 rolname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1260 3 rolsuper typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 4 rolinherit typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 5 rolcreaterole typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 6 rolcreatedb typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 7 rolcanlogin typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 8 rolreplication typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 9 rolbypassrls typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1260 10 rolconnlimit typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1260 11 rolpassword typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1260 12 rolvaliduntil typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- idx 2676 rel=1260 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2677 rel=1260 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- rel 2964 pg_db_role_setting am=heap kind=r natts=3
+-- att 2964 1 setdatabase typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2964 2 setrole typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2964 3 setconfig typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2965 rel=2964 keys=1,2 opts=0,0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=2
+-- rel 12000 pg_roles am=none kind=v natts=13
+-- att 12000 1 rolname typid=19 typmod=-1 len=64 byval=f notnull=f
+-- att 12000 2 rolsuper typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 12000 3 rolinherit typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 12000 4 rolcreaterole typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 12000 5 rolcreatedb typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 12000 6 rolcanlogin typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 12000 7 rolreplication typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 12000 8 rolconnlimit typid=23 typmod=-1 len=4 byval=t notnull=f
+-- att 12000 9 rolpassword typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 12000 10 rolvaliduntil typid=1184 typmod=-1 len=8 byval=t notnull=f
+-- att 12000 11 rolbypassrls typid=16 typmod=-1 len=1 byval=t notnull=f
+-- att 12000 12 rolconfig typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- att 12000 13 oid typid=26 typmod=-1 len=4 byval=t notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {RESULT :plan.disabled_nodes 0 :plan.startup_cost 1.2125 :plan.total_cost 1.2249999999999999 :plan.plan_rows 1 :plan.plan_width 1 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {FUNCEXPR :funcid 3008 :funcresulttype 16 :funcretset false :funcvariadic false :funcformat 0 :funccollid 0 :inputcollid 100 :args ({PARAM :paramkind 1 :paramid 0 :paramtype 26 :paramtypmod -1 :paramcollid 0 :location -1} {CONST :consttype 25 :consttypmod -1 :constcollid 100 :constlen -1 :constbyval false :constisnull false :location 95 :constvalue 6 [ 24 0 0 0 115 56 ]} {CONST :consttype 25 :consttypmod -1 :constcollid 100 :constlen -1 :constbyval false :constisnull false :location 101 :constvalue 9 [ 36 0 0 0 85 83 65 71 69 ]}) :location 7} :resno 1 :resname has_server_privilege :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}) :plan.qual <> :plan.lefttree <> :plan.righttree <> :plan.initPlan ({SUBPLAN :subLinkType 4 :testexpr <> :paramIds <> :plan_id 1 :plan_name InitPlan\ 1 :firstColType 26 :firstColTypmod -1 :firstColCollation 0 :useHashTable false :unknownEqFalse false :parallel_safe false :setParam (i 0) :parParam <> :args <> :startup_cost 0 :per_call_cost 1.2125}) :plan.extParam (b) :plan.allParam (b 0) :resconstantqual <>} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias <> :eref {ALIAS :aliasname *RESULT* :colnames <>} :rtekind 8 :lateral false :inFromCl false :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_roles :colnames ("rolname" "rolsuper" "rolinherit" "rolcreaterole" "rolcreatedb" "rolcanlogin" "rolreplication" "rolconnlimit" "rolpassword" "rolvaliduntil" "rolbypassrls" "rolconfig" "oid")} :rtekind 1 :subquery <> :security_barrier false :relid 12000 :inh false :relkind v :rellockmode 1 :perminfoindex 1 :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname pg_authid :colnames ("oid" "rolname" "rolsuper" "rolinherit" "rolcreaterole" "rolcreatedb" "rolcanlogin" "rolreplication" "rolbypassrls" "rolconnlimit" "rolpassword" "rolvaliduntil")} :rtekind 0 :relid 1260 :inh false :relkind r :rellockmode 1 :perminfoindex 2 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname s :colnames <>} :eref {ALIAS :aliasname s :colnames ("setdatabase" "setrole" "setconfig")} :rtekind 0 :relid 2964 :inh false :relkind r :rellockmode 1 :perminfoindex 3 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("oid" "rolname" "rolsuper" "rolinherit" "rolcreaterole" "rolcreatedb" "rolcanlogin" "rolreplication" "rolbypassrls" "rolconnlimit" "rolpassword" "rolvaliduntil" "setdatabase" "setrole" "setconfig")} :rtekind 2 :jointype 1 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 2 3 4) :permInfos ({RTEPERMISSIONINFO :relid 12000 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 8 20) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1260 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9 10 11 12 13 14 15 16 17 19) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 2964 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9 10) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans ({SEQSCAN :scan.plan.disabled_nodes 0 :scan.plan.startup_cost 0 :scan.plan.total_cost 1.2125 :scan.plan.plan_rows 1 :scan.plan.plan_width 4 :scan.plan.parallel_aware false :scan.plan.parallel_safe false :scan.plan.async_capable false :scan.plan.plan_node_id 1 :scan.plan.targetlist ({TARGETENTRY :expr {VAR :varno 3 :varattno 1 :vartype 26 :vartypmod -1 :varcollid 0 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn 1 :location -1} :resno 1 :resname oid :ressortgroupref 0 :resorigtbl 12000 :resorigcol 13 :resjunk false}) :scan.plan.qual ({OPEXPR :opno 93 :opfuncid 62 :opresulttype 16 :opretset false :opcollid 0 :inputcollid 950 :args ({VAR :varno 3 :varattno 2 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 3 :varattnosyn 2 :location -1} {CONST :consttype 19 :consttypmod -1 :constcollid 950 :constlen 64 :constbyval false :constisnull false :location 73 :constvalue 64 [ 114 101 103 114 101 115 115 95 116 101 115 116 95 114 111 108 101 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]}) :location 72}) :scan.plan.lefttree <> :scan.plan.righttree <> :scan.plan.initPlan <> :scan.plan.extParam (b) :scan.plan.allParam (b) :scan.scanrelid 3 :cb_scan_cols (b 1 2)}) :rewindPlanIDs (b) :rowMarks <> :relationOids (o 12000 1260 2964) :invalItems <> :paramExecTypes (o 26) :utilityStmt <> :stmt_location 0 :stmt_len 109}

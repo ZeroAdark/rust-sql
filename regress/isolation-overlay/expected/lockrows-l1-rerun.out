@@ -1,0 +1,296 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s1a s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.w IN (30, 40) FOR UPDATE OF a;
+QUERY PLAN                                                  
+------------------------------------------------------------
+LockRows                                                    
+  ->  Hash Join                                             
+        Hash Cond: (a.k = b.k)                              
+        ->  Seq Scan on la a                                
+              Filter: (v < 100)                             
+        ->  Hash                                            
+              ->  Seq Scan on lb b                          
+                    Filter: (w = ANY ('{30,40}'::integer[]))
+(8 rows)
+
+step s1a: UPDATE la SET v = v + 1 WHERE id = 3;
+step s2j: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.w IN (30, 40) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id| v| w
+--+--+--
+ 3| 4|30
+ 4| 4|40
+53|53|30
+54|54|40
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1b s1a s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1b: UPDATE lb SET w = w + 7 WHERE k = 3;
+step s1a: UPDATE la SET v = v + 1 WHERE id = 3;
+step s2j: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.w IN (30, 40) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id| v| w
+--+--+--
+ 3| 4|30
+ 4| 4|40
+53|53|30
+54|54|40
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1bk s1a s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1bk: UPDATE lb SET k = 9 WHERE k = 3;
+step s1a: UPDATE la SET v = v + 1 WHERE id = 3;
+step s2j: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.w IN (30, 40) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id| v| w
+--+--+--
+ 3| 4|30
+ 4| 4|40
+53|53|30
+54|54|40
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1af s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1af: UPDATE la SET v = 500 WHERE id = 3;
+step s2j: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.w IN (30, 40) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id| v| w
+--+--+--
+ 4| 4|40
+53|53|30
+54|54|40
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1ak s2j s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1ak: UPDATE la SET k = 4 WHERE id = 3;
+step s2j: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.w IN (30, 40) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id| v| w
+--+--+--
+ 4| 4|40
+53|53|30
+54|54|40
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2xs s1bi s1a s2s s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xs: EXPLAIN (COSTS OFF) SELECT a.id, s.n FROM la a JOIN (SELECT k, count(*) AS n FROM lb WHERE w IN (30, 40) GROUP BY k) s ON s.k = a.k WHERE a.v < 100 FOR UPDATE OF a;
+QUERY PLAN                                                                    
+------------------------------------------------------------------------------
+LockRows                                                                      
+  ->  Hash Join                                                               
+        Hash Cond: (a.k = s.k)                                                
+        ->  Seq Scan on la a                                                  
+              Filter: (v < 100)                                               
+        ->  Hash                                                              
+              ->  Subquery Scan on s                                          
+                    ->  GroupAggregate                                        
+                          Group Key: lb.k                                     
+                          ->  Sort                                            
+                                Sort Key: lb.k                                
+                                ->  Seq Scan on lb                            
+                                      Filter: (w = ANY ('{30,40}'::integer[]))
+(13 rows)
+
+step s1bi: INSERT INTO lb VALUES (100, 3, 30);
+step s1a: UPDATE la SET v = v + 1 WHERE id = 3;
+step s2s: SELECT a.id, s.n FROM la a JOIN (SELECT k, count(*) AS n FROM lb WHERE w IN (30, 40) GROUP BY k) s ON s.k = a.k WHERE a.v < 100 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id|n
+--+-
+ 3|1
+ 4|1
+53|1
+54|1
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s2x3 s1b s1a s2j3 s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2x3: EXPLAIN (COSTS OFF) SELECT a.id, b.w, c.z FROM la a JOIN lb b ON b.k = a.k JOIN lc c ON c.k = b.k WHERE a.v < 100 AND b.w IN (30, 40) AND c.z IN (3, 4) FOR UPDATE OF a;
+QUERY PLAN                                                            
+----------------------------------------------------------------------
+LockRows                                                              
+  ->  Hash Join                                                       
+        Hash Cond: (a.k = b.k)                                        
+        ->  Seq Scan on la a                                          
+              Filter: (v < 100)                                       
+        ->  Hash                                                      
+              ->  Hash Join                                           
+                    Hash Cond: (b.k = c.k)                            
+                    ->  Seq Scan on lb b                              
+                          Filter: (w = ANY ('{30,40}'::integer[]))    
+                    ->  Hash                                          
+                          ->  Seq Scan on lc c                        
+                                Filter: (z = ANY ('{3,4}'::integer[]))
+(13 rows)
+
+step s1b: UPDATE lb SET w = w + 7 WHERE k = 3;
+step s1a: UPDATE la SET v = v + 1 WHERE id = 3;
+step s2j3: SELECT a.id, b.w, c.z FROM la a JOIN lb b ON b.k = a.k JOIN lc c ON c.k = b.k WHERE a.v < 100 AND b.w IN (30, 40) AND c.z IN (3, 4) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2j3: <... completed>
+id| w|z
+--+--+-
+ 3|30|3
+ 4|40|4
+53|30|3
+54|40|4
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1g s1a s2g s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1g: UPDATE lcfg SET n = 1000;
+step s1a: UPDATE la SET v = v + 1 WHERE id = 3;
+step s2g: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.w IN (30, 40) AND b.w > lget() FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2g: <... completed>
+id| v| w
+--+--+--
+ 3| 4|30
+ 4| 4|40
+53|53|30
+54|54|40
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1ar s2r s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1ar: UPDATE la SET v = 60 WHERE id = 3;
+step s2r: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND 1000 / (a.v - 60) > -100000 AND b.w IN (30, 40) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+ERROR:  division by zero
+step s2c: COMMIT;
+
+starting permutation: s2b s2xn s2n s2c s1a s1c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s2xn: EXPLAIN (COSTS OFF) SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.id IN (3, 4) AND lnote(b.w) FOR UPDATE OF a;
+QUERY PLAN                                                     
+---------------------------------------------------------------
+LockRows                                                       
+  ->  Hash Join                                                
+        Hash Cond: (a.k = b.k)                                 
+        ->  Seq Scan on la a                                   
+              Filter: (v < 100)                                
+        ->  Hash                                               
+              ->  Index Scan using lb_pkey on lb b             
+                    Index Cond: (id = ANY ('{3,4}'::integer[]))
+                    Filter: lnote(w)                           
+(9 rows)
+
+s2: NOTICE:  lnote 30
+s2: NOTICE:  lnote 40
+step s2n: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.id IN (3, 4) AND lnote(b.w) FOR UPDATE OF a;
+id| v| w
+--+--+--
+ 3| 3|30
+ 4| 4|40
+53|53|30
+54|54|40
+(4 rows)
+
+step s2c: COMMIT;
+step s1a: UPDATE la SET v = v + 1 WHERE id = 3;
+step s1c: COMMIT;
+
+starting permutation: s2b s1a s2n s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1a: UPDATE la SET v = v + 1 WHERE id = 3;
+s2: NOTICE:  lnote 30
+s2: NOTICE:  lnote 40
+step s2n: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.id IN (3, 4) AND lnote(b.w) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  lnote 30
+step s2n: <... completed>
+id| v| w
+--+--+--
+ 3| 4|30
+ 4| 4|40
+53|53|30
+54|54|40
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1af s2n s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1af: UPDATE la SET v = 500 WHERE id = 3;
+s2: NOTICE:  lnote 30
+s2: NOTICE:  lnote 40
+step s2n: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.id IN (3, 4) AND lnote(b.w) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2n: <... completed>
+id| v| w
+--+--+--
+ 4| 4|40
+53|53|30
+54|54|40
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1a s1af53 s2n s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1a: UPDATE la SET v = v + 1 WHERE id = 3;
+step s1af53: UPDATE la SET v = 500 WHERE id = 53;
+s2: NOTICE:  lnote 30
+s2: NOTICE:  lnote 40
+step s2n: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.id IN (3, 4) AND lnote(b.w) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  lnote 30
+s2: NOTICE:  lnote 30
+step s2n: <... completed>
+id| v| w
+--+--+--
+ 3| 4|30
+ 4| 4|40
+54|54|40
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1af s1a53 s2n s1c s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1af: UPDATE la SET v = 500 WHERE id = 3;
+step s1a53: UPDATE la SET v = v + 1 WHERE id = 53;
+s2: NOTICE:  lnote 30
+s2: NOTICE:  lnote 40
+step s2n: SELECT a.id, a.v, b.w FROM la a JOIN lb b ON b.k = a.k WHERE a.v < 100 AND b.id IN (3, 4) AND lnote(b.w) FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+s2: NOTICE:  lnote 30
+step s2n: <... completed>
+id| v| w
+--+--+--
+ 4| 4|40
+53|54|30
+54|54|40
+(3 rows)
+
+step s2c: COMMIT;

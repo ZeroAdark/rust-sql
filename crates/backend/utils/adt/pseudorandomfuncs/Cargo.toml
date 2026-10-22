@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+fp_contract = { path = "../../../../_support/fp_contract" }
 adt_numeric = { path = "../numeric" }
 adt_timestamp = { path = "../adt_timestamp" }
 datum = { path = "../../../../_support/types/datum" }

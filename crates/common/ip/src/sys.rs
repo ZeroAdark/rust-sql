@@ -16,7 +16,7 @@ pub use libc::{
     accept, bind, chown, gai_strerror, getgrnam, getsockname, getsockopt, group, listen,
     sa_family_t, setsockopt, sockaddr, sockaddr_in, sockaddr_in6, sockaddr_un, socket, socklen_t,
     AF_INET, AF_INET6, AF_UNIX, AF_UNSPEC, AI_NUMERICHOST, AI_PASSIVE, EAI_NONAME, IPPROTO_IPV6,
-    IPPROTO_TCP, IPV6_V6ONLY, NI_NAMEREQD, NI_NUMERICHOST, NI_NUMERICSERV, SOCK_STREAM, SOL_SOCKET, SO_KEEPALIVE,
+    IPPROTO_TCP, IPV6_V6ONLY, NI_NAMEREQD, NI_NUMERICHOST, NI_NUMERICSERV, SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET, SO_KEEPALIVE,
     SO_REUSEADDR, TCP_KEEPCNT, TCP_KEEPINTVL, TCP_NODELAY,
 };
 // macOS spells the idle-probe option TCP_KEEPALIVE; consumers cfg that arm
@@ -35,6 +35,7 @@ mod wasm_sys {
     pub const AF_INET: c_int = 2;
     pub const AF_INET6: c_int = 10;
     pub const SOCK_STREAM: c_int = 1;
+    pub const SOCK_DGRAM: c_int = 2;
     pub const SOL_SOCKET: c_int = 1;
     pub const SO_REUSEADDR: c_int = 2;
     pub const SO_KEEPALIVE: c_int = 9;

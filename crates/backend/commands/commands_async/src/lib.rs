@@ -130,7 +130,7 @@ pub fn Async_Notify(channel: &[u8], payload: Option<&[u8]>) -> PgResult<()> {
         elog(ERROR, "cannot send notifications from a parallel worker")?;
     }
     if trace_notify() {
-        let mut msg = b"Async_Notify(".to_vec();
+        let mut msg = mcx::std_vec_from_slice("async", b"Async_Notify(")?;
         msg.extend_from_slice(channel);
         msg.push(b')');
         ereport(DEBUG1)
@@ -163,7 +163,7 @@ pub fn Async_Notify(channel: &[u8], payload: Option<&[u8]>) -> PgResult<()> {
             .into());
     }
 
-    let mut data = Vec::with_capacity(channel_len + payload_len + 2);
+    let mut data = ::mcx::std_vec_with_capacity("commands", channel_len + payload_len + 2)?;
     data.extend_from_slice(channel);
     data.push(0);
     if let Some(p) = payload {
@@ -288,6 +288,8 @@ pub(crate) fn listening_channel_at(i: usize) -> Option<Box<[u8]>> {
 }
 
 fn Async_UnlistenOnExit(_code: i32, _arg: datum::Datum) -> PgResult<()> {
+    // D4682: the registration is spent; a reused thread's next session registers again.
+    LOCAL.with(|s| s.unlisten_exit_registered.set(false));
     exec_unlisten_all_commit()?;
     async_queue_unregister()
 }

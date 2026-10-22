@@ -313,18 +313,18 @@ fn funcname_candidates<'mcx>(
     nargs: Option<usize>,
 ) -> PgResult<(PgVec<'mcx, syscache_seams::PgProcCandidate<'mcx>>, Vec<FuncCand>)> {
     let (schemaname, funcname) = deconstruct_qualified_name(names)?;
-    let raw = syscache_seams::lookup_pg_proc_name_candidates::call(mcx, funcname)?;
     // C FuncnameGetCandidates: regproc callers pass missing_ok=true — a
     // missing schema yields NULL candidates ("function does not exist"),
-    // never a schema error.
+    // never a schema error, and pg_proc is not scanned at all.
     let ns_filter = match schemaname {
         Some(name) => match lookup_explicit_namespace(name, true)? {
             #[allow(non_upper_case_globals)] // C-parity name
-            InvalidOid => return Ok((raw, Vec::new())),
+            InvalidOid => return Ok((PgVec::new_in(mcx), Vec::new())),
             id => Some(id),
         },
         None => None,
     };
+    let raw = syscache_seams::lookup_pg_proc_name_candidates::call(mcx, funcname)?;
     let path = match ns_filter {
         Some(_) => None,
         None => Some(lookup_search_path(mcx)?),

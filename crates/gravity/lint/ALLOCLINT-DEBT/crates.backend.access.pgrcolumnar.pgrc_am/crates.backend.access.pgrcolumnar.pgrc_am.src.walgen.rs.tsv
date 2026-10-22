@@ -1,0 +1,4 @@
+path	crates/backend/access/pgrcolumnar/pgrc_am/src/walgen.rs
+growth	std::string::String::push	1
+growth	std::string::String::push_str	1
+growth	std::vec::Vec::push	1

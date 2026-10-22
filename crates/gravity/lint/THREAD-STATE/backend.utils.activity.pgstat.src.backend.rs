@@ -1,0 +1,1 @@
+backend/utils/activity/pgstat/src/backend.rs	PREV_BACKEND_WAL_USAGE	pgport	at:pgstat_flush_backend	thread	the per-backend WAL stats baseline: this thread's pgWalUsage at its last per-backend flush (pgstat_create_backend sets it, pgstat_flush_backend moves it); read only by the thread's own pgstat_report_stat, which a pool thread never runs

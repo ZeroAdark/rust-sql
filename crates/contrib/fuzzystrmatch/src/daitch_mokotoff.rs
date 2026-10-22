@@ -392,7 +392,7 @@ pub(crate) fn fc_daitch_mokotoff(
     }
 
     let mcx = fcinfo.result_mcx();
-    let mut elems: Vec<Datum> = Vec::with_capacity(codes.len());
+    let mut elems: Vec<Datum> = ::mcx::std_vec_with_capacity("fuzzystrmatch", codes.len())?;
     for code in codes.iter() {
         elems.push(varlena_result(varlena::cstring_to_text(mcx, code)?));
     }

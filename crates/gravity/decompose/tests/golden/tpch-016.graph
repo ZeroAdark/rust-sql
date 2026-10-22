@@ -1,0 +1,66 @@
+-- tpch-016
+-- SELECT p_brand, p_type, p_size, count(DISTINCT ps_suppkey) AS supplier_cnt FROM partsupp, part WHERE p_partkey = ps_partkey AND p_brand <> 'Brand#45' AND p_type NOT LIKE 'MEDIUM POLISHED%' AND p_size IN (49, 14, 23, 45, 19, 3, 36, 9) AND ps_suppkey NOT IN ( SELECT s_suppkey FROM supplier WHERE s_comment LIKE '%Customer%Complaints%') GROUP BY p_brand, p_type, p_size ORDER BY supplier_cnt DESC, p_brand, p_type, p_size /* TH16 */;
+graph pipelines=6 breakers=5 init_plans=0 root=p5
+p0 node=6 eligible rows=304 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n6@0 n5@4
+  source range rel=16408 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(4):byref8:vl:win/page Attr(5):byref8:vl:win/page Attr(6):byval8:w8:val Offset:byval2:w2:val
+  filter op1057(v2.4, c1042:'Brand#45')
+  filter op1210(relabel25(v2.5), c25:'MEDIUM POLISHED%')
+  filter any96(v2.6, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x08\x00\x00\x00\x01\x00\x00\x001\x00\x00\x00\x0e\x00\x00\x00\x17\x00\x00\x00-\x00\x00\x00\x13\x00\x00\x00\x03\x00\x00\x00$\x00\x00\x00\x09\x00\x00\x00')
+  project (1=v2.4, 2=v2.5, 3=v2.6, 4=v2.1)
+  build keys=(outer.4) decls=23/23:I32
+  outs 1=vl:win/page 2=vl:win/page 3=w8:val 4=w8:val
+p1 node=7 eligible rows=1 end=breaker(slot=1 Distinct)
+  nodes n7@0
+  source range rel=16420 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(7):byref8:vl:win/page Offset:byval2:w2:val
+  filter op1209(relabel25(v4.7), c25:'%Customer%Complaints%')
+  project (1=v4.1)
+  subplan 1 build Any ids=($exec0) raise-free test=op96(v1.2, $exec0)
+  outs 1=w8:val
+p2 node=4 eligible rows=4000 end=breaker(slot=2 Sort)
+  desc consumes=slot1@p1 consumes=slot0@p0 finishing
+  nodes n4@0 n3@3 n2@5^
+  source range rel=16430 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  subplan 1 hashed Any slot=1 ids=($exec0) raise-free test=op96(v1.2, $exec0)
+  filter not(subplan1())
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5)
+  probe slot=0 inner=n5 JOIN_INNER unique keys=(outer.1) decls=23/23:I32 clauses=(op96(outer.1, inner.4))
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=outer.2)
+  sort keys=1+:Fp128/Bpchar@950,2+:Fp128@950,3+:I32,4+:I32 form=runs
+  outs 1=w8:val 2=w8:val 3=w4:val 4=vl:row 5=vl:row
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w8:val
+p3 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Distinct)
+  desc consumes=slot2@p2 owner=key/0 words=bits@3/5
+  nodes n2@0 n1@1^
+  source breaker slot=2
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w8:val
+p4 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot0@p3
+  nodes n1@0 n0@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=agg2147!distinct(1=outer.4))
+  sort keys=4-n:I64,1+:Fp128/Bpchar@950,2+:Fp128@950,3+:I32 form=runs
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w8:val
+p5 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p4
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4)
+  outs 1=vl:life/breaker 2=vl:life/breaker 3=w4:val 4=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+breaker slot=2 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128,Fp128,Fp128,I32,I32]->[Count@48] 56B order=1+,2+,3+,4+
+breaker slot=0 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p3 layout=[Fp128,Fp128,Fp128,Fp128,I32,I32]->[MinCode@48,MinCode@56,Count@64] 72B order=1+,2+,3+,0+
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p4 layout=[I64,Fp128,Fp128,Fp128,Fp128,I32]->[Count@48] 56B order=4-n,1+,2+,3+
+group slot=0 producer=p3 node=1 form=Distinct hints=[] layout=[Fp128,Fp128,Fp128,Fp128,I32,I32]->[MinCode@48,MinCode@56,Count@64] 72B
+  key 0 word=0 resno=1 kind=Fp128 attno=0 type=1042 rep=0 image=Bpchar expr=outer.1
+  key 1 word=2 resno=2 kind=Fp128 attno=0 type=1043 rep=1 expr=outer.2
+  key 2 word=4 resno=3 kind=I32 attno=0 type=23 expr=outer.3
+  key 3 word=5 resno=0 kind=I32 attno=0 type=23 expr=outer.4
+  agg aggno=0 fn=2147 reg=DistinctCount slot=- count_slot=- final=PairCount class=CountAny trans=Var mods=[distinct=1] expr=agg2147!distinct(1=outer.4)
+mapped: SeqScan HashJoin Sort Agg Hash SubPlan

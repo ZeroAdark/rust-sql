@@ -1,0 +1,10 @@
+-- regress-full-jsonb-009
+-- SELECT (jsonb_populate_record(NULL::jsbrec, js)).* FROM jsbpoptest;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1360 end=sink
+  nodes n0@0
+  source range rel=39270 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=T_FieldSelect, 2=T_FieldSelect, 3=T_FieldSelect, 4=T_FieldSelect, 5=T_FieldSelect, 6=T_FieldSelect, 7=T_FieldSelect, 8=T_FieldSelect, 9=T_FieldSelect, 10=T_FieldSelect, 11=T_FieldSelect, 12=T_FieldSelect, 13=T_FieldSelect, 14=T_FieldSelect, 15=T_FieldSelect, 16=T_FieldSelect, 17=T_FieldSelect)
+  outs 1=w4:val 2=vl:call0 3=vl:call0 4=vl:call0 5=vl:call0 6=? 7=? 8=vl:call0 9=vl:call0 10=vl:call0 11=vl:call0 12=w8:val 13=vl:call0 14=vl:call0 15=? 16=? 17=?
+mapped: SeqScan

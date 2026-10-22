@@ -35,13 +35,13 @@ fn decode_gid(buf: &[u8], layout: &BufferLayout, gidlen: u16, func: &'static str
     }
 }
 
-fn decode_children(buf: &[u8], layout: &BufferLayout, n: usize) -> Vec<TransactionId> {
-    let mut v = Vec::with_capacity(n);
+fn decode_children(buf: &[u8], layout: &BufferLayout, n: usize) -> PgResult<Vec<TransactionId>> {
+    let mut v = ::mcx::std_vec_with_capacity("TwoPhase", n)?;
     for i in 0..n {
         let o = layout.children + i * 4;
         v.push(TransactionId::from_ne_bytes(buf[o..o + 4].try_into().unwrap()));
     }
-    v
+    Ok(v)
 }
 
 /// `PrepareRedoAdd`: register a gxact from a prepare-record body during redo.
@@ -205,7 +205,7 @@ fn process_two_phase_buffer(
     }
 
     let layout = buffer_layout(&hdr, &buf, "ProcessTwoPhaseBuffer")?;
-    let subxids = decode_children(&buf, &layout, hdr.nsubxacts as usize);
+    let subxids = decode_children(&buf, &layout, hdr.nsubxacts as usize)?;
     for &subxid in &subxids {
         debug_assert!(TransactionIdFollows(subxid, xid));
         if set_next_xid {
@@ -242,6 +242,31 @@ pub fn restoreTwoPhaseData() -> PgResult<()> {
 /// (or nextXid when none).
 pub fn PrescanPreparedTransactions() -> PgResult<TransactionId> {
     Ok(prescan_prepared_transactions_impl()?.0)
+}
+
+/// No effect on nextXid or pg_subtrans: it runs where `rm_cleanup` does, before `RecoverPreparedTransactions` sets pg_subtrans.
+pub fn PreparedTransactionXidsWithSubxids() -> PgResult<Vec<TransactionId>> {
+    let mut xids: Vec<TransactionId> = Vec::new();
+    let st = TwoPhaseState();
+    lock_twophase_state(LW_EXCLUSIVE);
+    let inner = (|| -> PgResult<()> {
+        let mut i = 0;
+        while i < unsafe { st.num_prep_xacts.get() } {
+            let g = st.gxact(st.prep_xact(i));
+            let xid = unsafe { g.xid.get() };
+            let buf = process_two_phase_buffer(xid, unsafe { g.prepare_start_lsn.get() }, unsafe { g.ondisk.get() }, false, false)?;
+            if let Some(buf) = buf {
+                let hdr = corrupt_guard(TwoPhaseFileHeader::from_bytes(&buf), "PreparedTransactionXidsWithSubxids")?;
+                let layout = buffer_layout(&hdr, &buf, "PreparedTransactionXidsWithSubxids")?;
+                xids.push(xid);
+                xids.extend(decode_children(&buf, &layout, hdr.nsubxacts as usize)?);
+            }
+            i += 1;
+        }
+        Ok(())
+    })();
+    unlock_twophase_state();
+    inner.map(|()| xids)
 }
 
 /// `PrescanPreparedTransactions(&xids, &nxids)`: also collects the valid
@@ -382,7 +407,7 @@ pub fn RecoverPreparedTransactions() -> PgResult<()> {
             debug_assert_eq!(hdr.xid, xid);
             let layout = buffer_layout(&hdr, &buf, "RecoverPreparedTransactions")?;
             let gid = decode_gid(&buf, &layout, hdr.gidlen, "RecoverPreparedTransactions")?;
-            let subxids = decode_children(&buf, &layout, hdr.nsubxacts as usize);
+            let subxids = decode_children(&buf, &layout, hdr.nsubxacts as usize)?;
 
             mark_as_preparing_guts(idx, xid, &gid, hdr.prepared_at, hdr.owner, hdr.database);
             unsafe { g.inredo.set(false) };

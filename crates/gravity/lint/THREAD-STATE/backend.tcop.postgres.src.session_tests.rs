@@ -1,0 +1,9 @@
+backend/tcop/postgres/src/session_tests.rs	WIRE	unittest	test	test	#[cfg(test)] mod of backend/tcop/postgres/src/lib.rs
+backend/tcop/postgres/src/session_tests.rs	INPUT	unittest	test	test	#[cfg(test)] mod of backend/tcop/postgres/src/lib.rs
+backend/tcop/postgres/src/session_tests.rs	INPUT_POS	unittest	test	test	#[cfg(test)] mod of backend/tcop/postgres/src/lib.rs
+backend/tcop/postgres/src/session_tests.rs	PARAM_LOG_PROBE	unittest	test	test	#[cfg(test)] mod of backend/tcop/postgres/src/lib.rs
+backend/tcop/postgres/src/session_tests.rs	CURRENT_RESOWNER	unittest	test	test	#[cfg(test)] mod of backend/tcop/postgres/src/lib.rs
+backend/tcop/postgres/src/session_tests.rs	SNAPSHOT_REFS	unittest	test	test	#[cfg(test)] mod of backend/tcop/postgres/src/lib.rs
+backend/tcop/postgres/src/session_tests.rs	PEAK_MESSAGE_USED	unittest	test	test	#[cfg(test)] mod of backend/tcop/postgres/src/lib.rs
+backend/tcop/postgres/src/session_tests.rs	PLAN_CACHE_MODE	unittest	test	test	#[cfg(test)] mod of backend/tcop/postgres/src/lib.rs
+backend/tcop/postgres/src/session_tests.rs	THREAD_UP	unittest	test	test	#[cfg(test)] mod of backend/tcop/postgres/src/lib.rs

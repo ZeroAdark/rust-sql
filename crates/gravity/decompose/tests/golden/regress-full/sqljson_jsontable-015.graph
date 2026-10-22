@@ -1,0 +1,19 @@
+-- regress-full-sqljson_jsontable-015
+-- SELECT * FROM (VALUES ('1'), ('"err"')) vals(js) LEFT OUTER JOIN JSON_TABLE(vals.js::jsonb, '$' COLUMNS (a int PATH '$' ERROR ON ERROR)) jt ON true;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source values rti=4 rows=2
+    row (c25:'1')
+    row (c25:'"err"')
+  project (1=v4.1)
+  nest inner=n2 JOIN_LEFT vol=v params=($exec0=outer.1)
+  inner node=2 serial site=-1 reason=Host end=sink
+  nodes n2@0
+  source tablefunc rti=2 kind=json_table cols=1 ordinality=-1 doc=T_JsonExpr
+  project (1=v2.1)
+  project (1=outer.1, 2=inner.1)
+  outs 1=vl:row
+  outs 1=vl:row 2=w4:val
+param $exec0 owner=n0 type=25@100 rep=vl:row
+mapped: ValuesScan TableFuncScan NestLoop NestLoopParam

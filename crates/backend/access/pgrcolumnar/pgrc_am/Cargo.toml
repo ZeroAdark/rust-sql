@@ -1,0 +1,101 @@
+# pgrc_am — the pgrcolumnar table-AM glue (chunk M3-H).
+#
+# Dependency posture: the three frozen pgrc crates (format/write/read) plus
+# the backend glue surface the OLD pgrcolumnar AM already proved out
+# (tableam_vocab / exectuples / relpath / inval / snapmgr / transam_seams /
+# xact_seams), and `xact` for callback registration (the tableam-crate
+# precedent, hosted here so the session-envelope state and its hooks live in
+# ONE crate). All file I/O routes through `vfs::` / `wvfs::WriteVfs` — zero
+# determinism-ledger rows owed by this crate.
+
+[package]
+name = "pgrc_am"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pgrc_am"
+path = "src/lib.rs"
+
+[dependencies]
+guc_seams = { path = "../../../utils/misc/guc_seams" }
+# D259: the row scan's per-granule CHECK_FOR_INTERRUPTS (heapam's posture).
+init_small = { path = "../../../utils/init/init_small" }
+ipc_seams = { path = "../../../storage/ipc/ipc_seams" }
+postgres_seams = { path = "../../../tcop/postgres_seams" }
+pgrc_codec = { path = "../pgrc_codec" }
+pgrc_format = { path = "../pgrc_format" }
+pgrc_meta = { path = "../pgrc_meta" }
+pgrc_scan = { path = "../pgrc_scan" }
+pgrc_read = { path = "../pgrc_read" }
+pgrc_write = { path = "../pgrc_write" }
+# K1: the compaction policy, row order and output maps (pure).
+pgrc_compact = { path = "../pgrc_compact" }
+transam_xlog = { path = "../../transam/transam_xlog" }
+pgrc_wal_seams = { path = "../pgrc_wal_seams" }
+pgsync = { path = "../../../../_support/pgsync" }
+# P-1: the publish and catalog phase clocks on the DEBUG1 publish line (the sanctioned clock route).
+pg_clock = { path = "../../../../port/pg_clock" }
+mcx = { path = "../../../../_support/mcx" }
+# D4372: ANALYZE's sample workers run on the statement's ledger account (scan.rs sample_tasks, memledger::charge::enter_as).
+memledger = { path = "../../../../_support/memledger" }
+# D4372: the sample window's ladder wait sleeps through the waiter (the clock provider), as pgrc_write's load gate does.
+waiter = { path = "../../../storage/ipc/waiter" }
+# The part registry's budget is the memory policy's (mempolicy::cache).
+mempolicy = { path = "../../../../_support/mempolicy" }
+types_fmgr = { path = "../../../../_support/types/fmgr" }
+# planner_facts: the two SQL faces open their relation through the seam.
+relation_seams = { path = "../../common/relation_seams" }
+# SCANSTATS: a pgrcolumnar seq scan's seq_scan / seq_tup_read (heapam's pgstat_count_heap_* rules).
+pgstat = { path = "../../../utils/activity/pgstat" }
+libc = "0.2"
+vfs = { path = "../../../storage/file/vfs" }
+# SORTRUNS-E0 L2: the run merge's reverse build spills to PG temporary files (pgsql_tmp: removed at transaction end
+# and at startup after a crash).
+fd = { path = "../../../storage/file/fd" }
+datum = { path = "../../../../_support/types/datum" }
+types_core = { path = "../../../../_support/types/types_core" }
+types_error = { path = "../../../../_support/types/types_error" }
+types_rel = { path = "../../../../_support/types/rel" }
+types_snapshot = { path = "../../../../_support/types/snapshot" }
+types_slot = { path = "../../../../_support/types/types_slot" }
+types_storage = { path = "../../../../_support/types/types_storage" }
+types_tuple = { path = "../../../../_support/types/types_tuple" }
+tableam_vocab = { path = "../../table/tableam_vocab" }
+exectuples = { path = "../../../executor/exectuples" }
+relpath = { path = "../../../../common/relpath" }
+elog = { path = "../../../utils/error/elog" }
+mbutils = { path = "../../../utils/mb/mbutils" }
+wchar = { path = "../../../../common/wchar" }
+xact = { path = "../../transam/xact" }
+xact_seams = { path = "../../transam/xact_seams" }
+transam_seams = { path = "../../transam/transam_seams" }
+# D2066: reads refused while RecoveryInProgress() (a standby has no part files; standby.rs).
+transam_xlog_seams = { path = "../../transam/transam_xlog_seams" }
+# D3150: every publish logs its generation stamp (standby.rs log_published_generation).
+xloginsert_seams = { path = "../../transam/xloginsert_seams" }
+varsup_seams = { path = "../../transam/varsup_seams" }
+procarray = { path = "../../../storage/ipc/procarray" }
+# PUBLISH-WAIT: a publisher waits out a foreign in-progress head (XactLockTableWait); the background check (MyProc's
+# PROC_IS_AUTOVACUUM / PROC_IS_DB_MAINT_WORKER status flags).
+lmgr = { path = "../../../storage/lmgr/lmgr" }
+lmgr_proc = { path = "../../../storage/lmgr/lmgr_proc" }
+# CONCLOAD: the test hooks between a publish and its catalog record (pgrc-catalog-order isolation spec).
+injection_point = { path = "../../../utils/misc/injection_point" }
+procarray_seams = { path = "../../../storage/ipc/procarray_seams" }
+snapmgr = { path = "../../../utils/time/snapmgr" }
+inval = { path = "../../../utils/cache/inval" }
+syscache_seams = { path = "../../../utils/cache/syscache_seams" }
+# M4-S8 (the engine-cut substrate finding): DEFAULT-collation resolution
+# through the engine's own locale answer — a seam crate, fail-closed when
+# uninstalled (library worlds keep the conservative class).
+pg_locale_seams = { path = "../../../utils/adt/pg_locale_seams" }
+
+[dev-dependencies]
+# D4487: the tests read an open part's fault log (OpenPart::faults), kept only under this feature
+pgrc_read = { path = "../pgrc_read", features = ["fault-log"] }
+
+# process_global!'s loom arm expands here (the pgrc_read precedent).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

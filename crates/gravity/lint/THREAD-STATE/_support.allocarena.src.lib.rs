@@ -1,0 +1,1 @@
+_support/allocarena/src/lib.rs	DECOMMITS_HERE	memory	exit	thread	H3 step (2): the decommits this thread made through the arenas' commit callback and their bytes (const-initialized, no Drop: no TLS destructor; the born-red tests read it, the give-back service publishes its own from its loop)

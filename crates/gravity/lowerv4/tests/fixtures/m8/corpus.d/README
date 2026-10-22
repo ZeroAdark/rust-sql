@@ -1,0 +1,11 @@
+M8 seed corpus: one file per fixture, `<fixture>.tsv` holding its row `fixture<TAB>source<TAB>expect`
+(tests/nestloop_m8.rs m8_seed_verdicts_and_pins reads every *.tsv here; column 1 must be the file's name).
+- fixture: a decompose plan fixture id (plans/<id>.plan; regress-full-<stem> = plans/regress-full/<stem>.plan), or a
+  fixtures/m8/<id>.plan (m8x-<n>: fixtures/m8/m8x.sql, captured by scripts/gravity-capture-plans.sh m8x).
+- source: the census family (census/serve.tsv), or m8x/<shape> (a table-free statement with a PostgreSQL 18.6 golden,
+  fixtures/m8/<id>.pg, or a shape no census fixture carries alone).
+- expect: the crate's lowering verdict: `served` (with its IR pin, LOWERV4_PIN=write after review), `refused <text>`,
+  `rig-gap` (a rig_gaps.d fixture that refuses a Shape or a missing seam in the crate rig), or `server-only`: a fixture
+  the crate rig cannot judge (the rig catalog has no user aggregate / type / function, D537); the server rig (rig.py)
+  judges it.
+Re-keyed by fixture name (v5 core-face landing 8); the rows were first seeded per M8 kind / road (M8-RIG, 2026-09-27).

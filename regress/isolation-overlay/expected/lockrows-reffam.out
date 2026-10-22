@@ -1,0 +1,107 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1bumpa s2lka s1c
+step s1b: BEGIN;
+step s1bumpa: UPDATE lu SET v = v + 100 WHERE id IN (40, 45);
+step s2lka: SELECT a.id, a.v, b.v AS bv FROM lu a, rp b WHERE a.id = b.id AND b.v BETWEEN 400 AND 460 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2lka: <... completed>
+id|  v| bv
+--+---+---
+40|140|400
+41| 41|410
+42| 42|420
+43| 43|430
+44| 44|440
+45|145|450
+46| 46|460
+(7 rows)
+
+
+starting permutation: s1b s1part s2lka s1c
+step s1b: BEGIN;
+step s1part: UPDATE rc SET v = 9 WHERE id = 45; UPDATE lu SET v = v + 100 WHERE id IN (40, 45);
+step s2lka: SELECT a.id, a.v, b.v AS bv FROM lu a, rp b WHERE a.id = b.id AND b.v BETWEEN 400 AND 460 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2lka: <... completed>
+id|  v| bv
+--+---+---
+40|140|400
+41| 41|410
+42| 42|420
+43| 43|430
+44| 44|440
+45|145|450
+46| 46|460
+(7 rows)
+
+
+starting permutation: s1b s1bumpb s2lkb s1c
+step s1b: BEGIN;
+step s1bumpb: UPDATE rp SET v = v + 1 WHERE id IN (40, 45);
+step s2lkb: SELECT a.id, a.v, b.v AS bv FROM lu a, rp b WHERE a.id = b.id AND b.v BETWEEN 400 AND 460 FOR SHARE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2lkb: <... completed>
+id| v| bv
+--+--+---
+40|40|401
+41|41|410
+42|42|420
+43|43|430
+44|44|440
+45|45|451
+46|46|460
+(7 rows)
+
+
+starting permutation: s1b s1outb s2lkb s1c
+step s1b: BEGIN;
+step s1outb: UPDATE rp SET v = 9 WHERE id = 45;
+step s2lkb: SELECT a.id, a.v, b.v AS bv FROM lu a, rp b WHERE a.id = b.id AND b.v BETWEEN 400 AND 460 FOR SHARE OF b; <waiting ...>
+step s1c: COMMIT;
+step s2lkb: <... completed>
+id| v| bv
+--+--+---
+40|40|400
+41|41|410
+42|42|420
+43|43|430
+44|44|440
+46|46|460
+(6 rows)
+
+
+starting permutation: s1b s1bumpa s2lkab s1c
+step s1b: BEGIN;
+step s1bumpa: UPDATE lu SET v = v + 100 WHERE id IN (40, 45);
+step s2lkab: SELECT a.id, a.v, b.v AS bv FROM lu a, rp b WHERE a.id = b.id AND b.v BETWEEN 400 AND 460 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2lkab: <... completed>
+id|  v| bv
+--+---+---
+40|140|400
+41| 41|410
+42| 42|420
+43| 43|430
+44| 44|440
+45|145|450
+46| 46|460
+(7 rows)
+
+
+starting permutation: s1b s1outb s2lkab s1c
+step s1b: BEGIN;
+step s1outb: UPDATE rp SET v = 9 WHERE id = 45;
+step s2lkab: SELECT a.id, a.v, b.v AS bv FROM lu a, rp b WHERE a.id = b.id AND b.v BETWEEN 400 AND 460 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2lkab: <... completed>
+id| v| bv
+--+--+---
+40|40|400
+41|41|410
+42|42|420
+43|43|430
+44|44|440
+46|46|460
+(6 rows)
+

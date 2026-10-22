@@ -1,0 +1,22 @@
+# D604 (main 09-25; M4-HOSTS RH6 fixes the host, M4-LOCK's L1 must pass it): SELECT .. FOR SHARE (oltpc-054) while
+# another session's NO KEY UPDATE of the row (s_ytd) commits between the scan and the lock. PostgreSQL 18.6: the row,
+# no error, one lock. The rig scripts the host's answer as a recheck on the newer version (`~` row, slot 1), so the
+# EvalPlanQual path runs: the recheck returns the row once and locks nothing again ([locked] = the first lock only).
+# Scripted, not recorded (m4_write_golden.py records no concurrent session): [pg] / [tag] / [after] are PG's by the
+# rule above. write.lock refuses today; its builder deletes the refused: line.
+plan: oltpc-054
+table: 16462 stock s_i_id:int4 s_w_id:int4 s_ytd:int4 s_quantity:int2
+lock: recheck=1
+[before 16462]
+17	1	0	10
+~17	1	1	10
+18	1	0	20
+[pg]
+10
+[tag]
+1
+[locked]
+16462	0
+[after 16462]
+17	1	1	10
+18	1	0	20

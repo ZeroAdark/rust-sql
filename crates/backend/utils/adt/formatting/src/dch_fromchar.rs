@@ -54,7 +54,7 @@ pub struct TmFromChar {
     pub ff: i32,
     pub has_tz: bool,
     pub gmtoffset: i32,
-    pub tzp: Option<&'static ::adt_datetime::tz::PgTz>,
+    pub tzp: Option<::adt_datetime::tz::PgTzRef>,
     pub abbrev: [u8; ::adt_datetime::TOKMAXLEN],
     pub abbrev_len: u8,
 }
@@ -324,8 +324,9 @@ pub fn dch_from_char<'mcx>(
                     if tzlen > 0 {
                         out.has_tz = true;
                         out.gmtoffset = gmtoffset;
+                        let has_zone = tzp.is_some();
                         out.tzp = tzp;
-                        if tzp.is_some() {
+                        if has_zone {
                             out.abbrev[..tzlen as usize]
                                 .copy_from_slice(&cur.rest()[..tzlen as usize]);
                             out.abbrev_len = tzlen as u8;

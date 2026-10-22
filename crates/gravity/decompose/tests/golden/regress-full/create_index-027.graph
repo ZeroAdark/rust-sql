@@ -1,0 +1,24 @@
+-- regress-full-create_index-027
+-- SELECT unique1, unique2 FROM onek_with_null WHERE unique1 = 500 ORDER BY unique2 DESC, unique1 DESC LIMIT 1;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=2 serial site=0 reason=IndexSource end=breaker(slot=0 TopK)
+  nodes n3@0 n2@0 n1@1^
+  source bitmap rel=19520 rti=1 am=heap
+    bitmap index node=3 index=19525 rows=11
+      key att=1 op=96 value=c23:500
+    recheck (op96(v1.1, c23:500))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2)
+  sort keys=2-n:I32 form=topk count=1 offset=all
+  outs 1=w8:val 2=w8:val
+p1 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2)
+  limit count=1 offset=all
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=w8:val
+  outs 1=w8:val 2=w8:val
+breaker slot=0 kind=TopK budget=Fixed(104) spill=None producer=p0 layout=[I32]->[Count@8] 16B order=2-n
+mapped: BitmapIndexScan BitmapHeapScan Sort Limit

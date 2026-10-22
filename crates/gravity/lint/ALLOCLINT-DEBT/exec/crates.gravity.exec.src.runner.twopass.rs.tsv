@@ -1,0 +1,4 @@
+path	crates/gravity/exec/src/runner/twopass.rs
+ir-only	<alloc::sync::Arc<[T],A> as core::convert::From<alloc::vec::Vec<T,A>>>::from	1
+method	std::iter::Iterator::collect	1
+type	std::vec::Vec	1

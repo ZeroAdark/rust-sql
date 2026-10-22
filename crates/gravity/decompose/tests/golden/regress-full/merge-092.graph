@@ -1,0 +1,28 @@
+-- regress-full-merge-092
+-- MERGE INTO classv c USING pg_namespace n ON n.oid = c.relnamespace WHEN MATCHED AND c.oid = 'pg_depend'::regclass THEN UPDATE SET reltuples = reltuples - 1 RETURNING c.oid;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=4 eligible rows=98 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n4@0 n3@1
+  source range rel=2615 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v2.-1, 2=v2.1)
+  build keys=(outer.2) decls=26/26:I32
+  outs 1=fx6:row 2=w8:val
+p1 node=2 serial site=1 reason=Write end=sink
+  desc consumes=slot0@p0
+  nodes n2@0 n1@1 n0@3
+  source range rel=1259 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(18):byval8:w8:val Attr(19):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(22):byval8:w8:val Attr(23):byval8:w8:val Attr(24):byval8:w8:val Attr(25):byval8:w8:val Attr(26):byval8:w8:val Attr(27):byval8:w8:val Attr(28):byval8:w8:val Attr(29):byval8:w8:val Attr(30):byval8:w8:val Attr(31):byval8:w8:val Attr(32):byref8:vl:win/page Attr(33):byref8:vl:win/page Attr(34):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v3.-1, 2=v3.3, 3j=v3.1, 4j=v3.2, 5j=v3.3, 6j=v3.4, 7j=v3.5, 8j=v3.6, 9j=v3.7, 10j=v3.8, 11j=v3.9, 12j=v3.10, 13j=v3.11, 14j=v3.12, 15j=v3.13, 16j=v3.14, 17j=v3.15, 18j=v3.16, 19j=v3.17, 20j=v3.18, 21j=v3.19, 22j=v3.20, 23j=v3.21, 24j=v3.22, 25j=v3.23, 26j=v3.24, 27j=v3.25, 28j=v3.26, 29j=v3.27, 30j=v3.28, 31j=v3.29, 32j=v3.30, 33j=v3.31, 34j=v3.32, 35j=v3.33, 36j=v3.34)
+  probe slot=0 inner=n3 JOIN_INNER unique keys=(outer.2) decls=26/26:I32 clauses=(op607(outer.2, inner.2))
+  project (1j=outer.1, 2j=inner.1, 3j=outer.3, 4j=outer.4, 5j=outer.5, 6j=outer.6, 7j=outer.7, 8j=outer.8, 9j=outer.9, 10j=outer.10, 11j=outer.11, 12j=outer.12, 13j=outer.13, 14j=outer.14, 15j=outer.15, 16j=outer.16, 17j=outer.17, 18j=outer.18, 19j=outer.19, 20j=outer.20, 21j=outer.21, 22j=outer.22, 23j=outer.23, 24j=outer.24, 25j=outer.25, 26j=outer.26, 27j=outer.27, 28j=outer.28, 29j=outer.29, 30j=outer.30, 31j=outer.31, 32j=outer.32, 33j=outer.33, 34j=outer.34, 35j=outer.35, 36j=outer.36)
+  write MERGE rel=1259 rti=3 natts=34 indexes=(2662[1]up, 2663[2, 3]u, 3455[9, 8]) returning marks=1 (rti2:ROW_MARK_REFERENCE)
+    merge rowid=outer.1 target_cols=(1@3,2@4,3@5,4@6,5@7,6@8,7@9,8@10,9@11,10@12,11@13,12@14,13@15,14@16,15@17,16@18,17@19,18@20,19@21,20@22,21@23,22@24,23@25,24@26,25@27,26@28,27@29,28@30,29@31,30@32,31@33,32@34,33@35,34@36)
+    when matched and (op607(v3.1, c26:2608)) then update set=(11) (1=fn312(op1117(v3.11, c701:4607182418800017408)))
+  project (1=v3.1)
+  outs 1=fx6:row 2=w8:val 3=w8:val 4=fx64:win/page 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=w8:val 15=w8:val 16=w8:val 17=w8:val 18=w8:val 19=w8:val 20=w8:val 21=w8:val 22=w8:val 23=w8:val 24=w8:val 25=w8:val 26=w8:val 27=w8:val 28=w8:val 29=w8:val 30=w8:val 31=w8:val 32=w8:val 33=w8:val 34=vl:win/page 35=vl:win/page 36=vl:win/page
+  outs 1=fx6:row 2=fx6:life/breaker 3=w8:val 4=fx64:win/page 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=w8:val 14=w8:val 15=w8:val 16=w8:val 17=w8:val 18=w8:val 19=w8:val 20=w8:val 21=w8:val 22=w8:val 23=w8:val 24=w8:val 25=w8:val 26=w8:val 27=w8:val 28=w8:val 29=w8:val 30=w8:val 31=w8:val 32=w8:val 33=w8:val 34=vl:win/page 35=vl:win/page 36=vl:win/page
+  outs 1=w8:val
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+mapped: ModifyTable SeqScan HashJoin Hash PlanRowMark

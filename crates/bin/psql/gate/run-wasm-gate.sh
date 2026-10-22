@@ -66,7 +66,7 @@ kill -INT $SRV 2>/dev/null
 wait $SRV 2>/dev/null
 
 # ---- arm W: wasm x wasm ----------------------------------------------------
-(cd "$ROOT/tools/wasm-web" && timeout 900 node run-node-psql.mjs \
+(cd "$ROOT/wasm" && timeout 900 node run-node-psql.mjs \
     --script "$HERE/corpus-wasm.sql" \
     --vfs-file "$HERE/gate-include.sql:/gate-include.sql" \
     --out "$OUT/wasm.raw.out" --err "$OUT/wasm.raw.err" \

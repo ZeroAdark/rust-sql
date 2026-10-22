@@ -69,16 +69,6 @@ pub(crate) fn fc_brin_page_type(
     text_datum(mcx, typ.as_bytes())
 }
 
-fn wrong_column_count() -> Box<PgError> {
-    Box::new(
-        PgError::error("function has wrong number of declared columns")
-            .with_sqlstate(types_error::ERRCODE_INVALID_FUNCTION_DEFINITION)
-            .with_hint(
-                "To resolve the problem, update the \"pageinspect\" extension to the latest version.",
-            ),
-    )
-}
-
 pub(crate) fn fc_brin_metapage_info(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
@@ -120,6 +110,7 @@ pub(crate) fn fc_brin_revmap_data(
     require_superuser("raw page")?;
 
     let rows = if !flinfo.has_fn_extra() {
+        require_set_context(fcinfo)?;
         let page = RawPage::arg(fcinfo, 0)?;
         verify_brin_page(&page, BRIN_PAGETYPE_REVMAP, "revmap")?;
         if page_is_new(page.bytes()) {
@@ -128,7 +119,7 @@ pub(crate) fn fc_brin_revmap_data(
         let mut rows = Vec::with_capacity(REVMAP_PAGE_MAXITEMS);
         for idx in 0..REVMAP_PAGE_MAXITEMS {
             let ip = types_brin::revmap_get_tid(&page.page_ref(), idx);
-            rows.push(tid_bytes(ip).to_vec());
+            rows.push(::mcx::std_vec_from_slice("pageinspect", &tid_bytes(ip))?);
         }
         Some(rows)
     } else {
@@ -157,9 +148,8 @@ pub(crate) fn fc_brin_page_items(
 
     let index_relid = fcinfo.arg(1).as_oid();
     let index_rel = relation::relation_open(mcx, index_relid, types_rel::AccessShareLock)?;
-    // C brin_page_items opens the relation with index_open(), which permits both
-    // RELKIND_INDEX and RELKIND_PARTITIONED_INDEX (validate_relation_kind);
-    // only IS_BRIN then rejects non-BRIN indexes (brinfuncs.c:165).
+    // index_open() admits partitioned indexes too; only IS_BRIN rejects
+    // non-BRIN ones (brinfuncs.c:165).
     if index_rel.rd_rel.relkind != RELKIND_INDEX
         && index_rel.rd_rel.relkind != RELKIND_PARTITIONED_INDEX
     {
@@ -190,10 +180,10 @@ pub(crate) fn fc_brin_page_items(
     let natts = bdesc.bd_tupdesc.natts as usize;
 
     // Resolve output functions for every stored type once.
-    let mut out_fns: Vec<Vec<FmgrInfo>> = Vec::with_capacity(natts);
+    let mut out_fns: Vec<Vec<FmgrInfo>> = ::mcx::std_vec_with_capacity("contrib", natts)?;
     for attno in 1..=natts {
         let col = &bdesc.bd_info[attno - 1];
-        let mut fns = Vec::with_capacity(col.oi_nstored as usize);
+        let mut fns = ::mcx::std_vec_with_capacity("contrib", col.oi_nstored as usize)?;
         for i in 0..col.oi_nstored as usize {
             let (output, _isvarlena) = lsyscache::getTypeOutputInfo(col.oi_typids[i])?;
             fns.push(fmgr_core::fmgr_info(output)?);

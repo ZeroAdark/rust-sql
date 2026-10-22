@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/hashjoin/build_class.rs	defers	licence	fn	op 14: a raising outer-first build built eagerly, its error held until the probe's first row [HELD-ERROR; D1906,D1018,D2756,D3273]

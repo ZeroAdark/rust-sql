@@ -11,3 +11,7 @@ seam_core::seam!(
 seam_core::seam!(
     pub fn ereport_msg(elevel: ErrorLevel, msg: String, detail: Option<String>) -> PgResult<()>
 );
+
+seam_core::seam!(
+    pub fn ereport_msg_detail_log(elevel: ErrorLevel, msg: String, detail_log: String) -> PgResult<()>
+);

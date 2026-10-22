@@ -213,11 +213,7 @@ pub fn tsvector_concat_core<'mcx>(
         }
     }
 
-    let mut b = TsVecBuilder::with_capacity(
-        mcx,
-        in1.size() + in2.size(),
-        in1.payload.len() + in2.payload.len(),
-    )?;
+    let mut b = TsVecBuilder::with_capacity(mcx, in1.size() + in2.size(), in1.payload.len() + in2.payload.len())?;
     let mut scratch: PgVec<WordEntryPos> = PgVec::new_in(mcx);
     let (mut i1, mut i2) = (0usize, 0usize);
     while i1 < in1.size() && i2 < in2.size() {

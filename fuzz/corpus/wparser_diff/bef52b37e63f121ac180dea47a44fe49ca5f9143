@@ -1,2 +1,0 @@
-);
-SELECT ts_rewrite(ts_rewrite(

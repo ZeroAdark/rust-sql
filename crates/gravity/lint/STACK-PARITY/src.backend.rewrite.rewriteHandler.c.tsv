@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/rewrite/rewriteHandler.c: 1 stack-depth check sites
+2943	relation_is_updatable	crates/backend/rewrite/rewrite_handler/src/lib.rs	relation_is_updatable	yes	

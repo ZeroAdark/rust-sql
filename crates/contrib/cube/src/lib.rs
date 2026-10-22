@@ -77,7 +77,7 @@ fn arg_array_elems(
     // SAFETY: strict catalog fn; arg i is a non-null array varlena.
     let payload = unsafe { fcinfo.arg_varlena_packed(i)? };
     let data = payload.data();
-    let mut full = Vec::with_capacity(4 + data.len());
+    let mut full = ::mcx::std_vec_with_capacity("cube", 4 + data.len())?;
     full.extend_from_slice(&datum::varlena::set_varsize_4b(4 + data.len()));
     full.extend_from_slice(data);
     // SAFETY: the armed result mcx outlives this call.
@@ -94,7 +94,7 @@ fn arg_array_elems(
 
 fn fc_cube_in(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is cstring.
-    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes().to_vec();
+    let s = ::mcx::std_vec_from_slice("cube", unsafe { fcinfo.arg_cstring(0) }.to_bytes())?;
     match parse::parse_cube(&s) {
         Ok(img) => ret_cube(fcinfo, &img),
         Err(e) => {
@@ -150,7 +150,7 @@ fn fc_cube_send(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
         nitems += nitems;
     }
 
-    let mut buf: Vec<u8> = Vec::with_capacity(4 + 8 * nitems);
+    let mut buf: Vec<u8> = ::mcx::std_vec_with_capacity("cube", 4 + 8 * nitems)?;
     buf.extend_from_slice(&cube.header().to_be_bytes());
     // for symmetry with cube_recv, raw x[] slots (no LL/UR normalization)
     for i in 0..nitems {
@@ -179,7 +179,7 @@ fn fc_cube_recv(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
     }
 
     let size = repr::NDBOX_HDR + 8 * nitems;
-    let mut img = Vec::with_capacity(size);
+    let mut img = ::mcx::std_vec_with_capacity("cube", size)?;
     img.extend_from_slice(&datum::varlena::set_varsize_4b(size));
     // the header word is stored as received (C copies it verbatim)
     img.extend_from_slice(&header.to_ne_bytes());
@@ -212,14 +212,14 @@ fn fc_cube_a_f8_f8(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<D
         ));
     }
 
-    let mut coords = Vec::with_capacity(2 * dim);
+    let mut coords = ::mcx::std_vec_with_capacity("cube", 2 * dim)?;
     for d in &ur {
         coords.push(d.as_f64());
     }
     for d in &ll {
         coords.push(d.as_f64());
     }
-    ret_cube(fcinfo, &build_image_auto(dim, &coords))
+    ret_cube(fcinfo, &build_image_auto(dim, &coords)?)
 }
 
 /// `cube(float8[])` — cube_a_f8, a zero-volume cube (point).
@@ -233,7 +233,7 @@ fn fc_cube_a_f8(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
         return Err(array_too_long());
     }
     let coords: Vec<f64> = ur.iter().map(|d| d.as_f64()).collect();
-    ret_cube(fcinfo, &build_image(dim, true, &coords))
+    ret_cube(fcinfo, &build_image(dim, true, &coords)?)
 }
 
 fn fc_cube_subset(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -249,7 +249,7 @@ fn fc_cube_subset(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
     }
 
     let point = c.is_point();
-    let mut coords = vec![0f64; if point { dim } else { 2 * dim }];
+    let mut coords = ::mcx::std_vec_from_elem("cube", 0f64, if point { dim } else { 2 * dim })?;
     for (i, d) in idx.iter().enumerate() {
         let dx = d.as_i32();
         if dx <= 0 || dx > c.dim() as i32 {
@@ -262,13 +262,13 @@ fn fc_cube_subset(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
             coords[i + dim] = c.x(dx as usize + c.dim() - 1);
         }
     }
-    ret_cube(fcinfo, &build_image(dim, point, &coords))
+    ret_cube(fcinfo, &build_image(dim, point, &coords)?)
 }
 
 /// `cube(float8)` — cube_f8.
 fn fc_cube_f8(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let x = fcinfo.arg(0).as_f64();
-    ret_cube(fcinfo, &build_image(1, true, &[x]))
+    ret_cube(fcinfo, &build_image(1, true, &[x])?)
 }
 
 /// `cube(float8, float8)` — cube_f8_f8.
@@ -276,9 +276,9 @@ fn fc_cube_f8_f8(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Dat
     let x0 = fcinfo.arg(0).as_f64();
     let x1 = fcinfo.arg(1).as_f64();
     let img = if x0 == x1 {
-        build_image(1, true, &[x0])
+        build_image(1, true, &[x0])?
     } else {
-        build_image(1, false, &[x0, x1])
+        build_image(1, false, &[x0, x1])?
     };
     ret_cube(fcinfo, &img)
 }
@@ -294,22 +294,22 @@ fn fc_cube_c_f8(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
     }
 
     let img = if c.is_point() {
-        let mut coords = Vec::with_capacity(dim + 1);
+        let mut coords = ::mcx::std_vec_with_capacity("cube", dim + 1)?;
         for i in 0..dim {
             coords.push(c.x(i));
         }
         coords.push(x);
-        build_image(dim + 1, true, &coords)
+        build_image(dim + 1, true, &coords)?
     } else {
         let rdim = dim + 1;
-        let mut coords = vec![0f64; 2 * rdim];
+        let mut coords = ::mcx::std_vec_from_elem("cube", 0f64, 2 * rdim)?;
         for i in 0..dim {
             coords[i] = c.x(i);
             coords[rdim + i] = c.x(dim + i);
         }
         coords[rdim - 1] = x;
         coords[2 * rdim - 1] = x;
-        build_image(rdim, false, &coords)
+        build_image(rdim, false, &coords)?
     };
     ret_cube(fcinfo, &img)
 }
@@ -326,22 +326,22 @@ fn fc_cube_c_f8_f8(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<D
     }
 
     let img = if c.is_point() && x1 == x2 {
-        let mut coords = Vec::with_capacity(dim + 1);
+        let mut coords = ::mcx::std_vec_with_capacity("cube", dim + 1)?;
         for i in 0..dim {
             coords.push(c.x(i));
         }
         coords.push(x1);
-        build_image(dim + 1, true, &coords)
+        build_image(dim + 1, true, &coords)?
     } else {
         let rdim = dim + 1;
-        let mut coords = vec![0f64; 2 * rdim];
+        let mut coords = ::mcx::std_vec_from_elem("cube", 0f64, 2 * rdim)?;
         for i in 0..dim {
             coords[i] = c.ll(i);
             coords[rdim + i] = c.ur(i);
         }
         coords[rdim - 1] = x1;
         coords[2 * rdim - 1] = x2;
-        build_image(rdim, false, &coords)
+        build_image(rdim, false, &coords)?
     };
     ret_cube(fcinfo, &img)
 }
@@ -431,7 +431,7 @@ fn fc_cube_union(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Dat
     let img = ops::cube_union_v0(
         &a,
         &b,
-    );
+    )?;
     ret_cube(fcinfo, &img)
 }
 
@@ -442,7 +442,7 @@ fn fc_cube_inter(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Dat
     let img = ops::cube_inter_v0(
         &a,
         &b,
-    );
+    )?;
     ret_cube(fcinfo, &img)
 }
 
@@ -583,7 +583,7 @@ fn fc_cube_enlarge(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<D
         dim = a.dim();
     }
 
-    let mut coords = vec![0f64; 2 * dim];
+    let mut coords = ::mcx::std_vec_from_elem("cube", 0f64, 2 * dim)?;
     for i in 0..a.dim() {
         let j = dim + i;
         if a.ll(i) >= a.ur(i) {
@@ -603,7 +603,7 @@ fn fc_cube_enlarge(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<D
         coords[dim + i] = r;
     }
 
-    ret_cube(fcinfo, &build_image_auto(dim, &coords))
+    ret_cube(fcinfo, &build_image_auto(dim, &coords)?)
 }
 
 // ===========================================================================

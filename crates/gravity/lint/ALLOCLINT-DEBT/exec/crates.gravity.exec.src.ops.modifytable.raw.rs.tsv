@@ -1,0 +1,6 @@
+path	crates/gravity/exec/src/ops/modifytable/raw.rs
+macro	std::vec	2
+method	std::boxed::Box::new	1
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::into_boxed_slice	2
+type	std::boxed::Box	2

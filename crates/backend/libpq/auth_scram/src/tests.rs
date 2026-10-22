@@ -278,7 +278,7 @@ fn exchange_success_full_flow() {
         String::from_utf8(out.unwrap()).unwrap(),
         math.expect_server_signature(without_proof)
     );
-    assert!(port.has_scram_keys);
+    assert!(ScramMech.session_keys(&state).is_some());
     assert!(logdetail.is_none());
 }
 
@@ -296,7 +296,7 @@ fn exchange_wrong_password_fails_without_output() {
     assert_eq!(r, PG_SASL_EXCHANGE_FAILURE);
     assert!(out.is_none());
     assert!(logdetail.is_none());
-    assert!(!port.has_scram_keys);
+    assert!(ScramMech.session_keys(&state).is_none());
 }
 
 // An MD5 secret cannot do SCRAM: mock (doomed) exchange, correct password

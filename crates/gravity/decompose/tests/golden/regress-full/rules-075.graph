@@ -1,0 +1,13 @@
+-- regress-full-rules-075
+-- update t1 set a = 4 where a = 5;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  gate T_List
+  project (1=c23:4, 2j=c26:null, 3j=c27:null)
+  write UPDATE rel=33744 rti=2 natts=1 indexes=(33748[1]up) set=(1) tableoid=outer.2 route=rti1:33744 natts=1
+    target rti=3 rel=33750 natts=1 indexes=() set=(1)
+    target rti=4 rel=33755 natts=1 indexes=() set=(1)
+  outs 1=w4:val 2=w4:val 3=fx6:stmt/imm
+mapped: Result ModifyTable

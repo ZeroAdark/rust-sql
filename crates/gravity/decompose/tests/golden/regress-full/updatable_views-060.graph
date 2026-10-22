@@ -1,0 +1,15 @@
+-- regress-full-updatable_views-060
+-- UPDATE rw_view1 SET a = 1.05 WHERE a = 1.1 RETURNING s;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@3
+  source range rel=24443 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op671(v2.1, c701:0)
+  filter op670(v2.1, c701:4607632778762754458)
+  project (1=c701:4607407598781385933, 2j=v2.-1)
+  write UPDATE rel=24443 rti=2 natts=1 indexes=() set=(1) returning
+  project (1=fn1604(v2.1))
+  outs 1=w8:val 2=fx6:row
+  outs 1=w8:val
+mapped: ModifyTable SeqScan

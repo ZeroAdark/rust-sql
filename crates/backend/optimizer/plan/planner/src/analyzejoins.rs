@@ -834,9 +834,9 @@ pub fn innerrel_is_unique_ext<'mcx>(
         }
         Ok(true)
     } else {
-        // Negative caching pays only outside the bottom-up join search
-        // (join_search_private is always None here).
-        if force_cache {
+        // Negative caching pays only under GEQO (repeated tours) or when
+        // forced; the bottom-up search never re-probes a subset.
+        if force_cache || run.root.join_search_private.is_some() {
             let c = relids_copy(run.mcx, outerrelids);
             run.root.rel_mut(innerrel).non_unique_for_rels.push(c);
         }
@@ -989,7 +989,7 @@ fn replace_relid_rinfo(run: &mut PlannerRun<'_>, rid: RinfoId, from: i32, to: i3
                 let ntest_id = run.intern_expr(ntest);
                 let ri = run.root.rinfo_mut(rid);
                 ri.clause = ntest_id;
-                ri.mergeopfamilies = PgVec::new_in(mcx);
+                ri.mergeopfamilies = &[];
                 ri.left_em = None;
                 ri.right_em = None;
                 debug_assert!(run.root.rinfo(rid).orclause.is_none());

@@ -1,0 +1,20 @@
+Rust translation of TPDE x64/CompilerX64.hpp, revision
+116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception. Original sources and license
+texts are retained under tests/reference/tpde (LICENSES/ and manifest.json);
+crate-root LICENSE and LICENSE-LLVM-EXCEPTION; the translated files, as pinned
+there:
+  tpde/include/tpde/x64/CompilerX64.hpp
+    sha256 ebf9587928e0f09fedd9458c2690733b134e7f7e713ecc702652fff3d49590fc
+    git blob 4373be12ba3b93cf64c0b2cbf70c8cd39f56d6d4
+Rust changes include a typed x86-64 register/value model, explicit frame and
+calling-convention state, and the Fadec encoder reached through the fresh
+tpde_fadec crate instead of the C header. See
+docs/tpde-rewrite/coverage/compiler-x64.md.
+Fadec sources retained under tests/reference/fadec (revision
+3994d89500985491b1a7ccc17827a22058b3de49) are test-only oracles: Copyright (c)
+2018, Alexis Engelke, BSD-3-Clause, license text in
+tests/reference/fadec/LICENSE. tests/reference/fadec/corrected/encode2.c is a
+one-token sanitizer correction of the pristine encode2.c, recorded with its own
+hash and reason in tests/reference/fadec/manifest.json.

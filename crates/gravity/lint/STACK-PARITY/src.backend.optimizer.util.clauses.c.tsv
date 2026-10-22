@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/optimizer/util/clauses.c: 2 stack-depth check sites
+2473	eval_const_expressions_mutator	crates/backend/optimizer/util/clauses/src/fold.rs	ece_mutator	yes	
+5123	inline_set_returning_function	crates/backend/optimizer/util/clauses/src/srf_inline.rs	inline_set_returning_function	yes	

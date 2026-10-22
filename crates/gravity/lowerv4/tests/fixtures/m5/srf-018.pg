@@ -1,0 +1,7 @@
+# PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) (box 11, M5-RIG 09-26): COPY (<sql>) TO STDOUT over a fresh initdb + the corpus's setup
+sql: SELECT * FROM ROWS FROM (generate_series(1, 3), unnest(ARRAY['a', 'b'])) AS r(i, s)
+cols: i	s
+[pg]
+1	a
+2	b
+3	\N

@@ -1,0 +1,96 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2k s1k
+step s2x: EXPLAIN (COSTS OFF) UPDATE d08 t SET v = t.v + 1 WHERE EXISTS (SELECT 1 FROM d08k k WHERE k.id = t.id AND k.state = 'ready' FOR UPDATE) RETURNING t.id, t.v;
+QUERY PLAN                                              
+--------------------------------------------------------
+Update on d08 t                                         
+  ->  Seq Scan on d08 t                                 
+        Filter: EXISTS(SubPlan 1)                       
+        SubPlan 1                                       
+          ->  LockRows                                  
+                ->  Index Scan using d08k_pkey on d08k k
+                      Index Cond: (id = t.id)           
+                      Filter: (state = 'ready'::text)   
+(8 rows)
+
+step s2k: COMMIT;
+step s1k: COMMIT;
+
+starting permutation: s1v s2u s1k s2k s1s
+step s1v: UPDATE d08 SET v = 77 WHERE id = 2;
+step s2u: UPDATE d08 t SET v = t.v + 1 WHERE EXISTS (SELECT 1 FROM d08k k WHERE k.id = t.id AND k.state = 'ready' FOR UPDATE) RETURNING t.id, t.v; <waiting ...>
+step s1k: COMMIT;
+step s2u: <... completed>
+id|   v
+--+----
+ 1|1011
+ 2|2078
+ 3|1031
+ 5|1051
+ 6|1061
+(5 rows)
+
+step s2k: COMMIT;
+step s1s: SELECT * FROM d08 ORDER BY id;
+id|   v
+--+----
+ 1|1011
+ 2|2078
+ 3|1031
+ 4|  40
+ 5|1051
+ 6|1061
+(6 rows)
+
+
+starting permutation: s1i s2u s1k s2k s1s
+step s1i: UPDATE d08 SET id = 24 WHERE id = 3;
+step s2u: UPDATE d08 t SET v = t.v + 1 WHERE EXISTS (SELECT 1 FROM d08k k WHERE k.id = t.id AND k.state = 'ready' FOR UPDATE) RETURNING t.id, t.v; <waiting ...>
+step s1k: COMMIT;
+step s2u: <... completed>
+id|   v
+--+----
+ 1|1011
+ 2|1021
+ 5|1051
+ 6|1061
+(4 rows)
+
+step s2k: COMMIT;
+step s1s: SELECT * FROM d08 ORDER BY id;
+id|   v
+--+----
+ 1|1011
+ 2|1021
+ 4|  40
+ 5|1051
+ 6|1061
+24|1030
+(6 rows)
+
+
+starting permutation: s1d s2u s1k s2k s1s
+step s1d: DELETE FROM d08 WHERE id = 5;
+step s2u: UPDATE d08 t SET v = t.v + 1 WHERE EXISTS (SELECT 1 FROM d08k k WHERE k.id = t.id AND k.state = 'ready' FOR UPDATE) RETURNING t.id, t.v; <waiting ...>
+step s1k: COMMIT;
+step s2u: <... completed>
+id|   v
+--+----
+ 1|1011
+ 2|1021
+ 3|1031
+ 6|1061
+(4 rows)
+
+step s2k: COMMIT;
+step s1s: SELECT * FROM d08 ORDER BY id;
+id|   v
+--+----
+ 1|1011
+ 2|1021
+ 3|1031
+ 4|  40
+ 6|1061
+(5 rows)
+

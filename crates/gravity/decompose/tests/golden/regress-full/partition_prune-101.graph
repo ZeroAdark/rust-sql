@@ -1,0 +1,10 @@
+-- regress-full-partition_prune-101
+-- select 'create table hp_prefix_test_p' || x::text || ' partition of hp_prefix_test for values with (modulus 8, remainder ' || x::text || ');' from generate_Series(0,7) x;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, c23:7)]
+  project (1=op654(op654(op654(op654(c25:'create table hp_prefix_test_p', io25(v1.1)), c25:' partition of hp_prefix_test for values with (modulus 8, remainder '), io25(v1.1)), c25:');'))
+  outs 1=vl:call1258
+mapped: FunctionScan

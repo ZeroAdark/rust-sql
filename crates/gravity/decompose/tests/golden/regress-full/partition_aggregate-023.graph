@@ -1,0 +1,11 @@
+-- regress-full-partition_aggregate-023
+-- INSERT INTO pagg_tab_ml SELECT i % 30, i % 10, to_char(i % 4, 'FM0000') FROM generate_series(0, 29999) i;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:0, c23:29999)]
+  project (1=op530(v3.1, c23:30), 2=op530(v3.1, c23:10), 3=fn1773(op530(v3.1, c23:4), c25:'FM0000'))
+  write INSERT rel=46796 rti=1 natts=3 indexes=() route=rti1:46796 natts=3
+  outs 1=w4:val 2=w4:val 3=vl:call1773
+mapped: ModifyTable FunctionScan

@@ -1,0 +1,1 @@
+crates/gravity/decompose/src/ops/sort/mod.rs	lazy_ahead	licence	fn	a full or unbounded presorted Sort reads its whole input before its first row where PG's Incremental Sort batches stop under a LIMIT / FETCH / merge [LICENCE-ASKED; D2316,D3365,D449]

@@ -1,0 +1,14 @@
+-- regress-full-returning-004
+-- DELETE FROM foo WHERE f1 > 2 RETURNING f3, f2, f1, least(f1,f3);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=43613 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op521(v1.1, c23:2)
+  project (1j=v1.-1)
+  write DELETE rel=43613 rti=1 natts=3 indexes=() returning
+  project (1=v1.3, 2=v1.2, 3=v1.1, 4=minmax(v1.1, v1.3))
+  outs 1=fx6:row
+  outs 1=w4:val 2=vl:row 3=w8:val 4=w4:val
+mapped: ModifyTable SeqScan

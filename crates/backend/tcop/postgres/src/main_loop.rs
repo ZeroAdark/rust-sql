@@ -38,6 +38,11 @@ const EOF: i32 = pqcomm::EOF;
 const PQ_SMALL_MESSAGE_LIMIT: i32 = 10000;
 const PQ_LARGE_MESSAGE_LIMIT: i32 = 0x3fffffff - 1; /* MaxAllocSize - 1 */
 
+// MessageContext's first block (C: ALLOCSET_DEFAULT_INITSIZE, 8 kB). It is kept across the
+// per-message reset, so it is sized to hold a short statement's parse, analysis and plan: such a
+// message then takes and frees no block.
+const MESSAGE_CONTEXT_INIT_SIZE: usize = 64 * 1024;
+
 fn SocketBackend(in_buf: &mut StringInfo<'_>) -> PgResult<i32> {
     // HOLD_CANCEL_INTERRUPTS() ... RESUME_CANCEL_INTERRUPTS(): a query cancel
     // must not fire mid-read and lose FE/BE sync; the guard resumes on every
@@ -146,13 +151,8 @@ fn interactive_getc() -> PgResult<Option<u8>> {
             Ok(0) => return Ok(None), /* EOF */
             Ok(_) => return Ok(Some(byte[0])),
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => {
-                return Err(ereport(FATAL)
-                    .errcode(ERRCODE_CONNECTION_FAILURE)
-                    .errmsg(format!("could not read from standard input: {e}"))
-                    .into_error()
-                    .into());
-            }
+            // getc(3) reports any other read error as EOF.
+            Err(_) => return Ok(None),
         }
     }
 }
@@ -163,7 +163,8 @@ fn InteractiveBackend(in_buf: &mut StringInfo<'_>) -> PgResult<i32> {
     use std::io::Write;
 
     /* display a prompt and obtain input from the user */
-    print!("backend> ");
+    // printf/fflush: write failures are ignored, never a panic.
+    let _ = write!(std::io::stdout(), "backend> ");
     let _ = std::io::stdout().flush();
 
     in_buf.reset();
@@ -243,6 +244,9 @@ pub(crate) struct LoopState {
     pub(crate) idle_session_timeout_enabled: bool,
     /// D3.4 idle passivation timer armed for the current idle period.
     pub(crate) idle_passivate_timeout_enabled: bool,
+    /// D4812: the server-log writer this backend had before a condemned statement's error recovery deferred its writes
+    /// (`memruntime::memlog::defer_condemned`), put back once the statement's memory is freed (a retried recovery too).
+    pub(crate) log_defer_before: Option<Option<elog::ServerLogDefer>>,
 }
 
 pub(crate) fn error_recovery(
@@ -252,7 +256,9 @@ pub(crate) fn error_recovery(
 ) -> PgResult<()> {
     use init_small::globals as g;
 
-    /* error_context_stack = NULL: the ambient callback chain is Err-carried. */
+    /* error_context_stack = NULL (postgres.c:4408): the Err-carried chain is
+     * gone; emit-time callbacks a panic unwound past are dropped here. */
+    elog::clear_emit_context_callbacks();
 
     // An Err escaping a still-open critical section is a hand-built PgError
     // that bypassed errstart's ERROR->PANIC promotion; recovering here would
@@ -267,7 +273,13 @@ pub(crate) fn error_recovery(
     g::SetQueryCancelHoldoffCount(0);
     g::SetCritSectionCount(0);
 
-    // regression (E-4 + E-5) — EMIT THE REPORT ONCE, BEFORE ANY FALLIBLE STEP.
+    // D4812: a statement the memory watchdog canceled frees its memory in the steps below, after the report; its report
+    // and every line until the free go to the memory log's queue, so the free never waits on the server log's sink
+    if mcx::governor::take_ended_condemned() && state.log_defer_before.is_none() {
+        state.log_defer_before = Some(memruntime::memlog::defer_condemned());
+    }
+
+    // GL-ERRFIX-1 (E-4 + E-5) — EMIT THE REPORT ONCE, BEFORE ANY FALLIBLE STEP.
     // Two defects, one placement fixes both:
     //   E-4: the report used to sit AFTER `disable_all_timeouts` (the first
     //        fallible `?`). If that step failed, the original error reached
@@ -281,13 +293,19 @@ pub(crate) fn error_recovery(
     //        `first_attempt` is false on every retry, so the report is emitted
     //        at most once per original error.
     if first_attempt {
-        elog::emit_error_report_for(err);
+        // D378: a terminate raised while the report goes to a client that does not read (secure_write's
+        // ProcessClientWriteInterrupt) ends the backend, as C's ereport(FATAL) from inside the send does.
+        if let Err(e) = elog::try_emit_error_report_for(err) {
+            if e.level() >= FATAL {
+                return Err(e);
+            }
+        }
     }
     // C: `debug_query_string = NULL;` (postgres.c:4433), after the report.
     elog::clear_retired_debug_query_string();
 
     timeout_seams::disable_all_timeouts::call(false)?; /* do first to avoid race */
-    g::SetQueryCancelPending(false);
+    g::ClearQueryCancelPending(); // D334: with its abort-class byte
     state.idle_in_transaction_timeout_enabled = false;
     state.idle_session_timeout_enabled = false;
 
@@ -295,7 +313,7 @@ pub(crate) fn error_recovery(
 
     pqcomm::pq_comm_reset();
 
-    // (the report emission moved to the top of this function — regression E-4/E-5.)
+    // (the report emission moved to the top of this function — GL-ERRFIX-1 E-4/E-5.)
 
 
     xact::AbortCurrentTransaction()?;
@@ -305,6 +323,9 @@ pub(crate) fn error_recovery(
     }
 
     portalmem::PortalErrorCleanup()?;
+    if let Some(before) = state.log_defer_before.take() {
+        elog::set_server_log_defer(before);
+    }
 
     // Slots can't be released inside AbortTransaction (C keeps them across
     // sub-xacts); top-level error recovery is the C release point
@@ -357,6 +378,16 @@ fn start_idle_in_transaction_timer(state: &mut LoopState) -> PgResult<()> {
     Ok(())
 }
 
+fn arm_idle_timer(state: &mut LoopState, in_xact: bool) -> PgResult<()> {
+    let idle_ms = crate::passivate::arm_idle_timer_ms(in_xact);
+    if idle_ms > 0 {
+        init_small::globals::SetIdlePassivateTimeoutPending(false);
+        state.idle_passivate_timeout_enabled = true;
+        timeout_seams::enable_timeout_after::call(timeout_seams::IDLE_PASSIVATE_TIMEOUT, idle_ms)?;
+    }
+    Ok(())
+}
+
 fn ready_state(mcx: Mcx<'_>, state: &mut LoopState) -> PgResult<()> {
     use backend_status_seams::BackendState;
     crate::stmt_trace::probe("ready.begin");
@@ -368,6 +399,7 @@ fn ready_state(mcx: Mcx<'_>, state: &mut LoopState) -> PgResult<()> {
             None,
         );
         start_idle_in_transaction_timer(state)?;
+        arm_idle_timer(state, true)?;
     } else if xact::IsTransactionOrTransactionBlock() {
         ps_status_seams::set_ps_display::call("idle in transaction");
         backend_status_seams::pgstat_report_activity::call(
@@ -375,6 +407,8 @@ fn ready_state(mcx: Mcx<'_>, state: &mut LoopState) -> PgResult<()> {
             None,
         );
         start_idle_in_transaction_timer(state)?;
+        // the idle memory release stage alone (never passivation): an idle cursor's session gives memory back too
+        arm_idle_timer(state, true)?;
     } else {
         if commands_async::notifyInterruptPending() {
             commands_async::ProcessNotifyInterrupt(false)?;
@@ -405,19 +439,12 @@ fn ready_state(mcx: Mcx<'_>, state: &mut LoopState) -> PgResult<()> {
             )?;
         }
 
-        // D3.4 idle passivation: one-shot timer per idle period, armed only
-        // when truly idle (not in a transaction). Fires once → the
-        // ProcessInterrupts arm passivates → the backend keeps waiting; no
+        // D3.4 idle passivation: one-shot timer per idle period. Fires once →
+        // the ProcessInterrupts arm passivates → the backend keeps waiting; no
         // re-arm until the next command completes and we come back here.
-        let passivate_secs = crate::passivate::idle_passivate_secs();
-        if passivate_secs > 0 {
-            init_small::globals::SetIdlePassivateTimeoutPending(false);
-            state.idle_passivate_timeout_enabled = true;
-            timeout_seams::enable_timeout_after::call(
-                timeout_seams::IDLE_PASSIVATE_TIMEOUT,
-                passivate_secs.saturating_mul(1000),
-            )?;
-        }
+        // The same timer first runs the idle memory release
+        // (pgrust.memory_release_idle) when that comes earlier.
+        arm_idle_timer(state, false)?;
     }
 
     guc::report::report_changed_guc_options();
@@ -425,10 +452,24 @@ fn ready_state(mcx: Mcx<'_>, state: &mut LoopState) -> PgResult<()> {
     log_connection_ready_durations()?;
 
     crate::stmt_trace::probe("ready.pre_rfq");
+    // D2395: a reserve spent by a rescued allocation is taken again once the backend is idle (a cheap load when armed)
+    init_small::oom::arm_reserve();
+    // G1-A: the statement's committed bytes end with it (its trace record under PGRUST_MEMPOLICY=trace=1)
+    memledger::statement_end();
+    // memledger `unattr`: the statement's in-server unattributed check (PGRUST_MEMLEDGER_UNATTR=1): one LOG line when over
+    if let Some(r) = memledger::unattr::end_report() {
+        log_unattributed(&r);
+    }
     tcop_dest::ReadyForQuery(mcx, elog::config::where_to_send_output())?;
+    // purge timing: what this thread purges from here to its next command is off the client's latency
+    mcx::purge_phase(2);
     crate::stmt_trace::probe("rfq.flushed");
     crate::stmt_trace::flush();
     state.send_ready_for_query = false;
+    // D3652 P8: the cache cap trims, off the statement's latency (after its ReadyForQuery) and before the memory release.
+    crate::passivate::trim_caches_at_idle()?;
+    crate::passivate::release_after_statement()?;
+    fd::ShedIdleFiles()?;
 
     Ok(())
 }
@@ -510,6 +551,13 @@ pub(crate) fn forbidden_in_wal_sender_error(firstchar: i32) -> PgResult<()> {
         .finish(loc(line, "forbidden_in_wal_sender"))
 }
 
+/// A message that starts a statement (or continues one: Parse, Bind and Execute until their Sync): its start time, and
+/// G1-A's statement on this backend's memory account.
+fn statement_start() {
+    xact::SetCurrentStatementStartTimestamp();
+    memledger::statement_begin();
+}
+
 fn dispatch_message<'mcx>(
     mcx: Mcx<'mcx>,
     firstchar: i32,
@@ -518,11 +566,13 @@ fn dispatch_message<'mcx>(
 ) -> PgResult<()> {
     match firstchar {
         x if x == pqmsg::QUERY => {
-            xact::SetCurrentStatementStartTimestamp();
+            statement_start();
 
             let query_string: &'mcx str = {
                 let s = pqformat::pq_getmsgstring(mcx, input_message)?;
-                leak_str_in(mcx, s.as_bytes())?
+                let verified =
+                    matches!(s, pqformat::PqString::Borrowed(_)) && mbutils::client_to_server_verifies_utf8();
+                leak_str_in(mcx, s.as_bytes(), verified)?
             };
             pqformat::pq_getmsgend(input_message)?;
 
@@ -538,7 +588,7 @@ fn dispatch_message<'mcx>(
         x if x == pqmsg::PARSE => {
             forbidden_in_wal_sender(firstchar)?;
 
-            xact::SetCurrentStatementStartTimestamp();
+            statement_start();
 
             let stmt_name = extended_query::owned_msg_string(mcx, input_message)?;
             let query_string = extended_query::owned_msg_string(mcx, input_message)?;
@@ -563,7 +613,7 @@ fn dispatch_message<'mcx>(
         x if x == pqmsg::BIND => {
             forbidden_in_wal_sender(firstchar)?;
 
-            xact::SetCurrentStatementStartTimestamp();
+            statement_start();
 
             /* this message is complex enough that the field extraction is
              * out-of-line, as in C */
@@ -573,7 +623,7 @@ fn dispatch_message<'mcx>(
         x if x == pqmsg::EXECUTE => {
             forbidden_in_wal_sender(firstchar)?;
 
-            xact::SetCurrentStatementStartTimestamp();
+            statement_start();
 
             let portal_name = extended_query::owned_msg_string(mcx, input_message)?;
             let max_rows = pqformat::pq_getmsgint(input_message, 4)? as i32;
@@ -585,7 +635,7 @@ fn dispatch_message<'mcx>(
         x if x == pqmsg::DESCRIBE => {
             forbidden_in_wal_sender(firstchar)?;
 
-            xact::SetCurrentStatementStartTimestamp();
+            statement_start();
 
             let describe_type = pqformat::pq_getmsgbyte(input_message)?;
             let describe_target = extended_query::owned_msg_string(mcx, input_message)?;
@@ -620,7 +670,7 @@ fn dispatch_message<'mcx>(
 
             forbidden_in_wal_sender(firstchar)?;
 
-            xact::SetCurrentStatementStartTimestamp();
+            statement_start();
 
             backend_status_seams::pgstat_report_activity::call(BackendState::STATE_FASTPATH, None);
             ps_status_seams::set_ps_display::call("<FASTPATH>");
@@ -737,10 +787,18 @@ fn dispatch_message<'mcx>(
     Ok(())
 }
 
-fn leak_str_in<'mcx>(mcx: Mcx<'mcx>, bytes: &[u8]) -> PgResult<&'mcx str> {
+// `utf8_verified`: pg_client_to_server already verified these bytes as UTF-8 and handed them back unconverted
+// (mbutils::client_to_server_verifies_utf8), so the copy skips its own check (D4481).
+fn leak_str_in<'mcx>(mcx: Mcx<'mcx>, bytes: &[u8], utf8_verified: bool) -> PgResult<&'mcx str> {
     let mut v: PgVec<'mcx, u8> = PgVec::new_in(mcx);
     mcx::vec_append_bytes(&mut v, bytes)?;
     let slice: &'mcx mut [u8] = v.leak();
+    if utf8_verified {
+        debug_assert!(core::str::from_utf8(slice).is_ok());
+        // SAFETY: the bytes are a copy of a string pg_verify_mbstr(PG_UTF8, ..) accepted (see
+        // mbutils::client_to_server_verifies_utf8); that UTF-8 is a subset of what core::str accepts.
+        return Ok(unsafe { core::str::from_utf8_unchecked(slice) });
+    }
     // Invalid bytes for the database encoding were already rejected by
     // pq_getmsgstring's pg_client_to_server (pg_verify_mbstr, C-shaped
     // 22021); reaching here non-UTF8 means the database encoding itself
@@ -778,6 +836,20 @@ fn log_disconnections(_code: i32, _arg: usize) {
     let _ = ereport(LOG).errmsg(msg).finish(loc(5168, "log_disconnections"));
 }
 
+/// One LOG line for a statement whose backend account's unattributed bytes (its bytes less what its owners
+/// hold) passed their bound, max(16 MiB, 2 % of the account), at its end or at a rise (memledger `unattr`). The fire
+/// `ledger.unattributed_over` rides on the next gravity report line (the statement's own was written before its end).
+#[cold]
+#[inline(never)]
+fn log_unattributed(r: &memledger::unattr::Report) {
+    fires::fire_shared("ledger.unattributed_over");
+    let end = r.end.map_or_else(|| "skipped".to_string(), |(u, b)| format!("{u} end_bound={b}")); // alloc: Cold
+    let peak = r.peak.map_or_else(|| "-".to_string(), |(u, b, l)| format!("{u} peak_bound={b} peak_level={l}")); // alloc: Cold
+    let pid = memledger::account_row(memledger::current()).pid;
+    let msg = format!("pgrust memory: unattributed over its bound: pid={pid} end={end} peak={peak} checks={} skipped={}", r.checks, r.skips); // alloc: Cold
+    let _ = ereport(LOG).errmsg(msg).finish(loc(0, "log_unattributed"));
+}
+
 pub fn PostgresMain(dbname: &str, username: &str) -> ! {
     let outcome = postgres_main_inner(dbname, username);
     if let Err(err) = outcome {
@@ -786,16 +858,37 @@ pub fn PostgresMain(dbname: &str, username: &str) -> ! {
         // command loop swallows its own ERRORs and only lets FATAL+ out).
         // elog.c:375-381: with PG_exception_stack == NULL an ERROR is
         // promoted to FATAL before it is reported.
-        elog::emit_unhandled_error_report(&err);
+        report_escaped_error(&err);
     }
     ipc_seams::proc_exit::call(1, init_small::globals::MyProcPid())
+}
+
+// errfinish's FATAL arm (elog.c:579): an ERROR reported here was promoted to
+// FATAL, so both count as DISCONNECT_FATAL.
+pub(crate) fn report_escaped_error(err: &types_error::PgError) {
+    elog::emit_unhandled_error_report(err);
+    if err.level() < types_error::PANIC {
+        pgstat::database::pgstat_set_session_end_cause_fatal();
+    }
 }
 
 fn postgres_main_inner(dbname: &str, username: &str) -> PgResult<()> {
     elog::clear_retired_debug_query_string();
     assert!(!dbname.is_empty() || !username.is_empty());
+    crate::reset_session_statics();
 
     crate::install_thread_signal_handlers();
+    // memledger `unattr`: the in-server unattributed check is process-wide and off unless PGRUST_MEMLEDGER_UNATTR=1 (each
+    // backend's start turns it on, never off)
+    if std::env::var_os("PGRUST_MEMLEDGER_UNATTR").is_some_and(|v| v == "1") {
+        memledger::unattr::set(true);
+    }
+    // wasm32: the embedder's cancel (a browser page's Stop, psql's Ctrl-C) stands in for SIGINT (ProcessInterrupts)
+    #[cfg(target_family = "wasm")]
+    init_small::globals::SetHostCancel();
+    mcx::governor::set_exempt_probe(|| init_small::globals::CritSectionCount() > 0);
+    mcx::governor::set_sleep_probe(block_gate_may_sleep);
+    mcx::governor::set_interrupt_probe(block_gate_interrupted);
 
     timeout_seams::initialize_timeouts::call(); /* establishes SIGALRM handler */
 
@@ -832,6 +925,12 @@ fn postgres_main_inner(dbname: &str, username: &str) -> PgResult<()> {
         },
         None,
     )?;
+    mcx::governor::register(
+        init_small::globals::MyProcNumber(),
+        init_small::globals::MyProcPid(),
+    );
+    // C5: the spill-request registry reaches this backend's Gravity interrupt byte (REVOKE_BIT) by its slot
+    mcx::revoke::register_byte(init_small::globals::abort_pending_flag());
     drop(top);
 
 
@@ -852,32 +951,6 @@ fn postgres_main_inner(dbname: &str, username: &str) -> PgResult<()> {
         walsender_seams::init_wal_sender::call();
     }
 
-    // pgrust-only builtin backfill (janitor::bootstrap through the seam):
-    // the first client connection to a database inserts the three janitor
-    // builtins' pg_proc rows; every later connection is one set probe.
-    // CONTAINED: a failed backfill logs and the session proceeds — the
-    // functions are QoS surface, never a connect gate.
-    if !am_walsender && janitor_seams::builtin_backfill::is_installed() {
-        if let Err(e) = janitor_seams::builtin_backfill::call() {
-            let _ = ereport(LOG)
-                .errmsg(format!(
-                    "pgrust: builtin function backfill failed (continuing): {}",
-                    e.message()
-                ))
-                .finish(loc(0, "postgres_main_inner"));
-            // The backfill runs inside an open transaction; a raised PgError
-            // that we contain here would otherwise leave that transaction open
-            // with its catalog lock still held, violating the invariant that an
-            // error unwinds to a clean transaction state (relied on by
-            // fmgr_security_definer, GUC nesting, and lock release). Route the
-            // contained failure through the same abort the main loop's
-            // error_recovery uses (xact::AbortCurrentTransaction, main_loop.rs
-            // line 281) so locks/resources are released and the session returns
-            // to a clean idle state. Contained: swallow any abort failure too.
-            let _ = xact::AbortCurrentTransaction();
-        }
-    }
-
     if elog::config::where_to_send_output() == CommandDest::Remote {
         let key = init_small::globals::MyCancelKey();
         let len = init_small::globals::MyCancelKeyLength() as usize;
@@ -891,10 +964,13 @@ fn postgres_main_inner(dbname: &str, username: &str) -> PgResult<()> {
 
     /* Welcome banner for standalone case (postgres.c:4341) */
     if elog::config::where_to_send_output() == CommandDest::Debug {
-        println!("\nPostgreSQL stand-alone backend 18.6");
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout(), "\nPostgreSQL stand-alone backend 18.6");
     }
 
-    let mut message_context = MemoryContext::new_bump("MessageContext");
+    let mut message_context =
+        MemoryContext::new_wholesale_sized("MessageContext", MESSAGE_CONTEXT_INIT_SIZE);
+    message_context.set_owner_session();
 
     // C postgres.c:4369: fire login event triggers before the main loop; a
     // trigger error here aborts the connection, as C's pre-setjmp ERROR does.
@@ -903,11 +979,19 @@ fn postgres_main_inner(dbname: &str, username: &str) -> PgResult<()> {
         event_trigger_seams::event_trigger_on_login::call(scratch.mcx())?;
     }
 
+    // D3652 P8: this session trims its catcache / relcache to the caps at the idle point (ready_state). A WAL sender keeps
+    // the insert / commit trims: START_REPLICATION streams (and decodes) for its whole life without coming back to it.
+    if !walsender_seams::am_walsender() {
+        catcache::SetCatCacheTrimAtIdle(true);
+        relcache::SetRelationCacheTrimAtIdle(true);
+    }
+
     let mut state = LoopState {
         send_ready_for_query: true,
         idle_in_transaction_timeout_enabled: false,
         idle_session_timeout_enabled: false,
         idle_passivate_timeout_enabled: false,
+        log_defer_before: None,
     };
 
     loop {
@@ -971,20 +1055,23 @@ fn postgres_main_inner(dbname: &str, username: &str) -> PgResult<()> {
 }
 
 // One iteration of the C for(;;) body (postgres.c:4516-5021), Err = the
-// sigsetjmp path. Panics from unported seams are mapped to ERROR-level errors
-// so the backend recovers as C does from ereport(ERROR).
+// sigsetjmp path. A structured error unwound as a panic (a PgError payload)
+// recovers as C does from ereport(ERROR); a plain Rust panic is C's abort()
+// and takes the crash path (D2933, pg_error_from_panic).
 pub(crate) fn run_one_iteration(mcx: Mcx<'_>, state: &mut LoopState) -> PgResult<()> {
     // unwind-ok: stmt-boundary
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_one_iteration_inner(mcx, state)
     }));
+    mcx::governor::arm(false);
+    mcx::governor::statement_end();
     match outcome {
         Ok(r) => r,
         Err(payload) => Err(Box::new(pg_error_from_panic(payload))),
     }
 }
 
-fn pg_error_from_panic(payload: Box<dyn std::any::Any + Send>) -> PgError {
+pub(crate) fn pg_error_from_panic(payload: Box<dyn std::any::Any + Send>) -> PgError {
     // proc_exit unwinds ProcExitThread; converting it to an ERROR turns
     // backend exit into an infinite recovery loop (client EOF -> proc_exit(0)
     // -> "recovered" -> ReadCommand panic, ~850/s). Re-raise it.
@@ -998,20 +1085,19 @@ fn pg_error_from_panic(payload: Box<dyn std::any::Any + Send>) -> PgError {
     {
         std::panic::resume_unwind(payload);
     }
+    // D2933 (user 2026-09-29: "when crashing, the whole system should abort
+    // like postgres does"): a plain panic (an unwrap, an index, an assert, an
+    // unported seam) is C's abort(), not ERROR XX000: the backend thread dies
+    // as crashed and the postmaster runs the crash restart. The panic hook
+    // already logged its message, location and query.
     match ::types_error::pg_error_from_panic(payload) {
         Ok(e) => e,
-        Err(payload) => {
-            let msg = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_else(|| "backend panicked".to_string());
-            PgError::new(ERROR, msg)
-        }
+        Err(payload) => elog::abort_on_plain_panic(payload),
     }
 }
 
 fn run_one_iteration_inner<'mcx>(mcx: Mcx<'mcx>, state: &mut LoopState) -> PgResult<()> {
+    elog::clear_retired_debug_query_string();
     set_doing_extended_query_message(false);
 
     let mut input_message = StringInfo::new_in(mcx)?;
@@ -1024,10 +1110,8 @@ fn run_one_iteration_inner<'mcx>(mcx: Mcx<'mcx>, state: &mut LoopState) -> PgRes
 
     set_doing_command_read(true);
 
-    // No statement is in flight while reading a command: an idle-time FATAL
-    // logs no STATEMENT line.
-    elog::clear_retired_debug_query_string();
     let firstchar = ReadCommand(&mut input_message)?;
+    mcx::purge_phase(1);
     crate::stmt_trace::probe_read(firstchar);
 
     if state.idle_in_transaction_timeout_enabled {
@@ -1066,7 +1150,14 @@ fn run_one_iteration_inner<'mcx>(mcx: Mcx<'mcx>, state: &mut LoopState) -> PgRes
         return Ok(());
     }
 
+    // memfree Part 2: the statement ledger (pgrust.statement_mem_limit, pgrust.memory_cancel_threshold), per message; C5:
+    // pgrust.memory_revoke too (a revoke's registry entry is the ledger's)
+    let limit_kb = guc_tables::backing::pgrust_statement_mem_limit().max(0) as usize;
+    mcx::governor::statement_start(limit_kb << 10, guc_tables::backing::pgrust_memory_cancel_threshold() > 0 || mcx::revoke::enabled());
+    mcx::governor::arm(true);
     let r = dispatch_message(mcx, firstchar, &mut input_message, state);
+    mcx::governor::arm(false);
+    mcx::governor::statement_end();
     crate::stmt_trace::probe("cycle.end");
     r
 }
@@ -1083,4 +1174,18 @@ fn pg_strong_random(buf: &mut [u8]) -> PgResult<()> {
             .into());
     }
     Ok(())
+}
+
+/// D4812 (2): whether mcx's block gate may wait inside this thread's allocation: not in a critical section and with no
+/// interrupts held off. Every LWLock holder has them held off (LWLockAcquire holds them, as in C), so the gate never
+/// waits under an LWLock; buffer pins alone hold none (a bounded wait under a pin is allowed).
+pub(crate) fn block_gate_may_sleep() -> bool {
+    init_small::globals::CritSectionCount() == 0 && init_small::globals::InterruptHoldoffCount() == 0
+}
+
+/// D4812 (2): whether an interrupt is pending on this thread (a query cancel, a statement_timeout, a die: InterruptPending,
+/// which every sender raises, or the pending flags themselves): mcx's block gate stops waiting and takes its block, so the
+/// next CHECK_FOR_INTERRUPTS answers it at once.
+pub(crate) fn block_gate_interrupted() -> bool {
+    init_small::globals::InterruptPending() || init_small::globals::QueryCancelPending() || init_small::globals::ProcDiePending()
 }

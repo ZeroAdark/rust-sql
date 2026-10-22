@@ -1,0 +1,12 @@
+-- regress-full-opr_sanity-007
+-- SELECT oid, proname FROM pg_proc AS p WHERE prokind = 'a' AND proargdefaults IS NOT NULL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2 end=sink
+  nodes n0@0
+  source range rel=1255 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(10):byval8:w8:val Attr(24):byref8:vl:win/page Offset:byval2:w2:val
+  filter notnull(v1.24)
+  filter op92(v1.10, c18:97)
+  project (1=v1.1, 2=v1.2)
+  outs 1=w8:val 2=fx64:win/page
+mapped: SeqScan

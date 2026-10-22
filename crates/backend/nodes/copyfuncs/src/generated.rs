@@ -31,20 +31,20 @@ use types_nodes::primnodes::{
 use types_nodes::parsenodes::{
     ATAlterConstraint, AccessPriv, AlterCollationStmt, AlterDatabaseRefreshCollStmt,
     AlterDatabaseSetStmt, AlterDatabaseStmt, AlterDefaultPrivilegesStmt, AlterDomainStmt,
-    AlterEventTrigStmt, AlterFunctionStmt, AlterObjectDependsStmt, AlterObjectSchemaStmt, AlterOpFamilyStmt,
-    AlterOperatorStmt, AlterOwnerStmt, AlterPolicyStmt, AlterPublicationStmt, AlterRoleSetStmt,
-    AlterRoleStmt, AlterSubscriptionStmt, AlterSystemStmt, AlterTableCmd,
-    AlterTableMoveAllStmt, AlterTableSpaceOptionsStmt, AlterTableStmt, CTECycleClause,
-    CTESearchClause, CheckPointStmt, ClosePortalStmt, ClusterStmt, CommentStmt,
-    CommonTableExpr, CopyStmt, CreateAmStmt, CreateCastStmt, CreateConversionStmt,
-    CreateEventTrigStmt, CreateFunctionStmt, CreateOpClassItem, CreateOpClassStmt,
-    CreateOpFamilyStmt, CreatePLangStmt, CreatePolicyStmt, CreatePublicationStmt,
-    CreateRoleStmt, CreateSchemaStmt, CreateSubscriptionStmt, CreateTableSpaceStmt,
-    CreateTransformStmt, CreatedbStmt, DeallocateStmt, DeclareCursorStmt, DefElem, DefineStmt,
-    DiscardStmt, DoStmt, DropOwnedStmt, DropRoleStmt, DropStmt, DropSubscriptionStmt,
-    DropTableSpaceStmt, DropdbStmt, ExecuteStmt, ExplainStmt, FetchStmt, FunctionParameter,
-    GrantRoleStmt, GrantStmt, GroupingSet, ListenStmt, LoadStmt, LockStmt, NotifyStmt,
-    ObjectWithArgs, PrepareStmt, PublicationObjSpec, PublicationTable, Query,
+    AlterEventTrigStmt, AlterFunctionStmt, AlterObjectDependsStmt, AlterObjectSchemaStmt,
+    AlterOpFamilyStmt, AlterOperatorStmt, AlterOwnerStmt, AlterPolicyStmt,
+    AlterPublicationStmt, AlterRoleSetStmt, AlterRoleStmt, AlterSubscriptionStmt,
+    AlterSystemStmt, AlterTableCmd, AlterTableMoveAllStmt, AlterTableSpaceOptionsStmt,
+    AlterTableStmt, CTECycleClause, CTESearchClause, CheckPointStmt, ClosePortalStmt,
+    ClusterStmt, CommentStmt, CommonTableExpr, CopyStmt, CreateAmStmt, CreateCastStmt,
+    CreateConversionStmt, CreateEventTrigStmt, CreateFunctionStmt, CreateOpClassItem,
+    CreateOpClassStmt, CreateOpFamilyStmt, CreatePLangStmt, CreatePolicyStmt,
+    CreatePublicationStmt, CreateRoleStmt, CreateSchemaStmt, CreateSubscriptionStmt,
+    CreateTableSpaceStmt, CreateTransformStmt, CreatedbStmt, DeallocateStmt, DeclareCursorStmt,
+    DefElem, DefineStmt, DiscardStmt, DoStmt, DropOwnedStmt, DropRoleStmt, DropStmt,
+    DropSubscriptionStmt, DropTableSpaceStmt, DropdbStmt, ExecuteStmt, ExplainStmt, FetchStmt,
+    FunctionParameter, GrantRoleStmt, GrantStmt, GroupingSet, ListenStmt, LoadStmt, LockStmt,
+    NotifyStmt, ObjectWithArgs, PrepareStmt, PublicationObjSpec, PublicationTable, Query,
     RTEPermissionInfo, RangeTblEntry, RangeTblFunction, ReassignOwnedStmt, ReindexStmt,
     RenameStmt, ReplicaIdentityStmt, ReturnStmt, RoleSpec, RowMarkClause, SecLabelStmt,
     SetOperationStmt, SortGroupClause, TableSampleClause, TransactionStmt, TruncateStmt,
@@ -53,8 +53,7 @@ use types_nodes::parsenodes::{
 };
 use types_nodes::rawnodes::{
     A_ArrayExpr, A_Expr, A_Indices, A_Indirection, AlterEnumStmt, AlterExtensionContentsStmt,
-    AlterExtensionStmt,
-    AlterFdwStmt, AlterForeignServerStmt, AlterSeqStmt, AlterStatsStmt,
+    AlterExtensionStmt, AlterFdwStmt, AlterForeignServerStmt, AlterSeqStmt, AlterStatsStmt,
     AlterTSConfigurationStmt, AlterTSDictionaryStmt, AlterTypeStmt, AlterUserMappingStmt,
     CallStmt, ColumnDef, ColumnRef, CompositeTypeStmt, Constraint, ConstraintsSetStmt,
     CreateDomainStmt, CreateEnumStmt, CreateExtensionStmt, CreateFdwStmt,
@@ -87,1248 +86,2800 @@ pub(crate) fn copy_generated<'d>(mcx: Mcx<'d>, node: Node<'_>) -> PgResult<Optio
     let copy = match node.node_tag() {
         NodeTag::T_ATAlterConstraint => {
             let s = node.as_variant::<ATAlterConstraint>().expect("ATAlterConstraint");
-            Node::mk(mcx, copy_ATAlterConstraint(mcx, s)?)?
+            mkcopy_ATAlterConstraint(mcx, s)?
         }
         NodeTag::T_A_ArrayExpr => {
             let s = node.as_variant::<A_ArrayExpr>().expect("A_ArrayExpr");
-            Node::mk(mcx, copy_A_ArrayExpr(mcx, s)?)?
+            mkcopy_A_ArrayExpr(mcx, s)?
         }
         NodeTag::T_A_Expr => {
             let s = node.as_variant::<A_Expr>().expect("A_Expr");
-            Node::mk(mcx, copy_A_Expr(mcx, s)?)?
+            mkcopy_A_Expr(mcx, s)?
         }
         NodeTag::T_A_Indices => {
             let s = node.as_variant::<A_Indices>().expect("A_Indices");
-            Node::mk(mcx, copy_A_Indices(mcx, s)?)?
+            mkcopy_A_Indices(mcx, s)?
         }
         NodeTag::T_A_Indirection => {
             let s = node.as_variant::<A_Indirection>().expect("A_Indirection");
-            Node::mk(mcx, copy_A_Indirection(mcx, s)?)?
+            mkcopy_A_Indirection(mcx, s)?
         }
         NodeTag::T_AccessPriv => {
             let s = node.as_variant::<AccessPriv>().expect("AccessPriv");
-            Node::mk(mcx, copy_AccessPriv(mcx, s)?)?
+            mkcopy_AccessPriv(mcx, s)?
         }
         NodeTag::T_Agg => {
             let s = node.as_variant::<Agg>().expect("Agg");
-            Node::mk(mcx, copy_Agg(mcx, s)?)?
+            mkcopy_Agg(mcx, s)?
         }
         NodeTag::T_Aggref => {
             let s = node.as_variant::<Aggref>().expect("Aggref");
-            Node::mk(mcx, copy_Aggref(mcx, s)?)?
+            mkcopy_Aggref(mcx, s)?
         }
         NodeTag::T_Alias => {
             let s = node.as_variant::<Alias>().expect("Alias");
-            Node::mk(mcx, copy_Alias(mcx, s)?)?
+            mkcopy_Alias(mcx, s)?
         }
         NodeTag::T_AlterCollationStmt => {
             let s = node.as_variant::<AlterCollationStmt>().expect("AlterCollationStmt");
-            Node::mk(mcx, copy_AlterCollationStmt(mcx, s)?)?
+            mkcopy_AlterCollationStmt(mcx, s)?
         }
         NodeTag::T_AlterDatabaseRefreshCollStmt => {
             let s = node.as_variant::<AlterDatabaseRefreshCollStmt>().expect("AlterDatabaseRefreshCollStmt");
-            Node::mk(mcx, copy_AlterDatabaseRefreshCollStmt(mcx, s)?)?
+            mkcopy_AlterDatabaseRefreshCollStmt(mcx, s)?
         }
         NodeTag::T_AlterDatabaseSetStmt => {
             let s = node.as_variant::<AlterDatabaseSetStmt>().expect("AlterDatabaseSetStmt");
-            Node::mk(mcx, copy_AlterDatabaseSetStmt(mcx, s)?)?
+            mkcopy_AlterDatabaseSetStmt(mcx, s)?
         }
         NodeTag::T_AlterDatabaseStmt => {
             let s = node.as_variant::<AlterDatabaseStmt>().expect("AlterDatabaseStmt");
-            Node::mk(mcx, copy_AlterDatabaseStmt(mcx, s)?)?
+            mkcopy_AlterDatabaseStmt(mcx, s)?
         }
         NodeTag::T_AlterDefaultPrivilegesStmt => {
             let s = node.as_variant::<AlterDefaultPrivilegesStmt>().expect("AlterDefaultPrivilegesStmt");
-            Node::mk(mcx, copy_AlterDefaultPrivilegesStmt(mcx, s)?)?
+            mkcopy_AlterDefaultPrivilegesStmt(mcx, s)?
         }
         NodeTag::T_AlterDomainStmt => {
             let s = node.as_variant::<AlterDomainStmt>().expect("AlterDomainStmt");
-            Node::mk(mcx, copy_AlterDomainStmt(mcx, s)?)?
+            mkcopy_AlterDomainStmt(mcx, s)?
         }
         NodeTag::T_AlterEnumStmt => {
             let s = node.as_variant::<AlterEnumStmt>().expect("AlterEnumStmt");
-            Node::mk(mcx, copy_AlterEnumStmt(mcx, s)?)?
+            mkcopy_AlterEnumStmt(mcx, s)?
         }
         NodeTag::T_AlterEventTrigStmt => {
             let s = node.as_variant::<AlterEventTrigStmt>().expect("AlterEventTrigStmt");
-            Node::mk(mcx, copy_AlterEventTrigStmt(mcx, s)?)?
+            mkcopy_AlterEventTrigStmt(mcx, s)?
         }
         NodeTag::T_AlterExtensionContentsStmt => {
             let s = node.as_variant::<AlterExtensionContentsStmt>().expect("AlterExtensionContentsStmt");
-            Node::mk(mcx, copy_AlterExtensionContentsStmt(mcx, s)?)?
+            mkcopy_AlterExtensionContentsStmt(mcx, s)?
         }
         NodeTag::T_AlterExtensionStmt => {
             let s = node.as_variant::<AlterExtensionStmt>().expect("AlterExtensionStmt");
-            Node::mk(mcx, copy_AlterExtensionStmt(mcx, s)?)?
+            mkcopy_AlterExtensionStmt(mcx, s)?
         }
         NodeTag::T_AlterFdwStmt => {
             let s = node.as_variant::<AlterFdwStmt>().expect("AlterFdwStmt");
-            Node::mk(mcx, copy_AlterFdwStmt(mcx, s)?)?
+            mkcopy_AlterFdwStmt(mcx, s)?
         }
         NodeTag::T_AlterForeignServerStmt => {
             let s = node.as_variant::<AlterForeignServerStmt>().expect("AlterForeignServerStmt");
-            Node::mk(mcx, copy_AlterForeignServerStmt(mcx, s)?)?
+            mkcopy_AlterForeignServerStmt(mcx, s)?
         }
         NodeTag::T_AlterFunctionStmt => {
             let s = node.as_variant::<AlterFunctionStmt>().expect("AlterFunctionStmt");
-            Node::mk(mcx, copy_AlterFunctionStmt(mcx, s)?)?
+            mkcopy_AlterFunctionStmt(mcx, s)?
         }
         NodeTag::T_AlterObjectDependsStmt => {
             let s = node.as_variant::<AlterObjectDependsStmt>().expect("AlterObjectDependsStmt");
-            Node::mk(mcx, copy_AlterObjectDependsStmt(mcx, s)?)?
+            mkcopy_AlterObjectDependsStmt(mcx, s)?
         }
         NodeTag::T_AlterObjectSchemaStmt => {
             let s = node.as_variant::<AlterObjectSchemaStmt>().expect("AlterObjectSchemaStmt");
-            Node::mk(mcx, copy_AlterObjectSchemaStmt(mcx, s)?)?
+            mkcopy_AlterObjectSchemaStmt(mcx, s)?
         }
         NodeTag::T_AlterOpFamilyStmt => {
             let s = node.as_variant::<AlterOpFamilyStmt>().expect("AlterOpFamilyStmt");
-            Node::mk(mcx, copy_AlterOpFamilyStmt(mcx, s)?)?
+            mkcopy_AlterOpFamilyStmt(mcx, s)?
         }
         NodeTag::T_AlterOperatorStmt => {
             let s = node.as_variant::<AlterOperatorStmt>().expect("AlterOperatorStmt");
-            Node::mk(mcx, copy_AlterOperatorStmt(mcx, s)?)?
+            mkcopy_AlterOperatorStmt(mcx, s)?
         }
         NodeTag::T_AlterOwnerStmt => {
             let s = node.as_variant::<AlterOwnerStmt>().expect("AlterOwnerStmt");
-            Node::mk(mcx, copy_AlterOwnerStmt(mcx, s)?)?
+            mkcopy_AlterOwnerStmt(mcx, s)?
         }
         NodeTag::T_AlterPolicyStmt => {
             let s = node.as_variant::<AlterPolicyStmt>().expect("AlterPolicyStmt");
-            Node::mk(mcx, copy_AlterPolicyStmt(mcx, s)?)?
+            mkcopy_AlterPolicyStmt(mcx, s)?
         }
         NodeTag::T_AlterPublicationStmt => {
             let s = node.as_variant::<AlterPublicationStmt>().expect("AlterPublicationStmt");
-            Node::mk(mcx, copy_AlterPublicationStmt(mcx, s)?)?
+            mkcopy_AlterPublicationStmt(mcx, s)?
         }
         NodeTag::T_AlterRoleSetStmt => {
             let s = node.as_variant::<AlterRoleSetStmt>().expect("AlterRoleSetStmt");
-            Node::mk(mcx, copy_AlterRoleSetStmt(mcx, s)?)?
+            mkcopy_AlterRoleSetStmt(mcx, s)?
         }
         NodeTag::T_AlterRoleStmt => {
             let s = node.as_variant::<AlterRoleStmt>().expect("AlterRoleStmt");
-            Node::mk(mcx, copy_AlterRoleStmt(mcx, s)?)?
+            mkcopy_AlterRoleStmt(mcx, s)?
         }
         NodeTag::T_AlterSeqStmt => {
             let s = node.as_variant::<AlterSeqStmt>().expect("AlterSeqStmt");
-            Node::mk(mcx, copy_AlterSeqStmt(mcx, s)?)?
+            mkcopy_AlterSeqStmt(mcx, s)?
         }
         NodeTag::T_AlterStatsStmt => {
             let s = node.as_variant::<AlterStatsStmt>().expect("AlterStatsStmt");
-            Node::mk(mcx, copy_AlterStatsStmt(mcx, s)?)?
+            mkcopy_AlterStatsStmt(mcx, s)?
         }
         NodeTag::T_AlterSubscriptionStmt => {
             let s = node.as_variant::<AlterSubscriptionStmt>().expect("AlterSubscriptionStmt");
-            Node::mk(mcx, copy_AlterSubscriptionStmt(mcx, s)?)?
+            mkcopy_AlterSubscriptionStmt(mcx, s)?
         }
         NodeTag::T_AlterSystemStmt => {
             let s = node.as_variant::<AlterSystemStmt>().expect("AlterSystemStmt");
-            Node::mk(mcx, copy_AlterSystemStmt(mcx, s)?)?
+            mkcopy_AlterSystemStmt(mcx, s)?
         }
         NodeTag::T_AlterTSConfigurationStmt => {
             let s = node.as_variant::<AlterTSConfigurationStmt>().expect("AlterTSConfigurationStmt");
-            Node::mk(mcx, copy_AlterTSConfigurationStmt(mcx, s)?)?
+            mkcopy_AlterTSConfigurationStmt(mcx, s)?
         }
         NodeTag::T_AlterTSDictionaryStmt => {
             let s = node.as_variant::<AlterTSDictionaryStmt>().expect("AlterTSDictionaryStmt");
-            Node::mk(mcx, copy_AlterTSDictionaryStmt(mcx, s)?)?
+            mkcopy_AlterTSDictionaryStmt(mcx, s)?
         }
         NodeTag::T_AlterTableCmd => {
             let s = node.as_variant::<AlterTableCmd>().expect("AlterTableCmd");
-            Node::mk(mcx, copy_AlterTableCmd(mcx, s)?)?
+            mkcopy_AlterTableCmd(mcx, s)?
         }
         NodeTag::T_AlterTableMoveAllStmt => {
             let s = node.as_variant::<AlterTableMoveAllStmt>().expect("AlterTableMoveAllStmt");
-            Node::mk(mcx, copy_AlterTableMoveAllStmt(mcx, s)?)?
+            mkcopy_AlterTableMoveAllStmt(mcx, s)?
         }
         NodeTag::T_AlterTableSpaceOptionsStmt => {
             let s = node.as_variant::<AlterTableSpaceOptionsStmt>().expect("AlterTableSpaceOptionsStmt");
-            Node::mk(mcx, copy_AlterTableSpaceOptionsStmt(mcx, s)?)?
+            mkcopy_AlterTableSpaceOptionsStmt(mcx, s)?
         }
         NodeTag::T_AlterTableStmt => {
             let s = node.as_variant::<AlterTableStmt>().expect("AlterTableStmt");
-            Node::mk(mcx, copy_AlterTableStmt(mcx, s)?)?
+            mkcopy_AlterTableStmt(mcx, s)?
         }
         NodeTag::T_AlterTypeStmt => {
             let s = node.as_variant::<AlterTypeStmt>().expect("AlterTypeStmt");
-            Node::mk(mcx, copy_AlterTypeStmt(mcx, s)?)?
+            mkcopy_AlterTypeStmt(mcx, s)?
         }
         NodeTag::T_AlterUserMappingStmt => {
             let s = node.as_variant::<AlterUserMappingStmt>().expect("AlterUserMappingStmt");
-            Node::mk(mcx, copy_AlterUserMappingStmt(mcx, s)?)?
+            mkcopy_AlterUserMappingStmt(mcx, s)?
         }
         NodeTag::T_AlternativeSubPlan => {
             let s = node.as_variant::<AlternativeSubPlan>().expect("AlternativeSubPlan");
-            Node::mk(mcx, copy_AlternativeSubPlan(mcx, s)?)?
+            mkcopy_AlternativeSubPlan(mcx, s)?
         }
         NodeTag::T_Append => {
             let s = node.as_variant::<Append>().expect("Append");
-            Node::mk(mcx, copy_Append(mcx, s)?)?
+            mkcopy_Append(mcx, s)?
         }
         NodeTag::T_AppendRelInfo => {
             let s = node.as_variant::<AppendRelInfo>().expect("AppendRelInfo");
-            Node::mk(mcx, copy_AppendRelInfo(mcx, s)?)?
+            mkcopy_AppendRelInfo(mcx, s)?
         }
         NodeTag::T_ArrayCoerceExpr => {
             let s = node.as_variant::<ArrayCoerceExpr>().expect("ArrayCoerceExpr");
-            Node::mk(mcx, copy_ArrayCoerceExpr(mcx, s)?)?
+            mkcopy_ArrayCoerceExpr(mcx, s)?
         }
         NodeTag::T_ArrayExpr => {
             let s = node.as_variant::<ArrayExpr>().expect("ArrayExpr");
-            Node::mk(mcx, copy_ArrayExpr(mcx, s)?)?
+            mkcopy_ArrayExpr(mcx, s)?
         }
         NodeTag::T_BitmapAnd => {
             let s = node.as_variant::<BitmapAnd>().expect("BitmapAnd");
-            Node::mk(mcx, copy_BitmapAnd(mcx, s)?)?
+            mkcopy_BitmapAnd(mcx, s)?
         }
         NodeTag::T_BitmapHeapScan => {
             let s = node.as_variant::<BitmapHeapScan>().expect("BitmapHeapScan");
-            Node::mk(mcx, copy_BitmapHeapScan(mcx, s)?)?
+            mkcopy_BitmapHeapScan(mcx, s)?
         }
         NodeTag::T_BitmapIndexScan => {
             let s = node.as_variant::<BitmapIndexScan>().expect("BitmapIndexScan");
-            Node::mk(mcx, copy_BitmapIndexScan(mcx, s)?)?
+            mkcopy_BitmapIndexScan(mcx, s)?
         }
         NodeTag::T_BitmapOr => {
             let s = node.as_variant::<BitmapOr>().expect("BitmapOr");
-            Node::mk(mcx, copy_BitmapOr(mcx, s)?)?
+            mkcopy_BitmapOr(mcx, s)?
         }
         NodeTag::T_BoolExpr => {
             let s = node.as_variant::<BoolExpr>().expect("BoolExpr");
-            Node::mk(mcx, copy_BoolExpr(mcx, s)?)?
+            mkcopy_BoolExpr(mcx, s)?
         }
         NodeTag::T_BooleanTest => {
             let s = node.as_variant::<BooleanTest>().expect("BooleanTest");
-            Node::mk(mcx, copy_BooleanTest(mcx, s)?)?
+            mkcopy_BooleanTest(mcx, s)?
         }
         NodeTag::T_CTECycleClause => {
             let s = node.as_variant::<CTECycleClause>().expect("CTECycleClause");
-            Node::mk(mcx, copy_CTECycleClause(mcx, s)?)?
+            mkcopy_CTECycleClause(mcx, s)?
         }
         NodeTag::T_CTESearchClause => {
             let s = node.as_variant::<CTESearchClause>().expect("CTESearchClause");
-            Node::mk(mcx, copy_CTESearchClause(mcx, s)?)?
+            mkcopy_CTESearchClause(mcx, s)?
         }
         NodeTag::T_CallStmt => {
             let s = node.as_variant::<CallStmt>().expect("CallStmt");
-            Node::mk(mcx, copy_CallStmt(mcx, s)?)?
+            mkcopy_CallStmt(mcx, s)?
         }
         NodeTag::T_CaseExpr => {
             let s = node.as_variant::<CaseExpr>().expect("CaseExpr");
-            Node::mk(mcx, copy_CaseExpr(mcx, s)?)?
+            mkcopy_CaseExpr(mcx, s)?
         }
         NodeTag::T_CaseTestExpr => {
             let s = node.as_variant::<CaseTestExpr>().expect("CaseTestExpr");
-            Node::mk(mcx, copy_CaseTestExpr(mcx, s)?)?
+            mkcopy_CaseTestExpr(mcx, s)?
         }
         NodeTag::T_CaseWhen => {
             let s = node.as_variant::<CaseWhen>().expect("CaseWhen");
-            Node::mk(mcx, copy_CaseWhen(mcx, s)?)?
+            mkcopy_CaseWhen(mcx, s)?
         }
         NodeTag::T_CheckPointStmt => {
             let s = node.as_variant::<CheckPointStmt>().expect("CheckPointStmt");
-            Node::mk(mcx, copy_CheckPointStmt(mcx, s)?)?
+            mkcopy_CheckPointStmt(mcx, s)?
         }
         NodeTag::T_ClosePortalStmt => {
             let s = node.as_variant::<ClosePortalStmt>().expect("ClosePortalStmt");
-            Node::mk(mcx, copy_ClosePortalStmt(mcx, s)?)?
+            mkcopy_ClosePortalStmt(mcx, s)?
         }
         NodeTag::T_ClusterStmt => {
             let s = node.as_variant::<ClusterStmt>().expect("ClusterStmt");
-            Node::mk(mcx, copy_ClusterStmt(mcx, s)?)?
+            mkcopy_ClusterStmt(mcx, s)?
         }
         NodeTag::T_CoalesceExpr => {
             let s = node.as_variant::<CoalesceExpr>().expect("CoalesceExpr");
-            Node::mk(mcx, copy_CoalesceExpr(mcx, s)?)?
+            mkcopy_CoalesceExpr(mcx, s)?
         }
         NodeTag::T_CoerceToDomain => {
             let s = node.as_variant::<CoerceToDomain>().expect("CoerceToDomain");
-            Node::mk(mcx, copy_CoerceToDomain(mcx, s)?)?
+            mkcopy_CoerceToDomain(mcx, s)?
         }
         NodeTag::T_CoerceToDomainValue => {
             let s = node.as_variant::<CoerceToDomainValue>().expect("CoerceToDomainValue");
-            Node::mk(mcx, copy_CoerceToDomainValue(mcx, s)?)?
+            mkcopy_CoerceToDomainValue(mcx, s)?
         }
         NodeTag::T_CoerceViaIO => {
             let s = node.as_variant::<CoerceViaIO>().expect("CoerceViaIO");
-            Node::mk(mcx, copy_CoerceViaIO(mcx, s)?)?
+            mkcopy_CoerceViaIO(mcx, s)?
         }
         NodeTag::T_CollateClause => {
             let s = node.as_variant::<CollateClause>().expect("CollateClause");
-            Node::mk(mcx, copy_CollateClause(mcx, s)?)?
+            mkcopy_CollateClause(mcx, s)?
         }
         NodeTag::T_CollateExpr => {
             let s = node.as_variant::<CollateExpr>().expect("CollateExpr");
-            Node::mk(mcx, copy_CollateExpr(mcx, s)?)?
+            mkcopy_CollateExpr(mcx, s)?
         }
         NodeTag::T_ColumnDef => {
             let s = node.as_variant::<ColumnDef>().expect("ColumnDef");
-            Node::mk(mcx, copy_ColumnDef(mcx, s)?)?
+            mkcopy_ColumnDef(mcx, s)?
         }
         NodeTag::T_ColumnRef => {
             let s = node.as_variant::<ColumnRef>().expect("ColumnRef");
-            Node::mk(mcx, copy_ColumnRef(mcx, s)?)?
+            mkcopy_ColumnRef(mcx, s)?
         }
         NodeTag::T_CommentStmt => {
             let s = node.as_variant::<CommentStmt>().expect("CommentStmt");
-            Node::mk(mcx, copy_CommentStmt(mcx, s)?)?
+            mkcopy_CommentStmt(mcx, s)?
         }
         NodeTag::T_CommonTableExpr => {
             let s = node.as_variant::<CommonTableExpr>().expect("CommonTableExpr");
-            Node::mk(mcx, copy_CommonTableExpr(mcx, s)?)?
+            mkcopy_CommonTableExpr(mcx, s)?
         }
         NodeTag::T_CompositeTypeStmt => {
             let s = node.as_variant::<CompositeTypeStmt>().expect("CompositeTypeStmt");
-            Node::mk(mcx, copy_CompositeTypeStmt(mcx, s)?)?
+            mkcopy_CompositeTypeStmt(mcx, s)?
         }
         NodeTag::T_Constraint => {
             let s = node.as_variant::<Constraint>().expect("Constraint");
-            Node::mk(mcx, copy_Constraint(mcx, s)?)?
+            mkcopy_Constraint(mcx, s)?
         }
         NodeTag::T_ConstraintsSetStmt => {
             let s = node.as_variant::<ConstraintsSetStmt>().expect("ConstraintsSetStmt");
-            Node::mk(mcx, copy_ConstraintsSetStmt(mcx, s)?)?
+            mkcopy_ConstraintsSetStmt(mcx, s)?
         }
         NodeTag::T_ConvertRowtypeExpr => {
             let s = node.as_variant::<ConvertRowtypeExpr>().expect("ConvertRowtypeExpr");
-            Node::mk(mcx, copy_ConvertRowtypeExpr(mcx, s)?)?
+            mkcopy_ConvertRowtypeExpr(mcx, s)?
         }
         NodeTag::T_CopyStmt => {
             let s = node.as_variant::<CopyStmt>().expect("CopyStmt");
-            Node::mk(mcx, copy_CopyStmt(mcx, s)?)?
+            mkcopy_CopyStmt(mcx, s)?
         }
         NodeTag::T_CreateAmStmt => {
             let s = node.as_variant::<CreateAmStmt>().expect("CreateAmStmt");
-            Node::mk(mcx, copy_CreateAmStmt(mcx, s)?)?
+            mkcopy_CreateAmStmt(mcx, s)?
         }
         NodeTag::T_CreateCastStmt => {
             let s = node.as_variant::<CreateCastStmt>().expect("CreateCastStmt");
-            Node::mk(mcx, copy_CreateCastStmt(mcx, s)?)?
+            mkcopy_CreateCastStmt(mcx, s)?
         }
         NodeTag::T_CreateConversionStmt => {
             let s = node.as_variant::<CreateConversionStmt>().expect("CreateConversionStmt");
-            Node::mk(mcx, copy_CreateConversionStmt(mcx, s)?)?
+            mkcopy_CreateConversionStmt(mcx, s)?
         }
         NodeTag::T_CreateDomainStmt => {
             let s = node.as_variant::<CreateDomainStmt>().expect("CreateDomainStmt");
-            Node::mk(mcx, copy_CreateDomainStmt(mcx, s)?)?
+            mkcopy_CreateDomainStmt(mcx, s)?
         }
         NodeTag::T_CreateEnumStmt => {
             let s = node.as_variant::<CreateEnumStmt>().expect("CreateEnumStmt");
-            Node::mk(mcx, copy_CreateEnumStmt(mcx, s)?)?
+            mkcopy_CreateEnumStmt(mcx, s)?
         }
         NodeTag::T_CreateEventTrigStmt => {
             let s = node.as_variant::<CreateEventTrigStmt>().expect("CreateEventTrigStmt");
-            Node::mk(mcx, copy_CreateEventTrigStmt(mcx, s)?)?
+            mkcopy_CreateEventTrigStmt(mcx, s)?
         }
         NodeTag::T_CreateExtensionStmt => {
             let s = node.as_variant::<CreateExtensionStmt>().expect("CreateExtensionStmt");
-            Node::mk(mcx, copy_CreateExtensionStmt(mcx, s)?)?
+            mkcopy_CreateExtensionStmt(mcx, s)?
         }
         NodeTag::T_CreateFdwStmt => {
             let s = node.as_variant::<CreateFdwStmt>().expect("CreateFdwStmt");
-            Node::mk(mcx, copy_CreateFdwStmt(mcx, s)?)?
+            mkcopy_CreateFdwStmt(mcx, s)?
         }
         NodeTag::T_CreateForeignServerStmt => {
             let s = node.as_variant::<CreateForeignServerStmt>().expect("CreateForeignServerStmt");
-            Node::mk(mcx, copy_CreateForeignServerStmt(mcx, s)?)?
+            mkcopy_CreateForeignServerStmt(mcx, s)?
         }
         NodeTag::T_CreateForeignTableStmt => {
             let s = node.as_variant::<CreateForeignTableStmt>().expect("CreateForeignTableStmt");
-            Node::mk(mcx, copy_CreateForeignTableStmt(mcx, s)?)?
+            mkcopy_CreateForeignTableStmt(mcx, s)?
         }
         NodeTag::T_CreateFunctionStmt => {
             let s = node.as_variant::<CreateFunctionStmt>().expect("CreateFunctionStmt");
-            Node::mk(mcx, copy_CreateFunctionStmt(mcx, s)?)?
+            mkcopy_CreateFunctionStmt(mcx, s)?
         }
         NodeTag::T_CreateOpClassItem => {
             let s = node.as_variant::<CreateOpClassItem>().expect("CreateOpClassItem");
-            Node::mk(mcx, copy_CreateOpClassItem(mcx, s)?)?
+            mkcopy_CreateOpClassItem(mcx, s)?
         }
         NodeTag::T_CreateOpClassStmt => {
             let s = node.as_variant::<CreateOpClassStmt>().expect("CreateOpClassStmt");
-            Node::mk(mcx, copy_CreateOpClassStmt(mcx, s)?)?
+            mkcopy_CreateOpClassStmt(mcx, s)?
         }
         NodeTag::T_CreateOpFamilyStmt => {
             let s = node.as_variant::<CreateOpFamilyStmt>().expect("CreateOpFamilyStmt");
-            Node::mk(mcx, copy_CreateOpFamilyStmt(mcx, s)?)?
+            mkcopy_CreateOpFamilyStmt(mcx, s)?
         }
         NodeTag::T_CreatePLangStmt => {
             let s = node.as_variant::<CreatePLangStmt>().expect("CreatePLangStmt");
-            Node::mk(mcx, copy_CreatePLangStmt(mcx, s)?)?
+            mkcopy_CreatePLangStmt(mcx, s)?
         }
         NodeTag::T_CreatePolicyStmt => {
             let s = node.as_variant::<CreatePolicyStmt>().expect("CreatePolicyStmt");
-            Node::mk(mcx, copy_CreatePolicyStmt(mcx, s)?)?
+            mkcopy_CreatePolicyStmt(mcx, s)?
         }
         NodeTag::T_CreatePublicationStmt => {
             let s = node.as_variant::<CreatePublicationStmt>().expect("CreatePublicationStmt");
-            Node::mk(mcx, copy_CreatePublicationStmt(mcx, s)?)?
+            mkcopy_CreatePublicationStmt(mcx, s)?
         }
         NodeTag::T_CreateRangeStmt => {
             let s = node.as_variant::<CreateRangeStmt>().expect("CreateRangeStmt");
-            Node::mk(mcx, copy_CreateRangeStmt(mcx, s)?)?
+            mkcopy_CreateRangeStmt(mcx, s)?
         }
         NodeTag::T_CreateRoleStmt => {
             let s = node.as_variant::<CreateRoleStmt>().expect("CreateRoleStmt");
-            Node::mk(mcx, copy_CreateRoleStmt(mcx, s)?)?
+            mkcopy_CreateRoleStmt(mcx, s)?
         }
         NodeTag::T_CreateSchemaStmt => {
             let s = node.as_variant::<CreateSchemaStmt>().expect("CreateSchemaStmt");
-            Node::mk(mcx, copy_CreateSchemaStmt(mcx, s)?)?
+            mkcopy_CreateSchemaStmt(mcx, s)?
         }
         NodeTag::T_CreateSeqStmt => {
             let s = node.as_variant::<CreateSeqStmt>().expect("CreateSeqStmt");
-            Node::mk(mcx, copy_CreateSeqStmt(mcx, s)?)?
+            mkcopy_CreateSeqStmt(mcx, s)?
         }
         NodeTag::T_CreateStatsStmt => {
             let s = node.as_variant::<CreateStatsStmt>().expect("CreateStatsStmt");
-            Node::mk(mcx, copy_CreateStatsStmt(mcx, s)?)?
+            mkcopy_CreateStatsStmt(mcx, s)?
         }
         NodeTag::T_CreateStmt => {
             let s = node.as_variant::<CreateStmt>().expect("CreateStmt");
-            Node::mk(mcx, copy_CreateStmt(mcx, s)?)?
+            mkcopy_CreateStmt(mcx, s)?
         }
         NodeTag::T_CreateSubscriptionStmt => {
             let s = node.as_variant::<CreateSubscriptionStmt>().expect("CreateSubscriptionStmt");
-            Node::mk(mcx, copy_CreateSubscriptionStmt(mcx, s)?)?
+            mkcopy_CreateSubscriptionStmt(mcx, s)?
         }
         NodeTag::T_CreateTableAsStmt => {
             let s = node.as_variant::<CreateTableAsStmt>().expect("CreateTableAsStmt");
-            Node::mk(mcx, copy_CreateTableAsStmt(mcx, s)?)?
+            mkcopy_CreateTableAsStmt(mcx, s)?
         }
         NodeTag::T_CreateTableSpaceStmt => {
             let s = node.as_variant::<CreateTableSpaceStmt>().expect("CreateTableSpaceStmt");
-            Node::mk(mcx, copy_CreateTableSpaceStmt(mcx, s)?)?
+            mkcopy_CreateTableSpaceStmt(mcx, s)?
         }
         NodeTag::T_CreateTransformStmt => {
             let s = node.as_variant::<CreateTransformStmt>().expect("CreateTransformStmt");
-            Node::mk(mcx, copy_CreateTransformStmt(mcx, s)?)?
+            mkcopy_CreateTransformStmt(mcx, s)?
         }
         NodeTag::T_CreateTrigStmt => {
             let s = node.as_variant::<CreateTrigStmt>().expect("CreateTrigStmt");
-            Node::mk(mcx, copy_CreateTrigStmt(mcx, s)?)?
+            mkcopy_CreateTrigStmt(mcx, s)?
         }
         NodeTag::T_CreateUserMappingStmt => {
             let s = node.as_variant::<CreateUserMappingStmt>().expect("CreateUserMappingStmt");
-            Node::mk(mcx, copy_CreateUserMappingStmt(mcx, s)?)?
+            mkcopy_CreateUserMappingStmt(mcx, s)?
         }
         NodeTag::T_CreatedbStmt => {
             let s = node.as_variant::<CreatedbStmt>().expect("CreatedbStmt");
-            Node::mk(mcx, copy_CreatedbStmt(mcx, s)?)?
+            mkcopy_CreatedbStmt(mcx, s)?
         }
         NodeTag::T_CteScan => {
             let s = node.as_variant::<CteScan>().expect("CteScan");
-            Node::mk(mcx, copy_CteScan(mcx, s)?)?
+            mkcopy_CteScan(mcx, s)?
         }
         NodeTag::T_CurrentOfExpr => {
             let s = node.as_variant::<CurrentOfExpr>().expect("CurrentOfExpr");
-            Node::mk(mcx, copy_CurrentOfExpr(mcx, s)?)?
+            mkcopy_CurrentOfExpr(mcx, s)?
         }
         NodeTag::T_DeallocateStmt => {
             let s = node.as_variant::<DeallocateStmt>().expect("DeallocateStmt");
-            Node::mk(mcx, copy_DeallocateStmt(mcx, s)?)?
+            mkcopy_DeallocateStmt(mcx, s)?
         }
         NodeTag::T_DeclareCursorStmt => {
             let s = node.as_variant::<DeclareCursorStmt>().expect("DeclareCursorStmt");
-            Node::mk(mcx, copy_DeclareCursorStmt(mcx, s)?)?
+            mkcopy_DeclareCursorStmt(mcx, s)?
         }
         NodeTag::T_DefElem => {
             let s = node.as_variant::<DefElem>().expect("DefElem");
-            Node::mk(mcx, copy_DefElem(mcx, s)?)?
+            mkcopy_DefElem(mcx, s)?
         }
         NodeTag::T_DefineStmt => {
             let s = node.as_variant::<DefineStmt>().expect("DefineStmt");
-            Node::mk(mcx, copy_DefineStmt(mcx, s)?)?
+            mkcopy_DefineStmt(mcx, s)?
         }
         NodeTag::T_DeleteStmt => {
             let s = node.as_variant::<DeleteStmt>().expect("DeleteStmt");
-            Node::mk(mcx, copy_DeleteStmt(mcx, s)?)?
+            mkcopy_DeleteStmt(mcx, s)?
         }
         NodeTag::T_DiscardStmt => {
             let s = node.as_variant::<DiscardStmt>().expect("DiscardStmt");
-            Node::mk(mcx, copy_DiscardStmt(mcx, s)?)?
+            mkcopy_DiscardStmt(mcx, s)?
         }
         NodeTag::T_DistinctExpr => {
             let s = node.as_variant::<DistinctExpr>().expect("DistinctExpr");
-            Node::mk(mcx, copy_DistinctExpr(mcx, s)?)?
+            mkcopy_DistinctExpr(mcx, s)?
         }
         NodeTag::T_DoStmt => {
             let s = node.as_variant::<DoStmt>().expect("DoStmt");
-            Node::mk(mcx, copy_DoStmt(mcx, s)?)?
+            mkcopy_DoStmt(mcx, s)?
         }
         NodeTag::T_DropOwnedStmt => {
             let s = node.as_variant::<DropOwnedStmt>().expect("DropOwnedStmt");
-            Node::mk(mcx, copy_DropOwnedStmt(mcx, s)?)?
+            mkcopy_DropOwnedStmt(mcx, s)?
         }
         NodeTag::T_DropRoleStmt => {
             let s = node.as_variant::<DropRoleStmt>().expect("DropRoleStmt");
-            Node::mk(mcx, copy_DropRoleStmt(mcx, s)?)?
+            mkcopy_DropRoleStmt(mcx, s)?
         }
         NodeTag::T_DropStmt => {
             let s = node.as_variant::<DropStmt>().expect("DropStmt");
-            Node::mk(mcx, copy_DropStmt(mcx, s)?)?
+            mkcopy_DropStmt(mcx, s)?
         }
         NodeTag::T_DropSubscriptionStmt => {
             let s = node.as_variant::<DropSubscriptionStmt>().expect("DropSubscriptionStmt");
-            Node::mk(mcx, copy_DropSubscriptionStmt(mcx, s)?)?
+            mkcopy_DropSubscriptionStmt(mcx, s)?
         }
         NodeTag::T_DropTableSpaceStmt => {
             let s = node.as_variant::<DropTableSpaceStmt>().expect("DropTableSpaceStmt");
-            Node::mk(mcx, copy_DropTableSpaceStmt(mcx, s)?)?
+            mkcopy_DropTableSpaceStmt(mcx, s)?
         }
         NodeTag::T_DropUserMappingStmt => {
             let s = node.as_variant::<DropUserMappingStmt>().expect("DropUserMappingStmt");
-            Node::mk(mcx, copy_DropUserMappingStmt(mcx, s)?)?
+            mkcopy_DropUserMappingStmt(mcx, s)?
         }
         NodeTag::T_DropdbStmt => {
             let s = node.as_variant::<DropdbStmt>().expect("DropdbStmt");
-            Node::mk(mcx, copy_DropdbStmt(mcx, s)?)?
+            mkcopy_DropdbStmt(mcx, s)?
         }
         NodeTag::T_ExecuteStmt => {
             let s = node.as_variant::<ExecuteStmt>().expect("ExecuteStmt");
-            Node::mk(mcx, copy_ExecuteStmt(mcx, s)?)?
+            mkcopy_ExecuteStmt(mcx, s)?
         }
         NodeTag::T_ExplainStmt => {
             let s = node.as_variant::<ExplainStmt>().expect("ExplainStmt");
-            Node::mk(mcx, copy_ExplainStmt(mcx, s)?)?
+            mkcopy_ExplainStmt(mcx, s)?
         }
         NodeTag::T_FetchStmt => {
             let s = node.as_variant::<FetchStmt>().expect("FetchStmt");
-            Node::mk(mcx, copy_FetchStmt(mcx, s)?)?
+            mkcopy_FetchStmt(mcx, s)?
         }
         NodeTag::T_FieldSelect => {
             let s = node.as_variant::<FieldSelect>().expect("FieldSelect");
-            Node::mk(mcx, copy_FieldSelect(mcx, s)?)?
+            mkcopy_FieldSelect(mcx, s)?
         }
         NodeTag::T_FieldStore => {
             let s = node.as_variant::<FieldStore>().expect("FieldStore");
-            Node::mk(mcx, copy_FieldStore(mcx, s)?)?
+            mkcopy_FieldStore(mcx, s)?
         }
         NodeTag::T_ForeignScan => {
             let s = node.as_variant::<ForeignScan>().expect("ForeignScan");
-            Node::mk(mcx, copy_ForeignScan(mcx, s)?)?
+            mkcopy_ForeignScan(mcx, s)?
         }
         NodeTag::T_FromExpr => {
             let s = node.as_variant::<FromExpr>().expect("FromExpr");
-            Node::mk(mcx, copy_FromExpr(mcx, s)?)?
+            mkcopy_FromExpr(mcx, s)?
         }
         NodeTag::T_FuncCall => {
             let s = node.as_variant::<FuncCall>().expect("FuncCall");
-            Node::mk(mcx, copy_FuncCall(mcx, s)?)?
+            mkcopy_FuncCall(mcx, s)?
         }
         NodeTag::T_FuncExpr => {
             let s = node.as_variant::<FuncExpr>().expect("FuncExpr");
-            Node::mk(mcx, copy_FuncExpr(mcx, s)?)?
+            mkcopy_FuncExpr(mcx, s)?
         }
         NodeTag::T_FunctionParameter => {
             let s = node.as_variant::<FunctionParameter>().expect("FunctionParameter");
-            Node::mk(mcx, copy_FunctionParameter(mcx, s)?)?
+            mkcopy_FunctionParameter(mcx, s)?
         }
         NodeTag::T_FunctionScan => {
             let s = node.as_variant::<FunctionScan>().expect("FunctionScan");
-            Node::mk(mcx, copy_FunctionScan(mcx, s)?)?
+            mkcopy_FunctionScan(mcx, s)?
         }
         NodeTag::T_Gather => {
             let s = node.as_variant::<Gather>().expect("Gather");
-            Node::mk(mcx, copy_Gather(mcx, s)?)?
+            mkcopy_Gather(mcx, s)?
         }
         NodeTag::T_GatherMerge => {
             let s = node.as_variant::<GatherMerge>().expect("GatherMerge");
-            Node::mk(mcx, copy_GatherMerge(mcx, s)?)?
+            mkcopy_GatherMerge(mcx, s)?
         }
         NodeTag::T_GrantRoleStmt => {
             let s = node.as_variant::<GrantRoleStmt>().expect("GrantRoleStmt");
-            Node::mk(mcx, copy_GrantRoleStmt(mcx, s)?)?
+            mkcopy_GrantRoleStmt(mcx, s)?
         }
         NodeTag::T_GrantStmt => {
             let s = node.as_variant::<GrantStmt>().expect("GrantStmt");
-            Node::mk(mcx, copy_GrantStmt(mcx, s)?)?
+            mkcopy_GrantStmt(mcx, s)?
         }
         NodeTag::T_Group => {
             let s = node.as_variant::<Group>().expect("Group");
-            Node::mk(mcx, copy_Group(mcx, s)?)?
+            mkcopy_Group(mcx, s)?
         }
         NodeTag::T_GroupingFunc => {
             let s = node.as_variant::<GroupingFunc>().expect("GroupingFunc");
-            Node::mk(mcx, copy_GroupingFunc(mcx, s)?)?
+            mkcopy_GroupingFunc(mcx, s)?
         }
         NodeTag::T_GroupingSet => {
             let s = node.as_variant::<GroupingSet>().expect("GroupingSet");
-            Node::mk(mcx, copy_GroupingSet(mcx, s)?)?
+            mkcopy_GroupingSet(mcx, s)?
         }
         NodeTag::T_Hash => {
             let s = node.as_variant::<Hash>().expect("Hash");
-            Node::mk(mcx, copy_Hash(mcx, s)?)?
+            mkcopy_Hash(mcx, s)?
         }
         NodeTag::T_HashJoin => {
             let s = node.as_variant::<HashJoin>().expect("HashJoin");
-            Node::mk(mcx, copy_HashJoin(mcx, s)?)?
+            mkcopy_HashJoin(mcx, s)?
         }
         NodeTag::T_ImportForeignSchemaStmt => {
             let s = node.as_variant::<ImportForeignSchemaStmt>().expect("ImportForeignSchemaStmt");
-            Node::mk(mcx, copy_ImportForeignSchemaStmt(mcx, s)?)?
+            mkcopy_ImportForeignSchemaStmt(mcx, s)?
         }
         NodeTag::T_IncrementalSort => {
             let s = node.as_variant::<IncrementalSort>().expect("IncrementalSort");
-            Node::mk(mcx, copy_IncrementalSort(mcx, s)?)?
+            mkcopy_IncrementalSort(mcx, s)?
         }
         NodeTag::T_IndexElem => {
             let s = node.as_variant::<IndexElem>().expect("IndexElem");
-            Node::mk(mcx, copy_IndexElem(mcx, s)?)?
+            mkcopy_IndexElem(mcx, s)?
         }
         NodeTag::T_IndexOnlyScan => {
             let s = node.as_variant::<IndexOnlyScan>().expect("IndexOnlyScan");
-            Node::mk(mcx, copy_IndexOnlyScan(mcx, s)?)?
+            mkcopy_IndexOnlyScan(mcx, s)?
         }
         NodeTag::T_IndexScan => {
             let s = node.as_variant::<IndexScan>().expect("IndexScan");
-            Node::mk(mcx, copy_IndexScan(mcx, s)?)?
+            mkcopy_IndexScan(mcx, s)?
         }
         NodeTag::T_IndexStmt => {
             let s = node.as_variant::<IndexStmt>().expect("IndexStmt");
-            Node::mk(mcx, copy_IndexStmt(mcx, s)?)?
+            mkcopy_IndexStmt(mcx, s)?
         }
         NodeTag::T_InferClause => {
             let s = node.as_variant::<InferClause>().expect("InferClause");
-            Node::mk(mcx, copy_InferClause(mcx, s)?)?
+            mkcopy_InferClause(mcx, s)?
         }
         NodeTag::T_InferenceElem => {
             let s = node.as_variant::<InferenceElem>().expect("InferenceElem");
-            Node::mk(mcx, copy_InferenceElem(mcx, s)?)?
+            mkcopy_InferenceElem(mcx, s)?
         }
         NodeTag::T_InsertStmt => {
             let s = node.as_variant::<InsertStmt>().expect("InsertStmt");
-            Node::mk(mcx, copy_InsertStmt(mcx, s)?)?
+            mkcopy_InsertStmt(mcx, s)?
         }
         NodeTag::T_IntoClause => {
             let s = node.as_variant::<IntoClause>().expect("IntoClause");
-            Node::mk(mcx, copy_IntoClause(mcx, s)?)?
+            mkcopy_IntoClause(mcx, s)?
         }
         NodeTag::T_JoinExpr => {
             let s = node.as_variant::<JoinExpr>().expect("JoinExpr");
-            Node::mk(mcx, copy_JoinExpr(mcx, s)?)?
+            mkcopy_JoinExpr(mcx, s)?
         }
         NodeTag::T_JsonAggConstructor => {
             let s = node.as_variant::<JsonAggConstructor>().expect("JsonAggConstructor");
-            Node::mk(mcx, copy_JsonAggConstructor(mcx, s)?)?
+            mkcopy_JsonAggConstructor(mcx, s)?
         }
         NodeTag::T_JsonArgument => {
             let s = node.as_variant::<JsonArgument>().expect("JsonArgument");
-            Node::mk(mcx, copy_JsonArgument(mcx, s)?)?
+            mkcopy_JsonArgument(mcx, s)?
         }
         NodeTag::T_JsonArrayAgg => {
             let s = node.as_variant::<JsonArrayAgg>().expect("JsonArrayAgg");
-            Node::mk(mcx, copy_JsonArrayAgg(mcx, s)?)?
+            mkcopy_JsonArrayAgg(mcx, s)?
         }
         NodeTag::T_JsonArrayConstructor => {
             let s = node.as_variant::<JsonArrayConstructor>().expect("JsonArrayConstructor");
-            Node::mk(mcx, copy_JsonArrayConstructor(mcx, s)?)?
+            mkcopy_JsonArrayConstructor(mcx, s)?
         }
         NodeTag::T_JsonArrayQueryConstructor => {
             let s = node.as_variant::<JsonArrayQueryConstructor>().expect("JsonArrayQueryConstructor");
-            Node::mk(mcx, copy_JsonArrayQueryConstructor(mcx, s)?)?
+            mkcopy_JsonArrayQueryConstructor(mcx, s)?
         }
         NodeTag::T_JsonBehavior => {
             let s = node.as_variant::<JsonBehavior>().expect("JsonBehavior");
-            Node::mk(mcx, copy_JsonBehavior(mcx, s)?)?
+            mkcopy_JsonBehavior(mcx, s)?
         }
         NodeTag::T_JsonConstructorExpr => {
             let s = node.as_variant::<JsonConstructorExpr>().expect("JsonConstructorExpr");
-            Node::mk(mcx, copy_JsonConstructorExpr(mcx, s)?)?
+            mkcopy_JsonConstructorExpr(mcx, s)?
         }
         NodeTag::T_JsonExpr => {
             let s = node.as_variant::<JsonExpr>().expect("JsonExpr");
-            Node::mk(mcx, copy_JsonExpr(mcx, s)?)?
+            mkcopy_JsonExpr(mcx, s)?
         }
         NodeTag::T_JsonFormat => {
             let s = node.as_variant::<JsonFormat>().expect("JsonFormat");
-            Node::mk(mcx, copy_JsonFormat(mcx, s)?)?
+            mkcopy_JsonFormat(mcx, s)?
         }
         NodeTag::T_JsonFuncExpr => {
             let s = node.as_variant::<JsonFuncExpr>().expect("JsonFuncExpr");
-            Node::mk(mcx, copy_JsonFuncExpr(mcx, s)?)?
+            mkcopy_JsonFuncExpr(mcx, s)?
         }
         NodeTag::T_JsonIsPredicate => {
             let s = node.as_variant::<JsonIsPredicate>().expect("JsonIsPredicate");
-            Node::mk(mcx, copy_JsonIsPredicate(mcx, s)?)?
+            mkcopy_JsonIsPredicate(mcx, s)?
         }
         NodeTag::T_JsonKeyValue => {
             let s = node.as_variant::<JsonKeyValue>().expect("JsonKeyValue");
-            Node::mk(mcx, copy_JsonKeyValue(mcx, s)?)?
+            mkcopy_JsonKeyValue(mcx, s)?
         }
         NodeTag::T_JsonObjectAgg => {
             let s = node.as_variant::<JsonObjectAgg>().expect("JsonObjectAgg");
-            Node::mk(mcx, copy_JsonObjectAgg(mcx, s)?)?
+            mkcopy_JsonObjectAgg(mcx, s)?
         }
         NodeTag::T_JsonObjectConstructor => {
             let s = node.as_variant::<JsonObjectConstructor>().expect("JsonObjectConstructor");
-            Node::mk(mcx, copy_JsonObjectConstructor(mcx, s)?)?
+            mkcopy_JsonObjectConstructor(mcx, s)?
         }
         NodeTag::T_JsonOutput => {
             let s = node.as_variant::<JsonOutput>().expect("JsonOutput");
-            Node::mk(mcx, copy_JsonOutput(mcx, s)?)?
+            mkcopy_JsonOutput(mcx, s)?
         }
         NodeTag::T_JsonParseExpr => {
             let s = node.as_variant::<JsonParseExpr>().expect("JsonParseExpr");
-            Node::mk(mcx, copy_JsonParseExpr(mcx, s)?)?
+            mkcopy_JsonParseExpr(mcx, s)?
         }
         NodeTag::T_JsonReturning => {
             let s = node.as_variant::<JsonReturning>().expect("JsonReturning");
-            Node::mk(mcx, copy_JsonReturning(mcx, s)?)?
+            mkcopy_JsonReturning(mcx, s)?
         }
         NodeTag::T_JsonScalarExpr => {
             let s = node.as_variant::<JsonScalarExpr>().expect("JsonScalarExpr");
-            Node::mk(mcx, copy_JsonScalarExpr(mcx, s)?)?
+            mkcopy_JsonScalarExpr(mcx, s)?
         }
         NodeTag::T_JsonSerializeExpr => {
             let s = node.as_variant::<JsonSerializeExpr>().expect("JsonSerializeExpr");
-            Node::mk(mcx, copy_JsonSerializeExpr(mcx, s)?)?
+            mkcopy_JsonSerializeExpr(mcx, s)?
         }
         NodeTag::T_JsonTable => {
             let s = node.as_variant::<JsonTable>().expect("JsonTable");
-            Node::mk(mcx, copy_JsonTable(mcx, s)?)?
+            mkcopy_JsonTable(mcx, s)?
         }
         NodeTag::T_JsonTableColumn => {
             let s = node.as_variant::<JsonTableColumn>().expect("JsonTableColumn");
-            Node::mk(mcx, copy_JsonTableColumn(mcx, s)?)?
+            mkcopy_JsonTableColumn(mcx, s)?
         }
         NodeTag::T_JsonTablePath => {
             let s = node.as_variant::<JsonTablePath>().expect("JsonTablePath");
-            Node::mk(mcx, copy_JsonTablePath(mcx, s)?)?
+            mkcopy_JsonTablePath(mcx, s)?
         }
         NodeTag::T_JsonTablePathScan => {
             let s = node.as_variant::<JsonTablePathScan>().expect("JsonTablePathScan");
-            Node::mk(mcx, copy_JsonTablePathScan(mcx, s)?)?
+            mkcopy_JsonTablePathScan(mcx, s)?
         }
         NodeTag::T_JsonTablePathSpec => {
             let s = node.as_variant::<JsonTablePathSpec>().expect("JsonTablePathSpec");
-            Node::mk(mcx, copy_JsonTablePathSpec(mcx, s)?)?
+            mkcopy_JsonTablePathSpec(mcx, s)?
         }
         NodeTag::T_JsonTableSiblingJoin => {
             let s = node.as_variant::<JsonTableSiblingJoin>().expect("JsonTableSiblingJoin");
-            Node::mk(mcx, copy_JsonTableSiblingJoin(mcx, s)?)?
+            mkcopy_JsonTableSiblingJoin(mcx, s)?
         }
         NodeTag::T_JsonValueExpr => {
             let s = node.as_variant::<JsonValueExpr>().expect("JsonValueExpr");
-            Node::mk(mcx, copy_JsonValueExpr(mcx, s)?)?
+            mkcopy_JsonValueExpr(mcx, s)?
         }
         NodeTag::T_Limit => {
             let s = node.as_variant::<Limit>().expect("Limit");
-            Node::mk(mcx, copy_Limit(mcx, s)?)?
+            mkcopy_Limit(mcx, s)?
         }
         NodeTag::T_ListenStmt => {
             let s = node.as_variant::<ListenStmt>().expect("ListenStmt");
-            Node::mk(mcx, copy_ListenStmt(mcx, s)?)?
+            mkcopy_ListenStmt(mcx, s)?
         }
         NodeTag::T_LoadStmt => {
             let s = node.as_variant::<LoadStmt>().expect("LoadStmt");
-            Node::mk(mcx, copy_LoadStmt(mcx, s)?)?
+            mkcopy_LoadStmt(mcx, s)?
         }
         NodeTag::T_LockRows => {
             let s = node.as_variant::<LockRows>().expect("LockRows");
-            Node::mk(mcx, copy_LockRows(mcx, s)?)?
+            mkcopy_LockRows(mcx, s)?
         }
         NodeTag::T_LockStmt => {
             let s = node.as_variant::<LockStmt>().expect("LockStmt");
-            Node::mk(mcx, copy_LockStmt(mcx, s)?)?
+            mkcopy_LockStmt(mcx, s)?
         }
         NodeTag::T_LockingClause => {
             let s = node.as_variant::<LockingClause>().expect("LockingClause");
-            Node::mk(mcx, copy_LockingClause(mcx, s)?)?
+            mkcopy_LockingClause(mcx, s)?
         }
         NodeTag::T_Material => {
             let s = node.as_variant::<Material>().expect("Material");
-            Node::mk(mcx, copy_Material(mcx, s)?)?
+            mkcopy_Material(mcx, s)?
         }
         NodeTag::T_Memoize => {
             let s = node.as_variant::<Memoize>().expect("Memoize");
-            Node::mk(mcx, copy_Memoize(mcx, s)?)?
+            mkcopy_Memoize(mcx, s)?
         }
         NodeTag::T_MergeAction => {
             let s = node.as_variant::<MergeAction>().expect("MergeAction");
-            Node::mk(mcx, copy_MergeAction(mcx, s)?)?
+            mkcopy_MergeAction(mcx, s)?
         }
         NodeTag::T_MergeAppend => {
             let s = node.as_variant::<MergeAppend>().expect("MergeAppend");
-            Node::mk(mcx, copy_MergeAppend(mcx, s)?)?
+            mkcopy_MergeAppend(mcx, s)?
         }
         NodeTag::T_MergeJoin => {
             let s = node.as_variant::<MergeJoin>().expect("MergeJoin");
-            Node::mk(mcx, copy_MergeJoin(mcx, s)?)?
+            mkcopy_MergeJoin(mcx, s)?
         }
         NodeTag::T_MergeStmt => {
             let s = node.as_variant::<MergeStmt>().expect("MergeStmt");
-            Node::mk(mcx, copy_MergeStmt(mcx, s)?)?
+            mkcopy_MergeStmt(mcx, s)?
         }
         NodeTag::T_MergeSupportFunc => {
             let s = node.as_variant::<MergeSupportFunc>().expect("MergeSupportFunc");
-            Node::mk(mcx, copy_MergeSupportFunc(mcx, s)?)?
+            mkcopy_MergeSupportFunc(mcx, s)?
         }
         NodeTag::T_MergeWhenClause => {
             let s = node.as_variant::<MergeWhenClause>().expect("MergeWhenClause");
-            Node::mk(mcx, copy_MergeWhenClause(mcx, s)?)?
+            mkcopy_MergeWhenClause(mcx, s)?
         }
         NodeTag::T_MinMaxExpr => {
             let s = node.as_variant::<MinMaxExpr>().expect("MinMaxExpr");
-            Node::mk(mcx, copy_MinMaxExpr(mcx, s)?)?
+            mkcopy_MinMaxExpr(mcx, s)?
         }
         NodeTag::T_ModifyTable => {
             let s = node.as_variant::<ModifyTable>().expect("ModifyTable");
-            Node::mk(mcx, copy_ModifyTable(mcx, s)?)?
+            mkcopy_ModifyTable(mcx, s)?
         }
         NodeTag::T_MultiAssignRef => {
             let s = node.as_variant::<MultiAssignRef>().expect("MultiAssignRef");
-            Node::mk(mcx, copy_MultiAssignRef(mcx, s)?)?
+            mkcopy_MultiAssignRef(mcx, s)?
         }
         NodeTag::T_NamedArgExpr => {
             let s = node.as_variant::<NamedArgExpr>().expect("NamedArgExpr");
-            Node::mk(mcx, copy_NamedArgExpr(mcx, s)?)?
+            mkcopy_NamedArgExpr(mcx, s)?
         }
         NodeTag::T_NamedTuplestoreScan => {
             let s = node.as_variant::<NamedTuplestoreScan>().expect("NamedTuplestoreScan");
-            Node::mk(mcx, copy_NamedTuplestoreScan(mcx, s)?)?
+            mkcopy_NamedTuplestoreScan(mcx, s)?
         }
         NodeTag::T_NestLoop => {
             let s = node.as_variant::<NestLoop>().expect("NestLoop");
-            Node::mk(mcx, copy_NestLoop(mcx, s)?)?
+            mkcopy_NestLoop(mcx, s)?
         }
         NodeTag::T_NestLoopParam => {
             let s = node.as_variant::<NestLoopParam>().expect("NestLoopParam");
-            Node::mk(mcx, copy_NestLoopParam(mcx, s)?)?
+            mkcopy_NestLoopParam(mcx, s)?
         }
         NodeTag::T_NextValueExpr => {
             let s = node.as_variant::<NextValueExpr>().expect("NextValueExpr");
-            Node::mk(mcx, copy_NextValueExpr(mcx, s)?)?
+            mkcopy_NextValueExpr(mcx, s)?
         }
         NodeTag::T_NotifyStmt => {
             let s = node.as_variant::<NotifyStmt>().expect("NotifyStmt");
-            Node::mk(mcx, copy_NotifyStmt(mcx, s)?)?
+            mkcopy_NotifyStmt(mcx, s)?
         }
         NodeTag::T_NullIfExpr => {
             let s = node.as_variant::<NullIfExpr>().expect("NullIfExpr");
-            Node::mk(mcx, copy_NullIfExpr(mcx, s)?)?
+            mkcopy_NullIfExpr(mcx, s)?
         }
         NodeTag::T_NullTest => {
             let s = node.as_variant::<NullTest>().expect("NullTest");
-            Node::mk(mcx, copy_NullTest(mcx, s)?)?
+            mkcopy_NullTest(mcx, s)?
         }
         NodeTag::T_ObjectWithArgs => {
             let s = node.as_variant::<ObjectWithArgs>().expect("ObjectWithArgs");
-            Node::mk(mcx, copy_ObjectWithArgs(mcx, s)?)?
+            mkcopy_ObjectWithArgs(mcx, s)?
         }
         NodeTag::T_OnConflictClause => {
             let s = node.as_variant::<OnConflictClause>().expect("OnConflictClause");
-            Node::mk(mcx, copy_OnConflictClause(mcx, s)?)?
+            mkcopy_OnConflictClause(mcx, s)?
         }
         NodeTag::T_OnConflictExpr => {
             let s = node.as_variant::<OnConflictExpr>().expect("OnConflictExpr");
-            Node::mk(mcx, copy_OnConflictExpr(mcx, s)?)?
+            mkcopy_OnConflictExpr(mcx, s)?
         }
         NodeTag::T_OpExpr => {
             let s = node.as_variant::<OpExpr>().expect("OpExpr");
-            Node::mk(mcx, copy_OpExpr(mcx, s)?)?
+            mkcopy_OpExpr(mcx, s)?
         }
         NodeTag::T_PLAssignStmt => {
             let s = node.as_variant::<PLAssignStmt>().expect("PLAssignStmt");
-            Node::mk(mcx, copy_PLAssignStmt(mcx, s)?)?
+            mkcopy_PLAssignStmt(mcx, s)?
         }
         NodeTag::T_Param => {
             let s = node.as_variant::<Param>().expect("Param");
-            Node::mk(mcx, copy_Param(mcx, s)?)?
+            mkcopy_Param(mcx, s)?
         }
         NodeTag::T_ParamRef => {
             let s = node.as_variant::<ParamRef>().expect("ParamRef");
-            Node::mk(mcx, copy_ParamRef(mcx, s)?)?
+            mkcopy_ParamRef(mcx, s)?
         }
         NodeTag::T_PartitionBoundSpec => {
             let s = node.as_variant::<PartitionBoundSpec>().expect("PartitionBoundSpec");
-            Node::mk(mcx, copy_PartitionBoundSpec(mcx, s)?)?
+            mkcopy_PartitionBoundSpec(mcx, s)?
         }
         NodeTag::T_PartitionCmd => {
             let s = node.as_variant::<PartitionCmd>().expect("PartitionCmd");
-            Node::mk(mcx, copy_PartitionCmd(mcx, s)?)?
+            mkcopy_PartitionCmd(mcx, s)?
         }
         NodeTag::T_PartitionElem => {
             let s = node.as_variant::<PartitionElem>().expect("PartitionElem");
-            Node::mk(mcx, copy_PartitionElem(mcx, s)?)?
+            mkcopy_PartitionElem(mcx, s)?
         }
         NodeTag::T_PartitionPruneInfo => {
             let s = node.as_variant::<PartitionPruneInfo>().expect("PartitionPruneInfo");
-            Node::mk(mcx, copy_PartitionPruneInfo(mcx, s)?)?
+            mkcopy_PartitionPruneInfo(mcx, s)?
         }
         NodeTag::T_PartitionPruneStepCombine => {
             let s = node.as_variant::<PartitionPruneStepCombine>().expect("PartitionPruneStepCombine");
-            Node::mk(mcx, copy_PartitionPruneStepCombine(mcx, s)?)?
+            mkcopy_PartitionPruneStepCombine(mcx, s)?
         }
         NodeTag::T_PartitionPruneStepOp => {
             let s = node.as_variant::<PartitionPruneStepOp>().expect("PartitionPruneStepOp");
-            Node::mk(mcx, copy_PartitionPruneStepOp(mcx, s)?)?
+            mkcopy_PartitionPruneStepOp(mcx, s)?
         }
         NodeTag::T_PartitionRangeDatum => {
             let s = node.as_variant::<PartitionRangeDatum>().expect("PartitionRangeDatum");
-            Node::mk(mcx, copy_PartitionRangeDatum(mcx, s)?)?
+            mkcopy_PartitionRangeDatum(mcx, s)?
         }
         NodeTag::T_PartitionSpec => {
             let s = node.as_variant::<PartitionSpec>().expect("PartitionSpec");
-            Node::mk(mcx, copy_PartitionSpec(mcx, s)?)?
+            mkcopy_PartitionSpec(mcx, s)?
         }
         NodeTag::T_PartitionedRelPruneInfo => {
             let s = node.as_variant::<PartitionedRelPruneInfo>().expect("PartitionedRelPruneInfo");
-            Node::mk(mcx, copy_PartitionedRelPruneInfo(mcx, s)?)?
+            mkcopy_PartitionedRelPruneInfo(mcx, s)?
         }
         NodeTag::T_PlaceHolderVar => {
             let s = node.as_variant::<PlaceHolderVar>().expect("PlaceHolderVar");
-            Node::mk(mcx, copy_PlaceHolderVar(mcx, s)?)?
+            mkcopy_PlaceHolderVar(mcx, s)?
         }
         NodeTag::T_PlanInvalItem => {
             let s = node.as_variant::<PlanInvalItem>().expect("PlanInvalItem");
-            Node::mk(mcx, copy_PlanInvalItem(mcx, s)?)?
+            mkcopy_PlanInvalItem(mcx, s)?
         }
         NodeTag::T_PlanRowMark => {
             let s = node.as_variant::<PlanRowMark>().expect("PlanRowMark");
-            Node::mk(mcx, copy_PlanRowMark(mcx, s)?)?
+            mkcopy_PlanRowMark(mcx, s)?
         }
         NodeTag::T_PlannedStmt => {
             let s = node.as_variant::<PlannedStmt>().expect("PlannedStmt");
-            Node::mk(mcx, copy_PlannedStmt(mcx, s)?)?
+            mkcopy_PlannedStmt(mcx, s)?
         }
         NodeTag::T_PrepareStmt => {
             let s = node.as_variant::<PrepareStmt>().expect("PrepareStmt");
-            Node::mk(mcx, copy_PrepareStmt(mcx, s)?)?
+            mkcopy_PrepareStmt(mcx, s)?
         }
         NodeTag::T_ProjectSet => {
             let s = node.as_variant::<ProjectSet>().expect("ProjectSet");
-            Node::mk(mcx, copy_ProjectSet(mcx, s)?)?
+            mkcopy_ProjectSet(mcx, s)?
         }
         NodeTag::T_PublicationObjSpec => {
             let s = node.as_variant::<PublicationObjSpec>().expect("PublicationObjSpec");
-            Node::mk(mcx, copy_PublicationObjSpec(mcx, s)?)?
+            mkcopy_PublicationObjSpec(mcx, s)?
         }
         NodeTag::T_PublicationTable => {
             let s = node.as_variant::<PublicationTable>().expect("PublicationTable");
-            Node::mk(mcx, copy_PublicationTable(mcx, s)?)?
+            mkcopy_PublicationTable(mcx, s)?
         }
         NodeTag::T_Query => {
             let s = node.as_variant::<Query>().expect("Query");
-            Node::mk(mcx, copy_Query(mcx, s)?)?
+            mkcopy_Query(mcx, s)?
         }
         NodeTag::T_RTEPermissionInfo => {
             let s = node.as_variant::<RTEPermissionInfo>().expect("RTEPermissionInfo");
-            Node::mk(mcx, copy_RTEPermissionInfo(mcx, s)?)?
+            mkcopy_RTEPermissionInfo(mcx, s)?
         }
         NodeTag::T_RangeFunction => {
             let s = node.as_variant::<RangeFunction>().expect("RangeFunction");
-            Node::mk(mcx, copy_RangeFunction(mcx, s)?)?
+            mkcopy_RangeFunction(mcx, s)?
         }
         NodeTag::T_RangeSubselect => {
             let s = node.as_variant::<RangeSubselect>().expect("RangeSubselect");
-            Node::mk(mcx, copy_RangeSubselect(mcx, s)?)?
+            mkcopy_RangeSubselect(mcx, s)?
         }
         NodeTag::T_RangeTableFunc => {
             let s = node.as_variant::<RangeTableFunc>().expect("RangeTableFunc");
-            Node::mk(mcx, copy_RangeTableFunc(mcx, s)?)?
+            mkcopy_RangeTableFunc(mcx, s)?
         }
         NodeTag::T_RangeTableFuncCol => {
             let s = node.as_variant::<RangeTableFuncCol>().expect("RangeTableFuncCol");
-            Node::mk(mcx, copy_RangeTableFuncCol(mcx, s)?)?
+            mkcopy_RangeTableFuncCol(mcx, s)?
         }
         NodeTag::T_RangeTableSample => {
             let s = node.as_variant::<RangeTableSample>().expect("RangeTableSample");
-            Node::mk(mcx, copy_RangeTableSample(mcx, s)?)?
+            mkcopy_RangeTableSample(mcx, s)?
         }
         NodeTag::T_RangeTblEntry => {
             let s = node.as_variant::<RangeTblEntry>().expect("RangeTblEntry");
-            Node::mk(mcx, copy_RangeTblEntry(mcx, s)?)?
+            mkcopy_RangeTblEntry(mcx, s)?
         }
         NodeTag::T_RangeTblFunction => {
             let s = node.as_variant::<RangeTblFunction>().expect("RangeTblFunction");
-            Node::mk(mcx, copy_RangeTblFunction(mcx, s)?)?
+            mkcopy_RangeTblFunction(mcx, s)?
         }
         NodeTag::T_RangeTblRef => {
             let s = node.as_variant::<RangeTblRef>().expect("RangeTblRef");
-            Node::mk(mcx, copy_RangeTblRef(mcx, s)?)?
+            mkcopy_RangeTblRef(mcx, s)?
         }
         NodeTag::T_RangeVar => {
             let s = node.as_variant::<RangeVar>().expect("RangeVar");
-            Node::mk(mcx, copy_RangeVar(mcx, s)?)?
+            mkcopy_RangeVar(mcx, s)?
         }
         NodeTag::T_RawStmt => {
             let s = node.as_variant::<RawStmt>().expect("RawStmt");
-            Node::mk(mcx, copy_RawStmt(mcx, s)?)?
+            mkcopy_RawStmt(mcx, s)?
         }
         NodeTag::T_ReassignOwnedStmt => {
             let s = node.as_variant::<ReassignOwnedStmt>().expect("ReassignOwnedStmt");
-            Node::mk(mcx, copy_ReassignOwnedStmt(mcx, s)?)?
+            mkcopy_ReassignOwnedStmt(mcx, s)?
         }
         NodeTag::T_RecursiveUnion => {
             let s = node.as_variant::<RecursiveUnion>().expect("RecursiveUnion");
-            Node::mk(mcx, copy_RecursiveUnion(mcx, s)?)?
+            mkcopy_RecursiveUnion(mcx, s)?
         }
         NodeTag::T_RefreshMatViewStmt => {
             let s = node.as_variant::<RefreshMatViewStmt>().expect("RefreshMatViewStmt");
-            Node::mk(mcx, copy_RefreshMatViewStmt(mcx, s)?)?
+            mkcopy_RefreshMatViewStmt(mcx, s)?
         }
         NodeTag::T_ReindexStmt => {
             let s = node.as_variant::<ReindexStmt>().expect("ReindexStmt");
-            Node::mk(mcx, copy_ReindexStmt(mcx, s)?)?
+            mkcopy_ReindexStmt(mcx, s)?
         }
         NodeTag::T_RelabelType => {
             let s = node.as_variant::<RelabelType>().expect("RelabelType");
-            Node::mk(mcx, copy_RelabelType(mcx, s)?)?
+            mkcopy_RelabelType(mcx, s)?
         }
         NodeTag::T_RenameStmt => {
             let s = node.as_variant::<RenameStmt>().expect("RenameStmt");
-            Node::mk(mcx, copy_RenameStmt(mcx, s)?)?
+            mkcopy_RenameStmt(mcx, s)?
         }
         NodeTag::T_ReplicaIdentityStmt => {
             let s = node.as_variant::<ReplicaIdentityStmt>().expect("ReplicaIdentityStmt");
-            Node::mk(mcx, copy_ReplicaIdentityStmt(mcx, s)?)?
+            mkcopy_ReplicaIdentityStmt(mcx, s)?
         }
         NodeTag::T_ResTarget => {
             let s = node.as_variant::<ResTarget>().expect("ResTarget");
-            Node::mk(mcx, copy_ResTarget(mcx, s)?)?
+            mkcopy_ResTarget(mcx, s)?
         }
         NodeTag::T_Result => {
             let s = node.as_variant::<Result>().expect("Result");
-            Node::mk(mcx, copy_Result(mcx, s)?)?
+            mkcopy_Result(mcx, s)?
         }
         NodeTag::T_ReturnStmt => {
             let s = node.as_variant::<ReturnStmt>().expect("ReturnStmt");
-            Node::mk(mcx, copy_ReturnStmt(mcx, s)?)?
+            mkcopy_ReturnStmt(mcx, s)?
         }
         NodeTag::T_ReturningClause => {
             let s = node.as_variant::<ReturningClause>().expect("ReturningClause");
-            Node::mk(mcx, copy_ReturningClause(mcx, s)?)?
+            mkcopy_ReturningClause(mcx, s)?
         }
         NodeTag::T_ReturningExpr => {
             let s = node.as_variant::<ReturningExpr>().expect("ReturningExpr");
-            Node::mk(mcx, copy_ReturningExpr(mcx, s)?)?
+            mkcopy_ReturningExpr(mcx, s)?
         }
         NodeTag::T_ReturningOption => {
             let s = node.as_variant::<ReturningOption>().expect("ReturningOption");
-            Node::mk(mcx, copy_ReturningOption(mcx, s)?)?
+            mkcopy_ReturningOption(mcx, s)?
         }
         NodeTag::T_RoleSpec => {
             let s = node.as_variant::<RoleSpec>().expect("RoleSpec");
-            Node::mk(mcx, copy_RoleSpec(mcx, s)?)?
+            mkcopy_RoleSpec(mcx, s)?
         }
         NodeTag::T_RowCompareExpr => {
             let s = node.as_variant::<RowCompareExpr>().expect("RowCompareExpr");
-            Node::mk(mcx, copy_RowCompareExpr(mcx, s)?)?
+            mkcopy_RowCompareExpr(mcx, s)?
         }
         NodeTag::T_RowExpr => {
             let s = node.as_variant::<RowExpr>().expect("RowExpr");
-            Node::mk(mcx, copy_RowExpr(mcx, s)?)?
+            mkcopy_RowExpr(mcx, s)?
         }
         NodeTag::T_RowMarkClause => {
             let s = node.as_variant::<RowMarkClause>().expect("RowMarkClause");
-            Node::mk(mcx, copy_RowMarkClause(mcx, s)?)?
+            mkcopy_RowMarkClause(mcx, s)?
         }
         NodeTag::T_RuleStmt => {
             let s = node.as_variant::<RuleStmt>().expect("RuleStmt");
-            Node::mk(mcx, copy_RuleStmt(mcx, s)?)?
+            mkcopy_RuleStmt(mcx, s)?
         }
         NodeTag::T_SQLValueFunction => {
             let s = node.as_variant::<SQLValueFunction>().expect("SQLValueFunction");
-            Node::mk(mcx, copy_SQLValueFunction(mcx, s)?)?
+            mkcopy_SQLValueFunction(mcx, s)?
         }
         NodeTag::T_SampleScan => {
             let s = node.as_variant::<SampleScan>().expect("SampleScan");
-            Node::mk(mcx, copy_SampleScan(mcx, s)?)?
+            mkcopy_SampleScan(mcx, s)?
         }
         NodeTag::T_ScalarArrayOpExpr => {
             let s = node.as_variant::<ScalarArrayOpExpr>().expect("ScalarArrayOpExpr");
-            Node::mk(mcx, copy_ScalarArrayOpExpr(mcx, s)?)?
+            mkcopy_ScalarArrayOpExpr(mcx, s)?
         }
         NodeTag::T_SecLabelStmt => {
             let s = node.as_variant::<SecLabelStmt>().expect("SecLabelStmt");
-            Node::mk(mcx, copy_SecLabelStmt(mcx, s)?)?
+            mkcopy_SecLabelStmt(mcx, s)?
         }
         NodeTag::T_SelectStmt => {
             let s = node.as_variant::<SelectStmt>().expect("SelectStmt");
-            Node::mk(mcx, copy_SelectStmt(mcx, s)?)?
+            mkcopy_SelectStmt(mcx, s)?
         }
         NodeTag::T_SeqScan => {
             let s = node.as_variant::<SeqScan>().expect("SeqScan");
-            Node::mk(mcx, copy_SeqScan(mcx, s)?)?
+            mkcopy_SeqScan(mcx, s)?
         }
         NodeTag::T_SetOp => {
             let s = node.as_variant::<SetOp>().expect("SetOp");
-            Node::mk(mcx, copy_SetOp(mcx, s)?)?
+            mkcopy_SetOp(mcx, s)?
         }
         NodeTag::T_SetOperationStmt => {
             let s = node.as_variant::<SetOperationStmt>().expect("SetOperationStmt");
-            Node::mk(mcx, copy_SetOperationStmt(mcx, s)?)?
+            mkcopy_SetOperationStmt(mcx, s)?
         }
         NodeTag::T_SetToDefault => {
             let s = node.as_variant::<SetToDefault>().expect("SetToDefault");
-            Node::mk(mcx, copy_SetToDefault(mcx, s)?)?
+            mkcopy_SetToDefault(mcx, s)?
         }
         NodeTag::T_Sort => {
             let s = node.as_variant::<Sort>().expect("Sort");
-            Node::mk(mcx, copy_Sort(mcx, s)?)?
+            mkcopy_Sort(mcx, s)?
         }
         NodeTag::T_SortBy => {
             let s = node.as_variant::<SortBy>().expect("SortBy");
-            Node::mk(mcx, copy_SortBy(mcx, s)?)?
+            mkcopy_SortBy(mcx, s)?
         }
         NodeTag::T_SortGroupClause => {
             let s = node.as_variant::<SortGroupClause>().expect("SortGroupClause");
-            Node::mk(mcx, copy_SortGroupClause(mcx, s)?)?
+            mkcopy_SortGroupClause(mcx, s)?
         }
         NodeTag::T_StatsElem => {
             let s = node.as_variant::<StatsElem>().expect("StatsElem");
-            Node::mk(mcx, copy_StatsElem(mcx, s)?)?
+            mkcopy_StatsElem(mcx, s)?
         }
         NodeTag::T_SubLink => {
             let s = node.as_variant::<SubLink>().expect("SubLink");
-            Node::mk(mcx, copy_SubLink(mcx, s)?)?
+            mkcopy_SubLink(mcx, s)?
         }
         NodeTag::T_SubPlan => {
             let s = node.as_variant::<SubPlan>().expect("SubPlan");
-            Node::mk(mcx, copy_SubPlan(mcx, s)?)?
+            mkcopy_SubPlan(mcx, s)?
         }
         NodeTag::T_SubqueryScan => {
             let s = node.as_variant::<SubqueryScan>().expect("SubqueryScan");
-            Node::mk(mcx, copy_SubqueryScan(mcx, s)?)?
+            mkcopy_SubqueryScan(mcx, s)?
         }
         NodeTag::T_SubscriptingRef => {
             let s = node.as_variant::<SubscriptingRef>().expect("SubscriptingRef");
-            Node::mk(mcx, copy_SubscriptingRef(mcx, s)?)?
+            mkcopy_SubscriptingRef(mcx, s)?
         }
         NodeTag::T_TableFunc => {
             let s = node.as_variant::<TableFunc>().expect("TableFunc");
-            Node::mk(mcx, copy_TableFunc(mcx, s)?)?
+            mkcopy_TableFunc(mcx, s)?
         }
         NodeTag::T_TableFuncScan => {
             let s = node.as_variant::<TableFuncScan>().expect("TableFuncScan");
-            Node::mk(mcx, copy_TableFuncScan(mcx, s)?)?
+            mkcopy_TableFuncScan(mcx, s)?
         }
         NodeTag::T_TableLikeClause => {
             let s = node.as_variant::<TableLikeClause>().expect("TableLikeClause");
-            Node::mk(mcx, copy_TableLikeClause(mcx, s)?)?
+            mkcopy_TableLikeClause(mcx, s)?
         }
         NodeTag::T_TableSampleClause => {
             let s = node.as_variant::<TableSampleClause>().expect("TableSampleClause");
-            Node::mk(mcx, copy_TableSampleClause(mcx, s)?)?
+            mkcopy_TableSampleClause(mcx, s)?
         }
         NodeTag::T_TargetEntry => {
             let s = node.as_variant::<TargetEntry>().expect("TargetEntry");
-            Node::mk(mcx, copy_TargetEntry(mcx, s)?)?
+            mkcopy_TargetEntry(mcx, s)?
         }
         NodeTag::T_TidRangeScan => {
             let s = node.as_variant::<TidRangeScan>().expect("TidRangeScan");
-            Node::mk(mcx, copy_TidRangeScan(mcx, s)?)?
+            mkcopy_TidRangeScan(mcx, s)?
         }
         NodeTag::T_TidScan => {
             let s = node.as_variant::<TidScan>().expect("TidScan");
-            Node::mk(mcx, copy_TidScan(mcx, s)?)?
+            mkcopy_TidScan(mcx, s)?
         }
         NodeTag::T_TransactionStmt => {
             let s = node.as_variant::<TransactionStmt>().expect("TransactionStmt");
-            Node::mk(mcx, copy_TransactionStmt(mcx, s)?)?
+            mkcopy_TransactionStmt(mcx, s)?
         }
         NodeTag::T_TriggerTransition => {
             let s = node.as_variant::<TriggerTransition>().expect("TriggerTransition");
-            Node::mk(mcx, copy_TriggerTransition(mcx, s)?)?
+            mkcopy_TriggerTransition(mcx, s)?
         }
         NodeTag::T_TruncateStmt => {
             let s = node.as_variant::<TruncateStmt>().expect("TruncateStmt");
-            Node::mk(mcx, copy_TruncateStmt(mcx, s)?)?
+            mkcopy_TruncateStmt(mcx, s)?
         }
         NodeTag::T_TypeCast => {
             let s = node.as_variant::<TypeCast>().expect("TypeCast");
-            Node::mk(mcx, copy_TypeCast(mcx, s)?)?
+            mkcopy_TypeCast(mcx, s)?
         }
         NodeTag::T_TypeName => {
             let s = node.as_variant::<TypeName>().expect("TypeName");
-            Node::mk(mcx, copy_TypeName(mcx, s)?)?
+            mkcopy_TypeName(mcx, s)?
         }
         NodeTag::T_Unique => {
             let s = node.as_variant::<Unique>().expect("Unique");
-            Node::mk(mcx, copy_Unique(mcx, s)?)?
+            mkcopy_Unique(mcx, s)?
         }
         NodeTag::T_UnlistenStmt => {
             let s = node.as_variant::<UnlistenStmt>().expect("UnlistenStmt");
-            Node::mk(mcx, copy_UnlistenStmt(mcx, s)?)?
+            mkcopy_UnlistenStmt(mcx, s)?
         }
         NodeTag::T_UpdateStmt => {
             let s = node.as_variant::<UpdateStmt>().expect("UpdateStmt");
-            Node::mk(mcx, copy_UpdateStmt(mcx, s)?)?
+            mkcopy_UpdateStmt(mcx, s)?
         }
         NodeTag::T_VacuumRelation => {
             let s = node.as_variant::<VacuumRelation>().expect("VacuumRelation");
-            Node::mk(mcx, copy_VacuumRelation(mcx, s)?)?
+            mkcopy_VacuumRelation(mcx, s)?
         }
         NodeTag::T_VacuumStmt => {
             let s = node.as_variant::<VacuumStmt>().expect("VacuumStmt");
-            Node::mk(mcx, copy_VacuumStmt(mcx, s)?)?
+            mkcopy_VacuumStmt(mcx, s)?
         }
         NodeTag::T_ValuesScan => {
             let s = node.as_variant::<ValuesScan>().expect("ValuesScan");
-            Node::mk(mcx, copy_ValuesScan(mcx, s)?)?
+            mkcopy_ValuesScan(mcx, s)?
         }
         NodeTag::T_Var => {
             let s = node.as_variant::<Var>().expect("Var");
-            Node::mk(mcx, copy_Var(mcx, s)?)?
+            mkcopy_Var(mcx, s)?
         }
         NodeTag::T_VariableSetStmt => {
             let s = node.as_variant::<VariableSetStmt>().expect("VariableSetStmt");
-            Node::mk(mcx, copy_VariableSetStmt(mcx, s)?)?
+            mkcopy_VariableSetStmt(mcx, s)?
         }
         NodeTag::T_VariableShowStmt => {
             let s = node.as_variant::<VariableShowStmt>().expect("VariableShowStmt");
-            Node::mk(mcx, copy_VariableShowStmt(mcx, s)?)?
+            mkcopy_VariableShowStmt(mcx, s)?
         }
         NodeTag::T_ViewStmt => {
             let s = node.as_variant::<ViewStmt>().expect("ViewStmt");
-            Node::mk(mcx, copy_ViewStmt(mcx, s)?)?
+            mkcopy_ViewStmt(mcx, s)?
         }
         NodeTag::T_WindowAgg => {
             let s = node.as_variant::<WindowAgg>().expect("WindowAgg");
-            Node::mk(mcx, copy_WindowAgg(mcx, s)?)?
+            mkcopy_WindowAgg(mcx, s)?
         }
         NodeTag::T_WindowClause => {
             let s = node.as_variant::<WindowClause>().expect("WindowClause");
-            Node::mk(mcx, copy_WindowClause(mcx, s)?)?
+            mkcopy_WindowClause(mcx, s)?
         }
         NodeTag::T_WindowDef => {
             let s = node.as_variant::<WindowDef>().expect("WindowDef");
-            Node::mk(mcx, copy_WindowDef(mcx, s)?)?
+            mkcopy_WindowDef(mcx, s)?
         }
         NodeTag::T_WindowFunc => {
             let s = node.as_variant::<WindowFunc>().expect("WindowFunc");
-            Node::mk(mcx, copy_WindowFunc(mcx, s)?)?
+            mkcopy_WindowFunc(mcx, s)?
         }
         NodeTag::T_WindowFuncRunCondition => {
             let s = node.as_variant::<WindowFuncRunCondition>().expect("WindowFuncRunCondition");
-            Node::mk(mcx, copy_WindowFuncRunCondition(mcx, s)?)?
+            mkcopy_WindowFuncRunCondition(mcx, s)?
         }
         NodeTag::T_WithCheckOption => {
             let s = node.as_variant::<WithCheckOption>().expect("WithCheckOption");
-            Node::mk(mcx, copy_WithCheckOption(mcx, s)?)?
+            mkcopy_WithCheckOption(mcx, s)?
         }
         NodeTag::T_WithClause => {
             let s = node.as_variant::<WithClause>().expect("WithClause");
-            Node::mk(mcx, copy_WithClause(mcx, s)?)?
+            mkcopy_WithClause(mcx, s)?
         }
         NodeTag::T_WorkTableScan => {
             let s = node.as_variant::<WorkTableScan>().expect("WorkTableScan");
-            Node::mk(mcx, copy_WorkTableScan(mcx, s)?)?
+            mkcopy_WorkTableScan(mcx, s)?
         }
         NodeTag::T_XmlExpr => {
             let s = node.as_variant::<XmlExpr>().expect("XmlExpr");
-            Node::mk(mcx, copy_XmlExpr(mcx, s)?)?
+            mkcopy_XmlExpr(mcx, s)?
         }
         NodeTag::T_XmlSerialize => {
             let s = node.as_variant::<XmlSerialize>().expect("XmlSerialize");
-            Node::mk(mcx, copy_XmlSerialize(mcx, s)?)?
+            mkcopy_XmlSerialize(mcx, s)?
         }
         _ => return Ok(None),
     };
     Ok(Some(copy))
 }
+
+
+#[inline(never)]
+fn mkcopy_ATAlterConstraint<'d>(mcx: Mcx<'d>, s: &ATAlterConstraint<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ATAlterConstraint(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_A_ArrayExpr<'d>(mcx: Mcx<'d>, s: &A_ArrayExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_A_ArrayExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_A_Expr<'d>(mcx: Mcx<'d>, s: &A_Expr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_A_Expr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_A_Indices<'d>(mcx: Mcx<'d>, s: &A_Indices<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_A_Indices(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_A_Indirection<'d>(mcx: Mcx<'d>, s: &A_Indirection<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_A_Indirection(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AccessPriv<'d>(mcx: Mcx<'d>, s: &AccessPriv<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AccessPriv(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Agg<'d>(mcx: Mcx<'d>, s: &Agg<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Agg(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Aggref<'d>(mcx: Mcx<'d>, s: &Aggref<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Aggref(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Alias<'d>(mcx: Mcx<'d>, s: &Alias<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Alias(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterCollationStmt<'d>(mcx: Mcx<'d>, s: &AlterCollationStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterCollationStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterDatabaseRefreshCollStmt<'d>(mcx: Mcx<'d>, s: &AlterDatabaseRefreshCollStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterDatabaseRefreshCollStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterDatabaseSetStmt<'d>(mcx: Mcx<'d>, s: &AlterDatabaseSetStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterDatabaseSetStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterDatabaseStmt<'d>(mcx: Mcx<'d>, s: &AlterDatabaseStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterDatabaseStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterDefaultPrivilegesStmt<'d>(mcx: Mcx<'d>, s: &AlterDefaultPrivilegesStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterDefaultPrivilegesStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterDomainStmt<'d>(mcx: Mcx<'d>, s: &AlterDomainStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterDomainStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterEnumStmt<'d>(mcx: Mcx<'d>, s: &AlterEnumStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterEnumStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterEventTrigStmt<'d>(mcx: Mcx<'d>, s: &AlterEventTrigStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterEventTrigStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterExtensionContentsStmt<'d>(mcx: Mcx<'d>, s: &AlterExtensionContentsStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterExtensionContentsStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterExtensionStmt<'d>(mcx: Mcx<'d>, s: &AlterExtensionStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterExtensionStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterFdwStmt<'d>(mcx: Mcx<'d>, s: &AlterFdwStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterFdwStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterForeignServerStmt<'d>(mcx: Mcx<'d>, s: &AlterForeignServerStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterForeignServerStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterFunctionStmt<'d>(mcx: Mcx<'d>, s: &AlterFunctionStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterFunctionStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterObjectDependsStmt<'d>(mcx: Mcx<'d>, s: &AlterObjectDependsStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterObjectDependsStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterObjectSchemaStmt<'d>(mcx: Mcx<'d>, s: &AlterObjectSchemaStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterObjectSchemaStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterOpFamilyStmt<'d>(mcx: Mcx<'d>, s: &AlterOpFamilyStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterOpFamilyStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterOperatorStmt<'d>(mcx: Mcx<'d>, s: &AlterOperatorStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterOperatorStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterOwnerStmt<'d>(mcx: Mcx<'d>, s: &AlterOwnerStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterOwnerStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterPolicyStmt<'d>(mcx: Mcx<'d>, s: &AlterPolicyStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterPolicyStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterPublicationStmt<'d>(mcx: Mcx<'d>, s: &AlterPublicationStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterPublicationStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterRoleSetStmt<'d>(mcx: Mcx<'d>, s: &AlterRoleSetStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterRoleSetStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterRoleStmt<'d>(mcx: Mcx<'d>, s: &AlterRoleStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterRoleStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterSeqStmt<'d>(mcx: Mcx<'d>, s: &AlterSeqStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterSeqStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterStatsStmt<'d>(mcx: Mcx<'d>, s: &AlterStatsStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterStatsStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterSubscriptionStmt<'d>(mcx: Mcx<'d>, s: &AlterSubscriptionStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterSubscriptionStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterSystemStmt<'d>(mcx: Mcx<'d>, s: &AlterSystemStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterSystemStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterTSConfigurationStmt<'d>(mcx: Mcx<'d>, s: &AlterTSConfigurationStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterTSConfigurationStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterTSDictionaryStmt<'d>(mcx: Mcx<'d>, s: &AlterTSDictionaryStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterTSDictionaryStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterTableCmd<'d>(mcx: Mcx<'d>, s: &AlterTableCmd<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterTableCmd(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterTableMoveAllStmt<'d>(mcx: Mcx<'d>, s: &AlterTableMoveAllStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterTableMoveAllStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterTableSpaceOptionsStmt<'d>(mcx: Mcx<'d>, s: &AlterTableSpaceOptionsStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterTableSpaceOptionsStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterTableStmt<'d>(mcx: Mcx<'d>, s: &AlterTableStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterTableStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterTypeStmt<'d>(mcx: Mcx<'d>, s: &AlterTypeStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterTypeStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlterUserMappingStmt<'d>(mcx: Mcx<'d>, s: &AlterUserMappingStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlterUserMappingStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AlternativeSubPlan<'d>(mcx: Mcx<'d>, s: &AlternativeSubPlan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AlternativeSubPlan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Append<'d>(mcx: Mcx<'d>, s: &Append<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Append(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_AppendRelInfo<'d>(mcx: Mcx<'d>, s: &AppendRelInfo<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_AppendRelInfo(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ArrayCoerceExpr<'d>(mcx: Mcx<'d>, s: &ArrayCoerceExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ArrayCoerceExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ArrayExpr<'d>(mcx: Mcx<'d>, s: &ArrayExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ArrayExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_BitmapAnd<'d>(mcx: Mcx<'d>, s: &BitmapAnd<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_BitmapAnd(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_BitmapHeapScan<'d>(mcx: Mcx<'d>, s: &BitmapHeapScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_BitmapHeapScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_BitmapIndexScan<'d>(mcx: Mcx<'d>, s: &BitmapIndexScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_BitmapIndexScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_BitmapOr<'d>(mcx: Mcx<'d>, s: &BitmapOr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_BitmapOr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_BoolExpr<'d>(mcx: Mcx<'d>, s: &BoolExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_BoolExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_BooleanTest<'d>(mcx: Mcx<'d>, s: &BooleanTest<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_BooleanTest(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CTECycleClause<'d>(mcx: Mcx<'d>, s: &CTECycleClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CTECycleClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CTESearchClause<'d>(mcx: Mcx<'d>, s: &CTESearchClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CTESearchClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CallStmt<'d>(mcx: Mcx<'d>, s: &CallStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CallStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CaseExpr<'d>(mcx: Mcx<'d>, s: &CaseExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CaseExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CaseTestExpr<'d>(mcx: Mcx<'d>, s: &CaseTestExpr) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CaseTestExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CaseWhen<'d>(mcx: Mcx<'d>, s: &CaseWhen<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CaseWhen(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CheckPointStmt<'d>(mcx: Mcx<'d>, s: &CheckPointStmt) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CheckPointStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ClosePortalStmt<'d>(mcx: Mcx<'d>, s: &ClosePortalStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ClosePortalStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ClusterStmt<'d>(mcx: Mcx<'d>, s: &ClusterStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ClusterStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CoalesceExpr<'d>(mcx: Mcx<'d>, s: &CoalesceExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CoalesceExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CoerceToDomain<'d>(mcx: Mcx<'d>, s: &CoerceToDomain<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CoerceToDomain(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CoerceToDomainValue<'d>(mcx: Mcx<'d>, s: &CoerceToDomainValue) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CoerceToDomainValue(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CoerceViaIO<'d>(mcx: Mcx<'d>, s: &CoerceViaIO<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CoerceViaIO(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CollateClause<'d>(mcx: Mcx<'d>, s: &CollateClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CollateClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CollateExpr<'d>(mcx: Mcx<'d>, s: &CollateExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CollateExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ColumnDef<'d>(mcx: Mcx<'d>, s: &ColumnDef<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ColumnDef(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ColumnRef<'d>(mcx: Mcx<'d>, s: &ColumnRef<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ColumnRef(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CommentStmt<'d>(mcx: Mcx<'d>, s: &CommentStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CommentStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CommonTableExpr<'d>(mcx: Mcx<'d>, s: &CommonTableExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CommonTableExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CompositeTypeStmt<'d>(mcx: Mcx<'d>, s: &CompositeTypeStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CompositeTypeStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Constraint<'d>(mcx: Mcx<'d>, s: &Constraint<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Constraint(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ConstraintsSetStmt<'d>(mcx: Mcx<'d>, s: &ConstraintsSetStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ConstraintsSetStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ConvertRowtypeExpr<'d>(mcx: Mcx<'d>, s: &ConvertRowtypeExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ConvertRowtypeExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CopyStmt<'d>(mcx: Mcx<'d>, s: &CopyStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CopyStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateAmStmt<'d>(mcx: Mcx<'d>, s: &CreateAmStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateAmStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateCastStmt<'d>(mcx: Mcx<'d>, s: &CreateCastStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateCastStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateConversionStmt<'d>(mcx: Mcx<'d>, s: &CreateConversionStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateConversionStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateDomainStmt<'d>(mcx: Mcx<'d>, s: &CreateDomainStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateDomainStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateEnumStmt<'d>(mcx: Mcx<'d>, s: &CreateEnumStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateEnumStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateEventTrigStmt<'d>(mcx: Mcx<'d>, s: &CreateEventTrigStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateEventTrigStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateExtensionStmt<'d>(mcx: Mcx<'d>, s: &CreateExtensionStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateExtensionStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateFdwStmt<'d>(mcx: Mcx<'d>, s: &CreateFdwStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateFdwStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateForeignServerStmt<'d>(mcx: Mcx<'d>, s: &CreateForeignServerStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateForeignServerStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateForeignTableStmt<'d>(mcx: Mcx<'d>, s: &CreateForeignTableStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateForeignTableStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateFunctionStmt<'d>(mcx: Mcx<'d>, s: &CreateFunctionStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateFunctionStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateOpClassItem<'d>(mcx: Mcx<'d>, s: &CreateOpClassItem<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateOpClassItem(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateOpClassStmt<'d>(mcx: Mcx<'d>, s: &CreateOpClassStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateOpClassStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateOpFamilyStmt<'d>(mcx: Mcx<'d>, s: &CreateOpFamilyStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateOpFamilyStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreatePLangStmt<'d>(mcx: Mcx<'d>, s: &CreatePLangStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreatePLangStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreatePolicyStmt<'d>(mcx: Mcx<'d>, s: &CreatePolicyStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreatePolicyStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreatePublicationStmt<'d>(mcx: Mcx<'d>, s: &CreatePublicationStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreatePublicationStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateRangeStmt<'d>(mcx: Mcx<'d>, s: &CreateRangeStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateRangeStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateRoleStmt<'d>(mcx: Mcx<'d>, s: &CreateRoleStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateRoleStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateSchemaStmt<'d>(mcx: Mcx<'d>, s: &CreateSchemaStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateSchemaStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateSeqStmt<'d>(mcx: Mcx<'d>, s: &CreateSeqStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateSeqStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateStatsStmt<'d>(mcx: Mcx<'d>, s: &CreateStatsStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateStatsStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateStmt<'d>(mcx: Mcx<'d>, s: &CreateStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateSubscriptionStmt<'d>(mcx: Mcx<'d>, s: &CreateSubscriptionStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateSubscriptionStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateTableAsStmt<'d>(mcx: Mcx<'d>, s: &CreateTableAsStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateTableAsStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateTableSpaceStmt<'d>(mcx: Mcx<'d>, s: &CreateTableSpaceStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateTableSpaceStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateTransformStmt<'d>(mcx: Mcx<'d>, s: &CreateTransformStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateTransformStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateTrigStmt<'d>(mcx: Mcx<'d>, s: &CreateTrigStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateTrigStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreateUserMappingStmt<'d>(mcx: Mcx<'d>, s: &CreateUserMappingStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreateUserMappingStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CreatedbStmt<'d>(mcx: Mcx<'d>, s: &CreatedbStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CreatedbStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CteScan<'d>(mcx: Mcx<'d>, s: &CteScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CteScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_CurrentOfExpr<'d>(mcx: Mcx<'d>, s: &CurrentOfExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_CurrentOfExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DeallocateStmt<'d>(mcx: Mcx<'d>, s: &DeallocateStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DeallocateStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DeclareCursorStmt<'d>(mcx: Mcx<'d>, s: &DeclareCursorStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DeclareCursorStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DefElem<'d>(mcx: Mcx<'d>, s: &DefElem<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DefElem(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DefineStmt<'d>(mcx: Mcx<'d>, s: &DefineStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DefineStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DeleteStmt<'d>(mcx: Mcx<'d>, s: &DeleteStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DeleteStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DiscardStmt<'d>(mcx: Mcx<'d>, s: &DiscardStmt) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DiscardStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DistinctExpr<'d>(mcx: Mcx<'d>, s: &DistinctExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DistinctExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DoStmt<'d>(mcx: Mcx<'d>, s: &DoStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DoStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DropOwnedStmt<'d>(mcx: Mcx<'d>, s: &DropOwnedStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DropOwnedStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DropRoleStmt<'d>(mcx: Mcx<'d>, s: &DropRoleStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DropRoleStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DropStmt<'d>(mcx: Mcx<'d>, s: &DropStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DropStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DropSubscriptionStmt<'d>(mcx: Mcx<'d>, s: &DropSubscriptionStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DropSubscriptionStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DropTableSpaceStmt<'d>(mcx: Mcx<'d>, s: &DropTableSpaceStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DropTableSpaceStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DropUserMappingStmt<'d>(mcx: Mcx<'d>, s: &DropUserMappingStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DropUserMappingStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_DropdbStmt<'d>(mcx: Mcx<'d>, s: &DropdbStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_DropdbStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ExecuteStmt<'d>(mcx: Mcx<'d>, s: &ExecuteStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ExecuteStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ExplainStmt<'d>(mcx: Mcx<'d>, s: &ExplainStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ExplainStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_FetchStmt<'d>(mcx: Mcx<'d>, s: &FetchStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_FetchStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_FieldSelect<'d>(mcx: Mcx<'d>, s: &FieldSelect<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_FieldSelect(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_FieldStore<'d>(mcx: Mcx<'d>, s: &FieldStore<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_FieldStore(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ForeignScan<'d>(mcx: Mcx<'d>, s: &ForeignScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ForeignScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_FromExpr<'d>(mcx: Mcx<'d>, s: &FromExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_FromExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_FuncCall<'d>(mcx: Mcx<'d>, s: &FuncCall<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_FuncCall(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_FuncExpr<'d>(mcx: Mcx<'d>, s: &FuncExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_FuncExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_FunctionParameter<'d>(mcx: Mcx<'d>, s: &FunctionParameter<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_FunctionParameter(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_FunctionScan<'d>(mcx: Mcx<'d>, s: &FunctionScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_FunctionScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Gather<'d>(mcx: Mcx<'d>, s: &Gather<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Gather(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_GatherMerge<'d>(mcx: Mcx<'d>, s: &GatherMerge<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_GatherMerge(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_GrantRoleStmt<'d>(mcx: Mcx<'d>, s: &GrantRoleStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_GrantRoleStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_GrantStmt<'d>(mcx: Mcx<'d>, s: &GrantStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_GrantStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Group<'d>(mcx: Mcx<'d>, s: &Group<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Group(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_GroupingFunc<'d>(mcx: Mcx<'d>, s: &GroupingFunc<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_GroupingFunc(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_GroupingSet<'d>(mcx: Mcx<'d>, s: &GroupingSet<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_GroupingSet(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Hash<'d>(mcx: Mcx<'d>, s: &Hash<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Hash(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_HashJoin<'d>(mcx: Mcx<'d>, s: &HashJoin<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_HashJoin(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ImportForeignSchemaStmt<'d>(mcx: Mcx<'d>, s: &ImportForeignSchemaStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ImportForeignSchemaStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_IncrementalSort<'d>(mcx: Mcx<'d>, s: &IncrementalSort<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_IncrementalSort(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_IndexElem<'d>(mcx: Mcx<'d>, s: &IndexElem<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_IndexElem(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_IndexOnlyScan<'d>(mcx: Mcx<'d>, s: &IndexOnlyScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_IndexOnlyScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_IndexScan<'d>(mcx: Mcx<'d>, s: &IndexScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_IndexScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_IndexStmt<'d>(mcx: Mcx<'d>, s: &IndexStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_IndexStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_InferClause<'d>(mcx: Mcx<'d>, s: &InferClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_InferClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_InferenceElem<'d>(mcx: Mcx<'d>, s: &InferenceElem<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_InferenceElem(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_InsertStmt<'d>(mcx: Mcx<'d>, s: &InsertStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_InsertStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_IntoClause<'d>(mcx: Mcx<'d>, s: &IntoClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_IntoClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JoinExpr<'d>(mcx: Mcx<'d>, s: &JoinExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JoinExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonAggConstructor<'d>(mcx: Mcx<'d>, s: &JsonAggConstructor<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonAggConstructor(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonArgument<'d>(mcx: Mcx<'d>, s: &JsonArgument<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonArgument(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonArrayAgg<'d>(mcx: Mcx<'d>, s: &JsonArrayAgg<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonArrayAgg(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonArrayConstructor<'d>(mcx: Mcx<'d>, s: &JsonArrayConstructor<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonArrayConstructor(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonArrayQueryConstructor<'d>(mcx: Mcx<'d>, s: &JsonArrayQueryConstructor<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonArrayQueryConstructor(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonBehavior<'d>(mcx: Mcx<'d>, s: &JsonBehavior<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonBehavior(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonConstructorExpr<'d>(mcx: Mcx<'d>, s: &JsonConstructorExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonConstructorExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonExpr<'d>(mcx: Mcx<'d>, s: &JsonExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonFormat<'d>(mcx: Mcx<'d>, s: &JsonFormat) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonFormat(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonFuncExpr<'d>(mcx: Mcx<'d>, s: &JsonFuncExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonFuncExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonIsPredicate<'d>(mcx: Mcx<'d>, s: &JsonIsPredicate<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonIsPredicate(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonKeyValue<'d>(mcx: Mcx<'d>, s: &JsonKeyValue<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonKeyValue(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonObjectAgg<'d>(mcx: Mcx<'d>, s: &JsonObjectAgg<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonObjectAgg(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonObjectConstructor<'d>(mcx: Mcx<'d>, s: &JsonObjectConstructor<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonObjectConstructor(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonOutput<'d>(mcx: Mcx<'d>, s: &JsonOutput<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonOutput(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonParseExpr<'d>(mcx: Mcx<'d>, s: &JsonParseExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonParseExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonReturning<'d>(mcx: Mcx<'d>, s: &JsonReturning<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonReturning(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonScalarExpr<'d>(mcx: Mcx<'d>, s: &JsonScalarExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonScalarExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonSerializeExpr<'d>(mcx: Mcx<'d>, s: &JsonSerializeExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonSerializeExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonTable<'d>(mcx: Mcx<'d>, s: &JsonTable<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonTable(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonTableColumn<'d>(mcx: Mcx<'d>, s: &JsonTableColumn<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonTableColumn(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonTablePath<'d>(mcx: Mcx<'d>, s: &JsonTablePath<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonTablePath(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonTablePathScan<'d>(mcx: Mcx<'d>, s: &JsonTablePathScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonTablePathScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonTablePathSpec<'d>(mcx: Mcx<'d>, s: &JsonTablePathSpec<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonTablePathSpec(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonTableSiblingJoin<'d>(mcx: Mcx<'d>, s: &JsonTableSiblingJoin<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonTableSiblingJoin(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_JsonValueExpr<'d>(mcx: Mcx<'d>, s: &JsonValueExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_JsonValueExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Limit<'d>(mcx: Mcx<'d>, s: &Limit<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Limit(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ListenStmt<'d>(mcx: Mcx<'d>, s: &ListenStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ListenStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_LoadStmt<'d>(mcx: Mcx<'d>, s: &LoadStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_LoadStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_LockRows<'d>(mcx: Mcx<'d>, s: &LockRows<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_LockRows(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_LockStmt<'d>(mcx: Mcx<'d>, s: &LockStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_LockStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_LockingClause<'d>(mcx: Mcx<'d>, s: &LockingClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_LockingClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Material<'d>(mcx: Mcx<'d>, s: &Material<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Material(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Memoize<'d>(mcx: Mcx<'d>, s: &Memoize<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Memoize(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_MergeAction<'d>(mcx: Mcx<'d>, s: &MergeAction<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_MergeAction(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_MergeAppend<'d>(mcx: Mcx<'d>, s: &MergeAppend<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_MergeAppend(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_MergeJoin<'d>(mcx: Mcx<'d>, s: &MergeJoin<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_MergeJoin(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_MergeStmt<'d>(mcx: Mcx<'d>, s: &MergeStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_MergeStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_MergeSupportFunc<'d>(mcx: Mcx<'d>, s: &MergeSupportFunc) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_MergeSupportFunc(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_MergeWhenClause<'d>(mcx: Mcx<'d>, s: &MergeWhenClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_MergeWhenClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_MinMaxExpr<'d>(mcx: Mcx<'d>, s: &MinMaxExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_MinMaxExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ModifyTable<'d>(mcx: Mcx<'d>, s: &ModifyTable<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ModifyTable(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_MultiAssignRef<'d>(mcx: Mcx<'d>, s: &MultiAssignRef<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_MultiAssignRef(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_NamedArgExpr<'d>(mcx: Mcx<'d>, s: &NamedArgExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_NamedArgExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_NamedTuplestoreScan<'d>(mcx: Mcx<'d>, s: &NamedTuplestoreScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_NamedTuplestoreScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_NestLoop<'d>(mcx: Mcx<'d>, s: &NestLoop<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_NestLoop(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_NestLoopParam<'d>(mcx: Mcx<'d>, s: &NestLoopParam<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_NestLoopParam(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_NextValueExpr<'d>(mcx: Mcx<'d>, s: &NextValueExpr) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_NextValueExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_NotifyStmt<'d>(mcx: Mcx<'d>, s: &NotifyStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_NotifyStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_NullIfExpr<'d>(mcx: Mcx<'d>, s: &NullIfExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_NullIfExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_NullTest<'d>(mcx: Mcx<'d>, s: &NullTest<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_NullTest(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ObjectWithArgs<'d>(mcx: Mcx<'d>, s: &ObjectWithArgs<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ObjectWithArgs(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_OnConflictClause<'d>(mcx: Mcx<'d>, s: &OnConflictClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_OnConflictClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_OnConflictExpr<'d>(mcx: Mcx<'d>, s: &OnConflictExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_OnConflictExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_OpExpr<'d>(mcx: Mcx<'d>, s: &OpExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_OpExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PLAssignStmt<'d>(mcx: Mcx<'d>, s: &PLAssignStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PLAssignStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Param<'d>(mcx: Mcx<'d>, s: &Param) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Param(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ParamRef<'d>(mcx: Mcx<'d>, s: &ParamRef) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ParamRef(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PartitionBoundSpec<'d>(mcx: Mcx<'d>, s: &PartitionBoundSpec<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PartitionBoundSpec(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PartitionCmd<'d>(mcx: Mcx<'d>, s: &PartitionCmd<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PartitionCmd(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PartitionElem<'d>(mcx: Mcx<'d>, s: &PartitionElem<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PartitionElem(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PartitionPruneInfo<'d>(mcx: Mcx<'d>, s: &PartitionPruneInfo<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PartitionPruneInfo(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PartitionPruneStepCombine<'d>(mcx: Mcx<'d>, s: &PartitionPruneStepCombine<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PartitionPruneStepCombine(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PartitionPruneStepOp<'d>(mcx: Mcx<'d>, s: &PartitionPruneStepOp<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PartitionPruneStepOp(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PartitionRangeDatum<'d>(mcx: Mcx<'d>, s: &PartitionRangeDatum<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PartitionRangeDatum(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PartitionSpec<'d>(mcx: Mcx<'d>, s: &PartitionSpec<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PartitionSpec(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PartitionedRelPruneInfo<'d>(mcx: Mcx<'d>, s: &PartitionedRelPruneInfo<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PartitionedRelPruneInfo(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PlaceHolderVar<'d>(mcx: Mcx<'d>, s: &PlaceHolderVar<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PlaceHolderVar(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PlanInvalItem<'d>(mcx: Mcx<'d>, s: &PlanInvalItem) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PlanInvalItem(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PlanRowMark<'d>(mcx: Mcx<'d>, s: &PlanRowMark) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PlanRowMark(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PlannedStmt<'d>(mcx: Mcx<'d>, s: &PlannedStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PlannedStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PrepareStmt<'d>(mcx: Mcx<'d>, s: &PrepareStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PrepareStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ProjectSet<'d>(mcx: Mcx<'d>, s: &ProjectSet<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ProjectSet(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PublicationObjSpec<'d>(mcx: Mcx<'d>, s: &PublicationObjSpec<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PublicationObjSpec(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_PublicationTable<'d>(mcx: Mcx<'d>, s: &PublicationTable<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_PublicationTable(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Query<'d>(mcx: Mcx<'d>, s: &Query<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Query(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RTEPermissionInfo<'d>(mcx: Mcx<'d>, s: &RTEPermissionInfo<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RTEPermissionInfo(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RangeFunction<'d>(mcx: Mcx<'d>, s: &RangeFunction<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RangeFunction(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RangeSubselect<'d>(mcx: Mcx<'d>, s: &RangeSubselect<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RangeSubselect(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RangeTableFunc<'d>(mcx: Mcx<'d>, s: &RangeTableFunc<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RangeTableFunc(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RangeTableFuncCol<'d>(mcx: Mcx<'d>, s: &RangeTableFuncCol<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RangeTableFuncCol(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RangeTableSample<'d>(mcx: Mcx<'d>, s: &RangeTableSample<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RangeTableSample(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RangeTblEntry<'d>(mcx: Mcx<'d>, s: &RangeTblEntry<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RangeTblEntry(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RangeTblFunction<'d>(mcx: Mcx<'d>, s: &RangeTblFunction<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RangeTblFunction(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RangeTblRef<'d>(mcx: Mcx<'d>, s: &RangeTblRef) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RangeTblRef(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RangeVar<'d>(mcx: Mcx<'d>, s: &RangeVar<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RangeVar(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RawStmt<'d>(mcx: Mcx<'d>, s: &RawStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RawStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ReassignOwnedStmt<'d>(mcx: Mcx<'d>, s: &ReassignOwnedStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ReassignOwnedStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RecursiveUnion<'d>(mcx: Mcx<'d>, s: &RecursiveUnion<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RecursiveUnion(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RefreshMatViewStmt<'d>(mcx: Mcx<'d>, s: &RefreshMatViewStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RefreshMatViewStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ReindexStmt<'d>(mcx: Mcx<'d>, s: &ReindexStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ReindexStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RelabelType<'d>(mcx: Mcx<'d>, s: &RelabelType<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RelabelType(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RenameStmt<'d>(mcx: Mcx<'d>, s: &RenameStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RenameStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ReplicaIdentityStmt<'d>(mcx: Mcx<'d>, s: &ReplicaIdentityStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ReplicaIdentityStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ResTarget<'d>(mcx: Mcx<'d>, s: &ResTarget<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ResTarget(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Result<'d>(mcx: Mcx<'d>, s: &Result<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Result(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ReturnStmt<'d>(mcx: Mcx<'d>, s: &ReturnStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ReturnStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ReturningClause<'d>(mcx: Mcx<'d>, s: &ReturningClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ReturningClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ReturningExpr<'d>(mcx: Mcx<'d>, s: &ReturningExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ReturningExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ReturningOption<'d>(mcx: Mcx<'d>, s: &ReturningOption<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ReturningOption(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RoleSpec<'d>(mcx: Mcx<'d>, s: &RoleSpec<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RoleSpec(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RowCompareExpr<'d>(mcx: Mcx<'d>, s: &RowCompareExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RowCompareExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RowExpr<'d>(mcx: Mcx<'d>, s: &RowExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RowExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RowMarkClause<'d>(mcx: Mcx<'d>, s: &RowMarkClause) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RowMarkClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_RuleStmt<'d>(mcx: Mcx<'d>, s: &RuleStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_RuleStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SQLValueFunction<'d>(mcx: Mcx<'d>, s: &SQLValueFunction) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SQLValueFunction(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SampleScan<'d>(mcx: Mcx<'d>, s: &SampleScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SampleScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ScalarArrayOpExpr<'d>(mcx: Mcx<'d>, s: &ScalarArrayOpExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ScalarArrayOpExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SecLabelStmt<'d>(mcx: Mcx<'d>, s: &SecLabelStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SecLabelStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SelectStmt<'d>(mcx: Mcx<'d>, s: &SelectStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SelectStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SeqScan<'d>(mcx: Mcx<'d>, s: &SeqScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SeqScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SetOp<'d>(mcx: Mcx<'d>, s: &SetOp<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SetOp(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SetOperationStmt<'d>(mcx: Mcx<'d>, s: &SetOperationStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SetOperationStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SetToDefault<'d>(mcx: Mcx<'d>, s: &SetToDefault) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SetToDefault(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Sort<'d>(mcx: Mcx<'d>, s: &Sort<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Sort(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SortBy<'d>(mcx: Mcx<'d>, s: &SortBy<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SortBy(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SortGroupClause<'d>(mcx: Mcx<'d>, s: &SortGroupClause) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SortGroupClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_StatsElem<'d>(mcx: Mcx<'d>, s: &StatsElem<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_StatsElem(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SubLink<'d>(mcx: Mcx<'d>, s: &SubLink<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SubLink(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SubPlan<'d>(mcx: Mcx<'d>, s: &SubPlan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SubPlan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SubqueryScan<'d>(mcx: Mcx<'d>, s: &SubqueryScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SubqueryScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_SubscriptingRef<'d>(mcx: Mcx<'d>, s: &SubscriptingRef<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_SubscriptingRef(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TableFunc<'d>(mcx: Mcx<'d>, s: &TableFunc<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TableFunc(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TableFuncScan<'d>(mcx: Mcx<'d>, s: &TableFuncScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TableFuncScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TableLikeClause<'d>(mcx: Mcx<'d>, s: &TableLikeClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TableLikeClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TableSampleClause<'d>(mcx: Mcx<'d>, s: &TableSampleClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TableSampleClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TargetEntry<'d>(mcx: Mcx<'d>, s: &TargetEntry<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TargetEntry(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TidRangeScan<'d>(mcx: Mcx<'d>, s: &TidRangeScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TidRangeScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TidScan<'d>(mcx: Mcx<'d>, s: &TidScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TidScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TransactionStmt<'d>(mcx: Mcx<'d>, s: &TransactionStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TransactionStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TriggerTransition<'d>(mcx: Mcx<'d>, s: &TriggerTransition<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TriggerTransition(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TruncateStmt<'d>(mcx: Mcx<'d>, s: &TruncateStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TruncateStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TypeCast<'d>(mcx: Mcx<'d>, s: &TypeCast<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TypeCast(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_TypeName<'d>(mcx: Mcx<'d>, s: &TypeName<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_TypeName(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Unique<'d>(mcx: Mcx<'d>, s: &Unique<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Unique(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_UnlistenStmt<'d>(mcx: Mcx<'d>, s: &UnlistenStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_UnlistenStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_UpdateStmt<'d>(mcx: Mcx<'d>, s: &UpdateStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_UpdateStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_VacuumRelation<'d>(mcx: Mcx<'d>, s: &VacuumRelation<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_VacuumRelation(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_VacuumStmt<'d>(mcx: Mcx<'d>, s: &VacuumStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_VacuumStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ValuesScan<'d>(mcx: Mcx<'d>, s: &ValuesScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ValuesScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_Var<'d>(mcx: Mcx<'d>, s: &Var<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_Var(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_VariableSetStmt<'d>(mcx: Mcx<'d>, s: &VariableSetStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_VariableSetStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_VariableShowStmt<'d>(mcx: Mcx<'d>, s: &VariableShowStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_VariableShowStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_ViewStmt<'d>(mcx: Mcx<'d>, s: &ViewStmt<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_ViewStmt(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_WindowAgg<'d>(mcx: Mcx<'d>, s: &WindowAgg<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_WindowAgg(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_WindowClause<'d>(mcx: Mcx<'d>, s: &WindowClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_WindowClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_WindowDef<'d>(mcx: Mcx<'d>, s: &WindowDef<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_WindowDef(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_WindowFunc<'d>(mcx: Mcx<'d>, s: &WindowFunc<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_WindowFunc(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_WindowFuncRunCondition<'d>(mcx: Mcx<'d>, s: &WindowFuncRunCondition<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_WindowFuncRunCondition(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_WithCheckOption<'d>(mcx: Mcx<'d>, s: &WithCheckOption<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_WithCheckOption(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_WithClause<'d>(mcx: Mcx<'d>, s: &WithClause<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_WithClause(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_WorkTableScan<'d>(mcx: Mcx<'d>, s: &WorkTableScan<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_WorkTableScan(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_XmlExpr<'d>(mcx: Mcx<'d>, s: &XmlExpr<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_XmlExpr(mcx, s)?)
+}
+
+#[inline(never)]
+fn mkcopy_XmlSerialize<'d>(mcx: Mcx<'d>, s: &XmlSerialize<'_>) -> PgResult<Node<'d>> {
+    Node::mk(mcx, copy_XmlSerialize(mcx, s)?)
+}
+
 
 fn copy_node_opt<'d>(mcx: Mcx<'d>, node: Option<Node<'_>>) -> PgResult<Option<Node<'d>>> {
     match node {
@@ -1452,6 +3003,10 @@ pub(crate) fn copy_Agg<'d>(mcx: Mcx<'d>, s: &Agg<'_>) -> PgResult<Agg<'d>> {
         aggParams: copy_bms(mcx, &s.aggParams)?,
         groupingSets: copy_node_list(mcx, &s.groupingSets)?,
         chain: copy_node_list(mcx, &s.chain)?,
+        distinctHashed: s.distinctHashed,
+        gravity_rewrite: s.gravity_rewrite,
+        gravity_finals: copy_slice(mcx, s.gravity_finals)?,
+        gravity_groups_default: s.gravity_groups_default,
     })
 }
 
@@ -1549,10 +3104,7 @@ pub(crate) fn copy_AlterEventTrigStmt<'d>(mcx: Mcx<'d>, s: &AlterEventTrigStmt<'
     })
 }
 
-pub(crate) fn copy_AlterExtensionContentsStmt<'d>(
-    mcx: Mcx<'d>,
-    s: &AlterExtensionContentsStmt<'_>,
-) -> PgResult<AlterExtensionContentsStmt<'d>> {
+pub(crate) fn copy_AlterExtensionContentsStmt<'d>(mcx: Mcx<'d>, s: &AlterExtensionContentsStmt<'_>) -> PgResult<AlterExtensionContentsStmt<'d>> {
     Ok(AlterExtensionContentsStmt {
         extname: opt_str_in(mcx, s.extname)?,
         action: s.action,
@@ -1795,6 +3347,9 @@ pub(crate) fn copy_Append<'d>(mcx: Mcx<'d>, s: &Append<'_>) -> PgResult<Append<'
         nasyncplans: s.nasyncplans,
         first_partial_plan: s.first_partial_plan,
         part_prune_index: s.part_prune_index,
+        gravity_sort_col_idx: copy_slice(mcx, s.gravity_sort_col_idx)?,
+        gravity_sort_operators: copy_slice(mcx, s.gravity_sort_operators)?,
+        gravity_nulls_first: copy_slice(mcx, s.gravity_nulls_first)?,
     })
 }
 
@@ -2354,7 +3909,7 @@ pub(crate) fn copy_CreateStatsStmt<'d>(mcx: Mcx<'d>, s: &CreateStatsStmt<'_>) ->
         stxcomment: opt_str_in(mcx, s.stxcomment)?,
         transformed: s.transformed,
         if_not_exists: s.if_not_exists,
-        owner: s.owner, // upstream a1fa24127d6a (18.6): CreateStatsStmt.owner
+        owner: s.owner,
     })
 }
 
@@ -2455,6 +4010,7 @@ pub(crate) fn copy_CteScan<'d>(mcx: Mcx<'d>, s: &CteScan<'_>) -> PgResult<CteSca
         scan: copy_Scan(mcx, &s.scan)?,
         ctePlanId: s.ctePlanId,
         cteParam: s.cteParam,
+        gravity_fill: s.gravity_fill,
     })
 }
 
@@ -4169,9 +5725,9 @@ pub(crate) fn copy_SelectStmt<'d>(mcx: Mcx<'d>, s: &SelectStmt<'_>) -> PgResult<
 pub(crate) fn copy_SeqScan<'d>(mcx: Mcx<'d>, s: &SeqScan<'_>) -> PgResult<SeqScan<'d>> {
     Ok(SeqScan {
         scan: copy_Scan(mcx, &s.scan)?,
-        // pgrust-only field (plannodes.rs SeqScan::cb_scan_cols) — hand-added:
-        // generate.py mirrors C's node set, which has no such field.
         cb_scan_cols: s.cb_scan_cols.as_ref().map(|b| copy_bms(mcx, b)).transpose()?,
+        cb_target_cols: s.cb_target_cols.as_ref().map(|b| copy_bms(mcx, b)).transpose()?,
+        pgrc_merge: copy_slice(mcx, s.pgrc_merge)?,
     })
 }
 
@@ -4219,6 +5775,7 @@ pub(crate) fn copy_Sort<'d>(mcx: Mcx<'d>, s: &Sort<'_>) -> PgResult<Sort<'d>> {
         sortOperators: copy_slice(mcx, s.sortOperators)?,
         collations: copy_slice(mcx, s.collations)?,
         nullsFirst: copy_slice(mcx, s.nullsFirst)?,
+        gravity_rewrite: s.gravity_rewrite,
     })
 }
 

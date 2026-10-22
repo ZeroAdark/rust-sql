@@ -185,11 +185,7 @@ impl<'mcx, F: ListFlavor> List<'mcx, F> {
         }
     }
 
-    // Out of line: inlined, its frame taxes every lappend fast path.
-    #[inline(never)]
-    fn enlarge(&mut self, mcx: Mcx<'mcx>, min_size: i32) -> PgResult<()> {
-        debug_assert!(min_size > self.max_length);
-        let cell = core::mem::size_of::<F::Cell<'mcx>>();
+    fn checked_capacity(&self, min_size: i32) -> PgResult<i32> {
         // new_list caps the first allocation with the header folded in; a
         // non-empty list grows on the enlarge_list min-16 curve (list.c).
         let new_max = if self.max_length == 0 {
@@ -197,7 +193,21 @@ impl<'mcx, F: ListFlavor> List<'mcx, F> {
         } else {
             nextpower2(core::cmp::max(16, min_size))
         };
-        check_alloc_size(new_max as usize * cell)?;
+        let header = if self.max_length == 0 {
+            LIST_HEADER_OVERHEAD as usize * 8
+        } else {
+            0
+        };
+        check_alloc_size(header + new_max as usize * 8)?;
+        Ok(new_max)
+    }
+
+    // Out of line: inlined, its frame taxes every lappend fast path.
+    #[inline(never)]
+    fn enlarge(&mut self, mcx: Mcx<'mcx>, min_size: i32) -> PgResult<()> {
+        debug_assert!(min_size > self.max_length);
+        let cell = core::mem::size_of::<F::Cell<'mcx>>();
+        let new_max = self.checked_capacity(min_size)?;
         let new_layout = buf_layout::<F::Cell<'mcx>>(new_max as usize)
             .ok_or_else(|| crate::oom(mcx, new_max as usize * cell))?;
         let ptr = if self.max_length == 0 {
@@ -397,5 +407,40 @@ where
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_list().entries(self.as_slice()).finish()
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    fn check_limits<F: ListFlavor>() {
+        let mut list = List::<F>::nil();
+        let boundary = 1 << 26;
+        assert_eq!(list.checked_capacity(boundary - 3).unwrap(), boundary - 3);
+        for minimum in [boundary - 2, boundary - 1, boundary] {
+            let error = list.checked_capacity(minimum).unwrap_err();
+            assert_eq!(
+                error.message(),
+                "invalid memory alloc request size 1073741824"
+            );
+            assert_eq!(error.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+        }
+        list.max_length = 5;
+        assert_eq!(list.checked_capacity(boundary).unwrap(), boundary);
+        let error = list.checked_capacity(boundary + 1).unwrap_err();
+        assert_eq!(
+            error.message(),
+            "invalid memory alloc request size 1073741824"
+        );
+    }
+
+    #[test]
+    fn list_allocation_limits_match_c() {
+        check_limits::<PtrFlavor>();
+        check_limits::<OptPtrFlavor>();
+        check_limits::<IntFlavor>();
+        check_limits::<OidFlavor>();
+        check_limits::<XidFlavor>();
     }
 }

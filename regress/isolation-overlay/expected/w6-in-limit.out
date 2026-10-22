@@ -1,0 +1,130 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s2p s1c s2c s4c
+step s2p: EXPLAIN (COSTS OFF) UPDATE ilk SET n = n + 100000 WHERE id IN (SELECT id FROM ils ORDER BY val DESC, n LIMIT 6);
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Update on ilk                                                
+  ->  Nested Loop                                            
+        ->  HashAggregate                                    
+              Group Key: "ANY_subquery".id                   
+              ->  Subquery Scan on "ANY_subquery"            
+                    ->  Limit                                
+                          ->  Sort                           
+                                Sort Key: ils.val DESC, ils.n
+                                ->  Seq Scan on ils          
+        ->  Index Scan using ilk_pkey on ilk                 
+              Index Cond: (id = "ANY_subquery".id)           
+(11 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s4c: COMMIT;
+
+starting permutation: s1v s1k s1d s1s s2u s1c s2c s4c s3sel
+step s1v: UPDATE ilk SET val = val + 1000 WHERE id = 321;
+step s1k: UPDATE ilk SET id = 30284 WHERE id = 284;
+step s1d: DELETE FROM ilk WHERE id = 247;
+step s1s: UPDATE ils SET val = 0 WHERE id = 210;
+step s2u: UPDATE ilk SET n = n + 100000 WHERE id IN (SELECT id FROM ils ORDER BY val DESC, n LIMIT 6); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s4c: COMMIT;
+step s3sel: SELECT id, n, val FROM ilk WHERE id IN (136, 173, 210, 247, 284, 321, 457, 494, 30284) ORDER BY id;
+   id|     n| val
+-----+------+----
+  136|   136| 136
+  173|100173| 173
+  210|100210| 210
+  321|100321|1321
+  457|   457| 457
+  494|100494| 494
+30284|   284| 284
+(7 rows)
+
+
+starting permutation: s1v s1k s1d s2d s1c s2c s4c s3sel
+step s1v: UPDATE ilk SET val = val + 1000 WHERE id = 321;
+step s1k: UPDATE ilk SET id = 30284 WHERE id = 284;
+step s1d: DELETE FROM ilk WHERE id = 247;
+step s2d: DELETE FROM ilk WHERE id IN (SELECT id FROM ils ORDER BY val DESC, n LIMIT 6); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s4c: COMMIT;
+step s3sel: SELECT id, n, val FROM ilk WHERE id IN (136, 173, 210, 247, 284, 321, 457, 494, 30284) ORDER BY id;
+   id|  n|val
+-----+---+---
+  136|136|136
+  457|457|457
+30284|284|284
+(3 rows)
+
+
+starting permutation: s2u s1v s2c s1c s4c s3sel
+step s2u: UPDATE ilk SET n = n + 100000 WHERE id IN (SELECT id FROM ils ORDER BY val DESC, n LIMIT 6);
+step s1v: UPDATE ilk SET val = val + 1000 WHERE id = 321; <waiting ...>
+step s2c: COMMIT;
+step s1v: <... completed>
+step s1c: COMMIT;
+step s4c: COMMIT;
+step s3sel: SELECT id, n, val FROM ilk WHERE id IN (136, 173, 210, 247, 284, 321, 457, 494, 30284) ORDER BY id;
+ id|     n| val
+---+------+----
+136|   136| 136
+173|100173| 173
+210|100210| 210
+247|100247| 247
+284|100284| 284
+321|100321|1321
+457|   457| 457
+494|100494| 494
+(8 rows)
+
+
+starting permutation: s4p s1c s4c s2c
+step s4p: EXPLAIN (COSTS OFF) UPDATE ilp SET v = v + 1000 WHERE id IN (SELECT id - 29000 FROM ilr WHERE v < 178);
+QUERY PLAN                                            
+------------------------------------------------------
+Update on ilp                                         
+  Update on ilp_0 ilp_1                               
+  Update on ilp_1 ilp_2                               
+  Update on ilp_2 ilp_3                               
+  Update on ilp_3 ilp_4                               
+  ->  Hash Join                                       
+        Hash Cond: (ilp.id = (ilr.id - 29000))        
+        ->  Append                                    
+              ->  Seq Scan on ilp_0 ilp_1             
+              ->  Seq Scan on ilp_1 ilp_2             
+              ->  Seq Scan on ilp_2 ilp_3             
+              ->  Seq Scan on ilp_3 ilp_4             
+        ->  Hash                                      
+              ->  HashAggregate                       
+                    Group Key: (ilr.id - 29000)       
+                    ->  Seq Scan on ilr               
+                          Filter: (v < '178'::numeric)
+(17 rows)
+
+step s1c: COMMIT;
+step s4c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1pv s1pk s1pd s1ps s4u s1c s4c s2c s3p
+step s1pv: UPDATE ilp SET v = v + 5 WHERE id = 1005;
+step s1pk: UPDATE ilp SET k = 77 WHERE id = 1010;
+step s1pd: DELETE FROM ilp WHERE id = 1009;
+step s1ps: UPDATE ilr SET v = 999 WHERE id = 30010;
+step s4u: UPDATE ilp SET v = v + 1000 WHERE id IN (SELECT id - 29000 FROM ilr WHERE v < 178); <waiting ...>
+step s1c: COMMIT;
+step s4u: <... completed>
+step s4c: COMMIT;
+step s2c: COMMIT;
+step s3p: SELECT id, k, v FROM ilp WHERE id IN (1005, 1009, 1010, 1011) ORDER BY id;
+  id| k|      v
+----+--+-------
+1005| 5|1148.57
+1010|77|1144.29
+1011|11|1144.43
+(3 rows)
+

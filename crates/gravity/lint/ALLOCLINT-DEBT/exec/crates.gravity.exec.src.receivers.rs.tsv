@@ -1,0 +1,5 @@
+path	crates/gravity/exec/src/receivers.rs
+macro	std::vec	2
+method	std::boxed::Box::new	1
+method	std::vec::Vec::into_boxed_slice	2
+type	std::boxed::Box	1

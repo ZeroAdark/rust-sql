@@ -1,0 +1,12 @@
+-- regress-full-updatable_views-035
+-- INSERT INTO rw_view2 VALUES (3, 'Row 3') RETURNING old.*, new.*;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:3, 2=c25:'Row 3', 3=c25:null)
+  write INSERT rel=24317 rti=2 natts=3 indexes=() returning old=old new=new view instead=iud
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=T_ReturningExpr, 5=v2.1, 6=v2.2, 7=v2.3, 8=T_ReturningExpr)
+  outs 1=w4:val 2=vl:stmt/imm 3=vl:stmt/imm
+  outs 1=w4:val 2=vl:row 3=vl:row 4=vl:call0 5=w4:val 6=vl:row 7=vl:row 8=vl:call0
+mapped: Result ModifyTable

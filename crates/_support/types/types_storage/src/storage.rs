@@ -81,6 +81,11 @@ impl pg_atomic_uint64 {
 
     pub fn monotonic_advance(&self, target: uint64) -> uint64 {
         let mut currval = self.value.load(Ordering::SeqCst);
+        if currval >= target {
+            // atomics.h:596: pg_memory_barrier() — full barrier even when unchanged.
+            std::sync::atomic::fence(Ordering::SeqCst);
+            return currval;
+        }
         while currval < target {
             match self.value.compare_exchange_weak(
                 currval,
@@ -613,6 +618,8 @@ pub const PROC_IN_SAFE_IC: uint8 = 0x04;
 pub const PROC_VACUUM_FOR_WRAPAROUND: uint8 = 0x08;
 pub const PROC_IN_LOGICAL_DECODING: uint8 = 0x10;
 pub const PROC_AFFECTS_ALL_HORIZONS: uint8 = 0x20;
+/// Yields to CREATE / DROP / ALTER DATABASE: `CountOtherDBBackends` SIGTERMs it. Unlike `PROC_IS_AUTOVACUUM` it changes nothing else.
+pub const PROC_IS_DB_MAINT_WORKER: uint8 = 0x40;
 pub const PROC_VACUUM_STATE_MASK: uint8 =
     PROC_IN_VACUUM | PROC_IN_SAFE_IC | PROC_VACUUM_FOR_WRAPAROUND;
 pub const PROC_XMIN_FLAGS: uint8 = PROC_IN_VACUUM | PROC_IN_SAFE_IC;
@@ -889,6 +896,8 @@ mod tests {
     fn monotonic_advance_matches_c_loop() {
         let v = pg_atomic_uint64::new(5);
         assert_eq!(v.monotonic_advance(3), 5);
+        assert_eq!(v.monotonic_advance(9), 9);
+        assert_eq!(v.read(), 9);
         assert_eq!(v.monotonic_advance(9), 9);
         assert_eq!(v.read(), 9);
     }

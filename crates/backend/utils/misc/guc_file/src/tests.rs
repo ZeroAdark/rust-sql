@@ -28,6 +28,12 @@ fn setup() {
             }
         });
         conffiles_seams::get_conf_files_in_dir::set(|includedir, calling_file, _elevel| {
+            if includedir == "non_utf8_self_include" {
+                return Ok(conffiles_seams::ConfFilesInDir {
+                    filenames: vec![calling_file.unwrap()],
+                    err_msg: None,
+                });
+            }
             let dir = if Path::new(&includedir).is_absolute() {
                 PathBuf::from(&includedir)
             } else if let Some(calling) = calling_file {
@@ -340,4 +346,40 @@ fn trailing_separator_is_not_recursion() {
     let ok = ParseConfigFile(main.to_str().unwrap(), true, None, 0, 0, LOG, &mut vars).unwrap();
     assert!(ok);
     assert_eq!(settings(&vars), vec![("work_mem".into(), "3MB".into())]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn include_directory_preserves_filename_bytes() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    setup();
+    let dir = scratch_dir("filename_bytes");
+    let filename = dir.join(OsStr::from_bytes(b"\xff.conf"));
+    std::fs::write(&filename, "work_mem = 8MB\n").unwrap();
+    let mut vars = Vec::new();
+    assert!(ParseConfigDirectory(
+        dir.to_str().unwrap(), None, 0, 1, LOG, &mut vars,
+    ).unwrap());
+    assert_eq!(settings(&vars), vec![("work_mem".into(), "8MB".into())]);
+    assert_eq!(vars[0].filename.as_ref(), Some(&filename));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn include_directory_detects_recursion_with_non_utf8_filename() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    setup();
+    let filename = Path::new(OsStr::from_bytes(b"/conf.d/\xff.conf"));
+    let mut vars = Vec::new();
+    assert!(!ParseConfigDirectory(
+        "non_utf8_self_include", Some(filename), 1, 1, LOG, &mut vars,
+    ).unwrap());
+    assert_eq!(vars.len(), 1);
+    assert_eq!(vars[0].errmsg.as_deref(), Some("configuration file recursion"));
+    assert_eq!(vars[0].filename.as_deref(), Some(filename));
 }

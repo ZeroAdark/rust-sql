@@ -170,7 +170,8 @@ fn finish_relcache_entries() -> PgResult<()> {
             return Ok(());
         };
         let index_ok = crate::criticalRelcachesBuilt();
-        let scanned = relcache_build_seams::scan_pg_relation::call(relid, index_ok, false)?
+        let scan_cx = MemoryContext::new("ScanPgRelation");
+        let scanned = relcache_build_seams::scan_pg_relation::call(scan_cx.mcx(), relid, index_ok, false)?
             .ok_or_else(|| cache_lookup_failed(relid))?;
         debug_assert_eq!(rel.rd_att.tdtypeid, scanned.form.reltype);
         debug_assert_eq!(rel.rd_att.tdtypmod, -1);
@@ -208,7 +209,7 @@ fn finish_relcache_entries() -> PgResult<()> {
             // still governs validity.
             pgstat_link: core::cell::Cell::new(rel.pgstat_link.get()),
             rd_amcache: Default::default(),
-            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+            rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
             rd_support: mcx::PgVec::new_in(crate::cache_mcx()),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
@@ -507,32 +508,14 @@ fn put_options(buf: &mut Buf<'_>, o: &Option<RdOptions>) {
         None => put_u8(buf, 0),
         Some(RdOptions::Std(s)) => {
             put_u8(buf, 1);
-            put_i32(buf, s.fillfactor);
-            put_i32(buf, s.toast_tuple_target);
-            let a = &s.autovacuum;
-            put_bool(buf, a.enabled);
-            put_i32(buf, a.vacuum_threshold);
-            put_i32(buf, a.vacuum_max_threshold);
-            put_i32(buf, a.vacuum_ins_threshold);
-            put_i32(buf, a.analyze_threshold);
-            put_i32(buf, a.vacuum_cost_limit);
-            put_i32(buf, a.freeze_min_age);
-            put_i32(buf, a.freeze_max_age);
-            put_i32(buf, a.freeze_table_age);
-            put_i32(buf, a.multixact_freeze_min_age);
-            put_i32(buf, a.multixact_freeze_max_age);
-            put_i32(buf, a.multixact_freeze_table_age);
-            put_i32(buf, a.log_min_duration);
-            put_f64(buf, a.vacuum_cost_delay);
-            put_f64(buf, a.vacuum_scale_factor);
-            put_f64(buf, a.vacuum_ins_scale_factor);
-            put_f64(buf, a.analyze_scale_factor);
-            put_bool(buf, s.user_catalog_table);
-            put_i32(buf, s.parallel_workers);
-            put_i32(buf, s.vacuum_index_cleanup as i32);
-            put_bool(buf, s.vacuum_truncate);
-            put_bool(buf, s.vacuum_truncate_set);
-            put_f64(buf, s.vacuum_max_eager_freeze_failure_rate);
+            put_std(buf, s);
+        }
+        Some(RdOptions::Pgrcolumnar(o)) => {
+            put_u8(buf, 12);
+            put_std(buf, &o.std);
+            let sb = o.sorted_by().as_bytes();
+            put_u16(buf, sb.len() as u16);
+            buf.extend_from_slice(sb);
         }
         Some(RdOptions::View(v)) => {
             put_u8(buf, 2);
@@ -569,25 +552,6 @@ fn put_options(buf: &mut Buf<'_>, o: &Option<RdOptions>) {
             put_i32(buf, o.pages_per_range);
             put_bool(buf, o.autosummarize);
         }
-        Some(RdOptions::Pgrcolumnar(o)) => {
-            put_u8(buf, 9);
-            put_i32(
-                buf,
-                match o.codec {
-                    ::types_rel::PgrcolumnarCodec::Auto => 0,
-                    ::types_rel::PgrcolumnarCodec::Lz4 => 1,
-                    ::types_rel::PgrcolumnarCodec::Zstd => 2,
-                    ::types_rel::PgrcolumnarCodec::Plain => 3,
-                },
-            );
-            put_i32(buf, o.zstd_level);
-            let ck = o.cluster_key().as_bytes();
-            put_u16(buf, ck.len() as u16);
-            buf.extend_from_slice(ck);
-            let cc = o.codec_cols().as_bytes();
-            put_u16(buf, cc.len() as u16);
-            buf.extend_from_slice(cc);
-        }
         Some(RdOptions::Hnsw(o)) => {
             put_u8(buf, 10);
             put_i32(buf, o.m);
@@ -603,43 +567,85 @@ fn put_options(buf: &mut Buf<'_>, o: &Option<RdOptions>) {
     }
 }
 
+fn put_std(buf: &mut Buf<'_>, s: &StdRdOptions) {
+    put_i32(buf, s.fillfactor);
+    put_i32(buf, s.toast_tuple_target);
+    let a = &s.autovacuum;
+    put_bool(buf, a.enabled);
+    put_i32(buf, a.vacuum_threshold);
+    put_i32(buf, a.vacuum_max_threshold);
+    put_i32(buf, a.vacuum_ins_threshold);
+    put_i32(buf, a.analyze_threshold);
+    put_i32(buf, a.vacuum_cost_limit);
+    put_i32(buf, a.freeze_min_age);
+    put_i32(buf, a.freeze_max_age);
+    put_i32(buf, a.freeze_table_age);
+    put_i32(buf, a.multixact_freeze_min_age);
+    put_i32(buf, a.multixact_freeze_max_age);
+    put_i32(buf, a.multixact_freeze_table_age);
+    put_i32(buf, a.log_min_duration);
+    put_f64(buf, a.vacuum_cost_delay);
+    put_f64(buf, a.vacuum_scale_factor);
+    put_f64(buf, a.vacuum_ins_scale_factor);
+    put_f64(buf, a.analyze_scale_factor);
+    put_bool(buf, s.user_catalog_table);
+    put_i32(buf, s.parallel_workers);
+    put_i32(buf, s.vacuum_index_cleanup as i32);
+    put_bool(buf, s.vacuum_truncate);
+    put_bool(buf, s.vacuum_truncate_set);
+    put_f64(buf, s.vacuum_max_eager_freeze_failure_rate);
+}
+
+fn parse_std(rd: &mut Rd<'_>) -> Option<StdRdOptions> {
+    Some(StdRdOptions {
+        fillfactor: rd.i32()?,
+        toast_tuple_target: rd.i32()?,
+        autovacuum: AutoVacOpts {
+            enabled: rd.boolean()?,
+            vacuum_threshold: rd.i32()?,
+            vacuum_max_threshold: rd.i32()?,
+            vacuum_ins_threshold: rd.i32()?,
+            analyze_threshold: rd.i32()?,
+            vacuum_cost_limit: rd.i32()?,
+            freeze_min_age: rd.i32()?,
+            freeze_max_age: rd.i32()?,
+            freeze_table_age: rd.i32()?,
+            multixact_freeze_min_age: rd.i32()?,
+            multixact_freeze_max_age: rd.i32()?,
+            multixact_freeze_table_age: rd.i32()?,
+            log_min_duration: rd.i32()?,
+            vacuum_cost_delay: rd.f64()?,
+            vacuum_scale_factor: rd.f64()?,
+            vacuum_ins_scale_factor: rd.f64()?,
+            analyze_scale_factor: rd.f64()?,
+        },
+        user_catalog_table: rd.boolean()?,
+        parallel_workers: rd.i32()?,
+        vacuum_index_cleanup: match rd.i32()? {
+            0 => STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO,
+            1 => STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF,
+            2 => STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON,
+            _ => return None,
+        },
+        vacuum_truncate: rd.boolean()?,
+        vacuum_truncate_set: rd.boolean()?,
+        vacuum_max_eager_freeze_failure_rate: rd.f64()?,
+    })
+}
+
 fn parse_options(rd: &mut Rd<'_>) -> Option<Option<RdOptions>> {
     match rd.u8()? {
         0 => Some(None),
-        1 => Some(Some(RdOptions::Std(StdRdOptions {
-            fillfactor: rd.i32()?,
-            toast_tuple_target: rd.i32()?,
-            autovacuum: AutoVacOpts {
-                enabled: rd.boolean()?,
-                vacuum_threshold: rd.i32()?,
-                vacuum_max_threshold: rd.i32()?,
-                vacuum_ins_threshold: rd.i32()?,
-                analyze_threshold: rd.i32()?,
-                vacuum_cost_limit: rd.i32()?,
-                freeze_min_age: rd.i32()?,
-                freeze_max_age: rd.i32()?,
-                freeze_table_age: rd.i32()?,
-                multixact_freeze_min_age: rd.i32()?,
-                multixact_freeze_max_age: rd.i32()?,
-                multixact_freeze_table_age: rd.i32()?,
-                log_min_duration: rd.i32()?,
-                vacuum_cost_delay: rd.f64()?,
-                vacuum_scale_factor: rd.f64()?,
-                vacuum_ins_scale_factor: rd.f64()?,
-                analyze_scale_factor: rd.f64()?,
-            },
-            user_catalog_table: rd.boolean()?,
-            parallel_workers: rd.i32()?,
-            vacuum_index_cleanup: match rd.i32()? {
-                0 => STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO,
-                1 => STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF,
-                2 => STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON,
-                _ => return None,
-            },
-            vacuum_truncate: rd.boolean()?,
-            vacuum_truncate_set: rd.boolean()?,
-            vacuum_max_eager_freeze_failure_rate: rd.f64()?,
-        }))),
+        1 => Some(Some(RdOptions::Std(parse_std(rd)?))),
+        12 => {
+            let mut o = ::types_rel::PgrcolumnarOptions::new(parse_std(rd)?);
+            let n = rd.u16()? as usize;
+            let sb = core::str::from_utf8(rd.bytes(n)?).ok()?;
+            if !o.set_sorted_by(sb) {
+                return None;
+            }
+            Some(Some(RdOptions::Pgrcolumnar(o)))
+        }
         2 => Some(Some(RdOptions::View(ViewOptions {
             security_barrier: rd.boolean()?,
             security_invoker: rd.boolean()?,
@@ -674,28 +680,7 @@ fn parse_options(rd: &mut Rd<'_>) -> Option<Option<RdOptions>> {
             pages_per_range: rd.i32()?,
             autosummarize: rd.boolean()?,
         }))),
-        9 => {
-            let mut o = ::types_rel::PgrcolumnarOptions::default();
-            o.codec = match rd.i32()? {
-                0 => ::types_rel::PgrcolumnarCodec::Auto,
-                1 => ::types_rel::PgrcolumnarCodec::Lz4,
-                2 => ::types_rel::PgrcolumnarCodec::Zstd,
-                3 => ::types_rel::PgrcolumnarCodec::Plain,
-                _ => return None,
-            };
-            o.zstd_level = rd.i32()?;
-            let n = rd.u16()? as usize;
-            let ck = core::str::from_utf8(rd.bytes(n)?).ok()?;
-            if !o.set_cluster_key(ck) {
-                return None;
-            }
-            let n = rd.u16()? as usize;
-            let cc = core::str::from_utf8(rd.bytes(n)?).ok()?;
-            if !o.set_codec_cols(cc) {
-                return None;
-            }
-            Some(Some(RdOptions::Pgrcolumnar(o)))
-        }
+        // 9: retired (a deleted AM's options).
         10 => Some(Some(RdOptions::Hnsw(types_rel::reloptions::HnswOptions {
             m: rd.i32()?,
             ef_construction: rd.i32()?,
@@ -906,7 +891,8 @@ fn parse_entry(rd: &mut Rd<'_>, mcx: Mcx<'static>) -> Option<(RelationData<'stat
             // Same slot-0 preload as RelationInitIndexAccessInfo: btree/hash
             // resolve BTORDER_PROC eagerly, other AMs dispatch lazily.
             let amsupport = support.len() / nkey;
-            let mut supportinfo: Vec<Option<types_fmgr::FmgrInfo>> = Vec::with_capacity(nkey);
+            let mut supportinfo: Vec<Option<types_fmgr::FmgrInfo>> = Vec::new();
+            let _ = supportinfo.try_reserve(nkey);
             for i in 0..nkey {
                 let proc = if form.relam == BTREE_AM_OID || form.relam == HASH_AM_OID {
                     *support.get(i * amsupport)?
@@ -958,6 +944,7 @@ fn parse_entry(rd: &mut Rd<'_>, mcx: Mcx<'static>) -> Option<(RelationData<'stat
         rd_amcache_hash: Default::default(),
         rd_amcache_gin: Default::default(),
         rd_amcache_spgist: Default::default(),
+        rd_amcache_bloom: Default::default(),
         rd_support: support,
         rd_supportinfo: core::cell::RefCell::new(supportinfo),
         rd_opcoptions: Default::default(),
@@ -1186,7 +1173,7 @@ fn load_entries_via_l2(bytes: &[u8], shared: bool, gens: &[u64]) -> PgResult<boo
         };
         match core {
             Some(core) => {
-                let rel = Rc::new(shell_from_core(&core)?);
+                let rel = Rc::new(shell_from_core(&core, false)?);
                 store::insert(Rc::clone(&rel), nailed, false)?;
                 rel.rd_isvalid.set(true);
             }
@@ -1255,7 +1242,7 @@ fn load_relcache_init_file(shared: bool) -> PgResult<bool> {
         // heap; hand its segments back now. Without this the routed load's
         // whole byte win hides as per-thread mimalloc retention (measured:
         // warmed-100 footprint flat despite 139 entries turning into shells).
-        let _ = mcx::release_retained();
+        let _ = mcx::release_retained_at_exit();
     } else {
         let Ok(bytes) = fd::read_whole_file(path_s) else {
             return Ok(false);
@@ -1308,7 +1295,7 @@ fn could_not_write(e: std::io::Error) -> Box<PgError> {
 // after the file goes missing), and serializing from cores would need a
 // core for every entry including the private-arm ones — complexity for zero
 // byte savings on a cold path.
-fn write_relcache_init_file(shared: bool) -> PgResult<()> {
+pub(crate) fn write_relcache_init_file(shared: bool) -> PgResult<()> {
     if with_state(|st| st.invals_received != 0) {
         return Ok(());
     }
@@ -1335,6 +1322,19 @@ fn write_relcache_init_file(shared: bool) -> PgResult<()> {
         }
         encode_entry(&mut buf, rel, *nailed);
     }
+    // the snapshot dies HERE, before RelCacheInitLock. C walks
+    // RelationIdCache with hash_seq_search and bumps no rd_refcnt
+    // (relcache.c write_relcache_init_file), so the SI drain under the lock
+    // below finds every unused entry at refcount zero: RelationFlushRelation
+    // clears it, or defers an unused nailed one; it never reads a catalog.
+    // Held across the drain, these clones count as an open reference
+    // (store::refcount_zero), so every relcache inval in the drain REBUILDS
+    // its entry: a pg_class read with RelCacheInitLock held. An inplace
+    // update (vac_update_relstats -> heap_inplace_update_and_unlock) holds
+    // that pg_class buffer EXCLUSIVE and waits for RelCacheInitLock in
+    // PreInplace_Inval, so the two deadlock: every later session start then
+    // queues on RelCacheInitLock and the checkpointer on the buffer.
+    drop(entries);
 
     // Temp file + rename: a backend starting concurrently must never see a
     // partially written file. C's temp name is unique per WRITER because

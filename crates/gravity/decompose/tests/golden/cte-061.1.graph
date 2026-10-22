@@ -1,0 +1,12 @@
+-- cte-061.1
+-- SELECT t.a, u.z FROM t LEFT JOIN u ON u.z = t.c AND u.x = facts_user(7) WHERE t.a < 3;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:7)
+  limit count=1 offset=all
+  project (1=c23:7)
+  outs 1=w4:val
+  outs 1=w4:val
+mapped: Result Limit

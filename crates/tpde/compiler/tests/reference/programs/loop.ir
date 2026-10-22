@@ -1,0 +1,10 @@
+f(%n,%one) {
+entry:
+br ^loop
+loop:
+%i = phi [^entry, %n], [^loop, %next]
+%next = sub %i, %one
+condbr %next, ^loop, ^exit
+exit:
+ret %next
+}

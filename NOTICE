@@ -10,11 +10,29 @@ error message text, which are intentionally kept identical to
 PostgreSQL so the two systems can be compared byte-for-byte in
 testing).
 
-In addition, the equivalence-proof tree under proofs/ contains verbatim
-copies of PostgreSQL C source files (vendored as the reference side of
-machine-checked C-vs-Rust equivalence proofs). Those files are
-PostgreSQL source code, retain their upstream headers, and are
-distributed under the PostgreSQL License reproduced below.
+Verbatim PostgreSQL source also ships in this repository, under the
+PostgreSQL License reproduced below, with upstream headers retained:
+
+- crates/postgres-18.6-reference/: the unmodified PostgreSQL 18.6 source
+  tree, kept as a read-only reference (not compiled). It includes the
+  third-party files PostgreSQL itself carries, under their own headers
+  (for example src/backend/jit/llvm/SectionMemoryManager.LICENSE).
+- proofs/: PostgreSQL C files vendored as the reference side of
+  machine-checked C-vs-Rust equivalence proofs.
+- Test oracles and generators copied from PostgreSQL inside crates:
+  crates/_support/pg_qsort/cref, crates/_support/types/nodes/vendor,
+  crates/backend/access/common/tidstore/bench/cref/vendor,
+  crates/backend/lib/dshash/bench/cref.c, and the tests/data/cref
+  directories of crates/common/hashfn, crates/common/pglz and
+  crates/port/crc32c.
+- crates/backend/parser/gram_core/gram.c and
+  crates/backend/parser/scan_fgram/scan.c: Bison and flex output generated
+  from PostgreSQL's grammar and scanner. The Bison skeleton carries the
+  Bison special exception, which permits distributing the output under
+  any terms.
+- crates/bin/initdb/share/: PostgreSQL 18.6 install-time data (see its
+  PROVENANCE.md), including the IANA time zone database compiled by zic
+  (public domain).
 
 PostgreSQL is developed by the PostgreSQL Global Development Group and
 is distributed under the PostgreSQL License. In accordance with that
@@ -23,6 +41,117 @@ below.
 
 PostgreSQL: https://www.postgresql.org
 PostgreSQL source: https://github.com/postgres/postgres
+
+Third-party code inside PostgreSQL
+----------------------------------
+
+PostgreSQL incorporates code from other projects under their own
+permissive licenses. pgrust's Rust ports of those parts derive from that
+code. The license and copyright text of each is in the named file of
+crates/postgres-18.6-reference/:
+
+- Henry Spencer's regular expression engine, Copyright (c) 1998, 1999
+  Henry Spencer, BSD-style license (as adapted via Tcl):
+  ported in crates/backend/regex/ and crates/_support/types/regex.
+  License: src/backend/regex/COPYRIGHT.
+- Snowball stemmers and stop-word lists (https://snowballstem.org),
+  BSD-style license: ported in crates/backend/snowball/dict_snowball.
+  License: src/backend/snowball/README.
+- Ryu floating-point output, Copyright 2018 Ulf Adams, Boost Software
+  License 1.0 (as distributed in PostgreSQL): ported in crates/common/ryu.
+  License: src/common/d2s.c, src/common/f2s.c, src/common/ryu_common.h.
+- HyperLogLog, Copyright (c) 2013 Hideaki Ohno, MIT: ported in
+  crates/backend/lib/hyperloglog. License: src/backend/lib/hyperloglog.c.
+- MD5 and SHA-1, Copyright (C) 1995-1998 WIDE Project, BSD-3-Clause; SHA-2,
+  Copyright (c) 2000-2001 Aaron D. Gifford, BSD-3-Clause: ported in
+  crates/common/md5, crates/common/sha1, crates/common/sha2. License:
+  src/common/md5.c, src/common/sha1.c, src/common/sha2.c.
+- inet_net_ntop, Copyright (c) 2004 Internet Systems Consortium and (c)
+  1996,1999 Internet Software Consortium, ISC: ported in
+  crates/backend/utils/adt/network. License: src/port/inet_net_ntop.c.
+- tzcode (time zone library), public domain: ported in
+  crates/backend/timezone/.
+- pgcrypto's crypt() engines: crypt-des.c (FreeBSD, BSD), crypt-blowfish.c
+  and crypt-gensalt.c (Solar Designer, public domain with a fallback
+  permissive license), crypt-md5.c (Poul-Henning Kamp, "beer-ware"
+  license), crypt-sha.c (public domain), and Marko Kreen's pgcrypto
+  framework (BSD-2-Clause): ported in crates/contrib/pgcrypto. License: the
+  headers of the corresponding files under contrib/pgcrypto/.
+- Unicode Character Database derived tables, Copyright (c) Unicode, Inc.,
+  Unicode License v3: transcribed in crates/common/unicode_case,
+  crates/common/unicode_category and crates/common/unicode_norm (generated
+  in PostgreSQL by src/common/unicode/).
+- NetBSD qsort (Copyright (c) 1992, 1993 The Regents of the University of
+  California, BSD-3-Clause): ported in crates/_support/pg_qsort. License:
+  src/include/lib/sort_template.h.
+
+Other ported or derived code
+----------------------------
+
+- pgvector 0.8.5 (https://github.com/pgvector/pgvector), PostgreSQL
+  License: the vector type, its functions and the HNSW access method are
+  ported to Rust in crates/contrib/pgvector, crates/contrib/pgvector_hnsw
+  and crates/contrib/pgvector_hnsw_build; the extension script and
+  regression SQL are copied. License: crates/contrib/pgvector/LICENSE.
+- pg_cron 1.6 (https://github.com/citusdata/pg_cron), Copyright (c) 2015,
+  Citus Data, PostgreSQL-style license: ported to Rust in
+  crates/contrib/pg_cron; the extension scripts and regression files are
+  copied. License: crates/contrib/pg_cron/LICENSE.
+- CloudNativePG v1.30.1 (https://cloudnative-pg.io), Copyright contributors
+  to CloudNativePG, established as CloudNativePG a Series of LF Projects,
+  LLC, Apache License 2.0: portions translated to Rust in
+  crates/backend/postmaster/instaux (src/config.rs, src/roles.rs,
+  src/status.rs; modified by PagerFree, Inc., 2026). License:
+  crates/backend/postmaster/instaux/THIRD_PARTY/cloudnative-pg/LICENSE.
+- ALP (https://github.com/cwida/ALP), Copyright (c) 2023 CWI, Azim
+  Afroozeh, Leonardo Xavier Kuffo Rivero, MIT: crates/_support/alp follows
+  the reference implementation and copies its constants. License:
+  crates/_support/alp/LICENSE.
+
+The JIT compiler's code generator under crates/tpde/ is a Rust port of
+third-party components, each directory carrying its own NOTICE and license
+texts:
+
+- TPDE (https://tpde.org), Copyright 2025 Contributors to TPDE, licensed
+  under the Apache License 2.0 WITH LLVM-exception: crates/tpde/assembler,
+  base, compiler, compiler-a64, compiler-x64, core, elf-mapper,
+  function-writer, function-writer-a64, function-writer-x64, string-table,
+  test-ir and util. License texts: crates/tpde/compiler-x64/LICENSE and
+  crates/tpde/compiler-x64/LICENSE-LLVM-EXCEPTION.
+- Fadec (https://github.com/aengelke/fadec), Copyright (c) 2018, Alexis
+  Engelke, BSD-3-Clause: crates/tpde/fadec and fadec-gen. License text:
+  crates/tpde/fadec/LICENSE.
+- Disarm, Copyright (c) 2024, Alexis Engelke, BSD-3-Clause: crates/tpde/disarm
+  and disarm-gen. License text: crates/tpde/disarm/reference/LICENSE.
+- TPDE's upstream test sources include spdlog (Copyright (c) 2016 Gabi
+  Melman, MIT) and its bundled {fmt} (Copyright (c) Victor Zverovich, MIT):
+  crates/tpde/base/tests/upstream/deps/spdlog. License texts in that
+  directory.
+
+Vendored and linked libraries
+-----------------------------
+
+- mimalloc (https://github.com/microsoft/mimalloc), Copyright (c) 2018-2025
+  Microsoft Corporation, Daan Leijen, MIT, vendored with the
+  libmimalloc-sys crate (Copyright 2019 Octavian Oncescu, MIT):
+  third_party/libmimalloc-sys. License texts:
+  third_party/libmimalloc-sys/LICENSE.txt and
+  third_party/libmimalloc-sys/c_src/mimalloc/v2/LICENSE, v3/LICENSE.
+- allocator-api2, MIT OR Apache-2.0: third_party/allocator-api2. License
+  texts: third_party/allocator-api2/LICENSE-MIT, LICENSE-APACHE.
+- RE2 (https://github.com/google/re2), Copyright (c) 2009 The RE2 Authors,
+  BSD-3-Clause: linked (statically when available) by
+  crates/backend/utils/adt/regexp_alt. RE2's license text is reproduced at
+  the end of this file.
+- Rust crates from crates.io, listed with exact versions in Cargo.lock, are
+  compiled into pgrust binaries. Each is distributed under its own license
+  (all permissive: MIT, Apache-2.0, BSD, Zlib, Unicode-3.0, ISC, 0BSD or
+  Unlicense, several with the LLVM exception); their license texts are in
+  each crate's source package. The zstd-sys crate compiles the Zstandard
+  library (Copyright (c) Meta Platforms, Inc. and affiliates, BSD-3-Clause).
+
+Credits for the published research and other systems whose ideas pgrust
+uses are in ACKNOWLEDGEMENTS.md.
 
 ----------------------------------------------------------------------
 
@@ -49,3 +178,35 @@ INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
 AND FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS
 ON AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATIONS TO
 PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+
+----------------------------------------------------------------------
+
+RE2
+
+// Copyright (c) 2009 The RE2 Authors. All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//    * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//    * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//    * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

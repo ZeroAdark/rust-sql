@@ -28,6 +28,7 @@ init_small = { path = "../../../utils/init/init_small" }
 elog = { path = "../../../utils/error/elog" }
 pgstat = { path = "../../../utils/activity/pgstat" }
 rmgr = { path = "../../transam/rmgr" }
+multixact_seams = { path = "../../transam/multixact_seams" }
 
 [dev-dependencies]
 mcx = { path = "../../../../_support/mcx" }
@@ -40,7 +41,6 @@ xact_seams = { path = "../../transam/xact_seams" }
 transam_seams = { path = "../../transam/transam_seams" }
 subtrans_seams = { path = "../../transam/subtrans_seams" }
 combocid_seams = { path = "../../../utils/time/combocid_seams" }
-multixact_seams = { path = "../../transam/multixact_seams" }
 predicate_seams = { path = "../../../storage/lmgr/predicate_seams" }
 freespace_seams = { path = "../../../storage/freespace/freespace_seams" }
 miscinit_seams = { path = "../../../utils/init/miscinit_seams" }

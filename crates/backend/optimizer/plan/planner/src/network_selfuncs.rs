@@ -120,7 +120,7 @@ pub fn networksel<'mcx>(
         None => default_sel(operator),
     };
 
-    let selec = mcv_selec + (1.0 - nullfrac - sumcommon) * non_mcv_selec;
+    let selec = crate::fma_sites::net_mcv_combine(mcv_selec, nullfrac, sumcommon, non_mcv_selec);
     Ok(clamp_probability(selec))
 }
 
@@ -212,17 +212,22 @@ fn networkjoinsel_inner<'mcx>(
         )?;
     }
     if let (Some((v1, n1)), Some(h2)) = (s1.mcv, s2.hist) {
-        selec += (1.0 - s2.nullfrac - s2.sumcommon)
-            * inet_mcv_hist_sel(&v1[..s1.mcv_length as usize], n1, h2, opr_codenum);
+        let part = inet_mcv_hist_sel(&v1[..s1.mcv_length as usize], n1, h2, opr_codenum);
+        selec = crate::fma_sites::net_join_add(selec, s2.nullfrac, s2.sumcommon, part);
     }
     if let (Some((v2, n2)), Some(h1)) = (s2.mcv, s1.hist) {
-        selec += (1.0 - s1.nullfrac - s1.sumcommon)
-            * inet_mcv_hist_sel(&v2[..s2.mcv_length as usize], n2, h1, -opr_codenum);
+        let part = inet_mcv_hist_sel(&v2[..s2.mcv_length as usize], n2, h1, -opr_codenum);
+        selec = crate::fma_sites::net_join_add(selec, s1.nullfrac, s1.sumcommon, part);
     }
     if let (Some(h1), Some(h2)) = (s1.hist, s2.hist) {
-        selec += (1.0 - s1.nullfrac - s1.sumcommon)
-            * (1.0 - s2.nullfrac - s2.sumcommon)
-            * inet_hist_inclusion_join_sel(h1, h2, opr_codenum);
+        selec = crate::fma_sites::net_hist_hist_add(
+            selec,
+            s1.nullfrac,
+            s1.sumcommon,
+            s2.nullfrac,
+            s2.sumcommon,
+            inet_hist_inclusion_join_sel(h1, h2, opr_codenum),
+        );
     }
 
     if (s1.mcv.is_none() && s1.hist.is_none()) || (s2.mcv.is_none() && s2.hist.is_none()) {
@@ -255,15 +260,15 @@ fn networkjoinsel_semi<'mcx>(
     if let Some((v1, n1)) = s1.mcv {
         if s2.mcv.is_some() || s2.hist.is_some() {
             for i in 0..s1.mcv_length as usize {
-                selec += n1[i] as f64
-                    * inet_semi_join_sel(
-                        v1[i],
-                        s2.mcv.map(|(v, _)| &v[..s2.mcv_length as usize]),
-                        s2.hist,
-                        hist2_weight,
-                        &mut proc,
-                        opr_codenum,
-                    )?;
+                let sel = inet_semi_join_sel(
+                    v1[i],
+                    s2.mcv.map(|(v, _)| &v[..s2.mcv_length as usize]),
+                    s2.hist,
+                    hist2_weight,
+                    &mut proc,
+                    opr_codenum,
+                )?;
+                selec = crate::fma_sites::net_freq_accum(selec, n1[i] as f64, sel);
             }
         }
     }
@@ -371,7 +376,11 @@ fn inet_mcv_hist_sel(
     let mut selec = 0.0f64;
     // Paired iteration: torn-slot rule, see inet_mcv_join_sel.
     for (&v, &n) in mcv_values.iter().zip(mcv_numbers.iter()) {
-        selec += n as f64 * inet_hist_value_sel(hist_values, v, opr_codenum);
+        selec = crate::fma_sites::net_freq_accum(
+            selec,
+            n as f64,
+            inet_hist_value_sel(hist_values, v, opr_codenum),
+        );
     }
     selec
 }

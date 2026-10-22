@@ -82,14 +82,15 @@ pub fn transformWithClause<'mcx>(
     } else {
         // C list_copy: fresh cells, shared CommonTableExpr nodes.
         pstate.p_future_ctes = wc.ctes.clone_in(mcx)?;
-        for (i, cte_node) in wc.ctes.iter().enumerate() {
+        for cte_node in wc.ctes.iter() {
             analyzeCTE(mcx, pstate, cte_node)?;
             pstate.p_ctenamespace.lappend(mcx, cte_node)?;
-            let mut rest = NodeList::nil();
-            for later in wc.ctes.iter().skip(i + 1) {
-                rest.lappend(mcx, later)?;
+            // list_delete_first: shift in place, no new cells.
+            let future = &mut pstate.p_future_ctes;
+            if let Some(n) = future.len().checked_sub(1) {
+                future.as_mut_slice().copy_within(1.., 0);
+                future.truncate(n);
             }
-            pstate.p_future_ctes = rest;
         }
     }
 
@@ -897,6 +898,7 @@ struct WellFormedWalker<'a, 'p, 'mcx> {
 
 impl<'a, 'p, 'mcx> WellFormedWalker<'a, 'p, 'mcx> {
     fn check_select_stmt(&mut self, s: &'mcx SelectStmt<'mcx>) -> PgResult<()> {
+        stack_depth::check_stack_depth()?;
         let save_context = self.context;
         if save_context != RecursionContext::Allowed {
             nodes_core::walk_select_stmt(s, self)?;

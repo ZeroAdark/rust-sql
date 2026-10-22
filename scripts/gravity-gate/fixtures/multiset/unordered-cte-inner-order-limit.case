@@ -1,0 +1,14 @@
+# ORDER BY / LIMIT inside a CTE fix nothing at the top
+sql: WITH c AS (SELECT x FROM t ORDER BY x LIMIT 3)
+sql: SELECT x FROM c;
+cols: x
+class: unordered
+verdict: match
+[pg]
+1
+2
+3
+[got]
+3
+1
+2

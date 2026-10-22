@@ -7,7 +7,9 @@
 //! `jwt_validator` (always registered): verifies JWS access tokens against
 //! the issuer's JWKS (RS256/384/512, PS256/384/512, ES256/384; issuer,
 //! audience, exp/nbf/iat and scope checks) and falls back to RFC 7662
-//! introspection for opaque tokens. Configured by the jwt_validator.* GUCs.
+//! introspection for opaque tokens. Configured by the jwt_validator.* GUCs,
+//! which, like a C validator module's `_PG_init` settings, exist only once a
+//! backend has loaded the validator.
 //!
 //! `validator`, `fail_validator`, `oauth_test_validator` (feature
 //! `test-validator` only): the C regression module's validators, which
@@ -26,6 +28,8 @@ mod json;
 #[cfg(not(target_family = "wasm"))]
 mod jwt;
 #[cfg(not(target_family = "wasm"))]
+mod settings;
+#[cfg(not(target_family = "wasm"))]
 mod validator;
 
 #[cfg(feature = "test-validator")]
@@ -36,13 +40,29 @@ pub use validator::JWT_VALIDATOR_NAME;
 
 pub fn init_seams() {
     #[cfg(not(target_family = "wasm"))]
-    auth_oauth::register_builtin_validator(validator::JWT_VALIDATOR_NAME, &validator::JWT_VALIDATOR);
+    {
+        auth_oauth::register_builtin_validator(validator::JWT_VALIDATOR_NAME, &validator::JWT_VALIDATOR);
+        dfmgr::register_builtin_library(dfmgr::BuiltinLibraryEntry {
+            name: validator::JWT_VALIDATOR_NAME,
+            lookup: |_| None,
+            pg_init: Some(jwt_validator_pg_init),
+        });
+    }
     #[cfg(feature = "test-validator")]
     {
         auth_oauth::register_builtin_validator(testmod::VALIDATOR_NAME, &testmod::TEST_VALIDATOR);
         auth_oauth::register_builtin_validator(testmod::FAIL_VALIDATOR_NAME, &testmod::FAIL_VALIDATOR);
         auth_oauth::register_builtin_validator(testmod::PREFIX_VALIDATOR_NAME, &testmod::PREFIX_VALIDATOR);
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn jwt_validator_pg_init() -> types_error::PgResult<()> {
+    for &setting in settings::SETTINGS {
+        guc::DefineCustomVariable(setting)?;
+    }
+    guc::MarkGUCPrefixReserved(validator::JWT_VALIDATOR_NAME);
+    Ok(())
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]

@@ -1,0 +1,174 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1a s2l s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.attempts, q.name, q.max_attempts FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE;
+QUERY PLAN                                              
+--------------------------------------------------------
+Limit                                                   
+  ->  LockRows                                          
+        ->  Nested Loop                                 
+              Join Filter: (q.id = t.queue_id)          
+              ->  Index Scan using spt_claim on spt t   
+                    Index Cond: (status = 'ready'::text)
+              ->  Materialize                           
+                    ->  Seq Scan on spq q               
+                          Filter: (name = 'q2'::text)   
+(9 rows)
+
+step s1a: UPDATE spt SET attempts = attempts + 1 WHERE id = 11;
+step s2l: SELECT t.id, t.attempts, q.name, q.max_attempts FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts|name|max_attempts
+--+--------+----+------------
+11|       3|q2  |           5
+31|       1|q2  |           5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2l s1c
+step s1s: UPDATE spt SET status = 'done' WHERE id = 11;
+step s2l: SELECT t.id, t.attempts, q.name, q.max_attempts FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts|name|max_attempts
+--+--------+----+------------
+31|       1|q2  |           5
+51|       0|q2  |           5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1j s2l s1c
+step s1j: UPDATE spt SET queue_id = 3 WHERE id = 11;
+step s2l: SELECT t.id, t.attempts, q.name, q.max_attempts FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts|name|max_attempts
+--+--------+----+------------
+31|       1|q2  |           5
+51|       0|q2  |           5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2l s1c
+step s1d: DELETE FROM spt WHERE id = 11;
+step s2l: SELECT t.id, t.attempts, q.name, q.max_attempts FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts|name|max_attempts
+--+--------+----+------------
+31|       1|q2  |           5
+51|       0|q2  |           5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2l s1c
+step s1n: UPDATE spq SET name = 'q2x' WHERE id = 2;
+step s2l: SELECT t.id, t.attempts, q.name, q.max_attempts FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts|name|max_attempts
+--+--------+----+------------
+(0 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s2l s1c
+step s1r: UPDATE spq SET max_attempts = 9 WHERE id = 2;
+step s2l: SELECT t.id, t.attempts, q.name, q.max_attempts FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id|attempts|name|max_attempts
+--+--------+----+------------
+11|       2|q2  |           9
+31|       1|q2  |           9
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2o s1c
+step s1s: UPDATE spt SET status = 'done' WHERE id = 11;
+step s2o: SELECT t.id, q.name FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 OFFSET 1 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+id|name
+--+----
+51|q2  
+71|q2  
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM spt WHERE id = 11 FOR UPDATE;
+id
+--
+11
+(1 row)
+
+step s2sk: SELECT t.id, q.name FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE SKIP LOCKED;
+id|name
+--+----
+31|q2  
+51|q2  
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1lq s2sk s1c
+step s1lq: SELECT id FROM spq WHERE id = 2 FOR UPDATE;
+id
+--
+ 2
+(1 row)
+
+step s2sk: SELECT t.id, q.name FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE SKIP LOCKED;
+id|name
+--+----
+(0 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2nw s1c
+step s1l: SELECT id FROM spt WHERE id = 11 FOR UPDATE;
+id
+--
+11
+(1 row)
+
+step s2nw: SELECT t.id, q.name FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "spt"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1a s3l s1c
+step s1a: UPDATE spt SET attempts = attempts + 1 WHERE id = 11;
+step s3l: SELECT t.id, t.attempts, q.max_attempts FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR NO KEY UPDATE OF t FOR SHARE OF q; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|attempts|max_attempts
+--+--------+------------
+11|       3|           5
+31|       1|           5
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s3l s1c
+step s1r: UPDATE spq SET max_attempts = 9 WHERE id = 2;
+step s3l: SELECT t.id, t.attempts, q.max_attempts FROM spt t JOIN spq q ON q.id = t.queue_id WHERE t.status = 'ready' AND q.name = 'q2' ORDER BY t.priority DESC, t.run_at LIMIT 2 FOR NO KEY UPDATE OF t FOR SHARE OF q; <waiting ...>
+step s1c: COMMIT;
+step s3l: <... completed>
+id|attempts|max_attempts
+--+--------+------------
+11|       2|           9
+31|       1|           9
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress

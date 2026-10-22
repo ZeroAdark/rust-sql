@@ -1,0 +1,101 @@
+Parsed test spec with 4 sessions
+
+starting permutation: b13 ei bc
+step b13: UPDATE lkq SET b = 5 WHERE a = 13;
+step ei: SET enable_seqscan = off; SELECT a, b FROM lkq WHERE a > 11 AND a < 16 FOR UPDATE; <waiting ...>
+step bc: COMMIT;
+step ei: <... completed>
+ a|b
+--+-
+12|0
+13|5
+14|2
+15|3
+(4 rows)
+
+
+starting permutation: bx ei bc
+step bx: UPDATE lkq SET a = 113 WHERE a = 13;
+step ei: SET enable_seqscan = off; SELECT a, b FROM lkq WHERE a > 11 AND a < 16 FOR UPDATE; <waiting ...>
+step bc: COMMIT;
+step ei: <... completed>
+ a|b
+--+-
+12|0
+14|2
+15|3
+(3 rows)
+
+
+starting permutation: b13 ei br
+step b13: UPDATE lkq SET b = 5 WHERE a = 13;
+step ei: SET enable_seqscan = off; SELECT a, b FROM lkq WHERE a > 11 AND a < 16 FOR UPDATE; <waiting ...>
+step br: ROLLBACK;
+step ei: <... completed>
+ a|b
+--+-
+12|0
+13|1
+14|2
+15|3
+(4 rows)
+
+
+starting permutation: b13 es bc
+step b13: UPDATE lkq SET b = 5 WHERE a = 13;
+step es: SET enable_indexscan = off; SELECT a, b FROM lkq WHERE a > 11 AND a < 16 FOR UPDATE; <waiting ...>
+step bc: COMMIT;
+step es: <... completed>
+ a|b
+--+-
+12|0
+13|5
+14|2
+15|3
+(4 rows)
+
+
+starting permutation: bx es bc
+step bx: UPDATE lkq SET a = 113 WHERE a = 13;
+step es: SET enable_indexscan = off; SELECT a, b FROM lkq WHERE a > 11 AND a < 16 FOR UPDATE; <waiting ...>
+step bc: COMMIT;
+step es: <... completed>
+ a|b
+--+-
+12|0
+14|2
+15|3
+(3 rows)
+
+
+starting permutation: b13 one bc
+step b13: UPDATE lkq SET b = 5 WHERE a = 13;
+step one: SELECT a, b FROM lkq WHERE a > 11 AND a < 16 FOR UPDATE; <waiting ...>
+step bc: COMMIT;
+step one: <... completed>
+ a|b
+--+-
+12|0
+13|5
+14|2
+15|3
+(4 rows)
+
+
+starting permutation: pei pes
+step pei: SET enable_seqscan = off; EXPLAIN (COSTS OFF) SELECT a, b FROM lkq WHERE a > 11 AND a < 16 FOR UPDATE;
+QUERY PLAN                                 
+-------------------------------------------
+LockRows                                   
+  ->  Index Scan using lkq_pkey on lkq     
+        Index Cond: ((a > 11) AND (a < 16))
+(3 rows)
+
+step pes: SET enable_indexscan = off; EXPLAIN (COSTS OFF) SELECT a, b FROM lkq WHERE a > 11 AND a < 16 FOR UPDATE;
+QUERY PLAN                             
+---------------------------------------
+LockRows                               
+  ->  Seq Scan on lkq                  
+        Filter: ((a > 11) AND (a < 16))
+(3 rows)
+

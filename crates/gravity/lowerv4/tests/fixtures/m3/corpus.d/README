@@ -1,0 +1,7 @@
+M3 seed corpus: one file per fixture, `<fixture>.tsv` holding its row `fixture<TAB>source<TAB>expect` (tests/sort_m3.rs
+m3_seed_verdicts reads every *.tsv here; column 1 must be the file's name).
+- fixture: a decompose plan fixture id (plans/<id>.plan; regress-full-<stem> = plans/regress-full/<stem>.plan), or a
+  fixtures/m3/<id>.plan with its .pg golden.
+- source: the census family (census/serve.tsv).
+- expect: the crate's verdict today: `served`, or `refused <text>`.
+Re-keyed by fixture name (v5 core-face landing 8); the rows were first seeded per M3 kind / road (M3-L1, 2026-09-25).

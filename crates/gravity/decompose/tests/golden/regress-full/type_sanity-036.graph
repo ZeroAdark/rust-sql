@@ -1,0 +1,34 @@
+-- regress-full-type_sanity-036
+-- SELECT r.rngtypid, r.rngsubtype, o.opcmethod, o.opcname FROM pg_range r JOIN pg_opclass o ON o.oid = r.rngsubopc WHERE o.opcmethod != 403 OR ((o.opcintype != r.rngsubtype) AND NOT (o.opcintype = 'pg_catalog.anyarray'::regtype AND EXISTS(select 1 from pg_catalog.pg_type where oid = r.rngsubtype and typelem != 0 and typsubscript = 'array_subscript_handler'::regproc)));
+graph pipelines=3 breakers=2 init_plans=0 root=p2
+p0 node=3 eligible rows=177 end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n3@0 n2@1
+  source range rel=2616 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:fx64:win/page Attr(7):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.2, 2=v2.3, 3=v2.1, 4=v2.7)
+  build keys=(outer.3) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w8:val 4=w8:val
+p1 node=4 eligible rows=184 end=breaker(slot=1 Distinct)
+  nodes n4@0
+  source range rel=1247 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(13):byval8:w8:val Attr(14):byval8:w8:val Offset:byval2:w2:val
+  filter op608(v5.14, c26:0)
+  filter op607(relabel26(v5.13), c26:6179)
+  project (1=v5.1)
+  subplan 2 build Any unknown-eq-false ids=($exec1) site=joinqual conditional raise-free test=op607(outer.2, $exec1)
+  outs 1=w8:val
+p2 node=1 eligible rows=6 end=sink
+  desc consumes=slot0@p0 consumes=slot1@p1
+  nodes n1@0 n0@1
+  source range rel=3541 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(5):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7)
+  subplan 2 hashed Any unknown-eq-false slot=1 ids=($exec1) site=joinqual conditional raise-free test=op607(outer.2, $exec1)
+  probe slot=0 inner=n2 JOIN_INNER unique keys=(outer.5) decls=26/26:I32 clauses=(op607(outer.5, inner.3)) qual=(or(op608(inner.1, c26:403), and(op608(inner.4, outer.2), or(op608(inner.4, c26:2277), not(subplan2())))))
+  project (1=outer.1, 2=outer.2, 3=inner.1, 4=inner.2)
+  outs 1=w8:val 2=w8:val 3=w4:val 4=w4:val 5=w8:val 6=w4:val 7=w4:val
+  outs 1=w8:val 2=w8:val 3=w4:val 4=fx64:life/breaker
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B
+mapped: SeqScan HashJoin Hash SubPlan

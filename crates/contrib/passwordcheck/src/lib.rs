@@ -7,6 +7,8 @@
 //! The cracklib arm (`USE_CRACKLIB`, passwordcheck.c:120-127) is a build
 //! option pgrust never sets, exactly like a stock PGDG build.
 
+mod settings;
+
 use core::sync::atomic::{AtomicI32, Ordering};
 
 use datum::Datum;
@@ -16,8 +18,7 @@ use types_fmgr::PGFunction;
 
 const LIBRARY: &str = "passwordcheck";
 
-// passwordcheck.c:37 `static int min_password_length = 8` (PGC_SUSET custom
-// GUC, statically defined like auto_explain.*).
+// passwordcheck.c:37 `static int min_password_length = 8`.
 static MIN_PASSWORD_LENGTH: AtomicI32 = AtomicI32::new(8);
 
 fn invalid(msg: &str) -> Box<PgError> {
@@ -104,6 +105,9 @@ fn lookup(_function: &str) -> Option<PGFunction> {
 /// `_PG_init` (passwordcheck.c:134-155): the custom GUC, the reserved prefix,
 /// then the hook.
 fn pg_init() -> PgResult<()> {
+    for &setting in settings::SETTINGS {
+        guc::DefineCustomVariable(setting)?;
+    }
     guc::MarkGUCPrefixReserved("passwordcheck");
     user::install_check_password_hook(check_password);
     Ok(())

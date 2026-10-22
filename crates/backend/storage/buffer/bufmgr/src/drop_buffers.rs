@@ -6,6 +6,18 @@ use types_storage::buf::{BM_TAG_VALID, BUF_FLAG_MASK, BUF_USAGECOUNT_MASK};
 use crate::pin::buffer_refcount;
 use types_storage::{RelFileLocator, RelFileLocatorBackend};
 
+/// D4635: told the relation files whose buffers `DropRelationsAllBuffers` drops (their storage about to be unlinked) and
+/// the database whose buffers `DropDatabaseBuffers` drops, for state kept by relation file outside the pool (Gravity's page
+/// hints); set once at the process's start (`set_dropped_hooks`), none before.
+static RELATIONS_DROPPED: pgsync::OnceLock<fn(&[RelFileLocatorBackend])> = pgsync::OnceLock::new();
+static DATABASE_DROPPED: pgsync::OnceLock<fn(types_core::Oid)> = pgsync::OnceLock::new();
+
+/// D4635: the hooks `DropRelationsAllBuffers` and `DropDatabaseBuffers` call first (the first set stands).
+pub fn set_dropped_hooks(relations: fn(&[RelFileLocatorBackend]), database: fn(types_core::Oid)) {
+    let _ = RELATIONS_DROPPED.set(relations);
+    let _ = DATABASE_DROPPED.set(database);
+}
+
 use crate::buf_hdr::{
     cleared_buftag, BufferDesc, BufferDescriptorGetBuffer, GetBufferDescriptor, LockBufHdr,
     NBuffersInited, UnlockBufHdr,
@@ -232,6 +244,9 @@ fn FindAndDropRelationBuffers(
 /// DropDatabaseBuffers (bufmgr.c): whole-pool sweep; no relation-count
 /// optimization is possible, as in C.
 pub fn DropDatabaseBuffers(dbid: types_core::Oid) -> PgResult<()> {
+    if let Some(f) = DATABASE_DROPPED.get() {
+        f(dbid);
+    }
     // The callers (drop/move database) are about to rmtree the database's
     // file tree — sizes change behind md's back, so its process-global size
     // cache must forget the whole database.
@@ -254,7 +269,11 @@ pub fn DropDatabaseBuffers(dbid: types_core::Oid) -> PgResult<()> {
 }
 
 pub fn DropRelationsAllBuffers(smgr_reln: &[RelFileLocatorBackend]) -> PgResult<()> {
-    let mut rels: Vec<RelFileLocatorBackend> = Vec::with_capacity(smgr_reln.len());
+    if let Some(f) = RELATIONS_DROPPED.get() {
+        f(smgr_reln);
+    }
+    // bufmgr.c: palloc'd scratch arrays; failure is ERROR 53200, not an abort.
+    let mut rels: Vec<RelFileLocatorBackend> = ::mcx::std_vec_with_capacity("DropRelationsAllBuffers", smgr_reln.len())?;
     for r in smgr_reln {
         if r.backend != types_core::INVALID_PROC_NUMBER {
             if r.backend == init_small::globals::MyProcNumber() {
@@ -269,7 +288,8 @@ pub fn DropRelationsAllBuffers(smgr_reln: &[RelFileLocatorBackend]) -> PgResult<
     }
 
     let nforks = MAX_FORKNUM as usize + 1;
-    let mut block: Vec<[BlockNumber; 4]> = vec![[InvalidBlockNumber; 4]; rels.len()];
+    let mut block: Vec<[BlockNumber; 4]> =
+        ::mcx::std_vec_from_elem("DropRelationsAllBuffers", [InvalidBlockNumber; 4], rels.len())?;
     debug_assert!(nforks == 4);
     let mut n_blocks_to_invalidate: u64 = 0;
     let mut cached = true;

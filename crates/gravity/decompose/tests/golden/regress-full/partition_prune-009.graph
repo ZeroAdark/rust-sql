@@ -1,0 +1,11 @@
+-- regress-full-partition_prune-009
+-- explain (costs off) select * from lp where a = 'a';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=11 end=sink
+  nodes n1@0
+  source range rel=44740 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  filter op1054(v2.1, c1042:'a')
+  project (1=v2.1)
+  outs 1=vl:win/page
+mapped: SeqScan

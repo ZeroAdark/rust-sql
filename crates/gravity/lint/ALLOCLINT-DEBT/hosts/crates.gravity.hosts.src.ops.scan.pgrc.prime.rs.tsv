@@ -1,0 +1,8 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/prime.rs
+growth	std::vec::Vec::push	1
+method	slice::sort_by	1
+method	std::borrow::Cow::into_owned	1
+method	std::boxed::Box::new	1
+method	std::iter::Iterator::collect	1
+type	std::boxed::Box	1
+type	std::vec::Vec	2

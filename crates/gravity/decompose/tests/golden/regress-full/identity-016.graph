@@ -1,0 +1,10 @@
+-- regress-full-identity-016
+-- INSERT into pitest2(f1, f2) VALUES ('2016-07-4', 'from pitest2');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c1082:6029, 2=c25:'from pitest2', 3=T_NextValueExpr)
+  write INSERT rel=29219 rti=1 natts=3 indexes=() route=rti1:29219 natts=3
+  outs 1=w4:val 2=vl:stmt/imm 3=w4:val
+mapped: Result ModifyTable

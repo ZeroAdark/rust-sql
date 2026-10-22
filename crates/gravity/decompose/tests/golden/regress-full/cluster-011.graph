@@ -1,0 +1,21 @@
+-- regress-full-cluster-011
+-- SELECT * FROM clstr_expression WHERE -a = -3 ORDER BY -a, b;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 Sort)
+  nodes n2@0 n1@0 n0@1^
+  source bitmap rel=38480 rti=1 am=heap
+    bitmap index node=2 index=38489 rows=6
+      key att=0 op=96 col=1 value=c23:-3
+    recheck (op96(op558(v1.2), c23:-3))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4j=op558(v1.2))
+  sort keys=3+:Fp128@950 form=runs
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4j=outer.4)
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val
+breaker slot=0 kind=Sort budget=Share spill=Runs producer=p0 layout=[Fp128,Fp128]->[Count@16] 24B order=3+
+mapped: BitmapIndexScan BitmapHeapScan Sort

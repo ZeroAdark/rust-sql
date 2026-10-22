@@ -91,6 +91,11 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    // WalUsageAdd(&pgWalUsage, add) (instrument.c:232).
+    pub fn wal_usage_add(add: &types_core::instrument::WalUsage)
+);
+
+seam_core::seam!(
     // GetFlushRecPtr(&insertTLI) (xlog.c): (flush ptr, insert TLI).
     pub fn get_flush_rec_ptr() -> (XLogRecPtr, TimeLineID)
 );

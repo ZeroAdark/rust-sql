@@ -1,0 +1,23 @@
+-- regress-full-privileges-014
+-- EXPLAIN (COSTS OFF) SELECT * FROM atest12v x, atest12v y WHERE x.a = y.b;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=4 end=sink
+  nodes n1@0 n0@2
+  source range rel=27199 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op27207(v4.2, c23:5)
+  project (1=v4.1, 2=v4.2)
+  nest inner=n2 JOIN_INNER vol=v params=($exec0=outer.2)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=27199 rti=3 am=heap index=27202
+    key att=1 op=96 value=$exec0
+    recheck (op96(v3.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  filter op27207(v3.2, c23:5)
+  project (1=v3.1, 2=v3.2)
+  project (1=inner.1, 2=inner.2, 3=outer.1, 4=outer.2)
+  outs 1=w8:val 2=w8:val
+  outs 1=w4:val 2=w4:val 3=w8:val 4=w8:val
+param $exec0 owner=n0 type=23 rep=w8:val
+mapped: SeqScan IndexScan NestLoop NestLoopParam

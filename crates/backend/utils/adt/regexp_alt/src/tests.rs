@@ -24,19 +24,19 @@ fn replace(p: &str, s: &str, r: &str, start: i32, n: i32) -> String {
     String::from_utf8(out.as_slice().to_vec()).unwrap()
 }
 
-const Q29_PAT: &str = r"^https?://(?:www\.)?([^/]+)/.*$";
+const URL_HOST_PAT: &str = r"^https?://(?:m\.)?([^/]+)/.*$";
 
 #[test]
-fn q29_shape() {
+fn url_host_capture_replaces_with_the_host() {
     setup();
     if !re2_available() {
         return;
     }
-    assert_eq!(replace(Q29_PAT, "http://www.example.com/path/x?y=1", r"\1", 0, 1), "example.com");
-    assert_eq!(replace(Q29_PAT, "https://sub.host.ru/", r"\1", 0, 1), "sub.host.ru");
-    assert_eq!(replace(Q29_PAT, "not-a-url", r"\1", 0, 1), "not-a-url");
-    assert_eq!(replace(Q29_PAT, "http://hostonly.com", r"\1", 0, 1), "http://hostonly.com");
-    assert_eq!(replace(Q29_PAT, "", r"\1", 0, 1), "");
+    assert_eq!(replace(URL_HOST_PAT, "http://m.example.com/path/x?y=1", r"\1", 0, 1), "example.com");
+    assert_eq!(replace(URL_HOST_PAT, "https://sub.host.ru/", r"\1", 0, 1), "sub.host.ru");
+    assert_eq!(replace(URL_HOST_PAT, "not-a-url", r"\1", 0, 1), "not-a-url");
+    assert_eq!(replace(URL_HOST_PAT, "http://hostonly.com", r"\1", 0, 1), "http://hostonly.com");
+    assert_eq!(replace(URL_HOST_PAT, "", r"\1", 0, 1), "");
 }
 
 #[test]
@@ -183,8 +183,8 @@ fn dispatch_decision_is_cached() {
         return;
     }
     set_regex_engine(REGEX_ENGINE_AUTO);
-    let a = dispatch(Q29_PAT.as_bytes(), REG_ADVANCED, b"x").unwrap().unwrap();
-    let b = dispatch(Q29_PAT.as_bytes(), REG_ADVANCED, b"x").unwrap().unwrap();
+    let a = dispatch(URL_HOST_PAT.as_bytes(), REG_ADVANCED, b"x").unwrap().unwrap();
+    let b = dispatch(URL_HOST_PAT.as_bytes(), REG_ADVANCED, b"x").unwrap().unwrap();
     // Same Rc-backed compiled pattern comes back from the cache.
     assert!(Rc::ptr_eq(&a.inner, &b.inner));
     // Spencer verdicts are cached too.
@@ -192,26 +192,24 @@ fn dispatch_decision_is_cached() {
     assert!(dispatch(br"\d", REG_ADVANCED, b"x").unwrap().is_none());
 }
 
-// Pattern-program tier differential: for every subset pattern, program-on
-// exec must agree with program-off (pure RE2) exec — return value AND every
-// group span — across subjects incl. multibyte hosts and give-back shapes.
+// The pattern program against the RE2 automaton it stands in for: for every
+// pattern the program compiles, at every start, the verdict and every group
+// span equal RE2's (the program refusing is the RE2 answer).
+#[cfg(have_re2)]
 #[test]
 fn pattern_program_vs_re2_differential() {
     setup();
-    if !re2_available() {
-        return;
-    }
     set_regex_engine(REGEX_ENGINE_AUTO);
 
     let patterns: &[&str] = &[
-        Q29_PAT,
+        URL_HOST_PAT,
         "^",
         "^$",
         "^abc",
         "^abc$",
         "^a?b",
         "^https?://",
-        r"^(?:www\.)?([^/]+)$",
+        r"^(?:m\.)?([^/]+)$",
         "^([a-z]+)z$",
         "^([a-z]+)bc$",
         "^([^a]+)y$",
@@ -224,14 +222,31 @@ fn pattern_program_vs_re2_differential() {
         r"^\.\*",
         "^é?x",
         "^[^,]*,",
+        "https?://(?:www\\.)?([^/]+)/.*$",
+        "://([^/]+)/",
+        "([a-z]+)/([a-z]+)",
+        "^(.*)/(.*)$",
+        "^(.+)/[0-9]+/.*$",
+        "a.b",
+        ".{2,3}x",
+        "^([^/]{2,3})",
+        "([A-Za-z]+)/v?[0-9.]+",
+        "^([A-Za-z]+)/v?([0-9]+)\\..*$",
+        "[0-9]+",
+        "b*",
+        "x*$",
+        "é(.)",
+        "(.)(.)(.)",
+        "://(x)/(y)",
+        "^(.)x(.)$",
     ];
     let subjects: &[&str] = &[
         "",
-        "http://www.example.com/path/x?y=1",
+        "http://m.example.com/path/x?y=1",
         "https://sub.host.ru/",
         "http://hostonly.com",
         "https://пример.рф/страница",
-        "http://www/",
+        "http://m/",
         "not-a-url",
         "abc",
         "abcz",
@@ -239,8 +254,8 @@ fn pattern_program_vs_re2_differential() {
         "xéy",
         "xéX",
         "éxé",
-        "www.x",
-        "www",
+        "m.x",
+        "m",
         "1234-56",
         "0123x",
         "xxyyzz",
@@ -250,77 +265,66 @@ fn pattern_program_vs_re2_differential() {
         ",,a,,b,,",
         "line one\nline two\n",
         "café instrument",
+        "Mozilla/5.0 (X11; Linux x86_64) Chrome/118.0.1",
+        "a/b/c",
+        "x/y/12/z",
+        "日本語/abc/12/",
+        "a\nb",
+        "bbb",
     ];
-
     for p in patterns {
-        let re = dispatch(p.as_bytes(), REG_ADVANCED, b"clean").unwrap().unwrap_or_else(|| {
-            panic!("pattern {p:?} should dispatch to re2");
-        });
-        assert!(
-            program::compile(p.as_bytes()).is_some(),
-            "pattern {p:?} should be in the program subset"
-        );
+        let re = dispatch(p.as_bytes(), REG_ADVANCED, b"clean").unwrap().unwrap_or_else(|| panic!("pattern {p:?} should dispatch to re2"));
+        if !re.has_program() {
+            continue;
+        }
         for s in subjects {
-            for nout in [0usize, 1, 2, 10] {
-                let mut prog_out = [(-7i64, -7i64); 10];
-                let mut re2_out = [(-7i64, -7i64); 10];
-                set_regex_pattern_program(true);
-                let prog_m = re.exec(s.as_bytes(), 0, &mut prog_out[..nout]);
-                set_regex_pattern_program(false);
-                let re2_m = re.exec(s.as_bytes(), 0, &mut re2_out[..nout]);
-                set_regex_pattern_program(true);
-                assert_eq!(prog_m, re2_m, "match verdict diverges: {p:?} on {s:?}");
-                if prog_m {
-                    assert_eq!(
-                        prog_out[..nout],
-                        re2_out[..nout],
-                        "group spans diverge: {p:?} on {s:?}"
-                    );
+            for start in (0..=s.len()).filter(|&i| s.is_char_boundary(i)) {
+                for nout in [0usize, 1, 2, 4, 10] {
+                    let mut prog_out = [(-7i64, -7i64); 10];
+                    let mut re2_out = [(-7i64, -7i64); 10];
+                    let prog_m = re.exec(s.as_bytes(), start, &mut prog_out[..nout]);
+                    let re2_m = re.inner.match_at(s.as_bytes(), start, &mut re2_out[..nout]);
+                    assert_eq!(prog_m, re2_m, "match verdict diverges: {p:?} on {s:?} from {start}");
+                    if prog_m {
+                        assert_eq!(prog_out[..nout], re2_out[..nout], "group spans diverge: {p:?} on {s:?} from {start}");
+                    }
                 }
             }
         }
     }
 }
 
-// Pathological backtracking: the step budget must refuse (fall back inside
-// exec to RE2, same answer), never wrong-answer or hang. The public exec
-// must therefore agree with program-off exec even on budget-tripping input.
+// Pathological backtracking: the step budget refuses (exec falls back to RE2,
+// the same answer), never a wrong answer or a hang.
+#[cfg(have_re2)]
 #[test]
 fn pattern_program_budget_fallback() {
     setup();
-    if !re2_available() {
-        return;
-    }
     set_regex_engine(REGEX_ENGINE_AUTO);
     let p = "^[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*c$";
     let re = dispatch(p.as_bytes(), REG_ADVANCED, b"clean").unwrap().unwrap();
-    assert!(program::compile(p.as_bytes()).is_some());
     let hay = "ab".repeat(64);
-    // The raw program refuses (budget) …
-    assert_eq!(program::compile(p.as_bytes()).unwrap().exec(hay.as_bytes(), &mut []), None);
-    // … and the public exec still answers via RE2, matching program-off.
-    set_regex_pattern_program(true);
-    let on = re.exec(hay.as_bytes(), 0, &mut []);
-    set_regex_pattern_program(false);
-    let off = re.exec(hay.as_bytes(), 0, &mut []);
-    set_regex_pattern_program(true);
-    assert_eq!(on, off);
-    assert!(!on);
+    assert_eq!(program::Program::compile(p.as_bytes()).unwrap().exec(hay.as_bytes(), 0, &mut []), None);
+    assert!(!re.exec(hay.as_bytes(), 0, &mut []));
+    assert!(!re.inner.match_at(hay.as_bytes(), 0, &mut []));
 }
 
-// The tier engages for the exact anchored-URL pattern under auto dispatch, and the
-// GUC turns it off without recompiling.
+// The program attaches under auto dispatch for the subset RE2 runs
+// leftmost-first (pinned at both ends, or without a quantifier: anchored or
+// not, several groups); whole-match-tier, alternation and longest-mode
+// patterns get none.
 #[test]
-fn pattern_program_attaches_for_q29() {
+fn pattern_program_attaches() {
     setup();
     if !re2_available() {
         return;
     }
     set_regex_engine(REGEX_ENGINE_AUTO);
-    let re = dispatch(Q29_PAT.as_bytes(), REG_ADVANCED, b"clean").unwrap().unwrap();
-    assert!(re.has_program(), "Q29's pattern must compile to a pattern program");
-    // Whole-match-tier and alternation patterns must NOT get a program.
-    for p in ["^(foo|bar)$", "(a)+", "a|ab"] {
+    for p in [URL_HOST_PAT, "^([a-z]+)/([a-z]+)$", "^(.*)/(.*)$", "://(x)/(y)"] {
+        let re = dispatch(p.as_bytes(), REG_ADVANCED, b"clean").unwrap().unwrap();
+        assert!(re.has_program(), "{p:?} must compile to a pattern program");
+    }
+    for p in ["^(foo|bar)$", "(a)+", "a|ab", "://([^/]+)/"] {
         if let Some(re) = dispatch(p.as_bytes(), REG_ADVANCED, b"clean").unwrap() {
             assert!(!re.has_program(), "{p:?} must not get a program");
         }

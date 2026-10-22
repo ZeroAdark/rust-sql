@@ -1,20 +1,3 @@
-// Disk serialization support (reorderbuffer.c:3737): when decoded-but-not-yet-
-// replayed changes exceed logical_decoding_work_mem, the largest (sub)txn is
-// evicted from memory into per-WAL-segment spill files under
-// pg_replslot/<slot>/, and read back in bounded batches while replaying.
-//
-// The on-disk record encoding is port-private (size-prefixed, native-endian):
-// like C's memcpy'd ReorderBufferDiskChange it is only ever read back by the
-// same build within the same decoding run — leftovers are deleted at startup
-// and at slot allocate/free (startup.rs) — so no cross-version stability is
-// promised. What is C-exact is the lifecycle: file naming/segmentation,
-// final_lsn maintenance, nentries vs nentries_mem accounting, batch size,
-// spill statistics, and every allocation on the restore path landing in the
-// buffer's own context (rb->context parity; tuple/msg/inval/snapshot copies
-// must never land in a shorter- or longer-lived context).
-
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use mcx::PgVec;
@@ -30,23 +13,15 @@ use crate::{
     ReorderBufferChangeType::*, TxnId, INVALID_ID, RBTXN_IS_ABORTED, RBTXN_IS_SERIALIZED,
     RBTXN_IS_SERIALIZED_CLEAR,
 };
+use elog::PCT_M;
 
-// max_changes_in_memory (reorderbuffer.c:245): restore batch size.
 const MAX_CHANGES_IN_MEMORY: u64 = 4096;
 
 const SHARED_INVAL_MESSAGE_SIZE: usize = 16;
 
-// C's MaxAllocSize (utils/memutils.h): 1 GB - 1, the ceiling
-// AllocSizeIsValid() enforces inside every palloc/repalloc. On the restore
-// path C sizes rb->outbuf from the on-disk record length via
-// ReorderBufferSerializeReserve -> repalloc (reorderbuffer.c:4610), so a
-// crafted length above this ceiling is refused there with a catchable ERROR
-// rather than honored. This port must reproduce that admission check before
-// its own (infallible) buffer allocation.
+// This port must reproduce that admission check before its own (infallible) buffer allocation.
 const MAX_ALLOC_SIZE: usize = 0x3fff_ffff;
 
-// ReorderBufferSerializedPath (reorderbuffer.c:4889):
-// pg_replslot/<slot>/xid-%u-lsn-%X-%X.spill, LSN = the segment start.
 pub(crate) fn serialized_path(slot_name: &str, xid: TransactionId, segno: u64) -> PathBuf {
     let seg_size = transam_xlog_seams::wal_segment_size::call() as u64;
     let recptr: XLogRecPtr = segno * seg_size;
@@ -60,8 +35,6 @@ pub(crate) fn serialized_path(slot_name: &str, xid: TransactionId, segno: u64) -
     ));
     path
 }
-
-// ---- record encoding helpers -----------------------------------------------
 
 fn put_u8(buf: &mut Vec<u8>, v: u8) {
     buf.push(v);
@@ -179,8 +152,6 @@ fn get_tid(cur: &mut Cur) -> PgResult<ItemPointerData> {
     })
 }
 
-// Full owned tuple image: identity fields + header-and-data bytes, C's
-// HeapTupleData copy followed by the t_len image (reorderbuffer.c:4107).
 fn put_tuple(buf: &mut Vec<u8>, tuple: &heaptuple::HeapTuple<'static>) {
     put_tid(buf, &tuple.t_self);
     put_u32(buf, tuple.t_tableOid);
@@ -199,28 +170,16 @@ impl ReorderBuffer {
             )));
         }
         let image = cur.take(t_len)?;
-        // ReorderBufferAllocTupleBuf parity: the copy lands in the buffer's
-        // own context, never the caller's.
+        // The copy lands in the buffer's own context, never the caller's.
         let mut tuple = self.alloc_tuple_buf(t_len - SizeofHeapTupleHeader)?;
         tuple.image_mut().copy_from_slice(image);
         tuple.t_self = t_self;
         tuple.t_tableOid = t_table_oid;
 
         // Establish the header invariants heap_deform_tuple relies on before
-        // this image is ever handed to unsafe deform/varlena code. C builds
-        // these at heap_form_tuple time (heaptuple.c:1151-1156: t_hoff =
-        // MAXALIGN(SizeofHeapTupleHeader + (HEAP_HASNULL ? BITMAPLEN(natts) :
-        // 0))) but ReorderBufferRestoreChange (reorderbuffer.c:4676) re-hydrates
-        // the image straight from disk without re-checking them. These spill
-        // bytes are untrusted (a crafted file under pg_replslot/<slot>/), so a
-        // t_hoff past the image end would make GETSTRUCT / `tp = tup + t_hoff`
-        // (heaptuple.c:1368) read out of bounds, and a null bitmap that
-        // overruns t_hoff would make att_isnull() read past the header region.
-        // Reject either with a catchable DATA_CORRUPTED error rather than
-        // deforming into out-of-bounds memory.
+        // this image is ever handed to unsafe deform/varlena code.
         let header = tuple.t_data();
         let t_hoff = header.t_hoff as usize;
-        // BITMAPLEN(natts) = (natts + 7) / 8; only present when HEAP_HASNULL.
         let null_bitmap_len =
             if tuple.has_nulls() { (header.natts() as usize + 7) / 8 } else { 0 };
         let min_hoff = SizeofHeapTupleHeader + null_bitmap_len;
@@ -235,19 +194,13 @@ impl ReorderBuffer {
         Ok(tuple)
     }
 
-    // ReorderBufferLargestTXN (reorderbuffer.c:3814): the root of rb->txn_heap,
-    // so equal sizes resolve the way C's pairing heap does.
     pub(crate) fn largest_txn(&self) -> Option<TxnId> {
         let largest = self.txn_heap.first().map(|&(_, id)| id);
         debug_assert!(largest.map_or(true, |id| self.txn(id).size <= self.size));
         largest
     }
 
-    // ReorderBufferCheckAndTruncateAbortedTXN (reorderbuffer.c:1773): CLOG-
-    // check the eviction candidate and discard its changes when the
-    // transaction already aborted; the verdict is cached in txn_flags.
     fn check_and_truncate_aborted_txn(&mut self, txn: TxnId) -> PgResult<bool> {
-        // Quick return for regression tests.
         if guc_tables::vars::debug_logical_replication_streaming.read()
             == guc_tables::consts::DEBUG_LOGICAL_REP_STREAMING_IMMEDIATE
         {
@@ -258,7 +211,6 @@ impl ReorderBuffer {
             return Ok(false);
         }
         if self.txn(txn).is_aborted() {
-            // Already-aborted transactions should not have any changes.
             debug_assert_eq!(self.txn(txn).size, 0);
             return Ok(true);
         }
@@ -274,9 +226,7 @@ impl ReorderBuffer {
             return Ok(false);
         }
 
-        // Aborted: discard the changes collected so far and the toast
-        // reconstruction data; full cleanup happens when the ABORT record of
-        // this transaction is decoded.
+        // Full cleanup happens when the ABORT record of this transaction is decoded.
         let prepared = self.txn(txn).is_prepared();
         self.truncate_txn(txn, prepared)?;
         self.toast_reset(txn);
@@ -286,9 +236,6 @@ impl ReorderBuffer {
         Ok(true)
     }
 
-    // ReorderBufferCheckMemoryLimit (reorderbuffer.c:3883): evict the largest
-    // (sub)transaction at a time until back under logical_decoding_work_mem;
-    // under debug_logical_replication_streaming=immediate, until empty.
     pub(crate) fn check_memory_limit(&mut self) -> PgResult<()> {
         let limit = guc_tables::vars::logical_decoding_work_mem.read() as usize * 1024;
         let immediate = guc_tables::vars::debug_logical_replication_streaming.read()
@@ -298,12 +245,8 @@ impl ReorderBuffer {
             return Ok(());
         }
 
-        // Loop rather than evicting once: the GUC can shrink between changes,
-        // so one eviction is not guaranteed to get back under the limit.
+        // The GUC can shrink between changes, so one eviction is not guaranteed to get back under the limit.
         while self.size >= limit || (immediate && self.size > 0) {
-            // Prefer evicting the largest streamable toplevel transaction by
-            // streaming it, when the plugin supports it and a consistent
-            // point was reached; otherwise spill the largest (sub)txn.
             let streamable = if self.can_start_streaming() {
                 self.largest_streamable_top_txn()
             } else {
@@ -314,28 +257,22 @@ impl ReorderBuffer {
                 debug_assert!(self.txn(txn).total_size > 0);
                 debug_assert!(self.size >= self.txn(txn).total_size);
 
-                // Skip the transaction if aborted.
                 if self.check_and_truncate_aborted_txn(txn)? {
                     continue;
                 }
 
                 self.stream_txn(txn)?;
             } else {
-                // Pick the largest transaction (or subtransaction) and evict
-                // it from memory by serializing it to disk.
                 let txn = self.largest_txn().expect("nonzero rb size implies a sized txn");
                 debug_assert!(self.txn(txn).size > 0);
                 debug_assert!(self.size >= self.txn(txn).size);
 
-                // Skip the transaction if aborted.
                 if self.check_and_truncate_aborted_txn(txn)? {
                     continue;
                 }
 
                 self.serialize_txn(txn)?;
 
-                // After eviction, the transaction must hold no accounted
-                // memory.
                 debug_assert_eq!(self.txn(txn).size, 0);
                 debug_assert_eq!(self.txn(txn).nentries_mem, 0);
             }
@@ -345,9 +282,6 @@ impl ReorderBuffer {
         Ok(())
     }
 
-    // ReorderBufferSerializeTXN (reorderbuffer.c:3963): spill a transaction
-    // (and its subtransactions) to disk, one file per WAL segment of the
-    // change LSNs, freeing the in-memory changes as they are written.
     pub(crate) fn serialize_txn(&mut self, txn: TxnId) -> PgResult<()> {
         let size = self.txn(txn).size;
         let nentries_mem = self.txn(txn).nentries_mem;
@@ -361,7 +295,6 @@ impl ReorderBuffer {
             ),
         );
 
-        // Do the same to all child TXs.
         let subs: Vec<TxnId> = dl_iter(&self.txns, self.txn(txn).subtxns, |t| t.node).collect();
         for sub in subs {
             self.serialize_txn(sub)?;
@@ -369,11 +302,10 @@ impl ReorderBuffer {
 
         let seg_size = transam_xlog_seams::wal_segment_size::call() as u64;
         let xid = self.txn(txn).xid;
-        let mut file: Option<File> = None;
+        let mut fd_raw: i32 = -1;
+        let mut cur_offset: i64 = 0;
         let mut cur_open_segno: u64 = 0;
         let mut spilled: u64 = 0;
-        // C reuses rb->outbuf across calls; one buffer per spill pass keeps
-        // the same one-write-per-change shape without a long-lived field.
         let mut buf: Vec<u8> = Vec::new();
 
         loop {
@@ -382,30 +314,35 @@ impl ReorderBuffer {
                 break;
             }
 
-            // Store the change in the segment its start LSN falls into; a
-            // change never splits across segment files.
+            // A change never splits across segment files.
             let segno = self.change(head).lsn / seg_size;
-            if file.is_none() || segno != cur_open_segno {
-                drop(file.take());
+            if fd_raw == -1 || segno != cur_open_segno {
+                if fd_raw != -1 {
+                    fd::CloseTransientFile(fd_raw);
+                }
                 cur_open_segno = segno;
-                // No need to care about TLIs here: the files live for a
-                // single run, so each LSN maps to one WAL record.
+                // The files live for a single run, so each LSN maps to one WAL record.
                 let path = serialized_path(&self.slot_name, xid, segno);
-                file = Some(
-                    OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&path)
-                        .map_err(|e| {
-                            rb_file_error(
-                                format!("could not open file \"{}\": %m", path.display()),
-                                &e,
-                            )
-                        })?,
-                );
+                fd_raw = fd::OpenTransientFile(
+                    &path.to_string_lossy(),
+                    libc::O_CREAT | libc::O_WRONLY | libc::O_APPEND,
+                )?;
+                if fd_raw < 0 {
+                    return Err(rb_file_error(
+                        format!("could not open file \"{}\": {PCT_M}", crate::startup::datadir_relative(&path)),
+                        &errno_error(),
+                    ));
+                }
+                cur_offset = fd::pg_file_size_raw(fd_raw);
+                if cur_offset < 0 {
+                    return Err(rb_file_error(
+                        format!("could not open file \"{}\": {PCT_M}", crate::startup::datadir_relative(&path)),
+                        &errno_error(),
+                    ));
+                }
             }
 
-            self.serialize_change(txn, file.as_mut().expect("opened above"), head, &mut buf)?;
+            self.serialize_change(txn, fd_raw, &mut cur_offset, head, &mut buf)?;
             let mut list = self.txn(txn).changes;
             dl_delete(&mut self.changes, &mut list, head, |c| &mut c.node);
             self.txn_mut(txn).changes = list;
@@ -413,11 +350,8 @@ impl ReorderBuffer {
             spilled += 1;
         }
 
-        // Update the memory counter: everything this txn had accounted is now
-        // on disk.
         self.change_memory_update(None, Some(txn), false, size);
 
-        // Update the statistics iff we spilled anything.
         if spilled > 0 {
             self.spillCount += 1;
             self.spillBytes += size as i64;
@@ -425,8 +359,6 @@ impl ReorderBuffer {
             let counted = self.txn(txn).txn_flags & (RBTXN_IS_SERIALIZED | RBTXN_IS_SERIALIZED_CLEAR)
                 != 0;
             self.spillTxns += if counted { 0 } else { 1 };
-            // C flushes to pgstat through rb->private_data's decoding context
-            // (reorderbuffer.c:4042); the owning context installs this hook.
             if let Some(update_stats) = self.update_stats {
                 update_stats(self);
             }
@@ -436,6 +368,10 @@ impl ReorderBuffer {
         debug_assert!(self.txn(txn).changes.is_empty());
         self.txn_mut(txn).nentries_mem = 0;
         self.txn_mut(txn).txn_flags |= RBTXN_IS_SERIALIZED;
+
+        if fd_raw != -1 {
+            fd::CloseTransientFile(fd_raw);
+        }
         Ok(())
     }
 
@@ -444,7 +380,8 @@ impl ReorderBuffer {
     fn serialize_change(
         &mut self,
         txn: TxnId,
-        file: &mut File,
+        fd_raw: i32,
+        cur_offset: &mut i64,
         cid: ChangeId,
         buf: &mut Vec<u8>,
     ) -> PgResult<()> {
@@ -452,15 +389,13 @@ impl ReorderBuffer {
         let lsn = change.lsn;
 
         buf.clear();
-        put_u64(buf, 0); // total record size, patched below
+        put_u64(buf, 0);
         put_i32(buf, change.action as i32);
         put_u16(buf, change.origin_id);
         put_u64(buf, change.lsn);
 
         match &change.data {
-            // C memcpy's the base struct for every action, so the locator and
-            // clear-toast flag survive for the spec-confirm/abort forms too;
-            // tuples ride only when present.
+            // The locator and clear-toast flag survive for the spec-confirm/abort forms too; tuples ride only when present.
             ReorderBufferChangeData::Tp { rlocator, clear_toast_afterwards, oldtuple, newtuple } =>
             {
                 put_locator(buf, rlocator);
@@ -529,36 +464,39 @@ impl ReorderBuffer {
         let size = buf.len() as u64;
         buf[..8].copy_from_slice(&size.to_ne_bytes());
 
+        // A write that set no errno is taken as no disk space.
+        fd::set_errno(0);
         wait_start(WAIT_EVENT_REORDER_BUFFER_WRITE);
-        let written = file.write_all(buf);
+        let written = fd::pg_pwrite(fd_raw, buf, *cur_offset);
         wait_end();
-        written.map_err(|e| {
+        if written != size as isize {
+            let save_errno = fd::get_errno();
+            fd::CloseTransientFile(fd_raw);
+            let errno = if save_errno != 0 { save_errno } else { libc::ENOSPC };
             let xid = self.txn(txn).xid;
-            rb_file_error(format!("could not write to data file for XID {xid}: %m"), &e)
-        })?;
+            return Err(rb_file_error(
+                format!("could not write to data file for XID {xid}: {PCT_M}"),
+                &std::io::Error::from_raw_os_error(errno),
+            ));
+        }
+        *cur_offset += written as i64;
 
-        // Keep final_lsn current with each change sent to disk so that
-        // RestoreCleanup works even if a crash leaves the transaction without
-        // its abort record (reorderbuffer.c:4256). Never move it backwards.
+        // Keep final_lsn current with each change sent to disk so that RestoreCleanup works even if a crash leaves the transaction without its abort record. Never move it backwards.
         if self.txn(txn).final_lsn < lsn {
             self.txn_mut(txn).final_lsn = lsn;
         }
         Ok(())
     }
 
-    // ReorderBufferRestoreChanges (reorderbuffer.c:4510): drop the current
-    // in-memory batch and read back up to max_changes_in_memory changes,
-    // walking segment files from first_lsn's segment to final_lsn's.
     pub(crate) fn restore_changes(
         &mut self,
         txn: TxnId,
-        file: &mut Option<File>,
+        file: &mut Option<SpillReader>,
         segno: &mut u64,
     ) -> PgResult<u64> {
         debug_assert!(self.txn(txn).first_lsn != InvalidXLogRecPtr);
         debug_assert!(self.txn(txn).final_lsn != InvalidXLogRecPtr);
 
-        // Free the current entries, so we have memory for more.
         let changes: Vec<ChangeId> =
             dl_iter(&self.changes, self.txn(txn).changes, |c| c.node).collect();
         self.txn_mut(txn).changes = ListHead::EMPTY;
@@ -577,34 +515,33 @@ impl ReorderBuffer {
             postgres_seams::check_for_interrupts::call()?;
 
             if file.is_none() {
-                // First time in: start at the segment holding first_lsn.
                 if *segno == 0 {
                     *segno = self.txn(txn).first_lsn / seg_size;
                 }
                 debug_assert!(*segno != 0 || self.txn(txn).changes.is_empty());
 
                 let path = serialized_path(&self.slot_name, xid, *segno);
-                match File::open(&path) {
-                    Ok(f) => *file = Some(f),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let vfd = fd::PathNameOpenFile(&path.to_string_lossy(), libc::O_RDONLY)?;
+                if vfd.0 < 0 {
+                    let errno = fd::get_errno();
+                    if errno == libc::ENOENT {
                         *segno += 1;
                         continue;
                     }
-                    Err(e) => {
-                        return Err(rb_file_error(
-                            format!("could not open file \"{}\": %m", path.display()),
-                            &e,
-                        ))
-                    }
+                    return Err(rb_file_error(
+                        format!("could not open file \"{}\": {PCT_M}", crate::startup::datadir_relative(&path)),
+                        &std::io::Error::from_raw_os_error(errno),
+                    ));
                 }
+                *file = Some(SpillReader { vfd, cur_offset: 0 });
             }
 
-            // Read the size prefix; a clean zero-byte read is end-of-segment.
+            // A clean zero-byte read is end-of-segment.
             let f = file.as_mut().expect("opened above");
             let mut szbuf = [0u8; 8];
-            let n = read_full(f, &mut szbuf)?;
+            let n = f.read(&mut szbuf)?;
             if n == 0 {
-                *file = None;
+                file.take().expect("opened above").close()?;
                 *segno += 1;
                 continue;
             }
@@ -620,13 +557,7 @@ impl ReorderBuffer {
                     "invalid record size {size} in reorderbuffer spill file"
                 )));
             }
-            // The length prefix is attacker-controllable (a crafted file under
-            // pg_replslot/<slot>/), so it must clear C's MaxAllocSize admission
-            // (reorderbuffer.c:4610, repalloc) BEFORE it is used to size a
-            // buffer. Without this the resize below is an infallible
-            // allocation that aborts the whole process on an oversized value.
-            // Catchable, DATA_CORRUPTED-classed, so ReorderBufferRestoreChanges
-            // fails the decode rather than crashing.
+            // Without this the resize below is an infallible allocation that aborts the whole process on an oversized value.
             if size > MAX_ALLOC_SIZE {
                 return Err(PgError::error(format!(
                     "invalid record size {size} in reorderbuffer spill file"
@@ -637,10 +568,7 @@ impl ReorderBuffer {
 
             let body = size - szbuf.len();
             buf.clear();
-            // Fallible reservation: at or below MaxAllocSize a failure here is
-            // genuine memory pressure (C's palloc would raise
-            // ERRCODE_OUT_OF_MEMORY), not corruption — so raise a catchable
-            // error instead of aborting via the infallible allocator.
+            // At or below MaxAllocSize a failure here is genuine memory pressure, not corruption — raise a catchable error instead of aborting via the infallible allocator.
             buf.try_reserve_exact(body).map_err(|_| {
                 Box::new(
                     PgError::error(format!(
@@ -649,8 +577,8 @@ impl ReorderBuffer {
                     .with_sqlstate(ERRCODE_OUT_OF_MEMORY),
                 )
             })?;
-            buf.resize(body, 0);
-            let n = read_full(f, &mut buf)?;
+            ::mcx::std_vec_resize("replication", &mut buf, body, 0)?;
+            let n = f.read(&mut buf)?;
             if n != body {
                 return Err(rb_error(format!(
                     "could not read from reorderbuffer spill file: read {n} instead of {body} bytes"
@@ -664,8 +592,6 @@ impl ReorderBuffer {
         Ok(restored)
     }
 
-    // ReorderBufferRestoreChange (reorderbuffer.c:4653): decode one record
-    // back into in-memory form and queue it onto the TXN's change list.
     fn restore_change(&mut self, txn: TxnId, body: &[u8]) -> PgResult<()> {
         let mut cur = Cur { b: body };
         let action = action_from_i32(cur.i32()?)?;
@@ -734,10 +660,7 @@ impl ReorderBuffer {
                 snap.curcid.set(cur.u32()?);
                 snap.vistest = types_core::GlobalVisStateHandle::new(cur.u64()?);
                 snap.snapXactCompletionCount = cur.u64()?;
-                // The restored snapshot is a private copy (C sets copied=true,
-                // reorderbuffer.c:4783); refcounts follow copy_snap's
-                // fresh-copy convention — C memcpy's the serialized counts but
-                // never reads them on this path.
+                // The restored snapshot is a private copy; refcounts follow copy_snap's fresh-copy convention.
                 snap.copied = true;
                 snap.active_count.set(1);
                 snap.regd_count.set(0);
@@ -778,15 +701,12 @@ impl ReorderBuffer {
         self.txn_mut(txn).changes = list;
         self.txn_mut(txn).nentries_mem += 1;
 
-        // Account the restored change: it is released through the same
-        // accounting later, and the counters must not underflow then.
+        // It is released through the same accounting later, and the counters must not underflow then.
         let sz = self.change_size(cid);
         self.change_memory_update(Some(cid), None, true, sz);
         Ok(())
     }
 
-    // ReorderBufferRestoreCleanup (reorderbuffer.c:4820): unlink every
-    // possible segment file of the transaction.
     pub(crate) fn restore_cleanup(&mut self, txn: TxnId) -> PgResult<()> {
         debug_assert!(self.txn(txn).first_lsn != InvalidXLogRecPtr);
         debug_assert!(self.txn(txn).final_lsn != InvalidXLogRecPtr);
@@ -803,7 +723,7 @@ impl ReorderBuffer {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
                     return Err(rb_file_error(
-                        format!("could not remove file \"{}\": %m", path.display()),
+                        format!("could not remove file \"{}\": {PCT_M}", crate::startup::datadir_relative(&path)),
                         &e,
                     ))
                 }
@@ -813,7 +733,6 @@ impl ReorderBuffer {
     }
 }
 
-// Wait events (wait_event_names.txt, IO section): reorderbuffer.c:4266/4609.
 const PG_WAIT_IO: u32 = 0x0A00_0000;
 const WAIT_EVENT_REORDER_BUFFER_READ: u32 = PG_WAIT_IO + 43;
 const WAIT_EVENT_REORDER_BUFFER_WRITE: u32 = PG_WAIT_IO + 44;
@@ -830,24 +749,30 @@ fn wait_end() {
     }
 }
 
-// FileRead-loop shape: fill `buf` unless EOF arrives first; short only at EOF.
-fn read_full(f: &mut File, buf: &mut [u8]) -> PgResult<usize> {
-    let mut off = 0usize;
-    while off < buf.len() {
-        wait_start(WAIT_EVENT_REORDER_BUFFER_READ);
-        let r = f.read(&mut buf[off..]);
-        wait_end();
-        match r {
-            Ok(0) => break,
-            Ok(n) => off += n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => {
-                return Err(rb_file_error(
-                    "could not read from reorderbuffer spill file: %m".into(),
-                    &e,
-                ))
-            }
+fn errno_error() -> std::io::Error {
+    std::io::Error::from_raw_os_error(fd::get_errno())
+}
+
+// Never closed on drop, as C's File is a plain int.
+pub(crate) struct SpillReader {
+    vfd: types_storage::File,
+    cur_offset: i64,
+}
+
+impl SpillReader {
+    fn read(&mut self, buf: &mut [u8]) -> PgResult<usize> {
+        let n = fd::FileRead(self.vfd, buf, self.cur_offset, WAIT_EVENT_REORDER_BUFFER_READ)?;
+        if n < 0 {
+            return Err(rb_file_error(
+                format!("could not read from reorderbuffer spill file: {PCT_M}"),
+                &errno_error(),
+            ));
         }
+        self.cur_offset += n as i64;
+        Ok(n as usize)
     }
-    Ok(off)
+
+    pub(crate) fn close(self) -> PgResult<()> {
+        fd::FileClose(self.vfd)
+    }
 }

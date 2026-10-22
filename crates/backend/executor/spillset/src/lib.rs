@@ -37,6 +37,43 @@ use ::types_error::PgResult;
 
 const MAX_PHYSICAL_FILESIZE: i64 = 0x4000_0000; // buffile.rs segment size
 
+/// D491 (Gravity's serial owners past the grant pool): `map(fd)` over a temp file of `bytes`, made as a BufFile's
+/// (`PrepareTempTablespaces`, `OpenTemporaryFile`: the session's temp tablespace, deleted at close and at abort). Its last
+/// byte is written first, so the whole length is charged against `temp_file_limit` (53400 past it, FileWrite's check, as a
+/// PostgreSQL spill of those bytes would be), then its blocks are allocated (`FileFallocate`: a mapped page written back
+/// never meets a full disk). `map` maps the descriptor; the file is closed after it, which unlinks it: a mapping keeps it.
+pub fn with_map_file<T>(bytes: u64, map: impl FnOnce(i32) -> T) -> PgResult<T> {
+    let _io = runtime::blocking_io_section();
+    ::fd::PrepareTempTablespaces()?;
+    let file = ::fd::OpenTemporaryFile(false)?;
+    let io_error = |what: &str, state| {
+        let e = std::io::Error::from_raw_os_error(::fd::get_errno());
+        Box::new(::types_error::PgError::error(format!("could not {what} temporary file of {bytes} bytes for a Gravity owner region: {e}")).with_sqlstate(state))
+    };
+    let laid = (|| -> PgResult<i32> {
+        if bytes == 0 {
+            return Err(io_error("size", ::types_error::ERRCODE_IO_ERROR));
+        }
+        if ::fd::FileWrite(file, &[0u8], bytes as i64 - 1, ::fd::wait_event::WAIT_EVENT_BUFFILE_WRITE)? != 1 {
+            return Err(io_error("extend", ::types_error::ERRCODE_IO_ERROR));
+        }
+        if ::fd::FileFallocate(file, 0, bytes as i64, ::fd::wait_event::WAIT_EVENT_BUFFILE_WRITE)? != 0 {
+            let state = if ::fd::get_errno() == 28 { ::types_error::ERRCODE_DISK_FULL } else { ::types_error::ERRCODE_IO_ERROR }; // 28: ENOSPC
+            return Err(io_error("allocate", state));
+        }
+        match ::fd::FileGetRawDesc(file)? {
+            raw if raw >= 0 => Ok(raw),
+            _ => Err(io_error("open", ::types_error::ERRCODE_IO_ERROR)),
+        }
+    })();
+    let mapped = laid.map(map);
+    // the close deletes the file (a temporary file's FD_DELETE_AT_CLOSE); a mapping of it keeps its blocks until unmapped
+    let closed = ::fd::FileClose(file);
+    let t = mapped?;
+    closed?;
+    Ok(t)
+}
+
 /// Query-owned set of spill files for ONE engagement. Arc'd into the
 /// engagement payload; Drop (via the inner `FileSet`) deletes everything.
 pub struct SpillSet {
@@ -47,7 +84,8 @@ impl SpillSet {
     /// Create the engagement's spill set. Caller must be a thread with
     /// temp-file access up (leader at admission time, or a bound helper).
     pub fn create() -> PgResult<Arc<SpillSet>> {
-        Ok(Arc::new(SpillSet { fileset: FileSet::init()? }))
+        // D2570: a spill file counts against temp_file_limit until it is deleted, closed between epochs too
+        Ok(Arc::new(SpillSet { fileset: FileSet::init_charged_for_life()? }))
     }
 
     /// Canonical spill-file name: unique per (purpose, generation, worker)
@@ -60,6 +98,19 @@ impl SpillSet {
     fn fileset(&self) -> &FileSet {
         &self.fileset
     }
+
+    /// pgrust-only (gravity D3203): the set's files unlinked now, the unlinks run by `fan(n, job)` once they hold
+    /// `min_bytes` (fd `FileSet::delete_files_with`: every other effect of a delete stays on this thread), each job in a
+    /// blocking-I/O section on the thread that runs it; the set's drop then removes the empty directories.
+    /// -> (files, their bytes, whether `fan` ran).
+    pub fn delete_files_with(&self, min_bytes: u64, fan: &dyn Fn(usize, &(dyn Fn(usize) + Sync))) -> PgResult<(usize, u64, bool)> {
+        self.fileset.delete_files_with(min_bytes, &|n: usize, job: &(dyn Fn(usize) + Sync)| {
+            fan(n, &|i: usize| {
+                let _io = runtime::blocking_io_section();
+                job(i)
+            })
+        })
+    }
 }
 
 /// One partition extent: `len` bytes at logical BufFile offset `offset`.
@@ -67,14 +118,6 @@ impl SpillSet {
 pub struct Extent {
     pub offset: u64,
     pub len: u64,
-}
-
-/// One committed epoch: for each partition, at most one extent (an epoch's
-/// partitions are written contiguously and ascending).
-struct EpochDir {
-    /// (partition, extent), partition strictly ascending; empty partitions
-    /// are absent.
-    parts: Box<[(u32, Extent)]>,
 }
 
 /// A single-writer spill file with a partition directory. Plain data
@@ -89,14 +132,27 @@ pub struct SpillFile {
     /// Committed logical length (== next epoch's start offset).
     len: u64,
     created: bool,
-    epochs: Vec<EpochDir>,
+    epochs: usize,
+    /// Per partition, its committed extents in epoch order: a reader of every
+    /// partition walks each extent once, not every epoch's directory per
+    /// partition (an owner over 2^11 partitions of a many-epoch file).
+    by_part: Vec<Vec<Extent>>,
+}
+
+/// The heap bytes of a list of `cap` capacity whose elements are `list`'s.
+fn cap_bytes<T>(_list: &[T], cap: usize) -> usize {
+    cap * core::mem::size_of::<T>()
 }
 
 impl SpillFile {
     /// Lazy: no file exists until the first epoch is written.
     pub fn new(set: Arc<SpillSet>, name: String, nparts: u32) -> SpillFile {
         assert!(nparts > 0);
-        SpillFile { set, name, nparts, len: 0, created: false, epochs: Vec::new() }
+        SpillFile { set, name, nparts, len: 0, created: false, epochs: 0, by_part: Vec::new() }
+    }
+
+    fn extents_of(&self, part: u32) -> &[Extent] {
+        self.by_part.get(part as usize).map_or(&[], |v| v.as_slice())
     }
 
     pub fn nparts(&self) -> u32 {
@@ -109,31 +165,29 @@ impl SpillFile {
     }
 
     pub fn epochs(&self) -> usize {
-        self.epochs.len()
+        self.epochs
+    }
+
+    /// The directory's heap bytes: the per-partition extent lists' capacity (`EpochWriter::finish` grows them), so a
+    /// caller can charge them to the file's owner (CONVERSION WAVE 2: the gravity pool's spill file).
+    pub fn dir_bytes(&self) -> u64 {
+        let outer = cap_bytes(&self.by_part, self.by_part.capacity());
+        let inner: usize = self.by_part.iter().map(|v| cap_bytes(v, v.capacity())).sum();
+        (outer + inner) as u64
     }
 
     /// Total committed bytes of one partition across all epochs.
     pub fn part_len(&self, part: u32) -> u64 {
         debug_assert!(part < self.nparts);
-        self.epochs
-            .iter()
-            .flat_map(|e| e.parts.iter())
-            .filter(|(p, _)| *p == part)
-            .map(|(_, x)| x.len)
-            .sum()
+        self.extents_of(part).iter().map(|x| x.len).sum()
     }
 
     /// One partition's committed extents, epoch order (M3.5 join batches:
     /// each extent is one morsel-claim unit — extents are RECORD-aligned by
     /// construction, every epoch writes whole records).
-    pub fn part_extents(&self, part: u32) -> Vec<Extent> {
+    pub fn part_extents(&self, part: u32) -> PgResult<Vec<Extent>> {
         debug_assert!(part < self.nparts);
-        self.epochs
-            .iter()
-            .flat_map(|e| e.parts.iter())
-            .filter(|(p, _)| *p == part)
-            .map(|(_, x)| *x)
-            .collect()
+        ::mcx::stdvec::try_to_vec(self.extents_of(part), "spillset")
     }
 
     /// Stream ONE extent (from [`SpillFile::part_extents`]) of the frozen
@@ -169,7 +223,17 @@ impl SpillFile {
         // Drop the section while the writer stages in-memory state; each
         // write_part / finish enters its own.
         drop(_io);
-        Ok(EpochWriter { file: self, bf, cursor_valid: true, staged: Vec::new(), written: 0 })
+        Ok(EpochWriter { file: self, bf: Some(bf), cursor_valid: true, staged: Vec::new(), written: 0 })
+    }
+
+    /// Unlink the file's segments (gravity D1327: a sort merge pass's runs once the next pass has read them, the way
+    /// PG's logtape reuses a spent tape's blocks). The caller's deps DAG closes every reader first.
+    pub fn delete(self) -> PgResult<()> {
+        if !self.created {
+            return Ok(());
+        }
+        let _io = runtime::blocking_io_section();
+        ::fd::buffile::BufFileDeleteFileSet(self.set.fileset(), &self.name, true)
     }
 
     /// Stream one partition's committed bytes. Any thread with temp-file
@@ -178,20 +242,25 @@ impl SpillFile {
     /// created).
     pub fn read_part<'mcx>(&self, mcx: Mcx<'mcx>, part: u32) -> PgResult<Option<PartReader<'mcx>>> {
         debug_assert!(part < self.nparts);
-        let extents: Vec<Extent> = self
-            .epochs
-            .iter()
-            .flat_map(|e| e.parts.iter())
-            .filter(|(p, _)| *p == part)
-            .map(|(_, x)| *x)
-            .collect();
-        if extents.is_empty() || !self.created {
+        if self.extents_of(part).is_empty() || !self.created {
             return Ok(None);
         }
+        let extents = ::mcx::stdvec::try_to_vec(self.extents_of(part), "spillset")?;
         let _io = runtime::blocking_io_section();
         let bf = BufFileOpenFileSet(mcx, self.set.fileset(), &self.name, true)?;
         drop(_io);
         Ok(Some(PartReader { bf, extents, cur: 0, pos_in_cur: 0, seeked: false }))
+    }
+
+    /// [`SpillFile::read_part`] from byte `offset` of the partition on (gravity D3190: a put sort run's fence): the
+    /// extents walked to it, the BufFile seeked on the first read. None when no byte lies past `offset`.
+    pub fn read_part_at<'mcx>(&self, mcx: Mcx<'mcx>, part: u32, offset: u64) -> PgResult<Option<PartReader<'mcx>>> {
+        let Some(mut r) = self.read_part(mcx, part)? else { return Ok(None) };
+        if r.position(offset) {
+            return Ok(Some(r));
+        }
+        r.close()?;
+        Ok(None)
     }
 }
 
@@ -200,7 +269,8 @@ impl SpillFile {
 /// records where each partition's bytes landed.
 pub struct EpochWriter<'a, 'mcx> {
     file: &'a mut SpillFile,
-    bf: BufFile<'mcx>,
+    /// `finish` takes it; a writer dropped without finishing closes it unwritten (`Drop`).
+    bf: Option<BufFile<'mcx>>,
     cursor_valid: bool,
     staged: Vec<(u32, Extent)>,
     written: u64,
@@ -221,40 +291,84 @@ impl EpochWriter<'_, '_> {
         if bytes.is_empty() {
             return Ok(());
         }
-        let at = self.file.len + self.written;
-        match self.staged.last_mut() {
-            Some((p, x)) if *p == part => {
-                debug_assert_eq!(x.offset + x.len, at, "extents are contiguous");
-                x.len += bytes.len() as u64;
-            }
-            last => {
-                assert!(
-                    last.map_or(true, |(p, _)| *p < part),
-                    "partitions must be written in ascending order"
-                );
-                self.staged.push((part, Extent { offset: at, len: bytes.len() as u64 }));
-            }
-        }
+        self.stage(part, self.file.len + self.written, bytes.len() as u64);
         let _io = runtime::blocking_io_section();
-        self.bf.write(bytes)?;
+        // spillopt #3: a long span goes to the file without the 8 KB buffer's copy (BufFile::write_spans)
+        self.bf.as_mut().expect("an EpochWriter holds its BufFile until finish").write_spans(&[bytes])?;
         self.written += bytes.len() as u64;
         Ok(())
     }
 
+    /// spillopt #3: `write_part` for each `(part, bytes)` in order (parts ascending, a part repeated extends its
+    /// extent), the bytes handed to the file in gathered writes (`BufFile::write_spans`): an epoch's blocks reach the
+    /// file in a few large writes instead of a copy and a syscall per 8 KB.
+    pub fn write_parts(&mut self, parts: &[(u32, &[u8])]) -> PgResult<()> {
+        debug_assert!(self.cursor_valid);
+        let mut spans: Vec<&[u8]> = ::mcx::stdvec::try_vec(parts.len(), "lib")?; // alloc: Exec
+        let mut at = self.file.len + self.written;
+        for &(part, bytes) in parts {
+            debug_assert!(part < self.file.nparts);
+            if bytes.is_empty() {
+                continue;
+            }
+            self.stage(part, at, bytes.len() as u64);
+            at += bytes.len() as u64;
+            spans.push(bytes);
+        }
+        let _io = runtime::blocking_io_section();
+        self.bf.as_mut().expect("an EpochWriter holds its BufFile until finish").write_spans(&spans)?;
+        self.written = at - self.file.len;
+        Ok(())
+    }
+
+    /// The extent bookkeeping of `len` bytes for `part` landing at logical offset `at` (the epoch's end so far).
+    fn stage(&mut self, part: u32, at: u64, len: u64) {
+        match self.staged.last_mut() {
+            Some((p, x)) if *p == part => {
+                debug_assert_eq!(x.offset + x.len, at, "extents are contiguous");
+                x.len += len;
+            }
+            last => {
+                assert!(last.map_or(true, |(p, _)| *p < part), "partitions must be written in ascending order");
+                self.staged.push((part, Extent { offset: at, len }));
+            }
+        }
+    }
+
     /// Flush + close + commit the epoch into the directory. Not calling
-    /// this (drop/unwind) abandons the epoch: nothing is committed and the
-    /// next epoch overwrites the tail.
-    pub fn finish(self) -> PgResult<()> {
-        let EpochWriter { file, bf, staged, written, .. } = self;
+    /// this (drop/unwind) abandons the epoch: the file closes, nothing is
+    /// committed and the next epoch overwrites the tail.
+    pub fn finish(mut self) -> PgResult<()> {
+        let bf = self.bf.take().expect("an EpochWriter holds its BufFile until finish");
         {
             let _io = runtime::blocking_io_section();
             bf.close()?;
         }
-        if written > 0 {
-            file.epochs.push(EpochDir { parts: staged.into_boxed_slice() });
-            file.len += written;
+        if self.written > 0 {
+            let file = &mut *self.file;
+            if file.by_part.is_empty() {
+                ::mcx::stdvec::try_reserve_more(&mut file.by_part, file.nparts as usize, "spillset")?;
+                file.by_part.extend(core::iter::repeat_with(Vec::new).take(file.nparts as usize));
+            }
+            for &(part, x) in &self.staged {
+                file.by_part[part as usize].push(x);
+            }
+            file.epochs += 1;
+            file.len += self.written;
         }
         Ok(())
+    }
+}
+
+impl Drop for EpochWriter<'_, '_> {
+    // D2570: a writer dropped without `finish` (a write_part that failed, e.g. past temp_file_limit on a pool worker)
+    // closes its file unwritten. Nothing else would: the BufFile has no Drop, and a pool thread's resource owner
+    // never releases, so the descriptor stayed open on the thread, holding the file's disk after its delete.
+    fn drop(&mut self) {
+        if let Some(bf) = self.bf.take() {
+            let _io = runtime::blocking_io_section();
+            let _ = bf.abandon();
+        }
     }
 }
 
@@ -275,8 +389,28 @@ impl PartReader<'_> {
         self.extents.iter().map(|x| x.len).sum()
     }
 
+    /// The reader moved to byte `offset` of its partition (the next read seeks there); false when no byte lies past it.
+    fn position(&mut self, offset: u64) -> bool {
+        let mut left = offset;
+        for (i, x) in self.extents.iter().enumerate() {
+            if left < x.len {
+                (self.cur, self.pos_in_cur, self.seeked) = (i, left, false);
+                return true;
+            }
+            left -= x.len;
+        }
+        false
+    }
+
     /// Read up to `buf.len()` bytes; 0 = end of partition.
     pub fn read(&mut self, buf: &mut [u8]) -> PgResult<usize> {
+        self.read_each(buf, &mut || true).map(|(n, _)| n)
+    }
+
+    /// D4215: `read`, with `each` asked before every piece past the first (a piece is one extent's bytes: one pread, or a
+    /// few 8 KB ones under `THROUGH`), all inside the one blocking section. False stops the read there. Returns the bytes
+    /// read and whether `each` stopped it. A caller polls in `each`: the extents lie apart, so each is its own device wait.
+    pub fn read_each(&mut self, buf: &mut [u8], each: &mut dyn FnMut() -> bool) -> PgResult<(usize, bool)> {
         let mut filled = 0usize;
         let _io = runtime::blocking_io_section();
         while filled < buf.len() {
@@ -286,6 +420,9 @@ impl PartReader<'_> {
                 self.pos_in_cur = 0;
                 self.seeked = false;
                 continue;
+            }
+            if filled != 0 && !each() {
+                return Ok((filled, true));
             }
             if !self.seeked {
                 let at = (x.offset + self.pos_in_cur) as i64;
@@ -298,11 +435,12 @@ impl PartReader<'_> {
                 self.seeked = true;
             }
             let want = ((x.len - self.pos_in_cur) as usize).min(buf.len() - filled);
-            self.bf.read_exact(&mut buf[filled..filled + want])?;
+            // spillopt #3: straight into the caller's buffer (BufFile::read_through_exact)
+            self.bf.read_through_exact(&mut buf[filled..filled + want])?;
             filled += want;
             self.pos_in_cur += want as u64;
         }
-        Ok(filled)
+        Ok((filled, false))
     }
 
     /// Read the whole remaining partition (tests / small partitions).

@@ -59,33 +59,23 @@ pub fn PerformCursorOpen(
         .and_then(|n| n.as_query())
         .expect("analyzed DECLARE CURSOR carries its Query");
 
-    let plan_ctx = Box::new(MemoryContext::new_bump("PortalPlanContext"));
-    // SAFETY: the Box gives the context a stable address; PortalDrop reclaims
-    // it only after the stmts registry handle below is released.
-    let pctx: &'static MemoryContext = unsafe { &*(&*plan_ctx as *const MemoryContext) };
-    let pmcx = pctx.mcx();
-
-    // C copies the finished plan into portalContext after CreatePortal
-    // (portalcmds.c); here rewrite+plan run with the portal-owned arena's Mcx
-    // directly, so the plan tree is born portal-resident and no second copy
-    // is needed. copy_query keeps the incoming tree pristine — the rewriter
-    // and planner scribble on their input, and the same DECLARE source can
-    // be executed repeatedly (e.g. from a plpgsql loop). C's error order is
-    // preserved (rewrite/plan errors fire before CreatePortal's 42P03).
-    let mut query = copyfuncs::copy_query(pmcx, src_query)?;
+    // C plans in the caller's context and copies only the finished plan
+    // into portalContext (portalcmds.c): the rewriter's and planner's
+    // working memory must not live as long as the cursor.
+    let scratch = MemoryContext::new_wholesale("PerformCursorOpen");
+    let smcx = scratch.mcx();
+    let mut query = copyfuncs::copy_query(smcx, src_query)?;
 
     // C: "Query contained by DeclareCursor needs to be jumbled if requested"
     // — the analysis-time jumble covered only the outer utility Query.
-    // Jumbling the copy leaves the caller's tree unscribbled; the planned
-    // tree's queryId is the same either way.
     if parser_analyze::tap_post_parse_analyze::is_installed() && queryjumble::IsQueryIdEnabled() {
-        let js = queryjumble::JumbleQuery(pmcx, &mut query)?;
-        parser_analyze::tap_post_parse_analyze::call_if(|f| f(&mut query, &js, source_text));
+        let js = queryjumble::JumbleQuery(smcx, &mut query)?;
+        parser_analyze::tap_post_parse_analyze::call_if_or(Ok(()), |f| f(&mut query, &js, source_text))?;
     } else if queryjumble::IsQueryIdEnabled() {
-        queryjumble::JumbleQueryDiscard(pmcx, &mut query)?;
+        queryjumble::JumbleQueryDiscard(smcx, &mut query)?;
     }
 
-    let rewritten = rewrite_handler_seams::query_rewrite::call(pmcx, query)?;
+    let rewritten = rewrite_handler_seams::query_rewrite::call(smcx, query)?;
     if rewritten.len() != 1 {
         return Err(non_select_in_declare());
     }
@@ -94,8 +84,18 @@ pub fn PerformCursorOpen(
         return Err(non_select_in_declare());
     }
 
-    let plan = postgres::pg_plan_query(pmcx, mcx::leak_in(mcx::alloc_in(pmcx, query)?), source_text, cstmt.options, params)?
+    let planned = postgres::pg_plan_query(smcx, mcx::leak_in(mcx::alloc_in(smcx, query)?), source_text, cstmt.options, params)?
         .expect("planner output for a SELECT");
+
+    // C copies the plan into the ALLOCSET_SMALL_SIZES portalContext.
+    let plan_ctx = Box::new(MemoryContext::new_small_wholesale("PortalPlanContext"));
+    // SAFETY: the Box gives the context a stable address; PortalDrop reclaims
+    // it only after the stmts registry handle below is released.
+    let pctx: &'static MemoryContext = unsafe { &*(&*plan_ctx as *const MemoryContext) };
+    let pmcx = pctx.mcx();
+    let plan = copyfuncs::copy_planned_stmt(pmcx, &planned)?;
+    drop(planned);
+    drop(scratch);
 
     let portal = portalmem::CreatePortal(name, false, false)?;
 

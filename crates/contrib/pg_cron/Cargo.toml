@@ -1,0 +1,78 @@
+[package]
+name = "pg_cron"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pg_cron"
+path = "src/lib.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+
+[dependencies]
+mcx = { path = "../../_support/mcx" }
+types_core = { path = "../../_support/types/types_core" }
+types_error = { path = "../../_support/types/types_error" }
+types_fmgr = { path = "../../_support/types/fmgr" }
+types_guc = { path = "../../_support/types/types_guc" }
+dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
+guc = { path = "../../backend/utils/misc/guc" }
+guc_tables = { path = "../../backend/utils/misc/guc_tables" }
+elog = { path = "../../backend/utils/error/elog" }
+miscinit = { path = "../../backend/utils/init/miscinit" }
+bgworker = { path = "../../backend/postmaster/bgworker" }
+pgtz = { path = "../../backend/timezone/pgtz" }
+datum = { path = "../../_support/types/datum" }
+types_storage = { path = "../../_support/types/types_storage" }
+types_nodes = { path = "../../_support/types/nodes" }
+types_tuple = { path = "../../_support/types/types_tuple" }
+types_scan = { path = "../../_support/types/types_scan" }
+types_trigger_call = { path = "../../_support/types/types_trigger_call" }
+spi = { path = "../../backend/executor/spi" }
+varlena = { path = "../../backend/utils/adt/varlena" }
+funcapi = { path = "../../backend/utils/fmgr/funcapi" }
+fmgr_seams = { path = "../../backend/utils/fmgr/fmgr_seams" }
+superuser_seams = { path = "../../backend/utils/misc/superuser_seams" }
+aclchk = { path = "../../backend/catalog/aclchk" }
+acl_seams = { path = "../../backend/utils/adt/acl_seams" }
+dbcommands = { path = "../../backend/commands/dbcommands" }
+catalog_namespace = { path = "../../backend/catalog/catalog_namespace" }
+lsyscache = { path = "../../backend/utils/cache/lsyscache" }
+cache_syscache = { path = "../../backend/utils/cache/cache_syscache" }
+syscache_seams = { path = "../../backend/utils/cache/syscache_seams" }
+inval = { path = "../../backend/utils/cache/inval" }
+extension = { path = "../../backend/commands/extension" }
+pg_depend = { path = "../../backend/catalog/pg_depend" }
+init_small = { path = "../../backend/utils/init/init_small" }
+transam_xlog = { path = "../../backend/access/transam/transam_xlog" }
+xact = { path = "../../backend/access/transam/xact" }
+table = { path = "../../backend/access/table/table" }
+genam = { path = "../../backend/access/index/genam" }
+heapam = { path = "../../backend/access/heap/heapam" }
+ruleutils = { path = "../../backend/utils/adt/ruleutils" }
+snapmgr = { path = "../../backend/utils/time/snapmgr" }
+sequence_seams = { path = "../../backend/commands/sequence_seams" }
+pgsync = { path = "../../_support/pgsync" }
+types_portal = { path = "../../_support/types/portal" }
+types_dest = { path = "../../_support/types/types_dest" }
+postgres = { path = "../../backend/tcop/postgres" }
+postgres_seams = { path = "../../backend/tcop/postgres_seams" }
+pquery = { path = "../../backend/tcop/pquery" }
+portalmem = { path = "../../backend/utils/mmgr/portalmem" }
+tcop_dest = { path = "../../backend/tcop/dest" }
+cmdtag = { path = "../../backend/tcop/cmdtag" }
+utility_seams = { path = "../../backend/tcop/utility_seams" }
+analyze_seams = { path = "../../backend/parser/analyze_seams" }
+backend_status = { path = "../../backend/utils/activity/backend_status" }
+backend_status_seams = { path = "../../backend/utils/activity/backend_status_seams" }
+latch = { path = "../../backend/storage/ipc/latch" }
+interrupt = { path = "../../backend/postmaster/interrupt" }
+procsignal = { path = "../../backend/storage/ipc/procsignal" }
+guc_file = { path = "../../backend/utils/misc/guc_file" }
+lmgr_proc = { path = "../../backend/storage/lmgr/lmgr_proc" }
+timeout_seams = { path = "../../backend/utils/misc/timeout_seams" }
+adt_timestamp = { path = "../../backend/utils/adt/adt_timestamp" }
+adt_datetime = { path = "../../backend/utils/adt/adt_datetime" }
+localtime = { path = "../../backend/timezone/localtime" }

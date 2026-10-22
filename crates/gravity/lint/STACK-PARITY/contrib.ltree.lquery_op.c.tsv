@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 contrib/ltree/lquery_op.c: 1 stack-depth check sites
+203	checkCond	crates/contrib/ltree/src/op.rs	check_cond	yes	

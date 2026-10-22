@@ -43,10 +43,10 @@ fn parse_const(s: &str) -> PgUuid {
 
 // UUID_V3_OR_V5 on the E2FS path: the time_low/mid/hi byteswaps cancel; the
 // version/variant patch lands on bytes 6/8 of the big-endian image.
-fn uuid_name_based(version: u8, ns: &PgUuid, name: &[u8]) -> PgUuid {
+fn uuid_name_based(version: u8, ns: &PgUuid, name: &[u8]) -> PgResult<PgUuid> {
     let mut data = [0u8; UUID_LEN];
     if version == 3 {
-        let mut buf = Vec::with_capacity(UUID_LEN + name.len());
+        let mut buf = ::mcx::std_vec_with_capacity("uuid-ossp", UUID_LEN + name.len())?;
         buf.extend_from_slice(ns);
         buf.extend_from_slice(name);
         data.copy_from_slice(&pg_md5::pg_md5_binary(&buf));
@@ -58,7 +58,7 @@ fn uuid_name_based(version: u8, ns: &PgUuid, name: &[u8]) -> PgUuid {
     }
     data[6] = (data[6] & 0x0F) | (version << 4);
     data[8] = (data[8] & 0x3F) | 0x80;
-    data
+    Ok(data)
 }
 
 #[cold]
@@ -86,8 +86,8 @@ fn uuid_v4() -> PgResult<PgUuid> {
 
 #[derive(Clone, Copy)]
 struct V1State {
-    // 60-bit timestamp (100ns ticks since 1582-10-15), last value emitted.
-    last_ts: u64,
+    last_us: u64,
+    adjustment: u64,
     clock_seq: u16,
     node: [u8; 6],
 }
@@ -99,11 +99,13 @@ std::thread_local! {
 // 100ns ticks between the Gregorian UUID epoch (1582-10-15) and the Unix epoch.
 const GREGORIAN_TO_UNIX_100NS: u64 = 0x01B2_1DD2_1381_4000;
 
-fn now_uuid_ticks() -> u64 {
+fn now_unix_us() -> u64 {
     // DST P2 (contract §1.2): SystemTime -> pg_clock::wall_ns() (pre-epoch
     // clamps to 0, as duration_since().unwrap_or_default() did).
-    pg_clock::wall_ns().max(0) as u64 / 100 + GREGORIAN_TO_UNIX_100NS
+    pg_clock::wall_ns().max(0) as u64 / 1000
 }
+
+const MAX_ADJUSTMENT: u64 = 10;
 
 fn v1_state() -> PgResult<V1State> {
     if let Some(s) = V1_STATE.with(Cell::get) {
@@ -118,7 +120,7 @@ fn v1_state() -> PgResult<V1State> {
         node[0] |= 0x01;
         node
     });
-    let s = V1State { last_ts: 0, clock_seq, node };
+    let s = V1State { last_us: 0, adjustment: 0, clock_seq, node };
     V1_STATE.with(|c| c.set(Some(s)));
     Ok(s)
 }
@@ -187,13 +189,30 @@ unsafe fn link_addr(_sa: *const libc::sockaddr) -> Option<[u8; 6]> {
     None
 }
 
+// libuuid get_clock (RFC 4122 4.2.1).
+fn v1_advance(s: &mut V1State, mut now_us: impl FnMut() -> u64) -> u64 {
+    loop {
+        let tv = now_us();
+        if tv < s.last_us {
+            s.clock_seq = s.clock_seq.wrapping_add(1) & 0x3FFF;
+            s.adjustment = 0;
+            s.last_us = tv;
+        } else if tv == s.last_us {
+            if s.adjustment >= MAX_ADJUSTMENT {
+                continue;
+            }
+            s.adjustment += 1;
+        } else {
+            s.adjustment = 0;
+            s.last_us = tv;
+        }
+        return tv * 10 + s.adjustment + GREGORIAN_TO_UNIX_100NS;
+    }
+}
+
 fn v1_next() -> PgResult<(u64, u16)> {
     let mut s = v1_state()?;
-    let mut ts = now_uuid_ticks();
-    if ts <= s.last_ts {
-        ts = s.last_ts + 1;
-    }
-    s.last_ts = ts;
+    let ts = v1_advance(&mut s, now_unix_us);
     let clock_seq = s.clock_seq;
     V1_STATE.with(|c| c.set(Some(s)));
     Ok((ts, clock_seq))
@@ -264,7 +283,7 @@ fn name_based(fcinfo: &mut Fcinfo, version: u8) -> PgResult<Datum> {
     // block and a non-null text varlena.
     let ns = *unsafe { fcinfo.arg_uuid(0) };
     let name = unsafe { fcinfo.arg_varlena_packed(1)? };
-    let u = uuid_name_based(version, &ns, name.data());
+    let u = uuid_name_based(version, &ns, name.data())?;
     ret_uuid(fcinfo, u)
 }
 
@@ -313,15 +332,28 @@ mod tests {
     #[test]
     fn v3_matches_c() {
         let ns = parse_const("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
-        let u = uuid_name_based(3, &ns, b"www.widgets.com");
+        let u = uuid_name_based(3, &ns, b"www.widgets.com").unwrap();
         assert_eq!(hex(&u), "3d813cbb47fb32ba91df831e1593ac29");
     }
 
     #[test]
     fn v5_matches_c() {
         let ns = parse_const("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
-        let u = uuid_name_based(5, &ns, b"www.widgets.com");
+        let u = uuid_name_based(5, &ns, b"www.widgets.com").unwrap();
         assert_eq!(hex(&u), "21f7f8de80515b8986800195ef798b6a");
+    }
+
+    #[test]
+    fn v1_clock_regression_bumps_clock_seq_and_keeps_wall_time() {
+        let mut s = V1State { last_us: 0, adjustment: 0, clock_seq: 0x3FFF, node: [0; 6] };
+        let mut clock = [5_000_000u64, 5_000_000, 1_000_000].into_iter();
+        let t1 = v1_advance(&mut s, || clock.next().unwrap());
+        assert_eq!(t1, 50_000_000 + GREGORIAN_TO_UNIX_100NS);
+        let t2 = v1_advance(&mut s, || clock.next().unwrap());
+        assert_eq!(t2, t1 + 1);
+        let t3 = v1_advance(&mut s, || clock.next().unwrap());
+        assert_eq!(t3, 10_000_000 + GREGORIAN_TO_UNIX_100NS);
+        assert_eq!(s.clock_seq, 0);
     }
 
     #[test]

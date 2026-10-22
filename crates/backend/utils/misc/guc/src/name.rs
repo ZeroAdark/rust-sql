@@ -75,7 +75,11 @@ impl std::hash::Hasher for GucNameHasher {
         }
     }
     fn finish(&self) -> u64 {
-        self.0 as u64
+        // The table takes a bucket from the hash's low bits and each slot's tag from its top 7: the u32 zero-extended
+        // gave every name tag 0, so a lookup or insert compared its key against every full slot of the probed group. A
+        // multiply by an odd constant spreads all 32 bits into the top ones and keeps the low bits a bijection of the
+        // u32's low bits (the same buckets as before).
+        (self.0 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
     }
 }
 
@@ -109,4 +113,26 @@ pub fn hash_seq_order(reg: &crate::registry::GucRegistry) -> Vec<usize> {
         out.push(idx);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::hash::BuildHasher;
+
+    use super::GucNameHasherBuilder;
+
+    #[test]
+    fn the_names_tags_spread_over_the_top_bits() {
+        let names: Vec<String> = guc_tables::all_settings().map(|s| super::fold_name(s.name())).collect();
+        assert!(names.len() > 300, "the built-ins: {}", names.len());
+        let mut tags = [0u32; 128];
+        for n in &names {
+            let h = GucNameHasherBuilder.hash_one(n.as_str());
+            tags[(h >> 57) as usize] += 1;
+            assert_eq!(h, GucNameHasherBuilder.hash_one(n.to_ascii_uppercase().as_str()), "{n}: case-blind");
+        }
+        let used = tags.iter().filter(|&&c| c != 0).count();
+        // a uniform spread of ~450 names over 128 tags uses ~120; the zero-extended u32 used 1
+        assert!(used > 100, "{used} of 128 tags used");
+    }
 }

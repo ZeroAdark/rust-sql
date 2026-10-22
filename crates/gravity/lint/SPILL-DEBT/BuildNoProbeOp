@@ -1,0 +1,1 @@
+BuildNoProbeOp	crates/gravity/lowerv4/src/ops/hashjoin/build.rs	make	lifetime	-	a build whose probe pipeline holds no probe op of its slot keeps no partition bits	unreachable	No query reaches this: the probe pipeline Gravity finds for a hash build always holds a probe of that build.

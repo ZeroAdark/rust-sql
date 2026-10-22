@@ -1,0 +1,10 @@
+-- regress-full-domain-007
+-- select testtext || testvarchar as concat, testnumeric + 42 as sum from basictest;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=630 end=sink
+  nodes n0@0
+  source range rel=40314 rti=1 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=op654(relabel25(v1.2), relabel25(v1.3)), 2=op1758(relabel1700(v1.4), c1700:'\x00\x80*\x00'))
+  outs 1=vl:call1258 2=vl:call1724
+mapped: SeqScan

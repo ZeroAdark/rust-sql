@@ -1,0 +1,6 @@
+path	crates/gravity/exec/src/runner/admission.rs
+growth	std::iter::Extend::extend	1
+growth	std::string::String::push_str	1
+growth	std::vec::Vec::push	3
+method	std::boxed::Box::new	1
+type	std::boxed::Box	1

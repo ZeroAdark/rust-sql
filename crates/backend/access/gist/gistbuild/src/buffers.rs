@@ -64,15 +64,15 @@ fn place_itup_to_page(p: &mut AlignedPage, itup: &[u8]) {
 }
 
 /// gistGetItupFromPage.
-fn get_itup_from_page(p: &mut AlignedPage) -> Vec<u8> {
+fn get_itup_from_page(p: &mut AlignedPage) -> PgResult<Vec<u8>> {
     debug_assert!(!page_is_empty(p));
     let fs = page_freespace(p);
     let off = BUFFER_PAGE_DATA_OFFSET + fs;
     // SAFETY: tuple image written whole by place_itup_to_page.
     let sz = unsafe { index_tuple_size(p.0[off..].as_ptr()) };
-    let itup = p.0[off..off + sz].to_vec();
+    let itup = ::mcx::std_vec_from_slice("gistbuild", &p.0[off..off + sz])?;
     page_set_freespace(p, fs + maxalign(sz));
-    itup
+    Ok(itup)
 }
 
 /// GISTNodeBuffer; identified by its index block number (the node_buffers
@@ -127,9 +127,9 @@ impl<'mcx> GistBuildBuffers<'mcx> {
     }
 
     /// gistGetNodeBuffer.
-    pub fn get_node_buffer(&mut self, node_blkno: BlockNumber, level: i32) {
+    pub fn get_node_buffer(&mut self, node_blkno: BlockNumber, level: i32) -> PgResult<()> {
         if self.node_buffers.contains_key(&node_blkno) {
-            return;
+            return Ok(());
         }
         self.node_buffers.insert(
             node_blkno,
@@ -143,10 +143,15 @@ impl<'mcx> GistBuildBuffers<'mcx> {
         );
         let level = level as usize;
         if level >= self.buffers_on_levels.len() {
+            let add = level + 1 - self.buffers_on_levels.len();
+            self.buffers_on_levels.try_reserve(add).map_err(|_| {
+                ::mcx::oom_named("gistbuild", add * std::mem::size_of::<VecDeque<BlockNumber>>())
+            })?;
             self.buffers_on_levels.resize_with(level + 1, VecDeque::new);
         }
         // Prepend: split-created buffers get flushed first in final emptying.
         self.buffers_on_levels[level].push_front(node_blkno);
+        Ok(())
     }
 
     /// gistPushItupToNodeBuffer (queues the buffer for emptying when it
@@ -218,7 +223,7 @@ impl<'mcx> GistBuildBuffers<'mcx> {
         if nb.page_buffer.is_none() {
             self.load_node_buffer(nb, key)?;
         }
-        let itup = get_itup_from_page(nb.page_buffer.as_mut().expect("loaded"));
+        let itup = get_itup_from_page(nb.page_buffer.as_mut().expect("loaded"))?;
         if page_is_empty(nb.page_buffer.as_ref().expect("loaded")) {
             nb.blocks_count -= 1;
             let prevblkno = page_prev(nb.page_buffer.as_ref().expect("loaded"));
@@ -356,13 +361,13 @@ pub fn gistRelocateBuildBuffersOnSplit<'m>(
     }
 
     let nkeyatts = r.indnkeyatts() as usize;
-    let mut infos: Vec<RelocationBufferInfo> = Vec::with_capacity(splitinfo.len());
+    let mut infos: Vec<RelocationBufferInfo> = ::mcx::std_vec_with_capacity("access", splitinfo.len())?;
     for si in splitinfo.iter() {
         let mut entry = [GISTENTRY::default(); K];
         let mut isnull = [false; K];
         gistDeCompressAtt(mcx, giststate, r, si.downlink.as_ptr(), 0, &mut entry, &mut isnull)?;
         let si_blkno = ::bufmgr_seams::buffer_get_block_number::call(si.buf);
-        gfbb.get_node_buffer(si_blkno, level);
+        gfbb.get_node_buffer(si_blkno, level)?;
         infos.push(RelocationBufferInfo {
             entry,
             isnull,

@@ -1,0 +1,12 @@
+-- regress-full-collate.icu.utf8-024
+-- SELECT a.b AS a, b.b AS b, a.b < b.b COLLATE "C" AS lt, mylt(a.b, b.b COLLATE "C"), mylt_noninline(a.b, b.b COLLATE "C"), mylt_plpgsql(a.b, b.b COLLATE "C") FROM collate_test1 a, collate_test1 b ORDER BY a.b, b.b;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=op664($1, $2))
+  limit count=1 offset=all
+  project (1=outer.1)
+  outs 1=w1:val
+  outs 1=w1:val
+mapped: Result Limit

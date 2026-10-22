@@ -21,6 +21,7 @@ amapi = { path = "../../access/index/amapi" }
 types_pathnodes = { path = "../../../_support/types/pathnodes" }
 types_relscan = { path = "../../access/index/relscan" }
 genam_seams = { path = "../../access/index/genam_seams" }
+planner_seams = { path = "../../optimizer/plan/planner_seams" }
 relcache_seams = { path = "../../utils/cache/relcache_seams" }
 relcache_build_seams = { path = "../../utils/cache/relcache_build_seams" }
 lsyscache = { path = "../../utils/cache/lsyscache" }
@@ -30,6 +31,7 @@ types_snapshot = { path = "../../../_support/types/snapshot" }
 types_storage = { path = "../../../_support/types/types_storage" }
 types_scan = { path = "../../../_support/types/types_scan" }
 tableam_vocab = { path = "../../access/table/tableam_vocab" }
+tableam = { path = "../../access/table/tableam" }
 heapam = { path = "../../access/heap/heapam" }
 snapmgr = { path = "../../utils/time/snapmgr" }
 heapam_visibility = { path = "../../access/heap/heapam_visibility" }
@@ -41,7 +43,6 @@ types_nodes = { path = "../../../_support/types/nodes" }
 readfuncs = { path = "../../nodes/readfuncs" }
 nodes_core = { path = "../../nodes/nodes_core" }
 clauses = { path = "../../optimizer/util/clauses" }
-planner_seams = { path = "../../optimizer/plan/planner_seams" }
 copyfuncs = { path = "../../nodes/copyfuncs" }
 inval = { path = "../../utils/cache/inval" }
 execexpr = { path = "../execexpr" }
@@ -55,6 +56,7 @@ adt_rangetypes = { path = "../../utils/adt/rangetypes" }
 adt_multirangetypes = { path = "../../utils/adt/multirangetypes" }
 detoast_seams = { path = "../../access/common/detoast_seams" }
 
+
 [dev-dependencies]
 test_boot = { path = "../../../_support/test_boot" }
 resowner_seams = { path = "../../utils/resowner/resowner_seams" }
@@ -64,7 +66,6 @@ varsup = { path = "../../access/transam/varsup" }
 syncscan_seams = { path = "../../access/common/syncscan_seams" }
 namespace_seams = { path = "../../catalog/namespace_seams" }
 nbtree = { path = "../../access/nbtree/nbtree" }
-nodeindexscan = { path = "../nodeindexscan" }
 types_scan = { path = "../../../_support/types/types_scan" }
 types_snapshot = { path = "../../../_support/types/snapshot" }
 types_storage = { path = "../../../_support/types/types_storage" }
@@ -79,7 +80,6 @@ freespace_seams = { path = "../../storage/freespace/freespace_seams" }
 seam_core = { path = "../../../_support/seam_core" }
 types_nodes = { path = "../../../_support/types/nodes" }
 heaptuple = { path = "../../access/common/heaptuple" }
-tableam = { path = "../../access/table/tableam" }
 rmgr = { path = "../../access/transam/rmgr" }
 xact_seams = { path = "../../access/transam/xact_seams" }
 syscache_seams = { path = "../../utils/cache/syscache_seams" }

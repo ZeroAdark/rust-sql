@@ -1,0 +1,9 @@
+path	crates/gravity/expr/src/nodes/tuple.rs
+growth	std::iter::Extend::extend	2
+growth	std::vec::Vec::push	3
+macro	std::vec	1
+method	std::borrow::Cow::into_owned	1
+method	std::boxed::Box::new	1
+method	std::iter::Iterator::collect	3
+type	std::boxed::Box	1
+type	std::vec::Vec	2

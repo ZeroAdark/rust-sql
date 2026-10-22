@@ -22,6 +22,8 @@ use types_storage::waiteventset::WaitEventSetHandle;
 
 #[cfg(not(target_family = "wasm"))]
 pub mod crash_signals;
+#[cfg(target_os = "linux")]
+mod core_trim;
 // wasm32: no signals on WASI — a fatal fault is a wasm trap and the runtime
 // itself reports it; there is no disposition to install or restore.
 #[cfg(target_family = "wasm")]
@@ -31,10 +33,11 @@ pub mod crash_signals {
 pub mod main_entry;
 pub mod serverloop;
 pub mod statemachine;
+pub mod supervisor;
 #[cfg(test)]
 mod tests;
 
-pub use main_entry::{CheckMain, PostmasterMain};
+pub use main_entry::PostmasterMain;
 
 pub(crate) const SRC: &str = "src/backend/postmaster/postmaster.c";
 
@@ -48,7 +51,7 @@ pub const FastShutdown: i32 = 2;
 pub const ImmediateShutdown: i32 = 3;
 
 pub const SIGKILL_CHILDREN_AFTER_SECS: i64 = 5;
-/// regression: grace after the SIGKILL broadcast before the
+/// GL-DISCONNECT-WEDGE-1: grace after the SIGKILL broadcast before the
 /// postmaster forces its own exit. C's SIGKILL is unconditional, so C's
 /// PM_WAIT_BACKENDS always drains; the thread rendering (SendThreadKill)
 /// lands at a drain point, and a thread wedged off its drain points (deep
@@ -60,7 +63,7 @@ pub const SIGKILL_CHILDREN_AFTER_SECS: i64 = 5;
 /// the OS had killed us.
 pub const FORCED_EXIT_AFTER_LETHAL_SECS: i64 = 8;
 
-/// regression: bound on a NON-immediate shutdown that stops making
+/// GL-GANGWEDGE-1: bound on a NON-immediate shutdown that stops making
 /// progress through the shutdown states.
 ///
 /// C's fast/smart shutdown waits forever by design at every shutdown gate,
@@ -89,7 +92,7 @@ pub const FORCED_EXIT_AFTER_LETHAL_SECS: i64 = 8;
 ///
 /// On firing, the postmaster SELF-ESCALATES to immediate shutdown — exactly
 /// the operator action C assumes — which flows into the already-audited kill
-/// ladder (SIGKILL_CHILDREN_AFTER_SECS, then the regression
+/// ladder (SIGKILL_CHILDREN_AFTER_SECS, then the GL-DISCONNECT-WEDGE-1
 /// FORCED_EXIT_AFTER_LETHAL_SECS floor). The worst case becomes bounded and
 /// loud instead of infinite and silent. Escalation forfeits the shutdown
 /// checkpoint, so the next start runs crash recovery — strictly better than
@@ -222,7 +225,7 @@ pub struct PostmasterState {
     /// forced-exit floor (serverloop) fires FORCED_EXIT_AFTER_LETHAL_SECS
     /// after it if children still have not drained. 0 = not sent.
     pub lethal_time: i64,
-    /// regression: wall-clock second of the last PMState change, and
+    /// GL-GANGWEDGE-1: wall-clock second of the last PMState change, and
     /// whether the shutdown-stall watchdog has already escalated for this
     /// shutdown (it fires once — after that the immediate-shutdown ladder
     /// owns the outcome). 0 = never stamped.
@@ -249,6 +252,7 @@ pub struct PostmasterState {
     pub walreceiver: Option<PmChild>,
     pub walsummarizer: Option<PmChild>,
     pub syslogger: Option<PmChild>,
+    pub instance_aux: Option<PmChild>,
 }
 
 impl PostmasterState {
@@ -283,6 +287,7 @@ impl PostmasterState {
             walreceiver: None,
             walsummarizer: None,
             syslogger: None,
+            instance_aux: None,
         }
     }
 }
@@ -408,6 +413,8 @@ pub fn process_pm_reload_request() -> PgResult<()> {
             "process_pm_reload_request",
         );
         guc_file::ProcessConfigFile(types_guc::GucContext::PGC_SIGHUP)?;
+        supervisor::notify_restart_after_crash();
+        supervisor::publish_config(main_entry::pg_start_time());
         // Publish the post-reload BASE snapshot before children are told to
         // re-read: a child's own reload pass (and any reload-diff it runs)
         // then sees one atomic old-base -> new-base transition
@@ -502,6 +509,7 @@ pub fn process_pm_pmsignal() -> PgResult<()> {
     if pmsignal::CheckPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY)
         && with_pm(|pm| pm.pm_state == PMState::PM_RECOVERY && pm.shutdown == NoShutdown)
     {
+        launch_backend::rtpool::gravity_standby_ready();
         report(
             LOG,
             "database system is ready to accept read-only connections".into(),
@@ -515,6 +523,7 @@ pub fn process_pm_pmsignal() -> PgResult<()> {
             // Some workers may be scheduled to start now (postmaster.c:3740).
             pm.start_worker_needed = true;
         });
+        supervisor::notify_ready();
     }
 
     if pmsignal::CheckPostmasterSignal(PMSIGNAL_BACKGROUND_WORKER_CHANGE) {
@@ -652,6 +661,12 @@ fn log_child_exit(procname: &str, pid: pid_t, exitstatus: i32) {
 }
 
 pub(crate) fn log_child_exit_at(level: types_error::ErrorLevel, procname: &str, pid: pid_t, exitstatus: i32) {
+    child_exit_report(level, procname, pid, exitstatus)();
+}
+
+/// LogChildExit's line, its facts (the crashed child's activity) read now and the line written when the returned
+/// closure runs: handle_child_crash reads them before its quit broadcast and writes the line after (D4816).
+fn child_exit_report(level: types_error::ErrorLevel, procname: &str, pid: pid_t, exitstatus: i32) -> impl FnOnce() {
     // postmaster.c:2803-2845. Any non-zero status attaches the crashed
     // child's activity as DETAIL; activity_buffer is 1024 bytes (the default
     // track_activity_query_size), so the string is clipped to 1023.
@@ -676,11 +691,13 @@ pub(crate) fn log_child_exit_at(level: types_error::ErrorLevel, procname: &str, 
             )
         }
     };
-    let mut builder = elog::ereport(level).errmsg(message);
-    if let Some(activity) = activity {
-        builder = builder.errdetail(format!("Failed process was running: {activity}"));
+    move || {
+        let mut builder = elog::ereport(level).errmsg(message);
+        if let Some(activity) = activity {
+            builder = builder.errdetail(format!("Failed process was running: {activity}"));
+        }
+        let _ = builder.finish(loc(line, "LogChildExit"));
     }
-    let _ = builder.finish(loc(line, "LogChildExit"));
 }
 
 /// postmaster.c:2240: the reaper's entry line is DEBUG4.
@@ -743,6 +760,10 @@ pub fn process_pm_child_exit() -> PgResult<()> {
             });
             statemachine::UpdatePMState(PMState::PM_RUN);
             with_pm(|pm| pm.conns_allowed = true);
+            launch_backend::rtpool::gravity_server_ready();
+            // the catalog pre-warm worker runs to completion before connections are accepted
+            with_pm(|pm| pm.start_worker_needed = true);
+            launch_backend::rtpool::gravity_prewarm_wait(&prewarm_tick);
 
             with_pm(|pm| pm.start_worker_needed = true);
 
@@ -753,6 +774,7 @@ pub fn process_pm_child_exit() -> PgResult<()> {
                 "process_pm_child_exit",
             );
             miscinit::AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_READY)?;
+            supervisor::notify_ready();
             continue;
         }
 
@@ -842,6 +864,16 @@ pub fn process_pm_child_exit() -> PgResult<()> {
             continue;
         }
 
+        // Status 0 or 1 is a normal stop; the launch pass restarts it.
+        if with_pm(|pm| pm.instance_aux.map(|c| c.pid)) == Some(pid) {
+            let aux = with_pm(|pm| pm.instance_aux.take()).expect("checked");
+            pmchild_seams::release_postmaster_child_slot::call(aux.child_slot);
+            if !(status0 || status1) {
+                handle_child_crash("instance aux process", pid, exitstatus)?;
+            }
+            continue;
+        }
+
         if with_pm(|pm| pm.syslogger.map(|c| c.pid)) == Some(pid) {
             let logger = with_pm(|pm| pm.syslogger.take()).expect("checked");
             pmchild_seams::release_postmaster_child_slot::call(logger.child_slot);
@@ -890,6 +922,9 @@ pub fn process_pm_child_exit() -> PgResult<()> {
             Some((child_slot, BackendType::BgWorker)) => {
                 // CleanupBackend's B_BG_WORKER half.
                 let rw = bgworker::find_registered_worker_by_pid(pid);
+                if let Some(idx) = rw {
+                    bgworker::ReportPendingBackgroundWorkerStartup(idx);
+                }
                 let procname = match rw {
                     Some(idx) => format!("background worker \"{}\"", bgworker::rw_type(idx)),
                     None => "background worker".to_string(),
@@ -930,22 +965,20 @@ pub fn process_pm_child_exit() -> PgResult<()> {
                 "process_pm_child_exit: reaper arm for {} unported (its owner extends the reaper when its main lands)",
                 miscinit::GetBackendTypeDesc(btype)
             ),
-            None => {
-                log_child_exit("untracked child process", pid, exitstatus);
-                // Untracked-thread crash announce: the runtime pool/standing
-                // executors are registry-invisible (no pmchild slot), but a
-                // PANIC-class death there must still run the crash cascade —
-                // the fsync law depends on it (a demoted PANIC converts a
-                // failed fsync back into "retry and trust"). Clean/FATAL
-                // statuses stay log-only, exactly as before.
-                if !(status0 || status1) {
-                    handle_child_crash("untracked child process", pid, exitstatus)?;
-                }
-            }
+            None => reap_untracked_child(pid, exitstatus)?,
         }
     }
 
     statemachine::PostmasterStateMachine()
+}
+
+fn reap_untracked_child(pid: pid_t, exitstatus: i32) -> PgResult<()> {
+    if !matches!(exit_status_code(exitstatus), Some(0 | 1)) {
+        handle_child_crash("untracked child process", pid, exitstatus)?;
+    } else {
+        log_child_exit("untracked child process", pid, exitstatus);
+    }
+    Ok(())
 }
 
 /// HandleChildCrash. Covers the catchable crash class only (caught panics);
@@ -956,15 +989,21 @@ fn handle_child_crash(procname: &str, pid: pid_t, exitstatus: i32) -> PgResult<(
         return Ok(());
     }
 
-    log_child_exit(procname, pid, exitstatus);
+    // D4816: act, then log. A LOG line is a synchronous write(2) to server.log (elog has no queue with
+    // logging_collector off), and under IO pressure one waited 0.7-3 s on the ext4 journal (D4812). In C's order
+    // (LogChildExit, this line, then the quit) a crashed backend's peers ran on for those writes, so the quit
+    // broadcast goes first and both lines after it (the child's activity still read before). Do not restore C's
+    // order: server.log's line order is not a contract (main, 2026-10-17).
+    let exit_line = child_exit_report(LOG, procname, pid, exitstatus);
+    let quit = statemachine::HandleFatalError(pmsignal::QuitSignalReason::PMQUIT_FOR_CRASH, true);
+    exit_line();
     report(
         LOG,
         "terminating any other active server processes".into(),
         2804,
         "HandleChildCrash",
     );
-
-    statemachine::HandleFatalError(pmsignal::QuitSignalReason::PMQUIT_FOR_CRASH, true)
+    quit
 }
 
 /// pm_service_pending seam impl (SIMCORPUS): one postmaster service quantum
@@ -994,6 +1033,15 @@ fn pm_service_pending() {
     }
 }
 
+/// The pre-warm wait's step: take the workers registered meanwhile (the chain's next), then start what is due.
+fn prewarm_tick() {
+    if pmsignal::CheckPostmasterSignal(pmsignal::PMSignalReason::PMSIGNAL_BACKGROUND_WORKER_CHANGE) {
+        bgworker::BackgroundWorkerStateChange(with_pm(|pm| pm.pm_state < PMState::PM_STOP_BACKENDS));
+        with_pm(|pm| pm.start_worker_needed = true);
+    }
+    statemachine::maybe_start_bgworkers();
+}
+
 /// pm_promote_run seam impl (DST-MULTIBACKEND): the startup-exit promotion
 /// for harness boot threads that play the postmaster — the arm of
 /// process_pm_child_exit's startup case a PM_INIT surrogate never runs
@@ -1018,6 +1066,8 @@ fn pm_promote_run() {
         pm.conns_allowed = true;
         pm.start_worker_needed = true;
     });
+    launch_backend::rtpool::gravity_server_ready();
+    launch_backend::rtpool::gravity_prewarm_wait(&prewarm_tick);
 }
 
 pub fn init_seams() {

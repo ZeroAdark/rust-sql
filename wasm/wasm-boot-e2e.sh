@@ -30,7 +30,7 @@
 #   * USER env supplies the identity (no uids/passwd db on WASI).
 set -u
 
-REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"  # the public workspace root (git toplevel is the monorepo)
 PGINSTALL="${PGINSTALL:-}"
 for cand in "$PGINSTALL" /tmp/pgrust_pginstall/bin /opt/homebrew/bin; do
     [ -n "$cand" ] && [ -x "$cand/initdb" ] && PGBIN="$cand" && break
@@ -44,7 +44,7 @@ WASM_BIN="${PGRUST_WASM_BIN:-$REPO/target/wasm32-wasip1/debug/postgres.wasm}"
 [ -f "$WASM_BIN" ] || { echo "no wasm binary at $WASM_BIN (wasm/wasm-build.sh)"; exit 2; }
 
 . "$REPO/wasm/lib/scratch.sh"
-WORK="${WASM_BOOT_E2E_DIR:-$(scratch_datadir pgrust-wasm-boot-e2e)}"
+WORK="${WASM_BOOT_E2E_DIR:-$(scratch_datadir pgrust-fast-wasm-boot-e2e)}"
 scratch_adopt "$WORK"
 rm -rf "$WORK"; mkdir -p "$WORK"
 
@@ -137,8 +137,9 @@ PGRUST_TZDIR="$TZSRC/timezone" PGRUST_PGSHAREDIR="$TZSRC" \
 [ $? -eq 0 ] || miss "native --single exited nonzero"
 
 echo "=== wasm --single -j subset (wasmtime) ==="
-wasmtime run -W exceptions=y,max-wasm-stack=16777216 \
+wasmtime run -W exceptions=y,max-wasm-stack=16777216 --preload env="$REPO/wasm/gravity-jit-stub.wat" \
     --dir "$WORK::/work" \
+    --env PGRUST_WASM_ENGINE_STACK=16777216 \
     --env USER=postgres \
     --env PGRUST_TZDIR=/work/share/timezone \
     --env PGRUST_PGSHAREDIR=/work/share \
@@ -214,8 +215,9 @@ PGRUST_TZDIR="$TZSRC/timezone" PGRUST_PGSHAREDIR="$TZSRC" \
     < "$WORK/part.sql" > "$WORK/native-part.out" 2> "$WORK/native-part.err"
 [ $? -eq 0 ] || miss "native --single (partitioning) exited nonzero"
 
-wasmtime run -W exceptions=y,max-wasm-stack=16777216 \
+wasmtime run -W exceptions=y,max-wasm-stack=16777216 --preload env="$REPO/wasm/gravity-jit-stub.wat" \
     --dir "$WORK::/work" \
+    --env PGRUST_WASM_ENGINE_STACK=16777216 \
     --env USER=postgres \
     --env PGRUST_TZDIR=/work/share/timezone \
     --env PGRUST_PGSHAREDIR=/work/share \

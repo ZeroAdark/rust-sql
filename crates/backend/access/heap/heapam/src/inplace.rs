@@ -308,3 +308,46 @@ pub fn heap_inplace_unlock(
     inval::eoxact::ForgetInplace_Inval();
     Ok(())
 }
+
+/// pgrcolumnar LOCK-F3: overwrite the data of the tuple at `tid`, which the current (sub)transaction inserted and has
+/// not frozen (a tombstone heap's LOCK row, its insert the row's exclusive lock), with `data` (the same length), and
+/// stamp it with command id `cid`. One XLOG_HEAP_INPLACE record (no invalidations: not a catalog); redo copies the
+/// data. No other transaction can see the tuple as visible meanwhile (its inserter is running), and an abort takes
+/// it away whole, so an in-place change is safe; the command id is backend-local and needs no WAL.
+pub fn heap_overwrite_own_insert(
+    mcx: Mcx<'_>,
+    relation: &RelationData<'_>,
+    tid: ::types_tuple::ItemPointerData,
+    data: &[u8],
+    cid: CommandId,
+) -> PgResult<()> {
+    let buffer = bufmgr_seams::read_buffer::call(relation, ItemPointerGetBlockNumber(&tid))?;
+    bufmgr_seams::lock_buffer::call(buffer, BUFFER_LOCK_EXCLUSIVE)?;
+    let mut tup = on_page_tuple(relation, buffer, tid);
+    let xid = xact_seams::get_current_transaction_id::call()?;
+    let hoff = tup.t_data().t_hoff;
+    let ok = tup.t_data().xmin_raw() == xid && !tup.t_data().xmin_frozen() && tup.t_len as usize - hoff as usize == data.len();
+    if !ok {
+        bufmgr_seams::lock_buffer::call(buffer, BUFFER_LOCK_UNLOCK)?;
+        bufmgr_seams::release_buffer::call(buffer)?;
+        return Err(Box::new(PgError::error("heap_overwrite_own_insert: not an unfrozen tuple of the current transaction, or a length mismatch")));
+    }
+    tup.t_data_mut().set_cmin(cid);
+    let none = ::mcx::PgVec::new_in(mcx);
+    // WAL before the page changes, as heap_inplace_update_and_unlock: DELAY_CHKPT_START keeps a checkpoint's redo
+    // pointer from passing the record while the buffer is not yet dirty
+    let my_proc = lmgr_proc::MyProc().map(lmgr_proc::GetPGProcByNumber);
+    init_small::globals::StartCriticalSection();
+    if let Some(proc) = my_proc {
+        use core::sync::atomic::Ordering::Relaxed;
+        proc.delayChkptFlags.fetch_or(::types_storage::storage::DELAY_CHKPT_START, Relaxed);
+    }
+    // unlocks the buffer
+    inplace_write_wal_and_page(mcx, relation, &tup, buffer, data, hoff, data.len(), false, 0, &none)?;
+    if let Some(proc) = my_proc {
+        use core::sync::atomic::Ordering::Relaxed;
+        proc.delayChkptFlags.fetch_and(!::types_storage::storage::DELAY_CHKPT_START, Relaxed);
+    }
+    init_small::globals::EndCriticalSection();
+    bufmgr_seams::release_buffer::call(buffer)
+}

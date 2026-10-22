@@ -1,0 +1,166 @@
+Parsed test spec with 2 sessions
+
+starting permutation: upd rowv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step rowv: SELECT ta.id, ta.value, (SELECT ROW(tb.id, tb.value) FROM table_b tb WHERE ta.id = tb.id) AS tb_row FROM table_a ta WHERE ta.id = 1 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step rowv: <... completed>
+id|value         |tb_row         
+--+--------------+---------------
+ 1|newTableAValue|(1,tableBValue)
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd intv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step intv: SELECT ta.id, ta.value, (SELECT tb.id + 10 FROM table_b tb WHERE ta.id = tb.id) AS tb_id FROM table_a ta WHERE ta.id = 1 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step intv: <... completed>
+id|value         |tb_id
+--+--------------+-----
+ 1|newTableAValue|   11
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd txtv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step txtv: SELECT ta.id, ta.value, (SELECT tb.value FROM table_b tb WHERE ta.id = tb.id) AS tb_value FROM table_a ta WHERE ta.id = 1 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step txtv: <... completed>
+id|value         |tb_value   
+--+--------------+-----------
+ 1|newTableAValue|tableBValue
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd exv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step exv: SELECT ta.id, ta.value, EXISTS (SELECT 1 FROM table_b tb WHERE ta.id = tb.id) AS tb_exists FROM table_a ta WHERE ta.id = 1 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step exv: <... completed>
+id|value         |tb_exists
+--+--------------+---------
+ 1|newTableAValue|t        
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd arrv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step arrv: SELECT ta.id, ta.value, ARRAY(SELECT tb.value FROM table_b tb WHERE ta.id = tb.id) AS tb_values FROM table_a ta WHERE ta.id = 1 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step arrv: <... completed>
+id|value         |tb_values    
+--+--------------+-------------
+ 1|newTableAValue|{tableBValue}
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd selfv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step selfv: SELECT ta.id, ta.value, (SELECT length(ta2.value) FROM table_a ta2 WHERE ta2.id = ta.id) AS ta_seen_len FROM table_a ta WHERE ta.id = 1 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step selfv: <... completed>
+id|value         |ta_seen_len
+--+--------------+-----------
+ 1|newTableAValue|         11
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd initv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step initv: SELECT ta.id, ta.value, (SELECT max(tb.value) FROM table_b tb) AS tb_max FROM table_a ta WHERE ta.id = 1 FOR UPDATE; <waiting ...>
+step c1: COMMIT;
+step initv: <... completed>
+id|value         |tb_max     
+--+--------------+-----------
+ 1|newTableAValue|tableBValue
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd joinv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step joinv: SELECT ta.id, ta.value, tb.value AS tb_value, (SELECT tb2.id + 10 FROM table_b tb2 WHERE tb2.id = ta.id) AS tb_id FROM table_a ta JOIN table_b tb ON tb.id = ta.id WHERE ta.id = 1 FOR UPDATE OF ta; <waiting ...>
+step c1: COMMIT;
+step joinv: <... completed>
+id|value         |tb_value   |tb_id
+--+--------------+-----------+-----
+ 1|newTableAValue|tableBValue|   11
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd pullv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step pullv: SELECT ta.id, ta.value, s.value AS s_value FROM table_a ta JOIN (SELECT id, value FROM table_b) s ON s.id = ta.id WHERE ta.id = 1 FOR UPDATE OF ta; <waiting ...>
+step c1: COMMIT;
+step pullv: <... completed>
+id|value         |s_value    
+--+--------------+-----------
+ 1|newTableAValue|tableBValue
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd updv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step updv: UPDATE table_a ta SET value = ta.value || '/' || (SELECT length(tb.value) FROM table_b tb WHERE tb.id = ta.id) WHERE ta.id = 1 RETURNING ta.id, ta.value; <waiting ...>
+step c1: COMMIT;
+step updv: <... completed>
+id|value            
+--+-----------------
+ 1|newTableAValue/11
+(1 row)
+
+step c2: COMMIT;
+
+starting permutation: upd updjv c1 c2
+step upd: 
+	UPDATE table_a SET value = 'newTableAValue' WHERE id = 1;
+	UPDATE table_b SET value = 'newTableBValue' WHERE id = 1;
+
+step updjv: UPDATE table_a ta SET value = ta.value || '/' || tb.value || '/' || (SELECT length(tb2.value) FROM table_b tb2 WHERE tb2.id = ta.id) FROM (SELECT id, value FROM table_b) tb WHERE tb.id = ta.id AND ta.id = 1 RETURNING ta.id, ta.value; <waiting ...>
+step c1: COMMIT;
+step updjv: <... completed>
+id|value                        
+--+-----------------------------
+ 1|newTableAValue/tableBValue/11
+(1 row)
+
+step c2: COMMIT;

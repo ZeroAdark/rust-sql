@@ -1,1 +1,0 @@
-N$.a.datetime("HH24:MI TZH") >= $.b.timestamp_tz()

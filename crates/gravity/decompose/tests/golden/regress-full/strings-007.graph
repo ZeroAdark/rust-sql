@@ -1,0 +1,12 @@
+-- regress-full-strings-007
+-- SELECT pg_relation_size(reltoastrelid) = 0 AS is_empty FROM pg_class where relname = 'toasttest';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1259 rti=1 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v1.2, c19:#64))
+    lanes Attr(14):byval8:w8:val
+  project (1=op416(fn2332(relabel2205(v1.14), c25:'main'), c23:0))
+  outs 1=w1:val
+mapped: IndexScan

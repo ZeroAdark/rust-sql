@@ -80,8 +80,8 @@ pub fn spgbeginscan<'mcx>(
     let so = SpGistScanOpaqueData {
         state,
         scanQueue: SpGistScanQueue::new(spg_search_item_cmp),
-        tempCxt: MemoryContext::new_bump("SP-GiST search temporary context"),
-        traversalCxt: MemoryContext::new_bump("SP-GiST traversal-value context"),
+        tempCxt: MemoryContext::new_wholesale("SP-GiST search temporary context"),
+        traversalCxt: MemoryContext::new_wholesale("SP-GiST traversal-value context"),
         searchNulls: false,
         searchNonNulls: false,
         numberOfKeys: 0,
@@ -90,10 +90,10 @@ pub fn spgbeginscan<'mcx>(
         numberOfOrderBys: 0,
         numberOfNonNullOrderBys: 0,
         orderByData: Vec::new(),
-        nonNullOrderByOffsets: vec![0; norderbys.max(0) as usize],
-        orderByTypes: vec![0; norderbys.max(0) as usize],
-        zeroDistances: vec![0.0; norderbys.max(0) as usize],
-        infDistances: vec![f64::INFINITY; norderbys.max(0) as usize],
+        nonNullOrderByOffsets: ::mcx::std_vec_from_elem("access", 0, norderbys.max(0) as usize)?,
+        orderByTypes: ::mcx::std_vec_from_elem("access", 0, norderbys.max(0) as usize)?,
+        zeroDistances: ::mcx::std_vec_from_elem("access", 0.0, norderbys.max(0) as usize)?,
+        infDistances: ::mcx::std_vec_from_elem("access", f64::INFINITY, norderbys.max(0) as usize)?,
         innerConsistentFn: inner_fn,
         leafConsistentFn: leaf_fn,
         frame2: ::types_fmgr::LocalFcinfo::<2>::new(0),
@@ -213,11 +213,12 @@ fn spg_prepare_scan_keys(scan: &mut IndexScanDescData<'_>) {
     }
 }
 
-fn spg_add_start_item(so: &mut SpGistScanOpaqueData<'_>, isnull: bool) {
+fn spg_add_start_item(so: &mut SpGistScanOpaqueData<'_>, isnull: bool) -> PgResult<()> {
     let distances = if isnull {
         Vec::new()
     } else {
-        so.zeroDistances[..so.numberOfNonNullOrderBys.max(0) as usize].to_vec()
+        let n = so.numberOfNonNullOrderBys.max(0) as usize;
+        ::mcx::std_vec_from_slice("spgist", &so.zeroDistances[..n])?
     };
     so.scanQueue.add(SpGistSearchItem {
         value: Datum::null(),
@@ -234,21 +235,23 @@ fn spg_add_start_item(so: &mut SpGistScanOpaqueData<'_>, isnull: bool) {
         recheckDistances: false,
         distances,
     });
+    Ok(())
 }
 
-fn reset_scan_opaque(so: &mut SpGistScanOpaqueData<'_>) {
+fn reset_scan_opaque(so: &mut SpGistScanOpaqueData<'_>) -> PgResult<()> {
     so.traversalCxt.reset();
     so.scanQueue.reset();
     if so.searchNulls {
-        spg_add_start_item(so, true);
+        spg_add_start_item(so, true)?;
     }
     if so.searchNonNulls {
-        spg_add_start_item(so, false);
+        spg_add_start_item(so, false)?;
     }
     so.iPtr = 0;
     so.nPtrs = 0;
     so.distances.clear();
     so.recon_buf.clear();
+    Ok(())
 }
 
 /// spgrescan.
@@ -280,7 +283,7 @@ pub fn spgrescan(
     if let Some(orderbys) = orderbys.filter(|_| scan.numberOfOrderBys > 0) {
         debug_assert!(orderbys.len() as i32 == scan.numberOfOrderBys);
         scan.orderByData.clear();
-        let mut order_by_types = Vec::with_capacity(orderbys.len());
+        let mut order_by_types = ::mcx::std_vec_with_capacity("access", orderbys.len())?;
         for k in orderbys {
             order_by_types.push(indexam_seams::get_func_rettype::call(k.sk_func.fn_oid)?);
             scan.orderByData.push(ScanKeyData {
@@ -305,10 +308,10 @@ pub fn spgrescan(
         let IndexScanOpaque::Spgist(so) = &mut scan.opaque else {
             crate::non_spgist_opaque()
         };
-        reset_scan_opaque(so);
+        reset_scan_opaque(so)?;
     }
 
-    scan.xs_pgstat_index_scans += 1;
+    scan.xs_pgstat.count(1, 0, 0);
     scan.xs_nsearches += 1;
     scan.xs_hitup = None;
     Ok(())
@@ -392,7 +395,7 @@ fn store_result(
                 let row = match non_null_distances {
                     Some(d) if !isnull && so.numberOfNonNullOrderBys > 0 => {
                         let mut out =
-                            Vec::with_capacity(so.numberOfOrderBys.max(0) as usize);
+                            ::mcx::std_vec_with_capacity("access", so.numberOfOrderBys.max(0) as usize)?;
                         for i in 0..so.numberOfOrderBys as usize {
                             let offset = so.nonNullOrderByOffsets[i];
                             if offset >= 0 {
@@ -500,13 +503,13 @@ fn spg_leaf_test(
             && !leaf_out.distances.is_null()
         {
             // SAFETY: opclass contract — norderbys distances in the armed mcx.
-            unsafe {
+            let slice = unsafe {
                 core::slice::from_raw_parts(
                     leaf_out.distances,
                     so.numberOfNonNullOrderBys as usize,
                 )
-            }
-            .to_vec()
+            };
+            ::mcx::std_vec_from_slice("spgist", slice)?
         } else {
             Vec::new()
         };
@@ -533,7 +536,7 @@ fn spg_leaf_test(
                 Datum::null()
             };
             let leaf_copy = if so.want_itup && so.state.leafTupDesc.natts > 1 {
-                Some(leaf_tuple.to_vec())
+                Some(::mcx::std_vec_from_slice("access", &leaf_tuple)?)
             } else {
                 None
             };
@@ -662,7 +665,7 @@ fn spg_inner_test(
                     Vec::new()
                 } else {
                     // SAFETY: as above.
-                    unsafe { core::slice::from_raw_parts(row, nn) }.to_vec()
+                    ::mcx::std_vec_from_slice("spgist", &unsafe { core::slice::from_raw_parts(row, nn) })?
                 });
             }
         }
@@ -723,7 +726,7 @@ fn spg_inner_test(
         } else if have_distances && !distance_rows[i].is_empty() {
             distance_rows[i].clone()
         } else {
-            so.infDistances[..so.numberOfNonNullOrderBys as usize].to_vec()
+            ::mcx::std_vec_from_slice("spgist", &so.infDistances[..so.numberOfNonNullOrderBys as usize])?
         };
         so.scanQueue.add(SpGistSearchItem {
             value,

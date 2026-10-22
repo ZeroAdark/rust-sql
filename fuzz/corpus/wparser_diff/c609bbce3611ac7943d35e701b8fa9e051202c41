@@ -1,4 +1,0 @@
-);
-
--- these operators are ignored
-select websearch_to_tsquery(

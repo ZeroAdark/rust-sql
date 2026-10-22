@@ -1,0 +1,7 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/bankstats.rs
+growth	pgrc_format::wire::put_u32	4
+growth	pgrc_format::wire::put_u64	2
+growth	std::vec::Vec::push	3
+macro	std::format	1
+method	std::vec::Vec::with_capacity	3
+type	std::vec::Vec	4

@@ -7,8 +7,7 @@
 //! `be_secure_openssl::be_tls_*` accessors (the peer X509 lives in that
 //! crate's per-backend connection state).
 //!
-//! C's ssl_extension_info is a value-per-call SRF; this port materializes
-//! (the pg_walinspect precedent) — same rows, same first-error ereport.
+//! ssl_extension_info is a value-per-call SRF here as in C.
 
 #[cfg(not(target_family = "wasm"))]
 use be_secure_openssl as tls;
@@ -69,8 +68,11 @@ mod tls_stub {
     ) -> Option<DnFieldLookup> {
         None
     }
-    pub fn be_tls_get_peer_extensions() -> Result<Vec<X509ExtensionInfo>, X509ExtensionsError> {
-        Ok(Vec::new())
+    pub fn be_tls_get_peer_extension_count() -> i32 {
+        0
+    }
+    pub fn be_tls_get_peer_extension(pos: i32) -> Result<X509ExtensionInfo, X509ExtensionsError> {
+        Err(X509ExtensionsError::UnknownExtension(pos))
     }
 }
 use init_small::globals as g;
@@ -191,6 +193,7 @@ fn asn1_bytes_to_text(fcinfo: &mut Fcinfo, bytes: &[u8]) -> PgResult<Datum> {
 // sslinfo.c:209 errmsg("invalid X.509 field name: \"%s\"", fieldname):
 // the field-name bytes go out unchanged.
 fn invalid_field_name(field: &[u8]) -> Box<PgError> {
+    // ALLOC-REVIEW(antigravity): error-report buffer (invalid_field_name builds PgError on ereport path)
     let mut msg = b"invalid X.509 field name: \"".to_vec();
     msg.extend_from_slice(field);
     msg.push(b'"');
@@ -204,7 +207,7 @@ fn dn_field(fcinfo: &mut Fcinfo, issuer: bool) -> PgResult<Datum> {
     // text_to_cstring semantics: OBJ_txt2nid sees up to the first NUL.
     let bytes = field.data();
     let cut = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    let field_bytes = bytes[..cut].to_vec();
+    let field_bytes = ::mcx::std_vec_from_slice("sslinfo", &bytes[..cut])?;
     let cfield = std::ffi::CString::new(field_bytes.clone()).expect("NUL-free by construction");
     match tls::be_tls_get_peer_dn_field(&cfield, issuer) {
         // No peer: unreachable behind the callers' guards, NULL as in C.
@@ -263,35 +266,42 @@ fn fc_ssl_issuer_dn(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
     whole_dn(fcinfo, tls::be_tls_get_peer_issuer_name()?)
 }
 
-// ssl_extension_info: SETOF (name text, value text, critical boolean).
+// ssl_extension_info: SETOF (name text, value text, critical boolean),
+// value-per-call as in C (sslinfo.c:360-480): position N is only inspected
+// on call N, so a target-list SRF stopped by LIMIT never reaches a later
+// unknown extension.
 fn fc_ssl_extension_info(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let flinfo = flinfo.expect("ssl_extension_info: resolved FmgrInfo required");
-    // SAFETY: the arming context outlives this call.
-    let mcx = unsafe { fcinfo.result_mcx_detached() };
-    // sslinfo.c:380: SRF_FIRSTCALL_INIT's context check, then any
-    // non-composite declared result is 0A000 (InitMaterializedSRF's own
-    // check would elog XX000 "return type must be a row type").
-    let Some(rsinfo) = fcinfo.rsinfo_mut() else {
-        return Err(funcapi::srf_context_error());
-    };
-    // SAFETY: executor-armed expectedDesc, live for this call (same as
-    // InitMaterializedSRF).
-    let expected = rsinfo
-        .expectedDesc
-        .map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
-    if funcapi::get_call_result_type(mcx, flinfo, expected)?.class
-        != funcapi::TypeFuncClass::Composite
-    {
-        return Err(Box::new(
-            PgError::error(
-                "function returning record called in context that cannot accept type record",
-            )
-            .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
-        ));
+    if !flinfo.has_fn_extra() {
+        // sslinfo.c:380: SRF_FIRSTCALL_INIT's context check, then any
+        // non-composite declared result is 0A000.
+        if fcinfo.rsinfo_mut().is_none() {
+            return Err(funcapi::srf_context_error());
+        }
+        let expected = expected_desc(fcinfo);
+        if ssl_extension_result_desc(fcinfo.result_mcx(), flinfo, expected)?.is_none() {
+            return Err(Box::new(
+                PgError::error(
+                    "function returning record called in context that cannot accept type record",
+                )
+                .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
+            ));
+        }
+        let max_calls = tls::be_tls_get_peer_extension_count();
+        let fctx = funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
+        fctx.max_calls = max_calls.max(0) as u64;
+        if max_calls <= 0 {
+            return Ok(funcapi::srf_return_done(flinfo, fcinfo));
+        }
     }
-    let mut srf = funcapi::InitMaterializedSRF(mcx, flinfo, fcinfo, 0)?;
-
-    let exts = tls::be_tls_get_peer_extensions().map_err(|e| -> Box<PgError> {
+    let (call_cntr, max_calls) = {
+        let fctx = funcapi::per_MultiFuncCall(flinfo);
+        (fctx.call_cntr, fctx.max_calls)
+    };
+    if call_cntr >= max_calls {
+        return Ok(funcapi::srf_return_done(flinfo, fcinfo));
+    }
+    let ext = tls::be_tls_get_peer_extension(call_cntr as i32).map_err(|e| -> Box<PgError> {
         match e {
             X509ExtensionsError::BioFailure => bio_err(),
             X509ExtensionsError::UnknownExtension(pos) => Box::new(
@@ -308,8 +318,13 @@ fn fc_ssl_extension_info(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
             ),
         }
     })?;
-
-    for ext in exts {
+    let expected = expected_desc(fcinfo);
+    let result = {
+        let mcx = fcinfo.result_mcx();
+        let mut desc = ssl_extension_result_desc(mcx, flinfo, expected)?
+            .expect("composite result checked at first call");
+        // C: BlessTupleDesc (sslinfo.c:383).
+        typcache_seams::assign_record_type_typmod::call(&mut desc)?;
         let values = [
             // C: CStringGetTextDatum(OBJ_nid2sn(nid))
             text_datum(mcx, ext.name.as_bytes())?,
@@ -318,10 +333,30 @@ fn fc_ssl_extension_info(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
             text_datum(mcx, &ext.value)?,
             Datum::from_bool(ext.critical),
         ];
-        srf.putvalues(&values, &[false, false, false])?;
-    }
+        let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &[false; 3])?;
+        byref_result(mcx, tuple.image())?
+    };
+    Ok(funcapi::srf_return_next(flinfo, fcinfo, result))
+}
 
-    Ok(srf.finish(fcinfo))
+fn expected_desc(fcinfo: &mut Fcinfo) -> Option<&'static TupleDescData<'static>> {
+    let expected = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
+    // SAFETY: executor-armed expectedDesc, live for this call.
+    expected.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() })
+}
+
+// get_call_result_type's composite arm for ssl_extension_info; None when the
+// declared result is not a row type.
+fn ssl_extension_result_desc<'mcx>(
+    mcx: Mcx<'mcx>,
+    flinfo: &FmgrInfo,
+    expected: Option<&TupleDescData<'_>>,
+) -> PgResult<Option<TupleDescData<'mcx>>> {
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
+    if resolved.class != funcapi::TypeFuncClass::Composite {
+        return Ok(None);
+    }
+    Ok(Some(resolved.result_tuple_desc.expect("composite result carries a tupdesc")))
 }
 
 fn lookup(function: &str) -> Option<PGFunction> {

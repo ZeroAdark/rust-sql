@@ -1,0 +1,10 @@
+-- regress-full-case-005
+-- SELECT CASE WHEN ((i < 0) or (i < 0)) THEN 'small' WHEN ((i = 0) or (i = 0)) THEN 'zero' WHEN ((i = 1) or (i = 1)) THEN 'one' WHEN ((i = 2) or (i = 2)) THEN 'two' ELSE 'big' END AS "Category" FROM CASE_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=2040 end=sink
+  nodes n0@0
+  source range rel=25374 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=case(when or(op97(v1.1, c23:0), op97(v1.1, c23:0)) then c25:'small', when or(op96(v1.1, c23:0), op96(v1.1, c23:0)) then c25:'zero', when or(op96(v1.1, c23:1), op96(v1.1, c23:1)) then c25:'one', when or(op96(v1.1, c23:2), op96(v1.1, c23:2)) then c25:'two') else c25:'big')
+  outs 1=vl:stmt/imm
+mapped: SeqScan

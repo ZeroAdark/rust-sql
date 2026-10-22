@@ -1,0 +1,1 @@
+an output column whose type the test creates (a domain, a table's composite row type, an information_schema domain): the rig catalog has no pg_type row

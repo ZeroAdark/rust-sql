@@ -1,0 +1,14 @@
+-- regress-full-updatable_views-053
+-- MERGE INTO rw_view1 t USING (VALUES (1)) AS v(a) ON t.aa = v.a WHEN MATCHED THEN DELETE;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@2
+  source range rel=24373 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op96(v3.1, c23:1)
+  project (1j=v3.-1)
+  write MERGE rel=24373 rti=3 natts=3 indexes=()
+    merge rowid=outer.1 target_cols=()
+    when matched then delete
+  outs 1=fx6:row
+mapped: ModifyTable SeqScan

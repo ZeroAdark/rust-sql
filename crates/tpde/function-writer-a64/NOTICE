@@ -1,0 +1,19 @@
+Rust translation of TPDE arm64/FunctionWriterA64.hpp and FunctionWriterA64.cpp,
+revision 116b2b83eb8491fd63c017285c91b007b8a26a67.
+Copyright 2025 Contributors to TPDE <https://tpde.org>.
+Licensed under Apache-2.0 WITH LLVM-exception. Original sources and license
+texts are retained under tests/upstream (LICENSES/ and manifest.json); the
+translated files, as pinned there:
+  tpde/include/tpde/arm64/FunctionWriterA64.hpp
+    sha256 738586ae46ff17869371fdc678b775db7f19fddb3dfb1dc0cb0864c50c87f2fd
+    git blob fc45af9baf73375fe7f13e63476e901596900c29
+  tpde/src/arm64/FunctionWriterA64.cpp
+    sha256 49a6346c8e7da8455bc5dfe4358d0e53ddd450cdc39c2a9b59f4fe9fe51e45e2
+    git blob 496d1b5490a9c8aa95211f540e51063b09dceab6
+Rust changes include a writer guard for label/veneer state, checked
+branch-range arithmetic and the Disarm encoder reached through the fresh
+tpde_disarm crate. See docs/tpde-rewrite/coverage/function-writer-a64.md.
+Disarm sources retained under tests/upstream/disarm (revision
+2d13d3f410a52daff1c5d8ef07d623332f372560) are test-only oracles: Copyright (c)
+2024, Alexis Engelke, BSD-3-Clause, license text in
+tests/upstream/disarm/LICENSE.

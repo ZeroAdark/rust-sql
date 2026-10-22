@@ -13,6 +13,18 @@ use super::*;
 
 const UNDEFINED_TABLE: SqlState = make_sqlstate(*b"42P01");
 
+#[test]
+fn returned_errors_obey_exit_on_error() {
+    let _guard = lock();
+    config::set_exit_on_any_error(true);
+    let direct = PgError::error("direct");
+    let built = ereport(ERROR).errmsg("built").into_error();
+    config::set_exit_on_any_error(false);
+    assert_eq!(direct.level, FATAL);
+    assert_eq!(built.level, FATAL);
+    assert_eq!(ereport(ERROR).errmsg("off").into_error().level, ERROR);
+}
+
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
@@ -162,7 +174,7 @@ fn percent_m_expands_saved_errno() {
     let expected = errno::strerror(errno::ENOENT);
     pre_format_elog_string(errno::ENOENT, None);
     assert_eq!(
-        format_elog_string("could not open file: %m"),
+        format_elog_string(&format!("could not open file: {PCT_M}")),
         format!("could not open file: {}", expected)
     );
 
@@ -237,6 +249,8 @@ fn unhandled_error_report_promotes_error_to_fatal() {
     let previous = set_emit_log_hook(Some(hook));
 
     let mut error = PgError::error("maximum number of prepared transactions reached");
+    error.output_to_server = Some(false);
+    error.output_to_client = Some(false);
     error.hint = Some("Increase \"max_prepared_transactions\" (currently 0).".to_owned());
     emit_unhandled_error_report(&error);
     emit_unhandled_error_report(&PgError::warning("still a warning"));
@@ -662,6 +676,37 @@ fn current_query_string_outlives_the_guard_until_cleared() {
     clear_retired_debug_query_string();
 }
 
+// D4481: a statement that finished (exec_simple_query's tail, C's `debug_query_string = NULL`) retires no copy, so
+// nothing reported after it and before the next statement carries its text; a nested guard's finish leaves the
+// outer's text armed, and the outer's own drop (an error unwinding) still retires it for the STATEMENT line.
+#[test]
+fn a_finished_scope_retires_nothing() {
+    let _guard = lock();
+    clear_retired_debug_query_string();
+    let q = String::from("select 1");
+    let scope = debug_query_string_scope(&q);
+    assert_eq!(current_query_string().as_deref(), Some("select 1"));
+    scope.finish();
+    assert_eq!(current_query_string(), None);
+    with_debug_query_string(|q| assert_eq!(q, None));
+
+    let outer = String::from("outer");
+    let inner = String::from("inner");
+    let o = debug_query_string_scope(&outer);
+    let i = debug_query_string_scope(&inner);
+    assert_eq!(current_query_string().as_deref(), Some("inner"));
+    i.finish();
+    assert_eq!(current_query_string().as_deref(), Some("outer"));
+    drop(o);
+    assert_eq!(current_query_string().as_deref(), Some("outer"));
+
+    // the next statement arms over the retired text, and its finish leaves none
+    let next = String::from("next");
+    let scope = debug_query_string_scope(&next);
+    scope.finish();
+    assert_eq!(current_query_string(), None);
+}
+
 #[test]
 fn check_log_of_query_needs_a_statement_in_flight() {
     let _guard = lock();
@@ -994,7 +1039,7 @@ fn builder_captures_errno_for_percent_m() {
     unsafe { libc::close(-1) };
     let err = ereport(ERROR)
         .errcode_for_file_access()
-        .errmsg("could not open directory \"d\": %m")
+        .errmsg(format!("could not open directory \"d\": {PCT_M}"))
         .into_error();
     assert_eq!(
         err.message,
@@ -1091,7 +1136,7 @@ fn server_log_line_carries_raw_message_and_detail_bytes() {
     config::set_log_line_prefix(saved_prefix);
 }
 
-// regression: elog.c:3767 append_with_tabs copies a C string, so a
+// fp-error-elog-p2#1: elog.c:3767 append_with_tabs copies a C string, so a
 // raw message carrying an embedded NUL (acldefault_sql's %c of '\0') ends
 // the server-log line at the NUL.
 #[test]
@@ -1115,7 +1160,7 @@ fn server_log_line_stops_at_the_first_nul() {
     config::set_log_line_prefix(saved_prefix);
 }
 
-// heap-crit lane (regression): the scoped START/END_CRIT_SECTION
+// heap-crit lane (fp-heap-heapam-p3#1): the scoped START/END_CRIT_SECTION
 // guard — Drop is END, an ereport ERROR under it is PANIC, count ends at 0.
 #[test]
 fn crit_section_guard_balances_the_count_on_every_exit() {
@@ -1194,4 +1239,221 @@ fn crit_section_run_promotes_escaping_hand_built_error() {
     })()
     .unwrap_err();
     assert_eq!(err.level, ERROR);
+}
+
+#[test]
+fn rethrow_preserves_output_flags_but_throw_recomputes_them() {
+    let _guard = lock();
+    FlushErrorState();
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    fn hook(error: &PgError, output: &mut bool) {
+        SEEN.lock().unwrap().push(error.message.clone());
+        *output = false;
+    }
+    SEEN.lock().unwrap().clear();
+    let previous = set_emit_log_hook(Some(hook));
+    for (initial, later, expected) in [(ERROR, FATAL, true), (FATAL, ERROR, false)] {
+        set_guc(initial, NOTICE, CommandDest::None, false);
+        assert!(errstart(ERROR, None));
+        errmsg("saved error").unwrap();
+        let copied = CopyErrorData().unwrap();
+        assert_eq!(copied.output_to_server, Some(expected));
+        assert_eq!(copied.output_to_client, Some(false));
+        let finished = errfinish(None, 0, None).unwrap_err();
+        assert_eq!(finished.output_to_server, copied.output_to_server);
+        set_guc(later, NOTICE, CommandDest::None, false);
+        let rethrown = ReThrowError::<()>(copied.clone()).unwrap_err();
+        emit_error_report_for(&rethrown);
+        assert_eq!(SEEN.lock().unwrap().len(), usize::from(expected));
+        SEEN.lock().unwrap().clear();
+        let thrown = ThrowErrorData(copied).unwrap_err();
+        assert_eq!(thrown.output_to_server, Some(!expected));
+        emit_error_report_for(&thrown);
+        assert_eq!(SEEN.lock().unwrap().len(), usize::from(!expected));
+        SEEN.lock().unwrap().clear();
+    }
+    set_emit_log_hook(previous);
+    reset_guc();
+}
+
+#[test]
+fn percent_m_marker_expansion_and_literal_retention() {
+    let expected = errno::strerror(2);
+
+    let arg_literal = ErrorBuilder::new(ERROR)
+        .with_saved_errno(2)
+        .errmsg_internal(format!("relation \"{name}\" does not exist", name = "no%mtable"))
+        .into_error();
+    assert_eq!(arg_literal.message(), "relation \"no%mtable\" does not exist");
+
+    let marker_only = ErrorBuilder::new(ERROR)
+        .with_saved_errno(2)
+        .errmsg_internal(format!("could not open file: {PCT_M}"))
+        .into_error();
+    assert_eq!(marker_only.message(), format!("could not open file: {expected}"));
+
+    let both = ErrorBuilder::new(ERROR)
+        .with_saved_errno(2)
+        .errmsg(format!(
+            "could not open file \"{path}\" for reading: {PCT_M}",
+            path = "/nonexistent/data%m.csv"
+        ))
+        .errhint(format!("hint with argument {hint_arg}: {PCT_M}", hint_arg = "50%m"))
+        .into_error();
+    assert_eq!(
+        both.message(),
+        format!("could not open file \"/nonexistent/data%m.csv\" for reading: {expected}")
+    );
+    assert_eq!(
+        both.hint.as_deref(),
+        Some(format!("hint with argument 50%m: {expected}").as_str())
+    );
+}
+
+// parallel.c:1193-1200: a relayed report is decorated by the context stack
+// saved at CreateParallelContext, not by frames pushed after it.
+#[test]
+fn context_callbacks_below_mark_decorate_only_older_frames() {
+    let _guard = lock();
+    let outer = push_emit_context_callback(Box::new(|e| e.add_context_line("outer")));
+    let mark = context_stack_mark();
+    let inner = push_emit_context_callback(Box::new(|e| e.add_context_line("inner")));
+    let mut e = PgError::new(NOTICE, "relayed");
+    e.add_context_line("parallel worker");
+    apply_emit_context_callbacks_below(&mut e, mark);
+    pop_emit_context_callback(inner);
+    pop_emit_context_callback(outer);
+    assert_eq!(e.context.as_deref(), Some("parallel worker\nouter"));
+}
+
+// a borrowed frame (its closure in the pusher's own frame, pushed with no allocation, as C's ErrorContextCallback)
+// decorates like a boxed one, keeps its place among the boxed frames (innermost first), and is gone once popped.
+#[test]
+fn borrowed_context_frame_decorates_like_a_boxed_one() {
+    let _guard = lock();
+    let outer = push_context_frame(Box::new(|e| e.add_context_line("outer")), true);
+    let label = String::from("inner");
+    let mut cb = |e: &mut PgError| e.add_context_line(label.as_str());
+    // SAFETY: popped below, before `cb` goes out of scope.
+    let inner = unsafe { push_context_frame_borrowed(&mut cb, true) };
+    let mut e = PgError::new(NOTICE, "x");
+    apply_emit_context_callbacks_below(&mut e, context_stack_mark());
+    assert_eq!(e.context.as_deref(), Some("inner\nouter"));
+    pop_emit_context_callback(inner);
+    let mut e2 = PgError::new(NOTICE, "y");
+    apply_emit_context_callbacks_below(&mut e2, context_stack_mark());
+    pop_emit_context_callback(outer);
+    assert_eq!(e2.context.as_deref(), Some("outer"));
+}
+
+// errfinish walks no emit frame for a report whose context is printed nowhere: errhidecontext, no client, no
+// emit_log_hook. The walk costs one call per frame, so a LOG line at every level of an N-deep SQL function recursion
+// would cost O(N^2). A report that shows its context, or that a hook reads, still runs the frames.
+#[test]
+fn hidden_context_walks_no_emit_frame_when_no_one_reads_it() {
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    let _guard = lock();
+    reset_guc();
+    FlushErrorState();
+    static RUNS: AtomicUsize = AtomicUsize::new(0);
+    fn hook(_error: &PgError, output_to_server: &mut bool) {
+        *output_to_server = false;
+    }
+    let id = push_emit_context_callback(Box::new(|e| {
+        RUNS.fetch_add(1, Relaxed);
+        e.add_context_line("frame");
+    }));
+    set_guc(LOG, ERROR, CommandDest::None, false);
+    let at = ErrorLocation::new("file.c", 1, "func");
+    let before = RUNS.load(Relaxed);
+    assert_eq!(ereport(LOG).errmsg("context shown").finish(at.clone()), Ok(()));
+    assert_eq!(RUNS.load(Relaxed), before + 1);
+    assert_eq!(ereport(LOG).errmsg("context hidden").errhidecontext(true).finish(at.clone()), Ok(()));
+    assert_eq!(RUNS.load(Relaxed), before + 1, "a report whose context is printed nowhere walks no emit frame");
+    let previous = set_emit_log_hook(Some(hook));
+    assert_eq!(ereport(LOG).errmsg("a hook reads it").errhidecontext(true).finish(at), Ok(()));
+    set_emit_log_hook(previous);
+    assert_eq!(RUNS.load(Relaxed), before + 2);
+    pop_emit_context_callback(id);
+    reset_guc();
+}
+
+#[test]
+fn borrowed_frames_interleave_pop_out_of_order_and_spill() {
+    let _guard = lock();
+    let a = push_context_frame(Box::new(|e| e.add_context_line("a")), true);
+    let mut cb_b = |e: &mut PgError| e.add_context_line("b");
+    // SAFETY: every borrowed frame below is popped before its closure goes out of scope.
+    let b = unsafe { push_context_frame_borrowed(&mut cb_b, true) };
+    let c = push_context_frame(Box::new(|e| e.add_context_line("c")), true);
+    let mut cb_d = |e: &mut PgError| e.add_context_line("d");
+    let d = unsafe { push_context_frame_borrowed(&mut cb_d, true) };
+    let mut e = PgError::new(NOTICE, "x");
+    apply_emit_context_callbacks_below(&mut e, context_stack_mark());
+    assert_eq!(e.context.as_deref(), Some("d\nc\nb\na"));
+    pop_emit_context_callback(b);
+    let mut e = PgError::new(NOTICE, "y");
+    apply_emit_context_callbacks_below(&mut e, context_stack_mark());
+    assert_eq!(e.context.as_deref(), Some("d\nc\na"));
+    pop_emit_context_callback(d);
+    pop_emit_context_callback(c);
+    let labels: Vec<String> = (0..40).map(|i| format!("f{i}")).collect();
+    let mut cbs: Vec<_> = labels.iter().map(|l| move |e: &mut PgError| e.add_context_line(l.as_str())).collect();
+    let ids: Vec<u64> = cbs.iter_mut().map(|cb| unsafe { push_context_frame_borrowed(cb, true) }).collect();
+    let mut e = PgError::new(NOTICE, "z");
+    apply_emit_context_callbacks_below(&mut e, context_stack_mark());
+    let want: Vec<String> = labels.iter().rev().cloned().chain(core::iter::once("a".to_string())).collect();
+    assert_eq!(e.context.as_deref(), Some(want.join("\n").as_str()));
+    for id in ids.into_iter().rev() {
+        pop_emit_context_callback(id);
+    }
+    let mut e = PgError::new(NOTICE, "w");
+    apply_emit_context_callbacks_below(&mut e, context_stack_mark());
+    pop_emit_context_callback(a);
+    assert_eq!(e.context.as_deref(), Some("a"));
+    assert!(error_stack_clean());
+}
+
+// D3639 (main 12:59:36Z): with the slots full, a borrowed frame goes to the boxed stack; none is dropped, nothing panics.
+// 100 levels, each a boxed frame (PL/pgSQL's) under a borrowed one: past slot 32 the borrowed frames spill among the
+// boxed ones, and every walk (a report at the bottom, a mark half way, after a pop out of order) keeps push order.
+#[test]
+fn borrowed_frames_past_the_slots_among_boxed_frames_keep_order() {
+    let _guard = lock();
+    let labels: Vec<String> = (0..100).map(|i| format!("p{i}")).collect();
+    let mut cbs: Vec<_> = labels.iter().map(|l| move |e: &mut PgError| e.add_context_line(l.as_str())).collect();
+    let mut ids = Vec::new();
+    let mut mid_mark = 0;
+    for (i, cb) in cbs.iter_mut().enumerate() {
+        // SAFETY: every borrowed frame is popped below, before `cbs` goes out of scope.
+        ids.push(unsafe { push_context_frame_borrowed(cb, true) });
+        ids.push(push_context_frame(Box::new(move |e| e.add_context_line(&format!("b{i}"))), true));
+        if i == 49 {
+            mid_mark = context_stack_mark();
+        }
+    }
+    let want = |from: usize, to: usize| -> String {
+        (from..to).rev().flat_map(|i| [format!("b{i}"), format!("p{i}")]).collect::<Vec<_>>().join("\n")
+    };
+    let mut e = PgError::new(NOTICE, "bottom");
+    apply_emit_context_callbacks_below(&mut e, context_stack_mark());
+    assert_eq!(e.context.as_deref(), Some(want(0, 100).as_str()));
+    let mut e = PgError::new(NOTICE, "half");
+    apply_emit_context_callbacks_below(&mut e, mid_mark);
+    assert_eq!(e.context.as_deref(), Some(want(0, 50).as_str()));
+    pop_emit_context_callback(ids[140]);
+    pop_emit_context_callback(ids[20]);
+    let mut e = PgError::new(NOTICE, "holes");
+    apply_emit_context_callbacks_below(&mut e, context_stack_mark());
+    let got = e.context.unwrap_or_default();
+    assert_eq!(got.lines().count(), 198);
+    assert!(!got.lines().any(|l| l == "p70" || l == "p10"));
+    assert_eq!(got.lines().next(), Some("b99"));
+    assert_eq!(got.lines().last(), Some("p0"));
+    for (k, id) in ids.iter().enumerate().rev() {
+        if k != 140 && k != 20 {
+            pop_emit_context_callback(*id);
+        }
+    }
+    assert!(error_stack_clean());
 }

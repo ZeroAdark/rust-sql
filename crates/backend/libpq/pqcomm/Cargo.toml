@@ -29,3 +29,4 @@ libc = "0.2"
 
 [dev-dependencies]
 pgstat_seams = { path = "../../utils/activity/pgstat_seams" }
+types_dest = { path = "../../../_support/types/types_dest" }

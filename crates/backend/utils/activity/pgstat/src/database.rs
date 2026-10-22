@@ -78,6 +78,12 @@ pub fn pgstat_count_buffer_write_time(n: PgStat_Counter) {
     BLOCK_WRITE_TIME.with(|c| c.set(c.get() + n));
 }
 
+/// This thread's pending block read and write time (pgStatBlockReadTime / pgStatBlockWriteTime), taken out: a Gravity
+/// pool claim's go to its leader's pending (`section::take_thread_deltas`, D4241), which reports them to its database.
+pub fn take_block_time_pending() -> (PgStat_Counter, PgStat_Counter) {
+    (BLOCK_READ_TIME.with(|c| c.replace(0)), BLOCK_WRITE_TIME.with(|c| c.replace(0)))
+}
+
 pub fn pgstat_count_conn_active_time(n: PgStat_Counter) {
     ACTIVE_TIME.with(|c| c.set(c.get() + n));
 }

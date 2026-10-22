@@ -12246,10 +12246,24 @@ fn expr_location(n: Node<'_>) -> i32 {
         xs.location
     } else if let Some(na) = n.as_named_arg_expr() {
         leftmost_loc(na.location, expr_location_opt(na.arg))
-    } else if let Some(ind) = n.as_a_indirection() {
-        expr_location_opt(ind.arg)
     } else if let Some(jp) = n.as_json_is_predicate() {
         jp.location
+    } else if let Some(m) = n.as_merge_support_func() {
+        m.location
+    } else if let Some(d) = n.as_set_to_default() {
+        d.location
+    } else if let Some(j) = n.as_json_object_constructor() {
+        j.location
+    } else if let Some(j) = n.as_json_array_constructor() {
+        j.location
+    } else if let Some(j) = n.as_json_array_query_constructor() {
+        j.location
+    } else if let Some(j) = n.as_json_agg_constructor() {
+        j.location
+    } else if let Some(j) = n.as_json_object_agg() {
+        expr_location_opt(j.constructor)
+    } else if let Some(j) = n.as_json_array_agg() {
+        expr_location_opt(j.constructor)
     } else {
         -1
     }

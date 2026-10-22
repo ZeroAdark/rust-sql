@@ -1,0 +1,155 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3pu s3pr s1c s2c
+step s3pu: EXPLAIN (COSTS OFF) UPDATE bt SET st = 'paid', v = bt.v + 1 WHERE bt.id IN (SELECT bs.bid FROM bs JOIN bc ON bc.id = bs.cid WHERE bs.flag = 'x' AND bc.region = 'south');
+QUERY PLAN                                                
+----------------------------------------------------------
+Update on bt                                              
+  ->  Nested Loop                                         
+        ->  HashAggregate                                 
+              Group Key: bs.bid                           
+              ->  Nested Loop                             
+                    ->  Index Scan using bs_flag on bs    
+                          Index Cond: (flag = 'x'::text)  
+                    ->  Index Scan using bc_pkey on bc    
+                          Index Cond: (id = bs.cid)       
+                          Filter: (region = 'south'::text)
+        ->  Index Scan using bt_pkey on bt                
+              Index Cond: (id = bs.bid)                   
+(12 rows)
+
+step s3pr: EXPLAIN (COSTS OFF) UPDATE bt SET st = 'self', v = bt.v + 2 WHERE bt.id IN (SELECT b2.id FROM bt b2 JOIN bc ON bc.id = b2.id WHERE b2.id % 100 = 0 AND bc.region = 'south');
+QUERY PLAN                                                
+----------------------------------------------------------
+Update on bt                                              
+  ->  Nested Loop                                         
+        ->  HashAggregate                                 
+              Group Key: b2.id                            
+              ->  Nested Loop                             
+                    ->  Seq Scan on bt b2                 
+                          Filter: ((id % 100) = 0)        
+                    ->  Index Scan using bc_pkey on bc    
+                          Index Cond: (id = b2.id)        
+                          Filter: (region = 'south'::text)
+        ->  Index Scan using bt_pkey on bt                
+              Index Cond: (id = bc.id)                    
+(12 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1x s1f s1g s1d s1k s2u s1c s2c s3sel
+step s1x: UPDATE bt SET v = v + 10 WHERE id IN (100, 200, 300);
+step s1f: UPDATE bs SET flag = 'y' WHERE id = 200;
+step s1g: UPDATE bc SET region = 'north' WHERE id = 300;
+step s1d: DELETE FROM bt WHERE id = 400;
+step s1k: UPDATE bt SET id = id + 10000 WHERE id = 600;
+step s2u: UPDATE bt SET st = 'paid', v = bt.v + 1 WHERE bt.id IN (SELECT bs.bid FROM bs JOIN bc ON bc.id = bs.cid WHERE bs.flag = 'x' AND bc.region = 'south'); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, st, v FROM bt WHERE id % 100 = 0 OR id > 10000 ORDER BY id;
+   id|st  | v
+-----+----+--
+  100|paid|11
+  200|paid|11
+  300|paid|11
+  500|paid| 1
+  700|paid| 1
+  800|paid| 1
+  900|paid| 1
+ 1000|paid| 1
+ 1100|paid| 1
+ 1200|paid| 1
+ 1300|paid| 1
+ 1400|paid| 1
+ 1500|paid| 1
+ 1600|paid| 1
+ 1700|paid| 1
+ 1800|paid| 1
+ 1900|paid| 1
+ 2000|paid| 1
+10600|new | 0
+(19 rows)
+
+
+starting permutation: s2u s1x s2c s1c s3sel
+step s2u: UPDATE bt SET st = 'paid', v = bt.v + 1 WHERE bt.id IN (SELECT bs.bid FROM bs JOIN bc ON bc.id = bs.cid WHERE bs.flag = 'x' AND bc.region = 'south');
+step s1x: UPDATE bt SET v = v + 10 WHERE id IN (100, 200, 300); <waiting ...>
+step s2c: COMMIT;
+step s1x: <... completed>
+step s1c: COMMIT;
+step s3sel: SELECT id, st, v FROM bt WHERE id % 100 = 0 OR id > 10000 ORDER BY id;
+  id|st  | v
+----+----+--
+ 100|paid|11
+ 200|paid|11
+ 300|paid|11
+ 400|paid| 1
+ 500|paid| 1
+ 600|paid| 1
+ 700|paid| 1
+ 800|paid| 1
+ 900|paid| 1
+1000|paid| 1
+1100|paid| 1
+1200|paid| 1
+1300|paid| 1
+1400|paid| 1
+1500|paid| 1
+1600|paid| 1
+1700|paid| 1
+1800|paid| 1
+1900|paid| 1
+2000|paid| 1
+(20 rows)
+
+
+starting permutation: s1x s1d s1k s2d s1c s2c s3sel
+step s1x: UPDATE bt SET v = v + 10 WHERE id IN (100, 200, 300);
+step s1d: DELETE FROM bt WHERE id = 400;
+step s1k: UPDATE bt SET id = id + 10000 WHERE id = 600;
+step s2d: DELETE FROM bt WHERE bt.id IN (SELECT bs.bid FROM bs JOIN bc ON bc.id = bs.cid WHERE bs.flag = 'x' AND bc.region = 'south'); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, st, v FROM bt WHERE id % 100 = 0 OR id > 10000 ORDER BY id;
+   id|st |v
+-----+---+-
+10600|new|0
+(1 row)
+
+
+starting permutation: s1x s1f s1k s2r s1c s2c s3sel
+step s1x: UPDATE bt SET v = v + 10 WHERE id IN (100, 200, 300);
+step s1f: UPDATE bs SET flag = 'y' WHERE id = 200;
+step s1k: UPDATE bt SET id = id + 10000 WHERE id = 600;
+step s2r: UPDATE bt SET st = 'self', v = bt.v + 2 WHERE bt.id IN (SELECT b2.id FROM bt b2 JOIN bc ON bc.id = b2.id WHERE b2.id % 100 = 0 AND bc.region = 'south'); <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, st, v FROM bt WHERE id % 100 = 0 OR id > 10000 ORDER BY id;
+   id|st  | v
+-----+----+--
+  100|self|12
+  200|self|12
+  300|self|12
+  400|self| 2
+  500|self| 2
+  700|self| 2
+  800|self| 2
+  900|self| 2
+ 1000|self| 2
+ 1100|self| 2
+ 1200|self| 2
+ 1300|self| 2
+ 1400|self| 2
+ 1500|self| 2
+ 1600|self| 2
+ 1700|self| 2
+ 1800|self| 2
+ 1900|self| 2
+ 2000|self| 2
+10600|new | 0
+(20 rows)
+

@@ -146,7 +146,19 @@ fn gistvacuumscan<'mcx>(
     // gistPageRecyclable would wrongly record as reusable in the FSM).
     let need_lock = !relation_is_local(rel);
 
-    let mut current: BlockNumber = GIST_ROOT_BLKNO;
+    // gistvacuum.c:218: block_range_read_stream_cb takes no locks, so batch
+    // mode is safe.
+    let stream_cxt = ::mcx::MemoryContext::new("gistvacuumscan");
+    let mut stream = ::read_stream::read_stream_begin_relation_data::<()>(
+        stream_cxt.mcx(),
+        ::read_stream::READ_STREAM_MAINTENANCE
+            | ::read_stream::READ_STREAM_FULL
+            | ::read_stream::READ_STREAM_USE_BATCHING,
+        info.strategy.clone(),
+        rel,
+        ForkNumber::MAIN_FORKNUM,
+    )?;
+    let mut p = ::read_stream::BlockRangeReadStreamPrivate::new(GIST_ROOT_BLKNO, GIST_ROOT_BLKNO);
     let mut num_pages;
     loop {
         if need_lock {
@@ -157,16 +169,23 @@ fn gistvacuumscan<'mcx>(
         if need_lock {
             ::lmgr::UnlockRelationForExtension(rel, ::types_rel::ExclusiveLock)?;
         }
-        if current >= num_pages {
+        if p.current_blocknum >= num_pages {
             break;
         }
-        while current < num_pages {
+        p.last_exclusive = num_pages;
+        loop {
             vacuum_delay_point()?;
-            let pin = read_pin(info, current)?;
-            gistvacuumpage(&mut vstate, pin, current)?;
-            current += 1;
+            let buf = stream.next_buffer(&mut |_: &mut ()| Ok(p.next_block()))?;
+            let Some(pin) = BufferPin::adopt(buf) else {
+                break;
+            };
+            let blkno = pin.block_number();
+            gistvacuumpage(&mut vstate, pin, blkno)?;
         }
+        // The stream calls no callback after InvalidBuffer until reset.
+        stream.reset()?;
     }
+    stream.end()?;
 
     if vstate.stats.pages_free > 0 {
         freespace::IndexFreeSpaceMapVacuum(rel)?;

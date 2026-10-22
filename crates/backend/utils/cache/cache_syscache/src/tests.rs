@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn locked_copy_refetches_after_invalidation() {
+    InitCatalogCache().unwrap();
+    catcache::testing::force_initialized(PROCOID, [catcache::CCFastKind::Int4; 4]);
+    let keys = [
+        SysCacheKey::Value(Datum::from_oid(90001)),
+        SysCacheKey::UNUSED,
+        SysCacheKey::UNUSED,
+        SysCacheKey::UNUSED,
+    ];
+    let mut image = [0u8; 32];
+    image[22] = 24;
+    catcache::testing::insert_positive(PROCOID, &keys, &image);
+    lock_seams::lock_acquire_extended::set(|tag, mode, _, _, _, _| {
+        assert_eq!(tag, LOCKTAG::tuple(0, 1255, 0, 1));
+        assert_eq!(mode, InplaceUpdateTupleLock);
+        Ok(types_storage::lock::LOCKACQUIRE_OK)
+    });
+    sinval_seams::receive_shared_invalid_messages::set(|_, _| {
+        let keys = [
+            SysCacheKey::Value(Datum::from_oid(90001)),
+            SysCacheKey::UNUSED,
+            SysCacheKey::UNUSED,
+            SysCacheKey::UNUSED,
+        ];
+        let hash = GetSysCacheHashValue(PROCOID, keys[0], keys[1], keys[2], keys[3])?;
+        SysCacheInvalidate(PROCOID, hash);
+        let mut image = [0u8; 40];
+        image[22] = 24;
+        catcache::testing::insert_positive(PROCOID, &keys, &image);
+        Ok(())
+    });
+    let ctx = mcx::MemoryContext::new("locked-copy-test");
+    let tuple = SearchSysCacheLockedCopy1(ctx.mcx(), PROCOID, keys[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(tuple.as_tuple().t_len, 40);
+    assert_eq!(tuple.as_tuple().t_self, ItemPointerData::new(0, 1));
+}
+
+#[test]
 fn table_shape_invariants() {
     assert_eq!(CACHEINFO.len(), SYS_CACHE_SIZE);
     for (id, d) in CACHEINFO.iter().enumerate() {

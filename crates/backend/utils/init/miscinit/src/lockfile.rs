@@ -13,15 +13,13 @@ use std::os::unix::fs::{FileExt, OpenOptionsExt};
 #[cfg(target_family = "wasm")]
 use std::io::{Seek, SeekFrom};
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use init_small::globals as g;
 use types_error::{PgResult, ERRCODE_LOCK_FILE_EXISTS, FATAL, LOG, NOTICE};
 
 use crate::process::{leading_i64, loc};
 
 pub(crate) const DIRECTORY_LOCK_FILE: &str = "postmaster.pid";
-// The create mode is fd::vfd::pg_file_create_mode (SetDataDirectoryCreatePerm);
-// wasm32: WASI files carry no unix mode bits, so no mode is applied there.
 const LOCK_FILE_LINE_SHMEM_KEY: usize = 7;
 
 thread_local! {
@@ -30,7 +28,7 @@ thread_local! {
 }
 
 fn my_pid() -> i32 {
-    init_small::globals::process_id() as i32
+    init_small::globals::launched_pid()
 }
 
 pub fn UnlinkLockFiles(_status: i32, _arg: usize) {
@@ -120,9 +118,6 @@ pub(crate) fn CreateLockFile(
         open_opts.read(true).write(true).create_new(true);
         // wasm32: WASI has no file modes; create_new keeps the interlock.
         #[cfg(not(target_family = "wasm"))]
-        // C: pg_file_create_mode — 0640 when the data directory is group-
-        // readable (initdb -g / SetDataDirectoryCreatePerm), 0600 otherwise.
-        // pg_rewind/pg_ctl TAP "check PGDATA permissions" reads it back.
         open_opts.mode(fd::vfd::pg_file_create_mode());
         match open_opts.open(filename) {
             Ok(f) => {
@@ -135,7 +130,7 @@ pub(crate) fn CreateLockFile(
                     ereport(FATAL)
                         .with_saved_errno(errno)
                         .errcode_for_file_access()
-                        .errmsg(format!("could not create lock file \"{filename}\": %m"))
+                        .errmsg(format!("could not create lock file \"{filename}\": {PCT_M}"))
                         .finish(loc(1285, "CreateLockFile"))?;
                 }
             }
@@ -150,7 +145,7 @@ pub(crate) fn CreateLockFile(
                     ereport(FATAL)
                         .with_saved_errno(e.raw_os_error().unwrap_or(0))
                         .errcode_for_file_access()
-                        .errmsg(format!("could not read lock file \"{filename}\": %m"))
+                        .errmsg(format!("could not read lock file \"{filename}\": {PCT_M}"))
                         .finish(loc(1306, "CreateLockFile"))?;
                 }
             }
@@ -162,7 +157,7 @@ pub(crate) fn CreateLockFile(
                 ereport(FATAL)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not open lock file \"{filename}\": %m"))
+                    .errmsg(format!("could not open lock file \"{filename}\": {PCT_M}"))
                     .finish(loc(1299, "CreateLockFile"))?;
             }
         }
@@ -240,7 +235,7 @@ pub(crate) fn CreateLockFile(
             ereport(FATAL)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove old lock file \"{filename}\": %m"))
+                .errmsg(format!("could not remove old lock file \"{filename}\": {PCT_M}"))
                 .errhint(
                     "The file seems accidentally left over, but it could not be removed. \
                      Please remove the file by hand and try again.",
@@ -282,7 +277,7 @@ pub(crate) fn CreateLockFile(
         ereport(FATAL)
             .with_saved_errno(errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not write lock file \"{filename}\": %m"))
+            .errmsg(format!("could not write lock file \"{filename}\": {PCT_M}"))
             .finish(loc(1461, "CreateLockFile"))?;
     }
     if close_errno != 0 {
@@ -290,7 +285,7 @@ pub(crate) fn CreateLockFile(
         ereport(FATAL)
             .with_saved_errno(close_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not write lock file \"{filename}\": %m"))
+            .errmsg(format!("could not write lock file \"{filename}\": {PCT_M}"))
             .finish(loc(1486, "CreateLockFile"))?;
     }
 
@@ -348,7 +343,7 @@ pub fn AddToDataDirLockFile(target_line: i32, line: &str) -> PgResult<()> {
             return ereport(LOG)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{DIRECTORY_LOCK_FILE}\": %m"))
+                .errmsg(format!("could not open file \"{DIRECTORY_LOCK_FILE}\": {PCT_M}"))
                 .finish(loc(1586, "AddToDataDirLockFile"));
         }
     };
@@ -357,7 +352,7 @@ pub fn AddToDataDirLockFile(target_line: i32, line: &str) -> PgResult<()> {
         return ereport(LOG)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg(format!("could not read from file \"{DIRECTORY_LOCK_FILE}\": %m"))
+            .errmsg(format!("could not read from file \"{DIRECTORY_LOCK_FILE}\": {PCT_M}"))
             .finish(loc(1597, "AddToDataDirLockFile"));
     }
 
@@ -370,7 +365,8 @@ pub fn AddToDataDirLockFile(target_line: i32, line: &str) -> PgResult<()> {
         }
         lineno += 1;
     }
-    let mut dest = String::with_capacity(src.len() + line.len() + 8);
+    let mut dest = String::new();
+    let _ = dest.try_reserve(src.len() + line.len() + 8);
     dest.push_str(&src[..srcptr]);
     for _ in lineno..target_line {
         dest.push('\n');
@@ -396,7 +392,7 @@ pub fn AddToDataDirLockFile(target_line: i32, line: &str) -> PgResult<()> {
         return ereport(LOG)
             .with_saved_errno(e.raw_os_error().unwrap_or(libc::ENOSPC))
             .errcode_for_file_access()
-            .errmsg(format!("could not write to file \"{DIRECTORY_LOCK_FILE}\": %m"))
+            .errmsg(format!("could not write to file \"{DIRECTORY_LOCK_FILE}\": {PCT_M}"))
             .finish(loc(1661, "AddToDataDirLockFile"));
     }
     Ok(())
@@ -414,7 +410,7 @@ pub fn RecheckDataDirLockFile() -> PgResult<bool> {
                 ereport(LOG)
                     .with_saved_errno(errno)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not open file \"{DIRECTORY_LOCK_FILE}\": %m"))
+                    .errmsg(format!("could not open file \"{DIRECTORY_LOCK_FILE}\": {PCT_M}"))
                     .finish(loc(1720, "RecheckDataDirLockFile"))?;
                 return Ok(false);
             }
@@ -422,7 +418,7 @@ pub fn RecheckDataDirLockFile() -> PgResult<bool> {
                 .with_saved_errno(errno)
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "could not open file \"{DIRECTORY_LOCK_FILE}\": %m; continuing anyway"
+                    "could not open file \"{DIRECTORY_LOCK_FILE}\": {PCT_M}; continuing anyway"
                 ))
                 .finish(loc(1727, "RecheckDataDirLockFile"))?;
             return Ok(true);
@@ -434,7 +430,7 @@ pub fn RecheckDataDirLockFile() -> PgResult<bool> {
         ereport(LOG)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg(format!("could not read from file \"{DIRECTORY_LOCK_FILE}\": %m"))
+            .errmsg(format!("could not read from file \"{DIRECTORY_LOCK_FILE}\": {PCT_M}"))
             .finish(loc(1739, "RecheckDataDirLockFile"))?;
         return Ok(true);
     }

@@ -1,0 +1,5 @@
+path	crates/gravity/exec/src/ops/mergejoin/proto.rs
+method	std::boxed::Box::new	2
+method	std::rc::Rc::new	1
+type	std::boxed::Box	2
+type	std::rc::Rc	1

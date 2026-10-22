@@ -1,0 +1,28 @@
+# gravity_kernels's integration-test rig (kernels/tests/common/mod.rs, 1,422 lines) as a lib compiled once (BD-12, main GO
+# 2026-10-09T09:24:51Z): 11 test files declared `mod common;` and so compiled the whole rig into each binary. They say
+# `use gravity_kernels_rig as common;` now; still one binary and one process per test file, the same names. Its
+# dependencies are gravity_kernels' own dependencies and dev-dependencies, no features (the rig compiled without
+# hand-kernels for sort_v4_m3 / sort_v4_m3_cut, the two users without required-features). Its own `hand-kernels`
+# (gravity_kernels' turns it on) compiles owner_fns_for's hand-kernel arms; without it the rig builds for the lib's tests.
+[package]
+name = "gravity_kernels_rig"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "../kernels/tests/common/mod.rs"
+test = false
+doctest = false
+
+[dependencies]
+gravity_kernels = { path = "../kernels" }
+gravity_abi = { path = "../abi" }
+gravity_dict = { path = "../dict" }
+gravity_fn = { path = "../fn" }
+cost_profile = { path = "../../_support/cost_profile" }
+gravity_program = { path = "../program" }
+pg_locale_seams = { path = "../../backend/utils/adt/pg_locale_seams" }
+
+[features]
+hand-kernels = ["gravity_kernels/hand-kernels"]

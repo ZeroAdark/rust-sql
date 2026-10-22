@@ -7,9 +7,9 @@
 
 use std::io::{Read, Write};
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_core::instrument::{instr_time, BufferUsage, WalUsage};
-use types_error::{ERRCODE_INVALID_PARAMETER_VALUE, LOG};
+use types_error::{PgResult, ERRCODE_INVALID_PARAMETER_VALUE, LOG};
 
 use crate::{
     gucs, nesting_level, Counters, PgssEntry, PgssHashKey, PgssShared,
@@ -17,6 +17,14 @@ use crate::{
     PGSS_PG_MAJOR_VERSION, PGSS_PLAN, STICKY_DECREASE_FACTOR, USAGE_DEALLOC_PERCENT,
     USAGE_DECREASE_FACTOR, USAGE_EXEC, USAGE_INIT,
 };
+
+// pg_stat_statements.c:1428-1431 Welford update. On aarch64 GCC fuses
+// `sum_var += (x - old_mean) * (x - mean)` (fmadd, :1430; D400).
+fn welford_step(mean: f64, sum_var: f64, calls: i64, x: f64) -> (f64, f64) {
+    let old_mean = mean;
+    let mean = mean + (x - old_mean) / calls as f64;
+    (mean, ::fp_contract::fmadd(x - old_mean, x - mean, sum_var))
+}
 
 fn ms(t: instr_time) -> f64 {
     t.ticks as f64 / 1_000_000.0
@@ -37,10 +45,10 @@ pub(crate) fn pgss_store(
     jstate: Option<&queryjumble::JumbleState<'_>>,
     parallel_workers_to_launch: i64,
     parallel_workers_launched: i64,
-) {
+) -> PgResult<()> {
     // C: compute_query_id off and no module-side id => not tracked.
     if query_id == 0 {
-        return;
+        return Ok(());
     }
 
     let mut location = query_location;
@@ -60,28 +68,25 @@ pub(crate) fn pgss_store(
     // allocate under the exclusive lock.
     let absent = {
         let guard = PGSS.lock().unwrap();
-        let Some(shared) = guard.as_ref() else { return };
+        let Some(shared) = guard.as_ref() else { return Ok(()) };
         !shared.hash.contains_key(&key)
     };
     let norm_query: Option<String> = match jstate {
         Some(js) if absent => {
-            match crate::normalize::generate_normalized_query(js, query, location) {
-                Ok(s) => Some(s),
-                Err(e) => std::panic::panic_any(e),
-            }
+            Some(crate::normalize::generate_normalized_query(js, query, location)?)
         }
         _ => None,
     };
 
     let mut guard = PGSS.lock().unwrap();
-    let Some(shared) = guard.as_mut() else { return };
+    let Some(shared) = guard.as_mut() else { return Ok(()) };
 
     if !shared.hash.contains_key(&key) {
         let text: &str = norm_query.as_deref().unwrap_or(query);
-        entry_alloc(shared, key, text.as_bytes(), encoding, jstate.is_some());
+        entry_alloc(shared, key, text.as_bytes(), encoding, jstate.is_some())?;
     }
 
-    let Some(kind) = kind else { return };
+    let Some(kind) = kind else { return Ok(()) };
     debug_assert!(jstate.is_none() && (kind == PGSS_PLAN || kind == PGSS_EXEC));
     let e = shared.hash.get_mut(&key).expect("entry created above");
     let c = &mut e.counters;
@@ -98,9 +103,8 @@ pub(crate) fn pgss_store(
         c.mean_time[kind] = total_time;
     } else {
         // Welford's method, as in C.
-        let old_mean = c.mean_time[kind];
-        c.mean_time[kind] += (total_time - old_mean) / c.calls[kind] as f64;
-        c.sum_var_time[kind] += (total_time - old_mean) * (total_time - c.mean_time[kind]);
+        (c.mean_time[kind], c.sum_var_time[kind]) =
+            welford_step(c.mean_time[kind], c.sum_var_time[kind], c.calls[kind], total_time);
         // min==0 && max==0 means the min/max stats were reset.
         if c.min_time[kind] == 0.0 && c.max_time[kind] == 0.0 {
             c.min_time[kind] = total_time;
@@ -139,6 +143,7 @@ pub(crate) fn pgss_store(
     // No JIT in this engine: jit_* counters stay zero (C with jit disabled).
     c.parallel_workers_to_launch += parallel_workers_to_launch;
     c.parallel_workers_launched += parallel_workers_launched;
+    Ok(())
 }
 
 /// `entry_alloc`: evicts down to max first; sticky entries start at the
@@ -149,12 +154,12 @@ pub(crate) fn entry_alloc(
     query_text: &[u8],
     encoding: i32,
     sticky: bool,
-) {
+) -> types_error::PgResult<()> {
     while shared.hash.len() >= shared.max {
-        entry_dealloc(shared);
+        entry_dealloc(shared)?;
     }
     if shared.hash.contains_key(&key) {
-        return;
+        return Ok(());
     }
     let now = adt_timestamp::GetCurrentTimestamp();
     let usage = if sticky { shared.cur_median_usage } else { USAGE_INIT };
@@ -168,13 +173,15 @@ pub(crate) fn entry_alloc(
             minmax_stats_since: now,
         },
     );
+    Ok(())
 }
 
 /// `entry_dealloc`: decay usages, drop the lowest USAGE_DEALLOC_PERCENT.
-pub(crate) fn entry_dealloc(shared: &mut PgssShared) {
+pub(crate) fn entry_dealloc(shared: &mut PgssShared) -> types_error::PgResult<()> {
     let mut tottextlen: usize = 0;
     let mut nvalidtexts: usize = 0;
-    let mut usages: Vec<(PgssHashKey, f64)> = Vec::with_capacity(shared.hash.len());
+    let mut usages: Vec<(PgssHashKey, f64)> =
+        ::mcx::std_vec_with_capacity("pg_stat_statements", shared.hash.len())?;
 
     for (k, e) in shared.hash.iter_mut() {
         if e.counters.is_sticky() {
@@ -202,6 +209,7 @@ pub(crate) fn entry_dealloc(shared: &mut PgssShared) {
     }
 
     shared.stats.dealloc += 1;
+    Ok(())
 }
 
 /// `entry_reset`; returns the reset timestamp.
@@ -286,7 +294,7 @@ fn log_file_error(verb: &str, name: &str, err: &std::io::Error, function: &'stat
     let _ = ereport(LOG)
         .with_saved_errno(err.raw_os_error().unwrap_or(0))
         .errcode_for_file_access()
-        .errmsg(format!("could not {verb} file \"{name}\": %m"))
+        .errmsg(format!("could not {verb} file \"{name}\": {PCT_M}"))
         .finish(here(function));
 }
 
@@ -526,7 +534,12 @@ pub(crate) fn read_dump<R: Read>(r: &mut R, shared: &mut PgssShared) -> std::io:
             return Ok(false);
         }
         // C reads query_len + 1 bytes and forces the trailing NUL.
-        let mut query_text = vec![0u8; query_len as usize + 1];
+        let mut query_text = ::mcx::std_vec_from_elem(
+            "pg_stat_statements",
+            0u8,
+            query_len as usize + 1,
+        )
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, e.to_string()))?;
         r.read_exact(&mut query_text)?;
         query_text.pop();
 
@@ -545,7 +558,8 @@ pub(crate) fn read_dump<R: Read>(r: &mut R, shared: &mut PgssShared) -> std::io:
             queryid: ne_i64(&rec[8..16]),
             toplevel: rec[16] != 0,
         };
-        entry_alloc(shared, key, &query_text, encoding, false);
+        entry_alloc(shared, key, &query_text, encoding, false)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, e.to_string()))?;
         if let Some(e) = shared.hash.get_mut(&key) {
             e.counters = counters;
             e.stats_since = ne_i64(&rec[ENTRY_STATS_SINCE_OFF..]);
@@ -623,8 +637,20 @@ pub(crate) fn pgss_shmem_shutdown(code: i32, _arg: usize) {
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
             .errmsg(format!(
-                "could not rename file \"{tmp_name}\" to \"{PGSS_DUMP_FILE}\": %m"
+                "could not rename file \"{tmp_name}\" to \"{PGSS_DUMP_FILE}\": {PCT_M}"
             ))
             .finish(here("pgss_shmem_shutdown"));
+    }
+}
+
+#[cfg(test)]
+mod d400_tests {
+    // aarch64 pin: GCC 13.3 -O2 of pg_stat_statements.c:1428-1431 (fmadd
+    // d0, d2, d3, d1 as in pg_stat_statements.so); x86-64 rounds the product.
+    #[test]
+    fn welford_step_fmadd() {
+        let (m, v) = super::welford_step(1.397, 4.582, 26, 0.798);
+        assert_eq!(m, 1.3739615384615385);
+        assert_eq!(v, if cfg!(target_arch = "aarch64") { 4.927000961538462 } else { 4.927000961538461 });
     }
 }

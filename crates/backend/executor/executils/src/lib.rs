@@ -1,12 +1,13 @@
 // execUtils.c executor-state half. EState is the per-query resource owner
 // (docs/no-drop.md): droppy resources live here by value, arena-resident
-// nodes hold u32 handles. Query + per-tuple contexts are bump arenas.
+// nodes hold u32 handles. Query + per-tuple contexts are AllocSets, as in C.
 #![no_std]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 
@@ -81,6 +82,7 @@ pub type SubplanInitHook = for<'x> unsafe fn(
     core::ptr::NonNull<()>,
     types_nodes::Node<'x>,
     Option<execexpr::AggBind>,
+    Option<execexpr::MergeActionCell>,
 ) -> PgResult<core::ptr::NonNull<()>>;
 
 /// `outer` carries the owning node's explicit outer row when it lives
@@ -710,17 +712,26 @@ pub struct EcxtId(pub u32);
 pub struct ExecSlotId(pub u32);
 
 /// `AsyncRequest` (execnodes.h). C's requestor/requestee PlanState pointers
-/// collapse to ids: the requestor Append is named by its plan_node_id (the
-/// key postgres_fdw's per-connection pending fetch carries), the requestee is
-/// the Append's `substates[request_index]`.
+/// collapse to ids: the requestor Append is named by a backend-unique id from
+/// `next_async_requestor_id` (the key postgres_fdw's per-connection pending
+/// fetch carries; a plan_node_id repeats across concurrently open portals),
+/// the requestee is the Append's `substates[request_index]`.
 #[derive(Debug, Clone, Copy)]
 pub struct AsyncRequest {
-    pub requestor_plan_id: i32,
+    pub requestor_id: u64,
     pub request_index: i32,
     pub callback_pending: bool,
     pub request_complete: bool,
     /// None = no tuple (EOF when `request_complete`).
     pub result: Option<ExecSlotId>,
+}
+
+static NEXT_ASYNC_REQUESTOR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+/// A fresh requestor identity for one AppendState, unique among live Appends
+/// like the AppendState pointer C compares.
+pub fn next_async_requestor_id() -> u64 {
+    NEXT_ASYNC_REQUESTOR.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
 }
 
 /// The requestor-Append state C's ForeignAsyncConfigureWait reads through
@@ -800,6 +811,10 @@ pub struct ExprContextData<'mcx> {
     pub ecxt_scantuple: Option<ExecSlotId>,
     pub ecxt_innertuple: Option<ExecSlotId>,
     pub ecxt_outertuple: Option<ExecSlotId>,
+    // RETURNING's OLD / NEW rows (C ecxt_oldtuple / ecxt_newtuple), set by ExecProcessReturning for the SubPlans its
+    // projection runs: a SubPlan's testexpr reads them (D2273)
+    pub ecxt_oldtuple: Option<ExecSlotId>,
+    pub ecxt_newtuple: Option<ExecSlotId>,
     pub ecxt_param_exec_vals: Option<core::ptr::NonNull<ParamExecData>>,
     pub ecxt_param_list_info: Option<&'mcx [ParamExternData]>,
     pub ecxt_aggvalues: PgVec<'mcx, Datum>,
@@ -818,6 +833,8 @@ impl<'mcx> ExprContextData<'mcx> {
             ecxt_scantuple: None,
             ecxt_innertuple: None,
             ecxt_outertuple: None,
+            ecxt_oldtuple: None,
+            ecxt_newtuple: None,
             ecxt_param_exec_vals: None,
             ecxt_param_list_info: None,
             ecxt_aggvalues: PgVec::new_in(per_query),
@@ -882,6 +899,18 @@ impl<'mcx> ExprContextData<'mcx> {
 #[derive(Clone, Copy)]
 pub struct ParamStable(pub core::ptr::NonNull<ParamExternData>, pub u32);
 
+pub type ForeignInsertFlush =
+    for<'mcx> fn(&mut dyn core::any::Any, &mut EStateData<'mcx>) -> PgResult<()>;
+
+pub struct ForeignModifyState {
+    state: Option<Box<dyn core::any::Any>>,
+    flush: Option<ForeignInsertFlush>,
+    pending: bool,
+    // ExecBatchInsert's ExecARInsertTriggers refusal, raised once the
+    // buffered rows have reached the remote (trigger.c:2555-2562).
+    after_flush_error: Option<Box<PgError>>,
+}
+
 pub struct EStateData<'mcx> {
     pub es_query_cxt: Mcx<'mcx>,
     pub es_direction: ScanDirection,
@@ -911,14 +940,16 @@ pub struct EStateData<'mcx> {
     pub es_opened_result_relations: PgVec<'mcx, ResultRelInfo>,
     pub es_tuple_routing_result_relations: PgVec<'mcx, ResultRelInfo>,
     pub es_trig_target_relations: PgVec<'mcx, ResultRelInfo>,
-    pub es_insert_pending_result_relations: PgVec<'mcx, ResultRelInfo>,
+    /// ri_TrigDesc of each es_opened_result_relations entry without a root
+    /// (ExecGetTriggerResultRel(estate, relid, NULL) matches only those), in
+    /// open order; AfterTriggerEndQuery fires their events with these copies.
+    pub es_trig_result_descs: PgVec<'mcx, (::types_core::Oid, Option<Rc<::types_trigger::TriggerDesc<'static>>>)>,
+    pub es_insert_pending_result_relations: PgVec<'mcx, u32>,
+    pub es_foreign_modify_states: PgVec<'mcx, ForeignModifyState>,
     pub es_insert_pending_modifytables: PgVec<'mcx, ModifyTableP3>,
     pub es_param_list_info: Option<&'mcx [ParamExternData]>,
-    /// [sqe-cursors] PL provenance of `es_param_list_info` (C's
-    /// `params->paramFetch != NULL`): true for a hooked PL-built list
-    /// (plpgsql's datum-table environment), false for protocol/SQL bind
-    /// values. Read by the sqe dispatch's bind-params gate only.
-    pub es_param_list_hooked: bool,
+    /// C `params->paramFetch` of the list above, for its no-value slots.
+    pub es_param_fetch: Option<::types_portal::params::ParamFetchHook>,
     // Executor-skeleton stable extern-param images (no C counterpart):
     // compiled ParamExtern steps resolve into this estate-owned buffer
     // instead of the portal's per-EXECUTE array; restamped on skeleton reuse.
@@ -980,7 +1011,7 @@ pub struct EStateData<'mcx> {
     pub es_worker_instrument: PgVec<'mcx, WorkerInstr<'mcx>>,
     // Node-owned resettable contexts (C's node-local AllocSets): droppy, so
     // they live in the estate owner; nodes hold AuxCxtId (docs/no-drop.md).
-    es_aux_contexts: PgVec<'mcx, PgBox<'mcx, MemoryContext>>,
+    es_aux_contexts: PgVec<'mcx, Option<PgBox<'mcx, MemoryContext>>>,
     pub es_finished: bool,
     es_exprcontexts: PgVec<'mcx, Option<ExprContextData<'mcx>>>,
     pub es_subplanstates: PgVec<'mcx, SubplanStateCell>,
@@ -1014,7 +1045,7 @@ pub struct EStateData<'mcx> {
     es_per_tuple_exprcontext: Option<EcxtId>,
     pub es_sourceText: Option<&'mcx str>,
     pub es_use_parallel_mode: bool,
-    /// regression: this execution's plan tree HAS been parallel-wired —
+    /// GL-FIXCOUNT-2: this execution's plan tree HAS been parallel-wired —
     /// some scan node received its shared `ParallelTableScanDescShared`
     /// through `ExecParallelInitializeDSM` (leader) or
     /// `ExecParallelInitializeWorker` (worker). Published by the scan-node
@@ -1045,6 +1076,9 @@ pub struct EStateData<'mcx> {
     // execmain's InitPlan recording window; empty for executors that never
     // reference a function (nothing to recheck).
     pub es_execute_acl_funcs: Vec<::types_core::Oid>,
+    // track_functions as InitPlan compiled the FUSAGE choices; a parked
+    // reuse under a different setting rebuilds (C recompiles every start).
+    pub es_track_functions: i32,
     // C EPQState.relsubs_*, hosted on the (shared) estate — no child EState.
     pub es_epq: Option<EpqSubs<'mcx>>,
     // C `es_epq_active != NULL`; scan nodes select their EPQ variant on it.
@@ -1067,7 +1101,7 @@ pub struct EStateData<'mcx> {
     /// structurally unaffected. Default false (EPQ/worker estates stay on
     /// the slow path).
     pub es_lane_leaf_fast: bool,
-    /// regression: per-execution dedup bitmask for the row-mode OWNED
+    /// GL-ROWMODE-1: per-execution dedup bitmask for the row-mode OWNED
     /// engagement trace (bit = lanev2 ShapeClass discriminant; bit 63 is the
     /// instrumented-execution note). The OWNED verdict/tick cadence is per
     /// pull (row-mode law §3.3) and stays per pull — but the TRACE line is
@@ -1124,19 +1158,6 @@ pub struct EStateData<'mcx> {
     /// as the two fields above. Knob-OFF and tcount-0 runs always read
     /// None.
     pub es_spi_run_budget: Option<u64>,
-    /// [sqe-cursors] P6-4: the sqe cursor spool — the statement's full
-    /// materialized answer plane, retained across executor_run entries
-    /// so bounded pulls (cursor FETCH, portal suspension, SPI tcount,
-    /// SQL-function lazy eval) STREAM from one run-to-completion answer
-    /// instead of re-running the engine (whose parallel fold order is
-    /// not a per-run determinism). Type-erased (`sqeshell::seam` owns
-    /// the concrete `CursorSpool`; executils must not depend on sqe).
-    /// Created only by a bounded run of a served columnar statement,
-    /// priced against the E17 answer-face budget at creation (over
-    /// budget = typed 53400, the spool never exists), freed with the
-    /// estate at ExecutorEnd/unwind. Heap statements never touch it
-    /// beyond the `None` init.
-    pub es_sqe_spool: Option<alloc::boxed::Box<dyn core::any::Any>>,
 }
 
 /// One worker's instrumentation snapshot: `instrument` is indexed by
@@ -1266,6 +1287,67 @@ pub struct EngineEvent {
 }
 
 impl<'mcx> EStateData<'mcx> {
+    pub fn register_foreign_modify(
+        &mut self,
+        state: Box<dyn core::any::Any>,
+        flush: Option<ForeignInsertFlush>,
+    ) -> u32 {
+        let id = self.es_foreign_modify_states.len() as u32;
+        self.es_foreign_modify_states.push(ForeignModifyState {
+            state: Some(state),
+            flush,
+            pending: false,
+            after_flush_error: None,
+        });
+        id
+    }
+
+    pub fn with_foreign_modify<T>(
+        &mut self,
+        id: u32,
+        f: impl FnOnce(&mut dyn core::any::Any, &mut Self) -> PgResult<T>,
+    ) -> PgResult<T> {
+        let mut state = self.es_foreign_modify_states[id as usize].state.take().expect("idle FDW state");
+        let result = f(state.as_mut(), self);
+        self.es_foreign_modify_states[id as usize].state = Some(state);
+        result
+    }
+
+    pub fn take_foreign_modify(&mut self, id: u32) -> Box<dyn core::any::Any> {
+        self.es_foreign_modify_states[id as usize].state.take().expect("idle FDW state")
+    }
+
+    pub fn register_pending_foreign_insert(&mut self, id: u32) {
+        let state = &mut self.es_foreign_modify_states[id as usize];
+        if state.flush.is_some() && !state.pending {
+            state.pending = true;
+            self.es_insert_pending_result_relations.push(id);
+        }
+    }
+
+    pub fn defer_foreign_insert_error(&mut self, id: u32, err: Box<PgError>) {
+        let state = &mut self.es_foreign_modify_states[id as usize];
+        if state.after_flush_error.is_none() {
+            state.after_flush_error = Some(err);
+        }
+    }
+
+    pub fn flush_pending_foreign_inserts(&mut self) -> PgResult<()> {
+        let mut index = 0;
+        while index < self.es_insert_pending_result_relations.len() {
+            let id = self.es_insert_pending_result_relations[index];
+            let flush = self.es_foreign_modify_states[id as usize].flush.expect("pending FDW flush");
+            self.with_foreign_modify(id, flush)?;
+            self.es_foreign_modify_states[id as usize].pending = false;
+            if let Some(err) = self.es_foreign_modify_states[id as usize].after_flush_error.take() {
+                return Err(err);
+            }
+            index += 1;
+        }
+        self.es_insert_pending_result_relations.clear();
+        Ok(())
+    }
+
     /// Record a runtime-EA refusal (cold: instrumented+armed refusals only).
     /// Dedup on (node, arm): refused shapes re-walk admission per call and
     /// must not accrete duplicate lines; first reason wins (it is the
@@ -1389,10 +1471,12 @@ impl<'mcx> EStateData<'mcx> {
             es_opened_result_relations: PgVec::new_in(mcx),
             es_tuple_routing_result_relations: PgVec::new_in(mcx),
             es_trig_target_relations: PgVec::new_in(mcx),
+            es_trig_result_descs: PgVec::new_in(mcx),
             es_insert_pending_result_relations: PgVec::new_in(mcx),
+            es_foreign_modify_states: PgVec::new_in(mcx),
             es_insert_pending_modifytables: PgVec::new_in(mcx),
             es_param_list_info: None,
-            es_param_list_hooked: false,
+            es_param_fetch: None,
             es_param_stable: None,
             es_param_exec_vals: PgVec::new_in(mcx),
             es_queryEnv: None,
@@ -1407,7 +1491,6 @@ impl<'mcx> EStateData<'mcx> {
             es_cursor_run_budget: None,
             es_lane_cursor_parked: false,
             es_spi_run_budget: None,
-            es_sqe_spool: None,
             es_instrumentation: PgVec::new_in(mcx),
             es_trig_instrument: PgVec::new_in(mcx),
             es_runtime_ea_refusals: PgVec::new_in(mcx),
@@ -1449,6 +1532,7 @@ impl<'mcx> EStateData<'mcx> {
             es_jit_blocks: Vec::new(),
             es_jit_instr: ::jit_deform::JitInstrumentation::default(),
             es_execute_acl_funcs: Vec::new(),
+            es_track_functions: 0,
             es_epq: None,
             es_epq_active: false,
             es_epq_param: -1,
@@ -1462,8 +1546,9 @@ impl<'mcx> EStateData<'mcx> {
 
     /// `CreateExprContext(estate)`.
     pub fn create_expr_context(&mut self) -> EcxtId {
+        // execUtils.c CreateExprContextInternal: an AllocSet under es_query_cxt.
         let per_tuple = PgBox::new_in(
-            self.es_query_cxt.context().new_child_bump("ExprContext"),
+            self.es_query_cxt.context().new_child_wholesale("ExprContext"),
             self.es_query_cxt,
         );
         let mut ecxt = ExprContextData::new(self.es_query_cxt, per_tuple);
@@ -1486,6 +1571,9 @@ impl<'mcx> EStateData<'mcx> {
             // Entry::hooked): no paramCompile hook rides with them.
             param_callback: None,
             param_expanded: None,
+            param_rw: None,
+            param_ro_expanded: None,
+            extern_fetch: self.es_param_fetch,
         }
     }
 
@@ -1551,21 +1639,35 @@ impl<'mcx> EStateData<'mcx> {
         // per_tuple: PgVec allocator handles taken from aux_mcx must survive
         // es_aux_contexts growth.
         let cxt = PgBox::new_in(
-            self.es_query_cxt.context().new_child_bump(name),
+            self.es_query_cxt.context().new_child_wholesale(name),
             self.es_query_cxt,
         );
+        if let Some(i) = self.es_aux_contexts.iter().position(Option::is_none) {
+            self.es_aux_contexts[i] = Some(cxt);
+            return AuxCxtId(i as u32);
+        }
         let id = AuxCxtId(self.es_aux_contexts.len() as u32);
-        self.es_aux_contexts.push(cxt);
+        self.es_aux_contexts.push(Some(cxt));
         id
+    }
+
+    /// `MemoryContextDelete`; the slot is reused by the next `create_aux_context`.
+    pub fn delete_aux_context(&mut self, id: AuxCxtId) {
+        self.es_aux_contexts[id.0 as usize] = None;
+    }
+
+    #[inline]
+    fn aux_context(&self, id: AuxCxtId) -> &MemoryContext {
+        self.es_aux_contexts[id.0 as usize].as_deref().expect("aux context deleted")
     }
 
     #[inline]
     pub fn aux_mcx(&self, id: AuxCxtId) -> Mcx<'_> {
-        self.es_aux_contexts[id.0 as usize].mcx()
+        self.aux_context(id).mcx()
     }
 
     pub fn reset_aux_context(&mut self, id: AuxCxtId) {
-        self.es_aux_contexts[id.0 as usize].reset();
+        self.es_aux_contexts[id.0 as usize].as_deref_mut().expect("aux context deleted").reset();
     }
 
     #[inline]
@@ -1576,7 +1678,7 @@ impl<'mcx> EStateData<'mcx> {
     ) -> (&mut SlotData<'mcx>, Mcx<'_>) {
         (
             &mut self.es_tupleTable[slot.0 as usize],
-            self.es_aux_contexts[aux.0 as usize].mcx(),
+            self.es_aux_contexts[aux.0 as usize].as_deref().expect("aux context deleted").mcx(),
         )
     }
 
@@ -1729,7 +1831,7 @@ impl<'mcx> EStateData<'mcx> {
         perm_infos: &'mcx NodeList<'mcx>,
         unpruned_relids: Bitmapset<'mcx>,
     ) -> PgResult<()> {
-        self.es_range_table.reserve(range_table.len());
+        ::mcx::pgvec_reserve(&mut self.es_range_table, range_table.len())?;
         for rte_node in range_table.iter() {
             let rte = rte_node
                 .as_range_tbl_entry()
@@ -1925,6 +2027,9 @@ impl<'mcx> EStateData<'mcx> {
                 self.free_expr_context(EcxtId(i as u32), true);
             }
         }
+        self.es_foreign_modify_states.clear();
+        self.es_insert_pending_result_relations.clear();
+        self.es_trig_result_descs.clear();
         self.es_junkFilter = None;
         for slot in self.es_cte_shared.iter_mut() {
             *slot = None;
@@ -1933,12 +2038,9 @@ impl<'mcx> EStateData<'mcx> {
             *slot = None;
         }
         self.es_aux_contexts.clear();
-        self.es_jit_blocks.clear();
-        self.es_execute_acl_funcs.clear();
-        // [sqe-cursors] the spool is a droppy owner (Box): released here
-        // so the forget path reclaims it (partial-FETCH-then-CLOSE
-        // hygiene rides this line).
-        self.es_sqe_spool = None;
+        // Global-heap Vecs: clear() would keep the buffer, which the forget leaks.
+        self.es_jit_blocks = Vec::new();
+        self.es_execute_acl_funcs = Vec::new();
         // execUtils.c:219-223: DestroyPartitionDirectory releases the
         // relation pins its entries hold.
         self.es_partition_directory = None;
@@ -1947,7 +2049,9 @@ impl<'mcx> EStateData<'mcx> {
     /// True iff every census-exempt owner has been released — the
     /// `free_forget` precondition (forgetting a live one leaks).
     pub fn owners_released(&self) -> bool {
-        self.es_snapshot.is_none()
+        self.es_foreign_modify_states.is_empty()
+            && self.es_trig_result_descs.is_empty()
+            && self.es_snapshot.is_none()
             && self.es_crosscheck_snapshot.is_none()
             && self.es_junkFilter.is_none()
             && self.es_relations.iter().all(Option::is_none)
@@ -1956,9 +2060,8 @@ impl<'mcx> EStateData<'mcx> {
             && self.es_cte_shared.iter().all(Option::is_none)
             && self.es_worktable_shared.iter().all(Option::is_none)
             && self.es_aux_contexts.is_empty()
-            && self.es_jit_blocks.is_empty()
-            && self.es_execute_acl_funcs.is_empty()
-            && self.es_sqe_spool.is_none()
+            && self.es_jit_blocks.capacity() == 0
+            && self.es_execute_acl_funcs.capacity() == 0
             && self.es_subplan_expr_states.is_empty()
             && self
                 .es_tupleTable
@@ -2001,7 +2104,7 @@ mcx::forget_safe_struct!(
         es_unpruned_relids, es_output_cid, es_result_relations,
         es_opened_result_relations, es_tuple_routing_result_relations,
         es_trig_target_relations, es_insert_pending_result_relations,
-        es_param_list_info, es_param_list_hooked, es_param_stable, es_queryEnv, es_processed,
+        es_param_list_info, es_param_fetch, es_param_stable, es_queryEnv, es_processed,
         es_total_processed, es_direct_returning_slot,
         es_top_eflags, es_instrument, es_finished, es_subplanstates, es_subplan_chg, es_subplan_param_index, es_subplan_param_indexed, es_rescan_chg_scratch, es_parallel_pcxts,
         es_param_subplans, es_per_tuple_exprcontext,
@@ -2010,11 +2113,11 @@ mcx::forget_safe_struct!(
         es_parallel_workers_launched, es_jit_flags, es_jit_instr, es_epq,
         es_epq_active, es_epq_param, es_lane_leaf_fast, es_lane_trace_owned, es_cursor_run_budget,
         es_lane_cursor_parked,
-        es_spi_run_budget, es_rowmarks;
-        // [sqe-cursors] es_sqe_spool: droppy Box owner, released in
-        // teardown() before the bundle is forgotten (owners_released
-        // asserts it) — exempt group [1].
-        es_sqe_spool,
+        es_spi_run_budget, es_rowmarks, es_track_functions;
+        // FDW boxes are released by node shutdown or teardown().
+        es_foreign_modify_states,
+        // Relcache descriptor Rcs, released in teardown().
+        es_trig_result_descs,
         es_jit_blocks,
         // idx-112: global-heap Vec<Oid>, cleared in teardown() before the
         // bundle is forgotten (owners_released asserts it) — exempt group [1].
@@ -2067,10 +2170,10 @@ fn unpopulated_matview(rel: &Relation<'_>) -> alloc::boxed::Box<PgError> {
 /// The C `EState*`: the "ExecutorState" context + state, one movable value.
 pub type ExecutorState = McxOwned<EStateTy>;
 
-/// `CreateExecutorState()`; `parent` is C's CurrentMemoryContext. Bump: C
-/// never pfrees out of this context; droppy owner fields still drop.
+/// `CreateExecutorState()`; `parent` is C's CurrentMemoryContext. An AllocSet
+/// like C's: owner frees reclaim mid-statement, FreeExecutorState resets wholesale.
 pub fn create_executor_state(parent: &MemoryContext) -> PgResult<ExecutorState> {
-    McxOwned::try_new(parent.new_child_bump("ExecutorState"), |mcx| {
+    McxOwned::try_new(parent.new_child_wholesale("ExecutorState"), |mcx| {
         Ok(EStateData::new_in(mcx))
     })
 }
@@ -2087,7 +2190,7 @@ pub struct StandaloneExprContext<'mcx>(ExprContextData<'mcx>);
 pub fn create_standalone_expr_context(mcx: Mcx<'_>) -> StandaloneExprContext<'_> {
     StandaloneExprContext(ExprContextData::new(
         mcx,
-        PgBox::new_in(mcx.context().new_child_bump("ExprContext"), mcx),
+        PgBox::new_in(mcx.context().new_child_wholesale("ExprContext"), mcx),
     ))
 }
 
@@ -2130,18 +2233,18 @@ pub fn executor_errposition(estate: Option<&EStateData<'_>>, location: i32) -> i
 // ===========================================================================
 // Retained-tuple scratch context: C's `ExecCopySlot(node->prev_slot, slot)`
 // materializes into the slot's tts_mcxt (an AllocSet) and the next copy
-// pfrees the old image. Here the query context is a Bump arena (deallocate
-// is a no-op), so a node that retains one "previous / pivot / marked /
-// result" tuple per row or per group boundary must own a resettable child
-// context for that image, or the images accumulate until query end
+// pfrees the old image. Here the retained image is not owned through a
+// freeing handle, so a node that retains one "previous / pivot / marked /
+// result" tuple per row or per group boundary owns a resettable child
+// context for that image instead, or the images accumulate until query end
 // (measured: Unique over 5M distinct rows, ~75 MB in 16 Bump blocks).
 // ===========================================================================
 
-/// A node-owned Bump child of the query context holding exactly one retained
-/// tuple image at a time. Droppy context inside a no-drop arena: the query
-/// context's reset callback is its destructor (docs/no-drop.md; the nodeagg
-/// `make_agg_state_node` / nodememoize `make_table_ctx` idiom), so the holder
-/// stays `ForgetSafe` and `!needs_drop`.
+/// A node-owned AllocSet child of the query context holding one retained tuple
+/// image at a time (C: ExecutorState, pfree'd on the next ExecCopySlot). Droppy
+/// context inside a no-drop arena: the query context's reset callback is its
+/// destructor (docs/no-drop.md; the nodeagg `make_agg_state_node` / nodememoize
+/// `make_table_ctx` idiom), so the holder stays `ForgetSafe` and `!needs_drop`.
 #[derive(Clone, Copy)]
 pub struct RetainedTupleCtx(core::ptr::NonNull<MemoryContext>);
 
@@ -2155,7 +2258,7 @@ impl RetainedTupleCtx {
         let raw = ::mcx::Allocator::allocate(&mcx, layout).map_err(|_| mcx.oom(layout.size()))?;
         let p: core::ptr::NonNull<MemoryContext> = raw.cast();
         // SAFETY: fresh allocation of the exact layout.
-        unsafe { p.write(mcx.context().new_child_bump(name)) };
+        unsafe { p.write(mcx.context().new_child_wholesale(name)) };
         // SAFETY: fires exactly once, before the arena bytes are reclaimed.
         mcx.context()
             .register_reset_callback(move || unsafe { core::ptr::drop_in_place(p.as_ptr()) });

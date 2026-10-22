@@ -1,0 +1,63 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1add s2ins s1c s2ins s3sel
+step s1add: INSERT INTO sometable VALUES (2, 'no such row in sometable');
+step s2ins: INSERT INTO wcowrtest_v2 VALUES (2, 'no such row in sometable');
+ERROR:  new row violates check option for view "wcowrtest_v2"
+step s1c: COMMIT;
+step s2ins: INSERT INTO wcowrtest_v2 VALUES (2, 'no such row in sometable');
+step s3sel: SELECT tableoid::regclass, * FROM wcowrtest ORDER BY a, b;
+tableoid  |a|b                       
+----------+-+------------------------
+wcowrtest2|2|no such row in sometable
+(1 row)
+
+
+starting permutation: s1delb s2insb s1c s2insb s3sel
+step s1delb: DELETE FROM sometable WHERE b = 'b';
+step s2insb: INSERT INTO wcowrtest_v2 VALUES (2, 'b');
+step s1c: COMMIT;
+step s2insb: INSERT INTO wcowrtest_v2 VALUES (2, 'b');
+ERROR:  new row violates check option for view "wcowrtest_v2"
+step s3sel: SELECT tableoid::regclass, * FROM wcowrtest ORDER BY a, b;
+tableoid  |a|b
+----------+-+-
+wcowrtest2|2|b
+(1 row)
+
+
+starting permutation: s2rr s1add s1c s2ins s2c s3sel
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM sometable;
+count
+-----
+    2
+(1 row)
+
+step s1add: INSERT INTO sometable VALUES (2, 'no such row in sometable');
+step s1c: COMMIT;
+step s2ins: INSERT INTO wcowrtest_v2 VALUES (2, 'no such row in sometable');
+ERROR:  new row violates check option for view "wcowrtest_v2"
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass, * FROM wcowrtest ORDER BY a, b;
+tableoid|a|b
+--------+-+-
+(0 rows)
+
+
+starting permutation: s1addr s2all s1c s2all2 s3t
+step s1addr: INSERT INTO wsa_r VALUES (9, 5);
+step s2all: INSERT INTO wsa_all VALUES (1, 9, 50) RETURNING *;
+id|a| d
+--+-+--
+ 1|9|50
+(1 row)
+
+step s1c: COMMIT;
+step s2all2: INSERT INTO wsa_all VALUES (2, 9, 50) RETURNING *;
+ERROR:  new row violates check option for view "wsa_all"
+step s3t: SELECT * FROM wsa_t ORDER BY id;
+id|a| d
+--+-+--
+ 1|9|50
+(1 row)
+

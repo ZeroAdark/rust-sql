@@ -133,6 +133,8 @@ fn plan_tree_copy() {
         smcx,
         SeqScan {
             cb_scan_cols: None,
+            cb_target_cols: None,
+            pgrc_merge: mcx::slice_in(smcx, &[7i16, 2]).unwrap().leak(),
             scan: Scan {
                 plan: Plan {
                     plan_rows: 100.0,
@@ -156,6 +158,7 @@ fn plan_tree_copy() {
             sortOperators: mcx::slice_in(smcx, &[97u32]).unwrap().leak(),
             collations: mcx::slice_in(smcx, &[0u32]).unwrap().leak(),
             nullsFirst: mcx::slice_in(smcx, &[false]).unwrap().leak(),
+            gravity_rewrite: None,
         },
     )
     .unwrap();
@@ -171,6 +174,7 @@ fn plan_tree_copy() {
     let ss = inner.as_variant::<SeqScan>().unwrap();
     assert_eq!(ss.scan.scanrelid, 1);
     assert_eq!(ss.scan.plan.plan_rows, 100.0);
+    assert_eq!(ss.pgrc_merge, &[7i16, 2], "the merge mark is copied out of the dropped context");
     assert_eq!(ss.scan.plan.targetlist.len(), 1);
     let v = ss.scan.plan.targetlist.first().unwrap().as_variant::<Var>().unwrap();
     assert_eq!(v.vartype, 23);
@@ -314,4 +318,72 @@ fn value_and_scalar_list_nodes() {
     drop(src_ctx);
     assert_eq!(copy.as_oid_list().unwrap().as_slice(), &[16u32, 25, 1700]);
     assert_eq!(sc.as_string().unwrap().sval, "xyzzy");
+}
+
+// Stack bytes one copyObject recursion level may cost (measured through the
+// guard). C 18.6 (clang -O2): 32 B per TypeCast level, 160 B per sub-select
+// level. The caps catch a dispatcher whose frame grows with the node-type
+// count again (copy_generated was 21,424 B optimized, 97 KB at opt-level 0).
+// Measured 2026-09-22, opt3/opt0: TypeCast 272/6,393 B, sub-select 2,245/22,795 B.
+fn typecast_chain(mcx: mcx::Mcx<'_>, depth: usize) -> Node<'_> {
+    use types_nodes::rawnodes::{TypeCast, TypeName};
+    let mut n = Node::mk(mcx, types_nodes::Integer { ival: 1 }).unwrap();
+    for _ in 0..depth {
+        let typeName = Some(Node::mk(mcx, TypeName::default()).unwrap());
+        n = Node::mk(mcx, TypeCast { arg: Some(n), typeName, location: -1 }).unwrap();
+    }
+    n
+}
+
+fn sublink_chain(mcx: mcx::Mcx<'_>, depth: usize) -> Node<'_> {
+    use types_nodes::primnodes::{SubLink, SubLinkType, TargetEntry};
+    let mut expr = Node::mk(mcx, types_nodes::Integer { ival: 1 }).unwrap();
+    for _ in 0..depth {
+        let te = TargetEntry {
+            expr,
+            resno: 1,
+            resname: None,
+            ressortgroupref: 0,
+            resorigtbl: 0,
+            resorigcol: 0,
+            resjunk: false,
+        };
+        let q = Query {
+            targetList: NodeList::make1(mcx, Node::mk(mcx, te).unwrap()).unwrap(),
+            ..Default::default()
+        };
+        expr = Node::mk(
+            mcx,
+            SubLink {
+                subLinkType: SubLinkType::EXPR_SUBLINK,
+                subLinkId: 0,
+                testexpr: None,
+                operName: NodeList::nil(),
+                subselect: Node::mk(mcx, q).unwrap(),
+                location: -1,
+            },
+        )
+        .unwrap();
+    }
+    expr
+}
+
+fn copy_bytes_per_level(chain: for<'m> fn(mcx::Mcx<'m>, usize) -> Node<'m>) -> usize {
+    stack_depth_core::measured_bytes_per_level(1 << 20, 1 << 20, move |n| {
+        let src = MemoryContext::new("src");
+        let dst = MemoryContext::new("dst");
+        let tree = chain(src.mcx(), n);
+        copy_object(dst.mcx(), tree).map(|_| ())
+    })
+}
+
+#[test]
+fn copy_recursion_stack_per_level_is_capped() {
+    let typecast = copy_bytes_per_level(typecast_chain);
+    let sublink = copy_bytes_per_level(sublink_chain);
+    eprintln!("copyObject stack per level: TypeCast {typecast} B, SubLink/Query {sublink} B");
+    let cap = stack_depth_core::per_level_cap(400, 8_000);
+    assert!(typecast <= cap, "TypeCast copy costs {typecast} B/level (cap {cap})");
+    let cap = stack_depth_core::per_level_cap(3_200, 28_500);
+    assert!(sublink <= cap, "sub-select copy costs {sublink} B/level (cap {cap})");
 }

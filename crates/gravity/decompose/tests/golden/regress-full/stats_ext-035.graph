@@ -1,0 +1,11 @@
+-- regress-full-stats_ext-035
+-- INSERT INTO functional_dependencies (a, b, c, filler1) SELECT i, i, i, i FROM generate_series(1,5000) s(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:5000)]
+  project (1=io25(v3.1), 2=c1700:null, 3=v3.1, 4=io25(v3.1), 5=c1082:null, 6=v3.1, 7=c25:null)
+  write INSERT rel=34227 rti=1 natts=7 indexes=(34232[3, 4], 34233[3, 4, 6])
+  outs 1=vl:call46 2=vl:stmt/imm 3=w4:val 4=vl:call46 5=w4:val 6=w4:val 7=vl:stmt/imm
+mapped: ModifyTable FunctionScan

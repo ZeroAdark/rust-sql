@@ -1,0 +1,3 @@
+path	crates/backend/access/parquet_read/src/thrift.rs
+method	std::boxed::Box::new	2
+type	std::boxed::Box	2

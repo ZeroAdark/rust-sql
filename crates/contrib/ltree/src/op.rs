@@ -148,7 +148,7 @@ pub fn inner_subltree(t: &[u8], startpos: i32, endpos_in: i32) -> Result<Vec<u8>
     // and ltree images are on-disk format, so reproduce the walk exactly
     // rather than emitting a tidier empty ltree.
     let lvl_offs: Vec<usize> = {
-        let mut offs = Vec::with_capacity(numlevel as usize + 1);
+        let mut offs = ::mcx::std_vec_with_capacity("ltree", numlevel as usize + 1)?;
         let mut off = 0usize;
         for l in tt.levels() {
             offs.push(off);
@@ -169,7 +169,7 @@ pub fn inner_subltree(t: &[u8], startpos: i32, endpos_in: i32) -> Result<Vec<u8>
     }
     let body = &t[LTREE_HDRSIZE + start..LTREE_HDRSIZE + end];
     let total = LTREE_HDRSIZE + body.len();
-    let mut res = vec![0u8; total];
+    let mut res = ::mcx::std_vec_from_elem("ltree", 0u8, total)?;
     set_varsize(&mut res, total);
     write_u16(&mut res, 4, (endpos - startpos) as u16);
     res[LTREE_HDRSIZE..].copy_from_slice(body);
@@ -222,7 +222,7 @@ pub fn ltree_concat(a: &[u8], b: &[u8]) -> Result<Vec<u8>, PgError> {
     let a_payload = &a[LTREE_HDRSIZE..varsize(a)];
     let b_payload = &b[LTREE_HDRSIZE..varsize(b)];
     let total = LTREE_HDRSIZE + a_payload.len() + b_payload.len();
-    let mut r = vec![0u8; total];
+    let mut r = ::mcx::std_vec_from_elem("ltree", 0u8, total)?;
     set_varsize(&mut r, total);
     write_u16(&mut r, 4, numlevel as u16);
     r[LTREE_HDRSIZE..LTREE_HDRSIZE + a_payload.len()].copy_from_slice(a_payload);
@@ -282,16 +282,18 @@ pub fn ltree_index(a: &[u8], b: &[u8], start_in: Option<i32>) -> i32 {
     }
 }
 
-pub fn lca_inner(a: &[&[u8]]) -> Option<Vec<u8>> {
-    let len = a.len();
-    if len == 0 {
-        return None;
+pub fn lca_inner(a: &[&[u8]]) -> ::types_error::PgResult<Option<Vec<u8>>> {
+    if a.is_empty() {
+        return Ok(None);
     }
     let first = Ltree::new(a[0]);
     if first.numlevel() == 0 {
-        return None;
+        return Ok(None);
     }
-    let first_levels: Vec<&[u8]> = first.levels().map(|l| l.name).collect();
+    let mut first_levels: Vec<&[u8]> = ::mcx::std_vec_with_capacity("ltree", first.numlevel())?;
+    for l in first.levels() {
+        first_levels.push(l.name);
+    }
 
     // num = length of longest common ancestor so far
     let mut num = first.numlevel() - 1;
@@ -300,11 +302,14 @@ pub fn lca_inner(a: &[&[u8]]) -> Option<Vec<u8>> {
         let t = Ltree::new(img);
         let nl = t.numlevel();
         if nl == 0 {
-            return None;
+            return Ok(None);
         } else if nl == 1 {
             num = 0;
         } else {
-            let other_levels: Vec<&[u8]> = t.levels().map(|l| l.name).collect();
+            let mut other_levels: Vec<&[u8]> = ::mcx::std_vec_with_capacity("ltree", nl)?;
+            for l in t.levels() {
+                other_levels.push(l.name);
+            }
             let tmp = num.min(nl - 1);
             num = 0;
             for i in 0..tmp {
@@ -317,8 +322,7 @@ pub fn lca_inner(a: &[&[u8]]) -> Option<Vec<u8>> {
         }
     }
 
-    let labels: Vec<&[u8]> = first_levels[..num].to_vec();
-    Some(build_ltree(&labels))
+    Ok(Some(build_ltree(&first_levels[..num])?))
 }
 
 

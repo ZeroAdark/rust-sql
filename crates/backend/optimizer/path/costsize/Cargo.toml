@@ -8,7 +8,11 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+pgsync = { path = "../../../../_support/pgsync" }
 mcx = { path = "../../../../_support/mcx" }
+fp_contract = { path = "../../../../_support/fp_contract" }
+order_key = { path = "../../../../_support/order_key" }
+cost_profile = { path = "../../../../_support/cost_profile" }
 types_core = { path = "../../../../_support/types/types_core" }
 types_error = { path = "../../../../_support/types/types_error" }
 types_nodes = { path = "../../../../_support/types/nodes" }
@@ -20,13 +24,11 @@ allpaths = { path = "../allpaths" }
 guc_tables = { path = "../../../utils/misc/guc_tables" }
 init_small = { path = "../../../utils/init/init_small" }
 lsyscache = { path = "../../../utils/cache/lsyscache" }
+pgrc_zonequal = { path = "../../util/pgrc_zonequal" }
 spccache = { path = "../../../utils/cache/spccache" }
 table = { path = "../../../access/table/table" }
 tablesample = { path = "../../../access/tablesample/tablesample" }
 tidbitmap = { path = "../../../nodes/tidbitmap" }
-nodeagg = { path = "../../../executor/nodeagg" }
-nodehash = { path = "../../../executor/nodehash" }
-nodememoize = { path = "../../../executor/nodememoize" }
 vars = { path = "../../util/vars" }
 nodes_core = { path = "../../../nodes/nodes_core" }
 

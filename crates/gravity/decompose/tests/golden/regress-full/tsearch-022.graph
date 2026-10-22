@@ -1,0 +1,9 @@
+-- regress-full-tsearch-022
+-- SELECT ts_rank_cd(strip(to_tsvector('both stripped')), to_tsquery('both & stripped'));
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3710(fn3623(fn3749(c25:'both stripped')), fn3750(c25:'both & stripped')))
+  outs 1=w4:val
+mapped: Result

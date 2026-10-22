@@ -4,10 +4,33 @@ use ::types_error::{PgError, PgResult};
 use ::types_fmgr::{LocalFcinfo, PackedVarlena};
 use ::types_scan::scankey::ScanKeyData;
 
+const F_INT8EQ: ::types_core::Oid = 467;
+
 // Scan-owned fcinfo carrier: per-tuple sk_func calls rewrite collation + args
 // in place — never function_call2_coll's fresh 56B frame per tuple.
 pub struct OrderProcFrame {
     fcinfo: LocalFcinfo<2>,
+    /// D4560: the text order proc's collations resolved in this frame (an insertion's descent, a scan's binary
+    /// searches): (collation, whether it sorts as C), the two most recent. A cache: a key with more collations than two
+    /// resolves again on a miss. `bttextcmp` per compare resolved it through the fmgr frame, the proc scratch's
+    /// thread-local and `pg_newlocale_from_collation` each time.
+    text_coll: [Option<(::types_core::Oid, bool)>; 2],
+}
+
+/// D4560 A/B switch: `PGRUST_BT_INSERT_FAST=0` turns the resolved-once btree insert paths off (the text compare's
+/// collation resolve, the target block read through the relation's smgr handle); default on. Read once per process.
+pub(crate) fn insert_fast() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering::Relaxed};
+    static MODE: AtomicU8 = AtomicU8::new(0);
+    match MODE.load(Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = !std::env::var("PGRUST_BT_INSERT_FAST").is_ok_and(|v| v.trim() == "0");
+            MODE.store(if on { 1 } else { 2 }, Relaxed);
+            on
+        }
+    }
 }
 
 impl OrderProcFrame {
@@ -15,6 +38,22 @@ impl OrderProcFrame {
     pub fn new() -> Self {
         OrderProcFrame {
             fcinfo: LocalFcinfo::<2>::new(0),
+            text_coll: [None; 2],
+        }
+    }
+
+    /// D4560: whether `collid` sorts as C (`varlena::collation_sorts_as_c`), resolved at the frame's first text
+    /// compare under it (and again after two other collations displaced it).
+    #[inline]
+    fn text_sorts_as_c(&mut self, collid: ::types_core::Oid) -> bool {
+        match self.text_coll {
+            [Some((c, v)), _] if c == collid => v,
+            [_, Some((c, v))] if c == collid => v,
+            _ => {
+                let v = ::varlena::collation_sorts_as_c(collid);
+                self.text_coll = [Some((collid, v)), self.text_coll[0]];
+                v
+            }
         }
     }
 
@@ -62,6 +101,22 @@ impl OrderProcFrame {
                 };
                 Ok(::varlena::varstrfastcmp_c(a.data(), b.data()))
             }
+            // D4560: any other collation, inline images: fc_bttextcmp's own body (bttextcmp over the images, which it
+            // reads unpacked as here) without the fmgr frame, its collation's C-ness resolved once per frame.
+            360 if insert_fast() && unsafe { inline_image(left) && inline_image(right) } => {
+                // SAFETY: as the arm above.
+                let (a, b) = unsafe {
+                    (
+                        PackedVarlena::from_ptr(left.as_usize() as *const u8),
+                        PackedVarlena::from_ptr(right.as_usize() as *const u8),
+                    )
+                };
+                if self.text_sorts_as_c(key.sk_collation) {
+                    Ok(::varlena::varstrfastcmp_c(a.data(), b.data()))
+                } else {
+                    ::varlena::bttextcmp(a.data(), b.data(), key.sk_collation)
+                }
+            }
             // numeric_cmp: the generic proc frame is mcx-less and short args
             // detoast-expand; the kernel realigns on the stack instead.
             1769 if unsafe { inline_image(left) && inline_image(right) } => {
@@ -83,9 +138,20 @@ impl OrderProcFrame {
     }
 
     /// FunctionCall2Coll(&key->sk_func, …) returning bool (operator proc).
+    /// D3652 P10: the by-value equality procs of the catalog scan keys (oideq, int4eq, int2eq, chareq, booleq; int8eq)
+    /// dispatch as inline compares, as `cmp` does for the order procs; their C bodies are exactly these compares,
+    /// collation-blind and strict (both args are non-null here: null keys and null tuple values peel off first).
     #[inline]
     pub fn test(&mut self, key: &mut ScanKeyData, left: Datum, right: Datum) -> PgResult<bool> {
-        Ok(self.call(key, left, right)?.as_bool())
+        match key.sk_func.fn_oid {
+            ::types_core::fmgr::F_OIDEQ => Ok(left.as_oid() == right.as_oid()),
+            ::types_core::fmgr::F_INT4EQ => Ok(left.as_i32() == right.as_i32()),
+            ::types_core::fmgr::F_INT2EQ => Ok(left.as_i16() == right.as_i16()),
+            ::types_core::fmgr::F_CHAREQ => Ok(left.as_char() == right.as_char()),
+            ::types_core::fmgr::F_BOOLEQ => Ok(left.as_bool() == right.as_bool()),
+            F_INT8EQ => Ok(left.as_i64() == right.as_i64()),
+            _ => Ok(self.call(key, left, right)?.as_bool()),
+        }
     }
 
     /// FunctionCall2Coll(orderproc, …) returning int32 — the so->orderProcs
@@ -149,7 +215,7 @@ impl OrderProcFrame {
 
 thread_local! {
     static PROC_SCRATCH: core::cell::RefCell<::mcx::MemoryContext> =
-        core::cell::RefCell::new(::mcx::MemoryContext::new_bump("btproc scratch"));
+        core::cell::RefCell::new(::mcx::MemoryContext::new_wholesale("btproc scratch"));
 }
 
 // Detoast/deserialize scratch for the generic proc arm (C detoasts into the
@@ -167,7 +233,7 @@ pub(crate) fn with_proc_scratch<R>(
             f(ctx.mcx())
         }
         Err(_) => {
-            let ctx = ::mcx::MemoryContext::new_bump("btproc scratch (reentrant)");
+            let ctx = ::mcx::MemoryContext::new_wholesale("btproc scratch (reentrant)");
             f(ctx.mcx())
         }
     })

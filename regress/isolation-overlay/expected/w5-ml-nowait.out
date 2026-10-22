@@ -1,0 +1,80 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s2x s1lb s2nw s1c s2c
+step s2b: BEGIN;
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 30 FOR UPDATE OF a, b NOWAIT;
+QUERY PLAN                          
+------------------------------------
+LockRows                            
+  ->  Hash Join                     
+        Hash Cond: (a.id = b.a_id)  
+        ->  Seq Scan on ma a        
+        ->  Hash                    
+              ->  Seq Scan on mb b  
+                    Filter: (w < 30)
+(7 rows)
+
+step s1lb: SELECT id FROM mb WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2nw: SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 30 FOR UPDATE OF a, b NOWAIT;
+ERROR:  could not obtain lock on row in relation "mb"
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s1la s2nw s1c s2c
+step s2b: BEGIN;
+step s1la: SELECT id FROM ma WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2nw: SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 30 FOR UPDATE OF a, b NOWAIT;
+ERROR:  could not obtain lock on row in relation "ma"
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s1mix s2ksu s1c s2c
+step s2b: BEGIN;
+step s1mix: SELECT id FROM ma WHERE id = 1 FOR NO KEY UPDATE; SELECT id FROM mb WHERE id = 1 FOR SHARE;
+id
+--
+ 1
+(1 row)
+
+id
+--
+ 1
+(1 row)
+
+step s2ksu: SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 30 FOR KEY SHARE OF a NOWAIT FOR UPDATE OF b NOWAIT;
+ERROR:  could not obtain lock on row in relation "mb"
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2b s1mix s2kss s1c s2c
+step s2b: BEGIN;
+step s1mix: SELECT id FROM ma WHERE id = 1 FOR NO KEY UPDATE; SELECT id FROM mb WHERE id = 1 FOR SHARE;
+id
+--
+ 1
+(1 row)
+
+id
+--
+ 1
+(1 row)
+
+step s2kss: SELECT a.id, b.id FROM ma a JOIN mb b ON b.a_id = a.id WHERE b.w < 30 FOR KEY SHARE OF a NOWAIT FOR SHARE OF b NOWAIT;
+id|id
+--+--
+ 1| 1
+ 2| 2
+(2 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;

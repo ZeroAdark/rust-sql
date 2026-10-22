@@ -1,0 +1,19 @@
+//! `rep::varlena` (v5 serial step, landing 5: module lines written by modexit.py).
+pub(crate) mod cmp_aggnum;
+pub(crate) mod cmp_num;
+pub(crate) mod cmp_text;
+pub(crate) mod coll;
+pub(crate) mod datum;
+pub(crate) mod hash;
+pub(crate) mod hash_tagged;
+pub(crate) mod key_canon;
+pub(crate) mod num_arith;
+pub(crate) mod num_image;
+pub(crate) mod num_konst;
+pub(crate) mod num_short;
+pub(crate) mod order;
+pub(crate) mod raw;
+pub(crate) mod substr_ascii;
+pub(crate) mod text_lean;
+pub(crate) mod text_set;
+pub(crate) mod text_view;

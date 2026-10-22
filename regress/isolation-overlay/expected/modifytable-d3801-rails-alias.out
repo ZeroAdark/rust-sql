@@ -1,0 +1,113 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1n4 s2upd s1c s2show
+step s2x: EXPLAIN (COSTS OFF) UPDATE pets __active_record_update_alias SET name = COALESCE(toys.name || toys.toy_id, 'none') FROM pets LEFT OUTER JOIN toys ON toys.pet_id = pets.pet_id WHERE (toys.name = 'ball' OR toys.name IS NULL) AND pets.pet_id = __active_record_update_alias.pet_id;
+QUERY PLAN                                                                 
+---------------------------------------------------------------------------
+Update on pets __active_record_update_alias                                
+  ->  Nested Loop                                                          
+        ->  Hash Right Join                                                
+              Hash Cond: (toys.pet_id = pets.pet_id)                       
+              Filter: ((toys.name = 'ball'::text) OR (toys.name IS NULL))  
+              ->  Seq Scan on toys                                         
+              ->  Hash                                                     
+                    ->  Seq Scan on pets                                   
+        ->  Index Scan using pets_pkey on pets __active_record_update_alias
+              Index Cond: (pet_id = pets.pet_id)                           
+(10 rows)
+
+step s1n4: UPDATE pets SET n = n + 10 WHERE pet_id = 4;
+step s2upd: UPDATE pets __active_record_update_alias SET name = COALESCE(toys.name || toys.toy_id, 'none') FROM pets LEFT OUTER JOIN toys ON toys.pet_id = pets.pet_id WHERE (toys.name = 'ball' OR toys.name IS NULL) AND pets.pet_id = __active_record_update_alias.pet_id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2show: SELECT * FROM pets ORDER BY pet_id;
+pet_id|name | n
+------+-----+--
+     1|ball1| 0
+     2|ball3| 0
+     3|p3   | 0
+     4|none |10
+     5|none | 0
+     6|none | 0
+(6 rows)
+
+
+starting permutation: s1n1 s2upd s1c s2show
+step s1n1: UPDATE pets SET n = n + 10 WHERE pet_id = 1;
+step s2upd: UPDATE pets __active_record_update_alias SET name = COALESCE(toys.name || toys.toy_id, 'none') FROM pets LEFT OUTER JOIN toys ON toys.pet_id = pets.pet_id WHERE (toys.name = 'ball' OR toys.name IS NULL) AND pets.pet_id = __active_record_update_alias.pet_id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2show: SELECT * FROM pets ORDER BY pet_id;
+pet_id|name | n
+------+-----+--
+     1|ball1|10
+     2|ball3| 0
+     3|p3   | 0
+     4|none | 0
+     5|none | 0
+     6|none | 0
+(6 rows)
+
+
+starting permutation: s1key s2upd s1c s2show
+step s1key: UPDATE pets SET pet_id = 99 WHERE pet_id = 5;
+step s2upd: UPDATE pets __active_record_update_alias SET name = COALESCE(toys.name || toys.toy_id, 'none') FROM pets LEFT OUTER JOIN toys ON toys.pet_id = pets.pet_id WHERE (toys.name = 'ball' OR toys.name IS NULL) AND pets.pet_id = __active_record_update_alias.pet_id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2show: SELECT * FROM pets ORDER BY pet_id;
+pet_id|name |n
+------+-----+-
+     1|ball1|0
+     2|ball3|0
+     3|p3   |0
+     4|none |0
+     6|none |0
+    99|p5   |0
+(6 rows)
+
+
+starting permutation: s1del s2upd s1c s2show
+step s1del: DELETE FROM pets WHERE pet_id = 6;
+step s2upd: UPDATE pets __active_record_update_alias SET name = COALESCE(toys.name || toys.toy_id, 'none') FROM pets LEFT OUTER JOIN toys ON toys.pet_id = pets.pet_id WHERE (toys.name = 'ball' OR toys.name IS NULL) AND pets.pet_id = __active_record_update_alias.pet_id; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2show: SELECT * FROM pets ORDER BY pet_id;
+pet_id|name |n
+------+-----+-
+     1|ball1|0
+     2|ball3|0
+     3|p3   |0
+     4|none |0
+     5|none |0
+(5 rows)
+
+
+starting permutation: s1toy s2upd s1c s2show
+step s1toy: UPDATE toys SET name = 'bone' WHERE toy_id = 3;
+step s2upd: UPDATE pets __active_record_update_alias SET name = COALESCE(toys.name || toys.toy_id, 'none') FROM pets LEFT OUTER JOIN toys ON toys.pet_id = pets.pet_id WHERE (toys.name = 'ball' OR toys.name IS NULL) AND pets.pet_id = __active_record_update_alias.pet_id;
+step s1c: COMMIT;
+step s2show: SELECT * FROM pets ORDER BY pet_id;
+pet_id|name |n
+------+-----+-
+     1|ball1|0
+     2|ball3|0
+     3|p3   |0
+     4|none |0
+     5|none |0
+     6|none |0
+(6 rows)
+
+
+starting permutation: s1n4 s1key s2del s1c s2show
+step s1n4: UPDATE pets SET n = n + 10 WHERE pet_id = 4;
+step s1key: UPDATE pets SET pet_id = 99 WHERE pet_id = 5;
+step s2del: DELETE FROM pets a USING pets LEFT OUTER JOIN toys ON toys.pet_id = pets.pet_id WHERE (toys.name = 'ball' OR toys.name IS NULL) AND pets.pet_id = a.pet_id; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2show: SELECT * FROM pets ORDER BY pet_id;
+pet_id|name|n
+------+----+-
+     3|p3  |0
+    99|p5  |0
+(2 rows)
+

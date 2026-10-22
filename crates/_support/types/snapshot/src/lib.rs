@@ -38,7 +38,8 @@ pub use SnapshotType::*;
 // SnapshotData (utils/snapshot.h). xip/subxip capacity outlives xcnt/subxcnt
 // (C reuses the GetSnapshotData arrays), so the counts stay explicit; the
 // refcounts are Cell (snapmgr writes them through the shared pointer); C's
-// intrusive ph_node is replaced by shared-handle pointer identity.
+// intrusive ph_node is `regd_pos`, the snapshot's slot in snapmgr's
+// registered-snapshot heap.
 #[derive(Debug)]
 pub struct SnapshotData<'mcx> {
     pub snapshot_type: SnapshotType,
@@ -64,6 +65,7 @@ pub struct SnapshotData<'mcx> {
     pub vistest: GlobalVisStateHandle,
     pub active_count: Cell<u32>,
     pub regd_count: Cell<u32>,
+    pub regd_pos: Cell<u32>,
     pub snapXactCompletionCount: u64,
 }
 
@@ -89,10 +91,13 @@ impl<'mcx> SnapshotData<'mcx> {
             vistest: GlobalVisStateHandle::new(0),
             active_count: Cell::new(0),
             regd_count: Cell::new(0),
+            regd_pos: Cell::new(REGD_POS_NONE),
             snapXactCompletionCount: 0,
         }
     }
 }
+
+pub const REGD_POS_NONE: u32 = u32::MAX;
 
 pub const XVM_SNAP_VALID: u8 = 1;
 pub const XVM_IN_SNAPSHOT: u8 = 2;

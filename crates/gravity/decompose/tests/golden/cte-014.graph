@@ -1,0 +1,21 @@
+-- cte-014
+-- SELECT a, ARRAY(SELECT y FROM u WHERE u.x = t.a) FROM t WHERE a < 3;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=16395 rti=1 am=heap index=16402
+    key att=1 op=97 value=c23:3
+    recheck (op97(index.1, c23:3))
+    lanes Attr(1):byval8:w8:val
+  subplan 1 nested Array params=($exec0=index.1) raise-free
+  inner node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=16405 rti=2 am=heap index=16411
+    key att=1 op=96 value=$exec0
+    recheck (op96(v2.1, $exec0))
+    lanes Attr(2):byval8:w8:val
+  project (1=v2.2)
+  project (1=index.1, 2=subplan1(index.1))
+  outs 1=w4:val 2=vl:call0
+param $exec0 owner=subplan1 type=23 rep=w4:val
+mapped: IndexScan IndexOnlyScan SubPlan

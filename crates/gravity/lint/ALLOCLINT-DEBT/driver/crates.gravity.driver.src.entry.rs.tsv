@@ -1,0 +1,8 @@
+path	crates/gravity/driver/src/entry.rs
+growth	std::vec::Vec::extend_from_slice	4
+macro	std::vec	1
+method	std::boxed::Box::new	1
+method	std::iter::Iterator::collect	1
+method	std::vec::Vec::into_boxed_slice	1
+type	std::boxed::Box	1
+type	std::vec::Vec	1

@@ -162,6 +162,15 @@ pub struct SeqScan<'mcx> {
     /// back to walking the plan tlist. `Some(empty)` is meaningful — the
     /// plan reads no columns (a qual-only count(*) scan).
     pub cb_scan_cols: Option<Bitmapset<'mcx>>,
+    /// pgrust-only: `cb_scan_cols` without the scan clauses' Vars — the
+    /// columns something above the scan reads. Same `None` rule.
+    pub cb_target_cols: Option<Bitmapset<'mcx>>,
+    /// pgrust-only: the attnos of the pgrcolumnar `sorted_by` key prefix the
+    /// plan relies on this scan's rows coming in (ASC NULLS LAST), from the
+    /// path's pathkeys; empty when nothing above relies on an order. A part is
+    /// sorted only inside itself, so a marked scan merges its parts' sorted
+    /// streams (D4469). EXPLAIN never prints it.
+    pub pgrc_merge: &'mcx [i16],
 }
 
 #[derive(Default)]
@@ -258,6 +267,13 @@ pub struct Append<'mcx> {
     pub nasyncplans: i32,
     pub first_partial_plan: i32,
     pub part_prune_index: i32,
+    /// Gravity's mark of an ordered Append (generate_orderedappend_paths: the children are the
+    /// partitions in bound order, each in the pathkeys' order): the sort columns the planner pinned
+    /// every child to, as MergeAppend's `sortColIdx` / `sortOperators` / `nullsFirst`; empty when the
+    /// Append has no pathkeys. Read by the decomposer's order provenance, not by the executor.
+    pub gravity_sort_col_idx: &'mcx [i16],
+    pub gravity_sort_operators: &'mcx [Oid],
+    pub gravity_nulls_first: &'mcx [bool],
 }
 
 impl Default for Append<'_> {
@@ -269,6 +285,9 @@ impl Default for Append<'_> {
             nasyncplans: 0,
             first_partial_plan: 0,
             part_prune_index: -1,
+            gravity_sort_col_idx: &[],
+            gravity_sort_operators: &[],
+            gravity_nulls_first: &[],
         }
     }
 }
@@ -510,6 +529,12 @@ pub struct CteScan<'mcx> {
     pub scan: Scan<'mcx>,
     pub ctePlanId: i32,
     pub cteParam: i32,
+    /// pgrust-only (D4779, `pgrust.gravity_cte_pushdown` = fill; planner cte_or.rs `fill_admits`): the CTE this scan reads
+    /// is planned as written, and Gravity's fill of it may apply the OR of its CteScans' filters (decompose
+    /// facts/cte_fill.rs): it is read at least twice, not MATERIALIZED / NOT MATERIALIZED, not recursive, a SELECT with no
+    /// SubLink and no volatile function. Every CteScan of one CTE carries the same mark. Gravity's front key puts a marked
+    /// scan's quals in the zone class (exec inputs/front.rs): its CTE's scans take them, as a SeqScan's own quals.
+    pub gravity_fill: bool,
 }
 
 #[derive(Default)]
@@ -584,6 +609,43 @@ impl Default for ForeignScan<'_> {
     }
 }
 
+/// pgrust: a planner rewrite carried
+/// as an annotation on the standard node tree. The incumbent executor runs
+/// the plain node and ignores it (the plain plan is a valid answer for every
+/// annotated shape); Gravity's decomposer executes it; EXPLAIN prints it.
+/// Attnos are the scan relation's; directions are the walk's / floor's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GravityRewrite {
+    /// `Limit → Agg(hashed) → Scan`: walk the granules of `attno` in key
+    /// order and stop after n whole groups (`GROUP BY k… LIMIT n` with no
+    /// ORDER BY, canonicalised to `ORDER BY k1 LIMIT n`).
+    ZoneTopK { attno: i16, desc: bool, nulls_first: bool },
+    /// `Limit → Sort → Scan`: walk the granules of `attno` in the Sort's
+    /// first-key order and stop after n rows.
+    ZoneWalk { attno: i16, desc: bool, nulls_first: bool },
+    /// `Limit → Sort(count(*) DESC) → Agg(hashed) → Scan`: count `attno`
+    /// per key, admit the repeated keys plus the n first in the floor order,
+    /// aggregate the admitted rows only.
+    TwoPass { attno: i16, floor_desc: bool, floor_nulls_first: bool },
+}
+mcx::forget_safe_nodrop!(GravityRewrite);
+
+/// pgrust (gravity §3 #8, A70): a target entry the planner's aggregate algebra built (planner agg_algebra.rs `mark`), the
+/// mark Gravity's finals.cse reads instead of the entry's spelling. Entry `resno` of the Agg is `sum(e)`, `e` one integer
+/// `+` / `-` of a column `x` and a non-null literal (`x OP k` or `k OP x`), rewritten over x's aggregates `min`, `max`,
+/// `sum`, `count` (their aggnos): NULL over no rows; PostgreSQL's raise where a row at an edge of x would raise it (the
+/// entry's guard, `(min(x) OP k) IS NOT NULL AND (max(x) OP k) IS NOT NULL`, before its value); else PostgreSQL's int8 sum
+/// of `e` (int2_sum / int4_sum wrap past 2^63). The incumbent executor evaluates the entry as written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GravityFinal {
+    pub resno: i16,
+    pub min: i32,
+    pub max: i32,
+    pub sum: i32,
+    pub count: i32,
+}
+mcx::forget_safe_nodrop!(GravityFinal);
+
 /// Per-key arrays are C's `pg_node_attr(array_size(numCols))` parallel arrays.
 #[derive(Default)]
 #[repr(C)]
@@ -594,6 +656,8 @@ pub struct Sort<'mcx> {
     pub sortOperators: &'mcx [Oid],
     pub collations: &'mcx [Oid],
     pub nullsFirst: &'mcx [bool],
+    /// pgrust (gravity §3 #3): the zone-walk annotation, `None` for a plain Sort.
+    pub gravity_rewrite: Option<GravityRewrite>,
 }
 
 /// Per-key arrays as in [`Sort`]; the first `nPresortedCols` keys arrive
@@ -699,6 +763,14 @@ pub struct Agg<'mcx> {
     pub aggParams: Bitmapset<'mcx>,
     pub groupingSets: NodeList<'mcx>,
     pub chain: NodeList<'mcx>,
+    pub distinctHashed: bool,
+    /// pgrust (gravity §3 #3 / #5): the zone top-k or two-pass annotation.
+    pub gravity_rewrite: Option<GravityRewrite>,
+    /// pgrust (gravity §3 #8): the target entries the aggregate algebra built, empty for any other Agg.
+    pub gravity_finals: &'mcx [GravityFinal],
+    /// pgrust (DR-7): `numGroups` took some key's ndistinct from DEFAULT_NUM_DISTINCT (C's estinfo SELFLAG_USED_DEFAULT,
+    /// the grouping rel's `gravity_groups_default`): Gravity's estimate-mode grant asks its cap for such a breaker.
+    pub gravity_groups_default: bool,
 }
 
 impl Default for Agg<'_> {
@@ -716,6 +788,10 @@ impl Default for Agg<'_> {
             aggParams: Bitmapset::empty(),
             groupingSets: NodeList::nil(),
             chain: NodeList::nil(),
+            distinctHashed: false,
+            gravity_rewrite: None,
+            gravity_finals: &[],
+            gravity_groups_default: false,
         }
     }
 }

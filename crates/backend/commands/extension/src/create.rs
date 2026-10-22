@@ -272,7 +272,7 @@ pub(crate) fn get_required_extension(
         .errmsg(format!("installing required extension \"{req_extension_name}\""))
         .finish(here("get_required_extension"))?;
 
-    let mut cascade_parents: Vec<&str> = parents.to_vec();
+    let mut cascade_parents: Vec<&str> = ::mcx::std_vec_from_slice("commands", &parents)?;
     cascade_parents.push(extension_name);
 
     let addr = CreateExtensionInternal(
@@ -407,7 +407,7 @@ pub fn InsertExtensionTuple(
     pg_depend::recordDependencyOnOwner(mcx, EXTENSION_RELATION_ID, extension_oid, ext_owner)?;
 
     let myself = ObjectAddress::set(EXTENSION_RELATION_ID, extension_oid);
-    let mut refobjs: Vec<ObjectAddress> = Vec::with_capacity(1 + required_extensions.len());
+    let mut refobjs: Vec<ObjectAddress> = ::mcx::std_vec_with_capacity("commands", 1 + required_extensions.len())?;
     refobjs.push(ObjectAddress::set(NAMESPACE_RELATION_ID, schema_oid));
     for &reqext in required_extensions {
         refobjs.push(ObjectAddress::set(EXTENSION_RELATION_ID, reqext));

@@ -1,0 +1,15 @@
+-- oltpc-037
+-- UPDATE order_line SET ol_delivery_d = now() WHERE ol_w_id = 1 AND ol_d_id = 1 AND ol_o_id = 2101 /* C53 DEL order_line update multi-row */;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=16504 rti=1 am=heap index=16514
+    key att=3 op=96 value=c23:1
+    key att=6 op=532 value=c23:1
+    key att=2 op=96 value=c23:2101
+    recheck (op96(v1.3, c23:1), op532(v1.6, c23:1), op96(v1.2, c23:2101))
+    lanes Attr(2):byval8:w8:val Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(7):byval8:w8:val Attr(8):byval8:w8:val Attr(9):byref8:vl:win/page Attr(10):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=fn1299(), 2j=v1.-1, 3j=v1.2, 4j=v1.3, 5j=v1.4, 6j=v1.5, 7j=v1.6, 8j=v1.7, 9j=v1.8, 10j=v1.9, 11j=v1.10)
+  write UPDATE rel=16504 rti=1 natts=10 indexes=(16514[3, 6, 2, 7]up) set=(1)
+  outs 1=w8:val 2=fx6:row 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=w8:val 10=vl:win/page 11=vl:win/page
+mapped: ModifyTable IndexScan

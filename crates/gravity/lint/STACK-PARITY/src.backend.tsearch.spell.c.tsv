@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/tsearch/spell.c: 1 stack-depth check sites
+2452	SplitToVariants	crates/backend/tsearch/spell/src/normalize.rs	IspellDict::split_to_variants	yes	

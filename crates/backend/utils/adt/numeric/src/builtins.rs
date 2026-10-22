@@ -10,7 +10,7 @@ use ::mcx::Allocator;
 use ::types_error::PgResult;
 use ::types_fmgr::{
     byref_result, varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
-    PGFunction,
+    OutInto, PGFunction, OUT_CHARS_NUMERIC,
 };
 
 use crate::var::NumericImage;
@@ -70,7 +70,8 @@ pub fn fc_int8_sum(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
         return img_result(fcinfo, &crate::ops::int64_to_numeric(b.value.as_i64()));
     }
     if b.isnull {
-        return Ok(a.value);
+        // SAFETY: null-checked numeric arg of a non-strict fn.
+        return unsafe { num_arg_detoasted(fcinfo, 0) };
     }
     // SAFETY: null-checked numeric arg of a non-strict fn.
     let oldsum = unsafe { num_arg(fcinfo, 0)? };
@@ -115,24 +116,17 @@ pub fn fc_numeric_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     }
 }
 
-// C pallocs the cstring per row; the resolved FmgrInfo owns retained scratch
-// (rule 7) and the result datum aliases it until the next call.
-struct OutBuf(Vec<u8>);
-
-pub fn fc_numeric_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let Some(flinfo) = flinfo else {
-        panic!("numeric_out: cstring result needs a resolved FmgrInfo's scratch")
-    };
+pub fn fc_numeric_out(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is a non-null numeric varlena (strict fn).
     let num = unsafe { num_arg(fcinfo, 0) }?;
-    if !flinfo.has_fn_extra() {
-        flinfo.set_fn_extra(OutBuf(Vec::new()));
+    let bound = crate::io::numeric_out_bound(num);
+    let p = fcinfo.result_mcx().alloc_bytes(bound + 1)?.as_ptr();
+    // SAFETY: a fresh bound + 1 bytes: the text and its NUL.
+    unsafe {
+        let n = crate::io::numeric_out_raw(num, p);
+        *p.add(n) = 0;
     }
-    let buf = &mut flinfo.fn_extra_mut::<OutBuf>().unwrap().0;
-    buf.clear();
-    crate::io::numeric_out_into(num, buf);
-    buf.push(0);
-    Ok(Datum::from_usize(buf.as_ptr() as usize))
+    Ok(Datum::from_usize(p as usize))
 }
 
 pub fn fc_numeric_recv(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -181,11 +175,66 @@ fc_num_binop! {
     fc_numeric_power: numeric_power;
 }
 
+// PG_GETARG_NUMERIC into `mcx` (a scratch context stands in for
+// numeric.c:2548's PG_FREE_IF_COPY of a toasted operand).
+unsafe fn num_arg_in<'m>(fcinfo: &Fcinfo, i: usize, mcx: ::mcx::Mcx<'m>) -> PgResult<Num<'m>> {
+    // SAFETY: forwarded caller contract.
+    let v = unsafe { ::types_fmgr::datum_varlena_packed(fcinfo.arg(i), mcx)? };
+    let payload = if v.is_short() {
+        v.data_expanded(mcx)?
+    } else {
+        v.data()
+    };
+    Ok(Num::from_payload(payload))
+}
+
+/// Aligned home for a 1B-short numeric payload (at most 126 bytes), so a
+/// comparison frees its unpacked copies on return (C numeric_cmp and friends
+/// PG_FREE_IF_COPY both arguments) instead of leaving them in the caller's
+/// context for the whole sort or record comparison. Public so the Gravity
+/// shim generator can translate the comparison wrappers.
+#[repr(C, align(8))]
+pub struct ShortNum(pub [u8; 128]);
+
+/// # Safety
+/// Arg `i` is a non-null, untoasted numeric varlena.
+unsafe fn num_arg_local<'a>(fcinfo: &'a Fcinfo, i: usize, buf: &'a mut ShortNum) -> PgResult<Num<'a>> {
+    // SAFETY: forwarded caller contract.
+    let v = unsafe { fcinfo.arg_varlena_packed(i)? };
+    if !v.is_short() {
+        return Ok(Num::from_payload(v.data()));
+    }
+    let src = v.data();
+    let dst = &mut buf.0[..src.len()];
+    dst.copy_from_slice(src);
+    Ok(Num::from_payload(dst))
+}
+
+unsafe fn arg_is_toasted(fcinfo: &Fcinfo, i: usize) -> bool {
+    use ::types_tuple::varatt;
+    // SAFETY: forwarded caller contract — header readable.
+    unsafe {
+        let p = fcinfo.arg_ptr(i);
+        varatt::varatt_is_1b_e(p) || (!varatt::varatt_is_1b(p) && !varatt::varatt_is_4b_u(p))
+    }
+}
+
 macro_rules! fc_num_cmp {
     ($($fc:ident: $core:ident -> $conv:ident;)*) => {$(
         pub fn $fc(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
             // SAFETY: catalog args are non-null numeric varlenas (strict fn).
-            let (a, b) = unsafe { (num_arg(fcinfo, 0)?, num_arg(fcinfo, 1)?) };
+            if unsafe { arg_is_toasted(fcinfo, 0) || arg_is_toasted(fcinfo, 1) } {
+                let scratch = ::mcx::MemoryContext::new("numeric compare");
+                let m = scratch.mcx();
+                // SAFETY: as above.
+                let (a, b) = unsafe { (num_arg_in(fcinfo, 0, m)?, num_arg_in(fcinfo, 1, m)?) };
+                return Ok(Datum::$conv(crate::$core(a, b)));
+            }
+            let (mut b0, mut b1) = (ShortNum([0; 128]), ShortNum([0; 128]));
+            // SAFETY: as above; neither argument is toasted.
+            let (a, b) = unsafe {
+                (num_arg_local(fcinfo, 0, &mut b0)?, num_arg_local(fcinfo, 1, &mut b1)?)
+            };
             Ok(Datum::$conv(crate::$core(a, b)))
         }
     )*};
@@ -287,7 +336,7 @@ unsafe fn num_arg_detoasted(fcinfo: &Fcinfo, i: usize) -> PgResult<Datum> {
     // SAFETY: forwarded caller contract.
     let v = unsafe { fcinfo.arg_varlena_packed(i)? };
     if !v.is_short() {
-        return Ok(fcinfo.arg(i));
+        return Ok(Datum::from_usize(v.as_ptr() as usize));
     }
     let payload = v.data();
     let mut img = ::mcx::vec_with_capacity_in::<u8>(fcinfo.result_mcx(), payload.len() + 4)?;
@@ -1062,10 +1111,8 @@ pub fn fc_int8_avg(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
 
 pub fn fc_numerictypmodin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mcx = fcinfo.result_mcx();
-    // SAFETY: catalog arg 0 of numerictypmodin is a non-null cstring[] datum
-    // (strict fn); typenameTypeMod builds it flat (never toasted).
-    let arr = unsafe { fcinfo.arg_varlena_raw(0) };
-    let tl = ::arrayfuncs::array_get_integer_typmods(mcx, arr)?;
+    let arr = ::arrayfuncs::builtins::arg_array_bytes(fcinfo, 0, mcx)?;
+    let tl = ::arrayfuncs::array_get_integer_typmods(mcx, &arr)?;
     Ok(Datum::from_i32(crate::ops::numerictypmodin_core(&tl)?))
 }
 
@@ -1281,9 +1328,9 @@ pub fn fc_generate_series_numeric_support(
 ) -> PgResult<Datum> {
     let [a] = fcinfo.args_n::<1>();
     let p = a.value.as_usize() as *mut ();
-    // The estimated argument trees live in this bump arena and die with it;
+    // The estimated argument trees live in this scratch context and die with it;
     // the request's node lifetime is unified with it below.
-    let cx = ::mcx::MemoryContext::new_bump("generate_series support estimate");
+    let cx = ::mcx::MemoryContext::new_wholesale("generate_series support estimate");
     // SAFETY: prosupport contract — the internal arg points at a live
     // tag-first support-request node exclusively owned by this call.
     let Some(req) = (unsafe { ::types_nodes::supportnodes::support_request_rows_mut(p) }) else {
@@ -1596,3 +1643,37 @@ pub const NUMERIC_BUILTINS: &[FmgrBuiltin] = &[
         fc_generate_series_numeric_support,
     ),
 ];
+
+// numeric_out into the caller's buffer (printtup, COPY TO): an inline image read in place (a short header's payload
+// copied to an aligned stack word array first, as the digits need), no allocation; a toasted one takes the fmgr path.
+#[inline]
+fn with_num<R>(v: Datum, f: impl FnOnce(crate::Num<'_>) -> R) -> Option<R> {
+    use ::types_tuple::varatt;
+    let p = v.as_usize() as *const u8;
+    // SAFETY: a non-null numeric datum is a live varlena image; its first byte tells the header form.
+    unsafe {
+        if varatt::varatt_is_1b_e(p) || !(varatt::varatt_is_1b(p) || varatt::varatt_is_4b_u(p)) {
+            return None;
+        }
+        let img = ::types_fmgr::PackedVarlena::from_ptr(p);
+        if img.is_short() {
+            // a short payload is under 127 bytes
+            let data = img.data();
+            let mut words = [0u64; 16];
+            core::ptr::copy_nonoverlapping(data.as_ptr(), words.as_mut_ptr().cast::<u8>(), data.len());
+            let bytes = core::slice::from_raw_parts(words.as_ptr().cast::<u8>(), data.len());
+            return Some(f(crate::Num::from_payload(bytes)));
+        }
+        Some(f(crate::Num::from_payload(img.data())))
+    }
+}
+fn numeric_bound(v: Datum) -> Option<usize> {
+    with_num(v, crate::io::numeric_out_bound)
+}
+unsafe fn numeric_render(v: Datum, dst: *mut u8) -> PgResult<usize> {
+    // SAFETY: numeric_bound returned Some: `dst` has room for numeric_out_bound bytes of the same image.
+    Ok(with_num(v, |n| unsafe { crate::io::numeric_out_raw(n, dst) }).expect("numeric_render after numeric_bound"))
+}
+
+pub static NUMERIC_OUT_INTO: &[OutInto] =
+    &[OutInto { foid: 1702, bound: numeric_bound, render: numeric_render, chars: Some(OUT_CHARS_NUMERIC) }];

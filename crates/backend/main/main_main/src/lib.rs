@@ -19,7 +19,9 @@ mod wasm_lc {
 #[cfg(target_family = "wasm")]
 use wasm_lc::*;
 
+// Byte-identical to C: C pg_ctl / initdb / pg_upgrade / pg_rewind refuse any other line.
 pub const PG_BACKEND_VERSIONSTR: &str = "postgres (PostgreSQL) 18.6\n";
+pub const PGRUST_BUILD_ID: &str = env!("PGRUST_BUILD_ID");
 
 const SRC: &str = "src/backend/main/main.c";
 
@@ -210,6 +212,7 @@ pub fn argv_from_os<I: IntoIterator<Item = std::ffi::OsString>>(args: I) -> Vec<
 }
 
 pub fn pg_main(argv: &[String]) -> PgResult<()> {
+    guc_tables::consts::set_pgrust_build_id(PGRUST_BUILD_ID);
     let mut do_check_root = true;
     let mut dispatch_option = DispatchOption::Postmaster;
 
@@ -260,6 +263,15 @@ pub fn pg_main(argv: &[String]) -> PgResult<()> {
         if rlim > 0 && rlim < isize::MAX {
             stack_depth::set_thread_stack_ceiling(rlim as usize);
         }
+        #[cfg(target_family = "wasm")]
+        {
+            let engine = std::env::var("PGRUST_WASM_ENGINE_STACK")
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .filter(|&b| b > 0)
+                .unwrap_or(stack_depth::DEFAULT_WASM_ENGINE_STACK);
+            stack_depth::set_wasm_stack_ceiling(engine);
+        }
     }
 
     let main_context = mcx::MemoryContext::new("Main");
@@ -298,14 +310,10 @@ pub fn pg_main(argv: &[String]) -> PgResult<()> {
             std::process::exit(0);
         }
         if arg1 == "--version" {
-            let version = format!(
-                "pgrust {} (PostgreSQL {} compatible)\n",
-                guc_tables::consts::PGRUST_VERSION,
-                guc_tables::consts::PG_COMPAT_VERSION,
-            );
-            write_stdout_ignoring_errors(&mut std::io::stdout(), &version);
+            write_stdout_ignoring_errors(&mut std::io::stdout(), &version_banner());
             std::process::exit(0);
         }
+        // -V keeps PostgreSQL's string: initdb and pg_ctl run `postgres -V` and require it (find_other_exec).
         if arg1 == "-V" {
             write_stdout_ignoring_errors(&mut std::io::stdout(), PG_BACKEND_VERSIONSTR);
             std::process::exit(0);
@@ -326,22 +334,10 @@ pub fn pg_main(argv: &[String]) -> PgResult<()> {
     }
 
     match dispatch_option {
-        // Ratified carve (docs/design/carve-ratifications.md §1): pgrust
-        // does not implement bootstrap mode; clusters are initialized with
-        // stock PostgreSQL's initdb. Refuse cleanly on stderr — initdb
-        // pointed at this binary must see a message, not a Rust backtrace.
-        // main.c:206: `--check` is initdb's configuration probe — it must
-        // answer like C (exit 0 for an acceptable -c set) or initdb pointed at
-        // this binary sizes the cluster at its minimum (postmaster::CheckMain).
-        DispatchOption::Check => postmaster::CheckMain(argv),
-        DispatchOption::Boot => {
-            eprintln!("{progname}: bootstrap mode (--boot) is not supported by pgrust");
-            eprintln!(
-                "{progname}: initialize the data directory with stock PostgreSQL's \
-                 initdb, then start pgrust on it (see docs/design/carve-ratifications.md)"
-            );
-            std::process::exit(1);
-        }
+        // main.c:206: BootstrapModeMain(argc, argv, true). Exits the process.
+        DispatchOption::Check => bootstrap::BootstrapModeMain(argv, true),
+        // main.c:210: BootstrapModeMain(argc, argv, false). Exits the process.
+        DispatchOption::Boot => bootstrap::BootstrapModeMain(argv, false),
         DispatchOption::Forkchild => {
             panic!("DISPATCH_FORKCHILD reached without EXEC_BACKEND")
         }
@@ -366,7 +362,12 @@ pub fn pg_main(argv: &[String]) -> PgResult<()> {
             let username = get_user_name_or_exit(&progname);
             postgres_seams::postgres_sim_net_main::call(argv, &username)
         }
-        DispatchOption::Postmaster => postmaster::PostmasterMain(argv),
+        DispatchOption::Postmaster => {
+            // The crash supervisor forks here; only the server child returns
+            // (postmaster::supervisor).
+            let argv = postmaster::supervisor::supervise(argv)?;
+            postmaster::PostmasterMain(&argv)
+        }
     }
 }
 
@@ -442,6 +443,11 @@ fn set_errno_zero() {
     }
 }
 
+/// `postgres --version`: which pgrust this is and the PostgreSQL release it is compatible with.
+pub fn version_banner() -> String {
+    format!("pgrust {} (PostgreSQL {} compatible)\n", guc_tables::consts::PGRUST_VERSION, guc_tables::consts::PG_COMPAT_VERSION)
+}
+
 pub fn help(progname: &str) -> String {
     let mut s = String::with_capacity(2048);
     s.push_str(&format!("{progname} is the PostgreSQL server.\n\n"));
@@ -495,9 +501,161 @@ pub fn help(progname: &str) -> String {
     s
 }
 
+/// the process's transparent-huge-page policy, set once at start. Small heaps stay on base
+/// pages, large blocks take huge pages:
+/// - mimalloc is built `no_thp` (Cargo.toml), so it never advises its arenas MADV_HUGEPAGE. That advice made each
+///   thread's sparsely touched 64 KiB pages resident as whole 2 MiB pages, ~6 MB per idle session (wio P273), where C
+///   backends' glibc heaps never opt in.
+/// - The global allocator advises every block of `PGRUST_HEAP_HUGE_MIN_MB` (default 4, 0 = off) or more huge and
+///   gives its range back to base pages at its free (`init_small::oom::set_huge_advise`): hash tables, dictionaries
+///   and segments that span gigabytes run up to 1.5x slower on 4 KiB pages (an analytic scan suite, hot W0: 1.25x).
+/// - `PR_SET_THP_DISABLE` with `PR_THP_DISABLE_EXCEPT_ADVISED` (Linux 6.18+) turns a THP=always host into THP=madvise
+///   for this process, so the unadvised arenas stay on base pages there too. An older kernel refuses the flag: on a
+///   THP=always host the whole process then goes off huge pages (P273's lean-first policy) unless
+///   `PGRUST_HEAP_THP=keep`; on a THP=madvise or never host nothing needs to change.
+/// An explicit `MIMALLOC_ALLOW_THP` keeps mimalloc's own choice and skips the prctl (=0 is mimalloc's full off).
+pub fn heap_thp_policy() -> HeapThp {
+    #[cfg(target_os = "linux")]
+    {
+        let policy = linux_heap_thp();
+        // P6: not while PoolAlloc serves (the pool advises its own superpages; a block's advice would split them)
+        if policy != HeapThp::Off && !pool_allocates() {
+            let min_mb = std::env::var_os("PGRUST_HEAP_HUGE_MIN_MB").and_then(|v| v.to_str()?.trim().parse::<usize>().ok()).unwrap_or(4);
+            let pmd = std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/hpage_pmd_size").ok().and_then(|t| t.trim().parse::<usize>().ok()).unwrap_or(0);
+            init_small::oom::set_huge_advise(min_mb.saturating_mul(1 << 20), pmd);
+        }
+        policy
+    }
+    #[cfg(not(target_os = "linux"))]
+    HeapThp::Kept
+}
+
+/// P6 / pphatch: the page pool's `PoolAlloc` serves this process's allocations (the `pagepool-global` build, unless
+/// mimalloc was chosen at the first allocation: PGRUST_ALLOCATOR=mimalloc, or the server's default off Linux
+/// aarch64). False in every other build.
+#[inline]
+pub fn pool_allocates() -> bool {
+    #[cfg(all(feature = "pagepool-global", not(target_family = "wasm")))]
+    return pagepool::pool_allocates();
+    #[cfg(not(all(feature = "pagepool-global", not(target_family = "wasm"))))]
+    false
+}
+
+/// pphatch: the global allocator's name for `pgrust.allocator` and the start's log line.
+pub fn allocator_name() -> &'static str {
+    if pool_allocates() {
+        "hearth"
+    } else if cfg!(target_family = "wasm") {
+        "system"
+    } else {
+        "mimalloc"
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeapThp {
+    /// THP off for the process except advised ranges (Linux 6.18+): the large blocks keep huge pages on any host.
+    ExceptAdvised,
+    /// No prctl (a pre-6.18 kernel): the host's THP=madvise or never already keeps the unadvised arenas on base pages.
+    HostMadvise,
+    /// A pre-6.18 kernel on a THP=always host: THP off for the whole process (P273), large blocks included.
+    Off,
+    /// `MIMALLOC_ALLOW_THP` or `PGRUST_HEAP_THP=keep` set, or not Linux: the host's and mimalloc's own choice.
+    Kept,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_heap_thp() -> HeapThp {
+    const PR_THP_DISABLE_EXCEPT_ADVISED: libc::c_ulong = 1 << 1;
+    if std::env::var_os("MIMALLOC_ALLOW_THP").is_some() {
+        return HeapThp::Kept;
+    }
+    // SAFETY: integer-argument prctl; changes only this process's THP policy (EINVAL before Linux 6.18).
+    if unsafe { libc::prctl(libc::PR_SET_THP_DISABLE, 1 as libc::c_ulong, PR_THP_DISABLE_EXCEPT_ADVISED, 0 as libc::c_ulong, 0 as libc::c_ulong) } == 0 {
+        return HeapThp::ExceptAdvised;
+    }
+    let always = std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/enabled").is_ok_and(|t| t.contains("[always]"));
+    if !always {
+        return HeapThp::HostMadvise;
+    }
+    if std::env::var_os("PGRUST_HEAP_THP").is_some_and(|v| v == "keep") {
+        return HeapThp::Kept;
+    }
+    // SAFETY: as above, without the flag.
+    unsafe { libc::prctl(libc::PR_SET_THP_DISABLE, 1 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong) };
+    HeapThp::Off
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_names_pgrust_and_the_compatible_postgres() {
+        assert_eq!(
+            version_banner(),
+            format!("pgrust {} (PostgreSQL 18.6 compatible)\n", guc_tables::consts::PGRUST_VERSION)
+        );
+        assert_eq!(PG_BACKEND_VERSIONSTR, "postgres (PostgreSQL) 18.6\n", "-V stays PostgreSQL's for initdb / pg_ctl");
+    }
+
+    /// the policy's prctl state, by what it set: off except advised ranges (1 | PR_THP_DISABLE_EXCEPT_ADVISED),
+    /// off (1), or untouched (0).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn heap_thp_policy_keeps_advised_ranges_huge() {
+        if std::env::var_os("MIMALLOC_ALLOW_THP").is_some() || std::env::var_os("PGRUST_HEAP_THP").is_some() {
+            return;
+        }
+        let policy = heap_thp_policy();
+        // SAFETY: integer-argument prctl query.
+        let got = unsafe { libc::prctl(libc::PR_GET_THP_DISABLE, 0, 0, 0, 0) };
+        let want = match policy {
+            HeapThp::ExceptAdvised => 3,
+            HeapThp::Off => 1,
+            HeapThp::HostMadvise | HeapThp::Kept => 0,
+        };
+        assert_eq!(got, want, "{policy:?}");
+        if policy != HeapThp::Off && std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/hpage_pmd_size").is_ok() {
+            // while PoolAlloc serves, the pool advises its own superpages: no block advice
+            let want = if pool_allocates() { 0 } else { 4 << 20 };
+            assert_eq!(init_small::oom::huge_advise_min(), want, "the default threshold");
+        }
+    }
+
+    /// D3143 P1 (wio P273): mimalloc advises none of its own memory huge (built `no_thp`): a small block's mapping
+    /// carries no `hg` flag, so an idle session's first pages fault base pages.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mimalloc_advises_no_small_block_huge() {
+        use std::alloc::{GlobalAlloc, Layout};
+        let l = Layout::from_size_align(64 << 10, 16).unwrap();
+        let addr = std::thread::spawn(move || {
+            // SAFETY: a non-zero layout; freed with the same layout.
+            let p = unsafe { mimalloc::MiMalloc.alloc(l) };
+            assert!(!p.is_null());
+            // SAFETY: the block is 64 KiB.
+            unsafe { p.write_bytes(1, l.size()) };
+            let flags = std::fs::read_to_string("/proc/self/smaps").unwrap_or_default();
+            let mut inside = false;
+            let mut vm = String::new();
+            for line in flags.lines() {
+                let range = line.split_whitespace().next().unwrap_or("");
+                if let Some((lo, hi)) = range.split_once('-').and_then(|(a, b)| Some((usize::from_str_radix(a, 16).ok()?, usize::from_str_radix(b, 16).ok()?))) {
+                    inside = lo <= p as usize && (p as usize) < hi;
+                } else if inside && line.starts_with("VmFlags:") {
+                    vm = line.to_string();
+                    break;
+                }
+            }
+            // SAFETY: allocated above with `l`.
+            unsafe { mimalloc::MiMalloc.dealloc(p, l) };
+            vm
+        })
+        .join()
+        .unwrap();
+        assert!(!addr.is_empty() && !addr.split_whitespace().any(|f| f == "hg"), "mimalloc advised its arena huge: {addr}");
+    }
 
     // main.c:400 under USE_SSL (be_secure's default-on ssl feature).
     #[test]
@@ -563,6 +721,21 @@ mod tests {
         assert_eq!(
             expand_profile_argv(&sv(&["postgres", "-D", "dd", "--help", "--profile"])),
             Err(ProfileArgvError::MissingValue)
+        );
+    }
+
+    #[test]
+    fn version_option_answers_exactly_as_c_postgres() {
+        assert_eq!(PG_BACKEND_VERSIONSTR, "postgres (PostgreSQL) 18.6\n");
+        assert!(!PG_BACKEND_VERSIONSTR.contains("pgrust"));
+    }
+
+    #[test]
+    fn build_id_stamp_is_empty_or_a_plain_token() {
+        assert!(PGRUST_BUILD_ID.len() <= 40, "{PGRUST_BUILD_ID:?}");
+        assert!(
+            PGRUST_BUILD_ID.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b)),
+            "{PGRUST_BUILD_ID:?}"
         );
     }
 

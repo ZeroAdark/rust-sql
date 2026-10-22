@@ -164,7 +164,7 @@ fn gin_check_posting_tree_parent_keys_consistency(
     posting_tree_root: BlockNumber,
 ) -> PgResult<()> {
     let strategy = GetAccessStrategy(BufferAccessStrategyType::BasBulkread);
-    let arena = MemoryContext::new_bump("posting tree check context");
+    let arena = MemoryContext::new_wholesale("posting tree check context");
     let amcx = arena.mcx();
 
     let mut leafdepth: i32 = -1;
@@ -392,7 +392,7 @@ fn check_posting_tree_page(
 
 fn gin_check_parent_keys_consistency(rel: &Relation<'_>) -> PgResult<()> {
     let strategy = GetAccessStrategy(BufferAccessStrategyType::BasBulkread);
-    let arena = MemoryContext::new_bump("amcheck consistency check context");
+    let arena = MemoryContext::new_wholesale("amcheck consistency check context");
     let amcx = arena.mcx();
     let state = ::gin::build::initGinState(rel)?;
 
@@ -955,6 +955,7 @@ mod tests {
             rd_amcache_hash: Default::default(),
             rd_amcache_gin: Default::default(),
             rd_amcache_spgist: Default::default(),
+            rd_amcache_bloom: Default::default(),
             rd_support: ::mcx::PgVec::new_in(mcx),
             rd_supportinfo: Default::default(),
             rd_opcoptions: Default::default(),
@@ -1071,7 +1072,7 @@ mod tests {
             PageRef::from_raw(core::ptr::NonNull::new(img.as_ptr().cast_mut().cast::<u8>()).unwrap())
         };
 
-        let arena = MemoryContext::new_bump("amcheck consistency check context");
+        let arena = MemoryContext::new_wholesale("amcheck consistency check context");
         let amcx = arena.mcx();
         let mut stack: PgVec<'_, GinEntryScanItem> = mcx::vec_new_in(amcx);
         let mut leafdepth: i32 = -1;

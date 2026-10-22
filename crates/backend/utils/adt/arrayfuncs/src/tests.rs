@@ -443,6 +443,28 @@ mod expanded {
     }
 
     #[test]
+    fn append_element_grows_in_place_and_flattens_as_the_flat_append() {
+        let parent = MemoryContext::new("t");
+        let img = int4_array(parent.mcx(), &[7, 8, 9], None);
+        let mut meta = int4_meta();
+        let d = expand_array(Datum::from_usize(img.as_ptr() as usize), &parent, Some(&mut meta)).unwrap();
+        unsafe {
+            let eah = &mut *(datum_get_eohp(d) as *mut crate::expanded::ExpandedArrayHeader);
+            eah.append_element(Datum::from_i32(10), false).unwrap();
+            eah.append_element(Datum::null(), true).unwrap();
+            eah.append_element(Datum::from_i32(12), false).unwrap();
+            assert_eq!((eah.ndims, eah.dims[0], eah.lbound[0], eah.nelems), (1, 6, 1, 6));
+            let want = int4_array(parent.mcx(), &[7, 8, 9, 10, 0, 12], Some(&[false, false, false, false, true, false]));
+            let hdr = datum_get_eohp(d);
+            let n = eoh_get_flat_size(hdr);
+            assert_eq!(n, want.len());
+            let mut out = std::vec![0u8; n];
+            eoh_flatten_into(hdr, out.as_mut_ptr(), n);
+            assert_eq!(out.as_slice(), want.as_slice());
+        }
+    }
+
+    #[test]
     fn expand_flat_and_flatten_round_trip() {
         let parent = MemoryContext::new("t");
         let img = int4_array(parent.mcx(), &[7, 8, 9], None);
@@ -594,6 +616,92 @@ mod expanded {
         )
         .unwrap();
         parent.reset();
+    }
+
+    fn flat_of(d: Datum) -> std::vec::Vec<u8> {
+        let p = d.as_usize() as *const u8;
+        unsafe { core::slice::from_raw_parts(p, crate::foundation::varsize_any(p)) }.to_vec()
+    }
+
+    // wio P328: in place, flattening to what the flat path builds.
+    #[test]
+    fn set_element_expanded_matches_flat_path() {
+        let parent = MemoryContext::new("t");
+        let mcx = parent.mcx();
+        let mut flat = int4_array(mcx, &[], None).to_vec();
+        let mut owned = crate::expanded::expand_array_owned(
+            Datum::from_usize(flat.as_ptr() as usize),
+            &parent,
+            Some(&mut int4_meta()),
+        )
+        .unwrap();
+        let rw = owned.rw_datum();
+        let ops: std::vec::Vec<(i32, Option<i32>)> = (1..=300)
+            .map(|i| (i, Some(i)))
+            .chain([(0, Some(0)), (-3, None), (310, Some(7)), (5, None), (5, Some(55))])
+            .collect();
+        for (indx, v) in ops {
+            let (val, isnull) = match v {
+                Some(x) => (Datum::from_i32(x), false),
+                None => (Datum::null(), true),
+            };
+            let eah = unsafe { &mut *crate::expanded::rw_expanded_array(rw).unwrap() };
+            crate::expanded::array_set_element_expanded(eah, &[indx], val, isnull).unwrap();
+            flat = crate::element::array_set_element_ext(
+                mcx, &flat, &[indx], val, isnull, -1, 4, true, b'i', true,
+            )
+            .unwrap()
+            .to_vec();
+            assert_eq!(flat_of(owned.flat_datum().unwrap()), flat, "after [{indx}]");
+            assert_eq!(owned.rw_datum().as_usize(), rw.as_usize(), "same object");
+        }
+        let eah = unsafe { &mut *crate::expanded::rw_expanded_array(rw).unwrap() };
+        assert_eq!(
+            crate::expanded::array_get_element_expanded(eah, &[5]).unwrap(),
+            (Datum::from_i32(55), false)
+        );
+        assert!(crate::expanded::array_get_element_expanded(eah, &[-3]).unwrap().1);
+        let err = crate::expanded::array_set_element_expanded(eah, &[1, 1], Datum::from_i32(1), false)
+            .unwrap_err();
+        assert_eq!(err.message(), "wrong number of array subscripts");
+        drop(owned);
+    }
+
+    #[test]
+    fn set_element_expanded_self_referencing_text() {
+        let parent = MemoryContext::new("t");
+        let mcx = parent.mcx();
+        let texts: std::vec::Vec<std::vec::Vec<u8>> = ["alpha", "beta"]
+            .iter()
+            .map(|t| {
+                let mut v = (((t.len() + 4) as u32) << 2).to_ne_bytes().to_vec();
+                v.extend_from_slice(t.as_bytes());
+                v
+            })
+            .collect();
+        let elems: std::vec::Vec<Datum> =
+            texts.iter().map(|v| Datum::from_usize(v.as_ptr() as usize)).collect();
+        let img = crate::construct::construct_array(mcx, &elems, TEXTOID, -1, false, b'i').unwrap();
+        let mut meta =
+            ArrayMetaState { element_type: TEXTOID, typlen: -1, typbyval: false, typalign: b'i' };
+        let mut owned = crate::expanded::expand_array_owned(
+            Datum::from_usize(img.as_ptr() as usize),
+            &parent,
+            Some(&mut meta),
+        )
+        .unwrap();
+        let rw = owned.rw_datum();
+        for i in 0..40 {
+            let eah = unsafe { &mut *crate::expanded::rw_expanded_array(rw).unwrap() };
+            let (first, _) = crate::expanded::array_get_element_expanded(eah, &[1]).unwrap();
+            crate::expanded::array_set_element_expanded(eah, &[3 + i], first, false).unwrap();
+            let (last, _) = crate::expanded::array_get_element_expanded(eah, &[3 + i]).unwrap();
+            crate::expanded::array_set_element_expanded(eah, &[1], last, false).unwrap();
+        }
+        let out = array_out(mcx, &flat_of(owned.flat_datum().unwrap()), &meta_text(), &mut text_out());
+        let s = as_str(&out.unwrap()).to_string();
+        assert!(s.starts_with("{alpha,beta,alpha,alpha"), "{s}");
+        assert_eq!(s.matches("alpha").count(), 41);
     }
 }
 
@@ -915,6 +1023,26 @@ mod ops_tests {
         fcinfo.set_arg(1, Datum::from_usize(thresholds.as_ptr() as usize));
         let d = fc_width_bucket_array(None, &mut fcinfo).unwrap();
         assert_eq!(d.as_i32(), 2);
+    }
+
+    #[test]
+    fn width_bucket_array_searches_a_plain_image_in_place() {
+        install_identity_detoast();
+        let ctx = MemoryContext::new_bump("thresholds");
+        let vals: std::vec::Vec<f64> = (1..=1 << 16).map(|x| x as f64 * 10.0).collect();
+        let thresholds = float8_arr(ctx.mcx(), &vals);
+        let call_ctx = MemoryContext::new_bump("call");
+        let mut fcinfo = LocalFcinfo::<2>::new(0);
+        // SAFETY: call_ctx outlives the calls.
+        unsafe { fcinfo.set_result_mcx(call_ctx.mcx()) };
+        fcinfo.set_arg(1, Datum::from_usize(thresholds.as_ptr() as usize));
+        let before = call_ctx.mem_allocated();
+        for g in [5.0, 10.0, 12345.0, 1e9] {
+            fcinfo.set_arg(0, Datum::from_f64(g));
+            let d = fc_width_bucket_array(None, &mut fcinfo).unwrap();
+            assert_eq!(d.as_i32(), ((g / 10.0) as i32).min(1 << 16));
+        }
+        assert!(call_ctx.mem_allocated() - before < thresholds.len());
     }
 }
 
@@ -2487,7 +2615,7 @@ fn recv_null_element_still_calls_a_non_strict_receiver() {
     assert!(crate::foundation::arr_hasnull(&img));
 }
 
-// audit-18.6 regression: arrayfuncs.c:1218-1249 sizes the
+// audit-18.6 fp-adt-arrayfuncs-p1#3: arrayfuncs.c:1218-1249 sizes the
 // output exactly, so one 512 MiB unquoted element fits under MaxAllocSize;
 // the per-element reservation is the element's real length, not 2n+2.
 #[test]
@@ -2499,7 +2627,7 @@ fn array_out_reserves_exact_element_length() {
     assert!(big + crate::io::element_reserve(b"", false, 1) < 1_073_741_823);
 }
 
-// audit-18.6 regression: arrayfuncs.c:1297-1358 validates the
+// audit-18.6 fp-adt-arrayfuncs-p1#4: arrayfuncs.c:1297-1358 validates the
 // wire header (dimensions, flags, element type, bounds) before resolving the
 // element receive function, so FF FF FF FF into aclitem[] is 22P03, not the
 // 42883 "no binary input function" of the element lookup.
@@ -2533,7 +2661,7 @@ fn high_byte_typdelim_detail_is_raw() {
     assert_eq!(err.detail(), Some("Unexpected \"\u{FFFD}\" character."));
 }
 
-// audit-18.6 regression / regression:
+// audit-18.6 fp-contrib-pg_surgery-heap_surgery#2 / fp-statistics-b1#1:
 // array_contains_nulls propagates ArrayGetNItems' 54000 (arrayfuncs.c:3733)
 // instead of answering "has nulls" for a negative dimension.
 #[test]
@@ -2553,4 +2681,57 @@ fn array_contains_nulls_propagates_negative_dimension() {
 
     img[4 + 12..4 + 16].copy_from_slice(&1i32.to_ne_bytes());
     assert!(!crate::construct::array_contains_nulls(&img).unwrap());
+}
+
+#[test]
+fn flat_subscript_assign_past_max_alloc_size_is_an_alloc_error() {
+    let ctx = MemoryContext::new_bump("t");
+    let mcx = ctx.mcx();
+    let overhead = 24usize;
+    let data = ::mcx::MAX_ALLOC_SIZE - overhead - 3;
+    let n = 1024usize;
+    let total = overhead + data;
+    let mut img = alloc::vec![0u8; total];
+    img[0..4].copy_from_slice(&::datum::varlena::set_varsize_4b(total));
+    img[4..8].copy_from_slice(&1i32.to_ne_bytes());
+    img[8..12].copy_from_slice(&0i32.to_ne_bytes());
+    img[12..16].copy_from_slice(&(TEXTOID as u32).to_ne_bytes());
+    img[16..20].copy_from_slice(&(n as i32).to_ne_bytes());
+    img[20..24].copy_from_slice(&1i32.to_ne_bytes());
+    let value = build_varlena(mcx, &[b'y'; 1020]).unwrap();
+
+    let err = crate::element::array_set_element_ext(
+        mcx, &img, &[n as i32 + 1], value, false, -1, -1, false, b'i', false,
+    )
+    .unwrap_err();
+    assert_eq!(err.message(), format!("invalid memory alloc request size {}", total + 1024));
+}
+
+// array_expanded.c EA_get_flat_size: appending past MaxAllocSize of element
+// data is 54000, not the allocator's XX000. The 1 GiB text-array image is
+// calloc'd and only its header is written (the append path never walks the
+// existing elements), so the untouched pages cost nothing.
+#[test]
+fn element_append_past_max_alloc_size_is_a_flat_size_error() {
+    let ctx = MemoryContext::new_bump("t");
+    let mcx = ctx.mcx();
+    let overhead = 24usize;
+    let data = ::mcx::MAX_ALLOC_SIZE - overhead - 3; // 4-aligned, total = MaxAllocSize - 3
+    let n = 1024usize;
+    let total = overhead + data;
+    let mut img = alloc::vec![0u8; total];
+    img[0..4].copy_from_slice(&::datum::varlena::set_varsize_4b(total));
+    img[4..8].copy_from_slice(&1i32.to_ne_bytes());
+    img[8..12].copy_from_slice(&0i32.to_ne_bytes());
+    img[12..16].copy_from_slice(&(TEXTOID as u32).to_ne_bytes());
+    img[16..20].copy_from_slice(&(n as i32).to_ne_bytes());
+    img[20..24].copy_from_slice(&1i32.to_ne_bytes());
+    let value = build_varlena(mcx, &[b'y'; 1020]).unwrap();
+
+    let err = crate::element::array_set_element(
+        mcx, &img, &[n as i32 + 1], value, false, -1, -1, false, b'i',
+    )
+    .unwrap_err();
+    assert_eq!(err.message(), "array size exceeds the maximum allowed (1073741823)");
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
 }

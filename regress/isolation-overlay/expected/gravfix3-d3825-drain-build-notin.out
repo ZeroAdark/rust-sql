@@ -1,0 +1,198 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1name s2del s1c s2show s2c
+step s2x: EXPLAIN (COSTS OFF) delete from d3825p p1_0 where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0);
+QUERY PLAN                                                                    
+------------------------------------------------------------------------------
+Delete on d3825p p1_0                                                         
+  ->  Hash Right Semi Join                                                    
+        Hash Cond: (tp1_0.clientid = p1_0.clientid)                           
+        ->  Seq Scan on d3825t tp1_0                                          
+        ->  Hash                                                              
+              ->  Seq Scan on d3825p p1_0                                     
+                    Filter: (NOT (ANY (deltastamp = (hashed SubPlan 1).col1)))
+                    SubPlan 1                                                 
+                      ->  Seq Scan on d3825t tp2_0                            
+(9 rows)
+
+step s1name: UPDATE d3825p SET name = 'z' WHERE id = 1;
+step s2del: delete from d3825p p1_0 where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0) returning p1_0.id, p1_0.name; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|name
+--+----
+ 4|d   
+ 1|z   
+(2 rows)
+
+step s2show: SELECT * FROM d3825p ORDER BY id;
+id|clientid|deltastamp              |name
+--+--------+------------------------+----
+ 2|      20|Thu Jan 02 00:00:00 2020|b   
+ 3|      30|Fri Jan 03 00:00:00 2020|c   
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1name s2upd s1c s2show s2c
+step s1name: UPDATE d3825p SET name = 'z' WHERE id = 1;
+step s2upd: update d3825p p1_0 set name = name || '+s2' where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0) returning p1_0.id, p1_0.name; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|name
+--+----
+ 4|d+s2
+ 1|z+s2
+(2 rows)
+
+step s2show: SELECT * FROM d3825p ORDER BY id;
+id|clientid|deltastamp              |name
+--+--------+------------------------+----
+ 1|      10|Wed Jan 01 00:00:00 2020|z+s2
+ 2|      20|Thu Jan 02 00:00:00 2020|b   
+ 3|      30|Fri Jan 03 00:00:00 2020|c   
+ 4|      10|Sat Jan 04 00:00:00 2020|d+s2
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1stamp s2del s1c s2show s2c
+step s1stamp: UPDATE d3825p SET deltastamp = '2021-01-01' WHERE id = 1;
+step s2del: delete from d3825p p1_0 where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0) returning p1_0.id, p1_0.name; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|name
+--+----
+ 4|d   
+(1 row)
+
+step s2show: SELECT * FROM d3825p ORDER BY id;
+id|clientid|deltastamp              |name
+--+--------+------------------------+----
+ 1|      10|Fri Jan 01 00:00:00 2021|a   
+ 2|      20|Thu Jan 02 00:00:00 2020|b   
+ 3|      30|Fri Jan 03 00:00:00 2020|c   
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1stamp s2upd s1c s2show s2c
+step s1stamp: UPDATE d3825p SET deltastamp = '2021-01-01' WHERE id = 1;
+step s2upd: update d3825p p1_0 set name = name || '+s2' where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0) returning p1_0.id, p1_0.name; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|name
+--+----
+ 4|d+s2
+(1 row)
+
+step s2show: SELECT * FROM d3825p ORDER BY id;
+id|clientid|deltastamp              |name
+--+--------+------------------------+----
+ 1|      10|Fri Jan 01 00:00:00 2021|a   
+ 2|      20|Thu Jan 02 00:00:00 2020|b   
+ 3|      30|Fri Jan 03 00:00:00 2020|c   
+ 4|      10|Sat Jan 04 00:00:00 2020|d+s2
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1client s2del s1c s2show s2c
+step s1client: UPDATE d3825p SET clientid = 30 WHERE id = 1;
+step s2del: delete from d3825p p1_0 where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0) returning p1_0.id, p1_0.name; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|name
+--+----
+ 4|d   
+(1 row)
+
+step s2show: SELECT * FROM d3825p ORDER BY id;
+id|clientid|deltastamp              |name
+--+--------+------------------------+----
+ 1|      30|Wed Jan 01 00:00:00 2020|a   
+ 2|      20|Thu Jan 02 00:00:00 2020|b   
+ 3|      30|Fri Jan 03 00:00:00 2020|c   
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1cl3 s2del s1c s2show s2c
+step s1cl3: UPDATE d3825p SET clientid = 1003 WHERE id = 1;
+step s2del: delete from d3825p p1_0 where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0) returning p1_0.id, p1_0.name; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|name
+--+----
+ 4|d   
+(1 row)
+
+step s2show: SELECT * FROM d3825p ORDER BY id;
+id|clientid|deltastamp              |name
+--+--------+------------------------+----
+ 1|    1003|Wed Jan 01 00:00:00 2020|a   
+ 2|      20|Thu Jan 02 00:00:00 2020|b   
+ 3|      30|Fri Jan 03 00:00:00 2020|c   
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1cl3 s2upd s1c s2show s2c
+step s1cl3: UPDATE d3825p SET clientid = 1003 WHERE id = 1;
+step s2upd: update d3825p p1_0 set name = name || '+s2' where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0) returning p1_0.id, p1_0.name; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+id|name
+--+----
+ 4|d+s2
+(1 row)
+
+step s2show: SELECT * FROM d3825p ORDER BY id;
+id|clientid|deltastamp              |name
+--+--------+------------------------+----
+ 1|    1003|Wed Jan 01 00:00:00 2020|a   
+ 2|      20|Thu Jan 02 00:00:00 2020|b   
+ 3|      30|Fri Jan 03 00:00:00 2020|c   
+ 4|      10|Sat Jan 04 00:00:00 2020|d+s2
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2del s1c s2show s2c
+step s1del: DELETE FROM d3825p WHERE id = 1;
+step s2del: delete from d3825p p1_0 where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0) returning p1_0.id, p1_0.name; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+id|name
+--+----
+ 4|d   
+(1 row)
+
+step s2show: SELECT * FROM d3825p ORDER BY id;
+id|clientid|deltastamp              |name
+--+--------+------------------------+----
+ 2|      20|Thu Jan 02 00:00:00 2020|b   
+ 3|      30|Fri Jan 03 00:00:00 2020|c   
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1name s2del s1a s2show s2c
+step s1name: UPDATE d3825p SET name = 'z' WHERE id = 1;
+step s2del: delete from d3825p p1_0 where p1_0.clientid in (select tp1_0.clientid from d3825t tp1_0) and p1_0.deltastamp not in (select tp2_0.deltastamp from d3825t tp2_0) returning p1_0.id, p1_0.name; <waiting ...>
+step s1a: ROLLBACK;
+step s2del: <... completed>
+id|name
+--+----
+ 4|d   
+ 1|a   
+(2 rows)
+
+step s2show: SELECT * FROM d3825p ORDER BY id;
+id|clientid|deltastamp              |name
+--+--------+------------------------+----
+ 2|      20|Thu Jan 02 00:00:00 2020|b   
+ 3|      30|Fri Jan 03 00:00:00 2020|c   
+(2 rows)
+
+step s2c: COMMIT;

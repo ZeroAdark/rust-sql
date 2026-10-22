@@ -1,0 +1,22 @@
+-- regress-full-uuid-003
+-- EXPLAIN (COSTS OFF) SELECT COUNT(*) FROM guid1 WHERE guid_field = '3f3e3c3b-3a30-3938-3736-353433a2313e' OR guid_field = '11111111111111111111111111111111';
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=breaker(slot=0 PlainAgg)
+  nodes n2@0 n1@0 n0@1^
+  source bitmap rel=16657 rti=1 am=heap
+    bitmap index node=2 index=16677 rows=2
+      key att=1 op=2972 form=any value=c2951:'\x01\x00\x00\x00\x00\x00\x00\x00\x86\x0b\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00?><;:09876543\xa21>\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11'
+    recheck (or(op2972(v1.1, c2950:#16), op2972(v1.1, c2950:#16)))
+    lanes Offset:byval2:w2:val
+  project ()
+  outs
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2803*())
+  outs 1=w8:val
+breaker slot=0 kind=PlainAgg budget=Fixed(64) spill=None producer=p0 layout=[]->[Count@0] 8B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[Count@0] 8B
+  agg aggno=0 fn=2803 reg=CountStar slot=0 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: BitmapIndexScan BitmapHeapScan Agg

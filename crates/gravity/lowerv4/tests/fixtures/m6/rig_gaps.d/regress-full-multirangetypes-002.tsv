@@ -1,0 +1,1 @@
+range_agg(booked_during) GROUP BY room_id: the crate rig's catalog has no row for the multirange result type (end/output.rs facts: "an output type the catalog does not know"); the server serves it (dev regress multirangetypes#15 served at W0 and W8 on the D1375 binary, 0 WRONG), so the server runner judges it

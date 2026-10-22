@@ -1,0 +1,43 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1v s1d s2d s1c s2c s3sel s3sum
+step s1v: UPDATE ak SET val = 1 WHERE id = 350;
+step s1d: DELETE FROM ak WHERE id = 399;
+step s2d: DELETE FROM ak t WHERE NOT EXISTS (SELECT 1 FROM asx s WHERE s.id = t.id); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, val FROM ak WHERE id IN (301, 334, 350, 399) ORDER BY id;
+id|val
+--+---
+(0 rows)
+
+step s3sum: SELECT count(*), count(*) FILTER (WHERE val < 0), sum(val) FROM ak;
+count|count|   sum
+-----+-----+------
+  300|    0|451500
+(1 row)
+
+
+starting permutation: s1v s1f s2u s1c s2c s3sel s3sum
+step s1v: UPDATE ak SET val = 1 WHERE id = 350;
+step s1f: UPDATE ak SET val = 3000 WHERE id = 334;
+step s2u: UPDATE ak t SET val = -t.val WHERE NOT EXISTS (SELECT 1 FROM asx s WHERE s.id = t.id) AND t.val % 3 <> 0; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, val FROM ak WHERE id IN (301, 334, 350, 399) ORDER BY id;
+ id|  val
+---+-----
+301|-3010
+334| 3000
+350|   -1
+399| 3990
+(4 rows)
+
+step s3sum: SELECT count(*), count(*) FILTER (WHERE val < 0), sum(val) FROM ak;
+count|count|   sum
+-----+-----+------
+  400|   66|342499
+(1 row)
+

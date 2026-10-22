@@ -1,0 +1,22 @@
+-- facts-035
+-- SELECT fs.a, fs.t, fs2.v FROM fs JOIN fs2 ON fs.a = fs2.a;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=3 serial site=0 reason=SortedSource end=breaker(slot=0 Materialize)
+  nodes n3@0 n2@1
+  source range rel=16466 rti=2 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(2):byval4:w4:val Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2)
+  spool
+  outs 1=w4:val 2=w4:val
+p1 node=1 serial site=0 reason=SortedSource end=sink
+  desc consumes=slot0@p0
+  nodes n1@0 n0@1
+  source range rel=16463 rti=1 am=pgrc
+    lanes Attr(1):byval4:w4:val Attr(3):codes4:code:part/dict Offset:byval2:w2:val
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  merge slot=0 inner=n2 JOIN_INNER clauses=(op96(outer.1, inner.1)) reversals=[false] nulls_first=[false]
+  project (1=outer.1, 2=outer.3, 3=inner.2)
+  outs 1=w4:val 2=w4:val 3=code:part/dict
+  outs 1=w4:val 2=code:part/dict 3=w4:val
+breaker slot=0 kind=Materialize budget=Share spill=Runs producer=p0 layout=[]->[Count@0] 8B order=1+
+mapped: SeqScan MergeJoin Material

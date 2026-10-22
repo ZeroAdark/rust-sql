@@ -1,0 +1,13 @@
+-- regress-full-fast_default-026
+-- SELECT * FROM t WHERE a IS NULL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n1@0 n0@0
+  source bitmap rel=47835 rti=1 am=heap
+    bitmap index node=1 index=47839 rows=13
+      key att=1 op=0 form=null value=isnull(index.1)
+    recheck (isnull(v1.1))
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v1.1)
+  outs 1=w8:val
+mapped: BitmapIndexScan BitmapHeapScan

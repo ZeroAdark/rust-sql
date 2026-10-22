@@ -1,7 +1,7 @@
 
 use super::consts::*;
 use super::context::PgpContext;
-use super::packet::read_fixed;
+use super::pull::{getbyte, read_fixed, Dcx, PRes, Pull, SliceReader};
 
 #[derive(Clone)]
 pub struct S2k {
@@ -45,10 +45,19 @@ impl S2k {
         Ok(s)
     }
 
+    /// pgp-s2k.c:253 pgp_s2k_read over a byte slice; also returns the
+    /// bytes consumed.
+    pub fn read(src: &[u8], ctx: &mut PgpContext) -> Result<(S2k, usize), String> {
+        let mut cx = Dcx::new(ctx);
+        let mut rdr = SliceReader::new(src);
+        let s = S2k::read_pull(&mut rdr, &mut cx)?;
+        Ok((s, rdr.pos()))
+    }
+
     /// pgp-s2k.c:253 pgp_s2k_read.
-    pub fn read(src: &[u8], ctx: &mut PgpContext) -> Result<(S2k, usize), &'static str> {
-        let mode = read_fixed(src, 0, 1, ctx)?[0] as i32;
-        let digest_algo = read_fixed(src, 1, 1, ctx)?[0] as i32;
+    pub fn read_pull(src: &mut dyn Pull, cx: &mut Dcx) -> PRes<S2k> {
+        let mode = getbyte(src, cx)? as i32;
+        let digest_algo = getbyte(src, cx)? as i32;
         let mut s = S2k {
             mode,
             digest_algo,
@@ -57,20 +66,16 @@ impl S2k {
             key: Vec::new(),
             key_len: 0,
         };
-        let consumed = match mode {
-            PGP_S2K_SIMPLE => 2,
-            PGP_S2K_SALTED => {
-                s.salt.copy_from_slice(read_fixed(src, 2, PGP_S2K_SALT, ctx)?);
-                10
-            }
+        match mode {
+            PGP_S2K_SIMPLE => {}
+            PGP_S2K_SALTED => s.salt.copy_from_slice(&read_fixed(src, cx, PGP_S2K_SALT)?),
             PGP_S2K_ISALTED => {
-                s.salt.copy_from_slice(read_fixed(src, 2, PGP_S2K_SALT, ctx)?);
-                s.iter = read_fixed(src, 10, 1, ctx)?[0];
-                11
+                s.salt.copy_from_slice(&read_fixed(src, cx, PGP_S2K_SALT)?);
+                s.iter = getbyte(src, cx)?;
             }
-            _ => return Err(BAD_S2K_MODE),
-        };
-        Ok((s, consumed))
+            _ => return Err(BAD_S2K_MODE.to_string()),
+        }
+        Ok(s)
     }
 
     pub fn process(&mut self, cipher: i32, key: &[u8]) -> Result<(), &'static str> {

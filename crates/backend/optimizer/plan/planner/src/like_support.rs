@@ -206,7 +206,7 @@ pub(crate) fn patternsel_common<'mcx>(
                 selec = heursel;
             } else {
                 let hist_weight = hist_size as f64 / 100.0;
-                selec = selec * hist_weight + heursel * (1.0 - hist_weight);
+                selec = crate::fma_sites::hist_blend(selec, hist_weight, heursel);
             }
         }
 
@@ -216,8 +216,7 @@ pub(crate) fn patternsel_common<'mcx>(
             run, &vardata, &mut opproc, collation, constval, true,
         )?;
 
-        selec *= 1.0 - nullfrac - sumcommon;
-        selec += mcv_selec;
+        selec = crate::fma_sites::mcv_merge(selec, nullfrac, sumcommon, mcv_selec);
         result = selec;
     }
 
@@ -832,7 +831,7 @@ mod tests {
 
     #[test]
     fn like_ic_bytea_is_0a000() {
-        let cx = mcx::MemoryContext::new_bump("yaqs-bytea-ic");
+        let cx = mcx::MemoryContext::new_bump("d434-bytea-ic");
         let d = text_const(cx.mcx(), b"a", BYTEAOID).unwrap().value;
         let e = like_fixed_prefix(cx.mcx(), d, BYTEAOID, true, 0).unwrap_err();
         assert_eq!(e.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);
@@ -841,7 +840,7 @@ mod tests {
 
     #[test]
     fn like_ic_indeterminate_collation_is_42p22() {
-        let cx = mcx::MemoryContext::new_bump("yaqs-ilike-coll");
+        let cx = mcx::MemoryContext::new_bump("d434-ilike-coll");
         let d = text_const(cx.mcx(), b"a", TEXTOID).unwrap().value;
         let e = like_fixed_prefix(cx.mcx(), d, TEXTOID, true, 0).unwrap_err();
         assert_eq!(e.sqlstate(), ERRCODE_INDETERMINATE_COLLATION);
@@ -854,7 +853,7 @@ mod tests {
 
     #[test]
     fn regex_bytea_is_0a000() {
-        let cx = mcx::MemoryContext::new_bump("yaqs-bytea-re");
+        let cx = mcx::MemoryContext::new_bump("d434-bytea-re");
         let d = text_const(cx.mcx(), b"a", BYTEAOID).unwrap().value;
         let e = regex_fixed_prefix(cx.mcx(), d, BYTEAOID, false, 0, true).unwrap_err();
         assert_eq!(e.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);

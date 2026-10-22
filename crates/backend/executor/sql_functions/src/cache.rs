@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use types_core::catalog::VOIDOID;
 use types_core::Oid;
 use elog::ereport;
-use types_error::{PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERROR};
+use types_error::{PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERROR};
 use types_nodes::nodes_enums::CmdType;
 use types_nodes::parsenodes::Query;
 use types_nodes::{Node, NodeTag};
@@ -134,6 +134,16 @@ bind!(pub(crate) SqlFnEntryTy => SqlFnEntryState<'mcx>);
 pub(crate) struct SqlFnEntry {
     pub owned: McxOwned<SqlFnEntryTy>,
     stamp: (u32, (u32, u16)),
+    // Still in SQL_FN_CACHE (the proc-exit drain has no counterpart in C, whose hash dies with the process).
+    live: Cell<bool>,
+}
+
+impl SqlFnEntry {
+    // cached_function_compile with the FmgrInfo's own entry (funccache.c:523-540): no hash key is computed, the entry
+    // is valid while its pg_proc row's xmin and tid are the ones it was compiled from.
+    pub(crate) fn unchanged(&self, fn_oid: Oid) -> PgResult<bool> {
+        Ok(self.live.get() && self.stamp == proc_row_stamp(fn_oid)?)
+    }
 }
 
 impl Drop for SqlFnEntry {
@@ -176,7 +186,8 @@ impl RowTypeKey {
             .map(|i| {
                 let a = d.attr(i);
                 RowTypeAtt {
-                    attname: a.attname.name_str().to_vec(),
+                    attname: ::mcx::std_vec_from_slice("sql_functions", a.attname.name_str())
+                        .unwrap_or_default(),
                     atttypid: a.atttypid,
                     atttypmod: a.atttypmod,
                     attcollation: a.attcollation,
@@ -240,6 +251,7 @@ fn release_sql_fn_cache_at_exit(_code: i32, _arg: usize) {
         st.exit_release_registered = false;
         st.map.drain().map(|(_, e)| e).collect()
     });
+    entries.iter().for_each(|e| e.live.set(false));
     drop(entries);
 }
 
@@ -344,7 +356,13 @@ fn read_proc_row<'mcx>(mcx: Mcx<'mcx>, fn_oid: Oid) -> PgResult<ProcRow<'mcx>> {
         return Err(lookup_failed(fn_oid));
     };
     let (prolang, _) = SysCacheGetAttr(PROCOID, &tup, crate::ANUM_PG_PROC_PROLANG)?;
-    assert_eq!(prolang.as_oid(), fmgr_core::SQL_LANGUAGE_ID, "fmgr_sql: not a SQL function");
+    // The handler was bound by prolang (fmgr_info) and the row changed under that binding: an ERROR, never a
+    // panic — the caller may be an `extern "C"` frame (gravity_expr::emit::host::fmgr) that cannot unwind.
+    if prolang.as_oid() != fmgr_core::SQL_LANGUAGE_ID {
+        let lang = prolang.as_oid();
+        ReleaseSysCache(tup);
+        return Err(Box::new(PgError::error(format!("fmgr_sql: function {fn_oid} is not a SQL-language function (prolang {lang})"))));
+    }
     let (proname_d, _) = SysCacheGetAttr(PROCOID, &tup, ANUM_PG_PROC_PRONAME)?;
     let proname = name_str(mcx, proname_d)?;
     let (provolatile, _) = SysCacheGetAttr(PROCOID, &tup, ANUM_PG_PROC_PROVOLATILE)?;
@@ -481,6 +499,7 @@ pub(crate) fn cached_sql_function(
         if hit.stamp == stamp {
             return Ok(hit);
         }
+        hit.live.set(false);
         SQL_FN_CACHE.with(|c| {
             c.borrow_mut().map.remove(&key);
         });
@@ -580,7 +599,7 @@ fn compile_entry(
     // functions.c:1094 MemoryContextSetIdentifier(fcontext, func->fname).
     let fname = owned.with(|s| s.fname.as_str().to_string());
     owned.context().set_ident(Some(&fname));
-    Ok(SqlFnEntry { owned, stamp })
+    Ok(SqlFnEntry { owned, stamp, live: Cell::new(true) })
 }
 
 // check_sql_fn_statement (functions.c:2051): CALL runs through the generic
@@ -699,25 +718,29 @@ fn build_query_plansource(
                 // scanner warnings C doesn't.
                 let raw2 = plancache::CachedPlanRawParseTreeCopy(qmcx, psrc)?
                     .expect("created with a raw tree");
-                let mut name_refs: PgVec<'_, &str> = PgVec::new_in(qmcx);
-                name_refs
-                    .try_reserve_exact(s.argnames.len())
-                    .map_err(|_| qmcx.oom(s.argnames.len()))?;
-                for n in s.argnames.iter() {
-                    name_refs.push(n.as_str());
-                }
-                usage_reset();
-                let query = analyze_seams::parse_analyze_sql_fn::call(
-                    qmcx,
-                    raw2,
-                    src,
-                    s.fname.as_str(),
-                    &s.argtypes,
-                    &name_refs,
-                    s.input_collation,
-                    QueryEnvHandle::NULL,
-                    true,
-                )?;
+                // SaveCachedPlan may reclaim qmcx (arena compaction), so no
+                // qmcx allocation with drop glue may outlive this block.
+                let query = {
+                    let mut name_refs: PgVec<'_, &str> = PgVec::new_in(qmcx);
+                    name_refs
+                        .try_reserve_exact(s.argnames.len())
+                        .map_err(|_| qmcx.oom(s.argnames.len()))?;
+                    for n in s.argnames.iter() {
+                        name_refs.push(n.as_str());
+                    }
+                    usage_reset();
+                    analyze_seams::parse_analyze_sql_fn::call(
+                        qmcx,
+                        raw2,
+                        src,
+                        s.fname.as_str(),
+                        &s.argtypes,
+                        &name_refs,
+                        s.input_collation,
+                        QueryEnvHandle::NULL,
+                        true,
+                    )?
+                };
                 usage_show("PARSE ANALYSIS STATISTICS")?;
                 let mut query_list: PgVec<'static, Query<'static>> =
                     pg_rewrite_query(qmcx, query)?;
@@ -756,11 +779,8 @@ fn build_query_plansource(
     }
 }
 
-// C prepare_next_query's hook installation (functions.c:981-1000): the
-// parserSetup/parserSetupArg pair CompleteCachedPlan takes, then
-// SetPostRewriteHook. Both are what let plancache rebuild the source itself
-// when an invalidation lands, instead of the owner having to notice.
-//
+// C prepare_next_query's hook installation (functions.c:981-1000), which
+// lets plancache rebuild the source itself when an invalidation lands.
 // `raw_source` distinguishes C's two source shapes. C passes
 // sql_fn_parser_setup to CompleteCachedPlan for both, but only the raw-tree
 // arm of RevalidateCachedQuery ever consults it — the analyzed-tree

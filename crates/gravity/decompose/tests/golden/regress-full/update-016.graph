@@ -1,0 +1,21 @@
+-- regress-full-update-016
+-- WITH aaa AS (SELECT 1 AS ctea, ' Foo' AS cteb) INSERT INTO upsert_test VALUES (1, 'Bar'), (2, 'Baz') ON CONFLICT(a) DO UPDATE SET (b, a) = (SELECT upsert_test.b||cteb, upsert_test.a FROM aaa) RETURNING *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source values rti=2 rows=2
+    row (c23:1, c25:'Bar')
+    row (c23:2, c25:'Baz')
+  project (1=v2.1, 2=v2.2)
+  subplan 1 nested MultiExpr params=($exec0=v1.2, $exec1=v1.1) sets=($exec2,$exec3) raise-free
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  project (1=op654($exec0, c25:' Foo'), 2=$exec1)
+  write INSERT rel=26430 rti=1 natts=2 indexes=() on_conflict=update arbiter=(26434) excl_rti=3 cols=(1,2) set=(1=$exec3, 2=$exec2, 3j=subplan1(v1.2, v1.1)) returning epq=$exec4 route=rti1:26430 natts=2
+  project (1=v1.1, 2=v1.2)
+  outs 1=w4:val 2=vl:row
+  outs 1=w4:val 2=vl:row
+param $exec0 owner=subplan1 type=25@100 rep=vl:row
+param $exec1 owner=subplan1 type=23 rep=w4:val
+mapped: Result ModifyTable ValuesScan SubPlan

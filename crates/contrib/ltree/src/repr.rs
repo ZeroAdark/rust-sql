@@ -190,13 +190,13 @@ impl<'a> Iterator for LevelIter<'a> {
     }
 }
 
-pub fn build_ltree(levels: &[&[u8]]) -> Vec<u8> {
+pub fn build_ltree(levels: &[&[u8]]) -> ::types_error::PgResult<Vec<u8>> {
     let mut totallen = 0usize;
     for l in levels {
         totallen += maxalign(l.len() + LEVEL_HDRSIZE);
     }
     let total = LTREE_HDRSIZE + totallen;
-    let mut buf = vec![0u8; total];
+    let mut buf = ::mcx::std_vec_from_elem("ltree", 0u8, total)?;
     set_varsize(&mut buf, total);
     write_u16(&mut buf, 4, levels.len() as u16);
     let mut off = LTREE_HDRSIZE;
@@ -205,7 +205,7 @@ pub fn build_ltree(levels: &[&[u8]]) -> Vec<u8> {
         buf[off + LEVEL_HDRSIZE..off + LEVEL_HDRSIZE + l.len()].copy_from_slice(l);
         off += maxalign(l.len() + LEVEL_HDRSIZE);
     }
-    buf
+    Ok(buf)
 }
 
 

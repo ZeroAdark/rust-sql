@@ -1,0 +1,10 @@
+-- regress-full-plpgsql-080
+-- select consumes_rw_array(a), a from returns_rw_array(1) a;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  srf from rti=1 [1:Scalar fn39898 fn39898(c23:1)]
+  project (1=fn39899(v1.1), 2=v1.1)
+  outs 1=w4:val 2=vl:row
+mapped: FunctionScan

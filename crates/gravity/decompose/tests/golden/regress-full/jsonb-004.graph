@@ -1,0 +1,9 @@
+-- regress-full-jsonb-004
+-- SELECT jsonb_populate_record(null::jb_ordered_pair, '{"x": 0, "y": 1}');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3209(T_CoerceToDomain, c3802:'\x02\x00\x00 \x01\x00\x00\x80\x01\x00\x00\x00\x08\x00\x00\x10\x0a\x00\x00\x10xy\x00\x00\x18\x00\x00\x00\x00\x80\x00\x00 \x00\x00\x00\x00\x80\x01\x00'))
+  outs 1=?
+mapped: Result

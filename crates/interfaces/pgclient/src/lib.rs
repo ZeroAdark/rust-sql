@@ -21,6 +21,8 @@ pub use conninfo::{lookup_option, opt, parse_conninfo, resolve_conninfo, ConnOpt
 mod auth;
 #[cfg(test)]
 mod conninfo_uri_tests;
+#[cfg(not(target_family = "wasm"))]
+mod secure;
 
 pub const PG_PROTOCOL_3_0: u32 = 3 << 16;
 const PG_PROTOCOL_3_2: u32 = (3 << 16) | 2;
@@ -65,6 +67,10 @@ impl Drop for PgConn {
         if self.conn_ok && !self.terminate_sent {
             let _ = self.send_all(&msg(b'X', &[]));
         }
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(t) = self.tls.as_mut() {
+            t.shutdown();
+        }
         if self.external_fd {
             file_seams::release_external_fd::call();
         }
@@ -89,6 +95,10 @@ fn reserve_external_fd() -> PgResult<bool> {
 }
 
 pub struct PgConn {
+    // The TLS layer over `fd`; declared first so it is torn down before the
+    // socket it rides.
+    #[cfg(not(target_family = "wasm"))]
+    tls: Option<secure::ClientTls>,
     _stream: Stream,
     fd: RawFd,
     external_fd: bool,
@@ -154,6 +164,11 @@ pub struct ErrorFields {
     pub position: String,
     pub internal_position: String,
     pub internal_query: String,
+    // PQresultErrorField(res, PG_DIAG_MESSAGE_DETAIL/HINT/CONTEXT) != NULL:
+    // the field was sent, possibly empty.
+    pub has_detail: bool,
+    pub has_hint: bool,
+    pub has_context: bool,
 }
 
 pub struct QueryResult {
@@ -255,9 +270,18 @@ pub(crate) fn parse_diag(body: &[u8]) -> ErrorFields {
             b'S' => f.severity = val,
             b'C' => f.sqlstate = val,
             b'M' => f.primary = val,
-            b'D' => f.detail = val,
-            b'H' => f.hint = val,
-            b'W' => f.context = val,
+            b'D' => {
+                f.detail = val;
+                f.has_detail = true;
+            }
+            b'H' => {
+                f.hint = val;
+                f.has_hint = true;
+            }
+            b'W' => {
+                f.context = val;
+                f.has_context = true;
+            }
             b'P' => f.position = val,
             b'p' => f.internal_position = val,
             b'q' => f.internal_query = val,
@@ -501,10 +525,73 @@ fn host_addr_text(addr: &ip::SockAddr) -> String {
         libc::AF_INET6 => {
             // SAFETY: as above, for sockaddr_in6.
             let sin6: libc::sockaddr_in6 = unsafe { std::ptr::read_unaligned(addr.addr.as_ptr().cast()) };
-            std::net::Ipv6Addr::from(sin6.sin6_addr.s6_addr).to_string()
+            pg_inet6_ntop(&sin6.sin6_addr.s6_addr)
         }
         _ => String::new(),
     }
+}
+
+/// pg_inet_net_ntop(AF_INET6, src, 128) (inet_net_ntop.c inet_net_ntop_ipv6):
+/// libpq's IPv6 text. Unlike std's Display it prints IPv4-compatible
+/// addresses (::a.b.c.d) in dotted form.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(crate) fn pg_inet6_ntop(src: &[u8; 16]) -> String {
+    use std::fmt::Write;
+    let mut words = [0u32; 8];
+    for (i, &b) in src.iter().enumerate() {
+        words[i / 2] |= (b as u32) << ((1 - (i % 2)) << 3);
+    }
+    let (mut best_base, mut best_len) = (-1i32, 0i32);
+    let (mut cur_base, mut cur_len) = (-1i32, 0i32);
+    for (i, &w) in words.iter().enumerate() {
+        if w == 0 {
+            if cur_base == -1 {
+                cur_base = i as i32;
+                cur_len = 1;
+            } else {
+                cur_len += 1;
+            }
+        } else if cur_base != -1 {
+            if best_base == -1 || cur_len > best_len {
+                best_base = cur_base;
+                best_len = cur_len;
+            }
+            cur_base = -1;
+        }
+    }
+    if cur_base != -1 && (best_base == -1 || cur_len > best_len) {
+        best_base = cur_base;
+        best_len = cur_len;
+    }
+    if best_base != -1 && best_len < 2 {
+        best_base = -1;
+    }
+    let mut out = String::new();
+    for i in 0..8i32 {
+        if best_base != -1 && i >= best_base && i < best_base + best_len {
+            if i == best_base {
+                out.push(':');
+            }
+            continue;
+        }
+        if i != 0 {
+            out.push(':');
+        }
+        if i == 6
+            && best_base == 0
+            && (best_len == 6
+                || (best_len == 7 && words[7] != 0x0001)
+                || (best_len == 5 && words[5] == 0xffff))
+        {
+            let _ = write!(out, "{}.{}.{}.{}", src[12], src[13], src[14], src[15]);
+            break;
+        }
+        let _ = write!(out, "{:x}", words[i as usize]);
+    }
+    if best_base != -1 && best_base + best_len == 8 {
+        out.push(':');
+    }
+    out
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -1022,52 +1109,76 @@ fn tcp_connect_addrs_deadline(
 // full parameter list for the startup packet (caller decides user/database/
 // replication/...). Ok(Err(msg)) is libpq's CONNECTION_BAD-with-errorMessage
 // shape; the caller wraps it into its own ereport.
-// Enforce libpq's sslmode contract for a client with no TLS support. Mirrors
-// fe-connect.c connectOptions2's #ifndef USE_SSL arm: an unknown sslmode is an
-// "invalid sslmode value" error, and require/verify-ca/verify-full are rejected
-// with "sslmode value \"...\" invalid when SSL support is not compiled in".
-// disable/allow/prefer are accepted and proceed without encryption. An absent
-// sslmode is treated as the compiled default ("prefer"), which does not require
-// encryption. Refusing here is what prevents a silent cleartext downgrade of a
-// caller that asked for a TLS-required connection.
+// connectOptions2 (fe-connect.c:1766): the six sslmode values. The wasm
+// arm carries no TLS and keeps the no-USE_SSL refusal of the encrypting
+// modes (a silent cleartext downgrade is what libpq exists to prevent).
 fn check_sslmode(opts: &[(String, String)]) -> Result<(), String> {
     match opt(opts, "sslmode") {
         None | Some("disable") | Some("allow") | Some("prefer") => Ok(()),
-        Some(m @ ("require" | "verify-ca" | "verify-full")) => Err(format!(
-            "sslmode value \"{m}\" invalid when SSL support is not compiled in"
-        )),
+        Some(m @ ("require" | "verify-ca" | "verify-full")) => {
+            if cfg!(target_family = "wasm") {
+                Err(format!("sslmode value \"{m}\" invalid when SSL support is not compiled in"))
+            } else {
+                Ok(())
+            }
+        }
         Some(other) => Err(format!("invalid sslmode value: \"{other}\"")),
     }
 }
 
-// fe-connect.c connectOptions2 "validate channel_binding option": returns
-// whether channel binding is required. Enforcement happens in the auth
-// handshake, where libpq refuses every non-channel-bound exchange.
-fn check_channel_binding(opts: &[(String, String)]) -> Result<bool, String> {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ChannelBinding {
+    Disable,
+    Prefer,
+    Require,
+}
+
+// fe-connect.c connectOptions2 "validate channel_binding option".
+// Enforcement happens in the auth handshake.
+fn check_channel_binding(opts: &[(String, String)]) -> Result<ChannelBinding, String> {
     match opt(opts, "channel_binding") {
-        None | Some("disable") | Some("prefer") => Ok(false),
-        Some("require") => Ok(true),
+        None | Some("prefer") => Ok(ChannelBinding::Prefer),
+        Some("disable") => Ok(ChannelBinding::Disable),
+        Some("require") => Ok(ChannelBinding::Require),
         Some(other) => Err(format!("invalid channel_binding value: \"{other}\"")),
     }
 }
 
-// The #ifndef USE_SSL arms of connectOptions2 that precede sslmode:
-// sslrootcert=system changes the default sslmode, so it is refused first.
+// fe-connect.c:1866: sslrootcert=system demands verify-full (an absent
+// sslmode already defaulted to it in conninfo_add_defaults).
 fn check_sslrootcert(opts: &[(String, String)]) -> Result<(), String> {
-    match opt(opts, "sslrootcert") {
-        Some("system") => {
-            Err("sslrootcert value \"system\" invalid when SSL support is not compiled in".into())
-        }
-        _ => Ok(()),
+    if opt(opts, "sslrootcert") != Some("system") {
+        return Ok(());
+    }
+    if cfg!(target_family = "wasm") {
+        return Err("sslrootcert value \"system\" invalid when SSL support is not compiled in".into());
+    }
+    match opt(opts, "sslmode") {
+        None | Some("verify-full") => Ok(()),
+        Some(m) => Err(format!(
+            "weak sslmode \"{m}\" may not be used with sslrootcert=system (use \"verify-full\")"
+        )),
     }
 }
 
 fn check_sslnegotiation(opts: &[(String, String)]) -> Result<(), String> {
     match opt(opts, "sslnegotiation") {
         None | Some("postgres") => Ok(()),
-        Some("direct") => Err(
-            "sslnegotiation value \"direct\" invalid when SSL support is not compiled in".into(),
-        ),
+        Some("direct") => {
+            if cfg!(target_family = "wasm") {
+                return Err(
+                    "sslnegotiation value \"direct\" invalid when SSL support is not compiled in".into(),
+                );
+            }
+            let m = opt(opts, "sslmode").unwrap_or("prefer");
+            if m.starts_with('r') || m.starts_with('v') {
+                Ok(())
+            } else {
+                Err(format!(
+                    "weak sslmode \"{m}\" may not be used with sslnegotiation=direct (use \"require\", \"verify-ca\", or \"verify-full\")"
+                ))
+            }
+        }
         Some(other) => Err(format!("invalid sslnegotiation value: \"{other}\"")),
     }
 }
@@ -1106,13 +1217,17 @@ fn check_sslcertmode(opts: &[(String, String)]) -> Result<(), String> {
     match opt(opts, "sslcertmode") {
         None | Some("disable") | Some("allow") => Ok(()),
         Some("require") => {
-            Err("sslcertmode value \"require\" invalid when SSL support is not compiled in".into())
+            if cfg!(target_family = "wasm") {
+                Err("sslcertmode value \"require\" invalid when SSL support is not compiled in".into())
+            } else {
+                Ok(())
+            }
         }
         Some(other) => Err(format!("invalid sslcertmode value: \"{other}\"")),
     }
 }
 
-// The #ifndef ENABLE_GSS arm: this client has no GSSAPI transport either.
+// The #ifndef ENABLE_GSS arm: this client has no GSSAPI transport.
 fn check_gssencmode(opts: &[(String, String)]) -> Result<(), String> {
     match opt(opts, "gssencmode") {
         None | Some("disable") | Some("prefer") => Ok(()),
@@ -1124,19 +1239,67 @@ fn check_gssencmode(opts: &[(String, String)]) -> Result<(), String> {
 }
 
 // connectOptions2's transport-security validation in libpq's order
-// (channel_binding, sslrootcert, sslmode, sslnegotiation, sslcertmode,
-// gssencmode). Every option this client cannot honour is a hard error before
-// any socket is opened; silently proceeding in cleartext is the downgrade
-// libpq exists to prevent.
-fn check_transport_options(opts: &[(String, String)]) -> Result<bool, String> {
-    let channel_binding_require = check_channel_binding(opts)?;
-    check_sslrootcert(opts)?;
+// (channel_binding, sslmode, sslnegotiation, sslrootcert=system, protocol
+// versions, sslcertmode, gssencmode), all before any socket is opened.
+fn check_transport_options(opts: &[(String, String)]) -> Result<ChannelBinding, String> {
+    let channel_binding = check_channel_binding(opts)?;
     check_sslmode(opts)?;
     check_sslnegotiation(opts)?;
+    check_sslrootcert(opts)?;
     check_ssl_protocol_versions(opts)?;
     check_sslcertmode(opts)?;
     check_gssencmode(opts)?;
-    Ok(channel_binding_require)
+    Ok(channel_binding)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Enc {
+    Plain,
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    Ssl,
+}
+
+#[cfg(not(target_family = "wasm"))]
+enum SslNegotiation {
+    Ok,
+    // The server answered 'N': the connection stays usable in plaintext.
+    ServerRefused,
+    // pqsecure_open_client failed: CONNECTION_FAILED, retry the next method.
+    Failed(String),
+    // error_return: the whole connection attempt ends.
+    Fatal(String),
+}
+
+// init_allowed_encryption_methods + select_next_encryption_method
+// (fe-connect.c:4706): SSL and plaintext in sslmode's order; a Unix socket
+// is never encrypted; GSSAPI is not compiled in.
+fn encryption_methods(opts: &[(String, String)], unix: bool) -> Vec<Enc> {
+    if unix {
+        return vec![Enc::Plain];
+    }
+    let sslmode = opt(opts, "sslmode").unwrap_or("prefer");
+    let ssl = cfg!(not(target_family = "wasm")) && sslmode != "disable";
+    let plain = matches!(sslmode, "disable" | "allow" | "prefer");
+    let mut methods = Vec::with_capacity(2);
+    if sslmode == "allow" && plain {
+        methods.push(Enc::Plain);
+    }
+    if ssl {
+        methods.push(Enc::Ssl);
+    }
+    if sslmode != "allow" && plain {
+        methods.push(Enc::Plain);
+    }
+    methods
+}
+
+fn dial_is_unix(ch: &ConnHost) -> bool {
+    let host = if ch.host.is_empty() && ch.hostaddr.is_empty() {
+        conninfo::DEFAULT_PGSOCKET_DIR
+    } else {
+        ch.host.as_str()
+    };
+    ch.hostaddr.is_empty() && is_unixsock_path(host)
 }
 
 // pqConnectOptions2 (fe-connect.c:2065): load_balance_hosts is validated and,
@@ -1213,7 +1376,9 @@ fn connect_unreserved(
         Err(e) => return Ok(Err(e)),
     };
     let policy = match check_transport_options(&opts) {
-        Ok(cb) => policy.with_channel_binding_required(cb),
+        Ok(cb) => policy
+            .with_channel_binding(cb)
+            .with_sslcertmode_require(opt(&opts, "sslcertmode") == Some("require")),
         Err(e) => return Ok(Err(e)),
     };
     let mut server_type = match TargetServerType::parse(opt(&opts, "target_session_attrs")) {
@@ -1259,10 +1424,10 @@ fn connect_unreserved(
         .map(|(_, v)| v.to_string())
         .or_else(|| opt(&opts, "dbname").filter(|s| !s.is_empty()).map(|s| s.to_string()))
         .unwrap_or_else(|| user.clone());
-    // pqConnectOptions2 (fe-connect.c:1429): the password file path is
-    // always resolved into the options (PQconninfo shows it).
+    // pqConnectOptions2 (fe-connect.c:1429): without a password the password
+    // file path is resolved into the options (PQconninfo shows it).
     let mut opts = opts;
-    if opt(&opts, "passfile").is_none_or(str::is_empty) {
+    if explicit_password.is_none() && opt(&opts, "passfile").is_none_or(str::is_empty) {
         if let Some(f) = conninfo::passfile_path(&opts) {
             opts.retain(|(k, _)| k != "passfile");
             opts.push(("passfile".to_string(), f));
@@ -1275,7 +1440,7 @@ fn connect_unreserved(
     // now" ends the walk.
     let mut errs = String::new();
     loop {
-        for ch in &hosts {
+        'hosts: for ch in &hosts {
             let port = match parse_port(&ch.port) {
                 Ok(p) => p,
                 Err(e) => {
@@ -1294,132 +1459,186 @@ fn connect_unreserved(
                 }),
             };
             let display_host = pq_host(ch);
-            let (stream, fd, target) = match dial(ch, port, &opts, prng.as_mut(), we.connect)? {
-                Ok(d) => d,
-                Err((e, terminal)) => {
-                    append_conn_error(&mut errs, &e);
-                    if terminal {
-                        return Ok(Err(errs));
-                    }
-                    continue;
-                }
-            };
-
-            match &stream {
-                Stream::Tcp(s) => s.set_nonblocking(true).expect("set_nonblocking"),
-                #[cfg(not(target_family = "wasm"))]
-                Stream::Unix(s) => s.set_nonblocking(true).expect("set_nonblocking"),
-            }
-
-            // libpq's emitHostIdentityInfo (fe-connect.c), emitted SPECULATIVELY
-            // into conn->errorMessage the moment the target address is
-            // identified: every later failure of this attempt — the
-            // startup-packet send, a server-sent FATAL during auth, fe_sendauth,
-            // a SCRAM failure — carries the prefix. Dial failures above already
-            // build it inline.
-            let host_identity = match &target {
-                DialTarget::Unix(path) => {
-                    format!("connection to server on socket \"{path}\" failed: ")
-                }
-                DialTarget::Tcp(disp_host, disp_port) => {
-                    // C: a CHT_HOST_ADDRESS target (hostaddr=) displays bare; a
-                    // host NAME whose looked-up address differs textually
-                    // displays "name" (addr) (emitHostIdentityInfo's strcmp arm).
-                    let peer_ip = match &stream {
-                        Stream::Tcp(s) => {
-                            s.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default()
-                        }
-                        #[cfg(not(target_family = "wasm"))]
-                        Stream::Unix(_) => String::new(),
-                    };
-                    if !ch.hostaddr.is_empty() || peer_ip.is_empty() || peer_ip == *disp_host {
-                        format!("connection to server at \"{disp_host}\", port {disp_port} failed: ")
-                    } else {
-                        format!(
-                            "connection to server at \"{disp_host}\" ({peer_ip}), port {disp_port} failed: "
-                        )
-                    }
-                }
-            };
-
-            if let Stream::Tcp(_) = &stream {
-                if let Err(e) = setup_tcp_socket(fd, &opts) {
-                    append_conn_error(&mut errs, &format!("{host_identity}{e}"));
-                    continue;
-                }
-            }
-
-            let peer = match &stream {
-                Stream::Tcp(s) => s.peer_addr().ok(),
-                #[cfg(not(target_family = "wasm"))]
-                Stream::Unix(_) => None,
-            };
-            let mut conn = PgConn {
-                _stream: stream,
-                fd,
-                external_fd: false,
-                target,
-                inbuf: Vec::new(),
-                inpos: 0,
-                conn_ok: true,
-                terminate_sent: false,
-                in_copy: false,
-                copy_server_done: false,
-                copy_client_done: false,
-                peer,
-                err_prescanned: false,
-                pending_results: false,
-                txn_status: b'I',
-                err: String::new(),
-                opts: opts.clone(),
-                display_host,
-                display_port: port as i32,
-                be_pid: 0,
-                be_key: Vec::new(),
-                server_version: 0,
-                used_password: false,
-                last_sqlstate: String::new(),
-                params: Vec::new(),
-                notifies: std::collections::VecDeque::new(),
-                last_query: None,
-                we,
-            };
-
-            let mut body = Vec::new();
-            body.extend_from_slice(&PG_PROTOCOL_3_0.to_be_bytes());
-            for (k, v) in startup_params {
-                body.extend_from_slice(k.as_bytes());
-                body.push(0);
-                body.extend_from_slice(v.as_bytes());
-                body.push(0);
-            }
-            body.push(0);
-            let mut pkt = Vec::with_capacity(4 + body.len());
-            pkt.extend_from_slice(&((body.len() as u32 + 4).to_be_bytes()));
-            pkt.extend_from_slice(&body);
-            if let Err(e) = conn.send_all(&pkt) {
-                append_conn_error(&mut errs, &format!("{host_identity}{e}"));
-                continue;
-            }
-
-            let auth_opts = auth::AuthOptions {
-                password: password.as_deref(),
-                keys: keys.clone(),
-                policy: policy.clone(),
-                passfile: from_file,
-            };
-            match auth::handshake(&mut conn, &user, &auth_opts)? {
-                Ok(()) => match conn.check_target(server_type, &host_identity)? {
-                    TargetCheck::Ok => return Ok(Ok(conn)),
-                    TargetCheck::NextHost(e) => append_conn_error(&mut errs, &e),
-                    TargetCheck::Fail(e) => {
+            let methods = encryption_methods(&opts, dial_is_unix(ch));
+            let mut mi = 0;
+            while mi < methods.len() {
+                let method = methods[mi];
+                mi += 1;
+                let (stream, fd, target) = match dial(ch, port, &opts, prng.as_mut(), we.connect)? {
+                    Ok(d) => d,
+                    Err((e, terminal)) => {
                         append_conn_error(&mut errs, &e);
-                        return Ok(Err(errs));
+                        if terminal {
+                            return Ok(Err(errs));
+                        }
+                        continue 'hosts;
                     }
-                },
-                Err(e) => {
+                };
+
+                match &stream {
+                    Stream::Tcp(s) => s.set_nonblocking(true).expect("set_nonblocking"),
+                    #[cfg(not(target_family = "wasm"))]
+                    Stream::Unix(s) => s.set_nonblocking(true).expect("set_nonblocking"),
+                }
+
+                // libpq's emitHostIdentityInfo (fe-connect.c), emitted SPECULATIVELY
+                // into conn->errorMessage the moment the target address is
+                // identified: every later failure of this attempt — the
+                // startup-packet send, a server-sent FATAL during auth, fe_sendauth,
+                // a SCRAM failure — carries the prefix. Dial failures above already
+                // build it inline.
+                let host_identity = match &target {
+                    DialTarget::Unix(path) => {
+                        format!("connection to server on socket \"{path}\" failed: ")
+                    }
+                    DialTarget::Tcp(disp_host, disp_port) => {
+                        // C: a CHT_HOST_ADDRESS target (hostaddr=) displays bare; a
+                        // host NAME whose looked-up address differs textually
+                        // displays "name" (addr) (emitHostIdentityInfo's strcmp arm).
+                        let peer_ip = match &stream {
+                            Stream::Tcp(s) => {
+                                s.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default()
+                            }
+                            #[cfg(not(target_family = "wasm"))]
+                            Stream::Unix(_) => String::new(),
+                        };
+                        if !ch.hostaddr.is_empty() || peer_ip.is_empty() || peer_ip == *disp_host {
+                            format!("connection to server at \"{disp_host}\", port {disp_port} failed: ")
+                        } else {
+                            format!(
+                                "connection to server at \"{disp_host}\" ({peer_ip}), port {disp_port} failed: "
+                            )
+                        }
+                    }
+                };
+
+                if let Stream::Tcp(_) = &stream {
+                    if let Err(e) = setup_tcp_socket(fd, &opts) {
+                        append_conn_error(&mut errs, &format!("{host_identity}{e}"));
+                        continue 'hosts;
+                    }
+                }
+
+                let peer = match &stream {
+                    Stream::Tcp(s) => s.peer_addr().ok(),
+                    #[cfg(not(target_family = "wasm"))]
+                    Stream::Unix(_) => None,
+                };
+                let mut conn = PgConn {
+                    #[cfg(not(target_family = "wasm"))]
+                    tls: None,
+                    _stream: stream,
+                    fd,
+                    external_fd: false,
+                    target,
+                    inbuf: Vec::new(),
+                    inpos: 0,
+                    conn_ok: true,
+                    terminate_sent: false,
+                    in_copy: false,
+                    copy_server_done: false,
+                    copy_client_done: false,
+                    peer,
+                    err_prescanned: false,
+                    pending_results: false,
+                    txn_status: b'I',
+                    err: String::new(),
+                    opts: opts.clone(),
+                    display_host: display_host.clone(),
+                    display_port: port as i32,
+                    be_pid: 0,
+                    be_key: Vec::new(),
+                    server_version: 0,
+                    used_password: false,
+                    last_sqlstate: String::new(),
+                    params: Vec::new(),
+                    notifies: std::collections::VecDeque::new(),
+                    last_query: None,
+                    we,
+                };
+
+                #[cfg(not(target_family = "wasm"))]
+                if method == Enc::Ssl {
+                    let direct = opt(&opts, "sslnegotiation") == Some("direct");
+                    match conn.negotiate_ssl(&ch.host, &opts, direct)? {
+                        SslNegotiation::Ok => {}
+                        SslNegotiation::ServerRefused => {
+                            // ENCRYPTION_NEGOTIATION_FAILED: the connection is
+                            // still valid, so plaintext (when allowed next)
+                            // continues on it.
+                            if methods.get(mi) == Some(&Enc::Plain) {
+                                mi += 1;
+                            } else {
+                                append_conn_error(
+                                    &mut errs,
+                                    &format!("{host_identity}server does not support SSL, but SSL was required"),
+                                );
+                                return Ok(Err(errs));
+                            }
+                        }
+                        SslNegotiation::Failed(e) => {
+                            // CONNECTION_FAILED: the next method gets a fresh
+                            // connection; none left ends the attempt.
+                            append_conn_error(&mut errs, &format!("{host_identity}{e}"));
+                            if mi < methods.len() {
+                                continue;
+                            }
+                            return Ok(Err(errs));
+                        }
+                        SslNegotiation::Fatal(e) => {
+                            append_conn_error(&mut errs, &format!("{host_identity}{e}"));
+                            return Ok(Err(errs));
+                        }
+                    }
+                }
+                #[cfg(target_family = "wasm")]
+                let _ = method;
+
+                let mut body = Vec::new();
+                body.extend_from_slice(&PG_PROTOCOL_3_0.to_be_bytes());
+                for (k, v) in startup_params {
+                    body.extend_from_slice(k.as_bytes());
+                    body.push(0);
+                    body.extend_from_slice(v.as_bytes());
+                    body.push(0);
+                }
+                body.push(0);
+                let mut pkt = Vec::with_capacity(4 + body.len());
+                pkt.extend_from_slice(&((body.len() as u32 + 4).to_be_bytes()));
+                pkt.extend_from_slice(&body);
+                if let Err(e) = conn.send_all(&pkt) {
                     append_conn_error(&mut errs, &format!("{host_identity}{e}"));
-                    if conn.last_sqlstate != "57P03" {
+                    continue 'hosts;
+                }
+
+                let auth_opts = auth::AuthOptions {
+                    password: password.as_deref(),
+                    keys: keys.clone(),
+                    policy: policy.clone(),
+                    passfile: from_file,
+                };
+                match auth::handshake(&mut conn, &user, &auth_opts)? {
+                    Ok(()) => match conn.check_target(server_type, &host_identity)? {
+                        TargetCheck::Ok => return Ok(Ok(conn)),
+                        TargetCheck::NextHost(e) => {
+                            append_conn_error(&mut errs, &e);
+                            continue 'hosts;
+                        }
+                        TargetCheck::Fail(e) => {
+                            append_conn_error(&mut errs, &e);
+                            return Ok(Err(errs));
+                        }
+                    },
+                    Err(e) => {
+                        append_conn_error(&mut errs, &format!("{host_identity}{e}"));
+                        if conn.last_sqlstate == "57P03" {
+                            continue 'hosts;
+                        }
+                        // CONNECTION_FAILED on a server ErrorResponse: the
+                        // next encryption method gets a fresh connection.
+                        if !conn.last_sqlstate.is_empty() && mi < methods.len() {
+                            continue;
+                        }
                         return Ok(Err(errs));
                     }
                 }
@@ -1617,6 +1836,9 @@ impl PgConn {
 
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn send_all(&mut self, buf: &[u8]) -> Result<(), String> {
+        if self.tls.is_some() {
+            return self.send_all_tls(buf);
+        }
         let mut off = 0;
         while off < buf.len() {
             let n = unsafe {
@@ -1650,6 +1872,190 @@ impl PgConn {
         Ok(())
     }
 
+    // pqSendSome over pgtls_write: WANT_READ/WANT_WRITE wait on the socket
+    // (latch included); anything else kills the connection.
+    #[cfg(not(target_family = "wasm"))]
+    fn send_all_tls(&mut self, buf: &[u8]) -> Result<(), String> {
+        let mut off = 0;
+        while off < buf.len() {
+            let events = match secure::write(&self.tls.as_ref().unwrap().ssl, &buf[off..]) {
+                secure::Io::Done(n) => {
+                    off += n;
+                    continue;
+                }
+                secure::Io::WantRead => WL_SOCKET_READABLE,
+                secure::Io::WantWrite => WL_SOCKET_WRITEABLE,
+                secure::Io::Failed(m) => {
+                    self.conn_ok = false;
+                    self.append_conn_error(&m);
+                    return Err(self.err.clone());
+                }
+            };
+            if let Err(pe) = wait_socket(self.fd, events, self.we.receive) {
+                self.conn_ok = false;
+                return Err(format!("{pe:?}"));
+            }
+        }
+        Ok(())
+    }
+
+    // pqReadData over pgtls_read: every record OpenSSL already holds is
+    // drained before returning, so a later socket wait never sleeps on
+    // buffered plaintext. A failure after data is reported on the next call.
+    #[cfg(not(target_family = "wasm"))]
+    fn consume_input_tls(&mut self) -> bool {
+        let mut buf = [0u8; 16384];
+        let mut someread = false;
+        loop {
+            match secure::read(&self.tls.as_ref().unwrap().ssl, &mut buf) {
+                secure::Io::Done(n) => {
+                    self.inbuf.extend_from_slice(&buf[..n]);
+                    someread = true;
+                }
+                secure::Io::WantRead => return true,
+                secure::Io::WantWrite => {
+                    if wait_socket(self.fd, WL_SOCKET_WRITEABLE, self.we.receive).is_err() {
+                        self.conn_ok = false;
+                        return false;
+                    }
+                }
+                secure::Io::Failed(m) => {
+                    if someread {
+                        return true;
+                    }
+                    self.conn_ok = false;
+                    self.append_conn_error(&m);
+                    return false;
+                }
+            }
+        }
+    }
+
+    // PQsslInUse.
+    pub fn ssl_in_use(&self) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.tls.is_some()
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            false
+        }
+    }
+
+    // cert_cb's record: (server requested a client certificate, one was sent).
+    pub(crate) fn ssl_cert_state(&self) -> (bool, bool) {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.tls.as_ref().map_or((false, false), |t| (t.cert_requested(), t.cert_sent()))
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            (false, false)
+        }
+    }
+
+    // pgtls_get_peer_certificate_hash for SCRAM's tls-server-end-point.
+    pub(crate) fn peer_certificate_hash(&self) -> Result<Vec<u8>, String> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            match self.tls.as_ref() {
+                Some(t) => secure::peer_certificate_hash(&t.peer),
+                None => Err("channel binding not supported by this build".into()),
+            }
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            Err("channel binding not supported by this build".into())
+        }
+    }
+
+    // PQconnectPoll's CONNECTION_SSL_STARTUP arm (fe-connect.c:3755): the
+    // SSLRequest round trip (unless direct), then pqsecure_open_client.
+    #[cfg(not(target_family = "wasm"))]
+    fn negotiate_ssl(
+        &mut self,
+        host: &str,
+        opts: &[(String, String)],
+        direct: bool,
+    ) -> PgResult<SslNegotiation> {
+        if !direct {
+            let req: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
+            let mut off = 0;
+            while off < req.len() {
+                // SAFETY: req is valid readable memory of req.len() bytes.
+                let n = unsafe {
+                    libc::send(self.fd, req[off..].as_ptr().cast(), req.len() - off, libc::MSG_NOSIGNAL)
+                };
+                if n > 0 {
+                    off += n as usize;
+                    continue;
+                }
+                let e = last_errno();
+                match e {
+                    libc::EINTR => {}
+                    libc::EAGAIN => wait_socket(self.fd, WL_SOCKET_WRITEABLE, self.we.connect)?,
+                    _ => {
+                        self.conn_ok = false;
+                        return Ok(SslNegotiation::Fatal(format!(
+                            "could not send SSL negotiation packet: {}",
+                            strerror(e)
+                        )));
+                    }
+                }
+            }
+            while self.inpos >= self.inbuf.len() {
+                wait_socket(self.fd, WL_SOCKET_READABLE, self.we.connect)?;
+                if !self.consume_input() {
+                    return Ok(SslNegotiation::Fatal(self.err.clone()));
+                }
+            }
+            let response = self.inbuf[self.inpos];
+            self.inpos += 1;
+            match response {
+                b'S' => {}
+                b'N' => return Ok(SslNegotiation::ServerRefused),
+                b'E' => {
+                    self.conn_ok = false;
+                    return Ok(SslNegotiation::Fatal(
+                        "server sent an error response during SSL exchange".into(),
+                    ));
+                }
+                other => {
+                    self.conn_ok = false;
+                    return Ok(SslNegotiation::Fatal(format!(
+                        "received invalid response to SSL negotiation: {}",
+                        other as char
+                    )));
+                }
+            }
+        }
+        let pending = match secure::initialize(opts, host) {
+            Ok(p) => p,
+            Err(e) => {
+                self.conn_ok = false;
+                return Ok(SslNegotiation::Failed(e));
+            }
+        };
+        let (fd, ev) = (self.fd, self.we.connect);
+        let mut wait = |events: u32| wait_socket(fd, events, ev);
+        let tls = match secure::open(pending, fd, opts, host, direct, &mut wait)? {
+            Ok(t) => t,
+            Err(e) => {
+                self.conn_ok = false;
+                return Ok(SslNegotiation::Failed(e));
+            }
+        };
+        if self.inpos < self.inbuf.len() {
+            self.conn_ok = false;
+            return Ok(SslNegotiation::Fatal("received unencrypted data after SSL response".into()));
+        }
+        self.inbuf.clear();
+        self.inpos = 0;
+        self.tls = Some(tls);
+        Ok(SslNegotiation::Ok)
+    }
+
     // PQconsumeInput: drain whatever is readable right now. false == the
     // connection died (self.err set).
     // wasm32: no recv in the wasi libc crate; unreachable stub (see send_all).
@@ -1667,6 +2073,9 @@ impl PgConn {
     pub fn consume_input(&mut self) -> bool {
         if !self.conn_ok {
             return false;
+        }
+        if self.tls.is_some() {
+            return self.consume_input_tls();
         }
         let mut buf = [0u8; 16384];
         let mut someread = false;
@@ -2533,19 +2942,26 @@ impl PgConn {
     // Error-path cleanup: swallow everything through ReadyForQuery so the
     // connection is reusable (C's PG_CATCH PQgetResult-until-NULL loop).
     pub fn drain(&mut self) {
+        let _ = self.drain_interruptible();
+    }
+
+    // The backend's PG_CATCH `while (libpqsrv_get_result(...))` loop: an
+    // interrupt serviced while waiting (statement_timeout, cancel) escapes
+    // and replaces the error being cleaned up after.
+    pub fn drain_interruptible(&mut self) -> PgResult<()> {
         if !self.pending_results || !self.conn_ok {
-            return;
+            return Ok(());
         }
         loop {
-            match self.read_message(self.we.receive) {
-                Ok(Ok((b'Z', body))) => {
+            match self.read_message(self.we.receive)? {
+                Ok((b'Z', body)) => {
                     self.txn_status = body.first().copied().unwrap_or(b'I');
                     self.pending_results = false;
                     self.in_copy = false;
-                    return;
+                    return Ok(());
                 }
-                Ok(Ok((t, body))) => self.note_async(t, &body),
-                Ok(Err(_)) | Err(_) => return,
+                Ok((t, body)) => self.note_async(t, &body),
+                Err(_) => return Ok(()),
             }
         }
     }
@@ -2554,6 +2970,50 @@ impl PgConn {
     // saved BackendKeyData, wait (interruptibly, deadline-bounded) for the
     // server to close. None = accepted; Some(msg) = failure text.
     pub fn cancel(&self, timeout_ms: i64) -> PgResult<Option<String>> {
+        self.cancel_target().cancel(timeout_ms)
+    }
+
+    /// What PQcancelCreate copies out of the connection: enough to cancel
+    /// its running query while the connection itself is in use.
+    pub fn cancel_target(&self) -> CancelTarget {
+        CancelTarget {
+            target: self.target.clone(),
+            peer: self.peer,
+            be_pid: self.be_pid,
+            be_key: self.be_key.clone(),
+            sock_open: self.conn_ok,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CancelTarget {
+    target: DialTarget,
+    peer: Option<std::net::SocketAddr>,
+    be_pid: i32,
+    be_key: Vec<u8>,
+    sock_open: bool,
+}
+
+impl CancelTarget {
+    /// A target with no open connection behind it: cancel reports
+    /// "connection not open".
+    pub fn detached() -> CancelTarget {
+        CancelTarget {
+            target: DialTarget::Tcp(String::new(), 0),
+            peer: None,
+            be_pid: 0,
+            be_key: Vec::new(),
+            sock_open: false,
+        }
+    }
+
+    pub fn cancel(&self, timeout_ms: i64) -> PgResult<Option<String>> {
+        // PQcancelCreate: a connection libpq already dropped (EOF, sync loss)
+        // has no socket.
+        if !self.sock_open {
+            return Ok(Some("connection not open".into()));
+        }
         let deadline_ns = pg_clock::mono_ns().saturating_add(timeout_ms.max(0) as u64 * 1_000_000);
         let sock = match &self.target {
             DialTarget::Tcp(host, port) => {
@@ -2635,6 +3095,9 @@ impl PgConn {
         }
     }
 
+}
+
+impl PgConn {
     pub fn put_copy_data(&mut self, data: &[u8]) -> Result<(), String> {
         self.send_all(&msg(b'd', data))
     }
@@ -2923,6 +3386,21 @@ fn parse_data_row_borrowed<'a>(
 
 #[cfg(test)]
 mod tests {
+    // inet_net_ntop_ipv6 with bits 128, as libpq's getHostaddr prints.
+    #[test]
+    fn pg_inet6_ntop_matches_c() {
+        let f = |t: &str| super::pg_inet6_ntop(&t.parse::<std::net::Ipv6Addr>().unwrap().octets());
+        assert_eq!(f("::1.2.3.4"), "::1.2.3.4");
+        assert_eq!(f("::ffff:1.2.3.4"), "::ffff:1.2.3.4");
+        assert_eq!(f("::1"), "::1");
+        assert_eq!(f("::2"), "::2");
+        assert_eq!(f("::"), "::");
+        assert_eq!(f("fe80::1:0:0:1"), "fe80::1:0:0:1");
+        assert_eq!(f("1:0:0:2:0:0:0:3"), "1:0:0:2::3");
+        assert_eq!(f("2001:db8::"), "2001:db8::");
+        assert_eq!(f("1:0:2:3:4:5:6:7"), "1:0:2:3:4:5:6:7");
+    }
+
     use super::*;
 
     #[test]
@@ -3079,6 +3557,17 @@ mod tests {
         assert_eq!(pv("max_protocol_version=3.0"), Ok(()));
     }
 
+    // A host-less conninfo dials the distribution's socket directory, the
+    // one the server built alongside listens on (wio P219).
+    #[test]
+    fn default_socket_dir_is_the_build_configured_one() {
+        let want = option_env!("PGRUST_DEFAULT_PGSOCKET_DIR").unwrap_or("/tmp");
+        assert_eq!(conninfo::DEFAULT_PGSOCKET_DIR, want);
+        let ch = ConnHost { host: String::new(), hostaddr: String::new(), port: String::new() };
+        assert_eq!(pq_host(&ch), want);
+        assert!(dial_is_unix(&ch));
+    }
+
     #[test]
     fn dial_prefers_hostaddr_and_defaults_to_the_socket_dir() {
         let free = || {
@@ -3092,12 +3581,13 @@ mod tests {
         assert!(err.starts_with(&format!("connection to server at \"127.0.0.1\", port {p} failed: ")), "{err}");
         let opts = parse_conninfo(&format!("port={p} user=u")).unwrap();
         let err = connect(opts, &[("user", "u")], we).unwrap().err().unwrap();
-        assert!(err.starts_with(&format!("connection to server on socket \"/tmp/.s.PGSQL.{p}\" failed: ")), "{err}");
+        let dir = conninfo::DEFAULT_PGSOCKET_DIR;
+        assert!(err.starts_with(&format!("connection to server on socket \"{dir}/.s.PGSQL.{p}\" failed: ")), "{err}");
         assert!(err.ends_with("\n\tIs the server running locally and accepting connections on that socket?"), "{err}");
         let ch = |h: &str, a: &str| ConnHost { host: h.into(), hostaddr: a.into(), port: String::new() };
         assert_eq!(pq_host(&ch("h", "1.2.3.4")), "h");
         assert_eq!(pq_host(&ch("", "1.2.3.4")), "1.2.3.4");
-        assert_eq!(pq_host(&ch("", "")), "/tmp");
+        assert_eq!(pq_host(&ch("", "")), conninfo::DEFAULT_PGSOCKET_DIR);
     }
 
     #[test]
@@ -3384,6 +3874,8 @@ mod tests {
         client.set_nonblocking(true).unwrap();
         let fd = client.as_raw_fd();
         let conn = PgConn {
+            #[cfg(not(target_family = "wasm"))]
+            tls: None,
             _stream: Stream::Tcp(client),
             fd,
             external_fd: false,
@@ -3712,19 +4204,8 @@ mod tests {
     }
 
     #[test]
-    fn sslmode_refuses_tls_required_modes() {
-        // No TLS support here, so require/verify-* must be a hard error (no
-        // silent cleartext downgrade), matching libpq's no-USE_SSL wording.
-        for m in ["require", "verify-ca", "verify-full"] {
-            let opts = vec![("sslmode".to_string(), m.to_string())];
-            let err = check_sslmode(&opts).err().unwrap();
-            assert_eq!(
-                err,
-                format!("sslmode value \"{m}\" invalid when SSL support is not compiled in")
-            );
-        }
-        // Non-encrypting modes (and the absent/default "prefer") are accepted.
-        for m in ["disable", "allow", "prefer"] {
+    fn sslmode_accepts_the_six_libpq_values() {
+        for m in ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] {
             let opts = vec![("sslmode".to_string(), m.to_string())];
             assert!(check_sslmode(&opts).is_ok(), "sslmode={m:?} should be ok");
         }
@@ -3743,14 +4224,31 @@ mod tests {
     }
 
     #[test]
-    fn transport_options_refused_without_ssl_or_gss() {
+    fn transport_options_validate_like_libpq() {
         let o = |k: &str, v: &str| vec![(k.to_string(), v.to_string())];
-        let ssl = |k: &str, v: &str| {
-            format!("{k} value \"{v}\" invalid when SSL support is not compiled in")
+        let two = |k1: &str, v1: &str, k2: &str, v2: &str| {
+            vec![(k1.to_string(), v1.to_string()), (k2.to_string(), v2.to_string())]
         };
-        assert_eq!(check_transport_options(&o("sslrootcert", "system")).unwrap_err(), ssl("sslrootcert", "system"));
-        assert_eq!(check_transport_options(&o("sslnegotiation", "direct")).unwrap_err(), ssl("sslnegotiation", "direct"));
-        assert_eq!(check_transport_options(&o("sslcertmode", "require")).unwrap_err(), ssl("sslcertmode", "require"));
+        // fe-connect.c:1845 / :1866: direct negotiation and the system root
+        // store both refuse the weak sslmodes.
+        assert_eq!(
+            check_transport_options(&o("sslnegotiation", "direct")).unwrap_err(),
+            "weak sslmode \"prefer\" may not be used with sslnegotiation=direct (use \"require\", \"verify-ca\", or \"verify-full\")"
+        );
+        assert_eq!(
+            check_transport_options(&two("sslnegotiation", "direct", "sslmode", "allow")).unwrap_err(),
+            "weak sslmode \"allow\" may not be used with sslnegotiation=direct (use \"require\", \"verify-ca\", or \"verify-full\")"
+        );
+        for m in ["require", "verify-ca", "verify-full"] {
+            assert_eq!(check_transport_options(&two("sslnegotiation", "direct", "sslmode", m)), Ok(ChannelBinding::Prefer));
+        }
+        assert_eq!(
+            check_transport_options(&two("sslrootcert", "system", "sslmode", "require")).unwrap_err(),
+            "weak sslmode \"require\" may not be used with sslrootcert=system (use \"verify-full\")"
+        );
+        assert_eq!(check_transport_options(&two("sslrootcert", "system", "sslmode", "verify-full")), Ok(ChannelBinding::Prefer));
+        assert_eq!(check_transport_options(&o("sslrootcert", "system")), Ok(ChannelBinding::Prefer));
+        assert_eq!(check_transport_options(&o("sslcertmode", "require")), Ok(ChannelBinding::Prefer));
         assert_eq!(
             check_transport_options(&o("gssencmode", "require")).unwrap_err(),
             "gssencmode value \"require\" invalid when GSSAPI support is not compiled in"
@@ -3759,39 +4257,57 @@ mod tests {
         assert_eq!(check_transport_options(&o("sslcertmode", "x")).unwrap_err(), "invalid sslcertmode value: \"x\"");
         assert_eq!(check_transport_options(&o("gssencmode", "x")).unwrap_err(), "invalid gssencmode value: \"x\"");
         assert_eq!(check_transport_options(&o("channel_binding", "x")).unwrap_err(), "invalid channel_binding value: \"x\"");
-        // sslrootcert=system is checked before sslmode, as fe-connect.c does.
+        // sslmode is validated before the sslrootcert=system pairing.
         let both = vec![("sslmode".to_string(), "bogus".to_string()), ("sslrootcert".to_string(), "system".to_string())];
-        assert_eq!(check_transport_options(&both).unwrap_err(), ssl("sslrootcert", "system"));
+        assert_eq!(check_transport_options(&both).unwrap_err(), "invalid sslmode value: \"bogus\"");
         for (k, v) in [
             ("sslrootcert", "/x/ca.crt"), ("sslnegotiation", "postgres"), ("sslcertmode", "disable"),
             ("sslcertmode", "allow"), ("gssencmode", "disable"), ("gssencmode", "prefer"),
-            ("channel_binding", "disable"), ("channel_binding", "prefer"),
+            ("channel_binding", "prefer"),
         ] {
-            assert_eq!(check_transport_options(&o(k, v)), Ok(false), "{k}={v}");
+            assert_eq!(check_transport_options(&o(k, v)), Ok(ChannelBinding::Prefer), "{k}={v}");
         }
-        assert_eq!(check_transport_options(&o("channel_binding", "require")), Ok(true));
-        assert_eq!(check_transport_options(&[]), Ok(false));
+        assert_eq!(check_transport_options(&o("channel_binding", "disable")), Ok(ChannelBinding::Disable));
+        assert_eq!(check_transport_options(&o("channel_binding", "require")), Ok(ChannelBinding::Require));
+        assert_eq!(check_transport_options(&[]), Ok(ChannelBinding::Prefer));
     }
 
     // connect() must refuse before dialing: an unroutable port proves no
     // socket was opened (a dial would fail with a connection error instead).
     #[test]
-    fn connect_refuses_ignored_security_options_before_dial() {
-        for (k, v) in [
-            ("gssencmode", "require"), ("sslnegotiation", "direct"),
-            ("sslcertmode", "require"), ("sslrootcert", "system"),
+    fn connect_refuses_unsupported_transport_options_before_dial() {
+        for (k, v, want) in [
+            ("gssencmode", "require", "gssencmode value \"require\" invalid when GSSAPI support is not compiled in"),
+            ("sslnegotiation", "direct", "weak sslmode \"prefer\" may not be used with sslnegotiation=direct (use \"require\", \"verify-ca\", or \"verify-full\")"),
         ] {
             let opts = vec![
                 ("host".to_string(), "127.0.0.1".to_string()),
                 ("port".to_string(), "1".to_string()),
+                ("sslmode".to_string(), "prefer".to_string()),
                 (k.to_string(), v.to_string()),
             ];
             let err = match connect(opts, &[("user", "u")], WaitEvents { connect: 0, receive: 0 }) {
                 Ok(Err(e)) => e,
                 _ => panic!("{k}={v}: connect must refuse before dialing"),
             };
-            assert!(err.contains("not compiled in"), "{k}={v}: {err}");
+            assert_eq!(err, want, "{k}={v}");
         }
+    }
+
+    // select_next_encryption_method (fe-connect.c:4855): allow tries
+    // plaintext first, prefer SSL first, the verify modes SSL only, and a
+    // Unix socket is never encrypted.
+    #[test]
+    fn encryption_method_order_follows_sslmode() {
+        let o = |m: &str| vec![("sslmode".to_string(), m.to_string())];
+        assert_eq!(encryption_methods(&o("disable"), false), vec![Enc::Plain]);
+        assert_eq!(encryption_methods(&o("allow"), false), vec![Enc::Plain, Enc::Ssl]);
+        assert_eq!(encryption_methods(&o("prefer"), false), vec![Enc::Ssl, Enc::Plain]);
+        assert_eq!(encryption_methods(&[], false), vec![Enc::Ssl, Enc::Plain]);
+        for m in ["require", "verify-ca", "verify-full"] {
+            assert_eq!(encryption_methods(&o(m), false), vec![Enc::Ssl], "{m}");
+        }
+        assert_eq!(encryption_methods(&o("require"), true), vec![Enc::Plain]);
     }
 
     // channel_binding=require against a server that asks for a cleartext

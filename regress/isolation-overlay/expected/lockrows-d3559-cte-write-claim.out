@@ -1,0 +1,63 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2a s1c
+step s2x: EXPLAIN (COSTS OFF) WITH c AS (SELECT id FROM cq WHERE status = 'queued' ORDER BY payload LIMIT 2 FOR UPDATE), u AS (UPDATE cq SET status = 'picked' FROM c WHERE cq.id = c.id RETURNING cq.*) SELECT id, status, payload FROM u ORDER BY id;
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Sort                                                         
+  Sort Key: u.id                                             
+  CTE c                                                      
+    ->  Limit                                                
+          ->  LockRows                                       
+                ->  Sort                                     
+                      Sort Key: cq.payload                   
+                      ->  Seq Scan on cq                     
+                            Filter: (status = 'queued'::text)
+  CTE u                                                      
+    ->  Update on cq cq_1                                    
+          ->  Hash Join                                      
+                Hash Cond: (cq_1.id = c.id)                  
+                ->  Seq Scan on cq cq_1                      
+                ->  Hash                                     
+                      ->  CTE Scan on c                      
+  ->  CTE Scan on u                                          
+(17 rows)
+
+step s1u: UPDATE cq SET payload = 'p100' WHERE id = 1;
+step s2a: WITH c AS (SELECT id FROM cq WHERE status = 'queued' ORDER BY payload LIMIT 2 FOR UPDATE), u AS (UPDATE cq SET status = 'picked' FROM c WHERE cq.id = c.id RETURNING cq.*) SELECT id, status, payload FROM u ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|status|payload
+--+------+-------
+ 1|picked|p100   
+ 2|picked|p102   
+(2 rows)
+
+
+starting permutation: s1s s2a s1c
+step s1s: UPDATE cq SET status = 'done' WHERE id = 1;
+step s2a: WITH c AS (SELECT id FROM cq WHERE status = 'queued' ORDER BY payload LIMIT 2 FOR UPDATE), u AS (UPDATE cq SET status = 'picked' FROM c WHERE cq.id = c.id RETURNING cq.*) SELECT id, status, payload FROM u ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|status|payload
+--+------+-------
+ 2|picked|p102   
+ 3|picked|p103   
+(2 rows)
+
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT id FROM cq WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2sk: WITH c AS (SELECT id FROM cq WHERE status = 'queued' ORDER BY payload LIMIT 2 FOR UPDATE SKIP LOCKED), u AS (UPDATE cq SET status = 'picked' FROM c WHERE cq.id = c.id RETURNING cq.*) SELECT id, status, payload FROM u ORDER BY id;
+id|status|payload
+--+------+-------
+ 2|picked|p102   
+ 3|picked|p103   
+(2 rows)
+
+step s1c: COMMIT;

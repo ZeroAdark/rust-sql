@@ -1,0 +1,3 @@
+backend/utils/adt/adt_datetime/src/decode.rs	DATECACHE	pgport	key:the token at each field position (static datetktbl)	cache	key: the token; static tables; per-field-position memo of the datetktbl search
+backend/utils/adt/adt_datetime/src/decode.rs	DELTACACHE	pgport	key:the token at each field position (static deltatktbl)	cache	key: the token; static tables; per-field-position memo of the deltatktbl search
+backend/utils/adt/adt_datetime/src/decode.rs	TZABBREVCACHE	pgport	key:the abbreviation at each field position	cache	key: the abbreviation; ClearTimeZoneAbbrevCache on a zone move (StatementArm::apply) and on InstallTimeZoneAbbrevs (the gucs hook)

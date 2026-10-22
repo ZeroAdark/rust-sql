@@ -1,0 +1,14 @@
+backend/utils/cache/relcache/src/tests.rs	ROWS	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	SCAN_LOG	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	INVALIDATE_DURING_BUILD	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	INVALIDATE_OTHER_DURING_BUILD	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	IN_XACT	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	IS_BOOTSTRAP	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	CUR_SUBID	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	HAS_SYSCACHE	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	PG_INDEX_ROWS	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	INDEX_SCANS	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	CAP_OVERRIDE	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	DRAIN_INVALS	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	FKEY_SCANS	pgport	test	test	test
+backend/utils/cache/relcache/src/tests.rs	DOOR1	pgport	test	test	test

@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/optimizer/plan/createplan.c: 1 stack-depth check sites
+393	create_plan_recurse	crates/backend/optimizer/plan/planner/src/createplan.rs	create_plan_recurse	yes	

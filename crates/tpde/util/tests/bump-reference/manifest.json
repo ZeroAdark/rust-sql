@@ -1,0 +1,46 @@
+{
+  "repository": "https://github.com/tpde2/tpde",
+  "revision": "116b2b83eb8491fd63c017285c91b007b8a26a67",
+  "files": [
+    {
+      "path": "LICENSES/Apache-2.0.txt",
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "git_blob": "137069b823873b8bcf42979bcf8e9371052d26a2"
+    },
+    {
+      "path": "LICENSES/LLVM-exception.txt",
+      "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+      "git_blob": "fa4b725a0ee50ef723ce5292865e54de7b0bfca4"
+    },
+    {
+      "path": "tpde/include/tpde/base.hpp",
+      "sha256": "c13348df72171026eff9bc6bd284c6abdfac5d1cd170fdecf47c6fd9fe744d31",
+      "git_blob": "9d30b7b6231d544fefe99e5ba2b380ddfb9cd935"
+    },
+    {
+      "path": "tpde/include/tpde/util/AddressSanitizer.hpp",
+      "sha256": "dcf7daca345337a6e0e6c9e404fde9ff46db82f965f60064ef2398ef032d0cfa",
+      "git_blob": "01230c28409568eb2498267997b588a76a825a9d"
+    },
+    {
+      "path": "tpde/include/tpde/util/BumpAllocator.hpp",
+      "sha256": "b3a86498d97eaf23d0aa07ac40042a2459bea303f83908bfac363ba461fef3d5",
+      "git_blob": "b63195b7ed9614de59786cf4ca2d90ad25c0cb07"
+    },
+    {
+      "path": "tpde/include/tpde/util/SmallVector.hpp",
+      "sha256": "e9dbbb6f5e064e7692b75bf291515d63668679d89baeb5a707357205b017c835",
+      "git_blob": "6976ba96d104c7bc75b1ba0bc44604f4beacd000"
+    },
+    {
+      "path": "tpde/include/tpde/util/misc.hpp",
+      "sha256": "12ebd71ec005fb31546f6f2c16bcc6af90e4560189973e06e949ca74febcefe3",
+      "git_blob": "5b7ae6a88ae61adb0513bb609b2ebdb537a20856"
+    },
+    {
+      "path": "tpde/src/util/SmallVector.cpp",
+      "sha256": "6f10c6746166f81ed6b6d3b9d17c683743d3baecd4da3522b9536c3dde9dd28c",
+      "git_blob": "43796d2aa2a6991b7da3a25fbecf1cb535a8ccef"
+    }
+  ]
+}

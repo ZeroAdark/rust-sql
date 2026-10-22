@@ -1,0 +1,42 @@
+-- regress-full-subselect-007
+-- SELECT ((SELECT 2) UNION SELECT 2);
+graph pipelines=4 breakers=2 init_plans=1 root=p3
+p0 node=5 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Distinct)
+  desc owner=key/0 words=bits@3/5
+  nodes n5@0 n3@1 n2@3 n1@4^
+  source const
+  project (1=c23:2)
+  append arm 0/2
+  project (1=outer.1)
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+  outs 1=w4:val
+p1 node=7 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 Distinct)
+  desc owner=key/0 words=bits@3/5
+  nodes n7@0 n3@1 n2@3 n1@4^
+  source const
+  project (1=c23:2)
+  append arm 1/2
+  project (1=outer.1)
+  project (1=outer.1)
+  outs 1=w4:val
+  outs 1=w4:val
+  outs 1=w4:val
+p2 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p1
+  nodes n1@0
+  source breaker slot=0
+  project (1=outer.1)
+  outs 1=w4:val
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec0)
+  outs 1=w4:val
+breaker slot=0 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B order=1+
+breaker slot=0 kind=Distinct budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32]->[Count@8] 16B order=1+
+group slot=0 producer=p1 node=1 form=Unique hints=[] layout=[I32]->[Count@8] 16B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+init_plan id=1 pipeline=p2 link=Expr param=$exec0
+mapped: Result Append Unique SubPlan

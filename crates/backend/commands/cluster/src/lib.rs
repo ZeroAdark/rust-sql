@@ -70,6 +70,8 @@ pub fn make_new_heap<'mcx>(
         mcx,
         &catalog_heap::HeapCreateParams {
             relname: &new_heap_name,
+            relid: InvalidOid,
+            reltypeid: InvalidOid,
             relnamespace: namespaceid,
             reltablespace: new_tablespace,
             ownerid: old_heap.rd_rel.relowner,

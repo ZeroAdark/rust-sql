@@ -1,0 +1,7 @@
+RT's guard debt (crates/gravity/lint/rules/rt_thread_state.py, C7 clause (d), unwind-safe thread scopes; D4112, D4113):
+the registered thread-locals set for an extent and put back by a bare begin / end pair, which an ERROR that unwinds out
+of the extent skips. One file per source file, one row per static: <path> <static> <owner lane> <what is missing>. A
+row goes when its registry row's reset is a Drop guard (scope:<Type>, or scope:<fn> whose body holds a guard of its
+file that puts the static back). The list only shrinks: on a landing a row the parent lacks fails, and a new scope:
+row with no guard fails without a row here. Seeded with today's 16 bare scope rows and 4 set / clear pairs registered
+at:<fn> (rowsort SAVED, userfp ARMED / COLLIDED, fn PENDING_ERROR).

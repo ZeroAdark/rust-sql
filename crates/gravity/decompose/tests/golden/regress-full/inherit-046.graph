@@ -1,0 +1,48 @@
+-- regress-full-inherit-046
+-- explain (verbose, costs off) update inhpar i set (f1, f2) = (select i.f1, i.f2 || '-' from int4_tbl limit 1);
+graph pipelines=2 breakers=0 init_plans=0 root=p1
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@2 n0@4
+  source range rel=23111 rti=2 am=heap
+    lanes Attr(1):byref8:fx64:win/page Attr(2):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  subplan 1 nested MultiExpr params=($exec0=v2.2, $exec1=v2.1) sets=($exec2,$exec3) raise-free
+  inner node=5 eligible rows=5 end=sink
+  nodes n5@0 n4@1
+  source range rel=16400 rti=4 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=$exec0, 2=op654(fn406($exec1), c25:'-'))
+  limit count=1 offset=all
+  project (1=outer.1, 2=outer.2)
+  project (1=$exec2, 2=fn407($exec3), 3=subplan1(v2.2, v2.1), 4=v2.-6, 5=v2.-1)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2, 3j=outer.3, 4j=outer.4, 5j=outer.5)
+  write UPDATE rel=23111 rti=2 natts=2 indexes=(23115[2]up) set=(2,1) epq=$exec4 tableoid=outer.4 route=rti1:23105 natts=2 cross-partition map=(2,1)
+    target rti=3 rel=23117 natts=2 indexes=(23121[1]up) set=(1,2)
+  outs 1=w4:val 2=fx64:call407 3=vl:call0 4=w4:val 5=fx6:row
+  outs 1=w4:val 2=fx64:life/breaker 3=vl:life/breaker 4=w4:val 5=fx6:life/breaker
+p1 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n1@2 n0@4
+  source range rel=23117 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  subplan 1 nested MultiExpr params=($exec0=v3.1, $exec1=v3.2) sets=($exec2,$exec3) raise-free
+  inner node=5 eligible rows=5 end=sink
+  nodes n5@0 n4@1
+  source range rel=16400 rti=4 am=heap
+    lanes Offset:byval2:w2:val
+  project (1=$exec0, 2=op654(fn406($exec1), c25:'-'))
+  limit count=1 offset=all
+  project (1=outer.1, 2=outer.2)
+  project (1=$exec2, 2=fn407($exec3), 3=subplan1(v3.1, v3.2), 4=v3.-6, 5=v3.-1)
+  append arm 1/2
+  project (1=outer.1, 2=outer.2, 3j=outer.3, 4j=outer.4, 5j=outer.5)
+  write UPDATE rel=23111 rti=2 natts=2 indexes=(23115[2]up) set=(2,1) epq=$exec4 tableoid=outer.4 route=rti1:23105 natts=2 cross-partition map=(2,1)
+    target rti=3 rel=23117 natts=2 indexes=(23121[1]up) set=(1,2)
+  outs 1=w4:val 2=fx64:call407 3=vl:call0 4=w4:val 5=fx6:row
+  outs 1=w4:val 2=fx64:life/breaker 3=vl:life/breaker 4=w4:val 5=fx6:life/breaker
+param $exec0 owner=subplan1 type=23 rep=w8:val
+param $exec1 owner=subplan1 type=19@950 rep=fx64:win/page
+param $exec0 owner=subplan1 type=23 rep=w8:val
+param $exec1 owner=subplan1 type=19@950 rep=fx64:win/page
+scan-lanes node=2 rti=2 rel=23111 tableoid
+scan-lanes node=3 rti=3 rel=23117 tableoid
+mapped: ModifyTable Append SeqScan Limit SubPlan

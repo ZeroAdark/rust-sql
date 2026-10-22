@@ -1,0 +1,13 @@
+-- regress-full-arrays-015
+-- DELETE FROM arrtest WHERE a[2] IS NULL AND b IS NULL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@3
+  source range rel=26218 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val RowId:byval8:w8:val
+  filter isnull(T_SubscriptingRef)
+  filter isnull(v1.2)
+  project (1j=v1.-1)
+  write DELETE rel=26218 rti=1 natts=7 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable SeqScan

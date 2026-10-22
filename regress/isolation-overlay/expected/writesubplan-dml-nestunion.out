@@ -1,0 +1,201 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s1x s2d s1c s2sel s2c
+step s2e: EXPLAIN (COSTS OFF) DELETE FROM wdn_r WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1, array(SELECT q1 FROM wdn_q) AS arr FROM wdn_t) ss WHERE wdn_r.name = ss.f1);
+QUERY PLAN                                                 
+-----------------------------------------------------------
+Delete on wdn_r                                            
+  Delete on wdn_r wdn_r_1                                  
+  Delete on wdn_i wdn_r_2                                  
+  Delete on wdn_s wdn_r_3                                  
+  ->  Nested Loop                                          
+        ->  HashAggregate                                  
+              Group Key: wdn_t.f1                          
+              ->  Nested Loop                              
+                    ->  Seq Scan on wdn_a                  
+                    ->  Materialize                        
+                          ->  Seq Scan on wdn_t            
+        ->  Append                                         
+              ->  Seq Scan on wdn_r wdn_r_1                
+                    Filter: (wdn_t.f1 = name)              
+              ->  Bitmap Heap Scan on wdn_i wdn_r_2        
+                    Recheck Cond: (name = wdn_t.f1)        
+                    ->  Bitmap Index Scan on wdn_i_name_idx
+                          Index Cond: (name = wdn_t.f1)    
+              ->  Bitmap Heap Scan on wdn_s wdn_r_3        
+                    Recheck Cond: (name = wdn_t.f1)        
+                    ->  Bitmap Index Scan on wdn_s_name_idx
+                          Index Cond: (name = wdn_t.f1)    
+(22 rows)
+
+step s1x: UPDATE wdn_r SET x = x + 100 WHERE name = 'k1';
+step s2d: DELETE FROM wdn_r WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1, array(SELECT q1 FROM wdn_q) AS arr FROM wdn_t) ss WHERE wdn_r.name = ss.f1); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT tableoid::regclass, name, x FROM wdn_r WHERE name IN ('k1', 'k2', 'k3', 'gone') ORDER BY 1, 2, 3;
+tableoid|name|x
+--------+----+-
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1ren s2d s1c s2sel s2c
+step s1ren: UPDATE wdn_i SET name = 'gone' WHERE name = 'k2';
+step s2d: DELETE FROM wdn_r WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1, array(SELECT q1 FROM wdn_q) AS arr FROM wdn_t) ss WHERE wdn_r.name = ss.f1); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT tableoid::regclass, name, x FROM wdn_r WHERE name IN ('k1', 'k2', 'k3', 'gone') ORDER BY 1, 2, 3;
+tableoid|name|x
+--------+----+-
+wdn_i   |gone|2
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1del s2d s1c s2sel s2c
+step s1del: DELETE FROM wdn_s WHERE name = 'k2';
+step s2d: DELETE FROM wdn_r WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1, array(SELECT q1 FROM wdn_q) AS arr FROM wdn_t) ss WHERE wdn_r.name = ss.f1); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT tableoid::regclass, name, x FROM wdn_r WHERE name IN ('k1', 'k2', 'k3', 'gone') ORDER BY 1, 2, 3;
+tableoid|name|x
+--------+----+-
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1key s2d s1c s2sel s2c
+step s1key: UPDATE ONLY wdn_r SET name = 'k3' WHERE name = 'k1';
+step s2d: DELETE FROM wdn_r WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1, array(SELECT q1 FROM wdn_q) AS arr FROM wdn_t) ss WHERE wdn_r.name = ss.f1); <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2sel: SELECT tableoid::regclass, name, x FROM wdn_r WHERE name IN ('k1', 'k2', 'k3', 'gone') ORDER BY 1, 2, 3;
+tableoid|name| x
+--------+----+--
+wdn_r   |k3  |21
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1x s2d s1a s2sel s2c
+step s1x: UPDATE wdn_r SET x = x + 100 WHERE name = 'k1';
+step s2d: DELETE FROM wdn_r WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1, array(SELECT q1 FROM wdn_q) AS arr FROM wdn_t) ss WHERE wdn_r.name = ss.f1); <waiting ...>
+step s1a: ROLLBACK;
+step s2d: <... completed>
+step s2sel: SELECT tableoid::regclass, name, x FROM wdn_r WHERE name IN ('k1', 'k2', 'k3', 'gone') ORDER BY 1, 2, 3;
+tableoid|name|x
+--------+----+-
+(0 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2re s1x s2r s1c s2sel s2c
+step s2re: EXPLAIN (COSTS OFF) DELETE FROM wdn_r WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1, array(SELECT q1 FROM wdn_q) AS arr FROM wdn_t1) ss WHERE wdn_r.name = ss.f1) RETURNING tableoid::regclass, name, x;
+QUERY PLAN                                                 
+-----------------------------------------------------------
+Delete on wdn_r                                            
+  Delete on wdn_r wdn_r_1                                  
+  Delete on wdn_i wdn_r_2                                  
+  Delete on wdn_s wdn_r_3                                  
+  ->  Nested Loop                                          
+        ->  HashAggregate                                  
+              Group Key: wdn_t1.f1                         
+              ->  Nested Loop                              
+                    ->  Seq Scan on wdn_a                  
+                    ->  Materialize                        
+                          ->  Seq Scan on wdn_t1           
+        ->  Append                                         
+              ->  Seq Scan on wdn_r wdn_r_1                
+                    Filter: (wdn_t1.f1 = name)             
+              ->  Bitmap Heap Scan on wdn_i wdn_r_2        
+                    Recheck Cond: (name = wdn_t1.f1)       
+                    ->  Bitmap Index Scan on wdn_i_name_idx
+                          Index Cond: (name = wdn_t1.f1)   
+              ->  Bitmap Heap Scan on wdn_s wdn_r_3        
+                    Recheck Cond: (name = wdn_t1.f1)       
+                    ->  Bitmap Index Scan on wdn_s_name_idx
+                          Index Cond: (name = wdn_t1.f1)   
+(22 rows)
+
+step s1x: UPDATE wdn_r SET x = x + 100 WHERE name = 'k1';
+step s2r: DELETE FROM wdn_r WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1, array(SELECT q1 FROM wdn_q) AS arr FROM wdn_t1) ss WHERE wdn_r.name = ss.f1) RETURNING tableoid::regclass, name, x; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+tableoid|name|  x
+--------+----+---
+wdn_r   |k1  |121
+wdn_i   |k1  |101
+wdn_s   |k1  |111
+(3 rows)
+
+step s2sel: SELECT tableoid::regclass, name, x FROM wdn_r WHERE name IN ('k1', 'k2', 'k3', 'gone') ORDER BY 1, 2, 3;
+tableoid|name| x
+--------+----+--
+wdn_r   |k3  |23
+wdn_i   |k2  | 2
+wdn_i   |k3  | 3
+wdn_s   |k2  |12
+(4 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1key s2r s1c s2sel s2c
+step s1key: UPDATE ONLY wdn_r SET name = 'k3' WHERE name = 'k1';
+step s2r: DELETE FROM wdn_r WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1, array(SELECT q1 FROM wdn_q) AS arr FROM wdn_t1) ss WHERE wdn_r.name = ss.f1) RETURNING tableoid::regclass, name, x; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+tableoid|name| x
+--------+----+--
+wdn_i   |k1  | 1
+wdn_s   |k1  |11
+(2 rows)
+
+step s2sel: SELECT tableoid::regclass, name, x FROM wdn_r WHERE name IN ('k1', 'k2', 'k3', 'gone') ORDER BY 1, 2, 3;
+tableoid|name| x
+--------+----+--
+wdn_r   |k3  |21
+wdn_r   |k3  |23
+wdn_i   |k2  | 2
+wdn_i   |k3  | 3
+wdn_s   |k2  |12
+(5 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1x s2u s1c s2sel s2c
+step s1x: UPDATE wdn_r SET x = x + 100 WHERE name = 'k1';
+step s2u: UPDATE wdn_r SET x = x + 1000 WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1 FROM wdn_t) ss WHERE wdn_r.name = ss.f1); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT tableoid::regclass, name, x FROM wdn_r WHERE name IN ('k1', 'k2', 'k3', 'gone') ORDER BY 1, 2, 3;
+tableoid|name|   x
+--------+----+----
+wdn_r   |k1  |1121
+wdn_r   |k3  |1023
+wdn_i   |k1  |1101
+wdn_i   |k2  |1002
+wdn_i   |k3  |1003
+wdn_s   |k1  |1111
+wdn_s   |k2  |1012
+(7 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1ren s2u s1c s2sel s2c
+step s1ren: UPDATE wdn_i SET name = 'gone' WHERE name = 'k2';
+step s2u: UPDATE wdn_r SET x = x + 1000 WHERE EXISTS (SELECT 1 FROM wdn_a CROSS JOIN (SELECT f1 FROM wdn_t) ss WHERE wdn_r.name = ss.f1); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2sel: SELECT tableoid::regclass, name, x FROM wdn_r WHERE name IN ('k1', 'k2', 'k3', 'gone') ORDER BY 1, 2, 3;
+tableoid|name|   x
+--------+----+----
+wdn_r   |k1  |1021
+wdn_r   |k3  |1023
+wdn_i   |gone|   2
+wdn_i   |k1  |1001
+wdn_i   |k3  |1003
+wdn_s   |k1  |1011
+wdn_s   |k2  |1012
+(7 rows)
+
+step s2c: COMMIT;

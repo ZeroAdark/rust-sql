@@ -432,6 +432,9 @@ fn block_references_decode_and_marshal() {
     assert_eq!(&page[300..], &img[100..]);
 
     assert!(!r.RestoreBlockImage(0, &mut page));
+    // Consumers (wal_consistency_checking) read the unexposed buffer directly.
+    assert!(r.errormsg().is_none());
+    assert!(r.errormsg_buf_raw().unwrap().contains("could not restore image"));
     assert_eq!(r.XLogReadRecord(&mut src).unwrap(), None);
     assert!(r.errormsg().unwrap().contains("could not restore image"));
 }
@@ -633,6 +636,49 @@ fn restore_image_pglz_roundtrips() {
         .unwrap_err();
     assert!(matches!(err, RestoreErr::DecompressFailure));
     assert!(restore_err_msg(err, 0x1_0000_0000, 3).contains("could not decompress image"));
+}
+
+// xlogreader.c RestoreBlockImage LZ4_decompress_safe / ZSTD_decompress arms
+// over images written the way XLogCompressBackupBlock writes them.
+#[test]
+fn restore_image_lz4_zstd_roundtrips() {
+    let mut page_orig = [0u8; BLCKSZ];
+    let phrase = b"wal page payload / wal page payload % ";
+    for (i, b) in page_orig.iter_mut().enumerate() {
+        *b = phrase[i % phrase.len()];
+    }
+    let (hole_offset, hole_length) = (100usize, 800usize);
+    let mut holed: Vec<u8> = Vec::new();
+    holed.extend_from_slice(&page_orig[..hole_offset]);
+    holed.extend_from_slice(&page_orig[hole_offset + hole_length..]);
+
+    type Encoder = fn(&[u8]) -> Vec<u8>;
+    let lz4: Encoder = |src| {
+        let mut out = vec![0u8; lz4_block::compress_bound(src.len())];
+        let n = lz4_block::compress_default(src, &mut out);
+        out.truncate(n);
+        out
+    };
+    let zstd: Encoder = |src| zstd::bulk::compress(src, zstd::zstd_safe::CLEVEL_DEFAULT).unwrap();
+    for (flag, encode) in [(BKPIMAGE_COMPRESS_LZ4, lz4), (BKPIMAGE_COMPRESS_ZSTD, zstd)] {
+        let image = encode(&page_orig);
+        assert!(image.len() < BLCKSZ / 4);
+        let mut page = [0xAAu8; BLCKSZ];
+        restore_image_core(&image, flag, 0, 0, &mut page).unwrap();
+        assert_eq!(page, page_orig);
+
+        let image = encode(&holed);
+        let mut page = [0xAAu8; BLCKSZ];
+        restore_image_core(&image, flag | BKPIMAGE_HAS_HOLE, hole_offset, hole_length, &mut page)
+            .unwrap();
+        assert_eq!(&page[..hole_offset], &page_orig[..hole_offset]);
+        assert!(page[hole_offset..hole_offset + hole_length].iter().all(|&b| b == 0));
+        assert_eq!(&page[hole_offset + hole_length..], &page_orig[hole_offset + hole_length..]);
+
+        let err = restore_image_core(&image[..1], flag, 0, 0, &mut page).unwrap_err();
+        assert!(matches!(err, RestoreErr::DecompressFailure));
+        assert!(restore_err_msg(err, 0x1_0000_0000, 3).contains("could not decompress image"));
+    }
 }
 
 #[test]
@@ -865,7 +911,7 @@ fn released_records_free_their_block_metadata() {
 #[test]
 fn restore_block_image_seam_rejects_block_ids_above_max_as_invalid() {
     // xlogreader.c:2026 compares the uint8 block id against the int
-    // max_block_id (audit regression): ids with the high bit
+    // max_block_id (audit fp-transam-xlogreader#2): ids with the high bit
     // set are "invalid block", never an index past the 33-entry array.
     let mut v = ReaderView::default();
     v.record = Some(ViewRecord { max_block_id: 0, ..Default::default() });

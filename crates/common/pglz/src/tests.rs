@@ -132,3 +132,17 @@ fn max_output_matches_macro() {
     assert_eq!(pglz_max_output(0), 4);
     assert_eq!(pglz_max_output(100), 104);
 }
+
+#[test]
+fn history_is_allocated_on_first_compress_only() {
+    std::thread::spawn(|| {
+        let allocated = || HIST.with(|cell| unsafe { (*cell.get()).is_some() });
+        assert!(!allocated());
+        let input = vec![b'a'; 4096];
+        let c = compress(&input, &PGLZ_STRATEGY_ALWAYS).unwrap();
+        assert_eq!(decompress(&c, input.len(), true).unwrap(), input);
+        assert!(allocated());
+    })
+    .join()
+    .unwrap();
+}

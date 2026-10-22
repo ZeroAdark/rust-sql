@@ -91,10 +91,10 @@ pub fn transformTargetEntry<'mcx>(
     let colname = match colname {
         // C's transformSubLink scribbles the transformed Query into the raw
         // SubLink in place; the transformed expr carries that state here.
-        None if !resjunk => Some(FigureColname(match transformed_sublink(node, expr)? {
-            Some(sl) => sl,
-            None => node,
-        })),
+        None if !resjunk => Some(match transformed_sublink(node, expr)? {
+            Some(sl) => figure_wrapped_sublink_colname(node, sl),
+            None => figure_colname_transformed(node, expr)?,
+        }),
         other => other,
     };
 
@@ -1187,6 +1187,39 @@ fn star_with_no_tables(
 // TypeCast / CollateClause wrapper (both defer to an EXPR_SUBLINK's strength-2
 // name). Our transform builds fresh nodes: find that SubLink in the transformed
 // expression instead.
+// FigureColnameInternal over the raw TypeCast/CollateClause wrappers around
+// the sublink (parse_target.c:1872-1876): the sublink's own name wins at
+// strength 2; otherwise the outermost cast's type name (strength 1).
+fn figure_wrapped_sublink_colname<'mcx>(raw: Node<'mcx>, sublink: Node<'mcx>) -> &'mcx str {
+    let mut name = None;
+    if FigureColnameInternal(sublink, &mut name) >= 2 {
+        return name.unwrap_or("?column?");
+    }
+    let mut n = raw;
+    loop {
+        match n.node_tag() {
+            NodeTag::T_TypeCast => {
+                let tc = n.as_type_cast().unwrap();
+                if let Some(tn) = tc.typeName.and_then(|t| t.as_variant::<types_nodes::TypeName>()) {
+                    if let Some(last) = tn.names.last().and_then(|s| s.as_string()) {
+                        return last.sval;
+                    }
+                }
+                match tc.arg {
+                    Some(arg) => n = arg,
+                    None => break,
+                }
+            }
+            NodeTag::T_CollateClause => match n.as_collate_clause().unwrap().arg {
+                Some(arg) => n = arg,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    name.unwrap_or("?column?")
+}
+
 fn transformed_sublink<'mcx>(raw: Node<'mcx>, expr: Node<'mcx>) -> PgResult<Option<Node<'mcx>>> {
     let mut raw = raw;
     loop {
@@ -1270,6 +1303,39 @@ fn raw_select_first_colname<'mcx>(
 
 // C's strength contract: 0 = no name, 1 = weak (type-cast name), 2 = good.
 fn FigureColnameInternal<'mcx>(node: Node<'mcx>, name: &mut Option<&'mcx str>) -> i32 {
+    figure_colname_rec(node, name, None)
+}
+
+// C reads the Query transformSubLink scribbled into the raw SubLink; find it by location.
+fn figure_colname_transformed<'mcx>(node: Node<'mcx>, xf: Node<'mcx>) -> PgResult<&'mcx str> {
+    let mut name = None;
+    figure_colname_rec(node, &mut name, Some(xf));
+    Ok(name.unwrap_or("?column?"))
+}
+
+fn transformed_sublink_at<'mcx>(xf: Node<'mcx>, location: i32) -> Option<Node<'mcx>> {
+    struct At<'mcx>(i32, Option<Node<'mcx>>);
+    impl<'mcx> nodes_core::NodeWalker<'mcx> for At<'mcx> {
+        fn visit(&mut self, node: Node<'mcx>) -> PgResult<bool> {
+            if let Some(sl) = node.as_sub_link() {
+                if sl.location == self.0 {
+                    self.1 = Some(node);
+                    return Ok(true);
+                }
+            }
+            nodes_core::expression_tree_walker(node, self)
+        }
+    }
+    let mut w = At(location, None);
+    nodes_core::NodeWalker::visit(&mut w, xf).ok()?;
+    w.1
+}
+
+fn figure_colname_rec<'mcx>(
+    node: Node<'mcx>,
+    name: &mut Option<&'mcx str>,
+    xf: Option<Node<'mcx>>,
+) -> i32 {
     match node.node_tag() {
         NodeTag::T_ColumnRef => {
             let mut fname = None;
@@ -1293,7 +1359,7 @@ fn FigureColnameInternal<'mcx>(node: Node<'mcx>, name: &mut Option<&'mcx str>) -
         }
         NodeTag::T_TypeCast => {
             let tc = node.as_type_cast().unwrap();
-            let strength = tc.arg.map_or(0, |arg| FigureColnameInternal(arg, name));
+            let strength = tc.arg.map_or(0, |arg| figure_colname_rec(arg, name, xf));
             if strength <= 1 {
                 if let Some(tn) =
                     tc.typeName.and_then(|n| n.as_variant::<types_nodes::TypeName>())
@@ -1311,7 +1377,7 @@ fn FigureColnameInternal<'mcx>(node: Node<'mcx>, name: &mut Option<&'mcx str>) -
                 .as_case_expr()
                 .unwrap()
                 .defresult
-                .map_or(0, |d| FigureColnameInternal(d, name));
+                .map_or(0, |d| figure_colname_rec(d, name, xf));
             if strength <= 1 {
                 *name = Some("case");
                 return 1;
@@ -1336,7 +1402,7 @@ fn FigureColnameInternal<'mcx>(node: Node<'mcx>, name: &mut Option<&'mcx str>) -
                     return 2;
                 }
             }
-            ind.arg.map_or(0, |arg| FigureColnameInternal(arg, name))
+            ind.arg.map_or(0, |arg| figure_colname_rec(arg, name, xf))
         }
         NodeTag::T_MinMaxExpr => {
             *name = Some(match node.as_min_max_expr().unwrap().op {
@@ -1397,13 +1463,15 @@ fn FigureColnameInternal<'mcx>(node: Node<'mcx>, name: &mut Option<&'mcx str>) -
                     2
                 }
                 SubLinkType::EXPR_SUBLINK => {
-                    // C sees the transformed Query here because
-                    // transformSubLink scribbles it into the raw SubLink in
-                    // place; our transform builds a fresh node, so a SubLink
-                    // nested under indirection/casts is still raw and the
-                    // raw leg derives the resname transformTargetEntry would
-                    // have assigned.
-                    if let Some(q) = sl.subselect.as_query() {
+                    let analyzed = if sl.subselect.as_query().is_some() {
+                        Some(node)
+                    } else {
+                        xf.and_then(|x| transformed_sublink_at(x, sl.location))
+                    };
+                    if let Some(q) = analyzed
+                        .and_then(|n| n.as_sub_link())
+                        .and_then(|t| t.subselect.as_query())
+                    {
                         if let Some(te) =
                             q.targetList.first().and_then(|n| n.as_target_entry())
                         {
@@ -1423,7 +1491,7 @@ fn FigureColnameInternal<'mcx>(node: Node<'mcx>, name: &mut Option<&'mcx str>) -
             }
         }
         NodeTag::T_CollateClause => match node.as_collate_clause().unwrap().arg {
-            Some(arg) => FigureColnameInternal(arg, name),
+            Some(arg) => figure_colname_rec(arg, name, xf),
             None => 0,
         },
         NodeTag::T_RowExpr => {

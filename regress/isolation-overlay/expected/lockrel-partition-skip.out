@@ -1,0 +1,68 @@
+Parsed test spec with 4 sessions
+
+starting permutation: s1b s1l s1x s1a s2r s3x s4n s1c s4t s4n s1u s4t s4u
+step s1b: BEGIN;
+step s1l: LOCK TABLE lrskip IN ACCESS EXCLUSIVE MODE;
+step s1x: SELECT pg_advisory_xact_lock(4301);
+pg_advisory_xact_lock
+---------------------
+                     
+(1 row)
+
+step s1a: SELECT pg_advisory_lock(4302);
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s2r: SELECT count(*) FROM lrskip; <waiting ...>
+step s3x: SELECT pg_advisory_xact_lock(4301); <waiting ...>
+step s4n: SELECT count(*) FROM pg_locks WHERE locktype = 'relation' AND relation = 'lrskip'::regclass;
+count
+-----
+    2
+(1 row)
+
+step s1c: COMMIT;
+step s2r: <... completed>
+count
+-----
+    3
+(1 row)
+
+step s3x: <... completed>
+pg_advisory_xact_lock
+---------------------
+                     
+(1 row)
+
+step s4t: SELECT pg_try_advisory_lock(4302);
+pg_try_advisory_lock
+--------------------
+f                   
+(1 row)
+
+step s4n: SELECT count(*) FROM pg_locks WHERE locktype = 'relation' AND relation = 'lrskip'::regclass;
+count
+-----
+    0
+(1 row)
+
+step s1u: SELECT pg_advisory_unlock(4302);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s4t: SELECT pg_try_advisory_lock(4302);
+pg_try_advisory_lock
+--------------------
+t                   
+(1 row)
+
+step s4u: SELECT pg_advisory_unlock(4302);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+

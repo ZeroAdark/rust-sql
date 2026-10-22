@@ -1,0 +1,10 @@
+# FILTER keeps it bare
+sql: SELECT array_agg(x) FILTER (WHERE x > 0) FROM t;
+cols: array_agg
+tables: t
+class: unordered
+verdict: match
+[pg]
+{1,2}
+[got]
+{2,1}

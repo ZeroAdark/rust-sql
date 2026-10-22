@@ -1,0 +1,14 @@
+-- part-029
+-- DELETE FROM part1 WHERE k = 6;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@0 n0@1
+  source bitmap rel=16399 rti=1 am=heap
+    bitmap index node=2 index=16418 rows=20
+      key att=1 op=96 value=c23:6
+    recheck (op96(v1.1, c23:6))
+    lanes Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1j=v1.-1)
+  write DELETE rel=16399 rti=1 natts=3 indexes=()
+  outs 1=fx6:row
+mapped: ModifyTable BitmapIndexScan BitmapHeapScan

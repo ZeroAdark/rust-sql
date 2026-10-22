@@ -9,13 +9,16 @@ use crate::{
     convert_and_check_filename, io_error_path, log_directory, os_name_bytes, os_path,
     time_t_to_timestamptz, tmpdir_path, PG_LOGICAL_MAPPINGS_DIR, PG_LOGICAL_SNAPSHOTS_DIR, XLOGDIR,
 };
+use elog::PCT_M;
 
 // text_to_cstring (genfile.c): raw server-encoding bytes, not necessarily
 // UTF-8 (SQL_ASCII databases).
 fn arg_filename(fcinfo: &Fcinfo, i: usize) -> PgResult<Vec<u8>> {
     // SAFETY: these builtins are strict; arg i is a non-null text datum.
     let raw = unsafe { fcinfo.arg_varlena_packed(i) }?;
-    Ok(raw.data().to_vec())
+    let data = raw.data();
+    let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+    Ok(::mcx::std_vec_from_slice("adt", &data[..end])?)
 }
 
 fn bytes_result(fcinfo: &Fcinfo, bytes: &[u8]) -> PgResult<Datum> {
@@ -159,7 +162,7 @@ fn stat_file(
             if missing_ok && e.kind() == std::io::ErrorKind::NotFound {
                 return Ok(fcinfo.return_null());
             }
-            return Err(io_error_path(&e, "could not stat file ", &filename, ": %m"));
+            return Err(io_error_path(&e, "could not stat file ", &filename, &format!(": {PCT_M}")));
         }
     };
 
@@ -199,15 +202,16 @@ pub fn fc_pg_stat_file(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
 }
 
 pub fn fc_pg_stat_file_1arg(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    stat_file(flinfo, fcinfo, false)
+    let missing_ok = fcinfo.nargs() == 2 && fcinfo.arg_bool(1);
+    stat_file(flinfo, fcinfo, missing_ok)
 }
 
 fn open_dir_error(e: &std::io::Error, dir: &[u8]) -> Box<PgError> {
-    io_error_path(e, "could not open directory ", dir, ": %m")
+    io_error_path(e, "could not open directory ", dir, &format!(": {PCT_M}"))
 }
 
 fn read_dir_error(e: &std::io::Error, dir: &[u8]) -> Box<PgError> {
-    io_error_path(e, "could not read directory ", dir, ": %m")
+    io_error_path(e, "could not read directory ", dir, &format!(": {PCT_M}"))
 }
 
 // readdir's d_name: raw bytes, whatever the file system holds (C returns
@@ -225,7 +229,7 @@ fn ls_dir(
 
     let mut missing_ok = false;
     let mut include_dot_dirs = false;
-    if three_args {
+    if three_args || fcinfo.nargs() == 3 {
         if !fcinfo.argisnull(1) {
             missing_ok = fcinfo.arg_bool(1);
         }
@@ -309,7 +313,7 @@ fn ls_dir_files(
             continue;
         }
 
-        let mut path = Vec::with_capacity(dir.len() + 1 + name.len());
+        let mut path = ::mcx::std_vec_with_capacity("adt", dir.len() + 1 + name.len())?;
         path.extend_from_slice(dir.as_bytes());
         path.push(b'/');
         path.extend_from_slice(&name);
@@ -319,7 +323,7 @@ fn ls_dir_files(
                 if e.kind() == std::io::ErrorKind::NotFound {
                     continue;
                 }
-                return Err(io_error_path(&e, "could not stat file ", &path, ": %m"));
+                return Err(io_error_path(&e, "could not stat file ", &path, &format!(": {PCT_M}")));
             }
         };
 
@@ -403,7 +407,8 @@ pub fn fc_pg_ls_replslotdir(
     let slotname = match core::str::from_utf8(&slotname_bytes) {
         Ok(s) if slot::SearchNamedReplicationSlot(s, true)?.is_some() => s,
         _ => {
-            let mut msg = b"replication slot \"".to_vec();
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"replication slot \"");
             msg.extend_from_slice(&slotname_bytes);
             msg.extend_from_slice(b"\" does not exist");
             return Err(Box::new(

@@ -1,0 +1,28 @@
+-- regress-full-misc-016
+-- SELECT name, overpaid(emp.*) FROM emp;
+graph pipelines=2 breakers=0 init_plans=0 root=p1
+p0 node=2 eligible rows=3 end=sink
+  nodes n2@0 n1@1 n0@3
+  source range rel=16434 rti=2 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx16:win/page Attr(4):byval8:w8:val Attr(5):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.0)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.1, 2=fn30648(outer.2))
+  outs 1=vl:win/page 2=?
+  outs 1=vl:life/breaker 2=?
+  outs 1=vl:life/breaker 2=w1:val
+p1 node=3 eligible rows=3 end=sink
+  nodes n3@0 n1@1 n0@3
+  source range rel=16444 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Attr(3):byref8:fx16:win/page Attr(4):byval8:w8:val Attr(5):byref8:fx64:win/page Attr(6):byval8:w8:val Attr(7):byval8:w8:val Offset:byval2:w2:val
+  project (1=v3.1, 2=T_ConvertRowtypeExpr)
+  append arm 1/2
+  project (1=outer.1, 2=outer.2)
+  project (1=outer.1, 2=fn30648(outer.2))
+  outs 1=vl:win/page 2=?
+  outs 1=vl:life/breaker 2=?
+  outs 1=vl:life/breaker 2=w1:val
+scan-lanes node=2 rti=2 rel=16434 wholerow
+scan-lanes node=3 rti=3 rel=16444 wholerow
+mapped: Result Append SeqScan

@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/nodes/equalfuncs.c: 1 stack-depth check sites
+243	equal	crates/_support/types/nodes/src/equal.rs	equal	yes	

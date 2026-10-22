@@ -17,7 +17,7 @@
 //
 // Requires JSPI (WebAssembly.Suspending/promising), like wiresession.js.
 
-import { makeWasi, GuestExit } from './pgrust-wasi.js';
+import { makeWasi, makeGravityHost, GuestExit } from './pgrust-wasi.js';
 import { defaultWireArgv } from './wiresession.js';
 
 export function makePushStream() {
@@ -232,6 +232,7 @@ export class PsqlSession {
       // startup packet as SQL text. The server MUST speak the wire protocol.
       argv: o.serverArgv || defaultWireArgv(),
       env: o.serverEnv,
+      cancel: o.cancel, // the page's cancel word: psql's Ctrl-C (pgrust-wasi.js makeWasi)
     });
     const imports = {
       wasi_snapshot_preview1: {
@@ -239,8 +240,12 @@ export class PsqlSession {
         fd_read: new WebAssembly.Suspending(h.wasi.fd_read),
       },
     };
+    const jit = makeGravityHost({ cancel: o.cancel });
+    imports.env = jit.env;
     const instance = await WebAssembly.instantiate(o.serverModule, imports);
     h.setMemory(instance.exports.memory);
+    jit.setExports(instance.exports);
+    this.jit = jit;
     const startAsync = WebAssembly.promising(instance.exports._start);
     this.serverAlive = true;
     this.serverExit = startAsync()

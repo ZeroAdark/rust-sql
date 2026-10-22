@@ -1,0 +1,10 @@
+-- regress-full-constraints-003
+-- INSERT INTO INSERT_TBL(y) VALUES ('Y');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=fn480(fn1574(c2205:20674)), 2=c25:'Y', 3=fn480(op694(c23:-1, fn1575(c2205:20674))))
+  write INSERT rel=20675 rti=1 natts=3 indexes=()
+  outs 1=w4:val 2=vl:stmt/imm 3=w4:val
+mapped: Result ModifyTable

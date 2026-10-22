@@ -454,8 +454,8 @@ fn find_pullable_subquery<'mcx>(
     if target.is_some() {
         return Ok(());
     }
-    // C prepjointree.c:1132 (pull_up_subqueries_recurse).
     stack_depth::check_stack_depth()?;
+    postgres_seams::check_for_interrupts::call()?;
     match node.node_tag() {
         NodeTag::T_RangeTblRef => {
             let rti = node.as_range_tbl_ref().expect("RangeTblRef").rtindex;
@@ -1107,19 +1107,22 @@ fn pull_up_simple_subquery<'mcx>(
     // Nested pull-ups append their AppendRelInfos to run.root directly (C
     // keeps them on the subroot and offsets at concat); adjust the same set.
     let appinfo_snap = run.root.append_rel_list.len();
-    // pre_adjusted: the sublink arm ran C's OffsetVarNodes /
-    // IncrementVarSublevelsUp in place (sublevel-aware, descends into
-    // retained SubLink bodies), so the functional offset passes below and the
-    // per-RTE offset fixups must not run again.
-    let (sub, pre_adjusted): (&Query<'mcx>, bool) = if shared_sub.hasSubLinks {
-        // C copyObject (out/read round trip here): pull_up_sublinks and the
-        // in-place var adjustments may write any node, and the source tree is
-        // shared with the plancache.
+    // pre_adjusted: C's route (copyObject, recursive pull-up, in-place
+    // OffsetVarNodes / IncrementVarSublevelsUp) ran, so the functional offset
+    // passes below and the per-RTE offset fixups must not run again. Nested
+    // pullable RTEs take it too: offsetting the pulled-up result functionally
+    // re-copies everything the lower levels produced, O(depth^3) nodes for a
+    // chain of views where C's copy-first order is O(depth^2).
+    let (sub, pre_adjusted): (&Query<'mcx>, bool) = if shared_sub.hasSubLinks || has_pullable {
+        // C copyObject: pull_up_sublinks and the in-place var adjustments may
+        // write any node, and the source tree is shared with the plancache.
         let deep = rewrite_manip::copy_query_node(mcx, shared_sub)?;
         let mut sub_local =
             crate::subselect::query_cells_copy(mcx, deep.as_query().expect("Query round trip"))?;
         crate::prep::replace_empty_jointree(mcx, &mut sub_local)?;
-        crate::subselect::pull_up_sublinks(run, &mut sub_local)?;
+        if sub_local.hasSubLinks {
+            crate::subselect::pull_up_sublinks(run, &mut sub_local)?;
+        }
         // C order in pull_up_simple_subquery (prepjointree.c:1374-1394):
         // preprocess_function_rtes on the subroot, then
         // expand_virtual_generated_columns on the subroot, then the recursive
@@ -1133,7 +1136,8 @@ fn pull_up_simple_subquery<'mcx>(
         if has_pullable {
             preprocess_function_rtes(run, &mut sub_local)?;
         }
-        if needs_vgen {
+        // pull_up_sublinks may have merged relations into the subquery.
+        if rtable_has_virtual_generated(mcx, &sub_local.rtable)? {
             expand_virtual_generated_columns(run, &mut sub_local)?;
         }
         if has_pullable {
@@ -2249,6 +2253,14 @@ fn offset_expr<'mcx>(
                 }
             }
             Ok(Some(fresh))
+        }
+        NodeTag::T_SubLink => {
+            // Both C walkers recurse into the subselect with sublevels_up + 1,
+            // so its correlated Vars are offset and lowered too.
+            let copy = rewrite_manip::copy_node(mcx, node)?;
+            rewrite_manip::OffsetVarNodes(mcx, copy, rtoffset, 0)?;
+            rewrite_manip::IncrementVarSublevelsUp(copy, -1, 1)?;
+            Ok(Some(copy))
         }
         NodeTag::T_ReturningExpr => {
             // IncrementVarSublevelsUp(-1, 1) (rewriteManip.c:856-863): an
@@ -4145,6 +4157,8 @@ mod tests {
 
     #[test]
     fn simple_view_subquery_flattens() {
+        // The view's relation opens through the planner fixtures' relation_open seam: install them here, never rely on a sibling.
+        crate::tests::install_fixtures();
         let ctx = MemoryContext::new("t");
         let mcx = ctx.mcx();
 
@@ -4292,6 +4306,8 @@ mod tests {
 
     #[test]
     fn join_view_subquery_flattens() {
+        // The view's relation opens through the planner fixtures' relation_open seam: install them here, never rely on a sibling.
+        crate::tests::install_fixtures();
         let ctx = MemoryContext::new("t");
         let mcx = ctx.mcx();
 
@@ -4381,6 +4397,8 @@ mod tests {
 
     #[test]
     fn nested_view_subquery_flattens() {
+        // The view's relation opens through the planner fixtures' relation_open seam: install them here, never rely on a sibling.
+        crate::tests::install_fixtures();
         let ctx = MemoryContext::new("t");
         let mcx = ctx.mcx();
 
@@ -4434,6 +4452,76 @@ mod tests {
         assert_eq!(jt.fromlist.nth(0).as_range_tbl_ref().unwrap().rtindex, 3);
         let out_var = parse.targetList.nth(0).as_target_entry().unwrap().expr.as_var().unwrap();
         assert_eq!((out_var.varno, out_var.varattno), (3, 1));
+    }
+
+    // v0 = SELECT id, k FROM base; v(i) = SELECT id, k + 1 AS k FROM v(i-1)
+    // WHERE k >= 0; the query is SELECT id, k FROM v(n - 1).
+    fn view_chain<'mcx>(mcx: Mcx<'mcx>, n: usize) -> Query<'mcx> {
+        let int4 = |v: i32| {
+            Node::mk_const(mcx, 23, -1, 0, 4, datum::Datum::from_i32(v), false, true).unwrap()
+        };
+        let op = |opno: u32, opfuncid: u32, restype: u32, l: Node<'mcx>, r: Node<'mcx>| {
+            Node::mk(
+                mcx,
+                OpExpr {
+                    opno,
+                    opfuncid,
+                    opresulttype: restype,
+                    args: NodeList::make2(mcx, l, r).unwrap(),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let mut q = Query {
+            commandType: CmdType::CMD_SELECT,
+            rtable: NodeList::make1(mcx, rel_rte(mcx, 77, 1)).unwrap(),
+            rteperminfos: NodeList::make1(mcx, perminfo(mcx, 77)).unwrap(),
+            targetList: NodeList::make2(mcx, tle(mcx, var(mcx, 1, 1), 1), tle(mcx, var(mcx, 1, 2), 2))
+                .unwrap(),
+            jointree: Some(from_expr(mcx, 1, None)),
+            ..Default::default()
+        };
+        for i in 1..=n {
+            let inner = alloc_leak_in(mcx, q).unwrap();
+            let k1 = op(551, 177, 23, var(mcx, 1, 2), int4(1));
+            q = Query {
+                commandType: CmdType::CMD_SELECT,
+                rtable: NodeList::make1(mcx, view_rte(mcx, 100 + i as u32, inner)).unwrap(),
+                rteperminfos: NodeList::make1(mcx, perminfo(mcx, 100 + i as u32)).unwrap(),
+                targetList: NodeList::make2(mcx, tle(mcx, var(mcx, 1, 1), 1), tle(mcx, k1, 2))
+                    .unwrap(),
+                jointree: Some(from_expr(mcx, 1, Some(op(525, 150, 16, var(mcx, 1, 2), int4(0))))),
+                ..Default::default()
+            };
+        }
+        q
+    }
+
+    fn view_chain_pullup_bytes(n: usize) -> usize {
+        crate::tests::install_fixtures();
+        let ctx = MemoryContext::new("t");
+        let mcx = ctx.mcx();
+        let mut parse = view_chain(mcx, n);
+        let before = ctx.used();
+        super::pull_up_subqueries(&mut crate::run::PlannerRun::new(mcx), &mut parse).unwrap();
+        let mut node = parse.jointree.unwrap().fromlist.nth(0);
+        while let Some(f) = node.as_from_expr() {
+            node = f.fromlist.nth(0);
+        }
+        assert_eq!(node.as_range_tbl_ref().unwrap().rtindex as usize, n + 1);
+        assert_eq!(parse.rtable.nth(n).as_range_tbl_entry().unwrap().relid, 77);
+        ctx.used() - before
+    }
+
+    // C copies each level's unexpanded subquery once and offsets in place:
+    // O(depth^2) nodes. Offsetting the pulled-up result functionally at every
+    // level re-copied all lower levels' output, O(depth^3).
+    #[test]
+    fn view_chain_pullup_memory_is_quadratic() {
+        let small = view_chain_pullup_bytes(30);
+        let large = view_chain_pullup_bytes(90);
+        assert!(large < small * 14, "30 levels: {small} bytes, 90 levels: {large} bytes");
     }
 
     #[test]
@@ -4648,24 +4736,9 @@ pub fn transform_MERGE_to_join<'mcx>(mcx: Mcx<'mcx>, parse: &mut Query<'mcx>) ->
             .nth(sourcerti as usize - 1)
             .as_range_tbl_entry()
             .expect("rtable cell");
-        let vartype = if srte.rtekind == RTEKind::RTE_RELATION {
-            match lsyscache::get_rel_type_id(srte.relid) {
-                Ok(t) if t != 0 => t,
-                _ => types_core::catalog::RECORDOID,
-            }
-        } else {
-            types_core::catalog::RECORDOID
-        };
-        let mut wrv = types_nodes::primnodes::Var::default();
-        wrv.varno = sourcerti;
-        wrv.varattno = 0;
-        wrv.vartype = vartype;
-        wrv.vartypmod = -1;
-        wrv.varnullingrels
-            .add_member(mcx, joinrti)?;
-        wrv.varnosyn = sourcerti as u32;
-        wrv.varattnosyn = 0;
-        wrv.location = -1;
+        let mut wrv =
+            nodes_core::makefuncs::make_whole_row_var(mcx, srte, sourcerti as u32, 0, false)?;
+        wrv.varnullingrels.add_member(mcx, joinrti)?;
         let ntest = Node::mk(
             mcx,
             types_nodes::primnodes::NullTest {
@@ -4780,6 +4853,31 @@ fn rtable_has_virtual_generated<'mcx>(
     Ok(false)
 }
 
+// A non-virtual column's expand_virtual_generated_columns tlist entry. C
+// keeps a typeless Var for a dropped column and its whole-row expansion
+// (expandRTE include_dropped) substitutes NULL::int4; nothing else can
+// reference a dropped column, so the entry stores that shape.
+pub(crate) fn stored_column_tlist_expr<'mcx>(
+    mcx: Mcx<'mcx>,
+    att: &types_tuple::FormData_pg_attribute,
+    varno: i32,
+    attno: i16,
+) -> PgResult<Node<'mcx>> {
+    if att.attisdropped {
+        return Node::mk_const(
+            mcx,
+            types_core::catalog::INT4OID,
+            -1,
+            0,
+            4,
+            datum::Datum::null(),
+            true,
+            true,
+        );
+    }
+    Node::mk_var(mcx, varno, attno, att.atttypid, att.atttypmod, att.attcollation, 0)
+}
+
 // expand_virtual_generated_columns (prepjointree.c:969). Replaces every Var
 // referencing a virtual generated column with its generation expression via
 // the pullup replace machinery. build_generation_expression (rewriteHandler.c)
@@ -4829,15 +4927,7 @@ pub fn expand_virtual_generated_columns<'mcx>(
                 let e = generation_expr(mcx, &rel, i + 1)?;
                 change_varno_expr(mcx, e, 1, rt_index as i32)?.unwrap_or(e)
             } else {
-                Node::mk_var(
-                    mcx,
-                    rt_index as i32,
-                    (i + 1) as i16,
-                    att.atttypid,
-                    att.atttypmod,
-                    att.attcollation,
-                    0,
-                )?
+                stored_column_tlist_expr(mcx, att, rt_index as i32, (i + 1) as i16)?
             };
             tlist.lappend(mcx, Node::mk_target_entry(mcx, expr, (i + 1) as i16, None, false)?)?;
         }
@@ -5292,6 +5382,11 @@ pub fn expand_generated_columns_in_expr<'mcx>(
             return Ok(Some(change_varno_expr(mcx, e, 1, varno)?.unwrap_or(e)));
         }
         clauses::walker::expression_tree_mutator(mcx, node, &mut |n| walk(mcx, n, rel, varno))
+    }
+    // rewriteHandler.c:4555: no virtual generated columns -> node unchanged
+    // (a whole-row Var stays a Var).
+    if !rel.rd_att.constr.as_deref().is_some_and(|c| c.has_generated_virtual) {
+        return Ok(node);
     }
     Ok(walk(mcx, node, rel, varno)?.unwrap_or(node))
 }

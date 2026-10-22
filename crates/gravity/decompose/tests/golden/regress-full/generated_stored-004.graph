@@ -1,0 +1,32 @@
+-- regress-full-generated_stored-004
+-- UPDATE gtestp SET f1 = f1 * 10;
+graph pipelines=2 breakers=0 init_plans=0 root=p1
+p0 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n2@1 n1@3 n0@4
+  source range rel=29445 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v2.1, 2=v2.-6, 3=v2.-1)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1=op514(outer.1, c23:10), 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=29445 rti=2 natts=1 indexes=() set=(1) tableoid=outer.2 route=rti1:29445 natts=1
+    target rti=3 rel=29448 natts=2 indexes=() set=(1) map=(1,0) generated=(2s)
+  outs 1=w8:val 2=w4:val 3=fx6:row
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+p1 node=4 serial site=1 reason=Write end=sink
+  nodes n4@0 n2@1 n1@3 n0@4
+  source range rel=29448 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  project (1=v3.1, 2=v3.-6, 3=v3.-1)
+  append arm 1/2
+  project (1=outer.1, 2=outer.2, 3=outer.3)
+  project (1=op514(outer.1, c23:10), 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=29445 rti=2 natts=1 indexes=() set=(1) tableoid=outer.2 route=rti1:29445 natts=1
+    target rti=3 rel=29448 natts=2 indexes=() set=(1) map=(1,0) generated=(2s)
+  outs 1=w8:val 2=w4:val 3=fx6:row
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+  outs 1=w4:val 2=w4:val 3=fx6:life/breaker
+scan-lanes node=3 rti=2 rel=29445 tableoid
+scan-lanes node=4 rti=3 rel=29448 tableoid
+mapped: Result ModifyTable Append SeqScan

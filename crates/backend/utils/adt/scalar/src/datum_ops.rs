@@ -9,9 +9,10 @@ use core::ptr::NonNull;
 use datum::expandeddatum::{datum_get_eohp, eoh_flatten_into, eoh_get_flat_size};
 use datum::Datum;
 use mcx::{check_alloc_size, vec_append_bytes, Allocator, Mcx, PgVec};
-use types_error::{PgError, PgResult, ERRCODE_DATA_EXCEPTION};
+use types_error::{PgError, PgResult, ERRCODE_DATA_CORRUPTED, ERRCODE_DATA_EXCEPTION};
 use types_tuple::varatt::{
-    varatt_is_1b_e, varatt_is_external_expanded, varsize_any, vartag_external, VARTAG_EXPANDED_RW,
+    varatt_is_1b, varatt_is_1b_e, varatt_is_external_expanded, varsize_any, vartag_external, VARHDRSZ,
+    VARTAG_EXPANDED_RW,
 };
 
 #[track_caller]
@@ -26,6 +27,15 @@ fn invalid_datum_pointer() -> Box<PgError> {
 #[track_caller]
 #[cold]
 #[inline(never)]
+#[cold]
+#[inline(never)]
+fn varsize_under_header(n: usize) -> Box<PgError> {
+    Box::new(
+        PgError::error(format!("invalid varlena size {n}: less than its {VARHDRSZ}-byte header"))
+            .with_sqlstate(ERRCODE_DATA_CORRUPTED),
+    )
+}
+
 fn invalid_typlen(typlen: i16) -> Box<PgError> {
     Box::new(PgError::error(format!("invalid typLen: {typlen}")))
 }
@@ -92,6 +102,12 @@ pub fn datum_copy<'mcx>(
         }
     }
     let sz = datum_get_size(value, typbyval, typlen)?;
+    // D4728's class: a 4-byte header under its own 4 bytes is no value; a copy of sz bytes would end inside its header
+    // and its next reader would take the header word past the copy's end. C datumCopy copies it (and over-reads later).
+    // SAFETY: a varlena datum's first byte is live (datum_get_size read its header).
+    if typlen == -1 && sz < VARHDRSZ && !unsafe { varatt_is_1b(p) } {
+        return Err(varsize_under_header(sz));
+    }
     let dst = alloc_bytes(mcx, sz)?;
     // SAFETY: src live for sz bytes (datum_get_size read it); dst fresh.
     unsafe { core::ptr::copy_nonoverlapping(p, dst.as_ptr(), sz) };

@@ -1,0 +1,122 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2plan
+step s2plan: EXPLAIN (costs off) UPDATE ddi_t t SET v = v + 1 WHERE NOT EXISTS (SELECT 1 FROM ddi_s s WHERE s.k = t.k) AND t.n > 2900;
+QUERY PLAN                            
+--------------------------------------
+Update on ddi_t t                     
+  ->  Hash Right Anti Join            
+        Hash Cond: (s.k = t.k)        
+        ->  Seq Scan on ddi_s s       
+        ->  Hash                      
+              ->  Seq Scan on ddi_t t 
+                    Filter: (n > 2900)
+(7 rows)
+
+
+starting permutation: s1v s2upd s1c s2chk s2row
+s1: WARNING:  there is already a transaction in progress
+step s1v: UPDATE ddi_t SET v = v + 1000 WHERE k = 2999;
+step s2upd: UPDATE ddi_t t SET v = v + 1 WHERE NOT EXISTS (SELECT 1 FROM ddi_s s WHERE s.k = t.k) AND t.n > 2900; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT count(*), sum(v), min(k), max(k) FROM ddi_t WHERE n > 2900 OR k = 2999;
+count|    sum| min| max
+-----+-------+----+----
+  100|2951566|2901|3000
+(1 row)
+
+step s2row: SELECT * FROM ddi_t WHERE k = 2999;
+   k|   n|    v
+----+----+-----
+2999|2999|30991
+(1 row)
+
+
+starting permutation: s1n s2upd s1c s2chk s2row
+step s1n: UPDATE ddi_t SET n = 100 WHERE k = 2999;
+step s2upd: UPDATE ddi_t t SET v = v + 1 WHERE NOT EXISTS (SELECT 1 FROM ddi_s s WHERE s.k = t.k) AND t.n > 2900; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT count(*), sum(v), min(k), max(k) FROM ddi_t WHERE n > 2900 OR k = 2999;
+count|    sum| min| max
+-----+-------+----+----
+  100|2950565|2901|3000
+(1 row)
+
+step s2row: SELECT * FROM ddi_t WHERE k = 2999;
+   k|  n|    v
+----+---+-----
+2999|100|29990
+(1 row)
+
+
+starting permutation: s1del s2upd s1c s2chk s2row
+step s1del: DELETE FROM ddi_t WHERE k = 2999;
+step s2upd: UPDATE ddi_t t SET v = v + 1 WHERE NOT EXISTS (SELECT 1 FROM ddi_s s WHERE s.k = t.k) AND t.n > 2900; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT count(*), sum(v), min(k), max(k) FROM ddi_t WHERE n > 2900 OR k = 2999;
+count|    sum| min| max
+-----+-------+----+----
+   99|2920575|2901|3000
+(1 row)
+
+step s2row: SELECT * FROM ddi_t WHERE k = 2999;
+k|n|v
+-+-+-
+(0 rows)
+
+
+starting permutation: s1vs s2upd s1c s2chk s2row
+step s1vs: UPDATE ddi_t SET v = v + 1000 WHERE k = 2999; INSERT INTO ddi_s VALUES (2999, 0);
+step s2upd: UPDATE ddi_t t SET v = v + 1 WHERE NOT EXISTS (SELECT 1 FROM ddi_s s WHERE s.k = t.k) AND t.n > 2900; <waiting ...>
+step s1c: COMMIT;
+step s2upd: <... completed>
+step s2chk: SELECT count(*), sum(v), min(k), max(k) FROM ddi_t WHERE n > 2900 OR k = 2999;
+count|    sum| min| max
+-----+-------+----+----
+  100|2951566|2901|3000
+(1 row)
+
+step s2row: SELECT * FROM ddi_t WHERE k = 2999;
+   k|   n|    v
+----+----+-----
+2999|2999|30991
+(1 row)
+
+
+starting permutation: s1v s2del s1c s2chk s2row
+step s1v: UPDATE ddi_t SET v = v + 1000 WHERE k = 2999;
+step s2del: DELETE FROM ddi_t t WHERE NOT EXISTS (SELECT 1 FROM ddi_s s WHERE s.k = t.k) AND t.n > 2900; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2chk: SELECT count(*), sum(v), min(k), max(k) FROM ddi_t WHERE n > 2900 OR k = 2999;
+count|    sum| min| max
+-----+-------+----+----
+   34|1003170|2901|3000
+(1 row)
+
+step s2row: SELECT * FROM ddi_t WHERE k = 2999;
+k|n|v
+-+-+-
+(0 rows)
+
+
+starting permutation: s1n s2del s1c s2chk s2row
+step s1n: UPDATE ddi_t SET n = 100 WHERE k = 2999;
+step s2del: DELETE FROM ddi_t t WHERE NOT EXISTS (SELECT 1 FROM ddi_s s WHERE s.k = t.k) AND t.n > 2900; <waiting ...>
+step s1c: COMMIT;
+step s2del: <... completed>
+step s2chk: SELECT count(*), sum(v), min(k), max(k) FROM ddi_t WHERE n > 2900 OR k = 2999;
+count|    sum| min| max
+-----+-------+----+----
+   35|1033160|2901|3000
+(1 row)
+
+step s2row: SELECT * FROM ddi_t WHERE k = 2999;
+   k|  n|    v
+----+---+-----
+2999|100|29990
+(1 row)
+

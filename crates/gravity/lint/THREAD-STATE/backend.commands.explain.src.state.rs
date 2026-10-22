@@ -1,0 +1,4 @@
+backend/commands/explain/src/state.rs	EXTENSION_NAMES	pgport	exit	leader	explain extension ids appended by GetExplainExtensionId at a library's _PG_init (pg_overexplain), deduplicated by name: bounded by the loaded libraries, per session by design; EXPLAIN runs on the leader
+backend/commands/explain/src/state.rs	EXTENSION_OPTIONS	pgport	exit	leader	extension EXPLAIN options registered at _PG_init by RegisterExtensionExplainOption, deduplicated by name: bounded by the loaded libraries, per session by design; read by ParseExplainOptionList on the leader
+backend/commands/explain/src/state.rs	PER_NODE_HOOK	pgport	exit	leader	explain_per_node_hook set at a library's _PG_init, read by ExplainNode on the leader
+backend/commands/explain/src/state.rs	PER_PLAN_HOOK	pgport	exit	leader	explain_per_plan_hook set at a library's _PG_init, read by ExplainOnePlanRef on the leader

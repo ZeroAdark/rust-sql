@@ -54,6 +54,10 @@ pub struct BgWriterState {
     last_snapshot_ts: i64,
     last_snapshot_lsn: XLogRecPtr,
     pub prev_hibernate: bool,
+    /// A shared_buffers give-back is pending (`bufmgr::giveback_step`): the next cycle after this many ms, and the
+    /// body's last run, which keeps its own BgWriterDelay cadence meanwhile.
+    pub giveback_wait_ms: Option<u32>,
+    last_body_ts: i64,
 }
 
 impl Default for BgWriterState {
@@ -69,6 +73,8 @@ impl BgWriterState {
             last_snapshot_ts: 0,
             last_snapshot_lsn: 0,
             prev_hibernate: false,
+            giveback_wait_ms: None,
+            last_body_ts: 0,
         }
     }
 }
@@ -158,8 +164,9 @@ fn abort_cleanup(err: &PgError) {
 
 /// ONE loop-body iteration (both drivers): ResetLatch → main-loop
 /// interrupts → BgBufferSync → pgstat flushes → post-checkpoint smgr sweep
-/// → standby-snapshot logging. Returns `can_hibernate` — what the C loop
-/// feeds the hibernation leg. The tail wait is the DRIVER's: the thread
+/// → standby-snapshot logging, then one slice of a pending shared_buffers
+/// give-back (the body keeps its BgWriterDelay cadence while one is pending).
+/// Returns `can_hibernate` — what the C loop feeds the hibernation leg. The tail wait is the DRIVER's: the thread
 /// driver WaitLatches below; the job driver turns it into a re-arm
 /// deadline.
 pub fn bgwriter_cycle(state: &mut BgWriterState) -> PgResult<bool> {
@@ -169,6 +176,27 @@ pub fn bgwriter_cycle(state: &mut BgWriterState) -> PgResult<bool> {
 
     interrupt::ProcessMainLoopInterrupts()?;
 
+    let body_due = match state.giveback_wait_ms {
+        None => true,
+        Some(_) => {
+            let now = timestamp_seams::get_current_timestamp::call();
+            let due = now - state.last_body_ts >= BgWriterDelay() as i64 * 1000;
+            if due {
+                state.last_body_ts = now;
+            }
+            due
+        }
+    };
+    state.giveback_wait_ms = None;
+    let can_hibernate = if body_due { cycle_body(state)? } else { false };
+    state.giveback_wait_ms = match bufmgr::giveback_step()? {
+        bufmgr::GivebackStep::Idle => None,
+        bufmgr::GivebackStep::Again(ms) => Some(ms),
+    };
+    Ok(can_hibernate && state.giveback_wait_ms.is_none())
+}
+
+fn cycle_body(state: &mut BgWriterState) -> PgResult<bool> {
     let can_hibernate = bufmgr::BgBufferSync(&mut state.sync)?;
 
     if pgstat_seams::pgstat_report_bgwriter::is_installed() {
@@ -202,7 +230,7 @@ fn bgwriter_loop(state: &mut BgWriterState) -> PgResult<Never> {
         let rc = latch::WaitLatch(
             g::MyLatch(),
             WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-            BgWriterDelay() as i64,
+            state.giveback_wait_ms.map_or(BgWriterDelay() as i64, i64::from),
             WAIT_EVENT_BGWRITER_MAIN,
         )?;
 

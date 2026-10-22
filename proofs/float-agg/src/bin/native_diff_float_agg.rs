@@ -1,5 +1,5 @@
 //! Native differential replay of the float-agg value grids — in particular
-//! the three CI cluster FAILED harnesses (grid_stddev_pop, grid_stddev_samp,
+//! the three fleet FAILED harnesses (grid_stddev_pop, grid_stddev_samp,
 //! grid_corr; suite 994f9977/1785310905), whose failed check is a sqrt-result
 //! bit-compare = the dsqrt dual-mode artifact signature (CBMC's sqrt model
 //! diverges from real silicon; native parity for dsqrt itself is proven in

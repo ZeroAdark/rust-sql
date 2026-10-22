@@ -132,6 +132,7 @@ impl PosixVfs {
             getrlimit_failed: true,
             getrlimit_errno: libc::ENOSYS,
             setrlimit_errno: 0,
+            kernel_per_process_cap: None,
         }
     }
 
@@ -147,6 +148,9 @@ impl PosixVfs {
                 getrlimit_failed: true,
                 getrlimit_errno: get_errno(),
                 setrlimit_errno: 0,
+                // Still worth reporting: with no rlimit to read, the kernel's
+                // own cap is the only ceiling fd's arithmetic can use.
+                kernel_per_process_cap: kernel_per_process_fd_cap(),
             };
         }
         // rlim_t is u64 on every platform this builds for (Linux, macOS), so
@@ -160,6 +164,7 @@ impl PosixVfs {
             getrlimit_failed: false,
             getrlimit_errno: 0,
             setrlimit_errno: 0,
+            kernel_per_process_cap: kernel_per_process_fd_cap(),
         };
         if hard != libc::RLIM_INFINITY && soft_before >= hard {
             return report;
@@ -189,6 +194,35 @@ impl PosixVfs {
         }
         report.setrlimit_errno = last_errno;
         report
+    }
+}
+
+/// The per-process cap enforced ABOVE RLIMIT_NOFILE; `None` where the soft
+/// limit already tells the truth. macOS only: `setrlimit(1<<20)` succeeds there
+/// and `open()` still fails at `kern.maxfilesperproc`. Linux refuses a soft
+/// limit above `fs.nr_open`, so its rlimit is already the effective cap.
+#[cfg(not(target_family = "wasm"))]
+fn kernel_per_process_fd_cap() -> Option<u64> {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        let mut value: libc::c_int = 0;
+        let mut len = core::mem::size_of::<libc::c_int>();
+        // SAFETY: sysctlbyname writes at most `len` bytes into `value` and
+        // updates `len`; the name is a NUL-terminated literal.
+        let rc = unsafe {
+            libc::sysctlbyname(
+                c"kern.maxfilesperproc".as_ptr(),
+                core::ptr::from_mut(&mut value).cast(),
+                &mut len,
+                core::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc == 0 && value > 0 { Some(value as u64) } else { None }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        None
     }
 }
 
@@ -354,6 +388,59 @@ impl Vfs for PosixVfs {
     }
 
     #[inline]
+    fn cachestat(&self, fd: c_int, off: off_t, len: off_t, out: &mut [u64; 2]) -> c_int {
+        // SAFETY: sysconf reads a constant.
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as u64;
+        let (lo, hi) = (off.max(0) as u64, off.max(0) as u64 + len.max(0) as u64);
+        let pages = hi.div_ceil(page) - lo / page;
+        if pages == 0 {
+            *out = [0, 0];
+            return 0;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            #[repr(C)]
+            struct Range {
+                off: u64,
+                len: u64,
+            }
+            // struct cachestat: nr_cache, nr_dirty, nr_writeback, nr_evicted, nr_recently_evicted
+            let (r, mut st) = (Range { off: lo, len: hi - lo }, [0u64; 5]);
+            // SAFETY: cachestat(2) (syscall 451 on every architecture) reads `r`, writes `st`; fd is caller-owned.
+            let rc = unsafe { libc::syscall(451, fd, &r as *const Range, st.as_mut_ptr(), 0 as libc::c_uint) };
+            if rc == 0 {
+                *out = [st[0], pages];
+            }
+            rc as c_int
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = fd;
+            crate::set_errno(libc::EOPNOTSUPP);
+            -1
+        }
+    }
+
+    #[inline]
+    fn fadvise_random(&self, fd: c_int) -> c_int {
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: advisory hint on a caller-owned descriptor.
+            unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_RANDOM) }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // SAFETY: F_RDAHEAD with arg 0 disables read-ahead; fd is caller-owned.
+            unsafe { libc::fcntl(fd, libc::F_RDAHEAD, 0 as libc::c_int) }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = fd;
+            0
+        }
+    }
+
+    #[inline]
     fn stat(&self, path: &CStr, out: &mut FileInfo) -> c_int {
         // SAFETY: st is a valid out-param; path is NUL-terminated.
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
@@ -402,6 +489,12 @@ impl Vfs for PosixVfs {
     fn rename(&self, from: &CStr, to: &CStr) -> c_int {
         // SAFETY: both paths NUL-terminated; rename(2) is atomic.
         unsafe { libc::rename(from.as_ptr(), to.as_ptr()) }
+    }
+
+    #[inline]
+    fn link(&self, from: &CStr, to: &CStr) -> c_int {
+        // SAFETY: both paths NUL-terminated.
+        unsafe { libc::link(from.as_ptr(), to.as_ptr()) }
     }
 
     #[inline]
@@ -456,5 +549,6 @@ fn file_info_from_stat(st: &libc::stat) -> FileInfo {
         ino: st.st_ino as u64,
         uid: st.st_uid as u32,
         gid: st.st_gid as u32,
+        blksize: st.st_blksize as i64,
     }
 }

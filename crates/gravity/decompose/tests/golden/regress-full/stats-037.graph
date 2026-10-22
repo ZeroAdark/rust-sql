@@ -1,0 +1,21 @@
+-- regress-full-stats-037
+-- SELECT sum(extends) AS my_io_sum_shared_after_extends FROM pg_stat_get_backend_io(pg_backend_pid()) WHERE context = 'normal' AND object = 'relation'
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=0 PlainAgg)
+  nodes n1@0 n0@4^
+  source const
+  srf from rti=1 [1:Other fn6386 cols=20 fn6386(fn2026())]
+  filter op98(v1.3, c25:'normal')
+  filter op98(v1.2, c25:'relation')
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17, 18=v1.18, 19=v1.19, 20=v1.20)
+  outs 1=vl:row 2=vl:row 3=vl:row 4=w8:val 5=vl:row 6=w8:val 7=w8:val 8=vl:row 9=w8:val 10=w8:val 11=w8:val 12=w8:val 13=vl:row 14=w8:val 15=w8:val 16=w8:val 17=w8:val 18=w8:val 19=w8:val 20=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=agg2107(1=outer.12))
+  outs 1=vl:call2107
+breaker slot=0 kind=PlainAgg budget=Fixed(88) spill=None producer=p0 layout=[]->[SumI128@0,Count@16]+valid 32B
+group slot=0 producer=p0 node=0 form=Plain hints=[] layout=[]->[SumI128@0,Count@16]+valid 32B
+  agg aggno=0 fn=2107 reg=SumInt128 slot=0 count_slot=- final=Int128Sum class=SumI128 trans=Abi(SumI128) mods=[] expr=agg2107(1=outer.12)
+mapped: FunctionScan Agg

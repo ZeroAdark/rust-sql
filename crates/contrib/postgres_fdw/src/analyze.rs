@@ -183,7 +183,7 @@ fn postgres_acquire_sample_rows<'mcx>(
         targrows as u32,
     );
     // C's "postgres_fdw temporary data" per-tuple context.
-    let mut temp_cxt = MemoryContext::new_bump("postgres_fdw temporary data");
+    let mut temp_cxt = MemoryContext::new_wholesale("postgres_fdw temporary data");
 
     // Remote access as the table's owner (postgres_fdw.c:5122-5125).
     let table = GetForeignTable(mcx, relation.rd_id)?;
@@ -320,9 +320,10 @@ fn postgres_acquire_sample_rows<'mcx>(
                 if pos == rows.len() {
                     rows.push(tup);
                 } else {
-                    // C heap_freetuple's the replaced copy; here it stays in
-                    // the Analyze arena until teardown (native acquire precedent).
-                    rows[pos] = tup;
+                    // heap_freetuple of the replaced copy (postgres_fdw.c:5424).
+                    let replaced = core::mem::replace(&mut rows[pos], tup);
+                    // SAFETY: a forgotten form_sample_tuple image, unaliased once replaced.
+                    unsafe { heaptuple::heap_freetuple(mcx, replaced) };
                 }
                 temp_cxt.reset();
             }

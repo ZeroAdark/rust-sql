@@ -30,6 +30,18 @@ pub fn backend_context_forest() -> Vec<TreeStats> {
     })
 }
 
+/// The forest as C's single tree: every other root is parented under the
+/// TopMemoryContext root, as mcxt.c creates every context below it.
+pub fn backend_context_tree() -> Vec<TreeStats> {
+    let mut forest = backend_context_forest();
+    if let Some(i) = forest.iter().position(|t| t.name == "TopMemoryContext") {
+        let mut top = forest.remove(i);
+        top.children.append(&mut forest);
+        forest.push(top);
+    }
+    forest
+}
+
 // memgrowth-discriminator (suspect-A census): raw-Rust slot-registry census
 // hook. The slot registries (execmain querydesc ENTRIES, pquery stmt_list,
 // queryenvironment/tuplestore holds, the resowner arena) are thread-local
@@ -84,10 +96,7 @@ fn process_log_memory_context_interrupt() -> PgResult<()> {
         ))
         .finish(loc("ProcessLogMemoryContextInterrupt"))?;
 
-    // mcxt.c:1320: depth and children per parent both capped at 100. The
-    // forest stands in for TopMemoryContext's subtree — every root is walked
-    // at level 1 (C divergence: no TopMemoryContext parentage in the
-    // ownership model, so no single level-1 line).
+    // mcxt.c:1320: depth and children per parent both capped at 100.
     let mut grand_totals = Counters::default();
     let mut emit = |line: String| {
         ereport(LOG_SERVER_ONLY)
@@ -96,7 +105,7 @@ fn process_log_memory_context_interrupt() -> PgResult<()> {
             .errmsg_internal(line)
             .finish(loc("MemoryContextStatsInternal"))
     };
-    for root in backend_context_forest() {
+    for root in backend_context_tree() {
         stats_internal(&root, 1, 100, 100, &mut grand_totals, false, &mut emit)?;
     }
     // mcxt.c:864: one message per context, then the grand total — and
@@ -146,17 +155,18 @@ impl Counters {
 /// put_context_row so the view and the dump agree — no chunk or context
 /// headers in the totals, the total floored at the charged bytes and the
 /// block count at 1 (C's keeper is eager, pgrust's is lazy); bump free space
-/// is the block-transition window-tail snapshot and has no chunk count.
+/// is the block-transition window-tail snapshot and has no chunk count. A
+/// Slab has no keeper block: its figures are slab.c:937 SlabStats'.
 fn counters_of(t: &TreeStats) -> Counters {
     let total = t.arena_footprint.max(t.used);
     let free = t.free_bytes.min(total);
-    Counters { nblocks: t.nblocks.max(1), freechunks: t.free_chunks, totalspace: total, freespace: free }
+    let nblocks = if t.kind == "Slab" { t.nblocks } else { t.nblocks.max(1) };
+    Counters { nblocks, freechunks: t.free_chunks, totalspace: total, freespace: free }
 }
 
 /// Each allocator's stats string (aset.c:1596, generation.c:1076, slab.c:978,
-/// bump.c:713). Generation's allocated-chunk count and Slab's empty-block
-/// count are not tracked either (0).
-fn stats_string(kind: &str, c: &Counters) -> String {
+/// bump.c:713). Generation's allocated-chunk count is not tracked (0).
+fn stats_string(kind: &str, c: &Counters, empty_blocks: usize) -> String {
     let (total, nblocks, free, chunks, used) =
         (c.totalspace, c.nblocks, c.freespace, c.freechunks, c.used());
     match kind {
@@ -164,7 +174,7 @@ fn stats_string(kind: &str, c: &Counters) -> String {
             "{total} total in {nblocks} blocks ({chunks} chunks); {free} free ({chunks} chunks); {used} used"
         ),
         "Slab" => format!(
-            "{total} total in {nblocks} blocks; 0 empty blocks; {free} free ({chunks} chunks); {used} used"
+            "{total} total in {nblocks} blocks; {empty_blocks} empty blocks; {free} free ({chunks} chunks); {used} used"
         ),
         "Bump" => format!("{total} total in {nblocks} blocks; {free} free; {used} used"),
         _ => format!("{total} total in {nblocks} blocks; {free} free ({chunks} chunks); {used} used"),
@@ -217,7 +227,7 @@ fn stats_internal(
 ) -> PgResult<()> {
     let own = counters_of(t);
     let (name, truncated_ident) = print_label(t);
-    let stats = stats_string(t.kind, &own);
+    let stats = stats_string(t.kind, &own, t.empty_blocks);
     emit(if print_to_stderr {
         format!("{}{name}: {stats}{truncated_ident}", "  ".repeat(level - 1))
     } else {
@@ -263,10 +273,11 @@ fn stats_internal(
 }
 
 fn tally_subtree(t: &TreeStats, local_totals: &mut Counters, ichild: &mut usize) {
-    local_totals.add(&counters_of(t));
-    *ichild += 1;
-    for child in &t.children {
-        tally_subtree(child, local_totals, ichild);
+    let mut pending = vec![t];
+    while let Some(t) = pending.pop() {
+        local_totals.add(&counters_of(t));
+        *ichild += 1;
+        pending.extend(t.children.iter());
     }
 }
 
@@ -336,7 +347,11 @@ pub fn run_session_teardown() {
             }
             None
         });
-        let Some((i, f)) = next else { return };
+        let Some((i, f)) = next else {
+            // C8 checker 1 (B2): the session's estate is gone; the memory ledger ends the session the unbind left open
+            memledger::charge::session_drained();
+            return;
+        };
         // Absent-state tolerance is each cleanup's contract; the guard
         // keeps one bad cleanup from aborting the server.
         // unwind-ok: log-then-die
@@ -394,7 +409,7 @@ fn oom_observer(context_name: &str, request: usize) {
             out.push('\n');
             Ok(())
         };
-        for root in backend_context_forest() {
+        for root in backend_context_tree() {
             let _ = stats_internal(&root, 1, 100, 100, &mut grand_totals, true, &mut emit);
         }
     }
@@ -440,6 +455,17 @@ mod tests {
         assert!(!forest.iter().any(|t| t.name == "root-b"));
     }
 
+    #[test]
+    fn tree_parents_every_root_under_top_memory_context() {
+        mcx::set_root_observer(observe_root);
+        let _top = mcx::MemoryContext::new("TopMemoryContext");
+        let _other = mcx::MemoryContext::new("tree-other");
+        let tree = backend_context_tree();
+        assert_eq!(tree.len(), 1, "one level-1 context, as C's TopMemoryContext");
+        assert_eq!(tree[0].name, "TopMemoryContext");
+        assert!(tree[0].children.iter().any(|t| t.name == "tree-other"));
+    }
+
     fn node(name: &'static str, ident: Option<&str>, used: usize, children: Vec<TreeStats>) -> TreeStats {
         TreeStats {
             name,
@@ -455,6 +481,7 @@ mod tests {
             nblocks: 1,
             free_bytes: 8,
             free_chunks: 0,
+            empty_blocks: 0,
             children,
         }
     }
@@ -577,12 +604,36 @@ mod tests {
         );
     }
 
+    // slab.c:955-981: a Slab that never allocated has no blocks (no keeper
+    // floor), and its parked empty blocks print apart from the blocklist.
+    #[test]
+    fn slab_line_counts_blocklist_and_empty_blocks_apart() {
+        let mut t = node("node48", None, 0, vec![]);
+        t.kind = "Slab";
+        t.arena_footprint = 0;
+        t.nblocks = 0;
+        t.free_bytes = 0;
+        let (lines, _) = dump(&t, 100, 100, false);
+        assert_eq!(lines[0], "level: 1; node48: 0 total in 0 blocks; 0 empty blocks; 0 free (0 chunks); 0 used");
+        t.arena_footprint = 3 * 8192;
+        t.used = 3 * 8192;
+        t.nblocks = 1;
+        t.empty_blocks = 2;
+        t.free_bytes = 720;
+        t.free_chunks = 10;
+        let (lines, _) = dump(&t, 100, 100, false);
+        assert_eq!(
+            lines[0],
+            "level: 1; node48: 24576 total in 1 blocks; 2 empty blocks; 720 free (10 chunks); 23856 used"
+        );
+    }
+
     #[test]
     fn stats_string_follows_each_allocator() {
         let c = Counters { nblocks: 2, freechunks: 0, totalspace: 100, freespace: 40 };
-        assert_eq!(stats_string("AllocSet", &c), "100 total in 2 blocks; 40 free (0 chunks); 60 used");
-        assert_eq!(stats_string("Generation", &c), "100 total in 2 blocks (0 chunks); 40 free (0 chunks); 60 used");
-        assert_eq!(stats_string("Slab", &c), "100 total in 2 blocks; 0 empty blocks; 40 free (0 chunks); 60 used");
-        assert_eq!(stats_string("Bump", &c), "100 total in 2 blocks; 40 free; 60 used");
+        assert_eq!(stats_string("AllocSet", &c, 0), "100 total in 2 blocks; 40 free (0 chunks); 60 used");
+        assert_eq!(stats_string("Generation", &c, 0), "100 total in 2 blocks (0 chunks); 40 free (0 chunks); 60 used");
+        assert_eq!(stats_string("Slab", &c, 3), "100 total in 2 blocks; 3 empty blocks; 40 free (0 chunks); 60 used");
+        assert_eq!(stats_string("Bump", &c, 0), "100 total in 2 blocks; 40 free; 60 used");
     }
 }

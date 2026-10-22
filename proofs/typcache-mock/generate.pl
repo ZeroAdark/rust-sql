@@ -4,7 +4,7 @@
 #
 # Usage:
 #   PGSRC=/path/to/vendor/postgres-src perl generate.pl > src/generated.rs
-# Default PGSRC matches the sibling pgrust-reference clone layout.
+# Default PGSRC matches the sibling pgrust-fabled clone layout.
 #
 # Faithfulness notes:
 # - Rows are parsed with PostgreSQL's own Catalog.pm (ParseHeader + ParseData),
@@ -19,7 +19,7 @@ use strict;
 use warnings;
 
 my $pgsrc = $ENV{PGSRC}
-  // "$ENV{HOME}/dev/pgrust-reference/vendor/postgres-src";
+  // "$ENV{HOME}/dev/pgrust-fabled/vendor/postgres-src";
 my $cat = "$pgsrc/src/include/catalog";
 die "no catalog dir at $cat" unless -d $cat;
 unshift @INC, "$pgsrc/src/backend/catalog";

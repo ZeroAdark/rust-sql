@@ -1,0 +1,99 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1g s2u s1c s2c s3sel
+step s1g: UPDATE dk SET grp = 1 WHERE id = 2;
+step s2u: UPDATE dk t SET val = (SELECT max(v) FROM ds WHERE ds.grp = t.grp) WHERE t.id <= 3; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val FROM dk ORDER BY id;
+id|grp|val
+--+---+---
+ 1|  1|200
+ 2|  1|200
+ 3|  1|200
+ 4|  0| 40
+ 5|  1| 50
+ 6|  0| 60
+(6 rows)
+
+
+starting permutation: s1g s1i s2u s1c s2c s3sel
+step s1g: UPDATE dk SET grp = 1 WHERE id = 2;
+step s1i: INSERT INTO ds VALUES (1, 900);
+step s2u: UPDATE dk t SET val = (SELECT max(v) FROM ds WHERE ds.grp = t.grp) WHERE t.id <= 3; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val FROM dk ORDER BY id;
+id|grp|val
+--+---+---
+ 1|  1|200
+ 2|  1|200
+ 3|  1|200
+ 4|  0| 40
+ 5|  1| 50
+ 6|  0| 60
+(6 rows)
+
+
+starting permutation: s1v s2w s1c s2c s3sel
+step s1v: UPDATE dk SET val = 1000 WHERE id = 3;
+step s2w: UPDATE dk t SET val = -t.val WHERE t.val < (SELECT avg(v) FROM ds WHERE ds.grp = t.grp) AND t.id <= 4; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val FROM dk ORDER BY id;
+id|grp| val
+--+---+----
+ 1|  1| -10
+ 2|  0|  20
+ 3|  1|1000
+ 4|  0|  40
+ 5|  1|  50
+ 6|  0|  60
+(6 rows)
+
+
+starting permutation: s1g s2r s1c s2c s3sel
+step s1g: UPDATE dk SET grp = 1 WHERE id = 2;
+step s2r: UPDATE dk t SET val = (SELECT count(*) FROM ds WHERE ds.grp = t.grp) WHERE t.id <= 3 RETURNING id, grp, val; <waiting ...>
+step s1c: COMMIT;
+step s2r: <... completed>
+id|grp|val
+--+---+---
+ 1|  1|  2
+ 2|  1|  2
+ 3|  1|  2
+(3 rows)
+
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val FROM dk ORDER BY id;
+id|grp|val
+--+---+---
+ 1|  1|  2
+ 2|  1|  2
+ 3|  1|  2
+ 4|  0| 40
+ 5|  1| 50
+ 6|  0| 60
+(6 rows)
+
+
+starting permutation: s1g s1v s2d s1c s2c s3sel
+step s1g: UPDATE dk SET grp = 1 WHERE id = 2;
+step s1v: UPDATE dk SET val = 1000 WHERE id = 3;
+step s2d: DELETE FROM dk t WHERE t.val < (SELECT max(v) FROM ds WHERE ds.grp = t.grp) AND t.id <= 4; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT id, grp, val FROM dk ORDER BY id;
+id|grp| val
+--+---+----
+ 2|  1|  20
+ 3|  1|1000
+ 4|  0|  40
+ 5|  1|  50
+ 6|  0|  60
+(5 rows)
+

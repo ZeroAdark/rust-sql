@@ -14,8 +14,10 @@ pub struct TransientRelState<'mcx> {
     pub output_cid: CommandId,
     pub ti_options: i32,
     pub bistate: Option<BulkInsertStateData>,
+    pub multi_insert_ok: bool,
     /// W1 multi-insert buffer (tableam::write_buffer); None = per-tuple path.
     pub mibuf: Option<WriteMultiInsertBuffer<'mcx>>,
+    pub own_slot: Option<SlotData<'mcx>>,
 }
 
 impl<'mcx> TransientRelState<'mcx> {
@@ -27,7 +29,9 @@ impl<'mcx> TransientRelState<'mcx> {
             output_cid: 0,
             ti_options: 0,
             bistate: None,
+            multi_insert_ok: true,
             mibuf: None,
+            own_slot: None,
         }
     }
 }

@@ -1,0 +1,11 @@
+path	crates/backend/executor/spillset/src/lib.rs
+growth	std::iter::Extend::extend	1
+growth	std::vec::Vec::extend_from_slice	1
+growth	std::vec::Vec::push	3
+macro	std::format	2
+macro	std::vec	2
+method	std::boxed::Box::new	1
+method	std::sync::Arc::new	1
+type	std::boxed::Box	1
+type	std::sync::Arc	1
+type	std::vec::Vec	1

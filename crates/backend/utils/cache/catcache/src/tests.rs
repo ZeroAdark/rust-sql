@@ -62,9 +62,8 @@ fn get_cc_hash_eq_funcs_rejects_unknown() {
 }
 
 fn tiny_image() -> Vec<u8> {
-    /* 23-byte header + pad + 8B data, t_hoff 24; the hit path never decodes it */
     let mut img = vec![0u8; 32];
-    img[22] = 24; /* t_hoff */
+    img[22] = 24;
     img
 }
 
@@ -103,7 +102,6 @@ fn two_key_hit_general_lane() {
         .unwrap()
         .expect("2-key hit");
     ReleaseCatCache(t);
-    /* different second key: compare-miss falls through to the uninstalled scan seam */
     assert!(std::panic::catch_unwind(|| {
         SearchCatCache2(id, oid_key(1259), CatCKey::Value(Datum::from_i16(4)))
     })
@@ -129,12 +127,11 @@ fn name_key_hit() {
 #[test]
 fn move_to_front_on_hit() {
     let id = fresh_id();
-    testing::init_cache_bare(id, 1, KINDS1, 1, None); /* one bucket */
+    testing::init_cache_bare(id, 1, KINDS1, 1, None);
     let img = tiny_image();
     for oid in [10u32, 11, 12] {
         testing::insert_positive(id, &[oid_key(oid), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED], &img);
     }
-    /* head is last inserted (12); hitting 10 moves it to the head */
     let t = SearchCatCache1(id, oid_key(10)).unwrap().unwrap();
     ReleaseCatCache(t);
     with_state(|st| {
@@ -163,7 +160,6 @@ fn invalidate_and_reset() {
     testing::insert_negative(id, &[oid_key(78), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED]);
     assert_eq!(testing::cache_ntup(id), 2);
 
-    /* unreferenced entry: removed outright */
     let hv = with_state(|st| {
         let c = st.cache(id);
         compute_hash_value(&c.cc_kind, 1, &[oid_key(77), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED])
@@ -171,11 +167,10 @@ fn invalidate_and_reset() {
     crate::CatCacheInvalidate(id, hv);
     assert_eq!(testing::cache_ntup(id), 1);
 
-    /* referenced entry: marked dead, freed on release */
     testing::insert_positive(id, &[oid_key(77), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED], &img);
     let t = SearchCatCache1(id, oid_key(77)).unwrap().unwrap();
     crate::CatCacheInvalidate(id, hv);
-    assert_eq!(testing::cache_ntup(id), 2); /* still counted: pinned */
+    assert_eq!(testing::cache_ntup(id), 2);
     with_state(|st| assert!(st.cache(id).tuples[t.slot as usize].dead));
     ReleaseCatCache(t);
     assert_eq!(testing::cache_ntup(id), 1);
@@ -211,7 +206,6 @@ fn packed_byref_key_roundtrip() {
     assert_eq!(s, &[2, 3, 4, 5]);
 }
 
-// The UnsafeCell state-access kernel (the Miri target).
 mod state_kernel {
     use super::*;
 
@@ -232,7 +226,6 @@ mod state_kernel {
         let img = super::tiny_image();
         testing::insert_positive(id, &[oid_key(9), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED], &img);
         let t = SearchCatCache1(id, oid_key(9)).unwrap().unwrap();
-        /* slot-vec growth while the pin is live: the image is a separate stable allocation */
         for oid in 100..164u32 {
             testing::insert_negative(id, &[oid_key(oid), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED]);
         }
@@ -249,10 +242,6 @@ mod state_kernel {
         let _ = with_state(|st| st.caches.len());
     }
 }
-
-// ---------------------------------------------------------------------------
-// D3.1 capped eviction (clock sweep over the slot arenas)
-// ---------------------------------------------------------------------------
 
 fn k1(v: u32) -> [CatCKey<'static>; 4] {
     [oid_key(v), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED]
@@ -278,7 +267,6 @@ fn cap_evicts_down_to_cap_and_spares_pinned() {
     }
     let base = with_state(|st| st.ch_ntup);
 
-    // Pin two entries (refcount > 0 = exempt).
     let p1 = SearchCatCache1(id, oid_key(3)).unwrap().expect("hit");
     let p2 = SearchCatCache1(id, oid_key(7)).unwrap().expect("hit");
 
@@ -287,7 +275,6 @@ fn cap_evicts_down_to_cap_and_spares_pinned() {
     assert_eq!(with_state(|st| st.ch_ntup), target);
     assert_eq!(with_state(|st| st.cache(id).cc_ntup), 4);
 
-    // The pinned entries survived and are still probeable.
     assert!(probe_has(id, 3));
     assert!(probe_has(id, 7));
     ReleaseCatCache(p1);
@@ -302,8 +289,6 @@ fn cap_prefers_cold_entries_over_hot() {
     for v in 1..=6u32 {
         testing::insert_positive(id, &k1(v), &img);
     }
-    // Cool 3..6 by hand; 1 and 2 keep their reference bit, so a sweep that
-    // needs two evictions must take from the cold set.
     with_state(|st| {
         let c = st.cache_mut(id);
         for ct in c.tuples.iter_mut() {
@@ -330,7 +315,6 @@ fn cap_gives_up_when_everything_is_pinned() {
         pins.push(SearchCatCache1(id, oid_key(v)).unwrap().expect("hit"));
     }
     with_state(|st| crate::graph::enforce_cap_at(st, 1, -1, NONE));
-    // Nothing evictable: the cache legitimately runs above cap.
     assert_eq!(with_state(|st| st.cache(id).cc_ntup), 5);
     for p in pins {
         ReleaseCatCache(p);
@@ -345,7 +329,6 @@ fn cap_protects_the_just_created_slot() {
     for v in 1..=4u32 {
         testing::insert_positive(id, &k1(v), &img);
     }
-    // Find key 4's slot and protect it through a sweep that takes all it can.
     let slot4 = with_state(|st| {
         let c = st.cache(id);
         (0..c.tuples.len() as u32)
@@ -361,7 +344,37 @@ fn cap_protects_the_just_created_slot() {
     assert!(probe_has(id, 4), "protected slot was evicted");
 }
 
-// -- D3.2 shared L2 bodies -------------------------------------------------
+#[test]
+fn idle_trim_defers_eviction_to_the_idle_point() {
+    let id = fresh_id();
+    testing::init_cache_bare(id, 1, KINDS1, 8, None);
+    let img = tiny_image();
+    let base = with_state(|st| st.ch_ntup - st.ch_nlisted);
+    let cap = base + 4;
+    crate::CAP_OVERRIDE.with(|c| c.set(Some(cap)));
+    crate::SetCatCacheTrimAtIdle(true);
+    for v in 1..=4u32 {
+        testing::insert_positive(id, &k1(v), &img);
+    }
+    // Negative entries go through create_entry_negative, an insert site that runs the cap check.
+    for v in 101..=108u32 {
+        testing::insert_negative(id, &k1(v));
+    }
+    assert_eq!(testing::cache_ntup(id), 12, "an insertion past the cap evicted with the idle trim on");
+    let pin = SearchCatCache1(id, oid_key(3)).unwrap().expect("hit");
+    crate::TrimCatCacheAtIdle();
+    assert_eq!(with_state(|st| st.ch_ntup - st.ch_nlisted), cap, "the idle trim did not reach the cap");
+    assert!(probe_has(id, 3), "pinned entry evicted at the idle point");
+    ReleaseCatCache(pin);
+    crate::TrimCatCacheAtIdle();
+    assert_eq!(with_state(|st| st.ch_ntup - st.ch_nlisted), cap, "a second idle trim under the cap evicted");
+    crate::SetCatCacheTrimAtIdle(false);
+    for v in 201..=204u32 {
+        testing::insert_negative(id, &k1(v));
+    }
+    assert!(with_state(|st| st.ch_ntup - st.ch_nlisted) <= cap, "insert-time trim not back with the flag off");
+    crate::CAP_OVERRIDE.with(|c| c.set(None));
+}
 
 #[test]
 fn l2_negative_build_match_and_install() {
@@ -472,11 +485,8 @@ fn payload_alloc_failure_is_a_catchable_error() {
         crate::payload_alloc(cx.mcx(), 1usize << 31).map(|_| ())
     }));
     let payload = r.expect_err("over-ceiling request must unwind");
-    let msg = payload
-        .downcast_ref::<String>()
-        .cloned()
-        .unwrap_or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()).unwrap_or_default());
-    assert!(msg.contains("invalid memory alloc request size"), "{msg}");
+    let err = types_error::pg_error_from_panic(payload).unwrap_or_else(|_| panic!("a PgError payload"));
+    assert!(err.message().contains("invalid memory alloc request size"), "{}", err.message());
 }
 
 // C SearchCatCacheMiss copies the caller's raw NAME datum into the scan key
@@ -583,4 +593,167 @@ fn list_finalization_failure_releases_temp_member_refs() {
         with_state(|st| (st.cache(id).tuples[slot as usize].refcount, st.cache(id).tuples[slot as usize].c_list));
     assert_eq!(refcount, 0, "the scan's temp ref is released on the error path");
     assert_eq!(c_list, NONE);
+}
+
+// ExecGrant_common: a lookup, then an ereport before ReleaseSysCache; the dropped handle must unpin.
+#[test]
+fn abandoned_pin_releases_on_drop() {
+    let id = fresh_id();
+    testing::init_cache_bare(id, 1, KINDS1, 4, None);
+    let img = tiny_image();
+    let keys = [oid_key(1259), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED];
+    testing::insert_positive(id, &keys, &img);
+    let refcount = |slot: u32| with_state(|st| st.cache(id).tuples[slot as usize].refcount);
+
+    let mut slot = 0u32;
+    let r: types_error::PgResult<()> = (|| {
+        let t = SearchCatCache1(id, oid_key(1259))?.expect("hit");
+        slot = t.slot;
+        assert_eq!(refcount(slot), 1);
+        Err(Box::new(types_error::PgError::error("check failed".to_string())))?;
+        drop(t);
+        Ok(())
+    })();
+    assert!(r.is_err());
+    assert_eq!(refcount(slot), 0, "the early return released the pin");
+
+    let hash = compute_hash_value(&KINDS1, 1, &keys);
+    let t = SearchCatCache1(id, oid_key(1259)).unwrap().expect("hit");
+    crate::graph::CatCacheInvalidate(id, hash);
+    assert_eq!(testing::cache_ntup(id), 1, "dead-but-pinned entry stays");
+    drop(t);
+    assert_eq!(testing::cache_ntup(id), 0, "dropping the last pin removes the dead entry");
+}
+
+#[test]
+fn compressed_text_key_hashes_and_stores_detoasted() {
+    use core::mem::MaybeUninit;
+    ::detoast::init_seams();
+    let cx = mcx::MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let name: Vec<u8> = (0..2400).map(|i| b"abc."[i % 4]).collect();
+    let mut dest = vec![MaybeUninit::<u8>::uninit(); pglz::pglz_max_output(name.len())];
+    let n = pglz::pglz_compress_into(&name, &mut dest, &pglz::PGLZ_STRATEGY_ALWAYS).unwrap();
+    let total = 8 + n;
+    let mut img = Vec::with_capacity(total);
+    img.extend_from_slice(&(((total as u32) << 2) | 0x02).to_ne_bytes());
+    img.extend_from_slice(&(name.len() as u32).to_ne_bytes());
+    img.extend(dest[..n].iter().map(|b| unsafe { b.assume_init() }));
+
+    let mut td = ::tupdesc::CreateTemplateTupleDesc(mcx, 1).unwrap();
+    ::tupdesc::TupleDescInitBuiltinEntry(&mut td, 1, "k", 25, -1, 0).unwrap();
+    let tup = ::heaptuple::heap_form_tuple(
+        mcx,
+        &td,
+        &[datum::Datum::from_usize(img.as_ptr() as usize)],
+        &[false],
+    )
+    .unwrap();
+    let kinds = [CCFastKind::Text, CCFastKind::Int4, CCFastKind::Int4, CCFastKind::Int4];
+    let keyno = [1, 0, 0, 0];
+    let probe = [CatCKey::Bytes(&name), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED];
+    let hv = crate::graph::compute_tuple_hash_value(&kinds, 1, &keyno, &td, tup.as_tuple()).unwrap();
+    assert_eq!(hv, crate::compute::compute_hash_value(&kinds, 1, &probe));
+
+    let (buf, keys, len) = crate::graph::build_positive_payload(
+        &kinds,
+        1,
+        &keyno,
+        &td,
+        tup.as_tuple(),
+        crate::l2::AlignedBytes::new_zeroed,
+        |b| b.as_ptr(),
+    )
+    .unwrap();
+    assert_eq!(len, crate::IMG_PREFIX + tup.as_tuple().t_len as usize + name.len());
+    assert!(crate::eq_stored(CCFastKind::Text, keys[0], buf.as_ptr(), &probe[0]));
+}
+
+fn slot_of(id: i32, v: u32) -> u32 {
+    with_state(|st| {
+        let c = st.cache(id);
+        (0..c.tuples.len() as u32)
+            .find(|&s| {
+                let ct = &c.tuples[s as usize];
+                !ct.payload.is_null() && ct.keys[0].as_u32() == v
+            })
+            .expect("slot of key")
+    })
+}
+
+#[test]
+fn listed_members_do_not_count_against_the_cap() {
+    let id = fresh_id();
+    testing::init_cache_bare(id, 1, KINDS1, 8, None);
+    let img = tiny_image();
+    for v in 1..=6u32 {
+        testing::insert_positive(id, &k1(v), &img);
+    }
+    let members: Vec<u32> = (1..=4u32).map(|v| slot_of(id, v)).collect();
+    with_state(|st| {
+        let c = st.cache_mut(id);
+        c.cc_nlbuckets = 16;
+        c.cc_lbucket.resize(16, NONE);
+        for &m in &members {
+            c.tuples[m as usize].refcount += 1;
+        }
+    });
+    let keys = [oid_key(99), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED];
+    let (lslot, _) = crate::list::adopt_members(id, 1, 7, &keys, &members, true).unwrap();
+    with_state(|st| st.cache_mut(id).lists[lslot as usize].refcount = 0);
+    assert_eq!(with_state(|st| st.ch_nlisted), 4);
+    let target = with_state(|st| st.ch_ntup - st.ch_nlisted);
+    with_state(|st| crate::graph::enforce_cap_at(st, target, -1, NONE));
+    assert_eq!(testing::cache_ntup(id), 6, "nothing evictable exceeds the cap");
+    with_state(|st| crate::graph::remove_cl(st, id, lslot));
+    assert_eq!(with_state(|st| st.ch_nlisted), 0);
+}
+
+#[test]
+fn futile_sweep_holds_off_until_growth() {
+    let id = fresh_id();
+    testing::init_cache_bare(id, 1, KINDS1, 8, None);
+    let img = tiny_image();
+    let mut pins = Vec::new();
+    for v in 1..=8u32 {
+        testing::insert_positive(id, &k1(v), &img);
+        pins.push(SearchCatCache1(id, oid_key(v)).unwrap().expect("hit"));
+    }
+    let n = with_state(|st| st.ch_ntup - st.ch_nlisted);
+    with_state(|st| crate::graph::enforce_cap_at(st, n - 4, -1, NONE));
+    assert_eq!(testing::cache_ntup(id), 8);
+    let retry = with_state(|st| st.cap_retry_at);
+    assert!(retry > n, "futile sweep sets a hold-off above the current count");
+    with_state(|st| {
+        st.clock_cache = 0;
+        st.clock_slot = 0;
+    });
+    with_state(|st| crate::graph::enforce_cap_at(st, n - 4, -1, NONE));
+    assert_eq!(with_state(|st| (st.clock_cache, st.clock_slot)), (0, 0), "held off: no walk");
+    for p in pins {
+        ReleaseCatCache(p);
+    }
+    with_state(|st| crate::graph::enforce_cap_at(st, n - 4, -1, NONE));
+    assert_eq!(testing::cache_ntup(id), 8, "still held off below the retry mark");
+    with_state(|st| crate::graph::enforce_cap_at(st, n, -1, NONE));
+    assert_eq!(with_state(|st| st.cap_retry_at), 0, "under the cap clears the hold-off");
+    with_state(|st| crate::graph::enforce_cap_at(st, n - 4, -1, NONE));
+    assert_eq!(testing::cache_ntup(id), 4, "unpinned entries evict again");
+}
+
+/// V4R-453: a search, list search or hash of a cache this thread never registered (a gravity pool worker has no
+/// catcache) is a named ERROR, not the "not registered" panic that took the server down.
+#[test]
+fn an_unregistered_cache_is_a_named_error() {
+    let id = fresh_id() + 500; // never registered on any thread
+    std::thread::spawn(move || {
+        let e = SearchCatCache1(id, oid_key(1259)).err().expect("no cache on this thread");
+        assert!(e.message().contains("not registered") && e.message().contains("D1409"), "{}", e.message());
+        let e = GetCatCacheHashValue(id, oid_key(1), CatCKey::UNUSED, CatCKey::UNUSED, CatCKey::UNUSED).expect_err("hash");
+        assert!(e.message().contains("D1409"));
+        let e = crate::list::SearchCatCacheList(id, 1, oid_key(1), CatCKey::UNUSED, CatCKey::UNUSED).err().expect("list");
+        assert!(e.message().contains("D1409"));
+    })
+    .join()
+    .unwrap();
 }

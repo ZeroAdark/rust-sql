@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::ffi::CString;
 use std::sync::Mutex;
 
-use ::elog::{ereport, message_level_is_interesting};
+use ::elog::{ereport, message_level_is_interesting, PCT_M};
 use ::fmgr::PGFunction;
 use ::types_error::{
     ErrorLocation, PgError, PgResult, DEBUG3, ERRCODE_INSUFFICIENT_PRIVILEGE,
@@ -99,6 +99,10 @@ pub fn register_builtin_library(entry: BuiltinLibraryEntry) {
     }
 }
 
+pub fn is_builtin_library(name: &str) -> bool {
+    registered(name).is_some()
+}
+
 fn registered(key: &str) -> Option<BuiltinLibraryEntry> {
     BUILTIN_LIBRARIES.lock().unwrap().iter().find(|e| e.name == key).copied()
 }
@@ -185,7 +189,7 @@ fn file_access_error(libname: &str, errnum: i32) -> Box<PgError> {
         ereport(ERROR)
             .with_saved_errno(errnum)
             .errcode_for_file_access()
-            .errmsg(format!("could not access file \"{libname}\": %m"))
+            .errmsg(format!("could not access file \"{libname}\": {PCT_M}"))
             .into_error()
             .with_error_location(loc(212, "internal_load_library")),
     )
@@ -390,6 +394,13 @@ pub fn file_list_inherit(list: &FileList) {
     }
 }
 
+/// D4682: a reused client backend thread's next session starts with a new GUC registry and the postmaster's hooks
+/// (launch_backend's inherited globals), so the libraries the last session loaded are forgotten as a new thread
+/// would have them: a LOAD runs _PG_init again and defines its GUCs in the new registry.
+pub fn reset_for_thread_reuse() {
+    FILE_LIST.with(|s| *s.borrow_mut() = FileListState { list: Vec::new(), inherited: 0, initialized: Vec::new() });
+}
+
 // A preloaded library whose _PG_init state is per-thread here (C's fork
 // hands the postmaster's copy to every child): re-run in each inheriting
 // backend by file_list_inherit.
@@ -499,7 +510,7 @@ pub fn load_sql_callable_function(filename: &str, funcname: &str) -> PgResult<PG
         ))
         .with_sqlstate(ERRCODE_UNDEFINED_FUNCTION)
         .with_hint("SQL-callable functions need an accompanying PG_FUNCTION_INFO_V1(funcname).")
-        .with_error_location(loc(471, "fetch_finfo_record")),
+        .with_error_location(ErrorLocation::new("fmgr.c", 472, "fetch_finfo_record")),
     ))
 }
 
@@ -897,6 +908,11 @@ mod tests {
             assert_eq!(
                 e.hint(),
                 Some("SQL-callable functions need an accompanying PG_FUNCTION_INFO_V1(funcname)."),
+                "{funcname}"
+            );
+            assert_eq!(
+                e.location(),
+                Some(&ErrorLocation::new("fmgr.c", 472, "fetch_finfo_record")),
                 "{funcname}"
             );
         };

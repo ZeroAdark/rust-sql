@@ -1,0 +1,16 @@
+-- regress-full-returning-036
+-- INSERT INTO foo_parted VALUES (1, 17.1, 'P1'), (2, 17.2, 'P2'), (3, 17.3, 'P3'), (4, 17.4, 'P4') RETURNING old.tableoid::regclass, old.ctid, old.*, new.tableoid::regclass, new.ctid, new.*, *;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source values rti=2 rows=4
+    row (c23:1, c701:4625506439783881114, c25:'P1')
+    row (c23:2, c701:4625534587281552179, c25:'P2')
+    row (c23:3, c701:4625562734779223245, c25:'P3')
+    row (c23:4, c701:4625590882276894310, c25:'P4')
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  write INSERT rel=43670 rti=1 natts=3 indexes=() returning old=old new=new route=rti1:43670 natts=3
+  project (1=relabel2205(v1.-6), 2=v1.-1, 3=v1.1, 4=v1.2, 5=v1.3, 6=relabel2205(v1.-6), 7=v1.-1, 8=v1.1, 9=v1.2, 10=v1.3, 11=v1.1, 12=v1.2, 13=v1.3)
+  outs 1=w4:val 2=w8:val 3=vl:row
+  outs 1=w4:val 2=fx6:row 3=w4:val 4=w8:val 5=vl:row 6=w4:val 7=fx6:row 8=w4:val 9=w8:val 10=vl:row 11=w4:val 12=w8:val 13=vl:row
+mapped: ModifyTable ValuesScan

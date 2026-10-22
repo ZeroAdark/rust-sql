@@ -1,0 +1,5 @@
+path	crates/backend/access/pgrcolumnar/pgrc_codec/src/dispatch.rs
+growth	std::iter::Extend::extend	4
+growth	std::vec::Vec::push	9
+method	std::vec::Vec::into_boxed_slice	1
+type	std::boxed::Box	1

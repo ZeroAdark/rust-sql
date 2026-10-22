@@ -25,7 +25,7 @@ use crate::locallock;
 use crate::locallock::{
     assert_no_relation_extension_lock_held, grant_locallock_after_fastpath,
     prepare_or_grant_locallock, warn_not_owned, with_local, AbortStrongLockAcquire,
-    BeginStrongLockAcquire, FinishStrongLockAcquire, GrantLockLocal, LocalGrant, RemoveLocalLock,
+    BeginStrongLockAcquire, FinishStrongLockAcquire, LocalGrant, RemoveLocalLock,
 };
 use crate::shared::{
     dlist_delete, dlist_is_empty, find_lock, find_proclock, foreach_proclock_on_lock,
@@ -196,11 +196,8 @@ pub fn LockAcquireExtended(
         return Ok(LOCKACQUIRE_NOT_AVAIL);
     }
     let lock = unsafe { (*proclock).tag.myLock };
-    with_local(|state| {
-        let ll = state.table.get_mut(&localtag).expect("missing LOCALLOCK");
-        ll.proclock = proclock;
-        ll.lock = lock;
-    });
+    // D3652 P9: through the prepare pointer (C's locallock), a probe only if the table changed meanwhile.
+    crate::locallock::set_locallock_shared(&localtag, ll_ptr, lock, proclock);
 
     let found_conflict = unsafe {
         if lockMethodTable.conflictTab[lockmode as usize] & (*lock).waitMask != 0 {
@@ -303,7 +300,9 @@ pub fn LockAcquireExtended(
     debug_assert_eq!(wait_result, PROC_WAIT_STATUS_OK);
 
     debug_assert!(unsafe { (*proclock).holdMask & LOCKBIT_ON(lockmode) != 0 });
-    GrantLockLocal(&localtag, owner);
+    // D3652 P9: GrantLockLocal through the prepare pointer; it falls back to the probe when the table changed (a
+    // wait, or the standby xid assignment before it, can insert other LOCALLOCKs).
+    crate::locallock::grant_locallock_ptr(&localtag, owner, ll_ptr);
 
     FinishStrongLockAcquire();
 
@@ -458,7 +457,7 @@ pub fn LockReleaseAll(lockmethodid: LOCKMETHODID, allLocks: bool) -> PgResult<()
     // ONE table pass (C's single dynahash walk): drain matching entries,
     // then run the deferred per-entry work outside the with_local borrow.
     let mut kept_forgets: Vec<(ResourceOwner, LOCALLOCKTAG)> = Vec::new();
-    let mut removed = locallock::drain_release_all(lockmethodid, allLocks, &mut kept_forgets);
+    let mut removed = locallock::drain_release_all(lockmethodid, allLocks, &mut kept_forgets)?;
     for (owner, tag) in kept_forgets {
         // lock.c:2347: an unowned reference is the elog(ERROR).
         resowner::ResourceOwnerForgetLock(owner, tag)?;
@@ -496,7 +495,6 @@ pub fn LockReleaseAll(lockmethodid: LOCKMETHODID, allLocks: bool) -> PgResult<()
     drop(removed);
 
     for partition in 0..NUM_LOCK_PARTITIONS as usize {
-        let partition_lock = LockHashPartitionLockByIndex(partition);
         let proc_locks = my_proc.myProcLocks[partition].ptr();
 
         // Safe to skip without the partition lock: a concurrent fast-path
@@ -506,6 +504,10 @@ pub fn LockReleaseAll(lockmethodid: LOCKMETHODID, allLocks: bool) -> PgResult<()
             continue;
         }
 
+        // Looked up past the skip: a statement's commit holds locks in few of
+        // the 16 partitions, and each lookup (the published table's OnceLock
+        // + bounds check) cost ~0.35k instructions a statement over all 16.
+        let partition_lock = LockHashPartitionLockByIndex(partition);
         lwlock::LWLockAcquire(partition_lock, lwlock::LW_EXCLUSIVE, my_procno())?;
 
         let mut failure: Option<Box<PgError>> = None;

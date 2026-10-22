@@ -1,7 +1,7 @@
 // Version-update-path graph (extension.c:1469-1773). C's pointer-linked
 // ExtensionVersionInfo list becomes an index-handled Vec (one bulk-freed
 // context in C).
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_error::{PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE, ERROR};
 
 use crate::control::{get_extension_script_directory, ExtensionControlFile};
@@ -54,7 +54,7 @@ pub(crate) fn get_ext_ver_list(control: &ExtensionControlFile) -> PgResult<Vec<E
         if let Some(errno) = e.raw_os_error() {
             b = b.with_saved_errno(errno).errcode_for_file_access();
         }
-        b.errmsg(format!("could not open directory \"{location}\": %m")).into_error()
+        b.errmsg(format!("could not open directory \"{location}\": {PCT_M}")).into_error()
     })?;
     for de in entries {
         let de = de.map_err(|e| {
@@ -62,7 +62,7 @@ pub(crate) fn get_ext_ver_list(control: &ExtensionControlFile) -> PgResult<Vec<E
             if let Some(errno) = e.raw_os_error() {
                 b = b.with_saved_errno(errno).errcode_for_file_access();
             }
-            b.errmsg(format!("could not read directory \"{location}\": %m")).into_error()
+            b.errmsg(format!("could not read directory \"{location}\": {PCT_M}")).into_error()
         })?;
         let fname = de.file_name();
         let Some(fname) = fname.to_str() else { continue };

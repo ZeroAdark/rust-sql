@@ -1,0 +1,11 @@
+# RS's registry (lint/rules/rs_stack.py): the functions of decompose, the lowerer and expr that are to start with a
+# stack check and do not yet, each breaking at least one recursion cycle that passes no check today. Seeded from the
+# trunk scan (a greedy set: in each unchecked cycle, the function with the most calls in and out of it). A listed
+# function counts as checked; a row goes when its function starts with the check (decompose `crate::walk::stack_check()`,
+# the lowerer `crate::stack_check()`, else `stack_depth_core::check_stack_depth_or_panic()`), or when another
+# function's check breaks its cycles; a landing never adds a row (a move rewrites one).
+# path	fn	crate	the cycle its check breaks
+# fn is `Type::name` for a method, `name` for a free fn; a row covers that file's functions of that spelling.
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<fn> (the row's path with
+# crates/gravity/ dropped and '/' as '.', the fn's '::' as '.'), holding the row line; this README is not a row.
+# Deleting a row deletes its file, so lanes that delete different rows never touch the same file.

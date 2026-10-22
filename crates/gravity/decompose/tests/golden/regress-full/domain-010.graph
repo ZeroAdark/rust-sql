@@ -1,0 +1,10 @@
+-- regress-full-domain-010
+-- select array_dims(testint4arr), array_dims(testchar4arr) from domarrtest;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=880 end=sink
+  nodes n0@0
+  source range rel=40329 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=fn747(relabel1007(v1.1)), 2=fn747(relabel1015(v1.2)))
+  outs 1=vl:call747 2=vl:call747
+mapped: SeqScan

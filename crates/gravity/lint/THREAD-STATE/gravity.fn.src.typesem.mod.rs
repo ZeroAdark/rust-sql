@@ -1,0 +1,2 @@
+gravity/fn/src/typesem/mod.rs	LAST	keys	key:the interned form id (process-wide, never freed)	cache	the last canonical form id resolved by by_id and its leaked address: no lock per row
+gravity/fn/src/typesem/mod.rs	TMPS	keys	call	scratch	per-row temporaries pool (flat form, decompressed image, header rebuild, numeric image): 4 fixed slots, each kept only up to 16 KiB (<= 64 KiB per thread), taken and returned within one walk

@@ -8,13 +8,13 @@ well under a second. It is the authoring-time gate — run it before every
 SUITE.tsv commit.
 
 Why it exists: four separate classes of malformed rows were authored by four
-different lanes and only surfaced on a full CI cluster solve run (see
-proofs/CI-SOLVING.md "Measured baseline"), where each malformed row burns
+different lanes and only surfaced on a full fleet solve run (see
+proofs/FLEET-SOLVING.md "Measured baseline"), where each malformed row burns
 a solver slot and reports as a deviation indistinguishable from a real
 divergence:
 
   1. unexpanded `c/<FAMILY>.c` placeholders in the flags column
-     -> goto-cc "No such file", 62 rows failed on the CI cluster;
+     -> goto-cc "No such file", 62 rows failed on the fleet;
   2. prose leaking into the flags column (`... --exact (recipe: run-cmp.sh
      incl ...)`) -> `cargo-kani: unrecognized subcommand '(recipe:'`;
   3. `expected` / `tier` tokens outside the vocabulary the runner knows
@@ -52,7 +52,7 @@ Checks (violations; any one exits 1):
               shell metacharacters / prose parentheses
   FLAGPATH    a `--c-lib`/`--c-libs` path in flags does not exist in the
               family crate (this is what actually caught the placeholders on
-              the CI cluster; check-suite-names.py never looks at flag paths)
+              the fleet; check-suite-names.py never looks at flag paths)
 
 Advisories (reported, never fail): rows whose `expected` token is in the
 manifest vocabulary but which run-suite.sh has no arm for (none today —

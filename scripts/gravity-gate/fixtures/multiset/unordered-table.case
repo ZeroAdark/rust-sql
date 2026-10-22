@@ -1,0 +1,11 @@
+# TABLE t
+sql: TABLE t;
+cols: x
+class: unordered
+verdict: match
+[pg]
+1
+2
+[got]
+2
+1

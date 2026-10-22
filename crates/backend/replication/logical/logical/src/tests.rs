@@ -139,6 +139,7 @@ fn out_buffer_refuses_growth_past_max_alloc_size_like_enlarge_string_info() {
     assert!(super::enlarge_refused(0x3fff_fffe, 1));
     assert!(super::enlarge_refused(0x2000_0000, 0x1fff_ffff));
     assert!(!super::enlarge_refused(0x2000_0000, 0x1fff_fffe));
+    assert!(super::enlarge_refused(0x4000_0010, 1));
 
     let mut out = super::OutBuf::default();
     out.push_str("ab");
@@ -152,7 +153,27 @@ fn out_buffer_refuses_growth_past_max_alloc_size_like_enlarge_string_info() {
         Some("Cannot enlarge string buffer containing 1073741822 bytes by 1 more bytes.")
     );
     out.push_str("dropped");
+    out.push_bytes(b"dropped");
+    out.push_byte(b'x');
     assert_eq!(out.as_bytes(), b"ab");
+    out.clear();
+    assert!(out.check_limit().is_ok());
+}
+
+// pgoutput writes through as_mut_vec, bypassing append()'s overflow flag;
+// check_limit must still refuse an over-the-limit buffer (audit fp-logical-logical#1).
+#[test]
+fn out_buffer_refuses_growth_past_max_alloc_size_via_as_mut_vec() {
+    let mut out = super::OutBuf::default();
+    out.as_mut_vec().resize(0x4000_0001, 0);
+    assert!(out.overflow.is_none());
+    let err = out.check_limit().unwrap_err();
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(err.message(), "string buffer exceeds maximum allowed length (1073741823 bytes)");
+    assert_eq!(
+        err.detail(),
+        Some("Cannot enlarge string buffer containing 1073741823 bytes by 2 more bytes.")
+    );
     out.clear();
     assert!(out.check_limit().is_ok());
 }

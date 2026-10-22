@@ -1,0 +1,10 @@
+-- regress-full-interval-005
+-- SELECT -f1, EXTRACT(MICROSECOND FROM -f1) AS MICROSECOND, EXTRACT(MILLISECOND FROM -f1) AS MILLISECOND, EXTRACT(SECOND FROM -f1) AS SECOND, EXTRACT(MINUTE FROM -f1) AS MINUTE, EXTRACT(HOUR FROM -f1) AS HOUR, EXTRACT(DAY FROM -f1) AS DAY, EXTRACT(WEEK FROM -f1) AS WEEK, EXTRACT(MONTH FROM -f1) AS MONTH, EXTRACT(QUARTER FROM -f1) AS QUARTER, EXTRACT(YEAR FROM -f1) AS YEAR, EXTRACT(DECADE FROM -f1) AS DECADE, EXTRACT(CENTURY FROM -f1) AS CENTURY, EXTRACT(MILLENNIUM FROM -f1) AS MILLENNIUM, EXTRACT(EPOCH FROM -f1) AS EPOCH FROM INTERVAL_TBL;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1850 end=sink
+  nodes n0@0
+  source range rel=17177 rti=1 am=heap
+    lanes Attr(1):byref8:fx16:win/page Offset:byval2:w2:val
+  project (1=op1336(v1.1), 2=fn6204(c25:'microsecond', op1336(v1.1)), 3=fn6204(c25:'millisecond', op1336(v1.1)), 4=fn6204(c25:'second', op1336(v1.1)), 5=fn6204(c25:'minute', op1336(v1.1)), 6=fn6204(c25:'hour', op1336(v1.1)), 7=fn6204(c25:'day', op1336(v1.1)), 8=fn6204(c25:'week', op1336(v1.1)), 9=fn6204(c25:'month', op1336(v1.1)), 10=fn6204(c25:'quarter', op1336(v1.1)), 11=fn6204(c25:'year', op1336(v1.1)), 12=fn6204(c25:'decade', op1336(v1.1)), 13=fn6204(c25:'century', op1336(v1.1)), 14=fn6204(c25:'millennium', op1336(v1.1)), 15=fn6204(c25:'epoch', op1336(v1.1)))
+  outs 1=fx16:call1168 2=vl:call6204 3=vl:call6204 4=vl:call6204 5=vl:call6204 6=vl:call6204 7=vl:call6204 8=vl:call6204 9=vl:call6204 10=vl:call6204 11=vl:call6204 12=vl:call6204 13=vl:call6204 14=vl:call6204 15=vl:call6204
+mapped: SeqScan

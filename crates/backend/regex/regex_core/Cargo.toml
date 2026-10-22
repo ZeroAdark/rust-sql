@@ -3,6 +3,7 @@ name = "regex_core"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
+autotests = false
 
 [lib]
 name = "regex_core"
@@ -28,3 +29,26 @@ unicode_case = { path = "../../../common/unicode_case" }
 [dev-dependencies]
 regex = { path = "../../../_support/types/regex" }
 types_core = { path = "../../../_support/types/types_core" }
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# regex_core_suite (tests/regex_core_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs it once
+# per module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot share a
+# process with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text naming
+# process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state call): then
+# it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the file is in
+# exactly one of the two places.
+[[test]]
+name = "regex_core_suite"
+path = "tests/regex_core_suite.rs"
+
+[[test]]
+name = "dfa_heap_space"
+path = "tests/dfa_heap_space.rs"
+
+[[test]]
+name = "stack_depth"
+path = "tests/stack_depth.rs"
+
+[[test]]
+name = "upstream_f3cee4dc_lacon_ecolors"
+path = "tests/upstream_f3cee4dc_lacon_ecolors.rs"

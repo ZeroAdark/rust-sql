@@ -1,0 +1,177 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1u s2a s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t;
+QUERY PLAN                                                           
+---------------------------------------------------------------------
+Limit                                                                
+  ->  LockRows                                                       
+        ->  Nested Loop Left Join                                    
+              ->  Nested Loop                                        
+                    ->  Index Scan using rt_pkey on rt t             
+                          Index Cond: (id = ANY ('{1,4}'::integer[]))
+                          Filter: (status = 'ready'::text)           
+                    ->  Memoize                                      
+                          Cache Key: t.queue_id                      
+                          Cache Mode: logical                        
+                          ->  Index Scan using rq_pkey on rq q       
+                                Index Cond: (id = t.queue_id)        
+                                Filter: (NOT paused)                 
+              ->  Memoize                                            
+                    Cache Key: t.id                                  
+                    Cache Mode: logical                              
+                    ->  Index Scan using rl_task_id_key on rl l      
+                          Index Cond: (task_id = t.id)               
+(18 rows)
+
+step s1u: UPDATE rt SET note = 'changed', priority = 9 WHERE id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note   |name  |owner
+--+-------+------+-----
+ 1|changed|queue2|w1   
+ 4|n4     |queue1|     
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s2a s1c
+step s1q: UPDATE rt SET note = 'moved', queue_id = 3 WHERE id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note|name  |owner
+--+----+------+-----
+ 4|n4  |queue1|     
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2a s1c
+step s1s: UPDATE rt SET status = 'done' WHERE id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note|name  |owner
+--+----+------+-----
+ 4|n4  |queue1|     
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1n s2a s1c
+step s1n: UPDATE rt SET note = 'held' WHERE id = 4; INSERT INTO rl (task_id, owner) VALUES (4, 'late');
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note|name  |owner
+--+----+------+-----
+ 1|n1  |queue2|w1   
+ 4|held|queue1|     
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2a s1c
+step s1l: UPDATE rt SET note = 'relocked' WHERE id = 1; UPDATE rl SET owner = 'other' WHERE task_id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note    |name  |owner
+--+--------+------+-----
+ 1|relocked|queue2|w1   
+ 4|n4      |queue1|     
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2sk s1c
+step s1k: SELECT id FROM rt WHERE id = 1 FOR UPDATE;
+id
+--
+ 1
+(1 row)
+
+step s2sk: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t SKIP LOCKED;
+id|note|name  |owner
+--+----+------+-----
+ 4|n4  |queue1|     
+(1 row)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2mat s2x s1u s2a s1c
+step s2mat: SET enable_material = on;
+step s2x: EXPLAIN (COSTS OFF) SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t;
+QUERY PLAN                                                           
+---------------------------------------------------------------------
+Limit                                                                
+  ->  LockRows                                                       
+        ->  Nested Loop Left Join                                    
+              Join Filter: (l.task_id = t.id)                        
+              ->  Nested Loop                                        
+                    Join Filter: (q.id = t.queue_id)                 
+                    ->  Index Scan using rt_pkey on rt t             
+                          Index Cond: (id = ANY ('{1,4}'::integer[]))
+                          Filter: (status = 'ready'::text)           
+                    ->  Materialize                                  
+                          ->  Index Scan using rq_pkey on rq q       
+                                Filter: (NOT paused)                 
+              ->  Materialize                                        
+                    ->  Index Scan using rl_task_id_key on rl l      
+(14 rows)
+
+step s1u: UPDATE rt SET note = 'changed', priority = 9 WHERE id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note   |name  |owner
+--+-------+------+-----
+ 1|changed|queue2|w1   
+ 4|n4     |queue1|     
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2mat s1q s2a s1c
+step s2mat: SET enable_material = on;
+step s1q: UPDATE rt SET note = 'moved', queue_id = 3 WHERE id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note|name  |owner
+--+----+------+-----
+ 4|n4  |queue1|     
+(1 row)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2mat s1n s2a s1c
+step s2mat: SET enable_material = on;
+step s1n: UPDATE rt SET note = 'held' WHERE id = 4; INSERT INTO rl (task_id, owner) VALUES (4, 'late');
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note|name  |owner
+--+----+------+-----
+ 1|n1  |queue2|w1   
+ 4|held|queue1|     
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2mat s1l s2a s1c
+step s2mat: SET enable_material = on;
+step s1l: UPDATE rt SET note = 'relocked' WHERE id = 1; UPDATE rl SET owner = 'other' WHERE task_id = 1;
+step s2a: SELECT t.id, t.note, q.name, l.owner FROM rt t JOIN rq q ON q.id = t.queue_id LEFT JOIN rl l ON l.task_id = t.id WHERE t.status = 'ready' AND NOT q.paused AND t.id IN (1, 4) ORDER BY t.id LIMIT 2 FOR UPDATE OF t; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+id|note    |name  |owner
+--+--------+------+-----
+ 1|relocked|queue2|w1   
+ 4|n4      |queue1|     
+(2 rows)
+
+s1: WARNING:  there is no transaction in progress

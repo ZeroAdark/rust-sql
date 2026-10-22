@@ -15,7 +15,7 @@ mod registry;
 use datum::Datum;
 use elog::ereport;
 use pgclient::{ExecStatus, PgConn, QueryResult};
-use registry::RemoteConn;
+use registry::Access;
 use types_error::{
     make_sqlstate, ErrorLevel, ErrorLocation, PgError, PgResult, ERROR, NOTICE,
     ERRCODE_CONNECTION_FAILURE, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_CURSOR_NAME,
@@ -111,7 +111,7 @@ pub(crate) fn single_text_tupdesc<'m>(mcx: mcx::Mcx<'m>, name: &str) -> PgResult
 // a NOTICE and returns Ok.
 #[cold]
 fn res_error(
-    conn: &PgConn,
+    conn_errmsg: &str,
     conname: Option<&str>,
     res: &QueryResult,
     fail: bool,
@@ -125,10 +125,10 @@ fn res_error(
     } else {
         ERRCODE_CONNECTION_FAILURE
     };
-    let mut primary = diag.primary.clone();
-    if primary.is_empty() {
-        primary = pchomp(&conn.error_message());
-    }
+    let primary = match &res.diag {
+        Some(d) => d.primary.clone(),
+        None => pchomp(conn_errmsg),
+    };
     // dblink.c:2860 vsnprintf(dblink_context_msg[512]): the action keeps
     // at most 511 bytes.
     let mut action = action;
@@ -143,10 +143,10 @@ fn res_error(
         Some(n) => format!("{action} on dblink connection named \"{n}\""),
         None => format!("{action} on unnamed dblink connection"),
     };
-    let ctx = if diag.context.is_empty() {
-        dblink_ctx
-    } else {
+    let ctx = if diag.has_context {
         format!("{}\n{}", diag.context, dblink_ctx)
+    } else {
+        dblink_ctx
     };
     let mut b = ereport(level).errcode(sqlstate);
     b = if !primary.is_empty() {
@@ -154,10 +154,10 @@ fn res_error(
     } else {
         b.errmsg("could not obtain message string for remote error")
     };
-    if !diag.detail.is_empty() {
+    if diag.has_detail {
         b = b.errdetail_internal(diag.detail.clone());
     }
-    if !diag.hint.is_empty() {
+    if diag.has_hint {
         b = b.errhint(diag.hint.clone());
     }
     b = b.errcontext_msg(ctx);
@@ -211,33 +211,37 @@ fn dblink_get_conn(mcx: mcx::Mcx<'_>, conname_or_str: &str) -> PgResult<(ConnTar
     Ok((ConnTarget::Transient(conn), None))
 }
 
+const CONN_BUSY: &str = "another command is already in progress";
+
 // Run `f` against the connection identified by `target`. Transient conns are
-// owned (mutated in place); named/unnamed re-enter the registry.
-fn with_target<R>(target: &mut ConnTarget, f: impl FnOnce(&mut PgConn) -> R) -> PgResult<R> {
+// owned (mutated in place); named/unnamed re-enter the registry. `busy` stands
+// in for `f` on a connection a caller up the stack is still using.
+fn with_target<R>(
+    target: &mut ConnTarget,
+    f: impl FnOnce(&mut PgConn) -> R,
+    busy: impl FnOnce() -> R,
+) -> PgResult<R> {
     match target {
         ConnTarget::Transient(c) => Ok(f(c)),
         ConnTarget::Named(name) => {
             if !registry::named_present(name)? {
                 return Err(registry::conn_not_avail(Some(name)));
             }
-            registry::with_named_present(name, |rc| f(&mut rc.conn))
+            registry::with_named_present(name, |a| match a {
+                Access::Ready(rc) => f(&mut rc.conn),
+                _ => busy(),
+            })
         }
-        ConnTarget::Unnamed => registry::with_unnamed(|rc| match rc {
-            Some(rc) => Ok(f(&mut rc.conn)),
-            None => Err(registry::conn_not_avail(None)),
+        ConnTarget::Unnamed => registry::with_unnamed(|a| match a {
+            Access::Ready(rc) => Ok(f(&mut rc.conn)),
+            Access::Busy(_) => Ok(busy()),
+            Access::Missing => Err(registry::conn_not_avail(None)),
         }),
     }
 }
 
-fn with_target_ref<R>(target: &ConnTarget, f: impl FnOnce(&PgConn) -> R) -> PgResult<R> {
-    match target {
-        ConnTarget::Transient(c) => Ok(f(c)),
-        ConnTarget::Named(name) => registry::with_named_present(name, |rc| f(&rc.conn)),
-        ConnTarget::Unnamed => registry::with_unnamed(|rc| match rc {
-            Some(rc) => Ok(f(&rc.conn)),
-            None => Err(registry::conn_not_avail(None)),
-        }),
-    }
+fn target_error_message(target: &mut ConnTarget) -> PgResult<String> {
+    with_target(target, |c| c.error_message(), || CONN_BUSY.to_string())
 }
 
 fn terminate_transient(target: &mut ConnTarget) {
@@ -298,16 +302,15 @@ fn fc_dblink_disconnect(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
         if !registry::named_present(&name)? {
             return Err(registry::conn_not_avail(Some(&name)));
         }
-        registry::with_named(&name, |rc| {
-            if let Some(rc) = rc {
+        registry::with_named(&name, |a| {
+            if let Access::Ready(rc) = a {
                 rc.conn.terminate();
             }
         })?;
         registry::delete_named(&name)?;
     } else {
-        match registry::take_unnamed() {
-            Some(mut rc) => rc.conn.terminate(),
-            None => return Err(registry::conn_not_avail(None)),
+        if !registry::disconnect_unnamed() {
+            return Err(registry::conn_not_avail(None));
         }
     }
     text_result(mcx, "OK")
@@ -321,11 +324,11 @@ fn fc_dblink_get_connections(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo
         // `else` of `if (astate)`). A bare `Ok(Datum::null())` without
         // isnull=true hands the executor a "non-null" zero pointer datum —
         // detoasting it aborted the server mid-corpus (CI cluster gate
-        // pgrust-tests-601a9800c4-1784439279-28fc).
+        // pgrust-fast-tests-601a9800c4-1784439279-28fc).
         fcinfo.isnull = true;
         return Ok(Datum::null());
     }
-    let mut elems = Vec::with_capacity(names.len());
+    let mut elems = ::mcx::std_vec_with_capacity("dblink", names.len())?;
     for n in &names {
         elems.push(types_fmgr::varlena_result(varlena::cstring_to_text(mcx, n)?));
     }
@@ -342,7 +345,10 @@ fn fc_dblink_error_message(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) 
     if !registry::named_present(&name)? {
         return Err(registry::conn_not_avail(Some(&name)));
     }
-    let msg = registry::with_named_present(&name, |rc| rc.conn.error_message())?;
+    let msg = registry::with_named_present(&name, |a| match a {
+        Access::Ready(rc) => rc.conn.error_message(),
+        _ => String::new(),
+    })?;
     if msg.is_empty() {
         text_result(mcx, "OK")
     } else {
@@ -356,9 +362,12 @@ fn fc_dblink_is_busy(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     if !registry::named_present(&name)? {
         return Err(registry::conn_not_avail(Some(&name)));
     }
-    let busy = registry::with_named_present(&name, |rc| {
-        rc.conn.consume_input();
-        rc.conn.is_busy()
+    let busy = registry::with_named_present(&name, |a| match a {
+        Access::Ready(rc) => {
+            rc.conn.consume_input();
+            rc.conn.is_busy()
+        }
+        _ => false,
     })?;
     Ok(Datum::from_i32(if busy { 1 } else { 0 }))
 }
@@ -370,7 +379,11 @@ fn fc_dblink_cancel_query(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -
     if !registry::named_present(&name)? {
         return Err(registry::conn_not_avail(Some(&name)));
     }
-    let msg = registry::with_named_present(&name, |rc| rc.conn.cancel(30_000))??;
+    let msg = registry::with_named_present(&name, |a| match a {
+        Access::Ready(rc) => rc.conn.cancel(30_000),
+        Access::Busy(t) => t.cancel(30_000),
+        Access::Missing => unreachable!("with_named_present filters Missing"),
+    })??;
     text_result(mcx, msg.as_deref().unwrap_or("OK"))
 }
 
@@ -380,9 +393,12 @@ fn fc_dblink_send_query(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
     if !registry::named_present(&name)? {
         return Err(registry::conn_not_avail(Some(&name)));
     }
-    let (ok, errmsg) = registry::with_named_present(&name, |rc| {
-        let ok = rc.conn.send_query(&sql);
-        (ok, if ok { String::new() } else { rc.conn.error_message() })
+    let (ok, errmsg) = registry::with_named_present(&name, |a| match a {
+        Access::Ready(rc) => {
+            let ok = rc.conn.send_query(&sql);
+            (ok, if ok { String::new() } else { rc.conn.error_message() })
+        }
+        _ => (false, CONN_BUSY.to_string()),
     })?;
     if !ok {
         ereport(NOTICE)
@@ -404,10 +420,11 @@ fn fc_dblink_record(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     // storeQueryResult: a refused PQsendQuery (busy or dead connection) is
     // elog(ERROR) with PQerrorMessage whatever fail_on_error says; the
     // PG_CATCH drains whatever the connection still holds.
-    if !with_target(&mut target, |c| c.send_query(&sql))? {
-        let errmsg = with_target_ref(&target, |c| c.error_message())?;
-        let _ = with_target(&mut target, |c| c.drain());
+    if !with_target(&mut target, |c| c.send_query(&sql), || false)? {
+        let errmsg = target_error_message(&mut target)?;
+        let drained = with_target(&mut target, |c| c.drain_interruptible(), || Ok(()));
         terminate_transient(&mut target);
+        drained??;
         return throw(
             ereport(ERROR)
                 .errmsg(format!("could not send query: {}", pchomp(&errmsg)))
@@ -418,21 +435,27 @@ fn fc_dblink_record(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     let fcinfo_ptr: *mut Fcinfo = fcinfo;
     // SAFETY: sink holds fcinfo only across stream_results, no aliasing.
     let mut sink = unsafe { materialize::TupleSink::new(mcx, flinfo, fcinfo_ptr) };
-    let res = with_target(&mut target, |c| c.stream_results(&mut sink))?;
+    let res = with_target(
+        &mut target,
+        |c| c.stream_results(&mut sink),
+        || Ok(pgclient::QueryResult::conn_error(CONN_BUSY.to_string())),
+    )?;
     let res = match res {
         Ok(r) => r,
         Err(e) => {
             // PG_CATCH parity: clear pending data so the connection stays
             // usable, then rethrow (interrupt or conversion error mid-stream).
-            let _ = with_target(&mut target, |c| c.drain());
+            let drained = with_target(&mut target, |c| c.drain_interruptible(), || Ok(()));
             terminate_transient(&mut target);
+            drained??;
             return Err(e);
         }
     };
 
     let out = if res.status != ExecStatus::CommandOk && res.status != ExecStatus::TuplesOk {
-        with_target(&mut target, |c| c.drain())?;
-        with_target_ref(&target, |c| res_error(c, conname.as_deref(), &res, fail, "while executing query"))??;
+        with_target(&mut target, |c| c.drain(), || ())?;
+        let errmsg = target_error_message(&mut target)?;
+        res_error(&errmsg, conname.as_deref(), &res, fail, "while executing query")?;
         // fail=false: return the (empty) result the sink already holds.
         Ok(sink.finish(unsafe { &mut *fcinfo_ptr }))
     } else if res.status == ExecStatus::CommandOk {
@@ -450,7 +473,11 @@ fn fc_dblink_exec(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     let flinfo_ref = flinfo.map(|f| &*f);
     let (sql, mut target, conname, fail) = parse_conn_sql_args(mcx, fcinfo, flinfo_ref)?;
 
-    let res = with_target(&mut target, |c| c.exec(&sql))?;
+    let res = with_target(
+        &mut target,
+        |c| c.exec(&sql),
+        || Ok(pgclient::QueryResult::conn_error(CONN_BUSY.to_string())),
+    )?;
     let res = match res {
         Ok(r) => r,
         Err(e) => {
@@ -465,9 +492,8 @@ fn fc_dblink_exec(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
                 .with_sqlstate(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
         )),
         _ => {
-            with_target_ref(&target, |c| {
-                res_error(c, conname.as_deref(), &res, fail, "while executing command")
-            })??;
+            let errmsg = target_error_message(&mut target)?;
+            res_error(&errmsg, conname.as_deref(), &res, fail, "while executing command")?;
             text_result(mcx, "ERROR")
         }
     };
@@ -488,18 +514,30 @@ fn fc_dblink_get_result(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
     if !registry::named_present(&name)? {
         return Err(registry::conn_not_avail(Some(&name)));
     }
-    let (res, gucs) = registry::with_named_present(&name, |rc| {
-        let res = rc.conn.get_result();
-        let gucs = materialize::RemoteIoGucs::capture(&rc.conn);
-        (res, gucs)
+    let got = registry::with_named_present(&name, |a| match a {
+        Access::Ready(rc) => {
+            let res = rc.conn.get_result();
+            let gucs = materialize::RemoteIoGucs::capture(&rc.conn);
+            Some((res, gucs))
+        }
+        _ => None,
     })?;
+    let Some((res, gucs)) = got else {
+        return throw(ereport(ERROR)
+            .errcode(ERRCODE_CONNECTION_FAILURE)
+            .errmsg_internal(CONN_BUSY)
+            .errcontext_msg(format!("while executing query on dblink connection named \"{name}\""))
+            .finish(loc("dblink_get_result")));
+    };
     let Some(res) = res? else {
         return Ok(Datum::from_usize(0)); // NULL: async results exhausted
     };
     if res.status != ExecStatus::CommandOk && res.status != ExecStatus::TuplesOk {
-        registry::with_named_present(&name, |rc| {
-            res_error(&rc.conn, Some(&name), &res, fail, "while executing query")
-        })??;
+        let errmsg = registry::with_named_present(&name, |a| match a {
+            Access::Ready(rc) => rc.conn.error_message(),
+            _ => CONN_BUSY.to_string(),
+        })?;
+        res_error(&errmsg, Some(&name), &res, fail, "while executing query")?;
         return Ok(Datum::from_usize(0));
     }
     materialize::materialize_result(mcx, flinfo, fcinfo, &gucs, &res)
@@ -519,7 +557,10 @@ fn fc_dblink_open(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
         3 => (Some(arg_text(fcinfo, 0)?), arg_text(fcinfo, 1)?, arg_text(fcinfo, 2)?, true),
         _ => (Some(arg_text(fcinfo, 0)?), arg_text(fcinfo, 1)?, arg_text(fcinfo, 2)?, fcinfo.arg_bool(3)),
     };
-    let ok = cursor_op(&conname, |rc| {
+    let ok = cursor_op(&conname, |a| {
+        let Access::Ready(rc) = a else {
+            return busy_error(conname.as_deref(), fail, &format!("while opening cursor \"{curname}\""));
+        };
         // C: `if (PQtransactionStatus(conn) == PQTRANS_IDLE)` — the REMOTE
         // xact state, not our bookkeeping flag: when the user opened their
         // own transaction via dblink_exec('BEGIN'), C starts none and never
@@ -540,7 +581,7 @@ fn fc_dblink_open(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
         }
         let res = rc.conn.exec(&format!("DECLARE {curname} CURSOR FOR {sql}"))?;
         if res.status != ExecStatus::CommandOk {
-            res_error(&rc.conn, conname.as_deref(), &res, fail, &format!("while opening cursor \"{curname}\""))?;
+            res_error(&rc.conn.error_message(), conname.as_deref(), &res, fail, &format!("while opening cursor \"{curname}\""))?;
             return Ok(false);
         }
         Ok(true)
@@ -558,10 +599,13 @@ fn fc_dblink_close(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
         2 => (Some(arg_text(fcinfo, 0)?), arg_text(fcinfo, 1)?, true),
         _ => (Some(arg_text(fcinfo, 0)?), arg_text(fcinfo, 1)?, fcinfo.arg_bool(2)),
     };
-    let ok = cursor_op(&conname, |rc| {
+    let ok = cursor_op(&conname, |a| {
+        let Access::Ready(rc) = a else {
+            return busy_error(conname.as_deref(), fail, &format!("while closing cursor \"{curname}\""));
+        };
         let res = rc.conn.exec(&format!("CLOSE {curname}"))?;
         if res.status != ExecStatus::CommandOk {
-            res_error(&rc.conn, conname.as_deref(), &res, fail, &format!("while closing cursor \"{curname}\""))?;
+            res_error(&rc.conn.error_message(), conname.as_deref(), &res, fail, &format!("while closing cursor \"{curname}\""))?;
             return Ok(false);
         }
         if rc.new_xact_for_cursor {
@@ -597,16 +641,25 @@ fn fc_dblink_fetch(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
         return Err(registry::conn_not_avail(conname.as_deref()));
     }
     let sql = format!("FETCH {howmany} FROM {curname}");
-    let (res, gucs) = on_conn(&conname, |rc| {
-        let res = rc.conn.exec(&sql);
-        let gucs = materialize::RemoteIoGucs::capture(&rc.conn);
-        (res, gucs)
+    let got = on_conn(&conname, |a| match a {
+        Access::Ready(rc) => {
+            let res = rc.conn.exec(&sql);
+            let gucs = materialize::RemoteIoGucs::capture(&rc.conn);
+            Some((res, gucs))
+        }
+        _ => None,
     })?;
+    let Some((res, gucs)) = got else {
+        busy_error(conname.as_deref(), fail, &format!("while fetching from cursor \"{curname}\""))?;
+        return Ok(Datum::from_usize(0));
+    };
     let res = res?;
     if res.status != ExecStatus::CommandOk && res.status != ExecStatus::TuplesOk {
-        on_conn(&conname, |rc| {
-            res_error(&rc.conn, conname.as_deref(), &res, fail, &format!("while fetching from cursor \"{curname}\""))
-        })??;
+        let errmsg = on_conn(&conname, |a| match a {
+            Access::Ready(rc) => rc.conn.error_message(),
+            _ => CONN_BUSY.to_string(),
+        })?;
+        res_error(&errmsg, conname.as_deref(), &res, fail, &format!("while fetching from cursor \"{curname}\""))?;
         return Ok(Datum::from_usize(0));
     }
     if res.status == ExecStatus::CommandOk {
@@ -629,12 +682,14 @@ fn fc_dblink_get_notify(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
         return Err(registry::conn_not_avail(conname.as_deref()));
     }
     let notifies = if conn_present(&conname)? {
-        on_conn(&conname, |rc| {
-            rc.conn.consume_input();
+        on_conn(&conname, |a| {
             let mut out = Vec::new();
-            while let Some(n) = rc.conn.next_notify() {
-                out.push(n);
+            if let Access::Ready(rc) = a {
                 rc.conn.consume_input();
+                while let Some(n) = rc.conn.next_notify() {
+                    out.push(n);
+                    rc.conn.consume_input();
+                }
             }
             out
         })?
@@ -691,19 +746,26 @@ fn conn_present(conname: &Option<String>) -> PgResult<bool> {
     }
 }
 
-fn on_conn<R>(conname: &Option<String>, f: impl FnOnce(&mut RemoteConn) -> R) -> PgResult<R> {
+fn on_conn<R>(conname: &Option<String>, f: impl FnOnce(Access) -> R) -> PgResult<R> {
     match conname {
         Some(name) => registry::with_named_present(name, f),
-        None => registry::with_unnamed(|rc| match rc {
-            Some(rc) => Ok(f(rc)),
-            None => Err(registry::conn_not_avail(None)),
+        None => registry::with_unnamed(|a| match a {
+            Access::Missing => Err(registry::conn_not_avail(None)),
+            a => Ok(f(a)),
         }),
     }
 }
 
+#[cold]
+fn busy_error(conname: Option<&str>, fail: bool, action: &str) -> PgResult<bool> {
+    let res = pgclient::QueryResult::conn_error(CONN_BUSY.to_string());
+    res_error(CONN_BUSY, conname, &res, fail, action)?;
+    Ok(false)
+}
+
 fn cursor_op(
     conname: &Option<String>,
-    f: impl FnOnce(&mut RemoteConn) -> PgResult<bool>,
+    f: impl FnOnce(Access) -> PgResult<bool>,
 ) -> PgResult<bool> {
     if !conn_present(conname)? {
         return Err(registry::conn_not_avail(conname.as_deref()));

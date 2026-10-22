@@ -1,0 +1,6 @@
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	PENDING	writes	statement:fire_as	leader	writes on the leader: per query level AS-trigger entries; fire_as takes the level's at statement end; at_eoxact drops the rest
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	EOXACT_ARMED	writes	exit	leader	writes on the leader: once-per-thread flag, the transaction-end callback (at_eoxact) registered
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	EARLY	writes	statement:fire_as	leader	writes on the leader: per level relations whose AS events queue first; fire_as takes the level's; at_eoxact clears
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	TARGETS	writes	statement:take_targets	leader	writes on the leader: per level trigger targets; take_targets takes the level's at statement end; at_eoxact clears
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	AM_WRITTEN	writes	statement:finish_am	leader	writes on the leader: per level leaves written through a table AM; finish_am takes them at statement end; at_eoxact clears
+gravity/hosts/src/ops/modifytable/trigger_stmt.rs	CROSSCHECK	writes	scope:Crosscheck@gravity/hosts/src/ops/modifytable/write.rs	leader	writes on the leader: the running statement's crosscheck snapshot; the Crosscheck guard's Drop restores the previous

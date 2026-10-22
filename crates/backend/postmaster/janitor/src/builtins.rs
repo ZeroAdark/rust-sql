@@ -1,15 +1,17 @@
-//! `pgrust_pin_database(text)` / `pgrust_unpin_database(text)` /
-//! `pgrust_seal_template(text)` — pgrust-native internal builtins on the
+//! `pg_pgrust.pin_database(text)` / `pg_pgrust.unpin_database(text)` /
+//! `pg_pgrust.seal_template(text)` (internal symbols `pgrust_pin_database`,
+//! `pgrust_unpin_database`, `pgrust_seal_template`) — internal builtins on the
 //! reserved-oid EXTRA_BUILTINS path (the `pgrust_lane_coverage` precedent:
 //! execmain/src/lanev2/coverage.rs documents the 9000..=9099 range; 9000 is
 //! taken by the coverage SRF, this table claims 9001, 9002 and 9005 —
 //! 9003/9004 were pgrust_janitor_unpause and pgrust_set_template_grace,
 //! deleted 2026-08-05 and permanently retired, never reassigned).
 //!
-//! These three are TRUE builtins: bootstrap.rs backfills their pg_proc rows
-//! (same oids, pg_catalog namespace) into every database a session reaches,
-//! so no install script exists and clones inherit nothing they didn't
-//! already have — the total janitor SQL surface is these three functions.
+//! These three are TRUE builtins: their pg_proc rows (same oids, schema
+//! pg_pgrust) are bootstrap rows that pgrust's initdb splices into the BKI
+//! (crates/bin/initdb/src/pgrust.bki), so every database copied from
+//! template1 has them, no install script exists, and no session ever writes
+//! them — the total janitor SQL surface is these three functions.
 //!
 //! Privileges (spec "Security posture"): pin/unpin = database owner or
 //! superuser (`object_ownercheck`, which passes superusers); seal = owner
@@ -33,11 +35,16 @@ pub const PGRUST_PIN_DATABASE_FOID: Oid = 9001;
 pub const PGRUST_UNPIN_DATABASE_FOID: Oid = 9002;
 pub const PGRUST_SEAL_TEMPLATE_FOID: Oid = 9005;
 
+/// The system schema holding the three functions, with its reserved pinned
+/// oid.
+pub const PGRUST_NAMESPACE: &str = "pg_pgrust";
+pub const PGRUST_NAMESPACE_OID: Oid = 9006;
+
 /// Decode the text arg of a STRICT single-arg builtin into an owned name.
 fn text_arg0(fcinfo: &mut Fcinfo) -> PgResult<String> {
     // SAFETY: null-checked by strictness; arg 0 is a text datum.
     let v = unsafe { fcinfo.arg_varlena_packed(0)? };
-    let bytes = v.data().to_vec();
+    let bytes = ::mcx::std_vec_from_slice("janitor", &v.data())?;
     String::from_utf8(bytes).map_err(|_| {
         Box::new(
             PgError::error("database name is not valid UTF-8".to_string())
@@ -96,7 +103,7 @@ pub fn fc_pgrust_pin_database(
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
     let name = text_arg0(fcinfo)?;
-    let datname = owner_or_superuser_check(fcinfo, &name, "pgrust_pin_database")?;
+    let datname = owner_or_superuser_check(fcinfo, &name, "pg_pgrust.pin_database")?;
     Ok(Datum::from_bool(registry::pin(&datname)?))
 }
 
@@ -119,7 +126,7 @@ pub fn fc_pgrust_unpin_database(
                     return Err(ereport(ERROR)
                         .errcode(ERRCODE_INSUFFICIENT_PRIVILEGE)
                         .errmsg(format!(
-                            "must be owner of database {name} or superuser to call pgrust_unpin_database"
+                            "must be owner of database {name} or superuser to call pg_pgrust.unpin_database"
                         ))
                         .into_error()
                         .into());
@@ -177,7 +184,7 @@ pub fn fc_pgrust_seal_template(
             return Err(ereport(ERROR)
                 .errcode(ERRCODE_INSUFFICIENT_PRIVILEGE)
                 .errmsg(format!(
-                    "must be owner of database {name} or superuser to call pgrust_seal_template"
+                    "must be owner of database {name} or superuser to call pg_pgrust.seal_template"
                 ))
                 .into_error()
                 .into());
@@ -266,5 +273,48 @@ mod tests {
                 assert_ne!(name, b.name, "CANONICAL claims the name {name}");
             }
         }
+    }
+
+    /// The catalog rows pgrust's initdb creates and this dispatch table
+    /// must describe the same surface, and every oid must be implicitly
+    /// pinned (below FirstUnpinnedObjectId) like any initdb builtin.
+    #[test]
+    fn initdb_rows_match_dispatch_table() {
+        let rows: Vec<(&str, &str)> = include_str!("../../../../bin/initdb/src/pgrust.bki")
+            .lines()
+            .filter(|l| l.starts_with("pg_"))
+            .map(|l| {
+                let (cat, stmt) = l.split_once(' ').expect("catalog prefix");
+                let body = stmt.strip_prefix("insert ( ").and_then(|s| s.strip_suffix(" )"));
+                (cat, body.expect("insert ( ... )"))
+            })
+            .collect();
+        let has = |cat: &str, prefix: String| rows.iter().any(|&(c, b)| c == cat && b.starts_with(&prefix));
+        let procs: Vec<Vec<&str>> = rows
+            .iter()
+            .filter(|&&(c, _)| c == "pg_proc")
+            .map(|&(_, b)| b.split_whitespace().collect())
+            .collect();
+        assert_eq!(procs.len(), JANITOR_BUILTINS.len());
+        for b in JANITOR_BUILTINS {
+            let p = procs
+                .iter()
+                .find(|p| p[0] == b.foid.to_string())
+                .expect("every dispatch row has an initdb pg_proc row");
+            assert_eq!(p.len(), 30, "{}: pg_proc arity", b.name);
+            assert_eq!(Some(p[1]), b.name.strip_prefix("pgrust_"), "proname");
+            assert_eq!(p[2], PGRUST_NAMESPACE_OID.to_string(), "pronamespace");
+            assert_eq!(p[12], if b.strict { "t" } else { "f" }, "proisstrict");
+            assert_eq!(p[13], if b.retset { "t" } else { "f" }, "proretset");
+            assert_eq!(p[16], b.nargs.to_string(), "pronargs");
+            assert_eq!(p[25], b.name, "prosrc");
+            assert!(has("pg_description", format!("{} 1255 0 '", b.foid)), "{} descr", b.name);
+            assert!(b.foid < 12000, "{} must be implicitly pinned", b.foid);
+        }
+        let nsp = format!("{PGRUST_NAMESPACE_OID} {PGRUST_NAMESPACE} ");
+        assert!(has("pg_namespace", nsp), "pg_pgrust schema row");
+        assert!(has("pg_description", format!("{PGRUST_NAMESPACE_OID} 2615 0 '")));
+        assert!(PGRUST_NAMESPACE_OID < 12000);
+        assert!(PGRUST_NAMESPACE.starts_with("pg_") && PGRUST_NAMESPACE != "pg_catalog");
     }
 }

@@ -48,135 +48,197 @@ pub fn deflate_zlib(data: &[u8], level: i32) -> Vec<u8> {
     deflate(data, level, true)
 }
 
-/// Upper bound on the total decompressed output of a single PGP compressed
-/// packet. This mirrors upstream pgcrypto: `mbuf.c`'s `decompress_read` streams
-/// inflate output into an `MBuf` whose `prepare_room`/`repalloc` growth is
-/// capped at `MaxAllocSize`, so an over-large expansion fails cleanly with a
-/// catchable "invalid memory alloc request size" ERROR rather than exhausting
-/// memory. Our port grows a plain `Vec` on the global allocator, which would
-/// otherwise `handle_alloc_error`/abort the whole (single-process) server, so
-/// we enforce the same bound explicitly. A decompression bomb — a small DEFLATE
-/// stream that inflates to gigabytes — hits this cap and is rejected via the
-/// pgcrypto error path instead of allocating without limit.
-/// Sized so that a literal payload can reach the last MBuf capacity C
-/// accepts (MaxAllocSize rounded down to its 2*STEP growth grid) before the
-/// decrypt side reports mcxt.c's error for the next growth.
-const MAX_DECOMPRESSED: usize = ::mcx::MAX_ALLOC_SIZE + (1 << 20);
-
-/// zlib return codes as C's `inflate()` reports them for the same input:
-/// truncated input at Z_FINISH is Z_BUF_ERROR, everything else Z_DATA_ERROR.
+/// zlib return codes (zlib.h) as C's inflate() reports them.
+pub const Z_OK: i32 = 0;
+pub const Z_STREAM_END: i32 = 1;
 const Z_NEED_DICT: i32 = 2;
 const Z_DATA_ERROR: i32 = -3;
 const Z_BUF_ERROR: i32 = -5;
 
+/// Deflate's maximum match distance: the history a sliding window keeps.
+const WINDOW: usize = 32 * 1024;
+const HIST_CAP: usize = WINDOW + 256 * 1024;
+
 /// zlib inflate() answers Z_NEED_DICT once a well-formed header with FDICT
 /// set and its DICTID are in; miniz_oxide rejects the flag as a bad header.
-fn zlib_needs_dict(data: &[u8]) -> bool {
-    data.len() >= 6
-        && data[0] & 0x0f == 8
-        && data[0] >> 4 <= 7
-        && (((data[0] as u32) << 8) | data[1] as u32) % 31 == 0
-        && data[1] & 0x20 != 0
+fn zlib_needs_dict(hdr: [u8; 2]) -> bool {
+    hdr[0] & 0x0f == 8
+        && hdr[0] >> 4 <= 7
+        && (((hdr[0] as u32) << 8) | hdr[1] as u32) % 31 == 0
+        && hdr[1] & 0x20 != 0
 }
 
-/// Inflates `data`; `Ok((out, consumed))` counts the input bytes the
-/// stream spanned. `Err(None)` is the output ceiling, `Err(Some(code))`
-/// zlib's inflate() error for the same input.
-fn inflate_bounded(
-    data: &[u8],
-    zlib_header: bool,
-    max_output: usize,
-) -> Result<(Vec<u8>, usize), Option<i32>> {
-    if zlib_header && zlib_needs_dict(data) {
-        return Err(Some(Z_NEED_DICT));
-    }
-    let mut inf = DecompressorOxide::new();
-    let mut flags = inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
-    if zlib_header {
-        flags |= inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER;
-    }
-    let mut out: Vec<u8> = Vec::with_capacity((data.len() * 4 + 256).min(max_output.max(1)));
-    let mut in_pos = 0usize;
-    loop {
-        let out_len = out.len();
-        // Never let the output buffer grow past the cap. If the decompressor
-        // still wants to emit more once we are at the ceiling, the input is a
-        // decompression bomb: bail out via the (catchable) error path.
-        if out_len >= max_output {
-            return Err(None);
+/// A z_stream in inflate mode (pgp-compress.c:212 decompress_init). Each
+/// call produces at most `out.len()` bytes and consumes input only as far
+/// as that output needs, as zlib does, so the caller's source reads
+/// happen where C's do.
+pub struct Inflater {
+    decomp: Box<DecompressorOxide>,
+    hist: Vec<u8>,
+    used: usize,
+    zlib: bool,
+    hdr: [u8; 2],
+    hdr_seen: usize,
+    need_dict: bool,
+    done: bool,
+}
+
+impl Inflater {
+    pub fn new(zlib: bool) -> Inflater {
+        Inflater {
+            decomp: Box::default(),
+            hist: vec![0u8; HIST_CAP],
+            used: 0,
+            zlib,
+            hdr: [0; 2],
+            hdr_seen: 0,
+            need_dict: false,
+            done: false,
         }
-        let target = out.capacity().max(out_len + 256).min(max_output);
-        out.resize(target, 0);
-        let (status, consumed, written) =
-            decompress(&mut inf, &data[in_pos..], &mut out, out_len, flags);
-        in_pos += consumed;
-        out.truncate(out_len + written);
-        match status {
-            TINFLStatus::Done => return Ok((out, in_pos)),
-            TINFLStatus::HasMoreOutput => {
-                if out.len() >= max_output {
-                    return Err(None);
+    }
+
+    /// inflate(strm, finish ? Z_FINISH : Z_SYNC_FLUSH): (code, consumed,
+    /// written).
+    pub fn inflate(&mut self, input: &[u8], out: &mut [u8], finish: bool) -> (i32, usize, usize) {
+        if self.done {
+            return (Z_STREAM_END, 0, 0);
+        }
+        let mut consumed = 0usize;
+        if self.zlib && (self.hdr_seen < 2 || self.need_dict) {
+            while self.hdr_seen < 2 && consumed < input.len() {
+                self.hdr[self.hdr_seen] = input[consumed];
+                self.hdr_seen += 1;
+                consumed += 1;
+            }
+            if self.hdr_seen < 2 {
+                return (Self::no_end(consumed, 0, finish), consumed, 0);
+            }
+            if !self.need_dict && zlib_needs_dict(self.hdr) {
+                self.need_dict = true;
+                self.hdr_seen = 2;
+            }
+            if self.need_dict {
+                while self.hdr_seen < 6 && consumed < input.len() {
+                    self.hdr_seen += 1;
+                    consumed += 1;
                 }
-                let cap = out.capacity();
-                let want = cap.max(256).min(max_output - out.len());
-                out.reserve(want);
+                if self.hdr_seen == 6 {
+                    return (Z_NEED_DICT, consumed, 0);
+                }
+                return (Self::no_end(consumed, 0, finish), consumed, 0);
             }
-            TINFLStatus::NeedsMoreInput | TINFLStatus::FailedCannotMakeProgress => {
-                return Err(Some(Z_BUF_ERROR))
+            if consumed > 0 {
+                let hdr = self.hdr;
+                let (st, _, _) = self.step(&hdr, 0, false);
+                if (st as i32) < 0 {
+                    return (Z_DATA_ERROR, consumed, 0);
+                }
             }
-            _ => return Err(Some(Z_DATA_ERROR)),
+        }
+        let (st, inb, written) = self.step(&input[consumed..], out.len(), finish);
+        consumed += inb;
+        out[..written].copy_from_slice(&self.hist[self.used - written..self.used]);
+        let code = match st {
+            TINFLStatus::Done => {
+                self.done = true;
+                Z_STREAM_END
+            }
+            TINFLStatus::HasMoreOutput | TINFLStatus::NeedsMoreInput => {
+                Self::no_end(consumed, written, finish)
+            }
+            TINFLStatus::FailedCannotMakeProgress => Z_BUF_ERROR,
+            _ => Z_DATA_ERROR,
+        };
+        (code, consumed, written)
+    }
+
+    /// zlib's verdict on a call that did not reach the stream end.
+    fn no_end(consumed: usize, written: usize, finish: bool) -> i32 {
+        if finish || (consumed == 0 && written == 0) {
+            Z_BUF_ERROR
+        } else {
+            Z_OK
         }
     }
-}
 
-fn inflate(data: &[u8], zlib_header: bool) -> Result<(Vec<u8>, usize), Option<i32>> {
-    inflate_bounded(data, zlib_header, MAX_DECOMPRESSED)
-}
-
-pub fn inflate_raw(data: &[u8]) -> Result<(Vec<u8>, usize), Option<i32>> {
-    inflate(data, false)
-}
-
-pub fn inflate_zlib(data: &[u8]) -> Result<(Vec<u8>, usize), Option<i32>> {
-    inflate(data, true)
+    fn step(&mut self, input: &[u8], room: usize, finish: bool) -> (TINFLStatus, usize, usize) {
+        if self.used + room > HIST_CAP {
+            self.hist.copy_within(self.used - WINDOW..self.used, 0);
+            self.used = WINDOW;
+        }
+        let mut flags = inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
+        flags |= if self.zlib {
+            inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER | inflate_flags::TINFL_FLAG_COMPUTE_ADLER32
+        } else {
+            inflate_flags::TINFL_FLAG_IGNORE_ADLER32
+        };
+        if !finish {
+            flags |= inflate_flags::TINFL_FLAG_HAS_MORE_INPUT;
+        }
+        let end = self.used + room;
+        let (st, inb, outb) = decompress(&mut self.decomp, input, &mut self.hist[..end], self.used, flags);
+        self.used += outb;
+        (st, inb, outb)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn legitimate_message_round_trips() {
-        // A moderately large, highly compressible payload must still inflate
-        // fully — the cap only rejects abusive expansion, not valid data.
-        let plain = vec![0x5au8; 4 * 1024 * 1024];
-        let comp = deflate_raw(&plain, 6);
-        assert!(comp.len() < plain.len());
-        let (back, consumed) = inflate_raw(&comp).expect("valid stream must decompress");
-        assert_eq!(back, plain);
-        assert_eq!(consumed, comp.len());
+    /// Drives an Inflater the way pgp-compress.c:236 decompress_read does:
+    /// 8192-byte source reads, 8192-byte output buffer.
+    fn inflate_all(data: &[u8], zlib: bool) -> Result<Vec<u8>, i32> {
+        let mut inf = Inflater::new(zlib);
+        let mut out = Vec::new();
+        let mut buf = [0u8; 8192];
+        let (mut pos, mut avail) = (0usize, 0usize);
+        loop {
+            if avail == 0 {
+                avail = (data.len() - pos).min(8192);
+            }
+            let (code, used, written) = inf.inflate(&data[pos..pos + avail], &mut buf, avail == 0);
+            pos += used;
+            avail -= used;
+            out.extend_from_slice(&buf[..written]);
+            match code {
+                Z_STREAM_END => return Ok(out),
+                Z_OK => {}
+                e => return Err(e),
+            }
+        }
     }
 
     #[test]
-    fn decompression_bomb_is_rejected() {
-        // 8 MiB of zeros deflate to a tiny stream but inflate far past a small
-        // cap. With the bound in place the inflate must error rather than
-        // allocate without limit.
-        let plain = vec![0u8; 8 * 1024 * 1024];
-        let comp = deflate_raw(&plain, 6);
-        assert!(comp.len() < 64 * 1024);
-        // Cap the output well below the true inflated size.
-        assert_eq!(inflate_bounded(&comp, false, 64 * 1024).unwrap_err(), None);
+    fn streams_large_output_in_bounded_steps() {
+        let plain: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8 ^ (i >> 13) as u8).collect();
+        for zlib in [false, true] {
+            let comp = if zlib { deflate_zlib(&plain, 6) } else { deflate_raw(&plain, 6) };
+            assert_eq!(inflate_all(&comp, zlib).unwrap(), plain);
+        }
+    }
+
+    // zlib consumes input only as its output needs: a stream that inflates
+    // to far more than one output buffer leaves input unread.
+    #[test]
+    fn input_is_consumed_as_output_is_produced() {
+        let comp = deflate_raw(&vec![b'a'; 4 << 20], 6);
+        let mut inf = Inflater::new(false);
+        let mut buf = [0u8; 8192];
+        let (code, used, written) = inf.inflate(&comp, &mut buf, false);
+        assert_eq!((code, written), (Z_OK, 8192));
+        assert!(used < comp.len());
     }
 
     #[test]
     fn inflate_failures_carry_zlib_codes() {
-        assert_eq!(inflate_raw(&[0xff, 0xff, 0xff, 0xff]).unwrap_err(), Some(-3));
-        assert_eq!(inflate_zlib(&[0x00, 0x00]).unwrap_err(), Some(-3));
-        assert_eq!(inflate_zlib(&[0x78, 0x20, 0, 0, 0, 1, 0x03, 0x00]).unwrap_err(), Some(2));
-        assert_eq!(inflate_zlib(&[0x78, 0x21, 0, 0, 0, 1, 0x03, 0x00]).unwrap_err(), Some(-3));
-        assert_eq!(inflate_raw(&[0x78, 0x20, 0, 0, 0, 1, 0x03, 0x00]).unwrap_err(), Some(-3));
+        assert_eq!(inflate_all(&[0xff, 0xff, 0xff, 0xff], false).unwrap_err(), -3);
+        assert_eq!(inflate_all(&[0x00, 0x00], true).unwrap_err(), -3);
+        assert_eq!(inflate_all(&[0x78, 0x20, 0, 0, 0, 1, 0x03, 0x00], true).unwrap_err(), 2);
+        assert_eq!(inflate_all(&[0x78, 0x21, 0, 0, 0, 1, 0x03, 0x00], true).unwrap_err(), -3);
+        assert_eq!(inflate_all(&[0x78, 0x20, 0, 0, 0, 1, 0x03, 0x00], false).unwrap_err(), -3);
         let comp = deflate_raw(b"truncated stream payload", 6);
-        assert_eq!(inflate_raw(&comp[..comp.len() / 2]).unwrap_err(), Some(-5));
+        assert_eq!(inflate_all(&comp[..comp.len() / 2], false).unwrap_err(), -5);
+        assert_eq!(inflate_all(&[], false).unwrap_err(), -5);
     }
 }

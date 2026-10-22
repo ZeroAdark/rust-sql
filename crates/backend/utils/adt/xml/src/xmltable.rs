@@ -9,7 +9,9 @@ use ::types_error::{
     ERRCODE_INVALID_ARGUMENT_FOR_XQUERY, ERRCODE_INVALID_XML_DOCUMENT, ERRCODE_OUT_OF_MEMORY,
 };
 
-use crate::errhandler::{pg_xml_init, xml_ereport, xml_err_occurred, PG_XML_STRICTNESS_ALL};
+use crate::errhandler::{
+    flush_xml_warnings, pg_xml_init, xml_ereport, xml_err_occurred, PG_XML_STRICTNESS_ALL,
+};
 use crate::libxml::{
     self, cstr, xml2, xmlDoc, xmlNodeSetHdr, xmlParserCtxt, xmlXPathCompExpr, xmlXPathContext,
     xmlXPathContextHdr, xmlXPathObject, xmlXPathObjectHdr, XPATH_BOOLEAN, XPATH_NODESET,
@@ -32,6 +34,7 @@ pub struct XmlTableContext {
 impl XmlTableContext {
     /// C `XmlTableInitOpaque` (xml.c:4683).
     pub fn new(natts: i32) -> PgResult<XmlTableContext> {
+        crate::require_libxml()?;
         let x = xml2();
         pg_xml_init(PG_XML_STRICTNESS_ALL);
         // SAFETY: fresh parser context, freed by destroy().
@@ -53,7 +56,7 @@ impl XmlTableContext {
                 xpathcxt: core::ptr::null_mut(),
                 xpathcomp: core::ptr::null_mut(),
                 xpathobj: core::ptr::null_mut(),
-                xpathscomp: vec![core::ptr::null_mut(); natts.max(0) as usize],
+                xpathscomp: ::mcx::std_vec_from_elem("xml", core::ptr::null_mut(), natts.max(0) as usize)?,
                 row_count: 0,
             })
         }
@@ -64,6 +67,8 @@ impl XmlTableContext {
     pub fn set_document(&mut self, value: &[u8]) -> PgResult<()> {
         let image = crate::xml_out_internal(value, 0)?;
         let x = xml2();
+        // C keeps InitOpaque's handler across xml_in's; ours is re-armed.
+        pg_xml_init(PG_XML_STRICTNESS_ALL);
         // SAFETY: self.ctxt is live; doc/xpathcxt ownership moves into self.
         unsafe {
             let doc = (x.xmlCtxtReadMemory)(
@@ -74,6 +79,7 @@ impl XmlTableContext {
                 core::ptr::null(),
                 0,
             );
+            flush_xml_warnings();
             if doc.is_null() || xml_err_occurred() {
                 if !doc.is_null() {
                     (x.xmlFreeDoc)(doc);
@@ -109,6 +115,7 @@ impl XmlTableContext {
                 .into());
         };
         let x = xml2();
+        pg_xml_init(PG_XML_STRICTNESS_ALL);
         let n = cstr(name);
         let u = cstr(uri);
         // SAFETY: xpathcxt is live (set_document precedes per the routine order).
@@ -132,6 +139,7 @@ impl XmlTableContext {
                 .into());
         }
         let x = xml2();
+        pg_xml_init(PG_XML_STRICTNESS_ALL);
         let xstr = cstr(path);
         // SAFETY: xpathcxt live; comp ownership moves into self.
         unsafe {
@@ -155,6 +163,7 @@ impl XmlTableContext {
                 .into());
         }
         let x = xml2();
+        pg_xml_init(PG_XML_STRICTNESS_ALL);
         let xstr = cstr(path);
         // SAFETY: as set_row_filter.
         unsafe {

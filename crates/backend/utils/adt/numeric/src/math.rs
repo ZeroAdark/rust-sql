@@ -632,7 +632,8 @@ pub fn estimate_ln_dweight(var: VarView<'_>) -> i32 {
         }
 
         // var ~= digits * 10^dweight, so ln(var) ~= ln(digits) + dweight*ln(10)
-        let ln_var = (digits as f64).ln() + dweight as f64 * 2.302585092994046;
+        // numeric.c:11129: fmadd(dweight, ln 10, ln(digits)) on aarch64 (D400).
+        let ln_var = ::fp_contract::fmadd(dweight as f64, 2.302585092994046, (digits as f64).ln());
         ln_var.abs().log10() as i32
     } else {
         0
@@ -854,7 +855,8 @@ pub fn power_var_int(
         let mut p = base.weight * DEC_DIGITS;
         let mut i = 1;
         while i < base.ndigits && i * DEC_DIGITS < 16 {
-            f = f * NBASE as f64 + base.digits[i as usize] as f64;
+            // numeric.c:11523: fmadd on aarch64 (D400).
+            f = ::fp_contract::fmadd(f, NBASE as f64, base.digits[i as usize] as f64);
             p -= DEC_DIGITS;
             i += 1;
         }
@@ -1024,6 +1026,7 @@ pub fn get_str_from_var_sci(var: VarView<'_>, rscale: i32, out: &mut Vec<u8>) {
         (e.ilog10() + 1).max(2) as usize
     };
     let base = out.len();
+    let _ = out.try_reserve(ndig);
     out.resize(base + ndig, b'0');
     let mut e = e;
     for i in (0..ndig).rev() {

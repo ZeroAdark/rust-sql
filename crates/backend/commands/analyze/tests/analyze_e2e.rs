@@ -47,6 +47,7 @@ struct Fake {
     pages: Vec<usize>,
     pins: Vec<i32>,
     locks: Vec<i32>,
+    share_locks: Vec<u32>,
     buf_rel: Vec<(Oid, BlockNumber)>,
     rels: Vec<(Oid, Vec<usize>)>,
 }
@@ -55,6 +56,7 @@ static FAKE: Mutex<Fake> = Mutex::new(Fake {
     pages: Vec::new(),
     pins: Vec::new(),
     locks: Vec::new(),
+    share_locks: Vec::new(),
     buf_rel: Vec::new(),
     rels: Vec::new(),
 });
@@ -123,6 +125,9 @@ fn install_bufmgr_seams() {
                 _ => {
                     assert_eq!(*l, 0, "double content lock");
                     *l += 1;
+                    if mode == bufmgr_seams::BUFFER_LOCK_SHARE {
+                        f.share_locks[(buf - 1) as usize] += 1;
+                    }
                 }
             }
         });
@@ -164,6 +169,7 @@ fn install_bufmgr_seams() {
             f.pages.push(addr);
             f.pins.push(1);
             f.locks.push(1);
+            f.share_locks.push(0);
             let idx = f.pages.len() - 1;
             let block = rel_buffers(f, relid).len() as BlockNumber;
             rel_buffers(f, relid).push(idx);
@@ -499,7 +505,7 @@ fn make_relation<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> RelationData<'mcx> {
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -812,9 +818,20 @@ fn write_control_file(dir: &std::path::Path) {
     std::fs::write(dir.join("global/pg_control"), &image).unwrap();
 }
 
-fn boot() {
+/// The test's data directory, removed when dropped (the test's end, or a panic's unwind): a run leaves nothing in the
+/// temp dir.
+struct TempGone(std::path::PathBuf);
+
+impl Drop for TempGone {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn boot() -> TempGone {
     let dir = std::env::temp_dir().join(format!("pgrust_analyze_e2e_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    let gone = TempGone(dir.clone());
     for sub in ["global", "pg_wal", "pg_xact", "pg_subtrans"] {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
@@ -912,6 +929,8 @@ fn boot() {
     xlogutils::set_in_recovery(false);
     subtrans::StartupSUBTRANS(3).unwrap();
     assert!(transam_xlog::XLogInsertAllowed());
+    ::read_stream::testing::install_resident_reads();
+    gone
 }
 
 fn insert_rows() {
@@ -1045,13 +1064,29 @@ struct PlanQual {
 
 #[test]
 fn analyze_end_to_end_matches_live_postgres() {
-    boot();
+    let dir = boot();
     insert_rows();
 
     let nblocks = with_fake(|f| rel_buffers(f, T_OID).len() as BlockNumber);
     assert!(nblocks > 10, "10000 rows spread over multiple pages");
 
+    with_fake(|f| f.share_locks.iter_mut().for_each(|n| *n = 0));
     run_analyze();
+
+    // heapam_handler.c:1021-1160: analyze_next_block share-locks the page once
+    // and the lock is held until next_tuple exhausts it, so every sampled page
+    // sees exactly one share lock (the sample covers the whole table).
+    {
+        let per_page: Vec<u32> = with_fake(|f| {
+            rel_buffers(f, T_OID)
+                .clone()
+                .into_iter()
+                .map(|i| f.share_locks[i])
+                .collect()
+        });
+        assert_eq!(per_page.len(), nblocks as usize);
+        assert!(per_page.iter().all(|&n| n == 1), "share locks per sampled page: {per_page:?}");
+    }
 
     // pg_class update args (vac_update_relstats is the vacuum unit's; the
     // recorder stands in): live PG 18.3 reported reltuples=10000.
@@ -1125,4 +1160,8 @@ fn analyze_end_to_end_matches_live_postgres() {
         assert!(f.pins.iter().all(|p| *p == 0), "leaked pins: {:?}", f.pins);
         assert!(f.locks.iter().all(|l| *l == 0), "leaked locks: {:?}", f.locks);
     });
+    // the data directory goes with the test: nothing left in the temp dir
+    let path = dir.0.clone();
+    drop(dir);
+    assert!(!path.exists(), "{} left behind", path.display());
 }

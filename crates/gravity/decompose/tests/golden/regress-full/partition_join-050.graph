@@ -1,0 +1,119 @@
+-- regress-full-partition_join-050
+-- EXPLAIN (COSTS OFF) SELECT * FROM prt1_l t1 JOIN LATERAL (SELECT * FROM prt1_l t2 TABLESAMPLE SYSTEM (t1.a) REPEATABLE(t1.b)) s ON t1.a = s.a AND t1.b = s.b AND t1.c = s.c;
+graph pipelines=5 breakers=0 init_plans=0 root=p4
+p0 node=2 eligible rows=125 end=sink
+  nodes n2@0 n1@1 n0@3
+  source range rel=44147 rti=5 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v5.1, 2=v5.2, 3=v5.3)
+  nest inner=n3 JOIN_INNER params=($exec0=outer.1, $exec1=outer.2, $exec2=outer.3)
+  inner node=3 serial site=0 reason=Host end=sink
+  nodes n3@0
+  source sample rel=44147 rti=12 am=heap method=system handler=3314 args=(fn318($exec0)) repeatable=fn316($exec1)
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96($exec0, v12.1)
+  filter op96($exec1, v12.2)
+  filter op98(relabel25($exec2), relabel25(v12.3))
+  project (1=v12.1, 2=v12.2, 3=v12.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  append arm 0/5
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=vl:life/breaker
+p1 node=5 eligible rows=62 end=sink
+  nodes n5@0 n4@1 n0@3
+  source range rel=44155 rti=7 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v7.1, 2=v7.2, 3=v7.3)
+  nest inner=n6 JOIN_INNER params=($exec3=outer.1, $exec4=outer.2, $exec5=outer.3)
+  inner node=6 serial site=0 reason=Host end=sink
+  nodes n6@0
+  source sample rel=44155 rti=14 am=heap method=system handler=3314 args=(fn318($exec3)) repeatable=fn316($exec4)
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96($exec3, v14.1)
+  filter op96($exec4, v14.2)
+  filter op98(relabel25($exec5), relabel25(v14.3))
+  project (1=v14.1, 2=v14.2, 3=v14.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  append arm 1/5
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=vl:life/breaker
+p2 node=8 eligible rows=63 end=sink
+  nodes n8@0 n7@1 n0@3
+  source range rel=44160 rti=8 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v8.1, 2=v8.2, 3=v8.3)
+  nest inner=n9 JOIN_INNER params=($exec6=outer.1, $exec7=outer.2, $exec8=outer.3)
+  inner node=9 serial site=0 reason=Host end=sink
+  nodes n9@0
+  source sample rel=44160 rti=15 am=heap method=system handler=3314 args=(fn318($exec6)) repeatable=fn316($exec7)
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96($exec6, v15.1)
+  filter op96($exec7, v15.2)
+  filter op98(relabel25($exec8), relabel25(v15.3))
+  project (1=v15.1, 2=v15.2, 3=v15.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  append arm 2/5
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=vl:life/breaker
+p3 node=11 eligible rows=26 end=sink
+  nodes n11@0 n10@1 n0@3
+  source range rel=44168 rti=10 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v10.1, 2=v10.2, 3=v10.3)
+  nest inner=n12 JOIN_INNER params=($exec9=outer.1, $exec10=outer.2, $exec11=outer.3)
+  inner node=12 serial site=0 reason=Host end=sink
+  nodes n12@0
+  source sample rel=44168 rti=17 am=heap method=system handler=3314 args=(fn318($exec9)) repeatable=fn316($exec10)
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96($exec9, v17.1)
+  filter op96($exec10, v17.2)
+  filter op98(relabel25($exec11), relabel25(v17.3))
+  project (1=v17.1, 2=v17.2, 3=v17.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  append arm 3/5
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=vl:life/breaker
+p4 node=14 eligible rows=24 end=sink
+  nodes n14@0 n13@1 n0@3
+  source range rel=44173 rti=11 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v11.1, 2=v11.2, 3=v11.3)
+  nest inner=n15 JOIN_INNER params=($exec12=outer.1, $exec13=outer.2, $exec14=outer.3)
+  inner node=15 serial site=0 reason=Host end=sink
+  nodes n15@0
+  source sample rel=44173 rti=18 am=heap method=system handler=3314 args=(fn318($exec12)) repeatable=fn316($exec13)
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byref8:vl:win/page Offset:byval2:w2:val
+  filter op96($exec12, v18.1)
+  filter op96($exec13, v18.2)
+  filter op98(relabel25($exec14), relabel25(v18.3))
+  project (1=v18.1, 2=v18.2, 3=v18.3)
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=inner.1, 5=inner.2, 6=inner.3)
+  append arm 4/5
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6)
+  outs 1=w8:val 2=w8:val 3=vl:win/page
+  outs 1=w8:val 2=w8:val 3=vl:win/page 4=w4:val 5=w4:val 6=vl:life/breaker
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=w4:val 5=w4:val 6=vl:life/breaker
+param $exec0 owner=n1 type=23 rep=w8:val
+param $exec1 owner=n1 type=23 rep=w8:val
+param $exec2 owner=n1 type=1043@100 rep=vl:win/page
+param $exec3 owner=n4 type=23 rep=w8:val
+param $exec4 owner=n4 type=23 rep=w8:val
+param $exec5 owner=n4 type=1043@100 rep=vl:win/page
+param $exec6 owner=n7 type=23 rep=w8:val
+param $exec7 owner=n7 type=23 rep=w8:val
+param $exec8 owner=n7 type=1043@100 rep=vl:win/page
+param $exec9 owner=n10 type=23 rep=w8:val
+param $exec10 owner=n10 type=23 rep=w8:val
+param $exec11 owner=n10 type=1043@100 rep=vl:win/page
+param $exec12 owner=n13 type=23 rep=w8:val
+param $exec13 owner=n13 type=23 rep=w8:val
+param $exec14 owner=n13 type=1043@100 rep=vl:win/page
+mapped: Append SeqScan SampleScan NestLoop NestLoopParam

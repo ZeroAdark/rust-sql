@@ -135,9 +135,10 @@ fn lookup(function: &str) -> Option<PGFunction> {
     })
 }
 
-// isn.c:950 _PG_init: the GUC is defined statically (guc_tables); the prefix
-// reservation runs at library load.
 fn pg_init() -> PgResult<()> {
+    for &setting in crate::settings::SETTINGS {
+        guc::DefineCustomVariable(setting)?;
+    }
     guc::MarkGUCPrefixReserved("isn");
     Ok(())
 }

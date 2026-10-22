@@ -1,0 +1,475 @@
+Parsed test spec with 2 sessions
+
+starting permutation: hplan keep hlock c1 c2
+step hplan: EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+QUERY PLAN                      
+--------------------------------
+LockRows                        
+  ->  Hash Left Join            
+        Hash Cond: (lo.k = li.k)
+        ->  Seq Scan on lo      
+              Filter: (id <= 6) 
+        ->  Hash                
+              ->  Seq Scan on li
+(7 rows)
+
+step keep: UPDATE lo SET v = 'new' WHERE id = 2;
+step hlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step hlock: <... completed>
+id|k|v  |label
+--+-+---+-----
+ 1|1|v1 |one  
+ 2|2|new|two  
+ 3|3|v3 |three
+ 4|4|v4 |     
+ 5|5|v5 |five 
+ 6|6|v6 |six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: away hlock c1 c2
+step away: UPDATE lo SET k = 4 WHERE id = 2;
+step hlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step hlock: <... completed>
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+ 2|4|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: onto hlock c1 c2
+step onto: UPDATE lo SET k = 3 WHERE id = 2;
+step hlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step hlock: <... completed>
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+ 2|3|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: nulled hlock c1 c2
+step nulled: UPDATE lo SET v = 'nul' WHERE id = 4;
+step hlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step hlock: <... completed>
+id|k|v  |label
+--+-+---+-----
+ 1|1|v1 |one  
+ 2|2|v2 |two  
+ 3|3|v3 |three
+ 4|4|nul|     
+ 5|5|v5 |five 
+ 6|6|v6 |six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: away hmulti c1 c2
+step away: UPDATE lo SET k = 4 WHERE id = 2;
+step hmulti: 
+  SELECT 1;
+  SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+ <waiting ...>
+step c1: COMMIT;
+step hmulti: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+ 2|4|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan keep nlock c1 c2
+step nplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  SET LOCAL enable_material = off;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Seq Scan on li        
+(6 rows)
+
+step keep: UPDATE lo SET v = 'new' WHERE id = 2;
+step nlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step nlock: <... completed>
+id|k|v  |label
+--+-+---+-----
+ 1|1|v1 |one  
+ 2|2|new|two  
+ 3|3|v3 |three
+ 4|4|v4 |     
+ 5|5|v5 |five 
+ 6|6|v6 |six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan away nlock c1 c2
+step nplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  SET LOCAL enable_material = off;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Seq Scan on li        
+(6 rows)
+
+step away: UPDATE lo SET k = 4 WHERE id = 2;
+step nlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step nlock: <... completed>
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+ 2|4|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan onto nlock c1 c2
+step nplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  SET LOCAL enable_material = off;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Seq Scan on li        
+(6 rows)
+
+step onto: UPDATE lo SET k = 3 WHERE id = 2;
+step nlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step nlock: <... completed>
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+ 2|3|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan nulled nlock c1 c2
+step nplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  SET LOCAL enable_material = off;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Seq Scan on li        
+(6 rows)
+
+step nulled: UPDATE lo SET v = 'nul' WHERE id = 4;
+step nlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step nlock: <... completed>
+id|k|v  |label
+--+-+---+-----
+ 1|1|v1 |one  
+ 2|2|v2 |two  
+ 3|3|v3 |three
+ 4|4|nul|     
+ 5|5|v5 |five 
+ 6|6|v6 |six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: nplan away nmulti c1 c2
+step nplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  SET LOCAL enable_material = off;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Seq Scan on li        
+(6 rows)
+
+step away: UPDATE lo SET k = 4 WHERE id = 2;
+step nmulti: 
+  SELECT 1;
+  SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+ <waiting ...>
+step c1: COMMIT;
+step nmulti: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+ 2|4|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: mplan keep mlock c1 c2
+step mplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Materialize           
+              ->  Seq Scan on li  
+(7 rows)
+
+step keep: UPDATE lo SET v = 'new' WHERE id = 2;
+step mlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step mlock: <... completed>
+id|k|v  |label
+--+-+---+-----
+ 1|1|v1 |one  
+ 2|2|new|two  
+ 3|3|v3 |three
+ 4|4|v4 |     
+ 5|5|v5 |five 
+ 6|6|v6 |six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: mplan away mlock c1 c2
+step mplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Materialize           
+              ->  Seq Scan on li  
+(7 rows)
+
+step away: UPDATE lo SET k = 4 WHERE id = 2;
+step mlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step mlock: <... completed>
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+ 2|4|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: mplan onto mlock c1 c2
+step mplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Materialize           
+              ->  Seq Scan on li  
+(7 rows)
+
+step onto: UPDATE lo SET k = 3 WHERE id = 2;
+step mlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step mlock: <... completed>
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+ 2|3|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: mplan nulled mlock c1 c2
+step mplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Materialize           
+              ->  Seq Scan on li  
+(7 rows)
+
+step nulled: UPDATE lo SET v = 'nul' WHERE id = 4;
+step mlock: SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo; <waiting ...>
+step c1: COMMIT;
+step mlock: <... completed>
+id|k|v  |label
+--+-+---+-----
+ 1|1|v1 |one  
+ 2|2|v2 |two  
+ 3|3|v3 |three
+ 4|4|nul|     
+ 5|5|v5 |five 
+ 6|6|v6 |six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: mplan away mmulti c1 c2
+step mplan: 
+  SET LOCAL enable_hashjoin = off;
+  SET LOCAL enable_nestloop = on;
+  EXPLAIN (COSTS OFF) SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+
+QUERY PLAN                        
+----------------------------------
+LockRows                          
+  ->  Nested Loop Left Join       
+        Join Filter: (li.k = lo.k)
+        ->  Seq Scan on lo        
+              Filter: (id <= 6)   
+        ->  Materialize           
+              ->  Seq Scan on li  
+(7 rows)
+
+step away: UPDATE lo SET k = 4 WHERE id = 2;
+step mmulti: 
+  SELECT 1;
+  SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+ <waiting ...>
+step c1: COMMIT;
+step mmulti: <... completed>
+?column?
+--------
+       1
+(1 row)
+
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+ 2|4|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(6 rows)
+
+step c2: COMMIT;
+
+starting permutation: cur fetch1 away fetchall c1 c2
+step cur: DECLARE c CURSOR FOR SELECT lo.id, lo.k, lo.v, li.label FROM lo LEFT JOIN li ON li.k = lo.k WHERE lo.id <= 6 FOR UPDATE OF lo;
+step fetch1: FETCH 1 FROM c;
+id|k|v |label
+--+-+--+-----
+ 1|1|v1|one  
+(1 row)
+
+step away: UPDATE lo SET k = 4 WHERE id = 2;
+step fetchall: FETCH ALL FROM c; <waiting ...>
+step c1: COMMIT;
+step fetchall: <... completed>
+id|k|v |label
+--+-+--+-----
+ 2|4|v2|     
+ 3|3|v3|three
+ 4|4|v4|     
+ 5|5|v5|five 
+ 6|6|v6|six  
+(5 rows)
+
+step c2: COMMIT;

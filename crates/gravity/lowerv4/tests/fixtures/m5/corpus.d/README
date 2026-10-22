@@ -1,0 +1,13 @@
+M5 seed corpus: one file per fixture, `<fixture>.tsv` holding its row `fixture<TAB>source<TAB>expect` (tests/srf_m5.rs
+m5_seed_verdicts_and_pins reads every *.tsv here; column 1 must be the file's name).
+- fixture: a decompose plan fixture id (plans/<id>.plan; regress-full-<stem> = plans/regress-full/<stem>.plan), or a
+  fixtures/m5/<id>.plan (m5x-<n>: fixtures/m5/m5x.sql, captured by scripts/gravity-capture-plans.sh m5x).
+- source: the census family (census/serve.tsv), or m5x/<why> (L0-k: a user SRF on a join build side; G4: a shape the
+  srf family must leave alone; pset: a user SRF in the target list).
+- expect: the crate's lowering verdict: `served` (with its IR pin, LOWERV4_PIN=write after review), `refused <text>`,
+  or `server-only`: a fixture the crate rig cannot judge (the rig catalog has no user function / type, D537); the
+  server rig (rig.py) judges it.
+- The crate never runs a host site (library entries, fmgr sets, PL bodies, table functions: server rig only, by the
+  judge's `host site` refusal); iterator fixtures run against PG 18.6 through fixtures/m5/<id>.plan + <id>.pg
+  (m5_rows_against_the_oracle).
+Re-keyed by fixture name (v5 core-face landing 8); the rows were first seeded per M5 kind / road (M5-RIG, 2026-09-26).

@@ -4,7 +4,7 @@
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
-use allocator_api2::alloc::{AllocError, Allocator, Global};
+use allocator_api2::alloc::AllocError;
 
 use crate::aset::{INIT_BLOCK_SIZE, MAX_BLOCK_SIZE, POOL_MAX_ALIGN};
 use crate::Acct;
@@ -72,6 +72,15 @@ impl GenArena {
         self.blocks.len()
     }
 
+    // A retained keeper after reset is all free space (GenerationStats).
+    pub(crate) fn idle_keeper_tail(&self) -> usize {
+        if self.keeper == 0 {
+            0
+        } else {
+            block_mut(self.keeper).blksize - GEN_BLKHDRSZ
+        }
+    }
+
     #[inline]
     pub(crate) fn alloc(
         &mut self,
@@ -137,7 +146,9 @@ impl GenArena {
                 acct.commit_block(ksize, self.mem_allocated, self.blocks.len());
                 self.set_window(self.keeper);
                 // SAFETY: req fits the just-claimed keeper window.
-                return Ok(unsafe { self.carve(csize) });
+                let p = unsafe { self.carve(csize) };
+                self.note_window_tail(acct);
+                return Ok(p);
             }
         }
         if self.freeblock != 0 {
@@ -146,7 +157,9 @@ impl GenArena {
                 self.freeblock = 0;
                 self.set_window(fb);
                 // SAFETY: req fits the empty freeblock's window.
-                return Ok(unsafe { self.carve(csize) });
+                let p = unsafe { self.carve(csize) };
+                self.note_window_tail(acct);
+                return Ok(p);
             }
         }
         let is_keeper = self.keeper == 0;
@@ -160,25 +173,37 @@ impl GenArena {
         if blksize < req + GEN_BLKHDRSZ {
             blksize = (req + GEN_BLKHDRSZ).next_power_of_two();
         }
-        let addr = self.push_block(blksize, POOL_MAX_ALIGN, acct)?;
+        let addr = self.push_block(blksize, POOL_MAX_ALIGN, acct, is_keeper)?;
         if is_keeper {
             self.keeper = addr;
         }
         self.set_window(addr);
         // SAFETY: req + GEN_BLKHDRSZ <= blksize by construction.
-        Ok(unsafe { self.carve(csize) })
+        let p = unsafe { self.carve(csize) };
+        self.note_window_tail(acct);
+        Ok(p)
     }
 
+    // GenerationStats' free space (endptr - freeptr), snapshotted at block
+    // transitions like the bump window tail.
+    #[inline]
+    fn note_window_tail(&self, acct: &Acct) {
+        acct.window_tail.set(self.cur_end as usize - self.cur_ptr as usize);
+    }
+
+    // A `kept` block (the keeper a reset keeps) never comes from the block source.
     fn push_block(
         &mut self,
         blksize: usize,
         align: usize,
         acct: &Acct,
+        kept: bool,
     ) -> Result<usize, AllocError> {
         acct.check_limit(blksize)?;
+        acct.admit_block(blksize);
         self.blocks.try_reserve(1).map_err(|_| AllocError)?;
         let layout = Layout::from_size_align(blksize, align).map_err(|_| AllocError)?;
-        let p = Global.allocate(layout)?;
+        let p = if kept { crate::heap::allocate_kept_for(layout, &acct.led)? } else { crate::heap::allocate_for(layout, &acct.led)? };
         let addr = p.cast::<u8>().as_ptr().expose_provenance();
         let idx = self.blocks.len() as u32;
         // SAFETY: fresh blksize-byte allocation; the header fits its prefix.
@@ -217,7 +242,7 @@ impl GenArena {
         let csize = (layout.size() + 7) & !7;
         let data_off = (GEN_BLKHDRSZ + GEN_CHUNKHDRSZ + align - 1) & !(align - 1);
         let blksize = data_off.checked_add(csize).ok_or(AllocError)?;
-        let addr = self.push_block(blksize, align, acct)?;
+        let addr = self.push_block(blksize, align, acct, false)?;
         let b = block_mut(addr);
         b.nchunks = 1;
         let base = core::ptr::with_exposed_provenance_mut::<u8>(addr);
@@ -248,8 +273,10 @@ impl GenArena {
         debug_assert!(b.nfree <= b.nchunks);
         debug_assert!(addr != self.freeblock);
         if b.nfree < b.nchunks {
+            acct.free_chunks.set(acct.free_chunks.get() + 1);
             return;
         }
+        acct.free_chunks.set(acct.free_chunks.get() - (b.nfree as usize - 1));
         self.block_emptied(addr, acct);
     }
 
@@ -271,6 +298,7 @@ impl GenArena {
             if addr == self.cur_block {
                 // Rewind the window so the current block is reused in place.
                 self.cur_ptr = core::ptr::with_exposed_provenance_mut::<u8>(addr + GEN_BLKHDRSZ);
+                self.note_window_tail(acct);
             }
         } else if self.freeblock == 0 {
             let b = block_mut(addr);
@@ -284,22 +312,27 @@ impl GenArena {
             if let Some(&moved) = self.blocks.get(idx) {
                 block_mut(moved).idx = idx as u32;
             }
-            self.release_block_bytes(addr);
+            self.release_block_bytes(addr, Some(&acct.led));
             acct.uncommit_block(blksize, self.mem_allocated, self.blocks.len());
         }
     }
 
-    fn release_block_bytes(&mut self, addr: usize) {
+    // `led`: the context's, for a block freed while it lives; None at a reset or drop, whose caller resets the Led.
+    fn release_block_bytes(&mut self, addr: usize, led: Option<&crate::owner::Led>) {
         let b = block_mut(addr);
         let (blksize, align) = (b.blksize, b.align as usize);
         self.mem_allocated -= blksize;
         crate::global_footprint::sub(blksize);
         // SAFETY: block empty (or arena reset/teardown); size/align from its own header.
         unsafe {
-            Global.deallocate(
+            let (p, l) = (
                 NonNull::new_unchecked(core::ptr::with_exposed_provenance_mut::<u8>(addr)),
                 Layout::from_size_align_unchecked(blksize, align),
             );
+            match led {
+                Some(led) => crate::heap::deallocate_for(p, l, led),
+                None => crate::heap::free_block(p, l, None),
+            }
         }
     }
 
@@ -344,7 +377,7 @@ impl GenArena {
         for i in 0..self.blocks.len() {
             let addr = self.blocks[i];
             if addr != keeper {
-                self.release_block_bytes(addr);
+                self.release_block_bytes(addr, None);
             }
         }
         self.blocks.clear();
@@ -371,7 +404,7 @@ impl Drop for GenArena {
     fn drop(&mut self) {
         for i in 0..self.blocks.len() {
             let addr = self.blocks[i];
-            self.release_block_bytes(addr);
+            self.release_block_bytes(addr, None);
         }
         self.blocks.clear();
     }
@@ -395,11 +428,15 @@ mod tests {
             window_tail: Cell::new(0),
             live_chunk_bytes: Cell::new(0),
             free_chunks: Cell::new(0),
+            empty_blocks: Cell::new(0),
             is_bump: true,
             wholesale_reset: Cell::new(false),
+            send_root: Cell::new(false),
+            unpooled: false,
             kind: "Generation",
             parent: None,
             children: RefCell::new(alloc::vec::Vec::new()),
+            led: crate::owner::Led::NEW,
         }
     }
 

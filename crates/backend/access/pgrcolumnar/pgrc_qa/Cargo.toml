@@ -1,0 +1,45 @@
+# pgrc_qa — the M3-K storage QA battery (tests-only crate).
+#
+# Composes the MERGED product crates (format/codec/write/read) into the
+# adversarial suites: SimVfs crash batteries, kill -9 ladders, the #254
+# clog-fence regression, and the regrown read-path fuzzer. No product code
+# ships from here; the lib is rig scaffolding for the tests + the crash
+# harness binary.
+
+[package]
+name = "pgrc_qa"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "pgrc_qa"
+path = "src/lib.rs"
+
+[[bin]]
+name = "qa_crash_harness"
+path = "src/bin/qa_crash_harness.rs"
+
+[dependencies]
+libc = "0.2"
+pgrc_codec = { path = "../pgrc_codec" }
+pgrc_format = { path = "../pgrc_format" }
+pgrc_read = { path = "../pgrc_read" }
+pgrc_write = { path = "../pgrc_write" }
+pgsync = { path = "../../../../_support/pgsync" }
+
+# The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
+# pgrc_qa_suite (tests/pgrc_qa_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs it once per
+# module and keys the results as the former targets <stem>. A NEW test file goes there, unless it cannot share a process
+# with the others (tests/registered.rs's rule: a name of ct's serial tail; a #[global_allocator]; text naming
+# process-wide or process-global state; a `pub static` that holds state; a seam set or another process-state call): then
+# it gets a [[test]] entry here, named <stem>. autotests = false, and tests/registered.rs fails until the file is in
+# exactly one of the two places.
+[[test]]
+name = "pgrc_qa_suite"
+path = "tests/pgrc_qa_suite.rs"
+
+[[test]]
+name = "fuzz_read"
+path = "tests/fuzz_read.rs"

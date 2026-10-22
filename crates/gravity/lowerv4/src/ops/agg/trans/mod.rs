@@ -1,0 +1,27 @@
+//! `ops::agg::trans` (v5 serial step, landing 5: module lines written by modexit.py).
+pub(crate) mod aggcall;
+pub(crate) mod answer;
+pub(crate) mod answer_site;
+pub(crate) mod args;
+pub(crate) mod block_fold;
+pub(crate) mod class_collect;
+pub(crate) mod class_float;
+pub(crate) mod class_interval;
+pub(crate) mod class_interval_sum;
+pub(crate) mod class_of;
+pub(crate) mod class_ordered;
+pub(crate) mod class_other;
+pub(crate) mod class_stats;
+pub(crate) mod class_text;
+pub(crate) mod class_user;
+pub(crate) mod class_word;
+pub(crate) mod code_copy;
+pub(crate) mod filter;
+pub(crate) mod finals_shift;
+pub(crate) mod float_pg;
+pub(crate) mod hosted;
+pub(crate) mod kept;
+pub(crate) mod plain;
+pub(crate) mod plain_drain;
+pub(crate) mod slots;
+pub mod strategies;

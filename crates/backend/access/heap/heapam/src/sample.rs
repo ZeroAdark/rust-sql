@@ -28,7 +28,7 @@ pub fn heap_scan_sample_next_block<'mcx>(
     }
 
     let blockno = if scanstate.has_next_sample_block() {
-        scanstate.next_sample_block(scan.rs_nblocks, donetuples)
+        scanstate.next_sample_block(scan.rs_nblocks, donetuples)?
     } else if scan.rs_cblock == InvalidBlockNumber {
         debug_assert!(!scan.rs_inited);
         scan.rs_startblock

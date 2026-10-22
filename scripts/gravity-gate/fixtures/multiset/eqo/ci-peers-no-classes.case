@@ -1,0 +1,23 @@
+# CORR-8 (main 09-27): ORDER BY key columns whose sort peers display apart (a nondeterministic collation's zz / Zz, numeric
+# 1.5 / 1.500) take eqo classes under the sort's `=` (the rig asks PG): tie runs and the key sequence compare by class, rows exactly
+# the same cut without classes: the key sequence by text (zz zz Zz against zz Zz zz) fails (why eqo exists)
+sql: SELECT tn AS k, v FROM c8 ORDER BY 1 DESC LIMIT 3 OFFSET 1;
+cols: k	v
+class: limited 1
+verdict: mismatch
+[pg]
+zz	-183
+Zz	-270
+zz	-271
+[pg_full]
+zz	104
+zz	-183
+Zz	-270
+zz	-271
+Zz	210
+zz	137
+b	5
+[got]
+zz	137
+zz	-183
+Zz	210

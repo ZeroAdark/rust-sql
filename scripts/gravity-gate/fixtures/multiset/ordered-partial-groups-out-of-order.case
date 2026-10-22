@@ -1,0 +1,13 @@
+# a partial ORDER BY: the tie groups themselves out of order
+sql: SELECT g, x FROM t ORDER BY g;
+cols: g	x
+class: ordered 1
+verdict: mismatch-order
+[pg]
+1	a
+1	b
+2	c
+[got]
+2	c
+1	a
+1	b

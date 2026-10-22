@@ -1,0 +1,1 @@
+backend/access/pgrcolumnar/pgrc_wal/src/insert.rs	INSERT_ERROR	pgrc	call	scratch	the PgError behind the last WAL_INSERT_FAILED contract an XlogSink returned: stash() overwrites it as the insert fails and pgrc_am write_error takes it on the same thread to raise it; XlogSink logs on the leader only (rtpool workers seal through ForwardSink, pgrc_write par.rs W0-3)

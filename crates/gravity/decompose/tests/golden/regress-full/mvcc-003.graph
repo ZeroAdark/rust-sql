@@ -1,0 +1,10 @@
+-- regress-full-mvcc-003
+-- SELECT 16384 AS size_before, pg_relation_size('clean_aborted_self_key') size_after WHERE 16384 != pg_relation_size('clean_aborted_self_key');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  gate T_List
+  project (1=c23:16384, 2=fn2332(c2205:17432, c25:'main'))
+  outs 1=w4:val 2=w8:val
+mapped: Result

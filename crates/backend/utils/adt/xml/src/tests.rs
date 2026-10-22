@@ -274,7 +274,7 @@ fn xml_error_handler_accepts_memory_and_io_domains_when_wellformed() {
         set_strictness_for_test(PG_XML_STRICTNESS_WELLFORMED);
         raise(domain, &format!("{name} failed\n"));
         assert!(xml_err_occurred(), "domain {domain} must be accepted");
-        assert_eq!(xml_err_detail(), format!("{name} failed"));
+        assert_eq!(xml_err_detail(), format!("{name} failed").as_bytes());
     }
     for domain in [13, 15] {
         set_strictness_for_test(PG_XML_STRICTNESS_WELLFORMED);
@@ -284,7 +284,7 @@ fn xml_error_handler_accepts_memory_and_io_domains_when_wellformed() {
     set_strictness_for_test(0);
 }
 
-// regression: xml.c:410 hands the declaration's encoding name bytes to
+// fp-adt-xml-p1#1: xml.c:410 hands the declaration's encoding name bytes to
 // pg_char_to_encoding, whose clean_encoding_name drops every non-alnum byte;
 // the name is never UTF-8-validated (or lossily re-encoded) first.
 #[test]
@@ -299,4 +299,169 @@ fn xml_char_to_encoding_takes_raw_name_bytes() {
     assert_eq!(e.sqlstate(), ::types_error::ERRCODE_INVALID_PARAMETER_VALUE);
     let e = xmlChar_to_encoding(b"bo\xffgus").unwrap_err();
     assert_eq!(e.message_raw.as_deref(), Some(&b"invalid encoding name \"bo\xffgus\""[..]));
+}
+
+#[test]
+fn xmlconcat_growth_meets_the_stringinfo_ceiling() {
+    // enlargeStringInfo: needed >= MaxAllocSize - len is ERROR 54000.
+    assert!(stringinfo_room(0, ::mcx::MAX_ALLOC_SIZE - 1).is_ok());
+    let err = stringinfo_room(10, ::mcx::MAX_ALLOC_SIZE - 10).unwrap_err();
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(
+        err.message(),
+        "string buffer exceeds maximum allowed length (1073741823 bytes)"
+    );
+    assert_eq!(
+        err.detail(),
+        Some("Cannot enlarge string buffer containing 10 bytes by 1073741813 more bytes.")
+    );
+    assert_eq!(xmlconcat(&[b"<a/>", b"<b/>"]).unwrap(), b"<a/><b/>");
+}
+
+#[test]
+fn escape_xml_guards_every_append_like_enlarge_string_info() {
+    let max = ::mcx::MAX_ALLOC_SIZE;
+    assert!(enlarge_string_info(max - 2, 1).is_ok());
+    assert!(enlarge_string_info(max - 6, 5).is_ok());
+    assert!(enlarge_string_info(max - 5, 5).is_err());
+    let err = enlarge_string_info(max - 1, 1).unwrap_err();
+    assert_eq!(err.message(), "string buffer exceeds maximum allowed length (1073741823 bytes)");
+    assert_eq!(
+        err.detail(),
+        Some("Cannot enlarge string buffer containing 1073741822 bytes by 1 more bytes.")
+    );
+    assert_eq!(escape_xml(b"a&b<c>\r"), b"a&amp;b&lt;c&gt;&#x0d;");
+}
+
+#[test]
+fn xml_error_detail_preserves_invalid_utf8_excerpt() {
+    let error = xml_parse_ok(
+        b"<a>\xff</a>",
+        XmlOptionType::XMLOPTION_CONTENT,
+        true,
+        PG_UTF8,
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error.sqlstate(), types_error::ERRCODE_INVALID_XML_CONTENT);
+    let detail = error
+        .detail_raw
+        .as_deref()
+        .unwrap_or_else(|| error.detail().unwrap().as_bytes());
+    assert!(
+        detail.windows(8).any(|part| part == b"<a>\xff</a>"),
+        "{detail:?}"
+    );
+}
+
+#[test]
+fn xmltable_document_parse_uses_strictness_all() {
+    use crate::errhandler::{pg_xml_init, PG_XML_STRICTNESS_WELLFORMED};
+    use crate::xmltable::XmlTableContext;
+
+    let mut cx = XmlTableContext::new(1).unwrap();
+    pg_xml_init(PG_XML_STRICTNESS_WELLFORMED);
+    let e = cx.set_document(b"<nosuchprefix:tag/>").unwrap_err();
+    assert_eq!(e.message(), "could not parse XML document");
+    cx.destroy();
+}
+
+#[test]
+fn parse_xml_decl_uses_libxml_utf8_decoder() {
+    let mut len = 2;
+    // SAFETY: reads at most `len` bytes of the literal.
+    let c = unsafe { (crate::libxml::xml2().xmlGetUTF8Char)(b"\xC1\xA1".as_ptr(), &mut len) };
+    let (rc, ..) = decl(b"<?xml\xC1\xA1?><a/>");
+    if c < 0 {
+        assert_eq!(rc, XML_ERR_SPACE_REQUIRED);
+    } else {
+        assert_eq!(rc, 0);
+    }
+}
+
+// Replays query_to_xml's append sequence for 11 rows of repeat('x', 1e8)
+// against the growth model alone; the numbers are C 18.6's DETAIL.
+#[test]
+fn stringinfo_growth_matches_c_query_to_xml_limit() {
+    use crate::stringinfo::StringInfoGrowth;
+    const NS: usize = " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"".len();
+    let value_line = "  <c>".len() + 100_000_000 + "</c>\n".len();
+    for (tableforest, want_len) in [(false, 1_000_000_309usize), (true, 1_000_000_840)] {
+        let mut g = StringInfoGrowth::default();
+        let mut len = 0usize;
+        let fmt = |g: &mut StringInfoGrowth, len: &mut usize, n: usize| -> PgResult<()> {
+            g.before_format(*len, n)?;
+            *len += n;
+            Ok(())
+        };
+        let s = |g: &mut StringInfoGrowth, len: &mut usize, n: usize| -> PgResult<()> {
+            g.before_append(*len, n)?;
+            *len += n;
+            Ok(())
+        };
+        let err = (|| -> PgResult<()> {
+            if !tableforest {
+                fmt(&mut g, &mut len, "<table".len())?;
+                s(&mut g, &mut len, NS)?;
+                s(&mut g, &mut len, 2)?;
+                g.before_char(len)?;
+                len += 1;
+            }
+            for _ in 0..11 {
+                if tableforest {
+                    fmt(&mut g, &mut len, "<row".len())?;
+                    s(&mut g, &mut len, NS)?;
+                    s(&mut g, &mut len, 2)?;
+                } else {
+                    s(&mut g, &mut len, "<row>\n".len())?;
+                }
+                fmt(&mut g, &mut len, value_line)?;
+                if tableforest {
+                    fmt(&mut g, &mut len, "</row>\n".len())?;
+                    g.before_char(len)?;
+                    len += 1;
+                } else {
+                    s(&mut g, &mut len, "</row>\n\n".len())?;
+                }
+            }
+            Ok(())
+        })()
+        .unwrap_err();
+        assert_eq!(err.sqlstate(), ::types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+        assert_eq!(
+            err.detail().unwrap(),
+            format!("Cannot enlarge string buffer containing {want_len} bytes by 100000011 more bytes.")
+        );
+    }
+}
+
+#[test]
+fn stringinfo_append_kinds_follow_c() {
+    use crate::stringinfo::StringInfo;
+    let mut b = StringInfo::with_limit(64);
+    b.append_str(&"a".repeat(40)).unwrap();
+    // maxlen 64: 23 bytes left, so a 22-byte formatted piece still fits.
+    b.append_fmt(format_args!("{}", "b".repeat(22))).unwrap();
+    assert_eq!(b.len(), 62);
+    // avail 2 < 16: appendStringInfoVA asks for 32 before formatting.
+    let err = b.append_fmt(format_args!("c")).unwrap_err();
+    assert_eq!(
+        err.detail().unwrap(),
+        "Cannot enlarge string buffer containing 62 bytes by 32 more bytes."
+    );
+    b.append_str("c").unwrap();
+    let err = b.append_str("d").unwrap_err();
+    assert_eq!(
+        err.detail().unwrap(),
+        "Cannot enlarge string buffer containing 63 bytes by 1 more bytes."
+    );
+    b.append_char('\n').unwrap_err();
+    assert_eq!(b.as_str(), format!("{}{}c", "a".repeat(40), "b".repeat(22)));
+
+    // Below the cap, a formatted piece that does not fit asks for nprinted+1
+    // and the buffer doubles.
+    let mut b = StringInfo::with_limit(1 << 20);
+    b.append_fmt(format_args!("{}", "x".repeat(1500))).unwrap();
+    assert_eq!(b.len(), 1500);
+    assert!(b.into_string().capacity() >= 2047);
 }

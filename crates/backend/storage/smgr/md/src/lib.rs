@@ -1,14 +1,10 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-//! src/backend/storage/smgr/md.c — magnetic-disk storage manager: 1 GB
-//! (`RELSEG_SIZE`) segment fan-out per fork over fd.c VFDs. State (`MdRelnState`)
-//! lives in smgr's handle cache and is threaded in by the dispatch layer.
-
 use std::io::IoSliceMut;
 use std::mem::MaybeUninit;
 
-use ::elog::{ereport, ErrorBuilder};
+use ::elog::{ereport, ErrorBuilder, PCT_M};
 use ::types_core::primitive::{
     BlockNumber, ForkNumber, InvalidBlockNumber, MaxBlockNumber, INVALID_PROC_NUMBER, MAX_FORKNUM,
 };
@@ -17,7 +13,6 @@ use ::types_error::{
     ErrorLocation, PgResult, DEBUG1, ERROR, ERRCODE_DATA_CORRUPTED, ERRCODE_DISK_FULL,
     ERRCODE_PROGRAM_LIMIT_EXCEEDED, FATAL, WARNING,
 };
-use ::types_storage::bufpage::PG_IO_ALIGN_SIZE;
 use ::types_storage::file::{File, FILE_EXTEND_METHOD_WRITE_ZEROS, IO_DIRECT_DATA};
 use ::types_storage::smgr::{
     MdRelnState, MdfdVec, EXTENSION_CREATE, EXTENSION_CREATE_RECOVERY, EXTENSION_DONT_OPEN,
@@ -29,7 +24,6 @@ use ::types_storage::{RelFileLocator, RelFileLocatorBackend, WriteChunk};
 pub mod nblocks_cache;
 
 const PG_WAIT_IO: u32 = 0x0A00_0000;
-// WaitEventIO ordinals (wait_event_names.txt, alphabetical within section).
 const WAIT_EVENT_DATA_FILE_EXTEND: u32 = PG_WAIT_IO + 17;
 const WAIT_EVENT_DATA_FILE_FLUSH: u32 = PG_WAIT_IO + 18;
 const WAIT_EVENT_DATA_FILE_IMMEDIATE_SYNC: u32 = PG_WAIT_IO + 19;
@@ -66,7 +60,6 @@ pub fn set_errno(value: i32) {
     }
 }
 
-// bufmgr owns track_io_timing's backing; unread until its install runs.
 pub fn track_io_timing() -> bool {
     guc_tables::vars::track_io_timing.installed() && guc_tables::vars::track_io_timing.read()
 }
@@ -96,14 +89,6 @@ fn io_direct_data() -> bool {
     (fd::io_direct_flags() & IO_DIRECT_DATA) != 0
 }
 
-// md.c:1815 palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, MCXT_ALLOC_ZERO): the
-// block that pads a short prior segment must be I/O-aligned so the write is
-// legal on an O_DIRECT descriptor (debug_io_direct=data, EINVAL otherwise).
-// A read-only static carries the same bytes without the per-call allocation.
-#[repr(align(4096))]
-struct IoAlignedZeroBlock([u8; BLCKSZ]);
-const _: () = assert!(core::mem::align_of::<IoAlignedZeroBlock>() == PG_IO_ALIGN_SIZE);
-static ZERO_BLOCK: IoAlignedZeroBlock = IoAlignedZeroBlock([0u8; BLCKSZ]);
 
 #[inline]
 fn relpath(rlocator: RelFileLocatorBackend, forknum: ForkNumber) -> String {
@@ -121,8 +106,6 @@ pub fn fork_iter() -> [ForkNumber; SMGR_NFORKS] {
 
 #[track_caller]
 fn loc(funcname: &'static str) -> ErrorLocation {
-    // pgrust is Rust: report where in OUR source this was raised.
-    // #[track_caller] resolves to the call site, not this helper.
     let site = core::panic::Location::caller();
     ErrorLocation::new(site.file(), site.line() as i32, funcname)
 }
@@ -144,7 +127,6 @@ pub fn mdopenflags() -> i32 {
 }
 
 pub fn mdinit() -> PgResult<()> {
-    // MdCxt is only for MdfdVec arrays; those live in the smgr cache entry here.
     Ok(())
 }
 
@@ -193,24 +175,20 @@ pub fn mdcreate(
             file = fd::PathNameOpenFile(&path, mdopenflags())?;
         }
         if file.0 < 0 {
-            // report the error reported by create, not open
             return throw(
                 ereport(ERROR)
                     .with_saved_errno(save_errno)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not create file \"{path}\": %m")),
+                    .errmsg(format!("could not create file \"{path}\": {PCT_M}")),
                 "mdcreate",
             );
         }
     }
 
-    _fdvec_resize(st, forknum, 1);
+    _fdvec_resize(st, forknum, 1)?;
     st.md_seg_fds[fk][0] = MdfdVec { mdfd_vfd: file, mdfd_segno: 0 };
 
     if !is_temp(rlocator) {
-        // Fresh file identity: drop any stale size-cache entry (including a
-        // columnar poison — a reused relfilenumber starts clean; the next
-        // read walks, the next columnar writer open re-poisons).
         nblocks_cache::remove(rlocator.locator, forknum);
         let seg = st.md_seg_fds[fk][0];
         register_dirty_segment(rlocator, forknum, seg)?;
@@ -240,7 +218,7 @@ fn do_truncate(path: &str) -> PgResult<i32> {
         ereport(WARNING)
             .with_saved_errno(save_errno)
             .errcode_for_file_access()
-            .errmsg(format!("could not truncate file \"{path}\": %m"))
+            .errmsg(format!("could not truncate file \"{path}\": {PCT_M}"))
             .finish(loc("do_truncate"))?;
         set_errno(save_errno);
     }
@@ -252,9 +230,7 @@ fn mdunlinkfork(
     forknum: ForkNumber,
     is_redo: bool,
 ) -> PgResult<()> {
-    // Drop the size-cache entry (poison included) BEFORE touching the file:
-    // any racing reader then walks the real file and sees exactly what lseek
-    // sees at its instant of the race — the same nondeterminism C has.
+    // Drop size cache before touching the file so racing readers walk the real file.
     if !is_temp(rlocator) {
         nblocks_cache::remove(rlocator.locator, forknum);
     }
@@ -283,13 +259,13 @@ fn mdunlinkfork(
                 ereport(WARNING)
                     .with_saved_errno(save_errno)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not remove file \"{path}\": %m"))
+                    .errmsg(format!("could not remove file \"{path}\": {PCT_M}"))
                     .finish(loc("mdunlinkfork"))?;
                 set_errno(save_errno);
             }
         }
     } else {
-        // Main fork at commit: truncate now, unlink after the next checkpoint.
+        // Main fork at commit: truncate now, unlink after next checkpoint.
         ret = do_truncate(&path)?;
 
         let save_errno = last_errno();
@@ -298,7 +274,6 @@ fn mdunlinkfork(
     }
 
     if ret >= 0 || last_errno() != ENOENT {
-        // Delete additional segments until ENOENT (inactive segments included).
         let mut segno: BlockNumber = 1;
         loop {
             let segpath = format!("{path}.{segno}");
@@ -315,7 +290,7 @@ fn mdunlinkfork(
                     ereport(WARNING)
                         .with_saved_errno(last_errno())
                         .errcode_for_file_access()
-                        .errmsg(format!("could not remove file \"{segpath}\": %m"))
+                        .errmsg(format!("could not remove file \"{segpath}\": {PCT_M}"))
                         .finish(loc("mdunlinkfork"))?;
                 }
                 break;
@@ -323,13 +298,7 @@ fn mdunlinkfork(
             segno += 1;
         }
     }
-    // Drop the size-cache entry AGAIN now the file ops are done: a walker
-    // whose token postdates the leading remove could have measured the
-    // dying file mid-truncate and published that for this key. This second
-    // remove (an epoch bump) either invalidates that walker's still-pending
-    // publish or deletes its already-landed entry; a walk beginning after
-    // this point measures the settled tombstone (or ENOENTs), which is
-    // coherent by definition.
+    // Drop size cache again after file ops to invalidate any walk that measured the file mid-truncate.
     if !is_temp(rlocator) {
         nblocks_cache::remove(rlocator.locator, forknum);
     }
@@ -347,8 +316,6 @@ pub fn mdextend(
     let r = mdextend_inner(rlocator, st, forknum, blocknum, buffer, skip_fsync);
     if !is_temp(rlocator) {
         match &r {
-            // The file now reaches at least blocknum+1 (intermediate segments
-            // were zero-filled by _mdfd_getseg under the same call).
             Ok(()) => nblocks_cache::extend_to(rlocator.locator, forknum, blocknum + 1),
             Err(_) => nblocks_cache::invalidate(rlocator.locator, forknum),
         }
@@ -389,7 +356,7 @@ fn mdextend_inner(
                     .with_saved_errno(last_errno())
                     .errcode_for_file_access()
                     .errmsg(format!(
-                        "could not extend file \"{}\": %m",
+                        "could not extend file \"{}\": {PCT_M}",
                         fd::FilePathName(v.mdfd_vfd)
                     ))
                     .errhint("Check free disk space."),
@@ -431,11 +398,6 @@ pub fn mdzeroextend(
         match &r {
             Ok(()) => match cache_extent_after(blocknum, nblocks) {
                 Some(end) => nblocks_cache::extend_to(rlocator.locator, forknum, end),
-                // Not representable as a block count: do exactly what the
-                // error arm does and forget the size, so the next read
-                // measures the real file. Never publish a guessed value here —
-                // extend_to() only ever RAISES, so a too-high entry is
-                // permanent until something invalidates it.
                 None => nblocks_cache::invalidate(rlocator.locator, forknum),
             },
             Err(_) => nblocks_cache::invalidate(rlocator.locator, forknum),
@@ -444,38 +406,12 @@ pub fn mdzeroextend(
     r
 }
 
-/// The relation's block count after a successful `mdzeroextend` of `nblocks`
-/// blocks starting at `blocknum`, or `None` when that is not a representable
-/// block count — in which case no cached size may be published.
-///
-/// Checked rather than wrapping, and the reason is specific. `nblocks` is C's
-/// `int` (`md.c` `mdzeroextend`), so the obvious `blocknum + nblocks as
-/// BlockNumber` wraps whenever `nblocks` is negative. The dangerous direction
-/// is `blocknum + nblocks < 0`, where it wraps **upward**: `(0, -1)` lands
-/// exactly on `InvalidBlockNumber`, and `(5, -10)` on 4294967291. Because
-/// `nblocks_cache::extend_to` only ever raises the cached size, publishing one
-/// of those means every later size read reports a relation *longer than its
-/// file*, i.e. past-EOF blocks served as valid. C cannot express this defect:
-/// it keeps no cross-backend size cache, so out-of-contract `nblocks` there is
-/// simply a loop that does not run.
-///
-/// Two further notes worth keeping next to the arithmetic:
-///
-/// * `overflow-checks` would **not** have caught the dangerous cases. They stay
-///   inside `u32` (`0 + 0xFFFFFFFF == 0xFFFFFFFF`), so a trapping build traps
-///   only the *harmless* downward cases such as `(1000, -1) -> 999`. Checked
-///   arithmetic on a wider signed type is the only thing that sees them.
-/// * `nblocks <= 0` is out of contract (`mdzeroextend_inner` asserts
-///   `nblocks > 0`), and this returns `None` for it rather than the technically
-///   truthful `blocknum`, so the contract stays "Some only for a well-formed
-///   extension" and the caller's response to anything else is uniform.
+// Checked rather than wrapping: negative nblocks wraps upward and extend_to only raises cached size.
 fn cache_extent_after(blocknum: BlockNumber, nblocks: i32) -> Option<BlockNumber> {
     if nblocks <= 0 {
         return None;
     }
     let end = i64::from(blocknum) + i64::from(nblocks);
-    // mdzeroextend_inner rejects this range itself; keep the helper total so it
-    // is correct read on its own.
     if end >= i64::from(InvalidBlockNumber) {
         return None;
     }
@@ -535,7 +471,7 @@ fn mdzeroextend_inner(
                         .with_saved_errno(last_errno())
                         .errcode_for_file_access()
                         .errmsg(format!(
-                            "could not extend file \"{}\" with FileFallocate(): %m",
+                            "could not extend file \"{}\" with FileFallocate(): {PCT_M}",
                             fd::FilePathName(v.mdfd_vfd)
                         ))
                         .errhint("Check free disk space."),
@@ -555,7 +491,7 @@ fn mdzeroextend_inner(
                         .with_saved_errno(last_errno())
                         .errcode_for_file_access()
                         .errmsg(format!(
-                            "could not extend file \"{}\": %m",
+                            "could not extend file \"{}\": {PCT_M}",
                             fd::FilePathName(v.mdfd_vfd)
                         ))
                         .errhint("Check free disk space."),
@@ -597,12 +533,12 @@ fn mdopenfork(
             ereport(ERROR)
                 .with_saved_errno(last_errno())
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{path}\": %m")),
+                .errmsg(format!("could not open file \"{path}\": {PCT_M}")),
             "mdopenfork",
         );
     }
 
-    _fdvec_resize(st, forknum, 1);
+    _fdvec_resize(st, forknum, 1)?;
     st.md_seg_fds[fk][0] = MdfdVec { mdfd_vfd: file, mdfd_segno: 0 };
 
     let mdfd = st.md_seg_fds[fk][0];
@@ -614,11 +550,10 @@ pub fn mdclose(st: &mut MdRelnState, forknum: ForkNumber) -> PgResult<()> {
     let fk = fork_idx(forknum);
     let mut nopensegs = st.md_num_open_segs[fk];
 
-    // Close segments from the end (mirrors md.c; failures surface per close).
     while nopensegs > 0 {
         let v = st.md_seg_fds[fk][(nopensegs - 1) as usize];
         fd::FileClose(v.mdfd_vfd)?;
-        _fdvec_resize(st, forknum, nopensegs - 1);
+        _fdvec_resize(st, forknum, nopensegs - 1)?;
         nopensegs -= 1;
     }
     Ok(())
@@ -686,8 +621,7 @@ pub fn mdmaxcombine(blocknum: BlockNumber) -> u32 {
     RELSEG_SIZE - (blocknum % RELSEG_SIZE)
 }
 
-// C's iovec array is stack-local (md.c buffers_to_iovec); same here — a
-// MaybeUninit prefix avoids both heap traffic and 2 KB zero-init per I/O.
+// Avoids heap traffic and 2 KB zero-init per I/O.
 fn with_iov_mut<R>(
     seg_bufs: &mut [&mut [u8]],
     skip: usize,
@@ -798,7 +732,7 @@ pub fn mdreadv(
                         .with_saved_errno(last_errno())
                         .errcode_for_file_access()
                         .errmsg(format!(
-                            "could not read blocks {}..{} in file \"{}\": %m",
+                            "could not read blocks {}..{} in file \"{}\": {PCT_M}",
                             blocknum,
                             blocknum + nblocks_this_segment - 1,
                             fd::FilePathName(v.mdfd_vfd)
@@ -899,7 +833,7 @@ pub fn mdwritev(
                     .with_saved_errno(last_errno())
                     .errcode_for_file_access()
                     .errmsg(format!(
-                        "could not write blocks {}..{} in file \"{}\": %m",
+                        "could not write blocks {}..{} in file \"{}\": {PCT_M}",
                         blocknum,
                         blocknum + nblocks_this_segment - 1,
                         fd::FilePathName(v.mdfd_vfd)
@@ -1153,7 +1087,7 @@ fn mdtruncate_inner(
                         .with_saved_errno(last_errno())
                         .errcode_for_file_access()
                         .errmsg(format!(
-                            "could not truncate file \"{}\": %m",
+                            "could not truncate file \"{}\": {PCT_M}",
                             fd::FilePathName(v.mdfd_vfd)
                         )),
                     "mdtruncate",
@@ -1164,7 +1098,7 @@ fn mdtruncate_inner(
             }
             debug_assert!(curopensegs - 1 != 0);
             fd::FileClose(v.mdfd_vfd)?;
-            _fdvec_resize(st, forknum, curopensegs - 1);
+            _fdvec_resize(st, forknum, curopensegs - 1)?;
         } else if priorblocks + RELSEG_SIZE > nblocks {
             // Last segment to keep: truncate to the remainder.
             let lastsegblocks = nblocks - priorblocks;
@@ -1179,7 +1113,7 @@ fn mdtruncate_inner(
                         .with_saved_errno(last_errno())
                         .errcode_for_file_access()
                         .errmsg(format!(
-                            "could not truncate file \"{}\" to {} blocks: %m",
+                            "could not truncate file \"{}\" to {} blocks: {PCT_M}",
                             fd::FilePathName(v.mdfd_vfd),
                             nblocks
                         )),
@@ -1221,7 +1155,7 @@ pub fn mdregistersync(
         register_dirty_segment(rlocator, forknum, v)?;
         if segno > min_inactive_seg {
             fd::FileClose(v.mdfd_vfd)?;
-            _fdvec_resize(st, forknum, segno - 1);
+            _fdvec_resize(st, forknum, segno - 1)?;
         }
         segno -= 1;
     }
@@ -1255,7 +1189,7 @@ pub fn mdimmedsync(
                     .with_saved_errno(last_errno())
                     .errcode_for_file_access()
                     .errmsg(format!(
-                        "could not fsync file \"{}\": %m",
+                        "could not fsync file \"{}\": {PCT_M}",
                         fd::FilePathName(v.mdfd_vfd)
                     )),
                 "mdimmedsync",
@@ -1264,7 +1198,7 @@ pub fn mdimmedsync(
 
         if segno > min_inactive_seg {
             fd::FileClose(v.mdfd_vfd)?;
-            _fdvec_resize(st, forknum, segno - 1);
+            _fdvec_resize(st, forknum, segno - 1)?;
         }
         segno -= 1;
     }
@@ -1317,7 +1251,7 @@ fn register_dirty_segment(
                     .with_saved_errno(last_errno())
                     .errcode_for_file_access()
                     .errmsg(format!(
-                        "could not fsync file \"{}\": %m",
+                        "could not fsync file \"{}\": {PCT_M}",
                         fd::FilePathName(seg.mdfd_vfd)
                     )),
                 "register_dirty_segment",
@@ -1397,16 +1331,18 @@ pub fn mdfiletagmatches(ftag: FileTag, candidate: FileTag) -> bool {
     ftag.rlocator.dbOid == candidate.rlocator.dbOid
 }
 
-fn _fdvec_resize(st: &mut MdRelnState, forknum: ForkNumber, nseg: i32) {
+fn _fdvec_resize(st: &mut MdRelnState, forknum: ForkNumber, nseg: i32) -> PgResult<()> {
     let fk = fork_idx(forknum);
     let v = &mut st.md_seg_fds[fk];
     if nseg as usize > v.len() {
         // Vec keeps high-water capacity on truncate, so mdtruncate never allocates.
-        v.resize(nseg as usize, MdfdVec::default());
+        // md.c: repalloc in MdCxt; a failed grow is ERROR 53200, never an abort.
+        ::mcx::std_vec_resize("MdSmgr", v, nseg as usize, MdfdVec::default())?;
     } else {
         v.truncate(nseg as usize);
     }
     st.md_num_open_segs[fk] = nseg;
+    Ok(())
 }
 
 pub fn mdsegpath(rlocator: RelFileLocatorBackend, forknum: ForkNumber, segno: BlockNumber) -> String {
@@ -1435,7 +1371,7 @@ fn _mdfd_openseg(
 
     // Segments open strictly in order; the new one lands at the end.
     debug_assert!(segno == st.md_num_open_segs[fk] as BlockNumber);
-    _fdvec_resize(st, forknum, segno as i32 + 1);
+    _fdvec_resize(st, forknum, segno as i32 + 1)?;
     st.md_seg_fds[fk][segno as usize] = MdfdVec { mdfd_vfd: file, mdfd_segno: segno };
 
     let v = st.md_seg_fds[fk][segno as usize];
@@ -1500,7 +1436,8 @@ fn _mdfd_getseg(
                     st,
                     forknum,
                     nextsegno * RELSEG_SIZE - 1,
-                    &ZERO_BLOCK.0,
+                    // I/O-aligned, so padding a short segment is legal on an O_DIRECT descriptor
+                    fd::zero_block(),
                     skip_fsync,
                 )?;
             }
@@ -1541,7 +1478,7 @@ fn _mdfd_getseg(
                         .with_saved_errno(last_errno())
                         .errcode_for_file_access()
                         .errmsg(format!(
-                            "could not open file \"{}\" (target block {}): %m",
+                            "could not open file \"{}\" (target block {}): {PCT_M}",
                             mdsegpath(rlocator, forknum, nextsegno),
                             blkno
                         )),
@@ -1563,7 +1500,7 @@ fn _mdnblocks(seg: &MdfdVec) -> PgResult<BlockNumber> {
                 .with_saved_errno(last_errno())
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "could not seek to end of file \"{}\": %m",
+                    "could not seek to end of file \"{}\": {PCT_M}",
                     fd::FilePathName(seg.mdfd_vfd)
                 )),
             "_mdnblocks",
@@ -1628,7 +1565,7 @@ mod tests {
 
     #[test]
     fn md_relpath_forwards_locator_backend_and_fork_to_relpathbackend() {
-        // Regression pin (regression F-R2-2 adjudication): the old
+        // Regression pin (GL-TESTFIX-1 F-R2-2 adjudication): the old
         // hand-rolled mint dropped spcOid (shared catalogs printed as
         // "base/0/NNNN") and stamped numeric fork suffixes. C parity =
         // relpathbackend(rlocator, is_temp ? MyProcNumber : INVALID, fork);
@@ -1667,7 +1604,7 @@ mod tests {
         );
     }
 
-    // regression. The bar sits on `cache_extent_after` and on `wrapping_add`,
+    // GL-MDWRAP-1. The bar sits on `cache_extent_after` and on `wrapping_add`,
     // NOT on a call into mdzeroextend, and that placement is deliberate:
     // mdzeroextend_inner asserts `nblocks > 0`, so any fixture that drove the
     // out-of-contract input through it would be correct in the shipped profiles
@@ -1735,13 +1672,13 @@ mod tests {
     #[test]
     fn fdvec_resize_keeps_highwater_capacity() {
         let mut st = MdRelnState::default();
-        _fdvec_resize(&mut st, ForkNumber::MAIN_FORKNUM, 3);
+        _fdvec_resize(&mut st, ForkNumber::MAIN_FORKNUM, 3).unwrap();
         assert_eq!(st.md_num_open_segs[0], 3);
         let cap = st.md_seg_fds[0].capacity();
-        _fdvec_resize(&mut st, ForkNumber::MAIN_FORKNUM, 1);
+        _fdvec_resize(&mut st, ForkNumber::MAIN_FORKNUM, 1).unwrap();
         assert_eq!(st.md_num_open_segs[0], 1);
         assert_eq!(st.md_seg_fds[0].capacity(), cap);
-        _fdvec_resize(&mut st, ForkNumber::MAIN_FORKNUM, 0);
+        _fdvec_resize(&mut st, ForkNumber::MAIN_FORKNUM, 0).unwrap();
         assert_eq!(st.md_num_open_segs[0], 0);
     }
 
@@ -1849,7 +1786,7 @@ pub fn mdstartreadv(
                 .with_saved_errno(last_errno())
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "could not start reading blocks {}..{} in file \"{}\": %m",
+                    "could not start reading blocks {}..{} in file \"{}\": {PCT_M}",
                     blocknum,
                     blocknum + nblocks_this_segment - 1,
                     fd::FilePathName(v.mdfd_vfd)
@@ -1891,7 +1828,7 @@ pub fn md_aio_reopen_fd(
                 .with_saved_errno(last_errno())
                 .errcode_for_file_access()
                 .errmsg(format!(
-                    "could not reopen file \"{}\" for IO: %m",
+                    "could not reopen file \"{}\" for IO: {PCT_M}",
                     fd::FilePathName(v.mdfd_vfd)
                 )),
             "md_aio_reopen_fd",
@@ -1905,7 +1842,7 @@ pub fn md_aio_reopen_fd(
 // ignored the tablespace (shared catalogs printed as "base/0/NNNN" instead
 // of "global/NNNN", non-default tablespaces as base/), and stamped numeric
 // fork suffixes ("_1") where C prints fork names ("_fsm") — wrong paths in
-// every AIO read-error report (regression F-R2-2 adjudication).
+// every AIO read-error report (GL-TESTFIX-1 F-R2-2 adjudication).
 fn md_relpath(td: &types_storage::aio::PgAioTargetData) -> String {
     let backend = if td.smgr.is_temp {
         init_small::globals::MyProcNumber()
@@ -1973,7 +1910,7 @@ pub fn md_readv_report(
         ereport(elevel)
             .with_saved_errno(result.error_data as i32)
             .errcode_for_file_access()
-            .errmsg(format!("could not read blocks {first}..{last} in file \"{path}\": %m"))
+            .errmsg(format!("could not read blocks {first}..{last} in file \"{path}\": {PCT_M}"))
             .finish(loc("md_readv_report"))
     } else {
         ereport(elevel)

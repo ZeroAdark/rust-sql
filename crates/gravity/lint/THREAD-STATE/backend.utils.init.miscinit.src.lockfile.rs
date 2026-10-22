@@ -1,0 +1,2 @@
+backend/utils/init/miscinit/src/lockfile.rs	LOCK_FILES	pgport	at:UnlinkLockFiles	thread	C's lock_files: the lock files this process made (its data directory's, one per Unix socket directory), touched by TouchSocketLockFiles and unlinked and cleared at proc exit by UnlinkLockFiles; the postmaster's or a single-user backend's own; bounded: the data directory's plus one per unix_socket_directories entry
+backend/utils/init/miscinit/src/lockfile.rs	UNLINK_HOOK_REGISTERED	pgport	exit	thread	UnlinkLockFiles is registered on proc exit, once (register_lock_file)

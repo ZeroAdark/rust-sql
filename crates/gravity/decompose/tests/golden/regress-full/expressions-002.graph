@@ -1,0 +1,9 @@
+-- regress-full-expressions-002
+-- SELECT now()::time(3)::text = localtime(3)::text;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=op98(io25(fn1968(fn2019(fn1299()), c23:3)), io25(T_SQLValueFunction)))
+  outs 1=w1:val
+mapped: Result

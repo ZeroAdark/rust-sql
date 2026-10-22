@@ -1,0 +1,16 @@
+-- cte-033
+-- SELECT s.a FROM (SELECT a FROM t ORDER BY b LIMIT 20) s WHERE s.a > 5;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@1 n0@3
+  source index rel=16395 rti=2 am=heap index=16404
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val
+  project (1=v2.1, 2j=v2.2)
+  limit count=20 offset=all
+  project (1=outer.1, 2j=outer.2)
+  filter op521(v1.1, c23:5)
+  project (1=v1.1)
+  outs 1=w8:val 2=w8:val
+  outs 1=w8:val 2=w8:val
+  outs 1=w4:val
+mapped: IndexScan SubqueryScan Limit

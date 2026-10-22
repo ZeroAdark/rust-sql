@@ -1,0 +1,496 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2e s2c
+step s2e: EXPLAIN (COSTS OFF) WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now(), retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END FROM next WHERE name = 'q1' AND j.id = next.id;
+QUERY PLAN                                                                                                          
+--------------------------------------------------------------------------------------------------------------------
+Update on pb_job j                                                                                                  
+  Update on pb_job_q1 j_1                                                                                           
+  CTE next                                                                                                          
+    ->  Limit                                                                                                       
+          ->  LockRows                                                                                              
+                ->  Sort                                                                                            
+                      Sort Key: pb_job.priority DESC, pb_job.created_on, pb_job.id                                  
+                      ->  Seq Scan on pb_job_q1 pb_job                                                              
+                            Filter: ((state < 'active'::pb_state) AND (name = 'q1'::text) AND (start_after < now()))
+  ->  Hash Join                                                                                                     
+        Hash Cond: (j_1.id = next.id)                                                                               
+        ->  Seq Scan on pb_job_q1 j_1                                                                               
+              Filter: (name = 'q1'::text)                                                                           
+        ->  Hash                                                                                                    
+              ->  CTE Scan on next                                                                                  
+(15 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s2we s2c
+s1: WARNING:  there is already a transaction in progress
+step s2we: EXPLAIN (COSTS OFF) WITH next AS (SELECT id, name FROM pb_job WHERE name = ANY (ARRAY['q1', 'q2']) AND state < 'active' ORDER BY priority DESC, created_on, id LIMIT 4 FOR UPDATE) UPDATE pb_job j SET state = 'active' FROM next WHERE j.name = next.name AND j.id = next.id;
+QUERY PLAN                                                                                                   
+-------------------------------------------------------------------------------------------------------------
+Update on pb_job j                                                                                           
+  Update on pb_job_q1 j_1                                                                                    
+  Update on pb_job_q2 j_2                                                                                    
+  Update on pb_job_common j_3                                                                                
+  CTE next                                                                                                   
+    ->  Limit                                                                                                
+          ->  LockRows                                                                                       
+                ->  Sort                                                                                     
+                      Sort Key: pb_job.priority DESC, pb_job.created_on, pb_job.id                           
+                      ->  Append                                                                             
+                            ->  Seq Scan on pb_job_q1 pb_job_1                                               
+                                  Filter: ((name = ANY ('{q1,q2}'::text[])) AND (state < 'active'::pb_state))
+                            ->  Seq Scan on pb_job_q2 pb_job_2                                               
+                                  Filter: ((name = ANY ('{q1,q2}'::text[])) AND (state < 'active'::pb_state))
+  ->  Hash Join                                                                                              
+        Hash Cond: ((j.name = next.name) AND (j.id = next.id))                                               
+        ->  Append                                                                                           
+              ->  Seq Scan on pb_job_q1 j_1                                                                  
+              ->  Seq Scan on pb_job_q2 j_2                                                                  
+              ->  Seq Scan on pb_job_common j_3                                                              
+        ->  Hash                                                                                             
+              ->  CTE Scan on next                                                                           
+(22 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s2u s1c s2c s3sel
+s1: WARNING:  there is already a transaction in progress
+step s1n: UPDATE pb_job SET data = jsonb_build_object('held', true) WHERE id = 9;
+step s2u: WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now(), retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data          
+-------------+--+--------+---------+-----------+--------------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1}      
+pb_job_common| 2|       0|created  |          0|{"n": 2}      
+pb_job_q1    | 3|       1|active   |          0|{"n": 3}      
+pb_job_q2    | 4|       0|created  |          0|{"n": 4}      
+pb_job_common| 5|       1|created  |          0|{"n": 5}      
+pb_job_q1    | 6|       0|created  |          0|{"n": 6}      
+pb_job_q2    | 7|       1|completed|          0|{"n": 7}      
+pb_job_common| 8|       0|created  |          0|{"n": 8}      
+pb_job_q1    | 9|       1|active   |          0|{"held": true}
+pb_job_q2    |10|       0|created  |          0|{"n": 10}     
+pb_job_common|11|       1|retry    |          0|{"n": 11}     
+pb_job_q1    |12|       0|created  |          0|{"n": 12}     
+pb_job_q2    |13|       1|created  |          0|{"n": 13}     
+pb_job_common|14|       0|completed|          0|{"n": 14}     
+pb_job_q1    |15|       1|active   |          0|{"n": 15}     
+pb_job_q2    |16|       0|created  |          0|{"n": 16}     
+(16 rows)
+
+
+starting permutation: s1d s2u s1c s2c s3sel
+step s1d: UPDATE pb_job SET state = 'completed' WHERE id = 9;
+step s2u: WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now(), retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|active   |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q1    | 9|       1|completed|          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|active   |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(16 rows)
+
+
+starting permutation: s1x s2u s1c s2c s3sel
+step s1x: DELETE FROM pb_job WHERE id = 9;
+step s2u: WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now(), retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|active   |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|active   |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(15 rows)
+
+
+starting permutation: s1p s2u s1c s2c s3sel
+step s1p: UPDATE pb_job SET priority = 0 WHERE id = 9;
+step s2u: WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now(), retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|active   |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q1    | 9|       0|active   |          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|active   |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(16 rows)
+
+
+starting permutation: s1m s2u s1c s2c s3sel
+step s1m: UPDATE pb_job SET name = 'q2' WHERE id = 9;
+step s2u: WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now(), retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|created  |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q2    | 9|       1|created  |          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|created  |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(16 rows)
+
+
+starting permutation: s1n s2u s1a s2c s3sel
+step s1n: UPDATE pb_job SET data = jsonb_build_object('held', true) WHERE id = 9;
+step s2u: WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now(), retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1a: ROLLBACK;
+step s2u: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|active   |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q1    | 9|       1|active   |          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|active   |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(16 rows)
+
+
+starting permutation: s1n s2k s1c s2c s3sel
+step s1n: UPDATE pb_job SET data = jsonb_build_object('held', true) WHERE id = 9;
+step s2k: WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE SKIP LOCKED) UPDATE pb_job j SET state = 'active', started_on = now(), retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END FROM next WHERE name = 'q1' AND j.id = next.id;
+step s1c: COMMIT;
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data          
+-------------+--+--------+---------+-----------+--------------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1}      
+pb_job_common| 2|       0|created  |          0|{"n": 2}      
+pb_job_q1    | 3|       1|active   |          0|{"n": 3}      
+pb_job_q2    | 4|       0|created  |          0|{"n": 4}      
+pb_job_common| 5|       1|created  |          0|{"n": 5}      
+pb_job_q1    | 6|       0|created  |          0|{"n": 6}      
+pb_job_q2    | 7|       1|completed|          0|{"n": 7}      
+pb_job_common| 8|       0|created  |          0|{"n": 8}      
+pb_job_q1    | 9|       1|created  |          0|{"held": true}
+pb_job_q2    |10|       0|created  |          0|{"n": 10}     
+pb_job_common|11|       1|retry    |          0|{"n": 11}     
+pb_job_q1    |12|       0|created  |          0|{"n": 12}     
+pb_job_q2    |13|       1|created  |          0|{"n": 13}     
+pb_job_common|14|       0|completed|          0|{"n": 14}     
+pb_job_q1    |15|       1|active   |          0|{"n": 15}     
+pb_job_q2    |16|       0|created  |          0|{"n": 16}     
+(16 rows)
+
+
+starting permutation: s1n s2w s1c s2c s3sel
+step s1n: UPDATE pb_job SET data = jsonb_build_object('held', true) WHERE id = 9;
+step s2w: WITH next AS (SELECT id, name FROM pb_job WHERE name = ANY (ARRAY['q1', 'q2']) AND state < 'active' ORDER BY priority DESC, created_on, id LIMIT 4 FOR UPDATE) UPDATE pb_job j SET state = 'active' FROM next WHERE j.name = next.name AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data          
+-------------+--+--------+---------+-----------+--------------
+pb_job_q2    | 1|       1|active   |          0|{"n": 1}      
+pb_job_common| 2|       0|created  |          0|{"n": 2}      
+pb_job_q1    | 3|       1|active   |          0|{"n": 3}      
+pb_job_q2    | 4|       0|created  |          0|{"n": 4}      
+pb_job_common| 5|       1|created  |          0|{"n": 5}      
+pb_job_q1    | 6|       0|created  |          0|{"n": 6}      
+pb_job_q2    | 7|       1|completed|          0|{"n": 7}      
+pb_job_common| 8|       0|created  |          0|{"n": 8}      
+pb_job_q1    | 9|       1|active   |          0|{"held": true}
+pb_job_q2    |10|       0|created  |          0|{"n": 10}     
+pb_job_common|11|       1|retry    |          0|{"n": 11}     
+pb_job_q1    |12|       0|created  |          0|{"n": 12}     
+pb_job_q2    |13|       1|active   |          0|{"n": 13}     
+pb_job_common|14|       0|completed|          0|{"n": 14}     
+pb_job_q1    |15|       1|created  |          0|{"n": 15}     
+pb_job_q2    |16|       0|created  |          0|{"n": 16}     
+(16 rows)
+
+
+starting permutation: s1d s2w s1c s2c s3sel
+step s1d: UPDATE pb_job SET state = 'completed' WHERE id = 9;
+step s2w: WITH next AS (SELECT id, name FROM pb_job WHERE name = ANY (ARRAY['q1', 'q2']) AND state < 'active' ORDER BY priority DESC, created_on, id LIMIT 4 FOR UPDATE) UPDATE pb_job j SET state = 'active' FROM next WHERE j.name = next.name AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|active   |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|active   |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q1    | 9|       1|completed|          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|active   |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|active   |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(16 rows)
+
+
+starting permutation: s1m s2w s1c s2c s3sel
+step s1m: UPDATE pb_job SET name = 'q2' WHERE id = 9;
+step s2w: WITH next AS (SELECT id, name FROM pb_job WHERE name = ANY (ARRAY['q1', 'q2']) AND state < 'active' ORDER BY priority DESC, created_on, id LIMIT 4 FOR UPDATE) UPDATE pb_job j SET state = 'active' FROM next WHERE j.name = next.name AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|created  |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q2    | 9|       1|created  |          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|created  |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(16 rows)
+
+
+starting permutation: s1d s2x s1c s2c s3sel
+step s1d: UPDATE pb_job SET state = 'completed' WHERE id = 9;
+step s2x: WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' ORDER BY priority DESC, created_on, id LIMIT 2 FOR UPDATE) DELETE FROM pb_job j USING next WHERE j.name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2x: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q1    | 9|       1|completed|          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(14 rows)
+
+
+starting permutation: s2ie s2c
+step s2ie: SET LOCAL enable_seqscan = off; EXPLAIN (COSTS OFF) WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND retry_count >= 0 AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now() FROM next WHERE name = 'q1' AND j.id = next.id;
+QUERY PLAN                                                                                                   
+-------------------------------------------------------------------------------------------------------------
+Update on pb_job j                                                                                           
+  Update on pb_job_q1 j_1                                                                                    
+  CTE next                                                                                                   
+    ->  Limit                                                                                                
+          ->  LockRows                                                                                       
+                ->  Index Scan using pb_job_q1_name_priority_created_on_id_idx on pb_job_q1 pb_job           
+                      Index Cond: (name = 'q1'::text)                                                        
+                      Filter: ((state < 'active'::pb_state) AND (retry_count >= 0) AND (start_after < now()))
+  ->  Nested Loop                                                                                            
+        ->  CTE Scan on next                                                                                 
+        ->  Index Scan using pb_job_q1_pkey on pb_job_q1 j_1                                                 
+              Index Cond: ((name = 'q1'::text) AND (id = next.id))                                           
+(12 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s2i s1c s2c s3sel
+s1: WARNING:  there is already a transaction in progress
+step s1n: UPDATE pb_job SET data = jsonb_build_object('held', true) WHERE id = 9;
+step s2i: SET LOCAL enable_seqscan = off; WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND retry_count >= 0 AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now() FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data          
+-------------+--+--------+---------+-----------+--------------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1}      
+pb_job_common| 2|       0|created  |          0|{"n": 2}      
+pb_job_q1    | 3|       1|active   |          0|{"n": 3}      
+pb_job_q2    | 4|       0|created  |          0|{"n": 4}      
+pb_job_common| 5|       1|created  |          0|{"n": 5}      
+pb_job_q1    | 6|       0|created  |          0|{"n": 6}      
+pb_job_q2    | 7|       1|completed|          0|{"n": 7}      
+pb_job_common| 8|       0|created  |          0|{"n": 8}      
+pb_job_q1    | 9|       1|active   |          0|{"held": true}
+pb_job_q2    |10|       0|created  |          0|{"n": 10}     
+pb_job_common|11|       1|retry    |          0|{"n": 11}     
+pb_job_q1    |12|       0|created  |          0|{"n": 12}     
+pb_job_q2    |13|       1|created  |          0|{"n": 13}     
+pb_job_common|14|       0|completed|          0|{"n": 14}     
+pb_job_q1    |15|       1|active   |          0|{"n": 15}     
+pb_job_q2    |16|       0|created  |          0|{"n": 16}     
+(16 rows)
+
+
+starting permutation: s1d s2i s1c s2c s3sel
+step s1d: UPDATE pb_job SET state = 'completed' WHERE id = 9;
+step s2i: SET LOCAL enable_seqscan = off; WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND retry_count >= 0 AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now() FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|active   |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q1    | 9|       1|completed|          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|active   |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(16 rows)
+
+
+starting permutation: s1p s2i s1c s2c s3sel
+step s1p: UPDATE pb_job SET priority = 0 WHERE id = 9;
+step s2i: SET LOCAL enable_seqscan = off; WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND retry_count >= 0 AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now() FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|active   |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q1    | 9|       0|active   |          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|active   |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(16 rows)
+
+
+starting permutation: s1m s2i s1c s2c s3sel
+step s1m: UPDATE pb_job SET name = 'q2' WHERE id = 9;
+step s2i: SET LOCAL enable_seqscan = off; WITH next AS (SELECT id FROM pb_job WHERE name = 'q1' AND state < 'active' AND retry_count >= 0 AND start_after < now() ORDER BY priority DESC, created_on, id LIMIT 3 FOR UPDATE) UPDATE pb_job j SET state = 'active', started_on = now() FROM next WHERE name = 'q1' AND j.id = next.id; <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3sel: SELECT tableoid::regclass AS leaf, id, priority, state, retry_count, data FROM pb_job WHERE id <= 16 ORDER BY id;
+leaf         |id|priority|state    |retry_count|data     
+-------------+--+--------+---------+-----------+---------
+pb_job_q2    | 1|       1|created  |          0|{"n": 1} 
+pb_job_common| 2|       0|created  |          0|{"n": 2} 
+pb_job_q1    | 3|       1|created  |          0|{"n": 3} 
+pb_job_q2    | 4|       0|created  |          0|{"n": 4} 
+pb_job_common| 5|       1|created  |          0|{"n": 5} 
+pb_job_q1    | 6|       0|created  |          0|{"n": 6} 
+pb_job_q2    | 7|       1|completed|          0|{"n": 7} 
+pb_job_common| 8|       0|created  |          0|{"n": 8} 
+pb_job_q2    | 9|       1|created  |          0|{"n": 9} 
+pb_job_q2    |10|       0|created  |          0|{"n": 10}
+pb_job_common|11|       1|retry    |          0|{"n": 11}
+pb_job_q1    |12|       0|created  |          0|{"n": 12}
+pb_job_q2    |13|       1|created  |          0|{"n": 13}
+pb_job_common|14|       0|completed|          0|{"n": 14}
+pb_job_q1    |15|       1|created  |          0|{"n": 15}
+pb_job_q2    |16|       0|created  |          0|{"n": 16}
+(16 rows)
+

@@ -1,0 +1,1 @@
+backend/storage/aio/aio_core/src/lib.rs	MY_BACKEND	pgport	at:pgaio_shutdown@backend/storage/aio/aio_core/src/handle.rs	thread	C pgaio_my_backend: this thread's own AIO backend slot (its procno), set by pgaio_init_backend, cleared by the pgaio_shutdown exit callback; a thread without one skips the per-backend AIO cleanup (pgaio_error_cleanup, pgaio_closing_fd)

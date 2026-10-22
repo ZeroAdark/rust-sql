@@ -1,0 +1,13 @@
+# 'order by' inside a string and a comment is not a clause
+sql: SELECT 'order by 1' AS s, x /* order by x */ FROM t
+sql: -- ORDER BY 2
+sql: ;
+cols: s	x
+class: unordered
+verdict: match
+[pg]
+order by 1	1
+order by 1	2
+[got]
+order by 1	2
+order by 1	1

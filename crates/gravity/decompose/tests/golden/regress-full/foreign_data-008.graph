@@ -1,0 +1,55 @@
+-- regress-full-foreign_data-008
+-- SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef), a.attnotnull, (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation) AS attcollation, a.attidentity, a.attgenerated, CASE WHEN attfdwoptions IS NULL THEN '' ELSE '(' || pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(option_name) || ' ' || pg_catalog.quote_literal(option_value) FROM pg_catalog.pg_options_to_table(attfdwoptions)), ', ') || ')' END AS attfdwoptions, a.attstorage, CASE WHEN a.attstattarget=-1 THEN NULL ELSE a.attstattarget END AS attstattarget, pg_catalog.col_description(a.attrelid, a.attnum) FROM pg_catalog.pg_attribute a WHERE a.attrelid = '38716' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index rel=1249 rti=1 am=heap index=2659
+    key att=1 op=607 value=c26:38716
+    key att=5 op=536 value=c23:0
+    recheck (op607(v1.1, c26:38716), op536(v1.5, c23:0))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(5):byval8:w8:val Attr(6):byval8:w8:val Attr(10):byval8:w8:val Attr(12):byval8:w8:val Attr(13):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(17):byval8:w8:val Attr(20):byval8:w8:val Attr(21):byval8:w8:val Attr(24):byref8:vl:win/page
+  filter not(v1.17)
+  subplan 1 nested Expr params=($exec0=v1.1, $exec1=v1.5, $exec2=v1.13) vol=s
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0 n1@1
+  source index rel=2604 rti=2 am=heap index=2656
+    key att=2 op=607 value=$exec0
+    key att=3 op=94 value=$exec1
+    recheck (op607(v2.2, $exec0), op94(v2.3, $exec1))
+    lanes Attr(2):byval8:w8:val Attr(4):byref8:vl:win/page
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4)
+  gate T_List
+  project (1=fn2509(outer.4, outer.2, c16:1))
+  subplan 2 nested Expr params=($exec3=v1.20, $exec4=v1.3)
+  inner node=4 serial site=0 reason=IndexSource end=sink
+  nodes n4@0 n3@1
+  source index rel=3456 rti=3 am=heap index=3085
+    key att=1 op=607 value=$exec3
+    recheck (op607(v3.1, $exec3))
+    lanes Attr(2):byref8:fx64:win/page
+  project (1=v3.1, 2=v3.2, 3=v3.3, 4=v3.4, 5=v3.5, 6=v3.6, 7=v3.7, 8=v3.8, 9=v3.9, 10=v3.10, 11=v3.11, 12=v3.12)
+  nest inner=n5 JOIN_INNER raise-free params=()
+  inner node=5 serial site=0 reason=IndexSource end=sink
+  nodes n5@0
+  source index rel=1247 rti=4 am=heap index=2703
+    key att=1 op=607 value=$exec4
+    recheck (op607(v4.1, $exec4))
+    lanes Attr(29):byval8:w8:val
+  filter op608($exec3, v4.29)
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9, 10=v4.10, 11=v4.11, 12=v4.12, 13=v4.13, 14=v4.14, 15=v4.15, 16=v4.16, 17=v4.17, 18=v4.18, 19=v4.19, 20=v4.20, 21=v4.21, 22=v4.22, 23=v4.23, 24=v4.24, 25=v4.25, 26=v4.26, 27=v4.27, 28=v4.28, 29=v4.29, 30=v4.30, 31=v4.31, 32=v4.32)
+  project (1=outer.2)
+  subplan 3 nested Array params=($exec5=v1.24) conditional vol=s
+  inner node=6 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n6@0
+  source const
+  srf from rti=5 [1:Other fn2289 cols=2 fn2289($exec5)]
+  project (1=op654(op654(fn1282(v5.1), c25:' '), fn1283(v5.2)))
+  project (1=v1.2, 2=fn1081(v1.3, v1.6), 3=subplan1(v1.1, v1.5, v1.13), 4=v1.12, 5=subplan2(v1.20, v1.3), 6=v1.15, 7=v1.16, 8=case(when isnull(v1.24) then c25:'') else op654(op654(c25:'(', fn395(subplan3(v1.24), c25:', ')), c25:')'), 9=v1.10, 10=case(when op532(v1.21, c23:-1) then c21:null) else v1.21, 11=fn1216(v1.1, fn313(v1.5)), 12j=v1.5)
+  outs 1=fx64:win/page 2=vl:call1081 3=vl:call0 4=w8:val 5=fx64:call0 6=w8:val 7=w8:val 8=vl:call1258 9=w8:val 10=w2:val 11=vl:call1216 12=w8:val
+param $exec0 owner=subplan1 type=26 rep=w8:val
+param $exec1 owner=subplan1 type=21 rep=w8:val
+param $exec2 owner=subplan1 type=16 rep=w8:val
+param $exec3 owner=subplan2 type=26 rep=w8:val
+param $exec4 owner=subplan2 type=26 rep=w8:val
+param $exec5 owner=subplan3 type=1009@950 rep=vl:win/page
+mapped: Result IndexScan FunctionScan NestLoop SubPlan

@@ -12,6 +12,7 @@ pub mod packet;
 pub mod pubdec;
 pub mod pubenc;
 pub mod pubkey;
+pub mod pull;
 pub mod s2k;
 
 use context::PgpContext;
@@ -162,7 +163,8 @@ pub fn pub_encrypt(
     }
 
     let mut out = Vec::new();
-    pubenc::write_pubenc_sesskey(&mut out, &pk, ctx.cipher_algo, &sess_key)
+    let cipher_algo = ctx.cipher_algo;
+    pubenc::write_pubenc_sesskey(&mut out, &pk, cipher_algo, &sess_key, &mut ctx)
         .map_err(|e| fail(e, &ctx))?;
     encrypt::write_encdata_packet(&ctx, data, &sess_key, &mut out).map_err(|e| fail(e, &ctx))?;
     Ok(out)
@@ -187,8 +189,10 @@ pub fn pub_decrypt(
     ctx.mbuf_cap = decrypt_mbuf_cap(data.len());
 
     let exp = ctx.clone();
-    let result = decrypt::decrypt_pubkey(&mut ctx, data, &mut |ctx, body| {
-        let (cipher, key) = pubdec::parse_pubenc_sesskey(ctx, &pk, body)?;
+    let result = decrypt::decrypt_pubkey(&mut ctx, data, &mut |cx, pkt| {
+        let (cipher, key) = pubdec::parse_pubenc_sesskey(cx, &pk, pkt)?;
+        // pgp-pubdec.c:235: the recovered cipher is the context's.
+        cx.ctx.cipher_algo = cipher;
         Ok(decrypt::SessKey { cipher, key })
     });
     finish_decrypt(&exp, &ctx, result)
@@ -381,6 +385,55 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.message, "Wrong key");
         assert_eq!(err.notices, ["dbg: check_eme_pkcs1_v15 failed"]);
+    }
+
+    // Audit-found public-key/S2K debug parity (pgp-pubdec.c:235,
+    // pgp-decrypt.c:633/646, pgp-mpi-openssl.c, pgp-pubkey.c:483/492).
+    #[test]
+    fn pubkey_and_s2k_debug_lines_follow_c() {
+        let pubkey = armor::armor_decode(RSA_PUBKEY.as_bytes()).expect("dearmor pubkey");
+        let seckey = armor::armor_decode(RSA_SECKEY.as_bytes()).expect("dearmor seckey");
+        let ct = pub_encrypt(b"m", &pubkey, Some(b"cipher-algo=aes256"), true).expect("encrypt");
+        let out = pub_decrypt(&ct, &seckey, None, Some(b"expect-cipher-algo=aes256"), true).unwrap();
+        assert!(out.notices.is_empty(), "{:?}", out.notices);
+        let out = pub_decrypt(&ct, &seckey, None, Some(b"expect-cipher-algo=aes128"), true).unwrap();
+        assert_eq!(out.notices, ["pgp_decrypt: unexpected cipher_algo: expected 7 got 9"]);
+
+        let err = sym_decrypt(&unhex("c30404070063"), b"k",
+            Some(b"expect-s2k-mode=3, expect-s2k-digest-algo=sha1"), true).unwrap_err();
+        assert_eq!(err.notices, [
+            "pgp_decrypt: unexpected s2k_mode: expected 3 got 0",
+            "pgp_decrypt: unexpected s2k_digest_algo: expected 2 got 99",
+        ]);
+        let err = sym_decrypt(&unhex("c3020507"), b"k",
+            Some(b"sess-key=1, expect-s2k-cipher-algo=aes256"), true).unwrap_err();
+        assert_eq!(err.notices, ["pgp_decrypt: unexpected s2k_cipher_algo: expected 9 got 7"]);
+
+        let err = pub_decrypt(&unhex("c10d03000000000000000001000101"),
+            &unhex("c715040000000001000000000000000000000000000000"), None, Some(b"debug=1"), false)
+            .unwrap_err();
+        assert_eq!((err.message.as_str(), &err.notices[..]),
+            ("Wrong key", &["dbg: check_eme_pkcs1_v15 failed".to_string()][..]));
+        let err = pub_decrypt(&unhex("c11003000000000000000010000201000101"),
+            &unhex("c715040000000010000201000202000101000001010002"), None, Some(b"debug=1"), false)
+            .unwrap_err();
+        assert_eq!(err.notices, [
+            "dbg: mpi_to_bn: bignum conversion failed: mpi=2, bn=1",
+            "dbg: mpi_to_bn: bignum conversion failed: mpi=2, bn=1",
+        ]);
+
+        let err = pub_encrypt(b"x", &[0x01], Some(b"debug=1"), true).unwrap_err();
+        assert_eq!(err.notices, ["dbg: pgp_parse_pkt_hdr: not pkt hdr"]);
+        let mut key = unhex("ce2b04000000000100f000");
+        key.extend_from_slice(&[0xff; 29]);
+        key.extend_from_slice(&unhex("0011010001"));
+        let err = pub_encrypt(b"x", &key, Some(b"debug=1"), true).unwrap_err();
+        assert_eq!((err.message.as_str(), &err.notices[..]), ("Math operation failed",
+            &["dbg: mpi_to_bn: bignum conversion failed: mpi=240, bn=232".to_string()][..]));
+        let err = pub_encrypt(b"x", &unhex("c7e10000"), None, true).unwrap_err();
+        assert_eq!(err.message, "Refusing to encrypt with secret key");
+        let err = pub_encrypt(b"x", &unhex("d4e10000"), None, true).unwrap_err();
+        assert_eq!(err.message, "Unexpected packet in key data");
     }
 
     #[test]

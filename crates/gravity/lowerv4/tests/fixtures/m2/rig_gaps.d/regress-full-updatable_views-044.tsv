@@ -1,0 +1,1 @@
+an output type the regress test creates (a view's row type); the rig catalog has no pg_type row (reached once decompose's members table went, modifytable landing 11)

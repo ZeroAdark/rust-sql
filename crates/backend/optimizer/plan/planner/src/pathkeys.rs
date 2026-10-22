@@ -303,7 +303,7 @@ fn make_pathkey_from_sortinfo<'mcx>(
             "missing operator {COMPARE_EQ}({opcintype},{opcintype}) in opfamily {opfamily}"
         ))));
     }
-    let opfamilies = lsyscache::amop::get_mergejoin_opfamilies(run.mcx, equality_op)?;
+    let opfamilies = lsyscache::run_memo::get_mergejoin_opfamilies(run, equality_op)?;
     if opfamilies.is_empty() {
         return Err(Box::new(types_error::PgError::error(format!(
             "could not find opfamilies for equality operator {equality_op}"
@@ -312,7 +312,7 @@ fn make_pathkey_from_sortinfo<'mcx>(
     let Some(eclass) = crate::equivclass::get_eclass_for_sort_expr(
         run,
         expr,
-        &opfamilies,
+        opfamilies,
         opcintype,
         collation,
         sortref,
@@ -560,7 +560,7 @@ pub fn extract_subquery_pathkey_descs<'mcx>(
             has_volatile: ec.ec_has_volatile,
             sortref: ec.ec_sortref,
             members,
-            opfamilies: crate::relnode::pgvec_clone_shallow(mcx, &ec.ec_opfamilies),
+            opfamilies: ec.ec_opfamilies,
             collation: ec.ec_collation,
             pk_opfamily: pk.pk_opfamily,
             pk_cmptype: pk.pk_cmptype,
@@ -637,7 +637,7 @@ pub fn convert_subquery_pathkeys<'mcx>(
                 if let Some(outer_ec) = crate::equivclass::get_eclass_for_sort_expr(
                     run,
                     outer_var,
-                    &desc.opfamilies,
+                    desc.opfamilies,
                     sub_datatype,
                     desc.collation,
                     0,
@@ -673,7 +673,7 @@ pub fn convert_subquery_pathkeys<'mcx>(
                     let Some(outer_ec) = crate::equivclass::get_eclass_for_sort_expr(
                         run,
                         outer_var,
-                        &desc.opfamilies,
+                        desc.opfamilies,
                         sub_expr_type,
                         desc.collation,
                         0,
@@ -762,12 +762,11 @@ pub fn initialize_mergeclause_eclasses(
     let clause = *run.root.expr_node(run.root.rinfo(rinfo).clause);
     let o = clause.as_op_expr().expect("mergeclause is an OpExpr");
     let (lefttype, righttype) = lsyscache::op_input_types(o.opno)?;
-    let opfamilies =
-        crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.rinfo(rinfo).mergeopfamilies);
+    let opfamilies = run.root.rinfo(rinfo).mergeopfamilies;
     let left_ec = crate::equivclass::get_eclass_for_sort_expr(
         run,
         o.args.nth(0),
-        &opfamilies,
+        opfamilies,
         lefttype,
         o.inputcollid,
         0,
@@ -777,7 +776,7 @@ pub fn initialize_mergeclause_eclasses(
     let right_ec = crate::equivclass::get_eclass_for_sort_expr(
         run,
         o.args.nth(1),
-        &opfamilies,
+        opfamilies,
         righttype,
         o.inputcollid,
         0,
@@ -886,7 +885,7 @@ pub fn select_outer_pathkeys_for_merge<'mcx>(
     }
 
     if !run.root.query_pathkeys.is_empty() {
-        let query_pathkeys = crate::relnode::pgvec_clone_shallow(mcx, &run.root.query_pathkeys);
+        let query_pathkeys = run.root.query_pathkeys;
         let mut matches = 0usize;
         let mut have_all = true;
         for qpk in query_pathkeys.iter() {
@@ -1045,6 +1044,30 @@ pub fn truncate_useless_pathkeys<'mcx>(
     Ok(out)
 }
 
+/// D4568 part 2 (`pgrust.pgrc_merge_skip_hash_group`, default on): whether a sorted pgrcolumnar path's `pathkeys`
+/// would only presort this level's GROUP BY, short of all its keys (an Incremental Sort under a sorted aggregate), where
+/// a hash aggregate serves the GROUP BY: no grouping sets, no DISTINCT or ORDER BY aggregate, every group clause
+/// hashable; and no DISTINCT or set operation reads them. A merge join they could feed is not counted: a hash join
+/// serves the same equality. The one-part merge is priced at nothing, so with the pathkeys the sorted path wins every
+/// fuzzy cost tie and carries its order up the join tree: one low-estimate statement put the sorted dimension
+/// outermost over a chain of nested loops whose inners are sequential scans, to presort a group key (D3487).
+pub fn presorts_hash_group_only(run: &PlannerRun<'_>, pathkeys: &[PathKey]) -> bool {
+    let parse = run.parse();
+    if parse.groupClause.is_nil() || !parse.groupingSets.is_nil() || run.root.numOrderedAggs > 0 {
+        return false;
+    }
+    let groups = run.root.processed_groupClause;
+    if groups.is_empty() || !crate::grouping::grouping_is_hashable(run, groups) {
+        return false;
+    }
+    let n = pathkeys_useful_for_grouping(run, pathkeys);
+    n > 0
+        && n < run.root.group_pathkeys.len()
+        && pathkeys_useful_for_ordering(run, pathkeys) <= n
+        && pathkeys_useful_for_distinct(run, pathkeys) == 0
+        && pathkeys_useful_for_setop(run, pathkeys) == 0
+}
+
 fn pathkeys_useful_for_merging(
     run: &mut PlannerRun<'_>,
     rel: types_pathnodes::RelId,
@@ -1150,8 +1173,7 @@ pub fn get_cheapest_path_for_pathkeys<'mcx>(
             continue;
         }
         if let Some(m) = matched_path {
-            if crate::pathnode::compare_path_costs(run.root.path(m).base(), path, cost_criterion)
-                <= 0
+            if crate::pathnode::compare_path_costs_at(run, m, pid, cost_criterion) <= 0
             {
                 continue;
             }
@@ -1180,11 +1202,7 @@ pub fn get_cheapest_fractional_path_for_pathkeys(
     for &pid in paths {
         let path = run.root.path(pid).base();
         if let Some(m) = matched_path {
-            if crate::pathnode::compare_fractional_path_costs(
-                run.root.path(m).base(),
-                path,
-                fraction,
-            ) <= 0
+            if crate::pathnode::compare_fractional_path_costs_at(run, m, pid, fraction) <= 0
             {
                 continue;
             }

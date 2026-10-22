@@ -1,0 +1,19 @@
+-- regress-full-guc-003
+-- CREATE TABLE tab_settings_flags AS SELECT name, category, 'EXPLAIN' = ANY(flags) AS explain, 'NO_RESET' = ANY(flags) AS no_reset, 'NO_RESET_ALL' = ANY(flags) AS no_reset_all, 'NOT_IN_SAMPLE' = ANY(flags) AS not_in_sample, 'RUNTIME_COMPUTED' = ANY(flags) AS runtime_computed FROM pg_show_all_settings() AS psas, pg_settings_get_flags(psas.name) AS flags;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n1@0 n0@2
+  source const
+  srf from rti=1 [1:Other fn2084 cols=17 fn2084()]
+  project (1=v1.1, 2=v1.2, 3=v1.3, 4=v1.4, 5=v1.5, 6=v1.6, 7=v1.7, 8=v1.8, 9=v1.9, 10=v1.10, 11=v1.11, 12=v1.12, 13=v1.13, 14=v1.14, 15=v1.15, 16=v1.16, 17=v1.17)
+  nest inner=n2 JOIN_INNER vol=s params=($exec0=outer.1)
+  inner node=2 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n2@0
+  source const
+  srf from rti=2 [1:Scalar fn6240 fn6240($exec0)]
+  project (1=v2.1)
+  project (1=outer.1, 2=outer.4, 3=any98(c25:'EXPLAIN', inner.1), 4=any98(c25:'NO_RESET', inner.1), 5=any98(c25:'NO_RESET_ALL', inner.1), 6=any98(c25:'NOT_IN_SAMPLE', inner.1), 7=any98(c25:'RUNTIME_COMPUTED', inner.1))
+  outs 1=vl:row 2=vl:row 3=vl:row 4=vl:row 5=vl:row 6=vl:row 7=vl:row 8=vl:row 9=vl:row 10=vl:row 11=vl:row 12=vl:row 13=vl:row 14=vl:row 15=vl:row 16=w4:val 17=w1:val
+  outs 1=vl:row 2=vl:row 3=w1:val 4=w1:val 5=w1:val 6=w1:val 7=w1:val
+param $exec0 owner=n0 type=25@100 rep=vl:row
+mapped: FunctionScan NestLoop NestLoopParam

@@ -116,7 +116,8 @@ fn transmit_and_remember(pending: &[(String, String)]) {
     // the raw bytes stand here instead.
     let mut cx = mcx::MemoryContext::new("ParameterStatus conversion");
     for (name, val) in pending {
-        let mut body = Vec::with_capacity(name.len() + val.len() + 2);
+        let mut body = Vec::new();
+        let _ = body.try_reserve(name.len() + val.len() + 2);
         for s in [name.as_bytes(), val.as_bytes()] {
             match to_client_encoding(cx.mcx(), s) {
                 Some(converted) => body.extend_from_slice(&converted),

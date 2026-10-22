@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/utils/adt/jsonb_gin.c: 2 stack-depth check sites
+586	extract_jsp_bool_expr	crates/backend/utils/adt/jsonb/src/gin.rs	JspExtractor::extract_bool_expr	yes	
+721	emit_jsp_gin_entries	crates/backend/utils/adt/jsonb/src/gin.rs	JspExtractor::emit	yes	

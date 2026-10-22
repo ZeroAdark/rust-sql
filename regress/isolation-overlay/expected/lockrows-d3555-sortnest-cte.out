@@ -1,0 +1,167 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1a s2u s1c
+step s2x: EXPLAIN (COSTS OFF) WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t) UPDATE cnt SET status = 'running', attempts = attempts + 1 FROM c WHERE cnt.id = c.id RETURNING cnt.id, cnt.attempts;
+QUERY PLAN                                                              
+------------------------------------------------------------------------
+Update on cnt                                                           
+  CTE c                                                                 
+    ->  Limit                                                           
+          ->  LockRows                                                  
+                ->  Incremental Sort                                    
+                      Sort Key: t.priority DESC, t.run_at, t.id         
+                      Presorted Key: t.priority, t.run_at               
+                      ->  Nested Loop                                   
+                            ->  Index Scan using cnt_claim on cnt t     
+                                  Index Cond: (status = 'ready'::text)  
+                            ->  Memoize                                 
+                                  Cache Key: t.queue_id                 
+                                  Cache Mode: logical                   
+                                  ->  Index Scan using cnq_pkey on cnq q
+                                        Index Cond: (id = t.queue_id)   
+                                        Filter: (NOT paused)            
+  ->  Hash Join                                                         
+        Hash Cond: (cnt.id = c.id)                                      
+        ->  Seq Scan on cnt                                             
+        ->  Hash                                                        
+              ->  CTE Scan on c                                         
+(21 rows)
+
+step s1a: UPDATE cnt SET attempts = attempts + 10 WHERE id = 3;
+step s2u: WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t) UPDATE cnt SET status = 'running', attempts = attempts + 1 FROM c WHERE cnt.id = c.id RETURNING cnt.id, cnt.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+ 3|      11
+11|       3
+15|       1
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2u s1c
+step s1s: UPDATE cnt SET status = 'done' WHERE id = 3;
+step s2u: WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t) UPDATE cnt SET status = 'running', attempts = attempts + 1 FROM c WHERE cnt.id = c.id RETURNING cnt.id, cnt.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+11|       3
+15|       1
+19|       2
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s2u s1c
+step s1q: UPDATE cnt SET queue_id = 3 WHERE id = 3;
+step s2u: WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t) UPDATE cnt SET status = 'running', attempts = attempts + 1 FROM c WHERE cnt.id = c.id RETURNING cnt.id, cnt.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+11|       3
+15|       1
+19|       2
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2u s1c
+step s1d: DELETE FROM cnt WHERE id = 11;
+step s2u: WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t) UPDATE cnt SET status = 'running', attempts = attempts + 1 FROM c WHERE cnt.id = c.id RETURNING cnt.id, cnt.attempts; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|attempts
+--+--------
+ 3|       1
+15|       1
+19|       2
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM cnt WHERE id = 3 FOR UPDATE;
+id
+--
+ 3
+(1 row)
+
+step s2sk: WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t SKIP LOCKED) UPDATE cnt SET status = 'running' FROM c WHERE cnt.id = c.id RETURNING cnt.id;
+id
+--
+11
+15
+19
+(3 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s3x s1a s3u s1c
+step s3x: EXPLAIN (COSTS OFF) WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t) UPDATE cnt SET status = 'running', attempts = attempts + 1 FROM c WHERE cnt.id = c.id RETURNING cnt.id, cnt.attempts;
+QUERY PLAN                                                            
+----------------------------------------------------------------------
+Update on cnt                                                         
+  CTE c                                                               
+    ->  Limit                                                         
+          ->  LockRows                                                
+                ->  Incremental Sort                                  
+                      Sort Key: t.priority DESC, t.run_at, t.id       
+                      Presorted Key: t.priority, t.run_at             
+                      ->  Nested Loop                                 
+                            Join Filter: (q.id = t.queue_id)          
+                            ->  Index Scan using cnt_claim on cnt t   
+                                  Index Cond: (status = 'ready'::text)
+                            ->  Materialize                           
+                                  ->  Seq Scan on cnq q               
+                                        Filter: (NOT paused)          
+  ->  Hash Join                                                       
+        Hash Cond: (cnt.id = c.id)                                    
+        ->  Seq Scan on cnt                                           
+        ->  Hash                                                      
+              ->  CTE Scan on c                                       
+(19 rows)
+
+step s1a: UPDATE cnt SET attempts = attempts + 10 WHERE id = 3;
+step s3u: WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t) UPDATE cnt SET status = 'running', attempts = attempts + 1 FROM c WHERE cnt.id = c.id RETURNING cnt.id, cnt.attempts; <waiting ...>
+step s1c: COMMIT;
+step s3u: <... completed>
+id|attempts
+--+--------
+ 3|      11
+11|       3
+15|       1
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s3u s1c
+step s1q: UPDATE cnt SET queue_id = 3 WHERE id = 3;
+step s3u: WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t) UPDATE cnt SET status = 'running', attempts = attempts + 1 FROM c WHERE cnt.id = c.id RETURNING cnt.id, cnt.attempts; <waiting ...>
+step s1c: COMMIT;
+step s3u: <... completed>
+id|attempts
+--+--------
+11|       3
+15|       1
+19|       2
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s3u s1c
+step s1s: UPDATE cnt SET status = 'done' WHERE id = 3;
+step s3u: WITH c AS (SELECT t.id FROM cnt t JOIN cnq q ON q.id = t.queue_id WHERE t.status = 'ready' AND NOT q.paused ORDER BY t.priority DESC, t.run_at, t.id LIMIT 3 FOR UPDATE OF t) UPDATE cnt SET status = 'running', attempts = attempts + 1 FROM c WHERE cnt.id = c.id RETURNING cnt.id, cnt.attempts; <waiting ...>
+step s1c: COMMIT;
+step s3u: <... completed>
+id|attempts
+--+--------
+11|       3
+15|       1
+19|       2
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress

@@ -449,3 +449,12 @@ fn check_lists_not_empty_is_fatal() {
     assert_eq!(err.level(), FATAL, "{}", err.message);
     on_exit_reset();
 }
+
+#[test]
+fn d2962_ipc_exits_answer_is_exit_payload() {
+    register_exit_payloads();
+    let plain: Box<dyn std::any::Any + Send> = Box::new("bug");
+    assert!(types_error::is_exit_payload(&ProcExitThread { code: 1 }));
+    assert!(types_error::is_exit_payload(&KilledBySignal { signo: 9 }));
+    assert!(!types_error::is_exit_payload(&*plain));
+}

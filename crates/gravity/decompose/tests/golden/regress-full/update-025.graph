@@ -1,0 +1,58 @@
+-- regress-full-update-025
+-- UPDATE range_parted set c = 95 WHERE a = 'b' and b > 10 and c > 100 returning (range_parted), *;
+graph pipelines=3 breakers=0 init_plans=0 root=p2
+p0 node=2 serial site=1 reason=Write end=sink
+  nodes n2@0 n1@4 n0@6
+  source range rel=26481 rti=4 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op413(v4.5, c20:10)
+  filter op1756(v4.2, c1700:'\x00\x80d\x00')
+  filter op98(v4.4, c25:'b')
+  project (1=c1700:'\x00\x80_\x00', 2=v4.-6, 3=v4.-1)
+  append arm 0/3
+  project (1=c1700:'\x00\x80_\x00', 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=26481 rti=4 natts=5 indexes=() set=(2) returning tableoid=outer.2 route=rti1:26452 natts=5 cross-partition map=(4,3,5,1,2)
+    target rti=5 rel=26486 natts=5 indexes=() set=(2) returning map=(4,3,5,1,2)
+    target rti=6 rel=26455 natts=5 indexes=() set=(2) returning map=(5,3,1,2,4)
+  project (1=T_ConvertRowtypeExpr, 2=v4.4, 3=v4.5, 4=v4.2, 5=v4.1, 6=v4.3)
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+  outs 1=? 2=vl:row 3=w8:val 4=vl:row 5=w4:val 6=vl:row
+p1 node=3 serial site=1 reason=Write end=sink
+  nodes n3@0 n1@4 n0@6
+  source range rel=26486 rti=5 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(4):byref8:vl:win/page Attr(5):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op413(v5.5, c20:10)
+  filter op1756(v5.2, c1700:'\x00\x80d\x00')
+  filter op98(v5.4, c25:'b')
+  project (1=c1700:'\x00\x80_\x00', 2=v5.-6, 3=v5.-1)
+  append arm 1/3
+  project (1=c1700:'\x00\x80_\x00', 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=26481 rti=4 natts=5 indexes=() set=(2) returning tableoid=outer.2 route=rti1:26452 natts=5 cross-partition map=(4,3,5,1,2)
+    target rti=5 rel=26486 natts=5 indexes=() set=(2) returning map=(4,3,5,1,2)
+    target rti=6 rel=26455 natts=5 indexes=() set=(2) returning map=(5,3,1,2,4)
+  project (1=T_ConvertRowtypeExpr, 2=v5.4, 3=v5.5, 4=v5.2, 5=v5.1, 6=v5.3)
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+  outs 1=? 2=vl:row 3=w8:val 4=vl:row 5=w4:val 6=vl:row
+p2 node=4 serial site=1 reason=Write end=sink
+  nodes n4@0 n1@4 n0@6
+  source range rel=26455 rti=6 am=heap
+    lanes Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page Attr(4):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op413(v6.4, c20:10)
+  filter op1756(v6.2, c1700:'\x00\x80d\x00')
+  filter op98(v6.3, c25:'b')
+  project (1=c1700:'\x00\x80_\x00', 2=v6.-6, 3=v6.-1)
+  append arm 2/3
+  project (1=c1700:'\x00\x80_\x00', 2j=outer.2, 3j=outer.3)
+  write UPDATE rel=26481 rti=4 natts=5 indexes=() set=(2) returning tableoid=outer.2 route=rti1:26452 natts=5 cross-partition map=(4,3,5,1,2)
+    target rti=5 rel=26486 natts=5 indexes=() set=(2) returning map=(4,3,5,1,2)
+    target rti=6 rel=26455 natts=5 indexes=() set=(2) returning map=(5,3,1,2,4)
+  project (1=T_ConvertRowtypeExpr, 2=v6.3, 3=v6.4, 4=v6.2, 5=v6.5, 6=v6.1)
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:row
+  outs 1=vl:stmt/imm 2=w4:val 3=fx6:life/breaker
+  outs 1=? 2=vl:row 3=w8:val 4=vl:row 5=w4:val 6=vl:row
+scan-lanes node=2 rti=4 rel=26481 tableoid
+scan-lanes node=3 rti=5 rel=26486 tableoid
+scan-lanes node=4 rti=6 rel=26455 tableoid
+mapped: ModifyTable Append SeqScan

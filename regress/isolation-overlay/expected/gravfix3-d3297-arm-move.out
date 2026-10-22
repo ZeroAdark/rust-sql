@@ -1,0 +1,124 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1u s2m1 s1c s2c s3r
+step s1u: UPDATE dt SET v = v + 100 WHERE k = 1;
+step s2m1: UPDATE dt SET k = 3, v = dt.v + ds.a FROM ds WHERE ds.b = (SELECT 1) AND ds.a < 15; <waiting ...>
+step s1c: COMMIT;
+step s2m1: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, * FROM dt ORDER BY k, v;
+tableoid|k|  v
+--------+-+---
+dt3     |3| 10
+dt3     |3| 10
+dt3     |3|110
+(3 rows)
+
+
+starting permutation: s1u s2m s1c s2c s3r
+step s1u: UPDATE dt SET v = v + 100 WHERE k = 1;
+step s2m: UPDATE dt SET k = 3, v = dt.v + ds.a FROM ds WHERE ds.b = (SELECT 1); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, * FROM dt ORDER BY k, v;
+tableoid|k|  v
+--------+-+---
+dt1     |1|100
+dt2     |2|  0
+dt3     |3|  0
+(3 rows)
+
+
+starting permutation: s1k s2m1 s1c s2c s3r
+step s1k: UPDATE dt SET k = 2 WHERE k = 1;
+step s2m1: UPDATE dt SET k = 3, v = dt.v + ds.a FROM ds WHERE ds.b = (SELECT 1) AND ds.a < 15; <waiting ...>
+step s1c: COMMIT;
+step s2m1: <... completed>
+ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, * FROM dt ORDER BY k, v;
+tableoid|k|v
+--------+-+-
+dt2     |2|0
+dt2     |2|0
+dt3     |3|0
+(3 rows)
+
+
+starting permutation: s1d s2m s1c s2c s3r
+step s1d: DELETE FROM dt WHERE k = 1;
+step s2m: UPDATE dt SET k = 3, v = dt.v + ds.a FROM ds WHERE ds.b = (SELECT 1); <waiting ...>
+step s1c: COMMIT;
+step s2m: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, * FROM dt ORDER BY k, v;
+tableoid|k| v
+--------+-+--
+dt3     |3|10
+dt3     |3|10
+(2 rows)
+
+
+starting permutation: s1u s1s s2m1 s1c s2c s3r
+step s1u: UPDATE dt SET v = v + 100 WHERE k = 1;
+step s1s: UPDATE ds SET a = a + 1000 WHERE b = 1;
+step s2m1: UPDATE dt SET k = 3, v = dt.v + ds.a FROM ds WHERE ds.b = (SELECT 1) AND ds.a < 15; <waiting ...>
+step s1c: COMMIT;
+step s2m1: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, * FROM dt ORDER BY k, v;
+tableoid|k|  v
+--------+-+---
+dt3     |3| 10
+dt3     |3| 10
+dt3     |3|110
+(3 rows)
+
+
+starting permutation: s1u s1s s2v s1c s2c s3r
+step s1u: UPDATE dt SET v = v + 100 WHERE k = 1;
+step s1s: UPDATE ds SET a = a + 1000 WHERE b = 1;
+step s2v: UPDATE dt SET v = dt.v + ds.a FROM ds WHERE ds.b = (SELECT 1); <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, * FROM dt ORDER BY k, v;
+tableoid|k|  v
+--------+-+---
+dt1     |1|110
+dt2     |2| 10
+dt3     |3| 10
+(3 rows)
+
+
+starting permutation: s1u s2v s1c s2c s3r
+step s1u: UPDATE dt SET v = v + 100 WHERE k = 1;
+step s2v: UPDATE dt SET v = dt.v + ds.a FROM ds WHERE ds.b = (SELECT 1); <waiting ...>
+step s1c: COMMIT;
+step s2v: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, * FROM dt ORDER BY k, v;
+tableoid|k|  v
+--------+-+---
+dt1     |1|110
+dt2     |2| 10
+dt3     |3| 10
+(3 rows)
+
+
+starting permutation: s1u s2m1 s1a s2c s3r
+step s1u: UPDATE dt SET v = v + 100 WHERE k = 1;
+step s2m1: UPDATE dt SET k = 3, v = dt.v + ds.a FROM ds WHERE ds.b = (SELECT 1) AND ds.a < 15; <waiting ...>
+step s1a: ROLLBACK;
+step s2m1: <... completed>
+step s2c: COMMIT;
+step s3r: SELECT tableoid::regclass, * FROM dt ORDER BY k, v;
+tableoid|k| v
+--------+-+--
+dt3     |3|10
+dt3     |3|10
+dt3     |3|10
+(3 rows)
+

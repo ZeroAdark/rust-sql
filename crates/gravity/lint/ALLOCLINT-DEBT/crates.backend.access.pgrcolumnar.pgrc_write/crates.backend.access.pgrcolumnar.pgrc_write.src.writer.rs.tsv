@@ -1,0 +1,18 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/writer.rs
+growth	std::collections::BTreeMap::entry	2
+growth	std::collections::BTreeMap::insert	1
+growth	std::iter::Extend::extend	3
+growth	std::vec::Vec::append	1
+growth	std::vec::Vec::push	9
+macro	std::format	1
+macro	std::vec	1
+method	pgrc_format::try_filled	1
+method	pgrc_format::try_to_vec	2
+method	std::boxed::Box::new	3
+method	std::clone::Clone::clone	15
+method	std::iter::Iterator::collect	7
+method	std::sync::Arc::new	1
+type	std::boxed::Box	3
+type	std::string::String	2
+type	std::sync::Arc	1
+type	std::vec::Vec	6

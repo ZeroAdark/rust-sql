@@ -1,0 +1,5 @@
+path	crates/gravity/expr/src/nodes/xml.rs
+growth	std::vec::Vec::extend_from_slice	10
+growth	std::vec::Vec::push	2
+method	std::vec::Vec::with_capacity	3
+type	std::vec::Vec	7

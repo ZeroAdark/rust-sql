@@ -1,0 +1,12 @@
+# RL's registry (lint/rules/rl_lifetime.py; the user, 10-04: a home for option 2, then a gradual migration): the functions
+# outside the lifetime home (decompose/src/lifetime/: the keep table; lowerv4 lifetime/: declared scopes) that still
+# decide what a rescan keeps, rebuilds or resets, by repository path, name and owner lane. A row goes when its owner
+# moves the decision into the home (keep_rule / resolve, or a declared Scope) or calls it; a landing never adds a row (a
+# certified move rewrites one). Kinds: keep (keep or rebuild at a rescan, plan time or the kept run), reset (when a
+# runtime word or object is reset), scope (a word's scope declared outside the home), guard (a named shape fence that
+# stands in for a missing keep rule or scope; it goes when the rule or scope lands). R<n> = the rescan audit's row
+# (lanes/rescanaudit/AUDIT.md).
+# path	fn	owner	kind	what it decides
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<fn> (the row's path with
+# crates/gravity/ dropped and '/' as '.'), holding the row line; this README is not a row. Deleting a row deletes
+# its file, so lanes that delete different rows never touch the same file.

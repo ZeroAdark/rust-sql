@@ -435,8 +435,7 @@ fn convert_values_to_any<'mcx>(
     for elem in &rte.values_lists {
         let value = elem.as_list().expect("values row is a list").nth(0);
         let value = convert_testexpr(mcx, rightop, &[value])?;
-        let value =
-            clauses::eval_const_expressions_with_params(mcx, value, run.glob.bound_params)?;
+        let value = crate::setrefs::fold_with_deps(run, value)?;
         let Some(c) = value.as_const() else { return Ok(None) };
         elems.push(c.constvalue);
         nulls.push(c.constisnull);
@@ -886,6 +885,8 @@ fn offset_and_pull_down<'mcx>(
         }
         if node.as_aggref().is_some_and(|a| a.agglevelsup > 0)
             || node.as_grouping_func().is_some_and(|g| g.agglevelsup > 0)
+            || node.node_tag() == NodeTag::T_PlaceHolderVar
+            || node.node_tag() == NodeTag::T_ReturningExpr
         {
             let copy = rewrite_manip::copy_node(mcx, node)?;
             rewrite_manip::OffsetVarNodes(mcx, copy, rtoffset, 0)?;
@@ -1042,6 +1043,7 @@ fn make_subplan<'mcx>(
 
     debug_assert!(run.root.plan_params.is_empty());
     run.push_root()?;
+    crate::gravity_paths::nest_sublink(run);
     crate::subquery::subquery_planner(
         run,
         mcx::leak_in(mcx::alloc_in(mcx, subquery)?),
@@ -1078,6 +1080,7 @@ fn make_subplan<'mcx>(
             convert_exists_to_any(run, subquery)?
         {
             run.push_root()?;
+            crate::gravity_paths::nest_sublink(run);
             crate::subquery::subquery_planner(
                 run,
                 mcx::leak_in(mcx::alloc_in(mcx, subquery)?),
@@ -1151,11 +1154,7 @@ fn convert_exists_to_any<'mcx>(
     if clauses::contain_volatile_functions(where_clause)? {
         return Ok(None);
     }
-    let where_clause = clauses::eval_const_expressions_with_params(
-        mcx,
-        where_clause,
-        run.glob.bound_params,
-    )?;
+    let where_clause = crate::setrefs::fold_with_deps(run, where_clause)?;
     let where_clause = crate::prepqual::canonicalize_qual(mcx, where_clause, false)?;
     let clauses_list = clauses::make_ands_implicit(mcx, Some(where_clause))?;
 
@@ -1750,7 +1749,7 @@ pub(crate) fn cost_subplan<'mcx>(
     let mut startup = cost.startup;
     let mut per_tuple = cost.per_tuple;
     if splan.useHashTable {
-        startup += p.total_cost + crate::gucs::cpu_operator_cost() * p.plan_rows;
+        startup += fp_contract::fmadd(p.plan_rows, crate::gucs::cpu_operator_cost(), p.total_cost); // costsize.c:4565
     } else {
         let plan_run_cost = p.total_cost - p.startup_cost;
         match splan.subLinkType {
@@ -1759,7 +1758,9 @@ pub(crate) fn cost_subplan<'mcx>(
             }
             SubLinkType::ALL_SUBLINK | SubLinkType::ANY_SUBLINK => {
                 per_tuple += 0.5 * plan_run_cost;
-                per_tuple += 0.5 * p.plan_rows * crate::gucs::cpu_operator_cost();
+                // costsize.c:4599
+                per_tuple =
+                    fp_contract::fmadd(0.5 * p.plan_rows, crate::gucs::cpu_operator_cost(), per_tuple);
             }
             _ => per_tuple += plan_run_cost,
         }
@@ -1806,11 +1807,7 @@ fn simplify_exists_query<'mcx>(run: &mut PlannerRun<'mcx>, query: &mut Query<'mc
         return Ok(false);
     }
     if let Some(limit) = query.limitCount {
-        let node = clauses::eval_const_expressions_with_params(
-            run.mcx,
-            limit,
-            run.glob.bound_params,
-        )?;
+        let node = crate::setrefs::fold_with_deps(run, limit)?;
         query.limitCount = Some(node);
         let Some(c) = node.as_const() else { return Ok(false) };
         debug_assert_eq!(c.consttype, types_core::catalog::INT8OID);
@@ -2170,6 +2167,7 @@ fn finalize_plan<'mcx>(
             if let Some(ts) = plan.as_sample_scan().unwrap().tablesample {
                 finalize_primnode(run, root, ts, &mut paramids)?;
             }
+            paramids.add_members(mcx, scan_params)?;
         }
         NodeTag::T_TidScan => {
             finalize_primnode_list(run, root, &plan.as_tid_scan().unwrap().tidquals, &mut paramids)?;
@@ -2733,5 +2731,78 @@ mod simplify_exists_tests {
         assert_eq!(o.rtekind, RTEKind::RTE_GROUP, "shared RTE node was written");
         assert_eq!(o.groupexprs.len(), 1);
         assert!(orig.hasGroupRTE);
+    }
+}
+
+#[cfg(test)]
+mod finalize_scan_params_tests {
+    use super::*;
+    use mcx::MemoryContext;
+
+    // subselect.c finalize_plan, T_SampleScan: a SampleScan depends on the
+    // owner's scan_params (the EPQ param), so an EvalPlanQual recheck's
+    // chgParam reaches it and the Hash above it rebuilds per recheck.
+    #[test]
+    fn sample_scan_ext_param_includes_scan_params() {
+        crate::tests::install_fixtures();
+        let cx = MemoryContext::new_bump("finalize-samplescan");
+        let mcx = cx.mcx();
+        let run = PlannerRun::new(mcx);
+        let root = types_pathnodes::PlannerInfo::new(mcx);
+        let mut scan = Node::build::<types_nodes::plannodes::SampleScan>(mcx).unwrap();
+        scan.scan.scanrelid = 1;
+        let plan = scan.seal();
+        let scan_params = types_nodes::bitmapset::Bitmapset::make_singleton(mcx, 3).unwrap();
+        let valid = types_nodes::bitmapset::Bitmapset::make_singleton(mcx, 3).unwrap();
+        let got = finalize_plan(&run, &root, plan, -1, &valid, &scan_params).unwrap();
+        assert!(got.is_member(3));
+        let base = plan.as_plan().unwrap();
+        assert!(base.extParam.is_member(3));
+        assert!(base.allParam.is_member(3));
+    }
+}
+
+#[cfg(test)]
+mod cost_subplan_fma_tests {
+    use super::*;
+    use mcx::MemoryContext;
+
+    // D400: costsize.c:4565 and :4599 contract into one fmadd each on
+    // aarch64 (GCC 13.3 -O2 -ffp-contract=fast). Inputs and bits come from
+    // the C harness that pins the costsize crate's fma_tests; aarch64
+    // expects the fused bits, every other target the unfused ones.
+    fn seqscan<'m>(mcx: Mcx<'m>, startup: f64, total: f64, rows: f64) -> Node<'m> {
+        let mut scan = Node::build::<types_nodes::plannodes::SeqScan>(mcx).unwrap();
+        scan.scan.plan.startup_cost = startup;
+        scan.scan.plan.total_cost = total;
+        scan.scan.plan.plan_rows = rows;
+        scan.seal()
+    }
+
+    fn check(got: f64, fused: u64, plain: u64) {
+        let want = if fp_contract::FUSED { fused } else { plain };
+        assert_eq!(got.to_bits(), want, "got {got}, want {}", f64::from_bits(want));
+    }
+
+    #[test]
+    fn d400_cost_subplan_hashed() {
+        crate::tests::install_fixtures();
+        crate::gucs::set_cpu_operator_cost(0.0031);
+        let cx = MemoryContext::new_bump("d400-subplan");
+        let plan = seqscan(cx.mcx(), 0.0, 1.9750186076568241, 10448.691690736405);
+        let mut splan = SubPlan { useHashTable: true, ..Default::default() };
+        cost_subplan(&mut splan, plan).unwrap();
+        check(splan.startup_cost, 0x40412ed7dee1df9b, 0x40412ed7dee1df9a);
+    }
+
+    #[test]
+    fn d400_cost_subplan_any() {
+        crate::tests::install_fixtures();
+        crate::gucs::set_cpu_operator_cost(0.0031);
+        let cx = MemoryContext::new_bump("d400-subplan");
+        let plan = seqscan(cx.mcx(), 53216.516827383392, 620243.06967319013, 4326533.3379835319);
+        let mut splan = SubPlan { subLinkType: SubLinkType::ANY_SUBLINK, ..Default::default() };
+        cost_subplan(&mut splan, plan).unwrap();
+        check(splan.per_call_cost, 0x4114f62fae00996c, 0x4114f62fae00996d);
     }
 }

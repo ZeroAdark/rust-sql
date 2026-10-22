@@ -35,14 +35,19 @@ use ::types_scan::scankey::ScanKeyData;
 use ::types_scan::sdir::ScanDirection;
 use ::types_slot::{SlotData, TupleSlotKind};
 use ::types_storage::RelFileLocator;
-use ::types_tuple::{ItemPointerData, ItemPointerGetBlockNumber};
+use ::types_tuple::{ItemPointerData, ItemPointerGetBlockNumber, ItemPointerGetBlockNumberNoCheck, ItemPointerGetOffsetNumberNoCheck};
 
 pub use ::tableam_vocab::*;
+pub use ::pgrc_am::scan::TidNeed as PgrcTidNeed;
+pub use ::pgrc_am::scan::TidNeed as ScanTidNeed;
 
 #[cfg(test)]
 mod tests;
 
 pub mod write_buffer;
+
+mod am_ext;
+pub use am_ext::*;
 
 pub fn init_seams() {
     guc_tables::vars::synchronize_seqscans.install(guc_tables::GucVarAccessors {
@@ -58,6 +63,30 @@ pub fn init_seams() {
     guc_tables::hooks::check_default_table_access_method
         .install(check_default_table_access_method);
     tableam_seams::table_tid_get_latest::set(table_tid_get_latest);
+    tableam_seams::table_relation_dir_size::set(table_relation_dir_size);
+    tableam_seams::database_dir_am_size::set(database_dir_am_size);
+}
+
+/// dbsize's pg_database_size and pg_tablespace_size: the bytes in the pgrcolumnar table directories of database
+/// directory `db_path` (its flat walk counts only their dirents).
+fn database_dir_am_size(db_path: &str) -> PgResult<u64> {
+    let mut total = 0u64;
+    for (_, name) in ::pgrc_am::dircopy::table_dirs(db_path)? {
+        total += ::pgrc_am::dirpath::dir_bytes(&format!("{db_path}/{name}"))?;
+    }
+    Ok(total)
+}
+
+/// dbsize's pg_relation_size (main fork) and pg_table_size: the bytes the AM keeps outside its smgr forks.
+/// pgrcolumnar keeps its parts, manifests and sections in its table directory beside an empty main fork; heap keeps
+/// none.
+fn table_relation_dir_size(rel: &Relation<'_>) -> PgResult<u64> {
+    match TableAm::of(rel) {
+        Some(TableAm::Pgrcolumnar) => {
+            ::pgrc_am::dirpath::dir_bytes(&::pgrc_am::dirpath::table_dir_path(rel.rd_locator.get(), rel.rd_backend))
+        }
+        _ => Ok(0),
+    }
 }
 
 // --- The dispatch-facing scan values (closed per-AM extensions, rule 4) ---
@@ -67,11 +96,9 @@ pub fn init_seams() {
 // variant: the tag is free and every match is a direct call.
 pub enum TableScanDesc<'mcx> {
     Heap(HeapScanDescData<'mcx>),
-    // Boxed: cold at scan-begin, keeps the enum heap-sized for the hot arm.
-    Pgrcolumnar(std::boxed::Box<::pgrcolumnar::CbScanDescData<'mcx>>),
-    // The pgrcolumnar2 sibling AM (lanev3 M3-H; O-M3-2). Boxed like the
-    // old columnar arm for the same reason.
-    Pgrcolumnar2(std::boxed::Box<::pgrc2_am::scan::Pgrc2ScanDescData<'mcx>>),
+    // The pgrcolumnar AM. Boxed: cold at scan-begin, keeps the enum
+    // heap-sized for the hot arm.
+    Pgrcolumnar(std::boxed::Box<::pgrc_am::scan::PgrcScanDescData<'mcx>>),
 }
 
 impl<'mcx> TableScanDesc<'mcx> {
@@ -80,7 +107,6 @@ impl<'mcx> TableScanDesc<'mcx> {
         match self {
             TableScanDesc::Heap(h) => &h.rs_base,
             TableScanDesc::Pgrcolumnar(c) => &c.rs_base,
-            TableScanDesc::Pgrcolumnar2(c) => &c.rs_base,
         }
     }
 
@@ -89,7 +115,6 @@ impl<'mcx> TableScanDesc<'mcx> {
         match self {
             TableScanDesc::Heap(h) => &mut h.rs_base,
             TableScanDesc::Pgrcolumnar(c) => &mut c.rs_base,
-            TableScanDesc::Pgrcolumnar2(c) => &mut c.rs_base,
         }
     }
 }
@@ -97,6 +122,7 @@ impl<'mcx> TableScanDesc<'mcx> {
 // C's IndexFetchTableData base embedded in IndexFetchHeapData, same treatment.
 pub enum IndexFetchTableData<'mcx> {
     Heap(IndexFetchHeapData<'mcx>),
+    Pgrc(Box<::pgrc_front::ixfetch::PgrcIndexFetch<'mcx>>),
 }
 
 impl<'mcx> IndexFetchTableData<'mcx> {
@@ -104,6 +130,7 @@ impl<'mcx> IndexFetchTableData<'mcx> {
     pub fn rel(&self) -> &Relation<'mcx> {
         match self {
             IndexFetchTableData::Heap(h) => &h.xs_rel,
+            IndexFetchTableData::Pgrc(p) => p.rel(),
         }
     }
 }
@@ -134,67 +161,27 @@ fn unported(unit: &'static str) -> ! {
     panic!("backend-access-tableam reached unported unit: {unit}")
 }
 
-// pgrcolumnar arms (scan-only columnar AM; docs/design/pgrcolumnar-impl.md §7.2).
-mod cb {
-    use super::*;
-
-    pub(super) fn scan_begin<'mcx>(
-        mcx: Mcx<'mcx>,
-        rel: &Relation<'mcx>,
-        snapshot: Snapshot<'mcx>,
-        flags: u32,
-        parallel: Option<NonNull<ParallelBlockTableScanDescData>>,
-    ) -> PgResult<TableScanDesc<'mcx>> {
-        let rs_base = TableScanDescData {
-            rs_rd: rel.alias(),
-            rs_snapshot: snapshot,
-            rs_nkeys: 0,
-            rs_key: PgVec::new_in(mcx),
-            rs_mintid: ItemPointerData::default(),
-            rs_maxtid: ItemPointerData::default(),
-            rs_flags: flags,
-            rs_parallel: parallel,
-            rs_am: TableAm::Pgrcolumnar,
-        };
-        Ok(TableScanDesc::Pgrcolumnar(std::boxed::Box::new(::pgrcolumnar::CbScanDescData::new(
-            rs_base,
-        )?)))
-    }
-
-    // Shared parallel descriptor: phs_nallocated is the row-group claim
-    // cursor (docs/design/pgrcolumnar-impl.md S2); block fields stay unused.
-    pub(super) fn parallelscan_initialize(
-        rel: &Relation<'_>,
-        pscan: &mut ParallelBlockTableScanDescData,
-    ) -> usize {
-        pscan.phs_locator = rel.rd_locator.get();
-        pscan.phs_syncscan = false;
-        pscan.phs_nblocks = 0;
-        pscan.phs_startblock.store(0, std::sync::atomic::Ordering::Relaxed);
-        pscan.phs_nallocated.store(0, std::sync::atomic::Ordering::Relaxed);
-        0
-    }
-
-    pub(super) fn parallelscan_reinitialize(pscan: &ParallelBlockTableScanDescData) {
-        pscan.phs_nallocated.store(0, std::sync::atomic::Ordering::SeqCst);
-    }
+// The shared parallel descriptor of a columnar scan: phs_nallocated is the
+// claim cursor; block fields stay unused.
+fn columnar_parallelscan_reinitialize(pscan: &ParallelBlockTableScanDescData) {
+    pscan.phs_nallocated.store(0, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[cold]
 #[inline(never)]
-fn cb_refused(what: &'static str) -> ! {
-    panic!("pgrcolumnar does not support {what} (unreachable without indexes/DML)")
+fn cb2_refused(what: &'static str) -> Box<PgError> {
+    // A typed ERROR, not a panic: DefineIndex fences indexes on pgrc, so these
+    // are unreachable today, but a path that does reach one must not take the
+    // backend down.
+    Box::new(
+        PgError::error(format!("pgrcolumnar does not support {what}"))
+            .with_sqlstate(::types_error::ERRCODE_FEATURE_NOT_SUPPORTED),
+    )
 }
 
-#[cold]
-#[inline(never)]
-fn cb2_refused(what: &'static str) -> ! {
-    panic!("pgrcolumnar2 does not support {what} (unreachable without indexes/DML)")
-}
-
-// pgrcolumnar2 arms (lanev3 M3-H; COPY + SELECT only per O-M3-1a —
+// pgrcolumnar arms (lanev3 M3-H; COPY + SELECT only per O-M3-1a —
 // docs/design/lanev3-m3-chunks.md §2 M3-H row). Everything of substance
-// lives in the pgrc2_am crate; these are the dispatch shims.
+// lives in the pgrc_am crate; these are the dispatch shims.
 mod cb2 {
     use super::*;
 
@@ -205,7 +192,40 @@ mod cb2 {
         flags: u32,
         parallel: Option<NonNull<ParallelBlockTableScanDescData>>,
     ) -> PgResult<TableScanDesc<'mcx>> {
-        let rs_base = TableScanDescData {
+        let mut scan = ::pgrc_am::scan::PgrcScanDescData::begin(scan_base(mcx, rel, snapshot, flags, parallel))?;
+        // IX0 L2: positions are row IDs, resolved through the statement's view; nothing is registered per scan.
+        if scan.generation().is_some() {
+            super::ensure_pgrc_buffer_hooks();
+        }
+        attach_filter(mcx, rel, &mut scan)?;
+        Ok(TableScanDesc::Pgrcolumnar(scan))
+    }
+
+    /// F2 L3: the snapshot's tombstones, unioned into each granule's mask and skipped in segments (each parallel
+    /// worker builds its own). First the live segments newer than its view, which hold the transaction's own writes past
+    /// a switch its snapshot does not see (design §4.8).
+    pub(super) fn attach_filter<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, scan: &mut ::pgrc_am::scan::PgrcScanDescData<'mcx>) -> PgResult<()> {
+        let snap = scan.rs_base.rs_snapshot.clone();
+        let gen = scan.generation().cloned();
+        let newer = ::pgrc_front::ring::newer_segments(rel, gen.as_deref())?;
+        scan.add_segments(newer.iter().map(|r| (r.slot, r.relid, r.part_no)));
+        if gen.is_none() && newer.is_empty() {
+            return ::pgrc_front::filter::predicate_lock(rel, &snap);
+        }
+        if let Some(f) = ::pgrc_front::filter::build(mcx, rel, gen.as_ref(), &newer, &snap)? {
+            scan.filter = Some(Box::new(f));
+        }
+        Ok(())
+    }
+
+    pub(super) fn scan_base<'mcx>(
+        mcx: Mcx<'mcx>,
+        rel: &Relation<'mcx>,
+        snapshot: Snapshot<'mcx>,
+        flags: u32,
+        parallel: Option<NonNull<ParallelBlockTableScanDescData>>,
+    ) -> TableScanDescData<'mcx> {
+        TableScanDescData {
             rs_rd: rel.alias(),
             rs_snapshot: snapshot,
             rs_nkeys: 0,
@@ -214,11 +234,8 @@ mod cb2 {
             rs_maxtid: ItemPointerData::default(),
             rs_flags: flags,
             rs_parallel: parallel,
-            rs_am: TableAm::Pgrcolumnar2,
-        };
-        Ok(TableScanDesc::Pgrcolumnar2(
-            ::pgrc2_am::scan::Pgrc2ScanDescData::begin(rs_base)?,
-        ))
+            rs_am: TableAm::Pgrcolumnar,
+        }
     }
 
     // Part-grain parallel claims over the shared phs_nallocated cursor
@@ -239,11 +256,62 @@ mod cb2 {
         mcx: Mcx<'mcx>,
         rel: &Relation<'mcx>,
         slot: &mut SlotData<'mcx>,
+        cid: CommandId,
+        bulk: bool,
     ) -> PgResult<()> {
+        if !bulk {
+            return segment_insert(mcx, rel, slot, cid);
+        }
+        let id = bulk_row(mcx, rel, slot, cid)?;
+        // IX0 L3: a bulk row's ctid is its row ID once its part's IDs are granted (IX1's index inserts use it).
+        // IXBULKSORT: an ID its part's seal moves (a `sorted_by` table with indexes) is not the row's yet: the row waits,
+        // with it, for its placed ID and its index entries (`table_take_placed`), and has no position until then.
+        if let Some(::pgrc_am::ingest::RowId { id, handed: true }) = id {
+            let mut cx = SCRATCH.take().unwrap_or_else(|| ::mcx::MemoryContext::new_bump("pgrc statement row"));
+            let pended = exectuples::exec_copy_slot_heap_tuple(slot, mcx, cx.mcx()).and_then(|t| {
+                let pended = ::pgrc_front::xact::pend_handed(rel.rd_id, ::xact::GetCurrentSubTransactionId(), t.image(), handed_tid(id));
+                // the image dies with the scratch context's reset
+                core::mem::forget(t);
+                pended
+            });
+            cx.reset();
+            SCRATCH.set(Some(cx));
+            pended?;
+        }
+        let base = slot.base_mut();
+        match id {
+            Some(::pgrc_am::ingest::RowId { id, handed: false }) => {
+                let (block, off) = ::pgrc_am::rowid_alloc::tid_of(id);
+                ::types_tuple::ItemPointerSet(&mut base.tts_tid, block, off);
+            }
+            Some(_) => ::types_tuple::ItemPointerSetInvalid(&mut base.tts_tid),
+            None if rel.rd_rel.relhasindex => {
+                return Err(Box::new(PgError::error(format!("pgrcolumnar: a bulk row of \"{}\" got no row ID, which its indexes need", rel.name()))));
+            }
+            None => ::types_tuple::ItemPointerSetInvalid(&mut base.tts_tid),
+        }
+        base.tts_tableOid = rel.rd_id;
+        Ok(())
+    }
+
+    fn handed_tid(id: u64) -> ItemPointerData {
+        let (block, off) = ::pgrc_am::rowid_alloc::tid_of(id);
+        let mut tid = ItemPointerData::invalid();
+        ::types_tuple::ItemPointerSet(&mut tid, block, off);
+        tid
+    }
+
+    fn bulk_row<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, slot: &mut SlotData<'mcx>, cid: CommandId) -> PgResult<Option<::pgrc_am::ingest::RowId>> {
         // Deform before reading (the old-AM CTAS lesson: buffer/heap-backed
         // slots arrive with tts_nvalid == 0).
         exectuples::exec_materialize_slot(slot, mcx)?;
+        // D2973: the inserted row's relation, as heapam_tuple_insert sets it
+        slot.base_mut().tts_tableOid = rel.rd_id;
         exectuples::slot_getallattrs(slot);
+        if ::pgrc_front::logical::active(rel) {
+            super::ensure_pgrc_buffer_hooks();
+            ::pgrc_front::logical::bulk_row(mcx, rel, slot)?;
+        }
         // The flat backing bytes of the just-materialized tuple: the
         // independent readable-byte witness that lets `ingest_row`/`raw_row`
         // bound each by-reference datum's header-claimed size against the
@@ -251,7 +319,210 @@ mod cb2 {
         // header to size a read — the OOB/info-leak class).
         let image = exectuples::slot_materialized_image(slot);
         let base = slot.base();
-        ::pgrc2_am::ingest::ingest_row(rel, &base.tts_values, &base.tts_isnull, image)
+        ::pgrc_am::ingest::ingest_row(rel, cid, &base.tts_values, &base.tts_isnull, image)
+    }
+
+    pub(super) fn getnextslot<'mcx>(mcx: Mcx<'mcx>, c: &mut ::pgrc_am::scan::PgrcScanDescData<'mcx>, slot: &mut SlotData<'mcx>) -> PgResult<bool> {
+        if c.segment.is_none() && c.getnextslot(slot)? {
+            return Ok(true);
+        }
+        loop {
+            if let Some(seg) = c.segment.as_mut() {
+                if seg.next(slot)? {
+                    return Ok(true);
+                }
+                end_segment(c)?;
+            }
+            let Some((segslot, relid, part_no)) = c.claim_segment() else {
+                slot.base_mut().mark_empty();
+                return Ok(false);
+            };
+            let snapshot = match c.rs_base.rs_flags & SO_PGRC_INDEX_BUILD {
+                0 => c.rs_base.rs_snapshot.clone(),
+                _ => ::pgrc_front::segscan::index_build_snapshot(mcx, &c.rs_base.rs_rd),
+            };
+            let parent = c.rs_base.rs_rd.rd_id;
+            let deleted = match c.filter.as_ref() {
+                Some(f) => ::mcx::stdvec::try_to_vec(f.segment_positions(segslot), "pgrc segment scan")?,
+                None => Vec::new(),
+            };
+            let busy = match c.filter.as_ref() {
+                Some(f) => ::mcx::stdvec::try_to_vec(f.busy_segment(segslot), "pgrc segment scan")?,
+                None => Vec::new(),
+            };
+            c.segment = Some(Box::new(::pgrc_front::segscan::SegScan::begin(mcx, &c.rs_base.rs_rd, relid, segslot, part_no, snapshot, parent, deleted)?.with_busy(busy)));
+        }
+    }
+
+    pub(super) fn end_segment(c: &mut ::pgrc_am::scan::PgrcScanDescData<'_>) -> PgResult<()> {
+        let Some(s) = c.segment.take() else { return Ok(()) };
+        c.stats.segment_rows(s.returned());
+        s.end()
+    }
+
+    /// F1 L7 routing: a flagged statement (ModifyTable, COPY FROM) buffers; any other `BulkInsertState` or options
+    /// (CTAS, refresh, rewrites) is the bulk lane; a bare insert (single-row INSERT, apply worker, Gravity) is one heap
+    /// insert into the active segment.
+    pub(super) fn insert<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, slot: &mut SlotData<'mcx>, cid: CommandId, options: i32, bistate: bool) -> PgResult<()> {
+        ::pgrc_front::filter::conflict_in(rel)?;
+        if options & ::tableam_vocab::TABLE_INSERT_DEFER != 0 {
+            return buffered_insert(mcx, rel, slot, cid);
+        }
+        tuple_insert(mcx, rel, slot, cid, bistate || options != 0)
+    }
+
+    thread_local! {
+        static SCRATCH: std::cell::Cell<Option<::mcx::MemoryContext>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// The row's heap tuple image joins the statement buffer; a full buffer replays into the bulk lane, which takes
+    /// the rest of the statement. The slot has no position yet (`tts_tid` invalid).
+    fn buffered_insert<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, slot: &mut SlotData<'mcx>, cid: CommandId) -> PgResult<()> {
+        let subid = ::xact::GetCurrentSubTransactionId();
+        if ::pgrc_front::xact::switched(rel.rd_id, cid, subid) {
+            return tuple_insert(mcx, rel, slot, cid, true);
+        }
+        super::ensure_pgrc_buffer_hooks();
+        let mut cx = SCRATCH.take().unwrap_or_else(|| ::mcx::MemoryContext::new_bump("pgrc statement row"));
+        let full = exectuples::exec_copy_slot_heap_tuple(slot, mcx, cx.mcx()).and_then(|t| {
+            let full = ::pgrc_front::xact::push(rel.rd_id, cid, subid, t.image());
+            // the image dies with the scratch context's reset
+            core::mem::forget(t);
+            full
+        });
+        cx.reset();
+        SCRATCH.set(Some(cx));
+        let base = slot.base_mut();
+        base.tts_tid = ItemPointerData::invalid();
+        base.tts_tableOid = rel.rd_id;
+        if full? {
+            replay(mcx, rel, cid, subid, ::pgrc_front::xact::spill(rel.rd_id, cid, subid))?;
+        }
+        Ok(())
+    }
+
+    /// A table with indexes keeps them, with their IDs, for ModifyTable's index inserts (`table_take_placed`); IDs
+    /// their parts' seals move are kept as handed, to be placed.
+    fn replay<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, cid: CommandId, subid: u32, mut rows: ::pgrc_front::xact::Rows) -> PgResult<()> {
+        let mut slot = exectuples::make_tuple_table_slot(mcx, TupleSlotKind::HeapTuple, Some(rel.rd_att.clone()));
+        let mut tids = ::mcx::stdvec::try_vec(if rel.rd_rel.relhasindex { rows.len() } else { 0 }, "pgrc buffered replay")?;
+        let mut handed = false;
+        let mut out = Ok(());
+        for image in rows.images_mut() {
+            // SAFETY: a heap tuple image, 8-byte aligned, alive until the slot is cleared below.
+            let t = unsafe { ::types_tuple::htup::HeapTupleData::from_raw_parts(image.as_ptr(), image.len() as u32, ItemPointerData::invalid(), rel.rd_id) };
+            exectuples::exec_store_heap_tuple(&mut slot, mcx, t);
+            let id = match bulk_row(mcx, rel, &mut slot, cid) {
+                Ok(id) => id,
+                Err(e) => {
+                    out = Err(e);
+                    break;
+                }
+            };
+            if rel.rd_rel.relhasindex {
+                let Some(id) = id else {
+                    out = Err(Box::new(PgError::error(format!("pgrcolumnar: a bulk row of \"{}\" got no row ID, which its indexes need", rel.name()))));
+                    break;
+                };
+                // one writer's rows: all handed or none
+                handed = id.handed;
+                tids.push(handed_tid(id.id));
+            }
+        }
+        exectuples::exec_clear_tuple(&mut slot, mcx);
+        out?;
+        if rel.rd_rel.relhasindex {
+            ::pgrc_front::xact::pend_indexed(rel.rd_id, subid, rows, tids, handed);
+        }
+        Ok(())
+    }
+
+    const FLUSH_ROWS: usize = 1000;
+
+    pub(super) fn flush(rel: &Relation<'_>) -> PgResult<()> {
+        let stmts = ::pgrc_front::xact::take(rel.rd_id, ::xact::GetCurrentSubTransactionId());
+        if stmts.is_empty() {
+            return Ok(());
+        }
+        let cx = ::mcx::MemoryContext::new("pgrc statement flush");
+        let parent = ::pgrc_front::open_segment(cx.mcx(), rel.rd_id)?;
+        let subid = ::xact::GetCurrentSubTransactionId();
+        let mut out = Ok(());
+        for (cid, mut rows) in stmts {
+            let mut tids = Vec::new();
+            out = flush_rows(cx.mcx(), &parent, cid, &mut rows, &mut tids);
+            if out.is_err() {
+                break;
+            }
+            if parent.rd_rel.relhasindex {
+                ::pgrc_front::xact::pend_indexed(parent.rd_id, subid, rows, tids, false);
+            }
+        }
+        parent.close(::types_rel::NoLock)?;
+        out
+    }
+
+    fn flush_rows<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, cid: CommandId, rows: &mut ::pgrc_front::xact::Rows, tids: &mut Vec<ItemPointerData>) -> PgResult<()> {
+        let db = ::init_small::globals::MyDatabaseId();
+        ::pgrc_front::route::backpressure(db, rel, cid)?;
+        let seg = ::pgrc_front::route::segment(mcx, rel)?;
+        let segrel = ::pgrc_front::open_segment(mcx, seg.relid)?;
+        let mut bistate = ::heapam::GetBulkInsertState();
+        let mut slots: Vec<SlotData<'mcx>> = Vec::new();
+        let mut images = rows.images_mut().peekable();
+        let mut out = Ok(());
+        while images.peek().is_some() {
+            let mut n = 0;
+            for image in images.by_ref().take(FLUSH_ROWS) {
+                if slots.len() == n {
+                    slots.push(exectuples::make_tuple_table_slot(mcx, TupleSlotKind::HeapTuple, Some(segrel.rd_att.clone())));
+                }
+                // SAFETY: a heap tuple image, 8-byte aligned, alive until the slots are cleared below.
+                let t = unsafe { ::types_tuple::htup::HeapTupleData::from_raw_parts(image.as_ptr(), image.len() as u32, ItemPointerData::invalid(), segrel.rd_id) };
+                exectuples::exec_store_heap_tuple(&mut slots[n], mcx, t);
+                n += 1;
+            }
+            let mut refs: Vec<&mut SlotData<'mcx>> = slots[..n].iter_mut().collect();
+            out = super::heap::multi_insert(mcx, &segrel, &mut refs, cid, 0, Some(&mut bistate)).and_then(|()| {
+                // AUTOSTATS: the parent's count (the segment's own multi-insert counted the segment)
+                ::pgrc_front::stats::inserted(rel, n as u64);
+                let segloc = segrel.rd_locator.get();
+                let mut marked = u32::MAX;
+                for s in &slots[..n] {
+                    let tid = s.base().tts_tid;
+                    if ItemPointerGetBlockNumber(&tid) != marked {
+                        marked = ItemPointerGetBlockNumber(&tid);
+                        ::pgrc_marks::written((segloc.spcOid, segloc.dbOid, segloc.relNumber), marked);
+                    }
+                    // IX0: each row's extent is reserved (its ID homed) before the statement ends
+                    let id = ::pgrc_front::route::row_id(rel, &seg, ItemPointerGetBlockNumber(&tid), ItemPointerGetOffsetNumberNoCheck(&tid))?;
+                    if rel.rd_rel.relhasindex {
+                        let (block, off) = ::pgrc_am::rowid_alloc::tid_of(id);
+                        let mut t = ItemPointerData::invalid();
+                        ::types_tuple::ItemPointerSet(&mut t, block, off);
+                        tids.push(t);
+                    }
+                    ::pgrc_front::maint::inserted(db, rel.rd_id, seg.relid, ItemPointerGetBlockNumber(&tid));
+                }
+                Ok(())
+            });
+            for s in slots.iter_mut() {
+                exectuples::exec_clear_tuple(s, mcx);
+            }
+            if out.is_err() {
+                break;
+            }
+        }
+        drop(bistate);
+        segrel.close(::types_rel::NoLock)?;
+        out
+    }
+
+    fn segment_insert<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, slot: &mut SlotData<'mcx>, cid: CommandId) -> PgResult<()> {
+        ::pgrc_front::route::insert_row(mcx, rel, slot, cid, 0)?;
+        // AUTOSTATS: the parent's count (the segment's own heap insert counted the segment)
+        ::pgrc_front::stats::inserted(rel, 1);
+        Ok(())
     }
 }
 
@@ -677,12 +948,16 @@ mod heap {
         };
         scan.rs_cblock = pin.block_number();
         scan.rs_cbuf = Some(pin);
-        scan.rs_cindex = ::types_tuple::FirstOffsetNumber as u32;
+        scan.rs_cindex = 0;
+        scan.rs_ntuples = 0;
         Ok(true)
     }
 
-    // C divergence: C holds the share lock across calls; ContentLockGuard
-    // cannot outlive its borrow of the pin, so it is re-taken per call (cold).
+    // rs_vistuples entry of a dead line pointer; a plain offset is a sampled tuple.
+    const ANALYZE_DEAD_ITEM: ::types_core::primitive::OffsetNumber = 0x8000;
+
+    // C holds the share lock across the whole page; here the first call classifies
+    // every line pointer under one lock hold and later calls serve rs_vistuples under the pin.
     pub(super) fn scan_analyze_next_tuple<'mcx>(
         mcx: Mcx<'mcx>,
         scan: &mut HeapScanDescData<'mcx>,
@@ -691,97 +966,110 @@ mod heap {
         deadrows: &mut f64,
         slot: &mut SlotData<'mcx>,
     ) -> PgResult<bool> {
-        use ::types_snapshot::HTSV_Result::*;
         let pin = scan.rs_cbuf.take().expect("analyze scan positioned without a buffer");
         let rd_id = scan.rs_base.rs_rd.rd_id;
         let block = scan.rs_cblock;
-        let mut cindex = scan.rs_cindex;
-        let mut sampled = false;
-        {
-            let _lock = pin.lock_share()?;
-            let page = pin.page();
-            let maxoffset = page.max_offset_number();
-            while cindex <= maxoffset as u32 {
-                let offnum = cindex as ::types_core::primitive::OffsetNumber;
-                let itemid = page.item_id(offnum);
-                if !itemid.is_normal() {
-                    if itemid.is_dead() {
-                        *deadrows += 1.0;
-                    }
-                    cindex += 1;
-                    continue;
-                }
-                let (ptr, len) = page.item_raw(itemid);
-                // SAFETY: normal line pointer on the page pinned by `pin`.
-                let mut targtuple = unsafe {
-                    ::types_tuple::HeapTupleData::from_raw_parts(
-                        ptr,
-                        len,
-                        ItemPointerData::new(block, offnum),
-                        rd_id,
-                    )
-                };
-                let sample_it = match heapam_visibility_seams::heap_tuple_satisfies_vacuum::call(
-                    &mut targtuple,
-                    oldest_xmin,
-                    pin.buffer(),
-                )? {
-                    HEAPTUPLE_LIVE => {
-                        *liverows += 1.0;
-                        true
-                    }
-                    HEAPTUPLE_DEAD | HEAPTUPLE_RECENTLY_DEAD => {
-                        *deadrows += 1.0;
-                        false
-                    }
-                    HEAPTUPLE_INSERT_IN_PROGRESS => {
-                        if xact_seams::transaction_id_is_current_transaction_id::call(
-                            targtuple.t_data().xmin(),
-                        ) {
-                            *liverows += 1.0;
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    HEAPTUPLE_DELETE_IN_PROGRESS => {
-                        if xact_seams::transaction_id_is_current_transaction_id::call(
-                            ::heapam::HeapTupleHeaderGetUpdateXid(targtuple.t_data())?,
-                        ) {
-                            *deadrows += 1.0;
-                            false
-                        } else {
-                            *liverows += 1.0;
-                            true
-                        }
-                    }
-                };
-                cindex += 1;
-                if sample_it {
-                    // SAFETY: same pinned image; the slot store takes its own pin.
-                    let tuple = unsafe {
-                        ::types_tuple::HeapTupleData::from_raw_parts(
-                            targtuple.header_ptr(),
-                            targtuple.t_len,
-                            targtuple.t_self,
-                            rd_id,
-                        )
-                    };
-                    exectuples::exec_store_buffer_heap_tuple(slot, mcx, tuple, pin.buffer());
-                    sampled = true;
-                    break;
+        if scan.rs_ntuples == 0 && scan.rs_cindex == 0 {
+            match analyze_classify_page(scan, &pin, oldest_xmin) {
+                Ok(n) => scan.rs_ntuples = n,
+                Err(e) => {
+                    pin.release();
+                    return Err(e);
                 }
             }
         }
-        scan.rs_cindex = cindex;
-        if sampled {
+        let page = pin.page();
+        while scan.rs_cindex < scan.rs_ntuples {
+            let entry = scan.rs_vistuples[scan.rs_cindex as usize];
+            scan.rs_cindex += 1;
+            if entry & ANALYZE_DEAD_ITEM != 0 {
+                *deadrows += 1.0;
+                continue;
+            }
+            *liverows += 1.0;
+            let (ptr, len) = page.item_raw(page.item_id(entry));
+            // SAFETY: classified under the lock; the pin keeps it in place (pruning needs a cleanup lock).
+            let tuple = unsafe {
+                ::types_tuple::HeapTupleData::from_raw_parts(
+                    ptr,
+                    len,
+                    ItemPointerData::new(block, entry),
+                    rd_id,
+                )
+            };
+            exectuples::exec_store_buffer_heap_tuple(slot, mcx, tuple, pin.buffer());
             scan.rs_cbuf = Some(pin);
-            Ok(true)
-        } else {
-            pin.release();
-            exectuples::exec_clear_tuple(slot, mcx);
-            Ok(false)
+            return Ok(true);
         }
+        pin.release();
+        exectuples::exec_clear_tuple(slot, mcx);
+        Ok(false)
+    }
+
+    fn analyze_classify_page(
+        scan: &mut HeapScanDescData<'_>,
+        pin: &bufmgr_seams::BufferPin,
+        oldest_xmin: TransactionId,
+    ) -> PgResult<u32> {
+        use ::types_snapshot::HTSV_Result::*;
+        let rd_id = scan.rs_base.rs_rd.rd_id;
+        let block = scan.rs_cblock;
+        let _lock = pin.lock_share()?;
+        let page = pin.page();
+        let maxoffset = page.max_offset_number();
+        if maxoffset as usize > ::types_storage::bufpage::MaxHeapTuplesPerPage {
+            return Err(heapam::line_pointer_count_corrupted(maxoffset));
+        }
+        let mut n: u32 = 0;
+        let mut offnum = ::types_tuple::FirstOffsetNumber;
+        while offnum <= maxoffset {
+            let itemid = page.item_id(offnum);
+            if !itemid.is_normal() {
+                if itemid.is_dead() {
+                    scan.rs_vistuples[n as usize] = offnum | ANALYZE_DEAD_ITEM;
+                    n += 1;
+                }
+                offnum += 1;
+                continue;
+            }
+            let (ptr, len) = page.item_raw(itemid);
+            // SAFETY: normal line pointer on the page pinned by `pin`.
+            let mut targtuple = unsafe {
+                ::types_tuple::HeapTupleData::from_raw_parts(
+                    ptr,
+                    len,
+                    ItemPointerData::new(block, offnum),
+                    rd_id,
+                )
+            };
+            let sample_it = match heapam_visibility_seams::heap_tuple_satisfies_vacuum::call(
+                &mut targtuple,
+                oldest_xmin,
+                pin.buffer(),
+            )? {
+                HEAPTUPLE_LIVE => true,
+                HEAPTUPLE_DEAD | HEAPTUPLE_RECENTLY_DEAD => false,
+                HEAPTUPLE_INSERT_IN_PROGRESS => {
+                    if xact_seams::transaction_id_is_current_transaction_id::call(
+                        targtuple.t_data().xmin(),
+                    ) {
+                        true
+                    } else {
+                        offnum += 1;
+                        continue;
+                    }
+                }
+                HEAPTUPLE_DELETE_IN_PROGRESS => {
+                    !xact_seams::transaction_id_is_current_transaction_id::call(
+                        ::heapam::HeapTupleHeaderGetUpdateXid(targtuple.t_data())?,
+                    )
+                }
+            };
+            scan.rs_vistuples[n as usize] = if sample_it { offnum } else { offnum | ANALYZE_DEAD_ITEM };
+            n += 1;
+            offnum += 1;
+        }
+        Ok(n)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -914,7 +1202,7 @@ pub fn table_slot_callbacks(relation: &Relation<'_>) -> TupleSlotKind {
     if let Some(am) = TableAm::of(relation) {
         match am {
             TableAm::Heap => heap::slot_callbacks(relation),
-            TableAm::Pgrcolumnar | TableAm::Pgrcolumnar2 => TupleSlotKind::Virtual,
+            TableAm::Pgrcolumnar => TupleSlotKind::Virtual,
         }
     } else if relation.rd_rel.relkind == RELKIND_FOREIGN_TABLE {
         // FDWs historically expect heap tuples in their slots.
@@ -955,13 +1243,45 @@ pub fn table_beginscan<'mcx>(
         TableAm::Heap => heap::scan_begin(mcx, relation, snapshot, nkeys, key, None, flags),
         TableAm::Pgrcolumnar => {
             let _ = (nkeys, &key);
-            cb::scan_begin(mcx, relation, snapshot, flags, None)
-        }
-        TableAm::Pgrcolumnar2 => {
-            let _ = (nkeys, &key);
             cb2::scan_begin(mcx, relation, snapshot, flags, None)
         }
     }
+}
+
+/// An index build's scan of a pgrcolumnar table. Under `None` (SnapshotAny) its parts read every row no deletion vector
+/// drops and its segments every row a snapshot may still see.
+pub fn table_beginscan_index_build<'mcx>(
+    mcx: Mcx<'mcx>,
+    relation: &Relation<'mcx>,
+    snapshot: Snapshot<'mcx>,
+) -> PgResult<TableScanDesc<'mcx>> {
+    let mut flags = SO_TYPE_SEQSCAN | SO_ALLOW_STRAT | SO_ALLOW_PAGEMODE;
+    match am(relation) {
+        TableAm::Heap => heap::scan_begin(mcx, relation, snapshot, 0, PgVec::new_in(mcx), None, flags),
+        TableAm::Pgrcolumnar => {
+            if snapshot.is_none() {
+                flags |= SO_PGRC_INDEX_BUILD;
+            }
+            cb2::scan_begin(mcx, relation, snapshot, flags, None)
+        }
+    }
+}
+
+/// ALTER's rewrite scan: pgrcolumnar reads its rows under `desc`, the descriptor they were written with.
+pub fn table_beginscan_as<'mcx>(
+    mcx: Mcx<'mcx>,
+    relation: &Relation<'mcx>,
+    snapshot: Snapshot<'mcx>,
+    desc: &types_tuple::tupdesc::TupleDescData<'_>,
+) -> PgResult<TableScanDesc<'mcx>> {
+    if am(relation) != TableAm::Pgrcolumnar {
+        return table_beginscan(mcx, relation, snapshot, 0, PgVec::new_in(mcx));
+    }
+    let flags = SO_TYPE_SEQSCAN | SO_ALLOW_STRAT | SO_ALLOW_SYNC | SO_ALLOW_PAGEMODE;
+    let rs_base = cb2::scan_base(mcx, relation, snapshot, flags, None);
+    let mut scan = ::pgrc_am::scan::PgrcScanDescData::begin_as(rs_base, Some(desc))?;
+    cb2::attach_filter(mcx, relation, &mut scan)?;
+    Ok(TableScanDesc::Pgrcolumnar(scan))
 }
 
 pub fn table_beginscan_strat<'mcx>(
@@ -983,10 +1303,6 @@ pub fn table_beginscan_strat<'mcx>(
     match am(relation) {
         TableAm::Heap => heap::scan_begin(mcx, relation, snapshot, nkeys, key, None, flags),
         TableAm::Pgrcolumnar => {
-            let _ = (nkeys, &key);
-            cb::scan_begin(mcx, relation, snapshot, flags, None)
-        }
-        TableAm::Pgrcolumnar2 => {
             let _ = (nkeys, &key);
             cb2::scan_begin(mcx, relation, snapshot, flags, None)
         }
@@ -1011,9 +1327,39 @@ pub fn table_beginscan_bm<'mcx>(
     let flags = SO_TYPE_BITMAPSCAN | SO_ALLOW_PAGEMODE;
     match am(rel) {
         TableAm::Heap => heap::scan_begin(mcx, rel, snapshot, 0, PgVec::new_in(mcx), None, flags),
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("bitmap scans")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("bitmap scans")),
+        // IX1 L4: a bitmap page is a virtual block of row IDs, each judged and fetched by its ID (pgrc_front::ixbitmap)
+        TableAm::Pgrcolumnar => {
+            ensure_pgrc_buffer_hooks();
+            let source = ::pgrc_front::ixbitmap::begin(mcx, rel, snapshot.clone())?;
+            Ok(TableScanDesc::Pgrcolumnar(::pgrc_am::scan::PgrcScanDescData::begin_bitmap(cb2::scan_base(mcx, rel, snapshot, flags, None), Box::new(source))))
+        }
     }
+}
+
+/// Heap's `bitmap_next_block` without a buffer: the source judges the page's IDs; the page's staged count, `None`
+/// once the bitmap is exhausted.
+fn pgrc_bitmap_next_block(
+    source: &mut (dyn ::pgrc_am::scan::BitmapSource + '_),
+    tbm: Option<&tidbitmap::TIDBitmap<'_>>,
+    iterator: &mut tidbitmap::TbmIterator,
+    recheck: &mut bool,
+    lossy_pages: &mut u64,
+    exact_pages: &mut u64,
+) -> PgResult<Option<u32>> {
+    let mut offsets = [0 as ::types_core::OffsetNumber; tidbitmap::TBM_MAX_TUPLES_PER_PAGE];
+    let (blockno, lossy, page_recheck, noffsets) = {
+        let Some(tbmres) = iterator.next(tbm) else { return Ok(None) };
+        let n = if tbmres.lossy { 0 } else { tbmres.extract_page_tuples(&mut offsets).min(offsets.len()) };
+        (tbmres.blockno, tbmres.lossy, tbmres.recheck, n)
+    };
+    *recheck = page_recheck;
+    let n = source.stage(blockno, if lossy { None } else { Some(&offsets[..noffsets]) })?;
+    if lossy {
+        *lossy_pages += 1;
+    } else {
+        *exact_pages += 1;
+    }
+    Ok(Some(n))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1039,8 +1385,16 @@ pub fn table_beginscan_sampling<'mcx>(
     }
     match am(relation) {
         TableAm::Heap => heap::scan_begin(mcx, relation, snapshot, nkeys, key, None, flags),
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("TABLESAMPLE")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("TABLESAMPLE")),
+        // D4735: heap's page sampling over the virtual blocks of the IDs the counter has reserved; each picked offset is
+        // staged by its ID (pgrc_front::ixbitmap)
+        TableAm::Pgrcolumnar => {
+            ensure_pgrc_buffer_hooks();
+            ::pgrc_front::ixfetch::sample_ids_cover(relation)?;
+            let bound = ::pgrc_front::ixfetch::tid_bound(relation)?;
+            let source = ::pgrc_front::ixbitmap::begin(mcx, relation, snapshot.clone())?;
+            let base = cb2::scan_base(mcx, relation, snapshot, flags, None);
+            Ok(TableScanDesc::Pgrcolumnar(::pgrc_am::scan::PgrcScanDescData::begin_sample(base, Box::new(source), bound)))
+        }
     }
 }
 
@@ -1052,8 +1406,11 @@ pub fn table_beginscan_tid<'mcx>(
     let flags = SO_TYPE_TIDSCAN;
     match am(rel) {
         TableAm::Heap => heap::scan_begin(mcx, rel, snapshot, 0, PgVec::new_in(mcx), None, flags),
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("TID scans")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("TID scans")),
+        // IX1 L0: each TID is fetched by the row ID it names; the IDs the counter has reserved bound the valid ones
+        TableAm::Pgrcolumnar => {
+            let high = ::pgrc_front::ixfetch::tid_bound(rel)?;
+            Ok(TableScanDesc::Pgrcolumnar(::pgrc_am::scan::PgrcScanDescData::begin_tid(cb2::scan_base(mcx, rel, snapshot, flags, None), high)))
+        }
     }
 }
 
@@ -1064,71 +1421,139 @@ pub fn table_beginscan_analyze<'mcx>(
     let flags = SO_TYPE_ANALYZE;
     match am(relation) {
         TableAm::Heap => heap::scan_begin(mcx, relation, None, 0, PgVec::new_in(mcx), None, flags),
-        TableAm::Pgrcolumnar => cb::scan_begin(mcx, relation, None, flags, None),
-        TableAm::Pgrcolumnar2 => cb2::scan_begin(mcx, relation, None, flags, None),
+        TableAm::Pgrcolumnar => cb2::scan_begin(mcx, relation, None, flags, None),
     }
 }
 
-// Ingest-time per-column NDV from the pgrcolumnar part footer (0 = unknown).
-pub fn pgrcolumnar_footer_ndv(rel: &Relation<'_>) -> PgResult<Option<Vec<u64>>> {
-    ::pgrcolumnar::footer_ndv(rel)
+// pgrcolumnar (WW-2, census S02/U-22): per-column whole-table NDV from the
+// union of every part's NdvRegisters HLL sections (0 = unknown); None while
+// the table has no committed publish. Served from pgrc_am's
+// generation-keyed session fold cache (the planner asks on every plan).
+pub fn pgrc_footer_ndv(rel: &Relation<'_>) -> PgResult<Option<Vec<u64>>> {
+    ::pgrc_am::footer::footer_ndv(rel)
 }
 
-// The pgrcolumnar2 sibling (WW-2, census S02/U-22): per-column whole-table
-// NDV from the union of every part's NdvRegisters HLL sections (0 =
-// unknown); None while the table has no committed publish. Served from
-// pgrc2_am's generation-keyed session fold cache — the same
-// planner-asks-on-every-plan cost lesson as the v1 face above.
-pub fn pgrc2_footer_ndv(rel: &Relation<'_>) -> PgResult<Option<Vec<u64>>> {
-    ::pgrc2_am::footer::footer_ndv(rel)
-}
-
-// pgrc2-costing: per-column on-disk data bytes summed over every part's
-// section table (planner column-fraction seqscan disk costing — the pgrc2
-// arm of the v1 face below); None while the table has no committed
+// pgrc-costing: per-column on-disk data bytes summed over every part's
+// section table (planner column-fraction seqscan disk costing); None while
+// the table has no committed
 // publish. Same generation-keyed session fold cache as the NDV face.
-pub fn pgrc2_footer_col_bytes(rel: &Relation<'_>) -> PgResult<Option<Vec<u64>>> {
-    ::pgrc2_am::footer::footer_col_bytes(rel)
+pub fn pgrc_footer_col_bytes(rel: &Relation<'_>) -> PgResult<Option<Vec<u64>>> {
+    ::pgrc_am::footer::footer_col_bytes(rel)
 }
 
-// pgrc2-costing: per-column planner-convention average datum widths from
+// gravity §3 #7: per-column qual evaluation class bits
+// (pgrc_am::footer::QUAL_CLASS_*) for the planner's qual ordering; None
+// while the table has no committed publish.
+pub fn pgrc_footer_qual_classes(rel: &Relation<'_>) -> PgResult<Option<Vec<u8>>> {
+    ::pgrc_am::footer::footer_qual_classes(rel)
+}
+
+// gravity §3 #6: per-column max character length (0 = unknown) bounding
+// `length(col)` group counts; None while the table has no committed publish.
+pub fn pgrc_footer_max_len(rel: &Relation<'_>) -> PgResult<Option<Vec<i32>>> {
+    ::pgrc_am::footer::footer_max_len(rel)
+}
+
+// NEW-stats-2: the folded row total and per-column non-null counts (None =
+// unknown) from the parts' Stats records; None while the table has no
+// committed publish. A cost input only (the counts may lag the snapshot).
+pub fn pgrc_footer_nonnull(rel: &Relation<'_>) -> PgResult<Option<(u64, Vec<Option<u64>>)>> {
+    ::pgrc_am::footer::footer_nonnull(rel)
+}
+
+// The columnar scan cost model (costsize::pgrc_cost): the granule count
+// with per-column codec kinds (pgrc_am::footer::CODEC_*) and dictionary
+// sizes; None while the table has no committed publish.
+pub use ::pgrc_am::footer::CodecFacts as PgrcCodecFacts;
+pub fn pgrc_footer_codecs(rel: &Relation<'_>) -> PgResult<Option<PgrcCodecFacts>> {
+    ::pgrc_am::footer::footer_codecs(rel)
+}
+
+// IXPLAN-1 (2): per unsealed front segment, (heap blocks now, relpages, reltuples): the planner estimates the
+// front's rows from them as it estimates a heap's. Empty while the table has no committed publish.
+pub fn pgrc_front_shapes<'mcx>(mcx: ::mcx::Mcx<'mcx>, rel: &Relation<'mcx>) -> PgResult<Vec<(u64, i32, f64)>> {
+    ::pgrc_front::ring::unsealed_shapes(mcx, rel)
+}
+
+// The columnar scan cost model: one column's zone facts — the planner's summary
+// (the census input) and, expanded on first use,
+// the per-granule [min_key, max_key] in granule order (the zone-walk
+// paths); None without a committed publish or when the column carries no
+// word zone key.
+pub use ::pgrc_am::footer::ZoneColumn as PgrcZoneColumn;
+pub fn pgrc_footer_zone_column(rel: &Relation<'_>, attno: u32) -> PgResult<Option<std::sync::Arc<PgrcZoneColumn>>> {
+    ::pgrc_am::footer::footer_zone_column(rel, attno)
+}
+
+// pgrc-costing: per-column planner-convention average datum widths from
 // the part-grain Stats fold (payload avg + VARHDRSZ; 0 = unknown); None
-// while the table has no committed publish. Consumed by plancat's pgrc2
+// while the table has no committed publish. Consumed by plancat's pgrc
 // attr_widths pre-fill.
-pub fn pgrc2_footer_avg_widths(rel: &Relation<'_>) -> PgResult<Option<Vec<i32>>> {
-    ::pgrc2_am::footer::footer_avg_widths(rel)
+pub fn pgrc_footer_avg_widths(rel: &Relation<'_>) -> PgResult<Option<Vec<i32>>> {
+    ::pgrc_am::footer::footer_avg_widths(rel)
 }
 
-// M5a: the engine ANALYZE fold (ST-2 LIVE — pgrc2_am::analyze module doc).
-// ANALYZE on a pgrcolumnar2 table folds seal-built facts into
+// M5a: the engine ANALYZE fold (ST-2 LIVE — pgrc_am::analyze module doc).
+// ANALYZE on a pgrcolumnar table folds seal-built facts into
 // pg_statistic-shaped columns with NO sampling scan; "cannot serve" is a
 // typed decline the caller fails OPEN on (the sampling path runs). The
 // class/semantics/collation re-exports are the consumer's render gates
 // (canonical bytes → datums is the AM boundary's render contract).
-pub use ::pgrc2_am::analyze::{
-    AnalyzeFold as Pgrc2AnalyzeFold, ColFold as Pgrc2ColFold, FoldDecline as Pgrc2FoldDecline,
-    RelFold as Pgrc2RelFold, PGRC2_STATS_MCV_K,
+pub use ::pgrc_am::analyze::{
+    AnalyzeFold as PgrcAnalyzeFold, ColFold as PgrcColFold, FoldDecline as PgrcFoldDecline,
+    RelFold as PgrcRelFold, PGRC_STATS_MCV_K,
 };
-pub use ::pgrc2_am::analyze::{
-    CollationClass as Pgrc2CollationClass, PgStatColumn as Pgrc2PgStatColumn,
-    StorageClass as Pgrc2StorageClass, TypeSemantics as Pgrc2TypeSemantics,
+pub use ::pgrc_am::analyze::{
+    CollationClass as PgrcCollationClass, PgStatColumn as PgrcPgStatColumn,
+    StorageClass as PgrcStorageClass, TypeSemantics as PgrcTypeSemantics,
 };
-pub fn pgrc2_analyze_fold(rel: &Relation<'_>) -> PgResult<Pgrc2AnalyzeFold> {
-    ::pgrc2_am::analyze::analyze_fold(rel)
+pub fn pgrc_analyze_fold(mcx: Mcx<'_>, rel: &Relation<'_>) -> PgResult<PgrcAnalyzeFold> {
+    if !::pgrc_front::front_bearing_relid(mcx, rel.rd_id)? {
+        return ::pgrc_am::analyze::analyze_fold(rel);
+    }
+    let residue = PgrcAnalyzeFold::Declined(::pgrc_am::analyze::FoldDecline::FrontResidue);
+    // AUTOSTATS: autovacuum's visit no longer seals the front (the front worker does, within its age window), and its
+    // ANALYZE should not pay the sampling scan, which reads the whole table. With rows in the front, an autovacuum
+    // ANALYZE folds the parts when the front, counted by its heap blocks, is at most a tenth of the table (the parts
+    // stand for it as a sample would; the front's rows join the total). Otherwise, and for a manual ANALYZE, it
+    // declines to the sampling scan, which reads the front too.
+    if !::pgrc_am::ingest::is_autovacuum() {
+        return Ok(residue);
+    }
+    let (seg_blocks, tomb_blocks) = ::pgrc_front::front_blocks_relid(mcx, rel.rd_id)?;
+    if seg_blocks == 0 && tomb_blocks == 0 {
+        // bearing for another reason (a composed statement view)
+        return Ok(residue);
+    }
+    let mut fold = match ::pgrc_am::analyze::analyze_fold(rel)? {
+        PgrcAnalyzeFold::Folded(f) => f,
+        declined => return Ok(declined),
+    };
+    // heap rows per block at the folded width (a tuple header, its line pointer); a tombstone is a header and an ident
+    let per_block = |width: f64| (::types_core::BLCKSZ as f64 - 24.0) / (((24.0 + width) / 8.0).ceil() * 8.0 + 4.0);
+    let width: f64 = fold.cols.iter().map(|c| c.stat.stawidth).sum();
+    let front_rows = seg_blocks as f64 * per_block(width);
+    let deleted_rows = tomb_blocks as f64 * per_block(16.0);
+    let parts_rows = fold.total_rows as f64;
+    if front_rows + deleted_rows > parts_rows / 10.0 {
+        return Ok(residue);
+    }
+    fold.total_rows = (parts_rows + front_rows - deleted_rows).max(0.0) as u64;
+    Ok(PgrcAnalyzeFold::Folded(fold))
 }
 
 /// The fold-vintage witness for the S-1 pg_statistic read leg's honest
 /// source stamping (SketchFold only when THIS process wrote the rows via
 /// the fold; after a restart the label conservatively degrades to
 /// AnalyzeSample — the values are identical either way).
-pub fn pgrc2_stats_fold_vintage(rel: &Relation<'_>) -> bool {
-    ::pgrc2_am::analyze::is_fold_vintage(rel)
+pub fn pgrc_stats_fold_vintage(rel: &Relation<'_>) -> bool {
+    ::pgrc_am::analyze::is_fold_vintage(rel)
 }
 
 /// Record fold-vintage pg_statistic rows for `rel` (the ANALYZE fold
 /// consumer calls this right after its `update_attstats` write).
-pub fn pgrc2_record_stats_fold_vintage(rel: &Relation<'_>) {
-    ::pgrc2_am::analyze::record_fold_vintage(rel)
+pub fn pgrc_record_stats_fold_vintage(rel: &Relation<'_>) {
+    ::pgrc_am::analyze::record_fold_vintage(rel)
 }
 
 /// v8 per-column NDV register sketch (whole-part HyperLogLog). Register
@@ -1137,138 +1562,154 @@ pub fn pgrc2_record_stats_fold_vintage(rel: &Relation<'_>) {
 /// an honest parent-level NDV. None: no committed footer (zero committed
 /// rows). Per-column None entries: sketch absent (pre-v8 part,
 /// append-invalidated chain, or the writer kill switch).
-pub use ::pgrcolumnar::hll::Hll as PgrcolumnarNdvSketch;
-pub fn pgrcolumnar_footer_ndv_hll(
-    rel: &Relation<'_>,
-) -> PgResult<Option<Vec<Option<PgrcolumnarNdvSketch>>>> {
-    ::pgrcolumnar::footer_ndv_hll(rel)
-}
-
-// v5 whole-part per-column sorted-asc flags (false = unknown); None while
-// the table has no committed footer.
-pub fn pgrcolumnar_footer_sorted(rel: &Relation<'_>) -> PgResult<Option<Vec<bool>>> {
-    ::pgrcolumnar::footer_sorted(rel)
-}
-
-// Per-column on-disk chunk bytes from the pgrcolumnar part footer (planner
-// column-fraction seqscan disk costing); None while the table has no
-// committed footer.
-pub fn pgrcolumnar_footer_col_bytes(rel: &Relation<'_>) -> PgResult<Option<Vec<u64>>> {
-    ::pgrcolumnar::footer_col_bytes(rel)
-}
-
-// Every committed RG carries exact v7 zero/empty counts (q2box lane): the
-// plan-time answerability probe for the executor's meta zero-count qual
-// arm. None while the table has no committed footer; Some(false) on
-// v<=6-lineage parts (incl. preserved-RG mixtures).
-pub fn pgrcolumnar_footer_zerocnt_all(rel: &Relation<'_>) -> PgResult<Option<bool>> {
-    ::pgrcolumnar::footer_zerocnt_all(rel)
-}
-
-// v7 per-column part-global stitch dict sizes (SE-TOPNNI plan-time DictCode
-// sort-key answerability; 0 = no stitch). None while the table has no
-// committed footer; empty on pre-v7 parts.
-pub fn pgrcolumnar_footer_stitch_gndv(rel: &Relation<'_>) -> PgResult<Option<Vec<u64>>> {
-    ::pgrcolumnar::footer_stitch_gndv(rel)
-}
-
-// pgrcolumnar's AM-specific sample acquisition (C table_relation_analyze lets the
-// AM supply the whole acquirefunc): row-group enumeration + random row fetch.
-pub fn pgrcolumnar_analyze_visible_rgs(scan: &TableScanDesc<'_>) -> PgResult<Vec<(u32, u32)>> {
-    match scan {
-        TableScanDesc::Pgrcolumnar(c) => c.analyze_visible_rgs(),
-        TableScanDesc::Heap(_) => panic!("pgrcolumnar_analyze_visible_rgs: heap scan"),
-        TableScanDesc::Pgrcolumnar2(_) => {
-            panic!("pgrcolumnar_analyze_visible_rgs: pgrcolumnar2 scan (pgrc2 ANALYZE samples via its own acquirefunc)")
-        }
-    }
-}
-
-pub fn pgrcolumnar_analyze_fetch_row(
-    scan: &mut TableScanDesc<'_>,
-    rg: u32,
-    row: u32,
-    slot: &mut SlotData<'_>,
-) -> bool {
-    match scan {
-        TableScanDesc::Pgrcolumnar(c) => c.gather_row(rg, row, slot),
-        TableScanDesc::Heap(_) => panic!("pgrcolumnar_analyze_fetch_row: heap scan"),
-        TableScanDesc::Pgrcolumnar2(_) => panic!("pgrcolumnar_analyze_fetch_row: pgrcolumnar2 scan"),
-    }
-}
-
-// Parallel ANALYZE sample fetch (loadfinal lane, PGRUST_ANALYZE_SAMPLE_POOL):
-// materialize `refs` (ascending (rg, rg-global row) sample positions) into
-// `slot` in order via `per_row`, decoding granules on `pool` threads. Rows,
-// values, and order are identical to per-ref pgrcolumnar_analyze_fetch_row
-// fetches by construction. Returns the number of granule decode tasks.
-pub fn pgrcolumnar_analyze_gather_rows(
-    scan: &mut TableScanDesc<'_>,
-    refs: &[(u32, u32)],
-    pool: usize,
-    slot: &mut SlotData<'_>,
-    per_row: &mut dyn FnMut(&mut SlotData<'_>) -> PgResult<()>,
+// pgrc's ANALYZE sampling face: the exact LIVE row count for the open analyze scan, the stream `getnextslot` serves:
+// the parts' rows less their deletions and the snapshot's tombstones, and the live rows of the front's segments (read
+// through pgrc_front, which the parts cannot open: the segment pass needs the memory context and a slot). The
+// sampler's totalrows must equal the stream it reservoirs over.
+pub fn pgrc_analyze_total_rows<'mcx>(
+    mcx: Mcx<'mcx>,
+    scan: &mut TableScanDesc<'mcx>,
+    slot: &mut SlotData<'mcx>,
 ) -> PgResult<u64> {
     match scan {
-        TableScanDesc::Pgrcolumnar(c) => c.analyze_gather_rows(refs, pool, slot, per_row),
-        TableScanDesc::Heap(_) => panic!("pgrcolumnar_analyze_gather_rows: heap scan"),
-        TableScanDesc::Pgrcolumnar2(_) => panic!("pgrcolumnar_analyze_gather_rows: pgrcolumnar2 scan"),
+        TableScanDesc::Pgrcolumnar(c) => ::pgrc_front::sample::total_rows(mcx, c, slot),
+        TableScanDesc::Heap(_) => panic!("pgrc_analyze_total_rows: heap scan"),
     }
 }
 
-// pgrc2's ANALYZE sampling face (the P6-5 fail-open leg under the M5a
-// fold): exact LIVE row count for the open analyze scan — manifest facts
-// minus Dv deletions, the same truth `getnextslot` serves. The sampler's
-// totalrows must equal the stream it reservoirs over.
-pub fn pgrc2_analyze_total_rows(scan: &TableScanDesc<'_>) -> u64 {
+/// The sampler's two passes: the ctid positions of the live rows at stream ordinals `ords` (ascending; no column
+/// decodes), then each kept row by its position.
+pub fn pgrc_analyze_live_positions(scan: &mut TableScanDesc<'_>, ords: &[u64], out: &mut Vec<u64>) -> PgResult<()> {
     match scan {
-        TableScanDesc::Pgrcolumnar2(c) => c.total_rows(),
-        TableScanDesc::Heap(_) => panic!("pgrc2_analyze_total_rows: heap scan"),
-        TableScanDesc::Pgrcolumnar(_) => panic!("pgrc2_analyze_total_rows: pgrcolumnar scan"),
+        TableScanDesc::Pgrcolumnar(c) => c.live_positions(ords, out),
+        TableScanDesc::Heap(_) => panic!("pgrc_analyze_live_positions: heap scan"),
     }
 }
 
-// pgrc2-relstats: committed (rows, on-disk part bytes) from the effective
+/// The sample's positions (ascending), set before its fetches: each granule then decodes only the sampled rows.
+pub fn pgrc_analyze_sample_positions(scan: &mut TableScanDesc<'_>, positions: Vec<u64>) {
+    match scan {
+        TableScanDesc::Pgrcolumnar(c) => c.set_sample_positions(positions),
+        TableScanDesc::Heap(_) => panic!("pgrc_analyze_sample_positions: heap scan"),
+    }
+}
+
+pub fn pgrc_analyze_fetch_position<'mcx>(
+    mcx: Mcx<'mcx>,
+    scan: &mut TableScanDesc<'mcx>,
+    pos: u64,
+    slot: &mut SlotData<'mcx>,
+) -> PgResult<bool> {
+    match scan {
+        TableScanDesc::Pgrcolumnar(c) => ::pgrc_front::sample::fetch(mcx, c, pos, slot),
+        TableScanDesc::Heap(_) => panic!("pgrc_analyze_fetch_position: heap scan"),
+    }
+}
+
+pub use ::pgrc_am::scan::SampleFetch as PgrcSampleFetch;
+/// r14 merge: the sample-position bit of a front segment row (`pgrc_front::sample::fetch`); part rows have it clear.
+pub use ::pgrc_am::scan::SEGMENT_POSITION as PGRC_SEGMENT_POSITION;
+
+/// D3742: the sample's rows at `positions` (ascending) decoded by `dop` threads, each handed to `emit` in position order
+/// as its column values and NULL flags (`PgrcScanDescData::sample_rows_parallel`); `Declined` when the sample spans
+/// fewer than `min_granules` granules (the caller fetches each position).
+pub fn pgrc_analyze_fetch_parallel(
+    scan: &mut TableScanDesc<'_>,
+    positions: &[u64],
+    dop: usize,
+    min_granules: usize,
+    emit: &mut dyn FnMut(&[datum::Datum], &[bool]) -> PgResult<()>,
+) -> PgResult<PgrcSampleFetch> {
+    match scan {
+        TableScanDesc::Pgrcolumnar(c) => c.sample_rows_parallel(positions, dop, min_granules, emit),
+        TableScanDesc::Heap(_) => panic!("pgrc_analyze_fetch_parallel: heap scan"),
+    }
+}
+
+/// pgrc spec §8.9 (loadstats D): each part's live rows in `getnextslot` order and whether its stored Sample section
+/// may stand for it (`PgrcScanDescData::sample_part_rows`).
+pub fn pgrc_analyze_sample_parts(scan: &TableScanDesc<'_>) -> PgResult<Vec<(u64, bool)>> {
+    match scan {
+        TableScanDesc::Pgrcolumnar(c) => c.sample_part_rows(),
+        TableScanDesc::Heap(_) => panic!("pgrc_analyze_sample_parts: heap scan"),
+    }
+}
+
+/// pgrc spec §8.9 (loadstats D): part `p`'s stored sample rows `pick` chooses, each to `emit`; false = not served
+/// (`PgrcScanDescData::stored_sample`).
+pub fn pgrc_analyze_stored_sample(
+    scan: &mut TableScanDesc<'_>,
+    p: usize,
+    pick: &mut dyn FnMut(usize) -> Option<Vec<usize>>,
+    emit: &mut dyn FnMut(&[datum::Datum], &[bool]) -> PgResult<()>,
+) -> PgResult<bool> {
+    match scan {
+        TableScanDesc::Pgrcolumnar(c) => c.stored_sample(p, pick, emit),
+        TableScanDesc::Heap(_) => panic!("pgrc_analyze_stored_sample: heap scan"),
+    }
+}
+
+// pgrc-relstats: committed (rows, on-disk part bytes) from the effective
 // manifest — the SAME facts table_relation_estimate_size serves the
 // planner, re-exported so ANALYZE writes a pg_class.relpages/reltuples
 // that agrees with plan-time truth (P6-5). None: no committed publish.
-pub fn pgrc2_footer_size(rel: &Relation<'_>) -> PgResult<Option<(u64, u64)>> {
-    ::pgrc2_am::footer::footer_size(rel)
+pub fn pgrc_footer_size(rel: &Relation<'_>) -> PgResult<Option<(u64, u64)>> {
+    ::pgrc_am::footer::footer_size(rel)
+}
+
+// `sorted_by` (pgrc_am::reloptions): DDL's per-column verdict, the
+// ALTER SET emptiness gate, and the planner's claimable key.
+pub fn pgrc_sorted_by_column_sortable(atts: &[types_tuple::FormData_pg_attribute], col: &str) -> Option<bool> {
+    ::pgrc_am::reloptions::column_sortable(atts, col)
+}
+
+// F1: rows in the front's segments count as data, and a front-bearing table claims no order (its segment rows are
+// unsorted).
+fn pgrc_front_bearing(rel: &Relation<'_>) -> PgResult<bool> {
+    let ctx = mcx::MemoryContext::new("pgrc front");
+    ::pgrc_front::front_bearing_relid(ctx.mcx(), rel.rd_id)
+}
+
+pub use ::pgrc_am::schema::ColumnsVerdict as PgrcColumnsVerdict;
+
+/// What ALTER does to `rel`'s stored columns, which were `old`'s (F1 L5; FASTADD, pgrc-plans/FASTADD.done): nothing
+/// for a table that is not pgrcolumnar or whose stored columns did not change; metadata-only for added and dropped
+/// columns; the rewrite for a changed one. An unsupported new column type refuses here.
+pub fn pgrc_columns_verdict(rel: &Relation<'_>, old: &types_tuple::tupdesc::TupleDescData<'_>) -> PgResult<PgrcColumnsVerdict> {
+    if am(rel) != TableAm::Pgrcolumnar {
+        return Ok(PgrcColumnsVerdict::Same);
+    }
+    ::pgrc_am::schema::columns_verdict(rel, &old.attrs)
+}
+
+pub fn pgrc_table_has_data(rel: &Relation<'_>) -> PgResult<bool> {
+    Ok(::pgrc_am::reloptions::table_has_data(rel)? || pgrc_front_bearing(rel)?)
+}
+
+pub fn pgrc_planner_sorted_attnos(rel: &Relation<'_>) -> PgResult<Vec<i16>> {
+    if pgrc_front_bearing(rel)? {
+        return Ok(Vec::new());
+    }
+    let view = ::pgrc_front::ring::statement_view(rel)?;
+    ::pgrc_am::reloptions::planner_sorted_attnos(rel, view.as_deref())
+}
+
+// D4469 road 2: the committed part count, the merged sorted path's estimate of its streams (a cost input only: the scan
+// merges the parts its snapshot sees); None while the table has no committed publish or its fold does not say.
+pub fn pgrc_footer_part_count(rel: &Relation<'_>) -> PgResult<Option<u64>> {
+    Ok(::pgrc_am::footer::part_count(rel)?.filter(|&p| p != ::pgrc_am::footer::PARTS_UNKNOWN))
 }
 
 pub fn table_endscan(scan: TableScanDesc<'_>) -> PgResult<()> {
     match scan {
         TableScanDesc::Heap(h) => heap::scan_end(h),
-        TableScanDesc::Pgrcolumnar(mut c) => {
-            if std::env::var_os("PGRUST_AGG_BATCH_DEBUG").is_some() {
-                let (dfb, dft, dfe, dfa) = ::pgrcolumnar::dict_frame_stats();
-                eprintln!(
-                    "CBSCAN|windows={}|granules_scanned={}|granules_pruned={}|blocks_pruned={}|granules_bound_skipped={}|adaptive_probe_reverts={}|granules_meta={}|granules_bloom_pruned={}|rgs_readahead={}|rgs_claim_readahead={}|dictlazy_builds={dfb}|dict_frames={dft}|dict_frames_ensured={dfe}|dict_ensure_alls={dfa}",
-                    c.windows_staged,
-                    c.granules_scanned,
-                    c.granules_pruned,
-                    c.blocks_pruned,
-                    c.granules_bound_skipped,
-                    c.adaptive_probe_reverts,
-                    c.granules_meta,
-                    c.granules_bloom_pruned,
-                    c.rgs_readahead,
-                    c.rgs_claim_readahead
-                );
-            }
-            if (c.rs_base.rs_flags & SO_TEMP_SNAPSHOT) != 0 {
-                let snap = c
-                    .rs_temp_snapshot
-                    .take()
-                    .expect("SO_TEMP_SNAPSHOT scan carries its registered snapshot");
-                ::snapmgr::UnregisterSnapshot(Some(&snap));
-            }
-            drop(c);
-            Ok(())
-        }
         // Dropping the scan releases its part pins (registry LRU handles
         // the rest).
-        TableScanDesc::Pgrcolumnar2(mut c) => {
+        TableScanDesc::Pgrcolumnar(mut c) => {
+            cb2::end_segment(&mut c)?;
+            if let Some(b) = c.bitmap.take() {
+                b.end()?;
+            }
             if (c.rs_base.rs_flags & SO_TEMP_SNAPSHOT) != 0 {
                 let snap = c
                     .rs_temp_snapshot
@@ -1303,12 +1744,12 @@ pub fn table_rescan<'mcx>(
         TableScanDesc::Heap(h) => heap::scan_rescan(h, key, false, false, false, false),
         TableScanDesc::Pgrcolumnar(c) => {
             let _ = key;
+            cb2::end_segment(c)?;
             c.reset_position();
-            Ok(())
-        }
-        TableScanDesc::Pgrcolumnar2(c) => {
-            let _ = key;
-            c.reset_position();
+            // IX1 L4: a bitmap scan's staged page goes with its bitmap
+            if let Some(b) = c.bitmap.as_deref_mut() {
+                b.reset();
+            }
             Ok(())
         }
     }
@@ -1328,12 +1769,12 @@ pub fn table_rescan_set_params<'mcx>(
         }
         TableScanDesc::Pgrcolumnar(c) => {
             let _ = key;
+            cb2::end_segment(c)?;
             c.reset_position();
-            Ok(())
-        }
-        TableScanDesc::Pgrcolumnar2(c) => {
-            let _ = key;
-            c.reset_position();
+            // IX1 L4: a bitmap scan's staged page goes with its bitmap
+            if let Some(b) = c.bitmap.as_deref_mut() {
+                b.reset();
+            }
             Ok(())
         }
     }
@@ -1352,15 +1793,9 @@ pub fn table_scan_getnextslot<'mcx>(
         TableScanDesc::Heap(h) => heap::scan_getnextslot(mcx, h, direction, slot),
         TableScanDesc::Pgrcolumnar(c) => {
             if direction == ScanDirection::BackwardScanDirection {
-                return Err(::pgrcolumnar::unsupported("backward scans"));
+                return Err(::pgrc_am::unsupported("backward scans"));
             }
-            c.getnextslot(slot)
-        }
-        TableScanDesc::Pgrcolumnar2(c) => {
-            if direction == ScanDirection::BackwardScanDirection {
-                return Err(::pgrc2_am::unsupported("backward scans"));
-            }
-            c.getnextslot(slot)
+            cb2::getnextslot(mcx, c, slot)
         }
     }
 }
@@ -1377,9 +1812,8 @@ pub fn table_scan_supports_pagebatch(scan: &TableScanDesc<'_>) -> bool {
         // variant below instead; keeping the incumbents off pgrcolumnar keeps
         // lane-OFF the pure per-row Volcano drive (`getnextslot`) — the
         // byte-parity oracle for every pgrcolumnar lane path (phase4 design §6).
+        // pgrcolumnar (M3-H): per-row Volcano only; batching is M3-G's.
         TableScanDesc::Pgrcolumnar(_) => false,
-        // pgrcolumnar2 (M3-H): per-row Volcano only; batching is M3-G's.
-        TableScanDesc::Pgrcolumnar2(_) => false,
     }
 }
 
@@ -1400,9 +1834,8 @@ pub fn table_scan_supports_pagebatch_parallel(scan: &TableScanDesc<'_>) -> bool 
         // claims row groups through the shared `phs_nallocated` cursor
         // exactly as the per-tuple drive does, partitioning RGs across
         // workers without gaps or overlaps.
-        TableScanDesc::Pgrcolumnar(_) => true,
-        // pgrcolumnar2 (M3-H): no window feed yet — M3-G owns lane staging.
-        TableScanDesc::Pgrcolumnar2(_) => false,
+        // pgrcolumnar (M3-H): no window feed yet — M3-G owns lane staging.
+        TableScanDesc::Pgrcolumnar(_) => false,
     }
 }
 
@@ -1411,10 +1844,9 @@ pub fn table_scan_supports_pagebatch_parallel(scan: &TableScanDesc<'_>) -> bool 
 pub fn table_scan_cb_total_rows(scan: &TableScanDesc<'_>) -> Option<u64> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(c) => Some(c.total_rows()),
-        // pgrcolumnar2: keep the lane admission machinery off this AM
+        // pgrcolumnar: keep the lane admission machinery off this AM
         // until M3-G registers its implementor.
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
     }
 }
 
@@ -1424,8 +1856,7 @@ pub fn table_scan_cb_total_rows(scan: &TableScanDesc<'_>) -> Option<u64> {
 pub fn table_scan_cb_granule_geometry(scan: &TableScanDesc<'_>) -> Option<(u64, Vec<u64>)> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(c) => c.granule_geometry(),
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
     }
 }
 
@@ -1437,7 +1868,6 @@ pub fn table_scan_heap_block_geometry(scan: &TableScanDesc<'_>) -> Option<u64> {
     match scan {
         TableScanDesc::Heap(h) => Some(h.rs_nblocks as u64),
         TableScanDesc::Pgrcolumnar(_) => None,
-        TableScanDesc::Pgrcolumnar2(_) => None,
     }
 }
 
@@ -1448,17 +1878,13 @@ pub fn table_scan_heap_block_geometry(scan: &TableScanDesc<'_>) -> Option<u64> {
 /// The AM-dispatched positioning is `table_scan_set_morsel_range` below.
 pub fn table_scan_cb_set_granule_range(
     scan: &mut TableScanDesc<'_>,
-    g0: u64,
-    g1: u64,
+    _g0: u64,
+    _g1: u64,
 ) -> PgResult<bool> {
     match scan {
         TableScanDesc::Heap(_) => Ok(false),
-        TableScanDesc::Pgrcolumnar(c) => {
-            c.set_granule_range(g0, g1)?;
-            Ok(true)
-        }
         // Fail-closed like heap: the m2 sink arms admit pgrcolumnar only.
-        TableScanDesc::Pgrcolumnar2(_) => Ok(false),
+        TableScanDesc::Pgrcolumnar(_) => Ok(false),
     }
 }
 
@@ -1474,10 +1900,9 @@ pub fn table_scan_set_morsel_range(
 ) -> PgResult<()> {
     match scan {
         TableScanDesc::Heap(h) => ::heapam::heap_set_block_range(h, g0, g1),
-        TableScanDesc::Pgrcolumnar(c) => c.set_granule_range(g0, g1),
         // The runtime morsel drive never engages here (geometry above
         // reports None); defensive typed refusal.
-        TableScanDesc::Pgrcolumnar2(_) => Err(::pgrc2_am::unsupported("morsel positioning")),
+        TableScanDesc::Pgrcolumnar(_) => Err(::pgrc_am::unsupported("morsel positioning")),
     }
 }
 
@@ -1489,7 +1914,6 @@ pub fn table_scan_end_claim_release(scan: &mut TableScanDesc<'_>) {
     match scan {
         TableScanDesc::Heap(h) => ::heapam::heap_end_claim_release(h),
         TableScanDesc::Pgrcolumnar(_) => {}
-        TableScanDesc::Pgrcolumnar2(_) => {}
     }
 }
 
@@ -1505,7 +1929,6 @@ pub fn table_scan_cursor_park_point(scan: &TableScanDesc<'_>) -> Option<(u64, u6
     match scan {
         TableScanDesc::Heap(h) => ::heapam::heap_cursor_park_point(h),
         TableScanDesc::Pgrcolumnar(_) => None,
-        TableScanDesc::Pgrcolumnar2(_) => None,
     }
 }
 
@@ -1520,7 +1943,6 @@ pub fn table_scan_adopt_midpage_batch(scan: &mut TableScanDesc<'_>) -> Option<(u
     match scan {
         TableScanDesc::Heap(h) => ::heapam::heap_adopt_midpage_batch(h),
         TableScanDesc::Pgrcolumnar(_) => None,
-        TableScanDesc::Pgrcolumnar2(_) => None,
     }
 }
 
@@ -1531,7 +1953,6 @@ pub fn table_scan_holds_claim_pin(scan: &TableScanDesc<'_>) -> bool {
     match scan {
         TableScanDesc::Heap(h) => h.rs_cbuf.is_some(),
         TableScanDesc::Pgrcolumnar(_) => false,
-        TableScanDesc::Pgrcolumnar2(_) => false,
     }
 }
 
@@ -1541,14 +1962,13 @@ pub fn table_scan_holds_claim_pin(scan: &TableScanDesc<'_>) -> bool {
 /// correctness posture. `None` = heap or no columnar part.
 pub fn table_scan_cb_zone_topk_words(
     scan: &TableScanDesc<'_>,
-    col: u16,
-    desc: bool,
-    bound: u64,
+    _col: u16,
+    _desc: bool,
+    _bound: u64,
 ) -> PgResult<Option<(Vec<u64>, Option<u64>)>> {
     match scan {
         TableScanDesc::Heap(_) => Ok(None),
-        TableScanDesc::Pgrcolumnar(c) => c.zone_topk_words(col, desc, bound),
-        TableScanDesc::Pgrcolumnar2(_) => Ok(None),
+        TableScanDesc::Pgrcolumnar(_) => Ok(None),
     }
 }
 
@@ -1564,9 +1984,8 @@ pub fn table_scan_topn_direct_next_granule(
         TableScanDesc::Heap(_) => Err(elog_error(
             "direct top-N granule drive on a non-columnar scan",
         )),
-        TableScanDesc::Pgrcolumnar(c) => c.topn_direct_next_granule(),
-        TableScanDesc::Pgrcolumnar2(_) => Err(elog_error(
-            "direct top-N granule drive on a pgrcolumnar2 scan",
+        TableScanDesc::Pgrcolumnar(_) => Err(elog_error(
+            "direct top-N granule drive on a pgrcolumnar scan",
         )),
     }
 }
@@ -1576,12 +1995,11 @@ pub fn table_scan_topn_direct_next_granule(
 /// column / out of range (the caller fails closed to the staged feed).
 pub fn table_scan_topn_direct_lane<'a>(
     scan: &'a mut TableScanDesc<'_>,
-    col: usize,
+    _col: usize,
 ) -> Option<&'a [::datum::Datum]> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(c) => c.topn_direct_lane(col),
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
     }
 }
 
@@ -1591,8 +2009,7 @@ pub fn table_scan_topn_direct_lane<'a>(
 pub fn table_scan_cb_drive_counters(scan: &TableScanDesc<'_>) -> Option<(u64, u64, u64, u64)> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(c) => Some(c.drive_counters()),
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
     }
 }
 
@@ -1605,16 +2022,7 @@ pub fn table_scan_cb_drive_counters(scan: &TableScanDesc<'_>) -> Option<(u64, u6
 pub fn table_scan_cb_ea_counters(scan: &TableScanDesc<'_>) -> Option<[u64; 7]> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(c) => Some([
-            c.granules_scanned,
-            c.granules_pruned,
-            c.granules_bloom_pruned,
-            c.granules_meta,
-            c.granules_bound_skipped,
-            c.blocks_pruned,
-            c.windows_staged,
-        ]),
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
 
     }
 }
@@ -1623,56 +2031,63 @@ pub fn table_scan_cb_ea_counters(scan: &TableScanDesc<'_>) -> Option<[u64; 7]> {
 pub fn table_scan_nblocks(scan: &TableScanDesc<'_>) -> u32 {
     match scan {
         TableScanDesc::Heap(h) => h.rs_nblocks,
-        TableScanDesc::Pgrcolumnar(c) => c.nblocks(),
-        // pgrcolumnar2 stages no pages; 0 keeps the deform-JIT gate cold.
-        TableScanDesc::Pgrcolumnar2(_) => 0,
+        // pgrcolumnar stages no pages; 0 keeps the deform-JIT gate cold.
+        TableScanDesc::Pgrcolumnar(_) => 0,
     }
 }
 
-/// pgrcolumnar column projection: only these attributes' chunks are decoded.
+/// Columnar column projection: only these attributes' chunks are decoded.
 /// Heap scans always materialize whole tuples — no-op.
 pub fn table_scan_set_needed_attrs(scan: &mut TableScanDesc<'_>, needed: &[bool]) {
     match scan {
         TableScanDesc::Heap(_) => {}
-        TableScanDesc::Pgrcolumnar(c) => c.set_needed_attrs(needed),
-        // Full decode at M3-H; projection arrives with M3-G's implementor.
-        TableScanDesc::Pgrcolumnar2(_) => {}
+        // D259: the row scan decodes only the plan's consumed columns (IX1 L4: a bitmap scan's rows too).
+        TableScanDesc::Pgrcolumnar(c) => match c.bitmap.as_deref_mut() {
+            Some(b) => b.set_needed(needed),
+            None => c.set_needed_attrs(needed),
+        },
+    }
+}
+
+/// ROWMAP2 M0: who reads a pgrcolumnar scan's positions (`tts_tid`); a scan whose need is `None` loads no row map and
+/// leaves its part rows' positions invalid. A scan never told stamps them. Heap scans always have positions — no-op.
+pub fn table_scan_set_tid_need(scan: &mut TableScanDesc<'_>, need: PgrcTidNeed) {
+    match scan {
+        TableScanDesc::Heap(_) => {}
+        TableScanDesc::Pgrcolumnar(c) => c.set_tid_need(need),
     }
 }
 
 /// pgrcolumnar post-qual materialization (pgrcolumnar_prewhere): granule decode
 /// becomes per-column on demand — deform pulls only the columns it fills,
 /// store_slot completes the needed set for surviving rows. Heap no-op.
-pub fn table_scan_set_lazy_decode(scan: &mut TableScanDesc<'_>, on: bool) {
+pub fn table_scan_set_lazy_decode(scan: &mut TableScanDesc<'_>, _on: bool) {
     match scan {
         TableScanDesc::Heap(_) => {}
-        TableScanDesc::Pgrcolumnar(c) => c.set_lazy_decode(on),
-        TableScanDesc::Pgrcolumnar2(_) => {}
+        TableScanDesc::Pgrcolumnar(_) => {}
     }
 }
 
 /// pgrcolumnar zone-map pruning conjuncts (advisory-only; executor still
 /// evaluates the full qual on surviving rows).
 /// RG-altitude meta-answerability census over the scan's PUSHED zone quals
-/// (pgrcolumnar::zone_meta_rg_census doc — the regression qual-zone
+/// (pgrcolumnar::zone_meta_rg_census doc — the GL-SERIALTERM-META qual-zone
 /// helper). None = heap or no columnar part.
 pub fn table_scan_cb_zone_meta_census(
     scan: &TableScanDesc<'_>,
-    need_sums: bool,
+    _need_sums: bool,
 ) -> PgResult<Option<(u64, u64)>> {
     match scan {
         TableScanDesc::Heap(_) => Ok(None),
-        TableScanDesc::Pgrcolumnar(c) => c.zone_meta_rg_census(need_sums),
-        TableScanDesc::Pgrcolumnar2(_) => Ok(None),
+        TableScanDesc::Pgrcolumnar(_) => Ok(None),
     }
 }
 
 pub fn table_scan_push_zone_quals(scan: &mut TableScanDesc<'_>, quals: &[ZoneQual]) {
     match scan {
         TableScanDesc::Heap(_) => {}
+        // ZONEPRUNE: the scan skips a part granule whose zone fails one (advisory: a dropped qual only loses a skip).
         TableScanDesc::Pgrcolumnar(c) => c.push_zone_quals(quals),
-        // Advisory-only: dropping quals can only lose speed, never rows.
-        TableScanDesc::Pgrcolumnar2(_) => {}
     }
 }
 
@@ -1681,14 +2096,13 @@ pub fn table_scan_push_zone_quals(scan: &mut TableScanDesc<'_>, quals: &[ZoneQua
 /// false = refused; the physical claim order stays.
 pub fn table_scan_arm_adaptive_order(
     scan: &mut TableScanDesc<'_>,
-    col: usize,
-    desc: bool,
-    strict: bool,
+    _col: usize,
+    _desc: bool,
+    _strict: bool,
 ) -> PgResult<bool> {
     match scan {
         TableScanDesc::Heap(_) => Ok(false),
-        TableScanDesc::Pgrcolumnar(c) => c.arm_adaptive_order(col, desc, strict),
-        TableScanDesc::Pgrcolumnar2(_) => Ok(false),
+        TableScanDesc::Pgrcolumnar(_) => Ok(false),
     }
 }
 
@@ -1698,18 +2112,16 @@ pub fn table_scan_arm_adaptive_order(
 pub fn table_scan_disarm_adaptive_order(scan: &mut TableScanDesc<'_>) {
     match scan {
         TableScanDesc::Heap(_) => {}
-        TableScanDesc::Pgrcolumnar(c) => c.disarm_adaptive_order(),
-        TableScanDesc::Pgrcolumnar2(_) => {}
+        TableScanDesc::Pgrcolumnar(_) => {}
     }
 }
 
 /// Consumer bound feedback for an armed adaptive scan (top-k heap floor or
 /// running MIN/MAX best); no-op when unarmed.
-pub fn table_scan_update_scan_bound(scan: &mut TableScanDesc<'_>, key: ::datum::Datum) {
+pub fn table_scan_update_scan_bound(scan: &mut TableScanDesc<'_>, _key: ::datum::Datum) {
     match scan {
         TableScanDesc::Heap(_) => {}
-        TableScanDesc::Pgrcolumnar(c) => c.set_adaptive_bound(key),
-        TableScanDesc::Pgrcolumnar2(_) => {}
+        TableScanDesc::Pgrcolumnar(_) => {}
     }
 }
 
@@ -1717,30 +2129,37 @@ pub fn table_scan_update_scan_bound(scan: &mut TableScanDesc<'_>, key: ::datum::
 /// granule zone entry; int-family columns only). None = no zone metadata.
 pub fn table_scan_window_value_minmax(
     scan: &TableScanDesc<'_>,
-    col: usize,
+    _col: usize,
 ) -> Option<(i64, i64)> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(c) => c.staged_window_value_minmax(col),
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
     }
 }
 
-pub use ::pgrcolumnar::CbGranuleMetaStep;
+/// `table_scan_granule_meta_peek` verdict (granule length-stats metadata).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CbGranuleMetaStep {
+    /// Scan exhausted (next_window would return 0).
+    Exhausted,
+    /// Not at a metadata-answerable fresh granule; stage windows normally.
+    NotMeta,
+    /// The upcoming granule, wholly visible, described by footer metadata.
+    Meta { rows: u32 },
+}
 
 /// v7 granule length-stats metadata peek (pgrcolumnar only; see
 /// `CbScanDescData::granule_meta_peek`). Heap scans are never meta.
 pub fn table_scan_granule_meta_peek(
     scan: &mut TableScanDesc<'_>,
-    key_cols: &[u16],
-    len_cols: &[u16],
-    key_mm: &mut [(i64, i64)],
-    len_stats: &mut [(u64, u32, u32)],
+    _key_cols: &[u16],
+    _len_cols: &[u16],
+    _key_mm: &mut [(i64, i64)],
+    _len_stats: &mut [(u64, u32, u32)],
 ) -> PgResult<CbGranuleMetaStep> {
     match scan {
         TableScanDesc::Heap(_) => Ok(CbGranuleMetaStep::NotMeta),
-        TableScanDesc::Pgrcolumnar(c) => c.granule_meta_peek(key_cols, len_cols, key_mm, len_stats),
-        TableScanDesc::Pgrcolumnar2(_) => Ok(CbGranuleMetaStep::NotMeta),
+        TableScanDesc::Pgrcolumnar(_) => Ok(CbGranuleMetaStep::NotMeta),
     }
 }
 
@@ -1748,31 +2167,38 @@ pub fn table_scan_granule_meta_peek(
 pub fn table_scan_granule_meta_consume(scan: &mut TableScanDesc<'_>) {
     match scan {
         TableScanDesc::Heap(_) => unreachable!("granule meta is pgrcolumnar-only"),
-        TableScanDesc::Pgrcolumnar(c) => c.granule_meta_consume(),
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("granule meta is pgrcolumnar-only"),
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("granule meta is pgrcolumnar-only"),
     }
 }
 
-pub use ::pgrcolumnar::CbAggMetaStep;
+/// `table_scan_agg_meta_peek` verdict (footer-stat aggregate metadata).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CbAggMetaStep {
+    /// Scan exhausted (next_window would return 0).
+    Exhausted,
+    /// Not at a metadata-answerable position; stage windows normally.
+    NotMeta,
+    /// The upcoming WHOLE row group, described by footer metadata.
+    MetaRg { rows: u64 },
+    /// The upcoming granule, described by footer metadata.
+    MetaGranule { rows: u32 },
+}
 
 /// Footer-stat aggregate metadata peek (pgrcolumnar only; see
 /// `CbScanDescData::agg_meta_peek`). Heap scans are never meta.
 #[allow(clippy::too_many_arguments)]
 pub fn table_scan_agg_meta_peek(
     scan: &mut TableScanDesc<'_>,
-    mm_cols: &[u16],
-    sum_cols: &[u16],
-    len_cols: &[u16],
-    mm: &mut [(i64, i64)],
-    sums: &mut [i128],
-    lens: &mut [i64],
+    _mm_cols: &[u16],
+    _sum_cols: &[u16],
+    _len_cols: &[u16],
+    _mm: &mut [(i64, i64)],
+    _sums: &mut [i128],
+    _lens: &mut [i64],
 ) -> PgResult<CbAggMetaStep> {
     match scan {
         TableScanDesc::Heap(_) => Ok(CbAggMetaStep::NotMeta),
-        TableScanDesc::Pgrcolumnar(c) => {
-            c.agg_meta_peek(mm_cols, sum_cols, len_cols, mm, sums, lens)
-        }
-        TableScanDesc::Pgrcolumnar2(_) => Ok(CbAggMetaStep::NotMeta),
+        TableScanDesc::Pgrcolumnar(_) => Ok(CbAggMetaStep::NotMeta),
     }
 }
 
@@ -1780,8 +2206,7 @@ pub fn table_scan_agg_meta_peek(
 pub fn table_scan_agg_meta_consume_rg(scan: &mut TableScanDesc<'_>) {
     match scan {
         TableScanDesc::Heap(_) => unreachable!("agg meta is pgrcolumnar-only"),
-        TableScanDesc::Pgrcolumnar(c) => c.agg_meta_consume_rg(),
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("agg meta is pgrcolumnar-only"),
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("agg meta is pgrcolumnar-only"),
     }
 }
 
@@ -1789,45 +2214,52 @@ pub fn table_scan_agg_meta_consume_rg(scan: &mut TableScanDesc<'_>) {
 pub fn table_scan_agg_meta_consume_granule(scan: &mut TableScanDesc<'_>) {
     match scan {
         TableScanDesc::Heap(_) => unreachable!("agg meta is pgrcolumnar-only"),
-        TableScanDesc::Pgrcolumnar(c) => c.agg_meta_consume_granule(),
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("agg meta is pgrcolumnar-only"),
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("agg meta is pgrcolumnar-only"),
     }
 }
 
 /// Metadata COUNT(*) capability (pgrcolumnar: footer row counts per
 /// wholly-visible RG, fail-open per RG otherwise).
-pub fn table_scan_supports_meta_count(scan: &TableScanDesc<'_>) -> bool {
-    matches!(scan, TableScanDesc::Pgrcolumnar(_))
+pub fn table_scan_supports_meta_count(_scan: &TableScanDesc<'_>) -> bool {
+    false
 }
 
 /// Metadata COUNT(*) feed: visible-row count of one row group; 0 = exhausted.
 pub fn table_scan_meta_count_next(scan: &mut TableScanDesc<'_>) -> PgResult<u32> {
     match scan {
-        TableScanDesc::Pgrcolumnar(c) => c.next_meta_count(),
         TableScanDesc::Heap(_) => unreachable!("meta count is pgrcolumnar-only"),
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("meta count is pgrcolumnar-only"),
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("meta count is pgrcolumnar-only"),
     }
 }
 
-pub use ::pgrcolumnar::{MetaAggScan, MetaZeroQual};
+/// An exact metadata answer of `table_scan_meta_agg`: the row count and the
+/// per-column (min, max) / sums.
+pub struct MetaAggScan {
+    pub rows: u64,
+    pub minmax: Vec<(u16, i64, i64)>,
+    pub sums: Vec<(u16, i128)>,
+}
 
-/// Condition-cache cumulative counters (hits, misses, insertions,
-/// evictions) — the lane stats dump's source.
-pub use ::pgrcolumnar::condcache::stats as condcache_stats;
+/// The zero-count metadata qual: the scan qual is EXACTLY one `col <> 0` /
+/// `col = 0` conjunct over an int-family column (`keep_nonzero` = `<>`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetaZeroQual {
+    pub col: u16,
+    pub keep_nonzero: bool,
+}
 
 /// Metadata MIN/MAX/COUNT/SUM answer (pgrcolumnar zone maps + footer row counts
 /// + footer sums; `zq` = the v7 zero-count qual arm); None = the AM has no
 /// exact metadata answer for these columns.
 pub fn table_scan_meta_agg(
     scan: &TableScanDesc<'_>,
-    cols: &[u16],
-    sum_cols: &[u16],
-    zq: Option<MetaZeroQual>,
+    _cols: &[u16],
+    _sum_cols: &[u16],
+    _zq: Option<MetaZeroQual>,
 ) -> PgResult<Option<MetaAggScan>> {
     match scan {
-        TableScanDesc::Pgrcolumnar(c) => c.meta_agg_scan(cols, sum_cols, zq),
         TableScanDesc::Heap(_) => Ok(None),
-        TableScanDesc::Pgrcolumnar2(_) => Ok(None),
+        TableScanDesc::Pgrcolumnar(_) => Ok(None),
     }
 }
 
@@ -1836,44 +2268,40 @@ pub fn table_scan_meta_agg(
 /// its verdict is always Mixed (the staged drive is pgrcolumnar-only anyway).
 pub fn table_scan_staged_granule_verdict(
     scan: &TableScanDesc<'_>,
-    q: &ZoneQual,
+    _q: &ZoneQual,
 ) -> ZoneVerdict {
     match scan {
         TableScanDesc::Heap(_) => ZoneVerdict::Mixed,
-        TableScanDesc::Pgrcolumnar(c) => c.staged_granule_verdict(q),
-        TableScanDesc::Pgrcolumnar2(_) => ZoneVerdict::Mixed,
+        TableScanDesc::Pgrcolumnar(_) => ZoneVerdict::Mixed,
     }
 }
 
 /// Arm the pgrcolumnar condition cache (pgrust.condition_cache) on this scan:
 /// `fp` = the staged lane prefix's canonical fingerprint, `capacity` = the
 /// byte-budget GUC. Heap scans have no granule verdicts — always false.
-pub fn table_scan_condcache_arm(scan: &mut TableScanDesc<'_>, fp: u128, capacity: u64) -> bool {
+pub fn table_scan_condcache_arm(scan: &mut TableScanDesc<'_>, _fp: u128, _capacity: u64) -> bool {
     match scan {
         TableScanDesc::Heap(_) => false,
-        TableScanDesc::Pgrcolumnar(c) => c.condcache_arm(fp, capacity),
-        TableScanDesc::Pgrcolumnar2(_) => false,
+        TableScanDesc::Pgrcolumnar(_) => false,
     }
 }
 
 /// Condition-cache lookup for the currently staged pgrcolumnar window: true =
 /// hit, `sel` now holds the staged prefix's survivor bits and the qual's
 /// decode+eval legs are skipped. false = miss/unarmed (heap: always).
-pub fn table_scan_condcache_lookup(scan: &mut TableScanDesc<'_>, sel: &mut [u64]) -> bool {
+pub fn table_scan_condcache_lookup(scan: &mut TableScanDesc<'_>, _sel: &mut [u64]) -> bool {
     match scan {
         TableScanDesc::Heap(_) => false,
-        TableScanDesc::Pgrcolumnar(c) => c.condcache_lookup(sel),
-        TableScanDesc::Pgrcolumnar2(_) => false,
+        TableScanDesc::Pgrcolumnar(_) => false,
     }
 }
 
 /// Record the currently staged pgrcolumnar window's freshly evaluated survivor
 /// bits into the condition cache. No-op when unarmed or heap.
-pub fn table_scan_condcache_store(scan: &mut TableScanDesc<'_>, sel: &[u64]) {
+pub fn table_scan_condcache_store(scan: &mut TableScanDesc<'_>, _sel: &[u64]) {
     match scan {
         TableScanDesc::Heap(_) => {}
-        TableScanDesc::Pgrcolumnar(c) => c.condcache_store(sel),
-        TableScanDesc::Pgrcolumnar2(_) => {}
+        TableScanDesc::Pgrcolumnar(_) => {}
     }
 }
 
@@ -1882,18 +2310,21 @@ pub fn table_scan_condcache_store(scan: &mut TableScanDesc<'_>, sel: &[u64]) {
 pub fn table_scan_condcache_fold_stats(scan: &mut TableScanDesc<'_>) {
     match scan {
         TableScanDesc::Heap(_) => {}
-        TableScanDesc::Pgrcolumnar(c) => c.condcache_fold_stats(),
-        TableScanDesc::Pgrcolumnar2(_) => {}
+        TableScanDesc::Pgrcolumnar(_) => {}
     }
 }
+
+
+
+/// Condition-cache cumulative counters (hits, misses, insertions,
+/// evictions) — the lane stats dump's source.
 
 /// Page-batch scan feed (upstream batch scan API, CF 6176): 0 = exhausted.
 pub fn table_scan_getnextpagebatch<'mcx>(scan: &mut TableScanDesc<'mcx>) -> PgResult<u32> {
     match scan {
         TableScanDesc::Heap(h) => ::heapam::heap_getnextpagebatch(h),
-        TableScanDesc::Pgrcolumnar(c) => c.next_window(),
-        // Unreachable: supports_pagebatch* is false for pgrcolumnar2.
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("pgrcolumnar2 has no page-batch feed"),
+        // Unreachable: supports_pagebatch* is false for pgrcolumnar.
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("pgrcolumnar has no page-batch feed"),
     }
 }
 
@@ -1916,14 +2347,11 @@ pub fn table_scan_batch_deform_sel<'mcx>(
     plan: &::exectuples::SoaDeformPlan<'_>,
     soa: &mut ::exectuples::SoaBatch<'_>,
     qual_col_only: Option<u16>,
-    sel: Option<&[u64]>,
+    _sel: Option<&[u64]>,
 ) {
     match scan {
         TableScanDesc::Heap(h) => ::heapam::heap_batch_deform_soa(h, plan, soa, qual_col_only),
-        TableScanDesc::Pgrcolumnar(c) => {
-            c.batch_deform(plan.ncols() as usize, soa, qual_col_only, sel)
-        }
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("pgrcolumnar2 has no batch deform"),
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("pgrcolumnar has no batch deform"),
     }
 }
 
@@ -1942,11 +2370,7 @@ pub fn table_scan_batch_deform_cols<'mcx>(
 ) {
     match scan {
         TableScanDesc::Heap(h) => ::heapam::heap_batch_deform_soa_cols(h, plan, soa, cols),
-        TableScanDesc::Pgrcolumnar(c) => {
-            debug_assert!(false, "late-mat narrowed staging arms on heap scans only");
-            c.batch_deform(plan.ncols() as usize, soa, None, None)
-        }
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("pgrcolumnar2 has no batch deform"),
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("pgrcolumnar has no batch deform"),
     }
 }
 
@@ -1969,7 +2393,6 @@ pub fn table_scan_batch_complete_deform<'mcx>(
             ::heapam::heap_batch_complete_deform_soa(h, plan, soa, cols, sel)
         }
         TableScanDesc::Pgrcolumnar(_) => {}
-        TableScanDesc::Pgrcolumnar2(_) => {}
     }
 }
 
@@ -1982,12 +2405,11 @@ pub fn table_scan_batch_complete_deform<'mcx>(
 /// heap arm is unreachable.
 pub fn table_scan_batch_fill_len<'mcx>(
     scan: &mut TableScanDesc<'mcx>,
-    c: u16,
-    chars: bool,
-    soa: &mut ::exectuples::SoaBatch<'_>,
+    _c: u16,
+    _chars: bool,
+    _soa: &mut ::exectuples::SoaBatch<'_>,
 ) {
     match scan {
-        TableScanDesc::Pgrcolumnar(cb) => cb.batch_fill_len_col(c as usize, chars, soa),
         _ => unreachable!("length lanes arm on pgrcolumnar batches only"),
     }
 }
@@ -1999,12 +2421,11 @@ pub fn table_scan_batch_fill_len<'mcx>(
 #[inline]
 pub fn table_scan_batch_dict_codes<'mcx>(
     scan: &TableScanDesc<'mcx>,
-    c: u16,
+    _c: u16,
 ) -> Option<::exectuples::SoaDictLane> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(cb) => cb.staged_codes_lane(c as usize),
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
     }
 }
 
@@ -2016,12 +2437,11 @@ pub fn table_scan_batch_dict_codes<'mcx>(
 #[inline]
 pub fn table_scan_batch_dict_codes_global<'mcx>(
     scan: &mut TableScanDesc<'mcx>,
-    c: u16,
+    _c: u16,
 ) -> Option<::exectuples::SoaDictLane> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(cb) => cb.staged_codes_lane_global(c as usize),
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
     }
 }
 
@@ -2032,20 +2452,18 @@ pub fn table_scan_batch_dict_codes_global<'mcx>(
 pub fn table_scan_batch_rowref_base<'mcx>(scan: &TableScanDesc<'mcx>) -> Option<u64> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(cb) => cb.staged_rowref_base(),
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
     }
 }
 
 pub fn table_scan_batch_deform_col<'mcx>(
     scan: &mut TableScanDesc<'mcx>,
-    c: u16,
-    soa: &mut ::exectuples::SoaBatch<'_>,
+    _c: u16,
+    _soa: &mut ::exectuples::SoaBatch<'_>,
 ) {
     match scan {
         TableScanDesc::Heap(_) => unreachable!("staged deform is pgrcolumnar-only"),
-        TableScanDesc::Pgrcolumnar(cb) => cb.batch_deform_col(c as usize, soa),
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("staged deform is pgrcolumnar-only"),
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("staged deform is pgrcolumnar-only"),
     }
 }
 
@@ -2057,8 +2475,7 @@ pub fn table_scan_batch_stage_varkey<'mcx>(
 ) {
     match scan {
         TableScanDesc::Heap(h) => ::heapam::heap_batch_stage_varkey(h, plan, soa),
-        TableScanDesc::Pgrcolumnar(c) => c.batch_stage_varkey(plan.key() as usize, soa),
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("staged varkey is pgrcolumnar-only"),
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("staged varkey is pgrcolumnar-only"),
     }
 }
 
@@ -2072,8 +2489,7 @@ pub fn table_scan_batch_store_slot<'mcx>(
 ) {
     match scan {
         TableScanDesc::Heap(h) => ::heapam::heap_batch_store_slot(mcx, h, i, slot),
-        TableScanDesc::Pgrcolumnar(c) => c.store_slot(i, slot),
-        TableScanDesc::Pgrcolumnar2(_) => unreachable!("batch store is pgrcolumnar-only"),
+        TableScanDesc::Pgrcolumnar(_) => unreachable!("batch store is pgrcolumnar-only"),
     }
 }
 
@@ -2083,8 +2499,7 @@ pub fn table_scan_batch_store_slot<'mcx>(
 pub fn table_scan_window_ref(scan: &TableScanDesc<'_>) -> Option<(u32, u32)> {
     match scan {
         TableScanDesc::Heap(_) => None,
-        TableScanDesc::Pgrcolumnar(c) => c.window_ref(),
-        TableScanDesc::Pgrcolumnar2(_) => None,
+        TableScanDesc::Pgrcolumnar(_) => None,
     }
 }
 
@@ -2093,20 +2508,20 @@ pub fn table_scan_window_ref(scan: &TableScanDesc<'_>) -> Option<(u32, u32)> {
 /// unsupported AM; the caller must have materialized eagerly at feed time.
 pub fn table_scan_gather_row<'mcx>(
     scan: &mut TableScanDesc<'mcx>,
-    rg: u32,
-    row: u32,
-    slot: &mut SlotData<'mcx>,
+    _rg: u32,
+    _row: u32,
+    _slot: &mut SlotData<'mcx>,
 ) -> bool {
     match scan {
         TableScanDesc::Heap(_) => false,
-        TableScanDesc::Pgrcolumnar(c) => c.gather_row(rg, row, slot),
-        TableScanDesc::Pgrcolumnar2(_) => false,
+        TableScanDesc::Pgrcolumnar(_) => false,
     }
 }
 
 /// Bitmap page-batch feed for the fused drive: stage the next page with
 /// visible tuples (visibility resolved at staging); 0 = bitmap exhausted.
 pub fn table_scan_bitmap_next_pagebatch<'mcx>(
+    mcx: Mcx<'_>,
     scan: &mut TableScanDesc<'mcx>,
     tbm: Option<&tidbitmap::TIDBitmap<'_>>,
     iterator: &mut tidbitmap::TbmIterator,
@@ -2116,10 +2531,18 @@ pub fn table_scan_bitmap_next_pagebatch<'mcx>(
 ) -> PgResult<u32> {
     match scan {
         TableScanDesc::Heap(h) => ::heapam::bitmap::heap_scan_bitmap_next_pagebatch(
-            h, tbm, iterator, recheck, lossy_pages, exact_pages,
+            mcx, h, tbm, iterator, recheck, lossy_pages, exact_pages,
         ),
-        TableScanDesc::Pgrcolumnar(_) => cb_refused("bitmap scans"),
-        TableScanDesc::Pgrcolumnar2(_) => cb2_refused("bitmap scans"),
+        TableScanDesc::Pgrcolumnar(c) => {
+            let source = c.bitmap.as_deref_mut().ok_or_else(|| cb2_refused("bitmap scans"))?;
+            loop {
+                match pgrc_bitmap_next_block(source, tbm, iterator, recheck, lossy_pages, exact_pages)? {
+                    None => return Ok(0),
+                    Some(0) => continue,
+                    Some(n) => return Ok(n),
+                }
+            }
+        }
     }
 }
 
@@ -2130,11 +2553,13 @@ pub fn table_scan_bitmap_batch_store_slot<'mcx>(
     scan: &mut TableScanDesc<'mcx>,
     i: u32,
     slot: &mut SlotData<'mcx>,
-) {
+) -> PgResult<()> {
     match scan {
-        TableScanDesc::Heap(h) => ::heapam::bitmap::heap_scan_bitmap_batch_store(mcx, h, i, slot),
-        TableScanDesc::Pgrcolumnar(_) => cb_refused("bitmap scans"),
-        TableScanDesc::Pgrcolumnar2(_) => cb2_refused("bitmap scans"),
+        TableScanDesc::Heap(h) => {
+            ::heapam::bitmap::heap_scan_bitmap_batch_store(mcx, h, i, slot);
+            Ok(())
+        }
+        TableScanDesc::Pgrcolumnar(c) => c.bitmap.as_deref_mut().ok_or_else(|| cb2_refused("bitmap scans"))?.store(mcx, i, slot),
     }
 }
 
@@ -2156,8 +2581,7 @@ pub fn table_beginscan_tidrange<'mcx>(
             }
             Ok(sscan)
         }
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("TID range scans")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("TID range scans")),
+        TableAm::Pgrcolumnar => Err(::pgrc_am::unsupported("TID range scans")),
     }
 }
 
@@ -2174,8 +2598,7 @@ pub fn table_rescan_tidrange<'mcx>(
             heap::scan_set_tidrange(h, mintid, maxtid);
             Ok(())
         }
-        TableScanDesc::Pgrcolumnar(_) => Err(::pgrcolumnar::unsupported("TID range scans")),
-        TableScanDesc::Pgrcolumnar2(_) => Err(::pgrc2_am::unsupported("TID range scans")),
+        TableScanDesc::Pgrcolumnar(_) => Err(::pgrc_am::unsupported("TID range scans")),
     }
 }
 
@@ -2187,8 +2610,7 @@ pub fn table_scan_getnextslot_tidrange<'mcx>(
 ) -> PgResult<bool> {
     match scan {
         TableScanDesc::Heap(h) => heap::scan_getnextslot_tidrange(mcx, h, direction, slot),
-        TableScanDesc::Pgrcolumnar(_) => Err(::pgrcolumnar::unsupported("TID range scans")),
-        TableScanDesc::Pgrcolumnar2(_) => Err(::pgrc2_am::unsupported("TID range scans")),
+        TableScanDesc::Pgrcolumnar(_) => Err(::pgrc_am::unsupported("TID range scans")),
     }
 }
 
@@ -2217,7 +2639,7 @@ pub fn table_parallelscan_estimate(
 
     let am_sz = match am(rel) {
         TableAm::Heap => heap::parallelscan_estimate(rel),
-        TableAm::Pgrcolumnar | TableAm::Pgrcolumnar2 => {
+        TableAm::Pgrcolumnar => {
             std::mem::size_of::<ParallelBlockTableScanDescData>()
         }
     };
@@ -2233,8 +2655,7 @@ pub fn table_parallelscan_initialize(
 ) -> PgResult<()> {
     let snapshot_off = match am(rel) {
         TableAm::Heap => heap::parallelscan_initialize(rel, &mut target.pscan)?,
-        TableAm::Pgrcolumnar => cb::parallelscan_initialize(rel, &mut target.pscan),
-        TableAm::Pgrcolumnar2 => cb2::parallelscan_initialize(rel, &mut target.pscan),
+        TableAm::Pgrcolumnar => cb2::parallelscan_initialize(rel, &mut target.pscan),
     };
     target.pscan.phs_snapshot_off = snapshot_off;
 
@@ -2259,7 +2680,7 @@ pub fn table_parallelscan_reinitialize(
 ) {
     match am(rel) {
         TableAm::Heap => heap::parallelscan_reinitialize(rel, pscan),
-        TableAm::Pgrcolumnar | TableAm::Pgrcolumnar2 => cb::parallelscan_reinitialize(pscan),
+        TableAm::Pgrcolumnar => columnar_parallelscan_reinitialize(pscan),
     }
 }
 
@@ -2306,17 +2727,9 @@ pub fn table_beginscan_parallel<'mcx>(
             Ok(scan)
         }
         TableAm::Pgrcolumnar => {
-            let mut scan = cb::scan_begin(mcx, relation, snapshot, flags, Some(pscan_ptr))?;
-            match &mut scan {
-                TableScanDesc::Pgrcolumnar(c) => c.rs_temp_snapshot = registered,
-                _ => unreachable!(),
-            }
-            Ok(scan)
-        }
-        TableAm::Pgrcolumnar2 => {
             let mut scan = cb2::scan_begin(mcx, relation, snapshot, flags, Some(pscan_ptr))?;
             match &mut scan {
-                TableScanDesc::Pgrcolumnar2(c) => c.rs_temp_snapshot = registered,
+                TableScanDesc::Pgrcolumnar(c) => c.rs_temp_snapshot = registered,
                 _ => unreachable!(),
             }
             Ok(scan)
@@ -2326,25 +2739,44 @@ pub fn table_beginscan_parallel<'mcx>(
 
 // --- Index scan related functions (tableam.h / tableam.c) ---
 
-pub fn table_index_fetch_begin<'mcx>(rel: &Relation<'mcx>) -> IndexFetchTableData<'mcx> {
+pub fn table_index_fetch_begin<'mcx>(rel: &Relation<'mcx>) -> PgResult<IndexFetchTableData<'mcx>> {
     match am(rel) {
         TableAm::Heap => {
-            IndexFetchTableData::Heap(::heapam_handler::heapam_index_fetch_begin(rel))
+            Ok(IndexFetchTableData::Heap(::heapam_handler::heapam_index_fetch_begin(rel)))
         }
-        TableAm::Pgrcolumnar => cb_refused("index scans"),
-        TableAm::Pgrcolumnar2 => cb2_refused("index scans"),
+        TableAm::Pgrcolumnar => {
+            ensure_pgrc_buffer_hooks();
+            Ok(IndexFetchTableData::Pgrc(Box::new(::pgrc_front::ixfetch::begin(rel))))
+        }
+    }
+}
+
+/// IX1 L0: whether a TID's block number is a page of the relation's main fork, so an index scan may prefetch it and
+/// batch the TIDs of one block (heap); a pgrcolumnar TID names a row ID, not a page.
+pub fn table_index_fetch_reads_pages(scan: &IndexFetchTableData<'_>) -> bool {
+    matches!(scan, IndexFetchTableData::Heap(_))
+}
+
+/// IX1 L0 (choice 5): whether an index-only scan may skip the fetch of `tid` of `rel` (heap: its page is all-visible
+/// in the visibility map, `vm_all_visible`). No pgrcolumnar row is known all-visible: every one is fetched.
+pub fn table_index_fetch_all_visible(rel: &Relation<'_>, tid: &ItemPointerData, vm_all_visible: impl FnOnce(BlockNumber) -> PgResult<bool>) -> PgResult<bool> {
+    match am(rel) {
+        TableAm::Heap => vm_all_visible(ItemPointerGetBlockNumber(tid)),
+        TableAm::Pgrcolumnar => Ok(false),
     }
 }
 
 pub fn table_index_fetch_reset(scan: &mut IndexFetchTableData<'_>) {
     match scan {
         IndexFetchTableData::Heap(h) => ::heapam_handler::heapam_index_fetch_reset(h),
+        IndexFetchTableData::Pgrc(p) => p.reset(),
     }
 }
 
 pub fn table_index_fetch_end(scan: IndexFetchTableData<'_>) {
     match scan {
         IndexFetchTableData::Heap(h) => ::heapam_handler::heapam_index_fetch_end(h),
+        IndexFetchTableData::Pgrc(p) => p.end(),
     }
 }
 
@@ -2366,6 +2798,7 @@ pub fn table_index_fetch_tuple<'mcx>(
         IndexFetchTableData::Heap(h) => ::heapam_handler::heapam_index_fetch_tuple(
             mcx, h, tid, snapshot, slot, call_again, all_dead,
         ),
+        IndexFetchTableData::Pgrc(p) => ::pgrc_front::ixfetch::fetch(mcx, p, tid, snapshot, slot, call_again, all_dead),
     }
 }
 
@@ -2382,6 +2815,8 @@ pub fn table_index_fetch_batch_fill<'mcx>(
         IndexFetchTableData::Heap(h) => {
             ::heapam_handler::heapam_index_fetch_batch_fill(mcx, h, first_tid, rest, snapshot)
         }
+        // never armed: `table_index_fetch_reads_pages` is false
+        IndexFetchTableData::Pgrc(_) => Ok(()),
     }
 }
 
@@ -2395,6 +2830,7 @@ pub fn table_index_fetch_batch_next<'mcx>(
         IndexFetchTableData::Heap(h) => {
             ::heapam_handler::heapam_index_fetch_batch_next(mcx, h, tid, slot)
         }
+        IndexFetchTableData::Pgrc(_) => ::heapam_handler::BatchFetch::Miss,
     }
 }
 
@@ -2408,7 +2844,7 @@ pub fn table_index_fetch_tuple_check<'mcx>(
     let mut call_again = false;
 
     let mut slot = table_slot_create(mcx, rel)?;
-    let mut scan = table_index_fetch_begin(rel);
+    let mut scan = table_index_fetch_begin(rel)?;
     let found = table_index_fetch_tuple(
         mcx,
         &mut scan,
@@ -2432,8 +2868,9 @@ pub fn table_index_delete_tuples<'mcx>(
 ) -> PgResult<TransactionId> {
     match am(rel) {
         TableAm::Heap => heap::index_delete_tuples(mcx, rel, delstate),
-        TableAm::Pgrcolumnar => cb_refused("index scans"),
-        TableAm::Pgrcolumnar2 => cb2_refused("index scans"),
+        // IX1 L3: each TID judged dead to everyone on the newest generation (DV-marked, a committed tombstone below the
+        // horizon, a vacuumable segment row, no home and no bulk load in flight), with its conflict horizon.
+        TableAm::Pgrcolumnar => ::pgrc_front::ixclean::index_delete_tuples(mcx, rel, delstate),
     }
 }
 
@@ -2455,21 +2892,51 @@ pub fn table_tuple_fetch_row_version<'mcx>(
         TableAm::Heap => {
             ::heapam_handler::heapam_fetch_row_version(mcx, rel, tid, snapshot, slot)
         }
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("TID row fetches")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("TID row fetches")),
+        TableAm::Pgrcolumnar => ::pgrc_front::dml::fetch(mcx, rel, tid, snapshot, slot),
+    }
+}
+
+/// TRIGGERS: the stable identity of a pgrcolumnar row at a position its statement minted (`None`: another AM, whose
+/// row positions outlive the statement). A deferrable AFTER row trigger event keeps it to fetch the row at COMMIT.
+pub fn table_tuple_stable_ident<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, tid: &ItemPointerData) -> PgResult<Option<u64>> {
+    match am(rel) {
+        TableAm::Pgrcolumnar => ::pgrc_front::dml::rowident_of(mcx, rel, tid).map(Some),
+        TableAm::Heap => Ok(None),
+    }
+}
+
+/// TRIGGERS: [`table_tuple_fetch_row_version`] under `SnapshotAny` by the identity [`table_tuple_stable_ident`]
+/// returned; `false`: no such row.
+pub fn table_tuple_fetch_stable_ident<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>, ident: u64, slot: &mut SlotData<'mcx>) -> PgResult<bool> {
+    match am(rel) {
+        TableAm::Pgrcolumnar => ::pgrc_front::fetch::fetch_rowident(mcx, rel, ident, slot),
+        TableAm::Heap => Err(elog_error("table_tuple_fetch_stable_ident: the table access method has no stable row identities")),
+    }
+}
+
+/// IX1 L0 (OC-C c, main 2026-10-06): the position of the row `scan` last returned, for a caller whose slot carries
+/// none (`WHERE CURRENT OF` over a pgrcolumnar scan that stamps no positions, ROWMAP2's `TidNeed::None`): that one
+/// row's ID resolved through its part's map. `None`: heap (its slots always carry one), or no such row.
+pub fn table_scan_current_tid(scan: &TableScanDesc<'_>) -> PgResult<Option<ItemPointerData>> {
+    match scan {
+        TableScanDesc::Heap(_) => Ok(None),
+        TableScanDesc::Pgrcolumnar(c) => Ok(c.current_rowid()?.map(|id| {
+            let (block, off) = ::pgrc_format::rowid::tid_of(id);
+            ItemPointerData::new(block, off)
+        })),
     }
 }
 
 pub fn table_tuple_tid_valid(scan: &mut TableScanDesc<'_>, tid: &ItemPointerData) -> bool {
     match scan {
         TableScanDesc::Heap(h) => ::heapam_handler::heapam_tuple_tid_valid(h, tid),
-        TableScanDesc::Pgrcolumnar(_) => false,
-        TableScanDesc::Pgrcolumnar2(_) => false,
+        // IX1 L0: a TID that names a row ID the counter reserved before the scan began
+        TableScanDesc::Pgrcolumnar(c) => c.tid_valid(ItemPointerGetBlockNumberNoCheck(tid), ItemPointerGetOffsetNumberNoCheck(tid)),
     }
 }
 
 pub fn table_tuple_get_latest_tid<'mcx>(
-    _mcx: Mcx<'mcx>,
+    mcx: Mcx<'mcx>,
     scan: &mut TableScanDesc<'mcx>,
     tid: &mut ItemPointerData,
 ) -> PgResult<()> {
@@ -2488,14 +2955,18 @@ pub fn table_tuple_get_latest_tid<'mcx>(
             PgError::error(format!(
                 "tid ({blk}, {off}) is not valid for relation \"{relname}\""
             ))
-            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
+            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
+            .with_location("tableam.c", 259, "table_tuple_get_latest_tid"),
         ));
     }
 
     match scan {
         TableScanDesc::Heap(h) => ::heapam_handler::heapam_tuple_get_latest_tid(h, tid),
-        TableScanDesc::Pgrcolumnar(_) => Err(::pgrcolumnar::unsupported("TID row fetches")),
-        TableScanDesc::Pgrcolumnar2(_) => Err(::pgrc2_am::unsupported("TID row fetches")),
+        // IX1 L0: along the row's update chain (its tombstones' successors), the newest version the scan's snapshot sees
+        TableScanDesc::Pgrcolumnar(c) => {
+            let snap = c.rs_base.rs_snapshot.clone();
+            ::pgrc_front::ixfetch::latest_tid(mcx, &c.rs_base.rs_rd, &snap, tid)
+        }
     }
 }
 
@@ -2506,58 +2977,69 @@ pub fn table_tuple_satisfies_snapshot<'mcx>(
 ) -> PgResult<bool> {
     match am(rel) {
         TableAm::Heap => ::heapam_handler::heapam_tuple_satisfies_snapshot(rel, slot, snapshot),
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("tuple visibility rechecks")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("tuple visibility rechecks")),
+        TableAm::Pgrcolumnar => Err(::pgrc_am::unsupported("tuple visibility rechecks")),
     }
 }
 
 // --- Manipulations of physical tuples (tableam.h wrappers) ---
 
 thread_local! {
-    static CB_EOXACT_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static CB2_BUFFER_HOOKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-fn pgrcolumnar_eoxact_callback(
-    event: ::types_core::xact::XactEvent,
-    _arg: ::datum::Datum,
-) -> PgResult<()> {
-    use ::types_core::xact::XactEvent::*;
-    match event {
-        XACT_EVENT_COMMIT | XACT_EVENT_PARALLEL_COMMIT | XACT_EVENT_ABORT
-        | XACT_EVENT_PARALLEL_ABORT | XACT_EVENT_PREPARE => ::pgrcolumnar::at_eoxact(),
-        XACT_EVENT_PRE_COMMIT | XACT_EVENT_PARALLEL_PRE_COMMIT | XACT_EVENT_PRE_PREPARE => {}
-    }
-    Ok(())
-}
-
-/// The pgrcolumnar ingest writer is buffered in backend TLS across the
-/// statement (multi_insert opens it, finish_bulk_insert publishes it). A
-/// statement that errors mid-ingest unwinds past its finish, so transaction
-/// end must own the drop of whatever is left — C parity with copyfrom.c,
-/// whose COPY state dies with the statement's memory contexts during abort
-/// processing, never at backend exit. Registered once per backend thread on
-/// the first pgrcolumnar insert (the xact callback registry is per-thread; the
-/// postgres_fdw connection callback is the precedent).
-fn ensure_pgrcolumnar_eoxact_registered() {
-    CB_EOXACT_REGISTERED.with(|c| {
+/// The pgrcolumnar statement buffer (`pgrc_front::xact`) dies with the (sub)transaction that filled it: an errored
+/// statement's rows never reach the next statement. Rows still buffered at commit missed their
+/// `table_finish_bulk_insert` and refuse the commit, like the bulk lane's writers. Row caches empty here too (D4674).
+fn ensure_pgrc_buffer_hooks() {
+    CB2_BUFFER_HOOKS.with(|c| {
         if !c.get() {
-            xact::RegisterXactCallback(pgrcolumnar_eoxact_callback, ::datum::Datum::null());
-            xact::RegisterSubXactCallback(pgrcolumnar_subxact_callback, ::datum::Datum::null());
+            xact::RegisterXactCallback(pgrc_buffer_xact_callback, ::datum::Datum::null());
+            xact::RegisterSubXactCallback(pgrc_buffer_subxact_callback, ::datum::Datum::null());
             c.set(true);
         }
     });
 }
 
-fn pgrcolumnar_subxact_callback(
+fn pgrc_buffer_xact_callback(event: ::types_core::xact::XactEvent, _arg: ::datum::Datum) -> PgResult<()> {
+    use ::types_core::xact::XactEvent::*;
+    match event {
+        XACT_EVENT_PRE_COMMIT | XACT_EVENT_PARALLEL_PRE_COMMIT | XACT_EVENT_PRE_PREPARE => match ::pgrc_front::xact::pending() {
+            Some(relid) => Err(Box::new(
+                PgError::error(format!("pgrcolumnar: buffered rows for relation {relid} reached commit without table_finish_bulk_insert"))
+                    .with_sqlstate(::types_error::ERRCODE_INTERNAL_ERROR),
+            )),
+            None => match ::pgrc_front::xact::pending_indexed() {
+                Some(relid) => Err(Box::new(
+                    PgError::error(format!("pgrcolumnar: rows of relation {relid} reached commit without their index entries"))
+                        .with_sqlstate(::types_error::ERRCODE_INTERNAL_ERROR),
+                )),
+                None => ::pgrc_front::logical::at_xact_event(event),
+            },
+        },
+        _ => {
+            ::pgrc_front::xact::discard(::types_core::xact::TopSubTransactionId);
+            ::pgrc_am::rowcache::disarm_all();
+            ::pgrc_front::logical::at_xact_event(event)
+        }
+    }
+}
+
+fn pgrc_buffer_subxact_callback(
     event: ::types_core::xact::SubXactEvent,
-    my_subid: ::types_core::SubTransactionId,
-    parent_subid: ::types_core::SubTransactionId,
+    my: ::types_core::xact::SubTransactionId,
+    parent: ::types_core::xact::SubTransactionId,
     _arg: ::datum::Datum,
 ) -> PgResult<()> {
     use ::types_core::xact::SubXactEvent::*;
     match event {
-        SUBXACT_EVENT_ABORT_SUB => ::pgrcolumnar::at_subxact_abort(my_subid),
-        SUBXACT_EVENT_COMMIT_SUB => ::pgrcolumnar::at_subxact_commit(my_subid, parent_subid),
+        SUBXACT_EVENT_ABORT_SUB => {
+            ::pgrc_front::xact::discard(my);
+            ::pgrc_front::logical::at_subxact_abort(my);
+        }
+        SUBXACT_EVENT_COMMIT_SUB => {
+            ::pgrc_front::xact::reparent(my, parent);
+            ::pgrc_front::logical::at_subxact_commit(my, parent);
+        }
         SUBXACT_EVENT_START_SUB | SUBXACT_EVENT_PRE_COMMIT_SUB => {}
     }
     Ok(())
@@ -2573,16 +3055,7 @@ pub fn table_tuple_insert<'mcx>(
 ) -> PgResult<()> {
     match am(rel) {
         TableAm::Heap => heap::tuple_insert(mcx, rel, slot, cid, options, bistate),
-        TableAm::Pgrcolumnar => {
-            let _ = (options, bistate);
-            ensure_pgrcolumnar_eoxact_registered();
-            exectuples::exec_materialize_slot(slot, mcx)?;
-            ::pgrcolumnar::tuple_insert(rel, slot, cid)
-        }
-        TableAm::Pgrcolumnar2 => {
-            let _ = (cid, options, bistate);
-            cb2::tuple_insert(mcx, rel, slot)
-        }
+        TableAm::Pgrcolumnar => cb2::insert(mcx, rel, slot, cid, options, bistate.is_some()),
     }
 }
 
@@ -2600,8 +3073,7 @@ pub fn table_tuple_insert_speculative<'mcx>(
         TableAm::Heap => {
             heap::tuple_insert_speculative(mcx, rel, slot, cid, options, bistate, spec_token)
         }
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("INSERT ... ON CONFLICT")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("INSERT ... ON CONFLICT")),
+        TableAm::Pgrcolumnar => Err(::pgrc_am::unsupported("INSERT ... ON CONFLICT")),
     }
 }
 
@@ -2614,13 +3086,12 @@ pub fn table_tuple_complete_speculative<'mcx>(
 ) -> PgResult<()> {
     match am(rel) {
         TableAm::Heap => heap::tuple_complete_speculative(mcx, rel, slot, spec_token, succeeded),
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("INSERT ... ON CONFLICT")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("INSERT ... ON CONFLICT")),
+        TableAm::Pgrcolumnar => Err(::pgrc_am::unsupported("INSERT ... ON CONFLICT")),
     }
 }
 
 /// Caller contract for the buffering AMs (the F-1 census, M5e scout §1):
-/// on a pgrcolumnar / pgrcolumnar2 relation the inserted rows BUFFER in the
+/// on a pgrcolumnar / pgrcolumnar relation the inserted rows BUFFER in the
 /// per-statement writer and are only published by
 /// [`table_finish_bulk_insert`]; anything still buffered at transaction end
 /// is unconditionally purged (the eoxact abandonment law). Every caller
@@ -2640,14 +3111,9 @@ pub fn table_multi_insert<'mcx>(
     match am(rel) {
         TableAm::Heap => heap::multi_insert(mcx, rel, slots, cid, options, bistate),
         TableAm::Pgrcolumnar => {
-            let _ = (mcx, options, bistate);
-            ensure_pgrcolumnar_eoxact_registered();
-            ::pgrcolumnar::multi_insert(rel, slots, cid)
-        }
-        TableAm::Pgrcolumnar2 => {
-            let _ = (cid, options, bistate);
+            let bistate = bistate.is_some();
             for slot in slots.iter_mut() {
-                cb2::tuple_insert(mcx, rel, slot)?;
+                cb2::insert(mcx, rel, slot, cid, options, bistate)?;
             }
             Ok(())
         }
@@ -2659,8 +3125,23 @@ pub fn table_multi_insert<'mcx>(
 pub fn table_finish_bulk_insert(rel: &Relation<'_>, _options: i32) -> PgResult<()> {
     match am(rel) {
         TableAm::Heap => Ok(()),
-        TableAm::Pgrcolumnar => ::pgrcolumnar::finish_bulk_insert(rel),
-        TableAm::Pgrcolumnar2 => ::pgrc2_am::ingest::finish_bulk(rel),
+        TableAm::Pgrcolumnar => {
+            cb2::flush(rel)?;
+            // COMPACTP item 4: the L0 cap's wait, before the publish and within the statement's budget
+            if ::pgrc_am::ingest::bulk_open(rel) {
+                ::pgrc_front::route::l0_backpressure(rel)?;
+            }
+            ::pgrc_front::route::statement_end();
+            ::pgrc_front::logical::flush(rel)?;
+            // AUTOSTATS: the bulk lane's rows count as the parent's inserts once published
+            let published = ::pgrc_am::ingest::finish_bulk(rel)?;
+            ::pgrc_front::stats::inserted(rel, published);
+            // COMPACTP item 1: the part-count trigger
+            if published > 0 {
+                ::pgrc_front::compact::bulk_published(rel);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -2688,8 +3169,7 @@ pub fn table_tuple_delete<'mcx>(
             tmfd,
             changingPart,
         ),
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("DELETE")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("DELETE")),
+        TableAm::Pgrcolumnar => ::pgrc_front::dml::delete(mcx, rel, tid, cid, snapshot, wait, tmfd, changingPart),
     }
 }
 
@@ -2721,8 +3201,11 @@ pub fn table_tuple_update<'mcx>(
             lockmode,
             update_indexes,
         ),
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("UPDATE")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("UPDATE")),
+        TableAm::Pgrcolumnar => {
+            // IX1 L2: the new version has a new ID, so every index takes an entry for it
+            *update_indexes = TU_UpdateIndexes::TU_All;
+            ::pgrc_front::dml::update(mcx, rel, otid, slot, cid, snapshot, wait, tmfd, lockmode)
+        }
     }
 }
 
@@ -2752,8 +3235,7 @@ pub fn table_tuple_lock<'mcx>(
             flags,
             tmfd,
         ),
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("row locking")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("row locking")),
+        TableAm::Pgrcolumnar => ::pgrc_front::dml::lock(mcx, rel, tid, snapshot, slot, cid, mode, wait_policy, flags, tmfd),
     }
 }
 
@@ -2767,84 +3249,50 @@ pub fn table_relation_set_new_filelocator(
     match am(rel) {
         // Storage create/reset is AM-independent (main fork file); pgrcolumnar
         // reuses the heap arm — an empty file is a valid empty part.
-        TableAm::Heap | TableAm::Pgrcolumnar => {
+        TableAm::Heap => {
             heap::relation_set_new_filelocator(rel, newrlocator, relpersistence)
         }
-        // pgrcolumnar2: the (empty) main fork rides the heap arm; the O-7
-        // table DIRECTORY under the OLD locator is scheduled for
-        // delete-at-commit (TRUNCATE / SET AM locator swap — the new
-        // locator's directory is created lazily at first ingest).
-        TableAm::Pgrcolumnar2 => {
-            let old_dir = ::pgrc2_am::dirpath::table_dir_path(rel.rd_locator.get(), rel.rd_backend);
+        // pgrcolumnar: the (empty) main fork rides the heap arm and the table directory is
+        // created beside it, logged like the fork (a temp relation logs neither). The old
+        // locator's directory goes with its fork (catalog_storage).
+        TableAm::Pgrcolumnar => {
             let ret = heap::relation_set_new_filelocator(rel, newrlocator, relpersistence)?;
-            if ::pgrc2_am::dirpath::dir_exists(&old_dir)? {
-                ::pgrc2_am::session::schedule_dir_delete_at_commit(old_dir);
+            ::pgrc_am::dirpath::create_table_dir(*newrlocator, rel.rd_backend)?;
+            if relpersistence as u8 != ::types_core::catalog::RELPERSISTENCE_TEMP {
+                ::pgrc_wal::insert::log_dir_create(::pgrc_wal::dir_loc(*newrlocator))?;
             }
-            ::pgrc2_am::inval::invalidate_relid(rel.rd_id);
+            ::pgrc_am::inval::invalidate_relid(rel.rd_id);
             Ok(ret)
         }
     }
 }
 
-/// The pgrcolumnar2 O-7 table directory a DROP of `rel` must schedule for
-/// delete-at-commit, or `None` for any AM whose data lives entirely in the
-/// smgr forks. Split out (and free of I/O) so the DROP wiring is unit
-/// testable without touching smgr/xact state.
-pub(crate) fn pgrc2_drop_dir(rel: &Relation<'_>) -> Option<String> {
-    match TableAm::of(rel) {
-        Some(TableAm::Pgrcolumnar2) => Some(::pgrc2_am::dirpath::table_dir_path(
-            rel.rd_locator.get(),
-            rel.rd_backend,
-        )),
-        _ => None,
-    }
-}
-
-/// Drop the relation's physical storage at transaction commit.
-///
-/// C's `heap_drop_with_catalog` calls `RelationDropStorage` directly because
-/// every C table AM keeps its data in the smgr forks, which that call
-/// schedules for delete-at-commit. pgrcolumnar2 instead stores all table data
-/// in a per-table O-7 directory (`pgrc2_<relfilenumber>`, a sibling of the
-/// main-fork path), so a DROP of a columnar relation must ALSO schedule that
-/// directory for removal — using the same transactional discipline as the
-/// TRUNCATE / SET ACCESS METHOD locator-swap arm of
-/// [`table_relation_set_new_filelocator`]: unlink once the dropping
-/// transaction commits, cancel on abort. Without this the directory (sealed
-/// parts + committed manifest chain) is orphaned forever and, after
-/// relfilenumber reuse, resurrectable by a new relation.
+/// Drop the relation's physical storage at transaction commit (`heap_drop_with_catalog`'s
+/// `RelationDropStorage`); a pgrcolumnar directory is removed with the main fork.
 pub fn table_relation_drop_storage(rel: &Relation<'_>) -> PgResult<()> {
-    // AM-independent: schedule the main-fork smgr unlink at commit.
-    catalog_storage::RelationDropStorage(rel)?;
-    if let Some(dir) = pgrc2_drop_dir(rel) {
-        // A columnar table that never ingested has no directory yet; only
-        // schedule one that actually exists (the SET-AM arm's precedent).
-        if ::pgrc2_am::dirpath::dir_exists(&dir)? {
-            ::pgrc2_am::session::schedule_dir_delete_at_commit(dir);
-        }
-    }
-    Ok(())
+    catalog_storage::RelationDropStorage(rel)
 }
 
 pub fn table_relation_copy_data(rel: &Relation<'_>, newrlocator: &RelFileLocator) -> PgResult<()> {
     match am(rel) {
         TableAm::Heap => heap::relation_copy_data(rel, newrlocator),
-        TableAm::Pgrcolumnar => Err(::pgrcolumnar::unsupported("CLUSTER / rewrites")),
-        TableAm::Pgrcolumnar2 => Err(::pgrc2_am::unsupported("CLUSTER / rewrites")),
+        TableAm::Pgrcolumnar => Err(::pgrc_am::unsupported("CLUSTER / rewrites")),
     }
 }
 
 pub fn table_relation_nontransactional_truncate(rel: &Relation<'_>) -> PgResult<()> {
     match am(rel) {
-        TableAm::Heap | TableAm::Pgrcolumnar => heap::relation_nontransactional_truncate(rel),
-        // pgrcolumnar2: truncate the main fork (heap arm keeps the smgr
-        // bookkeeping honest) AND unlink every file in the O-7 directory
-        // (callers guarantee safety — the heap_truncate_one_rel contract).
-        TableAm::Pgrcolumnar2 => {
+        TableAm::Heap => heap::relation_nontransactional_truncate(rel),
+        // pgrcolumnar: truncate the main fork and empty the table directory, logged like
+        // `RelationTruncate` (callers guarantee safety — the heap_truncate_one_rel contract).
+        TableAm::Pgrcolumnar => {
             heap::relation_nontransactional_truncate(rel)?;
-            let dir = ::pgrc2_am::dirpath::table_dir_path(rel.rd_locator.get(), rel.rd_backend);
-            ::pgrc2_am::dirpath::remove_dir_contents(&dir)?;
-            ::pgrc2_am::inval::invalidate_relid(rel.rd_id);
+            let locator = rel.rd_locator.get();
+            if ::pgrc_wal::insert::relation_needs_wal(rel) {
+                ::pgrc_wal::insert::log_truncate(::pgrc_wal::dir_loc(locator))?;
+            }
+            ::pgrc_am::dirpath::truncate_table_dir(locator, rel.rd_backend)?;
+            ::pgrc_am::inval::invalidate_relid(rel.rd_id);
             Ok(())
         }
     }
@@ -2853,22 +3301,22 @@ pub fn table_relation_nontransactional_truncate(rel: &Relation<'_>) -> PgResult<
 pub fn table_relation_needs_toast_table(rel: &Relation<'_>) -> bool {
     match am(rel) {
         TableAm::Heap => heap::relation_needs_toast_table(rel),
-        TableAm::Pgrcolumnar | TableAm::Pgrcolumnar2 => false,
+        TableAm::Pgrcolumnar => false,
     }
 }
 
 pub fn table_relation_toast_am(rel: &Relation<'_>) -> ::types_core::Oid {
     match am(rel) {
         TableAm::Heap => heap::relation_toast_am(rel),
-        TableAm::Pgrcolumnar | TableAm::Pgrcolumnar2 => 0,
+        TableAm::Pgrcolumnar => 0,
     }
 }
 
 pub fn table_relation_size(rel: &Relation<'_>, forkNumber: ForkNumber) -> PgResult<u64> {
     match am(rel) {
-        // pgrcolumnar2's main fork is an empty file: relation_size 0 keeps
+        // pgrcolumnar's main fork is an empty file: relation_size 0 keeps
         // the planner honest about pages (row counts come from ANALYZE).
-        TableAm::Heap | TableAm::Pgrcolumnar | TableAm::Pgrcolumnar2 => {
+        TableAm::Heap | TableAm::Pgrcolumnar => {
             heap::relation_size(rel, forkNumber)
         }
     }
@@ -2883,8 +3331,7 @@ pub fn table_scan_analyze_next_block<'mcx>(
 ) -> PgResult<bool> {
     match scan {
         TableScanDesc::Heap(h) => heap::scan_analyze_next_block(mcx, h, next_buffer),
-        TableScanDesc::Pgrcolumnar(_) => Err(::pgrcolumnar::unsupported("ANALYZE")),
-        TableScanDesc::Pgrcolumnar2(_) => Err(::pgrc2_am::unsupported("ANALYZE")),
+        TableScanDesc::Pgrcolumnar(_) => Err(::pgrc_am::unsupported("ANALYZE")),
     }
 }
 
@@ -2900,8 +3347,7 @@ pub fn table_scan_analyze_next_tuple<'mcx>(
         TableScanDesc::Heap(h) => {
             heap::scan_analyze_next_tuple(mcx, h, oldest_xmin, liverows, deadrows, slot)
         }
-        TableScanDesc::Pgrcolumnar(_) => Err(::pgrcolumnar::unsupported("ANALYZE")),
-        TableScanDesc::Pgrcolumnar2(_) => Err(::pgrc2_am::unsupported("ANALYZE")),
+        TableScanDesc::Pgrcolumnar(_) => Err(::pgrc_am::unsupported("ANALYZE")),
     }
 }
 
@@ -2922,8 +3368,18 @@ pub fn table_scan_bitmap_next_tuple<'mcx>(
         TableScanDesc::Heap(h) => {
             heap::scan_bitmap_next_tuple(mcx, h, tbm, iterator, slot, recheck, lossy_pages, exact_pages)
         }
-        TableScanDesc::Pgrcolumnar(_) => cb_refused("bitmap scans"),
-        TableScanDesc::Pgrcolumnar2(_) => cb2_refused("bitmap scans"),
+        // IX1 L4: the staged page's next row, else the next page's
+        TableScanDesc::Pgrcolumnar(c) => {
+            let source = c.bitmap.as_deref_mut().ok_or_else(|| cb2_refused("bitmap scans"))?;
+            loop {
+                if source.next(mcx, slot)? {
+                    return Ok(true);
+                }
+                if pgrc_bitmap_next_block(source, tbm, iterator, recheck, lossy_pages, exact_pages)?.is_none() {
+                    return Ok(false);
+                }
+            }
+        }
     }
 }
 
@@ -2940,8 +3396,7 @@ pub fn table_scan_sample_next_block<'mcx>(
     }
     match scan {
         TableScanDesc::Heap(h) => heap::scan_sample_next_block(mcx, h, scanstate, donetuples),
-        TableScanDesc::Pgrcolumnar(_) => Err(::pgrcolumnar::unsupported("TABLESAMPLE")),
-        TableScanDesc::Pgrcolumnar2(_) => Err(::pgrc2_am::unsupported("TABLESAMPLE")),
+        TableScanDesc::Pgrcolumnar(c) => c.sample_next_block(scanstate, donetuples),
     }
 }
 
@@ -2961,8 +3416,7 @@ pub fn table_scan_sample_next_tuple<'mcx>(
         TableScanDesc::Heap(h) => {
             heap::scan_sample_next_tuple(mcx, h, scanstate, donetuples, slot)
         }
-        TableScanDesc::Pgrcolumnar(_) => Err(::pgrcolumnar::unsupported("TABLESAMPLE")),
-        TableScanDesc::Pgrcolumnar2(_) => Err(::pgrc2_am::unsupported("TABLESAMPLE")),
+        TableScanDesc::Pgrcolumnar(c) => c.sample_next_tuple(mcx, scanstate, donetuples, slot),
     }
 }
 
@@ -3114,30 +3568,16 @@ pub fn table_relation_estimate_size(
     tuples: &mut f64,
     allvisfrac: &mut f64,
 ) -> PgResult<()> {
-    // pgrcolumnar: heap density math against the compressed body underestimates
-    // rows ~5x; tuples = footer row count (pgrcolumnar-impl.md §7.2). allvisfrac
-    // 0.0: no visibility map, and it only feeds index-only-scan costing,
-    // which pgrcolumnar refuses. A footerless (never-loaded) table falls through
-    // to C's never-analyzed convention below.
-    if am(rel) == TableAm::Pgrcolumnar {
-        if let Some(nrows) = ::pgrcolumnar::footer_rows(rel)? {
-            *pages = relation_nblocks(rel)?;
-            *tuples = nrows as f64;
-            *allvisfrac = 0.0;
-            return Ok(());
-        }
-    }
-    // pgrcolumnar2 (WW-2): the main fork is a deliberately EMPTY smgr file
+    // pgrcolumnar (WW-2): the main fork is a deliberately EMPTY smgr file
     // (the O-7 directory lifecycle), so the heap math below sized every
-    // pgrc2 rel at 0 pages / 0 tuples — plan-time tuples were structurally
+    // pgrc rel at 0 pages / 0 tuples — plan-time tuples were structurally
     // zero, analyzed or not (curpages == 0 short-circuits before reltuples
     // is consulted). tuples/pages come from the effective manifest's part
-    // records (rows exact, pages = on-disk part bytes at BLCKSZ grain, the
-    // v1-arm convention above at directory grain). allvisfrac 0.0: no
+    // records (rows exact, pages = on-disk part bytes at BLCKSZ grain). allvisfrac 0.0: no
     // visibility map, index-only scans refuse. A never-published table
     // falls through to C's never-analyzed convention below.
-    if am(rel) == TableAm::Pgrcolumnar2 {
-        if let Some((nrows, nbytes)) = ::pgrc2_am::footer::footer_size(rel)? {
+    if am(rel) == TableAm::Pgrcolumnar {
+        if let Some((nrows, nbytes)) = ::pgrc_am::footer::footer_size(rel)? {
             *pages = nbytes.div_ceil(::types_core::BLCKSZ as u64) as BlockNumber;
             *tuples = nrows as f64;
             *allvisfrac = 0.0;
@@ -3265,5 +3705,5 @@ fn relation_nblocks(rel: &Relation<'_>) -> PgResult<BlockNumber> {
 }
 
 fn nbuffers() -> PgResult<i32> {
-    Ok(init_small::globals::NBuffers())
+    Ok(bufmgr_seams::active_buffers_or(init_small::globals::NBuffers()))
 }

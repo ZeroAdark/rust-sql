@@ -1,0 +1,129 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2b s1v s2sq s1c s2seq s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE wi SET v = v + 100 WHERE id = 3;
+step s2sq: SELECT v + 1 AS w FROM (SELECT id, v FROM wi WHERE grp = 0 AND CASE WHEN v > 0 THEN true ELSE (SELECT nextval('wisq') > 0) END FOR UPDATE) s ORDER BY w; <waiting ...>
+step s1c: COMMIT;
+step s2sq: <... completed>
+  w
+---
+  7
+ 10
+ 13
+104
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM wisq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1v s2squ s1c s2seq s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE wi SET v = v + 100 WHERE id = 3;
+step s2squ: SELECT v + 1 AS w FROM (SELECT id, v FROM wi WHERE grp = 0 AND v > (SELECT nextval('wisq'))::int - 1000 FOR UPDATE) s ORDER BY w; <waiting ...>
+step s1c: COMMIT;
+step s2squ: <... completed>
+  w
+---
+  7
+ 10
+ 13
+104
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM wisq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1v s2cu s1c s2seq s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE wi SET v = v + 100 WHERE id = 3;
+step s2cu: WITH c AS (SELECT id, v FROM wi WHERE grp = 0 AND v > (SELECT nextval('wisq'))::int - 1000 FOR UPDATE) SELECT * FROM c ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2cu: <... completed>
+id|  v
+--+---
+ 3|103
+ 6|  6
+ 9|  9
+12| 12
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM wisq;
+last_value|is_called
+----------+---------
+         2|t        
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1v s2cc s1c s2seq s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE wi SET v = v + 100 WHERE id = 3;
+step s2cc: WITH c1 AS (SELECT nextval('wisq')::int AS n), c2 AS (SELECT id, v FROM wi WHERE grp = 0 AND v > (SELECT n FROM c1) - 1000 FOR UPDATE) SELECT * FROM c2 ORDER BY id; <waiting ...>
+step s1c: COMMIT;
+step s2cc: <... completed>
+id|  v
+--+---
+ 3|103
+ 6|  6
+ 9|  9
+12| 12
+(4 rows)
+
+step s2seq: SELECT last_value, is_called FROM wisq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1v s2ca s1c s2seq s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE wi SET v = v + 100 WHERE id = 3;
+step s2ca: WITH c AS (SELECT id, v FROM wi WHERE grp = 0 AND CASE WHEN v > 0 THEN true ELSE (SELECT nextval('wisq') > 0) END FOR UPDATE) SELECT count(*), sum(v) FROM c; <waiting ...>
+step s1c: COMMIT;
+step s2ca: <... completed>
+count|sum
+-----+---
+    4|130
+(1 row)
+
+step s2seq: SELECT last_value, is_called FROM wisq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s2b s1v s2lim s1c s2seq s2c
+step s2b: BEGIN ISOLATION LEVEL READ COMMITTED;
+step s1v: UPDATE wi SET v = v + 100 WHERE id = 3;
+step s2lim: SELECT id, v FROM wi WHERE grp = 0 ORDER BY id LIMIT (SELECT nextval('wisq'))::int + 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2lim: <... completed>
+id|  v
+--+---
+ 3|103
+ 6|  6
+ 9|  9
+(3 rows)
+
+step s2seq: SELECT last_value, is_called FROM wisq;
+last_value|is_called
+----------+---------
+         1|t        
+(1 row)
+
+step s2c: COMMIT;

@@ -11,7 +11,7 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, Ordering::Relaxed};
 use std::sync::OnceLock;
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use init_small::globals as g;
 use transam_xlog::{
     IsTLHistoryFileName, StatusFilePath, XLogArchivingActive, MAX_XFN_CHARS, MIN_XFN_CHARS,
@@ -25,6 +25,7 @@ use types_error::{
 use types_startup::StartupData;
 use types_storage::waiteventset::{WL_LATCH_SET, WL_POSTMASTER_DEATH, WL_TIMEOUT};
 
+mod pgrc;
 #[cfg(test)]
 mod tests;
 
@@ -104,7 +105,10 @@ pub fn PgArchShmemResetAfterCrash() {
 static LAST_PGARCH_START_TIME: AtomicI64 = AtomicI64::new(0);
 
 pub fn PgArchCanRestart() -> bool {
-    let curtime = time_now();
+    can_restart_at(time_now())
+}
+
+fn can_restart_at(curtime: i64) -> bool {
     if !restart_interval_elapsed(curtime, LAST_PGARCH_START_TIME.load(Relaxed)) {
         return false;
     }
@@ -422,7 +426,8 @@ fn pgarch_archiveXlog(xlog: &str, module: &ArchiveModule) -> PgResult<bool> {
         ps_status_seams::set_ps_display::call(&format!("archiving {xlog}"));
     }
 
-    let ret = match module.archive_file(xlog, &pathname) {
+    let files = pgrc::archive_segment_files(xlog, &mut |file, path| module.archive_file(file, path));
+    let ret = match files.and_then(|ok| if ok { module.archive_file(xlog, &pathname) } else { Ok(false) }) {
         Ok(ok) => ok,
         Err(e) if e.level < FATAL => {
             archive_error_cleanup(&e);
@@ -580,7 +585,7 @@ fn pgarch_readyXlog(af: &mut ArchFilesState) -> PgResult<Option<String>> {
                 ereport(ERROR)
                     .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not stat file \"{status_file}\": %m"))
+                    .errmsg(format!("could not stat file \"{status_file}\": {PCT_M}"))
                     .finish(loc("pgarch_readyXlog"))?;
             }
         }
@@ -649,7 +654,7 @@ fn pgarch_archiveDone(xlog: &str) -> PgResult<()> {
         ereport(WARNING)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg(format!("could not rename file \"{rlogready}\" to \"{rlogdone}\": %m"))
+            .errmsg(format!("could not rename file \"{rlogready}\" to \"{rlogdone}\": {PCT_M}"))
             .finish(loc("pgarch_archiveDone"))?;
     }
     Ok(())

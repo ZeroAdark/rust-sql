@@ -2,7 +2,7 @@ use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::cell::Cell;
 use std::sync::Mutex;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_error::{ErrorLevel, ErrorLocation, PgResult, ERRCODE_OUT_OF_MEMORY};
 use types_guc::config_enum_entry;
 use types_storage::dsm_handle;
@@ -135,7 +135,7 @@ pub fn dsm_impl_op(
                     elevel,
                     libc::EFBIG,
                     format!(
-                        "could not resize shared memory segment \"{}\" to {request_size} bytes: %m",
+                        "could not resize shared memory segment \"{}\" to {request_size} bytes: {PCT_M}",
                         segment_name(handle)
                     ),
                 )?;
@@ -160,7 +160,7 @@ pub fn dsm_impl_op(
                     elevel,
                     libc::ENOMEM,
                     format!(
-                        "could not resize shared memory segment \"{}\" to {request_size} bytes: %m",
+                        "could not resize shared memory segment \"{}\" to {request_size} bytes: {PCT_M}",
                         segment_name(handle)
                     ),
                 )?;
@@ -193,7 +193,7 @@ pub fn dsm_impl_op(
                         elevel,
                         libc::ENOENT,
                         format!(
-                            "could not open shared memory segment \"{}\": %m",
+                            "could not open shared memory segment \"{}\": {PCT_M}",
                             segment_name(handle)
                         ),
                     )?;
@@ -230,7 +230,7 @@ pub fn dsm_impl_op(
                         elevel,
                         libc::ENOENT,
                         format!(
-                            "could not remove shared memory segment \"{}\": %m",
+                            "could not remove shared memory segment \"{}\": {PCT_M}",
                             segment_name(handle)
                         ),
                     )?;

@@ -1,11 +1,4 @@
-//! `contrib/pg_prewarm/pg_prewarm.c` — the `pg_prewarm()` SQL function —
-//! plus autoprewarm.c's module-load surface (_PG_init:126): the
-//! `pg_prewarm.autoprewarm_interval` and `pg_prewarm.autoprewarm` GUCs
-//! (table rows in guc_tables, the C statics' cells here), the reserved
-//! prefix, and the leader registration under shared_preload_libraries.
-//! The worker, shared state, dump file and SQL entry points are in
-//! `autoprewarm.rs`.
-
+mod settings;
 mod autoprewarm;
 
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -245,29 +238,33 @@ fn fc_pg_prewarm(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
             }
         }
         PrewarmType::Buffer => {
-            // C 18 streams via read_stream; no read_stream surface exists here,
-            // so this is the pre-17 per-block ReadBuffer loop — same buffers
-            // pulled into shared_buffers, same count returned.
-            // read_stream_begin_impl (read_stream.c:563) rejects before the
-            // first block, so an empty range still errors.
-            if rel.is_other_temp() {
-                return Err(Box::new(
-                    PgError::error("cannot access temporary tables of other sessions")
-                        .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
-                ));
-            }
-            for block in first_block..=last_block {
+            // pg_prewarm.c:251: block_range_read_stream_cb takes no locks,
+            // so batch mode is safe. Beginning the stream rejects another
+            // session's temp table, even for an empty range.
+            let mut p = read_stream::BlockRangeReadStreamPrivate::new(
+                first_block as BlockNumber,
+                (last_block + 1) as BlockNumber,
+            );
+            let mut stream = read_stream::read_stream_begin_relation::<()>(
+                mcx,
+                read_stream::READ_STREAM_MAINTENANCE
+                    | read_stream::READ_STREAM_FULL
+                    | read_stream::READ_STREAM_USE_BATCHING,
+                None,
+                &rel,
+                fork_number,
+            )?;
+            for _ in first_block..=last_block {
                 postgres_seams::check_for_interrupts::call()?;
-                let buf = bufmgr::ReadBufferExtended(
-                    &rel,
-                    fork_number,
-                    block as BlockNumber,
-                    ReadBufferMode::Normal,
-                    None,
-                )?;
+                let buf = stream.next_buffer(&mut |_: &mut ()| Ok(p.next_block()))?;
                 bufmgr::ReleaseBuffer(buf)?;
                 blocks_done += 1;
             }
+            debug_assert_eq!(
+                stream.next_buffer(&mut |_: &mut ()| Ok(p.next_block()))?,
+                types_core::InvalidBuffer
+            );
+            stream.end()?;
         }
     }
 
@@ -305,15 +302,13 @@ pub fn init_seams() {
     });
 }
 
-/// `_PG_init` (autoprewarm.c:126). Both GUCs are static guc_tables rows
-/// (this port has no DefineCustomXxxVariable; the auto_explain / pgss
-/// pattern), so only the preload arm's prefix reservation and leader
-/// registration happen here.
 fn pg_init() -> PgResult<()> {
+    guc::DefineCustomVariable(settings::SETTINGS[0])?;
     if !miscinit::process_shared_preload_libraries_in_progress() {
         return Ok(());
     }
 
+    guc::DefineCustomVariable(settings::SETTINGS[1])?;
     guc::MarkGUCPrefixReserved("pg_prewarm");
 
     // Register autoprewarm worker, if enabled.

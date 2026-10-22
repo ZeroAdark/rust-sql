@@ -112,7 +112,8 @@ fn pg_result_error_surface() {
 #[test]
 fn function_call_rejects_null_result() {
     let mut flinfo = FmgrInfo::new(always_null, 42, 1, false, false);
-    let err = function_call1_coll(&mut flinfo, 0, Datum::from_i32(0)).err().unwrap();
+    let ctx = ::mcx::MemoryContext::new_bump("fc-null");
+    let err = function_call1_coll_in(&mut flinfo, 0, ctx.mcx(), Datum::from_i32(0)).err().unwrap();
     assert_eq!(err.message(), "function 42 returned NULL");
 }
 
@@ -121,8 +122,10 @@ fn direct_function_call() {
     let r = direct_function_call2_coll(int4pl, 0, Datum::from_i32(20), Datum::from_i32(22))
         .expect("direct call ok");
     assert_eq!(r.as_i32(), 42);
-    let err =
-        direct_function_call1_coll(always_null, 0, Datum::from_i32(0)).err().unwrap();
+    let ctx = ::mcx::MemoryContext::new_bump("fc-null");
+    let err = direct_function_call1_coll_in(always_null, 0, ctx.mcx(), Datum::from_i32(0))
+        .err()
+        .unwrap();
     assert!(err.message().ends_with("returned NULL"));
 }
 

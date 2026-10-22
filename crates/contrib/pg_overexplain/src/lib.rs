@@ -104,14 +104,14 @@ fn overexplain_per_node_hook<'mcx>(
     if options.debug.get() {
         let plan = node.as_plan().expect("ExplainNode reached a plan node");
         // Raw disabled_nodes (normal EXPLAIN shows the child-relative delta).
-        ExplainPropertyInteger("Disabled Nodes", None, plan.disabled_nodes as i64, es);
-        ExplainPropertyBool("Parallel Safe", plan.parallel_safe, es);
-        ExplainPropertyInteger("Plan Node ID", None, plan.plan_node_id as i64, es);
+        ExplainPropertyInteger("Disabled Nodes", None, plan.disabled_nodes as i64, es)?;
+        ExplainPropertyBool("Parallel Safe", plan.parallel_safe, es)?;
+        ExplainPropertyInteger("Plan Node ID", None, plan.plan_node_id as i64, es)?;
         if es.format != EXPLAIN_FORMAT_TEXT || !plan.extParam.is_empty() {
-            overexplain_bitmapset("extParam", &plan.extParam, es);
+            overexplain_bitmapset("extParam", &plan.extParam, es)?;
         }
         if es.format != EXPLAIN_FORMAT_TEXT || !plan.allParam.is_empty() {
-            overexplain_bitmapset("allParam", &plan.allParam, es);
+            overexplain_bitmapset("allParam", &plan.allParam, es)?;
         }
     }
 
@@ -131,30 +131,30 @@ fn overexplain_per_node_hook<'mcx>(
             | NodeTag::T_CteScan
             | NodeTag::T_NamedTuplestoreScan
             | NodeTag::T_WorkTableScan => {
-                ExplainPropertyInteger("Scan RTI", None, scanrelid_of(node) as i64, es);
+                ExplainPropertyInteger("Scan RTI", None, scanrelid_of(node) as i64, es)?;
             }
             NodeTag::T_ForeignScan => {
                 overexplain_bitmapset(
                     "Scan RTIs",
                     &node.as_foreign_scan().expect("ForeignScan").fs_base_relids,
                     es,
-                );
+                )?;
             }
             // T_CustomScan: no custom-scan providers exist in this build.
             NodeTag::T_ModifyTable => {
                 let mt = node.as_modify_table().expect("ModifyTable");
-                ExplainPropertyInteger("Nominal RTI", None, mt.nominalRelation as i64, es);
-                ExplainPropertyInteger("Exclude Relation RTI", None, mt.exclRelRTI as i64, es);
+                ExplainPropertyInteger("Nominal RTI", None, mt.nominalRelation as i64, es)?;
+                ExplainPropertyInteger("Exclude Relation RTI", None, mt.exclRelRTI as i64, es)?;
             }
             NodeTag::T_Append => {
-                overexplain_bitmapset("Append RTIs", &node.as_append().expect("Append").apprelids, es);
+                overexplain_bitmapset("Append RTIs", &node.as_append().expect("Append").apprelids, es)?;
             }
             NodeTag::T_MergeAppend => {
                 overexplain_bitmapset(
                     "Append RTIs",
                     &node.as_merge_append().expect("MergeAppend").apprelids,
                     es,
-                );
+                )?;
             }
             _ => {}
         }
@@ -208,9 +208,9 @@ fn overexplain_debug<'mcx>(
     es: &mut ExplainState<'mcx>,
 ) -> PgResult<()> {
     // Its own group even in text mode.
-    ExplainOpenGroup("PlannedStmt", Some("PlannedStmt"), true, es);
+    ExplainOpenGroup("PlannedStmt", Some("PlannedStmt"), true, es)?;
     if es.format == EXPLAIN_FORMAT_TEXT {
-        ExplainIndentText(es);
+        ExplainIndentText(es)?;
         es.str.append_str("PlannedStmt:\n")?;
         es.indent += 1;
     }
@@ -225,7 +225,7 @@ fn overexplain_debug<'mcx>(
         CmdType::CMD_UTILITY => "utility",
         CmdType::CMD_NOTHING => "nothing",
     };
-    ExplainPropertyText("Command Type", command_type, es);
+    ExplainPropertyText("Command Type", command_type, es)?;
 
     let mut flags = String::new();
     for (set, name) in [
@@ -244,20 +244,20 @@ fn overexplain_debug<'mcx>(
     if flags.is_empty() {
         flags.push_str(", none");
     }
-    ExplainPropertyText("Flags", &flags[2..], es);
+    ExplainPropertyText("Flags", &flags[2..], es)?;
 
-    overexplain_bitmapset("Subplans Needing Rewind", &plannedstmt.rewindPlanIDs, es);
-    overexplain_oidlist("Relation OIDs", &plannedstmt.relationOids, es);
-    overexplain_oidlist("Executor Parameter Types", &plannedstmt.paramExecTypes, es);
+    overexplain_bitmapset("Subplans Needing Rewind", &plannedstmt.rewindPlanIDs, es)?;
+    overexplain_oidlist("Relation OIDs", &plannedstmt.relationOids, es)?;
+    overexplain_oidlist("Executor Parameter Types", &plannedstmt.paramExecTypes, es)?;
 
     if plannedstmt.stmt_location == -1 {
-        ExplainPropertyText("Parse Location", "Unknown", es);
+        ExplainPropertyText("Parse Location", "Unknown", es)?;
     } else if plannedstmt.stmt_len == 0 {
         ExplainPropertyText(
             "Parse Location",
             &format!("{} to end", plannedstmt.stmt_location),
             es,
-        );
+        )?;
     } else {
         ExplainPropertyText(
             "Parse Location",
@@ -266,13 +266,13 @@ fn overexplain_debug<'mcx>(
                 plannedstmt.stmt_location, plannedstmt.stmt_len
             ),
             es,
-        );
+        )?;
     }
 
     if es.format == EXPLAIN_FORMAT_TEXT {
         es.indent -= 1;
     }
-    ExplainCloseGroup("PlannedStmt", Some("PlannedStmt"), true, es);
+    ExplainCloseGroup("PlannedStmt", Some("PlannedStmt"), true, es)?;
     Ok(())
 }
 
@@ -283,7 +283,7 @@ fn overexplain_range_table<'mcx>(
     // SAFETY: the arming context outlives this EXPLAIN emission.
     let mcx = es.str.mcx();
 
-    ExplainOpenGroup("Range Table", Some("Range Table"), false, es);
+    ExplainOpenGroup("Range Table", Some("Range Table"), false, es)?;
 
     for (i, rte_node) in plannedstmt.rtable.iter().enumerate() {
         let rti = (i + 1) as u32;
@@ -303,10 +303,10 @@ fn overexplain_range_table<'mcx>(
             RTEKind::RTE_GROUP => "group",
         };
 
-        ExplainOpenGroup("Range Table Entry", None, true, es);
+        ExplainOpenGroup("Range Table Entry", None, true, es)?;
 
         if es.format == EXPLAIN_FORMAT_TEXT {
-            ExplainIndentText(es);
+            ExplainIndentText(es)?;
             es.str.append_str(&format!(
                 "RTI {rti} ({kind}{}{}):\n",
                 if rte.inh { ", inherited" } else { "" },
@@ -314,10 +314,10 @@ fn overexplain_range_table<'mcx>(
             ))?;
             es.indent += 1;
         } else {
-            ExplainPropertyUInteger("RTI", None, rti as u64, es);
-            ExplainPropertyText("Kind", kind, es);
-            ExplainPropertyBool("Inherited", rte.inh, es);
-            ExplainPropertyBool("In From Clause", rte.inFromCl, es);
+            ExplainPropertyUInteger("RTI", None, rti as u64, es)?;
+            ExplainPropertyText("Kind", kind, es)?;
+            ExplainPropertyBool("Inherited", rte.inh, es)?;
+            ExplainPropertyBool("In From Clause", rte.inFromCl, es)?;
         }
 
         if let Some(alias) = rte.alias {
@@ -337,7 +337,7 @@ fn overexplain_range_table<'mcx>(
             } else {
                 relname
             };
-            ExplainPropertyText("Relation", &qualname, es);
+            ExplainPropertyText("Relation", &qualname, es)?;
         }
 
         let relkind = match rte.relkind {
@@ -355,7 +355,7 @@ fn overexplain_range_table<'mcx>(
             other => Some((other as char).to_string()),
         };
         if let Some(rk) = relkind {
-            ExplainPropertyText("Relation Kind", &rk, es);
+            ExplainPropertyText("Relation Kind", &rk, es)?;
         }
 
         if rte.rellockmode != 0 {
@@ -363,15 +363,15 @@ fn overexplain_range_table<'mcx>(
                 "Relation Lock Mode",
                 lock::GetLockmodeName(DEFAULT_LOCKMETHOD, rte.rellockmode),
                 es,
-            );
+            )?;
         }
 
         if rte.perminfoindex != 0 {
-            ExplainPropertyInteger("Permission Info Index", None, rte.perminfoindex as i64, es);
+            ExplainPropertyInteger("Permission Info Index", None, rte.perminfoindex as i64, es)?;
         }
 
         if es.format != EXPLAIN_FORMAT_TEXT || rte.security_barrier {
-            ExplainPropertyBool("Security Barrier", rte.security_barrier, es);
+            ExplainPropertyBool("Security Barrier", rte.security_barrier, es)?;
         }
 
         if rte.rtekind == RTEKind::RTE_JOIN {
@@ -386,45 +386,45 @@ fn overexplain_range_table<'mcx>(
                 JoinType::JOIN_RIGHT_ANTI => "Right Anti",
                 _ => "???",
             };
-            ExplainPropertyText("Join Type", jointype, es);
+            ExplainPropertyText("Join Type", jointype, es)?;
             if es.format != EXPLAIN_FORMAT_TEXT || rte.joinmergedcols != 0 {
-                ExplainPropertyInteger("JOIN USING Columns", None, rte.joinmergedcols as i64, es);
+                ExplainPropertyInteger("JOIN USING Columns", None, rte.joinmergedcols as i64, es)?;
             }
         }
 
         if rte.rtekind == RTEKind::RTE_FUNCTION {
-            ExplainPropertyBool("WITH ORDINALITY", rte.funcordinality, es);
+            ExplainPropertyBool("WITH ORDINALITY", rte.funcordinality, es)?;
         }
 
         if rte.rtekind == RTEKind::RTE_CTE {
-            ExplainPropertyText("CTE Name", rte.ctename.expect("cte name"), es);
-            ExplainPropertyUInteger("CTE Levels Up", None, rte.ctelevelsup as u64, es);
-            ExplainPropertyBool("CTE Self-Reference", rte.self_reference, es);
+            ExplainPropertyText("CTE Name", rte.ctename.expect("cte name"), es)?;
+            ExplainPropertyUInteger("CTE Levels Up", None, rte.ctelevelsup as u64, es)?;
+            ExplainPropertyBool("CTE Self-Reference", rte.self_reference, es)?;
         }
 
         if rte.rtekind == RTEKind::RTE_NAMEDTUPLESTORE {
-            ExplainPropertyText("ENR Name", rte.enrname.expect("enr name"), es);
-            ExplainPropertyFloat("ENR Tuples", None, rte.enrtuples, 0, es);
+            ExplainPropertyText("ENR Name", rte.enrname.expect("enr name"), es)?;
+            ExplainPropertyFloat("ENR Tuples", None, rte.enrtuples, 0, es)?;
         }
 
         if es.format != EXPLAIN_FORMAT_TEXT || rte.lateral {
-            ExplainPropertyBool("Lateral", rte.lateral, es);
+            ExplainPropertyBool("Lateral", rte.lateral, es)?;
         }
 
         if es.format == EXPLAIN_FORMAT_TEXT {
             es.indent -= 1;
         }
-        ExplainCloseGroup("Range Table Entry", None, true, es);
+        ExplainCloseGroup("Range Table Entry", None, true, es)?;
     }
 
     // upstream 6723d462db5a (18.4): Fix pg_overexplain to emit valid output with RANGE_TABLE option.
-    ExplainCloseGroup("Range Table", Some("Range Table"), false, es);
+    ExplainCloseGroup("Range Table", Some("Range Table"), false, es)?;
 
     if es.format != EXPLAIN_FORMAT_TEXT || !plannedstmt.unprunableRelids.is_empty() {
-        overexplain_bitmapset("Unprunable RTIs", &plannedstmt.unprunableRelids, es);
+        overexplain_bitmapset("Unprunable RTIs", &plannedstmt.unprunableRelids, es)?;
     }
     if es.format != EXPLAIN_FORMAT_TEXT || !plannedstmt.resultRelations.is_nil() {
-        overexplain_intlist("Result RTIs", &plannedstmt.resultRelations, es);
+        overexplain_intlist("Result RTIs", &plannedstmt.resultRelations, es)?;
     }
     Ok(())
 }
@@ -446,14 +446,14 @@ fn overexplain_alias(
         first = false;
     }
     buf.push(')');
-    ExplainPropertyText(qlabel, &buf, es);
+    ExplainPropertyText(qlabel, &buf, es)?;
     Ok(())
 }
 
-fn overexplain_bitmapset(qlabel: &str, bms: &Bitmapset<'_>, es: &mut ExplainState<'_>) {
+fn overexplain_bitmapset(qlabel: &str, bms: &Bitmapset<'_>, es: &mut ExplainState<'_>) -> PgResult<()> {
     if bms.is_empty() {
-        ExplainPropertyText(qlabel, "none", es);
-        return;
+        ExplainPropertyText(qlabel, "none", es)?;
+        return Ok(());
     }
     let mut buf = String::new();
     let mut x = -1;
@@ -464,31 +464,34 @@ fn overexplain_bitmapset(qlabel: &str, bms: &Bitmapset<'_>, es: &mut ExplainStat
         }
         buf.push_str(&format!(" {x}"));
     }
-    ExplainPropertyText(qlabel, &buf[1..], es);
+    ExplainPropertyText(qlabel, &buf[1..], es)?;
+    Ok(())
 }
 
-fn overexplain_intlist(qlabel: &str, list: &IntList<'_>, es: &mut ExplainState<'_>) {
+fn overexplain_intlist(qlabel: &str, list: &IntList<'_>, es: &mut ExplainState<'_>) -> PgResult<()> {
     if list.is_nil() {
-        ExplainPropertyText(qlabel, "none", es);
-        return;
+        ExplainPropertyText(qlabel, "none", es)?;
+        return Ok(());
     }
     let mut buf = String::new();
     for i in list.iter() {
         buf.push_str(&format!(" {i}"));
     }
-    ExplainPropertyText(qlabel, &buf[1..], es);
+    ExplainPropertyText(qlabel, &buf[1..], es)?;
+    Ok(())
 }
 
-fn overexplain_oidlist(qlabel: &str, list: &OidList<'_>, es: &mut ExplainState<'_>) {
+fn overexplain_oidlist(qlabel: &str, list: &OidList<'_>, es: &mut ExplainState<'_>) -> PgResult<()> {
     if list.is_nil() {
-        ExplainPropertyText(qlabel, "none", es);
-        return;
+        ExplainPropertyText(qlabel, "none", es)?;
+        return Ok(());
     }
     let mut buf = String::new();
     for o in list.iter() {
         buf.push_str(&format!(" {o}"));
     }
-    ExplainPropertyText(qlabel, &buf[1..], es);
+    ExplainPropertyText(qlabel, &buf[1..], es)?;
+    Ok(())
 }
 
 pub fn init_seams() {
@@ -520,11 +523,11 @@ mod tests {
         let pstmt = PlannedStmt::default();
         let mut es = NewExplainState(mcx).unwrap();
         es.format = format;
-        ExplainBeginOutput(&mut es);
-        ExplainOpenGroup("Query", None, true, &mut es);
+        ExplainBeginOutput(&mut es).unwrap();
+        ExplainOpenGroup("Query", None, true, &mut es).unwrap();
         overexplain_range_table(&pstmt, &mut es).unwrap();
-        ExplainCloseGroup("Query", None, true, &mut es);
-        ExplainEndOutput(&mut es);
+        ExplainCloseGroup("Query", None, true, &mut es).unwrap();
+        ExplainEndOutput(&mut es).unwrap();
         String::from_utf8(es.str.as_bytes().to_vec()).unwrap()
     }
 

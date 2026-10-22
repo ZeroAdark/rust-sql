@@ -1,0 +1,9 @@
+# RR's debt (lint/rules/rr_road_registry.py): the roads on by default (and the CORE roads) that still fail a check, by
+# road name, with the checks they fail. reader: no reader that honours gravity_road_off reads the road (a CORE road is
+# not asked); fire: no row of lowerv4/registry/road-fires.tsv maps it to a fire its code fires; side: no row of
+# lowerv4/registry/registry-side.tsv with a trigger and a motivator. Seeded from the roads declared when RR landed.
+# A row only shrinks: a check goes when the road passes it, the row goes when it passes all three, and a landing never
+# adds a row or a check (a new road passes every check). Done at 0 rows.
+# road	checks it fails (a comma list of reader, fire, side)
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named by the road; this README is not a row.
+# Deleting a row deletes its file, so lanes that clear different roads never touch the same file.

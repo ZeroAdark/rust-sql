@@ -1,0 +1,5 @@
+path	crates/gravity/expr/src/catalog.rs
+growth	std::vec::Vec::push	2
+method	std::clone::Clone::clone	2
+method	std::iter::Iterator::collect	1
+type	std::vec::Vec	1

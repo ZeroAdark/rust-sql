@@ -121,6 +121,7 @@ pub struct PortalData<'mcx> {
     pub createLevel: i32,
 
     pub sourceText: Option<&'mcx str>,
+    pub sourceTextOwned: Option<PgVec<'mcx, u8>>,
     pub commandTag: CommandTag,
     pub qc: QueryCompletion,
     pub stmts: StmtListHandle,
@@ -183,6 +184,12 @@ pub struct PortalData<'mcx> {
     /// of the D-CA-2 fence. PortalStart-fixed like `currentOfEligible`;
     /// meaningful only when `currentOfEligible == Some(true)`.
     pub cursorCaptureBatch: bool,
+    pub gravity: u64,
+    /// C8 (checker 1): the portal as a memory owner, from its PortalStart to its PortalDrop (pquery's
+    /// `begin_memory_owner`): the backend account it began on and its owner id. What its executor takes while it runs
+    /// (`run_protected`) is the portal's, not the statement's that starts or fetches it. None: not begun (a runner-bound
+    /// portal is its own owner, `gravity`).
+    pub memory_owner: Option<(u32, u64)>,
     /// §4.2 hidden (tableoid, ctid) row-identity sidecar, eligible plans
     /// only; row index == store row index; spill-armed like the store.
     pub cursorTidStore: TuplestoreHandle,

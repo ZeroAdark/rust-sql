@@ -44,6 +44,11 @@ impl<T, C: Fn(&T, &T) -> i32> PairingHeap<T, C> {
         self.root = INVALID;
     }
 
+    /// The bytes its arena holds now (slot and free-list capacity, which `reset` keeps), for a caller that charges them.
+    pub fn heap_bytes(&self) -> usize {
+        self.slots.capacity() * core::mem::size_of::<Slot<T>>() + self.free.capacity() * core::mem::size_of::<NodeId>()
+    }
+
     #[inline]
     pub fn get(&self, id: NodeId) -> &T {
         self.slots[id as usize].item.as_ref().expect("live node")
@@ -300,5 +305,21 @@ mod tests {
         h.add(7);
         assert_eq!(h.remove_first(), Some(7));
         assert!(h.is_empty());
+    }
+
+    #[test]
+    fn heap_bytes_follow_the_arena_and_survive_reset() {
+        let mut h = max_heap();
+        assert_eq!(h.heap_bytes(), 0);
+        for v in 0..100i64 {
+            h.add(v);
+        }
+        let grown = h.heap_bytes();
+        assert!(grown >= 100 * core::mem::size_of::<Slot<i64>>());
+        while h.remove_first().is_some() {}
+        assert!(h.heap_bytes() >= grown + 100 * core::mem::size_of::<NodeId>());
+        let kept = h.heap_bytes();
+        h.reset();
+        assert_eq!(h.heap_bytes(), kept);
     }
 }

@@ -238,7 +238,7 @@ pub fn typeInheritsFrom(subclass_type_id: Oid, superclass_type_id: Oid) -> PgRes
         return Ok(false);
     }
 
-    let cx = mcx::MemoryContext::new_bump("typeInheritsFrom");
+    let cx = mcx::MemoryContext::new_wholesale("typeInheritsFrom");
     let mcx = cx.mcx();
     let mut result = false;
     let mut queue: PgVec<'_, Oid> = PgVec::new_in(mcx);

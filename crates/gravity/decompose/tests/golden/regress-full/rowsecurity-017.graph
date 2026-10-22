@@ -1,0 +1,21 @@
+-- regress-full-rowsecurity-017
+-- INSERT INTO part_document VALUES (100, 11, 5, 'regress_rls_dave', 'testing pp1');
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=28321 rti=3 am=heap index=28325
+    key att=1 op=93 value=T_SQLValueFunction
+    recheck (op93(v3.1, T_SQLValueFunction))
+    lanes Attr(2):byval8:w8:val
+  project (1=v3.2)
+  outs 1=w8:val
+p1 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c23:100, 2=c23:11, 3=c23:5, 4=c19:#64, 5=c25:'testing pp1')
+  write INSERT rel=28377 rti=1 natts=5 indexes=() epq=$exec1 route=rti1:28377 natts=5
+    check rls insert rel=part_document (op523(v1.3, $exec0))
+    check rls insert rel=part_document policy=pp1r (op97(v1.2, c23:55))
+  outs 1=w4:val 2=w4:val 3=w4:val 4=fx64:stmt/imm 5=vl:stmt/imm
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 vol=s
+mapped: Result ModifyTable IndexScan SubPlan

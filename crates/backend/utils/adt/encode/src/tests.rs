@@ -66,7 +66,7 @@ fn base64_invalid_symbol_message_stops_at_nul() {
     let err = binary_decode(ctx.mcx(), b"ab\0", b"base64").unwrap_err();
     assert_eq!(err.message, "invalid symbol \"\" found while decoding base64 sequence");
     // The raw-byte (non-UTF-8) rendering of the quoted symbol is
-    // regression (batch-225, PR #2332), not this row's claim.
+    // fp-adt-encode#1 (batch-225, PR #2332), not this row's claim.
 }
 
 #[test]

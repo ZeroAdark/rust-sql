@@ -1,0 +1,19 @@
+-- regress-full-tuplesort-005
+-- INSERT INTO test_mark_restore(col1, col2, col12) SELECT a.i, b.i, a.i * b.i FROM generate_series(1, 500) a(i), generate_series(1, 5) b(i);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=0 reason=Write end=sink
+  nodes n2@0 n1@2 n0@4
+  source const
+  srf from rti=4 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:5)]
+  project (1=v4.1)
+  nest inner=n3 JOIN_INNER invariant raise-free params=()
+  inner node=3 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n3@0
+  source const
+  srf from rti=3 [1:SeriesInt { width: 4, step: false } fn1067 fn1067(c23:1, c23:500)]
+  project (1=v3.1)
+  project (1=inner.1, 2=outer.1, 3=op514(inner.1, outer.1))
+  write INSERT rel=46928 rti=1 natts=3 indexes=()
+  outs 1=w4:val
+  outs 1=w4:val 2=w4:val 3=w4:val
+mapped: ModifyTable FunctionScan NestLoop

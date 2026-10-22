@@ -1,0 +1,9 @@
+# M6-FOLD R2 (main 09-26): regr_count is a count, never a float aggregate: exact even over float columns
+sql: SELECT regr_count(y, x) FROM st;
+schema: CREATE TABLE st (id int, k int, y float8, x float8, i int4, n numeric);
+class: unordered
+verdict: mismatch
+[pg]
+2931
+[got]
+2930

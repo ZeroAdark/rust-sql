@@ -1,0 +1,45 @@
+[package]
+name = "pgrc_colcache"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+# C1 (pgrc-plans/C1.md): the process-wide images of the pgrcolumnar companion
+# heaps (segments and the tombstone heap), kept current by pgrc_marks, and the
+# per-statement views over them. Sits above pgrc_front; tableam depends on it
+# (L4).
+[dependencies]
+pgrc_marks = { path = "../pgrc_marks" }
+pgrc_am = { path = "../pgrc_am" }
+pgrc_format = { path = "../pgrc_format" }
+pgrc_front = { path = "../pgrc_front" }
+pgrc_front_seams = { path = "../pgrc_front_seams" }
+pgrc_scan = { path = "../pgrc_scan" }
+# L5c: the residency plane's charges and ring; the builtins' heap scans and fmgr faces.
+pgrc_read = { path = "../pgrc_read" }
+datum = { path = "../../../../_support/types/datum" }
+heapam = { path = "../../heap/heapam" }
+tableam_vocab = { path = "../../table/tableam_vocab" }
+types_fmgr = { path = "../../../../_support/types/fmgr" }
+types_scan = { path = "../../../../_support/types/types_scan" }
+mcx = { path = "../../../../_support/mcx" }
+table = { path = "../../table/table" }
+pgsync = { path = "../../../../_support/pgsync" }
+bufmgr = { path = "../../../storage/buffer/bufmgr" }
+procarray = { path = "../../../storage/ipc/procarray" }
+snapmgr = { path = "../../../utils/time/snapmgr" }
+transam_seams = { path = "../../transam/transam_seams" }
+varsup = { path = "../../transam/varsup" }
+xact = { path = "../../transam/xact" }
+types_core = { path = "../../../../_support/types/types_core" }
+types_error = { path = "../../../../_support/types/types_error" }
+types_rel = { path = "../../../../_support/types/rel" }
+types_snapshot = { path = "../../../../_support/types/snapshot" }
+types_storage = { path = "../../../../_support/types/types_storage" }
+types_tuple = { path = "../../../../_support/types/types_tuple" }
+
+[dev-dependencies]
+# K1 L6: tests/compacted_keying.rs builds compaction outputs with the real map builder.
+pgrc_compact = { path = "../pgrc_compact" }
+# C1 L5c: tests/view_key.rs publishes part-less generations (their StatsState) into the in-process catalog.
+pgrc_write = { path = "../pgrc_write" }

@@ -1,0 +1,11 @@
+-- regress-full-tablespace-004
+-- SELECT regexp_replace(pg_tablespace_location(oid), '(pg_tblspc)/(\d+)', '\1/NNN') FROM pg_tablespace WHERE spcname = 'regress_tblspace';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=1 end=sink
+  nodes n0@0
+  source range rel=1213 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v1.2, c19:#64)
+  project (1=fn2284(fn3778(v1.1), c25:'(pg_tblspc)/(\d+)', c25:'\1/NNN'))
+  outs 1=vl:call2284
+mapped: SeqScan

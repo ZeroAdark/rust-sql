@@ -235,6 +235,7 @@ mod tests {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             typcache_seams::domain_check_input::set(fake_check);
+            syscache_seams::lookup_pg_type_typcache_shape::set(|_| Ok(None));
             syscache_seams::pg_type_base_shape::set(|typid| {
                 Ok(match typid {
                     1 | 2 => Some(syscache_seams::PgTypeBaseShape {
@@ -313,7 +314,7 @@ mod tests {
     // "type with OID %u does not exist", ERRCODE_UNDEFINED_OBJECT (42704).
     #[test]
     fn bogus_domain_oid_is_undefined_object() {
-        syscache_seams::lookup_pg_type_typcache_shape::set(|_| Ok(None));
+        install_type_stubs();
         let expect_err = |r: PgResult<DomainIOData>| match r {
             Err(e) => e,
             Ok(_) => panic!("bogus domain OID must fail"),

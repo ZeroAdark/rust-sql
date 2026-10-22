@@ -1,0 +1,19 @@
+[package]
+name = "tpde_assembler"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0 WITH LLVM-exception"
+
+[dependencies]
+tpde_util = { path = "../util" }
+mcx = { path = "../../_support/mcx" }
+types_error = { path = "../../_support/types/types_error" }
+tpde_string_table = { path = "../string-table" }
+
+[features]
+upstream-oracle = []
+
+[[test]]
+name = "upstream"
+required-features = ["upstream-oracle"]

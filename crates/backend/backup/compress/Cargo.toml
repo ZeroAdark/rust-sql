@@ -27,4 +27,4 @@ lz4_flex = "0.11"
 # zstd links C (zstd-sys); no wasm32 build. The wasm arm keeps C's exact
 # "zstd compression is not supported by this build" refusal.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-zstd = "0.13"
+zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off

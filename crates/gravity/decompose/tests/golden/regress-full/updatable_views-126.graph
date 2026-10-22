@@ -1,0 +1,10 @@
+-- regress-full-updatable_views-126
+-- insert into base_tab_def_view values (15, default, default, default, default), (16, default, default, default, default);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=$14, 2=$15, 3=$16, 4=$17, 5=$18)
+  write INSERT rel=24816 rti=1 natts=5 indexes=()
+  outs 1=w4:val 2=vl:row 3=vl:row 4=vl:row 5=vl:row
+mapped: Result ModifyTable

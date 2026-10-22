@@ -1,0 +1,45 @@
+-- regress-full-collate-015
+-- SELECT a, b COLLATE "C" FROM collate_test1 UNION SELECT a, b FROM collate_test2 ORDER BY 2;
+graph pipelines=4 breakers=3 init_plans=0 root=p3
+p0 node=4 eligible rows=1270 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n4@0 n2@1 n1@3^
+  source range rel=27668 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v3.1, 2=v3.2)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=vl:win/page
+  outs 1=w4:val 2=vl:life/breaker
+p1 node=6 eligible rows=1270 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n6@0 n5@1 n2@2 n1@4^
+  source range rel=27680 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v4.1, 2=v4.2)
+  project (1=v2.1, 2=relabel25(v2.2))
+  append arm 1/2
+  project (1=outer.1, 2=outer.2)
+  outs 1=w8:val 2=vl:win/page
+  outs 1=w4:val 2=vl:row
+  outs 1=w4:val 2=vl:life/breaker
+p2 node=1 serial site=-1 reason=NoDrivingSite end=breaker(slot=1 Sort)
+  desc consumes=slot0@p1
+  nodes n1@0 n0@1^
+  source breaker slot=0
+  project (1=outer.1, 2=outer.2)
+  sort keys=2+:Fp128@950 form=runs
+  outs 1=w4:val 2=vl:life/breaker
+p3 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot1@p2
+  nodes n0@0
+  source breaker slot=1
+  project (1=outer.1, 2=outer.2)
+  outs 1=w4:val 2=vl:life/breaker
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32,Fp128,Fp128]->[MinCode@24,Count@32] 40B
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p1 layout=[I32,Fp128,Fp128]->[MinCode@24,Count@32] 40B
+breaker slot=1 kind=Sort budget=Share spill=Runs producer=p2 layout=[Fp128,Fp128]->[Count@16] 24B order=2+
+group slot=0 producer=p1 node=1 form=Hashed hints=[] layout=[I32,Fp128,Fp128]->[MinCode@24,Count@32] 40B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=outer.1
+  key 1 word=1 resno=2 kind=Fp128 attno=0 type=25 rep=0 expr=outer.2
+mapped: Append SeqScan SubqueryScan Sort Agg

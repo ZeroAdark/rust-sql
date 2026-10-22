@@ -1,0 +1,11 @@
+-- regress-full-float8-008
+-- SELECT f.f1, exp(ln(f.f1)) AS exp_ln_f1 FROM FLOAT8_TBL f WHERE f.f1 > '0.0';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=753 end=sink
+  nodes n0@0
+  source range rel=16549 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  filter op674(v1.1, c701:0)
+  project (1=v1.1, 2=fn1347(fn1341(v1.1)))
+  outs 1=w8:val 2=w8:val
+mapped: SeqScan

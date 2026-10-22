@@ -17,7 +17,8 @@ fn header_scratch_size_matches_c() {
     // 24 + 27*33 + 5 + 3 + 5 (xlogrecord.h arithmetic).
     assert_eq!(HEADER_SCRATCH_SIZE, 928);
     assert_eq!(MaxSizeOfXLogRecordBlockHeader, 27);
-    assert_eq!(COMPRESS_BUFSIZE, 8196);
+    // Max(PGLZ_MAX_BLCKSZ, LZ4_COMPRESSBOUND, ZSTD_COMPRESSBOUND) = zstd's 8284.
+    assert_eq!(COMPRESS_BUFSIZE, 8284);
     assert_eq!(XLogRecordMaxSize, 1_069_547_520);
 }
 
@@ -320,12 +321,19 @@ fn assemble_insert_decode_roundtrip() {
     xlogutils::set_in_recovery(false);
     assert!(transam_xlog::XLogInsertAllowed());
 
+    assert!(!XLogCheckPageNeedsBackup(0));
+
     // Record 1: main-data-only through the xlog_insert seam.
     let frag_a = [0xA1u8; 3];
     let frag_b: Vec<u8> = (0..100u8).collect();
     let lsn1 =
         xloginsert_seams::xlog_insert::call(RM_XLOG_ID, 0x20 /* XLOG_NOOP */, &[&frag_a, &frag_b])
             .unwrap();
+
+    assert_eq!(transam_xlog::GetFullPageWriteInfo(), (prev_rec, true));
+    assert!(XLogCheckPageNeedsBackup(prev_rec - 1));
+    assert!(XLogCheckPageNeedsBackup(prev_rec));
+    assert!(!XLogCheckPageNeedsBackup(prev_rec + 1));
 
     // Record 2: forced full-page image of a standard page with a hole.
     let (lower, upper) = (64u16, 8000u16);
@@ -367,6 +375,32 @@ fn assemble_insert_decode_roundtrip() {
         }],
     )
     .unwrap();
+
+    // Records 3b/3c: the same FPI under wal_compression = lz4 and zstd.
+    let mut lsn3_methods = Vec::new();
+    for (blkno, method) in [
+        (11, guc_tables::consts::WAL_COMPRESSION_LZ4),
+        (12, guc_tables::consts::WAL_COMPRESSION_ZSTD),
+    ] {
+        guc_tables::vars::wal_compression.write(method);
+        let lsn = insert_record(
+            RM_XLOG_ID,
+            XLOG_FPI,
+            0,
+            &[],
+            &[RegBlock {
+                block_id: 0,
+                rlocator: rloc,
+                forknum: ForkNumber::MAIN_FORKNUM,
+                block: blkno,
+                page: &page3[..],
+                flags: REGBUF_FORCE_IMAGE | REGBUF_STANDARD,
+                bufdata: &[],
+            }],
+        )
+        .unwrap();
+        lsn3_methods.push(lsn);
+    }
     guc_tables::vars::wal_compression.write(guc_tables::consts::WAL_COMPRESSION_NONE);
 
     // Record 4: two same-rel NO_IMAGE blocks with data + main data.
@@ -458,6 +492,15 @@ fn assemble_insert_decode_roundtrip() {
     assert!(reader.RestoreBlockImage(0, &mut restored3));
     assert_eq!(restored3, expected_restored(&page3, lower, upper));
 
+    for lsn in lsn3_methods {
+        let _ = reader.XLogReadRecord(&mut routine).unwrap().unwrap();
+        assert_eq!(reader.v.EndRecPtr, lsn);
+        assert!(reader.XLogRecGetTotalLen() < 1024);
+        let mut restored = vec![0u8; BLCKSZ];
+        assert!(reader.RestoreBlockImage(0, &mut restored));
+        assert_eq!(restored, expected_restored(&page3, lower, upper));
+    }
+
     let _ = reader.XLogReadRecord(&mut routine).unwrap().unwrap();
     assert_eq!(reader.v.EndRecPtr, lsn4);
     assert_eq!(reader.XLogRecGetData(), &main4[..]);
@@ -475,6 +518,49 @@ fn assemble_insert_decode_roundtrip() {
     assert_eq!(reader.XLogRecGetOrigin(), 0); // no origin block emitted
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// XLogCompressBackupBlock: each method's stream decodes with the matching C
+// decoder, and an incompressible page (len + extra_bytes >= orig_len) is
+// stored raw under every method.
+#[test]
+fn compress_backup_block_per_method() {
+    use guc_tables::consts::{WAL_COMPRESSION_LZ4, WAL_COMPRESSION_PGLZ, WAL_COMPRESSION_ZSTD};
+    let (lower, upper) = (64u16, 8000u16);
+    let page = standard_page(0x5C, lower, upper);
+    let orig_len = BLCKSZ - (upper - lower) as usize;
+    let mut holed = page[..lower as usize].to_vec();
+    holed.extend_from_slice(&page[upper as usize..]);
+    let mut dest = Box::new([0u8; COMPRESS_BUFSIZE]);
+    let mut out = vec![0u8; orig_len];
+
+    let n = compress_backup_block(WAL_COMPRESSION_LZ4, &page[..], lower, upper - lower, &mut dest)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lz4_flex::block::decompress_into(&dest[..n], &mut out).unwrap(), orig_len);
+    assert_eq!(out, holed);
+
+    let n = compress_backup_block(WAL_COMPRESSION_ZSTD, &page[..], lower, upper - lower, &mut dest)
+        .unwrap()
+        .unwrap();
+    assert_eq!(zstd::bulk::decompress(&dest[..n], orig_len).unwrap(), holed);
+
+    let n = compress_backup_block(WAL_COMPRESSION_PGLZ, &page[..], lower, upper - lower, &mut dest)
+        .unwrap()
+        .unwrap();
+    assert!(n < orig_len);
+
+    let mut noise = [0u8; BLCKSZ];
+    let mut x = 0x9E37_79B9u32;
+    for b in noise.iter_mut() {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *b = x as u8;
+    }
+    for method in [WAL_COMPRESSION_PGLZ, WAL_COMPRESSION_LZ4, WAL_COMPRESSION_ZSTD] {
+        assert_eq!(compress_backup_block(method, &noise, 0, 0, &mut dest).unwrap(), None);
+    }
 }
 
 fn scratch() -> Scratch {

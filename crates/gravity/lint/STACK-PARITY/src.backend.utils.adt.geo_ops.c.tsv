@@ -1,0 +1,2 @@
+# PostgreSQL 18.6 src/backend/utils/adt/geo_ops.c: 1 stack-depth check sites
+3875	lseg_inside_poly	crates/backend/utils/adt/geo/src/poly.rs	lseg_inside_poly	yes	

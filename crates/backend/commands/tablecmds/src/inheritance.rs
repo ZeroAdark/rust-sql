@@ -564,10 +564,21 @@ fn coldef_type(def: &ColumnDef<'_>) -> (Oid, i32) {
 // columns reaching the merge path were already validated by transformCreateStmt.
 fn mcx_dummy() -> Mcx<'static> {
     thread_local! {
-        static CTX: &'static mcx::MemoryContext =
-            mcx::session_root("coldef-type-scratch");
+        static CTX: core::cell::Cell<Option<&'static mcx::MemoryContext>> = const { core::cell::Cell::new(None) };
     }
-    CTX.with(|c| c.mcx())
+    CTX.with(|c| match c.get() {
+        Some(m) => m.mcx(),
+        None => {
+            let m = mcx::session_root("coldef-type-scratch");
+            c.set(Some(m));
+            // D4682: the teardown retires this root; clear the slot first, so a reused thread's next session makes a
+            // new one.
+            mcx::register_session_cleanup(Box::new(|| {
+                let _ = CTX.try_with(|c| c.set(None));
+            }));
+            m.mcx()
+        }
+    })
 }
 
 fn coldef_collation(def: &ColumnDef<'_>, typeoid: Oid) -> PgResult<Oid> {

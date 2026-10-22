@@ -49,11 +49,11 @@ pub fn grouping_planner<'mcx>(
         let final_target_parallel_safe = is_parallel_safe_exprs(run, final_target)?;
         debug_assert!(!parse.hasTargetSRFs);
         debug_assert!(parse.rowMarks.is_nil() && parse.distinctClause.is_nil());
-        run.root.sort_pathkeys = crate::pathkeys::make_pathkeys_for_sortclauses(
+        run.root.sort_pathkeys = ::mcx::freeze_fit(crate::pathkeys::make_pathkeys_for_sortclauses(
             run,
             &parse.sortClause,
             run.processed_tlist(),
-        )?;
+        )?);
         // The setop result tlist couldn't contain any SRFs (C planner.c:1500).
         return grouping_planner_tail(
             run,
@@ -75,16 +75,26 @@ pub fn grouping_planner<'mcx>(
     } else {
         run.gset_data = None;
         if !parse.groupClause.is_nil() {
-            run.root.processed_groupClause = preprocess_groupclause(run, None)?;
+            run.root.processed_groupClause = ::mcx::freeze_fit(preprocess_groupclause(run, None)?);
         }
     }
 
     preprocess_targetlist(run)?;
 
+    let mut affine = None;
+    let deferred = parse.hasAggs && crate::agg_algebra::deferrable(run)?;
+    // A deferred statement's aggregates are numbered once, after query_planner, unless a semi join's unique path
+    // reads their transition count inside it (D2862 0d).
+    let numbered = !deferred || crate::agg_algebra::semi_join(parse);
     if parse.hasAggs {
-        crate::prepagg::preprocess_aggrefs(run, run.processed_tlist())?;
-        if let Some(having) = parse.havingQual {
-            crate::prepagg::preprocess_aggrefs_node(run, having)?;
+        if !deferred {
+            affine = crate::agg_algebra::rewrite_shifted_sums(run, None)?;
+        }
+        if numbered {
+            crate::prepagg::preprocess_aggrefs(run, run.processed_tlist())?;
+            if let Some(having) = parse.havingQual {
+                crate::prepagg::preprocess_aggrefs_node(run, having)?;
+            }
         }
     }
     run.active_windows = mcx::PgVec::new_in(run.mcx);
@@ -129,6 +139,19 @@ pub fn grouping_planner<'mcx>(
 
     run.qp_setop = setops;
     let current_rel = query_planner(run, standard_qp_callback)?;
+    if affine.is_some() || deferred {
+        let rows = run.root.rel(current_rel).rows;
+        let width = crate::agg_algebra::heap_width(run, current_rel);
+        if deferred {
+            let at = crate::agg_algebra::Deferred { rows, width, numbered };
+            affine = crate::agg_algebra::rewrite_shifted_sums(run, Some(at))?;
+        }
+        match affine {
+            Some(rw) => crate::agg_algebra::settle(run, rw, rows, width)?,
+            None if !numbered => crate::agg_algebra::renumber(run)?,
+            None => {}
+        }
+    }
 
     let final_target = create_pathtarget(run, run.processed_tlist())?;
     let final_target_parallel_safe = is_parallel_safe_exprs(run, final_target)?;
@@ -373,6 +396,7 @@ fn grouping_planner_tail<'mcx>(
                 crate::pathnode::create_lockrows_path(run, final_rel, path_id, marks, epq_param);
         }
         if limit_needed(parse) {
+            crate::gravity_paths::add_gravity_paths(run, final_rel, path_id, offset_est, count_est, limit_tuples)?;
             path_id = crate::pathnode::create_limit_path(
                 run,
                 final_rel,
@@ -782,16 +806,47 @@ fn sortgroupclause_equal(
 // C consults processed_groupClause, not parse->groupClause (planner.c:5550):
 // a GROUP BY item removed as pathkey-redundant is a non-group column here,
 // which also fixes its position in the group input target.
-fn target_sgref_in_group_clause(run: &PlannerRun<'_>, sgref: u32) -> bool {
-    sgref != 0
-        && run.root.processed_groupClause.iter().any(|&id| {
+fn target_sgref_in_group_clause(run: &PlannerRun<'_>, sgref: u32) -> PgResult<bool> {
+    Ok(sgref != 0
+        && (run.root.processed_groupClause.iter().any(|&id| {
             run.root
                 .expr_node(id)
                 .as_sort_group_clause()
                 .expect("processed_groupClause cell")
                 .tleSortGroupRef
                 == sgref
-        })
+        }) || (hashed_distinct_regroups(run)?
+            && run.parse().groupClause.iter().any(|n| {
+                n.as_sort_group_clause().expect("groupClause cell").tleSortGroupRef == sgref
+            }))))
+}
+
+/// D4169: whether the group input target (`make_group_input_target` over `final_target`) holds every one of `vars`:
+/// a group column equal to it, or a column the rest of the target list or HAVING reads. Under `hashed_distinct_regroups`
+/// a GROUP BY item is a group column of that target, so its own columns are there only where something else reads them;
+/// `make_window_input_target` keeps such an item whole where they are not (flattened, a node above the group would read
+/// a column the group's input does not carry: setrefs' "variable not found in subplan target list").
+pub(crate) fn group_input_holds<'mcx>(
+    run: &PlannerRun<'mcx>,
+    final_target: types_pathnodes::PtId,
+    vars: &[types_nodes::Node<'mcx>],
+) -> PgResult<bool> {
+    let mut have: mcx::PgVec<'mcx, types_nodes::Node<'mcx>> = mcx::PgVec::new_in(run.mcx);
+    let n = run.root.pathtarget(final_target).exprs.len();
+    for i in 0..n {
+        let ft = run.root.pathtarget(final_target);
+        let expr = *run.root.expr_node(ft.exprs[i]);
+        let sgref = ft.sortgrouprefs.get(i).copied().unwrap_or(0);
+        if target_sgref_in_group_clause(run, sgref)? {
+            have.push(expr);
+        } else {
+            pull_agg_input_vars(expr, &mut have);
+        }
+    }
+    if let Some(having) = run.parse().havingQual {
+        pull_agg_input_vars(having, &mut have);
+    }
+    Ok(vars.iter().all(|&v| have.iter().any(|&h| types_nodes::equal(h, v))))
 }
 
 // make_group_input_target (planner.c).
@@ -818,7 +873,7 @@ fn make_group_input_target<'mcx>(
         let ft = run.root.pathtarget(final_target);
         let mut expr = *run.root.expr_node(ft.exprs[i]);
         let sgref = ft.sortgrouprefs.get(i).copied().unwrap_or(0);
-        if target_sgref_in_group_clause(run, sgref) {
+        if target_sgref_in_group_clause(run, sgref)? {
             if let Some(rt) = strip_rt {
                 expr = crate::flatten_group::strip_group_nulling(mcx, expr, rt)?.unwrap_or(expr);
             }
@@ -1114,7 +1169,7 @@ fn grouping_is_sortable(run: &PlannerRun<'_>, clauses: &[types_pathnodes::NodeId
     })
 }
 
-fn grouping_is_hashable(run: &PlannerRun<'_>, clauses: &[types_pathnodes::NodeId]) -> bool {
+pub(crate) fn grouping_is_hashable(run: &PlannerRun<'_>, clauses: &[types_pathnodes::NodeId]) -> bool {
     clauses.iter().all(|&id| {
         run.root.expr_node(id).as_sort_group_clause().expect("group clause cell").hashable
     })
@@ -1326,11 +1381,18 @@ fn create_grouping_paths<'mcx>(
 
     let can_sort = run.gset_data.as_ref().is_some_and(|gd| !gd.rollups.is_empty())
         || grouping_is_sortable(run, &run.root.processed_groupClause);
+    let ordered_aggs_block_hash = run.root.numOrderedAggs > 0
+        && (run.root.numOrderByAggs > 0
+            || !hashed_distinct_admitted(run)?
+            || (run.root.processed_groupClause.is_empty() && !hashed_distinct_regroups(run)?)
+            || (can_sort && sorted_groups_stop_early(run)));
     let can_hash = !parse.groupClause.is_nil()
-        && run.root.numOrderedAggs == 0
         && match &run.gset_data {
-            Some(gd) => gd.any_hashable,
-            None => grouping_is_hashable(run, &run.root.processed_groupClause),
+            Some(gd) => run.root.numOrderedAggs == 0 && gd.any_hashable,
+            None => {
+                !ordered_aggs_block_hash
+                    && grouping_is_hashable(run, &run.root.processed_groupClause)
+            }
         };
     let mut extra = GroupPathExtra {
         can_sort,
@@ -1371,8 +1433,6 @@ fn create_ordinary_grouping_paths<'mcx>(
             && group_by_has_partkey(run, input_rel, extra.target_list)?
         {
             PartitionwiseAggregateType::Full
-        } else if extra.can_partial_agg {
-            PartitionwiseAggregateType::Partial
         } else {
             PartitionwiseAggregateType::None
         };
@@ -1419,7 +1479,9 @@ fn create_ordinary_grouping_paths<'mcx>(
         let cheapest = run.root.rel(input_rel).cheapest_total_path.unwrap();
         run.root.path(cheapest).base().rows
     };
-    let num_groups = get_number_of_groups(run, cheapest_rows, extra.target_list)?;
+    let mut groups_default = false;
+    let num_groups = get_number_of_groups(run, cheapest_rows, extra.target_list, &mut groups_default)?;
+    run.root.rel_mut(grouped_rel).gravity_groups_default = groups_default;
     add_paths_to_grouping_rel(
         run,
         input_rel,
@@ -1686,20 +1748,22 @@ fn create_partial_grouping_paths<'mcx>(
         extra.partial_costs_set = true;
     }
 
+    let mut groups_default = false;
     let num_partial_groups = match cheapest_total_path {
         Some(p) => {
             let rows = run.root.path(p).base().rows;
-            get_number_of_groups(run, rows, extra.target_list)?
+            get_number_of_groups(run, rows, extra.target_list, &mut groups_default)?
         }
         None => 0.0,
     };
     let num_partial_partial_groups = match cheapest_partial_path {
         Some(p) => {
             let rows = run.root.path(p).base().rows;
-            get_number_of_groups(run, rows, extra.target_list)?
+            get_number_of_groups(run, rows, extra.target_list, &mut groups_default)?
         }
         None => 0.0,
     };
+    run.root.rel_mut(partially_grouped_rel).gravity_groups_default = groups_default;
 
     // Partially aggregated non-partial paths (parent finalizes over Append).
     if extra.can_sort {
@@ -1834,6 +1898,7 @@ fn create_partial_grouping_paths<'mcx>(
                 &agg_costs_partial,
                 num_partial_groups,
             )?;
+            credit_gravity_hash_spill(run, agg_path, &agg_costs_partial);
             crate::pathnode::add_path(run, partially_grouped_rel, agg_path);
         }
     }
@@ -1855,6 +1920,7 @@ fn create_partial_grouping_paths<'mcx>(
                 &agg_costs_partial,
                 num_partial_partial_groups,
             )?;
+            credit_gravity_hash_spill(run, agg_path, &agg_costs_partial);
             crate::pathnode::add_partial_path(run, partially_grouped_rel, agg_path);
         }
     }
@@ -2095,6 +2161,22 @@ fn add_paths_to_grouping_rel<'mcx>(
                 &having_qual,
                 num_groups,
             )?;
+        } else if run.root.numOrderedAggs > 0 {
+            let group_clause = hashed_distinct_keys(run)?;
+            let sets = hashed_distinct_set_entries(run, cheapest, extra.target_list)?;
+            let agg_path = crate::pathnode::create_hashed_distinct_agg_path(
+                run,
+                grouped_rel,
+                cheapest,
+                grouping_target,
+                types_pathnodes::AGG_HASHED,
+                group_clause,
+                crate::relnode::pgvec_clone_shallow(run.mcx, &having_qual),
+                agg_costs,
+                num_groups,
+                &sets,
+            )?;
+            crate::pathnode::add_path(run, grouped_rel, agg_path);
         } else {
             let group_clause =
                 crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.processed_groupClause);
@@ -2110,6 +2192,7 @@ fn add_paths_to_grouping_rel<'mcx>(
                 agg_costs,
                 num_groups,
             )?;
+            credit_gravity_hash_spill(run, agg_path, agg_costs);
             crate::pathnode::add_path(run, grouped_rel, agg_path);
         }
 
@@ -2136,9 +2219,33 @@ fn add_paths_to_grouping_rel<'mcx>(
                     &final_costs,
                     num_groups,
                 )?;
+                credit_gravity_hash_spill(run, agg_path, &final_costs);
                 crate::pathnode::add_path(run, grouped_rel, agg_path);
             }
         }
+    }
+
+    if parse.groupClause.is_nil()
+        && parse.groupingSets.is_nil()
+        && parse.hasAggs
+        && run.root.numOrderedAggs > 0
+        && run.root.numOrderByAggs == 0
+        && hashed_distinct_admitted(run)?
+    {
+        let sets = hashed_distinct_set_entries(run, cheapest, extra.target_list)?;
+        let agg_path = crate::pathnode::create_hashed_distinct_agg_path(
+            run,
+            grouped_rel,
+            cheapest,
+            grouping_target,
+            types_pathnodes::AGG_PLAIN,
+            mcx::PgVec::new_in(run.mcx),
+            crate::relnode::pgvec_clone_shallow(run.mcx, &having_qual),
+            agg_costs,
+            1.0,
+            &sets,
+        )?;
+        crate::pathnode::add_path(run, grouped_rel, agg_path);
     }
 
     // Partitionwise aggregation can leave fully aggregated partial paths
@@ -2149,6 +2256,250 @@ fn add_paths_to_grouping_rel<'mcx>(
     }
 
     Ok(())
+}
+
+// gravity §3 #2: the identity-set executor is Gravity's over pgrcolumnar
+// scans; a query with no pgrcolumnar base relation keeps PostgreSQL's plan
+// (the OLTP statements on heap must not move). Within it, the rider rule.
+fn hashed_distinct_admitted(run: &PlannerRun<'_>) -> PgResult<bool> {
+    #[cfg(test)]
+    if HASHED_DISTINCT_ON_HEAP_FOR_TESTS.load(std::sync::atomic::Ordering::Relaxed) {
+        return hashed_distinct_riders_order_free(run);
+    }
+    Ok(level_reads_pgrcolumnar(run) && hashed_distinct_riders_order_free(run)?)
+}
+
+fn level_reads_pgrcolumnar(run: &PlannerRun<'_>) -> bool {
+    (0..run.root.simple_rel_array_size as usize).any(|i| {
+        run.root.simple_rel_array[i]
+            .is_some_and(|r| run.root.rel(r).amflags & types_pathnodes::AMFLAG_PGRCOLUMNAR != 0)
+    })
+}
+
+/// on a query level that reads a pgrcolumnar relation (Gravity's), a hashed Agg is not charged cost_agg's
+/// hash_mem spill surcharge. Gravity's group table is its own record, grown from the execution's grant and then the
+/// grant pool (exec inputs/knobs room.rs, D2990) before it spills, and Gravity's sorted form at the same work_mem is the
+/// slower one. MEASURED (c8g 16 vCPU, work_mem 4MB, hot medians, the sorted form PostgreSQL's spill price picks vs the
+/// hashed form): a 100 M-row `GROUP BY url ... ORDER BY count(*) DESC LIMIT 10` 46.3 s vs 2.0 s at W0, 13.8 s vs 0.33 s
+/// at W8; a two-key group over 100 M rows that spills in Gravity too 128 s vs 100 s at W0; a small jsonb group 42.6 vs
+/// 15.6 ms.
+/// `pgrust.gravity_hashagg_pg_spill = on` charges it as PostgreSQL does.
+fn credit_gravity_hash_spill(run: &mut PlannerRun<'_>, agg_path: types_pathnodes::PathId, aggcosts: &types_pathnodes::AggClauseCosts) {
+    let (startup, total) = gravity_hash_spill_credit(run, agg_path, aggcosts);
+    let p = run.root.path_mut(agg_path).base_mut();
+    p.startup_cost -= startup;
+    p.total_cost -= total;
+}
+
+pub(crate) fn gravity_hash_spill_credit(run: &PlannerRun<'_>, agg_path: types_pathnodes::PathId, aggcosts: &types_pathnodes::AggClauseCosts) -> (f64, f64) {
+    if !level_reads_pgrcolumnar(run) || crate::gravity_paths::hashagg_pg_spill_on() {
+        return (0.0, 0.0);
+    }
+    let types_pathnodes::PathNode::AggPath(agg) = run.root.path(agg_path) else { return (0.0, 0.0) };
+    let (groups, Some(sub)) = (agg.numGroups, agg.subpath) else { return (0.0, 0.0) };
+    if agg.aggstrategy != types_pathnodes::AGG_HASHED {
+        return (0.0, 0.0);
+    }
+    let input = run.root.path(sub).base();
+    let (rows, width) = (input.rows, input.pathtarget_id.map_or(0, |pt| run.root.pathtarget(pt).width));
+    ::costsize::hashed_agg_spill_surcharge(run, aggcosts, groups, rows, width)
+}
+
+/// D2006 (PG plan parity): under a fractional fetch (LIMIT, a cursor) whose ORDER BY the groups' order satisfies
+/// (or no ORDER BY), PostgreSQL's GroupAggregate over the sorted input emits each group as it ends and stops with
+/// the fetch, never evaluating a later group's arguments or FILTER. The grouped hashed-DISTINCT form folds every
+/// input row before its first group, so a later group's raising argument would raise where PostgreSQL answers:
+/// such a query keeps the sorted path (when the keys sort). A full fetch, or an ORDER BY the groups do not give (a Sort above reads
+/// every group in both plans), keeps the form.
+fn sorted_groups_stop_early(run: &PlannerRun<'_>) -> bool {
+    run.root.tuple_fraction > 0.0 && types_pathnodes::pathkeys_contained_in(&run.root.sort_pathkeys, &run.root.group_pathkeys)
+}
+
+/// EquivalenceClass processing proved every GROUP BY item redundant
+/// (`WHERE k = 1 GROUP BY k`: processed_groupClause empty) in a query whose
+/// DISTINCT aggregates #2 may hash. That form groups by the query's own GROUP
+/// BY items (constant in the one group: the same groups), never by none: a
+/// HashAgg of no grouping column is refused by ExecInitAgg. The group input
+/// target carries them as group columns. Every other query keeps C's list.
+pub(crate) fn hashed_distinct_regroups(run: &PlannerRun<'_>) -> PgResult<bool> {
+    let parse = run.parse();
+    Ok(run.root.processed_groupClause.is_empty()
+        && !parse.groupClause.is_nil()
+        && parse.groupingSets.is_nil()
+        && run.root.numOrderedAggs > 0
+        && run.root.numOrderByAggs == 0
+        && parse.groupClause.iter().all(|n| n.as_sort_group_clause().expect("groupClause cell").hashable)
+        && hashed_distinct_admitted(run)?)
+}
+
+fn hashed_distinct_riders_order_free(run: &PlannerRun<'_>) -> PgResult<bool> {
+    let parse = run.parse();
+    fn acts(n: types_nodes::Node<'_>) -> PgResult<bool> {
+        Ok(clauses::contain_volatile_functions(n)? || clauses::contain_subplans(n)?)
+    }
+    if !parse.groupClause.is_nil() {
+        for n in parse.targetList.iter().chain(parse.havingQual) {
+            if acts(n)? {
+                return Ok(false);
+            }
+        }
+    }
+    for &ai in run.root.agginfos.iter() {
+        let info = run.root.agg_info(ai);
+        let node = *run.root.expr_node(info.aggrefs[0]);
+        if acts(node)? {
+            return Ok(false);
+        }
+        let trans = run.root.agg_trans_info(run.root.aggtransinfos[info.transno as usize]);
+        for f in [trans.transfn_oid, info.finalfn_oid] {
+            if f != types_core::InvalidOid && lsyscache::func_volatile(f)? == clauses::classify::PROVOLATILE_VOLATILE {
+                return Ok(false);
+            }
+        }
+        let aggref = node.as_aggref().expect("AggInfo.aggrefs holds Aggrefs");
+        if !aggref.aggdistinct.is_nil() {
+            if !hashed_distinct_members_alike(aggref)? {
+                return Ok(false);
+            }
+            continue;
+        }
+        let free = match rider_order(aggref.aggfnoid) {
+            RiderOrder::Free => true,
+            RiderOrder::DeterministicCollation => {
+                aggref.inputcollid != types_core::InvalidOid
+                    && lsyscache::get_collation_isdeterministic(aggref.inputcollid)?
+            }
+            RiderOrder::Typmod => aggref.args.iter().all(|a| {
+                let tle = a.as_target_entry().expect("Aggref.args cell");
+                tle.resjunk || nodes_core::node_funcs::expr_typmod(tle.expr) >= 0
+            }),
+            RiderOrder::Reads => false,
+        };
+        if !free {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// the hashed-DISTINCT form's identity set (nodeagg hashdistinct.rs `collect`) keeps the FIRST-ARRIVING member of
+/// each run of equal arguments, and only then sorts; PostgreSQL sorts every row and keeps the first of each run in
+/// pg_qsort's order (not stable), so over the same input the two keep different members ('cd' / 'CD' under a
+/// nondeterministic collation, 1.0 / 1.00, -0 / 0). The form applies to a DISTINCT aggregate only when that cannot show:
+/// count(DISTINCT) and regr_count count the runs, or every argument prints equal values alike (`types_core::eq_alike`,
+/// the rule lowerv4's Merge Append admission reads too). Here a type the table does not
+/// list is alike only as an enum, or as a domain over a type that is; anything else keeps the sorted path, which is
+/// PostgreSQL's plan. A float under float4_accum / float8_accum / float8_regr_accum (avg, variance / stddev, var_* /
+/// stddev_*, regr_* but regr_count, covar_*, corr) hides its zero sign: those sums start from +0, which a -0 leaves +0
+/// (decompose's `float_hidden`, its classes AvgF64 / Stat3F64 / Stat6F64), and the form feeds the kept members in the
+/// sorted order, so they round as PostgreSQL's.
+pub(crate) fn hashed_distinct_members_alike(aggref: &types_nodes::primnodes::Aggref<'_>) -> PgResult<bool> {
+    use types_core::eq_alike::{alike, array_elem, builtin, EqAlike};
+    if matches!(aggref.aggfnoid, 2147 | 2818) {
+        return Ok(true);
+    }
+    let float_hidden = float_accum_aggregate(aggref.aggfnoid);
+    let coll_bytes_eq =
+        aggref.inputcollid == types_core::InvalidOid || lsyscache::get_collation_isdeterministic(aggref.inputcollid)?;
+    for a in aggref.args.iter() {
+        let tle = a.as_target_entry().expect("Aggref.args cell");
+        let mut typid = nodes_core::node_funcs::expr_type(tle.expr);
+        let mut typmod = nodes_core::node_funcs::expr_typmod(tle.expr);
+        let mut other = None;
+        if builtin(typid).is_none() && array_elem(typid).is_none() {
+            let mut base_typmod = -1;
+            let base = lsyscache::getBaseTypeAndTypmod(typid, &mut base_typmod)?;
+            if base != typid && typmod < 0 {
+                typmod = base_typmod;
+            }
+            typid = base;
+            if builtin(typid).is_none() && array_elem(typid).is_none() && lsyscache::type_is_enum(typid)? {
+                other = Some(EqAlike::Image);
+            }
+        }
+        if !alike(typid, typmod, coll_bytes_eq, float_hidden, |_| other) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) fn float_accum_aggregate(aggfnoid: u32) -> bool {
+    matches!(aggfnoid, 2104 | 2105 | 2151 | 2152 | 2157 | 2158 | 2644 | 2645 | 2715 | 2716 | 2721 | 2722 | 2727 | 2728 | 2819..=2829)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RiderOrder {
+    Free,
+    /// PostgreSQL breaks a deterministic collation's tie by the bytes.
+    DeterministicCollation,
+    Typmod,
+    Reads,
+}
+
+pub(crate) fn rider_order(aggfnoid: types_core::Oid) -> RiderOrder {
+    match aggfnoid {
+        2147 | 2803 | 2818 | 2107 | 2108 | 2109 | 2114 | 2100 | 2101 | 2102 | 2103 => RiderOrder::Free,
+        2517 | 2518 | 2519 | 2236..=2241 | 6164..=6166 => RiderOrder::Free,
+        2115..=2118 | 2122 | 2123 | 2125 | 2126 | 2127 | 2131..=2134 | 2138 | 2139 | 2141 | 2142 | 2143 => {
+            RiderOrder::Free
+        }
+        2797 | 2798 | 4189 | 4190 | 5099 | 5100 | 6395 | 6396 => RiderOrder::Free,
+        2129 | 2145 => RiderOrder::DeterministicCollation,
+        2130 | 2146 => RiderOrder::Typmod,
+        _ => RiderOrder::Reads,
+    }
+}
+
+fn hashed_distinct_keys<'mcx>(run: &mut PlannerRun<'mcx>) -> PgResult<mcx::PgVec<'mcx, types_pathnodes::NodeId>> {
+    if !hashed_distinct_regroups(run)? {
+        return Ok(crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.processed_groupClause));
+    }
+    let parse = run.parse();
+    let mut ids = mcx::PgVec::new_in(run.mcx);
+    for n in &parse.groupClause {
+        ids.push(run.intern_expr(n));
+    }
+    Ok(ids)
+}
+
+#[cfg(test)]
+pub(crate) static HASHED_DISTINCT_ON_HEAP_FOR_TESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn hashed_distinct_set_entries<'mcx>(
+    run: &mut PlannerRun<'mcx>,
+    input_path: types_pathnodes::PathId,
+    target_list: &'mcx types_nodes::list::NodeList<'mcx>,
+) -> PgResult<mcx::PgVec<'mcx, (f64, i32)>> {
+    let input_rows = run.root.path(input_path).base().rows;
+    let clauses = hashed_distinct_keys(run)?;
+    let group_exprs = sortgrouplist_exprs(run, &clauses, target_list);
+    let agginfo_ids = crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.agginfos);
+    let mut out = mcx::PgVec::new_in(run.mcx);
+    for &ai in agginfo_ids.iter() {
+        let aggref_id = run.root.agg_info(ai).aggrefs[0];
+        let aggref = run.root.expr_node(aggref_id).as_aggref().expect("AggInfo.aggrefs holds Aggrefs");
+        if aggref.aggdistinct.is_nil() {
+            continue;
+        }
+        let mut exprs = crate::relnode::pgvec_clone_shallow(run.mcx, &group_exprs);
+        let mut width = 0;
+        for arg in &aggref.args {
+            let tle = arg.as_target_entry().expect("Aggref.args cell");
+            if tle.resjunk {
+                continue;
+            }
+            width += lsyscache::get_typavgwidth(
+                nodes_core::node_funcs::expr_type(tle.expr),
+                nodes_core::node_funcs::expr_typmod(tle.expr),
+            )?;
+            let id = run.intern_expr(tle.expr);
+            exprs.push((id, tle.expr));
+        }
+        out.push((crate::selfuncs::estimate_num_groups(run, &exprs, input_rows)?, width));
+    }
+    Ok(out)
 }
 
 // create_partitionwise_grouping_paths (planner.c).
@@ -2333,10 +2684,13 @@ pub(crate) fn could_not_implement(what: &str) -> Box<types_error::PgError> {
 }
 
 // get_number_of_groups (planner.c).
+/// `used_default`: set when some estimate took a key's ndistinct from DEFAULT_NUM_DISTINCT (C's estinfo
+/// SELFLAG_USED_DEFAULT; DR-7: the grouping rel's `gravity_groups_default`, which its Agg carries).
 fn get_number_of_groups<'mcx>(
     run: &mut PlannerRun<'mcx>,
     path_rows: f64,
     target_list: &'mcx types_nodes::list::NodeList<'mcx>,
+    used_default: &mut bool,
 ) -> PgResult<f64> {
     let parse = run.parse();
     if !parse.groupClause.is_nil() {
@@ -2350,12 +2704,13 @@ fn get_number_of_groups<'mcx>(
                 let group_exprs = sortgrouplist_exprs(run, &clauses, tlist);
                 rollup.numGroups = 0.0;
                 for (gset, gs) in rollup.gsets.iter().zip(rollup.gsets_data.iter_mut()) {
-                    let num_groups = crate::selfuncs::estimate_num_groups_pgset(
+                    let (num_groups, d) = crate::selfuncs::estimate_num_groups_pgset_estinfo(
                         run,
                         &group_exprs,
                         path_rows,
                         Some(gset),
                     )?;
+                    *used_default |= d;
                     gs.numGroups = num_groups;
                     rollup.numGroups += num_groups;
                 }
@@ -2369,12 +2724,13 @@ fn get_number_of_groups<'mcx>(
                 );
                 let group_exprs = sortgrouplist_exprs(run, &clauses, tlist);
                 for (gset, gs) in gd.hash_sets_idx.iter().zip(gd.unsortable_sets.iter_mut()) {
-                    let num_groups = crate::selfuncs::estimate_num_groups_pgset(
+                    let (num_groups, d) = crate::selfuncs::estimate_num_groups_pgset_estinfo(
                         run,
                         &group_exprs,
                         path_rows,
                         Some(gset),
                     )?;
+                    *used_default |= d;
                     gs.numGroups = num_groups;
                     gd.dNumHashGroups += num_groups;
                 }
@@ -2383,10 +2739,11 @@ fn get_number_of_groups<'mcx>(
             run.gset_data = Some(gd);
             return Ok(dnum_groups);
         }
-        let clauses =
-            crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.processed_groupClause);
-        let group_exprs = sortgrouplist_exprs(run, &clauses, target_list);
-        return crate::selfuncs::estimate_num_groups(run, &group_exprs, path_rows);
+        let clauses = run.root.processed_groupClause;
+        let group_exprs = sortgrouplist_exprs(run, clauses, target_list);
+        let (n, d) = crate::selfuncs::estimate_num_groups_estinfo(run, &group_exprs, path_rows)?;
+        *used_default |= d;
+        return Ok(n);
     }
     if !parse.groupingSets.is_nil() {
         return Ok(parse.groupingSets.len() as f64);
@@ -2476,16 +2833,16 @@ fn create_partial_distinct_paths<'mcx>(
 
     let cheapest_partial = run.root.rel(input_rel).partial_pathlist[0];
     let num_distinct_rows = {
-        let clauses =
-            crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.processed_distinctClause);
-        let exprs = sortgrouplist_exprs(run, &clauses, &parse.targetList);
+        let clauses = run.root.processed_distinctClause;
+        let exprs = sortgrouplist_exprs(run, clauses, &parse.targetList);
         let rows = run.root.path(cheapest_partial).base().rows;
-        crate::selfuncs::estimate_num_groups(run, &exprs, rows)?
+        let (n, d) = crate::selfuncs::estimate_num_groups_estinfo(run, &exprs, rows)?;
+        run.root.rel_mut(partial_distinct_rel).gravity_groups_default = d;
+        n
     };
 
     if grouping_is_sortable(run, &run.root.processed_distinctClause) {
-        let distinct_pathkeys =
-            crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.distinct_pathkeys);
+        let distinct_pathkeys = run.root.distinct_pathkeys;
         let paths = crate::relnode::pgvec_clone_shallow(
             run.mcx,
             &run.root.rel(input_rel).partial_pathlist,
@@ -2617,11 +2974,12 @@ fn create_final_distinct_paths<'mcx>(
     {
         run.root.path(cheapest).base().rows
     } else {
-        let clauses =
-            crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.processed_distinctClause);
-        let exprs = sortgrouplist_exprs(run, &clauses, &parse.targetList);
+        let clauses = run.root.processed_distinctClause;
+        let exprs = sortgrouplist_exprs(run, clauses, &parse.targetList);
         let rows = run.root.path(cheapest).base().rows;
-        crate::selfuncs::estimate_num_groups(run, &exprs, rows)?
+        let (n, d) = crate::selfuncs::estimate_num_groups_estinfo(run, &exprs, rows)?;
+        run.root.rel_mut(distinct_rel).gravity_groups_default = d;
+        n
     };
 
     if grouping_is_sortable(run, &run.root.processed_distinctClause) {
@@ -2631,9 +2989,9 @@ fn create_final_distinct_paths<'mcx>(
         let needed_pathkeys = if has_distinct_on
             && run.root.distinct_pathkeys.len() < run.root.sort_pathkeys.len()
         {
-            crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.sort_pathkeys)
+            run.root.sort_pathkeys
         } else {
-            crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.distinct_pathkeys)
+            run.root.distinct_pathkeys
         };
         let paths =
             crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.rel(input_rel).pathlist);
@@ -2714,7 +3072,7 @@ fn create_final_distinct_paths<'mcx>(
 // get_useful_pathkeys_for_distinct (planner.c).
 fn get_useful_pathkeys_for_distinct<'mcx>(
     run: &PlannerRun<'mcx>,
-    needed_pathkeys: &mcx::PgVec<'mcx, types_pathnodes::PathKey>,
+    needed_pathkeys: &[types_pathnodes::PathKey],
     path_pathkeys: &[types_pathnodes::PathKey],
 ) -> mcx::PgVec<'mcx, mcx::PgVec<'mcx, types_pathnodes::PathKey>> {
     let mcx = run.mcx;
@@ -3174,7 +3532,7 @@ fn adjust_group_pathkeys_for_groupagg<'mcx>(run: &mut PlannerRun<'mcx>) -> PgRes
         return Ok(());
     }
     let mcx = run.mcx;
-    let grouppathkeys = crate::relnode::pgvec_clone_shallow(mcx, &run.root.group_pathkeys);
+    let grouppathkeys = run.root.group_pathkeys;
     let agginfo_ids = crate::relnode::pgvec_clone_shallow(mcx, &run.root.agginfos);
     let naggs = agginfo_ids.len();
     let aggref_of = |run: &PlannerRun<'mcx>, i: usize| -> &'mcx types_nodes::primnodes::Aggref<'mcx> {
@@ -3187,7 +3545,7 @@ fn adjust_group_pathkeys_for_groupagg<'mcx>(run: &mut PlannerRun<'mcx>) -> PgRes
 
     // C's unprocessed_aggs Bitmapset over agginfo indexes.
     let mut unprocessed: mcx::PgVec<'mcx, bool> = mcx::PgVec::new_in(mcx);
-    unprocessed.resize(naggs, false);
+    ::mcx::pgvec_resize(&mut unprocessed, naggs, false)?;
     let mut n_unprocessed = 0usize;
     for i in 0..naggs {
         let aggref = aggref_of(run, i);
@@ -3226,11 +3584,11 @@ fn adjust_group_pathkeys_for_groupagg<'mcx>(run: &mut PlannerRun<'mcx>) -> PgRes
 
     let mut bestpathkeys: mcx::PgVec<'mcx, types_pathnodes::PathKey> = mcx::PgVec::new_in(mcx);
     let mut bestaggs: mcx::PgVec<'mcx, bool> = mcx::PgVec::new_in(mcx);
-    bestaggs.resize(naggs, false);
+    ::mcx::pgvec_resize(&mut bestaggs, naggs, false)?;
     let mut n_best = 0usize;
     while n_unprocessed > n_best {
         let mut aggindexes: mcx::PgVec<'mcx, bool> = mcx::PgVec::new_in(mcx);
-        aggindexes.resize(naggs, false);
+        ::mcx::pgvec_resize(&mut aggindexes, naggs, false)?;
         let mut n_agg = 0usize;
         let mut currpathkeys: Option<mcx::PgVec<'mcx, types_pathnodes::PathKey>> = None;
         for i in 0..naggs {
@@ -3256,7 +3614,7 @@ fn adjust_group_pathkeys_for_groupagg<'mcx>(run: &mut PlannerRun<'mcx>) -> PgRes
                 None => {
                     let cur = if !grouppathkeys.is_empty() {
                         let mut cur =
-                            crate::relnode::pgvec_clone_shallow(mcx, &grouppathkeys);
+                            crate::relnode::pgvec_clone_shallow(mcx, grouppathkeys);
                         crate::pathkeys::append_pathkeys(run, &mut cur, &pathkeys);
                         cur
                     } else {
@@ -3269,7 +3627,7 @@ fn adjust_group_pathkeys_for_groupagg<'mcx>(run: &mut PlannerRun<'mcx>) -> PgRes
                 Some(cur) => {
                     let pathkeys = if !grouppathkeys.is_empty() {
                         let mut pk =
-                            crate::relnode::pgvec_clone_shallow(mcx, &grouppathkeys);
+                            crate::relnode::pgvec_clone_shallow(mcx, grouppathkeys);
                         crate::pathkeys::append_pathkeys(run, &mut pk, &pathkeys);
                         pk
                     } else {
@@ -3307,7 +3665,7 @@ fn adjust_group_pathkeys_for_groupagg<'mcx>(run: &mut PlannerRun<'mcx>) -> PgRes
 
     // bestpathkeys already includes the original GROUP BY pathkeys.
     if !bestpathkeys.is_empty() {
-        run.root.group_pathkeys = bestpathkeys;
+        run.root.group_pathkeys = mcx::freeze_fit(bestpathkeys);
     }
 
     // No Hash Aggregate risk: create_grouping_paths never allows hashing with
@@ -3358,33 +3716,31 @@ fn standard_qp_callback<'mcx>(run: &mut PlannerRun<'mcx>) -> PgResult<()> {
             )?;
             assert!(sortable);
             run.root.num_groupby_pathkeys = pathkeys.len() as i32;
-            run.root.group_pathkeys = pathkeys;
+            run.root.group_pathkeys = mcx::freeze_fit(pathkeys);
         } else {
-            run.root.group_pathkeys = mcx::PgVec::new_in(run.mcx);
+            run.root.group_pathkeys = &[];
             run.root.num_groupby_pathkeys = 0;
         }
     } else if !parse.groupClause.is_nil() || run.root.numOrderedAggs > 0 {
-        let mut clauses = core::mem::replace(
-            &mut run.root.processed_groupClause,
-            mcx::PgVec::new_in(run.mcx),
-        );
+        // make_pathkeys_for_sortclauses_extended drops redundant clauses in place: edit a copy, then freeze it.
+        let mut clauses = crate::relnode::pgvec_clone_shallow(run.mcx, run.root.processed_groupClause);
         let (pathkeys, sortable) = crate::pathkeys::make_pathkeys_for_sortclauses_extended(
             run, &mut clauses, tlist, true, false, true,
         )?;
-        run.root.processed_groupClause = clauses;
+        run.root.processed_groupClause = mcx::freeze_fit(clauses);
         if sortable {
             run.root.num_groupby_pathkeys = pathkeys.len() as i32;
-            run.root.group_pathkeys = pathkeys;
+            run.root.group_pathkeys = mcx::freeze_fit(pathkeys);
             if run.root.numOrderedAggs > 0 {
                 adjust_group_pathkeys_for_groupagg(run)?;
             }
         } else {
             // Can't sort; no point in considering aggregate ordering either.
-            run.root.group_pathkeys = mcx::PgVec::new_in(run.mcx);
+            run.root.group_pathkeys = &[];
             run.root.num_groupby_pathkeys = 0;
         }
     } else {
-        run.root.group_pathkeys = mcx::PgVec::new_in(run.mcx);
+        run.root.group_pathkeys = &[];
         run.root.num_groupby_pathkeys = 0;
     }
 
@@ -3397,25 +3753,24 @@ fn standard_qp_callback<'mcx>(run: &mut PlannerRun<'mcx>) -> PgResult<()> {
         let (pathkeys, sortable) = crate::pathkeys::make_pathkeys_for_sortclauses_extended(
             run, &mut clauses, tlist, true, false, false,
         )?;
-        run.root.processed_distinctClause = clauses;
-        run.root.distinct_pathkeys =
-            if sortable { pathkeys } else { mcx::PgVec::new_in(run.mcx) };
+        run.root.processed_distinctClause = mcx::freeze_fit(clauses);
+        run.root.distinct_pathkeys = if sortable { mcx::freeze_fit(pathkeys) } else { &[] };
     } else {
-        run.root.distinct_pathkeys = mcx::PgVec::new_in(run.mcx);
+        run.root.distinct_pathkeys = &[];
     }
 
     if !run.active_windows.is_empty() {
         let wc = run.active_windows[0];
         let pk = crate::window::make_pathkeys_for_window(run, wc, tlist)?;
-        run.root.window_pathkeys = pk;
+        run.root.window_pathkeys = mcx::freeze_fit(pk);
     } else {
-        run.root.window_pathkeys = mcx::PgVec::new_in(run.mcx);
+        run.root.window_pathkeys = &[];
     }
 
     run.root.sort_pathkeys =
-        crate::pathkeys::make_pathkeys_for_sortclauses(run, &parse.sortClause, tlist)?;
+        mcx::freeze_fit(crate::pathkeys::make_pathkeys_for_sortclauses(run, &parse.sortClause, tlist)?);
 
-    run.root.setop_pathkeys = mcx::PgVec::new_in(run.mcx);
+    run.root.setop_pathkeys = &[];
     if let Some(op) = run.qp_setop {
         let mut group_clauses = crate::prepunion::generate_setop_child_grouplist(run, op, tlist)?;
         if !group_clauses.is_empty() {
@@ -3428,21 +3783,21 @@ fn standard_qp_callback<'mcx>(run: &mut PlannerRun<'mcx>) -> PgResult<()> {
                 false,
             )?;
             if sortable {
-                run.root.setop_pathkeys = pathkeys;
+                run.root.setop_pathkeys = mcx::freeze_fit(pathkeys);
             }
         }
     }
 
     run.root.query_pathkeys = if !run.root.group_pathkeys.is_empty() {
-        crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.group_pathkeys)
+        run.root.group_pathkeys
     } else if !run.root.window_pathkeys.is_empty() {
-        crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.window_pathkeys)
+        run.root.window_pathkeys
     } else if run.root.distinct_pathkeys.len() > run.root.sort_pathkeys.len() {
-        crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.distinct_pathkeys)
+        run.root.distinct_pathkeys
     } else if !run.root.sort_pathkeys.is_empty() {
-        crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.sort_pathkeys)
+        run.root.sort_pathkeys
     } else {
-        crate::relnode::pgvec_clone_shallow(run.mcx, &run.root.setop_pathkeys)
+        run.root.setop_pathkeys
     };
     Ok(())
 }

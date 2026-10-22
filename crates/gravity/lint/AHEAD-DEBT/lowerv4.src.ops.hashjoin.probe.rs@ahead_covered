@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/hashjoin/probe.rs	ahead_covered	licence	fn	pre-registered for rxshape2No.2624 (queued; not on trunk yet): an outer-side pipeline of the probe runs before the build where the effects home's cover takes it (effects/visible/cover.rs), whole-read when the cover rests on the root's client [EFFECTS-ONLY; D2212]

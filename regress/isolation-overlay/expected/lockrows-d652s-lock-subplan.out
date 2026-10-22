@@ -1,0 +1,112 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1g s2t s1c
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, a.grp, (SELECT max(l.amt) FROM ll l WHERE l.acct = a.grp) AS m FROM la a WHERE a.id <= 8 ORDER BY a.id FOR UPDATE;
+QUERY PLAN                                          
+----------------------------------------------------
+LockRows                                            
+  ->  Index Scan using la_pkey on la a              
+        Index Cond: (id <= 8)                       
+        SubPlan 1                                   
+          ->  Aggregate                             
+                ->  Index Scan using ll_acct on ll l
+                      Index Cond: (acct = a.grp)    
+(7 rows)
+
+step s1g: UPDATE la SET grp = 3 WHERE id = 5;
+step s2t: SELECT a.id, a.grp, (SELECT max(l.amt) FROM ll l WHERE l.acct = a.grp) AS m FROM la a WHERE a.id <= 8 ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2t: <... completed>
+id|grp| m
+--+---+--
+ 1|  1|49
+ 2|  2|48
+ 3|  3|49
+ 4|  0|48
+ 5|  3|49
+ 6|  2|48
+ 7|  3|49
+ 8|  0|48
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s1i s2t s1c
+step s1g: UPDATE la SET grp = 3 WHERE id = 5;
+step s1i: INSERT INTO ll VALUES (1000, 3, 99);
+step s2t: SELECT a.id, a.grp, (SELECT max(l.amt) FROM ll l WHERE l.acct = a.grp) AS m FROM la a WHERE a.id <= 8 ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2t: <... completed>
+id|grp| m
+--+---+--
+ 1|  1|49
+ 2|  2|48
+ 3|  3|49
+ 4|  0|48
+ 5|  3|49
+ 6|  2|48
+ 7|  3|49
+ 8|  0|48
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2w s1c
+step s1v: UPDATE la SET v = 100 WHERE id = 5;
+step s2w: SELECT a.id, a.v FROM la a WHERE a.id <= 8 AND a.v < (SELECT max(l.amt) FROM ll l WHERE l.acct = a.grp) ORDER BY a.id FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+id|v
+--+-
+ 1|1
+ 2|2
+ 3|3
+ 4|4
+ 6|6
+ 7|7
+ 8|8
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2l s1c
+step s1g: UPDATE la SET grp = 3 WHERE id = 5;
+step s2l: SELECT a.id, (SELECT max(l.amt) FROM ll l WHERE l.acct = a.grp) AS m FROM la a WHERE a.id >= 4 ORDER BY a.id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+id| m
+--+--
+ 4|48
+ 5|49
+ 6|48
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2lw s1c
+step s1v: UPDATE la SET v = 100 WHERE id = 5;
+step s2lw: SELECT a.id, a.v, (SELECT max(l.amt) FROM ll l WHERE l.acct = a.grp) AS m FROM la a WHERE a.id >= 4 AND a.v < 60 ORDER BY a.id LIMIT 3 FOR SHARE; <waiting ...>
+step s1c: COMMIT;
+step s2lw: <... completed>
+id|v| m
+--+-+--
+ 4|4|48
+ 6|6|48
+ 7|7|49
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2lw s1c
+step s1g: UPDATE la SET grp = 3 WHERE id = 5;
+step s2lw: SELECT a.id, a.v, (SELECT max(l.amt) FROM ll l WHERE l.acct = a.grp) AS m FROM la a WHERE a.id >= 4 AND a.v < 60 ORDER BY a.id LIMIT 3 FOR SHARE; <waiting ...>
+step s1c: COMMIT;
+step s2lw: <... completed>
+id|v| m
+--+-+--
+ 4|4|48
+ 5|5|49
+ 6|6|48
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress

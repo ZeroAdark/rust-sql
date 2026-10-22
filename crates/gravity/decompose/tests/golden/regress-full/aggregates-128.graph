@@ -1,0 +1,22 @@
+-- regress-full-aggregates-128
+-- create table agg_hash_3 as select (g/2)::numeric as c1, sum(7::int4) as c2, count(*) as c3 from agg_data_2k group by g/2;
+graph pipelines=2 breakers=1 init_plans=0 root=p1
+p0 node=1 eligible rows=2000 end=breaker(slot=0 HashAgg)
+  desc owner=none/0 words=dense_lo@1,dense_hi@2,bits@3,order@4/5
+  nodes n1@0 n0@1^
+  source range rel=26053 rti=1 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=op528(v1.1, c23:2), 2=v1.1)
+  outs 1=w4:val 2=w8:val
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot0@p0
+  nodes n0@0
+  source breaker slot=0
+  project (1=fn1740(outer.1), 2=agg2108(1=c23:7), 3=agg2803*(), 4j=outer.1)
+  outs 1=vl:call1740 2=w8:val 3=w8:val 4=w4:val
+breaker slot=0 kind=HashAgg budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[SumI64@8,Count@16] 24B
+group slot=0 producer=p0 node=0 form=Hashed hints=[] layout=[I32]->[SumI64@8,Count@16] 24B
+  key 0 word=0 resno=1 kind=I32 attno=0 type=23 expr=op528(v1.1, c23:2)
+  agg aggno=0 fn=2108 reg=SumInt slot=0 count_slot=- final=Identity class=SumI64 trans=Abi(SumI64) mods=[] expr=agg2108(1=c23:7)
+  agg aggno=1 fn=2803 reg=CountStar slot=1 count_slot=- final=Identity class=CountStar trans=Abi(Count) mods=[star] expr=agg2803*()
+mapped: SeqScan Agg

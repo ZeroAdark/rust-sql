@@ -1,5 +1,4 @@
 use crate::*;
-use core::cell::Cell;
 
 pub fn pg_localtime(t: pg_time_t, tz: &PgTz) -> Option<PgTm<'_>> {
     localsub(&tz.state, t)
@@ -36,11 +35,9 @@ fn localsub(sp: &TzState, t: pg_time_t) -> Option<PgTm<'_>> {
     Some(tm)
 }
 
-thread_local! {
-    // C gmtsub's gmtptr: built fully before publish so a re-entrant pg_gmtime
-    // sees None or a finished state (loser leaks).
-    static GMT_STATE: Cell<Option<&'static TzState>> = const { Cell::new(None) };
-}
+// C gmtsub's gmtptr: one immutable GMT state per process (a per-thread
+// leaked Box outlived every session thread).
+static GMT_STATE: pgsync::OnceLock<Box<TzState>> = pgsync::OnceLock::new();
 
 fn gmtload(sp: &mut TzState) {
     if tzload(b"GMT", None, sp, true).is_err() {
@@ -48,17 +45,11 @@ fn gmtload(sp: &mut TzState) {
     }
 }
 
-fn gmt_state() -> &'static TzState {
-    GMT_STATE.with(|cell| {
-        if let Some(gmtptr) = cell.get() {
-            return gmtptr;
-        }
+pub(crate) fn gmt_state() -> &'static TzState {
+    GMT_STATE.get_or_init(|| {
         let mut boxed = Box::new(TzState::new());
         gmtload(&mut boxed);
-        if cell.get().is_none() {
-            cell.set(Some(Box::leak(boxed)));
-        }
-        cell.get().unwrap()
+        boxed
     })
 }
 

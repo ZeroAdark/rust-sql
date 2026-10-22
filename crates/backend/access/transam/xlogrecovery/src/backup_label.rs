@@ -32,7 +32,7 @@
 //! mid-conversion; we follow strtoul instead and parse the "0" (value 0),
 //! leaving the 'x' as trailing input.
 
-use elog::{elog, ereport};
+use elog::{elog, ereport, PCT_M};
 use pg_string::isspace_c_locale;
 use types_core::{TimeLineID, XLogRecPtr};
 use types_error::{PgResult, DEBUG1, ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, FATAL};
@@ -65,7 +65,7 @@ fn could_not_read<T>(file: &str, e: &std::io::Error, func: &'static str) -> PgRe
     ereport(FATAL)
         .with_saved_errno(e.raw_os_error().unwrap_or(0))
         .errcode_for_file_access()
-        .errmsg(format!("could not read file \"{file}\": %m"))
+        .errmsg(format!("could not read file \"{file}\": {PCT_M}"))
         .finish(loc(func))?;
     unreachable!()
 }
@@ -383,12 +383,24 @@ pub(crate) fn read_backup_label() -> PgResult<Option<BackupLabel>> {
     }
 }
 
+#[derive(Debug)]
+enum TablespaceMapError {
+    InvalidData,
+    Oom(Box<types_error::PgError>),
+}
+
+impl From<Box<types_error::PgError>> for TablespaceMapError {
+    fn from(e: Box<types_error::PgError>) -> Self {
+        Self::Oom(e)
+    }
+}
+
 pub(crate) struct TablespaceInfo {
     pub oid: u32,
     pub path: Vec<u8>,
 }
 
-fn parse_tablespace_map_content(content: &[u8]) -> Result<Vec<TablespaceInfo>, ()> {
+fn parse_tablespace_map_content(content: &[u8]) -> Result<Vec<TablespaceInfo>, TablespaceMapError> {
     let mut tablespaces = Vec::new();
     let mut buf = Vec::new();
     let mut was_backslash = false;
@@ -399,10 +411,10 @@ fn parse_tablespace_map_content(content: &[u8]) -> Result<Vec<TablespaceInfo>, (
             }
             let line = std::mem::take(&mut buf);
             let Some(sp) = line.iter().position(|&b| b == b' ') else {
-                return Err(());
+                return Err(TablespaceMapError::InvalidData);
             };
             if sp < 1 || sp >= line.len() - 1 {
-                return Err(());
+                return Err(TablespaceMapError::InvalidData);
             }
             // C: strtoul(str, &endp, 10) with `*endp != '\0' || errno ==
             // EINVAL || errno == ERANGE` as the reject test. strtoul skips
@@ -414,11 +426,11 @@ fn parse_tablespace_map_content(content: &[u8]) -> Result<Vec<TablespaceInfo>, (
             // is FATAL; trailing junk (endp not at NUL) is FATAL.
             let oid = match scan_uint(&line[..sp], 10, usize::MAX) {
                 Some((v, false, rest)) if rest.is_empty() => v as u32,
-                _ => return Err(()),
+                _ => return Err(TablespaceMapError::InvalidData),
             };
             tablespaces.push(TablespaceInfo {
                 oid,
-                path: line[sp + 1..].to_vec(),
+                path: ::mcx::std_vec_from_slice("xlogrecovery", &line[sp + 1..])?,
             });
         } else if !was_backslash && ch == b'\\' {
             was_backslash = true;
@@ -432,7 +444,7 @@ fn parse_tablespace_map_content(content: &[u8]) -> Result<Vec<TablespaceInfo>, (
         }
     }
     if !buf.is_empty() || was_backslash {
-        return Err(());
+        return Err(TablespaceMapError::InvalidData);
     }
     Ok(tablespaces)
 }
@@ -446,7 +458,8 @@ pub(crate) fn read_tablespace_map() -> PgResult<Option<Vec<TablespaceInfo>>> {
     };
     match parse_tablespace_map_content(&content) {
         Ok(tablespaces) => Ok(Some(tablespaces)),
-        Err(()) => invalid_data(TABLESPACE_MAP, "read_tablespace_map"),
+        Err(TablespaceMapError::InvalidData) => invalid_data(TABLESPACE_MAP, "read_tablespace_map"),
+        Err(TablespaceMapError::Oom(e)) => Err(e),
     }
 }
 

@@ -1,0 +1,18 @@
+-- regress-full-xml-022
+-- SELECT xmltable.* FROM (SELECT data FROM xmldata) x, LATERAL XMLTABLE('/ROWS/ROW' PASSING data COLUMNS id int PATH '@id', _id FOR ORDINALITY, country_name text PATH 'COUNTRY_NAME' NOT NULL, country_id text PATH 'COUNTRY_ID', region_id int PATH 'REGION_ID', size float PATH 'SIZE', unit text PATH 'SIZE/@unit', premier_name text PATH 'PREMIER_NAME' DEFAULT 'not specified');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=1360 end=sink
+  nodes n1@0 n0@1
+  source range rel=43924 rti=3 am=heap
+    lanes Attr(1):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=v3.1)
+  nest inner=n2 JOIN_INNER vol=v params=($exec0=outer.1)
+  inner node=2 serial site=-1 reason=Host end=sink
+  nodes n2@0
+  source tablefunc rti=2 kind=xmltable cols=8 ordinality=1 doc=$exec0 row=c25:'/ROWS/ROW'
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4, 5=v2.5, 6=v2.6, 7=v2.7, 8=v2.8)
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=inner.5, 6=inner.6, 7=inner.7, 8=inner.8)
+  outs 1=vl:win/page
+  outs 1=w4:val 2=w4:val 3=vl:life/breaker 4=vl:life/breaker 5=w4:val 6=w8:val 7=vl:life/breaker 8=vl:life/breaker
+param $exec0 owner=n0 type=142 rep=vl:win/page
+mapped: SeqScan TableFuncScan NestLoop NestLoopParam

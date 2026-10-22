@@ -1,0 +1,4 @@
+path	crates/backend/access/pgrcolumnar/pgrc_format/src/relopt.rs
+method	std::clone::Clone::clone	3
+method	std::string::ToString::to_string	1
+type	std::string::String	1

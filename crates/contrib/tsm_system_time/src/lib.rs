@@ -27,7 +27,6 @@ pub struct SystemTimeSampler {
 }
 
 impl SystemTimeSampler {
-    /// `system_time_beginsamplescan`.
     pub fn begin_sample_scan(&mut self, millis: f64, seed: u32) -> PgResult<()> {
         if millis < 0.0 || millis.is_nan() {
             return Err(negative_time());
@@ -39,34 +38,33 @@ impl SystemTimeSampler {
         Ok(())
     }
 
-    /// `system_time_nextsampleblock`.
-    pub fn next_sample_block(&mut self, nblocks: BlockNumber) -> BlockNumber {
+    pub fn next_sample_block(&mut self, nblocks: BlockNumber) -> PgResult<BlockNumber> {
         if self.doneblocks == 0 {
             if self.step == 0 {
                 if nblocks == 0 {
-                    return InvalidBlockNumber;
+                    return Ok(InvalidBlockNumber);
                 }
                 let mut randstate = sampler_random_init_state(self.seed);
                 self.nblocks = nblocks;
                 self.firstblock =
                     (sampler_random_fract(&mut randstate) * self.nblocks as f64) as BlockNumber;
-                self.step = random_relative_prime(self.nblocks, &mut randstate);
+                self.step = random_relative_prime(self.nblocks, &mut randstate)?;
             }
             self.lb = self.firstblock;
             self.start_time_ns = pg_clock::mono_ns();
         }
         self.doneblocks += 1;
         if self.doneblocks > self.nblocks {
-            return InvalidBlockNumber;
+            return Ok(InvalidBlockNumber);
         }
         let elapsed_ms = pg_clock::mono_ns().wrapping_sub(self.start_time_ns) as f64 / 1e6;
         if elapsed_ms >= self.millis {
-            return InvalidBlockNumber;
+            return Ok(InvalidBlockNumber);
         }
         loop {
             self.lb = ((self.lb as u64 + self.step as u64) % self.nblocks as u64) as BlockNumber;
             if self.lb < nblocks {
-                return self.lb;
+                return Ok(self.lb);
             }
         }
     }
@@ -135,18 +133,25 @@ fn gcd(mut a: u32, mut b: u32) -> u32 {
     b
 }
 
-/// Random value below and coprime to n (1 if n <= 1); ~2-3 draws. C's
-/// just-in-case CHECK_FOR_INTERRUPTS is not carried (loop always ends).
-pub fn random_relative_prime(n: u32, randstate: &mut PgPrng) -> u32 {
+pub fn random_relative_prime(n: u32, randstate: &mut PgPrng) -> PgResult<u32> {
     if n <= 1 {
-        return 1;
+        return Ok(1);
     }
     loop {
+        if init_small::globals::InterruptPending() {
+            process_interrupts()?;
+        }
         let r = (sampler_random_fract(randstate) * n as f64) as u32;
         if r != 0 && gcd(r, n) == 1 {
-            return r;
+            return Ok(r);
         }
     }
+}
+
+#[cold]
+#[inline(never)]
+fn process_interrupts() -> PgResult<()> {
+    postgres_seams::check_for_interrupts::call()
 }
 
 // clamp_row_est (costsize.c); grounded as in tablesample/tableam.

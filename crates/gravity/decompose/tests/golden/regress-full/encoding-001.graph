@@ -1,0 +1,10 @@
+-- regress-full-encoding-001
+-- INSERT INTO regress_encoding VALUES ('café', 'caf' || test_bytea_to_text('\xc3'), 'café' || test_bytea_to_text('\x00') || 'dcba', 'caf' || test_bytea_to_text('\xc300') || 'dcba');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c25:'caf\xc3\xa9', 2=op654(c25:'caf', fn17482(c17:'\xc3')), 3=op654(op654(c25:'caf\xc3\xa9', fn17482(c17:'\x00')), c25:'dcba'), 4=op654(op654(c25:'caf', fn17482(c17:'\xc3\x00')), c25:'dcba'))
+  write INSERT rel=17488 rti=1 natts=4 indexes=()
+  outs 1=vl:stmt/imm 2=vl:call1258 3=vl:call1258 4=vl:call1258
+mapped: Result ModifyTable

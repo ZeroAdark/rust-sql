@@ -1,0 +1,11 @@
+path	crates/gravity/hosts/src/ops/scan/index_ranges/mod.rs
+growth	std::vec::Vec::push	7
+ir-only	nbtree::pivots::bt_pivots	1
+macro	std::vec	5
+method	slice::sort_by_key	1
+method	std::clone::Clone::clone	9
+method	std::iter::Iterator::collect	4
+method	std::sync::Arc::new	2
+method	std::vec::Vec::with_capacity	1
+type	std::sync::Arc	3
+type	std::vec::Vec	13

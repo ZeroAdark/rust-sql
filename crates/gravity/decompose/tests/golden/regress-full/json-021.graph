@@ -1,0 +1,18 @@
+-- regress-full-json-021
+-- SELECT json_build_object( 'a', json_build_object('b',false,'c',99), 'd', json_build_object('e',array[9,8,7]::int[], 'f', (select row_to_json(r) from ( select relkind, oid::regclass as name from pg_class where relname = 'pg_class') r)));
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index rel=1259 rti=3 am=heap index=2663
+    key att=2 op=93 value=c19:#64
+    recheck (op93(v3.2, c19:#64))
+    lanes Attr(1):byval8:w8:val Attr(18):byval8:w8:val
+  project (1=fn3155(T_RowExpr))
+  outs 1=vl:call3155
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=fn3200(c705:#-2, fn3200(c705:#-2, c16:0, c705:#-2, c23:99), c705:#-2, fn3200(c705:#-2, c1007:'\x01\x00\x00\x00\x00\x00\x00\x00\x17\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x09\x00\x00\x00\x08\x00\x00\x00\x07\x00\x00\x00', c705:#-2, $exec0)))
+  outs 1=vl:call3200
+init_plan id=1 pipeline=p0 link=Expr param=$exec0 vol=s
+mapped: Result IndexScan SubPlan

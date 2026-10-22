@@ -1,0 +1,11 @@
+path	crates/backend/access/pgrcolumnar/pgrc_write/src/shred_jsonb.rs
+growth	std::vec::Vec::push	4
+method	pgrc_format::try_to_vec	1
+method	std::boxed::Box::new	1
+method	std::clone::Clone::clone	6
+method	std::iter::Iterator::collect	3
+method	std::string::String::from_utf8_lossy	1
+method	std::vec::Vec::with_capacity	1
+type	std::boxed::Box	1
+type	std::string::String	1
+type	std::vec::Vec	5

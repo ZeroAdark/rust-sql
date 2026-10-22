@@ -1,0 +1,10 @@
+-- regress-full-rowtypes-035
+-- explain (verbose, costs off) select (ss.a).x, (ss.a).n from (select information_schema._pg_expandarray(array[1,2]) AS a) ss where false;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  gate T_List
+  project (1=T_FieldSelect, 2=T_FieldSelect)
+  outs 1=w4:val 2=w4:val
+mapped: Result

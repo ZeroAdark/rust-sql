@@ -1,0 +1,13 @@
+-- regress-full-rules-055
+-- UPDATE shoelace_data SET sl_avail = 6 WHERE sl_name = 'sl7';
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@3
+  source range rel=33579 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byval8:w8:val Offset:byval2:w2:val
+  filter op518(v1.2, c23:6)
+  filter op1054(v1.1, c1042:'sl7')
+  project (1=v1.1, 2=c23:6, 3=c19:#64, 4=c1114:-946684800000000)
+  write INSERT rel=33597 rti=4 natts=4 indexes=()
+  outs 1=vl:win/page 2=w4:val 3=fx64:stmt/imm 4=w8:val
+mapped: ModifyTable SeqScan

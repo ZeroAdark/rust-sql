@@ -1,11 +1,11 @@
 use super::*;
-use datum::Datum;
 use mcx::MemoryContext;
 use std::sync::Once;
 use types_nodes::{Node, NodeList};
 
 const SPC_WITH_OPTS: Oid = 7001;
 const SPC_NULL_OPTS: Oid = 7002;
+const SPC_SHORT_OPTS: Oid = 7003;
 
 static SEAMS: Once = Once::new();
 
@@ -22,6 +22,25 @@ fn def<'mcx>(mcx: Mcx<'mcx>, name: &'static str, val: &'static str) -> Node<'mcx
         },
     )
     .unwrap()
+}
+
+// {seq_page_cost=1.1} as stored on disk: a 1-byte-header text[] image.
+fn short_header_options() -> Vec<u8> {
+    let elem = b"seq_page_cost=1.1";
+    let mut body = Vec::new();
+    body.extend_from_slice(&1i32.to_ne_bytes());
+    body.extend_from_slice(&0i32.to_ne_bytes());
+    body.extend_from_slice(&25u32.to_ne_bytes());
+    body.extend_from_slice(&1i32.to_ne_bytes());
+    body.extend_from_slice(&1i32.to_ne_bytes());
+    body.extend_from_slice(&((4 + elem.len() as u32) << 2).to_ne_bytes());
+    body.extend_from_slice(elem);
+    while body.len() % 4 != 0 {
+        body.push(0);
+    }
+    let mut img = vec![(((body.len() + 1) as u8) << 1) | 0x01];
+    img.extend_from_slice(&body);
+    img
 }
 
 fn install() {
@@ -41,8 +60,9 @@ fn install() {
                         mcx, None, &list, None, &[], false, false,
                     )?
                     .expect("options image");
-                    Some(Some(Datum::from_usize(img.leak().as_ptr() as usize)))
+                    Some(Some(img))
                 }
+                SPC_SHORT_OPTS => Some(Some(mcx::slice_in(mcx, &short_header_options())?)),
                 SPC_NULL_OPTS => Some(None),
                 _ => None,
             })
@@ -94,4 +114,19 @@ fn io_concurrency_prefers_tablespace_options_over_gucs() {
     assert_eq!(get_tablespace_io_concurrency(m, SPC_NULL_OPTS).unwrap(), 16);
     assert_eq!(get_tablespace_maintenance_io_concurrency(m, SPC_WITH_OPTS).unwrap(), 10);
     assert_eq!(get_tablespace_maintenance_io_concurrency(m, 9).unwrap(), 10);
+}
+
+// Read streams look options up in per-page scratch that is reset with a leak check.
+#[test]
+fn lookup_leaves_nothing_charged_in_the_callers_context() {
+    install();
+    let mut cx = MemoryContext::new("btvacuumpage");
+    let m = cx.mcx();
+    let opts = get_tablespace(m, SPC_SHORT_OPTS).unwrap().unwrap();
+    assert_eq!(opts.seq_page_cost, 1.1);
+    assert_eq!(opts.random_page_cost, -1.0);
+    assert_eq!(get_tablespace_page_costs(m, SPC_SHORT_OPTS, 4.0, 1.0).unwrap(), (4.0, 1.1));
+    assert_eq!(get_tablespace_maintenance_io_concurrency(m, SPC_SHORT_OPTS).unwrap(), 10);
+    assert_eq!(cx.used(), 0);
+    cx.reset();
 }

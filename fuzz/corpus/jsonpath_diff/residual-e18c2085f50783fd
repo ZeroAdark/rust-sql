@@ -1,1 +1,0 @@
-hstrict $[0 to last].datetime() == $.a.timestamp_tz()

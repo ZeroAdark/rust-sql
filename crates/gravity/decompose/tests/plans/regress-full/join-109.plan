@@ -1,0 +1,126 @@
+-- name: regress-full-join-109
+-- sql: explain (verbose, costs off) select table_catalog, table_name from int4_tbl t1 inner join (int8_tbl t2 left join information_schema.column_udt_usage on null) on null;
+-- test: join
+-- shape: afbef9026021154c seen=1
+-- rel 1247 pg_type am=heap kind=r natts=32
+-- att 1247 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 2 typname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1247 3 typnamespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 4 typowner typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 5 typlen typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1247 6 typbyval typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 7 typtype typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 8 typcategory typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 9 typispreferred typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 10 typisdefined typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 11 typdelim typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 12 typrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 13 typsubscript typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 14 typelem typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 15 typarray typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 16 typinput typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 17 typoutput typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 18 typreceive typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 19 typsend typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 20 typmodin typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 21 typmodout typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 22 typanalyze typid=24 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 23 typalign typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 24 typstorage typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 25 typnotnull typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1247 26 typbasetype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 27 typtypmod typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 28 typndims typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 29 typcollation typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1247 30 typdefaultbin typid=194 typmod=-1 len=-1 byval=f notnull=f
+-- att 1247 31 typdefault typid=25 typmod=-1 len=-1 byval=f notnull=f
+-- att 1247 32 typacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2703 rel=1247 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 2704 rel=1247 keys=2,3 opts=0,0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- rel 1249 pg_attribute am=heap kind=r natts=25
+-- att 1249 1 attrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1249 2 attname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1249 3 atttypid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1249 4 attlen typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1249 5 attnum typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1249 6 atttypmod typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1249 7 attndims typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1249 8 attbyval typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 9 attalign typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 10 attstorage typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 11 attcompression typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 12 attnotnull typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 13 atthasdef typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 14 atthasmissing typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 15 attidentity typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 16 attgenerated typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 17 attisdropped typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 18 attislocal typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1249 19 attinhcount typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1249 20 attcollation typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1249 21 attstattarget typid=21 typmod=-1 len=2 byval=t notnull=f
+-- att 1249 22 attacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- att 1249 23 attoptions typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- att 1249 24 attfdwoptions typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- att 1249 25 attmissingval typid=2277 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2658 rel=1249 keys=1,2 opts=0,0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- idx 2659 rel=1249 keys=1,5 opts=0,0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=2
+-- rel 1259 pg_class am=heap kind=r natts=34
+-- att 1259 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 2 relname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 1259 3 relnamespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 4 reltype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 5 reloftype typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 6 relowner typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 7 relam typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 8 relfilenode typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 9 reltablespace typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 10 relpages typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 11 reltuples typid=700 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 12 relallvisible typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 13 relallfrozen typid=23 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 14 reltoastrelid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 15 relhasindex typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 16 relisshared typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 17 relpersistence typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 18 relkind typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 19 relnatts typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1259 20 relchecks typid=21 typmod=-1 len=2 byval=t notnull=t
+-- att 1259 21 relhasrules typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 22 relhastriggers typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 23 relhassubclass typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 24 relrowsecurity typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 25 relforcerowsecurity typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 26 relispopulated typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 27 relreplident typid=18 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 28 relispartition typid=16 typmod=-1 len=1 byval=t notnull=t
+-- att 1259 29 relrewrite typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 30 relfrozenxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 31 relminmxid typid=28 typmod=-1 len=4 byval=t notnull=t
+-- att 1259 32 relacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- att 1259 33 reloptions typid=1009 typmod=-1 len=-1 byval=f notnull=f
+-- att 1259 34 relpartbound typid=194 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2662 rel=1259 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- idx 2663 rel=1259 keys=2,3 opts=0,0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- idx 3455 rel=1259 keys=9,8 opts=0,0 unique=f am=btree partial=f deferrable=f excl=f primary=f nkeyatts=2
+-- rel 2615 pg_namespace am=heap kind=r natts=4
+-- att 2615 1 oid typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2615 2 nspname typid=19 typmod=-1 len=64 byval=f notnull=t
+-- att 2615 3 nspowner typid=26 typmod=-1 len=4 byval=t notnull=t
+-- att 2615 4 nspacl typid=1034 typmod=-1 len=-1 byval=f notnull=f
+-- idx 2684 rel=2615 keys=2 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=f nkeyatts=1
+-- idx 2685 rel=2615 keys=1 opts=0 unique=t am=btree partial=f deferrable=f excl=f primary=t nkeyatts=1
+-- rel 13782 column_udt_usage am=none kind=v natts=7
+-- att 13782 1 udt_catalog typid=13718 typmod=-1 len=64 byval=f notnull=f
+-- att 13782 2 udt_schema typid=13718 typmod=-1 len=64 byval=f notnull=f
+-- att 13782 3 udt_name typid=13718 typmod=-1 len=64 byval=f notnull=f
+-- att 13782 4 table_catalog typid=13718 typmod=-1 len=64 byval=f notnull=f
+-- att 13782 5 table_schema typid=13718 typmod=-1 len=64 byval=f notnull=f
+-- att 13782 6 table_name typid=13718 typmod=-1 len=64 byval=f notnull=f
+-- att 13782 7 column_name typid=13718 typmod=-1 len=64 byval=f notnull=f
+-- rel 16400 int4_tbl am=heap kind=r natts=1
+-- att 16400 1 f1 typid=23 typmod=-1 len=4 byval=t notnull=f
+-- rel 16403 int8_tbl am=heap kind=r natts=2
+-- att 16403 1 q1 typid=20 typmod=-1 len=8 byval=t notnull=f
+-- att 16403 2 q2 typid=20 typmod=-1 len=8 byval=t notnull=f
+{PLANNEDSTMT :commandType 1 :queryId 0 :planId 0 :hasReturning false :hasModifyingCTE false :canSetTag true :transientPlan false :dependsOnRole false :parallelModeNeeded false :jitFlags 0 :planTree {RESULT :plan.disabled_nodes 0 :plan.startup_cost 0 :plan.total_cost 0 :plan.plan_rows 0 :plan.plan_width 128 :plan.parallel_aware false :plan.parallel_safe false :plan.async_capable false :plan.plan_node_id 0 :plan.targetlist ({TARGETENTRY :expr {RELABELTYPE :arg {FUNCEXPR :funcid 861 :funcresulttype 19 :funcretset false :funcvariadic false :funcformat 0 :funccollid 950 :inputcollid 0 :args <> :location -1} :resulttype 13718 :resulttypmod -1 :resultcollid 950 :relabelformat 1 :location -1} :resno 1 :resname table_catalog :ressortgroupref 0 :resorigtbl 13782 :resorigcol 4 :resjunk false} {TARGETENTRY :expr {RELABELTYPE :arg {VAR :varno 7 :varattno 2 :vartype 19 :vartypmod -1 :varcollid 950 :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn 7 :varattnosyn 2 :location -1} :resulttype 13718 :resulttypmod -1 :resultcollid 950 :relabelformat 1 :location -1} :resno 2 :resname table_name :ressortgroupref 0 :resorigtbl 13782 :resorigcol 6 :resjunk false}) :plan.qual <> :plan.lefttree <> :plan.righttree <> :plan.initPlan <> :plan.extParam (b) :plan.allParam (b) :resconstantqual ({CONST :consttype 16 :consttypmod -1 :constcollid 0 :constlen 1 :constbyval true :constisnull false :location -1 :constvalue 1 [ 0 0 0 0 0 0 0 0 ]})} :partPruneInfos <> :rtable ({RANGETBLENTRY :alias {ALIAS :aliasname t1 :colnames <>} :eref {ALIAS :aliasname t1 :colnames ("f1")} :rtekind 0 :relid 16400 :inh false :relkind r :rellockmode 1 :perminfoindex 1 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname t2 :colnames <>} :eref {ALIAS :aliasname t2 :colnames ("q1" "q2")} :rtekind 0 :relid 16403 :inh false :relkind r :rellockmode 1 :perminfoindex 2 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname column_udt_usage :colnames ("udt_catalog" "udt_schema" "udt_name" "table_catalog" "table_schema" "table_name" "column_name")} :rtekind 1 :subquery <> :security_barrier false :relid 13782 :inh false :relkind v :rellockmode 1 :perminfoindex 3 :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("q1" "q2" "udt_catalog" "udt_schema" "udt_name" "table_catalog" "table_schema" "table_name" "column_name")} :rtekind 2 :jointype 1 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("f1" "q1" "q2" "udt_catalog" "udt_schema" "udt_name" "table_catalog" "table_schema" "table_name" "column_name")} :rtekind 2 :jointype 0 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname a :colnames <>} :eref {ALIAS :aliasname a :colnames ("attrelid" "attname" "atttypid" "attlen" "attnum" "atttypmod" "attndims" "attbyval" "attalign" "attstorage" "attcompression" "attnotnull" "atthasdef" "atthasmissing" "attidentity" "attgenerated" "attisdropped" "attislocal" "attinhcount" "attcollation" "attstattarget" "attacl" "attoptions" "attfdwoptions" "attmissingval")} :rtekind 0 :relid 1249 :inh false :relkind r :rellockmode 1 :perminfoindex 4 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname c :colnames <>} :eref {ALIAS :aliasname c :colnames ("oid" "relname" "relnamespace" "reltype" "reloftype" "relowner" "relam" "relfilenode" "reltablespace" "relpages" "reltuples" "relallvisible" "relallfrozen" "reltoastrelid" "relhasindex" "relisshared" "relpersistence" "relkind" "relnatts" "relchecks" "relhasrules" "relhastriggers" "relhassubclass" "relrowsecurity" "relforcerowsecurity" "relispopulated" "relreplident" "relispartition" "relrewrite" "relfrozenxid" "relminmxid" "relacl" "reloptions" "relpartbound")} :rtekind 0 :relid 1259 :inh false :relkind r :rellockmode 1 :perminfoindex 5 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname nc :colnames <>} :eref {ALIAS :aliasname nc :colnames ("oid" "nspname" "nspowner" "nspacl")} :rtekind 0 :relid 2615 :inh false :relkind r :rellockmode 1 :perminfoindex 6 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname t :colnames <>} :eref {ALIAS :aliasname t :colnames ("oid" "typname" "typnamespace" "typowner" "typlen" "typbyval" "typtype" "typcategory" "typispreferred" "typisdefined" "typdelim" "typrelid" "typsubscript" "typelem" "typarray" "typinput" "typoutput" "typreceive" "typsend" "typmodin" "typmodout" "typanalyze" "typalign" "typstorage" "typnotnull" "typbasetype" "typtypmod" "typndims" "typcollation" "typdefaultbin" "typdefault" "typacl")} :rtekind 0 :relid 1247 :inh false :relkind r :rellockmode 1 :perminfoindex 7 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname nt :colnames <>} :eref {ALIAS :aliasname nt :colnames ("oid" "nspname" "nspowner" "nspacl")} :rtekind 0 :relid 2615 :inh false :relkind r :rellockmode 1 :perminfoindex 8 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("oid" "typname" "typnamespace" "typowner" "typlen" "typbyval" "typtype" "typcategory" "typispreferred" "typisdefined" "typdelim" "typrelid" "typsubscript" "typelem" "typarray" "typinput" "typoutput" "typreceive" "typsend" "typmodin" "typmodout" "typanalyze" "typalign" "typstorage" "typnotnull" "typbasetype" "typtypmod" "typndims" "typcollation" "typdefaultbin" "typdefault" "typacl" "oid" "nspname" "nspowner" "nspacl")} :rtekind 2 :jointype 0 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname bt :colnames <>} :eref {ALIAS :aliasname bt :colnames ("oid" "typname" "typnamespace" "typowner" "typlen" "typbyval" "typtype" "typcategory" "typispreferred" "typisdefined" "typdelim" "typrelid" "typsubscript" "typelem" "typarray" "typinput" "typoutput" "typreceive" "typsend" "typmodin" "typmodout" "typanalyze" "typalign" "typstorage" "typnotnull" "typbasetype" "typtypmod" "typndims" "typcollation" "typdefaultbin" "typdefault" "typacl")} :rtekind 0 :relid 1247 :inh false :relkind r :rellockmode 1 :perminfoindex 9 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias {ALIAS :aliasname nbt :colnames <>} :eref {ALIAS :aliasname nbt :colnames ("oid" "nspname" "nspowner" "nspacl")} :rtekind 0 :relid 2615 :inh false :relkind r :rellockmode 1 :perminfoindex 10 :tablesample <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("oid" "typname" "typnamespace" "typowner" "typlen" "typbyval" "typtype" "typcategory" "typispreferred" "typisdefined" "typdelim" "typrelid" "typsubscript" "typelem" "typarray" "typinput" "typoutput" "typreceive" "typsend" "typmodin" "typmodout" "typanalyze" "typalign" "typstorage" "typnotnull" "typbasetype" "typtypmod" "typndims" "typcollation" "typdefaultbin" "typdefault" "typacl" "oid" "nspname" "nspowner" "nspacl")} :rtekind 2 :jointype 0 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>} {RANGETBLENTRY :alias <> :eref {ALIAS :aliasname unnamed_join :colnames ("oid" "typname" "typnamespace" "typowner" "typlen" "typbyval" "typtype" "typcategory" "typispreferred" "typisdefined" "typdelim" "typrelid" "typsubscript" "typelem" "typarray" "typinput" "typoutput" "typreceive" "typsend" "typmodin" "typmodout" "typanalyze" "typalign" "typstorage" "typnotnull" "typbasetype" "typtypmod" "typndims" "typcollation" "typdefaultbin" "typdefault" "typacl" "oid" "nspname" "nspowner" "nspacl" "oid" "typname" "typnamespace" "typowner" "typlen" "typbyval" "typtype" "typcategory" "typispreferred" "typisdefined" "typdelim" "typrelid" "typsubscript" "typelem" "typarray" "typinput" "typoutput" "typreceive" "typsend" "typmodin" "typmodout" "typanalyze" "typalign" "typstorage" "typnotnull" "typbasetype" "typtypmod" "typndims" "typcollation" "typdefaultbin" "typdefault" "typacl" "oid" "nspname" "nspowner" "nspacl")} :rtekind 2 :jointype 1 :joinmergedcols 0 :joinaliasvars <> :joinleftcols <> :joinrightcols <> :join_using_alias <> :lateral false :inFromCl true :securityQuals <>}) :unprunableRelids (b 1 2 3 6 7 8 9 10 12 13) :permInfos ({RTEPERMISSIONINFO :relid 16400 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 16403 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 13782 :inh true :requiredPerms 2 :checkAsUser 0 :selectedCols (b 11 13) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1249 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9 10 12 24) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1259 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9 10 25) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 2615 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1247 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9 10 11 14 33) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 2615 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 1247 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9 10 11) :insertedCols (b) :updatedCols (b)} {RTEPERMISSIONINFO :relid 2615 :inh true :requiredPerms 2 :checkAsUser 10 :selectedCols (b 8 9) :insertedCols (b) :updatedCols (b)}) :resultRelations <> :appendRelations <> :subplans <> :rewindPlanIDs (b) :rowMarks <> :relationOids (o 16400 16403 13782 1249 1259 2615 1247 2615 1247 2615) :invalItems ({PLANINVALITEM :cacheId 82 :hashValue 2285844475} {PLANINVALITEM :cacheId 82 :hashValue 2285844475}) :paramExecTypes <> :utilityStmt <> :stmt_location 0 :stmt_len 0}

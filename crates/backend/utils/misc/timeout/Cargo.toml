@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+pagegive = { path = "../../../../_support/pagegive" }
 # DST P2 (contract s1.3): timer deadlines in pg_clock's mono domain; the
 # timer thread parks on the Waiter (rg.rs conversion precedent).
 pg_clock = { path = "../../../../port/pg_clock" }

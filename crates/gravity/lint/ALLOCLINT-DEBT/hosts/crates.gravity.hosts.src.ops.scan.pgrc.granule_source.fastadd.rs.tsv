@@ -1,0 +1,7 @@
+path	crates/gravity/hosts/src/ops/scan/pgrc/granule_source/fastadd.rs
+growth	std::vec::Vec::push	1
+method	std::clone::Clone::clone	6
+method	std::iter::Iterator::collect	2
+method	std::sync::Arc::new	2
+type	std::sync::Arc	4
+type	std::vec::Vec	1

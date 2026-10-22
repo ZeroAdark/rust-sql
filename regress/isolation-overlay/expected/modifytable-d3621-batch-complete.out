@@ -1,0 +1,124 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s1done s2top s1c s2show
+step s2x: EXPLAIN (COSTS OFF) UPDATE usc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4])) AND state = 'active';
+QUERY PLAN                                                                      
+--------------------------------------------------------------------------------
+Update on usc                                                                   
+  ->  Nested Loop                                                               
+        ->  Unique                                                              
+              ->  Sort                                                          
+                    Sort Key: "ANY_subquery".unnest                             
+                    ->  Subquery Scan on "ANY_subquery"                         
+                          ->  ProjectSet                                        
+                                ->  Result                                      
+        ->  Index Scan using usc_pkey on usc                                    
+              Index Cond: ((name = 'q1'::text) AND (id = "ANY_subquery".unnest))
+              Filter: (state = 'active'::text)                                  
+(11 rows)
+
+step s1done: UPDATE usc SET state = 'completed' WHERE name = 'q1' AND id = 2;
+step s2top: UPDATE usc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4])) AND state = 'active' RETURNING id, state, data; <waiting ...>
+step s1c: COMMIT;
+step s2top: <... completed>
+id|state    |data
+--+---------+----
+ 4|completed|   0
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM usc WHERE id IN (2, 4) ORDER BY id;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 2|completed|   0|                            
+q1  | 4|completed|   0|Sun Feb 01 00:00:00 2026 PST
+(2 rows)
+
+
+starting permutation: s1data s2top s1c s2show
+step s1data: UPDATE usc SET data = data + 1 WHERE name = 'q1' AND id = 2;
+step s2top: UPDATE usc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4])) AND state = 'active' RETURNING id, state, data; <waiting ...>
+step s1c: COMMIT;
+step s2top: <... completed>
+id|state    |data
+--+---------+----
+ 2|completed|   1
+ 4|completed|   0
+(2 rows)
+
+step s2show: SELECT name, id, state, data, completed_on FROM usc WHERE id IN (2, 4) ORDER BY id;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 2|completed|   1|Sun Feb 01 00:00:00 2026 PST
+q1  | 4|completed|   0|Sun Feb 01 00:00:00 2026 PST
+(2 rows)
+
+
+starting permutation: s1del s2top s1c s2show
+step s1del: DELETE FROM usc WHERE name = 'q1' AND id = 2;
+step s2top: UPDATE usc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4])) AND state = 'active' RETURNING id, state, data; <waiting ...>
+step s1c: COMMIT;
+step s2top: <... completed>
+id|state    |data
+--+---------+----
+ 4|completed|   0
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM usc WHERE id IN (2, 4) ORDER BY id;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 4|completed|   0|Sun Feb 01 00:00:00 2026 PST
+(1 row)
+
+
+starting permutation: s1done s2cte s1c s2show
+step s1done: UPDATE usc SET state = 'completed' WHERE name = 'q1' AND id = 2;
+step s2cte: WITH results AS (UPDATE usc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+count
+-----
+    1
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM usc WHERE id IN (2, 4) ORDER BY id;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 2|completed|   0|                            
+q1  | 4|completed|   0|Sun Feb 01 00:00:00 2026 PST
+(2 rows)
+
+
+starting permutation: s1data s2cte s1c s2show
+step s1data: UPDATE usc SET data = data + 1 WHERE name = 'q1' AND id = 2;
+step s2cte: WITH results AS (UPDATE usc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+count
+-----
+    2
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM usc WHERE id IN (2, 4) ORDER BY id;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 2|completed|   1|Sun Feb 01 00:00:00 2026 PST
+q1  | 4|completed|   0|Sun Feb 01 00:00:00 2026 PST
+(2 rows)
+
+
+starting permutation: s1del s2cte s1c s2show
+step s1del: DELETE FROM usc WHERE name = 'q1' AND id = 2;
+step s2cte: WITH results AS (UPDATE usc SET completed_on = '2026-02-01', state = 'completed' WHERE name = 'q1' AND id IN (SELECT UNNEST(ARRAY[2, 4])) AND state = 'active' RETURNING *) SELECT COUNT(*) FROM results; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+count
+-----
+    1
+(1 row)
+
+step s2show: SELECT name, id, state, data, completed_on FROM usc WHERE id IN (2, 4) ORDER BY id;
+name|id|state    |data|completed_on                
+----+--+---------+----+----------------------------
+q1  | 4|completed|   0|Sun Feb 01 00:00:00 2026 PST
+(1 row)
+

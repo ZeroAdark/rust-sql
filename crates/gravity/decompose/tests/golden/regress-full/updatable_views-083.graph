@@ -1,0 +1,24 @@
+-- regress-full-updatable_views-083
+-- MERGE INTO rw_view2 t USING (VALUES (6)) AS v(a) ON t.a = v.a WHEN NOT MATCHED THEN INSERT VALUES (v.a);
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=2 serial site=0 reason=Write end=sink
+  nodes n2@0 n1@1 n0@3
+  source const
+  project ()
+  nest inner=n3 JOIN_LEFT invariant raise-free params=()
+  inner node=3 eligible rows=1 end=sink
+  nodes n3@0
+  source range rel=24552 rti=6 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Offset:byval2:w2:val RowId:byval8:w8:val
+  filter op97(v6.1, v6.2)
+  filter op521(v6.1, c23:0)
+  filter op96(v6.1, c23:6)
+  project (1=v6.-1, 2=T_RowExpr)
+  project (1j=inner.2, 2j=inner.1)
+  write MERGE rel=24555 rti=4 natts=1 indexes=() marks=1 (rti6:ROW_MARK_REFERENCE) view instead=iud wholerow=outer.1
+    check view rel=rw_view2 (op521(v3.1, c23:0))
+    merge rowid=outer.1 target_cols=()
+    when not matched then insert (1=c23:6)
+  outs
+  outs 1=? 2=fx6:life/breaker
+mapped: Result ModifyTable SeqScan NestLoop PlanRowMark

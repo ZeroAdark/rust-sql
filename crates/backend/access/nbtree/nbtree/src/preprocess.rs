@@ -4,13 +4,16 @@
 
 use ::arrayfuncs::foundation as arrfn;
 use ::datum::Datum;
-use ::fmgr_core::{fmgr_info, function_call2_coll_in};
+use ::fmgr_core::function_call2_coll_in;
 use ::mcx::{Mcx, PgVec};
 use ::types_core::INDEX_MAX_KEYS;
 use ::types_error::{PgError, PgResult, ERRCODE_PROGRAM_LIMIT_EXCEEDED};
 use ::types_fmgr::FmgrInfo;
-use ::types_nbtree::{BTArrayKeyInfo, BTCommuteStrategyNumber, BTScanOpaqueData, BTORDER_PROC};
-use ::types_rel::Relation;
+use ::types_nbtree::{
+    BTArrayKeyInfo, BTArrayScratch, BTCommuteStrategyNumber, BTScanOpaqueData, BTORDER_PROC,
+};
+
+use crate::readrel::BtReadRel;
 use ::types_scan::scankey::{
     BTEqualStrategyNumber, BTGreaterEqualStrategyNumber, BTGreaterStrategyNumber,
     BTLessEqualStrategyNumber, BTLessStrategyNumber, BTMaxStrategyNumber, ScanKeyData,
@@ -29,8 +32,8 @@ struct XformEntry {
 
 /// _bt_preprocess_keys; `input_keys` (scan->keyData) is mutated in place by
 /// strategy fixup, as in C. `parallel` is `scan->parallel_scan != NULL`.
-pub(crate) fn bt_preprocess_keys(
-    rel: &Relation<'_>,
+pub(crate) fn bt_preprocess_keys<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     input_keys: &mut [ScanKeyData],
     parallel: bool,
@@ -46,22 +49,44 @@ pub(crate) fn bt_preprocess_keys(
         return Ok(()); // done if qual-less scan
     }
 
+    // the buffers this rebuilds per rescan (C's arrayContext) go back to the scan on every road out, an
+    // unmatchable qual and an error included, so the next rescan refills them instead of allocating.
     let mcx = *so.keyData.allocator();
-    let mut array_key_data = bt_preprocess_array_keys(mcx, rel, so, input_keys)?;
+    let mut scratch = core::mem::replace(&mut so.arrayScratch, BTArrayScratch::new_in(mcx));
+    let r = preprocess_keys_with(rel, so, input_keys, parallel, &mut scratch);
+    so.arrayScratch = scratch;
+    r
+}
+
+fn preprocess_keys_with<'mcx, R: BtReadRel + ?Sized>(
+    rel: &R,
+    so: &mut BTScanOpaqueData<'mcx>,
+    input_keys: &mut [ScanKeyData],
+    parallel: bool,
+    scratch: &mut BTArrayScratch<'mcx>,
+) -> PgResult<()> {
+    let mcx = *so.keyData.allocator();
+    let have_arrays = bt_preprocess_array_keys(mcx, rel, so, input_keys, scratch)?;
     if !so.qual_ok {
         return Ok(()); // unmatchable array, so give up
     }
 
-    let indoption = &rel.rd_indoption;
-    let have_arrays = array_key_data.is_some();
-    let inkeys: &mut [ScanKeyData] = match array_key_data.as_mut() {
-        Some(v) => v.as_mut_slice(),
-        None => input_keys,
+    let indoption = rel.indoption();
+    let BTArrayScratch {
+        keys: array_key_data,
+        key_map: key_data_map,
+        spare_elems,
+        ..
+    } = scratch;
+    let inkeys: &mut [ScanKeyData] = if have_arrays {
+        array_key_data.as_mut_slice()
+    } else {
+        input_keys
     };
     let number_of_keys = inkeys.len();
-    let mut key_data_map: PgVec<'_, i32> = PgVec::new_in(mcx);
+    key_data_map.clear();
     if have_arrays {
-        key_data_map.reserve(number_of_keys);
+        ::mcx::pgvec_reserve(key_data_map, number_of_keys)?;
     }
 
     if inkeys[0].sk_attno < 1 {
@@ -69,7 +94,7 @@ pub(crate) fn bt_preprocess_keys(
     }
 
     so.keyData.clear();
-    so.keyData.reserve(number_of_keys);
+    ::mcx::pgvec_reserve(&mut so.keyData, number_of_keys)?;
 
     if number_of_keys == 1 {
         if !bt_fix_scankey_strategy(&mut inkeys[0], indoption) {
@@ -268,7 +293,7 @@ pub(crate) fn bt_preprocess_keys(
     so.numberOfKeys = so.keyData.len() as i32;
 
     if have_arrays {
-        bt_preprocess_array_keys_final(rel, so, &key_data_map, parallel)?;
+        bt_preprocess_array_keys_final(rel, so, key_data_map, parallel, spare_elems)?;
     }
 
     if redundant_key_kept && so.qual_ok {
@@ -287,7 +312,7 @@ fn keys_out_of_order() -> Box<PgError> {
 }
 
 /// _bt_fix_scankey_strategy; false = unsatisfiable NULL qual.
-fn bt_fix_scankey_strategy(skey: &mut ScanKeyData, indoption: &PgVec<'_, i16>) -> bool {
+fn bt_fix_scankey_strategy(skey: &mut ScanKeyData, indoption: &[i16]) -> bool {
     let addflags = (indoption[skey.sk_attno as usize - 1] as i32) << SK_BT_INDOPTION_SHIFT;
 
     // match. IS NULL / IS NOT NULL keys keep going as =-like keys.
@@ -393,8 +418,8 @@ fn bt_mark_scankey_required(skey: &mut ScanKeyData) {
 /// opfamily can't supply the cross-type comparison; op aliases an arg.
 /// `array` = (so->arrayKeys index, orderProcs index) when exactly one of the
 /// args is an equality-type array key.
-fn compare_scankey_args(
-    rel: &Relation<'_>,
+fn compare_scankey_args<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     keys: &[ScanKeyData],
     op: usize,
@@ -451,8 +476,8 @@ fn compare_scankey_args(
 
 // _bt_compare_scankey_args, scalar tail: no array involvement (op may alias
 // either arg, so it's a separate borrow).
-fn compare_scankey_args_scalar(
-    rel: &Relation<'_>,
+fn compare_scankey_args_scalar<R: BtReadRel + ?Sized>(
+    rel: &R,
     op: &ScanKeyData,
     leftarg: &ScanKeyData,
     rightarg: &ScanKeyData,
@@ -480,7 +505,7 @@ fn compare_scankey_args_scalar(
 
     debug_assert!(leftarg.sk_attno == rightarg.sk_attno);
 
-    let opcintype = rel.rd_opcintype[leftarg.sk_attno as usize - 1];
+    let opcintype = rel.opcintype(leftarg.sk_attno as usize - 1);
 
     let lefttype = if leftarg.sk_subtype != 0 {
         leftarg.sk_subtype
@@ -518,16 +543,16 @@ fn compare_scankey_args_scalar(
         strat = BTCommuteStrategyNumber(strat);
     }
 
-    let cmp_op = lsyscache::get_opfamily_member(
-        rel.rd_opfamily[leftarg.sk_attno as usize - 1],
+    let cmp_op = rel.opfamily_member(
+        rel.opfamily(leftarg.sk_attno as usize - 1),
         lefttype,
         righttype,
         strat as i16,
     )?;
     if cmp_op != 0 {
-        let cmp_proc = lsyscache::get_opcode(cmp_op)?;
+        let cmp_proc = rel.opcode(cmp_op)?;
         if cmp_proc != 0 {
-            let mut func = fmgr_info(cmp_proc)?;
+            let mut func = rel.fmgr_info(cmp_proc)?;
             let r = crate::fcframe::with_proc_scratch(|mcx| {
                 function_call2_coll_in(
                     &mut func,
@@ -547,8 +572,8 @@ fn compare_scankey_args_scalar(
 /// _bt_saoparray_shrink: eliminate array elements contradicted by the scalar
 /// key at `skey_i`; Some(qual_ok) on success, None when the opfamily can't
 /// supply the cross-type ORDER proc.
-fn bt_saoparray_shrink(
-    rel: &Relation<'_>,
+fn bt_saoparray_shrink<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     arraysk_i: usize,
     skey_i: usize,
@@ -564,7 +589,7 @@ fn bt_saoparray_shrink(
     );
     debug_assert!(skey.sk_flags & (SK_ISNULL | SK_ROW_HEADER) == 0);
 
-    let opcintype = rel.rd_opcintype[arraysk.sk_attno as usize - 1];
+    let opcintype = rel.opcintype(arraysk.sk_attno as usize - 1);
     let mut crosstype_proc: Option<FmgrInfo> = None;
 
     if skey.sk_subtype != opcintype && skey.sk_subtype != 0 {
@@ -573,8 +598,8 @@ fn bt_saoparray_shrink(
         } else {
             opcintype
         };
-        let cmp_proc = lsyscache::get_opfamily_proc(
-            rel.rd_opfamily[arraysk.sk_attno as usize - 1],
+        let cmp_proc = rel.opfamily_proc(
+            rel.opfamily(arraysk.sk_attno as usize - 1),
             skey.sk_subtype,
             arraysk_elemtype,
             BTORDER_PROC as i16,
@@ -582,7 +607,7 @@ fn bt_saoparray_shrink(
         if cmp_proc == 0 {
             return Ok(None); // can't make the comparison
         }
-        crosstype_proc = Some(fmgr_info(cmp_proc)?);
+        crosstype_proc = Some(rel.fmgr_info(cmp_proc)?);
     }
 
     let BTScanOpaqueData {
@@ -655,8 +680,8 @@ fn bt_saoparray_shrink(
 /// _bt_skiparray_shrink: fold the scalar inequality at `skey` into the skip
 /// array's low_compare/high_compare; Some(true) = key now redundant, None =
 /// existing bound can't be compared against it.
-fn bt_skiparray_shrink(
-    rel: &Relation<'_>,
+fn bt_skiparray_shrink<R: BtReadRel + ?Sized>(
+    rel: &R,
     so: &mut BTScanOpaqueData<'_>,
     skey: &ScanKeyData,
     array_i: i32,
@@ -695,8 +720,8 @@ fn bt_skiparray_shrink(
 /// _bt_skiparray_strat_adjust: skip support turns a final > low_compare into
 /// >= (and < high_compare into <=) so MINVAL/MAXVAL descents can carry
 /// lower-order keys.
-fn bt_skiparray_strat_adjust(
-    rel: &Relation<'_>,
+fn bt_skiparray_strat_adjust<R: BtReadRel + ?Sized>(
+    rel: &R,
     arraysk: &ScanKeyData,
     array: &mut BTArrayKeyInfo<'_>,
     qual_ok: &mut bool,
@@ -723,15 +748,15 @@ fn bt_skiparray_strat_adjust(
 
 // _bt_skiparray_strat_decrement (is_low=false) / _bt_skiparray_strat_increment
 // (is_low=true); over/underflow marks the qual unsatisfiable.
-fn bt_skiparray_strat_step(
-    rel: &Relation<'_>,
+fn bt_skiparray_strat_step<R: BtReadRel + ?Sized>(
+    rel: &R,
     attno: usize,
     array: &mut BTArrayKeyInfo<'_>,
     qual_ok: &mut bool,
     is_low: bool,
 ) -> PgResult<()> {
-    let opfamily = rel.rd_opfamily[attno - 1];
-    let opcintype = rel.rd_opcintype[attno - 1];
+    let opfamily = rel.opfamily(attno - 1);
+    let opcintype = rel.opcintype(attno - 1);
     let sksup = array.sksup.expect("caller checked");
     let key = if is_low {
         array.low_compare.as_mut()
@@ -766,13 +791,13 @@ fn bt_skiparray_strat_step(
     if key.sk_flags & SK_BT_DESC != 0 {
         lookupstrat = BTCommuteStrategyNumber(lookupstrat);
     }
-    let op = lsyscache::get_opfamily_member(opfamily, opcintype, opcintype, lookupstrat as i16)?;
+    let op = rel.opfamily_member(opfamily, opcintype, opcintype, lookupstrat as i16)?;
     if op == 0 {
         return Ok(());
     }
-    let cmp_proc = lsyscache::get_opcode(op)?;
+    let cmp_proc = rel.opcode(op)?;
     if cmp_proc != 0 {
-        key.sk_func = fmgr_info(cmp_proc)?;
+        key.sk_func = rel.fmgr_info(cmp_proc)?;
         key.sk_argument = new_sk_argument;
         key.sk_strategy = newstrat;
     }
@@ -837,7 +862,8 @@ fn bt_binsrch_array_skey_raw(
 /// arrayKeys scan_key remap/sort).
 fn bt_unmark_keys(so: &mut BTScanOpaqueData<'_>) -> PgResult<()> {
     let n = so.numberOfKeys as usize;
-    let mcx = *so.keyData.allocator();
+    let work = ::mcx::MemoryContext::new_bump("bt_unmark_keys");
+    let mcx = work.mcx();
     let mut unmarkikey: PgVec<'_, bool> = ::mcx::vec_with_capacity_in(mcx, n)?;
     unmarkikey.resize(n, false);
     let mut nunmark = 0usize;
@@ -895,15 +921,15 @@ fn bt_unmark_keys(so: &mut BTScanOpaqueData<'_>) -> PgResult<()> {
     // ScanKeyData is droppy (sk_func.fn_extra): plain reserve, not the
     // !needs_drop arena helper.
     let mut kept: PgVec<'_, ScanKeyData> = PgVec::new_in(mcx);
-    kept.reserve(n - nunmark);
+    ::mcx::pgvec_reserve(&mut kept, n - nunmark)?;
     let mut unmarked: PgVec<'_, ScanKeyData> = PgVec::new_in(mcx);
-    unmarked.reserve(nunmark);
+    ::mcx::pgvec_reserve(&mut unmarked, nunmark)?;
     let have_arrays = so.numArrayKeys > 0;
     let mut kept_procs: PgVec<'_, FmgrInfo> = PgVec::new_in(mcx);
     let mut unmarked_procs: PgVec<'_, FmgrInfo> = PgVec::new_in(mcx);
     let mut key_map: PgVec<'_, i32> = PgVec::new_in(mcx);
     if have_arrays {
-        key_map.resize(n, 0);
+        ::mcx::pgvec_resize(&mut key_map, n, 0)?;
     }
 
     for (i, key) in so.keyData.iter().enumerate() {
@@ -964,8 +990,8 @@ fn bt_unmark_keys(so: &mut BTScanOpaqueData<'_>) -> PgResult<()> {
 
 // _bt_num_array_keys: SAOP array count plus the skip arrays to backfill
 // (one per most-significant attribute lacking a = input key).
-fn bt_num_array_keys(
-    rel: &Relation<'_>,
+fn bt_num_array_keys<R: BtReadRel + ?Sized>(
+    rel: &R,
     input_keys: &[ScanKeyData],
     skip_eq_ops: &mut [::types_core::Oid; INDEX_MAX_KEYS as usize],
 ) -> PgResult<(usize, usize)> {
@@ -982,14 +1008,10 @@ fn bt_num_array_keys(
     let mut prev_num_skip = 0usize;
     for i in 0..=input_keys.len() {
         while attno_skip < attno_inkey {
-            let opfamily = rel.rd_opfamily[attno_skip as usize - 1];
-            let opcintype = rel.rd_opcintype[attno_skip as usize - 1];
-            let eq_op = lsyscache::get_opfamily_member(
-                opfamily,
-                opcintype,
-                opcintype,
-                BTEqualStrategyNumber as i16,
-            )?;
+            let opfamily = rel.opfamily(attno_skip as usize - 1);
+            let opcintype = rel.opcintype(attno_skip as usize - 1);
+            let eq_op =
+                rel.opfamily_member(opfamily, opcintype, opcintype, BTEqualStrategyNumber as i16)?;
             skip_eq_ops[attno_skip as usize - 1] = eq_op;
             if eq_op == 0 {
                 return Ok((n_saop + prev_num_skip, prev_num_skip));
@@ -1010,9 +1032,9 @@ fn bt_num_array_keys(
             if attno_has_equal {
                 skip_eq_ops[attno_skip as usize - 1] = 0;
             } else {
-                let opfamily = rel.rd_opfamily[attno_skip as usize - 1];
-                let opcintype = rel.rd_opcintype[attno_skip as usize - 1];
-                let eq_op = lsyscache::get_opfamily_member(
+                let opfamily = rel.opfamily(attno_skip as usize - 1);
+                let opcintype = rel.opcintype(attno_skip as usize - 1);
+                let eq_op = rel.opfamily_member(
                     opfamily,
                     opcintype,
                     opcintype,
@@ -1041,30 +1063,44 @@ fn bt_num_array_keys(
 
 /// _bt_preprocess_array_keys: deconstruct SK_SEARCHARRAY arrays, sort/dedup
 /// elements, merge redundant arrays, and fill so->arrayKeys/orderProcs.
-/// Returns the modified copy of the input keys, or None with no arrays.
-fn bt_preprocess_array_keys<'mcx>(
+fn bt_preprocess_array_keys<'mcx, R: BtReadRel + ?Sized>(
     mcx: Mcx<'mcx>,
-    rel: &Relation<'_>,
+    rel: &R,
     so: &mut BTScanOpaqueData<'mcx>,
     input_keys: &[ScanKeyData],
-) -> PgResult<Option<PgVec<'mcx, ScanKeyData>>> {
+    scratch: &mut BTArrayScratch<'mcx>,
+) -> PgResult<bool> {
     let mut skip_eq_ops = [0 as ::types_core::Oid; INDEX_MAX_KEYS as usize];
     let (num_array_keys, num_skip_array_keys) =
         bt_num_array_keys(rel, input_keys, &mut skip_eq_ops)?;
     so.skipScan = num_skip_array_keys > 0;
 
     if num_array_keys == 0 {
-        return Ok(None);
+        return Ok(false);
     }
 
-    let indoption = &rel.rd_indoption;
-    let mut array_key_data: PgVec<'mcx, ScanKeyData> = PgVec::new_in(mcx);
-    array_key_data.reserve(input_keys.len() + num_skip_array_keys);
-    so.arrayKeys.clear();
-    so.arrayKeys.reserve(num_array_keys);
+    let indoption = rel.indoption();
+    let BTArrayScratch {
+        keys: array_key_data,
+        nulls,
+        spare_elems,
+        images,
+        images_used,
+        ..
+    } = scratch;
+    for array in so.arrayKeys.drain(..) {
+        BTArrayScratch::retire_elems(spare_elems, array.elem_values);
+    }
+    *images_used = 0;
+    array_key_data.clear();
+    ::mcx::pgvec_reserve(array_key_data, input_keys.len() + num_skip_array_keys)?;
+    ::mcx::pgvec_reserve(&mut so.arrayKeys, num_array_keys)?;
     so.orderProcs.clear();
-    so.orderProcs
-        .resize_with(input_keys.len() + num_skip_array_keys, FmgrInfo::unresolved);
+    ::mcx::pgvec_resize(
+        &mut so.orderProcs,
+        input_keys.len() + num_skip_array_keys,
+        FmgrInfo::unresolved(),
+    )?;
 
     let mut origarrayatt: i16 = 0;
     let mut origarraykey: i32 = -1;
@@ -1075,9 +1111,9 @@ fn bt_preprocess_array_keys<'mcx>(
 
     for inkey in input_keys.iter() {
         while num_skip_remaining > 0 && attno_skip <= inkey.sk_attno {
-            let opfamily = rel.rd_opfamily[attno_skip as usize - 1];
-            let opcintype = rel.rd_opcintype[attno_skip as usize - 1];
-            let collation = rel.rd_indcollation[attno_skip as usize - 1];
+            let opfamily = rel.opfamily(attno_skip as usize - 1);
+            let opcintype = rel.opcintype(attno_skip as usize - 1);
+            let collation = rel.indcollation(attno_skip as usize - 1);
             let eq_op = skip_eq_ops[attno_skip as usize - 1];
 
             if eq_op == 0 {
@@ -1087,7 +1123,7 @@ fn bt_preprocess_array_keys<'mcx>(
                 break;
             }
 
-            let cmp_proc = lsyscache::get_opcode(eq_op)?;
+            let cmp_proc = rel.opcode(eq_op)?;
             if cmp_proc == 0 {
                 return Err(Box::new(PgError::error(format!(
                     "missing oprcode for skipping equals operator {eq_op}"
@@ -1100,11 +1136,11 @@ fn bt_preprocess_array_keys<'mcx>(
                 sk_strategy: BTEqualStrategyNumber,
                 sk_subtype: 0,
                 sk_collation: collation,
-                sk_func: fmgr_info(cmp_proc)?,
+                sk_func: rel.fmgr_info(cmp_proc)?,
                 sk_argument: Datum::null(),
             };
 
-            let attr = rel.rd_att.compact_attr(attno_skip as usize - 1);
+            let attr = rel.tupdesc().compact_attr(attno_skip as usize - 1);
             let reverse = (indoption[attno_skip as usize - 1] as i32) & 0x0001 != 0;
             let (orderproc, _) = bt_setup_array_cmp(rel, &skipkey, opcintype, false)?;
             so.orderProcs[array_key_data.len()] = orderproc;
@@ -1116,9 +1152,7 @@ fn bt_preprocess_array_keys<'mcx>(
                 attlen: attr.attlen,
                 attbyval: attr.attbyval,
                 null_elem: true,
-                sksup: ::skipsupport::prepare_skip_support_from_opclass(
-                    opfamily, opcintype, reverse,
-                )?,
+                sksup: rel.skip_support(opfamily, opcintype, reverse)?,
                 low_compare: None,
                 high_compare: None,
                 skip_arg: PgVec::new_in(mcx),
@@ -1145,8 +1179,9 @@ fn bt_preprocess_array_keys<'mcx>(
 
         let p = cur.sk_argument.as_usize() as *const u8;
         // DatumGetArrayTypeP: borrow in place on an inline 4-byte header; a
-        // short (1B) image expands into `mcx` so ARR_* offsets hold
-        // (bound-param arrays keep their packed form through datumCopy).
+        // short (1B) image expands into a scan-owned buffer (C: arrayContext)
+        // so ARR_* offsets hold (bound-param arrays keep their packed form
+        // through datumCopy).
         // SAFETY: non-null array datum addresses a live varlena.
         let img: &[u8] = unsafe {
             let b0 = *p;
@@ -1157,10 +1192,21 @@ fn bt_preprocess_array_keys<'mcx>(
                 );
                 let total = ((b0 >> 1) & 0x7F) as usize;
                 let payload = core::slice::from_raw_parts(p.add(1), total - 1);
-                let mut v: PgVec<'mcx, u8> = ::mcx::vec_with_capacity_in(mcx, total - 1 + 4)?;
-                ::mcx::vec_append_bytes(&mut v, &::datum::varlena::set_varsize_4b(total - 1 + 4))?;
-                ::mcx::vec_append_bytes(&mut v, payload)?;
-                v.leak()
+                if *images_used == images.len() {
+                    images
+                        .try_reserve(1)
+                        .map_err(|_| mcx.oom(core::mem::size_of::<PgVec<'mcx, u8>>()))?;
+                    images.push(PgVec::new_in(mcx));
+                }
+                let v = &mut images[*images_used];
+                *images_used += 1;
+                v.clear();
+                ::mcx::vec_append_bytes(v, &::datum::varlena::set_varsize_4b(total - 1 + 4))?;
+                ::mcx::vec_append_bytes(v, payload)?;
+                // The copy stays put until the next preprocess frees it (images_used), after this build's arrays,
+                // whose by-reference elements point into it, are retired; pushing more images moves only the
+                // outer vector's headers, never this buffer.
+                core::slice::from_raw_parts(v.as_ptr(), v.len())
             } else {
                 assert!(
                     b0 & 0x03 == 0,
@@ -1170,25 +1216,31 @@ fn bt_preprocess_array_keys<'mcx>(
             }
         };
         let arr_elemtype = arrfn::arr_elemtype(img);
-        let (elmlen, elmbyval, elmalign) = lsyscache::get_typlenbyvalalign(arr_elemtype)?;
-        let (raw_values, nulls) = ::arrayfuncs::deconstruct_array(
-            mcx,
+        let (elmlen, elmbyval, elmalign) = rel.typlenbyvalalign(arr_elemtype)?;
+        let mut elem_values = BTArrayScratch::take_elems(spare_elems, mcx);
+        if let Err(e) = ::arrayfuncs::deconstruct_array_into(
             img,
             elmlen as i32,
             elmbyval,
             elmalign as u8,
             true,
-        )?;
-
-        let mut elem_values: PgVec<'mcx, Datum> = PgVec::new_in(mcx);
-        elem_values.reserve(raw_values.len());
-        for (v, isnull) in raw_values.iter().zip(nulls.iter()) {
-            if !*isnull {
-                elem_values.push(*v);
+            &mut elem_values,
+            nulls,
+        ) {
+            BTArrayScratch::retire_elems(spare_elems, elem_values);
+            return Err(e);
+        }
+        let mut kept = 0usize;
+        for i in 0..elem_values.len() {
+            if !nulls[i] {
+                elem_values[kept] = elem_values[i];
+                kept += 1;
             }
         }
+        elem_values.truncate(kept);
 
         if elem_values.is_empty() {
+            BTArrayScratch::retire_elems(spare_elems, elem_values);
             so.qual_ok = false;
             break;
         }
@@ -1196,7 +1248,7 @@ fn bt_preprocess_array_keys<'mcx>(
         let elemtype = if cur.sk_subtype != 0 {
             cur.sk_subtype
         } else {
-            rel.rd_opcintype[cur.sk_attno as usize - 1]
+            rel.opcintype(cur.sk_attno as usize - 1)
         };
 
         match cur.sk_strategy {
@@ -1208,6 +1260,7 @@ fn bt_preprocess_array_keys<'mcx>(
                     BTGreaterStrategyNumber,
                     &elem_values,
                 )?;
+                BTArrayScratch::retire_elems(spare_elems, elem_values);
                 array_key_data.push(cur);
                 continue;
             }
@@ -1220,6 +1273,7 @@ fn bt_preprocess_array_keys<'mcx>(
                     BTLessStrategyNumber,
                     &elem_values,
                 )?;
+                BTArrayScratch::retire_elems(spare_elems, elem_values);
                 array_key_data.push(cur);
                 continue;
             }
@@ -1249,6 +1303,7 @@ fn bt_preprocess_array_keys<'mcx>(
                 )?
             };
             if merged {
+                BTArrayScratch::retire_elems(spare_elems, elem_values);
                 if so.arrayKeys[origarraykey as usize].num_elems == 0 {
                     so.qual_ok = false;
                     break;
@@ -1280,17 +1335,18 @@ fn bt_preprocess_array_keys<'mcx>(
 
     debug_assert!(num_skip_remaining == 0 || !so.qual_ok);
     so.numArrayKeys = so.arrayKeys.len() as i32;
-    Ok(Some(array_key_data))
+    Ok(true)
 }
 
 /// _bt_preprocess_array_keys_final: remap array->scan_key references to
 /// so->keyData offsets, consolidate orderProcs, and turn single-element
 /// arrays into plain equality keys.
-fn bt_preprocess_array_keys_final(
-    rel: &Relation<'_>,
-    so: &mut BTScanOpaqueData<'_>,
+fn bt_preprocess_array_keys_final<'mcx, R: BtReadRel + ?Sized>(
+    rel: &R,
+    so: &mut BTScanOpaqueData<'mcx>,
     key_data_map: &[i32],
     parallel: bool,
+    spare_elems: &mut PgVec<'mcx, PgVec<'mcx, Datum>>,
 ) -> PgResult<()> {
     debug_assert!(so.qual_ok);
 
@@ -1318,7 +1374,7 @@ fn bt_preprocess_array_keys_final(
             let elemtype = if outkey.sk_subtype != 0 {
                 outkey.sk_subtype
             } else {
-                rel.rd_opcintype[outkey.sk_attno as usize - 1]
+                rel.opcintype(outkey.sk_attno as usize - 1)
             };
             let (orderproc, _) = bt_setup_array_cmp(rel, outkey, elemtype, false)?;
             so.orderProcs[output_ikey] = orderproc;
@@ -1343,7 +1399,8 @@ fn bt_preprocess_array_keys_final(
                     if so.numArrayKeys == 0 {
                         return Ok(());
                     }
-                    so.arrayKeys.remove(arrayidx);
+                    let gone = so.arrayKeys.remove(arrayidx);
+                    BTArrayScratch::retire_elems(spare_elems, gone.elem_values);
                 } else {
                     if so.arrayKeys[arrayidx].num_elems == -1
                         && so.arrayKeys[arrayidx].sksup.is_some()
@@ -1389,28 +1446,28 @@ fn parallel_array_key_limit(n: i32) -> Box<PgError> {
 }
 
 // _bt_find_extreme_element.
-fn bt_find_extreme_element(
-    rel: &Relation<'_>,
+fn bt_find_extreme_element<R: BtReadRel + ?Sized>(
+    rel: &R,
     skey: &ScanKeyData,
     elemtype: ::types_core::Oid,
     strat: StrategyNumber,
     elems: &[Datum],
 ) -> PgResult<Datum> {
     debug_assert!(skey.sk_strategy != BTEqualStrategyNumber);
-    let opfamily = rel.rd_opfamily[skey.sk_attno as usize - 1];
-    let cmp_op = lsyscache::get_opfamily_member(opfamily, elemtype, elemtype, strat as i16)?;
+    let opfamily = rel.opfamily(skey.sk_attno as usize - 1);
+    let cmp_op = rel.opfamily_member(opfamily, elemtype, elemtype, strat as i16)?;
     if cmp_op == 0 {
         return Err(Box::new(PgError::error(format!(
             "missing operator {strat}({elemtype},{elemtype}) in opfamily {opfamily}"
         ))));
     }
-    let cmp_proc = lsyscache::get_opcode(cmp_op)?;
+    let cmp_proc = rel.opcode(cmp_op)?;
     if cmp_proc == 0 {
         return Err(Box::new(PgError::error(format!(
             "missing oprcode for operator {cmp_op}"
         ))));
     }
-    let mut flinfo = fmgr_info(cmp_proc)?;
+    let mut flinfo = rel.fmgr_info(cmp_proc)?;
 
     debug_assert!(!elems.is_empty());
     let mut result = elems[0];
@@ -1426,14 +1483,14 @@ fn bt_find_extreme_element(
 }
 
 // _bt_setup_array_cmp: (orderproc, Some(same-type sortproc) when requested).
-fn bt_setup_array_cmp(
-    rel: &Relation<'_>,
+fn bt_setup_array_cmp<R: BtReadRel + ?Sized>(
+    rel: &R,
     skey: &ScanKeyData,
     elemtype: ::types_core::Oid,
     want_sortproc: bool,
 ) -> PgResult<(FmgrInfo, Option<FmgrInfo>)> {
     debug_assert!(skey.sk_strategy == BTEqualStrategyNumber);
-    let opcintype = rel.rd_opcintype[skey.sk_attno as usize - 1];
+    let opcintype = rel.opcintype(skey.sk_attno as usize - 1);
 
     if elemtype == opcintype {
         let proc = crate::search::order_procinfo(rel, skey.sk_attno as usize)?;
@@ -1445,9 +1502,8 @@ fn bt_setup_array_cmp(
         return Ok((proc, sort));
     }
 
-    let opfamily = rel.rd_opfamily[skey.sk_attno as usize - 1];
-    let cmp_proc =
-        lsyscache::get_opfamily_proc(opfamily, opcintype, elemtype, BTORDER_PROC as i16)?;
+    let opfamily = rel.opfamily(skey.sk_attno as usize - 1);
+    let cmp_proc = rel.opfamily_proc(opfamily, opcintype, elemtype, BTORDER_PROC as i16)?;
     if cmp_proc == 0 {
         return Err(missing_cross_type_proc(
             rel,
@@ -1456,13 +1512,13 @@ fn bt_setup_array_cmp(
             skey.sk_attno,
         ));
     }
-    let orderproc = fmgr_info(cmp_proc)?;
+    let orderproc = rel.fmgr_info(cmp_proc)?;
 
     if !want_sortproc {
         return Ok((orderproc, None));
     }
 
-    let cmp_proc = lsyscache::get_opfamily_proc(opfamily, elemtype, elemtype, BTORDER_PROC as i16)?;
+    let cmp_proc = rel.opfamily_proc(opfamily, elemtype, elemtype, BTORDER_PROC as i16)?;
     if cmp_proc == 0 {
         return Err(missing_cross_type_proc(
             rel,
@@ -1471,14 +1527,14 @@ fn bt_setup_array_cmp(
             skey.sk_attno,
         ));
     }
-    Ok((orderproc, Some(fmgr_info(cmp_proc)?)))
+    Ok((orderproc, Some(rel.fmgr_info(cmp_proc)?)))
 }
 
 #[track_caller]
 #[cold]
 #[inline(never)]
-fn missing_cross_type_proc(
-    rel: &Relation<'_>,
+fn missing_cross_type_proc<R: BtReadRel + ?Sized>(
+    rel: &R,
     lefttype: ::types_core::Oid,
     righttype: ::types_core::Oid,
     attno: i16,
@@ -1490,7 +1546,7 @@ fn missing_cross_type_proc(
 }
 
 // _bt_sort_array_elements: sort + dedup in place, index column order.
-fn bt_sort_array_elements(
+pub(crate) fn bt_sort_array_elements(
     frame: &mut crate::fcframe::OrderProcFrame,
     skey: &ScanKeyData,
     sortproc: &mut FmgrInfo,
@@ -1501,48 +1557,32 @@ fn bt_sort_array_elements(
         return Ok(());
     }
 
-    let mut err: Option<Box<PgError>> = None;
     let collation = skey.sk_collation;
-    {
-        let cmp = |a: Datum,
-                   b: Datum,
-                   frame: &mut crate::fcframe::OrderProcFrame,
-                   sortproc: &mut FmgrInfo,
-                   err: &mut Option<Box<PgError>>|
-         -> i32 {
-            if err.is_some() {
-                return 0;
+    let mut cmp = |a: Datum, b: Datum| -> PgResult<i32> {
+        let r = frame.cmp_proc(sortproc, collation, a, b)?;
+        Ok(if reverse { INVERT_COMPARE_RESULT(r) } else { r })
+    };
+    ::pg_qsort::pg_qsort_arg(elems.as_mut_slice(), |&a, &b| cmp(a, b))?;
+    // qunique_arg: compare each element against the last kept one.
+    let mut j = 0;
+    for i in 1..elems.len() {
+        if cmp(elems[i], elems[j])? != 0 {
+            j += 1;
+            if j != i {
+                elems[j] = elems[i];
             }
-            match frame.cmp_proc(sortproc, collation, a, b) {
-                Ok(mut r) => {
-                    if reverse {
-                        r = INVERT_COMPARE_RESULT(r);
-                    }
-                    r
-                }
-                Err(e) => {
-                    *err = Some(e);
-                    0
-                }
-            }
-        };
-        elems.sort_by(|&a, &b| cmp(a, b, frame, sortproc, &mut err).cmp(&0));
-        if err.is_none() {
-            elems.dedup_by(|a, b| cmp(*a, *b, frame, sortproc, &mut err) == 0);
         }
     }
-    match err {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
+    elems.truncate(j + 1);
+    Ok(())
 }
 
 // _bt_merge_arrays: intersect `next` into `orig` in place; false when the
 // opfamily lacks the cross-type ORDER proc.
 #[allow(clippy::too_many_arguments)]
-fn bt_merge_arrays(
+fn bt_merge_arrays<R: BtReadRel + ?Sized>(
     frame: &mut crate::fcframe::OrderProcFrame,
-    rel: &Relation<'_>,
+    rel: &R,
     skey: &ScanKeyData,
     sortproc: &mut FmgrInfo,
     reverse: bool,
@@ -1555,8 +1595,8 @@ fn bt_merge_arrays(
 
     let mut crosstype_proc: Option<FmgrInfo> = None;
     if origelemtype != nextelemtype {
-        let cmp_proc = lsyscache::get_opfamily_proc(
-            rel.rd_opfamily[skey.sk_attno as usize - 1],
+        let cmp_proc = rel.opfamily_proc(
+            rel.opfamily(skey.sk_attno as usize - 1),
             origelemtype,
             nextelemtype,
             BTORDER_PROC as i16,
@@ -1564,7 +1604,7 @@ fn bt_merge_arrays(
         if cmp_proc == 0 {
             return Ok(false);
         }
-        crosstype_proc = Some(fmgr_info(cmp_proc)?);
+        crosstype_proc = Some(rel.fmgr_info(cmp_proc)?);
     }
     let mergeproc = match crosstype_proc.as_mut() {
         Some(p) => p,

@@ -1,0 +1,3 @@
+path	crates/gravity/fn/src/pool_catalog.rs
+growth	std::vec::Vec::push	2
+method	std::vec::Vec::into_boxed_slice	3

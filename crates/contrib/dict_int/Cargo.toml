@@ -1,0 +1,19 @@
+[package]
+name = "dict_int"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "dict_int"
+path = "src/lib.rs"
+
+[dependencies]
+datum = { path = "../../_support/types/datum" }
+mcx = { path = "../../_support/mcx" }
+types_error = { path = "../../_support/types/types_error" }
+types_fmgr = { path = "../../_support/types/fmgr" }
+dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
+ts_locale = { path = "../../backend/tsearch/ts_locale" }
+
+[dev-dependencies]

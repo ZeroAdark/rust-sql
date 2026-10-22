@@ -1,0 +1,19 @@
+# PostgreSQL 18.6 (m4_write_golden.py): the tables before, the statement, its rows, count and tables after
+plan: oltpc-043
+table: 16585 pgbench_tellers tid:int4 bid:int4 tbalance:int4 filler:bpchar
+unique: 16585 pgbench_tellers_pkey tid
+[before 16585]
+1	1	0	\N
+2	1	5	\N
+3	1	-7	x
+4	1	\N	\N
+5	1	0	\N
+[pg]
+[tag]
+1
+[after 16585]
+1	1	0	\N
+2	1	5	\N
+4	1	\N	\N
+5	1	0	\N
+3	1	3	x

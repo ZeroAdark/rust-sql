@@ -9,7 +9,22 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    // pre-framed messages (each `type, int32 length, body` complete), appended in one pass
+    pub fn pq_putbytes(bytes: &[u8]) -> PgResult<i32>
+);
+
+seam_core::seam!(
     pub fn pq_flush() -> PgResult<i32>
+);
+
+seam_core::seam!(
+    // on: a send buffer a message fills grows once to PQ_SEND_BUFFER_GROWN before it flushes when full; off: C's flush
+    // when the 8 KiB buffer is full (pqcomm `set_send_grow`)
+    pub fn set_send_grow(on: bool)
+);
+
+seam_core::seam!(
+    pub fn pq_flush_if_writable() -> PgResult<i32>
 );
 
 seam_core::seam!(
@@ -37,6 +52,19 @@ seam_core::seam!(
         listen_sockets: &mut Vec<i32>,
         max_listen: usize,
     ) -> PgResult<()>
+);
+
+seam_core::seam!(
+    // Listen sockets a crash-restarted server generation inherits from its
+    // supervisor (fork-inherited fds, adopted instead of binding new ones).
+    pub fn inherit_listen_sockets(fds: &[i32], listen_line: &str, socket_dir_line: &str)
+);
+
+seam_core::seam!(
+    // Append the inherited listen sockets to ListenSockets and re-take the
+    // Unix socket lock files (the address set is fixed until a full restart);
+    // returns the first generation's postmaster.pid listen/socket-dir lines.
+    pub fn adopt_inherited_listen_sockets(listen_sockets: &mut Vec<i32>) -> PgResult<(String, String)>
 );
 
 seam_core::seam!(

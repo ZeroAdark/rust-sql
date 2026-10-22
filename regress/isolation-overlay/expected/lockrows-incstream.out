@@ -1,0 +1,162 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2e s1c s2c
+step s2e: EXPLAIN (COSTS OFF) SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE;
+QUERY PLAN                                                                      
+--------------------------------------------------------------------------------
+Limit                                                                           
+  ->  LockRows                                                                  
+        ->  Incremental Sort                                                    
+              Sort Key: run_at, id                                              
+              Presorted Key: run_at                                             
+              ->  Index Scan using job_run_at on job                            
+                    Filter: ((state = 'ready'::text) AND (queue = 'mail'::text))
+(7 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1h s2k s1c s2c
+step s1h: SELECT id FROM job WHERE id IN (190, 163, 109, 82) ORDER BY id FOR UPDATE;
+ id
+---
+ 82
+109
+163
+190
+(4 rows)
+
+step s2k: SELECT id, run_at FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE SKIP LOCKED;
+ id|run_at                      
+---+----------------------------
+ 55|Sun Dec 31 16:35:00 2023 PST
+  1|Sun Dec 31 16:37:00 2023 PST
+191|Sun Dec 31 17:07:00 2023 PST
+(3 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1d s2u s1c s2c
+step s1d: UPDATE job SET state = 'done' WHERE id IN (190, 163, 109);
+step s2u: SELECT id, run_at, state, note FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+id|run_at                      |state|note
+--+----------------------------+-----+----
+82|Sun Dec 31 16:34:00 2023 PST|ready|n82 
+55|Sun Dec 31 16:35:00 2023 PST|ready|n55 
+ 1|Sun Dec 31 16:37:00 2023 PST|ready|n1  
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1x s2u s1c s2c
+step s1x: DELETE FROM job WHERE id IN (190, 109, 55);
+step s2u: SELECT id, run_at, state, note FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ id|run_at                      |state|note
+---+----------------------------+-----+----
+163|Sun Dec 31 16:31:00 2023 PST|ready|n163
+ 82|Sun Dec 31 16:34:00 2023 PST|ready|n82 
+  1|Sun Dec 31 16:37:00 2023 PST|ready|n1  
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s2u s1c s2c
+step s1n: UPDATE job SET note = 'held' WHERE id IN (190, 163);
+step s2u: SELECT id, run_at, state, note FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+ id|run_at                      |state|note
+---+----------------------------+-----+----
+190|Sun Dec 31 16:30:00 2023 PST|ready|held
+163|Sun Dec 31 16:31:00 2023 PST|ready|held
+109|Sun Dec 31 16:33:00 2023 PST|ready|n109
+(3 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1d s2o s1c s2c
+step s1d: UPDATE job SET state = 'done' WHERE id IN (190, 163, 109);
+step s2o: SELECT id, run_at FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 2 OFFSET 2 FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2o: <... completed>
+ id|run_at                      
+---+----------------------------
+  1|Sun Dec 31 16:37:00 2023 PST
+191|Sun Dec 31 17:07:00 2023 PST
+(2 rows)
+
+step s2c: COMMIT;
+
+starting permutation: s1h s2w s1c s2c
+step s1h: SELECT id FROM job WHERE id IN (190, 163, 109, 82) ORDER BY id FOR UPDATE;
+ id
+---
+ 82
+109
+163
+190
+(4 rows)
+
+step s2w: SELECT id FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "job"
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2ae s1c s2c
+step s2ae: EXPLAIN (COSTS OFF) SELECT count(*), sum(id), max(note) FROM (SELECT id, note FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE) s;
+QUERY PLAN                                                                                  
+--------------------------------------------------------------------------------------------
+Aggregate                                                                                   
+  ->  Subquery Scan on s                                                                    
+        ->  Limit                                                                           
+              ->  LockRows                                                                  
+                    ->  Incremental Sort                                                    
+                          Sort Key: job.run_at, job.id                                      
+                          Presorted Key: job.run_at                                         
+                          ->  Index Scan using job_run_at on job                            
+                                Filter: ((state = 'ready'::text) AND (queue = 'mail'::text))
+(9 rows)
+
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1d s2a s1c s2c
+step s1d: UPDATE job SET state = 'done' WHERE id IN (190, 163, 109);
+step s2a: SELECT count(*), sum(id), max(note) FROM (SELECT id, note FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+count|sum|max
+-----+---+---
+    3|138|n82
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1x s2a s1c s2c
+step s1x: DELETE FROM job WHERE id IN (190, 109, 55);
+step s2a: SELECT count(*), sum(id), max(note) FROM (SELECT id, note FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+count|sum|max
+-----+---+---
+    3|246|n82
+(1 row)
+
+step s2c: COMMIT;
+
+starting permutation: s1n s2a s1c s2c
+step s1n: UPDATE job SET note = 'held' WHERE id IN (190, 163);
+step s2a: SELECT count(*), sum(id), max(note) FROM (SELECT id, note FROM job WHERE state = 'ready' AND queue = 'mail' ORDER BY run_at, id LIMIT 3 FOR UPDATE) s; <waiting ...>
+step s1c: COMMIT;
+step s2a: <... completed>
+count|sum|max 
+-----+---+----
+    3|462|n109
+(1 row)
+
+step s2c: COMMIT;

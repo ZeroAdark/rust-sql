@@ -64,7 +64,7 @@ pub fn decode_key(image: &[u8]) -> PgResult<TrgmKey> {
     } else if flag & ALLISTRUE != 0 {
         Ok(TrgmKey::AllTrue)
     } else {
-        Ok(TrgmKey::Sign(data.to_vec()))
+        Ok(TrgmKey::Sign(::mcx::std_vec_from_slice("pg_trgm", &data)?))
     }
 }
 
@@ -297,7 +297,12 @@ pub fn union(keys: &[TrgmKey], siglen: usize) -> Vec<u8> {
     let mut base = vec![0u8; siglen];
     for k in keys {
         if unionkey(&mut base, k, siglen) {
-            return encode_signkey(true, &base);
+            // gtrgm_union (trgm_gist.c:578) overwrites the flag with
+            // ALLISTRUE alone, unlike gtrgm_alloc's SIGNKEY|ALLISTRUE.
+            let mut img = Vec::with_capacity(TRGMHDRSIZE);
+            img.extend_from_slice(&varsize_header(TRGMHDRSIZE));
+            img.push(ALLISTRUE);
+            return img;
         }
     }
     encode_signkey(false, &base)
@@ -406,7 +411,7 @@ pub fn picksplit(
         return Err(PgError::error("gtrgm_picksplit: fewer than two entries to split").into());
     }
 
-    let mut cache: Vec<Option<CacheSign>> = Vec::with_capacity(maxoff + 1);
+    let mut cache: Vec<Option<CacheSign>> = ::mcx::std_vec_with_capacity("pg_trgm", maxoff + 1)?;
     cache.push(None);
     for k in 1..=maxoff {
         let key = keys[k]
@@ -443,7 +448,7 @@ pub fn picksplit(
     let datum_r_allistrue = cache[seed_2].as_ref().unwrap().allistrue;
     let mut union_r = cache[seed_2].as_ref().unwrap().sign.clone();
 
-    let mut costvector: Vec<(usize, i32)> = Vec::with_capacity(maxoff);
+    let mut costvector: Vec<(usize, i32)> = ::mcx::std_vec_with_capacity("pg_trgm", maxoff)?;
     for j in 1..=maxoff {
         let size_alpha =
             hemdistcache(cache[seed_1].as_ref().unwrap(), cache[j].as_ref().unwrap(), siglen);
@@ -522,6 +527,18 @@ pub fn picksplit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // gtrgm_union with an ALLISTRUE input stores flag 0x04 alone
+    // (trgm_gist.c:578); gtrgm_alloc's keys keep SIGNKEY|ALLISTRUE.
+    #[test]
+    fn union_of_alltrue_stores_allistrue_alone() {
+        let img = union(&[TrgmKey::Sign(vec![0u8; 12]), TrgmKey::AllTrue], 12);
+        assert_eq!(img.len(), TRGMHDRSIZE);
+        assert_eq!(img[4], ALLISTRUE);
+        assert!(matches!(decode_key(&img).unwrap(), TrgmKey::AllTrue));
+        assert_eq!(encode_signkey(true, &[])[4], SIGNKEY | ALLISTRUE);
+        assert_eq!(union(&[TrgmKey::Sign(vec![0u8; 12])], 12)[4], SIGNKEY);
+    }
 
     // trgm_gist.c makesign on 'abc' (regress little-endian bit positions:
     // CPTRGM native int % SIGLENBIT(12) for "bc ", "  a", " ab", "abc", plus

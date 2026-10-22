@@ -479,7 +479,12 @@ fn coerce_unknown_const<'mcx>(
             if e.sqlstate() == ERRCODE_QUERY_CANCELED {
                 return e;
             }
+            // parser_errposition leaves the error untouched when it has no
+            // position to give (parse_node.c:111-116).
             let pos = parser_errposition(pstate, con.location, mbutils::GetDatabaseEncoding());
+            if pos <= 0 {
+                return e;
+            }
             Box::new((*e).with_cursor_position(pos))
         })?;
 
@@ -524,8 +529,7 @@ fn string_type_datum<'mcx>(
     typmod: i32,
     isnull: bool,
 ) -> PgResult<Datum> {
-    if io.typinput == InvalidOid || !io.typisdefined {
-        // Route through the lsyscache errors (shell type / no input function).
+    if io.typinput == InvalidOid {
         lsyscache::getTypeInputInfo(io.oid)?;
     }
     let typioparam = lsyscache::getTypeIOParam(io);
@@ -2191,6 +2195,9 @@ pub fn coerce_to_specific_type<'mcx>(
 // Closed-set slice of nodeFuncs.c expression_returns_set over the tags this
 // parser lane can produce.
 pub fn expression_returns_set(node: Node<'_>) -> bool {
+    // nodeFuncs.c:2111 via expression_tree_walker; bool signature, so the
+    // 54001 travels as a PgError panic payload.
+    stack_depth_core::check_stack_depth_or_panic();
     match node.node_tag() {
         NodeTag::T_FuncExpr => {
             let f = node.as_func_expr().unwrap();

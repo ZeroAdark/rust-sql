@@ -53,7 +53,7 @@ fn create_lwlocks_once() {
     }
 }
 
-fn init_seams_once() {
+pub(crate) fn init_seams_once() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         shmem::init_seams();
@@ -169,6 +169,7 @@ fn insert_flush_smoke() {
     use std::sync::atomic::Ordering::Relaxed;
 
     let _gate = control_file_lock_gate();
+    let _generation = crate::insert::recovery_generation_tests::GENERATION.lock().unwrap_or_else(|e| e.into_inner());
 
     let dir = std::env::temp_dir().join(format!("pgrust_xlog_test_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -241,7 +242,7 @@ fn insert_flush_smoke() {
     XLOGShmemInit();
     // xlog.c:4985-4991: "XLOG Ctl" and "Control File" are ShmemIndex rows
     // (pg_shmem_allocations); a second ShmemInitStruct finds them
-    // (audit regression).
+    // (audit fp-transam-xlog-p2#7).
     let (_, found) = shmem::ShmemInitStruct("XLOG Ctl", XLOGShmemSize()).unwrap();
     assert!(found, "XLOG Ctl is missing from the ShmemIndex");
     let (_, found) =
@@ -849,38 +850,159 @@ fn keep_log_seg_matches_c() {
     with_seg(seg, || {
         init_seams_once();
         let recptr = 100 * seg as u64 + 1234;
+        let none = pgrc_spool::Ledger::new();
 
         // No slots, no wal_keep_size: horizon untouched.
         guc_tables::vars::wal_keep_size_mb.write(0);
         guc_tables::vars::max_slot_wal_keep_size_mb.write(-1);
         let mut segno = 90;
-        assert!(!crate::removal::keep_log_seg_with(recptr, &mut segno, InvalidXLogRecPtr));
+        assert!(!crate::removal::keep_log_seg_with(recptr, &mut segno, InvalidXLogRecPtr, &none).0);
         assert_eq!(segno, 90);
 
         // A slot restart_lsn pins its segment.
         let mut segno = 90;
-        assert!(!crate::removal::keep_log_seg_with(recptr, &mut segno, 40 * seg as u64 + 7));
+        assert!(!crate::removal::keep_log_seg_with(recptr, &mut segno, 40 * seg as u64 + 7, &none).0);
         assert_eq!(segno, 40);
 
         // max_slot_wal_keep_size caps the slot horizon and reports it.
         guc_tables::vars::max_slot_wal_keep_size_mb.write(16 * 10);
         let mut segno = 90;
-        assert!(crate::removal::keep_log_seg_with(recptr, &mut segno, 40 * seg as u64 + 7));
+        assert!(crate::removal::keep_log_seg_with(recptr, &mut segno, 40 * seg as u64 + 7, &none).0);
         assert_eq!(segno, 100 - 10);
 
         // wal_keep_size holds segments back without any slot.
         guc_tables::vars::max_slot_wal_keep_size_mb.write(-1);
         guc_tables::vars::wal_keep_size_mb.write(16 * 5);
         let mut segno = 99;
-        assert!(!crate::removal::keep_log_seg_with(recptr, &mut segno, InvalidXLogRecPtr));
+        assert!(!crate::removal::keep_log_seg_with(recptr, &mut segno, InvalidXLogRecPtr, &none).0);
         assert_eq!(segno, 95);
 
         // wal_keep_size larger than history bottoms out at segment 1.
         guc_tables::vars::wal_keep_size_mb.write(16 * 200);
         let mut segno = 99;
-        assert!(!crate::removal::keep_log_seg_with(recptr, &mut segno, InvalidXLogRecPtr));
+        assert!(!crate::removal::keep_log_seg_with(recptr, &mut segno, InvalidXLogRecPtr, &none).0);
         assert_eq!(segno, 1);
         guc_tables::vars::wal_keep_size_mb.write(0);
+    });
+}
+
+#[test]
+fn keep_log_seg_counts_spool_bytes() {
+    let seg = 16 * 1024 * 1024;
+    let mb = 1024 * 1024u64;
+    with_seg(seg, || {
+        init_seams_once();
+        let s = seg as u64;
+        let recptr = 100 * s + 1234;
+        let mut l = pgrc_spool::Ledger::new();
+        for i in 0..160 {
+            l.add(90 * s + i * mb + 40, 4 * mb);
+        }
+        guc_tables::vars::wal_keep_size_mb.write(0);
+
+        guc_tables::vars::max_slot_wal_keep_size_mb.write(1024);
+        let (mut segno, keep) = (99, 95 * s + 7);
+        assert_eq!(crate::removal::keep_log_seg_with(recptr, &mut segno, keep, &l), (false, keep));
+        assert_eq!(segno, 95);
+
+        guc_tables::vars::max_slot_wal_keep_size_mb.write(256);
+        let mut segno = 99;
+        let (capped, cut) = crate::removal::keep_log_seg_with(recptr, &mut segno, keep, &l);
+        assert!(capped);
+        let kept = |segno: u64, cut: u64| (100 - segno) * s + l.bytes_from(cut);
+        assert_eq!(segno, cut / s);
+        assert!(kept(segno, cut) <= 256 * mb && kept(segno, cut - 1) > 256 * mb, "cut {cut:#x} is the lowest that fits");
+        let horizon = crate::removal::spool_keep(segno, cut, &l).horizon;
+        assert_eq!(horizon, cut, "a slot at or past the cut keeps every entry it needs");
+
+        guc_tables::vars::max_slot_wal_keep_size_mb.write(-1);
+        guc_tables::vars::wal_keep_size_mb.write(256);
+        let mut segno = 100;
+        let (_, cut) = crate::removal::keep_log_seg_with(recptr, &mut segno, InvalidXLogRecPtr, &l);
+        assert!(kept(segno, cut) >= 256 * mb && kept(segno, cut) < 256 * mb + 4 * mb + s, "{segno} {cut:#x}");
+        assert!(segno > 100 - 16, "{segno}: the WAL of a few segments is kept, not 16");
+
+        let empty = pgrc_spool::Ledger::new();
+        assert_eq!(crate::removal::spool_keep(95, 95 * s + 99, &empty).horizon, 95 * s);
+        guc_tables::vars::wal_keep_size_mb.write(0);
+    });
+}
+
+#[test]
+fn spool_asks_for_a_checkpoint_at_every_segment_past_the_budget() {
+    let (s, mb) = (16u64 << 20, 1u64 << 20);
+    let budget = 3 * s;
+    let ask = |dist: u64, own: u64| crate::removal::spool_ask(dist, own, budget, s);
+    assert!(!ask(budget - mb, 4 * mb), "below the budget");
+    assert!(ask(budget + 2 * mb, 4 * mb), "the entry that reaches the budget asks");
+    assert!(ask(budget, 4 * mb), "reaching it exactly asks");
+    assert!(!ask(budget + 6 * mb, 4 * mb), "the next entry within the same segment does not");
+    assert!(ask(budget + s + mb, 4 * mb));
+    assert!(ask(budget + 40 * s, 65 * s), "one huge entry across many segments asks once");
+    assert!(!ask(budget + s + mb, 0), "no entry of its own (a WAL-only step) does not");
+    assert!(crate::removal::spool_ask(s + mb, 4 * mb, 0, s), "CheckPointSegments 1 (budget 0): every segment asks");
+}
+
+#[test]
+fn a_starting_backend_does_not_lower_a_running_backends_checkpoint_budget() {
+    let seg = 16 * 1024 * 1024;
+    with_seg(seg, || {
+        init_seams_once();
+        guc_tables::vars::max_wal_size_mb.write(32 * 1024);
+        guc_tables::vars::CheckPointCompletionTarget.write(0.9);
+        (guc_tables::hooks::assign_max_wal_size.get())(32 * 1024, None);
+        assert_eq!(CheckPointSegments(), 1077, "2048 segments / 1.9");
+        let redo_seg = XLByteToSeg(crate::insert::local_redo_rec_ptr(), seg);
+        assert!(!XLogCheckpointNeeded(redo_seg + 40));
+
+        std::thread::spawn(|| {
+            (guc_tables::hooks::assign_checkpoint_completion_target.get())(0.9, None);
+            assert_eq!(
+                CheckPointSegments(),
+                33,
+                "the child's own budget, from its boot max_wal_size"
+            );
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(
+            CheckPointSegments(),
+            1077,
+            "a starting backend lowered this one's budget"
+        );
+        assert!(
+            !XLogCheckpointNeeded(redo_seg + 40),
+            "a checkpoint asked 40 segments past the redo at max_wal_size 32GB"
+        );
+
+        // The dispatcher runs an assign hook before it writes the variable: the budget comes from newval.
+        (guc_tables::hooks::assign_max_wal_size.get())(16 * 1024, None);
+        assert_eq!(CheckPointSegments(), 538, "1024 segments / 1.9");
+    });
+}
+
+// xlog.c:2201-2212: the assign hooks store newval before recalculating
+// CheckPointSegments; the GUC dispatcher fires the hook before writing the
+// backing variable, so recalculating from the old value leaves the threshold
+// stale until the next assignment (audit fp-transam-xlog-p1#1).
+#[test]
+fn assign_hooks_recalculate_checkpoint_segments_from_newval() {
+    let seg = 16 * 1024 * 1024;
+    with_seg(seg, || {
+        init_seams_once();
+        guc_tables::vars::max_wal_size_mb.write(64 * 16);
+        guc_tables::vars::CheckPointCompletionTarget.write(0.9);
+        CalculateCheckpointSegments();
+        assert_eq!(CheckPointSegments(), 33);
+
+        assign_checkpoint_completion_target(0.0, None);
+        assert_eq!(CheckPointSegments(), 64);
+        guc_tables::vars::CheckPointCompletionTarget.write(0.0);
+
+        assign_max_wal_size(32 * 16, None);
+        assert_eq!(CheckPointSegments(), 32);
+        guc_tables::vars::max_wal_size_mb.write(32 * 16);
     });
 }
 
@@ -1029,6 +1151,17 @@ fn get_sync_bit_sets_o_direct_for_debug_io_direct_wal() {
     fd::set_io_direct_flags(saved_flags);
     init_small::globals::set_enableFsync(saved_fsync);
     assert_eq!(bit, vfs::PG_O_DIRECT, "io_direct_flags & IO_DIRECT_WAL must open WAL with PG_O_DIRECT");
+
+    // xlog.c:3231: debug_io_direct=wal_init opens the temp segment direct.
+    let saved_flags = fd::io_direct_flags();
+    fd::set_io_direct_flags(::types_storage::IO_DIRECT_WAL_INIT);
+    let with = crate::write::xlog_init_open_flags();
+    fd::set_io_direct_flags(::types_storage::IO_DIRECT_WAL);
+    let without = crate::write::xlog_init_open_flags();
+    fd::set_io_direct_flags(saved_flags);
+    let base = libc::O_RDWR | libc::O_CREAT | libc::O_EXCL;
+    assert_eq!(with, base | vfs::PG_O_DIRECT);
+    assert_eq!(without, base);
 }
 
 // update_checkpoint_display (xlog.c:6864-6885): the ps activity is
@@ -1334,7 +1467,7 @@ fn wal_read_from_buffers_serves_hot_pages_like_c() {
 
 // xlog.c:7211 / 7228 (wait_event_names.txt IPC class: CheckpointDelayComplete
 // = 9, CheckpointDelayStart = 10): the checkpoint-delay sleeps report their
-// wait event so pg_stat_activity names the wait. Audit regression.
+// wait event so pg_stat_activity names the wait. Audit fp-transam-xlog-p3#1.
 #[test]
 fn delay_chkpt_wait_events_are_c_exact() {
     use crate::startup::*;
@@ -1349,10 +1482,11 @@ fn delay_chkpt_wait_events_are_c_exact() {
 // Detail bug_b2485c35.
 #[test]
 fn xlog_temp_path_is_named_by_the_backend_pid() {
-    let prev = init_small::globals::MyProcPid();
-    init_small::globals::SetMyProcPid(4242);
-    assert_eq!(crate::write::xlog_temp_path(), "pg_wal/xlogtemp.4242");
-    init_small::globals::SetMyProcPid(prev);
+    let a = crate::write::xlog_temp_path();
+    let b = crate::write::xlog_temp_path();
+    let pfx = format!("pg_wal/xlogtemp.{}.", init_small::globals::process_id());
+    assert!(a.starts_with(&pfx) && b.starts_with(&pfx), "{a} / {b} vs {pfx}");
+    assert_ne!(a, b, "every call names its own temp segment");
 }
 
 #[test]
@@ -1364,6 +1498,12 @@ fn checkpoint_phase_milliseconds_saturate_at_int_max() {
         crate::startup::timestamp_difference_milliseconds(0, i64::MAX / 2),
         i32::MAX as i64
     );
+}
+
+#[test]
+fn checkpoint_phase_milliseconds_saturate_on_overflowing_difference() {
+    assert_eq!(crate::startup::timestamp_difference_milliseconds(i64::MIN, 3), i32::MAX as i64);
+    assert_eq!(crate::startup::timestamp_difference_milliseconds(1_000, 1_500_000), 1_499);
 }
 
 #[test]
@@ -1409,4 +1549,15 @@ fn restartpoint_declined_for_invalid_pages_is_logged_at_debug2_like_c() {
     );
     let msgs = MSGS.lock().unwrap();
     assert!(msgs.contains(&expected), "got {msgs:?}");
+}
+
+// xlog.c:172-185: "fsync_writethrough" is offered only under
+// HAVE_FSYNC_WRITETHROUGH, so other platforms reject it with 22023 instead of
+// PANICking at the first WAL flush.
+#[test]
+fn wal_sync_method_writethrough_only_where_supported() {
+    let has = crate::guc_vars::WAL_SYNC_METHOD_OPTIONS
+        .iter()
+        .any(|e| e.name == "fsync_writethrough");
+    assert_eq!(has, cfg!(target_os = "macos"));
 }

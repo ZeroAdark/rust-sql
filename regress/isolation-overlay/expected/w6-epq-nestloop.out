@@ -1,0 +1,395 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2plan
+step s2plan: EXPLAIN (COSTS OFF) MERGE INTO nt t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.d, 'new'); EXPLAIN (COSTS OFF) MERGE INTO ns t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d; EXPLAIN (COSTS OFF) MERGE INTO nb t USING (SELECT 2 AS id, 5010 AS k2) s ON t.id = s.id OR t.k2 = s.k2 WHEN MATCHED THEN UPDATE SET val = t.val + 1;
+QUERY PLAN                                  
+--------------------------------------------
+Merge on nt t                               
+  ->  Nested Loop Left Join                 
+        ->  Result                          
+        ->  Index Scan using nt_pkey on nt t
+              Index Cond: (id = 2)          
+(5 rows)
+
+QUERY PLAN              
+------------------------
+Merge on ns t           
+  ->  Seq Scan on ns t  
+        Filter: (id = 2)
+(3 rows)
+
+QUERY PLAN                                     
+-----------------------------------------------
+Merge on nb t                                  
+  ->  Bitmap Heap Scan on nb t                 
+        Recheck Cond: ((id = 2) OR (k2 = 5010))
+        ->  BitmapOr                           
+              ->  Bitmap Index Scan on nb_id   
+                    Index Cond: (id = 2)       
+              ->  Bitmap Index Scan on nb_k2   
+                    Index Cond: (k2 = 5010)    
+(8 rows)
+
+
+starting permutation: s1up s2left s1c s2chk
+s1: WARNING:  there is already a transaction in progress
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2left: MERGE INTO nt t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged' WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.d, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2left: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note  
+--+---+------
+ 2|127|merged
+ 3| 30|n3    
+(2 rows)
+
+
+starting permutation: s1key s2left s1c s2chk
+step s1key: UPDATE nt SET id = 2000 WHERE id = 2;
+step s2left: MERGE INTO nt t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged' WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.d, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2left: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+  id|val|note    
+----+---+--------
+   2|  7|inserted
+   3| 30|n3      
+2000| 20|n2      
+(3 rows)
+
+
+starting permutation: s1key s2inner s1c s2chk
+step s1key: UPDATE nt SET id = 2000 WHERE id = 2;
+step s2inner: MERGE INTO nt t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged inner'; <waiting ...>
+step s1c: COMMIT;
+step s2inner: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+  id|val|note
+----+---+----
+   3| 30|n3  
+2000| 20|n2  
+(2 rows)
+
+
+starting permutation: s1del s2left s1c s2chk
+step s1del: DELETE FROM nt WHERE id = 2;
+step s2left: MERGE INTO nt t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged' WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.d, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2left: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note    
+--+---+--------
+ 2|  7|inserted
+ 3| 30|n3      
+(2 rows)
+
+
+starting permutation: s1del s2inner s1c s2chk
+step s1del: DELETE FROM nt WHERE id = 2;
+step s2inner: MERGE INTO nt t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged inner'; <waiting ...>
+step s1c: COMMIT;
+step s2inner: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 3| 30|n3  
+(1 row)
+
+
+starting permutation: s1up s2mdel s1c s2chk
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2mdel: MERGE INTO nt t USING (SELECT 2 AS id) s ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.id, -1, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2mdel: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 3| 30|n3  
+(1 row)
+
+
+starting permutation: s1key s2mdel s1c s2chk
+step s1key: UPDATE nt SET id = 2000 WHERE id = 2;
+step s2mdel: MERGE INTO nt t USING (SELECT 2 AS id) s ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.id, -1, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2mdel: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+  id|val|note    
+----+---+--------
+   2| -1|inserted
+   3| 30|n3      
+2000| 20|n2      
+(3 rows)
+
+
+starting permutation: s1big s2when s1c s2chk
+step s1big: UPDATE nt SET val = 500 WHERE id = 2;
+step s2when: MERGE INTO nt t USING (SELECT 2 AS id) s ON t.id = s.id WHEN MATCHED AND t.val < 100 THEN UPDATE SET note = 'small' WHEN MATCHED THEN UPDATE SET note = 'big'; <waiting ...>
+step s1c: COMMIT;
+step s2when: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|500|big 
+ 3| 30|n3  
+(2 rows)
+
+
+starting permutation: s1up s2ret s1c s2chk
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2ret: MERGE INTO nt t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d RETURNING merge_action(), old.val AS old_val, t.*; <waiting ...>
+step s1c: COMMIT;
+step s2ret: <... completed>
+merge_action|old_val|id|val|note
+------------+-------+--+---+----
+UPDATE      |    120| 2|127|n2  
+(1 row)
+
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|127|n2  
+ 3| 30|n3  
+(2 rows)
+
+
+starting permutation: s1up s2init s1c s2chk
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2init: MERGE INTO nt t USING (SELECT (SELECT id FROM nr WHERE w = 200) AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'init' WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.d, 'init ins'); <waiting ...>
+step s1c: COMMIT;
+step s2init: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|127|init
+ 3| 30|n3  
+(2 rows)
+
+
+starting permutation: s1up s2bump s1c s2chk s2seqv
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2bump: MERGE INTO nt t USING (SELECT (SELECT max(k) FROM w6k WHERE w6_bump(k)) AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET note = 'bump'; <waiting ...>
+step s1c: COMMIT;
+step s2bump: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|120|bump
+ 3| 30|n3  
+(2 rows)
+
+step s2seqv: SELECT nextval('w6q');
+nextval
+-------
+      3
+(1 row)
+
+
+starting permutation: s1up s2seq s1c s2chk s2seqv
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2seq: MERGE INTO nt t USING (SELECT 2 AS id, nextval('w6q') AS n) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = s.n; <waiting ...>
+step s1c: COMMIT;
+step s2seq: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|  1|n2  
+ 3| 30|n3  
+(2 rows)
+
+step s2seqv: SELECT nextval('w6q');
+nextval
+-------
+      2
+(1 row)
+
+
+starting permutation: s1up s2vals s1c s2chk
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2vals: MERGE INTO nt t USING (VALUES (2, 7), (3, 8)) s(id, d) ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.d, 'v'); <waiting ...>
+step s1c: COMMIT;
+step s2vals: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|127|n2  
+ 3| 38|n3  
+(2 rows)
+
+
+starting permutation: s1up s2iwhen s1c s2chk
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2iwhen: MERGE INTO nt t USING (SELECT 2 AS id) s ON t.id = s.id WHEN MATCHED AND t.val > 100000 AND (SELECT id FROM nr) = 1 THEN UPDATE SET note = 'never' WHEN MATCHED THEN UPDATE SET note = 'iwhen' WHEN NOT MATCHED THEN INSERT VALUES (s.id, 0, 'iwhen ins'); <waiting ...>
+step s1c: COMMIT;
+step s2iwhen: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note 
+--+---+-----
+ 2|120|iwhen
+ 3| 30|n3   
+(2 rows)
+
+
+starting permutation: s1nr s1up s2iset s1c s2chk
+step s1nr: UPDATE nr SET w = 999 WHERE id = 2;
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2iset: MERGE INTO nt t USING (SELECT 2 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET note = 'w' || (SELECT w FROM nr WHERE id = 2) WHEN NOT MATCHED THEN INSERT VALUES (s.id, 0, 'iset ins'); <waiting ...>
+step s1c: COMMIT;
+step s2iset: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|120|w200
+ 3| 30|n3  
+(2 rows)
+
+
+starting permutation: s1up s2vq s1c s2chk s2seqv
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2vq: MERGE INTO nt t USING (SELECT 2 AS id WHERE w6_bump(2)) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET note = 'volatile source qual'; <waiting ...>
+step s1c: COMMIT;
+step s2vq: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note                
+--+---+--------------------
+ 2|120|volatile source qual
+ 3| 30|n3                  
+(2 rows)
+
+step s2seqv: SELECT nextval('w6q');
+nextval
+-------
+      3
+(1 row)
+
+
+starting permutation: s1up s2vset s1c s2chk s2seqv
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2vset: MERGE INTO nt t USING (SELECT 2 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = nextval('w6q'); <waiting ...>
+step s1c: COMMIT;
+step s2vset: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|  2|n2  
+ 3| 30|n3  
+(2 rows)
+
+step s2seqv: SELECT nextval('w6q');
+nextval
+-------
+      3
+(1 row)
+
+
+starting permutation: s1up s2vwhen s1c s2chk s2seqv
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2vwhen: MERGE INTO nt t USING (SELECT 2 AS id) s ON t.id = s.id WHEN MATCHED AND w6_bump(t.id) THEN UPDATE SET note = 'volatile when'; <waiting ...>
+step s1c: COMMIT;
+step s2vwhen: <... completed>
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note         
+--+---+-------------
+ 2|120|volatile when
+ 3| 30|n3           
+(2 rows)
+
+step s2seqv: SELECT nextval('w6q');
+nextval
+-------
+      3
+(1 row)
+
+
+starting permutation: s1hup s2hleft s1c s2hchk
+step s1hup: UPDATE ns SET val = val + 100 WHERE id = 2;
+step s2hleft: MERGE INTO ns t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged' WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.d, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2hleft: <... completed>
+step s2hchk: SELECT * FROM ns WHERE id IN (2, 2000) ORDER BY id, val;
+id|val|note  
+--+---+------
+ 2|127|merged
+(1 row)
+
+
+starting permutation: s1hkey s2hleft s1c s2hchk
+step s1hkey: UPDATE ns SET id = 2000 WHERE id = 2;
+step s2hleft: MERGE INTO ns t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged' WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.d, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2hleft: <... completed>
+step s2hchk: SELECT * FROM ns WHERE id IN (2, 2000) ORDER BY id, val;
+  id|val|note    
+----+---+--------
+   2|  7|inserted
+2000| 20|s2      
+(2 rows)
+
+
+starting permutation: s1hkey s2hinner s1c s2hchk
+step s1hkey: UPDATE ns SET id = 2000 WHERE id = 2;
+step s2hinner: MERGE INTO ns t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged inner'; <waiting ...>
+step s1c: COMMIT;
+step s2hinner: <... completed>
+step s2hchk: SELECT * FROM ns WHERE id IN (2, 2000) ORDER BY id, val;
+  id|val|note
+----+---+----
+2000| 20|s2  
+(1 row)
+
+
+starting permutation: s1bup s2bmap s1c s2bchk
+step s1bup: UPDATE nb SET val = val + 100 WHERE id = 2;
+step s2bmap: MERGE INTO nb t USING (SELECT 2 AS id, 5010 AS k2) s ON t.id = s.id OR t.k2 = s.k2 WHEN MATCHED THEN UPDATE SET val = t.val + 1; <waiting ...>
+step s1c: COMMIT;
+step s2bmap: <... completed>
+step s2bchk: SELECT * FROM nb WHERE val <> 0 ORDER BY id;
+id|  k2|val
+--+----+---
+ 2|5002|101
+10|5010|  1
+(2 rows)
+
+
+starting permutation: s2rr s1up s2inner s1c s2rb s2chk
+step s2rr: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM nt;
+count
+-----
+ 1000
+(1 row)
+
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2inner: MERGE INTO nt t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged inner'; <waiting ...>
+step s1c: COMMIT;
+step s2inner: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s2rb: ROLLBACK;
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|120|n2  
+ 3| 30|n3  
+(2 rows)
+
+
+starting permutation: s2sz s1up s2left s1c s2rb s2chk
+step s2sz: BEGIN ISOLATION LEVEL SERIALIZABLE; SELECT count(*) FROM nt;
+count
+-----
+ 1000
+(1 row)
+
+step s1up: UPDATE nt SET val = val + 100 WHERE id = 2;
+step s2left: MERGE INTO nt t USING (SELECT 2 AS id, 7 AS d) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = t.val + s.d, note = 'merged' WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.d, 'inserted'); <waiting ...>
+step s1c: COMMIT;
+step s2left: <... completed>
+ERROR:  could not serialize access due to concurrent update
+step s2rb: ROLLBACK;
+step s2chk: SELECT * FROM nt WHERE id IN (2, 3, 2000) ORDER BY id;
+id|val|note
+--+---+----
+ 2|120|n2  
+ 3| 30|n3  
+(2 rows)
+

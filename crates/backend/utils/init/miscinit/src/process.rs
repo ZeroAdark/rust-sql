@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use init_small::globals as g;
 use types_core::INVALID_PROC_NUMBER;
 use types_error::{
@@ -115,8 +115,8 @@ pub fn InitStandaloneProcess(argv0: &str) -> PgResult<()> {
 }
 
 fn c_str_of(buf: &[u8]) -> String {
-    String::from_utf8_lossy(&buf.iter().copied().take_while(|b| *b != 0).collect::<Vec<u8>>())
-        .into_owned()
+    let len = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..len]).into_owned()
 }
 
 // C's child-init order; process-wide arms are postmaster-signal design.
@@ -133,6 +133,28 @@ pub fn InitPostmasterChild(my_proc_pid: i32) -> PgResult<()> {
 
     // wasm32: the wasi libc crate exposes no SIG* names; 3 is SIGQUIT in the
     // thread-signal emulation's Linux-numbered space (libpq_pqsignal wasm arm).
+    #[cfg(not(target_family = "wasm"))]
+    const SIGQUIT: i32 = libc::SIGQUIT;
+    #[cfg(target_family = "wasm")]
+    const SIGQUIT: i32 = 3;
+    libpq_pqsignal::block_sig_delete(SIGQUIT);
+    libpq_pqsignal::block_signals();
+    Ok(())
+}
+
+/// D4682 (client backend thread reuse, launch_backend cpool): InitPostmasterChild on a thread a previous session
+/// parked. Its once-per-thread half survived the park (InitializeWaitEventSupport's tripwire, the local latch slot, the
+/// latch wait set, which still waits on that slot since ProcKill switched back to it); the per-session half runs as on a
+/// fresh thread, the local latch re-initialized under the new pid (AddWaitEventToSet checks the owner).
+pub fn InitReusedPostmasterChild(my_proc_pid: i32) -> PgResult<()> {
+    g::SetIsUnderPostmaster(true);
+
+    InitProcessGlobals(my_proc_pid);
+
+    libpq_pqsignal::pqinitmask();
+
+    InitProcessLocalLatch()?;
+
     #[cfg(not(target_family = "wasm"))]
     const SIGQUIT: i32 = libc::SIGQUIT;
     #[cfg(target_family = "wasm")]
@@ -233,7 +255,7 @@ pub fn ChangeToDataDir() -> PgResult<()> {
         ereport(FATAL)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()
-            .errmsg(format!("could not change directory to \"{data_dir}\": %m"))
+            .errmsg(format!("could not change directory to \"{data_dir}\": {PCT_M}"))
             .finish(loc(465, "ChangeToDataDir"))?;
     }
     Ok(())
@@ -259,7 +281,7 @@ pub fn ValidatePgVersion(path: &str) -> PgResult<()> {
             ereport(FATAL)
                 .with_saved_errno(errno)
                 .errcode_for_file_access()
-                .errmsg(format!("could not open file \"{full_path}\": %m"))
+                .errmsg(format!("could not open file \"{full_path}\": {PCT_M}"))
                 .finish(loc(1795, "ValidatePgVersion"))?;
             return Ok(());
         }

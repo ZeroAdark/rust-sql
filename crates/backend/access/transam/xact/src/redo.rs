@@ -336,11 +336,8 @@ pub fn parse_prepare_record(_info: u8, data: &[u8]) -> PgResult<ParsedPrepare> {
     let mut off = HDR;
     let gid_bytes = data.get(off..off + gidlen).ok_or_else(truncated)?;
     // gidlen counts the NUL terminator (twophase.c: strlen(gid) + 1).
-    let twophase_gid = gid_bytes
-        .split(|&b| b == 0)
-        .next()
-        .unwrap_or(&[])
-        .to_vec();
+    let raw_gid = gid_bytes.split(|&b| b == 0).next().unwrap_or(&[]);
+    let twophase_gid = ::mcx::std_vec_from_slice("xact", raw_gid)?;
     off = maxalign(off + gidlen);
 
     let mut subxacts = Vec::new();

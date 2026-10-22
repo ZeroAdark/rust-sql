@@ -170,8 +170,33 @@ fn toast_compress_extsize(b: &[u8]) -> u32 {
     tcinfo(b) & VARLENA_EXTSIZE_MASK
 }
 
+// C pg_detoast_datum_copy (fmgr.c:1848) pallocs VARSIZE bytes and copies them. A 4-byte header declaring a size under
+// its own 4 bytes would make a copy that ends inside its header, and every reader of the copy (accumArrayResult's
+// datumCopy, D4728) takes the header word past its end. C reads that word in palloc's 8-byte minimum chunk and reaches
+// its XX001 later (pageinspect heapfuncs.c:417); this port raises XX001 before any copy.
 fn copy_verbatim<'mcx>(mcx: Mcx<'mcx>, attr: &[u8]) -> PgResult<PgVec<'mcx, u8>> {
-    mcx::slice_in(mcx, &attr[..varsize_any(attr)])
+    let n = varsize_any(attr);
+    if n < VARHDRSZ && !is_short(attr) {
+        return Err(varsize_under_header(n).into());
+    }
+    mcx::slice_in(mcx, &attr[..n])
+}
+
+// D4901 S5: an external header whose tag is none of ONDISK / INDIRECT / EXPANDED_RO / EXPANDED_RW. C has no check
+// (its VARTAG_SIZE is AssertMacro(false), and detoast_attr's VARATT_IS_SHORT arm then memcpys VARSIZE_SHORT - 1 = -1
+// bytes); here it fell to the short arm, whose 0 - 1 underflow panicked and aborted the backend. XX001 instead.
+#[cold]
+#[inline(never)]
+fn unknown_vartag(attr: &[u8]) -> PgError {
+    let tag = attr.get(1).copied().unwrap_or(0);
+    PgError::error(format!("invalid external TOAST tag {tag}")).with_sqlstate(ERRCODE_DATA_CORRUPTED)
+}
+
+#[cold]
+#[inline(never)]
+fn varsize_under_header(n: usize) -> PgError {
+    PgError::error(format!("invalid varlena size {n}: less than its {VARHDRSZ}-byte header"))
+        .with_sqlstate(ERRCODE_DATA_CORRUPTED)
 }
 
 /// `struct varatt_indirect` (varatt.h) holds a raw pointer to a live varlena;
@@ -271,6 +296,8 @@ pub fn detoast_attr<'mcx>(mcx: Mcx<'mcx>, attr: &[u8]) -> PgResult<PgVec<'mcx, u
         // C: flatteners are not allowed to produce compressed/short output.
         debug_assert!(!is_external(&flat) && !is_compressed(&flat) && !is_short(&flat));
         Ok(flat)
+    } else if is_external(attr) {
+        Err(unknown_vartag(attr).into())
     } else if is_compressed(attr) {
         toast_decompress_datum(mcx, attr)
     } else if is_short(attr) {
@@ -353,6 +380,8 @@ pub fn detoast_attr_slice<'mcx>(
         return detoast_attr_slice(mcx, target, sliceoffset, slicelength);
     } else if is_external_expanded(attr) {
         Some(flatten_expanded(mcx, attr)?)
+    } else if is_external(attr) {
+        return Err(unknown_vartag(attr).into());
     } else {
         None
     };

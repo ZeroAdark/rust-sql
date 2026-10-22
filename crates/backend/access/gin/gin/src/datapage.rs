@@ -673,14 +673,14 @@ fn leaf_repack_items<'s>(
 }
 
 /// computeLeafRecompressWALData.
-fn compute_leaf_recompress_wal_data(leaf: &mut DisassembledLeaf, new_items: &[ItemPointerData]) {
+fn compute_leaf_recompress_wal_data(leaf: &mut DisassembledLeaf, new_items: &[ItemPointerData]) -> PgResult<()> {
     let nmodified = leaf
         .segs
         .iter()
         .filter(|s| s.action != GIN_SEGMENT_UNMODIFIED)
         .count();
 
-    let mut buf: Vec<u8> = Vec::with_capacity(2 + BLCKSZ + nmodified * 2);
+    let mut buf: Vec<u8> = ::mcx::std_vec_with_capacity("gin", 2 + BLCKSZ + nmodified * 2)?;
     buf.extend_from_slice(&crate::wal::ginxlog_recompress_header(nmodified as u16));
 
     let mut segno = 0u8;
@@ -726,6 +726,7 @@ fn compute_leaf_recompress_wal_data(leaf: &mut DisassembledLeaf, new_items: &[It
         }
     }
     leaf.walinfo = buf;
+    Ok(())
 }
 
 /// dataPlaceToPageLeafRecompress over the buffer page.
@@ -967,7 +968,7 @@ impl<'a, 'r, 's> DataBtree<'a, 'r, 's> {
         let place;
         if !needsplit {
             if relation_needs_wal(self.rel) && !self.is_build {
-                compute_leaf_recompress_wal_data(&mut leaf, new_items_all);
+                compute_leaf_recompress_wal_data(&mut leaf, new_items_all)?;
             }
             // gindatapage.c:609-615.
             elog::ereport(DEBUG2)
@@ -1206,7 +1207,7 @@ impl<'r> GinBt<'r> for DataBtree<'_, 'r, '_> {
             write_posting_item(bytes, off, &existing);
             gin_data_page_add_posting_item(bytes, &pitem, off);
             bm::mark_buffer_dirty::call(buf)?;
-            Ok(vec![crate::wal::ginxlog_insert_data_internal(off, &pitem).to_vec()])
+            Ok(vec![::mcx::std_vec_from_slice("gin", &crate::wal::ginxlog_insert_data_internal(off, &pitem))?])
         }
     }
 
@@ -1274,7 +1275,7 @@ impl DataBtree<'_, '_, '_> {
         gin_init_page_bytes(lpage.as_mut_bytes(), old_opaque.flags);
         gin_init_page_bytes(rpage.as_mut_bytes(), old_opaque.flags);
 
-        let mut allitems: Vec<PostingItem> = Vec::with_capacity(nitems + 1);
+        let mut allitems: Vec<PostingItem> = ::mcx::std_vec_with_capacity("access", nitems + 1)?;
         for i in 1..off {
             allitems.push(posting_item_at(oldbytes, i));
         }
@@ -1522,7 +1523,7 @@ pub(crate) fn ginVacuumPostingTreeLeaf<'s>(
 
     let need_wal = relation_needs_wal(rel);
     if need_wal {
-        compute_leaf_recompress_wal_data(&mut leaf, &[]);
+        compute_leaf_recompress_wal_data(&mut leaf, &[])?;
     }
 
     // gindatapage.c:845 START_CRIT_SECTION(): apply the changes to the page

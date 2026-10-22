@@ -1,7 +1,12 @@
 //! OpenLDAP's `ldap_url_parse` (historic-flags shim) and `ldap_err2string`,
 //! transcribed for the hba `ldapurl` option and the in-tree LDAP client.
 //! RFC 4516 subset: scheme://host:port/dn?attrs?scope?filter?exts. Historic
-//! semantics: empty host / dn become absent, missing scope defaults to base.
+//! semantics: empty host becomes absent, an empty dn after '/' stays "",
+//! a missing port defaults per scheme, missing scope defaults to base.
+
+// ldap.h LDAP_PORT / LDAPS_PORT.
+pub const LDAP_PORT: i32 = 389;
+pub const LDAPS_PORT: i32 = 636;
 
 // LDAP result codes this build can produce (ldap.h).
 pub const LDAP_SUCCESS: i32 = 0;
@@ -110,9 +115,9 @@ fn hex_val(b: u8) -> Option<u8> {
 // ldap_pvt_hex_unescape: %hh percent-decoding; a '%' not followed by two hex
 // digits is dropped with its trailing garbage kept, but we keep it literal
 // (the C behavior is unspecified byte salad; literal is the defensible arm).
-fn hex_unescape(s: &str) -> String {
+fn hex_unescape(s: &str) -> Result<String, i32> {
     let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
+    let mut out = ::mcx::std_vec_with_capacity("hba", b.len()).map_err(|_| LDAP_URL_ERR_MEM)?;
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' {
@@ -128,7 +133,8 @@ fn hex_unescape(s: &str) -> String {
         out.push(b[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out.truncate(out.iter().position(|&c| c == 0).unwrap_or(out.len()));
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 fn str2scope(s: &str) -> Option<i32> {
@@ -149,6 +155,17 @@ fn str2scope(s: &str) -> Option<i32> {
 /// ldap_url_parse with LDAP_PVT_URL_PARSE_HISTORIC. Err is an LDAP_URL_ERR_*
 /// code for hba's `could not parse LDAP URL` message.
 pub fn ldap_url_parse(url: &str) -> Result<LdapUrlDesc, i32> {
+    // skip_url_prefix: an optional "<...>" enclosure and a case-insensitive
+    // "URL:" prefix precede the scheme.
+    let (url, enclosed) = match url.strip_prefix('<') {
+        Some(rest) => (rest, true),
+        None => (url, false),
+    };
+    let url = if url.len() >= 4 && url[..4].eq_ignore_ascii_case("URL:") {
+        &url[4..]
+    } else {
+        url
+    };
     let Some(pos) = url.find("://") else {
         return Err(LDAP_URL_ERR_BADSCHEME);
     };
@@ -166,6 +183,11 @@ pub fn ldap_url_parse(url: &str) -> Result<LdapUrlDesc, i32> {
     };
 
     let rest = &url[pos + 3..];
+    let rest = if enclosed {
+        rest.strip_suffix('>').ok_or(LDAP_URL_ERR_BADENCLOSURE)?
+    } else {
+        rest
+    };
     let (hostport, sections) = match rest.find('/') {
         Some(slash) => (&rest[..slash], Some(&rest[slash + 1..])),
         None => (rest, None),
@@ -190,13 +212,13 @@ pub fn ldap_url_parse(url: &str) -> Result<LdapUrlDesc, i32> {
             None => return Err(LDAP_URL_ERR_BADURL),
         }
     } else {
-        match hostport.rfind(':') {
+        match hostport.find(':') {
             Some(colon) => (&hostport[..colon], Some(&hostport[colon + 1..])),
             None => (hostport, None),
         }
     };
     if !host_part.is_empty() {
-        desc.host = Some(hex_unescape(host_part));
+        desc.host = Some(hex_unescape(host_part)?);
     }
     if let Some(p) = port_part {
         if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
@@ -208,18 +230,22 @@ pub fn ldap_url_parse(url: &str) -> Result<LdapUrlDesc, i32> {
         }
     }
 
+    // LDAP_PVT_URL_PARSE_DEF_PORT (part of HISTORIC).
+    if desc.port == 0 && desc.scheme != "ldapi" {
+        desc.port = if desc.scheme == "ldaps" { LDAPS_PORT } else { LDAP_PORT };
+    }
+
     let Some(sections) = sections else {
         return Ok(desc);
     };
     let mut it = sections.splitn(5, '?');
+    // HISTORIC lacks NOEMPTY_DN: "ldap://h/" yields dn "", not NULL.
     let dn = it.next().unwrap_or("");
-    if !dn.is_empty() {
-        desc.dn = Some(hex_unescape(dn));
-    }
+    desc.dn = Some(hex_unescape(dn)?);
     if let Some(attrs) = it.next() {
         for a in attrs.split(',') {
             if !a.is_empty() {
-                desc.attrs.push(hex_unescape(a));
+                desc.attrs.push(hex_unescape(a)?);
             }
         }
     }
@@ -230,14 +256,81 @@ pub fn ldap_url_parse(url: &str) -> Result<LdapUrlDesc, i32> {
     }
     if let Some(filter) = it.next() {
         if !filter.is_empty() {
-            desc.filter = Some(hex_unescape(filter));
+            desc.filter = Some(hex_unescape(filter)?);
         }
     }
     if let Some(exts) = it.next() {
+        // lud_exts: hba.c copies none of them, so they are validated and
+        // dropped (an extra '?' is BADURL; only empty tokens is BADEXTS).
         if !exts.is_empty() {
-            // Extensions are unsupported in this client.
-            return Err(LDAP_URL_ERR_BADEXTS);
+            if exts.contains('?') {
+                return Err(LDAP_URL_ERR_BADURL);
+            }
+            if exts.split(',').all(str::is_empty) {
+                return Err(LDAP_URL_ERR_BADEXTS);
+            }
+            for e in exts.split(',').filter(|e| !e.is_empty()) {
+                hex_unescape(e)?;
+            }
         }
     }
     Ok(desc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ldap_url_parse, LDAP_URL_ERR_BADENCLOSURE, LDAP_URL_ERR_BADEXTS, LDAP_URL_ERR_BADURL,
+    };
+
+    // fp-libpq-hba#2: OpenLDAP skip_url_prefix takes "<...>" and "URL:".
+    #[test]
+    fn enclosure_and_url_prefix_are_skipped() {
+        let d = ldap_url_parse("<URL:ldap://h:389/dc=a?uid?sub?(x=y)>").unwrap();
+        assert_eq!(d.host.as_deref(), Some("h"));
+        assert_eq!(d.port, 389);
+        assert_eq!(d.dn.as_deref(), Some("dc=a"));
+        assert_eq!(d.filter.as_deref(), Some("(x=y)"));
+        assert_eq!(ldap_url_parse("url:LDAPS://h").unwrap().scheme, "ldaps");
+        assert_eq!(ldap_url_parse("<ldap://h/>").unwrap().host.as_deref(), Some("h"));
+        assert_eq!(ldap_url_parse("<ldap://h").err(), Some(LDAP_URL_ERR_BADENCLOSURE));
+    }
+
+    // fp-libpq-hba#3: extensions parse into lud_exts, which hba.c ignores.
+    #[test]
+    fn extensions_are_accepted_and_dropped() {
+        let d = ldap_url_parse("ldap://h/dc=a?uid?sub?(x=y)?bindname=cn%3Dx,!x-foo").unwrap();
+        assert_eq!(d.filter.as_deref(), Some("(x=y)"));
+        assert_eq!(d.attrs, vec!["uid".to_string()]);
+        assert!(ldap_url_parse("ldap://h/dc=a????").is_ok());
+        assert_eq!(ldap_url_parse("ldap://h/dc=a????,").err(), Some(LDAP_URL_ERR_BADEXTS));
+        assert_eq!(ldap_url_parse("ldap://h/dc=a????a?b").err(), Some(LDAP_URL_ERR_BADURL));
+    }
+
+    // ldap_pvt_hex_unescape writes into a C string: a %00 ends the component
+    // (hbafuncs.c:109 formats ldapbasedn with %s).
+    #[test]
+    fn percent_nul_ends_the_component() {
+        let d = ldap_url_parse("ldap://h%00x:389/dc=a%00,dc=b?uid%00x?sub?(x=%00y)").unwrap();
+        assert_eq!(d.host.as_deref(), Some("h"));
+        assert_eq!(d.dn.as_deref(), Some("dc=a"));
+        assert_eq!(d.attrs, vec!["uid".to_string()]);
+        assert_eq!(d.filter.as_deref(), Some("(x="));
+        assert_eq!(d.scope, types_startup::LDAP_SCOPE_SUBTREE);
+    }
+
+    // ldap_url_parse's HISTORIC flags: DEF_PORT fills 389/636, and without
+    // NOEMPTY_DN an empty dn after '/' is "" (hba.c:2226 keeps it as
+    // ldapbasedn). The port colon is the first one (strchr).
+    #[test]
+    fn historic_flags_default_port_and_keep_empty_dn() {
+        let d = ldap_url_parse("ldap://h/?uid?sub").unwrap();
+        assert_eq!(d.port, 389);
+        assert_eq!(d.dn.as_deref(), Some(""));
+        assert_eq!(ldap_url_parse("ldaps://h/dc=x").unwrap().port, 636);
+        assert_eq!(ldap_url_parse("ldap://h:0/dc=x").unwrap().port, 389);
+        assert_eq!(ldap_url_parse("ldap://h:1234").unwrap().port, 1234);
+        assert_eq!(ldap_url_parse("ldap://h").unwrap().dn, None);
+        assert_eq!(ldap_url_parse("ldap://a:b:389/").err(), Some(LDAP_URL_ERR_BADURL));
+    }
 }

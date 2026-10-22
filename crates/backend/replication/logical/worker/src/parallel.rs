@@ -480,9 +480,12 @@ pub(crate) fn test_worker_exited(winfo: &Winfo) {
     winfo.borrow().shared.lock().error_mq_detached = true;
 }
 
+// Membership of one worker's segment; the registry is process-wide and other
+// tests add and remove entries concurrently, so its length is not stable.
 #[cfg(test)]
-pub(crate) fn test_registry_len() -> usize {
-    PA_DSM_REGISTRY.lock().unwrap_or_else(|e| e.into_inner()).len()
+pub(crate) fn test_registry_holds(winfo: &Winfo) -> bool {
+    let h = winfo.borrow().dsm_handle;
+    PA_DSM_REGISTRY.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(x, _)| *x == h)
 }
 
 // pa_detach_all_error_mq (applyparallelworker.c:621).
@@ -563,7 +566,7 @@ pub(crate) fn pa_switch_to_partial_serialize(
     mcx: Mcx<'static>,
     winfo: &Winfo,
     stream_locked: bool,
-) -> PgResult<()> {
+) -> PgResult<bool> {
     let xid = winfo.borrow().shared.lock().xid;
     let _ = elog::elog(
         LOG,
@@ -573,14 +576,16 @@ pub(crate) fn pa_switch_to_partial_serialize(
     );
 
     winfo.borrow_mut().serialize_changes = true;
-    crate::stream_apply::stream_start_internal(mcx, xid, true)?;
+    if !crate::stream_apply::stream_start_internal(mcx, xid, true)? {
+        return Ok(false);
+    }
 
     if !stream_locked {
         pa_lock_stream(xid, AccessExclusiveLock)?;
     }
 
     pa_set_fileset_state(&winfo.borrow().shared, PartialFileSetState::SerializeInProgress);
-    Ok(())
+    Ok(true)
 }
 
 // ---- leader: waiting for the PA worker -------------------------------------
@@ -684,7 +689,7 @@ pub fn ProcessParallelApplyMessages() -> PgResult<()> {
             // C parses the worker's ErrorResponse and rethrows with an added
             // context line (applyparallelworker.c:1039); the original error
             // was already logged by the worker's own exit path.
-            ereport(ERROR)
+            ereport(ERROR).errverbatim()
                 .errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
                 .errmsg("logical replication parallel apply worker exited due to error")
                 .errcontext_msg(parallel_apply_worker_context(&e))
@@ -857,13 +862,15 @@ fn pa_process_spooled_messages_if_required(mcx: Mcx<'static>) -> PgResult<bool> 
             let inner = shared.lock();
             (inner.xid, inner.fileset.clone().expect("fileset set at SERIALIZE_DONE"))
         };
-        crate::stream_apply::apply_spooled_messages(
+        if !crate::stream_apply::apply_spooled_messages(
             mcx,
             None,
             &fileset,
             xid,
             InvalidXLogRecPtr,
-        )?;
+        )? {
+            return Ok(true);
+        }
         pa_set_fileset_state(&my_parallel_shared(), PartialFileSetState::Empty);
     }
     Ok(true)
@@ -878,12 +885,12 @@ fn process_parallel_apply_interrupts() -> PgResult<bool> {
 
     if interrupt::ShutdownRequestPending() {
         let name = my_sub(|s| s.name.clone());
-        let _ = elog::elog(
-            LOG,
-            format!(
+        let _ = elog::ereport(LOG)
+            .errverbatim()
+            .errmsg(format!(
                 "logical replication parallel apply worker for subscription \"{name}\" has finished"
-            ),
-        );
+            ))
+            .finish(types_error::ErrorLocation::new("applyparallelworker.c", 718, "ProcessParallelApplyInterrupts"));
         return Ok(false);
     }
 
@@ -904,9 +911,9 @@ fn logical_parallel_apply_loop(mqh: &mut ShmMqHandle) -> PgResult<()> {
 
 fn logical_parallel_apply_loop_guts(mqh: &mut ShmMqHandle) -> PgResult<()> {
     // The ApplyMessageContext we clean up after each replication protocol
-    // message (applyparallelworker.c:741-746); a bump arena released
-    // wholesale at every reset, as the leader's (see apply_loop_guts).
-    let mut top = mcx::MemoryContext::new_bump("ApplyMessageContext");
+    // message (applyparallelworker.c:741-746): an AllocSet reset wholesale
+    // after every message, as the leader's (see apply_loop_guts).
+    let mut top = mcx::MemoryContext::new_wholesale("ApplyMessageContext");
 
     // Reused across iterations; the ring borrow ends before dispatch.
     let mut buf: Vec<u8> = Vec::new();
@@ -1065,6 +1072,7 @@ pub fn ParallelApplyWorkerMain(main_arg: u64) -> PgResult<()> {
     }
     ipc::before_shmem_exit(pa_shutdown_on_exit, datum::Datum::from_i64(w.leader_pid as i64))?;
     let error_queue = elog::push_emit_context_callback(Box::new(pa_park_error_report));
+    launcher::my_worker_clear_stat_times();
 
     let result = pa_worker_body(&shared, &mut mqh, &w);
     elog::pop_emit_context_callback(error_queue);

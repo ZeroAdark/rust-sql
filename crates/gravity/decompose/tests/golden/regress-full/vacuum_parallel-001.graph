@@ -1,0 +1,19 @@
+-- regress-full-vacuum_parallel-001
+-- SELECT EXISTS ( SELECT 1 FROM pg_class WHERE oid = 'vacuum_in_leader_small_index'::regclass AND pg_relation_size(oid) < pg_size_bytes(current_setting('min_parallel_index_scan_size')) ) as leader_will_handle_small_index;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 serial site=0 reason=IndexSource end=sink
+  nodes n1@0
+  source index-only rel=1259 rti=2 am=heap index=2662
+    key att=1 op=607 value=c26:34537
+    recheck (op607(index.1, c26:34537))
+    lanes Attr(1):byval8:w8:val
+  filter op412(fn2332(relabel2205(index.1), c25:'main'), fn3334(fn2077(c25:'min_parallel_index_scan_size')))
+  project ()
+  outs
+p1 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  nodes n0@0
+  source const
+  project (1=$exec0)
+  outs 1=w1:val
+init_plan id=1 pipeline=p0 link=Exists param=$exec0 vol=v
+mapped: Result IndexOnlyScan SubPlan

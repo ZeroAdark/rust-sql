@@ -73,7 +73,11 @@ fn process_interrupts_lock_timeout_is_55p03() {
     init_small::globals::SetQueryCancelPending(true);
     let err = check_for_interrupts().unwrap_err();
     assert_eq!(err.sqlstate, types_error::ERRCODE_LOCK_NOT_AVAILABLE);
-    assert!(err.message.contains("lock timeout"));
+    assert_eq!(err.message, "canceling statement due to lock timeout");
+    let location = err.location().unwrap();
+    assert_eq!(location.filename.as_deref(), Some("postgres.c"));
+    assert_eq!(location.lineno, 3439);
+    assert_eq!(location.funcname.as_deref(), Some("ProcessInterrupts"));
     assert!(!LOCK_TIMEOUT_INDICATOR.load(Ordering::Relaxed)); /* reset consumed it */
 }
 
@@ -89,17 +93,49 @@ fn process_interrupts_statement_timeout_is_57014() {
     assert!(err.message.contains("statement timeout"));
 }
 
+// D380: the thread whose next timeout drain delivers a late fire (session_tests' process_timeout_interrupt stub).
+use crate::session_tests::LATE_FIRE;
+
+// D380: a statement_timeout fire the drain observes while its sender is still storing: ProcessInterrupts clears the
+// abort byte first, then drains; the fire's handler raises the cancel and the byte lands after the clear. The consume
+// must take the byte with the cancel, or it outlives the statement and the next one's Gravity kernels read a spurious
+// 57014 at their first window.
+#[test]
+fn process_interrupts_consumed_cancel_takes_a_late_abort_byte() {
+    install_test_seams();
+    let _serial = CANCEL_ARM.lock().unwrap();
+    crate::session_tests::install_timeout_drain_stub();
+    init_small::globals::SetAbortPending(false);
+    *LATE_FIRE.lock().unwrap() = Some(std::thread::current().id());
+    init_small::globals::SetInterruptPending(true);
+    let err = check_for_interrupts().unwrap_err();
+    *LATE_FIRE.lock().unwrap() = None;
+    assert_eq!(err.sqlstate, types_error::ERRCODE_QUERY_CANCELED);
+    let stale = init_small::globals::AbortPending();
+    init_small::globals::SetAbortPending(false);
+    assert!(!stale, "the consumed cancel's abort byte must not outlive it into the next statement");
+    assert!(!init_small::globals::QueryCancelPending());
+}
+
 // timeout.c:414: the SIGALRM handler runs before ProcessInterrupts clears
-// InterruptPending, never between the drain and the clear.
+// InterruptPending, never between the drain and the clear. The thread model
+// clears first (D355), so a timer post landing after the drain re-raises
+// InterruptPending and the next CHECK_FOR_INTERRUPTS services it.
 #[test]
 fn process_interrupts_timer_post_after_drain_is_serviced() {
     install_test_seams();
-    crate::session_tests::install_timeout_drain_stub();
     let _serial = CANCEL_ARM.lock().unwrap();
+    crate::session_tests::install_timeout_drain_stub();
     *crate::session_tests::TIMER_ARMED_THREAD.lock().unwrap() = Some(std::thread::current().id());
     crate::session_tests::TIMER_POST_ON_DRAIN.store(true, Ordering::SeqCst);
     init_small::globals::SetInterruptPending(true);
-    let err = check_for_interrupts().unwrap_err();
+    let err = match check_for_interrupts() {
+        Err(e) => e,
+        Ok(()) => {
+            assert!(init_small::globals::InterruptPending(), "the late post must re-raise InterruptPending");
+            check_for_interrupts().unwrap_err()
+        }
+    };
     *crate::session_tests::TIMER_ARMED_THREAD.lock().unwrap() = None;
     assert_eq!(err.sqlstate, types_error::ERRCODE_QUERY_CANCELED);
     assert!(err.message.contains("statement timeout"));
@@ -391,6 +427,22 @@ fn idle_and_transaction_timeout_arms() {
 }
 
 #[test]
+fn escaped_fatal_counts_as_fatal_disconnect() {
+    use pgstat::database::{pgstat_session_end_cause, pgstat_set_session_end_cause, SessionEndType};
+    pgstat_set_session_end_cause(SessionEndType::DisconnectNormal);
+    let fatal = ereport(FATAL)
+        .errcode(types_error::ERRCODE_IDLE_SESSION_TIMEOUT)
+        .errmsg("terminating connection due to idle-session timeout")
+        .into_error();
+    crate::main_loop::report_escaped_error(&fatal);
+    assert_eq!(pgstat_session_end_cause(), SessionEndType::DisconnectFatal);
+    pgstat_set_session_end_cause(SessionEndType::DisconnectKilled);
+    crate::main_loop::report_escaped_error(&fatal);
+    assert_eq!(pgstat_session_end_cause(), SessionEndType::DisconnectKilled);
+    pgstat_set_session_end_cause(SessionEndType::DisconnectNormal);
+}
+
+#[test]
 fn die_sets_flags_and_latch() {
     my_latch();
     init_small::globals::HoldInterrupts(); /* keep ProcessInterrupts inert */
@@ -489,7 +541,68 @@ fn thread_signal_sigint_cancels_and_sigterm_terminates() {
     backend.join().unwrap();
 }
 
-// ---- check_log_duration sampling (regression; postgres.c:2427 parity) ----
+// D355 (a D266 follow-up): a thread signal delivered while ProcessInterrupts drains (after the drain took the
+// pending word, before InterruptPending is cleared) must not be stranded. In C the handler runs at delivery and raises
+// InterruptPending after ProcessInterrupts cleared it, so a busy backend's next CHECK_FOR_INTERRUPTS runs it. The
+// window is forced deterministically: SIGHUP's disposition, run by the drain, sends this backend SIGUSR2 (the sender
+// pends the bit and raises InterruptPending), and SIGUSR2's disposition counts. After the check the SIGUSR2 bit is
+// pending; the next check must reach it without the backend going idle (no latch wait, no explicit drain).
+#[test]
+fn a_thread_signal_delivered_during_the_drain_is_not_stranded() {
+    install_test_seams();
+    install_ipc_stubs();
+    let backend = std::thread::spawn(|| {
+        use init_small::globals as g;
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        static RESENT: AtomicBool = AtomicBool::new(false);
+        static SECOND: AtomicUsize = AtomicUsize::new(0);
+        g::SetMyProcNumber(3);
+        g::SetMyProcPid(6266);
+        procsignal::ProcSignalInit(&[]).unwrap();
+        let h = latch::allocate_local_latch();
+        latch::InitLatch(h);
+        g::SetMyLatch(Some(h));
+        procsignal::pqsignal_thread(
+            libc::SIGUSR2,
+            procsignal::ThreadSignalHandler::Simple(|| {
+                SECOND.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        procsignal::pqsignal_thread(
+            libc::SIGHUP,
+            procsignal::ThreadSignalHandler::Simple(|| {
+                if !RESENT.swap(true, Ordering::SeqCst) {
+                    assert_eq!(procsignal::SendThreadSignal(6266, libc::SIGUSR2), 0);
+                }
+            }),
+        );
+        g::SetInterruptPending(false);
+        assert_eq!(procsignal::SendThreadSignal(6266, libc::SIGHUP), 0);
+        assert!(
+            g::InterruptPending(),
+            "delivery raises InterruptPending (D266)"
+        );
+        check_for_interrupts().unwrap(); /* runs SIGHUP; SIGUSR2 lands mid-drain */
+        assert!(RESENT.load(Ordering::SeqCst));
+        let stranded = !g::InterruptPending() && SECOND.load(Ordering::SeqCst) == 0;
+        check_for_interrupts().unwrap(); /* the busy backend's next CHECK_FOR_INTERRUPTS */
+        let seen = SECOND.load(Ordering::SeqCst);
+        procsignal::DrainThreadSignals().unwrap(); /* leave the slot clean either way */
+        g::SetInterruptPending(false);
+        (stranded, seen)
+    });
+    let (stranded, seen) = backend.join().unwrap();
+    assert!(
+        !stranded,
+        "SIGUSR2 delivered during the drain is pending with InterruptPending cleared: stranded until the backend idles"
+    );
+    assert_eq!(
+        seen, 1,
+        "the next CHECK_FOR_INTERRUPTS runs the signal delivered during the drain, exactly once"
+    );
+}
+
+// ---- check_log_duration sampling (GL-GUCBATCH-1; postgres.c:2427 parity) ----
 
 fn sampling_gucs() -> simple_query::LogDurationGucs {
     simple_query::LogDurationGucs {
@@ -623,6 +736,7 @@ fn error_recovery_escalates_instead_of_recovering_inside_critical_section() {
         idle_in_transaction_timeout_enabled: false,
         idle_session_timeout_enabled: false,
         idle_passivate_timeout_enabled: false,
+        log_defer_before: None,
     };
 
     g::SetCritSectionCount(1);
@@ -634,6 +748,43 @@ fn error_recovery_escalates_instead_of_recovering_inside_critical_section() {
     assert!(result
         .expect_err("error_recovery must not recover with a critical section open")
         .is::<types_error::PanicExitThread>());
+}
+
+// D2933 (user 2026-09-29: "when crashing, the whole system should abort like
+// postgres does"): the statement boundary keeps a structured error (a PgError
+// payload) an ERROR, re-raises an exit payload, and turns a plain panic into C's
+// abort(): the unwind goes on as PanicExitThread (the thread dies as crashed,
+// the postmaster's crash restart), never ERROR XX000 to the client.
+#[test]
+fn d2933_plain_panic_takes_the_crash_path_not_xx000() {
+    let pg = main_loop::pg_error_from_panic(Box::new(types_error::PgError::new(
+        types_error::ERROR,
+        "division by zero",
+    )));
+    assert_eq!((pg.level(), pg.message()), (types_error::ERROR, "division by zero"));
+    let boxed = main_loop::pg_error_from_panic(Box::new(Box::new(types_error::PgError::new(
+        types_error::ERROR,
+        "boxed",
+    ))));
+    assert_eq!(boxed.message(), "boxed");
+
+    for plain in [
+        Box::new(String::from("index out of bounds: the len is 1 but the index is 2"))
+            as Box<dyn std::any::Any + Send>,
+        Box::new("called `Option::unwrap()` on a `None` value"),
+        Box::new(7u32),
+    ] {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            main_loop::pg_error_from_panic(plain)
+        }));
+        let payload = r.expect_err("a plain panic must not become an ERROR");
+        assert!(payload.is::<types_error::PanicExitThread>(), "C's abort(): the crash path");
+    }
+
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        main_loop::pg_error_from_panic(Box::new(types_error::PanicExitThread))
+    }));
+    assert!(r.expect_err("a PANIC keeps unwinding").is::<types_error::PanicExitThread>());
 }
 
 // audit-18.6 b151: errdetail_abort (postgres.c:2540) — the aborted-transaction

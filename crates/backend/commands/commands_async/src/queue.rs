@@ -29,7 +29,7 @@ use types_storage::lock::AccessExclusiveLock;
 use types_storage::storage::{LWTRANCHE_NOTIFY_BUFFER, LWTRANCHE_NOTIFY_SLRU};
 use types_storage::sync::SyncRequestHandler;
 
-use elog::ereport;
+use elog::{ereport, PCT_M};
 use types_error::ErrorLocation;
 
 #[track_caller]
@@ -520,7 +520,7 @@ pub(crate) fn unregister_listener() -> PgResult<()> {
 /// SignalBackends: wake every listener that isn't caught up (same-db) or is
 /// far behind (other-db). Self-signal short-circuits to the local flag.
 pub(crate) fn signal_backends() -> PgResult<()> {
-    let mut targets: Vec<(i32, ProcNumber)> = Vec::with_capacity(g::MaxBackends() as usize);
+    let mut targets: Vec<(i32, ProcNumber)> = ::mcx::std_vec_with_capacity("commands", g::MaxBackends() as usize)?;
 
     let qlock = LwGuard::acquire(notify_queue_lock(), LW_EXCLUSIVE)?;
     let head = queue_head(&qlock);
@@ -564,7 +564,7 @@ pub(crate) fn signal_backends() -> PgResult<()> {
 // the signal; C logs it at DEBUG3 with %m.
 fn could_not_signal_backend(pid: i32) -> elog::ErrorBuilder {
     ereport(types_error::DEBUG3)
-        .errmsg_internal(format!("could not signal backend with PID {pid}: %m"))
+        .errmsg_internal(format!("could not signal backend with PID {pid}: {PCT_M}"))
 }
 
 pub(crate) struct ReadPositions {

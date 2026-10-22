@@ -1,0 +1,5 @@
+Goldens whose rows read state the crate has no source for (`CURRENT_DATE` is the transaction start's date;
+0 = 2000-01-01 without a transaction): pg_regress judges them through the server. One file per fixture,
+`<fixture>.tsv`, one line: why.
+
+One file per entry (Michael 09-24): lanes never edit one line; scripts/gravity-gate/m2-decompose.py.

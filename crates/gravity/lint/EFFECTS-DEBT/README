@@ -1,0 +1,17 @@
+# RV's registry (lint/rules/rv_visible.py; the user, 10-03): the functions outside the effects home that still decide
+# volatility, raise-freedom or row-order visibility, by repository path, name and owner lane. A row goes when
+# its owner moves the decision into the effects home (lowerv4/src/effects/visible.rs, effects.rs; decompose effects /
+# facts) or calls it; a landing never adds a row (a certified move rewrites one). kind: order (row order), calls (a
+# VOLATILE or user call's order or count), error (which error, or whether one), calls+error (both: a quiet / loud test).
+# Vocabulary 2 (C1, one effects answer): two more kinds. walk: a lowerv4 decider that walks an expression again instead
+# of reading the node's Effects (rule RW in rv_visible.py; the row goes when the decider is a function of Effects,
+# Departure and its strategy). list: builtin oids listed outside types_core::quiet, in an effects home file or inside a
+# decider (rule RQ; the row goes when the list moves into the one table). The file `vocabulary` holds no row: its
+# `# vocabulary 2` line let the widening landing register the sites it found once; keep it.
+# Layers: the home is decompose/src/effects/ and facts/ (planning) with lowerv4/src/effects.rs and effects/ (lowering:
+# effects/fx.rs answers each expression). Below it, fn/src/effects.rs and exec/src/effects.rs are its two lower layers
+# (crates the home cannot reach); the home reads through them, and lint HOME (lint/rules/common.py) closes at these.
+# path	fn	owner	kind
+# Layout (LEDGER-DIRS; shared lists are directories): one row per file, named <path>@<fn> (the row's path with
+# crates/gravity/ dropped and '/' as '.'), holding the row line; this README is not a row. Deleting a row deletes
+# its file, so lanes that delete different rows never touch the same file.

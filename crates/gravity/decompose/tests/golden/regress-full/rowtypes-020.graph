@@ -1,0 +1,10 @@
+-- regress-full-rowtypes-020
+-- select f.longname from fullname f;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=0 eligible rows=650 end=sink
+  nodes n0@0
+  source range rel=43492 rti=1 am=heap
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Offset:byval2:w2:val
+  project (1=op654(op654(v1.1, c25:' '), v1.2))
+  outs 1=vl:call1258
+mapped: SeqScan

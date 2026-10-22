@@ -1,0 +1,1 @@
+crates/gravity/lowerv4/src/ops/shared/limit.rs	Lim::Word	licence	variant	a LIMIT expression bound at bind (PG at ExecLimit's first call); rerun sets read it per open [REFUSES; D1634]

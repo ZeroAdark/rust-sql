@@ -109,6 +109,10 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    pub fn armed_enum_type_of(enum_oid: Oid) -> Option<Oid>
+);
+
+seam_core::seam!(
     // lookup_type_cache(.., TYPECACHE_CMP_PROC).cmp_proc — the
     // op_mergejoinable ARRAY_EQ/RECORD_EQ arms (lsyscache sits below typcache).
     pub fn type_cache_cmp_proc(type_id: Oid) -> PgResult<Oid>

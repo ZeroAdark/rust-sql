@@ -1,0 +1,10 @@
+-- regress-full-without_overlaps-003
+-- INSERT INTO temporal_rng4 VALUES ('[1,2)', '[10,11)');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=0 reason=Write end=sink
+  nodes n1@0 n0@1
+  source const
+  project (1=c3904:'@\x0f\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x02', 2=T_CoerceToDomain)
+  write INSERT rel=31796 rti=1 natts=2 indexes=(31801[1, 2]ux:gist)
+  outs 1=vl:stmt/imm 2=?
+mapped: Result ModifyTable

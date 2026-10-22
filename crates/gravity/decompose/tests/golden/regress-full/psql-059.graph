@@ -1,0 +1,53 @@
+-- regress-full-psql-059
+-- SELECT n.nspname as "Schema", p.proname as "Name", pg_catalog.pg_get_function_result(p.oid) as "Result data type", pg_catalog.pg_get_function_arguments(p.oid) as "Argument data types", CASE p.prokind WHEN 'a' THEN 'agg' WHEN 'w' THEN 'window' WHEN 'p' THEN 'proc' ELSE 'func' END as "Type", CASE WHEN p.provolatile = 'i' THEN 'immutable' WHEN p.provolatile = 's' THEN 'stable' WHEN p.provolatile = 'v' THEN 'volatile' END as "Volatility", CASE WHEN p.proparallel = 'r' THEN 'restricted' WHEN p.proparallel = 's' THEN 'safe' WHEN p.proparallel = 'u' THEN 'unsafe' END as "Parallel", pg_catalog.pg_get_userbyid(p.proowner) as "Owner", CASE WHEN prosecdef THEN 'definer' ELSE 'invoker' END AS "Security", CASE WHEN p.proleakproof THEN 'yes' ELSE 'no' END as "Leakproof?", CASE WHEN pg_catalog.array_length(p.proacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(p.proacl, E'\n') END AS "Access privileges", l.lanname as "Language", CASE WHEN l.lanname IN ('internal', 'c') THEN p.prosrc END as "Internal name", pg_catalog.obj_description(p.oid, 'pg_proc') as "Description" FROM pg_catalog.pg_proc p LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang WHERE p.proname OPERATOR(pg_catalog.~) '^(regress_zeropriv_proc)$' COLLATE pg_catalog.default AND pg_catalog.pg_function_is_visible(p.oid) ORDER BY 1, 2, 4;
+graph pipelines=5 breakers=4 init_plans=0 root=p4
+p0 node=5 serial site=0 reason=IndexSource end=breaker(slot=0 HashBuild)
+  desc words=bits@5/6
+  nodes n5@0 n4@3
+  source index rel=1255 rti=1 am=heap index=2691
+    key att=2 op=254 value=c25:'regress_zeropriv_proc'
+    recheck (op254(v1.2, c25:'regress_zeropriv_proc'))
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Attr(3):byval8:w8:val Attr(4):byval8:w8:val Attr(5):byval8:w8:val Attr(10):byval8:w8:val Attr(11):byval8:w8:val Attr(12):byval8:w8:val Attr(15):byval8:w8:val Attr(16):byval8:w8:val Attr(26):byref8:vl:win/page Attr(30):byref8:vl:win/page
+  filter op639(v1.2, c25:'^(regress_zeropriv_proc)$')
+  filter fn2081(v1.1)
+  project (1=v1.2, 2=v1.1, 3=v1.10, 4=v1.15, 5=v1.16, 6=v1.4, 7=v1.11, 8=v1.12, 9=v1.30, 10=v1.26, 11=v1.3, 12=v1.5)
+  build keys=(outer.11) decls=26/26:I32
+  outs 1=fx64:win/page 2=w8:val 3=w8:val 4=w8:val 5=w8:val 6=w8:val 7=w8:val 8=w8:val 9=vl:win/page 10=vl:win/page 11=w8:val 12=w8:val
+p1 node=3 eligible rows=98 end=breaker(slot=1 Materialize)
+  desc consumes=slot0@p0
+  nodes n3@0 n2@1^
+  source range rel=2615 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v2.1, 2=v2.2, 3=v2.3, 4=v2.4)
+  probe slot=0 inner=n4 JOIN_RIGHT marks build-first keys=(outer.1) decls=26/26:I32 clauses=(op607(outer.1, inner.11))
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=vl:row
+p2 node=6 eligible rows=4 end=breaker(slot=2 HashBuild)
+  desc words=bits@6/7
+  nodes n6@0 n1@1^
+  source range rel=2612 rti=4 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  project (1=v4.1, 2=v4.2, 3=v4.3, 4=v4.4, 5=v4.5, 6=v4.6, 7=v4.7, 8=v4.8, 9=v4.9)
+  build keys=(outer.1) decls=26/26:I32
+  outs 1=w8:val 2=fx64:win/page 3=w4:val 4=w1:val 5=w1:val 6=w4:val 7=w4:val 8=w4:val 9=vl:row
+p3 node=2 serial site=-1 reason=NoDrivingSite end=breaker(slot=3 Sort)
+  desc consumes=slot0@p0 consumes=slot1@p1 consumes=slot2@p2
+  nodes n2@0 n1@2 n0@4^
+  source breaker slot=0
+  drain matches=slot1 JOIN_RIGHT
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=inner.4, 5=inner.5, 6=inner.6, 7=inner.7, 8=inner.8, 9=inner.9, 10=inner.10, 11=inner.12, 12=outer.2)
+  probe slot=2 inner=n6 JOIN_LEFT unique catalog keys=(outer.11) decls=26/26:I32 clauses=(op607(inner.1, outer.11))
+  project (1=outer.12, 2=outer.1, 3=fn2165(outer.2), 4=fn2162(outer.2), 5=case[outer.3](when op92(T_CaseTestExpr, c18:97) then c25:'agg', when op92(T_CaseTestExpr, c18:119) then c25:'window', when op92(T_CaseTestExpr, c18:112) then c25:'proc') else c25:'func', 6=case(when op92(outer.4, c18:105) then c25:'immutable', when op92(outer.4, c18:115) then c25:'stable', when op92(outer.4, c18:118) then c25:'volatile') else c25:null, 7=case(when op92(outer.5, c18:114) then c25:'restricted', when op92(outer.5, c18:115) then c25:'safe', when op92(outer.5, c18:117) then c25:'unsafe') else c25:null, 8=fn1642(outer.6), 9=case(when outer.7 then c25:'definer') else c25:'invoker', 10=case(when outer.8 then c25:'yes') else c25:'no', 11=case(when op96(fn2176(outer.9, c23:1), c23:0) then c25:'(none)') else fn395(outer.9, c25:'\x0a'), 12=inner.2, 13=case(when any93(inner.2, c1003:'\x01\x00\x00\x00\x00\x00\x00\x00\x13\x00\x00\x00\x02\x00\x00\x00\x01\x00\x00\x00internal\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00') then outer.10) else c25:null, 14=fn1215(outer.2, c19:#64))
+  sort keys=1+:Fp128@950#19,2+:Fp128@950#19,4+:Fp128@100 form=runs
+  outs 1=fx64:life/breaker 2=w4:val 3=w1:val 4=w1:val 5=w1:val 6=w4:val 7=w1:val 8=w1:val 9=vl:life/breaker 10=vl:life/breaker 11=w4:val 12=fx64:life/breaker
+  outs 1=fx64:life/breaker 2=fx64:life/breaker 3=vl:call2165 4=vl:call2162 5=vl:stmt/imm 6=vl:stmt/imm 7=vl:stmt/imm 8=fx64:call1642 9=vl:stmt/imm 10=vl:stmt/imm 11=vl:call395 12=fx64:life/breaker 13=vl:life/breaker 14=vl:call1215
+p4 node=0 serial site=-1 reason=NoDrivingSite end=sink
+  desc consumes=slot3@p3
+  nodes n0@0
+  source breaker slot=3
+  project (1=outer.1, 2=outer.2, 3=outer.3, 4=outer.4, 5=outer.5, 6=outer.6, 7=outer.7, 8=outer.8, 9=outer.9, 10=outer.10, 11=outer.11, 12=outer.12, 13=outer.13, 14=outer.14)
+  outs 1=fx64:life/breaker 2=fx64:life/breaker 3=vl:call2165 4=vl:call2162 5=vl:stmt/imm 6=vl:stmt/imm 7=vl:stmt/imm 8=fx64:call1642 9=vl:stmt/imm 10=vl:stmt/imm 11=vl:call395 12=fx64:life/breaker 13=vl:life/breaker 14=vl:call1215
+breaker slot=0 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p0 layout=[I32]->[Count@8] 16B
+breaker slot=1 kind=Materialize budget=Share spill=Runs producer=p1 layout=[]->[Count@0] 8B
+breaker slot=2 kind=HashBuild budget=Share spill=Partitioned { bits: 3 } producer=p2 layout=[I32]->[Count@8] 16B
+breaker slot=3 kind=Sort budget=Share spill=Runs producer=p3 layout=[Fp128,Fp128,Fp128,Fp128,Fp128,Fp128]->[Count@48] 56B order=1+,2+,4+
+mapped: SeqScan IndexScan NestLoop HashJoin Sort Hash

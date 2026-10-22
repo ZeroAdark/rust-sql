@@ -1,4 +1,0 @@
-);
-
-
-SELET ts_rank_cd(to_tsvector(

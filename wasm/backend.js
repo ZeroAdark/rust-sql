@@ -28,9 +28,10 @@ let nextId = 1;
 const pending = new Map(); // id -> { resolve, reject }
 
 // One build for every engine: the wasm32-wasip1 module (standard exnref
-// wasm-EH + baseline post-MVP features, no SIMD/memory64) loads in Chrome,
-// Firefox, and WebKit/Safari including iOS — the old wasm64-desktop /
-// wasm32-safari dual-asset split is gone.
+// wasm-EH + baseline post-MVP features + simd128, no memory64) loads in
+// Chrome 91+, Firefox 89+, and WebKit/Safari 16.4+ including iOS — the old
+// wasm64-desktop / wasm32-safari dual-asset split is gone. An engine without
+// SIMD gets a too-old-browser message before the worker boots (simdSupported).
 //
 // TWO engine MODES over that one asset (worker.js picks by JSPI feature
 // detection, ?engineMode= overrides): 'wire' = one long-lived protocol
@@ -66,8 +67,20 @@ export function getBuildInfo() {
 
 export function getEngineMode() { return engineMode; }
 
+// i32.const 0; i8x16.splat; i8x16.popcnt: valid only where the engine has simd128.
+const SIMD_PROBE = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]);
+export function simdSupported() {
+  try { return typeof WebAssembly === 'object' && WebAssembly.validate(SIMD_PROBE); } catch { return false; }
+}
+export const SIMD_TOO_OLD = 'this browser is too old: pgrust needs WebAssembly SIMD (Chrome 91+, Firefox 89+, Safari 16.4+). Please update your browser.';
+
 function ensureWorker() {
   if (worker) return readyPromise;
+  if (!simdSupported()) {
+    readyPromise = Promise.reject(new Error(SIMD_TOO_OLD));
+    worker = { postMessage() {} };
+    return readyPromise;
+  }
   const params = new URLSearchParams(window.location.search);
   const assetEncoding = params.get('assetEncoding');
   const workerParams = new URLSearchParams();
@@ -79,6 +92,10 @@ function ensureWorker() {
   const qs = workerParams.toString();
   const workerUrl = qs ? `./worker.js?${qs}` : './worker.js';
   worker = new Worker(workerUrl, { type: 'module' });
+  // User cancel (cancelAvailable / requestCancel): only a cross-origin isolated page (COOP/COEP headers) has a
+  // SharedArrayBuffer to share with the worker; elsewhere the worker gets null and there is no cancel.
+  if (self.crossOriginIsolated && typeof SharedArrayBuffer === 'function') cancelWord = new Int32Array(new SharedArrayBuffer(4));
+  worker.postMessage({ type: 'hello', cancel: cancelWord });
   readyPromise = new Promise((resolve, reject) => {
     worker.onmessage = (ev) => {
       const m = ev.data;
@@ -132,6 +149,18 @@ function ensureWorker() {
 
 let onStatus = null;
 export function setStatusListener(fn) { onStatus = fn; }
+
+// ---- user cancel -------------------------------------------------------------
+// The running statement ends with PostgreSQL's 57014 "canceling statement due to user request": the server polls this
+// word while it runs and clears it when it reads the next command, so a cancel at an idle prompt is dropped.
+let cancelWord = null;
+export function cancelAvailable() { return !!cancelWord; }
+export const CANCEL_UNAVAILABLE = 'Stop needs a cross-origin isolated page (COOP/COEP headers); this page is not one, so a running statement cannot be canceled.';
+export function requestCancel() {
+  if (!cancelWord) return false;
+  Atomics.store(cancelWord, 0, 1);
+  return true;
+}
 
 // ---- psql client mode (worker runs the REAL Rust psql.wasm) ------------------
 // Selected by ?client=psql (repl.js decides, defaulting to psql where JSPI

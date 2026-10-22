@@ -360,3 +360,12 @@ fn constraint_cross_checks_are_xx000_errors() {
     assert_eq!(e.sqlstate(), ERRCODE_INTERNAL_ERROR);
     assert_eq!(e.message(), format!("unrecognized confmatchtype: {}", b'x'));
 }
+
+#[test]
+fn datum_image_eq_byval_8_bytes_compares_the_whole_word() {
+    let a = Datum::from_u64((-10.25f64).to_bits());
+    let b = Datum::from_u64(19.5f64.to_bits());
+    assert_eq!(a.as_u64() as u32, b.as_u64() as u32);
+    assert!(!datum_image_eq(a, b, true, 8, 0, 0).unwrap());
+    assert!(datum_image_eq(a, a, true, 8, 0, 0).unwrap());
+}

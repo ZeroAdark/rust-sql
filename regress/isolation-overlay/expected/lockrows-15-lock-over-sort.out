@@ -1,0 +1,348 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2x s1v s2s s1c
+count
+-----
+   24
+(1 row)
+
+step s2x: EXPLAIN (COSTS OFF) SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k FOR UPDATE;
+QUERY PLAN                     
+-------------------------------
+LockRows                       
+  ->  Sort                     
+        Sort Key: k            
+        ->  Seq Scan on lsa    
+              Filter: (grp = 1)
+(5 rows)
+
+step s1v: UPDATE lsa SET v = v || '+' WHERE id = 4;
+step s2s: SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id| k|v  
+--+--+---
+22|78|v22
+19|81|v19
+16|84|v16
+13|87|v13
+10|90|v10
+ 7|93|v7 
+ 4|96|v4+
+ 1|99|v1 
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2s s1c
+count
+-----
+   24
+(1 row)
+
+step s1k: UPDATE lsa SET k = 0, v = v || 'k' WHERE id = 13;
+step s2s: SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id| k|v   
+--+--+----
+22|78|v22 
+19|81|v19 
+16|84|v16 
+13| 0|v13k
+10|90|v10 
+ 7|93|v7  
+ 4|96|v4  
+ 1|99|v1  
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1k s2sh s1c
+count
+-----
+   24
+(1 row)
+
+step s1k: UPDATE lsa SET k = 0, v = v || 'k' WHERE id = 13;
+step s2sh: SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k, v FOR SHARE; <waiting ...>
+step s1c: COMMIT;
+step s2sh: <... completed>
+id| k|v   
+--+--+----
+22|78|v22 
+19|81|v19 
+16|84|v16 
+13| 0|v13k
+10|90|v10 
+ 7|93|v7  
+ 4|96|v4  
+ 1|99|v1  
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1g s2s s1c
+count
+-----
+   24
+(1 row)
+
+step s1g: UPDATE lsa SET grp = 2 WHERE id = 7;
+step s2s: SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id| k|v  
+--+--+---
+22|78|v22
+19|81|v19
+16|84|v16
+13|87|v13
+10|90|v10
+ 4|96|v4 
+ 1|99|v1 
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2s s1c
+count
+-----
+   24
+(1 row)
+
+step s1d: DELETE FROM lsa WHERE id = 10;
+step s2s: SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2s: <... completed>
+id| k|v  
+--+--+---
+22|78|v22
+19|81|v19
+16|84|v16
+13|87|v13
+ 7|93|v7 
+ 4|96|v4 
+ 1|99|v1 
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2s s1a
+count
+-----
+   24
+(1 row)
+
+step s1v: UPDATE lsa SET v = v || '+' WHERE id = 4;
+step s2s: SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k FOR UPDATE; <waiting ...>
+step s1a: ROLLBACK;
+step s2s: <... completed>
+id| k|v  
+--+--+---
+22|78|v22
+19|81|v19
+16|84|v16
+13|87|v13
+10|90|v10
+ 7|93|v7 
+ 4|96|v4 
+ 1|99|v1 
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2xj s1vw s2j s1c
+count
+-----
+   24
+(1 row)
+
+step s2xj: EXPLAIN (COSTS OFF) SELECT a.id, a.v, b.w FROM lsa a JOIN lsb b ON b.a_id = a.id WHERE a.grp = 1 ORDER BY a.k FOR UPDATE OF a;
+QUERY PLAN                                 
+-------------------------------------------
+LockRows                                   
+  ->  Sort                                 
+        Sort Key: a.k                      
+        ->  Hash Join                      
+              Hash Cond: (b.a_id = a.id)   
+              ->  Seq Scan on lsb b        
+              ->  Hash                     
+                    ->  Seq Scan on lsa a  
+                          Filter: (grp = 1)
+(9 rows)
+
+step s1vw: UPDATE lsa SET v = v || '+' WHERE id = 16; UPDATE lsb SET w = w + 1 WHERE id = 16;
+step s2j: SELECT a.id, a.v, b.w FROM lsa a JOIN lsb b ON b.a_id = a.id WHERE a.grp = 1 ORDER BY a.k FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2j: <... completed>
+id|v   |  w
+--+----+---
+22|v22 |220
+19|v19 |190
+16|v16+|160
+13|v13 |130
+10|v10 |100
+ 7|v7  | 70
+ 4|v4  | 40
+ 1|v1  | 10
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1vw s2b s1c
+count
+-----
+   24
+(1 row)
+
+step s1vw: UPDATE lsa SET v = v || '+' WHERE id = 16; UPDATE lsb SET w = w + 1 WHERE id = 16;
+step s2b: SELECT a.id, a.v, b.w FROM lsa a JOIN lsb b ON b.a_id = a.id WHERE a.grp = 1 ORDER BY a.k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+id|v   |  w
+--+----+---
+22|v22 |220
+19|v19 |190
+16|v16+|161
+13|v13 |130
+10|v10 |100
+ 7|v7  | 70
+ 4|v4  | 40
+ 1|v1  | 10
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1w s2b s1c
+count
+-----
+   24
+(1 row)
+
+step s1w: UPDATE lsb SET w = 0 WHERE id = 19;
+step s2b: SELECT a.id, a.v, b.w FROM lsa a JOIN lsb b ON b.a_id = a.id WHERE a.grp = 1 ORDER BY a.k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s2b: <... completed>
+id|v  |  w
+--+---+---
+22|v22|220
+19|v19|  0
+16|v16|160
+13|v13|130
+10|v10|100
+ 7|v7 | 70
+ 4|v4 | 40
+ 1|v1 | 10
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s2xc s1cv s2c s1c
+count
+-----
+   24
+(1 row)
+
+step s2xc: EXPLAIN (COSTS OFF) SELECT a.id, a.v, q.w FROM lsa a, (SELECT a_id, w FROM lsb OFFSET 0) q WHERE q.a_id = a.id AND a.grp = 1 ORDER BY a.k FOR UPDATE OF a;
+QUERY PLAN                                 
+-------------------------------------------
+LockRows                                   
+  ->  Sort                                 
+        Sort Key: a.k                      
+        ->  Hash Join                      
+              Hash Cond: (q.a_id = a.id)   
+              ->  Subquery Scan on q       
+                    ->  Seq Scan on lsb    
+              ->  Hash                     
+                    ->  Seq Scan on lsa a  
+                          Filter: (grp = 1)
+(10 rows)
+
+step s1cv: UPDATE lsa SET v = v || '+' WHERE id = 1; UPDATE lsb SET w = -1 WHERE id = 1;
+step s2c: SELECT a.id, a.v, q.w FROM lsa a, (SELECT a_id, w FROM lsb OFFSET 0) q WHERE q.a_id = a.id AND a.grp = 1 ORDER BY a.k FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+id|v  |  w
+--+---+---
+22|v22|220
+19|v19|190
+16|v16|160
+13|v13|130
+10|v10|100
+ 7|v7 | 70
+ 4|v4 | 40
+ 1|v1+| 10
+(8 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1ci s2c s1c
+count
+-----
+   24
+(1 row)
+
+step s1ci: UPDATE lsa SET id = 122 WHERE id = 22;
+step s2c: SELECT a.id, a.v, q.w FROM lsa a, (SELECT a_id, w FROM lsb OFFSET 0) q WHERE q.a_id = a.id AND a.grp = 1 ORDER BY a.k FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2c: <... completed>
+id|v  |  w
+--+---+---
+19|v19|190
+16|v16|160
+13|v13|130
+10|v10|100
+ 7|v7 | 70
+ 4|v4 | 40
+ 1|v1 | 10
+(7 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2sk s1c
+count
+-----
+   24
+(1 row)
+
+step s1v: UPDATE lsa SET v = v || '+' WHERE id = 4;
+step s2sk: SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k FOR UPDATE SKIP LOCKED;
+id| k|v  
+--+--+---
+22|78|v22
+19|81|v19
+16|84|v16
+13|87|v13
+10|90|v10
+ 7|93|v7 
+ 1|99|v1 
+(7 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s2nw s1c
+count
+-----
+   24
+(1 row)
+
+step s1v: UPDATE lsa SET v = v || '+' WHERE id = 4;
+step s2nw: SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k FOR UPDATE NOWAIT;
+ERROR:  could not obtain lock on row in relation "lsa"
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1v s3s s1c
+count
+-----
+   24
+(1 row)
+
+step s1v: UPDATE lsa SET v = v || '+' WHERE id = 4;
+step s3s: SELECT id, k, v FROM lsa WHERE grp = 1 ORDER BY k FOR UPDATE; <waiting ...>
+step s1c: COMMIT;
+step s3s: <... completed>
+ERROR:  could not serialize access due to concurrent update
+s1: WARNING:  there is no transaction in progress

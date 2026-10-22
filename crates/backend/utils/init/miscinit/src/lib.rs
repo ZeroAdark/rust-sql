@@ -35,8 +35,8 @@ pub use lockfile::{
 };
 pub use process::{
     ChangeToDataDir, InitPostmasterChild, InitProcessGlobals, InitProcessLocalLatch,
-    InitStandaloneProcess, LocalLatchReleaseGuard, SwitchBackToLocalLatch, SwitchToSharedLatch,
-    ValidatePgVersion,
+    InitReusedPostmasterChild, InitStandaloneProcess, LocalLatchReleaseGuard,
+    SwitchBackToLocalLatch, SwitchToSharedLatch, ValidatePgVersion,
 };
 pub use userid::*;
 
@@ -52,6 +52,19 @@ thread_local! {
     // authn_id: C TopMemoryContext char*, set at most once per thread; leaked.
     static CLIENT_AUTHN_ID: Cell<Option<&'static str>> = const { Cell::new(None) };
     static CLIENT_AUTH_METHOD: Cell<UserAuth> = const { Cell::new(uaReject) };
+}
+
+/// D4682 (client backend thread reuse, launch_backend cpool): this file's per-session thread-locals back to a fresh
+/// thread's values once a session parked its thread: the processing mode, the backend type, ignore_system_indexes and
+/// the client connection info (authn_id is set at most once per session; a stale one would also become the next
+/// session's SYSTEM_USER). The session identity is ResetSessionIdentityForRetainedPark's.
+pub fn ResetSessionForThreadReuse() {
+    MODE.set(ProcessingMode::InitProcessing);
+    MY_BACKEND_TYPE.set(BackendType::Invalid);
+    IGNORE_SYSTEM_INDEXES.set(false);
+    CLIENT_AUTHN_ID.set(None);
+    CLIENT_AUTH_METHOD.set(uaReject);
+    ResetSessionIdentityForRetainedPark();
 }
 
 pub fn GetProcessingMode() -> ProcessingMode {
@@ -110,6 +123,7 @@ pub fn GetBackendTypeDesc(backend_type: BackendType) -> &'static str {
         BackendType::WalSender => "walsender",
         BackendType::WalSummarizer => "walsummarizer",
         BackendType::WalWriter => "walwriter",
+        BackendType::InstanceAux => "instance aux",
     }
 }
 

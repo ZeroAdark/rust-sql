@@ -1,0 +1,11 @@
+# 'order by' inside $$..$$ and E'..' strings
+sql: SELECT $$ order by 1 $$ AS s, E'it\'s order by 2' AS e, x FROM t;
+cols: s	e	x
+class: unordered
+verdict: match
+[pg]
+ order by 1 	it's order by 2	1
+ order by 1 	it's order by 2	2
+[got]
+ order by 1 	it's order by 2	2
+ order by 1 	it's order by 2	1

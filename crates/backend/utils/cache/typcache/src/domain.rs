@@ -82,7 +82,7 @@ pub(crate) fn load_domaintype_info(entry: &TypeCacheEntry) -> PgResult<()> {
             let mcx = dcc_mcx(
                 dcc_ctx.get_or_insert_with(|| Box::new(MemoryContext::new("Domain constraints"))),
             );
-            let mut level: Vec<DomainConstraintState> = Vec::with_capacity(rows.len());
+            let mut level: Vec<DomainConstraintState> = ::mcx::std_vec_with_capacity("Domain constraints", rows.len())?;
             for row in rows.iter() {
                 let name_str = core::str::from_utf8(row.conname.name_str())
                     .unwrap_or_else(|_| panic!("non-UTF-8 constraint name"));

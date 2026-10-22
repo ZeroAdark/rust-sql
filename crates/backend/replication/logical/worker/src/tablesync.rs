@@ -407,7 +407,7 @@ fn quote_ident(s: &str) -> String {
 // anywhere forces the E'' form with backslashes doubled, so a publisher
 // running standard_conforming_strings = off decodes the value correctly.
 pub(crate) fn quote_literal_cstr(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len() * 2 + 3);
+    let mut out = String::new();
     if raw.contains('\\') {
         out.push('E');
     }
@@ -469,7 +469,13 @@ fn fetch_remote_table_info(
     // without a filter, FOR ALL TABLES, or TABLES IN SCHEMA) means the whole
     // table is copied — drop any collected filters.
     let pubnames = my_sub(|s| s.publications.clone());
-    let publist = pubnames.iter().map(|p| lit(p)).collect::<Vec<_>>().join(", ");
+    let mut publist = String::new();
+    for (i, p) in pubnames.iter().enumerate() {
+        if i > 0 {
+            publist.push_str(", ");
+        }
+        publist.push_str(&lit(p));
+    }
     let cmd = format!(
         "SELECT DISTINCT pg_get_expr(gpt.qual, gpt.relid) FROM pg_publication p, LATERAL \
          pg_get_publication_tables(p.pubname) gpt WHERE gpt.relid = {remoteid} AND p.pubname IN ({publist})"
@@ -624,8 +630,13 @@ fn copy_table_select(
     quals: &[String],
     gencol_published: bool,
 ) -> String {
-    let collist =
-        attnames.iter().map(|a| quote_ident(a)).collect::<Vec<_>>().join(", ");
+    let mut collist = String::new();
+    for (i, a) in attnames.iter().enumerate() {
+        if i > 0 {
+            collist.push_str(", ");
+        }
+        collist.push_str(&quote_ident(a));
+    }
     if relkind == b'r' && quals.is_empty() && !gencol_published {
         let mut cmd = format!("COPY {}.{}", quote_ident(nspname), quote_ident(relname));
         if !attnames.is_empty() {
@@ -943,18 +954,15 @@ pub(crate) fn LogicalRepSyncTableStart(
         )?;
     }
 
-    // tablesync.c:1538: refuse only when RLS actually applies to the acting
-    // user (check_enable_rls — the table owner without FORCE, a superuser or
-    // a BYPASSRLS role are exempt), with C's message. Testing relrowsecurity
-    // alone refused the owner's own table after NO FORCE ROW LEVEL SECURITY
-    // and looped the sync forever (src/test/subscription 027_nosuperuser).
+    // tablesync.c:1538: roles with BYPASSRLS (superusers implicitly) may copy
+    // into RLS-enabled relations.
     if rls::check_enable_rls(rel.rd_id, InvalidOid, false)? == rls::CheckEnableRls::RlsEnabled {
         let username = miscinit::GetUserNameFromId(mcx, miscinit::GetUserId(), true)?;
         ereport(ERROR)
             .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
             .errmsg(format!(
                 "user \"{}\" cannot replicate into relation with row-level security enabled: \"{relname}\"",
-                username.as_ref().map(|s| s.as_str()).unwrap_or("")
+                username.as_deref().unwrap_or("")
             ))
             .finish(loc("LogicalRepSyncTableStart"))?;
     }

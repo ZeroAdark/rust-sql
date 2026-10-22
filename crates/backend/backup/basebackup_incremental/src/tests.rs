@@ -507,14 +507,49 @@ fn fd_setup() {
     fd::InitFileAccess();
 }
 
-fn scratch_summaries_dir() -> String {
+/// A test's `<scratch>/summaries` directory: reads as its path (`Deref` to the `String`, `Display`), and its scratch
+/// parent is removed with everything below it when dropped (the test's end, or a panic's unwind), so the suite leaves no
+/// pgrust_incrbb_test_* in the temp dir.
+struct Summaries(String);
+
+impl std::ops::Deref for Summaries {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Summaries {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Drop for Summaries {
+    fn drop(&mut self) {
+        if let Some(parent) = std::path::Path::new(&self.0).parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+}
+
+fn scratch_summaries_dir() -> Summaries {
     let n = SCRATCH_N.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
         "pgrust_incrbb_test_{}_{n}/summaries",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    dir.to_str().unwrap().to_owned()
+    Summaries(dir.to_str().unwrap().to_owned())
+}
+
+#[test]
+fn scratch_summaries_dirs_leave_nothing_behind() {
+    let dir = scratch_summaries_dir();
+    let parent = std::path::Path::new(&*dir).parent().unwrap().to_path_buf();
+    std::fs::write(format!("{}/f", *dir), b"x").unwrap();
+    drop(dir);
+    assert!(!parent.exists(), "{} left behind", parent.display());
 }
 
 fn rl(spc: u32, db: u32, rel: u32) -> RelFileLocator {

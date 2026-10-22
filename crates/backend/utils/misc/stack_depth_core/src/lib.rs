@@ -38,11 +38,16 @@ pub const STACK_DEPTH_SLOP: isize = 512 * 1024;
 ///
 /// unoptimized (opt-level 0) = 32: covers the measured 27x worst chain
 /// with slop.
-/// optimized (opt-level >= 1, s, z) = 4: PLACEHOLDER — NOT a measurement.
-/// It MUST be calibrated with `scripts/stack-calibrate.sh` against a
-/// release build before any perf-claim or conformance run leans on
-/// release-mode depth behavior (the 27x/1.9x figures above are
-/// opt-level-0; optimized frames are smaller but not C-sized).
+/// optimized (opt-level >= 1, s, z) = 6: measured 2026-09-22 (opt-level 3,
+/// macOS arm64, vs C 18.6 clang -O2) as the smallest integer at which the
+/// statement chains the per-level frame-cap tests guard (analyzer, planner,
+/// copyObject, expression init, jsonpath exec) reach C's depth at 100kB and
+/// 2MB. C/pgrust bytes per level: nested sub-select 5.3x (the worst), jsonpath
+/// exec 4.6x, FROM sub-select 4.4x, expression init 4.4x, cast chain 4.3x,
+/// json/jsonb parse and jsonpath accessors 0.8-1.1x. plpgsql self-recursion
+/// (6.6-6.8x) stays about 10% short of C at 6; 7 would cover it but let
+/// json/jsonpath inputs C refuses at 2MB through. Re-measure with
+/// `scripts/stack-calibrate.sh` when a chain's frames change.
 ///
 /// Keyed on the build's opt-level (build.rs turns cargo's `OPT_LEVEL` into
 /// the `pgrust_opt_level` cfg), NOT on `debug_assertions` — as PR #1613
@@ -53,7 +58,7 @@ pub const STACK_DEPTH_SLOP: isize = 512 * 1024;
 /// regress inputs `repeat('[', 10000)::json` and the `{"a":` / jsonb twins
 /// at max_stack_depth = 100kB (3.2 MB enforced vs 0.64–1.4 MB used) parsed
 /// to end of input (22P02) where C raises 54001. tests.rs pins the keying.
-pub const STACK_DEPTH_SCALE: isize = if cfg!(pgrust_opt_level = "0") { 32 } else { 4 };
+pub const STACK_DEPTH_SCALE: isize = if cfg!(pgrust_opt_level = "0") { 32 } else { 6 };
 
 /// Cargo's `OPT_LEVEL` for this build ("0", "1", "2", "3", "s", "z") as
 /// build.rs saw it — the input `STACK_DEPTH_SCALE` is keyed on. Test-facing.
@@ -74,6 +79,90 @@ thread_local! {
     static STACK_BASE_PTR: Cell<usize> = const { Cell::new(0) };
     // 0 is C's "not yet computed" sentinel (a real rlimit is never 0).
     static STACK_DEPTH_RLIMIT_CACHE: Cell<isize> = const { Cell::new(0) };
+    // D3360: how many 54001 errors this thread has built (`stack_depth_exceeded`), read by `exceeded_count`.
+    static EXCEEDED: Cell<u64> = const { Cell::new(0) };
+    // D3763: the shadow bytes the guard adds to its depth for the nested statement levels running on this thread (`EngineLevel`).
+    #[cfg(target_family = "wasm")]
+    static ENGINE_CHARGE: Cell<isize> = const { Cell::new(0) };
+    // D3812: the two halves of wasm32's THREAD_STACK_CEILING (the smaller of them), 0 until `set_wasm_stack_ceiling`.
+    #[cfg(target_family = "wasm")]
+    static WASM_SHADOW_CEILING: Cell<isize> = const { Cell::new(0) };
+    #[cfg(target_family = "wasm")]
+    static WASM_ENGINE_CEILING: Cell<isize> = const { Cell::new(0) };
+}
+
+/// D3763: the shadow bytes one nested statement level charges wasm32's guard (`EngineLevel`); 0 elsewhere.
+///
+/// MEASURED (postgres.wasm in node v22.20.0 linux-arm64, `node --stack-size=984`, the endless `SELECT f(n + 1)` SQL
+/// function with max_stack_depth high so the engine dies first): the engine stack ran out at 277 levels (jit) / 266
+/// (interp) with 285 / 405 KB of shadow stack used. A level's ~18 frames (the served statement's runner, driver and
+/// program, the fmgr call back into the SQL function) keep nearly all of their state on the engine's own stack: 3.5
+/// engine bytes per level for each shadow byte, against the 0.6 the ceiling assumes (`WASM_ENGINE_PER_SHADOW`), so the
+/// guard read a fifth of its limit when the engine died. A level costs ~3.6 KB of engine stack, which the ceiling's
+/// ratio prices at ~6 KB of shadow; the level's own ~1 KB of shadow is already read, and the charge rounds the rest up
+/// with headroom to 8 KB (the guard now trips at ~180 such levels, ~65% of the engine stack).
+pub const WASM_ENGINE_LEVEL_CHARGE: isize = if cfg!(target_family = "wasm") { 8 * 1024 } else { 0 };
+
+/// D3763: one nested statement level running on this thread (a SQL function's or a PL statement's served query), held
+/// for the level's run: on wasm32 it adds `WASM_ENGINE_LEVEL_CHARGE` to the depth the guard reads, for the frames that
+/// live on the engine's stack only (the guard reads the shadow stack, D3103), and takes it off when dropped (an error's
+/// unwind too). Nothing elsewhere: the guard reads the one machine stack every frame is on.
+pub struct EngineLevel(isize);
+
+impl EngineLevel {
+    #[inline]
+    pub fn enter() -> EngineLevel {
+        EngineLevel::charging(WASM_ENGINE_LEVEL_CHARGE)
+    }
+
+    /// D3833: a level of another recursion whose frames are engine-heavy, charging `bytes` (0 off wasm32).
+    #[inline]
+    pub fn charging(bytes: isize) -> EngineLevel {
+        #[cfg(target_family = "wasm")]
+        ENGINE_CHARGE.set(ENGINE_CHARGE.get() + bytes);
+        EngineLevel(bytes)
+    }
+}
+
+impl Drop for EngineLevel {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(target_family = "wasm")]
+        ENGINE_CHARGE.set(ENGINE_CHARGE.get() - self.0);
+        #[cfg(not(target_family = "wasm"))]
+        let _ = self.0;
+    }
+}
+
+/// D3833: the shadow bytes one nest level of Gravity's lowering (lowerv4 `Inner::walk`, held across the level's
+/// recursion) charges wasm32's guard (`EngineLevel::charging`); 0 elsewhere.
+///
+/// MEASURED (postgres.wasm simd in node v22.20.0 linux-arm64, a LATERAL chain `t<i> = LATERAL (SELECT t<i-1>.a + i
+/// OFFSET 0)`, jit and interp alike): with lowerv4's walk frames shrunk, the engine's 984 KB ran out between 280 and 300
+/// levels while the uncharged guard tripped only between 350 and 400 (a 4000 KB engine). A level costs ~1.3x more
+/// engine stack than its shadow bytes say; 1.5 KB a level brings the guard to ~180-220 levels across the base the
+/// statement runs on, ~70% of the engine's depth.
+pub const WASM_NEST_LEVEL_CHARGE: isize = if cfg!(target_family = "wasm") { 1536 } else { 0 };
+
+/// The depth the guard reads: the stack's own, plus on wasm32 the nested levels' engine charge (`EngineLevel`).
+#[inline]
+fn guarded_depth(stack_depth: isize) -> isize {
+    #[cfg(target_family = "wasm")]
+    return stack_depth.saturating_add(ENGINE_CHARGE.get());
+    #[cfg(not(target_family = "wasm"))]
+    stack_depth
+}
+
+/// D3360: how many times this thread has met the stack depth limit (each 54001 error built). A caller that maps the errors
+/// under it to something else (Gravity's admission turns them into a refusal) compares two readings to learn that the
+/// limit was met beneath it, and raises `stack_depth_error` instead.
+pub fn exceeded_count() -> u64 {
+    EXCEEDED.get()
+}
+
+/// D3360: `check_stack_depth`'s 54001 error, for a caller that learned the limit was met beneath it (`exceeded_count`).
+pub fn stack_depth_error() -> Box<types_error::PgError> {
+    stack_depth_exceeded()
 }
 
 pub fn max_stack_depth() -> i32 {
@@ -140,7 +229,7 @@ pub fn restore_stack_base(base: pg_stack_base_t) {
 #[inline(never)]
 pub fn stack_is_too_deep() -> bool {
     let stack_base_ptr = STACK_BASE_PTR.get();
-    let stack_depth = stack_base_ptr.abs_diff(machine_stack_addr()) as isize;
+    let stack_depth = guarded_depth(stack_base_ptr.abs_diff(machine_stack_addr()) as isize);
     // base != 0 (NULL) guard last: no wasted cycles in the normal case.
     stack_depth > MAX_STACK_DEPTH_BYTES.get() && stack_base_ptr != 0
 }
@@ -186,6 +275,7 @@ pub fn check_stack_depth_or_panic() {
 #[cold]
 #[inline(never)]
 fn stack_depth_exceeded() -> Box<types_error::PgError> {
+    EXCEEDED.set(EXCEEDED.get().wrapping_add(1));
     Box::new(
         ereport(ERROR)
             .errcode(ERRCODE_STATEMENT_TOO_COMPLEX)
@@ -236,16 +326,193 @@ pub fn set_enforced_stack_budget_for_tests(bytes: isize) {
     MAX_STACK_DEPTH_BYTES.set(bytes);
 }
 
+/// Test/calibration hook: the stack bytes one nesting level of a recursive
+/// path costs, measured through the guard itself. `probe(n)` runs the path
+/// on an n-deep input; under an enforced budget of `budget` bytes the
+/// deepest passing `n` gives `budget / n`. Runs on a fresh thread whose base
+/// is its entry frame. Any error other than 54001 is a test failure. Depths
+/// grow by doubling, so no probe runs past twice the guard's depth.
+pub fn measured_bytes_per_level<F>(budget: usize, max_n: usize, probe: F) -> usize
+where
+    F: Fn(usize) -> PgResult<()> + Send + 'static,
+{
+    std::thread::Builder::new()
+        .stack_size(budget + (32 << 20))
+        .spawn(pagegive::pinned(move || {
+            set_stack_base();
+            set_enforced_stack_budget_for_tests(budget as isize);
+            let fits = |n: usize| match probe(n) {
+                Ok(()) => true,
+                Err(e) if e.sqlstate() == ERRCODE_STATEMENT_TOO_COMPLEX => false,
+                Err(e) => panic!("probe({n}) failed with something other than 54001: {e:?}"),
+            };
+            assert!(fits(1), "a 1-deep probe must fit in {budget} bytes");
+            let (mut lo, mut hi) = (1, 2);
+            while fits(hi) {
+                assert!(hi < max_n, "a {hi}-deep probe fits in {budget} bytes; raise max_n");
+                (lo, hi) = (hi, hi * 2);
+            }
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if fits(mid) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            budget / lo
+        }))
+        .expect("spawn measuring thread")
+        .join()
+        .expect("measuring thread panicked")
+}
+
+/// Test-facing: the per-level stack cap that applies to this build, keyed on
+/// the same opt-level classes as `STACK_DEPTH_SCALE`.
+pub fn per_level_cap(optimized: usize, unoptimized: usize) -> usize {
+    if cfg!(pgrust_opt_level = "0") || cfg!(pgrust_opt_level = "1") {
+        unoptimized
+    } else {
+        optimized
+    }
+}
+
 /// Record this thread's real stack reservation so the guard always fires
 /// before the stack actually ends. Call once at thread start, next to
 /// set_stack_base(). Keeps `min(8MiB, size/2)` in reserve below the
 /// reservation for the frames past the last check (elog machinery etc.).
 pub fn set_thread_stack_ceiling(stack_size: usize) {
+    THREAD_STACK_CEILING.set(reserved_ceiling(stack_size));
+    MAX_STACK_DEPTH_BYTES.set(effective_budget(SCALED_STACK_BUDGET.get()));
+}
+
+fn reserved_ceiling(stack_size: usize) -> isize {
     let size = stack_size.min(isize::MAX as usize) as isize;
     let reserve = (size / 2).min(8 << 20);
-    let ceiling = (size - reserve).max(0);
-    THREAD_STACK_CEILING.set(ceiling);
-    MAX_STACK_DEPTH_BYTES.set(effective_budget(SCALED_STACK_BUDGET.get()));
+    (size - reserve).max(0)
+}
+
+/// D3103: wasm32's guard reads the SHADOW stack (wasm-ld's `__stack_pointer` region in linear memory, 64 MiB: only
+/// address-taken locals and by-memory aggregates live there), but the rest of every frame lives on the engine's own
+/// stack (V8: ~984 KB per thread unless the host raises it; wasmtime: `--max-wasm-stack`). With no ceiling, whichever
+/// runs out first kills the server: the engine stack (RangeError / "call stack exhausted") at the browser's size, the
+/// shadow stack (SP wraps below 0: "memory access out of bounds") at a 16 MB engine stack. So wasm32's ceiling is the
+/// smaller of the shadow room and the shadow-byte equivalent of the engine stack the host declares
+/// (`PGRUST_WASM_ENGINE_STACK`, bytes; V8's default when unset).
+///
+/// MEASURED (D3103 calibration, 2026-10-07): the release postgres.wasm of 7594b322ef6 in node v22.20.0 (linux-arm64),
+/// `node --stack-size=984|4000|16000` (KB), max_stack_depth=60000 so the engine dies first, the shadow SP read at the
+/// RangeError. Engine bytes per shadow byte at death, per chain (984 / 4000 / 16000 KB): `SELECT 1+1+...+1` (100k terms)
+/// 0.26 / 0.26 / 0.26; 3000 nested scalar subqueries 0.35 / 0.35 / (shadow ran out first); SQL-function self-recursion
+/// 0.42 / 0.41 / 0.39; plpgsql self-recursion 0.56 / 0.51 / 0.49; `repeat('[', n)::json` 5.07 / 5.74 / 5.93;
+/// `repeat('{"a":', n)::jsonb` 5.05 / 5.74 / 5.93 (those charge `WASM_NATIVE_HEAVY_WEIGHT`). The ceiling assumes the
+/// worst non-JSON chain rounded up: 0.6 = 3/5.
+pub const WASM_ENGINE_PER_SHADOW: (usize, usize) = (3, 5);
+
+/// V8's default stack (node main thread, browser workers) when the host declares none.
+pub const DEFAULT_WASM_ENGINE_STACK: usize = 984 * 1024;
+
+/// How many times its shadow bytes a native-heavy recursion charges on wasm32 (`check_stack_depth_weighted`): the JSON
+/// parsers spend 5.1-5.9 engine bytes per shadow byte (the MEASURED table above), about 10x the 0.6 the ceiling
+/// assumes. 1 on every other target, where `check_stack_depth_weighted` IS `check_stack_depth` (asserted below).
+pub const WASM_NATIVE_HEAVY_WEIGHT: usize = if cfg!(target_family = "wasm") { 10 } else { 1 };
+#[cfg(not(target_family = "wasm"))]
+const _: () = assert!(WASM_NATIVE_HEAVY_WEIGHT == 1, "native check_stack_depth_weighted must be the plain check");
+
+/// The shadow-byte size an engine stack of `engine_bytes` stands for.
+pub fn wasm_shadow_equivalent(engine_bytes: usize) -> usize {
+    let (engine, shadow) = WASM_ENGINE_PER_SHADOW;
+    engine_bytes / engine * shadow
+}
+
+#[cfg(target_family = "wasm")]
+extern "C" {
+    /// wasm-ld's lowest address of the shadow stack.
+    static __stack_low: u8;
+}
+
+/// wasm32 only: the guard's ceiling for an engine stack of `engine_bytes` (call after `set_stack_base`).
+#[cfg(target_family = "wasm")]
+pub fn set_wasm_stack_ceiling(engine_bytes: usize) {
+    // SAFETY: only the symbol's address is taken; it is never read.
+    let low = unsafe { core::ptr::addr_of!(__stack_low) } as usize;
+    let shadow_room = STACK_BASE_PTR.get().saturating_sub(low);
+    let engine_equivalent = wasm_shadow_equivalent(engine_bytes);
+    let size = shadow_room.min(engine_equivalent);
+    WASM_SHADOW_CEILING.set(reserved_ceiling(shadow_room));
+    WASM_ENGINE_CEILING.set(reserved_ceiling(engine_equivalent));
+    // wasm32 never fills the rlimit cache (WASI has no rlimits), so it holds the declared size instead.
+    STACK_DEPTH_RLIMIT_CACHE.set(size.min(isize::MAX as usize) as isize);
+    set_thread_stack_ceiling(size);
+}
+
+/// The stack the max_stack_depth boot default derives from (`adjust_max_stack_depth_from_rlimit`): on wasm32 the
+/// shadow-byte size `set_wasm_stack_ceiling` computed from the host-declared engine stack (-1 before it runs), so the
+/// JS hosts need no max_stack_depth override; elsewhere the platform rlimit. The GUC check hook keeps reading
+/// `get_stack_depth_rlimit` (-1 on wasm32: any explicit value is accepted, the ceiling bounds what is enforced).
+pub fn stack_depth_default_source() -> isize {
+    #[cfg(target_family = "wasm")]
+    return match STACK_DEPTH_RLIMIT_CACHE.get() {
+        0 => -1,
+        v => v,
+    };
+    #[cfg(not(target_family = "wasm"))]
+    get_stack_depth_rlimit()
+}
+
+/// `check_stack_depth` for a recursion whose frames live almost wholly on the engine stack on wasm32 (the JSON
+/// parsers): the shadow depth counts `WASM_NATIVE_HEAVY_WEIGHT` times. Identical to `check_stack_depth` elsewhere.
+#[inline]
+pub fn check_stack_depth_weighted() -> PgResult<()> {
+    if WASM_NATIVE_HEAVY_WEIGHT == 1 {
+        return check_stack_depth();
+    }
+    let stack_base_ptr = STACK_BASE_PTR.get();
+    let depth = stack_base_ptr.abs_diff(current_stack_addr()) as isize;
+    if guarded_depth(depth.saturating_mul(WASM_NATIVE_HEAVY_WEIGHT as isize)) > MAX_STACK_DEPTH_BYTES.get() && stack_base_ptr != 0 {
+        return Err(stack_depth_exceeded());
+    }
+    Ok(())
+}
+
+/// D3812: the part of its shadow bytes a shadow-heavy recursion counts against wasm32's engine-derived ceiling, as
+/// (numerator, denominator) (`check_stack_depth_shadow_heavy_or_panic`). (1, 1) on every other target.
+///
+/// MEASURED (2026-10-10, as for `WASM_ENGINE_PER_SHADOW`: node v22.20.0 linux-arm64, the guard lifted so the engine dies
+/// first): a nested EXCEPT chain dies in decompose's plan mapping at 4.69 MB of shadow at 984 KB and 21.3 MB at 4000 KB,
+/// 0.215 / 0.192 engine bytes per shadow byte; decompose's join chains spend under 0.15 (200 tables in 500 KB). The worst,
+/// 0.215, is 0.36 of the ceiling's 0.6: rounded up to 3/8, which trips that chain at ~55% of a 984 KB engine stack.
+pub const WASM_SHADOW_HEAVY_PART: (isize, isize) = if cfg!(target_family = "wasm") { (3, 8) } else { (1, 1) };
+#[cfg(not(target_family = "wasm"))]
+const _: () = assert!(WASM_SHADOW_HEAVY_PART.0 == WASM_SHADOW_HEAVY_PART.1, "native shadow-heavy check must be the plain check");
+
+/// D3812: `check_stack_depth_or_panic` for a recursion whose frames keep most of their state on wasm32's shadow stack
+/// (by-memory aggregates: decompose's walks), which spend far fewer engine bytes per shadow byte than wasm32's
+/// engine-derived ceiling assumes. Identical to `check_stack_depth_or_panic` on every other target.
+#[inline]
+pub fn check_stack_depth_shadow_heavy_or_panic() {
+    #[cfg(not(target_family = "wasm"))]
+    check_stack_depth_or_panic();
+    #[cfg(target_family = "wasm")]
+    if shadow_heavy_too_deep() {
+        std::panic::panic_any(stack_depth_exceeded());
+    }
+}
+
+/// The whole depth against max_stack_depth's scaled budget and the shadow room, its `WASM_SHADOW_HEAVY_PART` against the
+/// engine-derived ceiling; `EngineLevel`'s charge counts whole in each.
+#[cfg(target_family = "wasm")]
+#[inline(never)]
+fn shadow_heavy_too_deep() -> bool {
+    let stack_base_ptr = STACK_BASE_PTR.get();
+    let engine_ceiling = WASM_ENGINE_CEILING.get();
+    if stack_base_ptr == 0 || engine_ceiling == 0 {
+        return stack_is_too_deep();
+    }
+    let shadow = stack_base_ptr.abs_diff(current_stack_addr()) as isize;
+    let (num, den) = WASM_SHADOW_HEAVY_PART;
+    let whole = guarded_depth(shadow);
+    whole > SCALED_STACK_BUDGET.get() || whole > WASM_SHADOW_CEILING.get() || guarded_depth(shadow / den * num) > engine_ceiling
 }
 
 // Platform stack limit in bytes, -1 if unknown; cached after first call.

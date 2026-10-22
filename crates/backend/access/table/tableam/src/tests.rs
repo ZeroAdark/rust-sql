@@ -15,7 +15,7 @@ use types_tuple::{ItemPointerData, NameData, TupleDescData};
 
 use crate::*;
 
-fn make<'mcx>(mcx: Mcx<'mcx>, oid: Oid, relkind: u8, relam: Oid) -> Relation<'mcx> {
+pub(crate) fn make<'mcx>(mcx: Mcx<'mcx>, oid: Oid, relkind: u8, relam: Oid) -> Relation<'mcx> {
     let mut relname = NameData::default();
     relname.namestrcpy("t");
     let data = RelationData { rd_locator: Default::default(), rd_smgr: Default::default(),
@@ -72,7 +72,7 @@ fn make<'mcx>(mcx: Mcx<'mcx>, oid: Oid, relkind: u8, relam: Oid) -> Relation<'mc
         pgstat_enabled: Cell::new(false),
         pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
         rd_amcache: Default::default(),
-        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(),
+        rd_amcache_hash: Default::default(), rd_amcache_gin: Default::default(), rd_amcache_spgist: Default::default(), rd_amcache_bloom: Default::default(),
         rd_support: PgVec::new_in(mcx),
         rd_supportinfo: Default::default(),
         rd_opcoptions: Default::default(),
@@ -94,6 +94,34 @@ fn pbscan(nblocks: u32) -> ParallelBlockTableScanDescData {
         phs_startblock: AtomicU32::new(InvalidBlockNumber),
         phs_nallocated: AtomicU64::new(0),
     }
+}
+
+#[test]
+fn invalid_latest_tid_error_location() {
+    let ctx = MemoryContext::new_wholesale("invalid_latest_tid");
+    let mcx = ctx.mcx();
+    let rel = make(mcx, 1, RELKIND_RELATION, HEAP_TABLE_AM_OID);
+    let mut parallel = pbscan(0);
+    let heap = heapam::heap_beginscan(
+        mcx,
+        &rel,
+        None,
+        0,
+        PgVec::new_in(mcx),
+        Some(core::ptr::NonNull::from(&mut parallel)),
+        SO_TYPE_TIDSCAN,
+    )
+    .unwrap();
+    let mut scan = TableScanDesc::Heap(heap);
+    let mut tid = ItemPointerData::invalid();
+    types_tuple::ItemPointerSet(&mut tid, 0, 1);
+    let err = table_tuple_get_latest_tid(mcx, &mut scan, &mut tid).unwrap_err();
+    assert_eq!(err.sqlstate, ERRCODE_INVALID_PARAMETER_VALUE);
+    assert_eq!(err.message, "tid (0, 1) is not valid for relation \"t\"");
+    let location = err.location.unwrap();
+    assert_eq!(location.filename.as_deref(), Some("tableam.c"));
+    assert_eq!(location.lineno, 259);
+    assert_eq!(location.funcname.as_deref(), Some("table_tuple_get_latest_tid"));
 }
 
 #[test]
@@ -157,36 +185,6 @@ fn am_resolution_and_slot_callbacks() {
 
     // finish_bulk_insert is a no-op for heap (NULL callback in heapam_methods)
     assert!(table_finish_bulk_insert(&heap, TABLE_INSERT_SKIP_FSM).is_ok());
-}
-
-// A DROP of a pgrcolumnar2 relation must target its O-7 table directory for
-// removal (heap relations own no such sibling directory). pgrc2_drop_dir is
-// the pure selector the drop-storage wiring consults; regression guard for
-// the disk-leak / relfilenumber-reuse resurrection finding.
-#[test]
-fn drop_storage_targets_columnar_directory_only() {
-    let ctx = MemoryContext::new("test");
-    let mcx = ctx.mcx();
-
-    // Heap and unrecognized AMs keep their data in the smgr forks: nothing
-    // extra to schedule.
-    let heap = make(mcx, 1, RELKIND_RELATION, HEAP_TABLE_AM_OID);
-    assert_eq!(pgrc2_drop_dir(&heap), None);
-
-    // A relation whose relam is registered as pgrcolumnar2 resolves to its
-    // per-table directory (pgrc2_<relfilenumber>, sibling of the main fork).
-    const PGRC2_AM_OID: Oid = 99_991;
-    register_pgrcolumnar2_table_am(PGRC2_AM_OID);
-    let columnar = make(mcx, 5, RELKIND_RELATION, PGRC2_AM_OID);
-    assert_eq!(TableAm::of(&columnar), Some(TableAm::Pgrcolumnar2));
-    let dir = pgrc2_drop_dir(&columnar).expect("columnar relation must schedule its directory");
-    let expected =
-        ::pgrc2_am::dirpath::table_dir_path(columnar.rd_locator.get(), columnar.rd_backend);
-    assert_eq!(dir, expected);
-    assert!(
-        dir.rsplit('/').next().unwrap().starts_with("pgrc2_"),
-        "columnar drop dir must be the pgrc2_<relfilenumber> table directory, got {dir}"
-    );
 }
 
 #[test]
@@ -404,10 +402,10 @@ fn write_buffer_begin_gates_on_switch_and_am() {
     let ctx = MemoryContext::new("test");
     let heap = make(ctx.mcx(), 1, RELKIND_RELATION, HEAP_TABLE_AM_OID);
     let foreign = make(ctx.mcx(), 2, RELKIND_FOREIGN_TABLE, 0);
-    // pgrcolumnar2 relation for the F-1 multi-insert census pin below.
-    const PGRC2_TEST_AM_OID: Oid = 77104;
-    register_pgrcolumnar2_table_am(PGRC2_TEST_AM_OID);
-    let pgrc2 = make(ctx.mcx(), 3, RELKIND_RELATION, PGRC2_TEST_AM_OID);
+    // pgrcolumnar relation for the F-1 multi-insert census pin below.
+    const PGRC_TEST_AM_OID: Oid = 77104;
+    register_pgrcolumnar_table_am(PGRC_TEST_AM_OID);
+    let pgrc = make(ctx.mcx(), 3, RELKIND_RELATION, PGRC_TEST_AM_OID);
 
     // Default OFF: never arms, heap AM or not.
     crate::write_buffer::write_multi_insert_set_for_tests(false);
@@ -423,36 +421,35 @@ fn write_buffer_begin_gates_on_switch_and_am() {
     assert!(crate::write_buffer::write_buffer_begin(&foreign).is_none());
     // The F-1 cross-check's multi-insert census pin: the W1 write buffer is
     // the only non-COPY table_multi_insert driver in-tree, and it must
-    // NEVER arm for a pgrcolumnar2 relation — its CTAS/matview receivers
+    // NEVER arm for a pgrcolumnar relation — its CTAS/matview receivers
     // stay on the per-tuple + table_finish_bulk_insert path (the ONE
     // publish point). A caller that reached table_multi_insert on a v2
     // relation and never called table_finish_bulk_insert would buffer rows
     // the eoxact purge silently abandons (the F-1 loss mechanism).
-    assert!(crate::write_buffer::write_buffer_begin(&pgrc2).is_none());
+    assert!(crate::write_buffer::write_buffer_begin(&pgrc).is_none());
 
     crate::write_buffer::write_multi_insert_set_for_tests(false);
 }
 
 #[test]
-fn pgrc2_tuple_update_delete_refuse_typed_at_the_dispatch() {
-    // The F-1 re-pin's standing half: UPDATE/DELETE on a pgrcolumnar2
-    // relation refuse typed AT THE AM DISPATCH (defense in depth beneath
-    // the restored ModifyTable trickle gate — same 0A000 identity at both
-    // altitudes, so error-parity suites see one message shape).
-    const PGRC2_TEST_AM_OID: Oid = 77103;
-    register_pgrcolumnar2_table_am(PGRC2_TEST_AM_OID);
+fn pgrc_tuple_update_delete_reach_the_front_at_the_dispatch() {
+    // F2 L4: UPDATE/DELETE on a pgrcolumnar relation go to pgrc_front::dml (Stage B); a position no scan of the
+    // statement stamped refuses there (22023) before any catalog or tombstone access.
+    const PGRC_TEST_AM_OID: Oid = 77103;
+    register_pgrcolumnar_table_am(PGRC_TEST_AM_OID);
     let ctx = MemoryContext::new("test");
-    let rel = make(ctx.mcx(), 7, RELKIND_RELATION, PGRC2_TEST_AM_OID);
+    let rel = make(ctx.mcx(), 7, RELKIND_RELATION, PGRC_TEST_AM_OID);
     let tid = ItemPointerData::default();
     let mut tmfd = TM_FailureData::default();
+    let not_valid = "pgrcolumnar: position not valid in this statement";
 
     let e = table_tuple_delete(ctx.mcx(), &rel, &tid, 0, &None, &None, true, &mut tmfd, false)
         .err().unwrap();
-    assert_eq!(e.sqlstate(), types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
-    assert_eq!(e.message(), "pgrcolumnar2 does not support DELETE");
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_INVALID_PARAMETER_VALUE);
+    assert_eq!(e.message(), not_valid);
 
-    let mut slot = table_slot_create(ctx.mcx(), &rel).expect("virtual slot for a pgrc2 rel");
-    let mut lockmode = LockTupleMode::LockTupleExclusive;
+    let mut slot = table_slot_create(ctx.mcx(), &rel).expect("virtual slot for a pgrc rel");
+    let mut lockmode = LockTupleMode::LockTupleShare;
     let mut update_indexes = TU_UpdateIndexes::TU_None;
     let e = table_tuple_update(
         ctx.mcx(),
@@ -468,6 +465,34 @@ fn pgrc2_tuple_update_delete_refuse_typed_at_the_dispatch() {
         &mut update_indexes,
     )
     .err().unwrap();
-    assert_eq!(e.sqlstate(), types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
-    assert_eq!(e.message(), "pgrcolumnar2 does not support UPDATE");
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_INVALID_PARAMETER_VALUE);
+    assert_eq!(e.message(), not_valid);
+    // LOCK: a pgrcolumnar UPDATE is a no-key update (no unique index), as heap_update's lock mode for it; IX1 L2:
+    // the new version has a new ID, so every index takes an entry for it
+    assert_eq!((lockmode, update_indexes), (LockTupleMode::LockTupleNoKeyExclusive, TU_UpdateIndexes::TU_All));
 }
+
+#[test]
+fn pgrc_index_callbacks_raise_a_typed_error_not_a_panic() {
+    // IX1 L0: a pgrcolumnar index fetch state begins (the fetch path by row ID), reads no pages (no prefetch, no
+    // same-block batches) and never answers all-visible. IX1 L4: table_beginscan_bm attaches a bitmap source; a pgrc
+    // descriptor without one (no bitmap scan began it) refuses the bitmap callbacks with 0A000.
+    const PGRC_TEST_AM_OID: Oid = 77105;
+    register_pgrcolumnar_table_am(PGRC_TEST_AM_OID);
+    let ctx = MemoryContext::new("pgrc-index-callbacks");
+    let rel = make(ctx.mcx(), 8, RELKIND_RELATION, PGRC_TEST_AM_OID);
+    let mut fetch = table_index_fetch_begin(&rel).expect("IX1 L0: a pgrc fetch state");
+    assert!(matches!(fetch, IndexFetchTableData::Pgrc(_)));
+    assert!(!table_index_fetch_reads_pages(&fetch));
+    assert_eq!(fetch.rel().rd_id, rel.rd_id);
+    table_index_fetch_set_needed_attrs(&mut fetch, Some(vec![true, false].into_boxed_slice()));
+    table_index_fetch_reset(&mut fetch);
+    table_index_fetch_end(fetch);
+    let tid = ItemPointerData::new(1, 1);
+    assert!(!table_index_fetch_all_visible(&rel, &tid, |_| unreachable!("pgrc consults no visibility map")).unwrap());
+    let e = cb2_refused("bitmap scans");
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
+    assert_eq!(e.message(), "pgrcolumnar does not support bitmap scans");
+}
+
+

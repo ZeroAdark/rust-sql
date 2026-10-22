@@ -19,14 +19,7 @@ const Anum_pg_class_relpersistence: usize = 17;
 const Anum_pg_class_relfrozenxid: usize = 30;
 const Anum_pg_class_relminmxid: usize = 31;
 
-// RelationSetNewRelfilenumber (relcache.c), hosted here: relcache cannot dep
-// catalog_storage/tableam/catalog_indexing without cycling. The pg_class write
-// takes LOCKTAG_TUPLE at InplaceUpdateTupleLock, as C's
-// SearchSysCacheLockedCopy1 does (relcache.c:3820/:3949) -- see
-// scripts/inplace-lockcheck.sh for the standing enumeration of pg_class's
-// transactional updaters and which of them C locks. The subid Cells are set
-// before CommandCounterIncrement so the inval rebuild's copy_preserved
-// carries them onto the rebuilt entry.
+// The subid Cells are set before CommandCounterIncrement so the inval rebuild's copy_preserved carries them onto the rebuilt entry.
 pub fn RelationSetNewRelfilenumber<'mcx>(
     mcx: Mcx<'mcx>,
     rel: &Relation<'mcx>,
@@ -52,29 +45,16 @@ pub fn RelationSetNewRelfilenumber<'mcx>(
         ));
     };
 
-    // relcache.c:3817-3826: pg_class is opened and the relation's pg_class
-    // tuple is locked (SearchSysCacheLockedCopy1, InplaceUpdateTupleLock)
-    // BEFORE the old storage is dropped (relcache.c:3860) and the new
-    // relfilenumber's storage created (relcache.c:3873-3884), and before the
-    // mapped/unmapped branch, for mapped indexes too; both are released after
-    // it (relcache.c:3949-3953). The tuple is a copy, as C's is, so no scan
-    // stays open across the storage change.
     let pg_class = table::table_open(mcx, RELATION_RELATION_ID, RowExclusiveLock)?;
     let key = [oid_scankey(1, rel.rd_id)];
     let mut scan =
         genam::systable_beginscan(mcx, &pg_class, catalog::ClassOidIndexId, true, None, &key)?;
     let Some(found) = genam::systable_getnext(mcx, &mut scan)? else {
-        // relcache.c:3824-3826 elog(ERROR): catchable, not a backend abort.
         return Err(crate::relation_tuple_missing(rel.rd_id));
     };
     let reltup = heaptuple::heap_copytuple(mcx, found)?;
     genam::systable_endscan(mcx, scan)?;
-    // C: SearchSysCacheLockedCopy1 (relcache.c:3820) / UnlockTuple
-    // (relcache.c:3949). Before the content read that feeds the
-    // replacement image, so a concurrent inplace writer is either
-    // serialized behind us or visible in what we copy -- losing
-    // relfrozenxid/relminmxid here is a durable wraparound-safety
-    // regression, and this function writes both.
+    // Losing relfrozenxid/relminmxid here is a durable wraparound-safety regression, and this function writes both.
     let otid = reltup.t_self;
     lmgr::LockTuple(&pg_class, &otid, InplaceUpdateTupleLock)?;
 
@@ -106,15 +86,11 @@ pub fn RelationSetNewRelfilenumber<'mcx>(
         | types_rel::RELKIND_MATVIEW => {
             tableam::table_relation_set_new_filelocator(rel, &newrlocator, persistence as i8)?
         }
-        // relcache.c:3888-3892: "we shouldn't be called for anything else" --
-        // elog(ERROR), catchable, C's message bytes.
         _ => return Err(crate::relation_has_no_storage(rel.name())),
     };
 
     if rel.is_mapped() {
-        // Mapped index: pg_class stays untouched (essential when reindexing
-        // pg_class itself); the relation mapper carries the new number
-        // (relcache.c:3895-3915).
+        // Mapped index: pg_class stays untouched (essential when reindexing pg_class itself).
         debug_assert!(rel.rd_rel.relkind == types_rel::RELKIND_INDEX);
         xact::GetCurrentTransactionId()?;
         relmapper::RelationMapUpdateMap(
@@ -156,8 +132,6 @@ pub fn RelationSetNewRelfilenumber<'mcx>(
     lmgr::UnlockTuple(&pg_class, &otid, InplaceUpdateTupleLock)?;
     pg_class.close(RowExclusiveLock)?;
 
-    // RelationAssumeNewRelfilelocator + the physical-addr refresh the C
-    // in-place rebuild would perform on this same entry.
     rel.rd_locator.set(newrlocator);
     relcache::invalidate::RelationAssumeNewRelfilelocator(rel);
 
@@ -214,10 +188,6 @@ pub fn reindex_index<'mcx>(
     let save_nestlevel = guc::NewGUCNestLevel();
     guc::RestrictSearchPath()?;
 
-    // index.c:3684-3699: REINDEXOPT_REPORT_PROGRESS starts the CREATE INDEX
-    // progress command (pg_stat_progress_create_index) with command = REINDEX
-    // and the index oid; ended at index.c:3937-3938 (or by the transaction's
-    // abort path). The index-gone early return leaves it started, as C does.
     let progress = params.options & REINDEXOPT_REPORT_PROGRESS != 0;
     if progress {
         use backend_progress::progress::*;
@@ -244,7 +214,6 @@ pub fn reindex_index<'mcx>(
         indexam::index_open(mcx, indexId, AccessExclusiveLock)?
     };
 
-    // index.c:3724-3726.
     if progress {
         backend_progress::pgstat_progress_update_param(
             backend_progress::progress::PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
@@ -252,9 +221,7 @@ pub fn reindex_index<'mcx>(
         );
     }
 
-    // C: EventTriggerCollectSimpleCommand(RelationRelationId, indexId, stmt) —
-    // fired only when a REINDEX statement (not an internal caller such as
-    // CLUSTER/VACUUM FULL/TRUNCATE) drives this reindex.
+    // Fired only when a REINDEX statement (not an internal caller such as CLUSTER/VACUUM FULL/TRUNCATE) drives this reindex.
     if let Some(cb) = on_collect {
         cb(indexId);
     }
@@ -271,9 +238,7 @@ pub fn reindex_index<'mcx>(
             ),
         )));
     }
-    // index.c:3726 — their local buffer manager cannot cope. Without this the
-    // rebuild reaches storage and fails by trying to open the owning backend's
-    // per-backend temp file.
+    // Without this the rebuild reaches storage and fails by trying to open the owning backend's per-backend temp file.
     if iRel.is_other_temp() {
         return Err(Box::new(
             PgError::error("cannot reindex temporary tables of other sessions")
@@ -309,8 +274,7 @@ pub fn reindex_index<'mcx>(
         catalog_storage::RelationDropStorage(&iRel)?;
         relcache::invalidate::RelationAssumeNewRelfilelocator(&iRel);
         xact::CommandCounterIncrement()?;
-        // C's CCI refreshes the entry in place; reopen so rd_rel.reltablespace
-        // steers the new relfilenumber below (lock held).
+        // Reopen so rd_rel.reltablespace steers the new relfilenumber below (lock held).
         indexam::index_close(iRel, NoLock)?;
         indexam::index_open(mcx, indexId, NoLock)?
     } else {
@@ -341,13 +305,11 @@ pub fn reindex_index<'mcx>(
     let build = (|| -> PgResult<types_rel::Relation<'mcx>> {
         RelationSetNewRelfilenumber(mcx, &iRel, persistence)?;
 
-        // C's CCI inval refreshes the same Relation struct in place; our
-        // handles are snapshots, so reopen to see the reset rd_rel
-        // (index_update_stats reads reltuples for its -1 hack). Lock held.
+        // Our handles are snapshots, so reopen to see the reset rd_rel (index_update_stats reads reltuples for its -1 hack). Lock held.
         indexam::index_close(iRel, NoLock)?;
         let iRel = indexam::index_open(mcx, indexId, NoLock)?;
 
-        crate::index_build(mcx, &heapRelation, &iRel, &mut indexInfo, true)?;
+        crate::index_build(mcx, &heapRelation, &iRel, &mut indexInfo, true, true)?;
         Ok(iRel)
     })();
     types_rel::reindex::reset_reindex_processing();
@@ -375,7 +337,6 @@ pub fn reindex_index<'mcx>(
     indexam::index_close(iRel, NoLock)?;
     heapRelation.close(NoLock)?;
 
-    // index.c:3937-3938.
     if progress {
         backend_progress::pgstat_progress_end_command();
     }
@@ -384,8 +345,6 @@ pub fn reindex_index<'mcx>(
 
 const GLOBALTABLESPACE_OID: Oid = 1664;
 
-// CheckRelationTableSpaceMove (tablecmds.c), index arm: storage exists and is
-// unmapped by reindex_index's earlier checks.
 fn CheckRelationTableSpaceMove(rel: &Relation<'_>, new_tablespace: Oid) -> PgResult<bool> {
     let old_tablespace = rel.rd_rel.reltablespace;
     if new_tablespace == old_tablespace
@@ -406,8 +365,6 @@ fn CheckRelationTableSpaceMove(rel: &Relation<'_>, new_tablespace: Oid) -> PgRes
     Ok(true)
 }
 
-// SetRelationTableSpace (tablecmds.c:3750), storage-bearing arm (no
-// tablespace-dependency rewrite; indexes always have storage here).
 fn SetRelationTableSpacePgClass<'mcx>(
     mcx: Mcx<'mcx>,
     rel: &Relation<'mcx>,
@@ -420,9 +377,7 @@ fn SetRelationTableSpacePgClass<'mcx>(
     let Some(tup) = genam::systable_getnext(mcx, &mut scan)? else {
         return Err(crate::relation_lookup_failed(rel.rd_id));
     };
-    // C: SearchSysCacheLockedCopy1 (tablecmds.c:3765) / UnlockTuple (:3777) --
-    // reindex_index reaches SetRelationTableSpace through index.c:3774, so this
-    // second copy of the function needs the same tuple lock as the first.
+    // Needs the same tuple lock as the first.
     let otid = tup.t_self;
     lmgr::LockTuple(&pg_class, &otid, InplaceUpdateTupleLock)?;
     let desc = pg_class.descr();
@@ -449,9 +404,7 @@ fn SetRelationTableSpacePgClass<'mcx>(
 
 const ANUM_PG_CLASS_RELTABLESPACE: usize = 9;
 
-// index.c reindex_index tail: clear indcheckxmin / repair invalid flags on the
-// pg_index row. index_bad is reachable only via CONCURRENTLY leftovers (loud
-// elsewhere); the indcheckxmin clear is the live arm.
+// Index_bad is reachable only via CONCURRENTLY leftovers (loud elsewhere); the indcheckxmin clear is the live arm.
 fn reindex_index_flags_fixup<'mcx>(
     mcx: Mcx<'mcx>,
     heapRelation: &Relation<'mcx>,
@@ -562,8 +515,6 @@ pub fn reindex_relation<'mcx>(
         rel.rd_rel.relpersistence
     };
 
-    // index.c:4072 `i = 1`: the CLUSTER/VACUUM FULL progress view's
-    // index_rebuild_count, bumped after every rebuilt index (index.c:4110-4113).
     let mut i: i64 = 1;
     for &indexOid in indexIds.iter() {
         let indexNamespaceId = lsyscache::get_rel_namespace(indexOid)?;
@@ -601,7 +552,6 @@ pub fn reindex_relation<'mcx>(
         xact::CommandCounterIncrement()?;
         debug_assert!(!types_rel::reindex::ReindexIsProcessingIndex(indexOid));
 
-        // Set index rebuild count (index.c:4110-4113).
         backend_progress::pgstat_progress_update_param(
             backend_progress::progress::PROGRESS_CLUSTER_INDEX_REBUILD_COUNT,
             i,

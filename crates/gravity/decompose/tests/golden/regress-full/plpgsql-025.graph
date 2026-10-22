@@ -1,0 +1,13 @@
+-- regress-full-plpgsql-025
+-- insert into PSlot values ('PS.base.b6', 'PF0_1', '', 'WS.002.3b');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Write end=sink
+  nodes n1@0 n0@1
+  source index rel=39606 rti=1 am=heap index=39609
+    key att=1 op=1054 value=$1
+    recheck (op1054(v1.1, $1))
+    lanes Attr(1):byref8:vl:win/page Attr(2):byref8:vl:win/page Attr(3):byref8:vl:win/page RowId:byval8:w8:val
+  project (1=fn668($2, c23:24, c16:0), 2j=v1.-1, 3j=v1.1, 4j=v1.2, 5j=v1.3)
+  write UPDATE rel=39606 rti=1 natts=4 indexes=(39609[1]u) set=(4)
+  outs 1=vl:call668 2=fx6:row 3=vl:win/page 4=vl:win/page 5=vl:win/page
+mapped: ModifyTable IndexScan

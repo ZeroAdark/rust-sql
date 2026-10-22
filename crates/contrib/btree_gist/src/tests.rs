@@ -127,9 +127,9 @@ fn varbit_image(bits: &str) -> Vec<u8> {
 fn bit_sortsupport_orders_leaf_keys_by_bitcmp() {
     let mem = mcx::MemoryContext::new("t");
     let m = mem.mcx();
-    let one = var::key_from_datum(&varbit_image("1"));
-    let ten = var::key_from_datum(&varbit_image("10"));
-    let zero9 = var::key_from_datum(&varbit_image("011111111"));
+    let one = var::key_from_datum(&varbit_image("1")).unwrap();
+    let ten = var::key_from_datum(&varbit_image("10")).unwrap();
+    let zero9 = var::key_from_datum(&varbit_image("011111111")).unwrap();
     let d = |k: &[u8]| Datum::from_usize(k.as_ptr() as usize);
     // bitcmp: bit bytes first (0x80 > 0x7f); byteacmp put the 1-bit value first.
     assert!(BitV::ssup_cmp(d(&one), d(&zero9), 0, m).unwrap() > 0);
@@ -137,8 +137,8 @@ fn bit_sortsupport_orders_leaf_keys_by_bitcmp() {
     assert!(BitV::ssup_cmp(d(&one), d(&ten), 0, m).unwrap() < 0);
     assert!(BitV::ssup_cmp(d(&ten), d(&one), 0, m).unwrap() > 0);
     assert_eq!(BitV::ssup_cmp(d(&one), d(&one), 0, m).unwrap(), 0);
-    let empty = var::key_from_datum(&varbit_image(""));
-    let zero = var::key_from_datum(&varbit_image("0"));
+    let empty = var::key_from_datum(&varbit_image("")).unwrap();
+    let zero = var::key_from_datum(&varbit_image("0")).unwrap();
     assert!(BitV::ssup_cmp(d(&empty), d(&zero), 0, m).unwrap() < 0);
     assert!(BitV::ssup_cmp(d(&zero), d(&one), 0, m).unwrap() < 0);
     assert!(BitV::ssup_cmp(d(&zero), d(&zero9), 0, m).unwrap() < 0);
@@ -162,21 +162,21 @@ fn not_equal_descends_through_truncated_internal_keys() {
     let c = &mut ctx();
     let (one, ten) = (varbit_image("1"), varbit_image("10"));
     // gbt_bit_xfrm drops the bit count: both leaves become the node key 0x80.
-    let node = var::key_copy(&bit_xfrm(&one), &bit_xfrm(&ten));
+    let node = var::key_copy(&bit_xfrm(&one).unwrap(), &bit_xfrm(&ten).unwrap()).unwrap();
     let nk = var::key_readable(&node);
     assert_eq!(nk.lower, nk.upper);
-    assert!(var::consistent::<BitV>(&nk, &bit_xfrm(&one), BT_NOT_EQUAL, false, c).unwrap());
-    assert!(var::consistent::<BitV>(&nk, &bit_xfrm(&ten), BT_NOT_EQUAL, false, c).unwrap());
-    let leaf = var::key_from_datum(&one);
+    assert!(var::consistent::<BitV>(&nk, &bit_xfrm(&one).unwrap(), BT_NOT_EQUAL, false, c).unwrap());
+    assert!(var::consistent::<BitV>(&nk, &bit_xfrm(&ten).unwrap(), BT_NOT_EQUAL, false, c).unwrap());
+    let leaf = var::key_from_datum(&one).unwrap();
     let lk = var::key_readable(&leaf);
     assert!(!var::consistent::<BitV>(&lk, &one, BT_NOT_EQUAL, true, c).unwrap());
     assert!(var::consistent::<BitV>(&lk, &ten, BT_NOT_EQUAL, true, c).unwrap());
     let (n7, n8) = (numeric_image(7), numeric_image(8));
-    let same = var::key_copy(&n7, &n7);
+    let same = var::key_copy(&n7, &n7).unwrap();
     let sk = var::key_readable(&same);
     assert!(!var::consistent::<NumericV>(&sk, &n7, BT_NOT_EQUAL, false, c).unwrap());
     assert!(var::consistent::<NumericV>(&sk, &n8, BT_NOT_EQUAL, false, c).unwrap());
-    let span = var::key_copy(&n7, &n8);
+    let span = var::key_copy(&n7, &n8).unwrap();
     let spk = var::key_readable(&span);
     assert!(var::consistent::<NumericV>(&spk, &n7, BT_NOT_EQUAL, false, c).unwrap());
     assert!(!num::consistent::<Int4>((5, 5), 5, BT_NOT_EQUAL, true, c).unwrap());
@@ -185,7 +185,7 @@ fn not_equal_descends_through_truncated_internal_keys() {
     assert!(num::consistent::<Int4>((3, 7), 5, BT_NOT_EQUAL, false, c).unwrap());
 }
 
-// bug-inventory 2026-09-13 batch-46 (regression): the
+// bug-inventory 2026-09-13 batch-46 (fp-contrib-btree_gist-b3#1): the
 // var_entries!("numeric", ..) arm matched "gbt_numeric_penalty" first and
 // handed out the byte-prefix var_penalty instead of btree_numeric.c's
 // range-width penalty, changing GiST subtree choices and page layout.
@@ -196,7 +196,7 @@ fn numeric_penalty_dispatches_to_the_numeric_specific_penalty() {
     assert_ne!(f, var_penalty::<NumericV> as PGFunction as usize);
 }
 
-// bug-inventory 2026-09-13 batch-46 (regression): the short-
+// bug-inventory 2026-09-13 batch-46 (fp-contrib-btree_gist-b1#1): the short-
 // header expansion of each compared key was allocated in tuplesort's context
 // and never freed, so a sorted bytea/bit GiST build grew with the comparison
 // count. C detoasts and pfrees per comparison (btree_bytea.c:177).
@@ -232,9 +232,11 @@ fn var_ssup_cmp_leaves_nothing_in_the_sort_context() {
 #[test]
 fn gbtreekey_in_direct_call_has_no_typioparam() {
     let input = b"x\0";
-    let err = ::types_fmgr::direct_function_call1_coll(
+    let mem = mcx::MemoryContext::new("gbtreekey_in direct");
+    let err = ::types_fmgr::direct_function_call1_coll_in(
         fc_gbtreekey_in,
         0,
+        mem.mcx(),
         Datum::from_usize(input.as_ptr() as usize),
     )
     .unwrap_err();

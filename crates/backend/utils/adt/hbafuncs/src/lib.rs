@@ -25,7 +25,7 @@ fn text_datum(mcx: Mcx<'_>, s: &str) -> PgResult<Datum> {
 }
 
 fn text_array_datum(mcx: Mcx<'_>, strings: &[&str]) -> PgResult<Datum> {
-    let mut datums: Vec<Datum> = Vec::with_capacity(strings.len());
+    let mut datums: Vec<Datum> = ::mcx::std_vec_with_capacity("adt", strings.len())?;
     for s in strings {
         datums.push(text_datum(mcx, s)?);
     }
@@ -285,7 +285,7 @@ fn token_datum(mcx: Mcx<'_>, t: &AuthToken) -> PgResult<Datum> {
 }
 
 fn auth_token_array(mcx: Mcx<'_>, tokens: &[AuthToken]) -> PgResult<Datum> {
-    let mut datums: Vec<Datum> = Vec::with_capacity(tokens.len());
+    let mut datums: Vec<Datum> = ::mcx::std_vec_with_capacity("adt", tokens.len())?;
     for t in tokens {
         datums.push(token_datum(mcx, t)?);
     }

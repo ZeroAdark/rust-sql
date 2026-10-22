@@ -31,3 +31,7 @@ types_resowner = { path = "../../../_support/types/types_resowner" }
 types_storage = { path = "../../../_support/types/types_storage" }
 waitevent_seams = { path = "../../utils/activity/waitevent_seams" }
 libc = "0.2"
+
+[dev-dependencies]
+pg_sema_seams = { path = "../../port/pg_sema_seams" }
+waitevent = { path = "../../utils/activity/waitevent" }

@@ -65,8 +65,19 @@ use xlogreader_seams::{
 const BKPIMAGE_HAS_HOLE: u8 = 0x01;
 const BKPIMAGE_APPLY: u8 = 0x02;
 const BKPIMAGE_COMPRESS_PGLZ: u8 = 0x04;
+const BKPIMAGE_COMPRESS_LZ4: u8 = 0x08;
+const BKPIMAGE_COMPRESS_ZSTD: u8 = 0x10;
 
-const COMPRESS_BUFSIZE: usize = pglz::pglz_max_output(BLCKSZ);
+const fn max_usize(a: usize, b: usize) -> usize {
+    if a > b { a } else { b }
+}
+// ZSTD_COMPRESSBOUND(BLCKSZ), the zstd.h macro.
+const ZSTD_MAX_BLCKSZ: usize =
+    BLCKSZ + (BLCKSZ >> 8) + if BLCKSZ < (128 << 10) { ((128 << 10) - BLCKSZ) >> 11 } else { 0 };
+const COMPRESS_BUFSIZE: usize = max_usize(
+    max_usize(pglz::pglz_max_output(BLCKSZ), lz4_block::compress_bound(BLCKSZ)),
+    ZSTD_MAX_BLCKSZ,
+);
 
 const RM_XLOG_ID: u8 = 0;
 const XLOG_FPI: u8 = 0xB0;
@@ -291,22 +302,16 @@ fn assemble(
 
             let wal_compression = guc_tables::vars::wal_compression.read();
             if wal_compression != guc_tables::consts::WAL_COMPRESSION_NONE {
-                if wal_compression != guc_tables::consts::WAL_COMPRESSION_PGLZ {
-                    // The LZ4/zstd arms are the C #else branches (not built).
-                    return Err(Box::new(PgError::new(
-                        ERROR,
-                        "LZ4/zstd wal_compression is not supported by this build".to_string(),
-                    )));
-                }
                 while scratch.compressed.len() <= i {
                     scratch.compressed.push(Box::new([0u8; COMPRESS_BUFSIZE]));
                 }
                 if let Some(len) = compress_backup_block(
+                    wal_compression,
                     blk.page,
                     bimg_hole_offset,
                     cbimg_hole_length,
                     &mut scratch.compressed[i],
-                ) {
+                )? {
                     is_compressed = true;
                     bimg_length = len as u16;
                 }
@@ -321,7 +326,11 @@ fn assemble(
             }
 
             if is_compressed {
-                bimg_info |= BKPIMAGE_COMPRESS_PGLZ;
+                bimg_info |= match wal_compression {
+                    guc_tables::consts::WAL_COMPRESSION_LZ4 => BKPIMAGE_COMPRESS_LZ4,
+                    guc_tables::consts::WAL_COMPRESSION_ZSTD => BKPIMAGE_COMPRESS_ZSTD,
+                    _ => BKPIMAGE_COMPRESS_PGLZ,
+                };
                 scratch
                     .rdatas
                     .push(erased(&scratch.compressed[i][..bimg_length as usize]));
@@ -465,11 +474,12 @@ fn assemble(
 
 // XLogCompressBackupBlock, pglz arm.
 fn compress_backup_block(
+    method: i32,
     page: &[u8],
     hole_offset: u16,
     hole_length: u16,
     dest: &mut [u8; COMPRESS_BUFSIZE],
-) -> Option<usize> {
+) -> PgResult<Option<usize>> {
     let orig_len = BLCKSZ - hole_length as usize;
     let mut tmp = [0u8; BLCKSZ];
     let (source, extra_bytes): (&[u8], usize) = if hole_length != 0 {
@@ -481,15 +491,34 @@ fn compress_backup_block(
         (page, 0)
     };
 
-    // SAFETY: MaybeUninit<u8> view over an initialized buffer.
-    let dest_uninit = unsafe {
-        core::slice::from_raw_parts_mut(
-            dest.as_mut_ptr().cast::<core::mem::MaybeUninit<u8>>(),
-            COMPRESS_BUFSIZE,
-        )
+    let len = match method {
+        guc_tables::consts::WAL_COMPRESSION_PGLZ => {
+            // SAFETY: MaybeUninit<u8> view over an initialized buffer.
+            let dest_uninit = unsafe {
+                core::slice::from_raw_parts_mut(
+                    dest.as_mut_ptr().cast::<core::mem::MaybeUninit<u8>>(),
+                    COMPRESS_BUFSIZE,
+                )
+            };
+            pglz::pglz_compress_into(source, dest_uninit, &pglz::PGLZ_STRATEGY_DEFAULT)
+        }
+        guc_tables::consts::WAL_COMPRESSION_LZ4 => {
+            Some(lz4_block::compress_default(source, &mut dest[..])).filter(|&n| n > 0)
+        }
+        guc_tables::consts::WAL_COMPRESSION_ZSTD => zstd_compress(source, &mut dest[..])?,
+        _ => None,
     };
-    let len = pglz::pglz_compress_into(source, dest_uninit, &pglz::PGLZ_STRATEGY_DEFAULT)?;
-    (len + extra_bytes < orig_len).then_some(len)
+    Ok(len.filter(|&n| n + extra_bytes < orig_len))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn zstd_compress(source: &[u8], dest: &mut [u8]) -> PgResult<Option<usize>> {
+    Ok(zstd::zstd_safe::compress(dest, source, zstd::zstd_safe::CLEVEL_DEFAULT).ok())
+}
+
+#[cfg(target_family = "wasm")]
+fn zstd_compress(_source: &[u8], _dest: &mut [u8]) -> PgResult<Option<usize>> {
+    Err(Box::new(PgError::new(ERROR, "zstd is not supported by this build".to_string())))
 }
 
 /// The whole C protocol in one call: XLogBeginInsert + XLogRegisterData(main
@@ -634,6 +663,11 @@ pub fn XLogCheckBufferNeedsBackup(buffer: Buffer) -> bool {
     do_page_writes && bufmgr::buffer_page_get_lsn(buffer) <= redo_rec_ptr
 }
 
+pub fn XLogCheckPageNeedsBackup(page_lsn: XLogRecPtr) -> bool {
+    let (redo_rec_ptr, do_page_writes) = transam_xlog::GetFullPageWriteInfo();
+    do_page_writes && page_lsn <= redo_rec_ptr
+}
+
 pub fn XLogSaveBufferForHint(buffer: Buffer, buffer_std: bool) -> PgResult<XLogRecPtr> {
     let redo_rec_ptr = transam_xlog::GetRedoRecPtr();
     let lsn = bufmgr::BufferGetLSNAtomic(buffer);
@@ -721,7 +755,7 @@ pub fn log_newpages(
     let mut i = 0;
     while i < pages.len() {
         let nbatch = (pages.len() - i).min(XLR_MAX_BLOCK_ID);
-        let mut blocks: Vec<RegBlock<'_>> = Vec::with_capacity(nbatch);
+        let mut blocks: Vec<RegBlock<'_>> = ::mcx::std_vec_with_capacity("access", nbatch)?;
         for j in 0..nbatch {
             blocks.push(RegBlock {
                 block_id: j as u8,

@@ -1,0 +1,28 @@
+-- regress-full-inherit-003
+-- select tableoid::regclass, a1 from inh_perm_parent;
+graph pipelines=2 breakers=0 init_plans=0 root=p1
+p0 node=2 eligible rows=255 end=sink
+  nodes n2@0 n1@1 n0@3
+  source range rel=23514 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v2.-6, 2=v2.1)
+  append arm 0/2
+  project (1=outer.1, 2=outer.2)
+  project (1=relabel2205(outer.1), 2=outer.2)
+  outs 1=w4:val 2=w8:val
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val 2=w4:val
+p1 node=3 eligible rows=2550 end=sink
+  nodes n3@0 n1@1 n0@3
+  source range rel=23520 rti=3 am=heap
+    lanes Attr(1):byval8:w8:val Offset:byval2:w2:val
+  project (1=v3.-6, 2=v3.1)
+  append arm 1/2
+  project (1=outer.1, 2=outer.2)
+  project (1=relabel2205(outer.1), 2=outer.2)
+  outs 1=w4:val 2=w8:val
+  outs 1=w4:val 2=w4:val
+  outs 1=w4:val 2=w4:val
+scan-lanes node=2 rti=2 rel=23514 tableoid
+scan-lanes node=3 rti=3 rel=23520 tableoid
+mapped: Result Append SeqScan

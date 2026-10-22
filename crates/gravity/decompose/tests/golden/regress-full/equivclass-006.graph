@@ -1,0 +1,22 @@
+-- regress-full-equivclass-006
+-- explain (costs off) select * from ec1, ec2 where ff = x1 and x1 = '42'::int8alias2;
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 eligible rows=8 end=sink
+  nodes n1@0 n0@2
+  source range rel=39133 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val Offset:byval2:w2:val
+  filter op39114(v2.2, c39096:42)
+  project (1=v2.1, 2=v2.2, 3=v2.3)
+  nest inner=n2 JOIN_INNER unique vol=v params=($exec0=outer.2)
+  inner node=2 serial site=0 reason=IndexSource end=sink
+  nodes n2@0
+  source index rel=39127 rti=1 am=heap index=39131
+    key att=1 op=39111 value=$exec0
+    recheck (op39111(v1.1, $exec0))
+    lanes Attr(1):byval8:w8:val Attr(2):byval8:w8:val Attr(3):byval8:w8:val
+  project (1=v1.1, 2=v1.2, 3=v1.3)
+  project (1=inner.1, 2=inner.2, 3=inner.3, 4=outer.1, 5=outer.2, 6=outer.3)
+  outs 1=w8:val 2=? 3=?
+  outs 1=w8:val 2=? 3=? 4=w8:val 5=? 6=?
+param $exec0 owner=n0 type=39092 rep=?
+mapped: SeqScan IndexScan NestLoop NestLoopParam

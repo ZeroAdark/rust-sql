@@ -1,0 +1,10 @@
+# D3732: the scalar subquery reads a name the file does not create as a table (a view may sort): exact
+sql: SELECT g, (SELECT array_agg(w.v) FROM w) FROM t;
+cols: g	array_agg
+tables: t c
+class: unordered
+verdict: mismatch
+[pg]
+1	{a,b}
+[got]
+1	{b,a}

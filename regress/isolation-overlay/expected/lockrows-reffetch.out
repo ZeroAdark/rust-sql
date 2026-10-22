@@ -1,0 +1,186 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2x s2l
+step s2x: EXPLAIN (COSTS OFF) SELECT a.id, a.bal FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 3 FOR UPDATE OF a;
+QUERY PLAN                                                   
+-------------------------------------------------------------
+Limit                                                        
+  ->  LockRows                                               
+        ->  Sort                                             
+              Sort Key: a.bal DESC, a.id                     
+              ->  Hash Join                                  
+                    Hash Cond: (a.owner = o.owner)           
+                    ->  Seq Scan on rfa a                    
+                    ->  Hash                                 
+                          ->  Seq Scan on rfo o              
+                                Filter: (region = 'eu'::text)
+(10 rows)
+
+step s2l: SELECT a.id, a.bal FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 3 FOR UPDATE OF a;
+ id|bal
+---+---
+ 30|100
+333|100
+ 60| 99
+(3 rows)
+
+
+starting permutation: s1b s2l s1c
+step s1b: UPDATE rfa SET bal = bal + 1000 WHERE id = 30;
+step s2l: SELECT a.id, a.bal FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id| bal
+---+----
+ 30|1100
+333| 100
+ 60|  99
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1w s2w s1c
+step s1w: UPDATE rfa SET w = 4 WHERE id = 30;
+step s2w: SELECT a.id, a.bal, a.w FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' AND a.w < 4 ORDER BY a.bal DESC, a.id LIMIT 3 FOR NO KEY UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2w: <... completed>
+ id|bal|w
+---+---+-
+333|100|3
+ 60| 99|0
+363| 99|3
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1m s2l s1c
+step s1m: UPDATE rfa SET owner = 'o1' WHERE id = 30;
+step s2l: SELECT a.id, a.bal FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|bal
+---+---
+333|100
+ 60| 99
+363| 99
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1s s2l s1c
+step s1s: UPDATE rfa SET owner = 'o9' WHERE id = 30;
+step s2l: SELECT a.id, a.bal FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|bal
+---+---
+333|100
+ 60| 99
+363| 99
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1d s2l s1c
+step s1d: DELETE FROM rfa WHERE id = 30;
+step s2l: SELECT a.id, a.bal FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id|bal
+---+---
+333|100
+ 60| 99
+363| 99
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s1b s2l s1c
+step s1r: UPDATE rfo SET region = 'us', cap = 1 WHERE owner = 'o6';
+step s1b: UPDATE rfa SET bal = bal + 1000 WHERE id = 30;
+step s2l: SELECT a.id, a.bal FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2l: <... completed>
+ id| bal
+---+----
+ 30|1100
+333| 100
+ 60|  99
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r9 s1p s2p s1c
+step s1r9: UPDATE rfo SET region = 'us', cap = 1 WHERE owner = 'o9';
+step s1p: UPDATE rfa SET bal = bal + 1 WHERE id = 237;
+step s2p: SELECT a.id, a.bal, o.region, o.cap FROM rfa a JOIN rfo o ON o.owner = a.owner AND o.cap > a.bal WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 3 FOR SHARE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+ id|bal|region|cap
+---+---+------+---
+237| 84|eu    | 85
+297| 81|eu    | 85
+357| 79|eu    | 85
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1q s2p s1c
+step s1q: UPDATE rfa SET bal = 97 WHERE id = 237;
+step s2p: SELECT a.id, a.bal, o.region, o.cap FROM rfa a JOIN rfo o ON o.owner = a.owner AND o.cap > a.bal WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 3 FOR SHARE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2p: <... completed>
+ id|bal|region|cap
+---+---+------+---
+297| 81|eu    | 85
+357| 79|eu    | 85
+417| 77|eu    | 85
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1l s2sk s1c
+step s1l: SELECT id FROM rfa WHERE id = 30 FOR UPDATE;
+id
+--
+30
+(1 row)
+
+step s2sk: SELECT a.id, a.bal FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' ORDER BY a.bal DESC, a.id LIMIT 2 FOR UPDATE OF a SKIP LOCKED;
+ id|bal
+---+---
+333|100
+ 60| 99
+(2 rows)
+
+step s1c: COMMIT;
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1b s2z s1c
+step s1b: UPDATE rfa SET bal = bal + 1000 WHERE id = 30;
+step s2z: SELECT a.id, a.bal, o.cap FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' AND 1000 / (o.cap - 30) > 5 ORDER BY a.bal DESC, a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2z: <... completed>
+ id| bal|cap
+---+----+---
+ 30|1100| 70
+333| 100| 85
+ 60|  99| 40
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress
+
+starting permutation: s1r s1b s2z s1c
+step s1r: UPDATE rfo SET region = 'us', cap = 1 WHERE owner = 'o6';
+step s1b: UPDATE rfa SET bal = bal + 1000 WHERE id = 30;
+step s2z: SELECT a.id, a.bal, o.cap FROM rfa a JOIN rfo o ON o.owner = a.owner WHERE o.region = 'eu' AND 1000 / (o.cap - 30) > 5 ORDER BY a.bal DESC, a.id LIMIT 3 FOR UPDATE OF a; <waiting ...>
+step s1c: COMMIT;
+step s2z: <... completed>
+ id| bal|cap
+---+----+---
+ 30|1100| 70
+333| 100| 85
+ 60|  99| 40
+(3 rows)
+
+s1: WARNING:  there is no transaction in progress

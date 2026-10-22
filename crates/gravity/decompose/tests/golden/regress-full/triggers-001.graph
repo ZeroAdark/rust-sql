@@ -1,0 +1,15 @@
+-- regress-full-triggers-001
+-- insert into convslot_test_child(col1) values ('1');
+graph pipelines=1 breakers=0 init_plans=0 root=p0
+p0 node=1 serial site=1 reason=Lock end=sink
+  nodes n1@0 n0@1
+  source index rel=22365 rti=1 am=heap index=22371
+    key att=1 op=98 value=c25:'1'
+    recheck (op98(v1.1, c25:'1'))
+    lanes RowId:byval8:w8:val
+  project (1=c23:1, 2j=v1.-1)
+  lock rel=22365 KeyShare Block marks=(rti1:ROW_MARK_KEYSHARE)
+  project (1=c23:1, 2j=outer.2)
+  outs 1=w4:val 2=fx6:row
+  outs 1=w4:val 2=fx6:row
+mapped: IndexScan LockRows PlanRowMark

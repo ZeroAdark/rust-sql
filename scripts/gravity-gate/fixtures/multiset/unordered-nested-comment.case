@@ -1,0 +1,11 @@
+# a nested /* /* */ */ comment hiding ORDER BY
+sql: SELECT x /* a /* order by 1 */ still a comment: order by 1 */ FROM t;
+cols: x
+class: unordered
+verdict: match
+[pg]
+1
+2
+[got]
+2
+1

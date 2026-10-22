@@ -3,7 +3,9 @@ use alloc::boxed::Box;
 use ::datum::Datum;
 use ::mcx::{check_alloc_size, vec_with_capacity_in, Mcx};
 use ::types_core::InvalidOid;
-use ::types_error::{PgError, PgResult, ERRCODE_INTERNAL_ERROR, ERRCODE_TOO_MANY_COLUMNS};
+use ::types_error::{
+    PgError, PgResult, ERRCODE_DATATYPE_MISMATCH, ERRCODE_INTERNAL_ERROR, ERRCODE_TOO_MANY_COLUMNS,
+};
 use ::types_tuple::tupmacs::{att_addlength_datum, att_datum_alignby};
 use ::types_tuple::{
     heap_deform_tuple, HeapTupleData, HeapTupleHeaderData, ItemPointerData, ItemPointerSetInvalid,
@@ -23,6 +25,22 @@ fn too_many_columns(natts: usize) -> Box<PgError> {
             "number of columns ({natts}) exceeds limit ({MaxTupleAttributeNumber})"
         ))
         .with_sqlstate(ERRCODE_TOO_MANY_COLUMNS),
+    )
+}
+
+/// C DIVERGENCE: C reads past a values array shorter than the descriptor (a builtin's row under a wider declared
+/// row); this raises the executor's tupledesc_match error instead.
+#[track_caller]
+#[cold]
+#[inline(never)]
+fn short_row(formed: usize, natts: usize) -> Box<PgError> {
+    let noun = if formed == 1 { "attribute" } else { "attributes" };
+    Box::new(
+        PgError::error("function return row and query-specified return row do not match")
+            .with_sqlstate(ERRCODE_DATATYPE_MISMATCH)
+            .with_detail(alloc::format!(
+                "Returned row contains {formed} {noun}, but query expects {natts}."
+            )),
     )
 }
 
@@ -48,6 +66,10 @@ pub fn heap_form_tuple<'mcx>(
     let natts = tupleDescriptor.natts as usize;
     if natts > MaxTupleAttributeNumber as usize {
         return Err(too_many_columns(natts));
+    }
+    let formed = values.len().min(isnull.len());
+    if formed < natts {
+        return Err(short_row(formed, natts));
     }
 
     let hasnull = isnull[..natts].contains(&true);
@@ -141,6 +163,10 @@ pub fn heap_form_minimal_tuple<'mcx>(
     let natts = tupleDescriptor.natts as usize;
     if natts > MaxTupleAttributeNumber as usize {
         return Err(too_many_columns(natts));
+    }
+    let formed = values.len().min(isnull.len());
+    if formed < natts {
+        return Err(short_row(formed, natts));
     }
 
     let hasnull = isnull[..natts].contains(&true);

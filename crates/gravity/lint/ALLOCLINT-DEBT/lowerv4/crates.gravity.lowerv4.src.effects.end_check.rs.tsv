@@ -1,0 +1,3 @@
+path	crates/gravity/lowerv4/src/effects/end_check.rs
+method	std::clone::Clone::clone	5
+type	std::string::String	1

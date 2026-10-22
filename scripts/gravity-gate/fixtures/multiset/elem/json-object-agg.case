@@ -1,0 +1,10 @@
+# json_object_agg: the pairs are a multiset
+sql: SELECT json_object_agg(k, v) FROM t;
+cols: json_object_agg
+elem: 1	json_object
+class: unordered
+verdict: match
+[pg]
+{ "a" : 1, "b" : 2 }
+[got]
+{ "b" : 2, "a" : 1 }

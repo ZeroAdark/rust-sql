@@ -1,0 +1,161 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1b s2hot s2mov s2del s2ins s3vac s1i0 s1i8 s1o0 s1o8 s1c s1i0 s1i8 s1o0 s1o8
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM frv WHERE k < 0;
+count
+-----
+    0
+(1 row)
+
+step s2hot: UPDATE frv SET pad = pad || 'h' WHERE id % 5 = 0;
+step s2mov: UPDATE frv SET k = k + 1 WHERE id % 7 = 0;
+step s2del: DELETE FROM frv WHERE id % 11 = 0 OR id BETWEEN 60000 AND 70000;
+step s2ins: INSERT INTO frv SELECT 1000000 + i, i * 2 + 1, 'q' || i FROM generate_series(1, 40000) i;
+step s3vac: VACUUM frv;
+step s1i0: SET max_parallel_workers_per_gather = 0; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|        sum|min|max   
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|p1 |p99999
+(1 row)
+
+step s1i8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|        sum|min|max   
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|p1 |p99999
+(1 row)
+
+step s1o0: SET max_parallel_workers_per_gather = 0; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+step s1o8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+step s1c: COMMIT;
+step s1i0: SET max_parallel_workers_per_gather = 0; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|        sum|min|max  
+------+-----------+-----------+---+-----
+167272|20872790911|50436366365|p1 |q9999
+(1 row)
+
+step s1i8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|        sum|min|max  
+------+-----------+-----------+---+-----
+167272|20872790911|50436366365|p1 |q9999
+(1 row)
+
+step s1o0: SET max_parallel_workers_per_gather = 0; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|        sum|min|    max
+------+-----------+-----------+---+-------
+167272|20872790911|50436366365|  2|1040000
+(1 row)
+
+step s1o8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|        sum|min|    max
+------+-----------+-----------+---+-------
+167272|20872790911|50436366365|  2|1040000
+(1 row)
+
+
+starting permutation: s1b s2bi s1i8 s1o8 s2a s3vac s1i0 s1o0 s1c s1i8 s1o8
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM frv WHERE k < 0;
+count
+-----
+    0
+(1 row)
+
+step s2bi: BEGIN; INSERT INTO frv SELECT 2000000 + i, i * 2 + 1, 'r' || i FROM generate_series(1, 40000) i;
+step s1i8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|        sum|min|max   
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|p1 |p99999
+(1 row)
+
+step s1o8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+step s2a: ROLLBACK;
+step s3vac: VACUUM frv;
+step s1i0: SET max_parallel_workers_per_gather = 0; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|        sum|min|max   
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|p1 |p99999
+(1 row)
+
+step s1o0: SET max_parallel_workers_per_gather = 0; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+step s1c: COMMIT;
+step s1i8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|        sum|min|max   
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|p1 |p99999
+(1 row)
+
+step s1o8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|        sum|min|   max
+------+-----------+-----------+---+------
+150000|22500150000|11250075000|  2|150000
+(1 row)
+
+
+starting permutation: s2hot s2del s1b s3vac s1i8 s1o8 s2mov s2ins s1i0 s1o0 s1c s1i8 s1o8
+step s2hot: UPDATE frv SET pad = pad || 'h' WHERE id % 5 = 0;
+step s2del: DELETE FROM frv WHERE id % 11 = 0 OR id BETWEEN 60000 AND 70000;
+step s1b: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM frv WHERE k < 0;
+count
+-----
+    0
+(1 row)
+
+step s3vac: VACUUM frv;
+step s1i8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|       sum|min|max   
+------+-----------+----------+---+------
+127272|19272692730|9636346365|p1 |p99999
+(1 row)
+
+step s1o8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|       sum|min|   max
+------+-----------+----------+---+------
+127272|19272692730|9636346365|  2|150000
+(1 row)
+
+step s2mov: UPDATE frv SET k = k + 1 WHERE id % 7 = 0;
+step s2ins: INSERT INTO frv SELECT 1000000 + i, i * 2 + 1, 'q' || i FROM generate_series(1, 40000) i;
+step s1i0: SET max_parallel_workers_per_gather = 0; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|       sum|min|max   
+------+-----------+----------+---+------
+127272|19272692730|9636346365|p1 |p99999
+(1 row)
+
+step s1o0: SET max_parallel_workers_per_gather = 0; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|       sum|min|   max
+------+-----------+----------+---+------
+127272|19272692730|9636346365|  2|150000
+(1 row)
+
+step s1c: COMMIT;
+step s1i8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = off; SELECT count(*), sum(k::bigint), sum(id::bigint), min(pad), max(pad) FROM (SELECT k, id, pad FROM frv ORDER BY k) s;
+ count|        sum|        sum|min|max  
+------+-----------+-----------+---+-----
+167272|20872790911|50436366365|p1 |q9999
+(1 row)
+
+step s1o8: SET max_parallel_workers_per_gather = 8; SET enable_indexonlyscan = on; SELECT count(*), sum(k::bigint), sum(id::bigint), min(k), max(id) FROM (SELECT k, id FROM frv ORDER BY k, id) s;
+ count|        sum|        sum|min|    max
+------+-----------+-----------+---+-------
+167272|20872790911|50436366365|  2|1040000
+(1 row)
+

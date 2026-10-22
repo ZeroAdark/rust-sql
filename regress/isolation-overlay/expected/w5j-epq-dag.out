@@ -1,0 +1,110 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2cnt s2plan s1c
+step s2cnt: SELECT count(*) FROM dt; SELECT count(*) FROM ds;
+count
+-----
+    5
+(1 row)
+
+count
+-----
+    5
+(1 row)
+
+step s2plan: EXPLAIN (costs off) UPDATE dt SET v = v * 10 WHERE a IN (SELECT DISTINCT a FROM ds WHERE b = 1);
+QUERY PLAN                                       
+-------------------------------------------------
+Update on dt                                     
+  ->  Hash Join                                  
+        Hash Cond: (dt.a = "ANY_subquery".a)     
+        ->  Seq Scan on dt                       
+        ->  Hash                                 
+              ->  Subquery Scan on "ANY_subquery"
+                    ->  HashAggregate            
+                          Group Key: ds.a        
+                          ->  Seq Scan on ds     
+                                Filter: (b = 1)  
+(10 rows)
+
+step s1c: COMMIT;
+
+starting permutation: s1v s2in s1c s2chk
+step s1v: UPDATE dt SET v = v + 100 WHERE id = 1;
+step s2in: UPDATE dt SET v = v * 10 WHERE a IN (SELECT DISTINCT a FROM ds WHERE b = 1); <waiting ...>
+step s1c: COMMIT;
+step s2in: <... completed>
+step s2chk: SELECT * FROM dt ORDER BY id;
+id|a|   v
+--+-+----
+ 1|1|1100
+ 2|2|  20
+ 3|3|  30
+ 4|4| 400
+ 5|5|  50
+(5 rows)
+
+
+starting permutation: s1key s2in s1c s2chk
+step s1key: UPDATE dt SET a = 99 WHERE id = 1;
+step s2in: UPDATE dt SET v = v * 10 WHERE a IN (SELECT DISTINCT a FROM ds WHERE b = 1); <waiting ...>
+step s1c: COMMIT;
+step s2in: <... completed>
+step s2chk: SELECT * FROM dt ORDER BY id;
+id| a|  v
+--+--+---
+ 1|99| 10
+ 2| 2| 20
+ 3| 3| 30
+ 4| 4|400
+ 5| 5| 50
+(5 rows)
+
+
+starting permutation: s1src s2in s1c s2chk
+step s1src: UPDATE dt SET v = v + 100 WHERE id = 1; UPDATE ds SET b = 7 WHERE a = 1;
+step s2in: UPDATE dt SET v = v * 10 WHERE a IN (SELECT DISTINCT a FROM ds WHERE b = 1); <waiting ...>
+step s1c: COMMIT;
+step s2in: <... completed>
+step s2chk: SELECT * FROM dt ORDER BY id;
+id|a|   v
+--+-+----
+ 1|1|1100
+ 2|2|  20
+ 3|3|  30
+ 4|4| 400
+ 5|5|  50
+(5 rows)
+
+
+starting permutation: s1v s2grp s1c s2chk
+step s1v: UPDATE dt SET v = v + 100 WHERE id = 1;
+step s2grp: UPDATE dt SET v = dt.v + g.n FROM (SELECT a, count(*) AS n FROM ds GROUP BY a) g WHERE dt.a = g.a; <waiting ...>
+step s1c: COMMIT;
+step s2grp: <... completed>
+step s2chk: SELECT * FROM dt ORDER BY id;
+id|a|  v
+--+-+---
+ 1|1|112
+ 2|2| 21
+ 3|3| 30
+ 4|4| 41
+ 5|5| 51
+(5 rows)
+
+
+starting permutation: s1max s2cte s1c s2chk
+step s1max: UPDATE dt SET v = v + 100 WHERE id = 5;
+step s2cte: WITH m AS (SELECT max(id) AS maxid FROM dt) UPDATE dt SET v = v * 10 FROM m WHERE dt.id = m.maxid; <waiting ...>
+step s1c: COMMIT;
+step s2cte: <... completed>
+step s2chk: SELECT * FROM dt ORDER BY id;
+id|a|   v
+--+-+----
+ 1|1|  10
+ 2|2|  20
+ 3|3|  30
+ 4|4|  40
+ 5|5|1500
+(5 rows)
+

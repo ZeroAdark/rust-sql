@@ -49,6 +49,7 @@ struct ProbeRet {
 const PROBE_NEG: usize = 1;
 const PROBE_MISS: usize = 2;
 const PROBE_INIT: usize = 3;
+const PROBE_UNREG: usize = 4; // V4R-453: no cache `id` on this thread
 
 impl ProbeRet {
     #[inline(always)]
@@ -66,6 +67,10 @@ impl ProbeRet {
     #[inline(always)]
     fn needs_init() -> Self {
         ProbeRet { p: core::ptr::without_provenance_mut(PROBE_INIT), w: 0 }
+    }
+    #[cold]
+    fn unregistered() -> Self {
+        ProbeRet { p: core::ptr::without_provenance_mut(PROBE_UNREG), w: 0 }
     }
 }
 
@@ -193,7 +198,9 @@ fn keys_match<K: ProbeKeys>(
 #[inline(always)]
 fn probe<K: ProbeKeys>(cache_id: i32, keys: &K) -> ProbeRet {
     with_state(|st| {
-        let cache = st.cache_mut(cache_id);
+        let Some(cache) = st.caches.get_mut(cache_id as usize).and_then(|c| c.as_mut()) else {
+            return ProbeRet::unregistered();
+        };
         if !cache.initialized {
             return ProbeRet::needs_init();
         }
@@ -281,14 +288,25 @@ fn found(cache: &mut crate::CatCache<'_>, bucket: usize, slot: u32) -> ProbeRet 
 
 #[inline(always)]
 fn search_internal<K: ProbeKeys>(cache_id: i32, keys: &K) -> PgResult<Option<CatCTuple>> {
+    let noted = gravity_deps::armed();
+    if noted {
+        note_search(cache_id, keys, false);
+    }
     loop {
         let r = probe(cache_id, keys);
         match r.p.addr() {
             PROBE_NEG => return Ok(None),
+            PROBE_UNREG => return Err(crate::unregistered(cache_id)),
+            PROBE_MISS if noted => return gravity_deps::suppressed(|| search_miss(cache_id, r.w as u32, &keys.to_array())),
             PROBE_MISS => return search_miss(cache_id, r.w as u32, &keys.to_array()),
             PROBE_INIT => {
                 /* init re-enters the catcache; no borrow held, then retry */
-                init::catalog_cache_initialize_cache(cache_id)?;
+                if noted {
+                    gravity_deps::suppressed(|| init::catalog_cache_initialize_cache(cache_id))?;
+                    note_search(cache_id, keys, true);
+                } else {
+                    init::catalog_cache_initialize_cache(cache_id)?;
+                }
             }
             _ => {
                 return Ok(Some(CatCTuple {
@@ -300,6 +318,23 @@ fn search_internal<K: ProbeKeys>(cache_id: i32, keys: &K) -> PgResult<Option<Cat
             }
         }
     }
+}
+
+/// C3: a recorded lowering's read of the row `keys` names, true when noted. A cache not yet initialized has no hash for
+/// it: nothing is noted until its init (the caller notes again after it), or, `whole`, its whole cache.
+#[cold]
+#[inline(never)]
+fn note_search<K: ProbeKeys>(cache_id: i32, keys: &K, whole: bool) -> bool {
+    let hash = with_state(|st| {
+        let c = st.caches.get(cache_id as usize).and_then(|c| c.as_ref()).filter(|c| c.initialized)?;
+        Some(hash_keys(&c.cc_kind, if K::NKEYS > 0 { K::NKEYS } else { c.cc_nkeys }, keys))
+    });
+    match hash {
+        Some(h) => gravity_deps::note_cat(cache_id, h),
+        None if whole => gravity_deps::note_cat_list(cache_id),
+        None => return false,
+    }
+    true
 }
 
 /// `SearchCatCacheMiss`, D3.2 head: consult the shared L2 before scanning the
@@ -315,6 +350,9 @@ fn search_miss(cache_id: i32, hash_value: u32, keys: &[CatCKey<'_>; 4]) -> PgRes
     {
         return search_miss_scan(cache_id, hash_value, keys);
     }
+    // C's miss path absorbs queued invalidations when it opens the catalog
+    // (lmgr.c:136); the L2 arm skips that open, so absorb them here.
+    inval_seams::accept_invalidation_messages::call()?;
     let (relisshared, kinds, nkeys) = with_state(|st| {
         let c = st.cache(cache_id);
         (c.cc_relisshared, c.cc_kind, c.cc_nkeys)
@@ -423,6 +461,7 @@ fn scan_to_l2(
     loop {
         let mut stale = false;
         genam_seams::systable_scan_catalog::call(
+            scan_mcx,
             &relation,
             indexoid,
             index_ok,
@@ -472,6 +511,7 @@ fn search_miss_scan(cache_id: i32, hash_value: u32, keys: &[CatCKey<'_>; 4]) -> 
     loop {
         let mut stale = false;
         genam_seams::systable_scan_catalog::call(
+            scan_mcx,
             &relation,
             indexoid,
             index_ok,
@@ -637,16 +677,25 @@ pub fn SearchCatCache4(
 /// `ReleaseCatCache(tuple)`.
 #[inline]
 pub fn ReleaseCatCache(tuple: CatCTuple) {
-    with_state(|st| {
-        let cache = st.cache_mut(tuple.cache_id);
-        // SAFETY: pins are minted over live slots, never freed while pinned.
-        let ct = unsafe { cache.tuples.get_unchecked_mut(tuple.slot as usize) };
-        debug_assert!(ct.refcount > 0);
-        ct.refcount -= 1;
-        if ct.dead && ct.refcount == 0 && ct.c_list == NONE {
-            remove_ct(st, tuple.cache_id, tuple.slot);
-        }
-    });
+    drop(tuple);
+}
+
+// C unpins abandoned handles via ResourceOwnerReleaseCatCacheRefs at abort; here drop glue does it.
+impl Drop for CatCTuple {
+    #[inline]
+    fn drop(&mut self) {
+        let (cache_id, slot) = (self.cache_id, self.slot);
+        crate::with_live_state(|st| {
+            let cache = st.cache_mut(cache_id);
+            // SAFETY: pins are minted over live slots, never freed while pinned.
+            let ct = unsafe { cache.tuples.get_unchecked_mut(slot as usize) };
+            debug_assert!(ct.refcount > 0);
+            ct.refcount -= 1;
+            if ct.dead && ct.refcount == 0 && ct.c_list == NONE {
+                remove_ct(st, cache_id, slot);
+            }
+        });
+    }
 }
 
 /// `GetCatCacheHashValue(cache, v1..v4)`.
@@ -657,6 +706,9 @@ pub fn GetCatCacheHashValue(
     v3: CatCKey<'_>,
     v4: CatCKey<'_>,
 ) -> PgResult<u32> {
+    if !with_state(|st| st.registered(cache_id)) {
+        return Err(crate::unregistered(cache_id));
+    }
     if !with_state(|st| st.cache(cache_id).initialized) {
         init::catalog_cache_initialize_cache(cache_id)?;
     }

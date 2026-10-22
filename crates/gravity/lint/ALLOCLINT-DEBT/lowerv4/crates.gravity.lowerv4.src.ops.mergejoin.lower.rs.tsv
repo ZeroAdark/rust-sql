@@ -1,0 +1,2 @@
+path	crates/gravity/lowerv4/src/ops/mergejoin/lower.rs
+growth	std::vec::Vec::push	2

@@ -1,0 +1,1 @@
+backend/storage/ipc/latch/src/lib.rs	LATCH_WAIT_SET	pgport	exit	thread	the thread's LatchWaitSet handle (C static), made once by InitializeLatchWaitSet; its set is freed at thread exit by waiteventset's release guard (release_thread_wait_event_sets); a claim's latch waits are its own thread's

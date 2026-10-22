@@ -1,0 +1,3 @@
+# PostgreSQL 18.6 src/backend/access/transam/xact.c: 2 stack-depth check sites
+5669	ShowTransactionStateRec	crates/backend/access/transam/xact/src/lib.rs	ShowTransactionStateRec	n/a	the Rust port is a loop over the state stack, no recursion
+5671	ShowTransactionStateRec	crates/backend/access/transam/xact/src/lib.rs	ShowTransactionStateRec	n/a	the Rust port is a loop over the state stack, no recursion

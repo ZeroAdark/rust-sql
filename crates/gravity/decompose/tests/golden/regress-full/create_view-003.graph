@@ -1,0 +1,23 @@
+-- regress-full-create_view-003
+-- SELECT relname FROM pg_class WHERE relname LIKE 'nontemp%' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'testviewschm2') ORDER BY relname;
+graph pipelines=2 breakers=0 init_plans=1 root=p1
+p0 node=1 eligible rows=1 end=sink
+  nodes n1@0
+  source range rel=2615 rti=2 am=heap
+    lanes Attr(1):byval8:w8:val Attr(2):byref8:fx64:win/page Offset:byval2:w2:val
+  filter op93(v2.2, c19:#64)
+  project (1=v2.1)
+  outs 1=w8:val
+p1 node=0 serial site=0 reason=IndexSource end=sink
+  nodes n0@0
+  source index-only rel=1259 rti=1 am=heap index=2663
+    key att=2 op=257 value=c25:'nontemp'
+    key att=2 op=255 value=c25:'nontemq'
+    key att=3 op=607 value=$exec0
+    recheck (op257(index.1, c25:'nontemp'), op255(index.1, c25:'nontemq'), op607(index.2, $exec0))
+    lanes Attr(2):byref8:fx64:win/page
+  filter op1207(index.1, c25:'nontemp%')
+  project (1=index.1)
+  outs 1=fx64:win/page
+init_plan id=1 pipeline=p0 link=Expr param=$exec0
+mapped: SeqScan IndexOnlyScan SubPlan
